@@ -56,7 +56,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly activeRevisionPreview?: DraftRevisionPreview | null;
   readonly onSteeringDirectionChange: (value: string) => void;
   readonly onGenerateSteering: () => void;
-  readonly onGenerateDraft?: () => void;
   readonly onRepairDraft?: () => void;
   readonly onDraftAIReview?: () => void;
   readonly onCreateRevisionTask?: (source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }) => void;
@@ -64,8 +63,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly onApplyRevisionPreview?: () => void;
   readonly onDismissRevisionTask?: () => void;
   readonly onRegenerateDraft?: () => void;
-  readonly onPreviewCommit?: () => void;
-  readonly onApplyCommit?: () => void;
   readonly onDraftContentChange?: (content: string) => void;
   /** 选区浮动操作条（阶段三块②）：选中正文 + 模板键 → 复用 draft-revision 改写选中段、可撤销。 */
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
@@ -148,11 +145,8 @@ export interface ChapterWorkspaceProps {
   readonly commitPreview?: CommitPreviewUiReport | null;
   readonly onSteeringDirectionChange: (value: string) => void;
   readonly onGenerateSteering: () => void;
-  readonly onGenerateDraft?: () => void;
   readonly onRepairDraft?: () => void;
   readonly onRegenerateDraft?: () => void;
-  readonly onPreviewCommit?: () => void;
-  readonly onApplyCommit?: () => void;
 }
 
 export interface ChapterFlowBarProps {
@@ -163,11 +157,8 @@ export interface ActionBarProps extends ChapterFlowBarProps {
   readonly steeringLoading?: boolean;
   readonly draftActionLoading?: string | null;
   readonly onGenerateSteering: () => void;
-  readonly onGenerateDraft?: () => void;
   readonly onRepairDraft?: () => void;
   readonly onRegenerateDraft?: () => void;
-  readonly onPreviewCommit?: () => void;
-  readonly onApplyCommit?: () => void;
 }
 
 export interface ModelSettingsDialogProps {
