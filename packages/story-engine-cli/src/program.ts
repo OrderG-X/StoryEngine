@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
@@ -1077,6 +1079,63 @@ function failedCommitReport(chapter: number, issues: readonly string[]): CommitR
   };
 }
 
+// ---------------------------------------------------------------------------
+// OpenCode Go 会话头（与 UI story-engine-ui/src/server/lib/llm-client.ts 同源的最小副本：
+// CLI 只依赖引擎包、够不着 UI 的 llm-client，函数很小故本地重复一份——改语义须两边同步）。
+// 规则（https://opencode.ai/docs/go/）：仅当 baseUrl 命中 opencode 主机才带稳定 x-opencode-session
+// + 自有 UA（不带会被拒 MissingSessionID），会话 id 持久化在
+// <SE_DATA_DIR ?? ~/.story-engine>/opencode-session.json（与 UI 同一文件同一格式，0600）。
+// ---------------------------------------------------------------------------
+
+const STORY_ENGINE_USER_AGENT = "story-engine-ng/1.0";
+
+function isOpencodeHost(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().includes("opencode");
+  } catch {
+    return false;
+  }
+}
+
+// 进程内缓存按「路径」键住：SE_DATA_DIR 变了（测试注入）自动重读，不会拿着旧目录的 id（同 UI）。
+let opencodeSessionCache: { readonly path: string; readonly id: string } | undefined;
+
+async function getOpencodeSessionId(env: Record<string, string | undefined>): Promise<string> {
+  const override = env.SE_DATA_DIR?.trim();
+  const dir = override || join(homedir(), ".story-engine");
+  const path = join(dir, "opencode-session.json");
+  if (opencodeSessionCache?.path === path) return opencodeSessionCache.id;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf-8"));
+    const existing = typeof parsed === "object" && parsed !== null && "sessionId" in parsed
+      ? (parsed as { readonly sessionId?: unknown }).sessionId
+      : undefined;
+    if (typeof existing === "string" && existing.trim()) {
+      opencodeSessionCache = { path, id: existing };
+      return existing;
+    }
+  } catch {
+    // 文件不存在/读失败/坏 JSON → 重新生成。session id 不是密钥、无数据损失，重建即恢复（同 UI）。
+  }
+  const id = randomUUID();
+  opencodeSessionCache = { path, id };
+  try {
+    await mkdir(dir, { recursive: true });
+    const tmp = join(dir, `.${randomUUID()}.tmp`);
+    try {
+      await writeFile(tmp, `${JSON.stringify({ version: 1, sessionId: id }, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+      await chmod(tmp, 0o600).catch(() => undefined);
+      await rename(tmp, path);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  } catch {
+    // 写盘失败不挡请求：进程内缓存仍保证本会话稳定，重启后重新生成（同 UI）。
+  }
+  return id;
+}
+
 export function createOpenAICompatibleWriterClient(input: {
   readonly provider: string;
   readonly model: string;
@@ -1094,12 +1153,17 @@ export function createOpenAICompatibleWriterClient(input: {
         throw new Error("Missing STORY_ENGINE_LLM_BASE_URL.");
       }
       const prompt = renderFastDraftPrompt(context);
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      };
+      if (isOpencodeHost(baseUrl)) {
+        headers["user-agent"] = STORY_ENGINE_USER_AGENT;
+        headers["x-opencode-session"] = await getOpencodeSessionId(input.env);
+      }
       const response = await input.fetch(completionEndpoint(baseUrl), {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "content-type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           model: input.model,
           messages: [

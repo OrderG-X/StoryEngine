@@ -264,6 +264,52 @@ describe("思考透传（非流式路）：按 configured.thinkingDialect 翻成
   });
 });
 
+describe("callOpenAICompatibleChatModel 超时（非流式短调用：signal 传入 fetch，超时判死不挂住）", () => {
+  function fakeConfigured(): Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"] {
+    return {
+      provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "",
+      thinking: false,
+      thinkingDialect: "none",
+    } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
+  }
+
+  it("fetch 收到 AbortSignal；正常响应不触发 abort", async () => {
+    let captured: AbortSignal | null = null;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      captured = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+    });
+    const out = await callOpenAICompatibleChatModel({ configured: fakeConfigured(), messages: [{ role: "user", content: "x" }] });
+    expect(out.content).toBe("ok");
+    expect(captured).toBeInstanceOf(AbortSignal);
+    expect(captured!.aborted).toBe(false);
+    spy.mockRestore();
+  });
+
+  it("上游死连超过 timeoutMs → abort 并抛「模型请求超时」（章节标题等短调用的 120s 兜底走这条路）", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let captured: AbortSignal | null = null;
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+        captured = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+        return new Promise<Response>((_resolve, reject) => {
+          captured?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        });
+      });
+      const pending = callOpenAICompatibleChatModel({ configured: fakeConfigured(), messages: [{ role: "user", content: "x" }], timeoutMs: 120_000 });
+      const assertion = expect(pending).rejects.toThrow("模型请求超时：120000ms");
+      await vi.advanceTimersByTimeAsync(120_001);
+      await assertion;
+      expect(captured!.aborted).toBe(true);
+      spy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆盖空档）", () => {
   function sseResponse(chunks: readonly string[]): globalThis.Response {
     const encoder = new TextEncoder();

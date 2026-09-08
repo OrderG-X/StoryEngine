@@ -45,7 +45,7 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamChatModelToText, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
 import { appendActualWordCountToReviewPrompt } from "../agent/tools/ai-review.js";
 import { countTextWords } from "../../utils/textUtils.js";
@@ -724,43 +724,29 @@ async function generateChapterDraftTitle(input: {
   readonly fallbackTitle: string;
 }): Promise<string> {
   try {
-    const response = await fetch(`${input.configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(await buildProviderRequestHeaders({
-          baseUrl: input.configured.provider.baseUrl,
-          apiKey: input.configured.apiKey,
-          customHeaders: input.configured.customHeaders,
-        })),
-      },
-      body: JSON.stringify({
-        model: input.configured.profile.model,
-        messages: [
-          {
-            role: "system",
-            content: "你是中文长篇小说章节标题助手。只输出一个章节标题，不要解释，不要引号，不要 Markdown，不要带\"第X章\"。标题应贴合本章内容，6 到 14 个汉字为宜。",
-          },
-          {
-            role: "user",
-            content: [
-              `章节：第${input.chapter}章`,
-              `本章方向：${input.chapterGoal}`,
-              "本章正文节选：",
-              input.content.slice(0, 1600),
-            ].join("\n"),
-          },
-        ],
-        temperature: 0.55,
-        // 不传 max_tokens：推理模型连标题也先思考，48 的小额度会被思考吃光、标题输出为空只能退回兜底；
-        // 标题长度由提示词约束（6~14 字），模型自然收尾（见 llm-client 注释）。
-        stream: false,
-      }),
+    // 短调用收拢到非流式 helper：自带总时长上限（死连 120s 兜底退回 fallbackTitle，不再挂住路由）、
+    // Qwen 非流式思考开关翻译也一并生效；helper 结构性不传 max_tokens（见其注释）。
+    const { content } = await callOpenAICompatibleChatModel({
+      configured: input.configured,
+      temperature: 0.55,
+      timeoutMs: 120_000,
+      messages: [
+        {
+          role: "system",
+          content: "你是中文长篇小说章节标题助手。只输出一个章节标题，不要解释，不要引号，不要 Markdown，不要带\"第X章\"。标题应贴合本章内容，6 到 14 个汉字为宜。",
+        },
+        {
+          role: "user",
+          content: [
+            `章节：第${input.chapter}章`,
+            `本章方向：${input.chapterGoal}`,
+            "本章正文节选：",
+            input.content.slice(0, 1600),
+          ].join("\n"),
+        },
+      ],
     });
-    if (!response.ok) return input.fallbackTitle;
-    const raw = await response.text();
-    const parsed = JSON.parse(raw) as { readonly choices?: readonly { readonly message?: { readonly content?: string } }[] };
-    return sanitizeChapterTitle(parsed.choices?.[0]?.message?.content, input.fallbackTitle);
+    return sanitizeChapterTitle(content, input.fallbackTitle);
   } catch {
     return input.fallbackTitle;
   }
@@ -960,33 +946,17 @@ async function callDraftAIReviewModel(input: {
   readonly configured: ResolvedChatModel;
   readonly prompt: string;
 }): Promise<DraftAIReviewReport> {
-  const response = await fetch(`${input.configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(await buildProviderRequestHeaders({
-        baseUrl: input.configured.provider.baseUrl,
-        apiKey: input.configured.apiKey,
-        customHeaders: input.configured.customHeaders,
-      })),
-    },
-    body: JSON.stringify({
-      model: input.configured.profile.model,
-      messages: [{ role: "user", content: input.prompt }],
-      temperature: input.configured.profile.temperature ?? 0.35,
-      // 不传 max_tokens：推理模型审稿先思考、思考吃额度会把 JSON 审稿结果截空（见 llm-client 注释）。
-      response_format: { type: "json_object" },
-      stream: false,
-    }),
+  // 流式 + 空闲超时：审稿是长任务，绝不设总时长上限——有任何字节（正文/思考 token）就续命，
+  // 只有连接彻底静默才判死（streamChatModelToText 内部 abort 并抛错）。对齐 agent/tools/ai-review.ts。
+  const { content } = await streamChatModelToText({
+    configured: input.configured,
+    messages: [{ role: "user", content: input.prompt }],
+    temperature: input.configured.profile.temperature ?? 0.35,
+    responseFormat: { type: "json_object" },
   });
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`模型请求失败：${response.status} ${raw.slice(0, 180)}`);
-  }
-  const parsed = JSON.parse(raw) as { readonly choices?: readonly { readonly message?: { readonly content?: string } }[] };
-  const content = parsed.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error("模型返回了空内容。");
-  return parseDraftAIReviewReport(content);
+  const text = content.trim();
+  if (!text) throw new Error("模型返回了空内容。");
+  return parseDraftAIReviewReport(text);
 }
 
 export const __draftRouteTest = {

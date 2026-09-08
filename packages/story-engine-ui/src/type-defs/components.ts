@@ -1,5 +1,5 @@
 import type { ChapterAdviceCard, ChapterSteeringDraft, CreateBookResult, DraftAIReviewIssue, DraftAIReviewReport, DraftAIRevisionSuggestion, DraftRevisionPreview, DraftRevisionTask, ModelSettingsLoadResult, StateOverview, StateOverviewCharacterMatrix } from "../api/types.js";
-import type { DevApiPermission, SuggestedAction, ThemeMode, ChapterFlowStatus } from "./workflow.js";
+import type { DevApiPermission, SuggestedAction, ThemeMode } from "./workflow.js";
 import type { ChapterNavItem, ChapterMessage, ProtagonistStatus, LocationStatus, TimeStatus, KnowledgeBoundary, AssetSummary, StoryMemory, RiskWarning, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
 import type { SelectionRevisionKey } from "../components/v2/selectionRevisionTemplates.js";
@@ -125,10 +125,6 @@ export interface ChapterSidebarProps {
   readonly onSelectChapter?: (chapterId: string) => void;
   readonly onSelectSection?: (section: string) => void;
   readonly onGoHome?: () => void;
-}
-
-export interface ChapterFlowBarProps {
-  readonly flowStatus: ChapterFlowStatus;
 }
 
 export interface ModelSettingsDialogProps {

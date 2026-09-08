@@ -525,6 +525,121 @@ describe("story-engine draft CLI", () => {
   });
 });
 
+describe("story-engine draft CLI opencode 会话头（与 UI llm-client 同源：仅 opencode 主机定向发头）", () => {
+  it("baseUrl 指向 opencode 主机 → 带 x-opencode-session + 自有 UA；持久化 0600、两次运行复用同一 id", async () => {
+    const projectDir = await createFixtureProject();
+    const dataDir = await mkdtemp(join(tmpdir(), "story-engine-cli-oc-session-"));
+    const seenSessions: string[] = [];
+    const fetchMock = vi.fn<FetchLike>(async (url, init) => {
+      expect(url).toBe("https://opencode.ai/zen/go/v1/chat/completions");
+      expect(init.headers["Authorization"]).toBe("Bearer fake-test-key");
+      expect(init.headers["user-agent"]).toBe("story-engine-ng/1.0");
+      const session = init.headers["x-opencode-session"];
+      expect(session).toMatch(/^[0-9a-f-]{36}$/u);
+      seenSessions.push(session);
+      return responseJson({
+        choices: [{ message: { content: "Guo Xu checks the ledger." } }],
+      });
+    });
+    const env = {
+      STORY_ENGINE_LLM_BASE_URL: "https://opencode.ai/zen/go/v1",
+      STORY_ENGINE_LLM_API_KEY: "fake-test-key",
+      SE_DATA_DIR: dataDir,
+    };
+
+    const first = await runDraftCommand({
+      project: projectDir,
+      chapter: 1,
+      provider: "opencode",
+      model: "opencode-model",
+      dryRun: false,
+      json: true,
+    }, { env, fetch: fetchMock, stdout: createWritable() });
+    const second = await runDraftCommand({
+      project: projectDir,
+      chapter: 2,
+      provider: "opencode",
+      model: "opencode-model",
+      dryRun: false,
+      json: true,
+    }, { env, fetch: fetchMock, stdout: createWritable() });
+
+    expect(first.passed).toBe(true);
+    expect(second.passed).toBe(true);
+    expect(seenSessions).toHaveLength(2);
+    expect(seenSessions[1]).toBe(seenSessions[0]);
+    const sessionPath = join(dataDir, "opencode-session.json");
+    expect(JSON.parse(await readFile(sessionPath, "utf-8"))).toEqual({ version: 1, sessionId: seenSessions[0] });
+    expect((await stat(sessionPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("复用 UI 写出的同格式 opencode-session.json（同文件同格式，不另起新 id）", async () => {
+    const projectDir = await createFixtureProject();
+    const dataDir = await mkdtemp(join(tmpdir(), "story-engine-cli-oc-reuse-"));
+    const existing = "11111111-2222-4333-8444-555555555555";
+    await writeFile(join(dataDir, "opencode-session.json"), `${JSON.stringify({ version: 1, sessionId: existing }, null, 2)}\n`, "utf-8");
+    const fetchMock = vi.fn<FetchLike>(async (_url, init) => {
+      expect(init.headers["x-opencode-session"]).toBe(existing);
+      return responseJson({
+        choices: [{ message: { content: "Guo Xu checks the ledger." } }],
+      });
+    });
+
+    const report = await runDraftCommand({
+      project: projectDir,
+      chapter: 1,
+      provider: "opencode",
+      model: "opencode-model",
+      dryRun: false,
+      json: true,
+    }, {
+      env: {
+        STORY_ENGINE_LLM_BASE_URL: "https://api.opencode.ai/v1",
+        STORY_ENGINE_LLM_API_KEY: "fake-test-key",
+        SE_DATA_DIR: dataDir,
+      },
+      fetch: fetchMock,
+      stdout: createWritable(),
+    });
+
+    expect(report.passed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("非 opencode 地址 → 不带 x-opencode-session / user-agent（不广播），也不落盘会话文件", async () => {
+    const projectDir = await createFixtureProject();
+    const dataDir = await mkdtemp(join(tmpdir(), "story-engine-cli-oc-plain-"));
+    const fetchMock = vi.fn<FetchLike>(async (_url, init) => {
+      expect(init.headers["Authorization"]).toBe("Bearer fake-test-key");
+      expect(init.headers["x-opencode-session"]).toBeUndefined();
+      expect(init.headers["user-agent"]).toBeUndefined();
+      return responseJson({
+        choices: [{ message: { content: "Guo Xu checks the ledger." } }],
+      });
+    });
+
+    const report = await runDraftCommand({
+      project: projectDir,
+      chapter: 1,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      dryRun: false,
+      json: true,
+    }, {
+      env: {
+        STORY_ENGINE_LLM_BASE_URL: "https://api.deepseek.com",
+        STORY_ENGINE_LLM_API_KEY: "fake-test-key",
+        SE_DATA_DIR: dataDir,
+      },
+      fetch: fetchMock,
+      stdout: createWritable(),
+    });
+
+    expect(report.passed).toBe(true);
+    await expect(access(join(dataDir, "opencode-session.json"))).rejects.toThrow();
+  });
+});
+
 describe("story-engine commit-draft CLI", () => {
   it("fails when the fast draft is missing", async () => {
     const projectDir = await createFixtureProject();

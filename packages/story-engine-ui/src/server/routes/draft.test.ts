@@ -122,6 +122,7 @@ vi.mock("../agent/presence/in-scene-detector.js", () => ({
 import { __draftRouteTest, registerDraftRoutes } from "./draft.js";
 
 const { buildStateOverview, buildWriterContext, readWritingRules, renderFastDraftPromptText, runFastDraft } = storyEngineMocks;
+const { buildDraftAIReviewPrompt, buildWritingContextPack, checkDraftBeforeCommit, fallbackDraftAIReviewReport, parseDraftAIReviewReport } = storyEngineMocks;
 const { callOpenAICompatibleChatModel, createConfiguredWriterClient, resolveConfiguredChatModel, streamOpenAICompatibleResponse } = llmClientMocks;
 const { resolveSelectedCharacterIds } = presenceMocks;
 
@@ -379,12 +380,7 @@ describe("draft length guard routes", () => {
       return "写作提示";
     });
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ choices: [{ message: { content: "标题" } }] }),
-      } as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response);
 
     const response = await callDraftSseRoute("/api/draft/stream", {
       projectPath: projectDir,
@@ -410,12 +406,7 @@ describe("draft length guard routes", () => {
     await writeProjectJson(projectDir);
     buildWriterContext.mockResolvedValueOnce(makeMockWriterContext());
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ choices: [{ message: { content: "标题" } }] }),
-      } as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response);
 
     const response = await callDraftSseRoute("/api/draft/stream", {
       projectPath: projectDir,
@@ -597,12 +588,7 @@ describe("draft length guard routes", () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-length-");
     await writeProjectJson(projectDir);
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ choices: [{ message: { content: "压缩标题" } }] }),
-      } as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response);
 
     const response = await callDraftSseRoute("/api/draft/stream", {
       projectPath: projectDir,
@@ -632,6 +618,27 @@ describe("draft length guard routes", () => {
     }));
   });
 
+  it("章节标题生成收拢进非流式 helper：带 120s 总时长上限（上游死连兜底退回第X章，不再挂住路由）", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-title-");
+    await writeProjectJson(projectDir);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response);
+
+    const response = await callDraftSseRoute("/api/draft/stream", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "继续推进主角进入审计楼。",
+    });
+
+    expect(response.events.some((event) => event.event === "error")).toBe(false);
+    expect(response.events.some((event) => event.event === "done")).toBe(true);
+    // 标题是流式出稿后的最后一次模型调用；timeoutMs 只挂在标题调用上（压缩/扩写不带）。
+    expect(callOpenAICompatibleChatModel).toHaveBeenLastCalledWith(expect.objectContaining({
+      timeoutMs: 120_000,
+      temperature: 0.55,
+    }));
+  });
+
   it("uses a second fallback when streamed explicit short-target compression becomes too short", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-length-");
     await writeProjectJson(projectDir);
@@ -648,12 +655,7 @@ describe("draft length guard routes", () => {
         response: { ok: true, status: 200 },
       });
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ choices: [{ message: { content: "短目标标题" } }] }),
-      } as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "" } as Response);
 
     const response = await callDraftSseRoute("/api/draft/stream", {
       projectPath: projectDir,
@@ -666,8 +668,9 @@ describe("draft length guard routes", () => {
     const cjkCount = __draftRouteTest.countCjkChars(done?.draftContent ?? "");
     expect(cjkCount).toBeGreaterThanOrEqual(425);
     expect(cjkCount).toBeLessThanOrEqual(575);
-    expect(callOpenAICompatibleChatModel).toHaveBeenCalledTimes(2);
-    expect(callOpenAICompatibleChatModel).toHaveBeenLastCalledWith(expect.objectContaining({
+    // 压缩 + 扩写 + 章节标题（标题已收拢进 callOpenAICompatibleChatModel，带 120s 上限）
+    expect(callOpenAICompatibleChatModel).toHaveBeenCalledTimes(3);
+    expect(callOpenAICompatibleChatModel).toHaveBeenNthCalledWith(2, expect.objectContaining({
       messages: expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("目标长度：425-575 个中文字符") }),
       ]),
@@ -759,12 +762,7 @@ describe("draft length guard routes", () => {
         .mockImplementationOnce((_input, init) => {
           capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
           return Promise.resolve({ ok: true, status: 200, text: async () => "" } as Response);
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ choices: [{ message: { content: "慢流标题" } }] }),
-        } as Response);
+        });
       // 模拟慢速长生成：每 60s 才来一块字节（每次都落在 90s 空闲窗内 → 续命），总时长 180s 远超窗口
       streamOpenAICompatibleResponse.mockImplementationOnce(async (
         _response: unknown,
@@ -828,6 +826,103 @@ describe("draft length guard routes", () => {
     const error = response.events.find((event) => event.event === "error")?.data as { readonly error?: string } | undefined;
     expect(error?.error).toContain("客户端已断开");
     expect(response.events.some((event) => event.event === "done")).toBe(false);
+  });
+});
+
+describe("draft ai-review route model call（收拢 streamChatModelToText：流式 + 空闲超时铁律）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    buildStateOverview.mockResolvedValue({ project: { title: "测试项目" } });
+    buildWritingContextPack.mockResolvedValue(undefined);
+    checkDraftBeforeCommit.mockResolvedValue({ issues: [] });
+    buildDraftAIReviewPrompt.mockReturnValue("审稿提示");
+    parseDraftAIReviewReport.mockReturnValue({ verdict: "pass", summary: "通过", issues: [] });
+    fallbackDraftAIReviewReport.mockReturnValue({ verdict: "blocked", summary: "兜底", issues: [{ id: "ai-review-format-error" }] });
+    resolveConfiguredChatModel.mockResolvedValue({
+      provider: { baseUrl: "https://example.invalid" },
+      profile: { id: "review-test", model: "review-model", temperature: 0.1 },
+      apiKey: "test-key",
+    });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("审稿请求带 AbortSignal、走流式（stream:true + response_format），聚合正文交 parseDraftAIReviewReport", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-review-");
+    await writeProjectJson(projectDir);
+    let capturedSignal: AbortSignal | null = null;
+    let capturedBody = "";
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce((_input, init) => {
+      capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+      capturedBody = String((init as RequestInit | undefined)?.body ?? "");
+      return Promise.resolve(sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "{\"verdict\":\"pass\"}" } }] })}\n\n`,
+        "data: [DONE]\n\n",
+      ]));
+    });
+
+    const response = await callDraftRoute("/api/draft/ai-review", {
+      projectPath: projectDir,
+      chapter: 1,
+      draftContent: longCjkDraft(4, 60),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({ ok: true, model: "review-model", profileId: "review-test", usedFallback: false });
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal!.aborted).toBe(false);
+    const body = JSON.parse(capturedBody) as Record<string, unknown>;
+    expect(body.stream).toBe(true);
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.max_tokens).toBeUndefined();
+    expect(parseDraftAIReviewReport).toHaveBeenCalledWith("{\"verdict\":\"pass\"}");
+  });
+
+  it("上游彻底静默超 90s → 空闲超时 abort 死连（不再永远挂住），路由回落兜底报告", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-review-");
+    await writeProjectJson(projectDir);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let capturedSignal: AbortSignal | null = null;
+      let fetchCalled!: () => void;
+      const fetchCalledPromise = new Promise<void>((resolvePromise) => {
+        fetchCalled = resolvePromise;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementationOnce((_input, init) => {
+        capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+        fetchCalled();
+        // 上游死连：永不出字节，只在被 abort 时按真实 fetch 行为 reject
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        });
+      });
+
+      const pending = callDraftRoute("/api/draft/ai-review", {
+        projectPath: projectDir,
+        chapter: 1,
+        draftContent: longCjkDraft(4, 60),
+      });
+      await fetchCalledPromise;
+      expect(capturedSignal!.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(90_001);
+      const response = await pending;
+
+      expect(capturedSignal!.aborted).toBe(true);
+      expect(response.statusCode).toBe(200);
+      expect(response.payload).toMatchObject({ ok: true, usedFallback: true });
+      expect(fallbackDraftAIReviewReport).toHaveBeenCalledWith(expect.stringContaining("静默超过 90s"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1058,6 +1153,17 @@ function parseSseEvents(raw: string): readonly { readonly event: string; readonl
 function longCjkDraft(paragraphCount: number, paragraphLength: number): string {
   const char = "海";
   return Array.from({ length: paragraphCount }, (_, index) => `第${index + 1}段${char.repeat(paragraphLength)}`).join("\n\n");
+}
+
+function sseResponse(chunks: readonly string[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200 });
 }
 
 interface MockContextSection {
