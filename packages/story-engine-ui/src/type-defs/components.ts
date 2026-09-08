@@ -1,6 +1,6 @@
 import type { ChapterAdviceCard, ChapterSteeringDraft, CreateBookResult, DraftAIReviewIssue, DraftAIReviewReport, DraftAIRevisionSuggestion, DraftRevisionPreview, DraftRevisionTask, ModelSettingsLoadResult, StateOverview, StateOverviewCharacterMatrix } from "../api/types.js";
 import type { DevApiPermission, SuggestedAction, ThemeMode, ChapterFlowStatus } from "./workflow.js";
-import type { ChapterNavItem, ChapterMessage, DraftPreview, ProtagonistStatus, LocationStatus, TimeStatus, KnowledgeBoundary, AssetSummary, StoryMemory, RiskWarning, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
+import type { ChapterNavItem, ChapterMessage, ProtagonistStatus, LocationStatus, TimeStatus, KnowledgeBoundary, AssetSummary, StoryMemory, RiskWarning, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
 import type { SelectionRevisionKey } from "../components/v2/selectionRevisionTemplates.js";
 
@@ -127,38 +127,8 @@ export interface ChapterSidebarProps {
   readonly onGoHome?: () => void;
 }
 
-export interface ChapterWorkspaceProps {
-  readonly draft: DraftPreview;
-  readonly messages: readonly ChapterMessage[];
-  readonly flowStatus: ChapterFlowStatus;
-  readonly selectedAdviceCardKeys?: readonly string[];
-  readonly onSelectAdviceCard?: (key: string, card: ChapterAdviceCard) => void;
-  readonly onSuggestedAction?: (action: SuggestedAction) => void;
-  readonly onSendMessage?: (message: string) => void;
-  readonly steeringDirection: string;
-  readonly steeringDraft?: ChapterSteeringDraft | null;
-  readonly steeringError?: string | null;
-  readonly steeringLoading?: boolean;
-  readonly chatLoading?: boolean;
-  readonly chatError?: string | null;
-  readonly draftActionLoading?: string | null;
-  readonly commitPreview?: CommitPreviewUiReport | null;
-  readonly onSteeringDirectionChange: (value: string) => void;
-  readonly onGenerateSteering: () => void;
-  readonly onRepairDraft?: () => void;
-  readonly onRegenerateDraft?: () => void;
-}
-
 export interface ChapterFlowBarProps {
   readonly flowStatus: ChapterFlowStatus;
-}
-
-export interface ActionBarProps extends ChapterFlowBarProps {
-  readonly steeringLoading?: boolean;
-  readonly draftActionLoading?: string | null;
-  readonly onGenerateSteering: () => void;
-  readonly onRepairDraft?: () => void;
-  readonly onRegenerateDraft?: () => void;
 }
 
 export interface ModelSettingsDialogProps {
