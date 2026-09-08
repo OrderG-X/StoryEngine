@@ -57,6 +57,15 @@ Then open the address shown in the terminal (default `http://127.0.0.1:5173`).
 (any OpenAI-compatible endpoint works: DeepSeek, GLM, Kimi, OpenAI, …). Keys stay on your machine
 (`~/.story-engine/`); never commit keys to any repository.
 
+## Currently disabled (no automation)
+
+These paths are deliberately disabled or treated as unsafe — no automation is provided:
+
+- `merge_threads` confirmation
+- `drop_thread` confirmation
+- Automatic cleanup / automatic intent expiry
+- Automatic `mark_thread_done` / automatic `apply-review-plan --confirm`
+
 ## Development
 
 ```bash
@@ -66,6 +75,16 @@ pnpm build
 ```
 
 GitHub CI runs these workspace commands on Node.js 22 and pnpm 11.
+
+## Desktop
+
+Desktop builds ship **without** any bundled model config (`preset-model-config`), and a post-pack probe verifies the artifacts contain no keys. A build with model presets is an explicitly dangerous internal-testing mode: it requires all three preset files plus the explicit confirmation env var `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`, produces artifacts with a `-with-model-preset` suffix, and keeps outputs isolated as `dist-electron/clean/` vs `dist-electron/with-model-preset/`.
+
+Desktop builds are currently **unsigned, internal-testing artifacts**. Code signing, notarization, and public distribution are not in place yet.
+
+## Security notes
+
+- Never distribute a desktop artifact built with model presets as a clean/public build — the bundled keys are extractable; discard it after internal testing
 
 ## License
 
