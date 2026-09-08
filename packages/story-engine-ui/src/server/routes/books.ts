@@ -579,6 +579,7 @@ async function handleUsageSummary(req: import("node:http").IncomingMessage, res:
     }
     const url = new URL(req.url ?? "", "http://localhost");
     const projectDir = requireBodyString(url.searchParams.get("project"), "项目路径不能为空。");
+    if (!guardProjectPath(res, projectDir)) return;
     await assertStoryEngineProject(projectDir);
     const summary = await readUsageSummary(projectDir);
     writeJson(res, 200, { ok: true, summary });

@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -95,9 +96,12 @@ const llmClientMocks = vi.hoisted(() => ({
   streamOpenAICompatibleResponse: vi.fn(),
 }));
 
-vi.mock("../lib/llm-client.js", () => ({
-  ...llmClientMocks,
-}));
+vi.mock("../lib/llm-client.js", async () => {
+  // 其余导出（createIdleAbort / STREAM_IDLE_TIMEOUT_MS 等）走真实实现——出稿流的空闲超时
+  // 铁律要靠真计时器验证；只有上面 hoisted 的几个函数被 mock。
+  const actual = await vi.importActual<typeof import("../lib/llm-client.js")>("../lib/llm-client.js");
+  return { ...actual, ...llmClientMocks };
+});
 
 const qualityJudgeMocks = vi.hoisted(() => ({
   judgeDraftQualityWithModel: vi.fn(),
@@ -703,6 +707,128 @@ describe("draft length guard routes", () => {
     await expect(readFile(draftPath, "utf-8")).resolves.toBe("# 第1章\n\n旧工作稿保留。\n");
     expect(callOpenAICompatibleChatModel).toHaveBeenCalledTimes(2);
   });
+
+  it("出稿流上游彻底静默超 90s → abort 上游 fetch 并报可读错误（不再永远挂住路由）", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-idle-");
+    await writeProjectJson(projectDir);
+    // 只 fake setTimeout：createIdleAbort 的计时器可控，fs/git/nextTick 等真实事件循环不受影响
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let capturedSignal: AbortSignal | null = null;
+      let fetchCalled!: () => void;
+      const fetchCalledPromise = new Promise<void>((resolvePromise) => {
+        fetchCalled = resolvePromise;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementationOnce((_input, init) => {
+        capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+        fetchCalled();
+        // 上游死连：永不出字节，只在被 abort 时按真实 fetch 行为 reject
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+        });
+      });
+
+      const { finished } = startDraftSseRoute("/api/draft/stream", {
+        projectPath: projectDir,
+        chapter: 1,
+        chapterGoal: "继续推进主角进入审计楼。",
+      });
+      await fetchCalledPromise;
+      expect(capturedSignal).not.toBeNull();
+      expect(capturedSignal!.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(90_001);
+      const response = await finished;
+
+      expect(capturedSignal!.aborted).toBe(true);
+      const error = response.events.find((event) => event.event === "error")?.data as { readonly error?: string } | undefined;
+      expect(error?.error).toContain("静默超过 90s");
+      expect(response.events.some((event) => event.event === "done")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("出稿流有字节就续命：总长超 90s 的慢速流式照常完成，不误杀、不设总时长上限", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-idle-");
+    await writeProjectJson(projectDir);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let capturedSignal: AbortSignal | null = null;
+      vi.spyOn(globalThis, "fetch")
+        .mockImplementationOnce((_input, init) => {
+          capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+          return Promise.resolve({ ok: true, status: 200, text: async () => "" } as Response);
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ choices: [{ message: { content: "慢流标题" } }] }),
+        } as Response);
+      // 模拟慢速长生成：每 60s 才来一块字节（每次都落在 90s 空闲窗内 → 续命），总时长 180s 远超窗口
+      streamOpenAICompatibleResponse.mockImplementationOnce(async (
+        _response: unknown,
+        onDelta: (delta: string) => void,
+        _onThinkingDelta: unknown,
+        onActivity?: () => void,
+      ) => {
+        for (let i = 0; i < 3; i += 1) {
+          await vi.advanceTimersByTimeAsync(60_000);
+          onActivity?.();
+          onDelta("海");
+        }
+        return { content: longCjkDraft(8, 90) };
+      });
+
+      const response = await startDraftSseRoute("/api/draft/stream", {
+        projectPath: projectDir,
+        chapter: 1,
+        chapterGoal: "继续推进主角进入审计楼。",
+      }).finished;
+
+      expect(capturedSignal).not.toBeNull();
+      expect(capturedSignal!.aborted).toBe(false);
+      expect(response.events.some((event) => event.event === "error")).toBe(false);
+      expect(response.events.some((event) => event.event === "done")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("客户端断开（res close 且 writableEnded=false）→ abort 上游 fetch、回报已中止", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-disconnect-");
+    await writeProjectJson(projectDir);
+    let capturedSignal: AbortSignal | null = null;
+    let fetchCalled!: () => void;
+    const fetchCalledPromise = new Promise<void>((resolvePromise) => {
+      fetchCalled = resolvePromise;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce((_input, init) => {
+      capturedSignal = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
+      fetchCalled();
+      // 上游长连不返回：只在被 abort 时 reject
+      return new Promise<Response>((_resolve, reject) => {
+        capturedSignal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
+      });
+    });
+
+    const { res, finished } = startDraftSseRoute("/api/draft/stream", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "继续推进主角进入审计楼。",
+    });
+    await fetchCalledPromise;
+    expect(capturedSignal).not.toBeNull();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    res.emit("close"); // writableEnded 仍为 false = 响应未完成时连接被掐（前端停止/关页）
+    const response = await finished;
+
+    expect(capturedSignal!.aborted).toBe(true);
+    const error = response.events.find((event) => event.event === "error")?.data as { readonly error?: string } | undefined;
+    expect(error?.error).toContain("客户端已断开");
+    expect(response.events.some((event) => event.event === "done")).toBe(false);
+  });
 });
 
 describe("draft direct edit route", () => {
@@ -862,6 +988,19 @@ async function callDraftSseRoute(path: string, body: Record<string, unknown>): P
   readonly raw: string;
   readonly events: readonly { readonly event: string; readonly data: unknown }[];
 }> {
+  return startDraftSseRoute(path, body).finished;
+}
+
+// 假 res 用真 EventEmitter：路由挂了 res 'close' 侦测客户端断开（abortOnClientDisconnect），
+// end() 正常收尾时 writableEnded=true 再发 close——与真实 Node 行为一致，顺带验证不误杀。
+function startDraftSseRoute(path: string, body: Record<string, unknown>): {
+  readonly res: ServerResponse;
+  readonly finished: Promise<{
+    readonly statusCode: number;
+    readonly raw: string;
+    readonly events: readonly { readonly event: string; readonly data: unknown }[];
+  }>;
+} {
   const handlers: Middleware[] = [];
   registerDraftRoutes({ use: (handler) => handlers.push(handler) });
   const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
@@ -869,8 +1008,9 @@ async function callDraftSseRoute(path: string, body: Record<string, unknown>): P
     url: path,
   }) as IncomingMessage;
   const chunks: Buffer[] = [];
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
+    writableEnded: false,
     setHeader: (name: string, value: string | number | readonly string[]) => {
       void name;
       void value;
@@ -886,17 +1026,21 @@ async function callDraftSseRoute(path: string, body: Record<string, unknown>): P
     },
     end: (chunk?: string | Buffer) => {
       if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      res.writableEnded = true;
+      res.emit("close");
       return res as unknown as ServerResponse;
     },
-  } as unknown as ServerResponse;
+  }) as unknown as ServerResponse & { statusCode: number; writableEnded: boolean };
 
-  await new Promise<void>((resolve, reject) => {
-    const result = handlers[0]?.(req, res, (error?: unknown) => error ? reject(error) : resolve()) as unknown;
-    Promise.resolve(result).then(() => resolve(), reject);
-  });
-
-  const raw = Buffer.concat(chunks).toString("utf-8");
-  return { statusCode: res.statusCode, raw, events: parseSseEvents(raw) };
+  const finished = (async () => {
+    await new Promise<void>((resolve, reject) => {
+      const result = handlers[0]?.(req, res, (error?: unknown) => error ? reject(error) : resolve()) as unknown;
+      Promise.resolve(result).then(() => resolve(), reject);
+    });
+    const raw = Buffer.concat(chunks).toString("utf-8");
+    return { statusCode: res.statusCode, raw, events: parseSseEvents(raw) };
+  })();
+  return { res, finished };
 }
 
 function parseSseEvents(raw: string): readonly { readonly event: string; readonly data: unknown }[] {

@@ -240,6 +240,34 @@ describe("books route destructive confirmation", () => {
   });
 });
 
+describe("usage-summary route path guard（用量汇总补齐路径闸）", () => {
+  it("拒绝家目录外的 project 查询参数（与其余路由同一错误形态）", async () => {
+    const evilProject = join(tmpdir(), `story-engine-usage-evil-${Date.now()}`);
+    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(evilProject)}`);
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toMatchObject({ ok: false });
+    expect(String(response.payload.error)).toContain("不安全的项目路径");
+  });
+
+  it("拒绝家目录敏感段（~/.ssh 下）的 project 查询参数", async () => {
+    const evilProject = join(homedir(), ".ssh", `story-engine-usage-probe-${Date.now()}`);
+    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(evilProject)}`);
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toMatchObject({ ok: false });
+    expect(String(response.payload.error)).toContain("不安全的项目路径");
+  });
+
+  it("合法项目路径照常返回用量汇总（闸不误伤）", async () => {
+    const projectDir = await createDeleteRouteProject("用量汇总书");
+    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(projectDir)}`);
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({
+      ok: true,
+      summary: { diagnosticsCount: 0, totalTokens: 0 },
+    });
+  });
+});
+
 async function createEmptyEngineBook(title: string): Promise<{ readonly projectDir: string; readonly title: string }> {
   // rootDir 必须落在用户目录内，否则 guardProjectPath 会以"不安全路径"拒绝删除；
   // makeHomeTempDir 落在 $HOME 下的隐藏测试基目录，满足这一约束。
@@ -273,6 +301,20 @@ async function callBooksRoute(url: string, body: Record<string, unknown>): Promi
   readonly statusCode: number;
   readonly payload: Record<string, unknown>;
 }> {
+  return invokeBooksRoute("POST", url, body);
+}
+
+async function callBooksGetRoute(url: string): Promise<{
+  readonly statusCode: number;
+  readonly payload: Record<string, unknown>;
+}> {
+  return invokeBooksRoute("GET", url);
+}
+
+async function invokeBooksRoute(method: string, url: string, body?: Record<string, unknown>): Promise<{
+  readonly statusCode: number;
+  readonly payload: Record<string, unknown>;
+}> {
   let handler: ((req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void) => unknown) | undefined;
   registerBooksRoutes({
     use(nextHandler) {
@@ -290,10 +332,10 @@ async function callBooksRoute(url: string, body: Record<string, unknown>): Promi
     },
   } as unknown as ServerResponse & { statusCode: number };
   const req = {
-    method: "POST",
+    method,
     url,
     async *[Symbol.asyncIterator]() {
-      yield Buffer.from(JSON.stringify(body), "utf-8");
+      if (body !== undefined) yield Buffer.from(JSON.stringify(body), "utf-8");
     },
   } as unknown as IncomingMessage;
 

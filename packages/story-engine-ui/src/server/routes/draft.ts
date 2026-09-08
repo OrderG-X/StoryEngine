@@ -45,7 +45,8 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, resolveConfiguredChatModel, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { abortOnClientDisconnect } from "./agent-chat.js";
 import { appendActualWordCountToReviewPrompt } from "../agent/tools/ai-review.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
@@ -302,36 +303,75 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
     const prompt = renderFastDraftPromptText(context);
     sendEvent("status", { message: "正在调用底层写作模型。" });
 
-    const response = await fetch(`${configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(await buildProviderRequestHeaders({
-          baseUrl: configured.provider.baseUrl,
-          apiKey: configured.apiKey,
-          customHeaders: configured.customHeaders,
-        })),
-      },
-      body: JSON.stringify({
-        model: configured.profile.model,
-        // 不传 max_tokens：正文也是推理模型写，思考(reasoning)算进 max_tokens，小额度会把章节截断/写空；
-        // 长度由提示词字数约束 + 过短自动补写重试兜底，模型自然收尾（见 llm-client 注释）。
-        messages: [{ role: "user", content: prompt }],
-        temperature: configured.profile.temperature ?? 0.8,
-        stream: true,
-      }),
-    });
+    // 出稿流直连上游 fetch 守同一套空闲超时铁律（同 streamChatModelToText）：有字节就续命、
+    // 彻底静默超 STREAM_IDLE_TIMEOUT_MS 才判死、绝不设总时长上限；客户端断开（res close 且
+    // writableEnded===false，req close 不可信——见 agent-chat）同步掐掉上游 fetch，不再白烧 token。
+    const idle = createIdleAbort(STREAM_IDLE_TIMEOUT_MS);
+    const disconnect = abortOnClientDisconnect(res);
+    const abortUpstreamOnDisconnect = (): void => idle.controller.abort();
+    disconnect.signal.addEventListener("abort", abortUpstreamOnDisconnect, { once: true });
+    let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实
+    let content = "";
+    try {
+      const response = await fetch(`${configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(await buildProviderRequestHeaders({
+            baseUrl: configured.provider.baseUrl,
+            apiKey: configured.apiKey,
+            customHeaders: configured.customHeaders,
+          })),
+        },
+        body: JSON.stringify({
+          model: configured.profile.model,
+          // 不传 max_tokens：正文也是推理模型写，思考(reasoning)算进 max_tokens，小额度会把章节截断/写空；
+          // 长度由提示词字数约束 + 过短自动补写重试兜底，模型自然收尾（见 llm-client 注释）。
+          messages: [{ role: "user", content: prompt }],
+          temperature: configured.profile.temperature ?? 0.8,
+          stream: true,
+        }),
+        signal: idle.controller.signal,
+      });
 
-    if (!response.ok) {
-      const raw = await response.text().catch(() => "");
-      sendEvent("error", { error: `模型请求失败：${response.status} ${raw.slice(0, 300)}` });
-      res.end();
-      return;
+      if (!response.ok) {
+        const raw = await response.text().catch(() => "");
+        sendEvent("error", { error: `模型请求失败：${response.status} ${raw.slice(0, 300)}` });
+        res.end();
+        return;
+      }
+
+      const streamed = await streamOpenAICompatibleResponse(
+        response,
+        (delta) => {
+          sendEvent("delta", { text: delta });
+        },
+        undefined,
+        () => {
+          gotBytes = true;
+          idle.kick();
+        },
+      );
+      content = streamed.content;
+    } catch (error) {
+      if (idle.controller.signal.aborted) {
+        const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);
+        sendEvent("error", {
+          error: disconnect.signal.aborted
+            ? "客户端已断开，已中止本次出稿生成。"
+            : gotBytes
+              ? `模型生成中途静默超过 ${idleSecs}s（已收到部分输出后上游断流，长内容生成时常见），请重试。`
+              : `模型连接静默超过 ${idleSecs}s（一直没有任何响应），判定连接已死，请重试。`,
+        });
+        res.end();
+        return;
+      }
+      throw error;
+    } finally {
+      disconnect.signal.removeEventListener("abort", abortUpstreamOnDisconnect);
+      idle.dispose();
     }
 
-    let { content } = await streamOpenAICompatibleResponse(response, (delta) => {
-      sendEvent("delta", { text: delta });
-    });
     let draftBody = stripLeadingMarkdownChapterHeading(content);
     let validationError = validateStreamedDraftBody(draftBody);
     if (validationError) {
