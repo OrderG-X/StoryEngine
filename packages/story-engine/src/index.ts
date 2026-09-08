@@ -1,3 +1,4 @@
+export * from "./ai-flavor-detection.js";
 export * from "./ai-reviewer.js";
 export * from "./ai-reviewer-prompt-contract.js";
 export * from "./agent-capabilities.js";

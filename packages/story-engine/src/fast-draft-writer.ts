@@ -1,6 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  buildAiFlavorReport,
+  detectAiFlavorViolations,
+  type AiFlavorReport,
+  type AiFlavorRule,
+} from "./ai-flavor-detection.js";
+import {
   buildWriterContext,
   type ArcGoalsContext,
   type StoryContinuityContext,
@@ -78,6 +84,12 @@ export interface FastDraftInput {
    * 让「再来一版」能临时生成 2–3 个候选并排给用户挑，不冲掉当前草稿、不污染操作历史。默认 true（写盘，原行为）。
    */
   readonly persist?: boolean;
+  /**
+   * AI 腔确定性回检规则（机制进引擎、策略留 UI：规则数据由上层传入，引擎不内置禁词表）。
+   * 不传/空数组 → 完全不跑、报告里无 aiFlavor 字段（旧调用方零行为变化）；传了 → 出稿后跑
+   * detectAiFlavorViolations，结果以 warning-only 放进 report.aiFlavor（绝不影响 passed、不拦稿、不触发重试）。
+   */
+  readonly aiFlavorRules?: readonly AiFlavorRule[];
 }
 
 export interface FastDraftReport {
@@ -99,6 +111,8 @@ export interface FastDraftReport {
   readonly draftLength?: DraftLengthReport;
   readonly continuityQuality?: ContinuityQualityReport;
   readonly beatFidelity?: BeatFidelityReport;
+  /** AI 腔确定性回检（warning-only）：仅 input.aiFlavorRules 非空时出现。 */
+  readonly aiFlavor?: AiFlavorReport;
   readonly diagnostics?: DiagnosticsRecord;
   readonly issues: readonly string[];
 }
@@ -176,6 +190,11 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     const beatFidelity = input.mustHitBeats && input.mustHitBeats.length > 0
       ? checkDraftBeatFidelity({ draftContent: normalizedGenerated.content, mustHitBeats: input.mustHitBeats })
       : undefined;
+    // AI 腔确定性回检（规则数据由上层传入）：与 beatFidelity 同级的 warning-only 软警告——
+    // 绝不影响 passed、不拦稿、不触发重试；不传规则则完全跳过（向后兼容）。
+    const aiFlavor = input.aiFlavorRules && input.aiFlavorRules.length > 0
+      ? buildAiFlavorReport(detectAiFlavorViolations(normalizedGenerated.content, input.aiFlavorRules))
+      : undefined;
     const issues = validateDraft(normalizedGenerated, context);
     if (trimResult && !trimResult.ok) {
       issues.push("Draft content could not be safely trimmed within the requested length range.");
@@ -192,6 +211,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         cacheMetrics: generated.cacheMetrics,
         continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
+        ...(aiFlavor ? { aiFlavor } : {}),
         issues,
       }, latencyTimer);
     }
@@ -210,6 +230,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         cacheMetrics: generated.cacheMetrics,
         continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
+        ...(aiFlavor ? { aiFlavor } : {}),
         issues: [],
       }, latencyTimer);
     }
@@ -229,6 +250,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       cacheMetrics: generated.cacheMetrics,
       continuityQuality,
       ...(beatFidelity ? { beatFidelity } : {}),
+      ...(aiFlavor ? { aiFlavor } : {}),
       issues: [],
     }, latencyTimer);
   } catch (error) {

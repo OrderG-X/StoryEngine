@@ -3,7 +3,10 @@
  *
  * 对照 routes/draft.ts 的 /api/draft/generate 编排（进程内复刻，不经 HTTP）：
  *   createConfiguredWriterClient("fastDraft") → runFastDraft（dryRun:false, persist:true）。
- *   引擎自带长度门槛与有效性校验：正文过短/无法裁剪等会 passed:false 并拒绝写盘。
+ *   一次成稿、不自动补写重试（HTTP 旧路的「过短补写重试」只在那条流式路由里，本工具没有）。
+ *   引擎会 passed:false 拒绝写盘的只有：有效性校验不过（空正文/JSON 伪正文/未提及在场角色）、
+ *   或超出上限且无法安全裁剪；正文低于字数下限【不拒绝】——照写盘，引擎在 report.draftLength
+ *   如实记录，本工具把关键信息透传进输出，并在 summary 里如实标注，由 agent 转达用户决定重写或接受。
  *
  * 快照策略（铁律「直接做+可撤销」的边界）：草稿是「待保存」的工作稿，不是状态入库，
  *   因此**不建 git 快照**（plan 明确：草稿/章节级才入库才建快照；改工作稿走操作历史撤销）。
@@ -13,11 +16,17 @@
  * 铁律：
  * - 题材中立：description / summary 用中性词。
  * - 绝不静默失败 / 绝不谎报：runFastDraft.passed=false 时如实回报 ok:false + issues，不假装出稿成功。
+ * - 字数透明：低于目标字数下限不拦也不藏——draftLength 进输出、summary 打 ⚠ 标注，不假装字数达标。
  */
 import { readFile } from "node:fs/promises";
 import {
   buildStateOverview,
   runFastDraft,
+  type AiFlavorReport,
+  type AiFlavorSeverity,
+  type DraftLengthReport,
+  type DraftLengthStatus,
+  type DraftLengthTargetSource,
   type FastDraftReport,
   type StateOverview,
   type WriterClient,
@@ -38,6 +47,8 @@ import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget }
 import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../presence/in-scene-detector.js";
 import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
+import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../ai-flavor/ai-flavor-rules.js";
+import { readAntiAiPatterns } from "./check-ai-flavor.js";
 
 /** 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。 */
 export async function isChapterCommitted(projectDir: string, chapter: number): Promise<boolean> {
@@ -88,11 +99,27 @@ const inputSchema = z.object({
 });
 
 const outputSchema = z.object({
-  ok: z.boolean().describe("是否成功出稿并写入工作稿。引擎拒绝写盘（如正文过短）时为 false。"),
+  ok: z.boolean().describe("是否成功出稿并写入工作稿。引擎校验不过拒绝写盘（空正文/JSON 伪正文/超上限无法安全裁剪等）时为 false；正文低于字数下限不拒绝、照常写盘（见 draftLength 与 summary 的 ⚠ 标注）。"),
   chapter: z.number().int().positive(),
   draftPath: z.string().optional().describe("工作稿文件路径（成功时）。"),
   draftBody: z.string().optional().describe("生成的正文（不含 Markdown 标题；成功时返回，供前端展示）。"),
   draftTitle: z.string().optional().describe("引擎为本章拟的标题（成功时）。"),
+  draftLength: z.object({
+    requestedDraftLength: z.number().describe("本章目标字数（中文字符数）。"),
+    lowerBound: z.number().describe("目标字数下限。"),
+    upperBound: z.number().describe("目标字数上限。"),
+    actualLength: z.number().describe("本版正文实际中文字符数。"),
+    lengthStatus: z.union([
+      z.literal("below_lower_bound"),
+      z.literal("within_range"),
+      z.literal("above_upper_bound"),
+    ]).describe("字数状态。below_lower_bound=低于下限：本工具一次成稿、不自动补写重试、不拒绝，仅在 summary 如实标注，由用户决定重写或接受。"),
+    source: z.union([
+      z.literal("user"),
+      z.literal("writing_rules"),
+      z.literal("default"),
+    ]).describe("目标字数来源：user=用户/agent 指定，writing_rules=项目写作规则，default=系统默认。"),
+  }).optional().describe("引擎对本版正文的字数核对（成功/失败均可能带）。低于下限不代表出稿失败，只是如实标注。"),
   issues: z.array(z.string()).describe("出稿过程中的问题（失败时含拒绝原因，诚实回报）。"),
   overview: z.unknown().describe("出稿后重新读取的 StateOverview，供前端刷新写作区/总览。"),
   summary: z.string().describe("出稿结果的自然语言摘要。"),
@@ -114,7 +141,29 @@ const outputSchema = z.object({
       "no_write_intent_this_turn=本轮用户原话没有写正文/续写意图（防入库后自主续写），按 summary 向用户讲清并给选项。",
   ),
   pendingChapterToCommit: z.number().int().positive().optional().describe("被章序护栏拦下时，建议先入库的那一章（= 本章号-1）。"),
+  aiFlavor: z.object({
+    total: z.number().int().nonnegative().describe("疑似 AI 腔命中总数（全量，含未截断进清单的）。"),
+    bySeverity: z.object({
+      high: z.number().int().nonnegative(),
+      medium: z.number().int().nonnegative(),
+      low: z.number().int().nonnegative(),
+    }).describe("按严重度分布（全量统计）。"),
+    truncated: z.boolean().describe("清单是否被截断（引擎 capped 8 条；true=还有未列出的命中）。"),
+  }).optional().describe(
+    "出稿后 AI 腔确定性回检（warning-only，绝不影响出稿成败）：内置规则 + 项目写作规则 antiAiPatterns 的确定性命中统计。" +
+    "检出 high/medium 时 summary 会带 ⚠ 标注，可引导用户说「去AI味」逐条修订；total=0 或只有 low 时不标注。",
+  ),
 });
+
+/** 工具输出的字数核对信息：引擎 DraftLengthReport 的关键字段提纯（目标区间/实际字数/是否低于下限/目标来源）。 */
+export interface GenerateDraftLengthInfo {
+  readonly requestedDraftLength: number;
+  readonly lowerBound: number;
+  readonly upperBound: number;
+  readonly actualLength: number;
+  readonly lengthStatus: DraftLengthStatus;
+  readonly source: DraftLengthTargetSource;
+}
 
 export interface GenerateDraftToolOutput {
   readonly ok: boolean;
@@ -122,6 +171,8 @@ export interface GenerateDraftToolOutput {
   readonly draftPath?: string;
   readonly draftBody?: string;
   readonly draftTitle?: string;
+  readonly draftLength?: GenerateDraftLengthInfo;
+  readonly aiFlavor?: GenerateDraftAiFlavorInfo;
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -131,6 +182,54 @@ export interface GenerateDraftToolOutput {
   readonly characterSelection?: CharacterPresenceResult;
   readonly blockedReason?: "previous_chapter_not_committed" | "no_write_intent_this_turn";
   readonly pendingChapterToCommit?: number;
+}
+
+/** 工具输出的 AI 腔回检信息：引擎 AiFlavorReport 的关键字段提纯（总数/按严重度分布/清单是否被截断）。 */
+export interface GenerateDraftAiFlavorInfo {
+  readonly total: number;
+  readonly bySeverity: Readonly<Record<AiFlavorSeverity, number>>;
+  readonly truncated: boolean;
+}
+
+/** 引擎 aiFlavor 报告 → 工具输出的关键信息（total/bySeverity 是全量统计；truncated=清单 capped 8 被截断）。纯逻辑、可测。 */
+export function buildAiFlavorInfo(report: AiFlavorReport): GenerateDraftAiFlavorInfo {
+  return {
+    total: report.total,
+    bySeverity: report.bySeverity,
+    truncated: report.violations.length < report.total,
+  };
+}
+
+/**
+ * 出稿回检的如实标注：检出 high/medium 才打 ⚠（治噪音铁律——total=0 或只有 low 一律静默，
+ * low 档全是「仿佛/一丝」这类弱信号与用户自定义词，提示了也是噪音）。纯逻辑、可测。
+ */
+export function buildAiFlavorWarning(info: GenerateDraftAiFlavorInfo): string {
+  const { high, medium } = info.bySeverity;
+  if (high + medium === 0) return "";
+  const breakdown = [high > 0 ? `high ${high}` : "", medium > 0 ? `medium ${medium}` : ""].filter(Boolean).join(" / ");
+  return `⚠ 检出 ${info.total} 处疑似 AI 腔（${breakdown}），可对我说「去AI味」逐条修订。`;
+}
+
+/** 引擎 draftLength 报告 → 工具输出的关键信息（目标区间/实际字数/是否低于下限/目标来源）。纯逻辑、可测。 */
+export function buildDraftLengthInfo(report: DraftLengthReport): GenerateDraftLengthInfo {
+  return {
+    requestedDraftLength: report.requestedDraftLength,
+    lowerBound: report.lowerBound,
+    upperBound: report.upperBound,
+    actualLength: report.actualLength,
+    lengthStatus: report.lengthStatus,
+    source: report.source,
+  };
+}
+
+/**
+ * 低于目标字数下限的如实标注：一次成稿不自动补写、不拒绝，让 agent 如实转达用户决定重写或接受。
+ * 在区间内/超上限返回空串（不标注；超上限引擎已自行裁剪或拒绝）。纯逻辑、可测。
+ */
+export function buildDraftLengthWarning(info: GenerateDraftLengthInfo): string {
+  if (info.lengthStatus !== "below_lower_bound") return "";
+  return `⚠ 低于目标字数下限（实际${info.actualLength}字/下限${info.lowerBound}字）。可以按原样接受，或让我重写一版补足字数。`;
 }
 
 /**
@@ -232,6 +331,10 @@ export async function runGenerateDraftToolLogic(input: {
   });
   const selectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
 
+  // 出稿即自动回检（warning-only）：内置确定性规则（7 条模式 + 虚弱副词频率闸）+ 项目写作规则的
+  // antiAiPatterns（用户自定义词，字面量匹配、一律 low 档）。writing-rules.json 读不到 → 只剩内置规则，不崩。
+  const aiFlavorRules = [...ALL_BUILTIN_AI_FLAVOR_RULES, ...buildUserAntiAiPatternRules(await readAntiAiPatterns(projectDir))];
+
   const report: FastDraftReport = await runFastDraft({
     projectDir,
     chapter,
@@ -239,6 +342,7 @@ export async function runGenerateDraftToolLogic(input: {
     writerClient,
     dryRun: false,
     persist: true,
+    aiFlavorRules,
     ...(positiveOrUndefined(input.requestedDraftLength) !== undefined ? { requestedDraftLength: positiveOrUndefined(input.requestedDraftLength) } : {}),
     ...(selectedCharacterIds !== undefined ? { selectedCharacterIds } : {}),
     ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
@@ -249,11 +353,14 @@ export async function runGenerateDraftToolLogic(input: {
 
   const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
   const contextBudget = optionalContextBudget(contextRanking);
+  // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带），透传关键信息进输出，绝不藏起来。
+  const draftLengthInfo = report.draftLength ? buildDraftLengthInfo(report.draftLength) : undefined;
 
   if (!report.passed || !report.draftPath) {
     return {
       ok: false,
       chapter,
+      ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
       issues: report.issues,
       overview,
       summary:
@@ -276,18 +383,30 @@ export async function runGenerateDraftToolLogic(input: {
     ? `⚠ 首稿核对：这几条要点可能漏写或被改写了——${missingBeats.join("、")}。要不要我改稿补回？`
     : "";
 
+  // 字数透明软警告：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注，让用户决定重写或接受。
+  const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
+
+  // AI 腔回检软警告（warning-only）：检出 high/medium 才在 summary 标注（只有 low/干净稿不加噪音），
+  // 引导用户说「去AI味」走 check_ai_flavor 逐条修订；绝不拦稿、不影响 ok。
+  const aiFlavorInfo = report.aiFlavor ? buildAiFlavorInfo(report.aiFlavor) : undefined;
+  const aiFlavorWarning = aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";
+
   return {
     ok: true,
     chapter,
     draftPath: report.draftPath,
     draftBody,
     ...(report.title ? { draftTitle: report.title } : {}),
+    ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
+    ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     issues: report.issues,
     overview,
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${report.title ? `《${report.title}》` : ""}。` +
       `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
       (beatWarning ? `\n${beatWarning}` : "") +
+      (lengthWarning ? `\n${lengthWarning}` : "") +
+      (aiFlavorWarning ? `\n${aiFlavorWarning}` : "") +
       // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
       (draftBody.trim().length === 0
         ? "（注：正文已写盘，但本次未能载入到写作区显示——切到别的章再切回本章即可看到，不用重写。）"
@@ -303,7 +422,10 @@ export const generateDraftTool = createTool({
   description:
     "为某章生成一版正文并写入工作稿（drafts/fast，不入库）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
     "草稿是待保存的工作稿，不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式入库。" +
-    "正文过短等被引擎拒绝时会如实回报，不假装出稿成功。",
+    "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。一次成稿、不自动补写重试：" +
+    "正文低于目标字数下限不会被拒绝，会在 draftLength 和 summary 里如实标注（⚠ 低于下限）——请如实转达用户，由其决定重写或接受，别假装字数达标。" +
+    "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时 aiFlavor 字段和 summary 会带 ⚠ 标注，" +
+    "可如实转达并引导用户说「去AI味」逐条修订；total=0 或只有 low 时不标注。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

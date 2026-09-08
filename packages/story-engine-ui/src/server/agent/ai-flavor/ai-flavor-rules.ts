@@ -1,8 +1,11 @@
 /**
- * ai-flavor-rules —— 「去AI味」确定性正则检测层（产品内核·内置不可删）。
+ * ai-flavor-rules —— 「去AI味」确定性检测的规则数据层（机制进引擎、策略留 UI）。
  *
  * 定位（用户拍板 2026-06-25·与 builtin-anti-ai-rules 同源）：这套确定性闸是**我们的内置规则**，
  * 代码常量、用户看不见删不掉、只我们改常量升级（开源后谁要改自己 fork）。
+ * 检测机器（抽整句/同句去重/频率闸/排序/id 形状）已整体下沉引擎 detectAiFlavorViolations
+ * （@actalk/story-engine ai-flavor-detection），本模块只剩规则数据 + 薄封装——
+ * 语义与旧本地实现逐点一致（引擎头注释列了逐点对齐清单，改规则数据时别动机器语义）。
  *
  * 设计（治「软误报噪音」铁律）：确定性层**只收跨源公认、低误报**的硬毛病——先正则高精度命中，
  * 再叫 LLM 补主观判断（见 ai-flavor-check.ts 的 runAiFlavorCheck 合并）。
@@ -13,24 +16,24 @@
  * 输出与 LLM 路同构（AiFlavorViolation）：text=逐字取自草稿的【整句】（供下游「改掉这句」定位）。
  * 纯函数、确定性、题材中立、不调 LLM。
  */
+import {
+  detectAiFlavorViolations,
+  type AiFlavorFrequencyGateRule,
+  type AiFlavorPatternRule,
+  type AiFlavorRule,
+} from "@actalk/story-engine";
 import type { AiFlavorViolation } from "./ai-flavor-check.js";
 
-export interface AiFlavorRule {
-  readonly id: string;
-  readonly label: string;
-  readonly severity: "high" | "medium" | "low";
-  /** 全局正则（带 g/u）。命中的所在整句会被抽出当 violation.text。 */
-  readonly pattern: RegExp;
-  readonly reason: string;
-  readonly suggestedFix: string;
-}
+/** 兼容旧导出名：规则类型就是引擎的 AiFlavorRule（判别联合：pattern / frequency_gate）。 */
+export type { AiFlavorRule } from "@actalk/story-engine";
 
 /**
- * 内置确定性规则集。每条都是跨源公认、低误报的硬毛病；severity 体现"该不该硬改"。
+ * 内置确定性规则集（pattern 类）。每条都是跨源公认、低误报的硬毛病；severity 体现"该不该硬改"。
  * 改这里＝给用户升级（同步 builtin-anti-ai-rules 的版本观）。
  */
-export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
+export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
   {
+    kind: "pattern",
     id: "not-x-but-y",
     label: "不是…而是 句式",
     severity: "high",
@@ -42,6 +45,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "拆成直述句，直接把结论说出来",
   },
   {
+    kind: "pattern",
     id: "explainer-spoiler",
     label: "解释腔/剧透腔",
     severity: "high",
@@ -50,6 +54,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "让信息在场景里被人物得知，别由叙述者直接交代",
   },
   {
+    kind: "pattern",
     id: "summary-uplift",
     label: "金句升华/替读者下结论",
     severity: "medium",
@@ -58,6 +63,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "删掉总结句，让读者自己从前文动作里感受",
   },
   {
+    kind: "pattern",
     id: "ai-cliche-face",
     label: "AI 套话·表情/心理套路",
     severity: "medium",
@@ -68,6 +74,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "换成具体动作或可见细节，别换成另一个形容词",
   },
   {
+    kind: "pattern",
     id: "ai-cliche-hedge",
     label: "AI 套话·情态中介词",
     severity: "low",
@@ -77,6 +84,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "删掉中介词直写画面，或换成具体动作",
   },
   {
+    kind: "pattern",
     id: "ai-cliche-action",
     label: "AI 套话·动作套路",
     severity: "medium",
@@ -86,6 +94,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
     suggestedFix: "换成具体身体反应（胸口起伏了一下）或直接删掉",
   },
   {
+    kind: "pattern",
     id: "omni-adverbial",
     label: "万能状语·带着…的",
     severity: "medium",
@@ -96,74 +105,55 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
   },
 ];
 
-/** novel-deslop「弱化副词每千字≤3」频率闸用词：单字常用、做不得"出现即报"，只在扎堆时报一条。 */
-const FILLER_ADVERB_PATTERN = /缓缓|微微|轻轻|淡淡|默默/gu;
+/**
+ * 「虚弱副词扎堆」频率闸（novel-deslop「弱化副词每千字≤3」）：缓缓/微微 这类词单字常用，
+ * 出现即报必误报——只在累计 ≥4 处且每千字密度 >3 时报一条，挂在第一处没被模式规则命中的整句上。
+ * id 取 "filler-adverb-flood"（与旧硬编码 violation id `aiflavor-rule-filler-adverb-flood` 逐字一致）。
+ */
+export const FILLER_ADVERB_FLOOD_RULE: AiFlavorFrequencyGateRule = {
+  kind: "frequency_gate",
+  id: "filler-adverb-flood",
+  severity: "low",
+  words: ["缓缓", "微微", "轻轻", "淡淡", "默默"],
+  maxPerThousandChars: 3,
+  minOccurrences: 4,
+  label: "虚弱副词扎堆",
+  reason: "缓缓/微微/轻轻/淡淡 等弱化副词密度过高（每千字宜≤3）",
+  suggestedFix: "删掉大部分弱化副词，只在真有必要时留一两个，多用具体动作",
+};
 
-const SEVERITY_RANK: Readonly<Record<AiFlavorViolation["severity"], number>> = { high: 3, medium: 2, low: 1 };
+/** 内置规则全量（7 条模式规则 + 虚弱副词频率闸）——generate_draft 回检与 detectAiFlavorRules 共用。 */
+export const ALL_BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorRule[] = [
+  ...BUILTIN_AI_FLAVOR_RULES,
+  FILLER_ADVERB_FLOOD_RULE,
+];
 
-/** 抽出 index 命中处所在的整句（以 。！？\n 为界，含句末标点），trim 后仍是草稿子串。 */
-function sentenceAround(text: string, start: number, end: number): string {
-  const isBoundary = (ch: string): boolean => ch === "。" || ch === "！" || ch === "？" || ch === "\n";
-  let s = start;
-  while (s > 0 && !isBoundary(text[s - 1] ?? "")) s--;
-  let e = Math.max(end, start + 1);
-  while (e < text.length && !isBoundary(text[e] ?? "")) e++;
-  if (e < text.length) e += 1; // 含句末标点
-  return text.slice(s, e).trim();
+/**
+ * 用户自定义 antiAiPatterns（writing-rules.json 的字符串数组）→ 引擎 pattern 规则：
+ * 字面量匹配（正则元字符转义，用户词是数据不是正则）、severity 一律 low——
+ * 用户自定义词误报风险高，给最低档，只提示不硬报。
+ */
+export function buildUserAntiAiPatternRules(patterns: readonly string[]): readonly AiFlavorRule[] {
+  return patterns
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .map((word, index) => ({
+      kind: "pattern" as const,
+      id: `user-anti-ai-${index}`,
+      severity: "low" as const,
+      pattern: new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gu"),
+      label: "写作规则·自定义反AI词",
+      reason: `命中项目写作规则 antiAiPatterns：「${word}」`,
+      suggestedFix: "删掉或换个说法",
+    }));
 }
 
 /**
- * 确定性检测：跑内置规则，命中处抽出整句去重，返回 AiFlavorViolation[]（高→低排序）。
- * 同一整句被多条规则命中 → 只留 severity 最高的一条（避免对同一句重复报，治噪音）。
+ * 确定性检测：跑内置规则（薄封装引擎 detectAiFlavorViolations），命中处抽出整句去重，
+ * 返回 AiFlavorViolation[]（高→低排序）。同一整句被多条规则命中 → 只留 severity 最高的一条。
+ * 返回的 violation 额外带引擎的 ruleId/start/end（draftText.slice(start,end)===text），
+ * 下游按 UI AiFlavorViolation 形状消费即可。
  */
 export function detectAiFlavorRules(draftText: string): readonly AiFlavorViolation[] {
-  if (!draftText.trim()) return [];
-  // sentence → 命中它的最高优先规则
-  const bySentence = new Map<string, AiFlavorRule>();
-  for (const rule of BUILTIN_AI_FLAVOR_RULES) {
-    const re = new RegExp(rule.pattern.source, rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`);
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(draftText)) !== null) {
-      if (m[0].length === 0) { re.lastIndex += 1; continue; }
-      const sentence = sentenceAround(draftText, m.index, m.index + m[0].length);
-      if (!sentence) continue;
-      const existing = bySentence.get(sentence);
-      if (!existing || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[existing.severity]) {
-        bySentence.set(sentence, rule);
-      }
-    }
-  }
-  const violations: AiFlavorViolation[] = [];
-  let i = 0;
-  for (const [sentence, rule] of bySentence) {
-    violations.push({
-      id: `aiflavor-rule-${rule.id}-${i++}`,
-      text: sentence,
-      reason: `${rule.label}：${rule.reason}`,
-      severity: rule.severity,
-      suggestedFix: rule.suggestedFix,
-    });
-  }
-
-  // 虚弱副词频率闸（novel-deslop：每千字≤3）：扎堆才报一条，挂在第一处「还没被其它规则命中」的整句上
-  // （守「同一整句只报一条」）；偶用（频率不超标）不报，避免对 缓缓/微微 这类常用词出现即报的噪音。
-  const fillerMatches = [...draftText.matchAll(FILLER_ADVERB_PATTERN)];
-  const per1000 = fillerMatches.length / Math.max(1, draftText.length / 1000);
-  if (fillerMatches.length >= 4 && per1000 > 3) {
-    for (const m of fillerMatches) {
-      if (m.index === undefined) continue;
-      const sentence = sentenceAround(draftText, m.index, m.index + m[0].length);
-      if (!sentence || bySentence.has(sentence)) continue;
-      violations.push({
-        id: "aiflavor-rule-filler-adverb-flood",
-        text: sentence,
-        reason: "虚弱副词扎堆：缓缓/微微/轻轻/淡淡 等弱化副词密度过高（每千字宜≤3）",
-        severity: "low",
-        suggestedFix: "删掉大部分弱化副词，只在真有必要时留一两个，多用具体动作",
-      });
-      break;
-    }
-  }
-
-  return violations.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+  return detectAiFlavorViolations(draftText, ALL_BUILTIN_AI_FLAVOR_RULES);
 }

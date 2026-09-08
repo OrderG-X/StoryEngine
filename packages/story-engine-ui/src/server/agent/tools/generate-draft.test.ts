@@ -3,10 +3,10 @@
 // generate_draft 纯逻辑单测：复刻 routes/draft.ts 的 runFastDraft 落工作稿编排（进程内）。
 // 草稿待保存 → 不建 git 快照（withSnapshot 不参与）；写盘后 refreshScope:"full"。
 // writerClient 注入一个 mock model（不调真实 LLM），引擎应用走临时项目 fixture。
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createStoryProject, runFastDraft, type StateOverview, type WriterClient } from "@actalk/story-engine";
+import { createStoryProject, countDraftChineseCharacters, runFastDraft, type StateOverview, type WriterClient } from "@actalk/story-engine";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,10 @@ import { makeWriterRankContext } from "../context-budget/rank-writer-context.js"
 import { buildProjectRequestContext } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
+  buildAiFlavorInfo,
+  buildAiFlavorWarning,
+  buildDraftLengthInfo,
+  buildDraftLengthWarning,
   buildNoWriteIntentBlockedOutput,
   buildSequencingBlockedOutput,
   generateDraftTool,
@@ -348,6 +352,110 @@ describe("generate_draft 写工作稿工具", () => {
   });
 });
 
+describe("draftLength 字数透明（一次成稿不重试：低于下限不拒绝、如实标注）", () => {
+  it("buildDraftLengthInfo：只提纯关键字段（目标区间/实际字数/状态/来源），不带 retryReason/裁剪细节", () => {
+    const info = buildDraftLengthInfo({
+      requestedDraftLength: 1800,
+      lowerBound: 1530,
+      upperBound: 2070,
+      actualLength: 200,
+      lengthStatus: "below_lower_bound",
+      source: "writing_rules",
+      retryReason: "below_lower_bound",
+      whetherTrimmed: false,
+    });
+    expect(info).toEqual({
+      requestedDraftLength: 1800,
+      lowerBound: 1530,
+      upperBound: 2070,
+      actualLength: 200,
+      lengthStatus: "below_lower_bound",
+      source: "writing_rules",
+    });
+  });
+
+  it("buildDraftLengthWarning：below_lower_bound → ⚠ 标注（实际X字/下限Y字）；其余状态 → 空串", () => {
+    const base = { requestedDraftLength: 1800, lowerBound: 1530, upperBound: 2070, source: "writing_rules" as const };
+    expect(buildDraftLengthWarning({ ...base, actualLength: 200, lengthStatus: "below_lower_bound" }))
+      .toBe("⚠ 低于目标字数下限（实际200字/下限1530字）。可以按原样接受，或让我重写一版补足字数。");
+    expect(buildDraftLengthWarning({ ...base, actualLength: 1700, lengthStatus: "within_range" })).toBe("");
+    expect(buildDraftLengthWarning({ ...base, actualLength: 2500, lengthStatus: "above_upper_bound" })).toBe("");
+  });
+
+  it("正文低于目标字数下限 → 仍 ok:true 照写盘（不拒绝、不自动补写），draftLength 透出 + summary 打 ⚠ 标注", async () => {
+    const projectDir = await makeProject("字数透明", "林远");
+    const shortBody = "林远走进了房间。"; // 远低于新项目写作规则目标 1800 的下限 1530
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "第 1 章。",
+      writerClient: mockWriterClient(shortBody),
+    });
+    // 低于下限不拒绝：照常出稿写盘
+    expect(out.ok).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("林远走进了房间");
+    // draftLength 关键信息进输出（新项目目标来自写作规则 1800 → 下限 1530/上限 2070）
+    expect(out.draftLength).toEqual({
+      requestedDraftLength: 1800,
+      lowerBound: 1530,
+      upperBound: 2070,
+      actualLength: countDraftChineseCharacters(shortBody),
+      lengthStatus: "below_lower_bound",
+      source: "writing_rules",
+    });
+    // summary 如实标注，agent 可转达用户决定重写或接受
+    expect(out.summary).toContain(
+      `⚠ 低于目标字数下限（实际${countDraftChineseCharacters(shortBody)}字/下限1530字）`,
+    );
+  });
+
+  it("字数落在目标区间内 → lengthStatus=within_range，summary 不带 ⚠ 字数标注", async () => {
+    const projectDir = await makeProject("字数达标", "林远");
+    const para = "林远在走廊尽头停下脚步，反复掂量手里这份账册的分量，心里盘算着接下来每一步该怎么走才不至于落人话柄。";
+    const repeats = Math.ceil(1700 / countDraftChineseCharacters(para)); // 落进 1530–2070 区间
+    const body = Array.from({ length: repeats }, () => para).join("\n\n");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "第 1 章。",
+      writerClient: mockWriterClient(body),
+    });
+    expect(out.ok).toBe(true);
+    expect(out.draftLength?.lengthStatus).toBe("within_range");
+    expect(out.draftLength?.actualLength).toBeGreaterThanOrEqual(out.draftLength?.lowerBound ?? 0);
+    expect(out.draftLength?.actualLength).toBeLessThanOrEqual(out.draftLength?.upperBound ?? Number.MAX_SAFE_INTEGER);
+    expect(out.summary).not.toContain("低于目标字数下限");
+  });
+
+  it("显式 requestedDraftLength → 目标来源如实标为 user", async () => {
+    const projectDir = await makeProject("用户定字数", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      requestedDraftLength: 300,
+      writerClient: mockWriterClient(longBody("林远")),
+    });
+    expect(out.ok).toBe(true);
+    expect(out.draftLength?.requestedDraftLength).toBe(300);
+    expect(out.draftLength?.source).toBe("user");
+  });
+
+  it("引擎校验不过（passed:false）→ ok:false 之外同样带出 draftLength（失败也透明，不藏）", async () => {
+    const projectDir = await makeProject("失败带字数", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "第 1 章。",
+      writerClient: mockWriterClient('{"tool":"call","args":{}}'),
+    });
+    expect(out.ok).toBe(false);
+    expect(out.draftLength).toBeDefined();
+    expect(out.draftLength?.actualLength).toBe(0); // JSON 伪正文无中文字符
+    expect(out.draftLength?.lengthStatus).toBe("below_lower_bound");
+  });
+});
+
 describe("readDraftBodyWithRetry（L1 回读兜底）", () => {
   it("文件有正文 → 去标题返回正文", async () => {
     const projectDir = await makeProject("回读", "林远");
@@ -548,5 +656,88 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
     } as unknown as ToolExecutionContext;
 
     await expect(execute({}, context)).rejects.toThrow(/缺少章号/);
+  });
+});
+
+describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + antiAiPatterns）", () => {
+  it("检出 high/medium AI 腔 → aiFlavor 字段计数正确 + summary 打 ⚠ 标注引导「去AI味」", async () => {
+    const projectDir = await makeProject("回检命中", "林远");
+    // 深吸一口气(medium) + 殊不知(high) 两处硬命中
+    const body = "林远深吸一口气，压下怒火。殊不知，门后的真相正在等他。";
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(body),
+    });
+    expect(out.ok).toBe(true); // warning-only：绝不拦稿
+    expect(out.aiFlavor).toEqual({
+      total: 2,
+      bySeverity: { high: 1, medium: 1, low: 0 },
+      truncated: false,
+    });
+    expect(out.summary).toContain("⚠ 检出 2 处疑似 AI 腔（high 1 / medium 1）");
+    expect(out.summary).toContain("去AI味");
+  });
+
+  it("干净稿 → aiFlavor.total=0，summary 不加 AI 腔噪音", async () => {
+    const projectDir = await makeProject("回检干净", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(longBody("林远")),
+    });
+    expect(out.ok).toBe(true);
+    expect(out.aiFlavor).toEqual({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false });
+    expect(out.summary).not.toContain("疑似 AI 腔");
+  });
+
+  it("writing-rules.json 的 antiAiPatterns 命中 → 按 low 档检出（正则元字符转义、字面量匹配），summary 不加 ⚠ 噪音", async () => {
+    const projectDir = await makeProject("回检用户词", "林远");
+    const rulesPath = join(projectDir, "story", "writing-rules.json");
+    const rules = JSON.parse(await readFile(rulesPath, "utf-8")) as Record<string, unknown>;
+    rules.antiAiPatterns = ["量子涨落", "C++"]; // 「C++」带正则元字符：不转义会直接 new RegExp 抛错
+    await writeFile(rulesPath, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
+
+    const body = "林远盯着仪器，量子涨落曲线剧烈抖动。他骂了一句，这破设备又吞了 C++ 补丁。";
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(body),
+    });
+    expect(out.ok).toBe(true); // 不崩（元字符已转义）
+    expect(out.aiFlavor?.total).toBe(2); // 两个用户词各命中一处整句
+    expect(out.aiFlavor?.bySeverity).toEqual({ high: 0, medium: 0, low: 2 }); // 用户自定义词一律 low 档
+    expect(out.summary).not.toContain("疑似 AI 腔"); // 只有 low 不打 ⚠（治噪音）
+  });
+
+  it("writing-rules.json 读不到（已删除）→ 不崩，内置规则照常回检", async () => {
+    const projectDir = await makeProject("回检无规则文件", "林远");
+    await rm(join(projectDir, "story", "writing-rules.json"));
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient("林远走出门。殊不知，这一走就是三年。"),
+    });
+    expect(out.ok).toBe(true);
+    expect(out.aiFlavor?.bySeverity.high).toBe(1); // 内置「殊不知」仍命中
+    expect(out.summary).toContain("⚠ 检出 1 处疑似 AI 腔（high 1）");
+  });
+
+  it("buildAiFlavorWarning：只有 low / 干净 → 空串；有 high/medium → ⚠ 如实标注", () => {
+    expect(buildAiFlavorWarning({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false })).toBe("");
+    expect(buildAiFlavorWarning({ total: 2, bySeverity: { high: 0, medium: 0, low: 2 }, truncated: false })).toBe("");
+    expect(buildAiFlavorWarning({ total: 3, bySeverity: { high: 1, medium: 1, low: 1 }, truncated: false }))
+      .toBe("⚠ 检出 3 处疑似 AI 腔（high 1 / medium 1），可对我说「去AI味」逐条修订。");
+  });
+
+  it("buildAiFlavorInfo：清单 capped 8 被截断 → truncated=true（total 仍是全量）", () => {
+    const v = { id: "x", ruleId: "r", text: "t", start: 0, end: 1, reason: "r", severity: "high" as const };
+    const info = buildAiFlavorInfo({
+      total: 10,
+      bySeverity: { high: 10, medium: 0, low: 0 },
+      violations: Array.from({ length: 8 }, () => v),
+    });
+    expect(info).toEqual({ total: 10, bySeverity: { high: 10, medium: 0, low: 0 }, truncated: true });
+    expect(buildAiFlavorInfo({ total: 1, bySeverity: { high: 0, medium: 1, low: 0 }, violations: [v] }).truncated).toBe(false);
   });
 });
