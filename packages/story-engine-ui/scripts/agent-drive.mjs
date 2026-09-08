@@ -11,18 +11,22 @@
 //   2) node scripts/agent-drive.mjs "<用户消息>" [currentChapter] [historyFile] [projectPath]
 //   多轮接着写：传同一个 historyFile（脚本会把 user+assistant 文本追加进去）。
 //
-// 环境变量：STORY_ENGINE_PROJECT（默认 /Users/author/story-engine/story-test-book）、
+// 环境变量：STORY_ENGINE_PROJECT（项目路径，无默认、缺省报错退出——见下）、
 //          STORY_ENGINE_BASE（默认 http://127.0.0.1:5188）。
+// 项目路径为什么不设默认：历史默认 story-test-book 已于 2026-07-12 清库；书库根下现只有
+// 用户真书 story-demo-book，严禁拿来跑。必须经 [projectPath] 参数或 STORY_ENGINE_PROJECT 显式指定。
 import { readFile, writeFile } from "node:fs/promises";
 
-const PROJECT = process.argv[5] || process.env.STORY_ENGINE_PROJECT || "/Users/author/story-engine/story-test-book";
+const PROJECT = process.argv[5] || process.env.STORY_ENGINE_PROJECT;
 const BASE = process.env.STORY_ENGINE_BASE || "http://127.0.0.1:5188";
 
 const userMsg = process.argv[2];
 const currentChapter = process.argv[3] ? Number(process.argv[3]) : undefined;
 const historyFile = process.argv[4];
 
-if (!userMsg) { console.error("用法：node agent-drive.mjs '<用户消息>' [currentChapter] [historyFile] [projectPath]"); process.exit(1); }
+const USAGE = "用法：node agent-drive.mjs '<用户消息>' [currentChapter] [historyFile] [projectPath]（项目路径也可由环境变量 STORY_ENGINE_PROJECT 指定）";
+if (!userMsg) { console.error(USAGE); process.exit(1); }
+if (!PROJECT) { console.error(`错误：必须显式指定项目路径，已无默认值（历史默认 story-test-book 已于 2026-07-12 清库）。\n${USAGE}`); process.exit(1); }
 
 let history = [];
 if (historyFile) history = JSON.parse(await readFile(historyFile, "utf-8").catch(() => "[]"));

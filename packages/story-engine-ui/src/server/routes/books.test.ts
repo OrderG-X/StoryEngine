@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildStateOverview, createStoryProject } from "@actalk/story-engine";
@@ -9,6 +10,7 @@ import { assertStoryEngineProject } from "../lib/project-io.js";
 import { registerBooksRoutes, resolveBookLastActiveMs, selectRecentDefaultBooks } from "./books.js";
 
 const generatedDeleteRouteProjectDirs = new Set<string>();
+const generatedCreateRouteRootDirs = new Set<string>();
 
 afterEach(async () => {
   await Promise.all([...generatedDeleteRouteProjectDirs].map((projectDir) => rm(projectDir, { recursive: true, force: true })));
@@ -70,6 +72,81 @@ describe("books route empty-create seeds no arc-goal (V4 护栏)", () => {
     const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
     expect(overview.arcGoals.activeCount).toBe(0);
     expect(overview.arcGoals.activeItems).toEqual([]);
+  });
+});
+
+describe("books route create path guard（建书路径闸）", () => {
+  const ORIGINAL_BOOKS_DIR = process.env.SE_BOOKS_DIR;
+
+  afterEach(async () => {
+    if (ORIGINAL_BOOKS_DIR === undefined) delete process.env.SE_BOOKS_DIR;
+    else process.env.SE_BOOKS_DIR = ORIGINAL_BOOKS_DIR;
+    await Promise.all([...generatedCreateRouteRootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
+    generatedCreateRouteRootDirs.clear();
+  });
+
+  it("拒绝客户端传入的家目录外 rootDir（与姊妹路由同一错误形态），且不落盘", async () => {
+    const evilRoot = join(tmpdir(), `story-engine-evil-root-${Date.now()}`);
+    const response = await callBooksRoute("/api/projects/create", {
+      rootDir: evilRoot,
+      draft: { title: "越界书" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toMatchObject({ ok: false });
+    expect(String(response.payload.error)).toContain("不安全的项目路径");
+    await expect(stat(evilRoot)).rejects.toThrow();
+  });
+
+  it("拒绝家目录敏感段（~/.ssh 下）的 rootDir，且不落盘", async () => {
+    const evilRoot = join(homedir(), ".ssh", `story-engine-guard-probe-${Date.now()}`);
+    const response = await callBooksRoute("/api/projects/create", {
+      rootDir: evilRoot,
+      draft: { title: "敏感目录书" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toMatchObject({ ok: false });
+    expect(String(response.payload.error)).toContain("不安全的项目路径");
+    await expect(stat(evilRoot)).rejects.toThrow();
+  });
+
+  it("home 内合法 rootDir 照常建书（闸不误伤合法客户端路径）", async () => {
+    const rootDir = await makeHomeTempDir("story-engine-create-route-");
+    generatedCreateRouteRootDirs.add(rootDir);
+    const response = await callBooksRoute("/api/projects/create", {
+      rootDir,
+      draft: { title: "路径闸合法书" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({ ok: true });
+    const projectDir = String(response.payload.projectDir);
+    expect(projectDir.startsWith(rootDir)).toBe(true);
+    await expect(stat(projectDir)).resolves.toBeTruthy();
+  });
+
+  it("不传 rootDir 时用默认书库根（SE_BOOKS_DIR 指向 home 内）照常建书", async () => {
+    const booksRoot = await makeHomeTempDir("story-engine-create-default-");
+    generatedCreateRouteRootDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+    const response = await callBooksRoute("/api/projects/create", {
+      draft: { title: "默认根建书" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({ ok: true });
+    expect(String(response.payload.projectDir).startsWith(booksRoot)).toBe(true);
+  });
+
+  it("SE_BOOKS_DIR 指到家目录外时，默认书库根仍能通过闸（回归：默认路径绝不被拒）", async () => {
+    // isSafeProjectPath 的覆盖分支只放行书库根【之下】的项目路径；建书入口校验的是根本身，
+    // 没有例外会把「覆盖书库根后建书」整个拒掉——这条用例锁死该回归。
+    const booksRoot = await mkdtemp(join(tmpdir(), "story-engine-books-root-"));
+    generatedCreateRouteRootDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+    const response = await callBooksRoute("/api/projects/create", {
+      draft: { title: "覆盖根建书" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({ ok: true });
+    expect(String(response.payload.projectDir).startsWith(booksRoot)).toBe(true);
   });
 });
 

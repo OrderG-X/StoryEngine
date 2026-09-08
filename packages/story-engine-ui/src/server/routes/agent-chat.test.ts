@@ -1,12 +1,16 @@
 // @vitest-environment node
 //
 // agent-chat 路由辅助：currentChapter 解析 + 「用户当前章」system 上下文构造（H3）。
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   MAX_CHAT_HISTORY_MESSAGES,
   MAX_OBEDIENCE_RETRIES,
   SSE_HEARTBEAT_INTERVAL_MS,
+  abortOnClientDisconnect,
   buildCurrentChapterSystemMessage,
   buildModelMessages,
   buildWholeBookTruthLine,
@@ -514,5 +518,84 @@ describe("startSseHeartbeat SSE 心跳（治工具长调用期间 90s 误判超�
   it("心跳间隔远低于客户端 90s 空闲看门狗，留足多次丢包余量", () => {
     // agentChatClient.AGENT_IDLE_TIMEOUT_MS = 90_000；心跳要能在其间多次喂活看门狗。
     expect(SSE_HEARTBEAT_INTERVAL_MS).toBeLessThan(90_000 / 3);
+  });
+});
+
+describe("abortOnClientDisconnect 客户端断开侦测（停止/空闲掐 fetch → 服务端中止生成）", () => {
+  /** 假 res：EventEmitter + writableEnded 标志，模拟 res 'close' 事件。 */
+  function makeFakeRes(writableEnded: boolean) {
+    const res = new EventEmitter() as EventEmitter & { writableEnded: boolean };
+    res.writableEnded = writableEnded;
+    return res as unknown as ServerResponse;
+  }
+
+  it("响应未完成时连接被掐（close + writableEnded=false）→ abort 触发", () => {
+    const res = makeFakeRes(false);
+    const controller = abortOnClientDisconnect(res);
+    expect(controller.signal.aborted).toBe(false);
+    res.emit("close");
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("正常 res.end() 收尾（close + writableEnded=true）→ 不误杀", () => {
+    const res = makeFakeRes(true);
+    const controller = abortOnClientDisconnect(res);
+    res.emit("close");
+    expect(controller.signal.aborted).toBe(false);
+  });
+});
+
+describe("runObedientAgentTurn shouldStop（客户端断开：停转发、不重做）", () => {
+  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
+
+  it("首轮空转声称 + 客户端已断开 → 不再自动重做（不开新工具步骤）", async () => {
+    let calls = 0;
+    const streamAttempt = async () => {
+      calls += 1;
+      return (async function* () {
+        yield { type: "text-delta", payload: { text: "第88章已正式入库。" } };
+      })();
+    };
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "正式入库第88章。" }],
+      userText: "正式入库第88章。",
+      streamAttempt: streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+      shouldStop: () => true,
+    });
+    // 空转声称本已满足重做条件（零工具调用），但客户端已走——绝不为此再开一轮 agent.stream。
+    expect(calls).toBe(1);
+    const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+  });
+
+  it("流式途中断开 → 之后的 chunk 不再转发（停止流式输出），回合照常收场", async () => {
+    let stopped = false;
+    let calls = 0;
+    const streamAttempt = async () => {
+      calls += 1;
+      return (async function* () {
+        yield { type: "text-delta", payload: { text: "甲" } };
+        stopped = true; // 客户端在「甲」之后断开
+        yield { type: "text-delta", payload: { text: "乙" } };
+        yield { type: "text-delta", payload: { text: "丙" } };
+      })();
+    };
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "继续写。" }],
+      userText: "继续写。",
+      streamAttempt: streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+      shouldStop: () => stopped,
+    });
+    expect(calls).toBe(1);
+    const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
+    expect(text).toContain("甲");
+    expect(text).not.toContain("乙");
+    expect(text).not.toContain("丙");
   });
 });

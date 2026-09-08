@@ -20,6 +20,7 @@ import {
 import {
   assertStoryEngineProject,
   guardProjectPath,
+  isSafeProjectPath,
   readJsonBody,
   readJsonFile,
   writeJsonFile,
@@ -110,6 +111,13 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
     const premise = readString(draft.logline) ?? readString(draft.worldPremise) ?? "主角进入一个等待展开的故事世界。";
     const mainCharacterName = readString(draft.protagonistName) ?? "主角";
     const rootDir = readString(body.rootDir) ?? resolveBooksRootDir();
+    // 建书同样过路径闸（与其余路由一致）：rootDir 直接来自客户端。
+    // 唯一例外是配置的书库根本身——SE_BOOKS_DIR 覆盖到家目录外时，isSafeProjectPath 的覆盖分支
+    // 只放行书库根之下的项目路径、根本身会被拒；而建书落点是 <rootDir>/story-engine/<id>，根可信即落点可信。
+    if (!isSafeProjectPath(rootDir) && resolve(rootDir) !== resolve(resolveBooksRootDir())) {
+      writeJson(res, 400, { ok: false, error: "不安全的项目路径" });
+      return;
+    }
     const created = await createStoryProject({
       rootDir,
       title,

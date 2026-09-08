@@ -12,6 +12,8 @@
  *
  * 铁律：projectDir 经 RequestContext 注入工具；绝不静默失败（任何错误→error 事件）；
  * 错误语义：运行时错误带 retryable:true。
+ * 客户端断开（前端「停止」/90s 空闲看门狗掐 fetch）→ abort 本轮 agent.stream：停流式输出、
+ * 尽力取消 in-flight 生成、不再开新工具步骤（已执行中的写盘工具不回滚，写盘本身有事务保护）。
  */
 import type { ModelMessage } from "ai";
 
@@ -184,6 +186,20 @@ export function startSseHeartbeat(
 }
 
 /**
+ * 客户端断开侦测 → AbortController（前端「停止」/空闲看门狗都只是掐 fetch，服务端 agent.stream
+ * 与工具步骤不会自己停）。res 'close' + writableEnded===false = 响应未完成时连接被掐 → abort。
+ * 不能挂 req 'close'：请求体一读完 IncomingMessage 就 close（Node ≥18 实测 req.complete=true 即触发），
+ * 挂它会误杀每个正常请求；正常 res.end() 收尾时 writableEnded=true，不误杀。
+ */
+export function abortOnClientDisconnect(res: import("node:http").ServerResponse): AbortController {
+  const controller = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  return controller;
+}
+
+/**
  * 路由级「绝不静默」兜底（铁律④延伸·E2E 实锤）：模型常在调完工具后沉默收场、偶尔整轮空转——
  * 用户只看到卡/章节冒出来、AI 一句话不说，体感像卡住/坏了。本轮 fullStream 结束时若一个 text-delta
  * 都没发过，就据本轮活动补一条收尾文本：工具有摘要→照实转述；工具无摘要→中性指向上方结果；
@@ -303,6 +319,8 @@ export async function runObedientAgentTurn(args: {
   readonly sendEvent: (event: string, data: unknown) => void;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly maxRetries?: number;
+  /** 客户端已断开（abortOnClientDisconnect）：立即停转发、且检出空转也不再自动重做（不再开新工具步骤）。 */
+  readonly shouldStop?: () => boolean;
 }): Promise<{ readonly finishReason: string | undefined; readonly attempts: number }> {
   const maxRetries = args.maxRetries ?? MAX_OBEDIENCE_RETRIES;
   const modelMessages: ModelMessage[] = [...args.initialMessages];
@@ -322,6 +340,8 @@ export async function runObedientAgentTurn(args: {
 
     const fullStream = await args.streamAttempt(modelMessages, attemptOptions);
     for await (const chunk of fullStream) {
+      // 客户端已断开：流还在吐也不再转发（write 到已关闭的 res 只是空转），尽快退出消费。
+      if (args.shouldStop?.()) break;
       switch (chunk.type) {
         case "text-delta": {
           const text = chunk.payload?.text;
@@ -408,7 +428,8 @@ export async function runObedientAgentTurn(args: {
       toolSteps: stepsForDetection,
     });
 
-    if (correction && attempt < maxRetries) {
+    // 客户端已断开时不重做：重试会再开一轮 agent.stream（新工具步骤），人已走茶凉纯属白费算力。
+    if (correction && attempt < maxRetries && args.shouldStop?.() !== true) {
       // 结构性强制（r8 二轮·ch93 实锤纯 prompt 纠偏无效——flash 重做轮直接交白卷）：
       // 能从用户意图定位到期望工具就点名强制 + 限 1 步（forced choice 作用于每一步，多步会反复调
       // 同一工具）；定位不到（只有声称、意图模糊）就至少强制调一个工具。协议层杜绝「纯文本再编一遍」。
@@ -480,6 +501,9 @@ async function handleAgentChat(
 
   // 切到 SSE 后启动；finally 统一停表（成功/出错/客户端断开都不向已关闭响应写心跳）。
   let stopHeartbeat: (() => void) | undefined;
+  // 客户端断开（停止/空闲超时掐 fetch）→ abort 本轮 agent.stream。挂得比 SSE 切换更早：
+  // body 读取/项目校验期间断开同样置位，进流后第一拍即停。
+  const disconnectAbort = abortOnClientDisconnect(res);
 
   try {
     const body = await readJsonBody(req);
@@ -543,12 +567,15 @@ async function handleAgentChat(
         (
           await agent.stream([...attemptMessages], {
             requestContext,
+            // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
+            abortSignal: disconnectAbort.signal,
             ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
             ...(options?.maxSteps ? { maxSteps: options.maxSteps } : {}),
           })
         ).fullStream as AsyncIterable<ObedientTurnChunk>,
       sendEvent,
       scrubber: visibleTextScrubber,
+      shouldStop: () => disconnectAbort.signal.aborted,
     });
 
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });
