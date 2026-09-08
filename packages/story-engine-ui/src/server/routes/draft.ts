@@ -45,7 +45,7 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { callOpenAICompatibleChatModel, createConfiguredWriterClient, resolveConfiguredChatModel, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, resolveConfiguredChatModel, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { appendActualWordCountToReviewPrompt } from "../agent/tools/ai-review.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
@@ -306,7 +306,11 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(configured.apiKey ? { authorization: `Bearer ${configured.apiKey}` } : {}),
+        ...(await buildProviderRequestHeaders({
+          baseUrl: configured.provider.baseUrl,
+          apiKey: configured.apiKey,
+          customHeaders: configured.customHeaders,
+        })),
       },
       body: JSON.stringify({
         model: configured.profile.model,
@@ -684,7 +688,11 @@ async function generateChapterDraftTitle(input: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(input.configured.apiKey ? { authorization: `Bearer ${input.configured.apiKey}` } : {}),
+        ...(await buildProviderRequestHeaders({
+          baseUrl: input.configured.provider.baseUrl,
+          apiKey: input.configured.apiKey,
+          customHeaders: input.configured.customHeaders,
+        })),
       },
       body: JSON.stringify({
         model: input.configured.profile.model,
@@ -916,7 +924,11 @@ async function callDraftAIReviewModel(input: {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(input.configured.apiKey ? { authorization: `Bearer ${input.configured.apiKey}` } : {}),
+      ...(await buildProviderRequestHeaders({
+        baseUrl: input.configured.provider.baseUrl,
+        apiKey: input.configured.apiKey,
+        customHeaders: input.configured.customHeaders,
+      })),
     },
     body: JSON.stringify({
       model: input.configured.profile.model,

@@ -29,7 +29,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { resolveConfiguredChatModel, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, resolveConfiguredChatModel, type ResolvedChatModel } from "../lib/llm-client.js";
 import { createSnapshot } from "../lib/snapshot.js";
 
 export function registerDraftRevisionRoutes(middlewares: MiddlewareStack): void {
@@ -164,7 +164,11 @@ async function callDraftRevisionModel(input: {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(input.configured.apiKey ? { authorization: `Bearer ${input.configured.apiKey}` } : {}),
+      ...(await buildProviderRequestHeaders({
+        baseUrl: input.configured.provider.baseUrl,
+        apiKey: input.configured.apiKey,
+        customHeaders: input.configured.customHeaders,
+      })),
     },
     body: JSON.stringify({
       model: input.configured.profile.model,

@@ -88,6 +88,7 @@ vi.mock("@actalk/story-engine", async () => {
 });
 
 const llmClientMocks = vi.hoisted(() => ({
+  buildProviderRequestHeaders: vi.fn(async () => ({})),
   callOpenAICompatibleChatModel: vi.fn(),
   createConfiguredWriterClient: vi.fn(),
   resolveConfiguredChatModel: vi.fn(),

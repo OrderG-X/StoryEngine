@@ -129,6 +129,21 @@ function validateProvider(providerId: string, value: unknown): readonly ModelSet
   if (value.apiKeyEnv !== undefined && (typeof value.apiKeyEnv !== "string" || value.apiKeyEnv.trim() === "")) {
     issues.push(issue("error", "invalid_api_key_env", `$.providers.${providerId}.apiKeyEnv`, "apiKeyEnv must be a non-empty string when provided."));
   }
+  if (value.customHeaders !== undefined) {
+    if (!isRecord(value.customHeaders)) {
+      issues.push(issue("error", "invalid_custom_headers", `$.providers.${providerId}.customHeaders`, "customHeaders must be an object mapping header names to string values."));
+    } else {
+      for (const [headerName, headerValue] of Object.entries(value.customHeaders)) {
+        if (!headerName.trim()) {
+          issues.push(issue("error", "invalid_custom_header_name", `$.providers.${providerId}.customHeaders`, "customHeaders header names must be non-empty strings."));
+        }
+        if (typeof headerValue !== "string") {
+          // 消息只带键名不带值——customHeaders 值视同机密，绝不进 issues/日志。
+          issues.push(issue("error", "invalid_custom_header_value", `$.providers.${providerId}.customHeaders.${headerName}`, "customHeaders values must be strings."));
+        }
+      }
+    }
+  }
   return issues;
 }
 
@@ -243,6 +258,8 @@ function buildModelSettingsSummary(
 }
 
 function summarizeProvider(provider: ProviderConfig, env: Record<string, string | undefined>): ProviderConfigSummary {
+  // 脱敏（customHeaders 值视同机密，与 apiKeyStatus 只出状态不出值同口径）：summary 只回键名列表。
+  const customHeaderNames = provider.customHeaders ? Object.keys(provider.customHeaders) : [];
   return {
     id: provider.id,
     ...(provider.label !== undefined ? { label: provider.label } : {}),
@@ -250,6 +267,7 @@ function summarizeProvider(provider: ProviderConfig, env: Record<string, string 
     baseUrl: provider.baseUrl,
     ...(provider.apiKeyEnv !== undefined ? { apiKeyEnv: provider.apiKeyEnv } : {}),
     apiKeyStatus: provider.apiKeyEnv === undefined ? "not_required" : env[provider.apiKeyEnv] ? "present" : "missing",
+    ...(customHeaderNames.length > 0 ? { customHeaderNames } : {}),
   };
 }
 

@@ -5,13 +5,18 @@ import { join } from "node:path";
 import { callRoute } from "./test-helpers.js";
 import {
   findInvalidTaskProfile,
+  MASKED_CUSTOM_HEADER_VALUE,
   readProfileIdsFromConfig,
   registerModelSettingsRoutes,
 } from "./model-settings.js";
 import type { TaskAssignmentsFile } from "../lib/task-assignments.js";
 
-/** 最小合法 model-settings（单 provider），baseUrl / apiKeyEnv 可覆盖。 */
-function sampleSettingsText(overrides: { baseUrl?: string; apiKeyEnv?: string } = {}): string {
+// M1 热生效断言用：PUT 保存后必须调 invalidateStoryAgent 清进程内 agent 缓存（改模型设置不重启即生效）。
+const storyAgentMocks = vi.hoisted(() => ({ invalidateStoryAgent: vi.fn() }));
+vi.mock("../agent/story-agent.js", () => ({ invalidateStoryAgent: storyAgentMocks.invalidateStoryAgent }));
+
+/** 最小合法 model-settings（单 provider），baseUrl / apiKeyEnv / customHeaders 可覆盖。 */
+function sampleSettingsText(overrides: { baseUrl?: string; apiKeyEnv?: string; customHeaders?: Record<string, string> } = {}): string {
   return `${JSON.stringify({
     version: 1,
     defaultProvider: "main",
@@ -23,6 +28,7 @@ function sampleSettingsText(overrides: { baseUrl?: string; apiKeyEnv?: string } 
         type: "openai-compatible",
         baseUrl: overrides.baseUrl ?? "https://api.example.com/v1",
         apiKeyEnv: overrides.apiKeyEnv ?? "STORY_ENGINE_API_KEY",
+        ...(overrides.customHeaders ? { customHeaders: overrides.customHeaders } : {}),
       },
     },
     profiles: {
@@ -256,5 +262,183 @@ describe("PUT 保存：origin 变更时清密钥（R1b）", () => {
     });
     expect(statusCode).toBe(200);
     expect(await readSecrets()).toEqual({ main: "sk-keep" });
+  });
+});
+
+describe("customHeaders：保存 / 脱敏回显 / 打码还原", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  const HEADER_SECRET = "real-header-secret-value";
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-mst-ch-"));
+    process.env.SE_DATA_DIR = dir;
+    storyAgentMocks.invalidateStoryAgent.mockClear();
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function readSavedSettings(): Promise<{ providers: Record<string, { customHeaders?: Record<string, string> }> }> {
+    return JSON.parse(await readFile(join(dir, "model-settings.json"), "utf-8"));
+  }
+
+  it("PUT 保存 customHeaders 落盘为真实值，但响应 rawText 打码、summary 只回键名（值绝不出 API）", async () => {
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }),
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+
+    // 落盘是真实值
+    const saved = await readSavedSettings();
+    expect(saved.providers.main.customHeaders).toEqual({ "x-opencode-session": HEADER_SECRET });
+
+    // 响应脱敏：rawText 值被打码；整个 payload（含 result/issues/taskAssignments）不含机密值
+    expect(payload.rawText).toContain(MASKED_CUSTOM_HEADER_VALUE);
+    expect(JSON.stringify(payload)).not.toContain(HEADER_SECRET);
+    const result = payload.result as { summary: { providers: { id: string; customHeaderNames?: string[] }[] } };
+    expect(result.summary.providers[0]?.customHeaderNames).toEqual(["x-opencode-session"]);
+  });
+
+  it("GET 回显脱敏：rawText 打码、summary 出键名、整个响应不含 customHeaders 值", async () => {
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }), "utf-8");
+
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "GET", "/api/model-settings");
+
+    expect(statusCode).toBe(200);
+    expect(payload.rawText).toContain(MASKED_CUSTOM_HEADER_VALUE);
+    expect(JSON.stringify(payload)).not.toContain(HEADER_SECRET);
+    const result = payload.result as { summary: { providers: { customHeaderNames?: string[] }[] } };
+    expect(result.summary.providers[0]?.customHeaderNames).toEqual(["x-opencode-session"]);
+  });
+
+  it("PUT 回传打码值 → 还原为磁盘真实值（面板不改动直接保存不丢头、哨兵绝不落盘）", async () => {
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }), "utf-8");
+
+    const maskedText = sampleSettingsText({ customHeaders: { "x-opencode-session": MASKED_CUSTOM_HEADER_VALUE } });
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: maskedText,
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+
+    const saved = await readSavedSettings();
+    expect(saved.providers.main.customHeaders).toEqual({ "x-opencode-session": HEADER_SECRET });
+    expect(JSON.stringify(saved)).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+  });
+
+  it("PUT 打码值但无旧值可还原（全新配置带哨兵）→ 该条目丢弃、整键不留，哨兵绝不落盘", async () => {
+    const maskedText = sampleSettingsText({ customHeaders: { "x-opencode-session": MASKED_CUSTOM_HEADER_VALUE } });
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: maskedText,
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+
+    const saved = await readSavedSettings();
+    expect(saved.providers.main.customHeaders).toBeUndefined();
+    expect(JSON.stringify(saved)).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+  });
+
+  it("PUT 非法 customHeaders（值不是字符串）→ 400 拒绝保存", async () => {
+    const bad = JSON.parse(sampleSettingsText()) as { providers: Record<string, Record<string, unknown>> };
+    bad.providers.main.customHeaders = { "x-token": 42 as unknown as string };
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: `${JSON.stringify(bad, null, 2)}\n`,
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(400);
+    expect(payload.ok).toBe(false);
+  });
+
+  it("M1 热生效回归守卫：PUT 保存成功后调用 invalidateStoryAgent（agent 缓存失效，改设置不必重启）", async () => {
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: sampleSettingsText(),
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(storyAgentMocks.invalidateStoryAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("provider 连通性测试带头（/models 出口：opencode 会话头 + customHeaders）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-mst-test-hdr-"));
+    process.env.SE_DATA_DIR = dir;
+    await mkdir(dir, { recursive: true });
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function mockModelsFetch() {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response(JSON.stringify({ data: [{ id: "m1" }] }), { status: 200 }),
+    );
+  }
+  function sentHeaders(spy: ReturnType<typeof mockModelsFetch>): Record<string, string> {
+    return ((spy.mock.calls[0]?.[1] as RequestInit).headers ?? {}) as Record<string, string>;
+  }
+
+  it("已存 provider 是 opencode 主机 → /models 测试自动带 x-opencode-session + 自有 User-Agent", async () => {
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ baseUrl: "https://opencode.ai/zen/go/v1" }), "utf-8");
+    const spy = mockModelsFetch();
+    await callRoute(registerModelSettingsRoutes, "POST", "/api/model-settings/test", { providerId: "main" });
+    const headers = sentHeaders(spy);
+    expect(headers["x-opencode-session"]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(headers["user-agent"]).toBe("story-engine-ng/1.0");
+  });
+
+  it("已存 provider 的 customHeaders 随 /models 测试发出（备胎 relay 配头场景）", async () => {
+    await writeFile(
+      join(dir, "model-settings.json"),
+      sampleSettingsText({ baseUrl: "http://10.0.0.8:3000/v1", customHeaders: { "x-opencode-session": "relay-session" } }),
+      "utf-8",
+    );
+    const spy = mockModelsFetch();
+    await callRoute(registerModelSettingsRoutes, "POST", "/api/model-settings/test", { providerId: "main" });
+    const headers = sentHeaders(spy);
+    expect(headers["x-opencode-session"]).toBe("relay-session"); // 用户配的头
+    expect(headers["user-agent"]).toBeUndefined(); // 非 opencode 主机不强加 UA
+  });
+
+  it("inline URL 与已存 provider 同源 → 复用其 customHeaders；不同源 → 绝不外送（视同机密）", async () => {
+    await writeFile(
+      join(dir, "model-settings.json"),
+      sampleSettingsText({ baseUrl: "http://10.0.0.8:3000/v1", customHeaders: { "x-relay-secret": "shhh-secret" } }),
+      "utf-8",
+    );
+
+    // 同源（同 host:port，仅路径不同）→ 带上
+    let spy = mockModelsFetch();
+    await callRoute(registerModelSettingsRoutes, "POST", "/api/model-settings/test", {
+      providerId: "main",
+      baseUrl: "http://10.0.0.8:3000/v2",
+    });
+    expect(sentHeaders(spy)["x-relay-secret"]).toBe("shhh-secret");
+    spy.mockRestore();
+
+    // 不同源（攻击者 URL）→ 绝不带，密钥值绝不出现在请求里
+    spy = mockModelsFetch();
+    await callRoute(registerModelSettingsRoutes, "POST", "/api/model-settings/test", {
+      providerId: "main",
+      baseUrl: "https://attacker.example/v1",
+    });
+    const init = spy.mock.calls[0]?.[1] as RequestInit;
+    expect(sentHeaders(spy)["x-relay-secret"]).toBeUndefined();
+    expect(JSON.stringify(init)).not.toContain("shhh-secret");
   });
 });

@@ -18,6 +18,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import {
+  buildProviderRequestHeaders,
   getSavedProviderApiKey,
   globalStoryEngineDir,
   globalModelSecretsPath,
@@ -26,6 +27,7 @@ import {
   loadGlobalModelSettings,
   mergeProviderApiKeys,
   readModelSecrets,
+  readProviderCustomHeaders,
   serializeModelSecrets,
 } from "../lib/llm-client.js";
 import { invalidateStoryAgent } from "../agent/story-agent.js";
@@ -55,7 +57,8 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
       }
       if (req.method === "GET") {
         const result = await loadModelSettingsWithSecretStatus();
-        const rawText = await readModelSettingsText(result.status);
+        // 脱敏回显：customHeaders 值视同机密（与 apiKeyStatus 只出状态不出值同口径）——rawText 里打码后再出 API。
+        const rawText = maskCustomHeadersInSettingsText(await readModelSettingsText(result.status));
         const { file: taFile } = await readTaskAssignments(homedir());
         const taskAssignments = buildTaskAssignmentsView(
           result.summary.taskProfiles as Record<string, string | undefined>,
@@ -85,6 +88,10 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           });
           return;
         }
+
+        // customHeaders 打码回显的逆操作：面板回传的打码哨兵先还原成磁盘上的真实值，再校验/落盘——
+        // 哨兵绝不写进设置文件；无旧值可还原的打码条目直接丢弃（用户想改头值就得重新填明文）。
+        restoreMaskedCustomHeaders(parsed, await readPreviousSettingsText());
 
         const validation = validateModelSettingsV0(parsed, {
           configPath: globalModelSettingsPath(),
@@ -146,7 +153,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
         // M1：模型设置已落盘，让缓存的聊天 agent 失效——下一句聊天即用新模型/key/思考开关重建，不必重启服务。
         invalidateStoryAgent();
         const result = await loadModelSettingsWithSecretStatus();
-        const savedText = await readModelSettingsText(result.status);
+        const savedText = maskCustomHeadersInSettingsText(await readModelSettingsText(result.status));
         const { file: taFile } = await readTaskAssignments(homedir());
         const savedAssignments = buildTaskAssignmentsView(
           result.summary.taskProfiles as Record<string, string | undefined>,
@@ -210,7 +217,8 @@ function sameHttpOrigin(a: string, b: string): boolean {
  *  - 永远不按客户端给的 apiKeyEnv 读 process.env。
  *  - inline（未保存 provider）测试：只用「用户此刻输入的 apiKey」；未输入时，仅当 inline URL 恰为该
  *    providerId 已存 provider 的同源 URL，才复用其已存密钥；否则无密钥裸测（多半 401，诚实报错即可）。
- *  - saved（已存 provider）测试：只用已存 provider 自己的 baseUrl + `getSavedProviderApiKey`；**测试路径
+ *    customHeaders（视同机密）同口径：仅同源时才随请求发出。
+ *  - saved（已存 provider）测试：只用已存 provider 自己的 baseUrl + `getSavedProviderApiKey` + 其 customHeaders；**测试路径
  *    永不读 process.env**（R1a）。无已存密钥就裸测；若配了 apiKeyEnv 且裸测失败，错误信息提示去输入/
  *    先保存密钥（运行时聊天仍可经 resolveProviderApiKey 读 env，那是正式功能）。
  *  - PUT 保存：已存密钥绑定已存 origin（R1b）。同 provider id 的 baseUrl origin 变了、且本次未附带新
@@ -234,15 +242,16 @@ async function handleModelTest(req: import("node:http").IncomingMessage, res: im
         return;
       }
       let apiKey = inlineApiKey?.trim() ?? "";
-      if (!apiKey) {
-        // 未输入 key：只在「inline URL 恰是该 provider 已存 URL」时才复用已存密钥，绝不把密钥发到任意 URL。
-        const settings = await loadGlobalModelSettings();
-        const saved = settings.available ? settings.summary.providers.find((p) => p.id === providerId) : undefined;
-        if (saved && sameHttpOrigin(saved.baseUrl, target.toString())) {
-          apiKey = await getSavedProviderApiKey(providerId);
-        }
+      // 已存密钥与 customHeaders 都绑定已存 origin：仅当 inline URL 恰是该 providerId 已存 provider 的同源 URL
+      // 才复用它们，绝不把密钥/自定义头（视同机密）发到客户端指定的任意 URL。
+      const settings = await loadGlobalModelSettings();
+      const saved = settings.available ? settings.summary.providers.find((p) => p.id === providerId) : undefined;
+      let customHeaders: Record<string, string> = {};
+      if (saved && sameHttpOrigin(saved.baseUrl, target.toString())) {
+        if (!apiKey) apiKey = await getSavedProviderApiKey(providerId);
+        customHeaders = await readProviderCustomHeaders(providerId);
       }
-      await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey);
+      await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey, undefined, customHeaders);
       return;
     }
 
@@ -268,8 +277,9 @@ async function handleModelTest(req: import("node:http").IncomingMessage, res: im
     const envKeyHint = !apiKey && provider.apiKeyEnv
       ? "出于安全，连通性测试不读取环境变量密钥；请在测试时输入 API Key，或先保存密钥再试。"
       : undefined;
+    const customHeaders = await readProviderCustomHeaders(provider.id);
 
-    await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey, envKeyHint);
+    await runProviderTest(res, providerId, target.toString().replace(/\/+$/u, ""), apiKey, envKeyHint, customHeaders);
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
@@ -310,6 +320,8 @@ async function runProviderTest(
   apiKey: string,
   /** 无密钥裸测失败时追加的 UX 提示（R1a：测试路径不读 env）。 */
   bareTestHint?: string,
+  /** 该 provider 已存配置里的自定义头（视同机密；opencode 会话头/UA 由 buildProviderRequestHeaders 自动附加）。 */
+  customHeaders: Readonly<Record<string, string>> = {},
 ): Promise<void> {
   const started = Date.now();
   const controller = new AbortController();
@@ -317,7 +329,7 @@ async function runProviderTest(
   let response: globalThis.Response;
   try {
     response = await fetch(baseUrl + "/models", {
-      headers: apiKey ? { authorization: "Bearer " + apiKey } : {},
+      headers: await buildProviderRequestHeaders({ baseUrl, apiKey, customHeaders }),
       // 绝不跟随重定向：跟随会把 Authorization 头泄露给被重定向到的（可能是攻击者的）主机。
       redirect: "error",
       signal: controller.signal,
@@ -373,6 +385,73 @@ async function runProviderTest(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** 回显打码哨兵：GET/PUT 响应里 customHeaders 的值一律换成它（值视同机密，绝不明文出 API/日志）。 */
+export const MASKED_CUSTOM_HEADER_VALUE = "__STORY_ENGINE_MASKED__";
+
+/**
+ * 把设置文本里每个 provider 的 customHeaders 值替换成打码哨兵（键名保留、值绝不回显），再重新序列化。
+ * 文本不是合法 JSON 时原样返回（校验层会另行报 JSON 错误；此时也无法定位需打码的字段）。
+ */
+export function maskCustomHeadersInSettingsText(rawText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText) as unknown;
+  } catch {
+    return rawText;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) return rawText;
+  let touched = false;
+  for (const provider of Object.values(parsed.providers)) {
+    if (!isRecord(provider) || !isRecord(provider.customHeaders)) continue;
+    const masked: Record<string, string> = {};
+    for (const name of Object.keys(provider.customHeaders)) {
+      masked[name] = MASKED_CUSTOM_HEADER_VALUE;
+    }
+    provider.customHeaders = masked;
+    touched = true;
+  }
+  return touched ? `${JSON.stringify(parsed, null, 2)}\n` : rawText;
+}
+
+/**
+ * PUT 保存前把面板回传的打码哨兵还原成磁盘上的真实值（原地改 parsed，随后才走校验与落盘）：
+ *  - 哨兵值 + 旧配置同 provider 同键有真实值 → 还原（用户没动这个头，原样保留）；
+ *  - 哨兵值但无旧值可还原（新加的头/旧文件缺失损坏）→ 丢弃该条目，哨兵绝不落盘；
+ *  - 丢完后 customHeaders 成空对象 → 整键删除。
+ */
+export function restoreMaskedCustomHeaders(parsed: unknown, previousRawText: string): void {
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) return;
+  let previous: unknown;
+  try {
+    previous = JSON.parse(previousRawText) as unknown;
+  } catch {
+    previous = undefined;
+  }
+  const previousProviders = isRecord(previous) && isRecord(previous.providers) ? previous.providers : {};
+  for (const [providerKey, provider] of Object.entries(parsed.providers)) {
+    if (!isRecord(provider) || !isRecord(provider.customHeaders)) continue;
+    const providerId = typeof provider.id === "string" && provider.id.trim() ? provider.id.trim() : providerKey;
+    const previousProvider = previousProviders[providerId];
+    const previousHeaders = isRecord(previousProvider) && isRecord(previousProvider.customHeaders) ? previousProvider.customHeaders : {};
+    for (const [name, value] of Object.entries(provider.customHeaders)) {
+      if (value !== MASKED_CUSTOM_HEADER_VALUE) continue;
+      const old = previousHeaders[name];
+      if (typeof old === "string") provider.customHeaders[name] = old;
+      else delete provider.customHeaders[name];
+    }
+    if (Object.keys(provider.customHeaders).length === 0) delete provider.customHeaders;
+  }
+}
+
+/** 读磁盘上当前设置原文（供打码还原）；文件不存在/读失败 → 空串（视为无旧值可还原）。 */
+async function readPreviousSettingsText(): Promise<string> {
+  try {
+    return await readFile(globalModelSettingsPath(), "utf-8");
+  } catch {
+    return "";
+  }
+}
 
 async function readModelSettingsText(status: ModelSettingsLoadResult["status"]): Promise<string> {
   if (status === "missing") return defaultModelSettingsText();

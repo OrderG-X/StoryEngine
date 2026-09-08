@@ -4,6 +4,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { loadModelSettingsV0, renderFastDraftPromptText } from "@actalk/story-engine";
 import type { ModelSettingsLoadResult, WriterClient } from "@actalk/story-engine";
 import { writeFileAtomic } from "./project-io.js";
@@ -182,6 +183,11 @@ export type ResolvedChatModel = {
   readonly thinking: boolean;
   /** 该模型的思考开关方言（请求侧模型无关·R7）：glm/qwen/none。按 model id 判，发对方言、none 整键不发。 */
   readonly thinkingDialect: ThinkingDialect;
+  /**
+   * 该 provider 的自定义请求头（含真实值，仅进程内使用，绝不进 API 输出/日志）。
+   * 从 model-settings.json 直读——summary 里只有脱敏键名（customHeaderNames）。
+   */
+  readonly customHeaders?: Record<string, string>;
 };
 
 export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
@@ -227,7 +233,118 @@ export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Pro
     apiKey,
     thinking: resolveTaskThinking(assignments, task),
     thinkingDialect: resolveThinkingDialect(profile.model),
+    customHeaders: await readProviderCustomHeaders(provider.id),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 出站请求头统一收口：OpenCode Go 会话头 + per-provider 自定义头
+// ---------------------------------------------------------------------------
+
+/**
+ * OpenCode Go 官方要求（https://opencode.ai/docs/go/）：
+ *  1. 每个会话发**稳定**的 `x-opencode-session`（路由优化 / prompt 缓存用）——持久化复用，绝不每次请求换新；
+ *  2. 用客户端自有 User-Agent 标识（如 `my-coding-agent/1.0`），不用通用 SDK/HTTP 库名。
+ * 不带这两个头的请求会被拒（MissingSessionID）。
+ */
+export const STORY_ENGINE_USER_AGENT = "story-engine-ng/1.0";
+
+export function globalOpencodeSessionPath(): string {
+  return join(globalStoryEngineDir(), "opencode-session.json");
+}
+
+/** 仅当 provider baseUrl 的 hostname 命中 opencode（大小写不敏感）才发会话头——绝不向任意 provider 广播。 */
+export function isOpencodeHost(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().includes("opencode");
+  } catch {
+    return false;
+  }
+}
+
+// 进程内缓存按「路径」键住：SE_DATA_DIR 变了（测试注入/Electron 后设 env）自动重读，不会拿着旧目录的 id。
+let opencodeSessionCache: { readonly path: string; readonly id: string } | undefined;
+let opencodeSessionInflight: Promise<string> | undefined;
+
+/**
+ * 取稳定会话 id：首次用时生成 uuid 并原子写 0600 持久化，之后一律复用（含跨进程重启）。
+ * 并发首调合并为同一次生成；写盘失败不挡请求（进程内缓存仍保证本会话稳定）。
+ */
+export async function getOpencodeSessionId(): Promise<string> {
+  const path = globalOpencodeSessionPath();
+  if (opencodeSessionCache?.path === path) return opencodeSessionCache.id;
+  opencodeSessionInflight ??= loadOrCreateOpencodeSessionId(path).finally(() => {
+    opencodeSessionInflight = undefined;
+  });
+  return opencodeSessionInflight;
+}
+
+async function loadOrCreateOpencodeSessionId(path: string): Promise<string> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf-8"));
+    const existing = isRecord(parsed) ? parsed.sessionId : undefined;
+    if (typeof existing === "string" && existing.trim()) {
+      opencodeSessionCache = { path, id: existing };
+      return existing;
+    }
+  } catch {
+    // 文件不存在/读失败/坏 JSON → 重新生成。session id 不是密钥、无数据损失，重建即恢复。
+  }
+  const id = randomUUID();
+  opencodeSessionCache = { path, id };
+  try {
+    await mkdir(globalStoryEngineDir(), { recursive: true });
+    await writeFileAtomic(path, `${JSON.stringify({ version: 1, sessionId: id }, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    console.warn(
+      `[opencode-session] 会话 id 持久化失败（${path}）：${error instanceof Error ? error.message : String(error)}。` +
+        "本次进程内仍复用同一 id，重启后会重新生成。",
+    );
+  }
+  return id;
+}
+
+/**
+ * 直读 model-settings.json 抽某 provider 的 customHeaders（含值）。
+ * 为何绕开 summary：ProviderConfigSummary 脱敏只回键名。读失败/无配置 → {}（缺几个自定义头绝不挡请求）。
+ */
+export async function readProviderCustomHeaders(providerId: string): Promise<Record<string, string>> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(globalModelSettingsPath(), "utf-8"));
+    if (!isRecord(parsed) || !isRecord(parsed.providers)) return {};
+    const provider = parsed.providers[providerId];
+    if (!isRecord(provider) || !isRecord(provider.customHeaders)) return {};
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(provider.customHeaders)) {
+      if (name.trim() && typeof value === "string") headers[name] = value;
+    }
+    return headers;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 组装发往 provider 的请求头（所有出站出口共用：chat 非流式/流式、/models 连通性测试、agent SDK 路）。
+ * 叠加顺序（后者盖前者）：opencode 定向头（仅 opencode 主机）→ authorization → customHeaders（用户显式配置最后盖，
+ * 允许自定义 UA/session/鉴权——备胎 relay 就靠它手工配上 x-opencode-session）。头名统一小写，避免大小写双键并发。
+ */
+export async function buildProviderRequestHeaders(input: {
+  readonly baseUrl: string;
+  readonly apiKey?: string;
+  readonly customHeaders?: Readonly<Record<string, string>>;
+}): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (isOpencodeHost(input.baseUrl)) {
+    headers["user-agent"] = STORY_ENGINE_USER_AGENT;
+    headers["x-opencode-session"] = await getOpencodeSessionId();
+  }
+  if (input.apiKey) headers.authorization = `Bearer ${input.apiKey}`;
+  for (const [name, value] of Object.entries(input.customHeaders ?? {})) {
+    const normalized = name.trim().toLowerCase();
+    if (normalized) headers[normalized] = value;
+  }
+  return headers;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +372,11 @@ export async function callOpenAICompatibleChatModel(input: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(input.configured.apiKey ? { authorization: `Bearer ${input.configured.apiKey}` } : {}),
+        ...(await buildProviderRequestHeaders({
+          baseUrl: input.configured.provider.baseUrl,
+          apiKey: input.configured.apiKey,
+          customHeaders: input.configured.customHeaders,
+        })),
       },
       body: JSON.stringify({
         model: input.configured.profile.model,
@@ -473,7 +594,11 @@ export async function streamChatModelToText(input: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(input.configured.apiKey ? { authorization: `Bearer ${input.configured.apiKey}` } : {}),
+        ...(await buildProviderRequestHeaders({
+          baseUrl: input.configured.provider.baseUrl,
+          apiKey: input.configured.apiKey,
+          customHeaders: input.configured.customHeaders,
+        })),
       },
       body: JSON.stringify({
         model: input.configured.profile.model,

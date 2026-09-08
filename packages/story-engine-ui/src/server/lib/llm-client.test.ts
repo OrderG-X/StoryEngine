@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModelSettingsLoadResult } from "@actalk/story-engine";
 
 const storyEngineMocks = vi.hoisted(() => ({
@@ -21,7 +24,7 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, getOpencodeSessionId, globalOpencodeSessionPath, isOpencodeHost, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
 
 const { loadModelSettingsV0 } = storyEngineMocks;
 
@@ -392,5 +395,240 @@ describe("createOpenAICompatibleWriterClient（出稿走流式·afterfix 治非�
     expect(deltas.join("")).toBe("第五章正文。");
     expect(out.content).toBe("第五章正文。");
     spy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenCode Go 会话头 + per-provider 自定义头（opencode.ai/docs/go/ 合规修复）
+// ---------------------------------------------------------------------------
+
+describe("isOpencodeHost（定向发头：只命中 opencode 主机，绝不广播）", () => {
+  it("opencode 域名命中（大小写不敏感、含子域）", () => {
+    expect(isOpencodeHost("https://opencode.ai/zen/go/v1")).toBe(true);
+    expect(isOpencodeHost("https://OPENCODE.AI/zen/go/v1")).toBe(true);
+    expect(isOpencodeHost("https://api.opencode.ai/v1")).toBe(true);
+  });
+
+  it("非 opencode / 非法 URL 不命中", () => {
+    expect(isOpencodeHost("https://api.example.com/v1")).toBe(false);
+    expect(isOpencodeHost("http://192.168.1.10:3000/v1")).toBe(false);
+    expect(isOpencodeHost("not-a-url")).toBe(false);
+    expect(isOpencodeHost("")).toBe(false);
+  });
+});
+
+describe("getOpencodeSessionId（稳定会话 id：首次生成、持久化复用）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-oc-session-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("两次调用返回同一 id（不每次请求换新），并落盘 opencode-session.json（0600）", async () => {
+    const first = await getOpencodeSessionId();
+    const second = await getOpencodeSessionId();
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/u);
+
+    const onDisk = JSON.parse(await readFile(globalOpencodeSessionPath(), "utf-8")) as { sessionId?: string };
+    expect(onDisk.sessionId).toBe(first);
+    const mode = (await stat(globalOpencodeSessionPath())).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("模拟重启（重新 import 模块清掉进程内缓存）后仍复用磁盘上的同一 id", async () => {
+    const before = await getOpencodeSessionId();
+    vi.resetModules();
+    const fresh = await import("./llm-client.js");
+    const after = await fresh.getOpencodeSessionId();
+    expect(after).toBe(before);
+  });
+
+  it("并发首调合并为同一次生成（全员拿到同一 id、磁盘只有一份）", async () => {
+    const ids = await Promise.all([getOpencodeSessionId(), getOpencodeSessionId(), getOpencodeSessionId()]);
+    expect(new Set(ids).size).toBe(1);
+  });
+});
+
+describe("buildProviderRequestHeaders（出站头组装：opencode 定向 + 自定义头合并）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-oc-headers-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("opencode 主机 → 带 x-opencode-session（稳定复用同一 id）+ 自有 User-Agent + authorization", async () => {
+    const input = { baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "sk-test" } as const;
+    const first = await buildProviderRequestHeaders(input);
+    expect(first["x-opencode-session"]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(first["user-agent"]).toBe(STORY_ENGINE_USER_AGENT);
+    expect(first.authorization).toBe("Bearer sk-test");
+
+    const second = await buildProviderRequestHeaders(input);
+    expect(second["x-opencode-session"]).toBe(first["x-opencode-session"]); // 稳定复用
+  });
+
+  it("非 opencode 主机 → 不带 x-opencode-session，也不强加 User-Agent（不广播）", async () => {
+    const headers = await buildProviderRequestHeaders({ baseUrl: "https://api.example.com/v1", apiKey: "sk-test" });
+    expect(headers["x-opencode-session"]).toBeUndefined();
+    expect(headers["user-agent"]).toBeUndefined();
+    expect(headers.authorization).toBe("Bearer sk-test");
+  });
+
+  it("customHeaders 合并进请求（头名统一小写），且显式配置最后盖（可覆盖自动 session/UA/authorization）", async () => {
+    const headers = await buildProviderRequestHeaders({
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      apiKey: "sk-test",
+      customHeaders: { "X-Opencode-Session": "manual-session", "X-Relay-Tag": "relay-1" },
+    });
+    expect(headers["x-opencode-session"]).toBe("manual-session"); // 用户显式配置赢
+    expect(headers["x-relay-tag"]).toBe("relay-1");
+    expect(headers["user-agent"]).toBe(STORY_ENGINE_USER_AGENT); // 未覆盖时自动头仍在
+    expect(Object.keys(headers)).not.toContain("X-Relay-Tag"); // 已归一小写，无双键并发
+  });
+
+  it("备胎 relay（非 opencode 主机）只在用户显式配了 customHeaders 时才带 x-opencode-session", async () => {
+    const bare = await buildProviderRequestHeaders({ baseUrl: "http://10.0.0.8:3000/v1", apiKey: "sk-relay" });
+    expect(bare["x-opencode-session"]).toBeUndefined();
+
+    const withCustom = await buildProviderRequestHeaders({
+      baseUrl: "http://10.0.0.8:3000/v1",
+      apiKey: "sk-relay",
+      customHeaders: { "x-opencode-session": "relay-session" },
+    });
+    expect(withCustom["x-opencode-session"]).toBe("relay-session");
+  });
+});
+
+describe("chat 出站请求带头（opencode MissingSessionID 修复·真机验收路径）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-oc-chat-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function chatConfigured(baseUrl: string, customHeaders?: Record<string, string>) {
+    return {
+      provider: { id: "p", baseUrl, apiKeyStatus: "not_required" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "sk-test",
+      thinking: false,
+      thinkingDialect: "none",
+      ...(customHeaders ? { customHeaders } : {}),
+    } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
+  }
+  function sentHeaders(spy: { mock: { calls: unknown[][] } }): Record<string, string> {
+    return ((spy.mock.calls[0]?.[1] as RequestInit).headers ?? {}) as Record<string, string>;
+  }
+
+  it("非流式 callOpenAICompatibleChatModel：opencode 主机带 session+UA，非 opencode 不带", async () => {
+    // 每次调用造新 Response（Body 只能读一次；mockResolvedValue 复用同一实例会 "Body has already been read"）。
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }));
+    await callOpenAICompatibleChatModel({
+      configured: chatConfigured("https://opencode.ai/zen/go/v1"),
+      messages: [{ role: "user", content: "x" }],
+    });
+    const opencodeHeaders = sentHeaders(spy);
+    expect(opencodeHeaders["x-opencode-session"]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(opencodeHeaders["user-agent"]).toBe(STORY_ENGINE_USER_AGENT);
+    expect(opencodeHeaders.authorization).toBe("Bearer sk-test");
+    expect(opencodeHeaders["content-type"]).toBe("application/json");
+
+    spy.mockClear();
+    await callOpenAICompatibleChatModel({
+      configured: chatConfigured("https://api.example.com/v1"),
+      messages: [{ role: "user", content: "x" }],
+    });
+    const plainHeaders = sentHeaders(spy);
+    expect(plainHeaders["x-opencode-session"]).toBeUndefined();
+    expect(plainHeaders["user-agent"]).toBeUndefined();
+    expect(plainHeaders.authorization).toBe("Bearer sk-test");
+  });
+
+  it("流式 streamChatModelToText：opencode 主机同样带 session+UA（审稿/质检主路径）", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream, { status: 200 }));
+    await streamChatModelToText({
+      configured: chatConfigured("https://opencode.ai/zen/go/v1"),
+      messages: [],
+    });
+    const headers = sentHeaders(spy);
+    expect(headers["x-opencode-session"]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(headers["user-agent"]).toBe(STORY_ENGINE_USER_AGENT);
+  });
+
+  it("configured.customHeaders 随请求发出（备胎 relay 场景），值不泄漏进错误消息", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }));
+    await callOpenAICompatibleChatModel({
+      configured: chatConfigured("http://10.0.0.8:3000/v1", { "x-opencode-session": "relay-session" }),
+      messages: [{ role: "user", content: "x" }],
+    });
+    expect(sentHeaders(spy)["x-opencode-session"]).toBe("relay-session");
+  });
+});
+
+describe("resolveConfiguredChatModel 合成 customHeaders（从设置文件直读真实值）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-oc-resolve-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.clearAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("provider 配了 customHeaders → 解析结果带上真实值；未配 → 空对象", async () => {
+    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: null, corrupt: false });
+    await writeFile(join(dir, "model-settings.json"), JSON.stringify({
+      version: 1,
+      providers: {
+        main: {
+          id: "main",
+          type: "openai-compatible",
+          baseUrl: "https://api.example.invalid/v1",
+          customHeaders: { "x-relay-tag": "relay-1" },
+        },
+      },
+      profiles: { fast: { id: "fast", provider: "main", model: "fast-model" } },
+      taskProfiles: { qualityCheck: "fast" },
+    }), "utf-8");
+
+    const resolved = await resolveConfiguredChatModel("qualityCheck");
+    expect(resolved.customHeaders).toEqual({ "x-relay-tag": "relay-1" });
   });
 });

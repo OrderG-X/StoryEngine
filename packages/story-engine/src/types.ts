@@ -460,6 +460,11 @@ export interface ProviderConfig {
   readonly baseUrl: string;
   readonly apiKeyEnv?: string;
   readonly defaultHeaders?: Record<string, string>;
+  /**
+   * 每-provider 自定义请求头（如备胎 relay 需要的 x-opencode-session）。
+   * 值视同机密：summary/API 输出只回键名（customHeaderNames），绝不回值。
+   */
+  readonly customHeaders?: Record<string, string>;
 }
 
 export interface ModelProfile {
@@ -502,6 +507,8 @@ export interface ProviderConfigSummary {
   readonly baseUrl: string;
   readonly apiKeyEnv?: string;
   readonly apiKeyStatus: "not_required" | "present" | "missing";
+  /** 自定义请求头的键名列表（脱敏：只出 key 名，绝不出值——值视同机密）。 */
+  readonly customHeaderNames?: readonly string[];
 }
 
 export interface ModelProfileSummary {

@@ -92,4 +92,49 @@ describe("makeAgentRequestFetch", () => {
     expect(params.properties.kind.type).toBeUndefined();  // enum-only 仍无 type（没改）
     expect(params.properties.n.minimum).toBe(0);          // 关键字仍在（没剥）
   });
+
+  it("extraHeaders：每请求追加出站头（opencode 会话头/自定义头），Headers 归一小写", async () => {
+    const spy = fetchSpy();
+    const f = makeAgentRequestFetch(false, "none", "some-model", spy as unknown as typeof fetch, {
+      "x-opencode-session": "session-abc",
+      "user-agent": "story-engine-ng/1.0",
+    });
+    await f("http://x", { body: JSON.stringify({ messages: [] }) } as RequestInit);
+    const headers = new Headers((spy.mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.get("x-opencode-session")).toBe("session-abc");
+    expect(headers.get("user-agent")).toBe("story-engine-ng/1.0");
+  });
+
+  it("extraHeaders 覆盖同名已有头（自定义 session 盖掉旧值），其余头保留", async () => {
+    const spy = fetchSpy();
+    const f = makeAgentRequestFetch(false, "none", "some-model", spy as unknown as typeof fetch, {
+      "x-opencode-session": "new-session",
+    });
+    await f("http://x", {
+      headers: { "x-opencode-session": "old-session", "content-type": "application/json" },
+      body: JSON.stringify({ messages: [] }),
+    } as RequestInit);
+    const headers = new Headers((spy.mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.get("x-opencode-session")).toBe("new-session");
+    expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("extraHeaders 与思考方言/body 改造叠加互不影响", async () => {
+    const spy = fetchSpy();
+    const f = makeAgentRequestFetch(false, "glm", "glm-4.6", spy as unknown as typeof fetch, {
+      "x-opencode-session": "session-abc",
+    });
+    await f("http://x", { body: JSON.stringify({ messages: [{ role: "user", content: "x" }] }) } as RequestInit);
+    expect(sentBody(spy).thinking).toEqual({ type: "disabled" });
+    const headers = new Headers((spy.mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.get("x-opencode-session")).toBe("session-abc");
+  });
+
+  it("不传 extraHeaders → 不动请求头（向后兼容）", async () => {
+    const spy = fetchSpy();
+    const f = makeAgentRequestFetch(false, "none", "some-model", spy as unknown as typeof fetch);
+    await f("http://x", { headers: { "x-keep": "1" }, body: "{}" } as RequestInit);
+    const headers = new Headers((spy.mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.get("x-keep")).toBe("1");
+  });
 });

@@ -130,6 +130,80 @@ describe("Model Settings V0", () => {
     expect(JSON.stringify(result.summary)).not.toContain("secret-real-key");
     expect(JSON.stringify(result.summary)).not.toContain("env-secret");
   });
+
+  it("accepts provider customHeaders and summarizes only header names (values redacted)", async () => {
+    const projectDir = await writeSettings({
+      ...validSettings(),
+      providers: {
+        main: {
+          ...validSettings().providers.main,
+          customHeaders: { "x-opencode-session": "secret-session-value", "x-extra": "secret-extra" },
+        },
+      },
+    });
+
+    const result = await loadModelSettingsV0(projectDir);
+
+    expect(result.passed).toBe(true);
+    expect(result.issues).toEqual([]);
+    expect(result.summary.providers[0]).toMatchObject({
+      id: "main",
+      customHeaderNames: ["x-opencode-session", "x-extra"],
+    });
+    // 脱敏铁律：summary/整个 result 里绝不出现 customHeaders 的值（视同机密，与 apiKey 同口径）。
+    expect(JSON.stringify(result)).not.toContain("secret-session-value");
+    expect(JSON.stringify(result)).not.toContain("secret-extra");
+  });
+
+  it("omits customHeaderNames when a provider has no customHeaders", async () => {
+    const projectDir = await writeSettings(validSettings());
+
+    const result = await loadModelSettingsV0(projectDir);
+
+    expect(result.summary.providers[0]?.customHeaderNames).toBeUndefined();
+  });
+
+  it("reports an error when customHeaders is not an object", async () => {
+    const projectDir = await writeSettings({
+      ...validSettings(),
+      providers: {
+        main: {
+          ...validSettings().providers.main,
+          customHeaders: "x-opencode-session: abc",
+        },
+      },
+    });
+
+    const result = await loadModelSettingsV0(projectDir);
+
+    expect(result.passed).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      severity: "error",
+      code: "invalid_custom_headers",
+      path: "$.providers.main.customHeaders",
+    }));
+  });
+
+  it("reports an error when a customHeaders value is not a string (message carries no value)", async () => {
+    const projectDir = await writeSettings({
+      ...validSettings(),
+      providers: {
+        main: {
+          ...validSettings().providers.main,
+          customHeaders: { "x-token": 42 },
+        },
+      },
+    });
+
+    const result = await loadModelSettingsV0(projectDir);
+
+    expect(result.passed).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      severity: "error",
+      code: "invalid_custom_header_value",
+      path: "$.providers.main.customHeaders.x-token",
+    }));
+  });
 });
 
 function validSettings(): ModelSettingsV0 {
