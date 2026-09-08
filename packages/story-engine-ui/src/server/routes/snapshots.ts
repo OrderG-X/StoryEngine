@@ -1,16 +1,18 @@
 /**
  * GET /api/snapshots?project=<dir> — list snapshot history newest-first.
  * POST /api/snapshots/restore — restore project to a snapshot.
+ * POST /api/snapshots/prune — prune snapshot history (dry-run by default, confirm=true to apply).
  */
 import {
   readJsonBody,
   guardProjectPath,
+  readPositiveInteger,
   requireBodyString,
   assertStoryEngineProject,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, restoreSnapshot } from "../lib/snapshot.js";
+import { humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, restoreSnapshot } from "../lib/snapshot.js";
 
 // ---------------------------------------------------------------------------
 // Route registrar
@@ -48,6 +50,23 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         const id = requireBodyString(body.id, "快照 id 不能为空。");
         const restored = await restoreSnapshot(projectDir, id);
         writeJson(res, 200, { ok: true, restored });
+        return;
+      }
+
+      // 预览优先（对齐 commit_preview/commit_apply）：默认 dry-run，只回报将裁多少条/释放多少 commit；
+      // confirm=true 才真裁。真裁前 lib 自动把裁前完整历史打成 bundle，存到项目目录外的
+      // ~/.story-engine/snapshot-backups/（SE_DATA_DIR 可覆盖）。
+      if (req.method === "POST" && url.pathname === "/api/snapshots/prune") {
+        const body = await readJsonBody(req);
+        const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
+        if (!guardProjectPath(res, projectDir)) return;
+        await assertStoryEngineProject(projectDir);
+        const keep = readPositiveInteger(body.keep);
+        const result = await pruneSnapshots(projectDir, {
+          ...(keep !== undefined ? { keep } : {}),
+          dryRun: body.confirm !== true,
+        });
+        writeJson(res, 200, { ok: true, result });
         return;
       }
 

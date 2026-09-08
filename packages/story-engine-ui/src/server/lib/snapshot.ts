@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { access, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
 
-import { resolveGitCommand } from "./data-dirs.js";
+import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,8 +20,8 @@ export interface SnapshotEntry {
 
 const LOG_FORMAT = "%H\t%ct\t%s";
 
-async function git(projectDir: string, args: readonly string[]): Promise<string> {
-  const { stdout } = await execFileAsync(resolveGitCommand(), [
+async function git(projectDir: string, args: readonly string[], env?: Record<string, string>): Promise<string> {
+  const argv = [
     "-C",
     projectDir,
     // 中文等非 ASCII 路径按原样输出，否则 diff --name-only 会给出八进制转义+引号
@@ -30,7 +31,10 @@ async function git(projectDir: string, args: readonly string[]): Promise<string>
     "-c",
     "commit.gpgsign=false",
     ...args,
-  ]);
+  ];
+  const { stdout } = env === undefined
+    ? await execFileAsync(resolveGitCommand(), argv)
+    : await execFileAsync(resolveGitCommand(), argv, { encoding: "utf-8", env: { ...process.env, ...env } });
   return stdout.trim();
 }
 
@@ -261,4 +265,204 @@ export async function undoLastChange(
   if (!target) return null;
   const restored = await restoreSnapshot(projectDir, target.id);
   return { undoneLabel: humanizeUndoLabel(target.label), restored };
+}
+
+// ---------------------------------------------------------------------------
+// 磁盘治理：历史裁剪（append-only「历史永不丢」保留，但旧史折叠成 base 提交，给磁盘一个收口）
+// ---------------------------------------------------------------------------
+
+/** 默认保留窗口：对齐 undoLastChange 的撤销回看窗口（200），裁掉它之外的历史不破坏撤销语义。 */
+export const SNAPSHOT_PRUNE_DEFAULT_KEEP = 200;
+/** keep 下限夹逼：防误传小值把历史裁光。 */
+export const SNAPSHOT_PRUNE_MIN_KEEP = 20;
+
+const PRUNE_BASE_LABEL_PREFIX = "base: 已裁剪";
+const PRUNE_BASE_LABEL_PATTERN = new RegExp(`^${PRUNE_BASE_LABEL_PREFIX} (\\d+) 条更早快照$`, "u");
+
+export interface SnapshotPruneOptions {
+  /** 保留最近多少条快照（默认 200，下限夹逼到 20） */
+  readonly keep?: number;
+  /** true 只预览不落盘；缺省即 true（保守），真裁须显式传 false */
+  readonly dryRun?: boolean;
+  /** bundle 备份目录，默认 ~/.story-engine/snapshot-backups/（在项目目录之外） */
+  readonly backupDir?: string;
+}
+
+export interface SnapshotPruneResult {
+  readonly dryRun: boolean;
+  readonly keep: number;
+  /** 裁前 HEAD 链全部提交数（含既有 base 提交） */
+  readonly totalBefore: number;
+  /** 本次折进 base 的更早快照条数；0 = no-op（dry-run 时为预计值） */
+  readonly prunedCount: number;
+  /** 裁后提交总数（dry-run 为预计值）= totalBefore - prunedCount + 1 */
+  readonly totalAfter: number;
+  /** 净释放的提交数 = prunedCount - 1（被裁条目折成一条 base） */
+  readonly freedCommits: number;
+  /** 真裁时新建的 base 提交 id */
+  readonly baseCommitId?: string;
+  /** 真裁时裁前完整历史的 bundle 备份路径 */
+  readonly backupBundlePath?: string;
+}
+
+function clampPruneKeep(keep: number | undefined): number {
+  if (keep === undefined || !Number.isFinite(keep)) return SNAPSHOT_PRUNE_DEFAULT_KEEP;
+  return Math.max(SNAPSHOT_PRUNE_MIN_KEEP, Math.trunc(keep));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const GIT_IN_FLIGHT_MARKERS = [
+  "MERGE_HEAD",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "REBASE_HEAD",
+  "rebase-merge",
+  "rebase-apply",
+  "index.lock",
+] as const;
+
+/** 裁剪前健康校验：git 可用（rev-parse 不过即抛）、在分支上（游离 HEAD 拒绝）、无 in-flight 合并/变基/拣选/锁。 */
+async function assertRepoHealthyForPrune(projectDir: string): Promise<string> {
+  const gitDir = await git(projectDir, ["rev-parse", "--absolute-git-dir"]);
+  let branch = "";
+  try {
+    branch = await git(projectDir, ["symbolic-ref", "-q", "--short", "HEAD"]);
+  } catch {
+    branch = "";
+  }
+  if (!branch) throw new Error("快照仓库不在分支上（游离 HEAD），拒绝裁剪历史。");
+  for (const marker of GIT_IN_FLIGHT_MARKERS) {
+    if (await pathExists(join(gitDir, marker))) {
+      throw new Error(`快照仓库存在未完成的 git 操作（${marker}），拒绝裁剪历史。`);
+    }
+  }
+  return branch;
+}
+
+interface RawCommitMeta {
+  readonly id: string;
+  readonly authorName: string;
+  readonly authorEmail: string;
+  readonly authorTs: string;
+  readonly committerName: string;
+  readonly committerEmail: string;
+  readonly committerTs: string;
+  readonly message: string;
+}
+
+const LOG_META_FORMAT = "%H%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ce%x1f%ct%x1f%B%x1e";
+
+function parseLogMeta(out: string): RawCommitMeta[] {
+  const commits: RawCommitMeta[] = [];
+  for (const chunk of out.split("\x1e")) {
+    const record = chunk.replace(/^\n+/u, "");
+    if (!record.trim()) continue;
+    const [id, authorName, authorEmail, authorTs, committerName, committerEmail, committerTs, ...rest] = record.split("\x1f");
+    commits.push({
+      id: id ?? "",
+      authorName: authorName ?? "",
+      authorEmail: authorEmail ?? "",
+      authorTs: authorTs ?? "",
+      committerName: committerName ?? "",
+      committerEmail: committerEmail ?? "",
+      committerTs: committerTs ?? "",
+      message: rest.join("\x1f").replace(/\n+$/u, ""),
+    });
+  }
+  return commits;
+}
+
+/** commit-tree 不读仓库 config 的 user.*，作者/提交者/时间戳全靠 env 注入——重放保留链时按原提交逐个带过去。 */
+function commitEnv(commit: RawCommitMeta): Record<string, string> {
+  return {
+    GIT_AUTHOR_NAME: commit.authorName || "StoryEngine",
+    GIT_AUTHOR_EMAIL: commit.authorEmail || "snapshot@story-engine.local",
+    GIT_AUTHOR_DATE: `${commit.authorTs} +0000`,
+    GIT_COMMITTER_NAME: commit.committerName || "StoryEngine",
+    GIT_COMMITTER_EMAIL: commit.committerEmail || "snapshot@story-engine.local",
+    GIT_COMMITTER_DATE: `${commit.committerTs} +0000`,
+  };
+}
+
+function snapshotBackupBundlePath(projectDir: string, backupDir: string): string {
+  const projectHash = createHash("sha1").update(projectDir).digest("hex").slice(0, 8);
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  return join(backupDir, `snapshot-backup-${projectHash}-${stamp}.bundle`);
+}
+
+/**
+ * 把快照 git 史裁到最近 keep 条：更早的 prunedCount 条压成一条 orphan base 提交
+ * （承载被裁边界提交的完整 tree，消息「base: 已裁剪 N 条更早快照」），保留窗口内的撤销链逐条可用；
+ * 更旧的不可逐条撤销，但 base 本身是合法恢复目标（完整状态不丢），裁前完整历史另有 bundle 备份兜底。
+ *
+ * 安全边界：全程只动 git 引用与对象库，绝不 checkout/reset——工作树（正稿文件）分毫不动。
+ * 真裁前先把裁前完整历史打成 bundle 存到项目目录之外；引用用 CAS 更新（持锁期间 HEAD 被移动即失败中止）；
+ * 失败时回滚分支引用到裁前 HEAD，bundle 作为对象级兜底。keep 不足 / 已有 base 之上真实快照数 ≤ keep 时 no-op
+ * （重复 prune 天然幂等）。reflog expire + gc 之后旧链才真正不可达、磁盘才真正回收。
+ */
+export async function pruneSnapshots(projectDir: string, options: SnapshotPruneOptions = {}): Promise<SnapshotPruneResult> {
+  const keep = clampPruneKeep(options.keep);
+  const dryRun = options.dryRun !== false;
+  return withProjectLock(projectDir, async () => {
+    await recoverProjectCommitTransactions(projectDir);
+    await ensureRepoUnlocked(projectDir);
+    const branch = await assertRepoHealthyForPrune(projectDir);
+
+    const revs = (await git(projectDir, ["rev-list", "--reverse", "HEAD"])).split("\n").filter(Boolean);
+    const rootSubject = await git(projectDir, ["log", "-1", "--pretty=format:%s", revs[0]!]);
+    const rootIsBase = PRUNE_BASE_LABEL_PATTERN.test(rootSubject);
+    // 既有 base 只占 1 条位、不参与「是否够裁」计数——重复 prune 因此是 no-op（幂等）。
+    const snapshotCount = revs.length - (rootIsBase ? 1 : 0);
+    if (snapshotCount <= keep) {
+      return { dryRun, keep, totalBefore: revs.length, prunedCount: 0, totalAfter: revs.length, freedCommits: 0 };
+    }
+    const prunedCount = snapshotCount - keep;
+    const firstPrunedIndex = rootIsBase ? 1 : 0;
+    const boundaryId = revs[firstPrunedIndex + prunedCount - 1]!;
+    const totalAfter = revs.length - prunedCount + 1;
+    const freedCommits = revs.length - totalAfter;
+
+    if (dryRun) {
+      return { dryRun, keep, totalBefore: revs.length, prunedCount, totalAfter, freedCommits };
+    }
+
+    const backupDir = options.backupDir ?? join(resolveGlobalDataDir(), "snapshot-backups");
+    await mkdir(backupDir, { recursive: true });
+    const bundlePath = snapshotBackupBundlePath(projectDir, backupDir);
+    await git(projectDir, ["bundle", "create", bundlePath, "HEAD"]);
+
+    const priorFolded = rootIsBase ? Number(PRUNE_BASE_LABEL_PATTERN.exec(rootSubject)?.[1] ?? 0) : 0;
+    const baseLabel = `${PRUNE_BASE_LABEL_PREFIX} ${priorFolded + prunedCount} 条更早快照`;
+    const boundaryMeta = parseLogMeta(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_META_FORMAT}`, boundaryId]))[0]!;
+    const baseTree = await git(projectDir, ["rev-parse", `${boundaryId}^{tree}`]);
+    const baseCommitId = await git(projectDir, ["commit-tree", baseTree, "-m", baseLabel], commitEnv(boundaryMeta));
+
+    // boundary..HEAD 恰为保留窗口（boundary 自身被裁、不入新链）
+    const kept = parseLogMeta(await git(projectDir, ["log", "--reverse", `--pretty=format:${LOG_META_FORMAT}`, `${boundaryId}..HEAD`]));
+    const oldHead = revs[revs.length - 1]!;
+    const branchRef = `refs/heads/${branch}`;
+    try {
+      let parent = baseCommitId;
+      for (const commit of kept) {
+        const tree = await git(projectDir, ["rev-parse", `${commit.id}^{tree}`]);
+        parent = await git(projectDir, ["commit-tree", tree, "-p", parent, "-m", commit.message], commitEnv(commit));
+      }
+      await git(projectDir, ["update-ref", branchRef, parent, oldHead]);
+      await git(projectDir, ["reflog", "expire", "--expire=now", "--all"]);
+      await git(projectDir, ["gc", "--prune=now", "--quiet"]);
+    } catch (error) {
+      // 回滚到裁前状态：引用恢复旧 HEAD；旧链对象若已被 gc 部分回收，由 bundle 兜底（错误里给出路径）。
+      await git(projectDir, ["update-ref", branchRef, oldHead]).catch(() => undefined);
+      throw new Error(`快照历史裁剪失败，已回滚到裁前状态；裁前完整历史备份：${bundlePath}。原始错误：${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { dryRun, keep, totalBefore: revs.length, prunedCount, totalAfter, freedCommits, baseCommitId, backupBundlePath: bundlePath };
+  });
 }

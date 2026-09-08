@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { withProjectCommitLock } from "@actalk/story-engine";
-import { createSnapshot, humanizeUndoLabel, listSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
+import { createSnapshot, humanizeUndoLabel, listSnapshots, pruneSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -292,4 +292,133 @@ describe("runWithSnapshot 落盘收尾·写后工作树干净（Codex afterfix #
     expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 再撤 step1
     await expect(access(join(dir, "drafts", "a.md"))).rejects.toThrow();
   });
+});
+
+// 磁盘治理：pruneSnapshots 把旧史折叠成 base 提交。append-only 语义保留（base 承载被裁边界完整 tree、
+// 裁前另有 bundle 备份），但最近 keep 条撤销链逐条可用、磁盘随 gc 真正回收。
+describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
+  async function commitCount(dir: string): Promise<number> {
+    const { stdout } = await execFileAsync("git", ["-C", dir, "rev-list", "--count", "HEAD"]);
+    return Number(stdout.trim());
+  }
+
+  async function revParse(dir: string, ref: string): Promise<string> {
+    const { stdout } = await execFileAsync("git", ["-C", dir, "rev-parse", ref]);
+    return stdout.trim();
+  }
+
+  // 批量造史：直接打 --allow-empty commit（与快照提交同构，仓库 config 已由首个 createSnapshot 备好），
+  // 比循环走 createSnapshot 快一个量级——本组测的是裁剪行为，不是建快照。
+  async function seedSnapshots(dir: string, count: number): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      await execFileAsync("git", ["-C", dir, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
+    }
+  }
+
+  it("250 条快照 keep=200 → 201 条（200+base）；base tree 完整检出无损；最近一条仍可撤销", async () => {
+    const dir = await makeProject();
+    await writeFile(join(dir, "story", "marker.md"), "边界标记", "utf-8");
+    await createSnapshot(dir, "agent:foundation_write:建库"); // 顺带 init 仓库（初始快照 + 本条 = 2）
+    await seedSnapshots(dir, 248);
+    expect(await commitCount(dir)).toBe(250);
+    // 裁后 base 应承载「第 50 条（从旧数）」的完整 tree；当前 HEAD tree 须分毫不差
+    const boundaryTree = await revParse(dir, "HEAD~200^{tree}");
+    const headTreeBefore = await revParse(dir, "HEAD^{tree}");
+    const oldHead = await revParse(dir, "HEAD");
+    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-backup-"));
+
+    const result = await pruneSnapshots(dir, { keep: 200, dryRun: false, backupDir });
+    expect(result.dryRun).toBe(false);
+    expect(result.prunedCount).toBe(50);
+    expect(result.totalBefore).toBe(250);
+    expect(result.totalAfter).toBe(201);
+    expect(result.freedCommits).toBe(49);
+    expect(await commitCount(dir)).toBe(201);
+    await access(result.backupBundlePath!); // 裁前完整历史已备份到项目目录外
+
+    // 当前完整状态不丢：HEAD tree 与工作树文件都与裁前一致
+    expect(await revParse(dir, "HEAD^{tree}")).toBe(headTreeBefore);
+    expect(await readFile(join(dir, "story", "marker.md"), "utf-8")).toBe("边界标记");
+
+    // base 提交在链尾、消息注明折叠条数，tree == 被裁边界提交的 tree（完整无损）
+    const list = await listSnapshots(dir, 300);
+    expect(list).toHaveLength(201);
+    const base = list[list.length - 1]!;
+    expect(base.id).toBe(result.baseCommitId);
+    expect(base.label).toBe("base: 已裁剪 50 条更早快照");
+    expect(await revParse(dir, `${base.id}^{tree}`)).toBe(boundaryTree);
+    const baseFiles = await filesInCommit(dir, base.id);
+    expect(baseFiles).toContain("project.json");
+    expect(baseFiles).toContain("story/threads.json");
+    expect(baseFiles).toContain("story/marker.md");
+    const { stdout: markerInBase } = await execFileAsync("git", ["-C", dir, "show", `${base.id}:story/marker.md`]);
+    expect(markerInBase).toBe("边界标记");
+
+    // 旧链已不可逐条撤销：reflog expire + gc 后，裁前 HEAD 提交对象被回收
+    await expect(execFileAsync("git", ["-C", dir, "cat-file", "-e", oldHead])).rejects.toThrow();
+
+    // 最近 keep 条撤销链逐条可用：裁后新写一步，撤销仍精确回退
+    await runWithSnapshot(dir, "agent:foundation_write", async () => {
+      await writeFile(join(dir, "world.json"), "新资料", "utf-8");
+    });
+    const r = await undoLastChange(dir);
+    expect(r?.undoneLabel).toBe("更新故事资料");
+    await expect(access(join(dir, "world.json"))).rejects.toThrow();
+  }, 120_000);
+
+  it("dry-run 只预览不落盘：不改历史、不建 base、连备份目录都不建", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点");
+    await seedSnapshots(dir, 28); // 共 30 条
+    const headBefore = await revParse(dir, "HEAD");
+    const backupDir = join(await mkdtemp(join(tmpdir(), "se-prune-dry-")), "backups");
+
+    const result = await pruneSnapshots(dir, { keep: 25, dryRun: true, backupDir });
+    expect(result.dryRun).toBe(true);
+    expect(result.prunedCount).toBe(5);
+    expect(result.totalAfter).toBe(26);
+    expect(result.freedCommits).toBe(4);
+    expect(result.baseCommitId).toBeUndefined();
+    expect(result.backupBundlePath).toBeUndefined();
+    expect(await commitCount(dir)).toBe(30);
+    expect(await revParse(dir, "HEAD")).toBe(headBefore);
+    await expect(access(backupDir)).rejects.toThrow();
+  }, 60_000);
+
+  it("不足 keep 时 no-op；重复 prune 幂等（既有 base 之上的真实快照 ≤ keep 即不再裁）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点");
+    await seedSnapshots(dir, 28); // 共 30 条
+    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-idem-"));
+
+    const noop = await pruneSnapshots(dir, { keep: 40, dryRun: false, backupDir });
+    expect(noop.prunedCount).toBe(0);
+    expect(noop.backupBundlePath).toBeUndefined(); // no-op 连备份都不建
+    expect(await commitCount(dir)).toBe(30);
+
+    const first = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+    expect(first.prunedCount).toBe(10);
+    expect(await commitCount(dir)).toBe(21);
+    const headAfterFirst = await revParse(dir, "HEAD");
+
+    const second = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+    expect(second.prunedCount).toBe(0);
+    expect(await commitCount(dir)).toBe(21);
+    expect(await revParse(dir, "HEAD")).toBe(headAfterFirst);
+
+    const list = await listSnapshots(dir, 50);
+    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 10 条更早快照"); // 计数不被重复 prune 虚增
+  }, 60_000);
+
+  it("keep 下限夹逼到 20：传 1 按 20 裁，防误裁光", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点");
+    await seedSnapshots(dir, 28); // 共 30 条
+    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-clamp-"));
+
+    const result = await pruneSnapshots(dir, { keep: 1, dryRun: false, backupDir });
+    expect(result.keep).toBe(20);
+    expect(result.prunedCount).toBe(10);
+    expect(await commitCount(dir)).toBe(21);
+  }, 60_000);
 });

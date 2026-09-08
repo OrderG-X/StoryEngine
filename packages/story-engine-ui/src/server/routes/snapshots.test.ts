@@ -1,12 +1,16 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Readable } from "node:stream";
 import { afterAll, describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerSnapshotsRoutes } from "./snapshots.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { createSnapshot, listSnapshots } from "../lib/snapshot.js";
 import { HOME_TEST_TMP_ROOT } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
+
+const execFileAsync = promisify(execFile);
 
 // guardProjectPath 要求项目路径在 $HOME 下（tmpdir 会被判不安全）；统一收敛到隐藏测试基目录下。
 const TEST_ROOT = join(HOME_TEST_TMP_ROOT, "se-snap-route-test");
@@ -103,4 +107,40 @@ describe("snapshots routes", () => {
     expect(statusCode).toBe(400);
     expect(payload.ok).toBe(false);
   });
+
+  it("POST /api/snapshots/prune 默认 dry-run 不落盘，confirm=true 才真裁（bundle 落在 SE_DATA_DIR 下、项目目录之外）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点"); // init + 本条 = 2
+    for (let i = 0; i < 28; i += 1) {
+      await execFileAsync("git", ["-C", dir, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
+    }
+    expect((await listSnapshots(dir, 100)).length).toBe(30);
+
+    // 备份目录经 SE_DATA_DIR 重定向到测试临时区，不碰真实 ~/.story-engine
+    const seDataDir = join(TEST_ROOT, `se-data-${Date.now()}`);
+    await mkdir(seDataDir, { recursive: true });
+    process.env.SE_DATA_DIR = seDataDir;
+    try {
+      const dry = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, keep: 20 });
+      expect(dry.statusCode).toBe(200);
+      const dryResult = dry.payload.result as { dryRun: boolean; prunedCount: number; totalAfter: number; freedCommits: number };
+      expect(dryResult.dryRun).toBe(true);
+      expect(dryResult.prunedCount).toBe(10);
+      expect(dryResult.totalAfter).toBe(21);
+      expect(dryResult.freedCommits).toBe(9);
+      expect((await listSnapshots(dir, 100)).length).toBe(30); // 预览不动历史
+
+      const real = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, keep: 20, confirm: true });
+      expect(real.statusCode).toBe(200);
+      const realResult = real.payload.result as { dryRun: boolean; prunedCount: number; backupBundlePath?: string };
+      expect(realResult.dryRun).toBe(false);
+      expect(realResult.prunedCount).toBe(10);
+      expect((await listSnapshots(dir, 100)).length).toBe(21); // 20 保留 + 1 base
+      expect(realResult.backupBundlePath).toBeDefined();
+      expect(realResult.backupBundlePath!.startsWith(seDataDir)).toBe(true);
+      await access(realResult.backupBundlePath!);
+    } finally {
+      delete process.env.SE_DATA_DIR;
+    }
+  }, 60_000);
 });
