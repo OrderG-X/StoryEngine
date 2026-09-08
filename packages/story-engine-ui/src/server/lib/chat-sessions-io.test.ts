@@ -139,6 +139,23 @@ describe("chat-sessions-io CRUD", () => {
     expect(await readdir(chatSessionsDir(dir))).toEqual(filesBefore);
   });
 
+  it("原子写中途失败（rename 受阻）→ 抛错且不留 .tmp- 残留，原目标分毫未动", async () => {
+    const dir = await tmpProject();
+    await mkdir(chatSessionsDir(dir), { recursive: true });
+    // 非空目录占住目标路径：rename(文件 → 非空目录) 必败，注入原子写收尾故障
+    const blockedPath = chatSessionPath(dir, "ghost");
+    await mkdir(join(blockedPath, "blocker"), { recursive: true });
+    const ts = new Date().toISOString();
+
+    await expect(writeChatSession(dir, {
+      id: "ghost", name: "故障注入", messages: [], archivedCount: 0, createdAt: ts, updatedAt: ts,
+    })).rejects.toThrow();
+
+    const leftovers = (await readdir(chatSessionsDir(dir))).filter((name) => name.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+    expect(await readdir(blockedPath)).toEqual(["blocker"]);
+  });
+
   it("delete refuses before mutation when the remaining active session is unreadable", async () => {
     const dir = await tmpProject();
     const active = (await readChatSessionIndex(dir)).activeSessionId;

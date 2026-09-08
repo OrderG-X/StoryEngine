@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import {
   buildCommitPlanFromProject,
   buildStateOverview,
@@ -301,10 +301,16 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
           return;
         }
         if (durableReceipt.status === "pending" || !durableReceipt.payload) {
+          const recoveredPayload = await recoverPendingCommitReceiptFromDisk(projectDir, chapter, durableReceipt)
+            .catch(() => undefined);
+          if (recoveredPayload) {
+            writeJson(res, 200, { ...recoveredPayload, idempotencyRecovered: true });
+            return;
+          }
           writeJson(res, 409, {
             ok: false,
             reason: "formal_commit_apply_idempotency_in_progress",
-            error: "检测到未完成的同键定稿记录；为避免重复写入，已拒绝自动重试。",
+            error: pendingReceiptBlockMessage(projectDir, chapter, idempotencyKey),
           });
           return;
         }
@@ -629,6 +635,70 @@ async function removePendingCommitReceipt(projectDir: string, receipt: DurableCo
   if (!existing || existing.status !== "pending") return;
   if (!sameReceiptIdentity(existing, receipt)) return;
   await rm(receiptPath(projectDir, receipt.chapter, receipt.idempotencyKey), { force: true });
+}
+
+/**
+ * pending 回执的恢复出口（数据安全收口硬不变量 #7：先恢复或拒绝，绝不删证据后重做）。
+ * pending 只证明「claim 之后、completed 回执落盘之前」中断，入库成败未知，故先做磁盘对账：
+ * 引擎事务残留已在进锁时由 recoverProjectCommitTransactions 收尾（无半写），而 commitFastDraft
+ * 把草稿原文写入 chapters/N.md——若该章已入库且内容与当前草稿哈希一致，说明入库其实已成功、
+ * 只是回执没写完。此时按磁盘真值补写 completed 回执并重建响应，是恢复而不是重复写入。
+ * 对不上（章未入库/内容被改/哈希不一致）一律返回 undefined，由调用方 fail-closed 409。
+ */
+async function recoverPendingCommitReceiptFromDisk(
+  projectDir: string,
+  chapter: number,
+  receipt: DurableCommitReceipt,
+): Promise<CommitApplySuccessPayload | undefined> {
+  const draftContent = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
+  if (draftContent === undefined) return undefined;
+  const chapterPath = defaultCommittedChapterPath(projectDir, chapter);
+  const chapterContent = await readFile(chapterPath, "utf-8").catch(() => undefined);
+  if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return undefined;
+  const warnings = [
+    "上次定稿在入库成功后、回执落盘前中断；本次按磁盘真值补写回执并返回结果（恢复，未重复入库）。",
+  ];
+  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 })
+    .catch((error: unknown) => {
+      warnings.push(`overview refresh failed after recovered commit: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+  let payload: CommitApplySuccessPayload = {
+    ok: true,
+    report: {
+      chapter,
+      passed: true,
+      chapterPath,
+      updatedCharacters: [],
+      timelineEventIds: [],
+      updatedHooks: [],
+      updatedWorld: false,
+      updatedCalendar: false,
+      issues: [],
+      recoveredFromPendingReceipt: true,
+    },
+    overview,
+    chapterContent,
+    chapterTitle: extractDraftTitle(chapterContent) ?? `第${chapter}章`,
+    warnings,
+  };
+  const completedReceipt: DurableCommitReceipt = { ...receipt, status: "completed", payload };
+  try {
+    await writeDurableCommitReceipt(projectDir, completedReceipt);
+  } catch (error) {
+    // 与主路径同口径：入库确已成功，回执补写再失败只降级为警告（下次同键重试还会走这条对账）。
+    const receiptWarning = `idempotency receipt persistence failed after recovered commit: ${error instanceof Error ? error.message : String(error)}`;
+    payload = { ...payload, warnings: [...warnings, receiptWarning] };
+  }
+  return payload;
+}
+
+/** pending 对账失败时的 409 文案：fail-closed，但必须给出可执行出路（含回执文件的确切路径）。 */
+function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempotencyKey: string): string {
+  const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
+  return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览入库（或草稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
+    + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
+    + `2) 人工核对确认上次定稿确实未生效后，删除回执文件 ${receiptFile} 再用原预览凭证重试。`;
 }
 
 function receiptMatchesRequest(

@@ -753,6 +753,92 @@ describe("commit routes", () => {
     expect(createSnapshot).not.toHaveBeenCalled();
   });
 
+  it("recovers a crash between the successful commit and the durable receipt write (disk reconciliation, no redo)", async () => {
+    projectDir = await createProjectFixture();
+    const applyBody = await previewApplyBody(projectDir, "idem-crash-after-commit-0001");
+    // 模拟「commitFastDraft 已成功、completed 回执未及落盘进程即死」：
+    // 正式章已按草稿原文写入（引擎侧 chapters/N.md = 草稿逐字），回执停在 pending。
+    const draftContent = await readFile(join(projectDir, "drafts", "fast", "chapter-0001.md"), "utf-8");
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "chapters", "0001.md"), draftContent, "utf-8");
+    const receiptFileName = await writePendingReceiptFixture(projectDir, applyBody);
+
+    const response = await callCommitRoute("/api/commit/apply", applyBody);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({
+      ok: true,
+      idempotencyRecovered: true,
+      overview: { overview: true },
+      chapterContent: draftContent,
+      chapterTitle: "第1章",
+      report: { chapter: 1, passed: true, recoveredFromPendingReceipt: true },
+    });
+    expect(response.payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("恢复")]),
+    );
+    // 恢复不是重做：绝不重跑入库、不重拍快照
+    expect(commitFastDraft).not.toHaveBeenCalled();
+    expect(createSnapshot).not.toHaveBeenCalled();
+    // 回执已补写为 completed：同键再试直接重放补写的响应，不再对账
+    const stored = JSON.parse(await readFile(
+      join(projectDir, ".story-engine-ui", "commit-idempotency", receiptFileName),
+      "utf-8",
+    )) as { status: string; payload?: { ok: boolean } };
+    expect(stored).toMatchObject({ status: "completed", payload: { ok: true } });
+    const replay = await callCommitRoute("/api/commit/apply", applyBody);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.payload).toMatchObject({ idempotencyReplayed: true, chapterContent: draftContent });
+    expect(commitFastDraft).not.toHaveBeenCalled();
+    expect(createSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps fail-closed 409 with actionable guidance when the pending receipt's commit never landed", async () => {
+    projectDir = await createProjectFixture();
+    const applyBody = await previewApplyBody(projectDir, "idem-crash-before-commit-0001");
+    // 崩溃发生在入库前：chapters/0001.md 不存在，只有 pending 回执
+    const receiptFileName = await writePendingReceiptFixture(projectDir, applyBody);
+
+    const response = await callCommitRoute("/api/commit/apply", applyBody);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.payload).toMatchObject({
+      ok: false,
+      reason: "formal_commit_apply_idempotency_in_progress",
+    });
+    const message = String(response.payload.error);
+    expect(message).toContain("重新生成定稿预览");
+    expect(message).toContain(join(".story-engine-ui", "commit-idempotency"));
+    expect(message).toContain(receiptFileName);
+    // fail-closed 不删证据：pending 回执原样保留
+    const stored = JSON.parse(await readFile(
+      join(projectDir, ".story-engine-ui", "commit-idempotency", receiptFileName),
+      "utf-8",
+    )) as { status: string };
+    expect(stored.status).toBe("pending");
+    expect(commitFastDraft).not.toHaveBeenCalled();
+    expect(createSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps fail-closed 409 when the committed chapter content does not match the pending receipt's draft", async () => {
+    projectDir = await createProjectFixture();
+    const applyBody = await previewApplyBody(projectDir, "idem-crash-content-mismatch-0001");
+    // 章已入库但内容与本次预览的草稿不一致（入库的不是这份草稿）→ 不得当作恢复
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章\n\n另一版早已入库的正文。", "utf-8");
+    await writePendingReceiptFixture(projectDir, applyBody);
+
+    const response = await callCommitRoute("/api/commit/apply", applyBody);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.payload).toMatchObject({
+      ok: false,
+      reason: "formal_commit_apply_idempotency_in_progress",
+    });
+    expect(commitFastDraft).not.toHaveBeenCalled();
+    expect(createSnapshot).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform === "win32")("fails closed when the durable receipt directory is a symlink", async () => {
     projectDir = await createProjectFixture();
     const applyBody = await previewApplyBody(projectDir, "idem-receipt-symlink-0001");
@@ -838,6 +924,28 @@ async function previewApplyBody(
     previewHash: String(preview.payload.previewHash),
     idempotencyKey,
   };
+}
+
+/** 写一份与 applyBody 完全匹配的 pending 回执（模拟「claim 之后、completed 落盘之前」进程中断），返回回执文件名。 */
+async function writePendingReceiptFixture(
+  projectPath: string,
+  applyBody: { chapter: number; transactionId: string; previewHash: string; idempotencyKey: string },
+): Promise<string> {
+  const receiptDir = join(projectPath, ".story-engine-ui", "commit-idempotency");
+  await mkdir(receiptDir, { recursive: true });
+  const cacheKey = `${projectPath} ${applyBody.chapter} ${applyBody.idempotencyKey}`;
+  const fileName = `${createHash("sha256").update(cacheKey, "utf-8").digest("hex")}.json`;
+  await writeFile(join(receiptDir, fileName), `${JSON.stringify({
+    version: 1,
+    status: "pending",
+    projectHash: createHash("sha256").update(projectPath, "utf-8").digest("hex"),
+    chapter: applyBody.chapter,
+    idempotencyKey: applyBody.idempotencyKey,
+    transactionId: applyBody.transactionId,
+    previewHash: applyBody.previewHash,
+    createdAt: "2026-09-08T00:00:00.000Z",
+  }, null, 2)}\n`, "utf-8");
+  return fileName;
 }
 
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {

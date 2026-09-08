@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { readWorkspaceMessages } from "./project-io.js";
@@ -108,11 +108,26 @@ function buildNewSession(name = "新会话"): StoredChatSession {
 
 // ── 并发安全：原子写 + 项目级写锁（根治 fuzz 测出的 BUG-1/2/3）────────────────────
 let __tmpSeq = 0;
-/** 原子写：先写临时文件再 rename 覆盖（POSIX rename 原子），避免并发 writeFile O_TRUNC 把 JSON 写撕裂。 */
+/**
+ * 原子写：写临时文件并 fsync 落盘后再 rename 覆盖（POSIX rename 原子），避免并发 writeFile O_TRUNC
+ * 把 JSON 写撕裂、断电时 rename 先于数据落盘；任何一步失败都清掉临时文件（force），不留 .tmp- 残留。
+ * 口径对齐 project-io.ts 的 writeFileAtomic。
+ */
 async function atomicWrite(path: string, data: string): Promise<void> {
   const tmp = `${path}.tmp-${process.pid}-${__tmpSeq++}`;
-  await writeFile(tmp, data, "utf-8");
-  await rename(tmp, path);
+  try {
+    const handle = await open(tmp, "w");
+    try {
+      await handle.writeFile(data, "utf-8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 /**
  * 按项目串行化所有会话写操作，消除对 index.json / 会话文件的「读→改→写」交错
