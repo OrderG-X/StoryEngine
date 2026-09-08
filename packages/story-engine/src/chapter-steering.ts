@@ -70,6 +70,7 @@ export interface ChapterSteeringSuggestion {
 }
 
 const DEFAULT_MAX_SUGGESTIONS = 6;
+const MAX_SELECTED_INCLUSIONS = 3;
 const AVAILABLE_ACTIONS = ["include", "skip", "weaken", "alternative"] as const;
 
 export async function buildChapterSteeringDraft(input: BuildChapterSteeringDraftInput): Promise<ChapterSteeringDraft> {
@@ -97,7 +98,10 @@ export async function buildChapterSteeringDraft(input: BuildChapterSteeringDraft
     ...selectWithTypeCoverage(ranked, nonRiskLimit, ["thread", "hook", "arcGoal"]),
     ...riskSuggestions,
   ]).slice(0, maxSuggestions);
-  const selectedInclusions: string[] = [];
+  const selectedInclusions = suggestions
+    .filter((item) => item.type !== "risk" && item.defaultAction === "include")
+    .slice(0, MAX_SELECTED_INCLUSIONS)
+    .map((item) => item.id);
 
   return {
     userDirection: input.userDirection,
@@ -409,7 +413,7 @@ function buildChapterGoalPreview(input: {
 }): string {
   const inclusions = input.inclusions
     .filter((item) => item.type !== "risk")
-    .slice(0, 3)
+    .slice(0, MAX_SELECTED_INCLUSIONS)
     .map((item) => item.title);
   return [
     `下一章方向：${input.userDirection.trim()}`,

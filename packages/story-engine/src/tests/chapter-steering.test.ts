@@ -73,9 +73,40 @@ describe("Chapter Steering Pack V0", () => {
     expect(riskTitles).not.toContain("写作规则提醒");
     expect(riskTitles).not.toContain("世界观与类型规则提醒");
     expect(riskTitles).not.toContain("角色边界提醒");
-    expect(draft.selectedInclusions).toEqual([]);
+    expect(draft.selectedInclusions.length).toBeGreaterThan(0);
+    const includedSuggestions = draft.suggestions.filter((suggestion) => draft.selectedInclusions.includes(suggestion.id));
+    expect(includedSuggestions.length).toBe(draft.selectedInclusions.length);
+    for (const suggestion of includedSuggestions) {
+      expect(suggestion.defaultAction).toBe("include");
+      expect(suggestion.type).not.toBe("risk");
+    }
+    const skippedSuggestions = draft.suggestions.filter((suggestion) => suggestion.defaultAction === "skip");
+    expect(skippedSuggestions.length).toBeGreaterThan(0);
+    for (const suggestion of skippedSuggestions) {
+      expect(draft.selectedInclusions).not.toContain(suggestion.id);
+      expect(draft.generatedChapterGoalPreview).not.toContain(`建议承接：${suggestion.title}`);
+    }
+    expect(draft.generatedChapterGoalPreview).toContain(`建议承接：${includedSuggestions[0]?.title}`);
 
     await expect(snapshotStateFiles(projectDir)).resolves.toEqual(before);
+  });
+
+  it("feeds top-ranked include suggestions into the goal preview instead of the fallback line", async () => {
+    const projectDir = await createSteeringFixture();
+
+    const draft = await buildChapterSteeringDraft({
+      projectDir,
+      userDirection: "下一章去地下车库确认信号源",
+      chapter: 8,
+      mustInclude: ["确认无线电信号来源"],
+    });
+
+    expect(draft.selectedInclusions.length).toBeGreaterThan(0);
+    expect(draft.selectedInclusions.length).toBeLessThanOrEqual(3);
+    const includedSuggestions = draft.suggestions.filter((suggestion) => draft.selectedInclusions.includes(suggestion.id));
+    expect(includedSuggestions.every((suggestion) => suggestion.defaultAction === "include" && suggestion.type !== "risk")).toBe(true);
+    expect(draft.generatedChapterGoalPreview).toContain(`建议承接：${includedSuggestions[0]?.title}`);
+    expect(draft.generatedChapterGoalPreview).not.toContain("保留 1 条主行动和 1 条轻量伏笔即可");
   });
 
   it("degrades gracefully when optional pools are missing", async () => {
