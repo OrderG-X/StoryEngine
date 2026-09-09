@@ -27,6 +27,16 @@
  *   后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。单个候选失败如实记 failed 不拖死全局，
  *   全部失败 → ok:false + candidatesReport 逐候选列明原因；passed=false 的候选永远不得中选。
  *
+ * 必命中要点误报降噪（beats 判漏 AI 复核，对齐 quality-judge 的「规则检出 + LLM 复核降级」模式）：
+ *   引擎 checkDraftBeatFidelity 只认词面锚点，对【有锚点却换了措辞】的要点会误报漏写（真机实锤：
+ *   「老街坊拿表来修」正文写了桂英老太太+海鸥表仍被判漏）。误报进两处——本工具的「首稿核对 ⚠」与
+ *   多候选评分器的「漏必命中要点 -50/条」（冤枉候选扣分）。故确定性判漏的每条 beat 先经 AI 复核
+ *   （beat-miss-adjudication.ts，triage 任务槽）：模型报「已覆盖」必须带正文逐字引证（quote 归一化
+ *   空白后是草稿逐字子串才采信），模型挂/超时/烂 JSON → 维持确定性结论 + adjudication:"unavailable"。
+ *   复核是降噪器不是闸门——只能把「漏」改成「已覆盖」，不新增漏报、不动 passed；被摘除的误报不消失，
+ *   进 beatFidelity.adjudicatedCovered 如实列出（可追溯）。零判漏零调用；多候选路径先裁决再进评分器
+ *   （评分吃裁决后漏报数）。
+ *
  * 铁律：
  * - 题材中立：description / summary 用中性词。
  * - 绝不静默失败 / 绝不谎报：runFastDraft.passed=false 时如实回报 ok:false + issues，不假装出稿成功。
@@ -60,6 +70,7 @@ export { positiveOrUndefined } from "./lenient-args.js";
 
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { adjudicateMissingBeats, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../../lib/beat-miss-adjudication.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../context-budget/rank-writer-context.js";
@@ -109,7 +120,7 @@ const inputSchema = z.object({
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("可选：本章明确相关伏笔 id 列表，用于收窄写作上下文。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
     "可选但强烈建议：当用户给了本章必须落实的【具体要点】（具体名物 / 数字 / 编号 / 关键动作，如『第三块砖』『债权池A-17』『买胶带』），逐条原样填进来，别压成一句话、别替换具体名词。" +
-    "引擎会把这些注入『本章硬约束』让模型逐条落实，并在出稿后确定性核对哪条漏了/写歪了。",
+    "引擎会把这些注入『本章硬约束』让模型逐条落实，并在出稿后确定性核对哪条漏了/写歪了；判漏条目还会先经 AI 复核摘除误报（带正文引证才摘），最终以 beatFidelity 字段的裁决后结果为准。",
   )),
   maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("可选：最多读取多少条时间线事件。")),
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("可选：动态上下文 token 预算；超出时只裁剪低优先动态块。")),
@@ -201,7 +212,8 @@ const outputSchema = z.object({
     index: z.number().int().positive().describe("候选序号（1 起，与 summary 的『第 N 个』一致）。"),
     chosen: z.boolean().describe("是否被确定性评分选中并落盘。"),
     score: z.number().optional().describe(
-      "确定性得分（100 起扣：漏必命中要点 -50/条、低于字数下限 -25、AI 腔计权 high×3+medium×1 每分 -10；可为负）。仅通过引擎校验的候选参与评分，失败候选无此值。",
+      "确定性得分（100 起扣：漏必命中要点 -50/条、低于字数下限 -25、AI 腔计权 high×3+medium×1 每分 -10；可为负）。" +
+      "漏报数先经 AI 复核裁决（误报摘除后不扣分，见 beatFidelity 字段）。仅通过引擎校验的候选参与评分，失败候选无此值。",
     ),
     aiFlavorCounts: z.object({
       high: z.number().int().nonnegative(),
@@ -212,6 +224,25 @@ const outputSchema = z.object({
     reason: z.string().describe("优胜/落选/失败的一句人话原因（如『AI 腔 2 处 > 优胜者 0 处』『低于字数下限』）。"),
   })).optional().describe(
     "多候选采样（candidates>1）的逐候选透明报告：得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
+  ),
+  beatFidelity: z.object({
+    missingBeats: z.array(z.string()).describe("确定性核对判漏、且（跑了复核时）AI 复核后仍可能漏写/被改写的必命中要点原文。"),
+    adjudicatedCovered: z.array(z.object({
+      beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
+      quote: z.string().describe("模型引用的正文原句（已校验：归一化空白后为草稿逐字子串），作为覆盖证据。"),
+    })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
+    adjudication: z.union([
+      z.literal("not_run"),
+      z.literal("applied"),
+      z.literal("unavailable"),
+    ]).describe(
+      "判漏复核状态：not_run=未跑复核（未注入裁决模型）；applied=复核已跑（哪怕一条没摘）；" +
+      "unavailable=复核模型失败/超时/烂 JSON，维持确定性结论、绝不反向谎报。",
+    ),
+    error: z.string().optional().describe("复核模型失败原因（adjudication=unavailable 时）。"),
+  }).optional().describe(
+    "必命中要点保真核对（warning-only，绝不影响出稿成败）：确定性规则判漏的要点先经 AI 复核（带正文逐字引证才摘除误报）；" +
+    "仅当确定性核对有判漏时出现，零判漏零调用。无锚点的要点规则本就不检，不在此列。",
   ),
 });
 
@@ -235,6 +266,7 @@ export interface GenerateDraftToolOutput {
   readonly aiFlavor?: GenerateDraftAiFlavorInfo;
   readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
   readonly candidatesReport?: readonly DraftCandidateReportEntry[];
+  readonly beatFidelity?: GenerateDraftBeatFidelityInfo;
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -339,6 +371,58 @@ export function buildDraftLengthInfo(report: DraftLengthReport): GenerateDraftLe
 export function buildDraftLengthWarning(info: GenerateDraftLengthInfo): string {
   if (info.lengthStatus !== "below_lower_bound") return "";
   return `⚠ 低于目标字数下限（实际${info.actualLength}字/下限${info.lowerBound}字）。可以按原样接受，或让我重写一版补足字数。`;
+}
+
+/** 必命中要点保真核对的工具输出信息：missingBeats 是【裁决后】结果；被摘除的误报进 adjudicatedCovered（可追溯）。 */
+export interface GenerateDraftBeatFidelityInfo {
+  readonly missingBeats: readonly string[];
+  readonly adjudicatedCovered: readonly AdjudicatedCoveredBeat[];
+  readonly adjudication: "not_run" | "applied" | "unavailable";
+  readonly error?: string;
+}
+
+/**
+ * 确定性判漏 + 复核结果 → 工具输出的 beatFidelity 信息。零判漏 → undefined（字段不出现、零成本）；
+ * 有判漏但没跑复核（未注入裁决模型）→ adjudication:"not_run"、维持确定性结论。纯逻辑、可测。
+ */
+export function buildBeatFidelityInfo(input: {
+  readonly deterministicMissingBeats: readonly string[];
+  readonly adjudication?: BeatMissAdjudication;
+}): GenerateDraftBeatFidelityInfo | undefined {
+  if (input.deterministicMissingBeats.length === 0) return undefined;
+  const adjudication = input.adjudication;
+  if (!adjudication) {
+    return { missingBeats: input.deterministicMissingBeats, adjudicatedCovered: [], adjudication: "not_run" };
+  }
+  return {
+    missingBeats: adjudication.missingBeats,
+    adjudicatedCovered: adjudication.adjudicatedCovered,
+    adjudication: adjudication.adjudication,
+    ...(adjudication.error ? { error: adjudication.error } : {}),
+  };
+}
+
+/**
+ * 首稿核对的 summary 文案（裁决后）：仍漏的照旧 ⚠ 如实提示；被复核摘除的误报如实交代去向（可追溯，
+ * 绝不静默消失）；复核没跑成（unavailable）在警告后如实补一句。全干净（零判漏/全摘除且无残留）时
+ * 只剩复核交代或空串——绝不打无内容的 ⚠。纯逻辑、可测。
+ */
+export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): string {
+  const parts: string[] = [];
+  if (info.missingBeats.length > 0) {
+    parts.push(
+      `⚠ 首稿核对：这几条要点可能漏写或被改写了——${info.missingBeats.join("、")}。要不要我改稿补回？` +
+        (info.adjudication === "unavailable" ? "（AI 复核没跑成，按确定性核对结果如实保留。）" : ""),
+    );
+  }
+  if (info.adjudicatedCovered.length > 0) {
+    parts.push(
+      `首稿复核：初判漏写的 ${info.adjudicatedCovered.length} 条要点（` +
+        `${info.adjudicatedCovered.map((entry) => entry.beat).join("、")}）经 AI 复核确认已写入正文，` +
+        `不再列为漏写（证据引文见 beatFidelity.adjudicatedCovered）。`,
+    );
+  }
+  return parts.join("\n");
 }
 
 /**
@@ -639,11 +723,16 @@ export function buildCandidateSummaryLine(
     `，其余落选原因见 candidatesReport。`;
 }
 
-/** 单个候选的 runFastDraft 报告 → 评分器输入（异常 / passed:false / 无正文 → eligible:false + 诚实原因）。 */
+/**
+ * 单个候选的 runFastDraft 报告 → 评分器输入（异常 / passed:false / 无正文 → eligible:false + 诚实原因）。
+ * beatAdjudication=该候选判漏要点的 AI 复核结果（有判漏且注入了裁决模型才跑）：评分吃【裁决后】漏报数，
+ * 误报摘除后不再冤枉扣分；复核 unavailable 时 missingBeats=确定性原样，计数不变（安全方向）。
+ */
 function scoreInputFromCandidateReport(
   index: number,
   report: FastDraftReport | undefined,
   exception?: string,
+  beatAdjudication?: BeatMissAdjudication,
 ): DraftCandidateScoreInput {
   if (!report) {
     return {
@@ -662,7 +751,7 @@ function scoreInputFromCandidateReport(
     belowLowerBound: report.draftLength?.lengthStatus === "below_lower_bound",
     actualLength: report.draftLength?.actualLength ?? 0,
     ...(report.draftLength?.lowerBound !== undefined ? { lowerBound: report.draftLength.lowerBound } : {}),
-    missingBeatCount: report.beatFidelity?.missingBeats.length ?? 0,
+    missingBeatCount: beatAdjudication?.missingBeats.length ?? report.beatFidelity?.missingBeats.length ?? 0,
   };
   if (!report.passed) {
     return {
@@ -685,17 +774,23 @@ interface DraftCandidateSampling {
   /** 全部候选无一通过（含全部异常）时为 true；false 而 effectiveReport.passed=false = 优胜稿落盘失败。 */
   readonly allFailed: boolean;
   readonly effectiveReport?: FastDraftReport;
+  /** 优胜候选的判漏 AI 复核结果（该候选无判漏/未注入裁决模型=undefined）；调用方据此构建裁决后的 beatFidelity 输出。 */
+  readonly chosenBeatAdjudication?: BeatMissAdjudication;
 }
 
 /**
  * 多候选采样：顺序生成 N 个 persist:false 候选（不并发——同一项目上下文并发只会给 provider 徒增限流压力、
  * 诊断乱序），确定性选优后优胜稿走引擎同一写盘通道落盘。单个候选失败如实记录、不拖死全局；
  * 至少 1 个通过就能继续；全部失败或优胜稿落盘失败 → effectiveReport.passed=false，由调用方 ok:false 诚实回报。
+ * 判漏误报降噪：选优前对每个「通过且有判漏」的候选先跑 AI 复核（顺序调、不并发），评分吃裁决后漏报数——
+ * 治「换了措辞被判漏 → 冤枉扣分」（真机实锤：优胜者被扣到 0 分）。未注入裁决模型=跳过、按确定性计数。
  */
 async function sampleDraftCandidates(input: {
   readonly candidateCount: number;
   readonly resolveWriterClient: (index: number) => WriterClient;
   readonly sharedDraftInput: Omit<FastDraftInput, "writerClient" | "persist" | "dryRun">;
+  /** 判漏要点的 AI 复核调用（execute 注入 triage 任务槽；测试注入 mock）。缺失=跳过裁决、按确定性漏报数评分。 */
+  readonly beatAdjudicationCallModel?: (prompt: string) => Promise<string>;
 }): Promise<DraftCandidateSampling> {
   const reports: (FastDraftReport | undefined)[] = [];
   const exceptions: (string | undefined)[] = [];
@@ -713,7 +808,22 @@ async function sampleDraftCandidates(input: {
       exceptions.push(error instanceof Error ? error.message : String(error));
     }
   }
-  const scoreInputs = reports.map((report, index) => scoreInputFromCandidateReport(index, report, exceptions[index]));
+  // 判漏误报降噪：选优前对每个「通过 + 有正文 + 有判漏」的候选跑 AI 复核（顺序调、不并发，同生成纪律）；
+  // 失败/未通过/零判漏的候选不花 token（零判漏零调用）。复核 unavailable 时 missingBeats=原样、计数不变。
+  const adjudications: (BeatMissAdjudication | undefined)[] = [];
+  for (const report of reports) {
+    const missingBeats = report?.beatFidelity?.missingBeats ?? [];
+    if (!input.beatAdjudicationCallModel || !report?.passed || !report.draftBody || missingBeats.length === 0) {
+      adjudications.push(undefined);
+      continue;
+    }
+    adjudications.push(await adjudicateMissingBeats({
+      draftContent: report.draftBody,
+      missingBeats,
+      callModel: input.beatAdjudicationCallModel,
+    }));
+  }
+  const scoreInputs = reports.map((report, index) => scoreInputFromCandidateReport(index, report, exceptions[index], adjudications[index]));
   const ranked = rankDraftCandidates(scoreInputs);
   if (ranked.chosenIndex === undefined) {
     return {
@@ -724,6 +834,7 @@ async function sampleDraftCandidates(input: {
     };
   }
   const winnerReport = reports[ranked.chosenIndex];
+  const chosenBeatAdjudication = adjudications[ranked.chosenIndex];
   if (!winnerReport?.draftBody) {
     // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
     return { entries: ranked.entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
@@ -741,6 +852,7 @@ async function sampleDraftCandidates(input: {
       chosenIndex: ranked.chosenIndex,
       allFailed: false,
       effectiveReport: { ...winnerReport, draftPath },
+      ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -770,6 +882,11 @@ async function sampleDraftCandidates(input: {
  *
  * 多候选（candidates=2/3，默认 1=零行为变化）：先后生成 N 个 persist:false 候选（candidateWriterClients
  * 按序注入，execute 用 temperature 错开构建），确定性评分选优、优胜稿落盘后汇入下方同一条后续链。
+ *
+ * 判漏误报降噪（beatAdjudicationCallModel，execute 注入 triage 任务槽）：确定性核对判漏的必命中要点
+ * 先经 AI 复核（带正文逐字引证才摘除误报；模型挂→维持原结论+unavailable），beatFidelity 输出与 summary
+ * 用裁决后结果；多候选路径在评分器之前逐候选裁决（评分吃裁决后漏报数）。缺失=跳过复核、维持确定性结论
+ * （adjudication:"not_run"）。零判漏零调用。
  */
 export async function runGenerateDraftToolLogic(input: {
   readonly projectDir: string;
@@ -790,6 +907,8 @@ export async function runGenerateDraftToolLogic(input: {
   readonly candidates?: number;
   /** candidates>1 时按序注入的候选 writer（execute 用 temperature 错开构建；测试注入 mock）。缺位的序号回退 writerClient。 */
   readonly candidateWriterClients?: readonly WriterClient[];
+  /** 判漏要点的 AI 复核调用（execute 注入 triage 任务槽；测试注入 mock）。缺失=跳过复核、维持确定性结论。 */
+  readonly beatAdjudicationCallModel?: (prompt: string) => Promise<string>;
 }): Promise<GenerateDraftToolOutput> {
   const { projectDir, chapter, writerClient } = input;
   const chapterGoal = input.chapterGoal?.trim() || `继续第 ${chapter} 章。`;
@@ -829,14 +948,18 @@ export async function runGenerateDraftToolLogic(input: {
   const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
   let report: FastDraftReport | undefined;
   let sampling: DraftCandidateSampling | undefined;
+  let beatAdjudication: BeatMissAdjudication | undefined;
   if (candidateCount > 1) {
-    // 多候选：N 个 persist:false 候选（只生成不落盘）→ 确定性选优 → 优胜稿统一落盘，汇入下方同一条后续链。
+    // 多候选：N 个 persist:false 候选（只生成不落盘）→ 逐候选判漏 AI 复核 → 确定性选优（吃裁决后漏报数）
+    // → 优胜稿统一落盘，汇入下方同一条后续链。
     sampling = await sampleDraftCandidates({
       candidateCount,
       resolveWriterClient: (index) => input.candidateWriterClients?.[index] ?? writerClient,
       sharedDraftInput,
+      ...(input.beatAdjudicationCallModel ? { beatAdjudicationCallModel: input.beatAdjudicationCallModel } : {}),
     });
     report = sampling.effectiveReport;
+    beatAdjudication = sampling.chosenBeatAdjudication;
   } else {
     report = await runFastDraft({
       ...sharedDraftInput,
@@ -880,11 +1003,23 @@ export async function runGenerateDraftToolLogic(input: {
   // ⚠ 绝不因此判 ok:false：稿子是真写成功的，谎报失败会诱导用户重写覆盖好稿。
   let draftBody = await readDraftBodyWithRetry(report.draftPath);
 
-  // 出稿后保真软警告：用户给的必命中要点里有具体锚点漏写/被改写 → 如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。
-  const missingBeats = report.beatFidelity?.missingBeats ?? [];
-  const beatWarning = missingBeats.length > 0
-    ? `⚠ 首稿核对：这几条要点可能漏写或被改写了——${missingBeats.join("、")}。要不要我改稿补回？`
-    : "";
+  // 出稿后保真软警告（裁决后）：确定性核对判漏的要点先经 AI 复核（带正文逐字引证才摘除误报），
+  // 用裁决后结果如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。复核没跑成 → 维持确定性结论
+  // + adjudication:"unavailable" 如实标注。零判漏零调用（连裁决模型都不碰）。无锚点 beat 规则不检，不在此列。
+  // 多候选路径的复核已在采样选优前逐候选跑完（beatAdjudication=优胜者那份），这里不重复调。
+  const deterministicMissingBeats = report.beatFidelity?.missingBeats ?? [];
+  if (!sampling && deterministicMissingBeats.length > 0 && input.beatAdjudicationCallModel) {
+    beatAdjudication = await adjudicateMissingBeats({
+      draftContent: draftBody,
+      missingBeats: deterministicMissingBeats,
+      callModel: input.beatAdjudicationCallModel,
+    });
+  }
+  const beatFidelityInfo = buildBeatFidelityInfo({
+    deterministicMissingBeats,
+    ...(beatAdjudication ? { adjudication: beatAdjudication } : {}),
+  });
+  const beatNote = beatFidelityInfo ? buildBeatFidelityNote(beatFidelityInfo) : "";
 
   // 字数透明软警告：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注，让用户决定重写或接受。
   const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
@@ -941,6 +1076,7 @@ export async function runGenerateDraftToolLogic(input: {
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
     ...(sampling ? { candidatesReport: sampling.entries } : {}),
+    ...(beatFidelityInfo ? { beatFidelity: beatFidelityInfo } : {}),
     // 自动去味真落了改动时，snapshotId 用它的快照（最近的撤销点）；否则由 execute 挂「再写一版」快照。
     ...(autoDeAiSnapshotId ? { snapshotId: autoDeAiSnapshotId } : {}),
     issues: report.issues,
@@ -949,7 +1085,7 @@ export async function runGenerateDraftToolLogic(input: {
       `第 ${chapter} 章已生成正文并写入工作稿${report.title ? `《${report.title}》` : ""}。` +
       candidateLine +
       `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
-      (beatWarning ? `\n${beatWarning}` : "") +
+      (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
       (aiFlavorNote ? `\n${aiFlavorNote}` : "") +
       // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
@@ -974,7 +1110,9 @@ export const generateDraftTool = createTool({
     "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。" +
     "默认一次成稿（candidates:1）；用户想多版挑选、或嫌连载文风越来越雷同时，传 candidates:2–3：先后生成 N 个候选（temperature 依次错开），" +
     "按确定性规则（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）自动选出最优稿落盘，逐候选得分与落选原因见 candidatesReport——请如实转达。" +
-    "注意多候选的 token 消耗与生成时间都约为 N 倍，别默认开。",
+    "注意多候选的 token 消耗与生成时间都约为 N 倍，别默认开。" +
+    "mustHitBeats 的判漏会先经 AI 复核（带正文逐字引证才摘除误报、模型没跑成则维持原结论），裁决后的剩余漏写与" +
+    "被摘除条目分别见 beatFidelity.missingBeats / beatFidelity.adjudicatedCovered——summary 的「首稿核对」警告以裁决后结果为准，请如实转达。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -1065,6 +1203,9 @@ export const generateDraftTool = createTool({
       ...(deAiCallModel ? { deAiCallModel } : {}),
       candidates: candidateCount,
       ...(candidateWriterClients ? { candidateWriterClients } : {}),
+      // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
+      // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
+      beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
       writerClient,
     });
     // 只在真出稿成功时挂 snapshotId（失败=未覆盖旧稿，无需撤销点）；自动去味已落改动时它自带更近的快照，不覆盖。
@@ -1096,6 +1237,26 @@ async function buildRepairDeAiCallModel(): Promise<(prompt: string) => Promise<s
       throw new Error(message);
     };
   }
+}
+
+/**
+ * 判漏复核的裁决模型（triage 任务槽：流式 + 空闲超时、不传 max_tokens、要 JSON，低温判定）。
+ * 惰性解析：只在真有判漏、复核真被调用时才 resolveConfiguredChatModel（零判漏连槽都不解析，
+ * 也不让复核槽的配置问题把 ok:true 的出稿拖成工具报错）——解析/调用失败一律在
+ * adjudicateMissingBeats 里被接住：维持确定性结论 + adjudication:"unavailable" 如实标注，绝不反向谎报。
+ */
+function buildTriageBeatAdjudicationCallModel(): (prompt: string) => Promise<string> {
+  return async (prompt: string): Promise<string> => {
+    const configured = await resolveConfiguredChatModel("triage");
+    const { content } = await streamChatModelToText({
+      configured,
+      messages: [{ role: "user", content: prompt }],
+      temperature: configured.profile.temperature ?? 0.2,
+      responseFormat: { type: "json_object" },
+    });
+    if (!content) throw new Error("复核模型返回了空内容。");
+    return content;
+  };
 }
 
 function optionalContextBudget(contextRanking: ReturnType<typeof makeWriterRankContext>): { readonly contextBudget: ReturnType<typeof contextBudgetPayload> } | Record<string, never> {
