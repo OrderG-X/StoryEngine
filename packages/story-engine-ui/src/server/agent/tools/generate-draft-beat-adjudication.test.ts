@@ -325,3 +325,66 @@ describe("generate_draft × beats 判漏 AI 复核（execute 接线：triage 任
     }
   });
 });
+
+describe("去味后 beats 复核的基准集与引证时效（Fable 复审 P2-新 回归）", () => {
+  // 复现链：要点换措辞 → 确定性判漏 → AI 复核确认覆盖（摘除）→ 自动去味改了别的 AI 腔句 →
+  // 去味后确定性复核照样判漏该要点（它本就词面无锚点）——不得误报成「去味吃掉了锚点」。
+  const REWORDED_QUOTE = "林远翻开那本编号一七的债权台账，指尖停在最后一页。";
+  const FLAVOR_SENTENCE = "林远深吸一口气，推开了办公室的门。";
+  const DEAI_REPRO_BODY = [longBody("林远"), REWORDED_QUOTE, FLAVOR_SENTENCE].join("\n\n");
+
+  it("裁决已覆盖 + 去味只改 AI 腔句 → 不误报「去味后新漏」、adjudicatedCovered 保留（基准集=裁决前判漏）", async () => {
+    const projectDir = await makeProject("去味复核不误报", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["债权池A-17"],
+      writerClient: mockWriterClient(DEAI_REPRO_BODY),
+      beatAdjudicationCallModel: async () => JSON.stringify({ judgements: [
+        { index: 1, covered: true, quote: REWORDED_QUOTE },
+      ] }),
+      deAiCallModel: async () => JSON.stringify({ rewrites: [
+        { text: FLAVOR_SENTENCE, afterText: "林远推开办公室的门。" },
+      ] }),
+    });
+    expect(out.ok).toBe(true);
+    // 去味真落改动（引证句没动）
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("林远推开办公室的门。");
+    expect(onDisk).toContain(REWORDED_QUOTE);
+    // 关键断言：裁决后照样判漏的要点不得进 postDeAiNewMisses（旧行为会误报且与复核交代自相矛盾）
+    expect(out.beatFidelity?.postDeAiNewMisses).toBeUndefined();
+    expect(out.beatFidelity?.staleAdjudications).toBeUndefined();
+    expect(out.beatFidelity?.adjudicatedCovered).toEqual([{ beat: "债权池A-17", quote: REWORDED_QUOTE }]);
+    expect(out.summary).toContain("复检干净");
+    expect(out.summary).toContain("经 AI 复核确认已写入正文");
+    expect(out.summary).not.toContain("去味后新漏");
+  });
+
+  it("去味恰好改写了复核引证句 → 该条目移出 adjudicatedCovered、进 staleAdjudications 并如实标注", async () => {
+    const projectDir = await makeProject("去味吃掉引证句", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["债权池A-17"],
+      writerClient: mockWriterClient(DEAI_REPRO_BODY),
+      beatAdjudicationCallModel: async () => JSON.stringify({ judgements: [
+        { index: 1, covered: true, quote: REWORDED_QUOTE },
+      ] }),
+      deAiCallModel: async () => JSON.stringify({ rewrites: [
+        { text: FLAVOR_SENTENCE, afterText: "林远推开办公室的门。" },
+        { text: REWORDED_QUOTE, afterText: "林远翻开债权台账，停在末页。" },
+      ] }),
+    });
+    expect(out.ok).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("林远翻开债权台账，停在末页。");
+    // 引证句被改写 → 覆盖结论过期：移出 covered、单列 stale；仍不得进 postDeAiNewMisses（去味前后都判漏，非新漏）
+    expect(out.beatFidelity?.adjudicatedCovered).toEqual([]);
+    expect(out.beatFidelity?.staleAdjudications).toEqual([{ beat: "债权池A-17", quote: REWORDED_QUOTE }]);
+    expect(out.beatFidelity?.postDeAiNewMisses).toBeUndefined();
+    expect(out.summary).toContain("去味改写了 1 条要点的复核引证句");
+    expect(out.summary).toContain("债权池A-17");
+    expect(out.summary).not.toContain("去味后新漏");
+  });
+});

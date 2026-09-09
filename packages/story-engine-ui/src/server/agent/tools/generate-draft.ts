@@ -72,7 +72,7 @@ export { positiveOrUndefined } from "./lenient-args.js";
 
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
-import { adjudicateMissingBeats, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../../lib/beat-miss-adjudication.js";
+import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../../lib/beat-miss-adjudication.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../context-budget/rank-writer-context.js";
@@ -236,7 +236,7 @@ const outputSchema = z.object({
       beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
       quote: z.string().describe(
         "模型引用的正文原句（已校验：归一化空白后为【裁决时草稿】的逐字子串），作为覆盖证据；" +
-        "若之后自动去味改掉了这句、锚点消失，该要点会同时出现在 postDeAiNewMisses。",
+        "若之后自动去味改掉了这句，该条目会移入 staleAdjudications（覆盖结论过期）。",
       ),
     })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
     adjudication: z.union([
@@ -250,7 +250,13 @@ const outputSchema = z.object({
     error: z.string().optional().describe("复核模型失败原因（adjudication=unavailable 时）。"),
     postDeAiNewMisses: z.array(z.string()).optional().describe(
       "自动去味真落了改动后，对最终正文再跑一遍确定性核对时【新出现】的漏写要点（去味整句改写吃掉了锚点；" +
-      "去味前已列在 missingBeats 的不重复计入）。这些是确定性核对结果、未经 AI 复核，请如实转达。",
+      "基准集是裁决【前】的确定性判漏——裁决已摘除的要点本就词面无锚点、去味后照样判漏，不算新漏）。这些是确定性核对结果、未经 AI 复核，请如实转达。",
+    ),
+    staleAdjudications: z.array(z.object({
+      beat: z.string().describe("复核曾确认覆盖、但引证句随后被自动去味改写的要点原文。"),
+      quote: z.string().describe("裁决时的引证原句——已被去味改写，不再是最终稿的逐字子串，覆盖结论过期。"),
+    })).optional().describe(
+      "引证过期的复核条目（从 adjudicatedCovered 移出，可追溯不静默）：去味恰好改写了它们的证据句，要点当前是否仍被覆盖需要人工或下一轮复核确认。",
     ),
   }).optional().describe(
     "必命中要点保真核对（warning-only，绝不影响出稿成败）：确定性规则判漏的要点先经 AI 复核（带正文逐字引证才摘除误报）；" +
@@ -391,8 +397,10 @@ export interface GenerateDraftBeatFidelityInfo {
   readonly adjudicatedCovered: readonly AdjudicatedCoveredBeat[];
   readonly adjudication: "not_run" | "applied" | "unavailable";
   readonly error?: string;
-  /** 自动去味真落改动后对最终正文复核时【新出现】的漏写（去味前没判漏、改写吃掉了锚点）；确定性结果、未经 AI 复核。 */
+  /** 自动去味真落改动后对最终正文复核时【新出现】的漏写（基准集是裁决【前】的确定性判漏）；确定性结果、未经 AI 复核。 */
   readonly postDeAiNewMisses?: readonly string[];
+  /** 去味恰好改写了复核引证句的条目：覆盖结论的证据已过期，从 adjudicatedCovered 移出单列（可追溯，不静默）。 */
+  readonly staleAdjudications?: readonly AdjudicatedCoveredBeat[];
 }
 
 /**
@@ -441,6 +449,13 @@ export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): stri
     parts.push(
       `⚠ 去味后新漏 ${info.postDeAiNewMisses.length} 条要点（${info.postDeAiNewMisses.join("、")}）：` +
         `自动去味的整句改写吃掉了它们的锚点（这是对去味后最终正文的确定性复核，未经 AI 复核）。要不要我改稿补回？`,
+    );
+  }
+  if (info.staleAdjudications && info.staleAdjudications.length > 0) {
+    parts.push(
+      `⚠ 去味改写了 ${info.staleAdjudications.length} 条要点的复核引证句（` +
+        `${info.staleAdjudications.map((entry) => entry.beat).join("、")}）：这些要点此前经 AI 复核确认已写入正文，` +
+        `但证据句被自动去味改掉了，当前是否仍被覆盖需要确认。要不要我复核一遍？`,
     );
   }
   return parts.join("\n");
@@ -1110,21 +1125,32 @@ export async function runGenerateDraftToolLogic(input: {
         autoDeAiInfo = round.info;
         autoDeAiSnapshotId = round.snapshotId;
         if (round.draftBody !== undefined) {
-          draftBody = round.draftBody;
-          // 去味真落了改动 → 对最终正文重跑一遍引擎确定性 beats 核对（纯函数、零 token）：去味按整句改写，
-          // 可能吃掉 beats 锚点、使 adjudicatedCovered 的引证过期。只把【新出现】的漏写（去味前核对没判漏的）
-          // 并入 beatFidelity.postDeAiNewMisses 如实标注来源；已在 missingBeats 列过的不重复报。
+          const deAiBody = round.draftBody;
+          draftBody = deAiBody;
+          // 去味真落了改动 → 对最终正文重跑一遍引擎确定性 beats 核对（纯函数、零 token）：
+          // ① 基准集用裁决【前】的确定性判漏 deterministicMissingBeats——裁决已摘除的要点本就词面无锚点，
+          //    去味后照样判漏，不算「新漏」（若拿裁决后的 missingBeats 当基准，会把它们误报成「去味吃掉了」）。
+          // ② adjudicatedCovered 的引证时效性：去味恰好改写了引证句的条目移出、单列 staleAdjudications 如实标注。
           if (input.mustHitBeats && input.mustHitBeats.length > 0) {
             const postDeAiMissing = checkDraftBeatFidelity({
-              draftContent: round.draftBody,
+              draftContent: deAiBody,
               mustHitBeats: input.mustHitBeats,
             }).missingBeats;
-            const alreadyReported = new Set(beatFidelityInfo?.missingBeats ?? []);
-            const newMisses = postDeAiMissing.filter((beat) => !alreadyReported.has(beat));
+            const deterministicBaseline = new Set(deterministicMissingBeats);
+            const newMisses = postDeAiMissing.filter((beat) => !deterministicBaseline.has(beat));
             if (newMisses.length > 0) {
               beatFidelityInfo = {
                 ...(beatFidelityInfo ?? { missingBeats: [], adjudicatedCovered: [], adjudication: "not_run" as const }),
                 postDeAiNewMisses: newMisses,
+              };
+            }
+            const coveredEntries = beatFidelityInfo?.adjudicatedCovered ?? [];
+            const staleEntries = coveredEntries.filter((entry) => !isAdjudicationQuoteVerbatim(entry.quote, deAiBody));
+            if (beatFidelityInfo && staleEntries.length > 0) {
+              beatFidelityInfo = {
+                ...beatFidelityInfo,
+                adjudicatedCovered: coveredEntries.filter((entry) => isAdjudicationQuoteVerbatim(entry.quote, deAiBody)),
+                staleAdjudications: staleEntries,
               };
             }
           }
