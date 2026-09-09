@@ -52,7 +52,7 @@ export async function updateChatHistoryBudgetTokens(budget: number): Promise<num
       settings = {};
       await mkdir(resolveGlobalDataDir(), { recursive: true });
       settings.chatHistoryBudgetTokens = budget;
-      await writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      await writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
       return budget;
     }
     throw new Error(
@@ -78,7 +78,7 @@ export async function updateChatHistoryBudgetTokens(budget: number): Promise<num
   settings = parsed;
   settings.chatHistoryBudgetTokens = budget;
   await mkdir(resolveGlobalDataDir(), { recursive: true });
-  await writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  await writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
   return budget;
 }
 

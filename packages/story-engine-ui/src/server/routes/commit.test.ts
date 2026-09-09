@@ -777,6 +777,10 @@ describe("commit routes", () => {
     expect(response.payload.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("恢复")]),
     );
+    // P3-1：恢复路径必须如实声明详细变更清单不可恢复、report 里那些零值是占位空值
+    expect(response.payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("详细变更清单不可恢复"), expect.stringContaining("占位空值")]),
+    );
     // 恢复不是重做：绝不重跑入库、不重拍快照
     expect(commitFastDraft).not.toHaveBeenCalled();
     expect(createSnapshot).not.toHaveBeenCalled();

@@ -19,6 +19,7 @@ import { buildProjectRequestContext } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
   aiFlavorWeightedScore,
+  attachCandidateTemperatures,
   buildAiFlavorInfo,
   buildAiFlavorWarning,
   buildAutoDeAiNote,
@@ -35,6 +36,7 @@ import {
   positiveOrUndefined,
   rankDraftCandidates,
   readDraftBodyWithRetry,
+  resolveCandidateTemperatures,
   runGenerateDraftToolLogic,
   scoreDraftCandidate,
   type DraftCandidateScoreInput,
@@ -986,7 +988,85 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
   });
 });
 
-// 第四层：多候选采样防坍缩——确定性评分器（纯函数）+ 采样编排集成。
+// 去味后 beats 复核：去味真落改动后对最终正文重跑一遍引擎确定性核对（纯函数零 token）——去味按整句
+// 改写、可能吃掉 beats 锚点（锚点句恰是被改写的 AI 腔句时）。新出现的漏写如实进 beatFidelity.postDeAiNewMisses
+// + summary「去味后新漏 N 条」；去味前已判漏的不重复报；没吃掉锚点则零噪音。
+describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实报新漏）", () => {
+  // 「深吸一口气」medium 命中的整句里带锚点「第三块砖」——去味改写这句时锚点可能一起被吃掉。
+  const ANCHOR_FLAVORED_BODY = "林远深吸一口气，撬开第三块砖后面的暗格，取出薄铁盒。";
+  const EAT_ANCHOR = JSON.stringify({ rewrites: [
+    { text: ANCHOR_FLAVORED_BODY, afterText: "林远撬开暗格，取出薄铁盒。" }, // 改写吃掉了「第三块砖」
+  ] });
+  const KEEP_ANCHOR = JSON.stringify({ rewrites: [
+    { text: ANCHOR_FLAVORED_BODY, afterText: "林远撬开第三块砖，取出薄铁盒。" }, // 锚点保住
+  ] });
+
+  it("去味改写吃掉锚点 → postDeAiNewMisses 如实报新漏 + summary 标「去味后新漏 1 条」（原稿锚点全中、零判漏）", async () => {
+    const projectDir = await makeProject("去味吃锚点", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["第三块砖"],
+      writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
+      deAiCallModel: async () => EAT_ANCHOR,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.autoDeAi?.fixedCount).toBe(1); // 去味真落了改动才触发复核
+    // 去味前锚点全中（零判漏）；新漏只来自去味后复核，如实标注来源（确定性结果、未经 AI 复核）
+    expect(out.beatFidelity).toEqual({
+      missingBeats: [],
+      adjudicatedCovered: [],
+      adjudication: "not_run",
+      postDeAiNewMisses: ["第三块砖"],
+    });
+    expect(out.summary).toContain("去味后新漏 1 条");
+    expect(out.summary).toContain("第三块砖");
+    expect(out.summary).not.toContain("⚠ 首稿核对"); // 去味前没有判漏，不打这条
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).not.toContain("第三块砖"); // 锚点确实被吃掉了
+  });
+
+  it("去味改写保住锚点 → 无 postDeAiNewMisses、beatFidelity 字段不出现、summary 无新漏噪音", async () => {
+    const projectDir = await makeProject("去味保锚点", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["第三块砖"],
+      writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
+      deAiCallModel: async () => KEEP_ANCHOR,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.autoDeAi?.fixedCount).toBe(1); // 去味真改了，但没吃掉锚点
+    expect("beatFidelity" in out).toBe(false);
+    expect(out.summary).toContain("复检干净"); // 去味本身照常如实报
+    expect(out.summary).not.toContain("去味后新漏");
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("第三块砖");
+  });
+
+  it("去味前已判漏的要点不重复计入新漏：missingBeats 保留债权池A-17，postDeAiNewMisses 只收新吃掉的「第三块砖」", async () => {
+    const projectDir = await makeProject("去味新旧漏分流", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["第三块砖", "债权池A-17"], // A-17 原稿就漏（确定性判漏）；第三块砖原稿命中、被去味吃掉
+      writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
+      deAiCallModel: async () => EAT_ANCHOR,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.beatFidelity).toEqual({
+      missingBeats: ["债权池A-17"],           // 去味前后都漏 → 留在原位，不重复进新漏
+      adjudicatedCovered: [],
+      adjudication: "not_run",
+      postDeAiNewMisses: ["第三块砖"],        // 只有新吃掉的进这里
+    });
+    expect(out.summary).toContain("⚠ 首稿核对");
+    expect(out.summary).toContain("债权池A-17");
+    expect(out.summary).toContain("去味后新漏 1 条");
+  });
+});
+
+
 // mock writer 返回不同质量候选，验证：选优正确、落选理由一句人话、只有优胜者落盘、
 // 单候选失败不拖死、全失败 ok:false 诚实、candidates=1 零行为变化、优胜稿照常走 autoDeAi 闭环。
 describe("多候选确定性评分器（纯函数，权重全透明）", () => {
@@ -1116,8 +1196,35 @@ describe("多候选确定性评分器（纯函数，权重全透明）", () => {
     expect(buildCandidateSummaryLine(2, poor, [poor, poorButCleaner])).toContain("（综合评分最高）");
   });
 
-  it("temperature 错开档位常量：基准 / +0.15 / +0.3（第 1 个=基准防 N 版同分布）", () => {
+  it("temperature 错开档位常量：基准 / ±0.15 / ±0.3（方向由 resolveCandidateTemperatures 按 base 定）", () => {
     expect(DRAFT_CANDIDATE_TEMPERATURE_OFFSETS).toEqual([0, 0.15, 0.3]);
+  });
+
+  it("resolveCandidateTemperatures：base 0.8 向上错开（既有行为不回归）；base ≥0.85 向上会撞封顶 → 向下错开", () => {
+    expect(resolveCandidateTemperatures(0.8, 3)).toEqual([0.8, 0.95, 1.0]);
+    expect(resolveCandidateTemperatures(0.84, 3)).toEqual([0.84, 0.99, 1.0]); // 向上还错得开
+    // P3-3：base 已是 1.0 时旧实现三候选同温（全撞封顶）防坍缩静默失效 → 改为向下错开
+    const capped = resolveCandidateTemperatures(1.0, 3);
+    expect(capped).toEqual([1.0, 0.85, 0.7]);
+    expect(new Set(capped).size).toBe(3); // 互不相同
+    expect(capped[0]).toBeGreaterThan(capped[1] as number); // 递减
+    expect(capped[1]).toBeGreaterThan(capped[2] as number);
+    expect(resolveCandidateTemperatures(0.9, 3)).toEqual([0.9, 0.75, 0.6]);
+    expect(resolveCandidateTemperatures(0.85, 3)).toEqual([0.85, 0.7, 0.55]); // 0.85+0.15 与 0.85+0.3 会同撞 1.0
+    expect(resolveCandidateTemperatures(1.0, 2)).toEqual([1.0, 0.85]); // candidates=2 只取前两档
+    expect(resolveCandidateTemperatures(0, 3)).toEqual([0, 0.15, 0.3]); // 下限夹逼 0，向上照常
+  });
+
+  it("attachCandidateTemperatures：只标真注入错温 client 的槽位；缺位回退槽/未注入温度 → 不编造", () => {
+    const entries = [
+      { index: 1, chosen: true, aiFlavorCounts: { high: 0, medium: 0, low: 0 }, actualLength: 100, reason: "x" },
+      { index: 2, chosen: false, aiFlavorCounts: { high: 0, medium: 0, low: 0 }, actualLength: 100, reason: "y" },
+    ];
+    const both = attachCandidateTemperatures(entries, [0.8, 0.95], [{} as WriterClient, {} as WriterClient]);
+    expect(both.map((entry) => entry.temperature)).toEqual([0.8, 0.95]);
+    const missingSlot = attachCandidateTemperatures(entries, [0.8, 0.95], [{} as WriterClient]); // 槽位 2 缺位回退 writerClient
+    expect(missingSlot.map((entry) => entry.temperature)).toEqual([0.8, undefined]);
+    expect(attachCandidateTemperatures(entries, undefined, undefined)).toBe(entries); // 未注入温度 → 原样返回
   });
 });
 
@@ -1369,6 +1476,58 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
       expect(out.candidatesReport).toHaveLength(3);
       expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       expect(out.summary).toContain("已生成 3 个候选并选出第 2 个");
+      const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    } finally {
+      spyResolve.mockRestore();
+      spyCreate.mockRestore();
+      spyWriter.mockRestore();
+      spyStream.mockRestore();
+    }
+  });
+
+  // P3-3：base 温度已封顶 1.0 时，旧实现三候选同温（全撞 Math.min(1,…)）防坍缩静默失效 → 向下错开，
+  // 且实际温度如实进 candidatesReport（不再只说「依次错开」却给了三个同温）。
+  it("execute 端到端接线：profile 温度已封顶 1.0 时向下错开（1.0/0.85/0.7 互不相同且递减），实际温度进 candidatesReport", async () => {
+    const projectDir = await makeProject("多候选封顶错温", "林远");
+    const clean = inRangeBody("林远");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel").mockResolvedValue({
+      provider: { id: "p", baseUrl: "http://127.0.0.1:1", apiKeyEnv: "TEST_KEY" },
+      profile: { id: "prof", provider: "p", model: "test-model", temperature: 1.0 }, // base 已封顶
+      apiKey: "k",
+      thinking: false,
+      thinkingDialect: "none",
+    } as unknown as Awaited<ReturnType<typeof llmClientModule.resolveConfiguredChatModel>>);
+    const seenTemperatures: (number | undefined)[] = [];
+    const bodies = [`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`, clean, "林远走进了房间。"];
+    let callIndex = 0;
+    const spyCreate = vi.spyOn(llmClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
+      ((configured: { profile: { temperature?: number } }) => {
+        seenTemperatures.push(configured.profile.temperature);
+        const body = bodies[callIndex];
+        callIndex += 1;
+        return { async generateDraft() { return { title: "第1章", content: body }; } };
+      }) as unknown as typeof llmClientModule.createOpenAICompatibleWriterClient,
+    );
+    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient");
+    const spyStream = vi.spyOn(llmClientModule, "streamChatModelToText");
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文，多写几版挑一挑。"),
+      } as unknown as ToolExecutionContext;
+      const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
+        ok: boolean; summary: string; candidatesReport?: readonly { index: number; chosen: boolean; temperature?: number }[];
+      }>;
+      const out = await execute({ candidates: 3 }, context);
+
+      expect(out.ok).toBe(true);
+      // 向下错开：三候选温度互不相同且递减（旧行为会是 [1.0, 1.0, 1.0] 同温静默失效）
+      expect(seenTemperatures).toEqual([1.0, 0.85, 0.7]);
+      // 实际温度如实进逐候选报告
+      expect(out.candidatesReport?.map((entry) => entry.temperature)).toEqual([1.0, 0.85, 0.7]);
+      expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
       expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
     } finally {

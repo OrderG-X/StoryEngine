@@ -35,7 +35,8 @@
  *   空白后是草稿逐字子串才采信），模型挂/超时/烂 JSON → 维持确定性结论 + adjudication:"unavailable"。
  *   复核是降噪器不是闸门——只能把「漏」改成「已覆盖」，不新增漏报、不动 passed；被摘除的误报不消失，
  *   进 beatFidelity.adjudicatedCovered 如实列出（可追溯）。零判漏零调用；多候选路径先裁决再进评分器
- *   （评分吃裁决后漏报数）。
+ *   （评分吃裁决后漏报数）。自动去味真落改动后，还会对最终正文再跑一遍确定性核对（零 token）：
+ *   整句改写吃掉锚点造成的新漏进 beatFidelity.postDeAiNewMisses，summary 如实标注「去味后新漏 N 条」。
  *
  * 铁律：
  * - 题材中立：description / summary 用中性词。
@@ -45,6 +46,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import {
   buildStateOverview,
+  checkDraftBeatFidelity,
   detectAiFlavorViolations,
   persistFastDraftBody,
   runFastDraft,
@@ -222,6 +224,9 @@ const outputSchema = z.object({
     }).describe("该候选出稿回检的 AI 腔按严重度计数。"),
     actualLength: z.number().describe("该候选正文实际中文字符数。"),
     reason: z.string().describe("优胜/落选/失败的一句人话原因（如『AI 腔 2 处 > 优胜者 0 处』『低于字数下限』）。"),
+    temperature: z.number().optional().describe(
+      "该候选生成时实际使用的 temperature（依次错开防同分布：基准向上错不开时会向下错开，以此处实际值为准）。",
+    ),
   })).optional().describe(
     "多候选采样（candidates>1）的逐候选透明报告：得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
   ),
@@ -229,7 +234,10 @@ const outputSchema = z.object({
     missingBeats: z.array(z.string()).describe("确定性核对判漏、且（跑了复核时）AI 复核后仍可能漏写/被改写的必命中要点原文。"),
     adjudicatedCovered: z.array(z.object({
       beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
-      quote: z.string().describe("模型引用的正文原句（已校验：归一化空白后为草稿逐字子串），作为覆盖证据。"),
+      quote: z.string().describe(
+        "模型引用的正文原句（已校验：归一化空白后为【裁决时草稿】的逐字子串），作为覆盖证据；" +
+        "若之后自动去味改掉了这句、锚点消失，该要点会同时出现在 postDeAiNewMisses。",
+      ),
     })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
     adjudication: z.union([
       z.literal("not_run"),
@@ -240,9 +248,13 @@ const outputSchema = z.object({
       "unavailable=复核模型失败/超时/烂 JSON，维持确定性结论、绝不反向谎报。",
     ),
     error: z.string().optional().describe("复核模型失败原因（adjudication=unavailable 时）。"),
+    postDeAiNewMisses: z.array(z.string()).optional().describe(
+      "自动去味真落了改动后，对最终正文再跑一遍确定性核对时【新出现】的漏写要点（去味整句改写吃掉了锚点；" +
+      "去味前已列在 missingBeats 的不重复计入）。这些是确定性核对结果、未经 AI 复核，请如实转达。",
+    ),
   }).optional().describe(
     "必命中要点保真核对（warning-only，绝不影响出稿成败）：确定性规则判漏的要点先经 AI 复核（带正文逐字引证才摘除误报）；" +
-    "仅当确定性核对有判漏时出现，零判漏零调用。无锚点的要点规则本就不检，不在此列。",
+    "仅当确定性核对有判漏、或自动去味后新出现漏写时出现，零判漏零调用。无锚点的要点规则本就不检，不在此列。",
   ),
 });
 
@@ -379,6 +391,8 @@ export interface GenerateDraftBeatFidelityInfo {
   readonly adjudicatedCovered: readonly AdjudicatedCoveredBeat[];
   readonly adjudication: "not_run" | "applied" | "unavailable";
   readonly error?: string;
+  /** 自动去味真落改动后对最终正文复核时【新出现】的漏写（去味前没判漏、改写吃掉了锚点）；确定性结果、未经 AI 复核。 */
+  readonly postDeAiNewMisses?: readonly string[];
 }
 
 /**
@@ -404,8 +418,9 @@ export function buildBeatFidelityInfo(input: {
 
 /**
  * 首稿核对的 summary 文案（裁决后）：仍漏的照旧 ⚠ 如实提示；被复核摘除的误报如实交代去向（可追溯，
- * 绝不静默消失）；复核没跑成（unavailable）在警告后如实补一句。全干净（零判漏/全摘除且无残留）时
- * 只剩复核交代或空串——绝不打无内容的 ⚠。纯逻辑、可测。
+ * 绝不静默消失）；复核没跑成（unavailable）在警告后如实补一句；自动去味吃掉锚点造成的新漏
+ * （postDeAiNewMisses）单独 ⚠ 如实标注来源。全干净（零判漏/全摘除且无残留）时只剩复核交代或空串——
+ * 绝不打无内容的 ⚠。纯逻辑、可测。
  */
 export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): string {
   const parts: string[] = [];
@@ -420,6 +435,12 @@ export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): stri
       `首稿复核：初判漏写的 ${info.adjudicatedCovered.length} 条要点（` +
         `${info.adjudicatedCovered.map((entry) => entry.beat).join("、")}）经 AI 复核确认已写入正文，` +
         `不再列为漏写（证据引文见 beatFidelity.adjudicatedCovered）。`,
+    );
+  }
+  if (info.postDeAiNewMisses && info.postDeAiNewMisses.length > 0) {
+    parts.push(
+      `⚠ 去味后新漏 ${info.postDeAiNewMisses.length} 条要点（${info.postDeAiNewMisses.join("、")}）：` +
+        `自动去味的整句改写吃掉了它们的锚点（这是对去味后最终正文的确定性复核，未经 AI 复核）。要不要我改稿补回？`,
     );
   }
   return parts.join("\n");
@@ -570,8 +591,23 @@ export async function runAutoDeAiRound(input: {
  *   之后与 candidates=1 完全同一条后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。
  * ------------------------------------------------------------------------- */
 
-/** 多候选采样的 temperature 错开档位（第 1 个=基准，之后 +0.15/+0.3，防 N 版同分布）。 */
+/** 多候选采样的 temperature 错开档位幅度（第 1 个=基准，之后错开 0.15/0.3，方向由 resolveCandidateTemperatures 定）。 */
 export const DRAFT_CANDIDATE_TEMPERATURE_OFFSETS = [0, 0.15, 0.3] as const;
+
+/**
+ * 逐候选实际 temperature：默认向上错开（base、base+0.15、base+0.3，封顶 1.0——部分 provider 上限为 1，
+ * 超了会被 400 拒）；base 已 ≥0.85 时向上错不开（+0.15/+0.3 全撞封顶=三版同温，防坍缩静默失效），
+ * 改为向下错开（base、base-0.15、base-0.3，下限夹逼 0）。base 本身也先夹逼进 [0,1]。
+ * 两位小数取整：0.8+0.15 的浮点尾差（0.9500000000000001）不上请求线。纯逻辑、可测。
+ */
+export function resolveCandidateTemperatures(baseTemperature: number, candidateCount: number): readonly number[] {
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+  const base = Math.min(1, Math.max(0, round2(baseTemperature)));
+  const direction = base < 0.85 ? 1 : -1; // base≥0.85 时向上必撞封顶（0.85+0.15=1.0 与 0.85+0.3→1.0 同温）
+  return DRAFT_CANDIDATE_TEMPERATURE_OFFSETS.slice(0, candidateCount).map((offset) =>
+    Math.min(1, Math.max(0, round2(base + direction * offset))),
+  );
+}
 
 /**
  * 确定性评分权重（100 起扣，越高越好，同分取序号靠前者）：
@@ -607,6 +643,24 @@ export interface DraftCandidateReportEntry {
   readonly aiFlavorCounts: Readonly<Record<AiFlavorSeverity, number>>;
   readonly actualLength: number;
   readonly reason: string;
+  /** 该候选生成时实际使用的 temperature（错温 client 真注入的槽位才有；缺位回退 writerClient 的槽位不标，不编造）。 */
+  readonly temperature?: number;
+}
+
+/**
+ * 候选实际 temperature 并入逐候选报告（如实反映错温结果，含「base 封顶改向下错开」后的真实值）：
+ * 只标【真注入了错温 client】的槽位；缺位回退 writerClient 的槽位温度未知 → 不标，绝不编造。纯逻辑、可测。
+ */
+export function attachCandidateTemperatures(
+  entries: readonly DraftCandidateReportEntry[],
+  temperatures: readonly number[] | undefined,
+  candidateWriterClients: readonly WriterClient[] | undefined,
+): readonly DraftCandidateReportEntry[] {
+  if (!temperatures) return entries;
+  return entries.map((entry, position) =>
+    candidateWriterClients?.[position] !== undefined && temperatures[position] !== undefined
+      ? { ...entry, temperature: temperatures[position] }
+      : entry);
 }
 
 /** AI 腔计权分：high×3 + medium×1（low 不计）。纯逻辑、可测。 */
@@ -879,6 +933,8 @@ async function sampleDraftCandidates(input: {
  * 自动去味（autoDeAi，默认 true）：出稿回检检出 high/medium 且注入了 deAiCallModel 时，
  * 自动跑一轮 runAutoDeAiRound（批量改写 + 复检），结果进 autoDeAi 字段与 summary；
  * autoDeAi:false 或未注入 deAiCallModel → 只标注不改写（attempted:false）。
+ * 去味真落改动后，对最终正文重跑一遍确定性 beats 核对（零 token）：整句改写吃掉锚点造成的新漏
+ * 并入 beatFidelity.postDeAiNewMisses 且 summary 如实标注（已在 missingBeats 列过的不重复报）。
  *
  * 多候选（candidates=2/3，默认 1=零行为变化）：先后生成 N 个 persist:false 候选（candidateWriterClients
  * 按序注入，execute 用 temperature 错开构建），确定性评分选优、优胜稿落盘后汇入下方同一条后续链。
@@ -907,6 +963,8 @@ export async function runGenerateDraftToolLogic(input: {
   readonly candidates?: number;
   /** candidates>1 时按序注入的候选 writer（execute 用 temperature 错开构建；测试注入 mock）。缺位的序号回退 writerClient。 */
   readonly candidateWriterClients?: readonly WriterClient[];
+  /** 各槽位错温 client 实际使用的 temperature（execute 注入 resolveCandidateTemperatures 的结果），如实进 candidatesReport。 */
+  readonly candidateTemperatures?: readonly number[];
   /** 判漏要点的 AI 复核调用（execute 注入 triage 任务槽；测试注入 mock）。缺失=跳过复核、维持确定性结论。 */
   readonly beatAdjudicationCallModel?: (prompt: string) => Promise<string>;
 }): Promise<GenerateDraftToolOutput> {
@@ -958,6 +1016,11 @@ export async function runGenerateDraftToolLogic(input: {
       sharedDraftInput,
       ...(input.beatAdjudicationCallModel ? { beatAdjudicationCallModel: input.beatAdjudicationCallModel } : {}),
     });
+    // 候选实际 temperature 进逐候选报告（只对真注入了错温 client 的槽位标注，缺位回退槽不编造）。
+    sampling = {
+      ...sampling,
+      entries: attachCandidateTemperatures(sampling.entries, input.candidateTemperatures, input.candidateWriterClients),
+    };
     report = sampling.effectiveReport;
     beatAdjudication = sampling.chosenBeatAdjudication;
   } else {
@@ -1015,11 +1078,11 @@ export async function runGenerateDraftToolLogic(input: {
       callModel: input.beatAdjudicationCallModel,
     });
   }
-  const beatFidelityInfo = buildBeatFidelityInfo({
+  // 去味真落改动后会往里并入新漏（见下），故用 let；summary 文案到最后才统一构建。
+  let beatFidelityInfo = buildBeatFidelityInfo({
     deterministicMissingBeats,
     ...(beatAdjudication ? { adjudication: beatAdjudication } : {}),
   });
-  const beatNote = beatFidelityInfo ? buildBeatFidelityNote(beatFidelityInfo) : "";
 
   // 字数透明软警告：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注，让用户决定重写或接受。
   const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
@@ -1045,8 +1108,27 @@ export async function runGenerateDraftToolLogic(input: {
           callModel: input.deAiCallModel,
         });
         autoDeAiInfo = round.info;
-        if (round.draftBody !== undefined) draftBody = round.draftBody;
         autoDeAiSnapshotId = round.snapshotId;
+        if (round.draftBody !== undefined) {
+          draftBody = round.draftBody;
+          // 去味真落了改动 → 对最终正文重跑一遍引擎确定性 beats 核对（纯函数、零 token）：去味按整句改写，
+          // 可能吃掉 beats 锚点、使 adjudicatedCovered 的引证过期。只把【新出现】的漏写（去味前核对没判漏的）
+          // 并入 beatFidelity.postDeAiNewMisses 如实标注来源；已在 missingBeats 列过的不重复报。
+          if (input.mustHitBeats && input.mustHitBeats.length > 0) {
+            const postDeAiMissing = checkDraftBeatFidelity({
+              draftContent: round.draftBody,
+              mustHitBeats: input.mustHitBeats,
+            }).missingBeats;
+            const alreadyReported = new Set(beatFidelityInfo?.missingBeats ?? []);
+            const newMisses = postDeAiMissing.filter((beat) => !alreadyReported.has(beat));
+            if (newMisses.length > 0) {
+              beatFidelityInfo = {
+                ...(beatFidelityInfo ?? { missingBeats: [], adjudicatedCovered: [], adjudication: "not_run" as const }),
+                postDeAiNewMisses: newMisses,
+              };
+            }
+          }
+        }
       } else {
         autoDeAiInfo = {
           attempted: false,
@@ -1060,6 +1142,9 @@ export async function runGenerateDraftToolLogic(input: {
   const aiFlavorNote = aiFlavorInfo && autoDeAiInfo
     ? buildAutoDeAiNote(autoDeAiInfo, aiFlavorInfo)
     : aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";
+
+  // 首稿核对文案在去味复核之后构建：去味吃掉锚点的新漏（postDeAiNewMisses）也要进 summary 如实标注。
+  const beatNote = beatFidelityInfo ? buildBeatFidelityNote(beatFidelityInfo) : "";
 
   // 多候选选优透明化：summary 一行讲清选了第几个、凭什么（优点逐条核实过才说），逐候选得分/落选原因进 candidatesReport。
   const candidateLine = sampling && sampling.chosenIndex !== undefined
@@ -1112,7 +1197,8 @@ export const generateDraftTool = createTool({
     "按确定性规则（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）自动选出最优稿落盘，逐候选得分与落选原因见 candidatesReport——请如实转达。" +
     "注意多候选的 token 消耗与生成时间都约为 N 倍，别默认开。" +
     "mustHitBeats 的判漏会先经 AI 复核（带正文逐字引证才摘除误报、模型没跑成则维持原结论），裁决后的剩余漏写与" +
-    "被摘除条目分别见 beatFidelity.missingBeats / beatFidelity.adjudicatedCovered——summary 的「首稿核对」警告以裁决后结果为准，请如实转达。",
+    "被摘除条目分别见 beatFidelity.missingBeats / beatFidelity.adjudicatedCovered——summary 的「首稿核对」警告以裁决后结果为准，请如实转达。" +
+    "若自动去味真改了稿，会对最终正文再做一遍确定性核对，被改写吃掉锚点的新漏见 beatFidelity.postDeAiNewMisses 与 summary 的「去味后新漏」标注。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -1162,20 +1248,22 @@ export const generateDraftTool = createTool({
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章再次出稿前快照`);
     // 出稿流式：路由注入了 sink 就把正文 delta 逐字喂前端编辑器（带本次章号，前端只往当前章追）；缺失=不流式。
     const draftDeltaSink = readDraftDeltaSinkFromContext(context);
-    // 多候选采样（第四层防坍缩）：N 个 writer 的 temperature 依次错开（基准 / +0.15 / +0.3，封顶 1.0——
-    // 部分 provider 的 temperature 上限为 1，超了会被 400 拒），防 N 版同分布。采样不接 delta sink：
+    // 多候选采样（第四层防坍缩）：N 个 writer 的 temperature 依次错开（基准 / ±0.15 / ±0.3——向上封顶 1.0，
+    // 部分 provider 的 temperature 上限为 1 超了会被 400 拒；base 已 ≥0.85 时向上错不开会三版同温，
+    // 改向下错开，见 resolveCandidateTemperatures），防 N 版同分布。采样不接 delta sink：
     // N 版正文逐字串进同一章编辑器会花屏，优胜稿落盘后由 refreshScope:"full" 一次性刷新。
     const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
     let writerClient: WriterClient;
     let candidateWriterClients: readonly WriterClient[] | undefined;
+    let candidateTemperatures: readonly number[] | undefined;
     if (candidateCount > 1) {
       const configured = await resolveConfiguredChatModel("fastDraft");
       const baseTemperature = configured.profile.temperature ?? 0.8; // 与 createOpenAICompatibleWriterClient 的兜底一致
-      candidateWriterClients = DRAFT_CANDIDATE_TEMPERATURE_OFFSETS.slice(0, candidateCount).map((offset) =>
+      candidateTemperatures = resolveCandidateTemperatures(baseTemperature, candidateCount);
+      candidateWriterClients = candidateTemperatures.map((temperature) =>
         createOpenAICompatibleWriterClient({
           ...configured,
-          // 两位小数取整：0.8+0.15 的浮点尾差（0.9500000000000001）不上请求线。
-          profile: { ...configured.profile, temperature: Math.min(1, Math.round((baseTemperature + offset) * 100) / 100) },
+          profile: { ...configured.profile, temperature },
         }));
       writerClient = candidateWriterClients[0];
     } else {
@@ -1203,6 +1291,7 @@ export const generateDraftTool = createTool({
       ...(deAiCallModel ? { deAiCallModel } : {}),
       candidates: candidateCount,
       ...(candidateWriterClients ? { candidateWriterClients } : {}),
+      ...(candidateTemperatures ? { candidateTemperatures } : {}),
       // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
       // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
       beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),

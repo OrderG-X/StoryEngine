@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, symlink, unlink, writeFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, unlink, writeFile, access, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -420,5 +420,48 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
     expect(result.keep).toBe(20);
     expect(result.prunedCount).toBe(10);
     expect(await commitCount(dir)).toBe(21);
+  }, 60_000);
+
+  // 真故障注入（非 mock）：SE_GIT_PATH 指向包装脚本，仅 gc 子命令返回 128，其余子命令原样转发真 git。
+  // 验证 P2-2 修复：update-ref 成功后的 gc 失败 → 引用不回滚、结果照返、warning 如实上报。
+  it.skipIf(process.platform === "win32")("update-ref 成功后 gc 失败：引用不回滚、裁剪结果照返并带 warning", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点");
+    await seedSnapshots(dir, 28); // 共 30 条
+    const oldHead = await revParse(dir, "HEAD");
+    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-gcfail-backup-"));
+    const wrapperDir = await mkdtemp(join(tmpdir(), "se-prune-gcfail-git-"));
+    const wrapper = join(wrapperDir, "git-gc-fail.sh");
+    await writeFile(
+      wrapper,
+      "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = \"gc\" ]; then\n    echo \"fatal: injected gc failure\" >&2\n    exit 128\n  fi\ndone\nexec git \"$@\"\n",
+      "utf-8",
+    );
+    await chmod(wrapper, 0o755);
+
+    const prevGitPath = process.env.SE_GIT_PATH;
+    process.env.SE_GIT_PATH = wrapper;
+    let result!: Awaited<ReturnType<typeof pruneSnapshots>>;
+    try {
+      result = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+    } finally {
+      if (prevGitPath === undefined) delete process.env.SE_GIT_PATH;
+      else process.env.SE_GIT_PATH = prevGitPath;
+    }
+
+    // gc 失败不抛错：裁剪视为完成，warning 如实说明「回收失败」而非谎称回滚
+    expect(result.prunedCount).toBe(10);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toContain("裁剪已完成");
+    expect(result.warnings?.[0]).toContain("回收失败");
+    // 引用停在新链头、绝不回滚：裁后 21 条（若回滚到 oldHead 会是 30 条，若仓库损坏会报错）
+    expect(await commitCount(dir)).toBe(21);
+    expect(await revParse(dir, "HEAD")).not.toBe(oldHead);
+    const list = await listSnapshots(dir, 50);
+    expect(list).toHaveLength(21);
+    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 10 条更早快照");
+    // gc 没跑成，旧对象仍在盘上（磁盘晚点回收无妨）；仓库整体仍可用
+    await execFileAsync("git", ["-C", dir, "cat-file", "-e", oldHead]);
+    await execFileAsync("git", ["-C", dir, "fsck", "--no-dangling"]);
   }, 60_000);
 });

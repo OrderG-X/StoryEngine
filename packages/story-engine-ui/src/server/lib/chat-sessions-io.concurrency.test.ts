@@ -19,7 +19,9 @@ import {
 } from "./chat-sessions-io.js";
 import type { StoredChatSession } from "./chat-sessions-io.js";
 
-const TRIALS = 25;
+// 原子写带 fsync（d18c6e8）后每 trial 多次落盘变慢，25 轮在并行全量跑时撞默认 5s 超时；
+// 降到 10 轮仍够复现并发交错，慢测试另给显式超时（CLAUDE.md：磁盘 IO 重的测试给显式超时）。
+const TRIALS = 10;
 
 async function tmpProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), "chat-race-"));
@@ -32,7 +34,7 @@ function msgs(n: number, len: number, tag: string) {
 const jitter = () => new Promise((r) => setTimeout(r, Math.random() * 6));
 
 describe("chat-sessions-io 并发安全", () => {
-  it("BUG-1: 并发 createChatSession 不丢会话、不抛错", async () => {
+  it("BUG-1: 并发 createChatSession 不丢会话、不抛错", { timeout: 30_000 }, async () => {
     for (let t = 0; t < TRIALS; t++) {
       const dir = await tmpProject();
       await readChatSessionIndex(dir); // 初始化 index（1 条空会话）
@@ -68,7 +70,7 @@ describe("chat-sessions-io 并发安全", () => {
     }
   });
 
-  it("BUG-3: 并发尺寸分化写不撕裂 JSON（会话不变 null）", async () => {
+  it("BUG-3: 并发尺寸分化写不撕裂 JSON（会话不变 null）", { timeout: 30_000 }, async () => {
     for (let t = 0; t < TRIALS; t++) {
       const dir = await tmpProject();
       const id = (await readChatSessionIndex(dir)).activeSessionId;

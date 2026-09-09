@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callRoute } from "./test-helpers.js";
@@ -332,7 +332,7 @@ describe("customHeaders：保存 / 脱敏回显 / 打码还原", () => {
     expect(JSON.stringify(saved)).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
   });
 
-  it("PUT 打码值但无旧值可还原（全新配置带哨兵）→ 该条目丢弃、整键不留，哨兵绝不落盘", async () => {
+  it("PUT 打码值但无旧值可还原（全新配置带哨兵）→ 该条目丢弃、整键不留，哨兵绝不落盘，丢弃进 warnings 如实告知", async () => {
     const maskedText = sampleSettingsText({ customHeaders: { "x-opencode-session": MASKED_CUSTOM_HEADER_VALUE } });
     const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
       rawText: maskedText,
@@ -344,6 +344,70 @@ describe("customHeaders：保存 / 脱敏回显 / 打码还原", () => {
     const saved = await readSavedSettings();
     expect(saved.providers.main.customHeaders).toBeUndefined();
     expect(JSON.stringify(saved)).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+
+    // 丢弃绝不静默：warnings 点名被丢的键（只列键名，绝无值/哨兵）
+    const warnings = payload.warnings as string[];
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("1 个自定义请求头无法还原已丢弃");
+    expect(warnings[0]).toContain("x-opencode-session");
+    expect(warnings[0]).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+  });
+
+  it("PUT 混合场景：有旧值的哨兵还原、无旧值的哨兵丢弃并进 warnings（只列被丢键名），可还原头不受牵连", async () => {
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }), "utf-8");
+
+    const maskedText = sampleSettingsText({
+      customHeaders: {
+        "x-opencode-session": MASKED_CUSTOM_HEADER_VALUE,
+        "x-brand-new": MASKED_CUSTOM_HEADER_VALUE,
+      },
+    });
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: maskedText,
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+
+    // 可还原的还原成真实值；不可还原的丢弃；哨兵绝不落盘
+    const saved = await readSavedSettings();
+    expect(saved.providers.main.customHeaders).toEqual({ "x-opencode-session": HEADER_SECRET });
+    expect(JSON.stringify(saved)).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+
+    const warnings = payload.warnings as string[];
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("1 个自定义请求头无法还原已丢弃");
+    expect(warnings[0]).toContain("x-brand-new");
+    expect(warnings[0]).not.toContain("x-opencode-session"); // 已还原的不进警告
+    expect(warnings[0]).not.toContain(HEADER_SECRET); // 警告绝不带任何头值
+    expect(warnings[0]).not.toContain(MASKED_CUSTOM_HEADER_VALUE);
+  });
+
+  it("PUT 全部哨兵都可还原 → 响应不带 warnings 字段（无丢弃不刷警告）", async () => {
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }), "utf-8");
+
+    const maskedText = sampleSettingsText({ customHeaders: { "x-opencode-session": MASKED_CUSTOM_HEADER_VALUE } });
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: maskedText,
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("PUT 落盘权限：model-settings.json 与 model-secrets.json 同为 0600（customHeaders 视同机密，机密边界前后一致）", async () => {
+    const { statusCode, payload } = await callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", {
+      rawText: sampleSettingsText({ customHeaders: { "x-opencode-session": HEADER_SECRET } }),
+      providerApiKeys: {},
+    });
+    expect(statusCode).toBe(200);
+    expect(payload.ok).toBe(true);
+
+    const settingsStat = await stat(join(dir, "model-settings.json"));
+    expect(settingsStat.mode & 0o777).toBe(0o600);
+    const secretsStat = await stat(join(dir, "model-secrets.json"));
+    expect(secretsStat.mode & 0o777).toBe(0o600);
   });
 
   it("PUT 非法 customHeaders（值不是字符串）→ 400 拒绝保存", async () => {

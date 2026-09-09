@@ -90,8 +90,9 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
         }
 
         // customHeaders 打码回显的逆操作：面板回传的打码哨兵先还原成磁盘上的真实值，再校验/落盘——
-        // 哨兵绝不写进设置文件；无旧值可还原的打码条目直接丢弃（用户想改头值就得重新填明文）。
-        restoreMaskedCustomHeaders(parsed, await readPreviousSettingsText());
+        // 哨兵绝不写进设置文件；无旧值可还原的打码条目直接丢弃（用户想改头值就得重新填明文），
+        // 丢弃名单进响应 warnings 如实告知（绝不静默失败），只列键名不列值。
+        const droppedMaskedHeaders = restoreMaskedCustomHeaders(parsed, await readPreviousSettingsText());
 
         const validation = validateModelSettingsV0(parsed, {
           configPath: globalModelSettingsPath(),
@@ -143,7 +144,9 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           }
         }
         const entries: AtomicFileEntry[] = [
-          { path: globalModelSettingsPath(), content: `${JSON.stringify(parsed, null, 2)}\n` },
+          // customHeaders 值随本文件落盘（视同机密，API/日志全打码）→ 与 secrets 同口径 0600，
+          // 机密边界前后一致。读者均为本进程同用户（llm-client 直读/引擎 loadModelSettingsV0），无跨进程读假设。
+          { path: globalModelSettingsPath(), content: `${JSON.stringify(parsed, null, 2)}\n`, mode: 0o600 },
           { path: globalModelSecretsPath(), content: serializeModelSecrets(mergedSecrets), mode: 0o600 },
         ];
         if (taskAssignments) {
@@ -160,7 +163,22 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           result.summary.defaultProfile,
           taFile,
         );
-        writeJson(res, 200, { ok: true, result, rawText: savedText, taskAssignments: savedAssignments });
+        // 打码哨兵还原失败被丢弃的头如实进 warnings（保存本身成功，不阻断；只列 provider id + 键名，绝不含值）。
+        const warnings: string[] = [];
+        if (droppedMaskedHeaders.length > 0) {
+          const names = droppedMaskedHeaders.map((dropped) => `${dropped.providerId} 的 ${dropped.name}`).join("、");
+          warnings.push(
+            `${droppedMaskedHeaders.length} 个自定义请求头无法还原已丢弃（未保存）：${names}。` +
+              "如需保留请重新填写明文值后保存。",
+          );
+        }
+        writeJson(res, 200, {
+          ok: true,
+          result,
+          rawText: savedText,
+          taskAssignments: savedAssignments,
+          ...(warnings.length > 0 ? { warnings } : {}),
+        });
         return;
       }
 
@@ -414,14 +432,22 @@ export function maskCustomHeadersInSettingsText(rawText: string): string {
   return touched ? `${JSON.stringify(parsed, null, 2)}\n` : rawText;
 }
 
+/** 打码哨兵还原失败被丢弃的自定义头（只记 provider id + 键名，绝不记值——值视同机密）。 */
+export interface DroppedMaskedCustomHeader {
+  readonly providerId: string;
+  readonly name: string;
+}
+
 /**
  * PUT 保存前把面板回传的打码哨兵还原成磁盘上的真实值（原地改 parsed，随后才走校验与落盘）：
  *  - 哨兵值 + 旧配置同 provider 同键有真实值 → 还原（用户没动这个头，原样保留）；
  *  - 哨兵值但无旧值可还原（新加的头/旧文件缺失损坏）→ 丢弃该条目，哨兵绝不落盘；
+ *    丢弃绝不静默：逐条收进返回值，由 PUT 响应的 warnings 如实告知用户（只列键名不列值）；
  *  - 丢完后 customHeaders 成空对象 → 整键删除。
  */
-export function restoreMaskedCustomHeaders(parsed: unknown, previousRawText: string): void {
-  if (!isRecord(parsed) || !isRecord(parsed.providers)) return;
+export function restoreMaskedCustomHeaders(parsed: unknown, previousRawText: string): DroppedMaskedCustomHeader[] {
+  const dropped: DroppedMaskedCustomHeader[] = [];
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) return dropped;
   let previous: unknown;
   try {
     previous = JSON.parse(previousRawText) as unknown;
@@ -438,10 +464,14 @@ export function restoreMaskedCustomHeaders(parsed: unknown, previousRawText: str
       if (value !== MASKED_CUSTOM_HEADER_VALUE) continue;
       const old = previousHeaders[name];
       if (typeof old === "string") provider.customHeaders[name] = old;
-      else delete provider.customHeaders[name];
+      else {
+        delete provider.customHeaders[name];
+        dropped.push({ providerId, name });
+      }
     }
     if (Object.keys(provider.customHeaders).length === 0) delete provider.customHeaders;
   }
+  return dropped;
 }
 
 /** 读磁盘上当前设置原文（供打码还原）；文件不存在/读失败 → 空串（视为无旧值可还原）。 */

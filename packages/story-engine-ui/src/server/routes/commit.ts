@@ -657,6 +657,7 @@ async function recoverPendingCommitReceiptFromDisk(
   if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return undefined;
   const warnings = [
     "上次定稿在入库成功后、回执落盘前中断；本次按磁盘真值补写回执并返回结果（恢复，未重复入库）。",
+    "详细变更清单不可恢复：report 中 updatedCharacters / timelineEventIds / updatedHooks / updatedWorld / updatedCalendar 均为占位空值（不代表实际未更新），真实变更以磁盘上的状态文件为准。",
   ];
   const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 })
     .catch((error: unknown) => {
@@ -669,6 +670,8 @@ async function recoverPendingCommitReceiptFromDisk(
       chapter,
       passed: true,
       chapterPath,
+      // 引擎 CommitReport 这些字段为必填（commit-engine.ts:192-196），标 undefined 不兼容类型；
+      // 占位空值的诚实性由上面第二条 warning 承担，recoveredFromPendingReceipt 供前端识别恢复场景。
       updatedCharacters: [],
       timelineEventIds: [],
       updatedHooks: [],

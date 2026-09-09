@@ -303,6 +303,8 @@ export interface SnapshotPruneResult {
   readonly baseCommitId?: string;
   /** 真裁时裁前完整历史的 bundle 备份路径 */
   readonly backupBundlePath?: string;
+  /** 非致命降级警告：update-ref 成功（裁剪已完成）后 reflog expire / gc 回收失败时如实写在这里 */
+  readonly warnings?: readonly string[];
 }
 
 function clampPruneKeep(keep: number | undefined): number {
@@ -404,9 +406,12 @@ function snapshotBackupBundlePath(projectDir: string, backupDir: string): string
  * 更旧的不可逐条撤销，但 base 本身是合法恢复目标（完整状态不丢），裁前完整历史另有 bundle 备份兜底。
  *
  * 安全边界：全程只动 git 引用与对象库，绝不 checkout/reset——工作树（正稿文件）分毫不动。
- * 真裁前先把裁前完整历史打成 bundle 存到项目目录之外；引用用 CAS 更新（持锁期间 HEAD 被移动即失败中止）；
- * 失败时回滚分支引用到裁前 HEAD，bundle 作为对象级兜底。keep 不足 / 已有 base 之上真实快照数 ≤ keep 时 no-op
- * （重复 prune 天然幂等）。reflog expire + gc 之后旧链才真正不可达、磁盘才真正回收。
+ * 真裁前先把裁前完整历史打成 bundle 存到项目目录之外；引用用 CAS 更新（持锁期间 HEAD 被移动即失败中止）。
+ * 只有 update-ref 本身（及其之前的建链步骤）失败才回滚分支引用到裁前 HEAD——此时旧链分毫未动，回滚是
+ * no-op 级安全，bundle 仅作对象级兜底；update-ref 成功即视为裁剪完成（新链完整合法），其后的
+ * reflog expire + gc 失败绝不回滚引用（旧链对象可能已被 gc 部分回收，回滚会让 HEAD 指向丢失对象、
+ * 把可用仓库搞坏），只降级为 warning 写进返回值，磁盘晚点回收无妨。keep 不足 / 已有 base 之上真实快照数
+ * ≤ keep 时 no-op（重复 prune 天然幂等）。reflog expire + gc 之后旧链才真正不可达、磁盘才真正回收。
  */
 export async function pruneSnapshots(projectDir: string, options: SnapshotPruneOptions = {}): Promise<SnapshotPruneResult> {
   const keep = clampPruneKeep(options.keep);
@@ -449,6 +454,8 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
     const kept = parseLogMeta(await git(projectDir, ["log", "--reverse", `--pretty=format:${LOG_META_FORMAT}`, `${boundaryId}..HEAD`]));
     const oldHead = revs[revs.length - 1]!;
     const branchRef = `refs/heads/${branch}`;
+    // update-ref 是全程唯一移动引用的步骤：它失败 = 旧链分毫未动（CAS 校验 oldHead，持锁期间 HEAD 被移动即拒绝），
+    // 此时回滚到 oldHead 是 no-op 级安全；它成功即视为裁剪完成，之后的回收步骤失败不得再碰引用。
     try {
       let parent = baseCommitId;
       for (const commit of kept) {
@@ -456,13 +463,28 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
         parent = await git(projectDir, ["commit-tree", tree, "-p", parent, "-m", commit.message], commitEnv(commit));
       }
       await git(projectDir, ["update-ref", branchRef, parent, oldHead]);
-      await git(projectDir, ["reflog", "expire", "--expire=now", "--all"]);
-      await git(projectDir, ["gc", "--prune=now", "--quiet"]);
     } catch (error) {
-      // 回滚到裁前状态：引用恢复旧 HEAD；旧链对象若已被 gc 部分回收，由 bundle 兜底（错误里给出路径）。
       await git(projectDir, ["update-ref", branchRef, oldHead]).catch(() => undefined);
       throw new Error(`快照历史裁剪失败，已回滚到裁前状态；裁前完整历史备份：${bundlePath}。原始错误：${error instanceof Error ? error.message : String(error)}`);
     }
-    return { dryRun, keep, totalBefore: revs.length, prunedCount, totalAfter, freedCommits, baseCommitId, backupBundlePath: bundlePath };
+    // 裁剪已完成：reflog expire / gc 只负责磁盘回收，失败降级为 warning（旧链对象暂留磁盘、仓库保持可用）。
+    const warnings: string[] = [];
+    try {
+      await git(projectDir, ["reflog", "expire", "--expire=now", "--all"]);
+      await git(projectDir, ["gc", "--prune=now", "--quiet"]);
+    } catch (error) {
+      warnings.push(`快照历史裁剪已完成，但旧对象回收失败（磁盘暂不释放，不影响仓库可用性，可稍后重试）：${error instanceof Error ? error.message : String(error)}`);
+    }
+    return {
+      dryRun,
+      keep,
+      totalBefore: revs.length,
+      prunedCount,
+      totalAfter,
+      freedCommits,
+      baseCommitId,
+      backupBundlePath: bundlePath,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
   });
 }

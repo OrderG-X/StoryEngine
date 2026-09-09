@@ -14,7 +14,7 @@
  *   文件损坏（非法 JSON）整体 ok:false，绝不覆盖丢数据。
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
@@ -26,6 +26,7 @@ import type { StyleExemplar } from "@actalk/story-engine";
 
 import { blankToUndefined, coerceEnum } from "./lenient-args.js";
 import { writeTool } from "../withSnapshot.js";
+import { writeFileAtomic } from "../../lib/project-io.js";
 
 export const STYLE_EXEMPLAR_ACTIONS = ["add", "list", "update", "remove"] as const;
 export type StyleExemplarAction = (typeof STYLE_EXEMPLAR_ACTIONS)[number];
@@ -107,10 +108,9 @@ async function writeStyleExemplars(
 ): Promise<void> {
   const path = join(projectDir, WRITING_RULES_RELATIVE_PATH);
   const next = { ...record, version: "v0", styleExemplars: exemplars };
+  // writeFileAtomic 不隐式建目录（首次 add 时 story/ 可能还不存在）
   await mkdir(dirname(path), { recursive: true });
-  const tmpPath = `${path}.tmp.${process.pid}`;
-  await writeFile(tmpPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
-  await rename(tmpPath, path);
+  await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
 /** 生成不撞现有条目的样本 id（内部定位用，绝不对用户展示）。 */
