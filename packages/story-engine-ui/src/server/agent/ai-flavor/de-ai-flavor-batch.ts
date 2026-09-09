@@ -115,14 +115,41 @@ export function buildDeAiRewriteMessages(
   ];
 }
 
+/** 跳过计数的按原因分布（generate_draft 自动去味要如实进 autoDeAi.skipped；各键之和恒等于 skipped）。 */
+export interface DeAiSkippedByReason {
+  readonly notFound: number;
+  readonly ambiguous: number;
+  readonly noop: number;
+  readonly overlap: number;
+  /** 模型没给有效改写（没返回这条 / afterText 为空或与原句相同 / text 不在草稿里被解析层丢弃）。 */
+  readonly noRewrite: number;
+}
+
 export interface DeAiBatchResult {
   readonly ok: boolean;
   readonly detected: number;
   readonly rewritten: number;
   readonly skipped: number;
+  readonly skippedByReason: DeAiSkippedByReason;
   readonly changes: readonly { readonly before: string; readonly after: string }[];
   readonly updatedContent: string;
   readonly summary: string;
+  /** 改写模型调用失败的原始错误信息（仅 ok:false 时带），供调用方如实上报。 */
+  readonly error?: string;
+}
+
+const EMPTY_SKIPPED_BY_REASON: DeAiSkippedByReason = { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 };
+
+/** applyDeAiBatch 的 snake_case 跳过原因 → 报告用 camelCase 计数键。 */
+function countApplySkipped(skipped: readonly { readonly reason: DeAiSkipReason }[]): DeAiSkippedByReason {
+  const counts = { ...EMPTY_SKIPPED_BY_REASON };
+  for (const s of skipped) {
+    if (s.reason === "not_found") counts.notFound += 1;
+    else if (s.reason === "ambiguous") counts.ambiguous += 1;
+    else if (s.reason === "noop") counts.noop += 1;
+    else counts.overlap += 1;
+  }
+  return counts;
 }
 
 /**
@@ -137,27 +164,32 @@ export async function runDeAiFlavorBatch(input: {
 }): Promise<DeAiBatchResult> {
   const draftText = input.draftText;
   if (!draftText.trim()) {
-    return { ok: false, detected: 0, rewritten: 0, skipped: 0, changes: [], updatedContent: draftText, summary: "本章还没正文，先出稿再一键去 AI 味。" };
+    return { ok: false, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "本章还没正文，先出稿再一键去 AI 味。" };
   }
   const detected = input.violations.length;
   if (detected === 0) {
-    return { ok: true, detected: 0, rewritten: 0, skipped: 0, changes: [], updatedContent: draftText, summary: "没挑出 AI 腔，无需一键全修。" };
+    return { ok: true, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "没挑出 AI 腔，无需一键全修。" };
   }
   let modelText: string;
   try {
     modelText = await input.callModel(buildDeAiRewriteMessages(input.violations, input.antiRules ?? []).map((m) => m.content).join("\n\n"));
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
-      ok: false, detected, rewritten: 0, skipped: detected, changes: [], updatedContent: draftText,
-      summary: `一键全修没成：改写模型没跑成（${error instanceof Error ? error.message : String(error)}），原稿没动，可重试或逐句手动改。`,
+      ok: false, detected, rewritten: 0, skipped: detected,
+      skippedByReason: { ...EMPTY_SKIPPED_BY_REASON, noRewrite: detected },
+      changes: [], updatedContent: draftText,
+      summary: `一键全修没成：改写模型没跑成（${message}），原稿没动，可重试或逐句手动改。`,
+      error: message,
     };
   }
   const rewrites = parseDeAiBatchRewrites(modelText, draftText);
-  const { updatedContent, applied } = applyDeAiBatch(draftText, rewrites);
+  const { updatedContent, applied, skipped: applySkipped } = applyDeAiBatch(draftText, rewrites);
   const rewritten = applied.length;
   const skipped = detected - rewritten;
+  const skippedByReason = { ...countApplySkipped(applySkipped), noRewrite: Math.max(0, detected - rewrites.length) };
   const summary = rewritten > 0
     ? `一键全修：${detected} 处 AI 腔，改了 ${rewritten} 处${skipped > 0 ? `，${skipped} 处没动（没定位到 / 与原句无异 / 重复 / 模型没给有效改写）` : ""}。`
     : `一键全修没改动：${detected} 处都没能安全替换（模型没给有效改写或定位不到），原稿没动，可逐句手动改。`;
-  return { ok: true, detected, rewritten, skipped, changes: applied, updatedContent, summary };
+  return { ok: true, detected, rewritten, skipped, skippedByReason, changes: applied, updatedContent, summary };
 }

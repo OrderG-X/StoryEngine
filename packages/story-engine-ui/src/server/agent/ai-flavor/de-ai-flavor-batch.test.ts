@@ -135,4 +135,30 @@ describe("runDeAiFlavorBatch · 编排 + 诚实回报", () => {
     expect(out.rewritten).toBe(1);
     expect(out.skipped).toBe(1);
   });
+
+  it("skippedByReason：模型没给改写的计 noRewrite、定位失败计 notFound，各键之和=skipped", async () => {
+    const callModel = async () => JSON.stringify({ rewrites: [
+      { text: "他深吸一口气，压下怒火。", afterText: "他胸口起伏了一下。" },
+      { text: "他深吸一口气，压下怒火。", afterText: "他胸口起伏了一下。" }, // 重复条目：第二条 overlap
+    ] });
+    const out = await runDeAiFlavorBatch({
+      draftText: draft,
+      violations: [v("他深吸一口气，压下怒火。"), v("窗外，带着潮湿的风。"), v("窗外，带着潮湿的风。")],
+      callModel,
+    });
+    expect(out.rewritten).toBe(1);
+    expect(out.skippedByReason.noRewrite).toBe(1); // parse 去重后少了 1 条 → 算「没给有效改写」
+    expect(out.skippedByReason.overlap).toBe(1);
+    const total = out.skippedByReason.notFound + out.skippedByReason.ambiguous + out.skippedByReason.noop
+      + out.skippedByReason.overlap + out.skippedByReason.noRewrite;
+    expect(total).toBe(out.skipped);
+  });
+
+  it("改写模型挂了 → error 字段带原始错误信息，skippedByReason.noRewrite=detected", async () => {
+    const callModel = async () => { throw new Error("model down 400"); };
+    const out = await runDeAiFlavorBatch({ draftText: draft, violations: [v("他深吸一口气，压下怒火。"), v("窗外，带着潮湿的风。")], callModel });
+    expect(out.ok).toBe(false);
+    expect(out.error).toBe("model down 400");
+    expect(out.skippedByReason).toEqual({ notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 2 });
+  });
 });

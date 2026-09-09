@@ -9,21 +9,30 @@
  *   如实记录，本工具把关键信息透传进输出，并在 summary 里如实标注，由 agent 转达用户决定重写或接受。
  *
  * 快照策略（铁律「直接做+可撤销」的边界）：草稿是「待保存」的工作稿，不是状态入库，
- *   因此**不建 git 快照**（plan 明确：草稿/章节级才入库才建快照；改工作稿走操作历史撤销）。
- *   故本工具用 createTool 而非 writeTool，output 不带 snapshotId。
- *   涉及草稿 → refreshScope:"full"（前端刷新写作区/总览）。
+ *   因此**不建入库级 git 快照**；但「再写一版」/自动去味会**覆盖**已有草稿，覆盖前用
+ *   snapshotBeforeDraftOverwrite 建轻量快照（M6），output.snapshotId 挂最近一个撤销点。
+ *   故本工具用 createTool 而非 writeTool。涉及草稿 → refreshScope:"full"（前端刷新写作区/总览）。
+ *
+ * 自动去味闭环（autoDeAi，默认开）：出稿回检检出 high/medium 时，自动走一轮 de-ai-flavor-batch
+ *   批量改写（只处理 high/medium，low 不动；repair 任务槽模型；最多一轮、不循环），落盘前先快照、
+ *   改后对改后正文复检同一套确定性规则，结果如实进 autoDeAi 字段与 summary 三态
+ *   （干净 / 已修掉 N 处剩 M 处 / 改写模型失败原稿未动）。改写失败/解析失败=原稿不动+如实报，
+ *   绝不影响出稿本身的 ok。autoDeAi:false → 只检测标注、不改写。
  *
  * 铁律：
  * - 题材中立：description / summary 用中性词。
  * - 绝不静默失败 / 绝不谎报：runFastDraft.passed=false 时如实回报 ok:false + issues，不假装出稿成功。
  * - 字数透明：低于目标字数下限不拦也不藏——draftLength 进输出、summary 打 ⚠ 标注，不假装字数达标。
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   buildStateOverview,
+  detectAiFlavorViolations,
   runFastDraft,
   type AiFlavorReport,
+  type AiFlavorRule,
   type AiFlavorSeverity,
+  type AiFlavorViolation,
   type DraftLengthReport,
   type DraftLengthStatus,
   type DraftLengthTargetSource,
@@ -39,7 +48,7 @@ import { coerceBoolean, coerceNumber, coerceStringArray, positiveOrUndefined } f
 // 兼容既有测试导入：positiveOrUndefined 现归位 lenient-args（模型无关 helper 正位），此处再导出。
 export { positiveOrUndefined } from "./lenient-args.js";
 
-import { createConfiguredWriterClient } from "../../lib/llm-client.js";
+import { createConfiguredWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
@@ -48,7 +57,8 @@ import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../pr
 import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../ai-flavor/ai-flavor-rules.js";
-import { readAntiAiPatterns } from "./check-ai-flavor.js";
+import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../ai-flavor/de-ai-flavor-batch.js";
+import { readAntiAiPatterns, readAntiRules } from "./check-ai-flavor.js";
 
 /** 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。 */
 export async function isChapterCommitted(projectDir: string, chapter: number): Promise<boolean> {
@@ -95,6 +105,9 @@ const inputSchema = z.object({
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("可选：动态上下文 token 预算；超出时只裁剪低优先动态块。")),
   allowWriteAhead: coerceBoolean(z.boolean().optional().describe(
     "章序护栏的知情 override：默认 false。前一章未入库时本工具会拦下（防穿帮）；仅当用户被告知风险后明确表示『仍要先写本章』，才带 true 再调一次放行。不要默认带 true。",
+  )),
+  autoDeAi: coerceBoolean(z.boolean().optional().describe(
+    "出稿检出 high/medium AI 腔后是否自动去味一轮（默认 true：repair 任务槽批量改写 + 改后复检，最多一轮不循环，落盘前自动快照，只改文风不动剧情）。false=只检测标注、不改写。",
   )),
 });
 
@@ -151,7 +164,23 @@ const outputSchema = z.object({
     truncated: z.boolean().describe("清单是否被截断（引擎 capped 8 条；true=还有未列出的命中）。"),
   }).optional().describe(
     "出稿后 AI 腔确定性回检（warning-only，绝不影响出稿成败）：内置规则 + 项目写作规则 antiAiPatterns 的确定性命中统计。" +
-    "检出 high/medium 时 summary 会带 ⚠ 标注，可引导用户说「去AI味」逐条修订；total=0 或只有 low 时不标注。",
+    "检出 high/medium 时 summary 会带 ⚠ 标注（默认还会自动去味一轮，见 autoDeAi 字段）；total=0 或只有 low 时不标注。",
+  ),
+  autoDeAi: z.object({
+    attempted: z.boolean().describe("是否真跑了一轮自动去味改写（false=只检测标注、未动稿，如 autoDeAi:false）。"),
+    fixedCount: z.number().int().nonnegative().describe("本轮实际安全替换落盘的处数。"),
+    remainingHighMedium: z.number().int().nonnegative().describe("改写后对改后正文复检同一套确定性规则仍剩的 high/medium 处数；未改写/失败时=初检 high+medium。"),
+    skipped: z.object({
+      notFound: z.number().int().nonnegative(),
+      ambiguous: z.number().int().nonnegative(),
+      noop: z.number().int().nonnegative(),
+      overlap: z.number().int().nonnegative(),
+      noRewrite: z.number().int().nonnegative(),
+    }).describe("跳过计数：定位不到 / 多处命中 / 改后与原句无异 / 区间重叠 / 模型没给有效改写。"),
+    error: z.string().optional().describe("改写模型失败原因（此时原稿未动、保留初始检出）。"),
+  }).optional().describe(
+    "出稿检出 high/medium 后的自动去味一轮（最多一轮、不循环；仅 autoDeAi 开启且有 high/medium 命中时出现）。" +
+    "改写失败/解析失败=原稿不动并如实报告，绝不影响出稿本身的 ok。",
   ),
 });
 
@@ -173,6 +202,7 @@ export interface GenerateDraftToolOutput {
   readonly draftTitle?: string;
   readonly draftLength?: GenerateDraftLengthInfo;
   readonly aiFlavor?: GenerateDraftAiFlavorInfo;
+  readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -209,6 +239,53 @@ export function buildAiFlavorWarning(info: GenerateDraftAiFlavorInfo): string {
   if (high + medium === 0) return "";
   const breakdown = [high > 0 ? `high ${high}` : "", medium > 0 ? `medium ${medium}` : ""].filter(Boolean).join(" / ");
   return `⚠ 检出 ${info.total} 处疑似 AI 腔（${breakdown}），可对我说「去AI味」逐条修订。`;
+}
+
+/** 自动去味一轮的如实回报：跑没跑 / 修了几处 / 复检还剩几处 high/medium / 跳过计数 / 失败原因。 */
+export interface GenerateDraftAutoDeAiInfo {
+  readonly attempted: boolean;
+  readonly fixedCount: number;
+  readonly remainingHighMedium: number;
+  readonly skipped: DeAiSkippedByReason;
+  readonly error?: string;
+}
+
+export const EMPTY_AUTO_DE_AI_SKIPPED: DeAiSkippedByReason = { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 };
+
+/** 初检报告里只挑 high/medium 命中去自动改写（low 全是弱信号/用户自定义词，不动）。纯逻辑、可测。 */
+export function pickAutoDeAiTargets(report: AiFlavorReport): readonly AiFlavorViolation[] {
+  return report.violations.filter((v) => v.severity === "high" || v.severity === "medium");
+}
+
+/**
+ * 自动去味的 summary 如实三态（+未跑时退回原标注）：
+ *   未跑（attempted:false）→ 原来的「检出 N 处…去AI味」标注；
+ *   改写模型失败 / 一处没能安全替换 → 如实说没改成、原稿未动；
+ *   修掉 N 处且复检干净 → 干净；修掉 N 处还剩 M 处 → 如实报剩、引导手动「去AI味」。
+ * 纯逻辑、可测。
+ */
+export function buildAutoDeAiNote(info: GenerateDraftAutoDeAiInfo, initial: GenerateDraftAiFlavorInfo): string {
+  if (!info.attempted) return buildAiFlavorWarning(initial);
+  const detectedHighMedium = initial.bySeverity.high + initial.bySeverity.medium;
+  if (info.error) {
+    return (
+      `⚠ 检出 ${detectedHighMedium} 处疑似 AI 腔，自动去味没跑成（${info.error}）——原稿未动、保留初始检出；` +
+      `可让我重试，或对我说「去AI味」手动逐条修。`
+    );
+  }
+  if (info.fixedCount === 0) {
+    return (
+      `⚠ 检出 ${detectedHighMedium} 处疑似 AI 腔，自动去味没能安全替换（模型没给有效改写或定位不到）——原稿未动；` +
+      `可对我说「去AI味」逐条手动修。`
+    );
+  }
+  if (info.remainingHighMedium === 0) {
+    return `已自动去 AI 味修掉 ${info.fixedCount} 处，复检干净。`;
+  }
+  return (
+    `⚠ 已自动去 AI 味修掉 ${info.fixedCount} 处疑似 AI 腔，复检还剩 ${info.remainingHighMedium} 处——` +
+    `可对我说「去AI味」继续逐条修。`
+  );
 }
 
 /** 引擎 draftLength 报告 → 工具输出的关键信息（目标区间/实际字数/是否低于下限/目标来源）。纯逻辑、可测。 */
@@ -297,9 +374,84 @@ export function buildNoWriteIntentBlockedOutput(
 }
 
 /**
+ * 自动去味一轮（最多一轮、不循环）：读工作稿全文 → runDeAiFlavorBatch 批量改写 → 有真改动才
+ * 先快照（对齐 revise_draft 的覆盖前快照）+ 写盘 → 对改后正文复检同一套确定性规则，如实报剩余。
+ * 改写模型失败/解析失败/一处都没能安全替换 → 原稿不动 + 如实报（error 或 fixedCount:0）。
+ * 返回 draftBody 仅在有真改动时（调用方据此更新输出里的正文，前端看到的是改后稿）。
+ */
+export async function runAutoDeAiRound(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftPath: string;
+  readonly initialHighMedium: number;
+  readonly targets: readonly AiFlavorViolation[];
+  readonly rules: readonly AiFlavorRule[];
+  readonly antiRules: readonly string[];
+  readonly callModel: (prompt: string) => Promise<string>;
+}): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string; readonly snapshotId?: string }> {
+  const notRun = (error?: string): { readonly info: GenerateDraftAutoDeAiInfo } => ({
+    info: {
+      attempted: true,
+      fixedCount: 0,
+      remainingHighMedium: input.initialHighMedium,
+      skipped: EMPTY_AUTO_DE_AI_SKIPPED,
+      ...(error ? { error } : {}),
+    },
+  });
+  // 违规句是正文整句、必为全文子串；对全文（含标题行）定位落盘，标题不动（对齐 routes/de-ai-flavor.ts）。
+  const rawDraft = await readFile(input.draftPath, "utf-8").catch(() => "");
+  if (!rawDraft.trim()) return notRun("工作稿读不到，没法定位改写");
+
+  const result = await runDeAiFlavorBatch({
+    draftText: rawDraft,
+    violations: input.targets,
+    callModel: input.callModel,
+    antiRules: input.antiRules,
+  });
+  if (!result.ok) {
+    return {
+      info: {
+        attempted: true,
+        fixedCount: 0,
+        remainingHighMedium: input.initialHighMedium,
+        skipped: result.skippedByReason,
+        ...(result.error ? { error: result.error } : {}),
+      },
+    };
+  }
+  if (result.rewritten === 0 || result.updatedContent === rawDraft) {
+    return {
+      info: {
+        attempted: true,
+        fixedCount: 0,
+        remainingHighMedium: input.initialHighMedium,
+        skipped: result.skippedByReason,
+      },
+    };
+  }
+  // 覆盖刚写盘的工作稿前先快照（对齐 revise_draft），让自动去味可撤销。
+  const snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+  const written = `${result.updatedContent.trimEnd()}\n`;
+  await writeFile(input.draftPath, written, "utf-8");
+  // 复检：对改后正文重跑同一套确定性规则（low 不计入剩余——本来就不动它）。
+  const remainingHighMedium = detectAiFlavorViolations(result.updatedContent, input.rules)
+    .filter((v) => v.severity !== "low").length;
+  return {
+    info: { attempted: true, fixedCount: result.rewritten, remainingHighMedium, skipped: result.skippedByReason },
+    draftBody: stripLeadingMarkdownChapterHeading(written).trim(),
+    ...(snapshotId ? { snapshotId } : {}),
+  };
+}
+
+/**
  * 纯逻辑：复刻路由编排——runFastDraft（注入 writerClient）→ 读回工作稿 → 诚实回报。
  * writerClient 作为参数注入，便于单测用 mock model；真实 execute 注入
- * createConfiguredWriterClient("fastDraft")。草稿待保存：不建 git 快照。
+ * createConfiguredWriterClient("fastDraft")。出稿本身不建快照；自动去味覆盖刚写盘的草稿前会先快照
+ * （runAutoDeAiRound 内，对齐 revise_draft 的覆盖前快照）。
+ *
+ * 自动去味（autoDeAi，默认 true）：出稿回检检出 high/medium 且注入了 deAiCallModel 时，
+ * 自动跑一轮 runAutoDeAiRound（批量改写 + 复检），结果进 autoDeAi 字段与 summary；
+ * autoDeAi:false 或未注入 deAiCallModel → 只标注不改写（attempted:false）。
  */
 export async function runGenerateDraftToolLogic(input: {
   readonly projectDir: string;
@@ -312,6 +464,10 @@ export async function runGenerateDraftToolLogic(input: {
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly writerClient: WriterClient;
+  /** 自动去味开关（默认 true）；false=检出 high/medium 也只标注、不改写。 */
+  readonly autoDeAi?: boolean;
+  /** 自动去味的改写模型调用（execute 注入 repair 任务槽；测试注入 mock）。缺失=只标注不改写。 */
+  readonly deAiCallModel?: (prompt: string) => Promise<string>;
 }): Promise<GenerateDraftToolOutput> {
   const { projectDir, chapter, writerClient } = input;
   const chapterGoal = input.chapterGoal?.trim() || `继续第 ${chapter} 章。`;
@@ -375,7 +531,7 @@ export async function runGenerateDraftToolLogic(input: {
   // L1：草稿已写盘，但回读那一刻偶发 FS 读失败会得空稿，前端这次就不刷新（草稿其实在磁盘，切走再回来就有）。
   // 重试回读兜底（刚写盘的文件、读空多是极少数 FS 抖动，重试即得）；仍取不到才退回空——
   // ⚠ 绝不因此判 ok:false：稿子是真写成功的，谎报失败会诱导用户重写覆盖好稿。
-  const draftBody = await readDraftBodyWithRetry(report.draftPath);
+  let draftBody = await readDraftBodyWithRetry(report.draftPath);
 
   // 出稿后保真软警告：用户给的必命中要点里有具体锚点漏写/被改写 → 如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。
   const missingBeats = report.beatFidelity?.missingBeats ?? [];
@@ -386,10 +542,42 @@ export async function runGenerateDraftToolLogic(input: {
   // 字数透明软警告：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注，让用户决定重写或接受。
   const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
 
-  // AI 腔回检软警告（warning-only）：检出 high/medium 才在 summary 标注（只有 low/干净稿不加噪音），
-  // 引导用户说「去AI味」走 check_ai_flavor 逐条修订；绝不拦稿、不影响 ok。
+  // AI 腔回检（warning-only）：检出 high/medium 默认接一轮自动去味（批量改写 + 复检，最多一轮）；
+  // autoDeAi:false 或未注入改写模型 → 只标注不改写。改写失败=原稿不动+如实报，绝不影响本出稿的 ok。
   const aiFlavorInfo = report.aiFlavor ? buildAiFlavorInfo(report.aiFlavor) : undefined;
-  const aiFlavorWarning = aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";
+  let autoDeAiInfo: GenerateDraftAutoDeAiInfo | undefined;
+  let autoDeAiSnapshotId: string | undefined;
+  if (report.aiFlavor) {
+    const targets = pickAutoDeAiTargets(report.aiFlavor);
+    const initialHighMedium = report.aiFlavor.bySeverity.high + report.aiFlavor.bySeverity.medium;
+    if (targets.length > 0) {
+      if ((input.autoDeAi ?? true) && input.deAiCallModel) {
+        const round = await runAutoDeAiRound({
+          projectDir,
+          chapter,
+          draftPath: report.draftPath,
+          initialHighMedium,
+          targets,
+          rules: aiFlavorRules,
+          antiRules: await readAntiRules(projectDir),
+          callModel: input.deAiCallModel,
+        });
+        autoDeAiInfo = round.info;
+        if (round.draftBody !== undefined) draftBody = round.draftBody;
+        autoDeAiSnapshotId = round.snapshotId;
+      } else {
+        autoDeAiInfo = {
+          attempted: false,
+          fixedCount: 0,
+          remainingHighMedium: initialHighMedium,
+          skipped: EMPTY_AUTO_DE_AI_SKIPPED,
+        };
+      }
+    }
+  }
+  const aiFlavorNote = aiFlavorInfo && autoDeAiInfo
+    ? buildAutoDeAiNote(autoDeAiInfo, aiFlavorInfo)
+    : aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";
 
   return {
     ok: true,
@@ -399,6 +587,9 @@ export async function runGenerateDraftToolLogic(input: {
     ...(report.title ? { draftTitle: report.title } : {}),
     ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
+    ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
+    // 自动去味真落了改动时，snapshotId 用它的快照（最近的撤销点）；否则由 execute 挂「再写一版」快照。
+    ...(autoDeAiSnapshotId ? { snapshotId: autoDeAiSnapshotId } : {}),
     issues: report.issues,
     overview,
     summary:
@@ -406,7 +597,7 @@ export async function runGenerateDraftToolLogic(input: {
       `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
       (beatWarning ? `\n${beatWarning}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
-      (aiFlavorWarning ? `\n${aiFlavorWarning}` : "") +
+      (aiFlavorNote ? `\n${aiFlavorNote}` : "") +
       // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
       (draftBody.trim().length === 0
         ? "（注：正文已写盘，但本次未能载入到写作区显示——切到别的章再切回本章即可看到，不用重写。）"
@@ -424,8 +615,9 @@ export const generateDraftTool = createTool({
     "草稿是待保存的工作稿，不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式入库。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。一次成稿、不自动补写重试：" +
     "正文低于目标字数下限不会被拒绝，会在 draftLength 和 summary 里如实标注（⚠ 低于下限）——请如实转达用户，由其决定重写或接受，别假装字数达标。" +
-    "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时 aiFlavor 字段和 summary 会带 ⚠ 标注，" +
-    "可如实转达并引导用户说「去AI味」逐条修订；total=0 或只有 low 时不标注。",
+    "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +
+    "最多一轮不循环、落盘前自动快照），结果如实进 autoDeAi 字段，summary 如实说明修掉几处/复检还剩几处（剩下的可引导用户说「去AI味」逐条修订）；" +
+    "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -479,6 +671,11 @@ export const generateDraftTool = createTool({
       "fastDraft",
       draftDeltaSink ? (delta) => draftDeltaSink({ chapter: resolvedChapter, text: delta }) : undefined,
     );
+    // 自动去味（默认开）：改写走 repair 任务槽（对齐 routes/de-ai-flavor.ts 的现行读法——
+    // resolveConfiguredChatModel 内部合成 task-assignments 旁路）。解析失败不拦出稿：
+    // 把错误包进 callModel，由去味闭环如实报「没跑成、原稿未动」。
+    const autoDeAiEnabled = input.autoDeAi ?? true;
+    const deAiCallModel = autoDeAiEnabled ? await buildRepairDeAiCallModel() : undefined;
     const result = await runGenerateDraftToolLogic({
       projectDir,
       chapter: resolvedChapter,
@@ -489,12 +686,40 @@ export const generateDraftTool = createTool({
       ...(input.mustHitBeats !== undefined ? { mustHitBeats: input.mustHitBeats } : {}),
       ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
       ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
+      autoDeAi: autoDeAiEnabled,
+      ...(deAiCallModel ? { deAiCallModel } : {}),
       writerClient,
     });
-    // 只在真出稿成功时挂 snapshotId（失败=未覆盖旧稿，无需撤销点）。
-    return result.ok && snapshotId ? { ...result, snapshotId } : result;
+    // 只在真出稿成功时挂 snapshotId（失败=未覆盖旧稿，无需撤销点）；自动去味已落改动时它自带更近的快照，不覆盖。
+    return result.ok && snapshotId ? { ...result, snapshotId: result.snapshotId ?? snapshotId } : result;
   },
 });
+
+/**
+ * 自动去味的改写模型（repair 任务槽，对齐 routes/de-ai-flavor.ts：流式 + 空闲超时、不传 max_tokens、要 JSON）。
+ * 绝不抛错：模型槽解析失败时返回一个「调用即抛该错误」的 callModel——出稿本身已成功，
+ * 不能让去味槽的配置问题把 ok:true 的出稿拖成工具报错；闭环会如实报「改写模型没跑成、原稿未动」。
+ */
+async function buildRepairDeAiCallModel(): Promise<(prompt: string) => Promise<string>> {
+  try {
+    const configured = await resolveConfiguredChatModel("repair");
+    return async (prompt: string): Promise<string> => {
+      const { content } = await streamChatModelToText({
+        configured,
+        messages: [{ role: "user", content: prompt }],
+        temperature: configured.profile.temperature ?? 0.4,
+        responseFormat: { type: "json_object" },
+      });
+      if (!content) throw new Error("改写模型返回了空内容。");
+      return content;
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return async () => {
+      throw new Error(message);
+    };
+  }
+}
 
 function optionalContextBudget(contextRanking: ReturnType<typeof makeWriterRankContext>): { readonly contextBudget: ReturnType<typeof contextBudgetPayload> } | Record<string, never> {
   return contextRanking.droppedSections.length > 0 || contextRanking.coreImpact || contextRanking.issues.length > 0
