@@ -117,6 +117,23 @@ export interface FastDraftReport {
   readonly issues: readonly string[];
 }
 
+/**
+ * 工作稿写盘的唯一通道：runFastDraft persist:true 与「先 persist:false 出候选、选出优胜再落盘」共用，
+ * 保证 drafts/fast/chapter-XXXX.md 的路径与标题行格式（`# {title}\n\n{body}\n`）只有这一处定义，
+ * 上层（路由抽卡落盘、agent 多候选选优落盘）绝不在引擎外另拼这个文件。
+ */
+export async function persistFastDraftBody(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly title: string;
+  readonly draftBody: string;
+}): Promise<string> {
+  const draftPath = join(input.projectDir, "drafts", "fast", `chapter-${padChapter(input.chapter)}.md`);
+  await mkdir(join(input.projectDir, "drafts", "fast"), { recursive: true });
+  await writeFile(draftPath, `# ${input.title}\n\n${input.draftBody.trim()}\n`, "utf-8");
+  return draftPath;
+}
+
 export async function runFastDraft(input: FastDraftInput): Promise<FastDraftReport> {
   const latencyTimer = startRuntimeLatency();
   const writingRules = await readWritingRules(input.projectDir).catch(() => null);
@@ -235,9 +252,12 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       }, latencyTimer);
     }
 
-    const draftPath = join(input.projectDir, "drafts", "fast", `chapter-${padChapter(input.chapter)}.md`);
-    await mkdir(join(input.projectDir, "drafts", "fast"), { recursive: true });
-    await writeFile(draftPath, `# ${generatedTitle}\n\n${normalizedGenerated.content.trim()}\n`, "utf-8");
+    const draftPath = await persistFastDraftBody({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      title: generatedTitle,
+      draftBody: normalizedGenerated.content,
+    });
     return withFastDraftDiagnostics(input.projectDir, {
       chapter: input.chapter,
       passed: true,

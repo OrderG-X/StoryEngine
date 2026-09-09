@@ -19,6 +19,14 @@
  *   （干净 / 已修掉 N 处剩 M 处 / 改写模型失败原稿未动）。改写失败/解析失败=原稿不动+如实报，
  *   绝不影响出稿本身的 ok。autoDeAi:false → 只检测标注、不改写。
  *
+ * 多候选采样防坍缩（candidates，默认 1=零行为变化）：单候选长篇连载会文风坍缩，多候选+选择是解药；
+ *   但「评分选优」有 typicality bias 风险，所以选择依据必须确定性+透明（不用模型打分）。candidates>1 时
+ *   先后生成 N 个候选（temperature 依次错开；全部 persist:false 只生成不落盘，绝不互相覆盖工作稿），
+ *   确定性评分器（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）选优，优胜稿走引擎同一写盘通道
+ *   （persistFastDraftBody，与 persist:true 同路径同标题行格式）落盘，之后与 candidates=1 完全同一条
+ *   后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。单个候选失败如实记 failed 不拖死全局，
+ *   全部失败 → ok:false + candidatesReport 逐候选列明原因；passed=false 的候选永远不得中选。
+ *
  * 铁律：
  * - 题材中立：description / summary 用中性词。
  * - 绝不静默失败 / 绝不谎报：runFastDraft.passed=false 时如实回报 ok:false + issues，不假装出稿成功。
@@ -28,6 +36,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import {
   buildStateOverview,
   detectAiFlavorViolations,
+  persistFastDraftBody,
   runFastDraft,
   type AiFlavorReport,
   type AiFlavorRule,
@@ -36,6 +45,7 @@ import {
   type DraftLengthReport,
   type DraftLengthStatus,
   type DraftLengthTargetSource,
+  type FastDraftInput,
   type FastDraftReport,
   type StateOverview,
   type WriterClient,
@@ -48,7 +58,7 @@ import { coerceBoolean, coerceNumber, coerceStringArray, positiveOrUndefined } f
 // 兼容既有测试导入：positiveOrUndefined 现归位 lenient-args（模型无关 helper 正位），此处再导出。
 export { positiveOrUndefined } from "./lenient-args.js";
 
-import { createConfiguredWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
@@ -108,6 +118,11 @@ const inputSchema = z.object({
   )),
   autoDeAi: coerceBoolean(z.boolean().optional().describe(
     "出稿检出 high/medium AI 腔后是否自动去味一轮（默认 true：repair 任务槽批量改写 + 改后复检，最多一轮不循环，落盘前自动快照，只改文风不动剧情）。false=只检测标注、不改写。",
+  )),
+  candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe(
+    "可选：多候选采样数（1–3，默认 1=一次成稿）。>1 时先后生成 N 个候选（temperature 依次错开），按确定性规则" +
+    "（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）选出最优稿落盘，逐候选得分与落选原因进 candidatesReport——防长篇连载文风坍缩。" +
+    "注意：token 消耗与生成时间都约为 N 倍，用户没明确要求多版挑选/防文风雷同时保持默认 1。",
   )),
 });
 
@@ -182,6 +197,22 @@ const outputSchema = z.object({
     "出稿检出 high/medium 后的自动去味一轮（最多一轮、不循环；仅 autoDeAi 开启且有 high/medium 命中时出现）。" +
     "改写失败/解析失败=原稿不动并如实报告，绝不影响出稿本身的 ok。",
   ),
+  candidatesReport: z.array(z.object({
+    index: z.number().int().positive().describe("候选序号（1 起，与 summary 的『第 N 个』一致）。"),
+    chosen: z.boolean().describe("是否被确定性评分选中并落盘。"),
+    score: z.number().optional().describe(
+      "确定性得分（100 起扣：漏必命中要点 -50/条、低于字数下限 -25、AI 腔计权 high×3+medium×1 每分 -10；可为负）。仅通过引擎校验的候选参与评分，失败候选无此值。",
+    ),
+    aiFlavorCounts: z.object({
+      high: z.number().int().nonnegative(),
+      medium: z.number().int().nonnegative(),
+      low: z.number().int().nonnegative(),
+    }).describe("该候选出稿回检的 AI 腔按严重度计数。"),
+    actualLength: z.number().describe("该候选正文实际中文字符数。"),
+    reason: z.string().describe("优胜/落选/失败的一句人话原因（如『AI 腔 2 处 > 优胜者 0 处』『低于字数下限』）。"),
+  })).optional().describe(
+    "多候选采样（candidates>1）的逐候选透明报告：得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
+  ),
 });
 
 /** 工具输出的字数核对信息：引擎 DraftLengthReport 的关键字段提纯（目标区间/实际字数/是否低于下限/目标来源）。 */
@@ -203,6 +234,7 @@ export interface GenerateDraftToolOutput {
   readonly draftLength?: GenerateDraftLengthInfo;
   readonly aiFlavor?: GenerateDraftAiFlavorInfo;
   readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
+  readonly candidatesReport?: readonly DraftCandidateReportEntry[];
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -443,6 +475,289 @@ export async function runAutoDeAiRound(input: {
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * 第四层：多候选采样防坍缩（candidates>1）
+ *
+ * 采样：N 个候选全部 persist:false（只生成不落盘，绝不互相覆盖工作稿），temperature 依次错开；
+ *   单个候选失败（模型异常/校验不过）如实记 failed，不拖死全局；passed=false 永远不得中选。
+ * 选优：确定性评分器（纯函数、可单测、题材中立），绝不用模型打分——「评分选优」的 typicality bias
+ *   靠「规则全透明 + 逐候选得分与落选理由如实输出」来对冲，而不是引入另一个黑盒偏好。
+ * 落盘：优胜稿走引擎同一写盘通道 persistFastDraftBody（与 persist:true 同路径同标题行格式），
+ *   之后与 candidates=1 完全同一条后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。
+ * ------------------------------------------------------------------------- */
+
+/** 多候选采样的 temperature 错开档位（第 1 个=基准，之后 +0.15/+0.3，防 N 版同分布）。 */
+export const DRAFT_CANDIDATE_TEMPERATURE_OFFSETS = [0, 0.15, 0.3] as const;
+
+/**
+ * 确定性评分权重（100 起扣，越高越好，同分取序号靠前者）：
+ * 漏用户/agent 必命中要点最重（-50/条——内容硬约束，选优之后没有任何环节能补回）；
+ * 低于字数下限次之（-25——一次成稿不补写，短稿缺陷不会自愈）；
+ * AI 腔计权（high×3+medium×1；low 不计——弱信号/用户自定义词不参与选优）每分 -10，
+ * 最轻——优胜稿还有 autoDeAi 一轮兜底可修。
+ */
+export const DRAFT_CANDIDATE_SCORE_WEIGHTS = {
+  perMissingBeat: 50,
+  belowLowerBound: 25,
+  perAiFlavorPoint: 10,
+} as const;
+
+/** 评分器输入：单个候选的确定性体检结果（eligible=false=未通过/生成失败，永远不得中选）。 */
+export interface DraftCandidateScoreInput {
+  readonly index: number;
+  readonly eligible: boolean;
+  readonly aiFlavorCounts: Readonly<Record<AiFlavorSeverity, number>>;
+  readonly belowLowerBound: boolean;
+  readonly actualLength: number;
+  readonly lowerBound?: number;
+  readonly missingBeatCount: number;
+  /** eligible=false 的诚实原因（校验 issues / 异常 message），原样进 candidatesReport。 */
+  readonly failureReason?: string;
+}
+
+/** 逐候选透明报告（index 1 起，与 summary 的「第 N 个」一致；失败候选也列出、score 缺省=未参与评分）。 */
+export interface DraftCandidateReportEntry {
+  readonly index: number;
+  readonly chosen: boolean;
+  readonly score?: number;
+  readonly aiFlavorCounts: Readonly<Record<AiFlavorSeverity, number>>;
+  readonly actualLength: number;
+  readonly reason: string;
+}
+
+/** AI 腔计权分：high×3 + medium×1（low 不计）。纯逻辑、可测。 */
+export function aiFlavorWeightedScore(counts: Readonly<Record<AiFlavorSeverity, number>>): number {
+  return counts.high * 3 + counts.medium * 1;
+}
+
+/** 单候选确定性得分：100 起扣（权重见 DRAFT_CANDIDATE_SCORE_WEIGHTS），可为负。纯逻辑、可测。 */
+export function scoreDraftCandidate(
+  input: Pick<DraftCandidateScoreInput, "missingBeatCount" | "belowLowerBound" | "aiFlavorCounts">,
+): number {
+  return 100
+    - input.missingBeatCount * DRAFT_CANDIDATE_SCORE_WEIGHTS.perMissingBeat
+    - (input.belowLowerBound ? DRAFT_CANDIDATE_SCORE_WEIGHTS.belowLowerBound : 0)
+    - aiFlavorWeightedScore(input.aiFlavorCounts) * DRAFT_CANDIDATE_SCORE_WEIGHTS.perAiFlavorPoint;
+}
+
+/**
+ * 确定性选优：eligible 候选里取最高分，同分保留序号靠前者（严格更高才替换，无任何随机/模型偏好）；
+ * 无 eligible → chosenIndex 缺省（调用方据此 ok:false 诚实回报）。逐候选报告按生成顺序、index 1 起。
+ * 纯逻辑、可测。
+ */
+export function rankDraftCandidates(
+  inputs: readonly DraftCandidateScoreInput[],
+): { readonly chosenIndex?: number; readonly entries: readonly DraftCandidateReportEntry[] } {
+  const scored = inputs.map((input) => ({ input, score: input.eligible ? scoreDraftCandidate(input) : undefined }));
+  let champion: { readonly input: DraftCandidateScoreInput; readonly score?: number } | undefined;
+  for (const current of scored) {
+    if (current.score === undefined) continue;
+    if (champion?.score === undefined || current.score > champion.score) champion = current;
+  }
+  const entries = scored.map((current, position) => {
+    const base = {
+      index: position + 1,
+      chosen: champion !== undefined && current.input.index === champion.input.index,
+      aiFlavorCounts: current.input.aiFlavorCounts,
+      actualLength: current.input.actualLength,
+    };
+    if (current.score === undefined) {
+      return { ...base, reason: current.input.failureReason ?? "生成失败：未知原因" };
+    }
+    if (champion === undefined || champion.input.index === current.input.index) {
+      return { ...base, score: current.score, reason: buildWinnerCandidateReason(current.input, current.score) };
+    }
+    return { ...base, score: current.score, reason: buildLoserCandidateReason(current.input, champion.input) };
+  });
+  return { ...(champion ? { chosenIndex: champion.input.index } : {}), entries };
+}
+
+/** 优胜理由：只讲自己的体检事实 + 综合评分最高（「最少/最好」类比较词留给 summary 行，那里会逐个核实）。 */
+function buildWinnerCandidateReason(input: DraftCandidateScoreInput, score: number): string {
+  const highMedium = input.aiFlavorCounts.high + input.aiFlavorCounts.medium;
+  const facts = [
+    input.missingBeatCount === 0 ? "要点全中" : `必命中要点漏 ${input.missingBeatCount} 条`,
+    input.belowLowerBound ? `低于字数下限（${belowLowerBoundFact(input)}）` : "字数达标",
+    `AI 腔 ${highMedium} 处`,
+  ];
+  return `综合评分最高（${score} 分）：${facts.join("、")}`;
+}
+
+/** 落选理由：一句人话。同分→讲清 tie-break；否则报「第一个比优胜者差的轴」（权重顺序：要点 > 字数 > AI 腔）。 */
+function buildLoserCandidateReason(loser: DraftCandidateScoreInput, winner: DraftCandidateScoreInput): string {
+  const loserScore = scoreDraftCandidate(loser);
+  if (loserScore === scoreDraftCandidate(winner)) {
+    return `与优胜者同分（${loserScore} 分），按候选顺序取序号靠前者`;
+  }
+  if (loser.missingBeatCount > winner.missingBeatCount) {
+    return `必命中要点漏 ${loser.missingBeatCount} 条 > 优胜者 ${winner.missingBeatCount} 条`;
+  }
+  if (loser.belowLowerBound && !winner.belowLowerBound) {
+    return `低于字数下限（${belowLowerBoundFact(loser)}），优胜者达标`;
+  }
+  const loserWeighted = aiFlavorWeightedScore(loser.aiFlavorCounts);
+  const winnerWeighted = aiFlavorWeightedScore(winner.aiFlavorCounts);
+  if (loserWeighted > winnerWeighted) {
+    const loserHighMedium = loser.aiFlavorCounts.high + loser.aiFlavorCounts.medium;
+    const winnerHighMedium = winner.aiFlavorCounts.high + winner.aiFlavorCounts.medium;
+    return loserHighMedium !== winnerHighMedium
+      ? `AI 腔 ${loserHighMedium} 处 > 优胜者 ${winnerHighMedium} 处`
+      : `AI 腔同为 ${loserHighMedium} 处但 high 档更多（high ${loser.aiFlavorCounts.high} 处 > 优胜者 ${winner.aiFlavorCounts.high} 处）`;
+  }
+  // 防御兜底：总分更低必有一轴更差（上面已全覆盖），真走到这也如实给总分对比，绝不静默。
+  return `综合评分 ${loserScore} 分 < 优胜者 ${scoreDraftCandidate(winner)} 分`;
+}
+
+function belowLowerBoundFact(input: DraftCandidateScoreInput): string {
+  return `实际${input.actualLength}字${input.lowerBound !== undefined ? `/下限${input.lowerBound}字` : ""}`;
+}
+
+/**
+ * summary 一行的选优人话：「已生成 3 个候选并选出第 2 个（要点全中、字数达标、无 AI 腔命中），其余落选原因见
+ * candidatesReport。」括号里的优点逐条核实过才说——「AI 腔最少」只在确实不比任何其他合格候选差时讲（含并列），
+ * 绝不为了好看夸口。纯逻辑、可测。
+ */
+export function buildCandidateSummaryLine(
+  candidateCount: number,
+  chosen: DraftCandidateScoreInput,
+  all: readonly DraftCandidateScoreInput[],
+): string {
+  const merits: string[] = [];
+  if (chosen.missingBeatCount === 0) merits.push("要点全中");
+  if (!chosen.belowLowerBound) merits.push("字数达标");
+  const chosenWeighted = aiFlavorWeightedScore(chosen.aiFlavorCounts);
+  const chosenHighMedium = chosen.aiFlavorCounts.high + chosen.aiFlavorCounts.medium;
+  if (chosenHighMedium === 0) {
+    merits.push("无 AI 腔命中");
+  } else {
+    const flavorIsMin = all.every((other) =>
+      other.index === chosen.index || !other.eligible || aiFlavorWeightedScore(other.aiFlavorCounts) >= chosenWeighted);
+    if (flavorIsMin) merits.push(`AI 腔最少（${chosenHighMedium} 处）`);
+  }
+  return `已生成 ${candidateCount} 个候选并选出第 ${chosen.index + 1} 个` +
+    (merits.length > 0 ? `（${merits.join("、")}）` : "（综合评分最高）") +
+    `，其余落选原因见 candidatesReport。`;
+}
+
+/** 单个候选的 runFastDraft 报告 → 评分器输入（异常 / passed:false / 无正文 → eligible:false + 诚实原因）。 */
+function scoreInputFromCandidateReport(
+  index: number,
+  report: FastDraftReport | undefined,
+  exception?: string,
+): DraftCandidateScoreInput {
+  if (!report) {
+    return {
+      index,
+      eligible: false,
+      aiFlavorCounts: { high: 0, medium: 0, low: 0 },
+      belowLowerBound: false,
+      actualLength: 0,
+      missingBeatCount: 0,
+      failureReason: `生成失败：${exception ?? "未知错误"}`,
+    };
+  }
+  const base = {
+    index,
+    aiFlavorCounts: report.aiFlavor?.bySeverity ?? { high: 0, medium: 0, low: 0 },
+    belowLowerBound: report.draftLength?.lengthStatus === "below_lower_bound",
+    actualLength: report.draftLength?.actualLength ?? 0,
+    ...(report.draftLength?.lowerBound !== undefined ? { lowerBound: report.draftLength.lowerBound } : {}),
+    missingBeatCount: report.beatFidelity?.missingBeats.length ?? 0,
+  };
+  if (!report.passed) {
+    return {
+      ...base,
+      eligible: false,
+      failureReason: `未通过引擎校验（${report.issues.length > 0 ? report.issues.join("；") : "引擎拒绝写盘"}）`,
+    };
+  }
+  if (!report.draftBody || report.draftBody.trim().length === 0) {
+    return { ...base, eligible: false, failureReason: "引擎未返回候选正文" };
+  }
+  return { ...base, eligible: true };
+}
+
+/** 采样编排结果：逐候选报告 + 汇入单候选下游链的报告（优胜=带 draftPath 的原报告；全失败=首个失败报告；全部异常=undefined）。 */
+interface DraftCandidateSampling {
+  readonly entries: readonly DraftCandidateReportEntry[];
+  readonly scoreInputs: readonly DraftCandidateScoreInput[];
+  readonly chosenIndex?: number;
+  /** 全部候选无一通过（含全部异常）时为 true；false 而 effectiveReport.passed=false = 优胜稿落盘失败。 */
+  readonly allFailed: boolean;
+  readonly effectiveReport?: FastDraftReport;
+}
+
+/**
+ * 多候选采样：顺序生成 N 个 persist:false 候选（不并发——同一项目上下文并发只会给 provider 徒增限流压力、
+ * 诊断乱序），确定性选优后优胜稿走引擎同一写盘通道落盘。单个候选失败如实记录、不拖死全局；
+ * 至少 1 个通过就能继续；全部失败或优胜稿落盘失败 → effectiveReport.passed=false，由调用方 ok:false 诚实回报。
+ */
+async function sampleDraftCandidates(input: {
+  readonly candidateCount: number;
+  readonly resolveWriterClient: (index: number) => WriterClient;
+  readonly sharedDraftInput: Omit<FastDraftInput, "writerClient" | "persist" | "dryRun">;
+}): Promise<DraftCandidateSampling> {
+  const reports: (FastDraftReport | undefined)[] = [];
+  const exceptions: (string | undefined)[] = [];
+  for (let index = 0; index < input.candidateCount; index += 1) {
+    try {
+      reports.push(await runFastDraft({
+        ...input.sharedDraftInput,
+        writerClient: input.resolveWriterClient(index),
+        dryRun: false,
+        persist: false,
+      }));
+      exceptions.push(undefined);
+    } catch (error) {
+      reports.push(undefined);
+      exceptions.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const scoreInputs = reports.map((report, index) => scoreInputFromCandidateReport(index, report, exceptions[index]));
+  const ranked = rankDraftCandidates(scoreInputs);
+  if (ranked.chosenIndex === undefined) {
+    return {
+      entries: ranked.entries,
+      scoreInputs,
+      allFailed: true,
+      effectiveReport: reports.find((report) => report !== undefined),
+    };
+  }
+  const winnerReport = reports[ranked.chosenIndex];
+  if (!winnerReport?.draftBody) {
+    // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
+    return { entries: ranked.entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
+  }
+  try {
+    const draftPath = await persistFastDraftBody({
+      projectDir: input.sharedDraftInput.projectDir,
+      chapter: input.sharedDraftInput.chapter,
+      title: winnerReport.title ?? `第${input.sharedDraftInput.chapter}章`,
+      draftBody: winnerReport.draftBody,
+    });
+    return {
+      entries: ranked.entries,
+      scoreInputs,
+      chosenIndex: ranked.chosenIndex,
+      allFailed: false,
+      effectiveReport: { ...winnerReport, draftPath },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      entries: ranked.entries,
+      scoreInputs,
+      chosenIndex: ranked.chosenIndex,
+      allFailed: false,
+      effectiveReport: {
+        ...winnerReport,
+        passed: false,
+        issues: [`优胜候选（第 ${ranked.chosenIndex + 1} 个）写入工作稿失败：${message}`],
+      },
+    };
+  }
+}
+
 /**
  * 纯逻辑：复刻路由编排——runFastDraft（注入 writerClient）→ 读回工作稿 → 诚实回报。
  * writerClient 作为参数注入，便于单测用 mock model；真实 execute 注入
@@ -452,6 +767,9 @@ export async function runAutoDeAiRound(input: {
  * 自动去味（autoDeAi，默认 true）：出稿回检检出 high/medium 且注入了 deAiCallModel 时，
  * 自动跑一轮 runAutoDeAiRound（批量改写 + 复检），结果进 autoDeAi 字段与 summary；
  * autoDeAi:false 或未注入 deAiCallModel → 只标注不改写（attempted:false）。
+ *
+ * 多候选（candidates=2/3，默认 1=零行为变化）：先后生成 N 个 persist:false 候选（candidateWriterClients
+ * 按序注入，execute 用 temperature 错开构建），确定性评分选优、优胜稿落盘后汇入下方同一条后续链。
  */
 export async function runGenerateDraftToolLogic(input: {
   readonly projectDir: string;
@@ -468,6 +786,10 @@ export async function runGenerateDraftToolLogic(input: {
   readonly autoDeAi?: boolean;
   /** 自动去味的改写模型调用（execute 注入 repair 任务槽；测试注入 mock）。缺失=只标注不改写。 */
   readonly deAiCallModel?: (prompt: string) => Promise<string>;
+  /** 多候选采样数（只认 2/3，其余一律当 1=一次成稿现状）。 */
+  readonly candidates?: number;
+  /** candidates>1 时按序注入的候选 writer（execute 用 temperature 错开构建；测试注入 mock）。缺位的序号回退 writerClient。 */
+  readonly candidateWriterClients?: readonly WriterClient[];
 }): Promise<GenerateDraftToolOutput> {
   const { projectDir, chapter, writerClient } = input;
   const chapterGoal = input.chapterGoal?.trim() || `继续第 ${chapter} 章。`;
@@ -491,13 +813,10 @@ export async function runGenerateDraftToolLogic(input: {
   // antiAiPatterns（用户自定义词，字面量匹配、一律 low 档）。writing-rules.json 读不到 → 只剩内置规则，不崩。
   const aiFlavorRules = [...ALL_BUILTIN_AI_FLAVOR_RULES, ...buildUserAntiAiPatternRules(await readAntiAiPatterns(projectDir))];
 
-  const report: FastDraftReport = await runFastDraft({
+  const sharedDraftInput = {
     projectDir,
     chapter,
     chapterGoal,
-    writerClient,
-    dryRun: false,
-    persist: true,
     aiFlavorRules,
     ...(positiveOrUndefined(input.requestedDraftLength) !== undefined ? { requestedDraftLength: positiveOrUndefined(input.requestedDraftLength) } : {}),
     ...(selectedCharacterIds !== undefined ? { selectedCharacterIds } : {}),
@@ -505,23 +824,51 @@ export async function runGenerateDraftToolLogic(input: {
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
     maxTimelineEvents,
     rankContext: contextRanking.rankContext,
-  });
+  };
+  // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。
+  const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
+  let report: FastDraftReport | undefined;
+  let sampling: DraftCandidateSampling | undefined;
+  if (candidateCount > 1) {
+    // 多候选：N 个 persist:false 候选（只生成不落盘）→ 确定性选优 → 优胜稿统一落盘，汇入下方同一条后续链。
+    sampling = await sampleDraftCandidates({
+      candidateCount,
+      resolveWriterClient: (index) => input.candidateWriterClients?.[index] ?? writerClient,
+      sharedDraftInput,
+    });
+    report = sampling.effectiveReport;
+  } else {
+    report = await runFastDraft({
+      ...sharedDraftInput,
+      writerClient,
+      dryRun: false,
+      persist: true,
+    });
+  }
 
   const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
   const contextBudget = optionalContextBudget(contextRanking);
   // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带），透传关键信息进输出，绝不藏起来。
-  const draftLengthInfo = report.draftLength ? buildDraftLengthInfo(report.draftLength) : undefined;
+  const draftLengthInfo = report?.draftLength ? buildDraftLengthInfo(report.draftLength) : undefined;
 
-  if (!report.passed || !report.draftPath) {
+  if (!report || !report.passed || !report.draftPath) {
+    // 候选全部异常（连报告都没有）时，issues 用逐候选原因拼出，绝不空着。
+    const failureIssues = report?.issues ?? sampling?.entries.map((entry) => `候选 ${entry.index}：${entry.reason}`) ?? [];
     return {
       ok: false,
       chapter,
       ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
-      issues: report.issues,
+      ...(sampling ? { candidatesReport: sampling.entries } : {}),
+      issues: failureIssues,
       overview,
-      summary:
-        `第 ${chapter} 章出稿未通过，未写入工作稿：` +
-        `${report.issues.length > 0 ? report.issues.join("；") : "引擎拒绝写盘"}。${characterSelection.summary}。请重试或调整本章方向。`,
+      summary: sampling
+        ? sampling.allFailed
+          ? `第 ${chapter} 章已生成 ${candidateCount} 个候选，但全部未通过或生成失败，未写入工作稿：` +
+            `${failureIssues.length > 0 ? failureIssues.join("；") : "全部候选生成失败"}。各候选情况见 candidatesReport。请重试或调整本章方向。`
+          : `第 ${chapter} 章已生成 ${candidateCount} 个候选并选出第 ${(sampling.chosenIndex ?? 0) + 1} 个，但优胜稿写入工作稿失败：` +
+            `${failureIssues.join("；")}。各候选情况见 candidatesReport。`
+        : `第 ${chapter} 章出稿未通过，未写入工作稿：` +
+          `${failureIssues.length > 0 ? failureIssues.join("；") : "引擎拒绝写盘"}。${characterSelection.summary}。请重试或调整本章方向。`,
       refreshScope: "full",
       characterSelection,
       ...contextBudget,
@@ -579,6 +926,11 @@ export async function runGenerateDraftToolLogic(input: {
     ? buildAutoDeAiNote(autoDeAiInfo, aiFlavorInfo)
     : aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";
 
+  // 多候选选优透明化：summary 一行讲清选了第几个、凭什么（优点逐条核实过才说），逐候选得分/落选原因进 candidatesReport。
+  const candidateLine = sampling && sampling.chosenIndex !== undefined
+    ? buildCandidateSummaryLine(candidateCount, sampling.scoreInputs[sampling.chosenIndex], sampling.scoreInputs)
+    : "";
+
   return {
     ok: true,
     chapter,
@@ -588,12 +940,14 @@ export async function runGenerateDraftToolLogic(input: {
     ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
+    ...(sampling ? { candidatesReport: sampling.entries } : {}),
     // 自动去味真落了改动时，snapshotId 用它的快照（最近的撤销点）；否则由 execute 挂「再写一版」快照。
     ...(autoDeAiSnapshotId ? { snapshotId: autoDeAiSnapshotId } : {}),
     issues: report.issues,
     overview,
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${report.title ? `《${report.title}》` : ""}。` +
+      candidateLine +
       `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
       (beatWarning ? `\n${beatWarning}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
@@ -617,7 +971,10 @@ export const generateDraftTool = createTool({
     "正文低于目标字数下限不会被拒绝，会在 draftLength 和 summary 里如实标注（⚠ 低于下限）——请如实转达用户，由其决定重写或接受，别假装字数达标。" +
     "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +
     "最多一轮不循环、落盘前自动快照），结果如实进 autoDeAi 字段，summary 如实说明修掉几处/复检还剩几处（剩下的可引导用户说「去AI味」逐条修订）；" +
-    "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。",
+    "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。" +
+    "默认一次成稿（candidates:1）；用户想多版挑选、或嫌连载文风越来越雷同时，传 candidates:2–3：先后生成 N 个候选（temperature 依次错开），" +
+    "按确定性规则（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）自动选出最优稿落盘，逐候选得分与落选原因见 candidatesReport——请如实转达。" +
+    "注意多候选的 token 消耗与生成时间都约为 N 倍，别默认开。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -667,10 +1024,28 @@ export const generateDraftTool = createTool({
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章再次出稿前快照`);
     // 出稿流式：路由注入了 sink 就把正文 delta 逐字喂前端编辑器（带本次章号，前端只往当前章追）；缺失=不流式。
     const draftDeltaSink = readDraftDeltaSinkFromContext(context);
-    const writerClient = await createConfiguredWriterClient(
-      "fastDraft",
-      draftDeltaSink ? (delta) => draftDeltaSink({ chapter: resolvedChapter, text: delta }) : undefined,
-    );
+    // 多候选采样（第四层防坍缩）：N 个 writer 的 temperature 依次错开（基准 / +0.15 / +0.3，封顶 1.0——
+    // 部分 provider 的 temperature 上限为 1，超了会被 400 拒），防 N 版同分布。采样不接 delta sink：
+    // N 版正文逐字串进同一章编辑器会花屏，优胜稿落盘后由 refreshScope:"full" 一次性刷新。
+    const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
+    let writerClient: WriterClient;
+    let candidateWriterClients: readonly WriterClient[] | undefined;
+    if (candidateCount > 1) {
+      const configured = await resolveConfiguredChatModel("fastDraft");
+      const baseTemperature = configured.profile.temperature ?? 0.8; // 与 createOpenAICompatibleWriterClient 的兜底一致
+      candidateWriterClients = DRAFT_CANDIDATE_TEMPERATURE_OFFSETS.slice(0, candidateCount).map((offset) =>
+        createOpenAICompatibleWriterClient({
+          ...configured,
+          // 两位小数取整：0.8+0.15 的浮点尾差（0.9500000000000001）不上请求线。
+          profile: { ...configured.profile, temperature: Math.min(1, Math.round((baseTemperature + offset) * 100) / 100) },
+        }));
+      writerClient = candidateWriterClients[0];
+    } else {
+      writerClient = await createConfiguredWriterClient(
+        "fastDraft",
+        draftDeltaSink ? (delta) => draftDeltaSink({ chapter: resolvedChapter, text: delta }) : undefined,
+      );
+    }
     // 自动去味（默认开）：改写走 repair 任务槽（对齐 routes/de-ai-flavor.ts 的现行读法——
     // resolveConfiguredChatModel 内部合成 task-assignments 旁路）。解析失败不拦出稿：
     // 把错误包进 callModel，由去味闭环如实报「没跑成、原稿未动」。
@@ -688,6 +1063,8 @@ export const generateDraftTool = createTool({
       ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
       autoDeAi: autoDeAiEnabled,
       ...(deAiCallModel ? { deAiCallModel } : {}),
+      candidates: candidateCount,
+      ...(candidateWriterClients ? { candidateWriterClients } : {}),
       writerClient,
     });
     // 只在真出稿成功时挂 snapshotId（失败=未覆盖旧稿，无需撤销点）；自动去味已落改动时它自带更近的快照，不覆盖。

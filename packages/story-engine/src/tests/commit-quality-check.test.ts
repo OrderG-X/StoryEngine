@@ -521,6 +521,7 @@ function makePack(overrides: {
       forbiddenContent: [],
       doNotDo: [],
       readerExperienceRules: [],
+      styleExemplars: [],
     },
     hardConstraints: [],
     sourceTrace: [],

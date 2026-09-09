@@ -170,6 +170,117 @@ describe("Writing Context Pack V0", () => {
     expect(prompt).toContain("前戏铺垫别超过200字"); // customNotes 原文真进 prompt（不止埋 JSON）
   });
 
+  it("旧书没有 styleExemplars 字段：pack 不崩、styleExemplars 为空（向后兼容）", async () => {
+    const projectDir = await createSoulSteelFixture(); // fixture 的 writing-rules.json 不带 styleExemplars
+    const pack = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    expect(pack.writingRulesContext.styleExemplars).toEqual([]);
+
+    const context = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
+    const prompt = renderFastDraftPromptText(context);
+    expect(prompt).not.toContain("作者文风样本");
+  });
+
+  it("文风样本进 writingRulesContext 且渲进 FastDraft 正文 prompt（正向锚·模仿风格不得照抄）", async () => {
+    const projectDir = await createSoulSteelFixture();
+    await writeJson(projectDir, "story/writing-rules.json", {
+      version: "v0",
+      proseStyle: ["克制"],
+      genreRequirements: [],
+      suspenseRules: [],
+      payoffRules: [],
+      reversalRules: [],
+      readerExperienceRules: [],
+      forbiddenContent: [],
+      doNotDo: [],
+      styleExemplars: [{
+        id: "exemplar-secret-01",
+        title: "雨夜开场",
+        text: "雨先是落在檐角，再落到他的肩上。他没有躲，只是觉得这座城忽然安静得过分。",
+        note: "我满意的开头节奏",
+        createdAtMs: 1726000000000,
+      }],
+    });
+
+    const pack = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    expect(pack.writingRulesContext.styleExemplars).toEqual([{
+      title: "雨夜开场",
+      text: "雨先是落在檐角，再落到他的肩上。他没有躲，只是觉得这座城忽然安静得过分。",
+      note: "我满意的开头节奏",
+    }]);
+
+    const context = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
+    const prompt = renderFastDraftPromptText(context);
+    expect(prompt).toContain("## 作者文风样本（模仿风格·不得照抄内容）");
+    expect(prompt).toContain("模仿其句法节奏、用词偏好与叙事温度");
+    expect(prompt).toContain("不得照抄样本内容、情节或具体名物");
+    expect(prompt).toContain("雨夜开场");
+    expect(prompt).toContain("雨先是落在檐角");
+    expect(prompt).toContain("我满意的开头节奏");
+    expect(prompt).not.toContain("exemplar-secret-01"); // 内部 id 不喂模型
+  });
+
+  it("坏样本条目跳过不崩：非对象 / 缺 text / 超存储上限，正常条目仍进 prompt", async () => {
+    const projectDir = await createSoulSteelFixture();
+    await writeJson(projectDir, "story/writing-rules.json", {
+      version: "v0",
+      proseStyle: [],
+      genreRequirements: [],
+      suspenseRules: [],
+      payoffRules: [],
+      reversalRules: [],
+      readerExperienceRules: [],
+      forbiddenContent: [],
+      doNotDo: [],
+      styleExemplars: [
+        "这不是对象",
+        { id: "bad-1", title: "没正文的" },
+        { id: "bad-2", title: "超长", text: "长".repeat(2001) },
+        { id: "good-1", title: "好样本", text: "灯火一盏一盏灭下去，他数着自己的脚步声。", createdAtMs: 1 },
+      ],
+    });
+
+    const pack = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    expect(pack.writingRulesContext.styleExemplars.map((item) => item.title)).toEqual(["好样本"]);
+
+    const context = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
+    const prompt = renderFastDraftPromptText(context);
+    expect(prompt).toContain("灯火一盏一盏灭下去");
+    expect(prompt).not.toContain("没正文的");
+  });
+
+  it("注入预算：单条截断 800 字、样本区总量封顶 1600 字（正文 prompt 同步有界）", async () => {
+    const projectDir = await createSoulSteelFixture();
+    await writeJson(projectDir, "story/writing-rules.json", {
+      version: "v0",
+      proseStyle: [],
+      genreRequirements: [],
+      suspenseRules: [],
+      payoffRules: [],
+      reversalRules: [],
+      readerExperienceRules: [],
+      forbiddenContent: [],
+      doNotDo: [],
+      styleExemplars: [
+        { id: "ex-1", title: "样本一", text: "一".repeat(900), createdAtMs: 1 },
+        { id: "ex-2", title: "样本二", text: "二".repeat(900), createdAtMs: 2 },
+        { id: "ex-3", title: "样本三", text: "三".repeat(900), createdAtMs: 3 },
+      ],
+    });
+
+    const pack = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    const items = pack.writingRulesContext.styleExemplars;
+    expect(items.map((item) => item.title)).toEqual(["样本一", "样本二"]); // 800+800 后预算耗尽，第三条整条不进
+    expect(items[0]?.text).toHaveLength(800);
+    expect(items[1]?.text).toHaveLength(800);
+    expect(items.reduce((sum, item) => sum + item.text.length, 0)).toBeLessThanOrEqual(1600);
+
+    const context = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
+    const prompt = renderFastDraftPromptText(context);
+    expect(prompt).toContain("样本一");
+    expect(prompt).toContain("样本二");
+    expect(prompt).not.toContain("样本三");
+  });
+
   it("uses the character directory id when legacy state files omit characterId", async () => {
     const projectDir = await createSoulSteelFixture();
     const characterId = toSafeCharacterId("林序");

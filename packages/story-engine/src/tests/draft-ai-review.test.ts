@@ -199,6 +199,7 @@ function contextPackFixture(): WritingContextPack {
       forbiddenContent: ["不要提前解释魂钢来源"],
       doNotDo: ["不要写成设定说明书"],
       readerExperienceRules: ["保持压迫感"],
+      styleExemplars: [],
     },
     hardConstraints: ["不要提前揭开隐藏真相"],
     sourceTrace: [],

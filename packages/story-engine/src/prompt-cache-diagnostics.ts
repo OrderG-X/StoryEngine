@@ -166,6 +166,33 @@ function renderWritingContextHardConstraints(content: unknown): readonly string[
     out.push("## 作者自定写作规矩（务必遵守）", customNotes.trim(), "");
   }
 
+  // 作者文风样本（styleExemplars·正向锚）：与 customNotes 同样提到 prompt 顶层人类可读处——
+  // 风格样本赢过风格描述；文案必须同时钉住「模仿风格」与「不得照抄内容/情节/名物」两头，
+  // 防模型把样本里的具体情节名物搬进正文。
+  const styleExemplarsRaw = typeof writingRulesContext === "object" && writingRulesContext !== null
+    ? (writingRulesContext as { readonly styleExemplars?: unknown }).styleExemplars
+    : undefined;
+  const styleExemplars = Array.isArray(styleExemplarsRaw)
+    ? styleExemplarsRaw.filter((item): item is { readonly title: string; readonly text: string; readonly note?: string } =>
+      typeof item === "object" && item !== null
+      && typeof (item as { readonly title?: unknown }).title === "string"
+      && (item as { readonly title: string }).title.trim().length > 0
+      && typeof (item as { readonly text?: unknown }).text === "string"
+      && (item as { readonly text: string }).text.trim().length > 0)
+    : [];
+  if (styleExemplars.length > 0) {
+    out.push(
+      "## 作者文风样本（模仿风格·不得照抄内容）",
+      "以下是作者文风样本：模仿其句法节奏、用词偏好与叙事温度；不得照抄样本内容、情节或具体名物。",
+      ...styleExemplars.flatMap((item, index) => [
+        `### 样本${index + 1} · ${item.title.trim()}`,
+        ...(typeof item.note === "string" && item.note.trim() ? [`（注：${item.note.trim()}）`] : []),
+        item.text.trim(),
+        "",
+      ]),
+    );
+  }
+
   return out;
 }
 

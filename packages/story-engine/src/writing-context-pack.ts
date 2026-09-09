@@ -2,6 +2,8 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { selectEffectiveFacts } from "./fact-selection.js";
 import { selectRelevant } from "./relevance-selection.js";
+import { buildStyleExemplarPromptItems, normalizeStyleExemplars } from "./style-exemplars.js";
+import type { StyleExemplarPromptItem } from "./style-exemplars.js";
 import {
   readArcGoalPool,
   readAssetLedger,
@@ -156,6 +158,8 @@ export interface WritingContextPack {
     readonly readerExperienceRules: readonly string[];
     /** 用户自定义的全局写作规矩（自由 Markdown）；每次生成正文都喂进 prompt。受控破例⑧。 */
     readonly customNotes?: string;
+    /** 作者文风样本（正向锚）：已按注入预算截断（单条/总量），渲染进正文 prompt；id/时间戳不喂模型。 */
+    readonly styleExemplars: readonly StyleExemplarPromptItem[];
   };
   readonly hardConstraints: readonly string[];
   readonly sourceTrace: readonly WritingContextSourceTrace[];
@@ -383,6 +387,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       doNotDo: writingRules?.doNotDo ?? [],
       readerExperienceRules: writingRules?.readerExperienceRules ?? [],
       ...(writingRules?.customNotes ? { customNotes: writingRules.customNotes } : {}),
+      styleExemplars: buildStyleExemplarPromptItems(normalizeStyleExemplars(writingRules?.styleExemplars).exemplars),
     },
     hardConstraints: buildHardConstraints({
       location: mainLocation?.name,

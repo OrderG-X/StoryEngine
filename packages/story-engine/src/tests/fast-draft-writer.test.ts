@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "../context-gateway.js";
-import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "../fast-draft-writer.js";
+import { runFastDraft, resolveDraftMaxOutputTokens, persistFastDraftBody, type WriterClient } from "../fast-draft-writer.js";
 import { buildPromptFingerprint, findFirstPromptDifference, renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
 import { createStoryProject } from "../project-store.js";
 
@@ -734,6 +734,48 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.passed).toBe(true);
+  });
+
+  // 「先 persist:false 出候选、选出优胜再落盘」的写盘通道：与 runFastDraft persist:true 同路径同标题行格式。
+  it("persistFastDraftBody writes the canonical draft file (same path + heading format as persist:true)", async () => {
+    const projectDir = await createFixtureProject();
+
+    const draftPath = await persistFastDraftBody({
+      projectDir,
+      chapter: 2,
+      title: "雪夜推门",
+      draftBody: "Guo Xu 推开门，雪光照进来。\n",
+    });
+
+    expect(draftPath).toBe(join(projectDir, "drafts", "fast", "chapter-0002.md"));
+    await expect(readFile(draftPath, "utf-8")).resolves.toBe(
+      "# 雪夜推门\n\nGuo Xu 推开门，雪光照进来。\n",
+    );
+  });
+
+  it("runFastDraft persist:false → persistFastDraftBody round-trip matches the persist:true file bytes", async () => {
+    const projectDir = await createFixtureProject();
+    const body = "Guo Xu 推开门，雪光照进来。";
+    const writerClient: WriterClient = {
+      generateDraft: vi.fn(async () => ({ title: "候选一版", content: body })),
+    };
+
+    const candidate = await runFastDraft({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "再来一版。",
+      writerClient,
+      persist: false,
+    });
+    expect(candidate.draftBody).toBe(body);
+
+    const draftPath = await persistFastDraftBody({
+      projectDir,
+      chapter: 1,
+      title: candidate.title ?? "第1章",
+      draftBody: candidate.draftBody!,
+    });
+    await expect(readFile(draftPath, "utf-8")).resolves.toBe(`# 候选一版\n\n${body}\n`);
   });
 });
 

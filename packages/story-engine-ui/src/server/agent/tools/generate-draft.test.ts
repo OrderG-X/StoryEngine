@@ -18,19 +18,26 @@ import { makeWriterRankContext } from "../context-budget/rank-writer-context.js"
 import { buildProjectRequestContext } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
+  aiFlavorWeightedScore,
   buildAiFlavorInfo,
   buildAiFlavorWarning,
   buildAutoDeAiNote,
+  buildCandidateSummaryLine,
   buildDraftLengthInfo,
   buildDraftLengthWarning,
   buildNoWriteIntentBlockedOutput,
   buildSequencingBlockedOutput,
+  DRAFT_CANDIDATE_SCORE_WEIGHTS,
+  DRAFT_CANDIDATE_TEMPERATURE_OFFSETS,
   generateDraftTool,
   isChapterCommitted,
   pickAutoDeAiTargets,
   positiveOrUndefined,
+  rankDraftCandidates,
   readDraftBodyWithRetry,
   runGenerateDraftToolLogic,
+  scoreDraftCandidate,
+  type DraftCandidateScoreInput,
 } from "./generate-draft.js";
 
 describe("positiveOrUndefined（模型把 0 当『默认/不限』用 → 归一成 undefined，让 ?? 默认 兜底）", () => {
@@ -974,6 +981,400 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
     } finally {
       spyWriter.mockRestore();
       spyResolve.mockRestore();
+      spyStream.mockRestore();
+    }
+  });
+});
+
+// 第四层：多候选采样防坍缩——确定性评分器（纯函数）+ 采样编排集成。
+// mock writer 返回不同质量候选，验证：选优正确、落选理由一句人话、只有优胜者落盘、
+// 单候选失败不拖死、全失败 ok:false 诚实、candidates=1 零行为变化、优胜稿照常走 autoDeAi 闭环。
+describe("多候选确定性评分器（纯函数，权重全透明）", () => {
+  function candidateInput(overrides: Partial<DraftCandidateScoreInput> & { index: number }): DraftCandidateScoreInput {
+    return {
+      eligible: true,
+      aiFlavorCounts: { high: 0, medium: 0, low: 0 },
+      belowLowerBound: false,
+      actualLength: 1800,
+      lowerBound: 1530,
+      missingBeatCount: 0,
+      ...overrides,
+    };
+  }
+
+  it("scoreDraftCandidate：100 起扣——漏要点 -50/条、低于下限 -25、AI 腔计权 -10/分，可为负", () => {
+    expect(DRAFT_CANDIDATE_SCORE_WEIGHTS).toEqual({ perMissingBeat: 50, belowLowerBound: 25, perAiFlavorPoint: 10 });
+    expect(scoreDraftCandidate(candidateInput({ index: 0 }))).toBe(100);
+    expect(scoreDraftCandidate(candidateInput({
+      index: 0,
+      missingBeatCount: 1,
+      belowLowerBound: true,
+      aiFlavorCounts: { high: 2, medium: 1, low: 5 }, // low 不计：计权 2×3+1×1=7
+    }))).toBe(100 - 50 - 25 - 70);
+  });
+
+  it("aiFlavorWeightedScore：high×3 + medium×1，low 不计", () => {
+    expect(aiFlavorWeightedScore({ high: 2, medium: 3, low: 9 })).toBe(9);
+    expect(aiFlavorWeightedScore({ high: 0, medium: 0, low: 0 })).toBe(0);
+  });
+
+  it("AI 腔少者胜：落选理由一句人话（AI 腔 2 处 > 优胜者 0 处），逐候选得分进报告", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, aiFlavorCounts: { high: 1, medium: 1, low: 0 } }), // 计权 4 → 60 分
+      candidateInput({ index: 1 }),                                                 // 100 分
+    ]);
+    expect(ranked.chosenIndex).toBe(1);
+    expect(ranked.entries).toHaveLength(2);
+    expect(ranked.entries[0]).toMatchObject({
+      index: 1, chosen: false, score: 60,
+      aiFlavorCounts: { high: 1, medium: 1, low: 0 },
+      reason: "AI 腔 2 处 > 优胜者 0 处",
+    });
+    expect(ranked.entries[1]).toMatchObject({ index: 2, chosen: true, score: 100 });
+    expect(ranked.entries[1].reason).toContain("综合评分最高（100 分）");
+    expect(ranked.entries[1].reason).toContain("要点全中");
+  });
+
+  it("漏必命中要点比 AI 腔更重：干净但漏要点的候选输给带 1 处 high 的达标候选（内容硬约束优先）", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, missingBeatCount: 1 }),                            // 50 分
+      candidateInput({ index: 1, aiFlavorCounts: { high: 1, medium: 0, low: 0 } }), // 70 分
+    ]);
+    expect(ranked.chosenIndex).toBe(1);
+    expect(ranked.entries[0].reason).toBe("必命中要点漏 1 条 > 优胜者 0 条");
+  });
+
+  it("低于字数下限输给达标者：理由带实际字数/下限", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, belowLowerBound: true, actualLength: 200 }), // 75 分
+      candidateInput({ index: 1 }),                                           // 100 分
+    ]);
+    expect(ranked.chosenIndex).toBe(1);
+    expect(ranked.entries[0].reason).toBe("低于字数下限（实际200字/下限1530字），优胜者达标");
+  });
+
+  it("同分 → 取序号靠前者，落选理由讲清 tie-break（无随机、无模型偏好）", () => {
+    const ranked = rankDraftCandidates([candidateInput({ index: 0 }), candidateInput({ index: 1 })]);
+    expect(ranked.chosenIndex).toBe(0);
+    expect(ranked.entries[0].chosen).toBe(true);
+    expect(ranked.entries[1].reason).toBe("与优胜者同分（100 分），按候选顺序取序号靠前者");
+  });
+
+  it("AI 腔处数相同但 high 档更多 → 计权分出胜负，理由讲严重度而非处数", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, aiFlavorCounts: { high: 1, medium: 0, low: 0 } }), // 计权 3 → 70 分
+      candidateInput({ index: 1, aiFlavorCounts: { high: 0, medium: 1, low: 0 } }), // 计权 1 → 90 分
+    ]);
+    expect(ranked.chosenIndex).toBe(1);
+    expect(ranked.entries[0].reason).toBe("AI 腔同为 1 处但 high 档更多（high 1 处 > 优胜者 0 处）");
+  });
+
+  it("eligible=false 的候选永远不得中选（哪怕其余候选全都更差）", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, eligible: false, failureReason: "生成失败：模型请求失败：500" }),
+      candidateInput({ index: 1, missingBeatCount: 3, belowLowerBound: true, aiFlavorCounts: { high: 5, medium: 0, low: 0 } }),
+    ]);
+    expect(ranked.chosenIndex).toBe(1); // 再差也是唯一合格候选
+    expect(ranked.entries[0]).toMatchObject({ chosen: false, reason: "生成失败：模型请求失败：500" });
+    expect(ranked.entries[0].score).toBeUndefined(); // 失败候选不参与评分
+  });
+
+  it("全部不合格 → chosenIndex 缺省，失败原因逐候选如实列出", () => {
+    const ranked = rankDraftCandidates([
+      candidateInput({ index: 0, eligible: false, failureReason: "未通过引擎校验（空正文）" }),
+      candidateInput({ index: 1, eligible: false, failureReason: "生成失败：模型请求超时" }),
+    ]);
+    expect(ranked.chosenIndex).toBeUndefined();
+    expect(ranked.entries.map((entry) => entry.chosen)).toEqual([false, false]);
+    expect(ranked.entries.map((entry) => entry.reason)).toEqual([
+      "未通过引擎校验（空正文）",
+      "生成失败：模型请求超时",
+    ]);
+  });
+
+  it("buildCandidateSummaryLine：优点逐条核实——AI 腔不是最少就绝不说「最少」", () => {
+    const all = [
+      candidateInput({ index: 0 }),                                                    // 无 AI 腔
+      candidateInput({ index: 1, aiFlavorCounts: { high: 0, medium: 2, low: 0 } }),    // 优胜但 AI 腔 2 处
+    ];
+    const line = buildCandidateSummaryLine(2, all[1], all);
+    expect(line).toContain("已生成 2 个候选并选出第 2 个");
+    expect(line).toContain("要点全中、字数达标");
+    expect(line).not.toContain("AI 腔最少"); // 另一个候选更干净——夸口就是谎报
+    expect(line).toContain("其余落选原因见 candidatesReport");
+  });
+
+  it("buildCandidateSummaryLine：无 AI 腔命中直说；全胜选手可说「AI 腔最少」；无优点可讲时退回「综合评分最高」", () => {
+    const clean = candidateInput({ index: 0 });
+    expect(buildCandidateSummaryLine(2, clean, [clean, candidateInput({ index: 1, aiFlavorCounts: { high: 1, medium: 0, low: 0 } })]))
+      .toContain("无 AI 腔命中");
+    const flavoredWinner = candidateInput({ index: 0, aiFlavorCounts: { high: 0, medium: 1, low: 0 } });
+    const moreFlavored = candidateInput({ index: 1, aiFlavorCounts: { high: 2, medium: 0, low: 0 } });
+    expect(buildCandidateSummaryLine(2, flavoredWinner, [flavoredWinner, moreFlavored])).toContain("AI 腔最少（1 处）");
+    const poor = candidateInput({ index: 0, missingBeatCount: 1, belowLowerBound: true, aiFlavorCounts: { high: 1, medium: 0, low: 0 } });
+    const poorButCleaner = candidateInput({ index: 1, missingBeatCount: 2, belowLowerBound: true });
+    expect(buildCandidateSummaryLine(2, poor, [poor, poorButCleaner])).toContain("（综合评分最高）");
+  });
+
+  it("temperature 错开档位常量：基准 / +0.15 / +0.3（第 1 个=基准防 N 版同分布）", () => {
+    expect(DRAFT_CANDIDATE_TEMPERATURE_OFFSETS).toEqual([0, 0.15, 0.3]);
+  });
+});
+
+describe("generate_draft 多候选采样集成（mock writer 返回不同质量候选）", () => {
+  // 「殊不知」high +「深吸一口气」medium 的确定性硬命中句（与回检测试同稿）。
+  const FLAVOR_TAIL = "林远深吸一口气，压下怒火。殊不知，门后的真相正在等他。";
+  const REWRITE_BOTH = JSON.stringify({ rewrites: [
+    { text: "林远深吸一口气，压下怒火。", afterText: "林远攥紧拳，把火压下去。" },
+    { text: "殊不知，门后的真相正在等他。", afterText: "门后的真相正在等他。" },
+  ] });
+
+  /** 落进新项目写作规则目标区间（1530–2070 字）的正文（沿用既有达标测试的构造法）。 */
+  function inRangeBody(mainCharacterName: string): string {
+    const para = `${mainCharacterName}在走廊尽头停下脚步，反复掂量手里这份账册的分量，心里盘算着接下来每一步该怎么走才不至于落人话柄。`;
+    const repeats = Math.ceil(1700 / countDraftChineseCharacters(para));
+    return Array.from({ length: repeats }, () => para).join("\n\n");
+  }
+
+  it("3 候选不同质量 → 干净达标稿中选、落选理由正确、只有优胜者落盘、summary 一行讲清", async () => {
+    const projectDir = await makeProject("多候选选优", "林远");
+    const clean = inRangeBody("林远");
+    const flavored = `${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`;
+    const short = "林远走进了房间。";
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(flavored), // 缺位序号回退用，本例三个候选都显式注入
+      candidates: 3,
+      candidateWriterClients: [mockWriterClient(flavored), mockWriterClient(clean), mockWriterClient(short)],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.draftPath).toBe(defaultDraftPath(projectDir, 1));
+    // 只有优胜者（第 2 个）落盘，格式与 candidates=1 完全一致（# 标题行 + 正文）
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    expect(out.draftBody).toBe(clean);
+    // 逐候选透明报告：得分/AI 腔计数/字数/中选/原因
+    expect(out.candidatesReport).toHaveLength(3);
+    expect(out.candidatesReport?.[0]).toMatchObject({
+      index: 1, chosen: false, score: 60,
+      aiFlavorCounts: { high: 1, medium: 1, low: 0 },
+      reason: "AI 腔 2 处 > 优胜者 0 处",
+    });
+    expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true, score: 100 });
+    expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: false, score: 75 });
+    expect(out.candidatesReport?.[2].reason).toContain("低于字数下限");
+    // summary 一行：选了第 2 个 + 核实过的优点
+    expect(out.summary).toContain("已生成 3 个候选并选出第 2 个（要点全中、字数达标、无 AI 腔命中），其余落选原因见 candidatesReport。");
+    // 优胜稿干净 → 不带 AI 腔 ⚠ 噪音
+    expect(out.aiFlavor).toEqual({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false });
+    expect(out.summary).not.toContain("疑似 AI 腔");
+  });
+
+  it("要点保真优先于文风：干净但漏要点的候选输给带 AI 腔但要点全中的候选，summary 不夸「AI 腔最少」", async () => {
+    const projectDir = await makeProject("多候选要点优先", "林远");
+    const cleanMissingBeat = inRangeBody("林远"); // 不含「第三块砖」
+    const flavoredHitsBeat = `${inRangeBody("林远")}\n\n林远撬开第三块砖后面的暗格。${FLAVOR_TAIL}`;
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["第三块砖"],
+      writerClient: mockWriterClient(cleanMissingBeat),
+      candidates: 2,
+      candidateWriterClients: [mockWriterClient(cleanMissingBeat), mockWriterClient(flavoredHitsBeat)],
+      autoDeAi: false, // 只标注不改写，聚焦选优断言
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.candidatesReport?.[0]).toMatchObject({
+      index: 1, chosen: false, score: 50,
+      reason: "必命中要点漏 1 条 > 优胜者 0 条",
+    });
+    expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true, score: 60 });
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("第三块砖");
+    // 优胜稿 AI 腔比落选者多——summary 绝不夸「AI 腔最少」
+    expect(out.summary).toContain("已生成 2 个候选并选出第 2 个（要点全中、字数达标）");
+    expect(out.summary).not.toContain("AI 腔最少");
+  });
+
+  it("单候选失败不拖死全局：中间候选模型 500 → 如实记 failed，优胜者从其余候选中选出", async () => {
+    const projectDir = await makeProject("多候选单失败", "林远");
+    const clean = inRangeBody("林远");
+    const throwingClient: WriterClient = {
+      async generateDraft() {
+        throw new Error("模型请求失败：500 Internal server error");
+      },
+    };
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`),
+      candidates: 3,
+      candidateWriterClients: [
+        mockWriterClient(`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`),
+        throwingClient,
+        mockWriterClient(clean),
+      ],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.candidatesReport).toHaveLength(3);
+    expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: false });
+    expect(out.candidatesReport?.[1].score).toBeUndefined();
+    expect(out.candidatesReport?.[1].reason).toContain("未通过引擎校验");
+    expect(out.candidatesReport?.[1].reason).toContain("500");
+    expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: true });
+    expect(out.summary).toContain("已生成 3 个候选并选出第 3 个");
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+  });
+
+  it("全部候选失败 → ok:false 诚实回报：逐候选列明原因、不落盘、不假装出稿成功", async () => {
+    const projectDir = await makeProject("多候选全失败", "林远");
+    const badClient = mockWriterClient('{"tool":"call","args":{}}'); // JSON 伪正文 → 引擎校验拒绝
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: badClient,
+      candidates: 3,
+      candidateWriterClients: [badClient, badClient, badClient],
+    });
+
+    expect(out.ok).toBe(false);
+    expect(out.issues.length).toBeGreaterThan(0);
+    expect(out.summary).toContain("已生成 3 个候选，但全部未通过或生成失败，未写入工作稿");
+    expect(out.summary).toContain("各候选情况见 candidatesReport");
+    expect(out.candidatesReport).toHaveLength(3);
+    expect(out.candidatesReport?.map((entry) => entry.chosen)).toEqual([false, false, false]);
+    expect(out.candidatesReport?.every((entry) => entry.reason.includes("未通过引擎校验"))).toBe(true);
+    // 失败也透明：draftLength 带出（首个失败报告的），且绝不写盘
+    expect(out.draftLength).toBeDefined();
+    await expect(readFile(defaultDraftPath(projectDir, 1), "utf-8")).rejects.toThrow();
+  });
+
+  it("优胜稿照常走 autoDeAi 闭环：带腔优胜稿中选 → 自动去味落盘 + 报告保留初检计数", async () => {
+    const projectDir = await makeProject("多候选去味闭环", "林远");
+    const cleanMissingBeat = inRangeBody("林远"); // 漏「第三块砖」→ 50 分
+    const flavoredHitsBeat = `${inRangeBody("林远")}\n\n林远撬开第三块砖后面的暗格。${FLAVOR_TAIL}`; // 60 分 → 优胜
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      mustHitBeats: ["第三块砖"],
+      writerClient: mockWriterClient(cleanMissingBeat),
+      candidates: 2,
+      candidateWriterClients: [mockWriterClient(cleanMissingBeat), mockWriterClient(flavoredHitsBeat)],
+      deAiCallModel: async () => REWRITE_BOTH,
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.candidatesReport?.[1]).toMatchObject({
+      index: 2, chosen: true,
+      aiFlavorCounts: { high: 1, medium: 1, low: 0 }, // candidatesReport 保留初检计数
+    });
+    // 与 candidates=1 完全一致的后续链：autoDeAi 改了优胜稿并复检干净
+    expect(out.autoDeAi).toMatchObject({ attempted: true, fixedCount: 2, remainingHighMedium: 0 });
+    expect(out.summary).toContain("已自动去 AI 味修掉 2 处，复检干净。");
+    expect(typeof out.snapshotId).toBe("string"); // 去味覆盖落盘前建了快照
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("攥紧拳");
+    expect(onDisk).not.toContain("深吸一口气");
+    expect(onDisk).not.toContain("殊不知");
+  });
+
+  it("candidates=1（显式）→ 单次成稿、无 candidatesReport，与默认零差异", async () => {
+    const projectDir = await makeProject("多候选显式1", "林远");
+    const client = mockWriterClient(longBody("林远"));
+    const spy = vi.spyOn(client, "generateDraft");
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: client,
+      candidates: 1,
+    });
+
+    expect(out.ok).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1); // 只调一次模型
+    expect("candidatesReport" in out).toBe(false);
+    expect(out.summary).not.toContain("候选");
+  });
+
+  it("candidateWriterClients 缺位的序号回退 writerClient（防御：少注入不崩、不静默换规则）", async () => {
+    const projectDir = await makeProject("多候选回退", "林远");
+    const clean = inRangeBody("林远");
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(clean), // 序号 2 缺位 → 回退用它
+      candidates: 2,
+      candidateWriterClients: [mockWriterClient(`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`)],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.candidatesReport).toHaveLength(2);
+    expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+  });
+
+  it("execute 端到端接线：candidates:3 → 3 个 writer 的 temperature 依次错开（基准/+0.15/封顶 1.0），不走单候选 writer、不接流式 sink", async () => {
+    const projectDir = await makeProject("多候选接线", "林远");
+    const clean = inRangeBody("林远");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel").mockResolvedValue({
+      provider: { id: "p", baseUrl: "http://127.0.0.1:1", apiKeyEnv: "TEST_KEY" },
+      profile: { id: "prof", provider: "p", model: "test-model", temperature: 0.8 },
+      apiKey: "k",
+      thinking: false,
+      thinkingDialect: "none",
+    } as unknown as Awaited<ReturnType<typeof llmClientModule.resolveConfiguredChatModel>>);
+    const seenTemperatures: (number | undefined)[] = [];
+    const bodies = [`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`, clean, "林远走进了房间。"];
+    let callIndex = 0;
+    const spyCreate = vi.spyOn(llmClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
+      ((configured: { profile: { temperature?: number } }, onDelta?: unknown) => {
+        seenTemperatures.push(configured.profile.temperature);
+        expect(onDelta).toBeUndefined(); // 多候选采样绝不逐字流进编辑器（N 版会串稿）
+        const body = bodies[callIndex];
+        callIndex += 1;
+        return { async generateDraft() { return { title: "第1章", content: body }; } };
+      }) as unknown as typeof llmClientModule.createOpenAICompatibleWriterClient,
+    );
+    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient");
+    const spyStream = vi.spyOn(llmClientModule, "streamChatModelToText");
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文，多写几版挑一挑。"),
+      } as unknown as ToolExecutionContext;
+      const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
+        ok: boolean; summary: string; candidatesReport?: readonly { index: number; chosen: boolean }[];
+      }>;
+      const out = await execute({ candidates: 3 }, context);
+
+      expect(out.ok).toBe(true);
+      // 基准 0.8 / +0.15 / +0.3→封顶 1.0（部分 provider temperature 上限为 1）
+      expect(seenTemperatures).toEqual([0.8, 0.95, 1.0]);
+      expect(spyResolve).toHaveBeenCalledWith("fastDraft");
+      expect(spyWriter).not.toHaveBeenCalled(); // 多候选不走单候选 writer 通道
+      expect(spyStream).not.toHaveBeenCalled(); // 优胜稿干净 → autoDeAi 不触发改写
+      expect(out.candidatesReport).toHaveLength(3);
+      expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true });
+      expect(out.summary).toContain("已生成 3 个候选并选出第 2 个");
+      const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+      expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+    } finally {
+      spyResolve.mockRestore();
+      spyCreate.mockRestore();
+      spyWriter.mockRestore();
       spyStream.mockRestore();
     }
   });

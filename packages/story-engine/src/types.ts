@@ -129,6 +129,15 @@ export interface FirstChapterSetup {
   readonly conflict?: string;
 }
 
+/** 作者文风样本（正向锚）：喂模型模仿句法节奏/用词偏好/叙事温度，不得照抄内容、情节或具体名物。 */
+export interface StyleExemplar {
+  readonly id: string;
+  readonly title: string;
+  readonly text: string;
+  readonly note?: string;
+  readonly createdAtMs: number;
+}
+
 export interface WritingRules {
   readonly version: "v0";
   readonly narrativePerspective?: string;
@@ -150,6 +159,8 @@ export interface WritingRules {
   readonly antiAiPatterns?: readonly string[];
   /** 用户自定义的全局写作规矩（自由 Markdown，短、每次必喂模型）。受控破例⑧。 */
   readonly customNotes?: string;
+  /** 作者文风样本（正向锚，每次写正文必喂）；最多 5 条、单条 text ≤2000 字（限额由 style-exemplars.ts 归一/管理工具把关）。 */
+  readonly styleExemplars?: readonly StyleExemplar[];
 }
 
 export interface CharacterBibleEntry {

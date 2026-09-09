@@ -117,6 +117,7 @@ describe("draft revision", () => {
           forbiddenContent: ["不要设定说明书"],
           doNotDo: ["不要突然开挂"],
           readerExperienceRules: ["保留追读点"],
+          styleExemplars: [],
         },
         hardConstraints: ["不要提前揭开隐藏真相"],
         sourceTrace: [],

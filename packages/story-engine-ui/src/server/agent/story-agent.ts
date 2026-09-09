@@ -41,6 +41,7 @@ import { setForeshadowingImportanceTool } from "./tools/set-foreshadowing-import
 import { resolveThreadTool } from "./tools/resolve-thread.js";
 import { cleanLegacyThreadsTool } from "./tools/legacy-thread-cleanup.js";
 import { groupRelatedLeadsTool } from "./tools/group-related-leads.js";
+import { manageStyleExemplarsTool } from "./tools/manage-style-exemplars.js";
 import { undoLastChangeTool } from "./tools/undo-last-change.js";
 
 export const STORY_AGENT_ID = "story-writing-agent";
@@ -89,6 +90,9 @@ export function buildInstructions(): string {
       "与 generate_matrix_enrichment 的分工：本工具负责『从无到有把人和关系铺出来（roster 候选 + 关系）』，generate_matrix_enrichment 负责『给已有的角色和关系再补叙事岗位/情感债等厚字段』。",
     "- generate_writing_rules_enrichment：基于本书题材与现有写作规则，整理出可识别的文风特点、提炼一组避免机器腔的可执行写作提醒（禁用 / 风险 / 鼓励，带严重度），写入资料、可一键撤销。" +
       "当用户说『补全/丰富写作规则 / 把写作规则做厚 / 量化本书风格 / 给本书打个风格指纹 / 帮我列一份反 AI 规则 / 查查哪些写法有 AI 味』时调用；只据本书既定风格补全，不会凭空发挥。",
+    "- manage_style_exemplars：管理本书的「作者文风样本」（add 存 / list 看 / update 改 / remove 删；最多 5 条、单条正文 ≤2000 字，超限会如实拒绝）。" +
+      "用户给出自己写过的满意段落、说『以后照这个感觉/节奏写、学我的文风、把这段当范文』时用 add 存进；" +
+      "存进后每章写正文都会当风格锚喂给模型——模仿句法节奏与用词偏好，但不照抄样本内容。写前自动快照、可一键撤销；改/删前先 action=list 看现有样本。",
     "- generate_alias_table：从现有角色资料生成/合并中文角色别名表（如全名、名、唯一姓、通用职务称谓），供后续在场检测和相关角色筛选使用；" +
       "以保守规则为主、默认再调 GLM 提议代称（经校验才入表，LLM 不可用自动降级为仅规则），只读 character-bible、不扫正文、不臆造；再生成会保留用户手改并如实回报同姓冲突与 merge 结果。",
     "- generate_draft：为某章生成一版正文并写入工作稿（草稿待保存，不入库；正文过短等会被引擎拒绝并如实回报）。缺章号时默认用户当前所在章。用户给了本章必须落实的具体要点（具体名物/数字/编号/关键动作）就逐条原样填进 mustHitBeats（别压成一句话），引擎会让模型逐条落实、并在出稿后核对哪条漏了。",
@@ -292,6 +296,7 @@ export async function getStoryAgent(): Promise<Agent> {
       resolve_thread: resolveThreadTool,
       clean_legacy_threads: cleanLegacyThreadsTool,
       group_related_leads: groupRelatedLeadsTool,
+      manage_style_exemplars: manageStyleExemplarsTool,
       undo_last_change: undoLastChangeTool,
       web_search: webSearchTool,
     },
