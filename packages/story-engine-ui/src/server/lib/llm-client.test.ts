@@ -24,7 +24,7 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, getOpencodeSessionId, globalOpencodeSessionPath, isOpencodeHost, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
 
 const { loadModelSettingsV0 } = storyEngineMocks;
 
@@ -676,5 +676,301 @@ describe("resolveConfiguredChatModel 合成 customHeaders（从设置文件直�
 
     const resolved = await resolveConfiguredChatModel("qualityCheck");
     expect(resolved.customHeaders).toEqual({ "x-relay-tag": "relay-1" });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// always-on 思考模型自适应（真机实锤 glm-5.3-flash：发 disabled 必 400「cannot be disabled」）
+// ---------------------------------------------------------------------------
+
+describe("isThinkingCannotBeDisabledError（「思考不可关」400 特征判定·宽松覆盖文案变体）", () => {
+  it("真机原文（glm-5.3-flash @ opencode-go）→ true：「[1210] cannot be disabled; please use low, high, or max」（不带 thinking 字样也认）", () => {
+    const raw = JSON.stringify({ error: { message: "[1210] cannot be disabled; please use low, high, or max", code: 1210 } });
+    expect(isThinkingCannotBeDisabledError(400, raw)).toBe(true);
+  });
+
+  it("已知文案变体 → true（cannot/can not/can't、1210 码、中文「不可关闭」类）", () => {
+    expect(isThinkingCannotBeDisabledError(400, "thinking cannot be disabled for this model")).toBe(true);
+    expect(isThinkingCannotBeDisabledError(400, "reasoning can not be disabled")).toBe(true);
+    expect(isThinkingCannotBeDisabledError(400, "enable_thinking can't be disabled")).toBe(true);
+    expect(isThinkingCannotBeDisabledError(400, "{\"code\":1210,\"message\":\"thinking disabled not allowed\"}")).toBe(true);
+    expect(isThinkingCannotBeDisabledError(400, "该模型的思考不可关闭，请用 low/high/max")).toBe(true);
+  });
+
+  it("只认 400：500/401 即便文案命中也 false（不吞上游真故障）", () => {
+    expect(isThinkingCannotBeDisabledError(500, "[1210] cannot be disabled")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(401, "thinking cannot be disabled")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(200, "cannot be disabled")).toBe(false);
+  });
+
+  it("其他 400 一律 false：鉴权/余额/参数错/模型不存在/空文案，绝不吞错重试", () => {
+    expect(isThinkingCannotBeDisabledError(400, "invalid api key")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(400, "insufficient balance")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(400, "model not found: glm-5.3-flash")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(400, "invalid request: messages is required")).toBe(false);
+    expect(isThinkingCannotBeDisabledError(400, "")).toBe(false);
+  });
+});
+
+describe("model-capabilities 能力库（学习落盘 / 查询 / 坏文件保护）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-cap-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("能力键 = baseUrl host + model id（小写归一；路径/协议/大小写不影响）", () => {
+    expect(modelCapabilityKey("https://OpenRouter.AI/zen/go/v1", "GLM-5.3-Flash")).toBe("openrouter.ai::glm-5.3-flash");
+    expect(modelCapabilityKey("http://47.104.186.114:3000/v1", "m")).toBe("47.104.186.114::m");
+    expect(modelCapabilityKey("openrouter.ai", "m")).toBe("openrouter.ai::m"); // 裸 host（agent 路抠出来的）兼容
+  });
+
+  it("未学习 → false；learn 落盘（含 learnedAt）→ true；重复 learn 幂等仍只有一个键", async () => {
+    expect(await isAlwaysOnThinkingModel("https://api.example.com/v1", "glm-5.3-flash")).toBe(false);
+    await learnAlwaysOnThinkingModel("https://api.example.com/v1", "glm-5.3-flash");
+    expect(await isAlwaysOnThinkingModel("https://api.example.com/v1", "glm-5.3-flash")).toBe(true);
+
+    const onDisk = JSON.parse(await readFile(join(dir, "model-capabilities.json"), "utf-8")) as {
+      models: Record<string, { alwaysOnThinking?: boolean; learnedAt?: string }>;
+    };
+    expect(onDisk.models["api.example.com::glm-5.3-flash"]?.alwaysOnThinking).toBe(true);
+    expect(onDisk.models["api.example.com::glm-5.3-flash"]?.learnedAt).toBeTruthy();
+
+    await learnAlwaysOnThinkingModel("https://api.example.com/v1", "glm-5.3-flash");
+    const after = JSON.parse(await readFile(join(dir, "model-capabilities.json"), "utf-8")) as { models: Record<string, unknown> };
+    expect(Object.keys(after.models)).toHaveLength(1);
+  });
+
+  it("键按 host+model 隔离：换 host 或换 model 互不影响", async () => {
+    await learnAlwaysOnThinkingModel("https://a.example.com/v1", "m1");
+    expect(await isAlwaysOnThinkingModel("https://a.example.com/v1", "m1")).toBe(true);
+    expect(await isAlwaysOnThinkingModel("https://b.example.com/v1", "m1")).toBe(false);
+    expect(await isAlwaysOnThinkingModel("https://a.example.com/v1", "m2")).toBe(false);
+  });
+
+  it("坏 JSON：查询不崩按无记忆返回 false；learn 绝不拿空库覆盖坏文件（坏文件保护）", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const path = join(dir, "model-capabilities.json");
+    await writeFile(path, "{broken json", "utf-8");
+
+    expect(await isAlwaysOnThinkingModel("https://a.example.com/v1", "m")).toBe(false); // 不崩
+    await learnAlwaysOnThinkingModel("https://a.example.com/v1", "m");
+    expect(await readFile(path, "utf-8")).toBe("{broken json"); // 原样保留，未被覆盖
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("model-capabilities"));
+  });
+});
+
+describe("always-on 思考自适应（非流式 callOpenAICompatibleChatModel）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  const cannotDisabled400 = () =>
+    new Response(JSON.stringify({ error: { message: "[1210] cannot be disabled; please use low, high, or max" } }), { status: 400 });
+  const ok200 = (content: string) =>
+    new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-cap-nonstream-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function glmConfigured(thinking: boolean, dialect = "glm") {
+    return {
+      provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
+      profile: { id: "m", provider: "p", model: "glm-5.3-flash", temperature: 0.5 },
+      apiKey: "",
+      thinking,
+      thinkingDialect: dialect,
+    } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
+  }
+  function sentBody(spy: { mock: { calls: unknown[][] } }, call: number): Record<string, unknown> {
+    return JSON.parse((spy.mock.calls[call]?.[1] as RequestInit).body as string) as Record<string, unknown>;
+  }
+
+  it("关思考被 400「cannot be disabled」拒 → 省略思考参数重试成功 + warn 留痕 + 能力落盘", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(ok200("正文"));
+
+    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [{ role: "user", content: "x" }] });
+
+    expect(out.content).toBe("正文");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentBody(spy, 0).thinking).toEqual({ type: "disabled" }); // 首发按方言照常关
+    const retryBody = sentBody(spy, 1);
+    expect(retryBody.thinking).toBeUndefined(); // 重试整键省略，让模型用自身默认
+    expect(retryBody.enable_thinking).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cannot be disabled")); // 诚实留痕
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(true); // 已学习落盘
+  });
+
+  it("学会后第二次调用直接跳过 disabled 注入（不再付 400 学费，只发一次请求）", async () => {
+    await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(ok200("ok"));
+
+    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] });
+
+    expect(out.content).toBe("ok");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const body = sentBody(spy, 0);
+    expect(body.thinking).toBeUndefined();
+    expect(body.enable_thinking).toBeUndefined();
+  });
+
+  it("其他 400 → 不重试、原样抛「模型返回错误」、不学习", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "invalid request: messages malformed" } }), { status: 400 }));
+
+    await expect(callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] }))
+      .rejects.toThrow(/模型返回错误/);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
+  });
+
+  it("用户显式开思考 → 即便模型已学 always-on 也照发 enabled（手动配置优先，绝不硬编码省略）", async () => {
+    await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(ok200("ok"));
+
+    await callOpenAICompatibleChatModel({ configured: glmConfigured(true), messages: [] });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(sentBody(spy, 0).thinking).toEqual({ type: "enabled" });
+  });
+
+  it("qwen 方言关思考命中同样 400 → 重试省略 enable_thinking（方言无关的自适应）", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(ok200("ok"));
+
+    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false, "qwen"), messages: [] });
+
+    expect(out.content).toBe("ok");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentBody(spy, 0).enable_thinking).toBe(false); // 非流式 qwen 强制 false
+    expect(sentBody(spy, 1).enable_thinking).toBeUndefined();
+    expect(sentBody(spy, 1).thinking).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it("重试仍失败（400 还是 cannot be disabled）→ 错误原样抛、不学习（没确认的配方不记账）", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(cannotDisabled400());
+
+    await expect(callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] }))
+      .rejects.toThrow(/cannot be disabled/);
+    expect(spy).toHaveBeenCalledTimes(2); // 只重试一次，不循环
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
+  });
+});
+
+describe("always-on 思考自适应（流式 streamChatModelToText）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  const cannotDisabled400 = () =>
+    new Response(JSON.stringify({ error: { message: "[1210] cannot be disabled; please use low, high, or max" } }), { status: 400 });
+  function sseResponse(chunks: readonly string[]): globalThis.Response {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-cap-stream-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function glmConfigured(thinking: boolean) {
+    return {
+      provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
+      profile: { id: "m", provider: "p", model: "glm-5.3-flash" },
+      apiKey: "",
+      thinking,
+      thinkingDialect: "glm",
+    } as unknown as Parameters<typeof streamChatModelToText>[0]["configured"];
+  }
+  function sentBody(spy: { mock: { calls: unknown[][] } }, call: number): Record<string, unknown> {
+    return JSON.parse((spy.mock.calls[call]?.[1] as RequestInit).body as string) as Record<string, unknown>;
+  }
+
+  it("400「cannot be disabled」→ 省略思考参数重试 + 聚合重试后的 SSE 正文 + 能力落盘 + warn 留痕", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "甲" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "乙" } }] })}\n\n`,
+        "data: [DONE]\n\n",
+      ]));
+
+    const out = await streamChatModelToText({ configured: glmConfigured(false), messages: [] });
+
+    expect(out.content).toBe("甲乙");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentBody(spy, 0).thinking).toEqual({ type: "disabled" });
+    expect(sentBody(spy, 1).thinking).toBeUndefined();
+    expect(sentBody(spy, 1).stream).toBe(true); // 重试仍是流式
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cannot be disabled"));
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(true);
+  });
+
+  it("其他 400 → 不重试，原样抛「模型请求失败：400」", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("invalid api key", { status: 400 }));
+
+    await expect(streamChatModelToText({ configured: glmConfigured(false), messages: [] }))
+      .rejects.toThrow(/模型请求失败：400/);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
+  });
+
+  it("已学 always-on → 首发即不发 disabled（流式路同样豁免学费）", async () => {
+    await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+
+    await streamChatModelToText({ configured: glmConfigured(false), messages: [] });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(sentBody(spy, 0).thinking).toBeUndefined();
+    expect(sentBody(spy, 0).enable_thinking).toBeUndefined();
+  });
+
+  it("重试仍失败（500）→ 抛重试后的「模型请求失败：500」，不学习", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(new Response("Internal server error", { status: 500 }));
+
+    await expect(streamChatModelToText({ configured: glmConfigured(false), messages: [] }))
+      .rejects.toThrow(/模型请求失败：500/);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
   });
 });

@@ -3,8 +3,12 @@
 // makeAgentRequestFetch 单测：主对话 agent（经 AI SDK 走流式）出站请求的两步模型无关改造（R7/R8）。
 // 思考方言：glm→thinking:{type:enabled|disabled}、qwen→enable_thinking、none→整键不发；已显式设过不覆盖、非 JSON 原样放行。
 // 工具 schema：带 tools 时把 parameters 递归补全 type（满足 Kimi/Moonshot 的 MFJS）。
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { makeAgentRequestFetch } from "./model.js";
+import { isAlwaysOnThinkingModel, learnAlwaysOnThinkingModel } from "../lib/llm-client.js";
 
 /** 带 fetch 参数签名的 mock，便于读 mock.calls[0][1]（RequestInit）做断言。 */
 function fetchSpy(body = "{}") {
@@ -136,5 +140,120 @@ describe("makeAgentRequestFetch", () => {
     await f("http://x", { headers: { "x-keep": "1" }, body: "{}" } as RequestInit);
     const headers = new Headers((spy.mock.calls[0]?.[1] as RequestInit).headers);
     expect(headers.get("x-keep")).toBe("1");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// always-on 思考模型自适应（agent 路·第三注入点）：400「cannot be disabled」→ 省略思考参数重试 + 学习
+// ---------------------------------------------------------------------------
+
+describe("makeAgentRequestFetch always-on 思考自适应", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+  const cannotDisabled400 = () =>
+    new Response(JSON.stringify({ error: { message: "[1210] cannot be disabled; please use low, high, or max" } }), { status: 400 });
+  const chatBody = () => JSON.stringify({ messages: [{ role: "user", content: "x" }] });
+  function sentBodyAt(spy: ReturnType<typeof fetchSpy>, call: number): Record<string, unknown> {
+    const init = spy.mock.calls[call]?.[1] as RequestInit;
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-cap-agent-"));
+    process.env.SE_DATA_DIR = dir;
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("glm 方言关思考被 400 拒 → 省略思考参数重试成功（最终 200）+ warn 留痕 + 能力落盘", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    spy
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const f = makeAgentRequestFetch(false, "glm", "glm-5.3-flash", spy as unknown as typeof fetch);
+    const out = await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(out.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentBodyAt(spy, 0).thinking).toEqual({ type: "disabled" }); // 首发按方言注入
+    expect(sentBodyAt(spy, 1).thinking).toBeUndefined(); // 重试整键省略
+    expect(sentBodyAt(spy, 1).enable_thinking).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cannot be disabled"));
+    expect(await isAlwaysOnThinkingModel("https://gw.example.com/v1", "glm-5.3-flash")).toBe(true); // 以请求 URL 的 host 记账
+  });
+
+  it("已学 always-on → 注入阶段直接跳过（首发即无 thinking 键，不再付 400 学费）", async () => {
+    await learnAlwaysOnThinkingModel("https://gw.example.com/v1", "glm-5.3-flash");
+    const spy = fetchSpy();
+
+    const f = makeAgentRequestFetch(false, "glm", "glm-5.3-flash", spy as unknown as typeof fetch);
+    await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(sentBody(spy).thinking).toBeUndefined();
+    expect(sentBody(spy).enable_thinking).toBeUndefined();
+  });
+
+  it("其他 400 → 不重试：baseFetch 只调一次，原响应原样返回（含 body 仍可读）", async () => {
+    const spy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("invalid request: messages malformed", { status: 400 }));
+
+    const f = makeAgentRequestFetch(false, "glm", "glm-5.3-flash", spy as unknown as typeof fetch);
+    const out = await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(out.status).toBe(400);
+    expect(await out.text()).toContain("messages malformed"); // 原响应未被消费
+    expect(await isAlwaysOnThinkingModel("https://gw.example.com/v1", "glm-5.3-flash")).toBe(false);
+  });
+
+  it("用户显式开思考（thinking=true → enabled）→ 照发不误；即便 400 带 cannot be disabled 也不吞不重试", async () => {
+    await learnAlwaysOnThinkingModel("https://gw.example.com/v1", "glm-5.3-flash");
+    const spy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => cannotDisabled400());
+
+    const f = makeAgentRequestFetch(true, "glm", "glm-5.3-flash", spy as unknown as typeof fetch);
+    const out = await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(spy).toHaveBeenCalledTimes(1); // 没带「关思考」信号 → 无资格重试
+    expect(sentBodyAt(spy, 0).thinking).toEqual({ type: "enabled" }); // 手动配置优先
+    expect(out.status).toBe(400);
+  });
+
+  it("qwen 方言关思考（enable_thinking:false）命中 400 → 重试省略 enable_thinking（方言无关）", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const spy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    spy
+      .mockResolvedValueOnce(cannotDisabled400())
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const f = makeAgentRequestFetch(false, "qwen", "qwen3.7-plus", spy as unknown as typeof fetch);
+    const out = await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(out.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentBodyAt(spy, 0).enable_thinking).toBe(false);
+    expect(sentBodyAt(spy, 1).enable_thinking).toBeUndefined();
+    expect(sentBodyAt(spy, 1).thinking).toBeUndefined();
+  });
+
+  it("能力文件坏 JSON → 注入阶段不崩（按无记忆照常注入 disabled），坏文件不被覆盖", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { writeFile, readFile } = await import("node:fs/promises");
+    const path = join(dir, "model-capabilities.json");
+    await writeFile(path, "{broken json", "utf-8");
+    const spy = fetchSpy();
+
+    const f = makeAgentRequestFetch(false, "glm", "glm-5.3-flash", spy as unknown as typeof fetch);
+    await f("https://gw.example.com/v1/chat/completions", { body: chatBody() } as RequestInit);
+
+    expect(sentBody(spy).thinking).toEqual({ type: "disabled" }); // 不崩，按无记忆照常发
+    expect(await readFile(path, "utf-8")).toBe("{broken json"); // 未被覆盖
   });
 });

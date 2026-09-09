@@ -348,6 +348,174 @@ export async function buildProviderRequestHeaders(input: {
 }
 
 // ---------------------------------------------------------------------------
+// 模型能力自适应学习：always-on 思考模型（不可关思考）——不维护硬编码模型表
+// ---------------------------------------------------------------------------
+//
+// 真机实锤（glm-5.3-flash @ opencode-go）：always-thinking 模型，发 thinking:{type:"disabled"}
+// 上游直接 400「[1210] cannot be disabled; please use low, high, or max」。这类模型会越来越多，
+// 硬编码表永远滞后 → 自适应：认出这个特定 400 → 省略思考参数重试一次（让模型用自身默认）→
+// 重试成功即把「host+model 不可关思考」记进 ~/.story-engine/model-capabilities.json，之后直接
+// 跳过 disabled 注入、不再付 400 学费。**只认这一个错误**，其他 400 原样抛、绝不吞。
+
+export function globalModelCapabilitiesPath(): string {
+  return join(globalStoryEngineDir(), "model-capabilities.json");
+}
+
+export interface ModelCapabilityEntry {
+  readonly alwaysOnThinking?: boolean;
+  /** ISO 时间戳，纯诊断用。 */
+  readonly learnedAt?: string;
+}
+
+/**
+ * 能力键 = provider baseUrl 的 host + model id（小写归一）。同一模型挂不同网关各自记账；
+ * baseUrl 解析不出 host（非法 URL / 裸 host 串）时用整串兜底，agent 路从请求 URL 抠出的裸 host 天然兼容。
+ */
+export function modelCapabilityKey(baseUrl: string, modelId: string): string {
+  let host = baseUrl.trim().toLowerCase();
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch { /* 非 URL（裸 host 等）→ 用整串兜底 */ }
+  return `${host}::${modelId.trim().toLowerCase()}`;
+}
+
+/** 读能力库。三态对齐旁路文件惯例：ENOENT → 空库（首跑正常态）；坏 JSON/结构不识 → corrupt:true（绝不覆盖坏文件）。 */
+async function readModelCapabilities(): Promise<{ readonly models: Record<string, ModelCapabilityEntry>; readonly corrupt: boolean }> {
+  let text: string;
+  try {
+    text = await readFile(globalModelCapabilitiesPath(), "utf-8");
+  } catch {
+    return { models: {}, corrupt: false };
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.models)) return { models: {}, corrupt: true };
+    const models: Record<string, ModelCapabilityEntry> = {};
+    for (const [key, value] of Object.entries(parsed.models)) {
+      if (isRecord(value) && value.alwaysOnThinking === true) {
+        models[key] = { alwaysOnThinking: true, ...(typeof value.learnedAt === "string" ? { learnedAt: value.learnedAt } : {}) };
+      }
+    }
+    return { models, corrupt: false };
+  } catch {
+    return { models: {}, corrupt: true };
+  }
+}
+
+// 损坏只警告一次（每次请求都查，避免刷屏）；恢复正常后重置，再坏再警告。
+let modelCapabilitiesCorruptWarned = false;
+function warnIfModelCapabilitiesCorrupt(corrupt: boolean): void {
+  if (corrupt && !modelCapabilitiesCorruptWarned) {
+    modelCapabilitiesCorruptWarned = true;
+    console.warn(
+      `[model-capabilities] ${globalModelCapabilitiesPath()} 解析失败，本次按无记忆运行且绝不覆盖该文件` +
+        "（可能再付一次 400 学费重新学习）；请检查或删除该文件。",
+    );
+  } else if (!corrupt && modelCapabilitiesCorruptWarned) {
+    modelCapabilitiesCorruptWarned = false;
+  }
+}
+
+/** 查「该模型是否已确认不可关思考」。读失败/坏 JSON 只当无记忆，绝不因此挡住请求。 */
+export async function isAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<boolean> {
+  const { models, corrupt } = await readModelCapabilities();
+  warnIfModelCapabilitiesCorrupt(corrupt);
+  return models[modelCapabilityKey(baseUrl, modelId)]?.alwaysOnThinking === true;
+}
+
+// 并发学习串行化：多个任务同时踩中新 always-on 模型时排队读-改-写，避免相互覆盖丢记录。
+let capabilityLearnChain: Promise<void> = Promise.resolve();
+
+/**
+ * 学习：重试成功确认「不可关思考」→ 合并落盘（原子写；非密钥，0600 不必）。
+ * 坏 JSON 时**跳过写入**——绝不拿「空库」盖掉损坏文件（对齐 model-secrets/task-assignments 的坏文件保护）。
+ * 落盘失败不挡请求（下轮再付一次学费重学即可）。
+ */
+export async function learnAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<void> {
+  capabilityLearnChain = capabilityLearnChain.then(() => persistAlwaysOnThinkingModel(baseUrl, modelId));
+  return capabilityLearnChain;
+}
+
+async function persistAlwaysOnThinkingModel(baseUrl: string, modelId: string): Promise<void> {
+  try {
+    const { models, corrupt } = await readModelCapabilities();
+    if (corrupt) {
+      warnIfModelCapabilitiesCorrupt(true);
+      return;
+    }
+    const key = modelCapabilityKey(baseUrl, modelId);
+    if (models[key]?.alwaysOnThinking === true) return;
+    models[key] = { alwaysOnThinking: true, learnedAt: new Date().toISOString() };
+    await mkdir(globalStoryEngineDir(), { recursive: true });
+    await writeFileAtomic(globalModelCapabilitiesPath(), `${JSON.stringify({ version: 1, models }, null, 2)}\n`);
+  } catch (error) {
+    console.warn(
+      `[model-capabilities] 能力落盘失败（${globalModelCapabilitiesPath()}）：${error instanceof Error ? error.message : String(error)}。` +
+        "本次请求不受影响，下轮重新学习。",
+    );
+  }
+}
+
+/**
+ * 判定上游 400 是否为「思考不可关」特征（always-on 思考模型）。真机原文：
+ * 「[1210] cannot be disabled; please use low, high, or max」——注意原文不一定带 thinking 字样。
+ * 宽松覆盖已知文案变体（cannot/can not/can't be disabled、智谱 1210 码、中文「不可关闭」类），
+ * 但**只认 400**：其他状态码、其他 400（鉴权/余额/参数错/模型不存在）一律 false，绝不吞错重试。
+ */
+export function isThinkingCannotBeDisabledError(status: number, errorText: string): boolean {
+  if (status !== 400) return false;
+  const t = errorText.toLowerCase();
+  if (/cannot be disabled|can not be disabled|can't be disabled|could not be disabled/u.test(t)) return true;
+  if (/\b1210\b/u.test(t) && /disabled|thinking|reasoning|思考/u.test(t)) return true;
+  if (/thinking|reasoning|enable_thinking|思考/u.test(t) && /不可(?:以)?关闭|不能关闭|无法关闭|不支持关闭/u.test(t)) return true;
+  return false;
+}
+
+/** 请求体是否带「关思考」信号（glm thinking.type=disabled / qwen enable_thinking:false）。没带就没资格谈「cannot be disabled」重试。 */
+export function bodyRequestsThinkingOff(body: Readonly<Record<string, unknown>>): boolean {
+  const thinking = body.thinking;
+  if (isRecord(thinking) && thinking.type === "disabled") return true;
+  return body.enable_thinking === false;
+}
+
+/** 剥离请求体里全部思考参数（thinking / enable_thinking 整键省略，让模型用自身默认）。 */
+export function omitThinkingParams(body: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const next = { ...body };
+  delete next.thinking;
+  delete next.enable_thinking;
+  return next;
+}
+
+/**
+ * 算本次请求实际要发的思考参数：已学到「不可关思考」且用户想关 → 整键省略（再发 disabled 必 400，不再付学费）；
+ * 其余照常按方言翻译——**用户显式开思考照发不误**（手动配置优先，一律不硬编码 enabled）。
+ */
+async function thinkingParamsForRequest(input: {
+  readonly baseUrl: string;
+  readonly modelId: string;
+  readonly dialect: ThinkingDialect;
+  readonly thinking: boolean;
+  readonly stream: boolean;
+}): Promise<Record<string, unknown>> {
+  if (!input.thinking && input.dialect !== "none" && (await isAlwaysOnThinkingModel(input.baseUrl, input.modelId))) {
+    return {};
+  }
+  return thinkingRequestParams({ dialect: input.dialect, thinking: input.thinking, stream: input.stream });
+}
+
+/** 重试留痕（诚实可见·console.warn 级别；agent 路不打扰用户，仅日志/diagnostics 可见）。 */
+function warnAlwaysOnThinkingRetry(modelId: string, baseUrl: string, errorText: string): void {
+  let host = baseUrl;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch { /* 裸 host 原样 */ }
+  console.warn(
+    `[model-capabilities] 模型「${modelId}」@${host} 拒绝关闭思考（400：${errorText.slice(0, 200)}）。` +
+      "已省略思考参数重试一次（让模型用自身默认）；重试成功即记住该模型，之后直接跳过 disabled 注入。",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // OpenAI-compatible HTTP helper
 // ---------------------------------------------------------------------------
 
@@ -368,29 +536,51 @@ export async function callOpenAICompatibleChatModel(input: {
   // （区间上限 393216、长输出 finish=stop 不截）；传 0 反被 DeepSeek 拒（"valid range [1,393216]"）。
   // 故调用选项上根本没有 maxTokens 字段（传了直接编译失败）；输出长度由提示词约束、模型自然收尾。思考全程保留。
   try {
-    const response = await fetch(`${input.configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(await buildProviderRequestHeaders({
-          baseUrl: input.configured.provider.baseUrl,
-          apiKey: input.configured.apiKey,
-          customHeaders: input.configured.customHeaders,
-        })),
-      },
-      body: JSON.stringify({
-        model: input.configured.profile.model,
-        messages: input.messages,
-        temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
-        ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
-        // 思考链方言（请求侧模型无关·R7）：按 model id 翻成该模型认的开关（GLM thinking:{type} / Qwen enable_thinking /
-        // 认不出整键不发）。**这是非流式路**——Qwen 非流式会被强制 enable_thinking:false（否则 400）。开/关由 task-assignments 决定。
-        ...thinkingRequestParams({ dialect: input.configured.thinkingDialect, thinking: input.configured.thinking, stream: input.stream ?? false }),
+    const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
+    const headers = {
+      "content-type": "application/json",
+      ...(await buildProviderRequestHeaders({
+        baseUrl: input.configured.provider.baseUrl,
+        apiKey: input.configured.apiKey,
+        customHeaders: input.configured.customHeaders,
+      })),
+    };
+    const body: Record<string, unknown> = {
+      model: input.configured.profile.model,
+      messages: input.messages,
+      temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
+      ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
+      // 思考链方言（请求侧模型无关·R7）：按 model id 翻成该模型认的开关（GLM thinking:{type} / Qwen enable_thinking /
+      // 认不出整键不发）。**这是非流式路**——Qwen 非流式会被强制 enable_thinking:false（否则 400）。开/关由 task-assignments 决定。
+      // always-on 自适应：已学到「不可关思考」的模型要关思考时整键省略（再发 disabled 必 400，不再付学费）。
+      ...(await thinkingParamsForRequest({
+        baseUrl: input.configured.provider.baseUrl,
+        modelId: input.configured.profile.model,
+        dialect: input.configured.thinkingDialect,
+        thinking: input.configured.thinking,
         stream: input.stream ?? false,
-      }),
-      signal: controller.signal,
-    });
-    const raw = await response.text();
+      })),
+      stream: input.stream ?? false,
+    };
+    const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    let response = await postChat(body);
+    let raw = await response.text();
+    // always-on 思考自适应：仅当本次真发了「关思考」且上游 400 明说 cannot be disabled 才省略思考参数重试一次；
+    // 其他 400 不吞——原样走 parseFirstChoiceContent 抛「模型返回错误」。
+    if (!response.ok && bodyRequestsThinkingOff(body) && isThinkingCannotBeDisabledError(response.status, raw)) {
+      warnAlwaysOnThinkingRetry(input.configured.profile.model, input.configured.provider.baseUrl, raw);
+      response = await postChat(omitThinkingParams(body));
+      raw = await response.text();
+      if (response.ok) {
+        await learnAlwaysOnThinkingModel(input.configured.provider.baseUrl, input.configured.profile.model);
+      }
+    }
     return { content: parseFirstChoiceContent(raw), raw, response };
   } catch (error) {
     if (controller.signal.aborted) {
@@ -590,30 +780,55 @@ export async function streamChatModelToText(input: {
   const idle = createIdleAbort(idleTimeoutMs);
   let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实（治审查 #5）
   try {
-    const response = await fetch(`${input.configured.provider.baseUrl.replace(/\/+$/u, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(await buildProviderRequestHeaders({
-          baseUrl: input.configured.provider.baseUrl,
-          apiKey: input.configured.apiKey,
-          customHeaders: input.configured.customHeaders,
-        })),
-      },
-      body: JSON.stringify({
-        model: input.configured.profile.model,
-        messages: input.messages,
-        temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
-        ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
-        // 思考链方言（模型无关·R7）：按 model id 翻成该模型认的开关。**这是流式路**——Qwen 可正常开关思考。见 thinkingRequestParams。
-        ...thinkingRequestParams({ dialect: input.configured.thinkingDialect, thinking: input.configured.thinking, stream: true }),
+    const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
+    const headers = {
+      "content-type": "application/json",
+      ...(await buildProviderRequestHeaders({
+        baseUrl: input.configured.provider.baseUrl,
+        apiKey: input.configured.apiKey,
+        customHeaders: input.configured.customHeaders,
+      })),
+    };
+    const body: Record<string, unknown> = {
+      model: input.configured.profile.model,
+      messages: input.messages,
+      temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
+      ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
+      // 思考链方言（模型无关·R7）：按 model id 翻成该模型认的开关。**这是流式路**——Qwen 可正常开关思考。见 thinkingRequestParams。
+      // always-on 自适应：已学到「不可关思考」的模型要关思考时整键省略（再发 disabled 必 400，不再付学费）。
+      ...(await thinkingParamsForRequest({
+        baseUrl: input.configured.provider.baseUrl,
+        modelId: input.configured.profile.model,
+        dialect: input.configured.thinkingDialect,
+        thinking: input.configured.thinking,
         stream: true,
-      }),
-      signal: idle.controller.signal,
-    });
+      })),
+      stream: true,
+    };
+    const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
+      fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: idle.controller.signal,
+      });
+    let response = await postChat(body);
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`);
+      // always-on 思考自适应：只认「cannot be disabled」这一个 400，省略思考参数重试一次（让模型用自身默认）；
+      // 其他 400/5xx 原样抛，绝不吞错。
+      if (bodyRequestsThinkingOff(body) && isThinkingCannotBeDisabledError(response.status, errorText)) {
+        warnAlwaysOnThinkingRetry(input.configured.profile.model, input.configured.provider.baseUrl, errorText);
+        response = await postChat(omitThinkingParams(body));
+        if (response.ok) {
+          await learnAlwaysOnThinkingModel(input.configured.provider.baseUrl, input.configured.profile.model);
+        } else {
+          const retryErrorText = await response.text().catch(() => "");
+          throw new Error(`模型请求失败：${response.status} ${retryErrorText.slice(0, 300)}`);
+        }
+      } else {
+        throw new Error(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`);
+      }
     }
     const { content, thinking } = await streamOpenAICompatibleResponse(
       response,
