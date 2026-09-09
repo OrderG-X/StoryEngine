@@ -698,6 +698,11 @@ describe("isThinkingCannotBeDisabledError（「思考不可关」400 特征判�
     expect(isThinkingCannotBeDisabledError(400, "该模型的思考不可关闭，请用 low/high/max")).toBe(true);
   });
 
+  it("glm-5.3 真机文案（thinking-only 变体，不带 cannot/disabled 连写）→ true", () => {
+    expect(isThinkingCannotBeDisabledError(400, "GLM-5.3 is a thinking-only model; disabling thinking...is not supported")).toBe(true);
+    expect(isThinkingCannotBeDisabledError(400, "this is a thinking-only model")).toBe(true);
+  });
+
   it("只认 400：500/401 即便文案命中也 false（不吞上游真故障）", () => {
     expect(isThinkingCannotBeDisabledError(500, "[1210] cannot be disabled")).toBe(false);
     expect(isThinkingCannotBeDisabledError(401, "thinking cannot be disabled")).toBe(false);

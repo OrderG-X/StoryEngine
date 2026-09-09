@@ -468,6 +468,8 @@ export function isThinkingCannotBeDisabledError(status: number, errorText: strin
   if (/cannot be disabled|can not be disabled|can't be disabled|could not be disabled/u.test(t)) return true;
   if (/\b1210\b/u.test(t) && /disabled|thinking|reasoning|思考/u.test(t)) return true;
   if (/thinking|reasoning|enable_thinking|思考/u.test(t) && /不可(?:以)?关闭|不能关闭|无法关闭|不支持关闭/u.test(t)) return true;
+  // glm-5.3 真机文案：「GLM-5.3 is a thinking-only model; disabling thinking…is not supported」（不带 cannot/disabled 连写）
+  if (/thinking-only/u.test(t) || (/disabling (?:the )?(?:thinking|reasoning)/u.test(t) && /not supported/u.test(t))) return true;
   return false;
 }
 
