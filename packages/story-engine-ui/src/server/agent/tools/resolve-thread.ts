@@ -1,10 +1,10 @@
-import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { bigramSimilarity, readThreadPool } from "@actalk/story-engine";
 import type { NarrativeThread } from "@actalk/story-engine";
 
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
 import { userTurnAllowsResolveThread } from "./turn-intent-gate.js";
@@ -100,10 +100,8 @@ export async function runResolveThread(projectDir: string, query: string): Promi
   );
 
   const threadsPath = join(projectDir, "story", "threads.json");
-  const tmpPath = `${threadsPath}.tmp.${process.pid}`;
   try {
-    await writeFile(tmpPath, `${JSON.stringify({ threads: next }, null, 2)}\n`, "utf-8");
-    await rename(tmpPath, threadsPath);
+    await writeFileAtomic(threadsPath, `${JSON.stringify({ threads: next }, null, 2)}\n`);
   } catch (error) {
     return {
       ok: false,

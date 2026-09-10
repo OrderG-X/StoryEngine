@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { IncomingMessage } from "node:http";
@@ -20,6 +20,7 @@ import {
   readUsageSummary,
   resolveFoundationUpdateTargetId,
   withUiOverviewDetails,
+  writeFileAtomic,
 } from "./project-io.js";
 
 const EXPECTED_MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
@@ -1219,5 +1220,28 @@ describe("foundation delete suggestion parsing", () => {
 
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.id).toBe("ai-stable-detail");
+  });
+});
+
+
+// 原子写口径锁（agent-41 审计：手写 tmp+rename 失败会留 .tmp 残留，三个 threads 工具已统一改用本助手）：
+// 失败必须自清临时文件——残留 tmp 不只脏目录，还会被下一次快照 commit 扫进历史。
+describe("writeFileAtomic 原子写（失败不留 tmp 残留）", () => {
+  it("正常写：内容原子落盘", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-ok-"));
+    const target = join(dir, "threads.json");
+    await writeFileAtomic(target, "{\"threads\":[]}\n");
+    expect(await readFile(target, "utf-8")).toBe("{\"threads\":[]}\n");
+  });
+
+  it("rename 失败（目标是已存在目录）→ 抛错且同目录不留任何 .tmp 残留", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-fail-"));
+    const target = join(dir, "threads.json");
+    await mkdir(target); // rename(文件, 已存在目录) 必失败（EISDIR/ENOTDIR），确定性地命中 catch 分支
+
+    await expect(writeFileAtomic(target, "x")).rejects.toThrow();
+
+    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
+    expect(residue).toEqual([]);
   });
 });

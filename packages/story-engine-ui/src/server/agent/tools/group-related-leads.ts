@@ -9,13 +9,12 @@
  * - 绝不静默失败（ok 字段如实回报；GLM/解析/写入任一失败 → ok:false）
  * - 题材中立（GLM 提示词也是中立的，见 lead-grouping lib）
  * - 引擎零改动（只 value-import readThreadPool）
- * - 原子写（tmp + rename）
+ * - 原子写（writeFileAtomic：tmp + rename，失败自清临时文件）
  *
  * 纯壳 runGroupRelatedLeads(projectDir, callModel) 与工具 run 分开，
  * 方便单测注入 mock callModel，工具 run 里才接真实 GLM。
  */
 
-import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -27,6 +26,7 @@ import {
   parseLeadGroups,
 } from "../lead-grouping/lead-grouping.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsThreadCleanup } from "./turn-intent-gate.js";
@@ -108,16 +108,13 @@ export async function runGroupRelatedLeads(
     return { ok: true, summary: "没有可合并的同类线索" };
   }
 
-  // 8. 原子写回（tmp + rename）
+  // 8. 原子写回（writeFileAtomic：tmp+rename，失败自清临时文件、不留残留）
   const threadsPath = join(projectDir, "story", "threads.json");
-  const tmpPath = `${threadsPath}.tmp.${process.pid}`;
   try {
-    await writeFile(
-      tmpPath,
+    await writeFileAtomic(
+      threadsPath,
       `${JSON.stringify({ threads: result.next }, null, 2)}\n`,
-      "utf-8",
     );
-    await rename(tmpPath, threadsPath);
   } catch (error) {
     return {
       ok: false,

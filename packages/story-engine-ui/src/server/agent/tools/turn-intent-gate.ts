@@ -120,6 +120,25 @@ export function userTurnAllowsResolveThread(userTurnText: string | undefined): b
   return !hasBlockingNegation(text, THREAD_RESOLVE_NEGATION_PATTERN, THREAD_RESOLVE_PATTERNS);
 }
 
+// 快照历史「真裁」确认意图（prune_snapshots confirm=true；dry-run 预览只读、不过这道门）。
+// 与 commit 门同哲学：缺原话放行（前端按钮/旧会话兼容）；有原话须见「确认裁剪」级意图——
+// 「裁剪一下快照历史」这种首次请求只够走预览，不够真裁。
+const SNAPSHOT_PRUNE_CONFIRM_PATTERNS = [
+  /(?:确认|确定|真的|直接)[^。！？；\n]{0,10}(?:裁剪|清理|裁掉|清掉)/u,
+  /(?:裁剪|清理|裁掉|清掉)[^。！？；\n]{0,8}(?:快照|历史|存档)[^。！？；\n]{0,8}(?:确认|确定|吧|动手)/u,
+  // 短确认整句（agent 预览后问过「确认裁剪？」，用户回「确认/裁吧」）
+  /^(?:好的?[，,。!\s]*)?(?:确认|确定|可以|行|没问题|裁吧|裁剪吧|裁掉吧|动手吧)[。.!！]?$/u,
+];
+
+const SNAPSHOT_PRUNE_NEGATION_PATTERN = /(?:先)?(?:别|不要|先不|暂不|无需|不用|算了)[^，。；！？\n]{0,8}(?:裁剪|清理|裁掉|清掉|裁)/u;
+
+export function userTurnAllowsSnapshotPrune(userTurnText: string | undefined): boolean {
+  const text = normalizeUserTurn(userTurnText);
+  if (!text) return true;
+  if (!hasAnyPattern(text, SNAPSHOT_PRUNE_CONFIRM_PATTERNS)) return false;
+  return !hasBlockingNegation(text, SNAPSHOT_PRUNE_NEGATION_PATTERN, SNAPSHOT_PRUNE_CONFIRM_PATTERNS);
+}
+
 /**
  * 已确立长期设定（如 age/gender）覆盖同意语。
  * fail-closed：缺原话 / 仅「改成」请求 / 否定语 → false；不接受 agent 自说自话。

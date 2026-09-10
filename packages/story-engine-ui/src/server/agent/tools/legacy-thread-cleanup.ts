@@ -9,13 +9,13 @@
  * runCleanLegacyThreads — 纯壳函数，便于单测（工具 run 调它）。
  */
 
-import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
 import { isQualityLead, bigramSimilarity, readThreadPool } from "@actalk/story-engine";
 import type { NarrativeThread } from "@actalk/story-engine";
 
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsThreadCleanup } from "./turn-intent-gate.js";
@@ -216,12 +216,10 @@ export async function runCleanLegacyThreads(projectDir: string): Promise<CleanLe
   const pureGarbageCount = staleIds.filter((id) => !loserIds.has(id)).length;
   const mergedCount = mergedPairs.length;
 
-  // 原子写回：先写临时文件再 rename
+  // 原子写回（writeFileAtomic：tmp+rename，失败自清临时文件、不留残留）
   const threadsPath = join(projectDir, "story", "threads.json");
-  const tmpPath = `${threadsPath}.tmp.${process.pid}`;
   try {
-    await writeFile(tmpPath, `${JSON.stringify({ threads: result.next }, null, 2)}\n`, "utf-8");
-    await rename(tmpPath, threadsPath);
+    await writeFileAtomic(threadsPath, `${JSON.stringify({ threads: result.next }, null, 2)}\n`);
   } catch (error) {
     return {
       ok: false,

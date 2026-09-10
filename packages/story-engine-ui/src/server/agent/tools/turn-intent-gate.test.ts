@@ -5,6 +5,7 @@ import {
   userTurnAllowsDraftWrite,
   userTurnAllowsEstablishedOverride,
   userTurnAllowsResolveThread,
+  userTurnAllowsSnapshotPrune,
   userTurnAllowsThreadCleanup,
 } from "./turn-intent-gate.js";
 
@@ -160,6 +161,48 @@ describe("turn-intent-gate resolve_thread", () => {
     "线索还没完结",
   ])("拦截没有收口意图或否定收口：%s", (text) => {
     expect(userTurnAllowsResolveThread(text)).toBe(false);
+  });
+});
+
+describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）", () => {
+  it.each([
+    "确认裁剪",
+    "确认裁剪快照历史",
+    "确定清理快照历史",
+    "把快照历史裁到最近100条，确认裁剪",
+    "裁剪快照历史吧",
+    "清理一下操作历史吧",
+    "直接裁剪快照历史",
+    // 短确认整句（agent 预览后问过，用户回一个短确认）
+    "确认",
+    "确定",
+    "裁吧",
+    "好的，行",
+  ])("允许明确确认裁剪意图：%s", (text) => {
+    expect(userTurnAllowsSnapshotPrune(text)).toBe(true);
+  });
+
+  it.each([
+    "继续写第56章正文",
+    // 首次请求只有裁剪意图、没有确认级措辞 → 只够走 dry-run 预览，不够真裁
+    "裁剪一下快照历史",
+    "把快照历史裁到最近100条",
+    "操作历史太长了，帮我裁一下",
+    // 否定
+    "先别裁剪快照历史",
+    "不要清理快照",
+    "确认裁剪，先别裁了",
+  ])("拦截没有确认意图或否定裁剪：%s", (text) => {
+    expect(userTurnAllowsSnapshotPrune(text)).toBe(false);
+  });
+
+  it("否定后有正向反转则允许", () => {
+    expect(userTurnAllowsSnapshotPrune("先别裁剪，算了还是确认裁剪快照历史")).toBe(true);
+  });
+
+  it("缺失 userTurnText 默认放行，兼容前端按钮/旧会话等不带原话的调用", () => {
+    expect(userTurnAllowsSnapshotPrune(undefined)).toBe(true);
+    expect(userTurnAllowsSnapshotPrune("   ")).toBe(true);
   });
 });
 

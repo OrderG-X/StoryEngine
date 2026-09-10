@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionContext } from "@mastra/core/tools";
@@ -161,6 +161,27 @@ describe("runGroupRelatedLeads", () => {
 
     expect(result.ok).toBe(true);
     expect(result.summary).toMatch(/线索不足/);
+  });
+
+  it("写盘失败（story 目录只读）→ ok:false 如实回报、threads.json 原样、不留 tmp 残留", async () => {
+    const dir = await tempProject(makeTestThreads());
+    const storyDir = join(dir, "story");
+    const threadsPath = join(storyDir, "threads.json");
+    const before = await readFile(threadsPath, "utf-8");
+    // 与 character-enrichment 同款失败注入：目录只读 → writeFileAtomic 建不出临时文件、抛 EACCES。
+    // 「rename 失败时自清已建 tmp」的口径锁在 project-io.test.ts 的 writeFileAtomic 用例里（那里能确定性造出 rename 失败）。
+    await chmod(storyDir, 0o555);
+    try {
+      const result = await runGroupRelatedLeads(dir, mockCallModelGroup());
+
+      expect(result.ok).toBe(false);
+      expect(result.summary).toContain("写回 threads.json 失败");
+      expect(await readFile(threadsPath, "utf-8")).toBe(before);
+      const residue = (await readdir(storyDir)).filter((entry) => entry.includes(".tmp"));
+      expect(residue).toEqual([]);
+    } finally {
+      await chmod(storyDir, 0o755);
+    }
   });
 });
 

@@ -32,6 +32,12 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("foundation_write");
   });
 
+  it("快照裁剪两步哲学：prune_snapshots 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
+    expect(instructions).toContain("prune_snapshots");
+    expect(instructions).toContain("确认裁剪");
+    expect(instructions).toMatch(/prune_snapshots（先预览、用户确认才真裁）/u);
+  });
+
   it("公开 generate_alias_table 工具作为后续在场检测的别名表入口", () => {
     expect(instructions).toContain("generate_alias_table");
     expect(instructions).toContain("别名");

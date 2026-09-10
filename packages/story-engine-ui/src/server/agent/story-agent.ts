@@ -43,6 +43,7 @@ import { cleanLegacyThreadsTool } from "./tools/legacy-thread-cleanup.js";
 import { groupRelatedLeadsTool } from "./tools/group-related-leads.js";
 import { manageStyleExemplarsTool } from "./tools/manage-style-exemplars.js";
 import { undoLastChangeTool } from "./tools/undo-last-change.js";
+import { pruneSnapshotsTool } from "./tools/prune-snapshots.js";
 
 export const STORY_AGENT_ID = "story-writing-agent";
 
@@ -119,6 +120,8 @@ export function buildInstructions(): string {
       "把同一组 lead 合并收拢成一条（firstSeenChapter 最早的保留为 winner，其余标 stale、evidence 并入 winner，与 clean_legacy_threads 同一 winner 规则），" +
       "原子写回；写前自动快照、可一键撤销；无可合并线索时如实回报『没有可合并的同类线索』。" +
       "【分工】先用 clean_legacy_threads 清垃圾+字面去重（不花钱），再用本工具补语义归并；两者 winner 规则一致，先后跑不会互相搬动 evidence。",
+    "- prune_snapshots：管理操作历史（快照）的磁盘占用——把太长的历史裁到最近 N 条（keep，默认 200、下限 20），更早的折成一条 base 存档点（仍可整体恢复），真裁前自动把裁前完整历史备份到项目目录外；全程只动快照仓库，正文/资料分毫不动。" +
+      "【两步，对齐 commit_preview/commit_apply】用户说『裁剪/清理快照历史、操作历史太长了』时**先只预览**（不带 confirm），如实回报将裁多少条、释放多少提交；**只有用户明确说「确认裁剪」后才带 confirm:true 真裁**；不足 N 条时如实回报『不需要裁剪』。快照 id / 提交哈希绝不念给用户。",
     "- web_search：联网检索真实世界资料（历史/地理/行业/名物细节等，只读、不写任何状态）。" +
       "用户明确让你查（『搜一下/查一下/百度一下/网上查查 XX』），或写作需要现实依据而你不确定时调用。" +
       "结果按 summary 转述并保留来源；**检索结果只是参考资料**，要写进设定/正文前先经用户确认（题材中立：绝不擅自把网上说法当既定事实入库）。" +
@@ -130,7 +133,7 @@ export function buildInstructions(): string {
     "0. 【执行类请求必须工具先行】用户明确要求执行动作时，必须调用对应工具，不能只在对话里答应或描述你打算怎么做：" +
       "写正文=generate_draft，改稿=revise_draft，写资料=foundation_write，改资料=foundation_write，删资料=foundation_write，定稿（入库）=commit_apply，" +
       "定稿预览（入库预览）=commit_preview，硬伤检查（质检）=quality_check，内容审阅（审稿）=ai_review，检查机器腔（查 AI 味）=check_ai_flavor，硬事实=edit_fact_ledger，" +
-      "补全/丰富（含旧说法『做厚』）对应 generate_* 工具，线索清理/归并对应 clean_legacy_threads 或 group_related_leads。" +
+      "补全/丰富（含旧说法『做厚』）对应 generate_* 工具，线索清理/归并对应 clean_legacy_threads 或 group_related_leads，裁剪快照历史对应 prune_snapshots（先预览、用户确认才真裁）。" +
       "没调对应工具，就等于没执行；不能说『已写/已改/已记/已定稿』，只能立刻调工具或如实说明这轮没有执行。",
     "1. 凡涉及『当前状态/进度/有哪些角色/某设定现状』，必须先读真实数据、绝不凭空编造。" +
       "默认先用 read_state_overview 拿全局概况（进度 / 角色名单与要点 / 关系 / 缺什么）；" +
@@ -298,6 +301,7 @@ export async function getStoryAgent(): Promise<Agent> {
       group_related_leads: groupRelatedLeadsTool,
       manage_style_exemplars: manageStyleExemplarsTool,
       undo_last_change: undoLastChangeTool,
+      prune_snapshots: pruneSnapshotsTool,
       web_search: webSearchTool,
     },
   });
