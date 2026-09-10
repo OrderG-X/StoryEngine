@@ -26,6 +26,8 @@
  *   （persistFastDraftBody，与 persist:true 同路径同标题行格式）落盘，之后与 candidates=1 完全同一条
  *   后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。单个候选失败如实记 failed 不拖死全局，
  *   全部失败 → ok:false + candidatesReport 逐候选列明原因；passed=false 的候选永远不得中选。
+ *   落选稿 persist:false 不落盘，故 candidatesReport 每条带正文开头预览（excerpt，约 100 字）
+ *   供快速比对候选风格；失败候选没有正文则不带该字段。
  *
  * 必命中要点误报降噪（beats 判漏 AI 复核，对齐 quality-judge 的「规则检出 + LLM 复核降级」模式）：
  *   引擎 checkDraftBeatFidelity 只认词面锚点，对【有锚点却换了措辞】的要点会误报漏写（真机实锤：
@@ -224,11 +226,15 @@ const outputSchema = z.object({
     }).describe("该候选出稿回检的 AI 腔按严重度计数。"),
     actualLength: z.number().describe("该候选正文实际中文字符数。"),
     reason: z.string().describe("优胜/落选/失败的一句人话原因（如『AI 腔 2 处 > 优胜者 0 处』『低于字数下限』）。"),
+    excerpt: z.string().optional().describe(
+      "该候选正文的开头预览（前 100 字，按码位截断、能落在句读边界就落，超出加省略号），供快速比对候选风格。" +
+      "失败候选没有正文 → 不带此字段（落选稿 persist:false 不落盘，这是读到落选稿样貌的唯一窗口）。",
+    ),
     temperature: z.number().optional().describe(
       "该候选生成时实际使用的 temperature（依次错开防同分布：基准向上错不开时会向下错开，以此处实际值为准）。",
     ),
   })).optional().describe(
-    "多候选采样（candidates>1）的逐候选透明报告：得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
+    "多候选采样（candidates>1）的逐候选透明报告：开头预览、得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
   ),
   beatFidelity: z.object({
     missingBeats: z.array(z.string()).describe("确定性核对判漏、且（跑了复核时）AI 复核后仍可能漏写/被改写的必命中要点原文。"),
@@ -601,7 +607,7 @@ export async function runAutoDeAiRound(input: {
  * 采样：N 个候选全部 persist:false（只生成不落盘，绝不互相覆盖工作稿），temperature 依次错开；
  *   单个候选失败（模型异常/校验不过）如实记 failed，不拖死全局；passed=false 永远不得中选。
  * 选优：确定性评分器（纯函数、可单测、题材中立），绝不用模型打分——「评分选优」的 typicality bias
- *   靠「规则全透明 + 逐候选得分与落选理由如实输出」来对冲，而不是引入另一个黑盒偏好。
+ *   靠「规则全透明 + 逐候选得分/落选理由/开头预览如实输出」来对冲，而不是引入另一个黑盒偏好。
  * 落盘：优胜稿走引擎同一写盘通道 persistFastDraftBody（与 persist:true 同路径同标题行格式），
  *   之后与 candidates=1 完全同一条后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。
  * ------------------------------------------------------------------------- */
@@ -658,6 +664,8 @@ export interface DraftCandidateReportEntry {
   readonly aiFlavorCounts: Readonly<Record<AiFlavorSeverity, number>>;
   readonly actualLength: number;
   readonly reason: string;
+  /** 该候选正文的开头预览（约前 100 字，供快速比对候选风格）；失败候选没有正文 → 缺省，绝不编造。 */
+  readonly excerpt?: string;
   /** 该候选生成时实际使用的 temperature（错温 client 真注入的槽位才有；缺位回退 writerClient 的槽位不标，不编造）。 */
   readonly temperature?: number;
 }
@@ -676,6 +684,45 @@ export function attachCandidateTemperatures(
     candidateWriterClients?.[position] !== undefined && temperatures[position] !== undefined
       ? { ...entry, temperature: temperatures[position] }
       : entry);
+}
+
+/** 候选开头预览长度上限（字符数，按 Unicode 码位计）。 */
+export const DRAFT_CANDIDATE_EXCERPT_MAX_CHARS = 100;
+
+/** 预览截断的句读边界字符：截断能落在整句边界就落（避免句子中间戛然而止）；逗号/顿号/冒号仍算半句，不收。 */
+const EXCERPT_BOUNDARY_CHARS = new Set(["。", "！", "？", "!", "?", "；", ";", "…"]);
+
+/**
+ * 候选正文的开头预览（供快速比对候选风格）：正文不足 maxChars 原样返回（无省略号）；
+ * 超出时按 Unicode 码位切（CJK 友好：不劈代理对半个字），窗口内最后一个句读边界能保住至少一半预览
+ * 就落在边界后，否则硬切 maxChars；只要正文被截断就一律加省略号。纯逻辑、可测。
+ */
+export function buildCandidateExcerpt(draftBody: string, maxChars: number = DRAFT_CANDIDATE_EXCERPT_MAX_CHARS): string {
+  const body = draftBody.trim();
+  const chars = Array.from(body);
+  if (chars.length <= maxChars) return body;
+  let boundary = -1;
+  for (let index = 0; index < maxChars; index += 1) {
+    if (EXCERPT_BOUNDARY_CHARS.has(chars[index] as string)) boundary = index;
+  }
+  // 边界太靠前时预览会短得没用（如「开门。」只剩 3 字），宁可硬切保留更多开头内容。
+  const cutAt = boundary + 1 >= Math.floor(maxChars / 2) ? boundary + 1 : maxChars;
+  return `${chars.slice(0, cutAt).join("").trimEnd()}…`;
+}
+
+/**
+ * 候选开头预览并入逐候选报告（真机验收发现落选稿 persist:false 不落盘、candidatesReport 只有分数，
+ * 用户完全读不到落选稿长什么样）：有正文的候选带开头预览；失败候选（异常/校验不过）没有正文 →
+ * 不带该字段（缺省如实反映「没有正文」，绝不编造）。纯逻辑、可测。
+ */
+export function attachCandidateExcerpts(
+  entries: readonly DraftCandidateReportEntry[],
+  draftBodies: readonly (string | undefined)[],
+): readonly DraftCandidateReportEntry[] {
+  return entries.map((entry, position) => {
+    const body = draftBodies[position]?.trim();
+    return body ? { ...entry, excerpt: buildCandidateExcerpt(body) } : entry;
+  });
 }
 
 /** AI 腔计权分：high×3 + medium×1（low 不计）。纯逻辑、可测。 */
@@ -894,9 +941,12 @@ async function sampleDraftCandidates(input: {
   }
   const scoreInputs = reports.map((report, index) => scoreInputFromCandidateReport(index, report, exceptions[index], adjudications[index]));
   const ranked = rankDraftCandidates(scoreInputs);
+  // 开头预览进逐候选报告：落选稿 persist:false 不落盘，这是用户读到落选稿样貌的唯一窗口；
+  // 失败候选（异常/校验不过）没有正文 → 不带 excerpt 字段。
+  const entries = attachCandidateExcerpts(ranked.entries, reports.map((report) => report?.draftBody));
   if (ranked.chosenIndex === undefined) {
     return {
-      entries: ranked.entries,
+      entries,
       scoreInputs,
       allFailed: true,
       effectiveReport: reports.find((report) => report !== undefined),
@@ -906,7 +956,7 @@ async function sampleDraftCandidates(input: {
   const chosenBeatAdjudication = adjudications[ranked.chosenIndex];
   if (!winnerReport?.draftBody) {
     // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
-    return { entries: ranked.entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
+    return { entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
   }
   try {
     const draftPath = await persistFastDraftBody({
@@ -916,7 +966,7 @@ async function sampleDraftCandidates(input: {
       draftBody: winnerReport.draftBody,
     });
     return {
-      entries: ranked.entries,
+      entries,
       scoreInputs,
       chosenIndex: ranked.chosenIndex,
       allFailed: false,
@@ -926,7 +976,7 @@ async function sampleDraftCandidates(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      entries: ranked.entries,
+      entries,
       scoreInputs,
       chosenIndex: ranked.chosenIndex,
       allFailed: false,

@@ -19,10 +19,12 @@ import { buildProjectRequestContext } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
   aiFlavorWeightedScore,
+  attachCandidateExcerpts,
   attachCandidateTemperatures,
   buildAiFlavorInfo,
   buildAiFlavorWarning,
   buildAutoDeAiNote,
+  buildCandidateExcerpt,
   buildCandidateSummaryLine,
   buildDraftLengthInfo,
   buildDraftLengthWarning,
@@ -1226,6 +1228,45 @@ describe("多候选确定性评分器（纯函数，权重全透明）", () => {
     expect(missingSlot.map((entry) => entry.temperature)).toEqual([0.8, undefined]);
     expect(attachCandidateTemperatures(entries, undefined, undefined)).toBe(entries); // 未注入温度 → 原样返回
   });
+
+  it("buildCandidateExcerpt：不足 100 字原样返回（无省略号），首尾空白先收掉", () => {
+    expect(buildCandidateExcerpt("林远走进了房间。")).toBe("林远走进了房间。");
+    const hundred = "字".repeat(100);
+    expect(buildCandidateExcerpt(`  ${hundred}  `)).toBe(hundred); // 恰好 100 字不截断
+  });
+
+  it("buildCandidateExcerpt：超长截断加省略号；窗口后半有句读边界 → 落在边界后，不硬切半句", () => {
+    const opening = `${"账".repeat(60)}。`; // 61 字，句读边界在保留 ≥ 一半的位置
+    const body = `${opening}${"余".repeat(200)}`;
+    expect(buildCandidateExcerpt(body)).toBe(`${opening}…`);
+  });
+
+  it("buildCandidateExcerpt：句读边界太靠前（预览会短得没用）→ 硬切 100 字加省略号", () => {
+    const body = `开门。${"他".repeat(200)}`; // 「。」在第 3 字
+    const excerpt = buildCandidateExcerpt(body);
+    expect(Array.from(excerpt)).toHaveLength(101); // 100 字 + 省略号
+    expect(excerpt.startsWith("开门。")).toBe(true);
+    expect(excerpt.endsWith("…")).toBe(true);
+  });
+
+  it("buildCandidateExcerpt：CJK 友好——按码位切，不劈代理对半个字", () => {
+    const excerpt = buildCandidateExcerpt("😀".repeat(150));
+    expect(Array.from(excerpt)).toHaveLength(101);
+    expect(Array.from(excerpt.slice(0, -1)).every((char) => char === "😀")).toBe(true); // 每个字符都完整
+    expect(excerpt.endsWith("…")).toBe(true);
+  });
+
+  it("attachCandidateExcerpts：有正文的候选带开头预览；失败候选（无正文/空白）不带 excerpt 字段", () => {
+    const entries = [
+      { index: 1, chosen: true, aiFlavorCounts: { high: 0, medium: 0, low: 0 }, actualLength: 100, reason: "x" },
+      { index: 2, chosen: false, aiFlavorCounts: { high: 0, medium: 0, low: 0 }, actualLength: 0, reason: "y" },
+    ];
+    const attached = attachCandidateExcerpts(entries, ["开头第一段正文。", undefined]);
+    expect(attached[0]?.excerpt).toBe("开头第一段正文。");
+    expect(attached[1] && "excerpt" in attached[1]).toBe(false);
+    const blank = attachCandidateExcerpts(entries, ["   ", ""]); // 空白正文同样视为没有正文
+    expect(blank.every((entry) => !("excerpt" in entry))).toBe(true);
+  });
 });
 
 describe("generate_draft 多候选采样集成（mock writer 返回不同质量候选）", () => {
@@ -1335,10 +1376,47 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[1].score).toBeUndefined();
     expect(out.candidatesReport?.[1].reason).toContain("未通过引擎校验");
     expect(out.candidatesReport?.[1].reason).toContain("500");
-    expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: true });
-    expect(out.summary).toContain("已生成 3 个候选并选出第 3 个");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
+  });
+
+  // 真机验收：落选稿 persist:false 不落盘、candidatesReport 只有分数，用户完全读不到落选稿长什么样 →
+  // 逐候选带正文开头预览（excerpt，约前 100 字），失败候选没有正文则不带。
+  it("落选/优胜候选都带开头预览（excerpt），超长截断加省略号；失败候选没有正文 → 不带 excerpt", async () => {
+    const projectDir = await makeProject("多候选开头预览", "林远");
+    const clean = inRangeBody("林远");
+    const flavored = `${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`;
+    const throwingClient: WriterClient = {
+      async generateDraft() {
+        throw new Error("模型请求失败：502 Bad Gateway");
+      },
+    };
+
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(flavored),
+      candidates: 3,
+      candidateWriterClients: [mockWriterClient(flavored), throwingClient, mockWriterClient(clean)],
+    });
+
+    expect(out.ok).toBe(true);
+    expect(out.candidatesReport).toHaveLength(3);
+    // 落选候选（第 1 个）：带正文开头预览；超长 → 句读边界截断 + 省略号，且确是落选稿开头的逐字前缀
+    const loser = out.candidatesReport?.[0];
+    expect(loser?.chosen).toBe(false);
+    expect(loser?.excerpt).toBe(buildCandidateExcerpt(flavored));
+    expect(loser?.excerpt?.endsWith("…")).toBe(true);
+    expect(Array.from(loser?.excerpt ?? "").length).toBeLessThanOrEqual(101);
+    expect(flavored.startsWith((loser?.excerpt ?? "").slice(0, -1))).toBe(true);
+    // 失败候选（第 2 个）：没有正文 → 不带 excerpt 字段（与 score 缺省同理，绝不编造）
+    expect(out.candidatesReport?.[1].score).toBeUndefined();
+    expect(out.candidatesReport?.[1] && "excerpt" in out.candidatesReport[1]).toBe(false);
+    // 优胜候选（第 3 个）：同样带开头预览，供和落选稿比对风格
+    const winner = out.candidatesReport?.[2];
+    expect(winner?.chosen).toBe(true);
+    expect(winner?.excerpt).toBe(buildCandidateExcerpt(clean));
+    expect(winner?.excerpt?.endsWith("…")).toBe(true);
   });
 
   it("全部候选失败 → ok:false 诚实回报：逐候选列明原因、不落盘、不假装出稿成功", async () => {
