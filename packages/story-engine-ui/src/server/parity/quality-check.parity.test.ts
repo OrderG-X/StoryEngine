@@ -4,14 +4,18 @@
 // 只读对拍：质检两侧都不写盘，共用同一项目目录（同一引擎 + 同一磁盘 → 同一确定性报告）。
 // AI 判定层（judgeDraftQualityWithModel）换成确定性透传桩并记录入参——两条路共用同一个 judge 模块。
 //
-// 已知刻意分歧（显式豁免清单；每条锁定现状并附代码证据）：
-//   D14 explicit 正文信任度：HTTP 路 trustExplicit:true（前端传的是编辑器实时正文，顶格优先，
-//       draft.ts handleDraftQuality 的注释块）；工具路默认不信任模型给的正文、盘稿优先
-//       （quality-check.ts resolveDraftContentForQualityCheck 的 trustExplicit 默认 false）。
-//   D15 输出面：工具多一层 refineQualityReport 分层降噪（partialMiss/refined/summary/errorIssueCount）；
-//       HTTP 路直接返回质检报告原文。
-//   D16 无草稿：HTTP 路照常把空串喂给引擎（200 + 引擎 empty_draft 报告）；工具短路出专门的
-//       「还没正文可质检」诚实输出（quality-check.ts buildNoDraftQualityOutput）。
+// 双轨合一后：编排已收进 services/quality-service.ts（runDraftQualityCheck），route/tool 均为薄适配。
+// 剩余已知刻意分歧（显式豁免清单；全部落成 service 的显式策略参数或适配层投影，不再是编排漂移）：
+//   D14 explicit 正文信任度 → service 的 trustExplicit 策略参数（quality-service.ts runDraftQualityCheck）：
+//       HTTP 路传 true（前端传的是编辑器实时正文，顶格优先，draft.ts handleDraftQuality）；
+//       工具路默认 false（不信模型给的正文、盘稿优先，quality-check.ts buildQualityCheckToolOutput）。
+//   D15 输出面：工具多一层 refineQualityReport 分层降噪投影（partialMiss/refined/summary/errorIssueCount）；
+//       HTTP 路直接返回质检报告原文（canonical result 里的 refined 不投影进 HTTP 响应）。
+//   D16 无草稿 → service 的 onNoDraft 策略参数：HTTP 路 "engine_empty_report"（照常把空串喂给引擎，
+//       200 + 引擎 empty_draft 报告）；工具路 "honest_short_circuit"（短路出专门的
+//       「还没正文可质检」诚实输出，quality-check.ts buildNoDraftQualityOutput）。
+//   D6  AI 判定层调不调 → service 的 judge 注入参数（默认 judgeDraftQualityWithModel；不调判定模型的
+//       调用方注入透传桩）。commit 预览对的 D6 接线归 commit 波处理（commit-preview.parity.test.ts）。
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

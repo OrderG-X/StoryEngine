@@ -4,12 +4,14 @@
 // 唯一一对【零 LLM】的对（引擎 buildChapterSteeringDraft 是确定性推导），无需任何模型 mock；
 // 只读对拍，两侧共用同一项目目录。
 //
-// 已知刻意分歧（显式豁免清单；每条锁定现状并附代码证据）：
+// 双轨合一后：编排已收进 services/steering-service.ts（runChapterSteering），route/tool 均为薄适配。
+// 剩余已知刻意分歧（显式豁免清单；均为适配层差异，不再是编排漂移）：
 //   D26 输入获取面：HTTP 从 body 读 projectPath/userDirection 且 projectPath 必填 400；工具从 RequestContext
 //       拿 projectDir、章号可回退 currentChapter（generate-chapter-steering.ts execute）。结构性分歧，只登记不测。
 //   D27 输出面：HTTP 只回 { ok, draft }；工具多回用户可见 summary（generate-chapter-steering.ts buildChapterSteeringToolOutput）。
-//   D28 缺方向：HTTP → 400「下一章方向不能为空。」（chapter-steering.ts）；工具 → ok:false + 诚实 summary
-//       （generate-chapter-steering.ts 的 userDirection.trim() 守卫）。
+//   D28 缺方向：判定已收敛进 service（runChapterSteering 统一返 missing_user_direction，两侧都不再出方案）；
+//       剩余差异仅是适配层渲染——HTTP → 400「下一章方向不能为空。」（chapter-steering.ts），
+//       工具 → ok:false + 诚实 summary（generate-chapter-steering.ts buildChapterSteeringToolOutput）。
 import { describe, expect, it } from "vitest";
 
 import { registerChapterSteeringRoutes } from "../routes/chapter-steering.js";

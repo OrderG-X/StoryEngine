@@ -271,4 +271,35 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     });
     expect(document.querySelector(".ms-warn-notice")).toBeNull();
   });
+
+  it("整页表单路径持久化保留磁盘 provider 的 customHeaders（P2-3 残留洞），无头的 provider 不凭空带出", async () => {
+    // 与服务端 MASKED_CUSTOM_HEADER_VALUE（server/routes/model-settings.ts）同字面量，内联守边界：
+    // GET 回显里 customHeaders 值一律是此哨兵，服务端 PUT 时还原磁盘真值。
+    const MASKED = "__STORY_ENGINE_MASKED__";
+    const fixture = makeFetchFixture();
+    const raw = JSON.parse(fixture.rawText) as { providers: Record<string, Record<string, unknown>> };
+    raw.providers["my-relay"] = {
+      ...raw.providers["my-relay"],
+      customHeaders: { "x-relay-key": MASKED },
+    };
+    const withHeaders = { ...fixture, rawText: JSON.stringify(raw) };
+    fetchModelSettings.mockResolvedValue(withHeaders);
+    saveModelSettings.mockResolvedValue(withHeaders);
+    await renderAndWaitLoaded();
+
+    // 任意一次表单路径持久化（这里走「添加服务商」）：既有 provider 的自定义头必须随合并写回，不静默丢
+    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    const keyInput = await screen.findByPlaceholderText("sk-...");
+    fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(1);
+    });
+    const config = JSON.parse(saveModelSettings.mock.calls[0][0] as string) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    expect(config.providers["my-relay"]?.customHeaders).toEqual({ "x-relay-key": MASKED });
+    expect(config.providers.deepseek && "customHeaders" in config.providers.deepseek).toBe(false);
+  });
 });

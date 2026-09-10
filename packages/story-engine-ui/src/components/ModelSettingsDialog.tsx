@@ -472,6 +472,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
       } else {
         const config = buildModelSettingsConfig(savedProviders, tasks, {
           chatHistoryBudgetTokens: chatMemoryBudget,
+          previousRawText: rawText,
         });
         payloadText = JSON.stringify(config, null, 2);
       }
@@ -510,6 +511,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
       const recommended = buildWizardRecommendedState(input.preset, input.baseUrl, modelId);
       const config = buildModelSettingsConfig(recommended.providers, recommended.tasks, {
         chatHistoryBudgetTokens: chatMemoryBudget,
+        previousRawText: rawText,
       });
       const taskAssignments = buildTaskAssignmentsPayload(recommended.tasks, recommended.thinking);
       const providerId = recommended.providers[0]?.id ?? input.preset.id;

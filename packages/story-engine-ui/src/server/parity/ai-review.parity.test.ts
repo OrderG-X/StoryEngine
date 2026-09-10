@@ -4,15 +4,22 @@
 // 只读对拍：审稿两侧都不写盘，共用同一项目目录。审稿模型（draftReview 槽，流式 streamChatModelToText）
 // 换成可编程桩——两侧共用同一个 mock，且两侧组出来的 prompt 应逐字一致（最强输入面锁定）。
 //
-// 已知刻意分歧（显式豁免清单；每条锁定现状并附代码证据）：
-//   D17 无草稿：HTTP 路 readFile 直接抛 → 500；工具路 resolveDraftContentForQualityCheck 三处取稿皆空 →
-//       ok:false + 诚实文案（ai-review.ts buildAIReviewToolOutput 的 hasRealDraft 分支）。
-//   D18 模型失败/烂输出的 ok 契约：HTTP 路永远 200 ok:true，仅用 usedFallback 标志（draft.ts
-//       handleDraftAIReview 的 catch → fallbackDraftAIReviewReport）；工具路 ok:false 显红
-//       （ai-review.ts 的 ok:!usedFallback，注释「走回退=没真审成」）。
-//   D19 explicit 正文信任度：HTTP 直接信 body.draftContent（draft.ts: readString(body.draftContent) ?? readFile）；
-//       工具不信任模型给的正文、盘稿优先（ai-review.ts 复用 resolveDraftContentForQualityCheck 默认不 trust）。
-//   D20 输出面：HTTP 多返回 model/profileId；工具多返回用户可见 summary。
+// 双轨合一后：编排已收进 services/review-service.ts（runDraftAIReview），route/tool 均为薄适配。
+// 已收敛（不再是分歧，见对应用例的共享语义断言）：
+//   D17 无草稿：两侧同走 service 的「三处取稿皆空 → no_draft 诚实短路、绝不审空稿」；差异只剩适配层
+//       渲染——HTTP 保持 500 状态码兼容 + ok:false + error 文案，工具 ok:false + summary；
+//       两侧文案逐字一致（同一 canonical summary）。
+//   D18 模型失败/烂输出的 ok 契约：canonical result 一律 ok:!usedFallback（走回退=没真审成）。
+//       HTTP 路从「永远 200 ok:true 仅靠 usedFallback 标志」收敛为 200 + ok:false + 诚实 error
+//       （刻意修复：前端 reviewDraftWithAI 对 ok:false 走 throw → handleDraftAIReview catch →
+//       failAgentFlow 红卡，该失败路径本有测试覆盖；不再渲染「审稿完成：被阻止」的假完成卡，
+//       与工具侧治 A5 同方向）。工具侧行为不变：ok:false 显红。
+// 剩余已知刻意分歧（显式豁免清单；均为显式策略参数或适配层投影）：
+//   D19 explicit 正文信任度 → service 的 trustExplicit 策略参数：HTTP 传 true（信 body.draftContent
+//       编辑器实时稿，draft.ts handleDraftAIReview）；工具默认 false（不信模型给的正文、盘稿优先，
+//       ai-review.ts buildAIReviewToolOutput 不传即默认）。
+//   D20 输出面：HTTP 多返回 model/profileId（canonical result 携带、路由投影）；工具多返回用户可见
+//       summary（同一 canonical summary，HTTP 只在 ok:false 时借作 error 文案）。
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const llmMocks = vi.hoisted(() => ({
@@ -113,7 +120,7 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     expect("review" in route.payload).toBe(true);
   });
 
-  it("D18 模型吐烂输出：两侧都走同一 fallback 报告，但 HTTP ok:true（仅 usedFallback 标志）、工具 ok:false", async () => {
+  it("D18 已收敛·模型吐烂输出：两侧同一 fallback、都 ok:false 诚实显红（HTTP 200 + error，工具 summary）", async () => {
     const projectDir = await makeParityProject("ai-review-fallback-");
     await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
     llmMocks.streamChatModelToText.mockResolvedValue({ content: "（模型乱吐，没有 JSON）", thinking: "" });
@@ -121,36 +128,39 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", { projectPath: projectDir, chapter: 1 });
     const tool = await driveToolExecute(aiReviewTool, { chapter: 1 }, { projectDir });
 
-    // 报告面一致：同一份 fallback（blocked + ai-review-format-error）
-    const routeReview = route.payload.review as ReviewLike;
+    // 收敛后的共享语义：同一失败 → 两侧都「没真审成」ok:false；fallback 报告（blocked +
+    // ai-review-format-error）仍在 canonical result 里（工具侧透出；HTTP 侧不再把它伪装成完成结果返回）。
     const toolReview = tool.review as ReviewLike;
-    expect(routeReview.verdict).toBe("blocked");
     expect(toolReview.verdict).toBe("blocked");
-    expect(routeReview.issues[0]?.id).toBe("ai-review-format-error");
     expect(toolReview.issues[0]?.id).toBe("ai-review-format-error");
-    expect(route.payload.usedFallback).toBe(true);
     expect(tool.usedFallback).toBe(true);
 
-    // 分歧本身：同一失败，HTTP 200 ok:true；工具 ok:false（诚实显红）
+    // HTTP 状态码保持 200 兼容，但 ok 字段诚实 false（前端 ok:false → throw → 失败红卡，已有测试覆盖）；
+    // 两侧失败文案逐字一致（同一 canonical summary，HTTP 借作 error）。
     expect(route.statusCode).toBe(200);
-    expect(route.payload.ok).toBe(true);
+    expect(route.payload.ok).toBe(false);
+    expect(String(route.payload.error)).toContain("审稿未完成");
+    expect(route.payload.error).toBe(tool.summary);
+    expect(route.payload.review).toBeUndefined();
     expect(tool.ok).toBe(false);
     expect(String(tool.summary)).toContain("审稿未完成");
   });
 
-  it("D17 无草稿：HTTP 500（读不到草稿直接抛）；工具 ok:false + 「还没有可审的正文」", async () => {
+  it("D17 已收敛·无草稿：两侧同一 no_draft 诚实短路（HTTP 保持 500 兼容 + ok:false；工具 ok:false），都不调模型", async () => {
     const projectDir = await makeParityProject("ai-review-nodraft-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", { projectPath: projectDir, chapter: 1 });
     const tool = await driveToolExecute(aiReviewTool, { chapter: 1 }, { projectDir });
 
-    // 共享语义：两侧都没审成
+    // 共享语义：两侧都没审成、文案逐字一致（同一 canonical summary）；差异只剩适配层状态码/字段。
     expect(route.statusCode).toBe(500);
     expect(route.payload.ok).toBe(false);
+    expect(String(route.payload.error)).toContain("还没有可审的正文");
+    expect(route.payload.error).toBe(tool.summary);
     expect(tool.ok).toBe(false);
     expect(tool.usedFallback).toBe(true);
     expect(String(tool.summary)).toContain("还没有可审的正文");
-    // 分歧：工具侧压根没调模型（诚实短路），HTTP 侧也没调到（抛在读稿）
+    // 两侧都没调到模型（service 短路在读稿，绝不审空稿）
     expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
   });
 

@@ -145,17 +145,29 @@ function parseProviderModels(
   return modelsByProvider;
 }
 
+/**
+ * 表单路径重建整份 model-settings 配置。P2-3 残留洞修复：options.previousRawText 给当前磁盘配置原文
+ * （GET 回显的打码文本）时，每个 provider 以磁盘对象为合并底、表单改动覆盖其上——表单不认识的字段
+ * （customHeaders 等）随合并保留，不再被静默丢掉。customHeaders 的值是打码哨兵（键名保留、值不回显），
+ * PUT 时服务端 restoreMaskedCustomHeaders 还原磁盘真实值，哨兵绝不落盘；还原不了的条目服务端会进
+ * warnings 如实告知。无 previousRawText / 文本非法 / 该 provider 是新增 → 退化为旧的从零重建行为。
+ */
 export function buildModelSettingsConfig(
   savedProviders: readonly SavedProvider[],
   tasks: Record<string, string>,
-  options?: { readonly chatHistoryBudgetTokens?: number | null },
+  options?: {
+    readonly chatHistoryBudgetTokens?: number | null;
+    readonly previousRawText?: string | null;
+  },
 ): Record<string, unknown> {
+  const previousProviders = parsePreviousProviders(options?.previousRawText);
   const providerMap: Record<string, unknown> = {};
   const seenProviders = new Set<string>();
 
   for (const prov of savedProviders) {
     const preset = PROVIDER_PRESETS.find((p) => p.id === prov.id);
     providerMap[prov.id] = {
+      ...previousProviders[prov.id],
       id: prov.id,
       label: prov.label,
       type: preset?.type ?? "openai-compatible",
@@ -173,6 +185,7 @@ export function buildModelSettingsConfig(
     const preset = PROVIDER_PRESETS.find((p) => p.id === provId);
     if (preset) {
       providerMap[preset.id] = {
+        ...previousProviders[preset.id],
         id: preset.id,
         label: preset.label,
         type: preset.type,
@@ -215,6 +228,29 @@ export function buildModelSettingsConfig(
     ...(defaultProvider ? { defaultProvider } : {}),
     ...(typeof budget === "number" && budget > 0 ? { chatHistoryBudgetTokens: budget } : {}),
   };
+}
+
+/**
+ * 从原始设置文本抽出「provider id → 磁盘上的 provider 对象」，供 buildModelSettingsConfig 按 id 合并、
+ * 保留表单不认识的字段。文本缺失/非法/结构不对 → 空表（调用方退化为从零重建，绝不因旧文本坏而炸表单保存）。
+ */
+function parsePreviousProviders(rawText: string | null | undefined): Record<string, Record<string, unknown>> {
+  if (!rawText?.trim()) return {};
+  try {
+    const parsed = JSON.parse(rawText) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const providers = (parsed as Record<string, unknown>).providers;
+    if (!providers || typeof providers !== "object" || Array.isArray(providers)) return {};
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [key, value] of Object.entries(providers as Record<string, unknown>)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        out[key] = value as Record<string, unknown>;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /**

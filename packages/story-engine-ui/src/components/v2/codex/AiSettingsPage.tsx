@@ -107,6 +107,9 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
   const persistQueue = useRef(Promise.resolve());
   const budgetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 最近一次 GET/保存回显的配置原文（customHeaders 已打码）：persist 重建配置时按它合并，
+  // 保住表单不认识的 provider 字段（P2-3 残留洞）；只作写盘输入、不驱动渲染，用 ref 即可。
+  const rawTextRef = useRef("");
 
   const detailId = view.kind === "detail" ? view.id : null;
   const detailSaved = useMemo(
@@ -120,6 +123,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const editingExisting = detailSaved !== null;
 
   const applySaved = useCallback((res: Awaited<ReturnType<typeof saveModelSettings>>) => {
+    rawTextRef.current = res.rawText;
     const parsed = parseModelSettings(res.result);
     setSavedProviders(parsed.providers);
     // 模型列表合并：保留比 profile 反推更全的已同步列表（仅限仍存在的服务商）。
@@ -146,6 +150,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     const run = async () => {
       const config = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
         chatHistoryBudgetTokens: snapshot.budget,
+        previousRawText: rawTextRef.current,
       });
       const payload = buildTaskAssignmentsPayload(snapshot.tasks, snapshot.thinking);
       const res = await saveModelSettings(JSON.stringify(config, null, 2), snapshot.apiKeys, payload);
@@ -189,6 +194,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     fetchModelSettings()
       .then((r) => {
         if (cancelled) return;
+        rawTextRef.current = r.rawText ?? "";
         const parsed = parseModelSettings(r.result);
         setSavedProviders(parsed.providers);
         setProviderModels(parsed.providerModels);

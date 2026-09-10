@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// generate_chapter_steering 纯逻辑单测：复刻 routes/chapter-steering.ts 的确定性编排
+// generate_chapter_steering 纯逻辑单测：薄适配层 + 共享 services/steering-service.ts 的确定性编排
 // （buildChapterSteeringDraft）。只读：不建快照、不带 snapshotId、不写盘；缺方向诚实拒绝。
 // 引擎读取用临时项目 fixture（createStoryProject）。
 import { mkdtemp } from "node:fs/promises";

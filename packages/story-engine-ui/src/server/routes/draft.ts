@@ -8,11 +8,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   buildStateOverview,
-  buildWritingContextPack,
   applyDraftLengthConstraint,
   buildDraftLengthReport,
   buildFastDraftRetryPrompt,
-  checkDraftBeforeCommit,
   countDraftChineseCharacters,
   renderFastDraftPromptText,
   resolveDraftLengthTarget,
@@ -20,12 +18,9 @@ import {
   resolveDraftMaxOutputTokens,
   trimDraftBodyToLengthTarget,
   runFastDraft,
-  fallbackDraftAIReviewReport,
-  buildDraftAIReviewPrompt,
-  parseDraftAIReviewReport,
   readWritingRules,
 } from "@actalk/story-engine";
-import type { DraftAIReviewReport, DraftLengthTarget } from "@actalk/story-engine";
+import type { DraftLengthTarget } from "@actalk/story-engine";
 import {
   assertStoryEngineProject,
   defaultDraftPath,
@@ -45,15 +40,13 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamChatModelToText, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
-import { appendActualWordCountToReviewPrompt } from "../agent/tools/ai-review.js";
-import { countTextWords } from "../../utils/textUtils.js";
-import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
 import { createSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
-import { resolveDraftContentForQualityCheck } from "../agent/tools/quality-check.js";
+import { runDraftQualityCheck } from "../services/quality-service.js";
+import { runDraftAIReview } from "../services/review-service.js";
 
 const DIRECT_EDIT_MODEL_FORMAT_ERROR = "修订模型返回格式不完整，请重试或换一种修改要求。";
 const DRAFT_TOO_SHORT_ERROR = "草稿正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。";
@@ -476,25 +469,18 @@ async function handleDraftQuality(req: import("node:http").IncomingMessage, res:
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
-    // 与 quality_check 工具同源的健壮取稿：真显式正文 → 文件(带重试) → workspace 原始草稿，
-    // 治草稿落盘时序竞争窗口里读到空/占位符被误报「正文为空/过短」（前端可能传到瞬时占位符）。
-    const resolvedDraft = await resolveDraftContentForQualityCheck({
+    // 共享编排在 services/quality-service.ts（与 quality_check 工具同调）。本路由的显式策略：
+    // trustExplicit:true（前端传【编辑器实时正文】，是用户当下看到的真稿、可能比盘新 → 顶格优先，D14；
+    // 与 agent 工具路相反：agent 路不信模型给的正文）+ onNoDraft "engine_empty_report"
+    // （无稿也把空串照常喂引擎，出 empty_draft 报告，D16）。
+    const result = await runDraftQualityCheck({
       projectDir,
       chapter,
-      // 路由由前端传【编辑器实时正文】，是用户当下看到的真稿、可能比盘新 → 可信、顶格优先（trustExplicit）。
-      // 与 agent 工具路相反：agent 路不信模型给的正文（afterfix·Codex：质检读了模型臆想的正文）。
       trustExplicit: true,
+      onNoDraft: "engine_empty_report",
       ...(readString(body.draftContent) !== undefined ? { explicitDraftContent: readString(body.draftContent)! } : {}),
     });
-    const draftContent = resolvedDraft.content;
-    const deterministicQuality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-    const quality = await judgeDraftQualityWithModel({
-      projectDir,
-      chapter,
-      draftContent,
-      deterministicQuality,
-    });
-    writeJson(res, 200, { ok: true, quality });
+    writeJson(res, 200, { ok: true, quality: result.quality });
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
@@ -667,42 +653,30 @@ async function handleDraftAIReview(req: import("node:http").IncomingMessage, res
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
-    const draftContentFromBody = readString(body.draftContent);
-    const draftContent = draftContentFromBody ?? await readFile(defaultDraftPath(projectDir, chapter), "utf-8");
-    const deterministicQuality = isRecord(body.deterministicQuality)
-      ? readDraftQualityReport(body.deterministicQuality)
-      : await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-    const [overview, writingContextPack] = await Promise.all([
-      buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }),
-      buildWritingContextPack({
-        projectDir,
-        chapter,
-        userDirection: readString(body.userDirection) ?? "",
-        currentChapterGoal: readString(body.chapterGoal),
-        maxTimelineEvents: 3,
-      }).catch(() => undefined),
-    ]);
-    const prompt = appendActualWordCountToReviewPrompt(
-      buildDraftAIReviewPrompt({
-        chapter,
-        draftContent,
-        chapterGoal: readString(body.chapterGoal),
-        userDirection: readString(body.userDirection),
-        deterministicQuality,
-        stateOverview: overview,
-        ...(writingContextPack ? { writingContextPack } : {}),
-      }),
-      countTextWords(draftContent),
-    );
-    const configured = await resolveConfiguredChatModel("draftReview");
-    const report = await callDraftAIReviewModel({ configured, prompt }).catch((error): DraftAIReviewReport =>
-      fallbackDraftAIReviewReport(error instanceof Error ? error.message : String(error)));
+    // 共享编排在 services/review-service.ts（与 ai_review 工具同调）。本路由的显式策略：
+    // trustExplicit:true（前端传【编辑器实时正文】，可信、顶格优先，D19）+ deterministicQuality 预传通道。
+    const result = await runDraftAIReview({
+      projectDir,
+      chapter,
+      trustExplicit: true,
+      ...(readString(body.draftContent) !== undefined ? { explicitDraftContent: readString(body.draftContent)! } : {}),
+      ...(readString(body.chapterGoal) !== undefined ? { chapterGoal: readString(body.chapterGoal)! } : {}),
+      ...(readString(body.userDirection) !== undefined ? { userDirection: readString(body.userDirection)! } : {}),
+      ...(isRecord(body.deterministicQuality) ? { deterministicQuality: readDraftQualityReport(body.deterministicQuality) } : {}),
+    });
+    if (!result.ok) {
+      // 失败语义已与工具对齐（同一 canonical summary）：D17 无稿 → 状态码保持 500 兼容；
+      // D18 模型回退 → 200 + ok:false 诚实显红（前端 reviewDraftWithAI 对 ok:false 走 throw → 失败卡，
+      // 不再渲染「审稿完成：被阻止」的假完成卡）。
+      writeJson(res, result.kind === "no_draft" ? 500 : 200, { ok: false, error: result.summary });
+      return;
+    }
     writeJson(res, 200, {
       ok: true,
-      review: report,
-      model: configured.profile.model,
-      profileId: configured.profile.id,
-      usedFallback: report.verdict === "blocked" && report.issues.some((issue) => issue.id === "ai-review-format-error"),
+      review: result.review,
+      model: result.model,
+      profileId: result.profileId,
+      usedFallback: result.usedFallback,
     });
   } catch (error) {
     writeJson(res, 500, {
@@ -940,23 +914,6 @@ async function expandDraftBodyToRequestedLength(input: {
     ],
   });
   return stripLeadingMarkdownChapterHeading(expanded.content).trim();
-}
-
-async function callDraftAIReviewModel(input: {
-  readonly configured: ResolvedChatModel;
-  readonly prompt: string;
-}): Promise<DraftAIReviewReport> {
-  // 流式 + 空闲超时：审稿是长任务，绝不设总时长上限——有任何字节（正文/思考 token）就续命，
-  // 只有连接彻底静默才判死（streamChatModelToText 内部 abort 并抛错）。对齐 agent/tools/ai-review.ts。
-  const { content } = await streamChatModelToText({
-    configured: input.configured,
-    messages: [{ role: "user", content: input.prompt }],
-    temperature: input.configured.profile.temperature ?? 0.35,
-    responseFormat: { type: "json_object" },
-  });
-  const text = content.trim();
-  if (!text) throw new Error("模型返回了空内容。");
-  return parseDraftAIReviewReport(text);
 }
 
 export const __draftRouteTest = {

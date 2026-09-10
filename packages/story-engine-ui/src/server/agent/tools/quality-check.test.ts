@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// quality_check 纯逻辑单测：复刻 routes/draft.ts 的 /api/draft/quality 编排（进程内）。
+// quality_check 纯逻辑单测：薄适配层 + 共享 services/quality-service.ts 编排（进程内）。
 // checkDraftBeforeCommit（确定性）+ judgeDraftQualityWithModel（无候选时短路、不调模型）。
 // 只读：不建快照、不带 snapshotId / refreshScope。引擎读取走临时项目 fixture。
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";

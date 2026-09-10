@@ -1,26 +1,20 @@
 /**
  * revise_draft — 草稿局部修订工具：对工作稿里某段原文做「确定性替换」的局部改写。
  *
- * 对照 routes/draft-revision.ts 的 preview→apply 编排（进程内合一复刻，不经 HTTP）：
- *   buildDraftRevisionPrompt → callOpenAICompatibleChatModel(repair) → parseDraftRevisionPreview
- *   → applyDraftRevisionToContent（确定性替换：原文必须在草稿中唯一出现）→ 写回工作稿。
+ * 双轨合一：编排（定位 → 预览 → 守卫 → 落盘）已收编进 services/revision-service.ts，
+ * 与 routes/draft-revision.ts 的 preview→apply 两步路共享同一实现；本文件只做 Mastra 适配——
+ * 入参 schema、上下文章号解析、覆盖前快照、输出契约（summary/refreshScope/draftBody）整形。
  *
- * 安全/诚实（铁律）：
- * - 原文须唯一命中：缺失/出现多次 → applyDraftRevisionToContent 抛错，本工具捕获后诚实回报
- *   applied:false，绝不写坏草稿、绝不谎称改了。
- * - 模型输出格式不全（缺 afterText）→ parseDraftRevisionPreview 抛错 → 走 fallback，applied:false。
+ * 安全/诚实（铁律，全部由 service 的守卫承接，本路文案口径不变）：
+ * - 原文须唯一命中：缺失/出现多次 → 诚实回报 applied:false，绝不写坏草稿、绝不谎称改了。
+ * - 模型输出格式不全（缺 afterText）→ 解析抛错 → 诚实拒，applied:false。
  * 快照策略：草稿是「待保存」工作稿，不建 git 快照（同 generate_draft）；故用 createTool 而非 writeTool，
  *   output 不带 snapshotId。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
-import { readFile, writeFile } from "node:fs/promises";
 import {
-  buildDraftRevisionPrompt,
   buildStateOverview,
-  buildWritingContextPack,
-  parseDraftRevisionPreview,
   type DraftRevisionPreview,
-  type DraftRevisionTask,
   type StateOverview,
 } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
@@ -28,10 +22,19 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceEnum, coerceNumber, coerceStringArray } from "./lenient-args.js";
 
-import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
-import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+import {
+  createRevisionModelChannel,
+  reviseDraftOneShot,
+  type RevisionOneShotFailure,
+  type RevisionOneShotSuccess,
+} from "../../services/revision-service.js";
+
+// 定位器实现已收编进 revision-service（D21）；此处保留原名 re-export，供 de-ai-flavor-batch 等既有消费方不动。
+export { locateRevisionSpan as locateTargetSpan } from "../../services/revision-service.js";
+export type { RevisionTargetSpan } from "../../services/revision-service.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要修订的章号（工作稿所在章）。")),
@@ -53,12 +56,6 @@ const inputSchema = z.object({
   problemSummary: z.string().optional().describe("可选：这段当前的问题一句话概括。"),
   constraints: coerceStringArray(z.array(z.string()).optional().describe("可选：修订约束（如『保留人物关系』『不新增剧情』）。")),
 });
-
-/** 去 AI 味改写手法（服务端版；与前端 selectionRevisionTemplates 的 deai 模板同源，因 import 边界不跨包共享）。 */
-const DEAI_CRAFT_GUIDANCE =
-  "改写这段文字，去掉常见的 AI 腔：删掉空泛的形容词堆砌、套路化的排比与升华总结句、"
-  + "「仿佛 / 似乎 / 不禁 / 那一刻 / 心中五味杂陈」之类被滥用的过渡与抒情；"
-  + "改用具体的动作、可感的细节和有长短变化的句子，让它读起来像人写的、有呼吸和留白。";
 
 const outputSchema = z.object({
   ok: z.boolean().describe("是否成功修订并写回工作稿。"),
@@ -86,81 +83,82 @@ export interface ReviseDraftToolOutput {
   readonly chapter?: number;
 }
 
-/** 由本工具输入组装一个 DraftRevisionTask（与路由 readDraftRevisionTask 等价的最小构造）。 */
-function buildRevisionTask(input: {
-  readonly chapter: number;
-  readonly targetText: string;
-  readonly revisionGoal: string;
-  readonly problemSummary?: string;
-  readonly constraints?: readonly string[];
-}): DraftRevisionTask {
+/** 守卫拒绝的用户可见文案（本路历史口径，逐条保持原字）。 */
+function refusalReason(failure: RevisionOneShotFailure): string {
+  switch (failure.code) {
+    case "target_empty":
+      return "修订任务缺少原文片段，请先指明要修的那段文字。";
+    case "target_not_found":
+      return "未在当前草稿中找到要修的原文片段，请逐字确认目标段落。";
+    case "target_ambiguous":
+      return "原文片段在草稿中出现多次，请改用更精确、只出现一次的片段。";
+    case "exact_replacement_noop":
+      return "给的替换文本与原句一致，等于没改；草稿未改动。";
+    case "model_output_unusable":
+      return `修订模型输出不可用，未改动草稿：${failure.detail ?? "未知错误"}`;
+    case "before_text_not_found":
+    case "before_text_ambiguous":
+      return "模型回吐的原句没法在草稿里唯一定位，未改动草稿。请重试或把要改的原文说得更精确。";
+    case "drift_rejected":
+      return "模型改写的不是你指定的那段（它去动了别处），草稿未改动。请把要改的原文逐字说清，或重试。";
+    case "noop":
+      return "模型回吐的片段与原文一致，等于没有任何修改；草稿未改动。";
+    case "target_unchanged":
+      return "改写后你点名的那句仍原样留在草稿里，等于没真改到；草稿未改动。请重试或把要改的原文逐字说清。";
+  }
+}
+
+/** 模型预览未产出时的兜底预览（拒绝输出的 preview 字段，保持原 refusal 内联构造的同构形状）。 */
+function refusalFallbackPreview(failure: RevisionOneShotFailure, reason: string): DraftRevisionPreview {
   return {
-    id: `revision-${Date.now().toString(36)}`,
-    chapter: input.chapter,
-    targetType: "paragraph",
-    targetText: input.targetText,
-    problemSummary: input.problemSummary?.trim() || "局部修订",
-    revisionGoal: input.revisionGoal,
-    constraints: input.constraints ?? [],
-    status: "pending",
+    taskId: failure.task.id,
+    beforeText: failure.task.targetText,
+    afterText: failure.task.targetText,
+    changeSummary: "未应用任何修改。",
+    rationale: reason,
+    riskNotes: [reason],
+    preservedFacts: [],
+    warnings: ["未应用任何修改。"],
   };
 }
 
-export type RevisionTargetSpan = { readonly start: number; readonly end: number };
-
-/**
- * 引号归一表（afterfix·改稿可用性）：模型常把对白连引号一起当 target 传，且引号风格与磁盘不一致
- * （磁盘 curly “”，模型回 ASCII "" 或 CJK 「」）→ 精确/空白归一都失配、locate 报 not_found、改稿「不可用」。
- * 把各种成对引号归成一个 canonical 字符（保持长度 1↔1，origIndex 映射不变）。双引号家族→"，单引号家族→'。
- */
-const QUOTE_CANON: Readonly<Record<string, string>> = {
-  "“": "\"", "”": "\"", "「": "\"", "」": "\"", "『": "\"", "』": "\"",
-  "„": "\"", "‟": "\"", "＂": "\"", "«": "\"", "»": "\"",
-  "‘": "'", "’": "'", "‚": "'", "‛": "'", "＇": "'",
-};
-const canonChar = (ch: string): string => QUOTE_CANON[ch] ?? ch;
-
-/**
- * B4 改写定位：先精确子串匹配（唯一→span / 多次→ambiguous）；精确未命中时用「空白+引号归一」兜底——
- * 把目标里的空白运行（含全/半角空格、换行）当作任意空白、各种成对引号当等价，回原文匹配真实区间。
- * 纯确定性、题材中立。只归一空白与引号（最常见的对白改写失配源），不碰其它标点（易过度匹配）。
- */
-export function locateTargetSpan(
-  draftContent: string,
-  target: string,
-): RevisionTargetSpan | "not_found" | "ambiguous" {
-  // 1) 精确子串匹配优先（保持原行为：唯一→span / 多次→ambiguous）。
-  const first = draftContent.indexOf(target);
-  if (first >= 0) {
-    if (draftContent.indexOf(target, first + target.length) >= 0) return "ambiguous";
-    return { start: first, end: first + target.length };
+/** service 结果 → 工具输出契约（summary/draftBody/overview/refreshScope 整形，纯适配无编排）。 */
+async function toToolOutput(
+  projectDir: string,
+  chapter: number,
+  outcome: RevisionOneShotSuccess | RevisionOneShotFailure,
+): Promise<ReviseDraftToolOutput> {
+  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
+  if (!outcome.ok) {
+    const reason = refusalReason(outcome);
+    return {
+      ok: false,
+      applied: false,
+      preview: outcome.preview ?? refusalFallbackPreview(outcome, reason),
+      overview,
+      summary: `未修订：${reason}`,
+      refreshScope: "full",
+    };
   }
-  // 2) 空白+引号归一兜底：剥空白、引号归 canonical 后比对，命中再映射回原文真实区间——覆盖模型回吐片段
-  //    空白「多了/少了/全半角不一致」+ 引号风格不一致（“”/""/「」）全部情况（精确 indexOf 对这些一律失败）。
-  const strippedChars: string[] = [];
-  const origIndex: number[] = []; // strippedChars[i] 对应原文位置 origIndex[i]
-  for (let i = 0; i < draftContent.length; i += 1) {
-    const ch = draftContent[i]!;
-    if (!/\s/u.test(ch)) {
-      strippedChars.push(canonChar(ch));
-      origIndex.push(i);
-    }
-  }
-  const strippedDraft = strippedChars.join("");
-  const strippedTarget = target.replace(/\s+/gu, "").split("").map(canonChar).join("");
-  if (strippedTarget.length === 0) return "not_found";
-  const sIdx = strippedDraft.indexOf(strippedTarget);
-  if (sIdx < 0) return "not_found";
-  if (strippedDraft.indexOf(strippedTarget, sIdx + strippedTarget.length) >= 0) return "ambiguous";
-  return { start: origIndex[sIdx]!, end: origIndex[sIdx + strippedTarget.length - 1]! + 1 };
+  return {
+    ok: true,
+    applied: true,
+    preview: outcome.preview,
+    // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
+    draftBody: stripLeadingMarkdownChapterHeading(outcome.updatedContent).trim(),
+    overview,
+    summary: outcome.mode === "exact"
+      ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。草稿未入库，可继续修改或撤销。`
+      : `已在第 ${chapter} 章工作稿上完成局部修订：${outcome.preview.changeSummary}。草稿未入库，可继续修改或撤销。`,
+    refreshScope: "full",
+    chapter,
+  };
 }
 
 /**
- * 纯逻辑：复刻 preview+apply 编排。callModel 注入（返回模型原始内容字符串），便于单测 mock；
- * 真实 execute 注入 callOpenAICompatibleChatModel(repair)。草稿类不建 git 快照。
- *
- * 守卫顺序与路由一致：先校验原文非空、在稿中唯一出现 → 再调模型预览 → applyDraftRevisionToContent
- * （二次确定性守卫）→ 写回。任何一步不满足都 applied:false 诚实回报、不写坏草稿。
+ * 纯逻辑入口（签名与行为保持收编前原样，供单测注入 callModel mock）：委托 service 一步路。
+ * 守卫顺序：原文非空 → 稿中唯一（含空白/引号归一兜底）→ 精确替换快路 → 模型预览 →
+ * 漂移/no-op/目标级守卫 → 写回。任何一步不满足都 applied:false 诚实回报、不写坏草稿。
  */
 export async function runReviseDraftToolLogic(input: {
   readonly projectDir: string;
@@ -174,202 +172,8 @@ export async function runReviseDraftToolLogic(input: {
   readonly replacementText?: string;
   readonly callModel: (prompt: string) => Promise<string>;
 }): Promise<ReviseDraftToolOutput> {
-  const { projectDir, chapter } = input;
-  const draftPath = defaultDraftPath(projectDir, chapter);
-  const draftContent = await readFile(draftPath, "utf-8");
-
-  // B3：style=deai 时把去 AI 味手法注入修订目标——让 agent 看完 check_ai_flavor 后能直接经本工具去 AI 味，
-  // 不再退化成普通润色（前端「改掉这句」那条 deai 路 agent 够不到的洞，从此 agent 也能驱动去 AI 味改写）。
-  const revisionGoal = input.style === "deai"
-    ? `${DEAI_CRAFT_GUIDANCE}${input.revisionGoal.trim() ? `\n另外按这条具体要求改：${input.revisionGoal.trim()}` : ""}`
-    : input.revisionGoal;
-
-  let task = buildRevisionTask({
-    chapter,
-    targetText: input.targetText,
-    revisionGoal,
-    ...(input.problemSummary !== undefined ? { problemSummary: input.problemSummary } : {}),
-    ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),
-  });
-
-  const target = task.targetText.trim();
-  if (!target) {
-    return refusal(projectDir, chapter, task, "修订任务缺少原文片段，请先指明要修的那段文字。");
-  }
-  // B4：先精确匹配；失败再用「空白归一」兜底定位回原文真实区间（治模型回吐片段多/少一个空格、全/半角
-  // 空格不一致导致长目标 / 批量改稿频繁「未找到」）。命中后用真实原文重建任务，保证下游 prompt 与引擎二次
-  // 守卫都精确命中（引擎 draft-revision 零改，靠喂它真实存在的 beforeText 来满足其 indexOf 精确匹配）。
-  const span = locateTargetSpan(draftContent, target);
-  if (span === "not_found") {
-    return refusal(projectDir, chapter, task, "未在当前草稿中找到要修的原文片段，请逐字确认目标段落。");
-  }
-  if (span === "ambiguous") {
-    return refusal(projectDir, chapter, task, "原文片段在草稿中出现多次，请改用更精确、只出现一次的片段。");
-  }
-  const resolvedTarget = draftContent.slice(span.start, span.end);
-  if (resolvedTarget !== target) {
-    task = buildRevisionTask({
-      chapter,
-      targetText: resolvedTarget,
-      revisionGoal,
-      ...(input.problemSummary !== undefined ? { problemSummary: input.problemSummary } : {}),
-      ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),
-    });
-  }
-
-  // 精确替换快路（afterfix·真机：模型拿到精确文本却自行改写成别的）：用户给了确切新文本 → 按目标 span 原样落地、
-  // 跳过模型改写，保证「换成你说的那句」。空/与原文一致则诚实拒（no-op）。
-  const exactReplacement = input.replacementText?.trim();
-  if (exactReplacement) {
-    if (exactReplacement === resolvedTarget.trim()) {
-      return refusal(projectDir, chapter, task, "给的替换文本与原句一致，等于没改；草稿未改动。");
-    }
-    const replaced = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
-    await writeFile(draftPath, `${replaced.trimEnd()}\n`, "utf-8");
-    const overviewAfter = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
-    return {
-      ok: true,
-      applied: true,
-      preview: {
-        taskId: task.id,
-        beforeText: resolvedTarget,
-        afterText: exactReplacement,
-        changeSummary: "按你给的精确文本替换",
-        rationale: "用户指定了确切替换文本，确定性原样落地（未经模型改写）。",
-        riskNotes: [],
-        preservedFacts: [],
-        warnings: [],
-      },
-      draftBody: stripLeadingMarkdownChapterHeading(replaced).trim(),
-      overview: overviewAfter,
-      summary: `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。草稿未入库，可继续修改或撤销。`,
-      refreshScope: "full",
-      chapter,
-    };
-  }
-
-  const [overviewBefore, writingContextPack] = await Promise.all([
-    buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }),
-    buildWritingContextPack({
-      projectDir,
-      chapter,
-      userDirection: "",
-      currentChapterGoal: task.revisionGoal,
-      maxTimelineEvents: 3,
-    }).catch(() => undefined),
-  ]);
-
-  const prompt = buildDraftRevisionPrompt({
-    task,
-    draftContent,
-    stateOverview: overviewBefore,
-    ...(writingContextPack ? { writingContextPack } : {}),
-  });
-
-  let preview: DraftRevisionPreview;
-  try {
-    const raw = await input.callModel(prompt);
-    preview = parseDraftRevisionPreview(raw, task);
-  } catch (error) {
-    return refusal(
-      projectDir,
-      chapter,
-      task,
-      `修订模型输出不可用，未改动草稿：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
-  // 定位模型回吐的 beforeText 的真实区间（容忍引号/空白变体——对白引号风格常与磁盘不一致：磁盘 curly “”、
-  // 模型回 ASCII "" 或 「」，旧的精确 indexOf 会失配致改稿「未找到原文/不可用」，afterfix 真机正是此症）。
-  const beforeSpan = locateTargetSpan(draftContent, preview.beforeText);
-  if (beforeSpan === "not_found" || beforeSpan === "ambiguous") {
-    return refusal(
-      projectDir,
-      chapter,
-      task,
-      "模型回吐的原句没法在草稿里唯一定位，未改动草稿。请重试或把要改的原文说得更精确。",
-      preview,
-    );
-  }
-  // 漂移守卫（afterfix·改稿谎报根治）：模型 beforeText 的区间必须与用户点名的目标区间重叠，否则=模型去动了
-  // 别处（漂移）→ 诚实拒、不落盘，绝不报「这处改好了」（Codex 真机：目标句仍逐字在盘却报已改）。
-  const overlaps = beforeSpan.start < span.end && span.start < beforeSpan.end;
-  if (!overlaps) {
-    return refusal(
-      projectDir,
-      chapter,
-      task,
-      "模型改写的不是你指定的那段（它去动了别处），草稿未改动。请把要改的原文逐字说清，或重试。",
-      preview,
-    );
-  }
-  // 按 beforeText 的真实区间落点替换（afterText 收尾去空白）——不再靠精确 indexOf，引号/空白风格不一致也能真落地。
-  const updatedContent = draftContent.slice(0, beforeSpan.start) + preview.afterText.trim() + draftContent.slice(beforeSpan.end);
-
-  // no-op 守卫（铁律④：改了等于没改不许报成功）：替换后内容与原稿逐字相同=没有任何修改——不写盘、诚实回报。
-  if (updatedContent === draftContent) {
-    return refusal(
-      projectDir,
-      chapter,
-      task,
-      "模型回吐的片段与原文一致，等于没有任何修改；草稿未改动。",
-      preview,
-    );
-  }
-
-  // 目标级诚实守卫（afterfix·改稿谎报根治）：成功必须 =「用户点名的那段真被改动」。resolvedTarget 在草稿里唯一
-  // （ambiguous 已拦），改后它若仍原样存在（空白+引号归一比对）= 目标没真被动 → 诚实拒、不落盘，绝不报「已修订」。
-  const normForCheck = (text: string): string => text.replace(/\s+/gu, "").split("").map(canonChar).join("");
-  if (normForCheck(updatedContent).includes(normForCheck(resolvedTarget))) {
-    return refusal(
-      projectDir,
-      chapter,
-      task,
-      "改写后你点名的那句仍原样留在草稿里，等于没真改到；草稿未改动。请重试或把要改的原文逐字说清。",
-      preview,
-    );
-  }
-
-  await writeFile(draftPath, `${updatedContent.trimEnd()}\n`, "utf-8");
-  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
-  return {
-    ok: true,
-    applied: true,
-    preview,
-    // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
-    draftBody: stripLeadingMarkdownChapterHeading(updatedContent).trim(),
-    overview,
-    summary: `已在第 ${chapter} 章工作稿上完成局部修订：${preview.changeSummary}。草稿未入库，可继续修改或撤销。`,
-    refreshScope: "full",
-    chapter,
-  };
-}
-
-async function refusal(
-  projectDir: string,
-  chapter: number,
-  task: DraftRevisionTask,
-  reason: string,
-  preview?: DraftRevisionPreview,
-): Promise<ReviseDraftToolOutput> {
-  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
-  return {
-    ok: false,
-    applied: false,
-    preview: preview ?? {
-      taskId: task.id,
-      beforeText: task.targetText,
-      afterText: task.targetText,
-      changeSummary: "未应用任何修改。",
-      rationale: reason,
-      riskNotes: [reason],
-      preservedFacts: [],
-      warnings: ["未应用任何修改。"],
-    },
-    overview,
-    summary: `未修订：${reason}`,
-    refreshScope: "full",
-  };
+  const outcome = await reviseDraftOneShot(input);
+  return toToolOutput(input.projectDir, input.chapter, outcome);
 }
 
 export const reviseDraftTool = createTool({
@@ -391,23 +195,10 @@ export const reviseDraftTool = createTool({
     if (resolvedChapter === undefined) {
       throw new Error("revise_draft 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
-    const configured = await resolveConfiguredChatModel("repair");
-    const callModel = async (prompt: string): Promise<string> => {
-      const { content, raw, response } = await callOpenAICompatibleChatModel({
-        configured,
-        messages: [{ role: "user", content: prompt }],
-        temperature: configured.profile.temperature ?? 0.45,
-        responseFormat: { type: "json_object" },
-      });
-      if (!response.ok) {
-        throw new Error(`修订模型请求失败：${response.status} ${raw.slice(0, 180)}`);
-      }
-      if (!content) throw new Error("修订模型返回了空内容。");
-      return content;
-    };
+    const channel = await createRevisionModelChannel();
     // M6：修订会覆盖现有草稿，覆盖前建快照让修订可撤销（修订必有非空草稿）。
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章修订前快照`);
-    const result = await runReviseDraftToolLogic({
+    const outcome = await reviseDraftOneShot({
       projectDir,
       chapter: resolvedChapter,
       targetText: input.targetText,
@@ -416,8 +207,9 @@ export const reviseDraftTool = createTool({
       ...(input.problemSummary !== undefined ? { problemSummary: input.problemSummary } : {}),
       ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),
       ...(input.replacementText !== undefined ? { replacementText: input.replacementText } : {}),
-      callModel,
+      callModel: channel.call,
     });
+    const result = await toToolOutput(projectDir, resolvedChapter, outcome);
     // 只在真改了草稿时挂 snapshotId（未命中/未写回=没覆盖，无需撤销点）。
     return result.ok && result.applied && snapshotId ? { ...result, snapshotId } : result;
   },

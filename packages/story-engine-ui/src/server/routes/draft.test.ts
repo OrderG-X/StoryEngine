@@ -918,7 +918,10 @@ describe("draft ai-review route model call（收拢 streamChatModelToText：流�
 
       expect(capturedSignal!.aborted).toBe(true);
       expect(response.statusCode).toBe(200);
-      expect(response.payload).toMatchObject({ ok: true, usedFallback: true });
+      // D18 收敛（刻意修复）：走兜底=没真审成 → ok:false 诚实显红（前端 ok:false → throw → 失败卡），
+      // 不再 200 ok:true 伪装完成；error 用与工具侧同一 canonical 文案。
+      expect(response.payload).toMatchObject({ ok: false });
+      expect(String((response.payload as { error?: unknown }).error)).toContain("审稿未完成");
       expect(fallbackDraftAIReviewReport).toHaveBeenCalledWith(expect.stringContaining("静默超过 90s"));
     } finally {
       vi.useRealTimers();

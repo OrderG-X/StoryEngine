@@ -1,16 +1,16 @@
 /**
  * generate_chapter_steering — 只读工具：为下一章生成一份「剧情方案」（建议清单 + 本章目标预览）。
  *
- * 对照 routes/chapter-steering.ts 的 /api/chapter-steering 编排（进程内复刻，不经 HTTP）：
- *   buildChapterSteeringDraft（chapter-steering.ts:75）。该引擎能力是确定性的——它从项目状态
- *   （伏笔/线索/主线目标/角色/地点/风险）推导候选建议并合成本章目标预览，自身 writesState:false。
- *   因此本工具同样是只读：不调模型、不写盘、不建快照、不带 snapshotId / refreshScope。
+ * 双轨合一：共享编排（校验方向 → buildChapterSteeringDraft → canonical result）已收进
+ * services/steering-service.ts（与 routes/chapter-steering.ts 同调）。本工具只剩适配层：
+ * RequestContext 取 projectDir/章号回退（D26 输入面）+ 用户可见 summary（D27 输出面）。
+ * 引擎能力是确定性的（writesState:false），本工具同样只读：不调模型、不写盘、不建快照、
+ * 不带 snapshotId / refreshScope。
  *
  * 铁律：
  * - 题材中立：description / summary 用中性词，不注入任何题材假设。
  * - 绝不静默失败 / 绝不谎报：缺方向时诚实拒绝（ok:false），不编造方案。
  */
-import { buildChapterSteeringDraft } from "@actalk/story-engine";
 import type {
   ChapterSteeringDraft,
   ChapterSteeringPacing,
@@ -22,6 +22,7 @@ import { z } from "zod";
 import { coerceEnum, coerceNumber, coerceStringArray, positiveOrUndefined } from "./lenient-args.js";
 
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { runChapterSteering } from "../../services/steering-service.js";
 
 const PACINGS = ["slow", "medium", "fast"] as const;
 const REVEAL_LEVELS = ["none", "small", "large"] as const;
@@ -49,7 +50,7 @@ export interface ChapterSteeringToolOutput {
 }
 
 /**
- * 纯逻辑：复刻路由编排——校验方向 → buildChapterSteeringDraft → 摘要。抽出以便直接单测（无需经 Mastra）。
+ * 工具适配层：调共享 service 拿 canonical draft，再加用户可见 summary（D27）。
  * 只读：不写盘、不建快照。缺方向 → ok:false、不编造。
  */
 export async function buildChapterSteeringToolOutput(input: {
@@ -62,22 +63,22 @@ export async function buildChapterSteeringToolOutput(input: {
   readonly mustAvoid?: readonly string[];
   readonly maxSuggestions?: number;
 }): Promise<ChapterSteeringToolOutput> {
-  const userDirection = input.userDirection.trim();
-  if (!userDirection) {
-    return { ok: false, summary: "下一章方向不能为空，请先告诉我这一章想往哪个方向走。" };
-  }
-
-  const draft = await buildChapterSteeringDraft({
+  const maxSuggestions = positiveOrUndefined(input.maxSuggestions);
+  const result = await runChapterSteering({
     projectDir: input.projectDir,
-    userDirection,
+    userDirection: input.userDirection,
     ...(input.chapter !== undefined ? { chapter: input.chapter } : {}),
     ...(input.pacing !== undefined ? { pacing: input.pacing } : {}),
     ...(input.revealLevel !== undefined ? { revealLevel: input.revealLevel } : {}),
     ...(input.mustInclude !== undefined ? { mustInclude: input.mustInclude } : {}),
     ...(input.mustAvoid !== undefined ? { mustAvoid: input.mustAvoid } : {}),
-    ...(positiveOrUndefined(input.maxSuggestions) !== undefined ? { maxSuggestions: positiveOrUndefined(input.maxSuggestions) } : {}),
+    ...(maxSuggestions !== undefined ? { maxSuggestions } : {}),
   });
+  if (!result.ok) {
+    return { ok: false, summary: "下一章方向不能为空，请先告诉我这一章想往哪个方向走。" };
+  }
 
+  const draft = result.draft;
   return {
     ok: true,
     draft,

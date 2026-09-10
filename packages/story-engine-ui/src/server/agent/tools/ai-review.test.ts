@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// ai_review 纯逻辑单测：复刻 routes/draft.ts 的 /api/draft/ai-review 编排（进程内）。
+// ai_review 纯逻辑单测：薄适配层 + 共享 services/review-service.ts 编排（进程内）。
 // checkDraftBeforeCommit → buildDraftAIReviewPrompt → callModel → parseDraftAIReviewReport，
 // 模型不可用时走 fallbackDraftAIReviewReport（不抛、诚实标 blocked）。
 // 只读：不建快照、不带 snapshotId / refreshScope。callModel 注入 mock，引擎读取走 fixture。
