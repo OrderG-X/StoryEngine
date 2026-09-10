@@ -1,50 +1,37 @@
 /**
  * commit_preview — 只读工具：预览把某章草稿入库会产生哪些变更，并做入库前质量门槛检查。
  *
- * 对照 routes/commit.ts 的 /api/commit/preview 编排（进程内复刻，不经 HTTP）：
- *   buildCommitPlanFromProject + checkDraftBeforeCommit + checkCommitPlanSemanticQuality。
- * 只跑引擎的确定性纯函数检查（不调模型），把结果摊给 agent 判断是否可入库。
- *
- * 预览成功（计划 passed）时，把 (项目, 章节, 草稿哈希) 登记成一个 previewToken 存内存，
- * 供 commit_apply 守卫「必须先预览过且草稿未变」。读类工具不建快照、不带 snapshotId。
+ * 双轨合一（第二波·commit 簇）：共享编排（锁内 recover → 读草稿 → 声明通道 → 建计划 →
+ * 质检 → 事务身份）已收进 services/commit-service.ts（与 routes/commit.ts 的
+ * /api/commit/preview 同调 runCommitPreview）。本工具只剩适配层：
+ *   - RequestContext 取 projectDir/章号回退 + zod schema；
+ *   - 显式策略参数：declarationChannel（D7，生产路径带 declareDelta 声明模型通道）+
+ *     judge 注入确定性透传桩（D6，工具预览不调判定模型）；
+ *   - canonical result 的工具投影（D8/D9）：issues 裁三元组、名字漂移/待收口/声明被拒/衔接
+ *     提醒组装、blockingReasons/canCommit 判定、summary/modelHint 文案；
+ *   - previewToken 登记（commit-preview-store 的所有权在本适配层）：canCommit 时把
+ *     (项目, 章节, 草稿哈希, 声明) 登记成 previewToken，供 commit_apply 守卫「必须先预览过且草稿未变」。
+ * 读类工具不建快照、不带 snapshotId。
  */
-import { readFile } from "node:fs/promises";
-import {
-  buildCommitPlanFromProject,
-  checkCommitPlanSemanticQuality,
-  checkDraftBeforeCommit,
-  readArcGoalPool,
-  readCharacterBible,
-  readHookPool,
-  recoverProjectCommitTransactions,
-  readThreadPool,
-  readTimelineEvents,
-  withProjectCommitLock,
-  type ChapterDeltaDeclaration,
-  type NameDriftFinding,
-} from "@actalk/story-engine";
+import type { ChapterDeltaDeclaration, NameDriftFinding } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
-import { defaultCommittedChapterPath, defaultDraftPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import {
+  runCommitPreview,
+  type CommitPreviewDeclareDelta,
+} from "../../services/commit-service.js";
 import { callConfiguredDeclareModel, declareChapterDelta } from "./chapter-delta-declaration.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
 
 /**
  * 预览阶段生成章节语义声明的注入点（单测可传假实现；缺省=不声明，走引擎正则）。
- * openThreadTitles：现有未决线索标题——喂给模型，让它回收时对号入座既有线索、而非每章重埋新线索（治线索堆积）。
+ * 类型的真家在 services/commit-service.ts（CommitPreviewDeclareDelta），此处保留别名兼容。
  */
-export type DeclareDeltaFn = (input: {
-  readonly chapter: number;
-  readonly draft: string;
-  readonly openThreadTitles?: readonly string[];
-  readonly establishedNames?: readonly string[];
-  readonly openGoalTitles?: readonly string[];
-  readonly previousChapterEnding?: string;
-}) => Promise<ChapterDeltaDeclaration | undefined>;
+export type DeclareDeltaFn = CommitPreviewDeclareDelta;
 
 /** 生产用：调用配置模型声明本章语义；任何失败 → undefined（非致命，降级到引擎正则）。 */
 const defaultDeclareDelta: DeclareDeltaFn = async ({ chapter, draft, openThreadTitles, establishedNames, openGoalTitles, previousChapterEnding }) =>
@@ -57,124 +44,6 @@ const defaultDeclareDelta: DeclareDeltaFn = async ({ chapter, draft, openThreadT
     ...(openGoalTitles ? { openGoalTitles } : {}),
     ...(previousChapterEnding ? { previousChapterEnding } : {}),
   });
-
-/**
- * 读现有未决的伏笔+线索标题，供声明模型回收时对号入座（回收 targetThreadHint 从这里选、别新造，也别漏收）。
- * 线索=open/touched thread；伏笔=active hook。两者都是「已埋下、还没收口」的东西，一并喂给模型。
- * 读失败/无库 → 忽略该来源，绝不阻断预览。
- */
-async function readOpenThreadTitles(projectDir: string): Promise<readonly string[]> {
-  const hookTitles: string[] = [];
-  const threadTitles: { readonly title: string; readonly lastTouchedChapter: number }[] = [];
-  try {
-    const pool = await readThreadPool(projectDir);
-    for (const thread of pool.threads) {
-      if (thread.status !== "open" && thread.status !== "touched") continue;
-      const title = typeof thread.title === "string" ? thread.title.trim() : "";
-      if (title) threadTitles.push({ title, lastTouchedChapter: thread.lastTouchedChapter });
-    }
-  } catch {
-    // 无线索库 → 跳过
-  }
-  try {
-    const pool = await readHookPool(projectDir);
-    for (const hook of pool.hooks) {
-      if (hook.status !== "active") continue;
-      const title = typeof hook.title === "string" ? hook.title.trim() : "";
-      if (title) hookTitles.push(title);
-    }
-  } catch {
-    // 无伏笔库 → 跳过
-  }
-  const unique = new Set<string>();
-  const result: string[] = [];
-  for (const title of hookTitles) {
-    if (unique.has(title)) continue;
-    unique.add(title);
-    result.push(title);
-  }
-  for (const { title } of threadTitles
-    .sort((left, right) => right.lastTouchedChapter - left.lastTouchedChapter)
-    .slice(0, 40)) {
-    if (unique.has(title)) continue;
-    unique.add(title);
-    result.push(title);
-  }
-  return result;
-}
-
-/**
- * 读现有未达成的主线/阶段目标标题，供声明模型推进/达成时对号入座既有目标（targetGoalHint 从这里选、别新造），
- * 治「同一条主线跨章被拆成好几个目标」。只喂 active/touched（还在推进中）的，completed/stale 不喂避免噪声。
- * 读失败/无库 → 空数组，绝不阻断预览。题材中立、纯读盘。
- */
-async function readOpenArcGoalTitles(projectDir: string): Promise<readonly string[]> {
-  const titles = new Set<string>();
-  try {
-    const pool = await readArcGoalPool(projectDir);
-    for (const goal of pool.goals) {
-      if (goal.status !== "active" && goal.status !== "touched") continue;
-      const title = typeof goal.title === "string" ? goal.title.trim() : "";
-      if (title) titles.add(title);
-    }
-  } catch {
-    // 无目标库 → 跳过
-  }
-  return [...titles];
-}
-
-/**
- * 汇出本书「已确立的角色名」，供①喂给声明模型（逐字沿用、别写形近错名）②引擎名字漂移写前校验。
- * 来源：已登记角色库（character-bible）+ 之前各章时间线里出现过的角色名（跨章累积）。
- * 读失败/无库 → 空数组，绝不阻断预览。题材中立、纯读盘。
- */
-async function readEstablishedCharacterNames(projectDir: string, chapter: number): Promise<readonly string[]> {
-  const names = new Set<string>();
-  try {
-    const bible = await readCharacterBible(projectDir);
-    for (const character of bible?.characters ?? []) {
-      const name = character.name?.trim();
-      if (name) names.add(name);
-    }
-  } catch {
-    // 无角色库 → 跳过
-  }
-  try {
-    const events = await readTimelineEvents(projectDir);
-    for (const event of events) {
-      if (typeof event.chapter === "number" && event.chapter >= chapter) continue;
-      const summary = event.effects?.semanticSummary as {
-        readonly mentionedCharacterNames?: readonly string[];
-        readonly presentCharacterNames?: readonly string[];
-      } | undefined;
-      // 登记角色出现的名字 + 模型声明并校验通过的出场名（含未登记 prose-only 名，如「妹妹林宁」）。
-      for (const name of [...(summary?.mentionedCharacterNames ?? []), ...(summary?.presentCharacterNames ?? [])]) {
-        const trimmed = typeof name === "string" ? name.trim() : "";
-        if (trimmed) names.add(trimmed);
-      }
-    }
-  } catch {
-    // 无时间线 → 跳过
-  }
-  return [...names];
-}
-
-function chapterEndingExcerpt(content: string, maxLength = 500): string | undefined {
-  const trimmed = content.trim();
-  if (trimmed.length === 0) return undefined;
-  if (trimmed.length <= maxLength) return trimmed;
-  return trimmed.slice(-maxLength);
-}
-
-async function readPreviousChapterEnding(projectDir: string, chapter: number): Promise<string | undefined> {
-  if (chapter <= 1) return undefined;
-  try {
-    const content = await readFile(defaultCommittedChapterPath(projectDir, chapter - 1), "utf-8");
-    return chapterEndingExcerpt(content);
-  } catch {
-    return undefined;
-  }
-}
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要预览入库的章号。")),
@@ -248,8 +117,8 @@ export interface CommitPreviewToolOutput {
 }
 
 /**
- * 纯逻辑：构建入库预览 + 质量检查 + （通过时）登记 previewToken。抽出以便直接单测。
- * 读草稿失败（缺草稿）→ canCommit=false，blockingReasons 含 missing_draft，不发 token。
+ * 工具适配层：调共享 service 拿 canonical result，投影成工具输出；canCommit 时登记 previewToken。
+ * 读草稿失败（缺草稿）→ canCommit=false，blockingReasons 含 missing_draft，不发 token（D8 工具渲染）。
  */
 export async function buildCommitPreviewToolOutput(input: {
   readonly projectDir: string;
@@ -260,79 +129,31 @@ export async function buildCommitPreviewToolOutput(input: {
    */
   readonly declareDelta?: DeclareDeltaFn;
 }): Promise<CommitPreviewToolOutput> {
-  return withProjectCommitLock(input.projectDir, async () => {
-    await recoverProjectCommitTransactions(input.projectDir);
-    return buildCommitPreviewToolOutputUnlocked(input);
+  const result = await runCommitPreview({
+    projectDir: input.projectDir,
+    chapter: input.chapter,
+    // D7 显式策略：工具路带声明通道（声明上下文收集 + 声明喂计划 + 名册进计划）。
+    declarationChannel: { ...(input.declareDelta ? { declareDelta: input.declareDelta } : {}) },
+    // D6 显式策略：工具预览只跑引擎确定性检查，不调判定模型（透传桩）。
+    judge: async ({ deterministicQuality }) => deterministicQuality,
   });
-}
+  if (result.kind === "no_draft") {
+    return {
+      chapter: result.chapter,
+      ok: false,
+      canCommit: false,
+      plan: undefined,
+      draftQualityIssues: [],
+      semanticQualityIssues: [],
+      nameConsistencyWarnings: [],
+      staleThreadWarnings: [],
+      blockingReasons: ["missing_draft"],
+      summary: `第 ${result.chapter} 章还没有草稿，无法预览入库。`,
+    };
+  }
 
-async function buildCommitPreviewToolOutputUnlocked(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly declareDelta?: DeclareDeltaFn;
-}): Promise<CommitPreviewToolOutput> {
   const { projectDir, chapter } = input;
-  const draftPath = defaultDraftPath(projectDir, chapter);
-
-  let draftContent: string | undefined;
-  try {
-    draftContent = await readFile(draftPath, "utf-8");
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return {
-        chapter,
-        ok: false,
-        canCommit: false,
-        plan: undefined,
-        draftQualityIssues: [],
-        semanticQualityIssues: [],
-        nameConsistencyWarnings: [],
-        staleThreadWarnings: [],
-        blockingReasons: ["missing_draft"],
-        summary: `第 ${chapter} 章还没有草稿，无法预览入库。`,
-      };
-    }
-    throw error;
-  }
-
-  // 已确立角色名：喂给声明模型逐字沿用 + 供引擎名字漂移写前校验。读失败 → 空数组，不阻断。
-  const establishedCharacterNames = await readEstablishedCharacterNames(projectDir, chapter);
-  const previousChapterEnding = await readPreviousChapterEnding(projectDir, chapter);
-
-  // 章节语义声明：预览阶段算一次（失败/未配置模型 → undefined，非致命）。传给引擎优先填 mainEvent/时间线/线索回收；
-  // 并随 previewToken 缓存，供 apply 复用、不重复调模型。
-  let declaration: ChapterDeltaDeclaration | undefined;
-  if (input.declareDelta) {
-    try {
-      const [openThreadTitles, openGoalTitles] = await Promise.all([
-        readOpenThreadTitles(projectDir),
-        readOpenArcGoalTitles(projectDir),
-      ]);
-      declaration = await input.declareDelta({
-        chapter,
-        draft: draftContent,
-        openThreadTitles,
-        ...(establishedCharacterNames.length > 0 ? { establishedNames: establishedCharacterNames } : {}),
-        ...(openGoalTitles.length > 0 ? { openGoalTitles } : {}),
-        ...(previousChapterEnding ? { previousChapterEnding } : {}),
-      });
-    } catch {
-      declaration = undefined;
-    }
-  }
-
-  const commitPlan = await buildCommitPlanFromProject({
-    projectDir,
-    chapter,
-    draftPath,
-    draftContent,
-    ...(declaration ? { declaration } : {}),
-    ...(establishedCharacterNames.length > 0 ? { establishedCharacterNames } : {}),
-  });
-  const draftQuality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-  const semanticQuality = commitPlan.commitPlan
-    ? checkCommitPlanSemanticQuality(commitPlan.commitPlan)
-    : undefined;
+  const { commitPlan, draftQuality, semanticQuality, declaration } = result;
 
   const draftQualityIssues = draftQuality.issues.map((issue) => ({
     severity: issue.severity,
@@ -391,10 +212,11 @@ async function buildCommitPreviewToolOutputUnlocked(input: {
   const canCommit = blockingReasons.length === 0;
   let previewToken: string | undefined;
   if (canCommit) {
+    // previewToken 内存 store 的所有权在本适配层（D7 机制外皮）：登记草稿哈希 + 预览声明，供 apply 守卫/复用。
     const record = recordCommitPreview({
       projectDir,
       chapter,
-      draftHash: hashDraftContent(draftContent),
+      draftHash: hashDraftContent(result.draftContent),
       ...(declaration ? { declaration } : {}),
     });
     previewToken = record.token;
@@ -601,7 +423,3 @@ export const commitPreviewTool = createTool({
     return buildCommitPreviewToolOutput({ projectDir, chapter: resolvedChapter, declareDelta: defaultDeclareDelta });
   },
 });
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
-}

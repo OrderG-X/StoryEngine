@@ -3,19 +3,26 @@
 // 双轨对拍（parity）：routes/commit.ts 的 POST /api/commit/apply ↔ agent/tools/commit-apply.ts 的 commit_apply。
 // 写盘对拍：双胞胎 fixture（route/tool 各一个同种子项目），比较落盘结果与关键输出字段。
 //
-// 两侧的「先预览后入库」门禁机制不同但语义对齐（都是本测试锁定的共享面）：
+// 双轨合一后：编排已收进 services/commit-service.ts（runCommitApply），route/tool 均为薄适配；
+// 「判定同请求」的核心（锁内 recover → 读草稿 → 重建计划 → 重算事务身份 → 凭证/票据比对 → 两阶段写）
+// 两侧同源。两侧的「先预览后入库」门禁机制外皮不同但语义对齐（都是本测试锁定的共享面）：
 //   HTTP 路：预览发 transactionId+previewHash，apply 重算比对（validateCommitApplyPreflight），
 //            另有幂等键持久回执（.story-engine-ui/commit-idempotency/）。
-//   工具路：预览登记内存票据（commit-preview-store），apply 校验同章+草稿哈希未变（verifyCommitPreview）。
+//   工具路：预览登记内存票据（commit-preview-store，由工具适配层注入 service），apply 校验同章+
+//            草稿哈希未变（verifyCommitPreview，R3 无状态重算）。
 //
-// 已知刻意分歧（显式豁免清单；每条锁定现状并附代码证据）：
-//   D10 重放保护机制不同：HTTP 靠持久回执重放（idempotencyReplayed）；工具靠 A7 已入库幂等探测
-//       （commit-apply.ts detectAlreadyCommittedDuplicate）——同一份草稿重复入库，两侧都 ok:true 且不重复写入。
-//   D11 入库后搭车：工具 execute 在成功后抽硬事实+新人物提示（commit-apply.ts run 的 extractAndAppendFacts 段，
-//       本测试 mock 成空）；HTTP 路无此步骤。
-//   D12 失败摘要消毒：工具对引擎 issues 做裸 id/路径消毒（commit-apply.ts scrubBareEntityIdsFromText）；
-//       HTTP 路原样返回 report/issues。本文件未触发引擎失败路径，仅在此登记。
-//   D13 输出面：HTTP 返回 chapterContent/chapterTitle，不回传 snapshotId；工具返回 draftBody/draftTitle + snapshotId。
+// 原已知刻意分歧全部落成 service 的显式策略参数或适配层投影（不再是编排漂移）：
+//   D10 重放保护机制 → service 的 policy 显式参数：HTTP=http_durable_receipt（持久回执重放
+//       idempotencyReplayed，含 pending 磁盘对账恢复出口 idempotencyRecovered）；工具=
+//       agent_preview_ticket（A7 已入库幂等探测 + previewToken 守卫）。同一份草稿重复入库，
+//       两侧都 ok:true 且不重复写入（下方对应用例锁定）。
+//   D11 入库后搭车：工具 execute 在成功后抽硬事实+新人物提示（留在工具适配层 run 内，本测试
+//       mock 成空）；HTTP 路无此步骤。
+//   D12 失败摘要消毒：工具适配层对引擎 issues 做裸 id/路径消毒（commit-apply.ts
+//       scrubBareEntityIdsFromText）；HTTP 路原样返回 report/issues。本文件未触发引擎失败路径，仅在此登记。
+//   D13 输出面 → canonical committed 全集（chapterContent/chapterTitle/draftBody/draftTitle/overview/…）
+//       的适配层投影：HTTP 返回 chapterContent/chapterTitle、不回传 snapshotId；工具返回
+//       draftBody/draftTitle + snapshotId（writeTool 快照包装层并入）。
 import { readFile } from "node:fs/promises";
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -155,7 +162,7 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
     expect(route.payload.overview).toBeTruthy();
     expect(tool.overview).toBeTruthy();
 
-    // D13（豁免清单·快照透出）：工具回传 snapshotId（writeTool 快照包装）；HTTP 路建了快照但不回传 id。
+    // D13（输出面投影·快照透出）：工具回传 snapshotId（writeTool 快照包装）；HTTP 路建了快照但不回传 id。
     expect(typeof tool.snapshotId).toBe("string");
     expect("snapshotId" in route.payload).toBe(false);
     expect(await pathExists(`${routeDir}/.git`)).toBe(true);

@@ -1,24 +1,18 @@
 /**
  * POST /api/commit/preview — preview a commit plan.
  * POST /api/commit/apply — apply a commit plan to formal state.
+ *
+ * 双轨合一（第二波·commit 簇）：preview/apply 的共享编排已收进
+ * services/commit-service.ts（与 commit_preview/commit_apply 工具同调），本路由只剩 HTTP 适配层：
+ * 入参解析与 400 守卫、formalCommitPreview 强化结构渲染（D9 输出面）、项目级 in-flight 忙碌门
+ * （activeProjectCommitOwners，HTTP 并发外皮）、canonical result → 状态码/字段投影（D8/D13）。
+ * 显式策略：预览不传 declarationChannel（暂无声明来源=空声明，D7）、judge 用默认
+ * judgeDraftQualityWithModel（草稿+语义各一次，D6）；apply 用 http_durable_receipt 机制（D10：
+ * 三绑死 preflight + 持久回执重放/pending 恢复出口 + 锁内快照两阶段，均在 service 内原位保留）。
  */
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
-  buildCommitPlanFromProject,
-  buildStateOverview,
-  checkCommitPlanSemanticQuality,
-  checkDraftBeforeCommit,
-  commitFastDraft,
-  recoverProjectCommitTransactions,
-  withProjectCommitLock,
-} from "@actalk/story-engine";
-import {
-  defaultCommittedChapterPath,
-  defaultDraftPath,
-  extractDraftTitle,
   guardProjectPath,
   isSafeProjectPath,
   readJsonBody,
@@ -29,52 +23,18 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
-import { createSnapshot } from "../lib/snapshot.js";
-import {
-  buildCommitPreviewTransaction,
-  validateCommitApplyPreflight,
-  type CommitPreviewTransactionMetadata,
-} from "../lib/transaction-hardening.js";
 import {
   buildFormalCommitPreviewResult,
   findForbiddenFormalCommitPreviewFields,
   type FormalCommitPreviewBlockingReason,
 } from "../lib/formal-commit-preview.js";
+import {
+  runCommitApply,
+  runCommitPreview,
+  type CommitApplyPreflightFailure,
+} from "../services/commit-service.js";
 
-interface CommitApplySuccessPayload extends Record<string, unknown> {
-  readonly ok: true;
-  readonly report: unknown;
-  readonly overview: unknown;
-  readonly chapterContent: string;
-  readonly chapterTitle: string;
-}
-
-type CommitIdempotencyEntry =
-  | {
-    readonly status: "running";
-    readonly transaction: CommitPreviewTransactionMetadata;
-  }
-  | {
-    readonly status: "completed";
-    readonly transaction: CommitPreviewTransactionMetadata;
-    readonly payload: CommitApplySuccessPayload;
-  };
-
-const commitIdempotencyEntries = new Map<string, CommitIdempotencyEntry>();
 const activeProjectCommitOwners = new Map<string, string>();
-
-interface DurableCommitReceipt {
-  readonly version: 1;
-  readonly status: "pending" | "completed";
-  readonly projectHash: string;
-  readonly chapter: number;
-  readonly idempotencyKey: string;
-  readonly transactionId: string;
-  readonly previewHash: string;
-  readonly createdAt: string;
-  readonly payload?: CommitApplySuccessPayload;
-}
 
 export function registerCommitRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {
@@ -140,40 +100,21 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
       });
       return;
     }
-    await withProjectCommitLock(projectDir, async () => {
-    await recoverProjectCommitTransactions(projectDir);
-    const draftPath = defaultDraftPath(projectDir, chapter);
-    let draftContent: string;
-    try {
-      draftContent = await readFile(draftPath, "utf-8");
-    } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") {
-        writeCommitPreviewBlocked(res, 400, {
-          reason: "formal_commit_preview_missing_workspace_diff",
-          error: "Workspace draft is required for Formal Commit Preview.",
-          projectPath: projectDir,
-          chapter,
-          requestId,
-          blockingReasons: ["missing_workspace_diff"],
-        });
-        return;
-      }
-      throw error;
+    // 共享编排在 services/commit-service.ts。本路由的显式策略：无声明通道（D7）+ 默认 AI 判定 ×2（D6）。
+    const result = await runCommitPreview({ projectDir, chapter });
+    if (result.kind === "no_draft") {
+      // D8 路由渲染：400 + missing_workspace_diff（工具路渲染 ok:false + missing_draft）。
+      writeCommitPreviewBlocked(res, 400, {
+        reason: "formal_commit_preview_missing_workspace_diff",
+        error: "Workspace draft is required for Formal Commit Preview.",
+        projectPath: projectDir,
+        chapter,
+        requestId,
+        blockingReasons: ["missing_workspace_diff"],
+      });
+      return;
     }
-    const commitPlan = await buildCommitPlanFromProject({ projectDir, chapter, draftPath, draftContent });
-    const deterministicDraftQuality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-    const deterministicSemanticQuality = commitPlan.commitPlan
-      ? checkCommitPlanSemanticQuality(commitPlan.commitPlan)
-      : undefined;
-    const [draftQuality, semanticQuality] = await Promise.all([
-      judgeDraftQualityWithModel({ projectDir, chapter, draftContent, deterministicQuality: deterministicDraftQuality }),
-      deterministicSemanticQuality
-        ? judgeDraftQualityWithModel({ projectDir, chapter, draftContent, deterministicQuality: deterministicSemanticQuality })
-        : Promise.resolve(undefined),
-    ]);
-    const transaction = buildCommitPreviewTransaction({ projectDir, chapter, draftContent, commitPlan });
-    const committedChapterContent = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8")
-      .catch(() => "");
+    const { commitPlan, draftQuality, semanticQuality, transaction } = result;
     const formalCommitPreview = buildFormalCommitPreviewResult({
       projectPath: projectDir,
       chapterTarget: chapter,
@@ -184,7 +125,7 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
         projectPath: projectDir,
         chapterTarget: chapter,
         previewHash: transaction.draftHash,
-        baseHash: sha256(committedChapterContent),
+        baseHash: sha256(result.committedChapterContent),
         workspaceDraftId: transaction.draftHash,
         readinessStatus: "ready_for_formal_review",
       },
@@ -203,7 +144,6 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
       transactionId: transaction.transactionId,
       previewHash: transaction.previewHash,
       formalCommitPreview,
-    });
     });
   } catch (error) {
     writeJson(res, 500, {
@@ -257,7 +197,8 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
-    const requestOwner = commitIdempotencyCacheKey(projectDir, chapter, idempotencyKey);
+    // 项目级 in-flight 忙碌门（HTTP 并发外皮）：同项目只允许一个正式定稿在执行。
+    const requestOwner = commitApplyOwnerKey(projectDir, chapter, idempotencyKey);
     const projectOwnerKey = resolve(projectDir);
     const existingOwner = activeProjectCommitOwners.get(projectOwnerKey);
     if (existingOwner && existingOwner !== requestOwner) {
@@ -272,183 +213,93 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
       activeProjectCommitOwners.set(projectOwnerKey, requestOwner);
       claimedProjectOwner = { key: projectOwnerKey, owner: requestOwner };
     }
-    await withProjectCommitLock(projectDir, async () => {
-      await recoverProjectCommitTransactions(projectDir);
-      const cacheKey = commitIdempotencyCacheKey(projectDir, chapter, idempotencyKey);
-      const transactionReceipt = typeof body.transactionId === "string" && typeof body.previewHash === "string"
-        ? await findDurableReceiptForTransaction(projectDir, chapter, body.transactionId, body.previewHash)
-        : undefined;
-      if (transactionReceipt && transactionReceipt.idempotencyKey !== idempotencyKey) {
+    // 共享编排在 services/commit-service.ts（http_durable_receipt 机制，D10）；
+    // 安全不变量（三绑死/锁内快照/两阶段回执/pending 恢复出口）全部在 service 内原位保留。
+    const result = await runCommitApply({
+      projectDir,
+      chapter,
+      policy: {
+        kind: "http_durable_receipt",
+        idempotencyKey,
+        credentials: {
+          transactionId: body.transactionId,
+          previewHash: body.previewHash,
+          idempotencyKey: body.idempotencyKey,
+        },
+      },
+    });
+    switch (result.kind) {
+      case "no_draft":
+        writeJson(res, 500, { ok: false, error: result.errorMessage });
+        return;
+      case "transaction_already_claimed":
         writeJson(res, 409, {
           ok: false,
           reason: "formal_commit_apply_transaction_already_claimed",
-          error: transactionReceipt.status === "completed"
+          error: result.receiptStatus === "completed"
             ? "该预览事务已经成功定稿；更换 idempotencyKey 不能重复写入。"
             : "该预览事务存在结果不确定的 pending 回执；更换 idempotencyKey 不能绕过保护。",
         });
         return;
-      }
-      const durableReceipt = isValidIdempotencyKey(idempotencyKey)
-        ? await readDurableCommitReceipt(projectDir, chapter, idempotencyKey)
-        : undefined;
-      if (durableReceipt) {
-        if (!receiptMatchesRequest(durableReceipt, body, projectDir, chapter)) {
-          writeJson(res, 409, {
-            ok: false,
-            reason: "formal_commit_apply_idempotency_collision",
-            error: "该 idempotencyKey 已绑定到另一份定稿请求，已拒绝重复使用。",
-          });
-          return;
-        }
-        if (durableReceipt.status === "pending" || !durableReceipt.payload) {
-          const recoveredPayload = await recoverPendingCommitReceiptFromDisk(projectDir, chapter, durableReceipt)
-            .catch(() => undefined);
-          if (recoveredPayload) {
-            writeJson(res, 200, { ...recoveredPayload, idempotencyRecovered: true });
-            return;
-          }
-          writeJson(res, 409, {
-            ok: false,
-            reason: "formal_commit_apply_idempotency_in_progress",
-            error: pendingReceiptBlockMessage(projectDir, chapter, idempotencyKey),
-          });
-          return;
-        }
-        writeJson(res, 200, { ...durableReceipt.payload, idempotencyReplayed: true });
+      case "idempotency_collision":
+        writeJson(res, 409, {
+          ok: false,
+          reason: "formal_commit_apply_idempotency_collision",
+          error: result.collision === "durable"
+            ? "该 idempotencyKey 已绑定到另一份定稿请求，已拒绝重复使用。"
+            : "幂等键与原请求不一致。",
+        });
         return;
-      }
-      const cached = idempotencyKey ? commitIdempotencyEntries.get(cacheKey) : undefined;
-      if (cached?.status === "completed") {
-        if (!receiptMatchesRequest(receiptFromCache(cached, chapter, idempotencyKey, projectDir), body, projectDir, chapter)) {
-          writeJson(res, 409, { ok: false, reason: "formal_commit_apply_idempotency_collision", error: "幂等键与原请求不一致。" });
-          return;
-        }
-        writeJson(res, 200, { ...cached.payload, idempotencyReplayed: true });
+      case "idempotency_in_progress":
+        writeJson(res, 409, {
+          ok: false,
+          reason: "formal_commit_apply_idempotency_in_progress",
+          error: result.error,
+        });
         return;
-      }
-
-      const draftPath = defaultDraftPath(projectDir, chapter);
-      const draftContent = await readFile(draftPath, "utf-8");
-      const commitPlan = await buildCommitPlanFromProject({ projectDir, chapter, draftPath, draftContent });
-      const transaction = buildCommitPreviewTransaction({ projectDir, chapter, draftContent, commitPlan });
-      const transactionPreflight = validateCommitApplyPreflight({
-        transactionId: body.transactionId,
-        expectedPreviewHash: body.previewHash,
-        idempotencyKey: body.idempotencyKey,
-        current: transaction,
-        residues: [],
-      });
-      if (!transactionPreflight.ok) {
-        writeCommitApplyPreflightFailure(res, transactionPreflight);
+      case "replayed":
+        writeJson(res, 200, { ...result.payload, idempotencyReplayed: true });
         return;
-      }
-      if (!commitPlan.passed || !commitPlan.commitPlan) {
+      case "recovered":
+        writeJson(res, 200, { ...result.payload, idempotencyRecovered: true });
+        return;
+      case "draft_changed_during_snapshot":
+        writeJson(res, 409, {
+          ok: false,
+          reason: "formal_commit_apply_draft_changed",
+          error: "创建快照期间草稿已变化，请重新生成定稿预览。",
+        });
+        return;
+      case "preflight_failed":
+        writeCommitApplyPreflightFailure(res, result.preflight);
+        return;
+      case "plan_not_applyable":
         writeJson(res, 409, {
           ok: false,
           reason: "commit_plan_not_applyable",
-          error: `Commit plan 不可用：${commitPlan.issues.join("；")}`,
-          issues: commitPlan.issues,
+          error: `Commit plan 不可用：${result.issues.join("；")}`,
+          issues: result.issues,
         });
         return;
-      }
-
-      const pendingReceipt: DurableCommitReceipt = {
-        version: 1,
-        status: "pending",
-        projectHash: sha256(resolve(projectDir)),
-        chapter,
-        idempotencyKey,
-        transactionId: transaction.transactionId,
-        previewHash: transaction.previewHash,
-        createdAt: new Date().toISOString(),
-      };
-      let businessCommitted = false;
-      try {
-        await createSnapshot(projectDir, `入库前快照：第${chapter}章`);
-        const draftAfterSnapshot = await readFile(draftPath, "utf-8");
-        if (sha256(draftAfterSnapshot) !== transaction.draftHash) {
-          await removePendingCommitReceipt(projectDir, pendingReceipt);
-          commitIdempotencyEntries.delete(cacheKey);
-          writeJson(res, 409, {
-            ok: false,
-            reason: "formal_commit_apply_draft_changed",
-            error: "创建快照期间草稿已变化，请重新生成定稿预览。",
-          });
-          return;
-        }
-
-        // Claim after the reversible pre-write snapshot so undoing that
-        // snapshot also removes the completed receipt and permits a genuine
-        // future re-commit. The exclusive create is the atomic post-await gate.
-        const racedReceipt = await claimDurableCommitReceipt(projectDir, pendingReceipt);
-        if (racedReceipt) {
-          if (!receiptMatchesRequest(racedReceipt, body, projectDir, chapter)) {
-            writeJson(res, 409, { ok: false, reason: "formal_commit_apply_idempotency_collision", error: "幂等键与原请求不一致。" });
-            return;
-          }
-          if (racedReceipt.status === "completed" && racedReceipt.payload) {
-            writeJson(res, 200, { ...racedReceipt.payload, idempotencyReplayed: true });
-          } else {
-            writeJson(res, 409, { ok: false, reason: "formal_commit_apply_idempotency_in_progress", error: "相同幂等请求仍在执行。" });
-          }
-          return;
-        }
-        commitIdempotencyEntries.set(cacheKey, { status: "running", transaction });
-
-        const report = await commitFastDraft({
-          projectDir,
-          chapter,
-          draftPath,
-          draftContent,
-          commitPlan: commitPlan.commitPlan,
+      case "commit_failed":
+        writeJson(res, 409, {
+          ok: false,
+          reason: "commit_failed",
+          error: result.report.issues.length > 0 ? result.report.issues.join("；") : "入库失败。",
+          report: result.report,
         });
-        if (!report.passed) {
-          await removePendingCommitReceipt(projectDir, pendingReceipt);
-          commitIdempotencyEntries.delete(cacheKey);
-          writeJson(res, 409, {
-            ok: false,
-            reason: "commit_failed",
-            error: report.issues.length > 0 ? report.issues.join("；") : "入库失败。",
-            report,
-          });
-          return;
+        return;
+      case "committed":
+        // http_durable_receipt 机制下 committed 恒带 httpPayload（与持久回执逐字同源）；缺省即编程错误。
+        if (!result.httpPayload) {
+          throw new Error("commit-service committed result missing httpPayload for http_durable_receipt policy.");
         }
-        businessCommitted = true;
-        const chapterContent = typeof report.chapterPath === "string"
-          ? await readFile(report.chapterPath, "utf-8").catch(() => draftContent)
-          : draftContent;
-        const chapterTitle = extractDraftTitle(chapterContent) ?? `第${chapter}章`;
-        const warnings: string[] = [];
-        const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 })
-          .catch((error: unknown) => {
-            warnings.push(`overview refresh failed after successful commit: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          });
-        let payload: CommitApplySuccessPayload = {
-          ok: true,
-          report,
-          overview,
-          chapterContent,
-          chapterTitle,
-          ...(warnings.length > 0 ? { warnings } : {}),
-        };
-        const completedReceipt: DurableCommitReceipt = { ...pendingReceipt, status: "completed", payload };
-        try {
-          await writeDurableCommitReceipt(projectDir, completedReceipt);
-        } catch (error) {
-          const receiptWarning = `idempotency receipt persistence failed after successful commit: ${error instanceof Error ? error.message : String(error)}`;
-          payload = { ...payload, warnings: [...warnings, receiptWarning] };
-        }
-        commitIdempotencyEntries.set(cacheKey, { status: "completed", transaction, payload });
-        writeJson(res, 200, payload);
-      } catch (error) {
-        if (!businessCommitted) {
-          await removePendingCommitReceipt(projectDir, pendingReceipt).catch(() => undefined);
-          commitIdempotencyEntries.delete(cacheKey);
-        }
-        throw error;
-      }
-    });
+        writeJson(res, 200, result.httpPayload);
+        return;
+      default:
+        // agent_preview_ticket 机制的专属 kind 不会出现在本路由；出现即编程错误。
+        throw new Error(`Unexpected commit apply result for http_durable_receipt policy: ${String(result.kind)}`);
+    }
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
@@ -463,7 +314,7 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
 
 function writeCommitApplyPreflightFailure(
   res: import("node:http").ServerResponse,
-  transactionPreflight: Exclude<ReturnType<typeof validateCommitApplyPreflight>, { readonly ok: true }>,
+  transactionPreflight: CommitApplyPreflightFailure,
 ): void {
   writeJson(res, 409, {
     ok: false,
@@ -473,306 +324,9 @@ function writeCommitApplyPreflightFailure(
   });
 }
 
-function commitIdempotencyCacheKey(projectDir: string, chapter: number, idempotencyKey: string): string {
+/** 忙碌门的 owner 串（仅作唯一标识用；与 service 内持久回执键同款 \u0000 分隔格式）。 */
+function commitApplyOwnerKey(projectDir: string, chapter: number, idempotencyKey: string): string {
   return `${resolve(projectDir)}\u0000${chapter}\u0000${idempotencyKey}`;
-}
-
-function isValidIdempotencyKey(value: string): boolean {
-  return /^[A-Za-z0-9._:-]{8,160}$/u.test(value);
-}
-
-function receiptPath(projectDir: string, chapter: number, idempotencyKey: string): string {
-  const digest = sha256(commitIdempotencyCacheKey(projectDir, chapter, idempotencyKey));
-  return join(projectDir, ".story-engine-ui", "commit-idempotency", `${digest}.json`);
-}
-
-async function ensureReceiptDirectory(projectDir: string): Promise<string> {
-  const uiRoot = join(projectDir, ".story-engine-ui");
-  const dir = join(uiRoot, "commit-idempotency");
-  const projectStats = await lstat(projectDir);
-  if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
-    throw new Error(`Unsafe durable commit receipt project root: ${projectDir}`);
-  }
-  for (const path of [uiRoot, dir]) {
-    try {
-      const stats = await lstat(path);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        throw new Error(`Unsafe durable commit receipt directory: ${path}`);
-      }
-    } catch (error) {
-      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-      await mkdir(path);
-      const stats = await lstat(path);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        throw new Error(`Unsafe durable commit receipt directory: ${path}`);
-      }
-    }
-  }
-  return dir;
-}
-
-async function readDurableCommitReceipt(
-  projectDir: string,
-  chapter: number,
-  idempotencyKey: string,
-): Promise<DurableCommitReceipt | undefined> {
-  const path = receiptPath(projectDir, chapter, idempotencyKey);
-  try {
-    await validateExistingReceiptParents(projectDir);
-    const parsed = JSON.parse(await readReceiptFileNoFollow(path)) as unknown;
-    if (!isDurableCommitReceipt(parsed)) throw new Error(`Unreadable durable commit receipt: ${path}`);
-    return parsed;
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-async function findDurableReceiptForTransaction(
-  projectDir: string,
-  chapter: number,
-  transactionId: string,
-  previewHash: string,
-): Promise<DurableCommitReceipt | undefined> {
-  const dir = join(projectDir, ".story-engine-ui", "commit-idempotency");
-  let entries;
-  try {
-    await validateExistingReceiptParents(projectDir);
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-  let match: DurableCommitReceipt | undefined;
-  for (const entry of entries) {
-    if (!entry.name.endsWith(".json")) continue;
-    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`Unsafe durable commit receipt entry: ${entry.name}`);
-    const path = join(dir, entry.name);
-    const parsed = JSON.parse(await readReceiptFileNoFollow(path)) as unknown;
-    if (!isDurableCommitReceipt(parsed)) throw new Error(`Unreadable durable commit receipt: ${path}`);
-    if (
-      parsed.projectHash !== sha256(resolve(projectDir))
-      || parsed.chapter !== chapter
-      || parsed.transactionId !== transactionId
-      || parsed.previewHash !== previewHash
-    ) continue;
-    if (match && !sameReceiptIdentity(match, parsed)) {
-      throw new Error("Conflicting durable receipts exist for the same preview transaction.");
-    }
-    match = parsed;
-  }
-  return match;
-}
-
-async function validateExistingReceiptParents(projectDir: string): Promise<void> {
-  for (const path of [projectDir, join(projectDir, ".story-engine-ui"), join(projectDir, ".story-engine-ui", "commit-idempotency")]) {
-    const stats = await lstat(path);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-      throw new Error(`Unsafe durable commit receipt parent: ${path}`);
-    }
-  }
-}
-
-async function readReceiptFileNoFollow(path: string): Promise<string> {
-  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  try {
-    const [handleStats, pathStats] = await Promise.all([handle.stat(), lstat(path)]);
-    if (
-      !handleStats.isFile()
-      || pathStats.isSymbolicLink()
-      || !pathStats.isFile()
-      || handleStats.dev !== pathStats.dev
-      || handleStats.ino !== pathStats.ino
-      || handleStats.nlink !== 1
-    ) {
-      throw new Error(`Unsafe durable commit receipt file: ${path}`);
-    }
-    return await handle.readFile("utf-8");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function claimDurableCommitReceipt(projectDir: string, receipt: DurableCommitReceipt): Promise<DurableCommitReceipt | undefined> {
-  await ensureReceiptDirectory(projectDir);
-  const path = receiptPath(projectDir, receipt.chapter, receipt.idempotencyKey);
-  let handle;
-  try {
-    handle = await open(path, "wx", 0o600);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "EEXIST") {
-      return readDurableCommitReceipt(projectDir, receipt.chapter, receipt.idempotencyKey);
-    }
-    throw error;
-  }
-  try {
-    await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  return undefined;
-}
-
-async function writeDurableCommitReceipt(projectDir: string, receipt: DurableCommitReceipt): Promise<void> {
-  const dir = await ensureReceiptDirectory(projectDir);
-  const path = receiptPath(projectDir, receipt.chapter, receipt.idempotencyKey);
-  const existing = await lstat(path);
-  if (!existing.isFile() || existing.isSymbolicLink()) throw new Error(`Unsafe durable commit receipt: ${path}`);
-  const tmp = join(dir, `.${sha256(receipt.idempotencyKey).slice(0, 16)}.${process.pid}.${Date.now()}.tmp`);
-  const handle = await open(tmp, "wx", 0o600);
-  try {
-    await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(tmp, path);
-}
-
-async function removePendingCommitReceipt(projectDir: string, receipt: DurableCommitReceipt): Promise<void> {
-  const existing = await readDurableCommitReceipt(projectDir, receipt.chapter, receipt.idempotencyKey);
-  if (!existing || existing.status !== "pending") return;
-  if (!sameReceiptIdentity(existing, receipt)) return;
-  await rm(receiptPath(projectDir, receipt.chapter, receipt.idempotencyKey), { force: true });
-}
-
-/**
- * pending 回执的恢复出口（数据安全收口硬不变量 #7：先恢复或拒绝，绝不删证据后重做）。
- * pending 只证明「claim 之后、completed 回执落盘之前」中断，入库成败未知，故先做磁盘对账：
- * 引擎事务残留已在进锁时由 recoverProjectCommitTransactions 收尾（无半写），而 commitFastDraft
- * 把草稿原文写入 chapters/N.md——若该章已入库且内容与当前草稿哈希一致，说明入库其实已成功、
- * 只是回执没写完。此时按磁盘真值补写 completed 回执并重建响应，是恢复而不是重复写入。
- * 对不上（章未入库/内容被改/哈希不一致）一律返回 undefined，由调用方 fail-closed 409。
- */
-async function recoverPendingCommitReceiptFromDisk(
-  projectDir: string,
-  chapter: number,
-  receipt: DurableCommitReceipt,
-): Promise<CommitApplySuccessPayload | undefined> {
-  const draftContent = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
-  if (draftContent === undefined) return undefined;
-  const chapterPath = defaultCommittedChapterPath(projectDir, chapter);
-  const chapterContent = await readFile(chapterPath, "utf-8").catch(() => undefined);
-  if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return undefined;
-  const warnings = [
-    "上次定稿在入库成功后、回执落盘前中断；本次按磁盘真值补写回执并返回结果（恢复，未重复入库）。",
-    "详细变更清单不可恢复：report 中 updatedCharacters / timelineEventIds / updatedHooks / updatedWorld / updatedCalendar 均为占位空值（不代表实际未更新），真实变更以磁盘上的状态文件为准。",
-  ];
-  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 })
-    .catch((error: unknown) => {
-      warnings.push(`overview refresh failed after recovered commit: ${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    });
-  let payload: CommitApplySuccessPayload = {
-    ok: true,
-    report: {
-      chapter,
-      passed: true,
-      chapterPath,
-      // 引擎 CommitReport 这些字段为必填（commit-engine.ts:192-196），标 undefined 不兼容类型；
-      // 占位空值的诚实性由上面第二条 warning 承担，recoveredFromPendingReceipt 供前端识别恢复场景。
-      updatedCharacters: [],
-      timelineEventIds: [],
-      updatedHooks: [],
-      updatedWorld: false,
-      updatedCalendar: false,
-      issues: [],
-      recoveredFromPendingReceipt: true,
-    },
-    overview,
-    chapterContent,
-    chapterTitle: extractDraftTitle(chapterContent) ?? `第${chapter}章`,
-    warnings,
-  };
-  const completedReceipt: DurableCommitReceipt = { ...receipt, status: "completed", payload };
-  try {
-    await writeDurableCommitReceipt(projectDir, completedReceipt);
-  } catch (error) {
-    // 与主路径同口径：入库确已成功，回执补写再失败只降级为警告（下次同键重试还会走这条对账）。
-    const receiptWarning = `idempotency receipt persistence failed after recovered commit: ${error instanceof Error ? error.message : String(error)}`;
-    payload = { ...payload, warnings: [...warnings, receiptWarning] };
-  }
-  return payload;
-}
-
-/** pending 对账失败时的 409 文案：fail-closed，但必须给出可执行出路（含回执文件的确切路径）。 */
-function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempotencyKey: string): string {
-  const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览入库（或草稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
-    + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
-    + `2) 人工核对确认上次定稿确实未生效后，删除回执文件 ${receiptFile} 再用原预览凭证重试。`;
-}
-
-function receiptMatchesRequest(
-  receipt: DurableCommitReceipt,
-  body: Record<string, unknown>,
-  projectDir: string,
-  chapter: number,
-): boolean {
-  return receipt.projectHash === sha256(resolve(projectDir))
-    && receipt.chapter === chapter
-    && typeof body.transactionId === "string"
-    && typeof body.previewHash === "string"
-    && typeof body.idempotencyKey === "string"
-    && body.transactionId === receipt.transactionId
-    && body.previewHash === receipt.previewHash
-    && body.idempotencyKey.trim() === receipt.idempotencyKey;
-}
-
-function sameReceiptIdentity(left: DurableCommitReceipt, right: DurableCommitReceipt): boolean {
-  return left.projectHash === right.projectHash
-    && left.chapter === right.chapter
-    && left.idempotencyKey === right.idempotencyKey
-    && left.transactionId === right.transactionId
-    && left.previewHash === right.previewHash;
-}
-
-function receiptFromCache(
-  entry: Extract<CommitIdempotencyEntry, { readonly status: "completed" }>,
-  chapter: number,
-  idempotencyKey: string,
-  projectDir: string,
-): DurableCommitReceipt {
-  return {
-    version: 1,
-    status: "completed",
-    projectHash: sha256(resolve(projectDir)),
-    chapter,
-    idempotencyKey,
-    transactionId: entry.transaction.transactionId,
-    previewHash: entry.transaction.previewHash,
-    createdAt: "memory-cache",
-    payload: entry.payload,
-  };
-}
-
-function isDurableCommitReceipt(value: unknown): value is DurableCommitReceipt {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  if (
-    record.version !== 1
-    || (record.status !== "pending" && record.status !== "completed")
-    || typeof record.projectHash !== "string"
-    || !/^[0-9a-f]{64}$/u.test(record.projectHash)
-    || typeof record.chapter !== "number"
-    || !Number.isInteger(record.chapter)
-    || record.chapter <= 0
-    || typeof record.idempotencyKey !== "string"
-    || !isValidIdempotencyKey(record.idempotencyKey)
-    || typeof record.transactionId !== "string"
-    || typeof record.previewHash !== "string"
-    || typeof record.createdAt !== "string"
-  ) return false;
-  if (record.status === "completed") {
-    const payload = record.payload;
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload) || (payload as { ok?: unknown }).ok !== true) return false;
-  }
-  return true;
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
 }
 
 function sha256(value: string): string {

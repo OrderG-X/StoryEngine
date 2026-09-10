@@ -1,24 +1,21 @@
 /**
  * POST /api/draft/generate — non-streaming draft generation.
  * POST /api/draft/stream — SSE streaming draft generation.
- * POST /api/draft/quality — draft quality check.
+ * POST /api/draft/apply-candidate — persist a picked draft candidate (snapshot + write, no model call).
  * POST /api/draft/ai-review — AI review of draft.
+ * POST /api/draft/direct-edit — model-driven direct edit of the working draft.
+ * POST /api/draft/quality — draft quality check.
  */
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   buildStateOverview,
   applyDraftLengthConstraint,
   buildDraftLengthReport,
   buildFastDraftRetryPrompt,
-  countDraftChineseCharacters,
   renderFastDraftPromptText,
   resolveDraftLengthTarget,
-  requestedDraftLengthBounds,
-  resolveDraftMaxOutputTokens,
   trimDraftBodyToLengthTarget,
-  runFastDraft,
-  readWritingRules,
 } from "@actalk/story-engine";
 import type { DraftLengthTarget } from "@actalk/story-engine";
 import {
@@ -45,12 +42,18 @@ import { abortOnClientDisconnect } from "./agent-chat.js";
 import { createSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
+import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
 import { runDraftQualityCheck } from "../services/quality-service.js";
 import { runDraftAIReview } from "../services/review-service.js";
+import {
+  countCjkChars,
+  generateDraftCandidate,
+  resolveProjectDraftLengthTarget,
+  runGenerateDraft,
+  validateStreamedDraftBody,
+} from "../services/draft-service.js";
 
 const DIRECT_EDIT_MODEL_FORMAT_ERROR = "修订模型返回格式不完整，请重试或换一种修改要求。";
-const DRAFT_TOO_SHORT_ERROR = "草稿正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。";
-const DRAFT_TOO_LONG_ERROR = "草稿正文超出目标字数过多，压缩后仍不稳定；已拒绝写入工作稿，请重试。";
 const DRAFT_TARGET_UNSATISFIED_ERROR = "模型输出无法稳定满足目标字数，已拒绝写入工作稿；请重试或换一种写法。";
 
 export function registerDraftRoutes(middlewares: MiddlewareStack): void {
@@ -83,6 +86,12 @@ export function registerDraftRoutes(middlewares: MiddlewareStack): void {
   });
 }
 
+// 共享编排在 services/draft-service.ts（与 generate_draft 工具同调 runGenerateDraft / generateDraftCandidate）。
+// 本路由只剩 HTTP 适配：入参解析 → service 调用 → 200/422 投影。本路由的显式策略（D1/D2/D4 处置）：
+//   - lengthPolicy:"enforce_or_rollback"（D1 按钮路现状）：低于下限拒写+回滚旧稿 → 422；超上限确定性裁剪落盘。
+//   - aiFlavorRecheck:false（D2 现状）：不给引擎传回检规则、不接 autoDeAi/beats 裁决栈（产品未给按钮路开回检）。
+//   - 快照（D4 刻意收敛）：与工具路同一 helper 同一语义——仅覆盖已有非空草稿前建可撤销快照，
+//     首次出稿无旧稿不建空快照（原「每次无条件 createSnapshot」收敛；覆盖写前必有撤销点一寸未让）。
 async function handleGenerateDraft(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
   try {
     if (req.method !== "POST") {
@@ -94,36 +103,22 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const rawChapterGoal = readString(body.chapterGoal) ?? `继续第 ${chapter} 章。`;
-    const requestedDraftLength = readPositiveInteger(body.requestedDraftLength);
-    const selectedCharacterIds = optionalStringList(body.selectedCharacterIds);
-    const selectedHookIds = optionalStringList(body.selectedHookIds);
-    const maxTimelineEvents = readPositiveInteger(body.maxTimelineEvents) ?? 8;
-    const lengthTarget = await resolveProjectDraftLengthTarget(projectDir, rawChapterGoal, requestedDraftLength);
     const writerClient = await createConfiguredWriterClient("fastDraft");
-    const characterSelection = await resolveSelectedCharacterIds({
+    const baseInput = {
       projectDir,
       chapter,
       chapterGoal: rawChapterGoal,
-      explicit: selectedCharacterIds,
-    });
-    const resolvedSelectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
-    // 抽卡候选（persist:false）：生成一版正文【不写盘、不快照】，临时返回给前端并排展示，挑中才落盘。
+      requestedDraftLength: readPositiveInteger(body.requestedDraftLength),
+      selectedCharacterIds: optionalStringList(body.selectedCharacterIds),
+      selectedHookIds: optionalStringList(body.selectedHookIds),
+      maxTimelineEvents: readPositiveInteger(body.maxTimelineEvents),
+      contextTokenBudget: readPositiveInteger(body.contextTokenBudget),
+      maxOutputTokens: readPositiveInteger(body.maxOutputTokens),
+      writerClient,
+    };
+    // 抽卡候选（persist:false，D5 的 HTTP 侧）：生成一版正文【不写盘、不快照】，临时返回给前端并排展示，挑中才落盘。
     if (body.persist === false) {
-      const contextRanking = makeWriterRankContext({ tokenBudget: resolveWriterTokenBudget(readPositiveInteger(body.contextTokenBudget)) });
-      const candidate = await runFastDraft({
-        projectDir,
-        chapter,
-        chapterGoal: rawChapterGoal,
-        writerClient,
-        dryRun: false,
-        persist: false,
-        requestedDraftLength,
-        maxOutputTokens: readPositiveInteger(body.maxOutputTokens) ?? resolveDraftMaxOutputTokens(lengthTarget),
-        maxTimelineEvents,
-        selectedCharacterIds: resolvedSelectedCharacterIds,
-        selectedHookIds,
-        rankContext: contextRanking.rankContext,
-      });
+      const { candidate, characterSelection, contextRanking } = await generateDraftCandidate(baseInput);
       if (!candidate.passed || !candidate.draftBody) {
         writeJson(res, 422, { ok: false, error: candidate.issues?.[0] ?? "候选生成失败，请重试。" });
         return;
@@ -139,65 +134,25 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       });
       return;
     }
-    const draftPath = defaultDraftPath(projectDir, chapter);
-    const previousDraftContent = await readFile(draftPath, "utf-8").catch(() => undefined);
-    // runFastDraft（dryRun: false）会写工作稿，写第一笔前先留可撤销快照
-    await createSnapshot(projectDir, `草稿生成前快照：第${chapter}章`);
-    const contextRanking = makeWriterRankContext({ tokenBudget: resolveWriterTokenBudget(readPositiveInteger(body.contextTokenBudget)) });
-    const report = await runFastDraft({
-      projectDir,
-      chapter,
-      chapterGoal: rawChapterGoal,
-      writerClient,
-      dryRun: false,
-      requestedDraftLength,
-      maxOutputTokens: readPositiveInteger(body.maxOutputTokens) ?? resolveDraftMaxOutputTokens(lengthTarget),
-      maxTimelineEvents,
-      selectedCharacterIds: resolvedSelectedCharacterIds,
-      selectedHookIds,
-      rankContext: contextRanking.rankContext,
+    await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章再次出稿前快照`);
+    const result = await runGenerateDraft({
+      ...baseInput,
+      policies: { lengthPolicy: "enforce_or_rollback", aiFlavorRecheck: false },
     });
-    let responseReport = report;
-    const draftContent = report.draftPath ? await readFile(report.draftPath, "utf-8").catch(() => "") : "";
-    if (draftContent.trim()) {
-      const draftBody = stripLeadingMarkdownChapterHeading(draftContent);
-      const enforced = enforceDraftLengthTarget({
-        draftBody,
-        lengthTarget,
-        allowDeterministicTrim: true,
-      });
-      if (!enforced.ok) {
-        await restoreDraftFile(draftPath, previousDraftContent);
-        writeJson(res, 422, { ok: false, error: enforced.error });
-        return;
-      }
-      const routeTrimmed = enforced.draftBody !== draftBody;
-      if (routeTrimmed && report.draftPath) {
-        const title = extractDraftTitle(draftContent) ?? report.title ?? `第${chapter}章`;
-        await writeFile(report.draftPath, `# ${title}\n\n${enforced.draftBody.trim()}\n`, "utf-8");
-      }
-      if (routeTrimmed || !report.draftLength) {
-        responseReport = {
-          ...report,
-          draftLength: buildDraftLengthReport({
-            draftBody: enforced.draftBody,
-            lengthTarget,
-            finalLengthAfterTrim: countCjkChars(enforced.draftBody),
-            whetherTrimmed: routeTrimmed || report.draftLength?.whetherTrimmed === true,
-          }),
-        };
-      }
+    if (result.rejection) {
+      writeJson(res, 422, { ok: false, error: result.rejection.error });
+      return;
     }
-    const finalDraftContent = report.draftPath ? await readFile(report.draftPath, "utf-8").catch(() => "") : "";
-    const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents }));
+    const finalDraftContent = result.http.draftContent;
+    const overview = await withUiOverviewDetails(projectDir, result.overview);
     writeJson(res, 200, {
       ok: true,
-      report: responseReport,
+      report: result.http.report,
       draftContent: finalDraftContent,
-      draftTitle: extractDraftTitle(finalDraftContent) ?? report.title,
+      draftTitle: extractDraftTitle(finalDraftContent) ?? result.http.report?.title,
       overview,
-      contextBudget: contextBudgetPayload(contextRanking),
-      characterSelection,
+      contextBudget: contextBudgetPayload(result.http.contextRanking),
+      characterSelection: result.characterSelection,
     });
   } catch (error) {
     writeJson(res, 500, {
@@ -489,15 +444,6 @@ async function handleDraftQuality(req: import("node:http").IncomingMessage, res:
   }
 }
 
-async function resolveProjectDraftLengthTarget(
-  projectDir: string,
-  chapterGoal: string,
-  requestedDraftLength?: number,
-): Promise<DraftLengthTarget> {
-  const writingRules = await readWritingRules(projectDir).catch(() => null);
-  return resolveDraftLengthTarget({ chapterGoal, requestedDraftLength, writingRules });
-}
-
 function optionalStringList(value: unknown): readonly string[] | undefined {
   const values = readStringList(value);
   return values.length > 0 ? values : undefined;
@@ -744,22 +690,9 @@ function formatChapterFileTitle(chapter: number, title: string): string {
   return `第${chapter}章 · ${cleanTitle}`;
 }
 
-function validateStreamedDraftBody(value: string): string | null {
-  const body = value
-    .replace(/```[\s\S]*?```/gu, "")
-    .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "")
-    .trim();
-  const cjkCount = countCjkChars(body);
-  const paragraphs = body.split(/\n{2,}/u).map((item) => item.trim()).filter(Boolean);
-  if (cjkCount < 200 || paragraphs.length < 3) {
-    return "模型返回的正文过短，疑似只返回标题或无效草稿；已拒绝写入 drafts/fast，请重新生成。";
-  }
-  return null;
-}
-
-function countCjkChars(value: string): number {
-  return countDraftChineseCharacters(value);
-}
+// countCjkChars / validateStreamedDraftBody 已迁入 services/draft-service.ts（顶部 import）——
+// 出稿流特有的「过短补写重试 + 压缩/扩写兜底」编排留在本路由层（SSE 特有：直连上游 fetch 流式吐字、
+// 断流重试、不落盘由前端接稿，与非流式/工具路无共享编排面，见 draft-service.ts 头注释）。
 
 function isDraftOverRequestedLength(draftBody: string, lengthTarget: DraftLengthTarget): boolean {
   return countCjkChars(draftBody) > lengthTarget.upperBound;
@@ -767,28 +700,6 @@ function isDraftOverRequestedLength(draftBody: string, lengthTarget: DraftLength
 
 function isDraftUnderRequestedLength(draftBody: string, lengthTarget: DraftLengthTarget): boolean {
   return countCjkChars(draftBody) < lengthTarget.lowerBound;
-}
-
-function enforceDraftLengthTarget(input: {
-  readonly draftBody: string;
-  readonly lengthTarget: DraftLengthTarget;
-  readonly allowDeterministicTrim: boolean;
-}): { readonly ok: true; readonly draftBody: string } | { readonly ok: false; readonly error: string } {
-  const currentLength = countCjkChars(input.draftBody);
-  if (currentLength < input.lengthTarget.lowerBound) {
-    return { ok: false, error: DRAFT_TOO_SHORT_ERROR };
-  }
-  if (currentLength <= input.lengthTarget.upperBound) {
-    return { ok: true, draftBody: input.draftBody.trim() };
-  }
-  if (!input.allowDeterministicTrim) {
-    return { ok: false, error: DRAFT_TOO_LONG_ERROR };
-  }
-  const trimmed = trimDraftBodyToLengthTarget(input.draftBody, input.lengthTarget);
-  if (!trimmed.ok || validateStreamedDraftBody(trimmed.draftBody)) {
-    return { ok: false, error: DRAFT_TOO_LONG_ERROR };
-  }
-  return { ok: true, draftBody: trimmed.draftBody.trim() };
 }
 
 async function ensureDraftBodyWithinLengthBounds(input: {
@@ -817,14 +728,6 @@ async function ensureDraftBodyWithinLengthBounds(input: {
   const validationError = validateStreamedDraftBody(candidate);
   if (validationError) return { ok: false, error: validationError };
   return { ok: true, draftBody: candidate.trim() };
-}
-
-async function restoreDraftFile(draftPath: string, previousContent: string | undefined): Promise<void> {
-  if (previousContent !== undefined) {
-    await writeFile(draftPath, previousContent, "utf-8");
-    return;
-  }
-  await rm(draftPath, { force: true });
 }
 
 async function compressDraftBodyToRequestedLength(input: {
@@ -919,5 +822,4 @@ async function expandDraftBodyToRequestedLength(input: {
 export const __draftRouteTest = {
   countCjkChars,
   resolveDraftLengthTarget,
-  requestedDraftLengthBounds,
 };

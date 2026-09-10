@@ -1,35 +1,38 @@
 /**
  * commit_apply — 写类工具：把某章草稿正式入库（章节正文 + 角色/伏笔/线索/时间线等全套状态）。
  *
- * 对照 routes/commit.ts 的 /api/commit/apply 编排（进程内复刻）：
- *   buildCommitPlanFromProject → commitFastDraft（自带事务回滚）。
+ * 双轨合一（第二波·commit 簇）：共享编排（锁内 recover → 机制外皮判定 → 重建计划 → 两阶段写）
+ * 已收进 services/commit-service.ts（与 routes/commit.ts 的 /api/commit/apply 同调 runCommitApply）。
+ * 本工具只剩适配层：
+ *   - RequestContext 取 projectDir/章号回退 + zod schema + writeTool 快照包装 + 本轮意图门；
+ *   - 显式策略参数：agent_preview_ticket 机制（D10：A7 幂等探测 + previewToken 守卫 +
+ *     预览缓存声明复用），previewToken 内存 store 以注入面形式交给 service（所有权仍在本适配层）；
+ *   - canonical result 的工具投影（D13）：draftBody/draftTitle/overview/summary/refreshScope，
+ *     快照 id 由 writeTool 包装层并入（HTTP 路不透出）。
+ *   - 失败摘要消毒（D12，scrubBareEntityIdsFromText）与入库后抽事实/新人物告知搭车（D11）留在本层。
  *
  * 守卫（铁律：绝不谎报）：必须先对「同一章节」commit_preview 过、且草稿在预览之后没改动
  *   （系统内预览票据/previewToken + 草稿哈希一致），否则诚实拒绝，不入库、不谎称成功。
- * 写类：用 writeTool 包装，入库前自动建快照，可一键撤销。入库成功后消费掉该 token（防重复入库）。
  */
-import { readFile } from "node:fs/promises";
 import {
-  buildCommitPlanFromProject,
   buildStateOverview,
-  commitFastDraft,
-  recoverProjectCommitTransactions,
-  withProjectCommitLock,
   type StateOverview,
 } from "@actalk/story-engine";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
-import { defaultCommittedChapterPath, defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
 import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import {
+  runCommitApply,
+  type CommitApplyPreviewTicketStore,
+} from "../../services/commit-service.js";
 import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from "./uncarded-character-memo.js";
 import {
   consumeCommitPreview,
   findCommitPreview,
-  hashDraftContent,
   verifyCommitPreview,
   type CommitPreviewGuardFailure,
 } from "./commit-preview-store.js";
@@ -89,7 +92,17 @@ export interface CommitApplyToolOutput {
 // 新出现人物改由入库后 extractAndAppendFacts 的 newCharacters 显式抽取、拼进 summary 告知（见工具 run）。
 
 /**
- * 纯逻辑：守卫校验 + 入库 + 诚实回报。抽出为可直接单测的函数（不经 writeTool 快照包装）。
+ * D10 机制外皮注入面：previewToken 内存 store（commit-preview-store.ts）的所有权在本适配层，
+ * service 经此窄接口做 A7 探测后的票据守卫/声明复用/消费，不反向依赖 agent/ 目录。
+ */
+const PREVIEW_TICKET_STORE: CommitApplyPreviewTicketStore = {
+  find: findCommitPreview,
+  verify: verifyCommitPreview,
+  consume: consumeCommitPreview,
+};
+
+/**
+ * 工具适配层：调共享 service 拿 canonical result（agent_preview_ticket 机制），投影成工具输出。
  * 任何守卫失败或计划不可用 → refused=true、committed=false，不入库、不谎报。
  */
 export async function applyCommitToolLogic(input: {
@@ -97,164 +110,96 @@ export async function applyCommitToolLogic(input: {
   readonly chapter: number;
   readonly previewToken?: string;
 }): Promise<CommitApplyToolOutput> {
-  return withProjectCommitLock(input.projectDir, async () => {
-    await recoverProjectCommitTransactions(input.projectDir);
-    return applyCommitToolLogicUnlocked(input);
+  const result = await runCommitApply({
+    projectDir: input.projectDir,
+    chapter: input.chapter,
+    policy: {
+      kind: "agent_preview_ticket",
+      ...(input.previewToken !== undefined ? { previewToken: input.previewToken } : {}),
+      previewStore: PREVIEW_TICKET_STORE,
+    },
   });
-}
-
-async function applyCommitToolLogicUnlocked(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly previewToken?: string;
-}): Promise<CommitApplyToolOutput> {
-  const { projectDir, chapter, previewToken } = input;
-  const draftPath = defaultDraftPath(projectDir, chapter);
-
-  let draftContent: string;
-  try {
-    draftContent = await readFile(draftPath, "utf-8");
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
+  const { projectDir, chapter } = input;
+  switch (result.kind) {
+    case "no_draft":
       return refusal(projectDir, chapter, `第 ${chapter} 章草稿不存在，无法定稿。`);
-    }
-    throw error;
-  }
-
-  // A7 幂等探测：断流后重试（实际已入库、token 已被消费）→ 该章已入库且正文与当前草稿一致，
-  // 直接幂等回报「已入库」，不因 token 蒸发误报「尚未预览」、也不重复写入。放在守卫之前。
-  const duplicate = await detectAlreadyCommittedDuplicate(projectDir, chapter, draftContent);
-  if (duplicate) {
-    const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }).catch(() => undefined);
-    return {
-      ok: true,
-      committed: true,
-      refused: false,
-      ...(duplicate.body ? { draftBody: duplicate.body } : {}),
-      ...(duplicate.title ? { draftTitle: duplicate.title } : {}),
-      overview,
-      summary: `第 ${chapter} 章此前已定稿，资料已更新（本次为重复请求，未重复写入）。`,
-      refreshScope: "full",
-      chapter,
-    };
-  }
-
-  const currentDraftHash = hashDraftContent(draftContent);
-  const effectivePreviewToken = resolveEffectivePreviewToken({
-    projectDir,
-    chapter,
-    providedToken: input.previewToken,
-  });
-
-  const guard = verifyCommitPreview({
-    projectDir,
-    chapter,
-    token: effectivePreviewToken,
-    currentDraftHash,
-  });
-  if (!guard.ok) {
-    return refusal(projectDir, chapter, GUARD_FAILURE_MESSAGE[guard.failure ?? "no_preview"]);
-  }
-
-  // 复用预览阶段算好的章节语义声明（不重复调模型）；取不到（进程重启/凭 token 无状态放行）→ undefined，引擎走正则回退。
-  const cachedDeclaration = findCommitPreview(projectDir, chapter)?.declaration;
-  const commitPlan = await buildCommitPlanFromProject({
-    projectDir,
-    chapter,
-    draftPath,
-    draftContent,
-    ...(cachedDeclaration ? { declaration: cachedDeclaration } : {}),
-  });
-  if (!commitPlan.passed || !commitPlan.commitPlan) {
-    return refusal(
-      projectDir,
-      chapter,
-      `定稿影响不可用：${commitPlan.issues.length > 0 ? commitPlan.issues.join("；") : "计划未通过"}。请重新 commit_preview。`,
-    );
-  }
-
-  // 治脏：不再注入正则猜的候选（会把『耳边轻声』类碎片写成矩阵候选）。
-  // 新出现人物改由入库后的 extractAndAppendFacts 显式抽取并『告知用户』，不偷偷写盘（见工具 run）。
-  const finalCommitPlan = commitPlan.commitPlan;
-
-  const report = await commitFastDraft({ projectDir, chapter, draftPath, draftContent, commitPlan: finalCommitPlan });
-  if (!report.passed) {
-    const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
-    // 铁律④·绝不泄露裸 id/path：report.issues 是引擎诊断文本，可能含合成的裸 hook-/char- id（幻影 hook）或
-    // 本地绝对路径，进【给用户看的】summary/refusalReason 前先消毒（原始 issues 仍保留在结构化 report 字段）。
-    const nameById = new Map(overview.characterMatrix.characters.map((character) => [character.id, character.name]));
-    const safeIssues = report.issues.map((issue) => scrubBareEntityIdsFromText(issue, nameById));
-    const safeJoined = safeIssues.length > 0 ? safeIssues.join("；") : "引擎报告失败";
-    return {
-      ok: false,
-      committed: false,
-      refused: false,
-      ...(safeIssues.length > 0 ? { refusalReason: safeJoined } : {}),
-      report,
-      overview,
-      // #6a 诚实性：入库失败=事务已回滚、未产生净改动 → 不再谎称「改动已建快照可撤销」。
-      summary: `第 ${chapter} 章定稿未通过：${safeJoined}。本次未定稿、草稿未改动。`,
-      refreshScope: "full",
-    };
-  }
-
-  // 入库成功：消费 token，防止用同一 token 重复入库。
-  consumeCommitPreview(projectDir, chapter);
-  // Formal bytes are already committed. A supporting overview refresh must
-  // never flip that business success into a tool failure.
-  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }).catch(() => undefined);
-  // 入库的章节正文（去标题）+ 标题，供前端以 committed 状态载入工作区——与老路径 handleCommitApply 同构，
-  // 防止入库后被 overview 占位覆盖，且 committed 状态让 autosave 不再把已入库章节写回 drafts/fast。
-  const committedBody = stripLeadingMarkdownChapterHeading(draftContent).trim();
-  const committedTitle = extractDraftTitle(draftContent) ?? undefined;
-  // report.updatedCharacters 是引擎的安全 slug ID（中文名会被 toSafeCharacterId 剥成 char-<hash>）；
-  // 按 overview 角色 id 映射回真实显示名再点名，绝不把 slug 暴露给用户。
-  const updatedIdSet = new Set(report.updatedCharacters);
-  const updatedNames = (overview?.characterMatrix.characters ?? [])
-    .filter((c) => updatedIdSet.has(c.id))
-    .map((c) => c.name);
-  return {
-    ok: true,
-    committed: true,
-    refused: false,
-    report,
-    ...(committedBody ? { draftBody: committedBody } : {}),
-    ...(committedTitle ? { draftTitle: committedTitle } : {}),
-    overview,
-    // r7：自动蛰伏（久未推进的意图/阶段目标）必须折进可见摘要——自动写盘动作绝不静默。
-    // 线索池体检：堆积达阈值时在摘要尾部带一行确定性提醒（清理仍需用户点头，这里只补盲区）。
-    summary: [
-      appendLifecycleNotesToSummary(
-        `第 ${chapter} 章已定稿，资料已更新${
-          updatedNames.length > 0 ? `（更新：${updatedNames.join("、")}）` : ""
-        }。改动已建立存档点，可一键撤销。`,
+    case "already_committed_duplicate":
+      // A7 命中：断流后重试/重复请求——幂等回报「已入库」，不重复写入。
+      return {
+        ok: true,
+        committed: true,
+        refused: false,
+        ...(result.draftBody ? { draftBody: result.draftBody } : {}),
+        ...(result.draftTitle ? { draftTitle: result.draftTitle } : {}),
+        overview: result.overview,
+        summary: `第 ${chapter} 章此前已定稿，资料已更新（本次为重复请求，未重复写入）。`,
+        refreshScope: "full",
+        chapter,
+      };
+    case "preview_guard_refused":
+      return refusal(projectDir, chapter, GUARD_FAILURE_MESSAGE[result.failure]);
+    case "plan_not_applyable":
+      return refusal(
+        projectDir,
+        chapter,
+        `定稿影响不可用：${result.issues.length > 0 ? result.issues.join("；") : "计划未通过"}。请重新 commit_preview。`,
+      );
+    case "commit_failed": {
+      const report = result.report;
+      const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 });
+      // 铁律④·绝不泄露裸 id/path：report.issues 是引擎诊断文本，可能含合成的裸 hook-/char- id（幻影 hook）或
+      // 本地绝对路径，进【给用户看的】summary/refusalReason 前先消毒（原始 issues 仍保留在结构化 report 字段）。
+      const nameById = new Map(overview.characterMatrix.characters.map((character) => [character.id, character.name]));
+      const safeIssues = report.issues.map((issue) => scrubBareEntityIdsFromText(issue, nameById));
+      const safeJoined = safeIssues.length > 0 ? safeIssues.join("；") : "引擎报告失败";
+      return {
+        ok: false,
+        committed: false,
+        refused: false,
+        ...(safeIssues.length > 0 ? { refusalReason: safeJoined } : {}),
         report,
-      ),
-      buildThreadMaintenanceNote(overview),
-    ].filter(Boolean).join("\n"),
-    refreshScope: "full",
-    chapter,
-  };
-}
-
-/**
- * A7 幂等探测：该章是否「已入库、且已入库正文与当前草稿一致」。
- * 命中=断流后重试 / 重复点入库的同一份草稿——应幂等回报「已入库」，不再因 token 被消费报「尚未预览」、
- * 也绝不重复写入。内容不一致（合法重写已入库章节）→ 返回 null，照常走守卫+入库。
- * 比对：两边都去 Markdown 标题、压掉空白后对比（已入库章节文件就是去标题的纯正文，见 045200/chapters）。
- */
-async function detectAlreadyCommittedDuplicate(
-  projectDir: string,
-  chapter: number,
-  draftContent: string,
-): Promise<{ readonly body: string; readonly title?: string } | null> {
-  const committed = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(() => undefined);
-  if (committed === undefined || committed.trim().length === 0) return null;
-  const norm = (text: string): string => stripLeadingMarkdownChapterHeading(text).replace(/\s+/gu, "");
-  if (norm(committed) !== norm(draftContent)) return null; // 内容不同=合法重写，不走幂等
-  const body = stripLeadingMarkdownChapterHeading(draftContent).trim();
-  const title = extractDraftTitle(draftContent) ?? undefined;
-  return { body, ...(title ? { title } : {}) };
+        overview,
+        // #6a 诚实性：入库失败=事务已回滚、未产生净改动 → 不再谎称「改动已建快照可撤销」。
+        summary: `第 ${chapter} 章定稿未通过：${safeJoined}。本次未定稿、草稿未改动。`,
+        refreshScope: "full",
+      };
+    }
+    case "committed": {
+      const report = result.report;
+      const overview = result.overview ?? undefined;
+      // report.updatedCharacters 是引擎的安全 slug ID（中文名会被 toSafeCharacterId 剥成 char-<hash>）；
+      // 按 overview 角色 id 映射回真实显示名再点名，绝不把 slug 暴露给用户。
+      const updatedIdSet = new Set(report.updatedCharacters);
+      const updatedNames = (overview?.characterMatrix.characters ?? [])
+        .filter((c) => updatedIdSet.has(c.id))
+        .map((c) => c.name);
+      return {
+        ok: true,
+        committed: true,
+        refused: false,
+        report,
+        ...(result.draftBody ? { draftBody: result.draftBody } : {}),
+        ...(result.draftTitle ? { draftTitle: result.draftTitle } : {}),
+        overview,
+        // r7：自动蛰伏（久未推进的意图/阶段目标）必须折进可见摘要——自动写盘动作绝不静默。
+        // 线索池体检：堆积达阈值时在摘要尾部带一行确定性提醒（清理仍需用户点头，这里只补盲区）。
+        summary: [
+          appendLifecycleNotesToSummary(
+            `第 ${chapter} 章已定稿，资料已更新${
+              updatedNames.length > 0 ? `（更新：${updatedNames.join("、")}）` : ""
+            }。改动已建立存档点，可一键撤销。`,
+            report,
+          ),
+          buildThreadMaintenanceNote(overview),
+        ].filter(Boolean).join("\n"),
+        refreshScope: "full",
+        chapter,
+      };
+    }
+    default:
+      // http_durable_receipt 机制的专属 kind 不会出现在本工具；出现即编程错误。
+      throw new Error(`Unexpected commit apply result for agent_preview_ticket policy: ${String(result.kind)}`);
+  }
 }
 
 async function refusal(projectDir: string, chapter: number, reason: string): Promise<CommitApplyToolOutput> {
@@ -428,10 +373,6 @@ export const commitApplyTool = writeTool({
   },
 });
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
-}
-
 const BARE_ENTITY_ID_PLACEHOLDER: Readonly<Record<string, string>> = {
   char: "「某角色」",
   hook: "「某条伏笔」",
@@ -454,21 +395,4 @@ export function scrubBareEntityIdsFromText(text: string, nameById: ReadonlyMap<s
       if (name) return name;
       return BARE_ENTITY_ID_PLACEHOLDER[prefix.toLowerCase()] ?? "「内部条目」";
     });
-}
-
-function resolveEffectivePreviewToken(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly providedToken?: string;
-}): string | undefined {
-  const record = findCommitPreview(input.projectDir, input.chapter);
-  if (record) return record.token;
-
-  const normalized = input.providedToken?.trim();
-  if (!normalized || isPlaceholderPreviewToken(normalized)) return undefined;
-  return normalized;
-}
-
-function isPlaceholderPreviewToken(token: string): boolean {
-  return /^(?:token[_-]?placeholder|placeholder[_-]?token|preview[_-]?token[_-]?placeholder)$/iu.test(token.trim());
 }

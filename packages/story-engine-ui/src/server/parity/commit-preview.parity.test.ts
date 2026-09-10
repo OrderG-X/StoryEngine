@@ -4,14 +4,19 @@
 // 只读对拍：预览两侧都不写盘（工具侧只把 previewToken 记进内存 store），故两侧共用同一项目目录，
 // 保证引擎读到完全相同的磁盘状态——这是对「同一引擎同一 fixture → 同一计划」的最强锁定。
 //
-// 已知刻意分歧（显式豁免清单；每条锁定现状并附代码证据）：
-//   D6 AI 质检判定：HTTP 预览对草稿+语义各跑一次 judgeDraftQualityWithModel（commit.ts handleCommitPreview 的
-//      Promise.all 两段）；工具预览只跑引擎确定性检查、不调判定模型（commit-preview.ts 头注释「不调模型」）。
-//   D7 章节语义声明：工具预览经 declareChapterDelta 调声明模型（chapterSteering 槽），把声明喂给
-//      buildCommitPlanFromProject 并随 token 缓存供 apply 复用（commit-preview.ts buildCommitPreviewToolOutputUnlocked）；
-//      HTTP 预览无此通道（commit.ts handleCommitPreview 只传 draftPath/draftContent）。
-//   D8 缺草稿：HTTP → 400 formal_commit_preview_missing_workspace_diff；工具 → ok:false + blockingReasons["missing_draft"]。
-//   D9 输出面：HTTP 返回 transaction/formalCommitPreview 强化结构；工具返回 previewToken/summary/modelHint。
+// 双轨合一后：编排已收进 services/commit-service.ts（runCommitPreview），route/tool 均为薄适配。
+// 原已知刻意分歧全部落成 service 的显式策略参数或适配层投影（不再是编排漂移）：
+//   D6 AI 质检判定 → service 的 judge 注入参数（对齐 quality-service 先例）：HTTP 预览用默认
+//      judgeDraftQualityWithModel（草稿+语义各跑一次，本文件 mock 计数锁定 =2）；工具预览注入
+//      确定性透传桩、不调判定模型（commit-preview.ts buildCommitPreviewToolOutput 的 judge 实参）。
+//   D7 章节语义声明 → service 的 declarationChannel 显式参数：工具路带通道（声明模型经
+//      declareChapterDelta 产出声明喂 buildCommitPlanFromProject，声明随 previewToken 缓存进工具
+//      store 供 apply 复用——登记在 commit-preview.ts 适配层）；HTTP 预览不传通道=空声明（纯正则计划）。
+//      声明模型降级（乱吐→undefined）时两侧计划输入同源，下方照妖镜断言入库计划深相等。
+//   D8 缺草稿 → canonical no_draft kind 的适配层渲染：HTTP → 400 formal_commit_preview_missing_workspace_diff；
+//      工具 → ok:false + blockingReasons["missing_draft"]。
+//   D9 输出面 → canonical result 的适配层投影：HTTP 返回 transaction/formalCommitPreview 强化结构；
+//      工具返回 previewToken/summary/modelHint。
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -82,15 +87,15 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     await writeParityDraft(projectDir, 1, parityCommitDraft(1));
 
     const route = await callRoute(registerCommitRoutes, "POST", "/api/commit/preview", { projectPath: projectDir, chapter: 1 });
-    // D6（豁免清单）：HTTP 预览调了 2 次 AI 判定（草稿 + 语义计划）；此刻工具还没跑，先锁 HTTP 侧。
+    // D6（judge 策略参数）：HTTP 预览用默认真判定、调了 2 次 AI 判定（草稿 + 语义计划）；此刻工具还没跑，先锁 HTTP 侧。
     expect(judgeMocks.judgeDraftQualityWithModel).toHaveBeenCalledTimes(2);
-    // D7（豁免清单）：HTTP 预览没有声明模型通道。
+    // D7（declarationChannel 策略参数）：HTTP 预览不传通道，没有声明模型调用。
     expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
 
     const tool = await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir });
-    // D6 另一侧：工具预览全程不调 AI 判定（仍是 2 次，没有新增）。
+    // D6 另一侧：工具预览注入透传桩，全程不调 AI 判定（仍是 2 次，没有新增）。
     expect(judgeMocks.judgeDraftQualityWithModel).toHaveBeenCalledTimes(2);
-    // D7 另一侧：工具预览调了 1 次声明模型（本用例它吐非 JSON → 声明降级 undefined，等价纯正则）。
+    // D7 另一侧：工具预览带声明通道、调了 1 次声明模型（本用例它吐非 JSON → 声明降级 undefined，等价纯正则）。
     expect(llmMocks.callOpenAICompatibleChatModel).toHaveBeenCalledTimes(1);
 
     // ok 契约与门禁结论
@@ -117,7 +122,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(tool.semanticQualityIssues).toEqual(reduceIssues(routeSemanticQuality.issues));
     expect(tool.blockingReasons).toEqual([]);
 
-    // D9（豁免清单·输出面）：HTTP 出 transaction/formalCommitPreview；工具出 previewToken/summary/modelHint。
+    // D9（输出面投影）：canonical result 同一，HTTP 投影 transaction/formalCommitPreview；工具投影 previewToken/summary/modelHint。
     expect(typeof route.payload.transactionId).toBe("string");
     expect(typeof route.payload.previewHash).toBe("string");
     expect(route.payload.transaction).toBeTruthy();
@@ -157,7 +162,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
   });
 });
 
-describe("parity: commit_preview 对拍——已知刻意分歧（豁免清单，断言锁定分歧存在）", () => {
+describe("parity: commit_preview 对拍——显式策略分歧（declarationChannel 开/关，断言锁定策略差异存在）", () => {
   it("D7 声明模型出有效声明时：工具计划吃声明（mainEvent 换成声明摘要），HTTP 计划仍纯正则 → 计划不再相等", async () => {
     const projectDir = await makeParityProject("commit-preview-declare-");
     // 正文用不重复句子的稿子，声明 quote 逐字取自正文（引擎 verifyChapterDelta 要逐字证据）。
