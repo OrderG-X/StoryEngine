@@ -242,4 +242,33 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     expect(config.taskProfiles.fastDraft).toBeUndefined();
     expect(taskAssignments.fastDraft?.profileId).toBeUndefined();
   });
+
+  it("保存响应带 warnings 时列表页如实展示（丢头警告不静默、不随 4 秒提示自动消失）", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：deepseek 的 x-brand-new。如需保留请重新填写明文值后保存。"];
+    saveModelSettings.mockResolvedValue({ ...makeFetchFixture(), warnings });
+    await renderAndWaitLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    const keyInput = await screen.findByPlaceholderText("sk-...");
+    fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    });
+  });
+
+  it("保存响应不带 warnings 时不出现警告条（无丢弃不刷警告）", async () => {
+    await renderAndWaitLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    const keyInput = await screen.findByPlaceholderText("sk-...");
+    fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(1);
+    });
+    expect(document.querySelector(".ms-warn-notice")).toBeNull();
+  });
 });

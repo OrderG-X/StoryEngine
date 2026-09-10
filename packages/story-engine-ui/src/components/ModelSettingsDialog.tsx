@@ -145,6 +145,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [saveWarnings, setSaveWarnings] = useState<readonly string[]>([]);
   const [, setLoadResult] = useState<ModelSettingsLoadResult | null>(null);
   const [rawText, setRawText] = useState("");
   const [rawTextDraft, setRawTextDraft] = useState("");
@@ -254,6 +255,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     setLoading(true);
     setError(null);
     setNotice(null);
+    setSaveWarnings([]);
     setWizardError(null);
     setSimpleTestError(null);
     setSimpleTestNotice(null);
@@ -455,12 +457,14 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     }
     setChatMemoryBudget(parseChatHistoryBudgetTokens(res.rawText) ?? chatMemoryBudget);
     setPendingProviderApiKeys({});
+    setSaveWarnings(res.warnings ?? []);
   }, [chatMemoryBudget]);
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     setNotice(null);
+    setSaveWarnings([]);
     try {
       let payloadText: string;
       if (rawJsonDirty) {
@@ -608,6 +612,13 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
 
           {error && <div className="ms-error">{error}</div>}
           {notice && <div className="ms-notice">{notice}</div>}
+          {saveWarnings.length > 0 && (
+            <div className="ms-notice ms-warn-notice">
+              {saveWarnings.map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+            </div>
+          )}
           {loading && <div className="ms-loading">正在加载配置...</div>}
           {syncingModels && surface === "advanced" && (
             <div className="ms-notice ms-sync-notice">

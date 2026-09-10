@@ -14,6 +14,7 @@ import {
   FOUNDATION_GAP_CHAT_TIMEOUT_MS,
   previewCommit,
   saveChapterWorkspace,
+  saveModelSettings,
   ChapterWorkspaceConflictError,
 } from "./client.js";
 
@@ -384,6 +385,54 @@ describe("fetchModelSettings", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/model-settings", expect.any(Object));
     expect(result.result.summary.providers[0]?.id).toBe("main");
     expect(result.rawText).toBe("{\"version\":1}\n");
+  });
+});
+
+describe("saveModelSettings warnings passthrough", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function okPayload(warnings?: readonly string[]) {
+    return {
+      ok: true,
+      result: {
+        passed: true,
+        available: true,
+        status: "loaded",
+        configPath: "/Users/example/.story-engine/model-settings.json",
+        summary: {
+          available: true,
+          status: "loaded",
+          configPath: "/Users/example/.story-engine/model-settings.json",
+          providers: [],
+          profiles: [],
+          taskProfiles: {},
+          issueCount: 0,
+          highRiskIssueCount: 0,
+        },
+        issues: [],
+      },
+      rawText: "{\"version\":1}\n",
+      ...(warnings ? { warnings } : {}),
+    };
+  }
+
+  it("透传 PUT 响应的 warnings（丢头警告必须能到达面板，绝不静默吞掉）", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：main 的 x-brand-new。如需保留请重新填写明文值后保存。"];
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okPayload(warnings), 200)));
+
+    const result = await saveModelSettings("{\"version\":1}");
+
+    expect(result.warnings).toEqual(warnings);
+  });
+
+  it("响应不带 warnings 字段时结果为 undefined（无丢弃不刷警告）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okPayload(), 200)));
+
+    const result = await saveModelSettings("{\"version\":1}");
+
+    expect(result.warnings).toBeUndefined();
   });
 });
 

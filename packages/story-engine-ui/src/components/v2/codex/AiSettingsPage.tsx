@@ -95,6 +95,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  const [saveWarnings, setSaveWarnings] = useState<readonly string[]>([]);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [picker, setPicker] = useState<PickerState>(CLOSED_PICKER);
 
@@ -135,6 +136,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     if (Object.keys(viewState.thinking).length > 0) setThinking(viewState.thinking);
     const budget = parseChatHistoryBudgetTokens(res.rawText);
     if (budget !== null) setChatMemoryBudget(budget);
+    // 每次成功落盘刷掉旧警告、只反映本次保存的丢弃项（需用户补明文值，不走 4 秒自动消失）。
+    setSaveWarnings(res.warnings ?? []);
   }, []);
 
   /** 全量快照写盘（config 规范 map + 任务旁路 + 密钥），排队串行防交错。 */
@@ -468,6 +471,13 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
         {!loading && !loadError && (
           <div key={view.kind} className="asm-view-anim">
             {notice && <div className="ms-notice">{notice}</div>}
+            {saveWarnings.length > 0 && (
+              <div className="ms-notice ms-warn-notice">
+                {saveWarnings.map((warning) => (
+                  <div key={warning}>{warning}</div>
+                ))}
+              </div>
+            )}
             {opError && <div className="ms-error">{opError}</div>}
 
             {view.kind === "list" && (

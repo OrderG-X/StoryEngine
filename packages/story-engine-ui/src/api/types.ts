@@ -1252,7 +1252,14 @@ export interface ModelSettingsValidationIssue {
 }
 
 export type ModelSettingsApiResponse =
-  | { readonly ok: true; readonly result: ModelSettingsLoadResult; readonly rawText: string; readonly taskAssignments?: TaskAssignmentView }
+  | {
+      readonly ok: true;
+      readonly result: ModelSettingsLoadResult;
+      readonly rawText: string;
+      readonly taskAssignments?: TaskAssignmentView;
+      /** 保存成功但有条目被丢弃（如打码哨兵无法还原的自定义请求头）时如实告知；无丢弃则不带该字段。 */
+      readonly warnings?: readonly string[];
+    }
   | { readonly ok: false; readonly error: string };
 
 export interface ModelTestConnectionRequest {

@@ -1020,6 +1020,12 @@
   gap: 8px;
 }
 
+.ms-warn-notice {
+  border-color: rgba(196, 160, 90, 0.35);
+  background: rgba(196, 160, 90, 0.06);
+  color: #d8b877;
+}
+
 
 
 

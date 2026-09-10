@@ -13,6 +13,7 @@ export interface ModelSettingsClientResult {
   readonly result: ModelSettingsLoadResult;
   readonly rawText: string;
   readonly taskAssignments?: TaskAssignmentView;
+  readonly warnings?: readonly string[];
 }
 
 export async function fetchModelSettings(signal?: AbortSignal): Promise<ModelSettingsClientResult> {
@@ -24,7 +25,12 @@ export async function fetchModelSettings(signal?: AbortSignal): Promise<ModelSet
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { result: payload.result, rawText: payload.rawText, taskAssignments: payload.taskAssignments };
+  return {
+    result: payload.result,
+    rawText: payload.rawText,
+    taskAssignments: payload.taskAssignments,
+    warnings: payload.warnings,
+  };
 }
 
 export async function saveModelSettings(
@@ -50,7 +56,12 @@ export async function saveModelSettings(
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { result: payload.result, rawText: payload.rawText, taskAssignments: payload.taskAssignments };
+  return {
+    result: payload.result,
+    rawText: payload.rawText,
+    taskAssignments: payload.taskAssignments,
+    warnings: payload.warnings,
+  };
 }
 
 export async function testModelConnection(input: ModelTestConnectionRequest, signal?: AbortSignal): Promise<ModelTestConnectionResult> {
