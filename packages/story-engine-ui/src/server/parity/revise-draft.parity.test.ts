@@ -15,8 +15,11 @@
 //       service 同时支撑两种形态（preview 产物即 apply 入参），本文件锁定的是形态分歧下的语义等价。
 //   D25 no-op 诚实【已收敛·刻意修复】：改后==改前拒绝报成功——收进 service；
 //       HTTP 路由 apply 步获得守卫（400 诚实拒），不再「照写原样内容还报 applied:true」。
+//   目标级诚实守卫【已收敛·2026-09-11 补】：改后用户点名句仍原样在稿（空白+引号归一比对）= 没真改到 → 拒。
+//       原是工具路独有、且未登记进漂移清单的盲区（HTTP 曾对「大区间 beforeText 保留目标句原样」报 applied:true）；
+//       收编后 preview 响应带 revisionContext（resolvedTarget+mode），apply 回传即同口径拒（400），见下方用例。
 //
-//   显式策略参数（收编后两侧刻意保留的分歧，service policies 参数化，不再是暗漂移）：
+//   显式策略参数（收编后两侧刻意保留的分歧，service policies 参数化，不再是暗漂移；下方「显式策略分歧」组锁定）：
 //   - modelErrorFallback：HTTP preview 模型调用失败回 200 + 安全兜底预览（前端 A.5 契约）；工具路诚实拒。
 //   - deterministicPreview：HTTP preview 对代词修复任务用引擎确定性预览覆盖模型 echo；工具路无此 overlay。
 import { readFile } from "node:fs/promises";
@@ -354,5 +357,132 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(toolDraft).toBe(routeDraft);
     expect(routeDraft).toContain("老王把账册收进抽屉，让他回去等信。");
     expect(routeDraft).not.toContain(dialogueCurly);
+  });
+
+  it("目标级守卫收敛：模型回吐大区间 beforeText 覆盖目标句、afterText 保留目标句原样 → HTTP apply 400、工具 target_unchanged，两侧草稿逐字未动", async () => {
+    // 用户点名改 B；模型回「A+B」大区间、只改写 A、B 一字未动——改后点名句仍原样在稿。
+    const wideBefore = `${REVISE_SENTENCE_A}\n\n${REVISE_SENTENCE_B}`;
+    const wideAfter = `林远把账册收进抽屉，吹熄了灯。\n\n${REVISE_SENTENCE_B}`;
+    mockRevisionModel(previewJson(wideBefore, wideAfter));
+    const { routeDir, toolDir } = await makeParityTwinProjects("revise-target-unchanged-");
+    await writeParityDraft(routeDir, 1, parityReviseDraft(1));
+    await writeParityDraft(toolDir, 1, parityReviseDraft(1));
+
+    // HTTP 路：preview 步落点重叠检查通过（大区间合法覆盖目标区间）→ 200，产物带 revisionContext
+    const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
+      projectPath: routeDir,
+      chapter: 1,
+      task: revisionTask(REVISE_SENTENCE_B),
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.payload.ok).toBe(true);
+    expect(preview.payload.revisionContext).toEqual({ resolvedTarget: REVISE_SENTENCE_B, mode: "model" });
+    // apply 步回传 revisionContext → 目标级守卫拦下（400 诚实拒），不再「applied:true 而点名句一字未动」
+    const apply = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {
+      projectPath: routeDir,
+      chapter: 1,
+      confirm: true,
+      preview: preview.payload.preview,
+      revisionContext: preview.payload.revisionContext,
+    });
+    expect(apply.statusCode).toBe(400);
+    expect(apply.payload.ok).toBe(false);
+    expect(String(apply.payload.error)).toContain("仍原样留在草稿里");
+
+    // 工具路：同一模型回吐 → target_unchanged 诚实拒（原行为，现两侧同口径）
+    const tool = await driveToolExecute(reviseDraftTool, {
+      chapter: 1,
+      targetText: REVISE_SENTENCE_B,
+      revisionGoal: "润色这段，让节奏更稳。",
+    }, { projectDir: toolDir });
+    expect(tool.ok).toBe(false);
+    expect(tool.applied).toBe(false);
+    expect(String(tool.summary)).toContain("仍原样留在草稿里");
+
+    // 两侧整稿逐字未动、字节一致
+    const routeDraft = await readFile(defaultDraftPath(routeDir, 1), "utf-8");
+    const toolDraft = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
+    expect(routeDraft).toBe(parityReviseDraft(1));
+    expect(toolDraft).toBe(parityReviseDraft(1));
+  });
+});
+
+describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback / deterministicPreview，刻意保留、本组锁定）", () => {
+  it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", async () => {
+    llmMocks.callOpenAICompatibleChatModel.mockRejectedValue(new Error("网络连接被重置"));
+    const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");
+    await writeParityDraft(routeDir, 1, parityReviseDraft(1));
+    await writeParityDraft(toolDir, 1, parityReviseDraft(1));
+
+    // HTTP 路：A.5 契约——模型失败回 200 + 安全兜底预览（afterText===beforeText 的 no-op + 警告标志），
+    // 前端据标志诚实报失败；诊断文案进 riskNotes。
+    const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
+      projectPath: routeDir,
+      chapter: 1,
+      task: revisionTask(REVISE_SENTENCE_B),
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.payload.ok).toBe(true);
+    const fallback = preview.payload.preview as { beforeText: string; afterText: string; warnings: string[]; riskNotes: string[] };
+    expect(fallback.beforeText).toBe(REVISE_SENTENCE_B);
+    expect(fallback.afterText).toBe(REVISE_SENTENCE_B);
+    expect(fallback.warnings).toContain("未应用任何修改。");
+    expect(fallback.riskNotes[0]).toContain("网络连接被重置");
+    expect(preview.payload.usedFallback).toBe(true);
+
+    // 工具路：模型失败诚实拒（model_output_unusable），不带兜底预览遮羞
+    const tool = await driveToolExecute(reviseDraftTool, {
+      chapter: 1,
+      targetText: REVISE_SENTENCE_B,
+      revisionGoal: "润色这段，让节奏更稳。",
+    }, { projectDir: toolDir });
+    expect(tool.ok).toBe(false);
+    expect(tool.applied).toBe(false);
+    expect(String(tool.summary)).toContain("修订模型输出不可用");
+    expect(String(tool.summary)).toContain("网络连接被重置");
+
+    // 模型真被调过（失败来自模型调用而非前置守卫）；两侧草稿逐字未动、字节一致
+    expect(llmMocks.callOpenAICompatibleChatModel).toHaveBeenCalled();
+    expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
+  });
+
+  it("deterministicPreview：代词修复任务模型回 echo no-op → HTTP preview 改用引擎确定性预览（真改动）、工具 no-op 诚实拒，两侧草稿都不动", async () => {
+    const pronounTarget = "他站起身，把账册递给林远。";
+    const draft = `# 第1章\n\n${REVISE_SENTENCE_A}\n\n${pronounTarget}\n\n${REVISE_SENTENCE_C}\n`;
+    // 模型把目标句原样 echo 回（afterText===beforeText 的 echo no-op）
+    mockRevisionModel(previewJson(pronounTarget, pronounTarget));
+    const { routeDir, toolDir } = await makeParityTwinProjects("revise-echo-noop-");
+    await writeParityDraft(routeDir, 1, draft);
+    await writeParityDraft(toolDir, 1, draft);
+
+    // HTTP 路：代词修复任务（统一为她）+ echo no-op → 引擎确定性预览覆盖（beforeText=目标句、afterText=代词真改）
+    const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
+      projectPath: routeDir,
+      chapter: 1,
+      task: revisionTask(pronounTarget, { revisionGoal: "统一为她。", problemSummary: "代词性别漂移。" }),
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.payload.ok).toBe(true);
+    const deterministic = preview.payload.preview as { beforeText: string; afterText: string; changeSummary: string };
+    expect(deterministic.beforeText).toBe(pronounTarget);
+    expect(deterministic.afterText).toBe("她站起身，把账册递给林远。");
+    expect(deterministic.changeSummary).toContain("统一角色称谓");
+    expect(preview.payload.usedFallback).toBe(false);
+
+    // 工具路：无此 overlay——echo no-op 直接诚实拒（改了等于没改不许报成功）
+    const tool = await driveToolExecute(reviseDraftTool, {
+      chapter: 1,
+      targetText: pronounTarget,
+      revisionGoal: "统一为她。",
+      problemSummary: "代词性别漂移。",
+    }, { projectDir: toolDir });
+    expect(tool.ok).toBe(false);
+    expect(tool.applied).toBe(false);
+    expect(String(tool.summary)).toContain("等于没有任何修改");
+
+    // 两侧都只到预览/拒绝为止：草稿逐字未动、字节一致
+    expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(draft);
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(draft);
   });
 });
