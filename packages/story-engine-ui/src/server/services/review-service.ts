@@ -21,6 +21,10 @@
  * 显式策略参数：
  *   - trustExplicit（D19）：路由传 true（编辑器实时稿顶格优先）；工具默认 false（盘稿优先）。
  *   - deterministicQuality：HTTP 专属输入通道（前端可预传质检结果，工具无此通道）。
+ *
+ * 入参归一（SWE P1-5 收敛·两侧适配层共用这一个归一点）：chapterGoal/userDirection 统一
+ *   trim + 空白→undefined——此前路由 readString（trim+空白→undefined）而工具 z.string() 原样透传，
+ *   同一输入（如「  加冲突  」）两侧送进模型的 prompt 真实不同；现在无论哪侧给原始串，结果一致。
  */
 import {
   buildDraftAIReviewPrompt,
@@ -87,6 +91,9 @@ export interface DraftAIReviewResult {
 
 export async function runDraftAIReview(input: DraftAIReviewInput): Promise<DraftAIReviewResult> {
   const { projectDir, chapter } = input;
+  // 入参归一（P1-5）：chapterGoal/userDirection 无论哪侧进来都先 trim + 空白→undefined 再进 prompt。
+  const chapterGoal = normalizeOptionalReviewText(input.chapterGoal);
+  const userDirection = normalizeOptionalReviewText(input.userDirection);
   // 模型无关取稿（与质检同源）：真显式正文（trustExplicit 时顶格）→ 文件(带重试) → workspace 原始草稿。
   // 治孪生 bug：模型多塞 `draftContent:""`（或文件暂空/占位）时，旧 `?? readFile` 会审一份空稿并
   // ok:true 谎报「审了」。三处皆无真稿 → 诚实 no_draft，绝不审空稿。
@@ -119,8 +126,8 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
     buildWritingContextPack({
       projectDir,
       chapter,
-      userDirection: input.userDirection ?? "",
-      ...(input.chapterGoal !== undefined ? { currentChapterGoal: input.chapterGoal } : {}),
+      userDirection: userDirection ?? "",
+      ...(chapterGoal !== undefined ? { currentChapterGoal: chapterGoal } : {}),
       maxTimelineEvents: 3,
     }).catch(() => undefined),
   ]);
@@ -129,8 +136,8 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
     buildDraftAIReviewPrompt({
       chapter,
       draftContent,
-      ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
-      ...(input.userDirection !== undefined ? { userDirection: input.userDirection } : {}),
+      ...(chapterGoal !== undefined ? { chapterGoal } : {}),
+      ...(userDirection !== undefined ? { userDirection } : {}),
       deterministicQuality,
       stateOverview: overview,
       ...(writingContextPack ? { writingContextPack } : {}),
@@ -157,6 +164,12 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
       ? `第 ${chapter} 章 AI 审稿未完成（模型不可用），未改任何内容；请稍后重试或人工检查。`
       : `第 ${chapter} 章 AI 审稿：${VERDICT_LABEL[review.verdict]}（评分 ${review.score}；正文实际 ${actualWordCount} 字）。${review.summary}`,
   };
+}
+
+/** 可选文本入参归一：trim + 空白→undefined（与路由 readString 同口径；双轨统一在本 service 做这一次）。 */
+function normalizeOptionalReviewText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 /** 调模型并解析；任何失败（请求/空内容/解析）都走 fallback，绝不抛、不谎称审稿通过。 */

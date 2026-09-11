@@ -19,20 +19,40 @@
 //      可撤销快照；首次出稿无旧稿不建空快照。HTTP 路原「每次出稿前无条件 createSnapshot」收敛到该 M6 语义
 //      （无旧稿时快照无可保护内容、纯噪音；覆盖写前必有撤销点的安全不变量两侧如一。代价：HTTP 首次出稿不再
 //      进操作历史，与工具路自 M6 起的行为一致——视为合理收敛而非能力损失）。
-//   D5 输入面【刻意保留】：persist:false 抽卡是 HTTP 路独有入参（service generateDraftCandidate 能力，
-//      路由继续用；工具 schema 无 persist）。两侧的回检/裁决输入面差异见 D2。
+//   D5 输入面【刻意保留】：persist:false 抽卡与 maxOutputTokens 显式覆盖均为 HTTP 路独有入参
+//      （抽卡=service generateDraftCandidate 能力，路由继续用，工具 schema 无 persist；maxOutputTokens
+//      缺省时两侧同一来源 resolveDraftMaxOutputTokens(lengthTarget)，工具入参面无此项——SWE P1-3 登记补漏）。
+//      两侧的回检/裁决输入面差异见 D2。
+//
+// 2026-09-11 收敛与加固：
+//   - 引擎拒稿 ok 契约【已收敛·诚实修复】：runGenerateDraft 返回 ok:false 且无 rejection（引擎校验拒稿
+//     passed:false / 全候选失败 / 优胜稿落盘失败）时，HTTP 路从「200 ok:true + 空 draftContent 假成功」
+//     收敛为 422 + ok:false + canonical summary（与工具路 ok:false 同向、与 D18 同先例）——SWE P1-3，
+//     下方用例锁定。
+//   - 意图门真参与对拍：generate_draft 的 driveToolExecute 一律带真实用户原话（userTurnText），写作
+//     意图门不再恒 undefined 放行；「本轮原话无写作意图被拦」成为可测分歧（D3 护栏簇的一条腿），下方用例锁定。
+//   - writer mock 记录入参（context 段序列 / maxOutputTokens / 渲染 prompt 长度）：上下文装配面漂移会在
+//     happy path 红出来，不再被「mock 吞入参」掩盖。
+//   - 磁盘 IO 重（真引擎建项目 + 真 git 快照子进程）：全部用例给显式 timeout（CLAUDE.md 纪律）。
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { WriterClient } from "@actalk/story-engine";
+import { renderFastDraftPromptText, type WriterClient } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // LLM 边界 mock：writer 由每个用例经 draftMocks.writerBody 驱动；引擎包保持真实。
 // routes/draft.js 与 agent/tools/generate-draft.js 解析到同一个 llm-client 模块，一次 mock 两侧生效。
+// mock writer 记录每次 generateDraft 的入参（context 段序列 / maxOutputTokens / 渲染 prompt 长度），
+// 让两侧上下文装配面的漂移在断言里可见（原为「吞入参」黑盒）。
 // ---------------------------------------------------------------------------
 const draftMocks = vi.hoisted(() => ({
   writerBody: "",
   writerTitle: "夜探",
+  writerCalls: [] as {
+    readonly maxOutputTokens?: number;
+    readonly sectionNames: readonly string[];
+    readonly promptLength: number;
+  }[],
   createConfiguredWriterClient: vi.fn(),
   createOpenAICompatibleWriterClient: vi.fn(),
   resolveConfiguredChatModel: vi.fn(),
@@ -67,21 +87,30 @@ import {
 } from "./parity-kit.js";
 
 const CHAPTER_GOAL = "第 1 章：主角拿到账册。";
+/** 写类对拍驱动 generate_draft 时带的用户原话：明确写作意图（意图门放行口径内的canonical句式）。 */
+const WRITE_TURN_TEXT = "写第 1 章正文";
+
+/** mock writer：固定正文 + 记录入参（装配面可见性）。 */
+function recordingWriterClient(): WriterClient {
+  return {
+    async generateDraft(input) {
+      draftMocks.writerCalls.push({
+        maxOutputTokens: input.maxOutputTokens,
+        sectionNames: input.context.sections.map((section) => section.name),
+        promptLength: renderFastDraftPromptText(input.context).length,
+      });
+      return { title: draftMocks.writerTitle, content: draftMocks.writerBody };
+    },
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   draftMocks.writerBody = PARITY_CLEAN_BODY;
   draftMocks.writerTitle = "夜探";
-  draftMocks.createConfiguredWriterClient.mockImplementation(async (): Promise<WriterClient> => ({
-    async generateDraft() {
-      return { title: draftMocks.writerTitle, content: draftMocks.writerBody };
-    },
-  }));
-  draftMocks.createOpenAICompatibleWriterClient.mockImplementation((): WriterClient => ({
-    async generateDraft() {
-      return { title: draftMocks.writerTitle, content: draftMocks.writerBody };
-    },
-  }));
+  draftMocks.writerCalls.length = 0;
+  draftMocks.createConfiguredWriterClient.mockImplementation(async (): Promise<WriterClient> => recordingWriterClient());
+  draftMocks.createOpenAICompatibleWriterClient.mockImplementation((): WriterClient => recordingWriterClient());
   draftMocks.resolveConfiguredChatModel.mockImplementation(async () => fakeResolvedChatModel());
   draftMocks.callOpenAICompatibleChatModel.mockResolvedValue({
     content: "{}",
@@ -102,7 +131,7 @@ function generateBody(projectDir: string, extra?: Record<string, unknown>): Reco
 }
 
 describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面）", () => {
-  it("长度窗口假设自证：对拍正文 328 字，落在 requestedDraftLength:300 的 [300,345] 窗口内", () => {
+  it("长度窗口假设自证：对拍正文 328 字，落在 requestedDraftLength:300 的 [300,345] 窗口内", { timeout: 30_000 }, () => {
     // 这条不是对拍，是 fixture 自证：正文改动若把字数推出窗口，下面的 happy-path 会假性变红。
     expect(countParityCjk(PARITY_CLEAN_BODY)).toBeGreaterThanOrEqual(300);
     expect(countParityCjk(PARITY_CLEAN_BODY)).toBeLessThanOrEqual(345);
@@ -110,16 +139,26 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     expect(countParityCjk(PARITY_AI_FLAVOR_BODY)).toBeLessThanOrEqual(345);
   });
 
-  it("happy path：同一 mock 正文 → 两侧 ok，drafts/fast 落盘字节一致，关键字段等价", async () => {
+  it("happy path：同一 mock 正文 → 两侧 ok，drafts/fast 落盘字节一致，关键字段等价", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-happy-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
-    const tool = await driveToolExecute(generateDraftTool, { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 }, { projectDir: toolDir });
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+    );
 
     // ok 契约
     expect(route.statusCode).toBe(200);
     expect(route.payload.ok).toBe(true);
     expect(tool.ok).toBe(true);
+
+    // 上下文装配面锁定（mock writer 记入参）：两侧 generateDraft 吃到的 context 段序列、
+    // maxOutputTokens、渲染 prompt 长度完全一致——装配漂移在这里红，不再被 mock 吞掉。
+    expect(draftMocks.writerCalls).toHaveLength(2);
+    expect(draftMocks.writerCalls[1]).toEqual(draftMocks.writerCalls[0]);
+    expect(draftMocks.writerCalls[0]!.promptLength).toBeGreaterThan(0);
 
     // 落盘状态：两侧工作稿文件字节一致（同一引擎同一写盘通道 persistFastDraftBody）
     const routeDraft = await readFile(defaultDraftPath(routeDir, 1), "utf-8");
@@ -151,13 +190,17 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     expect("snapshotId" in tool).toBe(false);
   });
 
-  it("覆盖已有草稿再出稿：两侧都先建可撤销快照（D4 收敛后同一语义：仅覆盖才建；工具把 snapshotId 透出给前端）", async () => {
+  it("覆盖已有草稿再出稿：两侧都先建可撤销快照（D4 收敛后同一语义：仅覆盖才建；工具把 snapshotId 透出给前端）", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-overwrite-");
     await writeParityDraft(routeDir, 1, parityDraftFileText(1, `${PARITY_CLEAN_BODY.slice(0, 200)}旧版收尾。`));
     await writeParityDraft(toolDir, 1, parityDraftFileText(1, `${PARITY_CLEAN_BODY.slice(0, 200)}旧版收尾。`));
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
-    const tool = await driveToolExecute(generateDraftTool, { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 }, { projectDir: toolDir });
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+    );
 
     expect(route.payload.ok).toBe(true);
     expect(tool.ok).toBe(true);
@@ -170,14 +213,69 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(routeDraft);
     expect(routeDraft).toContain(PARITY_CLEAN_BODY);
   });
+
+  it("引擎拒稿（passed:false 无 rejection）：HTTP 422+ok:false 如实报失败（不再 200 假 ok），工具 ok:false；两侧都不落盘", { timeout: 30_000 }, async () => {
+    // SWE P1-3 收敛锁定：mock writer 吐空正文 → 引擎 validateDraft 拒稿（report.passed:false、无 draftPath）。
+    draftMocks.writerBody = "";
+    const { routeDir, toolDir } = await makeParityTwinProjects("draft-rejected-");
+
+    const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+    );
+
+    // 收敛后的 ok 契约：两侧都如实报失败；HTTP 侧 error 借与工具同一 canonical summary（逐字一致）。
+    expect(route.statusCode).toBe(422);
+    expect(route.payload.ok).toBe(false);
+    expect(String(route.payload.error)).toContain("出稿未通过");
+    expect(tool.ok).toBe(false);
+    expect(route.payload.error).toBe(tool.summary);
+
+    // report 照带（引擎 issues 里有拒稿真相，不藏）；draftContent 不再是「空串假稿」字段。
+    const routeReport = route.payload.report as { readonly passed: boolean; readonly issues: readonly string[] };
+    expect(routeReport.passed).toBe(false);
+    expect(routeReport.issues.join(" ")).toContain("Draft content is required.");
+    expect(route.payload.draftContent).toBeUndefined();
+
+    // 两侧都没把工作稿写盘
+    expect(await readTextIfExists(defaultDraftPath(routeDir, 1))).toBeUndefined();
+    expect(await readTextIfExists(defaultDraftPath(toolDir, 1))).toBeUndefined();
+  });
+
+  it("写作意图门真参与对拍（D3 的一条腿）：本轮原话只有审稿意图 → 工具拦下不落盘；HTTP 按钮路无此门照常写", { timeout: 30_000 }, async () => {
+    const { routeDir, toolDir } = await makeParityTwinProjects("draft-gate-");
+
+    const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
+      { projectDir: toolDir, userTurnText: "审一下这一章" },
+    );
+
+    // HTTP 路无意图门（按钮直调语义）：照写
+    expect(route.payload.ok).toBe(true);
+    expect(await readTextIfExists(defaultDraftPath(routeDir, 1))).toContain(PARITY_MAIN_CHARACTER);
+
+    // 工具路：原话无写作意图 → 拦在建快照/调模型之前，不落盘、不烧 writer
+    expect(tool.ok).toBe(false);
+    expect(tool.blockedReason).toBe("no_write_intent_this_turn");
+    expect(await readTextIfExists(defaultDraftPath(toolDir, 1))).toBeUndefined();
+    expect(draftMocks.writerCalls).toHaveLength(1); // 唯一一次是 HTTP 侧
+  });
 });
 
 describe("parity: draft 对拍——显式策略分歧（两侧同调同一 service，差异只剩 policies/适配层投影，断言锁定现状）", () => {
-  it("D1 字数下限（lengthPolicy）：同一份 328 字正文配 2000 字目标 → HTTP 路 422 拒写+不留文件；工具照写盘+⚠标注", async () => {
+  it("D1 字数下限（lengthPolicy）：同一份 328 字正文配 2000 字目标 → HTTP 路 422 拒写+不留文件；工具照写盘+⚠标注", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-short-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir, { requestedDraftLength: 2000 }));
-    const tool = await driveToolExecute(generateDraftTool, { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 2000 }, { projectDir: toolDir });
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 2000 },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+    );
 
     // HTTP 路：lengthPolicy:"enforce_or_rollback" → 低于下限 → 拒写 + 回滚（无旧稿 → 删除引擎已写的文件）→ 422
     expect(route.statusCode).toBe(422);
@@ -192,7 +290,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     expect(await readTextIfExists(defaultDraftPath(toolDir, 1))).toContain(PARITY_MAIN_CHARACTER);
   });
 
-  it("D2 AI 腔簇（aiFlavorRecheck 开关）：同一含「殊不知」正文 → HTTP 路（false）无回检无去味（原样落盘）；工具路（true）回检+autoDeAi 真改落盘", async () => {
+  it("D2 AI 腔簇（aiFlavorRecheck 开关）：同一含「殊不知」正文 → HTTP 路（false）无回检无去味（原样落盘）；工具路（true）回检+autoDeAi 真改落盘", { timeout: 30_000 }, async () => {
     draftMocks.writerBody = PARITY_AI_FLAVOR_BODY;
     // 去味改写模型（repair 槽，工具 execute 内经 streamChatModelToText 触达）：逐字原句 → 改写句。
     draftMocks.streamChatModelToText.mockResolvedValue({
@@ -202,7 +300,11 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-deai-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
-    const tool = await driveToolExecute(generateDraftTool, { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 }, { projectDir: toolDir });
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+    );
 
     expect(route.payload.ok).toBe(true);
     expect(tool.ok).toBe(true);
@@ -225,7 +327,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     expect(typeof tool.snapshotId).toBe("string");
   });
 
-  it("D2b autoDeAi 关断：工具传 autoDeAi:false → 只标注不改写，落盘与 HTTP 路一致（同稿同文）", async () => {
+  it("D2b autoDeAi 关断：工具传 autoDeAi:false → 只标注不改写，落盘与 HTTP 路一致（同稿同文）", { timeout: 30_000 }, async () => {
     draftMocks.writerBody = PARITY_AI_FLAVOR_BODY;
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-deai-off-");
 
@@ -233,7 +335,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300, autoDeAi: false },
-      { projectDir: toolDir },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
     );
 
     expect(route.payload.ok).toBe(true);
@@ -245,12 +347,17 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(await readFile(defaultDraftPath(routeDir, 1), "utf-8"));
   });
 
-  it("D3 章序护栏：写第 2 章而第 1 章未入库 → HTTP 路照写；工具 execute 拦截不入盘", async () => {
+  it("D3 章序护栏：写第 2 章而第 1 章未入库 → HTTP 路照写；工具 execute 拦截不入盘", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-seq-");
     const body = { projectPath: routeDir, chapter: 2, chapterGoal: "第 2 章。", requestedDraftLength: 300 };
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", body);
-    const tool = await driveToolExecute(generateDraftTool, { chapter: 2, chapterGoal: "第 2 章。", requestedDraftLength: 300 }, { projectDir: toolDir });
+    const tool = await driveToolExecute(
+      generateDraftTool,
+      { chapter: 2, chapterGoal: "第 2 章。", requestedDraftLength: 300 },
+      // 带写作意图原话：让意图门放行、被测的是章序护栏这条腿（防「门先拦」掩盖护栏行为）。
+      { projectDir: toolDir, userTurnText: "写第 2 章正文" },
+    );
 
     // HTTP 路无护栏：第 2 章草稿照写
     expect(route.statusCode).toBe(200);
@@ -266,14 +373,14 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     expect(draftMocks.createConfiguredWriterClient).toHaveBeenCalledTimes(1);
   });
 
-  it("D5a mustHitBeats 工具独有：同传漏写要点 → 工具 beatFidelity 如实报漏；HTTP 路直接忽略该字段", async () => {
+  it("D5a mustHitBeats 工具独有：同传漏写要点 → 工具 beatFidelity 如实报漏；HTTP 路直接忽略该字段", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-beats-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir, { mustHitBeats: ["第三块砖"] }));
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300, mustHitBeats: ["第三块砖"] },
-      { projectDir: toolDir },
+      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
     );
 
     // HTTP 路：不认识 mustHitBeats，引擎无核对 → report 无 beatFidelity
@@ -288,7 +395,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     expect(String(tool.summary)).toContain("首稿核对");
   });
 
-  it("D5b persist:false 抽卡是 HTTP 路独有：只生成不落盘、不建快照；工具入参面无 persist", async () => {
+  it("D5b persist:false 抽卡是 HTTP 路独有：只生成不落盘、不建快照；工具入参面无 persist", { timeout: 30_000 }, async () => {
     const { routeDir } = await makeParityTwinProjects("draft-candidate-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir, { persist: false }));

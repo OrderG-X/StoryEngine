@@ -16,6 +16,12 @@
 //       「还没正文可质检」诚实输出，quality-check.ts buildNoDraftQualityOutput）。
 //   D6  AI 判定层调不调 → service 的 judge 注入参数（默认 judgeDraftQualityWithModel；不调判定模型的
 //       调用方注入透传桩）。commit 预览对的 D6 接线归 commit 波处理（commit-preview.parity.test.ts）。
+//   D31 章号数字字符串【仍是显式分歧·结构性，只登记 2026-09-11】：工具 schema coerceNumber 把
+//       chapter:"3" 还原成 3 照常质检；路由 requirePositiveBodyInteger 只认 number → 500
+//       「Chapter is required.」。这是「模型会发字符串化参数 vs 前端恒发 number」的输入面严格度差
+//       （lenient-args 层存在的理由本身），draft/ai-review 路由同模式；收进 service 无意义
+//       （路由连 service 都到不了），登记在此。
+//   磁盘 IO 重（真引擎建项目）：全部用例给显式 timeout（CLAUDE.md 纪律）。
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +64,7 @@ function issueTypes(payload: { readonly issues: readonly QualityIssueLike[] }): 
 }
 
 describe("parity: POST /api/draft/quality ↔ quality_check（共享行为面）", () => {
-  it("干净稿：两侧 ok/passed 一致、判定层吃到的正文一致、报告一致；工具多 D15 分层输出", async () => {
+  it("干净稿：两侧 ok/passed 一致、判定层吃到的正文一致、报告一致；工具多 D15 分层输出", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("quality-clean-");
     const draft = parityDraftFileText(1, PARITY_CLEAN_BODY);
     await writeParityDraft(projectDir, 1, draft);
@@ -94,7 +100,7 @@ describe("parity: POST /api/draft/quality ↔ quality_check（共享行为面）
     expect("refined" in route.payload).toBe(false);
   });
 
-  it("过短稿：确定性 error 两侧一致（都不通过），工具 partialMiss 显琥珀", async () => {
+  it("过短稿：确定性 error 两侧一致（都不通过），工具 partialMiss 显琥珀", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("quality-short-");
     await writeParityDraft(projectDir, 1, "# 第1章\n\n林远来了。\n");
 
@@ -115,7 +121,7 @@ describe("parity: POST /api/draft/quality ↔ quality_check（共享行为面）
     expect(tool.errorIssueCount).toBeGreaterThan(0);
   });
 
-  it("D16 无草稿：HTTP 把空串喂引擎照常出报告（empty_draft）；工具短路出专门的诚实输出", async () => {
+  it("D16 无草稿：HTTP 把空串喂引擎照常出报告（empty_draft）；工具短路出专门的诚实输出", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("quality-empty-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/quality", { projectPath: projectDir, chapter: 1 });
@@ -138,7 +144,7 @@ describe("parity: POST /api/draft/quality ↔ quality_check（共享行为面）
 });
 
 describe("parity: quality_check 对拍——已知刻意分歧（豁免清单，断言锁定分歧存在）", () => {
-  it("D14 explicit 正文信任度：同传与盘稿不同的正文 → HTTP 信传参（审新稿）；工具信盘稿（审旧稿）", async () => {
+  it("D14 explicit 正文信任度：同传与盘稿不同的正文 → HTTP 信传参（审新稿）；工具信盘稿（审旧稿）", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("quality-trust-");
     // 盘稿 A：带标题 + 对话的干净稿。显式正文 B：同正文但去掉标题行 → 触发 missing_chapter_title 警告。
     const draftA = parityDraftFileText(1, PARITY_CLEAN_BODY);

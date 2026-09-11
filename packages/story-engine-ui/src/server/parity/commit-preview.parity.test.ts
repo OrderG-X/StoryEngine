@@ -17,6 +17,11 @@
 //      工具 → ok:false + blockingReasons["missing_draft"]。
 //   D9 输出面 → canonical result 的适配层投影：HTTP 返回 transaction/formalCommitPreview 强化结构；
 //      工具返回 previewToken/summary/modelHint。
+//
+// 2026-09-11 登记补漏（按分工本文件只补登记注释，行为/断言未动）：
+//   - 原 happy path 内联注释声称「route 预览在上文已断言未登记工具 store」——实际并无该断言
+//     （SWE 审计核实），内联注释已更正为留档说明。
+//   - 本文件未加显式 timeout（同次加固其余 parity 文件已加；本文件按分工只许补注释），留档待补。
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,8 +136,9 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(typeof tool.previewToken).toBe("string");
     expect(String(tool.summary)).toContain("可以定稿");
 
-    // 预览票据只有工具侧登记（HTTP 预览不写工具 store）——route 先跑时 store 为空、tool 跑完才登记。
-    // （route 预览在上文已断言未登记；这里锁定工具登记后的状态。）
+    // 预览票据只有工具侧登记（HTTP 预览不写工具 store）；这里锁定工具登记后的状态。
+    // （留档：本文件没有「route 预览后 store 为空」的断言——原注释声称上文已断言，2026-09-11 审计
+    //   核实为不实，已更正；按分工本文件只补注释、不加断言。）
     expect(findCommitPreview(projectDir, 1)?.token).toBe(tool.previewToken);
 
     // 只读：两侧都没写正式章节，也没建 git 快照。

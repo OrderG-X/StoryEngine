@@ -6,8 +6,6 @@
 import {
   guardProjectPath,
   readJsonBody,
-  readPacing,
-  readRevealLevel,
   readString,
   readStringList,
   readPositiveInteger,
@@ -37,17 +35,16 @@ export function registerChapterSteeringRoutes(middlewares: MiddlewareStack): voi
       }
       if (!guardProjectPath(res, projectDir)) return;
 
-      const chapter = readPositiveInteger(body.chapter);
       const maxSuggestions = readPositiveInteger(body.maxSuggestions);
-      const pacing = readPacing(body.pacing);
-      const revealLevel = readRevealLevel(body.revealLevel);
       const result = await runChapterSteering({
         projectDir,
         userDirection: readString(body.userDirection),
-        ...(chapter !== undefined ? { chapter } : {}),
+        // chapter/pacing/revealLevel 只做类型守卫、原样透传——「"3"→3 / "Fast"→fast / 非法→缺省」的归一
+        // 收在 steering-service 单点（与工具路 lenient-args 同口径；本路由不再 readPacing 严格匹配即丢）。
+        ...(typeof body.chapter === "number" || typeof body.chapter === "string" ? { chapter: body.chapter } : {}),
         ...(maxSuggestions !== undefined ? { maxSuggestions } : {}),
-        ...(pacing !== undefined ? { pacing } : {}),
-        ...(revealLevel !== undefined ? { revealLevel } : {}),
+        ...(typeof body.pacing === "string" ? { pacing: body.pacing } : {}),
+        ...(typeof body.revealLevel === "string" ? { revealLevel: body.revealLevel } : {}),
         mustInclude: readStringList(body.mustInclude),
         mustAvoid: readStringList(body.mustAvoid),
       });

@@ -23,6 +23,15 @@
 //   D13 输出面 → canonical committed 全集（chapterContent/chapterTitle/draftBody/draftTitle/overview/…）
 //       的适配层投影：HTTP 返回 chapterContent/chapterTitle、不回传 snapshotId；工具返回
 //       draftBody/draftTitle + snapshotId（writeTool 快照包装层并入）。
+//
+// 2026-09-11 登记补漏（按分工本文件只补登记注释，行为/断言未动）：
+//   - D12 消毒分歧在 parity 层不设防：本对全部用例走成功/守卫拒绝路径，commit 引擎失败路径
+//     （issues 含裸 id/路径）无 parity 用例——工具 scrub 而 HTTP 原样的差异靠 routes/commit.test.ts
+//     与各单测兜底，已知盲区留档。
+//   - apply 级 no_draft / plan_not_applyable 分支全库零覆盖（非 HTTP-only 分支：canonical 拒绝两侧共享），
+//     本对未覆盖，留档。
+//   - 本文件含真 git 子进程 + 真 FS 但未加显式 timeout（同次加固其余 parity 文件已加；本文件按分工
+//     只许补注释），留档待补。
 import { readFile } from "node:fs/promises";
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";

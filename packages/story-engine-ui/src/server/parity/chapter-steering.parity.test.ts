@@ -12,6 +12,18 @@
 //   D28 缺方向：判定已收敛进 service（runChapterSteering 统一返 missing_user_direction，两侧都不再出方案）；
 //       剩余差异仅是适配层渲染——HTTP → 400「下一章方向不能为空。」（chapter-steering.ts），
 //       工具 → ok:false + 诚实 summary（generate-chapter-steering.ts buildChapterSteeringToolOutput）。
+//   D29 pacing/revealLevel/chapter 归一【已收敛 2026-09-11·SWE 归一差修复】：枚举 trim+小写+白名单
+//       （"Fast"→fast）、章号数字字符串还原（"3"→3）收进 steering-service 单点，路由只做类型守卫透传——
+//       原「工具 coerceEnum/coerceNumber 宽容还原 vs 路由 readPacing/readPositiveInteger 严格即丢」的
+//       活分歧（pacing:"Fast" 工具→fast/路由→默认 medium）已消除，下方用例锁定。残余（只登记）：
+//       枚举/章号的【非法值】口径仍不同——工具 schema 直接拒（input validation error），路由静默走
+//       引擎默认；这是「模型面向 schema 严格 vs 表单面向容错」的适配层严格度差，非编排漂移。
+//   D30 mustInclude/mustAvoid 字符串分隔符【仍是显式分歧·结构性，收不进 service】：字符串入参的切分
+//       各在适配层——路由 readStringList 按 \n/;/； 拆、工具 coerceStringArray 按 ,/，/JSON 拆
+//       （"a;b" 路由拆两条/工具不拆，"a,b" 方向互反）；数组入参两侧一致（引擎 normalizeList 统一
+//       trim/去重/滤空）。收不动的原因：数组项可合法含逗号（模型可发真 JSON 数组），service 对数组项
+//       二次切分会误伤合法要素。下方用例锁定现状，改动任一侧都会红。
+//   磁盘 IO 重（真引擎建项目）：全部用例给显式 timeout（CLAUDE.md 纪律）。
 import { describe, expect, it } from "vitest";
 
 import { registerChapterSteeringRoutes } from "../routes/chapter-steering.js";
@@ -21,7 +33,7 @@ import { callRoute, driveToolExecute, makeParityProject } from "./parity-kit.js"
 const USER_DIRECTION = "让主角拿到账册后发现里面有一页是空的。";
 
 describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共享行为面）", () => {
-  it("happy path：同一项目同一方向 → 两侧 draft 深相等；工具多 summary（D27）", async () => {
+  it("happy path：同一项目同一方向 → 两侧 draft 深相等；工具多 summary（D27）", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("steering-happy-");
 
     const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
@@ -43,7 +55,7 @@ describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共
     expect("summary" in route.payload).toBe(false);
   });
 
-  it("显式章号：两侧都按指定章出方案，draft 深相等", async () => {
+  it("显式章号：两侧都按指定章出方案，draft 深相等", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("steering-chapter-");
 
     const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
@@ -63,7 +75,7 @@ describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共
     expect((tool.draft as { chapter?: number }).chapter).toBe(3);
   });
 
-  it("D28 缺方向：两侧都拒绝（HTTP 400；工具 ok:false + 诚实文案），都不出方案", async () => {
+  it("D28 缺方向：两侧都拒绝（HTTP 400；工具 ok:false + 诚实文案），都不出方案", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("steering-nodirection-");
 
     const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
@@ -80,5 +92,92 @@ describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共
     expect(tool.ok).toBe(false);
     expect(String(tool.summary)).toContain("下一章方向不能为空");
     expect(tool.draft).toBeUndefined();
+  });
+
+  it("D29 已收敛·pacing 大小写变体：两侧同传 \"Fast\" → 都按 fast 出方案（draft 深相等），不再路由静默丢成默认 medium", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("steering-pacing-");
+
+    const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      pacing: "Fast",
+    });
+    const tool = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, pacing: "Fast" },
+      { projectDir },
+    );
+
+    expect(route.payload.ok).toBe(true);
+    expect(tool.ok).toBe(true);
+    // 收敛后两侧同一归一（service 单点 trim+小写+白名单）：draft 逐字段深相等、pacing 都是 fast
+    expect(tool.draft).toEqual(route.payload.draft);
+    expect((route.payload.draft as { pacing: string }).pacing).toBe("fast");
+  });
+
+  it("D29 已收敛·章号数字字符串：两侧同传 chapter:\"3\" → 都按第 3 章出方案（draft 深相等）", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("steering-chapter-str-");
+
+    const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      chapter: "3",
+    });
+    const tool = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, chapter: "3" },
+      { projectDir },
+    );
+
+    expect(route.payload.ok).toBe(true);
+    expect(tool.ok).toBe(true);
+    expect(tool.draft).toEqual(route.payload.draft);
+    expect((tool.draft as { chapter?: number }).chapter).toBe(3);
+  });
+
+  it("D30 登记·mustInclude 字符串分隔符差（结构性豁免）：\"a;b\" 路由拆两条/工具不拆；\"a,b\" 方向互反——锁定现状", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("steering-include-");
+
+    // 分号字符串：路由 readStringList 按 ; 拆成两条；工具 coerceStringArray 只按逗号/JSON 拆 → 原样一条
+    const routeSemi = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      mustInclude: "账册;旧钟",
+    });
+    const toolSemi = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, mustInclude: "账册;旧钟" },
+      { projectDir },
+    );
+    expect((routeSemi.payload.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
+    expect((toolSemi.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册;旧钟"]);
+
+    // 逗号字符串：方向互反（路由不拆、工具拆）
+    const routeComma = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      mustInclude: "账册,旧钟",
+    });
+    const toolComma = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, mustInclude: "账册,旧钟" },
+      { projectDir },
+    );
+    expect((routeComma.payload.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册,旧钟"]);
+    expect((toolComma.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
+
+    // 数组入参两侧一致（引擎 normalizeList 统一 trim/去重/滤空）——结构化入参本无分歧
+    const routeArr = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      mustInclude: ["账册", "旧钟"],
+    });
+    const toolArr = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, mustInclude: ["账册", "旧钟"] },
+      { projectDir },
+    );
+    expect((routeArr.payload.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
+    expect((toolArr.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
   });
 });

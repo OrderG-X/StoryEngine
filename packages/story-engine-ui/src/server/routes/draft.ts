@@ -92,6 +92,10 @@ export function registerDraftRoutes(middlewares: MiddlewareStack): void {
 //   - aiFlavorRecheck:false（D2 现状）：不给引擎传回检规则、不接 autoDeAi/beats 裁决栈（产品未给按钮路开回检）。
 //   - 快照（D4 刻意收敛）：与工具路同一 helper 同一语义——仅覆盖已有非空草稿前建可撤销快照，
 //     首次出稿无旧稿不建空快照（原「每次无条件 createSnapshot」收敛；覆盖写前必有撤销点一寸未让）。
+//   - 引擎拒稿的 ok 契约（2026-09-11 诚实修复）：runGenerateDraft 返回 ok:false 且无 rejection 时
+//     （引擎校验拒稿 passed:false / 全候选失败 / 优胜稿落盘失败），本路由如实 422 + ok:false + error，
+//     不再 200 ok:true + 空 draftContent 假成功（SWE P1-3；与工具路 ok:false 同向、与 D18 收敛同先例：
+//     前端 generateDraft 对 ok:false/非 2xx 都走 throw；主出稿路径是 SSE 流，本路无前端的假完成卡风险）。
 async function handleGenerateDraft(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
   try {
     if (req.method !== "POST") {
@@ -141,6 +145,16 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     });
     if (result.rejection) {
       writeJson(res, 422, { ok: false, error: result.rejection.error });
+      return;
+    }
+    // 引擎拒稿/失败（ok:false 且无 rejection）：诚实 422，error 借 canonical summary（与工具侧同一文案）；
+    // report 照带——引擎 issues 里有拒稿真相，不藏。
+    if (!result.ok) {
+      writeJson(res, 422, {
+        ok: false,
+        error: result.summary,
+        ...(result.http.report ? { report: result.http.report } : {}),
+      });
       return;
     }
     const finalDraftContent = result.http.draftContent;
@@ -601,13 +615,15 @@ async function handleDraftAIReview(req: import("node:http").IncomingMessage, res
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     // 共享编排在 services/review-service.ts（与 ai_review 工具同调）。本路由的显式策略：
     // trustExplicit:true（前端传【编辑器实时正文】，可信、顶格优先，D19）+ deterministicQuality 预传通道。
+    // chapterGoal/userDirection 只做类型守卫、原样透传——trim+空白→undefined 的归一收在 service 单点
+    // （与工具路同口径，SWE P1-5；这里不再 readString 预 trim，避免两处各归一各的）。
     const result = await runDraftAIReview({
       projectDir,
       chapter,
       trustExplicit: true,
       ...(readString(body.draftContent) !== undefined ? { explicitDraftContent: readString(body.draftContent)! } : {}),
-      ...(readString(body.chapterGoal) !== undefined ? { chapterGoal: readString(body.chapterGoal)! } : {}),
-      ...(readString(body.userDirection) !== undefined ? { userDirection: readString(body.userDirection)! } : {}),
+      ...(typeof body.chapterGoal === "string" ? { chapterGoal: body.chapterGoal } : {}),
+      ...(typeof body.userDirection === "string" ? { userDirection: body.userDirection } : {}),
       ...(isRecord(body.deterministicQuality) ? { deterministicQuality: readDraftQualityReport(body.deterministicQuality) } : {}),
     });
     if (!result.ok) {

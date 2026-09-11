@@ -20,6 +20,16 @@
 //       ai-review.ts buildAIReviewToolOutput 不传即默认）。
 //   D20 输出面：HTTP 多返回 model/profileId（canonical result 携带、路由投影）；工具多返回用户可见
 //       summary（同一 canonical summary，HTTP 只在 ok:false 时借作 error 文案）。
+//   D32 deterministicQuality 预传通道【HTTP 独有入参·登记补漏】：前端可预传确定性质检结果省一轮重算
+//       （draft.ts handleDraftAIReview 读 body.deterministicQuality）；工具入参面无此字段，service
+//       缺省现跑 checkDraftBeforeCommit（与正确预传同源：同一引擎同一盘稿的确定性结果）。结构性输入面
+//       分歧，对拍面不带该参，只登记。
+//
+// 2026-09-11 收敛与加固：
+//   - P1-5 chapterGoal/userDirection 归一【已收敛】：trim + 空白→undefined 收进 review-service 单点，
+//     路由侧只做类型守卫透传（原：路由 readString trim / 工具 z.string() 原样，同一输入两侧 prompt
+//     真实不同）。下方两个用例锁定（带参对拍 + 空白等价于不传）。
+//   - 磁盘 IO 重（真引擎建项目）：全部用例给显式 timeout（CLAUDE.md 纪律）。
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const llmMocks = vi.hoisted(() => ({
@@ -84,7 +94,7 @@ beforeEach(() => {
 });
 
 describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）", () => {
-  it("happy path：同稿 + 同一 mock 审稿输出 → 报告等价，且两侧送进模型的 prompt 逐字一致", async () => {
+  it("happy path：同稿 + 同一 mock 审稿输出 → 报告等价，且两侧送进模型的 prompt 逐字一致", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("ai-review-happy-");
     await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
 
@@ -120,7 +130,7 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     expect("review" in route.payload).toBe(true);
   });
 
-  it("D18 已收敛·模型吐烂输出：两侧同一 fallback、都 ok:false 诚实显红（HTTP 200 + error，工具 summary）", async () => {
+  it("D18 已收敛·模型吐烂输出：两侧同一 fallback、都 ok:false 诚实显红（HTTP 200 + error，工具 summary）", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("ai-review-fallback-");
     await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
     llmMocks.streamChatModelToText.mockResolvedValue({ content: "（模型乱吐，没有 JSON）", thinking: "" });
@@ -146,7 +156,7 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     expect(String(tool.summary)).toContain("审稿未完成");
   });
 
-  it("D17 已收敛·无草稿：两侧同一 no_draft 诚实短路（HTTP 保持 500 兼容 + ok:false；工具 ok:false），都不调模型", async () => {
+  it("D17 已收敛·无草稿：两侧同一 no_draft 诚实短路（HTTP 保持 500 兼容 + ok:false；工具 ok:false），都不调模型", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("ai-review-nodraft-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", { projectPath: projectDir, chapter: 1 });
@@ -164,7 +174,7 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
   });
 
-  it("D19 explicit 正文信任度：同传与盘稿不同的正文 → HTTP 审传参稿；工具审盘稿", async () => {
+  it("D19 explicit 正文信任度：同传与盘稿不同的正文 → HTTP 审传参稿；工具审盘稿", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("ai-review-trust-");
     const diskDraft = parityDraftFileText(1, PARITY_CLEAN_BODY);
     const marker = "墙角那台旧钟敲了三下，林远没有回头。";
@@ -186,5 +196,61 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     expect(routePrompt).toContain(marker);
     expect(toolPrompt).not.toContain(marker);
     expect(toolPrompt).toContain(PARITY_CLEAN_BODY.slice(0, 30));
+  });
+
+  it("P1-5 已收敛·chapterGoal/userDirection 归一：两侧同传带空白变体 → prompt 逐字一致、trim 后文本进 prompt", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("ai-review-normalize-");
+    await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
+
+    const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "  围绕账册推进  ",
+      userDirection: "  加冲突  ",
+    });
+    const routePrompt = lastStreamedPrompt();
+    const tool = await driveToolExecute(
+      aiReviewTool,
+      { chapter: 1, chapterGoal: "  围绕账册推进  ", userDirection: "  加冲突  " },
+      { projectDir },
+    );
+    const toolPrompt = lastStreamedPrompt();
+
+    expect(route.payload.ok).toBe(true);
+    expect(tool.ok).toBe(true);
+    // 归一收敛点：两侧带空白变体送进模型的 prompt 逐字一致（收敛前：路由 trim、工具原样透传 → 不同）
+    expect(toolPrompt).toBe(routePrompt);
+    expect(routePrompt).toContain("围绕账册推进");
+    expect(routePrompt).toContain("加冲突");
+    // 带空白的原始串若原样透传会逐字出现在 prompt 里——两侧都不得出现
+    expect(routePrompt).not.toContain("  围绕账册推进  ");
+    expect(routePrompt).not.toContain("  加冲突  ");
+  });
+
+  it("P1-5 已收敛·空白→undefined：两侧同传纯空白 chapterGoal/userDirection → prompt 与不传逐字一致", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("ai-review-blank-");
+    await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
+
+    // 基线：两侧都不带这两个参
+    const baselineRoute = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", { projectPath: projectDir, chapter: 1 });
+    const baselinePrompt = lastStreamedPrompt();
+    expect(baselineRoute.payload.ok).toBe(true);
+
+    // 路由带纯空白（原样透传给 service 归一）
+    const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/ai-review", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "   ",
+      userDirection: "  ",
+    });
+    const routeBlankPrompt = lastStreamedPrompt();
+    // 工具带纯空白（z.string() 原样进 service 归一）
+    const tool = await driveToolExecute(aiReviewTool, { chapter: 1, chapterGoal: "   ", userDirection: "  " }, { projectDir });
+    const toolBlankPrompt = lastStreamedPrompt();
+
+    expect(route.payload.ok).toBe(true);
+    expect(tool.ok).toBe(true);
+    expect(routeBlankPrompt).toBe(baselinePrompt);
+    expect(toolBlankPrompt).toBe(baselinePrompt);
   });
 });
