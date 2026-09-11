@@ -167,6 +167,9 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       overview,
       contextBudget: contextBudgetPayload(result.http.contextRanking),
       characterSelection: result.characterSelection,
+      // 降级留痕（enforce 回读失败/正文未载入）：canonical http.warnings 随 200 投影带出——
+      // 否则 ok:true+空稿对 HTTP 调用方零信号（形同假成功；此前警告只藏在未被投影的 summary 里）。
+      ...(result.http.warnings?.length ? { warnings: [...result.http.warnings] } : {}),
     });
   } catch (error) {
     writeJson(res, 500, {

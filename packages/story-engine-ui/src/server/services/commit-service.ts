@@ -24,7 +24,8 @@
  *     逐个函数对照挪入，适配层只选定机制：
  *       http_durable_receipt：transactionId/previewHash/idempotencyKey 三绑死 + 持久回执
  *         （.story-engine-ui/commit-idempotency/）重放/碰撞/pending 磁盘对账恢复出口 +
- *         快照与写盘同锁（createSnapshot 在锁内、快照后复核草稿哈希、claim-before-commit）。
+ *         快照与写盘同锁（createSnapshot 在锁内、快照后复核草稿哈希、claim-before-commit）；
+ *         一切 replayed 判定先过磁盘对账（安全不变量⑦）。
  *       agent_preview_ticket：A7 已入库幂等探测 + previewToken 守卫（R3 无状态重算在
  *         工具 store 内）+ 预览缓存声明复用；store 后端由工具适配层注入（本 service 不反向
  *         依赖 agent/ 目录）。
@@ -44,7 +45,11 @@
  *   ⑤ pending 恢复出口（recoverPendingCommitReceiptFromDisk）：先磁盘对账恢复或 fail-closed
  *      409，绝不删证据后重做；对不上（章未入库/内容被改）一律 409 + 可执行出路文案；
  *      对账本身 IO 读失败单列 409 文案（只说稍后重试，绝不诱导删回执）；
- *   ⑥ 回执文件 IO 全部 no-follow + 父目录防 symlink 校验（Unsafe durable commit receipt...）。
+ *   ⑥ 回执文件 IO 全部 no-follow + 父目录防 symlink 校验（Unsafe durable commit receipt...）；
+ *   ⑦ replayed 判定前的磁盘对账（undo 假成功根治）：内存缓存只是加速层、持久回执也可能与磁盘
+ *      脱节（undo 把回执连同章节一起回滚、内存条目却留在进程内）——该章已入库文件存在且全文与
+ *      回执 payload 记录的入库内容逐字一致，才允许报 replayed；对不上（章未入库/被撤销/内容被改）
+ *      fall through 走真 apply，磁盘真相为准，绝不做「200 但磁盘什么都没写」的假成功。
  */
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -576,14 +581,29 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
             : pendingReceiptBlockMessage(projectDir, chapter, idempotencyKey),
         };
       }
-      return { kind: "replayed", chapter, payload: durableReceipt.payload };
+      // 不变量⑦：completed 回执也可能与磁盘脱节（回执在、章节文件却被撤销/改动）——
+      // 磁盘对账通过才允许报 replayed；对不上 fall through 走真 apply
+      // （claim 会撞上这条现存回执，由下方竞态对账出口 fail-closed 收口）。
+      const reconciliation = await reconcileReplayWithDisk(projectDir, chapter, durableReceipt.payload);
+      if (reconciliation.outcome === "committed") {
+        return { kind: "replayed", chapter, payload: durableReceipt.payload };
+      }
     }
     const cached = idempotencyKey ? commitIdempotencyEntries.get(cacheKey) : undefined;
     if (cached?.status === "completed") {
       if (!receiptMatchesRequest(receiptFromCache(cached, chapter, idempotencyKey, projectDir), policy.credentials, projectDir, chapter)) {
         return { kind: "idempotency_collision", chapter, collision: "request_mismatch" };
       }
-      return { kind: "replayed", chapter, payload: cached.payload };
+      // 不变量⑦：内存缓存只是加速层，磁盘真相为准——undo 撤销后回执随快照回滚、内存条目却残留，
+      // 此时报 replayed 就是「200 但磁盘什么都没写」的假成功。确认对不上 → 摘掉陈旧条目；
+      // 对账本身读失败 → 条目保留（下次重试再对账）。两者都 fall through 走真 apply。
+      const reconciliation = await reconcileReplayWithDisk(projectDir, chapter, cached.payload);
+      if (reconciliation.outcome === "committed") {
+        return { kind: "replayed", chapter, payload: cached.payload };
+      }
+      if (reconciliation.outcome === "not_committed") {
+        commitIdempotencyEntries.delete(cacheKey);
+      }
     }
   }
 
@@ -694,7 +714,19 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
           return { kind: "idempotency_collision", chapter, collision: "request_mismatch" };
         }
         if (racedReceipt.status === "completed" && racedReceipt.payload) {
-          return { kind: "replayed", chapter, payload: racedReceipt.payload };
+          // 不变量⑦同口径：回执称已完成 ≠ 章真在盘上（undo/跨进程撤销窗口）。对不上绝不报假成功——
+          // fail-closed 409 + 可执行出路（回执证据绝不删了重做）；对账读失败只说稍后重试。
+          const reconciliation = await reconcileReplayWithDisk(projectDir, chapter, racedReceipt.payload);
+          if (reconciliation.outcome === "committed") {
+            return { kind: "replayed", chapter, payload: racedReceipt.payload };
+          }
+          return {
+            kind: "idempotency_in_progress",
+            chapter,
+            error: reconciliation.outcome === "unreadable"
+              ? completedReceiptUnreadableMessage(projectDir, chapter, idempotencyKey, reconciliation.error)
+              : completedReceiptDiskMismatchMessage(projectDir, chapter, idempotencyKey),
+          };
         }
         return { kind: "idempotency_in_progress", chapter, error: "相同幂等请求仍在执行。" };
       }
@@ -1118,6 +1150,53 @@ function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempot
 function pendingReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
   return `检测到未完成的同键定稿记录，但对账读取失败（${error}），无法确认上次定稿是否已生效；为避免重复写入，已拒绝自动重试。`
+    + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
+}
+
+/**
+ * replayed 判定前的磁盘对账（安全不变量⑦）：该章已入库文件存在、且全文与回执 payload 记录的
+ * 入库内容逐字一致，才算「确实已入库」——报 replayed 必须有这个肯定性确认。
+ * 三向结论与 pending 对账（recoverPendingCommitReceiptFromDisk）同一纪律：
+ * not_committed（文件不在/为空/内容不符=确认对不上）与 unreadable（对账本身读失败）严格分开，
+ * 调用方据此决定「fall through 走真 apply」的后续收口文案（前者给可执行出路，后者只说稍后重试）。
+ */
+type ReplayDiskReconciliation =
+  | { readonly outcome: "committed" }
+  | { readonly outcome: "not_committed" }
+  | { readonly outcome: "unreadable"; readonly error: string };
+
+async function reconcileReplayWithDisk(
+  projectDir: string,
+  chapter: number,
+  payload: CommitApplySuccessPayload,
+): Promise<ReplayDiskReconciliation> {
+  const committed = await readForPendingReconciliation(defaultCommittedChapterPath(projectDir, chapter));
+  if (committed.unreadable !== undefined) return { outcome: "unreadable", error: committed.unreadable };
+  const chapterContent = committed.content;
+  if (!chapterContent || sha256(chapterContent) !== sha256(payload.chapterContent)) {
+    return { outcome: "not_committed" };
+  }
+  return { outcome: "committed" };
+}
+
+/**
+ * completed 回执与磁盘真相矛盾（回执称已入库、对账确认该章未入库/内容不符）时的 409 文案：
+ * fail-closed + 可执行出路（人工核对确认未入库后删回执重试=真实重新入库）。
+ */
+function completedReceiptDiskMismatchMessage(projectDir: string, chapter: number, idempotencyKey: string): string {
+  const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
+  return `检测到同键定稿的已完成记录，但磁盘对账显示该章未按此次预览入库（可能被撤销或内容已变化）；为避免谎报成功，已拒绝按重放返回。`
+    + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
+    + `2) 人工核对确认该章确实未入库后，删除回执文件 ${receiptFile} 再用原预览凭证重试（将真实重新入库）。`;
+}
+
+/**
+ * completed 回执的磁盘对账本身读失败（IO 异常）时的 409 文案：与「确认对不上」严格分开——
+ * 该章是否已入库此时未知，出路只有稍后重试；回执是唯一证据，文案绝不提删除（同 pending 纪律）。
+ */
+function completedReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
+  const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
+  return `检测到同键定稿的已完成记录，但磁盘对账读取失败（${error}），无法确认该章是否已入库；为避免谎报成功，已拒绝按重放返回。`
     + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
 }
 

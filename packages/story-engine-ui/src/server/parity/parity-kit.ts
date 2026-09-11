@@ -22,6 +22,11 @@
  * （句柄耗尽、引擎失败兜底 rm 与同批在飞写盘互踩留下的半建半删目录）。对策见下：
  * 瞬时错误类换【全新】临时目录有限重试、建好后读 project.json 自证落盘事实、
  * 双胞胎目录撞车当面炸出。重试只认瞬时错误类，真 bug 立即抛红、绝不靠重试洗绿。
+ *
+ * 注（2026-09-11 复审更正）：当日并行 flake 的真根因不在本 fixture——是旧 globalSetup 对
+ * 共享基目录整体 rm -rf 把并行 vitest 进程的在飞 fixture 连根拔；该层已改为按进程独立
+ * run 目录（见 home-test-tmp.ts / test-global-setup.ts）。上述重试作为进程内瞬时竞态的
+ * 防御保留，不再承担跨进程踩踏的兜底。
  */
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";

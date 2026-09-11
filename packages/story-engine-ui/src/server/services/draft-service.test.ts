@@ -5,6 +5,8 @@
  * 整段长度执法静默跳过、响应仍 ok:true，长度不达标/超长的稿子无声流入工作稿。
  * 修复后：回读对齐 L1 口径（readFileContentWithRetry 3×60ms），仍失败则执法跳过在 summary
  * 如实留痕（⚠ 长度执法未执行），绝不静默；ok 仍 true（草稿确已落盘，绝不谎报失败）。
+ * 复审 P2② 起：降级同时随 http.warnings 投影带出——路由 200 投影不带 summary，
+ * 没有这条通道 HTTP 调用方拿到 ok:true+空稿却零信号（形同假成功）。
  *
  * 故障注入手法：引擎 mock 的 runFastDraft 报 passed 但不真写盘 → draftPath 不存在 → 回读必失败。
  * （节点内置 fs 在本 vitest 配置下不可跨模块 mock，故障从真实文件系统状态造。）
@@ -163,6 +165,12 @@ describe("runGenerateDraft D1 enforce 路回读降级（GLM P3 旧账④）", ()
     // 回读为空沿用 A11 可见性提示（两件事各说各的，不合并、不互相遮盖）。
     expect(result.summary).toContain("正文已写盘，但本次未能载入到写作区显示");
     expect(result.http.draftContent).toBe("");
+    // 复审 P2②：降级信息除 summary 外必须随 http.warnings 投影带出（路由 200 不投影 summary，
+    // 少了这条通道 HTTP 调用方就是 ok:true+空稿零信号）。warnings 是纯文本版（无 ⚠/（注：…）装饰）。
+    expect(result.http.warnings).toEqual([
+      expect.stringContaining("长度执法未执行"),
+      expect.stringContaining("正文已写盘，但本次未能载入到写作区显示"),
+    ]);
   }, 10_000);
 
   it("落盘回读正常 → 执法照常执行，summary 不带降级标注（行为不变）", async () => {
@@ -193,5 +201,7 @@ describe("runGenerateDraft D1 enforce 路回读降级（GLM P3 旧账④）", ()
     expect(result.summary).not.toContain("长度执法未执行");
     expect(result.draftBody).toBe("主角拿到账册，连夜翻看。");
     expect(result.http.draftContent).toContain("主角拿到账册");
+    // 无降级 → warnings 字段缺省，不打扰正常 200。
+    expect(result.http.warnings).toBeUndefined();
   }, 10_000);
 });

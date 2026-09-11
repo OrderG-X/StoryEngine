@@ -7,13 +7,13 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerSnapshotsRoutes } from "./snapshots.js";
 import { createSnapshot, listSnapshots } from "../lib/snapshot.js";
-import { HOME_TEST_TMP_ROOT } from "../lib/home-test-tmp.js";
+import { testRunRoot } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 
 const execFileAsync = promisify(execFile);
 
-// guardProjectPath 要求项目路径在 $HOME 下（tmpdir 会被判不安全）；统一收敛到隐藏测试基目录下。
-const TEST_ROOT = join(HOME_TEST_TMP_ROOT, "se-snap-route-test");
+// guardProjectPath 要求项目路径在 $HOME 下（tmpdir 会被判不安全）；统一收敛到本次运行专属 run 目录下。
+const TEST_ROOT = join(testRunRoot(), "se-snap-route-test");
 
 async function makeProject(): Promise<string> {
   await mkdir(TEST_ROOT, { recursive: true });

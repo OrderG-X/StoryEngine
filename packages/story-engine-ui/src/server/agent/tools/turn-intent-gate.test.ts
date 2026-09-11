@@ -40,6 +40,23 @@ describe("turn-intent-gate commit_apply", () => {
     expect(userTurnAllowsCommitApply("先别入库，算了还是确认正式入库")).toBe(true);
   });
 
+  it("否定后末句改主意（无「正式」级措辞）同样放行：后说话算数", () => {
+    expect(userTurnAllowsCommitApply("先别入库，算了还是确认入库")).toBe(true);
+  });
+
+  it.each([
+    // 复审 P1 实测误放行：否定嵌在确认锚与动词之间，嵌套后顾够不着
+    "确认不定稿",
+    "不能确认定稿",
+    "无法确认入库",
+  ])("拦截确认锚与动词之间的否定：%s", (text) => {
+    expect(userTurnAllowsCommitApply(text)).toBe(false);
+  });
+
+  it("「不确认了直接定稿」放行：「不确认」被「了」闭合成独立否定单元，末句「直接定稿」是肯定（复审 P1 实测误拦）", () => {
+    expect(userTurnAllowsCommitApply("不确认了直接定稿")).toBe(true);
+  });
+
   it.each([
     "先别入库，不过还是别确认入库",
     "先别入库，不过还是别确认定稿",

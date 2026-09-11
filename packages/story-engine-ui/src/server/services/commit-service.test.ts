@@ -349,7 +349,26 @@ describe("commit-apply pending 对账报错分流（GLM P3 旧账②）", () => 
 describe("commit-apply 幂等内存缓存上界（GLM P3 旧账③）", () => {
   let projectDir: string | undefined;
 
-  beforeEach(() => resetMocksBaseline());
+  beforeEach(() => {
+    resetMocksBaseline();
+    // 入库 mock 必须真写 chapters/NNNN.md（与引擎 commitFastDraft 同口径：草稿原文落盘）——
+    // replayed 判定现在先过磁盘对账（安全不变量⑦），mock 不落盘会让重放对账永远对不上、
+    // 把旧的「内存 replayed 假成功」行为固化进断言。
+    commitFastDraft.mockImplementation(async (input: { readonly projectDir: string; readonly chapter: number; readonly draftContent: string }) => {
+      await mkdir(join(input.projectDir, "chapters"), { recursive: true });
+      await writeFile(join(input.projectDir, "chapters", `${String(input.chapter).padStart(4, "0")}.md`), input.draftContent, "utf-8");
+      return {
+        passed: true,
+        chapter: input.chapter,
+        updatedCharacters: [],
+        timelineEventIds: [],
+        updatedHooks: [],
+        updatedWorld: false,
+        updatedCalendar: false,
+        issues: [],
+      };
+    });
+  });
 
   afterEach(async () => {
     if (projectDir) {
@@ -385,7 +404,8 @@ describe("commit-apply 幂等内存缓存上界（GLM P3 旧账③）", () => {
     expect(commitIdempotencyCacheSizeForTests()).toBe(50);
     expect(commitFastDraft).toHaveBeenCalledTimes(chapterCount);
 
-    // 重放不受淘汰影响：第 1 章内存条目已淘汰，同键同凭证重放仍由磁盘持久回执逐字兜底。
+    // 重放不受淘汰影响：第 1 章内存条目已淘汰，同键同凭证重放仍由磁盘持久回执逐字兜底
+    // （章节文件真在盘上、与回执 payload 逐字一致，磁盘对账⑦通过才允许 replayed）。
     const replayed = await runCommitApply({
       projectDir,
       chapter: 1,
@@ -395,7 +415,8 @@ describe("commit-apply 幂等内存缓存上界（GLM P3 旧账③）", () => {
     expect(commitFastDraft).toHaveBeenCalledTimes(chapterCount);
 
     // 旁证淘汰确曾发生（删文件纯属测试探针，用来区分内存/磁盘两条重放路径，非生产语义）：
-    // 第 1 章删掉磁盘回执后同键重放只能真重跑（内存已无条目）；仍留存的第 55 章删回执后仍走内存重放。
+    // 第 1 章删掉磁盘回执后同键重放只能真重跑（内存已无条目）；仍留存的第 55 章删回执后仍走内存重放
+    // （内存条目在 + 章节文件真在盘上，对账⑦通过——若章节不在盘上，内存重放会被对账拦下，见下个 describe）。
     await rm(receiptFilePath(projectDir, 1, chapterKey(1)), { force: true });
     const recommitted = await runCommitApply({
       projectDir,
@@ -466,3 +487,132 @@ async function writePendingReceipt(
   await writeFile(path, text, "utf-8");
   return { receiptDir, fileName: basename(path), text };
 }
+
+
+/* ---------------------------------------------------------------------------
+ * replayed 磁盘对账（安全不变量⑦·复审 P2①）的回归锁：
+ * undo 撤销会把持久回执连同章节文件一起回滚，内存缓存条目却留在进程内——
+ * 旧实现此时同键重放直接报 replayed（HTTP 200），磁盘上什么都没写（假成功）。
+ * 修复后：内存/持久/竞态三条 replayed 路径一律先过磁盘对账（章在盘上且与回执 payload
+ * 逐字一致才允许重放）；对不上 fall through 走真 apply，回执与磁盘矛盾时 fail-closed 409。
+ * ------------------------------------------------------------------------- */
+describe("commit-apply replayed 磁盘对账（undo 假成功根治·复审 P2①）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(() => {
+    resetMocksBaseline();
+    // 入库 mock 真写 chapters/NNNN.md（与引擎 commitFastDraft 同口径：草稿原文落盘），对账才有真相可核。
+    commitFastDraft.mockImplementation(async (input: { readonly projectDir: string; readonly chapter: number; readonly draftContent: string }) => {
+      await mkdir(join(input.projectDir, "chapters"), { recursive: true });
+      await writeFile(join(input.projectDir, "chapters", `${String(input.chapter).padStart(4, "0")}.md`), input.draftContent, "utf-8");
+      return {
+        passed: true,
+        chapter: input.chapter,
+        updatedCharacters: [],
+        timelineEventIds: [],
+        updatedHooks: [],
+        updatedWorld: false,
+        updatedCalendar: false,
+        issues: [],
+      };
+    });
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  /** 首次真实入库（持久回执正常落盘），返回凭证供同键重放。 */
+  async function commitChapterOnce(
+    dir: string,
+  ): Promise<{ readonly transactionId: string; readonly previewHash: string; readonly idempotencyKey: string }> {
+    const credentials = await previewCredentials(dir);
+    const result = await runCommitApply({
+      projectDir: dir,
+      chapter: 1,
+      policy: { kind: "http_durable_receipt", idempotencyKey: IDEMPOTENCY_KEY, credentials },
+    });
+    if (result.kind !== "committed") throw new Error(`expected committed, got ${result.kind}`);
+    return credentials;
+  }
+
+  function applyWith(credentials: { readonly transactionId: string; readonly previewHash: string; readonly idempotencyKey: string }) {
+    return runCommitApply({
+      projectDir: projectDir!,
+      chapter: 1,
+      policy: { kind: "http_durable_receipt", idempotencyKey: IDEMPOTENCY_KEY, credentials },
+    });
+  }
+
+  it("章在盘上且与回执逐字一致 → 同键重放照常 replayed（对账不误伤正常重放）", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await commitChapterOnce(projectDir);
+
+    const replayed = await applyWith(credentials);
+
+    expect(replayed.kind).toBe("replayed");
+    // 真重放：绝不重跑入库。
+    expect(commitFastDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("undo 撤销后（回执随快照回滚、章节文件不在、内存条目残留）→ 不再假 replayed，fall through 真入库", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await commitChapterOnce(projectDir);
+    const chapterPath = join(projectDir, "chapters", "0001.md");
+    await expect(readFile(chapterPath, "utf-8")).resolves.toBe(DRAFT_CONTENT);
+
+    // 模拟 undo：快照回滚把回执连同章节文件一起删掉；进程内内存缓存条目残留（旧假成功的现场）。
+    await rm(chapterPath);
+    await rm(receiptFilePath(projectDir, 1, IDEMPOTENCY_KEY), { force: true });
+
+    const result = await applyWith(credentials);
+
+    // 磁盘真相为准：内存 replayed 被对账拦下，fall through 走真 apply——章节真的重新落盘。
+    expect(result.kind).toBe("committed");
+    expect(commitFastDraft).toHaveBeenCalledTimes(2);
+    await expect(readFile(chapterPath, "utf-8")).resolves.toBe(DRAFT_CONTENT);
+
+    // 真入库后内存条目被新的 completed 覆写、回执重新落盘：再次同键重放走对账通过的正常 replayed。
+    const replayed = await applyWith(credentials);
+    expect(replayed.kind).toBe("replayed");
+    expect(commitFastDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("持久回执在但章节文件被撤 → 不重放、不假成功，fail-closed 409 且回执逐字节保留", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await commitChapterOnce(projectDir);
+    await rm(join(projectDir, "chapters", "0001.md"));
+    const receiptOnDisk = receiptFilePath(projectDir, 1, IDEMPOTENCY_KEY);
+    const receiptText = await readFile(receiptOnDisk, "utf-8");
+
+    const result = await applyWith(credentials);
+
+    // 回执与磁盘矛盾：fall through 后 claim 撞上现存 completed 回执，由竞态对账出口 fail-closed 收口。
+    expect(result.kind).toBe("idempotency_in_progress");
+    if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
+    expect(result.error).toContain("已完成记录");
+    expect(result.error).toContain("未按此次预览入库");
+    // 确认对不上 → 出路含「人工核对后删回执重试=真实重新入库」。
+    expect(result.error).toContain("删除回执文件");
+    expect(result.error).not.toContain("对账读取失败");
+    // 绝不重复入库；回执证据逐字节保留（绝不删证据后重做）。
+    expect(commitFastDraft).toHaveBeenCalledTimes(1);
+    await expect(readFile(receiptOnDisk, "utf-8")).resolves.toBe(receiptText);
+  });
+
+  it("章节文件内容与回执记录不符（被改/被旧版顶回）→ 同样 fail-closed 409，不重放", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await commitChapterOnce(projectDir);
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章\n\n被改动过的内容。", "utf-8");
+
+    const result = await applyWith(credentials);
+
+    expect(result.kind).toBe("idempotency_in_progress");
+    if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
+    expect(result.error).toContain("内容已变化");
+    expect(commitFastDraft).toHaveBeenCalledTimes(1);
+  });
+});

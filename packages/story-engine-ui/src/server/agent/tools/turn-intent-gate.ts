@@ -13,7 +13,38 @@ const COMMIT_APPLY_PATTERNS = [
   /预览(?:通过|没问题|无误)?(?:就|后|再)?(?:直接)?(?:正式)?(?:入库|定稿)/u,
 ];
 
-const COMMIT_NEGATION_PATTERN = /(?:先)?(?:(?<!特)别|不要|先不|暂不|无需|不用|不确认|没确认|未确认)[^，。；！？\n]{0,8}(?:正式)?(?:入库|提交|定稿)/u;
+// commit 门否定判定（复审 P1 方案级重做）：三层嵌套后顾已到极限——「确认不定稿」「不能确认定稿」
+// 「无法确认入库」里否定嵌在确认锚与动词之间，后顾够不着（曾误放行）；「不确认了直接定稿」里
+// 「不确认」是被「了」闭合的独立否定单元，不该打死后面的「直接定稿」（曾误拦）。
+// 迁到 draft 门同款「子句切分 + 词法极性」：
+// - 按子句切分原话，逐子句找入库动词（入库|定稿|提交），不含动词的子句与本门无关；
+// - 子句极性：最后一个入库动词之前存在未被「了」闭合的否定词 → 否定极性
+//   （「不确认了直接定稿」里「不」被「了」闭合，「直接定稿」是肯定极性）；
+// - 否定词表：不/未/别（「不要/不能/不用/先不/暂不/不确认」由「不」字天然覆盖）+ 没（「没问题」豁免，
+//   「预览没问题后再正式入库」不是否定）+ 无法/无需（「无」不单字扫，防「预览无误后入库」误伤）；
+//   「别」前是「特」豁免（「特别确认」的「别」是语气词的一部分，与确认锚后顾同口径）；
+// - 后说话算数：最后一个含入库动词的子句决定结果——「先别入库，算了还是确认入库」末句肯定=放行；
+//   「先别入库，不过还是别确认入库」末句否定=拦；
+// - 放行仍 fail-closed：肯定子句须命中 COMMIT_APPLY_PATTERNS 正向句式（裸「入库吧」现状不放行），
+//   否定子句则裸动词也算数（「先别入库」「别定稿」够不着正向句式，但必须拦得住）。
+const COMMIT_VERB_PATTERN = /入库|定稿|提交/gu;
+const COMMIT_NEGATION_WORD = /(?<!特)别|没(?!问题)|无法|无需|[不未]/gu;
+
+/** 子句内最后一个入库动词的下标；无动词返回 -1。 */
+function lastCommitVerbIndex(clause: string): number {
+  let index = -1;
+  for (const match of clause.matchAll(COMMIT_VERB_PATTERN)) index = match.index;
+  return index;
+}
+
+/** 子句极性：最后一个入库动词之前存在未被「了」闭合的否定词 → 否定极性。 */
+function isCommitClauseNegated(clause: string, verbIndex: number): boolean {
+  const prefix = clause.slice(0, verbIndex);
+  let lastNegation: RegExpExecArray | undefined;
+  for (const match of prefix.matchAll(COMMIT_NEGATION_WORD)) lastNegation = match;
+  if (!lastNegation) return false;
+  return !prefix.slice(lastNegation.index + lastNegation[0].length).includes("了");
+}
 
 // 写正文/续写意图（放行 generate_draft）。治「入库后模型自主续写下一章」——那一轮用户原话只有
 // 定稿/审稿等意图、没有任何写作意图，模型却擅自 generate_draft。与 commit_apply 门对称：缺原话放行、
@@ -80,11 +111,27 @@ function hasBlockingNegation(text: string, negationPattern: RegExp, allowPattern
   return !hasAnyPattern(afterNegation, allowPatterns);
 }
 
+/**
+ * 本轮用户原话是否允许真入库（commit_apply）。缺原话放行（向后兼容/前端按钮直调不传原话）。
+ * 否定按【子句作用域 + 词法极性】判定（与 draft 门同哲学，复审 P1 重做——嵌套后顾够不着
+ * 「确认不定稿」这类嵌在确认锚与动词之间的否定）：最后一个含入库动词的子句决定结果，
+ * 否定极性 → 拦；肯定极性 → 须命中正向句式才放行。
+ */
 export function userTurnAllowsCommitApply(userTurnText: string | undefined): boolean {
   const text = normalizeUserTurn(userTurnText);
   if (!text) return true;
-  if (!hasAnyPattern(text, COMMIT_APPLY_PATTERNS)) return false;
-  return !hasBlockingNegation(text, COMMIT_NEGATION_PATTERN, COMMIT_APPLY_PATTERNS);
+  const clauses = text.split(CLAUSE_SPLIT).map((clause) => clause.trim()).filter(Boolean);
+  let decision: { negated: boolean; positive: boolean } | undefined;
+  for (const clause of clauses) {
+    const verbIndex = lastCommitVerbIndex(clause);
+    if (verbIndex < 0) continue;
+    decision = {
+      negated: isCommitClauseNegated(clause, verbIndex),
+      positive: hasAnyPattern(clause, COMMIT_APPLY_PATTERNS),
+    };
+  }
+  if (!decision || decision.negated) return false;
+  return decision.positive;
 }
 
 /**

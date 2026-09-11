@@ -709,6 +709,12 @@ export interface ToolStep {
   readonly endedAt?: number;
   /** 工具执行详情（真实 summary / 失败原因）；折叠步骤展开后显示「具体怎么执行的」。 */
   readonly detail?: string;
+  /** 诚实背书粒度（与服务端 shared/honesty-detection.ts stepBacksWriteClaim 认的字段名对齐）：
+   *  prune_snapshots 的 dryRun——true=只读预览没落盘，completed 不背书「已裁剪」；写背书只认 false。 */
+  readonly dryRun?: boolean;
+  /** manage_style_exemplars 的动作：list 是只读 action，completed 不背书「已添加/已删除」；
+   *  写背书只认 add/update/remove。没有这两字段的工具自然缺省、维持旧口径。 */
+  readonly action?: string;
 }
 
 /**

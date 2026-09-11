@@ -476,7 +476,9 @@ describe("commit routes", () => {
 
   it("replays the original successful response for the same project/chapter idempotency key without writing twice", async () => {
     projectDir = await createProjectFixture();
-    commitFastDraft.mockResolvedValue({
+    // 入库 mock 真写 chapters/0001.md（引擎同口径）——复审 P2① 起 replayed 先过磁盘对账，
+    // 不落盘的 mock 会固化「无磁盘真相也报 replayed」的旧假成功。
+    mockCommitFastDraftWritingChapter({
       passed: true,
       chapter: 1,
       updatedCharacters: ["original-report"],
@@ -571,7 +573,8 @@ describe("commit routes", () => {
     const plan = { passed: true, issues: [], commitPlan: { threads: [] } };
     const firstPlanGate = deferred<typeof plan>();
     buildCommitPlanFromProject.mockReturnValueOnce(firstPlanGate.promise);
-    commitFastDraft.mockResolvedValue({ passed: true, updatedCharacters: ["original-only"] });
+    // 入库 mock 真写章节文件（引擎同口径）：第二个请求经磁盘对账⑦才算得上正常重放。
+    mockCommitFastDraftWritingChapter({ passed: true, updatedCharacters: ["original-only"] });
     buildStateOverview.mockResolvedValue({ overview: true });
     createSnapshot.mockResolvedValue({ id: "d".repeat(40) });
 
@@ -651,7 +654,8 @@ describe("commit routes", () => {
   it("persists a durable receipt so a fresh route module replays success without reapplying", async () => {
     projectDir = await createProjectFixture();
     const applyBody = await previewApplyBody(projectDir, "idem-durable-restart-0001");
-    commitFastDraft.mockResolvedValue({
+    // 入库 mock 真写章节文件（引擎同口径）：重启后走持久回执重放，磁盘对账⑦要求章真在盘上。
+    mockCommitFastDraftWritingChapter({
       passed: true,
       chapter: 1,
       updatedCharacters: ["durable-original"],
@@ -898,6 +902,19 @@ describe("commit routes", () => {
     await expect(readFile(receiptPath, "utf-8")).resolves.toBe(outsideReceipt);
   });
 });
+
+/**
+ * 把 commitFastDraft mock 成引擎真实行为：草稿原文写入 chapters/NNNN.md 再回传入报告。
+ * 复审 P2① 起 replayed 判定先过磁盘对账（章在盘上且与回执 payload 逐字一致才允许重放）——
+ * 不落盘的 mock 会让正常重放对账不上，把旧的「无磁盘真相也报 replayed」假成功固化进断言。
+ */
+function mockCommitFastDraftWritingChapter(report: Record<string, unknown>): void {
+  commitFastDraft.mockImplementation(async (input: { readonly projectDir: string; readonly chapter: number; readonly draftContent: string }) => {
+    await mkdir(join(input.projectDir, "chapters"), { recursive: true });
+    await writeFile(join(input.projectDir, "chapters", `${String(input.chapter).padStart(4, "0")}.md`), input.draftContent, "utf-8");
+    return report;
+  });
+}
 
 async function createProjectFixture(): Promise<string> {
   const root = await makeHomeTempDir("story-engine-ui-commit-route-");

@@ -148,8 +148,10 @@ function parseProviderModels(
 /**
  * 表单路径重建整份 model-settings 配置。P2-3 残留洞修复：options.previousRawText 给当前磁盘配置原文
  * （GET 回显的打码文本）时，逐层以磁盘对象为合并底、表单改动覆盖其上——provider 对象层表单不认识的字段
- * （customHeaders 等）、顶层表单不认识的键（defaultProfile 等）、profile 上手调的五件套旋钮
- * （temperature/maxTokens/timeoutMs/retries/stream）都随合并保留，不再被静默重建重置。customHeaders 的值是
+ * （customHeaders 等）、顶层表单不认识的键、profile 上手调的五件套旋钮
+ * （temperature/maxTokens/timeoutMs/retries/stream）都随合并保留，不再被静默重建重置。
+ * 例外：defaultProfile 过存在性校验才保留——指向的 profile 在重建后的 profiles 里才留，
+ * 悬空即丢弃（防引擎 unknown_default_profile 把 PUT 打成 400）。customHeaders 的值是
  * 打码哨兵（键名保留、值不回显），PUT 时服务端 restoreMaskedCustomHeaders 还原磁盘真实值，哨兵绝不落盘；
  * 还原不了的条目服务端会进 warnings 如实告知。无 previousRawText / 文本非法 / 条目是新增 → 退化为旧的从零重建行为。
  */
@@ -235,6 +237,15 @@ export function buildModelSettingsConfig(
   };
   if (defaultProvider) config.defaultProvider = defaultProvider;
   else delete config.defaultProvider;
+  // defaultProfile 同款存在性校验：磁盘带回值指向的 profile 若不在本次重建的 profiles 里
+  //（手写档被表单按 provider_model 重建抹掉），丢弃该字段、不留悬空引用——
+  // 悬空触发引擎 unknown_default_profile error，PUT 全路径 400「模型设置未保存」。
+  const previousDefaultProfile = previous.top.defaultProfile;
+  if (typeof previousDefaultProfile === "string" && profileMap[previousDefaultProfile]) {
+    config.defaultProfile = previousDefaultProfile;
+  } else {
+    delete config.defaultProfile;
+  }
   if (typeof budget === "number" && budget > 0) config.chatHistoryBudgetTokens = budget;
   return config;
 }

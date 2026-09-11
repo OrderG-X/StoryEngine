@@ -9,7 +9,7 @@
  * （显式策略参数）→ AI 腔回检/自动去味/beats 裁决（显式开关）→ 总览重建 + 诚实 summary。
  *
  * 两侧只剩适配层：
- *   - 路由：HTTP 入参解析 + 200/422 投影（report/draftContent/draftTitle/overview 包装）。
+ *   - 路由：HTTP 入参解析 + 200/422 投影（report/draftContent/draftTitle/overview/warnings 包装）。
  *   - 工具：RequestContext 章号回退与已入库前沿推进、写作意图门、章序护栏（D3：agent 语义，留在
  *     工具层）、writer 装配（delta sink / 候选错温）、repair/triage 任务槽 callModel 装配、输出投影。
  *
@@ -888,6 +888,9 @@ export interface GenerateDraftHttpProjection {
   readonly draftContent: string;
   /** 上下文预算裁剪账本：路由无条件投影 contextBudgetPayload；工具侧按 optionalContextBudget 条件投影（已并进顶层）。 */
   readonly contextRanking: WriterRankContextPlan;
+  /** 降级留痕（enforce 回读失败/正文未载入等）：summary 同款文案的纯文本版，路由 200 投影带出——
+   *  否则 HTTP 调用方拿到 ok:true+空稿却零信号（形同假成功）。无降级时字段缺省。 */
+  readonly warnings?: readonly string[];
 }
 
 /** 主编排 canonical 结果：工具输出契约的全部字段 + HTTP 投影料 + 执法拒稿标记。 */
@@ -1301,6 +1304,15 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     ? buildCandidateSummaryLine(candidateCount, sampling.scoreInputs[sampling.chosenIndex], sampling.scoreInputs)
     : "";
 
+  // 降级留痕双通道（复审 P2②）：这两条降级此前只进 summary，而路由 200 投影不带 summary——
+  // HTTP 调用方拿到 ok:true+空稿却零信号（形同假成功）。warnings 纯文本版随 http 投影带出；
+  // summary 的 ⚠/（注：…）装饰原样保留（既有契约锁定原文案），两处文案同源不漂移。
+  const enforcementSkippedWarning = "工作稿落盘后回读失败，本章长度执法未执行（正文以引擎写盘为准）；请切换章节刷新后核对字数。";
+  const draftNotLoadedWarning = "正文已写盘，但本次未能载入到写作区显示——切到别的章再切回本章即可看到，不用重写。";
+  const httpWarnings: string[] = [];
+  if (lengthEnforcementSkipped) httpWarnings.push(enforcementSkippedWarning);
+  if (draftBody.trim().length === 0) httpWarnings.push(draftNotLoadedWarning);
+
   return {
     ok: true,
     chapter,
@@ -1323,18 +1335,19 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
       // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。
-      (lengthEnforcementSkipped
-        ? "\n⚠ 工作稿落盘后回读失败，本章长度执法未执行（正文以引擎写盘为准）；请切换章节刷新后核对字数。"
-        : "") +
+      (lengthEnforcementSkipped ? `\n⚠ ${enforcementSkippedWarning}` : "") +
       (aiFlavorNote ? `\n${aiFlavorNote}` : "") +
       // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
-      (draftBody.trim().length === 0
-        ? "（注：正文已写盘，但本次未能载入到写作区显示——切到别的章再切回本章即可看到，不用重写。）"
-        : ""),
+      (draftBody.trim().length === 0 ? `（注：${draftNotLoadedWarning}）` : ""),
     refreshScope: "full",
     characterSelection,
     ...contextBudget,
-    http: { report: finalReport, draftContent: finalDraftContent, contextRanking },
+    http: {
+      report: finalReport,
+      draftContent: finalDraftContent,
+      contextRanking,
+      ...(httpWarnings.length > 0 ? { warnings: httpWarnings } : {}),
+    },
   };
 }
 

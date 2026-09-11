@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildStateOverview, createStoryProject } from "@actalk/story-engine";
-import { HOME_TEST_TMP_ROOT, makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { makeHomeTempDir, testRunRoot } from "../lib/home-test-tmp.js";
 import { assertStoryEngineProject } from "../lib/project-io.js";
 import { registerBooksRoutes, resolveBookLastActiveMs, selectRecentDefaultBooks } from "./books.js";
 
@@ -193,7 +193,7 @@ describe("books route destructive confirmation", () => {
       projectPath: projectDir,
       confirmDelete: true,
       confirmTitle: "路径确认书籍",
-      confirmProjectPath: join(HOME_TEST_TMP_ROOT, "other-project"),
+      confirmProjectPath: join(testRunRoot(), "other-project"),
     });
 
     expect(response.statusCode).toBe(400);
@@ -270,7 +270,7 @@ describe("usage-summary route path guard（用量汇总补齐路径闸）", () =
 
 async function createEmptyEngineBook(title: string): Promise<{ readonly projectDir: string; readonly title: string }> {
   // rootDir 必须落在用户目录内，否则 guardProjectPath 会以"不安全路径"拒绝删除；
-  // makeHomeTempDir 落在 $HOME 下的隐藏测试基目录，满足这一约束。
+  // makeHomeTempDir 落在 $HOME 下隐藏测试基目录的本次运行 run 目录内，满足这一约束。
   const rootDir = await makeHomeTempDir("story-engine-empty-book-");
   generatedDeleteRouteProjectDirs.add(rootDir);
   // 用引擎真实建书：仅给标题，其余字段留空——模拟"只问书名进台、还没搭任何内容"的空建书。

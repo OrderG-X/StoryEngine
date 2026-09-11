@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { HOME_TEST_TMP_ROOT, makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { makeHomeTempDir, testRunRoot } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 import { registerMemoryContextReadRoutes } from "./memory-context-read.js";
 
@@ -154,8 +154,8 @@ describe("Memory Context Runtime read-only route", () => {
       "memory/project.json",
       JSON.stringify([{ id: "external", text: "EXTERNAL_SHOULD_NOT_READ" }]),
     );
-    await mkdir(HOME_TEST_TMP_ROOT, { recursive: true });
-    const symlinkRoot = join(HOME_TEST_TMP_ROOT, `memory-context-read-symlink-external-${Date.now()}`);
+    await mkdir(testRunRoot(), { recursive: true });
+    const symlinkRoot = join(testRunRoot(), `memory-context-read-symlink-external-${Date.now()}`);
     extraCleanupPaths.push(symlinkRoot);
     await symlink(externalDir, symlinkRoot, "dir");
 
@@ -174,8 +174,8 @@ describe("Memory Context Runtime read-only route", () => {
   it("blocks symlink projectRoot even when it points at a valid home project", async () => {
     projectDir = await createProject();
     await writeProjectFile(projectDir, "memory/project.json", "[]");
-    await mkdir(HOME_TEST_TMP_ROOT, { recursive: true });
-    const symlinkRoot = join(HOME_TEST_TMP_ROOT, `memory-context-read-symlink-valid-${Date.now()}`);
+    await mkdir(testRunRoot(), { recursive: true });
+    const symlinkRoot = join(testRunRoot(), `memory-context-read-symlink-valid-${Date.now()}`);
     extraCleanupPaths.push(symlinkRoot);
     await symlink(projectDir, symlinkRoot, "dir");
 
@@ -379,8 +379,9 @@ async function callMemoryContextReadRoute(body: unknown, options: {
 }
 
 async function createProject(): Promise<string> {
-  await mkdir(HOME_TEST_TMP_ROOT, { recursive: true });
-  return createProjectIn(HOME_TEST_TMP_ROOT, "memory-context-read-route-");
+  const runRoot = testRunRoot();
+  await mkdir(runRoot, { recursive: true });
+  return createProjectIn(runRoot, "memory-context-read-route-");
 }
 
 async function createProjectIn(parentDir: string, prefix: string): Promise<string> {

@@ -208,3 +208,47 @@ describe("buildModelSettingsConfig 顶层与 profiles 同款式合并保留（P2
     expect(merged).toEqual(baseline);
   });
 });
+
+describe("buildModelSettingsConfig 磁盘带回的 defaultProfile 存在性校验（悬空触发引擎 unknown_default_profile，PUT 全路径 400）", () => {
+  const provider = {
+    id: "deepseek",
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    apiKeyStatus: "present" as const,
+  };
+  const tasks = { fastDraft: "deepseek|deepseek-chat" };
+  const profId = taskProfileId("deepseek", "deepseek-chat");
+
+  it("手写 defaultProfile 指向重建后不存在的 profile：字段被丢、不留悬空引用，其余合并照常", () => {
+    const config = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: JSON.stringify({
+        version: 1,
+        // 手写档：profiles 被表单按 provider_model 重建后，balanced 已不在新集合里
+        defaultProfile: "balanced",
+        someFutureTopLevel: { nested: [1, 2] },
+        providers: { deepseek: { id: "deepseek", type: "openai-compatible" } },
+        profiles: { balanced: { id: "balanced", provider: "deepseek", model: "deepseek-chat" } },
+        taskProfiles: {},
+      }),
+    });
+    expect("defaultProfile" in config).toBe(false); // 悬空引用绝不落盘，保存不再 400
+    // 其余合并行为不受影响
+    expect(Object.keys(config.profiles as Record<string, unknown>)).toEqual([profId]);
+    expect(config.someFutureTopLevel).toEqual({ nested: [1, 2] });
+    expect(config.defaultProvider).toBe("deepseek");
+  });
+
+  it("defaultProfile 指向重建后仍存在的 profile：原样保留", () => {
+    const config = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: JSON.stringify({
+        version: 1,
+        defaultProfile: profId,
+        providers: {},
+        profiles: {},
+        taskProfiles: {},
+      }),
+    });
+    expect(config.defaultProfile).toBe(profId);
+  });
+});

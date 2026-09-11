@@ -554,6 +554,38 @@ describe("draft length guard routes", () => {
     });
   });
 
+  it("enforce 落盘回读彻底失败 → 200 ok:true 但 warnings 投影带出降级留痕（复审 P2②：不再零信号假成功）", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-length-");
+    await writeProjectJson(projectDir);
+    // 故障注入：引擎报 passed 并给出 draftPath，但草稿根本没落盘 → 执法回读重试耗尽仍空。
+    const draftPath = join(projectDir, "drafts", "fast", "chapter-0001.md");
+    runFastDraft.mockResolvedValueOnce({
+      chapter: 1,
+      passed: true,
+      draftPath,
+      title: "第1章",
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: { hash: "test", sections: [] },
+      issues: [],
+    });
+
+    const response = await callDraftRoute("/api/draft/generate", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "继续推进主角进入审计楼。",
+    });
+
+    // 「草稿确已落盘」是引擎报告口径，ok 仍 true（绝不谎报失败）；
+    // 但执法跳过 + 正文未载入这两条降级必须随 warnings 投影带出（200 响应此前不带 summary=零信号）。
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.ok).toBe(true);
+    expect(response.payload.draftContent).toBe("");
+    expect(response.payload.warnings).toEqual([
+      expect.stringContaining("长度执法未执行"),
+      expect.stringContaining("正文已写盘"),
+    ]);
+  }, 10_000);
+
   it("rejects too-short non-stream drafts and restores the previous working draft", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-length-");
     await writeProjectJson(projectDir);

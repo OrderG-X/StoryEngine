@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterMessage } from "../types.js";
+import { detectUnbackedCompletionClaim } from "./detectUnbackedCompletion.js";
 import {
   emptyAssistantMessage,
   presentationFor,
@@ -151,6 +152,57 @@ describe("projectAgentEvent", () => {
       },
     ]);
     expect(message.toolSteps![0].status).toBe("completed");
+  });
+
+  it("tool-result 带 dryRun/action → 累加进 toolStep（诚实背书粒度，对齐服务端 honesty-detection 字段名）", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "p1", toolName: "prune_snapshots", startedAt: 10 },
+      {
+        type: "tool-result",
+        toolCallId: "p1",
+        toolName: "prune_snapshots",
+        endedAt: 20,
+        output: { ok: true, dryRun: true, summary: "预览：将裁 3 条快照。" },
+      },
+      { type: "tool-call", toolCallId: "e1", toolName: "manage_style_exemplars", startedAt: 30 },
+      {
+        type: "tool-result",
+        toolCallId: "e1",
+        toolName: "manage_style_exemplars",
+        endedAt: 40,
+        output: { ok: true, action: "add", summary: "已存文风样本「雨夜开场」。" },
+      },
+    ]);
+    expect(message.toolSteps![0]).toMatchObject({ status: "completed", dryRun: true });
+    expect(message.toolSteps![1]).toMatchObject({ status: "completed", action: "add" });
+  });
+
+  it("exemplars add 成功经投影后不再被诚实探针误判「操作未完成」；list 只读照旧判谎报（P2③ 端到端）", () => {
+    const added = project([
+      { type: "tool-call", toolCallId: "e1", toolName: "manage_style_exemplars", startedAt: 10 },
+      {
+        type: "tool-result",
+        toolCallId: "e1",
+        toolName: "manage_style_exemplars",
+        endedAt: 20,
+        output: { ok: true, action: "add", summary: "已存文风样本「雨夜开场」。" },
+      },
+    ]);
+    // action:"add" 累加进 step → stepBacksWriteClaim 认它背书——修复前字段在投影层丢失、被误盖「操作未完成」。
+    expect(detectUnbackedCompletionClaim("已保存文风样本。", added.toolSteps)).toBe(false);
+
+    const listed = project([
+      { type: "tool-call", toolCallId: "e2", toolName: "manage_style_exemplars", startedAt: 10 },
+      {
+        type: "tool-result",
+        toolCallId: "e2",
+        toolName: "manage_style_exemplars",
+        endedAt: 20,
+        output: { ok: true, action: "list", summary: "当前共 2 条样本。" },
+      },
+    ]);
+    // 对照：list 是只读 action，completed 也不背书「已保存」——同一投影链下照旧判谎报。
+    expect(detectUnbackedCompletionClaim("已保存文风样本。", listed.toolSteps)).toBe(true);
   });
 
   it("falls back to a generic step label for an unknown tool but never crashes", () => {

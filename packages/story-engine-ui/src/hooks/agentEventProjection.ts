@@ -43,6 +43,11 @@ export interface AgentToolResultOutput {
    * 部分失败显示成全成功（修#1）。优先级低于 needsConfirmation / ok===false。
    */
   readonly partialMiss?: boolean;
+  /** 诚实背书粒度（agentChatClient 透传；与服务端 honesty-detection stepBacksWriteClaim 认的字段名对齐）：
+   *  prune_snapshots 的 dryRun（true=预览没落盘不背书）/ manage_style_exemplars 的 action
+   *  （list 只读不背书；写背书只认 add/update/remove）。累加进 toolStep 供回合收尾的诚实探针判定。 */
+  readonly dryRun?: boolean;
+  readonly action?: string;
   readonly summary?: string;
   readonly issues?: readonly string[];
   readonly overview?: unknown;
@@ -214,6 +219,8 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // - needsConfirmation===true（如删角色未确认）→「待确认」(暖色 pending，不是失败)，优先级最高。
       // - ok===false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
+      // - dryRun/action（prune 只读预览 / exemplars 只读 list）随步骤累加进 toolStep，
+      //   供回合收尾的诚实探针（honesty-detection stepBacksWriteClaim）按粒度判写背书。
       const status = event.output?.needsConfirmation === true
         ? "needs_confirmation"
         : event.output?.ok === false
@@ -221,7 +228,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           : event.output?.partialMiss === true
             ? "partial"
             : "completed";
-      const settled = settleTool(message, event.toolCallId, status, event.endedAt, event.output?.summary);
+      const settled = settleTool(message, event.toolCallId, status, event.endedAt, event.output?.summary, event.output);
       // 块级撤销的命门：snapshotId 已从后端流到 event.output（agentChatClient→onToolResult），
       // 这里把它（连同 refreshScope）回写到消息上，建立「回合↔git 快照」映射，供 M3 块脚「撤销到此」。
       const withEffects = recordTurnEffects(settled, event.toolName, event.output);
@@ -338,11 +345,24 @@ function settleTool(
   status: "completed" | "failed" | "needs_confirmation" | "partial",
   endedAt: number,
   summary?: string,
+  output?: AgentToolResultOutput,
 ): ChapterMessage {
   const cardId = cardIdFor(toolCallId);
   const detail = summary?.trim();
   const toolSteps = message.toolSteps?.map((step) =>
-    step.id === toolCallId ? { ...step, status, endedAt, ...(detail ? { detail } : {}) } : step,
+    step.id === toolCallId
+      ? {
+        ...step,
+        status,
+        endedAt,
+        ...(detail ? { detail } : {}),
+        // 诚实背书粒度累加进 step（对齐服务端 honesty-detection 认的字段名）：dryRun（prune 预览
+        // 不背书）/ action（exemplars 的 list 不背书）；没有这两字段的工具自然缺省、维持旧口径。
+        // 缺了这层累加，exemplars add 真成功也会被回合收尾的诚实探针误判成「操作未完成」（复审 P2③）。
+        ...(typeof output?.dryRun === "boolean" ? { dryRun: output.dryRun } : {}),
+        ...(typeof output?.action === "string" ? { action: output.action } : {}),
+      }
+      : step,
   );
   // 把工具的真实 summary（成功摘要 / 失败原因）写进卡片，让用户看到引擎真实结果，而非只看 agent 文本。
   const agentCards = message.agentCards?.map((card) =>
