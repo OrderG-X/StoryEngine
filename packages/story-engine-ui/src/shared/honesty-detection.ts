@@ -17,6 +17,9 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   "generate_character_enrichment", "generate_matrix_enrichment", "generate_character_relationships",
   "generate_writing_rules_enrichment", "generate_alias_table",
   "edit_fact_ledger", "set_foreshadowing_importance", "clean_legacy_threads", "group_related_leads",
+  // 真裁改写快照历史（落盘生效）：成功后 agent 转述「已裁剪/已保存到备份目录」须认它背书——
+  // 漏了会被 A1 误判谎报、服务端强制作废重做（复审实锤）。
+  "prune_snapshots",
 ]);
 
 /**

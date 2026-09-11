@@ -410,6 +410,33 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
     expect(list[list.length - 1]?.label).toBe("base: 已裁剪 10 条更早快照"); // 计数不被重复 prune 虚增
   }, 60_000);
 
+  it("裁过再涨过 keep 二次裁：旧 base 换新，totalAfter/freedCommits 不多报/少报 1（off-by-one 回归）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "起点");
+    await seedSnapshots(dir, 28); // 共 30 条
+    const backupDir = await mkdtemp(join(tmpdir(), "se-prune-twice-"));
+
+    const first = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+    expect(first.prunedCount).toBe(10);
+    expect(await commitCount(dir)).toBe(21); // 20 保留 + 1 base
+
+    await seedSnapshots(dir, 10); // 涨到 31 条（1 旧 base + 30 快照），再按 keep=20 裁
+    const dry = await pruneSnapshots(dir, { keep: 20, dryRun: true, backupDir });
+    expect(dry.prunedCount).toBe(10);
+    expect(dry.totalBefore).toBe(31);
+    expect(dry.totalAfter).toBe(21); // 旧 base 也出链：21 不是 22
+    expect(dry.freedCommits).toBe(10); // 净释放 10 不是 9
+    expect(await commitCount(dir)).toBe(31); // dry-run 不落盘
+
+    const second = await pruneSnapshots(dir, { keep: 20, dryRun: false, backupDir });
+    expect(second.totalAfter).toBe(21);
+    expect(second.freedCommits).toBe(10);
+    expect(await commitCount(dir)).toBe(21);
+    const list = await listSnapshots(dir, 50);
+    expect(list).toHaveLength(21);
+    expect(list[list.length - 1]?.label).toBe("base: 已裁剪 20 条更早快照"); // 折叠计数累加 10+10
+  }, 60_000);
+
   it("keep 下限夹逼到 20：传 1 按 20 裁，防误裁光", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "起点");

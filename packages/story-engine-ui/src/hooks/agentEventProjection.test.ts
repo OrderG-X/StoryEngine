@@ -484,7 +484,7 @@ describe("projectAgentEvent — 有序分段 segments（时间线跟着对话走
   });
 });
 
-describe("presentationFor — 全部 27 工具块体详情人话标签（时间线不露英文）", () => {
+describe("presentationFor — 全部 32 工具块体详情人话标签（时间线不露英文）", () => {
   // 时间线里「调用工具 · XX」要和整套中文 UI 对齐，story-agent.ts 注册的每个工具
   // 都得有中文 stepLabel；漏一个就会回退到生硬的「执行 generate_worldbuilding」。
   // 这份清单与 story-agent.ts 的 tools 注册一一对应（新增工具两边都要补）。
@@ -514,16 +514,21 @@ describe("presentationFor — 全部 27 工具块体详情人话标签（时间�
     edit_fact_ledger: "记录故事事实",
     suggest_next_steps: "建议下一步",
     set_foreshadowing_importance: "调整伏笔权重",
+    resolve_thread: "收口单条线索",
     clean_legacy_threads: "清理历史线索",
     group_related_leads: "归并相关线索",
+    manage_style_exemplars: "管理文风样本",
+    undo_last_change: "撤销上一改动",
+    prune_snapshots: "裁剪快照历史",
+    web_search: "联网检索资料",
   };
 
   it("commit_apply 的块体步骤标签是『正式入库』（人话，不是 执行 commit_apply）", () => {
     expect(presentationFor("commit_apply").stepLabel).toBe("定稿");
   });
 
-  it("全部 27 个注册工具有人话 stepLabel（一律不回退到 执行 ${toolName} 英文）", () => {
-    expect(Object.keys(EXPECTED_STEP_LABELS)).toHaveLength(27);
+  it("全部 32 个注册工具有人话 stepLabel（一律不回退到 执行 ${toolName} 英文）", () => {
+    expect(Object.keys(EXPECTED_STEP_LABELS)).toHaveLength(32);
     for (const [toolName, label] of Object.entries(EXPECTED_STEP_LABELS)) {
       const stepLabel = presentationFor(toolName).stepLabel;
       expect(stepLabel).toBe(label);

@@ -432,7 +432,9 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
     const prunedCount = snapshotCount - keep;
     const firstPrunedIndex = rootIsBase ? 1 : 0;
     const boundaryId = revs[firstPrunedIndex + prunedCount - 1]!;
-    const totalAfter = revs.length - prunedCount + 1;
+    // 裁后新链 = 保留窗口（revs.length - prunedCount - (rootIsBase ? 1 : 0)）+ 1 条新 base；
+    // rootIsBase 时旧 base 一并出链（被新 base 顶替），别再把它算进裁后总数（复审实锤的 off-by-one）。
+    const totalAfter = revs.length - prunedCount + (rootIsBase ? 0 : 1);
     const freedCommits = revs.length - totalAfter;
 
     if (dryRun) {

@@ -122,19 +122,55 @@ export function userTurnAllowsResolveThread(userTurnText: string | undefined): b
 
 // 快照历史「真裁」确认意图（prune_snapshots confirm=true；dry-run 预览只读、不过这道门）。
 // 与 commit 门同哲学：缺原话放行（前端按钮/旧会话兼容）；有原话须见「确认裁剪」级意图——
-// 「裁剪一下快照历史」这种首次请求只够走预览，不够真裁。
+// 「裁剪一下快照历史」「裁剪快照历史吧」这种首次请求（含「吧」级商量语气）只够走预览，不够真裁。
+// 复审收紧（跨域误放行实锤：「确认清理线索」曾放行快照真裁）：
+// - 确认动词收窄为 裁剪|裁掉；清理|清掉 必须与快照域宾语（快照|操作历史|存档点）同框才算数；
+// - 否定同样带域锚：「确认裁剪快照历史，别清理线索」里被否定的是线索清理，不拦裁剪确认；
+// - 反转放行：「先别裁剪，算了还是裁吧」——否定之后用户明确改主意要裁，视为确认级。
+const SNAPSHOT_PRUNE_VERB = "(?:裁剪|裁掉)";
+const SNAPSHOT_PRUNE_DOMAIN = "(?:快照|操作历史|存档点)";
 const SNAPSHOT_PRUNE_CONFIRM_PATTERNS = [
-  /(?:确认|确定|真的|直接)[^。！？；\n]{0,10}(?:裁剪|清理|裁掉|清掉)/u,
-  /(?:裁剪|清理|裁掉|清掉)[^。！？；\n]{0,8}(?:快照|历史|存档)[^。！？；\n]{0,8}(?:确认|确定|吧|动手)/u,
+  // 确认级措辞 + 裁剪动词：「确认裁剪」「直接裁掉」「确认裁剪快照历史」
+  new RegExp(`(?:确认|确定|真的|直接)[^。！？；\\n]{0,10}${SNAPSHOT_PRUNE_VERB}`, "u"),
+  // 清理动词须带快照域宾语同框：「确定清理快照历史」可；「确认清理线索」跨域不可
+  new RegExp(`(?:确认|确定|真的|直接)[^。！？；\\n]{0,10}(?:清理|清掉)[^。！？；\\n]{0,8}${SNAPSHOT_PRUNE_DOMAIN}`, "u"),
+  // 裁剪动词 + 域宾语 + 确认级收尾：「把快照历史裁到100条，确认」「裁剪快照历史，动手」；
+  // 「吧」不算确认收尾——「裁剪快照历史吧」是首次请求语气，只够预览
+  new RegExp(`${SNAPSHOT_PRUNE_VERB}[^。！？；\\n]{0,8}${SNAPSHOT_PRUNE_DOMAIN}[^。！？；\\n]{0,8}(?:确认|确定|动手)`, "u"),
   // 短确认整句（agent 预览后问过「确认裁剪？」，用户回「确认/裁吧」）
   /^(?:好的?[，,。!\s]*)?(?:确认|确定|可以|行|没问题|裁吧|裁剪吧|裁掉吧|动手吧)[。.!！]?$/u,
 ];
 
-const SNAPSHOT_PRUNE_NEGATION_PATTERN = /(?:先)?(?:别|不要|先不|暂不|无需|不用|算了)[^，。；！？\n]{0,8}(?:裁剪|清理|裁掉|清掉|裁)/u;
+// 否定带域锚：裁剪系动词直接拦（别裁/先别裁剪）；清理系动词须带快照域宾语才拦——
+// 「别清理线索」拦的是线索清理，不该拦快照裁剪确认。
+const SNAPSHOT_PRUNE_NEGATION_PATTERN = new RegExp(
+  `(?:先)?(?:别|不要|先不|暂不|无需|不用|算了)[^，。；！？\\n]{0,8}(?:裁(?:剪|掉)?|(?:清理|清掉)[^，。；！？\\n]{0,8}${SNAPSHOT_PRUNE_DOMAIN})`,
+  "u",
+);
+
+// 反转放行用的确认锚（作用在否定之后的余文上，故不用 ^$ 整句锚）：
+// 「算了还是裁吧」「算了，确认裁剪」「先别裁剪，确认」都算用户改主意要裁。
+const SNAPSHOT_PRUNE_REVERSAL_CONFIRM = new RegExp(
+  `(?:确认|确定)[^。！？；\\n]{0,8}(?:裁(?:剪|掉)?|(?:清理|清掉)[^，。；！？\\n]{0,8}${SNAPSHOT_PRUNE_DOMAIN})` +
+    "|(?:裁吧|裁剪吧|裁掉吧|动手吧)" +
+    // 否定余文以一个短确认子句收尾：「先别裁剪，确认」——须以标点/空白开头，防「我不确认」误命中
+    "|(?:^|[，,。；！？\\s])(?:好的?[，,。!\\s]*)?(?:确认|确定|可以|行|没问题)[。.!！]?$",
+  "u",
+);
+
+/** 「先别裁剪，算了还是裁吧」式反转：否定之后（带反转语气词）又出现确认级裁意 → 视为确认。 */
+function hasSnapshotPruneReversal(text: string): boolean {
+  const match = SNAPSHOT_PRUNE_NEGATION_PATTERN.exec(text);
+  if (!match || match.index === undefined) return false;
+  const afterNegation = text.slice(match.index + match[0].length);
+  return REVERSAL_MARKER.test(afterNegation) && SNAPSHOT_PRUNE_REVERSAL_CONFIRM.test(afterNegation);
+}
 
 export function userTurnAllowsSnapshotPrune(userTurnText: string | undefined): boolean {
   const text = normalizeUserTurn(userTurnText);
   if (!text) return true;
+  // 反转句式先判：裸「裁吧」够不着正向确认锚，但「先别裁剪，算了还是裁吧」是否定后的同动作改主意。
+  if (hasSnapshotPruneReversal(text)) return true;
   if (!hasAnyPattern(text, SNAPSHOT_PRUNE_CONFIRM_PATTERNS)) return false;
   return !hasBlockingNegation(text, SNAPSHOT_PRUNE_NEGATION_PATTERN, SNAPSHOT_PRUNE_CONFIRM_PATTERNS);
 }

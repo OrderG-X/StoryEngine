@@ -99,6 +99,15 @@ describe("detectUnbackedCompletionClaim A1 谎报探针", () => {
     expect(detectUnbackedCompletionClaim("已入库。", [step("commit_apply", "completed")])).toBe(false);
   });
 
+  // prune_snapshots 真裁成功后 agent 转述「已裁剪/已保存到备份目录」：此前 WRITE_TOOL_NAMES 漏登记，
+  // 会被误判谎报 → 服务端强制作废重做（复审实锤）；补上背书后不误判，零背书/失败仍照抓。
+  it("prune_snapshots 真裁成功的转述有背书 → 不命中；零背书或工具失败 → 照抓", () => {
+    const paraphrase = "已把操作历史裁到最近 200 条，裁前完整历史已保存到备份目录。";
+    expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "completed")])).toBe(false);
+    expect(detectUnbackedCompletionClaim(paraphrase, [])).toBe(true);
+    expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "failed")])).toBe(true);
+  });
+
   it("没有写类完成断言 → 不命中（读取/审稿/普通对话不误伤）", () => {
     expect(detectUnbackedCompletionClaim("我读取了一下当前状态，这章还没写。", undefined)).toBe(false);
     expect(detectUnbackedCompletionClaim("好的，我现在开始写这一章。", undefined)).toBe(false); // 将来时不算

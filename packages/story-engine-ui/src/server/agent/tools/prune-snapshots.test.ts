@@ -59,6 +59,7 @@ type ToolResult = {
   readonly dryRun: boolean;
   readonly summary: string;
   readonly blockedReason?: string;
+  readonly keep?: number;
   readonly prunedCount?: number;
   readonly backupBundlePath?: string;
 };
@@ -111,6 +112,8 @@ describe("runPruneSnapshots（壳函数）", () => {
     await access(result.backupBundlePath!);
     expect(result.summary).toContain("已把操作历史裁到最近 25 条");
     expect(result.summary).not.toMatch(/[0-9a-f]{40}/u); // 不把 baseCommitId 这类裸 id 念给用户
+    // 如实声明：裁剪不在「撤销上一改动」链上，兜底是 bundle 备份（undo 撤不到纯历史折叠）
+    expect(result.summary).toContain("不在「撤销上一改动」链上");
   }, 60_000);
 
   it("不足 keep 时 no-op 如实回报（预览与真裁都不落盘）", async () => {
@@ -126,8 +129,27 @@ describe("runPruneSnapshots（壳函数）", () => {
     expect(real.ok).toBe(true);
     expect(real.prunedCount).toBe(0);
     expect(real.summary).toContain("无需裁剪");
+    // dryRun 口径=「没落盘」：confirm:true 但无需裁剪、什么都没改 → 仍是 true（与预览/被拦/失败同口径）
+    expect(real.dryRun).toBe(true);
     expect(real.backupBundlePath).toBeUndefined();
     expect((await listSnapshots(dir, 100)).length).toBe(30);
+  }, 60_000);
+
+  it("keep:0 按「0=默认」归一为缺省 200（与兄弟工具 nonnegative 惯例对齐，不再被 schema 拒/夹到 20）", async () => {
+    const dir = await makeProjectWithHistory();
+
+    // 壳函数层：keep:0 → 默认 200 → 30 条历史无需裁剪（若被夹到 20 会裁掉 10 条）
+    const shell = await runPruneSnapshots(dir, { keep: 0 });
+    expect(shell.ok).toBe(true);
+    expect(shell.keep).toBe(200);
+    expect(shell.prunedCount).toBe(0);
+    expect((await listSnapshots(dir, 100)).length).toBe(30);
+
+    // 工具层：schema nonnegative 收下 0（曾经 .positive() 直接拒），经归一同样按默认走
+    const viaTool = await executeTool({ keep: 0 }, dir);
+    expect(viaTool.ok).toBe(true);
+    expect(viaTool.keep).toBe(200);
+    expect(viaTool.prunedCount).toBe(0);
   }, 60_000);
 
   it("项目路径坏掉（不是目录）时 ok:false 如实回报原因，绝不静默", async () => {
@@ -141,6 +163,24 @@ describe("runPruneSnapshots（壳函数）", () => {
 
     expect(result.ok).toBe(false);
     expect(result.summary).toContain("失败");
+    // 铁律④：失败原因绝不内嵌本地绝对路径（复审实锤：此前 error.message 原文拼进 summary）
+    expect(result.summary).toContain("(本地路径)");
+    expect(result.summary).not.toContain(dir);
+    // 失败=没落盘，dryRun 恒 true（与「没落盘」口径自洽）
+    expect(result.dryRun).toBe(true);
+  });
+
+  it("真裁（confirm=true）失败同样 dryRun:true（没落盘）且摘要不含本地绝对路径", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "prune-snapshots-broken-"));
+    const filePath = join(dir, "not-a-dir");
+    await writeFile(filePath, "占位文件", "utf-8");
+
+    const result = await runPruneSnapshots(filePath, { confirm: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.dryRun).toBe(true); // 曾报 false——真裁失败其实没落盘（update-ref 前失败整体回滚）
+    expect(result.summary).toContain("裁剪操作历史失败");
+    expect(result.summary).not.toContain(dir);
   });
 });
 
@@ -158,6 +198,8 @@ describe("prune_snapshots 工具（意图门只守真裁）", () => {
     expect(result.ok).toBe(false);
     expect(result.blockedReason).toBe("user_turn_no_prune_confirm_intent");
     expect(result.summary).toContain("确认裁剪");
+    // 被拦=没落盘（连预览都没跑），dryRun 按「没落盘」口径报 true（字段语义自洽，复审 P2）
+    expect(result.dryRun).toBe(true);
     expect(await revParse(dir, "HEAD")).toBe(headBefore);
     expect((await listSnapshots(dir, 100)).length).toBe(30);
   }, 60_000);

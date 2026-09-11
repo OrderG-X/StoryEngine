@@ -94,7 +94,7 @@ interface ToolPresentation {
 /**
  * 工具 id → 时间线展示。stepLabel 是动作块「块体详情」里这一步的人话标签，
  * 对照 packages/story-engine/src/agent-capabilities.ts 的 label（只读不改它），
- * **覆盖 story-agent.ts 注册的全部 27 个工具**——时间线里「调用工具 · XX」一律说中文，
+ * **覆盖 story-agent.ts 注册的全部 32 个工具**——时间线里「调用工具 · XX」一律说中文，
  * 不让任何工具回退到生硬的「执行 generate_worldbuilding」之类英文（与整套中文 UI 对不齐）。
  * 新增工具务必在这里补一行中文标签；漏了才会落到 presentationFor 的英文兜底。
  *
@@ -141,8 +141,14 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   edit_fact_ledger: { stepLabel: "记录故事事实", card: null },
   suggest_next_steps: { stepLabel: "建议下一步", card: null },
   set_foreshadowing_importance: { stepLabel: "调整伏笔权重", card: null },
+  resolve_thread: { stepLabel: "收口单条线索", card: null },
   clean_legacy_threads: { stepLabel: "清理历史线索", card: null },
   group_related_leads: { stepLabel: "归并相关线索", card: null },
+  manage_style_exemplars: { stepLabel: "管理文风样本", card: null },
+  // 快照与外部簇
+  undo_last_change: { stepLabel: "撤销上一改动", card: null },
+  prune_snapshots: { stepLabel: "裁剪快照历史", card: null },
+  web_search: { stepLabel: "联网检索资料", card: null },
 };
 
 /**
@@ -168,7 +174,7 @@ export function presentationFor(toolName: string): ToolPresentation {
 }
 
 /**
- * 渲染时把工具步骤解析成中文标签：优先按 toolName 现取（presentationFor 覆盖全 27 工具），
+ * 渲染时把工具步骤解析成中文标签：优先按 toolName 现取（presentationFor 覆盖全 32 工具），
  * 让旧历史里烤进消息的英文 label 也显示中文；极旧消息没存 toolName 时，从「执行 xxx」英文兜底
  * label 里反解出工具名再现取中文，彻底覆盖历史；都不行才回退存下的 label（不崩、不静默）。
  */

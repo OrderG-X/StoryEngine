@@ -36,6 +36,8 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("prune_snapshots");
     expect(instructions).toContain("确认裁剪");
     expect(instructions).toMatch(/prune_snapshots（先预览、用户确认才真裁）/u);
+    // 如实声明撤销边界：undo 撤不到裁剪（不动工作树），别拿 undo 撤别的顶替（复审实锤的误撤风险）
+    expect(instructions).toContain("不在撤销链");
   });
 
   it("公开 generate_alias_table 工具作为后续在场检测的别名表入口", () => {
