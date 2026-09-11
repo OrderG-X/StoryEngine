@@ -143,4 +143,22 @@ describe("snapshots routes", () => {
       delete process.env.SE_DATA_DIR;
     }
   }, 60_000);
+
+  it("POST /api/snapshots/prune confirm=true 但无需裁剪时，dryRun 按「没落盘」口径回 true（与工具侧一致）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "唯一快照"); // init + 本条 = 2，远低于 keep 默认 200 → 无需裁剪
+    // 预览 no-op：新旧口径都是 true（钉住不漂移）
+    const dry = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir });
+    expect(dry.statusCode).toBe(200);
+    const dryResult = dry.payload.result as { dryRun: boolean; prunedCount: number };
+    expect(dryResult.prunedCount).toBe(0);
+    expect(dryResult.dryRun).toBe(true);
+    // confirm=true 的 no-op：老口径回 false（请求口径），新口径须回 true（什么都没落盘）
+    const real = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, confirm: true });
+    expect(real.statusCode).toBe(200);
+    const realResult = real.payload.result as { dryRun: boolean; prunedCount: number };
+    expect(realResult.prunedCount).toBe(0);
+    expect(realResult.dryRun).toBe(true);
+  });
 });
+

@@ -8,8 +8,8 @@ import {
   unbackedCompletionNoticeText,
 } from "./detectUnbackedCompletion.js";
 
-const step = (toolName: string, status: ToolStep["status"]) =>
-  ({ id: `s-${toolName}`, label: toolName, toolName, status, startedAt: 1 } as const);
+const step = (toolName: string, status: ToolStep["status"], result?: { readonly dryRun?: boolean; readonly action?: string }) =>
+  ({ id: `s-${toolName}`, label: toolName, toolName, status, startedAt: 1, ...result } as const);
 
 describe("关系整理谎报兜底（R3#2·A1 补『整理/梳理』）", () => {
   it("工具失败却说『人物关系已梳理清楚』→ 命中谎报（A1 兜底）", () => {
@@ -106,6 +106,26 @@ describe("detectUnbackedCompletionClaim A1 谎报探针", () => {
     expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "completed")])).toBe(false);
     expect(detectUnbackedCompletionClaim(paraphrase, [])).toBe(true);
     expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "failed")])).toBe(true);
+  });
+
+  // 写背书粒度（SWE 残留）：dry-run 预览态 completed 不是写——结果带 dryRun 时只认 false（真裁落盘）；
+  // 缺 payload 的旧调用方维持旧口径（completed 即背书，见上一条用例），不向坏方向回归。
+  it("prune_snapshots dry-run 预览（completed 但 dryRun:true）不背书「已裁剪/已保存」；真裁（dryRun:false）才背书", () => {
+    const paraphrase = "已把操作历史裁到最近 200 条，裁前完整历史已保存到备份目录。";
+    expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "completed", { dryRun: true })])).toBe(true);
+    expect(detectUnbackedCompletionClaim(paraphrase, [step("prune_snapshots", "completed", { dryRun: false })])).toBe(false);
+  });
+
+  // manage_style_exemplars 同族粒度：list 是只读 action，completed 不该背书「已添加/已删除」类声称；
+  // 只认 add/update/remove。缺 payload 时维持旧口径（该工具本不在写背书集 → 不背书）。
+  it("manage_style_exemplars：list（只读）completed 不背书；add/update/remove 才背书", () => {
+    const claim = "文风样本已保存到写作规则。";
+    expect(detectUnbackedCompletionClaim(claim, [])).toBe(true); //  sanity：零工具照抓
+    expect(detectUnbackedCompletionClaim(claim, [step("manage_style_exemplars", "completed", { action: "list" })])).toBe(true);
+    expect(detectUnbackedCompletionClaim(claim, [step("manage_style_exemplars", "completed", { action: "add" })])).toBe(false);
+    expect(detectUnbackedCompletionClaim(claim, [step("manage_style_exemplars", "completed", { action: "update" })])).toBe(false);
+    expect(detectUnbackedCompletionClaim(claim, [step("manage_style_exemplars", "completed", { action: "remove" })])).toBe(false);
+    expect(detectUnbackedCompletionClaim(claim, [step("manage_style_exemplars", "completed")])).toBe(true);
   });
 
   it("没有写类完成断言 → 不命中（读取/审稿/普通对话不误伤）", () => {

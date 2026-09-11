@@ -147,10 +147,11 @@ function parseProviderModels(
 
 /**
  * 表单路径重建整份 model-settings 配置。P2-3 残留洞修复：options.previousRawText 给当前磁盘配置原文
- * （GET 回显的打码文本）时，每个 provider 以磁盘对象为合并底、表单改动覆盖其上——表单不认识的字段
- * （customHeaders 等）随合并保留，不再被静默丢掉。customHeaders 的值是打码哨兵（键名保留、值不回显），
- * PUT 时服务端 restoreMaskedCustomHeaders 还原磁盘真实值，哨兵绝不落盘；还原不了的条目服务端会进
- * warnings 如实告知。无 previousRawText / 文本非法 / 该 provider 是新增 → 退化为旧的从零重建行为。
+ * （GET 回显的打码文本）时，逐层以磁盘对象为合并底、表单改动覆盖其上——provider 对象层表单不认识的字段
+ * （customHeaders 等）、顶层表单不认识的键（defaultProfile 等）、profile 上手调的五件套旋钮
+ * （temperature/maxTokens/timeoutMs/retries/stream）都随合并保留，不再被静默重建重置。customHeaders 的值是
+ * 打码哨兵（键名保留、值不回显），PUT 时服务端 restoreMaskedCustomHeaders 还原磁盘真实值，哨兵绝不落盘；
+ * 还原不了的条目服务端会进 warnings 如实告知。无 previousRawText / 文本非法 / 条目是新增 → 退化为旧的从零重建行为。
  */
 export function buildModelSettingsConfig(
   savedProviders: readonly SavedProvider[],
@@ -160,14 +161,14 @@ export function buildModelSettingsConfig(
     readonly previousRawText?: string | null;
   },
 ): Record<string, unknown> {
-  const previousProviders = parsePreviousProviders(options?.previousRawText);
+  const previous = parsePreviousConfig(options?.previousRawText);
   const providerMap: Record<string, unknown> = {};
   const seenProviders = new Set<string>();
 
   for (const prov of savedProviders) {
     const preset = PROVIDER_PRESETS.find((p) => p.id === prov.id);
     providerMap[prov.id] = {
-      ...previousProviders[prov.id],
+      ...previous.providers[prov.id],
       id: prov.id,
       label: prov.label,
       type: preset?.type ?? "openai-compatible",
@@ -185,7 +186,7 @@ export function buildModelSettingsConfig(
     const preset = PROVIDER_PRESETS.find((p) => p.id === provId);
     if (preset) {
       providerMap[preset.id] = {
-        ...previousProviders[preset.id],
+        ...previous.providers[preset.id],
         id: preset.id,
         label: preset.label,
         type: preset.type,
@@ -204,15 +205,18 @@ export function buildModelSettingsConfig(
     const profId = taskProfileId(provId, model);
     if (!profileMap[profId]) {
       profileMap[profId] = {
-        id: profId,
-        label: model,
-        provider: provId,
-        model,
+        // 五件套默认打底；磁盘同 id profile 的手调值盖过默认（这几个旋钮表单不管理），
+        // 表单管理的 id/label/provider/model 最后写死、永远以表单为准。
         temperature: 0.7,
         maxTokens: 4096,
         timeoutMs: 60000,
         retries: 2,
         stream: true,
+        ...previous.profiles[profId],
+        id: profId,
+        label: model,
+        provider: provId,
+        model,
       };
     }
     finalTasks[key] = profId;
@@ -220,37 +224,57 @@ export function buildModelSettingsConfig(
 
   const defaultProvider = seenProviders.size > 0 ? [...seenProviders][0] : undefined;
   const budget = options?.chatHistoryBudgetTokens;
-  return {
+  // 顶层同样以磁盘对象为合并底（表单不认识的键随合并保留）；表单管理的键覆盖其上。
+  // 服务商清空时磁盘残留的 defaultProvider 必须抹掉（指向已删服务商），不借合并复活。
+  const config: Record<string, unknown> = {
+    ...previous.top,
     version: 1,
     providers: providerMap,
     profiles: profileMap,
     taskProfiles: finalTasks,
-    ...(defaultProvider ? { defaultProvider } : {}),
-    ...(typeof budget === "number" && budget > 0 ? { chatHistoryBudgetTokens: budget } : {}),
   };
+  if (defaultProvider) config.defaultProvider = defaultProvider;
+  else delete config.defaultProvider;
+  if (typeof budget === "number" && budget > 0) config.chatHistoryBudgetTokens = budget;
+  return config;
+}
+
+interface PreviousConfig {
+  /** 磁盘配置顶层对象整体：defaultProfile 等表单不认识的键的保留来源。 */
+  readonly top: Record<string, unknown>;
+  /** provider id → 磁盘上的 provider 对象。 */
+  readonly providers: Record<string, Record<string, unknown>>;
+  /** profile id → 磁盘上的 profile 对象：手调五件套旋钮的保留来源。 */
+  readonly profiles: Record<string, Record<string, unknown>>;
 }
 
 /**
- * 从原始设置文本抽出「provider id → 磁盘上的 provider 对象」，供 buildModelSettingsConfig 按 id 合并、
- * 保留表单不认识的字段。文本缺失/非法/结构不对 → 空表（调用方退化为从零重建，绝不因旧文本坏而炸表单保存）。
+ * 从原始设置文本抽出合并底（顶层对象 + providers/profiles 两张 id 表），供 buildModelSettingsConfig
+ * 逐层合并、保留表单不认识的字段。文本缺失/非法/结构不对 → 全空（调用方退化为从零重建，绝不因旧文本坏而炸表单保存）。
  */
-function parsePreviousProviders(rawText: string | null | undefined): Record<string, Record<string, unknown>> {
-  if (!rawText?.trim()) return {};
+function parsePreviousConfig(rawText: string | null | undefined): PreviousConfig {
+  const empty: PreviousConfig = { top: {}, providers: {}, profiles: {} };
+  if (!rawText?.trim()) return empty;
   try {
     const parsed = JSON.parse(rawText) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const providers = (parsed as Record<string, unknown>).providers;
-    if (!providers || typeof providers !== "object" || Array.isArray(providers)) return {};
-    const out: Record<string, Record<string, unknown>> = {};
-    for (const [key, value] of Object.entries(providers as Record<string, unknown>)) {
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        out[key] = value as Record<string, unknown>;
-      }
-    }
-    return out;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
+    const top = parsed as Record<string, unknown>;
+    return { top, providers: pickObjectMap(top.providers), profiles: pickObjectMap(top.profiles) };
   } catch {
-    return {};
+    return empty;
   }
+}
+
+/** 只收「id → 对象」的纯对象层；数组/非标量条目丢弃。 */
+function pickObjectMap(value: unknown): Record<string, Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      out[key] = entry as Record<string, unknown>;
+    }
+  }
+  return out;
 }
 
 /**

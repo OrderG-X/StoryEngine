@@ -23,6 +23,8 @@ import {
 } from "../../ModelSettingsDialogTypes.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { AiServiceManager } from "./AiServiceManager.js";
+// 本页直接用 .ms-notice/.ms-warn-notice/.ms-error 等 ms-* 样式，显式引入其所在 css，不再隐式依赖单 bundle 里别人捎带。
+import "../../ModelSettingsDialog.css";
 import "./aiSettings.css";
 
 const DEFAULT_CHAT_MEMORY = 96_000;
@@ -497,8 +499,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
             {notice && <div className="ms-notice">{notice}</div>}
             {saveWarnings.length > 0 && (
               <div className="ms-notice ms-warn-notice">
-                {saveWarnings.map((warning) => (
-                  <div key={warning}>{warning}</div>
+                {saveWarnings.map((warning, index) => (
+                  <div key={`warn-${index}`}>{warning}</div>
                 ))}
                 {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无 raw JSON 编辑器，
                     被丢的 customHeaders 在本页补不回——指路到首页设置弹窗的原始 JSON。 */}

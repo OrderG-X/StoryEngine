@@ -22,6 +22,15 @@
 //   - 原 happy path 内联注释声称「route 预览在上文已断言未登记工具 store」——实际并无该断言
 //     （SWE 审计核实），内联注释已更正为留档说明。
 //   - 本文件未加显式 timeout（同次加固其余 parity 文件已加；本文件按分工只许补注释），留档待补。
+//     【2026-09-11 已补】磁盘 IO 重（真引擎建项目）：全部用例给显式 timeout（CLAUDE.md 纪律）。
+//
+// 2026-09-11 尾巴清零（本文件全量可动）：
+//   - D34 章号数字字符串【仍是显式分歧·结构性，只登记】：工具 schema coerceNumber 把 chapter:"3"
+//     还原成 3 照常预览/入库；HTTP 路由只认 number——本对 preview 侧 readPositiveInteger 静默丢 →
+//     400 formal_commit_preview_missing_chapter_target（apply 侧 requirePositiveBodyInteger 抛 → 500，
+//     见 commit-apply.parity.test.ts 同号登记）。与 quality 对 D31 同根（lenient-args vs project-io
+//     严格度差：模型会发字符串化参数 vs 前端恒发 number），收进 service 无意义（路由连 service
+//     都到不了），下方用例锁定现状。
 import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -87,7 +96,7 @@ beforeEach(() => {
 });
 
 describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面）", () => {
-  it("happy path：同稿同盘 → 两侧计划深相等、质量门禁结论一致；两侧都不写正式状态", async () => {
+  it("happy path：同稿同盘 → 两侧计划深相等、质量门禁结论一致；两侧都不写正式状态", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("commit-preview-happy-");
     await writeParityDraft(projectDir, 1, parityCommitDraft(1));
 
@@ -146,7 +155,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(await pathExists(`${projectDir}/.git`)).toBe(false);
   });
 
-  it("D8 缺草稿：两侧都诚实拒绝（HTTP 400 blocked；工具 canCommit:false + missing_draft），都不发凭证", async () => {
+  it("D8 缺草稿：两侧都诚实拒绝（HTTP 400 blocked；工具 canCommit:false + missing_draft），都不发凭证", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("commit-preview-nodraft-");
 
     const route = await callRoute(registerCommitRoutes, "POST", "/api/commit/preview", { projectPath: projectDir, chapter: 1 });
@@ -166,10 +175,30 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(findCommitPreview(projectDir, 1)).toBeUndefined();
     expect(await pathExists(defaultCommittedChapterPath(projectDir, 1))).toBe(false);
   });
+
+  it("D34 登记·章号数字字符串（lenient-args 分歧）：chapter:\"3\" 工具还原成 3 照常预览；HTTP 路由只认 number → 400", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("commit-preview-chapter-str-");
+    await writeParityDraft(projectDir, 3, parityCommitDraft(3));
+
+    const route = await callRoute(registerCommitRoutes, "POST", "/api/commit/preview", { projectPath: projectDir, chapter: "3" });
+    const tool = await driveToolExecute(commitPreviewTool, { chapter: "3" }, { projectDir });
+
+    // HTTP 路：readPositiveInteger 只认 number → chapter 静默丢 → 400 missing_chapter_target（连 service 都到不了）
+    expect(route.statusCode).toBe(400);
+    expect(route.payload.ok).toBe(false);
+    expect(route.payload.reason).toBe("formal_commit_preview_missing_chapter_target");
+    expect(route.payload.transactionId).toBeUndefined();
+
+    // 工具路：coerceNumber 把 "3" 还原成 3 → 第 3 章照常预览出凭证
+    expect(tool.ok).toBe(true);
+    expect(tool.canCommit).toBe(true);
+    expect(tool.chapter).toBe(3);
+    expect(typeof tool.previewToken).toBe("string");
+  });
 });
 
 describe("parity: commit_preview 对拍——显式策略分歧（declarationChannel 开/关，断言锁定策略差异存在）", () => {
-  it("D7 声明模型出有效声明时：工具计划吃声明（mainEvent 换成声明摘要），HTTP 计划仍纯正则 → 计划不再相等", async () => {
+  it("D7 声明模型出有效声明时：工具计划吃声明（mainEvent 换成声明摘要），HTTP 计划仍纯正则 → 计划不再相等", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("commit-preview-declare-");
     // 正文用不重复句子的稿子，声明 quote 逐字取自正文（引擎 verifyChapterDelta 要逐字证据）。
     await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));

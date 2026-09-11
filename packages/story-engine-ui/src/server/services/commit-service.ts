@@ -43,6 +43,7 @@
  *      pending 回执与内存缓存；
  *   ⑤ pending 恢复出口（recoverPendingCommitReceiptFromDisk）：先磁盘对账恢复或 fail-closed
  *      409，绝不删证据后重做；对不上（章未入库/内容被改）一律 409 + 可执行出路文案；
+ *      对账本身 IO 读失败单列 409 文案（只说稍后重试，绝不诱导删回执）；
  *   ⑥ 回执文件 IO 全部 no-follow + 父目录防 symlink 校验（Unsafe durable commit receipt...）。
  */
 import { createHash } from "node:crypto";
@@ -183,7 +184,12 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
           ...(openGoalTitles.length > 0 ? { openGoalTitles } : {}),
           ...(previousChapterEnding ? { previousChapterEnding } : {}),
         });
-      } catch {
+      } catch (error) {
+        // 回退正则是设计内降级，但完全无痕会让声明模型持续挂掉而无人察觉（ChapterDelta 静默退化）——
+        // 留一条 warn（章节号 + 错误摘要，不含草稿正文），行为不变只是留痕。
+        console.warn(
+          `[chapter-delta] ch${chapter} 声明通道调用失败，回退引擎正则：${error instanceof Error ? error.message : String(error)}`,
+        );
         declaration = undefined;
       }
     }
@@ -374,7 +380,31 @@ type CommitIdempotencyEntry =
     readonly payload: CommitApplySuccessPayload;
   };
 
+/**
+ * 幂等内存缓存上界（原无上界：每个成功 apply 的全章正文 payload 常驻内存，长跑只涨不消）。
+ * 超界按 FIFO 淘汰最旧条目（Map 迭代序即插入序）。淘汰的只是内存加速层——持久回执
+ * （.story-engine-ui/commit-idempotency/）才是重放真值，被淘汰键的同键重试走磁盘回执照常重放。
+ */
+const COMMIT_IDEMPOTENCY_CACHE_LIMIT = 50;
+
 const commitIdempotencyEntries = new Map<string, CommitIdempotencyEntry>();
+
+function setCommitIdempotencyEntry(cacheKey: string, entry: CommitIdempotencyEntry): void {
+  // 同键覆写（running → completed）不换名额、不挪位置，不触发淘汰。
+  if (!commitIdempotencyEntries.has(cacheKey)) {
+    while (commitIdempotencyEntries.size >= COMMIT_IDEMPOTENCY_CACHE_LIMIT) {
+      const oldest = commitIdempotencyEntries.keys().next();
+      if (oldest.done) break;
+      commitIdempotencyEntries.delete(oldest.value);
+    }
+  }
+  commitIdempotencyEntries.set(cacheKey, entry);
+}
+
+/** 测试专用自省：内存缓存当前条目数（上界淘汰的回归锁用；生产代码勿调）。 */
+export function commitIdempotencyCacheSizeForTests(): number {
+  return commitIdempotencyEntries.size;
+}
 
 interface DurableCommitReceipt {
   readonly version: 1;
@@ -529,15 +559,21 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
         return { kind: "idempotency_collision", chapter, collision: "durable" };
       }
       if (durableReceipt.status === "pending" || !durableReceipt.payload) {
-        const recoveredPayload = await recoverPendingCommitReceiptFromDisk(projectDir, chapter, durableReceipt)
-          .catch(() => undefined);
-        if (recoveredPayload) {
-          return { kind: "recovered", chapter, payload: recoveredPayload };
+        const recovery = await recoverPendingCommitReceiptFromDisk(projectDir, chapter, durableReceipt)
+          .catch((error: unknown): PendingReceiptRecovery => ({
+            // 恢复出口自身的意外异常同样按「对账读失败」如实报，绝不吞成「对不上」。
+            outcome: "unreadable",
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        if (recovery.outcome === "recovered") {
+          return { kind: "recovered", chapter, payload: recovery.payload };
         }
         return {
           kind: "idempotency_in_progress",
           chapter,
-          error: pendingReceiptBlockMessage(projectDir, chapter, idempotencyKey),
+          error: recovery.outcome === "unreadable"
+            ? pendingReceiptUnreadableMessage(projectDir, chapter, idempotencyKey, recovery.error)
+            : pendingReceiptBlockMessage(projectDir, chapter, idempotencyKey),
         };
       }
       return { kind: "replayed", chapter, payload: durableReceipt.payload };
@@ -662,7 +698,7 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
         }
         return { kind: "idempotency_in_progress", chapter, error: "相同幂等请求仍在执行。" };
       }
-      commitIdempotencyEntries.set(cacheKey, { status: "running", transaction });
+      setCommitIdempotencyEntry(cacheKey, { status: "running", transaction });
 
       const report = await commitFastDraft({
         projectDir,
@@ -693,7 +729,7 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
         const receiptWarning = `idempotency receipt persistence failed after successful commit: ${error instanceof Error ? error.message : String(error)}`;
         payload = { ...payload, warnings: [...committed.warnings, receiptWarning] };
       }
-      commitIdempotencyEntries.set(cacheKey, { status: "completed", transaction, payload });
+      setCommitIdempotencyEntry(cacheKey, { status: "completed", transaction, payload });
       return { ...committed, httpPayload: payload };
     } catch (error) {
       if (!businessCommitted) {
@@ -981,23 +1017,51 @@ async function removePendingCommitReceipt(projectDir: string, receipt: DurableCo
 }
 
 /**
+ * pending 对账的三向结论：恢复成功 / 确认对不上 / 对账本身读失败。
+ * IO 异常必须与「确认未入库」严格分开（治旧账：两者曾共用同一条 409 文案，
+ * 对账读失败会误导用户去删回执——而回执恰是上次定稿的唯一证据）。
+ */
+type PendingReceiptRecovery =
+  | { readonly outcome: "recovered"; readonly payload: CommitApplySuccessPayload }
+  | { readonly outcome: "mismatch" }
+  | { readonly outcome: "unreadable"; readonly error: string };
+
+/** 对账读盘：ENOENT=文件确实不在（对账得以继续/结论可信），其余错误=对账本身失败。 */
+async function readForPendingReconciliation(
+  path: string,
+): Promise<{ readonly content?: string; readonly unreadable?: string }> {
+  try {
+    return { content: await readFile(path, "utf-8") };
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return {};
+    return { unreadable: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * pending 回执的恢复出口（数据安全收口硬不变量 #7：先恢复或拒绝，绝不删证据后重做）。
  * pending 只证明「claim 之后、completed 回执落盘之前」中断，入库成败未知，故先做磁盘对账：
  * 引擎事务残留已在进锁时由 recoverProjectCommitTransactions 收尾（无半写），而 commitFastDraft
  * 把草稿原文写入 chapters/N.md——若该章已入库且内容与当前草稿哈希一致，说明入库其实已成功、
  * 只是回执没写完。此时按磁盘真值补写 completed 回执并重建响应，是恢复而不是重复写入。
- * 对不上（章未入库/内容被改/哈希不一致）一律返回 undefined，由调用方 fail-closed 409。
+ * 对不上（章未入库/内容被改/哈希不一致）返回 mismatch，由调用方 fail-closed 409 + 可执行出路；
+ * 对账读盘 IO 失败返回 unreadable，调用方另行报错（只让稍后重试，绝不诱导删回执）。
  */
 async function recoverPendingCommitReceiptFromDisk(
   projectDir: string,
   chapter: number,
   receipt: DurableCommitReceipt,
-): Promise<CommitApplySuccessPayload | undefined> {
-  const draftContent = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
-  if (draftContent === undefined) return undefined;
+): Promise<PendingReceiptRecovery> {
+  const draft = await readForPendingReconciliation(defaultDraftPath(projectDir, chapter));
+  if (draft.unreadable !== undefined) return { outcome: "unreadable", error: draft.unreadable };
+  // 草稿不在 → 没有可对账的基准，按「对不上」处理（block 文案已含「草稿在预览后已变化」的情形）。
+  if (draft.content === undefined) return { outcome: "mismatch" };
+  const draftContent = draft.content;
   const chapterPath = defaultCommittedChapterPath(projectDir, chapter);
-  const chapterContent = await readFile(chapterPath, "utf-8").catch(() => undefined);
-  if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return undefined;
+  const committed = await readForPendingReconciliation(chapterPath);
+  if (committed.unreadable !== undefined) return { outcome: "unreadable", error: committed.unreadable };
+  const chapterContent = committed.content;
+  if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return { outcome: "mismatch" };
   const warnings = [
     "上次定稿在入库成功后、回执落盘前中断；本次按磁盘真值补写回执并返回结果（恢复，未重复入库）。",
     "详细变更清单不可恢复：report 中 updatedCharacters / timelineEventIds / updatedHooks / updatedWorld / updatedCalendar 均为占位空值（不代表实际未更新），真实变更以磁盘上的状态文件为准。",
@@ -1036,7 +1100,7 @@ async function recoverPendingCommitReceiptFromDisk(
     const receiptWarning = `idempotency receipt persistence failed after recovered commit: ${error instanceof Error ? error.message : String(error)}`;
     payload = { ...payload, warnings: [...warnings, receiptWarning] };
   }
-  return payload;
+  return { outcome: "recovered", payload };
 }
 
 /** pending 对账失败时的 409 文案：fail-closed，但必须给出可执行出路（含回执文件的确切路径）。 */
@@ -1045,6 +1109,16 @@ function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempot
   return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览入库（或草稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
     + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
     + `2) 人工核对确认上次定稿确实未生效后，删除回执文件 ${receiptFile} 再用原预览凭证重试。`;
+}
+
+/**
+ * pending 对账本身读失败（IO 异常）时的 409 文案：与「对不上」严格分开——
+ * 上次定稿是否生效此时未知，出路只有稍后重试；回执是唯一证据，文案绝不提删除。
+ */
+function pendingReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
+  const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
+  return `检测到未完成的同键定稿记录，但对账读取失败（${error}），无法确认上次定稿是否已生效；为避免重复写入，已拒绝自动重试。`
+    + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
 }
 
 function receiptMatchesRequest(

@@ -25,11 +25,11 @@ export async function fetchModelSettings(signal?: AbortSignal): Promise<ModelSet
   if (!payload.ok) {
     throw new Error(payload.error);
   }
+  // GET 响应从不带 warnings（那是 PUT 还原打码头失败的专属回执），不透传死字段。
   return {
     result: payload.result,
     rawText: payload.rawText,
     taskAssignments: payload.taskAssignments,
-    warnings: payload.warnings,
   };
 }
 

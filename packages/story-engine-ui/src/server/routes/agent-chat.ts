@@ -378,11 +378,18 @@ export async function runObedientAgentTurn(args: {
         case "tool-result": {
           sawToolActivity = true;
           const toolCallId = chunk.payload?.toolCallId ?? "";
-          const summary = (chunk.payload?.result as { readonly summary?: unknown } | undefined)?.summary;
+          const resultPayload = chunk.payload?.result as
+            | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown }
+            | undefined;
+          const summary = resultPayload?.summary;
           if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
           toolSteps.set(toolCallId, {
             toolName: chunk.payload?.toolName,
             status: toolResultStatus(chunk.payload?.result),
+            // 诚实背书粒度（honesty-detection stepBacksWriteClaim）：prune 的 dryRun（预览不背书）/
+            // exemplars 的 action（list 不背书）随步骤带上；没有这两字段的工具自然缺省、维持旧口径。
+            ...(typeof resultPayload?.dryRun === "boolean" ? { dryRun: resultPayload.dryRun } : {}),
+            ...(typeof resultPayload?.action === "string" ? { action: resultPayload.action } : {}),
           });
           args.sendEvent("tool-result", {
             toolCallId,

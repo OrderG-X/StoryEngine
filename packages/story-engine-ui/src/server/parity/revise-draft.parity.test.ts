@@ -24,6 +24,9 @@
 //   显式策略参数（收编后两侧刻意保留的分歧，service policies 参数化，不再是暗漂移；下方「显式策略分歧」组锁定）：
 //   - modelErrorFallback：HTTP preview 模型调用失败回 200 + 安全兜底预览（前端 A.5 契约）；工具路诚实拒。
 //   - deterministicPreview：HTTP preview 对代词修复任务用引擎确定性预览覆盖模型 echo；工具路无此 overlay。
+//
+// 2026-09-11 尾巴清零：本文件磁盘 IO 重（真引擎建双胞胎项目 + 真 git 快照子进程）——
+// 全部用例给显式 timeout（CLAUDE.md 纪律；此前整文件无 timeout 属登记未补项，本次补齐）。
 import { readFile } from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -95,7 +98,7 @@ function revisionTask(targetText: string, extra?: Record<string, unknown>): Reco
 }
 
 describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", () => {
-  it("happy path：同稿同预览 → 两侧落盘字节一致；HTTP 两步、工具一步（D24 形态分歧下的语义等价）", async () => {
+  it("happy path：同稿同预览 → 两侧落盘字节一致；HTTP 两步、工具一步（D24 形态分歧下的语义等价）", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-happy-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
@@ -145,7 +148,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
     expect(typeof tool.snapshotId).toBe("string");
   });
 
-  it("原文缺失：两侧都拒绝、都不动稿（HTTP 400；工具 ok:false applied:false）", async () => {
+  it("原文缺失：两侧都拒绝、都不动稿（HTTP 400；工具 ok:false applied:false）", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-missing-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
@@ -173,7 +176,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
     expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
   });
 
-  it("原文出现多次：两侧都拒绝（HTTP 400「出现多次」；工具 ambiguous 拒）", async () => {
+  it("原文出现多次：两侧都拒绝（HTTP 400「出现多次」；工具 ambiguous 拒）", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-ambiguous-");
     const doubled = `# 第1章\n\n${REVISE_SENTENCE_A}\n\n${REVISE_SENTENCE_B}\n\n${REVISE_SENTENCE_B}\n`;
     await writeParityDraft(routeDir, 1, doubled);
@@ -202,7 +205,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
 });
 
 describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D22/D23/D25 豁免项已收敛）", () => {
-  it("D22 收敛：模型回吐的 beforeText 去了别处 → 两侧都诚实拒、都不动稿（HTTP preview 400；工具 ok:false）", async () => {
+  it("D22 收敛：模型回吐的 beforeText 去了别处 → 两侧都诚实拒、都不动稿（HTTP preview 400；工具 ok:false）", { timeout: 30_000 }, async () => {
     // 用户点名改 B，模型却回了 A 的改写——典型的「模型去动了别处」漂移。
     mockRevisionModel(previewJson(REVISE_SENTENCE_A, "林远合上账册，直接去了审计楼。"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-drift-");
@@ -237,7 +240,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(toolDraft).toBe(parityReviseDraft(1));
   });
 
-  it("D25 收敛：模型回「改后==改前」 → HTTP apply 拒（400）、工具拒；两侧草稿逐字未动", async () => {
+  it("D25 收敛：模型回「改后==改前」 → HTTP apply 拒（400）、工具拒；两侧草稿逐字未动", { timeout: 30_000 }, async () => {
     mockRevisionModel(previewJson(REVISE_SENTENCE_B, REVISE_SENTENCE_B));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-noop-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
@@ -277,7 +280,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
   });
 
-  it("D23 收敛：replacementText 给了就跳过模型原样落地——HTTP 两步与工具一步落盘字节一致", async () => {
+  it("D23 收敛：replacementText 给了就跳过模型原样落地——HTTP 两步与工具一步落盘字节一致", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-exact-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
@@ -318,7 +321,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(toolDraft).toBe(routeDraft);
   });
 
-  it("D21 收敛：目标带 ASCII 引号/盘稿是中文引号 → 两侧归一兜底都能改，落盘字节一致", async () => {
+  it("D21 收敛：目标带 ASCII 引号/盘稿是中文引号 → 两侧归一兜底都能改，落盘字节一致", { timeout: 30_000 }, async () => {
     // 盘稿用中文引号对白；两轨收到的 targetText 是 ASCII 引号变体（模型常见回吐风格）。
     const dialogueCurly = "老王低声说：「账册先放我这，你回去等信。」";
     const dialogueAscii = '老王低声说："账册先放我这，你回去等信。"';
@@ -365,7 +368,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(routeDraft).not.toContain(dialogueCurly);
   });
 
-  it("目标级守卫收敛：模型回吐大区间 beforeText 覆盖目标句、afterText 保留目标句原样 → HTTP apply 400、工具 target_unchanged，两侧草稿逐字未动", async () => {
+  it("目标级守卫收敛：模型回吐大区间 beforeText 覆盖目标句、afterText 保留目标句原样 → HTTP apply 400、工具 target_unchanged，两侧草稿逐字未动", { timeout: 30_000 }, async () => {
     // 用户点名改 B；模型回「A+B」大区间、只改写 A、B 一字未动——改后点名句仍原样在稿。
     const wideBefore = `${REVISE_SENTENCE_A}\n\n${REVISE_SENTENCE_B}`;
     const wideAfter = `林远把账册收进抽屉，吹熄了灯。\n\n${REVISE_SENTENCE_B}`;
@@ -412,7 +415,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(toolDraft).toBe(parityReviseDraft(1));
   });
 
-  it("目标级守卫防伪面（HTTP 回传路特有）：apply 带草稿里不存在的 targetText → 400 诚实拒、草稿逐字未动", async () => {
+  it("目标级守卫防伪面（HTTP 回传路特有）：apply 带草稿里不存在的 targetText → 400 诚实拒、草稿逐字未动", { timeout: 30_000 }, async () => {
     // 裸 resolvedTarget 回传的可伪造面（传「的」→ 恒拒一切修订）已被通道设计消除：apply 只收用户
     // 原始点名片段，resolvedTarget 由服务端在 apply 时的当前草稿上自己解析——客户端顶多传一个
     // 不存在的目标（伪造/过期片段），落得诚实拒，骗不出 applied:true 也锁不死别人。
@@ -454,7 +457,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
 });
 
 describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback / deterministicPreview，刻意保留、本组锁定）", () => {
-  it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", async () => {
+  it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", { timeout: 30_000 }, async () => {
     llmMocks.callOpenAICompatibleChatModel.mockRejectedValue(new Error("网络连接被重置"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
@@ -493,7 +496,7 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
   });
 
-  it("deterministicPreview：代词修复任务模型回 echo no-op → HTTP preview 改用引擎确定性预览（真改动）、工具 no-op 诚实拒，两侧草稿都不动", async () => {
+  it("deterministicPreview：代词修复任务模型回 echo no-op → HTTP preview 改用引擎确定性预览（真改动）、工具 no-op 诚实拒，两侧草稿都不动", { timeout: 30_000 }, async () => {
     const pronounTarget = "他站起身，把账册递给林远。";
     const draft = `# 第1章\n\n${REVISE_SENTENCE_A}\n\n${pronounTarget}\n\n${REVISE_SENTENCE_C}\n`;
     // 模型把目标句原样 echo 回（afterText===beforeText 的 echo no-op）

@@ -1,6 +1,16 @@
 export interface HonestyToolStep {
   readonly toolName?: string;
   readonly status?: string;
+  /**
+   * prune_snapshots 结果口径：dryRun=「没落盘」（只读预览 / 无需裁剪 / 被守卫拦下 / 失败回滚都是 true；
+   * 仅真裁成功改写历史为 false）。写背书只认 false——dry-run 预览态 completed 不背书「已裁剪/已保存」。
+   */
+  readonly dryRun?: boolean;
+  /**
+   * manage_style_exemplars 结果动作：list 是只读 action，completed 也不背书「已添加/已删除」类声称；
+   * 写背书只认 add/update/remove。
+   */
+  readonly action?: string;
 }
 
 type ToolStep = HonestyToolStep;
@@ -10,6 +20,8 @@ type ToolStep = HonestyToolStep;
  * 注意排除 commit_preview / quality_check / ai_review / check_ai_flavor / read_* / suggest_next_steps：
  * 它们成功不等于「真写盘/真入库」——实测见到 agent 质检+预览成功后谎称「第N章已正式入库」（commit_apply 并未成功），
  * 若把这些算作背书就漏判。
+ * prune_snapshots / manage_style_exemplars 不在此表：它们带只读形态（dry-run 预览 / list action），
+ * 背书须按结果 payload 逐工具判定，见 stepBacksWriteClaim。
  */
 const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   "generate_draft", "revise_draft", "commit_apply", "foundation_write",
@@ -17,10 +29,25 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   "generate_character_enrichment", "generate_matrix_enrichment", "generate_character_relationships",
   "generate_writing_rules_enrichment", "generate_alias_table",
   "edit_fact_ledger", "set_foreshadowing_importance", "clean_legacy_threads", "group_related_leads",
-  // 真裁改写快照历史（落盘生效）：成功后 agent 转述「已裁剪/已保存到备份目录」须认它背书——
-  // 漏了会被 A1 误判谎报、服务端强制作废重做（复审实锤）。
-  "prune_snapshots",
 ]);
+
+/**
+ * 写背书逐工具判定（按结果 payload 加粒度，别一刀切）：
+ * - prune_snapshots：dry-run 预览态 completed 不是写（预览没落盘）。结果带 dryRun 时只认 false（真裁落盘）——
+ *   真裁成功后 agent 转述「已裁剪/已保存到备份目录」须认它背书，漏了会被 A1 误判谎报、服务端强制作废重做（复审实锤）；
+ *   缺 payload 的旧调用方维持旧口径（completed 即背书），不向坏方向回归。
+ * - manage_style_exemplars：list 只读，completed 不背书「已添加/已删除」；只认 add/update/remove 真落盘动作。
+ *   缺 payload 时维持旧口径（该工具本不在写背书集 → 不背书）。
+ * - 其余写类工具：completed 即背书（照旧）。
+ */
+function stepBacksWriteClaim(step: ToolStep): boolean {
+  if (typeof step.toolName !== "string" || step.status !== "completed") return false;
+  if (step.toolName === "prune_snapshots") return step.dryRun !== true;
+  if (step.toolName === "manage_style_exemplars") {
+    return step.action === "add" || step.action === "update" || step.action === "remove";
+  }
+  return WRITE_TOOL_NAMES.has(step.toolName);
+}
 
 /**
  * 强「写类完成」断言（保守，只抓本人完成口吻；不含已读取/已审稿/已质检这类非写类，避免误伤）。
@@ -102,9 +129,7 @@ export function detectUnbackedCompletionClaim(
   if (!COMPLETION_CLAIM.test(content) && !RELATIONSHIP_COMPLETION_CLAIM.test(content) && !FACT_COMPLETION_CLAIM.test(content) && !REVISION_COMPLETION_CLAIM.test(content)) return false;
   if (isStatusReport(content)) return false;
   if (isBackedCommitPreviewClaim(content, toolSteps)) return false;
-  const hasWriteSuccess = (toolSteps ?? []).some(
-    (step) => typeof step.toolName === "string" && WRITE_TOOL_NAMES.has(step.toolName) && step.status === "completed",
-  );
+  const hasWriteSuccess = (toolSteps ?? []).some(stepBacksWriteClaim);
   return !hasWriteSuccess;
 }
 

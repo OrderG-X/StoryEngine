@@ -353,6 +353,27 @@ export async function readDraftBodyWithRetry(
 }
 
 /**
+ * 回读刚写盘文件的原始全文（含标题行），FS 抖动重试（与 L1 同口径：3×60ms）。
+ * D1 enforce 路的执法基准必须是磁盘真稿（执法/标题提取都要原文），故不能用上面的去标题版。
+ * 全部失败返回 ""——调用方据此如实降级（执法跳过留痕），绝不静默。retries/delayMs 仅为单测可注入。
+ */
+export async function readFileContentWithRetry(
+  path: string,
+  opts: { readonly retries?: number; readonly delayMs?: number } = {},
+): Promise<string> {
+  const retries = opts.retries ?? 3;
+  const delayMs = opts.delayMs ?? 60;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const content = await readFile(path, "utf-8").catch(() => "");
+    if (content.trim().length > 0) return content;
+    if (attempt < retries - 1 && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return "";
+}
+
+/**
  * 自动去味一轮（最多一轮、不循环）：读工作稿全文 → runDeAiFlavorBatch 批量改写 → 有真改动才
  * 先快照（对齐 revise_draft 的覆盖前快照）+ 写盘 → 对改后正文复检同一套确定性规则，如实报剩余。
  * 改写模型失败/解析失败/一处都没能安全替换 → 原稿不动 + 如实报（error 或 fixedCount:0）。
@@ -1122,11 +1143,14 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
 
   // D1 长度执法（enforce_or_rollback，HTTP 非流式路）：落盘后回读执法——低于下限拒写+回滚旧稿；
   // 超上限确定性裁剪重写落盘并重建 report.draftLength。annotate（工具路）跳过整段（引擎已如实记 draftLength）。
+  // 回读对齐 L1 口径（3×60ms 重试）；彻底读不到 → 执法如实降级跳过（summary 留痕 lengthEnforcementSkipped），
+  // 绝不静默漏执法（草稿确已落盘，ok 仍 true，绝不谎报失败）。
   let finalReport = report;
   let draftBody: string;
   let finalDraftContent = "";
+  let lengthEnforcementSkipped = false;
   if (lengthPolicy === "enforce_or_rollback") {
-    const writtenContent = await readFile(report.draftPath, "utf-8").catch(() => "");
+    const writtenContent = await readFileContentWithRetry(report.draftPath);
     if (writtenContent.trim()) {
       const writtenBody = stripLeadingMarkdownChapterHeading(writtenContent);
       const enforced = enforceDraftLengthTarget({
@@ -1165,8 +1189,11 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
           }),
         };
       }
+    } else {
+      // 执法基准回读彻底失败：执法跳过必须留痕（summary 如实标注），绝不静默放行未执法的稿子。
+      lengthEnforcementSkipped = true;
     }
-    finalDraftContent = await readFile(report.draftPath, "utf-8").catch(() => "");
+    finalDraftContent = await readFileContentWithRetry(report.draftPath);
     draftBody = stripLeadingMarkdownChapterHeading(finalDraftContent).trim();
   } else {
     // L1：草稿已写盘，但回读那一刻偶发 FS 读失败会得空稿，前端这次就不刷新（草稿其实在磁盘，切走再回来就有）。
@@ -1295,6 +1322,10 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
       `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
+      // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。
+      (lengthEnforcementSkipped
+        ? "\n⚠ 工作稿落盘后回读失败，本章长度执法未执行（正文以引擎写盘为准）；请切换章节刷新后核对字数。"
+        : "") +
       (aiFlavorNote ? `\n${aiFlavorNote}` : "") +
       // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
       (draftBody.trim().length === 0

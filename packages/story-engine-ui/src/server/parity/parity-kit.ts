@@ -16,8 +16,15 @@
  * fixture 纪律：项目必须建在 $HOME 下（makeHomeTempDir）——guardProjectPath 拒 $HOME 外的路径；
  * 写盘对拍用 makeParityTwinProjects 建双胞胎（route/tool 各一个同种子项目），避免互相污染；
  * 只读对拍（preview/quality/ai-review/steering）可共用一个项目目录。
+ *
+ * fixture 加固（2026-09-11，满负载并行 flake 治理）：vitest 多 worker 全量并行时，
+ * makeParityProject 系的真引擎脚手架（7 mkdir + 19 writeFile 并发）实测会撞瞬时 FS 竞态
+ * （句柄耗尽、引擎失败兜底 rm 与同批在飞写盘互踩留下的半建半删目录）。对策见下：
+ * 瞬时错误类换【全新】临时目录有限重试、建好后读 project.json 自证落盘事实、
+ * 双胞胎目录撞车当面炸出。重试只认瞬时错误类，真 bug 立即抛红、绝不靠重试洗绿。
  */
 import { access, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createStoryProject, countDraftChineseCharacters } from "@actalk/story-engine";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 
@@ -34,17 +41,62 @@ export { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChap
 
 export const PARITY_MAIN_CHARACTER = "林远";
 
+/**
+ * 满负载并行下搭脚手架实测会撞的瞬时错误：
+ * - EMFILE/ENFILE/EBUSY/EPERM/EAGAIN/ENOTEMPTY：句柄耗尽、目录项/锁竞态类；
+ * - ENOENT：createStoryProject 半途失败时其兜底 rm 与同批在飞 writeFile 的竞态（半建半删）；
+ * - git「unable to stat / could not stat」：IO 饱和时 git 子进程的已知抖动文案（防御性收录——
+ *   本 fixture 链路自身不跑 git，但同进程饱和下的快照子进程若把这类错冒进 fixture 层，按同口径容错）。
+ * 命中即换全新临时目录重试即愈；不在表内的错误（真 bug）立即抛，绝不重试掩盖。
+ */
+const TRANSIENT_FIXTURE_ERROR_CODES: ReadonlySet<string> = new Set([
+  "EMFILE",
+  "ENFILE",
+  "EBUSY",
+  "EPERM",
+  "EAGAIN",
+  "ENOENT",
+  "ENOTEMPTY",
+]);
+
+const FIXTURE_MAX_ATTEMPTS = 3;
+
+function isTransientFixtureError(error: unknown): boolean {
+  const code = (error as { readonly code?: unknown } | null | undefined)?.code;
+  if (typeof code === "string" && TRANSIENT_FIXTURE_ERROR_CODES.has(code)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /unable to stat|could not stat/u.test(message);
+}
+
 /** 与 routes/commit.test.ts、tools 各测试同构的最小真实项目（createStoryProject 真引擎脚手架）。 */
 export async function makeParityProject(prefix: string, title = "对拍书"): Promise<string> {
-  const rootDir = await makeHomeTempDir(prefix);
-  const { projectDir } = await createStoryProject({
-    rootDir,
-    title,
-    genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: PARITY_MAIN_CHARACTER,
-  });
-  return projectDir;
+  for (let attempt = 0; attempt < FIXTURE_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 60 * attempt));
+    // 每次尝试都用全新临时目录（mkdtemp 随机后缀保证唯一）：脚手架半途失败时引擎兜底 rm
+    // 可能和同批在飞写盘竞态留下半建半删的目录，绝不复用旧 rootDir 重试。
+    const rootDir = await makeHomeTempDir(prefix);
+    try {
+      const { projectDir } = await createStoryProject({
+        rootDir,
+        title,
+        genre: "都市",
+        premise: "主角进入权力中心。",
+        mainCharacterName: PARITY_MAIN_CHARACTER,
+      });
+      // 建好自证：projectDir 落在本次全新目录内、project.json 真可读——「脚手架建成」
+      // 凭落盘事实，不凭 createStoryProject 没抛错。
+      if (!projectDir.startsWith(rootDir)) {
+        throw new Error(`fixture 目录越界：${projectDir} 不在 ${rootDir} 内`);
+      }
+      await readFile(join(projectDir, "project.json"), "utf-8");
+      return projectDir;
+    } catch (error) {
+      if (attempt + 1 >= FIXTURE_MAX_ATTEMPTS || !isTransientFixtureError(error)) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[parity-kit] fixture 搭建撞瞬时错误（${message}），换全新临时目录重试（${attempt + 1}/${FIXTURE_MAX_ATTEMPTS - 1}）`);
+    }
+  }
+  throw new Error("fixture 重试计数溢出（正常控制流不会到达）");
 }
 
 /** 双胞胎 fixture：同参数建两个项目（route 侧 / tool 侧各一），供「写盘对拍」逐文件比较落盘结果。 */
@@ -54,6 +106,9 @@ export async function makeParityTwinProjects(
 ): Promise<{ readonly routeDir: string; readonly toolDir: string }> {
   const routeDir = await makeParityProject(`${prefix}r-`, title);
   const toolDir = await makeParityProject(`${prefix}t-`, title);
+  // 双胞胎不变量：两目录必须真分家（mkdtemp 唯一后缀 + r-/t- 前缀双保险）——若将来重构把两侧
+  // 指到同一目录，写盘对拍会互相污染还照绿，在这里当面炸出来。
+  if (routeDir === toolDir) throw new Error(`双胞胎 fixture 目录撞车：${routeDir}`);
   return { routeDir, toolDir };
 }
 

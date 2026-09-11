@@ -23,7 +23,14 @@
 //       （"a;b" 路由拆两条/工具不拆，"a,b" 方向互反）；数组入参两侧一致（引擎 normalizeList 统一
 //       trim/去重/滤空）。收不动的原因：数组项可合法含逗号（模型可发真 JSON 数组），service 对数组项
 //       二次切分会误伤合法要素。下方用例锁定现状，改动任一侧都会红。
+//   D33 maxSuggestions 数字字符串【仍是显式分歧·结构性，只登记 2026-09-11】：工具 schema coerceNumber
+//       把 maxSuggestions:"5" 还原成 5 生效；路由 readPositiveInteger 只认 number → 静默丢 → 引擎默认 6。
+//       D29 收敛时 maxSuggestions 没进归一单点（路由侧仍严格类型守卫），与 quality 对 D31 / commit 对
+//       D34 同根（lenient-args vs project-io 严格度差），收进 service 无意义（路由连 service 都到不了）。
+//       下方用例锁定现状（种 3 hook + 2 thread 把自然建议数垫过 6，分歧才可见）。
 //   磁盘 IO 重（真引擎建项目）：全部用例给显式 timeout（CLAUDE.md 纪律）。
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { registerChapterSteeringRoutes } from "../routes/chapter-steering.js";
@@ -31,6 +38,30 @@ import { generateChapterSteeringTool } from "../agent/tools/generate-chapter-ste
 import { callRoute, driveToolExecute, makeParityProject } from "./parity-kit.js";
 
 const USER_DIRECTION = "让主角拿到账册后发现里面有一页是空的。";
+
+/** 种 3 条活跃 hook + 2 条开放 thread：自然建议数垫到 7（3 hook + 2 thread + 1 主角 + 1 风险），maxSuggestions 夹逼才可见。 */
+async function seedSteeringSuggestionSources(projectDir: string): Promise<void> {
+  const hooks = ["账册里消失的一页", "老王的旧债", "茶水间的录音笔"].map((title, index) => ({
+    id: `hook-seed-${index + 1}`,
+    title,
+    description: `${title}。`,
+    status: "active",
+    firstSeenChapter: 1,
+    lastTouchedChapter: 1,
+    evidence: [],
+  }));
+  const threads = ["查清账册来源", "盯住停车场夜班保安"].map((title, index) => ({
+    id: `thread-seed-${index + 1}`,
+    type: "lead",
+    title,
+    status: "open",
+    firstSeenChapter: 1,
+    lastTouchedChapter: 1,
+    evidence: [],
+  }));
+  await writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({ hooks }, null, 2)}\n`, "utf-8");
+  await writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({ threads }, null, 2)}\n`, "utf-8");
+}
 
 describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共享行为面）", () => {
   it("happy path：同一项目同一方向 → 两侧 draft 深相等；工具多 summary（D27）", { timeout: 30_000 }, async () => {
@@ -179,5 +210,35 @@ describe("parity: POST /api/chapter-steering ↔ generate_chapter_steering（共
     );
     expect((routeArr.payload.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
     expect((toolArr.draft as { mustInclude: readonly string[] }).mustInclude).toEqual(["账册", "旧钟"]);
+  });
+
+  it("D33 登记·maxSuggestions 数字字符串（lenient-args 分歧）：\"5\" 路由静默丢→引擎默认 6 条；工具还原成 5 → 5 条", { timeout: 30_000 }, async () => {
+    const projectDir = await makeParityProject("steering-maxsuggestions-");
+    await seedSteeringSuggestionSources(projectDir); // 自然建议数 7 > 默认 6 > 5，夹逼效果两侧可分辨
+
+    const route = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      maxSuggestions: "5",
+    });
+    const tool = await driveToolExecute(
+      generateChapterSteeringTool,
+      { userDirection: USER_DIRECTION, maxSuggestions: "5" },
+      { projectDir },
+    );
+
+    expect(route.payload.ok).toBe(true);
+    expect(tool.ok).toBe(true);
+    // 路由：readPositiveInteger 只认 number，"5" 静默丢 → 引擎默认 6 → 6 条（自然 7 被默认上限裁到 6）
+    expect((route.payload.draft as { suggestions: readonly unknown[] }).suggestions).toHaveLength(6);
+    // 工具：coerceNumber 还原 "5"→5 → 真生效 → 5 条
+    expect((tool.draft as { suggestions: readonly unknown[] }).suggestions).toHaveLength(5);
+    // 对照组：同值 number 5 路由也认 → 两侧一致 5 条（分歧只在「字符串化入参」这一层，不在数值本身）
+    const routeNumber = await callRoute(registerChapterSteeringRoutes, "POST", "/api/chapter-steering", {
+      projectPath: projectDir,
+      userDirection: USER_DIRECTION,
+      maxSuggestions: 5,
+    });
+    expect((routeNumber.payload.draft as { suggestions: readonly unknown[] }).suggestions).toHaveLength(5);
   });
 });

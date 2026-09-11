@@ -1249,6 +1249,15 @@ describe("多候选确定性评分器（纯函数，权重全透明）", () => {
     expect(excerpt.endsWith("…")).toBe(true);
   });
 
+  it("buildCandidateExcerpt：半长阈值钉死「>=」语义——边界在 index 49（恰一半）落边界收；index 48（差一字）硬切 100", () => {
+    // 实现：cutAt = boundary + 1 >= floor(maxChars/2)=50 ? boundary + 1 : maxChars。
+    // 「>=」若退化成「>」，index 49 会从「落边界 51 字」退成「硬切 101 字」——两条断言把阈值两侧同时钉死。
+    const boundaryAt49 = `${"前".repeat(49)}。${"余".repeat(200)}`; // 「。」在 index 49 → 收 50 字 = 恰一半 → 落边界
+    expect(buildCandidateExcerpt(boundaryAt49)).toBe(`${"前".repeat(49)}。…`);
+    const boundaryAt48 = `${"前".repeat(48)}。${"余".repeat(200)}`; // 「。」在 index 48 → 收 49 字 < 一半 → 硬切 100 字
+    expect(buildCandidateExcerpt(boundaryAt48)).toBe(`${"前".repeat(48)}。${"余".repeat(51)}…`);
+  });
+
   it("buildCandidateExcerpt：CJK 友好——按码位切，不劈代理对半个字", () => {
     const excerpt = buildCandidateExcerpt("😀".repeat(150));
     expect(Array.from(excerpt)).toHaveLength(101);
@@ -1376,6 +1385,9 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[1].score).toBeUndefined();
     expect(out.candidatesReport?.[1].reason).toContain("未通过引擎校验");
     expect(out.candidatesReport?.[1].reason).toContain("500");
+    // 优胜者显式钉死：第 3 个候选中选（edfd56a 曾误删这两条，只靠落盘内容间接等价——补回显式断言）
+    expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: true });
+    expect(out.summary).toContain("已生成 3 个候选并选出第 3 个");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toBe(`# 第1章\n\n${clean}\n`);
   });
@@ -1411,6 +1423,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(flavored.startsWith((loser?.excerpt ?? "").slice(0, -1))).toBe(true);
     // 失败候选（第 2 个）：没有正文 → 不带 excerpt 字段（与 score 缺省同理，绝不编造）
     expect(out.candidatesReport?.[1].score).toBeUndefined();
+    expect(out.candidatesReport?.[1].reason).toContain("未通过引擎校验"); // 模型 502 被引擎兜成 passed:false 报告（无 draftBody）
     expect(out.candidatesReport?.[1] && "excerpt" in out.candidatesReport[1]).toBe(false);
     // 优胜候选（第 3 个）：同样带开头预览，供和落选稿比对风格
     const winner = out.candidatesReport?.[2];
@@ -1438,6 +1451,9 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport).toHaveLength(3);
     expect(out.candidatesReport?.map((entry) => entry.chosen)).toEqual([false, false, false]);
     expect(out.candidatesReport?.every((entry) => entry.reason.includes("未通过引擎校验"))).toBe(true);
+    // 校验不过的候选没有正文（引擎 passed:false 报告不带 draftBody）→ 一律不带 excerpt 字段
+    // （缺省如实反映「没有正文」，绝不编造——此前这条不变量零断言，纯靠引擎报告形状隐性兜底）
+    expect(out.candidatesReport?.every((entry) => !("excerpt" in entry))).toBe(true);
     // 失败也透明：draftLength 带出（首个失败报告的），且绝不写盘
     expect(out.draftLength).toBeDefined();
     await expect(readFile(defaultDraftPath(projectDir, 1), "utf-8")).rejects.toThrow();

@@ -40,6 +40,20 @@ describe("turn-intent-gate commit_apply", () => {
     expect(userTurnAllowsCommitApply("先别入库，算了还是确认正式入库")).toBe(true);
   });
 
+  it.each([
+    "先别入库，不过还是别确认入库",
+    "先别入库，不过还是别确认定稿",
+    "不确认入库",
+    "没确认定稿",
+    "未确认提交本章",
+  ])("拦截否定确认与反转通道的二次否定：%s", (text) => {
+    expect(userTurnAllowsCommitApply(text)).toBe(false);
+  });
+
+  it("「特别确认」不误伤（别确认≠否定，特别确认=确认）", () => {
+    expect(userTurnAllowsCommitApply("预览没问题，特别确认定稿")).toBe(true);
+  });
+
   it("缺失 userTurnText 默认放行，兼容老调用点", () => {
     expect(userTurnAllowsCommitApply(undefined)).toBe(true);
     expect(userTurnAllowsCommitApply("   ")).toBe(true);
@@ -185,6 +199,8 @@ describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）",
     "确认把快照清理掉",
     "确定把操作历史裁掉",
     "确认把存档点清掉",
+    // 「特别确认」是加强语气的真确认——虽含「别确认」子串，但「别」前面是「特」，不是二次否定（agent-61 裁决项：此前误拦）
+    "特别确认裁掉快照历史",
     // 裸「裁」域锚定 + 确认级收尾（复审实锤：注释自称放行但动词表没有裸「裁」，实际误拦）
     "把快照历史裁到100条，确认",
     "把操作历史裁到50条，确定",
@@ -254,6 +270,8 @@ describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）",
     "先别裁剪，不过还是不裁吧",
     "先别裁剪，不过还是别裁剪吧",
     "先别裁剪，不过还是不确认裁掉",
+    // 「别确认」同样是二次否定（agent-61 裁决项：反转确认锚后顾只挡 不/没/未，漏了「别」）
+    "先别裁剪，不过还是别确认裁掉快照",
   ])("否定后的伪反转仍拦截：%s", (text) => {
     expect(userTurnAllowsSnapshotPrune(text)).toBe(false);
   });

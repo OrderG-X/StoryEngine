@@ -937,7 +937,7 @@ async function writePendingReceiptFixture(
 ): Promise<string> {
   const receiptDir = join(projectPath, ".story-engine-ui", "commit-idempotency");
   await mkdir(receiptDir, { recursive: true });
-  const cacheKey = `${projectPath} ${applyBody.chapter} ${applyBody.idempotencyKey}`;
+  const cacheKey = `${projectPath}\u0000${applyBody.chapter}\u0000${applyBody.idempotencyKey}`;
   const fileName = `${createHash("sha256").update(cacheKey, "utf-8").digest("hex")}.json`;
   await writeFile(join(receiptDir, fileName), `${JSON.stringify({
     version: 1,
