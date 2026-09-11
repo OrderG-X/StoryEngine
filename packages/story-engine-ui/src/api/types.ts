@@ -1556,6 +1556,9 @@ export interface DraftRevisionApplyRequest {
   readonly projectPath: string;
   readonly chapter: number;
   readonly preview: DraftRevisionPreview;
+  /** 用户原始点名片段（task.targetText 原样回传）——带上即启用服务端目标级诚实守卫（target_unchanged）；
+   *  服务端在 apply 时的当前草稿上自己重新解析目标区间，不信客户端字符串。 */
+  readonly targetText?: string;
 }
 
 export type DraftRevisionPreviewApiResponse =

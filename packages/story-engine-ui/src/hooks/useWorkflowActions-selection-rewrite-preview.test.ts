@@ -146,7 +146,10 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     const { useWorkflowActions } = await import("./useWorkflowActions.js");
     const before = "他心中五味杂陈。";
     const after = "他捏紧了杯子，没说话。";
-    useWorkspaceStore.setState({ activeRevisionPreview: { ...makePreview(after), beforeText: before, afterText: after, originTarget: ORIGIN_TARGET } });
+    useWorkspaceStore.setState({
+      activeRevisionTask: makeTask(),
+      activeRevisionPreview: { ...makePreview(after), beforeText: before, afterText: after, originTarget: ORIGIN_TARGET },
+    });
     apiMocks.applyDraftRevision.mockResolvedValueOnce({ overview: {}, draftContent: `# 第一章\n\n${after}\n` });
 
     await useWorkflowActions({
@@ -157,9 +160,11 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
       applyOverviewToWorkspace: vi.fn(),
     }).handleApplyRevisionPreview();
 
-    const request = apiMocks.applyDraftRevision.mock.calls[0]?.[0] as { preview?: Record<string, unknown> } | undefined;
+    const request = apiMocks.applyDraftRevision.mock.calls[0]?.[0] as { preview?: Record<string, unknown>; targetText?: string } | undefined;
     expect(request?.preview).toBeDefined();
     expect(request?.preview).not.toHaveProperty("originTarget");
+    // 目标级诚实守卫回传链：任务里存着的用户点名片段随 apply 带上（服务端自解析目标区间）
+    expect(request?.targetText).toBe(SELECTION_TEXT);
 
     const applied = useWorkspaceStore.getState().workspace.messages.find(
       (m) => m.role === "assistant" && m.content.includes("手动改写"),

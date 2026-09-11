@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { summarizeFormalCommitApplyError } from "../utils/formalCommitApplyErrorCopy.js";
 import {
   applyFoundationGapDecisions,
+  applyDraftRevision,
   chatFoundationGapAssistant,
   applyCommit,
   confirmFoundationGapCharacterStateWrite,
@@ -118,6 +119,90 @@ describe("applyCommit structured error payloads", () => {
 
     expect(flattenCopy(copy)).toContain("同一章");
     expect(flattenCopy(copy)).toContain("事务目录");
+  });
+});
+
+describe("applyDraftRevision", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes targetText through with confirm:true (target_unchanged guard chain)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse({
+      ok: true,
+      result: { applied: true, chapter: 1, draftPath: "/tmp/story-project/drafts/fast/0001.md", updatedWordCount: 12 },
+      draftContent: "# 第一章\n\n改写后的新句。\n",
+      overview: {},
+    }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await applyDraftRevision({
+      projectPath: "/tmp/story-project",
+      chapter: 1,
+      preview: {
+        taskId: "revision-1",
+        beforeText: "用户点名的原句。",
+        afterText: "改写后的新句。",
+        changeSummary: "润色。",
+        rationale: "按修订目标改写。",
+        riskNotes: [],
+        preservedFacts: [],
+        warnings: [],
+      },
+      targetText: "用户点名的原句。",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/draft/revision/apply",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          projectPath: "/tmp/story-project",
+          chapter: 1,
+          preview: {
+            taskId: "revision-1",
+            beforeText: "用户点名的原句。",
+            afterText: "改写后的新句。",
+            changeSummary: "润色。",
+            rationale: "按修订目标改写。",
+            riskNotes: [],
+            preservedFacts: [],
+            warnings: [],
+          },
+          targetText: "用户点名的原句。",
+          confirm: true,
+        }),
+      }),
+    );
+  });
+
+  it("omits targetText from the request body when not provided (guard stays incremental)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse({
+      ok: true,
+      result: { applied: true, chapter: 1, draftPath: "/tmp/story-project/drafts/fast/0001.md", updatedWordCount: 12 },
+      draftContent: "# 第一章\n\n改写后的新句。\n",
+      overview: {},
+    }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await applyDraftRevision({
+      projectPath: "/tmp/story-project",
+      chapter: 1,
+      preview: {
+        taskId: "revision-1",
+        beforeText: "用户点名的原句。",
+        afterText: "改写后的新句。",
+        changeSummary: "润色。",
+        rationale: "按修订目标改写。",
+        riskNotes: [],
+        preservedFacts: [],
+        warnings: [],
+      },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body.confirm).toBe(true);
+    expect(body).not.toHaveProperty("targetText");
   });
 });
 

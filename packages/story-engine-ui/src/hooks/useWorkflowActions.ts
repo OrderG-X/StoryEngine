@@ -1305,6 +1305,9 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         projectPath,
         chapter: operation.chapter,
         preview: revisionPreviewForApi,
+        // 目标级诚实守卫回传链：把任务里存着的用户点名片段带上——服务端在 apply 时的当前草稿上
+        // 重新解析目标区间（解析不到 = 草稿已大变 → 诚实拒）；不回传 resolvedTarget，不信客户端字符串。
+        ...(ws.activeRevisionTask?.targetText ? { targetText: ws.activeRevisionTask.targetText } : {}),
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();

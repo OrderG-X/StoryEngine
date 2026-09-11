@@ -14,12 +14,16 @@
  *       由路由自持）；工具一步（reviseDraftOneShot 内部 preview+apply 合一）。preview 产物即 apply 入参。
  *   D25 no-op 诚实【已收敛·刻意修复】：改后==改前拒绝报成功。原是工具路独有；HTTP apply 曾把原样
  *       内容再写一遍还报 applied:true——收编后 HTTP apply 步拒 no-op（400）。
- *   目标级诚实守卫【已收敛·2026-09-11 补】：成功必须 = 用户点名句真被改动——改后目标句仍原样存在
- *       （空白+引号归一比对）= 没真改到 → 诚实拒、不落盘。原是工具路独有且未登记进漂移清单：HTTP
- *       两步路对「大区间 beforeText 覆盖目标句、afterText 保留目标句原样」的预览曾报 applied:true。
- *       收编后 preview 产物带 resolvedTarget，applyRevision 接受该可选上下文、落盘前同口径检查
- *       （精确替换快路豁免，与 reviseDraftOneShot 的 exact 分支一致：目标区间被整体替换，
- *       新文本恰好含旧文不算「没动」）。
+ *   目标级诚实守卫【已收敛·2026-09-11 补，同日改 targetText 回传通道】：成功必须 = 用户点名句真被
+ *       改动——改后目标句仍原样存在（空白+引号归一比对）= 没真改到 → 诚实拒、不落盘。原是工具路
+ *       独有且未登记进漂移清单：HTTP 两步路对「大区间 beforeText 覆盖目标句、afterText 保留目标句
+ *       原样」的预览曾报 applied:true。回传通道：apply 接受可选 targetText（用户原始点名片段，
+ *       客户端 task 里存着），applyRevision 在 apply 时的当前草稿上用 locateRevisionSpan 自己重新
+ *       解析目标区间——resolvedTarget 来自服务端解析而非客户端字符串（裸回传可伪造：
+ *       resolvedTarget:"的" → 恒拒一切修订），解析不到（草稿在预览后已大变）→ 诚实拒并说明。
+ *       整体替换豁免（与 reviseDraftOneShot 的 exact 分支一致）：beforeText 在当前草稿的落点恰为
+ *       目标区间本身（beforeSpan == targetSpan）= 目标被整段替换，新文本恰好含旧文不算「没动」；
+ *       豁免判据由服务端从真实区间算出，客户端无可乘之字段。
  *
  * 模型调用统一走 llm-client（resolveConfiguredChatModel("repair") + callOpenAICompatibleChatModel）：
  * HTTP 预览路原来的裸 fetch 收编进统一路，自动获得超时/思考方言/opencode 会话头等全部既有横切能力
@@ -136,18 +140,6 @@ export interface RevisionPreviewSuccess {
   readonly mode: "exact" | "model";
   readonly task: DraftRevisionTask;
   readonly preview: DraftRevisionPreview;
-  /** 已解析出的用户点名区间原文（归一兜底命中时为盘稿真实文本）——随 preview 产物传给 apply 做目标级守卫。 */
-  readonly resolvedTarget: string;
-}
-
-/**
- * preview→apply 的可选携带上下文（preview 步的解析产物）：带了就在落盘前做与工具路同口径的
- * target_unchanged 守卫；没带（旧客户端/直调 API 未回传）保持原行为——守卫是纯增量，不破坏既有调用。
- */
-export interface RevisionApplyTargetContext {
-  readonly resolvedTarget: string;
-  /** 精确替换快路豁免目标级守卫（同 reviseDraftOneShot 的 exact 分支）。 */
-  readonly mode: "exact" | "model";
 }
 
 export interface RevisionApplySuccess {
@@ -329,7 +321,7 @@ export async function previewRevision(input: {
     if (exactReplacement === resolvedTarget.trim()) {
       return { ok: false, code: "exact_replacement_noop", task };
     }
-    return { ok: true, mode: "exact", task, preview: exactReplacementPreview(task, resolvedTarget, exactReplacement), resolvedTarget };
+    return { ok: true, mode: "exact", task, preview: exactReplacementPreview(task, resolvedTarget, exactReplacement) };
   }
 
   let preview: DraftRevisionPreview;
@@ -362,15 +354,16 @@ export async function previewRevision(input: {
   if (typeof placement === "string") {
     return { ok: false, code: placement, task, preview };
   }
-  return { ok: true, mode: "model", task, preview, resolvedTarget };
+  return { ok: true, mode: "model", task, preview };
 }
 
 export async function applyRevision(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly preview: DraftRevisionPreview;
-  /** 可选：preview 步随产物传来的解析上下文——带了就启用目标级诚实守卫（target_unchanged）。 */
-  readonly targetContext?: RevisionApplyTargetContext;
+  /** 可选：用户原始点名片段（task.targetText 回传）——带了就在 apply 时的当前草稿上重新解析目标区间、
+   *  落盘前做与工具路同口径的 target_unchanged 守卫；没带（旧客户端）保持原行为，守卫是纯增量。 */
+  readonly targetText?: string;
   /** 守卫全过、落盘前的钩子（HTTP 路在此建「修订应用前快照」，保持原时序语义）。 */
   readonly beforeWrite?: () => Promise<unknown>;
 }): Promise<RevisionApplySuccess | RevisionFailure> {
@@ -383,11 +376,21 @@ export async function applyRevision(input: {
   const updatedContent = computeRevisionUpdate(draftContent, beforeSpan, preview.afterText);
   // D25 no-op 诚实：改后==改前 → 拒、不落盘，绝不谎报 applied:true。
   if (updatedContent === draftContent) return { ok: false, code: "noop" };
-  // 目标级诚实守卫（与 reviseDraftOneShot 同口径）：改后用户点名句仍原样存在（空白+引号归一比对）
-  // = 目标没真被动 → 诚实拒、不落盘。精确替换快路豁免（目标区间被整体替换，新文本含旧文不算没动）。
-  if (input.targetContext?.mode === "model"
-    && normalizeForMatch(updatedContent).includes(normalizeForMatch(input.targetContext.resolvedTarget))) {
-    return { ok: false, code: "target_unchanged", preview };
+  // 目标级诚实守卫（与 reviseDraftOneShot 同口径）：回传了用户点名片段，就在 apply 时的当前草稿上
+  // 用 locateRevisionSpan（D21 归一兜底同套）自己重新解析目标区间——resolvedTarget 来自服务端解析
+  // 而非客户端字符串，伪造面消除（顶多传个不存在的目标，落得诚实拒）。解析不到 = 草稿在预览后
+  // 已大变、预览语义失效 → 诚实拒并说明，不落盘。
+  if (input.targetText) {
+    const targetSpan = locateRevisionSpan(draftContent, input.targetText);
+    if (targetSpan === "not_found") return { ok: false, code: "target_not_found" };
+    if (targetSpan === "ambiguous") return { ok: false, code: "target_ambiguous" };
+    const resolvedTarget = draftContent.slice(targetSpan.start, targetSpan.end);
+    // 整体替换豁免（同 reviseDraftOneShot 的 exact 分支语义）：beforeText 在当前草稿的落点恰为目标
+    // 区间本身 = 目标被整段替换，改后新文本恰好含旧文不算「没动」。判据由服务端从真实区间算出。
+    const wholesaleReplacement = beforeSpan.start === targetSpan.start && beforeSpan.end === targetSpan.end;
+    if (!wholesaleReplacement && normalizeForMatch(updatedContent).includes(normalizeForMatch(resolvedTarget))) {
+      return { ok: false, code: "target_unchanged", preview };
+    }
   }
   await input.beforeWrite?.();
   await persistRevisionUpdate(draftPath, updatedContent);

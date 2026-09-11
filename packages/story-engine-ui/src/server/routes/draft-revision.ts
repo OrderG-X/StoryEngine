@@ -6,8 +6,10 @@
  * 与 agent/tools/revise-draft.ts 共享同一实现；本文件只做 HTTP 适配——参数解析、confirm 契约、
  * 状态码与响应整形。守卫收编给本路带来的行为变化（D21 归一兜底 / D22 漂移守卫 / D23 精确快路 /
  * D25 no-op 诚实 / 模型调用走 llm-client 统一路）见 service 头注释与 parity/revise-draft.parity.test.ts。
- * 目标级诚实守卫（target_unchanged）：preview 响应带 revisionContext（resolvedTarget+mode），
- * apply 回传即启用——与工具路同口径，「改后点名句仍原样在稿」落盘前 400 诚实拒。
+ * 目标级诚实守卫（target_unchanged）：apply 接受可选 targetText（用户原始点名片段，客户端 task 里
+ * 存着），service 在 apply 时的当前草稿上重新解析目标区间后同口径检查——「改后点名句仍原样在稿」
+ * 落盘前 400 诚实拒；解析不到（草稿在预览后已大变）同样 400 诚实拒。resolvedTarget 由服务端解析，
+ * 不回传、不信客户端字符串（裸 resolvedTarget 回传可伪造：传「的」→ 恒拒一切修订）。
  */
 import {
   buildStateOverview,
@@ -32,7 +34,6 @@ import {
   applyRevision,
   createRevisionModelChannel,
   previewRevision,
-  type RevisionApplyTargetContext,
   type RevisionFailure,
 } from "../services/revision-service.js";
 
@@ -87,8 +88,6 @@ async function handleDraftRevisionPreview(req: import("node:http").IncomingMessa
       model: channel.model,
       profileId: channel.profileId,
       usedFallback: outcome.preview.afterText === outcome.preview.beforeText && outcome.preview.warnings.includes("未应用任何修改。"),
-      // preview→apply 携带链：apply 回传它即启用目标级诚实守卫（target_unchanged，与工具路同口径）。
-      revisionContext: { resolvedTarget: outcome.resolvedTarget, mode: outcome.mode },
     });
   } catch (error) {
     writeJson(res, 500, {
@@ -115,14 +114,14 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
     }
     await assertStoryEngineProject(projectDir);
     const preview = readDraftRevisionPreviewObj(body.preview);
-    // preview→apply 携带链：preview 响应里的 revisionContext 随 apply 回传即启用目标级守卫；
-    // 没带（旧客户端）保持原行为——守卫是纯增量。形状不对按没带处理，不当错误拒。
-    const targetContext = readRevisionApplyTargetContext(body.revisionContext);
+    // 目标级诚实守卫回传链：客户端把任务里存着的用户点名片段（task.targetText）原样回传，service
+    // 在 apply 时的当前草稿上自己重新解析目标区间——没带（旧客户端）保持原行为，守卫是纯增量。
+    const targetText = readString(body.targetText);
     const outcome = await applyRevision({
       projectDir,
       chapter,
       preview,
-      ...(targetContext ? { targetContext } : {}),
+      ...(targetText ? { targetText } : {}),
       // 快照时序保持原语义：守卫全过之后、落盘之前建「修订应用前快照」。
       beforeWrite: () => createSnapshot(projectDir, "修订应用前快照"),
     });
@@ -171,15 +170,6 @@ function previewRefusalMessage(failure: RevisionFailure): string {
   }
 }
 
-/** apply body 里的 preview→apply 携带上下文（可选）：resolvedTarget 非空且 mode 合法才生效。 */
-function readRevisionApplyTargetContext(value: unknown): RevisionApplyTargetContext | undefined {
-  if (!isRecord(value)) return undefined;
-  const resolvedTarget = readString(value.resolvedTarget);
-  const mode = value.mode;
-  if (!resolvedTarget || (mode !== "exact" && mode !== "model")) return undefined;
-  return { resolvedTarget, mode };
-}
-
 /** apply 步守卫拒绝的用户可见文案（not_found/ambiguous 保持原引擎抛错文案；no-op 是 D25 收编的新诚实拒）。 */
 function applyRefusalMessage(failure: RevisionFailure): string {
   switch (failure.code) {
@@ -187,6 +177,10 @@ function applyRefusalMessage(failure: RevisionFailure): string {
       return "未在当前草稿中找到原文片段，请重新选择目标段落。";
     case "before_text_ambiguous":
       return "原文片段在草稿中出现多次，请选择更精确的目标段落。";
+    case "target_not_found":
+      return "你点名的片段已不在当前草稿中（草稿可能在生成预览后有变动），未改动草稿。请重新生成修订预览。";
+    case "target_ambiguous":
+      return "你点名的片段在当前草稿中出现多次，没法确认改哪一处，未改动草稿。请重新选择目标段落。";
     case "noop":
       return "修订后内容与原文一致，等于没有任何修改；草稿未改动。";
     case "target_unchanged":

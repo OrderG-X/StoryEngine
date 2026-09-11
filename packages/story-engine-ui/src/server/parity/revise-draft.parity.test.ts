@@ -15,9 +15,11 @@
 //       service 同时支撑两种形态（preview 产物即 apply 入参），本文件锁定的是形态分歧下的语义等价。
 //   D25 no-op 诚实【已收敛·刻意修复】：改后==改前拒绝报成功——收进 service；
 //       HTTP 路由 apply 步获得守卫（400 诚实拒），不再「照写原样内容还报 applied:true」。
-//   目标级诚实守卫【已收敛·2026-09-11 补】：改后用户点名句仍原样在稿（空白+引号归一比对）= 没真改到 → 拒。
-//       原是工具路独有、且未登记进漂移清单的盲区（HTTP 曾对「大区间 beforeText 保留目标句原样」报 applied:true）；
-//       收编后 preview 响应带 revisionContext（resolvedTarget+mode），apply 回传即同口径拒（400），见下方用例。
+//   目标级诚实守卫【已收敛·2026-09-11 补，同日改 targetText 回传通道】：改后用户点名句仍原样在稿
+//       （空白+引号归一比对）= 没真改到 → 拒。原是工具路独有、且未登记进漂移清单的盲区（HTTP 曾对
+//       「大区间 beforeText 保留目标句原样」报 applied:true）；收编后 apply 接受可选 targetText
+//       （用户原始点名片段回传），service 在 apply 时的当前草稿上自己重新解析目标区间、同口径拒（400），
+//       不信客户端字符串（防伪）；解析不到同样诚实拒。见下方用例。
 //
 //   显式策略参数（收编后两侧刻意保留的分歧，service policies 参数化，不再是暗漂移；下方「显式策略分歧」组锁定）：
 //   - modelErrorFallback：HTTP preview 模型调用失败回 200 + 安全兜底预览（前端 A.5 契约）；工具路诚实拒。
@@ -98,7 +100,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
 
-    // HTTP 路：preview → apply(confirm:true)
+    // HTTP 路：preview → apply(confirm:true + targetText 回传，即前端生产真实路径)
     const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
       projectPath: routeDir,
       chapter: 1,
@@ -111,6 +113,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
       chapter: 1,
       confirm: true,
       preview: preview.payload.preview,
+      targetText: REVISE_SENTENCE_B,
     });
 
     // 工具路：一次调用
@@ -250,6 +253,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
       chapter: 1,
       confirm: true,
       preview: preview.payload.preview,
+      targetText: REVISE_SENTENCE_B,
     });
     const tool = await driveToolExecute(reviseDraftTool, {
       chapter: 1,
@@ -293,6 +297,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
       chapter: 1,
       confirm: true,
       preview: preview.payload.preview,
+      targetText: REVISE_SENTENCE_B,
     });
     const tool = await driveToolExecute(reviseDraftTool, {
       chapter: 1,
@@ -343,6 +348,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
       chapter: 1,
       confirm: true,
       preview: preview.payload.preview,
+      targetText: dialogueAscii,
     });
     expect(apply.statusCode).toBe(200);
     expect(apply.payload.ok).toBe(true);
@@ -368,7 +374,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
 
-    // HTTP 路：preview 步落点重叠检查通过（大区间合法覆盖目标区间）→ 200，产物带 revisionContext
+    // HTTP 路：preview 步落点重叠检查通过（大区间合法覆盖目标区间）→ 200
     const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
       projectPath: routeDir,
       chapter: 1,
@@ -376,14 +382,14 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     });
     expect(preview.statusCode).toBe(200);
     expect(preview.payload.ok).toBe(true);
-    expect(preview.payload.revisionContext).toEqual({ resolvedTarget: REVISE_SENTENCE_B, mode: "model" });
-    // apply 步回传 revisionContext → 目标级守卫拦下（400 诚实拒），不再「applied:true 而点名句一字未动」
+    // apply 步回传用户原始点名片段（targetText 通道）→ 守卫在 apply 时的当前草稿上重新解析目标区间，
+    // 改后点名句仍原样在稿 → 拦下（400 诚实拒），不再「applied:true 而点名句一字未动」
     const apply = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {
       projectPath: routeDir,
       chapter: 1,
       confirm: true,
       preview: preview.payload.preview,
-      revisionContext: preview.payload.revisionContext,
+      targetText: REVISE_SENTENCE_B,
     });
     expect(apply.statusCode).toBe(400);
     expect(apply.payload.ok).toBe(false);
@@ -404,6 +410,46 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     const toolDraft = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
     expect(routeDraft).toBe(parityReviseDraft(1));
     expect(toolDraft).toBe(parityReviseDraft(1));
+  });
+
+  it("目标级守卫防伪面（HTTP 回传路特有）：apply 带草稿里不存在的 targetText → 400 诚实拒、草稿逐字未动", async () => {
+    // 裸 resolvedTarget 回传的可伪造面（传「的」→ 恒拒一切修订）已被通道设计消除：apply 只收用户
+    // 原始点名片段，resolvedTarget 由服务端在 apply 时的当前草稿上自己解析——客户端顶多传一个
+    // 不存在的目标（伪造/过期片段），落得诚实拒，骗不出 applied:true 也锁不死别人。
+    const { routeDir } = await makeParityTwinProjects("revise-forged-target-");
+    await writeParityDraft(routeDir, 1, parityReviseDraft(1));
+
+    // 正常 preview 拿到可应用预览（B → B'，模型真改）
+    const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
+      projectPath: routeDir,
+      chapter: 1,
+      task: revisionTask(REVISE_SENTENCE_B),
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.payload.ok).toBe(true);
+    // apply 回传草稿里不存在的「点名片段」→ 服务端重新解析不到 → 诚实拒并说明，不落盘
+    const apply = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {
+      projectPath: routeDir,
+      chapter: 1,
+      confirm: true,
+      preview: preview.payload.preview,
+      targetText: "这句话是客户端编的，草稿里根本没有。",
+    });
+    expect(apply.statusCode).toBe(400);
+    expect(apply.payload.ok).toBe(false);
+    expect(String(apply.payload.error)).toContain("已不在当前草稿中");
+    expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
+    // 对照：同预览同稿、回传真实点名片段 → 正常落盘（防伪拒不误伤正常链路）
+    const applyReal = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {
+      projectPath: routeDir,
+      chapter: 1,
+      confirm: true,
+      preview: preview.payload.preview,
+      targetText: REVISE_SENTENCE_B,
+    });
+    expect(applyReal.statusCode).toBe(200);
+    expect(applyReal.payload.ok).toBe(true);
+    expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toContain(REVISE_REPLACEMENT_B);
   });
 });
 
