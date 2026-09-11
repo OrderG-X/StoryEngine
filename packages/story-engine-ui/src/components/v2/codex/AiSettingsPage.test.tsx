@@ -256,6 +256,8 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await waitFor(() => {
       expect(screen.getByText(warnings[0] as string)).toBeTruthy();
     });
+    // 本页表单无 raw JSON 编辑器，警告必须指路到首页弹窗的补救路径（可行动性不断链）
+    expect(screen.getByText(/原始 JSON 编辑/)).toBeTruthy();
   });
 
   it("保存响应不带 warnings 时不出现警告条（无丢弃不刷警告）", async () => {
@@ -270,6 +272,66 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
       expect(saveModelSettings).toHaveBeenCalledTimes(1);
     });
     expect(document.querySelector(".ms-warn-notice")).toBeNull();
+  });
+
+  it("轻量旁路保存（切 thinking）不抹掉已有丢头警告——警告只归服务商保存刷新", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：deepseek 的 x-brand-new。如需保留请重新填写明文值后保存。"];
+    // 第一次：添加服务商（服务商保存），响应带回丢头警告
+    saveModelSettings.mockResolvedValueOnce({ ...makeFetchFixture(), warnings });
+    await renderAndWaitLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    const keyInput = await screen.findByPlaceholderText("sk-...");
+    fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => {
+      expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    });
+
+    // 第二次：切 thinking 触发轻量旁路保存，响应无 warnings —— 旧警告必须保住
+    saveModelSettings.mockResolvedValueOnce(makeFetchFixture());
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+  });
+
+  it("轻量旁路保存若真带回新警告也如实展示（新警告绝不静默吞）", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：my-relay 的 x-lost。如需保留请重新填写明文值后保存。"];
+    saveModelSettings.mockResolvedValueOnce({ ...makeFetchFixture(), warnings });
+    await renderAndWaitLoaded();
+
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    });
+  });
+
+  it("下一次服务商保存成功且无 warnings 时才清掉旧警告（成功才换）", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：deepseek 的 x-brand-new。如需保留请重新填写明文值后保存。"];
+    saveModelSettings.mockResolvedValueOnce({ ...makeFetchFixture(), warnings });
+    await renderAndWaitLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    const keyInput = await screen.findByPlaceholderText("sk-...");
+    fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => {
+      expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    });
+
+    // 再保存一次服务商（编辑 deepseek 走「保存修改」），响应无 warnings → 旧警告清掉
+    saveModelSettings.mockResolvedValueOnce(makeFetchFixture());
+    fireEvent.click(screen.getByRole("button", { name: /^DeepSeek已配置/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存修改" }));
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".ms-warn-notice")).toBeNull();
+    });
   });
 
   it("整页表单路径持久化保留磁盘 provider 的 customHeaders（P2-3 残留洞），无头的 provider 不凭空带出", async () => {

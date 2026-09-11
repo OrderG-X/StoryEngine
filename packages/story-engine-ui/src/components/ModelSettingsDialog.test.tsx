@@ -161,6 +161,51 @@ describe("ModelSettingsDialog 保存 warnings 展示", () => {
     expect(screen.getByText("已保存并校验通过。")).toBeTruthy();
     expect(container.querySelector(".ms-warn-notice")).not.toBeNull();
   });
+
+  it("保存响应不带 warnings 时不出现警告条（无丢弃不刷警告）", async () => {
+    fetchModelSettings.mockResolvedValue(configuredPayload());
+    saveModelSettings.mockResolvedValue(configuredPayload());
+    testModelConnection.mockResolvedValue({ providerId: "deepseek", models: [], elapsedMs: 1 });
+
+    const { container } = render(<ModelSettingsDialog open onCancel={() => undefined} />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("当前 AI 服务")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^高级设置/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("已保存并校验通过。")).toBeTruthy();
+    });
+    expect(container.querySelector(".ms-warn-notice")).toBeNull();
+  });
+
+  it("保存失败不清旧警告（两面板统一为「成功才换、失败保留」）", async () => {
+    const warnings = ["1 个自定义请求头无法还原已丢弃（未保存）：deepseek 的 x-brand-new。如需保留请重新填写明文值后保存。"];
+    fetchModelSettings.mockResolvedValue(configuredPayload());
+    saveModelSettings.mockResolvedValueOnce(configuredPayload(warnings));
+    testModelConnection.mockResolvedValue({ providerId: "deepseek", models: [], elapsedMs: 1 });
+
+    const { container } = render(<ModelSettingsDialog open onCancel={() => undefined} />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("当前 AI 服务")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^高级设置/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => {
+      expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    });
+
+    // 第二次保存失败：错误如实展示，且旧警告不被抹掉（用户还没补回丢的头）
+    saveModelSettings.mockRejectedValueOnce(new Error("network down"));
+    fireEvent.click(screen.getByRole("button", { name: /^高级设置/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => {
+      expect(screen.getByText(/保存失败/)).toBeTruthy();
+    });
+    expect(screen.getByText(warnings[0] as string)).toBeTruthy();
+    expect(container.querySelector(".ms-warn-notice")).not.toBeNull();
+  });
 });
 
 describe("ModelSettingsDialog 表单路径保存保留 customHeaders（P2-3 残留洞）", () => {

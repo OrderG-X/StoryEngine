@@ -122,7 +122,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   );
   const editingExisting = detailSaved !== null;
 
-  const applySaved = useCallback((res: Awaited<ReturnType<typeof saveModelSettings>>) => {
+  const applySaved = useCallback((
+    res: Awaited<ReturnType<typeof saveModelSettings>>,
+    refreshWarnings: boolean,
+  ) => {
     rawTextRef.current = res.rawText;
     const parsed = parseModelSettings(res.result);
     setSavedProviders(parsed.providers);
@@ -140,12 +143,21 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     if (Object.keys(viewState.thinking).length > 0) setThinking(viewState.thinking);
     const budget = parseChatHistoryBudgetTokens(res.rawText);
     if (budget !== null) setChatMemoryBudget(budget);
-    // 每次成功落盘刷掉旧警告、只反映本次保存的丢弃项（需用户补明文值，不走 4 秒自动消失）。
-    setSaveWarnings(res.warnings ?? []);
+    // 警告归属「服务商保存」类动作：只有它们（refreshWarnings=true）的成功响应才刷新/清空警告；
+    // 任务分配、thinking 开关、记忆上限等轻量旁路保存不动旧警告——防用户还没补回丢的头，
+    // 警告就被无关自动保存抹掉。任何保存真带回新警告都如实替换展示（新警告绝不静默吞）。
+    // 警告需用户补明文值才能消解，不走 4 秒自动消失。
+    setSaveWarnings((prev) => {
+      if (res.warnings && res.warnings.length > 0) return res.warnings;
+      return refreshWarnings ? [] : prev;
+    });
   }, []);
 
   /** 全量快照写盘（config 规范 map + 任务旁路 + 密钥），排队串行防交错。 */
-  const persist = useCallback((overrides: Partial<PersistSnapshot>) => {
+  const persist = useCallback((
+    overrides: Partial<PersistSnapshot>,
+    options?: { readonly refreshWarnings?: boolean },
+  ) => {
     const snapshot: PersistSnapshot = { ...stateRef.current, ...overrides };
     const run = async () => {
       const config = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
@@ -154,7 +166,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       });
       const payload = buildTaskAssignmentsPayload(snapshot.tasks, snapshot.thinking);
       const res = await saveModelSettings(JSON.stringify(config, null, 2), snapshot.apiKeys, payload);
-      applySaved(res);
+      applySaved(res, options?.refreshWarnings ?? false);
     };
     const p = persistQueue.current.then(run, run);
     persistQueue.current = p.then(
@@ -302,7 +314,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     setTestError(null);
     try {
       const key = form.apiKey.trim();
-      await persist({ providers: built.providers, apiKeys: key ? { [built.id]: key } : undefined });
+      await persist(
+        { providers: built.providers, apiKeys: key ? { [built.id]: key } : undefined },
+        { refreshWarnings: true },
+      );
       if (testModels.length > 0) {
         setProviderModels((prev) => ({ ...prev, [built.id]: [...testModels] }));
       }
@@ -325,11 +340,14 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     setTestError(null);
     try {
       const key = form.apiKey.trim();
-      await persist({
-        providers: built.providers,
-        tasks: nextTasks,
-        apiKeys: key ? { [built.id]: key } : undefined,
-      });
+      await persist(
+        {
+          providers: built.providers,
+          tasks: nextTasks,
+          apiKeys: key ? { [built.id]: key } : undefined,
+        },
+        { refreshWarnings: true },
+      );
       if (testModels.length > 0) {
         setProviderModels((prev) => ({ ...prev, [built.id]: [...testModels] }));
       }
@@ -357,7 +375,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     setSaving(true);
     setTestError(null);
     try {
-      await persist({ providers: nextProviders, tasks: nextTasks });
+      await persist({ providers: nextProviders, tasks: nextTasks }, { refreshWarnings: true });
       setProviderModels((prev) => {
         const next = { ...prev };
         delete next[detailId];
@@ -482,6 +500,12 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
                 {saveWarnings.map((warning) => (
                   <div key={warning}>{warning}</div>
                 ))}
+                {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无 raw JSON 编辑器，
+                    被丢的 customHeaders 在本页补不回——指路到首页设置弹窗的原始 JSON。 */}
+                <div>
+                  补回路径：回首页点「设置」→ 高级设置 →「原始 JSON 编辑」，在对应服务商下写回
+                  customHeaders 明文值后保存。
+                </div>
               </div>
             )}
             {opError && <div className="ms-error">{opError}</div>}

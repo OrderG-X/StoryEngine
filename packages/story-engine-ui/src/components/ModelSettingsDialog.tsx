@@ -457,6 +457,8 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     }
     setChatMemoryBudget(parseChatHistoryBudgetTokens(res.rawText) ?? chatMemoryBudget);
     setPendingProviderApiKeys({});
+    // 警告「成功才换」：只在保存成功时按本次响应替换；发起时与失败时都不清旧警告
+    // （与 AiSettingsPage 同口径——失败保留，用户还有据可查）。
     setSaveWarnings(res.warnings ?? []);
   }, [chatMemoryBudget]);
 
@@ -464,7 +466,6 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     setSaving(true);
     setError(null);
     setNotice(null);
-    setSaveWarnings([]);
     try {
       let payloadText: string;
       if (rawJsonDirty) {
