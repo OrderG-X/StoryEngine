@@ -299,6 +299,72 @@ describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）",
   });
 });
 
+// ─── 两门共用一套语料（复审 P1-A + P2-3 返工钉死）───
+// 每条同时断 commit / prune 两门期望：跨门句子（无本门域内动词）一律 fail-closed。
+const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: boolean; note: string }> = [
+  // 三审 P1-2 全部 8 条（含三审漏钉的「先别入库，不过还是不要确认入库」与全部 prune 例）
+  { text: "确认不定稿", commit: false, prune: false, note: "P1-2" },
+  { text: "不能确认定稿", commit: false, prune: false, note: "P1-2" },
+  { text: "无法确认入库", commit: false, prune: false, note: "P1-2" },
+  { text: "先别入库，不过还是不要确认入库", commit: false, prune: false, note: "P1-2（三审漏钉补钉）" },
+  { text: "不确认了直接定稿", commit: true, prune: false, note: "P1-2：「不确认」被「了」闭合，末句肯定" },
+  { text: "确认不裁剪快照历史", commit: false, prune: false, note: "P1-2 prune：字面反义曾放行真裁" },
+  { text: "先别裁剪，不过还是不要确认裁掉快照", commit: false, prune: false, note: "P1-2 prune" },
+  { text: "这段剧情别裁，还是裁吧", commit: false, prune: false, note: "P1-2 prune（2478dc1 起三轮残留）" },
+  // 复审 P1-A 扩展 12 条（prune 门迁子句极性前全部误放行）
+  { text: "确认不清理快照历史", commit: false, prune: false, note: "P1-A 扩展" },
+  { text: "确认没裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
+  { text: "确认未裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
+  { text: "不能确认裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
+  { text: "无法确认裁剪快照", commit: false, prune: false, note: "P1-A 扩展" },
+  { text: "先别裁，剧情那段还是裁吧", commit: false, prune: false, note: "P1-A 扩展：反转通道双无锚" },
+  { text: "别裁，还是裁吧，先别裁了", commit: false, prune: false, note: "P1-A 扩展：末句否定" },
+  { text: "先别裁，算了裁吧，不过还是别裁了", commit: false, prune: false, note: "P1-A 扩展：末句否定吞反转" },
+  { text: "别裁剪快照，还是确认裁掉快照吧", commit: false, prune: false, note: "P1-A 扩展：裸「还是」不算改主意" },
+  { text: "确认裁剪快照历史，先别", commit: false, prune: false, note: "P1-A 扩展：尾随否决" },
+  { text: "确认裁剪快照历史，先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟" },
+  { text: "确认裁剪，但是先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟同类" },
+  // P2-3 commit 门：中段状语否定误拦回归（与逗号版同义异形统一为放行）
+  { text: "不着急确认入库", commit: true, prune: false, note: "P2-3：「不着急」状语否定豁免" },
+  { text: "确认没毛病就入库", commit: true, prune: false, note: "P2-3：「没毛病」同「没问题」豁免" },
+  { text: "不着急，确认入库", commit: true, prune: false, note: "P2-3：逗号版对照" },
+  // P2-3 commit 门：疑问句 fail-closed（疑问不是确认）
+  { text: "确认定稿？", commit: false, prune: false, note: "P2-3：疑问句" },
+  { text: "你确认要入库吗", commit: false, prune: false, note: "P2-3：疑问句" },
+  { text: "确认入库？我再想想", commit: false, prune: false, note: "P2-3：疑问+反悔" },
+  // P2-3 commit 门：尾随否决
+  { text: "确认入库，先别", commit: false, prune: false, note: "P2-3：尾随否决" },
+  { text: "确认入库，算了先别", commit: false, prune: false, note: "P2-3：尾随否决" },
+  { text: "确认定稿，先别急", commit: false, prune: false, note: "P2-3：尾随推迟" },
+  { text: "确认定稿，但是先等等", commit: false, prune: false, note: "P2-3：尾随推迟" },
+  // P2-3 commit 门：动词后否定
+  { text: "确认入库不行", commit: false, prune: false, note: "P2-3：动词后否定" },
+  { text: "确认提交不了", commit: false, prune: false, note: "P2-3：动词后否定" },
+  // P2-3 ⑤ 正向句式主保险：「放行须命中正向句式」曾零测试保护（去之 165 用例仍全绿），此处钉死
+  { text: "入库有风险吗", commit: false, prune: false, note: "P2-3：正向句式主保险" },
+  { text: "定稿行不行", commit: false, prune: false, note: "P2-3：正向句式主保险（无疑问标记，专钉去正向约束变异）" },
+  { text: "裁剪快照安全吗", commit: false, prune: false, note: "P2-3：prune 正向句式主保险" },
+  // 两门参数化差异对照
+  { text: "先别入库，算了还是确认入库", commit: true, prune: false, note: "commit：末句肯定即后说话算数" },
+  { text: "先别裁剪，算了还是裁吧", commit: false, prune: true, note: "prune：强反转+裸「裁吧」算确认级" },
+  { text: "特别确认定稿", commit: true, prune: false, note: "「特别确认」是真确认" },
+  { text: "特别确认裁掉快照历史", commit: false, prune: true, note: "「特别确认」是真确认" },
+  { text: "先别清理线索,确认裁剪快照历史", commit: false, prune: true, note: "半角逗号与全角同判（旧半角误拦 anomaly）" },
+  { text: "确认一下方案，裁剪先等等", commit: false, prune: false, note: "r1 残留：推迟尾句" },
+  { text: "确认，把快照清理掉吧", commit: false, prune: true, note: "短确认 + 域内把字句" },
+  { text: "确认裁剪吗", commit: false, prune: true, note: "prune 疑问放行是钉住现状；commit 无此口径" },
+];
+
+describe("turn-intent-gate 两门共用语料（复审 P1-A + P2-3 钉死）", () => {
+  it.each(SHARED_GATE_CORPUS)("commit 门「$text」（$note）", ({ text, commit }) => {
+    expect(userTurnAllowsCommitApply(text)).toBe(commit);
+  });
+
+  it.each(SHARED_GATE_CORPUS)("prune 门「$text」（$note）", ({ text, prune }) => {
+    expect(userTurnAllowsSnapshotPrune(text)).toBe(prune);
+  });
+});
+
 describe("turn-intent-gate established override（已确立设定覆盖同意）", () => {
   it.each([
     "允许覆盖",

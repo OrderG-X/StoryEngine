@@ -711,7 +711,7 @@ export async function fetchMemoryContextRead(
   }
 }
 
-export async function generateDraft(input: GenerateDraftRequest, signal?: AbortSignal): Promise<{ readonly report: unknown; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: { readonly droppedSections: readonly string[] } }> {
+export async function generateDraft(input: GenerateDraftRequest, signal?: AbortSignal): Promise<{ readonly report: unknown; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly warnings?: readonly string[] }> {
   const payload = await fetchJson<GenerateDraftApiResponse>(
     "/api/draft/generate",
     {
@@ -724,7 +724,8 @@ export async function generateDraft(input: GenerateDraftRequest, signal?: AbortS
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { report: payload.report, draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview, contextBudget: payload.contextBudget };
+  // warnings（enforce 降级留痕）逐字透传——藏住就是 ok:true 假成功。
+  return { report: payload.report, draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview, contextBudget: payload.contextBudget, warnings: payload.warnings };
 }
 
 /**

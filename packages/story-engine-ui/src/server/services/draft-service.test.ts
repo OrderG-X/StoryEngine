@@ -11,7 +11,7 @@
  * 故障注入手法：引擎 mock 的 runFastDraft 报 passed 但不真写盘 → draftPath 不存在 → 回读必失败。
  * （节点内置 fs 在本 vitest 配置下不可跨模块 mock，故障从真实文件系统状态造。）
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { WriterClient } from "@actalk/story-engine";
@@ -83,9 +83,12 @@ vi.mock("../agent/ai-flavor/de-ai-flavor-batch.js", () => ({
 }));
 
 import { defaultDraftPath } from "../lib/project-io.js";
-import { readFileContentWithRetry, runGenerateDraft } from "./draft-service.js";
+import { readFileContentWithRetry, readPreviousDraftForRollback, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
+// chmod 0o000 注入读失败在 root 下不生效（root 无视权限位），win32 无 POSIX 权限语义——跳过。
+const skipChmodCase = process.platform === "win32"
+  || (typeof process.getuid === "function" && process.getuid() === 0);
 
 function stubWriterClient(): WriterClient {
   return {
@@ -203,5 +206,124 @@ describe("runGenerateDraft D1 enforce 路回读降级（GLM P3 旧账④）", ()
     expect(result.http.draftContent).toContain("主角拿到账册");
     // 无降级 → warnings 字段缺省，不打扰正常 200。
     expect(result.http.warnings).toBeUndefined();
+  }, 10_000);
+});
+
+// P2-5：写前读旧稿的裸 catch（readFile().catch(()=>undefined)）把「旧稿存在但读失败」与「无旧稿」混为一谈——
+// 执法拒稿回滚因此走 rm 删掉盘上真稿。修复后三态分清：absent/present/unreadable，unreadable 写盘前诚实拒稿。
+describe("readPreviousDraftForRollback（P2-5 写前读旧稿 fail-closed 三态）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(async () => {
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-"));
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("无旧稿（ENOENT）→ absent（确定答案不重试；回滚删引擎新写文件是对的）", async () => {
+    await expect(
+      readPreviousDraftForRollback(join(projectDir!, "missing.md"), { retries: 3, delayMs: 1 }),
+    ).resolves.toEqual({ kind: "absent" });
+  });
+
+  it("旧稿存在 → present，原文逐字返回（回滚凭据）", async () => {
+    const path = join(projectDir!, "draft.md");
+    await writeFile(path, DRAFT_TEXT, "utf-8");
+    await expect(
+      readPreviousDraftForRollback(path, { retries: 3, delayMs: 1 }),
+    ).resolves.toEqual({ kind: "present", content: DRAFT_TEXT });
+  });
+
+  it.skipIf(process.platform === "win32")("旧稿存在但彻底读失败（ELOOP 自指 symlink）→ unreadable 如实带错误", async () => {
+    const path = join(projectDir!, "looped.md");
+    await symlink(path, path); // 自指环：readFile 必 ELOOP，root 下也确定触发
+    const result = await readPreviousDraftForRollback(path, { retries: 2, delayMs: 1 });
+    expect(result.kind).toBe("unreadable");
+    expect(result.kind === "unreadable" && result.error.length > 0).toBe(true);
+  });
+});
+
+describe("runGenerateDraft enforce 路写前读失败（P2-5 真稿保护）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-"));
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  const OLD_DRAFT = "# 第1章\n\n这是上一版合格旧稿，绝不允许被回滚误删。\n";
+
+  it.skipIf(skipChmodCase)("旧稿存在但读失败（chmod 0o000）→ ok:false 诚实拒稿，真稿逐字不动、生成未启动", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, OLD_DRAFT, "utf-8");
+    await chmod(draftPath, 0o000); // 真故障注入：文件在、读必败（EACCES）
+
+    const writer = stubWriterClient();
+    let result!: Awaited<ReturnType<typeof runGenerateDraft>>;
+    try {
+      result = await runGenerateDraft({
+        projectDir: projectDir!,
+        chapter: 1,
+        writerClient: writer,
+        policies: { lengthPolicy: "enforce_or_rollback", aiFlavorRecheck: false },
+      });
+    } finally {
+      await chmod(draftPath, 0o644); // 恢复权限以便校验与清理
+    }
+
+    // 诚实拒稿：ok:false + 如实说明（读取失败/未覆盖），不走 rejection（不是执法拒稿）。
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain("读取失败");
+    expect(result.summary).toContain("未覆盖");
+    expect(result.issues.join(" ")).toContain("读取失败");
+    expect(result.rejection).toBeUndefined();
+    // 真稿逐字不动——回滚 rm 路径绝不能被触发；
+    expect(await readFile(draftPath, "utf-8")).toBe(OLD_DRAFT);
+    // 且生成根本没启动（写盘前拒稿，引擎/模型都没碰）。
+    expect(storyEngineMocks.runFastDraft).not.toHaveBeenCalled();
+    expect(writer.generateDraft).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("旧稿读正常 + 执法拒稿 → 回滚逐字写回旧稿（回归：fail-closed 不误伤正常回滚）", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, OLD_DRAFT, "utf-8");
+    // 引擎落盘一版「短稿」覆盖旧稿；字数核对返回 100 < lowerBound 200 → 执法拒稿。
+    storyEngineMocks.countDraftChineseCharacters.mockReturnValue(100);
+    storyEngineMocks.runFastDraft.mockImplementation(async () => {
+      await writeFile(draftPath, "# 第1章\n\n短。\n", "utf-8");
+      return {
+        chapter: 1,
+        passed: true,
+        draftPath,
+        contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+        promptFingerprint: {},
+        issues: [],
+      };
+    });
+
+    const result = await runGenerateDraft({
+      projectDir: projectDir!,
+      chapter: 1,
+      writerClient: stubWriterClient(),
+      policies: { lengthPolicy: "enforce_or_rollback", aiFlavorRecheck: false },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.rejection?.kind).toBe("length_rejected");
+    expect(await readFile(draftPath, "utf-8")).toBe(OLD_DRAFT); // 回滚凭据来自写前读，逐字写回
   }, 10_000);
 });

@@ -271,6 +271,82 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
   });
 });
 
+// 复审 P3 直测：tool-result 分支把结果 payload 的 dryRun/action 累加进 toolSteps（路由里「诚实背书
+// 粒度」注释处的 2 行接线）——这是服务端诚实探针（stepBacksWriteClaim）判「写背书」的唯一数据源：
+// prune 的 dryRun:true（只读预览）/ exemplars 的 action:"list"（只读列举）completed 不背书写声称。
+// 删掉这两行接线 → 干跑预览被当真裁、口头「已保存」漏判，本组测试即红。
+describe("runObedientAgentTurn tool-result dryRun/action 接线（诚实背书粒度直测）", () => {
+  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
+
+  /** 单轮直通：一次工具调用+结果+一句声称文本。maxRetries:0 让更正当轮直接追加——直测接线，不演练重做轮。 */
+  async function runClaimTurn(toolName: string, result: unknown, claimText: string, userText: string): Promise<string> {
+    const chunks: ObedientTurnChunk[] = [
+      { type: "tool-call", payload: { toolCallId: `${toolName}-1`, toolName, args: {} } },
+      { type: "tool-result", payload: { toolCallId: `${toolName}-1`, toolName, result } },
+      { type: "text-delta", payload: { text: claimText } },
+    ];
+    const streamAttempt = async () =>
+      (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })();
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: userText }],
+      userText,
+      streamAttempt: streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+      maxRetries: 0,
+    });
+    return events
+      .filter((e) => e.event === "text-delta")
+      .map((e) => (e.data as { text: string }).text)
+      .join("");
+  }
+
+  it("prune_snapshots dryRun:true（只读预览）completed 不背书「已保存」声称 → 追加系统更正", async () => {
+    const text = await runClaimTurn(
+      "prune_snapshots",
+      { ok: true, dryRun: true, summary: "预览：可裁剪 3 个旧快照。" },
+      "旧快照已裁剪，备份已保存。",
+      "帮我看看能裁剪哪些旧快照",
+    );
+    expect(text).toContain("⚠️ 系统更正");
+    expect(text).toContain("没有检测到对应写入工具成功执行");
+  });
+
+  it("prune_snapshots dryRun:false（真裁落盘）背书同一句声称 → 不追加系统更正", async () => {
+    const text = await runClaimTurn(
+      "prune_snapshots",
+      { ok: true, dryRun: false, summary: "已裁剪 3 个旧快照。" },
+      "旧快照已裁剪，备份已保存。",
+      "确认裁剪旧快照",
+    );
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("manage_style_exemplars action:list（只读列举）completed 不背书「已保存」声称 → 追加系统更正", async () => {
+    const text = await runClaimTurn(
+      "manage_style_exemplars",
+      { ok: true, action: "list", summary: "共 2 条风格范例。" },
+      "新范例已保存。",
+      "看看现在有哪些风格范例",
+    );
+    expect(text).toContain("⚠️ 系统更正");
+    expect(text).toContain("没有检测到对应写入工具成功执行");
+  });
+
+  it("manage_style_exemplars action:add（真落盘）背书同一句声称 → 不追加系统更正", async () => {
+    const text = await runClaimTurn(
+      "manage_style_exemplars",
+      { ok: true, action: "add", summary: "已添加 1 条风格范例。" },
+      "新范例已保存。",
+      "把这段加进风格范例",
+    );
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+});
+
 // r8 二轮：聊天历史窗口截断。ch84/ch88/ch93 三个病例一致：历史堆到 ≥5 章重复回执剧本后，
 // 弱模型开始续写回执而不调工具——正常成功回执也诱发。状态真值源在磁盘/工具，历史只保近程连续性。
 describe("capChatHistoryWindow 聊天历史窗口（r8 治回执模式先验）", () => {

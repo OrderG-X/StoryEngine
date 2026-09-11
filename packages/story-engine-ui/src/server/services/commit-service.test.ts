@@ -616,3 +616,97 @@ describe("commit-apply replayed 磁盘对账（undo 假成功根治·复审 P2�
     expect(commitFastDraft).toHaveBeenCalledTimes(1);
   });
 });
+
+
+/* ---------------------------------------------------------------------------
+ * 复审第四轮 P2-2：两条「对账读失败」409 文案的路径消毒回归锁——
+ * errno 原文（ENOTDIR/EACCES 等）内嵌绝对路径（如 open '/abs/path/chapters/0001.md'），
+ * 直达用户前必须按 commit-apply 同款口径洗掉（绝对路径 →「(本地路径)」，errno 码保留诊断价值）。
+ * 故障注入选 ENOTDIR（把路径中间目录换成普通文件）：error.message 必带绝对路径，
+ * 且对 root 跑手也稳定触发（chmod 造的 EACCES 在 root 下会被权限豁免跳过）。
+ * ------------------------------------------------------------------------- */
+describe("commit-apply 409 文案路径消毒（复审第四轮 P2-2）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(() => {
+    resetMocksBaseline();
+    // 入库 mock 真写 chapters/NNNN.md（与引擎 commitFastDraft 同口径），completed 回执对账才有真相可核。
+    commitFastDraft.mockImplementation(async (input: { readonly projectDir: string; readonly chapter: number; readonly draftContent: string }) => {
+      await mkdir(join(input.projectDir, "chapters"), { recursive: true });
+      await writeFile(join(input.projectDir, "chapters", `${String(input.chapter).padStart(4, "0")}.md`), input.draftContent, "utf-8");
+      return {
+        passed: true,
+        chapter: input.chapter,
+        updatedCharacters: [],
+        timelineEventIds: [],
+        updatedHooks: [],
+        updatedWorld: false,
+        updatedCalendar: false,
+        issues: [],
+      };
+    });
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("pending 对账读失败文案：errno 保留、绝对路径洗成「(本地路径)」（pendingReceiptUnreadableMessage）", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await previewCredentials(projectDir);
+    await writePendingReceipt(projectDir, 1, credentials);
+    // 故障注入：drafts/fast 换成同名普通文件 → 对账读草稿必 ENOTDIR 且 message 带绝对路径
+    //（非 ENOENT，属「对账读失败」而非「对不上」）。
+    const fastDir = join(projectDir, "drafts", "fast");
+    await rm(fastDir, { recursive: true });
+    await writeFile(fastDir, "not a directory", "utf-8");
+
+    const result = await runCommitApply({
+      projectDir,
+      chapter: 1,
+      policy: { kind: "http_durable_receipt", idempotencyKey: IDEMPOTENCY_KEY, credentials },
+    });
+
+    expect(result.kind).toBe("idempotency_in_progress");
+    if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
+    expect(result.error).toContain("对账读取失败");
+    expect(result.error).toContain("ENOTDIR"); // errno 码保留诊断价值
+    expect(result.error).toContain("(本地路径)");
+    expect(result.error).not.toContain(projectDir); // 绝对路径绝不直达用户
+    expect(commitFastDraft).not.toHaveBeenCalled();
+  });
+
+  it("completed 回执对账读失败文案：同款消毒（completedReceiptUnreadableMessage）", async () => {
+    projectDir = await createProjectFixture();
+    const credentials = await previewCredentials(projectDir);
+    const first = await runCommitApply({
+      projectDir,
+      chapter: 1,
+      policy: { kind: "http_durable_receipt", idempotencyKey: IDEMPOTENCY_KEY, credentials },
+    });
+    if (first.kind !== "committed") throw new Error(`expected committed, got ${first.kind}`);
+    // 故障注入：chapters 目录换成同名普通文件 → 同键重试的对账读 chapters/0001.md 必 ENOTDIR（带绝对路径）。
+    const chaptersDir = join(projectDir, "chapters");
+    await rm(chaptersDir, { recursive: true });
+    await writeFile(chaptersDir, "not a directory", "utf-8");
+
+    const result = await runCommitApply({
+      projectDir,
+      chapter: 1,
+      policy: { kind: "http_durable_receipt", idempotencyKey: IDEMPOTENCY_KEY, credentials },
+    });
+
+    // 磁盘对账读失败 → 重放被拒（fail-closed），文案走 completedReceiptUnreadableMessage。
+    expect(result.kind).toBe("idempotency_in_progress");
+    if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
+    expect(result.error).toContain("磁盘对账读取失败");
+    expect(result.error).toContain("ENOTDIR");
+    expect(result.error).toContain("(本地路径)");
+    expect(result.error).not.toContain(projectDir);
+    // 绝不重放/重做：入库只发生过第一次那一次。
+    expect(commitFastDraft).toHaveBeenCalledTimes(1);
+  });
+});

@@ -813,4 +813,46 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(errorMessages[0].errorDetail).toContain("落盘失败");
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
+
+  // 复审 P3：useChat finally 里的诚实收尾接线（回合终点 honestyRewritePatch(finished.content,
+  // finished.toolSteps) → updateMessage 盖掉假成功）此前零直测。链路：onToolResult(output:info)
+  // → toolStep 带 dryRun → finally 探针判「无写背书」→ 正文被确定性失败文案盖掉。
+  it("finally 诚实收尾：dry-run 预览态 prune 不背书「已保存」声称 → 盖掉假成功正文", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "prune_snapshots", toolCallId: "p1" });
+      handlers.onToolResult({ toolName: "prune_snapshots", toolCallId: "p1", ok: true, dryRun: true, summary: "预览：可裁剪 3 个旧快照。" });
+      handlers.onTextDelta("旧快照已裁剪，备份已保存。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendMessage("帮我看看能裁剪哪些旧快照");
+    });
+
+    const assistant = lastAssistant()!;
+    expect(assistant.toolSteps![0]).toMatchObject({ status: "completed", dryRun: true });
+    expect(assistant.content).toContain("没有检测到对应写入工具成功执行");
+    expect(assistant.content).not.toContain("备份已保存");
+  });
+
+  it("finally 诚实收尾：prune 真裁（dryRun:false）背书同一句声称 → 不盖正文", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "prune_snapshots", toolCallId: "p1" });
+      handlers.onToolResult({ toolName: "prune_snapshots", toolCallId: "p1", ok: true, dryRun: false, summary: "已裁剪 3 个旧快照。" });
+      handlers.onTextDelta("旧快照已裁剪，备份已保存。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendMessage("确认裁剪旧快照");
+    });
+
+    const assistant = lastAssistant()!;
+    expect(assistant.toolSteps![0]).toMatchObject({ status: "completed", dryRun: false });
+    expect(assistant.content).toContain("备份已保存");
+  });
 });

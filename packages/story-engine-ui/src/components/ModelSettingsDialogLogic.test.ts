@@ -36,7 +36,7 @@ describe("parseTaskViewState 反推面板状态", () => {
 
 describe("buildModelSettingsConfig 保留对话记忆上限", () => {
   it("写入 chatHistoryBudgetTokens 供 PUT 全链落盘", () => {
-    const config = buildModelSettingsConfig(
+    const { config } = buildModelSettingsConfig(
       [{ id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_API_KEY", apiKeyStatus: "present" }],
       { fastDraft: "deepseek|deepseek-chat" },
       { chatHistoryBudgetTokens: 300_000 },
@@ -64,7 +64,7 @@ describe("buildModelSettingsConfig 表单路径保留 provider 上表单不认�
   }
 
   it("有 customHeaders：打码哨兵随 provider 合并保留（服务端 PUT 还原真值），表单字段照常覆盖", () => {
-    const config = buildModelSettingsConfig([provider], tasks, {
+    const { config } = buildModelSettingsConfig([provider], tasks, {
       previousRawText: previousRawTextWith({
         id: "deepseek",
         label: "旧名称",
@@ -86,8 +86,8 @@ describe("buildModelSettingsConfig 表单路径保留 provider 上表单不认�
   });
 
   it("无 customHeaders：磁盘对象只有已知字段时，输出与不传 previousRawText 深相等（零行为漂移）", () => {
-    const baseline = buildModelSettingsConfig([provider], tasks, { chatHistoryBudgetTokens: 300_000 });
-    const merged = buildModelSettingsConfig([provider], tasks, {
+    const { config: baseline } = buildModelSettingsConfig([provider], tasks, { chatHistoryBudgetTokens: 300_000 });
+    const { config: merged } = buildModelSettingsConfig([provider], tasks, {
       chatHistoryBudgetTokens: 300_000,
       previousRawText: previousRawTextWith({
         id: "deepseek",
@@ -110,7 +110,7 @@ describe("buildModelSettingsConfig 表单路径保留 provider 上表单不认�
         "deleted-prov": { id: "deleted-prov", customHeaders: { "x-b": MASKED } },
       },
     });
-    const config = buildModelSettingsConfig(
+    const { config } = buildModelSettingsConfig(
       [provider, { id: "brand-new", label: "新服务", baseUrl: "https://new.example/v1", apiKeyEnv: "", apiKeyStatus: "missing" as const }],
       tasks,
       { previousRawText: previous },
@@ -122,8 +122,8 @@ describe("buildModelSettingsConfig 表单路径保留 provider 上表单不认�
   });
 
   it("previousRawText 非法 JSON：退化为从零重建，不炸表单保存", () => {
-    const config = buildModelSettingsConfig([provider], tasks, { previousRawText: "{not json" });
-    const baseline = buildModelSettingsConfig([provider], tasks);
+    const { config } = buildModelSettingsConfig([provider], tasks, { previousRawText: "{not json" });
+    const { config: baseline } = buildModelSettingsConfig([provider], tasks);
     expect(config).toEqual(baseline);
   });
 });
@@ -140,7 +140,7 @@ describe("buildModelSettingsConfig 顶层与 profiles 同款式合并保留（P2
   const profId = taskProfileId("deepseek", "deepseek-chat");
 
   it("手调过 temperature 等旋钮的 profile，表单保存后不丢、不被默认重置", () => {
-    const config = buildModelSettingsConfig([provider], tasks, {
+    const { config } = buildModelSettingsConfig([provider], tasks, {
       previousRawText: JSON.stringify({
         version: 1,
         providers: { deepseek: { id: "deepseek", type: "openai-compatible" } },
@@ -168,7 +168,7 @@ describe("buildModelSettingsConfig 顶层与 profiles 同款式合并保留（P2
   });
 
   it("顶层未知键（defaultProfile 等）随合并保留；表单管理键照常覆盖", () => {
-    const config = buildModelSettingsConfig([provider], tasks, {
+    const { config } = buildModelSettingsConfig([provider], tasks, {
       chatHistoryBudgetTokens: 300_000,
       previousRawText: JSON.stringify({
         version: 1,
@@ -187,7 +187,7 @@ describe("buildModelSettingsConfig 顶层与 profiles 同款式合并保留（P2
   });
 
   it("服务商清空时磁盘残留的 defaultProvider 不借合并复活（指向已删服务商）", () => {
-    const config = buildModelSettingsConfig([], {}, {
+    const { config } = buildModelSettingsConfig([], {}, {
       previousRawText: JSON.stringify({
         version: 1,
         defaultProvider: "deepseek",
@@ -201,8 +201,8 @@ describe("buildModelSettingsConfig 顶层与 profiles 同款式合并保留（P2
   });
 
   it("磁盘上没有同 id profile（新建）：五件套默认打底，与不传 previousRawText 零漂移", () => {
-    const baseline = buildModelSettingsConfig([provider], tasks);
-    const merged = buildModelSettingsConfig([provider], tasks, {
+    const { config: baseline } = buildModelSettingsConfig([provider], tasks);
+    const { config: merged } = buildModelSettingsConfig([provider], tasks, {
       previousRawText: JSON.stringify({ version: 1, providers: {}, profiles: {}, taskProfiles: {} }),
     });
     expect(merged).toEqual(baseline);
@@ -221,7 +221,7 @@ describe("buildModelSettingsConfig 磁盘带回的 defaultProfile 存在性校�
   const profId = taskProfileId("deepseek", "deepseek-chat");
 
   it("手写 defaultProfile 指向重建后不存在的 profile：字段被丢、不留悬空引用，其余合并照常", () => {
-    const config = buildModelSettingsConfig([provider], tasks, {
+    const { config } = buildModelSettingsConfig([provider], tasks, {
       previousRawText: JSON.stringify({
         version: 1,
         // 手写档：profiles 被表单按 provider_model 重建后，balanced 已不在新集合里
@@ -240,7 +240,7 @@ describe("buildModelSettingsConfig 磁盘带回的 defaultProfile 存在性校�
   });
 
   it("defaultProfile 指向重建后仍存在的 profile：原样保留", () => {
-    const config = buildModelSettingsConfig([provider], tasks, {
+    const { config } = buildModelSettingsConfig([provider], tasks, {
       previousRawText: JSON.stringify({
         version: 1,
         defaultProfile: profId,
@@ -250,5 +250,114 @@ describe("buildModelSettingsConfig 磁盘带回的 defaultProfile 存在性校�
       }),
     });
     expect(config.defaultProfile).toBe(profId);
+  });
+});
+
+
+describe("buildModelSettingsConfig 合并产物兜底清洗（复审第四轮 P2-1，同族校验洞不再逐 code 打补丁）", () => {
+  const provider = {
+    id: "deepseek",
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    apiKeyStatus: "present" as const,
+  };
+  const tasks = { fastDraft: "deepseek|deepseek-chat" };
+  const profId = taskProfileId("deepseek", "deepseek-chat");
+
+  it("F：磁盘 provider/顶层手写的明文 apiKey 整树剔除（密钥绝不落盘），warning 报路径绝不报值", () => {
+    const { config, cleaningWarnings } = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: JSON.stringify({
+        version: 1,
+        apiKey: "sk-top-level",
+        providers: {
+          deepseek: { id: "deepseek", type: "openai-compatible", baseUrl: "https://api.deepseek.com/v1", apiKey: "sk-handwritten" },
+        },
+        profiles: {},
+        taskProfiles: {},
+      }),
+    });
+    const providers = config.providers as Record<string, Record<string, unknown>>;
+    expect("apiKey" in (providers.deepseek ?? {})).toBe(false);
+    expect("apiKey" in config).toBe(false);
+    expect(cleaningWarnings).toHaveLength(2);
+    expect(cleaningWarnings.join("\n")).toContain("$.providers.deepseek.apiKey");
+    expect(cleaningWarnings.join("\n")).toContain("$.apiKey");
+    // 警告只报字段路径：明文值绝不进文案
+    expect(cleaningWarnings.join("\n")).not.toContain("sk-handwritten");
+    expect(cleaningWarnings.join("\n")).not.toContain("sk-top-level");
+    // 表单管理字段不受影响
+    expect(providers.deepseek?.baseUrl).toBe("https://api.deepseek.com/v1");
+  });
+
+  it("E：任务指向已删非 preset 服务商——任务条目剔除（config 与旁路载荷同口径），warning 告知重新选择", () => {
+    const { config, cleanedTasks, cleaningWarnings } = buildModelSettingsConfig(
+      [provider],
+      { fastDraft: "my-llm|m1" },
+      {
+        previousRawText: JSON.stringify({
+          version: 1,
+          providers: { deepseek: { id: "deepseek", type: "openai-compatible", baseUrl: "https://api.deepseek.com/v1" } },
+          profiles: { old: { id: "old", provider: "my-llm", model: "m1" } },
+          taskProfiles: { fastDraft: "old" },
+        }),
+      },
+    );
+    expect(cleanedTasks).toEqual({});
+    expect(config.taskProfiles).toEqual({});
+    expect(config.profiles).toEqual({});
+    expect(cleaningWarnings).toHaveLength(1);
+    expect(cleaningWarnings[0]).toContain("my-llm");
+    expect(cleaningWarnings[0]).toContain("正文生成"); // TASK_LABELS.fastDraft
+  });
+
+  it("E 对照：任务指向未保存的 preset 服务商——自动补建不清洗、零 warning（不误伤）", () => {
+    const { config, cleanedTasks, cleaningWarnings } = buildModelSettingsConfig(
+      [provider],
+      { fastDraft: "openai|gpt-4o" },
+      { previousRawText: "{}" },
+    );
+    expect(cleanedTasks).toEqual({ fastDraft: "openai|gpt-4o" });
+    expect(Object.keys(config.providers as Record<string, unknown>).sort()).toEqual(["deepseek", "openai"]);
+    expect(cleaningWarnings).toEqual([]);
+  });
+
+  it("G：同 id 磁盘 profile 五件套类型非法——回默认不盲保留，warning 逐条告知；合法手调值与未知字段不受影响", () => {
+    const { config, cleaningWarnings } = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: JSON.stringify({
+        version: 1,
+        providers: {},
+        profiles: {
+          [profId]: {
+            id: profId, provider: "deepseek", model: "deepseek-chat",
+            temperature: "high", maxTokens: -1, timeoutMs: 0, retries: "x", stream: "yes", topP: 0.9,
+          },
+        },
+        taskProfiles: {},
+      }),
+    });
+    const profile = (config.profiles as Record<string, Record<string, unknown>>)[profId];
+    expect(profile?.temperature).toBe(0.7);
+    expect(profile?.maxTokens).toBe(4096);
+    expect(profile?.timeoutMs).toBe(60000);
+    expect(profile?.retries).toBe(2);
+    expect(profile?.stream).toBe(true);
+    expect(profile?.topP).toBe(0.9); // 表单不认识的合法字段仍随合并保留
+    expect(cleaningWarnings).toHaveLength(5);
+    expect(cleaningWarnings.join("\n")).toContain("temperature");
+  });
+
+  it("合法手调五件套 + 无残留：cleaningWarnings 为空、cleanedTasks 与入参一致（零行为漂移）", () => {
+    const result = buildModelSettingsConfig([provider], tasks, {
+      previousRawText: JSON.stringify({
+        version: 1,
+        providers: { deepseek: { id: "deepseek", type: "openai-compatible" } },
+        profiles: { [profId]: { id: profId, provider: "deepseek", model: "deepseek-chat", temperature: 0.3 } },
+        taskProfiles: {},
+      }),
+    });
+    expect(result.cleaningWarnings).toEqual([]);
+    expect(result.cleanedTasks).toEqual(tasks);
+    expect((result.config.profiles as Record<string, Record<string, unknown>>)[profId]?.temperature).toBe(0.3);
   });
 });

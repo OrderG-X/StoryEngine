@@ -468,18 +468,27 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     setNotice(null);
     try {
       let payloadText: string;
+      // 表单路径的合并清洗结果：raw JSON 编辑路径不经过合并（用户手写全文，引擎校验原样把关）。
+      let cleaningWarnings: readonly string[] = [];
+      let cleanedTasks = tasks;
       if (rawJsonDirty) {
         payloadText = rawTextDraft;
       } else {
-        const config = buildModelSettingsConfig(savedProviders, tasks, {
+        const built = buildModelSettingsConfig(savedProviders, tasks, {
           chatHistoryBudgetTokens: chatMemoryBudget,
           previousRawText: rawText,
         });
-        payloadText = JSON.stringify(config, null, 2);
+        payloadText = JSON.stringify(built.config, null, 2);
+        cleaningWarnings = built.cleaningWarnings;
+        cleanedTasks = built.cleanedTasks;
       }
-      const taskAssignments = buildTaskAssignmentsPayload(tasks, thinking);
+      const taskAssignments = buildTaskAssignmentsPayload(cleanedTasks, thinking);
       const res = await saveModelSettings(payloadText, pendingProviderApiKeys, taskAssignments);
       applySavedResult(res);
+      // 合并清洗动作（剔除手写明文密钥/清掉指向已删服务商的任务/非法旋钮回默认）如实并进警告区。
+      if (cleaningWarnings.length > 0) {
+        setSaveWarnings((prev) => [...cleaningWarnings, ...prev]);
+      }
       setNotice("已保存并校验通过。");
       setForceAdvanced(false);
     } catch (e) {
@@ -510,18 +519,21 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
         return;
       }
       const recommended = buildWizardRecommendedState(input.preset, input.baseUrl, modelId);
-      const config = buildModelSettingsConfig(recommended.providers, recommended.tasks, {
+      const built = buildModelSettingsConfig(recommended.providers, recommended.tasks, {
         chatHistoryBudgetTokens: chatMemoryBudget,
         previousRawText: rawText,
       });
-      const taskAssignments = buildTaskAssignmentsPayload(recommended.tasks, recommended.thinking);
+      const taskAssignments = buildTaskAssignmentsPayload(built.cleanedTasks, recommended.thinking);
       const providerId = recommended.providers[0]?.id ?? input.preset.id;
       const res = await saveModelSettings(
-        JSON.stringify(config, null, 2),
+        JSON.stringify(built.config, null, 2),
         { [providerId]: input.apiKey },
         taskAssignments,
       );
       applySavedResult(res);
+      if (built.cleaningWarnings.length > 0) {
+        setSaveWarnings((prev) => [...built.cleaningWarnings, ...prev]);
+      }
       setTasks(recommended.tasks);
       setThinking(recommended.thinking);
       setProviderModels((prev) => ({ ...prev, [providerId]: test.models }));

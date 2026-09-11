@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { withProjectCommitLock } from "@actalk/story-engine";
+import { commitFastDraft, createStoryProject, recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
 import { createSnapshot, humanizeUndoLabel, listSnapshots, pruneSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
@@ -490,5 +490,74 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
     // gc 没跑成，旧对象仍在盘上（磁盘晚点回收无妨）；仓库整体仍可用
     await execFileAsync("git", ["-C", dir, "cat-file", "-e", oldHead]);
     await execFileAsync("git", ["-C", dir, "fsck", "--no-dangling"]);
+  }, 60_000);
+});
+
+// P1-B 回归：撤销「某章首次入库」后不许把书搞砖。restoreSnapshot 按 git diff --diff-filter=A 逐个
+// unlink 新增文件——只删文件不删目录，.story-engine-tx/commit-chapter-N 被掏空成无 manifest 的空壳；
+// 引擎 recoverProjectCommitTransactions 撞「目录在、manifest 不在」fail-closed 抛错 → 该书
+// 预览/入库/快照/undo 全部 500。修复后：空壳在 undo 当场被清（restoreSnapshot 清扫），
+// 漏网空壳由引擎 recover 判零文件残壳收掉。本测试全真：真引擎 commitFastDraft + 真 git + 真 undo，零 mock。
+describe("undo 首次入库不留事务空壳（P1-B 真引擎+真 git 端到端）", () => {
+  async function makeBookProject(): Promise<string> {
+    const rootDir = await mkdtemp(join(tmpdir(), "se-undo-commit-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "撤销事务回归书",
+      genre: "xianxia",
+      premise: "撤销首次入库后再入库必须走通。",
+      mainCharacterName: "测试主角",
+    });
+    await writeFile(
+      join(projectDir, "world", "state.json"),
+      `${JSON.stringify({ currentPhase: "opening", activeConflicts: [], activeHooks: [], knownSecrets: [], lastUpdatedChapter: null }, null, 2)}\n`,
+      "utf-8",
+    );
+    await writeFile(
+      join(projectDir, "story", "hooks.json"),
+      `${JSON.stringify({ hooks: [] }, null, 2)}\n`,
+      "utf-8",
+    );
+    return projectDir;
+  }
+
+  it("真 apply → 真 undo → 真 apply 全程走通，事务空壳不残留、recover 不再砖书", async () => {
+    const projectDir = await makeBookProject();
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0001");
+    const chapterPath = join(projectDir, "chapters", "0001.md");
+    // 镜像 writeTool(commit_apply) 生产接线：runWithSnapshot 罩真引擎 commitFastDraft
+    const applyOnce = () =>
+      runWithSnapshot(projectDir, "agent:commit_apply", async () => {
+        const report = await commitFastDraft({ projectDir, chapter: 1, commitPlan: {} });
+        expect(report.passed).toBe(true);
+        expect(report.issues).toEqual([]);
+        return report;
+      });
+
+    // 真 apply #1：草稿落 drafts/fast（快照内含它），入库产物 chapters/0001.md + 事务证据目录
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0001.md"), "# 第一章\n\n主角推开大门。\n", "utf-8");
+    await applyOnce();
+    expect(await readFile(chapterPath, "utf-8")).toContain("主角推开大门");
+    await access(join(txDir, "manifest.json")); // 事务证据按设计留存
+
+    // 真 undo：撤销首次入库——章节文件与事务文件都被撤回
+    const undo = await undoLastChange(projectDir);
+    expect(undo?.undoneLabel).toBe("定稿");
+    await expect(access(chapterPath)).rejects.toThrow();
+    // 核心断言①：.story-engine-tx/commit-chapter-0001 不许留下无 manifest 的空目录壳
+    await expect(access(txDir)).rejects.toThrow();
+    // 核心断言②：recover 健康——后续任何操作的第一道门不再 fail-closed 抛错
+    await recoverProjectCommitTransactions(projectDir);
+
+    // 真 apply #2：同一章再入库完整走通（commitFastDraft 进锁先 recover——砖书时这里就 passed:false）
+    await applyOnce();
+    expect(await readFile(chapterPath, "utf-8")).toContain("主角推开大门");
+
+    // 再撤第二次入库也走通：书从未进入残缺态，撤销链完整可用
+    const undo2 = await undoLastChange(projectDir);
+    expect(undo2?.undoneLabel).toBe("定稿");
+    await expect(access(chapterPath)).rejects.toThrow();
+    await expect(access(txDir)).rejects.toThrow();
+    await recoverProjectCommitTransactions(projectDir);
   }, 60_000);
 });

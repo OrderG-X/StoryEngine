@@ -598,6 +598,36 @@ describe("StoryEngine-NG CommitEngine", () => {
     await expect(readTransactionStatus(projectDir, 1)).resolves.toBe("recovered");
   });
 
+  it("drops a zero-file transaction shell left by snapshot undo instead of refusing forever", async () => {
+    const projectDir = await createFixtureProject();
+    // Undo unlinks every staged file but not the directories (git tracks files
+    // only): a nested empty shell with no manifest remains.
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0003");
+    await mkdir(join(txDir, "snapshot", "chapters"), { recursive: true });
+    await mkdir(join(txDir, "chapters"), { recursive: true });
+
+    await recoverProjectCommitTransactions(projectDir);
+
+    await expect(access(txDir)).rejects.toThrow(); // shell removed
+    await expect(access(join(projectDir, ".story-engine-tx"))).resolves.toBeUndefined(); // root stays
+    // The project is not bricked: a fresh commit for that chapter works.
+    await writeDraft(projectDir, 3, "# 第三章\n\nGuo Xu 在空壳清理后正常入库。\n");
+    const report = await commitFastDraft({ projectDir, chapter: 3, commitPlan: {} });
+    expect(report.passed).toBe(true);
+    await expect(readTransactionStatus(projectDir, 3)).resolves.toBe("applied");
+  });
+
+  it("still refuses a manifest-less transaction directory that contains any file", async () => {
+    const projectDir = await createFixtureProject();
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0004");
+    await mkdir(join(txDir, "snapshot"), { recursive: true });
+    await writeFile(join(txDir, "snapshot", "stray.txt"), "unidentified residue", "utf-8");
+
+    await expect(recoverProjectCommitTransactions(projectDir)).rejects.toThrow(/Unreadable commit transaction residue/iu);
+    // Fail closed means untouched: the unidentified file must survive.
+    await expect(readFile(join(txDir, "snapshot", "stray.txt"), "utf-8")).resolves.toBe("unidentified residue");
+  });
+
   it.skipIf(process.platform === "win32")("refuses a formal target symlink without touching its outside target", async () => {
     const projectDir = await createFixtureProject();
     const outsideDir = await mkdtemp(join(tmpdir(), "story-engine-outside-target-"));

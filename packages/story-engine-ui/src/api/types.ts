@@ -1379,7 +1379,9 @@ export interface DraftActionReport {
 }
 
 export type GenerateDraftApiResponse =
-  | { readonly ok: true; readonly report: DraftActionReport; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: WriterContextBudgetApiPayload }
+  // warnings：enforce 降级留痕（回读失败/正文未载入等）随 200 投影（routes/draft.ts 按 canonical
+  // http.warnings 带出）——类型层必须透出，否则调用方再次静默丢警告。
+  | { readonly ok: true; readonly report: DraftActionReport; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: WriterContextBudgetApiPayload; readonly warnings?: readonly string[] }
   | { readonly ok: false; readonly error: string };
 
 export interface DraftQualityRequest {

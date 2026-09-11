@@ -109,8 +109,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
   const persistQueue = useRef(Promise.resolve());
   const budgetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 最近一次 GET/保存回显的配置原文（customHeaders 已打码）：persist 重建配置时按它合并，
-  // 保住表单不认识的 provider 字段（P2-3 残留洞）；只作写盘输入、不驱动渲染，用 ref 即可。
+  // 最近一次 GET/保存回显的配置原文（customHeaders 已打码）：persist 写盘前会先 GET 刷新它再作合并底
+  // （防同会话他面改盘后被陈旧缓存静默抹字段）；预读失败时才用它兜底。只作写盘输入、不驱动渲染，用 ref 即可。
   const rawTextRef = useRef("");
 
   const detailId = view.kind === "detail" ? view.id : null;
@@ -162,13 +162,25 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   ) => {
     const snapshot: PersistSnapshot = { ...stateRef.current, ...overrides };
     const run = async () => {
-      const config = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
+      // 合并底取「此刻磁盘真值」：本页只在挂载时拉过一次 rawText，而同会话内 App 级设置弹窗
+      // （首页与工作区都能开 ModelSettingsDialog）随时可能改盘——拿陈旧 ref 当合并底会把别人
+      // 新写的字段（defaultProfile/customHeaders 等表单不认识的键）静默抹掉（三审 P2 rawTextRef
+      // 陈旧）。预读失败退回 ref 缓存：持久化主路不因一次 GET 变脆。
+      try {
+        rawTextRef.current = (await fetchModelSettings()).rawText;
+      } catch { /* 退回 ref 缓存合并 */ }
+      const built = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
         chatHistoryBudgetTokens: snapshot.budget,
         previousRawText: rawTextRef.current,
       });
-      const payload = buildTaskAssignmentsPayload(snapshot.tasks, snapshot.thinking);
-      const res = await saveModelSettings(JSON.stringify(config, null, 2), snapshot.apiKeys, payload);
+      const payload = buildTaskAssignmentsPayload(built.cleanedTasks, snapshot.thinking);
+      const res = await saveModelSettings(JSON.stringify(built.config, null, 2), snapshot.apiKeys, payload);
       applySaved(res, options?.refreshWarnings ?? false);
+      // 合并清洗动作（剔除手写明文密钥/清掉指向已删服务商的任务/非法旋钮回默认）如实进警告区，
+      // 与服务端 warnings 同栏、不自动消失——用户据此补密钥或重选模型。
+      if (built.cleaningWarnings.length > 0) {
+        setSaveWarnings((prev) => [...built.cleaningWarnings, ...prev]);
+      }
     };
     const p = persistQueue.current.then(run, run);
     persistQueue.current = p.then(

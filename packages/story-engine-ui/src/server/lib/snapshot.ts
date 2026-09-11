@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, unlink } from "node:fs/promises";
+import { access, mkdir, readdir, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
@@ -149,11 +149,45 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<S
         if (error.code !== "ENOENT") throw error;
       });
     }
+    // unlink 只删文件不删目录：.story-engine-tx/commit-chapter-N 被掏空后会留下无 manifest 的
+    // 空目录壳，引擎 recover 撞「目录在、manifest 不在」会 fail-closed 抛错把书搞砖（P1-B）。
+    // 当场把零文件空壳收掉；有内容的目录 rmdir 不动（ENOTEMPTY 停手），漏网壳由引擎 recover 兜底。
+    await removeEmptiedTransactionShells(projectDir);
     await git(projectDir, ["checkout", id, "--", "."]);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
     return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
   });
+}
+
+/**
+ * 自底向上收掉「递归零文件」的目录壳：rmdir 只对空目录生效——有文件/有非空子目录即 ENOTEMPTY 停手，
+ * 绝不会误删内容（也不用 recursive rm，Node 无 unlinkat、递归删除无法做到竞态安全）。
+ */
+async function rmdirIfEmptyRecursive(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => undefined);
+  if (!entries) return; // 已消失/读不到——没有壳可收
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await rmdirIfEmptyRecursive(join(dir, entry.name));
+    }
+  }
+  await rmdir(dir).catch(() => undefined); // 非空即停手，留给引擎 recover 按 fail-closed 判
+}
+
+/**
+ * 恢复/撤销 unlink 新增文件后，清扫 .story-engine-tx 下被掏空的空目录壳（典型：commit-chapter-N
+ * 的 manifest/暂存/备份全被删掉只剩空目录）。只动空壳；txRoot 本身保留（引擎容忍空根目录）。
+ */
+async function removeEmptiedTransactionShells(projectDir: string): Promise<void> {
+  const txRoot = join(projectDir, ".story-engine-tx");
+  const entries = await readdir(txRoot, { withFileTypes: true }).catch(() => undefined);
+  if (!entries) return; // 没有 tx 目录即无事可做
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await rmdirIfEmptyRecursive(join(txRoot, entry.name));
+    }
+  }
 }
 
 /** 撤销操作自身写下的两条 commit（恢复前自动快照 / 恢复到：…）——逐步撤销时要跳过、否则卡在原地。 */

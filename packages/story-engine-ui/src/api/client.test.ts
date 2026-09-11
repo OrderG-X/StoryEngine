@@ -13,6 +13,7 @@ import {
   FOUNDATION_GAP_APPLY_TIMEOUT_MS,
   FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE,
   FOUNDATION_GAP_CHAT_TIMEOUT_MS,
+  generateDraft,
   previewCommit,
   saveChapterWorkspace,
   saveModelSettings,
@@ -516,6 +517,42 @@ describe("saveModelSettings warnings passthrough", () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okPayload(), 200)));
 
     const result = await saveModelSettings("{\"version\":1}");
+
+    expect(result.warnings).toBeUndefined();
+  });
+});
+
+describe("generateDraft warnings passthrough", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function okDraftPayload(warnings?: readonly string[]) {
+    return {
+      ok: true,
+      report: { passed: true },
+      draftContent: "# 第1章\n\n正文。",
+      draftTitle: "第1章",
+      overview: {},
+      ...(warnings ? { warnings } : {}),
+    };
+  }
+
+  const request = { projectPath: "/tmp/story-project", chapter: 1, chapterGoal: "开场" };
+
+  it("透传 200 响应的 warnings（enforce 降级留痕绝不能藏在类型层外）", async () => {
+    const warnings = ["draft enforce re-read failed: body not reloaded, serving buffered draft"];
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okDraftPayload(warnings), 200)));
+
+    const result = await generateDraft(request);
+
+    expect(result.warnings).toEqual(warnings);
+  });
+
+  it("响应不带 warnings 字段时结果为 undefined（无降级不造警告）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okDraftPayload(), 200)));
+
+    const result = await generateDraft(request);
 
     expect(result.warnings).toBeUndefined();
   });

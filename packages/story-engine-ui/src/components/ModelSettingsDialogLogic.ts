@@ -145,6 +145,33 @@ function parseProviderModels(
   return modelsByProvider;
 }
 
+/** buildModelSettingsConfig 的返回袋：合并产物 + 与之一致的清洗后任务表 + 清洗动作人话记录。 */
+export interface ModelSettingsBuildResult {
+  readonly config: Record<string, unknown>;
+  /** 清洗后的任务表（指向已删服务商的条目已剔除）：旁路 taskAssignments 载荷必须用它构建，与 config 同口径。 */
+  readonly cleanedTasks: Record<string, string>;
+  /** 本次合并的就地清洗动作（人话文案，直贴 UI 警告区）；空数组 = 零清洗。 */
+  readonly cleaningWarnings: readonly string[];
+}
+
+/** 表单重建 profile 时五件套旋钮的默认打底；磁盘同 id profile 的手调合法值盖过它，类型非法的回它。 */
+const PROFILE_KNOB_DEFAULTS = {
+  temperature: 0.7,
+  maxTokens: 4096,
+  timeoutMs: 60000,
+  retries: 2,
+  stream: true,
+} as const;
+
+/** 五件套旋钮的合法性口径：与引擎 validateModelSettingsV0 的 validateProfile 逐条同规则（镜像落地）。 */
+const PROFILE_KNOB_CHECKS = [
+  { key: "temperature", valid: (value: unknown) => typeof value === "number" },
+  { key: "maxTokens", valid: isPositiveInteger },
+  { key: "timeoutMs", valid: isPositiveInteger },
+  { key: "retries", valid: isNonNegativeInteger },
+  { key: "stream", valid: (value: unknown) => typeof value === "boolean" },
+] as const;
+
 /**
  * 表单路径重建整份 model-settings 配置。P2-3 残留洞修复：options.previousRawText 给当前磁盘配置原文
  * （GET 回显的打码文本）时，逐层以磁盘对象为合并底、表单改动覆盖其上——provider 对象层表单不认识的字段
@@ -154,6 +181,21 @@ function parseProviderModels(
  * 悬空即丢弃（防引擎 unknown_default_profile 把 PUT 打成 400）。customHeaders 的值是
  * 打码哨兵（键名保留、值不回显），PUT 时服务端 restoreMaskedCustomHeaders 还原磁盘真实值，哨兵绝不落盘；
  * 还原不了的条目服务端会进 warnings 如实告知。无 previousRawText / 文本非法 / 条目是新增 → 退化为旧的从零重建行为。
+ *
+ * 复审第四轮 P2-1：合并产物在返回前统一过兜底清洗（同族校验洞不再逐 code 打补丁）——磁盘手写配置
+ * 借「保留表单不认识的字段」合并带回、足以让引擎 validateModelSettingsV0 报 error/high 的三类残留
+ * 就地清洗，清洗动作逐条进 cleaningWarnings 如实告知，清洗不掉的才交给路由校验（如实 400）：
+ *  ① 整树剔除明文密钥字段（键名 apiKey/api_key，引擎 plaintext_api_key=high）——密钥绝不许落盘，
+ *    手写带回的剔除（warning 只报字段路径、绝不报值，值视同机密）；
+ *  ② 任务指向已删非 preset 服务商（引擎 unknown_profile_provider=error）——合并入口剔除该任务条目，
+ *    任务回未分配态由用户重新选择（UI 只有「分配」没有「取消分配」，不剔就是每次保存永久 400 死锁）；
+ *    清洗后的任务表随 cleanedTasks 返回，旁路 taskAssignments 载荷用它构建即与 config 同口径；
+ *  ③ 同 id 磁盘 profile 五件套类型非法（引擎 invalid_temperature 等=error）——回 PROFILE_KNOB_DEFAULTS，
+ *    与「表单重建默认打底」同口径，不再盲保留。
+ * 本文件不能 value-import 引擎（scripts/check-import-boundary.mjs 禁止 src/server/ 以外引
+ * @actalk/story-engine 进前端 bundle），清洗规则按引擎校验同口径镜像实现；「合并产物过真引擎
+ * validateModelSettingsV0 零 error/high」由 server 侧验收测试钉死
+ * （src/server/routes/model-settings-merge-validation.test.ts）。
  */
 export function buildModelSettingsConfig(
   savedProviders: readonly SavedProvider[],
@@ -162,7 +204,29 @@ export function buildModelSettingsConfig(
     readonly chatHistoryBudgetTokens?: number | null;
     readonly previousRawText?: string | null;
   },
-): Record<string, unknown> {
+): ModelSettingsBuildResult {
+  const cleaningWarnings: string[] = [];
+  // 清洗②前置到合并入口：任务指向的服务商既不在表单已存列表也不是 preset（磁盘手写 profile 指向
+  // 已删服务商，GET 反推把任务显示成「ghost|model」），合并只能造出悬空引用把 PUT 打成 400——
+  // 剔除该任务条目并 warning 告知；provider/profile/taskProfiles 三张表全由 cleanedTasks 构建。
+  const knownProviderIds = new Set<string>([
+    ...savedProviders.map((p) => p.id),
+    ...PROVIDER_PRESETS.map((p) => p.id),
+  ]);
+  const cleanedTasks: Record<string, string> = {};
+  for (const [key, val] of Object.entries(tasks)) {
+    if (!val) continue;
+    const [provId, model] = val.split("|");
+    if (!provId || !model) continue;
+    if (!knownProviderIds.has(provId)) {
+      cleaningWarnings.push(
+        `任务「${TASK_LABELS[key] ?? key}」指向的服务商「${provId}」已不存在，本次保存已清除该任务的模型分配，请重新为它选择模型。`,
+      );
+      continue;
+    }
+    cleanedTasks[key] = val;
+  }
+
   const previous = parsePreviousConfig(options?.previousRawText);
   const providerMap: Record<string, unknown> = {};
   const seenProviders = new Set<string>();
@@ -180,8 +244,7 @@ export function buildModelSettingsConfig(
     seenProviders.add(prov.id);
   }
 
-  for (const val of Object.values(tasks)) {
-    if (!val) continue;
+  for (const val of Object.values(cleanedTasks)) {
     const [provId] = val.split("|");
     if (!provId || seenProviders.has(provId)) continue;
     seenProviders.add(provId);
@@ -200,8 +263,7 @@ export function buildModelSettingsConfig(
 
   const profileMap: Record<string, unknown> = {};
   const finalTasks: Record<string, string> = {};
-  for (const [key, val] of Object.entries(tasks)) {
-    if (!val) continue;
+  for (const [key, val] of Object.entries(cleanedTasks)) {
     const [provId, model] = val.split("|");
     if (!provId || !model) continue;
     const profId = taskProfileId(provId, model);
@@ -209,11 +271,7 @@ export function buildModelSettingsConfig(
       profileMap[profId] = {
         // 五件套默认打底；磁盘同 id profile 的手调值盖过默认（这几个旋钮表单不管理），
         // 表单管理的 id/label/provider/model 最后写死、永远以表单为准。
-        temperature: 0.7,
-        maxTokens: 4096,
-        timeoutMs: 60000,
-        retries: 2,
-        stream: true,
+        ...PROFILE_KNOB_DEFAULTS,
         ...previous.profiles[profId],
         id: profId,
         label: model,
@@ -247,7 +305,60 @@ export function buildModelSettingsConfig(
     delete config.defaultProfile;
   }
   if (typeof budget === "number" && budget > 0) config.chatHistoryBudgetTokens = budget;
-  return config;
+  // 清洗①③：合并产物返回前的兜底清扫（明文密钥整树剔除 + 五件套非法值回默认，详见函数 docstring）。
+  stripPlaintextApiKeyFields(config, "$", cleaningWarnings);
+  resetInvalidProfileKnobs(config, cleaningWarnings);
+  return { config, cleanedTasks, cleaningWarnings };
+}
+
+/**
+ * 整树剔除明文密钥字段（引擎 findApiKeyFields 同口径：键名命中 apiKey/api_key 即 high 阻断）——
+ * 磁盘手写带回的密钥绝不许落盘；剔除逐条进 warnings（只报字段路径、绝不报值，值视同机密）。
+ */
+function stripPlaintextApiKeyFields(value: unknown, path: string, warnings: string[]): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => stripPlaintextApiKeyFields(item, `${path}[${index}]`, warnings));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, nested] of Object.entries(value)) {
+    const nestedPath = `${path}.${key}`;
+    if (key.toLowerCase() === "apikey" || key.toLowerCase() === "api_key") {
+      delete value[key];
+      warnings.push(
+        `磁盘配置中手写的明文密钥字段（${nestedPath}）已在保存时剔除——明文密钥不允许落盘，请改用「认证环境变量」或服务商密钥输入框。`,
+      );
+      continue;
+    }
+    stripPlaintextApiKeyFields(nested, nestedPath, warnings);
+  }
+}
+
+/** 五件套类型非法的磁盘手调值回默认（引擎 invalid_temperature/invalid_max_tokens 等同口径）。 */
+function resetInvalidProfileKnobs(config: Record<string, unknown>, warnings: string[]): void {
+  if (!isRecord(config.profiles)) return;
+  for (const [profileId, profile] of Object.entries(config.profiles)) {
+    if (!isRecord(profile)) continue;
+    for (const knob of PROFILE_KNOB_CHECKS) {
+      if (profile[knob.key] === undefined || knob.valid(profile[knob.key])) continue;
+      profile[knob.key] = PROFILE_KNOB_DEFAULTS[knob.key];
+      warnings.push(
+        `模型档案「${profileId}」手调的 ${knob.key} 值类型非法，已重置为默认值 ${String(PROFILE_KNOB_DEFAULTS[knob.key])}。`,
+      );
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
 }
 
 interface PreviousConfig {

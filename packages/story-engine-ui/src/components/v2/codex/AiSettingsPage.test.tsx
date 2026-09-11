@@ -334,6 +334,59 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     });
   });
 
+  it("persist 写盘前重新拉取合并底（rawTextRef 陈旧修复）：同会话他面改盘后的新字段不被静默抹掉", async () => {
+    const fixture = makeFetchFixture();
+    fetchModelSettings.mockResolvedValue(fixture);
+    await renderAndWaitLoaded();
+
+    // 同会话内他面（App 级设置弹窗）改盘：磁盘文本多出 defaultProfile 与手写顶层键，
+    // 本页 ref 仍停在挂载时的旧文本——persist 必须先 GET 刷新合并底再重建。
+    const updatedRaw = JSON.stringify({
+      ...JSON.parse(fixture.rawText),
+      defaultProfile: "deepseek_deepseek-chat",
+      someFutureTopLevel: { nested: [1, 2] },
+    });
+    fetchModelSettings.mockResolvedValue({ ...fixture, rawText: updatedRaw });
+    saveModelSettings.mockResolvedValue({ ...fixture, rawText: updatedRaw });
+
+    // 任意一次轻量旁路保存（切 thinking）即触发 persist
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(1);
+    });
+    // 挂载 1 次 + persist 预读 1 次：预读真实发生
+    expect(fetchModelSettings).toHaveBeenCalledTimes(2);
+    const config = JSON.parse(saveModelSettings.mock.calls[0][0] as string) as Record<string, unknown>;
+    // 合并底是新拉取的磁盘文本：他面新写的字段随合并保留，不被陈旧 ref 抹掉
+    expect(config.defaultProfile).toBe("deepseek_deepseek-chat");
+    expect(config.someFutureTopLevel).toEqual({ nested: [1, 2] });
+  });
+
+  it("磁盘手写明文 apiKey 经合并带回：保存时剔除、警告如实上屏且文案绝不含密钥值（P2-1 兜底清洗）", async () => {
+    const fixture = makeFetchFixture();
+    const raw = JSON.parse(fixture.rawText) as { providers: Record<string, Record<string, unknown>> };
+    raw.providers["my-relay"] = { ...raw.providers["my-relay"], apiKey: "sk-handwritten" };
+    const withKey = { ...fixture, rawText: JSON.stringify(raw) };
+    fetchModelSettings.mockResolvedValue(withKey);
+    saveModelSettings.mockResolvedValue(withKey);
+    await renderAndWaitLoaded();
+
+    // 切 thinking 触发轻量旁路保存：合并产物里的手写明文密钥必须被剔除
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+    await waitFor(() => {
+      expect(saveModelSettings).toHaveBeenCalledTimes(1);
+    });
+    const sentText = saveModelSettings.mock.calls[0][0] as string;
+    expect(sentText).not.toContain("sk-handwritten");
+    const sent = JSON.parse(sentText) as { providers: Record<string, Record<string, unknown>> };
+    expect("apiKey" in (sent.providers["my-relay"] ?? {})).toBe(false);
+    // 清洗动作如实进警告区（与服务端 warnings 同栏）；文案只报字段路径、绝不含密钥明文
+    await waitFor(() => {
+      expect(screen.getByText(/明文密钥字段/)).toBeTruthy();
+    });
+    expect(document.querySelector(".ms-warn-notice")?.textContent ?? "").not.toContain("sk-handwritten");
+  });
+
   it("整页表单路径持久化保留磁盘 provider 的 customHeaders（P2-3 残留洞），无头的 provider 不凭空带出", async () => {
     // 与服务端 MASKED_CUSTOM_HEADER_VALUE（server/routes/model-settings.ts）同字面量，内联守边界：
     // GET 回显里 customHeaders 值一律是此哨兵，服务端 PUT 时还原磁盘真值。

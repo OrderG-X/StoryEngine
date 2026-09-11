@@ -1144,12 +1144,21 @@ function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempot
 }
 
 /**
+ * 用户可见文案的路径消毒（铁律④·绝不泄露本地绝对路径）：与 commit-apply.ts scrubBareEntityIdsFromText /
+ * prune-snapshots.ts scrubLocalAbsolutePaths 的路径分支同一口径。errno 原文
+ * （如 `EACCES: permission denied, open '/abs/path/chapters/0001.md'`）内嵌绝对路径，直达用户前必须洗掉。
+ */
+function scrubLocalAbsolutePaths(text: string): string {
+  return text.replace(/'?\/(?:Users|home|var|tmp|private)\/[^'"\s]*'?/gu, "(本地路径)");
+}
+
+/**
  * pending 对账本身读失败（IO 异常）时的 409 文案：与「对不上」严格分开——
  * 上次定稿是否生效此时未知，出路只有稍后重试；回执是唯一证据，文案绝不提删除。
  */
 function pendingReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到未完成的同键定稿记录，但对账读取失败（${error}），无法确认上次定稿是否已生效；为避免重复写入，已拒绝自动重试。`
+  return `检测到未完成的同键定稿记录，但对账读取失败（${scrubLocalAbsolutePaths(error)}），无法确认上次定稿是否已生效；为避免重复写入，已拒绝自动重试。`
     + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
 }
 
@@ -1196,7 +1205,7 @@ function completedReceiptDiskMismatchMessage(projectDir: string, chapter: number
  */
 function completedReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到同键定稿的已完成记录，但磁盘对账读取失败（${error}），无法确认该章是否已入库；为避免谎报成功，已拒绝按重放返回。`
+  return `检测到同键定稿的已完成记录，但磁盘对账读取失败（${scrubLocalAbsolutePaths(error)}），无法确认该章是否已入库；为避免谎报成功，已拒绝按重放返回。`
     + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
 }
 

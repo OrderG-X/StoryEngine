@@ -373,6 +373,41 @@ export async function readFileContentWithRetry(
   return "";
 }
 
+/** D1 enforce 写前读旧稿的三态结果：缺席（首稿）/读到原文/存在但读不出（调用方须 fail-closed 拒稿）。 */
+export type PreviousDraftReadResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "present"; readonly content: string }
+  | { readonly kind: "unreadable"; readonly error: string };
+
+/**
+ * enforce 路的写前旧稿读取（P2-5 fail-closed）：旧稿原文是执法拒稿回滚的唯一凭据——旧稿存在但读失败
+ * 时若当「无旧稿」继续，拒稿回滚会走 rm 把盘上真稿删掉。故三态必须分清：ENOENT=真无旧稿（确定答案，
+ * 不重试；回滚删引擎新写的文件是对的）；读到=回滚写回原文；其余错误重试（L1 同口径 3×60ms）仍失败
+ * =unreadable——调用方在写盘前诚实拒稿（此刻引擎尚未落盘，真稿分毫不动），绝不删真稿。
+ * retries/delayMs 仅为单测可注入。
+ */
+export async function readPreviousDraftForRollback(
+  draftPath: string,
+  opts: { readonly retries?: number; readonly delayMs?: number } = {},
+): Promise<PreviousDraftReadResult> {
+  const retries = opts.retries ?? 3;
+  const delayMs = opts.delayMs ?? 60;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const content = await readFile(draftPath, "utf-8");
+      return { kind: "present", content };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+      lastError = error;
+      if (attempt < retries - 1 && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  return { kind: "unreadable", error: lastError instanceof Error ? lastError.message : String(lastError) };
+}
+
 /**
  * 自动去味一轮（最多一轮、不循环）：读工作稿全文 → runDeAiFlavorBatch 批量改写 → 有真改动才
  * 先快照（对齐 revise_draft 的覆盖前快照）+ 写盘 → 对改后正文复检同一套确定性规则，如实报剩余。
@@ -430,7 +465,14 @@ export async function runAutoDeAiRound(input: {
     };
   }
   // 覆盖刚写盘的工作稿前先快照（对齐 revise_draft），让自动去味可撤销。
-  const snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+  // 快照读稿 fail-closed 抛错时（P2-5）：本出稿的草稿确已落盘——绝不因去味中止而谎报整稿失败；
+  // 放弃本轮改写、原稿不动，error 如实报（与「改写失败=原稿不动+如实报」同款降级）。
+  let snapshotId: string | undefined;
+  try {
+    snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+  } catch (error) {
+    return notRun(error instanceof Error ? error.message : String(error));
+  }
   const written = `${result.updatedContent.trimEnd()}\n`;
   await writeFile(input.draftPath, written, "utf-8");
   // 复检：对改后正文重跑同一套确定性规则（low 不计入剩余——本来就不动它）。
@@ -840,7 +882,8 @@ export interface GenerateDraftPolicies {
   /**
    * D1 长度执法：
    *   "enforce_or_rollback"（HTTP 非流式路）——落盘后回读执法：低于下限 → 回滚旧稿 + rejection（路由投影 422）；
-   *     超上限 → 确定性裁剪重写落盘并重建 report.draftLength。
+   *     超上限 → 确定性裁剪重写落盘并重建 report.draftLength。写前读旧稿（回滚凭据）读不出 → 写盘前
+   *     诚实拒稿（ok:false、真稿不动），绝不带丢失的回滚凭据继续写（P2-5 fail-closed）。
    *   "annotate"（默认，工具路）——一次成稿不拒绝：照写盘，draftLength 透出 + summary ⚠ 标注。
    */
   readonly lengthPolicy?: "enforce_or_rollback" | "annotate";
@@ -1079,10 +1122,31 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   const { chapterGoal, maxTimelineEvents, lengthTarget, contextRanking, characterSelection } = run;
 
   // D1 enforce 策略：执法拒稿要回滚旧稿——写盘前先留旧稿原文（annotate 无回滚，不读）。
+  // P2-5 fail-closed：旧稿存在但读不出时诚实拒稿——继续写会让拒稿回滚丢旧稿原文、走 rm 误删真稿；
+  // 此刻引擎尚未落盘，拒稿即真稿分毫不动。
   const draftPath = defaultDraftPath(projectDir, chapter);
-  const previousDraftContent = lengthPolicy === "enforce_or_rollback"
-    ? await readFile(draftPath, "utf-8").catch(() => undefined)
+  const previousDraft = lengthPolicy === "enforce_or_rollback"
+    ? await readPreviousDraftForRollback(draftPath)
     : undefined;
+  if (previousDraft?.kind === "unreadable") {
+    const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
+    const contextBudget = optionalContextBudget(contextRanking);
+    const message =
+      `第 ${chapter} 章已有工作稿但读取失败（${previousDraft.error}）。` +
+      "为保护旧稿，本次未生成、未覆盖任何内容；请检查该文件后重试。";
+    return {
+      ok: false,
+      chapter,
+      issues: [message],
+      overview,
+      summary: message,
+      refreshScope: "full",
+      characterSelection,
+      ...contextBudget,
+      http: { draftContent: "", contextRanking },
+    };
+  }
+  const previousDraftContent = previousDraft?.kind === "present" ? previousDraft.content : undefined;
 
   const sharedDraftInput = sharedFastDraftInput(run, input);
   // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。

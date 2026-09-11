@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   attachDiagnostics,
@@ -963,6 +963,36 @@ async function applyCommitTransaction(
   return { passed: true };
 }
 
+/**
+ * Snapshot undo (git restore) unlinks every file a finalized transaction left
+ * behind — git tracks files, not directories — leaving a zero-file shell with
+ * no manifest. An empty shell holds no recovery evidence, so it is safe to
+ * drop; anything containing files (or symlinks) must still fail closed.
+ */
+async function isZeroFileDirectoryShell(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) return false;
+    if (!(await isZeroFileDirectoryShell(join(dir, entry.name)))) return false;
+  }
+  return true;
+}
+
+/**
+ * Remove a verified zero-file shell bottom-up. rmdir(2) only removes empty
+ * directories, so a file racing back in fails the cleanup instead of being
+ * deleted — recursive rm cannot offer that guarantee (no unlinkat).
+ */
+async function removeZeroFileDirectoryShell(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await removeZeroFileDirectoryShell(join(dir, entry.name));
+    }
+  }
+  await rmdir(dir);
+}
+
 async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Promise<void> {
   const txRoot = join(projectDir, ".story-engine-tx");
   let rootStats;
@@ -1001,6 +1031,18 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
       if (hasSnapshotManifest) {
         await validateSnapshotOnlyCommitResidue(snapshotManifestPath, entry.name, chapter);
         continue;
+      }
+      // Zero-file shells (e.g. undo unlinked every staged file) carry no
+      // evidence; drop them instead of bricking the project. Cleanup uses
+      // rmdir-only primitives — if a file raced back in, removal fails and
+      // the fail-closed throw below still applies.
+      if (await isZeroFileDirectoryShell(txDir)) {
+        try {
+          await removeZeroFileDirectoryShell(txDir);
+          continue;
+        } catch {
+          // Fall through to the fail-closed throw.
+        }
       }
       throw new Error(`Unreadable commit transaction residue at ${txDir}; refusing formal-state reads.`);
     }

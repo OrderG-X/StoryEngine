@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // snapshotBeforeDraftOverwrite（M6）：覆盖现有非空草稿前建快照、首次出稿不建。用临时项目 + 真实 git 快照验。
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createStoryProject } from "@actalk/story-engine";
@@ -55,5 +55,18 @@ describe("snapshotBeforeDraftOverwrite（M6 覆盖现有非空草稿前建快照
     await writeDraft(projectDir, 3, "# 第三章\n\n");
     const id = await snapshotBeforeDraftOverwrite(projectDir, 3, "第3章再次出稿前快照");
     expect(id).toBeUndefined();
+  });
+
+  // P2-5 fail-closed：旧稿存在但读不出绝不能当「无旧稿」跳过快照——否则紧接的覆盖写让旧稿从此无撤销点。
+  it.skipIf(process.platform === "win32")("草稿存在但读失败（ELOOP 自指 symlink）→ 抛错中止，不建快照、不动旧稿", async () => {
+    const projectDir = await makeProject();
+    const draftPath = defaultDraftPath(projectDir, 4);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await symlink(draftPath, draftPath); // 自指环：readFile 必 ELOOP，root 下也确定触发
+    const before = await listSnapshots(projectDir);
+    await expect(snapshotBeforeDraftOverwrite(projectDir, 4, "第4章再次出稿前快照"))
+      .rejects.toThrow(/读取失败/u);
+    expect((await listSnapshots(projectDir)).length).toBe(before.length); // 没建快照
+    expect((await lstat(draftPath)).isSymbolicLink()).toBe(true); // 旧稿（ symlink 本体）分毫未动
   });
 });
