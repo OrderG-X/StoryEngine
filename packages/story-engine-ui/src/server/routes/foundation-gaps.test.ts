@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -498,6 +498,38 @@ describe("foundation gap routes", () => {
       },
     });
     await expect(access(join(projectDir, "characters", "lin-xiao", "state.json"))).rejects.toThrow();
+  });
+
+  // 故障注入确定性版：tempPath 命名确定（targetFile.tmp-sha256(idempotencyKey) 前 12 位），
+  // 预先在该处放一个只读文件 → writeFile(临时文件) 必以 EACCES 失败，且留下「待清理」的占位文件。
+  // （rename(文件→文件) 无法靠文件系统状态造失败，故故障点选在写临时文件这一步。）
+  it.skipIf(process.platform === "win32")("cleans the staged temp file when the character state write fails mid-write", async () => {
+    projectDir = await createFoundationRouteProject();
+    await writeCharacterState(projectDir, "lin-xiao", { mood: "紧张", notes: "原始状态" });
+    const idempotencyKey = "state-confirm-tmp-cleanup";
+    const tempPath = join(projectDir, "characters", "lin-xiao", `state.json.tmp-${sha256(idempotencyKey).slice(0, 12)}`);
+    await writeFile(tempPath, "occupied", { encoding: "utf-8", mode: 0o444 });
+
+    const response = await callFoundationGapsRoute("/api/foundation-gaps/confirm-character-write", characterStateConfirmBody(projectDir, {
+      baseState: { mood: "紧张", notes: "原始状态" },
+      idempotencyKey,
+      statePatch: { mood: "冷静" },
+    }));
+
+    expect(response.statusCode).toBe(500);
+    expect(response.payload).toMatchObject({
+      ok: false,
+      result: {
+        status: "failed",
+        didWriteCharacterState: false,
+        rollbackAttempted: false,
+        rollbackSucceeded: null,
+      },
+    });
+    // 写入未发生：旧内容分毫未动，且不留 .tmp- 残渣（残留会被下一次快照扫进 git）。
+    await expect(readJson(projectDir, "characters/lin-xiao/state.json")).resolves.toEqual({ mood: "紧张", notes: "原始状态" });
+    const residue = (await readdir(join(projectDir, "characters", "lin-xiao"))).filter((entry) => entry.includes(".tmp-"));
+    expect(residue).toEqual([]);
   });
 });
 

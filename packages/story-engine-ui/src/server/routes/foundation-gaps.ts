@@ -416,6 +416,9 @@ async function confirmCharacterStateWrite(
     }, null, 2)}\n`, "utf-8");
     return { statusCode: 200, payload: { ok: true, result } };
   } catch (error) {
+    // tmp 残留给快照扫进 git 的前科（writeFileAtomic 同口径）：rename 未成功时临时文件还在原地，必须清掉；
+    // didWrite=true 时 rename 已消费掉 tempPath，force rm 对其自然空转。清理失败绝不盖过原始错误。
+    await rm(tempPath, { force: true }).catch(() => undefined);
     const rollback = didWrite ? await rollbackCharacterStateWrite(targetPath, backup) : { attempted: false, succeeded: null };
     return {
       statusCode: 500,

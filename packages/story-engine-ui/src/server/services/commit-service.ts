@@ -956,14 +956,21 @@ async function writeDurableCommitReceipt(projectDir: string, receipt: DurableCom
   const existing = await lstat(path);
   if (!existing.isFile() || existing.isSymbolicLink()) throw new Error(`Unsafe durable commit receipt: ${path}`);
   const tmp = join(dir, `.${sha256(receipt.idempotencyKey).slice(0, 16)}.${process.pid}.${Date.now()}.tmp`);
-  const handle = await open(tmp, "wx", 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
-    await handle.sync();
-  } finally {
-    await handle.close();
+    const handle = await open(tmp, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, "utf-8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tmp, path);
+  } catch (error) {
+    // 失败必清 tmp（writeFileAtomic 同口径）：残留会被下一次快照扫进 git。tmp 名带本进程 pid+时间戳，
+    // 只可能属于本次调用，force rm 不会误删别处的临时文件；清理失败也绝不盖过原始错误。
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
   }
-  await rename(tmp, path);
 }
 
 async function removePendingCommitReceipt(projectDir: string, receipt: DurableCommitReceipt): Promise<void> {

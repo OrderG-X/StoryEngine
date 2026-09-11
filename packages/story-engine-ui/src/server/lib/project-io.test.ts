@@ -21,6 +21,7 @@ import {
   resolveFoundationUpdateTargetId,
   withUiOverviewDetails,
   writeFileAtomic,
+  commitFilesAtomically,
 } from "./project-io.js";
 
 const EXPECTED_MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
@@ -1243,5 +1244,52 @@ describe("writeFileAtomic 原子写（失败不留 tmp 残留）", () => {
 
     const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
     expect(residue).toEqual([]);
+  });
+});
+
+describe("commitFilesAtomically 多文件原子提交（失败不留 tmp 残留）", () => {
+  it("全部就绪：逐文件原子落盘", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-multi-ok-"));
+    await commitFilesAtomically([
+      { path: join(dir, "a.json"), content: "{\"a\":1}\n" },
+      { path: join(dir, "b.json"), content: "{\"b\":2}\n" },
+    ]);
+
+    expect(await readFile(join(dir, "a.json"), "utf-8")).toBe("{\"a\":1}\n");
+    expect(await readFile(join(dir, "b.json"), "utf-8")).toBe("{\"b\":2}\n");
+    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
+    expect(residue).toEqual([]);
+  });
+
+  it("提交段 rename 中途失败 → 抛错、已提交文件不回滚、未提交的 tmp 全清", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-multi-fail-"));
+    const committedTarget = join(dir, "a.json");
+    const blockedTarget = join(dir, "blocked.json");
+    await mkdir(blockedTarget); // rename(文件, 已存在目录) 必失败，确定性命中提交段 catch
+
+    await expect(commitFilesAtomically([
+      { path: committedTarget, content: "{\"a\":1}\n" },
+      { path: blockedTarget, content: "{\"b\":2}\n" },
+    ])).rejects.toThrow();
+
+    // 文档口径：「部分提交」窗口不回滚已 rename 的文件，但绝不留 tmp 残渣（会被快照扫进 git）。
+    expect(await readFile(committedTarget, "utf-8")).toBe("{\"a\":1}\n");
+    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
+    expect(residue).toEqual([]);
+  });
+
+  it("staging 段失败 → 已 staged 的 tmp 也全清（旧口径回归锁）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-atomic-stage-fail-"));
+    const missingDirTarget = join(dir, "no-such-dir", "b.json"); // 目录不存在 → writeFile 直接 ENOENT
+
+    await expect(commitFilesAtomically([
+      { path: join(dir, "a.json"), content: "{\"a\":1}\n" },
+      { path: missingDirTarget, content: "{\"b\":2}\n" },
+    ])).rejects.toThrow();
+
+    const residue = (await readdir(dir)).filter((entry) => entry.endsWith(".tmp"));
+    expect(residue).toEqual([]);
+    // staging 段失败时原文件分毫未动
+    await expect(readFile(join(dir, "a.json"), "utf-8")).rejects.toThrow();
   });
 });
