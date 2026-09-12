@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
-import { SaveStatusPill } from "./components/v2/codex/SaveStatusPill.js";
 import ImmersiveAppShell from "./components/v2/ImmersiveAppShell.js";
 import ModelSettingsDialog from "./components/ModelSettingsDialog.js";
 import SnapshotHistoryDialog from "./components/SnapshotHistoryDialog.js";
@@ -16,7 +15,7 @@ import { useChat } from "./hooks/useChat.js";
 import { useFoundationGaps } from "./hooks/useFoundationGaps.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
 import { ChapterWorkspaceConflictError, fetchListDefaultBooks, saveChapterWorkspaceBeacon } from "./api/client.js";
-import { saveChatSessionMessagesBeacon } from "./api/chatSessionsClient.js";
+import { saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { createWorkflowMessage } from "./utils/workflowHelpers.js";
 import { countTextWords } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
@@ -197,6 +196,17 @@ export function App() {
   useEffect(() => {
     setProjectKey(projectPath ?? activeBookId);
   }, [projectPath, activeBookId]);
+
+  /* ---- 聊天保存被短路的可见信号（UI 审计 T1：绝不静默失败；客户端按会话去重，不会刷屏） ---- */
+  useEffect(() => {
+    setChatSessionSaveSkippedNotifier(() => {
+      useNavigationStore.getState().showToast(
+        "本次对话没有被保存：会话尚未成功加载。重新打开本书可恢复自动保存。",
+        5600,
+      );
+    });
+    return () => setChatSessionSaveSkippedNotifier(null);
+  }, []);
 
   /* ---- Hook instantiations ---- */
   const bookManagement = useBookManagement();
@@ -654,11 +664,11 @@ export function App() {
             onApplyCandidate: (content: string) => void workflow.handleApplyCandidate(content),
             onCloseCandidates: workflow.handleCloseCandidates,
             onToggleTheme: toggleTheme,
+            onRetryAutosave: () => { void retryFailedAutosave(); },
             overview: currentOverview,
           }}
         />
       </ErrorBoundary>
-      <SaveStatusPill onRetry={() => { void retryFailedAutosave(); }} />
       {toast && <div className="app-toast">{toast}</div>}
       <ErrorBoundary fallbackTitle="设置对话框出错">
         {settingsDialog}

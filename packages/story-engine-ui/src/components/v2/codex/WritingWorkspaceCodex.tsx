@@ -17,6 +17,7 @@ import { flattenCharacterSearchItem, searchLibraryIndex } from "./librarySearch.
 import OperationHistoryView from "./OperationHistoryView.js";
 import { ModelSettingsEmbedded } from "./ModelSettingsEmbedded.js";
 import { DisplaySettingsEmbedded } from "./DisplaySettingsEmbedded.js";
+import { SaveStatusPill } from "./SaveStatusPill.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
@@ -51,6 +52,11 @@ export const __CATS_FOR_TEST = CATS;
 const AI_MIN_WIDTH = 320;
 const AI_MAX_WIDTH = 640;
 const AI_DEFAULT_WIDTH = 372;
+// 窄视口右栏让位（T3）：中栏至少保住的宽度，与右栏的硬下限。
+// 视口装不下「左栏 + 中栏下限 + 右栏下限」时右栏自动收成 44px 竖条；装得下就把右栏压到能放下的宽度，
+// composer 与发送键永远在视口内（styles.css 的 body min-width:1180 已同步撤掉）。
+const MID_MIN_WIDTH = 480;
+const AI_FIT_MIN_WIDTH = 280;
 
 function readStoredAiWidth(): number {
   try {
@@ -184,6 +190,19 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 里用 calc(... * var(--codex-ui-zoom)) 同步放大。
   const railWidth = Math.round(RAIL_BASE_WIDTH * uiZoom);
 
+  // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
+  // 连右栏硬下限都装不下时自动收成 44px 竖条（手动展开仍允许，宽度照样被夹在装得下的范围）。
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const aiWidthThatFits = viewportWidth - railWidth - MID_MIN_WIDTH;
+  const aiAutoCollapsed = !isFullscreenView && aiWidthThatFits < AI_FIT_MIN_WIDTH;
+  const effectiveRightOpen = rightOpen && !aiAutoCollapsed;
+  const effectiveRightWidth = Math.max(AI_FIT_MIN_WIDTH, Math.min(rightWidth, aiWidthThatFits));
+
   return (
     <div
       className="codex-app"
@@ -195,8 +214,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         </div>
       )}
       {/* 设置类整页（AI 设置/显示设置）隐藏右 AI 栏（保留左侧栏）：让设置页有更宽空间。
-          其他视图保持三栏（第 3 列宽度可拖 rightWidth；折叠时收到 44px 回收写作空间。左栏宽度随 uiZoom 放大）。 */}
-      <div className="app" style={{ gridTemplateColumns: isFullscreenView ? `${railWidth}px 1fr` : `${railWidth}px 1fr ${rightOpen ? rightWidth : 44}px` }}>
+          其他视图保持三栏（第 3 列宽度可拖 rightWidth、随视口自动压缩 effectiveRightWidth；折叠/装不下时 44px 回收写作空间。左栏宽度随 uiZoom 放大）。 */}
+      <div className="app" style={{ gridTemplateColumns: isFullscreenView ? `${railWidth}px minmax(0, 1fr)` : `${railWidth}px minmax(0, 1fr) ${effectiveRightOpen ? effectiveRightWidth : 44}px` }}>
         {/* ══ 左：书架 ══ */}
         <aside className="rail">
           <div
@@ -214,7 +233,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           <div className="book">
             <div className="bk-title">{projectName}</div>
             <div className="bk-meta">长篇 · 当前第 {currentChapter.chapterNumber} 章</div>
-            <div className="bk-bar"><i /></div>
             <div className="bk-meta" style={{ marginTop: 5 }}>共 {realChapterCount} 章</div>
           </div>
           <div className="nav-sec">导航</div>
@@ -331,7 +349,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           ) : (
             // 写作台视图：左侧章节竖轨（可收起 + 搜索）+ 右侧 WritingDeskCodex（codex 沉浸聚光稿纸）。
             // 章节竖轨也是 .catrail（被 uiZoom 缩放），展开时列宽随 uiZoom 放大，避免缩放后裁切。
-            <div className="codex" style={{ gridTemplateColumns: deskRailOpen ? `calc(212px * var(--codex-ui-zoom)) 1fr` : "44px 1fr" }}>
+            <div className="codex" style={{ gridTemplateColumns: deskRailOpen ? `calc(212px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "44px minmax(0, 1fr)" }}>
               {deskRailOpen ? (
                 <nav className="catrail" aria-label="章节">
                   <div className="catrail-head">
@@ -387,13 +405,15 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             </div>
           )}
           </div>
+          {/* 保存状态 Pill：中栏底边右下角（.desk 相对定位），不再压右栏 AI 发送键（UI 审计 T8）。 */}
+          <SaveStatusPill onRetry={props.onRetryAutosave} />
         </main>
 
         {/* ══ 右：AI 对话（codex 视觉，AiChatCodex；唯一控制面） ══ */}
         {!isFullscreenView && (
           <AiChatCodex
             {...props}
-            rightOpen={rightOpen}
+            rightOpen={effectiveRightOpen}
             onToggleRight={() => setRightOpen((o) => !o)}
             onResizeStart={handleResizeStart}
           />

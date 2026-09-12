@@ -77,6 +77,7 @@ import {
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
 import { defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { countTextWords } from "../../utils/textUtils.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { positiveOrUndefined } from "../agent/tools/lenient-args.js";
 import { readAntiAiPatterns, readAntiRules } from "../agent/tools/check-ai-flavor.js";
@@ -1273,7 +1274,15 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   }
 
   // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带；enforce 裁剪后为重建版），透传关键信息进输出，绝不藏起来。
-  const draftLengthInfo = finalReport.draftLength ? buildDraftLengthInfo(finalReport.draftLength) : undefined;
+  // T14 统一口径：对外 actualLength 与稿纸顶栏同函数（countTextWords：去标题/frontmatter 的中文字符数），
+  // 杜绝顶栏「851 字」vs 回执「704 字」双口径；执法内部仍用引擎 CJK 计数（lengthStatus/bounds 不动）。
+  // 回读失败拿不到正文时保留引擎原计数，不谎报 0。
+  const draftLengthInfo = finalReport.draftLength
+    ? {
+      ...buildDraftLengthInfo(finalReport.draftLength),
+      actualLength: draftBody.trim() ? countTextWords(draftBody) : finalReport.draftLength.actualLength,
+    }
+    : undefined;
 
   // 出稿后保真软警告（裁决后）：确定性核对判漏的要点先经 AI 复核（带正文逐字引证才摘除误报），
   // 用裁决后结果如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。复核没跑成 → 维持确定性结论

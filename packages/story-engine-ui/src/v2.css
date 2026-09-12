@@ -15,6 +15,10 @@
   --se-v2-muted: #9a9893;
   --se-v2-faint: #6b6964;
   --se-v2-accent: #c8956c;
+  /* T11：--se-v2-surface / --se-v2-accent-hi 此前从未定义（悬浮工具条落冷灰 fallback、内嵌设置页「已配置」丢金）。
+     surface 取暖色浮层值（介于 panel 与 card 之间）；accent-hi 对齐 codex 高光金。 */
+  --se-v2-surface: #211d16;
+  --se-v2-accent-hi: #d9a441;
   --se-v2-success: #7a9e7e;
   --se-v2-danger: #b86b6b;
   --se-v2-warning: #d9a441;
@@ -45,6 +49,8 @@
   --se-v2-muted: #9a9893;
   --se-v2-faint: #6b6964;
   --se-v2-accent: #c8956c;
+  --se-v2-surface: #211d16;
+  --se-v2-accent-hi: #d9a441;
   --se-v2-success: #7a9e7e;
   --se-v2-danger: #b86b6b;
   --se-v2-warning: #d9a441;
@@ -1316,8 +1322,8 @@ body:has(.se-v2-shell),
 /*  shadcn Dialog theme overrides                                      */
 /* ------------------------------------------------------------------ */
 
-/* shadcn/Radix Dialog 暗金化：本项目 Tailwind 工具类未生成（index.css 用 @import "tailwindcss"
- * 但未挂 Tailwind v4 Vite 插件 —— build 后 .fixed/.bg-card/.z-50 等 0 命中），
+/* shadcn/Radix Dialog 暗金化：本项目不接 Tailwind 工具类（旧 index.css 的 @theme 从未被 main.tsx
+ * 引入，整文件死代码，已随 T12 删除 —— build 后 .fixed/.bg-card/.z-50 等 0 命中），
  * 故 Radix 弹窗的定位/面板/遮罩/页脚全靠这里的显式样式接管。
  * 共用此三件套的弹窗：新建书籍(NewBookStarter)/重命名/删除。 */
 .dialog-overlay {

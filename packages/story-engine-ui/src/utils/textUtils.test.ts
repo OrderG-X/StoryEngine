@@ -50,13 +50,23 @@ describe("cleanUiText", () => {
   });
 });
 
-describe("countTextWords", () => {
-  it("counts non-whitespace characters", () => {
-    expect(countTextWords("hello world")).toBe(10);
+describe("countTextWords（T14 统一口径：正文中文字符数，不含标题/frontmatter/占位符）", () => {
+  it("只数中文字符：标点、空白、西文不计", () => {
+    expect(countTextWords("你好，世界。")).toBe(4);
+    expect(countTextWords("hello world")).toBe(0);
   });
 
-  it("strips markdown headings", () => {
-    expect(countTextWords("# Title\ncontent")).toBe(7);
+  it("去掉 Markdown 标题行", () => {
+    expect(countTextWords("# 第一章 · 标题\n正文内容")).toBe(4);
+  });
+
+  it("去掉开头 frontmatter 块", () => {
+    expect(countTextWords("---\ntitle: 第一章\ndate: 2026-09-12\n---\n正文内容")).toBe(4);
+  });
+
+  it("显示用空草稿占位符 → 0（空稿不显示假字数）", () => {
+    expect(countTextWords("还没有草稿正文。\n\n你可以在右侧章节对话里输入第 1 章方向。")).toBe(0);
+    expect(countTextWords("还没有载入本章草稿正文。")).toBe(0);
   });
 
   it("handles empty string", () => {

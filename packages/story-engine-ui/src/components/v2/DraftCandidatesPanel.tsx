@@ -1,4 +1,5 @@
 import type { DraftCandidate } from "../../stores/workspaceStore.js";
+import { countTextWords } from "../../utils/textUtils.js";
 
 /**
  * 抽卡候选并排面板（阶段三块③）：「再来一版」生成的 2–3 个临时候选并排展示，点「用这版」替换当前草稿。
@@ -24,7 +25,8 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
               <article className="se-v2-candidate-card" key={index}>
                 <div className="se-v2-candidate-meta">
                   <span>候选 {index + 1}</span>
-                  <span>{countChars(body).toLocaleString()} 字</span>
+                  {/* T14 统一口径：候选字数与稿纸顶栏同函数（正文中文字符，不含标题）。 */}
+                  <span>{countTextWords(candidate.content).toLocaleString()} 字</span>
                 </div>
                 <div className="se-v2-candidate-body">{body}</div>
                 <button
@@ -48,8 +50,4 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
 /** 去掉候选正文开头的 markdown 标题行，只展示正文。 */
 function candidateBody(content: string): string {
   return content.replace(/^#\s.*(?:\r?\n){1,2}/u, "").trim();
-}
-
-function countChars(text: string): number {
-  return text.replace(/\s+/gu, "").length;
 }

@@ -27,6 +27,13 @@
   ::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:2px solid var(--bg);}
   ::-webkit-scrollbar-thumb:hover{background:#3a3833;}
 
+  /* 键盘焦点可见性（对齐 v2.css:132-137 的 se-v2 总规则）：Tab 走一圈每个落点都有金色描边。 */
+  :where(button, input, textarea, select, summary, [role="button"], [tabindex]):not(:disabled):focus-visible{
+    outline:2px solid rgba(217,164,65,.8);outline-offset:2px;
+    box-shadow:0 0 0 4px rgba(217,164,65,.16);}
+  :where(button, input, textarea, select, summary, [role="button"], [tabindex]):disabled:focus-visible{
+    outline:none;box-shadow:none;}
+
   /* ═══ 三栏 ═══ */
   /* 环境警告条（缺 git 等）：置顶细黄条，占独立一行、把 .app 往下顶（.app 高度用 flex 吃剩余）。 */
   display:flex; flex-direction:column;
@@ -48,10 +55,10 @@
   .brand .name small{display:block;font-weight:500;letter-spacing:.04em;color:var(--faint);font-size:11px;margin-top:2px;}
   .book{margin:4px 0 10px;padding:10px 12px;border-radius:var(--r-md);
     background:linear-gradient(135deg,rgba(200,149,108,.12),rgba(74,48,40,.4));border:1px solid var(--accent-line-soft);}
-  .book .bk-title{font-size:13px;font-weight:700;color:var(--text);line-height:1.4;}
+  /* 书名两行封顶、超长省略：62 字压测书名不再把左栏卡撑成一长条。 */
+  .book .bk-title{font-size:13px;font-weight:700;color:var(--text);line-height:1.4;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
   .book .bk-meta{font-size:10.5px;color:var(--muted);margin-top:5px;letter-spacing:.04em;}
-  .book .bk-bar{margin-top:8px;height:5px;border-radius:3px;background:rgba(0,0,0,.3);overflow:hidden;}
-  .book .bk-bar i{display:block;height:100%;width:18%;background:linear-gradient(90deg,var(--accent),var(--accent-hi));border-radius:3px;}
   .nav-sec{font-size:11px;letter-spacing:.18em;color:var(--faint);margin:14px 8px 6px;text-transform:uppercase;}
   .nav-item{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-radius:9px;
     color:var(--muted);font-size:12.5px;cursor:pointer;transition:.15s;border:1px solid transparent;
@@ -75,21 +82,23 @@
       radial-gradient(640px 420px at 110% 12%, rgba(217,164,65,.06), transparent 55%),
       radial-gradient(circle at 1.5px 1.5px, rgba(200,149,108,.035) 1px, transparent 0) 0 0/26px 26px;}
   .desk > *{position:relative;z-index:1;}
-  .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;row-gap:8px;
     padding:14px 26px;border-bottom:1px solid var(--line-faint);backdrop-filter:blur(6px);}
-  .crumbs{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);}
-  .crumbs b{color:var(--text);font-weight:600;}
-  .crumbs .sep{color:var(--faint);}
-  .crumbs .here{color:var(--accent-hi);font-weight:600;}
-  .topbar .right{display:flex;align-items:center;gap:10px;}
+  .crumbs{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);min-width:0;flex:1 1 auto;}
+  .crumbs b{color:var(--text);font-weight:600;min-width:0;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .crumbs .sep{color:var(--faint);flex:0 0 auto;}
+  .crumbs .here{color:var(--accent-hi);font-weight:600;white-space:nowrap;}
+  .crumbs span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .topbar .right{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
   .kbd{font-size:10.5px;color:var(--faint);border:1px solid var(--line);border-radius:6px;
     padding:3px 7px;background:rgba(0,0,0,.2);letter-spacing:.02em;}
   .iconbtn{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:transparent;
     color:var(--muted);cursor:pointer;display:grid;place-items:center;font-size:13px;transition:.15s;}
   .iconbtn:hover{color:var(--accent-hi);border-color:var(--accent-line-soft);background:var(--accent-soft);}
 
-  /* 类目竖轨 + 阅读窗。catrail 跟界面字号 uiZoom 缩放，列宽同步放大避免内容裁切。 */
-  .codex{flex:1;min-height:0;display:grid;grid-template-columns:calc(212px * var(--codex-ui-zoom,1)) 1fr;overflow:hidden;}
+  /* 类目竖轨 + 阅读窗。catrail 跟界面字号 uiZoom 缩放，列宽同步放大避免内容裁切。
+     右列 minmax(0,1fr)：长书名/长章节名不再把内容区顶出中栏（min-content 穿透）。 */
+  .codex{flex:1;min-height:0;display:grid;grid-template-columns:calc(212px * var(--codex-ui-zoom,1)) minmax(0,1fr);overflow:hidden;}
   .catrail{border-right:1px solid var(--line-faint);
     background:linear-gradient(180deg,rgba(22,20,15,.5),rgba(15,14,12,.2));
     padding:16px 12px;overflow-y:auto;zoom:var(--codex-ui-zoom,1);}
@@ -548,6 +557,9 @@
   /* 失败态：该步工具 ok:false（如审稿超时）——红圈 + 叹号，诚实不谎报。 */
   .ai-step.fail{color:var(--danger);}
   .ai-step.fail .st{border-color:var(--danger);color:var(--danger);background:rgba(200,72,72,.12);box-shadow:none;}
+  /* 停止态：该步被「■」腰斩（toolSteps=stopped）——中性灰圈 + ■，不是失败、不呼吸不转圈。 */
+  .ai-step.halt{color:var(--muted);}
+  .ai-step.halt .st{border-color:var(--line);color:var(--muted);background:var(--surface);box-shadow:none;font-size:9px;}
   /* 实时跑动：该步工具正在执行（toolSteps=running）——金光呼吸外再叠一圈转动金环，示意「此刻正在做」。 */
   .ai-step.live .st::before{content:"";position:absolute;inset:-4px;border-radius:50%;
     border:1.5px solid transparent;border-top-color:var(--accent-hi);animation:aiFlowSpin .85s linear infinite;}
@@ -593,7 +605,8 @@
     opacity:0;visibility:hidden;pointer-events:none;transition:opacity .18s ease;z-index:60;}
   .ai-step-tip.tip-left{left:-6px;transform:none;}
   .ai-step-tip.tip-right{left:auto;right:-6px;transform:none;}
-  .ai-step:hover .ai-step-tip{opacity:1;visibility:visible;}
+  .ai-step:hover .ai-step-tip,
+  .ai-step:focus-visible .ai-step-tip{opacity:1;visibility:visible;}
   /* 聊天区：「内容优先平铺」——不要气泡、不要框套框。
      用户消息=低调浅底圆角块（左对齐全宽，无气泡尾）；助手消息=完全裸的全宽文字（无框无边）；
      工具步=极淡的一行小字；思考=扁平折叠。回合之间用 gap 拉开节奏。 */
@@ -644,6 +657,8 @@
   .step-label{position:relative;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
   .step-label.is-tool{color:#6fbf8a;}  /* 工具名=明确的绿色（标记「做了动作」）；思考标签保持中性白。 */
   .step-fail{color:var(--danger);flex:0 0 auto;}
+  /* 已停止徽标（人喊停，不是失败）：中性灰、不红不金。 */
+  .step-stop{color:var(--muted);flex:0 0 auto;}
   .step-head .tm{color:var(--faint);font-size:10.5px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
   .step-caret{color:var(--muted);font-size:10px;flex:0 0 auto;transition:color .15s;}
   .step-head:hover:not(:disabled) .step-caret{color:var(--accent-hi);}
@@ -651,15 +666,12 @@
     color:var(--muted);font-size:12.5px;line-height:1.62;white-space:pre-wrap;}
   .process-log-children{margin:4px 0 2px 8px;padding-left:8px;border-left:1px solid var(--line-faint);
     display:flex;flex-direction:column;gap:2px;}
-  /* 光影：金色光带从标签字上扫过，常驻循环（既是装饰，也帮一眼认出这是「步骤」元素）。
-     文字本色不变 → 思考白 / 工具绿的区分始终保留;运行中那步扫得更快更亮，多分一层「在干活」。 */
-  /* 扫光位置由 .ai-body 上的全局时钟变量 --codex-sweep-x 驱动 → 所有步骤同相位、同时扫过（一个动作一个动画）。
-     运行中的那步不再单独变速，只把光带调亮，靠亮度区分「在干活」。 */
-  .step-label::after,.step-kind::after{content:"";position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(100deg,transparent 20%,rgba(217,164,65,.3) 50%,transparent 80%);
+  /* 光影：只有「正在跑」那步的标签字上扫金色光带（.is-active）；已完成/未开始的步骤静止。
+     常驻扫光会让金色亮斑随机停在某个字上，看起来像渲染故障的金方块（A-9/T9），故撤掉常驻扫。
+     扫光位置仍由 .ai-body 上的全局时钟变量 --codex-sweep-x 驱动，多步并发时同相位。 */
+  .step-label.is-active::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(100deg,transparent 16%,rgba(217,164,65,.5) 50%,transparent 84%);
     transform:translateX(var(--codex-sweep-x,-120%));}
-  .step-label.is-active::after{
-    background:linear-gradient(100deg,transparent 16%,rgba(217,164,65,.5) 50%,transparent 84%);}
   .suggest{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px 4px;}
   .chip{font-size:11.5px;padding:6px 11px;border-radius:16px;border:1px solid var(--line);background:var(--surface);
     color:var(--muted);cursor:pointer;transition:.15s;}
@@ -692,6 +704,8 @@
   .nextstep-choice:disabled::before{opacity:0;}
   .composer{display:flex;align-items:center;gap:9px;margin:8px 16px 14px;padding:12px 14px;border-radius:16px;
     border:1px solid var(--accent-line-soft);background:var(--surface);}
+  /* 输入区聚焦：整个 composer 亮金色描边（textarea 本身 outline:none，焦点感由外壳承担）。 */
+  .composer:focus-within{border-color:rgba(217,164,65,.55);box-shadow:0 0 0 2px rgba(217,164,65,.14);}
   .composer .ph{flex:1;font-size:12.5px;color:var(--faint);}
   .composer .send{width:30px;height:30px;border-radius:9px;border:0;display:grid;place-items:center;cursor:pointer;
     background:linear-gradient(150deg,var(--accent-hi),var(--accent));color:#1a140d;font-weight:900;font-size:14px;
@@ -727,6 +741,9 @@
   .codex-desk{
     position:relative;min-width:0;min-height:0;
     display:grid;grid-template-rows:auto 1fr auto;
+    /* 隐式单列必须 minmax(0,1fr)：否则该列=auto，被顶栏长书名的 max-content 撑到 1200px+，
+       稿纸随舞台一起右移钻进 AI 栏（A-2 根因）。 */
+    grid-template-columns:minmax(0,1fr);
     background:
       radial-gradient(1100px 680px at 50% 26%, rgba(217,164,65,.08), transparent 58%),
       radial-gradient(150% 120% at 50% 48%, transparent 30%, rgba(0,0,0,.68) 100%),
@@ -734,25 +751,32 @@
     overflow:hidden;
   }
 
-  /* 顶/底纤细悬浮条：半透 + 轻模糊，淡到不抢戏。 */
+  /* 顶/底纤细悬浮条：半透 + 轻模糊，淡到不抢戏。
+     min-width:0：grid 子项默认 min-width:auto 会被长书名 min-content 撑破，必须归零。 */
   .codex-desk-bar{
-    position:relative;z-index:3;display:flex;align-items:center;gap:14px;
+    position:relative;z-index:3;display:flex;align-items:center;gap:14px;min-width:0;
     padding:11px 24px;color:var(--muted);font-size:12px;
     background:linear-gradient(180deg,rgba(18,16,13,.72),rgba(18,16,13,.34));
     backdrop-filter:blur(7px);
   }
-  .codex-desk-bar-top{justify-content:space-between;border-bottom:1px solid var(--line-faint);}
+  .codex-desk-bar-top{justify-content:space-between;border-bottom:1px solid var(--line-faint);flex-wrap:wrap;row-gap:6px;}
   .codex-desk-bar-bottom{justify-content:flex-start;gap:18px;border-top:1px solid var(--line-faint);}
 
-  .codex-desk-bar .cd-title{display:flex;align-items:baseline;gap:10px;min-width:0;}
-  .codex-desk-bar .cd-book{color:var(--faint);font-size:11.5px;letter-spacing:.02em;white-space:nowrap;}
+  .codex-desk-bar .cd-title{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1 1 auto;overflow:hidden;}
+  /* 书名：左栏已常驻，这里只留一截指路——封顶 320px、超长省略、空间不够时它先缩（flex-shrink 大），
+     绝不挤掉章节名与右侧按钮组。 */
+  .codex-desk-bar .cd-book{color:var(--faint);font-size:11.5px;letter-spacing:.02em;white-space:nowrap;
+    flex:0 8 auto;min-width:0;max-width:min(320px,42%);overflow:hidden;text-overflow:ellipsis;}
+  /* 章节名：当前上下文主标识，不主动缩（最多缩到 3.2em，保证「第 N 章」级别可读），更长才省略。 */
   .codex-desk-bar .cd-chapter{color:var(--text);font-weight:650;font-size:13px;letter-spacing:.01em;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .codex-desk-bar .cd-flow{font-style:normal;font-size:10.5px;color:var(--accent);letter-spacing:.06em;
+    flex:0 1 auto;min-width:3.2em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .codex-desk-bar .cd-flow{font-style:normal;font-size:10.5px;color:var(--accent);letter-spacing:.06em;flex:0 0 auto;
     border:1px solid var(--accent-line-soft);border-radius:var(--r-pill);padding:1px 9px;background:var(--accent-soft);white-space:nowrap;}
   /* P1-7：工作稿旁常驻可编辑提示（低调，不抢戏）。 */
-  .codex-desk-bar .cd-edit-hint{font-style:normal;font-size:11.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap;}
-  .codex-desk-bar .cd-bar-right{display:flex;align-items:center;gap:14px;}
+  .codex-desk-bar .cd-edit-hint{font-style:normal;font-size:11.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap;flex:0 0 auto;}
+  /* 视口 <1600 时中栏顶栏空间紧张：藏掉这条提示，把宽度让给书名/章节名（T2）。 */
+  @media (max-width:1599px){.codex-desk-bar .cd-edit-hint{display:none;}}
+  .codex-desk-bar .cd-bar-right{display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:wrap;row-gap:6px;justify-content:flex-end;}
   .codex-desk-bar .cd-words{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap;}
   /* P1-8：专注写作开关（描边，非金色实心——金色实心留给区唯一主动作）。 */
   .codex-desk-bar .cd-focus-btn{
@@ -761,11 +785,11 @@
   .codex-desk-bar .cd-focus-btn:hover{color:var(--accent-hi);border-color:var(--accent-line-soft);background:var(--accent-soft);}
   .codex-desk-bar .cd-focus-btn.is-on{color:var(--accent-hi);border-color:var(--accent-line-soft);background:var(--accent-soft);}
 
-  /* 草稿/正文 toggle：纤细药丸，淡入背景。 */
+  /* 草稿/正文 toggle：纤细药丸，淡入背景。按钮 nowrap：窄栏时「工作稿」不再折成两行。 */
   .codex-desk-bar .cd-tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line-faint);
-    border-radius:var(--r-pill);background:rgba(0,0,0,.22);}
+    border-radius:var(--r-pill);background:rgba(0,0,0,.22);flex:0 0 auto;}
   .codex-desk-bar .cd-tabs button{border:0;background:transparent;color:var(--muted);font-size:11.5px;
-    padding:4px 13px;border-radius:var(--r-pill);cursor:pointer;transition:.15s;letter-spacing:.04em;}
+    padding:4px 13px;border-radius:var(--r-pill);cursor:pointer;transition:.15s;letter-spacing:.04em;white-space:nowrap;}
   .codex-desk-bar .cd-tabs button:hover{color:var(--text);}
   .codex-desk-bar .cd-tabs button.is-active{color:var(--accent-hi);background:var(--accent-soft);
     box-shadow:inset 0 0 0 1px var(--accent-line-soft);font-weight:600;}
@@ -780,7 +804,7 @@
   .codex-desk-bar-bottom .cd-reroll{margin-left:auto;}
 
   /* 中间舞台：固定不滚的暗场（含暗角），把「稿纸框」居中撑满、框内自滚。 */
-  .codex-desk-stage{position:relative;z-index:1;min-height:0;overflow:hidden;
+  .codex-desk-stage{position:relative;z-index:1;min-height:0;min-width:0;overflow:hidden;
     display:flex;flex-direction:column;align-items:center;padding:24px 24px 28px;}
   .codex-desk-stage::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
     background:radial-gradient(140% 108% at 50% 42%, transparent 38%, rgba(0,0,0,.74) 100%);}
@@ -1120,6 +1144,8 @@
   .codex-session-name .csn-edit{flex:0 0 auto;font-size:10px;opacity:0;color:var(--accent-hi);transition:.14s;}
   .codex-session-name:hover{color:var(--accent-hi);background:var(--accent-soft);}
   .codex-session-name:hover .csn-edit{opacity:.75;}
+  /* 键盘 Tab 到会话名时同样亮出 ✎（hover-reveal 的操作必须对键盘可达）。 */
+  .codex-session-name:focus-visible .csn-edit{opacity:.75;}
   /* 就地改名 input（头部会话名点后展开）。 */
   .codex-session-name-input{
     flex:1 1 auto;min-width:0;
@@ -1221,6 +1247,7 @@
     opacity:0;transition:opacity .13s;
   }
   .cssp-item:hover .cssp-actions,
+  .cssp-item:focus-within .cssp-actions,
   .cssp-item.is-active .cssp-actions{opacity:1;}
   .cssp-btn{
     width:22px;height:22px;border:1px solid transparent;background:transparent;
@@ -1317,15 +1344,19 @@
 .codex-app .op-history-error{font-size:13px;color:#e88;padding:10px 12px;border:1px solid rgba(238,136,136,.3);border-radius:8px;margin-bottom:12px;}
 .codex-app .op-history-list{display:flex;flex-direction:column;gap:8px;}
 .codex-app .op-history-item{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);}
-.codex-app .op-history-item strong{font-size:13px;font-weight:600;color:var(--ink);}
+.codex-app .op-history-item strong{font-size:13px;font-weight:600;color:var(--text);}
 .codex-app .op-history-time{font-size:12px;color:var(--muted);white-space:nowrap;}
 .codex-app .op-history-item button{font-size:12px;padding:5px 12px;border:1px solid var(--accent);border-radius:8px;background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap;}
 .codex-app .op-history-item button:disabled{opacity:.5;cursor:default;}
+
+/* AI 设置页搜索框（.asm-search 本体在 aiSettings.css）：键盘聚焦时金色描边，与 composer 同款焦点语言。 */
+.codex-app .asm-search:focus-within{border-color:rgba(217,164,65,.55);box-shadow:0 0 0 2px rgba(217,164,65,.14);}
 
 /* 视图切换淡入（key=view 重建触发） */
 .codex-app .view-anim {
   height: 100%;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   animation: codex-view-fade-in 0.18s ease-out;
@@ -1341,3 +1372,18 @@
     transform: translateY(0);
   }
 }
+
+/* 保存状态 Pill（UI 审计 T8）：挂在中栏 main.desk 内绝对定位，底边右下角——
+   不再 fixed 压右栏 AI composer 的发送键；max-width 限制失败态宽度，超长错误文本截断。 */
+.codex-app .desk > .save-pill{position:absolute;right:16px;bottom:16px;z-index:40;
+  display:inline-flex;align-items:center;gap:8px;max-width:min(460px,calc(100% - 32px));
+  padding:6px 12px;border-radius:9px;font-size:12.5px;
+  box-shadow:0 6px 20px -6px rgba(0,0,0,.5);pointer-events:auto;}
+.codex-app .save-pill-saving{background:rgba(24,22,18,.92);border:1px solid rgba(217,164,65,.35);color:var(--accent-hi);}
+.codex-app .save-pill-saved{background:rgba(24,22,18,.9);border:1px solid rgba(120,160,120,.35);color:#9ec49e;}
+.codex-app .save-pill-error{background:#3a1512;border:1px solid #b4443a;color:#f4c7c1;}
+.codex-app .save-pill-dot{width:7px;height:7px;border-radius:50%;background:var(--accent-hi);opacity:.9;}
+.codex-app .save-pill-title{font-weight:600;white-space:nowrap;}
+.codex-app .save-pill-detail{opacity:.85;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.codex-app .save-pill-retry{margin-left:4px;padding:3px 10px;border-radius:6px;border:1px solid #b4443a;
+  background:transparent;color:#f4c7c1;cursor:pointer;font:inherit;white-space:nowrap;}

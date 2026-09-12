@@ -142,7 +142,7 @@ export default function TimelineCodexPanel({
           {l2Descending.length > 3 ? (
             <button
               type="button"
-              style={{ cursor: "pointer", border: "1px dashed var(--bd, #30363d)", padding: "4px 8px", borderRadius: 4, background: "transparent", color: "inherit", marginTop: 4 }}
+              style={{ cursor: "pointer", border: "1px dashed var(--line)", padding: "4px 8px", borderRadius: 4, background: "transparent", color: "inherit", marginTop: 4 }}
               onClick={() => setL2Expanded((v) => !v)}
             >
               {l2Expanded ? "◂ 折叠" : `▸ 展开更早 ${l2Descending.length - 3} 章`}

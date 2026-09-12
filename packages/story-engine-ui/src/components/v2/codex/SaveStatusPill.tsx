@@ -3,14 +3,16 @@
  *
  * 订阅 autosaveControl 快照：保存中显示低调「保存中…」，成功后短暂显示「已保存」再淡出，
  * 失败则常驻红色「保存失败」+ 手动「重试」，并做有限次指数退避自动重试（避免用户以为已保存实则丢失）。
- * 渲染在 .codex-app 之外（App 根），故用内联样式、不依赖 codex 作用域变量。
+ * 渲染在 .codex-app 中栏（main.desk）底边右下角（UI 审计 T8：不再 fixed 压右栏 composer 发送键），
+ * 样式走 codex.css 的 .save-pill 作用域规则。
  */
 import { useEffect, useRef, useState } from "react";
-import { subscribeAutosave, type AutosaveSnapshot } from "../../../utils/autosaveControl.js";
+import { flushAutosaveNow, subscribeAutosave, type AutosaveSnapshot } from "../../../utils/autosaveControl.js";
 
 const MAX_AUTO_RETRIES = 4;
 
-export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
+export function SaveStatusPill({ onRetry }: { readonly onRetry?: () => void }) {
+  const retry = onRetry ?? (() => { void flushAutosaveNow(); });
   const [snap, setSnap] = useState<AutosaveSnapshot>({ status: "idle", hasPending: false, lastError: null, lastSavedAt: null });
   const [showSaved, setShowSaved] = useState(false);
   const retryCountRef = useRef(0);
@@ -37,7 +39,7 @@ export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
         const delay = Math.min(30_000, 2_000 * 2 ** retryCountRef.current);
         retryTimerRef.current = setTimeout(() => {
           retryCountRef.current += 1;
-          onRetry();
+          retry();
         }, delay);
       }
     } else if (snap.status === "saved" || snap.status === "idle") {
@@ -46,19 +48,19 @@ export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, [snap.status, snap.lastError, onRetry]);
+  }, [snap.status, snap.lastError, retry]);
 
   if (snap.status === "error") {
     return (
-      <div style={{ ...baseStyle, background: "#3a1512", border: "1px solid #b4443a", color: "#f4c7c1" }} role="status" aria-live="polite">
-        <span style={{ fontWeight: 600 }}>保存失败</span>
-        <span style={{ opacity: 0.85, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <div className="save-pill save-pill-error" role="status" aria-live="polite">
+        <span className="save-pill-title">保存失败</span>
+        <span className="save-pill-detail">
           {snap.lastError ?? "未知错误"}
         </span>
         <button
           type="button"
-          onClick={() => { retryCountRef.current = 0; onRetry(); }}
-          style={{ marginLeft: 4, padding: "3px 10px", borderRadius: 6, border: "1px solid #b4443a", background: "transparent", color: "#f4c7c1", cursor: "pointer", font: "inherit" }}
+          className="save-pill-retry"
+          onClick={() => { retryCountRef.current = 0; retry(); }}
         >
           重试
         </button>
@@ -68,8 +70,8 @@ export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
 
   if (snap.status === "saving") {
     return (
-      <div style={{ ...baseStyle, background: "rgba(24,22,18,.92)", border: "1px solid rgba(217,164,65,.35)", color: "#d9a441" }} role="status" aria-live="polite">
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#d9a441", opacity: 0.9 }} aria-hidden="true" />
+      <div className="save-pill save-pill-saving" role="status" aria-live="polite">
+        <span className="save-pill-dot" aria-hidden="true" />
         保存中…
       </div>
     );
@@ -77,7 +79,7 @@ export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
 
   if (showSaved) {
     return (
-      <div style={{ ...baseStyle, background: "rgba(24,22,18,.9)", border: "1px solid rgba(120,160,120,.35)", color: "#9ec49e" }} role="status" aria-live="polite">
+      <div className="save-pill save-pill-saved" role="status" aria-live="polite">
         已保存
       </div>
     );
@@ -85,18 +87,3 @@ export function SaveStatusPill({ onRetry }: { readonly onRetry: () => void }) {
 
   return null;
 }
-
-const baseStyle: React.CSSProperties = {
-  position: "fixed",
-  right: 16,
-  bottom: 16,
-  zIndex: 60,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  borderRadius: 9,
-  fontSize: 12.5,
-  boxShadow: "0 6px 20px -6px rgba(0,0,0,.5)",
-  pointerEvents: "auto",
-};

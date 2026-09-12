@@ -3,6 +3,8 @@
  * All rules are declarative: add/remove entries in textRules without touching the engine.
  */
 
+import { isRealDraftContent } from "./draftContent.js";
+
 const STORY_WORD_PATTERN = /\bstory\b/giu;
 
 const textRules: Array<[pattern: string | RegExp, replacement: string]> = [
@@ -80,8 +82,19 @@ function looksLikePathText(value: string): boolean {
   return value.includes("/") || /\.json\b/iu.test(value);
 }
 
+/**
+ * 全仓唯一字数口径（UI 审计 T14：稿纸顶栏 / AI 回执 / 审稿计量 / 候选面板同函数同口径）：
+ * 正文字数 = 去掉开头 frontmatter（---…--- 块）与 Markdown 标题行后的中文字符数
+ * （字符集 [\u3400-\u9fff]，与引擎 countDraftChineseCharacters 同源；标点、空白、西文不计）。
+ * 显示用空草稿占位符（「还没有草稿正文…」，见 draftContent.isRealDraftContent）不是正文 → 0，
+ * 空稿顶栏不再显示假字数。
+ */
 export function countTextWords(text: string): number {
-  return text.replace(/^#.*$/gmu, "").replace(/\s+/gu, "").length;
+  if (!isRealDraftContent(text)) return 0;
+  const body = text
+    .replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/u, "")
+    .replace(/^#.*$/gmu, "");
+  return (body.match(/[\u3400-\u9fff]/gu) ?? []).length;
 }
 
 /**

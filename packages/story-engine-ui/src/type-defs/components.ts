@@ -21,6 +21,8 @@ export interface WritingWorkspaceLayoutProps {
   readonly onOpenSettings?: () => void;
   readonly onOpenUsage?: () => void;
   readonly onToggleTheme?: () => void;
+  /** 自动保存失败时「重试」回调（App 侧按上次失败 payload 原样重发）；缺省时 Pill 退回 flushAutosaveNow。 */
+  readonly onRetryAutosave?: () => void;
   readonly onSendMessage?: (message: string) => void;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出的内容保留、不报错。chatLoading 时展示「停止」按钮调用。 */
   readonly onStopAgent?: () => void;
