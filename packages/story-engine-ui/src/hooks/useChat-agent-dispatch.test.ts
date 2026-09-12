@@ -855,4 +855,189 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(assistant.toolSteps![0]).toMatchObject({ status: "completed", dryRun: false });
     expect(assistant.content).toContain("备份已保存");
   });
+
+  /* ---- A-5 「停止」收尾：abort 统一走回合收尾 ---- */
+
+  /** 装一条「发出工具调用后挂起、直到调用方 abort 才干净返回」的流（复刻 streamAgentChat 的 clean-abort 口径）。 */
+  function scriptAbortableStream(begin: (handlers: AgentChatHandlers) => void): void {
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers, signal) => {
+      begin(handlers);
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      // 真实 streamAgentChat 对用户主动 abort：不 onError、不 throw，干净返回。
+    });
+  }
+
+  it("流式出稿中途点「停止」→ running 步骤结算 stopped、flowStatus 复位、已流出内容保留、拉一次磁盘对账", async () => {
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftDelta?.({ chapter: 3, text: "已流出的一截新正文。" });
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      flowStatus: "draft_ready", draftContent: "短", hasDraftFile: true, hasCommittedChapter: false, revision: 5,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+
+    const agentMessage = messages().find((m) => (m.toolSteps?.length ?? 0) > 0)!;
+    // 残留 running → stopped（不是 failed），补 endedAt；金光/字幕随之静止。
+    expect(agentMessage.toolSteps![0].status).toBe("stopped");
+    expect(typeof agentMessage.toolSteps![0].endedAt).toBe("number");
+    // 不再卡「正在生成草稿」：编辑器有已流出内容 → draft_ready。
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_ready");
+    // 已写出的内容保留。
+    expect(useWorkspaceStore.getState().workspace.draft.content).toContain("已流出的一截新正文");
+    // 写类工具在飞 → 拉了一次磁盘对账（盘上稿更短 → 不覆盖编辑器）。
+    expect(mockedFetchChapterWorkspace).toHaveBeenCalledWith(
+      { projectPath: "/tmp/story-engine-agent", chapter: 3 },
+      expect.any(AbortSignal),
+    );
+    // 停止不是失败：无错误气泡。
+    expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
+    expect(useWorkspaceStore.getState().chatLoading).toBe(false);
+  });
+
+  it("「停止」后盘上稿更完整（服务端停止前已写完）→ 采用盘稿并如实回报", async () => {
+    const fullDraftOnDisk = "这是服务端在停止前其实已经写完整的一整章正文，比编辑器里流出的半截要长得多。";
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftDelta?.({ chapter: 3, text: "半截。" });
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      flowStatus: "draft_ready", draftContent: fullDraftOnDisk, draftTitle: "夜探祠堂",
+      hasDraftFile: true, hasCommittedChapter: false, revision: 9,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.workspace.draft).toMatchObject({
+      chapterNumber: 3,
+      title: "夜探祠堂",
+      content: fullDraftOnDisk,
+      savedContent: fullDraftOnDisk, // 编辑器与盘一致，autosave 不会立刻回写
+      status: "draft",
+    });
+    expect(state.workspace.flowStatus).toBe("draft_ready");
+    expect(state.workspaceRevision).toBe(9);
+    expect(messages().some((m) => m.content.includes("磁盘核对"))).toBe(true);
+  });
+
+  it("「停止」后用户又动过编辑器 → 不用盘稿盖掉新编辑", async () => {
+    const gate = deferred<{
+      chapter: number; messages: []; selectedAdviceCardKeys: [];
+      flowStatus: string; draftContent: string; hasDraftFile: boolean; hasCommittedChapter: boolean; revision: number;
+    }>();
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftDelta?.({ chapter: 3, text: "半截。" });
+    });
+    mockedFetchChapterWorkspace.mockReturnValueOnce(gate.promise as never);
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写第三章，主角夜探祠堂"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    act(() => { result.current.stopAgent(); });
+    await vi.waitFor(() => expect(mockedFetchChapterWorkspace).toHaveBeenCalled());
+    // 对账读盘期间，用户又改了一版。
+    act(() => {
+      useWorkspaceStore.getState().updateDraft({ content: "用户停止后亲手改的新版本。" });
+    });
+    gate.resolve({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      flowStatus: "draft_ready", draftContent: "盘上其实有一版长得多的完整稿，但绝不能盖掉用户的新编辑。", hasDraftFile: true, hasCommittedChapter: false, revision: 6,
+    });
+    await act(async () => { await pending; });
+
+    expect(useWorkspaceStore.getState().workspace.draft.content).toBe("用户停止后亲手改的新版本。");
+  });
+
+  it("「停止」腰斩 commit_apply 且盘证一致 → 按「其实已入库」整体恢复", async () => {
+    const committedBody = "停止前其实已经真正入库定稿的正文。";
+    useWorkspaceStore.getState().updateDraft({
+      content: committedBody,
+      savedContent: committedBody,
+      title: "磁盘定稿标题",
+      status: "draft",
+    });
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "commit_apply", toolCallId: "c1" });
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      flowStatus: "committed", draftContent: committedBody, draftTitle: "磁盘定稿标题",
+      hasDraftFile: true, hasCommittedChapter: true, revision: 21,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("确认定稿"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().chatLoading).toBe(true));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.workspace.flowStatus).toBe("committed");
+    expect(state.workspace.draft).toMatchObject({ content: committedBody, status: "committed" });
+    expect(state.workspace.currentChapter.hasCommittedChapter).toBe(true);
+    expect(messages().some((m) => m.content.includes("其实已经入库"))).toBe(true);
+  });
+
+  it("纯读回合点「停止」→ 步骤结算 stopped、不拉磁盘对账、流程态不动", async () => {
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "read_state_overview", toolCallId: "r1" });
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("现在写到哪了"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().chatLoading).toBe(true));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+
+    const agentMessage = messages().find((m) => (m.toolSteps?.length ?? 0) > 0)!;
+    expect(agentMessage.toolSteps![0].status).toBe("stopped");
+    expect(mockedFetchChapterWorkspace).not.toHaveBeenCalled();
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("idle");
+    expect(useWorkspaceStore.getState().chatLoading).toBe(false);
+  });
+
+  it("被「停止」腰斩的回合不做诚实盖文——半截流式文本不等于「声称完成」", async () => {
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onTextDelta("第3章正文已经写好了，接下来");
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      hasDraftFile: false, hasCommittedChapter: false, revision: 3,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写第三章"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().chatLoading).toBe(true));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+
+    const agentMessage = messages().find((m) => (m.toolSteps?.length ?? 0) > 0)!;
+    expect(agentMessage.toolSteps![0].status).toBe("stopped");
+    // 不被「操作未完成」盖掉：停止回合的半截文本原样保留。
+    expect(agentMessage.content).toBe("第3章正文已经写好了，接下来");
+    expect(agentMessage.content).not.toContain("没有检测到");
+  });
 });

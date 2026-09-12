@@ -6,6 +6,7 @@ import {
   presentationFor,
   resolveToolStepLabel,
   projectAgentEvent,
+  settleStoppedAgentTurn,
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 
@@ -672,5 +673,54 @@ describe("质检明细投影（quality_check → message.qualityReport）", () =
       { type: "tool-result", toolCallId: "q", toolName: "quality_check", endedAt: 2, output: { ok: true, qualityReport: refined } },
     ]);
     expect(message.qualityReport).toEqual(refined);
+  });
+});
+
+describe("settleStoppedAgentTurn（A-5 「停止」收尾结算）", () => {
+  it("残留 running 的步骤/卡片 → stopped + 补 endedAt；completed/failed 原样保留", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "c1", toolName: "read_state_overview", startedAt: 100 },
+      {
+        type: "tool-result",
+        toolCallId: "c1",
+        toolName: "read_state_overview",
+        endedAt: 200,
+        output: { summary: "读到了。", refreshScope: "full", overview: {} },
+      },
+      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 300 },
+    ]);
+    const settled = settleStoppedAgentTurn(message, 999);
+    expect(settled.toolSteps).toHaveLength(2);
+    // 已完成的步骤原样（状态/endedAt 不动）。
+    expect(settled.toolSteps![0]).toMatchObject({ id: "c1", status: "completed", endedAt: 200 });
+    // 残留 running → stopped（不是 failed：不是工具失败，是人喊停）+ 补 endedAt。
+    expect(settled.toolSteps![1]).toMatchObject({ id: "g1", status: "stopped", endedAt: 999 });
+    // 对应的 running agentCard 一并结算（read_state_overview 的卡已 completed、不动）。
+    expect(settled.agentCards).toHaveLength(1);
+    expect(settled.agentCards![0].status).toBe("completed");
+  });
+
+  it("running 的 agentCard（foundation_write 在飞）→ stopped", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "f1", toolName: "foundation_write", startedAt: 10 },
+    ]);
+    const settled = settleStoppedAgentTurn(message, 20);
+    expect(settled.toolSteps![0].status).toBe("stopped");
+    expect(settled.agentCards![0].status).toBe("stopped");
+  });
+
+  it("没有 running 步骤 → 内容等价（纯问答回合零成本）", () => {
+    const message = project([{ type: "text-delta", text: "好的。" }]);
+    const settled = settleStoppedAgentTurn(message, 5);
+    expect(settled.toolSteps ?? []).toEqual([]);
+    expect(settled.content).toBe("好的。");
+  });
+
+  it("不改入参（纯函数）", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
+    ]);
+    settleStoppedAgentTurn(message, 2);
+    expect(message.toolSteps![0].status).toBe("running");
   });
 });

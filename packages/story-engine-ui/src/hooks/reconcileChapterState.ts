@@ -46,3 +46,18 @@ export function flowStatusAfterGenerateFailure(
   if (flowNow !== "draft_generating") return null;
   return hasDraftContent ? "draft_ready" : "idle";
 }
+
+/**
+ * 「停止」后磁盘对账判定（治 A-5：出稿/改稿流到一半被 abort，SSE 回执丢了，但服务端可能在停止前
+ * 已把完整稿写进 drafts/fast——generate_draft 是落盘工具）。盘上草稿比停止那刻编辑器里的长 →
+ * 服务端写完了更全的一版 → 采用盘稿恢复；否则（盘上更短/一致/为空）保留编辑器里已流出的内容。
+ * 纯函数、无副作用；调用方负责先确认「停止后用户没再改过编辑器」再采用。
+ */
+export function shouldAdoptDiskDraftAfterStop(
+  snapshot: { readonly draftContent?: string },
+  editorContentAtStop: string,
+): boolean {
+  const disk = snapshot.draftContent?.trim() ?? "";
+  if (!disk) return false;
+  return disk.length > editorContentAtStop.trim().length;
+}

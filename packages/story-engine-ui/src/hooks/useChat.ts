@@ -5,6 +5,7 @@ import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
   emptyAssistantMessage,
   projectAgentEvent,
+  settleStoppedAgentTurn,
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
 import { deriveIntentTitle } from "./deriveIntentTitle.js";
@@ -12,7 +13,7 @@ import { nextFlowAfterToolResult } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
-import { flowStatusAfterGenerateFailure, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
+import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
 import { honestyRewritePatch } from "./detectUnbackedCompletion.js";
 import { DIRECT_WRITE_FALLBACK_GOAL, matchDeterministicChapterAction } from "../utils/chapterActionIntents.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
@@ -20,6 +21,7 @@ import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosav
 import type {
   ChapterAdviceCard,
   ChapterAgentCard,
+  ChapterWorkspaceSnapshot,
   FoundationGapAppliedWrite,
   FoundationGapApplyPlan,
   FoundationGapChatResult,
@@ -1604,6 +1606,70 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 用完整章节快照恢复正文/标题/文件标记/revision/流程态，而不是只改一个 flowStatus。
       let reconciliationPromise: Promise<void> | null = null;
       let commitReconciliationDraft: string | null = null;
+      // A-5：本轮是否出现过章节写类工具调用（generate_draft/revise_draft/commit_apply）——
+      // 「停止」收尾时据此决定要不要拉一次磁盘对账（纯读/问答回合不浪费这次 IO）。
+      let sawChapterWriteToolCall = false;
+      // 磁盘真值读取：5s 超时兜底，绝不让对账把回合收尾卡死（对账尽力而为，失败当没拉到）。
+      const fetchChapterSnapshotWithTimeout = async (chapter: number): Promise<ChapterWorkspaceSnapshot | undefined> => {
+        if (!projectPath) return undefined;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const reconciliationAbort = new AbortController();
+        return Promise.race([
+          fetchChapterWorkspace({ projectPath, chapter }, reconciliationAbort.signal),
+          new Promise<undefined>((resolve) => {
+            timeoutId = setTimeout(() => {
+              reconciliationAbort.abort();
+              resolve(undefined);
+            }, 5_000);
+          }),
+        ]).finally(() => {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        });
+      };
+      // 据磁盘快照把「其实已入库」的完整章节态恢复进工作区（错误对账与停止对账共用同一恢复动作）。
+      const adoptCommittedSnapshot = (snap: ChapterWorkspaceSnapshot, chapter: number): void => {
+        const store = useWorkspaceStore.getState();
+        const current = store.workspace;
+        const draftContent = snap.draftContent ?? current.draft.content;
+        const draftTitle = snap.draftTitle ?? current.draft.title;
+        const flowStatus = snap.flowStatus ?? "committed";
+        store.updateWorkspace({
+          flowStatus,
+          currentChapter: {
+            ...current.currentChapter,
+            title: draftTitle,
+            hasCommittedChapter: snap.hasCommittedChapter === true,
+            hasDraftFile: snap.hasDraftFile === true,
+            hasWorkspaceSnapshot: true,
+          },
+          chapters: current.chapters.map((item) => item.chapterNumber === chapter
+            ? {
+              ...item,
+              title: draftTitle,
+              hasCommittedChapter: snap.hasCommittedChapter === true,
+              hasDraftFile: snap.hasDraftFile === true,
+              hasWorkspaceSnapshot: true,
+            }
+            : item),
+          draft: {
+            ...current.draft,
+            chapterNumber: chapter,
+            title: draftTitle,
+            content: draftContent,
+            savedContent: draftContent,
+            wordCount: draftContent.trim() ? countTextWords(draftContent) : undefined,
+            status: flowStatus === "committed" || flowStatus === "ready_for_next" ? "committed" : "draft",
+          },
+        });
+        const revision = snap.revision ?? 0;
+        recordWorkspaceRevision(projectPath, chapter, revision);
+        store.setWorkspaceRevision(revision);
+        appendMessage({
+          id: `assistant-reconcile-${Date.now()}`,
+          role: "assistant",
+          content: `（磁盘核对：第 ${chapter} 章其实已经入库了——上一步可能因网络/连接中断没收到回执、看起来像失败，但磁盘上确已写入。已把状态更正为「已入库」。）`,
+        });
+      };
       const reconcileChapterFromDisk = async (): Promise<void> => {
         try {
           if (!projectPath) return;
@@ -1611,67 +1677,61 @@ export function useChat(params: UseChatParams): UseChatResult {
           if (attemptedDraftContent === null) return;
           const chapter = operation.chapter;
           if (typeof chapter !== "number") return;
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          const reconciliationAbort = new AbortController();
-          const snap = await Promise.race([
-            fetchChapterWorkspace({ projectPath, chapter }, reconciliationAbort.signal),
-            new Promise<undefined>((resolve) => {
-              timeoutId = setTimeout(() => {
-                reconciliationAbort.abort();
-                resolve(undefined);
-              }, 5_000);
-            }),
-          ]).finally(() => {
-            if (timeoutId !== undefined) clearTimeout(timeoutId);
-          });
+          const snap = await fetchChapterSnapshotWithTimeout(chapter);
           if (!snap) return;
           if (!ownsCurrentWorkspace()) return;
           const flowNow = useWorkspaceStore.getState().workspace.flowStatus;
           if (shouldReconcileCommitAttempt(snap, flowNow, attemptedDraftContent)) {
-            const store = useWorkspaceStore.getState();
-            const current = store.workspace;
-            const draftContent = snap.draftContent ?? current.draft.content;
-            const draftTitle = snap.draftTitle ?? current.draft.title;
-            const flowStatus = snap.flowStatus ?? "committed";
-            store.updateWorkspace({
-              flowStatus,
-              currentChapter: {
-                ...current.currentChapter,
-                title: draftTitle,
-                hasCommittedChapter: snap.hasCommittedChapter === true,
-                hasDraftFile: snap.hasDraftFile === true,
-                hasWorkspaceSnapshot: true,
-              },
-              chapters: current.chapters.map((item) => item.chapterNumber === chapter
-                ? {
-                  ...item,
-                  title: draftTitle,
-                  hasCommittedChapter: snap.hasCommittedChapter === true,
-                  hasDraftFile: snap.hasDraftFile === true,
-                  hasWorkspaceSnapshot: true,
-                }
-                : item),
-              draft: {
-                ...current.draft,
-                chapterNumber: chapter,
-                title: draftTitle,
-                content: draftContent,
-                savedContent: draftContent,
-                wordCount: draftContent.trim() ? countTextWords(draftContent) : undefined,
-                status: flowStatus === "committed" || flowStatus === "ready_for_next" ? "committed" : "draft",
-              },
-            });
-            const revision = snap.revision ?? 0;
-            recordWorkspaceRevision(projectPath, chapter, revision);
-            store.setWorkspaceRevision(revision);
-            appendMessage({
-              id: `assistant-reconcile-${Date.now()}`,
-              role: "assistant",
-              content: `（磁盘核对：第 ${chapter} 章其实已经入库了——上一步可能因网络/连接中断没收到回执、看起来像失败，但磁盘上确已写入。已把状态更正为「已入库」。）`,
-            });
+            adoptCommittedSnapshot(snap, chapter);
           }
         } catch {
           // 对账尽力而为，绝不让它破坏错误收尾路径。
+        }
+      };
+      // A-5 停止对账：写类工具在飞时被「停止」腰斩，SSE 回执丢失，但服务端可能在停止前已写完整稿
+      // （generate_draft 落 drafts/fast）或已入库（commit_apply）。拉一次磁盘真值：
+      //   ① commit_apply 在飞且盘证一致 → 复用「其实已入库」整体恢复；
+      //   ② 盘上草稿比停止那刻编辑器里的更全 → 采用盘稿（停止后用户又动过编辑器则不盖）；
+      //   否则保留编辑器里已流出的内容（「已停止 · 已写出的内容保留」）， autosave 随后照常落盘。
+      const reconcileAbortedTurnFromDisk = async (): Promise<void> => {
+        try {
+          if (!projectPath) return;
+          const chapter = operation.chapter;
+          if (typeof chapter !== "number") return;
+          const attemptedDraftContent = commitReconciliationDraft;
+          const editorAtStop = useWorkspaceStore.getState().workspace.draft.content;
+          const snap = await fetchChapterSnapshotWithTimeout(chapter);
+          if (!snap) return;
+          if (!ownsCurrentWorkspace()) return;
+          const flowNow = useWorkspaceStore.getState().workspace.flowStatus;
+          if (attemptedDraftContent !== null && shouldReconcileCommitAttempt(snap, flowNow, attemptedDraftContent)) {
+            adoptCommittedSnapshot(snap, chapter);
+            return;
+          }
+          if (!shouldAdoptDiskDraftAfterStop(snap, editorAtStop)) return;
+          const live = useWorkspaceStore.getState();
+          if (live.workspace.draft.content !== editorAtStop) return;
+          const draftContent = snap.draftContent ?? "";
+          const draftTitle = snap.draftTitle ?? extractDraftTitle(draftContent) ?? live.workspace.draft.title;
+          live.updateWorkspace({ flowStatus: "draft_ready" });
+          live.updateDraft({
+            chapterNumber: chapter,
+            title: draftTitle,
+            content: draftContent,
+            savedContent: draftContent,
+            wordCount: countTextWords(draftContent),
+            status: "draft",
+          });
+          const revision = snap.revision ?? 0;
+          recordWorkspaceRevision(projectPath, chapter, revision);
+          live.setWorkspaceRevision(revision);
+          appendMessage({
+            id: `assistant-stop-reconcile-${Date.now()}`,
+            role: "assistant",
+            content: `（磁盘核对：第 ${chapter} 章的工作稿已按盘上更完整的一版恢复。）`,
+          });
+        } catch {
+          // 对账尽力而为，绝不让它破坏停止收尾路径。
         }
       };
       const requestChapterReconciliation = (): void => {
@@ -1705,6 +1765,10 @@ export function useChat(params: UseChatParams): UseChatResult {
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;
               project({ type: "tool-call", toolCallId: stepIdFor(toolName, toolCallId), toolName, startedAt: Date.now() });
+              // A-5：记一笔「本轮有章节写类工具」——「停止」收尾时拉一次磁盘对账（回执可能被腰斩、盘上其实已写）。
+              if (toolName === "generate_draft" || toolName === "revise_draft" || toolName === "commit_apply") {
+                sawChapterWriteToolCall = true;
+              }
               // 出稿/续写一开始就把中间区切到写作台，让用户看着正文出现（而不是默默落进数据层、还停在资料中心）。
               if (toolName === "generate_draft") {
                 useNavigationStore.getState().requestCenterView("desk");
@@ -1895,6 +1959,19 @@ export function useChat(params: UseChatParams): UseChatResult {
         unstickGeneratingFlow();          // 出稿失败：标题区别卡在「正在生成草稿」
         requestChapterReconciliation(); // R2 兜底：未捕获异常路径也对账一次
       } finally {
+        // A-5 停止收尾：用户点「■」abort 只是断了流（streamAgentChat 对主动 abort 不报错、不收尾），
+        // 回合收尾必须在这里补齐——
+        //   ① 残留 running 的步骤/卡片结算成「已停止」（不是 failed：不是工具失败，是人喊停），金光/字幕随之静止；
+        //   ② 卡在「正在生成草稿」的流程态同步按编辑器现状复位（盘上真值随后异步再校）；
+        //   ③ 写类工具在飞 → 拉一次磁盘对账（回执丢了但盘上可能已写完整稿/已入库）。
+        const wasAborted = abortController.signal.aborted;
+        if (wasAborted && ownsCurrentWorkspace()) {
+          updateMessage(assistantMsgId, (current) => settleStoppedAgentTurn(current, Date.now()));
+          unstickGeneratingFlow();
+          if (sawChapterWriteToolCall) {
+            reconciliationPromise ??= reconcileAbortedTurnFromDisk();
+          }
+        }
         // 保持 operation 所有权直到盘上真值读完；否则异步 fetch 刚返回，finally 已释放 token，
         // 对账会把本应恢复的成功结果误当成迟到数据丢掉。
         if (reconciliationPromise) await reconciliationPromise;
@@ -1910,8 +1987,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           }));
         }
         // A1 谎报探针：回合「看似成功」（无 error）却声称已生成/已写入/已入库、且零写类工具成功 → 用确定性失败文案盖掉假成功。
-        // 错误回合已有 error 气泡 + R2 对账，不在此重复。
-        if (!sawError && ownsCurrentWorkspace()) {
+        // 错误回合已有 error 气泡 + R2 对账，不在此重复。被「停止」腰斩的回合也不盖——流是被掐断的，
+        // 半截文本不等于「声称完成」，「已停止」步骤结算 + 字幕已如实表达，再叠「没有执行」是双重谎报。
+        if (!wasAborted && !sawError && ownsCurrentWorkspace()) {
           const finished = useWorkspaceStore.getState().workspace.messages.find((m) => m.id === assistantMsgId);
           if (finished) {
             // 诚实收尾：盖掉假成功正文的同时，清掉同条消息上 agent 顺手挂的诱导卡（「直接入库」/「质检通过」），
@@ -2210,6 +2288,25 @@ export function useChat(params: UseChatParams): UseChatResult {
 
   /* ---- handleSuggestedAction ---- */
 
+  // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
+  // 已完成的动作（如「撤回本次修改」撤回成功后还能再点），成假入口。失败/未执行不摘，留着重试。
+  const consumeSuggestedAction = useCallback(
+    (consumed: SuggestedAction): void => {
+      const store = useWorkspaceStore.getState();
+      const carrier = [...store.workspace.messages].reverse().find((m) =>
+        m.role === "assistant"
+        && (m.suggestedActions ?? []).some((a) => a.id === consumed.id && a.endpoint === consumed.endpoint));
+      if (!carrier) return;
+      updateMessage(carrier.id, (current) => ({
+        ...current,
+        suggestedActions: (current.suggestedActions ?? []).filter(
+          (a) => !(a.id === consumed.id && a.endpoint === consumed.endpoint),
+        ),
+      }));
+    },
+    [updateMessage],
+  );
+
   const handleSuggestedAction = useCallback(
     (action: SuggestedAction) => {
       if (action.disabledReason) {
@@ -2265,6 +2362,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             return handleApplyFoundationGapSuggestionsFromChat(ids);
           }).then((result) => {
             if (!result) return;
+            consumeSuggestedAction(action);
             // 修3：只有真有写入才挂撤销按钮，避免「啥也没写却给假撤销」。
             const undoActions = (result?.writes?.length ?? 0) > 0 && result?.undo ? [buildUndoFoundationWriteAction(result.undo.undoId)] : [];
             appendMessage({
@@ -2281,6 +2379,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           if (!handleApplyFoundationGapSuggestionsFromChat) return;
           void runOwnedFoundationWrite(() => handleApplyFoundationGapSuggestionsFromChat(ids)).then((result) => {
             if (!result) return;
+            consumeSuggestedAction(action);
             const undoActions = (result?.writes?.length ?? 0) > 0 && result?.undo ? [buildUndoFoundationWriteAction(result.undo.undoId)] : [];
             appendMessage({
               id: `assistant-foundation-applied-${Date.now()}`,
@@ -2303,6 +2402,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           }
           void runOwnedFoundationWrite(() => handleRollbackFoundationGapApplyFromChat(undoId)).then((ok) => {
             if (ok === null) return;
+            if (ok) consumeSuggestedAction(action);
             appendMessage({
               id: `assistant-foundation-undone-${Date.now()}`,
               role: "assistant",
@@ -2337,6 +2437,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       handleApplyFoundationGapSuggestionsFromChat,
       handleRollbackFoundationGapApplyFromChat,
       appendMessage,
+      consumeSuggestedAction,
       runAgentDispatch,
       runOwnedFoundationWrite,
     ],

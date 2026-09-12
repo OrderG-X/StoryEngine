@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterAgentCard } from "../../api/types.js";
 import type { ChapterMessage } from "../../types.js";
-import { buildTimelineModel, liveFlowFromMessage } from "./agentTimelineModel.js";
+import { buildTimelineModel, liveFlowFromMessage, timelineStepStatusLabel } from "./agentTimelineModel.js";
 
 function message(overrides: Partial<ChapterMessage>): ChapterMessage {
   return { id: "m1", role: "assistant", content: "回复正文", ...overrides };
@@ -221,5 +221,44 @@ describe("liveFlowFromMessage（四步实时态）", () => {
       toolSteps: [{ id: "a", label: "生成正文", toolName: "generate_draft", status: "failed", startedAt: 1 }],
     }))!;
     expect(live.draft.status).toBe("failed");
+  });
+
+  it("stopped 如实透出 stopped（A-5：人喊停腰斩的步不再转圈、也不混进 done/failed）", () => {
+    const live = liveFlowFromMessage(message({
+      toolSteps: [
+        { id: "a", label: "生成章节方向", toolName: "generate_chapter_steering", status: "completed", startedAt: 1 },
+        { id: "b", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 2, endedAt: 3 },
+      ],
+    }))!;
+    expect(live.understand.status).toBe("done");
+    expect(live.draft.status).toBe("stopped");
+    expect(live.polish.status).toBe("idle");
+  });
+});
+
+describe("stopped 步骤的时间线归并（A-5）", () => {
+  it("含 stopped 步 → state=attention 且摘要说「已停止」（不说「待确认/已完成」）", () => {
+    const model = buildTimelineModel(message({
+      toolSteps: [
+        { id: "a", label: "读取", toolName: "read_state_overview", status: "completed", startedAt: 1, endedAt: 2 },
+        { id: "b", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 3, endedAt: 4 },
+      ],
+    }))!;
+    expect(model.state).toBe("attention");
+    expect(model.summary).toContain("已停止");
+  });
+
+  it("stopped 与 failed 并存 → failed 优先（真失败如实报失败）", () => {
+    const model = buildTimelineModel(message({
+      toolSteps: [
+        { id: "a", label: "生成正文", toolName: "generate_draft", status: "stopped", startedAt: 1, endedAt: 2 },
+        { id: "b", label: "质检", toolName: "quality_check", status: "failed", startedAt: 3, endedAt: 4 },
+      ],
+    }))!;
+    expect(model.state).toBe("failed");
+  });
+
+  it("timelineStepStatusLabel 如实翻译 stopped", () => {
+    expect(timelineStepStatusLabel("stopped")).toBe("已停止");
   });
 });

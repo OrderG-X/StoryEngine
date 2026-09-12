@@ -697,7 +697,7 @@ export type ChapterChatIntent =
   | "write_story_settings"
   | "chapter_complete";
 
-export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial";
+export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped";
 
 export interface ToolStep {
   readonly id: string;
@@ -762,7 +762,7 @@ export interface QualityCardReport {
   readonly summary: string;
 }
 
-export type ChapterAgentCardStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "needs_confirmation" | "saved" | "rejected" | "partial";
+export type ChapterAgentCardStatus = "queued" | "running" | "completed" | "blocked" | "failed" | "needs_confirmation" | "saved" | "rejected" | "partial" | "stopped";
 
 export type ChapterAgentCardKind =
   | "orchestrator"

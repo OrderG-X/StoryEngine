@@ -7,7 +7,7 @@ import type { ChapterAgentCard, ToolStep } from "../../api/types.js";
 import type { ChapterMessage } from "../../types.js";
 import { uiText } from "./v2Utils.js";
 
-export type TimelineStepStatus = "pending" | "running" | "completed" | "failed" | "needs_confirmation" | "partial";
+export type TimelineStepStatus = "pending" | "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped";
 
 export interface TimelineStep {
   readonly id: string;
@@ -108,6 +108,7 @@ const agentCardStatusMap: Record<ChapterAgentCard["status"], TimelineStepStatus>
   failed: "failed",
   blocked: "failed",
   rejected: "failed",
+  stopped: "stopped",
 };
 
 function agentCardTimelineStatus(status: ChapterAgentCard["status"]): TimelineStepStatus {
@@ -116,7 +117,7 @@ function agentCardTimelineStatus(status: ChapterAgentCard["status"]): TimelineSt
 
 function timelineState(steps: readonly TimelineStep[]): TimelineState {
   if (steps.some((step) => step.status === "failed")) return "failed";
-  if (steps.some((step) => step.status === "needs_confirmation" || step.status === "partial")) return "attention";
+  if (steps.some((step) => step.status === "needs_confirmation" || step.status === "partial" || step.status === "stopped")) return "attention";
   if (steps.some((step) => step.status === "running" || step.status === "pending")) return "running";
   return "completed";
 }
@@ -127,7 +128,11 @@ function timelineSubject(cards: readonly ChapterAgentCard[]): string {
 
 function timelineStatusText(steps: readonly TimelineStep[], state: TimelineState, cards: readonly ChapterAgentCard[]): string {
   if (state === "failed") return "执行遇到问题";
-  if (state === "attention") return "待确认";
+  if (state === "attention") {
+    // 停止（人喊停）与待确认/部分完成分开说——停止不是「等你确认」。
+    if (steps.some((step) => step.status === "stopped")) return "已停止";
+    return "待确认";
+  }
   if (state === "running") {
     const current = steps.find((step) => step.status === "running") ?? steps.find((step) => step.status === "pending");
     return `正在${current?.label ?? "执行"}`;
@@ -191,6 +196,7 @@ export function timelineStepStatusLabel(status: TimelineStepStatus): string {
     failed: "失败",
     needs_confirmation: "待确认",
     partial: "部分完成",
+    stopped: "已停止",
   };
   return labels[status];
 }
@@ -210,7 +216,7 @@ const TOOL_FLOW_PHASE: Readonly<Record<string, FlowPhaseKey>> = {
   commit_apply: "commit",
 };
 
-export type LiveFlowPhaseStatus = "idle" | "running" | "done" | "failed";
+export type LiveFlowPhaseStatus = "idle" | "running" | "done" | "failed" | "stopped";
 
 export interface LiveFlowPhase {
   readonly status: LiveFlowPhaseStatus;
@@ -239,7 +245,10 @@ export function liveFlowFromMessage(message: ChapterMessage | undefined): LiveFl
   const toLive = (step: ToolStep | undefined): LiveFlowPhase => {
     if (!step) return IDLE_PHASE;
     const status: LiveFlowPhaseStatus =
-      step.status === "running" ? "running" : step.status === "failed" ? "failed" : "done";
+      step.status === "running" ? "running"
+        : step.status === "failed" ? "failed"
+          : step.status === "stopped" ? "stopped"
+            : "done";
     const detail = step.detail?.trim();
     return detail ? { status, detail } : { status };
   };

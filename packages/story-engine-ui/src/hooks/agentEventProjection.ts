@@ -414,6 +414,23 @@ function recordTurnEffects(
   return next;
 }
 
+/**
+ * 「停止」收尾结算：用户点「■」abort 了流，残留 running 的步骤/卡片结算成 stopped——
+ * 不是 failed（不是工具自己失败，是人喊停），补 endedAt 让耗时落地。其余状态原样保留。
+ * 纯函数、不改入参；供 useChat 回合 finally 在 clean-abort 时调用（错误路径仍走 tool-error→failed）。
+ */
+export function settleStoppedAgentTurn(message: ChapterMessage, endedAt: number): ChapterMessage {
+  const toolSteps = message.toolSteps?.map((step) =>
+    step.status === "running" ? { ...step, status: "stopped" as const, endedAt } : step);
+  const agentCards = message.agentCards?.map((card) =>
+    card.status === "running" ? { ...card, status: "stopped" as const } : card);
+  return {
+    ...message,
+    ...(toolSteps ? { toolSteps } : {}),
+    ...(agentCards ? { agentCards } : {}),
+  };
+}
+
 function cardIdFor(toolCallId: string): string {
   return `agent-card-${toolCallId}`;
 }

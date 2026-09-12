@@ -31,6 +31,7 @@ import { ChatSessionBar } from "./ChatSessionBar.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt } from "./nextStepChoices.js";
+import { latestTurnSuggestedActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import {
   foldProcessSegments,
@@ -143,6 +144,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // （那套死选项不看你这章具体情况、还会和 agent 正文打架，正是 suggest_next_steps 当初要治的病）。
   // agent 没提议的回合就不出卡，顺着它正文走或直接打字即可。点选项=给 agent 发一句意图。
   const nextStep = busy ? null : lastAssistantNextStepPrompt(props.workspace.messages);
+  // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤回本次修改/确认写入资料…）。
+  // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
+  const railActions = busy ? [] : latestTurnSuggestedActions(props.workspace.messages);
   const canClear = Boolean(props.onClearChat) && props.workspace.messages.length > 0 && !workspaceBusy;
 
   return (
@@ -292,6 +296,26 @@ export default function AiChatCodex(props: AiChatCodexProps) {
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
       <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} />
+
+      {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
+          作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），
+          不是绕过对话的直连引擎按钮。 ── */}
+      {railActions.length > 0 && props.onSuggestedAction ? (
+        <div className="suggest" aria-label="建议动作">
+          {railActions.map((action) => (
+            <button
+              key={`${action.id}::${action.endpoint ?? ""}`}
+              type="button"
+              className="chip"
+              disabled={Boolean(action.disabledReason)}
+              title={action.disabledReason ?? uiText(action.description)}
+              onClick={() => props.onSuggestedAction?.(action)}
+            >
+              {uiText(action.label)}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {/* ── 输入区（含「正在思考」浮层） ── */}
       <div style={{ position: "relative" }}>
@@ -452,6 +476,10 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
   if (!live) return null;
   const running = FLOW_STEPS.find((s) => live[s.key].status === "running");
   if (running) return { text: `正在${running.label}…`, running: true };
+  // 「停止」收尾后（残留 running 已结算成 stopped）：常驻如实字幕，直到下一回合覆盖。
+  if (FLOW_STEPS.some((s) => live[s.key].status === "stopped")) {
+    return { text: "已停止 · 已写出的内容保留", running: false };
+  }
   const acted = FLOW_STEPS.filter((s) => live[s.key].status === "done" || live[s.key].status === "failed");
   const last = acted[acted.length - 1];
   if (!last) return null;
@@ -463,11 +491,13 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
 function AiFlow({ flowStatus, live }: { readonly flowStatus: ChapterFlowStatus; readonly live: LiveFlow | null }) {
   const current = flowStepIndex(flowStatus);
   // 每步状态：实时态（toolSteps 派生）优先；该相没有 live 数据时退回 flowStatus 基线下标。
-  const stepCls = (index: number, key: FlowPhaseKey): { cls: "done" | "on" | "fail" | ""; running: boolean } => {
+  // stopped（人喊停）= 既非完成也非失败的中性「停」态（halt），不转圈、不走红。
+  const stepCls = (index: number, key: FlowPhaseKey): { cls: "done" | "on" | "fail" | "halt" | ""; running: boolean } => {
     const status = live?.[key].status;
     if (status === "running") return { cls: "on", running: true };
     if (status === "done") return { cls: "done", running: false };
     if (status === "failed") return { cls: "fail", running: false };
+    if (status === "stopped") return { cls: "halt", running: false };
     return { cls: index < current ? "done" : index === current ? "on" : "", running: false };
   };
   const states = FLOW_STEPS.map((step, index) => stepCls(index, step.key));
@@ -479,10 +509,14 @@ function AiFlow({ flowStatus, live }: { readonly flowStatus: ChapterFlowStatus; 
           const { cls, running } = states[index];
           return (
             <span key={step.key} style={{ display: "contents" }}>
-              <div className={`ai-step ${cls}${running ? " live" : ""}`.trim()}>
-                <span className="st">{cls === "fail" ? "!" : step.icon}</span>
+              <div
+                className={`ai-step ${cls}${running ? " live" : ""}`.trim()}
+                tabIndex={0}
+                aria-label={`${step.label}：${step.desc}`}
+              >
+                <span className="st">{cls === "fail" ? "!" : cls === "halt" ? "■" : step.icon}</span>
                 {step.label}
-                {/* 悬停说明：不占地、要看才出（codex 暗金 tooltip）。首/末步靠边对齐防溢出。 */}
+                {/* 悬停/键盘聚焦说明：不占地、要看才出（codex 暗金 tooltip）。首/末步靠边对齐防溢出。 */}
                 <span className={`ai-step-tip ${index === 0 ? "tip-left" : index === FLOW_STEPS.length - 1 ? "tip-right" : ""}`.trim()}>
                   {step.desc}
                 </span>
@@ -719,7 +753,7 @@ function MessageBubbles({
       {/* 入库 delta 卡：这章正式入库改了哪些角色/伏笔/线索/时间线/主线目标，随消息走。 */}
       {message.commitReport ? <CommitDeltaCard report={message.commitReport} /> : null}
 
-      {/* 「下一步建议」已从气泡内移到 composer 正上方（见 SuggestRail），气泡内不再渲染 visibleActions。 */}
+      {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
       {/* 撤销到此 */}
       {canUndo ? (
@@ -822,6 +856,8 @@ function ToolStepFold({ step }: { readonly step: ToolStep }) {
   const [open, setOpen] = useState(false);
   const failed = step.status === "failed";
   const running = step.status === "running";
+  // 已停止（人喊停腰斩）：中性徽标如实说「已停止」，不走红（不是失败）、不跑光影（不在跑）。
+  const stopped = step.status === "stopped";
   const detail = step.detail?.trim();
   const canOpen = Boolean(detail);
   const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : null;
@@ -840,6 +876,7 @@ function ToolStepFold({ step }: { readonly step: ToolStep }) {
         <span className="step-sep">·</span>
         <span className={`step-label is-tool ${running ? "is-active" : ""}`.trim()}>{uiText(toolLabel, "执行步骤")}</span>
         {failed ? <span className="step-fail">失败</span> : null}
+        {stopped ? <span className="step-stop">已停止</span> : null}
         {elapsed ? <span className="tm">{elapsed}</span> : null}
         {canOpen ? <span className="step-caret" aria-hidden="true">{open ? "▾" : "▸"}</span> : null}
       </button>
