@@ -477,7 +477,7 @@ async function handleDraftDirectEdit(req: import("node:http").IncomingMessage, r
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const instruction = requireBodyString(body.instruction, "修改要求不能为空。");
-    const draftContent = requireBodyString(body.draftContent, "当前草稿不能为空。");
+    const draftContent = requireBodyString(body.draftContent, "当前工作稿不能为空。");
     const explicitReplacement = parseExplicitReplacementInstruction(instruction);
     if (explicitReplacement && !draftContent.includes(explicitReplacement.target)) {
       writeJson(res, 409, {
@@ -531,7 +531,7 @@ async function handleDraftDirectEdit(req: import("node:http").IncomingMessage, r
     if (parsed.draftContent.replace(/\s+/gu, "") === draftContent.replace(/\s+/gu, "")) {
       writeJson(res, 422, {
         ok: false,
-        error: "模型没有改动草稿（改后与原稿一致），未写入。请把要改的地方说得更具体，或重试。",
+        error: "模型没有改动工作稿（改后与原稿一致），未写入。请把要改的地方说得更具体，或重试。",
       });
       return;
     }
@@ -540,7 +540,7 @@ async function handleDraftDirectEdit(req: import("node:http").IncomingMessage, r
       result: {
         draftContent: parsed.draftContent,
         reply: parsed.reply ?? "已直接改到左侧写作区。",
-        changeSummary: parsed.changeSummary ?? "已按要求修改草稿。",
+        changeSummary: parsed.changeSummary ?? "已按要求修改工作稿。",
         model: configured.profile.model,
         profileId: configured.profile.id,
       },

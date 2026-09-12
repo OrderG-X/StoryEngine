@@ -76,7 +76,7 @@ export default function RevisionPreviewModal(props: WritingWorkspaceLayoutProps)
         </div>
       ) : zeroDiff ? (
         <div className="rpm-idle" aria-live="polite">
-          <p className="rpm-idle-msg">这段无需修改——改写结果与原文相同，草稿不会有变化。</p>
+          <p className="rpm-idle-msg">这段无需修改——改写结果与原文相同，工作稿不会有变化。</p>
           <div className="rpm-actions">
             <button type="button" className="rpm-apply" onClick={props.onDismissRevisionTask}>
               保留原文并关闭

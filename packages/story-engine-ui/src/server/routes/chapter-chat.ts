@@ -247,7 +247,8 @@ function withSanitizedReply<T extends SanitizableChapterChatWriteStatusPayload>(
 }
 
 function hasPrematureWriteSuccessClaim(reply: string): boolean {
-  return /(?:已(?:经)?[^，。！？\n]{0,16}(?:改为|改成|修改|更新|保存|写入|记录|提交|入库|删除|删掉|移除|清除)|[^，。！？\n]{0,16}已(?:改为|改成|修改|更新|保存|写入|记录|提交|入库|删除|删掉|移除|清除)|我(?:已经|已)?帮你[^，。！？\n]{0,16}(?:改|修改|更新|保存|写入|记录|删除|删掉|移除|清除)|\b(?:changed|updated|saved|wrote|written|renamed|deleted|removed)\b)/iu.test(reply);
+  // 动词表含「定稿」：模型说「已定稿/已正式定稿」与「已入库」同义，同样是提前成功声称，不能滑过。
+  return /(?:已(?:经)?[^，。！？\n]{0,16}(?:改为|改成|修改|更新|保存|写入|记录|提交|入库|定稿|删除|删掉|移除|清除)|[^，。！？\n]{0,16}已(?:改为|改成|修改|更新|保存|写入|记录|提交|入库|定稿|删除|删掉|移除|清除)|我(?:已经|已)?帮你[^，。！？\n]{0,16}(?:改|修改|更新|保存|写入|记录|定稿|删除|删掉|移除|清除)|\b(?:changed|updated|saved|wrote|written|renamed|deleted|removed)\b)/iu.test(reply);
 }
 
 function isWritableRouterDecision(decision: ParsedChapterChatPayload["decision"]): boolean {
@@ -636,7 +637,7 @@ function agentTitleForIntent(intent: ChapterChatIntent): string {
     generate_steering: "剧情方案",
     generate_draft: "正文生成",
     quality_check: "工作稿质检",
-    ai_review: "审稿建议",
+    ai_review: "内容审阅建议",
     revision_preview: "修订预览",
     commit_preview: "定稿预览",
     commit_apply: "定稿",

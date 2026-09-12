@@ -42,7 +42,7 @@ export function uiText(value: string | null | undefined, fallback = "尚未设�
     .replace(/\bcharacter\b/giu, "角色")
     .replace(/Character State/giu, "角色状态")
     .replace(/World State/giu, "世界状态")
-    .replace(/Asset ChangePlan/giu, "资产变更建议")
+    .replace(/Asset ChangePlan/giu, "道具变更建议")
     .replace(/Location ChangePlan/giu, "地点变更建议")
     .replace(/提交预览/gu, "定稿预览")
     .replace(/入库预览/gu, "定稿预览")

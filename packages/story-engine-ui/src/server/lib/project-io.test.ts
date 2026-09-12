@@ -236,6 +236,36 @@ describe("project io asset helpers", () => {
     expect(snapshot.messages).toEqual([]);
   });
 
+  it("老书旧口径落盘消息兼容：committed 章的「本章已入库」完成消息仍被识别、整段对话不清空", async () => {
+    // T15 读侧双匹配（复审探针 3d 收编）：老书盘上存的是旧口径完成消息；若读侧只认新词
+    // 「本章已定稿」，老书刷新后会被误判「已定稿但无完成消息」而清空整段对话。
+    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-legacy-terms-"));
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
+    const chapterContent = "# 第二章 纸灰\n\n沈砚从檐影里走出来，她拍了拍林远的肩膀。\n";
+    await writeFile(defaultCommittedChapterPath(projectDir, 2), chapterContent, "utf-8");
+    await writeFile(defaultDraftPath(projectDir, 2), chapterContent, "utf-8");
+    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
+      chapter: 2,
+      flowStatus: "committed",
+      draftContent: chapterContent,
+      messages: [
+        { id: "user-old-confirm", role: "user", content: "确认入库" },
+        { id: "assistant-old-commit-done", role: "assistant", content: "本章已入库。说「下一章」继续。" },
+      ],
+      selectedAdviceCardKeys: [],
+    }), "utf-8");
+
+    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
+
+    expect(snapshot.flowStatus).toBe("committed");
+    expect(snapshot.messages.map((message) => message.id)).toEqual([
+      "user-old-confirm",
+      "assistant-old-commit-done",
+    ]);
+  });
+
   it("keeps post-commit foundation Agent chat messages after refresh", async () => {
     const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-agent-chat-"));
     await mkdir(join(projectDir, "chapters"), { recursive: true });

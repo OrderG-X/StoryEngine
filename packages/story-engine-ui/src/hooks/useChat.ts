@@ -944,11 +944,11 @@ export function useChat(params: UseChatParams): UseChatResult {
           kind: "draft",
           agentName: "draftEditAgent",
           status: "running",
-          title: "正在直接修改草稿",
+          title: "正在直接修改工作稿",
           summary: "正在按用户要求修改左侧工作稿。",
           detail: [
             "target: 左侧工作稿",
-            "write: 草稿改动将自动保存",
+            "write: 工作稿改动将自动保存",
             "formal state: 不改正式故事",
           ],
         }],
@@ -974,11 +974,11 @@ export function useChat(params: UseChatParams): UseChatResult {
         kind: "draft",
         agentName: "draftEditAgent",
         status: "running",
-        title: "正在直接修改草稿",
+        title: "正在直接修改工作稿",
         summary: "正在按用户要求修改左侧工作稿。",
         detail: [
           "target: 左侧工作稿",
-          "write: 草稿改动将自动保存",
+          "write: 工作稿改动将自动保存",
           "formal state: 不改正式故事",
         ],
       }],
@@ -1006,7 +1006,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         appendMessage({
           id: `assistant-direct-edit-empty-${Date.now()}`,
           role: "assistant",
-          content: "当前草稿为空，不能直接修改。你可以先让我生成草稿。",
+          content: "当前工作稿为空，不能直接修改。你可以先让我生成工作稿。",
           suggestedActions: [suggestedAction("generate-draft")],
         });
         return;
@@ -1018,7 +1018,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         sessionId: current.activeSessionId,
       });
       if (!operation) {
-        showToast("已有操作正在进行，请等它结束后再修改草稿。", 4200);
+        showToast("已有操作正在进行，请等它结束后再修改工作稿。", 4200);
         return;
       }
       const ownsDirectEditTarget = (): boolean => {
@@ -1035,7 +1035,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       };
       updateAgentCard(agentCardId, {
         status: "running",
-        title: "正在直接修改草稿",
+        title: "正在直接修改工作稿",
         summary: "正在按用户要求修改左侧工作稿。",
       });
       const completeDraftEdit = (
@@ -1074,16 +1074,16 @@ export function useChat(params: UseChatParams): UseChatResult {
           });
           completeDraftEdit(
             `assistant-direct-last-sentence-${Date.now()}`,
-            `已把最后一句改成「${lastSentenceReplacement}」，并自动保存到草稿。不满意可以在操作历史中恢复快照。`,
-            ["draftEditAgent: 已执行本地精确改句", `change: 最后一句 -> ${lastSentenceReplacement}`, "safety: 已自动保存草稿，未写正式状态"],
+            `已把最后一句改成「${lastSentenceReplacement}」，并自动保存到工作稿。不满意可以在操作历史中恢复快照。`,
+            ["draftEditAgent: 已执行本地精确改句", `change: 最后一句 -> ${lastSentenceReplacement}`, "safety: 已自动保存工作稿，未写正式状态"],
             {
               id: `direct-last-sentence-success-${Date.now()}`,
               kind: "draft",
               agentName: "draftEditAgent",
               status: "completed",
-              title: "草稿已直接修改",
+              title: "工作稿已直接修改",
               summary: "已按用户要求修改左侧工作稿，并自动保存。",
-              detail: [`change: 最后一句 -> ${lastSentenceReplacement}`, "target: 左侧工作稿", "write: 草稿改动已自动保存"],
+              detail: [`change: 最后一句 -> ${lastSentenceReplacement}`, "target: 左侧工作稿", "write: 工作稿改动已自动保存"],
             },
           );
           await saveDraftChanges?.();
@@ -1171,7 +1171,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         if (!ownsDirectEditTarget()) return;
         updateAgentCard(agentCardId, {
           status: "failed",
-          title: "草稿修改失败",
+          title: "工作稿修改失败",
           summary: error instanceof Error ? error.message : String(error),
         });
         setChatError(error instanceof Error ? error.message : String(error));
@@ -1821,7 +1821,7 @@ export function useChat(params: UseChatParams): UseChatResult {
               } else if (chapter !== draftStreamChapter) {
                 if (!reportedDraftChapterMismatch) {
                   reportedDraftChapterMismatch = true;
-                  useNavigationStore.getState().showToast("收到不同章节的迟到正文片段，已拒绝混入当前草稿。", 5000);
+                  useNavigationStore.getState().showToast("收到不同章节的迟到正文片段，已拒绝混入当前工作稿。", 5000);
                 }
                 return;
               }
@@ -2320,12 +2320,12 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendMessage("帮我读一下当前状态，整理这一章的承接建议。");
           return;
         case "generate-draft":
-          void handleSendMessage("帮我写这一章的草稿。");
+          void handleSendMessage("帮我写这一章的工作稿。");
           return;
         case "generate-draft-direct": {
           const direction = resolveChapterDirection().trim();
           void handleSendMessage(
-            direction ? `帮我写这一章的草稿，方向是：${direction}` : "帮我写这一章的草稿。",
+            direction ? `帮我写这一章的工作稿，方向是：${direction}` : "帮我写这一章的工作稿。",
           );
           return;
         }
@@ -2342,7 +2342,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleApplyRevisionPreview();
           return;
         case "commit-preview":
-          void handleSendMessage("帮我预览这一章的入库改动。");
+          void handleSendMessage("帮我预览这一章的定稿改动。");
           return;
         case "commit-apply":
           void handleSendMessage("确认定稿");

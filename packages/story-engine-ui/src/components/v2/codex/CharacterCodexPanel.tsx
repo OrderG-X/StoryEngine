@@ -255,8 +255,8 @@ function CharacterCard({
     character.appearanceAnchors.length > 0 ? { label: "外貌锚点", value: uiList(character.appearanceAnchors).join(" · ") } : null,
     character.relationshipToProtagonist ? { label: "与主角关系", value: character.relationshipToProtagonist } : null,
     character.trustLevel ? { label: "信任度", value: character.trustLevel } : null,
-    character.carriedAssets.length > 0 ? { label: "携带资产", value: uiList(character.carriedAssets).join(" · ") } : null,
-    character.plotCriticalAssets.length > 0 ? { label: "关键资产", value: uiList(character.plotCriticalAssets).join(" · ") } : null,
+    character.carriedAssets.length > 0 ? { label: "携带道具", value: uiList(character.carriedAssets).join(" · ") } : null,
+    character.plotCriticalAssets.length > 0 ? { label: "关键道具", value: uiList(character.plotCriticalAssets).join(" · ") } : null,
   ] as readonly (CharRow | null)[]).filter((r): r is CharRow => r !== null);
 
   // 表达合同之后的「日常锚点 / 所在位置 / 最近出场 / 风险提醒」行（照 mockup 顺序排在 .voice 之后）。

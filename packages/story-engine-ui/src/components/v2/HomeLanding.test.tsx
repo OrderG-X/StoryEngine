@@ -86,6 +86,21 @@ describe("HomeLanding", () => {
     expect(recentSection).toHaveTextContent("还没有最近写作");
     expect(recentSection).toHaveTextContent("可以新建一本书，或打开已有项目");
   });
+
+  it("书卡进度条 = 已写章数 / 当前章号（真实章数），不再写死 /12", () => {
+    // 已写 30 / 当前第 40 章 → 75%；旧的 /12 会顶满 100%（长篇永远低估）。
+    const book = { ...recentBook(), writtenChapters: 30, currentChapterNumber: 40 };
+    const { container } = render(<HomeLanding {...homeProps({ recentBooks: [book] })} />);
+
+    const recentBar = container.querySelector(".se-v2-recent-book i b");
+    expect(recentBar).not.toBeNull();
+    expect((recentBar as HTMLElement).style.width).toBe("75%");
+
+    // 顶部「继续上次写作」卡同口径。
+    const continueBar = container.querySelector(".se-v2-continue-card i b");
+    expect(continueBar).not.toBeNull();
+    expect((continueBar as HTMLElement).style.width).toBe("75%");
+  });
 });
 
 function homeProps(overrides: Partial<HomePageProps> = {}): HomePageProps {

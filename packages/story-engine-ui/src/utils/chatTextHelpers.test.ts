@@ -34,7 +34,7 @@ describe("isChapterAgentConfirm", () => {
   });
 
   it("accepts explicit workflow confirmation commands", () => {
-    for (const message of ["生成本章方案", "开始写", "确认入库", "继续下一章"]) {
+    for (const message of ["生成本章方案", "开始写", "确认入库", "确认定稿", "生成工作稿", "质检工作稿", "生成定稿预览", "继续下一章"]) {
       expect(isChapterAgentConfirm(message)).toBe(true);
     }
   });

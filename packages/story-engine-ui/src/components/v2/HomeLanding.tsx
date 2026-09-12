@@ -15,6 +15,11 @@ import scifiCover from "../../assets/covers/scifi.png";
 import urbanCover from "../../assets/covers/urban.png";
 import xianxiaCover from "../../assets/covers/xianxia.png";
 
+/** 首页书卡进度条：已写章数 / 当前章号（都是真实章数）。不写死目标章数——长篇没有「12 章就写完」这回事。 */
+function bookProgress(book: BookSummary): number {
+  return Math.min(100, Math.round((book.writtenChapters / Math.max(1, book.currentChapterNumber)) * 100));
+}
+
 export default function HomeLanding({
   recentBooks,
   onChooseFolder,
@@ -41,7 +46,7 @@ export default function HomeLanding({
 
   const showFeedback = (message: string) => setFeedbackMessage(message);
   const findBook = (bookId: string) => recentBooks.find((book) => book.id === bookId);
-  const progress = lastBook ? Math.min(100, Math.round((lastBook.writtenChapters / 12) * 100)) : 0;
+  const progress = lastBook ? bookProgress(lastBook) : 0;
   const closeDeleteDialog = () => {
     setDeleteTarget(null);
   };
@@ -248,7 +253,7 @@ function RecentBook({
   readonly onRename: (bookId: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const progress = Math.min(100, Math.round((book.writtenChapters / 12) * 100));
+  const progress = bookProgress(book);
   const coverRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLMenuElement>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);

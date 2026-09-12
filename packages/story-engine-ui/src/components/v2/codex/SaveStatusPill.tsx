@@ -3,8 +3,8 @@
  *
  * 订阅 autosaveControl 快照：保存中显示低调「保存中…」，成功后短暂显示「已保存」再淡出，
  * 失败则常驻红色「保存失败」+ 手动「重试」，并做有限次指数退避自动重试（避免用户以为已保存实则丢失）。
- * 渲染在 .codex-app 中栏（main.desk）底边右下角（UI 审计 T8：不再 fixed 压右栏 composer 发送键），
- * 样式走 codex.css 的 .save-pill 作用域规则。
+ * 渲染在 .codex-app 中栏（main.desk）右下角、写作台底栏之上（UI 审计 T8 返工：不压右栏 composer 发送键，
+ * 也不压底栏右端的「↻ 再来一版」），样式走 codex.css 的 .save-pill 作用域规则。
  */
 import { useEffect, useRef, useState } from "react";
 import { flushAutosaveNow, subscribeAutosave, type AutosaveSnapshot } from "../../../utils/autosaveControl.js";

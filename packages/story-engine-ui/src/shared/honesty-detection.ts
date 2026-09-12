@@ -54,11 +54,26 @@ function stepBacksWriteClaim(step: ToolStep): boolean {
  * 允许「已正式入库 / 已成功生成」这种 已 与动词间夹「正式/成功」的写法（实测谎报正是「第3章已正式入库」）。
  */
 // 术语人话化：定稿/已保存 与旧词 入库/落盘 双写，新旧模板都命中。
-const COMPLETION_CLAIM = /已(?:经)?\s*(?:正式|成功)?\s*(?:生成|写好了?|写完|写入|保存|存好|存进|落盘|入库|定稿|提交了?入库)|已定稿[^。！？]{0,8}资料已更新/u;
+// 复审 T4 返工：补「已」与动词间夹介词短语的句式——把字句「我已经把第 2 章定稿了」、
+// 帮你句「我已经帮你生成并保存了」原是词表盲区（假完成声称连 A1 都绕过）。
+// 介词枝只收真·写动词（生成/写入/保存/落盘/入库/定稿），不含 写好/写完——聊天里直接交付的
+// 「把方向写好了」是消息内事实，不该当写盘声称抓。
+const COMPLETION_CLAIM = new RegExp(
+  "已(?:经)?\\s*(?:正式|成功)?\\s*(?:生成|写好了?|写完|写入|保存|存好|存进|落盘|入库|定稿|提交了?入库)" +
+  "|已(?:经)?[^。！？]{0,12}(?:把|帮你|替我|帮忙)[^。！？]{0,16}(?:生成|写入|保存|存好|存进|落盘|入库|定稿|提交了?入库)" +
+  "|已定稿[^。！？]{0,8}资料已更新",
+  "u",
+);
 // R3#2：关系整理类完成断言（generate_character_relationships 失败却说「关系已梳理清楚」=谎报）。
 // 收窄到「关系」与「整理/梳理/理清/理顺」同现，避免误伤「整理思路/线索」等无关说法。
 const RELATIONSHIP_COMPLETION_CLAIM = /(?:人物|角色)?关系[^。！？]{0,12}已(?:经)?\s*(?:整理|梳理|理清|理顺)|已(?:经)?\s*(?:整理|梳理)好?(?:人物|角色)?关系/u;
-const COMMIT_COMPLETION_CLAIM = /已(?:经)?\s*(?:正式|成功)?\s*(?:入库|定稿|提交了?入库)|正式(?:入库|定稿)(?:完成|成功)|(?:入库|定稿)(?:完成|成功)|已定稿[^。！？]{0,8}资料已更新/u;
+const COMMIT_COMPLETION_CLAIM = new RegExp(
+  "已(?:经)?\\s*(?:正式|成功)?\\s*(?:入库|定稿|提交了?入库)" +
+  // 把字句/帮你句的定稿声称（「我已经把第 2 章定稿了」）也算 commit 口径——文案与重做强制才能落到 commit_apply。
+  "|已(?:经)?[^。！？]{0,12}(?:把|帮你|替我|帮忙)[^。！？]{0,16}(?:入库|定稿|提交了?入库)" +
+  "|正式(?:入库|定稿)(?:完成|成功)|(?:入库|定稿)(?:完成|成功)|已定稿[^。！？]{0,8}资料已更新",
+  "u",
+);
 const COMMIT_PREVIEW_CLAIM = /(?:入库|定稿)(?:影响)?预览|定稿改动/u;
 // 事实账本「已记入账本/已入账/硬事实已记」类完成断言（scoped 到 账本/账/事实，避免误伤「记住你的想法」这类对话）。
 const FACT_COMPLETION_CLAIM = /已(?:经)?(?:把[^。！？]{0,16})?(?:记入|记进|记下|记到|登记|录入)[^。！？]{0,6}(?:账本|账|事实)|已(?:经)?入账|(?:硬事实|事实)[^。！？]{0,6}已(?:记|登记|入账)/u;
@@ -347,21 +362,32 @@ function composeCombinedMissingNotice(missing: readonly MissingExecutionResult[]
 /**
  * 有依据的拒绝/不可行回复（审计 A-4 误报实锤：用户「把第 99 章正式入库」，agent 调读类工具核实后
  * 如实答「第 99 章不存在、没法入库」——已调读工具、没调 commit_apply 都是对的，不是「只有口头声称」）。
- * 回复含拒绝/不可行语义且本回合真调过读类工具（拒绝有磁盘依据）→ 执行一致性探针豁免：
- * 不追加系统更正、不自动重做。零读工具的纯口头拒绝不豁免（无依据的拒绝照样可能是空转）；
+ * 复审 T4 返工后的三道条件（缺一不可）：
+ * ① 回复含拒绝/不可行语义；
+ * ② 同回复**不命中任何完成断言**（COMPLETION/RELATIONSHIP/FACT/REVISION）——混着「我已经把第 2 章定稿了」
+ *    这类无背书声称的拒绝不是纯拒绝，交给 A1/A2 判，别一票放行（修前凭「含不可行词+任意 read 步」整体豁免，
+ *    把 A2 兜底也压掉，双重静默）；
+ * ③ 本回合有**成功完成**（status===completed）的读/预览类工具作磁盘依据——read_* 之外，commit_preview /
+ *    revision_preview 等预览步也是核实「第 N 章状态」的天然路径（修前只认 read_*，预览核实后拒绝仍被误判
+ *    口头声称→自动重做，A-4 原症状复现）；failed/stopped/running 的读步没有依据可言，不豁免。
+ * 零成功读/预览工具的纯口头拒绝不豁免（无依据的拒绝照样可能是空转）；
  * 混着写类完成断言的回复已由 A1（detectUnbackedCompletionClaim）先行判决，走不到这层豁免。
  * `(?<!能)不能`：排除「能不能…」反问句式里的「不能」。
  */
 const REFUSAL_OR_INFEASIBLE = /(?:不存在|没法|无法|还没有|(?<!能)不能)/u;
-const READ_TOOL_NAME = /^read_/u;
+const READ_OR_PREVIEW_TOOL_NAME = /^(?:read_)|(?:_preview)$/u;
 
 export function isGroundedRefusalReply(
   content: string,
   toolSteps: readonly ToolStep[] | undefined,
 ): boolean {
   if (!REFUSAL_OR_INFEASIBLE.test(content)) return false;
+  if (hasAnyCompletionClaim(content)) return false;
   return (toolSteps ?? []).some(
-    (step) => typeof step.toolName === "string" && READ_TOOL_NAME.test(step.toolName),
+    (step) =>
+      typeof step.toolName === "string" &&
+      step.status === "completed" &&
+      READ_OR_PREVIEW_TOOL_NAME.test(step.toolName),
   );
 }
 

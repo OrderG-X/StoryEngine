@@ -634,7 +634,7 @@ export function readDraftRevisionTask(value: unknown, chapter: number): DraftRev
   const targetType = readDraftRevisionTargetType(value.targetType);
   const targetText = readString(value.targetText) ?? "";
   const problemSummary = readString(value.problemSummary) ?? "局部修订";
-  const revisionGoal = readString(value.revisionGoal) ?? "根据审稿建议优化当前片段。";
+  const revisionGoal = readString(value.revisionGoal) ?? "根据内容审阅建议优化当前片段。";
   return {
     id,
     ...(readString(value.sourceIssueId) ? { sourceIssueId: readString(value.sourceIssueId) } : {}),
@@ -975,10 +975,10 @@ export function withSuggestionSourcePreservation(
   const afterType = readString(isRecord(suggestion.after) ? suggestion.after.type : undefined) ?? "";
   const warnings: string[] = [];
   if (!assetNamePreserved(afterName, entity.name)) {
-    warnings.push(`你刚才说的是：${entity.name}；AI 整理成了：${afterName || "未命名资产"}。`);
+    warnings.push(`你刚才说的是：${entity.name}；AI 整理成了：${afterName || "未命名道具"}。`);
   }
   if (assetTypeConflicts(afterType, entity.type)) {
-    warnings.push(`你刚才描述的资产类型更像"${entity.typeLabel}"，AI 整理成了"${afterType}"。`);
+    warnings.push(`你刚才描述的道具类型更像"${entity.typeLabel}"，AI 整理成了"${afterType}"。`);
   }
   const cleanedAfter = afterRecord && warnings.length === 0 && afterName !== entity.name
     ? { ...afterRecord, name: entity.name }

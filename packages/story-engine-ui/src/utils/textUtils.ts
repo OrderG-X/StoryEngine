@@ -56,7 +56,7 @@ const textRules: Array<[pattern: string | RegExp, replacement: string]> = [
   // Domain terminology
   ["Character State", "角色状态"],
   ["World State", "世界状态"],
-  ["Asset ChangePlan", "资产变更建议"],
+  ["Asset ChangePlan", "道具变更建议"],
   ["Location ChangePlan", "地点变更建议"],
   // UI flow labels
   ["提交预览", "定稿预览"],

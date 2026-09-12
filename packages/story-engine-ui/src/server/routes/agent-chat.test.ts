@@ -99,6 +99,38 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
       toolSteps: [],
     })).toContain("⚠️ 系统更正");
   });
+
+  // 复审 T4 返工（review-2026-09-12_kimi-ui-fix-5commits §A1）：commit_preview 核实后拒绝是天然路径——
+  // 修前只认 read_*，预览核实后的如实拒绝被误判口头声称、触发自动重做（A-4 原症状实证复现）。
+  it("复审 T4：commit_preview 成功核实后如实拒绝「第 99 章不存在」→ 不追加更正、不重做", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第 99 章正式定稿",
+      assistantText: "第 99 章不存在，没法定稿。",
+      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
+    })).toBeNull();
+  });
+
+  it("复审 T4：读/预览步 failed 的拒绝没有磁盘依据 → 仍追加更正（不豁免）", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第 99 章正式入库",
+      assistantText: "第 99 章不存在，没法入库。",
+      toolSteps: [{ toolName: "read_state_overview", status: "failed" }],
+    })).toContain("⚠️ 系统更正");
+  });
+
+  it("复审 T4：拒绝话术混着把字句/帮你句假完成声称 → 豁免不挡，照抓更正", () => {
+    for (const assistantText of [
+      "第 3 章不存在，不过我已经把第 2 章定稿了。",
+      "这一章还没有工作稿，我已经帮你生成并保存了。",
+      "无法确认第 2 章状态，但资料已经写入。",
+    ]) {
+      expect(serverHonestyCorrectionText({
+        userText: "把第 99 章正式入库",
+        assistantText,
+        toolSteps: [{ toolName: "read_state_overview", status: "completed" }],
+      })).toContain("⚠️ 系统更正");
+    }
+  });
 });
 
 // r8 服从重试：ch84/ch88 真机实锤——模型口头声称「已生成/已入库」却零工具调用，护栏只纠文本时
@@ -306,6 +338,31 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(fake.calls()).toBe(1);
     const text = collectText(events);
     expect(text).toContain("第 99 章根本不存在");
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  // 复审 T4 返工（review-2026-09-12_kimi-ui-fix-5commits §A1）：commit_preview 核实「第 99 章」后如实拒绝——
+  // 修前只认 read_*，这条天然路径被误判口头声称 → 自动重做 → 二次失败亮红（A-4 原症状实证复现）。
+  it("commit_preview 核实后如实拒绝「第 99 章不存在」→ 一轮收场：不重做、无过渡、无更正（复审 T4）", async () => {
+    const fake = makeStreamAttempt([
+      [
+        ...toolChunks("commit_preview", { ok: true, summary: "第 99 章不存在，无法生成预览。" }),
+        textChunk("第 99 章不存在，没法定稿。要不要先从第 1 章开始写？"),
+      ],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第 99 章正式定稿" }],
+      userText: "把第 99 章正式定稿",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).toContain("第 99 章不存在");
     expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
     expect(text).not.toContain("⚠️ 系统更正");
   });

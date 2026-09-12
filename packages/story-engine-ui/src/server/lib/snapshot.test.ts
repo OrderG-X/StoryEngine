@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { commitFastDraft, createStoryProject, recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
-import { createSnapshot, humanizeUndoLabel, listSnapshots, pruneSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
+import { createSnapshot, humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -238,6 +238,34 @@ describe("undoLastChange 对话撤销", () => {
     expect(await readFile(join(dir, "a.md"), "utf-8")).toBe("A"); // a.md 仍在
     expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 再撤 step1
     await expect(access(join(dir, "a.md"))).rejects.toThrow();
+  });
+
+  it("老书旧前缀快照链照常识别：列表/人话化透传/落盘收尾产物/逐步撤销目标（T15 读侧兼容）", async () => {
+    // 复审探针 3c 收编：写侧早已只写新词（定稿前快照/工作稿生成前快照），老书 git 史里躺着的
+    // 旧前缀 label 必须仍是合法历史与撤销目标。
+    const dir = await makeProject();
+    await createSnapshot(dir, "入库前快照：第1章");
+    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["a"] }), "utf-8");
+    await createSnapshot(dir, "草稿生成前快照：第2章");
+    await writeFile(join(dir, "story", "threads.json"), JSON.stringify({ threads: ["a", "b"] }), "utf-8"); // 最近一次写入（未提交）
+
+    // 旧 label 照常列出；裸旧 label 人话化原样透传（落盘 label 是历史真相，不再翻译）；
+    // 旧「落盘收尾：…」条目仍被识别为工程产物（该前缀未改名）。
+    const labels = (await listSnapshots(dir)).map((snap) => snap.label);
+    expect(labels).toContain("入库前快照：第1章");
+    expect(labels).toContain("草稿生成前快照：第2章");
+    expect(humanizeUndoLabel("入库前快照：第1章")).toBe("入库前快照：第1章");
+    expect(humanizeUndoLabel("草稿生成前快照：第2章")).toBe("草稿生成前快照：第2章");
+    expect(isPostWriteSettlementSnapshot("落盘收尾：入库前快照：第1章")).toBe(true);
+
+    // 撤销链在纯旧前缀历史上完整工作：先撤掉未提交写入、落回「草稿生成前快照：第2章」，
+    // 再撤自动跳过恢复产物、落回「入库前快照：第1章」。
+    const first = await undoLastChange(dir);
+    expect(first?.undoneLabel).toBe("草稿生成前快照：第2章");
+    expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: ["a"] });
+    const second = await undoLastChange(dir);
+    expect(second?.undoneLabel).toBe("入库前快照：第1章");
+    expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: [] });
   });
 });
 

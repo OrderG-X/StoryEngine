@@ -53,8 +53,9 @@ const AI_MIN_WIDTH = 320;
 const AI_MAX_WIDTH = 640;
 const AI_DEFAULT_WIDTH = 372;
 // 窄视口右栏让位（T3）：中栏至少保住的宽度，与右栏的硬下限。
-// 视口装不下「左栏 + 中栏下限 + 右栏下限」时右栏自动收成 44px 竖条；装得下就把右栏压到能放下的宽度，
-// composer 与发送键永远在视口内（styles.css 的 body min-width:1180 已同步撤掉）。
+// 视口装不下「左栏 + 中栏下限 + 右栏下限」时右栏默认自动收成 44px 竖条（手动展开/收起后不再自动干预，
+// 见 resolveRightPanelOpen）；装得下就把右栏压到能放下的宽度，composer 与发送键永远在视口内
+// （styles.css 的 body min-width:1180 已同步撤掉）。
 const MID_MIN_WIDTH = 480;
 const AI_FIT_MIN_WIDTH = 280;
 
@@ -76,6 +77,16 @@ function trackCatLight(event: ReactMouseEvent<HTMLButtonElement>): void {
   event.currentTarget.style.setProperty("--my", `${event.clientY - rect.top}px`);
 }
 
+/**
+ * T3：右栏开合裁决——手动意愿优先于窄视口自动收起。
+ * 用户没碰过展开/收起（manualToggled=false）时：视口装不下右栏硬下限就收成 44px 竖条，窗口变宽自动恢复展开；
+ * 用户一旦点过，就完全以手动意愿为准——窄窗点展开也真的展开（中栏 minmax(0,1fr) 被挤压但不出屏），
+ * 手动收起后变宽也不擅自弹开。
+ */
+export function resolveRightPanelOpen(rightOpen: boolean, autoCollapsed: boolean, manualToggled: boolean): boolean {
+  return rightOpen && (manualToggled || !autoCollapsed);
+}
+
 export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps) {
   const workspaceBusy = Boolean(
     props.chatLoading
@@ -85,6 +96,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   );
   const focusWriting = useDisplaySettingsStore((s) => s.focusWriting);
   const [rightOpen, setRightOpen] = useState(() => !focusWriting);
+  // T3：用户是否点过右栏展开/收起。点过之后手动意愿覆盖窄视口自动收起（见 resolveRightPanelOpen）。
+  const [aiManualToggled, setAiManualToggled] = useState(false);
   // 环境健康：系统缺 git 时快照/撤销不可用（桌面前置·Windows 测试者大概率没装）——
   // 顶部亮黄条明说，绝不静默降级。只在挂载时探一次（git 可用性运行期不会变）。
   const [gitAvailable, setGitAvailable] = useState(true);
@@ -191,7 +204,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const railWidth = Math.round(RAIL_BASE_WIDTH * uiZoom);
 
   // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
-  // 连右栏硬下限都装不下时自动收成 44px 竖条（手动展开仍允许，宽度照样被夹在装得下的范围）。
+  // 连右栏硬下限都装不下时默认自动收成 44px 竖条；用户没碰过展开/收起时窗口变宽自动恢复，
+  // 点过之后以手动意愿为准（resolveRightPanelOpen，复审返工：修掉自动收起后展开钮死点击）。
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -200,7 +214,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   }, []);
   const aiWidthThatFits = viewportWidth - railWidth - MID_MIN_WIDTH;
   const aiAutoCollapsed = !isFullscreenView && aiWidthThatFits < AI_FIT_MIN_WIDTH;
-  const effectiveRightOpen = rightOpen && !aiAutoCollapsed;
+  const effectiveRightOpen = resolveRightPanelOpen(rightOpen, aiAutoCollapsed, aiManualToggled);
   const effectiveRightWidth = Math.max(AI_FIT_MIN_WIDTH, Math.min(rightWidth, aiWidthThatFits));
 
   return (
@@ -414,7 +428,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           <AiChatCodex
             {...props}
             rightOpen={effectiveRightOpen}
-            onToggleRight={() => setRightOpen((o) => !o)}
+            // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
+            // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
+            onToggleRight={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
             onResizeStart={handleResizeStart}
           />
         )}

@@ -379,7 +379,7 @@ function buildAssetCards(assets: AssetSummary, visibility?: AssetVisibilityMap):
   });
   uiList(assets.unavailableAssets).forEach((item) => add(item, { status: inferUnavailableStatus(item) }));
   uiList(assets.plotCriticalItems).forEach((item) => add(item, { critical: true }));
-  uiList(assets.properties).forEach((item) => add(item, { type: "住所 / 固定资产", carried: false }));
+  uiList(assets.properties).forEach((item) => add(item, { type: "住所 / 不动产", carried: false }));
 
   return [...byName.values()].map(withVis).sort(
     (a, b) =>

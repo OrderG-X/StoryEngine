@@ -110,7 +110,7 @@ export function qualityIssueDisplayText(item: Pick<JudgedQualityCandidate, "type
     case "writing_context_location_drift":
       return replaceEnglishPrefix(item.message, "Draft may invent locations outside Location Bible:", "可能出现未登记地点：");
     case "writing_context_asset_drift":
-      return replaceEnglishPrefix(item.message, "Draft may invent assets outside Asset Ledger:", "可能出现未登记资产：");
+      return replaceEnglishPrefix(item.message, "Draft may invent assets outside Asset Ledger:", "可能出现未登记道具：");
     case "writing_context_identity_detail_drift":
       return replaceEnglishPrefix(item.message, "Draft may invent unregistered identity details:", "可能写入未登记身份细节：");
     case "writing_context_forbidden_reveal":
@@ -152,7 +152,7 @@ function translateCommonQualityMessage(message: string): string {
     .replace(/^Draft does not mention any known character name\.$/u, "正文没有出现已登记角色名。")
     .replace(/^Draft may invent unregistered identity details:/u, "可能写入未登记身份细节：")
     .replace(/^Draft may invent locations outside Location Bible:/u, "可能出现未登记地点：")
-    .replace(/^Draft may invent assets outside Asset Ledger:/u, "可能出现未登记资产：")
+    .replace(/^Draft may invent assets outside Asset Ledger:/u, "可能出现未登记道具：")
     .replace(/^Draft does not clearly use required location:/u, "没有明确使用本章要求地点：");
 }
 

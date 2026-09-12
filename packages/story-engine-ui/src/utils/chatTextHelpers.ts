@@ -21,7 +21,7 @@ export function isChapterAgentConfirm(message: string): boolean {
   const text = message.trim();
   if (!text) return false;
   if (/^(?:确认|确定|可以|好|好的|行|没问题|就这样|按这个|开始|执行|来吧|继续|开始吧|可以开始)[。！!？?\s]*$/u.test(text)) return true;
-  if (/^(?:生成本章方案|整理本章方案|生成草稿|开始写|写吧|质检草稿|生成入库预览|确认入库|继续下一章)[。！!？?\s]*$/u.test(text)) return true;
+  if (/^(?:生成本章方案|整理本章方案|生成草稿|生成工作稿|开始写|写吧|质检草稿|质检工作稿|生成入库预览|生成定稿预览|确认入库|确认定稿|继续下一章)[。！!？?\s]*$/u.test(text)) return true;
   return false;
 }
 

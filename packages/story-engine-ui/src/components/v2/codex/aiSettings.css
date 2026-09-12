@@ -1,24 +1,25 @@
 /* AiSettingsPage + AiServiceManager — 服务商卡片网格（仿 inkos ServiceListPage） */
+/* 全部规则收进 .codex-app 作用域（codex 样式铁律：不外泄到别的壳）。 */
 
-.asm-shell {
+.codex-app .asm-shell {
   background-image: radial-gradient(circle at 48% 6%, rgba(217, 164, 65, 0.13), transparent 40%);
   background-color: #16140f;
 }
 
-.asm-body {
+.codex-app .asm-body {
   max-width: 860px;
   width: 100%;
   margin: 0 auto;
 }
 
-.asm-page {
+.codex-app .asm-page {
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
 /* 搜索 */
-.asm-search {
+.codex-app .asm-search {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -29,7 +30,7 @@
   color: var(--se-v2-faint);
 }
 
-.asm-search input {
+.codex-app .asm-search input {
   flex: 1;
   min-height: 36px;
   border: none;
@@ -39,11 +40,11 @@
   outline: none;
 }
 
-.asm-search input::placeholder {
+.codex-app .asm-search input::placeholder {
   color: var(--se-v2-faint);
 }
 
-.asm-search-clear {
+.codex-app .asm-search-clear {
   border: none;
   background: transparent;
   color: var(--se-v2-faint);
@@ -53,13 +54,13 @@
 }
 
 /* 分组 chips */
-.asm-groups {
+.codex-app .asm-groups {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.asm-chip {
+.codex-app .asm-chip {
   padding: 5px 12px;
   border: 1px solid var(--se-v2-line);
   border-radius: 999px;
@@ -71,25 +72,25 @@
   transition: all 0.15s;
 }
 
-.asm-chip:hover {
+.codex-app .asm-chip:hover {
   border-color: rgba(217, 164, 65, 0.4);
   color: var(--se-v2-text);
 }
 
-.asm-chip.is-active {
+.codex-app .asm-chip.is-active {
   border-color: var(--se-v2-accent);
   background: rgba(217, 164, 65, 0.12);
   color: var(--se-v2-accent-hi);
 }
 
 /* 分组 */
-.asm-group {
+.codex-app .asm-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.asm-group-title {
+.codex-app .asm-group-title {
   margin: 6px 0 0;
   font-size: 11px;
   font-weight: 700;
@@ -99,13 +100,13 @@
 }
 
 /* 卡片网格 */
-.asm-grid {
+.codex-app .asm-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
 
-.asm-card {
+.codex-app .asm-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -120,25 +121,25 @@
   transition: all 0.15s;
 }
 
-.asm-card:hover {
+.codex-app .asm-card:hover {
   border-color: rgba(217, 164, 65, 0.45);
   background: rgba(217, 164, 65, 0.05);
   box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.1), 0 8px 22px -14px rgba(0, 0, 0, 0.5);
 }
 
-.asm-card.is-configured {
+.codex-app .asm-card.is-configured {
   border-style: solid;
   border-color: rgba(217, 164, 65, 0.28);
 }
 
-.asm-card-top {
+.codex-app .asm-card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.asm-card-name {
+.codex-app .asm-card-name {
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
@@ -146,7 +147,7 @@
   text-overflow: ellipsis;
 }
 
-.asm-dot {
+.codex-app .asm-dot {
   flex: 0 0 8px;
   width: 8px;
   height: 8px;
@@ -154,46 +155,46 @@
   background: rgba(255, 255, 255, 0.18);
 }
 
-.asm-dot.ok {
+.codex-app .asm-dot.ok {
   background: #6abf6a;
   box-shadow: 0 0 8px rgba(106, 191, 106, 0.35);
 }
 
-.asm-dot.warn {
+.codex-app .asm-dot.warn {
   background: #d4a843;
   box-shadow: 0 0 8px rgba(212, 168, 67, 0.35);
 }
 
-.asm-card-status {
+.codex-app .asm-card-status {
   font-size: 12px;
   font-weight: 600;
   color: var(--se-v2-muted);
 }
 
-.asm-card.is-configured .asm-card-status {
+.codex-app .asm-card.is-configured .asm-card-status {
   color: var(--se-v2-accent-hi);
 }
 
-.asm-card-hint {
+.codex-app .asm-card-hint {
   font-size: 11px;
   color: var(--se-v2-faint);
   line-height: 1.4;
 }
 
 /* 自定义卡片 */
-.asm-card-custom {
+.codex-app .asm-card-custom {
   align-items: center;
   justify-content: center;
   gap: 6px;
   border-style: dashed;
 }
 
-.asm-card-plus {
+.codex-app .asm-card-plus {
   font-size: 18px;
   color: var(--se-v2-faint);
 }
 
-.asm-empty {
+.codex-app .asm-empty {
   padding: 40px 0;
   text-align: center;
   color: var(--se-v2-faint);
@@ -201,7 +202,7 @@
 }
 
 /* 详情视图 */
-.asm-back {
+.codex-app .asm-back {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
@@ -217,12 +218,12 @@
   transition: all 0.12s;
 }
 
-.asm-back:hover {
+.codex-app .asm-back:hover {
   border-color: rgba(217, 164, 65, 0.4);
   color: var(--se-v2-text);
 }
 
-.asm-custom-note {
+.codex-app .asm-custom-note {
   padding: 10px 14px;
   border: 1px solid rgba(217, 164, 65, 0.22);
   border-radius: 10px;
@@ -233,7 +234,7 @@
 }
 
 /* 自定义服务卡片的接口地址：单行截断，长 URL 不撑破卡片 */
-.asm-card-url {
+.codex-app .asm-card-url {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -241,14 +242,14 @@
 }
 
 /* 详情页删除区（两击确认） */
-.asm-danger-row {
+.codex-app .asm-danger-row {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 4px;
 }
 
-.asm-delete-btn {
+.codex-app .asm-delete-btn {
   padding: 6px 14px;
   border: 1px solid rgba(214, 92, 92, 0.35);
   border-radius: 8px;
@@ -260,23 +261,23 @@
   transition: all 0.12s;
 }
 
-.asm-delete-btn:hover {
+.codex-app .asm-delete-btn:hover {
   border-color: rgba(214, 92, 92, 0.6);
   background: rgba(214, 92, 92, 0.08);
 }
 
-.asm-delete-btn.is-armed {
+.codex-app .asm-delete-btn.is-armed {
   border-color: #d65c5c;
   background: rgba(214, 92, 92, 0.14);
   color: #e8a0a0;
 }
 
-.asm-delete-btn:disabled {
+.codex-app .asm-delete-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-.asm-delete-cancel {
+.codex-app .asm-delete-cancel {
   border: none;
   background: transparent;
   color: var(--se-v2-faint);
@@ -285,12 +286,12 @@
   padding: 6px 4px;
 }
 
-.asm-delete-cancel:hover {
+.codex-app .asm-delete-cancel:hover {
   color: var(--se-v2-text);
 }
 
 /* 列表 ↔ 详情 切换动画；同时承担 ms-body 的纵向布局（它是 ms-body 唯一直接子元素） */
-.asm-view-anim {
+.codex-app .asm-view-anim {
   display: flex;
   flex-direction: column;
   gap: 20px;

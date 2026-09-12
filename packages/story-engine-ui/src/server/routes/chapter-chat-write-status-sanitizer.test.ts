@@ -144,6 +144,28 @@ describe("sanitizeChapterChatWriteStatusForDisplay", () => {
     expect(result.reply).not.toContain("已正式入库");
   });
 
+  // T15 术语切换后的同义声称：「定稿」与「入库」一样是提前成功声称动词，缺它会滑过（复审 T15 残留实锤）。
+  it("does not claim 「已定稿」 succeeded from chapter chat either", () => {
+    for (const reply of ["已定稿。", "已正式定稿，资料已更新。", "本章已经定稿。"]) {
+      const result = sanitizeChapterChatWriteStatusForDisplay({
+        reply,
+        intent: "commit_apply",
+        requiresConfirmation: true,
+        decision: {
+          agentId: "commitAgent",
+          action: "commit_apply",
+          target: "formal story state",
+          confidence: 0.9,
+          reason: "用户要求定稿。",
+        },
+        writeInstructions: [],
+      });
+      expect(result.reply).toContain("本轮对话尚未写入文件");
+      expect(result.reply).not.toContain("已定稿");
+      expect(result.reply).not.toContain("已经定稿");
+    }
+  });
+
   it("keeps commit apply replies without premature success claims unchanged even when the model flags confirmation", () => {
     const result = sanitizeChapterChatWriteStatusForDisplay({
       reply: "好的，我会执行正式入库，写入前自动创建快照。",

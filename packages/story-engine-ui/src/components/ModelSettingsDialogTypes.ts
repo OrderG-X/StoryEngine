@@ -17,7 +17,7 @@ export const TASK_HINTS: Record<string, string> = {
   triage: "右侧对话总控，驱动所有工具",
   repair: "按建议局部修订正文",
   chapterSteering: "分析上下文、生成章节方案",
-  enrichment: "世界观/角色/地点/资产等资料补全",
+  enrichment: "世界观/角色/地点/道具与资源等资料补全",
   draftReview: "深度分析整章并给出改进建议",
   qualityCheck: "定稿前查硬伤/连续性",
 };

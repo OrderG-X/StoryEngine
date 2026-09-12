@@ -2,8 +2,8 @@ import type { DraftCandidate } from "../../stores/workspaceStore.js";
 import { countTextWords } from "../../utils/textUtils.js";
 
 /**
- * 抽卡候选并排面板（阶段三块③）：「再来一版」生成的 2–3 个临时候选并排展示，点「用这版」替换当前草稿。
- * 纯展示组件——生成/挑中/关闭由 useWorkflowActions + store 负责。候选临时、未落盘，关闭即丢弃、不影响当前草稿。
+ * 抽卡候选并排面板（阶段三块③）：「再来一版」生成的 2–3 个临时候选并排展示，点「用这版」替换当前工作稿。
+ * 纯展示组件——生成/挑中/关闭由 useWorkflowActions + store 负责。候选临时、未落盘，关闭即丢弃、不影响当前工作稿。
  */
 export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose }: {
   readonly candidates: readonly DraftCandidate[];
@@ -15,7 +15,7 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
     <div className="se-v2-candidates-overlay" role="dialog" aria-label="再来一版候选" aria-modal="true">
       <div className="se-v2-candidates-panel">
         <header className="se-v2-candidates-header">
-          <strong>再来一版 · 选一个替换当前草稿</strong>
+          <strong>再来一版 · 选一个替换当前工作稿</strong>
           <button className="se-v2-btn se-v2-btn-ghost" onClick={onClose} type="button">关闭</button>
         </header>
         <div className="se-v2-candidates-grid">

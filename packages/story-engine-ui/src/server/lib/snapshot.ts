@@ -501,7 +501,7 @@ export async function pruneSnapshots(projectDir: string, options: SnapshotPruneO
       await git(projectDir, ["update-ref", branchRef, parent, oldHead]);
     } catch (error) {
       await git(projectDir, ["update-ref", branchRef, oldHead]).catch(() => undefined);
-      throw new Error(`快照历史裁剪失败，已回滚到裁前状态；裁前完整历史备份：${bundlePath}。原始错误：${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`快照历史裁剪失败，已恢复到裁前状态；裁前完整历史备份：${bundlePath}。原始错误：${error instanceof Error ? error.message : String(error)}`);
     }
     // 裁剪已完成：reflog expire / gc 只负责磁盘回收，失败降级为 warning（旧链对象暂留磁盘、仓库保持可用）。
     const warnings: string[] = [];

@@ -597,6 +597,10 @@
   .ai-bar.active{background:rgba(217,164,65,.20);}
   .ai-bar.active::after{content:"";position:absolute;inset:0;width:42%;
     background:linear-gradient(90deg,transparent,var(--accent-hi),transparent);animation:aiFlowShimmer 1.6s linear infinite;}
+  /* 停止态静止（C 打磨）：被喊停那步（.ai-step.halt）之后的连接条在 JSX 里仍按 flowStatus 基线拿 active，
+     会永远流光；按 DOM 相邻关系压回静止暗条——halt 是中性「停」，不是进行中。 */
+  .ai-step.halt + .ai-bar.active{background:var(--line);}
+  .ai-step.halt + .ai-bar.active::after{content:none;}
   /* 悬停说明气泡：不占地、鼠标移上去才淡出。首/末步靠边对齐防溢出面板。 */
   .ai-step-tip{position:absolute;top:calc(100% + 9px);left:50%;transform:translateX(-50%);
     width:max-content;max-width:188px;padding:8px 11px;border-radius:9px;
@@ -704,8 +708,11 @@
   .nextstep-choice:disabled::before{opacity:0;}
   .composer{display:flex;align-items:center;gap:9px;margin:8px 16px 14px;padding:12px 14px;border-radius:16px;
     border:1px solid var(--accent-line-soft);background:var(--surface);}
-  /* 输入区聚焦：整个 composer 亮金色描边（textarea 本身 outline:none，焦点感由外壳承担）。 */
+  /* 输入区聚焦：整个 composer 亮金色描边（焦点感由外壳承担）。 */
   .composer:focus-within{border-color:rgba(217,164,65,.55);box-shadow:0 0 0 2px rgba(217,164,65,.14);}
+  /* 内层 textarea 不再自带焦点光晕（C 打磨）：内联 outline:none 只压掉了 outline，
+     全局 :focus-visible 规则的 4px 金色 box-shadow 仍会套在输入框上——壳描边+内层光晕=双层金，去掉内层。 */
+  .composer textarea:focus-visible{outline:none;box-shadow:none;}
   .composer .ph{flex:1;font-size:12.5px;color:var(--faint);}
   .composer .send{width:30px;height:30px;border-radius:9px;border:0;display:grid;place-items:center;cursor:pointer;
     background:linear-gradient(150deg,var(--accent-hi),var(--accent));color:#1a140d;font-weight:900;font-size:14px;
@@ -1373,17 +1380,18 @@
   }
 }
 
-/* 保存状态 Pill（UI 审计 T8）：挂在中栏 main.desk 内绝对定位，底边右下角——
-   不再 fixed 压右栏 AI composer 的发送键；max-width 限制失败态宽度，超长错误文本截断。 */
-.codex-app .desk > .save-pill{position:absolute;right:16px;bottom:16px;z-index:40;
+/* 保存状态 Pill（UI 审计 T8 返工）：挂在中栏 main.desk 内绝对定位，抬到写作台底栏之上——
+   底栏高约 53px（padding 11px×2 + 按钮约 30px + 描边 1px），bottom:64px 留出约 11px 间隙，
+   不再压底栏右端的「↻ 再来一版」（失败常驻态尤其不能盖按钮）；max-width 限制失败态宽度，超长错误文本截断。 */
+.codex-app .desk > .save-pill{position:absolute;right:16px;bottom:64px;z-index:40;
   display:inline-flex;align-items:center;gap:8px;max-width:min(460px,calc(100% - 32px));
   padding:6px 12px;border-radius:9px;font-size:12.5px;
   box-shadow:0 6px 20px -6px rgba(0,0,0,.5);pointer-events:auto;}
 .codex-app .save-pill-saving{background:rgba(24,22,18,.92);border:1px solid rgba(217,164,65,.35);color:var(--accent-hi);}
-.codex-app .save-pill-saved{background:rgba(24,22,18,.9);border:1px solid rgba(120,160,120,.35);color:#9ec49e;}
-.codex-app .save-pill-error{background:#3a1512;border:1px solid #b4443a;color:#f4c7c1;}
+.codex-app .save-pill-saved{background:rgba(24,22,18,.9);border:1px solid color-mix(in srgb, var(--success) 35%, transparent);color:var(--success);}
+.codex-app .save-pill-error{background:#3a1512;border:1px solid var(--danger);color:#f4c7c1;}
 .codex-app .save-pill-dot{width:7px;height:7px;border-radius:50%;background:var(--accent-hi);opacity:.9;}
 .codex-app .save-pill-title{font-weight:600;white-space:nowrap;}
 .codex-app .save-pill-detail{opacity:.85;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.codex-app .save-pill-retry{margin-left:4px;padding:3px 10px;border-radius:6px;border:1px solid #b4443a;
+.codex-app .save-pill-retry{margin-left:4px;padding:3px 10px;border-radius:6px;border:1px solid var(--danger);
   background:transparent;color:#f4c7c1;cursor:pointer;font:inherit;white-space:nowrap;}
