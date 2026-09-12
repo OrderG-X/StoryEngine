@@ -979,6 +979,20 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         showToast("原工作区已经变化，已丢弃迟到的新建书籍回执。", 5000);
         return;
       }
+      // 还必须把活跃会话真正读一遍：sessionEpochs 只在 readChatSession/create/setActive/delete 登记，
+      // 只 list 不读 → 首开期间 saveChatSessionMessages/beacon 因「本次运行未成功加载过该会话」全部短路，
+      // 聊了一整场的历史一个字都不落盘（UI 审计 T1 / A-1，实测会话文件 messages=0）。
+      // 读失败不阻塞开书，但绝不静默——开书成功的 toast 换成如实告警。
+      let activeSessionLoaded = true;
+      if (sessionBootstrap?.index?.activeSessionId) {
+        activeSessionLoaded = await readChatSession(created.projectDir, sessionBootstrap.index.activeSessionId)
+          .then((result) => Boolean(result?.session))
+          .catch(() => false);
+        if (!ownsNavigationOrigin(transition)) {
+          showToast("原工作区已经变化，已丢弃迟到的新建书籍回执。", 5000);
+          return;
+        }
+      }
       const book = bookSummaryFromOverview(created.overview, created.projectDir);
       setActiveBookId(null);
       setProjectPath(created.projectDir);
@@ -1010,7 +1024,13 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
       resetFoundationGaps();
-      showToast(`《${draft.title || "未命名"}》已创建并打开。`);
+      if (!activeSessionLoaded) {
+        // 会话没读成功 → epoch 未登记 → 本次运行聊天自动保存会被短路（另有客户端一次性 toast 兜底）。
+        // 开书照旧放行（重开本书 openProject 会补正），但成功 toast 必须让位给如实告警。
+        showToast(`《${draft.title || "未命名"}》已创建，但聊天会话初始化失败：本次对话可能不会被保存，重新打开本书即可恢复。`, 6400);
+      } else {
+        showToast(`《${draft.title || "未命名"}》已创建并打开。`);
+      }
     } catch (error) {
       if (ownsNavigationOrigin(transition)) {
         showToast(`创建失败：${error instanceof Error ? error.message : String(error)}`);

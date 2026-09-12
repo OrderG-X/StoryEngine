@@ -53,7 +53,8 @@
 
 body {
   margin: 0;
-  min-width: 1180px;
+  /* 不写 min-width：1180px 硬下限会让 <1180 的视口（1024 屏 / 125% 缩放）直接横向裁掉右栏发送键（A-3）。
+     窄视口的右栏让位由 codex 工作区按视口宽度自动压缩/收起（WritingWorkspaceCodex）。 */
   min-height: 100vh;
   background:
     radial-gradient(circle at 18% 8%, rgba(51, 102, 255, 0.16), transparent 26%),

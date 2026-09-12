@@ -9,13 +9,38 @@ const BASE = "/api/chat-sessions";
 // 保存直接短路跳过（这正是「加载失败→自动保存空历史→死锁/清空」那条雷的引信）。
 const sessionEpochs = new Map<string, number>();
 
+// 「保存被跳过」的 UI 信号（UI 审计 T1：绝不静默失败）。autosave 每 350ms 都可能撞一次短路，
+// 直接 toast 会刷屏 → 客户端按会话去重（每会话每次运行只报一次），App 挂载时注册 notifier 弹 toast。
+let saveSkippedNotifier: ((info: { readonly projectPath: string; readonly id: string }) => void) | null = null;
+const saveSkipNotifiedKeys = new Set<string>();
+
+export function setChatSessionSaveSkippedNotifier(
+  fn: ((info: { readonly projectPath: string; readonly id: string }) => void) | null,
+): void {
+  saveSkippedNotifier = fn;
+}
+
 function epochKey(projectPath: string, id: string): string {
   return `${projectPath}::${id}`;
 }
 
 function recordSessionEpoch(projectPath: string, session: ChatSession | null | undefined): void {
   if (!session?.id) return;
-  sessionEpochs.set(epochKey(projectPath, session.id), (session as { windowEpoch?: number }).windowEpoch ?? 0);
+  const key = epochKey(projectPath, session.id);
+  sessionEpochs.set(key, (session as { windowEpoch?: number }).windowEpoch ?? 0);
+  // 已成功加载 → 之前的「未加载」告警失效；若日后再短路（如会话被删后残留引用）重新报。
+  saveSkipNotifiedKeys.delete(key);
+}
+
+function notifySaveSkippedOnce(projectPath: string, id: string): void {
+  const key = epochKey(projectPath, id);
+  if (saveSkipNotifiedKeys.has(key)) return;
+  saveSkipNotifiedKeys.add(key);
+  try {
+    saveSkippedNotifier?.({ projectPath, id });
+  } catch {
+    // 通知通道本身绝不反过来炸保存链。
+  }
 }
 
 async function put<T>(body: Record<string, unknown>): Promise<T> {
@@ -61,7 +86,9 @@ export const saveChatSessionMessages = async (projectPath: string, id: string, m
   if (epoch === undefined) {
     // 本次运行从未成功加载过这份会话 → 内存里的 messages 不可信（多半是加载失败后的空壳）。
     // 跳过保存（不抛错：抛错会让自动保存链进入失败态、锁死切书/切会话导航——复审 P1 的死锁链）。
+    // 但不能静默：console.warn 之外再发一次性 UI 信号（toast，按会话去重，不随每次 autosave 刷屏）。
     console.warn("[chat-sessions] 跳过保存：该会话本次运行尚未成功加载，内存副本不可信", { id });
+    notifySaveSkippedOnce(projectPath, id);
     return { ok: true };
   }
   return put<{ ok: true }>({ action: "save", projectPath, id, messages, windowEpoch: epoch });
@@ -96,3 +123,10 @@ export const unarchiveChatSession = (projectPath: string, id: string) =>
   put<{ ok: true; archivedCount: number }>({ action: "unarchive", projectPath, id });
 export const saveChatHistoryBudget = (projectPath: string, budget: number) =>
   put<{ ok: true; chatHistoryBudgetTokens: number }>({ action: "setBudget", projectPath, budget });
+
+/** 仅供单测：清空纪元登记 / 跳过告警去重 / 通知回调，防模块态跨用例串味。 */
+export function __resetChatSessionsClientForTests(): void {
+  sessionEpochs.clear();
+  saveSkipNotifiedKeys.clear();
+  saveSkippedNotifier = null;
+}
