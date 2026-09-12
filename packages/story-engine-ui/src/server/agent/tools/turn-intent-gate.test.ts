@@ -299,7 +299,7 @@ describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）",
   });
 });
 
-// ─── 两门共用一套语料（复审 P1-A + P2-3 返工钉死）───
+// ─── 两门共用一套语料（复审 P1-A + P2-3 + P2-b/c 返工钉死）───
 // 每条同时断 commit / prune 两门期望：跨门句子（无本门域内动词）一律 fail-closed。
 const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: boolean; note: string }> = [
   // 三审 P1-2 全部 8 条（含三审漏钉的「先别入库，不过还是不要确认入库」与全部 prune 例）
@@ -324,10 +324,13 @@ const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: 
   { text: "确认裁剪快照历史，先别", commit: false, prune: false, note: "P1-A 扩展：尾随否决" },
   { text: "确认裁剪快照历史，先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟" },
   { text: "确认裁剪，但是先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟同类" },
-  // P2-3 commit 门：中段状语否定误拦回归（与逗号版同义异形统一为放行）
-  { text: "不着急确认入库", commit: true, prune: false, note: "P2-3：「不着急」状语否定豁免" },
-  { text: "确认没毛病就入库", commit: true, prune: false, note: "P2-3：「没毛病」同「没问题」豁免" },
-  { text: "不着急，确认入库", commit: true, prune: false, note: "P2-3：逗号版对照" },
+  // P2-b commit 门：「没毛病/没问题/没什么」是状况陈述不是推迟 → 放行；「不着急/不急着」推迟=否定极性 → 拦
+  // （第四轮「状语豁免」曾把无逗号推迟句放行真入库，豁免撤除；逗号版「不着急」独立成句不参与极性，仍放行）
+  { text: "不着急确认入库", commit: false, prune: false, note: "P2-b：推迟=否定极性，状语豁免撤除后拦（第四轮曾放行）" },
+  { text: "我不着急确认入库", commit: false, prune: false, note: "P2-b：推迟句拦（第四轮曾放行真入库）" },
+  { text: "确认不着急入库", commit: false, prune: false, note: "P2-b：推迟句拦同类" },
+  { text: "确认没毛病就入库", commit: true, prune: false, note: "P2-b：「没毛病」状况陈述豁免保住放行" },
+  { text: "不着急，确认入库", commit: true, prune: false, note: "P2-b：逗号版对照——「不着急」独立成句不参与极性" },
   // P2-3 commit 门：疑问句 fail-closed（疑问不是确认）
   { text: "确认定稿？", commit: false, prune: false, note: "P2-3：疑问句" },
   { text: "你确认要入库吗", commit: false, prune: false, note: "P2-3：疑问句" },
@@ -337,6 +340,10 @@ const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: 
   { text: "确认入库，算了先别", commit: false, prune: false, note: "P2-3：尾随否决" },
   { text: "确认定稿，先别急", commit: false, prune: false, note: "P2-3：尾随推迟" },
   { text: "确认定稿，但是先等等", commit: false, prune: false, note: "P2-3：尾随推迟" },
+  // P2-c：尾随否决词表补全（算了/等一下/慢着曾缺，这类尾句此前放行真入库）
+  { text: "确认入库，算了", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
+  { text: "确认定稿，等一下", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
+  { text: "确认入库，慢着", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
   // P2-3 commit 门：动词后否定
   { text: "确认入库不行", commit: false, prune: false, note: "P2-3：动词后否定" },
   { text: "确认提交不了", commit: false, prune: false, note: "P2-3：动词后否定" },
@@ -355,7 +362,7 @@ const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: 
   { text: "确认裁剪吗", commit: false, prune: true, note: "prune 疑问放行是钉住现状；commit 无此口径" },
 ];
 
-describe("turn-intent-gate 两门共用语料（复审 P1-A + P2-3 钉死）", () => {
+describe("turn-intent-gate 两门共用语料（复审 P1-A + P2-3 + P2-b/c 钉死）", () => {
   it.each(SHARED_GATE_CORPUS)("commit 门「$text」（$note）", ({ text, commit }) => {
     expect(userTurnAllowsCommitApply(text)).toBe(commit);
   });

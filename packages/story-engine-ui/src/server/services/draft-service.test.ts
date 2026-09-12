@@ -83,7 +83,9 @@ vi.mock("../agent/ai-flavor/de-ai-flavor-batch.js", () => ({
 }));
 
 import { defaultDraftPath } from "../lib/project-io.js";
-import { readFileContentWithRetry, readPreviousDraftForRollback, runGenerateDraft } from "./draft-service.js";
+import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
+import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
+import { readFileContentWithRetry, readPreviousDraftForRollback, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
 // chmod 0o000 注入读失败在 root 下不生效（root 无视权限位），win32 无 POSIX 权限语义——跳过。
@@ -290,6 +292,10 @@ describe("runGenerateDraft enforce 路写前读失败（P2-5 真稿保护）", (
     expect(result.summary).toContain("未覆盖");
     expect(result.issues.join(" ")).toContain("读取失败");
     expect(result.rejection).toBeUndefined();
+    // 铁律④：errno 原文内嵌的绝对路径绝不进用户可见文案（summary/issues 同口径消毒）。
+    expect(result.summary).toContain("(本地路径)");
+    expect(result.summary).not.toContain(projectDir!);
+    expect(result.issues.join(" ")).not.toContain(projectDir!);
     // 真稿逐字不动——回滚 rm 路径绝不能被触发；
     expect(await readFile(draftPath, "utf-8")).toBe(OLD_DRAFT);
     // 且生成根本没启动（写盘前拒稿，引擎/模型都没碰）。
@@ -326,4 +332,61 @@ describe("runGenerateDraft enforce 路写前读失败（P2-5 真稿保护）", (
     expect(result.rejection?.kind).toBe("length_rejected");
     expect(await readFile(draftPath, "utf-8")).toBe(OLD_DRAFT); // 回滚凭据来自写前读，逐字写回
   }, 10_000);
+});
+
+describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-"));
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("快照读稿 fail-closed 抛错带绝对路径 → info.error 如实降级但路径已消毒，原稿不动", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+    vi.mocked(runDeAiFlavorBatch).mockResolvedValue({
+      ok: true,
+      detected: 1,
+      rewritten: 1,
+      skipped: 0,
+      skippedByReason: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
+      changes: [],
+      updatedContent: "# 第1章\n\n改写后的正文，与原文不同。\n",
+      summary: "一键全修：1 处 AI 腔，改了 1 处。",
+    });
+    // 快照 fail-closed 的 errno 原文内嵌绝对路径（真实形态见 snapshot-on-draft-overwrite）。
+    vi.mocked(snapshotBeforeDraftOverwrite).mockRejectedValueOnce(
+      new Error(`第1章工作稿读取失败（EACCES: permission denied, open '${draftPath}'），已中止`),
+    );
+
+    const result = await runAutoDeAiRound({
+      projectDir: projectDir!,
+      chapter: 1,
+      draftPath,
+      initialHighMedium: 1,
+      targets: [],
+      rules: [],
+      antiRules: [],
+      callModel: vi.fn(async () => ""),
+    });
+
+    // 降级如实报：本轮没跑成（改写放弃），error 直达用户前路径已洗。
+    expect(result.info.attempted).toBe(true);
+    expect(result.info.fixedCount).toBe(0);
+    expect(result.info.error).toContain("(本地路径)");
+    expect(result.info.error ?? "").not.toContain(projectDir!);
+    expect(result.draftBody).toBeUndefined();
+    expect(result.snapshotId).toBeUndefined();
+    // 原稿分毫不动（降级承诺）。
+    expect(await readFile(draftPath, "utf-8")).toBe(DRAFT_TEXT);
+  });
 });

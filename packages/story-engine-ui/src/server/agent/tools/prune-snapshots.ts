@@ -19,6 +19,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
 import { pruneSnapshots, type SnapshotPruneResult } from "../../lib/snapshot.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { readProjectDirFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { coerceBoolean, coerceNumber, positiveOrUndefined } from "./lenient-args.js";
 import { userTurnAllowsSnapshotPrune } from "./turn-intent-gate.js";
@@ -34,15 +35,6 @@ export interface PruneSnapshotsRunResult {
   readonly freedCommits?: number;
   readonly backupBundlePath?: string;
   readonly warnings?: string[];
-}
-
-/**
- * 摘要消毒（铁律④·绝不泄露本地绝对路径）：与 commit-apply.ts scrubBareEntityIdsFromText 的
- * 路径分支同一口径。prune 的错误/警告文本可能内嵌 bundle 备份或项目目录的绝对路径
- * （snapshot.ts 回滚错误内嵌 bundlePath、git 子进程报错常带 -C 仓库路径），进【给用户看的】summary 前必须洗掉。
- */
-function scrubLocalAbsolutePaths(text: string): string {
-  return text.replace(/'?\/(?:Users|home|var|tmp|private)\/[^'"\s]*'?/gu, "(本地路径)");
 }
 
 /** summary 只讲条数与去向；快照 id / 提交哈希绝不进文本（baseCommitId 也不透出到 output——agent 用不上）。 */

@@ -77,6 +77,7 @@ import {
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
 import { defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { positiveOrUndefined } from "../agent/tools/lenient-args.js";
 import { readAntiAiPatterns, readAntiRules } from "../agent/tools/check-ai-flavor.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
@@ -471,7 +472,8 @@ export async function runAutoDeAiRound(input: {
   try {
     snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
   } catch (error) {
-    return notRun(error instanceof Error ? error.message : String(error));
+    // 错误原文可能内嵌绝对路径（快照读稿 errno / git 报错带 -C 仓库路径）——info.error 直达用户，先消毒（铁律④）。
+    return notRun(scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)));
   }
   const written = `${result.updatedContent.trimEnd()}\n`;
   await writeFile(input.draftPath, written, "utf-8");
@@ -805,7 +807,7 @@ async function sampleDraftCandidates(input: {
       exceptions.push(undefined);
     } catch (error) {
       reports.push(undefined);
-      exceptions.push(error instanceof Error ? error.message : String(error));
+      exceptions.push(scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)));
     }
   }
   // 判漏误报降噪：选优前对每个「通过 + 有正文 + 有判漏」的候选跑 AI 复核（顺序调、不并发，同生成纪律）；
@@ -858,7 +860,7 @@ async function sampleDraftCandidates(input: {
       ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
     return {
       entries,
       scoreInputs,
@@ -1131,8 +1133,9 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   if (previousDraft?.kind === "unreadable") {
     const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
     const contextBudget = optionalContextBudget(contextRanking);
+    // previousDraft.error 是 errno 原文、内嵌绝对路径——summary/issues 直达用户，先消毒（铁律④）。
     const message =
-      `第 ${chapter} 章已有工作稿但读取失败（${previousDraft.error}）。` +
+      `第 ${chapter} 章已有工作稿但读取失败（${scrubLocalAbsolutePaths(previousDraft.error)}）。` +
       "为保护旧稿，本次未生成、未覆盖任何内容；请检查该文件后重试。";
     return {
       ok: false,

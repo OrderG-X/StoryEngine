@@ -64,8 +64,14 @@ describe("snapshotBeforeDraftOverwrite（M6 覆盖现有非空草稿前建快照
     await mkdir(dirname(draftPath), { recursive: true });
     await symlink(draftPath, draftPath); // 自指环：readFile 必 ELOOP，root 下也确定触发
     const before = await listSnapshots(projectDir);
-    await expect(snapshotBeforeDraftOverwrite(projectDir, 4, "第4章再次出稿前快照"))
-      .rejects.toThrow(/读取失败/u);
+    const error = await snapshotBeforeDraftOverwrite(projectDir, 4, "第4章再次出稿前快照")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("读取失败");
+    // 铁律④：errno 原文内嵌的绝对路径直达用户（工具错误/路由 500）前必须洗掉。
+    expect(message).toContain("(本地路径)");
+    expect(message).not.toContain(projectDir);
     expect((await listSnapshots(projectDir)).length).toBe(before.length); // 没建快照
     expect((await lstat(draftPath)).isSymbolicLink()).toBe(true); // 旧稿（ symlink 本体）分毫未动
   });

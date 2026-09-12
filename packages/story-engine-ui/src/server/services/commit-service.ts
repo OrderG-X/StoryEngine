@@ -82,6 +82,7 @@ import {
   stripLeadingMarkdownChapterHeading,
 } from "../lib/project-io.js";
 import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { createSnapshot } from "../lib/snapshot.js";
 import {
   buildCommitPreviewTransaction,
@@ -1141,15 +1142,6 @@ function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempot
   return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览入库（或草稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
     + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
     + `2) 人工核对确认上次定稿确实未生效后，删除回执文件 ${receiptFile} 再用原预览凭证重试。`;
-}
-
-/**
- * 用户可见文案的路径消毒（铁律④·绝不泄露本地绝对路径）：与 commit-apply.ts scrubBareEntityIdsFromText /
- * prune-snapshots.ts scrubLocalAbsolutePaths 的路径分支同一口径。errno 原文
- * （如 `EACCES: permission denied, open '/abs/path/chapters/0001.md'`）内嵌绝对路径，直达用户前必须洗掉。
- */
-function scrubLocalAbsolutePaths(text: string): string {
-  return text.replace(/'?\/(?:Users|home|var|tmp|private)\/[^'"\s]*'?/gu, "(本地路径)");
 }
 
 /**

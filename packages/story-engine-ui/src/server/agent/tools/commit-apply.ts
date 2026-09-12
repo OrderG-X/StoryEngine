@@ -22,6 +22,7 @@ import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
@@ -386,9 +387,8 @@ const BARE_ENTITY_ID_PLACEHOLDER: Readonly<Record<string, string>> = {
  * summary/refusalReason 前必须清洗：裸 id → 角色/条目名（解析得到）或中性占位（解析不到），绝对路径 → 占位。
  */
 export function scrubBareEntityIdsFromText(text: string, nameById: ReadonlyMap<string, string>): string {
-  return text
-    // 先剥本地绝对路径（含引号包裹），避免把磁盘路径漏给用户。
-    .replace(/'?\/(?:Users|home|var|tmp|private)\/[^'"\s]*'?/gu, "(本地路径)")
+  // 先剥本地绝对路径（含引号包裹），避免把磁盘路径漏给用户。
+  return scrubLocalAbsolutePaths(text)
     // 再把裸 entity id → 名字 / 中性占位。
     .replace(/\b(char|hook|thread|fact)-[a-z0-9]{4,}\b/giu, (match, prefix: string) => {
       const name = nameById.get(match);
