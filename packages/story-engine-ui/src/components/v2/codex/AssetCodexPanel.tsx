@@ -130,8 +130,8 @@ export default function AssetCodexPanel({
       <div className="page-head">
         <div>
           <div className="kicker">道具与资源</div>
-          <h1>资产 / 道具</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把资产补全" label="✦ 补全资产" />
+          <h1>道具与资源</h1>
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把道具与资源补全" label="✦ 补全道具与资源" />
           {!isEmpty ? (
             <p className="lead-sub">
               按持有人分组，再按可用性分桶。每件标注读者可见性、角色知情状态与剧情风险——写作前据此判断「这个角色能不能突然拿出它」。
@@ -158,12 +158,12 @@ export default function AssetCodexPanel({
           ))}
 
           {cards.map((card) => (
-            <CustomFieldsSection key={`cf-${card.name}`} fields={card.extraFields} title={`${uiText(card.name, "未命名资产")} · 自定义字段`} />
+            <CustomFieldsSection key={`cf-${card.name}`} fields={card.extraFields} title={`${uiText(card.name, "未命名道具")} · 自定义字段`} />
           ))}
 
           {limits.length > 0 ? (
             <div className="asset-rule">
-              <h5>⚙ 资产硬规则 · 全局限制</h5>
+              <h5>⚙ 道具与资源硬规则 · 全局限制</h5>
               <ul>
                 {limits.map((rule, i) => (
                   <li key={i}>{rule}</li>
@@ -203,7 +203,7 @@ function OwnerLedger({ owner }: { readonly owner: AssetOwnerView }) {
         </div>
       </div>
       <div className="asset-grps">
-        <AssetGroup title="随身资产" glyph={GLYPH_CARRIED} items={owner.carried} />
+        <AssetGroup title="随身物品" glyph={GLYPH_CARRIED} items={owner.carried} />
         <AssetGroup title="当前可用" glyph={GLYPH_AVAILABLE} items={owner.available} />
         <AssetGroup title="受限 / 不可用" glyph={GLYPH_LOCKED} items={owner.unavailable} variant="locked" />
         <AssetGroup title="★ 剧情关键 / 隐藏" glyph={GLYPH_CRITICAL} items={owner.critical} variant="hidden" accent />
@@ -237,7 +237,7 @@ function AssetGroup({
           <div className={`asset-item${variant ? ` ${variant}` : ""}`} key={`${title}:${asset.name}:${asset.status}`}>
             <span className="ai-ic" style={accent ? { color: "var(--accent-hi)" } : undefined}>{glyph}</span>
             <div>
-              <b>{uiText(asset.name, "未命名资产")}</b>
+              <b>{uiText(asset.name, "未命名道具")}</b>
               {has(asset.visibility) ? <span className="ai-vis">{asset.visibility}</span> : null}
               {note ? <span className="ai-note">{note}</span> : null}
             </div>
@@ -273,7 +273,7 @@ function assetNote(asset: AssetCardData): string {
 
 function ownerSummary(owner: AssetOwnerView): string {
   const parts = [
-    `${owner.items.length} 件资产`,
+    `${owner.items.length} 件物品`,
     owner.carried.length ? `随身 ${owner.carried.length} 件` : undefined,
     owner.unavailable.length ? `受限 ${owner.unavailable.length} 件` : undefined,
     owner.critical.length ? `关键 ${owner.critical.length} 件` : undefined,

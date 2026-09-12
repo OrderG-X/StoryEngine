@@ -92,12 +92,12 @@ export function ChatSessionBar() {
       if (!ownsSessionOrigin(transition)) return false;
       if (!target.session) throw new Error(`活跃会话不可读: ${listed.index.activeSessionId}`);
       applySessionTruth({ index: listed.index, session: target.session });
-      notify(`${actionLabel}的回执未确认，已按磁盘状态重新同步。`);
+      notify(`${actionLabel}的结果没有收到确认，已按磁盘上的实际内容重新同步。`);
       return true;
     } catch (reconcileError) {
       if (ownsSessionOrigin(transition)) {
         console.error(`[ChatSessionBar] ${actionLabel}后对账失败`, { originalError, reconcileError });
-        notify(`${actionLabel}回执丢失且磁盘对账失败，当前会话状态不确定，请刷新页面后再操作。`);
+        notify(`${actionLabel}的结果丢失且磁盘对账失败，当前会话状态不确定，请刷新页面后再操作。`);
       }
       return false;
     }

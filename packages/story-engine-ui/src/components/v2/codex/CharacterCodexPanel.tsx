@@ -160,7 +160,7 @@ export default function CharacterCodexPanel({
     return (
       <div className="read-inner">
         <div className="catrail-foot" style={{ marginTop: 40 }}>
-          <b>还没有角色档案</b>　去右边对 AI 说「帮我完善主要角色」，AI 会把每个角色的性格、目标和说话方式整理在这里。
+          <b>还没有角色档案</b>　去右边对 AI 说「帮我补全主要角色」，AI 会把每个角色的性格、目标和说话方式整理在这里。
         </div>
       </div>
     );

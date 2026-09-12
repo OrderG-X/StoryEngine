@@ -18,7 +18,7 @@ export function AiFlavorCard({ report, fixedIds = [], pendingViolationId = null,
   readonly fixedIds?: readonly string[];
   /** 当前正在改写的违规 id（来自 store 的 aiFlavorPending，命中本卡时显示「改写中…」）。 */
   readonly pendingViolationId?: string | null;
-  /** 那条 pending 的改写草案是否已生成、正等用户去写作台点「应用到草稿」（activeRevisionPreview 就绪）。
+  /** 那条 pending 的改写草案是否已生成、正等用户去写作台点「应用到工作稿」（activeRevisionPreview 就绪）。
    *  true=系统已闲、在等人 → 显「待应用」；false=模型还在改 → 显「改写中…」。治「等用户期间误标改写中＝以为卡死」。 */
   readonly awaitingApply?: boolean;
   /** 本卡是否正在「一键全修」中（命中时顶部按钮转「全修中…」、禁重复点）。 */

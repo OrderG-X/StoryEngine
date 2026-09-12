@@ -59,7 +59,7 @@ export default function CharacterMatrixCodexPanel({
     return (
       <div className="read-inner">
         <div className="catrail-foot" style={{ marginTop: 40 }}>
-          <b>还没有角色关系</b>　去右边对 AI 说「帮我整理人物关系」，AI 会把角色之间的联系、立场和变化整理在这里。
+          <b>还没有角色关系</b>　去右边对 AI 说「帮我整理角色关系」，AI 会把角色之间的联系、立场和变化整理在这里。
         </div>
       </div>
     );

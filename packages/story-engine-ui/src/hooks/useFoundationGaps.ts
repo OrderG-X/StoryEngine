@@ -329,7 +329,7 @@ export function useFoundationGaps(projectPath: string | null) {
         setFoundationGapError("请先打开真实本地项目。");
         return false;
       }
-      setFoundationGapLoading("撤回资料修改");
+      setFoundationGapLoading("撤销资料修改");
       setFoundationGapError(null);
       try {
         const result = await rollbackFoundationGapApply(projectPath, undoId);
@@ -338,7 +338,7 @@ export function useFoundationGaps(projectPath: string | null) {
         setFoundationGapReport(nextReport);
         setFoundationGapSuggestions(nextReport.suggestions);
         setFoundationGapDecisions(Object.fromEntries(nextReport.suggestions.map((suggestion) => [suggestion.id, "defer" as const])));
-        showToast("已撤回本次资料修改。");
+        showToast("已撤销本次资料修改。");
         return true;
       } catch (error) {
         setFoundationGapError(error instanceof Error ? error.message : String(error));

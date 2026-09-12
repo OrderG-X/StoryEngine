@@ -40,37 +40,37 @@ import {
 import { userTurnAllowsCommitApply } from "./turn-intent-gate.js";
 
 const inputSchema = z.object({
-  chapter: coerceNumber(z.number().int().positive().optional().describe("要入库的章号（必须与之前 commit_preview 的章号一致）。")),
+  chapter: coerceNumber(z.number().int().positive().optional().describe("要定稿的章号（必须与之前 commit_preview 的章号一致）。")),
   previewToken: z.string().optional().describe(
-    "commit_preview 返回的真实令牌。可省略：系统会优先使用同进程内最近一次有效 commit_preview 票据；没有有效预览时会拒绝入库。",
+    "commit_preview 返回的真实令牌。可省略：系统会优先使用同进程内最近一次有效 commit_preview 票据；没有有效预览时会拒绝定稿。",
   ),
 });
 
 const outputSchema = z.object({
-  snapshotId: z.string().describe("入库前的快照 id，前端凭此可一键撤销整次入库。"),
+  snapshotId: z.string().describe("定稿前的快照 id，前端凭此可一键撤销整次定稿。"),
   ok: z.boolean().describe(
-    "统一诚实成功标志：true=真的入库成功（committed）；false=被拒绝或入库未通过。前端结构性防谎报只认这个字段。",
+    "统一诚实成功标志：true=真的定稿成功（committed）；false=被拒绝或定稿未通过。前端结构性防谎报只认这个字段。",
   ),
-  committed: z.boolean().describe("是否真的完成了入库。"),
-  refused: z.boolean().describe("是否因守卫（未预览/草稿已变/计划不可用）被拒绝。"),
+  committed: z.boolean().describe("是否真的完成了定稿。"),
+  refused: z.boolean().describe("是否因守卫（未预览/工作稿已变/计划不可用）被拒绝。"),
   refusalReason: z.string().optional().describe("被拒绝的原因（诚实回报，不谎称成功）。"),
-  blockedReason: z.string().optional().describe("写入前守卫拦截原因，如本轮用户原话没有正式入库意图。"),
-  report: z.unknown().optional().describe("入库报告（更新了哪些角色/伏笔/线索/时间线等）。"),
+  blockedReason: z.string().optional().describe("写入前守卫拦截原因，如本轮用户原话没有正式定稿意图。"),
+  report: z.unknown().optional().describe("定稿报告（更新了哪些角色/伏笔/线索/时间线等）。"),
   draftBody: z.string().optional().describe(
-    "入库的章节正文（去 Markdown 标题）；入库成功时返回，供前端把正文以 committed 状态载入工作区，避免被占位覆盖、且防 autosave 把已入库章节复活成草稿。",
+    "已定稿的章节正文（去 Markdown 标题）；定稿成功时返回，供前端把正文以 committed 状态载入工作区，避免被占位覆盖、且防 autosave 把已定稿章节复活成工作稿。",
   ),
-  draftTitle: z.string().optional().describe("入库章节标题（成功时）。"),
-  overview: z.unknown().describe("入库后（或拒绝时仍读取当前）的 StateOverview，供前端刷新。"),
-  summary: z.string().describe("入库结果的自然语言摘要。"),
+  draftTitle: z.string().optional().describe("定稿章节标题（成功时）。"),
+  overview: z.unknown().describe("定稿后（或拒绝时仍读取当前）的 StateOverview，供前端刷新。"),
+  summary: z.string().describe("定稿结果的自然语言摘要。"),
   refreshScope: z.literal("full"),
-  chapter: z.number().int().positive().optional().describe("本次入库的章号。"),
+  chapter: z.number().int().positive().optional().describe("本次定稿的章号。"),
 });
 
 const GUARD_FAILURE_MESSAGE: Record<CommitPreviewGuardFailure, string> = {
-  no_preview: "尚未对该章执行 commit_preview，按规则不能直接入库；请先预览确认。",
-  chapter_mismatch: "预览的章节与本次入库章节不一致；请对该章重新 commit_preview。",
+  no_preview: "尚未对该章执行 commit_preview，按规则不能直接定稿；请先预览确认。",
+  chapter_mismatch: "预览的章节与本次定稿章节不一致；请对该章重新 commit_preview。",
   token_mismatch: "previewToken 无效或与该章不匹配；请先 commit_preview 取得有效令牌。",
-  draft_changed_since_preview: "草稿在预览之后又改动过；为避免入库与预览不一致，请重新 commit_preview。",
+  draft_changed_since_preview: "工作稿在预览之后又改动过；为避免定稿与预览不一致，请重新 commit_preview。",
 };
 
 export interface CommitApplyToolOutput {
@@ -123,7 +123,7 @@ export async function applyCommitToolLogic(input: {
   const { projectDir, chapter } = input;
   switch (result.kind) {
     case "no_draft":
-      return refusal(projectDir, chapter, `第 ${chapter} 章草稿不存在，无法定稿。`);
+      return refusal(projectDir, chapter, `第 ${chapter} 章工作稿不存在，无法定稿。`);
     case "already_committed_duplicate":
       // A7 命中：断流后重试/重复请求——幂等回报「已入库」，不重复写入。
       return {
@@ -161,7 +161,7 @@ export async function applyCommitToolLogic(input: {
         report,
         overview,
         // #6a 诚实性：入库失败=事务已回滚、未产生净改动 → 不再谎称「改动已建快照可撤销」。
-        summary: `第 ${chapter} 章定稿未通过：${safeJoined}。本次未定稿、草稿未改动。`,
+        summary: `第 ${chapter} 章定稿未通过：${safeJoined}。本次未定稿、工作稿未改动。`,
         refreshScope: "full",
       };
     }
@@ -305,10 +305,10 @@ const callConfiguredFactModel: FactCallModel = async (messages) => {
 export const commitApplyTool = writeTool({
   id: "commit_apply",
   description:
-    "把某章草稿正式入库（写入章节正文与角色/伏笔/线索/时间线等全套状态，自带事务回滚）。" +
-    "必须先对同一章 commit_preview 过、且草稿未改动；否则会被拒绝、不会入库。" +
-    "previewToken 可省略，系统会使用最近一次有效入库预览票据；如果看到了真实 previewToken 可以带上，但绝不编造 token_placeholder。" +
-    "入库前自动建快照，可一键撤销。本工具有写入前守卫：本轮用户原话没有明确正式入库意图会被拒绝。",
+    "把某章工作稿正式定稿（写入章节正文与角色/伏笔/线索/时间线等全套状态，自带事务回滚）。" +
+    "必须先对同一章 commit_preview 过、且工作稿未改动；否则会被拒绝、不会定稿。" +
+    "previewToken 可省略，系统会使用最近一次有效定稿预览票据；如果看到了真实 previewToken 可以带上，但绝不编造 token_placeholder。" +
+    "定稿前自动建快照，可一键撤销。本工具有写入前守卫：本轮用户原话没有明确定稿意图会被拒绝。",
   inputSchema,
   outputSchema,
   preflight: async ({ input, projectDir, context }) => {

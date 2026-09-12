@@ -94,7 +94,7 @@ export const generateChapterSteeringTool = createTool({
   id: "generate_chapter_steering",
   description:
     "为下一章生成一份剧情方案：基于项目真实状态（伏笔/线索/主线目标/角色/地点/风险）给出可选的剧情建议清单，" +
-    "并合成本章目标预览（只读，不写任何文件、不入库）。当用户说『下一章怎么写 / 给我下一章的方案 / 帮我规划下一章』时调用。" +
+    "并合成本章目标预览（只读，不写任何文件、不定稿）。当用户说『下一章怎么写 / 给我下一章的方案 / 帮我规划下一章』时调用。" +
     "需要把方案落实成正文请随后调用 generate_draft。",
   inputSchema,
   outputSchema,

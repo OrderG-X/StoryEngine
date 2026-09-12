@@ -25,7 +25,7 @@ describe("UsageDialog", () => {
       />,
     );
 
-    expect(screen.getByText("暂无 diagnostics 用量记录。流式草稿可能无法返回 provider usage。")).toBeInTheDocument();
+    expect(screen.getByText("暂无 diagnostics 用量记录。流式生成工作稿时可能无法返回 provider usage。")).toBeInTheDocument();
   });
 
   it("renders diagnostics warnings as controlled compatibility notes", () => {

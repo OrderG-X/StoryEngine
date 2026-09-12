@@ -242,7 +242,7 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
     });
     const resolvedSelectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
     await assertStoryEngineProject(projectDir);
-    await createSnapshot(projectDir, `草稿生成前快照：第${chapter}章`);
+    await createSnapshot(projectDir, `工作稿生成前快照：第${chapter}章`);
 
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -262,7 +262,7 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
     });
     const context = contextRanking.rankContext(builtContext);
     if (context.sections.some((section) => section.name === "previous_uncommitted_draft")) {
-      sendEvent("status", { message: "已读取上一章未入库工作稿作为连续性上下文。" });
+      sendEvent("status", { message: "已读取上一章未定稿工作稿作为连续性上下文。" });
     }
     const configured = await resolveConfiguredChatModel("fastDraft");
     const prompt = renderFastDraftPromptText(context);

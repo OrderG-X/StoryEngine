@@ -92,9 +92,9 @@ describe("story agent instructions（确认口径唯一）", () => {
 
   // R2#2：开书给具名角色登记关系应走 update_character_detail 的 relationshipToProtagonist，
   // 别去调 generate_character_relationships（它只整理已入库章节、开书撞空且失败提示误导）。
-  it("关系登记纪律：开书登记关系走 update_character_detail，generate_character_relationships 仅整理已入库章节", () => {
+  it("关系登记纪律：开书登记关系走 update_character_detail，generate_character_relationships 仅整理已定稿章节", () => {
     expect(instructions).toContain("generate_character_relationships 只");
-    expect(instructions).toContain("已入库章节");
+    expect(instructions).toContain("已定稿章节");
   });
 
   // #1-B：开书阶段关系矩阵/关系网视图（character-matrix.json）建不出来，绝不谎报「关系矩阵已写入」。
@@ -241,9 +241,9 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toContain("不要用全局清理工具替代");
   });
 
-  it("出稿后下一步交给选项卡，文字不要重复口播草稿保存/下一步提示", () => {
+  it("出稿后下一步交给选项卡，文字不要重复口播工作稿保存/下一步提示", () => {
     expect(instructions).toContain("不要重复口播工具 summary");
-    expect(instructions).toContain("不要重复说『草稿已保存』");
+    expect(instructions).toContain("不要重复说『工作稿已保存』");
   });
 });
 

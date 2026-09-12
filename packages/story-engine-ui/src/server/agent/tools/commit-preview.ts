@@ -52,29 +52,29 @@ const inputSchema = z.object({
 const outputSchema = z.object({
   chapter: z.number().int().positive(),
   ok: z.boolean().describe(
-    "统一诚实成功标志：等于 canCommit。false=本章暂不可入库（缺草稿/计划不通过/有 error 级问题）。" +
-      "前端据此把时间线步骤置 failed，避免「想入库却不可入库」被显示成绿色完成（谎报）。",
+    "统一诚实成功标志：等于 canCommit。false=本章暂不可定稿（缺工作稿/计划不通过/有 error 级问题）。" +
+      "前端据此把时间线步骤置 failed，避免「想定稿却不可定稿」被显示成绿色完成（谎报）。",
   ),
-  canCommit: z.boolean().describe("是否可以入库（计划构建通过 + 质量检查无 error 级问题）。"),
+  canCommit: z.boolean().describe("是否可以定稿（计划构建通过 + 质量检查无 error 级问题）。"),
   previewToken: z.string().optional().describe("预览通过时签发的一次性令牌；commit_apply 可省略它，由系统使用最近一次有效预览票据。canCommit=false 时省略。"),
-  plan: z.unknown().describe("入库计划（角色/伏笔/线索/时间线等将发生的变更）。"),
+  plan: z.unknown().describe("定稿计划（角色/伏笔/线索/时间线等将发生的变更）。"),
   draftQualityIssues: z.array(z.object({
     severity: z.string(),
     type: z.string(),
     message: z.string(),
-  })).describe("草稿入库前的确定性质量检查问题（error 级会阻止入库）。"),
+  })).describe("工作稿定稿前的确定性质量检查问题（error 级会阻止定稿）。"),
   semanticQualityIssues: z.array(z.object({
     severity: z.string(),
     type: z.string(),
     message: z.string(),
-  })).describe("入库计划语义质量检查问题（含 type=character_name_drift 的人物名近形漂移 warning）。"),
+  })).describe("定稿计划语义质量检查问题（含 type=character_name_drift 的人物名近形漂移 warning）。"),
   nameConsistencyWarnings: z.array(z.object({
     establishedName: z.string(),
     driftedVariant: z.string(),
     message: z.string(),
   })).describe(
     "人物名一致性提醒：本章出现的名字与已确立角色名形近、疑似写歪（引擎确定性判定，非模型主观）。" +
-      "必须原样转达给用户、不得淡化为『有意设计/无关紧要』；这是写前一致性护栏，不阻断入库。",
+      "必须原样转达给用户、不得淡化为『有意设计/无关紧要』；这是写前一致性护栏，不阻断定稿。",
   ),
   staleThreadWarnings: z.array(z.object({
     kind: z.string(),
@@ -85,9 +85,9 @@ const outputSchema = z.object({
   })).describe(
     "伏笔/线索/目标待收口提醒（引擎确定性判定 + 里程碑制：新停滞头两章提醒、长期停滞每 10 章重提一次，" +
       "不会每章重复刷全量；全量底数见 summary 的 digest）。kind 含 伏笔/线索/主线目标/阶段目标。" +
-      "必须原样转达给用户、不得淡化——这是防『埋了不收、开了没下文』的遗漏护栏，只提示、不阻断入库。",
+      "必须原样转达给用户、不得淡化——这是防『埋了不收、开了没下文』的遗漏护栏，只提示、不阻断定稿。",
   ),
-  blockingReasons: z.array(z.string()).describe("阻止入库的原因（草稿缺失/计划不通过/存在 error 级质量问题等）。"),
+  blockingReasons: z.array(z.string()).describe("阻止定稿的原因（工作稿缺失/计划不通过/存在 error 级质量问题等）。"),
   summary: z.string().describe("预览结果的自然语言摘要（用户可见文案，UI 会直接展示；不含内部工具名）。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引：下一步流程与转达要求。仅你可见，UI 不展示。"),
 });
@@ -148,7 +148,7 @@ export async function buildCommitPreviewToolOutput(input: {
       nameConsistencyWarnings: [],
       staleThreadWarnings: [],
       blockingReasons: ["missing_draft"],
-      summary: `第 ${result.chapter} 章还没有草稿，无法预览入库。`,
+      summary: `第 ${result.chapter} 章还没有工作稿，无法生成定稿预览。`,
     };
   }
 
@@ -393,7 +393,7 @@ function buildPreviewSummary(input: {
   }
   const hints: string[] = [];
   if (input.canCommit) {
-    hints.push("用户明确确认定稿后再调用 commit_apply 正式写入（可省略 token，系统用最近一次有效预览票据）；未确认前不得自行入库。");
+    hints.push("用户明确确认定稿后再调用 commit_apply 正式写入（可省略 token，系统用最近一次有效预览票据）；未确认前不得自行定稿。");
   }
   if (summary !== base) {
     hints.push("summary 里【】内的提醒须如实转达给用户，勿淡化、勿隐去。");
@@ -404,9 +404,9 @@ function buildPreviewSummary(input: {
 export const commitPreviewTool = createTool({
   id: "commit_preview",
   description:
-    "预览把某章草稿正式入库会产生的变更，并做入库前的质量门槛检查（不修改任何文件）。" +
-    "当用户想把某章入库、或想知道入库会带来哪些状态变更时，先调用本工具。" +
-    "预览通过会返回 previewToken；正式入库必须随后调用 commit_apply。commit_apply 可省略 token，由系统使用最近一次有效预览票据。",
+    "预览把某章工作稿正式定稿会产生的变更，并做定稿前的质量门槛检查（不修改任何文件）。" +
+    "当用户想把某章定稿、或想知道定稿会带来哪些状态变更时，先调用本工具。" +
+    "预览通过会返回 previewToken；正式定稿必须随后调用 commit_apply。commit_apply 可省略 token，由系统使用最近一次有效预览票据。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

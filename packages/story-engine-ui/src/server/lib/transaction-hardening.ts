@@ -76,25 +76,25 @@ export function validateCommitApplyPreflight(input: {
   readonly residues: readonly TransactionResidue[];
 }): CommitApplyPreflightResult {
   if (typeof input.transactionId !== "string" || input.transactionId.trim().length === 0) {
-    return failure("missing_transaction_id", "缺少 transactionId，请重新生成入库预览。");
+    return failure("missing_transaction_id", "缺少 transactionId，请重新生成定稿预览。");
   }
   if (input.transactionId !== input.current.transactionId) {
-    return failure("transaction_id_mismatch", "transactionId 与当前入库预览不一致，请重新生成入库预览。");
+    return failure("transaction_id_mismatch", "transactionId 与当前定稿预览不一致，请重新生成定稿预览。");
   }
   if (typeof input.expectedPreviewHash !== "string" || input.expectedPreviewHash.trim().length === 0) {
-    return failure("missing_preview_hash", "缺少 previewHash，请重新生成入库预览。");
+    return failure("missing_preview_hash", "缺少 previewHash，请重新生成定稿预览。");
   }
   if (input.expectedPreviewHash !== input.current.previewHash) {
-    return failure("preview_hash_mismatch", "草稿或入库预览已变化，请重新生成入库预览后再确认。");
+    return failure("preview_hash_mismatch", "工作稿或定稿预览已变化，请重新生成定稿预览后再确认。");
   }
   if (!isValidIdempotencyKey(input.idempotencyKey)) {
-    return failure("missing_idempotency_key", "缺少 idempotencyKey，无法安全执行正式入库。");
+    return failure("missing_idempotency_key", "缺少 idempotencyKey，无法安全执行正式定稿。");
   }
   if (input.residues.length > 0) {
     return {
       ok: false,
       code: "transaction_residue_found",
-      message: "检测到未完成的事务残留，请先处理后再正式入库。",
+      message: "检测到未完成的事务残留，请先处理后再正式定稿。",
       residues: input.residues,
     };
   }

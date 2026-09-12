@@ -14,11 +14,11 @@ export function matrixPanelCopy(characterCount: number): {
       titleLead: "角色",
       titleEm: "近况",
       sectionTitle: "角色近况",
-      hint: "有第二个角色后显示人物关系",
+      hint: "有第二个角色后显示角色关系",
     };
   }
   return {
-    kicker: "人物关系",
+    kicker: "角色关系",
     titleLead: "角色",
     titleEm: "关系",
     sectionTitle: "角色关系",

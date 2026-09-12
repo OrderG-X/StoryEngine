@@ -214,7 +214,7 @@ export default function WritingRulesCodexPanel({
         <div>
           <div className="kicker">本书文风</div>
           <h1>写作规则</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我完善本书的写作规则和文风特点" label="✦ 完善写作规则" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我补全本书的写作规则和文风特点" label="✦ 补全写作规则" />
           <p className="lead-sub">这里写清楚这本书该怎么讲、怎么写，以及一定不要写什么。AI 写作和内容审阅时都会遵守。</p>
         </div>
         {stats.length > 0 ? (

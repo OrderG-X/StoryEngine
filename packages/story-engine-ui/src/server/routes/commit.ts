@@ -267,7 +267,7 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
         writeJson(res, 409, {
           ok: false,
           reason: "formal_commit_apply_draft_changed",
-          error: "创建快照期间草稿已变化，请重新生成定稿预览。",
+          error: "创建快照期间工作稿已变化，请重新生成定稿预览。",
         });
         return;
       case "preflight_failed":
@@ -285,7 +285,7 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
         writeJson(res, 409, {
           ok: false,
           reason: "commit_failed",
-          error: result.report.issues.length > 0 ? result.report.issues.join("；") : "入库失败。",
+          error: result.report.issues.length > 0 ? result.report.issues.join("；") : "定稿失败。",
           report: result.report,
         });
         return;

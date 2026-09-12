@@ -612,7 +612,7 @@ describe("draft length guard routes", () => {
     });
 
     expect(response.statusCode).toBe(422);
-    expect(response.payload.error).toBe("草稿正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。");
+    expect(response.payload.error).toBe("正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。");
     await expect(readFile(draftPath, "utf-8")).resolves.toBe("# 第1章\n\n旧工作稿保留。\n");
   });
 
@@ -953,7 +953,7 @@ describe("draft ai-review route model call（收拢 streamChatModelToText：流�
       // D18 收敛（刻意修复）：走兜底=没真审成 → ok:false 诚实显红（前端 ok:false → throw → 失败卡），
       // 不再 200 ok:true 伪装完成；error 用与工具侧同一 canonical 文案。
       expect(response.payload).toMatchObject({ ok: false });
-      expect(String((response.payload as { error?: unknown }).error)).toContain("审稿未完成");
+      expect(String((response.payload as { error?: unknown }).error)).toContain("内容审阅未完成");
       expect(fallbackDraftAIReviewReport).toHaveBeenCalledWith(expect.stringContaining("静默超过 90s"));
     } finally {
       vi.useRealTimers();

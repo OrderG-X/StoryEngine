@@ -149,11 +149,11 @@ describe("parity: POST /api/draft/ai-review ↔ ai_review（共享行为面）",
     // 两侧失败文案逐字一致（同一 canonical summary，HTTP 借作 error）。
     expect(route.statusCode).toBe(200);
     expect(route.payload.ok).toBe(false);
-    expect(String(route.payload.error)).toContain("审稿未完成");
+    expect(String(route.payload.error)).toContain("内容审阅未完成");
     expect(route.payload.error).toBe(tool.summary);
     expect(route.payload.review).toBeUndefined();
     expect(tool.ok).toBe(false);
-    expect(String(tool.summary)).toContain("审稿未完成");
+    expect(String(tool.summary)).toContain("内容审阅未完成");
   });
 
   it("D17 已收敛·无草稿：两侧同一 no_draft 诚实短路（HTTP 保持 500 兼容 + ok:false；工具 ok:false），都不调模型", { timeout: 30_000 }, async () => {

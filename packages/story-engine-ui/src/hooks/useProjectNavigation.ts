@@ -156,7 +156,7 @@ function recoverMisroutedDraft(messages: readonly ChapterMessage[]): { readonly 
       {
         id: `system-draft-recovered-${Date.now()}`,
         role: "system",
-        content: "已将误入聊天区的正文移回左侧草稿区。",
+        content: "已将误入聊天区的正文移回左侧工作稿区。",
         toolOutput: draftMessage.toolOutput,
       },
     ],
@@ -206,7 +206,7 @@ function titleFromEvent(event: StateOverview["timeline"]["recentEvents"][number]
   const source = event?.mainEvent ?? event?.summary;
   if (!source?.trim()) return `第${chapter}章`;
   const cleaned = source.replace(/\s+/gu, " ").trim();
-  return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned;
+  return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
 }
 
 function estimateWordsFromOverview(overview: StateOverview): number {
@@ -269,7 +269,7 @@ function workspaceFromBook(book: BookSummary) {
   const draftContent = [
     `这里是《${book.title}》第${book.currentChapterNumber}章「${book.currentChapterTitle}」的章节工作区。`,
     isRealProjectBook(book)
-      ? "本区域会读取项目状态、生成本章方案、草稿和提交预览。"
+      ? "本区域会读取项目状态、生成本章方案、工作稿和定稿预览。"
       : "这条书架记录还没有绑定本地项目目录。打开或创建真实项目后，本区域会读取项目状态。",
     book.logline,
   ].join("\n\n");
@@ -315,7 +315,7 @@ function sidebarFromBook(book: BookSummary): SidebarData {
     writingRules: ["写作规则：尚未配置"],
     characters: [book.protagonistName],
     locations: ["尚未配置重要地点"],
-    assets: ["尚未配置资产预留"],
+    assets: ["尚未配置道具与资源预留"],
     hooks: ["暂无伏笔线索"],
     arcGoals: ["暂无主线目标"],
   };
@@ -967,7 +967,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     try {
       const created = await createStoryProjectFromDraft({ draft });
       if (!ownsNavigationOrigin(transition)) {
-        showToast("原工作区已经变化，已丢弃迟到的新建书籍回执。", 5000);
+        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
         return;
       }
       // 新建书与 openProject 同款接线：引导会话索引 + 接上全局对话记忆上限。
@@ -976,7 +976,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       // 配置的上限被静默顶掉。读失败不阻塞开书：回退旧行为（空会话），重开本书时 openProject 会补正。
       const sessionBootstrap = await listChatSessions(created.projectDir).catch(() => null);
       if (!ownsNavigationOrigin(transition)) {
-        showToast("原工作区已经变化，已丢弃迟到的新建书籍回执。", 5000);
+        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
         return;
       }
       // 还必须把活跃会话真正读一遍：sessionEpochs 只在 readChatSession/create/setActive/delete 登记，
@@ -989,7 +989,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           .then((result) => Boolean(result?.session))
           .catch(() => false);
         if (!ownsNavigationOrigin(transition)) {
-          showToast("原工作区已经变化，已丢弃迟到的新建书籍回执。", 5000);
+          showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
           return;
         }
       }

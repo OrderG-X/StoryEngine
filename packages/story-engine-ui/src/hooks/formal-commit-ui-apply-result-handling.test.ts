@@ -294,7 +294,7 @@ describe("Formal Commit UI apply result handling", () => {
     expect(state.commitPreviewReport).not.toBeNull();
     expect(state.steeringError).toContain("重新生成定稿预览");
     expect(messages).toContain("重新生成定稿预览");
-    expect(messages).toContain("草稿和定稿预览已保留");
+    expect(messages).toContain("工作稿和定稿预览已保留");
   });
 
   it("explains stale preview failures from preserved API payloads", async () => {

@@ -125,7 +125,7 @@ describe("commit routes", () => {
     checkCommitPlanSemanticQuality.mockReturnValue(qualityReport("semantic-ok"));
     judgeDraftQualityWithModel.mockImplementation(async ({ deterministicQuality }: { deterministicQuality: unknown }) => deterministicQuality);
     commitFastDraft.mockResolvedValue({ passed: true });
-    createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "入库前快照：第1章", timestamp: 0 });
+    createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "定稿前快照：第1章", timestamp: 0 });
     buildFormalCommitApplyDryRunPlan.mockReturnValue({
       ok: true,
       plan: dryRunPlanFixture(),
@@ -371,7 +371,7 @@ describe("commit routes", () => {
     expect(response.payload.report).toMatchObject({ passed: true, updatedCharacters: ["lin-xiao"] });
     expect(typeof response.payload.chapterContent).toBe("string");
     // 写入前自动快照，整份提交可撤销
-    expect(createSnapshot).toHaveBeenCalledWith(projectDir, "入库前快照：第1章");
+    expect(createSnapshot).toHaveBeenCalledWith(projectDir, "定稿前快照：第1章");
     // 完整状态提交交给引擎 commitFastDraft，传入整份计划（不再逐条勾选、不再拒绝状态 JSON）
     expect(commitFastDraft).toHaveBeenCalledWith(expect.objectContaining({
       projectDir,
@@ -412,7 +412,7 @@ describe("commit routes", () => {
     expect(response.statusCode).toBe(409);
     expect(response.payload).toMatchObject({ ok: false, reason: "commit_failed" });
     // 快照在写入尝试前已创建，失败也能从操作历史回退
-    expect(createSnapshot).toHaveBeenCalledWith(projectDir, "入库前快照：第1章");
+    expect(createSnapshot).toHaveBeenCalledWith(projectDir, "定稿前快照：第1章");
   });
 
   it.each(["transactionId", "previewHash", "idempotencyKey"] as const)(

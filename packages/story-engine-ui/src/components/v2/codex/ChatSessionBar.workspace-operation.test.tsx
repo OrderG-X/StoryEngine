@@ -294,7 +294,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
     expect(useWorkspaceStore.getState().workspace.messages).toEqual([expect.objectContaining({ id: "b" })]);
-    expect(useNavigationStore.getState().toast).toContain("磁盘状态");
+    expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
 
@@ -316,7 +316,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
     expect(useWorkspaceStore.getState().workspace.messages).toEqual([expect.objectContaining({ id: "b" })]);
-    expect(useNavigationStore.getState().toast).toContain("磁盘状态");
+    expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
 
@@ -340,7 +340,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
     expect(useWorkspaceStore.getState().sessions).toEqual([sessions[1]]);
-    expect(useNavigationStore.getState().toast).toContain("磁盘状态");
+    expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
 

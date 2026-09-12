@@ -54,7 +54,7 @@ export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelection
         ) : (
           <div className="se-v2-editor-empty">
             <h2>当前章节还没有工作稿</h2>
-            <p>你可以在右侧让 AI 生成草稿。</p>
+            <p>你可以在右侧让 AI 生成工作稿。</p>
           </div>
         )}
       </div>
@@ -384,7 +384,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
           <EditorContent editor={editor} />
           {isEmpty && !isCommitted ? (
             <p className="se-v2-draft-editor-hint" aria-hidden="true">
-              当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成草稿。
+              当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。
             </p>
           ) : null}
           {canRewrite && selection ? (

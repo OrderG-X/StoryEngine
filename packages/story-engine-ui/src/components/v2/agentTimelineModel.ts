@@ -27,7 +27,7 @@ export interface TimelineModel {
   readonly state: TimelineState;
   readonly autoExpanded: boolean;
   readonly intentTitle?: string;
-  readonly affectedLabel?: string;     // 影响范围人话："资料库" / "正文·草稿" / "资料库·正文·草稿"
+  readonly affectedLabel?: string;     // 影响范围人话："资料库" / "正文·工作稿" / "资料库·正文·工作稿"
   readonly totalElapsedMs?: number;    // 回合总耗时
   readonly canUndo: boolean;           // 该回合是否有可回退的 git 快照
   readonly undoSnapshotId?: string;    // = turnSnapshots[0].snapshotId（回合首次写入前=整块回退点）
@@ -71,7 +71,7 @@ function affectedLabelFromScopes(scopes?: readonly ("full" | "foundation")[]): s
   if (!scopes?.length) return undefined;
   const parts: string[] = [];
   if (scopes.includes("foundation")) parts.push("资料库");
-  if (scopes.includes("full")) parts.push("正文·草稿");
+  if (scopes.includes("full")) parts.push("正文·工作稿");
   return parts.join("·") || undefined;
 }
 
@@ -162,7 +162,7 @@ export function agentDisplayLabel(card: ChapterAgentCard): string {
     chapterOrchestrator: "写作助手",
     chapterSteeringAgent: "剧情方案",
     draftWriterAgent: "正文生成",
-    draftEditAgent: "草稿修改",
+    draftEditAgent: "工作稿修改",
     qualityAgent: "硬伤检查",
     reviewAgent: "内容审阅",
     revisionAgent: "修订预览",
@@ -177,7 +177,7 @@ export function agentDisplayLabel(card: ChapterAgentCard): string {
   const byKind: Record<ChapterAgentCard["kind"], string> = {
     orchestrator: "写作助手",
     steering: "剧情方案",
-    draft: "草稿处理",
+    draft: "工作稿处理",
     revision: "修订预览",
     review: "内容审阅",
     quality: "硬伤检查",

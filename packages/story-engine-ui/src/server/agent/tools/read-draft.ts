@@ -26,9 +26,9 @@ const inputSchema = z.object({
   // 模型无关：枚举大小写/空白宽容（模型传 "Draft"/" auto " 不再硬 InputValidationError；空串→undefined→auto）。
   source: coerceEnum(z.enum(READ_DRAFT_SOURCES).optional().describe(
     "读哪一份正文：\n" +
-      "- auto（默认）：优先读工作稿（草稿），没有草稿才回退到已入库正文。\n" +
-      "- draft：只读工作稿（草稿）。\n" +
-      "- committed：只读已入库正文。",
+      "- auto（默认）：优先读工作稿，没有工作稿才回退到已定稿正文。\n" +
+      "- draft：只读工作稿。\n" +
+      "- committed：只读已定稿正文。",
   )),
 });
 
@@ -36,7 +36,7 @@ const outputSchema = z.object({
   chapter: z.number().int().positive(),
   found: z.boolean().describe("是否读到了正文（草稿与已入库都没有时为 false）。"),
   source: z.enum(["draft", "committed"]).nullable().describe(
-    "实际读到的是哪一份：draft=工作稿 / committed=已入库；都没有时为 null。",
+    "实际读到的是哪一份：draft=工作稿 / committed=已定稿；都没有时为 null。",
   ),
   title: z.string().nullable().describe("从正文首行解析出的标题（没有则 null）。"),
   content: z.string().describe("正文全文（found=false 时为空串）。"),
@@ -91,7 +91,7 @@ export async function readDraftContent(input: {
       title: null,
       content: "",
       charCount: 0,
-      summary: `读取第 ${chapter} 章正文失败（${readError}），不是「没有草稿」——请稍后重试或检查文件。`,
+      summary: `读取第 ${chapter} 章正文失败（${readError}），不是「没有工作稿」——请稍后重试或检查文件。`,
     };
   }
 
@@ -103,7 +103,7 @@ export async function readDraftContent(input: {
         : null;
 
   if (!picked) {
-    const want = source === "committed" ? "已入库正文" : source === "draft" ? "工作稿（草稿）" : "草稿或已入库正文";
+    const want = source === "committed" ? "已定稿正文" : source === "draft" ? "工作稿" : "工作稿或已定稿正文";
     return {
       chapter,
       found: false,
@@ -121,9 +121,9 @@ export async function readDraftContent(input: {
   const label =
     picked.source === "draft"
       ? hasCommittedChapter
-        ? "工作稿（该章已有入库正文，当前读的是工作稿）"
-        : "工作稿（未入库草稿）"
-      : "已入库正文";
+        ? "工作稿（该章已有定稿正文，当前读的是工作稿）"
+        : "工作稿（未定稿）"
+      : "已定稿正文";
   return {
     chapter,
     found: true,
@@ -138,9 +138,9 @@ export async function readDraftContent(input: {
 export const readDraftTool = createTool({
   id: "read_draft",
   description:
-    "直接读取并返回某章草稿（工作稿）或已入库正文的【全文】。" +
+    "直接读取并返回某章工作稿或已定稿正文的【全文】。" +
     "当用户问『看一下这章草稿 / 草稿里写了什么 / 某句话或某设定在不在正文里 / 帮我读一下正文』时，先调本工具拿到正文再回答——" +
-    "别反问用户、也别拿审稿/质检/入库预览去凑合读。只读，不改稿、不入库。缺章号时默认用户当前所在章。",
+    "别反问用户、也别拿审稿/质检/定稿预览去凑合读。只读，不改稿、不定稿。缺章号时默认用户当前所在章。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

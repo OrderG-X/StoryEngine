@@ -8,13 +8,13 @@ describe("matrixPanelCopy", () => {
       titleLead: "角色",
       titleEm: "近况",
       sectionTitle: "角色近况",
-      hint: "有第二个角色后显示人物关系",
+      hint: "有第二个角色后显示角色关系",
     });
     expect(matrixPanelCopy(0).kicker).toBe("角色近况");
   });
 
-  it("多角色 → 人物关系", () => {
-    expect(matrixPanelCopy(2).kicker).toBe("人物关系");
+  it("多角色 → 角色关系", () => {
+    expect(matrixPanelCopy(2).kicker).toBe("角色关系");
     expect(matrixPanelCopy(2).hint).toBeNull();
     expect(matrixPanelCopy(2).sectionTitle).toBe("角色关系");
   });

@@ -9,7 +9,7 @@
  * `activeRevisionTask` 非空才渲染；定位/毛玻璃/z-index 走 codex.css 的 `.revision-preview-modal`，
  * 相对 `.codex-desk`（relative）居中覆盖稿纸区（宽 640–720px、高上限 70%）。previewDraftRevision 是同步 API、无逐字思考流，故生成中只做 loading 态。
  *
- * 四态：generating / idle（任务在但无 preview）/ zero-diff（前后相同，无「应用到草稿」）/ preview。
+ * 四态：generating / idle（任务在但无 preview）/ zero-diff（前后相同，无「应用到工作稿」）/ preview。
  * 切勿把 idle 并进假 loading：审稿「生成修订任务」若只建任务不立刻请求，会永久卡「正在改写中…」。
  */
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
@@ -118,7 +118,7 @@ export default function RevisionPreviewModal(props: WritingWorkspaceLayoutProps)
               disabled={applying || !props.onApplyRevisionPreview}
               onClick={props.onApplyRevisionPreview}
             >
-              {applying ? "正在应用…" : "应用到草稿"}
+              {applying ? "正在应用…" : "应用到工作稿"}
             </button>
             <button
               type="button"

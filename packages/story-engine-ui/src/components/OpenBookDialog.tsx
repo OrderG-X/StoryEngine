@@ -31,7 +31,7 @@ export default function OpenBookDialog({
         <div className="open-book-actions">
           <button className="secondary" onClick={onChooseFolder} type="button">选择文件夹</button>
           <button disabled={loading || !projectPath.trim()} onClick={() => onOpenProject(projectPath)} type="button">
-            {loading ? "正在读取..." : "打开项目"}
+            {loading ? "正在读取…" : "打开项目"}
           </button>
         </div>
         {error ? <p className="dialog-error">{error}</p> : null}

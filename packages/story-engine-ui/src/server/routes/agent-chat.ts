@@ -69,15 +69,15 @@ export function readLatestUserTurnText(messages: readonly { readonly role: strin
 export function formatChapterStatusLine(chapter: number, status: UiChapterFileState | undefined): string {
   if (status?.hasCommittedChapter) {
     const title = status.committedTitle ?? status.draftTitle;
-    return `本章（第 ${chapter} 章）已入库${title ? `（标题：${title}）` : ""}。`;
+    return `本章（第 ${chapter} 章）已定稿${title ? `（标题：${title}）` : ""}。`;
   }
   // 「有草稿」只认真草稿：.md 有真内容，或 workspace 里有真草稿。光「开过」(hasWorkspaceSnapshot) 不算，
   // 否则用户只是打开/打了招呼、本章其实是空的，却被谎报「已有工作稿」，agent 跟着说「第N章已有内容」（真机实测 bug）。
   if (status?.hasDraftFile || status?.hasWorkspaceDraft) {
     const title = status.draftTitle ?? status.workspaceTitle;
-    return `本章（第 ${chapter} 章）已有工作稿待处理${title ? `（标题：${title}）` : ""}，尚未入库。`;
+    return `本章（第 ${chapter} 章）已有工作稿待处理${title ? `（标题：${title}）` : ""}，尚未定稿。`;
   }
-  return `本章（第 ${chapter} 章）还没有草稿，是空的。`;
+  return `本章（第 ${chapter} 章）还没有工作稿，是空的。`;
 }
 
 /**
@@ -101,7 +101,7 @@ export function buildCurrentChapterSystemMessage(
   // 当前章已入库时，「继续/写下一章」的目标是下一章（在本章之上往前推进），不是重写本章——
   // 治 codex 真机 P0「入库第 N 章后说写第 N+1 章却落回第 N 章」的章号 off-by-one。
   const committedForwardLine = chapterStatus?.hasCommittedChapter
-    ? `第 ${currentChapter} 章已入库；用户说「继续/接着写/写下一章」时，目标是第 ${currentChapter + 1} 章（往前推进），不是重写第 ${currentChapter} 章。`
+    ? `第 ${currentChapter} 章已定稿；用户说「继续/接着写/写下一章」时，目标是第 ${currentChapter + 1} 章（往前推进），不是重写第 ${currentChapter} 章。`
     : `用户说「继续/接着写」时指在本章继续（结合上面的本章状态判断是从头出稿还是接着已有草稿）。`;
   return {
     role: "system",
@@ -109,7 +109,7 @@ export function buildCurrentChapterSystemMessage(
       (truthLine ? `${truthLine}\n` : "") +
       `【当前上下文】用户此刻正停留在第 ${currentChapter} 章。` +
       (statusLine ? statusLine : "") +
-      `凡涉及具体章号的操作（读取该章、出稿/续写、修订、质检、审稿、入库预览/入库）：` +
+      `凡涉及具体章号的操作（读取该章、出稿/续写、修订、质检、内容审阅、定稿预览/定稿）：` +
       `如果用户明确点名了某一章（例如「写第 7 章」「改第 3 章」「入库第 5 章」），一律以用户点名的章号为准，` +
       `即使它不是第 ${currentChapter} 章——把该章号原样填进工具的 chapter 入参，绝不用第 ${currentChapter} 章顶替。` +
       `只有当用户没有明确点名另一章时，才默认作用于第 ${currentChapter} 章，绝不要擅自跳到最新章或别的章。` +
@@ -135,11 +135,11 @@ export function buildWholeBookTruthLine(allStates: readonly UiChapterFileState[]
       : `本书已定稿 ${committed.length} 章，最高到第 ${committed[committed.length - 1]} 章`;
   const draftDesc = draftOnly.length === 0
     ? ""
-    : `；有未入库工作稿的章节：第 ${draftOnly.slice(0, 20).join("、")} 章`;
+    : `；有未定稿工作稿的章节：第 ${draftOnly.slice(0, 20).join("、")} 章`;
   return (
     `【磁盘真相·硬约束】${committedDesc}${draftDesc}。这是磁盘上的客观事实。` +
-    `凡你声称某章「已生成草稿 / 已质检 / 已审稿 / 已入库」，都必须与此一致：这里没列为已入库的章就是还没入库、` +
-    `绝不能说成已入库；没列出工作稿的章就是还没写、绝不能说成已写好。拿不准先调 read_chapters_overview / ` +
+    `凡你声称某章「已生成工作稿 / 已质检 / 已审阅 / 已定稿」，都必须与此一致：这里没列为已定稿的章就是还没定稿、` +
+    `绝不能说成已定稿；没列出工作稿的章就是还没写、绝不能说成已写好。拿不准先调 read_chapters_overview / ` +
     `read_draft 核对真实状态，绝不凭对话历史或印象脑补出不存在的进度（结构性防谎报）。`
   );
 }

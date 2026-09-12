@@ -37,7 +37,7 @@ describe("actionsForWorkflowState", () => {
   it("disables quality-check when idle", () => {
     const actions = actionsForWorkflowState("idle");
     const qc = actions.find((a) => a.id === "quality-check");
-    expect(qc?.disabledReason).toBe("请先生成草稿。");
+    expect(qc?.disabledReason).toBe("请先生成工作稿。");
   });
 
   it("has no disabled reasons for draft_ready quality-check", () => {

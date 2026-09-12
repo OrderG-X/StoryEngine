@@ -995,7 +995,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(state.workspace.flowStatus).toBe("committed");
     expect(state.workspace.draft).toMatchObject({ content: committedBody, status: "committed" });
     expect(state.workspace.currentChapter.hasCommittedChapter).toBe(true);
-    expect(messages().some((m) => m.content.includes("其实已经入库"))).toBe(true);
+    expect(messages().some((m) => m.content.includes("其实已经定稿"))).toBe(true);
   });
 
   it("纯读回合点「停止」→ 步骤结算 stopped、不拉磁盘对账、流程态不动", async () => {

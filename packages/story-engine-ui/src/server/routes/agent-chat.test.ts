@@ -513,12 +513,12 @@ describe("buildCurrentChapterSystemMessage 当前章上下文", () => {
   });
 
   // 当前章已入库时，「继续/写下一章」目标是下一章（往前推进），不是重写本章（治章号 off-by-one）。
-  it("当前章已入库 → 明示「继续/写下一章」目标是下一章（N+1），不是重写本章", () => {
+  it("当前章已定稿 → 明示「继续/写下一章」目标是下一章（N+1），不是重写本章", () => {
     const msg = buildCurrentChapterSystemMessage(6, {
       chapter: 6, hasDraftFile: false, hasCommittedChapter: true, committedTitle: "灵泉",
     });
     const content = msg!.content as string;
-    expect(content).toContain("第 6 章已入库");
+    expect(content).toContain("第 6 章已定稿");
     expect(content).toContain("目标是第 7 章");
     expect(content).toContain("不是重写第 6 章");
   });
@@ -543,7 +543,7 @@ describe("buildWholeBookTruthLine 全书磁盘真相硬约束（A3 防谎报）"
     expect(line).toContain("第 1、2 章"); // 已入库
     expect(line).toContain("第 3 章");   // 未入库工作稿
     expect(line).toContain("磁盘真相");
-    expect(line).toContain("绝不能说成已入库");
+    expect(line).toContain("绝不能说成已定稿");
   });
 
   it("没有任何已入库章节 → 明说还没入库", () => {
@@ -600,33 +600,33 @@ describe("buildModelMessages 当前章提示紧贴用户最新指令（对抗 lo
 });
 
 describe("formatChapterStatusLine 当前章状态（中性描述）", () => {
-  it("已入库 → 带『已入库』+标题", () => {
+  it("已定稿 → 带『已定稿』+标题", () => {
     const line = formatChapterStatusLine(3, { chapter: 3, hasDraftFile: false, hasCommittedChapter: true, committedTitle: "归途" });
-    expect(line).toContain("已入库");
+    expect(line).toContain("已定稿");
     expect(line).toContain("归途");
   });
-  it("有草稿未入库 → 带『工作稿』『尚未入库』", () => {
+  it("有工作稿未定稿 → 带『工作稿』『尚未定稿』", () => {
     const line = formatChapterStatusLine(4, { chapter: 4, hasDraftFile: true, hasCommittedChapter: false, draftTitle: "暗涌" });
     expect(line).toContain("工作稿");
-    expect(line).toContain("尚未入库");
+    expect(line).toContain("尚未定稿");
     expect(line).toContain("暗涌");
   });
   it("空章 / 不在列表(undefined) → 带『还没有草稿，是空的』", () => {
     expect(formatChapterStatusLine(6, { chapter: 6, hasDraftFile: false, hasCommittedChapter: false })).toContain("是空的");
     expect(formatChapterStatusLine(9, undefined)).toContain("是空的");
   });
-  // 真机实测 bug：用户开书说「你好」，第1章只是被打开过（有 workspace 快照）但没真草稿，
+  // 真机实测 bug：用户开书说「你好」，第1章只是被打开过（有 workspace 快照）但没真工作稿，
   // 旧逻辑 hasDraftFile||hasWorkspaceSnapshot 把它谎报成「已有工作稿」，agent 跟着说「第1章已有内容」，
-  // 用户打开却是空的。修法：状态只认「真草稿」(hasWorkspaceDraft)，光「开过」不算。
-  it("只开过、无真草稿（hasWorkspaceSnapshot 但无 hasWorkspaceDraft）→ 是空的，绝不谎报工作稿", () => {
+  // 用户打开却是空的。修法：状态只认「真工作稿」(hasWorkspaceDraft)，光「开过」不算。
+  it("只开过、无真工作稿（hasWorkspaceSnapshot 但无 hasWorkspaceDraft）→ 是空的，绝不谎报已有工作稿", () => {
     const line = formatChapterStatusLine(1, { chapter: 1, hasDraftFile: false, hasCommittedChapter: false, hasWorkspaceSnapshot: true });
     expect(line).toContain("是空的");
-    expect(line).not.toContain("工作稿");
+    expect(line).not.toContain("已有工作稿");
   });
-  it("workspace 里有真草稿（hasWorkspaceDraft）→ 仍报有工作稿、尚未入库", () => {
+  it("workspace 里有真工作稿（hasWorkspaceDraft）→ 仍报有工作稿、尚未定稿", () => {
     const line = formatChapterStatusLine(2, { chapter: 2, hasDraftFile: false, hasCommittedChapter: false, hasWorkspaceSnapshot: true, hasWorkspaceDraft: true });
     expect(line).toContain("工作稿");
-    expect(line).toContain("尚未入库");
+    expect(line).toContain("尚未定稿");
   });
   it("题材中立：不含任何题材词", () => {
     const line = formatChapterStatusLine(1, { chapter: 1, hasDraftFile: true, hasCommittedChapter: false });

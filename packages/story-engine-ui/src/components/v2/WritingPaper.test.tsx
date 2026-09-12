@@ -34,7 +34,7 @@ describe("WritingPaper", () => {
   it("renders empty state when no content", () => {
     render(<WritingPaper draft={{ ...baseDraft, content: "" }} />);
     expect(screen.getByText("当前章节还没有工作稿")).toBeDefined();
-    expect(screen.getByText("你可以在右侧让 AI 生成草稿。")).toBeDefined();
+    expect(screen.getByText("你可以在右侧让 AI 生成工作稿。")).toBeDefined();
   });
 
   it("renders a real (Tiptap) editor — not a textarea — when onEdit is provided", () => {
@@ -49,7 +49,7 @@ describe("WritingPaper", () => {
   it("shows the empty-editor hint when an editable draft has no content", () => {
     render(<WritingPaper draft={{ ...baseDraft, content: "" }} onEdit={vi.fn()} />);
     expect(
-      screen.getByText("当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成草稿。"),
+      screen.getByText("当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。"),
     ).toBeDefined();
   });
 

@@ -96,7 +96,7 @@ export async function runCheckAiFlavorToolLogic(input: {
 export const checkAiFlavorTool = createTool({
   id: "check_ai_flavor",
   description:
-    "对某章草稿做『去 AI 味』体检（只读，不改稿）：挑出有 AI 腔的句子+原因+改写方向。" +
+    "对某章工作稿做『去 AI 味』体检（只读，不改稿）：挑出有 AI 腔的句子+原因+改写方向。" +
     "当用户问『有没有 AI 味 / 体检一下 AI 腔 / 这章像不像 AI 写的 / 去 AI 味』时调用。模型不可用时如实回报，不编造。",
   inputSchema,
   outputSchema,

@@ -147,7 +147,7 @@ const CONFIRM_COMMIT_RETRY_HINT = "请再发一次『确认定稿』，我会直
  */
 export function unbackedCompletionNoticeText(content: string, userText = ""): string {
   if (RELATIONSHIP_INTEGRATION_REQUEST.test(userText) && !COMMIT_APPLY_REQUEST.test(userText)) {
-    return "关系整理未完成：本回合没有检测到关系矩阵真正写入（梳理人物关系未成功），所以关系矩阵没有更新。多因书里硬事实还太少、暂无可整理的关系素材——可先多写几章或手动登记关系后再整理。";
+    return "关系整理未完成：本回合没有检测到角色关系真正写入（整理角色关系未成功），所以角色关系没有更新。多因书里硬事实还太少、暂无可整理的关系素材——可先多写几章或手动登记关系后再整理。";
   }
   if (COMMIT_COMPLETION_CLAIM.test(content)) {
     return `定稿未完成：本回合没有检测到定稿成功执行，所以没有证据表明章节已经正式写入并更新资料。${CONFIRM_COMMIT_RETRY_HINT}`;
@@ -156,7 +156,7 @@ export function unbackedCompletionNoticeText(content: string, userText = ""): st
     return "故事事实没有写入：本回合没有检测到记录故事事实成功执行，所以硬事实没有真正记下。请直接再说“把这些事实记进账本”。";
   }
   if (REVISION_COMPLETION_CLAIM.test(content)) {
-    return "改稿没有真正保存：本回合没有检测到改写工具成功应用、或重写没有调用 generate_draft，所以草稿可能并未真正改动（修改方案往往因目标片段没逐字命中被诚实拒）。请以磁盘/工具结果为准，把要改的原文逐字说清后重试。";
+    return "改稿没有真正保存：本回合没有检测到改写工具成功应用、或重写没有调用 generate_draft，所以工作稿可能并未真正改动（修改方案往往因目标片段没逐字命中被诚实拒）。请以磁盘/工具结果为准，把要改的原文逐字说清后重试。";
   }
   return "操作未完成：本回合助手声称已经生成、写入或保存，但没有检测到对应写入工具成功执行。请以工具结果和磁盘状态为准，必要时重新执行。";
 }
@@ -261,7 +261,7 @@ const EXECUTION_EXPECTATIONS: readonly ExecutionExpectation[] = [
   {
     intent: "generate_draft",
     expectedTool: "generate_draft",
-    notice: "正文生成没有执行：本回合没有检测到生成正文操作，所以没有真正生成或覆盖草稿。请直接再说“按刚才要求写正文”。",
+    notice: "正文生成没有执行：本回合没有检测到生成正文操作，所以没有真正生成或覆盖工作稿。请直接再说“按刚才要求写正文”。",
     // 让位给写资料：「把赵叔的小传写出来，记进角色资料」既命中 generate_draft 宽枝（把…写出来/来一段），
     // 又是写资料请求。照 revise_draft 同款 !FOUNDATION_WRITE_REQUEST，避免写资料被误报「正文生成没有执行」（Codex 真机 P1）。
     matches: (text) => DRAFT_GENERATION_REQUEST.test(text) && !WRITING_PLAN_ONLY.test(text) && !FOUNDATION_WRITE_REQUEST.test(text),
@@ -332,7 +332,7 @@ const INTENT_LABEL: Readonly<Record<string, string>> = {
   generate_draft: "正文生成",
   foundation_write: "更新故事资料",
   edit_fact_ledger: "记录故事事实",
-  revise_draft: "修改草稿",
+  revise_draft: "修改工作稿",
   check_ai_flavor: "检查机器腔",
   ai_review: "内容审阅",
   quality_check: "硬伤检查",
@@ -428,12 +428,12 @@ export function buildObedienceRetryNudgeMessage(
   return {
     role: "system",
     content:
-      "【系统纠偏·必须服从】你上一轮只输出了口头声称，没有调用任何工具——那些「已生成/已写入/已入库/已落盘」的说法全部无效、已被系统作废，磁盘上什么都没发生。" +
+      "【系统纠偏·必须服从】你上一轮只输出了口头声称，没有调用任何工具——那些「已生成/已写入/已定稿/已入库/已落盘」的说法全部无效、已被系统作废，磁盘上什么都没发生。" +
       `现在重新处理用户本轮请求${userText?.trim() ? `（原话：「${userText.trim()}」）` : ""}：` +
       (forcedToolName
         ? `本轮你必须调用 ${forcedToolName} 工具真正执行（系统已强制，不允许只回文本）。`
-        : "立即调用对应工具真正执行——写正文→generate_draft；入库预览→commit_preview；正式入库→先 commit_preview 后 commit_apply；写资料→foundation_write；改稿→revise_draft；其余同理。") +
-      "在拿到工具成功结果（ok=true）之前，绝对禁止输出任何「已完成/已生成/已写入/已入库/已落盘」类句子。",
+        : "立即调用对应工具真正执行——写正文→generate_draft；定稿预览→commit_preview；定稿→先 commit_preview 后 commit_apply；写资料→foundation_write；改稿→revise_draft；其余同理。") +
+      "在拿到工具成功结果（ok=true）之前，绝对禁止输出任何「已完成/已生成/已写入/已定稿/已入库/已落盘」类句子。",
   };
 }
 
@@ -503,7 +503,7 @@ export interface HonestyRewritePatch {
 const CONFIRM_COMMIT_RETRY_ACTION = {
   id: "commit-apply",
   label: "重新确认定稿",
-  description: "再次发送「确认定稿」，直接执行入库",
+  description: "再次发送「确认定稿」，直接执行定稿",
   permission: "formal_state_write" as const,
   requiresConfirmation: false as const,
 };

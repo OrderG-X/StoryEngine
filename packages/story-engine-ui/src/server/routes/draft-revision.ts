@@ -109,7 +109,7 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     // D24 形态分歧：HTTP 两步的 apply 步必须显式确认（工具一步路由工具契约自持）。
     if (body.confirm !== true) {
-      writeJson(res, 400, { ok: false, error: "应用修订到草稿需要 confirm=true。" });
+      writeJson(res, 400, { ok: false, error: "应用修订到工作稿需要 confirm=true。" });
       return;
     }
     await assertStoryEngineProject(projectDir);
@@ -155,16 +155,16 @@ function previewRefusalMessage(failure: RevisionFailure): string {
     case "target_empty":
       return "修订任务缺少原文片段，请先选择要修的段落。";
     case "target_not_found":
-      return "未在当前草稿中找到原文片段，请重新选择目标段落。";
+      return "未在当前工作稿中找到原文片段，请重新选择目标段落。";
     case "target_ambiguous":
-      return "原文片段在草稿中出现多次，请选择更精确的目标段落。";
+      return "原文片段在工作稿中出现多次，请选择更精确的目标段落。";
     case "exact_replacement_noop":
-      return "给的替换文本与原文一致，等于没改；草稿未改动。";
+      return "给的替换文本与原文一致，等于没改；工作稿未改动。";
     case "before_text_not_found":
     case "before_text_ambiguous":
-      return "模型回吐的原句没法在草稿里唯一定位，未改动草稿。请重试或把要改的片段说得更精确。";
+      return "模型回吐的原句没法在工作稿里唯一定位，未改动工作稿。请重试或把要改的片段说得更精确。";
     case "drift_rejected":
-      return "模型改写的不是你选择的片段（它去动了别处），草稿未改动。请重新选择目标段落或重试。";
+      return "模型改写的不是你选择的片段（它去动了别处），工作稿未改动。请重新选择目标段落或重试。";
     default:
       return failure.detail ?? "修订预览生成失败。";
   }
@@ -174,17 +174,17 @@ function previewRefusalMessage(failure: RevisionFailure): string {
 function applyRefusalMessage(failure: RevisionFailure): string {
   switch (failure.code) {
     case "before_text_not_found":
-      return "未在当前草稿中找到原文片段，请重新选择目标段落。";
+      return "未在当前工作稿中找到原文片段，请重新选择目标段落。";
     case "before_text_ambiguous":
-      return "原文片段在草稿中出现多次，请选择更精确的目标段落。";
+      return "原文片段在工作稿中出现多次，请选择更精确的目标段落。";
     case "target_not_found":
-      return "你点名的片段已不在当前草稿中（草稿可能在生成预览后有变动），未改动草稿。请重新生成修订预览。";
+      return "你点名的片段已不在当前工作稿中（工作稿可能在生成预览后有变动），未改动工作稿。请重新生成修订预览。";
     case "target_ambiguous":
-      return "你点名的片段在当前草稿中出现多次，没法确认改哪一处，未改动草稿。请重新选择目标段落。";
+      return "你点名的片段在当前工作稿中出现多次，没法确认改哪一处，未改动工作稿。请重新选择目标段落。";
     case "noop":
-      return "修订后内容与原文一致，等于没有任何修改；草稿未改动。";
+      return "修订后内容与原文一致，等于没有任何修改；工作稿未改动。";
     case "target_unchanged":
-      return "改写后你选择的片段仍原样留在草稿里，等于没真改到；草稿未改动。请重试或换个改写方向。";
+      return "改写后你选择的片段仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或换个改写方向。";
     default:
       return failure.detail ?? "修订应用失败。";
   }

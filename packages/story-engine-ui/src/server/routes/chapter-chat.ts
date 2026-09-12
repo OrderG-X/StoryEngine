@@ -218,7 +218,7 @@ export function sanitizeChapterChatWriteStatusForDisplay<T extends SanitizableCh
   if (payload.intent === "write_writing_rules" || payload.intent === "write_story_settings") {
     return withSanitizedReply(
       payload,
-      "已生成可执行的资料修改指令。我会直接修改当前书籍资料，完成后显示结果和撤回入口。",
+      "已生成可执行的资料修改指令。我会直接修改当前书籍资料，完成后显示结果和撤销入口。",
     );
   }
 
@@ -528,7 +528,7 @@ function buildAgentCardsForIntent(
     return [{
       ...base,
       kind: "quality",
-      detail: [...audit, "会检查当前草稿。", "只生成质检结果，不改正文。"],
+      detail: [...audit, "会检查当前工作稿。", "只生成质检结果，不改正文。"],
       permission: ["safe_read", "model_call"] as const,
     }];
   }
@@ -536,7 +536,7 @@ function buildAgentCardsForIntent(
     return [{
       ...base,
       kind: intent === "ai_review" ? "review" : "revision",
-      detail: [...audit, "会读取当前草稿。", intent === "ai_review" ? "只给审稿建议，不自动改正文。" : "只生成修订预览，应用前可确认。"],
+      detail: [...audit, "会读取当前工作稿。", intent === "ai_review" ? "只给内容审阅建议，不自动改正文。" : "只生成修订预览，应用前可确认。"],
       permission: ["safe_read", "model_call"] as const,
     }];
   }
@@ -632,10 +632,10 @@ function agentTitleForIntent(intent: ChapterChatIntent): string {
   const titles: Record<ChapterChatIntent, string> = {
     discuss: "写作助手",
     suggest: "剧情建议",
-    direct_edit: "草稿修改",
+    direct_edit: "工作稿修改",
     generate_steering: "剧情方案",
     generate_draft: "正文生成",
-    quality_check: "草稿质检",
+    quality_check: "工作稿质检",
     ai_review: "审稿建议",
     revision_preview: "修订预览",
     commit_preview: "定稿预览",

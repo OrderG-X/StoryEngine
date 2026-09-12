@@ -26,18 +26,18 @@ describe("draft agent settlement", () => {
   it("marks pending draft agent cards as saved and preserves route audit lines", () => {
     const [message] = settlePendingDraftAgentCards([pendingMessage], "saved");
 
-    expect(message.content).toContain("本次 AI 草稿改动已保存到当前章节草稿。");
+    expect(message.content).toContain("本次 AI 工作稿改动已保存到当前章节工作稿。");
     expect(message.content).not.toContain("保存草稿，不满意就拒绝");
     expect(message.agentCards?.[0]).toMatchObject({
       status: "saved",
-      title: "草稿改动已保存",
-      summary: "本次草稿改动已保存到当前章节草稿文件。",
+      title: "工作稿改动已保存",
+      summary: "本次工作稿改动已保存到当前章节工作稿文件。",
     });
     expect(message.agentCards?.[0]?.detail).toEqual(expect.arrayContaining([
       "route: draftEditAgent",
       "action: direct_edit",
       "target: current_draft",
-      "result: 已保存到 drafts/fast 当前章节",
+      "result: 已保存到当前章节工作稿",
     ]));
     expect(message.agentCards?.[0]?.detail).not.toContain("write: 待保存草稿改动");
   });
@@ -45,12 +45,12 @@ describe("draft agent settlement", () => {
   it("marks pending draft agent cards as rejected", () => {
     const [message] = settlePendingDraftAgentCards([pendingMessage], "rejected");
 
-    expect(message.content).toContain("本次 AI 草稿改动已被拒绝");
+    expect(message.content).toContain("本次 AI 工作稿改动已被拒绝");
     expect(message.agentCards?.[0]).toMatchObject({
       status: "rejected",
-      title: "草稿改动已拒绝",
+      title: "工作稿改动已拒绝",
     });
-    expect(message.agentCards?.[0]?.detail).toContain("result: 已恢复到保存前内容");
+    expect(message.agentCards?.[0]?.detail).toContain("result: 已撤销到保存前内容");
   });
 
   it("marks generated draft cards as saved after draft save", () => {
@@ -74,12 +74,12 @@ describe("draft agent settlement", () => {
 
     const [message] = settlePendingDraftAgentCards([generated], "saved");
 
-    expect(message.content).toContain("本次 AI 草稿改动已保存到当前章节草稿。");
+    expect(message.content).toContain("本次 AI 工作稿改动已保存到当前章节工作稿。");
     expect(message.agentCards?.[0]).toMatchObject({
       status: "saved",
-      title: "草稿改动已保存",
+      title: "工作稿改动已保存",
     });
-    expect(message.agentCards?.[0]?.detail).toContain("result: 已保存到 drafts/fast 当前章节");
+    expect(message.agentCards?.[0]?.detail).toContain("result: 已保存到当前章节工作稿");
     expect(message.agentCards?.[0]?.detail).not.toContain("write: 未写正式故事");
   });
 

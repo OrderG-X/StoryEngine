@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 export interface SnapshotEntry {
   /** git commit hash，恢复时用 */
   readonly id: string;
-  /** 操作描述，如"入库前快照：第12章" */
+  /** 操作描述，如"定稿前快照：第12章" */
   readonly label: string;
   /** epoch 秒 */
   readonly timestamp: number;
@@ -237,16 +237,16 @@ const UNDO_TOOL_LABELS: Record<string, string> = {
   commit_apply: "定稿",
   foundation_write: "更新故事资料",
   generate_draft: "出稿",
-  revise_draft: "修改草稿",
+  revise_draft: "修改工作稿",
   generate_chapter_steering: "章节方向",
-  generate_worldbuilding: "完善世界观",
-  generate_character_enrichment: "完善角色",
-  generate_asset_enrichment: "完善道具与资源",
-  generate_location_enrichment: "完善地点",
-  generate_matrix_enrichment: "完善角色关系",
-  generate_character_relationships: "完善人物关系",
+  generate_worldbuilding: "补全世界观",
+  generate_character_enrichment: "补全角色",
+  generate_asset_enrichment: "补全道具与资源",
+  generate_location_enrichment: "补全地点",
+  generate_matrix_enrichment: "补全角色关系",
+  generate_character_relationships: "整理角色关系",
   generate_writing_rules_enrichment: "重新整理写作规则",
-  generate_alias_table: "完善别名表",
+  generate_alias_table: "补全别名表",
   edit_fact_ledger: "记录故事事实",
   set_foreshadowing_importance: "伏笔重要度",
   resolve_thread: "线索收口",

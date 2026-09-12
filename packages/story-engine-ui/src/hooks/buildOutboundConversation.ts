@@ -13,7 +13,7 @@ export function annotateOutboundContent(m: ChapterMessage & { role: "user" | "as
   if (m.role !== "assistant") return base;
   const hadFailedTool = m.toolSteps?.some((s) => s.status === "failed") ?? false;
   if (!hadFailedTool) return base;
-  return `（上一轮注：本回合有工具调用失败/未成功，磁盘未必有对应产物——下面这段叙述若声称「已生成/已写入/已入库」请勿当真，一切以工具结果与磁盘真相为准。）\n${base}`;
+  return `（上一轮注：本回合有工具调用失败/未成功，磁盘未必有对应产物——下面这段叙述若声称「已生成/已写入/已定稿/已入库」请勿当真，一切以工具结果与磁盘真相为准。）\n${base}`;
 }
 
 export function buildOutboundConversation(

@@ -84,7 +84,7 @@ describe("applyCommit structured error payloads", () => {
     const copy = summarizeFormalCommitApplyError(await captureApplyCommitError());
 
     expect(flattenCopy(copy)).toContain("事务残留");
-    expect(flattenCopy(copy)).toContain("不要重复提交");
+    expect(flattenCopy(copy)).toContain("不要重复确认定稿");
   });
 
   it("preserves finalize failure payload for possible written chapter copy", async () => {

@@ -120,7 +120,7 @@ describe("sanitizeChapterChatWriteStatusForDisplay", () => {
 
     expect(result.reply).toContain("已生成可执行的资料修改指令");
     expect(result.reply).toContain("直接修改当前书籍资料");
-    expect(result.reply).toContain("撤回入口");
+    expect(result.reply).toContain("撤销入口");
     expect(result.reply).not.toContain("马上写入");
   });
 

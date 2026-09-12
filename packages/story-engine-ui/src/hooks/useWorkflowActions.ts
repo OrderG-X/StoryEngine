@@ -444,7 +444,7 @@ function revisionIssueConstraints(issue?: DraftAIReviewIssue): readonly string[]
   const evidence = cleanUiText(issue.evidence);
   return compactStrings([
     description ? `问题说明：${description.slice(0, 220)}` : undefined,
-    evidence ? `审稿证据：${evidence.slice(0, 260)}` : undefined,
+    evidence ? `内容审阅证据：${evidence.slice(0, 260)}` : undefined,
   ]);
 }
 
@@ -494,7 +494,7 @@ function buildUiCommitApplyIdempotencyKey(input: {
 }
 
 function missingCommitPreviewCredentialsMessage(): string {
-  return "定稿预览缺少事务凭证，请重新生成定稿预览后再提交。";
+  return "定稿预览缺少事务凭证，请重新生成定稿预览后再确认定稿。";
 }
 
 /* ------------------------------------------------------------------ */
@@ -537,7 +537,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   const beginOwnedOperation = (kind: WorkspaceOperationKind): WorkspaceOperationToken | null => {
     if (!projectPath) return null;
     if (useNavigationStore.getState().projectPath !== projectPath) {
-      useNavigationStore.getState().showToast("当前项目已经变化，不能启动旧工作区操作。", 4200);
+      useNavigationStore.getState().showToast("你切换了书，那个操作没有启动。", 4200);
       return null;
     }
     const token = beginWorkspaceOperation(kind, {
@@ -555,7 +555,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     isWorkspaceOperationTargetCurrent(token, currentOperationIdentity());
 
   const notifyStaleOperation = (): void => {
-    useNavigationStore.getState().showToast("原工作区已经变化，已丢弃迟到结果，没有写入当前章节。", 5000);
+    useNavigationStore.getState().showToast("你切换了书，那次结果没有写进当前章节。", 5000);
   };
 
   const finishOwnedOperation = (token: WorkspaceOperationToken): void => {
@@ -834,7 +834,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
                 agentCards: [draftAgentProgressCard({
                   status: "running",
                   title: "写作中",
-                  summary: "模型正在流式生成正文，左侧草稿区会同步更新。",
+                  summary: "模型正在流式生成正文，左侧工作稿区会同步更新。",
                   detail: [
                     "已完成上下文构建",
                     "正在接收正文内容",
@@ -867,8 +867,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
                 id: "agent-fast-draft",
                 kind: "draft",
                 agentName: "fastDraftAgent",
-                title: "正文草稿已生成",
-                summary: `已生成第 ${chapter} 章草稿，并自动保存到 drafts/fast。`,
+                title: "正文工作稿已生成",
+                summary: `已生成第 ${chapter} 章工作稿，并自动保存。`,
                 detail: [
                   `标题：${result.draftTitle ?? extractDraftTitle(result.draftContent) ?? "未生成"}`,
                   `长度：${result.draftContent.length} 字符`,
@@ -906,7 +906,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       try {
         await saveDraftChanges?.();
       } catch {
-        useNavigationStore.getState().showToast("草稿已生成，但自动保存失败，稍后会自动重试。", 5200);
+        useNavigationStore.getState().showToast("工作稿已生成，但自动保存失败，稍后会自动重试。", 5200);
       }
     } catch (error) {
       if (!ownsCurrentWorkspace(operation)) {
@@ -931,10 +931,10 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         content: `正文写作流程失败：${msg}`,
         agentCards: [draftAgentProgressCard({
           status: "failed",
-          title: "正文草稿未写入",
+          title: "正文工作稿未写入",
           summary: msg,
           detail: [
-            "已恢复生成前的草稿内容",
+            "已恢复生成前的工作稿内容",
             "未写正式故事状态",
           ],
         })],
@@ -1024,7 +1024,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const ws = useWorkspaceStore.getState();
     // #4 同类：占位/空草稿不审稿——避免把占位当真稿审。诚实拦下、指路写正文。
     if (!isRealDraftContent(ws.workspace.draft.content)) {
-      useNavigationStore.getState().showToast("这一章还没有正文，没法审稿。请先点「写这一章」生成正文，再来审稿。", 4600);
+      useNavigationStore.getState().showToast("这一章还没有正文，没法做内容审阅。请先点「写这一章」生成正文，再来做内容审阅。", 4600);
       return;
     }
     const operation = beginOwnedOperation("ai-review");
@@ -1034,9 +1034,9 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       messageId: `assistant-ai-review-progress-${Date.now()}`,
       kind: "review",
       agentName: "reviewAgent",
-      title: "审稿 Agent 运行中",
-      summary: "正在读取草稿、章节目标和质检结果，生成深度审稿。",
-      detail: ["读取上下文中", "审稿中"],
+      title: "内容审阅 Agent 运行中",
+      summary: "正在读取工作稿、章节目标和质检结果，生成内容审阅报告。",
+      detail: ["读取上下文中", "内容审阅中"],
     });
     try {
       const review = await reviewDraftWithAI({
@@ -1054,13 +1054,13 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       updateAgentFlow(messageId, {
         role: "assistant",
         content: [
-          `AI 深度审稿完成：${verdictLabel(review.verdict)}，评分 ${review.score}/100。`,
+          `AI 内容审阅完成：${verdictLabel(review.verdict)}，评分 ${review.score}/100。`,
           review.summary,
           review.verdict === "ready_to_commit"
             ? "可以继续生成定稿预览。"
             : review.verdict === "needs_minor_revision"
               ? "可以生成定稿预览，但建议先小修。"
-              : "暂不建议直接定稿，请先查看审稿问题和修改建议。",
+              : "暂不建议直接定稿，请先查看内容审阅的问题和修改建议。",
         ].join("\n"),
         suggestedActions: review.verdict === "ready_to_commit" || review.verdict === "needs_minor_revision"
           ? [suggestedAction("commit-preview")]
@@ -1069,21 +1069,21 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           id: messageId.replace(/^assistant-/u, "agent-"),
           kind: "review",
           agentName: "reviewAgent",
-          title: "AI 深度审稿完成",
+          title: "AI 内容审阅完成",
           summary: `${verdictLabel(review.verdict)}，评分 ${review.score}/100。`,
           detail: [
             `问题：${review.issues.length}`,
             `修改建议：${review.suggestedRevisions.length}`,
-            "未修改草稿，未写正式状态",
+            "未修改工作稿，未写正式状态",
           ],
         }),
         toolOutput: [
-          "draftAIReview: 已调用 AI 深度审稿",
+          "draftAIReview: 已调用 AI 内容审阅",
           `verdict: ${review.verdict}`,
           `score: ${review.score}`,
           `issues: ${review.issues.length}`,
           `suggestions: ${review.suggestedRevisions.length}`,
-          "safety: 未修改草稿，未写正式状态",
+          "safety: 未修改工作稿，未写正式状态",
         ],
         // 报告挂消息：时间线内折叠渲染；store.draftAIReview 仍写（分发/空态用），但展示不读它。
         aiReviewReport: review,
@@ -1096,7 +1096,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       failAgentFlow(messageId, {
         kind: "review",
         agentName: "reviewAgent",
-        title: "审稿 Agent",
+        title: "内容审阅 Agent",
         error,
       });
       useWorkspaceStore.getState().setSteeringError(error instanceof Error ? error.message : String(error));
@@ -1147,7 +1147,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       s.setActiveRevisionPreview({ ...result.preview, originTarget: operation });
       updateAgentFlow(messageId, {
         role: "assistant",
-        content: "修订草案已生成。请查看原文 / 修订后的对比；确认后才会应用到 drafts/fast 草稿。",
+        content: "修订草案已生成。请查看原文 / 修订后的对比；确认后才会应用到工作稿。",
         card: completedAgentCard({
           id: messageId.replace(/^assistant-/u, "agent-"),
           kind: "revision",
@@ -1157,13 +1157,13 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           summary: result.preview.changeSummary,
           detail: [
             `风险提醒：${result.preview.riskNotes.length + result.preview.warnings.length}`,
-            "等待确认后才应用到草稿",
+            "等待确认后才应用到工作稿",
           ],
         }),
         suggestedActions: [{
           id: "revision-apply",
-          label: "应用到草稿",
-          description: "只替换 drafts/fast 中对应片段，不写正式故事状态。",
+          label: "应用到工作稿",
+          description: "只替换工作稿中的对应片段，不写已定稿版。",
           permission: "draft_write",
           requiresConfirmation: true,
           endpoint: "/api/draft/revision/apply",
@@ -1195,12 +1195,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const nav = useNavigationStore.getState();
 
     if (!ws.workspace.draft.content.trim()) {
-      nav.showToast("当前没有可修订的草稿。");
+      nav.showToast("当前没有可修订的工作稿。");
       return;
     }
     const target = resolveRevisionTarget(source, ws.workspace.draft.content);
     if (!target) {
-      nav.showToast("无法自动定位原文片段。请先在审稿建议中选择更具体的问题，或把要修的段落发给我。", 4200);
+      nav.showToast("无法自动定位原文片段。请先在内容审阅建议中选择更具体的问题，或把要修的段落发给我。", 4200);
       return;
     }
     if (target.guessed) {
@@ -1216,12 +1216,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       targetType: target.targetType,
       targetText: target.targetText,
       problemSummary: source.issue?.title ?? source.suggestion?.target ?? "局部修订",
-      revisionGoal: source.issue?.suggestedFix ?? source.suggestion?.suggestion ?? "根据审稿建议优化当前片段。",
+      revisionGoal: source.issue?.suggestedFix ?? source.suggestion?.suggestion ?? "根据内容审阅建议优化当前片段。",
       constraints: [
         "只修改选中的原文片段，不重写全文。",
         "不改变本章核心事件。",
         "不提前揭开隐藏真相。",
-        "不新增未登记关键资产或地点。",
+        "不新增未登记关键道具或地点。",
         ...revisionIssueConstraints(source.issue),
       ],
       status: "pending",
@@ -1270,12 +1270,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     if (!workspaceOperationTargetMatches(revisionOrigin, currentOperationIdentity())) {
-      nav.showToast("这份修订预览属于原工作区，不能应用到当前章节。", 5000);
+      nav.showToast("这份修订预览来自切换前的那本书，不能应用到当前章节。", 5000);
       return;
     }
     // P0-3 防御纵深：UI 零差异态可能被绕过；入口再拦一次，绝不假成功落盘。
     if (isRevisionZeroDiff(ws.activeRevisionPreview.beforeText, ws.activeRevisionPreview.afterText)) {
-      nav.showToast("没有可应用的改动，草稿未变");
+      nav.showToast("没有可应用的改动，工作稿未变");
       ws.setActiveRevisionTask(null);
       ws.setActiveRevisionPreview(null);
       return;
@@ -1297,8 +1297,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       kind: "revision",
       agentName: "revisionAgent",
       title: "应用修订中",
-      summary: "正在把已确认的局部修订写回 drafts/fast 草稿。",
-      detail: ["写入草稿中", "刷新章节状态中"],
+      summary: "正在把已确认的局部修订写回工作稿。",
+      detail: ["写入工作稿中", "刷新章节状态中"],
     });
     try {
       const result = await applyDraftRevision({
@@ -1330,17 +1330,17 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       updateAgentFlow(messageId, {
         role: "assistant",
         content:
-          "已把选中的这段手动改写并应用到草稿（只动 drafts/fast 草稿正文，正式状态未变）：\n"
+          "已把选中的这段手动改写并应用到工作稿（只动工作稿正文，已定稿版未变）：\n"
           + `· 原文：「${brief(appliedPreview.beforeText)}」\n`
           + `· 改为：「${brief(appliedPreview.afterText)}」\n`
-          + "（这是在编辑器里手动改的，后续涉及这段以改写后为准。）建议重新质检或再次深度审稿。",
+          + "（这是在编辑器里手动改的，后续涉及这段以改写后为准。）建议重新质检或再次内容审阅。",
         card: completedAgentCard({
           id: messageId.replace(/^assistant-/u, "agent-"),
           kind: "revision",
           agentName: "revisionAgent",
-          title: "修订已应用到草稿",
-          summary: "已替换 drafts/fast 中对应片段。",
-          detail: ["未写正式状态", "建议重新质检或审稿"],
+          title: "修订已应用到工作稿",
+          summary: "已替换工作稿中对应片段。",
+          detail: ["未写正式状态", "建议重新质检或内容审阅"],
         }),
         suggestedActions: [suggestedAction("quality-check"), suggestedAction("ai-review"), suggestedAction("commit-preview")],
       });
@@ -1392,8 +1392,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       kind: "commit",
       agentName: "commitPreviewAgent",
       title: "定稿预览 Agent 运行中",
-      summary: "正在生成提交计划、草稿质检和语义承接检查。",
-      detail: ["生成提交计划中", "检查正式状态变更中"],
+      summary: "正在生成定稿计划、工作稿质检和语义承接检查。",
+      detail: ["生成定稿计划中", "检查正式状态变更中"],
     });
     try {
       const preview = await previewCommit({
@@ -1407,7 +1407,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       const nextCommitPreview = toCommitPreviewUiReport(preview.commitPlan);
       const draftQualitySummary = summarizeDraftQualityReport(preview.draftQuality);
       const draftActionableCount = draftQualitySummary.confirmed + draftQualitySummary.needsConfirmation;
-      const draftQualityLine = `草稿质检：待处理 ${draftActionableCount} 个，观察项 ${draftQualitySummary.watch} 个，已忽略 ${draftQualitySummary.dismissed} 个。`;
+      const draftQualityLine = `工作稿质检：待处理 ${draftActionableCount} 个，观察项 ${draftQualitySummary.watch} 个，已忽略 ${draftQualitySummary.dismissed} 个。`;
       const semanticQualitySummary = preview.semanticQuality ? summarizeDraftQualityReport(preview.semanticQuality) : null;
       const semanticActionableCount = semanticQualitySummary
         ? semanticQualitySummary.confirmed + semanticQualitySummary.needsConfirmation
@@ -1467,8 +1467,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           title: "定稿预览已生成",
           summary: qualityGate?.message ?? `高风险 ${previewWithGate.highRiskIssueCount ?? 0} 个，阻断项 ${previewWithGate.blockingReasons.length} 个。`,
           detail: [
-            `草稿质检待处理：${draftActionableCount}`,
-            `草稿观察项：${draftQualitySummary.watch}`,
+            `工作稿质检待处理：${draftActionableCount}`,
+            `工作稿观察项：${draftQualitySummary.watch}`,
             `已忽略候选：${draftQualitySummary.dismissed}`,
             `语义承接待处理：${semanticActionableCount}`,
             qualityGate ? "质检提示不拦截定稿，写入前会自动快照" : "确认后直接写入，可在快照中恢复",
@@ -1531,7 +1531,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       agentName: "commitApplyAgent",
       title: "定稿中",
       summary: "正在按你确认的选择写入正式章节正文。",
-      detail: ["应用章节提交计划中", "写入章节正文中"],
+      detail: ["应用章节定稿计划中", "写入章节正文中"],
     });
     try {
       const result = await applyCommit({
@@ -1589,7 +1589,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         kind: "commit",
         agentName: "commitApplyAgent",
         title: "定稿完成",
-        summary: `第 ${operation.chapter} 章已提交到正式故事状态。`,
+        summary: `第 ${operation.chapter} 章已定稿。`,
         detail: [
           `标题：${result.chapterTitle ?? extractDraftTitle(result.chapterContent) ?? `第${operation.chapter}章`}`,
           ...commitSummary.detailLines,
@@ -1678,7 +1678,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   /*  handleSelectionRewrite （阶段三块②：选区浮动操作条）           */
   /*  选中正文 → 点按钮（固定模板）→ 复用「审稿修订预览」流：             */
   /*  preview → 存进 activeRevisionTask/activeRevisionPreview → 出「改写前后对比卡」， */
-  /*  用户在卡上点「应用到草稿」才落盘（走 handleApplyRevisionPreview，写前快照=可撤销）。 */
+  /*  用户在卡上点「应用到工作稿」才落盘（走 handleApplyRevisionPreview，写前快照=可撤销）。 */
   /*  不再直接 apply——治「点了不知改了啥」。失败就地明示、不乱改。               */
   /*  选区文本随 task.targetText 存进预览态，即使等待确认期间编辑器选区丢了也不受影响。 */
   /* -------------------------------------------------------------- */
@@ -1702,7 +1702,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     if (ws.workspace.draft.status === "committed") {
-      nav.showToast("本章已入库，正文只读；如需修改请通过 AI 助手发起修订。");
+      nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
     const chapter = ws.workspace.currentChapter.chapterNumber;
@@ -1759,14 +1759,14 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         return;
       }
       // 不直接 apply：把任务 + 预览存进「审稿修订预览」同一套状态，让 codex 出「改写前后对比卡」，
-      // 用户在卡上点「应用到草稿」才走 handleApplyRevisionPreview 落盘（写前快照=可撤销）。
+      // 用户在卡上点「应用到工作稿」才走 handleApplyRevisionPreview 落盘（写前快照=可撤销）。
       // task 里带着 targetText（=选区原文），即使等待确认期间编辑器选区丢了，apply/再改一版都不依赖即时选区。
       const s = useWorkspaceStore.getState();
       s.setActiveRevisionTask(previewResult.task);
       s.setActiveRevisionPreview({ ...previewResult.preview, originTarget: operation });
       updateAgentFlow(messageId, {
         role: "assistant",
-        content: `已生成${template.label}草案。请在中间的写作台查看「原文 / 修订后」对比，确认后点「应用到草稿」才会改正文。`,
+        content: `已生成${template.label}草案。请在中间的写作台查看「原文 / 修订后」对比，确认后点「应用到工作稿」才会改正文。`,
         card: completedAgentCard({
           id: messageId.replace(/^assistant-/u, "agent-"),
           kind: "revision",
@@ -1776,13 +1776,13 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           summary: previewResult.preview.changeSummary,
           detail: [
             `风险提醒：${previewResult.preview.riskNotes.length + previewResult.preview.warnings.length}`,
-            "等待确认后才应用到草稿",
+            "等待确认后才应用到工作稿",
           ],
         }),
         suggestedActions: [{
           id: "revision-apply",
-          label: "应用到草稿",
-          description: "只替换 drafts/fast 中对应片段，不写正式故事状态。",
+          label: "应用到工作稿",
+          description: "只替换工作稿中的对应片段，不写已定稿版。",
           permission: "draft_write",
           requiresConfirmation: true,
           endpoint: "/api/draft/revision/apply",
@@ -1837,7 +1837,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const ws = useWorkspaceStore.getState();
     if (!projectPath) { nav.showToast("请先打开本地项目。"); return; }
     if (ws.workspace.draft.status === "committed") {
-      nav.showToast("本章已入库，正文只读；如需修改请通过 AI 助手发起修订。");
+      nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
     if (violations.length === 0) { nav.showToast("没有待改的 AI 腔。"); return; }
@@ -1907,7 +1907,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     if (ws.workspace.draft.status === "committed") {
-      nav.showToast("本章已入库，正文只读；如需另写请通过 AI 助手发起修订。");
+      nav.showToast("本章已定稿，正文只读；如需另写请通过 AI 助手发起修订。");
       return;
     }
     const chapter = ws.workspace.currentChapter.chapterNumber;
@@ -1959,7 +1959,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     if (!workspaceOperationTargetMatches(candidate.originTarget, currentOperationIdentity())) {
-      nav.showToast("这份候选稿属于原工作区，不能应用到当前章节。", 5000);
+      nav.showToast("这份候选稿来自切换前的那本书，不能应用到当前章节。", 5000);
       return;
     }
     const operation = beginOwnedOperation("apply-candidate");
@@ -1979,7 +1979,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         result.draftTitle ?? extractDraftTitle(result.draftContent) ?? ws.workspace.draft.title,
       );
       useWorkspaceStore.getState().setDraftCandidates(null);
-      nav.showToast("已用这版替换草稿，可在「操作历史」撤销。");
+      nav.showToast("已用这版替换工作稿，可在「操作历史」撤销。");
     } catch (error) {
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();

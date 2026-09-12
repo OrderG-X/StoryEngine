@@ -23,8 +23,8 @@ const PROJECT_PATH = "/Users/example/story";
 
 function snapshotEntries(): SnapshotEntryDto[] {
   return [
-    { id: "snap-2", label: "入库前快照：第3章", timestamp: 1_765_000_000 },
-    { id: "snap-1", label: "生成草稿前快照：第3章", timestamp: 1_764_900_000 },
+    { id: "snap-2", label: "定稿前快照：第3章", timestamp: 1_765_000_000 },
+    { id: "snap-1", label: "工作稿生成前快照：第3章", timestamp: 1_764_900_000 },
   ];
 }
 
@@ -44,8 +44,8 @@ describe("SnapshotHistoryDialog", () => {
 
     renderDialog();
 
-    expect(await screen.findByText("入库前快照：第3章")).toBeInTheDocument();
-    expect(screen.getByText("生成草稿前快照：第3章")).toBeInTheDocument();
+    expect(await screen.findByText("定稿前快照：第3章")).toBeInTheDocument();
+    expect(screen.getByText("工作稿生成前快照：第3章")).toBeInTheDocument();
     expect(fetchSnapshotsMock).toHaveBeenCalledWith(PROJECT_PATH);
 
     const expectedFirst = new Date(1_765_000_000 * 1000).toLocaleString("zh-CN", { hour12: false });

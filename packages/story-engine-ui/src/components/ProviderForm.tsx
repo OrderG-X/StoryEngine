@@ -98,7 +98,7 @@ export function ProviderForm(props: ProviderFormProps) {
           <input
             className="ms-input ms-input-key"
             type={props.showApiKey ? "text" : "password"}
-            placeholder="sk-..."
+            placeholder="sk-…"
             value={props.formApiKey}
             onChange={(e) => props.setFormApiKey(e.target.value)}
           />

@@ -36,7 +36,7 @@ function formatProviderRefreshError(providerLabel: string, error: unknown): stri
     return `${providerLabel} 模型列表接口不可用。请检查接口地址是否需要 /v1。`;
   }
   const cleaned = message.replace(/\s+/g, " ").trim();
-  return `${providerLabel} 模型列表刷新失败：${cleaned.slice(0, 180)}${cleaned.length > 180 ? "..." : ""}`;
+  return `${providerLabel} 模型列表刷新失败：${cleaned.slice(0, 180)}${cleaned.length > 180 ? "…" : ""}`;
 }
 
 interface PickerState {
@@ -816,7 +816,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
           onClick={() => { void handleSave(); }}
           type="button"
         >
-          {saving ? "保存中..." : "保存设置"}
+          {saving ? "保存中…" : "保存设置"}
         </button>
       )}
     </footer>

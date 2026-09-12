@@ -31,9 +31,9 @@ export const QUALITY_TYPE_LABELS: Readonly<Record<string, string>> = {
   missing_chapter_title: "缺章节标题",
   no_dialogue: "通篇无对话",
   // 入库元数据
-  semantic_chapter_summary_missing: "入库缺本章摘要",
-  semantic_key_events_missing: "入库缺关键事件",
-  semantic_timeline_missing: "入库缺时间线事件",
+  semantic_chapter_summary_missing: "定稿缺本章摘要",
+  semantic_key_events_missing: "定稿缺关键事件",
+  semantic_timeline_missing: "定稿缺时间线事件",
   semantic_timeline_summary_generic: "时间线摘要太笼统",
   // 一致性/设定漂移（writing_context_*）
   writing_context_age_drift: "角色年龄与设定不符",
@@ -69,7 +69,7 @@ export const QUALITY_TYPE_LABELS: Readonly<Record<string, string>> = {
  * 它们仍当软提示（可见、框成"参考不拦"，但不压成参考）。error 硬伤一律不碰。
  */
 export const QUALITY_DOWNGRADE_RULES: Readonly<Record<string, { readonly to: Severity; readonly note: string }>> = {
-  missing_chapter_title: { to: "info", note: "标题可在入库时自动补，非正文质量问题" },
+  missing_chapter_title: { to: "info", note: "标题可在定稿时自动补，非正文质量问题" },
   no_dialogue: { to: "info", note: "无对话不一定是问题（过场/独白章正常）" },
   semantic_timeline_summary_generic: { to: "info", note: "时间线摘要措辞，非正文质量" },
   // 「没提到/没接到 X」家族：靠子串匹配，角色用代称、线索隐性推进时极易误报，且低风险 → 降参考。

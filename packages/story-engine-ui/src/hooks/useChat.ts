@@ -108,7 +108,7 @@ function foundationSuggestionLabel(suggestion: FoundationGapSuggestion): string 
     : suggestion.actionType === "rename_character" ? "修改角色名"
     : suggestion.actionType === "update_character_detail" ? "更新角色资料"
     : suggestion.actionType === "create_location" ? "创建地点"
-    : suggestion.actionType === "create_asset" ? "创建资产"
+    : suggestion.actionType === "create_asset" ? "创建道具"
     : suggestion.actionType === "update_world_rule" ? "补世界观"
     : suggestion.actionType === "update_writing_rule" ? "补写作规则"
     : suggestion.actionType;
@@ -210,7 +210,7 @@ function foundationSuggestionTextValue(suggestion: FoundationGapSuggestion): str
 
 function shortFoundationLabel(value: string): string {
   const text = value.trim();
-  return text.length > 32 ? `${text.slice(0, 32)}...` : text;
+  return text.length > 32 ? `${text.slice(0, 32)}…` : text;
 }
 
 export function isShortFoundationWriteCommand(message: string): boolean {
@@ -412,7 +412,7 @@ export function buildNoExecutableFoundationChangeFeedback(sourceText: string): F
 function buildUndoFoundationWriteAction(undoId: string): SuggestedAction {
   return {
     id: "undo-foundation-write",
-    label: "撤回本次修改",
+    label: "撤销本次修改",
     description: "恢复到这次 Agent 修改前的资料状态。",
     permission: "project_config_write",
     requiresConfirmation: false,
@@ -460,7 +460,7 @@ export function foundationApplyResultText(
       }
       const parts = [...counts.entries()].map(([domain, count]) => `${foundationWriteDomainLabel(domain)} ${count} 条`);
       return [
-        `已写入 ${writtenCards.length} 条资料（${parts.join("、")}），可撤回本次修改。`,
+        `已写入 ${writtenCards.length} 条资料（${parts.join("、")}），可撤销本次修改。`,
         ...foundationNewExtraFieldLines(writes),
         ...(skippedLine ? [skippedLine] : []),
       ].join("\n");
@@ -475,7 +475,7 @@ export function foundationApplyResultText(
     }
     return skippedLine ? `${single}\n${skippedLine}` : single;
   }
-  // 修3：到这里 writes 为空，代表「一个字没写」。绝不报「已修改/可撤回」（哪怕 plan.fileChanges 非空——
+  // 修3：到这里 writes 为空，代表「一个字没写」。绝不报「已修改/可撤销」（哪怕 plan.fileChanges 非空——
   // 那只是 targetFilesForFoundationWriteSuggestion 在缺 targetId 时仍算出的占位文件，并无真实写入）。
   if (!plan || plan.acceptedSuggestions.length === 0) return "当前没有可写入的资料草案。";
   // 修1：优先采用引擎算好的精确原因（skippedWrites[].summary，含真实角色名），而非 UI 自己猜的通用句。
@@ -500,7 +500,7 @@ function foundationCategoryShortLabel(category: string): string {
   if (category === "world") return "世界观";
   if (category === "writingRules") return "写作规则";
   if (category === "locations") return "地点";
-  if (category === "assets") return "资产";
+  if (category === "assets") return "道具与资源";
   if (category === "knowledgeBoundary") return "知识边界";
   return "资料";
 }
@@ -540,7 +540,7 @@ export function foundationWritesResultText(writes: readonly FoundationGapApplied
     return [
       `已把主角名改为${rename.targetName}。`,
       ...newFieldLines,
-      "左侧资料已更新，可撤回本次修改。",
+      "左侧资料已更新，可撤销本次修改。",
     ].join("\n");
   }
   const primaryLine = foundationWriteProductLine(writes);
@@ -548,7 +548,7 @@ export function foundationWritesResultText(writes: readonly FoundationGapApplied
     return [
       primaryLine,
       ...newFieldLines,
-      "资料已更新，可撤回本次修改。",
+      "资料已更新，可撤销本次修改。",
     ].join("\n");
   }
   const lines = ["已修改。", ""];
@@ -573,7 +573,7 @@ export function foundationWritesResultText(writes: readonly FoundationGapApplied
       seen.add(fieldLine);
     }
   }
-  lines.push("状态：左侧资料已刷新，可撤回本次修改。");
+  lines.push("状态：左侧资料已刷新，可撤销本次修改。");
   return lines.join("\n");
 }
 
@@ -607,8 +607,8 @@ function foundationWriteProductLine(writes: readonly FoundationGapAppliedWrite[]
       : `已删除一条${label}资料，共更新 ${fileCount} 个文件。`;
   }
   if (primary.domain === "asset") {
-    if (name) return primary.action === "update_asset_status" ? `已更新${name}的资产状态。` : `已把${name}加入资产资料。`;
-    return "资产资料已更新。";
+    if (name) return primary.action === "update_asset_status" ? `已更新${name}的道具状态。` : `已把${name}加入道具与资源。`;
+    return "道具与资源已更新。";
   }
   if (primary.domain === "location") {
     if (name) return primary.action === "update_location_detail" ? `已更新${name}的地点资料。` : `已把${name}加入地点资料。`;
@@ -629,7 +629,7 @@ function foundationWriteDomainLabel(domain: FoundationGapAppliedWrite["domain"])
   if (domain === "location") return "地点";
   if (domain === "world") return "世界观";
   if (domain === "writingRules") return "写作规则";
-  if (domain === "asset") return "资产";
+  if (domain === "asset") return "道具";
   return "资料";
 }
 
@@ -639,7 +639,7 @@ function foundationWriteTargetLabel(targetFile: string): string {
   if (targetFile.match(/^characters\/[^/]+\/core\.json$/u)) return "角色核心资料";
   if (targetFile.match(/^characters\/[^/]+\/state\.json$/u)) return "角色状态资料";
   if (targetFile === "story/location-bible.json") return "地点资料";
-  if (targetFile === "story/assets.json") return "资产账本";
+  if (targetFile === "story/assets.json") return "道具与资源账本";
   if (targetFile === "story/world-bible.json") return "世界观";
   if (targetFile === "story/writing-rules.json") return "写作规则";
   if (targetFile === "story/bible.json") return "故事设定";
@@ -716,7 +716,7 @@ function buildLocalAssetAnswer(message: string, overview: StateOverview): string
     asset.rules.length ? `规则：${asset.rules.join("；")}` : undefined,
     asset.lossRules.length ? `遗失规则：${asset.lossRules.join("；")}` : undefined,
   ].filter(Boolean);
-  return `${asset.name} 已登记在当前资产资料中。\n${lines.map((item) => `- ${item}`).join("\n")}`;
+  return `${asset.name} 已登记在当前道具与资源资料中。\n${lines.map((item) => `- ${item}`).join("\n")}`;
 }
 
 function buildLocalCharacterAnswer(message: string, overview: StateOverview): string | undefined {
@@ -1101,16 +1101,16 @@ export function useChat(params: UseChatParams): UseChatResult {
           });
           completeDraftEdit(
             `assistant-direct-clear-${Date.now()}`,
-            "已清空左侧当前编辑区。为防误删，本次不会用空内容覆盖磁盘草稿；刷新后仍可恢复原稿。",
-            ["draftEditAgent: 已直接清空工作稿", "change: 当前草稿内容已置空", "safety: 空内容未覆盖磁盘草稿，未写正式状态"],
+            "已清空左侧当前编辑区。为防误删，本次不会用空内容覆盖磁盘工作稿；刷新后仍可找回原稿。",
+            ["draftEditAgent: 已直接清空工作稿", "change: 当前工作稿内容已置空", "safety: 空内容未覆盖磁盘工作稿，未写正式状态"],
             {
               id: `direct-clear-success-${Date.now()}`,
               kind: "draft",
               agentName: "draftEditAgent",
               status: "completed",
-              title: "草稿已直接修改",
-              summary: "已清空当前编辑区；磁盘草稿保留。",
-              detail: ["target: 左侧工作稿", "write: 未以空内容覆盖磁盘草稿"],
+              title: "工作稿已直接修改",
+              summary: "已清空当前编辑区；磁盘工作稿保留。",
+              detail: ["target: 左侧工作稿", "write: 未以空内容覆盖磁盘工作稿"],
             },
           );
           await saveDraftChanges?.();
@@ -1128,7 +1128,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           draftContent: draft.content,
         });
         if (!ownsDirectEditTarget()) {
-          useNavigationStore.getState().showToast("原工作区已经变化，已丢弃迟到的改稿结果。", 5000);
+          useNavigationStore.getState().showToast("你切换了书，那次改稿结果没有写进来。", 5000);
           return;
         }
         const nextStore = useWorkspaceStore.getState();
@@ -1145,24 +1145,24 @@ export function useChat(params: UseChatParams): UseChatResult {
         });
         completeDraftEdit(
           `assistant-direct-edit-${Date.now()}`,
-          `${result.reply} 改动已自动保存到草稿，不满意可以在操作历史中恢复快照。`,
+          `${result.reply} 改动已自动保存到工作稿，不满意可以在操作历史中恢复快照。`,
           [
             "draftEditAgent: 已调用 repair 模型直接修改工作稿",
             `model profile: ${result.profileId ?? "unknown"} / ${result.model ?? "unknown"}`,
             `change: ${result.changeSummary}`,
-            "safety: 已自动保存草稿，未写正式状态",
+            "safety: 已自动保存工作稿，未写正式状态",
           ],
           {
             id: `direct-edit-success-${Date.now()}`,
             kind: "draft",
             agentName: "draftEditAgent",
             status: "completed",
-            title: "草稿已直接修改",
+            title: "工作稿已直接修改",
             summary: "已按用户要求修改左侧工作稿，并自动保存。",
             detail: [
               `change: ${result.changeSummary}`,
               "target: 左侧工作稿",
-              "write: 草稿改动已自动保存",
+              "write: 工作稿改动已自动保存",
             ],
           },
         );
@@ -1345,7 +1345,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             {
               status: "running",
               title: "正在修改",
-              summary: "我会直接完成这次修改，完成后可以撤回。",
+              summary: "我会直接完成这次修改，完成后可以撤销。",
               detail: [
                 ...suggestionSummary.map((line) => `· ${line}`),
                 "scope: 当前书籍工作区",
@@ -1374,7 +1374,7 @@ export function useChat(params: UseChatParams): UseChatResult {
               [{
                 id: "confirm-foundation-delete",
                 label: "确认删除",
-                description: "确认后立即删除，完成后仍可撤回。",
+                description: "确认后立即删除，完成后仍可撤销。",
                 permission: "project_config_write",
                 requiresConfirmation: true,
                 endpoint: confirmIds.join(","),
@@ -1446,7 +1446,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 ? [
                     "status: pending / suggested，等待用户确认",
                     "targetStore: foundation_suggestion / agent_card / chat",
-                    "leftPanelVisible: false，未提交到 committed character files 前不会出现在左侧资料区",
+                    "leftPanelVisible: false，未确认写入前不会出现在左侧资料区",
                   ]
                 : ["write: 无需写入"]),
             ],
@@ -1543,7 +1543,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         });
       };
       const notifyStaleOperation = (): void => {
-        useNavigationStore.getState().showToast("原工作区已经变化，已丢弃迟到的 AI 结果。", 5000);
+        useNavigationStore.getState().showToast("你切换了书，那次结果没有写进来。", 5000);
       };
 
       const assistantMsgId = `assistant-agent-${Date.now()}`;
@@ -1667,7 +1667,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         appendMessage({
           id: `assistant-reconcile-${Date.now()}`,
           role: "assistant",
-          content: `（磁盘核对：第 ${chapter} 章其实已经入库了——上一步可能因网络/连接中断没收到回执、看起来像失败，但磁盘上确已写入。已把状态更正为「已入库」。）`,
+          content: `（磁盘核对：第 ${chapter} 章其实已经定稿——上一步可能因网络/连接中断没收到结果、看起来像失败，但磁盘上确实已写入。已把状态更正为「已定稿」。）`,
         });
       };
       const reconcileChapterFromDisk = async (): Promise<void> => {
@@ -2272,7 +2272,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       try {
         const result = await write();
         if (!ownsTarget()) {
-          useNavigationStore.getState().showToast("原工作区已经变化，已丢弃迟到的资料写入回执。", 5000);
+          useNavigationStore.getState().showToast("你切换了书，那次资料写入的结果没有写进来。", 5000);
           return null;
         }
         return result;
@@ -2289,7 +2289,7 @@ export function useChat(params: UseChatParams): UseChatResult {
   /* ---- handleSuggestedAction ---- */
 
   // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
-  // 已完成的动作（如「撤回本次修改」撤回成功后还能再点），成假入口。失败/未执行不摘，留着重试。
+  // 已完成的动作（如「撤销本次修改」撤销成功后还能再点），成假入口。失败/未执行不摘，留着重试。
   const consumeSuggestedAction = useCallback(
     (consumed: SuggestedAction): void => {
       const store = useWorkspaceStore.getState();
@@ -2396,7 +2396,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             appendMessage({
               id: `assistant-foundation-undo-missing-${Date.now()}`,
               role: "assistant",
-              content: "没有找到可撤回的修改记录。",
+              content: "没有找到可撤销的修改记录。",
             });
             return;
           }
@@ -2406,7 +2406,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             appendMessage({
               id: `assistant-foundation-undone-${Date.now()}`,
               role: "assistant",
-              content: ok ? "已撤回本次修改。" : "撤回失败，请查看资料补全面板错误。",
+              content: ok ? "已撤销本次修改。" : "撤销失败，请查看资料补全面板错误。",
             });
           });
           return;

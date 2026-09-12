@@ -1414,7 +1414,7 @@ export async function readChapterWorkspaceSnapshot(projectDir: string, chapter: 
     : shouldUseCommittedChapter && flowStatus !== "ready_for_next"
       ? "committed"
       : flowStatus;
-  // 刷新后残留 draft_generating → 诚实改成「草稿中/等待指令」，别渲染「正在生成」或空徽标。
+  // 刷新后残留 draft_generating → 诚实改成「工作稿中/待开始」，别渲染「正在生成」或空徽标。
   if (effectiveFlowStatus === "draft_generating") {
     const hasRecoverableDraft = preferDraftFileAfterInterrupt
       || hasRealDraftContent(draftFileContent)
@@ -1544,7 +1544,7 @@ function chapterNumberFromWorkspaceFile(file: string): number | undefined {
 }
 
 function isCommitCompletionMessage(content: string): boolean {
-  return /本章已入库|正式入库完成|已提交到正式故事状态|写入正式故事状态/u.test(content);
+  return /本章已入库|本章已定稿|正式入库完成|已提交到正式故事状态|写入正式故事状态/u.test(content);
 }
 
 function isPostCommitAgentMessage(message: {
@@ -1552,7 +1552,7 @@ function isPostCommitAgentMessage(message: {
   readonly content: string;
 }): boolean {
   if (/^assistant-foundation-(?:applied|rollback)-/u.test(message.id)) return true;
-  return /(?:资料已更新，可撤回本次修改|左侧资料已更新，可撤回本次修改|已撤回本次修改)/u.test(message.content);
+  return /(?:资料已更新，可(?:撤回|撤销)本次修改|左侧资料已更新，可(?:撤回|撤销)本次修改|已(?:撤回|撤销)本次修改)/u.test(message.content);
 }
 
 function normalizedContent(content: string | undefined): string {
@@ -1560,16 +1560,18 @@ function normalizedContent(content: string | undefined): string {
 }
 
 /**
- * 识别「显示用空草稿占位符」——buildStateBackedDraftPlaceholder（stateOverviewAdapter.ts）在
- * 「本章还没有真正文」时给写作台显示的引导语（以「还没有草稿正文」/「还没有载入本章草稿正文」开头）。
- * 这种占位符不是用户/AI 写的真草稿，一旦它被落进 drafts/fast 的 .md 或 workspace 的 draftContent，
- * 绝不能被当成「有草稿」——否则章节状态会谎报「有草稿未入库」、agent 跟着说「第N章已有工作稿」，
- * 用户打开却是空的（真机实测 bug）。真草稿绝不会以这两个标记开头，故按开头判定足够安全、题材中立。
+ * 识别「显示用空工作稿占位符」——buildStateBackedDraftPlaceholder（stateOverviewAdapter.ts）在
+ * 「本章还没有真正文」时给写作台显示的引导语（以「还没有工作稿正文」/「还没有载入本章工作稿正文」开头；
+ * 旧版文案「还没有草稿正文」/「还没有载入本章草稿正文」可能已落进老书的盘上文件，一并识别）。
+ * 这种占位符不是用户/AI 写的真稿，一旦它被落进 drafts/fast 的 .md 或 workspace 的 draftContent，
+ * 绝不能被当成「有工作稿」——否则章节状态会谎报「有工作稿未定稿」、agent 跟着说「第N章已有工作稿」，
+ * 用户打开却是空的（真机实测 bug）。真稿绝不会以这些标记开头，故按开头判定足够安全、题材中立。
  */
 function isStateBackedDraftPlaceholder(content: string | undefined): boolean {
   const body = stripLeadingMarkdownChapterHeading(normalizedContent(content)).trim();
   if (!body) return false;
-  return body.startsWith("还没有草稿正文") || body.startsWith("还没有载入本章草稿正文");
+  return body.startsWith("还没有工作稿正文") || body.startsWith("还没有载入本章工作稿正文")
+    || body.startsWith("还没有草稿正文") || body.startsWith("还没有载入本章草稿正文");
 }
 
 /**

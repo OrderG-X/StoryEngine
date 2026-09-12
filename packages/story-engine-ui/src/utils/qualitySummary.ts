@@ -66,7 +66,7 @@ export function summarizeDraftQualityReport(quality: DraftQualityReport): {
     dismissed,
     content,
     cardStatus: confirmed > 0 ? "blocked" : needsConfirmation > 0 ? "needs_confirmation" : "completed",
-    cardTitle: confirmed > 0 ? "质检发现确认问题" : needsConfirmation > 0 ? "质检需要作者确认" : "草稿质检完成",
+    cardTitle: confirmed > 0 ? "质检发现确认问题" : needsConfirmation > 0 ? "质检需要作者确认" : "工作稿质检完成",
     cardDetail: visibleDetails.length ? visibleDetails : [modelLine],
   };
 }
@@ -90,7 +90,7 @@ function qualityCategoryLabel(category: JudgedQualityCandidate["userDisplayCateg
 export function qualityIssueDisplayText(item: Pick<JudgedQualityCandidate, "type" | "message" | "evidence">): string {
   switch (item.type) {
     case "empty_draft":
-      return "草稿为空";
+      return "工作稿为空";
     case "tool_or_json_artifact":
       return "正文里疑似残留工具调用或 JSON";
     case "title_only":
@@ -142,9 +142,9 @@ function replaceEnglishPrefix(message: string, englishPrefix: string, chinesePre
 
 function translateCommonQualityMessage(message: string): string {
   return message
-    .replace(/^Draft content is empty\.$/u, "草稿为空。")
+    .replace(/^Draft content is empty\.$/u, "工作稿为空。")
     .replace(/^Draft content looks like JSON or a tool-call artifact\.$/u, "正文里疑似残留 JSON 或工具调用。")
-    .replace(/^Draft contains a title but no body content\.$/u, "草稿只有标题，没有正文。")
+    .replace(/^Draft contains a title but no body content\.$/u, "工作稿只有标题，没有正文。")
     .replace(/^Draft body is shorter than 300 Chinese characters\.$/u, "正文字数少于 300 个中文字符。")
     .replace(/^Draft contains model explanation or refusal wording\.$/u, "正文里出现模型解释或拒绝语。")
     .replace(/^Draft does not contain an obvious chapter title\.$/u, "缺少明显章节标题。")

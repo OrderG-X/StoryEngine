@@ -130,7 +130,7 @@ const inputSchema = z.object({
   maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("可选：最多读取多少条时间线事件。")),
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("可选：动态上下文 token 预算；超出时只裁剪低优先动态块。")),
   allowWriteAhead: coerceBoolean(z.boolean().optional().describe(
-    "章序护栏的知情 override：默认 false。前一章未入库时本工具会拦下（防穿帮）；仅当用户被告知风险后明确表示『仍要先写本章』，才带 true 再调一次放行。不要默认带 true。",
+    "章序护栏的知情 override：默认 false。前一章未定稿时本工具会拦下（防穿帮）；仅当用户被告知风险后明确表示『仍要先写本章』，才带 true 再调一次放行。不要默认带 true。",
   )),
   autoDeAi: coerceBoolean(z.boolean().optional().describe(
     "出稿检出 high/medium AI 腔后是否自动去味一轮（默认 true：repair 任务槽批量改写 + 改后复检，最多一轮不循环，落盘前自动快照，只改文风不动剧情）。false=只检测标注、不改写。",
@@ -168,7 +168,7 @@ const outputSchema = z.object({
   overview: z.unknown().describe("出稿后重新读取的 StateOverview，供前端刷新写作区/总览。"),
   summary: z.string().describe("出稿结果的自然语言摘要。"),
   refreshScope: z.literal("full"),
-  snapshotId: z.string().optional().describe("覆盖现有非空草稿前建的快照 id（M6：让『再写一版』可撤销）；首次出稿无此值。"),
+  snapshotId: z.string().optional().describe("覆盖现有非空工作稿前建的快照 id（M6：让『再写一版』可撤销）；首次出稿无此值。"),
   contextBudget: z.object({
     droppedSections: z.array(z.string()),
     droppedDetails: z.array(z.object({ name: z.string(), reason: z.string(), coreImpact: z.boolean() })).optional(),
@@ -181,10 +181,10 @@ const outputSchema = z.object({
     z.literal("no_write_intent_this_turn"),
   ]).optional().describe(
     "被护栏拦下时为此值（ok=false），别当普通失败重试：" +
-      "previous_chapter_not_committed=前一章没入库、现在写本章会穿帮；" +
-      "no_write_intent_this_turn=本轮用户原话没有写正文/续写意图（防入库后自主续写），按 summary 向用户讲清并给选项。",
+      "previous_chapter_not_committed=前一章没定稿、现在写本章会穿帮；" +
+      "no_write_intent_this_turn=本轮用户原话没有写正文/续写意图（防定稿后自主续写），按 summary 向用户讲清并给选项。",
   ),
-  pendingChapterToCommit: z.number().int().positive().optional().describe("被章序护栏拦下时，建议先入库的那一章（= 本章号-1）。"),
+  pendingChapterToCommit: z.number().int().positive().optional().describe("被章序护栏拦下时，建议先定稿的那一章（= 本章号-1）。"),
   aiFlavor: z.object({
     total: z.number().int().nonnegative().describe("疑似 AI 腔命中总数（全量，含未截断进清单的）。"),
     bySeverity: z.object({
@@ -242,7 +242,7 @@ const outputSchema = z.object({
     adjudicatedCovered: z.array(z.object({
       beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
       quote: z.string().describe(
-        "模型引用的正文原句（已校验：归一化空白后为【裁决时草稿】的逐字子串），作为覆盖证据；" +
+        "模型引用的正文原句（已校验：归一化空白后为【裁决时工作稿】的逐字子串），作为覆盖证据；" +
         "若之后自动去味改掉了这句，该条目会移入 staleAdjudications（覆盖结论过期）。",
       ),
     })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
@@ -288,12 +288,12 @@ export function buildSequencingBlockedOutput(
     chapter,
     blockedReason: "previous_chapter_not_committed",
     pendingChapterToCommit: priorChapter,
-    issues: [`第 ${priorChapter} 章还没入库`],
+    issues: [`第 ${priorChapter} 章还没定稿`],
     overview,
     summary:
-      `第 ${priorChapter} 章还没入库——它的新状态（人物变化/伏笔/世界事实）还没写进故事，` +
+      `第 ${priorChapter} 章还没定稿——它的新状态（人物变化/伏笔/世界事实）还没写进故事，` +
       `现在直接写第 ${chapter} 章会读到旧状态、容易前后穿帮。` +
-      `建议先把第 ${priorChapter} 章入库（commit_preview → commit_apply）再写第 ${chapter} 章；` +
+      `建议先把第 ${priorChapter} 章定稿（commit_preview → commit_apply）再写第 ${chapter} 章；` +
       `若确认要冒险先写，请明确说「知道风险，仍要先写第 ${chapter} 章」。`,
     refreshScope: "full",
   };
@@ -323,8 +323,8 @@ export function buildNoWriteIntentBlockedOutput(
 export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
-    "为某章生成一版正文并写入工作稿（drafts/fast，不入库）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
-    "草稿是待保存的工作稿，不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式入库。" +
+    "为某章生成一版正文并写入工作稿（drafts/fast，未定稿）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
+    "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。一次成稿、不自动补写重试：" +
     "正文低于目标字数下限不会被拒绝，会在 draftLength 和 summary 里如实标注（⚠ 低于下限）——请如实转达用户，由其决定重写或接受，别假装字数达标。" +
     "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +

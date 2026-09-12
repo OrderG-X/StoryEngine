@@ -51,7 +51,7 @@ const inputSchema = z.object({
   // 模型无关：枚举大小写宽容（模型传 "DeAI"/"DEAI" 不再硬失败）。
   style: coerceEnum(z.enum(["deai"]).optional().describe(
     "可选风格模板。deai=去 AI 味改写：自动注入去 AI 腔的写作手法（删空泛形容词/套路排比升华/被滥用的过渡抒情，改用具体动作与可感细节）。"
-    + "用户看完 check_ai_flavor 体检后要求『改掉 AI 味/去 AI 腔』时，对命中句逐句调本工具并设 style:deai（仍一次一句、targetText 逐字取自草稿）。",
+    + "用户看完 check_ai_flavor 体检后要求『改掉 AI 味/去 AI 腔』时，对命中句逐句调本工具并设 style:deai（仍一次一句、targetText 逐字取自工作稿）。",
   )),
   problemSummary: z.string().optional().describe("可选：这段当前的问题一句话概括。"),
   constraints: coerceStringArray(z.array(z.string()).optional().describe("可选：修订约束（如『保留人物关系』『不新增剧情』）。")),
@@ -59,16 +59,16 @@ const inputSchema = z.object({
 
 const outputSchema = z.object({
   ok: z.boolean().describe("是否成功修订并写回工作稿。"),
-  applied: z.boolean().describe("是否真的把改动写进了草稿（诚实回报，未命中/格式不全时为 false）。"),
+  applied: z.boolean().describe("是否真的把改动写进了工作稿（诚实回报，未命中/格式不全时为 false）。"),
   preview: z.unknown().describe("修订预览（beforeText/afterText/改动说明等）。"),
   draftBody: z.string().optional().describe(
-    "修订后的完整草稿正文（去 Markdown 章节标题）；成功时返回，供前端把真正文载入工作区（防占位覆盖+autosave 抹稿）。",
+    "修订后的完整工作稿正文（去 Markdown 章节标题）；成功时返回，供前端把真正文载入工作区（防占位覆盖+autosave 抹稿）。",
   ),
   overview: z.unknown().describe("修订后重新读取的 StateOverview，供前端刷新写作区/总览。"),
   summary: z.string().describe("修订结果的自然语言摘要。"),
   refreshScope: z.literal("full"),
-  snapshotId: z.string().optional().describe("修订覆盖草稿前建的快照 id（M6：让修订可撤销）；未命中/未写回时无此值。"),
-  chapter: z.number().int().positive().optional().describe("被修订草稿的章号。"),
+  snapshotId: z.string().optional().describe("修订覆盖工作稿前建的快照 id（M6：让修订可撤销）；未命中/未写回时无此值。"),
+  chapter: z.number().int().positive().optional().describe("被修订工作稿的章号。"),
 });
 
 export interface ReviseDraftToolOutput {
@@ -89,22 +89,22 @@ function refusalReason(failure: RevisionOneShotFailure): string {
     case "target_empty":
       return "修订任务缺少原文片段，请先指明要修的那段文字。";
     case "target_not_found":
-      return "未在当前草稿中找到要修的原文片段，请逐字确认目标段落。";
+      return "未在当前工作稿中找到要修的原文片段，请逐字确认目标段落。";
     case "target_ambiguous":
-      return "原文片段在草稿中出现多次，请改用更精确、只出现一次的片段。";
+      return "原文片段在工作稿中出现多次，请改用更精确、只出现一次的片段。";
     case "exact_replacement_noop":
-      return "给的替换文本与原句一致，等于没改；草稿未改动。";
+      return "给的替换文本与原句一致，等于没改；工作稿未改动。";
     case "model_output_unusable":
-      return `修订模型输出不可用，未改动草稿：${failure.detail ?? "未知错误"}`;
+      return `修订模型输出不可用，未改动工作稿：${failure.detail ?? "未知错误"}`;
     case "before_text_not_found":
     case "before_text_ambiguous":
-      return "模型回吐的原句没法在草稿里唯一定位，未改动草稿。请重试或把要改的原文说得更精确。";
+      return "模型回吐的原句没法在工作稿里唯一定位，未改动工作稿。请重试或把要改的原文说得更精确。";
     case "drift_rejected":
-      return "模型改写的不是你指定的那段（它去动了别处），草稿未改动。请把要改的原文逐字说清，或重试。";
+      return "模型改写的不是你指定的那段（它去动了别处），工作稿未改动。请把要改的原文逐字说清，或重试。";
     case "noop":
-      return "模型回吐的片段与原文一致，等于没有任何修改；草稿未改动。";
+      return "模型回吐的片段与原文一致，等于没有任何修改；工作稿未改动。";
     case "target_unchanged":
-      return "改写后你点名的那句仍原样留在草稿里，等于没真改到；草稿未改动。请重试或把要改的原文逐字说清。";
+      return "改写后你点名的那句仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或把要改的原文逐字说清。";
   }
 }
 
@@ -148,8 +148,8 @@ async function toToolOutput(
     draftBody: stripLeadingMarkdownChapterHeading(outcome.updatedContent).trim(),
     overview,
     summary: outcome.mode === "exact"
-      ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。草稿未入库，可继续修改或撤销。`
-      : `已在第 ${chapter} 章工作稿上完成局部修订：${outcome.preview.changeSummary}。草稿未入库，可继续修改或撤销。`,
+      ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`
+      : `已在第 ${chapter} 章工作稿上完成局部修订：${outcome.preview.changeSummary}。工作稿未定稿，可继续修改或撤销。`,
     refreshScope: "full",
     chapter,
   };
@@ -179,9 +179,9 @@ export async function runReviseDraftToolLogic(input: {
 export const reviseDraftTool = createTool({
   id: "revise_draft",
   description:
-    "对某章工作稿里某段原文做局部修订（确定性替换：原文必须逐字取自草稿且只出现一次）。" +
+    "对某章工作稿里某段原文做局部修订（确定性替换：原文必须逐字取自工作稿且只出现一次）。" +
     "当用户说『把这段改成…… / 修一下这一句 / 这段语气太冲，改克制点』时调用。" +
-    "草稿是待保存的工作稿，不建 git 快照（改坏了走操作历史撤销）。原文未命中或出现多次会被拒绝、不写坏草稿。",
+    "工作稿不建 git 快照（改坏了走操作历史撤销）。原文未命中或出现多次会被拒绝、不写坏工作稿。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

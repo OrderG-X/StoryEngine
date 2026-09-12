@@ -22,12 +22,12 @@ export interface CapabilityAction {
 /** 收起时常驻露脸的高频能力（写作/补全/整理 各露一个代表，一眼看见最常用的）。 */
 export const QUICK_ACTIONS: readonly CapabilityAction[] = [
   { key: "quality", label: "✓ 硬伤检查", intent: QUALITY_BUTTON_INTENT },
-  { key: "char", label: "✦ 完善角色", intent: "帮我把现有角色完善一点" },
-  { key: "rel", label: "⬡ 整理关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+  { key: "char", label: "✦ 补全角色", intent: "帮我把现有角色补全一点" },
+  { key: "rel", label: "⬡ 整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
 ];
 
 /**
- * 「⋯ 更多」展开后的全部能力，按 写作 / 完善 / 整理 分组。
+ * 「⋯ 更多」展开后的全部能力，按 写作 / 补全 / 整理 分组。
  * 写作辅助（内容审阅/检查机器腔/硬伤检查/定稿）也在上方 ChapterToolRail 按阶段提示——那是"当下该用啥"的流程向导，
  * 这里是"能用啥"的能力清单（随时可见），两者用途不同、可并存。
  */
@@ -43,20 +43,20 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
     ],
   },
   {
-    title: "完善",
+    title: "补全",
     actions: [
-      { key: "char", label: "✦ 完善角色", intent: "帮我把现有角色完善一点" },
-      { key: "world", label: "✦ 完善世界观", intent: "帮我把世界观完善" },
-      { key: "loc", label: "✦ 完善地点", intent: "帮我把地点完善" },
-      { key: "asset", label: "✦ 完善道具与资源", intent: "帮我把道具与资源完善" },
-      { key: "rules", label: "✦ 完善写作规则", intent: "帮我把写作规则完善、整理本书文风特点" },
+      { key: "char", label: "✦ 补全角色", intent: "帮我把现有角色补全一点" },
+      { key: "world", label: "✦ 补全世界观", intent: "帮我把世界观补全" },
+      { key: "loc", label: "✦ 补全地点", intent: "帮我把地点补全" },
+      { key: "asset", label: "✦ 补全道具与资源", intent: "帮我把道具与资源补全" },
+      { key: "rules", label: "✦ 补全写作规则", intent: "帮我把写作规则补全、整理本书文风特点" },
     ],
   },
 
   {
     title: "整理",
     actions: [
-      { key: "rel", label: "⬡ 整理人物关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+      { key: "rel", label: "⬡ 整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
       { key: "clean", label: "◌ 清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
       { key: "merge", label: "⇉ 合并重复伏笔", intent: "把讲同一件事的重复伏笔合并成一条" },
     ],

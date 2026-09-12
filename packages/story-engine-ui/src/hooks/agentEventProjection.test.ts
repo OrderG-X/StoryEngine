@@ -546,19 +546,19 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     read_chapters_overview: "读取章节概览",
     read_timeline: "读取时间线",
     read_foundation: "查看故事资料",
-    read_draft: "读取草稿原文",
+    read_draft: "读取工作稿原文",
     foundation_write: "更新故事资料",
-    generate_worldbuilding: "完善世界观",
-    generate_asset_enrichment: "完善道具与资源",
-    generate_location_enrichment: "完善地点",
-    generate_character_enrichment: "完善角色",
-    generate_matrix_enrichment: "完善角色关系",
-    generate_character_relationships: "完善人物关系",
+    generate_worldbuilding: "补全世界观",
+    generate_asset_enrichment: "补全道具与资源",
+    generate_location_enrichment: "补全地点",
+    generate_character_enrichment: "补全角色",
+    generate_matrix_enrichment: "补全角色关系",
+    generate_character_relationships: "整理角色关系",
     generate_writing_rules_enrichment: "重新整理写作规则",
-    generate_alias_table: "完善别名表",
+    generate_alias_table: "补全别名表",
     generate_chapter_steering: "生成章节方向",
     generate_draft: "生成正文",
-    revise_draft: "修改草稿",
+    revise_draft: "修改工作稿",
     quality_check: "硬伤检查",
     ai_review: "内容审阅",
     check_ai_flavor: "检查机器腔",
@@ -597,7 +597,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     const revise = project([
       { type: "tool-call", toolCallId: "r1", toolName: "revise_draft", startedAt: 1 },
     ]);
-    expect(revise.toolSteps![0].label).toBe("修改草稿");
+    expect(revise.toolSteps![0].label).toBe("修改工作稿");
   });
 
   it("card 仅保留 read_state_overview / foundation_write；其余工具 card:null（不强造误导卡）", () => {
@@ -623,9 +623,9 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
   });
 
   it("resolveToolStepLabel：有 toolName 现取中文；无 toolName 从旧『执行 xxx』英文 label 反解中文；都不行回退", () => {
-    expect(resolveToolStepLabel("read_draft", "执行 read_draft")).toBe("读取草稿原文"); // 有 toolName → 现取
+    expect(resolveToolStepLabel("read_draft", "执行 read_draft")).toBe("读取工作稿原文"); // 有 toolName → 现取
     expect(resolveToolStepLabel(undefined, "执行 suggest_next_steps")).toBe("建议下一步"); // 旧历史无 toolName → 反解
-    expect(resolveToolStepLabel(undefined, "执行 read_draft")).toBe("读取草稿原文");
+    expect(resolveToolStepLabel(undefined, "执行 read_draft")).toBe("读取工作稿原文");
     expect(resolveToolStepLabel(undefined, "执行 some_future_tool")).toBe("执行 some_future_tool"); // 未知工具回退
     expect(resolveToolStepLabel(undefined, "思考过程")).toBe("思考过程"); // 非『执行 xxx』形态原样
     expect(resolveToolStepLabel(undefined, undefined)).toBe(""); // 兜底不崩

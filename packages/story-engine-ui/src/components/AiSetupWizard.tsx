@@ -104,7 +104,7 @@ export function AiSetupWizard({ busy, error, onTestAndStart }: AiSetupWizardProp
               <input
                 className="ms-input ms-input-key"
                 type={showApiKey ? "text" : "password"}
-                placeholder="sk-..."
+                placeholder="sk-…"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 autoComplete="off"

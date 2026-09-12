@@ -67,15 +67,15 @@ describe("read_draft 只读草稿/正文工具", () => {
     expect(out.content).toBe(DRAFT);
   });
 
-  it("已入库章节也有工作稿时 → summary 说明当前读的是工作稿，不说未入库草稿", async () => {
-    const projectDir = await makeProject("入库后工作稿");
+  it("已定稿章节也有工作稿时 → summary 说明当前读的是工作稿，不说未定稿工作稿", async () => {
+    const projectDir = await makeProject("定稿后工作稿");
     await writeAt(defaultDraftPath(projectDir, 1), DRAFT);
     await writeAt(defaultCommittedChapterPath(projectDir, 1), COMMITTED);
 
     const out = await readDraftContent({ projectDir, chapter: 1, source: "draft" });
     expect(out.source).toBe("draft");
-    expect(out.summary).toContain("该章已有入库正文，当前读的是工作稿");
-    expect(out.summary).not.toContain("未入库草稿");
+    expect(out.summary).toContain("该章已有定稿正文，当前读的是工作稿");
+    expect(out.summary).not.toContain("未定稿）");
   });
 
   it("source=draft 但只有已入库 → 不回退，found=false 诚实回报", async () => {

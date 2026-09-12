@@ -15,7 +15,7 @@ describe("cleanUiText", () => {
   });
 
   it("replaces chapter_committed pattern", () => {
-    expect(cleanUiText("chapter_1_committed")).toBe("第1章已提交");
+    expect(cleanUiText("chapter_1_committed")).toBe("第1章已定稿");
   });
 
   it("replaces backend placeholder", () => {

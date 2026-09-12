@@ -33,8 +33,8 @@ describe("read_chapters_overview 全书章节地图", () => {
       { chapter: 2, status: "draft", title: "暗涌" },
       { chapter: 3, status: "empty" },
     ]);
-    expect(out.summary).toContain("已入库 1 章");
-    expect(out.summary).toContain("有草稿未入库 1 章");
+    expect(out.summary).toContain("已定稿 1 章");
+    expect(out.summary).toContain("有工作稿未定稿 1 章");
     expect(out.summary).toContain("最大章号 3");
   });
 

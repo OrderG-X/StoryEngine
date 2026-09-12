@@ -37,7 +37,7 @@ import "./codex.css";
 const CATS = [
   { id: "world", glyph: "◈", title: "故事设定 · 世界观", sub: "概要 / 规则 / 资源 / 关系" },
   { id: "rules", glyph: "§", title: "写作规则", sub: "本书文风 · 避免机器腔" },
-  { id: "matrix", glyph: "⬡", title: "角色关系", sub: "人物关系 · 单角色近况" },
+  { id: "matrix", glyph: "⬡", title: "角色关系", sub: "关系网 · 单角色近况" },
   { id: "chars", glyph: "♟", title: "角色", sub: "角色档案" },
   { id: "assets", glyph: "⚖", title: "道具与资源", sub: "物品归属" },
   { id: "places", glyph: "⌖", title: "地点", sub: "场景规则" },
@@ -143,7 +143,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     // 角色卡是 JSON 串：摊平成可读值串再喂搜索，结果不再是一坨 JSON（修 R2#5）。
     { cat: "chars", catLabel: "角色", items: props.sidebar.characters.map(flattenCharacterSearchItem) },
     { cat: "places", catLabel: "地点", items: props.sidebar.locations },
-    { cat: "assets", catLabel: "资产", items: props.sidebar.assets },
+    { cat: "assets", catLabel: "道具与资源", items: props.sidebar.assets },
   ];
   const libQ = libQuery.trim().toLowerCase();
   const librarySearchResults = searchLibraryIndex(librarySearchSources, libQuery);
@@ -253,7 +253,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           {/* 底部工具区：操作历史。用量入口已撤（流式草稿拿不回 provider usage、长期为 0，无实际意义）。 */}
           <div className="rail-spacer" />
           <div className="nav-sec">工具</div>
-          <button className={`nav-item ${view === "history" ? "on" : ""}`} onClick={() => setView("history")} type="button" title="操作历史 / 快照回滚">
+          <button className={`nav-item ${view === "history" ? "on" : ""}`} onClick={() => setView("history")} type="button" title="操作历史 / 快照恢复">
             <span className="ic">⟲</span>操作历史
           </button>
         </aside>

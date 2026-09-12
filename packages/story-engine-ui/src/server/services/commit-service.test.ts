@@ -87,7 +87,7 @@ describe("commit-service durable receipt tmp cleanup", () => {
       updatedCalendar: false,
       issues: [],
     });
-    createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "入库前快照：第1章", timestamp: 0 });
+    createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "定稿前快照：第1章", timestamp: 0 });
   });
 
   afterEach(async () => {
@@ -242,7 +242,7 @@ function resetMocksBaseline(): void {
     updatedCalendar: false,
     issues: [],
   });
-  createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "入库前快照", timestamp: 0 });
+  createSnapshot.mockResolvedValue({ id: "a".repeat(40), label: "定稿前快照", timestamp: 0 });
 }
 
 describe("commit-preview 声明通道降级留痕（GLM P3 旧账①）", () => {
@@ -339,7 +339,7 @@ describe("commit-apply pending 对账报错分流（GLM P3 旧账②）", () => 
 
     expect(result.kind).toBe("idempotency_in_progress");
     if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
-    expect(result.error).toContain("磁盘对账显示该章未按此次预览入库");
+    expect(result.error).toContain("磁盘对账显示该章未按此次预览定稿");
     expect(result.error).toContain("删除回执文件");
     expect(result.error).not.toContain("对账读取失败");
     expect(commitFastDraft).not.toHaveBeenCalled();
@@ -594,7 +594,7 @@ describe("commit-apply replayed 磁盘对账（undo 假成功根治·复审 P2�
     expect(result.kind).toBe("idempotency_in_progress");
     if (result.kind !== "idempotency_in_progress") throw new Error(`expected idempotency_in_progress, got ${result.kind}`);
     expect(result.error).toContain("已完成记录");
-    expect(result.error).toContain("未按此次预览入库");
+    expect(result.error).toContain("未按此次预览定稿");
     // 确认对不上 → 出路含「人工核对后删回执重试=真实重新入库」。
     expect(result.error).toContain("删除回执文件");
     expect(result.error).not.toContain("对账读取失败");

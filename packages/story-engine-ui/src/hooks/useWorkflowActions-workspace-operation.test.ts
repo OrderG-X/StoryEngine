@@ -213,7 +213,7 @@ describe("workspace-bound writing operations", () => {
     await pending;
 
     expect(useWorkspaceStore.getState().activeRevisionPreview).toBeNull();
-    expect(useNavigationStore.getState().toast).toContain("原工作区");
+    expect(useNavigationStore.getState().toast).toContain("你切换了书");
   });
 
   it("refuses to apply a candidate created for chapter A after switching to B", async () => {
@@ -230,7 +230,7 @@ describe("workspace-bound writing operations", () => {
     await workflow.handleApplyCandidate(candidate?.content ?? "");
 
     expect(apiMocks.applyDraftCandidate).not.toHaveBeenCalled();
-    expect(useNavigationStore.getState().toast).toContain("原工作区");
+    expect(useNavigationStore.getState().toast).toContain("切换前的那本书");
     expect(useWorkspaceStore.getState().workspace.draft.content).toBe(B_DRAFT);
   });
 

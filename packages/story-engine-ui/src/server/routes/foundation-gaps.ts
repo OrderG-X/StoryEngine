@@ -221,7 +221,7 @@ async function rollbackFoundationGapApply(
 }> {
   const undoId = readString(body.undoId);
   if (!undoId || !/^foundation-\d+-[0-9a-f-]{36}$/u.test(undoId)) {
-    return { statusCode: 400, payload: { ok: false, error: "撤回记录无效。" } };
+    return { statusCode: 400, payload: { ok: false, error: "撤销记录无效。" } };
   }
   const snapshotPath = foundationGapUndoSnapshotPath(projectDir, undoId);
   const snapshotRaw = await readFile(snapshotPath, "utf-8").catch((error: NodeJS.ErrnoException) => {
@@ -229,16 +229,16 @@ async function rollbackFoundationGapApply(
     throw error;
   });
   if (!snapshotRaw) {
-    return { statusCode: 404, payload: { ok: false, error: "没有找到这次修改的撤回记录。" } };
+    return { statusCode: 404, payload: { ok: false, error: "没有找到这次修改的撤销记录。" } };
   }
   const snapshot = JSON.parse(snapshotRaw) as FoundationGapUndoSnapshot;
   if (snapshot.version !== 1 || snapshot.undoId !== undoId || !Array.isArray(snapshot.files)) {
-    return { statusCode: 400, payload: { ok: false, error: "撤回记录已损坏。" } };
+    return { statusCode: 400, payload: { ok: false, error: "撤销记录已损坏。" } };
   }
   const restoredFiles: string[] = [];
   for (const file of snapshot.files) {
     if (!isSafeFoundationUndoPath(file.relativePath)) {
-      return { statusCode: 400, payload: { ok: false, error: "撤回记录包含非法路径。" } };
+      return { statusCode: 400, payload: { ok: false, error: "撤销记录包含非法路径。" } };
     }
     const absolutePath = join(projectDir, file.relativePath);
     if (file.existed) {
@@ -1033,7 +1033,7 @@ function deterministicFoundationGapChat(input: {
   return {
     reply: topGaps.length
       ? `我先按当前资料帮你抓重点：最影响继续写作的是 ${topGaps.map((item) => item.title).join("、")}。你可以选一个方向继续聊，我会整理成草案卡，确认前不会写入。`
-      : "当前扫描结果里没有明显高风险缺口。你可以继续指定要补角色、地点、资产或世界观。",
+      : "当前扫描结果里没有明显高风险缺口。你可以继续指定要补角色、地点、道具或世界观。",
     ...(intent ? { intent } : {}),
     askedQuestions: [],
     missingFields: [],
@@ -1191,8 +1191,8 @@ function buildDeterministicDeleteReply(
     return {
       ...base,
       reply: names.length > 0
-        ? `我没有从这句话里确定要删除哪条资料。当前已记录的角色有：${names.join("、")}。请直接说"删除角色XX"；要删地点、资产或规则时，请说出它的完整名字。`
-        : "我没有从这句话里确定要删除哪条资料。请直接说出要删除的角色、地点、资产或规则的名字。",
+        ? `我没有从这句话里确定要删除哪条资料。当前已记录的角色有：${names.join("、")}。请直接说"删除角色XX"；要删地点、道具或规则时，请说出它的完整名字。`
+        : "我没有从这句话里确定要删除哪条资料。请直接说出要删除的角色、地点、道具或规则的名字。",
     };
   }
   if (candidates.length > 1) {
@@ -1226,7 +1226,7 @@ function buildDeterministicDeleteReply(
   };
   return {
     ...base,
-    reply: `我会删除角色「${target.name}」的资料，并同步清理角色矩阵和角色档案。删除完成后可以撤回。`,
+    reply: `我会删除角色「${target.name}」的资料，并同步清理角色矩阵和角色档案。删除完成后可以撤销。`,
     focusedSuggestionIds: [suggestion.id],
     generatedSuggestions: [suggestion],
     suggestedActions: [{ id: "accept-visible", label: "确认删除" }],
@@ -1288,7 +1288,7 @@ function foundationCategoryLabel(category: FoundationGapSuggestion["category"]):
     characters: "角色资料",
     characterRelationships: "角色关系",
     locations: "地点资料",
-    assets: "资产资料",
+    assets: "道具与资源",
     knowledgeBoundary: "知识边界",
     hooks: "伏笔资料",
     threads: "线索资料",
@@ -1440,7 +1440,7 @@ function schemaAssistantQuestionReply(intent: FoundationGapSuggestion["actionTyp
   const intro: Record<string, string> = {
     create_character: "可以。这个角色会影响后续写作，我先帮你建角色资料。",
     create_location: "可以。地点资料会影响场景、移动和空间连续性，我先帮你建地点资料。",
-    create_asset: "可以。资产资料会影响后续能不能使用、消耗或遗失，我先帮你建资产草案。",
+    create_asset: "可以。道具与资源会影响后续能不能使用、消耗或遗失，我先帮你建道具草案。",
     update_world_rule: "可以。世界观规则会影响所有章节的冲突和限制，我先帮你梳理核心规则。",
     update_writing_rule: "可以。写作规则会约束后续文风、节奏和信息揭示，我先帮你整理。",
     create_relationship: "可以。角色关系会影响群像和后续冲突，我先帮你建关系草案。",
@@ -1448,7 +1448,7 @@ function schemaAssistantQuestionReply(intent: FoundationGapSuggestion["actionTyp
     fill_missing_field: "可以。我先确认几个关键信息。",
     update_character_boundary: "可以。我先确认角色边界。",
     update_location_detail: "可以。我先确认地点细节。",
-    update_asset_status: "可以。我先确认资产状态。",
+    update_asset_status: "可以。我先确认道具状态。",
     defer: "可以，先暂不处理。",
   };
   return `${intro[intent] ?? "可以。"}\n\n我需要先确认几个关键信息。`;
@@ -1458,7 +1458,7 @@ function requiredQuestionsForFoundationIntent(intent: FoundationGapSuggestion["a
   const questions: Record<string, readonly string[]> = {
     create_character: ["这个角色的身份是什么？", "他和主角是什么关系？", "年龄/性别大概是什么？", "他说话风格是什么？", "他知道哪些主角不知道的秘密？"],
     create_location: ["这个地点是什么？", "属于哪个上级地点？", "有几层或几个区域？", "主角从哪里进入？", "到关键地点需要多久？"],
-    create_asset: ["这是什么资产？", "谁拥有它？", "它现在在哪里？", "是否随身携带？", "能不能使用，有什么限制？"],
+    create_asset: ["这是什么道具？", "谁拥有它？", "它现在在哪里？", "是否随身携带？", "能不能使用，有什么限制？"],
     update_world_rule: ["这是哪种类型的世界？", "核心资源或力量是什么？", "谁掌握资源？", "普通人和强者差距在哪里？", "规则制造什么冲突？"],
     update_writing_rule: ["想写成什么风格？", "第几人称？", "节奏快慢？", "信息慢慢揭还是直接讲？", "不想写成什么样？"],
     create_relationship: ["哪两个角色？", "表面关系是什么？", "真实关系是什么？", "谁知道秘密？", "当前态度如何？"],
@@ -1646,8 +1646,8 @@ function buildDeterministicSchemaSuggestion(message: string, intent: FoundationG
         canAiModify: false,
         rules: uniqueStrings([
           ...rules,
-          /抢来/u.test(message) ? "来源为抢夺所得，后续使用可能带来追踪风险。" : "状态变化必须经过入库预览确认。",
-          ...(entity?.type === "container" ? ["只能存放用户确认过的物品，不能凭空装出新资产。"] : []),
+          /抢来/u.test(message) ? "来源为抢夺所得，后续使用可能带来追踪风险。" : "状态变化必须经过定稿预览确认。",
+          ...(entity?.type === "container" ? ["只能存放用户确认过的物品，不能凭空装出新道具。"] : []),
         ]),
         usageRules,
         lossRules,

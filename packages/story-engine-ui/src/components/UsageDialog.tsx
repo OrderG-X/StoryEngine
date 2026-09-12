@@ -18,7 +18,7 @@ export default function UsageDialog({ error, loading, onClose, summary }: UsageD
           </div>
           <button aria-label="关闭" onClick={onClose} type="button">×</button>
         </header>
-        {loading ? <div className="usage-empty">正在读取底层 diagnostics...</div> : null}
+        {loading ? <div className="usage-empty">正在读取底层 diagnostics…</div> : null}
         {error ? <div className="usage-error">{error}</div> : null}
         {!loading && !error && summary ? (
           <>
@@ -41,7 +41,7 @@ export default function UsageDialog({ error, loading, onClose, summary }: UsageD
             <section className="usage-recent">
               <h3>最近记录</h3>
               {summary.recent.length === 0 ? (
-                <p>暂无 diagnostics 用量记录。流式草稿可能无法返回 provider usage。</p>
+                <p>暂无 diagnostics 用量记录。流式生成工作稿时可能无法返回 provider usage。</p>
               ) : (
                 <div className="usage-table">
                   {summary.recent.map((item, index) => (
@@ -80,5 +80,5 @@ function formatDate(value: string | null): string {
 }
 
 function stageLabel(stage: string): string {
-  return stage === "fast-draft" ? "草稿生成" : stage === "commit" ? "正式提交" : stage;
+  return stage === "fast-draft" ? "工作稿生成" : stage === "commit" ? "定稿" : stage;
 }

@@ -4,7 +4,7 @@ export function uiText(value: string | null | undefined, fallback = "尚未设�
   const raw = value?.trim() ?? "";
   if (!raw || raw === "unknown" || raw === "后端未提供") return fallback;
   return raw
-    .replace(/undefined\/drafts(?:\/fast)?/giu, "草稿目录")
+    .replace(/undefined\/drafts(?:\/fast)?/giu, "工作稿目录")
     .replace(/ENOENT/giu, "本地文件未找到")
     .replace(/chapter_\d+_committed/giu, "已定稿章节")
     .replace(/char-[a-z0-9-]+/giu, "角色")
@@ -45,6 +45,7 @@ export function uiText(value: string | null | undefined, fallback = "尚未设�
     .replace(/Asset ChangePlan/giu, "资产变更建议")
     .replace(/Location ChangePlan/giu, "地点变更建议")
     .replace(/提交预览/gu, "定稿预览")
+    .replace(/入库预览/gu, "定稿预览")
     .replace(/正式提交/gu, "确认定稿")
     .replace(/正式状态/gu, "已定稿版");
 }
@@ -73,10 +74,10 @@ export function chapterHeading(chapterNumber: number, title: string): string {
 
 export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
   const labels: Record<ChapterFlowStatus, string> = {
-    idle: "等待指令",
+    idle: "待开始",
     steering_ready: "已定方案",
-    draft_generating: "正在生成草稿",
-    draft_ready: "草稿中",
+    draft_generating: "正在生成工作稿",
+    draft_ready: "工作稿中",
     quality_checked: "已硬伤检查",
     commit_preview_ready: "待定稿预览",
     waiting_commit_confirmation: "待确认定稿",
@@ -84,14 +85,14 @@ export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
     ready_for_next: "可进入下一章",
   };
   // 未知/缺失 flowStatus 绝不渲染空串或裸「·」（dogfood 问题 9：刷新后徽标变点）。
-  if (!state || !(state in labels)) return "草稿中";
+  if (!state || !(state in labels)) return "工作稿中";
   return labels[state];
 }
 
 export function flowHint(state: ChapterFlowStatus): string {
   const hints: Record<ChapterFlowStatus, string> = {
     idle: "当前章节已就绪。可以让 AI 生成本章方案，也可以直接说这一章想怎么写。",
-    steering_ready: "本章方案已准备好。确认方向后，可以生成正文草稿。",
+    steering_ready: "本章方案已准备好。确认方向后，可以生成工作稿正文。",
     draft_generating: "正在写工作稿，不会更新已定稿版。",
     draft_ready: "工作稿已生成。请先阅读，再做硬伤检查或生成定稿预览。",
     quality_checked: "硬伤检查完成。若没有阻断问题，可以生成定稿预览。",
@@ -108,7 +109,7 @@ export function permissionLabel(permission: SuggestedAction["permission"]): stri
     const labels: Record<DevApiPermission, string> = {
       safe_read: "不会修改内容",
       model_call: "调用 AI",
-      draft_write: "写入草稿",
+      draft_write: "写入工作稿",
       project_config_write: "写入配置",
       formal_state_write: "写入正式故事",
       destructive_write: "危险操作",

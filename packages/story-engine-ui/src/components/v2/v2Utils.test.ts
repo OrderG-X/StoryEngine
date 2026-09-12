@@ -36,13 +36,13 @@ describe("chapterHeading", () => {
 
 describe("flow copy", () => {
   it("uses author-facing idle wording", () => {
-    expect(flowLabel("idle")).toBe("等待指令");
+    expect(flowLabel("idle")).toBe("待开始");
     expect(flowHint("idle")).toContain("当前章节已就绪");
   });
 
-  it("未知/空 flowStatus 回退为「草稿中」，绝不空渲染（dogfood 徽标·）", () => {
-    expect(flowLabel(undefined)).toBe("草稿中");
-    expect(flowLabel(null)).toBe("草稿中");
-    expect(flowLabel("" as never)).toBe("草稿中");
+  it("未知/空 flowStatus 回退为「工作稿中」，绝不空渲染（dogfood 徽标·）", () => {
+    expect(flowLabel(undefined)).toBe("工作稿中");
+    expect(flowLabel(null)).toBe("工作稿中");
+    expect(flowLabel("" as never)).toBe("工作稿中");
   });
 });

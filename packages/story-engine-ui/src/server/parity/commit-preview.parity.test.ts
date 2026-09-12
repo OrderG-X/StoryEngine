@@ -170,7 +170,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(tool.canCommit).toBe(false);
     expect(tool.blockingReasons).toContain("missing_draft");
     expect(tool.previewToken).toBeUndefined();
-    expect(String(tool.summary)).toContain("还没有草稿");
+    expect(String(tool.summary)).toContain("还没有工作稿");
 
     expect(findCommitPreview(projectDir, 1)).toBeUndefined();
     expect(await pathExists(defaultCommittedChapterPath(projectDir, 1))).toBe(false);

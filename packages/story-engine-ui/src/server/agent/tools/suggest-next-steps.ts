@@ -19,7 +19,7 @@ const choiceSchema = z.object({
 });
 
 const inputSchema = z.object({
-  question: z.string().trim().optional().describe("一句话问用户接下来想怎么走（如『这章入库了，接下来？』）。"),
+  question: z.string().trim().optional().describe("一句话问用户接下来想怎么走（如『这章定稿了，接下来？』）。"),
   choices: coerceJsonArray(z.array(choiceSchema).max(4).describe("2–4 个下一步选项；建议含一个推荐项，并留一个『先放着/我自己说』之类的兜底。")).optional(),
 });
 

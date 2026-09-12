@@ -158,13 +158,13 @@ describe("buildTimelineModel", () => {
   it("有 turnSnapshots → canUndo=true，undoSnapshotId 取首个（整块回退点）", () => {
     const m = buildTimelineModel({
       id: "x", role: "assistant", content: "",
-      agentCards: [{ id: "c", kind: "commit", agentName: "commitApplyAgent", status: "completed", title: "入库", summary: "" }],
+      agentCards: [{ id: "c", kind: "commit", agentName: "commitApplyAgent", status: "completed", title: "定稿", summary: "" }],
       turnSnapshots: [{ toolName: "commit_apply", snapshotId: "a".repeat(40) }, { toolName: "foundation_write", snapshotId: "b".repeat(40) }],
       affectedScopes: ["full", "foundation"], turnStartedAt: 1000, turnEndedAt: 4200,
     });
     expect(m?.canUndo).toBe(true);
     expect(m?.undoSnapshotId).toBe("a".repeat(40));
-    expect(m?.affectedLabel).toBe("资料库·正文·草稿");
+    expect(m?.affectedLabel).toBe("资料库·正文·工作稿");
     expect(m?.totalElapsedMs).toBe(3200);
   });
 

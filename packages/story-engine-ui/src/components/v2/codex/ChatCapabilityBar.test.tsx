@@ -24,8 +24,8 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
   it("点高频按钮 → 发对应用户面意图（补全角色）", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} />);
-    fireEvent.click(btnByText(container, "✦ 完善角色")!);
-    expect(onSend).toHaveBeenCalledWith("帮我把现有角色完善一点");
+    fireEvent.click(btnByText(container, "✦ 补全角色")!);
+    expect(onSend).toHaveBeenCalledWith("帮我把现有角色补全一点");
   });
 
   it("点「更多」展开，显示 写作/补全/整理 分组与全部能力", () => {
@@ -37,10 +37,10 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     expect(text).toContain("内容审阅");     // 写作组
     expect(text).toContain("检查机器腔");   // 写作组
     expect(text).toContain("定稿");         // 写作组
-    expect(text).toContain("完善世界观");
+    expect(text).toContain("补全世界观");
     expect(text).toContain("合并重复伏笔");
     // 分组标题
-    expect([...panel!.querySelectorAll(".cap-group-title")].map((e) => e.textContent)).toEqual(["写作", "完善", "整理"]);
+    expect([...panel!.querySelectorAll(".cap-group-title")].map((e) => e.textContent)).toEqual(["写作", "补全", "整理"]);
   });
 
   it("写作辅助意图与 ChapterToolRail 一致（审稿）", () => {
@@ -60,7 +60,7 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
   it("disabled 时点了不发", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} disabled />);
-    fireEvent.click(btnByText(container, "✦ 完善角色")!);
+    fireEvent.click(btnByText(container, "✦ 补全角色")!);
     expect(onSend).not.toHaveBeenCalled();
   });
 });

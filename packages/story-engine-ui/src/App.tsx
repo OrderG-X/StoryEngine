@@ -313,9 +313,9 @@ export function App() {
           savedContent: draft.content,
           wordCount: countTextWords(draft.content),
         });
-        nav.showToast("草稿已保存。", 2200);
+        nav.showToast("工作稿已保存。", 2200);
       } else if (!hasRealDraft) {
-        nav.showToast("当前没有可安全保存的正文，未覆盖磁盘草稿。", 4200);
+        nav.showToast("当前没有可安全保存的正文，未覆盖磁盘工作稿。", 4200);
       }
     });
   };

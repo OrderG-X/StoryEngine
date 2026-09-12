@@ -101,7 +101,7 @@ describe("handleDraftAIReview 把报告挂到消息上", () => {
     expect(state.draftAIReview).toEqual(review);
     expect(state.draftActionLoading).toBeNull();
 
-    const msg = state.workspace.messages.find((m) => m.content.includes("AI 深度审稿完成"));
+    const msg = state.workspace.messages.find((m) => m.content.includes("AI 内容审阅完成"));
     expect(msg).toBeTruthy();
     expect(msg!.aiReviewReport).toEqual(review);
   });
@@ -123,7 +123,7 @@ describe("handleDraftAIReview 把报告挂到消息上", () => {
     expect(state.steeringError).toContain("审稿超时");
     expect(state.draftActionLoading).toBeNull();
 
-    const failed = state.workspace.messages.find((m) => m.content.includes("审稿 Agent失败"));
+    const failed = state.workspace.messages.find((m) => m.content.includes("内容审阅 Agent失败"));
     expect(failed).toBeTruthy();
     expect(failed!.aiReviewReport).toBeUndefined();
   });

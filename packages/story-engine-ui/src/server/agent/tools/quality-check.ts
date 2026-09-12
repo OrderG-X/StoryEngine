@@ -37,7 +37,7 @@ const outputSchema = z.object({
   passed: z.boolean().describe("是否通过质检（无未消解的 error 级问题）。"),
   quality: z.unknown().describe("完整质检报告（确定性问题 + AI 判定）。"),
   refined: z.unknown().describe("分层降噪后的报告：硬伤(拦)/软提示(参考)/参考/已降级，每项带中文标签。"),
-  errorIssueCount: z.number().int().nonnegative().describe("error 级问题数（会阻止入库）。"),
+  errorIssueCount: z.number().int().nonnegative().describe("error 级问题数（会阻止定稿）。"),
   summary: z.string().describe("质检结果的自然语言摘要（已分层降噪）。"),
 });
 
@@ -66,7 +66,7 @@ function buildNoDraftQualityOutput(result: {
     quality: result.quality,
     refined: result.refined,
     errorIssueCount: result.refined.blocking.length,
-    summary: `第 ${result.chapter} 章还没有可质检的正文（草稿为空或还没生成）。请先生成本章正文，再来质检。`,
+    summary: `第 ${result.chapter} 章还没有可质检的正文（工作稿为空或还没生成）。请先生成本章正文，再来质检。`,
   };
 }
 
@@ -122,9 +122,9 @@ export async function buildQualityCheckToolOutput(input: {
 export const qualityCheckTool = createTool({
   id: "quality_check",
   description:
-    "对某章草稿做入库前质量检查（确定性规则 + AI 判定），不修改任何文件。" +
-    "当用户问『这章草稿有没有问题 / 能入库吗 / 帮我检查一下质量』时调用。" +
-    "返回质检报告（含 error 级阻止项），但不改稿、不入库。",
+    "对某章工作稿做定稿前质量检查（确定性规则 + AI 判定），不修改任何文件。" +
+    "当用户问『这章工作稿有没有问题 / 能定稿吗 / 帮我检查一下质量』时调用（用户旧说法「草稿/入库」也指同一件事）。" +
+    "返回质检报告（含 error 级阻止项），但不改稿、不定稿。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

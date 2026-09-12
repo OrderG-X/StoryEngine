@@ -257,7 +257,7 @@ export default function LocationCodexPanel({
         <div>
           <div className="kicker">场景资料</div>
           <h1>地点</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我完善地点资料" label="✦ 完善地点" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我补全地点资料" label="✦ 补全地点" />
           {!isEmpty ? (
             <p className="lead-sub">每个地点的氛围、秘密、能发生什么和行动限制都在这里。已有资料会直接显示，暂时没有的内容不会硬凑。</p>
           ) : null}

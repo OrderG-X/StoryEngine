@@ -144,7 +144,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // （那套死选项不看你这章具体情况、还会和 agent 正文打架，正是 suggest_next_steps 当初要治的病）。
   // agent 没提议的回合就不出卡，顺着它正文走或直接打字即可。点选项=给 agent 发一句意图。
   const nextStep = busy ? null : lastAssistantNextStepPrompt(props.workspace.messages);
-  // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤回本次修改/确认写入资料…）。
+  // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
   const railActions = busy ? [] : latestTurnSuggestedActions(props.workspace.messages);
   const canClear = Boolean(props.onClearChat) && props.workspace.messages.length > 0 && !workspaceBusy;
@@ -250,7 +250,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         {shouldShowEmptyState(props) ? (
           <div style={surfaceCardStyle}>
             <strong style={{ color: "var(--text)", fontSize: 13 }}>可以直接描述下一章方向</strong>
-            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>我会先帮你生成承接建议或草稿。</p>
+            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>我会先帮你生成承接建议或工作稿。</p>
             {props.canUndoClearChat && props.onUndoClearChat ? (
               <button type="button" className="chip" style={{ marginTop: 10 }} onClick={() => props.onUndoClearChat?.()}>
                 ↩ 撤销清空，恢复刚才的对话
@@ -459,7 +459,7 @@ function flowStepIndex(flowStatus: ChapterFlowStatus): number {
 /** 点「审校问题·改这处」→ 拼一句给 agent 的改写意图（agent 据纪律 5.5 先 read_draft 定位逐字原文再 revise）。 */
 function buildReviseIntent(issue: DraftReviewIssueView): string {
   const trimDot = (s: string) => s.replace(/[。.]+\s*$/u, ""); // 去段尾句号，免与拼接的「。」叠成双句号
-  const parts = [`针对审校发现的问题改一下——【${issue.title}】${trimDot(issue.description)}`];
+  const parts = [`针对内容审阅发现的问题改一下——【${issue.title}】${trimDot(issue.description)}`];
   if (issue.evidence) parts.push(`原句：「${issue.evidence}」`);
   if (issue.suggestedFix) parts.push(`建议：${trimDot(issue.suggestedFix)}`);
   return `${parts.join("。")}。`;
@@ -1001,5 +1001,7 @@ function isInjectedWorkflowMessage(message: ChapterMessage): boolean {
   const content = message.content.trim();
   return content.startsWith("已进入《")
     || content === "当前章节已就绪。"
+    // 新旧定稿文案都算（老会话落盘的是旧口径）。
+    || content === "本章已定稿。说「下一章」继续。"
     || content === "本章已入库。说「下一章」继续。";
 }

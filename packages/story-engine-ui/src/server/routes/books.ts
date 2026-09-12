@@ -295,7 +295,7 @@ function bookSummaryFromOverviewServer(
     const source = currentEvent.mainEvent ?? currentEvent.summary;
     if (source?.trim()) {
       const cleaned = source.replace(/\s+/gu, " ").trim();
-      chapterTitle = cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned;
+      chapterTitle = cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
     }
   }
 

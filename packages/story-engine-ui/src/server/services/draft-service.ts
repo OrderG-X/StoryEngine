@@ -91,8 +91,8 @@ import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor
  * 长度目标解析与执法（D1：原 routes/draft.ts 的 enforce 栈整体迁入，逻辑一字未动）
  * ------------------------------------------------------------------------- */
 
-const DRAFT_TOO_SHORT_ERROR = "草稿正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。";
-const DRAFT_TOO_LONG_ERROR = "草稿正文超出目标字数过多，压缩后仍不稳定；已拒绝写入工作稿，请重试。";
+const DRAFT_TOO_SHORT_ERROR = "正文低于目标字数过多，已拒绝写入工作稿；请重试或提高模型输出上限。";
+const DRAFT_TOO_LONG_ERROR = "正文超出目标字数过多，压缩后仍不稳定；已拒绝写入工作稿，请重试。";
 
 /** 项目级章节目标字数解析：用户显式 > 方向文本里的数字 > 写作规则 > 默认（引擎 resolveDraftLengthTarget 同序）。 */
 export async function resolveProjectDraftLengthTarget(
@@ -117,7 +117,7 @@ export function validateStreamedDraftBody(value: string): string | null {
   const cjkCount = countCjkChars(body);
   const paragraphs = body.split(/\n{2,}/u).map((item) => item.trim()).filter(Boolean);
   if (cjkCount < 200 || paragraphs.length < 3) {
-    return "模型返回的正文过短，疑似只返回标题或无效草稿；已拒绝写入 drafts/fast，请重新生成。";
+    return "模型返回的正文过短，疑似只返回标题或无效正文；已拒绝写入工作稿，请重新生成。";
   }
   return null;
 }
@@ -1407,7 +1407,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。` +
       candidateLine +
-      `${characterSelection.summary}。草稿尚未入库，可在写作区查看修改；满意后再走 commit_preview / commit_apply 入库。` +
+      `${characterSelection.summary}。工作稿尚未定稿，可在写作区查看修改；满意后再走 commit_preview / commit_apply 定稿。` +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
       // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。

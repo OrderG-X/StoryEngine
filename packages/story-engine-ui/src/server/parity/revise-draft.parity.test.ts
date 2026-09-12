@@ -166,10 +166,10 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
 
     expect(route.statusCode).toBe(400);
     expect(route.payload.ok).toBe(false);
-    expect(String(route.payload.error)).toContain("未在当前草稿中找到");
+    expect(String(route.payload.error)).toContain("未在当前工作稿中找到");
     expect(tool.ok).toBe(false);
     expect(tool.applied).toBe(false);
-    expect(String(tool.summary)).toContain("未在当前草稿中找到");
+    expect(String(tool.summary)).toContain("未在当前工作稿中找到");
     // 都没动稿、都没调模型（守卫在调模型之前）
     expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
@@ -396,7 +396,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     });
     expect(apply.statusCode).toBe(400);
     expect(apply.payload.ok).toBe(false);
-    expect(String(apply.payload.error)).toContain("仍原样留在草稿里");
+    expect(String(apply.payload.error)).toContain("仍原样留在工作稿里");
 
     // 工具路：同一模型回吐 → target_unchanged 诚实拒（原行为，现两侧同口径）
     const tool = await driveToolExecute(reviseDraftTool, {
@@ -406,7 +406,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     }, { projectDir: toolDir });
     expect(tool.ok).toBe(false);
     expect(tool.applied).toBe(false);
-    expect(String(tool.summary)).toContain("仍原样留在草稿里");
+    expect(String(tool.summary)).toContain("仍原样留在工作稿里");
 
     // 两侧整稿逐字未动、字节一致
     const routeDraft = await readFile(defaultDraftPath(routeDir, 1), "utf-8");
@@ -440,7 +440,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     });
     expect(apply.statusCode).toBe(400);
     expect(apply.payload.ok).toBe(false);
-    expect(String(apply.payload.error)).toContain("已不在当前草稿中");
+    expect(String(apply.payload.error)).toContain("已不在当前工作稿中");
     expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
     // 对照：同预览同稿、回传真实点名片段 → 正常落盘（防伪拒不误伤正常链路）
     const applyReal = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {

@@ -118,7 +118,7 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
     case "steering_ready":
       return "补充想法，或说「写吧」开始生成…";
     case "draft_generating":
-      return "正在生成草稿…";
+      return "正在生成工作稿…";
     case "draft_ready":
       return "说说修改意见，或说「硬伤检查」检查穿帮…";
     case "quality_checked":
@@ -137,7 +137,7 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
 export function workflowErrorTitle(flowStatus: WritingWorkspaceLayoutProps["workspace"]["flowStatus"]): string {
   if (flowStatus === "waiting_commit_confirmation" || flowStatus === "commit_preview_ready") return "定稿失败";
   if (flowStatus === "quality_checked") return "硬伤检查失败";
-  if (flowStatus === "draft_generating" || flowStatus === "draft_ready") return "草稿处理失败";
+  if (flowStatus === "draft_generating" || flowStatus === "draft_ready") return "工作稿处理失败";
   if (flowStatus === "steering_ready" || flowStatus === "idle") return "本章方案整理失败";
   return "流程执行失败";
 }

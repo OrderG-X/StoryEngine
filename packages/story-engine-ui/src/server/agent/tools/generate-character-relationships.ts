@@ -187,10 +187,10 @@ const callConfiguredModel = async (messages: readonly ChatMessage[]): Promise<st
  * 开书阶段还没入库章节时，旧文案让用户「先写几章」是误导——给具名角色登记关系当下就能做。
  */
 export const NO_FACTS_RELATIONSHIP_SUMMARY =
-  "现在还没有可整理的硬事实——本工具是从【已入库章节】抽出的硬事实里梳理关系网的。" +
+  "现在还没有可整理的硬事实——本工具是从【已定稿章节】抽出的硬事实里梳理关系网的。" +
   "如果你是想给现有角色登记关系（比如『谁是谁的姐姐 / 谁信任谁』），现在就能做：" +
   "用 foundation_write 的 update_character_detail 把关系写进对方角色卡的 relationshipToProtagonist / relationshipDynamics 字段（写入可撤销），关系网会据此自动显示。" +
-  "等写了几章并入库后，本工具能再从正文里帮你补全更多关系。";
+  "等写了几章并定稿后，本工具能再从正文里帮你补全更多关系。";
 
 export const generateCharacterRelationshipsTool = writeTool({
   id: "generate_character_relationships",
@@ -225,7 +225,7 @@ export const generateCharacterRelationshipsTool = writeTool({
     if (rel.characters.length === 0) {
       return {
         ok: false,
-        summary: "我读完现有事实，没能从中整理出足够的具名人物关系——可能事实里多是无名提及。继续写、入库更多内容后再来整理会更准。",
+        summary: "我读完现有事实，没能从中整理出足够的具名人物关系——可能事实里多是无名提及。继续写、定稿更多章节后再来整理会更准。",
       };
     }
 
@@ -241,7 +241,7 @@ export const generateCharacterRelationshipsTool = writeTool({
     if (updates.length === 0) {
       return {
         ok: false,
-        summary: "事实里有人物提及，但没能归纳出足够支撑的具名候选（多为无名/泛指），本次没有写入。继续写、入库更多内容后再整理会更准。",
+        summary: "事实里有人物提及，但没能归纳出足够支撑的具名候选（多为无名/泛指），本次没有写入。继续写、定稿更多章节后再整理会更准。",
       };
     }
     await persistCharacterRoster(projectDir, updates, chapter);

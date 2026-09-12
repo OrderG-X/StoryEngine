@@ -101,7 +101,7 @@ export function workspaceFromStateOverview(
     : [];
   const setupAssets = storyBible?.setupAssets;
   const setupAssetLines = unique([
-    ...(setupAssets?.initialAssets ?? []).map((item) => `初始资产：${item}`),
+    ...(setupAssets?.initialAssets ?? []).map((item) => `初始物品：${item}`),
     ...(setupAssets?.keyItems ?? []).map((item) => `关键物品：${item}`),
     ...(setupAssets?.resourceLimits ?? []).map((item) => `资源限制：${item}`),
   ]);
@@ -268,7 +268,7 @@ export function workspaceFromStateOverview(
       assetRules: realList(unique([
         ...(setupAssets?.resourceLimits ?? []),
         ...(assetSummary?.unavailableAssets ?? []).map((item) => `${item} 不可随意使用`),
-        ...(assetSummary?.plotCriticalAssets ?? []).map((item) => `${item} 是剧情关键物品，变更必须走提交预览`),
+        ...(assetSummary?.plotCriticalAssets ?? []).map((item) => `${item} 是剧情关键物品，变更必须走定稿预览`),
       ])),
     },
     memory: {
@@ -302,7 +302,7 @@ export function sidebarFromStateOverview(overview: StateOverview): SidebarData {
 function buildSetupAssetLines(storyBible: StateOverview["storyBible"] | undefined): string[] {
   const setupAssets = storyBible?.setupAssets;
   return unique([
-    ...(setupAssets?.initialAssets ?? []).map((item) => `初始资产：${item}`),
+    ...(setupAssets?.initialAssets ?? []).map((item) => `初始物品：${item}`),
     ...(setupAssets?.keyItems ?? []).map((item) => `关键物品：${item}`),
     ...(setupAssets?.resourceLimits ?? []).map((item) => `资源限制：${item}`),
   ]);
@@ -322,7 +322,7 @@ function buildAssetSettings(overview: StateOverview): string[] {
     asset.usageRules.length ? `使用：${asset.usageRules.join("；")}` : undefined,
     asset.lossRules.length ? `遗失：${asset.lossRules.join("；")}` : undefined,
   ]).join("｜"));
-  return withFallback([...itemLines, ...setupLines], "资产：尚未配置");
+  return withFallback([...itemLines, ...setupLines], "道具与资源：尚未配置");
 }
 
 function buildStorySettings(overview: StateOverview): string[] {
@@ -516,13 +516,13 @@ function toReadableTimeOfDay(calendar: StateOverview["calendar"] | undefined): s
 function toReadableStage(stage: string | undefined): string | undefined {
   if (!stage?.trim()) return undefined;
   const match = stage.match(/^chapter_(\d+)_committed$/u);
-  if (match?.[1]) return `第${match[1]}章已提交`;
+  if (match?.[1]) return `第${match[1]}章已定稿`;
   const labels: Record<string, string> = {
     opening: "开篇",
     idle: "未开始",
-    draft_ready: "草稿已生成",
+    draft_ready: "工作稿已生成",
     quality_checked: "已质检",
-    committed: "已提交",
+    committed: "已定稿",
     ready_for_next: "可进入下一章",
   };
   return labels[stage] ?? sanitizeStageLabel(stage);
@@ -706,15 +706,15 @@ function buildStateBackedDraftPlaceholder(overview: StateOverview): string {
   const recent = overview.timeline.recentEvents.at(-1);
   if (!recent && overview.project.currentChapter === null) {
     return compact([
-      "还没有草稿正文。",
-      "你可以在右侧章节对话里输入第 1 章方向，先整理本章方案，再生成草稿。",
+      "还没有工作稿正文。",
+      "你可以在右侧章节对话里输入第 1 章方向，先整理本章方案，再生成工作稿。",
       cleanStorySummary(overview.world.summary) ? `故事简介：${cleanStorySummary(overview.world.summary)}` : undefined,
       overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
     ]).join("\n\n");
   }
 
   return compact([
-    "还没有载入本章草稿正文。",
+    "还没有载入本章工作稿正文。",
     overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
     overview.storyStatus.currentLocation ? `当前位置：${overview.storyStatus.currentLocation}` : undefined,
     recent ? `最近时间线：第${recent.chapter}章，${recent.summary}` : undefined,
@@ -748,7 +748,7 @@ function lastKnownChapter(overview: StateOverview): number | undefined {
 function titleFromSummary(summary: string, chapter: number): string {
   const cleaned = summary.replace(/\s+/g, " ").trim();
   if (!cleaned) return `第${chapter}章`;
-  return cleaned.length > 12 ? `${cleaned.slice(0, 12)}...` : cleaned;
+  return cleaned.length > 12 ? `${cleaned.slice(0, 12)}…` : cleaned;
 }
 
 function compact(values: readonly (string | undefined | null)[]): string[] {
@@ -779,16 +779,16 @@ function unique(values: readonly (string | undefined | null)[]): string[] {
 function sanitizeStageLabel(stage: string): string {
   if (stage === "unknown") return "尚未配置";
   const match = stage.match(/^chapter_(\d+)_committed$/u);
-  if (match) return `第${match[1]}章已提交`;
+  if (match) return `第${match[1]}章已定稿`;
   const labels: Record<string, string> = {
-    idle: "等待指令",
+    idle: "待开始",
     steering_ready: "方案已定",
-    draft_generating: "草稿生成中",
-    draft_ready: "草稿已生成",
+    draft_generating: "工作稿生成中",
+    draft_ready: "工作稿已生成",
     quality_checked: "质检通过",
-    commit_preview_ready: "待入库预览",
-    waiting_commit_confirmation: "待确认入库",
-    committed: "已入库",
+    commit_preview_ready: "待定稿预览",
+    waiting_commit_confirmation: "待确认定稿",
+    committed: "已定稿",
     ready_for_next: "可进入下一章",
   };
   return labels[stage] ?? cleanUiText(stage) ?? stage;
@@ -841,7 +841,7 @@ function buildHardConstraints(overview: StateOverview): string[] {
     "不要编造新城市名",
     ...(locationDetail?.floors?.length ? ["不要改变已登记楼层结构"] : []),
     ...(locationDetail?.travelRules?.length ? ["不要违反已登记移动规则"] : []),
-    ...(assetSummary?.available ? ["不要使用未登记资产；资产变更必须进入提交预览"] : []),
+    ...(assetSummary?.available ? ["不要使用未登记资产；资产变更必须进入定稿预览"] : []),
     ...(assetSummary?.unavailableAssets ?? []).map((item) => `不可用资产不能突然可用：${item}`),
     ...(assetSummary?.plotCriticalAssets ?? []).map((item) => `剧情关键物品不能凭空改变：${item}`),
     ...(characterDetail?.cannotDo ?? []).map((item) => `主角不能做：${item}`),

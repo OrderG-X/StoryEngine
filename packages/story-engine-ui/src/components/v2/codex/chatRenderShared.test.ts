@@ -121,7 +121,7 @@ describe("chatRenderShared", () => {
     });
 
     it("draft_generating 状态返回正确标题", () => {
-      expect(workflowErrorTitle("draft_generating")).toBe("草稿处理失败");
+      expect(workflowErrorTitle("draft_generating")).toBe("工作稿处理失败");
     });
 
     it("quality_checked 状态返回正确标题", () => {

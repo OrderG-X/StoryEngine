@@ -45,21 +45,21 @@ function settleDraftAgentCard(card: ChapterAgentCard, settlement: DraftAgentSett
   return {
     ...card,
     status: settlement,
-    title: saved ? "草稿改动已保存" : "草稿改动已拒绝",
+    title: saved ? "工作稿改动已保存" : "工作稿改动已拒绝",
     summary: saved
-      ? "本次草稿改动已保存到当前章节草稿文件。"
-      : "本次草稿改动已拒绝，左侧已恢复到保存前内容。",
+      ? "本次工作稿改动已保存到当前章节工作稿文件。"
+      : "本次工作稿改动已拒绝，左侧已撤销到保存前内容。",
     detail: uniqueStrings([
       ...details,
-      saved ? "result: 已保存到 drafts/fast 当前章节" : "result: 已恢复到保存前内容",
+      saved ? "result: 已保存到当前章节工作稿" : "result: 已撤销到保存前内容",
     ]),
   };
 }
 
 function settleDraftMessageContent(content: string, settlement: DraftAgentSettlement): string {
   const suffix = settlement === "saved"
-    ? "本次 AI 草稿改动已保存到当前章节草稿。"
-    : "本次 AI 草稿改动已被拒绝，左侧已恢复到保存前内容。";
+    ? "本次 AI 工作稿改动已保存到当前章节工作稿。"
+    : "本次 AI 工作稿改动已被拒绝，左侧已撤销到保存前内容。";
   const next = content.replace(PENDING_DRAFT_SENTENCE, "").trim();
   if (!next) return suffix;
   if (next.includes(suffix)) return next;

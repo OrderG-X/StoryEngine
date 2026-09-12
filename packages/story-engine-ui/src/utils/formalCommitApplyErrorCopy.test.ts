@@ -30,7 +30,7 @@ describe("formal commit apply error copy", () => {
     );
 
     expect(flattenCopy(copy)).toContain("事务残留");
-    expect(flattenCopy(copy)).toContain("不要重复提交");
+    expect(flattenCopy(copy)).toContain("不要重复确认定稿");
   });
 
   it("explains state writes are unsupported", () => {
@@ -79,7 +79,7 @@ describe("formal commit apply error copy", () => {
 
     expect(copy.title).toContain("定稿失败");
     expect(flattenCopy(copy)).toContain("network broke");
-    expect(flattenCopy(copy)).toContain("草稿和定稿预览已保留");
+    expect(flattenCopy(copy)).toContain("工作稿和定稿预览已保留");
   });
 });
 

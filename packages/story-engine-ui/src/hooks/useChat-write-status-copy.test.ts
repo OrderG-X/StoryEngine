@@ -177,7 +177,7 @@ describe("foundation write status copy", () => {
     expect(text).toContain("角色 2 条");
     expect(text).toContain("世界观 1 条");
     expect(text).toContain("写作规则 1 条");
-    expect(text).toContain("可撤回");
+    expect(text).toContain("可撤销");
   });
 
   it("reports plan-time skipped conflicts honestly without over-counting writes", () => {
@@ -272,12 +272,12 @@ describe("foundation write status copy", () => {
     expect(text).toContain("没能在角色资料里找到");
     expect(text).not.toContain("没能定位到这条资料对应的卡片");
     expect(text).not.toContain("已修改");
-    expect(text).not.toContain("可撤回");
+    expect(text).not.toContain("可撤销");
   });
 
   it("does not claim success when an accepted suggestion wrote nothing (no targetId)", () => {
     // 真机 bug：update_character_detail 缺 targetId → writes:[]，但 plan.fileChanges 仍有
-    // story/character-bible.json，旧逻辑据此谎报「已修改/可撤回」。
+    // story/character-bible.json，旧逻辑据此谎报「已修改/可撤销」。
     const plan = {
       acceptedSuggestions: [{ id: "s1", category: "characters" }],
       rejectedSuggestionIds: [],
@@ -290,7 +290,7 @@ describe("foundation write status copy", () => {
 
     expect(text).not.toContain("已修改");
     expect(text).not.toContain("已写入");
-    expect(text).not.toContain("可撤回");
+    expect(text).not.toContain("可撤销");
     expect(text).toContain("未写入任何");
   });
 
@@ -316,8 +316,8 @@ describe("foundation write status copy", () => {
       },
     ]);
 
-    expect(text).toContain("已把黑色越野车加入资产资料。");
-    expect(text).toContain("可撤回本次修改");
+    expect(text).toContain("已把黑色越野车加入道具与资源。");
+    expect(text).toContain("可撤销本次修改");
     expect(text).not.toContain("对象：");
     expect(text).not.toContain("位置：");
     expect(text).not.toContain("story/assets.json");
@@ -336,7 +336,7 @@ describe("foundation write status copy", () => {
     ]);
 
     expect(text).toContain("已更新苏晓薇的角色资料。");
-    expect(text).toContain("可撤回本次修改");
+    expect(text).toContain("可撤销本次修改");
     expect(text).not.toContain("对象：");
     expect(text).not.toContain("位置：");
     expect(text).not.toContain("story/character-bible.json");
@@ -357,7 +357,7 @@ describe("foundation write status copy", () => {
 
     expect(text).toContain("已更新林晚的角色资料。");
     expect(text).toContain("为「林晚」新增自定义字段：境界、功法");
-    expect(text).toContain("可撤回本次修改");
+    expect(text).toContain("可撤销本次修改");
     // 如实回报，纯中文，不暴露英文 key 或文件路径。
     expect(text).not.toContain("newExtraFields");
     expect(text).not.toContain("story/character-bible.json");
@@ -376,7 +376,7 @@ describe("foundation write status copy", () => {
       },
     ]);
 
-    expect(text).toContain("已把斩魂剑加入资产资料。");
+    expect(text).toContain("已把斩魂剑加入道具与资源。");
     expect(text).toContain("为「斩魂剑」新增自定义字段：品阶");
   });
 
@@ -431,7 +431,7 @@ describe("foundation write status copy", () => {
 
     expect(text).toContain("已删除角色「苏晓薇」");
     expect(text).toContain("3 个文件");
-    expect(text).toContain("可撤回本次修改");
+    expect(text).toContain("可撤销本次修改");
   });
 
   it("detects delete confirmation conflicts in an apply plan", () => {

@@ -151,7 +151,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
@@ -185,7 +185,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
 
@@ -249,7 +249,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
@@ -264,7 +264,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
@@ -281,7 +281,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
     await waitFor(() => {
@@ -315,7 +315,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
     await waitFor(() => {
@@ -404,7 +404,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
 
     // 任意一次表单路径持久化（这里走「添加服务商」）：既有 provider 的自定义头必须随合并写回，不静默丢
     fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
-    const keyInput = await screen.findByPlaceholderText("sk-...");
+    const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 

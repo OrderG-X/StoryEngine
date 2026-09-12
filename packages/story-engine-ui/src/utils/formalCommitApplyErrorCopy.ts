@@ -12,9 +12,9 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
   if (/\bpreview_hash_mismatch\b|\btransaction_id_mismatch\b|stale/u.test(normalized)) {
     return {
       title: "定稿预览已过期",
-      message: "当前定稿预览已过期，请重新生成定稿预览后再提交。",
+      message: "当前定稿预览已过期，请重新生成定稿预览后再确认定稿。",
       detail: [
-        "草稿和定稿预览已保留。",
+        "工作稿和定稿预览已保留。",
         "不要重复点击当前确认定稿；先重新生成预览，确认最新事务信息后再继续。",
         `原始错误：${rawMessage}`,
       ],
@@ -27,9 +27,9 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
       title: "检测到事务残留",
       message: "检测到未完成或异常事务残留，当前不能继续定稿。",
       detail: [
-        "不要重复提交。",
+        "不要重复确认定稿。",
         "需要先处理事务目录或联系维护流程，再重新生成定稿预览。",
-        "草稿和定稿预览已保留。",
+        "工作稿和定稿预览已保留。",
         `原始错误：${rawMessage}`,
       ],
       severity: "danger",
@@ -42,7 +42,7 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
       message: "当前版本只支持章节正文定稿，状态 JSON 暂未开放。",
       detail: [
         "请继续使用定稿预览确认计划，不要强行正式写状态。",
-        "草稿和定稿预览已保留。",
+        "工作稿和定稿预览已保留。",
         `原始错误：${rawMessage}`,
       ],
       severity: "warning",
@@ -56,7 +56,7 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
       detail: [
         "请保留现场，不要重复点击确认定稿。",
         "需要人工检查 `.story-engine-tx` 和 snapshot-manifest.json。",
-        "草稿和定稿预览已保留。",
+        "工作稿和定稿预览已保留。",
         `原始错误：${rawMessage}`,
       ],
       severity: "danger",
@@ -66,11 +66,11 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
   if (/formal_commit_snapshot_materialization_failed|snapshot_materialization|existing transaction dir|txdir|transaction dir/u.test(normalized)) {
     return {
       title: "同一章事务目录冲突",
-      message: "同一章已有事务目录，当前版本暂不支持同章重复正式提交。",
+      message: "同一章已有事务目录，当前版本暂不支持同章重复定稿。",
       detail: [
         "请不要重复点击。",
         "后续需要通过 cleanup/archive 或同章 guard 解决事务目录冲突。",
-        "草稿和定稿预览已保留。",
+        "工作稿和定稿预览已保留。",
         `原始错误：${rawMessage}`,
       ],
       severity: "warning",
@@ -79,7 +79,7 @@ export function summarizeFormalCommitApplyError(error: unknown): FormalCommitApp
 
   return {
     title: "定稿失败",
-    message: "定稿失败，草稿和定稿预览已保留。",
+    message: "定稿失败，工作稿和定稿预览已保留。",
     detail: [
       "请根据错误信息处理后再重试。",
       `原始错误：${rawMessage}`,

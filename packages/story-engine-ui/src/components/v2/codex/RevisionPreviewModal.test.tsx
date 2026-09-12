@@ -59,7 +59,7 @@ describe("RevisionPreviewModal 诚实第三态", () => {
     expect(screen.queryByRole("button", { name: "生成修订草案" })).toBeNull();
   });
 
-  it("零差异：无「应用到草稿」，主按钮是「保留原文并关闭」", () => {
+  it("零差异：无「应用到工作稿」，主按钮是「保留原文并关闭」", () => {
     const text = "林远站在落地窗前。";
     render(
       <RevisionPreviewModal
@@ -80,6 +80,6 @@ describe("RevisionPreviewModal 诚实第三态", () => {
     expect(screen.getByText(/这段无需修改/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "保留原文并关闭" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "换一种改法" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "应用到草稿" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "应用到工作稿" })).toBeNull();
   });
 });

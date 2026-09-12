@@ -110,10 +110,10 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
       chapter,
       kind: "no_draft",
       ok: false,
-      review: fallbackDraftAIReviewReport("本章还没有可审的正文（草稿为空或还没生成）。"),
+      review: fallbackDraftAIReviewReport("本章还没有可审的正文（工作稿为空或还没生成）。"),
       usedFallback: true,
       actualWordCount: 0,
-      summary: `第 ${chapter} 章还没有可审的正文（草稿为空或还没生成）。请先生成本章正文，再来审稿。`,
+      summary: `第 ${chapter} 章还没有可审的正文（工作稿为空或还没生成）。请先生成本章正文，再来做内容审阅。`,
     };
   }
   const draftContent = resolved.content;
@@ -161,8 +161,8 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
     actualWordCount,
     ...(configured !== undefined ? { model: configured.profile.model, profileId: configured.profile.id } : {}),
     summary: usedFallback
-      ? `第 ${chapter} 章 AI 审稿未完成（模型不可用），未改任何内容；请稍后重试或人工检查。`
-      : `第 ${chapter} 章 AI 审稿：${VERDICT_LABEL[review.verdict]}（评分 ${review.score}；正文实际 ${actualWordCount} 字）。${review.summary}`,
+      ? `第 ${chapter} 章 AI 内容审阅未完成（模型不可用），未改任何内容；请稍后重试或人工检查。`
+      : `第 ${chapter} 章 AI 内容审阅：${VERDICT_LABEL[review.verdict]}（评分 ${review.score}；正文实际 ${actualWordCount} 字）。${review.summary}`,
   };
 }
 
@@ -197,6 +197,6 @@ async function callDraftReviewModel(configured: ResolvedChatModel, prompt: strin
     responseFormat: { type: "json_object" },
   });
   const text = content.trim();
-  if (!text) throw new Error("审稿模型返回了空内容。");
+  if (!text) throw new Error("内容审阅模型返回了空内容。");
   return text;
 }

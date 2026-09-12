@@ -9,12 +9,12 @@ const STORY_WORD_PATTERN = /\bstory\b/giu;
 
 const textRules: Array<[pattern: string | RegExp, replacement: string]> = [
   // Internal state labels → user-facing Chinese
-  [/^chapter_(\d+)_committed$/iu, "第$1章已提交"],
-  [/chapter_\d+_committed/giu, "已入库章节"],
+  [/^chapter_(\d+)_committed$/iu, "第$1章已定稿"],
+  [/chapter_\d+_committed/giu, "已定稿章节"],
   ["后端未提供", "尚未配置"],
   ["touched", "已触及"],
   // Paths and file-system artifacts
-  [/undefined\/drafts(?:\/fast)?/giu, "草稿目录"],
+  [/undefined\/drafts(?:\/fast)?/giu, "工作稿目录"],
   ["ENOENT", "本地文件未找到"],
   // Character/location/asset ID fragments
   [/char-[a-z0-9-]+/giu, "角色"],
@@ -35,7 +35,7 @@ const textRules: Array<[pattern: string | RegExp, replacement: string]> = [
   ["ThreadPool", "线索池"],
   ["ArcGoal", "主线目标"],
   ["arcGoal", "主线目标"],
-  ["Commit Preview", "入库预览"],
+  ["Commit Preview", "定稿预览"],
   ["cleanup-visible intent", "需要清理的低价值意图"],
   ["stale intent", "过期意图"],
   // Narrative terminology
@@ -59,8 +59,9 @@ const textRules: Array<[pattern: string | RegExp, replacement: string]> = [
   ["Asset ChangePlan", "资产变更建议"],
   ["Location ChangePlan", "地点变更建议"],
   // UI flow labels
-  ["提交预览", "入库预览"],
-  ["正式提交", "确认入库"],
+  ["提交预览", "定稿预览"],
+  ["入库预览", "定稿预览"],
+  ["正式提交", "确认定稿"],
   ["正式状态", "正式故事"],
 ];
 

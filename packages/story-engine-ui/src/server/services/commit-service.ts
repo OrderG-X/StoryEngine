@@ -698,7 +698,7 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     };
     let businessCommitted = false;
     try {
-      await createSnapshot(projectDir, `入库前快照：第${chapter}章`);
+      await createSnapshot(projectDir, `定稿前快照：第${chapter}章`);
       const draftAfterSnapshot = await readFile(draftPath, "utf-8");
       if (sha256(draftAfterSnapshot) !== transaction.draftHash) {
         await removePendingCommitReceipt(projectDir, pendingReceipt);
@@ -1096,7 +1096,7 @@ async function recoverPendingCommitReceiptFromDisk(
   const chapterContent = committed.content;
   if (!chapterContent || sha256(chapterContent) !== sha256(draftContent)) return { outcome: "mismatch" };
   const warnings = [
-    "上次定稿在入库成功后、回执落盘前中断；本次按磁盘真值补写回执并返回结果（恢复，未重复入库）。",
+    "上次定稿在写入成功后、结果落盘前中断；本次按磁盘真值补写记录并返回结果（恢复，未重复写入）。",
     "详细变更清单不可恢复：report 中 updatedCharacters / timelineEventIds / updatedHooks / updatedWorld / updatedCalendar 均为占位空值（不代表实际未更新），真实变更以磁盘上的状态文件为准。",
   ];
   const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 })
@@ -1139,8 +1139,8 @@ async function recoverPendingCommitReceiptFromDisk(
 /** pending 对账失败时的 409 文案：fail-closed，但必须给出可执行出路（含回执文件的确切路径）。 */
 function pendingReceiptBlockMessage(projectDir: string, chapter: number, idempotencyKey: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览入库（或草稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
-    + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
+  return `检测到未完成的同键定稿记录，磁盘对账显示该章未按此次预览定稿（或工作稿在预览后已变化）；为避免重复写入，已拒绝自动重试。`
+    + `可执行出路：1) 工作稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
     + `2) 人工核对确认上次定稿确实未生效后，删除回执文件 ${receiptFile} 再用原预览凭证重试。`;
 }
 
@@ -1186,9 +1186,9 @@ async function reconcileReplayWithDisk(
  */
 function completedReceiptDiskMismatchMessage(projectDir: string, chapter: number, idempotencyKey: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到同键定稿的已完成记录，但磁盘对账显示该章未按此次预览入库（可能被撤销或内容已变化）；为避免谎报成功，已拒绝按重放返回。`
-    + `可执行出路：1) 草稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
-    + `2) 人工核对确认该章确实未入库后，删除回执文件 ${receiptFile} 再用原预览凭证重试（将真实重新入库）。`;
+  return `检测到同键定稿的已完成记录，但磁盘对账显示该章未按此次预览定稿（可能被撤销或内容已变化）；为避免谎报成功，已拒绝按重放返回。`
+    + `可执行出路：1) 工作稿有改动时，重新生成定稿预览会产出新凭证与新幂等键，按新预览重试即可；`
+    + `2) 人工核对确认该章确实未定稿后，删除回执文件 ${receiptFile} 再用原预览凭证重试（将真实重新定稿）。`;
 }
 
 /**
@@ -1197,7 +1197,7 @@ function completedReceiptDiskMismatchMessage(projectDir: string, chapter: number
  */
 function completedReceiptUnreadableMessage(projectDir: string, chapter: number, idempotencyKey: string, error: string): string {
   const receiptFile = join(".story-engine-ui", "commit-idempotency", basename(receiptPath(projectDir, chapter, idempotencyKey)));
-  return `检测到同键定稿的已完成记录，但磁盘对账读取失败（${scrubLocalAbsolutePaths(error)}），无法确认该章是否已入库；为避免谎报成功，已拒绝按重放返回。`
+  return `检测到同键定稿的已完成记录，但磁盘对账读取失败（${scrubLocalAbsolutePaths(error)}），无法确认该章是否已定稿；为避免谎报成功，已拒绝按重放返回。`
     + `请稍后重试；若持续失败请检查磁盘与文件权限。回执文件 ${receiptFile} 是上次定稿的唯一证据，请勿删除。`;
 }
 

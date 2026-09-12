@@ -26,7 +26,7 @@ describe("AiSetupWizard 三步流转", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
     expect(screen.getByText(/填写 DeepSeek 的 API 密钥/)).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-test" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-test" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
     expect(screen.getByRole("button", { name: "测试并开始使用" })).toBeTruthy();
@@ -43,7 +43,7 @@ describe("AiSetupWizard 三步流转", () => {
     render(<AiSetupWizard busy={false} error={null} onTestAndStart={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /OpenAI 兼容/ }));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-x" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-x" } });
     expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText("https://api.example.com/v1"), {
       target: { value: "https://api.openai.com/v1" },
@@ -61,7 +61,7 @@ describe("AiSetupWizard 三步流转", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /DeepSeek/ }));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-bad" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-bad" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("alert")).toHaveTextContent("密钥无效");
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();

@@ -78,9 +78,9 @@ export async function buildAIReviewToolOutput(input: {
 export const aiReviewTool = createTool({
   id: "ai_review",
   description:
-    "对某章草稿做 AI 深度审稿（剧情/节奏/人物/对白/连续性/读者钩子），给出评分、裁决、问题清单与修改建议，不修改任何文件。" +
+    "对某章工作稿做 AI 内容审阅（剧情/节奏/人物/对白/连续性/读者钩子），给出评分、裁决、问题清单与修改建议，不修改任何文件。" +
     "当用户问『帮我深度审一下这章 / 这章写得怎么样 / 有哪些可以改进』时调用。" +
-    "审稿不改稿、不入库；模型不可用时会诚实标注审稿未完成，不假装通过。",
+    "内容审阅不改稿、不定稿；模型不可用时会诚实标注内容审阅未完成，不假装通过。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
