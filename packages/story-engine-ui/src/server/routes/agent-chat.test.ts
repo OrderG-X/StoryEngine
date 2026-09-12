@@ -69,6 +69,36 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
       toolSteps: [{ toolName: "commit_preview", status: "completed" }, { toolName: "commit_apply", status: "completed" }],
     })).toBeNull();
   });
+
+  // 审计 A-4（shots/22 原话钉档）：读了盘如实拒绝「第 99 章不存在没法入库」是正确拒绝，
+  // 不是「只有口头声称」——不追加更正（runObedientAgentTurn 的重做条件=本函数非空，豁免即不重做）。
+  it("审计 A-4：调过读类工具后如实拒绝「第 99 章没法入库」→ 不追加系统更正", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第 99 章正式入库",
+      assistantText:
+        "第 99 章没法入库——目前这本书连第 1 章都还没有草稿，全书最大章号只有 1，第 99 章根本不存在。" +
+        "要先写正文才谈得上入库。要不要从第 1 章开始写？",
+      toolSteps: [{ toolName: "read_chapters_overview", status: "completed" }],
+    })).toBeNull();
+  });
+
+  it("同一拒绝话术但没调读类工具 → 无依据拒绝不豁免，仍追加更正", () => {
+    const correction = serverHonestyCorrectionText({
+      userText: "把第 99 章正式入库",
+      assistantText: "第 99 章不存在，没法入库。",
+      toolSteps: [],
+    });
+    expect(correction).toContain("⚠️ 系统更正");
+    expect(correction).toContain("定稿没有执行");
+  });
+
+  it("验收反例：「已经帮你入库了」零工具 → 仍追加更正（不回退）", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第2章正式入库",
+      assistantText: "已经帮你入库了。",
+      toolSteps: [],
+    })).toContain("⚠️ 系统更正");
+  });
 });
 
 // r8 服从重试：ch84/ch88 真机实锤——模型口头声称「已生成/已入库」却零工具调用，护栏只纠文本时
@@ -250,6 +280,52 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     });
     expect(attempts).toBe(1);
     expect(collectText(events)).not.toContain("系统更正");
+  });
+
+  // 审计 A-4（shots/22 原话钉档）：读了盘如实拒绝「第 99 章不存在没法入库」是正确拒绝——
+  // 此前 obedience 门按用户话「入库」关键词硬要求 commit_apply，自动重做一轮烧模型还亮红。
+  it("读了盘如实拒绝「不存在的章没法入库」→ 一轮收场：不重做、无过渡、无更正（审计 A-4）", async () => {
+    const fake = makeStreamAttempt([
+      [
+        ...toolChunks("read_chapters_overview", { ok: true, summary: "全书共 1 章，第 1 章有工作稿。" }),
+        textChunk(
+          "第 99 章没法入库——目前这本书连第 1 章都还没有草稿，全书最大章号只有 1，第 99 章根本不存在。" +
+            "要先写正文才谈得上入库。要不要从第 1 章开始写？",
+        ),
+      ],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第 99 章正式入库" }],
+      userText: "把第 99 章正式入库",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).toContain("第 99 章根本不存在");
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("验收反例：「已经帮你入库了」零工具 → 仍自动重做一次并强制 commit_apply（不回退）", async () => {
+    const fake = makeStreamAttempt([
+      [textChunk("已经帮你入库了。")],
+      [...toolChunks("commit_apply", { ok: true, summary: "第2章已正式入库。" }), textChunk("第2章已正式入库。")],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第2章正式入库。" }],
+      userText: "把第2章正式入库。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(2);
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    expect(collectText(events)).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
   });
 
   it("重做轮闷头调完工具不说话 → 兜底转述工具摘要（绝不静默，按最终尝试判）", async () => {

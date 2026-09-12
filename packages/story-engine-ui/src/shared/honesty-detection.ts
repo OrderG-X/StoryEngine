@@ -344,6 +344,27 @@ function composeCombinedMissingNotice(missing: readonly MissingExecutionResult[]
   return `本回合这些操作都没有执行：${labels.join("、")}。助手给出的是口头结果、不是真正的工具输出——请重新发送，让我真正调用这些工具。`;
 }
 
+/**
+ * 有依据的拒绝/不可行回复（审计 A-4 误报实锤：用户「把第 99 章正式入库」，agent 调读类工具核实后
+ * 如实答「第 99 章不存在、没法入库」——已调读工具、没调 commit_apply 都是对的，不是「只有口头声称」）。
+ * 回复含拒绝/不可行语义且本回合真调过读类工具（拒绝有磁盘依据）→ 执行一致性探针豁免：
+ * 不追加系统更正、不自动重做。零读工具的纯口头拒绝不豁免（无依据的拒绝照样可能是空转）；
+ * 混着写类完成断言的回复已由 A1（detectUnbackedCompletionClaim）先行判决，走不到这层豁免。
+ * `(?<!能)不能`：排除「能不能…」反问句式里的「不能」。
+ */
+const REFUSAL_OR_INFEASIBLE = /(?:不存在|没法|无法|还没有|(?<!能)不能)/u;
+const READ_TOOL_NAME = /^read_/u;
+
+export function isGroundedRefusalReply(
+  content: string,
+  toolSteps: readonly ToolStep[] | undefined,
+): boolean {
+  if (!REFUSAL_OR_INFEASIBLE.test(content)) return false;
+  return (toolSteps ?? []).some(
+    (step) => typeof step.toolName === "string" && READ_TOOL_NAME.test(step.toolName),
+  );
+}
+
 export function detectMissingExecutionForRequest(
   userText: string,
   toolSteps: readonly ToolStep[] | undefined,
@@ -515,6 +536,8 @@ export function honestyRewritePatch(args: {
     const isCommit = COMMIT_COMPLETION_CLAIM.test(args.content) || COMMIT_APPLY_REQUEST.test(args.userText);
     return clearedPatch(notice, isCommit);
   }
+  // 有依据的拒绝不是违令（审计 A-4）：读了盘如实说「不存在/没法入库」，别盖「没有执行」文案。
+  if (isGroundedRefusalReply(args.content, args.toolSteps)) return null;
   const missingExecution = detectMissingExecutionForRequest(args.userText, args.toolSteps);
   if (missingExecution) {
     return clearedPatch(missingExecution.notice, missingExecution.intent === "commit_apply");

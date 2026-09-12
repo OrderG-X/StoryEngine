@@ -25,6 +25,7 @@ import {
   detectMissingExecutionForRequest,
   detectUnbackedCompletionClaim,
   inferClaimedWriteTool,
+  isGroundedRefusalReply,
   OBEDIENCE_RETRY_TRANSITION_TEXT,
   sanitizeCorrectedAssistantHistory,
   unbackedCompletionNoticeText,
@@ -231,6 +232,9 @@ export function serverHonestyCorrectionText(args: {
   if (detectUnbackedCompletionClaim(assistantText, args.toolSteps)) {
     return `\n\n⚠️ 系统更正：${unbackedCompletionNoticeText(assistantText, userText)}`;
   }
+  // 有依据的拒绝豁免（审计 A-4：读了盘如实答「第 99 章不存在没法入库」是正确拒绝，不是口头声称）——
+  // 不追加更正；runObedientAgentTurn 的重做条件就是本函数非空，豁免即不重做、不多烧一次模型。
+  if (isGroundedRefusalReply(assistantText, args.toolSteps)) return null;
   const missingExecution = detectMissingExecutionForRequest(userText, args.toolSteps);
   if (missingExecution) {
     return `\n\n⚠️ 系统更正：${missingExecution.notice}`;

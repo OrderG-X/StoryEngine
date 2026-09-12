@@ -5,6 +5,7 @@ import {
   detectMissingExecutionForRequest,
   detectUnbackedCompletionClaim,
   honestyRewritePatch,
+  isGroundedRefusalReply,
   unbackedCompletionNoticeText,
 } from "./detectUnbackedCompletion.js";
 
@@ -485,5 +486,81 @@ describe("组合指令否定连坐 + 事实账本触发（Codex 5 章 E2E·P1）
   it("普通对话「记住你的想法」无事实/账本上下文 → 不误报", () => {
     expect(detectUnbackedCompletionClaim("好的，我记住你的想法了。", [])).toBe(false);
     expect(detectMissingExecutionForRequest("记住我喜欢悬疑。", [])).toBeNull();
+  });
+});
+
+// 审计 A-4（shots/22 原话钉档）：用户「把第 99 章正式入库」，agent 调读类工具核实后如实拒绝——
+// 正确拒绝不是「只有口头声称」，执行一致性探针不得再盖「没有执行」、服务端不得自动重做。
+describe("有依据的拒绝豁免（审计 A-4：正确拒绝被误判成口头声称并重做）", () => {
+  const AUDIT_A4_USER = "把第 99 章正式入库";
+  const AUDIT_A4_REPLY =
+    "第 99 章没法入库——目前这本书连第 1 章都还没有草稿，全书最大章号只有 1，第 99 章根本不存在。" +
+    "要先写正文才谈得上入库。要不要从第 1 章开始写？如果需要，我可以先生成第 1 章的剧情方向，" +
+    "或者你直接告诉我第 1 章想写什么，我来出正文。";
+
+  it("审计原话 + 本回合调过读类工具 → 判有依据的拒绝", () => {
+    expect(isGroundedRefusalReply(AUDIT_A4_REPLY, [step("read_chapters_overview", "completed")])).toBe(true);
+    expect(isGroundedRefusalReply(AUDIT_A4_REPLY, [step("read_state_overview", "completed"), step("read_draft", "completed")])).toBe(true);
+  });
+
+  it("拒绝语义但没有读类工具（纯口头拒绝）→ 不豁免", () => {
+    expect(isGroundedRefusalReply(AUDIT_A4_REPLY, [])).toBe(false);
+    expect(isGroundedRefusalReply(AUDIT_A4_REPLY, undefined)).toBe(false);
+    // 只有非读类工具（质检/预览/建议）也不算「读了盘」
+    expect(isGroundedRefusalReply(AUDIT_A4_REPLY, [step("quality_check", "completed")])).toBe(false);
+  });
+
+  it("调了读类工具但回复没有拒绝/不可行语义 → 不豁免", () => {
+    expect(isGroundedRefusalReply("我看了一下，状态如上。", [step("read_state_overview", "completed")])).toBe(false);
+    // 「能不能」是反问句式，不算拒绝语义
+    expect(isGroundedRefusalReply("你能不能先告诉我第 1 章想写什么？", [step("read_state_overview", "completed")])).toBe(false);
+  });
+
+  it("审计原话场景：honestyRewritePatch 不再盖「定稿没有执行」（返回 null）", () => {
+    expect(honestyRewritePatch({
+      content: AUDIT_A4_REPLY,
+      toolSteps: [step("read_chapters_overview", "completed")],
+      userText: AUDIT_A4_USER,
+    })).toBeNull();
+  });
+
+  it("同一请求、同一拒绝话术但没调读类工具 → 仍判 commit_apply 没执行（无依据拒绝不豁免）", () => {
+    const patch = honestyRewritePatch({
+      content: AUDIT_A4_REPLY,
+      toolSteps: [],
+      userText: AUDIT_A4_USER,
+    });
+    expect(patch).not.toBeNull();
+    expect(patch!.content).toContain("定稿没有执行");
+  });
+
+  it("同一请求、回复无拒绝语义（只调了读工具就收场）→ 仍判 commit_apply 没执行", () => {
+    const patch = honestyRewritePatch({
+      content: "好的，我看了一下当前状态。",
+      toolSteps: [step("read_chapters_overview", "completed")],
+      userText: AUDIT_A4_USER,
+    });
+    expect(patch).not.toBeNull();
+    expect(patch!.content).toContain("定稿没有执行");
+  });
+
+  it("验收反例：「已经帮你入库了」（无工具）仍被更正", () => {
+    const patch = honestyRewritePatch({
+      content: "已经帮你入库了。",
+      toolSteps: [],
+      userText: "把第2章正式入库",
+    });
+    expect(patch).not.toBeNull();
+    expect(patch!.content).toContain("定稿");
+  });
+
+  it("拒绝话术里混着无背书的完成断言 → A1 谎报先判，豁免不挡（第1章谎称已入库照抓）", () => {
+    const patch = honestyRewritePatch({
+      content: "第1章已正式入库。第99章不存在，没法入库。",
+      toolSteps: [step("read_chapters_overview", "completed")],
+      userText: AUDIT_A4_USER,
+    });
+    expect(patch).not.toBeNull();
+    expect(patch!.content).toContain("定稿未完成");
   });
 });

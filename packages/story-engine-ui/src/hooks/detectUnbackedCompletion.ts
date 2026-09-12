@@ -2,6 +2,7 @@ export {
   detectMissingExecutionForRequest,
   detectUnbackedCompletionClaim,
   honestyRewritePatch,
+  isGroundedRefusalReply,
   unbackedCompletionNoticeText,
   type HonestyRewritePatch,
   type MissingExecutionResult,
