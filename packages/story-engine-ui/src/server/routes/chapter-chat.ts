@@ -654,10 +654,10 @@ function agentTitleForIntent(intent: ChapterChatIntent): string {
 function agentSummaryForIntent(intent: ChapterChatIntent, sourceMessage: string): string {
   const target = sourceMessage.trim().slice(0, 60);
   if (intent === "direct_edit") return `按你的要求修改左侧工作稿：${target}`;
-  if (intent === "generate_draft") return `按你的方向写当前章节草稿：${target}`;
+  if (intent === "generate_draft") return `按你的方向写当前章节工作稿：${target}`;
   if (intent === "generate_steering") return `整理这一章的剧情推进方向：${target}`;
-  if (intent === "quality_check") return "检查当前草稿的连续性、穿帮和设定冲突。";
-  if (intent === "ai_review") return "从编辑视角给出审稿建议，不自动改正文。";
+  if (intent === "quality_check") return "检查当前工作稿的连续性、穿帮和设定冲突。";
+  if (intent === "ai_review") return "从编辑视角给出内容审阅建议，不自动改正文。";
   if (intent === "revision_preview") return "根据明确问题生成修订预览，应用前可确认。";
   if (intent === "commit_preview") return "生成定稿预览，先看会写入什么。";
   if (intent === "commit_apply") return "直接执行定稿，写入前自动快照，可撤销。";

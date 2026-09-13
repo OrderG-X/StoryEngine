@@ -1,5 +1,11 @@
 export interface HonestyToolStep {
   readonly toolName?: string;
+  /**
+   * 步骤状态。除 running/completed/failed/needs_confirmation/partial/stopped 外还有 "verdict"：
+   * 裁决类只读工具（commit_preview，ok===canCommit）正常执行后返回的「否定裁决」——工具没崩、
+   * 给出了「暂不可定稿」的真实答案。verdict 与 completed 都算「磁盘依据」（核实过），
+   * 与 failed（工具抛错/超时，tool-error 事件）严格区分（agent-chat.ts toolResultStatus 映射）。
+   */
   readonly status?: string;
   /**
    * prune_snapshots 结果口径：dryRun=「没落盘」（只读预览 / 无需裁剪 / 被守卫拦下 / 失败回滚都是 true；
@@ -14,6 +20,18 @@ export interface HonestyToolStep {
 }
 
 type ToolStep = HonestyToolStep;
+
+/**
+ * 裁决类只读工具：它们的 `ok:false` 是「正常执行后给出的否定裁决」（commit_preview 的 ok===canCommit，
+ * 无稿章/有阻断 → ok:false + blockingReasons 就是核实「第 N 章能不能定稿」的正确答案），不是工具崩了。
+ * 服务端 toolResultStatus 与前端 agentEventProjection 据此把这类步落成 verdict（裁决未过）而非 failed（红）；
+ * 诚实检测据此把它算作「磁盘依据」（isGroundedRefusalReply）。
+ */
+const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
+
+export function isVerdictToolName(toolName: string | undefined): boolean {
+  return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
+}
 
 /**
  * 真·写类工具：完成「已生成/已写入/已入库」必须有它们之一真成功背书。
@@ -75,6 +93,31 @@ const COMMIT_COMPLETION_CLAIM = new RegExp(
   "u",
 );
 const COMMIT_PREVIEW_CLAIM = /(?:入库|定稿)(?:影响)?预览|定稿改动/u;
+
+/**
+ * 完成声称的否定/引用语境免疫（复审 T4 三轮修法 3·洞2 假阳性）：
+ * 模型正确拒绝时引用声称词（「我不能谎称第 1 章已经定稿」「用户让我说『已经定稿』」）不该被当成声称。
+ * 掩码规则：『』「」“”‘’"" 引号内的文本、以及「不能/绝不/没有/不会/无法/没法…+声称动词」的否定段，
+ * 在跑声称断言前整段换成句号（断句符，防止空洞两侧拼出新匹配）。只用于声称检测；意图/状态汇报检测不受影响。
+ */
+const QUOTED_CLAIM_SPAN = /[『「“‘"][^』」”’"]{0,300}[』」”’"]/gu;
+const CLAIM_VERBS =
+  "(?:生成|写好|写完|写入|保存|存好|存进|落盘|入库|定稿|提交了?入库" +
+  "|改好|改完|改成|改为|换成|替换|修正|修订|润色|重写" +
+  "|记入|记进|记下|记到|登记|录入|入账|整理|梳理|理清|理顺)";
+// 否定段不许跨逗号/句号：只否定同一小句内的声称动词——「这一章还没有草稿，我已经帮你生成并保存了」里
+// 「还没有」否定的是「草稿」，逗号后的真声称必须保住（复审 T4 三轮·掩码过宽的假阴性实证）。
+const NEGATED_CLAIM_SPAN = new RegExp(
+  "(?:不能|绝不|决不|不可|不应|不该|无法|没法|没有|不会|未能|未曾)[^。！？!?；;，,、]{0,24}?" + CLAIM_VERBS,
+  "gu",
+);
+function maskNonClaimContexts(content: string): string {
+  return content.replace(QUOTED_CLAIM_SPAN, "。").replace(NEGATED_CLAIM_SPAN, "。");
+}
+/** 声称断言的统一入口：先掩掉否定/引用语境再测——否定句与引号内的声称字样不算完成声称。 */
+function claimMatches(claim: RegExp, content: string): boolean {
+  return claim.test(maskNonClaimContexts(content));
+}
 // 事实账本「已记入账本/已入账/硬事实已记」类完成断言（scoped 到 账本/账/事实，避免误伤「记住你的想法」这类对话）。
 const FACT_COMPLETION_CLAIM = /已(?:经)?(?:把[^。！？]{0,16})?(?:记入|记进|记下|记到|登记|录入)[^。！？]{0,6}(?:账本|账|事实)|已(?:经)?入账|(?:硬事实|事实)[^。！？]{0,6}已(?:记|登记|入账)/u;
 // 改稿/重写类完成断言（Codex retest2·铁律④）：revise_draft 全被诚实拒/重写没调 generate_draft，磁盘没变，
@@ -103,10 +146,10 @@ const AGGREGATE_PROGRESS_STATEMENT =
 
 function hasAnyCompletionClaim(content: string): boolean {
   return (
-    COMPLETION_CLAIM.test(content) ||
-    RELATIONSHIP_COMPLETION_CLAIM.test(content) ||
-    FACT_COMPLETION_CLAIM.test(content) ||
-    REVISION_COMPLETION_CLAIM.test(content)
+    claimMatches(COMPLETION_CLAIM, content) ||
+    claimMatches(RELATIONSHIP_COMPLETION_CLAIM, content) ||
+    claimMatches(FACT_COMPLETION_CLAIM, content) ||
+    claimMatches(REVISION_COMPLETION_CLAIM, content)
   );
 }
 
@@ -126,7 +169,7 @@ function hasToolAttempt(toolSteps: readonly ToolStep[] | undefined, toolName: st
 }
 
 function isBackedCommitPreviewClaim(content: string, toolSteps: readonly ToolStep[] | undefined): boolean {
-  return COMMIT_PREVIEW_CLAIM.test(content) && !COMMIT_COMPLETION_CLAIM.test(content) && hasCompletedTool(toolSteps, "commit_preview");
+  return COMMIT_PREVIEW_CLAIM.test(content) && !claimMatches(COMMIT_COMPLETION_CLAIM, content) && hasCompletedTool(toolSteps, "commit_preview");
 }
 
 /**
@@ -135,13 +178,14 @@ function isBackedCommitPreviewClaim(content: string, toolSteps: readonly ToolSte
  * 治头号根因「零工具调用却宣称完成」(ch8)，并覆盖「质检/预览成功但 commit_apply 没成功却谎称已入库」(实测见到)。
  * 两道闸：①多章状态汇报（✅❌/枚举多章）是诚实进度汇报、直接放过，避免误报；②否则要求有真写类工具成功背书，
  * 没有就判（commit_preview/quality_check/read 等成功不算背书）。失败的写工具本身也已在时间线结构性标红。
+ * 声称检测对否定/引用语境免疫（claimMatches）：「我不能谎称第 1 章已经定稿」这类正确拒绝不误判。
  * 纯确定性、保守，供 useChat 在回合收尾时挂一条诚实提醒。题材中立。
  */
 export function detectUnbackedCompletionClaim(
   content: string,
   toolSteps: readonly ToolStep[] | undefined,
 ): boolean {
-  if (!COMPLETION_CLAIM.test(content) && !RELATIONSHIP_COMPLETION_CLAIM.test(content) && !FACT_COMPLETION_CLAIM.test(content) && !REVISION_COMPLETION_CLAIM.test(content)) return false;
+  if (!hasAnyCompletionClaim(content)) return false;
   if (isStatusReport(content)) return false;
   if (isBackedCommitPreviewClaim(content, toolSteps)) return false;
   const hasWriteSuccess = (toolSteps ?? []).some(stepBacksWriteClaim);
@@ -164,13 +208,13 @@ export function unbackedCompletionNoticeText(content: string, userText = ""): st
   if (RELATIONSHIP_INTEGRATION_REQUEST.test(userText) && !COMMIT_APPLY_REQUEST.test(userText)) {
     return "关系整理未完成：本回合没有检测到角色关系真正写入（整理角色关系未成功），所以角色关系没有更新。多因书里硬事实还太少、暂无可整理的关系素材——可先多写几章或手动登记关系后再整理。";
   }
-  if (COMMIT_COMPLETION_CLAIM.test(content)) {
+  if (claimMatches(COMMIT_COMPLETION_CLAIM, content)) {
     return `定稿未完成：本回合没有检测到定稿成功执行，所以没有证据表明章节已经正式写入并更新资料。${CONFIRM_COMMIT_RETRY_HINT}`;
   }
-  if (FACT_COMPLETION_CLAIM.test(content)) {
+  if (claimMatches(FACT_COMPLETION_CLAIM, content)) {
     return "故事事实没有写入：本回合没有检测到记录故事事实成功执行，所以硬事实没有真正记下。请直接再说“把这些事实记进账本”。";
   }
-  if (REVISION_COMPLETION_CLAIM.test(content)) {
+  if (claimMatches(REVISION_COMPLETION_CLAIM, content)) {
     return "改稿没有真正保存：本回合没有检测到改写工具成功应用、或重写没有调用 generate_draft，所以工作稿可能并未真正改动（修改方案往往因目标片段没逐字命中被诚实拒）。请以磁盘/工具结果为准，把要改的原文逐字说清后重试。";
   }
   return "操作未完成：本回合助手声称已经生成、写入或保存，但没有检测到对应写入工具成功执行。请以工具结果和磁盘状态为准，必要时重新执行。";
@@ -360,33 +404,33 @@ function composeCombinedMissingNotice(missing: readonly MissingExecutionResult[]
 }
 
 /**
- * 有依据的拒绝/不可行回复（审计 A-4 误报实锤：用户「把第 99 章正式入库」，agent 调读类工具核实后
- * 如实答「第 99 章不存在、没法入库」——已调读工具、没调 commit_apply 都是对的，不是「只有口头声称」）。
- * 复审 T4 返工后的三道条件（缺一不可）：
- * ① 回复含拒绝/不可行语义；
- * ② 同回复**不命中任何完成断言**（COMPLETION/RELATIONSHIP/FACT/REVISION）——混着「我已经把第 2 章定稿了」
- *    这类无背书声称的拒绝不是纯拒绝，交给 A1/A2 判，别一票放行（修前凭「含不可行词+任意 read 步」整体豁免，
- *    把 A2 兜底也压掉，双重静默）；
- * ③ 本回合有**成功完成**（status===completed）的读/预览类工具作磁盘依据——read_* 之外，commit_preview /
- *    revision_preview 等预览步也是核实「第 N 章状态」的天然路径（修前只认 read_*，预览核实后拒绝仍被误判
- *    口头声称→自动重做，A-4 原症状复现）；failed/stopped/running 的读步没有依据可言，不豁免。
- * 零成功读/预览工具的纯口头拒绝不豁免（无依据的拒绝照样可能是空转）；
+ * 有磁盘依据的回合豁免（审计 A-4 误报实锤 + 复审 T4 三轮修法 1/2）：
+ * 用户「把第 99 章正式定稿」，agent 调读/预览工具核实后如实答「第 99 章不存在、没法定稿」——
+ * 核实过、没调 commit_apply 都是对的，不是「只有口头声称」。
+ *
+ * 两个条件（缺一不可）：
+ * ① 回复**不命中任何完成断言**（COMPLETION/RELATIONSHIP/FACT/REVISION，否定/引用语境已免疫）——
+ *    混着「我已经把第 2 章定稿了」这类无背书声称的回复不是诚实回复，交给 A1/A2 判，别一票放行；
+ * ② 本回合有读/预览类工具**返回了裁决**（status===completed 或 verdict）作磁盘依据——
+ *    依据的定义是「工具执行并返回了裁决」，不论 ok 真假：commit_preview 对无稿章的正确核实结果就是
+ *    ok:false（ok===canCommit，映射为 verdict 而非 failed）——核实越正确越算依据；
+ *    tool-error（抛错/超时 → failed）、stopped、running 的读步没有依据可言，不豁免。
+ * 零读/预览裁决的纯口头回复不豁免（无依据的拒绝照样可能是空转，落 A2 诚实更正）；
  * 混着写类完成断言的回复已由 A1（detectUnbackedCompletionClaim）先行判决，走不到这层豁免。
- * `(?<!能)不能`：排除「能不能…」反问句式里的「不能」。
+ * （复审 T4 三轮起不再要求拒绝词表——有依据的拒绝/状态汇报/诚实失败汇报天然不命中完成声称。）
  */
-const REFUSAL_OR_INFEASIBLE = /(?:不存在|没法|无法|还没有|(?<!能)不能)/u;
 const READ_OR_PREVIEW_TOOL_NAME = /^(?:read_)|(?:_preview)$/u;
+const GROUNDING_STEP_STATUSES: ReadonlySet<string> = new Set<string>(["completed", "verdict"]);
 
 export function isGroundedRefusalReply(
   content: string,
   toolSteps: readonly ToolStep[] | undefined,
 ): boolean {
-  if (!REFUSAL_OR_INFEASIBLE.test(content)) return false;
   if (hasAnyCompletionClaim(content)) return false;
   return (toolSteps ?? []).some(
     (step) =>
       typeof step.toolName === "string" &&
-      step.status === "completed" &&
+      GROUNDING_STEP_STATUSES.has(step.status ?? "") &&
       READ_OR_PREVIEW_TOOL_NAME.test(step.toolName),
   );
 }
@@ -471,9 +515,9 @@ export function buildObedienceRetryNudgeMessage(
  * 「已生成/已写入」这类泛动词在 generate_draft/foundation_write 间有歧义，返回 undefined 走 required 兜底。
  */
 export function inferClaimedWriteTool(content: string): string | undefined {
-  if (COMMIT_COMPLETION_CLAIM.test(content)) return "commit_apply";
-  if (REVISION_COMPLETION_CLAIM.test(content)) return "revise_draft";
-  if (FACT_COMPLETION_CLAIM.test(content)) return "edit_fact_ledger";
+  if (claimMatches(COMMIT_COMPLETION_CLAIM, content)) return "commit_apply";
+  if (claimMatches(REVISION_COMPLETION_CLAIM, content)) return "revise_draft";
+  if (claimMatches(FACT_COMPLETION_CLAIM, content)) return "edit_fact_ledger";
   return undefined;
 }
 
@@ -559,10 +603,11 @@ export function honestyRewritePatch(args: {
 }): HonestyRewritePatch | null {
   if (detectUnbackedCompletionClaim(args.content, args.toolSteps)) {
     const notice = unbackedCompletionNoticeText(args.content, args.userText);
-    const isCommit = COMMIT_COMPLETION_CLAIM.test(args.content) || COMMIT_APPLY_REQUEST.test(args.userText);
+    const isCommit = claimMatches(COMMIT_COMPLETION_CLAIM, args.content) || COMMIT_APPLY_REQUEST.test(args.userText);
     return clearedPatch(notice, isCommit);
   }
-  // 有依据的拒绝不是违令（审计 A-4）：读了盘如实说「不存在/没法入库」，别盖「没有执行」文案。
+  // 有磁盘依据、且无完成声称的回合不是违令（审计 A-4 + 复审 T4 三轮）：读/预览工具已给出裁决
+  // （completed/verdict），如实说「不存在/没法定稿/预览通过可以定稿」，别盖「没有执行」文案。
   if (isGroundedRefusalReply(args.content, args.toolSteps)) return null;
   const missingExecution = detectMissingExecutionForRequest(args.userText, args.toolSteps);
   if (missingExecution) {

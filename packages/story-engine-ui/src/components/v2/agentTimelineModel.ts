@@ -7,7 +7,7 @@ import type { ChapterAgentCard, ToolStep } from "../../api/types.js";
 import type { ChapterMessage } from "../../types.js";
 import { uiText } from "./v2Utils.js";
 
-export type TimelineStepStatus = "pending" | "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped";
+export type TimelineStepStatus = "pending" | "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped" | "verdict";
 
 export interface TimelineStep {
   readonly id: string;
@@ -197,6 +197,8 @@ export function timelineStepStatusLabel(status: TimelineStepStatus): string {
     needs_confirmation: "待确认",
     partial: "部分完成",
     stopped: "已停止",
+    // 裁决类只读工具（commit_preview）正常返回的否定裁决（ok===canCommit:false）：落定、不红不绿。
+    verdict: "裁决未过",
   };
   return labels[status];
 }
@@ -244,6 +246,8 @@ export function liveFlowFromMessage(message: ChapterMessage | undefined): LiveFl
   if (latest.size === 0) return null;
   const toLive = (step: ToolStep | undefined): LiveFlowPhase => {
     if (!step) return IDLE_PHASE;
+    // verdict（裁决未过，如 commit_preview 核实「暂不可定稿」）按落定处理：不算 failed（环不亮红），
+    // 如实显示该步 detail（工具真实 summary，如「第 99 章还没有工作稿，无法生成定稿预览。」）。
     const status: LiveFlowPhaseStatus =
       step.status === "running" ? "running"
         : step.status === "failed" ? "failed"

@@ -26,6 +26,7 @@ import {
   detectUnbackedCompletionClaim,
   inferClaimedWriteTool,
   isGroundedRefusalReply,
+  isVerdictToolName,
   OBEDIENCE_RETRY_TRANSITION_TEXT,
   sanitizeCorrectedAssistantHistory,
   unbackedCompletionNoticeText,
@@ -232,8 +233,9 @@ export function serverHonestyCorrectionText(args: {
   if (detectUnbackedCompletionClaim(assistantText, args.toolSteps)) {
     return `\n\n⚠️ 系统更正：${unbackedCompletionNoticeText(assistantText, userText)}`;
   }
-  // 有依据的拒绝豁免（审计 A-4：读了盘如实答「第 99 章不存在没法入库」是正确拒绝，不是口头声称）——
-  // 不追加更正；runObedientAgentTurn 的重做条件就是本函数非空，豁免即不重做、不多烧一次模型。
+  // 有磁盘依据、无完成声称的回合豁免（审计 A-4 + 复审 T4 三轮：读/预览工具已返回裁决（completed/verdict），
+  // 如实答「第 99 章不存在没法定稿」「预览通过可以定稿」是正确回合，不是口头声称）——不追加更正；
+  // runObedientAgentTurn 只在 A1（无背书完成声称）时重做，A2 缺执行不再触发重做。
   if (isGroundedRefusalReply(assistantText, args.toolSteps)) return null;
   const missingExecution = detectMissingExecutionForRequest(userText, args.toolSteps);
   if (missingExecution) {
@@ -242,10 +244,16 @@ export function serverHonestyCorrectionText(args: {
   return null;
 }
 
-function toolResultStatus(output: unknown): HonestyToolStep["status"] {
+/**
+ * 工具结果 → 诚实步骤状态。关键区分（复审 T4 三轮修法 2）：裁决类只读工具（isVerdictToolName，
+ * 如 commit_preview 的 ok===canCommit）正常返回的 ok:false 是「裁决未过」（工具没崩、给出了
+ * 真实否定答案）→ "verdict"，算「磁盘依据」；写类工具的 ok:false 仍是真失败 → "failed"；
+ * 工具抛错/超时走 tool-error 分支（也是 "failed"）——只有这两类不算依据。
+ */
+export function toolResultStatus(toolName: string | undefined, output: unknown): HonestyToolStep["status"] {
   const result = output as { readonly needsConfirmation?: unknown; readonly ok?: unknown; readonly partialMiss?: unknown } | undefined;
   if (result?.needsConfirmation === true) return "needs_confirmation";
-  if (result?.ok === false) return "failed";
+  if (result?.ok === false) return isVerdictToolName(toolName) ? "verdict" : "failed";
   if (result?.partialMiss === true) return "partial";
   return "completed";
 }
@@ -302,12 +310,14 @@ export interface ObedientTurnChunk {
 /**
  * 带「服从重试」的 agent 回合执行器（r8 治 ch88 阻断的核心）：
  *
- * 消费一次 agent.stream 的 fullStream 并转发 SSE；回合结束跑诚实检测——若检出「声称完成/请求执行
- * 却零对应工具调用」（`serverHonestyCorrectionText` 非空）且还有重试额度，则：
+ * 消费一次 agent.stream 的 fullStream 并转发 SSE；回合结束跑诚实检测——若检出「口头声称完成却无写类
+ * 工具背书」（A1：`detectUnbackedCompletionClaim` 命中）且还有重试额度，则：
  *   ①向用户推一条过渡文案（可见记录保持诚实：上面的声称无效、下面才是真实执行）；
  *   ②把本轮产出文本 + 系统纠偏消息追加进模型消息序列，**沿用同一 requestContext**（用户原话
  *     不变 → TurnIntentGate 对合法写入不误拦），自动重跑一轮。
  * 重做后仍检出 → 按原路径追加「⚠️ 系统更正」诚实收场，绝不第三轮、绝不谎报。
+ * A2「请求了执行类动作却没调对应工具」只产出诚实更正文案（`serverHonestyCorrectionText` 非空即追加），
+ * **不触发重做**（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）。
  *
  * 为什么不能只靠更正文案：ch84/ch88 真机实锤——护栏只纠文本时，弱模型把历史里的成功回执当剧本续写，
  * 更正后下一回合继续编造，长跑三连败卡死。重试把「自愈」从赌模型素质变成系统机制（模型无关）。
@@ -389,7 +399,7 @@ export async function runObedientAgentTurn(args: {
           if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
           toolSteps.set(toolCallId, {
             toolName: chunk.payload?.toolName,
-            status: toolResultStatus(chunk.payload?.result),
+            status: toolResultStatus(chunk.payload?.toolName, chunk.payload?.result),
             // 诚实背书粒度（honesty-detection stepBacksWriteClaim）：prune 的 dryRun（预览不背书）/
             // exemplars 的 action（list 不背书）随步骤带上；没有这两字段的工具自然缺省、维持旧口径。
             ...(typeof resultPayload?.dryRun === "boolean" ? { dryRun: resultPayload.dryRun } : {}),
@@ -439,8 +449,13 @@ export async function runObedientAgentTurn(args: {
       toolSteps: stepsForDetection,
     });
 
+    // 重做硬门已拆（复审 T4 三轮修法 1）：只有「回复命中完成声称且无写背书」（A1 谎报）才自动重做——
+    // 有依据的拒绝/状态汇报/诚实失败汇报天然不命中完成声称，不再因「用户话里有入库/定稿关键词而本回合
+    // 没出现写工具」（A2 缺执行）被强制重做；A2 只保留诚实更正文案（下方最终收尾照实追加，不重跑模型）。
+    const unbackedClaim = detectUnbackedCompletionClaim(turnText, stepsForDetection);
+
     // 客户端已断开时不重做：重试会再开一轮 agent.stream（新工具步骤），人已走茶凉纯属白费算力。
-    if (correction && attempt < maxRetries && args.shouldStop?.() !== true) {
+    if (unbackedClaim && attempt < maxRetries && args.shouldStop?.() !== true) {
       // 结构性强制（r8 二轮·ch93 实锤纯 prompt 纠偏无效——flash 重做轮直接交白卷）：
       // 能从用户意图定位到期望工具就点名强制 + 限 1 步（forced choice 作用于每一步，多步会反复调
       // 同一工具）；定位不到（只有声称、意图模糊）就至少强制调一个工具。协议层杜绝「纯文本再编一遍」。

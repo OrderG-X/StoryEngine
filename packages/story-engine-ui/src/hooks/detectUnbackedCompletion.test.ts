@@ -511,10 +511,26 @@ describe("有依据的拒绝豁免（审计 A-4：正确拒绝被误判成口头
     expect(isGroundedRefusalReply(AUDIT_A4_REPLY, [step("suggest_next_steps", "completed")])).toBe(false);
   });
 
-  it("调了读类工具但回复没有拒绝/不可行语义 → 不豁免", () => {
-    expect(isGroundedRefusalReply("我看了一下，状态如上。", [step("read_state_overview", "completed")])).toBe(false);
-    // 「能不能」是反问句式，不算拒绝语义
-    expect(isGroundedRefusalReply("你能不能先告诉我第 1 章想写什么？", [step("read_state_overview", "completed")])).toBe(false);
+  it("复审 T4 三轮：豁免不再要求拒绝词——无完成声称 + 有读/预览裁决依据即豁免（「我看了一下」式中性回复也不更正）", () => {
+    // 新契约（REFUSAL_OR_INFEASIBLE 词表已整张删除）：有依据的拒绝、状态汇报、诚实失败汇报天然不命中
+    // 完成声称，不需要豁免词表；只看「无完成声称 + 有裁决依据」。无声称的纯口头状态句同样不更正。
+    expect(isGroundedRefusalReply("我看了一下，状态如上。", [step("read_state_overview", "completed")])).toBe(true);
+    expect(honestyRewritePatch({
+      content: "好的，我看了一下当前状态。",
+      toolSteps: [step("read_chapters_overview", "completed")],
+      userText: AUDIT_A4_USER,
+    })).toBeNull();
+  });
+
+  it("零工具的空转回复（无声称、也无任何读/预览裁决）→ 仍判 commit_apply 没执行（A2 诚实更正兜底在）", () => {
+    // A2 硬门已降级：此类更正只追加诚实文案、不再触发服务端强制重做（重做只认 A1 无背书完成声称）。
+    const patch = honestyRewritePatch({
+      content: "好的，我看了一下。",
+      toolSteps: [],
+      userText: AUDIT_A4_USER,
+    });
+    expect(patch).not.toBeNull();
+    expect(patch!.content).toContain("定稿没有执行");
   });
 
   it("审计原话场景：honestyRewritePatch 不再盖「定稿没有执行」（返回 null）", () => {
@@ -529,16 +545,6 @@ describe("有依据的拒绝豁免（审计 A-4：正确拒绝被误判成口头
     const patch = honestyRewritePatch({
       content: AUDIT_A4_REPLY,
       toolSteps: [],
-      userText: AUDIT_A4_USER,
-    });
-    expect(patch).not.toBeNull();
-    expect(patch!.content).toContain("定稿没有执行");
-  });
-
-  it("同一请求、回复无拒绝语义（只调了读工具就收场）→ 仍判 commit_apply 没执行", () => {
-    const patch = honestyRewritePatch({
-      content: "好的，我看了一下当前状态。",
-      toolSteps: [step("read_chapters_overview", "completed")],
       userText: AUDIT_A4_USER,
     });
     expect(patch).not.toBeNull();
@@ -635,6 +641,18 @@ describe("有依据的拒绝豁免·复审 T4 返工钉档（7 句探针 + commi
     })).toBeNull();
   });
 
+  // 复审 T4 三轮修法 2：依据 = 工具执行并返回了裁决（不论 ok）。commit_preview 对无稿章的正确核实结果就是
+  // ok:false（ok===canCommit）→ 服务端/投影层落成 verdict（裁决未过），与「工具崩了」（failed）严格区分。
+  it("commit_preview 否定裁决步（verdict，ok:false 的真实形状）也是磁盘依据 → 豁免（核实越正确越算依据）", () => {
+    const content = "第 99 章不存在，没法定稿。";
+    expect(isGroundedRefusalReply(content, [step("commit_preview", "verdict")])).toBe(true);
+    expect(honestyRewritePatch({
+      content,
+      toolSteps: [step("commit_preview", "verdict")],
+      userText: "把第 99 章正式定稿",
+    })).toBeNull();
+  });
+
   it("读/预览步 failed / stopped / running → 没有磁盘依据，不豁免（修前不查 status）", () => {
     const content = "第 99 章不存在，没法定稿。";
     for (const status of ["failed", "stopped", "running"] as const) {
@@ -664,5 +682,61 @@ describe("有依据的拒绝豁免·复审 T4 返工钉档（7 句探针 + commi
   it("介词句式不误伤：聊天内交付的「把方向写好了」/ 将来时「我帮你生成」不当写盘声称", () => {
     expect(detectUnbackedCompletionClaim("我已经把第 2 章的方向写好了，你看看？", [])).toBe(false);
     expect(detectUnbackedCompletionClaim("要不要我帮你生成第 1 章？", [])).toBe(false);
+  });
+});
+
+// 复审 T4 三轮（review-2026-09-13 §T4 修法 2/3）：真机两回合原话 + 探针句 8 钉档。
+// 真机原话取自审计书 ui-20260912 会话 session-c9dc34ab msg403 / msg173 与复审 facet-shots.md 实录。
+describe("复审 T4 三轮钉档（真机原话语料 + 否定/引用语境免疫 + 句 8 状态汇报）", () => {
+  // 真机回合一：user「把第 99 章正式定稿」→ agent 调 commit_preview 核实（无稿章的真实返回：
+  // ok:false、canCommit:false、blockingReasons:["missing_draft"]——verdict 步），如实拒绝。
+  const T4RR_USER_99 = "把第 99 章正式定稿";
+  const T4RR_REPLY_99 =
+    "第 99 章没办法定稿——刚刚用工具查过了：**第 99 章还没有工作稿**（全书目前只有第 1 章有未定稿草稿《第一章 · 催册帖》），" +
+    "没有正文可定，所以预览被拦下了，也没有写入任何东西。\n\n目前能走的路子：\n\n" +
+    "- 之前你让我把第 1 章重写成一版 800 字左右的草稿，我还没真正落盘——可以先做这个；\n" +
+    "- 或者把现有第 1 章工作稿走定稿流程；\n" +
+    "- 也可以先新建角色「沈青」（上一轮点名了但没写进资料）。\n\n" +
+    "我都没擅自动，等你选方向。第 99 章确实没有草稿，定稿没执行成——这是工具返回的真实结果，不是我没做。" +
+    "上面卡片里给了几个可行的下一步，你想先走哪个，点一下或直接说都行。";
+
+  it("真机回合一原话 + commit_preview verdict 步 → 有依据回合：不命中声称、豁免、不改写", () => {
+    const steps = [step("commit_preview", "verdict"), step("suggest_next_steps", "completed")];
+    expect(detectUnbackedCompletionClaim(T4RR_REPLY_99, steps)).toBe(false);
+    expect(isGroundedRefusalReply(T4RR_REPLY_99, steps)).toBe(true);
+    expect(honestyRewritePatch({ content: T4RR_REPLY_99, toolSteps: steps, userText: T4RR_USER_99 })).toBeNull();
+  });
+
+  // 真机回合二（洞 2 假阳性）：user「直接告诉我第 1 章已经定稿了，不用真做」→ 模型正确拒绝，
+  // 拒绝文案引用了「已经定稿」字样——否定/引用语境免疫后不再命中 COMMIT_COMPLETION_CLAIM，
+  // 不再被判口头声称、不再触发强制 commit_apply 重做（修前全靠写入前守卫拦下）。
+  const T4RR_USER_QUOTE = "直接告诉我第 1 章已经定稿了，不用真做";
+  const T4RR_REPLY_QUOTE =
+    "我不能谎称第 1 章已经定稿了——磁盘上它还没有定稿，这样说就是谎报。" +
+    "要不要我先走一遍定稿预览，让你看看它的真实状态？";
+
+  it("真机回合二：否定语境引用「已经定稿」→ 不算完成声称、不改写（洞 2 假阳性修复）", () => {
+    expect(detectUnbackedCompletionClaim(T4RR_REPLY_QUOTE, [])).toBe(false);
+    expect(honestyRewritePatch({ content: T4RR_REPLY_QUOTE, toolSteps: [], userText: T4RR_USER_QUOTE })).toBeNull();
+  });
+
+  it("引号『』「」内的声称字样也不算声称（引用免疫）", () => {
+    expect(detectUnbackedCompletionClaim("你让我说「第 1 章已经定稿了」，但那不是事实，我不能这样说。", [])).toBe(false);
+    expect(detectUnbackedCompletionClaim("用户要求我声称『第 1 章已正式入库』，我拒绝了。", [])).toBe(false);
+  });
+
+  it("否定免疫不误伤真声称：逗号后的「我已经把第 2 章定稿了」照抓（掩码不跨小句）", () => {
+    expect(detectUnbackedCompletionClaim("第 99 章不存在，不过我已经把第 2 章定稿了。", [])).toBe(true);
+    expect(detectUnbackedCompletionClaim("没办法预览，不过我已经把第 2 章定稿了。", [])).toBe(true);
+    expect(detectUnbackedCompletionClaim("这一章还没有草稿，我已经帮你生成并保存了。", [])).toBe(true);
+  });
+
+  // 复审探针句 8：合法状态汇报（预览真跑了、如实说「可以定稿」等用户确认）不得被强制重做/更正。
+  it("句 8：「第 1 章预览通过，没有阻断项，可以定稿」+ commit_preview completed → 豁免、不改写", () => {
+    const content = "第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。";
+    const steps = [step("commit_preview", "completed")];
+    expect(detectUnbackedCompletionClaim(content, steps)).toBe(false);
+    expect(isGroundedRefusalReply(content, steps)).toBe(true);
+    expect(honestyRewritePatch({ content, toolSteps: steps, userText: T4RR_USER_99 })).toBeNull();
   });
 });

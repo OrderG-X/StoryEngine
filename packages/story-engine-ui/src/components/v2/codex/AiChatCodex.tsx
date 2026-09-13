@@ -858,6 +858,8 @@ function ToolStepFold({ step }: { readonly step: ToolStep }) {
   const running = step.status === "running";
   // 已停止（人喊停腰斩）：中性徽标如实说「已停止」，不走红（不是失败）、不跑光影（不在跑）。
   const stopped = step.status === "stopped";
+  // 裁决未过（commit_preview 核实「暂不可定稿」这类否定裁决）：落定徽标，不红（不是失败）不绿。
+  const verdict = step.status === "verdict";
   const detail = step.detail?.trim();
   const canOpen = Boolean(detail);
   const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : null;
@@ -877,6 +879,7 @@ function ToolStepFold({ step }: { readonly step: ToolStep }) {
         <span className={`step-label is-tool ${running ? "is-active" : ""}`.trim()}>{uiText(toolLabel, "执行步骤")}</span>
         {failed ? <span className="step-fail">失败</span> : null}
         {stopped ? <span className="step-stop">已停止</span> : null}
+        {verdict ? <span className="step-verdict">裁决未过</span> : null}
         {elapsed ? <span className="tm">{elapsed}</span> : null}
         {canOpen ? <span className="step-caret" aria-hidden="true">{open ? "▾" : "▸"}</span> : null}
       </button>

@@ -223,6 +223,16 @@ describe("liveFlowFromMessage（四步实时态）", () => {
     expect(live.draft.status).toBe("failed");
   });
 
+  // 复审 T4 三轮：commit_preview 否定裁决（ok:false=canCommit:false → verdict）落定成 done+detail——
+  // 四步环不亮红（不是 failed），字幕如实显示「暂不可定稿」的工具真实 summary。
+  it("verdict（裁决未过）落定成 done 且透出 detail，环不亮红", () => {
+    const live = liveFlowFromMessage(message({
+      toolSteps: [{ id: "a", label: "定稿影响预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2, detail: "第 99 章还没有工作稿，无法生成定稿预览。" }],
+    }))!;
+    expect(live.commit.status).toBe("done");
+    expect(live.commit.detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
+  });
+
   it("stopped 如实透出 stopped（A-5：人喊停腰斩的步不再转圈、也不混进 done/failed）", () => {
     const live = liveFlowFromMessage(message({
       toolSteps: [
@@ -260,5 +270,20 @@ describe("stopped 步骤的时间线归并（A-5）", () => {
 
   it("timelineStepStatusLabel 如实翻译 stopped", () => {
     expect(timelineStepStatusLabel("stopped")).toBe("已停止");
+  });
+
+  it("timelineStepStatusLabel 如实翻译 verdict（裁决未过，不混进失败/停止）", () => {
+    expect(timelineStepStatusLabel("verdict")).toBe("裁决未过");
+  });
+
+  // 复审 T4 三轮：verdict 步是落定形态——不把时间线整体态拖进 failed/attention，按 completed 收口。
+  it("含 verdict 步 → state=completed（否定裁决不是失败、不需要引导注意）", () => {
+    const model = buildTimelineModel(message({
+      toolSteps: [
+        { id: "a", label: "定稿影响预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2 },
+        { id: "b", label: "建议下一步", toolName: "suggest_next_steps", status: "completed", startedAt: 3, endedAt: 4 },
+      ],
+    }))!;
+    expect(model.state).toBe("completed");
   });
 });

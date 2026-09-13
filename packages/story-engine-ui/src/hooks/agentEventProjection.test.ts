@@ -363,8 +363,11 @@ describe("projectAgentEvent", () => {
     expect(msg.affectedScopes).toBeUndefined(); // 没真删 → 不染「影响范围」
   });
 
-  it("commit_preview 不可入库(ok:false=canCommit:false) → 「入库预览」步骤 failed,不再绿色谎报(问题1)", () => {
-    // commit_preview 是只读工具,但「想入库却不可入库」是 go/no-go 结果——ok=canCommit:false 时步骤须 failed。
+  it("commit_preview 否定裁决(ok:false=canCommit:false) → 步骤落定 verdict「裁决未过」，不红不绿不永转（复审 T4 三轮·副产品 B）", () => {
+    // commit_preview 是只读裁决工具：ok:false 是「暂不可定稿」的真实答案（无稿章/有阻断），不是工具崩了——
+    // 落 verdict（落定、带真实 summary、不算失败），修前落 failed 会让「把第 99 章定稿→核实不可定稿→如实拒绝」
+    // 的合法回合四步环亮红（A-4 亮红实锤）。
+    // fixture 用真实工具 payload 形状（commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons 含 missing_draft）。
     let msg = emptyAssistantMessage("preview-fail");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
     msg = projectAgentEvent(msg, {
@@ -372,10 +375,30 @@ describe("projectAgentEvent", () => {
       toolCallId: "p1",
       toolName: "commit_preview",
       endedAt: 2,
-      output: { ok: false, summary: "第 1 章还没有草稿，无法预览入库。" },
+      output: {
+        chapter: 99,
+        ok: false,
+        summary: "第 99 章还没有工作稿，无法生成定稿预览。",
+      },
+    });
+    expect(msg.toolSteps![0].status).toBe("verdict");
+    expect(msg.toolSteps![0].label).toBe("定稿影响预览");
+    // 落定：补 endedAt、带真实 summary 作详情——不再永远 running。
+    expect(msg.toolSteps![0].endedAt).toBe(2);
+    expect(msg.toolSteps![0].detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
+  });
+
+  it("写类工具 ok:false 仍落 failed（commit_apply 被拒不是「裁决未过」，红不回归）", () => {
+    let msg = emptyAssistantMessage("apply-fail");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "a1",
+      toolName: "commit_apply",
+      endedAt: 2,
+      output: { ok: false, summary: "未定稿：第 99 章工作稿不存在，无法定稿。" },
     });
     expect(msg.toolSteps![0].status).toBe("failed");
-    expect(msg.toolSteps![0].label).toBe("定稿影响预览");
   });
 
   it("commit_preview 带 nameConsistencyWarnings → 挂到消息（固定展示提醒卡，不靠模型转述）", () => {

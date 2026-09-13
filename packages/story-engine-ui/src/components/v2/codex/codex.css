@@ -663,6 +663,8 @@
   .step-fail{color:var(--danger);flex:0 0 auto;}
   /* 已停止徽标（人喊停，不是失败）：中性灰、不红不金。 */
   .step-stop{color:var(--muted);flex:0 0 auto;}
+  /* 裁决未过徽标（commit_preview 核实「暂不可定稿」这类否定裁决）：中性 info 色、不红不绿。 */
+  .step-verdict{color:var(--info);flex:0 0 auto;}
   .step-head .tm{color:var(--faint);font-size:10.5px;font-variant-numeric:tabular-nums;flex:0 0 auto;}
   .step-caret{color:var(--muted);font-size:10px;flex:0 0 auto;transition:color .15s;}
   .step-head:hover:not(:disabled) .step-caret{color:var(--accent-hi);}

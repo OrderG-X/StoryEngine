@@ -1831,8 +1831,10 @@ export function useChat(params: UseChatParams): UseChatResult {
             },
             onToolResult: (info) => {
               if (!ownsCurrentWorkspace()) return;
-              if (typeof info.chapter === "number" && info.chapter !== operation.chapter) return;
-              if (info.toolName === "commit_apply") commitReconciliationDraft = null;
+              // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）也必须把对应步骤
+              // 落定——否则该步永远 running（金光不散、落盘成僵尸 partial，副产品 B）。章号不匹配只跳过
+              // 「工作区应用」（overview/草稿/流程态会写错章），不跳过步骤收尾。
+              const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
               project({
                 type: "tool-result",
                 toolCallId: stepIdFor(info.toolName, info.toolCallId),
@@ -1840,6 +1842,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
+              if (chapterMismatch) return;
+              if (info.toolName === "commit_apply") commitReconciliationDraft = null;
               // 去 AI 味体检：报告已随上面 project(output:info) 挂到这条 assistant 消息上（见 agentEventProjection
               // 的 check_ai_flavor 分支），在时间线里随对话渲染体检卡——不再写全局 store（旧挂件会一直钉底部）。
               // A（2026-06-18）：让本章流程状态在纯 agent 流程也走完整生命周期——据刚完成的工具推进 flowStatus，

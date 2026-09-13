@@ -11,7 +11,8 @@
  *   并（对已知工具）push 一张 agentCards{ status:"running" }，其 agentName 必须命中
  *   components/v2/agentTimelineModel.ts 的 agentDisplayLabel 字典，这样 AiChatCodex
  *   经 buildTimelineModel 零改就能渲染。
- * - tool-result 把对应 step / card 置 completed + endedAt；tool-error 置 failed（绝不静默失败）。
+ * - tool-result 把对应 step / card 置 completed + endedAt（裁决类只读工具的 ok:false 置 verdict「裁决未过」，
+ *   写类工具 ok:false 置 failed）；tool-error 置 failed（绝不静默失败）。
  *
  * 工具 → agent 名映射（与后端工具 id 对齐，命中 agentDisplayLabel 的 byAgentName）：
  *   read_state_overview → stateOverviewReader（显示「资料助手」）
@@ -20,6 +21,7 @@
  */
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
+import { isVerdictToolName } from "../shared/honesty-detection.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -215,16 +217,18 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
     case "tool-call":
       return applyToolCall(message, event);
     case "tool-result": {
-      // 结构性防谎报 + 待确认：
+      // 结构性防谎报 + 待确认 + 裁决：
       // - needsConfirmation===true（如删角色未确认）→「待确认」(暖色 pending，不是失败)，优先级最高。
-      // - ok===false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
+      // - ok===false 分两种（复审 T4 三轮修法 2）：裁决类只读工具（commit_preview，ok===canCommit）的
+      //   ok:false 是「裁决未过」（工具没崩、给了真实否定答案）→「裁决未过」落定形态，不红不绿；
+      //   其余工具（写类/出稿）的 ok:false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
       // - dryRun/action（prune 只读预览 / exemplars 只读 list）随步骤累加进 toolStep，
       //   供回合收尾的诚实探针（honesty-detection stepBacksWriteClaim）按粒度判写背书。
       const status = event.output?.needsConfirmation === true
         ? "needs_confirmation"
         : event.output?.ok === false
-          ? "failed"
+          ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
           : event.output?.partialMiss === true
             ? "partial"
             : "completed";
@@ -342,7 +346,7 @@ function appendTextSegment(
 function settleTool(
   message: ChapterMessage,
   toolCallId: string,
-  status: "completed" | "failed" | "needs_confirmation" | "partial",
+  status: "completed" | "failed" | "needs_confirmation" | "partial" | "verdict",
   endedAt: number,
   summary?: string,
   output?: AgentToolResultOutput,
@@ -365,8 +369,10 @@ function settleTool(
       : step,
   );
   // 把工具的真实 summary（成功摘要 / 失败原因）写进卡片，让用户看到引擎真实结果，而非只看 agent 文本。
+  // verdict 不落卡：出卡的工具（read_state_overview/foundation_write）都不是裁决类工具，防御性归 completed。
+  const cardStatus: ChapterAgentCard["status"] = status === "verdict" ? "completed" : status;
   const agentCards = message.agentCards?.map((card) =>
-    card.id === cardId ? { ...card, status, ...(detail ? { summary: detail } : {}) } : card,
+    card.id === cardId ? { ...card, status: cardStatus, ...(detail ? { summary: detail } : {}) } : card,
   );
   return {
     ...message,

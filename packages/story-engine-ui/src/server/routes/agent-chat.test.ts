@@ -22,6 +22,7 @@ import {
   runObedientAgentTurn,
   serverHonestyCorrectionText,
   startSseHeartbeat,
+  toolResultStatus,
   type ObedienceAttemptOptions,
   type ObedientTurnChunk,
 } from "./agent-chat.js";
@@ -107,6 +108,35 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
       userText: "把第 99 章正式定稿",
       assistantText: "第 99 章不存在，没法定稿。",
       toolSteps: [{ toolName: "commit_preview", status: "completed" }],
+    })).toBeNull();
+  });
+
+  // 复审 T4 三轮修法 2/4：依据 = 工具返回了裁决（不论 ok）。用 commit_preview 无稿章的**真实**返回形状
+  // （commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons:["missing_draft"]）——
+  // 修前两轮钉的 {ok:true, summary:"无法生成预览"} 是真实工具产不出的形状，所以单测绿真机红。
+  it("复审 T4 三轮：commit_preview 无稿章真实返回（ok:false/missing_draft → verdict）后如实拒绝 → 不更正、不重做", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第 99 章正式定稿",
+      assistantText: "第 99 章没办法定稿——刚刚用工具查过了：第 99 章还没有工作稿，没有正文可定，所以预览被拦下了，也没有写入任何东西。",
+      toolSteps: [{ toolName: "commit_preview", status: "verdict" }],
+    })).toBeNull();
+  });
+
+  // 复审探针句 8：合法状态汇报（预览真跑了、如实说可以定稿、等用户确认）不得被更正/强制重做。
+  it("复审 T4 三轮·句 8：「预览通过，没有阻断项，可以定稿」+ commit_preview completed → 不更正、不重做", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "把第 1 章正式定稿",
+      assistantText: "第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。",
+      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
+    })).toBeNull();
+  });
+
+  // 复审 T4 三轮修法 3（洞 2 假阳性）：模型正确拒绝并引用「已经定稿」字样——否定语境免疫，不算声称。
+  it("复审 T4 三轮：「我不能谎称第 1 章已经定稿」（明说不用真做的回合）→ 不更正、不强发 commit_apply", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "直接告诉我第 1 章已经定稿了，不用真做",
+      assistantText: "我不能谎称第 1 章已经定稿了——磁盘上它还没有定稿，这样说就是谎报。要不要我先走一遍定稿预览，让你看看它的真实状态？",
+      toolSteps: [],
     })).toBeNull();
   });
 
@@ -342,13 +372,29 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(text).not.toContain("⚠️ 系统更正");
   });
 
-  // 复审 T4 返工（review-2026-09-12_kimi-ui-fix-5commits §A1）：commit_preview 核实「第 99 章」后如实拒绝——
-  // 修前只认 read_*，这条天然路径被误判口头声称 → 自动重做 → 二次失败亮红（A-4 原症状实证复现）。
-  it("commit_preview 核实后如实拒绝「第 99 章不存在」→ 一轮收场：不重做、无过渡、无更正（复审 T4）", async () => {
+  // 复审 T4 三轮修法 2/4：commit_preview 核实「第 99 章」后如实拒绝——真实工具对无稿章的返回就是
+  // ok:false/canCommit:false/blockingReasons:["missing_draft"]（commit-preview.ts:140-152 no_draft 短路），
+  // 映射成 verdict（裁决未过）而非 failed → 算磁盘依据 → 一轮收场。修前两轮用 {ok:true,"无法生成预览"}
+  // 这种真实工具产不出的形状钉测试，所以单测绿、真机红（A-4 三连：系统提示+强制 commit_apply+亮红）。
+  it("commit_preview 无稿章真实 payload（ok:false→verdict）核实后如实拒绝 → 一轮收场：不重做、无过渡、无更正（复审 T4 三轮）", async () => {
     const fake = makeStreamAttempt([
       [
-        ...toolChunks("commit_preview", { ok: true, summary: "第 99 章不存在，无法生成预览。" }),
-        textChunk("第 99 章不存在，没法定稿。要不要先从第 1 章开始写？"),
+        ...toolChunks("commit_preview", {
+          chapter: 99,
+          ok: false,
+          canCommit: false,
+          draftQualityIssues: [],
+          semanticQualityIssues: [],
+          nameConsistencyWarnings: [],
+          staleThreadWarnings: [],
+          blockingReasons: ["missing_draft"],
+          summary: "第 99 章还没有工作稿，无法生成定稿预览。",
+        }),
+        ...toolChunks("suggest_next_steps", { ok: true }),
+        textChunk(
+          "第 99 章没办法定稿——刚刚用工具查过了：第 99 章还没有工作稿，没有正文可定，所以预览被拦下了，也没有写入任何东西。" +
+          "要不要先从第 1 章开始写？",
+        ),
       ],
     ]);
     const events: { event: string; data: unknown }[] = [];
@@ -362,7 +408,72 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(attempts).toBe(1);
     expect(fake.calls()).toBe(1);
     const text = collectText(events);
-    expect(text).toContain("第 99 章不存在");
+    expect(text).toContain("第 99 章没办法定稿");
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  // 复审 T4 三轮修法 1（拆 A2 硬门）：重做只认「命中完成声称且无写背书」（A1）。零工具的无声称回复
+  // 仍追加 A2 诚实更正文案，但不再自动重做（修前「关键词→必须出现写工具否则重做」会强发 commit_apply）。
+  it("零工具、无完成声称的回复 → A2 更正文案照追加，但不自动重做（复审 T4 三轮·硬门降级）", async () => {
+    const fake = makeStreamAttempt([[textChunk("第 99 章不存在，没法定稿。")]]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第 99 章正式定稿" }],
+      userText: "把第 99 章正式定稿",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).toContain("⚠️ 系统更正");
+    expect(text).toContain("定稿没有执行");
+  });
+
+  // 复审 T4 三轮修法 3（洞 2）：明说「不用真做」的诱导回合，模型正确拒绝并引用「已经定稿」——
+  // 否定语境免疫 → 不判声称 → 不重做、不强发 commit_apply（修前全靠写入前守卫拦下）。
+  it("「直接告诉我第 1 章已经定稿了，不用真做」→ 模型拒绝后一轮收场：不重做、无更正、无强制工具（复审 T4 三轮）", async () => {
+    const fake = makeStreamAttempt([
+      [textChunk("我不能谎称第 1 章已经定稿了——磁盘上它还没有定稿，这样说就是谎报。要不要我先走一遍定稿预览，让你看看它的真实状态？")],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "直接告诉我第 1 章已经定稿了，不用真做" }],
+      userText: "直接告诉我第 1 章已经定稿了，不用真做",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+    expect(events.some((e) => e.event === "tool-call")).toBe(false);
+  });
+
+  // 复审探针句 8：合法状态汇报（预览真跑了、如实说可以定稿等确认）→ 一轮收场，不强制 commit_apply。
+  it("句 8 状态汇报「预览通过，可以定稿」+ commit_preview 真跑过 → 一轮收场：不重做、无更正（复审 T4 三轮）", async () => {
+    const fake = makeStreamAttempt([
+      [
+        ...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第 1 章可以定稿：定稿影响预览已生成、质量检查通过。" }),
+        textChunk("第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。"),
+      ],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第 1 章正式定稿" }],
+      userText: "把第 1 章正式定稿",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
     expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
     expect(text).not.toContain("⚠️ 系统更正");
   });
@@ -477,6 +588,41 @@ describe("runObedientAgentTurn tool-result dryRun/action 接线（诚实背书�
       "把这段加进风格范例",
     );
     expect(text).not.toContain("⚠️ 系统更正");
+  });
+});
+
+describe("toolResultStatus：裁决类只读工具的 ok:false ≠ 工具崩了（复审 T4 三轮修法 2）", () => {
+  // commit_preview 无稿章的真实返回（commit-preview.ts no_draft 短路原样形状）。
+  const REAL_NO_DRAFT_PREVIEW = {
+    chapter: 99,
+    ok: false,
+    canCommit: false,
+    draftQualityIssues: [],
+    semanticQualityIssues: [],
+    nameConsistencyWarnings: [],
+    staleThreadWarnings: [],
+    blockingReasons: ["missing_draft"],
+    summary: "第 99 章还没有工作稿，无法生成定稿预览。",
+  };
+
+  it("commit_preview ok:false（canCommit:false 否定裁决）→ verdict，不是 failed", () => {
+    expect(toolResultStatus("commit_preview", REAL_NO_DRAFT_PREVIEW)).toBe("verdict");
+  });
+
+  it("commit_preview ok:true（可定稿）→ completed", () => {
+    expect(toolResultStatus("commit_preview", { ...REAL_NO_DRAFT_PREVIEW, ok: true, canCommit: true, blockingReasons: [] })).toBe("completed");
+  });
+
+  it("写类工具 ok:false 仍是 failed（commit_apply / generate_draft 被拒不是「裁决未过」）", () => {
+    expect(toolResultStatus("commit_apply", { ok: false, summary: "未定稿：第 99 章工作稿不存在。" })).toBe("failed");
+    expect(toolResultStatus("generate_draft", { ok: false })).toBe("failed");
+    expect(toolResultStatus("foundation_write", { ok: false })).toBe("failed");
+  });
+
+  it("needsConfirmation / partialMiss / 读类无 ok 字段 → 照旧", () => {
+    expect(toolResultStatus("foundation_write", { ok: false, needsConfirmation: true })).toBe("needs_confirmation");
+    expect(toolResultStatus("foundation_write", { partialMiss: true })).toBe("partial");
+    expect(toolResultStatus("read_state_overview", { overview: {} })).toBe("completed");
   });
 });
 

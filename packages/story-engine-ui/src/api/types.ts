@@ -697,7 +697,12 @@ export type ChapterChatIntent =
   | "write_story_settings"
   | "chapter_complete";
 
-export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped";
+/**
+ * running=进行中；completed=正常完成；failed=工具失败/被拒绝（红）；needs_confirmation=待确认；
+ * partial=部分完成；stopped=人喊停；verdict=裁决类只读工具（commit_preview）正常执行后的「否定裁决」
+ * （ok===canCommit:false，如「暂不可定稿」）——落定形态，不红不绿，不是失败。
+ */
+export type ToolStepStatus = "running" | "completed" | "failed" | "needs_confirmation" | "partial" | "stopped" | "verdict";
 
 export interface ToolStep {
   readonly id: string;
