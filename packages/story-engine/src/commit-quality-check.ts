@@ -80,21 +80,39 @@ export async function checkDraftBeforeCommit(input: {
     issues.push(errorIssue("missing_character_name", "Draft does not mention any known character name."));
   }
   if (content) {
+    // P2 铁律④：上下文包构造失败时此前静默跳过连续性检查——检查于是「通过」了，却没查任何东西，
+    // 给用户假的安全感。降级仍要（不能让一次坏读盘堵死入库），但必须留 warning 说明「没查」。
     const writingContextPack = await buildWritingContextPack({
       projectDir: input.projectDir,
       chapter: input.chapter,
       userDirection: "",
       maxTimelineEvents: 3,
-    }).catch(() => undefined);
+    }).catch((error) => {
+      issues.push({
+        type: "continuity_check_skipped",
+        message: `连续性检查已跳过：上下文构造失败（${error instanceof Error ? error.message : String(error)}）。入库仍可进行，但未校验与前文的一致性。`,
+        severity: "warning",
+      });
+      return undefined;
+    });
     if (writingContextPack) {
       issues.push(...checkWritingContextPackDraft(body, writingContextPack, input.chapter));
     }
+    // 与上面同口径（铁律④）：人称漂移检查读盘失败时不能静默跳过——不然「没查」被当成「查了没问题」。
+    // 降级仍要（不堵死入库），但留 warning 说明「没查」。
     const pronounDriftIssues = await findCrossChapterPronounDrift({
       projectDir: input.projectDir,
       chapter: input.chapter,
       draftBody: body,
       knownNames: characterNames,
-    }).catch(() => []);
+    }).catch((error) => {
+      issues.push({
+        type: "pronoun_drift_check_skipped",
+        message: `人称漂移检查已跳过：跨章比对失败（${error instanceof Error ? error.message : String(error)}）。入库仍可进行，但未校验人称一致性。`,
+        severity: "warning",
+      });
+      return [];
+    });
     issues.push(...pronounDriftIssues);
   }
 

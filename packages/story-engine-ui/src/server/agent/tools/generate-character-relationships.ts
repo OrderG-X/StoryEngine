@@ -136,6 +136,10 @@ export async function persistCharacterRoster(
 ): Promise<void> {
   if (updates.length === 0) return;
   const previous = await readCharacterMatrixLedger(projectDir);
+  // P2 修重复条目：键统一用 id || name。此前 map 键用 id||name、写回却用 next.id——
+  // 没 id 的条目 next.id 是 undefined，全部塌进同一个 undefined 键；而按 name 兜底匹配到的
+  // 既有条目又不在这个键上，于是同名角色被重复写入矩阵（前端矩阵同一个角色出现两行）。
+  // 读侧/写侧键现在逐字一致，同名兜底匹配命中后也写回同一个键。
   const byKey = new Map<string, CharacterMatrixEntry>(
     previous.entries.map((entry) => [entry.id || entry.name, entry]),
   );
@@ -162,7 +166,8 @@ export async function persistCharacterRoster(
       appearances: existing?.appearances ?? [],
       relationshipEvents: existing?.relationshipEvents ?? [],
     };
-    byKey.set(next.id, next);
+    // 写回键与读入键同构：id 缺省时回落到 name，绝不写 undefined 键
+    byKey.set(next.id || next.name, next);
   }
   const nextLedger: CharacterMatrixLedger = { version: "v0", entries: [...byKey.values()] };
   const path = join(projectDir, "story", "character-matrix.json");

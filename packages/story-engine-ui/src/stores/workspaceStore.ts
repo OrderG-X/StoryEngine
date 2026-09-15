@@ -44,12 +44,46 @@ function loadMessages(projectKey: string | null): readonly ChapterMessage[] {
   }
 }
 
-function saveMessages(messages: readonly ChapterMessage[], projectKey: string | null): void {
+function writeMessagesSync(messages: readonly ChapterMessage[], projectKey: string | null): void {
   try {
     sessionStorage.setItem(getProjectStorageKey(projectKey), JSON.stringify(messages));
   } catch {
     // Ignore quota errors
   }
+}
+
+// 流式更新期间 updateMessage 每个增量都调 saveMessages：整条历史 JSON.stringify + 同步 setItem
+// 在主线程上是 O(回合字数 × 历史条数)，长稿流到几千 token 会把 UI 卡顿成幻灯片。节流到至多每
+// 250ms 写一次，且总是写「最新一条」——首次调用排期、期间只刷新待写值、到点落盘最终状态。
+const MESSAGE_SAVE_THROTTLE_MS = 250;
+let pendingSave: { readonly messages: readonly ChapterMessage[]; readonly projectKey: string | null } | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function saveMessages(messages: readonly ChapterMessage[], projectKey: string | null): void {
+  pendingSave = { messages, projectKey };
+  if (saveTimer !== null) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (pendingSave === null) return;
+    const pending = pendingSave;
+    pendingSave = null;
+    writeMessagesSync(pending.messages, pending.projectKey);
+  }, MESSAGE_SAVE_THROTTLE_MS);
+}
+
+/**
+ * 立即把节流里攒着的待写尾巴同步落盘。撤销重载（undoToTurn 写完截断立刻 window.location.reload）
+ * 与切项目（setProjectKey）前必须调：节流窗口内的 reload 会读到旧 sessionStorage，孤儿气泡复活。
+ */
+export function flushPendingMessageSave(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (pendingSave === null) return;
+  const pending = pendingSave;
+  pendingSave = null;
+  writeMessagesSync(pending.messages, pending.projectKey);
 }
 
 function clearMessages(projectKey: string | null): void {
@@ -61,6 +95,8 @@ function clearMessages(projectKey: string | null): void {
 }
 
 export function setProjectKey(projectKey: string | null): void {
+  // 切走前把上一项目的待写尾巴落盘（写的是它自己当时的 key），否则新项目的 sessionStorage 会覆盖掉尾巴。
+  flushPendingMessageSave();
   currentProjectKey = projectKey;
   const persistedMessages = loadMessages(projectKey);
   if (persistedMessages.length === 0) return;

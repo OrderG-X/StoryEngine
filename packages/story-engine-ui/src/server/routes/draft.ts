@@ -39,6 +39,7 @@ import {
 } from "../lib/project-io.js";
 import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
+import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { createSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
@@ -105,6 +106,8 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     const body = await readJsonBody(req);
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
+    // P1-8：非流式出稿路此前漏校验，会在任意家目录 git init/改提交身份/提交
+    await assertStoryEngineProject(projectDir);
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const rawChapterGoal = readString(body.chapterGoal) ?? `继续第 ${chapter} 章。`;
     const writerClient = await createConfiguredWriterClient("fastDraft");
@@ -212,6 +215,9 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
 
 async function handleGenerateDraftStream(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
   const sendEvent = (event: string, data: unknown) => {
+    // P2：连接已断/响应已结束时静默跳过（客户端刷新或断线时常见，不是错误）；
+    // headersSent 之前禁止写帧——裸 res.write 会隐式刷出默认 200 头，content-type 不对，SSE 帧就废了
+    if (res.writableEnded || res.destroyed || !res.headersSent) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
@@ -249,7 +255,10 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
     });
-    sendEvent("status", { message: "正在读取故事状态和写作上下文。" });
+    // 模型思考/非流式重试期间连接会静默数十秒——没有心跳会被浏览器/代理按空闲超时掐掉
+    const heartbeat = startSseHeartbeat(res);
+    try {
+      sendEvent("status", { message: "正在读取故事状态和写作上下文。" });
 
     const { buildWriterContext } = await import("@actalk/story-engine");
     const builtContext = await buildWriterContext({
@@ -417,7 +426,10 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
       contextBudget: contextBudgetPayload(contextRanking),
       characterSelection,
     });
-    res.end();
+      res.end();
+    } finally {
+      heartbeat.stop();
+    }
   } catch (error) {
     if (!res.headersSent) {
       res.writeHead(200, {
@@ -440,6 +452,7 @@ async function handleDraftQuality(req: import("node:http").IncomingMessage, res:
     const body = await readJsonBody(req);
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
+    await assertStoryEngineProject(projectDir); // P1-8：统一项目校验
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     // 共享编排在 services/quality-service.ts（与 quality_check 工具同调）。本路由的显式策略：
     // trustExplicit:true（前端传【编辑器实时正文】，是用户当下看到的真稿、可能比盘新 → 顶格优先，D14；
@@ -475,6 +488,7 @@ async function handleDraftDirectEdit(req: import("node:http").IncomingMessage, r
     const body = await readJsonBody(req);
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
+    await assertStoryEngineProject(projectDir); // P1-8：统一项目校验
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const instruction = requireBodyString(body.instruction, "修改要求不能为空。");
     const draftContent = requireBodyString(body.draftContent, "当前工作稿不能为空。");
@@ -615,6 +629,7 @@ async function handleDraftAIReview(req: import("node:http").IncomingMessage, res
     const body = await readJsonBody(req);
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
+    await assertStoryEngineProject(projectDir); // P1-8：统一项目校验
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     // 共享编排在 services/review-service.ts（与 ai_review 工具同调）。本路由的显式策略：
     // trustExplicit:true（前端传【编辑器实时正文】，可信、顶格优先，D19）+ deterministicQuality 预传通道。

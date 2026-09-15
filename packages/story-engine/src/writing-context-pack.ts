@@ -165,6 +165,9 @@ export interface WritingContextPack {
   readonly sourceTrace: readonly WritingContextSourceTrace[];
 }
 
+/** 本包（受保护段）内保留的最近时间线事件条数上限。完整时间线走独立可裁的 timeline_events 段。 */
+const PACK_TIMELINE_EXCERPT = 3;
+
 export interface BuildWritingContextPackInput {
   readonly projectDir: string;
   readonly chapter: number;
@@ -248,7 +251,17 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     relevantCharacterIds: input.selectedCharacterIds,
     closedStatuses: ["completed", "stale"],
   }).selected.slice(0, 4); // 原为 2
-  const recentTimelineEvents = timelineEvents.slice(-Math.max(1, input.maxTimelineEvents ?? 3)).slice(-3);
+  // 「最近时间线事件」须按【章号】取最近 N 条，不能按磁盘顺序——commit-engine 落盘时把
+  // 重提章的事件挪到文件末尾（`[...existing.filter(e => e.chapter !== chapter), ...newEvents]`），
+  // 磁盘顺序在重提中间章后会错（重提第3章后尾部是 [ch6,ch7,ch3]，slice(-3) 取到错的一组）。
+  // 2026-09-15 审计 P1-7。
+  // 本包是【受保护段】（ranker 不能裁它）：完整时间线由独立可裁的 timeline_events 段承载
+  // （context-gateway，吃 maxTimelineEvents 全量、超预算由 ranker 整删）。包内只留极小摘要——
+  // 不然 maxTimelineEvents=400 会把受保护段顶到 2 万 token，预算器无从下手（长篇收口实测）。
+  const sortedTimelineEvents = [...timelineEvents].sort((a, b) => a.chapter - b.chapter);
+  const recentTimelineEvents = sortedTimelineEvents.slice(
+    -Math.max(1, Math.min(input.maxTimelineEvents ?? PACK_TIMELINE_EXCERPT, PACK_TIMELINE_EXCERPT)),
+  );
   const protectedSecrets = unique([
     ...(storyBible?.protectedSecrets ?? []),
     ...(storyBible?.coreMysteries ?? []),
@@ -352,8 +365,17 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       resourceRules: writingRules?.genreRequirements ?? [],
       socialOrder: worldBible?.socialOrder ?? [],
       factions: (worldBible?.factions ?? []).map(formatFaction),
-      conflictSources: unique([...worldState.activeConflicts, worldCore.mainConflict, ...(storyBible?.centralConflicts ?? [])]),
-      hiddenTruths: unique([...(storyBible?.coreMysteries ?? []), ...worldState.knownSecrets]),
+      // P2：activeConflicts/knownSecrets 只增不减，长篇会无限堆积进提示词。世界圣经里的常设冲突/隐情
+      // 先占位（不会过期），世界状态取追加序最新的若干条。
+      conflictSources: unique([
+        worldCore.mainConflict,
+        ...(storyBible?.centralConflicts ?? []),
+        ...recentWorldItems(worldState.activeConflicts),
+      ]).slice(0, 8),
+      hiddenTruths: unique([
+        ...(storyBible?.coreMysteries ?? []),
+        ...recentWorldItems(worldState.knownSecrets),
+      ]).slice(0, 8),
       protectedSecrets,
     },
     assetContext: {
@@ -627,4 +649,9 @@ function formatTravelRule(rule: { readonly targetLocation: string; readonly meth
 
 function unique(values: readonly string[]): readonly string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+/** 只增不减的累积列表里取追加序最新的若干条（老的留在盘上、不进提示词） */
+function recentWorldItems(values: readonly string[]): readonly string[] {
+  return values.slice(-6);
 }

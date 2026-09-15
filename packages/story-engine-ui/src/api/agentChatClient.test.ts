@@ -408,6 +408,99 @@ describe("streamAgentChat", () => {
     expect((received?.qualityReport as { blocking?: readonly unknown[] }).blocking).toHaveLength(1);
   });
 
+  it("translates commit_preview 裁决（R3）→ commitPreview for 定稿预览卡（不靠模型转述）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "p1",
+          toolName: "commit_preview",
+          output: {
+            ok: false,
+            chapter: 7,
+            canCommit: false,
+            blockingReasons: ["第 7 章还没有工作稿。"],
+            summary: "暂不可定稿。",
+            draftQualityIssues: [{ severity: "error", type: "too_short", message: "正文过短" }],
+            semanticQualityIssues: [],
+          },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+
+    let received: { commitPreview?: unknown } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received = info; },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    expect(received?.commitPreview).toEqual({
+      chapter: 7,
+      canCommit: false,
+      blockingReasons: ["第 7 章还没有工作稿。"],
+      summary: "暂不可定稿。",
+      draftIssueCount: 1,
+      semanticIssueCount: 0,
+    });
+  });
+
+  it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", { toolCallId: "p1", toolName: "commit_preview", output: { ok: true, summary: "可以。" } }),
+        frame("done", {}),
+      ]),
+    ));
+
+    let received: { commitPreview?: unknown } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received = info; },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    expect(received?.commitPreview).toBeUndefined();
+  });
+
+  it("routes an SSE status event to onStatus（R4：历史裁剪等说明不静默吞掉）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("status", { message: "对话历史较长，本次只把最近 12 条发给模型。" }),
+        frame("text-delta", { text: "我看了一下。" }),
+        frame("done", {}),
+      ]),
+    ));
+
+    const statuses: string[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "继续" }] },
+      {
+        onTextDelta: () => undefined,
+        onStatus: (message) => statuses.push(message),
+        onToolCall: () => undefined,
+        onToolResult: () => undefined,
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    expect(statuses).toEqual(["对话历史较长，本次只把最近 12 条发给模型。"]);
+  });
+
   it("routes an SSE error event to onError with retryable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

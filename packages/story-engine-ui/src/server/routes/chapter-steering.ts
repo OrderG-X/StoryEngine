@@ -4,6 +4,7 @@
  * 本文件只剩 HTTP 入参解析、projectPath 守卫与状态码/字段包装（D26 输入面、D28 的 400 渲染）。
  */
 import {
+  assertStoryEngineProject,
   guardProjectPath,
   readJsonBody,
   readString,
@@ -34,6 +35,7 @@ export function registerChapterSteeringRoutes(middlewares: MiddlewareStack): voi
         return;
       }
       if (!guardProjectPath(res, projectDir)) return;
+      await assertStoryEngineProject(projectDir); // P1-8：统一项目校验
 
       const maxSuggestions = readPositiveInteger(body.maxSuggestions);
       const result = await runChapterSteering({

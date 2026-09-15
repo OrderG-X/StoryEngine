@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
+  assertStoryEngineProject,
   guardProjectPath,
   isSafeProjectPath,
   readJsonBody,
@@ -89,6 +90,8 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
       });
       return;
     }
+    // P1-8：须验明是 StoryEngine 项目，否则会在任意家目录 git init/改提交身份/提交
+    await assertStoryEngineProject(projectDir);
     const chapter = readPositiveInteger(body.chapter);
     if (chapter === undefined) {
       writeCommitPreviewBlocked(res, 400, {
@@ -195,6 +198,7 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
     const body = await readJsonBody(req);
     const projectDir = requireBodyString(body.projectPath, "Project path is required.");
     if (!guardProjectPath(res, projectDir)) return;
+    await assertStoryEngineProject(projectDir); // P1-8：统一项目校验
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
     // 项目级 in-flight 忙碌门（HTTP 并发外皮）：同项目只允许一个正式定稿在执行。

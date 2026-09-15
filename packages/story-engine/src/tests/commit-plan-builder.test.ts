@@ -79,9 +79,8 @@ describe("commit plan builder", () => {
         },
       }),
     ]);
-    expect(result.commitPlan?.worldUpdates).toEqual({
-      currentPhase: "chapter_1_committed",
-    });
+    // P2：不再写 chapter_N_committed 水印——自动路径无阶段推进证据，保留作者既有设定
+    expect(result.commitPlan?.worldUpdates).toEqual({});
     expect(result.semanticSummary).toMatchObject({
       chapter: 1,
       mainEvent: "林远推开外院园圃的木门。",
@@ -149,7 +148,6 @@ describe("commit plan builder", () => {
       },
     ]);
     expect(result.commitPlan?.worldUpdates).toEqual({
-      currentPhase: "chapter_1_committed",
       activeHooks: ["h-ledger"],
     });
   });

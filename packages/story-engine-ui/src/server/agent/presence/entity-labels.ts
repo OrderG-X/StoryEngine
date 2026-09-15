@@ -7,8 +7,12 @@
  */
 import { readCharacterBible } from "@actalk/story-engine";
 
-/** 内部角色 hash id 的形状（如 char-ffe5af）。匹配上且解析不到名字 → 中性占位，绝不泄露裸 hash。 */
-const INTERNAL_CHARACTER_ID = /^char-[0-9a-z]+$/iu;
+/**
+ * 内部实体 hash id 的形状（如 char-ffe5af / asset-3c2d / thread-9a1b）。匹配上且解析不到名字
+ * → 中性占位，绝不泄露裸 hash。做厚工具的 targetIds 会带 asset-/location- 等各类引擎 slug，
+ * 都按同一规则兜底。
+ */
+const INTERNAL_ENTITY_ID = /^(?:char|asset|location|thread|hook|fact|lead|goal|chapter)-[0-9a-z]+$/iu;
 
 /** 读角色册 → id→角色名 映射（解析裸 char-id 用）。读失败/无册 → 空 Map（调用方据此回落，不崩）。 */
 export async function readCharacterNameById(projectDir: string): Promise<Map<string, string>> {
@@ -29,7 +33,7 @@ export async function readCharacterNameById(projectDir: string): Promise<Map<str
 export function resolveEntityLabel(ref: string, nameById: ReadonlyMap<string, string>): string {
   const name = nameById.get(ref);
   if (name) return name;
-  return INTERNAL_CHARACTER_ID.test(ref) ? "「未知角色」" : ref;
+  return INTERNAL_ENTITY_ID.test(ref) ? "「未知角色」" : ref;
 }
 
 /** 批量解析（如 timeline 事件的 participants）。 */

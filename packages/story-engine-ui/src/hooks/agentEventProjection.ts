@@ -71,11 +71,14 @@ export interface AgentToolResultOutput {
   readonly nameConsistencyWarnings?: ChapterMessage["nameConsistencyWarnings"];
   /** commit_preview 专属：伏笔/线索待收口提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「伏笔/线索待收口」提醒卡。 */
   readonly staleThreadWarnings?: ChapterMessage["staleThreadWarnings"];
+  /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
+  readonly commitPreview?: ChapterMessage["commitPreview"];
 }
 
 export type AgentProjectionEvent =
   | { readonly type: "text-delta"; readonly text: string }
   | { readonly type: "reasoning-delta"; readonly text: string }
+  | { readonly type: "status"; readonly text: string }
   | { readonly type: "tool-call"; readonly toolCallId: string; readonly toolName: string; readonly startedAt: number }
   | {
       readonly type: "tool-result";
@@ -214,6 +217,9 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         thinking: (message.thinking ?? "") + event.text,
         segments: appendTextSegment(message.segments, "reasoning", event.text),
       };
+    case "status":
+      // R4：服务端状态说明（如历史窗口被裁剪）照实挂上展示，绝不静默吞掉；不进正文——不替模型说话。
+      return { ...message, statusNotes: [...(message.statusNotes ?? []), event.text] };
     case "tool-call":
       return applyToolCall(message, event);
     case "tool-result": {
@@ -257,12 +263,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       if (event.toolName === "quality_check" && event.output?.qualityReport) {
         return { ...withEffects, qualityReport: event.output.qualityReport };
       }
-      // commit_preview 的两类固定提醒卡（不管模型嘴上怎么说都照实显示）可同时出现，合并挂上、别互相顶掉：
+      // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
+      //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。
       //   · nameConsistencyWarnings：本章名字疑似把已确立角色名写歪（近形错名）。
       //   · staleThreadWarnings：伏笔/线索超 3 章没推进（埋了不收的遗漏）。
       if (event.toolName === "commit_preview") {
         return {
           ...withEffects,
+          ...(event.output?.commitPreview ? { commitPreview: event.output.commitPreview } : {}),
           ...(event.output?.nameConsistencyWarnings?.length ? { nameConsistencyWarnings: event.output.nameConsistencyWarnings } : {}),
           ...(event.output?.staleThreadWarnings?.length ? { staleThreadWarnings: event.output.staleThreadWarnings } : {}),
         };

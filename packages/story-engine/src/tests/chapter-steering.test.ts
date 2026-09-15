@@ -166,6 +166,62 @@ describe("Chapter Steering Pack V0", () => {
     expect(draft.foundationContext.worldRuleReminders).toEqual([]);
     expect(draft.generatedChapterGoalPreview).toContain("下一章去地下车库确认信号源");
   });
+
+  // P2：风险提醒是安全告警，绝不能被普通建议挤出预算。此前 nonRiskLimit 的 Math.max(3,...) 保底
+  // 让总数超预算，最终 slice(0, max) 把排在末尾的「不要提前揭开隐藏真相」（高危）静默砍掉——
+  // 用户和模型都看不到这条提醒，隐藏真相就可能被提前揭开。
+  it("keeps every high-severity risk inside a tight suggestion budget", async () => {
+    const projectDir = await createSteeringFixture();
+
+    const draft = await buildChapterSteeringDraft({
+      projectDir,
+      userDirection: "下一章去地下车库确认信号源",
+      chapter: 8,
+      maxSuggestions: 3, // 比风险条数还少——预算极度紧张
+    });
+
+    const risks = draft.suggestions.filter((suggestion) => suggestion.type === "risk");
+    // 高危提醒一条不缺；低危的可以让位
+    expect(risks.some((risk) => risk.title === "不要提前揭开隐藏真相")).toBe(true);
+    expect(draft.suggestions).toHaveLength(3);
+  });
+
+  it("discloses risksTruncated instead of silently dropping risk warnings", async () => {
+    const projectDir = await createSteeringFixture();
+    // 造出 4 条风险全开的极端项目：mustAvoid 冲突 + 待清理线索 + 保护秘密 + 常规数量风险
+    await writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
+      threads: [{
+        id: "intent-stale", type: "intent", title: "打听避难所广播", status: "open",
+        firstSeenChapter: 1, lastTouchedChapter: 1, evidence: ["林澈提到广播。"],
+      }],
+    }, null, 2)}\n`, "utf-8");
+
+    const draft = await buildChapterSteeringDraft({
+      projectDir,
+      userDirection: "去避难所看看", // 命中 mustAvoid → 触发冲突风险
+      mustAvoid: ["避难所"],
+      chapter: 30, // 线索停滞 29 章 → 待清理
+      maxSuggestions: 3, // 预算 3 < 风险 4：放不下
+    });
+
+    const risks = draft.suggestions.filter((suggestion) => suggestion.type === "risk");
+    expect(risks.length).toBe(3);
+    // 高危优先保留；被砍的是低危条目
+    expect(risks.every((risk) => risk.risk !== "low" || risks.filter((r) => r.risk === "high").length >= 2)).toBe(true);
+    // 预算放不下全部风险时必须如实披露砍了几条（铁律④：永不静默）
+    expect(draft.risksTruncated).toBe(1);
+  });
+
+  it("does not report risksTruncated when the budget fits every risk", async () => {
+    const projectDir = await createSteeringFixture();
+    const draft = await buildChapterSteeringDraft({
+      projectDir,
+      userDirection: "下一章去地下车库确认信号源",
+      chapter: 8,
+      maxSuggestions: 10,
+    });
+    expect(draft.risksTruncated).toBeUndefined();
+  });
 });
 
 async function createSteeringFixture(): Promise<string> {

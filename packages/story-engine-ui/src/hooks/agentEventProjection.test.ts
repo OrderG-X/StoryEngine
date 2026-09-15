@@ -468,6 +468,69 @@ describe("projectAgentEvent", () => {
     expect(msg.staleThreadWarnings).toHaveLength(1);
   });
 
+  it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
+    let msg = emptyAssistantMessage("preview-verdict");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "p1",
+      toolName: "commit_preview",
+      endedAt: 2,
+      output: {
+        ok: false,
+        commitPreview: {
+          chapter: 7,
+          canCommit: false,
+          blockingReasons: ["第 7 章还没有工作稿。"],
+          summary: "暂不可定稿。",
+          draftIssueCount: 2,
+        },
+      },
+    });
+    expect(msg.commitPreview).toEqual({
+      chapter: 7,
+      canCommit: false,
+      blockingReasons: ["第 7 章还没有工作稿。"],
+      summary: "暂不可定稿。",
+      draftIssueCount: 2,
+    });
+  });
+
+  it("commit_preview 可定稿（R3）→ 挂 commitPreview，与名字漂移提醒卡并存不顶掉", () => {
+    let msg = emptyAssistantMessage("preview-ok");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "p1",
+      toolName: "commit_preview",
+      endedAt: 2,
+      output: {
+        ok: true,
+        commitPreview: { chapter: 7, canCommit: true, summary: "可以定稿。" },
+        nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
+      },
+    });
+    expect(msg.commitPreview?.canCommit).toBe(true);
+    expect(msg.nameConsistencyWarnings).toHaveLength(1);
+  });
+
+  it("status 事件（R4）→ 挂 statusNotes 照实展示，且不污染助手正文", () => {
+    const msg = project([
+      { type: "status", text: "对话历史较长，本次只把最近 12 条发给模型。" },
+      { type: "text-delta", text: "我看了一下。" },
+    ]);
+    expect(msg.statusNotes).toEqual(["对话历史较长，本次只把最近 12 条发给模型。"]);
+    expect(msg.content).toBe("我看了一下。");
+  });
+
+  it("多条 status 事件按序累加（R4）", () => {
+    const msg = project([
+      { type: "status", text: "第一条说明。" },
+      { type: "status", text: "第二条说明。" },
+    ]);
+    expect(msg.statusNotes).toEqual(["第一条说明。", "第二条说明。"]);
+  });
+
   it("generate_draft 出稿被拒(ok:false、无 snapshotId) → 步骤 failed 且不染「正文·草稿」徽标(M4)", () => {
     let msg = emptyAssistantMessage("m4-fail");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });

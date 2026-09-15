@@ -82,7 +82,10 @@ export const generateLocationEnrichmentTool = writeTool({
   outputSchema,
   run: async ({ input, projectDir }) => {
     const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
-    const target = parseEntityTarget(input);
+    const target = parseEntityTarget({
+      ...input,
+      nameById: new Map(overview.characterMatrix.characters.map((c) => [c.id, c.name])),
+    });
     const locations = filterByEntityTarget(collectLocationEntities(overview.locationDetailSummary), target);
     if (target && locations.length === 0) {
       return {

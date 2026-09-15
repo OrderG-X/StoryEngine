@@ -456,6 +456,12 @@ export interface StateOverviewFoundationCompleteness {
 const DEFAULT_MAX_TIMELINE_EVENTS = 5;
 const MAX_ITEMS = 12;
 const MAX_TEXT = 160;
+/** 只增不减的累积列表里，取追加序最新的若干条（老的留在盘上、不进概览） */
+const MAX_RECENT_WORLD_ITEMS = 6;
+
+function recentItems(values: readonly string[]): readonly string[] {
+  return values.slice(-MAX_RECENT_WORLD_ITEMS);
+}
 
 export async function buildStateOverview(input: BuildStateOverviewInput): Promise<StateOverview> {
   return withProjectCommitLock(input.projectDir, async () => {
@@ -632,14 +638,17 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
         ...threadPool.threads.flatMap((thread) => thread.relatedLocations ?? []),
         ...arcGoalPool.goals.flatMap((goal) => goal.relatedLocations ?? []),
       ]).slice(0, MAX_ITEMS),
+      // P2：activeConflicts/knownSecrets 按章追加、只增不减，老条目会无限堆积。用户的常设世界规则
+      // 必须先占位（它们不会过期），冲突/隐情取最近若干条（slice(-N) 保留追加序最新的），
+      // 否则写到第 50 章时「第 1 章的冲突」会把世界规则全线挤出概览。
       importantFacts: unique([
-        ...worldState.activeConflicts,
         ...worldCore.rules,
+        ...recentItems(worldState.activeConflicts),
       ].map((item) => truncate(item))).slice(0, MAX_ITEMS),
       protectedSecrets: unique([
-        ...worldState.knownSecrets,
         ...storyBibleSummary.coreMysteries,
         ...storyBibleSummary.protectedSecrets,
+        ...recentItems(worldState.knownSecrets),
       ].map((item) => truncate(item))).slice(0, MAX_ITEMS),
     },
     storyFoundation: {

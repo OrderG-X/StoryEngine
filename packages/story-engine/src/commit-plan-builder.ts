@@ -290,7 +290,8 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
         },
       ],
       worldUpdates: {
-        currentPhase: `chapter_${input.chapter}_committed`,
+        // P2：不再写 chapter_N_committed 水印——它每章覆盖作者/模型已设定的故事阶段（铁律②：
+        // 写操作要可撤销、不破坏用户已确立的设定）。自动路径没有阶段推进的证据，保留既有值。
         ...([...matchedHooks.map((hook) => hook.id), ...hookTracking.updates.map((update) => update.id)].length > 0
           ? { activeHooks: unique([...matchedHooks.map((hook) => hook.id), ...hookTracking.updates.map((update) => update.id)]) }
           : {}),

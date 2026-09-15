@@ -724,7 +724,9 @@ describe("story-engine commit-draft CLI", () => {
       }),
     ]);
     await expect(readWorldState(projectDir)).resolves.toMatchObject({
-      currentPhase: "chapter_1_committed",
+      // P2：提交不再用「chapter_N_committed」水印覆盖用户设定的 currentPhase——
+      // 作者填的「开篇」必须跨定稿保留（旧实现每章提交都把它顶成水印）。
+      currentPhase: "开篇",
       activeConflicts: [],
       activeHooks: ["h-ledger"],
       knownSecrets: [],

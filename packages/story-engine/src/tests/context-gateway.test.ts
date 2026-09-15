@@ -610,6 +610,39 @@ describe("StoryEngine-NG ContextGateway", () => {
     // The early+relevant thread should rank above the recent but irrelevant thread
     expect(openLeadIds.indexOf("lead-early-relevant")).toBeLessThan(openLeadIds.indexOf("lead-recent-irrelevant"));
   });
+
+  // P2 铁律④（永不静默）：损坏的 timeline/events.json 此前双重 catch 后静默降级为 []，
+  // 模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。降级照做（不炸出稿），
+  // 但失败原因必须以 read_failures 段进上下文，让模型知道自己在盲写并如实转达用户。
+  it("corrupt timeline/events.json degrades to empty but surfaces a read_failures section", async () => {
+    const projectDir = await createFixtureProject();
+    await writeFile(join(projectDir, "timeline", "events.json"), "{not-json", "utf-8");
+
+    const envelope = await buildWriterContext({
+      projectDir,
+      chapter: 8,
+      chapterGoal: "追查矿藏失踪。",
+      maxTimelineEvents: 3,
+    });
+
+    const failures = envelope.sections.find((s) => s.name === "read_failures")?.content as
+      | { failures: readonly string[] }
+      | undefined;
+    expect(failures?.failures.length).toBeGreaterThan(0);
+    expect(failures!.failures.join(" ")).toContain("时间线事件");
+    // 健康项目里这一段根本不存在——只有坏读盘才出现，不污染正常上下文
+  });
+
+  it("healthy projects never carry a read_failures section", async () => {
+    const projectDir = await createFixtureProject();
+    const envelope = await buildWriterContext({
+      projectDir,
+      chapter: 8,
+      chapterGoal: "追查矿藏失踪。",
+      maxTimelineEvents: 3,
+    });
+    expect(envelope.sections.some((s) => s.name === "read_failures")).toBe(false);
+  });
 });
 
 async function createFixtureProject(): Promise<string> {

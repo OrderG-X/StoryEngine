@@ -346,6 +346,29 @@ export async function runObedientAgentTurn(args: {
   // 诚实检测按【整回合累计】口径：首轮真跑了 commit_preview、重做轮只补 commit_apply 时，
   // 只看重做轮会把 preview 误判成「没执行」（组合意图）。声称文本与工具集都跨尝试累计。
   const toolSteps = new Map<string, HonestyToolStep>();
+  // 空工具调用 id 兜底：上游三层（ai-sdk / openai-compatible / Mastra）正常都保证带 id，但适配器
+  // 抽风给空串时，所有空 id 会塌进 toolSteps 的同一个 key —— 前一张工具卡被后一张覆盖、结果配错对、
+  // 时间线卡死。给空 id 分配确定性合成 id；同工具名的 call/result 按 FIFO 配对，保证仍能对上。
+  const syntheticQueues = new Map<string, string[]>();
+  let syntheticCounter = 0;
+  const syntheticToolName = (raw: unknown): string =>
+    typeof raw === "string" && raw.trim() ? raw.trim() : "tool";
+  const allocateSyntheticToolCallId = (raw: unknown, toolName: unknown): string => {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (id) return id;
+    const name = syntheticToolName(toolName);
+    const next = `synthetic-${name}-${(syntheticCounter += 1)}`;
+    const queue = syntheticQueues.get(name) ?? [];
+    queue.push(next);
+    syntheticQueues.set(name, queue);
+    return next;
+  };
+  const reuseSyntheticToolCallId = (raw: unknown, toolName: unknown): string => {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (id) return id;
+    const name = syntheticToolName(toolName);
+    return syntheticQueues.get(name)?.shift() ?? `synthetic-${name}-${(syntheticCounter += 1)}`;
+  };
   let turnText = "";
 
   for (let attempt = 0; ; attempt += 1) {
@@ -377,7 +400,7 @@ export async function runObedientAgentTurn(args: {
         }
         case "tool-call": {
           sawToolActivity = true;
-          const toolCallId = chunk.payload?.toolCallId ?? "";
+          const toolCallId = allocateSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
           toolSteps.set(toolCallId, {
             toolName: chunk.payload?.toolName,
             status: "running",
@@ -391,7 +414,7 @@ export async function runObedientAgentTurn(args: {
         }
         case "tool-result": {
           sawToolActivity = true;
-          const toolCallId = chunk.payload?.toolCallId ?? "";
+          const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
           const resultPayload = chunk.payload?.result as
             | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown }
             | undefined;
@@ -416,7 +439,7 @@ export async function runObedientAgentTurn(args: {
           // 工具内部抛错（如缺 projectDir / 落盘失败）。绝不静默失败，且必须收尾正在 running 的
           // 步骤/卡片：发独立 tool-error 事件（带 toolCallId+toolName），前端据此把对应步骤置 failed
           // 再 append 错误消息——而非复用 error 事件（那样无法定位是哪张卡，时间线会卡在 running）。
-          const toolCallId = chunk.payload?.toolCallId ?? "";
+          const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
           toolSteps.set(toolCallId, {
             toolName: chunk.payload?.toolName,
             status: "failed",
@@ -543,7 +566,11 @@ async function handleAgentChat(
     // 进站消毒（r8 任务②）：把历史里被系统更正/作废过的编造回执换成短桩，打断「编造回执成为
     // 后续回合造假范本」的正反馈污染（user 消息原样保留）。再截历史窗口（r8 二轮）：正常成功回执
     // 堆多了同样诱发模式续写（ch93 实锤），只保留最近一段——故事状态真值源在磁盘/工具，不在聊天历史。
-    const messages = capChatHistoryWindow(sanitizeCorrectedAssistantHistory(readChatMessages(body.messages)));
+    const incomingMessages = sanitizeCorrectedAssistantHistory(readChatMessages(body.messages));
+    const messages = capChatHistoryWindow(incomingMessages);
+    // R4 绝不静默：历史被裁掉时必须告诉用户——不然用户以为前面说过的话 agent 还记得，
+    // 得到的回复却像失忆。故事状态真值在磁盘/工具，但聊天上下文确实被截了。
+    const droppedHistoryCount = incomingMessages.length - messages.length;
     if (messages.length === 0) {
       writeJson(res, 400, { ok: false, error: "对话内容不能为空。" });
       return;
@@ -571,6 +598,14 @@ async function handleAgentChat(
     });
     // 工具长调用期间 SSE 会长时间静默，靠心跳喂活客户端 90s 空闲看门狗，避免误判超时掐流。
     stopHeartbeat = startSseHeartbeat(res);
+
+    if (droppedHistoryCount > 0) {
+      sendEvent("status", {
+        message:
+          `对话历史较长，为保证聚焦，本次只把最近 ${messages.length} 条对话发给模型（更早的 ${droppedHistoryCount} 条不参与本轮判断）。` +
+          "故事状态以资料库和工具结果为准，如需让我回忆前面的安排，请直接再说一遍。",
+      });
+    }
 
     // 读全书章节文件状态（空/有草稿/已入库）：①取当前章给 agent 抓手；②派生「全书磁盘真相」硬约束
     // 注入 system，结构性防谎报（A3）。这次扫盘的全书结果不再只取一条就丢。读盘失败不阻塞聊天。

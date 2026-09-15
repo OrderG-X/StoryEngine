@@ -86,9 +86,21 @@ import {
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
 
-/** 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。 */
+/**
+ * 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。
+ *
+ * P2 铁律④（永不静默）：此前 `.catch(() => undefined)` 把所有读盘错误都塌成「未入库」——
+ * 权限不足（EACCES）、路径被目录占位（EISDIR）时，已入库的章会被误判成没入库，
+ * 进而触发 advancePastCommittedFrontier 把出稿目标悄悄推进到下一章（写串章号）。
+ * 只有 ENOENT 才真的代表「没入库」；其它错误必须如实上抛。
+ */
 export async function isChapterCommitted(projectDir: string, chapter: number): Promise<boolean> {
-  const content = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(() => undefined);
+  const content = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    },
+  );
   return content !== undefined && content.trim().length > 0;
 }
 

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { formatStaleGoalMessage } from "./arc-goal-tracking.js";
 import { formatStaleHookMessage } from "./hook-tracking.js";
 import { formatStaleThreadMessage } from "./lead-intent-tracking.js";
-import { shouldRemindStaleAt } from "./stale-reminder-policy.js";
+import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import {
   readCharacterCore,
   readCharacterProfile,
@@ -165,6 +165,13 @@ export interface BuildWriterContextInput {
 export async function buildWriterContext(input: BuildWriterContextInput): Promise<WriterContextEnvelope> {
   const project = await readProject(input.projectDir);
   const characterIds = await resolveSelectedCharacterIds(input);
+  // P2 铁律④（永不静默）：损坏的 timeline/events.json 此前双重 catch 后静默降级为 [] ——
+  // 模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。降级仍要做（不能让一次坏读盘
+  // 炸掉整次出稿），但失败原因必须进上下文，让模型知道并如实转达用户。
+  const readFailures: string[] = [];
+  const trackReadFailure = (label: string) => (error: unknown) => {
+    readFailures.push(`${label} 读取失败，已降级为空：${error instanceof Error ? error.message : String(error)}`);
+  };
   const [storyCore, worldCore, profiles, cores, calendar, hookPool, threadPool, arcGoalPool, states, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
     readStoryCore(input.projectDir),
     readWorldCore(input.projectDir),
@@ -177,7 +184,9 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readCharacterStates(input.projectDir, characterIds),
     readWorldState(input.projectDir),
     // 全量 timeline 只读一次：近 N 段（selectRecentTimelineEvents）与早期分层（buildTimelineLayers）共用，避免重复读盘
-    readTimelineEvents(input.projectDir).catch(() => readTimelineEventsFallback(input.projectDir)).catch(() => [] as readonly TimelineEvent[]),
+    readTimelineEvents(input.projectDir)
+      .catch((error) => { trackReadFailure("时间线事件")(error); return readTimelineEventsFallback(input.projectDir); })
+      .catch((error) => { trackReadFailure("时间线事件（含旧格式回退）")(error); return [] as readonly TimelineEvent[]; }),
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
   ]);
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
@@ -217,6 +226,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("story_continuity", storyContinuity, "dynamic"),
     section("timeline_events", timelineEvents, "dynamic"),
     ...(hasEarlierContent ? [section("timeline_earlier_summary", { earlierSummary: timelineLayers.l2, macroSummary: timelineLayers.l3 }, "dynamic")] : []),
+    // P2：坏读盘的降级原因要进上下文——模型拿到空历史时知道自己正盲写，并如实告知用户
+    ...(readFailures.length > 0 ? [section("read_failures", { failures: readFailures }, "dynamic")] : []),
   ] as const;
   const totalTokenEstimate = sections.reduce((sum, item) => sum + item.tokenEstimate, 0);
   const stableTokenEstimate = sections
@@ -374,7 +385,7 @@ function buildHookTrackingContext(hooks: readonly HookItem[], chapter: number, c
     .filter((hook) => hook.lastTouchedChapter !== undefined)
     .map((hook) => ({
       hook,
-      chaptersSinceTouched: chapter - hook.lastTouchedChapter!,
+      chaptersSinceTouched: chaptersSinceTouched(hook.lastTouchedChapter, chapter),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 3))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
@@ -452,7 +463,7 @@ function buildStoryThreadsContext(
   const staleThreadWarnings = ranked
     .map((thread) => ({
       thread,
-      chaptersSinceTouched: chapter - thread.lastTouchedChapter,
+      chaptersSinceTouched: chaptersSinceTouched(thread.lastTouchedChapter, chapter),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 3))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
@@ -533,7 +544,7 @@ function buildArcGoalsContext(goals: readonly ArcGoal[], chapter: number, chapte
     .filter((goal) => goal.status === "active" || goal.status === "touched")
     .map((goal) => ({
       goal,
-      chaptersSinceTouched: chapter - goal.lastTouchedChapter,
+      chaptersSinceTouched: chaptersSinceTouched(goal.lastTouchedChapter, chapter),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, 5))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)

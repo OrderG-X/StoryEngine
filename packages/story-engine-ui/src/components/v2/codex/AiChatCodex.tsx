@@ -51,6 +51,7 @@ import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
 import { NameConsistencyCard } from "./NameConsistencyCard.js";
 import { StaleThreadCard } from "./StaleThreadCard.js";
+import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 
@@ -222,7 +223,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             ))}
           </div>
         ) : null}
-        {props.workspace.messages.map((message, index, all) => {
+        {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
+            ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
+            「清理早先消息」后消息仍在、展开后同 N 条渲染两遍（2026-09-15 审计 P1-2） */}
+        {props.workspace.messages.slice(activeArchivedCount).map((message, index, all) => {
           const isLiveAssistant = Boolean(props.chatLoading)
             && message.role === "assistant"
             && !all.slice(index + 1).some((m) => m.role === "assistant");
@@ -614,6 +618,8 @@ function MessageBubbles({
     || Boolean(message.draftReview)
     || Boolean(message.nameConsistencyWarnings?.length)
     || Boolean(message.staleThreadWarnings?.length)
+    || Boolean(message.commitPreview)
+    || Boolean(message.statusNotes?.length)
     || Boolean(message.thinking?.trim());
   // 流式开始前的空占位助手气泡不渲染。
   if (!hasAnything) return null;
@@ -638,6 +644,14 @@ function MessageBubbles({
 
   return (
     <div className="msg msg-ai">
+      {/* R4：服务端状态说明（如历史窗口被裁剪）照实展示，不静默吞掉；不进助手正文。 */}
+      {message.statusNotes?.length ? (
+        <div className="msg-status-notes">
+          {message.statusNotes.map((note, index) => (
+            <p className="msg-status-note" key={`status-${index}`}>{note}</p>
+          ))}
+        </div>
+      ) : null}
       {folded ? (
         folded.map((seg, index) => {
           if (seg.kind === "process") {
@@ -743,6 +757,9 @@ function MessageBubbles({
 
       {/* 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。 */}
       {message.qualityReport ? <QualityCheckCard report={message.qualityReport} /> : null}
+
+      {/* 定稿预览卡（R3）：commit_preview 的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。 */}
+      {message.commitPreview ? <CommitPreviewCard preview={message.commitPreview} /> : null}
 
       {/* 人物名一致性提醒卡：入库预览报出近形错名时固定醒目展示，不靠模型转述、不被说软。 */}
       {message.nameConsistencyWarnings?.length ? <NameConsistencyCard warnings={message.nameConsistencyWarnings} /> : null}

@@ -27,3 +27,20 @@ export function shouldRemindStaleAt(chaptersSinceTouched: number, threshold: num
   if (chaptersSinceTouched <= threshold + FRESH_STALE_REMINDER_WINDOW) return true;
   return chaptersSinceTouched % LONG_STALE_REMINDER_INTERVAL === 0;
 }
+
+/**
+ * 算「已停滞章数」= 当前章 - lastTouchedChapter，结果恒为有限整数 ≥ 0。
+ *
+ * 老书的数据可能早于 lastTouchedChapter 字段引入（缺字段、null、字符串）。裸相减得 NaN，
+ * 而 NaN 参与比较恒为 false——`NaN < 15` 是 false，导致**未知停滞时长的目标被直接判成
+ * 「停滞超阈值」而自动蛰伏**，还会把「已 NaN 章没有推进」的鬼话写进给用户看的提醒。
+ *
+ * 未知按「本章刚碰过」（0 章）处理：不蛰伏、不报警。绝不拿读不到的日期做自动清理决策（铁律④：
+ * 永不静默——蛰伏一条不知道上次何时推进的目标，就是静默地丢掉用户的叙事承诺）。
+ */
+export function chaptersSinceTouched(lastTouchedChapter: unknown, currentChapter: number): number {
+  const touched = typeof lastTouchedChapter === "number" && Number.isFinite(lastTouchedChapter)
+    ? Math.floor(lastTouchedChapter)
+    : currentChapter;
+  return Math.max(0, Math.floor(currentChapter) - touched);
+}

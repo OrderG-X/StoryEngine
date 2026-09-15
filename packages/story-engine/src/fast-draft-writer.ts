@@ -136,7 +136,15 @@ export async function persistFastDraftBody(input: {
 
 export async function runFastDraft(input: FastDraftInput): Promise<FastDraftReport> {
   const latencyTimer = startRuntimeLatency();
-  const writingRules = await readWritingRules(input.projectDir).catch(() => null);
+  // P2 铁律④：损坏的 writing-rules.json 此前静默降级为 null——模型拿不到任何风格/篇幅规则，
+  // 出稿质量悄悄掉档而用户一无所知。降级仍要（不能让一次坏读盘炸掉出稿），但原因要进 issues。
+  const writingRulesFailure: string[] = [];
+  const writingRules = await readWritingRules(input.projectDir).catch((error) => {
+    writingRulesFailure.push(
+      `写作规则读取失败，已降级为无规则：${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  });
   const draftLengthTarget = resolveDraftLengthTarget({
     chapterGoal: input.chapterGoal,
     requestedDraftLength: input.requestedDraftLength,
@@ -166,7 +174,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       draftLength: emptyDraftLength,
       contextStats,
       promptFingerprint,
-      issues: [],
+      issues: writingRulesFailure,
     }, latencyTimer);
   }
 
@@ -248,7 +256,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
         ...(aiFlavor ? { aiFlavor } : {}),
-        issues: [],
+        issues: writingRulesFailure,
       }, latencyTimer);
     }
 
@@ -271,7 +279,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       continuityQuality,
       ...(beatFidelity ? { beatFidelity } : {}),
       ...(aiFlavor ? { aiFlavor } : {}),
-      issues: [],
+      issues: writingRulesFailure,
     }, latencyTimer);
   } catch (error) {
     return withFastDraftDiagnostics(input.projectDir, {
@@ -280,7 +288,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       contextStats,
       promptFingerprint,
       draftLength: emptyDraftLength,
-      issues: [error instanceof Error ? error.message : String(error)],
+      issues: [...writingRulesFailure, error instanceof Error ? error.message : String(error)],
     }, latencyTimer);
   }
 }

@@ -68,6 +68,16 @@ export interface AgentToolResult {
   readonly nameConsistencyWarnings?: readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[];
   /** commit_preview 专属：伏笔/线索待收口提醒（引擎确定性判定：超 3 章未推进）。透传给投影层挂到消息→渲染固定「伏笔/线索待收口」提醒卡，不靠模型转述。 */
   readonly staleThreadWarnings?: readonly { readonly kind: string; readonly title: string; readonly lastTouchedChapter: number; readonly chaptersSinceTouched: number; readonly message: string }[];
+  /** commit_preview 专属：结构化定稿预览（R3）——裁决/阻断项/质量问题计数透传给投影层渲染固定「定稿预览」卡。
+   *  裁决不靠模型转述：模型可能把「暂不可定稿」说成小问题或略过不提。 */
+  readonly commitPreview?: {
+    readonly chapter: number;
+    readonly canCommit: boolean;
+    readonly blockingReasons?: readonly string[];
+    readonly summary?: string;
+    readonly draftIssueCount?: number;
+    readonly semanticIssueCount?: number;
+  };
 }
 
 export interface AgentToolError {
@@ -79,6 +89,8 @@ export interface AgentToolError {
 
 export interface AgentChatHandlers {
   readonly onTextDelta: (text: string) => void;
+  /** 服务端状态说明（如「历史过长，仅保留最近 N 条作为上下文」）：必须展示给用户，不能静默吞掉（R4）。 */
+  readonly onStatus?: (message: string) => void;
   /** 思考链增量（仅思考模式下有）。累加成消息的「思考过程」。 */
   readonly onReasoningDelta?: (text: string) => void;
   /** 出稿正文增量（generate_draft 流式）：逐字进编辑器。带本次章号，前端只往当前章追。 */
@@ -178,6 +190,10 @@ export async function streamAgentChat(
         case "text-delta":
           if (typeof parsed.text === "string") handlers.onTextDelta(parsed.text);
           return;
+        case "status":
+          // 服务端状态说明（R4：历史窗口裁剪等）必须照实带给用户，不能静默吞掉。
+          if (typeof parsed.message === "string") handlers.onStatus?.(parsed.message);
+          return;
         case "reasoning-delta":
           if (typeof parsed.text === "string") handlers.onReasoningDelta?.(parsed.text);
           return;
@@ -244,6 +260,22 @@ export async function streamAgentChat(
             // commit_preview 专属：伏笔/线索待收口提醒（不在轻量白名单里）→ 透传，前端渲染固定提醒卡（不靠模型转述、不被隐去）。
             ...(parsed.toolName === "commit_preview" && isStaleThreadWarnings(output.staleThreadWarnings)
               ? { staleThreadWarnings: output.staleThreadWarnings }
+              : {}),
+            // commit_preview 专属：结构化定稿预览（R3）→ 透传，前端渲染固定「定稿预览」卡。裁决/阻断项不靠模型
+            // 转述（模型可能把硬阻断说成「小问题」或干脆不提）。字段防御解析：缺 chapter/canCommit 的残缺输出不挂卡。
+            ...(parsed.toolName === "commit_preview" && typeof output.chapter === "number" && typeof output.canCommit === "boolean"
+              ? {
+                  commitPreview: {
+                    chapter: output.chapter,
+                    canCommit: output.canCommit,
+                    ...(Array.isArray(output.blockingReasons)
+                      ? { blockingReasons: output.blockingReasons.filter((reason): reason is string => typeof reason === "string") }
+                      : {}),
+                    ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
+                    ...(Array.isArray(output.draftQualityIssues) ? { draftIssueCount: output.draftQualityIssues.length } : {}),
+                    ...(Array.isArray(output.semanticQualityIssues) ? { semanticIssueCount: output.semanticQualityIssues.length } : {}),
+                  },
+                }
               : {}),
             overview: output.overview as StateOverview | undefined,
             refreshScope: output.refreshScope as "full" | "foundation" | undefined,

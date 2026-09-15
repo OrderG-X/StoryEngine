@@ -589,3 +589,58 @@ describe("undo 首次入库不留事务空壳（P1-B 真引擎+真 git 端到端
     await recoverProjectCommitTransactions(projectDir);
   }, 60_000);
 });
+
+// P1-6：崩溃残留的 staged 事务（新建文件无法自证为事务写入内容）不许砖住撤销线。
+// restoreSnapshot 第一道门就是 recoverProjectCommitTransactions——修复前 recover 对这类残留
+// 永久抛错，导致快照/撤销/预览全线 500，用户只能手工删 .story-engine-tx。修复后 recover 标记
+// recovered 放行（新建文件原地保留、绝不误删用户数据），撤销照常可用。
+describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () => {
+  async function makeBookProject(): Promise<string> {
+    const rootDir = await mkdtemp(join(tmpdir(), "se-p16-undo-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "P1-6 撤销回归书",
+      genre: "xianxia",
+      premise: "崩溃残留后撤销仍可用。",
+      mainCharacterName: "测试主角",
+    });
+    return projectDir;
+  }
+
+  it("staged 新建文件无法自证 → recover 放行（半章原地保留）、restoreSnapshot 不再抛错", async () => {
+    const projectDir = await makeBookProject();
+    const target = await createSnapshot(projectDir, "撤销目标");
+    const relativePath = join("chapters", "0007.md");
+    const chapterPath = join(projectDir, relativePath);
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0007");
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await mkdir(txDir, { recursive: true });
+    await writeFile(chapterPath, "崩溃残留的半章正文", "utf-8");
+    await writeFile(
+      join(txDir, "manifest.json"),
+      `${JSON.stringify({
+        version: 2,
+        chapter: 7,
+        createdAt: "2026-09-15T00:00:00.000Z",
+        files: [relativePath],
+        backups: [{ relativePath, existed: false }],
+        status: "staged",
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    // 修复前：这一步直接 reject（撤销线第一道门就死）。修复后：标 recovered 放行，
+    // 无法自证的新建文件绝不被事务回滚误删——原地保留，等后续提交自然覆盖。
+    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
+    await expect(readFile(chapterPath, "utf-8")).resolves.toBe("崩溃残留的半章正文");
+    await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
+      .resolves.toMatch(/"status":\s*"recovered"/u);
+
+    // 撤销线恢复可用：restoreSnapshot 不再被残留事务砖住，正常落「恢复到：撤销目标」。
+    const restored = await restoreSnapshot(projectDir, target.id);
+    expect(restored.label).toBe("恢复到：撤销目标");
+    // 恢复目标之后新增的文件由 restoreSnapshot 按 git diff 正常清理（这是它的设计语义，
+    // 与事务回滚的不可判定删除是两回事）。
+    await expect(access(chapterPath)).rejects.toThrow();
+  }, 60_000);
+});

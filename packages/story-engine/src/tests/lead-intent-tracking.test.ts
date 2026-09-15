@@ -6,7 +6,7 @@ import { commitFastDraft } from "../commit-engine.js";
 import { buildCommitPlanFromProject } from "../commit-plan-builder.js";
 import { checkDraftContinuity } from "../continuity-quality-check.js";
 import { buildWriterContext, type StoryThreadsContext } from "../context-gateway.js";
-import { mergeThreadTrackingUpdates } from "../lead-intent-tracking.js";
+import { mergeThreadTrackingUpdates, expireStaleIntents } from "../lead-intent-tracking.js";
 import { createStoryProject, readHookPool, readThreadPool } from "../project-store.js";
 import type { ChapterDeltaDeclaration } from "../chapter-delta.js";
 import type { NarrativeThread, ThreadPool } from "../types.js";
@@ -938,6 +938,32 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
       expect.objectContaining({ severity: "warning", type: "open_intents_not_referenced" }),
     ]));
   });
+
+  it("expireStaleIntents：lastTouchedChapter 缺失/null/字符串/NaN → 一个都不蛰伏", () => {
+    const legacy = (id: string, lastTouchedChapter: unknown): ThreadPool["threads"][number] => {
+      const { lastTouchedChapter: _dropped, ...base } = trackedThread(id, "intent", id, 1);
+      // 老数据本来就是畸形态——这里刻意构造类型不允许的形状，用 as 明示「我们知道这是坏数据」
+      return {
+        ...base,
+        ...(lastTouchedChapter === "missing" ? {} : { lastTouchedChapter: lastTouchedChapter as number }),
+      } as ThreadPool["threads"][number];
+    };
+    const pool: ThreadPool = {
+      threads: [
+        legacy("t-missing", "missing"),
+        legacy("t-null", null),
+        legacy("t-string", "第三章"),
+        legacy("t-nan", Number.NaN),
+      ],
+    };
+
+    const result = expireStaleIntents({ pool, chapter: 99 });
+
+    expect(result.expired).toEqual([]);
+    for (const thread of result.pool.threads) {
+      expect(thread.status).toBe("open");
+    }
+  });
 });
 
 async function createThreadProject(mainCharacterName = "林远"): Promise<string> {
@@ -1015,6 +1041,9 @@ function threadContextItem(
     relatedLocations: ["账房"],
   };
 }
+
+  // P2：老书的 threads.json 可能早于 lastTouchedChapter 字段引入。NaN < 9 恒为 false
+  // → 意图线被直接判成「停滞超阈值」而自动蛰伏（stale），静默丢掉用户的叙事承诺。
 
 describe("题材中立·线索池持久层不得因题材专名词表破坏性熔合", () => {
   const makeLead = (id: string, title: string): NarrativeThread => ({

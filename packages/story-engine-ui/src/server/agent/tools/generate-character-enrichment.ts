@@ -82,7 +82,10 @@ export const generateCharacterEnrichmentTool = writeTool({
   outputSchema,
   run: async ({ input, projectDir }) => {
     const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
-    const target = parseEntityTarget(input);
+    const target = parseEntityTarget({
+      ...input,
+      nameById: new Map(overview.characterMatrix.characters.map((c) => [c.id, c.name])),
+    });
     const characters = filterByEntityTarget(collectCharacterEntities(overview.characterMatrix), target);
     if (target && characters.length === 0) {
       // 定向了却一个没命中 → 诚实回报，绝不静默整批或空跑（铁律④）。

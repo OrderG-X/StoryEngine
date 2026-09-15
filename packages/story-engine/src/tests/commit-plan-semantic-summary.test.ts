@@ -55,8 +55,8 @@ describe("commit plan semantic summary", () => {
       mentionedCharacterNames: ["林远"],
       locations: expect.arrayContaining(["园圃", "库房", "账房"]),
     });
+    // P2：currentPhase 水印已移除（自动路径无阶段证据，保留作者既有设定）
     expect(result.commitPlan?.worldUpdates).toMatchObject({
-      currentPhase: "chapter_1_committed",
       activeHooks: expect.arrayContaining(["h-ledger"]),
       activeConflicts: [expect.stringContaining("克扣")],
     });

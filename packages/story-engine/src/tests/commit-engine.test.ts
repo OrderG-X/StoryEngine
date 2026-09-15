@@ -10,6 +10,7 @@ import {
   setCommitIoTestHookForTests,
   withProjectCommitLock,
 } from "../commit-engine.js";
+import { buildStateOverview } from "../state-overview.js";
 import {
   createStoryProject,
   readCharacterState,
@@ -447,7 +448,7 @@ describe("StoryEngine-NG CommitEngine", () => {
     expect(JSON.parse(JSON.stringify(report))).not.toHaveProperty("diagnosticsWarning");
   });
 
-  it("restores safe backups but refuses a staged transaction that would require path deletion", async () => {
+  it("auto-recovers a staged residue: restores safe backups, keeps unverifiable new files, unblocks the next commit", async () => {
     const projectDir = await createFixtureProject();
     const stateRelativePath = join("characters", "guo-xu", "state.json");
     const statePath = join(projectDir, stateRelativePath);
@@ -486,11 +487,15 @@ describe("StoryEngine-NG CommitEngine", () => {
       commitPlan: {},
     });
 
-    expect(report.passed).toBe(false);
-    expect(report.issues.join(" ")).toMatch(/snapshot|manual|delete|refus/iu);
+    // P1-6：残留事务不再永久锁死项目。recover 把能安全回滚的备份还原（state.json），
+    // 无法自证为事务写入内容的新建文件原地保留（不误删用户数据），标记 recovered 放行，
+    // 随后的新提交自然把残留的半截章节覆盖成正式定稿。
+    expect(report.passed).toBe(true);
+    expect(report.issues).toHaveLength(0);
     await expect(readFile(statePath, "utf-8")).resolves.toBe(originalState);
-    await expect(readFile(join(projectDir, "chapters", "0009.md"), "utf-8")).resolves.toBe("partial chapter write");
-    await expect(readTransactionStatus(projectDir, 9)).resolves.toBe("staged");
+    await expect(readFile(join(projectDir, "chapters", "0009.md"), "utf-8"))
+      .resolves.toContain("崩溃恢复后的新提交");
+    await expect(readTransactionStatus(projectDir, 9)).resolves.not.toBe("staged");
   });
 
   it("serializes same-chapter commits in invocation order so transaction staging cannot race", async () => {
@@ -688,7 +693,7 @@ describe("StoryEngine-NG CommitEngine", () => {
     await expect(access(txDir)).resolves.toBeUndefined();
   });
 
-  it("fails closed instead of path-deleting a target that did not exist before the transaction", async () => {
+  it("never path-deletes a new target it cannot verify, but marks the residue recovered instead of locking the project", async () => {
     const projectDir = await createFixtureProject();
     const relativePath = "chapters/0016.md";
     const targetPath = join(projectDir, relativePath);
@@ -705,10 +710,18 @@ describe("StoryEngine-NG CommitEngine", () => {
       status: "staged",
     }, null, 2)}\n`, "utf-8");
 
-    await expect(recoverProjectCommitTransactions(projectDir)).rejects.toThrow(/manual|snapshot|delete|refus/iu);
+    // P1-6：recover 无法自证磁盘内容就是事务写入的内容（可能含用户未保存的编辑），
+    // 所以绝不路径删除；但也不再永久抛错把项目锁死——标记 recovered 放行，文件原地保留。
+    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
     await expect(readFile(targetPath, "utf-8"))
       .resolves.toBe("partial newly-created target must remain for manual recovery");
     await expect(access(txDir)).resolves.toBeUndefined();
+    await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
+      .resolves.toMatch(/"status":\s*"recovered"/u);
+    await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
+      .resolves.toMatch(/"recoveryIssues"/u);
+    // 已 recovered 的残留不再重复处理，也不会再阻塞。
+    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
   });
 
   it.skipIf(process.platform === "win32")("does not truncate an outside sentinel when a target parent is swapped before open", async () => {
@@ -732,6 +745,193 @@ describe("StoryEngine-NG CommitEngine", () => {
     } finally {
       setCommitIoTestHookForTests(undefined);
     }
+  });
+
+  it("P1-6 apply 中段崩溃 → 回滚按内容匹配安全处理新建章节文件，项目不锁死", async () => {
+    const projectDir = await createFixtureProject();
+    const chapterPath = join(projectDir, "chapters", "0014.md");
+    await writeDraft(projectDir, 14, "# 第十四章\n\nGuo Xu 提交后崩溃在 manifest 落 applied 之前。\n");
+    // 事务前 chapters/0014.md 不存在（existed:false）——正是新建文件场景（probe 实证）
+
+    // 在章节文件打开后、写入前注入故障：模拟崩溃在 apply 中段
+    let injected = false;
+    setCommitIoTestHookForTests(async (phase, targetPath) => {
+      if (injected || targetPath !== chapterPath) return;
+      if (phase !== "after-open-before-verify") return;
+      injected = true;
+      throw new Error("模拟崩溃：apply 中段故障");
+    });
+    try {
+      const report = await commitFastDraft({ projectDir, chapter: 14, commitPlan: {} });
+      expect(report.passed).toBe(false);
+    } finally {
+      setCommitIoTestHookForTests(undefined);
+    }
+
+    // 关键回归点：此前此处会永久锁死——每次提交都进 recover → 遇 existed:false 的新建文件
+    // 抛 Rollback failed → commitFastDraft 转 passed:false，永远无法再提交。
+    // 修复后回滚自洽（删或保留都如实记录），项目可继续提交。
+    const report2 = await commitFastDraft({ projectDir, chapter: 14, commitPlan: {} });
+    expect(report2.passed).toBe(true);
+  });
+
+  it("P1-6 新建文件被第三方改动后内容不匹配 → 拒绝删除并保留（不误删用户数据）", async () => {
+    const projectDir = await createFixtureProject();
+    const chapterPath = join(projectDir, "chapters", "0013.md");
+    await writeDraft(projectDir, 13, "# 第十三章\n\n原始事务写入的内容。\n");
+
+    let injected = false;
+    setCommitIoTestHookForTests(async (phase, targetPath) => {
+      if (injected || targetPath !== chapterPath) return;
+      if (phase !== "after-open-before-verify") return;
+      injected = true;
+      // 事务写完后、崩溃前，别的进程改了这个新建文件
+      await writeFile(chapterPath, "用户或别的进程刚保存的改动，绝不能被回滚删掉", "utf-8");
+      throw new Error("模拟崩溃：apply 中段故障");
+    });
+    try {
+      const report = await commitFastDraft({ projectDir, chapter: 13, commitPlan: {} });
+      expect(report.passed).toBe(false);
+    } finally {
+      setCommitIoTestHookForTests(undefined);
+    }
+
+    // 内容已不匹配 → 拒绝删除，第三方改动保留在盘上
+    await expect(readFile(chapterPath, "utf-8"))
+      .resolves.toBe("用户或别的进程刚保存的改动，绝不能被回滚删掉");
+  });
+
+  // P2：世界状态的冲突/隐情/hook 此前只增不减——写到第 50 章时第 1 章的冲突仍挂在 activeConflicts 里，
+  // 把用户的世界规则挤出概览、还让已揭底的秘密继续被当悬念写。现在支持显式退场：
+  // 只扣模型明确点名的条目（归一化匹配），绝不做推断式清除。
+  it("P2 世界状态退场：resolvedConflicts/revealedSecrets 按归一化文本扣除；未点名的必须保留", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 20, "# 第二十章\n\n城南争夺化解，商会继承权仍在。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 20,
+      commitPlan: {
+        worldUpdates: {
+          activeConflicts: ["城南争夺", "商会继承权"],
+          knownSecrets: ["会长是义父"],
+        },
+      },
+    })).passed).toBe(true);
+
+    // 归一化匹配：「城南 争夺」（中间多个空格）须扣掉早前登记的「城南争夺」。
+    await writeDraft(projectDir, 21, "# 第二十一章\n\n商会继承权仍在。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 21,
+      commitPlan: {
+        worldUpdates: {
+          resolvedConflicts: ["城南 争夺"],
+          revealedSecrets: ["会长是义父"],
+        },
+      },
+    })).passed).toBe(true);
+
+    const state = await readWorldState(projectDir);
+    expect(state.activeConflicts).toEqual(["旧冲突", "商会继承权"]); // 缺失不等于化解
+    expect(state.knownSecrets).toEqual(["旧秘密"]); // 本章只揭示了「会长是义父」；未点名的旧秘密保留
+  });
+
+  it("P2 resolvedConflicts 传空串/空数组时零扣除（退化输入不静默清空用户数据）", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 22, "# 第二十二章\n\n什么都没化解。\n");
+    await commitFastDraft({
+      projectDir,
+      chapter: 22,
+      commitPlan: { worldUpdates: { activeConflicts: ["新冲突"], resolvedConflicts: ["", "   "] } },
+    });
+    expect((await readWorldState(projectDir)).activeConflicts).toEqual(["旧冲突", "新冲突"]);
+  });
+
+  it("P2 activeHooks 随 hook 化解/废弃退场，不再永久堆积", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 23, "# 第二十三章\n\n账册线索了结。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 23,
+      commitPlan: {
+        worldUpdates: { activeHooks: ["h-existing", "h-ledger"] },
+        hookUpdates: [{ hookId: "h-ledger", status: "resolved" }],
+      },
+    })).passed).toBe(true);
+    // 化解的 h-ledger 退场；未涉及的两个保留。
+    expect((await readWorldState(projectDir)).activeHooks).toEqual(["h-existing"]);
+  });
+
+  it("P2 退化输入：resolvedConflicts 传非数组/数字时不崩、零扣除", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 24, "# 第二十四章\n\n退化输入测试。\n");
+    await commitFastDraft({
+      projectDir,
+      chapter: 24,
+      // 模型可能给畸形值；引擎须容忍并归一成「无扣除」，而不是清空或崩
+      commitPlan: { worldUpdates: { resolvedConflicts: 42 as unknown as readonly string[] } },
+    });
+    expect((await readWorldState(projectDir)).activeConflicts).toEqual(["旧冲突"]);
+  });
+
+  it("P2 故事日不回退：作者已写到第 10 天，后续低章号提交不许压回第 4 天", async () => {
+    const projectDir = await createFixtureProject();
+    // 作者明确设定：第 3 章时故事已推进到第 10 天、夜晚
+    const calPath = join(projectDir, "time", "calendar.json");
+    await writeFile(calPath, `${JSON.stringify({ currentStoryDay: 10, currentTimeOfDay: "night" }, null, 2)}\n`, "utf-8");
+
+    await writeDraft(projectDir, 4, "# 第四章\n\n新的清晨。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 4,
+      commitPlan: { calendar: { storyDay: 4, timeOfDay: "unknown" } },
+    })).passed).toBe(true);
+
+    const cal = await readStoryCalendar(projectDir);
+    expect(cal.currentStoryDay).toBe(10); // 不许回压
+    expect(cal.currentTimeOfDay).toBe("night"); // 无时间证据时沿用上次已知时刻
+  });
+
+  it("P2 故事日正常前进：无既有设定时按章号推进，时刻诚实留 unknown", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 5, "# 第五章\n\n行程继续。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 5,
+      commitPlan: { calendar: { storyDay: 5, timeOfDay: "unknown" } },
+    })).passed).toBe(true);
+    expect(await readStoryCalendar(projectDir)).toEqual({
+      currentStoryDay: 5,
+      currentTimeOfDay: "unknown",
+    });
+  });
+
+  it("P2 退化输入：storyDay 传 NaN/0/负数时不崩，回落到既有故事日", async () => {
+    const projectDir = await createFixtureProject();
+    const calPath = join(projectDir, "time", "calendar.json");
+    await writeFile(calPath, `${JSON.stringify({ currentStoryDay: 7, currentTimeOfDay: "noon" }, null, 2)}\n`, "utf-8");
+
+    await writeDraft(projectDir, 6, "# 第六章\n\n退化输入测试。\n");
+    expect((await commitFastDraft({
+      projectDir,
+      chapter: 6,
+      commitPlan: { calendar: { storyDay: Number.NaN, timeOfDay: "unknown" } },
+    })).passed).toBe(true);
+    expect(await readStoryCalendar(projectDir)).toEqual({
+      currentStoryDay: 7, // NaN 被拒，沿用既有
+      currentTimeOfDay: "noon",
+    });
+  });
+
+  it("P2 currentPhase 水印已移除：作者设定的故事阶段在入库后保留", async () => {
+    const projectDir = await createFixtureProject();
+    const statePath = join(projectDir, "world", "state.json");
+    const seeded = JSON.parse(await readFile(statePath, "utf-8")) as { currentPhase: string };
+    await writeFile(statePath, `${JSON.stringify({ ...seeded, currentPhase: "高潮篇·背叛" }, null, 2)}\n`, "utf-8");
+
+    await writeDraft(projectDir, 8, "# 第八章\n\n高潮继续。\n");
+    expect((await commitFastDraft({ projectDir, chapter: 8, commitPlan: {} })).passed).toBe(true);
+    expect((await readWorldState(projectDir)).currentPhase).toBe("高潮篇·背叛");
   });
 });
 
@@ -767,6 +967,37 @@ async function readTransactionStatus(projectDir: string, chapter: number): Promi
   );
   return (JSON.parse(text) as { status: string }).status;
 }
+
+
+
+describe("StoryEngine-NG CommitEngine（世界状态只增不减·读侧）", () => {
+  it("P2 概览取最近若干条累积项，常设世界规则不被老冲突挤出", async () => {
+    const projectDir = await createFixtureProject();
+    // 作者填写的故事法则（新建书默认为空，长篇里这是常设设定，不该被章级冲突挤出概览）
+    const rules = ["修仙界以矿藏为硬通货。", "宗门弟子按修为分阶。"];
+    const corePath = join(projectDir, "world", "core.json");
+    const core = JSON.parse(await readFile(corePath, "utf-8")) as { rules: string[] };
+    await writeFile(corePath, `${JSON.stringify({ ...core, rules }, null, 2)}\n`, "utf-8");
+
+    // 塞 20 条只增不减的冲突——模拟长篇堆积
+    await writeDraft(projectDir, 30, "# 第三十章\n\n堆积测试。\n");
+    await commitFastDraft({
+      projectDir,
+      chapter: 30,
+      commitPlan: {
+        worldUpdates: { activeConflicts: Array.from({ length: 20 }, (_, index) => `第${index + 1}冲突`) },
+      },
+    });
+    const state = await readWorldState(projectDir);
+    expect(state.activeConflicts).toHaveLength(21); // 全量留在盘上（不丢用户数据）
+
+    const overview = await buildStateOverview({ projectDir, chapter: 30 });
+    // 世界规则先占位（它们不过期），冲突取最新的若干条——最早的「旧冲突」不再霸占有限名额
+    expect(overview.world.importantFacts.slice(0, rules.length)).toEqual(rules);
+    expect(overview.world.importantFacts).toContain("第20冲突");
+    expect(overview.world.importantFacts).not.toContain("旧冲突");
+  });
+});
 
 async function createFixtureProject(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "story-engine-commit-"));

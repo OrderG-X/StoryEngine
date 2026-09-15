@@ -75,6 +75,21 @@ describe("turn-intent-gate commit_apply", () => {
     expect(userTurnAllowsCommitApply(undefined)).toBe(true);
     expect(userTurnAllowsCommitApply("   ")).toBe(true);
   });
+
+  // P2（2026-09-15 审计）：尾句否决词表漏收「不着急/不急着」——draft 门已收（DRAFT_WRITE_NEGATION_PATTERN），
+  // commit 门却放行「确认定稿，不着急」，用户明明在推迟却照常入库。
+  it.each([
+    "确认定稿，不着急",
+    "确认入库，不着急",
+    "正式入库，不急着",
+    "定稿吧，但我现在不着急",
+  ])("拦截确认后的不着急/不急着尾句：%s", (text) => {
+    expect(userTurnAllowsCommitApply(text)).toBe(false);
+  });
+
+  it("「不着急」后改回肯定仍放行（后说话算数）", () => {
+    expect(userTurnAllowsCommitApply("不着急，现在确认定稿")).toBe(true);
+  });
 });
 
 // 治「入库后模型自主续写下一章」：那一轮用户原话只有定稿/审稿等意图、没有任何写作意图，

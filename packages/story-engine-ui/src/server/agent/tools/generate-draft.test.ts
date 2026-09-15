@@ -504,6 +504,16 @@ describe("章序护栏（防穿帮）", () => {
     await writeFile(committedPath, "# 第一章\n\n已入库正文。", "utf-8");
     expect(await isChapterCommitted(projectDir, 1)).toBe(true);
   });
+
+  // P2 铁律④：此前 .catch(() => undefined) 把所有读盘错误都塌成「未入库」——
+  // 路径被目录占位（EISDIR）时，已入库的章被误判成没入库，触发前沿推进、写串章号。
+  it("isChapterCommitted：读盘异常（路径被目录占位）如实上抛，不塌成「未入库」", async () => {
+    const projectDir = await makeProject("护栏测试书");
+    const committedPath = defaultCommittedChapterPath(projectDir, 7);
+    // chapters/0007.md 这个「文件路径」被一个同名目录占住 → 读它抛 EISDIR
+    await mkdir(committedPath, { recursive: true });
+    await expect(isChapterCommitted(projectDir, 7)).rejects.toThrow();
+  });
 });
 
 describe("advancePastCommittedFrontier（已入库前沿→推进下一章，治章号 off-by-one）", () => {

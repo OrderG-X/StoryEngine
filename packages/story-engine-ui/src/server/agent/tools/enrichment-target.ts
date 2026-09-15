@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { resolveEntityLabel } from "../presence/entity-labels.js";
 import { coerceStringArray } from "./lenient-args.js";
 
 /**
@@ -22,19 +23,33 @@ export const targetFields = {
 export interface EntityTarget {
   readonly ids: ReadonlySet<string>;
   readonly names: ReadonlySet<string>;
+  /** 「没找到 X」提示用的人类可读标签（铁律④：绝不回显裸 char-/asset- 等引擎 id）。 */
   readonly labels: readonly string[];
 }
 
-/** 把 targetNames/targetIds 整理成命中集合；都为空返回 undefined（=补全部）。 */
+/**
+ * 把 targetNames/targetIds 整理成命中集合；都为空返回 undefined（=补全部）。
+ *
+ * P2 铁律④（绝不泄露裸 id）：labels 此前在「只给了 id」时直接回显 `[...ids]`——四个做厚工具的
+ * 「没找到 X（…）」摘要会把 `char-1a2b3c` 这类引擎 slug 原样塞进给用户看的文本。现在统一过
+ * resolveEntityLabel：id 能映射成名字就映射，映射不到的引擎 id 显示「未知角色」而非裸 id。
+ * 匹配逻辑仍走 ids/names 集合，labels 只影响显示。
+ */
 export function parseEntityTarget(input: {
   readonly targetNames?: readonly string[] | undefined;
   readonly targetIds?: readonly string[] | undefined;
+  /** id → 显示名映射（由调用方从 overview 角色矩阵提供）；缺省=只按名字回显 */
+  readonly nameById?: ReadonlyMap<string, string> | undefined;
 }): EntityTarget | undefined {
   const names = new Set((input.targetNames ?? []).map((s) => s.trim()).filter((s) => s.length > 0));
   const ids = new Set((input.targetIds ?? []).map((s) => s.trim()).filter((s) => s.length > 0));
   if (names.size === 0 && ids.size === 0) return undefined;
-  // labels 仅用于「没找到 X」提示：优先用人类可读的名字，仅当只给了 id 时才回显 id（绝不泄露裸 id·匹配仍走 ids/names 集合）。
-  return { ids, names, labels: names.size > 0 ? [...names] : [...ids] };
+  const nameById = input.nameById ?? new Map<string, string>();
+  // 优先用名字；只给了 id 时映射成名字，映射不到的引擎 id 归一成「未知角色」，绝不裸奔
+  const labels = names.size > 0
+    ? [...names]
+    : [...ids].map((id) => resolveEntityLabel(id, nameById));
+  return { ids, names, labels };
 }
 
 /** 按 target 过滤实体清单（实体含 name + 可选 id）；target 为空=原样返回。 */

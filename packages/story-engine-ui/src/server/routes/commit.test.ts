@@ -921,6 +921,12 @@ async function createProjectFixture(): Promise<string> {
   const draftsDir = join(root, "drafts", "fast");
   await mkdir(draftsDir, { recursive: true });
   await writeFile(join(draftsDir, "chapter-0001.md"), "# 第1章\n\n测试草稿。", "utf-8");
+  // P1-8：commit 路由现在过 assertStoryEngineProject——得有真项目骨架（project.json + 四个标准目录），
+  // 不然路由把缺 project.json 当非项目目录拒绝（500），测的是路由而不是校验本身。
+  await writeFile(join(root, "project.json"), JSON.stringify({ title: "测试书" }), "utf-8");
+  for (const dir of ["story", "timeline", "world", "characters"]) {
+    await mkdir(join(root, dir), { recursive: true });
+  }
   return root;
 }
 

@@ -85,6 +85,23 @@ export interface ChapterMessage {
   readonly nameConsistencyWarnings?: readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[];
   /** commit_preview 伏笔/线索待收口提醒：某伏笔/线索连续多章没推进（引擎确定性判定：active/open 超 3 章未触及）。随消息走，渲染固定提醒卡，不靠模型转述、不被隐去。 */
   readonly staleThreadWarnings?: readonly { readonly kind: string; readonly title: string; readonly lastTouchedChapter: number; readonly chaptersSinceTouched: number; readonly message: string }[];
+  /** commit_preview 结构化定稿预览（R3）：裁决结果（可否定稿/不可定稿）+ 阻断项 + 质量问题计数随消息走，
+   *  渲染固定「定稿预览」卡——裁决不靠模型转述（模型可能把硬阻断说成「小问题」或干脆不提）。 */
+  readonly commitPreview?: CommitPreviewCardData;
+  /** 服务端状态说明（R4：如「历史窗口被裁剪」）：照实展示给用户、不进助手正文（不替模型说话）。 */
+  readonly statusNotes?: readonly string[];
+}
+
+/** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */
+export interface CommitPreviewCardData {
+  readonly chapter: number;
+  readonly canCommit: boolean;
+  /** 阻断理由（引擎确定性判定：缺稿/质检硬伤/名字漂移等）。非空时 canCommit 必为 false。 */
+  readonly blockingReasons?: readonly string[];
+  readonly summary?: string;
+  /** 质量问题分层计数（不展开明细，明细走质检卡）；缺省时不渲染该行。 */
+  readonly draftIssueCount?: number;
+  readonly semanticIssueCount?: number;
 }
 
 export interface DraftPreview {

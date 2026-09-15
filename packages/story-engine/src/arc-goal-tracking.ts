@@ -2,7 +2,7 @@ import type { VerifiedChapterDelta } from "./chapter-delta.js";
 import type { ChapterSemanticSummary } from "./commit-plan-builder.js";
 import type { HookTrackingUpdate } from "./hook-tracking.js";
 import type { ThreadTrackingUpdate } from "./lead-intent-tracking.js";
-import { shouldRemindStaleAt } from "./stale-reminder-policy.js";
+import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import type { ArcGoal, ArcGoalPool } from "./types.js";
 
 export interface ArcGoalUpdate {
@@ -89,7 +89,7 @@ export function buildArcGoalTrackingPlan(input: {
   const existingById = new Map(input.arcGoalPool.goals.map((goal) => [goal.id, goal]));
   const activeMiniArcCount = input.arcGoalPool.goals
     .filter((goal) => (goal.status === "active" || goal.status === "touched") && goal.scope === "mini_arc")
-    .filter((goal) => input.chapter - goal.lastTouchedChapter <= 5)
+    .filter((goal) => chaptersSinceTouched(goal.lastTouchedChapter, input.chapter) <= 5)
     .length;
   const activeMainArcCount = input.arcGoalPool.goals
     .filter((goal) => (goal.status === "active" || goal.status === "touched") && goal.scope === "main_arc")
@@ -155,14 +155,14 @@ export function expireStaleArcGoals(input: {
   const goals = input.pool.goals.map((goal) => {
     if (goal.scope === "main_arc") return goal;
     if (goal.status !== "active" && goal.status !== "touched") return goal;
-    const chaptersSinceTouched = input.chapter - goal.lastTouchedChapter;
-    if (chaptersSinceTouched < MINI_ARC_GOAL_STALE_CHAPTERS) return goal;
+    const idleChapters = chaptersSinceTouched(goal.lastTouchedChapter, input.chapter);
+    if (idleChapters < MINI_ARC_GOAL_STALE_CHAPTERS) return goal;
     expired.push({
       id: goal.id,
       title: goal.title,
       scope: goal.scope,
       lastTouchedChapter: goal.lastTouchedChapter,
-      chaptersSinceTouched,
+      chaptersSinceTouched: idleChapters,
     });
     return { ...goal, status: "stale" as const };
   });
@@ -359,7 +359,7 @@ function findStaleGoalWarnings(
     .filter((goal) => !touchedGoalIds.has(goal.id))
     .map((goal) => ({
       goal,
-      chaptersSinceTouched: chapter - goal.lastTouchedChapter,
+      chaptersSinceTouched: chaptersSinceTouched(goal.lastTouchedChapter, chapter),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, GOAL_STALE_THRESHOLD))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)

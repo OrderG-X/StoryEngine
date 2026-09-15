@@ -13,7 +13,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useProjectNavigation } from "./useProjectNavigation.js";
 import { createStoryProjectFromDraft, fetchChapterWorkspace, fetchStateOverview } from "../api/client.js";
 import { listChatSessions } from "../api/chatSessionsClient.js";
-import { setProjectKey, useWorkspaceStore } from "../stores/workspaceStore.js";
+import { flushPendingMessageSave, setProjectKey, useWorkspaceStore } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
 import type { ChapterNavItem } from "../types.js";
@@ -234,6 +234,11 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     useWorkspaceStore.getState().updateWorkspace({
       messages: [{ id: "b-message", role: "user", content: "B only" }],
     });
+
+    // 消息持久化已节流（250ms 窗口，治流式逐 token 全量写卡主线程）：落盘前先冲盘。
+    // 生产路径里 openHome/openProject/handleCreateBook 都经 setProjectKey 内部冲盘，只有
+    // 「最后一条写完立刻关标签页」的 250ms 窗口内会丢——那是换 UI 不卡所付的代价。
+    flushPendingMessageSave();
 
     expect(JSON.parse(window.sessionStorage.getItem(aKey) ?? "[]")).toEqual([
       expect.objectContaining({ id: "a-message" }),

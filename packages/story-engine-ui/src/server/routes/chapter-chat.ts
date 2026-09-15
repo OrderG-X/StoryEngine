@@ -19,6 +19,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { resolveConfiguredChatModel, callOpenAICompatibleChatModel } from "../lib/llm-client.js";
+import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { buildChapterChatMessages } from "../lib/prompt-builder.js";
 import type { ChapterAgentCard } from "../../api/types.js";
 
@@ -745,6 +746,10 @@ async function handleChapterChatStream(
   res: import("node:http").ServerResponse,
 ): Promise<void> {
   const sendEvent = (event: string, data: unknown) => {
+    // P2：连接已断/响应已结束时静默跳过（客户端刷新或断线时常见，不是错误，不能让写盘错误
+    // 冒泡成 500 噪声）；headersSent 之前禁止写帧——裸 res.write 会隐式刷出默认 200 头，
+    // content-type 不对，SSE 帧就废了
+    if (res.writableEnded || res.destroyed || !res.headersSent) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
@@ -772,7 +777,10 @@ async function handleChapterChatStream(
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
     });
-    sendEvent("tool:start", { id: "state-overview", label: "读取当前故事状态" });
+    // 总控模型是非流式调用，期间连接会静默数十秒——没有心跳会被浏览器/代理按空闲超时掐掉
+    const heartbeat = startSseHeartbeat(res);
+    try {
+      sendEvent("tool:start", { id: "state-overview", label: "读取当前故事状态" });
 
     const overview = await buildStateOverview({
       projectDir,
@@ -843,17 +851,23 @@ async function handleChapterChatStream(
           : []),
       ],
     });
-    res.end();
+      res.end();
+    } finally {
+      heartbeat.stop();
+    }
   } catch (error) {
+    // P2 修 headersSent 崩溃：writeHead 之前就出错时（assertStoryEngineProject/解析 body 抛错）
+    // 头还没发，此时写 SSE 帧会隐式刷出默认 200 头、content-type 全错；再 writeJson(500) 又会
+    // 抛 ERR_HTTP_HEADERS_SENT。按「头是否已发」分两条路，两条都把错误如实带给客户端。
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (!res.headersSent) {
+      writeJson(res, 500, { ok: false, error: errorMessage });
+      return;
+    }
     try {
-      sendEvent("error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      sendEvent("error", { error: errorMessage });
     } catch {
-      writeJson(res, 500, {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // 帧写不进去（连接已断）：错误已在上面带出，这里不再冒泡
     }
     res.end();
   }

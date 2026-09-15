@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   attachDiagnostics,
@@ -110,7 +110,17 @@ export interface TimelineEventInput {
 export interface WorldStateUpdate {
   readonly currentPhase?: string;
   readonly activeConflicts?: readonly string[];
+  /**
+   * 本章明确化解/了结的冲突。按归一化文本从 activeConflicts 扣除——只删模型显式点名的条目，
+   * 绝不因「本章没再提」就静默清除（缺失不等于化解，铁律④：永不静默）。
+   */
+  readonly resolvedConflicts?: readonly string[];
   readonly activeHooks?: readonly string[];
+  /**
+   * 本章明确揭示/公开的秘密。从 knownSecrets 扣除——已被读者知晓的秘密不再是「隐情」，
+   * 再放进 hiddenTruths/protectedSecrets 会让模型把已揭底的事当悬念写。
+   */
+  readonly revealedSecrets?: readonly string[];
   readonly knownSecrets?: readonly string[];
 }
 
@@ -225,6 +235,8 @@ export interface CommitTransactionManifest {
   readonly files: readonly string[];
   readonly backups: readonly CommitTransactionBackup[];
   readonly status: "staged" | "applied" | "failed" | "recovered";
+  /** P1-6：回滚不完备的残留原因（新建文件无法自证为事务写入内容，原地保留并放行） */
+  readonly recoveryIssues?: readonly string[];
 }
 
 export interface CommitTransactionBackup {
@@ -317,7 +329,7 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
   const transactionFiles = [
     ...buildCharacterStateFiles(input.chapter, characterStates, characterUpdates),
     ...(timelineEvents.file ? [timelineEvents.file] : []),
-    ...(await buildWorldStateFile(input.projectDir, input.chapter, input.commitPlan.worldUpdates)),
+    ...(await buildWorldStateFile(input.projectDir, input.chapter, input.commitPlan.worldUpdates, hookUpdates)),
     ...buildHookPoolFiles(hookPool, hookUpdates, hookTrackingUpdates),
     ...threadPoolFiles.files,
     ...arcGoalPoolFiles.files,
@@ -798,15 +810,29 @@ async function buildWorldStateFile(
   projectDir: string,
   chapter: number,
   update: WorldStateUpdate | undefined,
+  /** 本章被模型声明并经校验的 hook 状态变更（化解/废弃的 hook 要从 activeHooks 退场） */
+  hookUpdates: readonly HookUpdate[] = [],
 ): Promise<readonly TransactionFile[]> {
   if (!update) return [];
   const previous = await readWorldState(projectDir);
+  const retiredHookIds = hookUpdates
+    .filter((update) => update.status === "resolved" || update.status === "abandoned")
+    .map((update) => update.hookId);
   const next: WorldState = {
     ...previous,
     ...(update.currentPhase !== undefined ? { currentPhase: update.currentPhase } : {}),
-    activeConflicts: mergeUnique(previous.activeConflicts, update.activeConflicts),
-    activeHooks: mergeUnique(previous.activeHooks, update.activeHooks),
-    knownSecrets: mergeUnique(previous.knownSecrets, update.knownSecrets),
+    activeConflicts: subtractNormalized(
+      mergeUnique(previous.activeConflicts, update.activeConflicts),
+      update.resolvedConflicts,
+    ),
+    activeHooks: subtractNormalized(
+      mergeUnique(previous.activeHooks, update.activeHooks),
+      retiredHookIds,
+    ),
+    knownSecrets: subtractNormalized(
+      mergeUnique(previous.knownSecrets, update.knownSecrets),
+      update.revealedSecrets,
+    ),
     lastUpdatedChapter: chapter,
   };
   return [{
@@ -875,10 +901,17 @@ async function buildStoryCalendarFile(
 ): Promise<readonly TransactionFile[]> {
   if (!update) return [];
   const previous = await readStoryCalendar(projectDir);
+  // P2：自动路径按章号推一天，但绝不让「第 3 章已明确写到第 10 天」被后续章节回压成第 4 天——
+  // 故事日只许前进不许后退。时刻同理：没有时间证据时沿用上次已知时刻，不回退成 unknown。
+  const requestedDay = Number.isFinite(update.storyDay) && update.storyDay > 0
+    ? Math.floor(update.storyDay)
+    : previous.currentStoryDay;
   const next: StoryCalendar = {
     ...previous,
-    currentStoryDay: update.storyDay,
-    currentTimeOfDay: update.timeOfDay,
+    currentStoryDay: Math.max(previous.currentStoryDay, requestedDay),
+    currentTimeOfDay: update.timeOfDay === "unknown" && previous.currentTimeOfDay !== "unknown"
+      ? previous.currentTimeOfDay
+      : update.timeOfDay,
   };
   return [{
     relativePath: join("time", "calendar.json"),
@@ -944,6 +977,7 @@ async function applyCommitTransaction(
       projectDir,
       transaction.txDir,
       transaction.manifest.backups,
+      transaction.files,
     );
     await writeManifest(projectDir, transaction.txDir, {
       ...transaction.manifest,
@@ -1135,9 +1169,20 @@ async function recoverCommitTransactionResidue(
 
   if (manifest.status === "recovered") return;
   if (manifest.status !== "applied") {
+    // recover 路径不传 writtenFiles：staged/failed 残留的新建文件可能含用户未保存的编辑，
+    // 磁盘内容不能自证为「事务写入的内容」。保持 fail-closed（拒绝删除并如实记录），
+    // 只有 apply 路径（内存里有确切 writtenContent）才安全删除。
     const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
     if (rollbackIssues.length > 0) {
-      throw new Error(`Commit transaction recovery failed: ${rollbackIssues.join("; ")}`);
+      // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件
+      // 原地保留（用户数据分毫不动），事务标记 recovered 放行——后续提交会自然覆盖它。
+      // 恢复手段从「报错让用户手工删 .story-engine-tx」升级为「如实记录 + 自动放行」。
+      await writeManifest(projectDir, txDir, {
+        ...manifest,
+        status: "recovered",
+        recoveryIssues: rollbackIssues,
+      });
+      return;
     }
   }
   await writeManifest(projectDir, txDir, { ...manifest, status: "recovered" });
@@ -1180,8 +1225,13 @@ async function restoreCommitTransactionBackups(
   projectDir: string,
   txDir: string,
   backups: readonly CommitTransactionBackup[],
+  /** 事务写入的新文件内容（P1-6：新建文件回滚的删除凭据） */
+  writtenFiles?: readonly TransactionFile[],
 ): Promise<string[]> {
   const issues: string[] = [];
+  const writtenByPath = new Map(
+    (writtenFiles ?? []).map((file) => [file.relativePath, file.content] as const),
+  );
   for (const backup of [...backups].reverse()) {
     const targetPath = join(projectDir, backup.relativePath);
     try {
@@ -1195,7 +1245,12 @@ async function restoreCommitTransactionBackups(
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
         await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target");
       } else {
-        await removeFileNoFollow(projectDir, targetPath, "formal rollback target");
+        await removeFileNoFollow(
+          projectDir,
+          targetPath,
+          "formal rollback target",
+          writtenByPath.get(backup.relativePath),
+        );
       }
     } catch (error) {
       issues.push(`Rollback failed for ${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1386,7 +1441,21 @@ async function verifyOpenedProjectFile(
   }
 }
 
-async function removeFileNoFollow(projectDir: string, targetPath: string, label: string): Promise<void> {
+/**
+ * 回滚「事务前不存在的文件」（新建的章节文件）。此前一律拒绝删除 → apply 中段崩溃后
+ * 每次提交都进 recover → 抛 Rollback failed → 项目永久锁死，只能手工删 .story-engine-tx
+ * （2026-09-15 审计 P1-6）。
+ *
+ * 安全收紧而非放开：只有当磁盘内容【仍是本事务刚写入的内容】时才删（哈希比对）——
+ * 这证明文件是本次未完成的提交产生的、没被用户/别的进程改过，删了不会丢任何用户数据。
+ * 内容不匹配则保留并如实记录，绝不误删。
+ */
+async function removeFileNoFollow(
+  projectDir: string,
+  targetPath: string,
+  label: string,
+  writtenContent?: string,
+): Promise<void> {
   await assertSafeProjectPath(projectDir, targetPath, true, label);
   try {
     await lstat(targetPath);
@@ -1394,9 +1463,18 @@ async function removeFileNoFollow(projectDir: string, targetPath: string, label:
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
-  throw new Error(
-    `Refusing to path-delete ${label} at ${targetPath}; use the pre-commit snapshot or manual recovery.`,
-  );
+  if (writtenContent === undefined) {
+    throw new Error(
+      `Refusing to path-delete ${label} at ${targetPath}; no transaction content recorded for verification.`,
+    );
+  }
+  const currentContent = await readFile(targetPath, "utf-8");
+  if (sha256Text(currentContent) !== sha256Text(writtenContent)) {
+    throw new Error(
+      `Refusing to path-delete ${label} at ${targetPath}; content no longer matches the transaction's write (file was modified after the failed commit).`,
+    );
+  }
+  await rm(targetPath, { force: true });
 }
 
 function findUnknownHookIds(hookPool: HookPool, updates: readonly HookUpdate[]): string[] {
@@ -1404,9 +1482,10 @@ function findUnknownHookIds(hookPool: HookPool, updates: readonly HookUpdate[]):
   return updates.map((update) => update.hookId).filter((hookId) => !existing.has(hookId));
 }
 
-function mergeUnique(previous: readonly string[], additions: readonly string[] | undefined): readonly string[] {
-  if (!additions) return previous;
-  return [...new Set([...previous, ...additions].filter(Boolean))];
+function mergeUnique(previous: readonly string[], additions: unknown): readonly string[] {
+  const list = toStringArray(additions);
+  if (list.length === 0) return previous;
+  return [...new Set([...previous, ...list].filter(Boolean))];
 }
 
 function mergeUniqueRecords<T>(
@@ -1418,6 +1497,38 @@ function mergeUniqueRecords<T>(
   for (const item of previous) byKey.set(keyOf(item), item);
   for (const item of additions ?? []) byKey.set(keyOf(item), item);
   return [...byKey.values()];
+}
+
+/**
+ * P2：从累积列表里扣除显式点名的条目。归一化（去空白、转小写、压空格）后按文本匹配，
+ * 让模型写「城南争夺」能扣掉此前登记的「城南 争夺」。只删被点名的条目——
+ * 缺失不等于化解，绝不做推断式清除（铁律④：永不静默）。
+ */
+function subtractNormalized(values: readonly string[], removals: unknown): readonly string[] {
+  const removalList = toStringArray(removals);
+  if (removalList.length === 0) return values;
+  const removalSet = new Set(removalList.map(normalizeForMatch).filter((value) => value.length > 0));
+  if (removalSet.size === 0) return values;
+  return values.filter((value) => !removalSet.has(normalizeForMatch(value)));
+}
+
+/**
+ * 退化输入归一（铁律：工具边界要容忍模型给 ""/[]/0/"False"/裸 id 甚至非数组）。
+ * 非数组/非字符串一律归零，绝不让畸形值清空用户已登记的条目。
+ */
+function toStringArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
+/**
+ * 匹配归一：去全部空白 + 转小写。模型重述条目时常随手加空格/换行（「城南 争夺」vs「城南争夺」），
+ * 扣除按语义而非按字节才不漏扣；空格对语义无贡献，去掉它不会误伤两个真正不同的条目。
+ */
+function normalizeForMatch(value: string): string {
+  return value.replace(/\s+/gu, "").toLowerCase();
 }
 
 function unique(values: readonly string[]): readonly string[] {

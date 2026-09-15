@@ -8,6 +8,7 @@ import { buildCommitPlanFromProject } from "../commit-plan-builder.js";
 import { checkDraftContinuity } from "../continuity-quality-check.js";
 import { buildWriterContext, type ArcGoalsContext } from "../context-gateway.js";
 import { createStoryProject, readArcGoalPool, readHookPool, readThreadPool } from "../project-store.js";
+import { chaptersSinceTouched } from "../stale-reminder-policy.js";
 import type { ChapterDeltaDeclaration } from "../chapter-delta.js";
 import type { ArcGoalPool } from "../types.js";
 
@@ -311,6 +312,49 @@ describe("StoryEngine-NG Arc Goal Tracking", () => {
     expect(byId.get("arc-main")?.status).toBe("active"); // 主线 idle 19 也不自动蛰伏
     expect(byId.get("arc-done")?.status).toBe("completed");
     expect(byId.get("arc-already")?.status).toBe("stale");
+  });
+
+  // P2：老书的 arc-goals.json 可能早于 lastTouchedChapter 字段引入（缺字段/null/字符串）。
+  // 裸相减得 NaN，而 NaN < 15 恒为 false → 未知停滞时长的目标被直接判成超阈值而自动蛰伏，
+  // 这是静默地丢掉用户的叙事承诺。修复后：未知按「本章刚碰过」处理，不蛰伏、不报警。
+  it("expireStaleArcGoals：lastTouchedChapter 缺失/null/字符串 → 不蛰伏（NaN 不再做自动清理决策）", () => {
+    // 模拟老数据：字段缺失 / null / 字符串 / NaN 四种形态（base 里先把 lastTouchedChapter 摘掉）
+    const legacyGoal = (id: string, lastTouchedChapter: unknown): ArcGoalPool["goals"][number] => {
+      const { lastTouchedChapter: _dropped, ...base } = arcGoal(id, id, 1);
+      // 老数据本来就是畸形态——这里刻意构造类型不允许的形状，用 as 明示「我们知道这是坏数据」
+      return {
+        ...base,
+        scope: "mini_arc",
+        ...(lastTouchedChapter === "missing" ? {} : { lastTouchedChapter: lastTouchedChapter as number }),
+      } as ArcGoalPool["goals"][number];
+    };
+    const pool: ArcGoalPool = {
+      goals: [
+        legacyGoal("arc-missing", "missing"),
+        legacyGoal("arc-null", null),
+        legacyGoal("arc-string", "第三章"),
+        legacyGoal("arc-nan", Number.NaN),
+      ],
+    };
+
+    const result = expireStaleArcGoals({ pool, chapter: 99 });
+
+    expect(result.expired).toEqual([]); // 一个都不许蛰伏
+    for (const goal of result.pool.goals) {
+      expect(goal.status).toBe("active");
+    }
+  });
+
+  it("chaptersSinceTouched：缺字段/null/字符串/NaN/Infinity 一律按「本章刚碰过」（0 章）", () => {
+    expect(chaptersSinceTouched(undefined, 20)).toBe(0);
+    expect(chaptersSinceTouched(null, 20)).toBe(0);
+    expect(chaptersSinceTouched("第五章", 20)).toBe(0);
+    expect(chaptersSinceTouched(Number.NaN, 20)).toBe(0);
+    expect(chaptersSinceTouched(Number.POSITIVE_INFINITY, 20)).toBe(0);
+    // 正常值照算，且永不为负
+    expect(chaptersSinceTouched(15, 20)).toBe(5);
+    expect(chaptersSinceTouched(25, 20)).toBe(0);
+    expect(chaptersSinceTouched(15.7, 20)).toBe(5);
   });
 
   it("入库路径：久未推进的 mini_arc 被自动蛰伏并写盘+披露（即使本章无目标更新），main_arc 不蛰伏", async () => {

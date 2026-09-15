@@ -27,6 +27,8 @@ export interface ChapterSteeringDraft {
   readonly revealLevel: ChapterSteeringRevealLevel;
   readonly foundationContext: ChapterSteeringFoundationContext;
   readonly suggestions: readonly ChapterSteeringSuggestion[];
+  /** 预算不足以放下全部风险提醒时被砍下的条数（高危优先保留）；为 0/缺省=没砍 */
+  readonly risksTruncated?: number;
   readonly selectedInclusions: readonly string[];
   readonly generatedChapterGoalPreview: string;
   readonly safety: {
@@ -73,6 +75,9 @@ const DEFAULT_MAX_SUGGESTIONS = 6;
 const MAX_SELECTED_INCLUSIONS = 3;
 const AVAILABLE_ACTIONS = ["include", "skip", "weaken", "alternative"] as const;
 
+/** 风险严重度排序：预算不够时优先保留高危提醒，砍掉低危的 */
+const SEVERITY_RANK: Record<ChapterSteeringRisk, number> = { high: 3, medium: 2, low: 1 };
+
 export async function buildChapterSteeringDraft(input: BuildChapterSteeringDraftInput): Promise<ChapterSteeringDraft> {
   const overview = await buildStateOverview({
     projectDir: input.projectDir,
@@ -93,11 +98,19 @@ export async function buildChapterSteeringDraft(input: BuildChapterSteeringDraft
   ];
   const riskSuggestions = buildRiskSuggestions(overview, input.userDirection, mustAvoid);
   const ranked = rankSuggestions(candidates, mustInclude);
-  const nonRiskLimit = Math.min(maxSuggestions, Math.max(3, maxSuggestions - riskSuggestions.length));
+  // 风险条目是安全告警（「不要提前揭开隐藏真相」等高危提醒排在末尾），绝不能被普通建议挤出预算——
+  // 此前 nonRiskLimit 的 Math.max(3, ...) 保底让总数超预算，最终 slice(0, max) 把排在最后的 risk4
+  // 静默砍掉，用户和模型都看不到那条高危提醒。现在风险按严重度排序后优先占自己的份额，普通建议
+  // 只用剩余预算；风险超出预算时如实披露被砍条数（铁律④：永不静默）。
+  const risksBySeverity = [...riskSuggestions].sort((left, right) => SEVERITY_RANK[right.risk] - SEVERITY_RANK[left.risk]);
+  const riskBudget = Math.min(risksBySeverity.length, maxSuggestions);
+  const visibleRisks = risksBySeverity.slice(0, riskBudget);
+  const risksTruncated = risksBySeverity.length - visibleRisks.length;
+  const nonRiskLimit = Math.max(0, maxSuggestions - visibleRisks.length);
   const suggestions = uniqueSuggestions([
     ...selectWithTypeCoverage(ranked, nonRiskLimit, ["thread", "hook", "arcGoal"]),
-    ...riskSuggestions,
-  ]).slice(0, maxSuggestions);
+    ...visibleRisks,
+  ]);
   const selectedInclusions = suggestions
     .filter((item) => item.type !== "risk" && item.defaultAction === "include")
     .slice(0, MAX_SELECTED_INCLUSIONS)
@@ -112,6 +125,7 @@ export async function buildChapterSteeringDraft(input: BuildChapterSteeringDraft
     revealLevel,
     foundationContext,
     suggestions,
+    ...(risksTruncated > 0 ? { risksTruncated } : {}),
     selectedInclusions,
     generatedChapterGoalPreview: buildChapterGoalPreview({
       userDirection: input.userDirection,
@@ -371,6 +385,7 @@ function selectWithTypeCoverage(
   limit: number,
   preferredTypes: readonly ChapterSteeringSuggestionType[],
 ): ChapterSteeringSuggestion[] {
+  if (limit <= 0) return [];
   const selected: ChapterSteeringSuggestion[] = [];
   const selectedIds = new Set<string>();
   for (const type of preferredTypes) {

@@ -43,8 +43,28 @@ describe("enrichment-target 单体定向（补即做厚只补指名的，不整�
     expect(t?.ids.has("cX")).toBe(true); // 但仍参与匹配
   });
 
-  it("只给 id（无名字）时 labels 才回显 id（唯一可读 ref）", () => {
-    const t = parseEntityTarget({ targetIds: ["cX"] });
-    expect(t?.labels).toEqual(["cX"]);
+  it("只给 id 时 labels 映射成名字（有 nameById）；匹配仍按裸 id 走，不泄露给用户", () => {
+    const nameById = new Map([["cX", "沈墨"]]);
+    const t = parseEntityTarget({ targetIds: ["cX"], nameById });
+    expect(t?.labels).toEqual(["沈墨"]); // 用户看到的是名字
+    expect(t?.ids.has("cX")).toBe(true); // 引擎匹配仍走 id
+  });
+
+  // P2 铁律④：模型可能把引擎 slug（char-1a2b3c / asset-xxx）当 targetIds 传进来。
+  // 四个做厚工具的「没找到 X（…）」摘要直接拼 labels——裸 id 会原样进给用户看的文本。
+  it("只给引擎 slug 且映射不到名字 → labels 归一成「未知角色」，绝不裸奔", () => {
+    const t = parseEntityTarget({ targetIds: ["char-1a2b3c"] });
+    expect(t?.labels).toEqual(["「未知角色」"]);
+    expect(t?.ids.has("char-1a2b3c")).toBe(true); // 匹配照常
+  });
+
+  it("混合 id：能映射的用名字、映射不到的归一，顺序保持稳定", () => {
+    const nameById = new Map([["c1", "林远"]]);
+    const t = parseEntityTarget({ targetIds: ["c1", "char-deadbeef"], nameById });
+    expect(t?.labels).toEqual(["林远", "「未知角色」"]);
+  });
+
+  it("没有 nameById 时，引擎 slug 仍归一成「未知角色」（默认空映射，不回退裸 id）", () => {
+    expect(parseEntityTarget({ targetIds: ["asset-xyz"] })?.labels).toEqual(["「未知角色」"]);
   });
 });

@@ -992,6 +992,7 @@ describe("draft direct edit route", () => {
 
   it("does not call the model when explicit replacement target is missing", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-edit-");
+    await writeProjectJson(projectDir);  // P1-8：direct-edit 也过 assertStoryEngineProject
 
     const response = await callDraftRoute("/api/draft/direct-edit", {
       projectPath: projectDir,
@@ -1011,6 +1012,7 @@ describe("draft direct edit route", () => {
 
   it("allows direct edit when explicit replacement target exists", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-edit-");
+    await writeProjectJson(projectDir);  // P1-8：direct-edit 也过 assertStoryEngineProject
 
     const response = await callDraftRoute("/api/draft/direct-edit", {
       projectPath: projectDir,
@@ -1032,6 +1034,7 @@ describe("draft direct edit route", () => {
 
   it("模型回吐的草稿与原稿逐字一致（什么都没改）→ 诚实 422、不回『已改』（afterfix·改稿谎报根治）", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-edit-");
+    await writeProjectJson(projectDir);  // P1-8：direct-edit 也过 assertStoryEngineProject
     callOpenAICompatibleChatModel.mockResolvedValueOnce({
       content: JSON.stringify({
         reply: "已改到工作稿。",
@@ -1056,6 +1059,7 @@ describe("draft direct edit route", () => {
 
   it("returns a readable no-op error when the model returns malformed JSON", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-edit-");
+    await writeProjectJson(projectDir);  // P1-8：direct-edit 也过 assertStoryEngineProject
     callOpenAICompatibleChatModel.mockResolvedValueOnce({
       content: '{ "reply": "已改" "draftContent": "# 第1章\\n\\n海州审计办公室灯还亮着。" }',
       raw: "{}",
@@ -1140,7 +1144,11 @@ function startDraftSseRoute(path: string, body: Record<string, unknown>): {
   const chunks: Buffer[] = [];
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
+    // 与真 Node 同口径：writeHead 之前 headersSent=false，之后 true。路由的 sendEvent 护栏
+    // （!res.headersSent 时丢帧，防 writeHead 前写 SSE 帧刷出错的默认头）依赖它。
+    headersSent: false,
     writableEnded: false,
+    destroyed: false,
     setHeader: (name: string, value: string | number | readonly string[]) => {
       void name;
       void value;
@@ -1148,6 +1156,7 @@ function startDraftSseRoute(path: string, body: Record<string, unknown>): {
     },
     writeHead: (statusCode: number) => {
       res.statusCode = statusCode;
+      (res as { headersSent: boolean }).headersSent = true;
       return res as unknown as ServerResponse;
     },
     write: (chunk: string | Buffer) => {

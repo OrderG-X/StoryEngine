@@ -94,7 +94,10 @@ export const generateAssetEnrichmentTool = writeTool({
   outputSchema,
   run: async ({ input, projectDir }) => {
     const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
-    const target = parseEntityTarget(input);
+    const target = parseEntityTarget({
+      ...input,
+      nameById: new Map(overview.characterMatrix.characters.map((c) => [c.id, c.name])),
+    });
     const assets = filterByEntityTarget(collectAssetEntities(overview.assetSummary), target);
     if (target && assets.length === 0) {
       return {

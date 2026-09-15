@@ -626,6 +626,76 @@ describe("toolResultStatus：裁决类只读工具的 ok:false ≠ 工具崩了�
   });
 });
 
+describe("空 toolCallId 兜底（治多工具塌进同一个 toolSteps key）", () => {
+  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
+
+  async function runToolTurn(chunks: ObedientTurnChunk[]): Promise<{ event: string; data: unknown }[]> {
+    const streamAttempt = async () =>
+      (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })();
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "开始" }],
+      userText: "开始",
+      streamAttempt: streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+      maxRetries: 0,
+    });
+    return events;
+  }
+
+  it("两次空 id 的工具调用 → 转发的 id 各不相同、不再互相覆盖", async () => {
+    const events = await runToolTurn([
+      { type: "tool-call", payload: { toolCallId: "", toolName: "generate_draft", args: {} } },
+      { type: "tool-result", payload: { toolCallId: "", toolName: "generate_draft", result: { ok: true, summary: "已生成工作稿。" } } },
+      { type: "tool-call", payload: { toolCallId: "", toolName: "commit_chapter", args: {} } },
+      { type: "tool-result", payload: { toolCallId: "", toolName: "commit_chapter", result: { ok: true, summary: "已入库。" } } },
+    ]);
+    const calls = events.filter((e) => e.event === "tool-call").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    const results = events.filter((e) => e.event === "tool-result").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    expect(calls).toHaveLength(2);
+    expect(results).toHaveLength(2);
+    expect(calls[0]).not.toBe("");
+    expect(new Set(calls).size).toBe(2);
+    // FIFO 配对：结果按序复用对应调用的合成 id（前端按 id 把步骤收尾，配错会卡 running）
+    expect(results[0]).toBe(calls[0]);
+    expect(results[1]).toBe(calls[1]);
+  });
+
+  it("有真实 id 时原样透传，不被合成 id 污染", async () => {
+    const events = await runToolTurn([
+      { type: "tool-call", payload: { toolCallId: "call-abc", toolName: "generate_draft", args: {} } },
+      { type: "tool-result", payload: { toolCallId: "call-abc", toolName: "generate_draft", result: { ok: true, summary: "已生成。" } } },
+    ]);
+    const calls = events.filter((e) => e.event === "tool-call").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    const results = events.filter((e) => e.event === "tool-result").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    expect(calls).toEqual(["call-abc"]);
+    expect(results).toEqual(["call-abc"]);
+  });
+
+  it("tool-error 空 id 也按 FIFO 配对收尾（不把别的步骤置 failed）", async () => {
+    const events = await runToolTurn([
+      { type: "tool-call", payload: { toolCallId: "", toolName: "generate_draft", args: {} } },
+      { type: "tool-error", payload: { toolCallId: "", toolName: "generate_draft", error: "boom" } },
+    ]);
+    const calls = events.filter((e) => e.event === "tool-call").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    const errors = events.filter((e) => e.event === "tool-error").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    expect(calls[0]).not.toBe("");
+    expect(errors[0]).toBe(calls[0]);
+  });
+
+  it("结果事件先于调用事件到达（旧数据/race）→ 自己领一个新 id，不崩、不串", async () => {
+    const events = await runToolTurn([
+      { type: "tool-result", payload: { toolCallId: "", toolName: "generate_draft", result: { ok: true, summary: "孤儿结果。" } } },
+    ]);
+    const results = events.filter((e) => e.event === "tool-result").map((e) => (e.data as { toolCallId: string }).toolCallId);
+    expect(results).toHaveLength(1);
+    expect(results[0]).not.toBe("");
+  });
+});
+
 // r8 二轮：聊天历史窗口截断。ch84/ch88/ch93 三个病例一致：历史堆到 ≥5 章重复回执剧本后，
 // 弱模型开始续写回执而不调工具——正常成功回执也诱发。状态真值源在磁盘/工具，历史只保近程连续性。
 describe("capChatHistoryWindow 聊天历史窗口（r8 治回执模式先验）", () => {

@@ -1,6 +1,6 @@
 import type { ForeshadowingDeclaration, PendingIntentDeclaration, VerifiedChapterDelta } from "./chapter-delta.js";
 import type { ChapterSemanticSummary } from "./commit-plan-builder.js";
-import { shouldRemindStaleAt } from "./stale-reminder-policy.js";
+import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import { bigramSimilarity } from "./text-similarity.js";
 import type { NarrativeThread, ThreadPool } from "./types.js";
 
@@ -288,14 +288,14 @@ export function expireStaleIntents(input: {
   const expired: ExpiredIntentThread[] = [];
   const threads = input.pool.threads.map((thread) => {
     if (thread.type !== "intent" || thread.status !== "open") return thread;
-    const chaptersSinceTouched = input.chapter - thread.lastTouchedChapter;
-    if (chaptersSinceTouched < 9) return thread;
+    const idleChapters = chaptersSinceTouched(thread.lastTouchedChapter, input.chapter);
+    if (idleChapters < 9) return thread;
     expired.push({
       id: thread.id,
       type: "intent",
       title: thread.title,
       lastTouchedChapter: thread.lastTouchedChapter,
-      chaptersSinceTouched,
+      chaptersSinceTouched: idleChapters,
     });
     return { ...thread, status: "stale" as const };
   });
@@ -630,7 +630,7 @@ function findStaleThreadWarnings(
     .filter((thread) => !touchedThreadIds.has(thread.id))
     .map((thread) => ({
       thread,
-      chaptersSinceTouched: chapter - thread.lastTouchedChapter,
+      chaptersSinceTouched: chaptersSinceTouched(thread.lastTouchedChapter, chapter),
     }))
     .filter((entry) => shouldRemindStaleAt(entry.chaptersSinceTouched, THREAD_STALE_THRESHOLD))
     .sort((left, right) => right.chaptersSinceTouched - left.chaptersSinceTouched)
@@ -659,7 +659,7 @@ function collectStaleBacklog(
   const idles = threads
     .filter((thread) => thread.status === "open" || thread.status === "touched")
     .filter((thread) => !touchedThreadIds.has(thread.id))
-    .map((thread) => chapter - thread.lastTouchedChapter)
+    .map((thread) => chaptersSinceTouched(thread.lastTouchedChapter, chapter))
     .filter((idle) => idle > THREAD_STALE_THRESHOLD);
   if (idles.length === 0) return { count: 0 };
   return { count: idles.length, oldestChaptersSinceTouched: Math.max(...idles) };
