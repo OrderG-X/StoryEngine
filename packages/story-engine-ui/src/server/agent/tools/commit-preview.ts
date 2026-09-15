@@ -25,6 +25,8 @@ import {
   type CommitPreviewDeclareDelta,
 } from "../../services/commit-service.js";
 import { callConfiguredDeclareModel, declareChapterDelta } from "./chapter-delta-declaration.js";
+import { scrubBareEntityIdsFromText } from "./commit-apply.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
 
 /**
@@ -197,16 +199,25 @@ export async function buildCommitPreviewToolOutput(input: {
     ...(continuityBreakWarning ? [continuityBreakWarning] : []),
   ];
 
+  // 铁律④·绝不泄露裸 id/path：commitPlan.issues 是引擎诊断文本，可能含裸 hook-/char- id
+  // （「Hook not found: hook-a3f9c1」）或本地绝对路径 errno 原文。同簇 commit-apply 已消毒，
+  // 预览侧此前漏接（2026-09-15 审计 P1-5）。nameById 就用本轮已有的名字漂移 findings，
+  // 不必为消毒重读一次 overview。
+  const nameById = new Map(nameConsistencyWarnings.map((warning) => [warning.driftedVariant, warning.establishedName]));
+  const safeIssues = commitPlan.issues.map(
+    (issue) => scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(issue, nameById)),
+  );
+
   const blockingReasons: string[] = [];
   if (!commitPlan.passed || !commitPlan.commitPlan) {
-    blockingReasons.push("commit_plan_not_passed");
-    blockingReasons.push(...commitPlan.issues);
+    blockingReasons.push("定稿计划未通过");
+    blockingReasons.push(...safeIssues);
   }
   if (draftQualityIssues.some((issue) => issue.severity === "error")) {
-    blockingReasons.push("draft_quality_error");
+    blockingReasons.push("正文质量存在硬伤级问题");
   }
   if (semanticQualityIssues.some((issue) => issue.severity === "error")) {
-    blockingReasons.push("semantic_quality_error");
+    blockingReasons.push("语义质量存在硬伤级问题");
   }
 
   const canCommit = blockingReasons.length === 0;

@@ -612,3 +612,20 @@ describe("commit_preview", () => {
     expect(seenGoals ?? []).not.toContain("早已达成的目标");
   });
 });
+
+  it("P1-5 消毒：预览不通过时 summary/blockingReasons 不含裸 entity id 与本地绝对路径", async () => {
+    const projectDir = await makeProject("消毒", "林远");
+    await writeDraft(projectDir, 1, "# 第1章\n\n林远来了。\n"); // 过短 → 走 issues 路径
+    const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+    expect(out.canCommit).toBe(false);
+
+    const BARE_ID = /(?:^|[^\p{L}])(?:hook|char|thread|fact)-[0-9a-f]{4,}/u;
+    const ABS_PATH = /\/(?:Users|home|tmp|var|private)\//u;
+    const allText = [out.summary, ...out.blockingReasons].join("\n");
+    expect(BARE_ID.test(allText), `summary 含裸 id：${allText}`).toBe(false);
+    expect(ABS_PATH.test(allText), `summary 含绝对路径：${allText}`).toBe(false);
+    // 机器码已换成中文（此前显示 commit_plan_not_passed/draft_quality_error）
+    expect(out.blockingReasons).not.toContain("commit_plan_not_passed");
+    expect(out.blockingReasons).not.toContain("draft_quality_error");
+    expect(out.blockingReasons).not.toContain("semantic_quality_error");
+  });

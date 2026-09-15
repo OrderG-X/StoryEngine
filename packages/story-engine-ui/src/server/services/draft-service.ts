@@ -48,7 +48,7 @@
  * 铁律继承（一字未动）：优胜稿落盘唯一通道 persistFastDraftBody；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, stat as statFile, writeFile } from "node:fs/promises";
 import {
   buildDraftLengthReport,
   buildStateOverview,
@@ -145,9 +145,26 @@ function enforceDraftLengthTarget(input: {
   return { ok: true, draftBody: trimmed.draftBody.trim() };
 }
 
-/** 执法拒稿回滚：有旧稿原文则写回，无旧稿删掉引擎刚写的文件（绝不把拒收的短稿留在盘上）。 */
-async function restoreDraftFile(draftPath: string, previousContent: string | undefined): Promise<void> {
+/**
+ * 执法拒稿回滚：有旧稿原文则写回，无旧稿删掉引擎刚写的文件（绝不把拒收的短稿留在盘上）。
+ * CAS 防护（Fable 5.1 复审漏报 R1 / 2026-09-15 审计 P1-6 附带）：读旧稿（写盘前）与回滚
+ * 之间有一个写盘窗口，期间文件若被别的进程改过（mtime/size 变了），回滚会静默覆盖第三方
+ * 改动。此时如实抛错，绝不覆盖——调用方把它报成失败，比静默吞掉安全。
+ */
+export async function restoreDraftFile(
+  draftPath: string,
+  previousContent: string | undefined,
+  cas?: { readonly mtimeMs?: number; readonly size?: number },
+): Promise<void> {
   if (previousContent !== undefined) {
+    if (cas?.mtimeMs !== undefined && cas?.size !== undefined) {
+      const current = await statFile(draftPath).catch(() => null);
+      if (current && (current.mtimeMs !== cas.mtimeMs || current.size !== cas.size)) {
+        throw new Error(
+          `回滚前发现工作稿已被改动（mtime ${cas.mtimeMs} → ${current.mtimeMs}，size ${cas.size} → ${current.size}），为避免覆盖第三方改动，本次拒稿未回滚旧稿。`,
+        );
+      }
+    }
     await writeFile(draftPath, previousContent, "utf-8");
     return;
   }
@@ -378,7 +395,7 @@ export async function readFileContentWithRetry(
 /** D1 enforce 写前读旧稿的三态结果：缺席（首稿）/读到原文/存在但读不出（调用方须 fail-closed 拒稿）。 */
 export type PreviousDraftReadResult =
   | { readonly kind: "absent" }
-  | { readonly kind: "present"; readonly content: string }
+  | { readonly kind: "present"; readonly content: string; readonly mtimeMs?: number; readonly size?: number }
   | { readonly kind: "unreadable"; readonly error: string };
 
 /**
@@ -397,8 +414,10 @@ export async function readPreviousDraftForRollback(
   let lastError: unknown;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const content = await readFile(draftPath, "utf-8");
-      return { kind: "present", content };
+      const [content, stat] = await Promise.all([readFile(draftPath, "utf-8"), statFile(draftPath)]);
+      // CAS 凭据（Fable 5.1 复审漏报 R1）：回滚前要比对 mtime+size，若写盘窗口内文件被
+      // 别的进程改过，restoreDraftFile 不得静默覆盖第三方改动。
+      return { kind: "present", content, mtimeMs: stat.mtimeMs, size: stat.size };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
       lastError = error;
@@ -1221,6 +1240,13 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   let finalDraftContent = "";
   let lengthEnforcementSkipped = false;
   if (lengthPolicy === "enforce_or_rollback") {
+    // CAS 锚点必须在【引擎写盘之后】：previousDraftCas 是写盘前的 mtime/size，引擎自己的
+    // runFastDraft 落盘必然改变它——若拿写盘前的凭据去比对，正常回滚会被误拦。这里重取
+    // 一次 stat 作为「引擎写完后的已知状态」，回滚前再比对：只有引擎写完之后、回滚之前
+    // 这段窗口内文件被第三方改动，才拒绝覆盖（Fable 5.1 复审漏报 R1）。
+    const postWriteCas = await statFile(report.draftPath).then(
+      (stat) => ({ mtimeMs: stat.mtimeMs, size: stat.size }),
+    ).catch(() => undefined);
     const writtenContent = await readFileContentWithRetry(report.draftPath);
     if (writtenContent.trim()) {
       const writtenBody = stripLeadingMarkdownChapterHeading(writtenContent);
@@ -1230,7 +1256,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
         allowDeterministicTrim: true,
       });
       if (!enforced.ok) {
-        await restoreDraftFile(report.draftPath, previousDraftContent);
+        await restoreDraftFile(report.draftPath, previousDraftContent, postWriteCas);
         return {
           ok: false,
           chapter,

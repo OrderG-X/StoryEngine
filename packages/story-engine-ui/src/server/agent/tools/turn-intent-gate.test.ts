@@ -143,6 +143,34 @@ describe("turn-intent-gate draft write（generate_draft 写作意图门）", () 
     expect(userTurnAllowsDraftWrite(undefined)).toBe(true);
     expect(userTurnAllowsDraftWrite("   ")).toBe(true);
   });
+
+  // P1-3：否定词表补裸「不」与「不着急/不急着」——对齐 commit 门，此前漏收致出稿被白耗
+  it.each([
+    "不着急写下一章",
+    "我不着急写下一章",
+    "不急着写第8章",
+    "下一章先不写",
+    "这一章不用写",
+  ])("P1-3 推迟/否定写作句应拦：%s", (text) => {
+    expect(userTurnAllowsDraftWrite(text)).toBe(false);
+  });
+
+  // P1-4：尾句否决——正向决定子句之后的纯推迟/否定尾句行使否决权（对齐 commit 门）
+  it.each([
+    "写第8章，先别写",
+    "写下一章，等等再说",
+    "继续写，慢着",
+    "写第8章，不着急",
+    "写下一章，不急着写",
+    "写第8章，算了",
+  ])("P1-4 尾句否决应拦：%s", (text) => {
+    expect(userTurnAllowsDraftWrite(text)).toBe(false);
+  });
+
+  it("P1-4 范围限定尾句不得被误拦（否定作用于范围宾语，不是叫停本轮）", () => {
+    expect(userTurnAllowsDraftWrite("写第7章正文，不要写后面的章节")).toBe(true);
+    expect(userTurnAllowsDraftWrite("写这章，其他章别写")).toBe(true);
+  });
 });
 
 describe("turn-intent-gate thread cleanup", () => {

@@ -83,3 +83,22 @@ describe("RevisionPreviewModal 诚实第三态", () => {
     expect(screen.queryByRole("button", { name: "应用到工作稿" })).toBeNull();
   });
 });
+
+  it("P1-1 回归：同一挂载实例上 task 从非空变空不崩（Rules of Hooks）", () => {
+    // RevisionPreviewModal 由 WritingDeskCodex 无条件挂载，点「放弃/应用/切章」会让
+    // activeRevisionTask 变空。Hook 若在条件 return 之后，这一变空会抛
+    // "Rendered fewer hooks than expected" 把整个工作区崩到 ErrorBoundary 兜底页。
+    const { rerender } = render(<RevisionPreviewModal {...baseProps()} />);
+    expect(screen.getByRole("button", { name: "放弃" })).toBeTruthy();
+
+    expect(() => {
+      rerender(<RevisionPreviewModal {...baseProps({ activeRevisionTask: null })} />);
+    }).not.toThrow();
+    expect(screen.queryByRole("button", { name: "放弃" })).toBeNull();
+
+    // 再变回非空也要正常（Hook 顺序在两次切换间必须稳定）
+    expect(() => {
+      rerender(<RevisionPreviewModal {...baseProps()} />);
+    }).not.toThrow();
+    expect(screen.getByRole("button", { name: "放弃" })).toBeTruthy();
+  });

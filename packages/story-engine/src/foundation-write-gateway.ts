@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { dedupeStringList } from "./canonical-resolvers.js";
 import { isSentinelEntityId, readProject, toSafeCharacterId } from "./project-store.js";
@@ -2481,9 +2481,17 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   return text === undefined ? fallback : JSON.parse(text) as T;
 }
 
+/**
+ * 原子写（tmp + rename）：与 project-store.writeJson 对齐。
+ * 直接 writeFile 覆盖在进程被杀（OOM/断电/强退）时会留下截断的 JSON，而 readJsonSafe
+ * 对 SyntaxError 一律返回 fallback → 面板和写手上下文静默显示空设定（2026-09-15 审计 P0-2）。
+ * rename 在同文件系统内是原子的：要么完整落盘，要么保持旧文件不动。
+ */
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  const tmpPath = `${path}.tmp-${process.pid}`;
+  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  await rename(tmpPath, path);
 }
 
 function lastPathSegment(path: string): string {

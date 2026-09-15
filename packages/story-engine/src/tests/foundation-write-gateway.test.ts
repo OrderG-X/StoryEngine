@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -1550,6 +1550,39 @@ describe("foundation write gateway", () => {
     expect(result.applied).toBe(false);
     expect(result.writes).toEqual([]);
     expect(result.skipped?.some((s) => s.reason === "no_recognized_fields")).toBe(true);
+  });
+
+  it("P0-2 原子写：成功后不留 .tmp 残留，旧文件在写入期间始终可读且完整", async () => {
+    const { projectDir } = await createProject("原子写");
+    const rel = "story/writing-rules.json";
+    await writeJson(projectDir, rel, {
+      version: "v0",
+      rules: [{ id: "rule-old", doNotDo: ["旧规则"], proseStyle: ["克制"] }],
+    });
+    const abs = join(projectDir, rel);
+
+    // 写入前旧文件完整可读（写入期间也始终是完整的旧内容，直到 rename 那一刻才换新）
+    await expect(readFile(abs, "utf-8")).resolves.toContain("旧规则");
+
+    const result = await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: rel,
+        targetPath: "rule-old",
+        after: { doNotDo: ["新规则"] },
+      },
+    });
+    expect(result.applied).toBe(true);
+
+    // 成功后目标文件已更新、且目录里没有 .tmp 残留（tmp 已被 rename 消费）
+    const files = await readdir(join(projectDir, "story"));
+    expect(files.filter((f) => f.includes(".tmp-"))).toEqual([]);
+    const after = await readFile(abs, "utf-8");
+    expect(after).toContain("新规则");
+    // JSON 仍合法可解析（原子写的核心保证：不会留下截断的半个文件）
+    expect(() => JSON.parse(after)).not.toThrow();
   });
 });
 

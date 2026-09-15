@@ -85,7 +85,7 @@ vi.mock("../agent/ai-flavor/de-ai-flavor-batch.js", () => ({
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
-import { readFileContentWithRetry, readPreviousDraftForRollback, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
+import { readFileContentWithRetry, readPreviousDraftForRollback, restoreDraftFile, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
 // chmod 0o000 注入读失败在 root 下不生效（root 无视权限位），win32 无 POSIX 权限语义——跳过。
@@ -233,12 +233,14 @@ describe("readPreviousDraftForRollback（P2-5 写前读旧稿 fail-closed 三态
     ).resolves.toEqual({ kind: "absent" });
   });
 
-  it("旧稿存在 → present，原文逐字返回（回滚凭据）", async () => {
+  it("旧稿存在 → present，原文逐字返回（回滚凭据），并带 mtime/size 供 CAS 比对", async () => {
     const path = join(projectDir!, "draft.md");
     await writeFile(path, DRAFT_TEXT, "utf-8");
-    await expect(
-      readPreviousDraftForRollback(path, { retries: 3, delayMs: 1 }),
-    ).resolves.toEqual({ kind: "present", content: DRAFT_TEXT });
+    const result = await readPreviousDraftForRollback(path, { retries: 3, delayMs: 1 });
+    expect(result).toMatchObject({ kind: "present", content: DRAFT_TEXT });
+    // CAS 凭据齐备：回滚前比对，防写盘窗口内的第三方改动被静默覆盖（R1）
+    expect(result.kind === "present" && typeof result.mtimeMs === "number").toBe(true);
+    expect(result.kind === "present" && typeof result.size === "number").toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("旧稿存在但彻底读失败（ELOOP 自指 symlink）→ unreadable 如实带错误", async () => {
@@ -388,5 +390,42 @@ describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）"
     expect(result.snapshotId).toBeUndefined();
     // 原稿分毫不动（降级承诺）。
     expect(await readFile(draftPath, "utf-8")).toBe(DRAFT_TEXT);
+  });
+});
+
+describe("restoreDraftFile CAS（R1：写盘窗口内的第三方改动不得被静默覆盖）", () => {
+  let dir: string | undefined;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "cas-")); });
+  afterEach(async () => { if (dir) { await rm(dir, { recursive: true, force: true }); dir = undefined; } });
+
+  it("mtime/size 未变 → 照常写回旧稿", async () => {
+    const path = join(dir!, "draft.md");
+    await writeFile(path, "旧稿", "utf-8");
+    const cas = await readPreviousDraftForRollback(path);
+    expect(cas.kind).toBe("present");
+    const { mtimeMs, size } = cas.kind === "present" ? cas : { mtimeMs: undefined, size: undefined };
+    await restoreDraftFile(path, "旧稿", { mtimeMs, size });
+    expect(await readFile(path, "utf-8")).toBe("旧稿");
+  });
+
+  it("窗口内文件被改动 → 拒绝回滚覆盖，如实抛错", async () => {
+    const path = join(dir!, "draft.md");
+    await writeFile(path, "旧稿", "utf-8");
+    const cas = await readPreviousDraftForRollback(path);
+    expect(cas.kind).toBe("present");
+    const { mtimeMs, size } = cas.kind === "present" ? cas : { mtimeMs: undefined, size: undefined };
+    // 模拟写盘窗口内别的进程改了稿子（内容+size 都变）
+    await writeFile(path, "别人刚保存的新稿", "utf-8");
+    await expect(restoreDraftFile(path, "旧稿", { mtimeMs, size }))
+      .rejects.toThrow(/已被改动/);
+    // 关键：第三方改动留在盘上，没被旧稿覆盖
+    expect(await readFile(path, "utf-8")).toBe("别人刚保存的新稿");
+  });
+
+  it("缺 CAS 凭据 → 维持旧行为照常回滚（向后兼容旧调用方）", async () => {
+    const path = join(dir!, "draft.md");
+    await writeFile(path, "引擎刚写的短稿", "utf-8");
+    await restoreDraftFile(path, "旧稿");
+    expect(await readFile(path, "utf-8")).toBe("旧稿");
   });
 });

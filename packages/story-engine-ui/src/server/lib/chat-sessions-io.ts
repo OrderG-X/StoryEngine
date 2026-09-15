@@ -25,14 +25,32 @@ export interface ChatSessionIndex { sessions: ChatSessionIndexEntry[]; activeSes
 export function chatSessionsDir(projectDir: string): string {
   return join(projectDir, ".story-engine-ui", "chat-sessions");
 }
+
+/**
+ * 会话 id 守门（安全收敛，2026-09-15 审计 P0-1）：客户端传入的 id 直接拼进路径，
+ * 未校验时可借 `..` 段逃出 chat-sessions 目录，读到任意 JSON（含 ~/.story-engine/model-secrets.json
+ * 的 API Key 明文），并经 save/rename/delete 衍生任意文件覆盖/删除。
+ * 只放行服务端 newId() 生成的格式（session- + 8 位 hex），合法 id 零误伤。
+ * 注意：磁盘文件名是 session-${id}.json（id 自带 session- 前缀，历史形成双前缀，
+ * 见 git b299390）——守门只校验 id，不改拼接，免得老书会话文件全部读不到。
+ */
+export function assertSafeSessionId(id: string): void {
+  if (!SAFE_SESSION_ID.test(id)) {
+    throw new Error(`非法会话 id（拒绝拼路径）：${JSON.stringify(id).slice(0, 80)}`);
+  }
+}
+const SAFE_SESSION_ID = /^session-[0-9a-f]{8}$/u;
+
 export function chatSessionPath(projectDir: string, id: string): string {
+  assertSafeSessionId(id);
   return join(chatSessionsDir(projectDir), `session-${id}.json`);
 }
 export function chatSessionIndexPath(projectDir: string): string {
   return join(chatSessionsDir(projectDir), "index.json");
 }
-/** 冷归档：溢出热窗口的旧消息按行追加于此（jsonl，只增不删），数据永不丢。 */
+/** 冷归档：溢出热窗口的旧消息按行追加于此（jsonl，只增不删，数据永不丢）。 */
 export function chatSessionArchivePath(projectDir: string, id: string): string {
+  assertSafeSessionId(id);
   return join(chatSessionsDir(projectDir), `session-${id}.archive.jsonl`);
 }
 

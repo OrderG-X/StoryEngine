@@ -191,8 +191,16 @@ const DRAFT_WRITE_PATTERNS = [
   new RegExp(`(?:创作|撰写)[^。！？；\\n]{0,6}(?:第\\s*${CH_NUM}\\s*章|正文|这一?章|下一?章)`, "u"),
 ];
 
-// 否定词 + 短距离内的「写/动/碰/急」（「下一章不要写」「下一章先别动」都算否定该子句）
-const DRAFT_WRITE_NEGATION_PATTERN = /(?:先)?(?:别|不要|先不|暂不|无需|不用)[^，。；！？\n]{0,6}(?:写|动|碰|急)/u;
+// 否定词 + 短距离内的「写/动/碰/急」（「下一章不要写」「下一章先别动」都算否定该子句）。
+// 含裸「不」与「不着急/不急着」——对齐 commit 门的 GATE_NEGATION_WORD（「不着急入库」已拦，
+// draft 门此前漏收：用户说「不着急写下一章」被当正向放行，白耗一整章 token；2026-09-15 审计 P1-3）
+const DRAFT_WRITE_NEGATION_PATTERN = /(?:先)?(?:不(?:着急|急着|要|用|想)?|别|先不|暂不|无需)[^，。；！？\n]{0,6}(?:写|动|碰|急)/u;
+// 纯推迟尾句（对齐 commit 门的 GATE_TRAILING_VETO_CLAUSE）。「不着急/不急着」亦收。
+// 允许「等等再说」「想了想再说」这类「推迟A + 再说」组合（复审 P1-4 实锤）。
+const DRAFT_WRITE_TRAILING_VETO = /^(?:但|但是|不过|可是)?(?:我)?(?:再|又)?(?:先)?(?:不(?:着急|急着)|别|别急|不行|不好|等等|等下|等一等|等一下|缓一缓|慢着|想想|想一下|考虑一下|考虑|算了)(?:再(?:说|看|想|等等?))?$/u;
+// 范围限定而非拒写：否定作用于「其他/后面/别的章节」这类范围宾语（「不要写后面的章节」
+// 限定本轮范围，不是叫停本轮写作）。出现这些范围词时，否定子句不当否决。
+const DRAFT_WRITE_SCOPE_LIMIT = /其他|别的|后面|后续|以外|之外/u;
 
 /** 子句切分（逗号/句号/分号/问叹号/换行）：否定的作用域按子句判定，不跨子句误伤。 */
 const CLAUSE_SPLIT = /[，,。．.;；！!？?\n]+/u;
@@ -258,7 +266,9 @@ export function userTurnAllowsCommitApply(userTurnText: string | undefined): boo
  * 否定按【子句作用域】判定（复审 P1 重做——此前「否定在正向之后=限定范围」的规则会把
  * 「确认定稿，下一章不要写」反向放行）：
  * - 一个子句里同时有写作词和否定词 → 该子句被否定（「下一章不要写」「别写下一章」）；
- * - 存在至少一个「纯正向」子句（有写作意图、无否定）→ 放行
+ * - 尾句否决：决定性正向子句之后的纯推迟/否定尾句行使否决权（「写第8章，先别写」「写下一章，不着急」
+ *   「继续写，慢着」）——对齐 commit 门的尾句否决，2026-09-15 审计 P1-4 补；
+ * - 存在至少一个「纯正向」子句（有写作意图、无否定、且后面没被尾句否决）→ 放行
  *   （「继续写第59章正文。只写这一章，不要写其他章。」「先别写，算了还是写第8章吧」）；
  * - 只有被否定的子句 → 拦。
  */
@@ -267,9 +277,19 @@ export function userTurnAllowsDraftWrite(userTurnText: string | undefined): bool
   if (!text) return true;
   if (!hasAnyPattern(text, DRAFT_WRITE_PATTERNS)) return false;
   const clauses = text.split(CLAUSE_SPLIT).map((clause) => clause.trim()).filter(Boolean);
-  return clauses.some((clause) =>
-    hasAnyPattern(clause, DRAFT_WRITE_PATTERNS) && !DRAFT_WRITE_NEGATION_PATTERN.test(clause),
+  const positiveIdx = clauses.findIndex(
+    (clause) => hasAnyPattern(clause, DRAFT_WRITE_PATTERNS) && !DRAFT_WRITE_NEGATION_PATTERN.test(clause),
   );
+  if (positiveIdx < 0) return false;
+  // 尾句否决：正向决定子句之后的尾句若为纯推迟/否定写作，行使否决权（「写第8章，先别写」
+  // 「写下一章，等等再说」「写下一章，不急着写」）。「写第7章，不要写后面的章节」
+  // 不拦——它的否定限定的是「后面的章节」这一范围宾语，不是本轮写作本身。
+  return !clauses.slice(positiveIdx + 1).some((clause) => {
+    if (DRAFT_WRITE_TRAILING_VETO.test(clause)) return true;
+    // 否定写作尾句（如「先别写」「不急着写」）：命中否定写作即否决，除非是范围限定
+    if (!DRAFT_WRITE_NEGATION_PATTERN.test(clause)) return false;
+    return !DRAFT_WRITE_SCOPE_LIMIT.test(clause);
+  });
 }
 
 export function userTurnAllowsThreadCleanup(userTurnText: string | undefined): boolean {

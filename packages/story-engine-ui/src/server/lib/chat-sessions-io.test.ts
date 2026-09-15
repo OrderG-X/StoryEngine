@@ -120,8 +120,9 @@ describe("chat-sessions-io CRUD", () => {
     const before = await readChatSessionIndex(dir);
     const activeBefore = await readChatSession(dir, before.activeSessionId);
 
-    await expect(switchChatSessionTransaction(dir, "missing")).rejects.toThrow("会话不存在");
-    await expect(deleteChatSessionTransaction(dir, "missing")).rejects.toThrow("会话不存在");
+    // id 用 newId 格式（过 P0-1 守门），测的是「存在性校验」而非路径校验
+    await expect(switchChatSessionTransaction(dir, "session-deadbeef")).rejects.toThrow("会话不存在");
+    await expect(deleteChatSessionTransaction(dir, "session-deadbeef")).rejects.toThrow("会话不存在");
 
     expect(await readChatSessionIndex(dir)).toEqual(before);
     expect(await readChatSession(dir, before.activeSessionId)).toEqual(activeBefore);
@@ -143,12 +144,13 @@ describe("chat-sessions-io CRUD", () => {
     const dir = await tmpProject();
     await mkdir(chatSessionsDir(dir), { recursive: true });
     // 非空目录占住目标路径：rename(文件 → 非空目录) 必败，注入原子写收尾故障
-    const blockedPath = chatSessionPath(dir, "ghost");
+    // id 用服务端 newId() 的真实格式（session- + 8 位 hex），过 P0-1 守门
+    const blockedPath = chatSessionPath(dir, "session-deadbeef");
     await mkdir(join(blockedPath, "blocker"), { recursive: true });
     const ts = new Date().toISOString();
 
     await expect(writeChatSession(dir, {
-      id: "ghost", name: "故障注入", messages: [], archivedCount: 0, createdAt: ts, updatedAt: ts,
+      id: "session-deadbeef", name: "故障注入", messages: [], archivedCount: 0, createdAt: ts, updatedAt: ts,
     })).rejects.toThrow();
 
     const leftovers = (await readdir(chatSessionsDir(dir))).filter((name) => name.includes(".tmp-"));
@@ -406,5 +408,45 @@ describe("settleInterruptedToolSteps（僵尸 running 步骤结算）", () => {
     const reread = await readChatSession(dir, id);
     const rereadSteps = (reread!.messages[0] as unknown as { toolSteps: Record<string, unknown>[] }).toolSteps;
     expect(rereadSteps[0].status).toBe("partial");
+  });
+});
+
+describe("P0-1 会话 id 守门（路径穿越收敛）", () => {
+  it("合法 id（newId 格式）照常拼路径", () => {
+    const dir = "/tmp/proj";
+    expect(chatSessionPath(dir, "session-deadbeef"))
+      .toBe(join(dir, ".story-engine-ui/chat-sessions/session-session-deadbeef.json"));
+    expect(chatSessionArchivePath(dir, "session-deadbeef"))
+      .toBe(join(dir, ".story-engine-ui/chat-sessions/session-session-deadbeef.archive.jsonl"));
+  });
+
+  it("穿越串一律拒拼（读不到 ~/.story-engine/model-secrets.json）", () => {
+    const dir = "/home/u/Books/mybook";
+    const traversals = [
+      "../".repeat(6) + ".story-engine/model-secrets", // 实测命中家目录所需层数
+      "../".repeat(5) + ".story-engine/model-secrets",
+      "/../../../../../../../etc/anything",
+      "..",
+      "session-../x",
+      "session-\0",
+      "",
+    ];
+    for (const bad of traversals) {
+      expect(() => chatSessionPath(dir, bad)).toThrow(/非法会话 id/u);
+      expect(() => chatSessionArchivePath(dir, bad)).toThrow(/非法会话 id/u);
+    }
+  });
+
+  it("readChatSession 对穿越 id fail-closed 抛错（绝不读盘）", async () => {
+    const dir = await tmpProject();
+    await expect(readChatSession(dir, "../".repeat(6) + ".story-engine/model-secrets"))
+      .rejects.toThrow(/非法会话 id/u);
+  });
+
+  it("save/delete 对穿越 id 拒绝执行", async () => {
+    const dir = await tmpProject();
+    const evil = "../".repeat(6) + ".story-engine/model-secrets";
+    await expect(saveChatSessionMessages(dir, evil, [])).rejects.toThrow(/非法会话 id/u);
+    await expect(deleteChatSession(dir, evil)).rejects.toThrow(/非法会话 id/u);
   });
 });

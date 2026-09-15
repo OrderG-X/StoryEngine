@@ -24,14 +24,18 @@ function isGeneratingRevision(loading: string | null | undefined): boolean {
 }
 
 export default function RevisionPreviewModal(props: WritingWorkspaceLayoutProps) {
+  // Hook 必须在任何条件 return 之前调用（Rules of Hooks）：本组件由 WritingDeskCodex 无条件
+  // 挂载，activeRevisionTask 会在存活期间从非空变空（点放弃/应用/切章），若 Hook 在
+  // `if (!task) return null` 之后，task 变空时 React 抛 "Rendered fewer hooks than expected"，
+  // 整个工作区被 ErrorBoundary 接住 → 每次改写收尾必崩（2026-09-15 审计 P1-1）。
+  const rewriteZoom = useDisplaySettingsStore((s) => s.rewriteZoom);
+  const adjustFont = useDisplaySettingsStore((s) => s.adjustDisplaySetting);
   const task = props.activeRevisionTask;
   if (!task) return null; // 没有选区改写在进行 → 不渲染弹窗。
   const preview = props.activeRevisionPreview;
   const generating = isGeneratingRevision(props.draftActionLoading);
   const applying = props.draftActionLoading === "revision-apply";
   const risks = preview ? [...preview.riskNotes, ...preview.warnings].map((r) => `${r}`.trim()).filter(Boolean) : [];
-  const rewriteZoom = useDisplaySettingsStore((s) => s.rewriteZoom);
-  const adjustFont = useDisplaySettingsStore((s) => s.adjustDisplaySetting);
   const zeroDiff = preview ? isRevisionZeroDiff(preview.beforeText, preview.afterText) : false;
 
   return (
