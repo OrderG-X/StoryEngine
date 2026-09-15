@@ -14,7 +14,7 @@
 //      store 供 apply 复用——登记在 commit-preview.ts 适配层）；HTTP 预览不传通道=空声明（纯正则计划）。
 //      声明模型降级（乱吐→undefined）时两侧计划输入同源，下方照妖镜断言入库计划深相等。
 //   D8 缺草稿 → canonical no_draft kind 的适配层渲染：HTTP → 400 formal_commit_preview_missing_workspace_diff；
-//      工具 → ok:false + blockingReasons["missing_draft"]。
+//      工具 → ok:false + blockingReasons 中文人话（审计返工 B2：missing_draft 机器码不得进用户可见面）。
 //   D9 输出面 → canonical result 的适配层投影：HTTP 返回 transaction/formalCommitPreview 强化结构；
 //      工具返回 previewToken/summary/modelHint。
 //
@@ -155,7 +155,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(await pathExists(`${projectDir}/.git`)).toBe(false);
   });
 
-  it("D8 缺草稿：两侧都诚实拒绝（HTTP 400 blocked；工具 canCommit:false + missing_draft），都不发凭证", { timeout: 30_000 }, async () => {
+  it("D8 缺草稿：两侧都诚实拒绝（HTTP 400 blocked；工具 canCommit:false + 中文阻断理由），都不发凭证", { timeout: 30_000 }, async () => {
     const projectDir = await makeParityProject("commit-preview-nodraft-");
 
     const route = await callRoute(registerCommitRoutes, "POST", "/api/commit/preview", { projectPath: projectDir, chapter: 1 });
@@ -168,7 +168,10 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
 
     expect(tool.ok).toBe(false);
     expect(tool.canCommit).toBe(false);
-    expect(tool.blockingReasons).toContain("missing_draft");
+    // 审计返工 B2：blockingReasons 渲染给用户看——中文人话，机器码/绝对路径不得出现
+    expect(tool.blockingReasons).not.toContain("missing_draft");
+    expect((tool.blockingReasons as string[]).join("\n")).toContain("还没有工作稿");
+    expect((tool.blockingReasons as string[]).join("\n")).not.toMatch(/[a-z]+_[a-z_]+/);
     expect(tool.previewToken).toBeUndefined();
     expect(String(tool.summary)).toContain("还没有工作稿");
 

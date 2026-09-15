@@ -24,6 +24,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   buildFormalCommitPreviewResult,
   findForbiddenFormalCommitPreviewFields,
@@ -106,7 +107,7 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
     // 共享编排在 services/commit-service.ts。本路由的显式策略：无声明通道（D7）+ 默认 AI 判定 ×2（D6）。
     const result = await runCommitPreview({ projectDir, chapter });
     if (result.kind === "no_draft") {
-      // D8 路由渲染：400 + missing_workspace_diff（工具路渲染 ok:false + missing_draft）。
+      // D8 路由渲染：400 + missing_workspace_diff（工具路渲染 ok:false + 中文阻断理由，审计返工 B2 后不再含 missing_draft 机器码）。
       writeCommitPreviewBlocked(res, 400, {
         reason: "formal_commit_preview_missing_workspace_diff",
         error: "Workspace draft is required for Formal Commit Preview.",
@@ -234,7 +235,8 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
     });
     switch (result.kind) {
       case "no_draft":
-        writeJson(res, 500, { ok: false, error: result.errorMessage });
+        // errorMessage 是 fs errno 原文（内嵌绝对路径）——进用户可见 500 前先刮路径（铁律④）
+        writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(result.errorMessage) });
         return;
       case "transaction_already_claimed":
         writeJson(res, 409, {

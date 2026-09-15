@@ -19,6 +19,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { resolveConfiguredChatModel, callOpenAICompatibleChatModel } from "../lib/llm-client.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { buildChapterChatMessages } from "../lib/prompt-builder.js";
 import type { ChapterAgentCard } from "../../api/types.js";
@@ -859,7 +860,9 @@ async function handleChapterChatStream(
     // P2 修 headersSent 崩溃：writeHead 之前就出错时（assertStoryEngineProject/解析 body 抛错）
     // 头还没发，此时写 SSE 帧会隐式刷出默认 200 头、content-type 全错；再 writeJson(500) 又会
     // 抛 ERR_HTTP_HEADERS_SENT。按「头是否已发」分两条路，两条都把错误如实带给客户端。
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    // 审计返工（B5）：error.message 可能内嵌本地绝对路径（fs ENOENT/ENOSPC、git 子进程报错），
+    // 两条路（500 JSON 与 SSE error 帧）都进用户可见区域——先过 scrubLocalAbsolutePaths。
+    const errorMessage = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
     if (!res.headersSent) {
       writeJson(res, 500, { ok: false, error: errorMessage });
       return;

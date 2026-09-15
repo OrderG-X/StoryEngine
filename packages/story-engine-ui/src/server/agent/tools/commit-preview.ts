@@ -120,7 +120,7 @@ export interface CommitPreviewToolOutput {
 
 /**
  * 工具适配层：调共享 service 拿 canonical result，投影成工具输出；canCommit 时登记 previewToken。
- * 读草稿失败（缺草稿）→ canCommit=false，blockingReasons 含 missing_draft，不发 token（D8 工具渲染）。
+ * 读草稿失败（缺草稿）→ canCommit=false，blockingReasons 为中文人话（审计返工 B2，不再含 missing_draft 机器码），不发 token（D8 工具渲染）。
  */
 export async function buildCommitPreviewToolOutput(input: {
   readonly projectDir: string;
@@ -140,6 +140,12 @@ export async function buildCommitPreviewToolOutput(input: {
     judge: async ({ deterministicQuality }) => deterministicQuality,
   });
   if (result.kind === "no_draft") {
+    // 审计返工（P1-5 补短路分支）：blockingReasons 会被 CommitPreviewCard 逐条渲染给用户——
+    // 机器码「missing_draft」绝不能进；与主路 safeIssues 同款双消毒（字面量本无可刮内容，
+    // 接管线防日后回填机器码/路径的回归）。
+    const missingDraftReason = scrubLocalAbsolutePaths(
+      scrubBareEntityIdsFromText(`第 ${result.chapter} 章还没有工作稿，先写正文再定稿。`, new Map()),
+    );
     return {
       chapter: result.chapter,
       ok: false,
@@ -149,7 +155,7 @@ export async function buildCommitPreviewToolOutput(input: {
       semanticQualityIssues: [],
       nameConsistencyWarnings: [],
       staleThreadWarnings: [],
-      blockingReasons: ["missing_draft"],
+      blockingReasons: [missingDraftReason],
       summary: `第 ${result.chapter} 章还没有工作稿，无法生成定稿预览。`,
     };
   }
@@ -167,8 +173,6 @@ export async function buildCommitPreviewToolOutput(input: {
     type: issue.type,
     message: issue.message,
   }));
-  const deltaRejectedWarnings = collectDeltaRejectedWarnings(commitPlan);
-
   // 人物名近形漂移：引擎的确定性发现（结构化）升级成明确 warning，别让模型在回执里把它说软或说没。
   // severity=warning（不阻断入库），type 固定为 character_name_drift，供 UI 固定展示、供模型忠实转述。
   const nameDriftFindings: readonly NameDriftFinding[] = commitPlan.nameDriftFindings ?? [];
@@ -177,6 +181,12 @@ export async function buildCommitPreviewToolOutput(input: {
     driftedVariant: finding.driftedVariant,
     message: `人物名疑似写歪：本章出现「${finding.driftedVariant}」，与已确立角色「${finding.establishedName}」形近。请确认应写作「${finding.establishedName}」，还是「${finding.driftedVariant}」确为另一个角色。`,
   }));
+  // nameById 提到所有「进用户可见字段」的消毒点之前：safeIssues（blockingReasons）、
+  // deltaRejectedWarnings（semanticQualityIssues+summary）共用同一份，不必为消毒重读 overview。
+  const nameById = new Map(nameConsistencyWarnings.map((warning) => [warning.driftedVariant, warning.establishedName]));
+  // 审计返工（P1-5 补漏分支）：声明被拒的 issues 文本含模型提供的 quote 原文（模型可控字段，
+  // 可能塞裸 entity id / 本地绝对路径），进 semanticQualityIssues 与 summary 前必须同款消毒。
+  const deltaRejectedWarnings = collectDeltaRejectedWarnings(commitPlan, nameById);
   const continuityBreakWarning = collectContinuityBreakWarning(declaration);
   // 伏笔/线索/目标待收口：引擎按里程碑制（新停滞头两章 + 长期停滞每 10 章重提）确定性选出本章该提醒的条目，
   // 这里合并成一份结构化提醒（含 r7 新接入的停滞目标——此前 staleGoalWarnings 从没到过用户面前），
@@ -201,9 +211,7 @@ export async function buildCommitPreviewToolOutput(input: {
 
   // 铁律④·绝不泄露裸 id/path：commitPlan.issues 是引擎诊断文本，可能含裸 hook-/char- id
   // （「Hook not found: hook-a3f9c1」）或本地绝对路径 errno 原文。同簇 commit-apply 已消毒，
-  // 预览侧此前漏接（2026-09-15 审计 P1-5）。nameById 就用本轮已有的名字漂移 findings，
-  // 不必为消毒重读一次 overview。
-  const nameById = new Map(nameConsistencyWarnings.map((warning) => [warning.driftedVariant, warning.establishedName]));
+  // 预览侧此前漏接（2026-09-15 审计 P1-5）。
   const safeIssues = commitPlan.issues.map(
     (issue) => scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(issue, nameById)),
   );
@@ -259,24 +267,31 @@ export async function buildCommitPreviewToolOutput(input: {
   };
 }
 
-function collectDeltaRejectedWarnings(commitPlan: { readonly issues?: readonly string[] }): { severity: "warning"; type: "delta_rejected"; message: string }[] {
+function collectDeltaRejectedWarnings(
+  commitPlan: { readonly issues?: readonly string[] },
+  nameById: ReadonlyMap<string, string>,
+): { severity: "warning"; type: "delta_rejected"; message: string }[] {
   return (commitPlan.issues ?? [])
     .filter((issue) => issue.startsWith("章节语义声明被拒（"))
     .map((message) => ({
       severity: "warning",
       type: "delta_rejected",
-      message,
+      // message 尾部是模型声明里的 quote 原文（模型可控）：同款双消毒，防裸 id/绝对路径透进
+      // semanticQualityIssues 与 summary（此前只消毒 blockingReasons 一支，审计返工补齐）。
+      message: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(message, nameById)),
     }));
 }
 
 function collectContinuityBreakWarning(declaration: ChapterDeltaDeclaration | undefined): { severity: "warning"; type: "continuity_break"; message: string } | undefined {
   const continuity = declaration?.continuityWithPrevious;
   if (!continuity || continuity.connects !== false) return undefined;
+  // note 是声明模型写的自由文本（模型可控字段），拼进用户可见文案前过同款消毒。
   const note = continuity.note?.trim();
+  const safeNote = note ? scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(note, new Map())) : undefined;
   return {
     severity: "warning",
     type: "continuity_break",
-    message: `本章开头与上一章结尾疑似衔接断裂${note ? `：${note}` : ""}。请确认这是有意的时间跳转，还是需要改稿补足承接。`,
+    message: `本章开头与上一章结尾疑似衔接断裂${safeNote ? `：${safeNote}` : ""}。请确认这是有意的时间跳转，还是需要改稿补足承接。`,
   };
 }
 

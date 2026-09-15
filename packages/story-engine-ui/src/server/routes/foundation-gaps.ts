@@ -17,6 +17,8 @@ import {
   applyFoundationGapDecisions,
   collectBookExtraFieldKeys,
   toSafeCharacterId,
+  recoverProjectCommitTransactions,
+  withProjectCommitLock,
 } from "@actalk/story-engine";
 import type { StateOverview } from "@actalk/story-engine";
 import type { FoundationGapDecision, FoundationGapSuggestion } from "../../api/types.js";
@@ -42,11 +44,13 @@ import {
   withSuggestionSourcePreservation,
   extractExplicitAssetEntity,
   withUiOverviewDetails,
+  writeFileAtomic,
   writeJson,
   type FoundationKnownEntities,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { resolveConfiguredChatModel, callOpenAICompatibleChatModel, type ResolvedChatModel } from "../lib/llm-client.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { buildFoundationGapChatMessages, summarizeFoundationGapReport, summarizeFoundationGapSuggestion, summarizeOverviewForFoundationGapChat } from "../lib/prompt-builder.js";
 import { createSnapshot } from "../lib/snapshot.js";
 
@@ -139,9 +143,19 @@ export function registerFoundationGapsRoutes(middlewares: MiddlewareStack): void
           writeJson(res, 400, { ok: false, error: "写入资料补全建议需要 confirm=true。" });
           return;
         }
-        await createSnapshot(projectDir, "资料写入前快照");
-        const undo = await createFoundationGapUndoSnapshot(projectDir, decisions, requestSuggestions);
-        const result = await applyFoundationGapDecisions(projectDir, decisions, requestSuggestions);
+        // 审计返工 B1（P0-2 补另一条路）：「快照 → 撤销底账 → 引擎落盘」整段收进项目级写锁，
+        // 与 foundation_write 工具路（writeTool→runWithSnapshot）/commit-service 同款拿锁——
+        // apply 与并发 commit 共享 story/character-bible.json、characters/*/state.json 等文件，
+        // 锁外读-改-写会与并发提交交错丢更新。withProjectCommitLock 是链式可重入锁
+        // （ALS 检出同 project 已持锁 → 任务内联执行）：createSnapshot 内部再拿同一把锁不死锁；
+        // createFoundationGapUndoSnapshot/applyFoundationGapDecisions 均不自持该锁。
+        const { undo, result } = await withProjectCommitLock(projectDir, async () => {
+          await recoverProjectCommitTransactions(projectDir);
+          await createSnapshot(projectDir, "资料写入前快照");
+          const undoSnapshot = await createFoundationGapUndoSnapshot(projectDir, decisions, requestSuggestions);
+          const applyResult = await applyFoundationGapDecisions(projectDir, decisions, requestSuggestions);
+          return { undo: undoSnapshot, result: applyResult };
+        });
         writeJson(res, 200, {
           ok: true,
           result: {
@@ -159,9 +173,11 @@ export function registerFoundationGapsRoutes(middlewares: MiddlewareStack): void
 
       writeJson(res, 404, { ok: false, error: "Unknown foundation gap endpoint." });
     } catch (error) {
+      // catch-all 的 error.message 直进用户可见 500——B1 后 try 内含 recover/快照/原子写整段
+      // fs 操作，EACCES/ENOSPC/git 报错原文内嵌本地绝对路径，必须先过 scrub（同 chapter-chat :865）。
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });
@@ -206,7 +222,9 @@ async function createFoundationGapUndoSnapshot(
   };
   const snapshotPath = foundationGapUndoSnapshotPath(projectDir, undoId);
   await mkdir(dirname(snapshotPath), { recursive: true });
-  await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8");
+  // writeFileAtomic（tmp+rename，失败自清临时文件）：崩溃/中途失败不留半截底账——
+  // 半截 undo 底账若被 rollback 读到会按「损坏」拒掉事小，被当完好截断数据回滚事大。
+  await writeFileAtomic(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
   return { undoId, changedFiles };
 }
 
@@ -235,32 +253,37 @@ async function rollbackFoundationGapApply(
   if (snapshot.version !== 1 || snapshot.undoId !== undoId || !Array.isArray(snapshot.files)) {
     return { statusCode: 400, payload: { ok: false, error: "撤销记录已损坏。" } };
   }
-  const restoredFiles: string[] = [];
-  for (const file of snapshot.files) {
-    if (!isSafeFoundationUndoPath(file.relativePath)) {
-      return { statusCode: 400, payload: { ok: false, error: "撤销记录包含非法路径。" } };
+  // 审计返工 B1（P0-2 同路）：恢复写与 apply/commit 共享同一批资料文件，整段收进项目级写锁
+  // （可重入链式锁；本段内函数均不自持锁）。恢复写用 writeFileAtomic（tmp+rename，失败自清临时文件）。
+  return withProjectCommitLock(projectDir, async () => {
+    await recoverProjectCommitTransactions(projectDir);
+    const restoredFiles: string[] = [];
+    for (const file of snapshot.files) {
+      if (!isSafeFoundationUndoPath(file.relativePath)) {
+        return { statusCode: 400, payload: { ok: false, error: "撤销记录包含非法路径。" } };
+      }
+      const absolutePath = join(projectDir, file.relativePath);
+      if (file.existed) {
+        await mkdir(dirname(absolutePath), { recursive: true });
+        await writeFileAtomic(absolutePath, file.content ?? "");
+      } else {
+        await rm(absolutePath, { force: true });
+      }
+      restoredFiles.push(file.relativePath);
     }
-    const absolutePath = join(projectDir, file.relativePath);
-    if (file.existed) {
-      await mkdir(dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, file.content ?? "", "utf-8");
-    } else {
-      await rm(absolutePath, { force: true });
-    }
-    restoredFiles.push(file.relativePath);
-  }
-  const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
-  return {
-    statusCode: 200,
-    payload: {
-      ok: true,
-      result: {
-        undoId,
-        restoredFiles,
-        overview: await withUiOverviewDetails(projectDir, overview),
+    const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
+    return {
+      statusCode: 200,
+      payload: {
+        ok: true,
+        result: {
+          undoId,
+          restoredFiles,
+          overview: await withUiOverviewDetails(projectDir, overview),
+        },
       },
-    },
-  };
+    };
+  });
 }
 
 function foundationGapUndoSnapshotPath(projectDir: string, undoId: string): string {

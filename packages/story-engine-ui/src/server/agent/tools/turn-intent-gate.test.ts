@@ -186,6 +186,35 @@ describe("turn-intent-gate draft write（generate_draft 写作意图门）", () 
     expect(userTurnAllowsDraftWrite("写第7章正文，不要写后面的章节")).toBe(true);
     expect(userTurnAllowsDraftWrite("写这章，其他章别写")).toBe(true);
   });
+
+  // 审计返工 B7：draft 尾句否决词表逐槽对齐 commit 门 GATE_TRAILING_VETO_CLAUSE——
+  // 补「算了」前缀、咱们/你主语、现在/目前/暂时副词、再说/反悔了?词根。
+  it.each([
+    "写第8章，我反悔了",
+    "写第8章，再说",
+    "写第8章，你先等等",
+    "写第8章，暂时别写",
+    "写第8章，咱们等等",
+    "写第8章，目前先等等",
+    "写第8章，暂时等等",
+    "写第8章，我现在反悔了",
+    "写第8章，不过你反悔了",
+    "写第8章，算了再说",
+  ])("B7 词表对齐后应拦的尾句否决：%s", (text) => {
+    expect(userTurnAllowsDraftWrite(text)).toBe(false);
+  });
+
+  // B7 合法面（防误拦回归）：「你」只是主语前缀、不配词根不否决；
+  // 「现在/目前」副词后不配否决词根不否决。
+  it.each([
+    "写第8章，你看看行不行",
+    "写下一章，现在就写",
+    "写第8章，目前设定不变",
+    "写第8章，你说呢",
+    "写第8章，咱们现在开始写",
+  ])("B7 合法面不误拦：%s", (text) => {
+    expect(userTurnAllowsDraftWrite(text)).toBe(true);
+  });
 });
 
 describe("turn-intent-gate thread cleanup", () => {

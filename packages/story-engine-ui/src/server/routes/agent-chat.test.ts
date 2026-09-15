@@ -112,9 +112,9 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
   });
 
   // 复审 T4 三轮修法 2/4：依据 = 工具返回了裁决（不论 ok）。用 commit_preview 无稿章的**真实**返回形状
-  // （commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons:["missing_draft"]）——
+  // （commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons:[中文人话]）——
   // 修前两轮钉的 {ok:true, summary:"无法生成预览"} 是真实工具产不出的形状，所以单测绿真机红。
-  it("复审 T4 三轮：commit_preview 无稿章真实返回（ok:false/missing_draft → verdict）后如实拒绝 → 不更正、不重做", () => {
+  it("复审 T4 三轮：commit_preview 无稿章真实返回（ok:false/中文阻断理由 → verdict）后如实拒绝 → 不更正、不重做", () => {
     expect(serverHonestyCorrectionText({
       userText: "把第 99 章正式定稿",
       assistantText: "第 99 章没办法定稿——刚刚用工具查过了：第 99 章还没有工作稿，没有正文可定，所以预览被拦下了，也没有写入任何东西。",
@@ -373,7 +373,7 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
   });
 
   // 复审 T4 三轮修法 2/4：commit_preview 核实「第 99 章」后如实拒绝——真实工具对无稿章的返回就是
-  // ok:false/canCommit:false/blockingReasons:["missing_draft"]（commit-preview.ts:140-152 no_draft 短路），
+  // ok:false/canCommit:false/blockingReasons:[中文人话]（commit-preview.ts no_draft 短路），
   // 映射成 verdict（裁决未过）而非 failed → 算磁盘依据 → 一轮收场。修前两轮用 {ok:true,"无法生成预览"}
   // 这种真实工具产不出的形状钉测试，所以单测绿、真机红（A-4 三连：系统提示+强制 commit_apply+亮红）。
   it("commit_preview 无稿章真实 payload（ok:false→verdict）核实后如实拒绝 → 一轮收场：不重做、无过渡、无更正（复审 T4 三轮）", async () => {
@@ -387,7 +387,7 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
           semanticQualityIssues: [],
           nameConsistencyWarnings: [],
           staleThreadWarnings: [],
-          blockingReasons: ["missing_draft"],
+          blockingReasons: ["第 99 章还没有工作稿，先写正文再定稿。"],
           summary: "第 99 章还没有工作稿，无法生成定稿预览。",
         }),
         ...toolChunks("suggest_next_steps", { ok: true }),
@@ -601,7 +601,7 @@ describe("toolResultStatus：裁决类只读工具的 ok:false ≠ 工具崩了�
     semanticQualityIssues: [],
     nameConsistencyWarnings: [],
     staleThreadWarnings: [],
-    blockingReasons: ["missing_draft"],
+    blockingReasons: ["第 99 章还没有工作稿，先写正文再定稿。"],
     summary: "第 99 章还没有工作稿，无法生成定稿预览。",
   };
 

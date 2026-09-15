@@ -2,7 +2,7 @@
 //
 // commit_preview 纯逻辑单测：缺草稿诚实拒发 token；草稿过短(质量 error)不可入库；
 // 合格草稿可入库并签发 previewToken。引擎写入用临时项目 fixture。
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStoryProject } from "@actalk/story-engine";
@@ -56,13 +56,17 @@ async function writeDraft(projectDir: string, chapter: number, content: string):
 }
 
 describe("commit_preview", () => {
-  it("缺草稿 → canCommit=false，blockingReasons 含 missing_draft，不发 token", async () => {
+  it("缺草稿 → canCommit=false，blockingReasons 是中文人话（无机器码/无绝对路径），不发 token", async () => {
     const projectDir = await makeProject("缺草稿");
     const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
     expect(out.ok).toBe(false); // ok=canCommit：不可入库→ok:false（前端时间线置 failed，不绿色谎报）
     expect(out.canCommit).toBe(false);
     expect(out.previewToken).toBeUndefined();
-    expect(out.blockingReasons).toContain("missing_draft");
+    // 审计返工 B2：missing_draft 机器码不得进用户可见 blockingReasons（CommitPreviewCard 逐条渲染）
+    expect(out.blockingReasons).not.toContain("missing_draft");
+    expect(out.blockingReasons.join("\n")).toContain("第 1 章还没有工作稿");
+    expect(out.blockingReasons.join("\n")).not.toMatch(/[a-z]+_[a-z_]+/);
+    expect(out.blockingReasons.join("\n")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
   });
 
   it("草稿过短 → 质量 error 阻止入库，不发 token", async () => {
@@ -628,4 +632,53 @@ describe("commit_preview", () => {
     expect(out.blockingReasons).not.toContain("commit_plan_not_passed");
     expect(out.blockingReasons).not.toContain("draft_quality_error");
     expect(out.blockingReasons).not.toContain("semantic_quality_error");
+  });
+
+  // 审计返工 B2（原测试只断「不泄漏」但没给 fixture 里塞可泄漏内容，删 scrub 也全绿——咬不住）。
+  // 两条真实注入路径钉死消毒实际生效：
+  // ① 引擎 issue 内嵌绝对路径（readHookPool 遇 EACCES → error.message 带 open '<abs path>'），
+  //    计划判负 → 进 blockingReasons 前必须被 scrub；
+  // ② declareDelta 的 quote（模型可控字段）塞裸 id+绝对路径 → 被拒后原样进 issues
+  //    → semanticQualityIssues/summary 前必须被 scrub（deltaRejectedWarnings 此前是漏接支路）。
+  it.skipIf(process.platform === "win32")("P1-5 消毒咬变异：含绝对路径的引擎 issue 进 blockingReasons 前被 scrub", async () => {
+    const projectDir = await makeProject("消毒咬变异", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    // hooks.json 置不可读 → readHookPool 抛 EACCES（message 内嵌绝对路径）→ issues 收集 → 计划判负
+    const hooksPath = join(projectDir, "story", "hooks.json");
+    await writeFile(hooksPath, "{ \"hooks\": [] }\n", "utf-8");
+    await chmod(hooksPath, 0o000);
+
+    const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+
+    expect(out.canCommit).toBe(false);
+    expect(out.blockingReasons.length).toBeGreaterThan(0);
+    const joined = out.blockingReasons.join("\n");
+    expect(joined, `blockingReasons 仍含绝对路径：${joined}`).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
+    expect(joined, `blockingReasons 仍含机器码：${joined}`).not.toMatch(/[a-z]+_[a-z_]+/);
+  });
+
+  it("P1-5 消毒咬变异：声明被拒 quote 里的裸 id/绝对路径进 summary/semanticQualityIssues 前被 scrub", async () => {
+    const projectDir = await makeProject("消毒咬变异二", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({
+        chapter: 1,
+        // quote 不在草稿里 → verifyChapterDelta 判拒 → 「章节语义声明被拒（…）：<quote 原文>」进 issues
+        mainEvent: { summary: "主角入场", quote: "证据见 /Users/guo/secret/book.md 与 hook-a3f9c1" },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      }),
+    });
+
+    const rejected = out.semanticQualityIssues.filter((issue) => issue.type === "delta_rejected");
+    expect(rejected.length).toBeGreaterThan(0);
+    const allText = [out.summary, ...rejected.map((issue) => issue.message)].join("\n");
+    expect(allText, `仍含绝对路径：${allText}`).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
+    expect(allText, `仍含裸 entity id：${allText}`).not.toMatch(/(?:^|[^\p{L}])(?:hook|char|thread|fact)-[0-9a-f]{4,}/u);
+    // 消毒后文案本体仍在（不是整句吞掉）
+    expect(allText).toContain("章节语义声明被拒");
   });

@@ -18,7 +18,7 @@
  *     收集 + declareDelta 调用 + 声明随 previewToken 缓存进工具 store）；路由不传=空声明，
  *     纯正则计划。声明降级（undefined）时两侧计划输入同源，深相等照妖镜由 parity 锁定。
  *   - D8 缺草稿 → canonical no_draft kind；路由渲染 400 missing_workspace_diff，工具渲染
- *     ok:false + blockingReasons["missing_draft"]。
+ *     ok:false + 中文阻断理由（审计返工 B2 后不再含 missing_draft 机器码）。
  *   - D10 重放保护 → apply 的 policy 显式参数。「判定同请求」的核心（锁内 recover → 读草稿 →
  *     重建计划 → 重算事务身份 → 比对凭证/票据）由本 service 统一持有；两套机制实现也在此
  *     逐个函数对照挪入，适配层只选定机制：
@@ -128,7 +128,7 @@ export interface CommitPreviewServiceInput {
   readonly judge?: QualityJudge;
 }
 
-/** D8 canonical：缺草稿=「无草稿」kind，两侧适配层各自渲染（HTTP 400 / 工具 missing_draft）。 */
+/** D8 canonical：缺草稿=「无草稿」kind，两侧适配层各自渲染（HTTP 400 / 工具中文阻断理由）。 */
 export type CommitPreviewServiceResult =
   | { readonly kind: "no_draft"; readonly chapter: number }
   | {

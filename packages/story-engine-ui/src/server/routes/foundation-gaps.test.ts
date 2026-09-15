@@ -36,7 +36,11 @@ vi.mock("../lib/snapshot.js", async () => {
   };
 });
 
+import { withProjectCommitLock } from "@actalk/story-engine";
 import { __foundationGapsRouteTest, registerFoundationGapsRoutes } from "./foundation-gaps.js";
+
+// 真实 createSnapshot（含真 git + 内部自持同一把项目锁）：给「锁内嵌套拿锁不死锁」测试用。
+const snapshotActual = await vi.importActual<typeof import("../lib/snapshot.js")>("../lib/snapshot.js");
 
 const { createSnapshot } = snapshotMocks;
 
@@ -321,6 +325,262 @@ describe("foundation gap routes", () => {
       id: "lin-xu",
       name: "林序",
     });
+  });
+
+  // ─── 审计返工 B1（P0-2 补另一条路）：apply/rollback 进项目级写锁 + 撤销底账原子写 ───
+
+  it("apply 写盘原子化：撤销底账完整可解析、目标文件内容正确、全目录无 .tmp 残渣", async () => {
+    projectDir = await createFoundationRouteProject();
+    await writeFile(join(projectDir, "story", "writing-rules.json"), `${JSON.stringify({ pointOfView: "第三人称" }, null, 2)}\n`, "utf-8");
+    const suggestion: FoundationGapSuggestion = {
+      id: "suggestion-atomic-1",
+      gapId: "gap-atomic-1",
+      category: "writingRules",
+      actionType: "update_writing_rule",
+      targetFile: "story/writing-rules.json",
+      targetPath: "pointOfView",
+      before: "第三人称",
+      after: "第一人称",
+      rationale: "切第一人称。",
+      risk: "info",
+      requiresUserConfirm: true,
+    };
+    const plan = {
+      acceptedSuggestions: [suggestion],
+      rejectedSuggestionIds: [],
+      deferredSuggestionIds: [],
+      skippedConflicts: [],
+      fileChanges: [{ targetFile: "story/writing-rules.json", summary: "更新写作视角", suggestionIds: [suggestion.id] }],
+    };
+    buildFoundationGapApplyPlan.mockResolvedValueOnce(plan);
+    applyFoundationGapDecisions.mockImplementationOnce(async () => {
+      await writeFile(join(projectDir!, "story", "writing-rules.json"), `${JSON.stringify({ pointOfView: "第一人称" }, null, 2)}\n`, "utf-8");
+      return { applied: true, plan, writes: [], overview: {} };
+    });
+
+    const response = await callFoundationGapsRoute("/api/foundation-gaps/apply", {
+      projectPath: projectDir,
+      confirm: true,
+      decisions: [{ suggestionId: suggestion.id, decision: "accept" }],
+      currentSuggestions: [suggestion],
+    });
+
+    expect(response.statusCode).toBe(200);
+    // 目标文件内容正确（引擎 mock 落盘的是 mock，但撤销底账是路由真写的——两份都要对）
+    await expect(readJson(projectDir, "story/writing-rules.json")).resolves.toEqual({ pointOfView: "第一人称" });
+    const undoId = (((response.payload.result as Record<string, unknown>).undo as Record<string, unknown>).undoId as string);
+    // 撤销底账本体完好：经 writeFileAtomic 落盘，rollback 用同一个 JSON.parse 协议能读回
+    const undoDoc = JSON.parse(
+      await readFile(join(projectDir, ".story-engine-ui", "foundation-undo", `${undoId}.json`), "utf-8"),
+    ) as { files: { relativePath: string; existed: boolean; content?: string }[] };
+    expect(undoDoc.files).toEqual([expect.objectContaining({ relativePath: "story/writing-rules.json", existed: true })]);
+    // 原子写不残留临时文件（writeFileAtomic 的 .<uuid>.tmp 与手写 .tmp-* 两类都扫）
+    const residue = await listTmpResidue(projectDir);
+    expect(residue).toEqual([]);
+  });
+
+  it("apply 撤销底账目录不可建 → 500、引擎落盘未发生、无 .tmp 残渣", async () => {
+    projectDir = await createFoundationRouteProject();
+    await writeFile(join(projectDir, "story", "writing-rules.json"), `${JSON.stringify({ pointOfView: "第三人称" }, null, 2)}\n`, "utf-8");
+    const suggestion: FoundationGapSuggestion = {
+      id: "suggestion-atomic-fail-1",
+      gapId: "gap-atomic-fail-1",
+      category: "writingRules",
+      actionType: "update_writing_rule",
+      targetFile: "story/writing-rules.json",
+      targetPath: "pointOfView",
+      before: "第三人称",
+      after: "第一人称",
+      rationale: "切第一人称。",
+      risk: "info",
+      requiresUserConfirm: true,
+    };
+    buildFoundationGapApplyPlan.mockResolvedValueOnce({
+      acceptedSuggestions: [suggestion],
+      rejectedSuggestionIds: [],
+      deferredSuggestionIds: [],
+      skippedConflicts: [],
+      fileChanges: [{ targetFile: "story/writing-rules.json", summary: "更新写作视角", suggestionIds: [suggestion.id] }],
+    });
+    // .story-engine-ui 预置为【普通文件】→ createFoundationGapUndoSnapshot 里 mkdir(foundation-undo) 必失败
+    // → 底账写不出来时绝不能碰正式状态（fail-closed），也不该留任何残渣。
+    await writeFile(join(projectDir, ".story-engine-ui"), "blocks undo directory", "utf-8");
+
+    const response = await callFoundationGapsRoute("/api/foundation-gaps/apply", {
+      projectPath: projectDir,
+      confirm: true,
+      decisions: [{ suggestionId: suggestion.id, decision: "accept" }],
+      currentSuggestions: [suggestion],
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(applyFoundationGapDecisions).not.toHaveBeenCalled();
+    await expect(readJson(projectDir, "story/writing-rules.json")).resolves.toEqual({ pointOfView: "第三人称" });
+    expect(await listTmpResidue(projectDir)).toEqual([]);
+  });
+
+  // rename(临时文件→非空目录) 必失败是「tmp 已写完、rename 炸」的确定性故障点
+  // （builtin 模块 mock 在本 vitest 配置下不生效，无法定死 .<uuid>.tmp 名——故改走 rollback 路：
+  // 撤销底账文件手工构造、恢复目标名完全可控）。
+  it("rollback 恢复写 rename 失败 → 500 且 .tmp 自清、原目录内容不动（咬「失败留临时文件」变异）", async () => {
+    projectDir = await createFoundationRouteProject();
+    const undoId = "foundation-1700000000000-11111111-2222-4333-8444-555555555555";
+    const undoDir = join(projectDir, ".story-engine-ui", "foundation-undo");
+    await mkdir(undoDir, { recursive: true });
+    // 手工造一条合法撤销底账（rollback 用 <undoId>.json 协议读盘）
+    await writeFile(join(undoDir, `${undoId}.json`), `${JSON.stringify({
+      version: 1,
+      undoId,
+      createdAt: new Date().toISOString(),
+      files: [{ relativePath: "story/writing-rules.json", existed: true, content: '{ "pointOfView": "第一人称" }\n' }],
+    }, null, 2)}\n`, "utf-8");
+    // 恢复目标预置为非空目录 → writeFileAtomic 的 rename(临时文件→非空目录) 必炸
+    await mkdir(join(projectDir, "story", "writing-rules.json"), { recursive: true });
+    await writeFile(join(projectDir, "story", "writing-rules.json", "keep.txt"), "占位", "utf-8");
+
+    const rollback = await callFoundationGapsRoute("/api/foundation-gaps/rollback", {
+      projectPath: projectDir,
+      undoId,
+    });
+
+    expect(rollback.statusCode).toBe(500);
+    // 失败自清：无 .tmp 残渣（「写 tmp + rename」无 catch 清理的写法会留 .<uuid>.tmp → 红）；
+    // 目标目录原内容分毫未动（半截写绝不能污染既有状态）。
+    expect(await listTmpResidue(projectDir)).toEqual([]);
+    await expect(readFile(join(projectDir, "story", "writing-rules.json", "keep.txt"), "utf-8")).resolves.toBe("占位");
+    expect(buildStateOverview).not.toHaveBeenCalled();
+  });
+
+  // 复审 C 级收尾：catch-all 500 的 error.message 直进用户可见响应——B1 把 recover/快照/原子写
+  // 整段 fs 代码放进它的 try，errno/git 原文内嵌绝对路径的暴露面变大，必须过 scrubLocalAbsolutePaths。
+  // 注入手法同本文件既有 mock（buildFoundationGapReport mockRejectedValueOnce 打进同一条 catch-all）。
+  it("catch-all 500 响应脱敏：错误含本地绝对路径 → error 字段只见 (本地路径) 占位", async () => {
+    projectDir = await createFoundationRouteProject();
+    buildFoundationGapReport.mockRejectedValueOnce(
+      new Error("EACCES: permission denied, open '/Users/tester/secret/book/story/hooks.json'"),
+    );
+
+    const response = await callFoundationGapsRoute(
+      `/api/foundation-gaps/report?project=${encodeURIComponent(projectDir)}`,
+      undefined,
+      "GET",
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(response.payload).toMatchObject({ ok: false });
+    const errorText = String((response.payload as { readonly error?: unknown }).error);
+    expect(errorText).not.toContain("/Users/tester");
+    expect(errorText).not.toContain("hooks.json");
+    expect(errorText).toContain("(本地路径)");
+    // errno code 本体保留——脱敏只洗路径段，不吞诊断信息。
+    expect(errorText).toContain("EACCES");
+  });
+
+  it("apply 与并发项目级写锁串行：外部持锁期间 apply 的快照/落盘不得插入（咬「去掉锁」变异）", async () => {
+    projectDir = await createFoundationRouteProject();
+    await writeFile(join(projectDir, "story", "writing-rules.json"), `${JSON.stringify({ pointOfView: "第三人称" }, null, 2)}\n`, "utf-8");
+    const suggestion: FoundationGapSuggestion = {
+      id: "suggestion-lock-1",
+      gapId: "gap-lock-1",
+      category: "writingRules",
+      actionType: "update_writing_rule",
+      targetFile: "story/writing-rules.json",
+      targetPath: "pointOfView",
+      before: "第三人称",
+      after: "第一人称",
+      rationale: "切第一人称。",
+      risk: "info",
+      requiresUserConfirm: true,
+    };
+    const plan = {
+      acceptedSuggestions: [suggestion],
+      rejectedSuggestionIds: [],
+      deferredSuggestionIds: [],
+      skippedConflicts: [],
+      fileChanges: [{ targetFile: "story/writing-rules.json", summary: "更新写作视角", suggestionIds: [suggestion.id] }],
+    };
+    buildFoundationGapApplyPlan.mockResolvedValueOnce(plan);
+
+    const events: string[] = [];
+    createSnapshot.mockImplementationOnce(async () => {
+      events.push("snapshot");
+      return { id: "snap-lock", label: "资料写入前快照", createdAt: new Date().toISOString() };
+    });
+    applyFoundationGapDecisions.mockImplementationOnce(async () => {
+      events.push("apply:start");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      events.push("apply:end");
+      return { applied: true, plan, writes: [], overview: {} };
+    });
+
+    let releaseExternal!: () => void;
+    const externalHold = new Promise<void>((resolve) => { releaseExternal = resolve; });
+    // 外部持锁方先占位（模拟并发 commit_apply/foundation_write 的临界区）
+    const external = withProjectCommitLock(projectDir, async () => {
+      events.push("ext:start");
+      await externalHold;
+      events.push("ext:end");
+    });
+    const applyPromise = callFoundationGapsRoute("/api/foundation-gaps/apply", {
+      projectPath: projectDir,
+      confirm: true,
+      decisions: [{ suggestionId: suggestion.id, decision: "accept" }],
+      currentSuggestions: [suggestion],
+    });
+    // 给 apply 的 body 解析与临界区入口留足时间片：若 apply 没拿锁，它的写段此刻已插进 ext 段内
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    releaseExternal();
+    const response = await applyPromise;
+    await external;
+
+    expect(response.statusCode).toBe(200);
+    // 串行顺序：ext 整段结束 → apply 临界区才开始（交错即红）
+    expect(events).toEqual(["ext:start", "ext:end", "snapshot", "apply:start", "apply:end"]);
+  });
+
+  it("apply 锁内嵌套真实 createSnapshot 不死锁（真 git 快照，ALS 可重入内联）", async () => {
+    projectDir = await createFoundationRouteProject();
+    await writeFile(join(projectDir, "story", "writing-rules.json"), `${JSON.stringify({ pointOfView: "第三人称" }, null, 2)}\n`, "utf-8");
+    // 用真 createSnapshot：它内部先 recover 再 ensureRepository 再 commit——全程自持同一把锁。
+    // 若 withProjectCommitLock 不可重入，apply 会在锁里等自己释放 → 测试超时判死。
+    createSnapshot.mockImplementation(snapshotActual.createSnapshot);
+    const suggestion: FoundationGapSuggestion = {
+      id: "suggestion-reenter-1",
+      gapId: "gap-reenter-1",
+      category: "writingRules",
+      actionType: "update_writing_rule",
+      targetFile: "story/writing-rules.json",
+      targetPath: "pointOfView",
+      before: "第三人称",
+      after: "第一人称",
+      rationale: "切第一人称。",
+      risk: "info",
+      requiresUserConfirm: true,
+    };
+    buildFoundationGapApplyPlan.mockResolvedValueOnce({
+      acceptedSuggestions: [suggestion],
+      rejectedSuggestionIds: [],
+      deferredSuggestionIds: [],
+      skippedConflicts: [],
+      fileChanges: [{ targetFile: "story/writing-rules.json", summary: "更新写作视角", suggestionIds: [suggestion.id] }],
+    });
+    applyFoundationGapDecisions.mockImplementationOnce(async () => ({
+      applied: true,
+      plan: { acceptedSuggestions: [suggestion] },
+      writes: [],
+      overview: {},
+    }));
+
+    const response = await callFoundationGapsRoute("/api/foundation-gaps/apply", {
+      projectPath: projectDir,
+      confirm: true,
+      decisions: [{ suggestionId: suggestion.id, decision: "accept" }],
+      currentSuggestions: [suggestion],
+    });
+
+    expect(response.statusCode).toBe(200);
+    // 真快照确实建了（git 仓库存在）——证明嵌套持锁路径真走过且正常收尾
+    await access(join(projectDir, ".git"));
   });
 
   it("commits only characters/<id>/state.json through the character confirm route", async () => {
@@ -1084,6 +1344,24 @@ async function writeCharacterState(projectDir: string, characterId: string, valu
 
 async function readJson(projectDir: string, relativePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(join(projectDir, relativePath), "utf-8")) as Record<string, unknown>;
+}
+
+/** 递归收集项目里的临时文件残渣（writeFileAtomic 的 .<uuid>.tmp 与手写 .tmp-* 两类）。 */
+async function listTmpResidue(dir: string, prefix = ""): Promise<string[]> {
+  const out: string[] = [];
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.name === ".git") continue; // git 自身内部文件不算业务残渣
+    if (entry.name.includes(".tmp")) out.push(rel);
+    if (entry.isDirectory()) out.push(...await listTmpResidue(join(dir, entry.name), rel));
+  }
+  return out;
 }
 
 function characterStateConfirmBody(
