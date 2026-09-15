@@ -632,6 +632,68 @@ describe("Writing Context Pack V0", () => {
     const goalFocus = pack.continuityFocus.arcGoalFocus;
     expect(goalFocus.some((g) => g.includes("查清魂钢申请异常"))).toBe(true);
   });
+
+  // P1-7 复现（scratchpad p17-timeline-order.mjs）：重提中间章时 commit-engine 把该章事件
+  // 挪到文件尾，「最近 N 条」必须按章号选——重提第3章后应选 ch5/ch6/ch7，不是磁盘尾的 ch6/ch7/ch3。
+  it("P1-7 recentTimelineEvents 按章号选最近 N 条，不受重提落盘顺序影响", async () => {
+    const projectDir = await createSoulSteelFixture();
+    const ev = (chapter: number) => ({
+      id: `ch${String(chapter).padStart(4, "0")}-001`,
+      chapter,
+      summary: `CH${chapter}-EVENT`,
+      participants: [],
+    });
+    const events = [1, 2, 3, 4, 5, 6, 7].map(ev);
+    // 模拟 commit-engine 重提第3章的落盘写法：filter 掉旧 ch3 事件、新事件 append 到文件尾
+    const resubmitted = [...events.filter((event) => event.chapter !== 3), { ...ev(3), summary: "CH3-REWRITE-EVENT" }];
+    await writeJson(projectDir, "timeline/events.json", resubmitted);
+
+    const pack = await buildWritingContextPack({ projectDir, chapter: 8, userDirection: "续写" });
+    expect(pack.continuityFocus.recentTimelineEvents).toEqual([
+      "第5章：CH5-EVENT",
+      "第6章：CH6-EVENT",
+      "第7章：CH7-EVENT",
+    ]);
+  });
+
+  it("P1-7 包内受保护摘要恒 ≤3 条（maxTimelineEvents=10 不生效），可裁 timeline_events 段吃全量", async () => {
+    const projectDir = await createSoulSteelFixture();
+    const ev = (chapter: number) => ({
+      id: `ch${String(chapter).padStart(4, "0")}-001`,
+      chapter,
+      summary: `CH${chapter}-EVENT`,
+      participants: [],
+    });
+    await writeJson(projectDir, "timeline/events.json", [1, 2, 3, 4, 5, 6, 7].map(ev));
+
+    // 受保护包内自限 3 条——传更大值不会顶爆保护段（ranker 裁不动它）
+    const pack = await buildWritingContextPack({ projectDir, chapter: 8, userDirection: "续写", maxTimelineEvents: 10 });
+    expect(pack.continuityFocus.recentTimelineEvents).toHaveLength(3);
+
+    // 完整时间线走可裁的 timeline_events 段——吃 maxTimelineEvents 全量（7 条全进）
+    const envelope = await buildWriterContext({ projectDir, chapter: 8, chapterGoal: "续写", maxTimelineEvents: 10 });
+    const section = envelope.sections.find((item) => item.name === "timeline_events")?.content as readonly unknown[];
+    expect(section).toHaveLength(7);
+  });
+
+  // P1-5 真修：pack 构造期的台账读盘失败进结构化 readFailures——不静默吞成 null 也不整包 reject。
+  it("损坏 writing-rules.json → pack 降级不崩，readFailures 如实记录且无绝对路径", async () => {
+    const projectDir = await createSoulSteelFixture();
+    await writeFile(join(projectDir, "story", "writing-rules.json"), "{not-json", "utf-8");
+
+    const pack = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    expect(pack.writingRulesContext.proseStyle).toEqual([]); // 降级为空
+    expect(pack.readFailures.join(" ")).toContain("写作规则");
+    expect(pack.readFailures.join(" ")).toContain("story/writing-rules.json");
+    expect(pack.readFailures.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
+
+    // 同口径并进上下文的 read_failures 段
+    const envelope = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "第一章" });
+    const failures = envelope.sections.find((item) => item.name === "read_failures")?.content as
+      | { failures: readonly string[] }
+      | undefined;
+    expect(failures?.failures.join(" ")).toContain("写作规则");
+  });
 });
 
 async function createSoulSteelFixture(): Promise<string> {

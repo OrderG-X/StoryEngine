@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyFoundationGapDecisions,
   buildFoundationGapApplyPlan,
@@ -10,6 +10,28 @@ import {
 } from "../foundation-gap-assistant.js";
 import { createStoryProject, toSafeCharacterId } from "../project-store.js";
 import { buildStateOverview } from "../state-overview.js";
+
+/**
+ * 原子写回归需要「rename 抛错」这种 chmod 注入不出来的故障（同目录下 tmp 写入和 rename
+ * 要的都是目录写权限，chmod 无法只拦后者）。只换 rename 一个符号，其余 fs/promises
+ * 全部透传真实实现；默认行为 = 真实 rename，仅个别用例 mockRejectedValueOnce 注入单次失败。
+ */
+const { renameMock } = vi.hoisted(() => ({ renameMock: vi.fn() }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: (oldPath: unknown, newPath: unknown) => renameMock(oldPath, newPath),
+  };
+});
+const realRename = (await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")).rename;
+
+beforeEach(() => {
+  renameMock.mockImplementation(realRename);
+});
+afterEach(() => {
+  renameMock.mockReset();
+});
 
 describe("Foundation Gap Assistant V0", () => {
   it("finds book-wide continuity gaps without writing files", async () => {
@@ -787,6 +809,76 @@ describe("Foundation Gap Assistant V0", () => {
     const bible = await readJson(projectDir, "story/bible.json");
     expect(bible.genre).toBe("都市英灵");
   });
+
+  // P0-2 原子写回归①：apply 走 tmp+rename 落盘，正常完成后目录内不得残留 *.tmp*，
+  // 且目标文件是完整可解析的 JSON（进程被杀时要么完整落盘要么旧文件不动，不存在半截文件）。
+  it("leaves no tmp residue and parseable JSON after apply", async () => {
+    const projectDir = await createSparseProject();
+    const suggestion = {
+      id: "ai-world-atomic-residue",
+      gapId: "ai-gap-world",
+      category: "world" as const,
+      actionType: "update_world_rule" as const,
+      targetFile: "story/world-bible.json",
+      targetPath: "socialOrder",
+      targetId: "socialOrder",
+      before: undefined,
+      after: ["现实都市阶层由家庭资源、职业准入、资本和地方关系共同决定。"],
+      rationale: "用户确认用现实都市规则补全世界观。",
+      risk: "warning" as const,
+      requiresUserConfirm: true as const,
+    };
+
+    const result = await applyFoundationGapDecisions(
+      projectDir,
+      [{ suggestionId: suggestion.id, decision: "accept" }],
+      [suggestion],
+    );
+
+    expect(result.applied).toBe(true);
+    const worldBible = await readJson(projectDir, "story/world-bible.json");
+    expect(worldBible.socialOrder).toEqual(["现实都市阶层由家庭资源、职业准入、资本和地方关系共同决定。"]);
+    expect(await listTmpResidue(projectDir)).toEqual([]);
+  });
+
+  // P0-2 原子写回归②：rename 中途抛错 → 该条如实记 apply_failed 跳过（不谎报成功），
+  // 目标文件保持旧字节（rename 没发生=旧文件没被碰），tmp 半成品被清掉。
+  it("keeps old content and cleans tmp when rename fails mid-apply", async () => {
+    const projectDir = await createSparseProject();
+    const targetPath = join(projectDir, "story", "world-bible.json");
+    const beforeContent = await readFile(targetPath, "utf-8");
+    const suggestion = {
+      id: "ai-world-atomic-rename-fail",
+      gapId: "ai-gap-world",
+      category: "world" as const,
+      actionType: "update_world_rule" as const,
+      targetFile: "story/world-bible.json",
+      targetPath: "socialOrder",
+      targetId: "socialOrder",
+      before: undefined,
+      after: ["注入 rename 故障后这条不应该落盘。"],
+      rationale: "验证原子写失败路径。",
+      risk: "warning" as const,
+      requiresUserConfirm: true as const,
+    };
+
+    renameMock.mockRejectedValueOnce(new Error("injected rename failure"));
+
+    const result = await applyFoundationGapDecisions(
+      projectDir,
+      [{ suggestionId: suggestion.id, decision: "accept" }],
+      [suggestion],
+    );
+
+    expect(renameMock).toHaveBeenCalled();
+    expect(result.writes).toEqual([]);
+    expect(result.applied).toBe(false);
+    expect(result.skippedWrites).toEqual(expect.arrayContaining([
+      expect.objectContaining({ suggestionId: suggestion.id, reason: "apply_failed" }),
+    ]));
+    expect(await readFile(targetPath, "utf-8")).toBe(beforeContent);
+    expect(await listTmpResidue(projectDir)).toEqual([]);
+  });
 });
 
 async function createSparseProject(): Promise<string> {
@@ -847,4 +939,20 @@ async function readJson(projectDir: string, relativePath: string): Promise<Recor
 
 async function writeJson(projectDir: string, relativePath: string, value: unknown): Promise<void> {
   await writeFile(join(projectDir, relativePath), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+/** 递归扫出目录里所有名字含 `.tmp` 的文件（原子写半成品残留）。 */
+async function listTmpResidue(rootDir: string): Promise<string[]> {
+  const found: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        await walk(join(dir, entry.name));
+      } else if (entry.name.includes(".tmp")) {
+        found.push(join(dir, entry.name));
+      }
+    }
+  }
+  await walk(rootDir);
+  return found;
 }

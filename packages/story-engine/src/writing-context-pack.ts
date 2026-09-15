@@ -5,6 +5,7 @@ import { selectRelevant } from "./relevance-selection.js";
 import { buildStyleExemplarPromptItems, normalizeStyleExemplars } from "./style-exemplars.js";
 import type { StyleExemplarPromptItem } from "./style-exemplars.js";
 import {
+  describeErrorBriefly,
   readArcGoalPool,
   readAssetLedger,
   readCharacterBible,
@@ -163,6 +164,12 @@ export interface WritingContextPack {
   };
   readonly hardConstraints: readonly string[];
   readonly sourceTrace: readonly WritingContextSourceTrace[];
+  /**
+   * 构造期间被降级为空的读盘失败（相对文件名 + errno code/错误类型，绝不带 error.message 原文）。
+   * 与 context-gateway 的 `read_failures` 段同口径——gateway 会把本列表并进该段渲染进上下文；
+   * 直接消费 pack 的调用方（质量检查/修订/审阅）也应如实透出，绝不静默吞掉（审计 P1-5 真修）。
+   */
+  readonly readFailures: readonly string[];
 }
 
 /** 本包（受保护段）内保留的最近时间线事件条数上限。完整时间线走独立可裁的 timeline_events 段。 */
@@ -175,12 +182,27 @@ export interface BuildWritingContextPackInput {
   readonly currentChapterGoal?: string;
   readonly selectedCharacterIds?: readonly string[];
   readonly selectedHookIds?: readonly string[];
+  /**
+   * 本包内「最近时间线事件」摘要的请求条数。**注意：本包在 ranker 是受保护段（不可裁），
+   * 包内自限最多 {@link PACK_TIMELINE_EXCERPT}=3 条——传更大值不会生效**；完整时间线走
+   * context-gateway 里独立可裁的 `timeline_events` 段（吃 maxTimelineEvents 全量、超预算可整段裁掉）。
+   */
   readonly maxTimelineEvents?: number;
   readonly mustHitBeats?: readonly string[];
 }
 
 export async function buildWritingContextPack(input: BuildWritingContextPackInput): Promise<WritingContextPack> {
   const characterIds = await resolveSelectedCharacterIds(input.projectDir, input.selectedCharacterIds);
+  // P1-5 真修（2026-09-15）：台账级文件损坏（writing-rules/timeline/fact-ledger 等 JSON 坏掉）此前
+  // 要么无 catch 直接 reject 炸掉整个 buildWriterContext，要么静默吞成空值——模型拿着降级上下文
+  // 盲写却毫无知觉。现在：降级仍做（不让一次坏读盘炸掉出稿），但每条失败进 readFailures 上浮，
+  // 由 context-gateway 的 read_failures 段渲染给模型，绝不静默。缺文件（ENOENT）不是失败——
+  // 老书合法缺文件由 project-store 的 ENOENT 兜底处理，不到这里。
+  const readFailures: string[] = [];
+  const trackReadFailure = <T>(label: string, file: string, fallback: T) => (error: unknown): T => {
+    readFailures.push(`${label}读取失败（${file}，${describeErrorBriefly(error)}），已按空资料降级。`);
+    return fallback;
+  };
   const [
     storyBible,
     writingRules,
@@ -198,7 +220,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     states,
   ] = await Promise.all([
     readStoryBible(input.projectDir),
-    readWritingRules(input.projectDir),
+    readWritingRules(input.projectDir).catch(trackReadFailure("写作规则", join("story", "writing-rules.json"), null)),
     readCharacterBible(input.projectDir),
     readWorldBible(input.projectDir),
     readLocationBible(input.projectDir),
@@ -208,7 +230,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     readHookPool(input.projectDir),
     readThreadPool(input.projectDir),
     readArcGoalPool(input.projectDir),
-    readTimelineEvents(input.projectDir).catch(() => [] as TimelineEvent[]),
+    readTimelineEvents(input.projectDir).catch(trackReadFailure("时间线事件", join("timeline", "events.json"), [] as TimelineEvent[])),
     Promise.all(characterIds.map((id) => readCharacterProfile(input.projectDir, id).catch(() => undefined))),
     Promise.all(characterIds.map((id) => readCharacterState(input.projectDir, id).catch(() => undefined))),
   ]);
@@ -255,10 +277,13 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   // 重提章的事件挪到文件末尾（`[...existing.filter(e => e.chapter !== chapter), ...newEvents]`），
   // 磁盘顺序在重提中间章后会错（重提第3章后尾部是 [ch6,ch7,ch3]，slice(-3) 取到错的一组）。
   // 2026-09-15 审计 P1-7。
+  // 排序键与 context-gateway.selectRecentTimelineEvents 同口径（章号升序、同章按 id 升序），
+  // 两条链选出的「最近 N 条」集合一致——不让包内摘要与可裁段各取各的（微差也会累积成困惑）。
   // 本包是【受保护段】（ranker 不能裁它）：完整时间线由独立可裁的 timeline_events 段承载
   // （context-gateway，吃 maxTimelineEvents 全量、超预算由 ranker 整删）。包内只留极小摘要——
   // 不然 maxTimelineEvents=400 会把受保护段顶到 2 万 token，预算器无从下手（长篇收口实测）。
-  const sortedTimelineEvents = [...timelineEvents].sort((a, b) => a.chapter - b.chapter);
+  const sortedTimelineEvents = [...timelineEvents]
+    .sort((a, b) => a.chapter - b.chapter || a.id.localeCompare(b.id));
   const recentTimelineEvents = sortedTimelineEvents.slice(
     -Math.max(1, Math.min(input.maxTimelineEvents ?? PACK_TIMELINE_EXCERPT, PACK_TIMELINE_EXCERPT)),
   );
@@ -278,7 +303,8 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     ...(bibleCharacter?.extraFields ?? {}),
   }).slice(0, 12);
   const supportingCast = buildSupportingCast(characterBible?.characters ?? [], bibleCharacter);
-  const factLedger = await readFactLedger(input.projectDir).catch(() => null);
+  const factLedger = await readFactLedger(input.projectDir)
+    .catch(trackReadFailure("事实账本", join("story", "fact-ledger.json"), null));
   // relevantFactNames 已在上面计算（线索/目标/事实选取共用）。
   const establishedFacts = selectEffectiveFacts({
     facts: factLedger?.facts ?? [],
@@ -426,6 +452,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       mustHitBeats: input.mustHitBeats ?? [],
     }),
     sourceTrace: trace,
+    readFailures,
   };
 
   return pack;

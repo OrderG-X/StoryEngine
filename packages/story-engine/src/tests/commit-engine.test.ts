@@ -724,6 +724,67 @@ describe("StoryEngine-NG CommitEngine", () => {
     await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
   });
 
+  // A3（2026-09-15 复审）：P1-6 放行残留的 recoveryIssues 此前只写 manifest、全仓零读点——
+  // 盘上「章文件已留、资料已回滚」的分歧态用户/agent 无从知晓。回归：残留必须上浮进
+  // CommitReport.issues 与 overview 的 warnings 通道，且文案中性、不带绝对路径。
+  it("A3 残留上浮：recovered-with-issues 进 report.issues 与 overview warnings，无绝对路径", async () => {
+    const projectDir = await createFixtureProject();
+    const relativePath = "chapters/0003.md";
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0003");
+    await mkdir(txDir, { recursive: true });
+    // 事务前不存在的新建文件被留在盘上——recover 无法自证内容，只能标 recovered+recoveryIssues 放行
+    await writeFile(join(projectDir, relativePath), "half-applied chapter kept on disk", "utf-8");
+    await writeFile(join(txDir, "manifest.json"), `${JSON.stringify({
+      version: 2,
+      chapter: 3,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      files: [relativePath],
+      backups: [{ relativePath, existed: false }],
+      status: "staged",
+    }, null, 2)}\n`, "utf-8");
+
+    // 另一章正常提交：recover 放行残留后完成本事务，report.issues 必须带上浮通知
+    await writeDraft(projectDir, 4, "# 第四章\n\nGuo Xu 继续推进主线。\n");
+    const report = await commitFastDraft({ projectDir, chapter: 4, commitPlan: {} });
+    expect(report.passed).toBe(true);
+    expect(report.issues.join(" ")).toContain("transaction_recovered_partial");
+    expect(report.issues.join(" ")).toContain("第 3 章");
+    // 路径泄漏纪律：用户可见文案绝不带本地绝对路径
+    expect(report.issues.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
+
+    // overview 既有 warnings 通道同步可见（UI 消费 uiHints.warnings）
+    const overview = await buildStateOverview({ projectDir, chapter: 4 });
+    expect(overview.uiHints.warnings.join(" ")).toContain("transaction_recovered_partial");
+    expect(overview.uiHints.warnings.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
+
+    // 细节仍在盘上 manifest 里可人工核对
+    await expect(readFile(join(txDir, "manifest.json"), "utf-8")).resolves.toMatch(/"recoveryIssues"/u);
+  });
+
+  it("A3 同章重提吸收残留后不再报（分歧态已自愈）", async () => {
+    const projectDir = await createFixtureProject();
+    const relativePath = "chapters/0003.md";
+    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0003");
+    await mkdir(txDir, { recursive: true });
+    await writeFile(join(projectDir, relativePath), "half-applied chapter kept on disk", "utf-8");
+    await writeFile(join(txDir, "manifest.json"), `${JSON.stringify({
+      version: 2,
+      chapter: 3,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      files: [relativePath],
+      backups: [{ relativePath, existed: false }],
+      status: "staged",
+    }, null, 2)}\n`, "utf-8");
+
+    // 直接重提同一章：新事务吸收残留目录，旧 manifest 被覆盖为 applied——分歧态自愈，不应再报。
+    await writeDraft(projectDir, 3, "# 第三章\n\nGuo Xu 重提并落定了这一章。\n");
+    const report = await commitFastDraft({ projectDir, chapter: 3, commitPlan: {} });
+    expect(report.passed).toBe(true);
+    expect(report.issues.join(" ")).not.toContain("transaction_recovered_partial");
+    const overview = await buildStateOverview({ projectDir, chapter: 3 });
+    expect(overview.uiHints.warnings.join(" ")).not.toContain("transaction_recovered_partial");
+  });
+
   it.skipIf(process.platform === "win32")("does not truncate an outside sentinel when a target parent is swapped before open", async () => {
     const projectDir = await createFixtureProject();
     const outsideDir = await mkdtemp(join(tmpdir(), "story-engine-parent-swap-outside-"));
@@ -932,6 +993,78 @@ describe("StoryEngine-NG CommitEngine", () => {
     await writeDraft(projectDir, 8, "# 第八章\n\n高潮继续。\n");
     expect((await commitFastDraft({ projectDir, chapter: 8, commitPlan: {} })).passed).toBe(true);
     expect((await readWorldState(projectDir)).currentPhase).toBe("高潮篇·背叛");
+  });
+
+  // A4（P1-4 真修）：老书缺台账文件不该让入库直接失败——project-store 的 ENOENT 兜底
+  // 把「没建过/早期版本没有」的文件按空台账读。commit-plan-builder 每次必发 calendar 更新，
+  // 缺 time/calendar.json 此前会让整次提交 reject。损坏 JSON 仍 fail-closed 不静默。
+  it("A4 老书缺台账文件：hooks/calendar/world-state/timeline 全缺也能入库", async () => {
+    const projectDir = await createFixtureProject();
+    await rm(join(projectDir, "story", "hooks.json"), { force: true });
+    await rm(join(projectDir, "time", "calendar.json"), { force: true });
+    await rm(join(projectDir, "world", "state.json"), { force: true });
+    await rm(join(projectDir, "timeline", "events.json"), { force: true });
+
+    await writeDraft(projectDir, 25, "# 第二十五章\n\n老书续写正常入库。\n");
+    const report = await commitFastDraft({
+      projectDir,
+      chapter: 25,
+      commitPlan: {
+        calendar: { storyDay: 25, timeOfDay: "unknown" },
+        timelineEvents: [{ summary: "老书事件", participants: ["guo-xu"] }],
+        worldUpdates: { activeConflicts: ["新冲突"] },
+      },
+    });
+    expect(report.passed).toBe(true);
+    expect(report.issues.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
+    expect(await readStoryCalendar(projectDir)).toMatchObject({ currentStoryDay: 25 });
+    expect(await readTimelineEvents(projectDir)).toHaveLength(1);
+    expect((await readWorldState(projectDir)).activeConflicts).toContain("新冲突");
+    expect((await readHookPool(projectDir)).hooks).toEqual([]);
+  });
+
+  // A6 老书回归：盘上 world/state.json 含退休字段（resolvedConflicts/revealedSecrets 键）与
+  // 旧版自动水印（currentPhase: chapter_N_committed），calendar 故事日高于后续章号——
+  // 读/概览/入库三条主路径必须零崩，字段被忽略但原样透传，故事日不被回压，水印不再被自动覆写。
+  it("A6 老书兼容：退休字段+旧水印+回退故事日 零崩且不丢数据", async () => {
+    const projectDir = await createFixtureProject();
+    await writeFile(join(projectDir, "world", "state.json"), `${JSON.stringify({
+      currentPhase: "chapter_3_committed", // 旧版自动水印的存量值
+      activeConflicts: ["旧冲突"],
+      activeHooks: ["h-existing"],
+      knownSecrets: ["旧秘密"],
+      lastUpdatedChapter: 3,
+      resolvedConflicts: ["已化解的旧冲突"], // 退休字段：老盘上可能已手写/旧版留下
+      revealedSecrets: ["已揭示的旧秘密"],
+    }, null, 2)}\n`, "utf-8");
+    await writeFile(join(projectDir, "time", "calendar.json"), `${JSON.stringify({ currentStoryDay: 10, currentTimeOfDay: "night" }, null, 2)}\n`, "utf-8");
+
+    // readWorldState：未知键透传、不崩
+    const state = await readWorldState(projectDir);
+    expect(state.currentPhase).toBe("chapter_3_committed");
+    expect((state as unknown as Record<string, unknown>).resolvedConflicts).toEqual(["已化解的旧冲突"]);
+
+    // buildStateOverview：零崩（概览对 worldState 未知键本就宽容）
+    const overview = await buildStateOverview({ projectDir, chapter: 5 });
+    expect(overview.project.title).toBeTruthy();
+
+    // commitFastDraft：零崩；故事日单调不回压；退休字段与旧水印透传保留、不被覆写
+    await writeDraft(projectDir, 5, "# 第五章\n\n老书继续推进。\n");
+    const report = await commitFastDraft({
+      projectDir,
+      chapter: 5,
+      commitPlan: {
+        calendar: { storyDay: 4, timeOfDay: "unknown" }, // 请求日低于既有 10 → 不得回压
+        worldUpdates: { activeConflicts: ["新冲突"] },
+      },
+    });
+    expect(report.passed).toBe(true);
+    expect((await readStoryCalendar(projectDir)).currentStoryDay).toBe(10);
+    const after = JSON.parse(await readFile(join(projectDir, "world", "state.json"), "utf-8")) as Record<string, unknown>;
+    expect(after.currentPhase).toBe("chapter_3_committed"); // 自动入库不再写 chapter_N_committed 水印
+    expect(after.resolvedConflicts).toEqual(["已化解的旧冲突"]); // 未知键被忽略但透传，不丢数据
+    expect(after.revealedSecrets).toEqual(["已揭示的旧秘密"]);
+    expect(after.activeConflicts).toEqual(["旧冲突", "新冲突"]);
   });
 });
 

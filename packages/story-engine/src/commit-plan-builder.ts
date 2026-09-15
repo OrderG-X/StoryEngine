@@ -14,7 +14,7 @@ import {
   type ThreadHygieneReport,
   type ThreadTrackingUpdate,
 } from "./lead-intent-tracking.js";
-import { readArcGoalPool, readCharacterProfile, readHookPool, readThreadPool, toSafeCharacterId } from "./project-store.js";
+import { describeErrorBriefly, readArcGoalPool, readCharacterProfile, readHookPool, readThreadPool, toSafeCharacterId } from "./project-store.js";
 import { verifyChapterDelta, type ChapterDeltaDeclaration, type VerifiedChapterDelta } from "./chapter-delta.js";
 import { detectNameDrift, type EstablishedCharacter, type NameDriftFinding } from "./character-name-consistency.js";
 import type { AssetLedger, CharacterMatrixLedger, CharacterProfile, HookItem, LocationBible } from "./types.js";
@@ -148,27 +148,27 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
     input.draftContent !== undefined
       ? Promise.resolve(input.draftContent)
       : readFile(draftPath, "utf-8").catch((error: unknown) => {
-        issues.push(error instanceof Error ? error.message : String(error));
+        issues.push(describeErrorBriefly(error, input.projectDir));
         return undefined;
       }),
     listCharacterProfiles(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(describeErrorBriefly(error, input.projectDir));
       return [];
     }),
     readHookPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(describeErrorBriefly(error, input.projectDir));
       return undefined;
     }),
     readThreadPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(describeErrorBriefly(error, input.projectDir));
       return undefined;
     }),
     readArcGoalPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(describeErrorBriefly(error, input.projectDir));
       return undefined;
     }),
     readCommitPreviewContext(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(describeErrorBriefly(error, input.projectDir));
       return emptyCommitPreviewContext();
     }),
   ]);

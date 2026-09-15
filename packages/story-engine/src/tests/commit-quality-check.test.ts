@@ -525,5 +525,6 @@ function makePack(overrides: {
     },
     hardConstraints: [],
     sourceTrace: [],
+    readFailures: [],
   };
 }

@@ -5,6 +5,7 @@ import { formatStaleHookMessage } from "./hook-tracking.js";
 import { formatStaleThreadMessage } from "./lead-intent-tracking.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import {
+  describeErrorBriefly,
   readCharacterCore,
   readCharacterProfile,
   readCharacterState,
@@ -158,6 +159,11 @@ export interface BuildWriterContextInput {
   readonly chapterGoal: string;
   readonly selectedCharacterIds?: readonly string[];
   readonly selectedHookIds?: readonly string[];
+  /**
+   * `timeline_events` 段（可裁段）取最近 N 条（默认 5）。
+   * 注意 `writing_context_pack` 是受保护段，包内时间线摘要另有自限（≤3 条，
+   * 见 BuildWritingContextPackInput.maxTimelineEvents）——这里传大值只放大可裁段，不会顶爆保护段。
+   */
   readonly maxTimelineEvents?: number;
   readonly mustHitBeats?: readonly string[];
 }
@@ -170,7 +176,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
   // 炸掉整次出稿），但失败原因必须进上下文，让模型知道并如实转达用户。
   const readFailures: string[] = [];
   const trackReadFailure = (label: string) => (error: unknown) => {
-    readFailures.push(`${label} 读取失败，已降级为空：${error instanceof Error ? error.message : String(error)}`);
+    // 只给 errno code/错误类型 + 项目内相对文件名——error.message 原文带本地绝对路径，不进上下文（路径泄漏纪律）。
+    readFailures.push(`${label} 读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
   };
   const [storyCore, worldCore, profiles, cores, calendar, hookPool, threadPool, arcGoalPool, states, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
     readStoryCore(input.projectDir),
@@ -205,6 +212,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     maxTimelineEvents: input.maxTimelineEvents,
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
   });
+  // 包内台账读盘失败（损坏 JSON 降级）与本层失败同一通道上浮——都进 read_failures 段。
+  readFailures.push(...writingContextPack.readFailures);
   // 早期宏事件分层摘要（L2 中段 + L3 远期），让出稿上下文能看见早期内容
   const timelineLayers = buildTimelineLayers(allTimelineEvents, input.chapter);
   const hasEarlierContent = timelineLayers.l2.length > 0 || timelineLayers.l3.length > 0;
@@ -596,6 +605,8 @@ function buildArcCarryForwardInstruction(activeGoals: readonly ArcGoalContextIte
 }
 
 // 从全量 timeline 在内存里挑近 N 段（出稿上下文用）。纯函数——全量已在 buildWriterContext 读过一次，避免重复读盘。
+// 本段是可裁段（ranker 可整段裁掉），吃 maxTimelineEvents 全量；受保护的 writing_context_pack 内摘要
+// 另自限 ≤3 条。两侧排序键同口径（章号→同章 id），选出的「最近 N 条」集合一致（2026-09-15 P1-7 对齐）。
 function selectRecentTimelineEvents(events: readonly TimelineEvent[], maxTimelineEvents: number | undefined): readonly TimelineEvent[] {
   const limit = Math.max(0, Math.trunc(maxTimelineEvents ?? 5));
   if (limit === 0) return [];

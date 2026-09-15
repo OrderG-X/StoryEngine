@@ -5,7 +5,12 @@ import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
 import { selectRelevant } from "./relevance-selection.js";
 import { bigramSimilarity } from "./text-similarity.js";
-import { recoverProjectCommitTransactions, withProjectCommitLock } from "./commit-engine.js";
+import {
+  formatCommitRecoveryNotice,
+  listCommitRecoveryNotices,
+  recoverProjectCommitTransactions,
+  withProjectCommitLock,
+} from "./commit-engine.js";
 import {
   resolveCharacterRole,
   resolveIdentity,
@@ -489,6 +494,7 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     timelineEvents,
     calendar,
     characters,
+    commitRecoveryNotices,
   ] = await Promise.all([
     readJsonSafe<StoryProject>(input.projectDir, "project.json", { id: "unknown", title: "Untitled", createdAt: "", updatedAt: "" }),
     readJsonSafe<WorldCore>(input.projectDir, join("world", "core.json"), { genre: "unknown", premise: "", rules: [], mainConflict: "" }),
@@ -507,6 +513,10 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), []),
     readJsonSafe<StoryCalendar>(input.projectDir, join("time", "calendar.json"), { currentStoryDay: 1, currentTimeOfDay: "unknown" }),
     readCharacters(input.projectDir),
+    // A3（P1-6 上浮）：recover 已在上方锁内跑完；仍挂着「recovered + recoveryIssues」的残留
+    // =盘上「章文件在、资料已回滚」的分歧态。上浮进 uiHints.warnings 既有通道，绝不只写 manifest 静默。
+    // 扫描失败不堵概览——概述是读侧，残留信号由下一次 recover/commit 继续兜。
+    listCommitRecoveryNotices(input.projectDir).catch(() => [] as const),
   ]);
 
   const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
@@ -686,7 +696,10 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     },
     uiHints: {
       recommendedNextPanels: buildRecommendedPanels({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
-      warnings: buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
+      warnings: [
+        ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
+        ...commitRecoveryNotices.map(formatCommitRecoveryNotice),
+      ],
       disabledActions: [
         "merge_threads_confirm",
         "drop_thread_confirm",

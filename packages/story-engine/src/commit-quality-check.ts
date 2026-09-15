@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommitDraftInput } from "./commit-engine.js";
-import { readCharacterProfile } from "./project-store.js";
+import { describeErrorBriefly, readCharacterProfile } from "./project-store.js";
 import {
   defaultQualityJudgement,
   userDisplayCategoryForJudgement,
@@ -90,12 +90,22 @@ export async function checkDraftBeforeCommit(input: {
     }).catch((error) => {
       issues.push({
         type: "continuity_check_skipped",
-        message: `连续性检查已跳过：上下文构造失败（${error instanceof Error ? error.message : String(error)}）。入库仍可进行，但未校验与前文的一致性。`,
+        // errno code/错误类型 + 项目内相对文件名，绝不拼 error.message 原文（带本地绝对路径=泄漏）。
+        message: `连续性检查已跳过：上下文构造失败（${describeErrorBriefly(error, input.projectDir)}）。入库仍可进行，但未校验与前文的一致性。`,
         severity: "warning",
       });
       return undefined;
     });
     if (writingContextPack) {
+      // 包构造成功但内部有读盘降级（如 writing-rules.json 损坏）——检查仍在降级上下文上跑，
+      // 把每条降级如实记成 warning，不静默（与 read_failures 段同口径）。
+      for (const failure of writingContextPack.readFailures) {
+        issues.push({
+          type: "context_read_degraded",
+          message: `${failure}入库仍可进行，但相关检查基于降级后的上下文。`,
+          severity: "warning",
+        });
+      }
       issues.push(...checkWritingContextPackDraft(body, writingContextPack, input.chapter));
     }
     // 与上面同口径（铁律④）：人称漂移检查读盘失败时不能静默跳过——不然「没查」被当成「查了没问题」。
@@ -108,7 +118,8 @@ export async function checkDraftBeforeCommit(input: {
     }).catch((error) => {
       issues.push({
         type: "pronoun_drift_check_skipped",
-        message: `人称漂移检查已跳过：跨章比对失败（${error instanceof Error ? error.message : String(error)}）。入库仍可进行，但未校验人称一致性。`,
+        // errno code/错误类型 + 项目内相对文件名，绝不拼 error.message 原文（带本地绝对路径=泄漏）。
+        message: `人称漂移检查已跳过：跨章比对失败（${describeErrorBriefly(error, input.projectDir)}）。入库仍可进行，但未校验人称一致性。`,
         severity: "warning",
       });
       return [];

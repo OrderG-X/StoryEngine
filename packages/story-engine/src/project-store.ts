@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   ArcGoalPool,
   AssetLedger,
@@ -125,25 +125,25 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
   const timelineEvents: TimelineEvent[] = [];
 
   await Promise.all([
-    writeJson(join(projectDir, "project.json"), project),
-    writeJson(join(projectDir, "world", "core.json"), worldCore),
-    writeJson(join(projectDir, "world", "state.json"), worldState),
-    writeJson(join(projectDir, "story", "core.json"), storyCore),
-    writeJson(join(projectDir, "story", "bible.json"), storyBible),
-    writeJson(join(projectDir, "story", "writing-rules.json"), writingRules),
-    writeJson(join(projectDir, "story", "character-bible.json"), characterBible),
-    writeJson(join(projectDir, "story", "character-matrix.json"), characterMatrix),
-    writeJson(join(projectDir, "story", "world-bible.json"), worldBible),
-    writeJson(join(projectDir, "story", "location-bible.json"), locationBible),
-    writeJson(join(projectDir, "story", "assets.json"), assetLedger),
-    writeJson(join(projectDir, "story", "hooks.json"), hooks),
-    writeJson(join(projectDir, "story", "threads.json"), threads),
-    writeJson(join(projectDir, "story", "arc-goals.json"), arcGoals),
-    writeJson(join(projectDir, "timeline", "events.json"), timelineEvents),
-    writeJson(join(projectDir, "time", "calendar.json"), calendar),
-    writeJson(join(projectDir, "characters", mainCharacterId, "profile.json"), profile),
-    writeJson(join(projectDir, "characters", mainCharacterId, "core.json"), core),
-    writeJson(join(projectDir, "characters", mainCharacterId, "state.json"), state),
+    writeJsonAtomic(join(projectDir, "project.json"), project),
+    writeJsonAtomic(join(projectDir, "world", "core.json"), worldCore),
+    writeJsonAtomic(join(projectDir, "world", "state.json"), worldState),
+    writeJsonAtomic(join(projectDir, "story", "core.json"), storyCore),
+    writeJsonAtomic(join(projectDir, "story", "bible.json"), storyBible),
+    writeJsonAtomic(join(projectDir, "story", "writing-rules.json"), writingRules),
+    writeJsonAtomic(join(projectDir, "story", "character-bible.json"), characterBible),
+    writeJsonAtomic(join(projectDir, "story", "character-matrix.json"), characterMatrix),
+    writeJsonAtomic(join(projectDir, "story", "world-bible.json"), worldBible),
+    writeJsonAtomic(join(projectDir, "story", "location-bible.json"), locationBible),
+    writeJsonAtomic(join(projectDir, "story", "assets.json"), assetLedger),
+    writeJsonAtomic(join(projectDir, "story", "hooks.json"), hooks),
+    writeJsonAtomic(join(projectDir, "story", "threads.json"), threads),
+    writeJsonAtomic(join(projectDir, "story", "arc-goals.json"), arcGoals),
+    writeJsonAtomic(join(projectDir, "timeline", "events.json"), timelineEvents),
+    writeJsonAtomic(join(projectDir, "time", "calendar.json"), calendar),
+    writeJsonAtomic(join(projectDir, "characters", mainCharacterId, "profile.json"), profile),
+    writeJsonAtomic(join(projectDir, "characters", mainCharacterId, "core.json"), core),
+    writeJsonAtomic(join(projectDir, "characters", mainCharacterId, "state.json"), state),
   ]);
 
   return { projectDir, project };
@@ -162,7 +162,14 @@ export async function readWorldCore(projectDir: string): Promise<WorldCore> {
 }
 
 export async function readWorldState(projectDir: string): Promise<WorldState> {
-  return readJson<WorldState>(join(projectDir, "world", "state.json"));
+  // 老书兼容（审计 P1-4）：早期书没有 world/state.json——ENOENT 回落到空世界状态，
+  // 与 state-overview 的读侧默认值同口径；损坏 JSON 仍如实上抛（missing≠corrupt）。
+  return readJson<WorldState>(join(projectDir, "world", "state.json")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return { currentPhase: "unknown", activeConflicts: [], activeHooks: [], knownSecrets: [], lastUpdatedChapter: null };
+    }
+    throw error;
+  });
 }
 
 export async function readStoryCore(projectDir: string): Promise<StoryCore> {
@@ -208,7 +215,12 @@ export async function readAssetLedger(projectDir: string): Promise<AssetLedger> 
 }
 
 export async function readHookPool(projectDir: string): Promise<HookPool> {
-  return readJson<HookPool>(join(projectDir, "story", "hooks.json"));
+  // 老书兼容（审计 P1-4）：缺 hooks.json 按空池处理，与 readThreadPool/readArcGoalPool 同款兜底；
+  // 损坏 JSON 仍上抛——伏笔池是正式状态，坏文件绝不能静默当空池往下写。
+  return readJson<HookPool>(join(projectDir, "story", "hooks.json")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return { hooks: [] };
+    throw error;
+  });
 }
 
 export async function readThreadPool(projectDir: string): Promise<ThreadPool> {
@@ -226,11 +238,21 @@ export async function readArcGoalPool(projectDir: string): Promise<ArcGoalPool> 
 }
 
 export async function readStoryCalendar(projectDir: string): Promise<StoryCalendar> {
-  return readJson<StoryCalendar>(join(projectDir, "time", "calendar.json"));
+  // 老书兼容（审计 P1-4）：缺 time/calendar.json 按「第 1 天·时刻未知」起步——
+  // commit-plan-builder 每次提交必发 calendar 更新，缺文件不该让 commit 直接 reject。
+  return readJson<StoryCalendar>(join(projectDir, "time", "calendar.json")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return { currentStoryDay: 1, currentTimeOfDay: "unknown" };
+    throw error;
+  });
 }
 
 export async function readTimelineEvents(projectDir: string): Promise<readonly TimelineEvent[]> {
-  return readJson<TimelineEvent[]>(join(projectDir, "timeline", "events.json"));
+  // 老书兼容（审计 P1-4）：缺 timeline/events.json 按空时间线处理；
+  // 损坏 JSON 仍上抛，由上层（context-gateway 的 read_failures 等）如实记录降级。
+  return readJson<TimelineEvent[]>(join(projectDir, "timeline", "events.json")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [] as TimelineEvent[];
+    throw error;
+  });
 }
 
 export async function readCharacterProfile(projectDir: string, characterId: string): Promise<CharacterProfile> {
@@ -398,11 +420,32 @@ function createDefaultAssetLedger(): AssetLedger {
   };
 }
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-  const dir = filePath.substring(0, filePath.lastIndexOf("/"));
-  const tmpPath = `${filePath}.tmp.${process.pid}`;
-  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-  await rename(tmpPath, filePath);
+/**
+ * 原子写盘（tmp + rename），引擎内统一口径（2026-09-15 审计 P0-2 收口）：
+ * 直接 writeFile 覆盖在进程被杀（OOM/断电/强退）时会留下截断文件，而读侧 readJsonSafe
+ * 对 SyntaxError 一律回 fallback → 面板和写手上下文静默显示空设定。rename 在同文件
+ * 系统内原子：要么完整落盘、要么保持旧文件不动。tmp 统一 `<file>.tmp-<pid>` 后缀
+ * （对齐 8b4123c 给 foundation-write-gateway 定的口径）；写盘或改名任一步失败先清
+ * tmp 再原样上抛——绝不静默失败、不留半成品。
+ * foundation-write-gateway / foundation-gap-assistant（含 restoreFiles 回滚写）共用此函数。
+ */
+export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  // dirname 平台感知：Windows 反斜杠路径也算出正确父目录——旧 lastIndexOf("/") 算法
+  // 在 `\` 路径下得出 ""，mkdir 被静默跳过（复审 C 级）。
+  await mkdir(dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmpPath, content, "utf-8");
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** 原子写 JSON：2 空格缩进 + 尾换行，与旧 writeJson 落盘格式一致。 */
+export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+  await writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -414,4 +457,35 @@ async function readOptionalJson<T>(path: string): Promise<T | null> {
     if (error.code === "ENOENT") return null;
     throw error;
   });
+}
+
+/**
+ * 错误的用户可见简报——路径泄漏纪律（2026-09-15 复审；引擎侧不复制 UI 的 scrub 正则，只产出结构化简报）：
+ * - errno/自造 code（EACCES、UNSAFE_*、TX_*…）→ `错误码 X`，错误自带 path 且能折算进 projectDir 时附相对文件名；
+ * - JSON 解析失败 → 固定文案（不带源文件内容）；
+ * - 普通 Error：message 里**不含任何路径分隔符**（`/`、`\`）才原样放行——配置类错误（如缺 API key）
+ *   的文案本来就该到用户面前；带分隔符的 message 可能藏本地绝对路径，一律降级为类型名。
+ */
+export function describeErrorBriefly(error: unknown, projectDir?: string): string {
+  if (error instanceof SyntaxError) return "JSON 解析失败";
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const kind = typeof code === "string" && code.length > 0
+      ? `错误码 ${code}`
+      : (() => {
+        const message = error.message.trim();
+        return message.length > 0 && !message.includes("/") && !message.includes("\\")
+          ? message
+          : `错误类型 ${error.name || "Error"}`;
+      })();
+    const rawPath = (error as NodeJS.ErrnoException).path;
+    if (projectDir !== undefined && typeof rawPath === "string" && rawPath.length > 0) {
+      const rel = relative(resolve(projectDir), resolve(rawPath));
+      if (rel.length > 0 && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
+        return `${kind}（${rel}）`;
+      }
+    }
+    return kind;
+  }
+  return "未知错误";
 }

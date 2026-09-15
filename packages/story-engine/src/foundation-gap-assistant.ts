@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
   applyFoundationWriteSuggestion,
   classifyFoundationWriteSuggestion,
@@ -20,7 +20,10 @@ import {
   readWorldCore,
   readWorldState,
   readWritingRules,
+  describeErrorBriefly,
   toSafeCharacterId,
+  writeFileAtomic,
+  writeJsonAtomic,
 } from "./project-store.js";
 import { buildStateOverview, type StateOverview } from "./state-overview.js";
 import type {
@@ -382,7 +385,7 @@ export async function applyFoundationGapDecisions(
         reason: "apply_failed",
         action: suggestion.actionType ?? "unknown",
         ...(targetName ? { targetName } : {}),
-        summary: `${targetName ? `「${targetName}」` : "这条资料"}未写入：写入时出错（${summarizeApplyError(error)}），已跳过，其余资料照常写入。`,
+        summary: `${targetName ? `「${targetName}」` : "这条资料"}未写入：写入时出错（${describeErrorBriefly(error, projectDir)}），已跳过，其余资料照常写入。`,
       });
     }
   }
@@ -419,16 +422,11 @@ async function restoreFiles(projectDir: string, snapshot: ReadonlyMap<string, st
       await rm(absolutePath, { force: true }).catch(() => undefined);
       return;
     }
-    await writeFile(absolutePath, content, "utf-8");
+    await writeFileAtomic(absolutePath, content);
   }));
 }
 
-/** 把写入期错误压成一行可读摘要：只取 message 首行、截断，不带 stack。 */
-function summarizeApplyError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const firstLine = message.split("\n")[0]?.trim() ?? "未知错误";
-  return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine;
-}
+
 
 /** 取建议的展示名：优先抽取出的实体名，其次 before.name。供 apply_failed 跳过文案用。 */
 function suggestionDisplayName(suggestion: FoundationGapSuggestion): string | undefined {
@@ -728,7 +726,7 @@ async function applyFieldSuggestion(projectDir: string, suggestion: FoundationGa
   const record = await readJson(absolutePath, defaultDocument(relativePath));
   const targetPath = targetPathForSuggestion(suggestion);
   writePath(record, targetPath, suggestion.after, suggestion.targetId);
-  await writeJson(absolutePath, record);
+  await writeJsonAtomic(absolutePath, record);
 }
 
 async function applyCreateCharacter(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
@@ -742,7 +740,7 @@ async function applyCreateCharacter(projectDir: string, suggestion: FoundationGa
   } else {
     characters[index] = mergeCharacterBibleEntry(characters[index] as CharacterBibleEntry, patch.bibleEntry);
   }
-  await writeJson(biblePath, { ...bible, characters });
+  await writeJsonAtomic(biblePath, { ...bible, characters });
   const characterDir = join(projectDir, "characters", patch.bibleEntry.id);
   await mkdir(characterDir, { recursive: true });
   await writeMergedCharacterFile(join(characterDir, "profile.json"), patch.profile);
@@ -886,7 +884,7 @@ function mergeCharacterBibleEntry(existing: CharacterBibleEntry, patch: Characte
 async function writeMergedCharacterFile(path: string, patch: unknown): Promise<void> {
   if (!isRecord(patch)) return;
   const existing = await readJson<Record<string, unknown>>(path, {});
-  await writeJson(path, mergeRecordsPreferExisting(existing, patch));
+  await writeJsonAtomic(path, mergeRecordsPreferExisting(existing, patch));
 }
 
 function mergeRecordsPreferExisting(existing: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
@@ -999,12 +997,12 @@ async function applyLocationSuggestion(projectDir: string, suggestion: Foundatio
   const bible = await readJson<LocationBible>(locationPath, { version: "v0", locations: [] });
   const index = bible.locations.findIndex((item) => item.id === location.id || item.name === location.name);
   if (index < 0) {
-    await writeJson(locationPath, { ...bible, locations: [...bible.locations, location] });
+    await writeJsonAtomic(locationPath, { ...bible, locations: [...bible.locations, location] });
     return;
   }
   const nextLocations = [...bible.locations];
   nextLocations[index] = mergeLocationDetail(nextLocations[index] as LocationBibleEntry, location);
-  await writeJson(locationPath, { ...bible, locations: nextLocations });
+  await writeJsonAtomic(locationPath, { ...bible, locations: nextLocations });
 }
 
 async function applyCreateAsset(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
@@ -1012,7 +1010,7 @@ async function applyCreateAsset(projectDir: string, suggestion: FoundationGapSug
   const assetPath = join(projectDir, "story", "assets.json");
   const ledger = await readJson<AssetLedger>(assetPath, { version: "v0", assets: [], containers: [] });
   if (ledger.assets.some((item) => item.id === asset.id || item.name === asset.name)) return;
-  await writeJson(assetPath, { ...ledger, assets: [...ledger.assets, asset] });
+  await writeJsonAtomic(assetPath, { ...ledger, assets: [...ledger.assets, asset] });
 }
 
 async function applyAssetSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
@@ -1026,7 +1024,7 @@ async function applyAssetSuggestion(projectDir: string, suggestion: FoundationGa
   } else {
     assets[index] = mergeAssetItem(assets[index] as AssetItem, patch);
   }
-  await writeJson(assetPath, { ...ledger, assets });
+  await writeJsonAtomic(assetPath, { ...ledger, assets });
 }
 
 async function applyWorldRuleSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
@@ -1035,7 +1033,7 @@ async function applyWorldRuleSuggestion(projectDir: string, suggestion: Foundati
   if (!isRecord(suggestion.after)) {
     const record = { ...bible } as Record<string, unknown>;
     writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJson(worldPath, record);
+    await writeJsonAtomic(worldPath, record);
     return;
   }
   const source = suggestion.after;
@@ -1058,7 +1056,7 @@ async function applyWorldRuleSuggestion(projectDir: string, suggestion: Foundati
     hiddenFacts: mergeStringArrays(bible.hiddenFacts ?? [], readStringList(source.hiddenFacts)),
     forbiddenRuleBreaks: mergeStringArrays(bible.forbiddenRuleBreaks ?? [], readStringList(source.forbiddenRuleBreaks)),
   };
-  await writeJson(worldPath, next);
+  await writeJsonAtomic(worldPath, next);
 }
 
 async function applyWritingRuleSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
@@ -1077,7 +1075,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
   if (!isRecord(suggestion.after)) {
     const record = { ...rules } as Record<string, unknown>;
     writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJson(rulesPath, record);
+    await writeJsonAtomic(rulesPath, record);
     return;
   }
   const source = suggestion.after;
@@ -1098,7 +1096,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
     doNotDo: mergeStringArrays(rules.doNotDo ?? [], readStringList(source.doNotDo)),
     antiAiPatterns: mergeStringArrays(rules.antiAiPatterns ?? [], readStringList(source.antiAiPatterns)),
   };
-  await writeJson(rulesPath, next);
+  await writeJsonAtomic(rulesPath, next);
 }
 
 async function findSuggestionConflict(projectDir: string, suggestion: FoundationGapSuggestion): Promise<FoundationConflictItem | undefined> {
@@ -1553,7 +1551,7 @@ async function writeIfMissing(path: string, value: unknown): Promise<void> {
     throw error;
   });
   if (existing !== undefined) return;
-  await writeJson(path, value);
+  await writeJsonAtomic(path, value);
 }
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -1564,10 +1562,7 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   return text === undefined ? fallback : JSON.parse(text) as T;
 }
 
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-}
+
 
 function lastPathSegment(path: string): string {
   return path.split(".").at(-1) ?? path;

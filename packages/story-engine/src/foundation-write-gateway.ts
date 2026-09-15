@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { dedupeStringList } from "./canonical-resolvers.js";
-import { isSentinelEntityId, readProject, toSafeCharacterId } from "./project-store.js";
+import { isSentinelEntityId, readProject, toSafeCharacterId, writeJsonAtomic } from "./project-store.js";
 import type {
   AssetItem,
   AssetLedger,
@@ -542,7 +542,7 @@ async function applyDeleteCharacter(projectDir: string, suggestion: FoundationWr
   const remaining = bible.characters
     .filter((item) => item.id !== entry.id)
     .map((item) => withoutRelationshipRefs(item, entry.name));
-  await writeJson(biblePath, { ...bible, characters: remaining });
+  await writeJsonAtomic(biblePath, { ...bible, characters: remaining });
   writes.push({
     domain: "character",
     action: "delete_foundation_entry",
@@ -555,7 +555,7 @@ async function applyDeleteCharacter(projectDir: string, suggestion: FoundationWr
   const matrixPath = join(projectDir, "story", "character-matrix.json");
   const matrix = await readJson<CharacterMatrixLedger>(matrixPath, { version: "v0", entries: [] });
   const nextEntries = matrix.entries.filter((item) => item.id !== entry.id && item.promotedCharacterId !== entry.id && item.name !== entry.name);
-  await writeJson(matrixPath, { ...matrix, entries: nextEntries });
+  await writeJsonAtomic(matrixPath, { ...matrix, entries: nextEntries });
   writes.push({
     domain: "character",
     action: "delete_character_matrix_entry",
@@ -599,7 +599,7 @@ async function applyDeleteRelationshipEntry(projectDir: string, suggestion: Foun
       ? { ...item, relationshipDynamics: (item.relationshipDynamics ?? []).filter((line) => line.trim() !== beforeText) }
       : item
   ));
-  await writeJson(biblePath, { ...bible, characters });
+  await writeJsonAtomic(biblePath, { ...bible, characters });
   return [{
     domain: "character",
     action: "delete_foundation_entry",
@@ -615,7 +615,7 @@ async function applyDeleteLocation(projectDir: string, suggestion: FoundationWri
   const bible = await readJson<LocationBible>(biblePath, { version: "v0", locations: [] });
   const entry = findEntryByIdOrName(bible.locations, suggestion);
   if (!entry) throw new Error("delete_target_not_found");
-  await writeJson(biblePath, { ...bible, locations: bible.locations.filter((item) => item.id !== entry.id) });
+  await writeJsonAtomic(biblePath, { ...bible, locations: bible.locations.filter((item) => item.id !== entry.id) });
   return [{
     domain: "location",
     action: "delete_foundation_entry",
@@ -631,7 +631,7 @@ async function applyDeleteAsset(projectDir: string, suggestion: FoundationWriteS
   const ledger = await readJson<AssetLedger>(ledgerPath, { version: "v0", assets: [], containers: [] });
   const entry = findEntryByIdOrName(ledger.assets, suggestion);
   if (!entry) throw new Error("delete_target_not_found");
-  await writeJson(ledgerPath, { ...ledger, assets: ledger.assets.filter((item) => item.id !== entry.id) });
+  await writeJsonAtomic(ledgerPath, { ...ledger, assets: ledger.assets.filter((item) => item.id !== entry.id) });
   return [{
     domain: "asset",
     action: "delete_foundation_entry",
@@ -656,7 +656,7 @@ async function applyDeleteTextEntry(
   if (!field) throw new Error("delete_target_not_found");
   const current = record[field] as readonly unknown[];
   record[field] = current.filter((item) => !(typeof item === "string" && item.trim() === beforeText));
-  await writeJson(absolutePath, record);
+  await writeJsonAtomic(absolutePath, record);
   return [{
     domain,
     action: "delete_foundation_entry",
@@ -674,7 +674,7 @@ async function applyFieldSuggestion(projectDir: string, suggestion: FoundationWr
   } else {
     writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
   }
-  await writeJson(absolutePath, record);
+  await writeJsonAtomic(absolutePath, record);
   return [{
     domain: "field",
     action: suggestion.actionType,
@@ -707,7 +707,7 @@ async function applyCreateCharacter(projectDir: string, suggestion: FoundationWr
   } else {
     characters[index] = mergeCharacterBibleEntry(characters[index] as CharacterBibleEntry, patch.bibleEntry);
   }
-  await writeJson(biblePath, { ...bible, characters });
+  await writeJsonAtomic(biblePath, { ...bible, characters });
 
   const characterDir = join(projectDir, "characters", patch.bibleEntry.id);
   await mkdir(characterDir, { recursive: true });
@@ -786,7 +786,7 @@ async function writeCharacterStateWithExtraFields(
     : mergeRecordsPreferExisting(existingRaw, patchWithoutExtra);
   const next = merged ? { ...baseMerged, extraFields: merged } : baseMerged;
   const changed = JSON.stringify(next) !== JSON.stringify(existingRaw);
-  await writeJson(statePath, next);
+  await writeJsonAtomic(statePath, next);
   return { merged, newKeys, changed };
 }
 
@@ -806,11 +806,11 @@ async function applyRenameCharacter(projectDir: string, suggestion: FoundationWr
   const existing = bible.characters[index] as CharacterBibleEntry;
   const nextCharacters = [...bible.characters];
   nextCharacters[index] = { ...existing, name: newName };
-  await writeJson(biblePath, { ...bible, characters: nextCharacters });
+  await writeJsonAtomic(biblePath, { ...bible, characters: nextCharacters });
 
   const profilePath = join(projectDir, "characters", suggestion.targetId, "profile.json");
   const profile = await readJson<CharacterProfile>(profilePath, { id: suggestion.targetId, name: existing.name, identity: existing.identity ?? existing.role ?? "protagonist", appearance: {}, tags: [] });
-  await writeJson(profilePath, { ...profile, id: suggestion.targetId, name: newName });
+  await writeJsonAtomic(profilePath, { ...profile, id: suggestion.targetId, name: newName });
 
   return [
     {
@@ -970,7 +970,7 @@ async function applyUpdateCharacterDetail(projectDir: string, suggestion: Founda
   const otherFieldsChanged = JSON.stringify(mergedEntry) !== JSON.stringify(existing);
   const characters = [...bible.characters];
   characters[index] = finalEntry;
-  await writeJson(biblePath, { ...bible, characters });
+  await writeJsonAtomic(biblePath, { ...bible, characters });
 
   await mkdir(characterDir, { recursive: true });
   const profileChanged = await writePatchedCharacterFile(join(characterDir, "profile.json"), {
@@ -1375,7 +1375,7 @@ function mergeCharacterBibleEntry(existing: CharacterBibleEntry, patch: Characte
 async function writeMergedCharacterFile(path: string, patch: unknown): Promise<void> {
   if (!isRecord(patch)) return;
   const existing = await readJson<Record<string, unknown>>(path, {});
-  await writeJson(path, mergeRecordsPreferExisting(existing, patch));
+  await writeJsonAtomic(path, mergeRecordsPreferExisting(existing, patch));
 }
 
 /** 返回该文件内容是否真变（用于 writes[] 诚实明细：没变的文件不报）。照常写盘——幂等无变不产生 git diff。 */
@@ -1383,7 +1383,7 @@ async function writePatchedCharacterFile(path: string, patch: unknown): Promise<
   if (!isRecord(patch)) return false;
   const existing = await readJson<Record<string, unknown>>(path, {});
   const merged = mergeRecordsPreferPatch(existing, patch);
-  await writeJson(path, merged);
+  await writeJsonAtomic(path, merged);
   return JSON.stringify(merged) !== JSON.stringify(existing);
 }
 
@@ -1445,11 +1445,11 @@ async function applyLocationSuggestion(projectDir: string, suggestion: Foundatio
   const merged = mergeExtraFields(existingExtra, location.extraFields);
   const newKeys = newExtraFieldKeys(existingExtra, location.extraFields);
   if (index < 0) {
-    await writeJson(locationPath, { ...bible, locations: [...bible.locations, location] });
+    await writeJsonAtomic(locationPath, { ...bible, locations: [...bible.locations, location] });
   } else {
     const nextLocations = [...bible.locations];
     nextLocations[index] = mergeLocationDetail(nextLocations[index] as LocationBibleEntry, location);
-    await writeJson(locationPath, { ...bible, locations: nextLocations });
+    await writeJsonAtomic(locationPath, { ...bible, locations: nextLocations });
   }
   return [withExtraFieldsReport(
     {
@@ -1573,7 +1573,7 @@ async function applyCreateAsset(projectDir: string, suggestion: FoundationWriteS
   } else {
     assets[index] = mergeAssetItem(assets[index] as AssetItem, asset);
   }
-  await writeJson(assetPath, { ...ledger, assets });
+  await writeJsonAtomic(assetPath, { ...ledger, assets });
   const newKeys = newExtraFieldKeys(existingExtra, incomingExtra);
   return { writes: [withExtraFieldsReport(
     {
@@ -1603,7 +1603,7 @@ async function applyAssetSuggestion(projectDir: string, suggestion: FoundationWr
   } else {
     assets[index] = mergeAssetItem(assets[index] as AssetItem, patch);
   }
-  await writeJson(assetPath, { ...ledger, assets });
+  await writeJsonAtomic(assetPath, { ...ledger, assets });
   return [withExtraFieldsReport(
     {
       domain: "asset",
@@ -1624,7 +1624,7 @@ async function applyWorldRuleSuggestion(projectDir: string, suggestion: Foundati
   if (!isRecord(suggestion.after)) {
     const record = { ...bible } as Record<string, unknown>;
     writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJson(worldPath, record);
+    await writeJsonAtomic(worldPath, record);
   } else {
     const source = suggestion.after;
     const coreRules = mergeStringArrays(readStringList(source.coreRules), readStringList(source.rules), readStringList(source.worldRules));
@@ -1675,7 +1675,7 @@ async function applyWorldRuleSuggestion(projectDir: string, suggestion: Foundati
       hiddenFacts: mergeStringArrays(bible.hiddenFacts ?? [], readStringList(source.hiddenFacts)),
       forbiddenRuleBreaks: mergeStringArrays(bible.forbiddenRuleBreaks ?? [], readStringList(source.forbiddenRuleBreaks)),
     };
-    await writeJson(worldPath, next);
+    await writeJsonAtomic(worldPath, next);
   }
   const records: FoundationWriteRecord[] = [{
     domain: "world",
@@ -1696,7 +1696,7 @@ async function applyWorldRuleSuggestion(projectDir: string, suggestion: Foundati
     const existingExtra = readExtraFields(existingState);
     const merged = mergeExtraFields(existingExtra, incomingExtra);
     const newKeys = newExtraFieldKeys(existingExtra, incomingExtra);
-    await writeJson(statePath, merged ? { ...existingState, extraFields: merged } : existingState);
+    await writeJsonAtomic(statePath, merged ? { ...existingState, extraFields: merged } : existingState);
     records.push(withExtraFieldsReport(
       {
         domain: "world",
@@ -1743,7 +1743,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
   if (!isRecord(suggestion.after) && scalarTargetWords === undefined) {
     const record = { ...rules } as Record<string, unknown>;
     writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJson(rulesPath, record);
+    await writeJsonAtomic(rulesPath, record);
     return { writes: [WRITING_RULE_WRITE_RECORD] };
   } else {
     const source = isRecord(suggestion.after) ? suggestion.after : { targetChapterWords: scalarTargetWords };
@@ -1831,7 +1831,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
         },
       };
     }
-    await writeJson(rulesPath, next);
+    await writeJsonAtomic(rulesPath, next);
     // 写成功，但有要删的目标没命中（部分 miss）→ 同时回报 skip 点名没删到的，避免静默成功（修#2·铁律④）。
     return {
       writes: [WRITING_RULE_WRITE_RECORD],
@@ -2479,19 +2479,6 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
     throw error;
   });
   return text === undefined ? fallback : JSON.parse(text) as T;
-}
-
-/**
- * 原子写（tmp + rename）：与 project-store.writeJson 对齐。
- * 直接 writeFile 覆盖在进程被杀（OOM/断电/强退）时会留下截断的 JSON，而 readJsonSafe
- * 对 SyntaxError 一律返回 fallback → 面板和写手上下文静默显示空设定（2026-09-15 审计 P0-2）。
- * rename 在同文件系统内是原子的：要么完整落盘，要么保持旧文件不动。
- */
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const tmpPath = `${path}.tmp-${process.pid}`;
-  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-  await rename(tmpPath, path);
 }
 
 function lastPathSegment(path: string): string {

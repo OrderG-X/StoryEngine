@@ -33,7 +33,7 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { readWritingRules } from "./project-store.js";
+import { describeErrorBriefly, readWritingRules } from "./project-store.js";
 import type { CharacterProfile } from "./types.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
@@ -72,6 +72,10 @@ export interface FastDraftInput {
   readonly writerClient: WriterClient;
   readonly selectedCharacterIds?: readonly string[];
   readonly selectedHookIds?: readonly string[];
+  /**
+   * 时间线相关段的条数请求：可裁的 `timeline_events` 段按它取最近 N 条（默认 5）；
+   * 受保护的 `writing_context_pack` 内时间线摘要另自限 ≤3 条（传更大值不会顶爆保护段）。
+   */
   readonly maxTimelineEvents?: number;
   /** 用户/agent 指定的本章必须命中要点：注入「本章硬约束」让模型逐条落实，出稿后确定性核对（Codex 复测：首稿跑偏）。 */
   readonly mustHitBeats?: readonly string[];
@@ -140,8 +144,9 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
   // 出稿质量悄悄掉档而用户一无所知。降级仍要（不能让一次坏读盘炸掉出稿），但原因要进 issues。
   const writingRulesFailure: string[] = [];
   const writingRules = await readWritingRules(input.projectDir).catch((error) => {
+    // errno code/错误类型 + 相对文件名，绝不拼 error.message 原文（带本地绝对路径=泄漏）。
     writingRulesFailure.push(
-      `写作规则读取失败，已降级为无规则：${error instanceof Error ? error.message : String(error)}`,
+      `写作规则读取失败（story/writing-rules.json，${describeErrorBriefly(error)}），已降级为无规则。`,
     );
     return null;
   });
@@ -155,16 +160,35 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     draftBody: "",
     lengthTarget: draftLengthTarget,
   });
-  const builtContext = await buildWriterContext({
-    projectDir: input.projectDir,
-    chapter: input.chapter,
-    chapterGoal,
-    selectedCharacterIds: input.selectedCharacterIds,
-    selectedHookIds: input.selectedHookIds,
-    maxTimelineEvents: input.maxTimelineEvents,
-    ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
-  });
-  const context = input.rankContext ? input.rankContext(builtContext) : builtContext;
+  // P1-5 真修（2026-09-15）：上下文构造真进 try——任何读盘/构包失败（含 rankContext 注入函数抛错）
+  // 都落成 passed:false + writer_context_unavailable，绝不让 runFastDraft 整体 reject 砸穿调用方。
+  let context: WriterContextEnvelope;
+  try {
+    const builtContext = await buildWriterContext({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      chapterGoal,
+      selectedCharacterIds: input.selectedCharacterIds,
+      selectedHookIds: input.selectedHookIds,
+      maxTimelineEvents: input.maxTimelineEvents,
+      ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
+    });
+    context = input.rankContext ? input.rankContext(builtContext) : builtContext;
+  } catch (error) {
+    // 上下文不存在时没有真实 section 可统计——给空壳包底的零值指纹/统计，报告结构仍完整诚实。
+    const emptyContext = emptyWriterContext(input.chapter);
+    return withFastDraftDiagnostics(input.projectDir, {
+      chapter: input.chapter,
+      passed: false,
+      contextStats: buildContextStats(emptyContext),
+      promptFingerprint: buildPromptFingerprint(emptyContext),
+      draftLength: emptyDraftLength,
+      issues: [
+        ...writingRulesFailure,
+        `writer_context_unavailable: 写作上下文读取失败（${describeErrorBriefly(error, input.projectDir)}），未生成本章草稿。`,
+      ],
+    }, latencyTimer);
+  }
   const contextStats = buildContextStats(context);
   const promptFingerprint = buildPromptFingerprint(context);
   if (input.dryRun === true) {
@@ -237,7 +261,9 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
         ...(aiFlavor ? { aiFlavor } : {}),
-        issues,
+        // 校验失败早退同样并 writingRulesFailure——降级留痕不能因稿子没过校验被吞
+        // （与其余三条返回路径同口径，复审 C 级）。
+        issues: [...writingRulesFailure, ...issues],
       }, latencyTimer);
     }
 
@@ -288,9 +314,29 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       contextStats,
       promptFingerprint,
       draftLength: emptyDraftLength,
-      issues: [...writingRulesFailure, error instanceof Error ? error.message : String(error)],
+      // describeErrorBriefly：errno/自造 code → 错误码+相对文件名；无路径分隔符的安全文案
+      // （如缺 API key）原样放行——CLI 的 issues 契约（精确断言 adapter 文案）靠它保住。
+      issues: [...writingRulesFailure, describeErrorBriefly(error, input.projectDir)],
     }, latencyTimer);
   }
+}
+
+/** 上下文构造失败时的空壳包底：仅用于产出结构完整的零值 contextStats/promptFingerprint。 */
+function emptyWriterContext(chapter: number): WriterContextEnvelope {
+  return {
+    projectId: "",
+    chapter,
+    sections: [],
+    trace: {
+      sectionNames: [],
+      totalTokenEstimate: 0,
+      stableTokenEstimate: 0,
+      dynamicTokenEstimate: 0,
+      selectedCharacters: [],
+      selectedHooks: [],
+      selectedTimelineEvents: [],
+    },
+  };
 }
 
 async function withFastDraftDiagnostics(

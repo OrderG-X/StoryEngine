@@ -1,4 +1,4 @@
-import { access, stat } from "node:fs/promises";
+import { access, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -25,6 +25,7 @@ import {
   readWritingRules,
   isSentinelEntityId,
   toSafeCharacterId,
+  writeFileAtomic,
 } from "../project-store.js";
 
 describe("StoryEngine-NG ProjectStore", () => {
@@ -174,6 +175,20 @@ describe("StoryEngine-NG ProjectStore", () => {
     expect(first.project.id).toMatch(/^story-[a-f0-9]{6}$/u);
     expect(second.project.id).toBe(`${first.project.id}-2`);
     expect(first.projectDir).not.toBe(second.projectDir);
+  });
+
+  it("writeFileAtomic 自建缺失父目录并落盘（path.join 深层子目录目标）", async () => {
+    // 复审 C 级收尾：目标路径父目录不存在时 writeFileAtomic 必须 mkdir -p 自建——
+    // 现存调用点目录都预建/必存在，这条专门钉「父目录缺失」的兜底行为
+    // （咬「mkdir 跳过/dir 算错」变异；Windows `\` 路径下旧 lastIndexOf("/") 正是死在这里）。
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ng-atomic-"));
+    const target = join(rootDir, "nested", "deeper", "target.json");
+
+    await writeFileAtomic(target, "{ \"ok\": true }\n");
+
+    await expect(readFile(target, "utf-8")).resolves.toBe("{ \"ok\": true }\n");
+    // rename 已消费 tmp：目录里只有目标文件，无 .tmp- 残渣。
+    expect(await readdir(join(rootDir, "nested", "deeper"))).toEqual(["target.json"]);
   });
 
   it("rolls back partial project directories when initial creation fails", async () => {

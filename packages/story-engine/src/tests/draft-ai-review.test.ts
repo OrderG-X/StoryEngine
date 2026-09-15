@@ -203,5 +203,6 @@ function contextPackFixture(): WritingContextPack {
     },
     hardConstraints: ["不要提前揭开隐藏真相"],
     sourceTrace: [],
+    readFailures: [],
   };
 }

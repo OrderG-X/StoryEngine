@@ -34,6 +34,7 @@ import {
   type ThreadTrackingUpdate,
 } from "./lead-intent-tracking.js";
 import {
+  describeErrorBriefly,
   readCharacterState,
   readAssetLedger,
   readArcGoalPool,
@@ -272,14 +273,27 @@ export async function commitFastDraft(input: CommitDraftInput): Promise<CommitRe
     try {
       await recoverProjectCommitTransactionsUnlocked(input.projectDir);
     } catch (error) {
+      // 引擎自造错误都带 .code（UNSAFE_*/TX_*），fs 错误带 errno——进 report.issues 只给
+      // code + 项目内相对文件名，绝不拼 error.message 原文（fs 文案带本地绝对路径=泄漏）。
       return withCommitDiagnostics(
         input.projectDir,
-        failedReport(input.chapter, [error instanceof Error ? error.message : String(error)]),
+        failedReport(input.chapter, [`入库事务自检失败（${describeErrorBriefly(error, input.projectDir)}）。`]),
         startRuntimeLatency(),
         input.draftContent,
       );
     }
-    return commitFastDraftUnlocked(input);
+    const report = await commitFastDraftUnlocked(input);
+    // A3（P1-6 上浮，2026-09-15 复审）：recover 放行的「回滚不完整」残留此前只写进 manifest、
+    // 全仓零读点——盘上「章文件已留、资料已回滚」的分歧态用户/agent 无从知晓（违铁律④）。
+    // 在提交收尾【之后】扫一次：同章残留刚被本事务吸收（manifest 已 applied、无 recoveryIssues）
+    // 不会再报；仍挂着的 recovered-with-issues 残留折进 report.issues 上浮，细节留在盘上 manifest。
+    const notices = await listCommitRecoveryNotices(input.projectDir).catch(() => undefined);
+    const noticeLines = notices === undefined
+      // 残留自检本身失败：不堵提交、也不装没看见——给一条中性提示，指引人工核对事务目录。
+      ? ["transaction_recovery_scan_failed: 入库事务残留自检未跑通；如本书此前有中断的入库，请人工核对 .story-engine-tx 目录。"]
+      : notices.map(formatCommitRecoveryNotice);
+    if (noticeLines.length === 0) return report;
+    return { ...report, issues: [...report.issues, ...noticeLines] };
   });
 }
 
@@ -290,7 +304,7 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
   const draft = input.draftContent !== undefined
     ? input.draftContent
     : await readFile(draftPath, "utf-8").catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(`读取草稿失败（${describeErrorBriefly(error, input.projectDir)}）。`);
       return undefined;
     });
   if (!draft) return withCommitDiagnostics(input.projectDir, failedReport(input.chapter, issues), latencyTimer);
@@ -303,15 +317,15 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
   const [characterStates, hookPool, threadPool, arcGoalPool] = await Promise.all([
     readExistingCharacterStates(input.projectDir, characterUpdates, issues),
     readHookPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(`读取伏笔池失败（${describeErrorBriefly(error, input.projectDir)}）。`);
       return undefined;
     }),
     readThreadPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(`读取线索池失败（${describeErrorBriefly(error, input.projectDir)}）。`);
       return undefined;
     }),
     readArcGoalPool(input.projectDir).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(`读取目标池失败（${describeErrorBriefly(error, input.projectDir)}）。`);
       return undefined;
     }),
   ]);
@@ -344,7 +358,7 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
     },
   ];
   const transaction = await stageCommitTransaction(input.projectDir, input.chapter, transactionFiles)
-    .catch((error: unknown) => undefinedWithIssue(error, issues));
+    .catch((error: unknown) => undefinedWithIssue(error, issues, input.projectDir));
   if (!transaction) {
     return withCommitDiagnostics(input.projectDir, failedReport(input.chapter, issues), latencyTimer, draft);
   }
@@ -452,6 +466,58 @@ export async function recoverProjectCommitTransactions(projectDir: string): Prom
   return withProjectCommitLock(projectDir, () => recoverProjectCommitTransactionsUnlocked(projectDir));
 }
 
+/**
+ * 一条「已放行但回滚不完整」的事务残留通知。
+ * 只放章号/事务目录名/条目计数——具体原因（含盘上绝对路径）留在 txDir/manifest.json 里，
+ * 用户可见面绝不上浮原文（路径泄漏纪律）。
+ */
+export interface CommitRecoveryNotice {
+  readonly chapter: number;
+  readonly transactionId: string;
+  readonly issueCount: number;
+}
+
+/**
+ * A3（P1-6 上浮）：列出盘上仍挂着的「recovered + recoveryIssues」事务残留。
+ * recover 放行后 manifest 原地保留（同章重提被新事务吸收前一直在），对应的分歧态也就一直在——
+ * 此函数给 report.issues / overview warnings 一个可持续的上浮信号，绝非只报一次就静默。
+ * 只读 manifest、不动任何文件；坏 manifest 由 recover 路径 fail-closed 拦截，这里跳过不重复判。
+ */
+export async function listCommitRecoveryNotices(projectDir: string): Promise<readonly CommitRecoveryNotice[]> {
+  const txRoot = join(projectDir, ".story-engine-tx");
+  let entries;
+  try {
+    entries = await readdir(txRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const notices: CommitRecoveryNotice[] = [];
+  for (const entry of entries) {
+    const match = /^commit-chapter-(\d+)$/u.exec(entry.name);
+    if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(join(txRoot, entry.name, "manifest.json"), "utf-8")) as unknown;
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed) || parsed.status !== "recovered" || !Array.isArray(parsed.recoveryIssues)) continue;
+    const issues = parsed.recoveryIssues.filter((item): item is string => typeof item === "string" && item.length > 0);
+    if (issues.length === 0) continue;
+    notices.push({ chapter: Number(match[1]), transactionId: entry.name, issueCount: issues.length });
+  }
+  return notices.sort((left, right) => left.chapter - right.chapter);
+}
+
+/**
+ * 把一条残留通知渲成用户可见的中性文本（code 前缀 `transaction_recovered_partial` + 章号 + 计数）。
+ * 绝不带绝对路径/error.message——细节证据在 `.story-engine-tx/<transactionId>/manifest.json`（相对路径）。
+ */
+export function formatCommitRecoveryNotice(notice: CommitRecoveryNotice): string {
+  return `transaction_recovered_partial: 第 ${notice.chapter} 章的入库事务此前中断且未能完全回滚，已按原样放行（${notice.issueCount} 项残留记录在 ${notice.transactionId}/manifest.json）；该章文件可能与伏笔/时间线等资料不一致，建议重新提交第 ${notice.chapter} 章或人工核对。`;
+}
+
 async function withCommitDiagnostics(
   projectDir: string,
   report: CommitReport,
@@ -521,8 +587,7 @@ async function withCommitDiagnostics(
     });
     return attachDiagnostics(report, diagnostics);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return attachDiagnosticsWarning(report, `commit diagnostics write failed: ${detail}`);
+    return attachDiagnosticsWarning(report, `commit diagnostics write failed: ${describeErrorBriefly(error, projectDir)}`);
   }
 }
 
@@ -543,8 +608,8 @@ function failedReport(chapter: number, issues: readonly string[]): CommitReport 
   };
 }
 
-function undefinedWithIssue(error: unknown, issues: string[]): undefined {
-  issues.push(error instanceof Error ? error.message : String(error));
+function undefinedWithIssue(error: unknown, issues: string[], projectDir: string): undefined {
+  issues.push(`事务落盘失败（${describeErrorBriefly(error, projectDir)}）。`);
   return undefined;
 }
 
@@ -556,7 +621,7 @@ async function readExistingCharacterStates(
   const entries = await Promise.all(updates.map(async (update) => {
     const characterId = toSafeCharacterId(update.characterId);
     const state = await readCharacterState(projectDir, characterId).catch((error: unknown) => {
-      issues.push(error instanceof Error ? error.message : String(error));
+      issues.push(`读取角色状态失败（${describeErrorBriefly(error, projectDir)}）。`);
       return undefined;
     });
     return [characterId, state] as const;
@@ -986,7 +1051,7 @@ async function applyCommitTransaction(
     return {
       passed: false,
       issues: [
-        error instanceof Error ? error.message : String(error),
+        `入库写入失败（${describeErrorBriefly(error, projectDir)}）。`,
         ...rollbackIssues,
       ],
     };
@@ -1037,7 +1102,7 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
     throw error;
   }
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-    throw new Error(`Unsafe commit transaction root at ${txRoot}; refusing formal-state reads.`);
+    throw taggedError("UNSAFE_TX_ROOT", `Unsafe commit transaction root at ${relative(resolve(projectDir), txRoot)}; refusing formal-state reads.`);
   }
   const entries = await readdir(txRoot, { withFileTypes: true });
   for (const entry of entries) {
@@ -1045,7 +1110,7 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
     if (!match) continue;
     const txDir = join(txRoot, entry.name);
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
-      throw new Error(`Unsafe commit transaction residue at ${txDir}; refusing formal-state reads.`);
+      throw taggedError("UNSAFE_TX_RESIDUE", `Unsafe commit transaction residue at ${relative(resolve(projectDir), txDir)}; refusing formal-state reads.`);
     }
     const chapter = Number(match[1]);
     // Historical finalized snapshot scaffolds use snapshot-manifest.json and
@@ -1063,7 +1128,7 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
         .then((stats) => stats.isFile() && !stats.isSymbolicLink())
         .catch(() => false);
       if (hasSnapshotManifest) {
-        await validateSnapshotOnlyCommitResidue(snapshotManifestPath, entry.name, chapter);
+        await validateSnapshotOnlyCommitResidue(projectDir, snapshotManifestPath, entry.name, chapter);
         continue;
       }
       // Zero-file shells (e.g. undo unlinked every staged file) carry no
@@ -1078,27 +1143,34 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
           // Fall through to the fail-closed throw.
         }
       }
-      throw new Error(`Unreadable commit transaction residue at ${txDir}; refusing formal-state reads.`);
+      throw taggedError("UNREADABLE_TX_RESIDUE", `Unreadable commit transaction residue at ${relative(resolve(projectDir), txDir)}; refusing formal-state reads.`);
     }
     await recoverCommitTransactionResidue(projectDir, txDir, chapter);
   }
 }
 
 async function validateSnapshotOnlyCommitResidue(
+  projectDir: string,
   manifestPath: string,
   transactionId: string,
   chapter: number,
 ): Promise<void> {
+  // manifestPath 一律落成项目内相对路径再进文案——thrown message 可能被调用方原样上抛/打印。
+  const manifestRel = relative(resolve(projectDir), manifestPath);
   if (transactionId !== `commit-chapter-${padChapter(chapter)}` || chapter <= 0) {
-    throw new Error(`Unsafe snapshot-only commit residue id: ${transactionId}`);
+    throw taggedError("UNSAFE_SNAPSHOT_RESIDUE_ID", `Unsafe snapshot-only commit residue id: ${transactionId}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(manifestPath, "utf-8")) as unknown;
   } catch (error) {
-    throw new Error(`Unreadable snapshot-only commit manifest at ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw taggedError(
+      "UNREADABLE_SNAPSHOT_MANIFEST",
+      `Unreadable snapshot-only commit manifest at ${manifestRel}: ${describeErrorBriefly(error, projectDir)}`,
+      error,
+    );
   }
-  if (!isRecord(parsed)) throw new Error(`Invalid snapshot-only commit manifest at ${manifestPath}`);
+  if (!isRecord(parsed)) throw taggedError("INVALID_SNAPSHOT_MANIFEST", `Invalid snapshot-only commit manifest at ${manifestRel}`);
   const expectedChapterPath = `chapters/${padChapter(chapter)}.md`;
   if (
     parsed.status !== "finalized"
@@ -1118,11 +1190,11 @@ async function validateSnapshotOnlyCommitResidue(
     || parsed.appliedChangedFiles.length !== 1
     || parsed.appliedChangedFiles[0] !== expectedChapterPath
   ) {
-    throw new Error(`Invalid snapshot-only commit manifest at ${manifestPath}`);
+    throw taggedError("INVALID_SNAPSHOT_MANIFEST", `Invalid snapshot-only commit manifest at ${manifestRel}`);
   }
   const file = parsed.files[0];
   if (!isRecord(file) || file.relativePath !== expectedChapterPath) {
-    throw new Error(`Unsafe snapshot-only commit target at ${manifestPath}`);
+    throw taggedError("UNSAFE_SNAPSHOT_TARGET", `Unsafe snapshot-only commit target at ${manifestRel}`);
   }
   const validRollback = file.rollbackAction === "delete_if_created"
     ? file.snapshotPath == null
@@ -1133,7 +1205,7 @@ async function validateSnapshotOnlyCommitResidue(
       && file.byteLength >= 0
       && typeof file.sha256 === "string"
       && /^[0-9a-f]{64}$/u.test(file.sha256);
-  if (!validRollback) throw new Error(`Invalid snapshot-only commit rollback metadata at ${manifestPath}`);
+  if (!validRollback) throw taggedError("INVALID_SNAPSHOT_ROLLBACK", `Invalid snapshot-only commit rollback metadata at ${manifestRel}`);
 }
 
 async function recoverCommitTransactionResidue(
@@ -1148,8 +1220,9 @@ async function recoverCommitTransactionResidue(
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
+  const txRel = relative(resolve(projectDir), txDir);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new Error(`Unsafe commit transaction residue at ${txDir}; refusing to delete or overwrite it.`);
+    throw taggedError("UNSAFE_TX_RESIDUE", `Unsafe commit transaction residue at ${txRel}; refusing to delete or overwrite it.`);
   }
 
   let parsed: unknown;
@@ -1158,13 +1231,15 @@ async function recoverCommitTransactionResidue(
     await assertSafeProjectPath(projectDir, manifestPath, false, "commit transaction manifest");
     parsed = JSON.parse(await readFile(manifestPath, "utf-8")) as unknown;
   } catch (error) {
-    throw new Error(
-      `Unreadable commit transaction residue at ${txDir}; refusing to delete it: ${error instanceof Error ? error.message : String(error)}`,
+    throw taggedError(
+      "UNREADABLE_TX_RESIDUE",
+      `Unreadable commit transaction residue at ${txRel}; refusing to delete it: ${describeErrorBriefly(error, projectDir)}`,
+      error,
     );
   }
   const manifest = parseRecoverableCommitManifest(parsed, expectedChapter);
   if (!manifest) {
-    throw new Error(`Unrecoverable commit transaction manifest at ${txDir}; refusing to delete or overwrite it.`);
+    throw taggedError("UNRECOVERABLE_TX_MANIFEST", `Unrecoverable commit transaction manifest at ${txRel}; refusing to delete or overwrite it.`);
   }
 
   if (manifest.status === "recovered") return;
@@ -1240,7 +1315,7 @@ async function restoreCommitTransactionBackups(
         await assertSafeProjectPath(projectDir, backupPath, false, "commit backup");
         const content = await readFile(backupPath, "utf-8");
         if (sha256Text(content) !== backup.sha256) {
-          throw new Error(`backup checksum mismatch at ${backupPath}`);
+          throw taggedError("TX_BACKUP_CHECKSUM_MISMATCH", `backup checksum mismatch at ${relative(resolve(projectDir), backupPath)}`);
         }
         await ensureSafeDirectory(projectDir, dirname(targetPath), true, "formal target parent");
         await writeTextNoFollow(projectDir, targetPath, content, "formal rollback target");
@@ -1253,7 +1328,9 @@ async function restoreCommitTransactionBackups(
         );
       }
     } catch (error) {
-      issues.push(`Rollback failed for ${targetPath}: ${error instanceof Error ? error.message : String(error)}`);
+      // 相对文件名 + errno code/自造错误码：这条 issues 会同时进 report.issues（用户可见）和
+      // manifest.recoveryIssues（盘上取证）——error.message 原文带绝对路径，绝不直拼。
+      issues.push(`Rollback failed for ${backup.relativePath}: ${describeErrorBriefly(error, projectDir)}`);
     }
   }
   return issues;
@@ -1314,7 +1391,7 @@ function parseRecoverableCommitManifest(value: unknown, expectedChapter: number)
 function assertUniqueSafeTransactionFiles(files: readonly TransactionFile[]): void {
   const paths = files.map((file) => file.relativePath);
   if (!isUniqueSafeRelativePaths(paths)) {
-    throw new Error("Commit transaction contains duplicate or unsafe target paths.");
+    throw taggedError("UNSAFE_TX_TARGETS", "Commit transaction contains duplicate or unsafe target paths.");
   }
 }
 
@@ -1346,11 +1423,12 @@ async function assertSafeProjectPath(
   const candidate = resolve(candidatePath);
   const rel = relative(root, candidate);
   if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) {
-    throw new Error(`Unsafe ${label} path outside project: ${candidatePath}`);
+    // 越界目标只给相对关系（"../…" 已足够定位），绝不落绝对路径进 message。
+    throw taggedError("UNSAFE_PATH_OUTSIDE_PROJECT", `Unsafe ${label} path outside project: ${rel}`);
   }
   const rootStats = await lstat(root);
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
-    throw new Error(`Unsafe ${label}: project root is not a real directory.`);
+    throw taggedError("UNSAFE_PROJECT_ROOT", `Unsafe ${label}: project root is not a real directory.`);
   }
   let current = root;
   const segments = rel.split(sep).filter(Boolean);
@@ -1358,9 +1436,10 @@ async function assertSafeProjectPath(
     current = join(current, segments[index]!);
     try {
       const stats = await lstat(current);
-      if (stats.isSymbolicLink()) throw new Error(`Unsafe ${label}: symbolic link at ${current}`);
+      const currentRel = relative(root, current) || ".";
+      if (stats.isSymbolicLink()) throw taggedError("UNSAFE_SYMLINK", `Unsafe ${label}: symbolic link at ${currentRel}`);
       if (index < segments.length - 1 && !stats.isDirectory()) {
-        throw new Error(`Unsafe ${label}: non-directory parent at ${current}`);
+        throw taggedError("UNSAFE_PARENT", `Unsafe ${label}: non-directory parent at ${currentRel}`);
       }
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT" && allowMissing) return;
@@ -1380,7 +1459,7 @@ async function ensureSafeDirectory(
   await assertSafeProjectPath(projectDir, directoryPath, false, label);
   const stats = await lstat(directoryPath);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new Error(`Unsafe ${label}: expected a real directory at ${directoryPath}`);
+    throw taggedError("UNSAFE_DIRECTORY", `Unsafe ${label}: expected a real directory at ${relative(resolve(projectDir), directoryPath)}`);
   }
 }
 
@@ -1428,16 +1507,16 @@ async function verifyOpenedProjectFile(
   ]);
   const parentRelative = relative(rootRealPath, parentRealPath);
   if (isAbsolute(parentRelative) || parentRelative === ".." || parentRelative.startsWith(`..${sep}`)) {
-    throw new Error(`Unsafe ${label}: parent realpath escaped project containment.`);
+    throw taggedError("UNSAFE_CONTAINMENT", `Unsafe ${label}: parent realpath escaped project containment.`);
   }
   if (pathStats.isSymbolicLink() || !pathStats.isFile()) {
-    throw new Error(`Unsafe ${label}: final path is not a real file.`);
+    throw taggedError("UNSAFE_NOT_A_FILE", `Unsafe ${label}: final path is not a real file.`);
   }
   if (handleStats.dev !== pathStats.dev || handleStats.ino !== pathStats.ino) {
-    throw new Error(`Unsafe ${label}: opened inode no longer matches the target path.`);
+    throw taggedError("UNSAFE_INODE_MISMATCH", `Unsafe ${label}: opened inode no longer matches the target path.`);
   }
   if (handleStats.nlink !== 1) {
-    throw new Error(`Unsafe ${label}: hard-linked targets are not allowed.`);
+    throw taggedError("UNSAFE_HARDLINK", `Unsafe ${label}: hard-linked targets are not allowed.`);
   }
 }
 
@@ -1463,15 +1542,18 @@ async function removeFileNoFollow(
     if (isNodeError(error) && error.code === "ENOENT") return;
     throw error;
   }
+  const targetRel = relative(resolve(projectDir), targetPath);
   if (writtenContent === undefined) {
-    throw new Error(
-      `Refusing to path-delete ${label} at ${targetPath}; no transaction content recorded for verification.`,
+    throw taggedError(
+      "TX_UNVERIFIED_DELETE",
+      `Refusing to path-delete ${label} at ${targetRel}; no transaction content recorded for verification.`,
     );
   }
   const currentContent = await readFile(targetPath, "utf-8");
   if (sha256Text(currentContent) !== sha256Text(writtenContent)) {
-    throw new Error(
-      `Refusing to path-delete ${label} at ${targetPath}; content no longer matches the transaction's write (file was modified after the failed commit).`,
+    throw taggedError(
+      "TX_CONTENT_CHANGED",
+      `Refusing to path-delete ${label} at ${targetRel}; content no longer matches the transaction's write (file was modified after the failed commit).`,
     );
   }
   await rm(targetPath, { force: true });
@@ -1541,6 +1623,16 @@ function padChapter(chapter: number): string {
 
 function jsonText(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+/**
+ * 引擎自造错误：给稳定 .code，让剔除 error.message 的上游 catch（report.issues/诊断面）
+ * 仍能保留语义关键字；message 原文（含内部绝对路径）只留在 Error 对象里供抛出方/调试用。
+ */
+function taggedError(code: string, message: string, cause?: unknown): Error {
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  (error as NodeJS.ErrnoException).code = code;
+  return error;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
