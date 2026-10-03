@@ -6,6 +6,17 @@ import { createStoryProject } from "../project-store.js";
 import { buildStateOverview } from "../state-overview.js";
 
 describe("State Overview defensive readers", () => {
+  it("corrupt ledger JSON degrades to empty but surfaces a visible warning (审计 Low：面板显示「坏」而非「空」)", async () => {
+    const projectDir = await createProjectWithSparseFoundationFiles();
+    await writeFile(join(projectDir, "story", "hooks.json"), "{not-json", "utf-8");
+
+    const overview = await buildStateOverview({ projectDir, chapter: 1 });
+
+    // 读侧降级照做（不堵概览）
+    expect(overview.uiHints.warnings.join(" ")).toContain("资料文件损坏");
+    expect(overview.uiHints.warnings.join(" ")).toContain(join("story", "hooks.json"));
+  });
+
   it("builds a controlled overview from old handwritten foundation files with missing fields", async () => {
     const projectDir = await createProjectWithSparseFoundationFiles();
 

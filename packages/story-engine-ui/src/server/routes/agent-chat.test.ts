@@ -21,12 +21,12 @@ import {
   readLatestUserTurnText,
   runObedientAgentTurn,
   serverHonestyCorrectionText,
-  startSseHeartbeat,
   toolResultStatus,
   type ObedienceAttemptOptions,
   type ObedientTurnChunk,
 } from "./agent-chat.js";
 import { OBEDIENCE_RETRY_TRANSITION_TEXT } from "../../shared/honesty-detection.js";
+import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 
 // E2E 实锤：MIMO 等模型干完工具常沉默收场（用户只看到卡/章节冒出来、AI 一句话不说），偶尔整轮空转。
 // 路由兜底保证「绝不静默」：本轮一个 text 都没发就补一条收尾。
@@ -912,11 +912,11 @@ describe("startSseHeartbeat SSE 心跳（治工具长调用期间 90s 误判超�
     vi.useFakeTimers();
     try {
       const writes: string[] = [];
-      const res = { write: (chunk: string) => writes.push(chunk) };
-      const stop = startSseHeartbeat(res, 1000);
+      const res = { write: (chunk: string) => writes.push(chunk), writableEnded: false, destroyed: false } as never;
+      const heartbeat = startSseHeartbeat(res, 1000);
       vi.advanceTimersByTime(3500);
       expect(writes).toEqual([": ping\n\n", ": ping\n\n", ": ping\n\n"]);
-      stop();
+      heartbeat.stop();
       vi.advanceTimersByTime(5000);
       expect(writes).toHaveLength(3); // stop 之后心跳停了
     } finally {
@@ -931,10 +931,12 @@ describe("startSseHeartbeat SSE 心跳（治工具长调用期间 90s 误判超�
         write: () => {
           throw new Error("EPIPE");
         },
-      };
-      const stop = startSseHeartbeat(res, 1000);
+        writableEnded: false,
+        destroyed: false,
+      } as never;
+      const heartbeat = startSseHeartbeat(res, 1000);
       expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
-      stop();
+      heartbeat.stop();
     } finally {
       vi.useRealTimers();
     }

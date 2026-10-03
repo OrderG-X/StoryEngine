@@ -16,7 +16,15 @@ vi.mock("../lib/llm-client.js", () => ({
   resolveConfiguredChatModel: llmMocks.resolveConfiguredChatModel,
   streamChatModelToText: llmMocks.streamChatModelToText,
 }));
-vi.mock("../lib/snapshot.js", () => ({ createSnapshot: snapshotMocks.createSnapshot }));
+vi.mock("../lib/snapshot.js", () => ({
+  createSnapshot: snapshotMocks.createSnapshot,
+  // 审计 High-2 后路由走 runWithSnapshot（快照+落盘同一临界区）：mock 仍经 createSnapshot 建「快照」，
+  // fn 拿其 id 执行——既保持既有断言（createSnapshot 被调 1 次）语义，也覆盖新临界区形态。
+  runWithSnapshot: async (projectDir: string, label: string, fn: (snapshotId: string) => Promise<unknown>) => {
+    const snapshot = await snapshotMocks.createSnapshot(projectDir, label);
+    return { snapshot, result: await fn(snapshot.id) };
+  },
+}));
 
 const { registerDeAiFlavorRoutes } = await import("./de-ai-flavor.js");
 

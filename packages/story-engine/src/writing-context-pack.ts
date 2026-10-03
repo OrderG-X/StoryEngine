@@ -231,8 +231,13 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     readThreadPool(input.projectDir),
     readArcGoalPool(input.projectDir),
     readTimelineEvents(input.projectDir).catch(trackReadFailure("时间线事件", join("timeline", "events.json"), [] as TimelineEvent[])),
-    Promise.all(characterIds.map((id) => readCharacterProfile(input.projectDir, id).catch(() => undefined))),
-    Promise.all(characterIds.map((id) => readCharacterState(input.projectDir, id).catch(() => undefined))),
+    // 审计 Med：角色文件读失败不再无痕吞掉——readCharacterProfile/State 无 ENOENT 兜底（旧注释的理由
+    // 不成立），缺文件与损坏 JSON 都会落到这里；与上面同口径进 readFailures（主角资料降级必须让
+    // 模型知道，质检/审稿拿到的降级底账才有痕）。跳过的角色自然落到「主角」占位。
+    Promise.all(characterIds.map((id) => readCharacterProfile(input.projectDir, id)
+      .catch(trackReadFailure(`角色「${id}」资料`, join("characters", id, "profile.json"), undefined as CharacterProfile | undefined)))),
+    Promise.all(characterIds.map((id) => readCharacterState(input.projectDir, id)
+      .catch(trackReadFailure(`角色「${id}」当前状态`, join("characters", id, "state.json"), undefined as CharacterState | undefined)))),
   ]);
 
   const profile = profiles.find((item): item is CharacterProfile => item !== undefined && isMainCharacter(item)) ?? profiles.find((item): item is CharacterProfile => item !== undefined);

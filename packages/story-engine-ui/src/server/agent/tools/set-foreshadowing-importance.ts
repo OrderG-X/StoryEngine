@@ -6,12 +6,14 @@
  * 绝不碰 hooks.json / threads.json（引擎不感知 override）。
  * 铁律：直接做 + 可撤销（writeTool 前置快照）；绝不静默失败（ok 字段如实回报）。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { readHookPool, readThreadPool } from "@actalk/story-engine";
 
 import { coerceEnum } from "./lenient-args.js";
+import { writeFileAtomic } from "../../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { writeTool } from "../withSnapshot.js";
 
 /** UI 侧伏笔大小覆盖表的相对路径（相对于 projectDir）。 */
@@ -45,10 +47,9 @@ async function readOverrides(projectDir: string): Promise<OverridesMap> {
 async function writeOverrides(projectDir: string, overrides: OverridesMap): Promise<void> {
   const dir = join(projectDir, ".story-engine-ui");
   await mkdir(dir, { recursive: true });
-  await writeFile(
+  await writeFileAtomic(
     join(projectDir, FORESHADOWING_OVERRIDES_RELATIVE_PATH),
     `${JSON.stringify(overrides, null, 2)}\n`,
-    "utf-8",
   );
 }
 
@@ -86,7 +87,7 @@ export async function setForeshadowingImportanceLogic(input: {
   try {
     titleById = await readPoolTitles(projectDir);
   } catch (error) {
-    return { ok: false, summary: `核对伏笔/线索资料失败（${error instanceof Error ? error.message : String(error)}），没改任何东西；请稍后重试或检查资料文件。` };
+    return { ok: false, summary: `核对伏笔/线索资料失败（${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}），没改任何东西；请稍后重试或检查资料文件。` };
   }
 
   // 校验 id 真存在，否则覆盖了一个不存在的 id → ok:true 但页面无变化＝静默失败。
@@ -110,7 +111,7 @@ export async function setForeshadowingImportanceLogic(input: {
   } catch (error) {
     return {
       ok: false,
-      summary: `写入伏笔覆盖失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `写入伏笔覆盖失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 }

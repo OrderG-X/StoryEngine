@@ -179,16 +179,18 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     // 只给 errno code/错误类型 + 项目内相对文件名——error.message 原文带本地绝对路径，不进上下文（路径泄漏纪律）。
     readFailures.push(`${label} 读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
   };
-  const [storyCore, worldCore, profiles, cores, calendar, hookPool, threadPool, arcGoalPool, states, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
+  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
     readStoryCore(input.projectDir),
     readWorldCore(input.projectDir),
-    readCharacterProfiles(input.projectDir, characterIds),
-    readCharacterCores(input.projectDir, characterIds),
+    // 角色（profile+core+state）三件套按角色兜底：单个角色资料残缺不再炸掉整次出稿，
+    // 跳过的角色进 readFailures（模型知道、如实转达），其余角色照常参与。
+    readCharacterBundles(input.projectDir, characterIds, (id, failedFile, error) => {
+      trackReadFailure(`角色「${id}」的 ${failedFile}`)(error);
+    }),
     readStoryCalendar(input.projectDir),
     readHookPool(input.projectDir),
     readThreadPool(input.projectDir),
     readArcGoalPool(input.projectDir),
-    readCharacterStates(input.projectDir, characterIds),
     readWorldState(input.projectDir),
     // 全量 timeline 只读一次：近 N 段（selectRecentTimelineEvents）与早期分层（buildTimelineLayers）共用，避免重复读盘
     readTimelineEvents(input.projectDir)
@@ -196,6 +198,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       .catch((error) => { trackReadFailure("时间线事件（含旧格式回退）")(error); return [] as readonly TimelineEvent[]; }),
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
   ]);
+  const { profiles, cores, states } = characterBundles;
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
   const storyContinuity = buildStoryContinuityContext(timelineEvents);
   const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds);
@@ -347,16 +350,48 @@ async function resolveSelectedCharacterIds(input: BuildWriterContextInput): Prom
     .sort((left, right) => left.localeCompare(right));
 }
 
-async function readCharacterProfiles(projectDir: string, characterIds: readonly string[]): Promise<readonly CharacterProfile[]> {
-  return Promise.all(characterIds.map((id) => readCharacterProfile(projectDir, id)));
+/**
+ * 审计 Med：角色三件套按【单个角色】兜底，不再一个坏文件炸掉整次出稿。
+ * 建角色本身无事务（foundation-write-gateway 顺序写四件），中断会留「目录在、文件不全」的残态；
+ * 此前 Promise.all 让缺一文件的角色的 ENOENT/损坏 JSON 把 buildWriterContext 整体 reject（整章无法出稿）。
+ * 现在：逐角色 settle，三件任一读失败 → 丢弃该角色（不出假状态）+ 留痕回调（进 readFailures，
+ * 模型与用户都知道该角色被跳过、为什么）；其余角色照常出稿。
+ */
+async function readCharacterBundles(
+  projectDir: string,
+  characterIds: readonly string[],
+  onSkip: (id: string, failedFile: string, error: unknown) => void,
+): Promise<{
+  readonly profiles: readonly CharacterProfile[];
+  readonly cores: readonly CharacterCore[];
+  readonly states: readonly CharacterState[];
+}> {
+  const settled = await Promise.all(
+    characterIds.map(async (id) => {
+      try {
+        const profile = await readCharacterProfile(projectDir, id);
+        const core = await readCharacterCore(projectDir, id);
+        const state = await readCharacterState(projectDir, id);
+        return { id, profile, core, state };
+      } catch (error) {
+        onSkip(id, characterFileLabelForError(error), error);
+        return undefined;
+      }
+    }),
+  );
+  const kept = settled.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  return {
+    profiles: kept.map((entry) => entry.profile),
+    cores: kept.map((entry) => entry.core),
+    states: kept.map((entry) => entry.state),
+  };
 }
 
-async function readCharacterCores(projectDir: string, characterIds: readonly string[]): Promise<readonly CharacterCore[]> {
-  return Promise.all(characterIds.map((id) => readCharacterCore(projectDir, id)));
-}
-
-async function readCharacterStates(projectDir: string, characterIds: readonly string[]): Promise<readonly CharacterState[]> {
-  return Promise.all(characterIds.map((id) => readCharacterState(projectDir, id)));
+/** 从 errno 里反解是三件中的哪件读挂了（ENOENT message 含文件名；解析不出就给中性说法）。 */
+function characterFileLabelForError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = /\b(profile|core|state)\.json\b/u.exec(message);
+  return match?.[1] ? `${match[1]}.json` : "资料文件";
 }
 
 function selectHooks(hooks: readonly HookItem[], selectedHookIds?: readonly string[]): readonly HookItem[] {

@@ -9,7 +9,8 @@
  * 备忘落在 .story-engine-ui/uncarded-character-memo.json（UI 侧旁路数据，不进引擎状态）。
  * 名字建了卡后不再出现在 newCharacters 里，备忘条目自然停止累积。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { dirname, join } from "node:path";
 
 export const RECURRING_UNCARDED_THRESHOLD = 3;
@@ -67,7 +68,7 @@ async function readMemo(projectDir: string): Promise<MemoFile> {
 async function writeMemo(projectDir: string, memo: MemoFile): Promise<void> {
   const path = uncardedCharacterMemoPath(projectDir);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(memo, null, 2)}\n`, "utf-8");
+  await writeFileAtomic(path, `${JSON.stringify(memo, null, 2)}\n`);
 }
 
 /**

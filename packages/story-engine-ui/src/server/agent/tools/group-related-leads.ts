@@ -26,6 +26,7 @@ import {
   parseLeadGroups,
 } from "../lead-grouping/lead-grouping.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
@@ -56,7 +57,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `读取 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `读取 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -84,7 +85,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `GLM 分组调用失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `GLM 分组调用失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -95,7 +96,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `解析 GLM 分组输出失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `解析 GLM 分组输出失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -118,7 +119,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `写回 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `写回 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 

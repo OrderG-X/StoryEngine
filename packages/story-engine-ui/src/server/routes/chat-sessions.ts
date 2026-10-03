@@ -159,6 +159,9 @@ export function registerChatSessionsRoutes(middlewares: MiddlewareStack): void {
               requireBodyString(body.id, "id 不能为空。"),
               readWorkspaceMessages(body.messages),
               typeof body.windowEpoch === "number" && Number.isFinite(body.windowEpoch) ? body.windowEpoch : undefined,
+              // 显式截断旁路（「撤销到此」撤掉全部回合 / 「清空对话」）：空守卫只放行显式用户动作，
+              // 常态 autosave 不带该标记、照旧被守卫拦住。
+              body.allowEmpty === true,
             );
             writeJson(res, 200, { ok: true });
             return;

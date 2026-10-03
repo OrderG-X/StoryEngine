@@ -276,7 +276,7 @@ describe("StoryEngine-NG CommitEngine", () => {
     });
 
     expect(report.passed).toBe(false);
-    expect(report.issues).toEqual(expect.arrayContaining(["Hook not found: missing-hook"]));
+    expect(report.issues).toEqual(expect.arrayContaining(["本章声明的伏笔更新里有伏笔池中不存在的条目，已跳过；请核对伏笔名称后重试。"]));
     await expect(access(join(projectDir, "chapters", "0004.md"))).rejects.toThrow();
     await expect(readCharacterState(projectDir, "guo-xu")).resolves.toMatchObject({
       emotion: "平静",

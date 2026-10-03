@@ -8,7 +8,7 @@ import type { StateOverview } from "../api/types.js";
 import { sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { useWorkspaceStore, emptyCommitSelections, setProjectKey, type SelectedAdviceCard } from "../stores/workspaceStore.js";
+import { useWorkspaceStore, emptyCommitSelections, setProjectKey, readPersistedProjectMessages, type SelectedAdviceCard } from "../stores/workspaceStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
 import {
   actionsForWorkflowState,
@@ -633,10 +633,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       let backendSessionMessages: readonly ChapterMessage[] = [];
       let activeArchivedCount = 0;
       let backendSessionLoaded = false;
+      let sessionReadFailed = false;
       if (sessionIndex?.index) {
         const activeSessionId = sessionIndex.index.activeSessionId;
         const active = await readChatSession(nextProjectPath, activeSessionId).catch((error) => {
-          console.warn("[openProject] 读取会话历史失败，回退到内存消息", { activeSessionId, error });
+          console.warn("[openProject] 读取会话历史失败，回退到本地副本", { activeSessionId, error });
+          sessionReadFailed = true;
           return null;
         });
         if (!ownsNavigationOrigin(transition)) return false;
@@ -654,11 +656,28 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
             storeMessageCount: storeMessages.length,
           });
         }
-        backendSessionMessages = messagesWhenBackendSessionMissing({
-          overview,
-          storeMessages,
-          allowStoreFallback: nextProjectPath === transition.projectPath,
-        });
+        // 审计 Med：本项目 sessionStorage 副本优先——boot 时 transition.projectPath 为空串导致
+        // allowStoreFallback 恒 false、回退 []，随即 setWorkspace 空消息把刚水合的本地副本也覆盖销毁
+        // （用户只见空聊天）。副本是本项目的数据，无论切换身份如何都可安全回退；非空回退还保住该键不被清。
+        const persistedCopy = readPersistedProjectMessages(nextProjectPath);
+        if (persistedCopy.length > 0) {
+          backendSessionMessages = persistedCopy;
+        } else {
+          backendSessionMessages = messagesWhenBackendSessionMissing({
+            overview,
+            storeMessages,
+            allowStoreFallback: nextProjectPath === transition.projectPath,
+          });
+        }
+        if (sessionReadFailed) {
+          // 绝不静默：读失败要让用户看得见（回退了什么、怎么恢复），不再只有 console.warn。
+          showToast(
+            persistedCopy.length > 0
+              ? "聊天记录从服务器读取失败，已用本地副本显示；刷新页面可重试。"
+              : "聊天记录从服务器读取失败，且本地没有副本；刷新页面可重试。",
+            5200,
+          );
+        }
       }
       const draftTitle = snapshot?.draftTitle ?? extractDraftTitle(draftContent) ?? activeChapter.title;
       const flowStatus: ChapterWorkflowState = snapshot?.flowStatus

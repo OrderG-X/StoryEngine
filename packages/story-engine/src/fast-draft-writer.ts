@@ -1,4 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   buildAiFlavorReport,
@@ -33,7 +32,7 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { describeErrorBriefly, readWritingRules } from "./project-store.js";
+import { describeErrorBriefly, readWritingRules, writeFileAtomic } from "./project-store.js";
 import type { CharacterProfile } from "./types.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
@@ -133,8 +132,9 @@ export async function persistFastDraftBody(input: {
   readonly draftBody: string;
 }): Promise<string> {
   const draftPath = join(input.projectDir, "drafts", "fast", `chapter-${padChapter(input.chapter)}.md`);
-  await mkdir(join(input.projectDir, "drafts", "fast"), { recursive: true });
-  await writeFile(draftPath, `# ${input.title}\n\n${input.draftBody.trim()}\n`, "utf-8");
+  // 审计 Med：工作稿正文（用户核心内容）原子写——JSON 全收口了，唯独 .md 还是裸 writeFile，
+  // 进程被杀（OOM/断电）会留下截断的半章稿，且截断文件无解析校验、下次被当正常稿读走。
+  await writeFileAtomic(draftPath, `# ${input.title}\n\n${input.draftBody.trim()}\n`);
   return draftPath;
 }
 
@@ -344,7 +344,11 @@ async function withFastDraftDiagnostics(
   report: FastDraftReport,
   latencyTimer: ReturnType<typeof startRuntimeLatency>,
 ): Promise<FastDraftReport> {
-  const diagnostics = await writeDiagnostics(projectDir, {
+  // 审计 Low：诊断是旁证不是业务本身（commit 侧 withCommitDiagnostics 同款）——出稿已成功、稿已落盘后
+  // 诊断写失败，绝不能把整次出稿翻改判成失败（调用方会按失败处理、抽卡正文白烧）。吞掉并留痕。
+  let diagnostics: Awaited<ReturnType<typeof writeDiagnostics>>;
+  try {
+    diagnostics = await writeDiagnostics(projectDir, {
     stage: "fast-draft",
     chapter: report.chapter,
     generatedAt: new Date().toISOString(),
@@ -371,6 +375,12 @@ async function withFastDraftDiagnostics(
         : {}),
     },
   });
+  } catch (error) {
+    return {
+      ...report,
+      issues: [...report.issues, `诊断记录写入失败（${describeErrorBriefly(error, projectDir)}），不影响本次出稿结果。`],
+    };
+  }
   return attachDiagnostics(report, diagnostics);
 }
 

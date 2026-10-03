@@ -15,7 +15,7 @@ import { useChat } from "./hooks/useChat.js";
 import { useFoundationGaps } from "./hooks/useFoundationGaps.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
 import { ChapterWorkspaceConflictError, fetchListDefaultBooks, saveChapterWorkspaceBeacon } from "./api/client.js";
-import { saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
+import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { createWorkflowMessage } from "./utils/workflowHelpers.js";
 import { countTextWords } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
@@ -633,10 +633,40 @@ export function App() {
             onSendMessage: handleSendMessage,
             onStopAgent: stopAgent,
             onClearChat: () => {
+              const backup = useWorkspaceStore.getState().workspace.messages;
               useWorkspaceStore.getState().clearChat();
               useNavigationStore.getState().showToast("已清空对话（正文和资料不受影响，可撤销）", 4000);
+              // 审计 Med：清空必须落会话文件——reload 后消息一律取自会话文件，不写回的话 F5 全量复活，
+              // 与「已清空」toast 直接矛盾（chapter-workspace 那份已被清、两存储分叉）。空列表走
+              // allowEmpty 显式旁路（用户显式动作），常态 autosave 仍被防误清守卫拦住。
+              const sessionId = useWorkspaceStore.getState().activeSessionId;
+              const clearProjectPath = useNavigationStore.getState().projectPath;
+              if (sessionId && clearProjectPath && backup.length > 0) {
+                void saveChatSessionMessages(clearProjectPath, sessionId, [], { allowEmpty: true })
+                  .catch((error: unknown) => {
+                    useNavigationStore.getState().showToast(
+                      `清空未写入会话文件（${error instanceof Error ? error.message : String(error)}），刷新后对话可能恢复。`,
+                      5000,
+                    );
+                  });
+              }
             },
-            onUndoClearChat: () => useWorkspaceStore.getState().undoClearChat(),
+            onUndoClearChat: () => {
+              const backup = useWorkspaceStore.getState().clearedChatBackup;
+              useWorkspaceStore.getState().undoClearChat();
+              // 撤销清空同样要落会话文件：否则 F5 后又变回清空态（与清空同一条双向通道）。
+              const sessionId = useWorkspaceStore.getState().activeSessionId;
+              const undoProjectPath = useNavigationStore.getState().projectPath;
+              if (sessionId && undoProjectPath && backup && backup.length > 0) {
+                void saveChatSessionMessages(undoProjectPath, sessionId, backup)
+                  .catch((error: unknown) => {
+                    useNavigationStore.getState().showToast(
+                      `恢复未写入会话文件（${error instanceof Error ? error.message : String(error)}），刷新后可能仍显示清空态。`,
+                      5000,
+                    );
+                  });
+              }
+            },
             canUndoClearChat: clearedChatBackup !== null,
             onUndoToTurn: (message) => void undoToTurn(message),
             onSteeringDirectionChange: (value) => {

@@ -7,7 +7,7 @@
  *   - 不返回 overview：去 AI 味只改文风、不动故事状态/事实，无需刷新资料面板。
  *   - violations 由前端把卡片里那几条传来（含可定位 text），不在端点重复体检（用户改的就是卡里那几条）。
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   assertStoryEngineProject,
   defaultDraftPath,
@@ -18,10 +18,11 @@ import {
   requireBodyString,
   requirePositiveBodyInteger,
   writeJson,
+  writeFileAtomic,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { runWithSnapshot } from "../lib/snapshot.js";
 import { readAntiRules } from "../agent/tools/check-ai-flavor.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import type { AiFlavorViolation } from "../agent/ai-flavor/ai-flavor-check.js";
@@ -97,10 +98,12 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     let snapshotId: string | undefined;
     let writtenContent = rawDraft;
     if (result.rewritten > 0 && result.updatedContent !== rawDraft) {
-      const snapshot = await createSnapshot(projectDir, "一键去 AI 味前快照");
-      snapshotId = snapshot.id;
+      // 审计 High-2：快照与落盘同一临界区（此前锁外裸写可被 commit_apply 交错读到半截稿）+ 原子写。
       writtenContent = `${result.updatedContent.trimEnd()}\n`;
-      await writeFile(draftPath, writtenContent, "utf-8");
+      const { snapshot } = await runWithSnapshot(projectDir, "一键去 AI 味前快照", async () => {
+        await writeFileAtomic(draftPath, writtenContent);
+      });
+      snapshotId = snapshot.id;
     }
 
     writeJson(res, 200, {

@@ -525,10 +525,32 @@ function blockedCharacterStateWrite(statusCode: number, reason: string): { reado
     statusCode,
     payload: {
       ok: false,
-      error: reason,
+      // 审计 Med：error 字段直达用户（fetch 错误文案），换人话；机器码保留在 result.reason（程序判定/测试用）。
+      error: describeBlockedCharacterStateReason(reason),
       result: baseCharacterStateResult("blocked", reason),
     },
   };
+}
+
+/** 角色状态确认失败原因的用户可读文案（机器码 → 中文；未知码原样透出，可排障）。 */
+function describeBlockedCharacterStateReason(reason: string): string {
+  if (reason === "idempotency_conflict") return "同一操作已用不同的内容提交过（幂等键冲突）。请刷新页面后重试。";
+  if (reason === "base_hash_mismatch") return "该角色的资料在预览之后已被修改。请重新预览再确认。";
+  if (reason === "preview_hash_mismatch") return "本次确认的内容与预览时不一致。请重新预览再确认。";
+  if (reason.startsWith("forbidden_fields:")) return `请求包含不被支持的字段（${reason.slice("forbidden_fields:".length)}）。`;
+  if (reason === "missing_project_path") return "缺少项目路径。";
+  if (reason === "missing_character_id") return "缺少角色标识。";
+  if (reason === "missing_target_file") return "缺少目标文件。";
+  if (reason === "missing_preview_hash") return "缺少预览校验值。";
+  if (reason === "missing_base_hash") return "缺少底账校验值。";
+  if (reason === "missing_idempotency_key") return "缺少幂等键。";
+  if (reason === "missing_explicit_confirm") return "缺少显式确认标记。";
+  if (reason === "invalid_target_file") return "目标文件不合法。";
+  if (reason === "target_file_must_be_character_state_only") return "该操作只允许写入角色状态文件。";
+  if (reason === "missing_suggestion_ids") return "缺少建议条目。";
+  if (reason === "missing_state_patch") return "缺少要写入的修改内容。";
+  if (reason === "character_state_write_failed") return "写入角色状态失败，未改动任何资料。";
+  return reason;
 }
 
 function baseCharacterStateResult(status: CharacterStateConfirmStatus, reason?: string): CharacterStateConfirmResult {

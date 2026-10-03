@@ -436,6 +436,17 @@ function suggestionDisplayName(suggestion: FoundationGapSuggestion): string | un
   return undefined;
 }
 
+
+/** ENOENT-only 兜底：缺文件回落 fallback（老书合法缺台账），其余错误（损坏 JSON 等）原样上抛。 */
+function enoentOnly<T>(fallback: () => T): (error: unknown) => T {
+  return (error: unknown) => {
+    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ENOENT") {
+      return fallback();
+    }
+    throw error;
+  };
+}
+
 async function readSources(projectDir: string): Promise<SourceBundle> {
   const [storyBible, worldCore, worldState, worldBible, writingRules, characterBible, locationBible, assetLedger, hooks, threads, arcGoals, timelineEvents] = await Promise.all([
     readStoryBible(projectDir),
@@ -446,10 +457,13 @@ async function readSources(projectDir: string): Promise<SourceBundle> {
     readCharacterBible(projectDir),
     readLocationBible(projectDir),
     readAssetLedger(projectDir),
-    readHookPool(projectDir).catch(() => ({ hooks: [] })),
-    readThreadPool(projectDir).catch(() => ({ threads: [] })),
-    readArcGoalPool(projectDir).catch(() => ({ goals: [] })),
-    readTimelineEvents(projectDir).catch(() => []),
+    // 审计 Low：readXxxPool 只兜 ENOENT（老书合法缺文件）、损坏 JSON 会 rethrow——这里的裸 catch
+    // 把损坏也吞成空池，gap 报告按「资料缺失」给误导性建议。改为 ENOENT-only：损坏如实上抛
+    // （调用方 500 报错，用户知道要先修文件），与 project-store「坏文件绝不当空池」口径一致。
+    readHookPool(projectDir).catch(enoentOnly(() => ({ hooks: [] }))),
+    readThreadPool(projectDir).catch(enoentOnly(() => ({ threads: [] }))),
+    readArcGoalPool(projectDir).catch(enoentOnly(() => ({ goals: [] }))),
+    readTimelineEvents(projectDir).catch(enoentOnly(() => [] as never[])),
   ]);
   return { storyBible, worldCore, worldState, worldBible, writingRules, characterBible, locationBible, assetLedger, hooks, threads, arcGoals, timelineEvents };
 }

@@ -390,6 +390,22 @@ describe("settleInterruptedToolSteps（僵尸 running 步骤结算）", () => {
     expect((await readChatSession(dir, id))?.messages).toHaveLength(1);
   });
 
+  it("allowEmpty 显式旁路（审计 High-3）：撤销撤掉全部回合/清空对话可写空，常态保存仍被拦", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "chat-allow-empty-"));
+    const id = (await readChatSessionIndex(dir)).activeSessionId;
+    await saveChatSessionMessages(dir, id, [
+      { id: "m-1", role: "user", content: "写下一章" },
+      { id: "m-2", role: "assistant", content: "好，正在写。" },
+    ] as unknown);
+
+    // 显式用户动作（allowEmpty=true）：空列表放行——「撤销到此」撤掉全部回合、清空对话都要落盘，
+    // 否则 reload 后被会话文件复活（跨会话撤销失效）。
+    await expect(saveChatSessionMessages(dir, id, [] as unknown, undefined, true)).resolves.toBeUndefined();
+    expect((await readChatSession(dir, id))?.messages).toHaveLength(0);
+    // 归档游标同被夹进合法范围（0）
+    expect((await readChatSession(dir, id))?.archivedCount).toBe(0);
+  });
+
   it("打开会话即结算：重载后不再有僵尸「正在…」步骤", async () => {
     const dir = await mkdtemp(join(tmpdir(), "chat-settle-"));
     const id = (await readChatSessionIndex(dir)).activeSessionId;

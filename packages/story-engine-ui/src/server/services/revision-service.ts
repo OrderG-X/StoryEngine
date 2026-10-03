@@ -36,7 +36,7 @@
  *   policies.deterministicPreview — HTTP preview：模型回 echo no-op 且任务是代词修复时改用引擎确定性
  *                                   预览；工具路无此 Overlay（echo no-op 直接诚实拒）。
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import {
   buildDeterministicRevisionPreview,
   buildDraftRevisionPrompt,
@@ -49,7 +49,8 @@ import {
 } from "@actalk/story-engine";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { defaultDraftPath } from "../lib/project-io.js";
+import { defaultDraftPath, writeFileAtomic } from "../lib/project-io.js";
+import { runWithSnapshot } from "../lib/snapshot.js";
 
 /* ---------------------------------------------------------------------------
  * D21 定位：精确子串优先 + 空白/引号归一兜底
@@ -290,7 +291,8 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
 }
 
 async function persistRevisionUpdate(draftPath: string, updatedContent: string): Promise<void> {
-  await writeFile(draftPath, `${updatedContent.trimEnd()}\n`, "utf-8");
+  // 审计：覆盖写原子化（tmp+rename）——进程被杀不留半截稿。
+  await writeFileAtomic(draftPath, `${updatedContent.trimEnd()}\n`);
 }
 
 /* ---------------------------------------------------------------------------
@@ -366,8 +368,6 @@ export async function applyRevision(input: {
   /** 可选：用户原始点名片段（task.targetText 回传）——带了就在 apply 时的当前草稿上重新解析目标区间、
    *  落盘前做与工具路同口径的 target_unchanged 守卫；没带（旧客户端）保持原行为，守卫是纯增量。 */
   readonly targetText?: string;
-  /** 守卫全过、落盘前的钩子（HTTP 路在此建「修订应用前快照」，保持原时序语义）。 */
-  readonly beforeWrite?: () => Promise<unknown>;
 }): Promise<RevisionApplySuccess | RevisionFailure> {
   const { projectDir, chapter, preview } = input;
   const draftPath = defaultDraftPath(projectDir, chapter);
@@ -394,8 +394,12 @@ export async function applyRevision(input: {
       return { ok: false, code: "target_unchanged", preview };
     }
   }
-  await input.beforeWrite?.();
-  await persistRevisionUpdate(draftPath, updatedContent);
+  // 审计 High-2：快照与落盘同一临界区（此前 HTTP 路的 createSnapshot 在锁内一瞬、紧接的覆盖写在
+  // 锁外，commit_apply 在锁内读同一工作稿并定稿——交错可丢修订或把半截稿定稿）。修订应用前快照的
+  // 时序语义不变：守卫全过之后才进 runWithSnapshot（拒绝路径不建快照）。
+  await runWithSnapshot(projectDir, "修订应用前快照", async () => {
+    await persistRevisionUpdate(draftPath, updatedContent);
+  });
   return { ok: true, applied: true, preview, draftPath, updatedContent };
 }
 

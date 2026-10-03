@@ -6,7 +6,8 @@
  * 生成结果写入 .story-engine-ui/alias-tables.json，
  * 供后续「本章相关角色」检测使用。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { dirname, join } from "node:path";
 import { readCharacterBible, type CharacterBibleEntry } from "@actalk/story-engine";
 
@@ -343,7 +344,7 @@ async function readAliasTableForMerge(projectDir: string): Promise<{
 async function writeAliasTable(projectDir: string, table: AliasTable): Promise<void> {
   const path = join(projectDir, ALIAS_TABLE_RELATIVE_PATH);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(table, null, 2), "utf-8");
+  await writeFileAtomic(path, JSON.stringify(table, null, 2));
 }
 
 function buildSummary(input: {

@@ -18,6 +18,8 @@ import type { WriterClient } from "@actalk/story-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const storyEngineMocks = vi.hoisted(() => ({
+  // 审计 High-2：自动去味的「读旧稿→快照→覆盖写」整段进了 withProjectCommitLock——测试直通执行。
+  withProjectCommitLock: vi.fn(async (_projectDir: string, task: () => Promise<unknown>) => task()),
   buildDraftLengthReport: vi.fn(() => ({
     requestedDraftLength: 1800,
     lowerBound: 200,

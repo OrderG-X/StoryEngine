@@ -5,6 +5,7 @@ import { bigramSimilarity, readThreadPool } from "@actalk/story-engine";
 import type { NarrativeThread } from "@actalk/story-engine";
 
 import { writeFileAtomic } from "../../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
 import { userTurnAllowsResolveThread } from "./turn-intent-gate.js";
@@ -67,7 +68,7 @@ export async function runResolveThread(projectDir: string, query: string): Promi
     return {
       ok: false,
       blockedReason: "read_failed",
-      summary: `读取 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `读取 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -106,7 +107,7 @@ export async function runResolveThread(projectDir: string, query: string): Promi
     return {
       ok: false,
       blockedReason: "write_failed",
-      summary: `写回 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `写回 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 

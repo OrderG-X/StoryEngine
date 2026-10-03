@@ -94,6 +94,14 @@ function clearMessages(projectKey: string | null): void {
   }
 }
 
+/**
+ * 只读某项目的 sessionStorage 对话副本（不水合、不动 store）。openProject 的会话文件读取失败时
+ * 用它做回退（审计 Med：此前回退到 [] 并顺手销毁该键——用户刷新只见空聊天，本地副本也陪葬）。
+ */
+export function readPersistedProjectMessages(projectKey: string | null): readonly ChapterMessage[] {
+  return loadMessages(projectKey);
+}
+
 export function setProjectKey(projectKey: string | null): void {
   // 切走前把上一项目的待写尾巴落盘（写的是它自己当时的 key），否则新项目的 sessionStorage 会覆盖掉尾巴。
   flushPendingMessageSave();

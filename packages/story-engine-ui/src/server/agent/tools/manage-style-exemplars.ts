@@ -25,6 +25,7 @@ import {
 import type { StyleExemplar } from "@actalk/story-engine";
 
 import { blankToUndefined, coerceEnum } from "./lenient-args.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { writeTool } from "../withSnapshot.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
 
@@ -73,7 +74,7 @@ async function readWritingRulesFile(projectDir: string): Promise<WritingRulesFil
       ok: false,
       exemplars: [],
       droppedBad: [],
-      failSummary: `读 story/writing-rules.json 失败：${error instanceof Error ? error.message : String(error)}，没改任何东西。`,
+      failSummary: `读 story/writing-rules.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}，没改任何东西。`,
     };
   }
   let parsed: unknown;
@@ -228,7 +229,7 @@ export async function manageStyleExemplarsLogic(input: {
     try {
       await writeStyleExemplars(projectDir, read.record ?? {}, next);
     } catch (error) {
-      return fail(`写入 story/writing-rules.json 失败：${error instanceof Error ? error.message : String(error)}`, existing, read.droppedBad);
+      return fail(`写入 story/writing-rules.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`, existing, read.droppedBad);
     }
     return {
       ok: true,
@@ -264,7 +265,7 @@ export async function manageStyleExemplarsLogic(input: {
     try {
       await writeStyleExemplars(projectDir, read.record ?? {}, next);
     } catch (error) {
-      return fail(`写入 story/writing-rules.json 失败：${error instanceof Error ? error.message : String(error)}`, existing, read.droppedBad);
+      return fail(`写入 story/writing-rules.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`, existing, read.droppedBad);
     }
     const changes = [
       renameTo ? `标题改为「${renameTo}」` : undefined,
@@ -288,7 +289,7 @@ export async function manageStyleExemplarsLogic(input: {
   try {
     await writeStyleExemplars(projectDir, read.record ?? {}, next);
   } catch (error) {
-    return fail(`写入 story/writing-rules.json 失败：${error instanceof Error ? error.message : String(error)}`, existing, read.droppedBad);
+    return fail(`写入 story/writing-rules.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`, existing, read.droppedBad);
   }
   return {
     ok: true,

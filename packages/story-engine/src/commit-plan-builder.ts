@@ -144,7 +144,7 @@ export interface ChapterSemanticSummary {
 export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): Promise<BuildCommitPlanResult> {
   const issues: string[] = [];
   const draftPath = input.draftPath ?? defaultDraftPath(input.projectDir, input.chapter);
-  const [draft, characters, hookPool, threadPool, arcGoalPool, previewContext] = await Promise.all([
+  const [draft, characters, hookPool, threadPool, arcGoalPool, previewContextRead] = await Promise.all([
     input.draftContent !== undefined
       ? Promise.resolve(input.draftContent)
       : readFile(draftPath, "utf-8").catch((error: unknown) => {
@@ -169,9 +169,15 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
     }),
     readCommitPreviewContext(input.projectDir).catch((error: unknown) => {
       issues.push(describeErrorBriefly(error, input.projectDir));
-      return emptyCommitPreviewContext();
+      return { context: emptyCommitPreviewContext(), failures: [] as readonly string[] };
     }),
   ]);
+  // 审计 Med：保护性底账（bible/world-bible/assets 等）损坏不再静默失明——「触碰禁止揭示」等
+  // 门禁按空底账跑等于没查；每条读取失败如实进 issues（ENOENT 是老书合法缺文件，不算失败）。
+  for (const ledgerFailure of previewContextRead.failures) {
+    issues.push(ledgerFailure);
+  }
+  const previewContext = previewContextRead.context;
 
   if (!draft) return { passed: false, issues };
   if (characters.length === 0) {
@@ -517,36 +523,53 @@ interface CommitPreviewContext {
   readonly protectedSecrets: readonly string[];
 }
 
-async function readCommitPreviewContext(projectDir: string): Promise<CommitPreviewContext> {
+async function readCommitPreviewContext(projectDir: string): Promise<{
+  readonly context: CommitPreviewContext;
+  /** 损坏（非 ENOENT）的底账文件清单（已格式化为 issue 文案）；空 = 全部读好或合法缺文件。 */
+  readonly failures: readonly string[];
+}> {
+  // 审计 Med：这些是保护性底账——损坏时 protectedSecrets/资产地点账本静默变空，
+  // 「触碰禁止揭示」等门禁零候选、无任何 issue（外层 catch 对这组文件是不可达死通道）。失败必须上浮。
+  const failures: string[] = [];
+  const safe = <T>(relativePath: string): Promise<T | undefined> =>
+    readJsonSafe<T>(projectDir, relativePath, (error) => {
+      failures.push(
+        `保护性底账读取失败（${relativePath}：${describeErrorBriefly(error, projectDir)}），` +
+        "基于它的检查（如触碰禁止揭示）本轮按空底账执行，请修复该文件后重新预览。",
+      );
+    });
   const [project, worldCore, storyBible, worldBible, assetLedger, locationBible, characterMatrix] = await Promise.all([
-    readJsonSafe<Record<string, unknown>>(projectDir, "project.json"),
-    readJsonSafe<Record<string, unknown>>(projectDir, join("world", "core.json")),
-    readJsonSafe<Record<string, unknown>>(projectDir, join("story", "bible.json")),
-    readJsonSafe<Record<string, unknown>>(projectDir, join("story", "world-bible.json")),
-    readJsonSafe<AssetLedger>(projectDir, join("story", "assets.json")),
-    readJsonSafe<LocationBible>(projectDir, join("story", "location-bible.json")),
-    readJsonSafe<CharacterMatrixLedger>(projectDir, join("story", "character-matrix.json")),
+    safe<Record<string, unknown>>("project.json"),
+    safe<Record<string, unknown>>(join("world", "core.json")),
+    safe<Record<string, unknown>>(join("story", "bible.json")),
+    safe<Record<string, unknown>>(join("story", "world-bible.json")),
+    safe<AssetLedger>(join("story", "assets.json")),
+    safe<LocationBible>(join("story", "location-bible.json")),
+    safe<CharacterMatrixLedger>(join("story", "character-matrix.json")),
   ]);
   return {
-    genreContext: [
-      readString(project?.title),
-      readString(worldCore?.genre),
-      readString(worldCore?.premise),
-      readString(storyBible?.genre),
-      readString(storyBible?.premise),
-      readString(storyBible?.projectLogline),
-      ...(readStringList(storyBible?.subgenres)),
-      ...(readStringList(worldBible?.rules)),
-      ...(readStringList(worldBible?.powerOrSurvivalSystems)),
-    ].filter(isNonEmptyString),
-    assetLedger: assetLedger ?? { version: "v0", assets: [], containers: [] },
-    locationBible,
-    characterMatrix: characterMatrix ?? { version: "v0", entries: [] },
-    protectedSecrets: unique([
-      ...readStringList(storyBible?.protectedSecrets),
-      ...readStringList(storyBible?.coreMysteries),
-      ...readStringList(storyBible?.forbiddenChanges),
-    ]),
+    failures,
+    context: {
+      genreContext: [
+        readString(project?.title),
+        readString(worldCore?.genre),
+        readString(worldCore?.premise),
+        readString(storyBible?.genre),
+        readString(storyBible?.premise),
+        readString(storyBible?.projectLogline),
+        ...(readStringList(storyBible?.subgenres)),
+        ...(readStringList(worldBible?.rules)),
+        ...(readStringList(worldBible?.powerOrSurvivalSystems)),
+      ].filter(isNonEmptyString),
+      assetLedger: assetLedger ?? { version: "v0", assets: [], containers: [] },
+      locationBible,
+      characterMatrix: characterMatrix ?? { version: "v0", entries: [] },
+      protectedSecrets: unique([
+        ...readStringList(storyBible?.protectedSecrets),
+        ...readStringList(storyBible?.coreMysteries),
+        ...readStringList(storyBible?.forbiddenChanges),
+      ]),
+    },
   };
 }
 
@@ -560,10 +583,18 @@ function emptyCommitPreviewContext(): CommitPreviewContext {
   };
 }
 
-async function readJsonSafe<T>(projectDir: string, relativePath: string): Promise<T | undefined> {
+async function readJsonSafe<T>(
+  projectDir: string,
+  relativePath: string,
+  onFailure?: (error: unknown) => void,
+): Promise<T | undefined> {
   return readFile(join(projectDir, relativePath), "utf-8")
     .then((text) => JSON.parse(text) as T)
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      // ENOENT = 老书合法缺文件（可选底账），不算失败；损坏 JSON/权限等如实回调。
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") onFailure?.(error);
+      return undefined;
+    });
 }
 
 function readString(value: unknown): string | undefined {

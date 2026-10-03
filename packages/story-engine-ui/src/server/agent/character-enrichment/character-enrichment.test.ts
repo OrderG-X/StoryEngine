@@ -175,22 +175,31 @@ describe("mergeCharacterEnrichmentIntoEngine 并入引擎（做厚真进正文�
 
   it("写盘失败时 merge 返回 {merged:false, reason 含失败}", async () => {
     const dir = await projectWithBible();
-    // bible 可读且有命中（→ changed=true 会触发 writeFile），但文件只读 → writeFile 抛 EACCES，
-    // 真异常走第二层 catch 返回带 reason 的 {merged:false}。
-    await chmod(join(dir, "story", "character-bible.json"), 0o444);
-    const r = await mergeCharacterEnrichmentIntoEngine(dir, characterEnrichmentSchema.parse(VALID));
-    expect(r.merged).toBe(false);
-    expect(r.reason ?? "").toContain("失败");
+    // 写已收口 writeFileAtomic（tmp+rename，审计 Med）：只读文件挡不住 rename——注入改为只读
+    // story 目录（tmp 建不出来 → EACCES），真异常走第二层 catch 返回带 reason 的 {merged:false}。
+    await chmod(join(dir, "story"), 0o555);
+    try {
+      const r = await mergeCharacterEnrichmentIntoEngine(dir, characterEnrichmentSchema.parse(VALID));
+      expect(r.merged).toBe(false);
+      expect(r.reason ?? "").toContain("失败");
+    } finally {
+      await chmod(join(dir, "story"), 0o755); // 恢复可写，否则 mkdtemp 清理不掉
+    }
   });
 
   it("写盘失败时 generate 仍 ok:true 但 mergedIntoEngine:false 且 summary 如实标注未进正文", async () => {
     const dir = await projectWithBible();
-    await chmod(join(dir, "story", "character-bible.json"), 0o444);
-    const callModel = vi.fn(async () => JSON.stringify(VALID));
-    const r = await generateCharacterEnrichment({ projectDir: dir, characters: CHARACTERS, callModel });
-    expect(r.ok).toBe(true);
-    expect(r.mergedIntoEngine).toBe(false);
-    expect(r.summary).toContain("未能");
+    // 同上：writeFileAtomic 时代的失败注入 = 只读目录（挡 tmp 创建）。
+    await chmod(join(dir, "story"), 0o555);
+    try {
+      const callModel = vi.fn(async () => JSON.stringify(VALID));
+      const r = await generateCharacterEnrichment({ projectDir: dir, characters: CHARACTERS, callModel });
+      expect(r.ok).toBe(true);
+      expect(r.mergedIntoEngine).toBe(false);
+      expect(r.summary).toContain("未能");
+    } finally {
+      await chmod(join(dir, "story"), 0o755);
+    }
   });
 
   it("R2 件③：bible 条目改名后仍按 id 命中并入（不漏并）", async () => {

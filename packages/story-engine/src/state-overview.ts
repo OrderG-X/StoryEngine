@@ -476,6 +476,11 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
 }
 
 async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promise<StateOverview> {
+  // 审计 Low：损坏台账（SyntaxError）回落空值时的留痕收集器——进 uiHints.warnings，面板显示「坏」而非「空」。
+  const corruptLedgerFiles: string[] = [];
+  const noteCorruptLedger = (relativePath: string): void => {
+    corruptLedgerFiles.push(relativePath);
+  };
   const [
     project,
     worldCore,
@@ -496,22 +501,22 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     characters,
     commitRecoveryNotices,
   ] = await Promise.all([
-    readJsonSafe<StoryProject>(input.projectDir, "project.json", { id: "unknown", title: "Untitled", createdAt: "", updatedAt: "" }),
+    readJsonSafe<StoryProject>(input.projectDir, "project.json", { id: "unknown", title: "Untitled", createdAt: "", updatedAt: "" }, noteCorruptLedger),
     readJsonSafe<WorldCore>(input.projectDir, join("world", "core.json"), { genre: "unknown", premise: "", rules: [], mainConflict: "" }),
     readJsonSafe<WorldState>(input.projectDir, join("world", "state.json"), { currentPhase: "unknown", activeConflicts: [], activeHooks: [], knownSecrets: [] }),
     readJsonSafe<StoryCore>(input.projectDir, join("story", "core.json"), { readerPromise: "", tone: "", targetEmotion: "" }),
-    readJsonSafe<StoryBible | null>(input.projectDir, join("story", "bible.json"), null),
-    readJsonSafe<WritingRules | null>(input.projectDir, join("story", "writing-rules.json"), null),
-    readJsonSafe<CharacterBible | null>(input.projectDir, join("story", "character-bible.json"), null),
-    readJsonSafe<CharacterMatrixLedger>(input.projectDir, join("story", "character-matrix.json"), { version: "v0", entries: [] }),
-    readJsonSafe<WorldBible | null>(input.projectDir, join("story", "world-bible.json"), null),
-    readJsonSafe<LocationBible | null>(input.projectDir, join("story", "location-bible.json"), null),
-    readJsonSafe<AssetLedger>(input.projectDir, join("story", "assets.json"), { version: "v0", assets: [], containers: [] }),
-    readJsonSafe<HookPool>(input.projectDir, join("story", "hooks.json"), { hooks: [] }),
-    readJsonSafe<ThreadPool>(input.projectDir, join("story", "threads.json"), { threads: [] }),
-    readJsonSafe<ArcGoalPool>(input.projectDir, join("story", "arc-goals.json"), { goals: [] }),
-    readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), []),
-    readJsonSafe<StoryCalendar>(input.projectDir, join("time", "calendar.json"), { currentStoryDay: 1, currentTimeOfDay: "unknown" }),
+    readJsonSafe<StoryBible | null>(input.projectDir, join("story", "bible.json"), null, noteCorruptLedger),
+    readJsonSafe<WritingRules | null>(input.projectDir, join("story", "writing-rules.json"), null, noteCorruptLedger),
+    readJsonSafe<CharacterBible | null>(input.projectDir, join("story", "character-bible.json"), null, noteCorruptLedger),
+    readJsonSafe<CharacterMatrixLedger>(input.projectDir, join("story", "character-matrix.json"), { version: "v0", entries: [] }, noteCorruptLedger),
+    readJsonSafe<WorldBible | null>(input.projectDir, join("story", "world-bible.json"), null, noteCorruptLedger),
+    readJsonSafe<LocationBible | null>(input.projectDir, join("story", "location-bible.json"), null, noteCorruptLedger),
+    readJsonSafe<AssetLedger>(input.projectDir, join("story", "assets.json"), { version: "v0", assets: [], containers: [] }, noteCorruptLedger),
+    readJsonSafe<HookPool>(input.projectDir, join("story", "hooks.json"), { hooks: [] }, noteCorruptLedger),
+    readJsonSafe<ThreadPool>(input.projectDir, join("story", "threads.json"), { threads: [] }, noteCorruptLedger),
+    readJsonSafe<ArcGoalPool>(input.projectDir, join("story", "arc-goals.json"), { goals: [] }, noteCorruptLedger),
+    readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), [], noteCorruptLedger),
+    readJsonSafe<StoryCalendar>(input.projectDir, join("time", "calendar.json"), { currentStoryDay: 1, currentTimeOfDay: "unknown" }, noteCorruptLedger),
     readCharacters(input.projectDir),
     // A3（P1-6 上浮）：recover 已在上方锁内跑完；仍挂着「recovered + recoveryIssues」的残留
     // =盘上「章文件在、资料已回滚」的分歧态。上浮进 uiHints.warnings 既有通道，绝不只写 manifest 静默。
@@ -699,6 +704,9 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
       warnings: [
         ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
         ...commitRecoveryNotices.map(formatCommitRecoveryNotice),
+        // 审计 Low：损坏台账如实可见（绝不把「坏文件」显示成「没有资料」）。
+        ...unique(corruptLedgerFiles.map((relativePath) =>
+          `资料文件损坏，面板按空显示：${relativePath}。定稿等写入操作会如实报错，请先修复该文件。`)),
       ],
       disabledActions: [
         "merge_threads_confirm",
@@ -1656,12 +1664,22 @@ async function readCharacters(projectDir: string): Promise<readonly { readonly p
   return result.filter((item): item is { readonly profile: CharacterProfile; readonly state?: CharacterState } => item !== undefined);
 }
 
-async function readJsonSafe<T>(projectDir: string, relativePath: string, fallback: T): Promise<T> {
+async function readJsonSafe<T>(
+  projectDir: string,
+  relativePath: string,
+  fallback: T,
+  onCorrupt?: (relativePath: string) => void,
+): Promise<T> {
   try {
     return JSON.parse(await readFile(join(projectDir, relativePath), "utf-8")) as T;
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return fallback;
-    if (error instanceof SyntaxError) return fallback;
+    // 审计 Low：损坏 JSON 回落 fallback 保留（读侧不堵），但必须留痕——否则面板把「坏」显示成
+    // 「空」，与写侧 fail-closed（commit 报「读取伏笔池失败」）跨视图矛盾，用户会被误导去补资料。
+    if (error instanceof SyntaxError) {
+      onCorrupt?.(relativePath);
+      return fallback;
+    }
     throw error;
   }
 }

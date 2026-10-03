@@ -16,6 +16,7 @@ import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import {
   buildStateOverview,
   createStoryProject,
+  withProjectCommitLock,
 } from "@actalk/story-engine";
 import {
   assertStoryEngineProject,
@@ -23,7 +24,7 @@ import {
   isSafeProjectPath,
   readJsonBody,
   readJsonFile,
-  writeJsonFile,
+  writeFileAtomic,
   readString,
   readStringList,
   readPositiveInteger,
@@ -396,35 +397,42 @@ async function handleUpdateStorySettings(req: import("node:http").IncomingMessag
     const storyCorePath = join(projectDir, "story", "core.json");
     const storyBiblePath = join(projectDir, "story", "bible.json");
     const worldBiblePath = join(projectDir, "story", "world-bible.json");
-    const [project, worldCore, worldState, storyCore, storyBible, worldBible] = await Promise.all([
-      readJsonFile(projectPath),
-      readJsonFile(worldCorePath),
-      readJsonFile(worldStatePath),
-      readJsonFile(storyCorePath),
-      readJsonFile(storyBiblePath),
-      readJsonFile(worldBiblePath),
-    ]);
+    // 审计 High-1：读-改-写整段进项目级写锁（可重入，createSnapshot 内部的锁嵌套安全）——
+    // agent 侧 foundation_write/worldbuilding/commit 持同一把锁写这批 story|world 文件，锁外交错会丢更新。
+    // 写全部走 writeFileAtomic（tmp+rename）：中途失败/崩溃不留半截 JSON。
+    await withProjectCommitLock(projectDir, async () => {
+      const [project, worldCore, worldState, storyCore, storyBible, worldBible] = await Promise.all([
+        readJsonFile(projectPath),
+        readJsonFile(worldCorePath),
+        readJsonFile(worldStatePath),
+        readJsonFile(storyCorePath),
+        readJsonFile(storyBiblePath),
+        readJsonFile(worldBiblePath),
+      ]);
 
-    await createSnapshot(projectDir, "故事设定修改前快照");
-    await Promise.all([
-      writeJsonFile(projectPath, { ...project, title, updatedAt: now }),
-      writeJsonFile(worldCorePath, { ...worldCore, genre, premise: logline, rules: worldRules }),
-      writeJsonFile(worldStatePath, { ...worldState, currentPhase, activeConflicts: importantFacts }),
-      writeJsonFile(storyCorePath, { ...storyCore, readerPromise: currentMainGoal ?? logline }),
-      writeJsonFile(storyBiblePath, {
-        ...storyBible,
-        projectLogline: logline,
-        premise: logline,
-        genre,
-        readerPromise: logline,
-        longFormGoals,
-        centralConflicts,
-        forbiddenChanges: forbiddenReveals,
-        canonFacts: importantFacts,
-        openQuestions,
-      }),
-      writeJsonFile(worldBiblePath, { ...worldBible, rules: worldRules, factions: mergeWorldBibleFactions(worldBible.factions, socialRules) }),
-    ]);
+      await createSnapshot(projectDir, "故事设定修改前快照");
+      const writeJsonAtomic = (path: string, value: unknown) =>
+        writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+      await Promise.all([
+        writeJsonAtomic(projectPath, { ...project, title, updatedAt: now }),
+        writeJsonAtomic(worldCorePath, { ...worldCore, genre, premise: logline, rules: worldRules }),
+        writeJsonAtomic(worldStatePath, { ...worldState, currentPhase, activeConflicts: importantFacts }),
+        writeJsonAtomic(storyCorePath, { ...storyCore, readerPromise: currentMainGoal ?? logline }),
+        writeJsonAtomic(storyBiblePath, {
+          ...storyBible,
+          projectLogline: logline,
+          premise: logline,
+          genre,
+          readerPromise: logline,
+          longFormGoals,
+          centralConflicts,
+          forbiddenChanges: forbiddenReveals,
+          canonFacts: importantFacts,
+          openQuestions,
+        }),
+        writeJsonAtomic(worldBiblePath, { ...worldBible, rules: worldRules, factions: mergeWorldBibleFactions(worldBible.factions, socialRules) }),
+      ]);
+    });
 
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
     writeJson(res, 200, { ok: true, overview });
@@ -452,7 +460,6 @@ async function handleUpdateWritingRules(req: import("node:http").IncomingMessage
     await assertStoryEngineProject(projectDir);
 
     const writingRulesPath = join(projectDir, "story", "writing-rules.json");
-    const current = await readJsonFile(writingRulesPath);
     const parsed = Array.isArray(body.rules)
       ? parseWritingRuleLines(readStringList(body.rules))
       : {
@@ -466,11 +473,16 @@ async function handleUpdateWritingRules(req: import("node:http").IncomingMessage
         doNotDo: readStringList(body.doNotDo),
         readerExperienceRules: readStringList(body.readerExperienceRules),
       };
-    await createSnapshot(projectDir, "写作规则修改前快照");
-    await writeJsonFile(writingRulesPath, {
-      ...current,
-      version: "v0",
-      ...parsed,
+    // 审计 High-1 同款：读-改-写整段进锁 + 原子写（writing-rules.json 与 agent 的
+    // manage_style_exemplars / 生成流程共享，锁外裸写会交错丢更新）。
+    await withProjectCommitLock(projectDir, async () => {
+      const current = await readJsonFile(writingRulesPath);
+      await createSnapshot(projectDir, "写作规则修改前快照");
+      await writeFileAtomic(writingRulesPath, `${JSON.stringify({
+        ...current,
+        version: "v0",
+        ...parsed,
+      }, null, 2)}\n`);
     });
 
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));

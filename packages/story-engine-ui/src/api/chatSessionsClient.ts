@@ -81,7 +81,12 @@ export const setActiveChatSession = async (projectPath: string, id: string) => {
   recordSessionEpoch(projectPath, result.session);
   return result;
 };
-export const saveChatSessionMessages = async (projectPath: string, id: string, messages: unknown): Promise<{ ok: true }> => {
+export const saveChatSessionMessages = async (
+  projectPath: string,
+  id: string,
+  messages: unknown,
+  options?: { readonly allowEmpty?: boolean },
+): Promise<{ ok: true }> => {
   const epoch = sessionEpochs.get(epochKey(projectPath, id));
   if (epoch === undefined) {
     // 本次运行从未成功加载过这份会话 → 内存里的 messages 不可信（多半是加载失败后的空壳）。
@@ -91,7 +96,9 @@ export const saveChatSessionMessages = async (projectPath: string, id: string, m
     notifySaveSkippedOnce(projectPath, id);
     return { ok: true };
   }
-  return put<{ ok: true }>({ action: "save", projectPath, id, messages, windowEpoch: epoch });
+  // allowEmpty=true 仅用于显式截断（撤销到此撤掉全部回合 / 清空对话）：绕过服务端防误清守卫；
+  // 常态 autosave 不带，守卫照拦。
+  return put<{ ok: true }>({ action: "save", projectPath, id, messages, windowEpoch: epoch, ...(options?.allowEmpty ? { allowEmpty: true } : {}) });
 };
 /** 退出/切换前的「尽力而为」保存（审查 #4）：keepalive fetch，请求能在页面卸载后继续送达。 */
 export function saveChatSessionMessagesBeacon(projectPath: string, id: string, messages: unknown): void {

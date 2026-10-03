@@ -330,8 +330,10 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
     }),
   ]);
   const unknownHookIds = hookPool ? findUnknownHookIds(hookPool, hookUpdates) : hookUpdates.map((update) => update.hookId);
-  for (const hookId of unknownHookIds) {
-    issues.push(`Hook not found: ${hookId}`);
+  for (const _hookId of unknownHookIds) {
+    // 铁律④：id 解析不到（正是 not found 场景）用中性占位，绝不把裸 hook id 拼进用户可见文案
+    // （该 issues 经 HTTP 路由与 CLI 两路直达用户）。
+    issues.push("本章声明的伏笔更新里有伏笔池中不存在的条目，已跳过；请核对伏笔名称后重试。");
   }
   if (issues.length > 0 || !hookPool || !threadPool || !arcGoalPool) {
     return withCommitDiagnostics(input.projectDir, failedReport(input.chapter, issues), latencyTimer, draft);

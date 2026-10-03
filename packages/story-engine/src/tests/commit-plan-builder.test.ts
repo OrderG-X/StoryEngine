@@ -54,6 +54,28 @@ describe("uniqueAssetCandidates · 别名子串去重（Codex 5 章 E2E·P2）",
 });
 
 describe("commit plan builder", () => {
+  it("corrupt protection ledger (story/bible.json) surfaces an issue instead of silently blinding the gate (审计 Med)", async () => {
+    const projectDir = await createFixtureProject("林远");
+    await writeDraft(projectDir, 1, "# 第一章\n\n林远推开外院园圃的木门。");
+    // bible 损坏 → protectedSecrets 静默变空 → 「触碰禁止揭示」门禁失明。现在必须进 issues。
+    await writeFile(join(projectDir, "story", "bible.json"), "{not-json", "utf-8");
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
+
+    expect(result.issues.join(" ")).toContain("保护性底账读取失败");
+    expect(result.issues.join(" ")).toContain(join("story", "bible.json"));
+    // 缺文件（ENOENT）不是失败：合法缺 bible 的老书不产生噪声 issue（下一测钉住反例）
+    expect(result.issues.join(" ")).not.toContain("world-bible.json");
+  });
+
+  it("missing optional ledger (ENOENT) produces no noise issue", async () => {
+    const projectDir = await createFixtureProject("林远");
+    await writeDraft(projectDir, 1, "# 第一章\n\n林远推开外院园圃的木门。");
+    // 不写 assets.json/location-bible.json 等：合法缺文件 → 无「保护性底账读取失败」issue
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
+    expect(result.issues.join(" ")).not.toContain("保护性底账读取失败");
+  });
+
   it("builds a minimal commit plan from real project characters without hardcoded ids", async () => {
     const projectDir = await createFixtureProject("林远");
     await writeDraft(projectDir, 1, "# 第一章\n\n林远推开外院园圃的木门。");

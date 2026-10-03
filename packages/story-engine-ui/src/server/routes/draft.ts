@@ -34,13 +34,14 @@ import {
   stripLeadingMarkdownChapterHeading,
   withUiOverviewDetails,
   writeJson,
+  writeFileAtomic,
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, describeTruncatedFinish, isTruncatedFinishReason, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
@@ -197,9 +198,12 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     const draftContent = requireBodyString(body.draftContent, "候选正文不能为空。");
     await assertStoryEngineProject(projectDir);
     const draftPath = defaultDraftPath(projectDir, chapter);
-    await createSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`);
-    await mkdir(dirname(draftPath), { recursive: true });
-    await writeFile(draftPath, `${draftContent.trimEnd()}\n`, "utf-8");
+    // 审计 High-2：快照与落盘收进同一临界区（commit_apply 在锁内读同一工作稿并定稿，锁外裸写可被
+    // 插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
+    await runWithSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`, async () => {
+      await mkdir(dirname(draftPath), { recursive: true });
+      await writeFileAtomic(draftPath, `${draftContent.trimEnd()}\n`);
+    });
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
     writeJson(res, 200, {
       ok: true,

@@ -17,13 +17,14 @@
  *
  * 提示词与数据结构均为本项目原创（借鉴通用提示工程技法，不复制任何第三方文案/代码）。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { semanticDedupRules } from "../enrichment-dedup.js";
 import type { MergeResult } from "../enrichment-merge-result.js";
 import { sanitizeBookStyleRuleLines } from "../../../shared/sparse-panel-honesty.js";
+import { writeFileAtomic } from "../../lib/project-io.js";
 
 const nonEmpty = z.string().trim().min(1);
 
@@ -153,7 +154,7 @@ export async function persistWritingRulesEnrichment(
 ): Promise<{ readonly artifactPath: string }> {
   const artifactPath = join(projectDir, ".story-engine-ui", "writing-rules-enrichment.json");
   await mkdir(dirname(artifactPath), { recursive: true });
-  await writeFile(artifactPath, JSON.stringify(data, null, 2), "utf-8");
+  await writeFileAtomic(artifactPath, JSON.stringify(data, null, 2));
   return { artifactPath };
 }
 
@@ -201,7 +202,7 @@ export async function mergeWritingRulesEnrichmentIntoEngine(projectDir: string, 
     }
     wr.version = "v0";
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify(wr, null, 2), "utf-8");
+    await writeFileAtomic(path, JSON.stringify(wr, null, 2));
     return { merged: true };
   } catch (err) {
     return { merged: false, reason: `写 story/writing-rules.json 失败：${err instanceof Error ? err.message : String(err)}` };

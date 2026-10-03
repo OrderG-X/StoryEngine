@@ -21,7 +21,7 @@
  * 铁律：直接做 + 可撤销（writeTool 前置快照）；绝不静默失败（facts 空 ok:false、人物空 ok:false、
  * 模型/解析出错抛错）；题材中立（一切以 fact-ledger 真实事实为准、不预设关系/世界观）。
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   readCharacterMatrixLedger,
@@ -33,6 +33,7 @@ import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { writeFileAtomic } from "../../lib/project-io.js";
 import { readFactLedger } from "../fact-ledger/fact-ledger.js";
 import { appendDedup } from "../enrichment-dedup.js";
 import { resolveChapterFromInputOrContext } from "../request-context.js";
@@ -172,7 +173,7 @@ export async function persistCharacterRoster(
   const nextLedger: CharacterMatrixLedger = { version: "v0", entries: [...byKey.values()] };
   const path = join(projectDir, "story", "character-matrix.json");
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(nextLedger, null, 2), "utf-8");
+  await writeFileAtomic(path, JSON.stringify(nextLedger, null, 2));
 }
 
 /** 用用户配置的模型做一次 JSON 输出调用（照 generate-matrix-enrichment 的 callConfiguredModel）。 */

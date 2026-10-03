@@ -475,6 +475,7 @@ async function saveChatSessionMessagesImpl(
   id: string,
   messages: unknown,
   clientWindowEpoch?: number,
+  allowEmpty?: boolean,
 ): Promise<void> {
   const session = await readChatSession(projectDir, id);
   if (!session) throw new Error(`会话不存在: ${id}`);
@@ -487,9 +488,10 @@ async function saveChatSessionMessagesImpl(
   }
   const next = readWorkspaceMessages(messages);
   // 防误清守卫（50 章耐力书实测被炸）：会话加载瞬时失败时，客户端会把「空历史」当现状自动保存回来，
-  // 空数组覆盖非空历史 = 不可逆全丢。如实拒绝（客户端只会看到一次保存失败，历史保住）；
-  // 真要清空历史请走「新建会话 / 删除会话」这两条显式路径。
-  if (next.length === 0 && session.messages.length > 0) {
+  // 空数组覆盖非空历史 = 不可逆全丢。如实拒绝（客户端只会看到一次保存失败，历史保住）。
+  // 唯一旁路：allowEmpty=true（显式用户动作——「撤销到此」撤掉全部回合 / 「清空对话」）。
+  // 常态 autosave 永不带该标记，守卫对它原样生效。
+  if (next.length === 0 && session.messages.length > 0 && allowEmpty !== true) {
     throw new Error(
       `已拒绝保存：空消息列表将覆盖该会话的 ${session.messages.length} 条历史（疑似加载失败后的误保存，非用户意图）。`,
     );
@@ -514,8 +516,9 @@ export function saveChatSessionMessages(
   id: string,
   messages: unknown,
   clientWindowEpoch?: number,
+  allowEmpty?: boolean,
 ): Promise<void> {
-  return withProjectLock(projectDir, () => saveChatSessionMessagesImpl(projectDir, id, messages, clientWindowEpoch));
+  return withProjectLock(projectDir, () => saveChatSessionMessagesImpl(projectDir, id, messages, clientWindowEpoch, allowEmpty));
 }
 
 async function bootstrapSessions(projectDir: string): Promise<void> {

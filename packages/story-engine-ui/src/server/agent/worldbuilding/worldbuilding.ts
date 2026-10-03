@@ -9,11 +9,11 @@
  * 引擎包零改动：本模块只在 UI 服务层写项目文件——完整结构落到 .story-engine-ui/worldbuilding.json，
  * 同时把头部要点并入引擎读取的 story/world-bible.json（合并去重，写失败不致命但据 MergeResult 如实回报）。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-import { toSafeLocalId } from "../../lib/project-io.js";
+import { toSafeLocalId, writeFileAtomic } from "../../lib/project-io.js";
 import { appendDedup } from "../enrichment-dedup.js";
 import type { MergeResult } from "../enrichment-merge-result.js";
 
@@ -248,7 +248,7 @@ export async function persistWorldbuilding(
 ): Promise<{ readonly artifactPath: string; readonly merge: MergeResult }> {
   const artifactPath = join(projectDir, ".story-engine-ui", "worldbuilding.json");
   await mkdir(dirname(artifactPath), { recursive: true });
-  await writeFile(artifactPath, JSON.stringify(wb, null, 2), "utf-8");
+  await writeFileAtomic(artifactPath, JSON.stringify(wb, null, 2));
 
   // 并入引擎 world-bible（合并去重，不覆盖既有）。失败不致命（完整结构已在 UI 侧落盘），
   // 但据 MergeResult 二态如实回报，不再静默吞错。worldbuilding schema 保证 rules/socialStructure/
@@ -284,7 +284,7 @@ export async function persistWorldbuilding(
     bible.factions = mergeRichFactions(bible.factions, wb.forces);
     bible.conflictSources = dedupeAppend(bible.conflictSources, wb.conflictSources);
     await mkdir(dirname(wbiblePath), { recursive: true });
-    await writeFile(wbiblePath, JSON.stringify(bible, null, 2), "utf-8");
+    await writeFileAtomic(wbiblePath, JSON.stringify(bible, null, 2));
     merge = { merged: true };
   } catch (err) {
     merge = { merged: false, reason: `并入 story/world-bible.json 失败：${err instanceof Error ? err.message : String(err)}` };

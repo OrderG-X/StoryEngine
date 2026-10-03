@@ -43,6 +43,8 @@ import {
   type MiddlewareStack,
   type UiChapterFileState,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
+import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 
 /** body.currentChapter 容错解析：只接受正整数，其余（缺省/非法/0/负/小数）一律 undefined。 */
 export function readCurrentChapter(raw: unknown): number | undefined {
@@ -165,27 +167,6 @@ export function buildModelMessages(
  * 留足多次丢包余量；15s → 90s 内可喂活看门狗 5~6 次。
  */
 export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
-
-/**
- * SSE 心跳：工具执行期间 fullStream 可能长时间不吐 chunk（如 generate_worldbuilding 一次性大模型
- * 调用，服务端给 200s、期间 SSE 全程静默），客户端 90s 空闲看门狗会误判超时掐流——服务端其实还在
- * 老实生成。每 intervalMs 发一条 SSE 注释行（合法 SSE，客户端语义忽略、但收到字节即重置看门狗），
- * 喂活看门狗。这样 90s 看门狗语义回归正确：「连心跳都收不到」才算真·网络/服务端挂了（永久转圈保护不丢）。
- * 返回停止函数，务必在流结束/出错收尾时调用（避免向已关闭的响应写入）。
- */
-export function startSseHeartbeat(
-  res: { write: (chunk: string) => void },
-  intervalMs: number = SSE_HEARTBEAT_INTERVAL_MS,
-): () => void {
-  const timer = setInterval(() => {
-    try {
-      res.write(": ping\n\n");
-    } catch {
-      // 客户端已断开（broken pipe）：吞掉写失败，等收尾停表。
-    }
-  }, intervalMs);
-  return () => clearInterval(timer);
-}
 
 /**
  * 客户端断开侦测 → AbortController（前端「停止」/空闲看门狗都只是掐 fetch，服务端 agent.stream
@@ -543,7 +524,10 @@ async function handleAgentChat(
   res: import("node:http").ServerResponse,
 ): Promise<void> {
   // headersSent 之后只能走 SSE error 事件；之前可走标准 JSON 错误。
+  // 审计 Low：与 draft/chapter-chat 两条已加固路由同口径的三重护栏——writeHead 前不发帧
+  // （防隐式刷错默认头）、连接已断/已收尾不再写（防 ERR_STREAM_WRITE_AFTER_END）。
   const sendEvent = (event: string, data: unknown) => {
+    if (res.writableEnded || res.destroyed || !res.headersSent) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
@@ -597,7 +581,7 @@ async function handleAgentChat(
       connection: "keep-alive",
     });
     // 工具长调用期间 SSE 会长时间静默，靠心跳喂活客户端 90s 空闲看门狗，避免误判超时掐流。
-    stopHeartbeat = startSseHeartbeat(res);
+    stopHeartbeat = startSseHeartbeat(res).stop;
 
     if (droppedHistoryCount > 0) {
       sendEvent("status", {
@@ -642,7 +626,8 @@ async function handleAgentChat(
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });
     res.end();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // 审计 Med：两条路（500 JSON 与 SSE error 帧）都进用户可见区域——先过 scrubLocalAbsolutePaths。
+    const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
     if (res.headersSent) {
       // 已切到 SSE：错误也走 error 事件（前端可重试），再收尾。
       try {
@@ -660,6 +645,12 @@ async function handleAgentChat(
 }
 
 function stringifyError(error: unknown): string {
+  // 审计 Med：错误原文（fs errno 等）内嵌本地绝对路径，直达前端步骤卡/错误气泡——
+  // 与 chapter-chat 已立的口径对齐：进用户可见面之前先过 scrubLocalAbsolutePaths。
+  return scrubLocalAbsolutePaths(rawStringifyError(error));
+}
+
+function rawStringifyError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   try {

@@ -61,6 +61,7 @@ import {
   resolveDraftMaxOutputTokens,
   runFastDraft,
   trimDraftBodyToLengthTarget,
+  withProjectCommitLock,
   type AiFlavorReport,
   type AiFlavorRule,
   type AiFlavorSeverity,
@@ -76,7 +77,7 @@ import {
 } from "@actalk/story-engine";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
-import { defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading, writeFileAtomic } from "../lib/project-io.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { positiveOrUndefined } from "../agent/tools/lenient-args.js";
@@ -488,15 +489,19 @@ export async function runAutoDeAiRound(input: {
   // 覆盖刚写盘的工作稿前先快照（对齐 revise_draft），让自动去味可撤销。
   // 快照读稿 fail-closed 抛错时（P2-5）：本出稿的草稿确已落盘——绝不因去味中止而谎报整稿失败；
   // 放弃本轮改写、原稿不动，error 如实报（与「改写失败=原稿不动+如实报」同款降级）。
+  // 审计 High-2：读旧稿→快照→覆盖写整段进同一临界区（commit_apply 在锁内读同一工作稿并定稿，
+  // 锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
   let snapshotId: string | undefined;
+  const written = `${result.updatedContent.trimEnd()}\n`;
   try {
-    snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+    await withProjectCommitLock(input.projectDir, async () => {
+      snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+      await writeFileAtomic(input.draftPath, written);
+    });
   } catch (error) {
     // 错误原文可能内嵌绝对路径（快照读稿 errno / git 报错带 -C 仓库路径）——info.error 直达用户，先消毒（铁律④）。
     return notRun(scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)));
   }
-  const written = `${result.updatedContent.trimEnd()}\n`;
-  await writeFile(input.draftPath, written, "utf-8");
   // 复检：对改后正文重跑同一套确定性规则（low 不计入剩余——本来就不动它）。
   const remainingHighMedium = detectAiFlavorViolations(result.updatedContent, input.rules)
     .filter((v) => v.severity !== "low").length;

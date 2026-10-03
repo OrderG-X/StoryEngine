@@ -29,7 +29,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { createSnapshot } from "../lib/snapshot.js";
+// apply 的「修订应用前快照」不再经本路由：快照+落盘已收进 revision-service 的 runWithSnapshot 同一临界区。
 import {
   applyRevision,
   createRevisionModelChannel,
@@ -122,8 +122,6 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
       chapter,
       preview,
       ...(targetText ? { targetText } : {}),
-      // 快照时序保持原语义：守卫全过之后、落盘之前建「修订应用前快照」。
-      beforeWrite: () => createSnapshot(projectDir, "修订应用前快照"),
     });
     if (!outcome.ok) {
       writeJson(res, 400, { ok: false, error: applyRefusalMessage(outcome) });

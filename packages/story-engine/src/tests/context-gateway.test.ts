@@ -643,6 +643,68 @@ describe("StoryEngine-NG ContextGateway", () => {
     });
     expect(envelope.sections.some((s) => s.name === "read_failures")).toBe(false);
   });
+
+  // 审计 Med：角色三件套按【单个角色】兜底——此前单个角色缺一个文件（建角色无事务的残态）
+  // 会让 buildWriterContext 整体 reject、整章无法出稿。现在跳过该角色 + read_failures 留痕。
+  it("character with partial files is skipped (not fatal) and surfaces in read_failures", async () => {
+    const projectDir = await createFixtureProject();
+    // 造一个「目录在、state.json 缺」的残态角色。
+    const partialDir = join(projectDir, "characters", "canzhao");
+    await mkdir(partialDir, { recursive: true });
+    await writeFile(
+      join(partialDir, "profile.json"),
+      JSON.stringify({ id: "canzhao", name: "残态角色", role: "witness" }),
+      "utf-8",
+    );
+
+    const envelope = await buildWriterContext({
+      projectDir,
+      chapter: 8,
+      chapterGoal: "追查矿藏失踪。",
+      maxTimelineEvents: 3,
+    });
+
+    // 出稿上下文整体成功（主角照常在）
+    const characterState = envelope.sections.find((s) => s.name === "character_state")?.content as
+      | readonly { characterId?: string }[]
+      | undefined;
+    expect(Array.isArray(characterState)).toBe(true);
+    expect((characterState ?? []).some((item) => item.characterId === "canzhao")).toBe(false);
+    // 跳过留痕：模型与用户都知道这个角色被跳过
+    const failures = envelope.sections.find((s) => s.name === "read_failures")?.content as
+      | { failures: readonly string[] }
+      | undefined;
+    expect(failures?.failures.join(" ")).toContain("canzhao");
+  });
+
+  it("character with corrupt profile.json is skipped (not fatal) and surfaces in read_failures", async () => {
+    const projectDir = await createFixtureProject();
+    const corruptDir = join(projectDir, "characters", "sunhuai");
+    await mkdir(corruptDir, { recursive: true });
+    await writeFile(join(corruptDir, "profile.json"), "{not-json", "utf-8");
+    await writeFile(
+      join(corruptDir, "core.json"),
+      JSON.stringify({ id: "sunhuai", name: "损坏角色" }),
+      "utf-8",
+    );
+    await writeFile(
+      join(corruptDir, "state.json"),
+      JSON.stringify({ characterId: "sunhuai", emotion: "平静" }),
+      "utf-8",
+    );
+
+    const envelope = await buildWriterContext({
+      projectDir,
+      chapter: 8,
+      chapterGoal: "追查矿藏失踪。",
+      maxTimelineEvents: 3,
+    });
+    const failures = envelope.sections.find((s) => s.name === "read_failures")?.content as
+      | { failures: readonly string[] }
+      | undefined;
+    expect(failures?.failures.join(" ")).toContain("sunhuai");
+    expect(failures?.failures.join(" ")).toContain("profile.json");
+  });
 });
 
 async function createFixtureProject(): Promise<string> {

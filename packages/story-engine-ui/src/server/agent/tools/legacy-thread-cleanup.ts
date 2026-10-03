@@ -16,6 +16,7 @@ import { isQualityLead, bigramSimilarity, readThreadPool } from "@actalk/story-e
 import type { NarrativeThread } from "@actalk/story-engine";
 
 import { writeFileAtomic } from "../../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsThreadCleanup } from "./turn-intent-gate.js";
@@ -200,7 +201,7 @@ export async function runCleanLegacyThreads(projectDir: string): Promise<CleanLe
   } catch (error) {
     return {
       ok: false,
-      summary: `读取 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `读取 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -223,7 +224,7 @@ export async function runCleanLegacyThreads(projectDir: string): Promise<CleanLe
   } catch (error) {
     return {
       ok: false,
-      summary: `写回 threads.json 失败：${error instanceof Error ? error.message : String(error)}`,
+      summary: `写回 threads.json 失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
