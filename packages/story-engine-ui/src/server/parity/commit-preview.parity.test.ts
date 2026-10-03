@@ -35,8 +35,8 @@ import type { CommitQualityReport } from "@actalk/story-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// LLM 边界 mock：声明模型（callOpenAICompatibleChatModel）默认吐非 JSON → 声明降级 undefined，
-// 此时工具预览退化为与 HTTP 路完全同源的「引擎正则」计划（两侧计划应当深相等）。
+// LLM 边界 mock：声明模型（streamChatModelToText·流式空闲超时，2026-10-02 起不再走非流式固定死表）默认吐非 JSON
+// → 声明降级 fallback，此时工具预览退化为与 HTTP 路完全同源的「引擎正则」计划（两侧计划应当深相等）。
 // quality-judge 的 AI 判定层换成确定性透传桩（并记录调用次数，供 D6 锁定）。
 // ---------------------------------------------------------------------------
 const llmMocks = vi.hoisted(() => ({
@@ -80,13 +80,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetCommitPreviewStore();
   llmMocks.resolveConfiguredChatModel.mockImplementation(async () => fakeResolvedChatModel());
-  // 默认：声明模型吐非 JSON → declareChapterDelta 降级 undefined（等价 HTTP 路的纯正则计划）。
+  // 默认：声明模型吐非 JSON → 声明降级 fallback（等价 HTTP 路的纯正则计划）。
   llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({
-    content: "（声明模型乱吐，没有 JSON）",
+    content: "",
     raw: "",
     response: { ok: true, status: 200 },
   });
-  llmMocks.streamChatModelToText.mockResolvedValue({ content: "", thinking: "" });
+  llmMocks.streamChatModelToText.mockResolvedValue({ content: "（声明模型乱吐，没有 JSON）", thinking: "" });
   judgeMocks.judgeDraftQualityWithModel.mockImplementation(
     async ({ deterministicQuality }: { readonly deterministicQuality: CommitQualityReport }) => ({
       ...deterministicQuality,
@@ -104,13 +104,18 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     // D6（judge 策略参数）：HTTP 预览用默认真判定、调了 2 次 AI 判定（草稿 + 语义计划）；此刻工具还没跑，先锁 HTTP 侧。
     expect(judgeMocks.judgeDraftQualityWithModel).toHaveBeenCalledTimes(2);
     // D7（declarationChannel 策略参数）：HTTP 预览不传通道，没有声明模型调用。
+    expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
     expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
 
     const tool = await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir });
     // D6 另一侧：工具预览注入透传桩，全程不调 AI 判定（仍是 2 次，没有新增）。
     expect(judgeMocks.judgeDraftQualityWithModel).toHaveBeenCalledTimes(2);
-    // D7 另一侧：工具预览带声明通道、调了 1 次声明模型（本用例它吐非 JSON → 声明降级 undefined，等价纯正则）。
-    expect(llmMocks.callOpenAICompatibleChatModel).toHaveBeenCalledTimes(1);
+    // D7 另一侧：工具预览带声明通道、调了 1 次声明模型（流式空闲超时路；本用例它吐非 JSON → 声明降级 fallback，等价纯正则）。
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(1);
+    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+    // P1：降级对用户不静默——工具输出标 fallback、summary 带固定提示。
+    expect(tool.declarationStatus).toBe("fallback");
+    expect(String(tool.summary)).toContain("【章节语义声明未生效】");
 
     // ok 契约与门禁结论
     expect(route.statusCode).toBe(200);
@@ -205,10 +210,9 @@ describe("parity: commit_preview 对拍——显式策略分歧（declarationCha
     const projectDir = await makeParityProject("commit-preview-declare-");
     // 正文用不重复句子的稿子，声明 quote 逐字取自正文（引擎 verifyChapterDelta 要逐字证据）。
     await writeParityDraft(projectDir, 1, parityDraftFileText(1, PARITY_CLEAN_BODY));
-    llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({
+    llmMocks.streamChatModelToText.mockResolvedValue({
       content: JSON.stringify({ mainEvent: { summary: "林远从老王手里接过账册并决定查下去", quote: P1 } }),
-      raw: "",
-      response: { ok: true, status: 200 },
+      thinking: "",
     });
 
     const route = await callRoute(registerCommitRoutes, "POST", "/api/commit/preview", { projectPath: projectDir, chapter: 1 });
@@ -223,5 +227,7 @@ describe("parity: commit_preview 对拍——显式策略分歧（declarationCha
     expect(routePlanText).not.toContain("林远从老王手里接过账册并决定查下去");
     // 票据缓存了声明（供 commit_apply 复用、不重复调模型）。
     expect(findCommitPreview(projectDir, 1)?.declaration?.mainEvent?.summary).toBe("林远从老王手里接过账册并决定查下去");
+    expect(tool.declarationStatus).toBe("model");
+    expect(String(tool.summary)).not.toContain("【章节语义声明未生效】");
   });
 });

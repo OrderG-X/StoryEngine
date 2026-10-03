@@ -24,7 +24,7 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
 
 const { loadModelSettingsV0 } = storyEngineMocks;
 
@@ -156,6 +156,62 @@ describe("streamOpenAICompatibleResponse onActivity（每收到一块字节就�
     expect(deltas).toEqual(["正文A", "正文B"]);
     expect(thinks).toEqual(["想…"]);
     expect(activity).toBeGreaterThan(0);
+    expect(out.finishReason).toBeUndefined();
+  });
+
+  it("流中途的 error 帧（OpenAI 形 {error:{message}}）→ 抛「模型返回错误：…」，不再当 keepalive 吞掉", async () => {
+    const response = sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "半截" } }] })}\n\n`,
+      `data: ${JSON.stringify({ error: { message: "upstream overloaded", type: "server_error", code: 503 } })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    await expect(streamOpenAICompatibleResponse(response, () => undefined)).rejects.toThrow("模型返回错误：upstream overloaded");
+  });
+
+  it("error 帧为字符串 / 只有 code 没有 message → 仍抛错且文案不为空", async () => {
+    await expect(streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: "rate limited" })}\n\n`]), () => undefined))
+      .rejects.toThrow("模型返回错误：rate limited");
+    await expect(streamOpenAICompatibleResponse(sseResponse([`data: ${JSON.stringify({ error: { code: 429 } })}\n\n`]), () => undefined))
+      .rejects.toThrow("模型返回错误：429");
+  });
+
+  it("末帧 finish_reason 被记录（stop / length），中间帧的 null 不覆盖", async () => {
+    const stopped = await streamOpenAICompatibleResponse(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "A" }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]), () => undefined);
+    expect(stopped.content).toBe("A");
+    expect(stopped.finishReason).toBe("stop");
+
+    const truncated = await streamOpenAICompatibleResponse(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "B" }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`,
+    ]), () => undefined);
+    expect(truncated.finishReason).toBe("length");
+  });
+
+  it("没有换行收尾的末帧也被读到（finish_reason 不漏）", async () => {
+    const out = await streamOpenAICompatibleResponse(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "C" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "content_filter" }] })}`,
+    ]), () => undefined);
+    expect(out.content).toBe("C");
+    expect(out.finishReason).toBe("content_filter");
+  });
+});
+
+describe("isTruncatedFinishReason / describeTruncatedFinish（只认公认截断枚举，陌生值不当失败）", () => {
+  it("length / content_filter / max_tokens / truncated（大小写不敏感）为截断；stop / end_turn / tool_calls / 空 不是", () => {
+    for (const bad of ["length", "LENGTH", "content_filter", "max_tokens", "truncated"]) expect(isTruncatedFinishReason(bad)).toBe(true);
+    for (const ok of ["stop", "end_turn", "tool_calls", "", undefined]) expect(isTruncatedFinishReason(ok)).toBe(false);
+  });
+
+  it("文案含 finish_reason 与已收字数；全空时说明「一个字都没出」", () => {
+    expect(describeTruncatedFinish("length", 120)).toMatch(/finish_reason=length/u);
+    expect(describeTruncatedFinish("length", 120)).toMatch(/120 字/u);
+    expect(describeTruncatedFinish("length", 0)).toMatch(/一个字都没出/u);
+    expect(describeTruncatedFinish("content_filter", 5)).toMatch(/内容过滤/u);
   });
 });
 
@@ -382,6 +438,48 @@ describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆�
     const out = await streamChatModelToText({ configured: streamConfigured(false), messages: [], onDelta: (d) => deltas.push(d) });
     expect(deltas).toEqual(["甲", "乙"]);
     expect(out.content).toBe("甲乙");
+    spy.mockRestore();
+  });
+
+  it("上游 200 但流里塞 error 帧 → 抛「模型返回错误」而不是返回半截正文（与非流式 parseFirstChoiceContent 对齐）", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "半截" } }] })}\n\n`,
+      `data: ${JSON.stringify({ error: { message: "context length exceeded" } })}\n\n`,
+    ]));
+    await expect(streamChatModelToText({ configured: streamConfigured(false), messages: [] }))
+      .rejects.toThrow("模型返回错误：context length exceeded");
+    spy.mockRestore();
+  });
+
+  it("末帧 finish_reason=length → 抛截断错（半截正文不当完整结果）；=stop 正常返回并带回 finishReason", async () => {
+    const truncatedSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "正文…" }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]));
+    await expect(streamChatModelToText({ configured: streamConfigured(false), messages: [] }))
+      .rejects.toThrow(/被截断.*finish_reason=length/u);
+    truncatedSpy.mockRestore();
+
+    const okSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "完整" }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]));
+    const out = await streamChatModelToText({ configured: streamConfigured(false), messages: [] });
+    expect(out.content).toBe("完整");
+    expect(out.finishReason).toBe("stop");
+    okSpy.mockRestore();
+  });
+
+  it("陌生的非 stop finish_reason（如 end_turn）不当失败——模型无关，不赌陌生网关的枚举", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "end_turn" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]));
+    const out = await streamChatModelToText({ configured: streamConfigured(false), messages: [] });
+    expect(out.content).toBe("ok");
+    expect(out.finishReason).toBe("end_turn");
     spy.mockRestore();
   });
 });

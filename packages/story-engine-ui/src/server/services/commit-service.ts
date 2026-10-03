@@ -108,7 +108,48 @@ export type CommitPreviewDeclareDelta = (input: {
   readonly establishedNames?: readonly string[];
   readonly openGoalTitles?: readonly string[];
   readonly previousChapterEnding?: string;
-}) => Promise<ChapterDeltaDeclaration | undefined>;
+}) => Promise<ChapterDeltaDeclaration | ChapterDeltaDeclarationOutcome | undefined>;
+
+/** 章节语义声明这一步的结果：model=模型声明已拿到、喂给引擎做证据校验；fallback=没拿到，本章按确定性规则（正则）兜底。 */
+export type ChapterDeltaDeclarationStatus = "model" | "fallback";
+
+/**
+ * 章节语义声明的「状态 + 原因」。治 ChapterDelta 静默退化（真机 6/20 章无声回退正则、日志零痕迹、用户不知情）：
+ * 预览/入库结果都带着它，工具层据此在给用户看的 summary 里明说「本章语义声明未生效、按确定性规则兜底」。
+ * reason 是给人看的一句话（不含草稿正文；可能含上游错误摘要，进用户文案前由工具层消毒）。
+ */
+export interface ChapterDeltaDeclarationOutcome {
+  readonly status: ChapterDeltaDeclarationStatus;
+  readonly declaration?: ChapterDeltaDeclaration;
+  readonly reason?: string;
+}
+
+function isDeclarationOutcome(value: unknown): value is ChapterDeltaDeclarationOutcome {
+  if (!value || typeof value !== "object") return false;
+  const status = (value as { readonly status?: unknown }).status;
+  return status === "model" || status === "fallback";
+}
+
+/** 把 declareDelta 的三种返回形态（裸声明 / 带状态结果 / undefined）归一成带状态结果（向后兼容旧注入实现）。 */
+export function normalizeDeclarationOutcome(value: ChapterDeltaDeclaration | ChapterDeltaDeclarationOutcome | undefined): ChapterDeltaDeclarationOutcome {
+  if (value === undefined || value === null) {
+    return { status: "fallback", reason: "声明模型没有返回可解析的章节语义" };
+  }
+  if (isDeclarationOutcome(value)) {
+    if (value.status === "model" && !value.declaration) {
+      return { status: "fallback", reason: value.reason ?? "声明模型没有返回可解析的章节语义" };
+    }
+    return value;
+  }
+  return { status: "model", declaration: value };
+}
+
+/** 工具/路由两侧共用：fallback 原因里的异常文本截短（不含草稿正文，但上游错误可能很长）。 */
+export function describeDeclarationFailure(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).trim();
+  const compact = message.replace(/\s+/gu, " ");
+  return `声明模型调用失败：${compact.length > 160 ? `${compact.slice(0, 160)}…` : compact || "未知错误"}`;
+}
 
 /**
  * D7 显式策略：章节语义声明通道。工具路传（含声明上下文收集：已确立角色名册进计划、
@@ -138,6 +179,8 @@ export type CommitPreviewServiceResult =
     readonly draftContent: string;
     /** 预览阶段算好的章节语义声明（工具路随 previewToken 缓存供 apply 复用；路由路恒无）。 */
     readonly declaration?: ChapterDeltaDeclaration;
+    /** 声明这一步的状态+原因；只有带 declareDelta 通道的调用方（工具路）才有，路由路无通道=undefined。 */
+    readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
     readonly commitPlan: BuildCommitPlanResult;
     /** 判定层产出（路由=AI 判定后；工具=确定性透传）。 */
     readonly draftQuality: CommitQualityReport;
@@ -172,6 +215,7 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
   // 写前校验；上一章结尾供衔接判断。读失败 → 空，绝不阻断预览。
   const channel = input.declarationChannel;
   let declaration: ChapterDeltaDeclaration | undefined;
+  let declarationOutcome: ChapterDeltaDeclarationOutcome | undefined;
   let establishedCharacterNames: readonly string[] = [];
   if (channel) {
     establishedCharacterNames = await readEstablishedCharacterNames(projectDir, chapter);
@@ -182,21 +226,25 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
           readOpenThreadTitles(projectDir),
           readOpenArcGoalTitles(projectDir),
         ]);
-        declaration = await channel.declareDelta({
+        declarationOutcome = normalizeDeclarationOutcome(await channel.declareDelta({
           chapter,
           draft: draftContent,
           openThreadTitles,
           ...(establishedCharacterNames.length > 0 ? { establishedNames: establishedCharacterNames } : {}),
           ...(openGoalTitles.length > 0 ? { openGoalTitles } : {}),
           ...(previousChapterEnding ? { previousChapterEnding } : {}),
-        });
+        }));
       } catch (error) {
-        // 回退正则是设计内降级，但完全无痕会让声明模型持续挂掉而无人察觉（ChapterDelta 静默退化）——
-        // 留一条 warn（章节号 + 错误摘要，不含草稿正文），行为不变只是留痕。
+        // 回退正则是设计内降级（ChapterDelta 不回退到纯正则猜结构，只是本章兜底），但绝不静默：
+        // 状态+原因随结果带出，工具层会在给用户看的 summary 里明说；server 日志同时留痕。
         console.warn(
           `[chapter-delta] ch${chapter} 声明通道调用失败，回退引擎正则：${error instanceof Error ? error.message : String(error)}`,
         );
-        declaration = undefined;
+        declarationOutcome = { status: "fallback", reason: describeDeclarationFailure(error) };
+      }
+      declaration = declarationOutcome.declaration;
+      if (declarationOutcome.status === "fallback") {
+        console.warn(`[chapter-delta] ch${chapter} 声明未生效，本章按确定性规则兜底：${declarationOutcome.reason ?? "原因未知"}`);
       }
     }
   }
@@ -230,6 +278,7 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
     draftPath,
     draftContent,
     ...(declaration ? { declaration } : {}),
+    ...(declarationOutcome ? { declarationOutcome } : {}),
     commitPlan,
     draftQuality,
     ...(semanticQuality ? { semanticQuality } : {}),
@@ -440,6 +489,8 @@ export interface CommitApplyPreviewTicketStore {
     readonly token: string;
     readonly draftHash: string;
     readonly declaration?: ChapterDeltaDeclaration;
+    /** 预览阶段声明步骤的状态+原因（旧票据可能没有：按「有声明=model / 无声明=fallback」推断）。 */
+    readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
   } | undefined;
   readonly verify: (input: {
     readonly projectDir: string;
@@ -530,6 +581,8 @@ export type CommitApplyServiceResult =
     /** 入库后 overview（刷新失败：HTTP 路=null + warnings 带文案；工具路=undefined 静默）。 */
     readonly overview: StateOverview | null | undefined;
     readonly warnings: readonly string[];
+    /** 工具路专属：入库用的章节语义声明状态（fallback=本章按确定性规则兜底，工具层须折进 summary 明说）。 */
+    readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
     /** HTTP 路专属：与持久回执里逐字同源的成功响应体（重放一致性靠它锁住）。 */
     readonly httpPayload?: CommitApplySuccessPayload;
   };
@@ -622,6 +675,7 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
 
   // ── 工具机制外皮（写盘前）：A7 幂等探测 → 票据守卫 → 取预览缓存声明。 ──
   let cachedDeclaration: ChapterDeltaDeclaration | undefined;
+  let declarationOutcome: ChapterDeltaDeclarationOutcome | undefined;
   if (policy.kind === "agent_preview_ticket") {
     // A7 幂等探测：断流后重试（实际已入库、token 已被消费）→ 该章已入库且正文与当前草稿一致，
     // 直接幂等回报「已入库」，不因 token 蒸发误报「尚未预览」、也不重复写入。放在守卫之前。
@@ -653,8 +707,22 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     if (!guard.ok) {
       return { kind: "preview_guard_refused", chapter, failure: guard.failure ?? "no_preview" };
     }
-    // 复用预览阶段算好的章节语义声明（不重复调模型）；取不到（进程重启/凭 token 无状态放行）→ undefined，引擎走正则回退。
-    cachedDeclaration = policy.previewStore.find(projectDir, chapter)?.declaration;
+    // 复用预览阶段算好的章节语义声明（不重复调模型）；取不到（进程重启/凭 token 无状态放行）→ 引擎走正则回退，
+    // 但状态+原因随结果带出（工具层折进 summary），绝不让「票据里没声明」变成用户看不见的静默退化。
+    const ticket = policy.previewStore.find(projectDir, chapter);
+    cachedDeclaration = ticket?.declaration;
+    if (!ticket) {
+      declarationOutcome = { status: "fallback", reason: "预览票据里取不到章节语义声明（进程重启或凭令牌无状态放行），本次入库按确定性规则兜底" };
+    } else if (ticket.declarationOutcome) {
+      declarationOutcome = ticket.declarationOutcome;
+    } else {
+      declarationOutcome = cachedDeclaration
+        ? { status: "model", declaration: cachedDeclaration }
+        : { status: "fallback", reason: "预览阶段没有拿到章节语义声明" };
+    }
+    if (declarationOutcome.status === "fallback") {
+      console.warn(`[chapter-delta] ch${chapter} 入库阶段声明未生效，按确定性规则兜底：${declarationOutcome.reason ?? "原因未知"}`);
+    }
   }
 
   const commitPlan = await buildCommitPlanFromProject({
@@ -786,7 +854,8 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
   }
   // 入库成功：消费 token，防止用同一 token 重复入库。
   policy.previewStore.consume(projectDir, chapter);
-  return buildCommittedResult({ projectDir, chapter, draftContent, report, overviewFailure: "swallow" });
+  const committed = await buildCommittedResult({ projectDir, chapter, draftContent, report, overviewFailure: "swallow" });
+  return { ...committed, ...(declarationOutcome ? { declarationOutcome } : {}) };
 }
 
 /**

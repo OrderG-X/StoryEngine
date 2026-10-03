@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateOverview } from "../api/types.js";
 import { mockWorkspaceData } from "../mockData.js";
 import { useWorkspaceStore } from "../stores/workspaceStore.js";
@@ -10,6 +10,9 @@ import { renameChatSession } from "../api/chatSessionsClient.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
+import { __resetAutosaveControlForTest, isAutosaveSuspended } from "../utils/autosaveControl.js";
+import { __setPageReloaderForTest } from "../utils/pageReload.js";
+import { __resetRecentWorkspaceUndoForTest, hasRecentWorkspaceUndo } from "../utils/workspaceRevisionConflict.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -1039,5 +1042,126 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     // 不被「操作未完成」盖掉：停止回合的半截文本原样保留。
     expect(agentMessage.content).toBe("第3章正文已经写好了，接下来");
     expect(agentMessage.content).not.toContain("没有检测到");
+  });
+});
+
+// P2（2026-10-02）agent 路 undo_last_change 真撤销 × autosave：服务端 git 已回退磁盘，但内存里仍是撤销前旧稿；
+// 此前靠 350ms autosave 把旧稿 PUT 回去 → 服务端 409 → 「另一窗口」误导 toast → reload 兜底。
+// 现在显式：undone=true 即冻结 autosave → 排空在途 → 读磁盘真值接管草稿/revision → 回合收尾整页重载。
+describe("useChat agent undo_last_change × autosave（P2）", () => {
+  const reloads: number[] = [];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    resetStore();
+    __resetAutosaveControlForTest();
+    __resetRecentWorkspaceUndoForTest();
+    reloads.length = 0;
+    __setPageReloaderForTest(() => { reloads.push(Date.now()); });
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+  });
+  afterEach(() => {
+    __setPageReloaderForTest(null);
+    __resetAutosaveControlForTest();
+    __resetRecentWorkspaceUndoForTest();
+  });
+
+  it("undone=true：先冻结 autosave，再用磁盘真值替掉内存旧稿、对齐 revision，回合收尾整页重载", async () => {
+    const staleInMemory = "撤销前内存里那版很长的旧稿，绝不能被 autosave 写回磁盘。";
+    const diskAfterUndo = "磁盘回退后的更早版本。";
+    useWorkspaceStore.getState().updateDraft({ content: staleInMemory, savedContent: staleInMemory, title: "旧标题", status: "draft" });
+    useWorkspaceStore.getState().updateWorkspace({ flowStatus: "draft_ready" });
+    useWorkspaceStore.getState().setWorkspaceRevision(12);
+    let autosaveSuspendedAtToolResult: boolean | null = null;
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "undo_last_change", toolCallId: "u1" });
+      handlers.onToolResult({
+        toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。",
+        refreshScope: "full", overview: makeOverview("T"),
+      });
+      // 工具回执一落地就应已冻结（在任何 overview 刷新 / 后续 autosave 之前）。
+      autosaveSuspendedAtToolResult = isAutosaveSuspended();
+      handlers.onTextDelta("已撤销上一步「出稿」。");
+      handlers.onDone();
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [],
+      flowStatus: "draft_ready", draftContent: diskAfterUndo, draftTitle: "回退后的标题",
+      hasDraftFile: true, hasCommittedChapter: false, revision: 7,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
+
+    expect(autosaveSuspendedAtToolResult).toBe(true);
+    expect(isAutosaveSuspended()).toBe(true); // 直到 reload 都不解冻
+    expect(hasRecentWorkspaceUndo()).toBe(true); // 若服务端此刻仍 409，toast 文案走「撤销」而非「另一窗口」
+    expect(mockedFetchChapterWorkspace).toHaveBeenCalledWith(
+      { projectPath: "/tmp/story-engine-agent", chapter: 3 },
+      expect.any(AbortSignal),
+    );
+    const state = useWorkspaceStore.getState();
+    expect(state.workspace.draft).toMatchObject({
+      chapterNumber: 3, title: "回退后的标题", content: diskAfterUndo, savedContent: diskAfterUndo, status: "draft",
+    });
+    expect(state.workspace.draft.content).not.toContain("旧稿");
+    expect(state.workspaceRevision).toBe(7);
+    expect(state.workspace.flowStatus).toBe("draft_ready");
+    // 回合收尾才重载（agent 收尾文本不被截断），且重载前打了「优先 sessionStorage 对话」标记。
+    expect(reloads).toHaveLength(1);
+    expect(window.sessionStorage.getItem("se-undo-prefer-session")).toBe("1");
+    expect(lastAssistant()?.content).toBe("已撤销上一步「出稿」。");
+  });
+
+  it("undone=true 且磁盘上已无草稿（撤到「还没写过」）→ 正文清空而不是留着内存旧稿", async () => {
+    useWorkspaceStore.getState().updateDraft({ content: "内存旧稿", savedContent: "内存旧稿", status: "draft" });
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onDone();
+    });
+    mockedFetchChapterWorkspace.mockResolvedValue({
+      chapter: 3, messages: [], selectedAdviceCardKeys: [], hasDraftFile: false, hasCommittedChapter: false, revision: 2,
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销"); });
+
+    expect(useWorkspaceStore.getState().workspace.draft.content).toBe("");
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("idle");
+    expect(useWorkspaceStore.getState().workspaceRevision).toBe(2);
+    expect(reloads).toHaveLength(1);
+  });
+
+  it("undone=false（没东西可撤）→ 不冻结、不读盘、不重载", async () => {
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: false, summary: "没有可撤销的改动。" });
+      handlers.onTextDelta("当前没有可撤销的改动。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销"); });
+
+    expect(isAutosaveSuspended()).toBe(false);
+    expect(hasRecentWorkspaceUndo()).toBe(false);
+    expect(mockedFetchChapterWorkspace).not.toHaveBeenCalled();
+    expect(reloads).toHaveLength(0);
+  });
+
+  it("读盘失败 → 仍保持冻结并重载（旧稿绝不写回；reload 后从磁盘重建）", async () => {
+    useWorkspaceStore.getState().updateDraft({ content: "内存旧稿", savedContent: "内存旧稿", status: "draft" });
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "undo_last_change", toolCallId: "u1", ok: true, undone: true, summary: "已撤销上一步「出稿」。" });
+      handlers.onDone();
+    });
+    mockedFetchChapterWorkspace.mockRejectedValue(new Error("网络抖动"));
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销"); });
+
+    expect(isAutosaveSuspended()).toBe(true);
+    expect(reloads).toHaveLength(1);
+    expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
   });
 });

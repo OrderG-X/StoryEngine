@@ -21,13 +21,15 @@ import {
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
-import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
 import { writeTool } from "../withSnapshot.js";
 import { readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   runCommitApply,
+  type ChapterDeltaDeclarationOutcome,
+  type ChapterDeltaDeclarationStatus,
   type CommitApplyPreviewTicketStore,
 } from "../../services/commit-service.js";
 import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from "./uncarded-character-memo.js";
@@ -64,6 +66,10 @@ const outputSchema = z.object({
   summary: z.string().describe("定稿结果的自然语言摘要。"),
   refreshScope: z.literal("full"),
   chapter: z.number().int().positive().optional().describe("本次定稿的章号。"),
+  declarationStatus: z.enum(["model", "fallback"]).optional().describe(
+    "本次定稿用的章节语义声明来源：model=模型声明已生效；fallback=没拿到声明、本章按确定性规则兜底（summary 里已有【章节语义声明未生效】提示，须如实转达）。",
+  ),
+  declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案）。"),
 });
 
 const GUARD_FAILURE_MESSAGE: Record<CommitPreviewGuardFailure, string> = {
@@ -86,6 +92,9 @@ export interface CommitApplyToolOutput {
   readonly summary: string;
   readonly refreshScope: "full";
   readonly chapter?: number;
+  /** 定稿成功时：章节语义声明来源（fallback=本章按确定性规则兜底，summary 已明说）。 */
+  readonly declarationStatus?: ChapterDeltaDeclarationStatus;
+  readonly declarationReason?: string;
 }
 
 // 角色候选自动登记（convertCandidatesToMatrixUpdates）已于 2026-06-24 移除：
@@ -174,6 +183,9 @@ export async function applyCommitToolLogic(input: {
       const updatedNames = (overview?.characterMatrix.characters ?? [])
         .filter((c) => updatedIdSet.has(c.id))
         .map((c) => c.name);
+      // 章节语义声明未生效（预览没拿到 / 票据里取不到）→ 定稿仍成功，但必须在用户可见摘要里明说「本章是兜底结果」。
+      const nameById = new Map((overview?.characterMatrix.characters ?? []).map((c) => [c.id, c.name]));
+      const declarationNotice = describeDeclarationFallback(result.declarationOutcome, nameById);
       return {
         ok: true,
         committed: true,
@@ -191,10 +203,15 @@ export async function applyCommitToolLogic(input: {
             }。改动已建立存档点，可一键撤销。`,
             report,
           ),
+          declarationNotice,
           buildThreadMaintenanceNote(overview),
         ].filter(Boolean).join("\n"),
         refreshScope: "full",
         chapter,
+        ...(result.declarationOutcome ? { declarationStatus: result.declarationOutcome.status } : {}),
+        ...(declarationNotice && result.declarationOutcome?.reason
+          ? { declarationReason: scrubBareEntityIdsFromText(result.declarationOutcome.reason, nameById) }
+          : {}),
       };
     }
     default:
@@ -287,18 +304,26 @@ export function appendNewCharactersToSummary(summary: string, newCharacters: rea
 }
 
 /**
+ * 硬事实抽取的空闲窗口（不是总时长上限）：入库回报用户在等，比审稿/质检的 90s 收紧；
+ * 但只要模型还在吐字节就续命——旧 20s 固定死表在长章（5k+ 字 prompt）上掐在正常分布里，抽不到就「这章硬事实没抽成」。
+ */
+export const FACT_EXTRACTION_IDLE_TIMEOUT_MS = 30_000;
+
+/**
  * 用用户配置的模型做一次 JSON 输出调用（结算搭车在硬事实抽取上）。
  * 强制关思考：结算只机械抽 JSON、不需推理链——不跟随任务旁路默认，
- * 否则推理模型先吐 6~9k 思考 token 拖慢入库回报。短超时（20s）：抽不到就算了（非致命）。
+ * 否则推理模型先吐 6~9k 思考 token 拖慢入库回报。走 streamChatModelToText 空闲超时（2026-10-02 P2）：
+ * 有字节就续命、无总时长上限、一律不传 max_tokens；抽不到仍非致命（fact-ledger 收成 ok=false 如实回报）。
  */
-const callConfiguredFactModel: FactCallModel = async (messages) => {
+export const callConfiguredFactModel: FactCallModel = async (messages) => {
   const configured = await resolveConfiguredChatModel("chapterSteering");
-  const { content } = await callOpenAICompatibleChatModel({
+  const { content } = await streamChatModelToText({
     configured: { ...configured, thinking: false },
     messages: messages.map((message) => ({ role: message.role, content: message.content })),
     responseFormat: { type: "json_object" },
-    timeoutMs: 20000,
+    idleTimeoutMs: FACT_EXTRACTION_IDLE_TIMEOUT_MS,
   });
+  if (!content.trim()) throw new Error("硬事实抽取模型返回了空内容。");
   return content;
 };
 
@@ -395,4 +420,22 @@ export function scrubBareEntityIdsFromText(text: string, nameById: ReadonlyMap<s
       if (name) return name;
       return BARE_ENTITY_ID_PLACEHOLDER[prefix.toLowerCase()] ?? "「内部条目」";
     });
+}
+
+/** 用户可见的「声明未生效」固定提示（commit_preview / commit_apply 两处同款，便于前端与测试对齐）。 */
+export const DECLARATION_FALLBACK_NOTICE = "【章节语义声明未生效】本章按确定性规则兜底";
+
+/**
+ * 把章节语义声明状态翻成给用户看的一句（fallback 才有；model → undefined）。
+ * reason 可能含上游错误原文（模型/网关可控字段），进用户文案前双消毒（裸 id / 本地绝对路径）。
+ * 治 ChapterDelta 静默退化：声明没拿到时用户必须看得见「本章是兜底结果」，而不是和正常章一样一句「已定稿」。
+ */
+export function describeDeclarationFallback(
+  outcome: ChapterDeltaDeclarationOutcome | undefined,
+  nameById: ReadonlyMap<string, string>,
+): string | undefined {
+  if (!outcome || outcome.status !== "fallback") return undefined;
+  const reason = outcome.reason?.trim();
+  const safeReason = reason ? scrubBareEntityIdsFromText(reason, nameById) : "";
+  return `${DECLARATION_FALLBACK_NOTICE}${safeReason ? `（${safeReason}）` : ""}。`;
 }

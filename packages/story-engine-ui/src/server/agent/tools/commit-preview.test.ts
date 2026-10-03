@@ -13,11 +13,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // 避免 execute 测试依赖网络变 flaky/超时。纯逻辑测试直接给 buildCommitPreviewToolOutput 传假 declareDelta，不受影响。
 vi.mock("./chapter-delta-declaration.js", () => ({
   declareChapterDelta: vi.fn(async () => undefined),
+  declareChapterDeltaWithStatus: vi.fn(async () => ({ status: "fallback", reason: "单测桩：未启用声明模型" })),
   callConfiguredDeclareModel: vi.fn(async () => "{}"),
 }));
 
 import { buildProjectRequestContext } from "../request-context.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
+import { DECLARATION_FALLBACK_NOTICE } from "./commit-apply.js";
 import { __resetCommitPreviewStore, findCommitPreview } from "./commit-preview-store.js";
 import { buildCommitPreviewToolOutput, commitPreviewTool } from "./commit-preview.js";
 
@@ -262,15 +264,67 @@ describe("commit_preview", () => {
     expect(out.canCommit).toBe(true);
     expect(out.previewToken).toBeTruthy();
     expect(findCommitPreview(projectDir, 1)?.declaration).toBeUndefined();
+    // P1（2026-10-02）：降级不再对用户静默——状态 + 原因进工具输出，summary 固定带【章节语义声明未生效】。
+    expect(out.declarationStatus).toBe("fallback");
+    expect(out.declarationReason).toContain("模型超时");
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(out.summary).toContain("模型超时");
+    expect(out.modelHint).toContain("如实转达");
+    expect(findCommitPreview(projectDir, 1)?.declarationOutcome?.status).toBe("fallback");
+  });
+
+  it("declareDelta 返回 undefined（坏 JSON 解析失败）→ declarationStatus=fallback，summary 带提示", async () => {
+    const projectDir = await makeProject("声明解析失败", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1, declareDelta: async () => undefined });
+    expect(out.canCommit).toBe(true);
+    expect(out.declarationStatus).toBe("fallback");
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+  });
+
+  it("declareDelta 返回带状态结果 {status:'fallback', reason} → 原因原样透传（经消毒）", async () => {
+    const projectDir = await makeProject("声明带状态", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({ status: "fallback", reason: "声明模型调用失败：/Users/x/y char-deadbeef 500" }),
+    });
+    expect(out.declarationStatus).toBe("fallback");
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(out.summary).not.toContain("/Users/x");
+    expect(out.summary).not.toMatch(/char-deadbeef/u);
+  });
+
+  it("declareDelta 返回合法声明 → declarationStatus=model，summary 不带兜底提示", async () => {
+    const projectDir = await makeProject("声明成功", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({
+        chapter: 1,
+        mainEvent: { summary: "林远掂量账册", quote: "林远在会议室外停下脚步" },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      }),
+    });
+    expect(out.declarationStatus).toBe("model");
+    expect(out.declarationReason).toBeUndefined();
+    expect(out.summary).not.toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(findCommitPreview(projectDir, 1)?.declarationOutcome?.status).toBe("model");
   });
 
   // 阶段 4·向后兼容：不传 declareDelta（纯逻辑路径）→ 不调模型、record 无 declaration。
-  it("不传 declareDelta → record 无 declaration（旧行为）", async () => {
+  it("不传 declareDelta → record 无 declaration（旧行为），如实标为 fallback", async () => {
     const projectDir = await makeProject("无声明通道", "林远");
     await writeDraft(projectDir, 1, longDraft(1, "林远"));
     const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
     expect(out.canCommit).toBe(true);
     expect(findCommitPreview(projectDir, 1)?.declaration).toBeUndefined();
+    expect(out.declarationStatus).toBe("fallback");
   });
 
   // 修复①（真机验收发现·治线索堆积）：预览把现有未决线索标题喂给声明模型，让它回收时对号入座、不再每章重埋。

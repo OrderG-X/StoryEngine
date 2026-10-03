@@ -25,12 +25,57 @@ export interface StandaloneServerOptions {
   readonly port?: number;
 }
 
+export interface StandaloneServerCloseOptions {
+  /**
+   * 给「仍在处理中」的连接多少毫秒排空（如 pagehide keepalive 保存刚抵达、server 还在写盘）；超时后强制断开。
+   * 默认 0 = 立即断开全部连接。空闲 keep-alive 连接任何情况下都立即关掉。
+   */
+  readonly graceMs?: number;
+}
+
 export interface StandaloneServerHandle {
   readonly server: Server;
   readonly host: string;
   readonly port: number;
   readonly url: string;
-  close(): Promise<void>;
+  /**
+   * 关闭 server：停止接受新连接 + **主动断开既有连接**后 resolve。
+   *
+   * why（P2·2026-10-02）：`http.Server#close()` 只停监听，要等所有既有连接自然结束才回调；agent 聊天是长连接 SSE
+   * （思考 + 多轮工具调用可持续数分钟），桌面壳 Cmd+Q 时若正在流式出稿，`before-quit` 等 close() 会一直挂着不退。
+   * 现在：close() → closeIdleConnections() 立即收掉空闲 keep-alive → （graceMs 后）closeAllConnections() 掐掉在飞的
+   * SSE/请求 → close 回调才能到达。被掐断的 SSE 只是断流，不是数据损坏：写盘路径都在 server 端持锁、有快照。
+   */
+  close(options?: StandaloneServerCloseOptions): Promise<void>;
+}
+
+/** 内部：把 Node ≥18.2 才有的连接收割 API 做成可选调用（旧运行时无此方法时退化为只停监听）。 */
+function teardownConnections(server: Server, mode: "idle" | "all"): void {
+  const target = server as Server & {
+    closeIdleConnections?: () => void;
+    closeAllConnections?: () => void;
+  };
+  if (mode === "idle") target.closeIdleConnections?.();
+  else target.closeAllConnections?.();
+}
+
+/** 可单测的 close 实现：listen 中的 server → 停监听 + 收割连接，既有 SSE 长连接在 graceMs 后被强制断开。 */
+export function closeStandaloneServer(server: Server, options: StandaloneServerCloseOptions = {}): Promise<void> {
+  const graceMs = Math.max(0, Number.isFinite(options.graceMs) ? Number(options.graceMs) : 0);
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    server.close((error) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    });
+    teardownConnections(server, "idle");
+    if (graceMs === 0) {
+      teardownConnections(server, "all");
+    } else {
+      timer = setTimeout(() => teardownConnections(server, "all"), graceMs);
+    }
+  });
 }
 
 /** 起一个独立 server：挂全部 /api 路由 + 服务静态前端（SPA fallback）。返回句柄含真实 url/port。 */
@@ -68,10 +113,7 @@ export async function createStandaloneServer(options: StandaloneServerOptions): 
     host,
     port,
     url: `http://${host}:${port}/`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: (closeOptions) => closeStandaloneServer(server, closeOptions),
   };
 }
 

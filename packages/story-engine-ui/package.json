@@ -14,7 +14,7 @@
     "serve": "node dist-server/server.mjs",
     "smoke:longform": "node scripts/longform-regression-smoke.mjs",
     "pretypecheck": "corepack pnpm --filter @actalk/story-engine build",
-    "test": "vitest run",
+    "test": "node ../../test-tools/run-vitest.mjs run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -51,7 +51,7 @@ vi.mock("../lib/snapshot.js", () => ({
   ...snapshotMocks,
 }));
 
-import { commitIdempotencyCacheSizeForTests, runCommitApply, runCommitPreview } from "./commit-service.js";
+import { commitIdempotencyCacheSizeForTests, describeDeclarationFailure, normalizeDeclarationOutcome, runCommitApply, runCommitPreview } from "./commit-service.js";
 
 const {
   buildCommitPlanFromProject,
@@ -272,10 +272,14 @@ describe("commit-preview 声明通道降级留痕（GLM P3 旧账①）", () => 
         judge: async ({ deterministicQuality }) => deterministicQuality,
       });
 
-      // 行为不变：声明降级为缺省（结果不带 declaration 字段），计划走纯正则。
+      // 声明降级为缺省（结果不带 declaration 字段），计划走纯正则；但状态+原因随结果带出（P1：不对用户静默）。
       expect(preview.kind).toBe("preview");
-      if (preview.kind === "preview") expect("declaration" in preview).toBe(false);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
+      if (preview.kind === "preview") {
+        expect("declaration" in preview).toBe(false);
+        expect(preview.declarationOutcome?.status).toBe("fallback");
+        expect(preview.declarationOutcome?.reason).toContain("声明模型 503");
+      }
+      expect(warnSpy).toHaveBeenCalled();
       const warnText = warnSpy.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
       expect(warnText).toContain("ch1");
       expect(warnText).toContain("声明模型 503");
@@ -283,6 +287,46 @@ describe("commit-preview 声明通道降级留痕（GLM P3 旧账①）", () => 
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("声明模型返回合法声明 → declarationOutcome.status=model 且 declaration 透传", async () => {
+    projectDir = await createProjectFixture();
+    const declaration = { chapter: 1, mainEvent: { summary: "事", quote: DRAFT_CONTENT.slice(0, 8) }, seededForeshadowing: [], resolvedForeshadowing: [], resourceDeltas: [], keyLeads: [] };
+    const preview = await runCommitPreview({
+      projectDir,
+      chapter: 1,
+      declarationChannel: { declareDelta: async () => declaration },
+      judge: async ({ deterministicQuality }) => deterministicQuality,
+    });
+    expect(preview.kind).toBe("preview");
+    if (preview.kind === "preview") {
+      expect(preview.declaration).toEqual(declaration);
+      expect(preview.declarationOutcome).toEqual({ status: "model", declaration });
+    }
+  });
+
+  it("无声明通道（路由路）→ 结果不带 declarationOutcome（旧行为，不额外报兜底）", async () => {
+    projectDir = await createProjectFixture();
+    const preview = await runCommitPreview({ projectDir, chapter: 1, judge: async ({ deterministicQuality }) => deterministicQuality });
+    expect(preview.kind).toBe("preview");
+    if (preview.kind === "preview") expect(preview.declarationOutcome).toBeUndefined();
+  });
+});
+
+describe("normalizeDeclarationOutcome（declareDelta 三种返回形态归一）", () => {
+  it("undefined → fallback；裸声明 → model；带状态结果原样；status=model 但缺 declaration → 纠成 fallback", () => {
+    expect(normalizeDeclarationOutcome(undefined).status).toBe("fallback");
+    const declaration = { chapter: 1, mainEvent: { summary: "a", quote: "b" }, seededForeshadowing: [], resolvedForeshadowing: [], resourceDeltas: [], keyLeads: [] };
+    expect(normalizeDeclarationOutcome(declaration)).toEqual({ status: "model", declaration });
+    expect(normalizeDeclarationOutcome({ status: "fallback", reason: "x" })).toEqual({ status: "fallback", reason: "x" });
+    expect(normalizeDeclarationOutcome({ status: "model" }).status).toBe("fallback");
+  });
+
+  it("describeDeclarationFailure：压成一行、截短、不丢错误摘要", () => {
+    const text = describeDeclarationFailure(new Error(`a\n b ${"c".repeat(300)}`));
+    expect(text.startsWith("声明模型调用失败：a b ccc")).toBe(true);
+    expect(text.endsWith("…")).toBe(true);
+    expect(text.length).toBeLessThan(200);
   });
 });
 

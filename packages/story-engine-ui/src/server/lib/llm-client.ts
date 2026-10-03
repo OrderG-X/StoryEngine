@@ -654,6 +654,63 @@ export function createOpenAICompatibleWriterClient(configured: ResolvedChatModel
 // SSE streaming reader
 // ---------------------------------------------------------------------------
 
+/** 流式一帧的最小形状（模型无关：只认 OpenAI 兼容网关普遍带的字段，其余一律忽略）。 */
+interface StreamFrame {
+  readonly choices?: readonly {
+    readonly delta?: {
+      readonly content?: string;
+      readonly reasoning_content?: string;
+      readonly thinking?: string;
+      readonly role?: string;
+    };
+    readonly message?: { readonly content?: string };
+    readonly finish_reason?: string | null;
+  }[];
+  /** 上游在流中途/开头塞的错误帧：OpenAI 形 `{error:{message}}`，也有网关直接给字符串。 */
+  readonly error?: { readonly message?: string; readonly code?: string | number; readonly type?: string } | string;
+}
+
+/**
+ * 从一帧里抠出上游错误文案；没有 error 字段返回 undefined。
+ * 治「流式解析吞 error 帧」：以前只读 choices[0].delta，上游 200 + 流里一句 `{"error":{...}}`
+ * 就被当 keepalive 忽略，聚合出一段空/半截正文还报成功——与非流式 parseFirstChoiceContent 的 error.message 检查对齐。
+ */
+export function describeStreamErrorFrame(parsed: unknown): string | undefined {
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const error = (parsed as StreamFrame).error;
+  if (error === undefined || error === null) return undefined;
+  if (typeof error === "string") return error.trim() || "上游返回了未说明原因的错误";
+  if (typeof error === "object") {
+    const message = typeof error.message === "string" ? error.message.trim() : "";
+    if (message) return message;
+    const code = error.code !== undefined ? String(error.code) : "";
+    const type = typeof error.type === "string" ? error.type : "";
+    return [type, code].filter(Boolean).join(" ") || "上游返回了未说明原因的错误";
+  }
+  return undefined;
+}
+
+/**
+ * finish_reason 是否表示「正文没完整收尾」（被截断 / 被过滤）。只认各家网关公认的几个值：
+ * OpenAI `length`/`content_filter`、Anthropic 兼容网关的 `max_tokens`、个别网关的 `truncated`。
+ * 认不出的非 stop 值（`end_turn`/`tool_calls`/厂商私有）**不**当失败——模型无关铁律：不赌陌生网关的枚举。
+ */
+export function isTruncatedFinishReason(finishReason: string | undefined): boolean {
+  if (!finishReason) return false;
+  const normalized = finishReason.trim().toLowerCase();
+  return normalized === "length" || normalized === "content_filter" || normalized === "max_tokens" || normalized === "truncated";
+}
+
+/** 把「正文没完整收尾」翻成给人看的一句话（含已收到多少字，方便判断是半截还是全空）。 */
+export function describeTruncatedFinish(finishReason: string, contentLength: number): string {
+  const normalized = finishReason.trim().toLowerCase();
+  const got = contentLength > 0 ? `已收到 ${contentLength} 字半截输出，` : "正文一个字都没出，";
+  if (normalized === "content_filter") {
+    return `模型输出被上游内容过滤中断（finish_reason=${finishReason}），${got}不能当成完整结果使用，请调整内容后重试。`;
+  }
+  return `模型输出被截断（finish_reason=${finishReason}），${got}不能当成完整结果使用。本网关不设 max_tokens 上限，截断多为模型自身上限或网关限制，可重试或换更稳的模型。`;
+}
+
 export async function streamOpenAICompatibleResponse(
   response: globalThis.Response,
   onDelta: (delta: string) => void,
@@ -661,12 +718,14 @@ export async function streamOpenAICompatibleResponse(
   // 每收到一块原始字节就回调（含 keepalive / 仅 role 的首块）——用于空闲超时「有字节就续命」，
   // 比只盯 content/thinking delta 更准：思考阶段 content 为空但 reasoning 在流，连接其实活着。
   onActivity?: () => void,
-): Promise<{ readonly content: string; readonly thinking: string }> {
+): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
   if (!response.body) {
-    const parsed = await response.json() as { readonly choices?: readonly { readonly message?: { readonly content?: string } }[] };
+    const parsed = await response.json() as StreamFrame;
+    const errorText = describeStreamErrorFrame(parsed);
+    if (errorText) throw new Error(`模型返回错误：${errorText}`);
     const content = parsed.choices?.[0]?.message?.content ?? "";
     if (content) onDelta(content);
-    return { content, thinking: "" };
+    return { content, thinking: "", finishReason: parsed.choices?.[0]?.finish_reason ?? undefined };
   }
 
   const decoder = new TextDecoder();
@@ -674,54 +733,75 @@ export async function streamOpenAICompatibleResponse(
   let buffer = "";
   let content = "";
   let thinking = "";
+  let finishReason: string | undefined;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    onActivity?.(); // 收到任何字节 → 续命（重置空闲超时）
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/u);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const data = trimmed.slice("data:".length).trim();
-      if (!data) continue;
-      if (data === "[DONE]") {
-        await reader.cancel().catch(() => undefined);
-        return { content, thinking };
+  const consumeFrame = (parsed: StreamFrame): void => {
+    const errorText = describeStreamErrorFrame(parsed);
+    if (errorText) throw new Error(`模型返回错误：${errorText}`);
+    const choice = parsed.choices?.[0];
+    const delta = choice?.delta;
+    const textDelta = delta?.content ?? choice?.message?.content ?? "";
+    if (textDelta) {
+      content += textDelta;
+      onDelta(textDelta);
+    }
+    // Extract thinking/reasoning tokens from providers that support it
+    const thinkDelta = delta?.reasoning_content ?? delta?.thinking ?? "";
+    if (thinkDelta && onThinkingDelta) {
+      thinking += thinkDelta;
+      onThinkingDelta(thinkDelta);
+    }
+    // 记下最后一帧的 finish_reason（非 null/空才算）：以前整段丢掉，length/content_filter 的半截正文被当完整结果。
+    if (typeof choice?.finish_reason === "string" && choice.finish_reason.trim()) {
+      finishReason = choice.finish_reason;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      onActivity?.(); // 收到任何字节 → 续命（重置空闲超时）
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/u);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice("data:".length).trim();
+        if (!data) continue;
+        if (data === "[DONE]") {
+          await reader.cancel().catch(() => undefined);
+          return { content, thinking, finishReason };
+        }
+        let parsed: StreamFrame | undefined;
+        try {
+          parsed = JSON.parse(data) as StreamFrame;
+        } catch {
+          // Ignore provider keepalive or non-JSON stream fragments.
+          continue;
+        }
+        consumeFrame(parsed); // error 帧在这里抛，不再被上面的 JSON 容错吞掉
       }
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  // 流结束但没见 [DONE]：残留在 buffer 里的最后一行（不带换行收尾的网关）也要看一眼，别漏掉末帧的 error/finish_reason。
+  const tail = buffer.trim();
+  if (tail.startsWith("data:")) {
+    const data = tail.slice("data:".length).trim();
+    if (data && data !== "[DONE]") {
       try {
-        const parsed = JSON.parse(data) as {
-          readonly choices?: readonly {
-            readonly delta?: {
-              readonly content?: string;
-              readonly reasoning_content?: string;
-              readonly thinking?: string;
-              readonly role?: string;
-            };
-            readonly message?: { readonly content?: string };
-          }[];
-        };
-        const delta = parsed.choices?.[0]?.delta;
-        const textDelta = delta?.content ?? parsed.choices?.[0]?.message?.content ?? "";
-        if (textDelta) {
-          content += textDelta;
-          onDelta(textDelta);
-        }
-        // Extract thinking/reasoning tokens from providers that support it
-        const thinkDelta = delta?.reasoning_content ?? delta?.thinking ?? "";
-        if (thinkDelta && onThinkingDelta) {
-          thinking += thinkDelta;
-          onThinkingDelta(thinkDelta);
-        }
-      } catch {
-        // Ignore provider keepalive or non-JSON stream fragments.
+        consumeFrame(JSON.parse(data) as StreamFrame);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("模型返回错误：")) throw error;
       }
     }
   }
 
-  return { content, thinking };
+  return { content, thinking, finishReason };
 }
 
 // ---------------------------------------------------------------------------
@@ -777,7 +857,7 @@ export async function streamChatModelToText(input: {
   readonly idleTimeoutMs?: number;
   /** 每段正文 delta 实时回调（出稿流式进编辑器用）；不传则照常只聚合、不外发。 */
   readonly onDelta?: (delta: string) => void;
-}): Promise<{ readonly content: string; readonly thinking: string }> {
+}): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
   const idleTimeoutMs = input.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   const idle = createIdleAbort(idleTimeoutMs);
   let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实（治审查 #5）
@@ -832,13 +912,18 @@ export async function streamChatModelToText(input: {
         throw new Error(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`);
       }
     }
-    const { content, thinking } = await streamOpenAICompatibleResponse(
+    const { content, thinking, finishReason } = await streamOpenAICompatibleResponse(
       response,
       input.onDelta ?? (() => undefined), // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合
       () => undefined,
       () => { gotBytes = true; idle.kick(); }, // 收到任何字节就续命，并记下「收过字节」
     );
-    return { content, thinking };
+    // 末帧 finish_reason 说「没收尾」（length / content_filter …）→ 半截正文不能当完整结果：诚实抛错，
+    // 调用方按 ok=false 如实回报，绝不把截断稿当成功。认不出的非 stop 值只原样带回，不赌陌生网关的枚举。
+    if (isTruncatedFinishReason(finishReason)) {
+      throw new Error(describeTruncatedFinish(finishReason as string, content.length));
+    }
+    return { content, thinking, finishReason };
   } catch (error) {
     if (idle.controller.signal.aborted) {
       const secs = Math.round(idleTimeoutMs / 1000);

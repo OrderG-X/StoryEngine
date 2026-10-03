@@ -4,14 +4,16 @@
  * 背景：引擎退出「从正文正则猜结构化」，改由模型主动声明本章 mainEvent / 埋的伏笔 / 回收的伏笔 / 资源变化 / 关键线索，
  * 每条附正文原句证据；引擎只做确定性证据校验（见 @actalk/story-engine 的 verifyChapterDelta）。本模块负责生成声明。
  *
- * 铁律：题材中立 prompt、强制关思考、responseFormat=json_object；坏 JSON / 超时 / 任何异常 → undefined（降级到引擎正则）。
+ * 铁律：题材中立 prompt、强制关思考、responseFormat=json_object；坏 JSON / 超时 / 任何异常 → status=fallback + 原因
+ * （本章降级到引擎确定性规则，但状态一路带到用户可见 summary，绝不静默；旧签名 declareChapterDelta 仍返回 undefined 兼容）。
  * callModel 注入便于单测（不真连网络）。绝不臆造：模型只允许引用正文真实出现的句子，引擎会逐字复核、对不上就丢弃。
  * 解析是【逐条打捞】不是整体判死：单条列表项不合 schema 只丢那一条，其余照收——对齐 lenient-args 的「永远不信模型会传干净输入」。
  * 降级绝不静默：每次失败/丢条都 console.warn 落 server 日志（用户路径仍平滑降级，但长跑诊断有迹可循）。
  */
 import { z } from "zod";
 import type { ChapterDeltaDeclaration } from "@actalk/story-engine";
-import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import type { ChapterDeltaDeclarationOutcome } from "../../services/commit-service.js";
 
 export type DeclareCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -241,7 +243,7 @@ export function parseChapterDeltaDeclaration(
  * 降级绝不静默：失败原因 console.warn 落 server 日志（20 章真机曾 6/20 章无声回退正则、mainEvent 变对白碎片，
  * 日志零痕迹 → 诊断只能靠事后对账；用户路径仍平滑降级不受影响）。
  */
-export async function declareChapterDelta(input: {
+export interface DeclareChapterDeltaInput {
   readonly chapter: number;
   readonly draft: string;
   readonly callModel: DeclareCallModel;
@@ -249,8 +251,28 @@ export async function declareChapterDelta(input: {
   readonly establishedNames?: readonly string[];
   readonly openGoalTitles?: readonly string[];
   readonly previousChapterEnding?: string;
-}): Promise<ChapterDeltaDeclaration | undefined> {
-  if (!input.draft || input.draft.trim().length === 0) return undefined;
+}
+
+/** 兼容旧签名：只要声明本体（拿不到=undefined）。新代码请用 declareChapterDeltaWithStatus 拿状态+原因。 */
+export async function declareChapterDelta(input: DeclareChapterDeltaInput): Promise<ChapterDeltaDeclaration | undefined> {
+  return (await declareChapterDeltaWithStatus(input)).declaration;
+}
+
+/** 把异常文本压成一行、截短（不含草稿正文；上游错误体可能很长）。 */
+function compactErrorText(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).trim().replace(/\s+/gu, " ");
+  return message.length > 160 ? `${message.slice(0, 160)}…` : message || "未知错误";
+}
+
+/**
+ * 带状态的声明编排：status=model 表示拿到了可用声明（引擎还会逐条做证据校验）；status=fallback 表示本章没拿到，
+ * 下游按确定性规则兜底，并把 reason 一路带到给用户看的 summary——治「6/20 章无声回退正则、用户不知情」的静默退化。
+ * 任何异常/超时/坏 JSON 都不抛（声明不是致命步骤），但绝不静默：返回 fallback+原因，并 console.warn 落 server 日志。
+ */
+export async function declareChapterDeltaWithStatus(input: DeclareChapterDeltaInput): Promise<ChapterDeltaDeclarationOutcome> {
+  if (!input.draft || input.draft.trim().length === 0) {
+    return { status: "fallback", reason: "正文为空，没有可声明的章节语义" };
+  }
   const onDrop: DeclarationDropListener = (field, detail) => {
     console.warn(`[chapter-delta] ch${input.chapter} 声明字段丢弃 ${field}：${detail}`);
   };
@@ -267,31 +289,38 @@ export async function declareChapterDelta(input: {
     const declaration = parseChapterDeltaDeclaration(text, input.chapter, onDrop);
     if (!declaration) {
       console.warn(`[chapter-delta] ch${input.chapter} 声明整体失败（模型输出无法解析成 JSON），回退引擎正则`);
-    } else {
-      warnLikelyCopiedSummaries(input.chapter, declaration);
+      return { status: "fallback", reason: "声明模型的输出无法解析成结构化 JSON" };
     }
-    return declaration;
+    warnLikelyCopiedSummaries(input.chapter, declaration);
+    return { status: "model", declaration };
   } catch (error) {
     console.warn(
       `[chapter-delta] ch${input.chapter} 声明调用异常（${error instanceof Error ? error.message : String(error)}），回退引擎正则`,
     );
-    return undefined;
+    return { status: "fallback", reason: `声明模型调用失败：${compactErrorText(error)}` };
   }
 }
 
 /**
+ * 声明调用的空闲窗口（不是总时长上限）：只要模型还在吐字节就续命，彻底静默超过这么久才判死。
+ * 预览路径用户在等，所以比审稿/质检的 90s 收紧到 45s（真机 2026-07-04 实测正常返回 10~16s）；
+ * 但绝不再设固定总时长死表——旧 20s/45s 死表掐在长正文分布右尾上，是 6/20 章无声降级的直接原因。
+ */
+export const DECLARE_IDLE_TIMEOUT_MS = 45_000;
+
+/**
  * 生产用 callModel：复用 chapterSteering 任务档、强制关思考（声明只机械抽 JSON、不需推理链）、json_object。
- * 超时 45s：真机重放（2026-07-04，deepseek-v4-pro，5k 字 prompt）实测 10~16s 正常返回，旧 20s 死表卡在
- * 分布右尾上（长正文/线索多时必超）→ 6/20 章无声降级。45s 覆盖 2 倍余量；声明是预览路径的一环，
- * 不能学审稿走「无总上限空闲超时」（用户在等预览），但也不能掐在正常分布里。
+ * 走 streamChatModelToText：流式 + 空闲超时（有字节就续命、无总时长上限）；一律不传 max_tokens。
+ * 流里的 error 帧 / finish_reason=length 会在 llm-client 层诚实抛错，这里原样向上抛，由 declareChapterDeltaWithStatus 收成 fallback+原因。
  */
 export const callConfiguredDeclareModel: DeclareCallModel = async (messages) => {
   const configured = await resolveConfiguredChatModel("chapterSteering");
-  const { content } = await callOpenAICompatibleChatModel({
+  const { content } = await streamChatModelToText({
     configured: { ...configured, thinking: false },
     messages: messages.map((message) => ({ role: message.role, content: message.content })),
     responseFormat: { type: "json_object" },
-    timeoutMs: 45000,
+    idleTimeoutMs: DECLARE_IDLE_TIMEOUT_MS,
   });
+  if (!content.trim()) throw new Error("声明模型返回了空内容。");
   return content;
 };

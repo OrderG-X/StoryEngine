@@ -10,7 +10,7 @@
     "pack:dir": "echo '请用 ./build-desktop.sh（原因：必须先 pnpm deploy 到 staging，从工作区直接 electron-builder --dir 会打出坏包）' && exit 1",
     "dist:mac": "bash ./build-desktop.sh --mac",
     "dist:win": "bash ./build-desktop.sh --win",
-    "test": "node --check main.mjs && node --check server-port.mjs && bash -n ./build-desktop.sh && bash ./build-desktop.test.sh"
+    "test": "node --check main.mjs && node --check server-port.mjs && node --test server-port.test.mjs && bash -n ./build-desktop.sh && bash ./build-desktop.test.sh"
   },
   "dependencies": {
     "@actalk/story-engine-ui": "workspace:*"

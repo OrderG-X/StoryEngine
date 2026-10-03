@@ -44,6 +44,9 @@ export interface AgentToolResult {
   readonly draftTitle?: string;
   /** commit_apply 入库成功标志：前端据此把 draftBody 以 committed 状态（而非 draft_ready）载入工作区，防 autosave 复活已入库章节。 */
   readonly committed?: boolean;
+  /** undo_last_change 专属：true=磁盘真的被 git 回退了。前端据此冻结 autosave、改读磁盘真值、回合收尾后整页重载——
+   *  否则内存里撤销前的旧稿会被 autosave 写回去（此前只靠 409 冲突兜底）。 */
+  readonly undone?: boolean;
   readonly overview?: StateOverview;
   readonly refreshScope?: "full" | "foundation";
   readonly snapshotId?: string;
@@ -232,6 +235,8 @@ export async function streamAgentChat(
             ...(typeof output.draftTitle === "string" ? { draftTitle: output.draftTitle } : {}),
             // 入库成功标志：让 draftBody 以 committed 状态载入（commit_apply 专用）。
             ...(output.committed === true ? { committed: true } : {}),
+            // 撤销标志（undo_last_change 专用）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。
+            ...(parsed.toolName === "undo_last_change" && typeof output.undone === "boolean" ? { undone: output.undone } : {}),
             // check_ai_flavor 专属：整份体检报告（violations/usedFallback 不在上面的轻量白名单里），
             // 仅在该工具且 output 形状符合 AiFlavorReport 时透传，前端据此落 store 渲染体检卡。
             ...(parsed.toolName === "check_ai_flavor" && isAiFlavorReport(output)

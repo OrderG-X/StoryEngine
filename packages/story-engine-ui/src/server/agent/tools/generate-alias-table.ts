@@ -5,7 +5,7 @@
  * （createConfiguredAliasProposer，PromptedOutput；经 validateLlmAlias 校验才入表；
  * LLM 不可用时自动降级为仅规则 + warning，绝不静默）。不扫正文、不改引擎。
  * 写入 .story-engine-ui/alias-tables.json，供后续相关角色检测读取。
- * 注：LLM 提议跑模型自身上限——callOpenAICompatibleChatModel 一律忽略传入的 maxTokens
+ * 注：LLM 提议跑模型自身上限——streamChatModelToText 一律不传 max_tokens
  * （全局不限制——推理模型的思考也占 max_tokens 额度，设小会截空正文），故思考+正文都装得下、不会被截空。
  */
 import { z } from "zod";
@@ -15,7 +15,7 @@ import {
   type AliasProposalFn,
   type CharacterAliasInput,
 } from "../alias-generator/alias-generator.js";
-import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { writeTool } from "../withSnapshot.js";
 
 const inputSchema = z.object({
@@ -62,15 +62,19 @@ function parsePromptedAliasOutput(text: string): readonly string[] {
   return parsed.filter((item): item is string => typeof item === "string").slice(0, 5);
 }
 
-async function createConfiguredAliasProposer(): Promise<AliasProposalFn> {
+/**
+ * 走 streamChatModelToText（2026-10-02 P2）：原非流式 60s 固定死表会把开了思考的推理模型（光思考就几十秒）误杀；
+ * 流式 + 空闲超时只在上游彻底静默才判死、不设总时长上限。一律不传 max_tokens；思考开关仍随 enrichment 任务旁路。
+ */
+export async function createConfiguredAliasProposer(): Promise<AliasProposalFn> {
   const configured = await resolveConfiguredChatModel("enrichment");
   return async (character) => {
-    const { content } = await callOpenAICompatibleChatModel({
+    const { content } = await streamChatModelToText({
       configured,
       messages: buildAliasProposalMessages(character),
       temperature: 0.2,
-      timeoutMs: 60000,
     });
+    if (!content.trim()) throw new Error("别名提议模型返回了空内容。");
     return parsePromptedAliasOutput(content);
   };
 }

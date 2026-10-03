@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, readdir, rmdir, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
 
@@ -47,17 +47,69 @@ function parseLogLine(line: string): SnapshotEntry {
   return { id: id ?? "", timestamp: Number(ts ?? 0), label: rest.join("\t") };
 }
 
+/* ---------------------------------------------------------------------------
+ * 对话历史不入快照（P2·2026-10-02）
+ *
+ * 快照用 `git add -A` 把项目目录整个卷进去，`.story-engine-ui/chat-sessions/`（右侧 AI 对话的持久化）也在内。
+ * 于是 undo_last_change / 块级撤销在回退写作状态的同时，把用户**已经看到过的聊天记录**也回退掉——
+ * 对话是「控制面日志」不是「写作状态」，撤销应只回退后者。
+ * 做法：写进 `<gitdir>/info/exclude`（不碰用户可见的 .gitignore）；旧书里已被跟踪的会话文件 `git rm --cached` 摘出索引
+ * （磁盘不动）；restore 的 diff/checkout 用 `:(exclude)` 路径魔法跳过该目录，连历史快照里的旧会话文件也不会被 checkout 盖回来。
+ * 幂等回执目录 `.story-engine-ui/commit-idempotency/` 仍随快照（设计如此：撤销定稿要连回执一起回退，见 commit-service 不变量⑦）。
+ * ------------------------------------------------------------------------- */
+
+/** 对话历史目录（相对项目根，无前后斜杠）。 */
+export const SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR = ".story-engine-ui/chat-sessions";
+/** info/exclude 里的那一行（锚定根、目录语义）。 */
+export const CHAT_SESSIONS_EXCLUDE_LINE = `/${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}/`;
+const CHAT_SESSIONS_EXCLUDE_MARKER = "# story-engine-ui: 对话历史不入快照（撤销不回退聊天记录）";
+/** git 路径魔法：diff / checkout 时跳过对话目录。 */
+const CHAT_SESSIONS_EXCLUDE_PATHSPEC = `:(exclude)${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}`;
+
+function excludeFileHasLine(text: string, line: string): boolean {
+  return text.split(/\r?\n/u).some((entry) => entry.trim() === line);
+}
+
+/**
+ * 确保 `<gitdir>/info/exclude` 含对话目录；首次写入时把旧书里已跟踪的会话文件摘出索引（下一次快照即记为「不再跟踪」）。
+ * 失败不阻断快照（exclude 只是降噪，不是正确性前提）：读/写 exclude 出错就跳过，下次再试。
+ */
+async function ensureChatSessionsExcludedUnlocked(projectDir: string): Promise<void> {
+  const excludePath = join(projectDir, ".git", "info", "exclude");
+  let existing = "";
+  try {
+    existing = await readFile(excludePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return; // .git 是文件（worktree）等异常形态：不碰
+  }
+  if (excludeFileHasLine(existing, CHAT_SESSIONS_EXCLUDE_LINE)) return;
+  try {
+    await mkdir(dirname(excludePath), { recursive: true });
+    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    await writeFile(excludePath, `${existing}${separator}${CHAT_SESSIONS_EXCLUDE_MARKER}\n${CHAT_SESSIONS_EXCLUDE_LINE}\n`, "utf-8");
+    // 旧书迁移：已跟踪的会话文件从索引摘掉（--cached 不动磁盘；--ignore-unmatch 没跟踪过也不报错）。
+    await git(projectDir, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR]);
+  } catch (error) {
+    console.warn("[snapshot] 写入对话目录 exclude 失败（不影响快照本身，下次再试）", error);
+  }
+}
+
 /** 不加锁的内部版本，供已持锁的导出函数复用，避免同模块重入死锁。 */
 async function ensureRepoUnlocked(projectDir: string): Promise<void> {
+  let isRepo = true;
   try {
     await access(join(projectDir, ".git"));
-    return;
   } catch {
-    // 还不是仓库，初始化
+    isRepo = false; // 还不是仓库，初始化
+  }
+  if (isRepo) {
+    await ensureChatSessionsExcludedUnlocked(projectDir); // 旧书：补 exclude + 摘索引（幂等、一次性）
+    return;
   }
   await git(projectDir, ["init"]);
   await git(projectDir, ["config", "user.name", "StoryEngine"]);
   await git(projectDir, ["config", "user.email", "snapshot@story-engine.local"]);
+  await ensureChatSessionsExcludedUnlocked(projectDir);
   await git(projectDir, ["add", "-A"]);
   await git(projectDir, ["commit", "--allow-empty", "-m", "初始快照"]);
 }
@@ -143,7 +195,10 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<S
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", "恢复前自动快照"]);
     // --no-renames：禁用 rename 侦测，改名产生的新文件按 A 计，否则会被判为 R 而残留
-    const addedSince = await git(projectDir, ["diff", "--name-only", "--no-renames", "--diff-filter=A", `${id}..HEAD`]);
+    // 对话目录用 :(exclude) 跳过：旧快照里曾被跟踪的会话文件既不被 unlink、也不被下面的 checkout 盖回磁盘。
+    const addedSince = await git(projectDir, [
+      "diff", "--name-only", "--no-renames", "--diff-filter=A", `${id}..HEAD`, "--", ".", CHAT_SESSIONS_EXCLUDE_PATHSPEC,
+    ]);
     for (const file of addedSince.split("\n").filter(Boolean)) {
       await unlink(join(projectDir, file)).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
@@ -153,7 +208,7 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<S
     // 空目录壳，引擎 recover 撞「目录在、manifest 不在」会 fail-closed 抛错把书搞砖（P1-B）。
     // 当场把零文件空壳收掉；有内容的目录 rmdir 不动（ENOTEMPTY 停手），漏网壳由引擎 recover 兜底。
     await removeEmptiedTransactionShells(projectDir);
-    await git(projectDir, ["checkout", id, "--", "."]);
+    await git(projectDir, ["checkout", id, "--", ".", CHAT_SESSIONS_EXCLUDE_PATHSPEC]);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
     return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
@@ -226,7 +281,9 @@ async function hasUncommittedChanges(projectDir: string): Promise<boolean> {
 async function snapshotDiffersFromWorkingTree(projectDir: string, id: string, untracked: boolean): Promise<boolean> {
   if (untracked) return true;
   try {
-    await git(projectDir, ["diff", "--quiet", id, "--"]);
+    // 对话目录不参与「有没有可撤销改动」的判定：旧书里曾被跟踪的会话文件在摘索引后与旧快照永远有差异，不排除会让
+    // 「没东西可撤」被误判成「有」、把一次 no-op 恢复报成撤销。
+    await git(projectDir, ["diff", "--quiet", id, "--", ".", CHAT_SESSIONS_EXCLUDE_PATHSPEC]);
     return false; // exit 0：无差异
   } catch {
     return true; // 非零：有差异

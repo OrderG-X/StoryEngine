@@ -22,10 +22,12 @@ import { coerceNumber } from "./lenient-args.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   runCommitPreview,
+  type ChapterDeltaDeclarationOutcome,
+  type ChapterDeltaDeclarationStatus,
   type CommitPreviewDeclareDelta,
 } from "../../services/commit-service.js";
-import { callConfiguredDeclareModel, declareChapterDelta } from "./chapter-delta-declaration.js";
-import { scrubBareEntityIdsFromText } from "./commit-apply.js";
+import { callConfiguredDeclareModel, declareChapterDeltaWithStatus } from "./chapter-delta-declaration.js";
+import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
 
@@ -35,9 +37,9 @@ import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js
  */
 export type DeclareDeltaFn = CommitPreviewDeclareDelta;
 
-/** 生产用：调用配置模型声明本章语义；任何失败 → undefined（非致命，降级到引擎正则）。 */
+/** 生产用：调用配置模型声明本章语义；任何失败 → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。 */
 const defaultDeclareDelta: DeclareDeltaFn = async ({ chapter, draft, openThreadTitles, establishedNames, openGoalTitles, previousChapterEnding }) =>
-  declareChapterDelta({
+  declareChapterDeltaWithStatus({
     chapter,
     draft,
     callModel: callConfiguredDeclareModel,
@@ -92,6 +94,11 @@ const outputSchema = z.object({
   blockingReasons: z.array(z.string()).describe("阻止定稿的原因（工作稿缺失/计划不通过/存在 error 级质量问题等）。"),
   summary: z.string().describe("预览结果的自然语言摘要（用户可见文案，UI 会直接展示；不含内部工具名）。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引：下一步流程与转达要求。仅你可见，UI 不展示。"),
+  declarationStatus: z.enum(["model", "fallback"]).optional().describe(
+    "章节语义声明来源：model=模型声明已拿到并经引擎证据校验；fallback=没拿到（模型失败/超时/坏 JSON），本章按确定性规则兜底。" +
+      "fallback 时 summary 已带【章节语义声明未生效】提示，必须如实转达给用户、不得隐去。缺草稿时省略。",
+  ),
+  declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案，已消毒）。"),
 });
 
 export interface StaleThreadWarningView {
@@ -116,6 +123,9 @@ export interface CommitPreviewToolOutput {
   readonly summary: string;
   /** 给模型的行动指引（下一步调 commit_apply、转达要求）；UI 不渲染，summary 保持用户可见纯净。 */
   readonly modelHint?: string;
+  /** 章节语义声明来源（fallback=本章按确定性规则兜底，summary 已明说）；缺草稿分支省略。 */
+  readonly declarationStatus?: ChapterDeltaDeclarationStatus;
+  readonly declarationReason?: string;
 }
 
 /**
@@ -162,6 +172,9 @@ export async function buildCommitPreviewToolOutput(input: {
 
   const { projectDir, chapter } = input;
   const { commitPlan, draftQuality, semanticQuality, declaration } = result;
+  // 声明状态：工具路恒有通道；没传 declareDelta（纯逻辑/无模型环境）= 本次没启用声明模型，也如实算 fallback。
+  const declarationOutcome: ChapterDeltaDeclarationOutcome = result.declarationOutcome
+    ?? { status: "fallback", reason: "本次预览没有启用章节语义声明模型" };
 
   const draftQualityIssues = draftQuality.issues.map((issue) => ({
     severity: issue.severity,
@@ -237,10 +250,13 @@ export async function buildCommitPreviewToolOutput(input: {
       chapter,
       draftHash: hashDraftContent(result.draftContent),
       ...(declaration ? { declaration } : {}),
+      declarationOutcome,
     });
     previewToken = record.token;
   }
 
+  // 声明未生效 → 用户可见摘要里固定一句（原因已消毒），不让「模型声明挂了」藏在 server 日志里。
+  const declarationFallbackNotice = describeDeclarationFallback(declarationOutcome, nameById);
   const preview = buildPreviewSummary({
     chapter,
     canCommit,
@@ -250,6 +266,7 @@ export async function buildCommitPreviewToolOutput(input: {
     staleBacklog,
     deltaRejectedWarnings,
     continuityBreakWarning,
+    ...(declarationFallbackNotice ? { declarationFallbackNotice } : {}),
   });
   return {
     chapter,
@@ -264,6 +281,10 @@ export async function buildCommitPreviewToolOutput(input: {
     blockingReasons,
     summary: preview.summary,
     ...(preview.modelHint ? { modelHint: preview.modelHint } : {}),
+    declarationStatus: declarationOutcome.status,
+    ...(declarationOutcome.status === "fallback" && declarationOutcome.reason
+      ? { declarationReason: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(declarationOutcome.reason, nameById)) }
+      : {}),
   };
 }
 
@@ -380,6 +401,8 @@ function buildPreviewSummary(input: {
   readonly staleBacklog?: StaleBacklogView;
   readonly deltaRejectedWarnings?: readonly { readonly message: string }[];
   readonly continuityBreakWarning?: { readonly message: string };
+  /** 已消毒的「声明未生效」整句（describeDeclarationFallback 产出）；model 状态不传。 */
+  readonly declarationFallbackNotice?: string;
 }): { readonly summary: string; readonly modelHint?: string } {
   const base = input.canCommit
     ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。说「确认定稿」即可写入。`
@@ -416,6 +439,10 @@ function buildPreviewSummary(input: {
   }
   if (input.continuityBreakWarning) {
     summary += `【跨章衔接提醒】${input.continuityBreakWarning.message}`;
+  }
+  // 声明未生效：本章 mainEvent/伏笔/线索等按引擎确定性规则兜底（不是坏事、但不能瞒）——用户据此决定是否重跑预览。
+  if (input.declarationFallbackNotice) {
+    summary += input.declarationFallbackNotice;
   }
   const hints: string[] = [];
   if (input.canCommit) {

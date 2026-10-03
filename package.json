@@ -19,7 +19,7 @@
   "scripts": {
     "dev": "pnpm --filter @actalk/story-engine build && pnpm --filter @actalk/story-engine-ui dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "node --test test-tools/run-vitest.test.mjs && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "story-engine:test": "pnpm --filter @actalk/story-engine test",
     "story-engine:typecheck": "pnpm --filter @actalk/story-engine typecheck",

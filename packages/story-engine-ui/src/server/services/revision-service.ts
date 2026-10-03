@@ -48,7 +48,7 @@ import {
   type DraftRevisionTask,
 } from "@actalk/story-engine";
 
-import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 
 /* ---------------------------------------------------------------------------
@@ -173,23 +173,25 @@ export interface RevisionModelChannel {
   readonly profileId: string;
 }
 
-/** 解析 repair 任务模型并给出调用闭包（解析失败在调用点抛错，时序与两轨原实现各自一致）。 */
+/**
+ * 解析 repair 任务模型并给出调用闭包（解析失败在调用点抛错，时序与两轨原实现各自一致）。
+ * 走 streamChatModelToText（2026-10-02 P2）：修订一整章/长段落时推理模型常跑过 60s，旧非流式 60s 固定死表
+ * 会把正常修订误杀成「请求超时」；流式 + 空闲超时只在上游彻底静默 90s 才判死、不设总时长上限。一律不传 max_tokens。
+ * 非 2xx / 流中 error 帧 / finish_reason=length 由 llm-client 层诚实抛错（「模型请求失败」「模型返回错误」「被截断」）。
+ */
 export async function createRevisionModelChannel(): Promise<RevisionModelChannel> {
   const configured = await resolveConfiguredChatModel("repair");
   return {
     model: configured.profile.model,
     profileId: configured.profile.id,
     call: async (prompt) => {
-      const { content, raw, response } = await callOpenAICompatibleChatModel({
+      const { content } = await streamChatModelToText({
         configured,
         messages: [{ role: "user", content: prompt }],
         temperature: configured.profile.temperature ?? 0.45,
         responseFormat: { type: "json_object" },
       });
-      if (!response.ok) {
-        throw new Error(`修订模型请求失败：${response.status} ${raw.slice(0, 180)}`);
-      }
-      if (!content) throw new Error("修订模型返回了空内容。");
+      if (!content.trim()) throw new Error("修订模型返回了空内容。");
       return content;
     },
   };

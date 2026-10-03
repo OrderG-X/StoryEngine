@@ -18,6 +18,9 @@ import { honestyRewritePatch } from "./detectUnbackedCompletion.js";
 import { DIRECT_WRITE_FALLBACK_GOAL, matchDeterministicChapterAction } from "../utils/chapterActionIntents.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
+import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
+import { reloadPage } from "../utils/pageReload.js";
+import { markRecentWorkspaceUndo } from "../utils/workspaceRevisionConflict.js";
 import type {
   ChapterAdviceCard,
   ChapterAgentCard,
@@ -1432,6 +1435,32 @@ export function useChat(params: UseChatParams): UseChatResult {
         if (commitReconciliationDraft === null) return;
         reconciliationPromise ??= reconcileChapterFromDisk();
       };
+      // P2（2026-10-02）agent 路 undo_last_change 真撤销：服务端已 git 回退磁盘，但内存里仍是撤销前的旧稿、
+      // revision 也过期；350ms 后的 autosave 会把旧稿 PUT 回去——此前只靠服务端 409 + 「另一窗口」误导 toast 兜底。
+      // 现在显式：冻结 autosave → 排空在途 PUT → 读磁盘真值接管草稿/标记/revision → 回合收尾后整页重载
+      // （与 undoToTurn 同一收尾：草稿正文不在 overview 里，重载才能让对话/草稿/资料三者从磁盘真值一致重建）。
+      let agentUndoSyncPromise: Promise<void> | null = null;
+      const syncWorkspaceAfterAgentUndo = async (): Promise<void> => {
+        try {
+          if (!projectPath) return;
+          const chapter = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
+          await drainAutosave();
+          const snap = await fetchChapterSnapshotWithTimeout(chapter);
+          if (!snap || !ownsCurrentWorkspace()) return;
+          const live = useWorkspaceStore.getState();
+          const patch = buildWorkspacePatchAfterAgentUndo(snap, chapter, live.workspace);
+          live.updateWorkspace({
+            flowStatus: patch.flowStatus,
+            currentChapter: patch.currentChapter,
+            chapters: patch.chapters,
+            draft: patch.draft,
+          });
+          recordWorkspaceRevision(projectPath, chapter, patch.revision);
+          live.setWorkspaceRevision(patch.revision);
+        } catch {
+          // 尽力而为：读不到磁盘也不解冻 autosave（旧稿绝不能写回），随后 reload 从磁盘重建。
+        }
+      };
       // 出稿失败收尾：onToolCall(generate_draft) 把 flowStatus 置「正在生成草稿」，失败路径若不复位，标题区
       // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。同步据「编辑器是否已有草稿内容」复位成
       // draft_ready/idle；「磁盘其实已入库」的特例由上面 reconcileChapterFromDisk 异步再升成 committed。
@@ -1540,6 +1569,13 @@ export function useChat(params: UseChatParams): UseChatResult {
               });
               if (chapterMismatch) return;
               if (info.toolName === "commit_apply") commitReconciliationDraft = null;
+              // undo_last_change 真撤销（undone=true）：先冻结 autosave 再做任何事——从此刻起本页不再有任何 PUT 能把
+              // 撤销前的旧稿写回磁盘；下面的 overview 刷新照常跑（资料面板），草稿由磁盘真值异步接管。undone=false（没东西可撤）不触发。
+              if (info.toolName === "undo_last_change" && info.undone === true) {
+                suspendAutosave();
+                markRecentWorkspaceUndo();
+                agentUndoSyncPromise ??= syncWorkspaceAfterAgentUndo();
+              }
               // 去 AI 味体检：报告已随上面 project(output:info) 挂到这条 assistant 消息上（见 agentEventProjection
               // 的 check_ai_flavor 分支），在时间线里随对话渲染体检卡——不再写全局 store（旧挂件会一直钉底部）。
               // A（2026-06-18）：让本章流程状态在纯 agent 流程也走完整生命周期——据刚完成的工具推进 flowStatus，
@@ -1675,6 +1711,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         // 保持 operation 所有权直到盘上真值读完；否则异步 fetch 刚返回，finally 已释放 token，
         // 对账会把本应恢复的成功结果误当成迟到数据丢掉。
         if (reconciliationPromise) await reconciliationPromise;
+        // agent 撤销的磁盘真值接管同理：须在 token 释放前等完（接管内部用 ownsCurrentWorkspace 守门）。
+        if (agentUndoSyncPromise) await agentUndoSyncPromise;
         if (!ownsCurrentWorkspace() && isWorkspaceOperationCurrent(operation)) {
           notifyStaleOperation();
         }
@@ -1704,11 +1742,23 @@ export function useChat(params: UseChatParams): UseChatResult {
             }
           }
         }
+        // agent 撤销收尾：接管已完成（autosave 仍冻结）且用户没切书/切章 → 回合最末整页重载（在释放 token 之前判定）。
+        const reloadAfterAgentUndo = agentUndoSyncPromise !== null && ownsCurrentWorkspace();
         if (isWorkspaceOperationCurrent(operation)) {
           if (ownsCurrentWorkspace()) setChatLoading(false);
           finishWorkspaceOperation(operation);
         }
         agentAbortRef.current = null; // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）。
+        // 把对话同步冲进 sessionStorage 并标记「下一次开书优先 session 对话」（磁盘上的旧按章对话文件可能被 git 回退），
+        // 再整页重载——与 undoToTurn 同一收尾；放在回合最末，不腰斩 agent 的收尾文字。
+        if (reloadAfterAgentUndo) {
+          markUndoReloadPreferSession();
+          flushPendingMessageSave();
+          reloadPage();
+        } else if (agentUndoSyncPromise !== null) {
+          // 用户已切书/切章：撤销前的旧稿已随工作区替换消失，不重载；解冻 autosave 让新工作区照常保存。
+          resumeAutosave();
+        }
       }
     },
     [

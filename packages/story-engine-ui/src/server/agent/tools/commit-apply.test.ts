@@ -18,8 +18,11 @@ import {
   appendNewCharactersToSummary,
   applyCommitToolLogic,
   buildThreadMaintenanceNote,
+  callConfiguredFactModel,
   CLEANUP_VISIBLE_HINT_THRESHOLD,
   commitApplyTool,
+  DECLARATION_FALLBACK_NOTICE,
+  FACT_EXTRACTION_IDLE_TIMEOUT_MS,
   OPEN_THREADS_HINT_THRESHOLD,
   scrubBareEntityIdsFromText,
 } from "./commit-apply.js";
@@ -32,6 +35,17 @@ import { __resetCommitPreviewStore } from "./commit-preview-store.js";
 vi.mock("../fact-ledger/fact-ledger.js", () => ({
   extractAndAppendFacts: vi.fn(async () => ({ ok: true, added: 0, summary: "", newCharacters: [] })),
 }));
+
+// 硬事实抽取的模型调用边界（P2：走 streamChatModelToText 空闲超时，不再是非流式 20s 固定死表）。其余 llm-client 走真实现。
+const llmMocks = vi.hoisted(() => ({
+  resolveConfiguredChatModel: vi.fn(),
+  streamChatModelToText: vi.fn(),
+  callOpenAICompatibleChatModel: vi.fn(),
+}));
+vi.mock("../../lib/llm-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/llm-client.js")>();
+  return { ...actual, ...llmMocks };
+});
 
 // 把 @actalk/story-engine 换成可 spy 的可变副本（importOriginal 保留所有真实实现）。
 // 默认行为：透传真实引擎，其余测试不受影响。
@@ -414,6 +428,135 @@ describe("commit_apply 复用预览缓存的章节语义声明", () => {
       expect(arg?.declaration).toBeUndefined();
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  // P1（2026-10-02）：ChapterDelta 声明失败不再对用户静默——apply 摘要里必须明说「本章按确定性规则兜底」。
+  it("预览阶段声明失败（fallback）→ 入库成功，但 summary 带【章节语义声明未生效】且 declarationStatus=fallback", async () => {
+    const projectDir = await makeProject("声明失败入库提示", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const preview = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => {
+        throw new Error("模型连接静默超过 45s（一直没有任何响应），判定连接已死，请重试。");
+      },
+    });
+    expect(preview.canCommit).toBe(true);
+    expect(preview.declarationStatus).toBe("fallback");
+
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
+    expect(out.ok).toBe(true);
+    expect(out.committed).toBe(true);
+    expect(out.declarationStatus).toBe("fallback");
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(out.summary).toContain("静默超过 45s");
+    expect(out.summary).toContain("已定稿"); // 入库本身仍如实报成功
+  });
+
+  it("预览声明成功（model）→ summary 不带兜底提示，declarationStatus=model", async () => {
+    const projectDir = await makeProject("声明成功无提示", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const preview = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({
+        chapter: 1,
+        mainEvent: { summary: "林远掂量账册的分量", quote: "林远在会议室外停下脚步" },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      }),
+    });
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
+    expect(out.committed).toBe(true);
+    expect(out.declarationStatus).toBe("model");
+    expect(out.summary).not.toContain(DECLARATION_FALLBACK_NOTICE);
+  });
+
+  it("票据蒸发（进程重启/凭 token 无状态放行）→ 入库成功但如实说明「预览票据里取不到声明」", async () => {
+    const projectDir = await makeProject("票据蒸发兜底提示", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const preview = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({
+        chapter: 1,
+        mainEvent: { summary: "林远掂量账册的分量", quote: "林远在会议室外停下脚步" },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      }),
+    });
+    expect(preview.declarationStatus).toBe("model");
+    __resetCommitPreviewStore(); // 模拟进程重启：内存票据蒸发，token 仍可按当前草稿无状态重算放行
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
+    expect(out.committed).toBe(true);
+    expect(out.declarationStatus).toBe("fallback");
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(out.summary).toContain("预览票据里取不到");
+  });
+
+  it("声明失败原因里的裸 id / 本地绝对路径不进用户可见摘要", async () => {
+    const projectDir = await makeProject("声明原因消毒", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const preview = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => {
+        throw new Error("ENOENT /Users/someone/secret/book/char-abcd1234.json");
+      },
+    });
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
+    expect(out.committed).toBe(true);
+    expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
+    expect(out.summary).not.toContain("/Users/someone");
+    expect(out.summary).not.toMatch(/char-abcd1234/u);
+    expect(out.declarationReason).not.toContain("/Users/someone");
+  });
+});
+
+describe("callConfiguredFactModel（P2：硬事实抽取走流式空闲超时，不再是 20s 固定死表）", () => {
+  it("chapterSteering 档、强制 thinking:false、json_object、idleTimeoutMs=FACT_EXTRACTION_IDLE_TIMEOUT_MS；不走非流式", async () => {
+    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
+      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "",
+      thinking: true,
+      thinkingDialect: "glm",
+    });
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: "{\"facts\":[]}", thinking: "" });
+    try {
+      const text = await callConfiguredFactModel([{ role: "user", content: "抽事实" }]);
+      expect(text).toBe("{\"facts\":[]}");
+      expect(llmMocks.resolveConfiguredChatModel).toHaveBeenCalledWith("chapterSteering");
+      expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+      const call = llmMocks.streamChatModelToText.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect((call.configured as { thinking: boolean }).thinking).toBe(false);
+      expect(call.responseFormat).toEqual({ type: "json_object" });
+      expect(call.idleTimeoutMs).toBe(FACT_EXTRACTION_IDLE_TIMEOUT_MS);
+      expect("timeoutMs" in call).toBe(false);
+      expect("max_tokens" in call || "maxTokens" in call).toBe(false);
+    } finally {
+      vi.clearAllMocks();
+    }
+  });
+
+  it("流式返回空内容 → 抛错（fact-ledger 收成 ok=false「没抽成」，不把空串当成功）", async () => {
+    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
+      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "",
+      thinking: false,
+      thinkingDialect: "none",
+    });
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: " ", thinking: "" });
+    try {
+      await expect(callConfiguredFactModel([{ role: "user", content: "抽事实" }])).rejects.toThrow("空内容");
+    } finally {
+      vi.clearAllMocks();
     }
   });
 });

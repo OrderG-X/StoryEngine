@@ -2,11 +2,24 @@
 //
 // chapter-delta-declaration 纯逻辑单测：prompt 题材中立、JSON 解析健壮、坏 JSON/超时/空正文全部降级为 undefined。
 // callModel 注入，不真连网络。
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const llmMocks = vi.hoisted(() => ({
+  resolveConfiguredChatModel: vi.fn(),
+  streamChatModelToText: vi.fn(),
+  callOpenAICompatibleChatModel: vi.fn(),
+}));
+vi.mock("../../lib/llm-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/llm-client.js")>();
+  return { ...actual, ...llmMocks };
+});
 
 import {
   buildChapterDeltaMessages,
+  callConfiguredDeclareModel,
+  DECLARE_IDLE_TIMEOUT_MS,
   declareChapterDelta,
+  declareChapterDeltaWithStatus,
   parseChapterDeltaDeclaration,
 } from "./chapter-delta-declaration.js";
 
@@ -417,5 +430,98 @@ describe("declareChapterDelta", () => {
       callModel: async () => "对不起我无法输出 JSON",
     });
     expect(result).toBeUndefined();
+  });
+});
+
+// P1（2026-10-02）：声明失败不再静默——带状态的编排返回 status + 原因，供 commit_preview/commit_apply 折进用户可见摘要。
+describe("declareChapterDeltaWithStatus（状态 + 原因，绝不静默）", () => {
+  it("合法 JSON → status=model，带 declaration", async () => {
+    const out = await declareChapterDeltaWithStatus({
+      chapter: 5,
+      draft: "本章正文。",
+      callModel: async () => JSON.stringify({ mainEvent: { summary: "事", quote: "本章正文。" } }),
+    });
+    expect(out.status).toBe("model");
+    expect(out.declaration?.chapter).toBe(5);
+    expect(out.reason).toBeUndefined();
+  });
+
+  it("空正文 → fallback + 原因，不调模型", async () => {
+    let called = false;
+    const out = await declareChapterDeltaWithStatus({
+      chapter: 1,
+      draft: "  ",
+      callModel: async () => {
+        called = true;
+        return "{}";
+      },
+    });
+    expect(called).toBe(false);
+    expect(out.status).toBe("fallback");
+    expect(out.reason).toContain("正文为空");
+  });
+
+  it("模型抛错（空闲超时/流中 error 帧/截断）→ fallback，原因含错误摘要且压成一行截短", async () => {
+    const out = await declareChapterDeltaWithStatus({
+      chapter: 1,
+      draft: "正文。",
+      callModel: async () => {
+        throw new Error(`模型返回错误：${"x".repeat(500)}\n多行`);
+      },
+    });
+    expect(out.status).toBe("fallback");
+    expect(out.declaration).toBeUndefined();
+    expect(out.reason).toMatch(/^声明模型调用失败：模型返回错误：x+…$/u);
+    expect(out.reason?.length).toBeLessThan(200);
+  });
+
+  it("坏 JSON → fallback，原因说明无法解析", async () => {
+    const out = await declareChapterDeltaWithStatus({
+      chapter: 1,
+      draft: "正文。",
+      callModel: async () => "对不起我无法输出 JSON",
+    });
+    expect(out.status).toBe("fallback");
+    expect(out.reason).toContain("无法解析");
+  });
+});
+
+describe("callConfiguredDeclareModel（走 streamChatModelToText 空闲超时，不再是 45s 固定死表）", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("用 chapterSteering 档、强制 thinking:false、json_object、idleTimeoutMs=DECLARE_IDLE_TIMEOUT_MS；不走非流式固定超时", async () => {
+    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
+      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "",
+      thinking: true,
+      thinkingDialect: "glm",
+    });
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: "{\"mainEvent\":{\"summary\":\"a\",\"quote\":\"b\"}}", thinking: "" });
+    const text = await callConfiguredDeclareModel([{ role: "user", content: "声明" }]);
+    expect(text).toContain("mainEvent");
+    expect(llmMocks.resolveConfiguredChatModel).toHaveBeenCalledWith("chapterSteering");
+    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+    const call = llmMocks.streamChatModelToText.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect((call.configured as { thinking: boolean }).thinking).toBe(false);
+    expect(call.responseFormat).toEqual({ type: "json_object" });
+    expect(call.idleTimeoutMs).toBe(DECLARE_IDLE_TIMEOUT_MS);
+    expect(DECLARE_IDLE_TIMEOUT_MS).toBeLessThan(90_000); // 预览路径收紧的空闲窗口（不是总时长上限）
+    expect("timeoutMs" in call).toBe(false);
+    expect("max_tokens" in call || "maxTokens" in call).toBe(false);
+  });
+
+  it("流式返回空正文 → 抛错（由上层收成 fallback，不把空串当成功声明）", async () => {
+    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
+      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
+      profile: { id: "m", provider: "p", model: "m" },
+      apiKey: "",
+      thinking: false,
+      thinkingDialect: "none",
+    });
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: "   ", thinking: "" });
+    await expect(callConfiguredDeclareModel([{ role: "user", content: "声明" }])).rejects.toThrow("空内容");
   });
 });

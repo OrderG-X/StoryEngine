@@ -15,13 +15,13 @@
  */
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { app, BrowserWindow, dialog, shell } from "electron";
 
-import { readStoredPort } from "./server-port.mjs";
+import { readStoredPort, writeStoredPortAtomically } from "./server-port.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -43,10 +43,15 @@ async function loadStoredPort() {
   }
 }
 
-/** 把实际绑定端口写回 userData，供下次启动复用同一 origin（localStorage 稳定）。 */
+/**
+ * 把实际绑定端口写回 userData，供下次启动复用同一 origin（localStorage 稳定）。
+ * P2（2026-10-02）：改为 tmp + rename 原子写（见 server-port.mjs writeStoredPortAtomically）——直接 writeFile 写一半
+ * 被杀/断电会留半截 JSON，下次启动解析失败 → 回退随机端口 → origin 漂移 → 书架/主题等 localStorage 整体清零。
+ */
 async function persistServerPort(port) {
   try {
-    await writeFile(serverPortPath(), `${JSON.stringify({ port })}\n`, "utf-8");
+    await mkdir(dirname(serverPortPath()), { recursive: true });
+    await writeStoredPortAtomically(serverPortPath(), port);
   } catch (error) {
     console.warn(`[desktop] 写入 server-port.json 失败（不影响本次运行）：${error instanceof Error ? error.message : String(error)}`);
   }
@@ -218,15 +223,30 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+/** 退出时 server.close 的在飞请求宽限（keepalive 保存还在写盘时多等一下），到期强制断开既有连接（含 SSE）。 */
+const QUIT_CLOSE_GRACE_MS = 1_000;
+/** 退出兜底总时限：无论 close 是否回调，到点必退——Cmd+Q 永远不能被任何连接挂死。 */
+const QUIT_HARD_DEADLINE_MS = 4_000;
+
 let quitting = false;
 app.on("before-quit", (event) => {
   // 审查 #4：退出前给前端 pagehide 的 keepalive 保存留一点时间抵达 server，并让 server 排空在途写盘请求，
   // 再真正退出——否则关窗即杀进程，最后一次未落盘的编辑会丢。首次拦截退出、短暂宽限后放行。
+  // P2（2026-10-02）：agent 流式出稿是 SSE 长连接，裸 server.close() 要等它自然结束 → Cmd+Q 挂死。
+  // 现在 close({ graceMs }) 会主动断开既有连接；外面再套一道硬时限兜底，任何情况下都退得出去。
   if (quitting) return;
   event.preventDefault();
   quitting = true;
+  let done = false;
+  const quitOnce = () => {
+    if (done) return;
+    done = true;
+    app.quit();
+  };
   const finish = () => {
-    void serverHandle?.close().catch(() => {}).finally(() => app.quit());
+    const closing = serverHandle ? serverHandle.close({ graceMs: QUIT_CLOSE_GRACE_MS }) : Promise.resolve();
+    void closing.catch(() => {}).finally(quitOnce);
+    setTimeout(quitOnce, QUIT_HARD_DEADLINE_MS);
   };
   // 400ms 宽限：keepalive 请求已在 pagehide 时同步派发，这里只需等它抵达 + server 处理。
   setTimeout(finish, 400);

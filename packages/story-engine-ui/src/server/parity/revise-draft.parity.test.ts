@@ -2,7 +2,7 @@
 //
 // 双轨对拍（parity）：routes/draft-revision.ts 的 preview→apply 两步 ↔ agent/tools/revise-draft.ts 的 revise_draft 一步到位。
 // 写盘对拍：双胞胎 fixture。两轨编排已收编进 services/revision-service.ts（双轨合一）：
-// 模型调用统一走 llm-client（callOpenAICompatibleChatModel），两侧同一个 mock 边界、喂同一份修订预览 JSON。
+// 模型调用统一走 llm-client（streamChatModelToText），两侧同一个 mock 边界、喂同一份修订预览 JSON。
 //
 // 原漂移清单处置（收编结论；代码证据在 services/revision-service.ts）：
 //   D21 定位宽容度【已收敛】：空白+引号归一兜底收进 service（locateRevisionSpan），两轨共用；
@@ -58,7 +58,7 @@ import {
   writeParityDraft,
 } from "./parity-kit.js";
 
-/** 组一份模型修订预览 JSON（两轨共用：统一走 llm-client 的 callOpenAICompatibleChatModel content）。 */
+/** 组一份模型修订预览 JSON（两轨共用：统一走 llm-client 的 streamChatModelToText content）。 */
 function previewJson(beforeText: string, afterText: string): string {
   return JSON.stringify({
     taskId: "parity-rev-1",
@@ -72,19 +72,16 @@ function previewJson(beforeText: string, afterText: string): string {
   });
 }
 
+/** 修订模型 2026-10-02 起走 streamChatModelToText（流式空闲超时，不再是非流式 60s 固定死表）；非流式 mock 保留只为锁「不再被调」。 */
 function mockRevisionModel(content: string): void {
-  llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({
-    content,
-    raw: content,
-    response: { ok: true, status: 200 },
-  });
+  llmMocks.streamChatModelToText.mockResolvedValue({ content, thinking: "" });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   llmMocks.resolveConfiguredChatModel.mockImplementation(async () => fakeResolvedChatModel("parity-repair-model"));
   mockRevisionModel(previewJson(REVISE_SENTENCE_B, REVISE_REPLACEMENT_B));
-  llmMocks.streamChatModelToText.mockResolvedValue({ content: "", thinking: "" });
+  llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({ content: "", raw: "", response: { ok: true, status: 200 } });
 });
 
 function revisionTask(targetText: string, extra?: Record<string, unknown>): Record<string, unknown> {
@@ -173,7 +170,7 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
     // 都没动稿、都没调模型（守卫在调模型之前）
     expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
-    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+    expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
   });
 
   it("原文出现多次：两侧都拒绝（HTTP 400「出现多次」；工具 ambiguous 拒）", { timeout: 30_000 }, async () => {
@@ -294,7 +291,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(preview.statusCode).toBe(200);
     expect(preview.payload.ok).toBe(true);
     expect((preview.payload.preview as { afterText: string }).afterText).toBe("用户指定的精确替换句。");
-    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+    expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
     const apply = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/apply", {
       projectPath: routeDir,
       chapter: 1,
@@ -314,7 +311,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     expect(apply.payload.ok).toBe(true);
     expect(tool.ok).toBe(true);
     expect(tool.applied).toBe(true);
-    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
+    expect(llmMocks.streamChatModelToText).not.toHaveBeenCalled();
     const routeDraft = await readFile(defaultDraftPath(routeDir, 1), "utf-8");
     const toolDraft = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
     expect(routeDraft).toContain("用户指定的精确替换句。");
@@ -458,7 +455,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
 
 describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback / deterministicPreview，刻意保留、本组锁定）", () => {
   it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", { timeout: 30_000 }, async () => {
-    llmMocks.callOpenAICompatibleChatModel.mockRejectedValue(new Error("网络连接被重置"));
+    llmMocks.streamChatModelToText.mockRejectedValue(new Error("网络连接被重置"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");
     await writeParityDraft(routeDir, 1, parityReviseDraft(1));
     await writeParityDraft(toolDir, 1, parityReviseDraft(1));
@@ -491,7 +488,8 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     expect(String(tool.summary)).toContain("网络连接被重置");
 
     // 模型真被调过（失败来自模型调用而非前置守卫）；两侧草稿逐字未动、字节一致
-    expect(llmMocks.callOpenAICompatibleChatModel).toHaveBeenCalled();
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalled();
+    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled(); // 修订不再走非流式固定死表
     expect(await readFile(defaultDraftPath(routeDir, 1), "utf-8")).toBe(parityReviseDraft(1));
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
   });

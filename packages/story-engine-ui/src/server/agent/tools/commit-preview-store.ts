@@ -13,6 +13,7 @@
  */
 import { createHash } from "node:crypto";
 import type { ChapterDeltaDeclaration } from "@actalk/story-engine";
+import type { ChapterDeltaDeclarationOutcome } from "../../services/commit-service.js";
 
 export interface CommitPreviewTokenRecord {
   readonly token: string;
@@ -27,6 +28,8 @@ export interface CommitPreviewTokenRecord {
    * 缺失（模型未配置/抽取失败/进程重启后凭 token 无状态放行）→ apply 走引擎正则回退，等价老行为。
    */
   readonly declaration?: ChapterDeltaDeclaration;
+  /** 预览阶段声明步骤的状态+原因（fallback 时 apply 要把「本章按确定性规则兜底」如实带给用户）。 */
+  readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
   readonly createdAt: number;
 }
 
@@ -54,6 +57,7 @@ export function recordCommitPreview(input: {
   readonly chapter: number;
   readonly draftHash: string;
   readonly declaration?: ChapterDeltaDeclaration;
+  readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
 }): CommitPreviewTokenRecord {
   const token = expectedToken(input.projectDir, input.chapter, input.draftHash);
   const record: CommitPreviewTokenRecord = {
@@ -63,6 +67,7 @@ export function recordCommitPreview(input: {
     draftHash: input.draftHash,
     passed: true,
     ...(input.declaration ? { declaration: input.declaration } : {}),
+    ...(input.declarationOutcome ? { declarationOutcome: input.declarationOutcome } : {}),
     createdAt: Date.now(),
   };
   store.set(keyFor(input.projectDir, input.chapter), record);

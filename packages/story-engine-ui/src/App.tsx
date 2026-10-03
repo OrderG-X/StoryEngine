@@ -33,7 +33,7 @@ import { isRealDraftContent } from "./utils/draftContent.js";
 import { isDraftFileWriteSuppressed } from "./utils/draftWriteGuard.js";
 import { buildWorkspaceAutosaveRequest } from "./utils/workspaceAutosaveRequest.js";
 import { prepareVersionedWorkspaceSave, recordWorkspaceRevision } from "./utils/workspaceRevisionTracker.js";
-import { reloadAfterWorkspaceRevisionConflict } from "./utils/workspaceRevisionConflict.js";
+import { describeWorkspaceRevisionConflict, reloadAfterWorkspaceRevisionConflict, workspaceRevisionConflictCause } from "./utils/workspaceRevisionConflict.js";
 import {
   persistCapturedAutosavePayload,
   type CapturedAutosavePayload,
@@ -59,7 +59,8 @@ function reconcileWorkspaceConflict(
     revision,
     recordRevision: recordWorkspaceRevision,
     suspend: suspendAutosave,
-    notify: () => nav.showToast("检测到另一窗口已保存更新，正在重新加载磁盘版本；本次旧版本没有覆盖它。", 6500),
+    // 文案按成因：本页刚做过撤销（agent undo_last_change / 块级撤销）→ 说「撤销回退」，不再误导成「另一窗口」。
+    notify: () => nav.showToast(describeWorkspaceRevisionConflict(workspaceRevisionConflictCause()), 6500),
     reload: () => window.location.reload(),
   });
 }

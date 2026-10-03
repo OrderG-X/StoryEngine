@@ -20,7 +20,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepare": "tsc",
-    "test": "vitest run",
+    "test": "node ../../test-tools/run-vitest.mjs run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

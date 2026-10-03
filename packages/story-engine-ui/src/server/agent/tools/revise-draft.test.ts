@@ -54,11 +54,13 @@ describe("locateTargetSpan B4 改写定位（空白归一兜底）", () => {
 // ──────────────────────────────────────────────────────────────────────────
 // Mocks for the execute path (LLM + snapshot are not needed in unit tests)
 // ──────────────────────────────────────────────────────────────────────────
-const { callOpenAICompatibleChatModel, resolveConfiguredChatModel } = vi.hoisted(() => ({
+// 修订模型 2026-10-02 起走 streamChatModelToText（流式空闲超时，不再是非流式 60s 固定死表）。
+const { callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel } = vi.hoisted(() => ({
   callOpenAICompatibleChatModel: vi.fn(),
+  streamChatModelToText: vi.fn(),
   resolveConfiguredChatModel: vi.fn(),
 }));
-vi.mock("../../lib/llm-client.js", () => ({ callOpenAICompatibleChatModel, resolveConfiguredChatModel }));
+vi.mock("../../lib/llm-client.js", () => ({ callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel }));
 
 const { snapshotBeforeDraftOverwrite } = vi.hoisted(() => ({ snapshotBeforeDraftOverwrite: vi.fn() }));
 vi.mock("./snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
@@ -294,11 +296,7 @@ describe("revise_draft execute 章号缺省回退", () => {
     resolveConfiguredChatModel.mockResolvedValue({
       profile: { temperature: 0.45, maxTokens: 1800 },
     });
-    callOpenAICompatibleChatModel.mockResolvedValue({
-      content: MOCK_REVISION_JSON,
-      raw: MOCK_REVISION_JSON,
-      response: { ok: true, status: 200 },
-    });
+    streamChatModelToText.mockResolvedValue({ content: MOCK_REVISION_JSON, thinking: "" });
     snapshotBeforeDraftOverwrite.mockResolvedValue(undefined);
 
     const context = makeContext(projectDir, 5);

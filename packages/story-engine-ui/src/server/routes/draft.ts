@@ -37,7 +37,7 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, describeTruncatedFinish, isTruncatedFinishReason, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { createSnapshot } from "../lib/snapshot.js";
@@ -327,6 +327,12 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
         },
       );
       content = streamed.content;
+      // 末帧 finish_reason=length/content_filter → 半截正文不能当完整章节：如实报错，不让下游「过短重试」把它当正常稿。
+      if (isTruncatedFinishReason(streamed.finishReason)) {
+        sendEvent("error", { error: describeTruncatedFinish(streamed.finishReason as string, content.length) });
+        res.end();
+        return;
+      }
     } catch (error) {
       if (idle.controller.signal.aborted) {
         const idleSecs = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000);

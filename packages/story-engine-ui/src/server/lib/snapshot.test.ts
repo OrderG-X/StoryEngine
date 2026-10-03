@@ -5,7 +5,18 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { commitFastDraft, createStoryProject, recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
-import { createSnapshot, humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, restoreSnapshot, runWithSnapshot, undoLastChange } from "./snapshot.js";
+import {
+  CHAT_SESSIONS_EXCLUDE_LINE,
+  SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR,
+  createSnapshot,
+  humanizeUndoLabel,
+  isPostWriteSettlementSnapshot,
+  listSnapshots,
+  pruneSnapshots,
+  restoreSnapshot,
+  runWithSnapshot,
+  undoLastChange,
+} from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -266,6 +277,84 @@ describe("undoLastChange 对话撤销", () => {
     const second = await undoLastChange(dir);
     expect(second?.undoneLabel).toBe("入库前快照：第1章");
     expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: [] });
+  });
+});
+
+// P2（2026-10-02）对话历史不入快照：撤销只回退写作状态，用户已看到的聊天记录不随 undo 消失。
+describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", () => {
+  const sessionsRel = join(".story-engine-ui", "chat-sessions");
+
+  async function writeSession(dir: string, name: string, body: string): Promise<void> {
+    await mkdir(join(dir, sessionsRel), { recursive: true });
+    await writeFile(join(dir, sessionsRel, name), body, "utf-8");
+  }
+
+  it("新书：首个快照即写 info/exclude，会话文件不进 commit；undo 回退正文时聊天记录原地不动", async () => {
+    const dir = await makeProject();
+    await writeSession(dir, "s1.json", "聊天-1");
+    const first = await createSnapshot(dir, "agent:generate_draft");
+    const exclude = await readFile(join(dir, ".git", "info", "exclude"), "utf-8");
+    expect(exclude.split(/\r?\n/u)).toContain(CHAT_SESSIONS_EXCLUDE_LINE);
+    expect(await filesInCommit(dir, first.id)).not.toContain(`${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}/s1.json`);
+    // 幂等回执目录仍随快照（设计如此）
+    await mkdir(join(dir, ".story-engine-ui", "commit-idempotency"), { recursive: true });
+    await writeFile(join(dir, ".story-engine-ui", "commit-idempotency", "r1.json"), "{}", "utf-8");
+    const second = await createSnapshot(dir, "agent:commit_apply");
+    expect(await filesInCommit(dir, second.id)).toContain(".story-engine-ui/commit-idempotency/r1.json");
+
+    // 写操作 + 对话继续增长 → undo：正文回退、对话不回退
+    await writeFile(join(dir, "a.md"), "A", "utf-8");
+    await writeSession(dir, "s1.json", "聊天-1 + 用户刚看到的新回合");
+    await writeSession(dir, "s2.json", "聊天-2");
+    const r = await undoLastChange(dir);
+    expect(r?.undoneLabel).toBe("定稿");
+    await expect(access(join(dir, "a.md"))).rejects.toThrow();
+    expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("聊天-1 + 用户刚看到的新回合");
+    expect(await readFile(join(dir, sessionsRel, "s2.json"), "utf-8")).toBe("聊天-2");
+  });
+
+  it("只有对话在变、正文没变 → 仍判「没有可撤销的改动」（对话差异不算改动）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "agent:foundation_write");
+    await writeSession(dir, "s1.json", "新对话");
+    expect(await undoLastChange(dir)).toBeNull();
+  });
+
+  it("旧书迁移：历史快照里已跟踪的会话文件被摘出索引（磁盘不动），恢复到旧快照也不把旧聊天记录盖回来", async () => {
+    const dir = await makeProject();
+    await writeSession(dir, "s1.json", "旧聊天");
+    // 模拟老版本：exclude 还不存在时建的仓库，会话文件被 add -A 卷进了历史
+    await execFileAsync("git", ["-C", dir, "init"]);
+    await execFileAsync("git", ["-C", dir, "config", "user.name", "StoryEngine"]);
+    await execFileAsync("git", ["-C", dir, "config", "user.email", "snapshot@story-engine.local"]);
+    await execFileAsync("git", ["-C", dir, "add", "-A"]);
+    await execFileAsync("git", ["-C", dir, "-c", "commit.gpgsign=false", "commit", "-m", "初始快照"]);
+    const legacy = (await listSnapshots(dir)).at(-1)!; // listSnapshots 内部 ensureRepo → 已补 exclude + 摘索引
+    expect(await filesInCommit(dir, legacy.id)).toContain(`${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}/s1.json`);
+    expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("旧聊天"); // 磁盘没动
+    const exclude = await readFile(join(dir, ".git", "info", "exclude"), "utf-8");
+    expect(exclude.split(/\r?\n/u)).toContain(CHAT_SESSIONS_EXCLUDE_LINE);
+
+    // 新快照：会话文件已不在树里；对话继续增长 → 恢复到旧快照：正文回退、聊天记录保持最新
+    await writeFile(join(dir, "project.json"), JSON.stringify({ title: "改名后" }), "utf-8");
+    const migrated = await createSnapshot(dir, "agent:foundation_write");
+    expect(await filesInCommit(dir, migrated.id)).not.toContain(`${SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR}/s1.json`);
+    await writeSession(dir, "s1.json", "新聊天");
+    await restoreSnapshot(dir, legacy.id);
+    expect(JSON.parse(await readFile(join(dir, "project.json"), "utf-8"))).toEqual({ title: "测试书" });
+    expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("新聊天");
+  });
+
+  it("exclude 已有用户自定义内容时追加不覆盖、重复调用只写一次", async () => {
+    const dir = await makeProject();
+    await execFileAsync("git", ["-C", dir, "init"]);
+    await mkdir(join(dir, ".git", "info"), { recursive: true });
+    await writeFile(join(dir, ".git", "info", "exclude"), "*.tmp", "utf-8"); // 无结尾换行
+    await createSnapshot(dir, "a");
+    await createSnapshot(dir, "b");
+    const lines = (await readFile(join(dir, ".git", "info", "exclude"), "utf-8")).split(/\r?\n/u);
+    expect(lines[0]).toBe("*.tmp");
+    expect(lines.filter((line) => line === CHAT_SESSIONS_EXCLUDE_LINE)).toHaveLength(1);
   });
 });
 

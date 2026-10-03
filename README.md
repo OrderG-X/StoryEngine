@@ -106,6 +106,10 @@ pnpm --filter @actalk/story-engine-cli typecheck
 
 GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条工作区命令。
 
+工作区与单包的 `pnpm test` 会为本次测试单独分配系统临时目录，结束或正常中断后只回收本次目录，
+不扫描或删除其他任务的临时数据。需要保留失败夹具排障时，可显式设置 `STORY_ENGINE_KEEP_TEST_TMP=1`；
+终端会打印保留路径。直接运行 `vitest` 会绕过此运行级回收，建议使用上述测试入口。
+
 ## 桌面端
 
 默认桌面构建**不含**任何模型配置（`preset-model-config`），并会在打包后用探针验证产物里没有密钥。带模型预设的构建是明确危险的内部测试模式：需要全部三个预设文件 + 显式确认环境变量 `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`，产物名带 `-with-model-preset` 后缀，输出按安全模式隔离在 `dist-electron/clean/` 与 `dist-electron/with-model-preset/`。
