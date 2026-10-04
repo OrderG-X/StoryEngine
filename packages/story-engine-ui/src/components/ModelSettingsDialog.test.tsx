@@ -102,6 +102,65 @@ describe("ModelSettingsDialog 表面切换", () => {
     expect(screen.getByText("DeepSeek")).toBeTruthy();
     expect(screen.queryByLabelText("AI 设置向导")).toBeNull();
   });
+
+  it("长跑 #2：极简卡显示任务实际解析出的 effective provider/model，不是 providers 列表第一个", async () => {
+    // 复刻真机形态：providers 列表第一个是没配密钥的 DeepSeek，但任务旁路把主对话/出稿都解析到
+    // 第二个服务商（opencode-go）——卡片必须显示 opencode-go + 模型名，绝不拿第一个误导用户。
+    fetchModelSettings.mockResolvedValue({
+      result: {
+        passed: true,
+        available: true,
+        status: "loaded",
+        configPath: "/tmp/x",
+        summary: {
+          available: true,
+          status: "loaded",
+          configPath: "/tmp/x",
+          providers: [
+            {
+              id: "deepseek",
+              label: "DeepSeek",
+              type: "openai-compatible",
+              baseUrl: "https://api.deepseek.com/v1",
+              apiKeyEnv: "DEEPSEEK_API_KEY",
+              apiKeyStatus: "missing",
+            },
+            {
+              id: "opencode-go",
+              label: "OpenCode Go",
+              type: "openai-compatible",
+              baseUrl: "https://opencode.ai/zen/go/v1",
+              apiKeyEnv: "OPENCODE_API_KEY",
+              apiKeyStatus: "present",
+            },
+          ],
+          profiles: [{ id: "go_deepseek-v4.1-flash", provider: "opencode-go", model: "deepseek-v4.1-flash" }],
+          taskProfiles: { fastDraft: "go_deepseek-v4.1-flash" },
+          issueCount: 0,
+          highRiskIssueCount: 0,
+        },
+        issues: [],
+      },
+      rawText: "{}",
+      taskAssignments: {
+        triage: { profileId: "go_deepseek-v4.1-flash", thinking: false },
+        fastDraft: { profileId: "go_deepseek-v4.1-flash", thinking: false },
+      },
+    });
+    testModelConnection.mockResolvedValue({ providerId: "opencode-go", models: [], elapsedMs: 1 });
+
+    render(<ModelSettingsDialog open onCancel={() => undefined} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("当前 AI 服务")).toBeTruthy();
+    });
+    expect(screen.getByText("OpenCode Go")).toBeTruthy();
+    expect(screen.getByText(/deepseek-v4\.1-flash/u)).toBeTruthy();
+    // 卡片显示的是在用服务（密钥已配置），不再是列表第一个的「尚未配置密钥」。
+    expect(screen.queryByText("DeepSeek")).toBeNull();
+    expect(screen.getByText("密钥已配置")).toBeTruthy();
+    expect(screen.queryByText("尚未配置密钥")).toBeNull();
+  });
 });
 
 describe("ModelSettingsDialog 保存 warnings 展示", () => {

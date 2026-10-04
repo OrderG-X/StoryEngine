@@ -226,6 +226,8 @@ export interface StateOverviewWritingRulesSummary {
   readonly pacing?: string;
   readonly revealPolicy?: string;
   readonly targetChapterWords?: number;
+  /** 章节字数硬下限（chapterLength.minWords，纯汉字口径；长跑 2026-10-04 #4）：出稿与定稿执法都用它，AI 报字数时须对照。 */
+  readonly minChapterChineseCharacters?: number;
   readonly genreRequirements: readonly string[];
   readonly forbiddenContent: readonly string[];
   readonly doNotDo: readonly string[];
@@ -930,6 +932,8 @@ function toWritingRulesSummary(rules: WritingRules | null): StateOverviewWriting
     pacing: rules.pacing,
     revealPolicy: rules.revealPolicy,
     targetChapterWords: rules.chapterLength?.targetWords,
+    // 长跑 #4：显式硬下限透出给 AI/面板（缺省不出现，老书 overview 形状不变）。
+    ...(rules.chapterLength?.minWords ? { minChapterChineseCharacters: rules.chapterLength.minWords } : {}),
     genreRequirements: safeStringArray(rules.genreRequirements).map((item) => truncate(item)).slice(0, MAX_ITEMS),
     forbiddenContent: safeStringArray(rules.forbiddenContent).map((item) => truncate(item)).slice(0, MAX_ITEMS),
     doNotDo: safeStringArray(rules.doNotDo).map((item) => truncate(item)).slice(0, MAX_ITEMS),

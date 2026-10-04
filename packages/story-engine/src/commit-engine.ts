@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   attachDiagnostics,
@@ -251,6 +251,16 @@ interface TransactionFile {
   readonly relativePath: string;
   readonly content: string;
 }
+
+/**
+ * #7：事务目录的活跃保留窗口——`.story-engine-tx/` 顶层按章号只保留最近 N 个
+ * `commit-chapter-NNNN` 目录，更旧的「终态干净」目录（applied，或回滚干净的 recovered）
+ * 归档进 `.story-engine-tx/archive/`（恢复扫描/残留通知只扫顶层，归档目录天然出扫描面）。
+ * 归档用单次 rename(2)（同盘原子、无递归删除竞态），证据全保留、不删任何字节。
+ * 永不归档：recovered-with-issues（listCommitRecoveryNotices 的持续上浮证据）、
+ * staged/failed（未决事务，交给恢复路径收尾）、snapshot-manifest 目录（历史审计证据）。
+ */
+export const COMMIT_TRANSACTION_ACTIVE_RETENTION = 5;
 
 const commitTransactionTails = new Map<string, Promise<void>>();
 interface CommitLockContext {
@@ -1061,6 +1071,9 @@ async function applyCommitTransaction(
   // Preserve the applied manifest and backups as durable evidence. Recursive
   // path cleanup cannot be made race-free with Node's fs API (no unlinkat).
   // A later transaction reuses this manifest-controlled directory safely.
+  // (#7) Evidence is never deleted: once the retention window rolls past this
+  // chapter, the whole directory is atomically renamed into .story-engine-tx/archive/
+  // (see archiveSettledCommitTransactionsUnlocked).
   return { passed: true };
 }
 
@@ -1148,6 +1161,84 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
       throw taggedError("UNREADABLE_TX_RESIDUE", `Unreadable commit transaction residue at ${relative(resolve(projectDir), txDir)}; refusing formal-state reads.`);
     }
     await recoverCommitTransactionResidue(projectDir, txDir, chapter);
+  }
+  // #7：恢复收尾后做一次事务目录治理（保留窗口 + 归档）。这是 housekeeping 而非正确性前提——
+  // 失败（权限/瞬态 IO）就把目录原样留给下一轮，绝不让归档把正式状态读写堵死。
+  try {
+    await archiveSettledCommitTransactionsUnlocked(projectDir);
+  } catch {
+    // 归档失败 ≠ 数据问题：目录保留在原位，恢复扫描照常处理（applied/recovered 均为已收敛状态）。
+  }
+}
+
+/**
+ * #7：把超出保留窗口的「终态干净」事务目录原子归档进 `.story-engine-tx/archive/`。
+ * 只做 rename(2)（同盘原子、整目录 all-or-nothing），不递归删除——旧实现刻意保留
+ * applied 目录当证据（"recursive path cleanup cannot be made race-free"），本函数不改这个
+ * 约束：证据一个字节都不删，只是搬出恢复扫描/残留通知的视野（两者只扫顶层 `commit-chapter-\d+`），
+ * 顶层从此只留最近 N 章，长跑不再无限堆积。调用方必须已持有 project commit 锁。
+ */
+async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Promise<void> {
+  const txRoot = join(projectDir, ".story-engine-tx");
+  let entries;
+  try {
+    entries = await readdir(txRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  const chapters: { readonly chapter: number; readonly dirName: string }[] = [];
+  for (const entry of entries) {
+    const match = /^commit-chapter-(\d+)$/u.exec(entry.name);
+    if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    chapters.push({ chapter: Number(match[1]), dirName: entry.name });
+  }
+  if (chapters.length <= COMMIT_TRANSACTION_ACTIVE_RETENTION) return;
+  // 章号最新的 N 个保持在原位（近期取证窗口），更旧的才候选归档。
+  const candidates = chapters
+    .sort((left, right) => right.chapter - left.chapter)
+    .slice(COMMIT_TRANSACTION_ACTIVE_RETENTION);
+  for (const candidate of candidates) {
+    const txDir = join(txRoot, candidate.dirName);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await readFile(join(txDir, "manifest.json"), "utf-8")) as unknown;
+    } catch {
+      // 读不了/解析不了：不是归档对象。坏 manifest 由恢复路径 fail-closed 把关，这里绝不碰。
+      continue;
+    }
+    if (!isRecord(raw)) continue;
+    const manifest = parseRecoverableCommitManifest(raw, candidate.chapter);
+    if (!manifest) continue;
+    // 只归档终态干净的事务：applied（成功终态）或「recovered 且无 recoveryIssues」（回滚干净的残留）。
+    // recovered-with-issues 是「已放行但盘上分歧仍在」的持续证据（listCommitRecoveryNotices 会一直
+    // 上浮到 report.issues/overview warnings），归档它等于把分歧信号静默抹掉——绝不动。
+    if (manifest.status !== "applied" && manifest.status !== "recovered") continue;
+    if (manifest.status === "recovered"
+      && Array.isArray(raw.recoveryIssues)
+      && raw.recoveryIssues.some((item): item is string => typeof item === "string" && item.length > 0)) {
+      continue;
+    }
+    // rename 前复核源目录仍是真实目录（恢复循环刚校验过，这里是防 TOCTOU 的廉价兜底）。
+    const stats = await lstat(txDir).catch(() => undefined);
+    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) continue;
+    const archiveRoot = join(txRoot, "archive");
+    await ensureSafeDirectory(projectDir, archiveRoot, true, "commit transaction archive root");
+    // 同章重提后再归档会撞同名：归档名加序号后缀，绝不覆盖既有归档（历史证据只增不减）。
+    for (let attempt = 1; attempt <= 20; attempt += 1) {
+      const targetName = attempt === 1 ? candidate.dirName : `${candidate.dirName}--${attempt}`;
+      const target = join(archiveRoot, targetName);
+      try {
+        await rename(txDir, target);
+        break;
+      } catch (error) {
+        if (!isNodeError(error) || (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM" && error.code !== "ENOTDIR")) {
+          // 真正的 IO 故障：跳过这个目录（留在原位），继续处理其余候选——归档绝不半途炸掉恢复扫描。
+          break;
+        }
+        // EEXIST/ENOTEMPTY：归档目标被占，换下一个后缀重试。
+      }
+    }
   }
 }
 
@@ -1245,22 +1336,28 @@ async function recoverCommitTransactionResidue(
   }
 
   if (manifest.status === "recovered") return;
-  if (manifest.status !== "applied") {
-    // recover 路径不传 writtenFiles：staged/failed 残留的新建文件可能含用户未保存的编辑，
-    // 磁盘内容不能自证为「事务写入的内容」。保持 fail-closed（拒绝删除并如实记录），
-    // 只有 apply 路径（内存里有确切 writtenContent）才安全删除。
-    const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
-    if (rollbackIssues.length > 0) {
-      // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件
-      // 原地保留（用户数据分毫不动），事务标记 recovered 放行——后续提交会自然覆盖它。
-      // 恢复手段从「报错让用户手工删 .story-engine-tx」升级为「如实记录 + 自动放行」。
-      await writeManifest(projectDir, txDir, {
-        ...manifest,
-        status: "recovered",
-        recoveryIssues: rollbackIssues,
-      });
-      return;
-    }
+  // #7（长跑 2026-10-04 真机 50 章实证）：applied 是成功终态，恢复扫描对它无事可做、更不能改写。
+  // apply 的收尾顺序是「逐文件 fsync 全部落盘 → 最后写 applied manifest」，manifest 落成 applied 即
+  // 证明事务写入全部完成；此前这里对 applied 无条件改写成 recovered——而恢复扫描无处不在（每次提交、
+  // 每次读概览 buildStateOverview、快照操作都先跑 recoverProjectCommitTransactions），于是每个成功
+  // 事务的 applied 终态在收尾后的第一次概览刷新就被降级成 recovered，成功/中断在盘上从此不可区分
+  // （测试书 50/50 manifest 全停 recovered、零 recoveryIssues）。「recovered」只留给真正被中断、
+  // 由恢复路径收尾的事务（staged/failed）。
+  if (manifest.status === "applied") return;
+  // recover 路径不传 writtenFiles：staged/failed 残留的新建文件可能含用户未保存的编辑，
+  // 磁盘内容不能自证为「事务写入的内容」。保持 fail-closed（拒绝删除并如实记录），
+  // 只有 apply 路径（内存里有确切 writtenContent）才安全删除。
+  const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
+  if (rollbackIssues.length > 0) {
+    // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件
+    // 原地保留（用户数据分毫不动），事务标记 recovered 放行——后续提交会自然覆盖它。
+    // 恢复手段从「报错让用户手工删 .story-engine-tx」升级为「如实记录 + 自动放行」。
+    await writeManifest(projectDir, txDir, {
+      ...manifest,
+      status: "recovered",
+      recoveryIssues: rollbackIssues,
+    });
+    return;
   }
   await writeManifest(projectDir, txDir, { ...manifest, status: "recovered" });
 }

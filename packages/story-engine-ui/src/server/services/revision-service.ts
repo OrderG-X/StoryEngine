@@ -49,7 +49,7 @@ import {
 } from "@actalk/story-engine";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { defaultDraftPath, writeFileAtomic } from "../lib/project-io.js";
+import { defaultDraftPath, runExclusive, writeFileAtomic } from "../lib/project-io.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
 
 /* ---------------------------------------------------------------------------
@@ -369,8 +369,18 @@ export async function applyRevision(input: {
    *  落盘前做与工具路同口径的 target_unchanged 守卫；没带（旧客户端）保持原行为，守卫是纯增量。 */
   readonly targetText?: string;
 }): Promise<RevisionApplySuccess | RevisionFailure> {
-  const { projectDir, chapter, preview } = input;
+  const { projectDir, chapter } = input;
   const draftPath = defaultDraftPath(projectDir, chapter);
+  // #9：读稿→算稿→写盘整段按草稿文件互斥（与 reviseDraftOneShot 同一把锁）——apply 的读此前在
+  // runWithSnapshot 临界区之外，两笔并发 apply 仍能交错出「各自基于旧稿、最后写者赢」。
+  return runExclusive(draftPath, () => applyRevisionLocked(input, draftPath));
+}
+
+async function applyRevisionLocked(
+  input: Parameters<typeof applyRevision>[0],
+  draftPath: string,
+): Promise<RevisionApplySuccess | RevisionFailure> {
+  const { projectDir, chapter, preview } = input;
   const draftContent = await readFile(draftPath, "utf-8");
   const beforeSpan = locateRevisionSpan(draftContent, preview.beforeText);
   if (beforeSpan === "not_found") return { ok: false, code: "before_text_not_found" };
@@ -419,8 +429,23 @@ export async function reviseDraftOneShot(input: {
   readonly replacementText?: string;
   readonly callModel: RevisionModelCaller;
 }): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
+  const draftPath = defaultDraftPath(input.projectDir, input.chapter);
+  // #9（长跑 2026-10-04 真机实证）：Mastra 对同一轮模型回出的多个 tool call 是
+  // Promise.all 并行执行（@mastra/core 1.42.0 executeTools）。「读稿 → 调修订模型 → 写盘」
+  // 这段读-改-写此前无任何互斥：同轮 N 笔 revise_draft 并发跑时各自读到同一份「本轮开头的
+  // 工作稿」、各自写回「开头稿+自己的修订」，最后写者赢——前面的修订被静默覆盖（真机第 2 章
+  // 两笔丢一笔、第 14 章四笔并发只活最后一笔，AI 会话原话「并发改写只保留了最后一处」）。
+  // 修法：整段按草稿文件加进程内互斥（runExclusive，同 workspace 写盘串行的既有原语）——
+  // 第二笔排队等第一笔写完才读盘，每笔修订天然基于磁盘最新工作稿（含上一笔的结果）。
+  // 刻意不用 project 级 commit 锁：修订模型一跑几十秒，别让概览/提交读写陪跑。
+  return runExclusive(draftPath, () => reviseDraftOneShotLocked(input, draftPath));
+}
+
+async function reviseDraftOneShotLocked(
+  input: Parameters<typeof reviseDraftOneShot>[0],
+  draftPath: string,
+): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
   const { projectDir, chapter } = input;
-  const draftPath = defaultDraftPath(projectDir, chapter);
   const draftContent = await readFile(draftPath, "utf-8");
 
   // style=deai 时把去 AI 味手法注入修订目标——让 agent 看完 check_ai_flavor 后能直接经本工具去 AI 味，

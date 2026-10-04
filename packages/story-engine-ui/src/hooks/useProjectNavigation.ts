@@ -48,9 +48,23 @@ export interface UseProjectNavigationParams {
 }
 
 export interface UseProjectNavigationReturn {
-  readonly openProject: (nextProjectPath: string, options?: { readonly updateUrl?: boolean }) => Promise<boolean>;
-  readonly openRecentBook: (bookId: string, options?: { readonly updateUrl?: boolean }) => Promise<boolean>;
-  readonly openHome: (options?: { readonly updateUrl?: boolean }) => Promise<boolean>;
+  /**
+   * onBusy:"silent"（长跑 #1）：忙碌守卫撞上时不弹「已有操作正在进行」toast、静默放弃本次导航。
+   * 只给 App 启动/路由回放用——StrictMode 会在挂载时同步双跑初始路由 effect，第一次 openHome 还
+   * await 在 flushAutosaveNow 里没走完 finally，第二次就撞上单槽忙碌守卫误弹 toast（首页加载即弹的根源）。
+   * 用户点击导航（onGoHome 等）保持默认 "toast"，忙碌仍要如实告知。
+   */
+  readonly openProject: (
+    nextProjectPath: string,
+    options?: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" },
+  ) => Promise<boolean>;
+  readonly openRecentBook: (
+    bookId: string,
+    options?: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" },
+  ) => Promise<boolean>;
+  readonly openHome: (
+    options?: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" },
+  ) => Promise<boolean>;
   readonly openChapterWorkspace: (chapter: ChapterNavItem) => Promise<void>;
   readonly handleSelectChapter: (chapterId: string) => void;
   readonly handleContinueNextChapter: () => Promise<void>;
@@ -523,9 +537,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     };
   };
 
-  const beginNavigationTransition = (action: string): WorkspaceOperationToken | null => {
+  const beginNavigationTransition = (
+    action: string,
+    onBusy: "toast" | "silent" = "toast",
+  ): WorkspaceOperationToken | null => {
     const token = beginWorkspaceOperation("navigation-transition", currentNavigationIdentity());
-    if (!token) showToast(`已有操作正在进行，暂不能${action}。`, 4600);
+    if (!token && onBusy === "toast") showToast(`已有操作正在进行，暂不能${action}。`, 4600);
     return token;
   };
 
@@ -538,8 +555,11 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   /* ================================================================ */
   /*  openProject                                                     */
   /* ================================================================ */
-  const openProject = async (nextProjectPath: string, options: { readonly updateUrl?: boolean } = {}): Promise<boolean> => {
-    const transition = beginNavigationTransition("切换书籍");
+  const openProject = async (
+    nextProjectPath: string,
+    options: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" } = {},
+  ): Promise<boolean> => {
+    const transition = beginNavigationTransition("切换书籍", options.onBusy);
     if (!transition) return false;
     const wasSuspended = isAutosaveSuspended();
     let suspendedForTransition = false;
@@ -767,7 +787,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   /* ================================================================ */
   /*  openRecentBook                                                  */
   /* ================================================================ */
-  const openRecentBook = async (bookId: string, options: { readonly updateUrl?: boolean } = {}): Promise<boolean> => {
+  const openRecentBook = async (
+    bookId: string,
+    options: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" } = {},
+  ): Promise<boolean> => {
     const book = recentBooks.find((item) => item.id === bookId);
     if (!book) return false;
 
@@ -775,7 +798,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       return openProject(book.projectPath, options);
     }
 
-    const transition = beginNavigationTransition("切换书籍");
+    const transition = beginNavigationTransition("切换书籍", options.onBusy);
     if (!transition) return false;
 
     try {
@@ -832,8 +855,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   /* ================================================================ */
   /*  openHome                                                        */
   /* ================================================================ */
-  const openHome = async (options: { readonly updateUrl?: boolean } = {}): Promise<boolean> => {
-    const transition = beginNavigationTransition("返回首页");
+  const openHome = async (
+    options: { readonly updateUrl?: boolean; readonly onBusy?: "toast" | "silent" } = {},
+  ): Promise<boolean> => {
+    const transition = beginNavigationTransition("返回首页", options.onBusy);
     if (!transition) return false;
     try {
       const flushed = await flushAutosaveNow();

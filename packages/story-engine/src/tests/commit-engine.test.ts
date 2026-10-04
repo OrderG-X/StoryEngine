@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  COMMIT_TRANSACTION_ACTIVE_RETENTION,
   commitFastDraft,
+  listCommitRecoveryNotices,
   recoverProjectCommitTransactions,
   setCommitIoTestHookForTests,
   withProjectCommitLock,
@@ -783,6 +785,81 @@ describe("StoryEngine-NG CommitEngine", () => {
     expect(report.issues.join(" ")).not.toContain("transaction_recovered_partial");
     const overview = await buildStateOverview({ projectDir, chapter: 3 });
     expect(overview.uiHints.warnings.join(" ")).not.toContain("transaction_recovered_partial");
+  });
+
+  it("#7 成功终态 applied 跨恢复扫描存活：概览刷新/后续提交不再把它降级成 recovered", async () => {
+    const projectDir = await createFixtureProject();
+    await writeDraft(projectDir, 5, "# 第五章\n\nGuo Xu 提交后还要被反复读概览。\n");
+    const report = await commitFastDraft({ projectDir, chapter: 5, commitPlan: {} });
+    expect(report.passed).toBe(true);
+    await expect(readTransactionStatus(projectDir, 5)).resolves.toBe("applied");
+
+    // 真机链路里，提交收尾后的每一次概览刷新、下一次提交、快照操作都会先跑恢复扫描——
+    // 旧实现在这把 applied 无条件改写成 recovered（测试书 50/50 全停 recovered、零 recoveryIssues）。
+    await buildStateOverview({ projectDir, chapter: 5 });
+    await recoverProjectCommitTransactions(projectDir);
+    await writeDraft(projectDir, 6, "# 第六章\n\nGuo Xu 提交另一章。\n");
+    const laterReport = await commitFastDraft({ projectDir, chapter: 6, commitPlan: {} });
+    expect(laterReport.passed).toBe(true);
+
+    await expect(readTransactionStatus(projectDir, 5)).resolves.toBe("applied");
+    await expect(readTransactionStatus(projectDir, 6)).resolves.toBe("applied");
+    // 全干净的目录不产生任何残留通知（recovered 才会——applied 是成功，不是残留）。
+    await expect(listCommitRecoveryNotices(projectDir)).resolves.toEqual([]);
+  });
+
+  it("#7 超出保留窗口的终态干净事务目录原子归档；recovered-with-issues 与最近 N 章永不归档", async () => {
+    const projectDir = await createFixtureProject();
+    const txRoot = join(projectDir, ".story-engine-tx");
+    const archiveRoot = join(txRoot, "archive");
+    // 连续成功提交 7 章：第 7 章提交的恢复扫描会看到 6 个目录，把最旧的第 1 章归档。
+    for (let chapter = 1; chapter <= 7; chapter += 1) {
+      await writeDraft(projectDir, chapter, `# 第${chapter}章\n\nGuo Xu 第${chapter}次提交。\n`);
+      const report = await commitFastDraft({ projectDir, chapter, commitPlan: {} });
+      expect(report.passed).toBe(true);
+    }
+    await expect(access(join(archiveRoot, "commit-chapter-0001"))).resolves.toBeUndefined();
+    await expect(access(join(txRoot, "commit-chapter-0001"))).rejects.toThrow();
+    // 归档保全证据：manifest 原样可读、仍是 applied 终态。
+    const archived = JSON.parse(await readFile(join(archiveRoot, "commit-chapter-0001", "manifest.json"), "utf-8")) as { status: string };
+    expect(archived.status).toBe("applied");
+
+    // 伪造第 2 章为 recovered-with-issues（已放行但盘上分歧仍在的持续证据）——必须留在原地、持续上浮。
+    const issueDir = join(txRoot, "commit-chapter-0002");
+    await writeFile(join(issueDir, "manifest.json"), `${JSON.stringify({
+      version: 2,
+      chapter: 2,
+      createdAt: "2026-10-04T00:00:00.000Z",
+      files: [],
+      backups: [],
+      status: "recovered",
+      recoveryIssues: ["Rollback failed for chapters/0002.md: TX_CONTENT_CHANGED"],
+    }, null, 2)}\n`, "utf-8");
+    await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
+    await expect(access(join(txRoot, "commit-chapter-0002"))).resolves.toBeUndefined(); // 未被归档
+    await expect(listCommitRecoveryNotices(projectDir)).resolves.toEqual([
+      expect.objectContaining({ chapter: 2, transactionId: "commit-chapter-0002" }),
+    ]);
+
+    // 再提一章 + 再跑一次恢复：窗口滚动，第 3 章归档；issues 目录与最近 N 章仍在顶层。
+    await writeDraft(projectDir, 8, "# 第八章\n\nGuo Xu 推进到第八章。\n");
+    expect((await commitFastDraft({ projectDir, chapter: 8, commitPlan: {} })).passed).toBe(true);
+    await recoverProjectCommitTransactions(projectDir);
+    await expect(access(join(archiveRoot, "commit-chapter-0003"))).resolves.toBeUndefined();
+    await expect(access(join(txRoot, "commit-chapter-0003"))).rejects.toThrow();
+    const topLevel = (await readdir(txRoot, { withFileTypes: true }))
+      .map((entry) => entry.name)
+      .filter((name) => /^commit-chapter-\d+$/u.test(name))
+      .sort();
+    expect(topLevel).toEqual([
+      "commit-chapter-0002", // recovered-with-issues：永不归档
+      ...[4, 5, 6, 7, 8].map((chapter) => `commit-chapter-${String(chapter).padStart(4, "0")}`), // 最近 N 章保持活跃
+    ]);
+    for (const chapter of [4, 5, 6, 7, 8]) {
+      await expect(readTransactionStatus(projectDir, chapter)).resolves.toBe("applied");
+    }
+    // 保留窗口常量被测试锁定：改窗口大小是有意决策，须同步改这条测试的期望清单。
+    expect(COMMIT_TRANSACTION_ACTIVE_RETENTION).toBe(5);
   });
 
   it.skipIf(process.platform === "win32")("does not truncate an outside sentinel when a target parent is swapped before open", async () => {

@@ -18,6 +18,7 @@ import {
   buildStateOverview,
   type StateOverview,
 } from "@actalk/story-engine";
+import { basename, isAbsolute, relative } from "node:path";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
@@ -40,6 +41,14 @@ import {
   type CommitPreviewGuardFailure,
 } from "./commit-preview-store.js";
 import { userTurnAllowsCommitApply } from "./turn-intent-gate.js";
+
+/**
+ * 堆积加重档阈值（长跑 #16：50 章积 323 条、42 条超 3 章未推进，全靠用户发起治理）：
+ * 未收口 ≥30 条时回执除文案提醒外加结构化 threadMaintenanceHint:"escalated"，
+ * instructions 据此**必须**在收尾 suggest_next_steps 里摆上「清理线索」选项卡——把「该清理了」
+ * 从模型的自觉变成回执里的确定性触发。仍只是给选项：真清理走意图门、要用户点头。
+ */
+export const THREAD_STALE_ESCALATION_THRESHOLD = 30;
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要定稿的章号（必须与之前 commit_preview 的章号一致）。")),
@@ -70,6 +79,9 @@ const outputSchema = z.object({
     "本次定稿用的章节语义声明来源：model=模型声明已生效；fallback=没拿到声明、本章按确定性规则兜底（summary 里已有【章节语义声明未生效】提示，须如实转达）。",
   ),
   declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案）。"),
+  threadMaintenanceHint: z.literal("escalated").optional().describe(
+    "线索池堆积加重档（未收口 ≥" + THREAD_STALE_ESCALATION_THRESHOLD + " 条）：必须在收尾的 suggest_next_steps 里摆上「清理线索」选项卡（仍只给选项，真清理要用户点头）。",
+  ),
 });
 
 const GUARD_FAILURE_MESSAGE: Record<CommitPreviewGuardFailure, string> = {
@@ -95,6 +107,8 @@ export interface CommitApplyToolOutput {
   /** 定稿成功时：章节语义声明来源（fallback=本章按确定性规则兜底，summary 已明说）。 */
   readonly declarationStatus?: ChapterDeltaDeclarationStatus;
   readonly declarationReason?: string;
+  /** 线索池堆积加重档（长跑 #16）：未收口 ≥30 条时出现，instructions 据此必须在下一步选项卡里摆「清理线索」。 */
+  readonly threadMaintenanceHint?: "escalated";
 }
 
 // 角色候选自动登记（convertCandidatesToMatrixUpdates）已于 2026-06-24 移除：
@@ -167,7 +181,8 @@ export async function applyCommitToolLogic(input: {
         committed: false,
         refused: false,
         ...(safeIssues.length > 0 ? { refusalReason: safeJoined } : {}),
-        report,
+        // #6 绝对路径不进用户可见卡：report.chapterPath 改写为项目内相对路径（失败卡同样会渲染 detailLines）。
+        report: withRelativeChapterPath(report, projectDir),
         overview,
         // #6a 诚实性：入库失败=事务已回滚、未产生净改动 → 不再谎称「改动已建快照可撤销」。
         summary: `第 ${chapter} 章定稿未通过：${safeJoined}。本次未定稿、工作稿未改动。`,
@@ -190,7 +205,8 @@ export async function applyCommitToolLogic(input: {
         ok: true,
         committed: true,
         refused: false,
-        report,
+        // #6 绝对路径不进用户可见卡：CommitDeltaCard 直接渲染 report.chapterPath，出工具前改写为相对路径。
+        report: withRelativeChapterPath(report, projectDir),
         ...(result.draftBody ? { draftBody: result.draftBody } : {}),
         ...(result.draftTitle ? { draftTitle: result.draftTitle } : {}),
         overview,
@@ -212,12 +228,32 @@ export async function applyCommitToolLogic(input: {
         ...(declarationNotice && result.declarationOutcome?.reason
           ? { declarationReason: scrubBareEntityIdsFromText(result.declarationOutcome.reason, nameById) }
           : {}),
+        // 长跑 #16：堆积加重档走结构化字段（不赌模型读散文），instructions 键定它摆「清理线索」选项卡。
+        ...(threadMaintenanceEscalated(overview) ? { threadMaintenanceHint: "escalated" as const } : {}),
       };
     }
     default:
       // http_durable_receipt 机制的专属 kind 不会出现在本工具；出现即编程错误。
       throw new Error(`Unexpected commit apply result for agent_preview_ticket policy: ${String(result.kind)}`);
   }
+}
+
+/**
+ * 铁律④·绝不泄露本地绝对路径（长跑 #6）：引擎 CommitReport.chapterPath 是磁盘绝对路径
+ * （join(projectDir, "chapters", "NNNN.md")），report 会原样流到前端定稿卡——
+ * CommitDeltaCard「正式章节：已写入 …」（utils/commitReportSummary.ts 只做展示、无消毒）。
+ * 回执出工具前把 chapterPath 改写成项目内相对路径（chapters/NNNN.md）；不在项目内时退化为文件名，
+ * 绝不让 /Users/... 进用户可见文案。report 其余字段不动（服务端自身读盘不经过本投影）。
+ */
+function withRelativeChapterPath(report: unknown, projectDir: string): unknown {
+  const chapterPath = (typeof report === "object" && report !== null
+    ? (report as { readonly chapterPath?: unknown }).chapterPath
+    : undefined);
+  if (typeof chapterPath !== "string" || chapterPath.trim().length === 0) return report;
+  // relative() 在 Windows 上产出反斜杠分隔，统一拍平成 / 展示；逃出项目根（../ 或绝对）时退化为文件名。
+  const rel = relative(projectDir, chapterPath).split("\\").join("/");
+  const safePath = rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel) ? rel : basename(chapterPath);
+  return { ...(report as Record<string, unknown>), chapterPath: safePath };
 }
 
 async function refusal(projectDir: string, chapter: number, reason: string): Promise<CommitApplyToolOutput> {
@@ -257,10 +293,17 @@ export function buildThreadMaintenanceNote(overview: StateOverview | undefined):
   const unresolved = (overview?.threads.open ?? 0) + (overview?.threads.touched ?? 0);
   const cleanupVisible = overview?.threads.cleanupVisibleCount ?? 0;
   if (unresolved < OPEN_THREADS_HINT_THRESHOLD && cleanupVisible < CLEANUP_VISIBLE_HINT_THRESHOLD) return "";
+  const escalated = unresolved >= THREAD_STALE_ESCALATION_THRESHOLD;
   const detail = cleanupVisible > 0
     ? `未收口的线索已积到 ${unresolved} 条，其中 ${cleanupVisible} 条已经低价值或过期`
     : `未收口的线索已积到 ${unresolved} 条`;
-  return `另外，${detail}——积多了会拖累后面的章节方向。想清就说「清理线索」，我会先归并整理、建好存档点，可一键撤销。`;
+  return `另外，${detail}${escalated ? "，已经明显堆积、建议尽快清理" : ""}——积多了会拖累后面的章节方向。想清就说「清理线索」，我会先归并整理、建好存档点，可一键撤销。`;
+}
+
+/** 堆积加重档判定（与 buildThreadMaintenanceNote 同口径）：给回执结构化 threadMaintenanceHint 用。 */
+export function threadMaintenanceEscalated(overview: StateOverview | undefined): boolean {
+  const unresolved = (overview?.threads.open ?? 0) + (overview?.threads.touched ?? 0);
+  return unresolved >= THREAD_STALE_ESCALATION_THRESHOLD;
 }
 
 interface ExpiredEntryLike {

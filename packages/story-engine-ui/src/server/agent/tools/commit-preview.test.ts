@@ -57,6 +57,24 @@ async function writeDraft(projectDir: string, chapter: number, content: string):
   );
 }
 
+/** 构造【正文纯汉字数恰为 N】的草稿（含标题/主角名/对话，满足除长度外的质检门）；与引擎 countDraftChineseCharacters 同字符集。 */
+function draftOfExactlyChineseChars(target: number, mainCharacterName: string): string {
+  const cjk = /[\u3400-\u9fff]/u;
+  let body = "";
+  let count = 0;
+  const append = (text: string): void => {
+    for (const ch of text) {
+      if (count >= target) return;
+      body += ch;
+      if (cjk.test(ch)) count += 1;
+    }
+  };
+  append(`${mainCharacterName}说：“先记下来，回头对账。”`);
+  const filler = "檐角的铜铃被风吹得轻响，他把袖口的灰拍净，沿着廊下慢慢往前走，心里把下一步又推了一遍。";
+  while (count < target) append(filler);
+  return `# 第1章\n\n${body}\n`;
+}
+
 describe("commit_preview", () => {
   it("缺草稿 → canCommit=false，blockingReasons 是中文人话（无机器码/无绝对路径），不发 token", async () => {
     const projectDir = await makeProject("缺草稿");
@@ -78,6 +96,37 @@ describe("commit_preview", () => {
     expect(out.canCommit).toBe(false);
     expect(out.previewToken).toBeUndefined();
     expect(out.draftQualityIssues.some((issue) => issue.severity === "error")).toBe(true);
+  });
+
+  // 长跑 2026-10-04 #5b/#4：写作规则显式 minWords=3000 时，400 字短稿（>旧 300 封顶）必须被硬阻断；
+  // blockingReasons/summary 点名字数下限（人话），modelHint 指路「扩写」——别让模型在不达标稿上反复尝试定稿。
+  it("写作规则显式 minWords → 短稿被硬阻断，阻断原因点名字数下限（人话）", async () => {
+    const projectDir = await makeProject("字数硬下限", "林远");
+    await writeFile(
+      join(projectDir, "story", "writing-rules.json"),
+      `${JSON.stringify({
+        version: "v0",
+        chapterLength: { targetWords: 3000, minWords: 3000 },
+        proseStyle: [], genreRequirements: [], suspenseRules: [], payoffRules: [],
+        reversalRules: [], readerExperienceRules: [], forbiddenContent: [], doNotDo: [],
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+    await writeDraft(projectDir, 1, draftOfExactlyChineseChars(400, "林远"));
+
+    const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+    expect(out.canCommit).toBe(false);
+    expect(out.ok).toBe(false);
+    expect(out.previewToken).toBeUndefined();
+    expect(out.draftQualityIssues.some((issue) => issue.type === "too_short" && issue.severity === "error")).toBe(true);
+    // 阻断原因含下限与当前字数（中文人话，无机器码），summary 同步「暂不可定稿」。
+    const joined = out.blockingReasons.join("\n");
+    expect(joined).toContain("3000");
+    expect(joined).toContain("400");
+    expect(joined).toContain("下限");
+    expect(joined).not.toMatch(/[a-z]+_[a-z_]+/);
+    expect(out.summary).toContain("暂不可定稿");
+    expect(out.modelHint).toContain("扩写");
   });
 
   it("合格草稿 → canCommit=true 并签发 previewToken", async () => {

@@ -1596,6 +1596,11 @@ export function useChat(params: UseChatParams): UseChatResult {
                   `这次操作写的是第 ${info.chapter} 章，不在当前章（第 ${operation.chapter} 章）；当前章的稿子没有变动，章节列表已按最新状态刷新。`,
                   4200,
                 );
+                // #13（长跑×3）：onToolCall(generate_draft) 曾乐观把【当前章】置成 draft_generating，
+                // 结果落定是「写的是另一章」（多候选采样不接 delta sink / retarget 用尽时不会有流式正文
+                // 把 operation 带过去）→ 当前章不可能还在生成，这里立即按编辑器现状复位，
+                // 别让「正在生成工作稿…」一直挂到回合结束（跨章分支原本直接 return、跳过全部复位链）。
+                unstickGeneratingFlow();
                 return;
               }
               if (info.toolName === "commit_apply") commitReconciliationDraft = null;
@@ -1743,6 +1748,13 @@ export function useChat(params: UseChatParams): UseChatResult {
             reconciliationPromise ??= reconcileAbortedTurnFromDisk();
           }
         }
+        // #13 回合收尾兜底（长跑×3：回合正常结束后标题区仍挂「正在生成工作稿…」）：SSE 回合走到
+        // finally 时 generate_draft 必然已结束（工具在流内串行执行），残留的 draft_generating 只能是
+        // 某条中途分支没复位（跨章出稿直接 return / 出稿后守卫拦下定稿、后续工具不推进流程态等）。
+        // 诚实按编辑器现状复位（有内容→draft_ready，一字未出→idle）；unstickGeneratingFlow 自带
+        // 「只在确实卡在 draft_generating 时才动」守门，正常回合零影响。此时 operation token 还没释放，
+        // 不会有下一轮出稿并发置位（beginWorkspaceOperation 单槽互斥）。
+        if (!wasAborted) unstickGeneratingFlow();
         // 保持 operation 所有权直到盘上真值读完；否则异步 fetch 刚返回，finally 已释放 token，
         // 对账会把本应恢复的成功结果误当成迟到数据丢掉。
         if (reconciliationPromise) await reconciliationPromise;

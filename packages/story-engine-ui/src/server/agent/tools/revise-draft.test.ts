@@ -204,6 +204,68 @@ describe("revise_draft 草稿局部修订工具", () => {
     expect(onDisk).not.toContain("灯是我亲手关的");
   });
 
+  it("#9 同轮并发两次修订都必须保留：第二笔基于磁盘最新稿（含第一笔结果），不再互相覆盖", async () => {
+    const projectDir = await makeProject("并发修订互斥");
+    await writeDraft(projectDir, 1, "# 第1章\n\n门厅的灯还是冷的。\n\n林远推开了那扇门，门后是空荡的走廊。\n");
+
+    // 确定性复现真机交错：第一笔修订的模型调用挂起期间，第二笔并发进来。
+    // （真机即此：Mastra 对同轮多个 tool call 是 Promise.all 并行执行——第 2 章两笔丢一笔、
+    //  第 14 章四笔只活最后一笔，AI 会话原话「并发改写只保留了最后一处」。）
+    let model1Started = false;
+    let releaseModel1!: () => void;
+    const model1Gate = new Promise<void>((resolve) => { releaseModel1 = resolve; });
+    const promptsSeenBySecond: string[] = [];
+
+    const first = runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "门厅的灯还是冷的。",
+      revisionGoal: "场景A：把灯光改成暖的。",
+      callModel: async () => {
+        model1Started = true;
+        await model1Gate; // 模拟修订模型慢——期间第二笔并发进来
+        return JSON.stringify({
+          beforeText: "门厅的灯还是冷的。",
+          afterText: "门厅的灯换成了暖黄的。",
+          changeSummary: "换灯。",
+        });
+      },
+    });
+    while (!model1Started) await new Promise((resolve) => setTimeout(resolve, 1));
+    const second = runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "林远推开了那扇门，门后是空荡的走廊。",
+      revisionGoal: "场景B：把动作改克制。",
+      callModel: async (prompt) => {
+        promptsSeenBySecond.push(prompt);
+        return JSON.stringify({
+          beforeText: "林远推开了那扇门，门后是空荡的走廊。",
+          afterText: "林远轻轻带上了那扇门，走廊尽头有光。",
+          changeSummary: "关门。",
+        });
+      },
+    });
+    // 两笔都在飞时才放行第一笔的模型返回——若无互斥，第二笔此刻已经基于「本轮开头的旧稿」算完，
+    // 随后的写盘会把第一笔的成果整个覆盖掉（旧实现的静默丢失）。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseModel1();
+    const [out1, out2] = await Promise.all([first, second]);
+
+    expect(out1.ok).toBe(true);
+    expect(out1.applied).toBe(true);
+    expect(out2.ok).toBe(true);
+    expect(out2.applied).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("门厅的灯换成了暖黄的。"); // 第一笔存活
+    expect(onDisk).toContain("林远轻轻带上了那扇门，走廊尽头有光。"); // 第二笔存活
+    expect(onDisk).not.toContain("门厅的灯还是冷的");
+    expect(onDisk).not.toContain("推开了那扇门");
+    // 修订基线证据：第二笔的 prompt 里必须已经看到第一笔的结果（基于磁盘最新稿重算）。
+    expect(promptsSeenBySecond.length).toBeGreaterThan(0);
+    expect(promptsSeenBySecond.join("\n")).toContain("门厅的灯换成了暖黄的。");
+  });
+
   it("模型把片段原样 echo 回（afterText===beforeText）→ no-op：诚实 applied:false，不谎称已完成修订", async () => {
     const projectDir = await makeProject("echo空操作");
     const draft = "# 第1章\n\n林远推开了那扇门，门后是空荡的走廊。\n";

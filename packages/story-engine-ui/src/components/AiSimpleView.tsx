@@ -2,6 +2,8 @@ import type { SavedProvider } from "./ModelSettingsDialogTypes.js";
 
 export interface AiSimpleViewProps {
   readonly provider: SavedProvider;
+  /** 实际解析出的模型名（长跑 #2：卡片显示 effective provider/model；解析不到传空串不显示）。 */
+  readonly modelLabel?: string;
   readonly testing: boolean;
   readonly testError: string | null;
   readonly testNotice: string | null;
@@ -18,6 +20,7 @@ function statusLabel(status: SavedProvider["apiKeyStatus"]): string {
 
 export function AiSimpleView({
   provider,
+  modelLabel,
   testing,
   testError,
   testNotice,
@@ -39,7 +42,10 @@ export function AiSimpleView({
         <div className="ms-simple-main">
           <span className={`ms-provider-dot ${ok ? "ok" : "warn"}`} />
           <div className="ms-simple-info">
-            <div className="ms-simple-name">{provider.label}</div>
+            <div className="ms-simple-name">
+              {provider.label}
+              {modelLabel ? <span className="ms-simple-model"> · {modelLabel}</span> : null}
+            </div>
             <div className="ms-simple-status">{statusLabel(provider.apiKeyStatus)}</div>
           </div>
         </div>

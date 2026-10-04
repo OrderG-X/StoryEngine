@@ -96,7 +96,9 @@ export function qualityIssueDisplayText(item: Pick<JudgedQualityCandidate, "type
     case "title_only":
       return "只有标题，没有正文";
     case "too_short":
-      return "正文字数少于 300 个中文字符";
+      // 长跑 2026-10-04 #5b：下限是动态的（写作规则显式 minWords / targetWords×0.75 / 默认 300），
+      // 从引擎消息里取真实下限，别再写死 300。
+      return `正文字数少于 ${readLengthFloorFromMessage(item.message)} 个中文字符（纯汉字口径）`;
     case "model_explanation":
       return "正文里出现模型解释或拒绝语";
     case "missing_chapter_title":
@@ -140,12 +142,17 @@ function replaceEnglishPrefix(message: string, englishPrefix: string, chinesePre
   return `${chinesePrefix}${message.slice(englishPrefix.length).trim()}`;
 }
 
+/** 引擎 too_short 消息（`Draft body is shorter than N Chinese characters (current: M).`）里的下限 N；解析不到回落默认 300。 */
+function readLengthFloorFromMessage(message: string): number {
+  return Number(message.match(/shorter than (\d+)/u)?.[1] ?? 300);
+}
+
 function translateCommonQualityMessage(message: string): string {
   return message
     .replace(/^Draft content is empty\.$/u, "工作稿为空。")
     .replace(/^Draft content looks like JSON or a tool-call artifact\.$/u, "正文里疑似残留 JSON 或工具调用。")
     .replace(/^Draft contains a title but no body content\.$/u, "工作稿只有标题，没有正文。")
-    .replace(/^Draft body is shorter than 300 Chinese characters\.$/u, "正文字数少于 300 个中文字符。")
+    .replace(/^Draft body is shorter than (\d+) Chinese characters(?:[（(].*[)）])?\.$/u, "正文字数少于 $1 个中文字符。")
     .replace(/^Draft contains model explanation or refusal wording\.$/u, "正文里出现模型解释或拒绝语。")
     .replace(/^Draft does not contain an obvious chapter title\.$/u, "缺少明显章节标题。")
     .replace(/^Draft does not contain obvious dialogue\.$/u, "正文没有明显对话。")

@@ -312,6 +312,36 @@ describe("chat-sessions-io 冷热分层（loadChatSessionForDisplay）", () => {
     expect((await readFile(chatSessionArchivePath(dir, id), "utf-8")).trim().split("\n")).toHaveLength(spilled);
   }, 20_000);
 
+  it("第二次溢写追加到已有冷归档不 EBADF（长跑 #17：flag a 只写 fd 上 read 必败，整备降级、分层静默停摆）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "chat-spill2-"));
+    const id = (await readChatSessionIndex(dir)).activeSessionId;
+    // 第一次溢写：归档文件尚不存在 → open 创建、size=0 不走尾字节 read（旧 bug 下首过侥幸成功）。
+    const first = await loadChatSessionForDisplay(dir, id);
+    await saveChatSessionMessages(dir, id, Array.from({ length: 120 }, (_, i) => fatMsg(i)) as unknown);
+    const loaded1 = await loadChatSessionForDisplay(dir, id);
+    expect(loaded1!.windowEpoch).toBe(1);
+    expect(first).not.toBeNull();
+    const firstSpillLines = (await readFile(chatSessionArchivePath(dir, id), "utf-8")).trim().split("\n").length;
+    expect(firstSpillLines).toBeGreaterThan(0);
+
+    // 继续聊到再次超窗 → 第二次溢写要 handle.read 已有归档的尾字节（旧 flag "a" = O_WRONLY，
+    // read 必 EBADF → prepareSessionSafely 降级返回原会话：纪元不涨、窗口不分层）。
+    await saveChatSessionMessages(
+      dir,
+      id,
+      [...loaded1!.messages, ...Array.from({ length: 60 }, (_, i) => fatMsg(200 + i))] as unknown,
+      1,
+    );
+    const loaded2 = await loadChatSessionForDisplay(dir, id);
+    expect(loaded2!.windowEpoch).toBe(2); // 整备真跑成（EBADF 降级路径会停在 1）
+    // 冷归档两段拼接可回读：每行都是完整 JSON（无半行损坏）、第二次溢写真的追加了新段、id 不重复。
+    const lines = (await readFile(chatSessionArchivePath(dir, id), "utf-8")).trim().split("\n");
+    const ids = lines.map((line) => (JSON.parse(line) as { id: string }).id);
+    expect(ids[0]).toBe("fat-0");
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(lines.length).toBeGreaterThan(firstSpillLines);
+  }, 20_000);
+
   it("窗口纪元对账：带过期纪元的保存被拒（旧页/他页全量回写），最新纪元照常保存", async () => {
     const dir = await mkdtemp(join(tmpdir(), "chat-epoch-"));
     const id = (await readChatSessionIndex(dir)).activeSessionId;

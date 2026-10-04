@@ -466,20 +466,26 @@ export function App() {
 
   /* ---- Initial routing useEffect ---- */
   useEffect(() => {
-    const applyRoute = () => {
+    // 首次挂载走 onBusy:"silent"（长跑 #1）：StrictMode 挂载期同步双跑本 effect，第一次 openHome 还
+    // await 在 flushAutosaveNow 里没走完 finally，第二次就撞上单槽忙碌守卫——误弹「已有操作正在进行，
+    // 暂不能返回首页」。启动路由回放撞忙只静默放弃（第一次正在去的正是同一个路由）；popstate 是
+    // 用户驱动的导航，保持默认弹 toast 如实告知。
+    const applyRoute = (initial = false) => {
       const route = readWorkspaceRoute();
+      const onBusy = initial ? ("silent" as const) : ("toast" as const);
       if (route.type === "book") {
-        navigation.openRecentBook(route.bookId, { updateUrl: false });
+        navigation.openRecentBook(route.bookId, { updateUrl: false, onBusy });
         return;
       }
       if (route.type === "project") {
-        void navigation.openProject(route.projectPath, { updateUrl: false });
+        void navigation.openProject(route.projectPath, { updateUrl: false, onBusy });
         return;
       }
-      navigation.openHome({ updateUrl: false });
+      navigation.openHome({ updateUrl: false, onBusy });
     };
-    applyRoute();
-    window.addEventListener("popstate", applyRoute);
+    applyRoute(true);
+    const onPopState = (): void => applyRoute(false);
+    window.addEventListener("popstate", onPopState);
 
     // 首页启动时扫描默认目录，归并进书架（服务端真值刷新已有条目 + 按活跃时间排序；
     // 别再逐本 upsertBook 头插——那会把服务端的「最近活跃降序」反转，最旧的书霸占 books[0]）
@@ -492,7 +498,7 @@ export function App() {
       }
     })();
 
-    return () => window.removeEventListener("popstate", applyRoute);
+    return () => window.removeEventListener("popstate", onPopState);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

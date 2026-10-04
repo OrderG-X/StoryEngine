@@ -161,6 +161,38 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
       })).toContain("⚠️ 系统更正");
     }
   });
+
+  // 长跑 #8/#18（docs/longrun-2026-10-04_wutong-50ch.md）：组合授权句（一轮里同时点了「预览」和
+  // 「定稿/确认」）的尾步丢失要能检出——旧检测的 apply 让位是纯文本层（看不到工具状态），
+  // 「预览通过就定稿」里预览真跑成功了、尾步 apply 被丢也检不出（第 22 章连催 3 轮的检测侧根因）。
+  it("组合授权「重走定稿（预览+确认）」零工具 → 先报预览缺失（apply 依赖成功预览，顺序铁律）", () => {
+    const result = serverHonestyCorrectionText({
+      userText: "重走定稿（预览+确认）",
+      assistantText: "好的，这就走。",
+      toolSteps: [],
+    });
+    expect(result).toContain("定稿影响预览没有执行");
+  });
+
+  it("组合授权「预览通过就定稿」预览已成功、apply 没跑 → 更正文案层保持 grounded 豁免（null）；补做由执行器层负责", () => {
+    // 分层口径（复审 T4 保持）：更正文案只盖「无依据的口头回合」，预览真跑成功 + 如实汇报的回合
+    // 不追加「定稿没有执行」（那会与真实的预览结果自相矛盾）。#18 尾步的自动补做在
+    // runObedientAgentTurn 的 missingWarrantsRetry（见下方回合级测试），不在文案层。
+    expect(serverHonestyCorrectionText({
+      userText: "预览通过就定稿",
+      assistantText: "第 1 章预览通过，可以定稿。说「确认定稿」即可写入。",
+      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
+    })).toBeNull();
+  });
+
+  it("组合授权句预览裁决不可定稿（verdict）→ apply 不算缺：不误报「定稿没有执行」", () => {
+    const result = serverHonestyCorrectionText({
+      userText: "预览通过就定稿",
+      assistantText: "预览显示正文还有硬伤，暂不可定稿，建议先修订。",
+      toolSteps: [{ toolName: "commit_preview", status: "verdict" }],
+    });
+    expect(result).toBeNull();
+  });
 });
 
 // r8 服从重试：ch84/ch88 真机实锤——模型口头声称「已生成/已入库」却零工具调用，护栏只纠文本时
@@ -512,6 +544,119 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     const text = collectText(events);
     expect(text).toContain("第88章已正式入库，共2100字。");
     expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  // ─── A2 尾步丢失补做（长跑 #8/#18：≈每 2-3 章一次、第 22 章连催 3 轮）───
+  // 组合授权句（预览+确认同轮点名）里被丢的 commit 簇尾步纳入服从重做；与句 8（非组合句、停在预览
+  // 等确认不重做）成对钉住边界——差异只在用户句是否组合授权。
+
+  it("#8 写完生成预览：正文真跑了、预览尾步被丢（无声称收尾）→ 自动补做一轮强制 commit_preview", async () => {
+    const fake = makeStreamAttempt([
+      // 首轮：generate_draft 真跑了，模型收尾没提预览也没做（「完成」不命中完成声称 → A1 不触发，
+      // 靠 A2 组合授权尾步检出）
+      [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成。")],
+      // 重做轮：被点名强制补预览
+      [...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第22章可以定稿。" })],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "写完生成预览，确认定稿。" }],
+      userText: "写完生成预览，确认定稿。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(2);
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
+    const text = collectText(events);
+    expect(text).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("#18 预览通过就定稿：预览真成功了、模型停在预览等确认 → 组合授权在原话里，自动补做强制 commit_apply", async () => {
+    const fake = makeStreamAttempt([
+      // 首轮与句 8 同构（预览通过 + 如实说可以定稿等确认），唯一差异是用户句为组合授权——
+      // instructions「组合意图=一轮走完」明文禁止停在预览等下一轮
+      [...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第 1 章可以定稿。" }), textChunk("第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。")],
+      [...toolChunks("commit_apply", { ok: true, summary: "第 1 章已定稿并更新资料。" }), textChunk("第 1 章已定稿并更新资料。")],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "预览通过就定稿。" }],
+      userText: "预览通过就定稿。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(2);
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+  });
+
+  it("组合授权但预览裁决不可定稿（verdict）→ 尾步 apply 不算缺：一轮收场不重做（防误伤）", async () => {
+    const fake = makeStreamAttempt([
+      [
+        ...toolChunks("commit_preview", {
+          chapter: 22,
+          ok: false,
+          canCommit: false,
+          blockingReasons: ["正文质量存在硬伤级问题"],
+          summary: "第 22 章暂不可定稿：正文质量存在硬伤级问题。",
+        }),
+        textChunk("预览显示正文还有硬伤，暂不可定稿，建议先修订再走定稿。"),
+      ],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "预览通过就定稿。" }],
+      userText: "预览通过就定稿。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("组合授权、预览没跑但模型读了盘如实说没草稿（grounded）→ 不强制补预览（复审 T4 口径保持）", async () => {
+    const fake = makeStreamAttempt([
+      [
+        ...toolChunks("read_chapters_overview", { ok: true, summary: "全书共 21 章，第 22 章为空。" }),
+        textChunk("第 22 章还没有工作稿，先写正文才谈得上预览和定稿。要不要先写第 22 章？"),
+      ],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "写完生成预览，确认定稿。" }],
+      userText: "写完生成预览，确认定稿。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+    expect(fake.calls()).toBe(1);
+    const text = collectText(events);
+    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("#8 尾步补做也只重试一次：两轮都丢尾步 → 恰一条系统更正收场，绝不第三轮", async () => {
+    const lostTail = [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成。")];
+    const fake = makeStreamAttempt([lostTail, lostTail]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "写完生成预览，确认定稿。" }],
+      userText: "写完生成预览，确认定稿。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1 + MAX_OBEDIENCE_RETRIES);
+    const text = collectText(events);
+    expect(text.match(/⚠️ 系统更正/gu)?.length).toBe(1);
+    expect(text).toContain("定稿影响预览没有执行");
   });
 });
 

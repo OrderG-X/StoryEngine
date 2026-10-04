@@ -228,13 +228,16 @@ function buildColdArchiveMarker(totalArchived: number): StoredMessage {
 }
 
 /**
- * 崩溃安全的 jsonl 追加：open("a") → 尾字节非换行先补 \n（自愈上次部分写留下的半行）→
+ * 崩溃安全的 jsonl 追加：open("a+") → 尾字节非换行先补 \n（自愈上次部分写留下的半行）→
  * write → fsync → close。fsync 保证「先冷后热」的持久化顺序真实成立（append 留在 page cache、
  * 热文件 rename 先落盘的断电窗口被关闭）。
+ * ⚠️ 必须 "a+" 不能 "a"（长跑 #17·dev log 60 次 EBADF 实锤）：Node 的 "a" = O_WRONLY|O_APPEND，
+ * 只写——归档文件已有内容时要 handle.read 尾字节自愈半行，对只写 fd read 必 EBADF
+ * （首次溢写 size=0 跳过 read 才显得「偶发」）。"a+" = O_RDWR|O_APPEND，读写都合法、写仍原子追加。
  */
 async function appendJsonlDurable(path: string, lines: readonly string[]): Promise<void> {
   if (lines.length === 0) return;
-  const handle = await open(path, "a");
+  const handle = await open(path, "a+");
   try {
     const { size } = await handle.stat();
     if (size > 0) {

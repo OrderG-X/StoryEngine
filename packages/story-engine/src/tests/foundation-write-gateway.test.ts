@@ -1649,3 +1649,105 @@ describe("applyRenameCharacter 静默空返消灭（审计 Med：三条路径全
     expect(result.skipped?.[0]?.summary).toContain("没能在角色资料里找到");
   });
 });
+
+// 长跑 2026-10-04 #4：章节字数硬下限（chapterLength.minWords）写入侧——
+// 「至少/不少于 N 字」旧逻辑一律摘成 targetWords（下限被 0.85 稀释），现在同写显式 minWords；
+// 出稿（draft-length-control）与定稿执法（commit-quality-check）都读它。
+describe("writingRules 章节字数下限（长跑 #4）", () => {
+  it("用户原话「每章至少3000字」→ targetWords=3000 且 minWords=3000（不再稀释成下限 2550）", async () => {
+    const { projectDir } = await createProject("至少三千字");
+    const result = await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: "story/writing-rules.json",
+        targetPath: "$",
+        after: {},
+        sourceUserMessage: "每章至少3000字，别写短了",
+      },
+    });
+    expect(result.applied).toBe(true);
+    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
+    expect(rules.chapterLength).toMatchObject({ targetWords: 3000, minWords: 3000 });
+  });
+
+  it("模型结构化传参 minChapterChineseCharacters（弱模型也常只给 target）：两字段分别落盘、目标不高于下限", async () => {
+    const { projectDir } = await createProject("结构化下限");
+    await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: "story/writing-rules.json",
+        targetPath: "$",
+        after: { targetChapterWords: 2500, minChapterChineseCharacters: 2200 },
+        sourceUserMessage: "目标两千五，别少于两千二",
+      },
+    });
+    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
+    expect(rules.chapterLength).toMatchObject({ targetWords: 2500, minWords: 2200 });
+  });
+
+  it("下限高于目标（用户只强调下限）→ 目标顶到下限，区间不倒挂", async () => {
+    const { projectDir } = await createProject("下限高于目标");
+    await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: "story/writing-rules.json",
+        targetPath: "$",
+        after: { targetChapterWords: 2000 },
+        sourceUserMessage: "目标两千字左右，但每章不少于3000字",
+      },
+    });
+    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
+    expect(rules.chapterLength).toMatchObject({ targetWords: 3000, minWords: 3000 });
+  });
+
+  it("minChapterChineseCharacters=0 → 清空下限（读侧视 0 为缺省、回落推导算法）", async () => {
+    const { projectDir } = await createProject("清空下限");
+    await writeJson(projectDir, "story/writing-rules.json", {
+      version: "v0",
+      chapterLength: { targetWords: 3000, minWords: 3000 },
+      proseStyle: [], genreRequirements: [], suspenseRules: [], payoffRules: [],
+      reversalRules: [], readerExperienceRules: [], forbiddenContent: [], doNotDo: [],
+    });
+    await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: "story/writing-rules.json",
+        targetPath: "$",
+        after: { minChapterChineseCharacters: 0 },
+        sourceUserMessage: "下限取消，字数随意些",
+      },
+    });
+    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
+    expect(rules.chapterLength).toMatchObject({ targetWords: 3000, minWords: 0 });
+    // 读侧（出稿/定稿共用的意图解析）：0 = 缺省，不产生 minWords 意图。
+    const { readWritingRulesLengthIntent } = await import("../draft-length-control.js");
+    expect(readWritingRulesLengthIntent(rules).minWords).toBeUndefined();
+    expect(readWritingRulesLengthIntent(rules).targetWords).toBe(3000);
+  });
+
+  it("非字数语境的「至少」不误伤（「至少三个反转」不产生 minWords）", async () => {
+    const { projectDir } = await createProject("至少不误伤");
+    await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "update_writing_rule",
+        category: "writingRules",
+        targetFile: "story/writing-rules.json",
+        targetPath: "$",
+        after: { doNotDo: ["不要每章都塞反转"] },
+        sourceUserMessage: "每章至少三个反转太多了，收敛一点",
+      },
+    });
+    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
+    // 建书模板自带 chapterLength.targetWords:1800——断言它原样保留、且绝没混进 minWords。
+    expect(rules.chapterLength).toEqual({ targetWords: 1800 });
+  });
+});

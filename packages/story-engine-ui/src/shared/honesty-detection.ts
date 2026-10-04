@@ -236,7 +236,7 @@ interface ExecutionExpectation {
 // `方向(?![：:])`：避免吃掉出稿指令的「第N章方向：…」标题前缀（那是用户给了方向+要写正文，不是「只聊方向」的方案讨论）。
 const WRITING_PLAN_ONLY = /(?:怎么写|如何写|方案|思路|建议|方向(?![：:])|大纲|聊聊|讨论|分析|评价|看看|要不要)/u;
 const COMMIT_PREVIEW_REQUEST = /(?:入库预览|定稿(?:影响)?预览|生成.*预览|预览.*(?:入库|定稿)|看看.*(?:入库|定稿)|检查.*(?:入库|定稿)|准备.*(?:入库|定稿)|预览.*定稿改动)/u;
-const COMMIT_APPLY_REQUEST = /(?:确认|正式|执行).{0,12}(?:入库|提交|定稿)|(?:入库|提交|定稿).{0,12}(?:确认|正式|执行)|直接(?:正式)?(?:入库|定稿)|提交本章|确认定稿|定稿吧|定稿并更新资料|把(?:这|第\s*\d+)\s*章.{0,12}(?:正式)?(?:入库|定稿)/u;
+const COMMIT_APPLY_REQUEST = /(?:确认|正式|执行).{0,12}(?:入库|提交|定稿)|(?:入库|提交|定稿).{0,12}(?:确认|正式|执行)|直接(?:正式)?(?:入库|定稿)|提交本章|确认定稿|定稿吧|定稿并更新资料|把(?:这|第\s*\d+)\s*章.{0,12}(?:正式)?(?:入库|定稿)|预览(?:通过|没问题|无误)?(?:然后?|之?后|再|随后|接着){0,2}就?(?:直接)?(?:正式)?(?:入库|定稿)|重走[^，。；！？]{0,8}(?:定稿|入库)/u;
 const NEGATED_COMMIT_PREVIEW = /(?:不用|无需|不要|先不|暂不).{0,8}预览/u;
 // 裸『续写』→『续写(?!作)』：别被开书话术「后续写作必须用这些设定」里的「续写作」子串误命中（Codex 1-5 章真机）。
 const DRAFT_GENERATION_REQUEST = /(?:写第?\s*\d+\s*章|(?:写|开始|进入)?下一章(?:的?正文)?|把(?:这|第\s*\d+)\s*章.{0,12}(?:写了|写出来|重写|续写)|写.*正文|出一版|再写一版|重写这章|续写(?!作)|继续写|动笔|来一段|把.*写出来|照这个写|按这个写)/u;
@@ -258,7 +258,10 @@ const AI_FLAVOR_REQUEST = /AI\s*味|AI\s*腔|AI\s*感|机翻感|机器腔|像.{0
 // 出稿/改稿里「少/别/避免…AI 味」是**写作约束**（写的时候少点 AI 腔），不是「跑 check_ai_flavor 体检」的请求——别误报「AI 味体检没有执行」（Codex 1-5 章真机：出稿指令带「少AI味」被误判）。
 const AI_FLAVOR_AS_CONSTRAINT = /(?:少|减少|降低|别|不要|不能|避免|没有?|不带|去掉|控制|压低|保持.{0,4}少).{0,3}(?:AI\s*味|AI\s*腔|AI\s*感)/iu;
 // 明确「生成入库预览/出预览/做预览」=必须真跑 commit_preview 的请求，区别于「检查能不能入库」这类可行性问句（后者质检也能答、可让位）。
-const EXPLICIT_PREVIEW_REQUEST = /(?:入库|定稿)(?:影响)?预览|(?:生成|出|做|来).{0,4}预览|预览.{0,4}(?:入库|定稿|这章|本章|第\s*\d+\s*章|定稿改动)/u;
+// 末枝（长跑 #11/#12/#15）：「重走定稿（预览+确认）」这种「预览+确认」并列表述不含生成/出/做/来动词、
+// 预览后也不接入库/定稿（确认在后），旧词形不认 → 预览期望进不了集，委托链第一环就断。
+// 与 turn-intent-gate 的 COMMIT_APPLY_PATTERNS 后置确认句式同族，两边词表须同步改。
+const EXPLICIT_PREVIEW_REQUEST = /(?:入库|定稿)(?:影响)?预览|(?:生成|出|做|来).{0,4}预览|预览.{0,4}(?:入库|定稿|这章|本章|第\s*\d+\s*章|定稿改动)|预览[^，。；！？]{0,4}[+＋]\s*(?:然后?|再)?\s*确认/u;
 const POLITE_EXECUTION_REQUEST = /(?:能不能|能否|可不可以|可以帮我|麻烦|帮我).{0,40}(?:补进|写进|记进|写入|补|删|删除|改|写第|写.*正文|入库|定稿|提交|质检|硬伤检查|审稿|内容审阅|润色|改写)/u;
 const QUESTION_LIKE = /[？?]\s*$|(?:吗|呢|会不会|有没有|能不能|能否|可不可以|可以吗)/u;
 // 反转（自我更正）语气词：出现在被否定动词前后，表示「改主意、还是要做」。
@@ -315,7 +318,10 @@ const EXECUTION_EXPECTATIONS: readonly ExecutionExpectation[] = [
     intent: "commit_apply",
     expectedTool: "commit_apply",
     notice: `定稿没有执行：本回合没有检测到定稿操作，所以章节没有正式写入并更新资料。${CONFIRM_COMMIT_RETRY_HINT}`,
-    matches: (text) => COMMIT_APPLY_REQUEST.test(text) && (!COMMIT_PREVIEW_REQUEST.test(text) || NEGATED_COMMIT_PREVIEW.test(text)),
+    // matches 只判「用户句含定稿授权」；「预览请求在场时的让位」挪到 detectMissingExecutionForRequest
+    // 循环内按工具状态判（长跑 #8/#18：旧纯文本让位把组合授权句「预览通过就定稿」的 apply 永久踢出
+    // 期望集——预览真跑成功了、尾步 apply 被丢也检不出，第 22 章连催 3 轮的检测侧根因）。
+    matches: (text) => COMMIT_APPLY_REQUEST.test(text),
   },
   {
     intent: "generate_draft",
@@ -450,6 +456,17 @@ export function detectMissingExecutionForRequest(
     // 该意图真尝试过（含 failed/needs_confirmation）→ 不算缺；但**不再全局 return null**，
     // 否则组合指令里「质检真跑了、预览没跑」会被质检的尝试整体放过、漏报没跑的预览（Codex 5 章 E2E）。
     if (hasToolAttempt(toolSteps, expectation.expectedTool)) continue;
+    // 定稿让位（tool 状态感知，长跑 #8/#18）：本轮点了预览（未否定「不要预览」）而定稿预览还没
+    // **成功**（未尝试/失败/裁决不可定稿）→ apply 暂不算缺——apply 依赖成功预览（顺序铁律），
+    // 先补预览；预览已成功（canCommit）而 apply 没跑，才是真·尾步丢失，照实检出。
+    if (
+      expectation.intent === "commit_apply" &&
+      !hasCompletedTool(toolSteps, "commit_preview") &&
+      (COMMIT_PREVIEW_REQUEST.test(text) || EXPLICIT_PREVIEW_REQUEST.test(text)) &&
+      !NEGATED_COMMIT_PREVIEW.test(text)
+    ) {
+      continue;
+    }
     // 「检查能不能入库」这类既像入库预览、又像质检的【模糊可行性问句】：若本回合已真跑了 quality_check（质检也是在答
     // 「这章能不能入库」），就别再用「入库预览没执行」盖掉质检结果（afterfix·Codex 真机：质检轮被误盖成 commit_preview 提醒）。
     // 但【明确要「生成入库预览」】绝不因质检完成而让位——否则组合指令里没真跑 commit_preview 却谎称「预览通过」会漏报（Codex 1-5 章真机·假预览）。
@@ -474,6 +491,19 @@ export function detectMissingExecutionForRequest(
 }
 
 // ============ 服从重试（r8：治「口头声称完成但零工具调用」的执行层，配合服务端自动重做） ============
+
+/**
+ * 组合授权句（长跑 #8/#18）：用户一轮里同时点了「预览」和「定稿/确认」（「预览通过就定稿」
+ * 「重走定稿（预览+确认）」「写完生成预览，确认定稿」）。instructions「组合意图=一轮走完」条款下，
+ * 这类句子的期望集 = 先 commit_preview 后 commit_apply；尾步被丢时服从重试据此补做。
+ * 判定 = 预览词与定稿授权词同现（各自让位/否定细粒度由 detectMissingExecutionForRequest 内部把关）。
+ */
+export function isCombinedPreviewConfirmRequest(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return (COMMIT_PREVIEW_REQUEST.test(trimmed) || EXPLICIT_PREVIEW_REQUEST.test(trimmed))
+    && COMMIT_APPLY_REQUEST.test(trimmed);
+}
 
 /** 服务端更正文案的固定前缀（agent-chat 追加更正时使用；历史消毒据此识别「声称已被作废」的回合）。 */
 export const HONESTY_CORRECTION_MARKER = "⚠️ 系统更正：";

@@ -78,6 +78,47 @@ describe("foundation_write 构造逻辑", () => {
     expect(s.targetId).toBe("char-x");
     expect(s.targetFile).toBe("story/character-bible.json");
   });
+
+  it("长跑 #3：rename 的顶层 newName 归一进 after.name；after 已写 name/newName 时以 after 为准；after 省略成 {}", () => {
+    // 模型只给 newName 直达参数（最自然的调用形态）→ 归一成引擎认的 after.name。
+    const viaTopLevel = buildFoundationWriteSuggestion({
+      actionType: "rename_character",
+      category: "characters",
+      targetId: "char-x",
+      targetName: "旧名",
+      newName: "沈茂行",
+    });
+    expect(viaTopLevel.after).toMatchObject({ name: "沈茂行" });
+
+    // after 里已写 name → 以 after 为准，顶层 newName 不覆盖。
+    const afterWins = buildFoundationWriteSuggestion({
+      actionType: "rename_character",
+      category: "characters",
+      targetId: "char-x",
+      after: { name: "after里的新名" },
+      newName: "顶层新名",
+    });
+    expect(afterWins.after).toMatchObject({ name: "after里的新名" });
+
+    // after.newName（引擎也认的键）在场时顶层 newName 同样不覆盖。
+    const afterNewNameWins = buildFoundationWriteSuggestion({
+      actionType: "rename_character",
+      category: "characters",
+      targetId: "char-x",
+      after: { newName: "after的newName" },
+      newName: "顶层新名",
+    });
+    expect(afterNewNameWins.after).toMatchObject({ newName: "after的newName" });
+    expect((afterNewNameWins.after as Record<string, unknown>).name).toBeUndefined();
+
+    // after 整体省略 → 归一成 {}（引擎按缺字段诚实 skip，不再死在 zod 硬校验）。
+    const noAfter = buildFoundationWriteSuggestion({
+      actionType: "rename_character",
+      category: "characters",
+      targetId: "char-x",
+    });
+    expect(noAfter.after).toEqual({});
+  });
 });
 
 describe("foundation_write 诚实回报", () => {

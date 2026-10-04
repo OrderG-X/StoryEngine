@@ -229,6 +229,9 @@ export async function buildCommitPreviewToolOutput(input: {
     (issue) => scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(issue, nameById)),
   );
 
+  // 长跑 2026-10-04 #5b：字数不足（too_short，error 级）从泛泛的「硬伤级问题」里点名出来——
+  // 字数是用户硬约束，模型/用户得看出「该扩写正文」而不是重跑预览碰运气。
+  const lengthShortfall = describeLengthShortfall(draftQualityIssues);
   const blockingReasons: string[] = [];
   if (!commitPlan.passed || !commitPlan.commitPlan) {
     blockingReasons.push("定稿计划未通过");
@@ -236,6 +239,7 @@ export async function buildCommitPreviewToolOutput(input: {
   }
   if (draftQualityIssues.some((issue) => issue.severity === "error")) {
     blockingReasons.push("正文质量存在硬伤级问题");
+    if (lengthShortfall) blockingReasons.push(lengthShortfall);
   }
   if (semanticQualityIssues.some((issue) => issue.severity === "error")) {
     blockingReasons.push("语义质量存在硬伤级问题");
@@ -266,6 +270,7 @@ export async function buildCommitPreviewToolOutput(input: {
     staleBacklog,
     deltaRejectedWarnings,
     continuityBreakWarning,
+    ...(lengthShortfall ? { lengthShortfall } : {}),
     ...(declarationFallbackNotice ? { declarationFallbackNotice } : {}),
   });
   return {
@@ -286,6 +291,25 @@ export async function buildCommitPreviewToolOutput(input: {
       ? { declarationReason: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(declarationOutcome.reason, nameById)) }
       : {}),
   };
+}
+
+/**
+ * too_short（error 级）→ 用户可读的中文 shortfall 文案；无 too_short 时 undefined。
+ * 引擎消息形如 `Draft body is shorter than 2250 Chinese characters (current: 2000).`
+ * （下限来自写作规则显式 minWords 或 targetWords×0.75，见 commit-quality-check.resolveMinBodyChineseCharacters）。
+ */
+function describeLengthShortfall(
+  issues: readonly { readonly severity: string; readonly type: string; readonly message: string }[],
+): string | undefined {
+  const issue = issues.find((item) => item.type === "too_short");
+  if (!issue) return undefined;
+  const min = issue.message.match(/shorter than (\d+)/u)?.[1];
+  const current = issue.message.match(/current: (\d+)/u)?.[1];
+  // 数字从引擎消息解析，解析不到（消息格式变化）也要给定性文案，绝不静默吞掉长度阻断。
+  if (min === undefined) return "正文纯汉字字数低于写作规则要求的下限，需扩写后再定稿";
+  return current === undefined
+    ? `正文纯汉字字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿`
+    : `正文纯汉字 ${current} 字，低于写作规则要求的下限 ${min} 字（纯汉字口径，不含标点与标题），需扩写后再定稿`;
 }
 
 function collectDeltaRejectedWarnings(
@@ -401,6 +425,8 @@ function buildPreviewSummary(input: {
   readonly staleBacklog?: StaleBacklogView;
   readonly deltaRejectedWarnings?: readonly { readonly message: string }[];
   readonly continuityBreakWarning?: { readonly message: string };
+  /** too_short 的人话文案（长跑 #5b）：进 modelHint 指路「扩写」而不是反复重试定稿。 */
+  readonly lengthShortfall?: string;
   /** 已消毒的「声明未生效」整句（describeDeclarationFallback 产出）；model 状态不传。 */
   readonly declarationFallbackNotice?: string;
 }): { readonly summary: string; readonly modelHint?: string } {
@@ -446,10 +472,23 @@ function buildPreviewSummary(input: {
   }
   const hints: string[] = [];
   if (input.canCommit) {
-    hints.push("用户明确确认定稿后再调用 commit_apply 正式写入（可省略 token，系统用最近一次有效预览票据）；未确认前不得自行定稿。");
+    // 组合授权口径（长跑 #11/#15：模型把「说确认定稿即可写入」当成万能收尾，用户本轮原话已授权
+    // 组合步骤却被要求再显式说一遍——委托链体验断裂）：用户本轮原话含组合授权（预览+确认 /
+    // 写完直接确认定稿 / 预览通过就定稿 / 重走定稿）时，预览通过即可同轮继续 commit_apply，
+    // 不必再问一轮。未授权组合的纯预览轮仍停在预览等确认（与 instructions 分工一致）。
+    hints.push(
+      "用户明确确认定稿后再调用 commit_apply 正式写入（可省略 token，系统用最近一次有效预览票据）；未确认前不得自行定稿。" +
+        "但若用户本轮原话已含组合授权（如「预览+确认」「写完直接确认定稿」「预览通过就定稿」「重走定稿」），视为已授权：预览通过（canCommit=true）就同轮继续 commit_apply，绝不停在预览再问一轮。",
+    );
   }
   if (summary !== base) {
     hints.push("summary 里【】内的提醒须如实转达给用户，勿淡化、勿隐去。");
+  }
+  // 长跑 #5b：长度不足是硬阻断——指路「扩写正文后重新预览」，别让模型在不达标稿上反复尝试定稿。
+  if (!input.canCommit && input.lengthShortfall) {
+    hints.push(
+      "字数不足是硬阻断：先扩写正文（与用户商量补写方向后重写/续写工作稿），字数达标后重新生成定稿预览；不要在字数不足时反复尝试定稿。",
+    );
   }
   return { summary, ...(hints.length > 0 ? { modelHint: hints.join(" ") } : {}) };
 }

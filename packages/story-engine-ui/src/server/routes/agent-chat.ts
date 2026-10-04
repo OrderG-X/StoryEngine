@@ -25,6 +25,7 @@ import {
   detectMissingExecutionForRequest,
   detectUnbackedCompletionClaim,
   inferClaimedWriteTool,
+  isCombinedPreviewConfirmRequest,
   isGroundedRefusalReply,
   isVerdictToolName,
   OBEDIENCE_RETRY_TRANSITION_TEXT,
@@ -297,8 +298,10 @@ export interface ObedientTurnChunk {
  *   ②把本轮产出文本 + 系统纠偏消息追加进模型消息序列，**沿用同一 requestContext**（用户原话
  *     不变 → TurnIntentGate 对合法写入不误拦），自动重跑一轮。
  * 重做后仍检出 → 按原路径追加「⚠️ 系统更正」诚实收场，绝不第三轮、绝不谎报。
- * A2「请求了执行类动作却没调对应工具」只产出诚实更正文案（`serverHonestyCorrectionText` 非空即追加），
- * **不触发重做**（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）。
+ * A2「请求了执行类动作却没调对应工具」原则上只产出诚实更正文案（`serverHonestyCorrectionText` 非空即
+ * 追加）、不触发重做（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）——
+ * 唯一例外是组合授权句（预览+确认同轮点名）里被丢的 commit 簇尾步（长跑 #8/#18）：预览缺失须无磁盘
+ * 依据、定稿缺失的检出前提是预览已成功，才补做一轮（见下方 missingWarrantsRetry 注释）。
  *
  * 为什么不能只靠更正文案：ch84/ch88 真机实锤——护栏只纠文本时，弱模型把历史里的成功回执当剧本续写，
  * 更正后下一回合继续编造，长跑三连败卡死。重试把「自愈」从赌模型素质变成系统机制（模型无关）。
@@ -458,15 +461,33 @@ export async function runObedientAgentTurn(args: {
     // 没出现写工具」（A2 缺执行）被强制重做；A2 只保留诚实更正文案（下方最终收尾照实追加，不重跑模型）。
     const unbackedClaim = detectUnbackedCompletionClaim(turnText, stepsForDetection);
 
+    // A2 尾步丢失补做（长跑 #8/#18，最高频痛点：≈每 2-3 章一次、第 22 章连催 3 轮）：组合授权句
+    // （用户一轮里同时点了「预览」和「定稿/确认」，见 isCombinedPreviewConfirmRequest）里被丢的
+    // commit 簇尾步也纳入服从重做——「承诺了没做→自动补做一轮」。这是对复审 T4「A2 永不重做」的
+    // 受控放宽，只放开两个口子、其余意图维持原口径：
+    // - commit_preview 缺失：仍要求无磁盘依据（grounded 如实汇报豁免——模型核实过「没草稿/不存在」
+    //   的回合不该被强制跑预览，复审 T4 口径保持）；
+    // - commit_apply 缺失：检出前提已是本轮 commit_preview 成功（canCommit，授权与依据都在手、只剩
+    //   执行），组合授权在原话里 → 即使回复是「预览通过，说确认定稿即可写入」的如实汇报也补做
+    //   （instructions「组合意图=一轮走完」明文禁止停在预览等下一轮——长跑实锤停在预览就是连催的根源）。
+    // 非组合句（如「把第 N 章正式定稿」后停在预览等确认，复审 T4 句 8 钉住的合法回合）不触发。
+    const groundedRefusal = isGroundedRefusalReply(turnText, stepsForDetection);
+    const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
+    const combinedAuth = isCombinedPreviewConfirmRequest(args.userText ?? "");
+    const missingWarrantsRetry =
+      missing !== null &&
+      combinedAuth &&
+      (missing.intent === "commit_apply" ||
+        (missing.intent === "commit_preview" && !groundedRefusal));
+
     // 客户端已断开时不重做：重试会再开一轮 agent.stream（新工具步骤），人已走茶凉纯属白费算力。
-    if (unbackedClaim && attempt < maxRetries && args.shouldStop?.() !== true) {
+    if ((unbackedClaim || missingWarrantsRetry) && attempt < maxRetries && args.shouldStop?.() !== true) {
       // 结构性强制（r8 二轮·ch93 实锤纯 prompt 纠偏无效——flash 重做轮直接交白卷）：
       // 能从用户意图定位到期望工具就点名强制 + 限 1 步（forced choice 作用于每一步，多步会反复调
       // 同一工具）；定位不到（只有声称、意图模糊）就至少强制调一个工具。协议层杜绝「纯文本再编一遍」。
-      // 期望工具定位：先用户意图（missing execution）；定位不到再从声称文本反推被编造的动作
-      // （ch96 实锤：真跑了 commit_preview、编造了 commit_apply——组合意图里 apply 让位、missing 为空，
+      // 期望工具定位：先用户意图（missing execution，A1/A2 尾步共用）；定位不到再从声称文本反推被编造
+      // 的动作（ch96 实锤：真跑了 commit_preview、编造了 commit_apply——组合意图里 apply 让位、missing 为空，
       // 但「已正式入库」的声称本身指认了该强制哪个工具）。都定位不到才 required 兜底。
-      const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
       const forcedTool = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
       // required 也必须限步（真机实锤）：forced choice 每一步都强制调工具、永远到不了纯文本收尾，
       // 不限步会一直跑到框架步数上限（弱模型开思考时一步一分钟，整轮挂十来分钟）。

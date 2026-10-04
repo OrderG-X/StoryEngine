@@ -47,6 +47,21 @@ describe("read_draft 只读草稿/正文工具", () => {
     expect("snapshotId" in out).toBe(false);
   });
 
+  // 长跑 2026-10-04 #5：字数口径统一。正文 17 个纯汉字；标题行与标点（，。）不计——
+  // 旧实现「去空白全字符」会把标题+标点都算进去（同稿报 31），AI 据高估字数误判达标（第 2 章 2989 报 3616）。
+  it("charCount 是纯汉字口径（[\u3400-\u9fff]，去标题/标点），与写作区 countTextWords 同数", async () => {
+    const projectDir = await makeProject("纯汉字口径");
+    await writeAt(defaultDraftPath(projectDir, 1), DRAFT);
+
+    const out = await readDraftContent({ projectDir, chapter: 1 });
+    // 正文「林远推开家门，饭桌上父母的神色不太对。」→ 17 个汉字（标点不计），标题行整体剥离。
+    expect(out.charCount).toBe(17);
+    // 旧口径（去空白全字符，含标题与标点）为 31——钉死别回退。
+    expect(DRAFT.replace(/\s/gu, "").length).toBe(31);
+    expect(out.charCount).toBeLessThan(DRAFT.replace(/\s/gu, "").length);
+    expect(out.summary).toContain("纯汉字");
+  });
+
   it("无工作稿但有已入库正文 → auto 回退读已入库，source=committed", async () => {
     const projectDir = await makeProject("回退已入库");
     await writeAt(defaultCommittedChapterPath(projectDir, 1), COMMITTED);

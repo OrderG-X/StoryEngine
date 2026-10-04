@@ -139,6 +139,93 @@ describe("commit quality check", () => {
     ]));
   });
 
+  // 长跑 2026-10-04 #5b/#4 语义定案：目标字数是「约」（软推导保 300 封顶，默认建书模板自带 targetWords:1800，
+  // 全额 0.75 执法会把所有默认书下限抬到 1350，误伤自愿短章）；硬约束本体 = 显式 chapterLength.minWords
+  //（写入侧会把「至少/不少于 N 字」自动落进该字段），定稿侧不封顶全额执法。
+  it("只有 targetWords（无显式 min）：软推导保 300 封顶，target 3600 不拦 2600 字短稿（软带执法留给出稿侧 ⚠）", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { targetWords: 3600 });
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: draftOfExactlyChineseChars(2600),
+    });
+
+    expect(report.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "too_short" }),
+    ]));
+  });
+
+  it("targetWords + 显式 min：min 不封顶全额执法（target 3600 + min 2700 → 拦 2600 字短稿）", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { targetWords: 3600, minWords: 2700 });
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: draftOfExactlyChineseChars(2600),
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: "error", type: "too_short", message: expect.stringContaining("2700") }),
+    ]));
+  });
+
+  // 长跑 2026-10-04 #4：「至少 3000 字」的硬下限本体（chapterLength.minWords）——
+  // 第 2 章 2989 纯汉字「过线」定稿的场景（目标 3000/推导下限 2550）必须被显式 min 拦下。
+  it("explicit chapterLength.minWords is the hard floor: 3000-word floor rejects a 2989-char draft", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { targetWords: 3000, minWords: 3000 });
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: draftOfExactlyChineseChars(2989),
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: "error",
+        type: "too_short",
+        message: expect.stringMatching(/shorter than 3000 Chinese characters \(current: 2989\)/u),
+      }),
+    ]));
+  });
+
+  it("explicit chapterLength.minWords: 3010 字（≥3000）放行", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { targetWords: 3000, minWords: 3000 });
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: draftOfExactlyChineseChars(3010),
+    });
+
+    expect(report.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "too_short" }),
+    ]));
+  });
+
+  // 长跑 #5：定稿执法计数与出稿/UI 同口径 countDraftChineseCharacters（[\u3400-\u9fff]，去标题）——
+  // 标点/空白/西文/标题行不计入，含大量标点的 2499 汉字稿在 2500 下限下必须被拦（旧 \p{Script=Han} 同样不计标点，
+  // 此用例主要钉「去标题行」与字符集不回退）。
+  it("length count excludes punctuation/whitespace/title (unified countDraftChineseCharacters)", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { minWords: 2500 });
+
+    const draft = `# 第一章 标题行的汉字不该计入\n\n${"林远数着台阶往上报数，一步一句，句句押着鼓点！".repeat(50)}\n`;
+    const report = await checkDraftBeforeCommit({ projectDir, chapter: 1, draftContent: draft });
+    // 正文每句 20 汉字（，！不计）×50 = 1000 < 2500 → 拦；消息里的 current 是纯汉字数（1000），
+    // 不是含标点的全字符数（1150）——口径统一钉死。
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "too_short", message: expect.stringContaining("(current: 1000)") }),
+    ]));
+  });
+
   it("rejects title-only drafts", async () => {
     const projectDir = await createFixtureProject();
 
@@ -448,6 +535,47 @@ function longDraft(input: {
     "他没有立刻争辩，而是把账册上每一个被涂改的数字都记在心里，知道真正的机会不会来自怒火，只会来自证据、耐心和一次准确的反击。",
   ].join("");
   return `${title}${dialogue}${Array.from({ length: 5 }, () => paragraph).join("\n\n")}\n`;
+}
+
+/** 写 writing-rules.json（只填 chapterLength，数组字段给空，保持类型完整）。 */
+async function writeWritingRules(projectDir: string, chapterLength: { readonly targetWords?: number; readonly minWords?: number }): Promise<void> {
+  await writeFile(
+    join(projectDir, "story", "writing-rules.json"),
+    `${JSON.stringify({
+      version: "v0",
+      ...(chapterLength.targetWords !== undefined || chapterLength.minWords !== undefined ? { chapterLength } : {}),
+      proseStyle: [],
+      genreRequirements: [],
+      suspenseRules: [],
+      payoffRules: [],
+      reversalRules: [],
+      readerExperienceRules: [],
+      forbiddenContent: [],
+      doNotDo: [],
+    }, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
+/**
+ * 构造【正文纯汉字数恰为 N】的草稿（含标题、主角名与对话，满足除长度外的其余质检门）。
+ * 与 countDraftChineseCharacters 同字符集逐字累加，标点/空白不计——钉「精确到字」的下限边界。
+ */
+function draftOfExactlyChineseChars(target: number): string {
+  const cjk = /[\u3400-\u9fff]/u;
+  let body = "";
+  let count = 0;
+  const append = (text: string): void => {
+    for (const ch of text) {
+      if (count >= target) return;
+      body += ch;
+      if (cjk.test(ch)) count += 1;
+    }
+  };
+  append("林远说：“先记下来，回头对账。”");
+  const filler = "檐角的铜铃被风吹得轻响，他把袖口的灰拍净，沿着廊下慢慢往前走，心里把下一步又推了一遍。";
+  while (count < target) append(filler);
+  return `# 第一章 长度边界\n\n${body}\n`;
 }
 
 /**

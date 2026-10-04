@@ -187,7 +187,20 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
     return "simple";
   }, [forceAdvanced, savedProviders.length]);
 
-  const primaryProvider = savedProviders[0] ?? null;
+  // 长跑 #2：极简卡「当前 AI 服务」要显示【实际在用】的服务，不是 providers 列表第一个
+  // （实测书里列表第一个是 DeepSeek 未配密钥、真正出稿/对话走 OpenCode Go → 卡片误导）。
+  // tasks（服务端 taskAssignments 视图解析）已把每个任务按「任务旁路 → 引擎档案 → defaultProfile」
+  // 解析成 "providerId|model"。主对话（agent 大脑，triage 任务，story-agent.ts resolveGlmModel("triage")）
+  // 优先，其次出稿（fastDraft）；都解析不到（旧配置/视图缺任务）才退回列表第一个，向后兼容。
+  const effectiveChatTaskEntry = tasks.triage ?? tasks.fastDraft;
+  const effectiveProviderId = typeof effectiveChatTaskEntry === "string"
+    ? effectiveChatTaskEntry.split("|")[0]
+    : undefined;
+  const primaryProvider = savedProviders.find((p) => p.id === effectiveProviderId) ?? savedProviders[0] ?? null;
+  // 实际解析出的模型名（极简卡一行带出，让「当前 AI 服务」名副其实；解析不到不显示）。
+  const effectiveModelLabel = typeof effectiveChatTaskEntry === "string"
+    ? effectiveChatTaskEntry.split("|").slice(1).join("|")
+    : "";
 
   const closeModelPicker = useCallback(() => {
     setPickerState(CLOSED_PICKER_STATE);
@@ -672,6 +685,7 @@ export default function ModelSettingsDialog({ open, onCancel, embedded }: ModelS
               </div>
               <AiSimpleView
                 provider={primaryProvider}
+                modelLabel={effectiveModelLabel}
                 testing={simpleTesting}
                 testError={simpleTestError}
                 testNotice={simpleTestNotice}

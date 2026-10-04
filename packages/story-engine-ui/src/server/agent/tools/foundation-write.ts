@@ -82,8 +82,17 @@ const inputSchema = z.object({
   before: z.unknown().optional().describe(
     "删除关系条目 / 世界规则 / 写作规则这类「按内容删」时，填要删除的原文字符串（引擎据此精确定位）。",
   ),
-  after: coerceJsonObject(z.record(z.string(), z.unknown()).describe(
+  // 长跑 #3（改名入参缺口·模型无关归一）：改名的「新名字」给一条直达参数——真机首调用时模型在
+  // targetName（=旧名，按名定位用）与 after.name 之间没有明确指路，猜错就报「缺参数」再自愈重试。
+  // 只在 after 里没写 name/newName 时生效；两边都给以 after 为准（更完整的结构化意图）。
+  newName: z.string().optional().describe(
+    "rename_character 专用：角色的新名字直接填这里（等价写进 after.name，二选一即可）。旧名字用 targetId/targetName 定位，别把新名字放进 targetName。",
+  ),
+  // 长跑 #3：after 允许整体省略（默认 {}）——省略时引擎按缺字段诚实 skip 回报，
+  // 不再让整次调用死在 zod 硬校验 InputValidationError 上（边界宽容，见 CLAUDE.md 模型无关原则）。
+  after: coerceJsonObject(z.record(z.string(), z.unknown()).default({}).describe(
     "写入后的结构化内容，键名必须用引擎认得的字段，否则不会落盘（删除动作可填空对象 {}）。常用字段：\n" +
+      "- 给角色改名（rename_character）：新名字写进 {\"name\":\"新名\"}（或 newName 键；也可用顶层 newName 参数）。\n" +
       `${FOUNDATION_WRITE_ASSETIZATION_GUIDANCE}\n` +
       "- 外貌/疤痕/体貌特征 → appearanceAnchors（字符串数组），如『左手有疤』写成 " +
       '{"appearanceAnchors":["左手有一道明显的疤痕"]}。\n' +
@@ -96,6 +105,7 @@ const inputSchema = z.object({
       "- 资产（create_asset/update_asset_status）：name/status 等。\n" +
       "- 世界规则（update_world_rule）：rules/socialOrder/historyFacts/powerOrSurvivalSystems（字符串数组）。\n" +
       "- 写作规则（update_writing_rule）：proseStyle/forbiddenContent/doNotDo 等（字符串数组）；customNotes=用户自定义的整段自由 Markdown 全局规矩（传一段字符串，原样保存、每章必喂模型；空字符串=清空）。\n" +
+      "- 章节字数：目标字数=targetChapterWords（数字，如 3000）。用户说『每章至少 N 字 / 不少于 N 字』是硬下限语义——必须同时传 minChapterChineseCharacters=N（出稿与定稿都会按它执法；传 0=清除下限），别只写 targetChapterWords 把『至少 N』稀释成 N×0.85。\n" +
       "- 没有专用字段的杂项事实，放进 {\"extraFields\":{\"自定义键\":\"值\"}}。\n" +
       "【纠错·删/改/整列重写写错的资料（角色 update_character_detail 与 update_writing_rule 都支持）】：\n" +
       "- 删数组里某几条（精确匹配原文）：{\"removeFromArrays\":{\"字段名\":[\"要删的原文\"]}}，如把外貌某条删掉 " +
@@ -182,7 +192,10 @@ export interface FoundationWriteToolInput {
   readonly targetId?: string;
   readonly targetName?: string;
   readonly before?: unknown;
-  readonly after: Record<string, unknown>;
+  /** rename_character 的新名字直达通道（长跑 #3）：after 里没写 name/newName 时归一进 after.name。 */
+  readonly newName?: string;
+  /** 可省略（zod default {}）：引擎对缺字段按诚实 skip 回报，不硬崩。 */
+  readonly after?: Record<string, unknown>;
   readonly confirmed?: boolean;
   readonly rationale?: string;
 }
@@ -227,6 +240,13 @@ export function buildFoundationWriteSuggestion(
     confirmed: input.confirmed,
     userTurnText: options.userTurnText,
   });
+  // 长跑 #3（改名入参归一）：顶层 newName 是「新名字」的直达通道——引擎只认 after.name/after.newName，
+  // 模型首调用常把新名字放错位（targetName 是旧名定位用）而吃「缺参数」重试。after 已写 name/newName
+  // 时以 after 为准（更完整的结构化意图），否则把 newName 归一进 after.name。
+  const afterRecord = input.after ?? {};
+  const afterWithNewName = input.newName && input.newName.trim() && !afterRecord.name && !afterRecord.newName
+    ? { ...afterRecord, name: input.newName }
+    : afterRecord;
   return {
     actionType: input.actionType,
     category: input.category,
@@ -236,7 +256,7 @@ export function buildFoundationWriteSuggestion(
     ...(input.targetName ? { extractedEntityName: input.targetName } : {}),
     ...(input.before !== undefined ? { before: input.before } : {}),
     ...(confirmedByUser ? { confirmedByUser: true } : {}),
-    after: input.after,
+    after: afterWithNewName,
   };
 }
 

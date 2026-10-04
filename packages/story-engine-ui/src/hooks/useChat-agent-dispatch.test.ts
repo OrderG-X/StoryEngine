@@ -1001,6 +1001,47 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(messages().some((m) => m.content.includes("其实已经定稿"))).toBe(true);
   });
 
+  /* ---- #13（长跑×3）：回合正常收尾后 flowStatus 不得残留 draft_generating ---- */
+
+  it("出稿写了另一章（跨章 tool-result 直接 return）→ 当前章立即退出「正在生成工作稿…」，不挂到回合结束", async () => {
+    // 复刻多候选/retarget 用尽的形态：generate_draft 只发 tool-call + 带章号的结果、没有 draft-delta
+    // 把 operation 带去那一章 → 跨章分支原本直接 return，flowStatus 卡 draft_generating 到回合结束。
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", ok: true, chapter: 4, summary: "第 4 章已出稿。" });
+      handlers.onTextDelta("第 4 章的工作稿已经写好了。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendMessage("写第 4 章");
+    });
+
+    // 编辑器里本就有第 3 章草稿内容 → 诚实复位成 draft_ready，而不是谎报「正在生成」。
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_ready");
+    expect(useNavigationStore.getState().toast ?? "").toContain("第 4 章");
+  });
+
+  it("回合正常结束但出稿结果没复位（守卫拦下定稿等中途分支）→ 收尾兜底把 draft_generating 复位，不永久转圈", async () => {
+    // 最小复刻：tool-call(generate_draft) 后回合正常收尾（结果事件因故没推进流程态的任何形态）。
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onTextDelta("这章的稿子已经准备好了。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    await act(async () => { await pending; });
+
+    // 回合已结束（chatLoading=false）→ 不允许任何路径把「正在生成工作稿…」留到回合之外。
+    expect(useWorkspaceStore.getState().chatLoading).toBe(false);
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_ready");
+  });
+
   it("纯读回合点「停止」→ 步骤结算 stopped、不拉磁盘对账、流程态不动", async () => {
     scriptAbortableStream((handlers) => {
       handlers.onToolCall({ toolName: "read_state_overview", toolCallId: "r1" });

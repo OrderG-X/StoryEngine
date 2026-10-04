@@ -1800,6 +1800,34 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
         ...rawAntiAiPatterns,
         suggestion.sourceUserMessage,
       ]);
+    // 显式硬下限（长跑 #4）：①模型结构化传参（minChapterChineseCharacters / chapterLength.minWords，
+    // 传 0=清空下限）；②从规则文本/用户原话里摘「至少/不少于/最少/不低于 N 字」——旧逻辑把这类话
+    // 一律摘成 targetWords，「至少 3000」被稀释成「目标 3000/下限 2550」。引擎执法点
+    // （draft-length-control / commit-quality-check）现在都会读 chapterLength.minWords。
+    const explicitMinWords = readNumber(source.minChapterChineseCharacters)
+      ?? readNumber(isRecord(source.chapterLength) ? source.chapterLength.minWords : undefined)
+      ?? extractMinimumChapterWordsFromTexts([
+        ...rawProseStyle,
+        ...rawGenreRequirements,
+        ...rawSuspenseRules,
+        ...rawPayoffRules,
+        ...rawReversalRules,
+        ...rawReaderExperienceRules,
+        ...rawForbiddenContent,
+        ...rawDoNotDo,
+        ...rawAntiAiPatterns,
+        !isRecord(suggestion.after) ? readString(suggestion.after) : undefined,
+        suggestion.sourceUserMessage,
+      ]);
+    // 目标合并：显式下限不倒挂目标（取 max）；只清下限（0）时不动目标；只给下限没给目标时目标抬到下限。
+    // 注意 0 是「清空下限」哨兵，绝不能经 ?? 链漏进 targetWords。
+    const effectiveTargetWords = targetWords !== undefined && explicitMinWords !== undefined
+      ? Math.max(targetWords, explicitMinWords)
+      : targetWords !== undefined
+        ? targetWords
+        : explicitMinWords !== undefined && explicitMinWords > 0
+          ? explicitMinWords
+          : undefined;
     const removals = readRemovalMap(source.removeFromArrays);
     const replacements = readRemovalMap(source.replaceArrays);
     // honest miss（修#2·铁律④）：逐条核对 removeFromArrays 目标是否真命中现存写作规则；没命中如实回报、绝不静默成功。
@@ -1815,6 +1843,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
     const hasAdditive =
       [rawProseStyle, rawGenreRequirements, rawSuspenseRules, rawPayoffRules, rawReversalRules, rawReaderExperienceRules, rawForbiddenContent, rawDoNotDo, rawAntiAiPatterns].some((a) => a.length > 0)
       || Boolean(readString(source.narrativePerspective)) || Boolean(readString(source.pacing)) || Boolean(readString(source.revealPolicy)) || targetWords !== undefined
+      || explicitMinWords !== undefined
       || customNotesRaw !== undefined;
     const next: WritingRules = {
       ...rules,
@@ -1822,7 +1851,16 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
       proseStyle: mergeStringArrayField(filterTargetChapterWordsRules(rules.proseStyle ?? []), filterTargetChapterWordsRules(rawProseStyle), removals.proseStyle, replacements.proseStyle),
       ...(readString(source.pacing) ? { pacing: readString(source.pacing) } : {}),
       ...(readString(source.revealPolicy) ? { revealPolicy: readString(source.revealPolicy) } : {}),
-      ...(targetWords !== undefined ? { chapterLength: { ...(rules.chapterLength ?? {}), targetWords } } : {}),
+      // 字数下限/目标一起合并进 chapterLength：minWords 显式传 0 = 用户清空下限（读侧视 0 为缺省）。
+      ...(effectiveTargetWords !== undefined || explicitMinWords !== undefined
+        ? {
+          chapterLength: {
+            ...(rules.chapterLength ?? {}),
+            ...(effectiveTargetWords !== undefined ? { targetWords: effectiveTargetWords } : {}),
+            ...(explicitMinWords !== undefined ? { minWords: explicitMinWords } : {}),
+          },
+        }
+        : {}),
       genreRequirements: mergeStringArrayField(filterTargetChapterWordsRules(rules.genreRequirements ?? []), filterTargetChapterWordsRules(rawGenreRequirements), removals.genreRequirements, replacements.genreRequirements),
       suspenseRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.suspenseRules ?? []), filterTargetChapterWordsRules(rawSuspenseRules), removals.suspenseRules, replacements.suspenseRules),
       payoffRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.payoffRules ?? []), filterTargetChapterWordsRules(rawPayoffRules), removals.payoffRules, replacements.payoffRules),
@@ -2542,6 +2580,21 @@ function extractTargetChapterWordsFromTexts(values: readonly (string | undefined
   for (const value of values) {
     const matched = extractTargetChapterWordsFromText(value);
     if (matched !== undefined) return matched;
+  }
+  return undefined;
+}
+
+/**
+ * 「至少/不少于/最少/不低于 N 字」→ 显式章节字数下限（长跑 2026-10-04 #4）。
+ * 只认带「字」尾的数量（「至少三次」「至少两个人」不误伤）；数值域与目标字数同款 50..50000。
+ */
+function extractMinimumChapterWordsFromTexts(values: readonly (string | undefined)[]): number | undefined {
+  for (const value of values) {
+    if (!value) continue;
+    const match = /(?:至少|不少于|最少|不低于)\s*([1-9]\d{1,5})\s*个?字/u.exec(value);
+    if (!match) continue;
+    const words = Number(match[1]);
+    if (Number.isInteger(words) && words >= 50 && words <= 50000) return words;
   }
   return undefined;
 }

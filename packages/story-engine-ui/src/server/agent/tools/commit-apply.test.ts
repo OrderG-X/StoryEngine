@@ -25,6 +25,8 @@ import {
   FACT_EXTRACTION_IDLE_TIMEOUT_MS,
   OPEN_THREADS_HINT_THRESHOLD,
   scrubBareEntityIdsFromText,
+  THREAD_STALE_ESCALATION_THRESHOLD,
+  threadMaintenanceEscalated,
 } from "./commit-apply.js";
 import { buildCommitPreviewToolOutput } from "./commit-preview.js";
 import { __resetCommitPreviewStore } from "./commit-preview-store.js";
@@ -200,8 +202,12 @@ describe("commit_apply 守卫", () => {
     expect(out.refreshScope).toBe("full");
     expect(out.summary).toContain("第 1 章已定稿，资料已更新");
     expect(out.summary).toContain("改动已建立存档点");
-    const report = out.report as { passed: boolean; chapter: number };
+    const report = out.report as { passed: boolean; chapter: number; chapterPath?: string };
     expect(report.passed).toBe(true);
+    // #6 绝对路径不进用户可见卡：report.chapterPath 出工具前改写为项目内相对路径
+    // （前端 CommitDeltaCard 直接渲染「正式章节：已写入 <chapterPath>」），不带磁盘前缀 /Users|tmp/...。
+    expect(report.chapterPath).toBe("chapters/0001.md");
+    expect(report.chapterPath).not.toMatch(/^\/|[A-Za-z]:[\\/]/);
     // 入库成功必须回传章节正文（去标题），供前端以 committed 状态载入工作区、防 autosave 复活已入库章节。
     expect(out.draftBody).toContain("林远在会议室外停下脚步");
     expect(out.draftBody).not.toContain("# 第1章");
@@ -628,6 +634,17 @@ describe("buildThreadMaintenanceNote（入库后线索堆积提醒）", () => {
     const note = buildThreadMaintenanceNote(overviewWith(35, 12));
     expect(note).not.toMatch(/clean_legacy_threads|group_related_leads|commit_apply/u);
     expect(note).not.toMatch(/hook|thread|arc/iu);
+  });
+
+  it("长跑 #16：未收口 ≥THREAD_STALE_ESCALATION_THRESHOLD → 加重档文案（明显堆积）+ escalated 判定true；阈值下不加重", () => {
+    const escalatedNote = buildThreadMaintenanceNote(overviewWith(THREAD_STALE_ESCALATION_THRESHOLD, 0));
+    expect(escalatedNote).toContain("已经明显堆积、建议尽快清理");
+    expect(threadMaintenanceEscalated(overviewWith(THREAD_STALE_ESCALATION_THRESHOLD, 0))).toBe(true);
+    expect(threadMaintenanceEscalated(overviewWith(THREAD_STALE_ESCALATION_THRESHOLD - 1, 99))).toBe(false);
+    // 普通档（≥20 但 <30）不出现加重字样，判定 false。
+    const normalNote = buildThreadMaintenanceNote(overviewWith(OPEN_THREADS_HINT_THRESHOLD, 0));
+    expect(normalNote).not.toContain("明显堆积");
+    expect(threadMaintenanceEscalated(overviewWith(OPEN_THREADS_HINT_THRESHOLD, 0))).toBe(false);
   });
 });
 

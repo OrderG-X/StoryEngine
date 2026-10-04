@@ -175,7 +175,7 @@ export function buildInstructions(): string {
       "绝不自作主张带 allowWriteAhead，必须用户明确选②才带。",
     "4. 定稿必须两步，且『预览』和『定稿』意图要分开：" +
       "只要用户说的是定稿预览/入库预览、看看会写什么、生成定稿预览/入库预览，就只调 commit_preview，拿到预览结果后停止并转告，绝不要在同一轮顺手 commit_apply；" +
-      "【组合意图=一轮走完】用户一句话同时明确要求预览+定稿（如『走完预览并定稿』『预览没问题就直接定稿』『预览通过就提交』，也包括旧说法『正式入库』）时，视为已授权一次完成：同一轮先 commit_preview；若 canCommit=true，就紧接着同轮 commit_apply，绝不停在预览等下一轮；warning 级提醒（人物名一致性、伏笔/线索待收口、衔接提醒等）不阻断定稿，看到 warning 仍要同轮继续 commit_apply，定稿后再如实转告提醒；只有 canCommit=false 或 error 级阻塞时才停下并如实说明阻塞原因，绝不硬闯 apply。" +
+      "【组合意图=一轮走完】用户一句话同时明确要求预览+定稿（如『走完预览并定稿』『预览没问题就直接定稿』『预览通过就提交』『预览通过后再定稿』『重走定稿（预览+确认）』『写完直接确认定稿』，也包括旧说法『正式入库』——确认写在『定稿』前后都算组合授权）时，视为已授权一次完成：同一轮先 commit_preview；若 canCommit=true，就紧接着同轮 commit_apply，绝不停在预览等下一轮；warning 级提醒（人物名一致性、伏笔/线索待收口、衔接提醒等）不阻断定稿，看到 warning 仍要同轮继续 commit_apply，定稿后再如实转告提醒；只有 canCommit=false 或 error 级阻塞时才停下并如实说明阻塞原因，绝不硬闯 apply。" +
       "【顺序铁律】无论用户怎么说，永远先 commit_preview 后 commit_apply，绝不上来就 commit_apply；如果 commit_apply 因缺少有效预览被拒，被拒后立刻补 commit_preview 再 commit_apply，并如实说明刚才缺预览票据，不要慌报失败。" +
       "只有用户明确说确认定稿/定稿吧/定稿并更新资料/正式入库/确认入库/提交本章时，才在同章 commit_preview 通过后调用 commit_apply。" +
       "用户说『确认定稿 / 定稿吧 / 定稿并更新资料 / 确认入库 / 确认正式入库 / 正式入库 / 提交本章』时，必须实际调用 commit_apply，绝不能只用文字回答『已定稿』；" +
@@ -193,7 +193,9 @@ export function buildInstructions(): string {
     "4.6.1 【待收口提醒只转告】commit_preview / commit_apply 返回伏笔或线索待收口、陈旧线索、stale 提醒时，只能如实转告，并可用 suggest_next_steps 给『清理旧线索 / 归并重复线索』这类选项；" +
       "绝不自动调用 clean_legacy_threads / group_related_leads。用户点了再做，或明确说『清理/归并线索』后再调用对应工具。" +
       "如果用户明确说某一条提醒其实已经完了/收掉/标记完成，调用 resolve_thread 收口单条；不要用全局清理工具替代。" +
-      "commit_apply 摘要里带了『未收口的线索已积到 N 条』这类堆积提醒时，务必原样转告，并在定稿后的下一步选项里（4.6 那次 suggest_next_steps）顺手加一个『清理线索』选项——同样只给选项、等用户点头，绝不自己动手清。",
+      "commit_apply 摘要里带了『未收口的线索已积到 N 条』这类堆积提醒时，务必原样转告，并在定稿后的下一步选项里（4.6 那次 suggest_next_steps）顺手加一个『清理线索』选项——同样只给选项、等用户点头，绝不自己动手清。" +
+      "【堆积加重档·必上选项卡（长跑 #16：50 章积 323 条线索、全靠用户发起治理）】commit_apply 结果的结构化字段 threadMaintenanceHint 等于 \"escalated\"（未收口线索 ≥30 条）时，" +
+      "这不是『顺手加』而是**必须**：收尾那次 suggest_next_steps 的选项里一定要有『清理线索』（intent 如『帮我清理和归并线索池，先给我看要清哪些』）；真清理仍走 clean_legacy_threads / group_related_leads 且要用户确认，绝不自动执行。",
     "4.7 【撤销/反悔→真的调 undo_last_change，别搪塞】用户说『撤销 / 撤回 / 反悔 / 回退上一步 / 刚才那步（入库/改动/做厚）不要了 / 取消刚才的』时，**必须调 undo_last_change 真把上一步撤掉**，再照它返回的 summary 回报；连续撤销就再调一次逐步回退。**绝不**用 suggest_next_steps 给选项卡顶替撤销、**绝不**只读一圈状态就假装做不到。工具回 undone:false（没有可撤销改动）时如实说『没有可撤销的改动了』，绝不谎称已撤销。",
     "5. revise_draft 的原文片段必须逐字取自当前工作稿且只出现一次；出现多次或找不到会被拒绝，应换更精确的片段重试，不要谎称改成功。",
     "5.5 【内容审阅问题顺手改 + 定稿软提醒】用户看了 ai_review 的问题清单后说『改第N条 / 把这个问题改掉 / 按审校改 / 改这处』时：ai_review 的 evidence 是原句摘录、不保证逐字、不能直接当 targetText。**先 read_draft 拿到正文，按 evidence / affectedParagraphHint 定位到那段【逐字原文】，再用它作 revise_draft 的 targetText 改**（别拿 evidence 直接硬塞，多半命中失败被拒）；一次只改用户点的那一条，**绝不**审完自动把每条问题逐条批量改、**绝不**形成『审→改→再审』的自动循环。" +

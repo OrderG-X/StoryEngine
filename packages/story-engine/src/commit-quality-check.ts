@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommitDraftInput } from "./commit-engine.js";
 import { describeErrorBriefly, listCharacterDirectoryEntries, readCharacterProfile } from "./project-store.js";
+import { countDraftChineseCharacters, readWritingRulesLengthIntent } from "./draft-length-control.js";
 import {
   defaultQualityJudgement,
   userDisplayCategoryForJudgement,
@@ -54,8 +55,16 @@ export async function checkDraftBeforeCommit(input: {
   if (content && !body) {
     issues.push(errorIssue("title_only", "Draft contains a title but no body content."));
   }
-  if (content && countChineseCharacters(body) < minBodyChineseCharacters) {
-    issues.push(errorIssue("too_short", `Draft body is shorter than ${minBodyChineseCharacters} Chinese characters.`));
+  // 长跑 2026-10-04 #5：计数口径统一 countDraftChineseCharacters（[\u3400-\u9fff] 纯汉字，去标题行）——
+  // 与出稿执法（draft-length-control）、UI 写作区显示（countTextWords 同字符集）同源，
+  // 不再用自己的 \p{Script=Han} 另算一套（〇/扩展B 等边缘字符三处口径不一致）。
+  if (content && countDraftChineseCharacters(body) < minBodyChineseCharacters) {
+    issues.push(
+      errorIssue(
+        "too_short",
+        `Draft body is shorter than ${minBodyChineseCharacters} Chinese characters (current: ${countDraftChineseCharacters(body)}).`,
+      ),
+    );
   }
   if (content && containsModelExplanation(content)) {
     issues.push(errorIssue("model_explanation", "Draft contains model explanation or refusal wording."));
@@ -133,25 +142,33 @@ export async function checkDraftBeforeCommit(input: {
   return buildQualityReport("draft_quality", issues);
 }
 
+/**
+ * 定稿长度下限（长跑 2026-10-04 #5b/#4）：
+ *  ① 写作规则显式 chapterLength.minWords → 直接作为下限（「至少 N 字」的硬约束本体，不乘系数、不封顶）；
+ *    写入侧（foundation-write-gateway）现在会把用户说的「至少/不少于 N 字」自动落进这个字段。
+ *  ② 只有 targetWords → 软推导 floor(target×0.75)（地板 80、封顶 300）——目标字数是「约」不是硬约束，
+ *     保留 300 封顶（旧契约：默认建书模板自带 targetWords:1800，若按 0.75 全额执法会把所有默认书的
+ *     定稿下限抬到 1350，误伤「作者自愿接受短章」的合法流；目标带的宽松执法留给出稿侧 ⚠ 标注）。
+ *  ③ 无任何规则 → 默认 300（老书/无规则书行为不变）。
+ * severity 维持既有语义：too_short 是 error 级（预览侧进 blockingReasons、CLI 侧阻断入库）。
+ */
 async function resolveMinBodyChineseCharacters(projectDir: string): Promise<number> {
-  const targetWords = await readWritingRuleTargetWords(projectDir);
-  if (targetWords === undefined) return DEFAULT_MIN_BODY_CHINESE_CHARACTERS;
-  return Math.min(
-    DEFAULT_MIN_BODY_CHINESE_CHARACTERS,
-    Math.max(MIN_BODY_CHINESE_CHARACTERS_FLOOR, Math.floor(targetWords * TARGET_WORDS_MIN_RATIO)),
-  );
-}
-
-async function readWritingRuleTargetWords(projectDir: string): Promise<number | undefined> {
+  // 读盘口径与旧实现逐字保留：ENOENT=老书合法缺文件、空文件=无规则；损坏 JSON 照旧上抛（不静默降级，铁律④）。
   const text = await readFile(join(projectDir, "story", "writing-rules.json"), "utf-8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  if (!text) return undefined;
-  const parsed = JSON.parse(text) as unknown;
-  if (!isRecord(parsed) || !isRecord(parsed.chapterLength)) return undefined;
-  const value = parsed.chapterLength.targetWords;
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  if (!text) return DEFAULT_MIN_BODY_CHINESE_CHARACTERS;
+  const intent = readWritingRulesLengthIntent(JSON.parse(text));
+  if (intent.minWords !== undefined) return intent.minWords;
+  // rawTargetWords：只验正数、不归一——保住「targetWords:200 → 下限 150」这类下调门槛的既有行为。
+  if (intent.rawTargetWords !== undefined) {
+    return Math.min(
+      DEFAULT_MIN_BODY_CHINESE_CHARACTERS,
+      Math.max(MIN_BODY_CHINESE_CHARACTERS_FLOOR, Math.floor(intent.rawTargetWords * TARGET_WORDS_MIN_RATIO)),
+    );
+  }
+  return DEFAULT_MIN_BODY_CHINESE_CHARACTERS;
 }
 
 export function checkWritingContextPackDraft(
@@ -797,9 +814,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function countChineseCharacters(content: string): number {
-  return [...content.matchAll(/\p{Script=Han}/gu)].length;
-}
+// countChineseCharacters（\p{Script=Han} 旧口径）已删——统一走 countDraftChineseCharacters（见 too_short 检查注释）。
 
 function errorIssue(type: string, message: string): CommitQualityIssue {
   return {
@@ -807,10 +822,6 @@ function errorIssue(type: string, message: string): CommitQualityIssue {
     type,
     message,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function unique(values: readonly string[]): readonly string[] {

@@ -16,6 +16,7 @@ import { z } from "zod";
 import { coerceEnum, coerceNumber } from "./lenient-args.js";
 
 import { defaultCommittedChapterPath, defaultDraftPath, extractDraftTitle } from "../../lib/project-io.js";
+import { countTextWords } from "../../../utils/textUtils.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 
 export const READ_DRAFT_SOURCES = ["auto", "draft", "committed"] as const;
@@ -40,7 +41,10 @@ const outputSchema = z.object({
   ),
   title: z.string().nullable().describe("从正文首行解析出的标题（没有则 null）。"),
   content: z.string().describe("正文全文（found=false 时为空串）。"),
-  charCount: z.number().int().nonnegative().describe("正文去空白后的字数。"),
+  charCount: z.number().int().nonnegative().describe(
+    "正文纯汉字字数（[\u3400-\u9fff]，去 frontmatter 与 Markdown 标题；标点/空白/西文不计）。" +
+    "与写作区显示、引擎长度执法同口径——判断字数是否达标一律以此为准，不要自己数全字符。",
+  ),
   summary: z.string().describe("自然语言摘要，供回答用户。"),
 });
 
@@ -115,7 +119,10 @@ export async function readDraftContent(input: {
     };
   }
 
-  const charCount = picked.content.replace(/\s/gu, "").length;
+  // 长跑 2026-10-04 #5：字数口径统一。旧实现「去空白全字符」把标点也计进去（第 2 章实际 2989 纯汉字
+  // 报成 3616，AI 据此误判字数达标）——改用 countTextWords（纯汉字 [\u3400-\u9fff]、去 frontmatter/标题），
+  // 与 UI 写作区顶栏、引擎 countDraftChineseCharacters 执法口径同源。
+  const charCount = countTextWords(picked.content);
   const title = extractDraftTitle(picked.content);
   const hasCommittedChapter = hasText(committed.content);
   const label =
@@ -131,7 +138,7 @@ export async function readDraftContent(input: {
     title: title ?? null,
     content: picked.content,
     charCount,
-    summary: `已读取第 ${chapter} 章${label}${title ? `《${title}》` : ""}，约 ${charCount} 字。`,
+    summary: `已读取第 ${chapter} 章${label}${title ? `《${title}》` : ""}，正文 ${charCount} 字（纯汉字，不含标点与标题）。`,
   };
 }
 
