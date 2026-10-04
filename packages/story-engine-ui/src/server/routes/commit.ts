@@ -152,7 +152,7 @@ async function handleCommitPreview(req: import("node:http").IncomingMessage, res
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -309,7 +309,7 @@ async function handleCommitApply(req: import("node:http").IncomingMessage, res: 
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   } finally {
     if (claimedProjectOwner && activeProjectCommitOwners.get(claimedProjectOwner.key) === claimedProjectOwner.owner) {

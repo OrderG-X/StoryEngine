@@ -12,6 +12,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, restoreSnapshot } from "../lib/snapshot.js";
 
 // ---------------------------------------------------------------------------
@@ -79,7 +80,7 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
     } catch (error) {
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });

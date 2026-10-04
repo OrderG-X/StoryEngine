@@ -18,6 +18,7 @@ import {
   isRecord,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   readChatSessionIndex,
   loadChatSessionForDisplay,
@@ -56,7 +57,7 @@ export async function updateChatHistoryBudgetTokens(budget: number): Promise<num
       return budget;
     }
     throw new Error(
-      `读取模型设置失败（${settingsPath}）：${error instanceof Error ? error.message : String(error)}。` +
+      `读取模型设置失败（${settingsPath}）：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}。` +
         `为避免覆盖现有模型配置，本次未保存。`,
     );
   }
@@ -65,7 +66,7 @@ export async function updateChatHistoryBudgetTokens(budget: number): Promise<num
     parsed = JSON.parse(text) as unknown;
   } catch (error) {
     throw new Error(
-      `模型设置不是有效 JSON（${settingsPath}）：${error instanceof Error ? error.message : String(error)}。` +
+      `模型设置不是有效 JSON（${settingsPath}）：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}。` +
         `为避免覆盖现有模型配置，本次未保存。`,
     );
   }
@@ -196,7 +197,7 @@ export function registerChatSessionsRoutes(middlewares: MiddlewareStack): void {
 
       writeJson(res, 405, { ok: false, error: "Only GET and PUT are supported." });
     } catch (error) {
-      writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
     }
   });
 }

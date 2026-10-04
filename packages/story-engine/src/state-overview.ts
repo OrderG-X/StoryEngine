@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { analyzeIntentLifecycle } from "./intent-lifecycle-diagnostics.js";
+import { describeErrorBriefly } from "./project-store.js";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
 import { selectRelevant } from "./relevance-selection.js";
@@ -481,6 +482,11 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
   const noteCorruptLedger = (relativePath: string): void => {
     corruptLedgerFiles.push(relativePath);
   };
+  // 审计 Med：读侧降级留痕（角色目录枚举失败等）——与损坏台账同一 warnings 通道上浮。
+  const degradedReads: string[] = [];
+  const noteDegradedRead = (message: string): void => {
+    degradedReads.push(message);
+  };
   const [
     project,
     worldCore,
@@ -517,7 +523,7 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     readJsonSafe<ArcGoalPool>(input.projectDir, join("story", "arc-goals.json"), { goals: [] }, noteCorruptLedger),
     readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), [], noteCorruptLedger),
     readJsonSafe<StoryCalendar>(input.projectDir, join("time", "calendar.json"), { currentStoryDay: 1, currentTimeOfDay: "unknown" }, noteCorruptLedger),
-    readCharacters(input.projectDir),
+    readCharacters(input.projectDir, noteDegradedRead),
     // A3（P1-6 上浮）：recover 已在上方锁内跑完；仍挂着「recovered + recoveryIssues」的残留
     // =盘上「章文件在、资料已回滚」的分歧态。上浮进 uiHints.warnings 既有通道，绝不只写 manifest 静默。
     // 扫描失败不堵概览——概述是读侧，残留信号由下一次 recover/commit 继续兜。
@@ -707,6 +713,7 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
         // 审计 Low：损坏台账如实可见（绝不把「坏文件」显示成「没有资料」）。
         ...unique(corruptLedgerFiles.map((relativePath) =>
           `资料文件损坏，面板按空显示：${relativePath}。定稿等写入操作会如实报错，请先修复该文件。`)),
+        ...unique(degradedReads),
       ],
       disabledActions: [
         "merge_threads_confirm",
@@ -1647,9 +1654,20 @@ function buildStoryFoundationSummary(input: {
   return truncate(`Foundation available: ${available.join(", ")}.`);
 }
 
-async function readCharacters(projectDir: string): Promise<readonly { readonly profile: CharacterProfile; readonly state?: CharacterState }[]> {
+async function readCharacters(
+  projectDir: string,
+  onDegraded?: (message: string) => void,
+): Promise<readonly { readonly profile: CharacterProfile; readonly state?: CharacterState }[]> {
   const charactersDir = join(projectDir, "characters");
-  const entries = await readdir(charactersDir, { withFileTypes: true }).catch(() => []);
+  // 审计 Med：ENOENT-only——权限类失败不再无痕清空角色列表；降级+回调留痕（读侧不崩）。
+  let entries: readonly import("node:fs").Dirent[] = [];
+  try {
+    entries = await readdir(charactersDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      onDegraded?.(`角色目录读取失败（${describeErrorBriefly(error, projectDir)}），角色列表按空显示。`);
+    }
+  }
   const result = await Promise.all(entries
     .filter((entry) => entry.isDirectory())
     .map(async (entry) => {

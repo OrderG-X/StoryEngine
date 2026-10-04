@@ -168,6 +168,7 @@ export async function streamAgentChat(
     let buffer = "";
     let eventName = "message";
     let dataLines: string[] = [];
+    let badFrameReported = false;
 
     const flush = () => {
       if (dataLines.length === 0) {
@@ -182,6 +183,12 @@ export async function streamAgentChat(
       try {
         parsed = JSON.parse(raw) as unknown;
       } catch {
+        // 审计 Low：坏帧不再无声吞——断流尾部截断的 error/done 帧解析失败时若不报，
+        // 回合会以「正常结束+内容缺尾」假收场（违反本文件头的绝不静默铁律）。每条流只报一次。
+        if (!badFrameReported) {
+          badFrameReported = true;
+          handlers.onError("收到无法解析的事件帧（连接可能被截断），本次回复可能不完整；可重试该消息。", true);
+        }
         return;
       }
       dispatchEvent(current, parsed);

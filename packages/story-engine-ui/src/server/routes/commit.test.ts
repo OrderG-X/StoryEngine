@@ -587,11 +587,15 @@ describe("commit routes", () => {
 
     const second = await secondPending;
 
+    // 恰好一次契约（修三轮 flake）：两个同键并发请求谁先拿到锁不确定——高负载下第二个可能
+    // 先执行、第一个变成重放，两种顺序都是正确行为。只断言不变量：两请求都 200、恰好一个是
+    // 原发（无重放标志）、另一个是重放/恢复（带标志）、物理写入只发生一次。
     expect(second.statusCode).toBe(200);
-    expect(second.payload).toMatchObject({
-      idempotencyReplayed: true,
-      report: { updatedCharacters: ["original-only"] },
-    });
+    const firstReplayed = first.payload.idempotencyReplayed === true || first.payload.idempotencyRecovered === true;
+    const secondReplayed = second.payload.idempotencyReplayed === true || second.payload.idempotencyRecovered === true;
+    expect(firstReplayed).not.toBe(secondReplayed);
+    const replayedPayload = (firstReplayed ? first.payload : second.payload) as { report?: { updatedCharacters?: readonly string[] } };
+    expect(replayedPayload.report).toMatchObject({ updatedCharacters: ["original-only"] });
     expect(createSnapshot).toHaveBeenCalledTimes(1);
     expect(commitFastDraft).toHaveBeenCalledTimes(1);
     expect(buildCommitPlanFromProject).toHaveBeenCalledTimes(1);

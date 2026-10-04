@@ -71,9 +71,6 @@ import type {
   UpdateWritingRulesRequest,
   UsageSummary,
   UsageSummaryApiResponse,
-  WorkspacePatchApplyApiResponse,
-  WorkspacePatchApplyRequest,
-  WorkspacePatchApplySuccessResult,
 } from "./types.js";
 import { FetchJsonError, fetchJson, mergeSignals } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
@@ -891,25 +888,6 @@ export async function applyDeAiFlavorBatch(
     throw new Error(payload.error ?? "一键去 AI 味失败。");
   }
   return { result: payload.result, summary: payload.summary, draftContent: payload.draftContent, ...(payload.snapshotId ? { snapshotId: payload.snapshotId } : {}) };
-}
-
-export async function applyWorkspacePatch(
-  input: WorkspacePatchApplyRequest,
-  signal?: AbortSignal,
-): Promise<WorkspacePatchApplySuccessResult> {
-  const payload = await fetchJson<WorkspacePatchApplyApiResponse>(
-    "/api/workspace-patch/apply",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw createApiPayloadError(payload);
-  }
-  return payload;
 }
 
 export async function previewCommit(

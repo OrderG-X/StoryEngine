@@ -41,6 +41,7 @@ import {
 import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createConfiguredWriterClient, createIdleAbort, describeTruncatedFinish, isTruncatedFinishReason, resolveConfiguredChatModel, STREAM_IDLE_TIMEOUT_MS, streamOpenAICompatibleResponse, type ResolvedChatModel } from "../lib/llm-client.js";
 import { abortOnClientDisconnect } from "./agent-chat.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
@@ -178,7 +179,7 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -213,7 +214,7 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
       overview,
     });
   } catch (error) {
-    writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
   }
 }
 
@@ -448,7 +449,9 @@ async function handleGenerateDraftStream(req: import("node:http").IncomingMessag
         connection: "keep-alive",
       });
     }
-    sendEvent("error", { error: error instanceof Error ? error.message : String(error) });
+    // 审计（复核半修①）：错误原文（密钥库路径/errno）内嵌本地绝对路径，直达前端错误气泡——
+    // 与 agent-chat/chapter-chat 已立口径对齐，进用户可见面前先消毒。
+    sendEvent("error", { error: scrubLocalAbsolutePaths(scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))) });
     res.end();
   }
 }
@@ -479,7 +482,7 @@ async function handleDraftQuality(req: import("node:http").IncomingMessage, res:
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -572,7 +575,7 @@ async function handleDraftDirectEdit(req: import("node:http").IncomingMessage, r
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -671,7 +674,7 @@ async function handleDraftAIReview(req: import("node:http").IncomingMessage, res
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }

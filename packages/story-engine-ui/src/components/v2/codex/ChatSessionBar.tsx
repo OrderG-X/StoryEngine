@@ -146,7 +146,9 @@ export function ChatSessionBar() {
   async function saveBudgetToSettings(budget: number) {
     if (!projectPath) return;
     try { await api.saveChatHistoryBudget(projectPath, budget); } catch (err) {
+      // 审计 Low：store 已乐观更新为新值，保存失败若只进 console，刷新后预算悄悄回旧值——如实提示。
       console.error("[ChatSessionBar] 保存上下文预算失败", err);
+      notify(`上下文预算保存失败（${err instanceof Error ? err.message : String(err)}），刷新后会回到旧值；请重试或检查设置文件。`);
     }
   }
 

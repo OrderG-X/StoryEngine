@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readArcGoalPool, readHookPool, readThreadPool } from "./project-store.js";
+import { withProjectCommitLock } from "./commit-engine.js";
 import type { AIReviewReport, AIReviewScope, AIReviewSuggestion } from "./ai-reviewer.js";
 import type { ArcGoal, HookItem, NarrativeThread, ThreadPool } from "./types.js";
 
@@ -238,8 +239,12 @@ export async function applyReviewPlan(options: ApplyReviewPlanOptions): Promise<
   if (!options.confirm && options.dryRun !== true) return resultWithoutWrite;
   if (options.dryRun === true) return resultWithoutWrite;
 
-  await writeThreadPoolTransaction(options.projectDir, { threads });
-  return resultWithoutWrite;
+  // 审计 Low：story/threads.json 是 commit 事务目标之一——整读-整写收进项目级写锁并先清残留事务，
+  // 不再与持锁的 commitFastDraft 并发交错丢线索池更新（此前仅 CLI 环境变量门控路径可达，仍收口）。
+  return withProjectCommitLock(options.projectDir, async () => {
+    await writeThreadPoolTransaction(options.projectDir, { threads });
+    return resultWithoutWrite;
+  });
 }
 
 export async function inspectStoryEngineTransactionResidue(projectDir: string): Promise<TransactionResidueReport> {

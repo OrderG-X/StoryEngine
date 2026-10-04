@@ -13,6 +13,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { runChapterSteering } from "../services/steering-service.js";
 
 export function registerChapterSteeringRoutes(middlewares: MiddlewareStack): void {
@@ -59,7 +60,7 @@ export function registerChapterSteeringRoutes(middlewares: MiddlewareStack): voi
     } catch (error) {
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });

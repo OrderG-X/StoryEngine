@@ -1,5 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "./project-store.js";
 
 export interface DiagnosticsTokenUsage {
   readonly promptTokens: number;
@@ -100,7 +101,8 @@ export async function writeDiagnostics(
     diagnosticsPath,
   };
   await mkdir(diagnosticsDir, { recursive: true });
-  await writeFile(diagnosticsPath, `${JSON.stringify(record, null, 2)}\n`, "utf-8");
+  // 审计 Low：引擎内最后一处对项目目录的非原子 JSON 写——收口 writeFileAtomic。
+  await writeFileAtomic(diagnosticsPath, `${JSON.stringify(record, null, 2)}\n`);
   return record;
 }
 

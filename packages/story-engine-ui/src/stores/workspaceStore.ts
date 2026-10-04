@@ -20,6 +20,7 @@ import type {
   StateOverview,
 } from "../api/types.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
+import { useNavigationStore } from "./navigationStore.js";
 
 /* ------------------------------------------------------------------ */
 /*  Message persistence                                                */
@@ -44,11 +45,25 @@ function loadMessages(projectKey: string | null): readonly ChapterMessage[] {
   }
 }
 
+let sessionStorageWriteNotified = false;
+
 function writeMessagesSync(messages: readonly ChapterMessage[], projectKey: string | null): void {
   try {
     sessionStorage.setItem(getProjectStorageKey(projectKey), JSON.stringify(messages));
-  } catch {
-    // Ignore quota errors
+  } catch (error) {
+    // 审计 Low：不再无痕吞——配额溢出后本地副本会冻结在旧态，而它正是服务端会话读取失败时的回退源。
+    // 一次性 toast 如实告知（常态保存走服务端会话文件，不受影响）。
+    if (!sessionStorageWriteNotified) {
+      sessionStorageWriteNotified = true;
+      try {
+        useNavigationStore.getState().showToast(
+          `本地对话副本写入失败（${error instanceof Error ? error.message : String(error)}），已停更；聊天记录仍保存在项目里，不受影响。`,
+          5200,
+        );
+      } catch {
+        // 通知通道绝不反过来炸保存链。
+      }
+    }
   }
 }
 

@@ -1604,3 +1604,48 @@ async function readJson<T>(projectDir: string, relativePath: string): Promise<T>
 async function writeJson(projectDir: string, relativePath: string, value: unknown): Promise<void> {
   await writeFile(join(projectDir, relativePath), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
+
+
+describe("applyRenameCharacter 静默空返消灭（审计 Med：三条路径全带 skip 显式信号）", () => {
+  it("缺新名字 → skip missing_name，applied=false 且有人话原因", async () => {
+    const { projectDir } = await createProject("skip-rename-no-name", "林序");
+    const result = await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "rename_character",
+        category: "characters",
+        targetFile: "story/character-bible.json",
+        targetPath: "characters.name",
+        targetId: toSafeCharacterId("林序"),
+        before: "林序",
+        after: {},
+        // 不带 extractedEntityName：新名字彻底缺失（带上它会被当新名兜底）
+        sourceUserMessage: "给主角改名",
+      },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.skipped?.map((skip) => skip.reason)).toEqual(["missing_name"]);
+    expect(result.skipped?.[0]?.summary).toContain("没有给出新名字");
+  });
+
+  it("targetId 在角色册查无目标 → skip target_not_found", async () => {
+    const { projectDir } = await createProject("skip-rename-not-found", "林序");
+    const result = await applyFoundationWriteSuggestion({
+      projectDir,
+      suggestion: {
+        actionType: "rename_character",
+        category: "characters",
+        targetFile: "story/character-bible.json",
+        targetPath: "characters.name",
+        targetId: "no-such-character",
+        before: "旧名",
+        after: { name: "新名" },
+        extractedEntityName: "旧名",
+        sourceUserMessage: "把旧名改成新名",
+      },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.skipped?.map((skip) => skip.reason)).toEqual(["target_not_found"]);
+    expect(result.skipped?.[0]?.summary).toContain("没能在角色资料里找到");
+  });
+});

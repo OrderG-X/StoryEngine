@@ -1,4 +1,3 @@
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { selectEffectiveFacts } from "./fact-selection.js";
 import { selectRelevant } from "./relevance-selection.js";
@@ -22,6 +21,7 @@ import {
   readWorldState,
   readWritingRules,
   toSafeCharacterId,
+  listCharacterDirectoryEntries,
 } from "./project-store.js";
 import type {
   ArcGoal,
@@ -192,7 +192,12 @@ export interface BuildWritingContextPackInput {
 }
 
 export async function buildWritingContextPack(input: BuildWritingContextPackInput): Promise<WritingContextPack> {
-  const characterIds = await resolveSelectedCharacterIds(input.projectDir, input.selectedCharacterIds);
+  const characterIds = await resolveSelectedCharacterIds(input.projectDir, input.selectedCharacterIds)
+    .catch((error: unknown) => {
+      // 审计 Med：characters 目录枚举失败（EACCES 等）不再无痕清空全部角色——降级为空可以，
+      // 但必须留痕（主角资料将落占位、质检在降级底账上跑，模型与用户都得知道）。
+      return trackReadFailure("角色目录", "characters/", [] as string[])(error);
+    });
   // P1-5 真修（2026-09-15）：台账级文件损坏（writing-rules/timeline/fact-ledger 等 JSON 坏掉）此前
   // 要么无 catch 直接 reject 炸掉整个 buildWriterContext，要么静默吞成空值——模型拿着降级上下文
   // 盲写却毫无知觉。现在：降级仍做（不让一次坏读盘炸掉出稿），但每条失败进 readFailures 上浮，
@@ -467,7 +472,8 @@ async function resolveSelectedCharacterIds(projectDir: string, selectedCharacter
   if (selectedCharacterIds && selectedCharacterIds.length > 0) {
     return [...unique(selectedCharacterIds.map(toSafeCharacterId))];
   }
-  const entries = await readdir(join(projectDir, "characters"), { withFileTypes: true }).catch(() => []);
+  // 审计 Med：ENOENT-only（新书合法无目录）；权限类失败由调用方留痕——绝不再无痕清空全部角色。
+  const entries = await listCharacterDirectoryEntries(projectDir);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => toSafeCharacterId(entry.name)).sort((a, b) => a.localeCompare(b));
 }
 

@@ -166,7 +166,8 @@ export async function restoreDraftFile(
         );
       }
     }
-    await writeFile(draftPath, previousContent, "utf-8");
+    // 审计：拒稿回滚旧稿原子化——回滚写撕裂会让「旧稿」变半截（CAS 只防覆盖不防撕裂）。
+    await writeFileAtomic(draftPath, previousContent);
     return;
   }
   await rm(draftPath, { force: true });
@@ -1278,7 +1279,8 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
       const routeTrimmed = enforced.draftBody !== writtenBody;
       if (routeTrimmed) {
         const title = extractDraftTitle(writtenContent) ?? report.title ?? `第${chapter}章`;
-        await writeFile(report.draftPath, `# ${title}\n\n${enforced.draftBody.trim()}\n`, "utf-8");
+        // 审计：长度执法裁剪后重写整份工作稿——同样原子化。
+        await writeFileAtomic(report.draftPath, `# ${title}\n\n${enforced.draftBody.trim()}\n`);
       }
       if (routeTrimmed || !report.draftLength) {
         finalReport = {

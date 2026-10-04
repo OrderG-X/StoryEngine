@@ -14,6 +14,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 
 export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {
@@ -52,7 +53,7 @@ export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void 
     } catch (error) {
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });

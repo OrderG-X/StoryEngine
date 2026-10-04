@@ -5,7 +5,7 @@ import ModelSettingsDialog from "./components/ModelSettingsDialog.js";
 import SnapshotHistoryDialog from "./components/SnapshotHistoryDialog.js";
 import UsageDialog from "./components/UsageDialog.js";
 import { useNavigationStore } from "./stores/navigationStore.js";
-import { useWorkspaceStore, setProjectKey } from "./stores/workspaceStore.js";
+import { useWorkspaceStore, setProjectKey, flushPendingMessageSave } from "./stores/workspaceStore.js";
 import { useRecentBooksStore } from "./stores/recentBooksStore.js";
 import { useThemeStore } from "./stores/themeStore.js";
 import { useBookManagement, workspaceFromBook, sidebarFromBook } from "./hooks/useBookManagement.js";
@@ -635,6 +635,8 @@ export function App() {
             onClearChat: () => {
               const backup = useWorkspaceStore.getState().workspace.messages;
               useWorkspaceStore.getState().clearChat();
+              // 审计 Low：clearChat 的空列表是 250ms 节流写——不冲盘的话窗口内 F5 会从旧副本复活（与 undoToTurn 同款窗口）。
+              flushPendingMessageSave();
               useNavigationStore.getState().showToast("已清空对话（正文和资料不受影响，可撤销）", 4000);
               // 审计 Med：清空必须落会话文件——reload 后消息一律取自会话文件，不写回的话 F5 全量复活，
               // 与「已清空」toast 直接矛盾（chapter-workspace 那份已被清、两存储分叉）。空列表走
@@ -654,6 +656,8 @@ export function App() {
             onUndoClearChat: () => {
               const backup = useWorkspaceStore.getState().clearedChatBackup;
               useWorkspaceStore.getState().undoClearChat();
+              // 同上：恢复后的消息也要立刻冲盘，窗口内 F5 不回清空态。
+              flushPendingMessageSave();
               // 撤销清空同样要落会话文件：否则 F5 后又变回清空态（与清空同一条双向通道）。
               const sessionId = useWorkspaceStore.getState().activeSessionId;
               const undoProjectPath = useNavigationStore.getState().projectPath;

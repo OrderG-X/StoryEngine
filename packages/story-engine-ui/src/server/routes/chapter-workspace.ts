@@ -25,6 +25,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 
 /** 读当前 workspace 文件的 revision（缺失/损坏视为 0），供写盘时自增。 */
 async function readCurrentRevision(workspacePath: string): Promise<number> {
@@ -151,7 +152,7 @@ export function registerChapterWorkspaceRoutes(middlewares: MiddlewareStack): vo
     } catch (error) {
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });

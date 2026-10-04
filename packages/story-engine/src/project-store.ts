@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   ArcGoalPool,
@@ -429,6 +429,22 @@ function createDefaultAssetLedger(): AssetLedger {
  * tmp 再原样上抛——绝不静默失败、不留半成品。
  * foundation-write-gateway / foundation-gap-assistant（含 restoreFiles 回滚写）共用此函数。
  */
+/**
+ * 枚举 characters/ 下的角色目录（ENOENT-only 兜底：新书合法没有该目录回 []；
+ * EACCES/EMFILE 等原样上抛——此前各处 .catch(() => []) 把权限错吞成「零角色」，
+ * 主角落占位、质检角色名门静默跳过且零留痕（审计 Med））。调用方自行 catch 留痕。
+ */
+export async function listCharacterDirectoryEntries(
+  projectDir: string,
+): Promise<readonly import("node:fs").Dirent[]> {
+  try {
+    return await readdir(join(projectDir, "characters"), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
   // dirname 平台感知：Windows 反斜杠路径也算出正确父目录——旧 lastIndexOf("/") 算法
   // 在 `\` 路径下得出 ""，mkdir 被静默跳过（复审 C 级）。

@@ -18,7 +18,6 @@ import { registerBooksRoutes } from "./routes/books.js";
 import { registerModelSettingsRoutes } from "./routes/model-settings.js";
 import { registerChapterWorkspaceRoutes } from "./routes/chapter-workspace.js";
 import { registerChatSessionsRoutes } from "./routes/chat-sessions.js";
-import { registerWorkspacePatchApplyRoutes } from "./routes/workspace-patch-apply.js";
 import { registerMemoryContextReadRoutes } from "./routes/memory-context-read.js";
 import { registerCharacterMatrixPreviewRoutes } from "./routes/character-matrix-preview.js";
 import { registerSnapshotsRoutes } from "./routes/snapshots.js";
@@ -52,7 +51,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerModelSettingsRoutes(router);
   registerChapterWorkspaceRoutes(router);
   registerChatSessionsRoutes(router);
-  registerWorkspacePatchApplyRoutes(router);
   registerMemoryContextReadRoutes(router);
   registerCharacterMatrixPreviewRoutes(router);
   registerSnapshotsRoutes(router);

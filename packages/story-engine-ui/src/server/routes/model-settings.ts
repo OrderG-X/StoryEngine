@@ -17,6 +17,7 @@ import {
   type AtomicFileEntry,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   buildProviderRequestHeaders,
   getSavedProviderApiKey,
@@ -84,7 +85,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
         } catch (error) {
           writeJson(res, 400, {
             ok: false,
-            error: `JSON 格式错误：${error instanceof Error ? error.message : String(error)}`,
+            error: `JSON 格式错误：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
           });
           return;
         }
@@ -186,7 +187,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
     } catch (error) {
       writeJson(res, 500, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
       });
     }
   });
@@ -301,7 +302,7 @@ async function handleModelTest(req: import("node:http").IncomingMessage, res: im
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -382,7 +383,7 @@ async function runProviderTest(
   try {
     raw = await readCappedText(response, PROVIDER_TEST_MAX_BYTES);
   } catch (error) {
-    writeJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    writeJson(res, 200, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
     return;
   }
   let data: { data?: Array<{ id: string; name?: string }> };

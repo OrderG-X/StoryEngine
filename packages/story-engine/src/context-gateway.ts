@@ -19,6 +19,7 @@ import {
   readWorldCore,
   readWorldState,
   toSafeCharacterId,
+  listCharacterDirectoryEntries,
 } from "./project-store.js";
 import { selectRelevant } from "./relevance-selection.js";
 import { buildTimelineLayers } from "./timeline-layers.js";
@@ -170,7 +171,6 @@ export interface BuildWriterContextInput {
 
 export async function buildWriterContext(input: BuildWriterContextInput): Promise<WriterContextEnvelope> {
   const project = await readProject(input.projectDir);
-  const characterIds = await resolveSelectedCharacterIds(input);
   // P2 铁律④（永不静默）：损坏的 timeline/events.json 此前双重 catch 后静默降级为 [] ——
   // 模型拿到「空历史」却毫无知觉，会把已写过的章节当没发生过。降级仍要做（不能让一次坏读盘
   // 炸掉整次出稿），但失败原因必须进上下文，让模型知道并如实转达用户。
@@ -179,6 +179,12 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     // 只给 errno code/错误类型 + 项目内相对文件名——error.message 原文带本地绝对路径，不进上下文（路径泄漏纪律）。
     readFailures.push(`${label} 读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
   };
+  // 审计 Med：characters 目录枚举失败（EACCES 等）不再无痕清空全部角色——降级+留痕。
+  const characterIds = await resolveSelectedCharacterIds(input)
+    .catch((error: unknown) => {
+      trackReadFailure("角色目录")(error);
+      return [] as string[];
+    });
   const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
     readStoryCore(input.projectDir),
     readWorldCore(input.projectDir),
@@ -194,8 +200,9 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readWorldState(input.projectDir),
     // 全量 timeline 只读一次：近 N 段（selectRecentTimelineEvents）与早期分层（buildTimelineLayers）共用，避免重复读盘
     readTimelineEvents(input.projectDir)
-      .catch((error) => { trackReadFailure("时间线事件")(error); return readTimelineEventsFallback(input.projectDir); })
-      .catch((error) => { trackReadFailure("时间线事件（含旧格式回退）")(error); return [] as readonly TimelineEvent[]; }),
+      // 审计 Low：删掉「旧格式回退」第二跳——它与首读同一文件同一 JSON.parse，首读失败它必失败，
+      // 永远不可能救回，只是把同一故障记两遍（且内层把权限错无痕吞成 []）。单跳：降级 + 留痕一次。
+      .catch((error) => { trackReadFailure("时间线事件")(error); return [] as readonly TimelineEvent[]; }),
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
   ]);
   const { profiles, cores, states } = characterBundles;
@@ -270,7 +277,11 @@ async function readPreviousUncommittedDraftContext(
   if (chapter <= 1) return undefined;
   const previousChapter = chapter - 1;
   const committedPath = join(projectDir, "chapters", `${padChapter(previousChapter)}.md`);
-  const committedContent = await readFile(committedPath, "utf-8").catch(() => undefined);
+  const committedContent = await readFile(committedPath, "utf-8").catch((error: unknown) => {
+    // 审计 Low：只把「确实没有入库章」（ENOENT）当未入库——权限/IO 错误误判会向写手注入
+    // 「上一章尚未正式入库、以工作稿为准」的错误前情指令。其它错误返回 null：同样跳过本段（不注入指令）。
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null;
+  });
   if (committedContent !== undefined) return undefined;
 
   const draftPath = join(projectDir, "drafts", "fast", `chapter-${padChapter(previousChapter)}.md`);
@@ -343,7 +354,8 @@ async function resolveSelectedCharacterIds(input: BuildWriterContextInput): Prom
   if (input.selectedCharacterIds && input.selectedCharacterIds.length > 0) {
     return unique(input.selectedCharacterIds.map(toSafeCharacterId));
   }
-  const entries = await readdir(join(input.projectDir, "characters"), { withFileTypes: true }).catch(() => []);
+  // 审计 Med：ENOENT-only——权限类失败上抛，由 buildWriterContext 的 read_failures 留痕（不再无痕清空全部角色）。
+  const entries = await listCharacterDirectoryEntries(input.projectDir);
   return entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => toSafeCharacterId(entry.name))
@@ -738,11 +750,6 @@ function truncateText(value: string, maxLength: number): string {
 
 function stripTerminalPunctuation(value: string): string {
   return value.replace(/[。！？!?；;，,、\s]+$/u, "");
-}
-
-async function readTimelineEventsFallback(projectDir: string): Promise<readonly TimelineEvent[]> {
-  const raw = await readFile(join(projectDir, "timeline", "events.json"), "utf-8").catch(() => "[]");
-  return JSON.parse(raw) as TimelineEvent[];
 }
 
 function unique(values: readonly string[]): string[] {

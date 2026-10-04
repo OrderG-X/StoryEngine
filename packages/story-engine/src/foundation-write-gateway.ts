@@ -138,7 +138,6 @@ export interface FoundationWriteResult {
   readonly writes: readonly FoundationWriteRecord[];
   readonly writtenFiles: readonly string[];
   readonly refreshRequired: boolean;
-  readonly userSummaryLines: readonly string[];
   readonly blockedWrites?: readonly FoundationWriteRisk[];
   /** 因目标缺失而被跳过的写入（修2）。有值即代表「这条没写成」是明确状态，而非「啥也没要写」。 */
   readonly skipped?: readonly FoundationWriteSkip[];
@@ -496,10 +495,10 @@ async function applySuggestion(projectDir: string, suggestion: FoundationWriteSu
     return applyCreateCharacter(projectDir, suggestion);
   }
   if (suggestion.actionType === "rename_character") {
-    return { writes: await applyRenameCharacter(projectDir, suggestion) };
+    return applyRenameCharacter(projectDir, suggestion);
   }
   if (suggestion.actionType === "update_character_detail") {
-    // 唯一会因目标缺失而静默返回空的路径——改为带 skip 的显式信号（修2）。
+    // 静默空返已全部消灭（update_character_detail 与 rename_character 都带 skip 显式信号，审计 Med）。
     return applyUpdateCharacterDetail(projectDir, suggestion);
   }
   if (suggestion.actionType === "create_location") {
@@ -796,13 +795,40 @@ function extraFieldsSummary(base: string, targetName: string | undefined, newKey
   return `${base}（为${label}新增自定义字段：${newKeys.join("、")}）`;
 }
 
-async function applyRenameCharacter(projectDir: string, suggestion: FoundationWriteSuggestionLike): Promise<readonly FoundationWriteRecord[]> {
+async function applyRenameCharacter(projectDir: string, suggestion: FoundationWriteSuggestionLike): Promise<FoundationWriteOutcome> {
+  // 审计 Med：rename 此前三条静默空返路径全部改显式 skip（对齐 update_character_detail 的修2 口径，
+  // 注释里「rename 不是静默路径」的说法不成立）。缺新名/缺 targetId/角色册查无目标都如实上报。
+  const skipName = suggestion.extractedEntityName ?? suggestion.targetId;
   const newName = readRenameCharacterName(suggestion);
-  if (!newName || !suggestion.targetId) return [];
+  if (!newName || !suggestion.targetId) {
+    return {
+      writes: [],
+      skip: {
+        reason: "missing_name",
+        action: "rename_character",
+        ...(skipName ? { targetName: skipName } : {}),
+        summary: skipName
+          ? `要给「${skipName}」改名，但没有给出新名字（或缺目标标识），本次未写入任何内容。`
+          : "改名建议缺少新名字或目标标识，本次未写入任何内容。",
+      },
+    };
+  }
   const biblePath = join(projectDir, "story", "character-bible.json");
   const bible = await readJson<CharacterBible>(biblePath, { version: "v0", characters: [] });
   const index = bible.characters.findIndex((character) => character.id === suggestion.targetId);
-  if (index < 0) return [];
+  if (index < 0) {
+    return {
+      writes: [],
+      skip: {
+        reason: "target_not_found",
+        action: "rename_character",
+        ...(skipName ? { targetName: skipName } : {}),
+        summary: skipName
+          ? `没能在角色资料里找到「${skipName}」，改名没有执行。`
+          : "没能在角色资料里找到要改名的角色，改名没有执行。",
+      },
+    };
+  }
   const existing = bible.characters[index] as CharacterBibleEntry;
   const nextCharacters = [...bible.characters];
   nextCharacters[index] = { ...existing, name: newName };
@@ -812,7 +838,8 @@ async function applyRenameCharacter(projectDir: string, suggestion: FoundationWr
   const profile = await readJson<CharacterProfile>(profilePath, { id: suggestion.targetId, name: existing.name, identity: existing.identity ?? existing.role ?? "protagonist", appearance: {}, tags: [] });
   await writeJsonAtomic(profilePath, { ...profile, id: suggestion.targetId, name: newName });
 
-  return [
+  return {
+    writes: [
     {
       domain: "character",
       action: "rename_character",
@@ -829,7 +856,8 @@ async function applyRenameCharacter(projectDir: string, suggestion: FoundationWr
       targetName: newName,
       summary: `已同步角色档案名 ${newName}`,
     },
-  ];
+  ],
+  };
 }
 
 async function applyUpdateCharacterDetail(projectDir: string, suggestion: FoundationWriteSuggestionLike): Promise<FoundationWriteOutcome> {
@@ -2370,17 +2398,6 @@ function result(
     refreshRequired: writes.length > 0,
     ...(blockedWrites.length > 0 ? { blockedWrites } : {}),
     ...(skipped.length > 0 ? { skipped } : {}),
-    userSummaryLines: blockedWrites.length > 0 ? [
-      "写入已暂停，等待明确覆盖确认。",
-      ...blockedWrites.map((write) => `${write.targetFile} / ${write.targetPath}：${write.reason}`),
-    ] : [
-      "已写入当前书籍资料。",
-      ...writes.map((write) => [
-        write.targetName ? `对象：${labelForDomain(write.domain)} ${write.targetName}` : `对象：${labelForDomain(write.domain)}`,
-        `位置：${write.targetFile}`,
-        "状态：刷新后仍可读取",
-      ].join(" / ")),
-    ],
   };
 }
 

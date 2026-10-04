@@ -72,20 +72,6 @@ function firstChapterSetupDirection(overview: StateOverview | null): string {
   ]).join("；");
 }
 
-function foundationSuggestionKey(suggestion: FoundationGapSuggestion): string {
-  const after = suggestion.after as Record<string, unknown> | undefined;
-  const bibleEntry = (after?.bibleEntry ?? after) as Record<string, unknown> | undefined;
-  const name = String(bibleEntry?.name ?? suggestion.extractedEntityName ?? suggestion.targetPath ?? suggestion.targetFile ?? "");
-  return [
-    suggestion.actionType,
-    suggestion.targetFile,
-    suggestion.targetPath,
-    suggestion.category,
-    name,
-    JSON.stringify(after ?? {}),
-  ].join("|");
-}
-
 function foundationSuggestionLabel(suggestion: FoundationGapSuggestion): string {
   if (suggestion.actionType === "delete_foundation_entry") {
     const beforeRecord = suggestion.before as Record<string, unknown> | undefined;
@@ -1601,7 +1587,17 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
-              if (chapterMismatch) return;
+              if (chapterMismatch) {
+                // 审计 Med：跨章工具结果只跳过「工作区草稿/流程态应用」（会写错当前章），但携带最新
+                // 章列表/入库状态的 overview 不能一起丢——否则章列表/侧栏停在旧态，与聊天里「已入库」
+                // 自相矛盾。资料面板按 foundation 口径刷新 + 如实提示（draft-delta 跨章同款）。
+                if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
+                showToast(
+                  `这次操作写的是第 ${info.chapter} 章，不在当前章（第 ${operation.chapter} 章）；当前章的稿子没有变动，章节列表已按最新状态刷新。`,
+                  4200,
+                );
+                return;
+              }
               if (info.toolName === "commit_apply") commitReconciliationDraft = null;
               // undo_last_change 真撤销（undone=true）：先冻结 autosave 再做任何事——从此刻起本页不再有任何 PUT 能把
               // 撤销前的旧稿写回磁盘；下面的 overview 刷新照常跑（资料面板），草稿由磁盘真值异步接管。undone=false（没东西可撤）不触发。

@@ -367,6 +367,18 @@ async function confirmCharacterStateWrite(
   projectDir: string,
   body: Record<string, unknown>,
 ): Promise<{ readonly statusCode: number; readonly payload: CharacterStateConfirmPayload }> {
+  // 审计（复核 High）：读-改-写整段进项目级写锁——commit apply 持同一把锁写同一份
+  // characters/<id>/state.json，锁外交错会互相覆盖用户数据（baseHash 只挡「预览后已变」，
+  // 挡不住 check→rename 之间、含整个 git 快照期间插进来的定稿写；反向还会幂等回执已记、
+  // 界面报成功、实际写入被覆盖丢掉）。与同文件 apply/rollback 的既有口径一致（锁可重入，
+  // createSnapshot 嵌套安全）。
+  return withProjectCommitLock(projectDir, () => confirmCharacterStateWriteUnlocked(projectDir, body));
+}
+
+async function confirmCharacterStateWriteUnlocked(
+  projectDir: string,
+  body: Record<string, unknown>,
+): Promise<{ readonly statusCode: number; readonly payload: CharacterStateConfirmPayload }> {
   const forbiddenFields = Object.keys(body).filter((field) => !CHARACTER_STATE_CONFIRM_ALLOWED_FIELDS.has(field)).sort();
   if (forbiddenFields.length > 0) {
     return blockedCharacterStateWrite(400, `forbidden_fields:${forbiddenFields.join(",")}`);
@@ -433,10 +445,11 @@ async function confirmCharacterStateWrite(
       overview: refresh.overview,
     };
     await mkdir(dirname(idempotencyPath), { recursive: true });
-    await writeFile(idempotencyPath, `${JSON.stringify({
+    // 审计：幂等回执原子写（半截只导致 409 重试，也别留）。
+    await writeFileAtomic(idempotencyPath, `${JSON.stringify({
       requestFingerprint,
       result: { ...result, overview: undefined },
-    }, null, 2)}\n`, "utf-8");
+    }, null, 2)}\n`);
     return { statusCode: 200, payload: { ok: true, result } };
   } catch (error) {
     // tmp 残留给快照扫进 git 的前科（writeFileAtomic 同口径）：rename 未成功时临时文件还在原地，必须清掉；
@@ -606,7 +619,8 @@ async function readJsonRecordSnapshot(path: string): Promise<JsonSnapshot> {
 async function rollbackCharacterStateWrite(targetPath: string, backup: CharacterStateBackup): Promise<{ readonly attempted: true; readonly succeeded: boolean } | { readonly attempted: false; readonly succeeded: null }> {
   try {
     if (backup.exists) {
-      await writeFile(targetPath, `${JSON.stringify(JSON.parse(backup.content) as unknown, null, 2)}\n`, "utf-8");
+      // 审计：失败恢复写原子化——恢复路写坏（半截 state.json）比正向写坏更糟（用户以为已恢复）。
+      await writeFileAtomic(targetPath, `${JSON.stringify(JSON.parse(backup.content) as unknown, null, 2)}\n`);
     } else {
       await rm(targetPath, { force: true });
     }

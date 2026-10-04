@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommitDraftInput } from "./commit-engine.js";
-import { describeErrorBriefly, readCharacterProfile } from "./project-store.js";
+import { describeErrorBriefly, listCharacterDirectoryEntries, readCharacterProfile } from "./project-store.js";
 import {
   defaultQualityJudgement,
   userDisplayCategoryForJudgement,
@@ -75,7 +75,10 @@ export async function checkDraftBeforeCommit(input: {
     });
   }
 
-  const characterNames = await listCharacterNames(input.projectDir);
+  const { names: characterNames, degradations: characterNameDegradations } = await listCharacterNames(input.projectDir);
+  for (const degradation of characterNameDegradations) {
+    issues.push({ type: "character_names_degraded", severity: "warning", message: degradation });
+  }
   if (content && characterNames.length > 0 && !characterNames.some((name) => content.includes(name))) {
     issues.push(errorIssue("missing_character_name", "Draft does not mention any known character name."));
   }
@@ -388,13 +391,24 @@ function issueToCandidate(issue: CommitQualityIssue, source: RuleQualityCandidat
   };
 }
 
-async function listCharacterNames(projectDir: string): Promise<readonly string[]> {
-  const entries = await readdir(join(projectDir, "characters"), { withFileTypes: true }).catch(() => []);
+async function listCharacterNames(projectDir: string): Promise<{ readonly names: readonly string[]; readonly degradations: readonly string[] }> {
+  // 审计 Med：角色目录/资料读取失败不再无痕清空——EACCES 时 names=[] 会让 missing_character_name
+  // 门静默跳过（零 warning），降级必须留痕（铁律④）。
+  const degradations: string[] = [];
+  let entries: readonly import("node:fs").Dirent[] = [];
+  try {
+    entries = await listCharacterDirectoryEntries(projectDir);
+  } catch (error) {
+    degradations.push(`角色目录枚举失败（${describeErrorBriefly(error, projectDir)}），角色名门本轮按空角色名执行。`);
+  }
   const profiles = await Promise.all(entries
     .filter((entry) => entry.isDirectory())
-    // profile 缺失/损坏（空角色目录、被中断的写入）不应崩掉质检——容错跳过（对齐 writing-context-pack 的 .catch）。
-    .map((entry) => readCharacterProfile(projectDir, entry.name).catch(() => undefined)));
-  return unique(profiles.flatMap((profile) => (profile ? nameCandidates(profile) : [])));
+    // profile 缺失/损坏（空角色目录、被中断的写入）不应崩掉质检——容错跳过并留痕。
+    .map((entry) => readCharacterProfile(projectDir, entry.name).catch((error: unknown) => {
+      degradations.push(`角色「${entry.name}」资料读取失败（${describeErrorBriefly(error, projectDir)}），已跳过。`);
+      return undefined;
+    })));
+  return { names: unique(profiles.flatMap((profile) => (profile ? nameCandidates(profile) : []))), degradations };
 }
 
 function nameCandidates(profile: CharacterProfile): readonly string[] {

@@ -1582,57 +1582,6 @@ export type DraftRevisionApplyApiResponse =
   | { readonly ok: true; readonly result: DraftRevisionApplyResult; readonly draftContent: string; readonly overview: StateOverview }
   | { readonly ok: false; readonly error: string };
 
-export type WorkspacePatchApplyDocumentType =
-  | "chapter_markdown"
-  | "draft_markdown"
-  | "outline_markdown"
-  | "note_markdown"
-  | "review_markdown"
-  | "quality_report_markdown"
-  | "task_log_markdown";
-
-export interface WorkspacePatchApplyRequest {
-  readonly projectPath: string;
-  readonly targetPath: string;
-  readonly beforeText: string;
-  readonly afterText: string;
-  readonly patchId?: string;
-  readonly previewId?: string;
-  readonly expectedBeforeHash: string;
-  readonly userConfirmed: boolean;
-  readonly idempotencyKey: string;
-}
-
-export interface WorkspacePatchApplySuccessResult {
-  readonly ok: true;
-  readonly patchApplyTxId: string;
-  readonly targetPath: string;
-  readonly documentType: WorkspacePatchApplyDocumentType;
-  readonly beforeHash: string;
-  readonly afterHash: string;
-  readonly changeSummary: string;
-  readonly changedFiles: readonly string[];
-  readonly rollbackAvailable: boolean;
-  readonly rollbackNote: string;
-  readonly noStateJsonWrite: true;
-  readonly noMemoryWrite: true;
-  readonly noFormalCommitApply: true;
-  readonly warnings: readonly string[];
-  readonly transactionPath: string;
-}
-
-export interface WorkspacePatchApplyErrorResponse {
-  readonly ok: false;
-  readonly code: string;
-  readonly error: string;
-  readonly reasons?: readonly string[];
-  readonly warnings?: readonly string[];
-}
-
-export type WorkspacePatchApplyApiResponse =
-  | WorkspacePatchApplySuccessResult
-  | WorkspacePatchApplyErrorResponse;
-
 export type MemoryContextReadRouteStatus = "idle" | "loading" | "ready" | "warning" | "blocked" | "failed";
 
 export interface MemoryContextReadRouteLimits {

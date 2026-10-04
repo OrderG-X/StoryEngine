@@ -13,6 +13,7 @@ import { resolve, join } from "node:path";
 import { promisify } from "node:util";
 
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   buildStateOverview,
   createStoryProject,
@@ -135,7 +136,7 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
     }
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -261,7 +262,7 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -342,19 +343,22 @@ async function handleRenameBook(req: import("node:http").IncomingMessage, res: i
 
     await assertStoryEngineProject(projectDir);
     const projectPath = join(projectDir, "project.json");
-    const project = JSON.parse(await readFile(projectPath, "utf-8")) as Record<string, unknown>;
-    const nextProject = {
-      ...project,
-      title,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeFile(projectPath, `${JSON.stringify(nextProject, null, 2)}\n`, "utf-8");
+    // 审计（复核 Med）：rename 与 story-settings 写同一个 project.json——那条已进锁+原子写，
+    // 这条漏了同款收口（锁外读-改-写 + 裸 writeFile，交错丢更新/崩溃留半截 project.json 会打不开书）。
+    await withProjectCommitLock(projectDir, async () => {
+      const project = JSON.parse(await readFile(projectPath, "utf-8")) as Record<string, unknown>;
+      await writeFileAtomic(projectPath, `${JSON.stringify({
+        ...project,
+        title,
+        updatedAt: new Date().toISOString(),
+      }, null, 2)}\n`);
+    });
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
     writeJson(res, 200, { ok: true, title, overview });
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -439,7 +443,7 @@ async function handleUpdateStorySettings(req: import("node:http").IncomingMessag
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -490,7 +494,7 @@ async function handleUpdateWritingRules(req: import("node:http").IncomingMessage
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -550,7 +554,7 @@ async function handleDeleteBook(req: import("node:http").IncomingMessage, res: i
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -574,7 +578,7 @@ async function handleOpenBookFolder(req: import("node:http").IncomingMessage, re
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -598,7 +602,7 @@ async function handleUsageSummary(req: import("node:http").IncomingMessage, res:
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }

@@ -29,6 +29,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 // apply 的「修订应用前快照」不再经本路由：快照+落盘已收进 revision-service 的 runWithSnapshot 同一临界区。
 import {
   applyRevision,
@@ -92,7 +93,7 @@ async function handleDraftRevisionPreview(req: import("node:http").IncomingMessa
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
@@ -142,7 +143,7 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
   }
 }
