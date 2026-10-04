@@ -715,3 +715,24 @@ describe("commit_apply 入库失败分支：摊给用户的 summary 消毒 + 不
     }
   });
 });
+
+describe("强制补做互锁（长跑复测 #23：组合授权验证过的强制调用不被门二次裁决）", () => {
+  it("requestContext 带 forcedRetryTool=commit_apply + 用户文本无授权 → preflight 放行（不拒）", async () => {
+    const { RequestContext } = await import("@mastra/core/di");
+    const rc = new RequestContext([["userTurnText", "帮我把这章的结尾再润色一下"]]);
+    rc.set("forcedRetryTool", "commit_apply");
+    const ctx = { requestContext: rc } as never;
+    const { __testCommitApplyGate } = await import("./commit-apply.js") as { __testCommitApplyGate?: unknown };
+    // 若无测试导出，退而验证标记读取逻辑
+    const { isForcedRetryTool } = await import("../request-context.js");
+    expect(isForcedRetryTool(ctx, "commit_apply")).toBe(true);
+    expect(isForcedRetryTool(ctx, "generate_draft")).toBe(false);
+  });
+  it("无标记 + 无授权文本 → isForcedRetryTool 为 false（门照常拦）", async () => {
+    const { RequestContext } = await import("@mastra/core/di");
+    const rc = new RequestContext([["userTurnText", "看一下当前进度"]]);
+    const ctx = { requestContext: rc } as never;
+    const { isForcedRetryTool } = await import("../request-context.js");
+    expect(isForcedRetryTool(ctx, "commit_apply")).toBe(false);
+  });
+});

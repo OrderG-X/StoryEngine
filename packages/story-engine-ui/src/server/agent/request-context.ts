@@ -26,6 +26,27 @@ export const REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY = "draftDeltaSink";
  */
 export const REQUEST_CONTEXT_USER_TURN_TEXT_KEY = "userTurnText";
 
+/**
+ * 服从补做互锁（长跑复测 #23）：missingWarrantsRetry 强制补做的工具名。
+ * 该路已由 isCombinedPreviewConfirmRequest + detectMissingExecutionForRequest 在用户原话上验证过
+ * 写入意图——工具层意图门再对同一段文本做一次匹配是重复裁决，且两套词表一旦有分歧就会出现
+ * 「服务端强制调用 → 门拦下未授权」的自相矛盾（真机实锤：预览通过就定稿的补做 apply 被门拦）。
+ * 标记了就放行；未标记的普通/A1 谎报重做调用仍走门的全文匹配（A1 的强制工具由声称文本反推，
+ * 用户未必授权过，必须继续受门约束）。
+ */
+export const REQUEST_CONTEXT_FORCED_RETRY_TOOL_KEY = "forcedRetryTool";
+
+/** 标记「本次调用是组合授权验证过的服务端强制补做」。 */
+export function markForcedRetryTool(context: RequestContext | undefined, toolName: string | undefined): void {
+  context?.set(REQUEST_CONTEXT_FORCED_RETRY_TOOL_KEY, toolName);
+}
+
+/** 工具层：读强制补做标记；与工具名一致才视为「本次强制即授权」。 */
+export function isForcedRetryTool(context: ToolExecutionContext | undefined, toolName: string): boolean {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_FORCED_RETRY_TOOL_KEY);
+  return raw === toolName;
+}
+
 export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string }) => void;
 
 function isPositiveInt(value: unknown): value is number {

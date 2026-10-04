@@ -78,6 +78,7 @@ import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resol
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
+import { isForcedRetryTool } from "../request-context.js";
 import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import {
@@ -374,7 +375,9 @@ export const generateDraftTool = createTool({
     // 模型不得擅自 generate_draft 往下写整章（纪律 145「出稿不越权」的确定性护栏——不赌弱模型守规矩）。
     // 缺原话放行（向后兼容/前端按钮直调）；组合意图「定稿并接着写下一章」含写作意图仍放行。拦在调模型之前。
     const userTurnText = readUserTurnTextFromContext(context);
-    if (userTurnText !== undefined && !userTurnAllowsDraftWrite(userTurnText)) {
+    // 强制补做互锁（#23）：组合授权验证过的强制调用放行（draft 门词表较窄，#20——
+    // 「重新生成整章正文」类措辞会被拦；服务端强制时用户意图已验证，不再二次裁决）。
+    if (userTurnText !== undefined && !userTurnAllowsDraftWrite(userTurnText) && !isForcedRetryTool(context, "generate_draft")) {
       console.warn("[turn-intent-gate] 拦下未授权 generate_draft（本轮用户原话无写作意图，防入库后自主续写）");
       const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
       return buildNoWriteIntentBlockedOutput(resolvedChapter, overview);

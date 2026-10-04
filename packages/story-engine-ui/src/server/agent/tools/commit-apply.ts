@@ -26,7 +26,7 @@ import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
 import { writeTool } from "../withSnapshot.js";
-import { readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { isForcedRetryTool, readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   runCommitApply,
   type ChapterDeltaDeclarationOutcome,
@@ -381,7 +381,8 @@ export const commitApplyTool = writeTool({
   outputSchema,
   preflight: async ({ input, projectDir, context }) => {
     const userTurnText = readUserTurnTextFromContext(context);
-    if (userTurnText === undefined || userTurnAllowsCommitApply(userTurnText)) return undefined;
+    // 强制补做互锁（#23）：组合授权验证过的服务端强制调用放行，不再对同一段文本二次裁决。
+    if (userTurnText === undefined || userTurnAllowsCommitApply(userTurnText) || isForcedRetryTool(context, "commit_apply")) return undefined;
 
     console.warn("[turn-intent-gate] 拦下未授权 commit_apply（本轮用户原话无对应意图）");
     const resolvedChapter = resolveChapterFromInputOrContext(input.chapter, context);

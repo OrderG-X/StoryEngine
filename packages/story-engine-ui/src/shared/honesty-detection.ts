@@ -498,6 +498,17 @@ export function detectMissingExecutionForRequest(
  * 这类句子的期望集 = 先 commit_preview 后 commit_apply；尾步被丢时服从重试据此补做。
  * 判定 = 预览词与定稿授权词同现（各自让位/否定细粒度由 detectMissingExecutionForRequest 内部把关）。
  */
+/**
+ * 空转承诺判别（长跑复测 #25）：零工具回合里，模型文本是「承诺了要动手」还是「陈述性拒绝」。
+ * 「好的，我来处理定稿 / 这就执行」= 承诺 → 补做（说了要做却没做）；
+ * 「第 99 章不存在，没法定稿」= 陈述性拒绝（无承诺词）→ 维持 T4 只更正不重做。
+ */
+export function isActionPromiseReply(content: string): boolean {
+  const text = content.trim();
+  if (!text) return false;
+  return /(?:我来|我来处理|这就|马上|立即|立刻|正在|这就去|我去|交给我|会直接|这就执行|开始(?:执行|处理|定稿|入库))|(?:会|将)?(?:直接)?(?:执行|处理|完成)(?:定稿|入库)/u.test(text);
+}
+
 export function isCombinedPreviewConfirmRequest(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;

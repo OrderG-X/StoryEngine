@@ -24,6 +24,7 @@ import {
   toolResultStatus,
   type ObedienceAttemptOptions,
   type ObedientTurnChunk,
+  MAX_WARRANTS_RETRIES,
 } from "./agent-chat.js";
 import { OBEDIENCE_RETRY_TRANSITION_TEXT } from "../../shared/honesty-detection.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
@@ -555,8 +556,10 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       // 首轮：generate_draft 真跑了，模型收尾没提预览也没做（「完成」不命中完成声称 → A1 不触发，
       // 靠 A2 组合授权尾步检出）
       [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成。")],
-      // 重做轮：被点名强制补预览
+      // 补做第 1 轮：点名强制补预览（组合句预览+确认都在原话，apply 还没轮到）
       [...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第22章可以定稿。" })],
+      // 补做第 2 轮（长跑复测 #24：组合授权预算两轮）：点名强制 apply，链收口
+      [...toolChunks("commit_apply", { ok: true, committed: true, summary: "第22章已定稿。" })],
     ]);
     const events: { event: string; data: unknown }[] = [];
     const { attempts } = await runObedientAgentTurn({
@@ -566,8 +569,9 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
     });
-    expect(attempts).toBe(2);
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
+    expect(attempts).toBe(3);
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1, forcedRetryTool: "commit_preview" });
+    expect(fake.seenOptions[2]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1, forcedRetryTool: "commit_apply" });
     const text = collectText(events);
     expect(text).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
     expect(text).not.toContain("⚠️ 系统更正");
@@ -589,7 +593,7 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       scrubber: passthroughScrubber(),
     });
     expect(attempts).toBe(2);
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1, forcedRetryTool: "commit_apply" });
   });
 
   it("组合授权但预览裁决不可定稿（verdict）→ 尾步 apply 不算缺：一轮收场不重做（防误伤）", async () => {
@@ -642,9 +646,45 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(text).not.toContain("⚠️ 系统更正");
   });
 
+  it("#25 空转显式确认：『确认定稿第 N 章』零工具纯文本 → 补做强制 commit_apply（长跑第54章实锤）", async () => {
+    const fake = makeStreamAttempt([
+      // 首轮：模型纯文本空转（承诺了要动手却零工具——第54章真机形态）
+      [textChunk("好的，我来处理定稿。")],
+      // 补做轮：点名强制 apply
+      [...toolChunks("commit_apply", { ok: true, committed: true, summary: "第54章已定稿。" })],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "确认定稿第 54 章。" }],
+      userText: "确认定稿第 54 章。",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(2);
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1, forcedRetryTool: "commit_apply" });
+    const text = collectText(events);
+    expect(text).not.toContain("⚠️ 系统更正");
+  });
+
+  it("#25 反例：跑过工具的显式定稿回合（如重跑预览后停等）维持句 8 合法停等，不强制", async () => {
+    const fake = makeStreamAttempt([
+      [...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "可以定稿。" }), textChunk("预览已通过，等你确认。")],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    const { attempts } = await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "把第 22 章正式定稿" }],
+      userText: "把第 22 章正式定稿",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(attempts).toBe(1);
+  });
+
   it("#8 尾步补做也只重试一次：两轮都丢尾步 → 恰一条系统更正收场，绝不第三轮", async () => {
     const lostTail = [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成。")];
-    const fake = makeStreamAttempt([lostTail, lostTail]);
+    const fake = makeStreamAttempt([lostTail, lostTail, lostTail]);
     const events: { event: string; data: unknown }[] = [];
     const { attempts } = await runObedientAgentTurn({
       initialMessages: [{ role: "user", content: "写完生成预览，确认定稿。" }],
@@ -653,7 +693,9 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
     });
-    expect(attempts).toBe(1 + MAX_OBEDIENCE_RETRIES);
+    // 组合授权预算 MAX_WARRANTS_RETRIES=2（#24）：首轮 + 两轮补做都丢尾步 → 第 4 轮不再有，
+    // 恰一条系统更正收场（A1 预算仍为 MAX_OBEDIENCE_RETRIES，不叠加）。
+    expect(attempts).toBe(1 + MAX_WARRANTS_RETRIES);
     const text = collectText(events);
     expect(text.match(/⚠️ 系统更正/gu)?.length).toBe(1);
     expect(text).toContain("定稿影响预览没有执行");
