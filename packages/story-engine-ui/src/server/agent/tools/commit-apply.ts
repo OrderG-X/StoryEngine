@@ -18,6 +18,7 @@ import {
   buildStateOverview,
   type StateOverview,
 } from "@actalk/story-engine";
+import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, relative } from "node:path";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
@@ -26,7 +27,8 @@ import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
 import { writeTool } from "../withSnapshot.js";
-import { isForcedRetryTool, readUserTurnTextFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { defaultDraftPath } from "../../lib/project-io.js";
+import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   runCommitApply,
   type ChapterDeltaDeclarationOutcome,
@@ -37,10 +39,10 @@ import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from ".
 import {
   consumeCommitPreview,
   findCommitPreview,
+  hashDraftContent,
   verifyCommitPreview,
   type CommitPreviewGuardFailure,
 } from "./commit-preview-store.js";
-import { userTurnAllowsCommitApply } from "./turn-intent-gate.js";
 
 /**
  * 堆积加重档阈值（长跑 #16：50 章积 323 条、42 条超 3 章未推进，全靠用户发起治理）：
@@ -65,7 +67,15 @@ const outputSchema = z.object({
   committed: z.boolean().describe("是否真的完成了定稿。"),
   refused: z.boolean().describe("是否因守卫（未预览/工作稿已变/计划不可用）被拒绝。"),
   refusalReason: z.string().optional().describe("被拒绝的原因（诚实回报，不谎称成功）。"),
-  blockedReason: z.string().optional().describe("写入前守卫拦截原因，如本轮用户原话没有正式定稿意图。"),
+  blockedReason: z.string().optional().describe(
+    "写入前守卫拦截原因：awaiting_user_confirmation=已预览通过、等用户点「确认定稿」按钮；no_preview/draft_changed_since_preview/no_draft=还不能定稿。",
+  ),
+  needsConfirmation: z.boolean().optional().describe("true=没有写盘，界面已给用户出「确认定稿」按钮，用户点了才真正定稿。"),
+  confirmAction: z.object({
+    toolName: z.literal("commit_apply"),
+    chapter: z.number().int().positive(),
+    previewToken: z.string().optional(),
+  }).optional().describe("「确认定稿」按钮携带的结构化动作（前端据此渲染按钮）。"),
   report: z.unknown().optional().describe("定稿报告（更新了哪些角色/伏笔/线索/时间线等）。"),
   draftBody: z.string().optional().describe(
     "已定稿的章节正文（去 Markdown 标题）；定稿成功时返回，供前端把正文以 committed 状态载入工作区，避免被占位覆盖、且防 autosave 把已定稿章节复活成工作稿。",
@@ -97,6 +107,9 @@ export interface CommitApplyToolOutput {
   readonly refused: boolean;
   readonly refusalReason?: string;
   readonly blockedReason?: string;
+  /** 模型发起的调用：没写盘，等用户点「确认定稿」按钮（结构化动作）。 */
+  readonly needsConfirmation?: boolean;
+  readonly confirmAction?: CommitApplyConfirmAction;
   readonly report?: unknown;
   readonly draftBody?: string;
   readonly draftTitle?: string;
@@ -109,6 +122,13 @@ export interface CommitApplyToolOutput {
   readonly declarationReason?: string;
   /** 线索池堆积加重档（长跑 #16）：未收口 ≥30 条时出现，instructions 据此必须在下一步选项卡里摆「清理线索」。 */
   readonly threadMaintenanceHint?: "escalated";
+}
+
+/** 「确认定稿」按钮的结构化动作：前端原样回传给 /api/agent/chat 的 action 字段。 */
+export interface CommitApplyConfirmAction {
+  readonly toolName: "commit_apply";
+  readonly chapter: number;
+  readonly previewToken?: string;
 }
 
 // 角色候选自动登记（convertCandidatesToMatrixUpdates）已于 2026-06-24 移除：
@@ -373,31 +393,21 @@ export const callConfiguredFactModel: FactCallModel = async (messages) => {
 export const commitApplyTool = writeTool({
   id: "commit_apply",
   description:
-    "把某章工作稿正式定稿（写入章节正文与角色/伏笔/线索/时间线等全套状态，自带事务回滚）。" +
-    "必须先对同一章 commit_preview 过、且工作稿未改动；否则会被拒绝、不会定稿。" +
-    "previewToken 可省略，系统会使用最近一次有效定稿预览票据；如果看到了真实 previewToken 可以带上，但绝不编造 token_placeholder。" +
-    "定稿前自动建快照，可一键撤销。本工具有写入前守卫：本轮用户原话没有明确定稿意图会被拒绝。",
+    "请求把某章工作稿定稿。你调用它不会直接写入：本章有有效定稿预览时，它给用户出一个「确认定稿」按钮" +
+    "（needsConfirmation=true），用户点了按钮系统才真正定稿；没有有效预览/工作稿预览后改过时如实拒绝，先 commit_preview。" +
+    "用户说要定稿时调用它（给出章号即可），然后告诉用户点「确认定稿」按钮；绝不说成『已定稿』。",
   inputSchema,
   outputSchema,
+  // 授权模型（2026-10-07 拆补丁塔）：只有用户点了「确认定稿」按钮（结构化动作，服务端直接执行）才真写盘；
+  // 模型自己发起的调用一律不定稿——有有效预览就给用户出确认按钮，没有就如实让先预览。
+  // 不再用正则猜用户原话是不是授权（那张词表追不完中文说法、还和诚实检测两表互锁）。
   preflight: async ({ input, projectDir, context }) => {
-    const userTurnText = readUserTurnTextFromContext(context);
-    // 强制补做互锁（#23）：组合授权验证过的服务端强制调用放行，不再对同一段文本二次裁决。
-    if (userTurnText === undefined || userTurnAllowsCommitApply(userTurnText) || isForcedRetryTool(context, "commit_apply")) return undefined;
-
-    console.warn("[turn-intent-gate] 拦下未授权 commit_apply（本轮用户原话无对应意图）");
-    const resolvedChapter = resolveChapterFromInputOrContext(input.chapter, context);
-    const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter ?? 1, maxTimelineEvents: 8 }).catch(() => undefined);
-    return {
-      ok: false,
-      committed: false,
-      refused: true,
-      blockedReason: "user_turn_no_commit_intent",
-      refusalReason: "本回合用户没有明确要求定稿，已拦下自动定稿（写入前守卫）。",
-      overview,
-      summary: "本回合用户没有明确要求定稿，已拦下自动定稿（写入前守卫）。请把当前进展如实转告用户；用户说『确认定稿』我才会真正写入；旧说法『确认正式入库』也仍然有效。",
-      refreshScope: "full" as const,
-      ...(resolvedChapter ? { chapter: resolvedChapter } : {}),
-    };
+    if (isUserConfirmedTool(context, "commit_apply")) return undefined;
+    const chapter = resolveChapterFromInputOrContext(input.chapter, context);
+    if (chapter === undefined) {
+      throw new Error("commit_apply 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
+    }
+    return buildConfirmationRequest(projectDir, chapter);
   },
   run: async ({ input, projectDir, context }) => {
     const resolvedChapter = resolveChapterFromInputOrContext(input.chapter, context);
@@ -442,6 +452,40 @@ export const commitApplyTool = writeTool({
     }
   },
 });
+
+/**
+ * 模型发起的 commit_apply：不写盘，按预览票据给出「确认定稿」按钮或如实拒绝。
+ * 票据核对与 apply 时的守卫同口径（有记录 + 草稿未改），免得给用户一个点了必失败的按钮。
+ */
+export async function buildConfirmationRequest(projectDir: string, chapter: number): Promise<CommitApplyToolOutput> {
+  const record = findCommitPreview(projectDir, chapter);
+  if (!record) {
+    return { ...(await refusal(projectDir, chapter, GUARD_FAILURE_MESSAGE.no_preview)), blockedReason: "no_preview", chapter };
+  }
+  const draft = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
+  if (draft === undefined) {
+    return { ...(await refusal(projectDir, chapter, `第 ${chapter} 章工作稿不存在，无法定稿。`)), blockedReason: "no_draft", chapter };
+  }
+  if (hashDraftContent(draft) !== record.draftHash) {
+    return {
+      ...(await refusal(projectDir, chapter, GUARD_FAILURE_MESSAGE.draft_changed_since_preview)),
+      blockedReason: "draft_changed_since_preview",
+      chapter,
+    };
+  }
+  return {
+    ok: false,
+    committed: false,
+    refused: false,
+    needsConfirmation: true,
+    blockedReason: "awaiting_user_confirmation",
+    confirmAction: { toolName: "commit_apply", chapter, previewToken: record.token },
+    overview: undefined,
+    summary: `第 ${chapter} 章已预览通过，还没写入。请点「确认定稿」按钮完成定稿（定稿前自动存档，可撤销）。`,
+    refreshScope: "full",
+    chapter,
+  };
+}
 
 const BARE_ENTITY_ID_PLACEHOLDER: Readonly<Record<string, string>> = {
   char: "「某角色」",

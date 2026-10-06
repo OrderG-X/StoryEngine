@@ -431,7 +431,7 @@ function buildPreviewSummary(input: {
   readonly declarationFallbackNotice?: string;
 }): { readonly summary: string; readonly modelHint?: string } {
   const base = input.canCommit
-    ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。说「确认定稿」即可写入。`
+    ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。点预览卡上的「确认定稿」即可写入。`
     : `第 ${input.chapter} 章暂不可定稿：${input.blockingReasons.join("；")}。`;
   let summary = base;
   if (input.nameConsistencyWarnings.length > 0) {
@@ -472,13 +472,10 @@ function buildPreviewSummary(input: {
   }
   const hints: string[] = [];
   if (input.canCommit) {
-    // 组合授权口径（长跑 #11/#15：模型把「说确认定稿即可写入」当成万能收尾，用户本轮原话已授权
-    // 组合步骤却被要求再显式说一遍——委托链体验断裂）：用户本轮原话含组合授权（预览+确认 /
-    // 写完直接确认定稿 / 预览通过就定稿 / 重走定稿）时，预览通过即可同轮继续 commit_apply，
-    // 不必再问一轮。未授权组合的纯预览轮仍停在预览等确认（与 instructions 分工一致）。
+    // 定稿由用户点预览卡上的「确认定稿」按钮完成（结构化动作，2026-10-07），模型这侧不产生定稿。
     hints.push(
-      "用户明确确认定稿后再调用 commit_apply 正式写入（可省略 token，系统用最近一次有效预览票据）；未确认前不得自行定稿。" +
-        "但若用户本轮原话已含组合授权（如「预览+确认」「写完直接确认定稿」「预览通过就定稿」「重走定稿」），视为已授权：预览通过（canCommit=true）就同轮继续 commit_apply，绝不停在预览再问一轮。",
+      "预览通过：请用户点预览卡上的「确认定稿」按钮写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
+        "用户口头说确认定稿时可调 commit_apply，它只会再给用户出一个确认按钮。",
     );
   }
   if (summary !== base) {

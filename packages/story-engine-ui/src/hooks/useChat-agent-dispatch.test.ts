@@ -1206,3 +1206,67 @@ describe("useChat agent undo_last_change × autosave（P2）", () => {
     expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
   });
 });
+
+// 「确认定稿」按钮（2026-10-07 拆补丁塔）：点击发结构化动作，服务端直接执行 commit_apply——
+// 不再发文本「确认定稿」让模型猜、过正则意图门。
+describe("「确认定稿」按钮 → 结构化动作", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    resetStore();
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "commit_apply", toolCallId: "c1", ok: true, committed: true, summary: "第 3 章已定稿。" });
+      handlers.onTextDelta("第 3 章已定稿。");
+      handlers.onDone();
+    });
+  });
+
+  const commitApply = (commitTarget?: { chapter?: number; previewToken?: string }) => ({
+    id: "commit-apply",
+    label: "确认定稿",
+    description: "写入定稿章节",
+    permission: "formal_state_write" as const,
+    requiresConfirmation: false,
+    ...(commitTarget ? { commitTarget } : {}),
+  });
+
+  it("带目标章与令牌 → streamAgentChat 收到 action，对话留一条「确认定稿第 N 章」", async () => {
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    act(() => {
+      result.current.handleSuggestedAction(commitApply({ chapter: 2, previewToken: "tok" }));
+    });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+
+    const request = mockedStreamAgentChat.mock.calls[0]![0];
+    expect(request.action).toEqual({ toolName: "commit_apply", chapter: 2, previewToken: "tok" });
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "确认定稿第 2 章" });
+    expect(messages().some((m) => m.role === "user" && m.content === "确认定稿第 2 章")).toBe(true);
+  });
+
+  it("无目标（诚实更正上的「重新确认定稿」）→ 用当前章，不带令牌（服务端用最近一次预览票据）", async () => {
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    act(() => {
+      result.current.handleSuggestedAction(commitApply());
+    });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "commit_apply", chapter: 3 });
+  });
+
+  it("已有操作在跑 → 不发动作、不追加消息", async () => {
+    useWorkspaceStore.setState({ chatLoading: true });
+    const before = messages();
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    act(() => {
+      result.current.handleSuggestedAction(commitApply({ chapter: 3 }));
+    });
+    await Promise.resolve();
+
+    expect(mockedStreamAgentChat).not.toHaveBeenCalled();
+    expect(messages()).toBe(before);
+  });
+});

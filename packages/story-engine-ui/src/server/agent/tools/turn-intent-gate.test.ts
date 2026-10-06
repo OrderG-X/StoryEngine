@@ -1,145 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  userTurnAllowsCommitApply,
   userTurnAllowsDraftWrite,
   userTurnAllowsEstablishedOverride,
   userTurnAllowsResolveThread,
   userTurnAllowsSnapshotPrune,
   userTurnAllowsThreadCleanup,
 } from "./turn-intent-gate.js";
-
-describe("turn-intent-gate commit_apply", () => {
-  it.each([
-    "确认定稿",
-    "定稿吧",
-    "定稿并更新资料",
-    "确认正式入库",
-    "执行入库",
-    "直接入库",
-    "直接正式入库",
-    "提交本章",
-    "把这章正式入库",
-    "把第59章草稿走完预览并正式入库",
-    "预览通过就直接入库",
-    "预览没问题后再正式入库",
-  ])("允许明确定稿/入库意图：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(true);
-  });
-
-  it.each([
-    "继续写第59章正文。只写这一章，不要写其他章。",
-    "先别入库，改完再说",
-    "不要正式入库，只生成预览",
-    "暂不提交，我先看看",
-  ])("拦截没有正式入库意图或否定入库：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(false);
-  });
-
-  it("否定后有正向反转则允许", () => {
-    expect(userTurnAllowsCommitApply("先别入库，算了还是确认正式入库")).toBe(true);
-  });
-
-  it("否定后末句改主意（无「正式」级措辞）同样放行：后说话算数", () => {
-    expect(userTurnAllowsCommitApply("先别入库，算了还是确认入库")).toBe(true);
-  });
-
-  it.each([
-    // 复审 P1 实测误放行：否定嵌在确认锚与动词之间，嵌套后顾够不着
-    "确认不定稿",
-    "不能确认定稿",
-    "无法确认入库",
-  ])("拦截确认锚与动词之间的否定：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(false);
-  });
-
-  it("「不确认了直接定稿」放行：「不确认」被「了」闭合成独立否定单元，末句「直接定稿」是肯定（复审 P1 实测误拦）", () => {
-    expect(userTurnAllowsCommitApply("不确认了直接定稿")).toBe(true);
-  });
-
-  it.each([
-    "先别入库，不过还是别确认入库",
-    "先别入库，不过还是别确认定稿",
-    "不确认入库",
-    "没确认定稿",
-    "未确认提交本章",
-  ])("拦截否定确认与反转通道的二次否定：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(false);
-  });
-
-  it("「特别确认」不误伤（别确认≠否定，特别确认=确认）", () => {
-    expect(userTurnAllowsCommitApply("预览没问题，特别确认定稿")).toBe(true);
-  });
-
-  it("缺失 userTurnText 默认放行，兼容老调用点", () => {
-    expect(userTurnAllowsCommitApply(undefined)).toBe(true);
-    expect(userTurnAllowsCommitApply("   ")).toBe(true);
-  });
-
-  // P2（2026-09-15 审计）：尾句否决词表漏收「不着急/不急着」——draft 门已收（DRAFT_WRITE_NEGATION_PATTERN），
-  // commit 门却放行「确认定稿，不着急」，用户明明在推迟却照常入库。
-  it.each([
-    "确认定稿，不着急",
-    "确认入库，不着急",
-    "正式入库，不急着",
-    "定稿吧，但我现在不着急",
-  ])("拦截确认后的不着急/不急着尾句：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(false);
-  });
-
-  it("「不着急」后改回肯定仍放行（后说话算数）", () => {
-    expect(userTurnAllowsCommitApply("不着急，现在确认定稿")).toBe(true);
-  });
-});
-
-// 长跑 #11/#12/#15（docs/longrun-2026-10-04_wutong-50ch.md）：组合/间接确认授权覆盖不稳——
-// 「重走定稿（预览+确认）」不认（确认锚在「定稿」之后是旧正向句式盲区）；「预览通过就定稿」放、
-// 「预览通过后再定稿」拦（连接副词单槽）；「定稿（预览+确认）」拦而「把这章定稿（预览+确认）」放。
-// 统一语义：用户本轮原话含「预览+确认」「直接定稿」「写完…确认定稿」等组合授权即放行对应步骤，
-// 行为随措辞不翻转；同时钉住新句式的反例（定稿前/之前确认是核对不是授权）不倒退拦截面。
-describe("turn-intent-gate 组合/间接确认授权（长跑 #11/#12/#15）", () => {
-  it.each([
-    // 后置确认 + 重走族（#12 实锤：「重走定稿（预览+确认）」曾不认）
-    "重走定稿（预览+确认）",
-    "重走定稿流程：预览+确认",
-    "第22章重走定稿（预览+确认）",
-    "重走一遍定稿（先生成预览，然后确认）",
-    "重走定稿",
-    "定稿（预览+确认）",
-    // 连接副词连用族（#11 实锤：单字之差曾致第4章拦第5章放）
-    "预览通过后就定稿",
-    "预览通过后再定稿",
-    "预览通过之后再定稿",
-    "预览没问题后就定稿",
-    "预览通过然后定稿",
-    "预览通过随后就定稿",
-    // 既有组合授权面钉住（防倒退）
-    "预览通过就定稿",
-    "预览没问题后再正式入库",
-    "写完直接确认定稿",
-    "写完确认定稿",
-    "先预览再确认定稿",
-    "走完预览并正式入库",
-  ])("组合/间接确认授权放行：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(true);
-  });
-
-  it.each([
-    // 新句式反例：「定稿前/之前确认」是定稿前的核对，不是授权定稿（负向前瞻钉住）
-    "定稿前确认一下方案",
-    "定稿之前先确认方案",
-    // 后置确认的二次否定（确认锚后顾排除）
-    "定稿后不确认会怎样",
-    "不确认重走定稿",
-    // 重走族的否定/尾句否决/疑问照拦（fail-closed 不倒退）
-    "先别重走定稿",
-    "重走定稿，先别",
-    "重走定稿吗？",
-    "预览通过后别定稿",
-  ])("组合措辞的否定/核对/疑问仍拦：%s", (text) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(false);
-  });
-});
 
 // 治「入库后模型自主续写下一章」：那一轮用户原话只有定稿/审稿等意图、没有任何写作意图，
 // 模型却擅自 generate_draft。门从宽设计（只拦明显无写作意图的轮），常见写作说法必须全放行。
@@ -420,74 +287,71 @@ describe("turn-intent-gate snapshot prune（prune_snapshots 真裁确认门）",
   });
 });
 
-// ─── 两门共用一套语料（复审 P1-A + P2-3 + P2-b/c 返工钉死）───
-// 每条同时断 commit / prune 两门期望：跨门句子（无本门域内动词）一律 fail-closed。
-const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; commit: boolean; prune: boolean; note: string }> = [
+// ─── prune 门语料（复审 P1-A + P2-3 + P2-b/c 返工钉死）───
+// 原为 commit / prune 两门共用；定稿改走「确认定稿」按钮（2026-10-07）后 commit 门已删，只留 prune 期望。
+// 跨门句子（无本门域内动词）一律 fail-closed。
+const SHARED_GATE_CORPUS: ReadonlyArray<{ text: string; prune: boolean; note: string }> = [
   // 三审 P1-2 全部 8 条（含三审漏钉的「先别入库，不过还是不要确认入库」与全部 prune 例）
-  { text: "确认不定稿", commit: false, prune: false, note: "P1-2" },
-  { text: "不能确认定稿", commit: false, prune: false, note: "P1-2" },
-  { text: "无法确认入库", commit: false, prune: false, note: "P1-2" },
-  { text: "先别入库，不过还是不要确认入库", commit: false, prune: false, note: "P1-2（三审漏钉补钉）" },
-  { text: "不确认了直接定稿", commit: true, prune: false, note: "P1-2：「不确认」被「了」闭合，末句肯定" },
-  { text: "确认不裁剪快照历史", commit: false, prune: false, note: "P1-2 prune：字面反义曾放行真裁" },
-  { text: "先别裁剪，不过还是不要确认裁掉快照", commit: false, prune: false, note: "P1-2 prune" },
-  { text: "这段剧情别裁，还是裁吧", commit: false, prune: false, note: "P1-2 prune（2478dc1 起三轮残留）" },
+  { text: "确认不定稿", prune: false, note: "P1-2" },
+  { text: "不能确认定稿", prune: false, note: "P1-2" },
+  { text: "无法确认入库", prune: false, note: "P1-2" },
+  { text: "先别入库，不过还是不要确认入库", prune: false, note: "P1-2（三审漏钉补钉）" },
+  { text: "不确认了直接定稿", prune: false, note: "P1-2：「不确认」被「了」闭合，末句肯定" },
+  { text: "确认不裁剪快照历史", prune: false, note: "P1-2 prune：字面反义曾放行真裁" },
+  { text: "先别裁剪，不过还是不要确认裁掉快照", prune: false, note: "P1-2 prune" },
+  { text: "这段剧情别裁，还是裁吧", prune: false, note: "P1-2 prune（2478dc1 起三轮残留）" },
   // 复审 P1-A 扩展 12 条（prune 门迁子句极性前全部误放行）
-  { text: "确认不清理快照历史", commit: false, prune: false, note: "P1-A 扩展" },
-  { text: "确认没裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
-  { text: "确认未裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
-  { text: "不能确认裁剪快照历史", commit: false, prune: false, note: "P1-A 扩展" },
-  { text: "无法确认裁剪快照", commit: false, prune: false, note: "P1-A 扩展" },
-  { text: "先别裁，剧情那段还是裁吧", commit: false, prune: false, note: "P1-A 扩展：反转通道双无锚" },
-  { text: "别裁，还是裁吧，先别裁了", commit: false, prune: false, note: "P1-A 扩展：末句否定" },
-  { text: "先别裁，算了裁吧，不过还是别裁了", commit: false, prune: false, note: "P1-A 扩展：末句否定吞反转" },
-  { text: "别裁剪快照，还是确认裁掉快照吧", commit: false, prune: false, note: "P1-A 扩展：裸「还是」不算改主意" },
-  { text: "确认裁剪快照历史，先别", commit: false, prune: false, note: "P1-A 扩展：尾随否决" },
-  { text: "确认裁剪快照历史，先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟" },
-  { text: "确认裁剪，但是先等等", commit: false, prune: false, note: "P1-A 扩展：尾随推迟同类" },
+  { text: "确认不清理快照历史", prune: false, note: "P1-A 扩展" },
+  { text: "确认没裁剪快照历史", prune: false, note: "P1-A 扩展" },
+  { text: "确认未裁剪快照历史", prune: false, note: "P1-A 扩展" },
+  { text: "不能确认裁剪快照历史", prune: false, note: "P1-A 扩展" },
+  { text: "无法确认裁剪快照", prune: false, note: "P1-A 扩展" },
+  { text: "先别裁，剧情那段还是裁吧", prune: false, note: "P1-A 扩展：反转通道双无锚" },
+  { text: "别裁，还是裁吧，先别裁了", prune: false, note: "P1-A 扩展：末句否定" },
+  { text: "先别裁，算了裁吧，不过还是别裁了", prune: false, note: "P1-A 扩展：末句否定吞反转" },
+  { text: "别裁剪快照，还是确认裁掉快照吧", prune: false, note: "P1-A 扩展：裸「还是」不算改主意" },
+  { text: "确认裁剪快照历史，先别", prune: false, note: "P1-A 扩展：尾随否决" },
+  { text: "确认裁剪快照历史，先等等", prune: false, note: "P1-A 扩展：尾随推迟" },
+  { text: "确认裁剪，但是先等等", prune: false, note: "P1-A 扩展：尾随推迟同类" },
   // P2-b commit 门：「没毛病/没问题/没什么」是状况陈述不是推迟 → 放行；「不着急/不急着」推迟=否定极性 → 拦
   // （第四轮「状语豁免」曾把无逗号推迟句放行真入库，豁免撤除；逗号版「不着急」独立成句不参与极性，仍放行）
-  { text: "不着急确认入库", commit: false, prune: false, note: "P2-b：推迟=否定极性，状语豁免撤除后拦（第四轮曾放行）" },
-  { text: "我不着急确认入库", commit: false, prune: false, note: "P2-b：推迟句拦（第四轮曾放行真入库）" },
-  { text: "确认不着急入库", commit: false, prune: false, note: "P2-b：推迟句拦同类" },
-  { text: "确认没毛病就入库", commit: true, prune: false, note: "P2-b：「没毛病」状况陈述豁免保住放行" },
-  { text: "不着急，确认入库", commit: true, prune: false, note: "P2-b：逗号版对照——「不着急」独立成句不参与极性" },
+  { text: "不着急确认入库", prune: false, note: "P2-b：推迟=否定极性，状语豁免撤除后拦（第四轮曾放行）" },
+  { text: "我不着急确认入库", prune: false, note: "P2-b：推迟句拦（第四轮曾放行真入库）" },
+  { text: "确认不着急入库", prune: false, note: "P2-b：推迟句拦同类" },
+  { text: "确认没毛病就入库", prune: false, note: "P2-b：「没毛病」状况陈述豁免保住放行" },
+  { text: "不着急，确认入库", prune: false, note: "P2-b：逗号版对照——「不着急」独立成句不参与极性" },
   // P2-3 commit 门：疑问句 fail-closed（疑问不是确认）
-  { text: "确认定稿？", commit: false, prune: false, note: "P2-3：疑问句" },
-  { text: "你确认要入库吗", commit: false, prune: false, note: "P2-3：疑问句" },
-  { text: "确认入库？我再想想", commit: false, prune: false, note: "P2-3：疑问+反悔" },
+  { text: "确认定稿？", prune: false, note: "P2-3：疑问句" },
+  { text: "你确认要入库吗", prune: false, note: "P2-3：疑问句" },
+  { text: "确认入库？我再想想", prune: false, note: "P2-3：疑问+反悔" },
   // P2-3 commit 门：尾随否决
-  { text: "确认入库，先别", commit: false, prune: false, note: "P2-3：尾随否决" },
-  { text: "确认入库，算了先别", commit: false, prune: false, note: "P2-3：尾随否决" },
-  { text: "确认定稿，先别急", commit: false, prune: false, note: "P2-3：尾随推迟" },
-  { text: "确认定稿，但是先等等", commit: false, prune: false, note: "P2-3：尾随推迟" },
+  { text: "确认入库，先别", prune: false, note: "P2-3：尾随否决" },
+  { text: "确认入库，算了先别", prune: false, note: "P2-3：尾随否决" },
+  { text: "确认定稿，先别急", prune: false, note: "P2-3：尾随推迟" },
+  { text: "确认定稿，但是先等等", prune: false, note: "P2-3：尾随推迟" },
   // P2-c：尾随否决词表补全（算了/等一下/慢着曾缺，这类尾句此前放行真入库）
-  { text: "确认入库，算了", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
-  { text: "确认定稿，等一下", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
-  { text: "确认入库，慢着", commit: false, prune: false, note: "P2-c：尾随否决词表补全" },
+  { text: "确认入库，算了", prune: false, note: "P2-c：尾随否决词表补全" },
+  { text: "确认定稿，等一下", prune: false, note: "P2-c：尾随否决词表补全" },
+  { text: "确认入库，慢着", prune: false, note: "P2-c：尾随否决词表补全" },
   // P2-3 commit 门：动词后否定
-  { text: "确认入库不行", commit: false, prune: false, note: "P2-3：动词后否定" },
-  { text: "确认提交不了", commit: false, prune: false, note: "P2-3：动词后否定" },
+  { text: "确认入库不行", prune: false, note: "P2-3：动词后否定" },
+  { text: "确认提交不了", prune: false, note: "P2-3：动词后否定" },
   // P2-3 ⑤ 正向句式主保险：「放行须命中正向句式」曾零测试保护（去之 165 用例仍全绿），此处钉死
-  { text: "入库有风险吗", commit: false, prune: false, note: "P2-3：正向句式主保险" },
-  { text: "定稿行不行", commit: false, prune: false, note: "P2-3：正向句式主保险（无疑问标记，专钉去正向约束变异）" },
-  { text: "裁剪快照安全吗", commit: false, prune: false, note: "P2-3：prune 正向句式主保险" },
+  { text: "入库有风险吗", prune: false, note: "P2-3：正向句式主保险" },
+  { text: "定稿行不行", prune: false, note: "P2-3：正向句式主保险（无疑问标记，专钉去正向约束变异）" },
+  { text: "裁剪快照安全吗", prune: false, note: "P2-3：prune 正向句式主保险" },
   // 两门参数化差异对照
-  { text: "先别入库，算了还是确认入库", commit: true, prune: false, note: "commit：末句肯定即后说话算数" },
-  { text: "先别裁剪，算了还是裁吧", commit: false, prune: true, note: "prune：强反转+裸「裁吧」算确认级" },
-  { text: "特别确认定稿", commit: true, prune: false, note: "「特别确认」是真确认" },
-  { text: "特别确认裁掉快照历史", commit: false, prune: true, note: "「特别确认」是真确认" },
-  { text: "先别清理线索,确认裁剪快照历史", commit: false, prune: true, note: "半角逗号与全角同判（旧半角误拦 anomaly）" },
-  { text: "确认一下方案，裁剪先等等", commit: false, prune: false, note: "r1 残留：推迟尾句" },
-  { text: "确认，把快照清理掉吧", commit: false, prune: true, note: "短确认 + 域内把字句" },
-  { text: "确认裁剪吗", commit: false, prune: true, note: "prune 疑问放行是钉住现状；commit 无此口径" },
+  { text: "先别入库，算了还是确认入库", prune: false, note: "commit：末句肯定即后说话算数" },
+  { text: "先别裁剪，算了还是裁吧", prune: true, note: "prune：强反转+裸「裁吧」算确认级" },
+  { text: "特别确认定稿", prune: false, note: "「特别确认」是真确认" },
+  { text: "特别确认裁掉快照历史", prune: true, note: "「特别确认」是真确认" },
+  { text: "先别清理线索,确认裁剪快照历史", prune: true, note: "半角逗号与全角同判（旧半角误拦 anomaly）" },
+  { text: "确认一下方案，裁剪先等等", prune: false, note: "r1 残留：推迟尾句" },
+  { text: "确认，把快照清理掉吧", prune: true, note: "短确认 + 域内把字句" },
+  { text: "确认裁剪吗", prune: true, note: "prune 疑问放行是钉住现状；commit 无此口径" },
 ];
 
-describe("turn-intent-gate 两门共用语料（复审 P1-A + P2-3 + P2-b/c 钉死）", () => {
-  it.each(SHARED_GATE_CORPUS)("commit 门「$text」（$note）", ({ text, commit }) => {
-    expect(userTurnAllowsCommitApply(text)).toBe(commit);
-  });
-
+describe("turn-intent-gate prune 门语料（复审 P1-A + P2-3 + P2-b/c 钉死）", () => {
   it.each(SHARED_GATE_CORPUS)("prune 门「$text」（$note）", ({ text, prune }) => {
     expect(userTurnAllowsSnapshotPrune(text)).toBe(prune);
   });

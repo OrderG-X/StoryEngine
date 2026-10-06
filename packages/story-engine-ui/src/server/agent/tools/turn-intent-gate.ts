@@ -1,31 +1,7 @@
-// 术语人话化：定稿 = 入库（新旧词都认，兼容老会话与用户习惯）
-// 确认引导词带后顾：紧跟「不/没/未/别」的是二次否定（「别确认入库」不算确认）；「特别确认」不算否定（嵌套后顾只挡前面不是「特」的「别」）。
-const COMMIT_CONFIRM_LEAD = "(?<![不没未])(?<!(?<!特)别)(?:确认)";
-const COMMIT_APPLY_PATTERNS = [
-  new RegExp(`(?:${COMMIT_CONFIRM_LEAD}|正式|执行)[^。！？；\\n]{0,12}(?:入库|提交|定稿)`, "u"),
-  /直接(?:正式)?(?:入库|定稿)/u,
-  /提交本章/u,
-  new RegExp(`${COMMIT_CONFIRM_LEAD}定稿`, "u"),
-  /定稿吧/u,
-  /定稿并更新资料/u,
-  /把(?:这|第\s*\d+)\s*章[^。！？；\n]{0,16}(?:正式)?(?:入库|定稿)/u,
-  /走完预览并(?:正式)?(?:入库|定稿)/u,
-  // 连接副词改双槽（长跑 #11：旧单槽 (?:就|后|再)? 只认一个字——「预览通过就定稿」放、
-  // 「预览通过后再定稿」拦，同一授权意图随一字之差翻转。连接词槽放宽到最多两个连用 + 可选「就」，
-  // 覆盖 后就/后再/之后就/之后再/然后/随后/接着 等），语义仍是「预览通过即定稿」的组合授权。
-  /预览(?:通过|没问题|无误)?(?:然后?|之?后|再|随后|接着){0,2}就?(?:直接)?(?:正式)?(?:入库|定稿)/u,
-  // 后置确认（长跑 #12：「重走定稿（预览+确认）」「定稿（预览+确认）」不认——旧正向句式全要求
-  // 确认锚在域动词之前，确认出现在「定稿」之后就是盲区）。确认锚沿用 COMMIT_CONFIRM_LEAD
-  // （「定稿后不确认」的二次否定被后顾排除）；负向前瞻挡「定稿前/之前确认」——那是「定稿之前
-  // 先核对」，不是授权定稿。与 honesty-detection 的 COMMIT_APPLY_REQUEST 双向枝同族，
-  // 两边词表须同步改（见 shared/honesty-detection.ts 的同款注释）。
-  new RegExp(`(?:入库|定稿)(?!之前?|前)[^。！？；\\n]{0,12}${COMMIT_CONFIRM_LEAD}`, "u"),
-  // 「重走定稿（预览+确认）」族（长跑 #12 实锤）：重走=把预览+确认的定稿流程完整再走一遍，
-  // 本身就是 apply 授权。措辞族窄（重走+短距离+域动词），无误伤面。
-  /重走[^。！？；\n]{0,8}(?:定稿|入库)/u,
-];
+// 定稿（commit_apply）不再走本文件的文本意图门（2026-10-07）：真写盘只由用户点「确认定稿」按钮的
+// 结构化动作授权（agent/user-actions.ts），模型发起的调用只出确认按钮——用正则猜中文授权说法追不完。
 
-// ─── 子句极性引擎：commit_apply / snapshot_prune 两门共用（复审 P1-A 参数化重做）───
+// ─── 子句极性引擎：snapshot_prune 门使用（复审 P1-A 参数化重做；参数表保留 commit 时代的开关以备复用）───
 // 判定哲学（draft 门同款「子句切分 + 词法极性」，动词集/域宾语集/正向句式集作参数）：
 // - 按子句切分原话，逐子句找域内动词；不含域内动词的子句不参与极性判定；
 // - 子句极性：最后一个域内动词之前存在未被「了」闭合的否定词 → 否定极性
@@ -255,25 +231,6 @@ function hasBlockingNegation(text: string, negationPattern: RegExp, allowPattern
   const afterNegation = text.slice(match.index + match[0].length);
   if (!REVERSAL_MARKER.test(afterNegation)) return true;
   return !hasAnyPattern(afterNegation, allowPatterns);
-}
-
-const COMMIT_GATE_SPEC: ClauseGateSpec = {
-  verbPattern: /入库|定稿|提交/gu,
-  positivePatterns: COMMIT_APPLY_PATTERNS,
-  shortConfirmPatterns: [],
-  blockQuestions: true,
-  overrideNeedsStrongMarker: false,
-};
-
-/**
- * 本轮用户原话是否允许真入库（commit_apply）。缺原话放行（向后兼容/前端按钮直调不传原话）。
- * 子句极性引擎判定（见上方 GATE 注释块）：末个含入库动词的子句定结果——否定极性 → 拦；
- * 肯定极性 → 须命中正向句式才放行；疑问句与尾随否决同样 fail-closed（复审 P2-3）。
- */
-export function userTurnAllowsCommitApply(userTurnText: string | undefined): boolean {
-  const text = normalizeUserTurn(userTurnText);
-  if (!text) return true;
-  return decideByClausePolarity(text, COMMIT_GATE_SPEC);
 }
 
 /**

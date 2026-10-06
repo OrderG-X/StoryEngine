@@ -1,4 +1,4 @@
-import type { ChapterWorkflowState, SuggestedAction } from "../types.js";
+import type { ChapterWorkflowState, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import type { DraftAIReviewReport } from "../api/types.js";
 
 export function workflowPromptText(state: ChapterWorkflowState): string {
@@ -8,8 +8,8 @@ export function workflowPromptText(state: ChapterWorkflowState): string {
     draft_generating: "正在生成工作稿…",
     draft_ready: "工作稿已生成。看看左侧工作稿，说「硬伤检查」检查穿帮，或告诉我要改哪里。",
     quality_checked: "硬伤检查通过。说「定稿预览」查看定稿后会怎么变化，或让 AI 做内容审阅。",
-    commit_preview_ready: "定稿预览已生成。说「确认定稿」即可写入已定稿版，可在操作历史撤销。",
-    waiting_commit_confirmation: "定稿预览已生成。说「确认定稿」即可写入，写入前会自动存档，可撤销。",
+    commit_preview_ready: "定稿预览已生成。点「确认定稿」即可写入已定稿版，可在操作历史撤销。",
+    waiting_commit_confirmation: "定稿预览已生成。点「确认定稿」即可写入，写入前会自动存档，可撤销。",
     committed: "本章已定稿。说「下一章」继续。",
     ready_for_next: "可以进入下一章。说「下一章」或告诉我新章节想写什么。",
   };
@@ -161,6 +161,14 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
     },
   };
   return actions[id] ?? actions["generate-steering"];
+}
+
+/**
+ * 「确认定稿」按钮（预览卡 / 建议条 / 诚实更正都用它）：点了发结构化动作、由服务端直接执行定稿，
+ * 不经模型、不靠文本意图词表（2026-10-07）。
+ */
+export function commitConfirmAction(target?: CommitConfirmTarget): SuggestedAction {
+  return { ...suggestedAction("commit-apply"), ...(target ? { commitTarget: target } : {}) };
 }
 
 function withDisabledReason(action: SuggestedAction, disabledReason: string | undefined): SuggestedAction {

@@ -102,6 +102,8 @@ export interface CommitPreviewCardData {
   /** 质量问题分层计数（不展开明细，明细走质检卡）；缺省时不渲染该行。 */
   readonly draftIssueCount?: number;
   readonly semanticIssueCount?: number;
+  /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
+  readonly previewToken?: string;
 }
 
 export interface DraftPreview {

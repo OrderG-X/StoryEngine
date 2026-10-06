@@ -36,7 +36,7 @@ import {
   defaultDraftPath,
   stripLeadingMarkdownChapterHeading,
 } from "../lib/project-io.js";
-import { buildProjectRequestContext } from "../agent/request-context.js";
+import { buildProjectRequestContext, markUserConfirmedTool } from "../agent/request-context.js";
 
 export { callRoute } from "../routes/test-helpers.js";
 export { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading };
@@ -163,13 +163,15 @@ export async function driveToolExecute(
     readonly projectDir: string;
     readonly currentChapter?: number;
     readonly userTurnText?: string;
+    /** 模拟用户点了该工具的确认按钮（结构化动作通道设的标记，如定稿的「确认定稿」）。 */
+    readonly userConfirmedTool?: string;
   },
 ): Promise<Record<string, unknown>> {
   const execute = tool.execute;
   if (!execute) throw new Error("tool has no execute");
-  const context = {
-    requestContext: buildProjectRequestContext(opts.projectDir, opts.currentChapter, undefined, opts.userTurnText),
-  } as unknown as ToolExecutionContext;
+  const requestContext = buildProjectRequestContext(opts.projectDir, opts.currentChapter, undefined, opts.userTurnText);
+  if (opts.userConfirmedTool) markUserConfirmedTool(requestContext, opts.userConfirmedTool);
+  const context = { requestContext } as unknown as ToolExecutionContext;
   return (await execute(input, context)) as Record<string, unknown>;
 }
 

@@ -50,7 +50,7 @@ describe("honestyRewritePatch 诚实收尾 + 清矛盾卡", () => {
     });
     expect(patch).not.toBeNull();
     expect(patch!.content).toContain("定稿未完成");
-    expect(patch!.content).toContain("请再发一次『确认定稿』，我会直接执行");
+    expect(patch!.content).toContain("点下方「确认定稿」按钮即可直接定稿");
     expect(patch!.suggestedActions?.some((a) => a.label === "重新确认定稿")).toBe(true);
     expect(patch!.nextStepPrompt).toBeUndefined();
     expect(patch!.qualityReport).toBeUndefined();
@@ -208,7 +208,7 @@ describe("detectUnbackedCompletionClaim A1 谎报探针", () => {
   it("未成功 commit_apply 却说已正式入库时，失败文案必须盖掉假成功正文", () => {
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("定稿未完成");
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("没有检测到定稿成功执行");
-    expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("请再发一次『确认定稿』，我会直接执行");
+    expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("点下方「确认定稿」按钮即可直接定稿");
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).not.toContain("commit_apply");
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).not.toContain("已正式入库完成");
   });
@@ -219,7 +219,7 @@ describe("detectUnbackedCompletionClaim A1 谎报探针", () => {
       toolSteps: [],
       userText: "确认定稿",
     });
-    expect(patch?.content).toContain("请再发一次『确认定稿』，我会直接执行");
+    expect(patch?.content).toContain("点下方「确认定稿」按钮即可直接定稿");
     expect(patch?.suggestedActions?.some((a) => a.id === "commit-apply" && a.label === "重新确认定稿")).toBe(true);
   });
 

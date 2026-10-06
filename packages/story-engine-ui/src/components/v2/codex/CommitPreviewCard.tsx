@@ -5,11 +5,23 @@
  * 关键：裁决结果固定展示，不靠助手转述——模型可能把「暂不可定稿（缺稿/硬伤）」说成「有点小问题」
  * 或干脆略过只说「可以定稿了」。卡里照实列出阻断项，用户自己判断要不要先修再定稿。
  * 与 NameConsistencyCard/StaleThreadCard 同出 commit_preview，三者可同时出现、互不顶掉。
+ *
+ * 「确认定稿」按钮（2026-10-07）：可定稿时卡上直接给按钮——点了发结构化动作、服务端直接执行定稿，
+ * 不经模型、不靠文本意图词表。只有最新一张未用掉的预览卡带按钮（调用方决定是否传 onConfirm）。
  */
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import { StepCard } from "./StepCard.js";
 
-export function CommitPreviewCard({ preview }: { readonly preview: CommitPreviewCardData }) {
+export function CommitPreviewCard({
+  preview,
+  onConfirm,
+  confirmDisabled = false,
+}: {
+  readonly preview: CommitPreviewCardData;
+  /** 传了且可定稿 → 渲染「确认定稿」按钮。 */
+  readonly onConfirm?: () => void;
+  readonly confirmDisabled?: boolean;
+}) {
   const { canCommit, blockingReasons, summary, draftIssueCount, semanticIssueCount } = preview;
   const blocking = blockingReasons?.filter((reason) => typeof reason === "string" && reason.trim()) ?? [];
   // 有阻断项却误标 canCommit:true（残缺/不一致输出）时以阻断项为准，绝不显示「可以定稿」。
@@ -26,8 +38,13 @@ export function CommitPreviewCard({ preview }: { readonly preview: CommitPreview
       <p className="cpc-note">
         {blocked
           ? `${chapterLabel}目前不满足定稿条件（引擎确定性判定，与助手措辞无关）：`
-          : `${chapterLabel}已满足定稿条件，可以执行「确认定稿」。`}
+          : `${chapterLabel}已满足定稿条件，点「确认定稿」即写入（写入前自动存档，可撤销）。`}
       </p>
+      {!blocked && onConfirm ? (
+        <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={onConfirm}>
+          确认定稿
+        </button>
+      ) : null}
       {blocking.length > 0 ? (
         <ul className="cpc-list">
           {blocking.map((reason) => (

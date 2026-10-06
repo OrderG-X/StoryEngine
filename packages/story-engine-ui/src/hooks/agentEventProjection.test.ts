@@ -751,6 +751,34 @@ describe("入库 delta 投影（commit_apply → message.commitReport）", () =>
   });
 });
 
+describe("定稿待确认投影（模型发起的 commit_apply 只出「确认定稿」按钮）", () => {
+  it("needsConfirmation + commitConfirmAction → 步骤待确认、消息挂「确认定稿」按钮（带目标章与令牌）", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "a1", toolName: "commit_apply", startedAt: 1 },
+      {
+        type: "tool-result",
+        toolCallId: "a1",
+        toolName: "commit_apply",
+        endedAt: 2,
+        output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
+      },
+    ]);
+    expect(message.toolSteps?.[0]?.status).toBe("needs_confirmation");
+    expect(message.commitReport).toBeUndefined();
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "commit-apply", label: "确认定稿", commitTarget: { chapter: 4, previewToken: "t4" } }),
+    ]);
+  });
+
+  it("同回合多次请求 → 只留最后一个按钮（不堆重复「确认定稿」）", () => {
+    const message = project([
+      { type: "tool-result", toolCallId: "a1", toolName: "commit_apply", endedAt: 2, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 4 } } },
+      { type: "tool-result", toolCallId: "a2", toolName: "commit_apply", endedAt: 3, output: { ok: false, needsConfirmation: true, commitConfirmAction: { chapter: 5 } } },
+    ]);
+    expect(message.suggestedActions?.map((a) => a.commitTarget?.chapter)).toEqual([5]);
+  });
+});
+
 describe("质检明细投影（quality_check → message.qualityReport）", () => {
   it("带 qualityReport → 挂到 message.qualityReport", () => {
     const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };

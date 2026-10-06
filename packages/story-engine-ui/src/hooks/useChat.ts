@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { directEditDraft, fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
-import { streamAgentChat } from "../api/agentChatClient.js";
+import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
 import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
 import {
   emptyAssistantMessage,
@@ -33,7 +33,7 @@ import type {
   FoundationGapSuggestion,
   StateOverview,
 } from "../api/types.js";
-import type { ChapterMessage, ChapterWorkflowState, SuggestedAction } from "../types.js";
+import type { ChapterMessage, ChapterWorkflowState, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import { suggestedAction } from "../utils/workflowHelpers.js";
 import {
   isChapterAgentCancel,
@@ -1179,6 +1179,8 @@ export function useChat(params: UseChatParams): UseChatResult {
     async (
       text: string,
       conversation: readonly { readonly role: "user" | "assistant"; readonly content: string }[],
+      /** 结构化动作（「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
+      action?: AgentUserAction,
     ): Promise<void> => {
       if (!projectPath) {
         setChatError("请先打开真实本地项目。");
@@ -1501,6 +1503,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             projectPath,
             messages: [...conversation, { role: "user", content: text }],
             ...(typeof currentChapterNumber === "number" ? { currentChapter: currentChapterNumber } : {}),
+            ...(action ? { action } : {}),
           },
           {
             onTextDelta: (delta) => project({ type: "text-delta", text: delta }),
@@ -2107,6 +2110,38 @@ export function useChat(params: UseChatParams): UseChatResult {
     [projectPath, showToast],
   );
 
+  /* ---- handleConfirmCommit：「确认定稿」按钮 ---- */
+
+  // 结构化动作（2026-10-07 拆补丁塔）：按钮点击即授权，服务端直接执行 commit_apply——不经模型、
+  // 不靠文本意图词表。对话里留一条「确认定稿第 N 章」作记录，后续回合模型能看到发生过什么。
+  const handleConfirmCommit = useCallback(
+    async (target?: CommitConfirmTarget): Promise<void> => {
+      if (!projectPath) {
+        setChatError("请先打开真实本地项目。");
+        return;
+      }
+      const live = useWorkspaceStore.getState();
+      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+        showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
+        return;
+      }
+      const chapter = target?.chapter ?? live.workspace.currentChapter?.chapterNumber;
+      if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
+        showToast("没找到要定稿的章节，请先打开那一章。", 4200);
+        return;
+      }
+      const text = `确认定稿第 ${chapter} 章`;
+      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      await runAgentDispatch(text, conversation, {
+        toolName: "commit_apply",
+        chapter,
+        ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
+      });
+    },
+    [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
+  );
+
   /* ---- handleSuggestedAction ---- */
 
   // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
@@ -2166,7 +2201,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendMessage("帮我预览这一章的定稿改动。");
           return;
         case "commit-apply":
-          void handleSendMessage("确认定稿");
+          void handleConfirmCommit(action.commitTarget);
           return;
         case "continue-next": {
           void handleSendMessage("继续写下一章。");
@@ -2254,6 +2289,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       showToast,
       resolveChapterDirection,
       handleSendMessage,
+      handleConfirmCommit,
       handleApplyRevisionPreview,
       handleApplyFoundationGapSuggestionsFromChat,
       handleRollbackFoundationGapApplyFromChat,

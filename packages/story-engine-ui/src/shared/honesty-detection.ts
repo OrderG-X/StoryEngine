@@ -196,7 +196,8 @@ export function detectUnbackedCompletionClaim(
 // 不要把关系工具失败误套成「正式入库未完成」（#5 真机：Kimi 关系失败却显示 commit_apply 缺失文案）。
 const RELATIONSHIP_INTEGRATION_REQUEST = /(?:整理|梳理|理清|理顺)[^。！？]{0,30}关系|人物关系|关系(?:矩阵|网|图谱)/u;
 
-const CONFIRM_COMMIT_RETRY_HINT = "请再发一次『确认定稿』，我会直接执行";
+// 定稿真写盘只走「确认定稿」按钮（结构化动作，2026-10-07）；更正消息同时挂这个按钮（CONFIRM_COMMIT_RETRY_ACTION）。
+const CONFIRM_COMMIT_RETRY_HINT = "点下方「确认定稿」按钮即可直接定稿（没有有效预览时会提示先预览）";
 
 /**
  * 诚实文案选择：优先按**请求类型**给对的口径（userText），content 兜底。
@@ -259,8 +260,8 @@ const AI_FLAVOR_REQUEST = /AI\s*味|AI\s*腔|AI\s*感|机翻感|机器腔|像.{0
 const AI_FLAVOR_AS_CONSTRAINT = /(?:少|减少|降低|别|不要|不能|避免|没有?|不带|去掉|控制|压低|保持.{0,4}少).{0,3}(?:AI\s*味|AI\s*腔|AI\s*感)/iu;
 // 明确「生成入库预览/出预览/做预览」=必须真跑 commit_preview 的请求，区别于「检查能不能入库」这类可行性问句（后者质检也能答、可让位）。
 // 末枝（长跑 #11/#12/#15）：「重走定稿（预览+确认）」这种「预览+确认」并列表述不含生成/出/做/来动词、
-// 预览后也不接入库/定稿（确认在后），旧词形不认 → 预览期望进不了集，委托链第一环就断。
-// 与 turn-intent-gate 的 COMMIT_APPLY_PATTERNS 后置确认句式同族，两边词表须同步改。
+// 预览后也不接入库/定稿（确认在后），旧词形不认 → 预览期望进不了集。
+// 这些词表只用于事后更正文案，不再授权写盘（定稿授权 = 用户点按钮，见 agent/user-actions.ts）。
 const EXPLICIT_PREVIEW_REQUEST = /(?:入库|定稿)(?:影响)?预览|(?:生成|出|做|来).{0,4}预览|预览.{0,4}(?:入库|定稿|这章|本章|第\s*\d+\s*章|定稿改动)|预览[^，。；！？]{0,4}[+＋]\s*(?:然后?|再)?\s*确认/u;
 const POLITE_EXECUTION_REQUEST = /(?:能不能|能否|可不可以|可以帮我|麻烦|帮我).{0,40}(?:补进|写进|记进|写入|补|删|删除|改|写第|写.*正文|入库|定稿|提交|质检|硬伤检查|审稿|内容审阅|润色|改写)/u;
 const QUESTION_LIKE = /[？?]\s*$|(?:吗|呢|会不会|有没有|能不能|能否|可不可以|可以吗)/u;
@@ -492,30 +493,6 @@ export function detectMissingExecutionForRequest(
 
 // ============ 服从重试（r8：治「口头声称完成但零工具调用」的执行层，配合服务端自动重做） ============
 
-/**
- * 组合授权句（长跑 #8/#18）：用户一轮里同时点了「预览」和「定稿/确认」（「预览通过就定稿」
- * 「重走定稿（预览+确认）」「写完生成预览，确认定稿」）。instructions「组合意图=一轮走完」条款下，
- * 这类句子的期望集 = 先 commit_preview 后 commit_apply；尾步被丢时服从重试据此补做。
- * 判定 = 预览词与定稿授权词同现（各自让位/否定细粒度由 detectMissingExecutionForRequest 内部把关）。
- */
-/**
- * 空转承诺判别（长跑复测 #25）：零工具回合里，模型文本是「承诺了要动手」还是「陈述性拒绝」。
- * 「好的，我来处理定稿 / 这就执行」= 承诺 → 补做（说了要做却没做）；
- * 「第 99 章不存在，没法定稿」= 陈述性拒绝（无承诺词）→ 维持 T4 只更正不重做。
- */
-export function isActionPromiseReply(content: string): boolean {
-  const text = content.trim();
-  if (!text) return false;
-  return /(?:我来|我来处理|这就|马上|立即|立刻|正在|这就去|我去|交给我|会直接|这就执行|开始(?:执行|处理|定稿|入库))|(?:会|将)?(?:直接)?(?:执行|处理|完成)(?:定稿|入库)/u.test(text);
-}
-
-export function isCombinedPreviewConfirmRequest(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  return (COMMIT_PREVIEW_REQUEST.test(trimmed) || EXPLICIT_PREVIEW_REQUEST.test(trimmed))
-    && COMMIT_APPLY_REQUEST.test(trimmed);
-}
-
 /** 服务端更正文案的固定前缀（agent-chat 追加更正时使用；历史消毒据此识别「声称已被作废」的回合）。 */
 export const HONESTY_CORRECTION_MARKER = "⚠️ 系统更正：";
 
@@ -614,7 +591,7 @@ export interface HonestyRewritePatch {
 const CONFIRM_COMMIT_RETRY_ACTION = {
   id: "commit-apply",
   label: "重新确认定稿",
-  description: "再次发送「确认定稿」，直接执行定稿",
+  description: "直接执行定稿（用最近一次有效定稿预览）",
   permission: "formal_state_write" as const,
   requiresConfirmation: false as const,
 };

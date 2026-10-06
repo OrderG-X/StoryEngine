@@ -55,7 +55,7 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("写正文=generate_draft");
     expect(instructions).toContain("改稿=revise_draft");
     expect(instructions).toContain("写资料=foundation_write");
-    expect(instructions).toContain("定稿（入库）=commit_apply");
+    expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
 
@@ -72,9 +72,9 @@ describe("story agent instructions（确认口径唯一）", () => {
   });
 
   // R2#1：定稿「下一步卡」intent 是模型自由生成，须用能干净映射工具的措辞。
-  it("下一步卡的定稿类 intent 用能干净触发工具的措辞（预览/定稿分开）", () => {
+  it("下一步卡的预览 intent 用能干净触发工具的措辞；定稿不放进选项卡（预览卡自带按钮）", () => {
     expect(instructions).toContain("生成第N章定稿预览");
-    expect(instructions).toContain("确认定稿第N章");
+    expect(instructions).toContain("定稿不放进选项卡");
   });
 
   // R3#4 + R5：用户可见泄漏——绝不把内部 id / 资料编号 / previewToken 复述给用户；调工具前别先吐英文思考/preamble。
@@ -224,9 +224,9 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toContain("缺章号时默认用户当前所在章");
   });
 
-  it("定稿后主动用 suggest_next_steps 引路下一章（章号＝刚定稿章＋1）", () => {
-    expect(instructions).toContain("定稿后主动引路下一章");
-    expect(instructions).toMatch(/进入下一章|刚定稿章/);
+  it("定稿后的下一步由系统按钮通道给出，模型不用补", () => {
+    expect(instructions).toContain("定稿后的下一步");
+    expect(instructions).toContain("系统会直接转告定稿结果");
   });
 
   it("入库后遇到待收口/陈旧线索提醒只能转告并给选项，不能自动清理归并", () => {
@@ -247,55 +247,29 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
   });
 });
 
-describe("buildInstructions 定稿预览与定稿意图分离", () => {
+describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07）", () => {
   const instructions = buildInstructions();
 
-  it("用户只要定稿预览时只调 commit_preview，不在同一轮顺手 commit_apply", () => {
-    expect(instructions).toContain("只要用户说的是定稿预览/入库预览");
-    expect(instructions).toContain("只调 commit_preview");
-    expect(instructions).toContain("不要在同一轮顺手 commit_apply");
+  it("定稿真写入只由用户点「确认定稿」按钮完成，模型负责预览并请用户点按钮", () => {
+    expect(instructions).toContain("【定稿 = 你预览、用户点按钮】");
+    expect(instructions).toContain("先对该章 commit_preview");
+    expect(instructions).toContain("请用户点预览卡上的「确认定稿」按钮");
   });
 
-  it("commit_apply 可只带章号，由系统使用最近一次有效预览票据", () => {
-    expect(instructions).toContain("commit_apply 可以只带章号");
-    expect(instructions).toContain("系统会使用最近一次有效 commit_preview 票据");
-    expect(instructions).toContain("token_placeholder");
-    expect(instructions).toContain("绝不编造");
+  it("commit_apply 由模型调用时不写入，只给用户出确认按钮", () => {
+    expect(instructions).toContain("你调用它不会直接写入");
+    expect(instructions).toContain("needsConfirmation=true");
   });
 
-  it("用户确认定稿时必须执行 commit_apply，同时继续兼容旧入库确认", () => {
-    expect(instructions).toContain("用户说『确认定稿 / 定稿吧 / 定稿并更新资料 / 确认入库 / 确认正式入库 / 正式入库 / 提交本章』");
-    expect(instructions).toContain("必须实际调用 commit_apply");
-    expect(instructions).toContain("绝不能只用文字回答『已定稿』");
-    expect(instructions).toContain("确认定稿时直接调用 commit_apply");
-    expect(instructions).toContain("说「确认定稿」我就定稿并更新资料");
-    expect(instructions).toContain("确认正式入库");
-    expect(instructions).toContain("提交本章");
-    expect(instructions).toContain("【确认定稿·强制执行】");
-    expect(instructions).toContain("本轮**必须立刻调用 commit_apply**");
+  it("绝不说已定稿；不可定稿时如实说明、不让用户去点按钮", () => {
+    expect(instructions).toContain("**绝不说『已定稿/已入库』**");
+    expect(instructions).toContain("canCommit=false 时如实说明阻断原因");
   });
 
-  it("组合意图一轮走完：用户同时要求预览+定稿时，先 preview，通过后同轮 apply，不停在预览", () => {
-    expect(instructions).toContain("组合意图=一轮走完");
-    expect(instructions).toContain("走完预览并定稿");
-    expect(instructions).toContain("预览通过就提交");
-    expect(instructions).toContain("同一轮先 commit_preview");
-    expect(instructions).toContain("紧接着同轮 commit_apply");
-    expect(instructions).toContain("绝不停在预览等下一轮");
-  });
-
-  it("组合意图下 warning 级提醒不阻断 commit_apply", () => {
-    expect(instructions).toContain("warning 级提醒");
-    expect(instructions).toContain("不阻断");
-    expect(instructions).toContain("同轮继续 commit_apply");
-    expect(instructions).toContain("只有 canCommit=false");
-  });
-
-  it("顺序铁律：正式入库永远先 commit_preview 后 commit_apply，不能上来就 apply", () => {
-    expect(instructions).toContain("顺序铁律");
-    expect(instructions).toContain("永远先 commit_preview 后 commit_apply");
-    expect(instructions).toContain("绝不上来就 commit_apply");
-    expect(instructions).toContain("被拒后立刻补 commit_preview 再 commit_apply");
+  it("旧的组合意图/强制执行条款已删（不再靠模型一轮走完定稿）", () => {
+    expect(instructions).not.toContain("组合意图=一轮走完");
+    expect(instructions).not.toContain("【确认定稿·强制执行】");
+    expect(instructions).not.toContain("同轮继续 commit_apply");
   });
 
   it("纯出稿不越权：用户只要写正文时，generate_draft 后停住并给下一步，不顺手 preview/apply", () => {
@@ -313,7 +287,4 @@ describe("buildInstructions 定稿预览与定稿意图分离", () => {
     expect(instructions).toContain("用户没请求");
   });
 
-  it("禁止把 ok:true/committed:true/摘要文字伪造成 previewToken", () => {
-    expect(instructions).toContain("不要把 ok:true、committed:true、summary、状态文字或你自己的判断当成 previewToken");
-  });
 });

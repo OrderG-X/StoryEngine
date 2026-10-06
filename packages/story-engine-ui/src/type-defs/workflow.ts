@@ -29,4 +29,12 @@ export interface SuggestedAction {
   readonly requiresConfirmation: boolean;
   readonly endpoint?: string;
   readonly disabledReason?: string;
+  /** 「确认定稿」按钮的目标（commit-apply 专用）：缺省 = 用户当前章 + 服务端最近一次有效预览票据。 */
+  readonly commitTarget?: CommitConfirmTarget;
+}
+
+/** 「确认定稿」结构化动作的目标章与预览令牌（令牌让服务重启后仍能凭「这版草稿已预览」放行）。 */
+export interface CommitConfirmTarget {
+  readonly chapter?: number;
+  readonly previewToken?: string;
 }

@@ -31,6 +31,8 @@ import { ChatSessionBar } from "./ChatSessionBar.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt } from "./nextStepChoices.js";
+import { commitChapterFromChoiceIntent, confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import {
@@ -148,6 +150,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
   const railActions = busy ? [] : latestTurnSuggestedActions(props.workspace.messages);
+  // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
+  const confirmablePreviewId = confirmableCommitPreviewMessageId(props.workspace.messages);
   const canClear = Boolean(props.onClearChat) && props.workspace.messages.length > 0 && !workspaceBusy;
 
   return (
@@ -247,6 +251,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSendMessage={props.onSendMessage}
             onSuggestedAction={props.onSuggestedAction}
             onCreateRevisionTask={props.onCreateRevisionTask}
+            commitConfirmable={message.id === confirmablePreviewId}
           />
           );
         })}
@@ -286,7 +291,15 @@ export default function AiChatCodex(props: AiChatCodexProps) {
                 className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
                 disabled={busy}
                 onMouseMove={trackChoiceLight}
-                onClick={() => props.onSendMessage?.(choice.intent)}
+                onClick={() => {
+                  // 定稿选项走按钮通道（结构化动作，服务端直接执行）；其余选项照旧作为一句话发给 agent。
+                  const commitChapter = commitChapterFromChoiceIntent(choice.intent);
+                  if (commitChapter !== null && props.onSuggestedAction) {
+                    props.onSuggestedAction(commitConfirmAction({ chapter: commitChapter }));
+                    return;
+                  }
+                  props.onSendMessage?.(choice.intent);
+                }}
               >
                 <span>{choice.label}{choice.primary ? <em className="nextstep-rec">推荐</em> : null}</span>
               </button>
@@ -556,6 +569,7 @@ function MessageBubbles({
   onSendMessage,
   onSuggestedAction,
   onCreateRevisionTask,
+  commitConfirmable = false,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -575,6 +589,8 @@ function MessageBubbles({
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   /** REST 深度审稿卡「生成修订任务」——传进消息内卡，不再靠钉底卡。 */
   readonly onCreateRevisionTask?: WritingWorkspaceLayoutProps["onCreateRevisionTask"];
+  /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
+  readonly commitConfirmable?: boolean;
 }) {
   if (message.role === "system") return null;
 
@@ -608,6 +624,13 @@ function MessageBubbles({
   const model = buildTimelineModel(message);
   const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
   const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
+  const commitPreview = message.commitPreview;
+  const confirmCommit = commitPreview && commitConfirmable && onSuggestedAction
+    ? () => onSuggestedAction(commitConfirmAction({
+      chapter: commitPreview.chapter,
+      ...(commitPreview.previewToken ? { previewToken: commitPreview.previewToken } : {}),
+    }))
+    : undefined;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
   const hasAnything = message.content.trim().length > 0
     || toolSteps.length > 0
@@ -759,7 +782,9 @@ function MessageBubbles({
       {message.qualityReport ? <QualityCheckCard report={message.qualityReport} /> : null}
 
       {/* 定稿预览卡（R3）：commit_preview 的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。 */}
-      {message.commitPreview ? <CommitPreviewCard preview={message.commitPreview} /> : null}
+      {commitPreview ? (
+        <CommitPreviewCard preview={commitPreview} onConfirm={confirmCommit} confirmDisabled={chatLoading} />
+      ) : null}
 
       {/* 人物名一致性提醒卡：入库预览报出近形错名时固定醒目展示，不靠模型转述、不被说软。 */}
       {message.nameConsistencyWarnings?.length ? <NameConsistencyCard warnings={message.nameConsistencyWarnings} /> : null}

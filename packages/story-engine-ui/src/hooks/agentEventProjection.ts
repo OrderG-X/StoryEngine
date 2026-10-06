@@ -22,6 +22,7 @@
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
 import { isVerdictToolName } from "../shared/honesty-detection.js";
+import { commitConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -73,6 +74,8 @@ export interface AgentToolResultOutput {
   readonly staleThreadWarnings?: ChapterMessage["staleThreadWarnings"];
   /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
   readonly commitPreview?: ChapterMessage["commitPreview"];
+  /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
+  readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
 }
 
 export type AgentProjectionEvent =
@@ -258,6 +261,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 入库 delta：commit_apply 的 CommitReport 随消息走，渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。
       if (event.toolName === "commit_apply" && event.output?.commitReport) {
         return { ...withEffects, commitReport: event.output.commitReport };
+      }
+      // 模型发起的定稿请求：没写盘，挂「确认定稿」按钮（建议条渲染），用户点了才由服务端直接执行。
+      if (event.toolName === "commit_apply" && event.output?.commitConfirmAction) {
+        const button = commitConfirmAction(event.output.commitConfirmAction);
+        return {
+          ...withEffects,
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+        };
       }
       // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。
       if (event.toolName === "quality_check" && event.output?.qualityReport) {

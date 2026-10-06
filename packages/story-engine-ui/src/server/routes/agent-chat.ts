@@ -1,7 +1,9 @@
 /**
  * POST /api/agent/chat — Mastra 写作总控 agent 的 SSE 入口。
  *
- * body: { projectPath: string, messages: [{ role, content }], currentChapter?: number }
+ * body: { projectPath: string, messages: [{ role, content }], currentChapter?: number, action?: UserAction }
+ * action（结构化动作，2026-10-07）：界面按钮的明确指令（如「确认定稿」），服务端直接执行对应工具、不经模型，
+ * 事件协议同下（见 agent/user-actions.ts）。
  * 把 agent.stream() 的流式 chunk 转成 SSE 事件推给前端：
  *   - text-delta   { text }                              助手文本增量
  *   - tool-call    { toolCallId, toolName, args }        agent 决定调某工具
@@ -17,22 +19,22 @@
  */
 import type { ModelMessage } from "ai";
 
-import { buildProjectRequestContext, markForcedRetryTool } from "../agent/request-context.js";
+import { buildProjectRequestContext } from "../agent/request-context.js";
 import { getStoryAgent } from "../agent/story-agent.js";
+import { commitApplyTool } from "../agent/tools/commit-apply.js";
+import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import {
   buildObedienceRetryNudgeMessage,
   detectMissingExecutionForRequest,
   detectUnbackedCompletionClaim,
   inferClaimedWriteTool,
-  isCombinedPreviewConfirmRequest,
   isGroundedRefusalReply,
   isVerdictToolName,
   OBEDIENCE_RETRY_TRANSITION_TEXT,
   sanitizeCorrectedAssistantHistory,
   unbackedCompletionNoticeText,
   type HonestyToolStep,
-  isActionPromiseReply,
 } from "../../shared/honesty-detection.js";
 import {
   assertStoryEngineProject,
@@ -248,15 +250,6 @@ export function toolResultStatus(toolName: string | undefined, output: unknown):
 export const MAX_OBEDIENCE_RETRIES = 1;
 
 /**
- * 组合授权尾步补做的独立预算（长跑复测 #24）：组合句「预览通过就定稿」可能【两步全丢】——
- * 第 54 章实锤：模型连预览都没跑，第一轮补做强制 commit_preview（maxSteps 1）后回合即收，
- * apply 没有自己的补做轮，最终又落回「请再确认定稿」的连催循环。补做链允许两轮：
- * 第一轮强制 preview、第二轮强制 apply（每轮仍是缺失检测驱动的点名强制，apply 成功后
- * missing 归零即停）。A1 谎报重做预算不变（仍是 MAX_OBEDIENCE_RETRIES）。
- */
-export const MAX_WARRANTS_RETRIES = 2;
-
-/**
  * 聊天历史窗口上限（r8 二轮·治「回执模式污染」的源头）。
  *
  * 真机实锤（ch84/ch88/ch93 三个病例完全一致）：聊天历史堆到 ≥5 章「出稿→回执→入库→回执」
@@ -282,13 +275,6 @@ export interface ObedienceAttemptOptions {
   readonly toolChoice?: ObedienceToolChoice;
   /** 点名强制时限 1 步：forced toolChoice 会作用于每一步，放多步会反复调同一工具。 */
   readonly maxSteps?: number;
-  /**
-   * 组合授权验证过的强制补做工具名（长跑复测 #23 互锁）：missingWarrantsRetry 专用——
-   * 用户原话已过 combined/missing 双重检测，工具层意图门见此标记放行，不再重复文本裁决。
-   * A1 谎报重做（强制工具由声称文本反推、用户未必授权）不带此标记，仍受门全文约束。
-   * streamAttempt 每次调用据此设置/清除 requestContext 标记（见 markForcedRetryTool）。
-   */
-  readonly forcedRetryTool?: string;
 }
 
 /** agent.stream fullStream chunk 的结构化最小面（只声明本路由真正读的字段，真实类型由 Mastra 提供）。 */
@@ -315,10 +301,10 @@ export interface ObedientTurnChunk {
  *   ②把本轮产出文本 + 系统纠偏消息追加进模型消息序列，**沿用同一 requestContext**（用户原话
  *     不变 → TurnIntentGate 对合法写入不误拦），自动重跑一轮。
  * 重做后仍检出 → 按原路径追加「⚠️ 系统更正」诚实收场，绝不第三轮、绝不谎报。
- * A2「请求了执行类动作却没调对应工具」原则上只产出诚实更正文案（`serverHonestyCorrectionText` 非空即
- * 追加）、不触发重做（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）——
- * 唯一例外是组合授权句（预览+确认同轮点名）里被丢的 commit 簇尾步（长跑 #8/#18）：预览缺失须无磁盘
- * 依据、定稿缺失的检出前提是预览已成功，才补做一轮（见下方 missingWarrantsRetry 注释）。
+ * A2「请求了执行类动作却没调对应工具」只产出诚实更正文案（`serverHonestyCorrectionText` 非空即
+ * 追加）、不触发重做（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）。
+ * 定稿不靠模型执行到底：真写盘只走用户点按钮的结构化动作（见 agent/user-actions.ts），
+ * 模型漏调 commit_apply 时更正文案自带「确认定稿」按钮，一键补救。
  *
  * 为什么不能只靠更正文案：ch84/ch88 真机实锤——护栏只纠文本时，弱模型把历史里的成功回执当剧本续写，
  * 更正后下一回合继续编造，长跑三连败卡死。重试把「自愈」从赌模型素质变成系统机制（模型无关）。
@@ -371,7 +357,6 @@ export async function runObedientAgentTurn(args: {
     return syntheticQueues.get(name)?.shift() ?? `synthetic-${name}-${(syntheticCounter += 1)}`;
   };
   let turnText = "";
-  let warrantsRetriesUsed = 0;
 
   for (let attempt = 0; ; attempt += 1) {
     let attemptText = "";
@@ -479,53 +464,20 @@ export async function runObedientAgentTurn(args: {
     // 没出现写工具」（A2 缺执行）被强制重做；A2 只保留诚实更正文案（下方最终收尾照实追加，不重跑模型）。
     const unbackedClaim = detectUnbackedCompletionClaim(turnText, stepsForDetection);
 
-    // A2 尾步丢失补做（长跑 #8/#18，最高频痛点：≈每 2-3 章一次、第 22 章连催 3 轮）：组合授权句
-    // （用户一轮里同时点了「预览」和「定稿/确认」，见 isCombinedPreviewConfirmRequest）里被丢的
-    // commit 簇尾步也纳入服从重做——「承诺了没做→自动补做一轮」。这是对复审 T4「A2 永不重做」的
-    // 受控放宽，只放开两个口子、其余意图维持原口径：
-    // - commit_preview 缺失：仍要求无磁盘依据（grounded 如实汇报豁免——模型核实过「没草稿/不存在」
-    //   的回合不该被强制跑预览，复审 T4 口径保持）；
-    // - commit_apply 缺失：检出前提已是本轮 commit_preview 成功（canCommit，授权与依据都在手、只剩
-    //   执行），组合授权在原话里 → 即使回复是「预览通过，说确认定稿即可写入」的如实汇报也补做
-    //   （instructions「组合意图=一轮走完」明文禁止停在预览等下一轮——长跑实锤停在预览就是连催的根源）。
-    // 非组合句（如「把第 N 章正式定稿」后停在预览等确认，复审 T4 句 8 钉住的合法回合）不触发。
-    const groundedRefusal = isGroundedRefusalReply(turnText, stepsForDetection);
-    const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
-    const combinedAuth = isCombinedPreviewConfirmRequest(args.userText ?? "");
-    // 空转补充（长跑复测 #25）：显式「确认定稿第 N 章」这类【单步定稿授权】+ 本轮零工具活动
-    // （模型纯文本空转、连预览都没跑）也纳入补做——预览票据早已在手，没有任何「等确认」的
-    // 合法停等理由，不执行就是纯失败。仅限 commit_apply 且 sawToolActivity=false：
-    // 本轮真跑过工具（如重跑了预览后停等）的回合维持复审 T4 句 8 的合法停等口径。
-    const missingWarrantsRetry =
-      missing !== null &&
-      (combinedAuth ||
-        // 空转补充只兜 A1 没接手的零工具回合（有完成声称的空转走 A1 预算），
-        // 且必须是「没干活也没依据拒绝」的纯空转——grounded 拒绝（如「第99章不存在」）不重做。
-        (missing.intent === "commit_apply" && !sawToolActivity && !unbackedClaim && isActionPromiseReply(turnText))) &&
-      (missing.intent === "commit_apply" ||
-        (missing.intent === "commit_preview" && !groundedRefusal));
-
     // 客户端已断开时不重做：重试会再开一轮 agent.stream（新工具步骤），人已走茶凉纯属白费算力。
-    const canA1Retry = unbackedClaim && attempt < maxRetries;
-    const canWarrantsRetry = missingWarrantsRetry && warrantsRetriesUsed < MAX_WARRANTS_RETRIES;
-    if ((canA1Retry || canWarrantsRetry) && args.shouldStop?.() !== true) {
-      if (missingWarrantsRetry) warrantsRetriesUsed += 1;
+    if (unbackedClaim && attempt < maxRetries && args.shouldStop?.() !== true) {
       // 结构性强制（r8 二轮·ch93 实锤纯 prompt 纠偏无效——flash 重做轮直接交白卷）：
       // 能从用户意图定位到期望工具就点名强制 + 限 1 步（forced choice 作用于每一步，多步会反复调
       // 同一工具）；定位不到（只有声称、意图模糊）就至少强制调一个工具。协议层杜绝「纯文本再编一遍」。
       // 期望工具定位：先用户意图（missing execution，A1/A2 尾步共用）；定位不到再从声称文本反推被编造
       // 的动作（ch96 实锤：真跑了 commit_preview、编造了 commit_apply——组合意图里 apply 让位、missing 为空，
       // 但「已正式入库」的声称本身指认了该强制哪个工具）。都定位不到才 required 兜底。
+      const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
       const forcedTool = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
       // required 也必须限步（真机实锤）：forced choice 每一步都强制调工具、永远到不了纯文本收尾，
       // 不限步会一直跑到框架步数上限（弱模型开思考时一步一分钟，整轮挂十来分钟）。
       attemptOptions = forcedTool
-        ? {
-          toolChoice: { type: "tool", toolName: forcedTool },
-          maxSteps: 1,
-          // 只有组合授权验证过的补做才带放行标记（missingWarrantsRetry）；A1 反推的强制不带。
-          ...(missingWarrantsRetry && !unbackedClaim ? { forcedRetryTool: forcedTool } : {}),
-        }
+        ? { toolChoice: { type: "tool", toolName: forcedTool }, maxSteps: 1 }
         : { toolChoice: "required", maxSteps: 4 };
       console.warn(
         `[obedience-retry] 第 ${attempt + 1} 次回复口头声称未执行（零对应工具调用），自动重做一次` +
@@ -600,6 +552,11 @@ async function handleAgentChat(
       return;
     }
     if (!guardProjectPath(res, projectDir)) return;
+    const parsedAction = parseUserAction(body.action);
+    if (parsedAction.kind === "invalid") {
+      writeJson(res, 400, { ok: false, error: parsedAction.reason });
+      return;
+    }
 
     // 进站消毒（r8 任务②）：把历史里被系统更正/作废过的编造回执换成短桩，打断「编造回执成为
     // 后续回合造假范本」的正反馈污染（user 消息原样保留）。再截历史窗口（r8 二轮）：正常成功回执
@@ -637,6 +594,21 @@ async function handleAgentChat(
     // 工具长调用期间 SSE 会长时间静默，靠心跳喂活客户端 90s 空闲看门狗，避免误判超时掐流。
     stopHeartbeat = startSseHeartbeat(res).stop;
 
+    // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
+    if (parsedAction.kind === "action") {
+      await runUserAction({
+        action: parsedAction.action,
+        requestContext,
+        executeTool: executeUserActionTool,
+        sendEvent,
+        scrubber: createStreamingScrubber(),
+        scrubError: stringifyError,
+      });
+      sendEvent("done", {});
+      res.end();
+      return;
+    }
+
     if (droppedHistoryCount > 0) {
       sendEvent("status", {
         message:
@@ -662,11 +634,8 @@ async function handleAgentChat(
     const { finishReason } = await runObedientAgentTurn({
       initialMessages: modelMessages,
       userText: readLatestUserTurnText(messages),
-      streamAttempt: async (attemptMessages, options) => {
-        // 强制补做互锁（#23）：组合授权验证过的强制工具 → 标记放行；普通尝试显式清标记，
-        // 同一 requestContext 跨尝试复用，绝不让上一轮的标记漏进正常调用。
-        markForcedRetryTool(requestContext, options?.forcedRetryTool);
-        return (
+      streamAttempt: async (attemptMessages, options) =>
+        (
           await agent.stream([...attemptMessages], {
             requestContext,
             // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
@@ -674,8 +643,7 @@ async function handleAgentChat(
             ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
             ...(options?.maxSteps ? { maxSteps: options.maxSteps } : {}),
           })
-        ).fullStream as AsyncIterable<ObedientTurnChunk>;
-      },
+        ).fullStream as AsyncIterable<ObedientTurnChunk>,
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
@@ -701,6 +669,19 @@ async function handleAgentChat(
     stopHeartbeat?.();
   }
 }
+
+/** 结构化动作的工具执行器：按白名单取工具、带同一 requestContext 直接 execute。 */
+const executeUserActionTool: UserActionToolExecutor = async (toolName, input, requestContext) => {
+  switch (toolName) {
+    case "commit_apply": {
+      const execute = commitApplyTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+  }
+};
 
 function stringifyError(error: unknown): string {
   // 审计 Med：错误原文（fs errno 等）内嵌本地绝对路径，直达前端步骤卡/错误气泡——

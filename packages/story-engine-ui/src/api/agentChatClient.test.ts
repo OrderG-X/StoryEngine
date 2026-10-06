@@ -451,6 +451,62 @@ describe("streamAgentChat", () => {
     });
   });
 
+  it("结构化动作（「确认定稿」按钮）→ 请求体带 action；commit_preview 的 previewToken 透传给卡（按钮带回）", async () => {
+    const fetchMock = vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "p1",
+          toolName: "commit_preview",
+          output: { ok: true, chapter: 2, canCommit: true, previewToken: "tok-2", summary: "可以定稿。" },
+        }),
+        frame("done", {}),
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let received: { commitPreview?: unknown } | undefined;
+    await streamAgentChat(
+      {
+        projectPath: "/tmp/p",
+        messages: [{ role: "user", content: "确认定稿第 2 章" }],
+        action: { toolName: "commit_apply", chapter: 2, previewToken: "tok-2" },
+      },
+      { ...noopHandlers(), onToolResult: (info) => { received = info; } },
+    );
+
+    const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(requestInit.body)).action).toEqual({ toolName: "commit_apply", chapter: 2, previewToken: "tok-2" });
+    expect(received?.commitPreview).toMatchObject({ chapter: 2, canCommit: true, previewToken: "tok-2" });
+  });
+
+  it("模型发起的 commit_apply 只出确认按钮（needsConfirmation + confirmAction）→ 透传 commitConfirmAction；残缺 confirmAction 不透传", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "a1",
+          toolName: "commit_apply",
+          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply", chapter: 4, previewToken: "t4" }, summary: "等你点确认定稿。" },
+        }),
+        frame("tool-result", {
+          toolCallId: "a2",
+          toolName: "commit_apply",
+          output: { ok: false, committed: false, needsConfirmation: true, confirmAction: { toolName: "commit_apply" }, summary: "残缺。" },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+
+    const received: { commitConfirmAction?: unknown; needsConfirmation?: boolean }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "确认定稿" }] },
+      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
+    );
+
+    expect(received[0]?.needsConfirmation).toBe(true);
+    expect(received[0]?.commitConfirmAction).toEqual({ chapter: 4, previewToken: "t4" });
+    expect(received[1]?.commitConfirmAction).toBeUndefined();
+  });
+
   it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

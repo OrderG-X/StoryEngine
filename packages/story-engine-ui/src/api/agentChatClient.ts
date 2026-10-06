@@ -21,6 +21,15 @@ export interface StreamAgentChatRequest {
   readonly messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
   /** 用户当前打开/停留的章号。后端据此引导 agent 默认作用于该章、工具缺省回退该值（H3：回看旧章不写错章）。 */
   readonly currentChapter?: number;
+  /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
+  readonly action?: AgentUserAction;
+}
+
+/** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
+export interface AgentUserAction {
+  readonly toolName: "commit_apply";
+  readonly chapter: number;
+  readonly previewToken?: string;
 }
 
 export interface AgentToolResult {
@@ -80,7 +89,10 @@ export interface AgentToolResult {
     readonly summary?: string;
     readonly draftIssueCount?: number;
     readonly semanticIssueCount?: number;
+    readonly previewToken?: string;
   };
+  /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认——投影层据此挂「确认定稿」按钮。 */
+  readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
 }
 
 export interface AgentToolError {
@@ -151,6 +163,7 @@ export async function streamAgentChat(
         projectPath: input.projectPath,
         messages: input.messages,
         ...(typeof input.currentChapter === "number" ? { currentChapter: input.currentChapter } : {}),
+        ...(input.action ? { action: input.action } : {}),
       }),
       signal: idleController.signal,
     });
@@ -286,6 +299,16 @@ export async function streamAgentChat(
                     ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
                     ...(Array.isArray(output.draftQualityIssues) ? { draftIssueCount: output.draftQualityIssues.length } : {}),
                     ...(Array.isArray(output.semanticQualityIssues) ? { semanticIssueCount: output.semanticQualityIssues.length } : {}),
+                    ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
+                  },
+                }
+              : {}),
+            // commit_apply 专属：模型发起的定稿请求只出确认按钮（needsConfirmation + confirmAction），透传给投影层挂按钮。
+            ...(parsed.toolName === "commit_apply" && output.needsConfirmation === true && isCommitConfirmAction(output.confirmAction)
+              ? {
+                  commitConfirmAction: {
+                    chapter: output.confirmAction.chapter,
+                    ...(typeof output.confirmAction.previewToken === "string" ? { previewToken: output.confirmAction.previewToken } : {}),
                   },
                 }
               : {}),
@@ -361,6 +384,10 @@ export async function streamAgentChat(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {
+  return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
 
 /** check_ai_flavor 输出形状校验：必须有 boolean ok + 数组 violations + boolean usedFallback。

@@ -10,7 +10,7 @@ import { createStoryProject, readCharacterMatrixLedger } from "@actalk/story-eng
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildProjectRequestContext } from "../request-context.js";
+import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
 import { extractAndAppendFacts } from "../fact-ledger/fact-ledger.js";
 import { listSnapshots } from "../../lib/snapshot.js";
 import {
@@ -64,6 +64,13 @@ const execute = commitApplyTool.execute as unknown as ToolExec;
 beforeEach(() => {
   __resetCommitPreviewStore();
 });
+
+/** 用户点了「确认定稿」按钮的执行上下文（结构化动作通道设的标记）——只有它才真写盘。 */
+function userConfirmedContext(projectDir: string, chapter?: number): ToolExecutionContext {
+  const requestContext = buildProjectRequestContext(projectDir, chapter);
+  markUserConfirmedTool(requestContext, "commit_apply");
+  return { requestContext } as unknown as ToolExecutionContext;
+}
 
 async function makeProject(title: string, mainCharacterName = "林远"): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "commit-apply-test-"));
@@ -242,48 +249,94 @@ describe("commit_apply 章号缺省回退（H3）", () => {
     await writeDraft(projectDir, 5, longDraft(5, "林远"));
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
     expect(preview.canCommit).toBe(true);
-    const context = { requestContext: buildProjectRequestContext(projectDir, 5) } as unknown as ToolExecutionContext;
+    const context = userConfirmedContext(projectDir, 5);
 
     const out = await execute({}, context) as { committed: boolean; report: { chapter: number } };
     expect(out.committed).toBe(true);
     expect(out.report.chapter).toBe(5);
   });
 
-  it("注入本轮用户原话但没有正式入库意图 → 写入前拦截，不入库也不建快照", async () => {
-    const projectDir = await makeProject("本轮意图门-拦自动入库", "林远");
+  it("模型发起（无按钮确认标记）→ 不写盘、不建快照，返回 needsConfirmation + 确认按钮动作", async () => {
+    const projectDir = await makeProject("模型发起只出按钮", "林远");
     await writeDraft(projectDir, 5, longDraft(5, "林远"));
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
     expect(preview.canCommit).toBe(true);
     const beforeSnapshots = await listSnapshots(projectDir);
+    // 用户原话就是「确认定稿」也一样：文本不再是授权，授权只来自按钮点击。
     const context = {
-      requestContext: buildProjectRequestContext(projectDir, 5, undefined, "继续写第5章正文。只写这一章，不要写其他章。"),
+      requestContext: buildProjectRequestContext(projectDir, 5, undefined, "确认定稿第5章"),
     } as unknown as ToolExecutionContext;
 
-    const out = await execute({}, context) as { ok: boolean; committed: boolean; blockedReason?: string; summary: string };
+    const out = await execute({}, context) as {
+      ok: boolean;
+      committed: boolean;
+      needsConfirmation?: boolean;
+      blockedReason?: string;
+      confirmAction?: { toolName: string; chapter: number; previewToken?: string };
+      summary: string;
+    };
 
     expect(out.ok).toBe(false);
     expect(out.committed).toBe(false);
-    expect(out.blockedReason).toBe("user_turn_no_commit_intent");
-    expect(out.summary).toContain("本回合用户没有明确要求定稿");
+    expect(out.needsConfirmation).toBe(true);
+    expect(out.blockedReason).toBe("awaiting_user_confirmation");
+    expect(out.confirmAction).toEqual({ toolName: "commit_apply", chapter: 5, previewToken: preview.previewToken });
     expect(out.summary).toContain("确认定稿");
-    expect(out.summary).toContain("确认正式入库");
     await expect(access(join(projectDir, "chapters", "0005.md"))).rejects.toThrow();
     expect(await listSnapshots(projectDir)).toHaveLength(beforeSnapshots.length);
   });
 
-  it("注入本轮用户原话且有正式入库意图 → 正常入库", async () => {
-    const projectDir = await makeProject("本轮意图门-允许入库", "林远");
+  it("模型发起但没有有效预览 → 如实拒绝（no_preview），不出按钮", async () => {
+    const projectDir = await makeProject("模型发起无预览", "林远");
+    await writeDraft(projectDir, 5, longDraft(5, "林远"));
+    const context = { requestContext: buildProjectRequestContext(projectDir, 5) } as unknown as ToolExecutionContext;
+
+    const out = await execute({}, context) as { committed: boolean; needsConfirmation?: boolean; blockedReason?: string; confirmAction?: unknown };
+
+    expect(out.committed).toBe(false);
+    expect(out.needsConfirmation).toBeUndefined();
+    expect(out.confirmAction).toBeUndefined();
+    expect(out.blockedReason).toBe("no_preview");
+  });
+
+  it("模型发起但工作稿在预览后改过 → 如实拒绝（draft_changed_since_preview），不给点了必失败的按钮", async () => {
+    const projectDir = await makeProject("模型发起稿已改", "林远");
     await writeDraft(projectDir, 5, longDraft(5, "林远"));
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
     expect(preview.canCommit).toBe(true);
-    const context = {
-      requestContext: buildProjectRequestContext(projectDir, 5, undefined, "把第5章草稿走完预览并正式入库。"),
-    } as unknown as ToolExecutionContext;
+    await writeDraft(projectDir, 5, `${longDraft(5, "林远")}林远又补了一句话改动了草稿内容。\n`);
+    const context = { requestContext: buildProjectRequestContext(projectDir, 5) } as unknown as ToolExecutionContext;
 
-    const out = await execute({}, context) as { committed: boolean; report: { chapter: number } };
+    const out = await execute({}, context) as { committed: boolean; needsConfirmation?: boolean; blockedReason?: string };
+
+    expect(out.committed).toBe(false);
+    expect(out.needsConfirmation).toBeUndefined();
+    expect(out.blockedReason).toBe("draft_changed_since_preview");
+  });
+
+  it("按钮确认（userConfirmedTool=commit_apply）→ 正常入库", async () => {
+    const projectDir = await makeProject("按钮确认入库", "林远");
+    await writeDraft(projectDir, 5, longDraft(5, "林远"));
+    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
+    expect(preview.canCommit).toBe(true);
+
+    const out = await execute({ chapter: 5 }, userConfirmedContext(projectDir, 5)) as { committed: boolean; report: { chapter: number } };
 
     expect(out.committed).toBe(true);
     expect(out.report.chapter).toBe(5);
+  });
+
+  it("标记是别的工具名 → 不算本工具的按钮确认，仍只出按钮", async () => {
+    const projectDir = await makeProject("标记错工具", "林远");
+    await writeDraft(projectDir, 5, longDraft(5, "林远"));
+    await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
+    const requestContext = buildProjectRequestContext(projectDir, 5);
+    markUserConfirmedTool(requestContext, "generate_draft");
+
+    const out = await execute({}, { requestContext } as unknown as ToolExecutionContext) as { committed: boolean; needsConfirmation?: boolean };
+
+    expect(out.committed).toBe(false);
+    expect(out.needsConfirmation).toBe(true);
   });
 
   it("不传 chapter 但注入 currentChapter:5 → 工具用第5章执行", async () => {
@@ -291,7 +344,7 @@ describe("commit_apply 章号缺省回退（H3）", () => {
     await writeDraft(projectDir, 5, longDraft(5, "林远"));
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 5 });
     expect(preview.canCommit).toBe(true);
-    const context = { requestContext: buildProjectRequestContext(projectDir, 5) } as unknown as ToolExecutionContext;
+    const context = userConfirmedContext(projectDir, 5);
     // 不传 chapter，工具应从 context 中读取 currentChapter:5 执行入库
     const out = await execute({ previewToken: preview.previewToken }, context) as { committed: boolean; report: { chapter: number } };
     expect(out.committed).toBe(true);
@@ -655,8 +708,7 @@ describe("commit_apply 入库后告知：knownNames 用真实显示名（防主�
     const projectDir = await makeProject("knownNames真名", "林远");
     await writeDraft(projectDir, 1, longDraft(1, "林远"));
     const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
-    const context = { requestContext: buildProjectRequestContext(projectDir, 1) } as unknown as ToolExecutionContext;
-    await execute({ previewToken: preview.previewToken }, context);
+    await execute({ previewToken: preview.previewToken }, userConfirmedContext(projectDir, 1));
 
     expect(mocked).toHaveBeenCalledTimes(1);
     const known = mocked.mock.calls[0]![0].knownNames ?? [];
@@ -713,26 +765,5 @@ describe("commit_apply 入库失败分支：摊给用户的 summary 消毒 + 不
     } finally {
       spy.mockRestore();
     }
-  });
-});
-
-describe("强制补做互锁（长跑复测 #23：组合授权验证过的强制调用不被门二次裁决）", () => {
-  it("requestContext 带 forcedRetryTool=commit_apply + 用户文本无授权 → preflight 放行（不拒）", async () => {
-    const { RequestContext } = await import("@mastra/core/di");
-    const rc = new RequestContext([["userTurnText", "帮我把这章的结尾再润色一下"]]);
-    rc.set("forcedRetryTool", "commit_apply");
-    const ctx = { requestContext: rc } as never;
-    const { __testCommitApplyGate } = await import("./commit-apply.js") as { __testCommitApplyGate?: unknown };
-    // 若无测试导出，退而验证标记读取逻辑
-    const { isForcedRetryTool } = await import("../request-context.js");
-    expect(isForcedRetryTool(ctx, "commit_apply")).toBe(true);
-    expect(isForcedRetryTool(ctx, "generate_draft")).toBe(false);
-  });
-  it("无标记 + 无授权文本 → isForcedRetryTool 为 false（门照常拦）", async () => {
-    const { RequestContext } = await import("@mastra/core/di");
-    const rc = new RequestContext([["userTurnText", "看一下当前进度"]]);
-    const ctx = { requestContext: rc } as never;
-    const { isForcedRetryTool } = await import("../request-context.js");
-    expect(isForcedRetryTool(ctx, "commit_apply")).toBe(false);
   });
 });

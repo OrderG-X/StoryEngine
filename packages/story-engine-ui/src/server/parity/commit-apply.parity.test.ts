@@ -35,9 +35,8 @@
 //
 // 2026-09-11 尾巴清零（本文件全量可动）：
 //   - 显式 timeout 已补齐：真 git 子进程 + 真 FS，全部用例 30s（CLAUDE.md 磁盘 IO 重纪律）。
-//   - 意图门真参与对拍（对齐 draft 对已做先例）：驱动 commit_apply 一律带真实用户原话
-//     （userTurnText，明确入库意图 → 门放行口径内），新增「原话无入库意图被拦」用例——
-//     此前全用例恒 undefined 放行，门的双轨分歧不可测（SWE 复审登记）。
+//   - 授权真参与对拍：工具侧真写盘只认按钮确认标记（2026-10-07 起取代原文本意图门），
+//     另有一条钉住「模型发起只出确认按钮、不落盘、不消费票据」。
 //   - D34 章号数字字符串【仍是显式分歧·结构性，只登记】：工具 schema coerceNumber 把
 //     chapter:"3" 还原成 3 照常预览/入库；HTTP 路由只认 number——preview readPositiveInteger
 //     静默丢 → 400 formal_commit_preview_missing_chapter_target，apply requirePositiveBodyInteger
@@ -99,8 +98,8 @@ interface CommitReportLike {
   readonly issues: readonly string[];
 }
 
-/** 驱动 commit_apply 时带的用户原话：明确定稿意图（意图门放行口径内的 canonical 句式，对齐 draft 对 WRITE_TURN_TEXT 先例）。 */
-const COMMIT_TURN_TEXT = "预览通过了，确认定稿。";
+// 工具侧真写盘只走「确认定稿」按钮（结构化动作标记 userConfirmedTool，2026-10-07）；
+// 模型发起的 commit_apply 只出确认按钮——对拍用例按按钮语义驱动，另有一条钉住模型发起不落盘。
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -138,11 +137,11 @@ async function routePreviewThenApply(projectDir: string, idempotencyKey: string)
   });
 }
 
-/** 工具路完整流：预览登记票据 → apply（省略 token，系统用最近预览票据；带明确定稿意图原话过意图门）。 */
+/** 工具路完整流：预览登记票据 → apply（省略 token，系统用最近预览票据；按钮确认语义）。 */
 async function toolPreviewThenApply(projectDir: string) {
   const preview = await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir });
   expect(preview.ok).toBe(true);
-  return driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir, userTurnText: COMMIT_TURN_TEXT });
+  return driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir, userConfirmedTool: "commit_apply" });
 }
 
 describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）", () => {
@@ -201,8 +200,8 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
       chapter: 1,
       idempotencyKey: "parity-apply-noguard-1",
     });
-    // 带明确定稿意图原话：意图门放行，被测的是「未预览」票据守卫这条腿（防「门先拦」掩盖守卫行为）。
-    const tool = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT });
+    // 按钮确认语义：被测的是「未预览」票据守卫这条腿。
+    const tool = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userConfirmedTool: "commit_apply" });
 
     expect(route.statusCode).toBe(409);
     expect(route.payload.ok).toBe(false);
@@ -237,7 +236,7 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
       previewHash: routePreview.payload.previewHash,
       idempotencyKey: "parity-apply-stale-1",
     });
-    const tool = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT });
+    const tool = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userConfirmedTool: "commit_apply" });
 
     expect(route.statusCode).toBe(409);
     expect(route.payload.ok).toBe(false);
@@ -278,9 +277,9 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
 
     // 工具侧：token 已被首次消费，第二次靠 A7 幂等探测（已入库且正文一致）回报「此前已定稿」
     await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir: toolDir });
-    const toolFirst = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT });
+    const toolFirst = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userConfirmedTool: "commit_apply" });
     const toolChapterAfterFirst = await readFile(defaultCommittedChapterPath(toolDir, 1), "utf-8");
-    const toolSecond = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT });
+    const toolSecond = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userConfirmedTool: "commit_apply" });
     const toolChapterAfterSecond = await readFile(defaultCommittedChapterPath(toolDir, 1), "utf-8");
 
     expect(toolFirst.committed).toBe(true);
@@ -293,31 +292,31 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
     expect(toolChapterAfterFirst).toBe(chapterAfterFirst);
   });
 
-  it("入库意图门真参与对拍：本轮原话只有审稿意图 → 工具拦下不落正式章；HTTP 按钮路无此门照常入库", { timeout: 30_000 }, async () => {
+  it("授权真参与对拍：模型发起（无按钮确认）→ 工具只出确认按钮不落正式章；按钮确认后同一票据照常入库", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await seedTwinDrafts("commit-apply-gate-", parityCommitDraft(1));
 
-    // HTTP 路无意图门（按钮直调语义）：预览 → apply 照常入库
+    // HTTP 路（确认卡按钮直调语义）：预览 → apply 照常入库
     const route = await routePreviewThenApply(routeDir, "parity-apply-gate-1");
     expect(route.payload.ok).toBe(true);
     expect(await pathExists(defaultCommittedChapterPath(routeDir, 1))).toBe(true);
 
-    // 工具路：预览票据有效，但本轮原话无入库意图 → 写入前守卫拦在 apply 之前，不落盘、不消费票据语义
+    // 工具路：预览票据有效，但这次是模型自己发起（用户原话就是「确认定稿」也一样）→ 只出按钮、不落盘
     const toolPreview = await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir: toolDir });
     expect(toolPreview.ok).toBe(true);
     const tool = await driveToolExecute(
       commitApplyTool,
       { chapter: 1 },
-      { projectDir: toolDir, userTurnText: "先帮我审一下这一章" },
+      { projectDir: toolDir, userTurnText: "预览通过了，确认定稿。" },
     );
     expect(tool.ok).toBe(false);
     expect(tool.committed).toBe(false);
-    expect(tool.refused).toBe(true);
-    expect(tool.blockedReason).toBe("user_turn_no_commit_intent");
+    expect(tool.needsConfirmation).toBe(true);
+    expect(tool.blockedReason).toBe("awaiting_user_confirmation");
     expect(await pathExists(defaultCommittedChapterPath(toolDir, 1))).toBe(false);
-    // 意图门拦下的只是这一回合：换带定稿意图的原话，同一张预览票据照常入库（票据未被误消费）
-    const retry = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT });
-    expect(retry.ok).toBe(true);
-    expect(retry.committed).toBe(true);
+    // 用户点了按钮：同一张预览票据照常入库（票据未被误消费）
+    const confirmed = await driveToolExecute(commitApplyTool, { chapter: 1 }, { projectDir: toolDir, userConfirmedTool: "commit_apply" });
+    expect(confirmed.ok).toBe(true);
+    expect(confirmed.committed).toBe(true);
     // 两轨最终落盘仍字节一致
     expect(await readFile(defaultCommittedChapterPath(toolDir, 1), "utf-8"))
       .toBe(await readFile(defaultCommittedChapterPath(routeDir, 1), "utf-8"));
@@ -344,7 +343,7 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
     const tool = await driveToolExecute(
       commitApplyTool,
       { chapter: "3" },
-      { projectDir: toolDir, userTurnText: COMMIT_TURN_TEXT },
+      { projectDir: toolDir, userConfirmedTool: "commit_apply" },
     );
     expect(tool.ok).toBe(true);
     expect(tool.committed).toBe(true);

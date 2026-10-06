@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 
@@ -57,5 +57,31 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     const items = container.querySelectorAll(".cpc-item");
     expect(items).toHaveLength(1);
     expect(container.textContent ?? "").toContain("真阻断。");
+  });
+
+  // 本文件不做自动 cleanup，多次 render 会叠在 document 上——按钮一律在各自 container 内查。
+  it("可定稿 + 传了 onConfirm → 渲染「确认定稿」按钮，点击回调", () => {
+    const onConfirm = vi.fn();
+    const { container } = render(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={onConfirm} />);
+    const button = container.querySelector<HTMLButtonElement>("button.cpc-confirm");
+    expect(button?.textContent).toBe("确认定稿");
+    fireEvent.click(button!);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("不可定稿 / 没传 onConfirm（旧卡）→ 不渲染按钮", () => {
+    const { container, rerender } = render(
+      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} onConfirm={() => undefined} />,
+    );
+    expect(container.querySelector("button.cpc-confirm")).toBeNull();
+    rerender(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} />);
+    expect(container.querySelector("button.cpc-confirm")).toBeNull();
+  });
+
+  it("回合进行中 confirmDisabled → 按钮禁用", () => {
+    const { container } = render(
+      <CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={() => undefined} confirmDisabled />,
+    );
+    expect(container.querySelector<HTMLButtonElement>("button.cpc-confirm")?.disabled).toBe(true);
   });
 });
