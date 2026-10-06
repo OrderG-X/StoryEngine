@@ -259,6 +259,17 @@ export type WorkspaceStaleThreadWarning = {
   readonly message: string;
 };
 
+/** 定稿预览卡（R3）的持久化子集：此前不在白名单里，刷新后预览卡（连同「确认定稿」按钮）整张消失。 */
+export type WorkspaceCommitPreview = {
+  readonly chapter: number;
+  readonly canCommit: boolean;
+  readonly blockingReasons?: readonly string[];
+  readonly summary?: string;
+  readonly draftIssueCount?: number;
+  readonly semanticIssueCount?: number;
+  readonly previewToken?: string;
+};
+
 export type WorkspaceNextStepPrompt = {
   readonly question: string;
   readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean }[];
@@ -289,6 +300,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly commitReport?: unknown;
   readonly nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
   readonly staleThreadWarnings?: readonly WorkspaceStaleThreadWarning[];
+  readonly commitPreview?: WorkspaceCommitPreview;
   readonly nextStepPrompt?: WorkspaceNextStepPrompt;
   readonly isErrorNotice?: boolean;
   readonly errorDetail?: string;
@@ -319,6 +331,7 @@ export function readWorkspaceMessages(value: unknown): {
     commitReport?: unknown;
     nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
     staleThreadWarnings?: readonly WorkspaceStaleThreadWarning[];
+    commitPreview?: WorkspaceCommitPreview;
     nextStepPrompt?: WorkspaceNextStepPrompt;
     isErrorNotice?: boolean;
     errorDetail?: string;
@@ -366,6 +379,7 @@ export function readWorkspaceMessages(value: unknown): {
       : undefined;
     const nameConsistencyWarnings = readWorkspaceNameConsistencyWarnings(item.nameConsistencyWarnings);
     const staleThreadWarnings = readWorkspaceStaleThreadWarnings(item.staleThreadWarnings);
+    const commitPreview = readWorkspaceCommitPreview(item.commitPreview);
     const nextStepPrompt = readWorkspaceNextStepPrompt(item.nextStepPrompt);
     const isErrorNotice = item.isErrorNotice === true;
     const errorDetail = readString(item.errorDetail);
@@ -394,6 +408,7 @@ export function readWorkspaceMessages(value: unknown): {
       ...(commitReport !== undefined ? { commitReport } : {}),
       ...(nameConsistencyWarnings.length > 0 ? { nameConsistencyWarnings } : {}),
       ...(staleThreadWarnings.length > 0 ? { staleThreadWarnings } : {}),
+      ...(commitPreview ? { commitPreview } : {}),
       ...(nextStepPrompt ? { nextStepPrompt } : {}),
       ...(isErrorNotice ? { isErrorNotice: true } : {}),
       ...(errorDetail ? { errorDetail } : {}),
@@ -518,6 +533,39 @@ function readWorkspaceStaleThreadWarnings(value: unknown): WorkspaceStaleThreadW
   return warnings.slice(0, 20);
 }
 
+function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = readPositiveInteger(value.chapter);
+  if (chapter === undefined || typeof value.canCommit !== "boolean") return undefined;
+  const blockingReasons = readStringList(value.blockingReasons).slice(0, 20);
+  const summary = readString(value.summary);
+  const previewToken = readString(value.previewToken);
+  const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
+  const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
+  return {
+    chapter,
+    canCommit: value.canCommit,
+    ...(blockingReasons.length > 0 ? { blockingReasons } : {}),
+    ...(summary ? { summary } : {}),
+    ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
+    ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
+    ...(previewToken ? { previewToken } : {}),
+  };
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** 「确认定稿」按钮目标（commit-apply 的 commitTarget）：章号 + 可选预览令牌。 */
+function readWorkspaceCommitTarget(value: unknown): { chapter?: number; previewToken?: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = readPositiveInteger(value.chapter);
+  const previewToken = readString(value.previewToken);
+  if (chapter === undefined && !previewToken) return undefined;
+  return { ...(chapter !== undefined ? { chapter } : {}), ...(previewToken ? { previewToken } : {}) };
+}
+
 function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
   const actions: Record<string, unknown>[] = [];
@@ -528,6 +576,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const description = readString(item.description);
     const permission = readWorkspacePermission(item.permission);
     if (!id || !label || !description || !permission) continue;
+    const commitTarget = readWorkspaceCommitTarget(item.commitTarget);
     actions.push({
       id,
       label,
@@ -535,6 +584,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       permission,
       requiresConfirmation: item.requiresConfirmation === true,
       ...(readString(item.endpoint) ? { endpoint: readString(item.endpoint) } : {}),
+      ...(commitTarget ? { commitTarget } : {}),
     });
   }
   return actions.slice(0, 8);

@@ -837,6 +837,58 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(legacy).not.toHaveProperty("intentTitle");
   });
 
+  it("定稿预览卡 commitPreview 与「确认定稿」按钮 commitTarget 持久化（刷新后卡与按钮不丢）；坏值不写", () => {
+    const out = readWorkspaceMessages([
+      {
+        id: "assistant-preview",
+        role: "assistant",
+        content: "预览通过，点按钮定稿。",
+        commitPreview: {
+          chapter: 2,
+          canCommit: true,
+          blockingReasons: ["", "x"],
+          summary: "可以定稿。",
+          draftIssueCount: 0,
+          semanticIssueCount: -1,
+          previewToken: "tok-2",
+        },
+        suggestedActions: [
+          {
+            id: "commit-apply",
+            label: "确认定稿",
+            description: "写入定稿章节",
+            permission: "formal_state_write",
+            requiresConfirmation: false,
+            commitTarget: { chapter: 2, previewToken: "tok-2", junk: 1 },
+          },
+          {
+            id: "commit-apply-bad-target",
+            label: "确认定稿",
+            description: "写入定稿章节",
+            permission: "formal_state_write",
+            requiresConfirmation: false,
+            commitTarget: { chapter: 0 },
+          },
+        ],
+      },
+      { id: "assistant-bad-preview", role: "assistant", content: "坏卡", commitPreview: { chapter: 2 } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+
+    expect(out[0]!.commitPreview).toEqual({
+      chapter: 2,
+      canCommit: true,
+      blockingReasons: ["x"],
+      summary: "可以定稿。",
+      draftIssueCount: 0,
+      previewToken: "tok-2",
+    });
+    expect(out[0]!.suggestedActions?.[0]).toMatchObject({ id: "commit-apply", commitTarget: { chapter: 2, previewToken: "tok-2" } });
+    expect(out[0]!.suggestedActions?.[0]?.commitTarget).toEqual({ chapter: 2, previewToken: "tok-2" });
+    expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("commitTarget");
+    expect(out[1]).not.toHaveProperty("commitPreview");
+  });
+
   it("turnStartedAt/turnEndedAt round-trip：有限正数保留，坏值不写", () => {
     const out = readWorkspaceMessages([
       {
