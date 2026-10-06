@@ -45,7 +45,7 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
   const projectDir = join(input.rootDir, "story-engine", projectId);
 
   try {
-  await Promise.all([
+  await settleAllOrThrow([
     mkdir(join(projectDir, "characters", mainCharacterId), { recursive: true }),
     mkdir(join(projectDir, "world"), { recursive: true }),
     mkdir(join(projectDir, "story"), { recursive: true }),
@@ -124,7 +124,7 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
   };
   const timelineEvents: TimelineEvent[] = [];
 
-  await Promise.all([
+  await settleAllOrThrow([
     writeJsonAtomic(join(projectDir, "project.json"), project),
     writeJsonAtomic(join(projectDir, "world", "core.json"), worldCore),
     writeJsonAtomic(join(projectDir, "world", "state.json"), worldState),
@@ -151,6 +151,16 @@ export async function createStoryProject(input: CreateStoryProjectInput): Promis
     await rm(projectDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * 等全部并行写盘落定后再抛首个失败：Promise.all 首个 reject 就返回，兄弟 mkdir/写入仍在飞，
+ * 回滚的 rm 会和它们赛跑、被重新建出半截目录（高负载下 rollback 测试偶发红的根因）。
+ */
+async function settleAllOrThrow(operations: readonly Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(operations);
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
 }
 
 export async function readProject(projectDir: string): Promise<StoryProject> {
