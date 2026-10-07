@@ -126,6 +126,25 @@
   /* 编辑器本身不画焦点框：稿纸框已有获得焦点时的描边反馈（.se-v2-writing-canvas:focus-within） */
   .ProseMirror:focus-visible{outline:none;box-shadow:none;}
 
+  /* 角色名速览：正文里的角色名虚下划线（CSS Highlight API）+ 悬停卡片 */
+  ::highlight(se-char-names){text-decoration:underline dashed;text-decoration-color:var(--faint);text-underline-offset:4px;}
+  .se-name-peek{
+    position:absolute;z-index:30;width:316px;padding:14px 16px 12px;
+    background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
+    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;animation:se-fade .12s ease-out;
+  }
+  .se-peek-h{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .se-peek-av{width:32px;height:32px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:600;font-size:13px;}
+  .se-peek-who{min-width:0;}
+  .se-peek-who b{display:block;font-size:14px;color:var(--text);}
+  .se-peek-who span{font-size:12px;color:var(--muted);}
+  .se-peek-kv{display:grid;grid-template-columns:64px minmax(0,1fr);gap:6px 10px;margin:0;font-size:13px;line-height:1.6;}
+  .se-peek-kv dt{color:var(--faint);}
+  .se-peek-kv dd{margin:0;color:var(--text);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .se-peek-f{display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--line);}
+  .se-peek-f button{border:0;background:none;padding:0;color:var(--accent);font-size:13px;cursor:pointer;}
+  .se-peek-f button:hover{text-decoration:underline;}
+
   @media (max-width:1279px){
     .codex-desk-stage{padding:16px 16px 0;}
     .codex-desk-stage > .se-v2-writing-canvas,

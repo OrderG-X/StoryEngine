@@ -3,6 +3,7 @@ import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
+import { NamePeek } from "./NamePeek.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -47,7 +48,10 @@ export function parseTargetChapterWords(writingRules: readonly string[] | undefi
   return null;
 }
 
-export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
+export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
+  /** 角色速览卡里点「在设定本中打开」。 */
+  readonly onOpenCharacter?: (name: string) => void;
+}) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
@@ -208,6 +212,15 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
             </div>
           </div>
         )}
+        {/* 角色名速览：正文里的角色名画虚下划线，鼠标停上去弹出角色卡（不碰编辑器内核，见 NamePeek）。 */}
+        {!showStarter ? (
+          <NamePeek
+            stageRef={stageRef}
+            matrix={props.workspace.characterMatrix}
+            contentKey={`${draft.chapterNumber}:${activeTab}`}
+            onOpenCharacter={props.onOpenCharacter}
+          />
+        ) : null}
       </div>
 
       {/* 底部细条：上一章 / 再来一版 / 下一章；都没有时整条不渲染。 */}

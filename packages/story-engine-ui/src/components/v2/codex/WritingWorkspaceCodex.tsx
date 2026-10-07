@@ -529,7 +529,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                   </div>
                 </nav>
               ) : null}
-              <WritingDeskCodex {...props} />
+              <WritingDeskCodex {...props} onOpenCharacter={() => { setView("library"); setCat("chars"); }} />
             </div>
           )}
           </div>

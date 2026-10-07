@@ -1,0 +1,231 @@
+/**
+ * NamePeek —— 稿纸里的角色名速览（2026-10-07 改版，补齐原型）。
+ *
+ * 不碰编辑器内核（WritingPaper / ProseMirror 一行不改）：
+ *  - 标记：用浏览器的 CSS Custom Highlight API 给正文里出现的角色名画虚下划线（不改 DOM、不进文档模型、不影响编辑与保存）；
+ *  - 触发：鼠标在名字上停 450ms 弹出速览卡，移开即收；按任意键 / 滚动也收起，不打扰打字。
+ * 浏览器不支持 Highlight API 时只是没有下划线，悬停速览照常可用。只读展示，不写任何数据。
+ */
+import { useEffect, useRef, useState } from "react";
+import type { StateOverviewCharacterMatrix } from "../../../api/types.js";
+
+type MatrixCharacter = StateOverviewCharacterMatrix["characters"][number];
+
+export interface NameOccurrence {
+  readonly start: number;
+  readonly end: number;
+  readonly name: string;
+}
+
+/** 在一段文本里找角色名出现的位置：长名优先、互不重叠（「周屿」与「周」同时存在时取「周屿」）。名字少于 2 个字不标。 */
+export function findNameOccurrences(text: string, names: readonly string[]): NameOccurrence[] {
+  const sorted = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))].sort((a, b) => b.length - a.length);
+  const taken: boolean[] = new Array(text.length).fill(false);
+  const out: NameOccurrence[] = [];
+  for (const name of sorted) {
+    let from = 0;
+    for (;;) {
+      const at = text.indexOf(name, from);
+      if (at < 0) break;
+      const end = at + name.length;
+      let free = true;
+      for (let i = at; i < end; i += 1) if (taken[i]) { free = false; break; }
+      if (free) {
+        for (let i = at; i < end; i += 1) taken[i] = true;
+        out.push({ start: at, end, name });
+      }
+      from = end;
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+const HIGHLIGHT_NAME = "se-char-names";
+const HOVER_DELAY_MS = 450;
+
+interface PeekState {
+  readonly character: MatrixCharacter;
+  readonly top: number;
+  readonly left: number;
+}
+
+function textNodesUnder(root: Element): Text[] {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text);
+  return nodes;
+}
+
+function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const pos = doc.caretPositionFromPoint?.(x, y);
+  if (pos) return { node: pos.offsetNode, offset: pos.offset };
+  const range = doc.caretRangeFromPoint?.(x, y);
+  return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+function firstLine(values: readonly (string | undefined)[]): string {
+  for (const value of values) if (value && value.trim()) return value.trim();
+  return "";
+}
+
+export function NamePeek({
+  stageRef,
+  matrix,
+  contentKey,
+  onOpenCharacter,
+}: {
+  readonly stageRef: React.RefObject<HTMLDivElement | null>;
+  readonly matrix: StateOverviewCharacterMatrix | undefined;
+  /** 正文变了（换章 / 流式写入 / 编辑）就重算下划线。 */
+  readonly contentKey: string;
+  readonly onOpenCharacter?: (name: string) => void;
+}) {
+  const characters = matrix?.characters ?? [];
+  const names = characters.map((c) => c.name).filter(Boolean);
+  const namesKey = names.join("|");
+  const [peek, setPeek] = useState<PeekState | null>(null);
+  const hoverTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const hoveredName = useRef<string | null>(null);
+
+  // 下划线：Highlight API 标记全部角色名（不改 DOM）。正文变动后防抖重算。
+  useEffect(() => {
+    const stage = stageRef.current;
+    const registry = (globalThis.CSS as unknown as { highlights?: Map<string, unknown> } | undefined)?.highlights;
+    const HighlightCtor = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+    if (!stage || !registry || !HighlightCtor || names.length === 0) return undefined;
+    let timer = 0;
+    const paint = () => {
+      const ranges: Range[] = [];
+      for (const node of textNodesUnder(stage)) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest("button, input, textarea, .se-name-peek, .cd-starter")) continue;
+        for (const hit of findNameOccurrences(node.data, names)) {
+          const range = document.createRange();
+          range.setStart(node, hit.start);
+          range.setEnd(node, hit.end);
+          ranges.push(range);
+        }
+      }
+      registry.set(HIGHLIGHT_NAME, new HighlightCtor(...ranges));
+    };
+    paint();
+    const observer = new MutationObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(paint, 300);
+    });
+    observer.observe(stage, { subtree: true, childList: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      registry.delete(HIGHLIGHT_NAME);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageRef, namesKey, contentKey]);
+
+  // 悬停速览：鼠标停在名字上 450ms 弹卡；离开名字 / 卡片 200ms 后收起；按键、滚动立即收起。
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || names.length === 0) return undefined;
+    const clearHover = () => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); hoverTimer.current = null; };
+    const scheduleClose = () => {
+      if (closeTimer.current) window.clearTimeout(closeTimer.current);
+      closeTimer.current = window.setTimeout(() => { setPeek(null); hoveredName.current = null; }, 200);
+    };
+    const onMove = (event: MouseEvent) => {
+      if ((event.target as Element | null)?.closest?.(".se-name-peek")) return;
+      if (event.buttons !== 0) { clearHover(); return; } // 正在拖选
+      const caret = caretAt(event.clientX, event.clientY);
+      let hit: { name: string; rect: DOMRect } | null = null;
+      if (caret && caret.node.nodeType === Node.TEXT_NODE) {
+        const node = caret.node as Text;
+        for (const occ of findNameOccurrences(node.data, names)) {
+          if (caret.offset < occ.start || caret.offset > occ.end) continue;
+          const range = document.createRange();
+          range.setStart(node, occ.start);
+          range.setEnd(node, occ.end);
+          // 名字可能被折成两行：逐行矩形判断，鼠标必须真在某一段字形上（caret 落在行尾空白处不算）。
+          const rect = [...range.getClientRects()].find((r) =>
+            event.clientX >= r.left - 1 && event.clientX <= r.right + 1 && event.clientY >= r.top - 2 && event.clientY <= r.bottom + 2);
+          if (rect) hit = { name: occ.name, rect };
+          break;
+        }
+      }
+      if (!hit) {
+        clearHover();
+        hoveredName.current = null;
+        if (peek) scheduleClose();
+        return;
+      }
+      if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
+      if (hoveredName.current === hit.name && (hoverTimer.current || peek)) return;
+      hoveredName.current = hit.name;
+      clearHover();
+      const target = hit;
+      hoverTimer.current = window.setTimeout(() => {
+        const character = characters.find((c) => c.name === target.name);
+        const stageRect = stage.getBoundingClientRect();
+        if (!character) return;
+        const left = Math.max(12, Math.min(target.rect.left - stageRect.left - 12, stageRect.width - 332));
+        setPeek({ character, top: target.rect.bottom - stageRect.top + 8, left });
+      }, HOVER_DELAY_MS);
+    };
+    const onLeave = () => { clearHover(); hoveredName.current = null; scheduleClose(); };
+    const closeNow = () => { clearHover(); hoveredName.current = null; setPeek(null); };
+    stage.addEventListener("mousemove", onMove);
+    stage.addEventListener("mouseleave", onLeave);
+    window.addEventListener("keydown", closeNow);
+    stage.addEventListener("scroll", closeNow, true);
+    return () => {
+      stage.removeEventListener("mousemove", onMove);
+      stage.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("keydown", closeNow);
+      stage.removeEventListener("scroll", closeNow, true);
+      clearHover();
+      if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageRef, namesKey, peek]);
+
+  // 换章时收起。
+  useEffect(() => { setPeek(null); }, [contentKey]);
+
+  if (!peek) return null;
+  const c = peek.character;
+  const identity = firstLine([c.identity, c.role]);
+  const now = firstLine([c.currentGoal, c.mood, c.currentLocation ? `在${c.currentLocation}` : undefined, c.recentEvents?.[0]]);
+  const unknown = firstLine([c.unknownTruths?.[0]]);
+  // 主角本人不显示「和主角」。
+  const relation = /主角/u.test(c.role ?? "") ? "" : firstLine([c.relationshipToProtagonist]);
+  return (
+    <div
+      className="se-name-peek"
+      role="dialog"
+      aria-label={`${c.name}的角色速览`}
+      style={{ top: peek.top, left: peek.left }}
+      onMouseEnter={() => { if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; } }}
+      onMouseLeave={() => { closeTimer.current = window.setTimeout(() => { setPeek(null); hoveredName.current = null; }, 200); }}
+    >
+      <div className="se-peek-h">
+        <span className="se-peek-av" aria-hidden="true">{c.name.slice(0, 1)}</span>
+        <div className="se-peek-who"><b>{c.name}</b><span>{c.role || "角色"}</span></div>
+      </div>
+      <dl className="se-peek-kv">
+        {identity && identity !== c.role ? (<><dt>身份</dt><dd>{identity}</dd></>) : null}
+        {relation ? (<><dt>和主角</dt><dd>{relation}</dd></>) : null}
+        {now ? (<><dt>此刻</dt><dd>{now}</dd></>) : null}
+        {unknown ? (<><dt>还不知道</dt><dd>{unknown}</dd></>) : null}
+        {!identity && !relation && !now && !unknown ? (<><dt>资料</dt><dd>这个角色还没有详细资料，可以让 AI 补全。</dd></>) : null}
+      </dl>
+      {onOpenCharacter ? (
+        <div className="se-peek-f">
+          <button type="button" onClick={() => { setPeek(null); onOpenCharacter(c.name); }}>在设定本中打开</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
