@@ -23,6 +23,7 @@ import { buildTimelineModel, liveFlowFromMessage, type LiveFlow, type FlowPhaseK
 import { flowHint, primaryPermission, uiText } from "../v2Utils.js";
 import { IconClose, IconCopy, IconSparkle, IconUndo } from "./icons.js";
 import { useActiveModel } from "./useActiveModel.js";
+import { StepCardCollapsedByDefault } from "./StepCard.js";
 import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
 import { parsePaletteCharacters } from "./CommandPalette.js";
 import { buildInboxTodos } from "./inboxTodos.js";
@@ -327,12 +328,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
             「清理早先消息」后消息仍在、展开后同 N 条渲染两遍（2026-09-15 审计 P1-2） */}
         {props.workspace.messages.slice(activeArchivedCount).map((message, index, all) => {
-          const isLiveAssistant = Boolean(props.chatLoading)
-            && message.role === "assistant"
+          const isLatestAssistant = message.role === "assistant"
             && !all.slice(index + 1).some((m) => m.role === "assistant");
+          const isLiveAssistant = Boolean(props.chatLoading) && isLatestAssistant;
           return (
+          // 较早回复里的卡片（定稿明细 / 线索提醒 / 审稿…）默认收起成一行，只有最新一条回复的卡片展开。
+          <StepCardCollapsedByDefault.Provider key={message.id} value={message.role === "assistant" && !isLatestAssistant}>
           <MessageBubbles
-            key={message.id}
             message={message}
             chatLoading={workspaceBusy}
             isLiveAssistant={isLiveAssistant}
@@ -349,6 +351,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onCreateRevisionTask={props.onCreateRevisionTask}
             commitConfirmable={message.id === confirmablePreviewId}
           />
+          </StepCardCollapsedByDefault.Provider>
           );
         })}
 

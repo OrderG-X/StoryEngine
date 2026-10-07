@@ -4,7 +4,7 @@
  * body：折叠区，放各卡自己的结构化内容。无 children 时不可折叠、不出箭头。
  * 样式走 codex.css 的 .step-card / .sc-*（scope .codex-app；暗金，attention=金 / failed=暗红）。
  */
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
 import { formatStepElapsed } from "./chatRenderShared.js";
 
@@ -17,15 +17,24 @@ const DEFAULT_BADGE: Record<StepCardStatus, string> = {
   failed: "失败",
 };
 
-export function StepCard({ title, status, statusLabel, elapsedMs, defaultOpen = true, children }: {
+/**
+ * 对话里「较早的回复」用它把卡片默认收起成一行（2026-10-07 改版：治回执卡层层堆叠，越翻越长）。
+ * 只影响初始开合，点标题照样展开；最新一条回复不包它，卡片照常展开。
+ */
+export const StepCardCollapsedByDefault = createContext(false);
+
+export function StepCard({ title, status, statusLabel, elapsedMs, defaultOpen = true, keepOpen = false, children }: {
   readonly title: string;
   readonly status: StepCardStatus;
   readonly statusLabel?: string;
   readonly elapsedMs?: number;
   readonly defaultOpen?: boolean;
+  /** 卡里有还能点的关键按钮（如「确认定稿」）时永远默认展开，不受「旧回复收起」影响。 */
+  readonly keepOpen?: boolean;
   readonly children?: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const collapsedByDefault = useContext(StepCardCollapsedByDefault);
+  const [open, setOpen] = useState(keepOpen || (defaultOpen && !collapsedByDefault));
   const hasBody = Boolean(children);
   const badge = statusLabel ?? DEFAULT_BADGE[status];
   const elapsed = typeof elapsedMs === "number" && elapsedMs > 0 ? formatStepElapsed(elapsedMs) : null;

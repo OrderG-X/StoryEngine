@@ -34,6 +34,7 @@ export function CommitPreviewCard({
       status={blocked ? "attention" : "done"}
       statusLabel={blocked ? "暂不可定稿" : "可以定稿"}
       defaultOpen
+      keepOpen={Boolean(onConfirm)}
     >
       <p className="cpc-note">
         {blocked
