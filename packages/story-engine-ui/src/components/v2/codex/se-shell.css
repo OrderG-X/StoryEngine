@@ -1,0 +1,79 @@
+/* 2026-10-07 改版 · 外壳：全宽顶栏 + 两栏 + 设置弹窗。全部 scope 在 .codex-app 下（原生嵌套）。
+   配色 token 定义在 codex.css 顶部（.codex-app 块）；这里只用 token，不写死颜色。 */
+.codex-app{
+  .app{height:auto;}
+  /* 旧版中栏的金色光晕 + 点阵底纹撤掉：稿纸和资料靠层级说话，不靠背景装饰。 */
+  .desk::before{display:none;}
+
+  /* ═══ 顶栏 ═══ */
+  .se-top{
+    flex:0 0 auto;height:52px;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+    align-items:center;gap:16px;padding:0 12px 0 10px;
+    background:var(--panel);border-bottom:1px solid var(--line);
+    font-size:13px;
+  }
+  .se-top-l,.se-top-r{display:flex;align-items:center;gap:4px;min-width:0;}
+  .se-top-r{justify-content:flex-end;}
+
+  .se-icon-btn{
+    width:34px;height:34px;flex:none;border:0;border-radius:8px;background:transparent;
+    display:inline-grid;place-items:center;color:var(--muted);cursor:pointer;
+    transition:background .15s,color .15s;
+  }
+  .se-icon-btn:hover{background:var(--hover);color:var(--text);}
+  .se-icon-btn.on{color:var(--accent);background:var(--accent-soft);}
+
+  .se-crumb{display:flex;align-items:center;gap:8px;min-width:0;padding-left:4px;color:var(--muted);white-space:nowrap;}
+  .se-crumb-book{
+    display:inline-flex;align-items:center;gap:4px;min-width:0;height:28px;padding:0 6px;margin-left:-6px;
+    border:0;border-radius:6px;background:transparent;color:var(--text);font-weight:600;cursor:pointer;
+  }
+  .se-crumb-book:hover{background:var(--hover);}
+  .se-crumb-book svg{color:var(--faint);}
+  .se-crumb-name{overflow:hidden;text-overflow:ellipsis;max-width:22ch;}
+  .se-crumb-sep{color:var(--faint);flex:none;}
+  .se-crumb-here{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);}
+
+  .se-seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--bg);border:1px solid var(--line);}
+  .se-seg button{
+    height:28px;padding:0 14px;border:0;border-radius:7px;background:transparent;
+    color:var(--muted);font-size:13px;cursor:pointer;transition:color .15s,background .15s;
+  }
+  .se-seg button:hover{color:var(--text);}
+  .se-seg button.on{background:var(--surface-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.18),0 0 0 1px var(--line);}
+
+  /* 资料中心旧工具条：面包屑已上移到顶栏，只剩右侧搜索 + 只读提示。 */
+  .topbar.se-lib-bar{justify-content:flex-end;}
+
+  /* ═══ 设置弹窗 ═══ */
+  .se-scrim{position:fixed;inset:0;z-index:60;background:var(--scrim);animation:se-fade .14s ease-out;}
+  .se-modal{
+    position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:min(960px,calc(100vw - 32px));height:min(720px,calc(100vh - 48px));
+    display:grid;grid-template-columns:168px minmax(0,1fr);
+    background:var(--panel);border:1px solid var(--line-strong);border-radius:14px;
+    box-shadow:var(--shadow-pop);overflow:hidden;animation:se-fade .14s ease-out;
+  }
+  .se-modal-nav{display:flex;flex-direction:column;gap:2px;padding:16px 10px;border-right:1px solid var(--line);}
+  .se-modal-title{padding:4px 10px 10px;font-size:12px;color:var(--faint);}
+  .se-modal-nav button{
+    height:34px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;
+    color:var(--muted);font-size:13px;cursor:pointer;
+  }
+  .se-modal-nav button:hover{background:var(--hover);color:var(--text);}
+  .se-modal-nav button.on{background:var(--accent-soft);color:var(--text);}
+  .se-modal-body{position:relative;min-width:0;overflow:auto;}
+  .se-modal-close{position:absolute;top:10px;right:10px;z-index:2;}
+  /* 嵌进弹窗的旧设置页：去掉它自带的整页外框与返回键（弹窗已有关闭键）。 */
+  .se-modal-body .ms-close,.se-modal-body .ai-settings-back{display:none;}
+
+  @keyframes se-fade{from{opacity:0}to{opacity:1}}
+
+  @media (max-width:860px){
+    .se-top{grid-template-columns:minmax(0,1fr) auto auto;}
+    .se-crumb-book,.se-crumb-sep{display:none;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .se-scrim,.se-modal{animation:none;}
+  }
+}

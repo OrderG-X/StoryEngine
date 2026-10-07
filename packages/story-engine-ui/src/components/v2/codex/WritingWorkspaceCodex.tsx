@@ -21,11 +21,15 @@ import { SaveStatusPill } from "./SaveStatusPill.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
+import { chapterHeading } from "../v2Utils.js";
+import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSettings } from "./icons.js";
 import "./codex.css";
+import "./se-shell.css";
 
 /**
- * WritingWorkspaceCodex — 按 GLM 设计稿 codex.html 重做的写作工作区三栏外壳（落地进行中）。
- * 左=书架/导航；中=资料中心(codex 视觉) 或 写作台；右=AI 对话。
+ * WritingWorkspaceCodex — 写作工作区外壳。
+ * 2026-10-07 改版：撤掉左侧导航栏，改为全宽顶栏（书名面包屑 / 写作·设定本·历史 / 专注·设置·AI 开关），
+ * 设置改成弹窗；下方两栏 = 中（写作台 / 资料中心 / 操作历史）+ 右（AI 对话）。
  *
  * 落地策略（用户选的 B：直接在主界面渐进替换）：
  *  - 中栏「资料中心」用 codex 新视觉，7 类全接真实数据。
@@ -67,8 +71,10 @@ function readStoredAiWidth(): number {
   return AI_DEFAULT_WIDTH;
 }
 
-// 左栏（书架）基准宽度（px）。界面字号放大时按 uiZoom 放大，避免缩放后字挤/截断。
-const RAIL_BASE_WIDTH = 188;
+// 写作台章节栏基准宽度（px，随 uiZoom 放大）。窄视口让位计算要扣掉它。
+const CHAPTER_RAIL_BASE_WIDTH = 212;
+
+type SettingsTab = "model" | "display";
 
 /** 资料类目卡的鼠标跟手金光：把指针在卡内坐标写进 --mx/--my，CSS ::after 径向光据此定位。 */
 function trackCatLight(event: ReactMouseEvent<HTMLButtonElement>): void {
@@ -113,11 +119,11 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   }, []);
   const [rightWidth, setRightWidth] = useState(readStoredAiWidth);
   // P1-5：空书首次进入默认落写作台（非资料中心）。
-  const [view, setView] = useState<"library" | "desk" | "history" | "settings" | "display">(() =>
+  const [view, setView] = useState<"library" | "desk" | "history">(() =>
     defaultCenterViewForWorkspace(props.workspace),
   );
-  // 设置类整页占满全窗口（隐藏左右栏）；settings/display 之外的视图保持三栏。
-  const isFullscreenView = (view as string) === "settings" || (view as string) === "display";
+  // 设置改成弹窗（不再占中栏整页），null = 关着。
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [cat, setCat] = useState<string>("world");
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting);
   const [chapterQuery, setChapterQuery] = useState("");
@@ -147,6 +153,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const realChapterCount = countRealChapters(chapters, currentChapter.chapterNumber);
   const currentId = currentChapter.id;
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
+  const crumbHere = view === "desk"
+    ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")
+    : view === "library" ? `设定本 · ${catTitle}` : "操作历史";
 
   // 资料全局搜索（打磨D）：跨类目搜 sidebar 已聚合的分类标签，命中可一键跳到对应类目。
   // 世界观面板的数据是面板内单独拉取的（不在 props），故搜不到——只覆盖 sidebar 已有的 5 类。
@@ -183,6 +192,13 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     window.addEventListener("pointerup", onUp);
   }
 
+  useEffect(() => {
+    if (!settingsTab) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setSettingsTab(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsTab]);
+
   // 宽度变化落盘（下次进来记住）。
   useEffect(() => {
     try { window.localStorage.setItem("codex.aiWidth", String(rightWidth)); } catch { /* 忽略 */ }
@@ -199,9 +215,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(i + 1).includes(chapterFilter))
     : chapters;
 
-  // 左栏宽度随界面字号放大：避免放大后书架文字挤/截断。catrail（资料类目栏）宽度在 codex.css
-  // 里用 calc(... * var(--codex-ui-zoom)) 同步放大。
-  const railWidth = Math.round(RAIL_BASE_WIDTH * uiZoom);
+  // 写作台章节栏展开时占的宽度（随界面字号放大），窄视口让位要扣掉它。
+  const chapterRailWidth = view === "desk" && deskRailOpen ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
 
   // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
   // 连右栏硬下限都装不下时默认自动收成 44px 竖条；用户没碰过展开/收起时窗口变宽自动恢复，
@@ -212,8 +227,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const aiWidthThatFits = viewportWidth - railWidth - MID_MIN_WIDTH;
-  const aiAutoCollapsed = !isFullscreenView && aiWidthThatFits < AI_FIT_MIN_WIDTH;
+  const aiWidthThatFits = viewportWidth - chapterRailWidth - MID_MIN_WIDTH;
+  const aiAutoCollapsed = aiWidthThatFits < AI_FIT_MIN_WIDTH;
   const effectiveRightOpen = resolveRightPanelOpen(rightOpen, aiAutoCollapsed, aiManualToggled);
   const effectiveRightWidth = Math.max(AI_FIT_MIN_WIDTH, Math.min(rightWidth, aiWidthThatFits));
 
@@ -227,68 +242,72 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           未检测到 git：快照与撤销功能不可用（写作不受影响）。安装 git 后重启应用即可恢复。
         </div>
       )}
-      {/* 设置类整页（AI 设置/显示设置）隐藏右 AI 栏（保留左侧栏）：让设置页有更宽空间。
-          其他视图保持三栏（第 3 列宽度可拖 rightWidth、随视口自动压缩 effectiveRightWidth；折叠/装不下时 44px 回收写作空间。左栏宽度随 uiZoom 放大）。 */}
-      <div className="app" style={{ gridTemplateColumns: isFullscreenView ? `${railWidth}px minmax(0, 1fr)` : `${railWidth}px minmax(0, 1fr) ${effectiveRightOpen ? effectiveRightWidth : 44}px` }}>
-        {/* ══ 左：书架 ══ */}
-        <aside className="rail">
-          <div
-            className="brand"
-            role="button"
-            tabIndex={0}
-            title="返回书架（首页）"
-            style={{ cursor: "pointer" }}
-            onClick={() => props.onGoHome?.()}
-            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onGoHome?.(); } }}
+      <header className="se-top">
+        <div className="se-top-l">
+          {view === "desk" ? (
+            <button
+              className={`se-icon-btn${deskRailOpen ? " on" : ""}`}
+              type="button"
+              aria-label={deskRailOpen ? "收起章节列表" : "展开章节列表"}
+              aria-pressed={deskRailOpen}
+              title="章节列表"
+              onClick={() => setDeskRailOpen(!deskRailOpen)}
+            >
+              <IconPanelLeft />
+            </button>
+          ) : null}
+          <nav className="se-crumb" aria-label="当前位置">
+            <button className="se-crumb-book" type="button" title="返回书架" onClick={() => props.onGoHome?.()}>
+              <IconChevronLeft size={14} strokeWidth={1.8} />
+              <span className="se-crumb-name">{projectName}</span>
+            </button>
+            <span className="se-crumb-sep" aria-hidden="true">/</span>
+            <span className="se-crumb-here">{crumbHere}</span>
+          </nav>
+        </div>
+        <nav className="se-seg" aria-label="视图">
+          <button className={view === "desk" ? "on" : ""} type="button" aria-pressed={view === "desk"} onClick={() => setView("desk")}>写作</button>
+          <button className={view === "library" ? "on" : ""} type="button" aria-pressed={view === "library"} onClick={() => setView("library")}>设定本</button>
+          <button className={view === "history" ? "on" : ""} type="button" aria-pressed={view === "history"} onClick={() => setView("history")}>历史</button>
+        </nav>
+        <div className="se-top-r">
+          <button
+            className={`se-icon-btn${focusWriting ? " on" : ""}`}
+            type="button"
+            aria-label="专注写作"
+            aria-pressed={focusWriting}
+            title="专注写作（收起两侧）"
+            onClick={() => {
+              if (!focusWriting) setView("desk");
+              useDisplaySettingsStore.getState().toggleFocusWriting();
+            }}
           >
-            <div className="mark">书</div>
-            <div className="name">STORY ENGINE<small>写作引擎 · v2</small></div>
-          </div>
-          <div className="book">
-            <div className="bk-title">{projectName}</div>
-            <div className="bk-meta">长篇 · 当前第 {currentChapter.chapterNumber} 章</div>
-            <div className="bk-meta" style={{ marginTop: 5 }}>共 {realChapterCount} 章</div>
-          </div>
-          <div className="nav-sec">导航</div>
-          <button className={`nav-item ${view === "library" ? "on" : ""}`} onClick={() => setView("library")} type="button">
-            <span className="ic">▦</span>资料中心
+            <IconFocus />
           </button>
-          <button className={`nav-item ${view === "desk" ? "on" : ""}`} onClick={() => setView("desk")} type="button">
-            <span className="ic">✎</span>写作台
+          <button className="se-icon-btn" type="button" aria-label="设置" title="设置" onClick={() => setSettingsTab("model")}>
+            <IconSettings />
           </button>
-          <button className={`nav-item ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")} type="button" title="AI 服务与模型设置">
-            <span className="ic">⚙</span>AI 设置
+          <button
+            className={`se-icon-btn${effectiveRightOpen ? " on" : ""}`}
+            type="button"
+            aria-label={effectiveRightOpen ? "收起 AI 助手" : "展开 AI 助手"}
+            aria-pressed={effectiveRightOpen}
+            title="AI 助手"
+            onClick={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
+          >
+            <IconPanelRight />
           </button>
-          <button className={`nav-item ${view === "display" ? "on" : ""}`} onClick={() => setView("display")} type="button" title="界面显示与字号">
-            <span className="ic">◐</span>显示设置
-          </button>
-          {/* 章节列表已移到「写作台」视图的章节竖轨（资料中心视图换章走「章节」类目）。 */}
-
-          {/* 底部工具区：操作历史。用量入口已撤（流式草稿拿不回 provider usage、长期为 0，无实际意义）。 */}
-          <div className="rail-spacer" />
-          <div className="nav-sec">工具</div>
-          <button className={`nav-item ${view === "history" ? "on" : ""}`} onClick={() => setView("history")} type="button" title="操作历史 / 快照恢复">
-            <span className="ic">⟲</span>操作历史
-          </button>
-        </aside>
-
+        </div>
+      </header>
+      <div className="app" style={{ gridTemplateColumns: `minmax(0, 1fr) ${effectiveRightOpen ? effectiveRightWidth : 44}px` }}>
         {/* ══ 中：资料中心 / 写作台 ══ */}
         <main className="desk">
           <div key={view} className="view-anim">
-          {view === "settings" ? (
-            <ModelSettingsEmbedded onBack={() => setView("desk")} />
-          ) : view === "display" ? (
-            <DisplaySettingsEmbedded onBack={() => setView("desk")} />
-          ) : view === "history" ? (
+          {view === "history" ? (
             <OperationHistoryView projectPath={props.projectPath} />
           ) : view === "library" ? (
             <>
-              <div className="topbar">
-                <div className="crumbs">
-                  <b>{projectName}</b><span className="sep">/</span>
-                  <span className="here">资料中心</span><span className="sep">/</span>
-                  <span>{catTitle}</span>
-                </div>
+              <div className="topbar se-lib-bar">
                 <div className="right">
                   {/* 资料全局搜索（D）：跨类目找人/物/设定，点结果跳类目。 */}
                   <div className="lib-search-wrap">
@@ -424,17 +443,35 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         </main>
 
         {/* ══ 右：AI 对话（codex 视觉，AiChatCodex；唯一控制面） ══ */}
-        {!isFullscreenView && (
-          <AiChatCodex
-            {...props}
-            rightOpen={effectiveRightOpen}
-            // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
-            // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
-            onToggleRight={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
-            onResizeStart={handleResizeStart}
-          />
-        )}
+        <AiChatCodex
+          {...props}
+          rightOpen={effectiveRightOpen}
+          // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
+          // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
+          onToggleRight={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
+          onResizeStart={handleResizeStart}
+        />
       </div>
+      {settingsTab ? (
+        <>
+          <div className="se-scrim" aria-hidden="true" onClick={() => setSettingsTab(null)} />
+          <div className="se-modal" role="dialog" aria-modal="true" aria-label="设置">
+            <nav className="se-modal-nav" aria-label="设置分类">
+              <span className="se-modal-title">设置</span>
+              <button className={settingsTab === "model" ? "on" : ""} type="button" onClick={() => setSettingsTab("model")}>模型</button>
+              <button className={settingsTab === "display" ? "on" : ""} type="button" onClick={() => setSettingsTab("display")}>显示</button>
+            </nav>
+            <div className="se-modal-body">
+              <button className="se-icon-btn se-modal-close" type="button" aria-label="关闭设置" onClick={() => setSettingsTab(null)}>
+                <IconClose />
+              </button>
+              {settingsTab === "model"
+                ? <ModelSettingsEmbedded onBack={() => setSettingsTab(null)} />
+                : <DisplaySettingsEmbedded onBack={() => setSettingsTab(null)} />}
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
