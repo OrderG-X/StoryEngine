@@ -24,6 +24,7 @@ import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
 import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSearch, IconSettings } from "./icons.js";
+import "./se-tokens.css";
 import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";

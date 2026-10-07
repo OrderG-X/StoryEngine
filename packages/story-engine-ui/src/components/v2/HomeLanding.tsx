@@ -2,22 +2,43 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "../ui/dialog";
 import NewBookStarter from "../NewBookStarter.js";
 import OpenBookDialog from "../OpenBookDialog.js";
-import { useCursorSpotlight } from "../../hooks/useCursorSpotlight.js";
-import { coverTiltTransform } from "../../hooks/coverTilt.js";
 import { useMotionStore } from "../../stores/motionStore.js";
 import type { BookSummary, HomePageProps } from "../../types.js";
-import apocalypseCover from "../../assets/covers/apocalypse.png";
-import fantasyCover from "../../assets/covers/fantasy.png";
-import heroStudyCover from "../../assets/covers/hero-study.png";
-import literaryCover from "../../assets/covers/literary.png";
-import mysteryCover from "../../assets/covers/mystery.png";
-import scifiCover from "../../assets/covers/scifi.png";
-import urbanCover from "../../assets/covers/urban.png";
-import xianxiaCover from "../../assets/covers/xianxia.png";
+import "./codex/se-tokens.css";
+import "./home.css";
 
-/** 首页书卡进度条：已写章数 / 当前章号（都是真实章数）。不写死目标章数——长篇没有「12 章就写完」这回事。 */
-function bookProgress(book: BookSummary): number {
-  return Math.min(100, Math.round((book.writtenChapters / Math.max(1, book.currentChapterNumber)) * 100));
+const COVER_TONES = 7;
+
+/** 书名 → 稳定的封面色号（同一本书永远同色）。 */
+export function coverTone(title: string): number {
+  let h = 0;
+  for (let i = 0; i < title.length; i += 1) h = (h * 31 + title.charCodeAt(i)) >>> 0;
+  return h % COVER_TONES;
+}
+
+/** 纯中文短书名竖排（像书脊），夹英文/数字或太长的横排，避免竖排里字母横躺。 */
+export function coverIsVertical(title: string): boolean {
+  return /^[\u4e00-\u9fa5]{1,8}$/u.test(title);
+}
+
+function formatWords(totalWords: number): string {
+  if (totalWords >= 10000) return `${(totalWords / 10000).toFixed(1)} 万字`;
+  return `${totalWords.toLocaleString()} 字`;
+}
+
+const STATUS_PILL: Record<BookSummary["status"], { readonly label: string; readonly tone: string }> = {
+  草稿中: { label: "工作稿", tone: "warn" },
+  待确认: { label: "待定稿", tone: "warn" },
+  可继续下一章: { label: "已定稿", tone: "ok" },
+};
+
+function BookCover({ title, large = false }: { readonly title: string; readonly large?: boolean }) {
+  return (
+    <span className={`se-cover tone-${coverTone(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
+      <span className="se-cover-t">{title}</span>
+      {large ? <span className="se-cover-seal" /> : null}
+    </span>
+  );
 }
 
 export default function HomeLanding({
@@ -39,108 +60,123 @@ export default function HomeLanding({
   const [renameTarget, setRenameTarget] = useState<BookSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
-  const homeRef = useRef<HTMLElement>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
-  useCursorSpotlight(homeRef, !reduceMotion);
   const lastBook = recentBooks[0];
 
   const showFeedback = (message: string) => setFeedbackMessage(message);
   const findBook = (bookId: string) => recentBooks.find((book) => book.id === bookId);
-  const progress = lastBook ? bookProgress(lastBook) : 0;
   const closeDeleteDialog = () => {
     setDeleteTarget(null);
   };
 
   return (
     <main
-      ref={homeRef}
       className={`se-v2-home${reduceMotion ? " is-reduced-motion" : ""}`}
       aria-label="StoryEngine 首页"
     >
-      <header className="se-v2-home-header">
-        <div aria-label="StoryEngine 品牌" className="se-v2-home-brand">
-          <span>SE</span>
+      <header className="se-home-top">
+        <div aria-label="StoryEngine 品牌" className="se-home-brand">
+          <span className="se-home-mark" aria-hidden="true">书</span>
           <strong>StoryEngine</strong>
         </div>
-        <button className="se-v2-home-settings" onClick={onOpenSettings} type="button">设置</button>
+        <button className="se-home-settings" onClick={onOpenSettings} type="button">设置</button>
       </header>
 
-      <section className="se-v2-home-main">
-        <div className="se-v2-home-hero" aria-hidden="true">
-          <img alt="" className="se-v2-home-hero-image" src={heroStudyCover} />
-        </div>
-
-        {lastBook ? (
-          <button className="se-v2-continue-card" onClick={() => onOpenRecentBook(lastBook.id)} type="button">
-            <span>继续上次写作</span>
-            <strong>《{lastBook.title}》</strong>
-            <small>第 {lastBook.currentChapterNumber} 章 · {lastBook.updatedAt}</small>
-            <i><b style={{ width: `${progress}%` }} /></i>
-          </button>
-        ) : (
-          <section className="se-v2-continue-card is-empty">
-            <span>继续上次写作</span>
-            <strong>还没有最近书籍</strong>
-            <small>新建一本书，或打开已有 StoryEngine 项目。</small>
-            <i><b style={{ width: "8%" }} /></i>
-          </section>
-        )}
-
-        <div className="se-v2-home-actions">
-          <button onClick={() => setDialog("create")} type="button">
-            <span>+</span>
-            <strong>新建书籍</strong>
-          </button>
-          <button onClick={() => setDialog("open")} type="button">
-            <span>□</span>
-            <strong>打开已有书籍</strong>
-          </button>
-        </div>
-
-        <section aria-label="最近写作" className="se-v2-recent-section">
-          <header>
-            <span>最近写作</span>
-            {feedbackMessage ? <small>{feedbackMessage}</small> : null}
-          </header>
-          {recentBooks.length === 0 ? (
-            <div className="se-v2-recent-empty">
-              <strong>还没有最近写作</strong>
-              <p>可以新建一本书，或打开已有项目。</p>
+      <div className="se-home-scroll">
+        <div className="se-home-inner">
+          <div className="se-home-head">
+            <div>
+              <h1>书架</h1>
+              <p>{recentBooks.length > 0 ? `${recentBooks.length} 本书` : "还没有书"}</p>
             </div>
+            <div className="se-home-actions">
+              <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
+              <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
+            </div>
+          </div>
+
+          {lastBook ? (
+            <section className="se-hero" aria-label="继续上次写作">
+              <button className="se-hero-cover" onClick={() => onOpenRecentBook(lastBook.id)} type="button" aria-label={`打开《${lastBook.title}》`}>
+                <BookCover title={lastBook.title} large />
+              </button>
+              <div className="se-hero-info">
+                <p className="se-eyebrow">继续写</p>
+                <h2>{lastBook.title}</h2>
+                <p className="se-hero-meta">
+                  {lastBook.genre ? <span>{lastBook.genre}</span> : null}
+                  <span>{lastBook.writtenChapters} 章</span>
+                  <span>{formatWords(lastBook.totalWords)}</span>
+                  {lastBook.protagonistName ? <span>主角 {lastBook.protagonistName}</span> : null}
+                </p>
+                <div className="se-hero-last">
+                  <span className="se-faint">上次写到</span>
+                  <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
+                  <span className={`se-pill ${STATUS_PILL[lastBook.status]?.tone ?? ""}`}>{STATUS_PILL[lastBook.status]?.label ?? lastBook.status}</span>
+                  <span className="se-faint">· {lastBook.updatedAt}</span>
+                </div>
+                <div className="se-hero-actions">
+                  <button className="se-btn primary" onClick={() => onOpenRecentBook(lastBook.id)} type="button">继续写</button>
+                </div>
+              </div>
+            </section>
           ) : (
-            <div className="se-v2-recent-grid">
-              {recentBooks.map((book, index) => (
-                <RecentBook
-                  book={book}
-                  index={index}
-                  key={book.id}
-                  onDelete={(bookId) => {
-                    const bookToDelete = findBook(bookId);
-                    if (!bookToDelete) return;
-                    setDeleteTarget(bookToDelete);
-                  }}
-                  onOpen={onOpenRecentBook}
-                  onOpenFolder={(bookId) => {
-                    void onOpenRecentBookFolder(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
-                  }}
-                  onRemove={(bookId) => {
-                    const bookToRemove = findBook(bookId);
-                    if (!bookToRemove) return;
-                    if (!window.confirm(`从最近写作中移除《${bookToRemove.title}》？不会删除本地项目文件。`)) return;
-                    void onRemoveRecentBook(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
-                  }}
-                  onRename={(bookId) => {
-                    const bookToRename = findBook(bookId);
-                    if (!bookToRename) return;
-                    setRenameTarget(bookToRename);
-                    setRenameValue(bookToRename.title);
-                  }}
-                />
-              ))}
-            </div>
+            <section className="se-hero is-empty" aria-label="开始">
+              <div className="se-hero-info">
+                <h2>从一本新书开始</h2>
+                <p className="se-hero-meta"><span>起个名字、用一句话说说想写什么，AI 会帮你把开头的设定搭起来。也可以打开已有的 StoryEngine 项目。</span></p>
+                <div className="se-hero-actions">
+                  <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
+                  <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
+                </div>
+              </div>
+            </section>
           )}
-        </section>
-      </section>
+
+          <section aria-label="最近写作" className="se-shelf-section">
+            <header>
+              <h2>全部书</h2>
+              {feedbackMessage ? <small role="status">{feedbackMessage}</small> : null}
+            </header>
+            {recentBooks.length === 0 ? (
+              <div className="se-shelf-empty">
+                <strong>还没有最近写作</strong>
+                <p>可以新建一本书，或打开已有项目。</p>
+              </div>
+            ) : (
+              <div className="se-shelf-grid">
+                {recentBooks.map((book) => (
+                  <RecentBook
+                    book={book}
+                    key={book.id}
+                    onDelete={(bookId) => {
+                      const bookToDelete = findBook(bookId);
+                      if (!bookToDelete) return;
+                      setDeleteTarget(bookToDelete);
+                    }}
+                    onOpen={onOpenRecentBook}
+                    onOpenFolder={(bookId) => {
+                      void onOpenRecentBookFolder(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
+                    }}
+                    onRemove={(bookId) => {
+                      const bookToRemove = findBook(bookId);
+                      if (!bookToRemove) return;
+                      if (!window.confirm(`从最近写作中移除《${bookToRemove.title}》？不会删除本地项目文件。`)) return;
+                      void onRemoveRecentBook(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
+                    }}
+                    onRename={(bookId) => {
+                      const bookToRename = findBook(bookId);
+                      if (!bookToRename) return;
+                      setRenameTarget(bookToRename);
+                      setRenameValue(bookToRename.title);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
 
       <NewBookStarter
         open={dialog === "create"}
@@ -237,7 +273,6 @@ export default function HomeLanding({
 
 function RecentBook({
   book,
-  index,
   onDelete,
   onOpen,
   onOpenFolder,
@@ -245,7 +280,6 @@ function RecentBook({
   onRename,
 }: {
   readonly book: BookSummary;
-  readonly index: number;
   readonly onDelete: (bookId: string) => void;
   readonly onOpen: (bookId: string) => void;
   readonly onOpenFolder: (bookId: string) => void;
@@ -253,11 +287,8 @@ function RecentBook({
   readonly onRename: (bookId: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const progress = bookProgress(book);
-  const coverRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLMenuElement>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
-  const reduceMotion = useMotionStore((s) => s.reduceMotion);
   // 菜单收口：点菜单外/按 Esc 关闭。否则菜单(absolute z-index:60)会一直浮在卡上、
   // 盖住「···」按钮，导致改名等动作后再点菜单被拦截(真机 V6 回归根因)。
   useEffect(() => {
@@ -275,42 +306,20 @@ function RecentBook({
       document.removeEventListener("keydown", onKey);
     };
   }, [menuOpen]);
-  const onCoverMove = (event: React.MouseEvent) => {
-    if (reduceMotion) return;
-    const el = coverRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    el.style.transform = coverTiltTransform(
-      (event.clientX - rect.left) / rect.width,
-      (event.clientY - rect.top) / rect.height,
-    );
-  };
-  const onCoverLeave = () => {
-    if (coverRef.current) coverRef.current.style.transform = "";
-  };
 
   return (
-    <article className="se-v2-recent-book">
-      <button
-        aria-label={`打开《${book.title}》`}
-        className="se-v2-cover"
-        onClick={() => onOpen(book.id)}
-        onMouseLeave={onCoverLeave}
-        onMouseMove={onCoverMove}
-        ref={coverRef}
-        type="button"
-      >
-        <img alt="" src={coverForGenre(book.genre)} />
+    <article className="se-book">
+      <button aria-label={`打开《${book.title}》`} className="se-book-open" onClick={() => onOpen(book.id)} title={book.title} type="button">
+        <BookCover title={book.title} />
       </button>
-      <div className="se-v2-recent-info">
-        <div>
-          <h3>《{book.title}》</h3>
-          <button aria-label="书籍管理" onClick={() => setMenuOpen((current) => !current)} ref={menuBtnRef} type="button">···</button>
+      <div className="se-book-info">
+        <div className="se-book-row">
+          <h3 title={book.title}>{book.title}</h3>
+          <button aria-label="书籍管理" className="se-book-more" onClick={() => setMenuOpen((current) => !current)} ref={menuBtnRef} type="button">···</button>
         </div>
-        <p>第 {book.currentChapterNumber} 章 · {book.updatedAt}</p>
-        <i><b style={{ width: `${progress}%` }} /></i>
+        <p>{book.writtenChapters} 章 · {book.updatedAt}</p>
         {menuOpen ? (
-          <menu className="se-v2-book-menu" ref={menuRef}>
+          <menu className="se-book-menu" ref={menuRef}>
             <button onClick={() => { setMenuOpen(false); onOpen(book.id); }} type="button">继续写作</button>
             <button onClick={() => { setMenuOpen(false); onRename(book.id); }} type="button">重命名</button>
             <button onClick={() => { setMenuOpen(false); onRemove(book.id); }} type="button">从最近写作移除</button>
@@ -321,15 +330,4 @@ function RecentBook({
       </div>
     </article>
   );
-}
-
-function coverForGenre(genre: string): string {
-  const normalized = genre.toLowerCase();
-  if (/末日|废土|灾变|survival|apocalypse/u.test(normalized)) return apocalypseCover;
-  if (/民俗|克苏鲁|诡异|恐怖|惊悚|悬疑|mystery|horror/u.test(normalized)) return mysteryCover;
-  if (/科幻|星港|太空|赛博|机甲|sci|cyber|space/u.test(normalized)) return scifiCover;
-  if (/修仙|仙侠|玄幻|灵气|cultivation|xianxia/u.test(normalized)) return xianxiaCover;
-  if (/都市|异能|英灵|创业|urban/u.test(normalized)) return urbanCover;
-  if (/奇幻|魔法|fantasy/u.test(normalized)) return fantasyCover;
-  return literaryCover;
 }

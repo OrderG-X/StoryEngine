@@ -87,19 +87,15 @@ describe("HomeLanding", () => {
     expect(recentSection).toHaveTextContent("可以新建一本书，或打开已有项目");
   });
 
-  it("书卡进度条 = 已写章数 / 当前章号（真实章数），不再写死 /12", () => {
-    // 已写 30 / 当前第 40 章 → 75%；旧的 /12 会顶满 100%（长篇永远低估）。
-    const book = { ...recentBook(), writtenChapters: 30, currentChapterNumber: 40 };
+  it("改版：书卡与继续写卡显示真实章数和字数（撤掉恒近满格、没信息量的进度条）", () => {
+    const book = { ...recentBook(), writtenChapters: 30, currentChapterNumber: 40, totalWords: 123456 };
     const { container } = render(<HomeLanding {...homeProps({ recentBooks: [book] })} />);
 
-    const recentBar = container.querySelector(".se-v2-recent-book i b");
-    expect(recentBar).not.toBeNull();
-    expect((recentBar as HTMLElement).style.width).toBe("75%");
-
-    // 顶部「继续上次写作」卡同口径。
-    const continueBar = container.querySelector(".se-v2-continue-card i b");
-    expect(continueBar).not.toBeNull();
-    expect((continueBar as HTMLElement).style.width).toBe("75%");
+    expect(container.querySelector(".se-book-info p")).toHaveTextContent("30 章");
+    const hero = screen.getByRole("region", { name: "继续上次写作" });
+    expect(hero).toHaveTextContent("30 章");
+    expect(hero).toHaveTextContent("12.3 万字");
+    expect(hero).toHaveTextContent("第 40 章");
   });
 });
 

@@ -1,0 +1,125 @@
+/* 2026-10-07 改版 · 书架首页。scope 在 .se-v2-home 下（原生嵌套），只用 se-tokens.css 的 token。
+   旧版图片封面 / 鼠标光斑 / 封面倾斜全部撤掉：封面改纯文字排版，按书名稳定取色。 */
+.se-v2-home{
+  --cover-0:#3b4a43; --cover-1:#4a3f35; --cover-2:#3f4552; --cover-3:#51403f; --cover-4:#454a3a; --cover-5:#3d4650; --cover-6:#4b4140;
+  --cover-ink:rgba(255,255,255,.92);
+
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  background:var(--bg);color:var(--text);
+  font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;
+
+  *{box-sizing:border-box;}
+  ::selection{background:rgba(217,169,111,.28);}
+  button{font:inherit;color:inherit;}
+  :where(button):focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .se-home-top{
+    flex:none;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);
+  }
+  .se-home-brand{display:flex;align-items:center;gap:8px;font-size:14px;}
+  .se-home-brand strong{font-weight:600;}
+  .se-home-mark{
+    width:24px;height:24px;border-radius:6px;display:grid;place-items:center;
+    background:var(--accent);color:var(--accent-ink);font-family:"Noto Serif SC","Songti SC",serif;font-size:14px;font-weight:600;
+  }
+  .se-home-settings{height:32px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;}
+  .se-home-settings:hover{background:var(--hover);color:var(--text);}
+
+  .se-home-scroll{flex:1;min-height:0;overflow-y:auto;}
+  .se-home-inner{max-width:1080px;margin:0 auto;padding:36px 40px 64px;}
+  .se-home-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap;}
+  .se-home-head h1{margin:0;font-size:24px;line-height:1.3;}
+  .se-home-head p{margin:4px 0 0;font-size:13px;color:var(--muted);}
+  .se-home-actions{display:flex;gap:8px;}
+
+  .se-btn{height:34px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;}
+  .se-btn.primary{border:0;background:var(--accent);color:var(--accent-ink);}
+  .se-btn.primary:hover{filter:brightness(1.06);}
+  .se-btn.ghost{border:1px solid var(--line-strong);background:transparent;color:var(--text);}
+  .se-btn.ghost:hover{background:var(--hover);}
+
+  .se-faint{color:var(--faint);}
+  .se-eyebrow{margin:0 0 8px;font-size:12px;color:var(--faint);}
+  .se-pill{display:inline-flex;align-items:center;font-size:12px;line-height:20px;padding:0 8px;border-radius:999px;color:var(--muted);background:var(--hover);}
+  .se-pill.ok{color:var(--success);background:var(--success-soft);}
+  .se-pill.warn{color:var(--warn);background:var(--warn-soft);}
+
+  /* ── 封面 ── */
+  .se-cover{
+    position:relative;display:flex;justify-content:center;width:100%;aspect-ratio:3/4;padding:14px 0;overflow:hidden;
+    border-radius:4px 8px 8px 4px;background:var(--cover-0);
+    box-shadow:inset 6px 0 0 rgba(0,0,0,.14),0 10px 24px -14px rgba(0,0,0,.6);
+    transition:transform .15s;
+  }
+  .se-cover.tone-1{background:var(--cover-1);} .se-cover.tone-2{background:var(--cover-2);} .se-cover.tone-3{background:var(--cover-3);}
+  .se-cover.tone-4{background:var(--cover-4);} .se-cover.tone-5{background:var(--cover-5);} .se-cover.tone-6{background:var(--cover-6);}
+  .se-cover-t{
+    writing-mode:vertical-rl;max-height:100%;overflow:hidden;color:var(--cover-ink);
+    font-family:"Noto Serif SC","Songti SC",serif;font-weight:600;font-size:17px;letter-spacing:.12em;line-height:1.3;
+  }
+  .se-cover.is-h{justify-content:flex-start;align-items:flex-start;padding:16px 14px 14px 18px;}
+  .se-cover.is-h .se-cover-t{
+    writing-mode:horizontal-tb;letter-spacing:0;font-size:14px;line-height:1.45;word-break:break-all;
+    display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;
+  }
+  .se-cover.is-lg .se-cover-t{font-size:20px;}
+  .se-cover-seal{position:absolute;left:10px;bottom:10px;width:18px;height:18px;border-radius:3px;background:rgba(190,70,50,.75);}
+
+  /* ── 继续写 ── */
+  .se-hero{
+    display:grid;grid-template-columns:132px minmax(0,1fr);gap:28px;align-items:center;margin-bottom:36px;padding:24px;
+    border-radius:16px;background:var(--surface-2);border:1px solid var(--line);
+  }
+  .se-hero.is-empty{grid-template-columns:minmax(0,1fr);}
+  .se-hero-cover{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
+  .se-hero-cover:hover .se-cover{transform:translateY(-2px);}
+  .se-hero-info{min-width:0;}
+  .se-hero h2{margin:0;font-family:"Noto Serif SC","Songti SC",serif;font-size:26px;line-height:1.3;overflow-wrap:anywhere;}
+  .se-hero-meta{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--muted);}
+  .se-hero-last{margin:16px 0 0;padding:12px 14px;border-radius:10px;background:var(--bg);display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:13px;}
+  .se-hero-last b{font-weight:500;}
+  .se-hero-actions{display:flex;gap:8px;margin-top:18px;}
+
+  /* ── 全部书 ── */
+  .se-shelf-section > header{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;}
+  .se-shelf-section h2{margin:0;font-size:18px;}
+  .se-shelf-section small{font-size:12px;color:var(--muted);}
+  .se-shelf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:28px 22px;}
+  .se-shelf-empty{padding:24px;border:1px dashed var(--line-strong);border-radius:12px;text-align:center;color:var(--faint);font-size:13px;}
+  .se-shelf-empty strong{display:block;color:var(--text);font-weight:500;margin-bottom:4px;}
+  .se-shelf-empty p{margin:0;}
+  .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
+  .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
+  .se-book-open:hover .se-cover{transform:translateY(-2px);}
+  .se-book-info{position:relative;min-width:0;}
+  .se-book-row{display:flex;align-items:flex-start;gap:4px;}
+  .se-book-row h3{
+    flex:1;min-width:0;margin:0;font-size:14px;font-weight:500;line-height:1.45;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-all;
+  }
+  .se-book-more{
+    flex:none;width:24px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--faint);cursor:pointer;
+    font-size:12px;letter-spacing:-.05em;opacity:.7;
+  }
+  .se-book:hover .se-book-more,.se-book-more:focus-visible,.se-book-more[aria-expanded="true"]{opacity:1;}
+  .se-book-more:hover{background:var(--hover);color:var(--text);}
+  .se-book-info p{margin:2px 0 0;font-size:12px;color:var(--faint);}
+  .se-book-menu{
+    position:absolute;top:26px;right:0;z-index:60;min-width:168px;margin:0;padding:4px;list-style:none;
+    display:flex;flex-direction:column;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);
+  }
+  .se-book-menu button{height:32px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;font-size:13px;color:var(--text);cursor:pointer;}
+  .se-book-menu button:hover{background:var(--hover);}
+  .se-book-menu button.is-danger{color:var(--danger);}
+
+  @media (max-width:860px){
+    .se-home-inner{padding:24px 16px 48px;}
+    .se-hero{grid-template-columns:96px minmax(0,1fr);gap:18px;padding:18px;}
+  }
+  &.is-reduced-motion .se-cover{transition:none;}
+  @media (prefers-reduced-motion:reduce){
+    .se-cover{transition:none;}
+  }
+}

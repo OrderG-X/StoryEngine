@@ -1,20 +1,6 @@
 /* 来自 GLM 设计稿 codex.html、作用域隔离版（全部规则包进 .codex-app，原生 CSS 嵌套；不污染全局）。 */
 .codex-app{
-  /* 2026-10-07 改版配色：暖灰底 + 单一琥珀强调色；正文对比度 ≥ 4.5（faint 也过 AA）。 */
-  --bg:#131211; --panel:#191816; --surface:#1d1c19; --surface-2:#22201d; --sheet:#1b1a17;
-  --line:rgba(255,255,255,.08); --line-weak:rgba(255,255,255,.06); --line-faint:rgba(255,255,255,.05);
-  --line-strong:rgba(255,255,255,.15);
-  --text:#ece7df; --muted:#aba498; --faint:#948d82;
-  --accent:#d9a96f; --accent-hi:#d9a96f; --accent-ink:#20170c; --accent-soft:rgba(217,169,111,.13);
-  --accent-line:rgba(217,169,111,.32); --accent-line-soft:rgba(217,169,111,.18);
-  --danger:#e0897c; --danger-soft:rgba(224,137,124,.13);
-  --success:#92bf98; --success-soft:rgba(146,191,152,.13);
-  --warn:#e2a75c; --warn-soft:rgba(226,167,92,.13);
-  --info:#aba498; --info-soft:rgba(171,164,152,.13);
-  --hover:rgba(255,255,255,.05); --scrim:rgba(0,0,0,.55);
-  --shadow-pop:0 18px 50px -18px rgba(0,0,0,.7);
-  --read-max:680px;
-  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
+  /* 配色 token 已移到 se-tokens.css（工作区与书架共用）。 */
   --shadow-card:0 1px 0 rgba(255,255,255,.02), 0 12px 30px -16px rgba(0,0,0,.6);
 
   margin:0; height:100vh;
