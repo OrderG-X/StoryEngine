@@ -1,0 +1,61 @@
+/* 2026-10-07 改版 · 设定本（资料中心）导航 + 操作历史。scope 在 .codex-app 下，只用 token。 */
+.codex-app{
+  /* ═══ 设定本 ═══ */
+  .codex.se-bible{grid-template-columns:calc(220px * var(--codex-ui-zoom,1)) minmax(0,1fr);}
+  .se-bnav{
+    display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;padding:16px 10px;
+    background:var(--panel);border-right:1px solid var(--line);zoom:var(--codex-ui-zoom,1);
+  }
+  .se-bnav .lib-search-wrap{margin:0 0 10px;}
+  .se-bnav .se-field-search{margin:0 2px;}
+  .se-bnav .lib-search-pop{left:0;right:auto;width:300px;border-color:var(--line-strong);background:var(--surface-2);box-shadow:var(--shadow-pop);}
+  .se-bnav .lib-search-hit:hover{background:var(--hover);border-color:transparent;}
+  .se-bnav .lib-hit-cat{color:var(--muted);background:var(--hover);border:0;}
+  .se-bnav-item{
+    width:100%;height:34px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;
+    color:var(--muted);font-size:13px;cursor:pointer;
+  }
+  .se-bnav-item:hover{background:var(--hover);color:var(--text);}
+  .se-bnav-item.on{background:var(--accent-soft);color:var(--text);}
+  .se-bnav-note{margin:auto 6px 0;padding-top:16px;font-size:12px;line-height:1.6;color:var(--faint);}
+  .se-bible .read{padding:28px 36px 64px;}
+
+  /* ═══ 操作历史 ═══ */
+  .op-history{height:100%;overflow-y:auto;}
+  .op-history-body{max-width:860px;margin:0 auto;padding:28px 36px 56px;}
+  .op-history-head h2{margin:0;font-size:20px;line-height:1.3;color:var(--text);}
+  .op-history-head .op-history-hint{margin:4px 0 0;font-size:13px;color:var(--muted);}
+  .op-history-day{margin:24px 0 6px;font-size:12px;font-weight:500;color:var(--faint);}
+  .op-history-list{display:flex;flex-direction:column;gap:0;}
+  .op-history-item{
+    display:grid;grid-template-columns:48px minmax(0,1fr) auto auto;align-items:center;gap:12px;
+    padding:9px 12px;border:0;border-radius:10px;background:transparent;
+  }
+  .op-history-item:hover{background:var(--hover);}
+  .op-history-item.is-confirming{background:var(--warn-soft);}
+  .op-history-clock{font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums;}
+  .op-history-item strong{font-size:14px;font-weight:500;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .op-history-item .op-history-time{font-size:12px;color:var(--faint);}
+  .op-history-item .op-history-restore{
+    height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
+    color:var(--faint);font-size:13px;cursor:pointer;opacity:.8;
+  }
+  .op-history-item:hover .op-history-restore,.op-history-item.is-confirming .op-history-restore,.op-history-item .op-history-restore:focus-visible{opacity:1;color:var(--text);}
+  .op-history-item .op-history-restore:hover:not(:disabled){background:var(--hover);}
+  .op-history-item .op-history-restore:disabled{cursor:default;opacity:.5;}
+  .op-history-confirm{
+    display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:2px 12px 8px 72px;padding:10px 12px;
+    border:1px solid var(--line-strong);border-radius:10px;background:var(--surface-2);font-size:13px;
+  }
+  .op-history-confirm span{flex:1;min-width:220px;color:var(--muted);}
+  .op-history-confirm button{height:28px;padding:0 12px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;}
+  .op-history-confirm-go{border:0;background:var(--accent);color:var(--accent-ink);}
+  .op-history-confirm-cancel{border:1px solid var(--line-strong);background:transparent;color:var(--text);}
+  .op-history-empty,.op-history-error{margin-top:20px;padding:20px;border:1px dashed var(--line-strong);border-radius:12px;font-size:13px;color:var(--faint);text-align:center;}
+  .op-history-error{color:var(--danger);border-color:rgba(224,137,124,.35);}
+
+  @media (max-width:1279px){
+    .se-bible .read,.op-history-body{padding:24px 24px 48px;}
+    .op-history-confirm{margin-left:12px;}
+  }
+}

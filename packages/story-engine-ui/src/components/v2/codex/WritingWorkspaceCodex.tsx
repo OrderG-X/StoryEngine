@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -28,6 +28,7 @@ import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";
 import "./se-ai.css";
+import "./se-bible.css";
 
 /**
  * WritingWorkspaceCodex — 写作工作区外壳。
@@ -51,6 +52,12 @@ const CATS = [
   { id: "hooks", glyph: "❖", title: "伏笔线索", sub: "未回收 / 已回收" },
   { id: "timeline", glyph: "▤", title: "时间线", sub: "近期 · 中段 · 远期" },
 ] as const;
+
+// 设定本左侧导航用的短名（CATS.title 保留给旧测试与搜索结果标签）。
+const CAT_LABELS: Record<(typeof CATS)[number]["id"], string> = {
+  world: "世界观", rules: "写作规则", matrix: "角色关系", chars: "角色",
+  assets: "道具与资源", places: "地点", hooks: "伏笔与线索", timeline: "时间线",
+};
 
 /** 仅供测试用：导出 CATS 数组供轻量测试断言（不影响生产代码）。 */
 export const __CATS_FOR_TEST = CATS;
@@ -110,13 +117,6 @@ export function buildChapterRows(chapters: readonly ChapterNavItem[], searching:
     rows.push({ kind: "chapter", ch });
   }
   return rows;
-}
-
-/** 资料类目卡的鼠标跟手金光：把指针在卡内坐标写进 --mx/--my，CSS ::after 径向光据此定位。 */
-function trackCatLight(event: ReactMouseEvent<HTMLButtonElement>): void {
-  const rect = event.currentTarget.getBoundingClientRect();
-  event.currentTarget.style.setProperty("--mx", `${event.clientX - rect.left}px`);
-  event.currentTarget.style.setProperty("--my", `${event.clientY - rect.top}px`);
 }
 
 /**
@@ -191,7 +191,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
     ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")
-    : view === "library" ? `设定本 · ${catTitle}` : "操作历史";
+    : view === "library" ? `设定本 · ${CAT_LABELS[cat as keyof typeof CAT_LABELS] ?? catTitle}` : "操作历史";
 
   // 资料全局搜索（打磨D）：跨类目搜 sidebar 已聚合的分类标签，命中可一键跳到对应类目。
   // 世界观面板的数据是面板内单独拉取的（不在 props），故搜不到——只覆盖 sidebar 已有的 5 类。
@@ -344,19 +344,21 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             <OperationHistoryView projectPath={props.projectPath} />
           ) : view === "library" ? (
             <>
-              <div className="topbar se-lib-bar">
-                <div className="right">
-                  {/* 资料全局搜索（D）：跨类目找人/物/设定，点结果跳类目。 */}
+              <div className="codex se-bible">
+                <nav className="se-bnav" aria-label="设定分类">
+                  {/* 资料全局搜索：跨类目找人 / 物 / 设定，点结果跳到对应类目。 */}
                   <div className="lib-search-wrap">
-                    <input
-                      className="lib-search"
-                      type="search"
-                      value={libQuery}
-                      onChange={(event) => setLibQuery(event.target.value)}
-                      onKeyDown={(event) => { if (event.key === "Escape") setLibQuery(""); }}
-                      placeholder="搜资料（人 / 物 / 设定）…"
-                      aria-label="搜索资料"
-                    />
+                    <label className="se-field-search">
+                      <IconSearch size={14} strokeWidth={1.8} />
+                      <input
+                        type="search"
+                        value={libQuery}
+                        onChange={(event) => setLibQuery(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === "Escape") setLibQuery(""); }}
+                        placeholder="搜人、物、设定…"
+                        aria-label="搜索资料"
+                      />
+                    </label>
                     {libQ ? (
                       <div className="lib-search-pop" role="listbox" aria-label="搜索结果">
                         {librarySearchResults.length > 0 ? (
@@ -378,29 +380,19 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       </div>
                     ) : null}
                   </div>
-                  {/* 资料字号已并入「设置 · 显示」面板（统一调，含左侧两栏）；此处旧步进器已撤。 */}
-                  <span className="view-pill">只读视图 · 改设定请 <b>向右对 AI 说</b></span>
-                </div>
-              </div>
-              <div className="codex">
-                <nav className="catrail">
-                  <div className="catrail-title">资料类目 · {CATS.length}</div>
-                  {CATS.map((c, i) => (
+                  {CATS.map((c) => (
                     <button
                       key={c.id}
-                      className={`cat cat-enter ${cat === c.id ? "on" : ""}`}
-                      style={{ animationDelay: `${i * 45}ms` }}
+                      className={`se-bnav-item${cat === c.id ? " on" : ""}`}
+                      aria-current={cat === c.id ? "page" : undefined}
+                      title={c.sub}
                       onClick={() => setCat(c.id)}
-                      onMouseMove={trackCatLight}
                       type="button"
                     >
-                      <span className="glyph">{c.glyph}</span>
-                      <span className="ct"><b>{c.title}</b><small>{c.sub}</small></span>
+                      {CAT_LABELS[c.id]}
                     </button>
                   ))}
-                  <div className="catrail-foot">
-                    <b>提示</b>　这是只读展示。要修改任何设定，请在右边对 AI 说——它会把改动同步回来。
-                  </div>
+                  <p className="se-bnav-note">设定由 AI 维护，这里只读。想改哪一处，直接在右边说。</p>
                 </nav>
                 <div className="read">
                   <div className="read-inner read-enter" key={cat}>
