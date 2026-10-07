@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { withProjectCommitLock } from "@actalk/story-engine";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
-import { registerChapterWorkspaceRoutes } from "./chapter-workspace.js";
+import { composeDraftFileText, registerChapterWorkspaceRoutes } from "./chapter-workspace.js";
 
 async function realProject(): Promise<string> {
   const dir = await makeHomeTempDir("chapter-workspace-cas-");
@@ -200,3 +200,24 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   const promise = new Promise<T>((res) => { resolve = res; });
   return { promise, resolve };
 }
+
+describe("composeDraftFileText：autosave 写工作稿时保住第一行章名（定稿取章名的唯一来源）", () => {
+  it("正文不带标题行 + 请求带真章名 → 补「# 章名」", async () => {
+    const dir = await makeHomeTempDir("draft-title-");
+    expect(await composeDraftFileText(join(dir, "none.md"), "下午三点。\n\n她推门。", "夹在书页里的信"))
+      .toBe("# 夹在书页里的信\n\n下午三点。\n\n她推门。\n");
+  });
+
+  it("请求只带占位章名 → 沿用磁盘上原有的标题行；都没有 → 只写正文", async () => {
+    const dir = await makeHomeTempDir("draft-title-keep-");
+    const path = join(dir, "chapter-0001.md");
+    await writeFile(path, "# 夹在书页里的信\n\n旧正文\n");
+    expect(await composeDraftFileText(path, "新正文", "第1章")).toBe("# 夹在书页里的信\n\n新正文\n");
+    expect(await composeDraftFileText(join(dir, "missing.md"), "新正文", "第1章")).toBe("新正文\n");
+  });
+
+  it("正文自带标题行 → 原样写", async () => {
+    const dir = await makeHomeTempDir("draft-title-own-");
+    expect(await composeDraftFileText(join(dir, "x.md"), "# 自带标题\n\n正文", "别的标题")).toBe("# 自带标题\n\n正文\n");
+  });
+});

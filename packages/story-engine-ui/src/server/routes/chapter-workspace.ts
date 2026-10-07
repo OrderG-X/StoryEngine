@@ -103,7 +103,7 @@ export function registerChapterWorkspaceRoutes(middlewares: MiddlewareStack): vo
           if (body.writeDraftFile === true && draftContent !== undefined) {
             const draftPath = defaultDraftPath(projectDir, chapter);
             await mkdir(dirname(draftPath), { recursive: true });
-            await writeFileAtomic(draftPath, `${draftContent.trimEnd()}\n`);
+            await writeFileAtomic(draftPath, await composeDraftFileText(draftPath, draftContent, draftTitle));
           }
           // 生成中断路径可能省略 draftContent——保留既有草稿字段，勿被 undefined 抹掉。
           const previous = await readFile(workspacePath, "utf-8")
@@ -156,4 +156,32 @@ export function registerChapterWorkspaceRoutes(middlewares: MiddlewareStack): vo
       });
     }
   });
+}
+
+const CHAPTER_TOKEN = "第[0-9一二三四五六七八九十百零两]+章";
+
+/** 只有章号（「第3章」「第三章」）或占位（「下一章」「未命名」）的标题不算真章名。 */
+function isPlaceholderChapterTitle(title: string): boolean {
+  const bare = title.replace(new RegExp(`^(?:${CHAPTER_TOKEN}\\s*[·.．、:：-]?\\s*)+`, "u"), "").trim();
+  return bare === "" || /^(下一章|未命名|待定|无题)$/u.test(bare);
+}
+
+/**
+ * 工作稿文件第一行的「# 标题」是定稿取章名的唯一来源（commit-plan-builder 的 extractMarkdownTitle）。
+ * 编辑器里的正文不带标题行，autosave 若整文件直接覆写就会把标题抹掉 → 定稿后章名退化成「第N章」
+ * （2026-10-07 改版走查：新书第 1 章「夹在书页里的信」定稿后变「第1章」）。
+ * 写盘时：正文自带标题行照写；否则补回标题——优先本次请求的 draftTitle（非占位），其次沿用磁盘上原有的标题行；
+ * 两者都没有就只写正文（与旧行为一致）。
+ */
+export async function composeDraftFileText(draftPath: string, draftContent: string, draftTitle: string | undefined): Promise<string> {
+  const body = draftContent.trim();
+  if (/^#{1,6}\s/u.test(body)) return `${body}\n`;
+  let title = draftTitle?.trim() && !isPlaceholderChapterTitle(draftTitle.trim()) ? draftTitle.trim() : "";
+  if (!title) {
+    const existing = await readFile(draftPath, "utf-8").catch(() => "");
+    const firstLine = existing.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim() ?? "";
+    const existingTitle = firstLine.startsWith("#") ? firstLine.replace(/^#{1,6}\s*/u, "").trim() : "";
+    if (existingTitle && !isPlaceholderChapterTitle(existingTitle)) title = existingTitle;
+  }
+  return title ? `# ${title}\n\n${body}\n` : `${body}\n`;
 }
