@@ -41,3 +41,15 @@ export function latestTurnSuggestedActions(messages: readonly ChapterMessage[]):
   }
   return collected;
 }
+
+/** 建议条最多露几个（再多就是整张流程菜单，和下面的快捷条重复，作者反而不知道点哪个）。 */
+export const RAIL_MAX_VISIBLE = 3;
+
+/**
+ * 建议条实际显示的动作：只留现在能点的（禁用的是「现在还不能做」，摆出来只是噪音），最多 3 个。
+ * 通用流程菜单是按写作进度从前往后排的，超出时留最后几个（往前推进的那几步）。
+ */
+export function visibleRailActions(actions: readonly SuggestedAction[]): readonly SuggestedAction[] {
+  const enabled = actions.filter((action) => !action.disabledReason);
+  return enabled.length > RAIL_MAX_VISIBLE ? enabled.slice(-RAIL_MAX_VISIBLE) : enabled;
+}

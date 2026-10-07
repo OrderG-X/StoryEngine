@@ -907,6 +907,23 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(out[0]!.suggestedActions?.[1]?.pruneTarget).toEqual({});
   });
 
+  it("建议动作的 disabledReason 持久化：重开书后「还不能点」的按钮仍是灰的", () => {
+    const out = readWorkspaceMessages([
+      {
+        id: "assistant-quality",
+        role: "assistant",
+        content: "质检完成。",
+        suggestedActions: [
+          { id: "commit-apply", label: "确认定稿", description: "写入", permission: "draft_write", requiresConfirmation: true, disabledReason: "必须先生成定稿预览。" },
+          { id: "commit-preview", label: "生成定稿预览", description: "预览", permission: "safe_read", requiresConfirmation: false, disabledReason: "" },
+        ],
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+    expect(out[0]!.suggestedActions?.[0]?.disabledReason).toBe("必须先生成定稿预览。");
+    expect(out[0]!.suggestedActions?.[1]).not.toHaveProperty("disabledReason");
+  });
+
   it("turnStartedAt/turnEndedAt round-trip：有限正数保留，坏值不写", () => {
     const out = readWorkspaceMessages([
       {

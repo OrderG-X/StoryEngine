@@ -32,6 +32,7 @@ import AgentErrorCard from "./AgentErrorCard.js";
 import { railActionsForFlow } from "./ChapterToolRail.js";
 import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
+import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
@@ -41,7 +42,7 @@ import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt } from "./nextStepChoices.js";
 import { commitChapterFromChoiceIntent, confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
-import { latestTurnSuggestedActions } from "./suggestedActionRail.js";
+import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import {
   foldProcessSegments,
@@ -212,7 +213,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const nextStep = busy ? null : lastAssistantNextStepPrompt(props.workspace.messages);
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
-  const railActions = busy ? [] : latestTurnSuggestedActions(props.workspace.messages);
+  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(props.workspace.messages));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(props.workspace.messages);
   const canClear = Boolean(props.onClearChat) && props.workspace.messages.length > 0 && !workspaceBusy;
@@ -269,7 +270,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 状态行：平时说本章到哪一步了；本回合有工具在跑时换成实时字幕（写到多少字 / 审到哪）。
           2026-10-07 改版：撤掉四步大圆进度，省出一百多像素给对话。 ── */}
       <div className="se-ai-ctx-row">
-        <AiStatusLine flowStatus={flowStatus} live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))} />
+        <AiStatusLine
+          flowStatus={flowStatus}
+          live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))}
+          operation={operationCaption(props.draftActionLoading)}
+        />
         <button
           type="button"
           className={`se-inbox-btn${inboxTodos.length ? "" : " is-clear"}`}
@@ -348,6 +353,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSelectAdviceCard={props.onSelectAdviceCard}
             onUndoToHere={props.onUndoToTurn ? () => props.onUndoToTurn?.(message) : undefined}
             onPrefillComposer={prefillComposer}
+            liveOperation={index === all.length - 1 ? operationCaption(props.draftActionLoading) : null}
             onFixAiFlavorViolation={props.onFixAiFlavorViolation}
             onFixAllAiFlavorViolations={props.onFixAllAiFlavorViolations}
             pendingViolationId={props.aiFlavorPending?.messageId === message.id ? props.aiFlavorPending.violationId : null}
@@ -619,10 +625,15 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
   return { text: lp.detail ? oneLine(lp.detail, 52) : `${last.label}完成`, running: false };
 }
 
-function AiStatusLine({ flowStatus, live }: { readonly flowStatus: ChapterFlowStatus; readonly live: LiveFlow | null }) {
+function AiStatusLine({ flowStatus, live, operation }: {
+  readonly flowStatus: ChapterFlowStatus;
+  readonly live: LiveFlow | null;
+  /** 不走对话的操作（审稿/质检/修改方案…）进行中时的一句话。 */
+  readonly operation?: string | null;
+}) {
   const caption = liveCaption(live);
-  const running = Boolean(caption?.running);
-  const text = running && caption ? caption.text : flowHint(flowStatus);
+  const running = Boolean(caption?.running) || Boolean(operation);
+  const text = caption?.running ? caption.text : operation ?? flowHint(flowStatus);
   return (
     <div className={`se-ai-ctx${running ? " is-running" : ""}`} role="status" aria-live="polite">
       <span className="se-ai-ctx-dot" aria-hidden="true" />
@@ -650,6 +661,7 @@ function MessageBubbles({
   onCreateRevisionTask,
   commitConfirmable = false,
   onPrefillComposer,
+  liveOperation = null,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -673,8 +685,24 @@ function MessageBubbles({
   readonly commitConfirmable?: boolean;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
+  /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
+  readonly liveOperation?: string | null;
 }) {
-  if (message.role === "system") return null;
+  if (message.role === "system") {
+    // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
+    const running = runningAgentCard(message.agentCards);
+    if (!running) return null;
+    return liveOperation ? (
+      <div className="msg msg-ai se-op-row is-running" role="status">
+        <span className="se-op-dot" aria-hidden="true" />
+        <span>{liveOperation}…</span>
+      </div>
+    ) : (
+      <div className="msg msg-ai se-op-row">
+        <span>{running.title.replace(/\s*Agent\s*运行中$/u, "")}没做完（中途关掉或刷新了），可以再来一次。</span>
+      </div>
+    );
+  }
 
   if (message.role === "user") {
     const blocks = formatMessageBlocks(message.content);

@@ -586,6 +586,8 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       permission,
       requiresConfirmation: item.requiresConfirmation === true,
       ...(readString(item.endpoint) ? { endpoint: readString(item.endpoint) } : {}),
+      // 「现在还不能点」的原因：不进白名单的话重开书后禁用的按钮（如没预览就「确认定稿」）会变成可点。
+      ...(readString(item.disabledReason) ? { disabledReason: readString(item.disabledReason) } : {}),
       ...(commitTarget ? { commitTarget } : {}),
       ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
     });

@@ -87,3 +87,13 @@ describe("latestTurnSuggestedActions（A-6 建议动作条取数）", () => {
     expect(latestTurnSuggestedActions([user("u1"), assistant("a1")])).toEqual([]);
   });
 });
+
+describe("visibleRailActions 建议条只露能点的、最多 3 个", () => {
+  it("去掉禁用的；超过 3 个留最后 3 个", async () => {
+    const { visibleRailActions } = await import("./suggestedActionRail.js");
+    const a = (id: string, disabledReason?: string) => ({ id, label: id, ...(disabledReason ? { disabledReason } : {}) }) as never;
+    const out = visibleRailActions([a("s"), a("d"), a("q"), a("r"), a("p"), a("c", "还不能"), a("n", "还不能")]);
+    expect(out.map((x: { id: string }) => x.id)).toEqual(["q", "r", "p"]);
+    expect(visibleRailActions([a("x"), a("y", "不行")]).map((x: { id: string }) => x.id)).toEqual(["x"]);
+  });
+});
