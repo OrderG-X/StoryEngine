@@ -420,6 +420,23 @@ describe("settleInterruptedToolSteps（僵尸 running 步骤结算）", () => {
     expect((await readChatSession(dir, id))?.messages).toHaveLength(1);
   });
 
+  it("防误清守卫只护真实历史：会话里只有开书开场白时，空列表可以覆盖（重开新书不再误报保存失败）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "chat-greeting-only-"));
+    const id = (await readChatSessionIndex(dir)).activeSessionId;
+    await saveChatSessionMessages(dir, id, [
+      { id: "assistant-book-creation-1791345995317", role: "assistant", content: "新书已经建好啦。" },
+    ] as unknown);
+    await expect(saveChatSessionMessages(dir, id, [] as unknown)).resolves.toBeUndefined();
+    expect((await readChatSession(dir, id))?.messages).toHaveLength(0);
+
+    // 开场白之外还有真实对话 → 照样拦
+    await saveChatSessionMessages(dir, id, [
+      { id: "assistant-book-creation-1", role: "assistant", content: "新书已经建好啦。" },
+      { id: "m-1", role: "user", content: "主角叫周屿" },
+    ] as unknown);
+    await expect(saveChatSessionMessages(dir, id, [] as unknown)).rejects.toThrow(/已拒绝保存/);
+  });
+
   it("allowEmpty 显式旁路（审计 High-3）：撤销撤掉全部回合/清空对话可写空，常态保存仍被拦", async () => {
     const dir = await mkdtemp(join(tmpdir(), "chat-allow-empty-"));
     const id = (await readChatSessionIndex(dir)).activeSessionId;

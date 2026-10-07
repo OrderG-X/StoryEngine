@@ -473,6 +473,14 @@ export function deleteChatSessionTransaction(
   return withProjectLock(projectDir, () => deleteChatSessionTransactionImpl(projectDir, id));
 }
 
+/** 注入的脚手架消息（开书开场白 assistant-book-creation-* / 流程招呼 assistant-workflow-*），且不带任何卡片或工具步骤。 */
+function isInjectedScaffoldingMessage(message: { readonly id?: unknown; readonly toolSteps?: unknown; readonly agentCards?: unknown; readonly adviceCards?: unknown }): boolean {
+  const id = typeof message.id === "string" ? message.id : "";
+  if (!id.startsWith("assistant-book-creation-") && !id.startsWith("assistant-workflow-")) return false;
+  const nonEmpty = (value: unknown) => Array.isArray(value) && value.length > 0;
+  return !nonEmpty(message.toolSteps) && !nonEmpty(message.agentCards) && !nonEmpty(message.adviceCards);
+}
+
 async function saveChatSessionMessagesImpl(
   projectDir: string,
   id: string,
@@ -494,7 +502,10 @@ async function saveChatSessionMessagesImpl(
   // 空数组覆盖非空历史 = 不可逆全丢。如实拒绝（客户端只会看到一次保存失败，历史保住）。
   // 唯一旁路：allowEmpty=true（显式用户动作——「撤销到此」撤掉全部回合 / 「清空对话」）。
   // 常态 autosave 永不带该标记，守卫对它原样生效。
-  if (next.length === 0 && session.messages.length > 0 && allowEmpty !== true) {
+  // 只有「真实历史」才受保护：开书开场白 / 流程招呼这类注入脚手架，进工作台时前端本就不展示（entryChatMessages），
+  // 重开新书后 autosave 的空列表覆盖它是预期行为——否则每次重开没动过的新书都报一次「保存失败」吓人（2026-10-07 改版走查发现）。
+  const realHistoryCount = session.messages.filter((message) => !isInjectedScaffoldingMessage(message)).length;
+  if (next.length === 0 && realHistoryCount > 0 && allowEmpty !== true) {
     throw new Error(
       `已拒绝保存：空消息列表将覆盖该会话的 ${session.messages.length} 条历史（疑似加载失败后的误保存，非用户意图）。`,
     );
