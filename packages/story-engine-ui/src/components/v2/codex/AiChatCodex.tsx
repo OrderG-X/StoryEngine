@@ -344,6 +344,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             selectedAdviceCardKeys={props.selectedAdviceCardKeys}
             onSelectAdviceCard={props.onSelectAdviceCard}
             onUndoToHere={props.onUndoToTurn ? () => props.onUndoToTurn?.(message) : undefined}
+            onPrefillComposer={prefillComposer}
             onFixAiFlavorViolation={props.onFixAiFlavorViolation}
             onFixAllAiFlavorViolations={props.onFixAllAiFlavorViolations}
             pendingViolationId={props.aiFlavorPending?.messageId === message.id ? props.aiFlavorPending.violationId : null}
@@ -645,6 +646,7 @@ function MessageBubbles({
   onSuggestedAction,
   onCreateRevisionTask,
   commitConfirmable = false,
+  onPrefillComposer,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -666,6 +668,8 @@ function MessageBubbles({
   readonly onCreateRevisionTask?: WritingWorkspaceLayoutProps["onCreateRevisionTask"];
   /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
   readonly commitConfirmable?: boolean;
+  /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
+  readonly onPrefillComposer?: (text: string) => void;
 }) {
   if (message.role === "system") return null;
 
@@ -859,7 +863,12 @@ function MessageBubbles({
 
       {/* 定稿预览卡（R3）：commit_preview 的结构化裁决照实展示，不靠模型转述（模型可能把硬阻断说软/略过）。 */}
       {commitPreview ? (
-        <CommitPreviewCard preview={commitPreview} onConfirm={confirmCommit} confirmDisabled={chatLoading} />
+        <CommitPreviewCard
+          preview={commitPreview}
+          onConfirm={confirmCommit}
+          confirmDisabled={chatLoading}
+          onDecline={confirmCommit && onPrefillComposer ? () => onPrefillComposer("先不定稿，") : undefined}
+        />
       ) : null}
 
       {/* 人物名一致性提醒卡：入库预览报出近形错名时固定醒目展示，不靠模型转述、不被说软。 */}

@@ -84,4 +84,19 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     );
     expect(container.querySelector<HTMLButtonElement>("button.cpc-confirm")?.disabled).toBe(true);
   });
+
+  it("「先不定」只在挂了确认按钮时出现，点了调 onDecline、不触发定稿", () => {
+    const onConfirm = vi.fn();
+    const onDecline = vi.fn();
+    const { container } = render(
+      <CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={onConfirm} onDecline={onDecline} />,
+    );
+    fireEvent.click(container.querySelector<HTMLButtonElement>("button.cpc-decline")!);
+    expect(onDecline).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    const { container: blocked } = render(
+      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} onConfirm={onConfirm} onDecline={onDecline} />,
+    );
+    expect(blocked.querySelector("button.cpc-decline")).toBeNull();
+  });
 });

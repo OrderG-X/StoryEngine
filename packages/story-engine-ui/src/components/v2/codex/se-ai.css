@@ -134,6 +134,14 @@
   /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
   .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
   .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
+  .step-card .cpc-actions{display:flex;align-items:center;gap:8px;margin:0 0 10px;}
+  .step-card .cpc-actions .cpc-confirm{margin:0;}
+  .step-card .cpc-decline{
+    height:34px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:transparent;
+    color:var(--text);font-size:13px;cursor:pointer;
+  }
+  .step-card .cpc-decline:hover:not(:disabled){background:var(--hover);}
+  .step-card .cpc-decline:disabled{opacity:.55;cursor:default;}
 
   .agent-error-card{background:var(--danger-soft);border-color:rgba(224,137,124,.3);}
   .agent-error-card .aec-retry{color:var(--accent-ink);background:var(--accent);border:0;}

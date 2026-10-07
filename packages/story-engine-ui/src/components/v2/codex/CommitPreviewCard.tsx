@@ -16,11 +16,14 @@ export function CommitPreviewCard({
   preview,
   onConfirm,
   confirmDisabled = false,
+  onDecline,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 传了且可定稿 → 渲染「确认定稿」按钮。 */
   readonly onConfirm?: () => void;
   readonly confirmDisabled?: boolean;
+  /** 「先不定」：把「先不定稿，」填进输入框让作者接着说原因（不发送、不写盘）。 */
+  readonly onDecline?: () => void;
 }) {
   const { canCommit, blockingReasons, summary, draftIssueCount, semanticIssueCount } = preview;
   const blocking = blockingReasons?.filter((reason) => typeof reason === "string" && reason.trim()) ?? [];
@@ -42,9 +45,16 @@ export function CommitPreviewCard({
           : `${chapterLabel}已满足定稿条件，点「确认定稿」即写入（写入前自动存档，可撤销）。`}
       </p>
       {!blocked && onConfirm ? (
-        <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={onConfirm}>
-          确认定稿
-        </button>
+        <div className="cpc-actions">
+          <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={onConfirm}>
+            确认定稿
+          </button>
+          {onDecline ? (
+            <button type="button" className="cpc-decline" disabled={confirmDisabled} onClick={onDecline}>
+              先不定
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {blocking.length > 0 ? (
         <ul className="cpc-list">
