@@ -16,6 +16,7 @@ import {
   isStarterEmptyWorkspace,
 } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
+import { useNavigationStore } from "../../../stores/navigationStore.js";
 
 /**
  * WritingDeskCodex — 沉浸聚光式 codex 写作台外壳。
@@ -37,6 +38,15 @@ function flowTone(state: WritingWorkspaceLayoutProps["workspace"]["flowStatus"])
   return "warn";
 }
 
+/** 从写作规则里读「每章目标字数」（sidebar 已格式化成「目标字数：约 3200 字 / 章」）；没配就返回 null，不画目标条。 */
+export function parseTargetChapterWords(writingRules: readonly string[] | undefined): number | null {
+  for (const rule of writingRules ?? []) {
+    const match = /目标字数[：:]\s*约?\s*(\d{3,6})/u.exec(rule);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
 export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
@@ -56,6 +66,30 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
   const draftWordCount = draft.wordCount ?? 0;
   const showStarter = isStarterEmptyWorkspace(props.workspace);
   const showEditHint = activeTab === "draft" && draft.status !== "committed";
+  const targetWords = parseTargetChapterWords(props.sidebar?.writingRules);
+  const goalPct = targetWords ? Math.min(100, Math.round((draftWordCount / targetWords) * 100)) : 0;
+  // 低于目标 78%（≈「最少」口径）提醒橙，达标绿，其余强调色。
+  const goalTone = !targetWords ? "" : draftWordCount >= targetWords ? "met" : draftWordCount < targetWords * 0.78 ? "low" : "";
+  // 本章梗概：取时间线里本章的主事件（只有最近几章有），没有就不显示。
+  const synopsisEvent = props.overview?.timeline?.recentEvents?.find((event) => event.chapter === draft.chapterNumber);
+  const synopsis = (synopsisEvent?.mainEvent || synopsisEvent?.summary || "").trim();
+  const [synopsisOpen, setSynopsisOpen] = useState(false);
+  // 上一章 / 下一章（按章号相邻，跳过未写的占位章）。
+  const realChapters = [...props.workspace.chapters]
+    .filter((ch) => ch.status !== "planned" || ch.chapterNumber === draft.chapterNumber)
+    .sort((a, b) => a.chapterNumber - b.chapterNumber);
+  const prevChapter = [...realChapters].reverse().find((ch) => ch.chapterNumber < draft.chapterNumber) ?? null;
+  // 下一章包含「还没写」的占位章：在最新一章时也能一步走到下一章开写。
+  const nextChapter = [...props.workspace.chapters]
+    .sort((a, b) => a.chapterNumber - b.chapterNumber)
+    .find((ch) => ch.chapterNumber > draft.chapterNumber) ?? null;
+  const goToChapter = (id: string) => {
+    if (workspaceBusy) {
+      useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
+      return;
+    }
+    props.onSelectChapter?.(id);
+  };
 
   // 切章/切视图后正文回到顶部：稿纸的滚动容器（草稿=.se-v2-writing-canvas / 正文=.se-v2-paper）
   // 是 .codex-desk-stage 的直接子元素、且 overflow-y:auto。换章时 draft 变了但容器 scrollTop 不会自己归零，
@@ -88,12 +122,31 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
           ) : null}
         </div>
         <div className="cd-bar-right">
-          <span className="cd-words">{draftWordCount.toLocaleString()} 字</span>
+          {targetWords ? (
+            <span className={`cd-goal ${goalTone}`.trim()} title={`写作规则：每章目标约 ${targetWords.toLocaleString()} 字`}>
+              <span className="cd-words"><b>{draftWordCount.toLocaleString()}</b> / {targetWords.toLocaleString()} 字</span>
+              <span className="cd-goal-bar" aria-hidden="true"><i style={{ width: `${goalPct}%` }} /></span>
+            </span>
+          ) : (
+            <span className="cd-words">{draftWordCount.toLocaleString()} 字</span>
+          )}
           <div className="cd-tabs" role="tablist" aria-label="版本视图">
             <button className={activeTab === "draft" ? "is-active" : ""} onClick={() => setActiveTab("draft")} type="button" aria-label="查看工作稿">工作稿</button>
             <button className={activeTab === "committed" ? "is-active" : ""} onClick={() => setActiveTab("committed")} type="button" aria-label="查看定稿">定稿</button>
           </div>
         </div>
+        {synopsis && !showStarter ? (
+          <button
+            type="button"
+            className={`cd-synopsis${synopsisOpen ? " is-open" : ""}`}
+            aria-expanded={synopsisOpen}
+            title={synopsisOpen ? "收起" : synopsis}
+            onClick={() => setSynopsisOpen((open) => !open)}
+          >
+            <b>本章梗概</b>
+            <span>{synopsis}</span>
+          </button>
+        ) : null}
       </header>
 
       {/* 中间：稿纸"浮"在暗场里。草稿走 WritingPaper（完整编辑器内核），正文走只读段落（照 WritingDesk）。 */}
@@ -157,10 +210,15 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
         )}
       </div>
 
-      {/* 底部细条：只放「再来一版」；没得放时整条不渲染（不留空条）。 */}
-      {canReroll && !showStarter ? (
+      {/* 底部细条：上一章 / 再来一版 / 下一章；都没有时整条不渲染。 */}
+      {prevChapter || nextChapter || (canReroll && !showStarter) ? (
       <footer className="codex-desk-bar codex-desk-bar-bottom">
-        {(
+        {prevChapter ? (
+          <button className="cd-nav prev" type="button" disabled={workspaceBusy} onClick={() => goToChapter(prevChapter.id)} title="上一章">
+            <span>上一章</span>{chapterHeading(prevChapter.chapterNumber, prevChapter.title ?? "")}
+          </button>
+        ) : <span />}
+        {canReroll && !showStarter ? (
           <button
             className="cd-reroll"
             disabled={rerolling}
@@ -170,7 +228,12 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
           >
             {rerolling ? "生成候选中…" : draftWordCount > 0 || draft.content.trim() ? "↻ 再来一版" : "✎ 写第一版"}
           </button>
-        )}
+        ) : <span />}
+        {nextChapter ? (
+          <button className="cd-nav next" type="button" disabled={workspaceBusy} onClick={() => goToChapter(nextChapter.id)} title="下一章">
+            <span>下一章</span>{nextChapter.status === "planned" ? `第${nextChapter.chapterNumber}章 · 还没写` : chapterHeading(nextChapter.chapterNumber, nextChapter.title ?? "")}
+          </button>
+        ) : <span />}
       </footer>
       ) : null}
 

@@ -26,7 +26,7 @@ import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
-import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSearch, IconSettings } from "./icons.js";
+import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
 import "./codex.css";
@@ -287,6 +287,12 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(i + 1).includes(chapterFilter))
     : chapters;
   const chapterRows = buildChapterRows(visibleChapters, Boolean(chapterFilter));
+  const draftChapterCount = chapters.filter((ch) => ch.status === "draft" || (ch.status === "current" && ch.hasDraftFile && !ch.hasCommittedChapter)).length;
+  // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
+  const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
+  const nextToWrite = latestReal && (latestReal.status === "committed" || latestReal.hasCommittedChapter) && draftChapterCount === 0
+    ? latestReal.chapterNumber + 1
+    : null;
 
   // 写作台章节栏展开时占的宽度（随界面字号放大），窄视口让位要扣掉它。
   const chapterRailWidth = view === "desk" && deskRailOpen ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
@@ -467,6 +473,17 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       aria-label="搜索章节"
                     />
                   </label>
+                  {nextToWrite && !chapterFilter ? (
+                    <button
+                      className="se-new-ch"
+                      type="button"
+                      disabled={workspaceBusy || !props.onSendMessage}
+                      title={`让 AI 写第 ${nextToWrite} 章（在右边对话里进行，可随时停止）`}
+                      onClick={() => props.onSendMessage?.(`写第${nextToWrite}章，现在就动笔直接出稿`)}
+                    >
+                      <IconPlus size={16} />写第 {nextToWrite} 章
+                    </button>
+                  ) : null}
                   <div className="se-ch-list">
                     {chapterRows.map((row) => row.kind === "group" ? (
                       <div key={row.key} className="se-ch-group">{row.label}</div>
@@ -495,6 +512,10 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       <div className="se-ch-empty">没有章名或章号包含「{chapterQuery.trim()}」的章节</div>
                     ) : null}
                   </div>
+                  <div className="se-ch-foot">
+                    <span className={`se-dot ${draftChapterCount ? "warn" : "ok"}`} aria-hidden="true" />
+                    {draftChapterCount ? `${draftChapterCount} 章工作稿还没定稿` : "全部已定稿"}
+                  </div>
                 </nav>
               ) : null}
               <WritingDeskCodex {...props} />
@@ -513,6 +534,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
           onToggleRight={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
           onResizeStart={handleResizeStart}
+          onOpenModelSettings={() => setSettingsTab("model")}
+          // 设置弹窗开 / 关都会翻转这个值 → AI 栏重读当前模型（改完模型关弹窗即生效）。
+          modelRefreshKey={settingsTab === null ? 1 : 0}
         />
       </div>
       {paletteOpen ? (

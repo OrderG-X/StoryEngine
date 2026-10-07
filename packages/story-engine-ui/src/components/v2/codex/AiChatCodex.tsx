@@ -21,7 +21,11 @@ import { resolveToolStepLabel } from "../../../hooks/agentEventProjection.js";
 import { isBookCreationGreeting } from "../../../hooks/useProjectNavigation.js";
 import { buildTimelineModel, liveFlowFromMessage, type LiveFlow, type FlowPhaseKey } from "../agentTimelineModel.js";
 import { flowHint, primaryPermission, uiText } from "../v2Utils.js";
-import { IconClose, IconSparkle } from "./icons.js";
+import { IconClose, IconCopy, IconSparkle, IconUndo } from "./icons.js";
+import { useActiveModel } from "./useActiveModel.js";
+import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
+import { parsePaletteCharacters } from "./CommandPalette.js";
+import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { ChapterToolRail } from "./ChapterToolRail.js";
 import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
@@ -63,6 +67,10 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly onToggleRight: () => void;
   /** 拖动右栏左缘改宽（pointerdown 起拖，宽度状态由外层 codex 壳持有）。 */
   readonly onResizeStart?: (event: ReactPointerEvent) => void;
+  /** 点头部模型标签：打开模型设置（工作区设置弹窗）。 */
+  readonly onOpenModelSettings?: () => void;
+  /** 变了就重读一次当前模型（设置弹窗关闭时 +1）。 */
+  readonly modelRefreshKey?: number;
 };
 
 /**
@@ -104,6 +112,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 归档折叠行展开态。
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   const { activeArchivedCount } = useWorkspaceStore();
+  // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
+  const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -116,6 +126,27 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // IME 守卫（治拼音确认回车被误判成发送）。
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(Number.NEGATIVE_INFINITY);
+  // @ 引用：末尾正在打「@xxx」时弹候选（角色 / 地点 / 最近章节）。Esc 关掉后直到这段 @ 打完都不再弹。
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissedAt, setMentionDismissedAt] = useState<string | null>(null);
+  const mentionQuery = activeMentionQuery(props.steeringDirection);
+  const mentionCandidates = mentionQuery === null ? [] : buildMentionCandidates({
+    query: mentionQuery,
+    characters: parsePaletteCharacters(props.sidebar.characters).map((c) => c.name),
+    locations: props.overview?.locationBible?.activeLocationNames ?? props.overview?.world.activeLocations ?? [],
+    chapters: props.workspace.chapters,
+  });
+  const mentionOpen = mentionCandidates.length > 0 && mentionDismissedAt !== props.steeringDirection;
+  const activeMention = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
+  const pickMention = (label: string) => {
+    props.onSteeringDirectionChange(insertMention(props.steeringDirection, label));
+    setMentionIndex(0);
+    requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  };
   const workspaceBusy = Boolean(
     props.chatLoading
     || props.steeringLoading
@@ -140,6 +171,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   if (!props.rightOpen) {
     return <CollapsedAiRail onToggleRight={props.onToggleRight} />;
   }
+
 
   const { flowStatus } = props.workspace;
   const busy = workspaceBusy;
@@ -171,6 +203,17 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 头部：标题 + 清空 / 收起 ── */}
       <div className="ai-head se-ai-head">
         <span className="se-ai-title"><IconSparkle size={17} />AI 助手</span>
+        {activeModel ? (
+          <button
+            type="button"
+            className="se-model-chip"
+            title={activeModel.ok ? `当前模型：${activeModel.label}（点开模型设置）` : `模型设置有问题：${activeModel.label}（点开查看）`}
+            onClick={() => props.onOpenModelSettings?.()}
+          >
+            <span className={`se-dot ${activeModel.ok ? "ok" : "warn"}`} aria-hidden="true" />
+            <span className="se-model-name">{activeModel.label}</span>
+          </button>
+        ) : null}
         <span className="se-ai-head-actions">
           {/* 聊天字号步进器已撤——统一并入「设置 · 显示」面板；缩放仍由 .codex-app 的 --codex-chat-zoom 生效。 */}
           {canClear ? (
@@ -340,18 +383,57 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             <ThinkingIndicator />
           </div>
         ) : null}
+        {mentionOpen ? (
+          <div className="se-mention" role="listbox" aria-label="引用角色、地点或章节">
+            <div className="se-mention-h">引用角色、地点或章节 · ↑↓ 选，回车插入</div>
+            {mentionCandidates.map((c, i) => (
+              <button
+                key={`${c.kind}:${c.label}`}
+                type="button"
+                role="option"
+                aria-selected={i === activeMention}
+                className={i === activeMention ? "on" : ""}
+                onMouseDown={(event) => { event.preventDefault(); pickMention(c.label); }}
+                onMouseMove={() => { if (i !== activeMention) setMentionIndex(i); }}
+              >
+                <span className="se-mention-label">{c.label}</span>
+                <span className="se-mention-kind">{c.kind}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="composer" style={{ alignItems: "flex-end" }}>
           <textarea
+            ref={composerRef}
             className="ai-composer-input"
             disabled={!chatEnabled}
             value={props.steeringDirection}
-            onChange={(event) => props.onSteeringDirectionChange(event.target.value)}
+            onChange={(event) => { props.onSteeringDirectionChange(event.target.value); setMentionIndex(0); }}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => {
               composingRef.current = false;
               compositionEndedAtRef.current = performance.now();
             }}
             onKeyDown={(event) => {
+              if (mentionOpen && !event.nativeEvent.isComposing && !composingRef.current) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setMentionIndex((activeMention + step + mentionCandidates.length) % mentionCandidates.length);
+                  return;
+                }
+                if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+                  event.preventDefault();
+                  const picked = mentionCandidates[activeMention];
+                  if (picked) pickMention(picked.label);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setMentionDismissedAt(props.steeringDirection);
+                  return;
+                }
+              }
               if (!shouldSendOnEnterKey({
                 key: event.key,
                 shiftKey: event.shiftKey,
@@ -574,6 +656,7 @@ function MessageBubbles({
   if (!hasAnything) return null;
 
   const canUndo = Boolean(onUndoToHere) && (model?.canUndo ?? false);
+  const canCopy = !isLiveAssistant && message.content.trim().length > 0;
   // 思考「进行中」=本轮还在流、答案与工具都还没出现（此时思考字上跑光影；一旦出工具/答案即静止）。
   const thinkingActive = chatLoading && !message.content.trim() && toolSteps.length === 0;
   // 有序分段：把「想→调工具→再想→答」按真实时间顺序逐段渲染（治「工具堆顶部、后续思考看不见」）。
@@ -723,26 +806,32 @@ function MessageBubbles({
 
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
-      {/* 撤销到此 */}
-      {canUndo ? (
-        <div style={{ marginBottom: 12 }}>
-          <button
-            type="button"
-            disabled={chatLoading}
-            onClick={onUndoToHere}
-            title="把这回合的改动整块回退，并截断这之后的对话"
-            style={{
-              fontSize: 11,
-              color: "var(--muted)",
-              background: "transparent",
-              border: 0,
-              cursor: chatLoading ? "not-allowed" : "pointer",
-              opacity: chatLoading ? 0.5 : 1,
-              padding: 0,
-            }}
-          >
-            ↩ 撤销到此
-          </button>
+      {/* 回复下方的小动作（悬停才显）：复制回复文字 / 撤销到此。 */}
+      {(canCopy || canUndo) ? (
+        <div className="se-msg-acts">
+          {canCopy ? (
+            <button
+              type="button"
+              title="复制这条回复的文字"
+              onClick={() => {
+                void navigator.clipboard?.writeText(message.content.trim())
+                  .then(() => useNavigationStore.getState().showToast("已复制这条回复", 2400))
+                  .catch(() => useNavigationStore.getState().showToast("复制没成功：浏览器没给剪贴板权限", 4200));
+              }}
+            >
+              <IconCopy size={13} />复制
+            </button>
+          ) : null}
+          {canUndo ? (
+            <button
+              type="button"
+              disabled={chatLoading}
+              onClick={onUndoToHere}
+              title="把这回合的改动整块回退，并截断这之后的对话"
+            >
+              <IconUndo size={13} />撤销到此
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

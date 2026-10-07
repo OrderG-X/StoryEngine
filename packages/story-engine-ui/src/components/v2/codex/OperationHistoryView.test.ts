@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupSnapshotsByDay } from "./OperationHistoryView.js";
+import { groupSnapshotsByDay, snapshotKind } from "./OperationHistoryView.js";
 
 const at = (y: number, m: number, d: number, h = 12) => Math.floor(new Date(y, m - 1, d, h).getTime() / 1000);
 
@@ -20,5 +20,16 @@ describe("改版 groupSnapshotsByDay：操作历史按自然日分组", () => {
 
   it("空列表 → 空分组", () => {
     expect(groupSnapshotsByDay([], now)).toEqual([]);
+  });
+});
+
+describe("改版 snapshotKind：操作历史筛选分类", () => {
+  it("按存档标签分四类", () => {
+    expect(snapshotKind("定稿")).toBe("commit");
+    expect(snapshotKind("恢复到：第55章再次出稿前快照")).toBe("restore");
+    expect(snapshotKind("恢复前自动快照")).toBe("restore");
+    expect(snapshotKind("更新故事资料：建角色 阿琴")).toBe("bible");
+    expect(snapshotKind("第57章自动去AI味前快照")).toBe("draft");
+    expect(snapshotKind("第55章修订前快照")).toBe("draft");
   });
 });

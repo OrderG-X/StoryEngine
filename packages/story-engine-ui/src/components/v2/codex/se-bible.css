@@ -25,6 +25,13 @@
   .op-history-body{max-width:860px;margin:0 auto;padding:28px 36px 56px;}
   .op-history-head h2{margin:0;font-size:20px;line-height:1.3;color:var(--text);}
   .op-history-head .op-history-hint{margin:4px 0 0;font-size:13px;color:var(--muted);}
+  .op-history-filters{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 -4px;}
+  .op-history-filters button{
+    height:28px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:transparent;
+    color:var(--muted);font-size:12px;cursor:pointer;
+  }
+  .op-history-filters button:hover{color:var(--text);border-color:var(--line-strong);}
+  .op-history-filters button.on{color:var(--text);border-color:var(--line-strong);background:var(--surface-2);}
   .op-history-day{margin:24px 0 6px;font-size:12px;font-weight:500;color:var(--faint);}
   .op-history-list{display:flex;flex-direction:column;gap:0;}
   .op-history-item{

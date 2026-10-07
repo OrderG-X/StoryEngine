@@ -54,6 +54,25 @@ export function groupSnapshotsByDay<T extends { readonly timestamp: number }>(
   return groups.map(({ day, items }) => ({ day, items }));
 }
 
+export type SnapshotKind = "commit" | "draft" | "bible" | "restore";
+
+/** 按存档标签粗分四类（标签是写入方写的中文说明，如「定稿」「第55章修订前快照」「更新故事资料：建角色 阿琴」「恢复到：…」）。 */
+export function snapshotKind(label: string): SnapshotKind {
+  const text = label.trim();
+  if (/^恢复/u.test(text)) return "restore";
+  if (/定稿|入库/u.test(text)) return "commit";
+  if (/故事资料|设定|线索|伏笔|角色|地点|世界观|写作规则|时间线/u.test(text)) return "bible";
+  return "draft";
+}
+
+const KIND_FILTERS: readonly { readonly id: "all" | SnapshotKind; readonly label: string }[] = [
+  { id: "all", label: "全部" },
+  { id: "commit", label: "定稿" },
+  { id: "draft", label: "正文改动" },
+  { id: "bible", label: "设定" },
+  { id: "restore", label: "恢复" },
+];
+
 export default function OperationHistoryView({ projectPath }: { readonly projectPath: string | null | undefined }) {
   const [snapshots, setSnapshots] = useState<SnapshotEntryDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +107,9 @@ export default function OperationHistoryView({ projectPath }: { readonly project
     }
   };
 
-  const groups = snapshots ? groupSnapshotsByDay(snapshots) : [];
+  const [kindFilter, setKindFilter] = useState<"all" | SnapshotKind>("all");
+  const filtered = snapshots ? snapshots.filter((snapshot) => kindFilter === "all" || snapshotKind(snapshot.label) === kindFilter) : null;
+  const groups = filtered ? groupSnapshotsByDay(filtered) : [];
 
   return (
     <div className="op-history">
@@ -97,6 +118,24 @@ export default function OperationHistoryView({ projectPath }: { readonly project
           <h2>操作历史</h2>
           <p className="op-history-hint">AI 每次写入前都会自动存档。恢复前也会先存一份，恢复本身也能再撤销。</p>
         </header>
+        {snapshots && snapshots.length > 0 ? (
+          <div className="op-history-filters" role="group" aria-label="按类型筛选">
+            {KIND_FILTERS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={kindFilter === f.id ? "on" : ""}
+                aria-pressed={kindFilter === f.id}
+                onClick={() => { setKindFilter(f.id); setConfirmId(null); }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {filtered && snapshots && snapshots.length > 0 && filtered.length === 0 ? (
+          <div className="op-history-empty">没有「{KIND_FILTERS.find((f) => f.id === kindFilter)?.label}」类的存档。</div>
+        ) : null}
         {!projectPath ? <div className="op-history-empty">请先打开一本真实的本地项目，才能查看操作历史。</div> : null}
         {projectPath && error ? <div className="op-history-error">读取存档失败：{error}</div> : null}
         {projectPath && !error && snapshots === null ? <div className="op-history-empty">正在读取存档列表…</div> : null}

@@ -35,6 +35,15 @@
   .se-dot.ok{background:var(--success);}
   .se-dot.run{background:var(--accent);}
 
+  .se-new-ch{
+    display:flex;align-items:center;gap:8px;height:34px;margin:0 6px 6px;padding:0 10px;border:0;border-radius:7px;
+    background:transparent;color:var(--muted);font-size:13px;cursor:pointer;text-align:left;
+  }
+  .se-new-ch svg{color:var(--faint);}
+  .se-new-ch:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .se-new-ch:disabled{opacity:.5;cursor:default;}
+  .se-ch-foot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);}
+
   /* ═══ 写作台 ═══ */
   .codex-desk{background:var(--bg);}
   .codex-desk-bar{background:var(--bg);backdrop-filter:none;padding:10px 24px;font-size:13px;}
@@ -56,6 +65,33 @@
   .codex-desk-bar .cd-tabs button.is-active{color:var(--text);background:var(--surface-2);box-shadow:0 0 0 1px var(--line);font-weight:500;}
   .codex-desk-bar .cd-reroll{border:1px solid var(--line-strong);background:transparent;color:var(--text);font-size:12px;padding:0 12px;height:28px;}
   .codex-desk-bar .cd-reroll:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--hover);}
+
+  /* 字数目标条 */
+  .codex-desk-bar .cd-goal{display:inline-flex;align-items:center;gap:8px;}
+  .codex-desk-bar .cd-goal b{color:var(--muted);font-weight:500;}
+  .cd-goal-bar{width:64px;height:4px;border-radius:2px;background:var(--line);overflow:hidden;}
+  .cd-goal-bar i{display:block;height:100%;border-radius:2px;background:var(--accent);transition:width .2s;}
+  .cd-goal.low .cd-goal-bar i{background:var(--warn);}
+  .cd-goal.met .cd-goal-bar i{background:var(--success);}
+  /* 本章梗概：顶条第二行，一行省略，点开看全 */
+  .codex-desk-bar .cd-synopsis{
+    flex:1 1 100%;min-width:0;display:flex;gap:8px;align-items:baseline;margin:2px 0 0;padding:6px 10px;border:0;border-radius:8px;
+    background:var(--hover);color:var(--muted);font-size:13px;line-height:1.6;text-align:left;cursor:pointer;
+  }
+  .codex-desk-bar .cd-synopsis b{flex:none;font-weight:500;color:var(--faint);}
+  .codex-desk-bar .cd-synopsis span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .codex-desk-bar .cd-synopsis.is-open span{white-space:normal;}
+  /* 底条：上一章 | 再来一版 | 下一章 */
+  .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px;padding:8px 24px;}
+  .codex-desk-bar-bottom .cd-reroll{margin:0;}
+  .codex-desk-bar .cd-nav{
+    min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 10px;border:0;border-radius:8px;background:transparent;
+    color:var(--text);font-size:13px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .codex-desk-bar .cd-nav span{font-size:12px;color:var(--faint);}
+  .codex-desk-bar .cd-nav.next{justify-self:end;text-align:right;}
+  .codex-desk-bar .cd-nav:hover:not(:disabled){background:var(--hover);}
+  .codex-desk-bar .cd-nav:disabled{opacity:.5;cursor:default;}
 
   /* 舞台去暗角，稿纸去金色光晕：一张安静的纸。 */
   .codex-desk-stage{padding:24px 24px 0;}
