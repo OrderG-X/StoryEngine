@@ -232,6 +232,12 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   ];
   const librarySearchResults = searchLibraryIndex(librarySearchSources, libQuery);
 
+  // 选中段引用进输入框：压成一行、过长截断（完整段 AI 能从稿子里对上）。
+  function quoteForComposer(text: string): string {
+    const flat = text.replace(/\s+/gu, " ").trim();
+    return flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
+  }
+
   // 资料面板里的「问 AI」：把一句话填进右侧输入框（不发送），打开 AI 栏并把光标放到句末，作者看过再发。
   function fillComposer(text: string) {
     props.onSteeringDirectionChange(text);
@@ -543,7 +549,11 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                   </div>
                 </nav>
               ) : null}
-              <WritingDeskCodex {...props} onOpenCharacter={() => { setView("library"); setCat("chars"); }} />
+              <WritingDeskCodex
+                {...props}
+                onOpenCharacter={() => { setView("library"); setCat("chars"); }}
+                onAskAboutSelection={(text) => fillComposer(`关于这段「${quoteForComposer(text)}」，`)}
+              />
             </div>
           )}
           </div>

@@ -24,21 +24,23 @@ import { useWorkspaceStore } from "../../stores/workspaceStore.js";
 
 const BLOCK_SEPARATOR = "\n\n";
 const TOOLBAR_GAP = 44;
-const TOOLBAR_WIDTH = 240;
+const TOOLBAR_WIDTH = 300;
 
-export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelectionRewrite, onSelectionRewriteCustom }: {
+export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelectionRewrite, onSelectionRewriteCustom, onAskAboutSelection }: {
   readonly draft: DraftPreview;
   readonly fontSize?: number;
   readonly onEdit?: (content: string) => void;
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
+  /** 选区浮动条「问 AI」：把选中文字交给外层（引用进对话输入框），不改稿。 */
+  readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const paperStyle = {
     "--se-v2-paper-font-size": `${fontSize}px`,
   } as CSSProperties & Record<"--se-v2-paper-font-size", string>;
 
   if (onEdit) {
-    return <EditablePaper draft={draft} onEdit={onEdit} paperStyle={paperStyle} onSelectionRewrite={onSelectionRewrite} onSelectionRewriteCustom={onSelectionRewriteCustom} />;
+    return <EditablePaper draft={draft} onEdit={onEdit} paperStyle={paperStyle} onSelectionRewrite={onSelectionRewrite} onSelectionRewriteCustom={onSelectionRewriteCustom} onAskAboutSelection={onAskAboutSelection} />;
   }
 
   const rawContent = draft.content;
@@ -62,12 +64,13 @@ export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelection
   );
 }
 
-function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelectionRewriteCustom }: {
+function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelectionRewriteCustom, onAskAboutSelection }: {
   readonly draft: DraftPreview;
   readonly onEdit: (content: string) => void;
   readonly paperStyle: CSSProperties;
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;
   readonly onSelectionRewriteCustom?: (selectionText: string, instruction: string) => Promise<void>;
+  readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const isCommitted = draft.status === "committed";
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。
@@ -87,6 +90,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const [selection, setSelection] = useState<{ readonly text: string; readonly top: number; readonly left: number } | null>(null);
   const [busyKey, setBusyKey] = useState<SelectionRevisionKey | null>(null);
   const canRewrite = Boolean(onSelectionRewrite) && !isCommitted;
+  // 定稿后不能就地改写，但仍可选中一段「问 AI」（不改稿）——浮动条只剩这一个按钮。
+  const canAsk = Boolean(onAskAboutSelection);
 
   // 查找替换（块④）：当前匹配靠编辑器选区原生高亮；这里只持有面板状态、调 findReplace。
   const [findOpen, setFindOpen] = useState(false);
@@ -99,7 +104,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   // jsdom 下会抛——try/catch 兜住，失败就不显示（真实定位交真机）。
   const refreshSelection = useCallback((instance: Editor) => {
     // 查找替换开着时不出选区浮动条——否则查找导航选中匹配会误触发块②的润色条。
-    if (!canRewrite || findOpen) { setSelection(null); return; }
+    if (!(canRewrite || canAsk) || findOpen) { setSelection(null); return; }
     const { from, to, empty } = instance.state.selection;
     if (empty) { setSelection(null); return; }
     // leafText 必须用 "\n" 与 draft.content 的 getText 对齐：Tiptap 的 hardBreak（段内单换行 → <br>）
@@ -116,7 +121,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
     } catch {
       setSelection(null);
     }
-  }, [canRewrite, findOpen]);
+  }, [canRewrite, canAsk, findOpen]);
   const refreshSelectionRef = useRef(refreshSelection);
   refreshSelectionRef.current = refreshSelection;
   // 浮动操作条只在「选区定下来（松开鼠标）」后出现，而非拖选过程中边拖边冒/抖。
@@ -387,8 +392,16 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
               当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。
             </p>
           ) : null}
-          {canRewrite && selection ? (
-            <SelectionToolbar top={selection.top} left={selection.left} busyKey={busyKey} onPick={handlePick} onPickCustom={handlePickCustom} />
+          {(canRewrite || canAsk) && selection ? (
+            <SelectionToolbar
+              top={selection.top}
+              left={selection.left}
+              busyKey={busyKey}
+              askOnly={!canRewrite}
+              onPick={handlePick}
+              onPickCustom={handlePickCustom}
+              onAsk={onAskAboutSelection ? () => { onAskAboutSelection(selection.text); setSelection(null); } : undefined}
+            />
           ) : null}
         </div>
       </div>

@@ -3,19 +3,23 @@ import { VISIBLE_SELECTION_REVISION_TEMPLATES, type SelectionRevisionKey } from 
 
 /**
  * 选区浮动操作条（阶段三块②）：在编辑器里选中一段正文时浮出。
- * 6 个固定预设按钮 + 一个「✎ 自己说」入口——点它就地变成输入行，让用户交代具体改写要求。
+ * 6 个固定预设按钮 + 一个「自己说」入口（+ 可选「问 AI」）——点它就地变成输入行，让用户交代具体改写要求。
  *
  * 选区跟踪/定位/改写动作在 WritingPaper + useWorkflowActions 里；WritingPaper 的 selection 由
  * 编辑器 state（ProseMirror）驱动、不受点击工具条影响，故输入态下选区不丢、工具条不消失。
  * 容器 onMouseDown + preventDefault：避免按下按钮时浏览器先清掉编辑器选区（拿不到 targetText）；
  * 唯独输入框用 stopPropagation 隔离，使容器的 preventDefault 不挡住它聚焦。
  */
-export default function SelectionToolbar({ top, left, busyKey, onPick, onPickCustom }: {
+export default function SelectionToolbar({ top, left, busyKey, askOnly = false, onPick, onPickCustom, onAsk }: {
   readonly top: number;
   readonly left: number;
   readonly busyKey: SelectionRevisionKey | null;
+  /** 只出「问 AI」（定稿章节不能就地改写时）。 */
+  readonly askOnly?: boolean;
   readonly onPick: (key: SelectionRevisionKey) => void;
   readonly onPickCustom?: (instruction: string) => void;
+  /** 「问 AI」：不改稿，把选中段引用进右侧输入框，跟 AI 聊这段。 */
+  readonly onAsk?: () => void;
 }) {
   const busy = busyKey !== null;
   const [customMode, setCustomMode] = useState(false);
@@ -78,7 +82,7 @@ export default function SelectionToolbar({ top, left, busyKey, onPick, onPickCus
         </>
       ) : (
         <>
-          {VISIBLE_SELECTION_REVISION_TEMPLATES.map((template) => (
+          {askOnly ? null : VISIBLE_SELECTION_REVISION_TEMPLATES.map((template) => (
             <button
               key={template.key}
               className="se-v2-selection-toolbar-btn"
@@ -94,7 +98,7 @@ export default function SelectionToolbar({ top, left, busyKey, onPick, onPickCus
               {busyKey === template.key ? "…" : template.label}
             </button>
           ))}
-          <button
+          {askOnly ? null : <button
             type="button"
             className="se-v2-selection-toolbar-btn"
             disabled={busy}
@@ -104,8 +108,22 @@ export default function SelectionToolbar({ top, left, busyKey, onPick, onPickCus
               if (!busy) setCustomMode(true);
             }}
           >
-            ✎ 自己说
-          </button>
+            自己说
+          </button>}
+          {onAsk ? (
+            <button
+              type="button"
+              className="se-v2-selection-toolbar-btn"
+              disabled={busy}
+              title="不改稿，把这段引用到右边跟 AI 聊"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                if (!busy) onAsk();
+              }}
+            >
+              问 AI
+            </button>
+          ) : null}
         </>
       )}
     </div>

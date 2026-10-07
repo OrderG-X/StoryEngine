@@ -37,15 +37,15 @@ describe("SelectionToolbar", () => {
   });
 });
 
-describe("SelectionToolbar ✎ 自己说（自定义改写输入）", () => {
+describe("SelectionToolbar 自己说（自定义改写输入）", () => {
   afterEach(() => cleanup());
 
-  it("默认有「✎ 自己说」入口；点它出输入框、输要求、点「改」走 onPickCustom 带要求", () => {
+  it("默认有「自己说」入口；点它出输入框、输要求、点「改」走 onPickCustom 带要求", () => {
     const onPickCustom = vi.fn();
     render(<SelectionToolbar top={0} left={0} busyKey={null} onPick={vi.fn()} onPickCustom={onPickCustom} />);
-    expect(screen.getByRole("button", { name: "✎ 自己说" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "自己说" })).toBeDefined();
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "✎ 自己说" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "自己说" }));
     const input = screen.getByLabelText("改写要求") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "写紧张点，删掉心理描写" } });
     fireEvent.mouseDown(screen.getByRole("button", { name: "改" }));
@@ -56,11 +56,29 @@ describe("SelectionToolbar ✎ 自己说（自定义改写输入）", () => {
   it("空要求时「改」不触发；「返回」回到预设按钮", () => {
     const onPickCustom = vi.fn();
     render(<SelectionToolbar top={0} left={0} busyKey={null} onPick={vi.fn()} onPickCustom={onPickCustom} />);
-    fireEvent.mouseDown(screen.getByRole("button", { name: "✎ 自己说" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "自己说" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "改" })); // 空
     expect(onPickCustom).not.toHaveBeenCalled();
     fireEvent.mouseDown(screen.getByRole("button", { name: "返回" }));
     expect(screen.getByRole("button", { name: "润色" })).toBeDefined();
     expect(screen.queryByLabelText("改写要求")).toBeNull();
+  });
+});
+
+describe("SelectionToolbar 问 AI", () => {
+  afterEach(() => cleanup());
+
+  it("传了 onAsk 才出「问 AI」，点它调 onAsk、不走改写", () => {
+    const onPick = vi.fn();
+    const onAsk = vi.fn();
+    render(<SelectionToolbar top={0} left={0} busyKey={null} onPick={onPick} onAsk={onAsk} />);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "问 AI" }));
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("askOnly（定稿章节）只剩「问 AI」，没有改写预设和「自己说」", () => {
+    render(<SelectionToolbar top={0} left={0} busyKey={null} askOnly onPick={vi.fn()} onAsk={vi.fn()} />);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["问 AI"]);
   });
 });

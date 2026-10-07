@@ -51,6 +51,8 @@ export function parseTargetChapterWords(writingRules: readonly string[] | undefi
 export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   /** 角色速览卡里点「在设定本中打开」。 */
   readonly onOpenCharacter?: (name: string) => void;
+  /** 选区浮动条「问 AI」：把选中段引用进右侧输入框。 */
+  readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
@@ -175,7 +177,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
               </div>
             </div>
           ) : (
-            <WritingPaper draft={draft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} />
+            <WritingPaper draft={draft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} onAskAboutSelection={props.onAskAboutSelection} />
           )
         ) : (
           <div className="se-v2-editor-wrap se-v2-paper">
