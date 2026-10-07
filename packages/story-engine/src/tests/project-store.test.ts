@@ -29,6 +29,14 @@ import {
 } from "../project-store.js";
 
 describe("StoryEngine-NG ProjectStore", () => {
+  it("新书目录名：中文书名只剩数字时用 story-<hash>，有英文词时用英文词", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ng-"));
+    const digits = await createStoryProject({ rootDir, title: "改名测试书2", genre: "", premise: "", mainCharacterName: "主角" });
+    expect(digits.projectDir.split("/").at(-1)).toMatch(/^story-[0-9a-z]+$/u);
+    const english = await createStoryProject({ rootDir, title: "UI审计-20260912", genre: "", premise: "", mainCharacterName: "主角" });
+    expect(english.projectDir.split("/").at(-1)).toBe("ui-20260912");
+  });
+
   it("creates and reads the minimal structured project layout", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-ng-"));
     const result = await createStoryProject({

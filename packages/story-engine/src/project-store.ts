@@ -39,7 +39,7 @@ export interface CreateStoryProjectResult {
 
 export async function createStoryProject(input: CreateStoryProjectInput): Promise<CreateStoryProjectResult> {
   const now = new Date().toISOString();
-  const projectIdBase = toSafeId(input.title, "story");
+  const projectIdBase = toProjectIdBase(input.title);
   const projectId = await resolveUniqueProjectId(join(input.rootDir, "story-engine"), projectIdBase);
   const mainCharacterId = toSafeCharacterId(input.mainCharacterName);
   const projectDir = join(input.rootDir, "story-engine", projectId);
@@ -315,6 +315,16 @@ function normalizeToSafeIdCore(value: string): string {
 function toSafeId(value: string, fallback: string): string {
   const safe = normalizeToSafeIdCore(value);
   return safe || `${fallback}-${shortHash(value)}`;
+}
+
+/**
+ * 新书目录名：书名里抽得出像样的英文词就用它（如「UI审计-20260912」→ ui-20260912），
+ * 否则用 story-<hash>。中文书名里只剩数字时（「测试书2」→「2」）以前会建出叫 `2` 的目录，看不出是书。
+ * 只影响新建，旧书目录不动。
+ */
+function toProjectIdBase(title: string): string {
+  const core = normalizeToSafeIdCore(title);
+  return /[a-z]{2,}/u.test(core) ? core : `story-${shortHash(title)}`;
 }
 
 async function resolveUniqueProjectId(rootDir: string, baseId: string): Promise<string> {
