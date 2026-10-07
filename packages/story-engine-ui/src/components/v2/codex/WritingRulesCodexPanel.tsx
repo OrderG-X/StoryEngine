@@ -197,7 +197,7 @@ export default function WritingRulesCodexPanel({
     return (
       <div className="read-inner">
         <div className="catrail-foot" style={{ marginTop: 40 }}>
-          <b>还没有写作规则</b>　去右边对 AI 说「帮我整理本书写法」，AI 会把适合这本书的写作规则整理在这里。
+          <b>还没有写作规则</b>去右边对 AI 说「帮我整理本书写法」，AI 会把适合这本书的写作规则整理在这里。
         </div>
       </div>
     );

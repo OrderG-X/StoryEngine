@@ -69,7 +69,7 @@ export default function TimelineCodexPanel({
           </div>
         </div>
         <div className="catrail-foot" style={{ marginTop: 40 }}>
-          <b>还没有时间线</b>　去右边写第一章并定稿，时间线会按近期 / 中段 / 远期三层铺开。
+          <b>还没有时间线</b>去右边写第一章并定稿，时间线会按近期 / 中段 / 远期三层铺开。
         </div>
       </section>
     );
@@ -102,7 +102,7 @@ export default function TimelineCodexPanel({
       {l1Descending.length > 0 ? (
         <div className="asset-grp">
           <h5 className="h2">
-            ● 近期 <span className="cnt">{l1Descending.length}</span>
+            近期 <span className="cnt">{l1Descending.length}</span>
           </h5>
           {l1Descending.map((event) => (
             <div key={`l1-${event.chapter}`} className="asset-item">
@@ -110,7 +110,7 @@ export default function TimelineCodexPanel({
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <b>第{event.chapter}章</b>
                   {event.location ? (
-                    <span className="tag" data-testid="loc">📍&nbsp;{event.location}</span>
+                    <span className="tl-loc" data-testid="loc">{event.location}</span>
                   ) : null}
                 </div>
                 {event.mainEvent ? (
@@ -132,7 +132,7 @@ export default function TimelineCodexPanel({
       {l2Descending.length > 0 ? (
         <div className="asset-grp">
           <h5 className="h2">
-            ▦ 中段 <span className="cnt">{l2Descending.length}</span>
+            中段 <span className="cnt">{l2Descending.length}</span>
           </h5>
           {(l2Expanded ? l2Descending : l2Descending.slice(0, 3)).map((event) => (
             <div key={`l2-${event.chapter}`} className="asset-item">
@@ -140,12 +140,8 @@ export default function TimelineCodexPanel({
             </div>
           ))}
           {l2Descending.length > 3 ? (
-            <button
-              type="button"
-              style={{ cursor: "pointer", border: "1px dashed var(--line)", padding: "4px 8px", borderRadius: 4, background: "transparent", color: "inherit", marginTop: 4 }}
-              onClick={() => setL2Expanded((v) => !v)}
-            >
-              {l2Expanded ? "◂ 折叠" : `▸ 展开更早 ${l2Descending.length - 3} 章`}
+            <button type="button" className="tl-more" onClick={() => setL2Expanded((v) => !v)}>
+              {l2Expanded ? "收起" : `展开更早 ${l2Descending.length - 3} 章`}
             </button>
           ) : null}
         </div>
@@ -155,13 +151,13 @@ export default function TimelineCodexPanel({
       {l3Descending.length > 0 ? (
         <div className="asset-grp" style={{ opacity: 0.8 }}>
           <h5 className="h2">
-            ▤ 远期 <span className="cnt">{l3Descending.length}</span>
+            远期 <span className="cnt">{l3Descending.length}</span>
           </h5>
           {l3Descending.map((block, index) => (
             <div key={`l3-${block.fromChapter}-${block.toChapter}-${index}`} className="asset-item">
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <b style={{ opacity: 0.7 }}>第{block.fromChapter}-{block.toChapter}章</b>
-                <span style={{ fontStyle: "italic" }}>{block.summary}</span>
+                <span>{block.summary}</span>
               </div>
             </div>
           ))}

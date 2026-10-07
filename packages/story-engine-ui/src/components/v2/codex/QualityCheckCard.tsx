@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
+import { IconChevronRight } from "./icons.js";
 import type { QualityCardReport, QualityCardIssue } from "../../../api/types.js";
 
 function IssueRow({ issue }: { readonly issue: QualityCardIssue }) {
@@ -46,7 +47,7 @@ export function QualityCheckCard({ report }: { readonly report: QualityCardRepor
       ) : null}
       {hasSevere ? (
         <>
-          <p className="qcc-severe-note">⚠️ 没有阻止定稿的硬伤，但有 {severe.length} 处严重问题（AI 已确认），强烈建议先改再定稿：</p>
+          <p className="qcc-severe-note">没有阻止定稿的硬伤，但有 {severe.length} 处严重问题（AI 已确认），强烈建议先改再定稿：</p>
           <ul className="qcc-list">{severe.map((i) => <IssueRow issue={i} key={`${i.type}|${i.message}`} />)}</ul>
         </>
       ) : null}
@@ -56,7 +57,8 @@ export function QualityCheckCard({ report }: { readonly report: QualityCardRepor
       {soft.length > 0 ? (
         <div className="qcc-soft">
           <button type="button" className="qcc-soft-toggle" onClick={() => setSoftOpen((v) => !v)} aria-expanded={softOpen}>
-            {softOpen ? "▾" : "▸"} 软提示 {soft.length} 处（参考不拦）
+            <span className={`qcc-caret${softOpen ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={11} strokeWidth={2} /></span>
+            软提示 {soft.length} 处（参考不拦）
           </button>
           {softOpen ? <ul className="qcc-list">{soft.map((i) => <IssueRow issue={i} key={`${i.type}|${i.message}`} />)}</ul> : null}
         </div>

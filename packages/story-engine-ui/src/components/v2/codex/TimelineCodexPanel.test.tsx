@@ -52,7 +52,7 @@ describe("TimelineCodexPanel L1 近期层", () => {
     expect(items[2]).toHaveTextContent("第10章");
   });
 
-  it("location 缺失时隐藏地点标记、不渲染空 📍", () => {
+  it("location 缺失时隐藏地点标记、不渲染空地点", () => {
     render(<TimelineCodexPanel timeline={{ recentEvents: L1_EVENTS, earlierSummary: [], macroSummary: [] }} />);
     const locs = screen.queryAllByTestId("loc");
     // 第12章和第10章有 location，第11章无 → 2 个地点标记
@@ -182,18 +182,18 @@ describe("TimelineCodexPanel L2 中段层折叠", () => {
     expect(screen.getByText(/展开更早 2 章/)).toBeInTheDocument();
   });
 
-  it("点击『展开更早 N 章』显示全部 L2，按钮变『折叠』", () => {
+  it("点击『展开更早 N 章』显示全部 L2，按钮变『收起』", () => {
     render(<TimelineCodexPanel timeline={{ recentEvents: [], earlierSummary: L2_EVENTS, macroSummary: [] }} />);
     fireEvent.click(screen.getByText(/展开更早 2 章/));
     expect(screen.getByText(/档案室交锋/)).toBeInTheDocument();
     expect(screen.getByText(/走私档案浮现/)).toBeInTheDocument();
-    expect(screen.getByText(/折叠/)).toBeInTheDocument();
+    expect(screen.getByText(/收起/)).toBeInTheDocument();
   });
 
-  it("再点『折叠』恢复默认 3 条", () => {
+  it("再点『收起』恢复默认 3 条", () => {
     render(<TimelineCodexPanel timeline={{ recentEvents: [], earlierSummary: L2_EVENTS, macroSummary: [] }} />);
     fireEvent.click(screen.getByText(/展开更早 2 章/));
-    fireEvent.click(screen.getByText(/折叠/));
+    fireEvent.click(screen.getByText(/收起/));
     expect(screen.queryByText(/档案室交锋/)).not.toBeInTheDocument();
   });
 
@@ -226,7 +226,7 @@ describe("TimelineCodexPanel 短书退化", () => {
     render(<TimelineCodexPanel timeline={{ recentEvents: L1_EVENTS.slice(0, 1), earlierSummary: [], macroSummary: [] }} />);
     // L1 第12章渲染了（mainEvent + summary 都含 P-07）
     expect(screen.getAllByText(/P-07/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/^▦ 中段/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^▤ 远期/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^中段/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^远期/)).not.toBeInTheDocument();
   });
 });

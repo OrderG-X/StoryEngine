@@ -21,7 +21,7 @@ import { resolveToolStepLabel } from "../../../hooks/agentEventProjection.js";
 import { isBookCreationGreeting } from "../../../hooks/useProjectNavigation.js";
 import { buildTimelineModel, liveFlowFromMessage, type LiveFlow, type FlowPhaseKey } from "../agentTimelineModel.js";
 import { flowHint, primaryPermission, uiText } from "../v2Utils.js";
-import { IconClose, IconCopy, IconSparkle, IconUndo } from "./icons.js";
+import { IconArrowUp, IconChevronRight, IconClose, IconCopy, IconSparkle, IconStop, IconUndo } from "./icons.js";
 import { useActiveModel } from "./useActiveModel.js";
 import { StepCardCollapsedByDefault } from "./StepCard.js";
 import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
@@ -103,7 +103,7 @@ export function CollapsedAiRail({ onToggleRight }: { readonly onToggleRight: () 
           fontSize: 12,
         }}
       >
-        <span style={{ fontSize: 16 }} aria-hidden="true">✦</span>
+        <IconSparkle size={16} />
         <span>AI 助手</span>
       </button>
     </aside>
@@ -307,7 +307,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onClick={() => setArchivedExpanded((v) => !v)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setArchivedExpanded((v) => !v); }}
           >
-            {archivedExpanded ? `▾ 隐藏已清理的 ${activeArchivedCount} 条早先消息` : `— 已清理 ${activeArchivedCount} 条早先消息，点击展开 —`}
+            {archivedExpanded ? `收起已清理的 ${activeArchivedCount} 条早先消息` : `已清理 ${activeArchivedCount} 条早先消息 · 点开回看`}
           </div>
         ) : null}
         {/* 展开归档段：只读显示 slice(0, activeArchivedCount) */}
@@ -359,7 +359,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>我会先帮你生成承接建议或工作稿。</p>
             {props.canUndoClearChat && props.onUndoClearChat ? (
               <button type="button" className="chip" style={{ marginTop: 10 }} onClick={() => props.onUndoClearChat?.()}>
-                ↩ 撤销清空，恢复刚才的对话
+                撤销清空，恢复刚才的对话
               </button>
             ) : null}
           </div>
@@ -511,9 +511,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
               className="send"
               onClick={() => props.onStopAgent?.()}
               title="停止本次生成（已写出的内容保留）"
-              style={{ background: "var(--danger)", color: "#fff" }}
+              aria-label="停止"
+              data-stop="true"
             >
-              ■
+              <IconStop size={16} />
             </button>
           ) : (
             <button
@@ -522,9 +523,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
               disabled={!chatEnabled || !props.steeringDirection.trim()}
               onClick={sendCurrent}
               title="发送"
+              aria-label="发送"
               style={!chatEnabled || !props.steeringDirection.trim() ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
             >
-              ↑
+              <IconArrowUp size={16} strokeWidth={2} />
             </button>
           )}
         </div>
@@ -994,7 +996,7 @@ function ToolStepFold({ step }: { readonly step: ToolStep }) {
         {stopped ? <span className="step-stop">已停止</span> : null}
         {verdict ? <span className="step-verdict">裁决未过</span> : null}
         {elapsed ? <span className="tm">{elapsed}</span> : null}
-        {canOpen ? <span className="step-caret" aria-hidden="true">{open ? "▾" : "▸"}</span> : null}
+        {canOpen ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
       </button>
       {open && detail ? <p className="step-detail">{detail}</p> : null}
     </div>
@@ -1015,7 +1017,7 @@ function ProcessLogAggregate({ steps }: { readonly steps: readonly ProcessFoldSt
         <span className="step-kind">AI 操作记录</span>
         <span className="step-sep">·</span>
         <span className="step-label is-tool">{steps.length} 步</span>
-        <span className="step-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
       </button>
       {open ? (
         <div className="process-log-children">
@@ -1038,7 +1040,7 @@ function ThinkingDisclosure({ thinking, active }: { readonly thinking: string; r
     <div className="step-fold">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="step-head">
         <span className={`step-label ${active ? "is-active" : ""}`.trim()}>AI 分析</span>
-        <span className="step-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
       </button>
       {open ? <p className="step-detail">{thinking}</p> : null}
     </div>

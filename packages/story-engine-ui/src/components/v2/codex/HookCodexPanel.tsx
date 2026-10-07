@@ -155,7 +155,7 @@ export default function HookCodexPanel({
           </div>
         </div>
         <div className="catrail-foot" style={{ marginTop: 40 }}>
-          <b>还没有伏笔线索</b>　去右边对 AI 说「帮我梳理当前的伏笔和线索」，生成后这里会按未回收/已回收分桶铺开。
+          <b>还没有伏笔线索</b>去右边对 AI 说「帮我梳理当前的伏笔和线索」，生成后这里会按未回收/已回收分桶铺开。
         </div>
       </section>
     );
@@ -235,10 +235,7 @@ export default function HookCodexPanel({
       {(totalResolved > 0 || resolvedHooks.length > 0 || doneThreads.length > 0) ? (
         <div className="asset-grp" style={{ opacity: 0.7 }}>
           <h5 className="h2">
-            ✅ 已回收{" "}
-            <span className="cnt tag ok" style={{ marginLeft: 4 }}>
-              已回收 {totalResolved} 条
-            </span>
+            已回收 <span className="cnt">{totalResolved}</span>
           </h5>
 
           {/* 若有明细则列出 */}
@@ -281,7 +278,7 @@ export default function HookCodexPanel({
           {/* 若明细为空但计数 > 0，仅按计数展示说明文 */}
           {resolvedHooks.length === 0 && doneThreads.length === 0 && totalResolved > 0 ? (
             <div className="asset-item" style={{ opacity: 0.6 }}>
-              <span>已回收的伏笔/线索明细由 AI 汇报（明细在引擎状态中，此处仅展示计数）</span>
+              <span>这里只记已回收的总数。想知道某条是怎么收的，直接问右边的 AI。</span>
             </div>
           ) : null}
         </div>

@@ -52,6 +52,46 @@
   }
   /* 写作提醒（知识边界）：是给 AI 的提醒不是报错，用正文色 + 左侧提醒橙细线，不再整段红字 */
   .se-bible .char-row .cv.risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
+  /* 时间线：地点用淡色小字跟在章号后，不用表情；「展开更早」做成文字按钮 */
+  .se-bible .tl-loc{font-size:12px;color:var(--faint);}
+  .se-bible .tl-loc::before{content:"·";margin-right:6px;}
+  .se-bible .tl-more{
+    margin-top:8px;height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
+    color:var(--muted);font-size:12px;cursor:pointer;
+  }
+  .se-bible .tl-more:hover{background:var(--hover);color:var(--text);}
+  /* 地点九宫格：格子数不满三的倍数时，同一行的格子自动撑满，不留深色空格 */
+  .se-bible .loc-grid{display:flex;flex-wrap:wrap;}
+  .se-bible .loc-cell{flex:1 1 240px;min-width:0;}
+  .se-bible .loc-cell h6{margin:0 0 6px;}
+  /* 道具：去掉每条前的符号，条目左对齐；风险提示不再整段红字 */
+  .se-bible .asset-item .ai-vis{margin-left:6px;border:0;background:var(--hover);color:var(--muted);}
+  .se-bible :is(.asset-rule,.continuity){border:1px solid var(--line);background:var(--surface-2);}
+  .se-bible .continuity{border-left:2px solid var(--warn);}
+  /* 空状态：一张淡虚线卡，标题一行 + 说明一行，左对齐；不再是中间一块深色大框 */
+  .se-bible .catrail-foot{
+    margin-top:24px !important;padding:18px 20px;border:1px dashed var(--line-strong);border-radius:12px;background:transparent;
+    font-size:13px;line-height:1.7;color:var(--muted);
+  }
+  .se-bible .catrail-foot b{display:block;margin-bottom:2px;font-size:14px;font-weight:600;color:var(--text);}
+  .se-bible .panel-empty-center{min-height:0;max-width:none;margin-left:0;margin-right:0;align-items:stretch;text-align:left;}
+
+  /* 世界观：标题里的强调字、子页签编号、圈层金边、罗马数字都撤掉，留序号淡字 */
+  .se-bible .page-head h1 em{color:inherit;}
+  .se-bible .subtabs{gap:4px;padding:4px;border-color:var(--line);background:transparent;}
+  .se-bible .subtab{padding:6px 12px;font-size:13px;}
+  .se-bible .subtab .sub-no{display:none;}
+  .se-bible .subtab.on{color:var(--text);background:var(--surface-2);border-color:var(--line-strong);font-weight:500;}
+  .se-bible .h3{font-size:14px;font-weight:600;}
+  .se-bible .h3 .dot{display:none;}
+  .se-bible .pyramid{gap:0;}
+  .se-bible .tier{padding:12px 0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;box-shadow:none;}
+  .se-bible .tier:hover{transform:none;border-color:var(--line);}
+  .se-bible .tier .roman{flex:0 0 22px;font-size:13px;font-weight:500;color:var(--faint);}
+  .se-bible .tier .body b{font-weight:500;}
+  .se-bible .wb-hero{border-color:var(--line);background:var(--surface);}
+  .se-bible .wb-hero::after{display:none;}
+  .se-bible .wb-hero .one::before{color:var(--faint);opacity:.6;}
   /* 两列格子里单数个时，最后一个占满整行（不留半行空白） */
   .se-bible .voice .vc:last-child:nth-child(odd),
   .se-bible .spec .cell:last-child:nth-child(odd){grid-column:1/-1;}

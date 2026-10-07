@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchWorldbuilding, type WorldbuildingData } from "../../../api/worldbuildingClient.js";
 import PanelEnrichButton from "./PanelEnrichButton.js";
 import { CustomFieldsSection } from "./CustomFieldsSection.js";
+import { uiText } from "../v2Utils.js";
 import {
   filterSystemStoryMeta,
   isSystemStoryMetaSentence,
@@ -13,7 +14,6 @@ import {
  * 厚版字段(worldRules/factions/specialElements/storyBinding/概要明细/隐藏目标/关系稳定性)由扩展后的
  * generate_worldbuilding 生成；旧数据缺这些字段时对应 section 自动降级隐藏，不造假。
  */
-const ROMAN = ["Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ"];
 
 function has(s?: string): s is string {
   return typeof s === "string" && s.trim().length > 0;
@@ -96,7 +96,7 @@ export default function WorldbuildingCodexPanel({
           </div>
         </div>
         <div className="catrail-foot panel-empty-center" style={{ marginTop: 40 }}>
-          <b>还没有世界观</b>　去右边对 AI 说「帮我把世界观搭起来」，生成后这里就会铺开。
+          <b>还没有世界观</b>去右边对 AI 说「帮我把世界观搭起来」，生成后这里就会铺开。
         </div>
       </section>
     );
@@ -135,11 +135,14 @@ export default function WorldbuildingCodexPanel({
         {has(w.overview.oneLine) && !isSystemStoryMetaSentence(w.overview.oneLine) ? (
           <p className="one serif">{w.overview.oneLine}</p>
         ) : null}
-        <div className="wb-metas">
-          <div className="wb-meta"><b>基调</b><span>{w.overview.tone}</span></div>
-          <div className="wb-meta"><b>核心冲突</b><span>{w.overview.coreConflict}</span></div>
-          {has(w.overview.coreTheme) ? <div className="wb-meta"><b>核心主题</b><span>{w.overview.coreTheme}</span></div> : null}
-        </div>
+        {/* 只列有内容的项：空值不留一个光秃秃的标签 */}
+        {has(w.overview.tone) || has(w.overview.coreConflict) || has(w.overview.coreTheme) ? (
+          <div className="wb-metas">
+            {has(w.overview.tone) ? <div className="wb-meta"><b>基调</b><span>{w.overview.tone}</span></div> : null}
+            {has(w.overview.coreConflict) ? <div className="wb-meta"><b>核心冲突</b><span>{w.overview.coreConflict}</span></div> : null}
+            {has(w.overview.coreTheme) ? <div className="wb-meta"><b>核心主题</b><span>{w.overview.coreTheme}</span></div> : null}
+          </div>
+        ) : null}
       </div>
 
       {/* 世界观自定义字段（破例⑦展示）：从引擎正典兜底取 extraFields，即便做厚层覆盖了其余字段也照常显。 */}
@@ -186,7 +189,7 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
               const [head, body] = splitHead(s);
               return (
                 <div key={i} className={`tier t${Math.min(i + 1, 4)}`}>
-                  <span className="roman">{ROMAN[i] ?? i + 1}</span>
+                  <span className="roman">{i + 1}</span>
                   <div className="body"><b>{head}</b>{body ? <p>{body}</p> : null}</div>
                 </div>
               );
@@ -198,7 +201,7 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
       {r && (has(r.realityStability) || has(r.supernaturalVisibility) || has(r.truthAccessibility) || has(r.narrativeLimit)) ? (
         <>
           <H2 no="03" title="世界法则" cnt="上位约束 · 不可违反" />
-          <div className="h3"><span className="dot" />现实 / 超常 / 信息 规则</div>
+          <div className="h3">现实 / 超常 / 信息 规则</div>
           <SpecGrid
             mb
             cells={[
@@ -213,11 +216,11 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
 
       {w.rules.length > 0 ? (
         <>
-          <div className="h3"><span className="dot" />{w.rules.length} 条铁律 · 法典</div>
+          <div className="h3">{w.rules.length} 条铁律</div>
           <div className="laws">
             {w.rules.map((rule, i) => (
               <div key={i} className="law">
-                <div className="ix">{ROMAN[i] ?? i + 1}<small>条</small></div>
+                <div className="ix">{i + 1}</div>
                 <div className="law-body"><h4>{rule.name}</h4><p>{rule.detail}</p></div>
               </div>
             ))}
@@ -225,7 +228,7 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
         </>
       ) : (
         <div className="catrail-foot" style={{ marginTop: 18 }}>
-          <b>还没有世界法则</b>　去右边对 AI 说「帮我定几条本书的世界铁律」，生成后这里会按法典列出。
+          <b>还没有世界法则</b>去右边对 AI 说「帮我定几条本书的世界铁律」，生成后会列在这里。
         </div>
       )}
     </div>
@@ -296,7 +299,7 @@ function ResourcesSub({ w }: { readonly w: WorldbuildingData }) {
           <div className="res-grid">
             {w.specialElements.map((e, i) => (
               <div key={i} className="res-card">
-                <div className="rch"><span className="ric">★</span><b>{e.name}</b>{e.type ? <span className="rtype tag warn">{e.type}</span> : null}</div>
+                <div className="rch"><span className="ric">{uiText(e.name, "要").slice(0, 1)}</span><b>{e.name}</b>{e.type ? <span className="rtype tag warn">{e.type}</span> : null}</div>
                 <div className="rcr"><span className="k">作用</span><span className="v">{e.effect}</span></div>
                 <div className="rcr"><span className="k">使用代价</span><span className="v">{e.cost}</span></div>
                 <div className="rcr"><span className="k">掌控者</span><span className="v">{e.controller}</span></div>
@@ -347,7 +350,7 @@ function RelationsSub({ w }: { readonly w: WorldbuildingData }) {
               return (
                 <div key={i} className="conflict">
                   <span className="cn">{String(i + 1).padStart(2, "0")}</span>
-                  <p>{body ? <><b>{head}</b>　{body}</> : c}</p>
+                  <p>{body ? <><b>{head}</b>{body}</> : c}</p>
                 </div>
               );
             })}

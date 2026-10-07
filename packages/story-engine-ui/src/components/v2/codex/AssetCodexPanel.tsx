@@ -11,7 +11,7 @@ import { isPlaceholderUiValue } from "../../../shared/sparse-panel-honesty.js";
  *
  * 视觉照 GLM 设计稿 codex.html#p-assets（样式在 codex.css，作用域 .codex-app）：
  *  - .asset-owner 按持有人分组 → .ao-head 头像 + 概述
- *  - .asset-grps 四桶：随身资产 / 当前可用 / 受限·不可用 / ★ 剧情关键·隐藏
+ *  - .asset-grps 四桶：随身资产 / 当前可用 / 受限·不可用 / 剧情关键·隐藏
  *  - .asset-item 内含 .ai-vis（读者可见 / 知情边界标）+ .ai-note（细节一行）
  *  - .asset-rule 资产硬规则 · 全局限制
  *  - .continuity 连续性风险提示（写作前必看）
@@ -28,10 +28,6 @@ import { isPlaceholderUiValue } from "../../../shared/sparse-panel-honesty.js";
  * 故在此忠实复刻同一套解析，保证两个面板名单一致），仅 buildAssetCards 携带 vis/desc 注入。
  */
 
-const GLYPH_CARRIED = "◉";
-const GLYPH_AVAILABLE = "◇";
-const GLYPH_LOCKED = "⊘";
-const GLYPH_CRITICAL = "★";
 
 /** codex 厚字段：资产名 → 读者可见性 / 知情边界标（如「读者可见」「仅主角知」「主角+某配角知」）。 */
 export type AssetVisibilityMap = Readonly<Record<string, string>>;
@@ -149,7 +145,7 @@ export default function AssetCodexPanel({
 
       {isEmpty ? (
         <div className="catrail-foot panel-empty-center" style={{ marginTop: 40 }}>
-          <b>还没有道具与资源</b>　去右边对 AI 说「帮我把角色的随身物品和资源理一下」，生成后这里就会按持有人铺开。
+          <b>还没有道具与资源</b>去右边对 AI 说「帮我把角色的随身物品和资源理一下」，生成后这里就会按持有人铺开。
         </div>
       ) : (
         <>
@@ -163,7 +159,7 @@ export default function AssetCodexPanel({
 
           {limits.length > 0 ? (
             <div className="asset-rule">
-              <h5>⚙ 道具与资源硬规则 · 全局限制</h5>
+              <h5>道具与资源的硬规则</h5>
               <ul>
                 {limits.map((rule, i) => (
                   <li key={i}>{rule}</li>
@@ -174,10 +170,9 @@ export default function AssetCodexPanel({
 
           {risks.length > 0 ? (
             <div className="continuity">
-              <h5>⚠ 连续性风险提示（写作前必看）</h5>
+              <h5>写作前留意：连续性风险</h5>
               {risks.map((risk, i) => (
                 <div key={i} className="citem">
-                  <span className="ci">▸</span>
                   <span>
                     {has(risk.label) ? <b>{risk.label}：</b> : null}
                     {risk.detail}
@@ -203,10 +198,10 @@ function OwnerLedger({ owner }: { readonly owner: AssetOwnerView }) {
         </div>
       </div>
       <div className="asset-grps">
-        <AssetGroup title="随身物品" glyph={GLYPH_CARRIED} items={owner.carried} />
-        <AssetGroup title="当前可用" glyph={GLYPH_AVAILABLE} items={owner.available} />
-        <AssetGroup title="受限 / 不可用" glyph={GLYPH_LOCKED} items={owner.unavailable} variant="locked" />
-        <AssetGroup title="★ 剧情关键 / 隐藏" glyph={GLYPH_CRITICAL} items={owner.critical} variant="hidden" accent />
+        <AssetGroup title="随身物品" items={owner.carried} />
+        <AssetGroup title="当前可用" items={owner.available} />
+        <AssetGroup title="受限 / 不可用" items={owner.unavailable} variant="locked" />
+        <AssetGroup title="剧情关键 / 隐藏" items={owner.critical} variant="hidden" accent />
       </div>
     </div>
   );
@@ -214,13 +209,11 @@ function OwnerLedger({ owner }: { readonly owner: AssetOwnerView }) {
 
 function AssetGroup({
   accent,
-  glyph,
   items,
   title,
   variant,
 }: {
   readonly accent?: boolean;
-  readonly glyph: string;
   readonly items: readonly AssetCardData[];
   readonly title: string;
   readonly variant?: "locked" | "hidden";
@@ -235,7 +228,6 @@ function AssetGroup({
         const note = assetNote(asset);
         return (
           <div className={`asset-item${variant ? ` ${variant}` : ""}`} key={`${title}:${asset.name}:${asset.status}`}>
-            <span className="ai-ic" style={accent ? { color: "var(--accent-hi)" } : undefined}>{glyph}</span>
             <div>
               <b>{uiText(asset.name, "未命名道具")}</b>
               {has(asset.visibility) ? <span className="ai-vis">{asset.visibility}</span> : null}
@@ -308,7 +300,7 @@ function buildAssetOwners(
 }
 
 /**
- * 互斥分桶：codex 里每件资产只落一个桶。按优先级 ★关键 > 受限 > 随身 > 当前可用
+ * 互斥分桶：codex 里每件资产只落一个桶。按优先级 关键 > 受限 > 随身 > 当前可用
  * 依次归位，已归入高优先级桶的项不再进入低优先级桶——杜绝随身/关键被「当前可用」重复收录。
  * （对照 codex.html#p-assets：随身桶里的可用项不应再出现在「当前可用」，关键/受限同理。）
  */

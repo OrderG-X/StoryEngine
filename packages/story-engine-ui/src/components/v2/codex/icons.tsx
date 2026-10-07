@@ -41,6 +41,23 @@ export function IconChevronLeft(props: IconProps) {
   return <Icon {...props}><path d="M15 18l-6-6 6-6" /></Icon>;
 }
 
+export function IconChevronRight(props: IconProps) {
+  return <Icon {...props}><path d="M9 6l6 6-6 6" /></Icon>;
+}
+
+export function IconArrowUp(props: IconProps) {
+  return <Icon {...props}><path d="M12 19V5M6 11l6-6 6 6" /></Icon>;
+}
+
+/** 停止：实心圆角方块（不走描边，fill=currentColor）。 */
+export function IconStop({ size = 18, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" className={className}>
+      <rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function IconFocus(props: IconProps) {
   return <Icon {...props}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></Icon>;
 }

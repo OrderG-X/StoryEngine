@@ -7,6 +7,7 @@
 import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
 import { formatStepElapsed } from "./chatRenderShared.js";
+import { IconChevronRight } from "./icons.js";
 
 export type StepCardStatus = "running" | "done" | "attention" | "failed";
 
@@ -51,7 +52,7 @@ export function StepCard({ title, status, statusLabel, elapsedMs, defaultOpen = 
         <span className="sc-title">{title}</span>
         <span className="sc-badge">{badge}</span>
         {elapsed ? <span className="sc-tm">{elapsed}</span> : null}
-        {hasBody ? <span className="sc-caret" aria-hidden="true">{open ? "▾" : "▸"}</span> : null}
+        {hasBody ? <span className={`sc-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
       </button>
       {open && hasBody ? <div className="sc-body">{children}</div> : null}
     </div>

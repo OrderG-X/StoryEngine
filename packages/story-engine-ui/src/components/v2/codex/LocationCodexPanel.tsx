@@ -270,7 +270,7 @@ export default function LocationCodexPanel({
 
       {isEmpty ? (
         <div className="catrail-foot panel-empty-center" style={{ marginTop: 40 }}>
-          <b>还没有地点资料</b>　去右边对 AI 说「帮我整理这章会用到的地点」，AI 会把地点资料整理在这里。
+          <b>还没有地点资料</b>去右边对 AI 说「帮我整理这章会用到的地点」，AI 会把地点资料整理在这里。
         </div>
       ) : (
         <div className="locs">

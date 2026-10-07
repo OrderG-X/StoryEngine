@@ -113,7 +113,7 @@ export default function RevisionPreviewModal(props: WritingWorkspaceLayoutProps)
             {`${preview.changeSummary}`.trim() ? (
               <p className="rpm-summary">改了什么：{`${preview.changeSummary}`.trim()}</p>
             ) : null}
-            {risks.length ? <p className="rpm-risk">⚠ {risks.join("；")}</p> : null}
+            {risks.length ? <p className="rpm-risk">留意：{risks.join("；")}</p> : null}
           </div>
           <div className="rpm-actions">
             <button

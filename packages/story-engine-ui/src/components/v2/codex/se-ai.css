@@ -113,6 +113,10 @@
   .step-kind,.step-label{color:var(--muted);font-weight:500;}
   .step-label.is-tool{color:var(--muted);}
   .step-head:hover:not(:disabled) .step-caret{color:var(--text);}
+  /* 展开箭头：统一用线条图标，展开时转 90° */
+  :is(.step-caret,.sc-caret,.qcc-caret){display:inline-grid;place-items:center;transition:transform .15s ease,color .15s;}
+  :is(.step-caret,.sc-caret,.qcc-caret).is-open{transform:rotate(90deg);}
+  .step-card .qcc-soft-toggle{display:inline-flex;align-items:center;gap:4px;}
   .step-detail{border-left-color:var(--line);color:var(--faint);}
   .step-label.is-active{color:var(--text);}
   .step-label.is-active::after{display:none;}
@@ -168,6 +172,9 @@
   .composer{margin:8px 12px 12px;padding:8px 8px 8px 12px;border-radius:12px;border:1px solid var(--line-strong);background:var(--bg);}
   .composer:focus-within{border-color:var(--accent);box-shadow:none;}
   .composer .send{width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);box-shadow:none;font-weight:600;}
+  /* 停止：不用刺眼的红底，换成正文色实心钮 + 方块图标 */
+  .composer .send[data-stop]{background:var(--text);color:var(--bg);}
+  .composer .send svg{display:block;}
   .codex-context-meter{color:var(--faint);}
 
   /* 过期线索卡：类型小标中性、「已 N 章没推进」用提醒橙（不是错误红）。 */
