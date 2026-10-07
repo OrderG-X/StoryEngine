@@ -398,6 +398,8 @@ export const commitApplyTool = writeTool({
     "用户说要定稿时调用它（给出章号即可），然后告诉用户点「确认定稿」按钮；绝不说成『已定稿』。",
   inputSchema,
   outputSchema,
+  // 操作历史可读性：定稿存档标签带章号（agent:commit_apply:第58章 → 「定稿：第58章」），不再一排分不清的「定稿」。
+  snapshotDetail: (input) => (typeof input.chapter === "number" && input.chapter > 0 ? `第${input.chapter}章` : undefined),
   // 授权模型（2026-10-07 拆补丁塔）：只有用户点了「确认定稿」按钮（结构化动作，服务端直接执行）才真写盘；
   // 模型自己发起的调用一律不定稿——有有效预览就给用户出确认按钮，没有就如实让先预览。
   // 不再用正则猜用户原话是不是授权（那张词表追不完中文说法、还和诚实检测两表互锁）。

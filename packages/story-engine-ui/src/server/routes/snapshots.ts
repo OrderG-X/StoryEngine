@@ -13,7 +13,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, restoreSnapshot } from "../lib/snapshot.js";
+import { attachCommitChapterDetails, humanizeUndoLabel, isPostWriteSettlementSnapshot, listSnapshots, pruneSnapshots, readCommitChapterHints, restoreSnapshot } from "../lib/snapshot.js";
 
 // ---------------------------------------------------------------------------
 // Route registrar
@@ -37,7 +37,12 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         // undoLastChange 依赖原始 label 做 isRestoreArtifact/^agent: 匹配，提前 humanize 会破坏它。
         // 过滤掉「落盘收尾」工程 commit（afterfix #2）：它只为把写产物收进 git、让工作树干净，不是用户动作，
         // 不该出现在操作历史里（否则每个写操作多一条无意义条目）。
-        const raw = (await listSnapshots(projectDir)).filter((s) => !isPostWriteSettlementSnapshot(s.label));
+        // 老「定稿」条目补章号（新存档标签已自带）：须在过滤落盘收尾之前做，它靠紧邻的收尾提交认章。
+        const listed = await listSnapshots(projectDir);
+        const withChapters = listed.some((s) => s.label === "agent:commit_apply")
+          ? attachCommitChapterDetails(listed, await readCommitChapterHints(projectDir))
+          : listed;
+        const raw = withChapters.filter((s) => !isPostWriteSettlementSnapshot(s.label));
         const snapshots = raw.map((s) => ({ ...s, label: humanizeUndoLabel(s.label) }));
         writeJson(res, 200, { ok: true, snapshots });
         return;

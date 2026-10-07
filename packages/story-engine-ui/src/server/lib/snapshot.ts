@@ -256,6 +256,39 @@ function isRestoreArtifact(label: string): boolean {
  * 可能被误当撤销目标（变成重做）；故显式纳入 undo 跳过名单。操作历史也据此过滤、不显这条工程 commit。
  */
 const POST_WRITE_LABEL_PREFIX = "落盘收尾：";
+/**
+ * 每个提交改动了哪一章的正式章节文件（chapters/NNNN.md）：一次 git log --name-only 拿全，供操作历史给老的「定稿」条目补章号。
+ * 只认项目根下的 chapters/ 文件（.story-engine-tx 事务归档里的副本不算）。读不到返回空表，不影响列表本身。
+ */
+export async function readCommitChapterHints(projectDir: string, limit = 100): Promise<Map<string, number>> {
+  const hints = new Map<string, number>();
+  const out = await withProjectLock(projectDir, () => git(projectDir, ["log", `-${limit}`, "--name-only", "--pretty=format:@@%H"]))
+    .catch(() => "");
+  let current = "";
+  for (const line of out.split("\n")) {
+    if (line.startsWith("@@")) { current = line.slice(2).trim(); continue; }
+    const match = /^chapters\/(\d+)\.md$/u.exec(line.trim());
+    if (current && match && !hints.has(current)) hints.set(current, Number(match[1]));
+  }
+  return hints;
+}
+
+/**
+ * 老的定稿存档（标签只有 agent:commit_apply、没带章号）补章号：定稿前存档点之后紧跟的「落盘收尾」提交里有 chapters/NNNN.md。
+ * entries 是 git log 原始顺序（新→旧），须在过滤掉落盘收尾条目之前调用。
+ */
+export function attachCommitChapterDetails(
+  entries: readonly SnapshotEntry[],
+  hints: ReadonlyMap<string, number>,
+): SnapshotEntry[] {
+  return entries.map((entry, index) => {
+    if (entry.label !== "agent:commit_apply") return entry;
+    const newer = index > 0 ? entries[index - 1] : undefined;
+    const chapter = (newer && isPostWriteSettlementSnapshot(newer.label) ? hints.get(newer.id) : undefined) ?? hints.get(entry.id);
+    return chapter ? { ...entry, label: `agent:commit_apply:第${chapter}章` } : entry;
+  });
+}
+
 export function isPostWriteSettlementSnapshot(label: string): boolean {
   return label.startsWith(POST_WRITE_LABEL_PREFIX);
 }
