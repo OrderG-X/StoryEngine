@@ -158,7 +158,7 @@ export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): 
     "5. 只给明确、可执行的修改建议。",
     "6. 如果草稿有明显高风险问题，verdict 必须是 needs_major_revision 或 blocked。",
     "7. 输出必须是 JSON 对象，不能有 Markdown 包裹。",
-    "8. 给作者看的文字（summary、strengths、issues 的 title/description/evidence 以外的说明、suggestedFix 等）一律写中文自然语言，不得出现上下文里的英文字段名、检查项代码或内部 id（如 deterministicQuality、missing_chapter_title、char-xxx）；要提到某项检查，用中文说它查的是什么（如「机械检查提示缺章节标题」）。",
+    "8. 给作者看的文字（summary、strengths、issues 的 title/description/evidence 以外的说明、suggestedFix 等）一律写中文自然语言，不得出现上下文里的英文字段名、检查项代码或内部 id（如 deterministicQuality、missing_chapter_title、char-xxx）；要提到某项检查，用中文说它查的是什么（如「自动检查提示缺章节标题」，别说「机械检查」）。",
     "",
     "必须审查：",
     "- 剧情质量：本章事件、冲突、推进、悬念、水文、是否偏离目标。",
