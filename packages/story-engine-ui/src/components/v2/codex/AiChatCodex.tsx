@@ -25,6 +25,7 @@ import { IconClose, IconCopy, IconSparkle, IconUndo } from "./icons.js";
 import { useActiveModel } from "./useActiveModel.js";
 import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
 import { parsePaletteCharacters } from "./CommandPalette.js";
+import { buildInboxTodos } from "./inboxTodos.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { ChapterToolRail } from "./ChapterToolRail.js";
@@ -139,6 +140,27 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   });
   const mentionOpen = mentionCandidates.length > 0 && mentionDismissedAt !== props.steeringDirection;
   const activeMention = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
+  // 「待处理」收件箱：点「让 AI …」只把一句话放进输入框，发不发由你。
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const inboxTodos = buildInboxTodos({
+    chapters: props.workspace.chapters,
+    overview: props.overview,
+    currentChapterNumber: props.workspace.currentChapter.chapterNumber,
+  });
+  useEffect(() => {
+    if (!inboxOpen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setInboxOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inboxOpen]);
+  const prefillComposer = (text: string) => {
+    props.onSteeringDirectionChange(text);
+    setInboxOpen(false);
+    requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  };
   const pickMention = (label: string) => {
     props.onSteeringDirectionChange(insertMention(props.steeringDirection, label));
     setMentionIndex(0);
@@ -237,7 +259,40 @@ export default function AiChatCodex(props: AiChatCodexProps) {
 
       {/* ── 状态行：平时说本章到哪一步了；本回合有工具在跑时换成实时字幕（写到多少字 / 审到哪）。
           2026-10-07 改版：撤掉四步大圆进度，省出一百多像素给对话。 ── */}
-      <AiStatusLine flowStatus={flowStatus} live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))} />
+      <div className="se-ai-ctx-row">
+        <AiStatusLine flowStatus={flowStatus} live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))} />
+        <button
+          type="button"
+          className={`se-inbox-btn${inboxTodos.length ? "" : " is-clear"}`}
+          aria-expanded={inboxOpen}
+          aria-label={inboxTodos.length ? `待处理 ${inboxTodos.length} 项` : "没有待处理"}
+          onClick={() => setInboxOpen((open) => !open)}
+        >
+          {inboxTodos.length ? `待处理 ${inboxTodos.length}` : "没有待处理"}
+        </button>
+        {inboxOpen ? (
+          <div className="se-inbox-pop" role="dialog" aria-label="待处理">
+            <div className="se-inbox-h">
+              <span>{inboxTodos.length ? "这些不急，但别忘了" : "眼下没有要你留意的事"}</span>
+              <button type="button" className="se-icon-btn sm" aria-label="关闭" onClick={() => setInboxOpen(false)}><IconClose size={14} /></button>
+            </div>
+            {inboxTodos.map((todo) => (
+              <div key={todo.key} className="se-todo">
+                <div className="se-todo-tx">{todo.title}<span title={todo.sub}>{todo.sub}</span></div>
+                <button
+                  type="button"
+                  className="se-todo-act"
+                  disabled={!chatEnabled}
+                  title={`把「${todo.prefill}」放进输入框（不会自动发送）`}
+                  onClick={() => prefillComposer(todo.prefill)}
+                >
+                  {todo.action}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
       {/* ── 本章工具条（B1）：按阶段确定性列出该用的工具，点一下=给 agent 发预置意图（对话唯一控制面） ── */}
       <ChapterToolRail flowStatus={flowStatus} onSendMessage={props.onSendMessage} disabled={workspaceBusy} />
 

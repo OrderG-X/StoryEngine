@@ -23,11 +23,34 @@
   .se-text-btn:hover{background:var(--hover);color:var(--text);}
 
   /* ── 状态行（替代四步大圆） ── */
-  .se-ai-ctx{display:flex;align-items:center;gap:8px;min-width:0;padding:0 14px 10px;font-size:12px;color:var(--muted);}
+  .se-ai-ctx-row{position:relative;display:flex;align-items:center;gap:8px;padding:0 10px 10px 14px;}
+  .se-ai-ctx{flex:1;display:flex;align-items:center;gap:8px;min-width:0;font-size:12px;color:var(--muted);}
+  .se-inbox-btn{
+    flex:none;height:24px;padding:0 10px;border:0;border-radius:999px;background:var(--warn-soft);color:var(--warn);
+    font-size:12px;cursor:pointer;white-space:nowrap;
+  }
+  .se-inbox-btn.is-clear{background:transparent;color:var(--faint);box-shadow:inset 0 0 0 1px var(--line);}
+  .se-inbox-pop{
+    position:absolute;top:calc(100% - 4px);left:10px;right:10px;z-index:40;padding:6px;
+    background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
+    animation:se-fade .12s ease-out;
+  }
+  .se-inbox-h{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 4px 10px;font-size:12px;color:var(--faint);}
+  .se-todo{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px;border-radius:8px;}
+  .se-todo:hover{background:var(--hover);}
+  .se-todo-tx{min-width:0;font-size:13px;color:var(--text);}
+  .se-todo-tx span{display:block;margin-top:2px;font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-todo-act{
+    height:28px;padding:0 10px;border:1px solid var(--line-strong);border-radius:7px;background:transparent;
+    color:var(--text);font-size:12px;cursor:pointer;white-space:nowrap;
+  }
+  .se-todo-act:hover:not(:disabled){background:var(--hover);}
+  .se-todo-act:disabled{opacity:.5;cursor:default;}
   .se-ai-ctx-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--faint);}
   .se-ai-ctx.is-running{color:var(--text);}
   .se-ai-ctx.is-running .se-ai-ctx-dot{background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
   .se-ai-ctx-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  @keyframes se-fade{from{opacity:0}to{opacity:1}}
   @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
   /* ── 会话条 ── */
