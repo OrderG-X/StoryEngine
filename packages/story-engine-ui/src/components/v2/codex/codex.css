@@ -942,19 +942,19 @@
   /* 图例：用真实的删/增样式当示例，教用户颜色含义。 */
   .revision-preview-modal .rpm-legend{display:flex;align-items:center;gap:5px;margin:0 0 12px;
     font-size:12.5px;color:var(--faint);letter-spacing:.02em;}
-  .revision-preview-modal .rpm-legend .rpm-tag-del{margin-left:10px;color:rgba(229,140,130,.85);
+  .revision-preview-modal .rpm-legend .rpm-tag-del{margin-left:10px;color:var(--danger);
     text-decoration:line-through;text-decoration-thickness:1px;}
   .revision-preview-modal .rpm-legend .rpm-tag-add{margin-left:10px;background:color-mix(in srgb,var(--accent) 28%,transparent);
     color:var(--text);border-radius:3px;padding:0 4px;}
   /* 行内 diff：改写结果直接成段，删去划掉、新增金色高亮——一眼看出改了啥。 */
   .revision-preview-modal .rpm-diff{margin:0 0 14px;font-family:"Noto Serif SC",ui-serif,Georgia,serif;
     font-size:17px;line-height:2;color:var(--text);white-space:pre-wrap;word-break:break-word;}
-  .revision-preview-modal .rpm-diff .rpm-del{color:rgba(229,140,130,.82);
+  .revision-preview-modal .rpm-diff .rpm-del{color:var(--danger);
     text-decoration:line-through;text-decoration-thickness:1px;}
   .revision-preview-modal .rpm-diff .rpm-add{background:color-mix(in srgb,var(--accent) 28%,transparent);color:var(--text);
     border-radius:3px;padding:0 1.5px;text-decoration:none;}
   .revision-preview-modal .rpm-summary{margin:0 0 9px;font-size:13.5px;line-height:1.7;color:var(--muted);}
-  .revision-preview-modal .rpm-risk{margin:0 0 12px;font-size:13.5px;line-height:1.65;color:rgba(229,140,130,.9);}
+  .revision-preview-modal .rpm-risk{margin:0 0 12px;font-size:13.5px;line-height:1.65;color:var(--danger);}
   .revision-preview-modal .rpm-actions{display:flex;gap:8px;flex-wrap:wrap;}
   .revision-preview-modal .rpm-apply,.revision-preview-modal .rpm-btn{font-size:14px;padding:9px 18px;
     border-radius:10px;cursor:pointer;font-family:inherit;transition:.15s;border:1px solid var(--line);}
