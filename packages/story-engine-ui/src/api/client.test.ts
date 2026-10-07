@@ -16,6 +16,7 @@ import {
   generateDraft,
   previewCommit,
   saveChapterWorkspace,
+  saveChapterWorkspaceBeacon,
   saveModelSettings,
   ChapterWorkspaceConflictError,
 } from "./client.js";
@@ -50,6 +51,28 @@ describe("saveChapterWorkspace revision conflicts", () => {
     expect(error).toMatchObject({
       snapshot: { chapter: 1, draftContent: "server wins", revision: 4 },
     });
+  });
+});
+
+describe("saveChapterWorkspaceBeacon 页面还活着时回报新 revision", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("保存成功 → 回调拿到服务端新 revision；失败不回调", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      ok: true,
+      snapshot: { chapter: 1, messages: [], selectedAdviceCardKeys: [], revision: 8 },
+    })));
+    const onSaved = vi.fn();
+    saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSaved);
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ revision: 8 })));
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "冲突" }, 409)));
+    const onSavedConflict = vi.fn();
+    saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSavedConflict);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onSavedConflict).not.toHaveBeenCalled();
   });
 });
 

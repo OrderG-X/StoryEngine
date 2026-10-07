@@ -235,14 +235,29 @@ export class ChapterWorkspaceConflictError extends Error {
 }
 
 /** 退出/切换前的「尽力而为」草稿保存（审查 #4）：keepalive fetch，页面卸载后仍能送达服务端。 */
-export function saveChapterWorkspaceBeacon(input: SaveChapterWorkspaceRequest): void {
+/**
+ * 关窗/切后台时的「尽力而为」保存（keepalive，页面卸载后请求仍能送达）。
+ * 页面若没卸载（只是切到别的应用、窗口被遮住），回调会收到服务端的新 revision——调用方必须记下来：
+ * 否则下一笔常规自动保存还拿旧 revision，撞 409 → 整页重载，正在跑的 AI 回合被腰斩（2026-10-07 桌面版实锤）。
+ */
+export function saveChapterWorkspaceBeacon(
+  input: SaveChapterWorkspaceRequest,
+  onSaved?: (snapshot: ChapterWorkspaceSnapshot) => void,
+): void {
   try {
     void fetch("/api/chapter-workspace", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
       keepalive: true,
-    });
+    })
+      .then((response) => (response.ok ? response.json() as Promise<ChapterWorkspaceApiResponse> : null))
+      .then((payload) => {
+        if (payload && payload.ok && onSaved) onSaved(payload.snapshot);
+      })
+      .catch(() => {
+        // 卸载途中或网络失败：无法补救，忽略。
+      });
   } catch {
     // 尽力而为：卸载途中失败无法补救，忽略。
   }

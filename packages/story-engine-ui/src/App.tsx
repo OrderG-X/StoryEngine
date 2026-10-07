@@ -389,7 +389,17 @@ export function App() {
 
     if (options.keepalive) {
       // 退出/隐藏途中：同步派发 keepalive fetch（静态 import，不经动态 import 的微任务——页面卸载时那一跳可能来不及跑）。
-      saveChapterWorkspaceBeacon(prepareVersionedWorkspaceSave(request));
+      const beaconRequest = prepareVersionedWorkspaceSave(request);
+      saveChapterWorkspaceBeacon(beaconRequest, (snapshot) => {
+        // 页面还活着（切后台而非关窗）：记下新 revision，下一笔常规保存才不会撞 409 把页面重载掉。
+        const revision = snapshot.revision ?? beaconRequest.expectedRevision ?? 0;
+        recordWorkspaceRevision(beaconRequest.projectPath, beaconRequest.chapter, revision);
+        const liveStore = useWorkspaceStore.getState();
+        if (useNavigationStore.getState().projectPath === beaconRequest.projectPath
+          && liveStore.workspace.currentChapter.chapterNumber === beaconRequest.chapter) {
+          liveStore.setWorkspaceRevision(revision);
+        }
+      });
       if (sessionId) {
         saveChatSessionMessagesBeacon(activeProjectPath, sessionId, messages);
       }
@@ -432,8 +442,10 @@ export function App() {
   // 关窗/刷新/切后台前 keepalive flush，抢救最后一次未落盘的编辑（审查 #4）。
   useEffect(() => {
     const onHide = () => performAutosaveFromStore({ keepalive: true });
+    // 只是切后台/窗口被遮住（页面还活着）：走常规排队保存，记得住新 revision。
+    // 以前这里也发 keepalive 信标，它的新 revision 没人记，下一笔保存撞 409 → 整页重载，正在跑的 AI 回合被打断。
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") onHide();
+      if (document.visibilityState === "hidden") void performAutosaveFromStore();
     };
     window.addEventListener("pagehide", onHide);
     window.addEventListener("beforeunload", onHide);
