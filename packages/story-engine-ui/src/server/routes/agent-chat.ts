@@ -620,8 +620,8 @@ async function handleAgentChat(
     if (droppedHistoryCount > 0) {
       sendEvent("status", {
         message:
-          `对话历史较长，为保证聚焦，本次只把最近 ${messages.length} 条对话发给模型（更早的 ${droppedHistoryCount} 条不参与本轮判断）。` +
-          "故事状态以资料库和工具结果为准，如需让我回忆前面的安排，请直接再说一遍。",
+          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；故事资料不受影响。` +
+          "前面说过的安排要用到的话，请再说一遍。",
       });
     }
 

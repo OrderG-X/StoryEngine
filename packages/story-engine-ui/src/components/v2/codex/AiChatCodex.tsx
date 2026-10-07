@@ -356,6 +356,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onUndoToHere={props.onUndoToTurn ? () => props.onUndoToTurn?.(message) : undefined}
             onPrefillComposer={prefillComposer}
             liveOperation={index === all.length - 1 ? operationCaption(props.draftActionLoading) : null}
+            isLatestMessage={index === all.length - 1}
             onFixAiFlavorViolation={props.onFixAiFlavorViolation}
             onFixAllAiFlavorViolations={props.onFixAllAiFlavorViolations}
             pendingViolationId={props.aiFlavorPending?.messageId === message.id ? props.aiFlavorPending.violationId : null}
@@ -676,6 +677,7 @@ function MessageBubbles({
   commitConfirmable = false,
   onPrefillComposer,
   liveOperation = null,
+  isLatestMessage = true,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -701,6 +703,8 @@ function MessageBubbles({
   readonly onPrefillComposer?: (text: string) => void;
   /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
   readonly liveOperation?: string | null;
+  /** 是不是对话里最后一条（旧的出错卡不再给「重试」——后面已经重试过/往下走了，再点会重复跑）。 */
+  readonly isLatestMessage?: boolean;
 }) {
   if (message.role === "system") {
     // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
@@ -736,7 +740,7 @@ function MessageBubbles({
       <div className="msg msg-ai">
         <AgentErrorCard
           detail={message.errorDetail || message.content}
-          retryAction={retry}
+          retryAction={isLatestMessage ? retry : null}
           chatLoading={chatLoading}
           onRetry={onSuggestedAction}
         />

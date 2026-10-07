@@ -85,15 +85,16 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
   });
 
   it("retry-agent 不进建议条：错误气泡内已有就地「重试这一步」，条上不重复", () => {
+    // 错误卡放最后：只有最新那条出错卡才给「重试」（更早的出错卡后面已经往下走了，再点会重复跑）。
     const { container } = renderChat([
       user("u1"),
+      assistant("a2", "已写入资料。", [action("undo-foundation-write", "撤销本次修改", "undo-9")]),
       assistant(
         "err-1",
         "AI 服务暂时没响应，本次没有改动。",
         [action("retry-agent", "重试", "把这条记进资料")],
         { isErrorNotice: true, errorDetail: "落盘失败" },
       ),
-      assistant("a2", "已写入资料。", [action("undo-foundation-write", "撤销本次修改", "undo-9")]),
     ]);
 
     // 就地入口在错误卡上，全界面只此一个重试钮。
@@ -103,6 +104,20 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
     const chips = within(el!);
     chips.getByRole("button", { name: "撤销本次修改" });
     expect(chips.queryByRole("button", { name: /重试/ })).toBeNull();
+  });
+
+  it("更早的出错卡不再给「重试」（后面已经有新回复了）", () => {
+    renderChat([
+      user("u1"),
+      assistant(
+        "err-1",
+        "AI 服务暂时没响应，本次没有改动。",
+        [action("retry-agent", "重试", "把这条记进资料")],
+        { isErrorNotice: true, errorDetail: "断开" },
+      ),
+      assistant("a2", "第 2 章已写好。", []),
+    ]);
+    expect(screen.queryByRole("button", { name: "重试这一步" })).toBeNull();
   });
 
   it("回合进行中（chatLoading）整条不渲染，回合结束才浮现", () => {
