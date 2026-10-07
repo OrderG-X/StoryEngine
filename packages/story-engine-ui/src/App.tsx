@@ -541,6 +541,16 @@ export function App() {
   ) : null;
 
   /* ---- Render ---- */
+  // 地址栏就是某本书（刷新写作台、桌面版重开）而书还在加载：先给一个安静的「正在打开」，
+  // 别先闪一下书架再跳进书里。打开失败（openProjectError）照常落回书架并提示。
+  if (!workspaceReady && readWorkspaceRoute().type !== "home" && !openProjectError) {
+    return (
+      <div className="se-boot" role="status" aria-live="polite">
+        <span className="se-boot-dot" aria-hidden="true" />
+        正在打开…
+      </div>
+    );
+  }
   if (!workspaceReady) {
     return (
       <>

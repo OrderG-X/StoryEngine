@@ -275,6 +275,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))}
           operation={operationCaption(props.draftActionLoading)}
           busy={Boolean(props.chatLoading)}
+          runningStep={[...props.workspace.messages].reverse().find((m) => m.role === "assistant")?.toolSteps?.find((step) => step.status === "running")?.label ?? null}
         />
         <button
           type="button"
@@ -628,17 +629,25 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
   return { text: lp.detail ? oneLine(lp.detail, 52) : `${last.label}完成`, running: false };
 }
 
-function AiStatusLine({ flowStatus, live, operation, busy = false }: {
+/** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——预览定稿时说「正在定稿」会吓人）。 */
+const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
+  "定稿影响预览": "生成定稿预览",
+};
+
+function AiStatusLine({ flowStatus, live, operation, busy = false, runningStep = null }: {
   readonly flowStatus: ChapterFlowStatus;
   readonly live: LiveFlow | null;
   /** 不走对话的操作（审稿/质检/修改方案…）进行中时的一句话。 */
   readonly operation?: string | null;
   /** AI 这一轮还在跑（在想、还没调工具）：别还挂着「本章已就绪」这类静态提示。 */
   readonly busy?: boolean;
+  /** 本回合正在跑的工具步骤名（如「生成正文」「定稿影响预览」）。 */
+  readonly runningStep?: string | null;
 }) {
   const caption = liveCaption(live);
   const running = Boolean(caption?.running) || Boolean(operation) || busy;
-  const text = caption?.running ? caption.text : operation ?? (busy ? "AI 正在处理…" : flowHint(flowStatus));
+  const stepText = runningStep ? `正在${RUNNING_STEP_WORDS[runningStep] ?? runningStep}…` : null;
+  const text = operation ?? (busy ? stepText ?? (caption?.running ? caption.text : "AI 正在处理…") : (caption?.running ? caption.text : flowHint(flowStatus)));
   return (
     <div className={`se-ai-ctx${running ? " is-running" : ""}`} role="status" aria-live="polite">
       <span className="se-ai-ctx-dot" aria-hidden="true" />

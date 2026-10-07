@@ -232,6 +232,24 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     return { streamAttempt, seenMessages, seenOptions, calls: () => call };
   }
 
+  it("模型/网络中途出错：只发 error 帧，不再叠「抱歉没能回应」和「正文生成没有执行」", async () => {
+    const fake = makeStreamAttempt([
+      [{ type: "error", payload: { error: new Error("terminated") } } as ObedientTurnChunk],
+    ]);
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "继续写第 2 章的正文" }],
+      userText: "继续写第 2 章的正文",
+      streamAttempt: fake.streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(events.some((e) => e.event === "error")).toBe(true);
+    const text = collectText(events);
+    expect(text).not.toContain("没能生成回应");
+    expect(text).not.toContain("系统更正");
+  });
+
   it("首轮空转声称 → 自动重做一轮（带纠偏消息），重做真调工具 → 无系统更正", async () => {
     const fake = makeStreamAttempt([
       // 第 1 轮：纯口头声称，零工具（ch88 病例原样）

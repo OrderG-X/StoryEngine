@@ -118,6 +118,8 @@ const OP_NAMES: Readonly<Record<string, string>> = {
   "草稿生成": "生成工作稿",
   "自动去AI味": "自动去 AI 味",
   "入库": "定稿",
+  "修订应用": "应用修改",
+  "一键去 AI 味": "一键去 AI 味",
 };
 
 /**

@@ -27,6 +27,13 @@
 :root .se-open-book-path .se-v2-dialog-cancel-btn{flex:none;color:var(--text);}
 :root .se-open-book-error{margin:0;font-size:13px;color:var(--danger);}
 
+/* 打开书途中的过渡页（地址栏已是某本书、书还在加载） */
+:root .se-boot{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;
+  background:var(--bg);color:var(--muted);font-size:14px;
+}
+:root .se-boot-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+
 /* 改版用到的动画关键帧放顶层（嵌套在 .codex-app{} 里的 @keyframes 不保证生效）。 */
 @keyframes se-fade{from{opacity:0}to{opacity:1}}
 @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}

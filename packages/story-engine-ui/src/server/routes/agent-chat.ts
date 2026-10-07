@@ -330,6 +330,9 @@ export async function runObedientAgentTurn(args: {
   // 跨尝试累计：工具活动/最近摘要供「绝不静默」兜底（重做轮真调了工具，兜底就该转述它的结果）。
   let sawToolActivity = false;
   let lastToolSummary: string | undefined;
+  // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」
+  // 和「正文生成没有执行」这两段——三句话说同一件失败，作者反而看不清（2026-10-08 浏览器走查）。
+  let sawStreamError = false;
   let attemptOptions: ObedienceAttemptOptions | undefined;
   // 诚实检测按【整回合累计】口径：首轮真跑了 commit_preview、重做轮只补 commit_apply 时，
   // 只看重做轮会把 preview 误判成「没执行」（组合意图）。声称文本与工具集都跨尝试累计。
@@ -441,6 +444,7 @@ export async function runObedientAgentTurn(args: {
           break;
         }
         case "error": {
+          sawStreamError = true;
           args.sendEvent("error", { error: stringifyError(chunk.payload?.error), retryable: true });
           break;
         }
@@ -493,7 +497,9 @@ export async function runObedientAgentTurn(args: {
 
     // 最终尝试收尾。绝不静默：本轮一个 text 都没发就补一条收尾，别让用户对着无声的工具结果发懵（#2/#4）。
     // emittedText 按【最终尝试】算——被作废的首轮声称不算「已回话」，重做轮闷头调完工具就该转述其结果。
-    const fallback = closingFallbackText({ emittedText: attemptEmittedText, sawToolActivity, lastToolSummary });
+    const fallback = sawStreamError && !sawToolActivity
+      ? null
+      : closingFallbackText({ emittedText: attemptEmittedText, sawToolActivity, lastToolSummary });
     if (fallback) {
       const scrubbed = args.scrubber.push(fallback);
       if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
@@ -501,7 +507,8 @@ export async function runObedientAgentTurn(args: {
     const remainingText = args.scrubber.flush();
     if (remainingText) args.sendEvent("text-delta", { text: remainingText });
 
-    if (correction) {
+    // 出错回合只保留「口头声称完成却没执行」那种更正（那是谎报，必须当场纠正）；「该做的没做」由错误卡说清。
+    if (correction && (!sawStreamError || unbackedClaim)) {
       console.warn(`[honesty-guard] 追加服务端诚实更正：${correction.replace(/\s+/gu, " ").slice(0, 240)}`);
       const correctionScrubber = createStreamingScrubber();
       const text = correctionScrubber.push(correction) + correctionScrubber.flush();
