@@ -192,4 +192,20 @@
   @media (prefers-reduced-motion:reduce){
     .se-ai-ctx.is-running .se-ai-ctx-dot,.step-label.is-active::before{animation:none;}
   }
+
+  /* 定稿卡底部「撤销这次定稿」：安静的文字钮，点了在卡内确认 */
+  .step-card .cdc-undo{
+    margin-top:8px;height:26px;padding:0 8px;margin-left:-8px;border:0;border-radius:6px;background:transparent;
+    color:var(--faint);font-size:12px;cursor:pointer;
+  }
+  .step-card .cdc-undo:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .step-card .cdc-undo-confirm{
+    display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;padding:10px 12px;
+    border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);font-size:12.5px;
+  }
+  .step-card .cdc-undo-confirm span{flex:1 1 200px;color:var(--muted);line-height:1.6;}
+  .step-card .cdc-undo-confirm button{height:28px;padding:0 12px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;}
+  .step-card .cdc-undo-go{border:0;background:var(--text);color:var(--bg);}
+  .step-card .cdc-undo-cancel{border:1px solid var(--line-strong);background:transparent;color:var(--text);}
+  .step-card :is(.cdc-undo,.cdc-undo-go):disabled{opacity:.5;cursor:default;}
 }

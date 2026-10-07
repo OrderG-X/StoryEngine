@@ -860,7 +860,13 @@ function MessageBubbles({
       {message.staleThreadWarnings?.length ? <StaleThreadCard warnings={message.staleThreadWarnings} /> : null}
 
       {/* 入库 delta 卡：这章正式入库改了哪些角色/伏笔/线索/时间线/主线目标，随消息走。 */}
-      {message.commitReport ? <CommitDeltaCard report={message.commitReport} /> : null}
+      {message.commitReport ? (
+        <CommitDeltaCard
+          report={message.commitReport}
+          onUndo={canUndo ? onUndoToHere : undefined}
+          undoDisabled={chatLoading}
+        />
+      ) : null}
 
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 

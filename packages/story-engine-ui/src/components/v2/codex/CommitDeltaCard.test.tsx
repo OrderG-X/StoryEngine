@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 
 const report = {
@@ -59,5 +59,26 @@ describe("displayDeltaLines：定稿明细说人话", () => {
       "过期提醒：线索 7 条，主线目标 1 条",
     ]);
     expect(displayDeltaLines(["正式章节：已写入 chapters"])).toEqual(["正文：已写入"]);
+  });
+});
+
+describe("CommitDeltaCard 撤销这次定稿", () => {
+  afterEach(() => cleanup());
+
+  it("先确认再撤；点「算了」不撤；没有撤销能力就不出按钮", () => {
+    const onUndo = vi.fn();
+    const { getByText, queryByText } = render(<CommitDeltaCard report={report} onUndo={onUndo} />);
+    fireEvent.click(getByText("撤销这次定稿"));
+    expect(onUndo).not.toHaveBeenCalled();
+    fireEvent.click(getByText("算了"));
+    expect(queryByText("撤销定稿")).toBeNull();
+    fireEvent.click(getByText("撤销这次定稿"));
+    fireEvent.click(getByText("撤销定稿"));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it("不传 onUndo 时不渲染撤销按钮", () => {
+    const { queryByText } = render(<CommitDeltaCard report={report} />);
+    expect(queryByText("撤销这次定稿")).toBeNull();
   });
 });
