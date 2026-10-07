@@ -1807,6 +1807,13 @@ export function useChat(params: UseChatParams): UseChatResult {
         if (reloadAfterAgentUndo) {
           markUndoReloadPreferSession();
           flushPendingMessageSave();
+          // 重载后对话以后端会话文件为准（readChatSession），而撤销期间 autosave 冻结、会话文件停在回合中途——
+          // 不先写回，重载后这一回合只剩半截「AI 分析」，撤销回报和收尾文字都没了（2026-10-07 真机走查实锤）。
+          const undoSessionId = useWorkspaceStore.getState().activeSessionId;
+          if (projectPath && undoSessionId) {
+            await saveChatSessionMessages(projectPath, undoSessionId, useWorkspaceStore.getState().workspace.messages)
+              .catch(() => undefined);
+          }
           reloadPage();
         } else if (agentUndoSyncPromise !== null) {
           // 用户已切书/切章：撤销前的旧稿已随工作区替换消失，不重载；解冻 autosave 让新工作区照常保存。

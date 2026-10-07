@@ -251,6 +251,24 @@ describe("undoLastChange 对话撤销", () => {
     await expect(access(join(dir, "a.md"))).rejects.toThrow();
   });
 
+  it("连续撤销三步一路往回退，不在两个状态之间来回跳（恢复产物指向的存档点之下再找）", async () => {
+    const dir = await makeProject();
+    await createSnapshot(dir, "agent:generate_draft"); // S1：什么都没有
+    await writeFile(join(dir, "a.md"), "A");
+    await createSnapshot(dir, "agent:revise_draft"); // S2：a
+    await writeFile(join(dir, "b.md"), "B");
+    await createSnapshot(dir, "agent:commit_apply"); // S3：a b
+    await writeFile(join(dir, "c.md"), "C");
+    expect((await undoLastChange(dir))?.undoneLabel).toBe("定稿"); // 回到 S3
+    await expect(access(join(dir, "c.md"))).rejects.toThrow();
+    expect((await undoLastChange(dir))?.undoneLabel).toBe("修改工作稿"); // 回到 S2
+    await expect(access(join(dir, "b.md"))).rejects.toThrow();
+    expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 回到 S1，而不是又跳回 S3
+    await expect(access(join(dir, "a.md"))).rejects.toThrow();
+    await expect(access(join(dir, "b.md"))).rejects.toThrow();
+    expect(await undoLastChange(dir)).toBeNull(); // 到头了如实说没有
+  });
+
   it("老书旧前缀快照链照常识别：列表/人话化透传/落盘收尾产物/逐步撤销目标（T15 读侧兼容）", async () => {
     // 复审探针 3c 收编：写侧早已只写新词（定稿前快照/工作稿生成前快照），老书 git 史里躺着的
     // 旧前缀 label 必须仍是合法历史与撤销目标。

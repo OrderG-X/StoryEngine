@@ -6,7 +6,7 @@ import { useWorkspaceStore } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { streamAgentChat } from "../api/agentChatClient.js";
 import { directEditDraft, fetchChapterWorkspace } from "../api/client.js";
-import { renameChatSession } from "../api/chatSessionsClient.js";
+import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
@@ -28,6 +28,7 @@ vi.mock("../api/agentChatClient.js", () => ({
 
 vi.mock("../api/chatSessionsClient.js", () => ({
   renameChatSession: vi.fn(),
+  saveChatSessionMessages: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 const mockedStreamAgentChat = vi.mocked(streamAgentChat);
@@ -1153,6 +1154,9 @@ describe("useChat agent undo_last_change × autosave（P2）", () => {
     expect(reloads).toHaveLength(1);
     expect(window.sessionStorage.getItem("se-undo-prefer-session")).toBe("1");
     expect(lastAssistant()?.content).toBe("已撤销上一步「出稿」。");
+    // 重载后对话读后端会话文件：重载前必须把整回合（含收尾文字）写回去，否则只剩半截气泡。
+    const saved = vi.mocked(saveChatSessionMessages).mock.calls.at(-1)?.[2] as readonly { content?: string }[] | undefined;
+    expect(saved?.at(-1)?.content).toBe("已撤销上一步「出稿」。");
   });
 
   it("undone=true 且磁盘上已无草稿（撤到「还没写过」）→ 正文清空而不是留着内存旧稿", async () => {

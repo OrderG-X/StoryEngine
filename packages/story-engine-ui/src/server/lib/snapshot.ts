@@ -329,6 +329,17 @@ function isUndoSkippableArtifact(label: string): boolean {
   return isRestoreArtifact(label) || isPostWriteSettlementSnapshot(label);
 }
 
+/** 最近 limit 个提交的内容树 hash（id → tree），撤销据此认出「恢复到：X」恢复的是哪个存档点。 */
+async function readCommitTrees(projectDir: string, limit: number): Promise<Map<string, string>> {
+  const out = await git(projectDir, ["log", `-${limit}`, "--pretty=format:%H %T"]).catch(() => "");
+  const trees = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    const [id, tree] = line.trim().split(" ");
+    if (id && tree) trees.set(id, tree);
+  }
+  return trees;
+}
+
 /** 工作树是否有未跟踪文件（工具新写的草稿/资料在下一次快照前是 untracked，git diff 看不到，须单独探）。 */
 async function hasUntrackedFiles(projectDir: string): Promise<boolean> {
   const out = await git(projectDir, ["ls-files", "--others", "--exclude-standard"]);
@@ -410,14 +421,33 @@ export async function undoLastChange(
   await ensureSnapshotRepo(projectDir);
   const snaps = await listSnapshots(projectDir, 200);
   const untracked = await hasUntrackedFiles(projectDir);
-  let target: SnapshotEntry | undefined;
-  for (const snap of snaps) {
-    if (isUndoSkippableArtifact(snap.label)) continue;
-    if (await snapshotDiffersFromWorkingTree(projectDir, snap.id, untracked)) {
-      target = snap;
-      break;
+  const trees = await readCommitTrees(projectDir, 200);
+  let lostRestoreTarget = false;
+  const findTarget = async (followRestores: boolean): Promise<SnapshotEntry | undefined> => {
+    // 连续撤销要接着往回走：遇到「恢复到：X」就跳到它恢复的那个存档点 X 之下再找。
+    // 否则第三次撤销会把第一次撤掉的那步又恢复回来（在两个状态之间来回跳，2026-10-07 真机实锤）。
+    // 认 X 用「标签相同 + 内容树相同」，裁剪历史改写了提交 hash 也认得出。
+    let skipTo: { readonly label: string; readonly tree: string } | null = null;
+    for (const snap of snaps) {
+      if (skipTo) {
+        if (snap.label === skipTo.label && trees.get(snap.id) === skipTo.tree) skipTo = null;
+        continue;
+      }
+      const restored = /^恢复到：(.+)$/u.exec(snap.label);
+      if (followRestores && restored) {
+        const tree = trees.get(snap.id);
+        if (tree) skipTo = { label: restored[1]!, tree };
+        continue;
+      }
+      if (isUndoSkippableArtifact(snap.label)) continue;
+      if (await snapshotDiffersFromWorkingTree(projectDir, snap.id, untracked)) return snap;
     }
-  }
+    if (skipTo) lostRestoreTarget = true;
+    return undefined;
+  };
+  // 恢复目标在回看窗口外认不出时，才退回老规则（最近一个与当前不同的存档点），不误报「没有可撤销的」；
+  // 认出来了、只是下面没有更早的改动 = 真到头了，如实返回 null。
+  const target = (await findTarget(true)) ?? (lostRestoreTarget ? await findTarget(false) : undefined);
   if (!target) return null;
   const restored = await restoreSnapshot(projectDir, target.id);
   return { undoneLabel: humanizeUndoLabel(target.label), restored };
