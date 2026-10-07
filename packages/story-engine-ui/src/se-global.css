@@ -10,6 +10,23 @@
   max-width:calc(100vw - 32px);
 }
 
+/* 「打开已有书籍」弹窗（portal 到 body，不在书架作用域里）：最近的书一行一本，选中有底色。 */
+:root .dialog-content.se-open-book{width:min(600px,calc(100vw - 32px));}
+:root .se-open-book-list{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow-y:auto;margin:0 -6px;}
+:root .se-open-book-list button{
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:9px 10px;
+  border:0;border-radius:9px;background:transparent;color:var(--text);text-align:left;cursor:pointer;
+}
+:root .se-open-book-list button:hover{background:var(--hover);}
+:root .se-open-book-list button.on{background:var(--accent-soft);}
+:root .se-open-book-list strong{font-size:14px;font-weight:500;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+:root .se-open-book-list small{font-size:12px;color:var(--faint);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+:root .se-open-book .se-v2-new-book-label{margin-top:4px;font-size:12px;color:var(--muted);}
+:root .se-open-book-path{display:flex;gap:8px;}
+:root .se-open-book-path .se-v2-rename-input{flex:1;min-width:0;}
+:root .se-open-book-path .se-v2-dialog-cancel-btn{flex:none;color:var(--text);}
+:root .se-open-book-error{margin:0;font-size:13px;color:var(--danger);}
+
 /* 改版用到的动画关键帧放顶层（嵌套在 .codex-app{} 里的 @keyframes 不保证生效）。 */
 @keyframes se-fade{from{opacity:0}to{opacity:1}}
 @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
