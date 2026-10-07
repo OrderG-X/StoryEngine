@@ -21,6 +21,7 @@ import { resolveToolStepLabel } from "../../../hooks/agentEventProjection.js";
 import { isBookCreationGreeting } from "../../../hooks/useProjectNavigation.js";
 import { buildTimelineModel, liveFlowFromMessage, type LiveFlow, type FlowPhaseKey } from "../agentTimelineModel.js";
 import { flowHint, primaryPermission, uiText } from "../v2Utils.js";
+import { IconClose, IconSparkle } from "./icons.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { ChapterToolRail } from "./ChapterToolRail.js";
 import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
@@ -167,27 +168,23 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           title="拖动调整对话宽度"
         />
       ) : null}
-      {/* ── 头部：身份 + 在线点 + 折叠/清空小按钮 ── */}
-      <div className="ai-head">
-        <div className="ai-av"><span aria-hidden="true">✦</span><span className="ai-av-dot" title="在线" /></div>
-        <div className="ai-id">
-          <b>AI 写作助手</b>
-          <small title={flowHint(flowStatus)}>{flowHint(flowStatus)}</small>
-        </div>
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      {/* ── 头部：标题 + 清空 / 收起 ── */}
+      <div className="ai-head se-ai-head">
+        <span className="se-ai-title"><IconSparkle size={17} />AI 助手</span>
+        <span className="se-ai-head-actions">
           {/* 聊天字号步进器已撤——统一并入「设置 · 显示」面板；缩放仍由 .codex-app 的 --codex-chat-zoom 生效。 */}
           {canClear ? (
             <button
               type="button"
+              className="se-text-btn"
               onClick={() => props.onClearChat?.()}
               title="清空当前对话（不影响正文和资料，可撤销）"
-              style={aiHeadBtnStyle}
             >
               清空
             </button>
           ) : null}
-          <button type="button" onClick={props.onToggleRight} title="收起 AI 对话" style={aiHeadBtnStyle}>
-            收起
+          <button type="button" className="se-icon-btn sm" onClick={props.onToggleRight} title="收起" aria-label="收起 AI 助手">
+            <IconClose size={16} />
           </button>
         </span>
       </div>
@@ -195,8 +192,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 会话入口：当前会话名（可就地改名）+ 新建 + 历史列表 ── */}
       <ChatSessionBar />
 
-      {/* ── 四步进度：flowStatus 基线 + 本回合 toolSteps 派生的实时态（哪步在跑 / 落地物） ── */}
-      <AiFlow flowStatus={flowStatus} live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))} />
+      {/* ── 状态行：平时说本章到哪一步了；本回合有工具在跑时换成实时字幕（写到多少字 / 审到哪）。
+          2026-10-07 改版：撤掉四步大圆进度，省出一百多像素给对话。 ── */}
+      <AiStatusLine flowStatus={flowStatus} live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))} />
       {/* ── 本章工具条（B1）：按阶段确定性列出该用的工具，点一下=给 agent 发预置意图（对话唯一控制面） ── */}
       <ChapterToolRail flowStatus={flowStatus} onSendMessage={props.onSendMessage} disabled={workspaceBusy} />
 
@@ -397,17 +395,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   );
 }
 
-const aiHeadBtnStyle: React.CSSProperties = {
-  fontSize: 11,
-  padding: "3px 9px",
-  borderRadius: 8,
-  border: "1px solid var(--line)",
-  background: "var(--surface)",
-  color: "var(--muted)",
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-
 const surfaceCardStyle: React.CSSProperties = {
   background: "var(--surface)",
   border: "1px solid var(--line)",
@@ -447,32 +434,6 @@ const FLOW_STEPS: readonly FlowStep[] = [
   { key: "commit", icon: "↻", label: "定稿", desc: "确认这章为定稿，更新人物、伏笔等故事资料，让下一章接得上。"},
 ];
 
-/**
- * 9 阶段 flowStatus → codex 4 步的「当前下标」（0=构思,1=写稿,2=审校,3=入库）。
- * 已入库（committed/ready_for_next）返回 4 = 越过末尾 → 四步全部显示「完成」（入库这步也打勾），
- * 而不是停在入库发光（那会让用户以为还没走完）。入库前一步（预览/等确认）才让入库步「on」。
- */
-function flowStepIndex(flowStatus: ChapterFlowStatus): number {
-  switch (flowStatus) {
-    case "idle":
-    case "steering_ready":
-      return 0;
-    case "draft_generating":
-    case "draft_ready":
-      return 1;
-    case "quality_checked":
-      return 2;
-    case "commit_preview_ready":
-    case "waiting_commit_confirmation":
-      return 3;
-    case "committed":
-    case "ready_for_next":
-      return 4;
-    default:
-      return 0;
-  }
-}
-
 /** 点「审校问题·改这处」→ 拼一句给 agent 的改写意图（agent 据纪律 5.5 先 read_draft 定位逐字原文再 revise）。 */
 function buildReviseIntent(issue: DraftReviewIssueView): string {
   const trimDot = (s: string) => s.replace(/[。.]+\s*$/u, ""); // 去段尾句号，免与拼接的「。」叠成双句号
@@ -505,49 +466,14 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
   return { text: lp.detail ? oneLine(lp.detail, 52) : `${last.label}完成`, running: false };
 }
 
-function AiFlow({ flowStatus, live }: { readonly flowStatus: ChapterFlowStatus; readonly live: LiveFlow | null }) {
-  const current = flowStepIndex(flowStatus);
-  // 每步状态：实时态（toolSteps 派生）优先；该相没有 live 数据时退回 flowStatus 基线下标。
-  // stopped（人喊停）= 既非完成也非失败的中性「停」态（halt），不转圈、不走红。
-  const stepCls = (index: number, key: FlowPhaseKey): { cls: "done" | "on" | "fail" | "halt" | ""; running: boolean } => {
-    const status = live?.[key].status;
-    if (status === "running") return { cls: "on", running: true };
-    if (status === "done") return { cls: "done", running: false };
-    if (status === "failed") return { cls: "fail", running: false };
-    if (status === "stopped") return { cls: "halt", running: false };
-    return { cls: index < current ? "done" : index === current ? "on" : "", running: false };
-  };
-  const states = FLOW_STEPS.map((step, index) => stepCls(index, step.key));
+function AiStatusLine({ flowStatus, live }: { readonly flowStatus: ChapterFlowStatus; readonly live: LiveFlow | null }) {
   const caption = liveCaption(live);
+  const running = Boolean(caption?.running);
+  const text = running && caption ? caption.text : flowHint(flowStatus);
   return (
-    <div className="ai-flow">
-      <div className="ai-flow-rail">
-        {FLOW_STEPS.map((step, index) => {
-          const { cls, running } = states[index];
-          return (
-            <span key={step.key} style={{ display: "contents" }}>
-              <div
-                className={`ai-step ${cls}${running ? " live" : ""}`.trim()}
-                tabIndex={0}
-                aria-label={`${step.label}：${step.desc}`}
-              >
-                <span className="st">{cls === "fail" ? "!" : cls === "halt" ? "■" : step.icon}</span>
-                {step.label}
-                {/* 悬停/键盘聚焦说明：不占地、要看才出（codex 暗金 tooltip）。首/末步靠边对齐防溢出。 */}
-                <span className={`ai-step-tip ${index === 0 ? "tip-left" : index === FLOW_STEPS.length - 1 ? "tip-right" : ""}`.trim()}>
-                  {step.desc}
-                </span>
-              </div>
-              {index < FLOW_STEPS.length - 1 ? (
-                // 走过/已完成段=done(金色填满)；正在跑那步紧后段=active(金光流动)；更远=暗。
-                <div className={`ai-bar ${states[index].running ? "active" : states[index].cls === "done" ? "done" : index < current ? "done" : index === current ? "active" : ""}`.trim()} />
-              ) : null}
-            </span>
-          );
-        })}
-      </div>
-      {/* 实时态字幕：让用户「看见」每步在干啥、干完了啥（codex 暗金、淡、不抢戏）。 */}
-      {caption ? <div className={`ai-flow-live${caption.running ? " is-running" : ""}`}>{caption.text}</div> : null}
+    <div className={`se-ai-ctx${running ? " is-running" : ""}`} role="status" aria-live="polite">
+      <span className="se-ai-ctx-dot" aria-hidden="true" />
+      <span className="se-ai-ctx-text" title={text}>{text}</span>
     </div>
   );
 }

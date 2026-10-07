@@ -1,0 +1,110 @@
+/* 2026-10-07 改版 · 右侧 AI 栏：头部 / 状态行 / 会话条 / 消息 / 步骤 / 下一步 / 输入框。
+   scope 在 .codex-app 下，只用 token；结构沿用 AiChatCodex，这里覆盖旧暗金皮。 */
+.codex-app{
+  .ai{background:var(--panel);border-left:1px solid var(--line);}
+
+  /* ── 头部 ── */
+  .ai-head.se-ai-head{height:48px;padding:0 8px 0 14px;gap:8px;border-bottom:0;}
+  .se-ai-title{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--text);}
+  .se-ai-title svg{color:var(--accent);}
+  .se-ai-head-actions{margin-left:auto;display:inline-flex;align-items:center;gap:2px;}
+  .se-icon-btn.sm{width:28px;height:28px;}
+  .se-text-btn{
+    height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
+    color:var(--muted);font-size:12px;cursor:pointer;
+  }
+  .se-text-btn:hover{background:var(--hover);color:var(--text);}
+
+  /* ── 状态行（替代四步大圆） ── */
+  .se-ai-ctx{display:flex;align-items:center;gap:8px;min-width:0;padding:0 14px 10px;font-size:12px;color:var(--muted);}
+  .se-ai-ctx-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--faint);}
+  .se-ai-ctx.is-running{color:var(--text);}
+  .se-ai-ctx.is-running .se-ai-ctx-dot{background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+  .se-ai-ctx-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ── 会话条 ── */
+  .codex-chat-session-bar{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:transparent;}
+  .codex-session-name:hover{color:var(--text);background:var(--hover);}
+  .codex-session-action{border-color:var(--line);background:transparent;color:var(--muted);}
+  .codex-session-action:hover,.codex-session-action.is-open{color:var(--text);border-color:var(--line-strong);background:var(--hover);}
+
+  /* ── 本章工具条 / 能力条：统一成安静的描边小药丸 ── */
+  .chapter-tool-rail{justify-content:flex-start;margin:8px 14px 0;}
+  .ctr-btn,.cap-btn{font-size:12px;padding:0 10px;height:26px;color:var(--muted);border-color:var(--line);}
+  .ctr-btn:hover:not(:disabled),.cap-btn:hover:not(:disabled){color:var(--text);border-color:var(--line-strong);background:var(--hover);}
+  .cap-more{font-size:12px;height:26px;padding:0 8px;color:var(--faint);border:1px dashed var(--line);}
+  .cap-more:hover{color:var(--text);border-color:var(--line-strong);}
+  .cap-bar{margin:6px 14px 4px;}
+  .cap-group-title{color:var(--faint);font-weight:500;letter-spacing:0;font-size:12px;}
+
+  /* ── 消息 ── */
+  .ai-body{padding:16px 14px 8px;gap:14px;animation:none;}
+  .msg{font-size:14px;line-height:1.7;}
+  .msg-user{display:flex;justify-content:flex-end;}
+  .msg-user .msg-body{
+    max-width:85%;padding:8px 12px;border-radius:12px 12px 4px 12px;
+    background:var(--surface-2);border:1px solid var(--line);box-shadow:none;
+  }
+  .msg-ai .msg-body{font-family:inherit;line-height:1.75;}
+  .msg-ai .msg-body .lead{color:var(--text);font-style:normal;}
+  .msg-ai .msg-body b{color:var(--text);}
+
+  /* 思考 / 工具步：一行安静的小字，展开才看细节。 */
+  .step-kind,.step-label{color:var(--muted);font-weight:500;}
+  .step-label.is-tool{color:var(--muted);}
+  .step-head:hover:not(:disabled) .step-caret{color:var(--text);}
+  .step-detail{border-left-color:var(--line);color:var(--faint);}
+  .step-label.is-active{color:var(--text);}
+  .step-label.is-active::after{display:none;}
+  .step-label.is-active::before{
+    content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:middle;
+    background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;
+  }
+
+  /* 卡片（审稿 / 体检 / 定稿预览等）：中性描边卡。 */
+  .step-card{margin:0;border-color:var(--line-strong);background:var(--surface-2);}
+  .step-card .sc-title{color:var(--text);letter-spacing:0;font-size:13px;}
+  .step-card .sc-badge{color:var(--muted);}
+  .step-card .sc-head:hover:not(:disabled) .sc-caret{color:var(--text);}
+
+  .agent-error-card{background:var(--danger-soft);border-color:rgba(224,137,124,.3);}
+  .agent-error-card .aec-retry{color:var(--accent-ink);background:var(--accent);border:0;}
+  .agent-error-card .aec-detail-toggle{background:transparent;}
+
+  .chip{font-size:12px;padding:0 12px;height:30px;border-radius:999px;border-color:var(--line-strong);background:transparent;color:var(--text);}
+  .chip:hover{border-color:var(--line-strong);color:var(--text);background:var(--hover);}
+
+  /* ── 下一步：问句 + 选项；推荐项=唯一实心强调色按钮 ── */
+  .nextstep{margin:6px 0 0;padding:10px 14px 2px;border-top:1px solid var(--line);gap:8px;}
+  .nextstep-q{font-size:12px;color:var(--faint);font-weight:400;letter-spacing:0;}
+  .nextstep-q::before{display:none;}
+  .nextstep-choice{font-size:13px;padding:0 12px;height:32px;border-radius:999px;border-color:var(--line-strong);background:transparent;color:var(--text);}
+  .nextstep-choice::before{display:none;}
+  .nextstep-choice:hover{transform:none;color:var(--text);border-color:var(--line-strong);background:var(--hover);box-shadow:none;}
+  .nextstep-choice.is-primary{flex:0 0 auto;border-radius:999px;color:var(--accent-ink);background:var(--accent);box-shadow:none;}
+  .nextstep-choice.is-primary:hover{filter:brightness(1.06);transform:none;box-shadow:none;}
+  .nextstep-rec{background:rgba(0,0,0,.16);color:inherit;}
+
+  /* ── 输入框 ── */
+  .composer{margin:8px 12px 12px;padding:8px 8px 8px 12px;border-radius:12px;border:1px solid var(--line-strong);background:var(--bg);}
+  .composer:focus-within{border-color:var(--accent);box-shadow:none;}
+  .composer .send{width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);box-shadow:none;font-weight:600;}
+  .codex-context-meter{color:var(--faint);}
+
+  /* 过期线索卡：类型小标中性、「已 N 章没推进」用提醒橙（不是错误红）。 */
+  .step-card .stc-item{background:transparent;border-color:var(--line);}
+  .step-card .stc-kind{font-weight:500;color:var(--muted);border:0;background:var(--hover);}
+  .step-card .stc-title{font-weight:500;}
+  .step-card .stc-gap{color:var(--warn);font-weight:500;}
+  .step-card .stc-since{color:var(--faint);}
+
+  /* 拖宽手柄：平时不可见，悬停才出一条强调色细线（撤掉常驻的点阵握把）。 */
+  .ai-resize::before{display:none;}
+  .ai-resize::after{background:transparent;}
+  .ai-resize:hover::after,.ai-resize:active::after{width:2px;background:var(--accent);}
+
+  @media (prefers-reduced-motion:reduce){
+    .se-ai-ctx.is-running .se-ai-ctx-dot,.step-label.is-active::before{animation:none;}
+  }
+}

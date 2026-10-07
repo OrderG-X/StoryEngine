@@ -27,6 +27,7 @@ import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, I
 import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";
+import "./se-ai.css";
 
 /**
  * WritingWorkspaceCodex — 写作工作区外壳。
