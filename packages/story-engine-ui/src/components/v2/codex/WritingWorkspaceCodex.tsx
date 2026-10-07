@@ -21,6 +21,7 @@ import { DisplaySettingsEmbedded } from "./DisplaySettingsEmbedded.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
+import { contextActionsForView } from "./ChatCapabilityBar.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
@@ -572,6 +573,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           onResizeReset={() => setRightWidth(AI_DEFAULT_WIDTH)}
           // 输入框提示跟着当前页走：设定本里说改设定，历史里说撤销；写作台按写作进度提示。
           composerHint={view === "library" ? "想改哪条设定，直接说" : view === "history" ? "比如「撤销上一步」" : undefined}
+          contextActions={contextActionsForView(view, cat)}
           onOpenModelSettings={() => setSettingsTab("model")}
           // 设置弹窗开 / 关都会翻转这个值 → AI 栏重读当前模型（改完模型关弹窗即生效）。
           modelRefreshKey={settingsTab === null ? 1 : 0}

@@ -63,9 +63,43 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   },
 ];
 
-export function ChatCapabilityBar({ onSendMessage, disabled, leading = [] }: {
+/** 按 key 取能力（找不到返回 undefined）。 */
+export function capabilityByKey(key: string): CapabilityAction | undefined {
+  for (const group of CAPABILITY_GROUPS) {
+    const hit = group.actions.find((action) => action.key === key);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+const UNDO_LAST: CapabilityAction = { key: "undo", label: "撤销上一步", intent: "撤销上一步" };
+
+/**
+ * 不在写作台时，快捷条最前面换成跟当前页有关的能力（设定本按分类、历史给「撤销上一步」）；
+ * 写作台返回 null（照旧按本章进度给写作工具）。时间线没有专门能力，也返回 null。
+ */
+export function contextActionsForView(view: "desk" | "library" | "history", cat: string): readonly CapabilityAction[] | null {
+  if (view === "history") return [UNDO_LAST];
+  if (view !== "library") return null;
+  const keysByCat: Record<string, readonly string[]> = {
+    world: ["world"],
+    rules: ["rules"],
+    matrix: ["rel"],
+    chars: ["char", "rel"],
+    assets: ["asset"],
+    places: ["loc"],
+    hooks: ["clean", "merge"],
+  };
+  const keys = keysByCat[cat];
+  if (!keys) return null;
+  return keys.map(capabilityByKey).filter((action): action is CapabilityAction => Boolean(action));
+}
+
+export function ChatCapabilityBar({ onSendMessage, disabled, leading = [], leadingOnly = false }: {
   readonly onSendMessage?: (content: string) => void;
   readonly disabled?: boolean;
+  /** true：只放 leading（设定本/历史里不再拿写作工具凑满一排），其余进「更多」。 */
+  readonly leadingOnly?: boolean;
   /** 按本章进度派生的工具（ChapterToolRail.railActionsForFlow）：排在最前、第一个高亮；常驻快捷里同 key 的去重。 */
   readonly leading?: readonly { readonly key: string; readonly label: string; readonly intent: string }[];
 }) {
@@ -94,7 +128,7 @@ export function ChatCapabilityBar({ onSendMessage, disabled, leading = [] }: {
           </button>
         ))}
         {/* 一排最多放 3 个常用（本章进度工具优先），其余进「更多」：窄栏里也不折成两行。 */}
-        {QUICK_ACTIONS.filter((action) => !leading.some((lead) => lead.key === action.key)).slice(0, Math.max(0, 3 - leading.length)).map((action) => (
+        {(leadingOnly ? [] : QUICK_ACTIONS).filter((action) => !leading.some((lead) => lead.key === action.key)).slice(0, Math.max(0, 3 - leading.length)).map((action) => (
           <button
             key={action.key}
             type="button"

@@ -83,3 +83,14 @@ describe("ChatCapabilityBar · 本章进度工具并入同一排", () => {
     expect(container.querySelector(".cap-btn.is-lead")?.textContent).toBe("硬伤检查");
   });
 });
+
+describe("contextActionsForView 快捷条随页面", () => {
+  it("写作台不给（照旧按进度）；设定本按分类；历史给撤销上一步；时间线不给", async () => {
+    const { contextActionsForView } = await import("./ChatCapabilityBar.js");
+    expect(contextActionsForView("desk", "world")).toBeNull();
+    expect(contextActionsForView("library", "chars")?.map((a) => a.label)).toEqual(["补全角色", "整理角色关系"]);
+    expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["清理废弃线索", "合并重复伏笔"]);
+    expect(contextActionsForView("library", "timeline")).toBeNull();
+    expect(contextActionsForView("history", "world")?.map((a) => a.label)).toEqual(["撤销上一步"]);
+  });
+});

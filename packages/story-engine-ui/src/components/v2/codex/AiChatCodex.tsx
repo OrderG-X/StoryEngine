@@ -73,6 +73,8 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly onResizeReset?: () => void;
   /** 非写作页（设定本 / 历史）的输入框提示；写作台不传，按写作进度提示。 */
   readonly composerHint?: string;
+  /** 非写作页时快捷条最前面的能力（跟当前页有关）；不传则按本章进度给写作工具。 */
+  readonly contextActions?: readonly { readonly key: string; readonly label: string; readonly intent: string }[] | null;
   /** 点头部模型标签：打开模型设置（工作区设置弹窗）。 */
   readonly onOpenModelSettings?: () => void;
   /** 变了就重读一次当前模型（设置弹窗关闭时 +1）。 */
@@ -415,7 +417,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       <ChatContextMeter />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
-      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={railActionsForFlow(flowStatus)} />
+      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions)} />
 
       {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
           作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），
