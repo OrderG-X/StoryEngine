@@ -110,7 +110,8 @@ export default function HomeLanding({
                   {lastBook.genre ? <span>{lastBook.genre}</span> : null}
                   <span>{lastBook.writtenChapters} 章</span>
                   <span>{formatWords(lastBook.totalWords)}</span>
-                  {lastBook.protagonistName ? <span>主角 {lastBook.protagonistName}</span> : null}
+                  {/* 主角还没起名时数据里是占位词「主角」，不显示「主角 主角」。 */}
+                  {lastBook.protagonistName && !/^(主角|未命名|待定|无)$/u.test(lastBook.protagonistName.trim()) ? <span>主角 {lastBook.protagonistName}</span> : null}
                 </p>
                 <div className="se-hero-last">
                   <span className="se-faint">上次写到</span>

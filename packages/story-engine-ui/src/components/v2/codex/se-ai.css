@@ -109,6 +109,10 @@
   .step-card .sc-badge{color:var(--muted);}
   .step-card .sc-head:hover:not(:disabled) .sc-caret{color:var(--text);}
 
+  /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
+  .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
+  .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
+
   .agent-error-card{background:var(--danger-soft);border-color:rgba(224,137,124,.3);}
   .agent-error-card .aec-retry{color:var(--accent-ink);background:var(--accent);border:0;}
   .agent-error-card .aec-detail-toggle{background:transparent;}
