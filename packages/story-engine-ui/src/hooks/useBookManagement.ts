@@ -45,10 +45,13 @@ function bookSummaryFromOverview(overview: StateOverview, projectPath: string): 
   };
 }
 
-function titleFromEvent(
+export function titleFromEvent(
   event: StateOverview["timeline"]["recentEvents"][number] | undefined,
   chapter: number,
 ): string {
+  // 优先用真章名（时间线事件带 title，剥掉「第N章 ·」前缀）；没有章名才退回事件摘要（截 18 字）。
+  const realTitle = (event?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
+  if (realTitle && !/^(下一章|未命名|待补|待定)$/u.test(realTitle)) return realTitle;
   const source = event?.mainEvent ?? event?.summary;
   if (!source?.trim()) return `第${chapter}章`;
   const cleaned = source.replace(/\s+/gu, " ").trim();

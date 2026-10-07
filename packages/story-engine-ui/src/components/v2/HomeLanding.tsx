@@ -115,7 +115,7 @@ export default function HomeLanding({
                 </p>
                 <div className="se-hero-last">
                   <span className="se-faint">上次写到</span>
-                  <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
+                  <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle && !/^第\s*[0-9一二三四五六七八九十百零两]+\s*章$/u.test(lastBook.currentChapterTitle.trim()) ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
                   <span className={`se-pill ${STATUS_PILL[lastBook.status]?.tone ?? ""}`}>{STATUS_PILL[lastBook.status]?.label ?? lastBook.status}</span>
                   <span className="se-faint">· {lastBook.updatedAt}</span>
                 </div>

@@ -16,6 +16,7 @@ import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import {
   buildStateOverview,
+  countDraftChineseCharacters,
   createStoryProject,
   withProjectCommitLock,
 } from "@actalk/story-engine";
@@ -37,6 +38,8 @@ import {
   readUsageSummary,
   writeJson,
   isRecord,
+  chapterWorkspacePath,
+  stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { createSnapshot } from "../lib/snapshot.js";
@@ -236,7 +239,16 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
         try {
           const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
           const book = bookSummaryFromOverviewServer(overview, projectDir, lastActiveMs);
-          return book;
+          // 书架字数：按定稿章节文件实数（与写作台、定稿执法同一计字口径），读不到才保留估算。
+          const counted = await countCommittedChapterCharacters(projectDir);
+          // 章名：时间线里没有真章名（老数据只存了「第N章」）时，用写作台章节工作区记下的标题。
+          const workspaceTitle = await readChapterWorkspaceTitle(projectDir, book.currentChapterNumber);
+          const { hasRealChapterTitle, ...summary } = book;
+          return {
+            ...summary,
+            ...(counted > 0 ? { totalWords: counted } : {}),
+            ...(workspaceTitle && !hasRealChapterTitle ? { currentChapterTitle: workspaceTitle } : {}),
+          };
         } catch {
           // 回退：只用 title
           return {
@@ -267,6 +279,25 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
   }
 }
 
+/** 写作台章节工作区记下的章名（剥掉「第N章 ·」前缀；占位或读不到返回空串）。 */
+async function readChapterWorkspaceTitle(projectDir: string, chapter: number): Promise<string> {
+  const record = await readJsonFile(chapterWorkspacePath(projectDir, chapter)).catch(() => null);
+  const raw = typeof record?.draftTitle === "string" ? record.draftTitle : "";
+  const bare = raw.replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
+  return bare && !/^(下一章|未命名|待补|待定)$/u.test(bare) ? bare : "";
+}
+
+/** 定稿章节总字数：chapters/NNNN.md 去掉标题行后按引擎同口径（纯汉字）计数。目录不存在返回 0。 */
+export async function countCommittedChapterCharacters(projectDir: string): Promise<number> {
+  const dir = join(projectDir, "chapters");
+  const files = (await readdir(dir).catch(() => [] as string[])).filter((name) => /^\d+\.md$/u.test(name));
+  const counts = await Promise.all(files.map(async (name) => {
+    const text = await readFile(join(dir, name), "utf-8").catch(() => "");
+    return countDraftChineseCharacters(stripLeadingMarkdownChapterHeading(text));
+  }));
+  return counts.reduce((total, n) => total + n, 0);
+}
+
 function stableHash(value: string): string {
   let hash = 0;
   for (const char of value) {
@@ -293,7 +324,12 @@ function bookSummaryFromOverviewServer(
   const projectTitle = (proj.title || "未命名故事").trim();
 
   let chapterTitle = `第${currentChapterNumber}章`;
-  if (currentEvent) {
+  // 优先真章名（时间线事件 title，剥掉「第N章 ·」前缀）；没有才退回事件摘要。
+  const realTitle = String(currentEvent?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
+  const hasRealChapterTitle = Boolean(realTitle && !/^(下一章|未命名|待补|待定)$/u.test(realTitle));
+  if (hasRealChapterTitle) {
+    chapterTitle = realTitle;
+  } else if (currentEvent) {
     const source = currentEvent.mainEvent ?? currentEvent.summary;
     if (source?.trim()) {
       const cleaned = source.replace(/\s+/gu, " ").trim();
@@ -309,6 +345,7 @@ function bookSummaryFromOverviewServer(
     title: projectTitle,
     genre: proj.genre || "长篇故事",
     currentChapterTitle: chapterTitle,
+    hasRealChapterTitle,
     currentChapterNumber,
     protagonistName: characters.protagonist ?? characters.knownCharacters?.[0]?.name ?? "主角",
     status: proj.currentChapter ? "可继续下一章" as const : "草稿中" as const,

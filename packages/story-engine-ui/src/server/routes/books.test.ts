@@ -348,3 +348,19 @@ async function invokeBooksRoute(method: string, url: string, body?: Record<strin
     payload: JSON.parse(raw) as Record<string, unknown>,
   };
 }
+
+describe("书架字数按定稿章节实数统计", () => {
+  it("countCommittedChapterCharacters：去标题行、纯汉字口径、只认 chapters/NNNN.md", async () => {
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { countCommittedChapterCharacters } = await import("./books.js");
+    const dir = await mkdtemp(join(tmpdir(), "books-count-"));
+    await mkdir(join(dir, "chapters"));
+    await writeFile(join(dir, "chapters", "0001.md"), "# 第1章 · 开端标题不计\n\n他推门。“好。”\n");
+    await writeFile(join(dir, "chapters", "0002.md"), "门开着。\n");
+    await writeFile(join(dir, "chapters", "notes.md"), "这不是章节文件");
+    expect(await countCommittedChapterCharacters(dir)).toBe(4 + 3);
+    expect(await countCommittedChapterCharacters(join(dir, "missing"))).toBe(0);
+  });
+});
