@@ -79,6 +79,8 @@ export default function OperationHistoryView({ projectPath }: { readonly project
   const [restoring, setRestoring] = useState<string | null>(null);
   // 恢复要先在行内确认一次（恢复会整页重载，误点代价大）。
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  // 「查看改动」一次只展开一条。
+  const [changesId, setChangesId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectPath) return;
@@ -148,25 +150,48 @@ export default function OperationHistoryView({ projectPath }: { readonly project
             <div className="op-history-list">
               {group.items.map((snapshot) => {
                 const confirming = confirmId === snapshot.id;
+                const changes = snapshot.changes ?? [];
+                const showing = changesId === snapshot.id && changes.length > 0;
+                // 「恢复到…」这条本身就是恢复的结果，内容和它恢复的那条一样；要撤销恢复，点它下面那条「恢复前的自动存档」。
+                const restorable = !snapshot.label.startsWith("恢复到");
                 return (
                   <div key={snapshot.id} className="op-history-entry">
-                    <article className={`op-history-item${confirming ? " is-confirming" : ""}`}>
+                    <article className={`op-history-item${confirming ? " is-confirming" : ""}${showing ? " is-showing" : ""}`}>
                       <span className="op-history-clock" title={formatTime(snapshot.timestamp)}>{formatClock(snapshot.timestamp)}</span>
                       <strong>{snapshot.label}</strong>
                       <span className="op-history-time" title={formatTime(snapshot.timestamp)}>{formatRelativeTime(snapshot.timestamp)}</span>
-                      <button
-                        className="op-history-restore"
-                        disabled={restoring !== null}
-                        aria-expanded={confirming}
-                        onClick={() => setConfirmId(confirming ? null : snapshot.id)}
-                        type="button"
-                      >
-                        {restoring === snapshot.id ? "恢复中……" : "恢复到这里"}
-                      </button>
+                      <span className="op-history-acts">
+                        {changes.length > 0 ? (
+                          <button
+                            className="op-history-restore"
+                            aria-expanded={showing}
+                            onClick={() => { setChangesId(showing ? null : snapshot.id); setConfirmId(null); }}
+                            type="button"
+                          >
+                            {showing ? "收起改动" : "查看改动"}
+                          </button>
+                        ) : null}
+                        {restorable ? (
+                          <button
+                            className="op-history-restore"
+                            disabled={restoring !== null}
+                            aria-expanded={confirming}
+                            onClick={() => { setConfirmId(confirming ? null : snapshot.id); setChangesId(null); }}
+                            type="button"
+                          >
+                            {restoring === snapshot.id ? "恢复中……" : "恢复到这之前"}
+                          </button>
+                        ) : null}
+                      </span>
                     </article>
+                    {showing ? (
+                      <ul className="op-history-changes" aria-label="这一步改了什么">
+                        {changes.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    ) : null}
                     {confirming && restoring === null ? (
                       <div className="op-history-confirm" role="alertdialog" aria-label="确认恢复">
-                        <span>恢复到「{snapshot.label}」这一刻？现在的内容会先自动存档，之后也能再撤销。</span>
+                        <span>回到「{snapshot.label}」之前的样子？现在的内容会先自动存档，之后也能再撤销。</span>
                         <button className="op-history-confirm-go" type="button" onClick={() => void handleRestore(snapshot.id)}>恢复</button>
                         <button className="op-history-confirm-cancel" type="button" onClick={() => setConfirmId(null)}>取消</button>
                       </div>

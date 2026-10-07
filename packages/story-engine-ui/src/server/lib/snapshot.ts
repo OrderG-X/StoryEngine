@@ -261,14 +261,45 @@ const POST_WRITE_LABEL_PREFIX = "落盘收尾：";
  * 只认项目根下的 chapters/ 文件（.story-engine-tx 事务归档里的副本不算）。读不到返回空表，不影响列表本身。
  */
 export async function readCommitChapterHints(projectDir: string, limit = 100): Promise<Map<string, number>> {
-  const hints = new Map<string, number>();
-  const out = await withProjectLock(projectDir, () => git(projectDir, ["log", `-${limit}`, "--name-only", "--pretty=format:@@%H"]))
-    .catch(() => "");
-  let current = "";
+  return chapterHintsFromFileChanges(await readCommitFileChanges(projectDir, limit));
+}
+
+/** 一个提交里改动的一个文件：status 取 git 的 A(新增)/M(修改)/D(删除)/T 等首字母。 */
+export interface CommitFileChange {
+  readonly status: string;
+  readonly path: string;
+}
+
+/**
+ * 每个提交改了哪些文件（一次 git log --name-status 拿全，新→旧）：操作历史据此补章号、列「查看改动」。
+ * 读不到（非 git 目录、git 失败）返回空表，不影响列表本身。
+ */
+export async function readCommitFileChanges(projectDir: string, limit = 100): Promise<Map<string, CommitFileChange[]>> {
+  const changes = new Map<string, CommitFileChange[]>();
+  const out = await withProjectLock(projectDir, () =>
+    git(projectDir, ["log", `-${limit}`, "--name-status", "--no-renames", "--pretty=format:@@%H"]),
+  ).catch(() => "");
+  let current: CommitFileChange[] | null = null;
   for (const line of out.split("\n")) {
-    if (line.startsWith("@@")) { current = line.slice(2).trim(); continue; }
-    const match = /^chapters\/(\d+)\.md$/u.exec(line.trim());
-    if (current && match && !hints.has(current)) hints.set(current, Number(match[1]));
+    if (line.startsWith("@@")) {
+      current = [];
+      changes.set(line.slice(2).trim(), current);
+      continue;
+    }
+    const match = /^([A-Z])[0-9]*\t(.+)$/u.exec(line);
+    if (current && match) current.push({ status: match[1]!, path: match[2]!.trim() });
+  }
+  return changes;
+}
+
+/** 只认项目根下的 chapters/NNNN.md（.story-engine-tx 事务归档里的副本不算），每个提交取第一个。 */
+export function chapterHintsFromFileChanges(changes: ReadonlyMap<string, readonly CommitFileChange[]>): Map<string, number> {
+  const hints = new Map<string, number>();
+  for (const [id, files] of changes) {
+    for (const file of files) {
+      const match = /^chapters\/(\d+)\.md$/u.exec(file.path);
+      if (match) { hints.set(id, Number(match[1])); break; }
+    }
   }
   return hints;
 }
@@ -352,6 +383,7 @@ const UNDO_TOOL_LABELS: Record<string, string> = {
 export function humanizeUndoLabel(label: string): string {
   const restoreMatch = /^恢复到：(.+)$/u.exec(label);
   if (restoreMatch) return `恢复到：${humanizeUndoLabel(restoreMatch[1]!)}`;
+  if (label === "恢复前自动快照") return "恢复前的自动存档";
   const match = /^agent:(.+)$/u.exec(label);
   if (match) {
     // 标签可带细节后缀：agent:<tool>:<detail>（如 agent:foundation_write:建角色 顾长风）。

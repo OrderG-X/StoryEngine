@@ -28,7 +28,7 @@ describe("humanizeUndoLabel（R2#3·操作历史 label 人话化）", () => {
 
   it("恢复产物里嵌入的 agent:<toolId> 也一并人话化（不再露『恢复到：agent:commit_apply』）", () => {
     expect(humanizeUndoLabel("恢复到：agent:commit_apply")).toBe("恢复到：定稿");
-    expect(humanizeUndoLabel("恢复前自动快照")).toBe("恢复前自动快照");
+    expect(humanizeUndoLabel("恢复前自动快照")).toBe("恢复前的自动存档");
   });
 
   it("未登记工具 id 至少剥掉 agent: 前缀；非 agent 标签原样返回", () => {

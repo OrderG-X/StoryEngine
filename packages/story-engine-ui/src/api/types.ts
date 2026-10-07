@@ -926,6 +926,8 @@ export interface SnapshotEntryDto {
   readonly id: string;
   readonly label: string;
   readonly timestamp: number;
+  /** 这个存档点之后改了什么（已翻成人话，如「正文：第 58 章写入定稿」）；认不出时缺省。 */
+  readonly changes?: readonly string[];
 }
 
 export type SnapshotListApiResponse =

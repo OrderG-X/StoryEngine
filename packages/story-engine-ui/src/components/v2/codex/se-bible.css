@@ -110,7 +110,7 @@
 
   /* ═══ 操作历史 ═══ */
   .op-history{height:100%;overflow-y:auto;}
-  .op-history-body{max-width:860px;margin:0 auto;padding:28px 36px 56px;}
+  .op-history-body{width:100%;max-width:860px;margin:0 auto;padding:28px 36px 56px;box-sizing:border-box;}
   .op-history-head h2{margin:0;font-size:20px;line-height:1.3;color:var(--text);}
   .op-history-head .op-history-hint{margin:4px 0 0;font-size:13px;color:var(--muted);}
   .op-history-filters{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 -4px;}
@@ -138,6 +138,17 @@
   .op-history-item:hover .op-history-restore,.op-history-item.is-confirming .op-history-restore,.op-history-item .op-history-restore:focus-visible{opacity:1;color:var(--text);}
   .op-history-item .op-history-restore:hover:not(:disabled){background:var(--hover);}
   .op-history-item .op-history-restore:disabled{cursor:default;opacity:.5;}
+  .op-history-acts{display:flex;gap:2px;}
+  .op-history-item.is-showing{background:var(--hover);}
+  .op-history-item.is-showing .op-history-restore{opacity:1;color:var(--text);}
+  /* 「查看改动」展开的清单：对齐标题列，小圆点列表 */
+  .op-history-changes{
+    display:flex;flex-direction:column;gap:6px;margin:2px 12px 8px 72px;padding:10px 14px;list-style:none;
+    border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;color:var(--muted);
+    animation:se-fade .12s ease-out;
+  }
+  .op-history-changes li{display:flex;gap:8px;line-height:1.6;}
+  .op-history-changes li::before{content:"";flex:none;width:5px;height:5px;margin-top:9px;border-radius:50%;background:var(--faint);}
   .op-history-confirm{
     display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:2px 12px 8px 72px;padding:10px 12px;
     border:1px solid var(--line-strong);border-radius:10px;background:var(--surface-2);font-size:13px;
@@ -151,6 +162,6 @@
 
   @media (max-width:1279px){
     .se-bible .read,.op-history-body{padding:24px 24px 48px;}
-    .op-history-confirm{margin-left:12px;}
+    .op-history-confirm,.op-history-changes{margin-left:12px;}
   }
 }
