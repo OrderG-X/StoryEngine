@@ -8,7 +8,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createSnapshot, listSnapshots } from "../../lib/snapshot.js";
-import { buildProjectRequestContext } from "../request-context.js";
+import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
 import { pruneSnapshotsTool, runPruneSnapshots } from "./prune-snapshots.js";
 
 const execFileAsync = promisify(execFile);
@@ -59,6 +59,8 @@ type ToolResult = {
   readonly dryRun: boolean;
   readonly summary: string;
   readonly blockedReason?: string;
+  readonly needsConfirmation?: boolean;
+  readonly confirmAction?: { readonly toolName: string; readonly keep?: number };
   readonly keep?: number;
   readonly prunedCount?: number;
   readonly backupBundlePath?: string;
@@ -184,68 +186,50 @@ describe("runPruneSnapshots（壳函数）", () => {
   });
 });
 
-describe("prune_snapshots 工具（意图门只守真裁）", () => {
-  it("本轮用户原话没有确认裁剪意图 → confirm=true 被拦，历史不动", async () => {
+describe("prune_snapshots 工具（2026-10-07：模型只预览出按钮，用户点「确认裁剪」才真裁）", () => {
+  it("模型带 confirm=true 也只预览：不改历史，给用户出「确认裁剪」按钮", async () => {
     const dir = await makeProjectWithHistory();
     const headBefore = await revParse(dir, "HEAD");
-
-    const result = await executeTool(
-      { keep: 25, confirm: true },
-      dir,
-      "继续写第56章正文。只写这一章，不要写其他章。",
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.blockedReason).toBe("user_turn_no_prune_confirm_intent");
-    expect(result.summary).toContain("确认裁剪");
-    // 被拦=没落盘（连预览都没跑），dryRun 按「没落盘」口径报 true（字段语义自洽，复审 P2）
-    expect(result.dryRun).toBe(true);
-    expect(await revParse(dir, "HEAD")).toBe(headBefore);
-    expect((await listSnapshots(dir, 100)).length).toBe(30);
-  }, 60_000);
-
-  it("首次只说『裁剪一下快照历史』（无确认措辞）→ confirm=true 同样被拦，引导先预览", async () => {
-    const dir = await makeProjectWithHistory();
-    const headBefore = await revParse(dir, "HEAD");
-
-    const result = await executeTool({ keep: 25, confirm: true }, dir, "裁剪一下快照历史");
-
-    expect(result.ok).toBe(false);
-    expect(result.blockedReason).toBe("user_turn_no_prune_confirm_intent");
-    expect(await revParse(dir, "HEAD")).toBe(headBefore);
-  }, 60_000);
-
-  it("用户明确说「确认裁剪」→ confirm=true 真裁落盘", async () => {
-    const dir = await makeProjectWithHistory();
-    await redirectBackupDir();
 
     const result = await executeTool({ keep: 25, confirm: true }, dir, "确认裁剪快照历史");
 
     expect(result.ok).toBe(true);
-    expect(result.dryRun).toBe(false);
-    expect(result.prunedCount).toBe(5);
-    expect((await listSnapshots(dir, 100)).length).toBe(26);
-  }, 60_000);
-
-  it("预览（不带 confirm）不过意图门：无关原话也照调照报", async () => {
-    const dir = await makeProjectWithHistory();
-
-    const result = await executeTool({ keep: 25 }, dir, "继续写第56章正文");
-
-    expect(result.ok).toBe(true);
     expect(result.dryRun).toBe(true);
     expect(result.prunedCount).toBe(5);
-    expect((await listSnapshots(dir, 100)).length).toBe(30); // 预览不动历史
+    expect(result.needsConfirmation).toBe(true);
+    expect(result.confirmAction).toEqual({ toolName: "prune_snapshots", keep: 25 });
+    expect(result.summary).toContain("「确认裁剪」按钮");
+    expect(await revParse(dir, "HEAD")).toBe(headBefore);
+    expect((await listSnapshots(dir, 100)).length).toBe(30);
   }, 60_000);
 
-  it("缺 userTurnText（前端按钮/旧会话）→ 真裁放行（向后兼容）", async () => {
+  it("预览（不带 confirm）同样出按钮；没东西可裁时不出按钮", async () => {
+    const dir = await makeProjectWithHistory();
+    const prunable = await executeTool({ keep: 25 }, dir, "继续写第56章正文");
+    expect(prunable.needsConfirmation).toBe(true);
+    expect((await listSnapshots(dir, 100)).length).toBe(30);
+
+    const nothing = await executeTool({ keep: 200 }, dir);
+    expect(nothing.prunedCount).toBe(0);
+    expect(nothing.needsConfirmation).toBeUndefined();
+  }, 60_000);
+
+  it("用户点了「确认裁剪」按钮（结构化动作带确认标记）→ 真裁落盘", async () => {
     const dir = await makeProjectWithHistory();
     await redirectBackupDir();
+    const requestContext = buildProjectRequestContext(dir, undefined, undefined, "确认裁剪操作历史");
+    markUserConfirmedTool(requestContext, "prune_snapshots");
+    const execute = pruneSnapshotsTool.execute as unknown as (
+      input: Record<string, unknown>,
+      context: ToolExecutionContext,
+    ) => Promise<ToolResult>;
 
-    const result = await executeTool({ keep: 25, confirm: true }, dir);
+    const result = await execute({ keep: 25, confirm: true }, { requestContext } as unknown as ToolExecutionContext);
 
     expect(result.ok).toBe(true);
     expect(result.dryRun).toBe(false);
+    expect(result.prunedCount).toBe(5);
+    expect(result.needsConfirmation).toBeUndefined();
     expect((await listSnapshots(dir, 100)).length).toBe(26);
   }, 60_000);
 });

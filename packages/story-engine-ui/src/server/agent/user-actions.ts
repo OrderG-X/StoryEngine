@@ -10,14 +10,13 @@ import type { RequestContext } from "@mastra/core/di";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = ["commit_apply"] as const;
+export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots"] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 
-export interface UserAction {
-  readonly toolName: UserActionToolName;
-  readonly chapter: number;
-  readonly previewToken?: string;
-}
+/** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
+export type UserAction =
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
+  | { readonly toolName: "prune_snapshots"; readonly keep?: number };
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -33,6 +32,14 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof toolName !== "string" || !(USER_ACTION_TOOL_NAMES as readonly string[]).includes(toolName)) {
     return { kind: "invalid", reason: "不支持的操作。" };
   }
+  if (toolName === "prune_snapshots") {
+    const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
+    if (rawKeep === undefined || rawKeep === null || rawKeep === "") return { kind: "action", action: { toolName: "prune_snapshots" } };
+    if (typeof rawKeep !== "number" || !Number.isInteger(rawKeep) || rawKeep < 0) {
+      return { kind: "invalid", reason: "保留条数不对。" };
+    }
+    return { kind: "action", action: { toolName: "prune_snapshots", ...(rawKeep > 0 ? { keep: rawKeep } : {}) } };
+  }
   const chapter = typeof record.chapter === "string" ? Number(record.chapter.trim()) : record.chapter;
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
@@ -42,7 +49,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     : undefined;
   return {
     kind: "action",
-    action: { toolName: toolName as UserActionToolName, chapter, ...(previewToken ? { previewToken } : {}) },
+    action: { toolName: "commit_apply", chapter, ...(previewToken ? { previewToken } : {}) },
   };
 }
 
@@ -103,6 +110,10 @@ export async function runUserAction(args: {
   readonly scrubError: (error: unknown) => string;
 }): Promise<void> {
   const { action } = args;
+  if (action.toolName === "prune_snapshots") {
+    await runPruneAction({ ...args, action });
+    return;
+  }
   const stamp = Date.now();
   const toolCallId = `user-action-${action.toolName}-${stamp}`;
   const emitText = (text: string): void => {
@@ -149,4 +160,47 @@ export async function runUserAction(args: {
     toolName: "suggest_next_steps",
     output: { ok: true, question: nextSteps.question, choices: nextSteps.choices },
   });
+}
+
+interface PruneLikeOutput {
+  readonly ok?: unknown;
+  readonly summary?: unknown;
+}
+
+/** 「确认裁剪」按钮：服务端直接真裁（带用户确认标记），结果按 agent 回合同款事件推给前端。 */
+async function runPruneAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "prune_snapshots" }>;
+}): Promise<void> {
+  const { action } = args;
+  const toolCallId = `user-action-prune_snapshots-${Date.now()}`;
+  const input = { confirm: true, ...(action.keep ? { keep: action.keep } : {}) };
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  };
+  const flush = (): void => {
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "prune_snapshots", args: input });
+  let output: unknown;
+  markUserConfirmedTool(args.requestContext, "prune_snapshots");
+  try {
+    output = await args.executeTool("prune_snapshots", input, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "prune_snapshots", error: message, retryable: true });
+    emitText(`裁剪操作历史没有完成：${message}。历史没有被改动，可以再点一次「确认裁剪」重试。`);
+    flush();
+    return;
+  } finally {
+    markUserConfirmedTool(args.requestContext, undefined);
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "prune_snapshots", output });
+  const result = output as PruneLikeOutput | undefined;
+  const summary = typeof result?.summary === "string" && result.summary.trim()
+    ? result.summary.trim()
+    : result?.ok === true ? "操作历史已裁剪。" : "操作历史没有裁剪。";
+  emitText(summary);
+  flush();
 }

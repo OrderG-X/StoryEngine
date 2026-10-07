@@ -22,7 +22,7 @@
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
 import { isVerdictToolName } from "../shared/honesty-detection.js";
-import { commitConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, pruneConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -76,6 +76,8 @@ export interface AgentToolResultOutput {
   readonly commitPreview?: ChapterMessage["commitPreview"];
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
+  /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
+  readonly pruneConfirmAction?: { readonly keep?: number };
 }
 
 export type AgentProjectionEvent =
@@ -265,6 +267,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 模型发起的定稿请求：没写盘，挂「确认定稿」按钮（建议条渲染），用户点了才由服务端直接执行。
       if (event.toolName === "commit_apply" && event.output?.commitConfirmAction) {
         const button = commitConfirmAction(event.output.commitConfirmAction);
+        return {
+          ...withEffects,
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+        };
+      }
+      // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
+      if (event.toolName === "prune_snapshots" && event.output?.pruneConfirmAction) {
+        const button = pruneConfirmAction(event.output.pruneConfirmAction);
         return {
           ...withEffects,
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],

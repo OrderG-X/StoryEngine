@@ -22,6 +22,7 @@ import type { ModelMessage } from "ai";
 import { buildProjectRequestContext } from "../agent/request-context.js";
 import { getStoryAgent } from "../agent/story-agent.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
+import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import {
@@ -675,6 +676,13 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
   switch (toolName) {
     case "commit_apply": {
       const execute = commitApplyTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    case "prune_snapshots": {
+      const execute = pruneSnapshotsTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

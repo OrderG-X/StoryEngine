@@ -779,6 +779,23 @@ describe("定稿待确认投影（模型发起的 commit_apply 只出「确认�
   });
 });
 
+describe("裁剪待确认投影（prune_snapshots 预览后挂「确认裁剪」按钮）", () => {
+  it("pruneConfirmAction → 消息挂「确认裁剪」按钮（带保留条数）", () => {
+    const message = project([
+      {
+        type: "tool-result",
+        toolCallId: "p1",
+        toolName: "prune_snapshots",
+        endedAt: 2,
+        output: { ok: true, needsConfirmation: true, pruneConfirmAction: { keep: 50 }, summary: "预览：将裁 30 条。" },
+      },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "prune-confirm", label: "确认裁剪", pruneTarget: { keep: 50 } }),
+    ]);
+  });
+});
+
 describe("质检明细投影（quality_check → message.qualityReport）", () => {
   it("带 qualityReport → 挂到 message.qualityReport", () => {
     const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };

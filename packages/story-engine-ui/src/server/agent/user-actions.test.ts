@@ -157,3 +157,53 @@ describe("runUserAction 执行结构化动作", () => {
     expect(isUserConfirmedTool({ requestContext } as never, "commit_apply")).toBe(false);
   });
 });
+
+describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
+  it("parseUserAction：keep 可缺省、数字字符串宽容、0=缺省、负数/小数拒绝；不需要章号", () => {
+    expect(parseUserAction({ toolName: "prune_snapshots" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });
+    expect(parseUserAction({ toolName: "prune_snapshots", keep: "50" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots", keep: 50 } });
+    expect(parseUserAction({ toolName: "prune_snapshots", keep: 0 })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });
+    expect(parseUserAction({ toolName: "prune_snapshots", keep: -1 }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "prune_snapshots", keep: 2.5 }).kind).toBe("invalid");
+  });
+
+  it("runUserAction：带确认标记执行 confirm=true，结束即清；结果摘要如实转述，不出下一步卡", async () => {
+    const requestContext = new RequestContext();
+    let markedDuringExecution = false;
+    let receivedInput: Record<string, unknown> | undefined;
+    const executeTool: UserActionToolExecutor = async (toolName, input, context) => {
+      markedDuringExecution = isUserConfirmedTool({ requestContext: context } as never, toolName);
+      receivedInput = input;
+      return { ok: true, dryRun: false, summary: "已把操作历史裁到最近 50 条。" };
+    };
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "prune_snapshots", keep: 50 },
+      requestContext,
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(markedDuringExecution).toBe(true);
+    expect(isUserConfirmedTool({ requestContext } as never, "prune_snapshots")).toBe(false);
+    expect(receivedInput).toEqual({ confirm: true, keep: 50 });
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+    expect(events[2]!.data.text).toBe("已把操作历史裁到最近 50 条。");
+  });
+
+  it("执行抛错：tool-error + 如实说没完成、历史没动、可再点", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "prune_snapshots" },
+      requestContext: new RequestContext(),
+      executeTool: async () => { throw new Error("磁盘满了"); },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: (e) => (e instanceof Error ? e.message : String(e)),
+    });
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
+    expect(String(events[2]!.data.text)).toContain("没有完成");
+    expect(String(events[2]!.data.text)).toContain("确认裁剪");
+  });
+});

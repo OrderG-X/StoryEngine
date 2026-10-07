@@ -152,6 +152,13 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       requiresConfirmation: false,
       endpoint: "/api/commit/apply",
     },
+    "prune-confirm": {
+      id: "prune-confirm",
+      label: "确认裁剪",
+      description: "把操作历史裁到预览里说的条数；裁前完整历史自动备份到项目目录外。",
+      permission: "destructive_write",
+      requiresConfirmation: false,
+    },
     "continue-next": {
       id: "continue-next",
       label: "继续下一章",
@@ -169,6 +176,11 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
  */
 export function commitConfirmAction(target?: CommitConfirmTarget): SuggestedAction {
   return { ...suggestedAction("commit-apply"), ...(target ? { commitTarget: target } : {}) };
+}
+
+/** 「确认裁剪」按钮：点了发结构化动作、由服务端直接真裁（裁剪快照预览之后出现）。 */
+export function pruneConfirmAction(target?: { readonly keep?: number }): SuggestedAction {
+  return { ...suggestedAction("prune-confirm"), pruneTarget: { ...(target?.keep ? { keep: target.keep } : {}) } };
 }
 
 function withDisabledReason(action: SuggestedAction, disabledReason: string | undefined): SuggestedAction {

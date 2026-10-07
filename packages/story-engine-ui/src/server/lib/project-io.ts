@@ -577,6 +577,8 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const permission = readWorkspacePermission(item.permission);
     if (!id || !label || !description || !permission) continue;
     const commitTarget = readWorkspaceCommitTarget(item.commitTarget);
+    // 「确认裁剪」按钮的保留条数：不进白名单的话刷新后丢失，按钮会按默认 200 条裁（与预览不一致）。
+    const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
     actions.push({
       id,
       label,
@@ -585,6 +587,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       requiresConfirmation: item.requiresConfirmation === true,
       ...(readString(item.endpoint) ? { endpoint: readString(item.endpoint) } : {}),
       ...(commitTarget ? { commitTarget } : {}),
+      ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
     });
   }
   return actions.slice(0, 8);

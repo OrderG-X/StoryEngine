@@ -26,11 +26,9 @@ export interface StreamAgentChatRequest {
 }
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
-export interface AgentUserAction {
-  readonly toolName: "commit_apply";
-  readonly chapter: number;
-  readonly previewToken?: string;
-}
+export type AgentUserAction =
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
+  | { readonly toolName: "prune_snapshots"; readonly keep?: number };
 
 export interface AgentToolResult {
   readonly toolCallId?: string;
@@ -93,6 +91,8 @@ export interface AgentToolResult {
   };
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认——投影层据此挂「确认定稿」按钮。 */
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
+  /** prune_snapshots 专属：模型只做了预览、有可裁内容，等用户点「确认裁剪」按钮。 */
+  readonly pruneConfirmAction?: { readonly keep?: number };
 }
 
 export interface AgentToolError {
@@ -309,6 +309,16 @@ export async function streamAgentChat(
                   commitConfirmAction: {
                     chapter: output.confirmAction.chapter,
                     ...(typeof output.confirmAction.previewToken === "string" ? { previewToken: output.confirmAction.previewToken } : {}),
+                  },
+                }
+              : {}),
+            ...(parsed.toolName === "prune_snapshots" && output.needsConfirmation === true
+              && typeof output.confirmAction === "object" && output.confirmAction !== null
+              ? {
+                  pruneConfirmAction: {
+                    ...(typeof (output.confirmAction as { keep?: unknown }).keep === "number"
+                      ? { keep: (output.confirmAction as { keep: number }).keep }
+                      : {}),
                   },
                 }
               : {}),

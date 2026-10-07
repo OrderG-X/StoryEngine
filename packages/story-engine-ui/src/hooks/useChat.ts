@@ -2145,6 +2145,28 @@ export function useChat(params: UseChatParams): UseChatResult {
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
 
+  /* ---- handleConfirmPrune：「确认裁剪」按钮 ---- */
+
+  // 与「确认定稿」同一套结构化动作：按钮点击即授权，服务端直接真裁操作历史（裁前自动备份），不经模型。
+  const handleConfirmPrune = useCallback(
+    async (target?: { readonly keep?: number }): Promise<void> => {
+      if (!projectPath) {
+        setChatError("请先打开真实本地项目。");
+        return;
+      }
+      const live = useWorkspaceStore.getState();
+      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+        showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
+        return;
+      }
+      const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
+      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
+    },
+    [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
+  );
+
   /* ---- handleSuggestedAction ---- */
 
   // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
@@ -2205,6 +2227,10 @@ export function useChat(params: UseChatParams): UseChatResult {
           return;
         case "commit-apply":
           void handleConfirmCommit(action.commitTarget);
+          return;
+        case "prune-confirm":
+          consumeSuggestedAction(action);
+          void handleConfirmPrune(action.pruneTarget);
           return;
         case "continue-next": {
           void handleSendMessage("继续写下一章。");
@@ -2293,6 +2319,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       resolveChapterDirection,
       handleSendMessage,
       handleConfirmCommit,
+      handleConfirmPrune,
       handleApplyRevisionPreview,
       handleApplyFoundationGapSuggestionsFromChat,
       handleRollbackFoundationGapApplyFromChat,

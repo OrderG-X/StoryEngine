@@ -890,6 +890,23 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(out[1]).not.toHaveProperty("commitPreview");
   });
 
+  it("「确认裁剪」按钮的 pruneTarget 持久化（刷新后按钮仍按预览的保留条数裁）；坏 keep 丢掉但按钮还在", () => {
+    const out = readWorkspaceMessages([
+      {
+        id: "assistant-prune",
+        role: "assistant",
+        content: "预览：将裁 12 条，点确认裁剪。",
+        suggestedActions: [
+          { id: "prune-confirm", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: 20, junk: 1 } },
+          { id: "prune-confirm-bad", label: "确认裁剪", description: "裁剪操作历史", permission: "destructive_write", requiresConfirmation: false, pruneTarget: { keep: -3 } },
+        ],
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any);
+    expect(out[0]!.suggestedActions?.[0]?.pruneTarget).toEqual({ keep: 20 });
+    expect(out[0]!.suggestedActions?.[1]?.pruneTarget).toEqual({});
+  });
+
   it("turnStartedAt/turnEndedAt round-trip：有限正数保留，坏值不写", () => {
     const out = readWorkspaceMessages([
       {
