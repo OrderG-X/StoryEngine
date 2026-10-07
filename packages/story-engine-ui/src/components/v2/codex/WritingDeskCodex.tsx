@@ -3,7 +3,7 @@ import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
-import { chapterHeading, flowLabel } from "../v2Utils.js";
+import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import {
@@ -124,7 +124,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
           <div className="se-v2-editor-wrap se-v2-paper">
             <div className="se-v2-editor-text">
               {draft.status === "committed" && draft.content.trim() ? (
-                draft.content.split(/\n{2,}/u).map((para, i) => (
+                cleanProseForDisplay(draft.content).split(/\n{2,}/u).map((para, i) => (
                   para.trim() ? <p key={i}>{para.trim()}</p> : null
                 ))
               ) : (

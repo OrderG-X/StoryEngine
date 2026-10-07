@@ -14,6 +14,7 @@
  */
 import {
   buildStateOverview,
+  stripMarkdownEmphasis,
   type DraftRevisionPreview,
   type StateOverview,
 } from "@actalk/story-engine";
@@ -145,7 +146,7 @@ async function toToolOutput(
     applied: true,
     preview: outcome.preview,
     // 修订后的完整草稿正文（去标题），供前端把真正文载入工作区，与 generate_draft 的 draftBody 同构。
-    draftBody: stripLeadingMarkdownChapterHeading(outcome.updatedContent).trim(),
+    draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(outcome.updatedContent)).trim(),
     overview,
     summary: outcome.mode === "exact"
       ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`

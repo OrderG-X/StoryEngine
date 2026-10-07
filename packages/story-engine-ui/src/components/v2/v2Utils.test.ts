@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chapterHeading, flowHint, flowLabel, uiText } from "./v2Utils.js";
+import { chapterHeading, cleanProseForDisplay, flowHint, flowLabel, uiText } from "./v2Utils.js";
 
 describe("uiText", () => {
   it("does not translate story inside filesystem paths", () => {
@@ -44,5 +44,14 @@ describe("flow copy", () => {
     expect(flowLabel(undefined)).toBe("工作稿中");
     expect(flowLabel(null)).toBe("工作稿中");
     expect(flowLabel("" as never)).toBe("工作稿中");
+  });
+});
+
+describe("cleanProseForDisplay：定稿只读视图去掉标题行与粗体记号", () => {
+  it("去开头 # 第N章 标题行、去成对 **", () => {
+    expect(cleanProseForDisplay("# 第34章 · 看手\n\n他说：**九号，西侧。**\n\n完。")).toBe("他说：九号，西侧。\n\n完。");
+  });
+  it("正文中间的 # 行与单星号不动", () => {
+    expect(cleanProseForDisplay("开头。\n# 不是标题\n* * *")).toBe("开头。\n# 不是标题\n* * *");
   });
 });

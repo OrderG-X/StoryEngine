@@ -80,6 +80,20 @@ export function chapterBareTitle(title: string): string {
   return cleaned.replace(prefix, "").trim();
 }
 
+/**
+ * 只读展示用：去掉正文开头的「# 第N章 …」标题行与成对的 **粗体** / __粗体__ 记号。
+ * 只用于定稿只读视图——不回写、不改用户文件（生成侧已在引擎里同口径清洗，这里兜旧数据）。
+ */
+export function cleanProseForDisplay(content: string): string {
+  const lines = content.replace(/\r\n?/gu, "\n").split("\n");
+  const first = lines.findIndex((line) => line.trim().length > 0);
+  if (first >= 0 && /^#{1,6}\s*第[0-9一二三四五六七八九十百零两]+章/u.test(lines[first].trim())) lines.splice(first, 1);
+  return lines.join("\n")
+    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")
+    .replace(/__(?=\S)([^_\n]*?\S)__/gu, "$1")
+    .trim();
+}
+
 export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
   const labels: Record<ChapterFlowStatus, string> = {
     idle: "待开始",

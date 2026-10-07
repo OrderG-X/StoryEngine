@@ -67,8 +67,43 @@
   /* 嵌进弹窗的旧设置页：去掉它自带的整页外框与返回键（弹窗已有关闭键）。 */
   .se-modal-body .ms-close,.se-modal-body .ai-settings-back{display:none;}
 
+  /* ═══ 搜索按钮 + ⌘K 面板 ═══ */
+  .se-search-btn{
+    height:34px;min-width:0;display:inline-flex;align-items:center;gap:8px;margin-right:6px;padding:0 6px 0 10px;
+    border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--faint);font-size:13px;cursor:pointer;
+  }
+  .se-search-btn:hover{border-color:var(--line-strong);color:var(--muted);}
+  .se-search-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  kbd{font-family:inherit;font-size:12px;line-height:18px;padding:0 5px;border:1px solid var(--line);border-radius:5px;color:var(--faint);background:transparent;}
+  .se-palette{
+    position:fixed;z-index:61;top:72px;left:50%;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));
+    background:var(--panel);border:1px solid var(--line-strong);border-radius:14px;box-shadow:var(--shadow-pop);overflow:hidden;
+    animation:se-fade .12s ease-out;
+  }
+  .se-pal-in{display:flex;align-items:center;gap:10px;height:52px;padding:0 12px 0 14px;border-bottom:1px solid var(--line);color:var(--faint);}
+  .se-pal-in input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--text);font:inherit;font-size:15px;}
+  .se-pal-in input::placeholder{color:var(--faint);}
+  .se-pal-in input:focus-visible{outline:none;box-shadow:none;}
+  .se-pal-res{max-height:min(400px,calc(100vh - 220px));overflow-y:auto;padding:6px;}
+  .se-pal-g{padding:10px 10px 4px;font-size:12px;color:var(--faint);}
+  .se-pal-it{
+    width:100%;height:38px;display:flex;align-items:center;gap:10px;padding:0 10px;border:0;border-radius:8px;
+    background:transparent;color:var(--text);font-size:14px;text-align:left;cursor:pointer;
+  }
+  .se-pal-it svg{flex:none;color:var(--faint);}
+  .se-pal-it.on{background:var(--hover);}
+  .se-pal-it.on svg{color:var(--accent);}
+  .se-pal-it:disabled{opacity:.45;cursor:default;}
+  .se-pal-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-pal-hint{flex:0 1 auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--faint);}
+  .se-pal-empty{padding:18px 12px;font-size:13px;color:var(--faint);}
+  .se-pal-foot{display:flex;gap:16px;padding:8px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);}
+
   @keyframes se-fade{from{opacity:0}to{opacity:1}}
 
+  @media (max-width:1279px){
+    .se-search-lbl{display:none;}
+  }
   @media (max-width:860px){
     .se-top{grid-template-columns:minmax(0,1fr) auto auto;}
     .se-crumb-book,.se-crumb-sep{display:none;}

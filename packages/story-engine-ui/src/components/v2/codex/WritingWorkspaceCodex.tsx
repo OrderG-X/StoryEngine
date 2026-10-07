@@ -24,7 +24,11 @@ import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
+import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
+import { useThemeStore } from "../../../stores/themeStore.js";
 import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSearch, IconSettings } from "./icons.js";
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
 import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";
@@ -161,6 +165,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   );
   // 设置改成弹窗（不再占中栏整页），null = 关着。
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [cat, setCat] = useState<string>("world");
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting);
   const [chapterQuery, setChapterQuery] = useState("");
@@ -205,6 +210,24 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     { cat: "assets", catLabel: "道具与资源", items: props.sidebar.assets },
   ];
   const libQ = libQuery.trim().toLowerCase();
+  const paletteCharacters = parsePaletteCharacters(props.sidebar.characters);
+  const paletteCommands: PaletteCommand[] = [
+    {
+      id: "next", label: "写下一章", hint: "交给 AI", disabled: workspaceBusy || !props.onSendMessage,
+      run: () => { setView("desk"); props.onSendMessage?.("继续写下一章的正文，现在就动笔直接出稿"); },
+    },
+    { id: "desk", label: "打开写作台", hint: "视图", run: () => setView("desk") },
+    { id: "library", label: "打开设定本", hint: "视图", run: () => setView("library") },
+    { id: "history", label: "打开操作历史", hint: "视图", run: () => setView("history") },
+    {
+      id: "focus", label: focusWriting ? "退出专注写作" : "专注写作", hint: "收起两侧",
+      run: () => { setView("desk"); useDisplaySettingsStore.getState().toggleFocusWriting(); },
+    },
+    { id: "theme", label: "切换深色 / 纸面主题", hint: "外观", run: () => useThemeStore.getState().toggle() },
+    { id: "settings", label: "模型设置", hint: "设置", run: () => setSettingsTab("model") },
+    { id: "display", label: "显示设置（主题、字号）", hint: "设置", run: () => setSettingsTab("display") },
+    { id: "home", label: "回到书架", hint: "视图", run: () => props.onGoHome?.() },
+  ];
   const librarySearchResults = searchLibraryIndex(librarySearchSources, libQuery);
 
   // 拖动右缘改宽：pointer 拖动期间实时夹在 [min,max] 设宽，松手解绑监听。
@@ -228,6 +251,18 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }
+
+  // ⌘K / Ctrl+K：任何地方都能呼出搜索与命令面板（再按一次关）。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     if (!settingsTab) return;
@@ -309,6 +344,11 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           <button className={view === "history" ? "on" : ""} type="button" aria-pressed={view === "history"} onClick={() => setView("history")}>历史</button>
         </nav>
         <div className="se-top-r">
+          <button className="se-search-btn" type="button" aria-label="搜索章节、设定、命令" onClick={() => setPaletteOpen(true)}>
+            <IconSearch size={16} />
+            <span className="se-search-lbl">搜索章节、设定、命令</span>
+            <kbd>{IS_MAC ? "⌘K" : "Ctrl K"}</kbd>
+          </button>
           <button
             className={`se-icon-btn${focusWriting ? " on" : ""}`}
             type="button"
@@ -475,6 +515,26 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           onResizeStart={handleResizeStart}
         />
       </div>
+      {paletteOpen ? (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          chapters={chapters}
+          characters={paletteCharacters}
+          librarySources={librarySearchSources}
+          commands={paletteCommands}
+          onPickChapter={(id) => {
+            setView("desk");
+            if (id === currentId) return;
+            if (workspaceBusy) {
+              useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
+              return;
+            }
+            props.onSelectChapter?.(id);
+          }}
+          onPickCharacter={() => { setView("library"); setCat("chars"); }}
+          onPickSetting={(target) => { setView("library"); setCat(target); }}
+        />
+      ) : null}
       {settingsTab ? (
         <>
           <div className="se-scrim" aria-hidden="true" onClick={() => setSettingsTab(null)} />

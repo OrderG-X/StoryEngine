@@ -208,7 +208,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       maxOutputTokens: input.maxOutputTokens ?? resolveDraftMaxOutputTokens(draftLengthTarget),
     });
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
-    const rawDraftBody = stripLeadingMarkdownChapterHeading(generated.content);
+    const rawDraftBody = stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content));
     const rawDraftLength = buildDraftLengthReport({
       draftBody: rawDraftBody,
       lengthTarget: draftLengthTarget,
@@ -498,6 +498,17 @@ function looksLikeToolOrJsonArtifact(content: string): boolean {
     }
   }
   return /tool_call|function_call|"arguments"\s*:|"name"\s*:/iu.test(content);
+}
+
+/**
+ * 去掉小说正文里的 Markdown 强调记号：**粗体** / __粗体__ → 原文。
+ * 模型偶尔把句子包成粗体，正文是纯文本、编辑器不渲染 Markdown，记号会原样出现在稿纸上（「**九号，西侧，二层。**」）。
+ * 只认成对、同一行内的记号；单个星号（如「*」作分隔或引用）不动。题材中立、纯确定性。
+ */
+export function stripMarkdownEmphasis(content: string): string {
+  return content
+    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")
+    .replace(/__(?=\S)([^_\n]*?\S)__/gu, "$1");
 }
 
 function stripLeadingMarkdownChapterHeading(content: string): string {
