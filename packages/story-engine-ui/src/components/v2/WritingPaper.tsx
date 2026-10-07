@@ -24,7 +24,9 @@ import { useWorkspaceStore } from "../../stores/workspaceStore.js";
 
 const BLOCK_SEPARATOR = "\n\n";
 const TOOLBAR_GAP = 44;
-const TOOLBAR_WIDTH = 300;
+// 浮动条宽度上限（定位时防右侧溢出）：完整一排 8 个按钮约 490px；定稿章节只有「问 AI」一个钮。
+const TOOLBAR_WIDTH = 500;
+const ASK_ONLY_TOOLBAR_WIDTH = 80;
 
 export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelectionRewrite, onSelectionRewriteCustom, onAskAboutSelection }: {
   readonly draft: DraftPreview;
@@ -116,7 +118,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       const start = instance.view.coordsAtPos(from);
       const hostRect = host.getBoundingClientRect();
       const top = Math.max(0, start.top - hostRect.top - TOOLBAR_GAP);
-      const left = Math.max(0, Math.min(start.left - hostRect.left, host.clientWidth - TOOLBAR_WIDTH));
+      const barWidth = canRewrite ? TOOLBAR_WIDTH : ASK_ONLY_TOOLBAR_WIDTH;
+      const left = Math.max(0, Math.min(start.left - hostRect.left, host.clientWidth - barWidth));
       setSelection({ text, top, left });
     } catch {
       setSelection(null);

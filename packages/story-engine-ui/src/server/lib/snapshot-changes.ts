@@ -128,6 +128,7 @@ export function humanizeHistoryLabel(label: string): string {
   // 恢复到某个存档点 = 回到那一步操作之前。
   const restore = /^恢复到：(.+)$/u.exec(label.trim());
   if (restore) return `恢复到「${humanizeHistoryLabel(restore[1]!)}」之前`;
+  if (label.trim() === "初始快照") return "建书时的初始状态";
   const text = humanizeUndoLabel(label);
   const op = (name: string) => OP_NAMES[name.trim()] ?? name.trim();
   const chapterFirst = /^第\s*(\d+)\s*章(.+?)前快照$/u.exec(text);

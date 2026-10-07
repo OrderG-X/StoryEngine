@@ -100,5 +100,6 @@ describe("操作历史条目名", () => {
     expect(humanizeHistoryLabel("恢复到：第55章再次出稿前快照")).toBe("恢复到「再次出稿：第55章」之前");
     expect(humanizeHistoryLabel("恢复到：agent:commit_apply")).toBe("恢复到「定稿」之前");
     expect(humanizeHistoryLabel("恢复前自动快照")).toBe("恢复前的自动存档");
+    expect(humanizeHistoryLabel("初始快照")).toBe("建书时的初始状态");
   });
 });

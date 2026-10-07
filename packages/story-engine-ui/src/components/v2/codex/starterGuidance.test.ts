@@ -66,7 +66,7 @@ describe("starterGuidance", () => {
     ).toBe(false);
   });
 
-  it("空书默认落写作台，非空书落资料中心", () => {
+  it("空书、非空书打开都落写作台（书架点的是「继续写」）", () => {
     expect(
       defaultCenterViewForWorkspace({
         draft: { content: "", wordCount: 0 },
@@ -78,6 +78,6 @@ describe("starterGuidance", () => {
         draft: { content: "有字真正文", wordCount: 4 },
         chapters: [],
       }),
-    ).toBe("library");
+    ).toBe("desk");
   });
 });

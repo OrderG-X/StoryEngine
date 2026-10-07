@@ -40,9 +40,12 @@ export function isStarterEmptyWorkspace(workspace: StarterWorkspaceProbe): boole
   );
 }
 
-/** 空书首次进入默认落写作台（非资料中心）。 */
+/**
+ * 打开一本书默认落写作台：空书看起步引导，有稿的书接着写（书架上点的是「继续写」）。
+ * 2026-10-07 改版前非空书落资料中心——和顶栏「写作」在首位、书架「继续写」的预期对不上，改成一律写作台。
+ */
 export function defaultCenterViewForWorkspace(
-  workspace: StarterWorkspaceProbe,
+  _workspace: StarterWorkspaceProbe,
 ): "library" | "desk" {
-  return isStarterEmptyWorkspace(workspace) ? "desk" : "library";
+  return "desk";
 }
