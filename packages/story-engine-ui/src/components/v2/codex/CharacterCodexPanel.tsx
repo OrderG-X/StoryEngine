@@ -283,15 +283,18 @@ function CharacterCard({
       <div className="char-head">
         <div className="avatar">{avatarText(character.name)}</div>
         <div className="char-id">
-          <h3>{uiText(character.name, "未命名角色")}</h3>
-          <div className="sub">
-            {character.age ? <b>{uiText(character.age)}</b> : null}
-            {character.identity ? <><span>·</span><span>{uiText(character.identity)}</span></> : null}
-            <span>·</span>
+          <div className="char-name">
+            <h3>{uiText(character.name, "未命名角色")}</h3>
             {/* P2 canonical：职能只显一个权威值（resolveCharacterRole 已合并 narrativeRole/role/roleHint）；
-                取短标签展示，避免做厚后的「叙事岗位」长描述塞爆 tag。不再单列 roleHint 致重复。 */}
+                取短标签展示，避免做厚后的「叙事岗位」长描述塞爆 tag。不再单列 roleHint 致重复。
+                标签跟在名字后面；身份长句单独一行，不再拿「·」去拼（缺字段时会剩一个孤零零的点）。 */}
             <span className={`tag ${roleTag}`}>{uiText(roleLabel, "角色")}</span>
           </div>
+          {character.age || character.identity ? (
+            <div className="sub">
+              {[character.age, character.identity].filter(Boolean).map((part) => uiText(part)).join(" · ")}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -508,9 +511,10 @@ function roleTagClass(role: string): string {
  */
 function shortRoleLabel(role: string, isLead: boolean): string {
   if (isLead) return "主角";
-  const head = (role ?? "").split(/[：:。\n]/u)[0]?.trim() ?? "";
+  const head = (role ?? "").split(/[：:。，,\n]/u)[0]?.trim() ?? "";
   if (!head) return "角色";
-  return head.length <= 16 ? head : `${head.slice(0, 16)}…`;
+  // 标签只放短职能（「商业劲敌」「女主」）；一整句身份描述放不进标签，退成「配角」——描述本身在下一行身份里。
+  return head.length <= 8 ? head : "配角";
 }
 
 /**

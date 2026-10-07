@@ -89,6 +89,18 @@
   .se-bible .tier:hover{transform:none;border-color:var(--line);}
   .se-bible .tier .roman{flex:0 0 22px;font-size:13px;font-weight:500;color:var(--faint);}
   .se-bible .tier .body b{font-weight:500;}
+  /* 角色卡：名字 + 职能标签同一行，身份一行；格子按内容自适应列数（两项不再挤在三分之二宽里） */
+  .se-bible .char-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .se-bible .char-id .sub{display:block;margin-top:4px;line-height:1.6;}
+  .se-bible :is(.layer3,.drive3){grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
+  .se-bible :is(.layer3 .ly,.drive3 .dv,.know .kbox,.voice .vc){border-color:var(--line);background:var(--surface-2);}
+  .se-bible :is(.layer3 .ly p,.drive3 .dv p){font-size:12.5px;line-height:1.65;}
+  .se-bible .know .kbox li{font-size:12.5px;}
+  .se-bible .know .kbox.dont li{color:var(--text);list-style:disc;margin-left:0;padding-left:0;}
+  .se-bible .know .kbox.dont li::before{content:none;}
+  .se-bible .voice .vc p{font-size:12.5px;line-height:1.65;}
+  .se-bible .voice .vc.ban p{color:var(--text);}
+  .se-bible .voice .vc.ban{box-shadow:inset 2px 0 0 var(--warn);}
   .se-bible .wb-hero{border-color:var(--line);background:var(--surface);}
   .se-bible .wb-hero::after{display:none;}
   .se-bible .wb-hero .one::before{color:var(--faint);opacity:.6;}
