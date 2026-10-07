@@ -323,7 +323,9 @@ function collectDeltaRejectedWarnings(
       type: "delta_rejected",
       // message 尾部是模型声明里的 quote 原文（模型可控）：同款双消毒，防裸 id/绝对路径透进
       // semanticQualityIssues 与 summary（此前只消毒 blockingReasons 一支，审计返工补齐）。
-      message: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(message, nameById)),
+      message: `AI 对本章的标注和正文对不上：${humanizeDeltaRejection(
+        scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(message, nameById)),
+      )}（已按正文为准处理）`,
     }));
 }
 
@@ -457,11 +459,9 @@ function buildPreviewSummary(input: {
     summary += `【伏笔/线索待收口】${detail ? `本章提醒：${detail}。` : ""}${backlogNote}`;
   }
   if ((input.deltaRejectedWarnings?.length ?? 0) > 0) {
-    const detail = input.deltaRejectedWarnings
-      ?.slice(0, 3)
-      .map((warning) => warning.message)
-      .join("；");
-    summary += `【章节语义声明被拒】${detail}。已回退安全路径处理。`;
+    const count = input.deltaRejectedWarnings?.length ?? 0;
+    const sample = humanizeDeltaRejection(input.deltaRejectedWarnings?.[0]?.message ?? "");
+    summary += `【已自动核对】AI 对本章的标注有 ${count} 处和正文对不上${sample ? `（如${sample}）` : ""}，已按正文为准处理，不影响定稿。`;
   }
   if (input.continuityBreakWarning) {
     summary += `【跨章衔接提醒】${input.continuityBreakWarning.message}`;
@@ -512,3 +512,28 @@ export const commitPreviewTool = createTool({
     return buildCommitPreviewToolOutput({ projectDir, chapter: resolvedChapter, declareDelta: defaultDeclareDelta });
   },
 });
+
+/** 标注字段 → 作者看得懂的叫法。 */
+const DELTA_FIELD_WORDS: readonly (readonly [RegExp, string])[] = [
+  [/^charactersPresent/u, "出场人物"],
+  [/^mainEvent/u, "本章主事件"],
+  [/^(threads|newThreads|threadUpdates|leads)/u, "线索"],
+  [/^(hooks|newHooks|hookUpdates)/u, "伏笔"],
+  [/^(locations|location)/u, "地点"],
+  [/^(assets|items|gains|losses)/u, "物品得失"],
+  [/^(facts|hardFacts)/u, "硬事实"],
+];
+
+/**
+ * 「章节语义声明被拒（charactersPresent[3]·name_not_in_evidence）：原句」→「出场人物里的一处：「原句」」。
+ * 字段路径和原因代码是程序内部的，不给作者看。认不出格式就只留引用的原句。
+ */
+export function humanizeDeltaRejection(message: string): string {
+  const match = /^章节语义声明(?:被拒|数量未采信[^（]*)（([^·）]+)·[^）]*）：(.*)$/u.exec(message.trim());
+  const field = match?.[1] ?? "";
+  const quote = (match?.[2] ?? message).trim().replace(/[。.\s]+$/u, "");
+  const what = DELTA_FIELD_WORDS.find(([pattern]) => pattern.test(field))?.[1];
+  const shortQuote = quote.length > 30 ? `${quote.slice(0, 30)}…` : quote;
+  if (!shortQuote) return what ?? "";
+  return what ? `${what}里的「${shortQuote}」` : `「${shortQuote}」`;
+}

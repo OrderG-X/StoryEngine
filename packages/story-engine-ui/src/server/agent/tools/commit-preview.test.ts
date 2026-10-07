@@ -292,11 +292,12 @@ describe("commit_preview", () => {
       expect.objectContaining({
         severity: "warning",
         type: "delta_rejected",
-        message: expect.stringContaining("章节语义声明被拒"),
+        message: expect.stringContaining("AI 对本章的标注和正文对不上"),
       }),
     ]));
     expect(out.blockingReasons).not.toContain("semantic_quality_error");
-    expect(out.summary).toContain("章节语义声明被拒");
+    expect(out.summary).toContain("已自动核对");
+    expect(out.summary).not.toMatch(/章节语义声明|_in_evidence|charactersPresent/u);
   });
 
   // 阶段 4·降级：declareDelta 抛错 → 预览仍成功（声明 undefined、走引擎正则），不缓存声明。
@@ -782,6 +783,7 @@ describe("commit_preview", () => {
     const allText = [out.summary, ...rejected.map((issue) => issue.message)].join("\n");
     expect(allText, `仍含绝对路径：${allText}`).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/);
     expect(allText, `仍含裸 entity id：${allText}`).not.toMatch(/(?:^|[^\p{L}])(?:hook|char|thread|fact)-[0-9a-f]{4,}/u);
-    // 消毒后文案本体仍在（不是整句吞掉）
-    expect(allText).toContain("章节语义声明被拒");
+    // 消毒后文案本体仍在（不是整句吞掉）——改成作者看得懂的说法后不再露「章节语义声明」这类内部叫法
+    expect(allText).toContain("和正文对不上");
+    expect(allText).not.toContain("章节语义声明");
   });

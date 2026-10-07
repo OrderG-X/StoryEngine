@@ -150,7 +150,8 @@ async function toToolOutput(
     overview,
     summary: outcome.mode === "exact"
       ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`
-      : `已在第 ${chapter} 章工作稿上完成局部修订：${outcome.preview.changeSummary}。工作稿未定稿，可继续修改或撤销。`,
+      // changeSummary 是模型写的，常自带句号——去掉再接，免得出现「…。。工作稿未定稿」。
+      : `已在第 ${chapter} 章工作稿上完成局部修订：${`${outcome.preview.changeSummary ?? ""}`.trim().replace(/[。.\s]+$/u, "")}。工作稿未定稿，可继续修改或撤销。`,
     refreshScope: "full",
     chapter,
   };
