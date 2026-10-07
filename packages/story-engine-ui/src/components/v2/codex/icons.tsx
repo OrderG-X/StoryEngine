@@ -74,3 +74,35 @@ export function IconSparkle(props: IconProps) {
     </Icon>
   );
 }
+
+export function IconSun(props: IconProps) {
+  return <Icon {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Icon>;
+}
+
+export function IconMoon(props: IconProps) {
+  return <Icon {...props}><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" /></Icon>;
+}
+
+export function IconArrowRight(props: IconProps) {
+  return <Icon {...props}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>;
+}
+
+export function IconFile(props: IconProps) {
+  return <Icon {...props}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6M8 13h8M8 17h5" /></Icon>;
+}
+
+export function IconUser(props: IconProps) {
+  return <Icon {...props}><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /></Icon>;
+}
+
+export function IconBook(props: IconProps) {
+  return <Icon {...props}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" /></Icon>;
+}
+
+export function IconCopy(props: IconProps) {
+  return <Icon {...props}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></Icon>;
+}
+
+export function IconPlus(props: IconProps) {
+  return <Icon {...props}><path d="M12 5v14M5 12h14" /></Icon>;
+}

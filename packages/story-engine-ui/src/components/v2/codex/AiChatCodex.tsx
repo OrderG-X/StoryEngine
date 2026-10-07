@@ -663,7 +663,7 @@ function MessageBubbles({
                 style={{
                   ...adviceCardStyle,
                   borderColor: selected ? "var(--accent-hi)" : "var(--line-weak)",
-                  background: selected ? "var(--accent-soft)" : "rgba(0,0,0,.22)",
+                  background: selected ? "var(--accent-soft)" : "var(--sunken)",
                 }}
                 title={card.reason ? uiText(card.reason) : undefined}
               >

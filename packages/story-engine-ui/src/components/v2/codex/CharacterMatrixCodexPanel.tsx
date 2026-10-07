@@ -243,9 +243,9 @@ function CharacterForceGraph({
         ))}
       </svg>
       <div className="gfoot">
-        <span><i style={{ borderTopColor: "rgba(184,107,107,.72)" }} />信任低 / 张力</span>
+        <span><i style={{ borderTopColor: "var(--danger)" }} />信任低 / 张力</span>
         <span><i />中</span>
-        <span><i style={{ borderTopColor: "rgba(127,200,164,.7)" }} />信任高</span>
+        <span><i style={{ borderTopColor: "var(--success)" }} />信任高</span>
         <span style={{ marginLeft: "auto", color: "var(--muted)" }}>主角居中 · 只读，改关系请向右对 AI 说</span>
       </div>
     </div>

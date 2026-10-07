@@ -5,33 +5,33 @@
  * 提到 :root 后首页视觉精修与弹窗 danger 色才真正生效，也补回 2B-1 呼吸辉光。
  * .se-v2-shell / .se-v2-home 的本地同名定义(同值)仍在、优先级更高，工作台行为不变。 */
 :root {
-  --se-v2-bg: #0f0e0c;
+  --se-v2-bg: var(--bg);
   --se-v2-panel: #1a1917;
   --se-v2-card: #23221f;
   --se-v2-hover: #2a2925;
-  --se-v2-line: #2e2d2a;
+  --se-v2-line: var(--line-strong);
   --se-v2-line-weak: #1f1e1c;
-  --se-v2-text: #e8e6e1;
+  --se-v2-text: var(--text);
   --se-v2-muted: #9a9893;
   --se-v2-faint: #6b6964;
-  --se-v2-accent: #c8956c;
+  --se-v2-accent: var(--accent);
   /* T11：--se-v2-surface / --se-v2-accent-hi 此前从未定义（悬浮工具条落冷灰 fallback、内嵌设置页「已配置」丢金）。
      surface 取暖色浮层值（介于 panel 与 card 之间）；accent-hi 对齐 codex 高光金。 */
-  --se-v2-surface: #211d16;
-  --se-v2-accent-hi: #d9a441;
-  --se-v2-success: #7a9e7e;
-  --se-v2-danger: #b86b6b;
-  --se-v2-warning: #d9a441;
+  --se-v2-surface: var(--surface-2);
+  --se-v2-accent-hi: var(--accent);
+  --se-v2-success: var(--success);
+  --se-v2-danger: var(--danger);
+  --se-v2-warning: var(--accent);
   --se-v2-alpha-xs: 0.03;
   --se-v2-alpha-sm: 0.08;
   --se-v2-alpha-md: 0.16;
   --se-v2-alpha-lg: 0.32;
   --se-v2-alpha-xl: 0.52;
-  --se-v2-accent-border-sm: rgba(200, 149, 108, 0.08);
-  --se-v2-accent-border-md: rgba(200, 149, 108, 0.16);
-  --se-v2-accent-border-lg: rgba(200, 149, 108, 0.32);
-  --se-v2-danger-border-sm: rgba(184, 107, 107, 0.10);
-  --se-v2-shadow-accent: 0 0 42px rgba(200, 149, 108, 0.08);
+  --se-v2-accent-border-sm: color-mix(in srgb,var(--accent) 8%,transparent);
+  --se-v2-accent-border-md: color-mix(in srgb,var(--accent) 16%,transparent);
+  --se-v2-accent-border-lg: color-mix(in srgb,var(--accent) 32%,transparent);
+  --se-v2-danger-border-sm: color-mix(in srgb,var(--danger) 10%,transparent);
+  --se-v2-shadow-accent: 0 0 42px color-mix(in srgb,var(--accent) 8%,transparent);
   --se-v2-btn-radius: 9px;
   --se-v2-btn-height: 36px;
   --se-v2-btn-padding: 8px 14px;
@@ -39,21 +39,21 @@
 }
 
 .se-v2-shell {
-  --se-v2-bg: #0f0e0c;
+  --se-v2-bg: var(--bg);
   --se-v2-panel: #1a1917;
   --se-v2-card: #23221f;
   --se-v2-hover: #2a2925;
-  --se-v2-line: #2e2d2a;
+  --se-v2-line: var(--line-strong);
   --se-v2-line-weak: #1f1e1c;
-  --se-v2-text: #e8e6e1;
+  --se-v2-text: var(--text);
   --se-v2-muted: #9a9893;
   --se-v2-faint: #6b6964;
-  --se-v2-accent: #c8956c;
-  --se-v2-surface: #211d16;
-  --se-v2-accent-hi: #d9a441;
-  --se-v2-success: #7a9e7e;
-  --se-v2-danger: #b86b6b;
-  --se-v2-warning: #d9a441;
+  --se-v2-accent: var(--accent);
+  --se-v2-surface: var(--surface-2);
+  --se-v2-accent-hi: var(--accent);
+  --se-v2-success: var(--success);
+  --se-v2-danger: var(--danger);
+  --se-v2-warning: var(--accent);
   --se-v2-sidebar-width: 200px;
   --se-v2-right-width: 440px;
   /* Alpha 透明度阶梯 */
@@ -63,11 +63,11 @@
   --se-v2-alpha-lg: 0.32;
   --se-v2-alpha-xl: 0.52;
   /* 语义化颜色+透明度组合 */
-  --se-v2-accent-border-sm: rgba(200, 149, 108, 0.08);
-  --se-v2-accent-border-md: rgba(200, 149, 108, 0.16);
-  --se-v2-accent-border-lg: rgba(200, 149, 108, 0.32);
-  --se-v2-danger-border-sm: rgba(184, 107, 107, 0.10);
-  --se-v2-shadow-accent: 0 0 42px rgba(200, 149, 108, 0.08);
+  --se-v2-accent-border-sm: color-mix(in srgb,var(--accent) 8%,transparent);
+  --se-v2-accent-border-md: color-mix(in srgb,var(--accent) 16%,transparent);
+  --se-v2-accent-border-lg: color-mix(in srgb,var(--accent) 32%,transparent);
+  --se-v2-danger-border-sm: color-mix(in srgb,var(--danger) 10%,transparent);
+  --se-v2-shadow-accent: 0 0 42px color-mix(in srgb,var(--accent) 8%,transparent);
   /* 统一按钮样式系统 */
   --se-v2-btn-radius: 9px;
   --se-v2-btn-height: 36px;
@@ -108,14 +108,13 @@
 .se-v2-btn.se-v2-btn-primary {
   background: var(--se-v2-accent);
   border-color: var(--se-v2-accent);
-  color: var(--se-v2-bg);
+  color: var(--accent-ink);
 }
 .se-v2-btn.se-v2-btn-primary:not(:disabled):hover {
-  background: #d4a27a;
-  border-color: #d4a27a;
+  filter: brightness(1.06);
   /* 里程碑2·hover 跟手微动：主按钮轻微升起+暗金阴影加深 */
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(200, 149, 108, 0.24);
+  box-shadow:none;
 }
 
 /* ghost: 透明 */
@@ -149,23 +148,23 @@ body:has(.se-v2-shell),
 }
 
 .se-v2-home {
-  --se-v2-bg: #0f0e0c;
+  --se-v2-bg: var(--bg);
   --se-v2-panel: #1a1917;
   --se-v2-card: #23221f;
   --se-v2-hover: #2a2925;
-  --se-v2-line: #2e2d2a;
+  --se-v2-line: var(--line-strong);
   --se-v2-line-weak: #1f1e1c;
-  --se-v2-text: #e8e6e1;
+  --se-v2-text: var(--text);
   --se-v2-muted: #9a9893;
   --se-v2-faint: #6b6964;
-  --se-v2-accent: #c8956c;
+  --se-v2-accent: var(--accent);
   position: relative;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
-  background: #0f0e0c;
-  color: #e8e6e1;
+  background: var(--bg);
+  color: var(--text);
   font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
@@ -224,7 +223,7 @@ body:has(.se-v2-shell),
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: rgba(200, 149, 108, 0.15);
+  background: color-mix(in srgb,var(--accent) 15%,transparent);
   color: var(--se-v2-accent);
   font-weight: 900;
 }
@@ -264,7 +263,7 @@ body:has(.se-v2-shell),
   margin-bottom: 40px;
   border-radius: 24px;
   background: var(--se-v2-panel);
-  border: 1px solid rgba(200,149,108,.12);
+  border: 1px solid color-mix(in srgb,var(--accent) 12%,transparent);
   /* 顶部叠一层与首页聚光灯同色系的低强度辉光，呼应 accent；底部保留原压暗 inset。 */
   box-shadow:
     inset 0 -80px 110px rgba(0, 0, 0, 0.42),
@@ -309,7 +308,7 @@ body:has(.se-v2-shell),
 
 .se-v2-continue-card:hover {
   transform: translateY(-4px);
-  border-color: rgba(200,149,108,.35);
+  border-color: color-mix(in srgb,var(--accent) 35%,transparent);
 }
 
 .se-v2-continue-card span,
@@ -366,7 +365,7 @@ body:has(.se-v2-shell),
 
 .se-v2-home-actions button:hover {
   transform: translateY(-2px);
-  border-color: rgba(200,149,108,.35);
+  border-color: color-mix(in srgb,var(--accent) 35%,transparent);
 }
 
 .se-v2-home-actions span {
@@ -404,9 +403,9 @@ body:has(.se-v2-shell),
   display: grid;
   gap: 6px;
   min-height: 116px;
-  border: 1px dashed rgba(200, 149, 108, 0.24);
+  border: 1px dashed color-mix(in srgb,var(--accent) 24%,transparent);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.025);
+  background:var(--hover);
   padding: 24px;
 }
 
@@ -432,7 +431,7 @@ body:has(.se-v2-shell),
 
 .se-v2-recent-book:hover {
   transform: translateY(-4px);
-  border-color: rgba(200,149,108,.35); /* 与继续卡 hover 统一 */
+  border-color: color-mix(in srgb,var(--accent) 35%,transparent); /* 与继续卡 hover 统一 */
 }
 
 .se-v2-cover {
@@ -445,9 +444,9 @@ body:has(.se-v2-shell),
   border-radius: 16px 16px 0 0;
   background:
     linear-gradient(to top, #1a1917 0%, transparent 54%),
-    radial-gradient(circle at 60% 18%, rgba(200,149,108,.42), transparent 34%),
+    radial-gradient(circle at 60% 18%, color-mix(in srgb,var(--accent) 42%,transparent), transparent 34%),
     linear-gradient(135deg, #4a3028, #151412);
-  color: #e8e6e1;
+  color: var(--text);
   padding: 16px;
   text-align: left;
   /* 书封 3D 跟手倾斜：JS 写 transform(内含 perspective() 自带 3D)，CSS 给过渡 + 抬起辉光。
@@ -634,7 +633,7 @@ body:has(.se-v2-shell),
 }
 
 .se-v2-book-menu button.is-danger {
-  color: #d98b8b;
+  color: var(--danger);
 }
 
 /* 旧版 RecentBookCard 进度条 */
@@ -730,15 +729,15 @@ body:has(.se-v2-shell),
 
 .se-v2-find-text-btn {
   padding: 4px 10px;
-  background: var(--se-v2-accent-soft, rgba(200, 149, 108, 0.16));
+  background: var(--se-v2-accent-soft, color-mix(in srgb,var(--accent) 16%,transparent));
 }
 
 .se-v2-find-btn:hover:not(:disabled) {
-  background: var(--se-v2-accent-soft, rgba(200, 149, 108, 0.22));
+  background: var(--se-v2-accent-soft, color-mix(in srgb,var(--accent) 22%,transparent));
 }
 
 .se-v2-find-btn.is-active {
-  background: var(--se-v2-accent-soft, rgba(200, 149, 108, 0.3));
+  background: var(--se-v2-accent-soft, color-mix(in srgb,var(--accent) 30%,transparent));
 }
 
 .se-v2-find-btn:disabled {
@@ -760,9 +759,9 @@ body:has(.se-v2-shell),
 /* 「刚改片段」高亮：应用一次改写后，把刚改动的那段标成暗金，像 IDE 看未保存改动一样一眼可见；
    用户编辑/切章/新改写时撤掉（见 WritingPaper revisionHighlight）。独立于查找高亮、互不覆盖。 */
 .se-v2-revision-highlight {
-  background: rgba(217, 164, 65, 0.30);
+  background: color-mix(in srgb,var(--accent) 30%,transparent);
   border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.22);
+  box-shadow:none;
 }
 
 .se-v2-editor-wrap {
@@ -928,7 +927,7 @@ body:has(.se-v2-shell),
 }
 
 .se-v2-selection-toolbar-btn:hover:not(:disabled) {
-  background: var(--se-v2-accent-soft, rgba(200, 149, 108, 0.2));
+  background: var(--se-v2-accent-soft, color-mix(in srgb,var(--accent) 20%,transparent));
   transform: translateY(-1px);
 }
 
@@ -944,7 +943,7 @@ body:has(.se-v2-shell),
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.42);
+  background:var(--sunken);
   animation: se-v2-selection-toolbar-in 140ms ease-out;
 }
 
@@ -1172,11 +1171,11 @@ body:has(.se-v2-shell),
 }
 @keyframes se-v2-thinking-glow {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(217, 164, 65, 0);
+    box-shadow:none;
     border-color: var(--se-v2-accent-border-md);
   }
   50% {
-    box-shadow: 0 0 16px 0 rgba(217, 164, 65, 0.18);
+    box-shadow:none;
     border-color: var(--se-v2-accent-border-lg);
   }
 }
@@ -1195,7 +1194,7 @@ body:has(.se-v2-shell),
   width: min(620px, calc(100vw - 32px));
   max-height: min(720px, calc(100vh - 32px));
   overflow-y: auto;
-  border: 1px solid rgba(200, 149, 108, 0.22);
+  border: 1px solid color-mix(in srgb,var(--accent) 22%,transparent);
   border-radius: 16px;
   background: var(--se-v2-panel);
   color: var(--se-v2-text);
@@ -1236,7 +1235,7 @@ body:has(.se-v2-shell),
   height: 32px;
   border: 1px solid var(--se-v2-line);
   border-radius: 9px;
-  background: rgba(255,255,255,.035);
+  background:var(--hover);
   color: var(--se-v2-muted);
 }
 
@@ -1244,7 +1243,7 @@ body:has(.se-v2-shell),
   min-height: 36px;
   border: 1px solid var(--se-v2-line);
   border-radius: 9px;
-  background: rgba(255,255,255,.035);
+  background:var(--hover);
   color: var(--se-v2-text);
   padding: 8px 13px;
   font-weight: 800;
@@ -1267,9 +1266,9 @@ body:has(.se-v2-shell),
 
 .se-v2-commit-modal {
   width: min(620px, 100%);
-  border: 1px solid rgba(200,149,108,.28);
+  border: 1px solid color-mix(in srgb,var(--accent) 28%,transparent);
   border-radius: 18px;
-  background: #1f1d1a;
+  background: var(--surface-2);
   color: var(--se-v2-text);
   box-shadow: 0 24px 80px rgba(0,0,0,.55);
   overflow: hidden;
@@ -1388,7 +1387,7 @@ body:has(.se-v2-shell),
   height: 30px;
   border: 1px solid var(--se-v2-line);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.035);
+  background:var(--hover);
   color: var(--se-v2-muted);
   cursor: pointer;
 }
@@ -1456,7 +1455,7 @@ body:has(.se-v2-shell),
 }
 
 .se-v2-dialog-confirm-btn:hover {
-  background: rgba(200, 149, 108, 0.85);
+  background: color-mix(in srgb,var(--accent) 85%,transparent);
 }
 
 .se-v2-dialog-confirm-btn:disabled {
@@ -1474,12 +1473,12 @@ body:has(.se-v2-shell),
   font-weight: 800;
   font-size: 13px;
   cursor: pointer;
-  background: rgba(184, 107, 107, 0.16);
+  background: color-mix(in srgb,var(--danger) 16%,transparent);
   color: var(--se-v2-danger);
 }
 
 .se-v2-dialog-danger-btn:hover {
-  background: rgba(184, 107, 107, 0.26);
+  background: color-mix(in srgb,var(--danger) 26%,transparent);
 }
 
 .se-v2-delete-path {

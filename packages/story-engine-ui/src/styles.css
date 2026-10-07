@@ -190,7 +190,7 @@ button:disabled {
   min-height: 108px;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.045);
+  background:var(--hover);
   color: var(--text);
   padding: 20px;
   text-align: left;
@@ -209,7 +209,7 @@ button:disabled {
   height: 44px;
   border: 1px solid var(--line-strong);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.06);
+  background:var(--hover);
   color: var(--cyan);
   font-size: 24px;
   font-weight: 900;
@@ -229,7 +229,7 @@ button:disabled {
   margin: 22px auto 0;
   border: 1px solid var(--line);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.025);
+  background:var(--hover);
   padding: 20px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.16);
 }
@@ -332,7 +332,7 @@ button:disabled {
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.045);
+  background:var(--hover);
   color: var(--muted);
   padding: 0;
   font-size: 16px;
@@ -379,7 +379,7 @@ button:disabled {
 }
 
 .book-manage-menu button:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background:var(--hover);
 }
 
 .book-manage-menu .danger-menu-item {
@@ -557,7 +557,7 @@ button:disabled {
   height: 42px;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.045);
+  background:var(--hover);
   color: var(--text);
   font-size: 18px;
 }
@@ -619,14 +619,14 @@ button:disabled {
   flex: 0 0 auto;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.035);
+  background:var(--hover);
   overflow: hidden;
 }
 
 .foundation-form-section > header {
   padding: 15px 16px 12px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-  background: rgba(255, 255, 255, 0.025);
+  background:var(--hover);
 }
 
 .foundation-form-section h3 {
@@ -696,7 +696,7 @@ button:disabled {
 .foundation-edit-footer button {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.045);
+  background:var(--hover);
   color: var(--text);
   padding: 10px 16px;
   font-weight: 850;
@@ -827,7 +827,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.82);
+  background:var(--sunken);
   backdrop-filter: blur(10px);
 }
 
@@ -905,7 +905,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
+  background:var(--sunken);
   backdrop-filter: blur(6px);
 }
 
@@ -962,7 +962,7 @@ button:disabled {
 .usage-error {
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  background:var(--hover);
 }
 
 .usage-stat {
@@ -1021,7 +1021,7 @@ button:disabled {
   border-color: rgba(255, 107, 107, 0.32);
   color: var(--red);
 }
-.msk-close:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.msk-close:hover { background:var(--hover); color: #fff; }
 
 .msk-body {
   flex: 1;
@@ -1099,12 +1099,12 @@ button:disabled {
   padding: 4px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background:var(--hover);
   color: #ccc;
   transition: background 0.12s, border-color 0.12s;
 }
 .msk-preset-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background:var(--hover);
   border-color: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
@@ -1116,7 +1116,7 @@ button:disabled {
 /* ---- Card grid ---- */
 .msk-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .msk-card {
-  background: rgba(255, 255, 255, 0.03);
+  background:var(--hover);
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 10px;
   padding: 12px;
@@ -1130,7 +1130,7 @@ button:disabled {
   font-size: 9px;
   padding: 1px 6px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
+  background:var(--hover);
   color: #999;
   text-transform: uppercase;
 }
@@ -1149,7 +1149,7 @@ button:disabled {
 .msk-task-label { font-size: 12px; color: #ccc; min-width: 60px; }
 .msk-task-card select {
   width: 140px;
-  background: rgba(255, 255, 255, 0.05);
+  background:var(--hover);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   color: #ddd;
@@ -1158,7 +1158,7 @@ button:disabled {
 }
 .msk-task-card input {
   flex: 1;
-  background: rgba(0, 0, 0, 0.25);
+  background:var(--sunken);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   color: #eee;
@@ -1176,7 +1176,7 @@ button:disabled {
 .msk-json-editor {
   width: 100%;
   min-height: 120px;
-  background: rgba(0, 0, 0, 0.3);
+  background:var(--sunken);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   color: #b0b8cc;
@@ -1200,14 +1200,14 @@ button:disabled {
 .msk-btn-primary { background: #3366ff; color: #fff; }
 .msk-btn-primary:hover { background: #4477ff; }
 .msk-btn-primary:disabled { opacity: 0.4; }
-.msk-btn-secondary { background: rgba(255, 255, 255, 0.06); color: #ccc; border: 1px solid rgba(255, 255, 255, 0.08); }
+.msk-btn-secondary { background:var(--hover); color: #ccc; border: 1px solid rgba(255, 255, 255, 0.08); }
 .msk-btn-secondary:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 
 /* ---- Sub-panels ---- */
 .msk-overlay {
   position: fixed; inset: 0; z-index: 1100;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(4px);
+  background:var(--sunken); backdrop-filter: blur(4px);
 }
 .msk-panel {
   width: 500px; max-height: 80vh; display: flex; flex-direction: column;
@@ -1224,7 +1224,7 @@ button:disabled {
 .msk-field { display: flex; flex-direction: column; gap: 3px; }
 .msk-field span { font-size: 11px; color: #999; font-weight: 500; }
 .msk-field input, .msk-field select {
-  background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08);
+  background:var(--sunken); border: 1px solid rgba(255,255,255,0.08);
   border-radius: 7px; padding: 7px 10px; color: #eee; font-size: 12px;
 }
 .msk-field input.mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
@@ -1241,9 +1241,9 @@ button:disabled {
 .msk-test-acts { display: flex; gap: 8px; }
 .msk-test-acts button {
   font-size: 11px; padding: 5px 12px; border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 7px; background: rgba(255,255,255,0.04); color: #ccc;
+  border-radius: 7px; background:var(--hover); color: #ccc;
 }
-.msk-test-acts button:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: #fff; }
+.msk-test-acts button:hover:not(:disabled) { background:var(--hover); color: #fff; }
 .msk-test-acts button:disabled { opacity: 0.4; }
 .msk-test-ok { margin-top: 8px; font-size: 11px; color: #4ade80; }
 .msk-test-err { margin-top: 8px; font-size: 11px; color: #ff6b6b; }
@@ -1515,7 +1515,7 @@ button:disabled {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.035);
+  background:var(--hover);
   padding: 11px;
 }
 
@@ -1968,7 +1968,7 @@ button:disabled {
   min-height: 0;
   justify-self: center;
   overflow: hidden;
-  border: 1px solid rgba(200, 149, 108, 0.18);
+  border: 1px solid color-mix(in srgb,var(--accent) 18%,transparent);
   border-radius: 5px;
   background: #fafaf8;
   box-shadow:
@@ -1994,8 +1994,8 @@ button:disabled {
 }
 
 .draft-badge {
-  border-color: rgba(200, 149, 108, 0.34);
-  background: rgba(200, 149, 108, 0.12);
+  border-color: color-mix(in srgb,var(--accent) 34%,transparent);
+  background: color-mix(in srgb,var(--accent) 12%,transparent);
   color: #8b5f39;
 }
 
@@ -2016,47 +2016,47 @@ button:disabled {
 }
 
 .chapter-flow-bar::after {
-  background: linear-gradient(90deg, #c8956c, rgba(200, 149, 108, 0.52));
-  box-shadow: 0 0 12px rgba(200, 149, 108, 0.22);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb,var(--accent) 52%,transparent));
+  box-shadow:none;
 }
 
 .flow-step.is-active {
-  color: #c8956c;
+  color: var(--accent);
 }
 
 .flow-step.is-active span {
-  border-color: #c8956c;
-  background: rgba(200, 149, 108, 0.24);
-  box-shadow: 0 0 14px rgba(200, 149, 108, 0.25);
+  border-color: var(--accent);
+  background: color-mix(in srgb,var(--accent) 24%,transparent);
+  box-shadow:none;
 }
 
 .commit-change-group {
-  border-color: #2e2d2a;
+  border-color: var(--line-strong);
   background: #23221f;
 }
 
 .home-hero,
 .recent-books-section,
 .home-dialog {
-  border-color: #2e2d2a;
+  border-color: var(--line-strong);
   background: rgba(26, 25, 23, 0.94);
 }
 
 .home-hero h1 {
-  color: #e8e6e1;
+  color: var(--text);
 }
 
 .home-primary-card,
 .continue-card,
 .recent-book-card {
-  border-color: rgba(200, 149, 108, 0.14);
+  border-color: color-mix(in srgb,var(--accent) 14%,transparent);
   background: #1f1e1b;
 }
 
 .home-primary-card:hover,
 .continue-card:hover,
 .recent-book-card:hover {
-  border-color: rgba(200, 149, 108, 0.36);
+  border-color: color-mix(in srgb,var(--accent) 36%,transparent);
 }
 
 @media (max-width: 1320px) {

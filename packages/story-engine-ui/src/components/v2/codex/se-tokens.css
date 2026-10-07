@@ -1,8 +1,9 @@
-/* 2026-10-07 改版 · 设计 token：工作区（.codex-app）与书架首页（.se-v2-home）共用一份。
-   暖灰底 + 单一琥珀强调色；正文对比度 ≥ 4.5（faint 也过 AA）。只放变量，不放规则。 */
-.codex-app,
-.se-v2-home{
-  /* 2026-10-07 改版配色：暖灰底 + 单一琥珀强调色；正文对比度 ≥ 4.5（faint 也过 AA）。 */
+/* 2026-10-07 改版 · 设计 token（全局唯一来源）。
+   深色 = 暖灰底 + 单一琥珀强调色；纸面 = 米白纸 + 赭石强调色。两套正文对比度都 ≥ 4.5（faint 也过 AA）。
+   挂在 :root：工作区、书架、Radix 弹窗（portal 到 body）都能解析。主题由 themeStore 往 <html> 上挂 theme-light / theme-dark。
+   旧版 --se-v2-* 变量（WritingPaper 编辑器、旧弹窗在用）一并映射到新 token，两套主题自动跟随。 */
+:root{
+  color-scheme:dark;
   --bg:#131211; --panel:#191816; --surface:#1d1c19; --surface-2:#22201d; --sheet:#1b1a17;
   --line:rgba(255,255,255,.08); --line-weak:rgba(255,255,255,.06); --line-faint:rgba(255,255,255,.05);
   --line-strong:rgba(255,255,255,.15);
@@ -13,8 +14,60 @@
   --success:#92bf98; --success-soft:rgba(146,191,152,.13);
   --warn:#e2a75c; --warn-soft:rgba(226,167,92,.13);
   --info:#aba498; --info-soft:rgba(171,164,152,.13);
-  --hover:rgba(255,255,255,.05); --scrim:rgba(0,0,0,.55);
+  --hover:rgba(255,255,255,.05); --sunken:rgba(0,0,0,.2); --scrim:rgba(0,0,0,.55);
+  --selection:rgba(217,169,111,.28);
   --shadow-pop:0 18px 50px -18px rgba(0,0,0,.7);
+  --toolbar-bg:#2c2925; --toolbar-ink:#ece7df;
+  --cover-0:#3b4a43; --cover-1:#4a3f35; --cover-2:#3f4552; --cover-3:#51403f; --cover-4:#454a3a; --cover-5:#3d4650; --cover-6:#4b4140;
+  --cover-ink:rgba(255,255,255,.92);
   --read-max:680px;
   --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
 }
+
+:root.theme-light{
+  color-scheme:light;
+  --bg:#f3efe7; --panel:#faf8f3; --surface:#f7f4ee; --surface-2:#ffffff; --sheet:#fffdf9;
+  --line:rgba(40,30,20,.10); --line-weak:rgba(40,30,20,.08); --line-faint:rgba(40,30,20,.06);
+  --line-strong:rgba(40,30,20,.20);
+  --text:#26221e; --muted:#635b51; --faint:#6e665b;
+  --accent:#9a5a22; --accent-hi:#9a5a22; --accent-ink:#ffffff; --accent-soft:rgba(154,90,34,.10);
+  --accent-line:rgba(154,90,34,.32); --accent-line-soft:rgba(154,90,34,.18);
+  --danger:#b2402f; --danger-soft:rgba(178,64,47,.09);
+  --success:#38734a; --success-soft:rgba(56,115,74,.10);
+  --warn:#985b14; --warn-soft:rgba(152,91,20,.10);
+  --info:#635b51; --info-soft:rgba(99,91,81,.10);
+  --hover:rgba(40,30,20,.05); --sunken:rgba(40,30,20,.04); --scrim:rgba(40,30,20,.28);
+  --selection:rgba(154,90,34,.20);
+  --shadow-pop:0 18px 50px -20px rgba(60,40,20,.3);
+  --toolbar-bg:#2c2925; --toolbar-ink:#ece7df;
+  --cover-0:#cfdbd2; --cover-1:#e6d6c3; --cover-2:#d3d9e4; --cover-3:#e7d0cc; --cover-4:#dadfca; --cover-5:#ccd7df; --cover-6:#e2d3cf;
+  --cover-ink:rgba(38,34,30,.9);
+}
+
+/* 旧 --se-v2-* → 新 token（v2.css 在 :root / .se-v2-shell / .se-v2-home 上各定义过一遍，这里同级覆盖、后加载者胜）。 */
+:root,
+:root .se-v2-shell,
+:root .se-v2-home{
+  --se-v2-bg:var(--bg);
+  --se-v2-panel:var(--panel);
+  --se-v2-card:var(--surface-2);
+  --se-v2-hover:var(--hover);
+  --se-v2-line:var(--line-strong);
+  --se-v2-line-weak:var(--line);
+  --se-v2-text:var(--text);
+  --se-v2-muted:var(--muted);
+  --se-v2-faint:var(--faint);
+  --se-v2-accent:var(--accent);
+  --se-v2-surface:var(--surface-2);
+  --se-v2-accent-hi:var(--accent);
+  --se-v2-success:var(--success);
+  --se-v2-danger:var(--danger);
+  --se-v2-warning:var(--warn);
+  --se-v2-accent-border-sm:color-mix(in srgb,var(--accent) 8%,transparent);
+  --se-v2-accent-border-md:color-mix(in srgb,var(--accent) 16%,transparent);
+  --se-v2-accent-border-lg:color-mix(in srgb,var(--accent) 32%,transparent);
+  --se-v2-danger-border-sm:color-mix(in srgb,var(--danger) 10%,transparent);
+  --se-v2-shadow-accent:none;
+}
+
+body{background:var(--bg);color:var(--text);}

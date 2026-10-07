@@ -23,8 +23,8 @@ import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
+import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSearch, IconSettings } from "./icons.js";
-import "./se-tokens.css";
 import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";
@@ -322,6 +322,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           >
             <IconFocus />
           </button>
+          <ThemeToggleButton />
           <button className="se-icon-btn" type="button" aria-label="设置" title="设置" onClick={() => setSettingsTab("model")}>
             <IconSettings />
           </button>

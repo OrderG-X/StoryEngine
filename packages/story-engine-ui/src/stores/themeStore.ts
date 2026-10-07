@@ -19,6 +19,7 @@ function applyMode(mode: ThemeMode): void {
 export interface ThemeStore {
   readonly mode: ThemeMode;
   readonly toggle: () => void;
+  readonly setMode: (mode: ThemeMode) => void;
 }
 
 export const useThemeStore = create<ThemeStore>((set) => {
@@ -33,6 +34,12 @@ export const useThemeStore = create<ThemeStore>((set) => {
         localStorage.setItem(STORAGE_KEY, next);
         applyMode(next);
         return { mode: next };
+      }),
+    setMode: (mode) =>
+      set(() => {
+        localStorage.setItem(STORAGE_KEY, mode);
+        applyMode(mode);
+        return { mode };
       }),
   };
 });

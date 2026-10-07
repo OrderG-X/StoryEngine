@@ -3,7 +3,7 @@
 
 .codex-app .asm-shell {
   background-image: radial-gradient(circle at 48% 6%, rgba(217, 164, 65, 0.13), transparent 40%);
-  background-color: #16140f;
+  background-color: var(--panel);
 }
 
 .codex-app .asm-body {
@@ -26,7 +26,7 @@
   padding: 0 12px;
   border: 1px solid var(--se-v2-line);
   border-radius: 10px;
-  background: #1b1813;
+  background: var(--surface);
   color: var(--se-v2-faint);
 }
 
@@ -156,12 +156,12 @@
 }
 
 .codex-app .asm-dot.ok {
-  background: #6abf6a;
+  background: var(--success);
   box-shadow: 0 0 8px rgba(106, 191, 106, 0.35);
 }
 
 .codex-app .asm-dot.warn {
-  background: #d4a843;
+  background: var(--warn);
   box-shadow: 0 0 8px rgba(212, 168, 67, 0.35);
 }
 
@@ -254,7 +254,7 @@
   border: 1px solid rgba(214, 92, 92, 0.35);
   border-radius: 8px;
   background: transparent;
-  color: #d68a8a;
+  color: var(--danger);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -267,9 +267,9 @@
 }
 
 .codex-app .asm-delete-btn.is-armed {
-  border-color: #d65c5c;
+  border-color: var(--danger);
   background: rgba(214, 92, 92, 0.14);
-  color: #e8a0a0;
+  color: var(--danger);
 }
 
 .codex-app .asm-delete-btn:disabled {

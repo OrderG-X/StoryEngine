@@ -4,7 +4,7 @@ import NewBookStarter from "../NewBookStarter.js";
 import OpenBookDialog from "../OpenBookDialog.js";
 import { useMotionStore } from "../../stores/motionStore.js";
 import type { BookSummary, HomePageProps } from "../../types.js";
-import "./codex/se-tokens.css";
+import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
 import "./home.css";
 
 const COVER_TONES = 7;
@@ -79,7 +79,10 @@ export default function HomeLanding({
           <span className="se-home-mark" aria-hidden="true">书</span>
           <strong>StoryEngine</strong>
         </div>
-        <button className="se-home-settings" onClick={onOpenSettings} type="button">设置</button>
+        <div className="se-home-top-r">
+          <ThemeToggleButton className="se-home-icon" />
+          <button className="se-home-settings" onClick={onOpenSettings} type="button">设置</button>
+        </div>
       </header>
 
       <div className="se-home-scroll">

@@ -8,6 +8,7 @@ import {
   DESK_FONT_STEP,
   type DisplaySettingKey,
 } from "../stores/displaySettingsStore.js";
+import { useThemeStore } from "../stores/themeStore.js";
 
 /**
  * DisplaySettingsSection — 设置面板顶部「显示 · 字号」区。
@@ -40,7 +41,7 @@ const ROWS: readonly Row[] = [
   {
     key: "uiZoom",
     label: "界面字号",
-    hint: "左侧栏 + 资料中心",
+    hint: "章节列表 + 设定本",
     min: ZOOM_MIN,
     max: ZOOM_MAX,
     step: ZOOM_STEP,
@@ -67,17 +68,29 @@ export function DisplaySettingsSection() {
   const resetOne = useDisplaySettingsStore((s) => s.resetDisplaySetting);
   // rewriteZoom 不在本面板列出（它在选区改写预览框头部就地调），仅为类型完整带上。
   const values: Record<DisplaySettingKey, number> = { chatZoom, uiZoom, deskFontSize, rewriteZoom };
+  const themeMode = useThemeStore((s) => s.mode);
+  const setThemeMode = useThemeStore((s) => s.setMode);
 
   return (
     <section className="ms-section ms-display-section">
       <div className="ms-section-header">
         <div className="ms-section-title-row">
-          <h3 className="ms-section-title">显示 · 字号</h3>
+          <h3 className="ms-section-title">显示</h3>
         </div>
         <span className="ms-section-hint">调整后立即生效，刷新仍在</span>
       </div>
 
       <div className="ms-display-list">
+        <div className="ms-display-row">
+          <div className="ms-display-label-col">
+            <span className="ms-display-name">主题</span>
+            <span className="ms-display-hint">纸面主题适合白天长时间写作</span>
+          </div>
+          <div className="ms-display-control ms-theme-seg" role="group" aria-label="主题">
+            <button type="button" className={`ms-display-btn${themeMode === "dark" ? " is-on" : ""}`} aria-pressed={themeMode === "dark"} onClick={() => setThemeMode("dark")}>深色</button>
+            <button type="button" className={`ms-display-btn${themeMode === "light" ? " is-on" : ""}`} aria-pressed={themeMode === "light"} onClick={() => setThemeMode("light")}>纸面</button>
+          </div>
+        </div>
         {ROWS.map((row) => {
           const value = values[row.key];
           return (

@@ -178,7 +178,7 @@ function createWindow(url) {
     height: 900,
     minWidth: 1080,
     minHeight: 680,
-    backgroundColor: "#0f0e0c", // codex 暗色底，避免加载白闪
+    backgroundColor: "#131211", // 改版深色底（与 se-tokens --bg 一致），避免加载白闪
     title: "StoryEngine",
     webPreferences: {
       // 前端全走 localhost HTTP，无需 Node 能力——保持默认最小权限面。
