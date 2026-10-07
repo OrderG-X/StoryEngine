@@ -1,7 +1,7 @@
 /* 来自 GLM 设计稿 codex.html、作用域隔离版（全部规则包进 .codex-app，原生 CSS 嵌套；不污染全局）。 */
 .codex-app{
   /* 2026-10-07 改版配色：暖灰底 + 单一琥珀强调色；正文对比度 ≥ 4.5（faint 也过 AA）。 */
-  --bg:#131211; --panel:#191816; --surface:#1d1c19; --surface-2:#22201d;
+  --bg:#131211; --panel:#191816; --surface:#1d1c19; --surface-2:#22201d; --sheet:#1b1a17;
   --line:rgba(255,255,255,.08); --line-weak:rgba(255,255,255,.06); --line-faint:rgba(255,255,255,.05);
   --line-strong:rgba(255,255,255,.15);
   --text:#ece7df; --muted:#aba498; --faint:#948d82;

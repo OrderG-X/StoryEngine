@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { __CATS_FOR_TEST, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
+import { __CATS_FOR_TEST, buildChapterRows, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
 describe("B5-3 CATS 数组含「伏笔线索」与「时间线」类目", () => {
   it("CATS 共 8 项", () => {
@@ -86,5 +86,25 @@ describe("T3 resolveRightPanelOpen：手动意愿覆盖自动收起", () => {
     expect(effective()).toBe(true);  // 变宽：手动展开意愿保留
     clickToggle();
     expect(effective()).toBe(false); // 宽窗点收起：收拢且不再自动弹开
+  });
+});
+
+describe("改版 buildChapterRows：章节列表新章在上、每 10 章分组", () => {
+  const ch = (n: number) => ({ id: `c${n}`, chapterNumber: n, title: `第${n}章 · 标题${n}`, status: "committed" as const });
+
+  it("不搜索：倒序 + 分组标题，最后一组上限取最大章号", () => {
+    const rows = buildChapterRows([ch(1), ch(2), ch(11), ch(12)], false);
+    expect(rows.map((r) => (r.kind === "group" ? r.label : r.ch.chapterNumber))).toEqual(["第 11–12 章", 12, 11, "第 1–10 章", 2, 1]);
+  });
+
+  it("搜索：平铺不分组", () => {
+    const rows = buildChapterRows([ch(3), ch(20)], true);
+    expect(rows.every((r) => r.kind === "chapter")).toBe(true);
+    expect(rows.map((r) => (r.kind === "chapter" ? r.ch.chapterNumber : 0))).toEqual([20, 3]);
+  });
+
+  it("只有一章的组标题不写成区间", () => {
+    const rows = buildChapterRows([ch(21)], false);
+    expect(rows[0]).toEqual({ kind: "group", key: "g2", label: "第 21 章" });
   });
 });

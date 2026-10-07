@@ -72,6 +72,14 @@ export function chapterHeading(chapterNumber: number, title: string): string {
   return withoutPrefix ? `第${chapterNumber}章 · ${withoutPrefix}` : `第${chapterNumber}章`;
 }
 
+/** 只要章名本身：剥掉开头的「第N章 ·」标记（阿拉伯/中文数字、可叠多个）；只有章号时返回空串。 */
+export function chapterBareTitle(title: string): string {
+  const cleaned = uiText(title, "");
+  const chapterToken = "第[0-9一二三四五六七八九十百零两]+章";
+  const prefix = new RegExp(`^(?:${chapterToken}\\s*[·.．、:-]?\\s*)+`, "u");
+  return cleaned.replace(prefix, "").trim();
+}
+
 export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
   const labels: Record<ChapterFlowStatus, string> = {
     idle: "待开始",

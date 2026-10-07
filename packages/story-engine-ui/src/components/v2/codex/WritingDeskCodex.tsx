@@ -29,12 +29,18 @@ import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
  * 编辑器内核（句级聚焦、打字机居中、查找替换、选区改写、IME、外部稿同步）全在 WritingPaper 里复用，
  * 本组件一行都不碰；codex 沉浸视觉（居中稿纸 / 暗角 / 金 caret / 当前句呼吸辉光）全走 codex.css 的 .codex-desk 作用域。
  */
+/** 状态药丸配色：定稿=绿、生成/检查中=强调色、其余（工作稿/待开始）=橙，提醒「还没定稿」。 */
+function flowTone(state: WritingWorkspaceLayoutProps["workspace"]["flowStatus"]): string {
+  if (state === "committed" || state === "ready_for_next") return "ok";
+  if (state === "draft_generating") return "run";
+  if (state === "idle" || state === "steering_ready") return "";
+  return "warn";
+}
+
 export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
-  const focusWriting = useDisplaySettingsStore((s) => s.focusWriting);
-  const toggleFocusWriting = useDisplaySettingsStore((s) => s.toggleFocusWriting);
   const draft = props.workspace.draft;
   const draftCandidates = useWorkspaceStore((state) => state.draftCandidates);
   const draftActionLoading = useWorkspaceStore((state) => state.draftActionLoading);
@@ -72,27 +78,16 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
 
   return (
     <div className="codex-desk" aria-label="写作台">
-      {/* 顶部纤细悬浮条：书名 · 章号标题 + 状态 + 字数 + 草稿/正文 切换（视觉淡、不抢戏）。 */}
+      {/* 顶部细条：章号标题 + 状态 + 字数 + 工作稿/定稿 切换（书名在全局顶栏；专注写作开关也在顶栏）。 */}
       <header className="codex-desk-bar codex-desk-bar-top">
         <div className="cd-title">
-          <span className="cd-book">《{props.workspace.projectName}》</span>
           <strong className="cd-chapter">{chapterHeading(draft.chapterNumber, draft.title)}</strong>
-          <em className="cd-flow">{flowLabel(props.workspace.flowStatus)}</em>
+          <em className={`cd-flow ${flowTone(props.workspace.flowStatus)}`}>{flowLabel(props.workspace.flowStatus)}</em>
           {showEditHint ? (
             <span className="cd-edit-hint">可直接编辑 · 自动保存</span>
           ) : null}
         </div>
         <div className="cd-bar-right">
-          <button
-            type="button"
-            className={`cd-focus-btn${focusWriting ? " is-on" : ""}`}
-            onClick={() => toggleFocusWriting()}
-            title={focusWriting ? "退出专注写作（展开章节栏与 AI）" : "专注写作：收起章节栏与 AI，加宽稿纸"}
-            aria-pressed={focusWriting}
-            aria-label="专注写作"
-          >
-            {focusWriting ? "退出专注" : "专注写作"}
-          </button>
           <span className="cd-words">{draftWordCount.toLocaleString()} 字</span>
           <div className="cd-tabs" role="tablist" aria-label="版本视图">
             <button className={activeTab === "draft" ? "is-active" : ""} onClick={() => setActiveTab("draft")} type="button" aria-label="查看工作稿">工作稿</button>
@@ -162,9 +157,10 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
         )}
       </div>
 
-      {/* 底部纤细悬浮条：正文字号已并入「设置 · 显示」面板；这里只留「再来一版」。 */}
+      {/* 底部细条：只放「再来一版」；没得放时整条不渲染（不留空条）。 */}
+      {canReroll && !showStarter ? (
       <footer className="codex-desk-bar codex-desk-bar-bottom">
-        {canReroll && !showStarter ? (
+        {(
           <button
             className="cd-reroll"
             disabled={rerolling}
@@ -174,8 +170,9 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps) {
           >
             {rerolling ? "生成候选中…" : draftWordCount > 0 || draft.content.trim() ? "↻ 再来一版" : "✎ 写第一版"}
           </button>
-        ) : null}
+        )}
       </footer>
+      ) : null}
 
       {draftCandidates && draftCandidates.length > 0 ? (
         <DraftCandidatesPanel

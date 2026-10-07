@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
+import type { ChapterNavItem } from "../../../type-defs/workspace.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AiChatCodex from "./AiChatCodex.js";
@@ -21,10 +22,11 @@ import { SaveStatusPill } from "./SaveStatusPill.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
-import { chapterHeading } from "../v2Utils.js";
-import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSettings } from "./icons.js";
+import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
+import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconSearch, IconSettings } from "./icons.js";
 import "./codex.css";
 import "./se-shell.css";
+import "./se-desk.css";
 
 /**
  * WritingWorkspaceCodex — 写作工作区外壳。
@@ -72,9 +74,42 @@ function readStoredAiWidth(): number {
 }
 
 // 写作台章节栏基准宽度（px，随 uiZoom 放大）。窄视口让位计算要扣掉它。
-const CHAPTER_RAIL_BASE_WIDTH = 212;
+const CHAPTER_RAIL_BASE_WIDTH = 248;
 
 type SettingsTab = "model" | "display";
+
+const CHAPTER_STATUS_LABEL: Record<ChapterNavItem["status"], string> = {
+  committed: "已定稿", draft: "工作稿", current: "当前章", planned: "还没写",
+};
+// 只给「要你留意」的章亮点：工作稿=橙点；当前章靠整行高亮、已定稿与未写不打点，列表才安静。
+const CHAPTER_STATUS_DOT: Record<ChapterNavItem["status"], string> = {
+  committed: "", draft: "warn", current: "", planned: "",
+};
+
+type ChapterRow =
+  | { readonly kind: "group"; readonly key: string; readonly label: string }
+  | { readonly kind: "chapter"; readonly ch: ChapterNavItem };
+
+/** 章节列表行：新章在上；不搜索时每 10 章插一个分组标题（第 51–58 章），搜索时平铺。 */
+export function buildChapterRows(chapters: readonly ChapterNavItem[], searching: boolean): readonly ChapterRow[] {
+  const rows: ChapterRow[] = [];
+  let lastGroup: number | null = null;
+  const ordered = [...chapters].sort((a, b) => b.chapterNumber - a.chapterNumber);
+  const maxNumber = ordered[0]?.chapterNumber ?? 0;
+  for (const ch of ordered) {
+    if (!searching) {
+      const group = Math.floor((Math.max(1, ch.chapterNumber) - 1) / 10);
+      if (group !== lastGroup) {
+        lastGroup = group;
+        const lo = group * 10 + 1;
+        const hi = Math.min(group * 10 + 10, maxNumber);
+        rows.push({ kind: "group", key: `g${group}`, label: lo === hi ? `第 ${lo} 章` : `第 ${lo}–${hi} 章` });
+      }
+    }
+    rows.push({ kind: "chapter", ch });
+  }
+  return rows;
+}
 
 /** 资料类目卡的鼠标跟手金光：把指针在卡内坐标写进 --mx/--my，CSS ::after 径向光据此定位。 */
 function trackCatLight(event: ReactMouseEvent<HTMLButtonElement>): void {
@@ -214,6 +249,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(ch.chapterNumber).includes(chapterFilter)
       || String(i + 1).includes(chapterFilter))
     : chapters;
+  const chapterRows = buildChapterRows(visibleChapters, Boolean(chapterFilter));
 
   // 写作台章节栏展开时占的宽度（随界面字号放大），窄视口让位要扣掉它。
   const chapterRailWidth = view === "desk" && deskRailOpen ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
@@ -380,60 +416,52 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               </div>
             </>
           ) : (
-            // 写作台视图：左侧章节竖轨（可收起 + 搜索）+ 右侧 WritingDeskCodex（codex 沉浸聚光稿纸）。
-            // 章节竖轨也是 .catrail（被 uiZoom 缩放），展开时列宽随 uiZoom 放大，避免缩放后裁切。
-            <div className="codex" style={{ gridTemplateColumns: deskRailOpen ? `calc(212px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "44px minmax(0, 1fr)" }}>
+            // 写作台视图：左侧章节列表（顶栏按钮开合 + 搜索，每 10 章一组）+ 右侧 WritingDeskCodex 稿纸。
+            <div className="codex" style={{ gridTemplateColumns: deskRailOpen ? `calc(${CHAPTER_RAIL_BASE_WIDTH}px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "minmax(0, 1fr)" }}>
               {deskRailOpen ? (
-                <nav className="catrail" aria-label="章节">
-                  <div className="catrail-head">
-                    <span className="catrail-title">章节 · {realChapterCount}</span>
-                    <button className="rail-collapse-btn" onClick={() => setDeskRailOpen(false)} type="button" title="收起章节栏" aria-label="收起章节栏">⟨</button>
-                  </div>
-                  <input
-                    className="chap-search"
-                    type="search"
-                    value={chapterQuery}
-                    onChange={(event) => setChapterQuery(event.target.value)}
-                    placeholder="搜索章节（标题或章号）…"
-                    aria-label="搜索章节"
-                  />
-                  {visibleChapters.map((ch) => {
-                    const idx = chapters.indexOf(ch);
-                    return (
+                <nav className="se-chapters" aria-label="章节">
+                  <div className="se-ch-head"><b>章节</b><span>{realChapterCount} 章</span></div>
+                  <label className="se-field-search">
+                    <IconSearch size={14} strokeWidth={1.8} />
+                    <input
+                      type="search"
+                      value={chapterQuery}
+                      onChange={(event) => setChapterQuery(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Escape") setChapterQuery(""); }}
+                      placeholder="搜章名或章号"
+                      aria-label="搜索章节"
+                    />
+                  </label>
+                  <div className="se-ch-list">
+                    {chapterRows.map((row) => row.kind === "group" ? (
+                      <div key={row.key} className="se-ch-group">{row.label}</div>
+                    ) : (
                       <button
-                        key={ch.id}
-                        className={`cat ${ch.id === currentId ? "on" : ""}`}
+                        key={row.ch.id}
+                        className={`se-ch${row.ch.id === currentId ? " on" : ""}`}
                         disabled={workspaceBusy}
-                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : undefined}
+                        aria-current={row.ch.id === currentId ? "page" : undefined}
+                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${CHAPTER_STATUS_LABEL[row.ch.status]}`}
                         onClick={() => {
                           if (workspaceBusy) {
                             useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
                             return;
                           }
-                          props.onSelectChapter?.(ch.id);
+                          props.onSelectChapter?.(row.ch.id);
                         }}
                         type="button"
                       >
-                        <span className="glyph">{String(idx + 1).padStart(2, "0")}</span>
-                        <span className="ct">
-                          <b>{ch.title || `第 ${ch.chapterNumber} 章`}</b>
-                          <small>第 {ch.chapterNumber} 章</small>
-                        </span>
+                        <span className="se-ch-n">{row.ch.chapterNumber}</span>
+                        <span className={`se-ch-t${chapterBareTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterBareTitle(row.ch.title ?? "") || "未命名"}</span>
+                        <span className={`se-dot ${CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
                       </button>
-                    );
-                  })}
-                  {visibleChapters.length === 0 ? (
-                    <div className="catrail-empty">没有匹配「{chapterQuery.trim()}」的章节</div>
-                  ) : null}
+                    ))}
+                    {visibleChapters.length === 0 ? (
+                      <div className="se-ch-empty">没有章名或章号包含「{chapterQuery.trim()}」的章节</div>
+                    ) : null}
+                  </div>
                 </nav>
-              ) : (
-                <nav className="catrail catrail-collapsed" aria-label="章节（已收起）">
-                  <button className="rail-expand-btn" onClick={() => setDeskRailOpen(true)} type="button" title="展开章节栏" aria-label="展开章节栏">
-                    <span aria-hidden="true">☰</span>
-                    <span>章节</span>
-                  </button>
-                </nav>
-              )}
+              ) : null}
               <WritingDeskCodex {...props} />
             </div>
           )}
