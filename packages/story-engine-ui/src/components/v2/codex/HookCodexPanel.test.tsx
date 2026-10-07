@@ -45,7 +45,7 @@ import { fetchForeshadowingOverrides } from "../../../api/foreshadowingOverrides
 // ── 基础渲染断言 ──────────────────────────────────────────────────────────────
 
 describe("HookCodexPanel 基础渲染", () => {
-  it("major hook 显示🔴大伏笔 badge + 章号 + 已回收计数", () => {
+  it("major hook 显示大伏笔 badge + 章号 + 已回收计数", () => {
     render(
       <HookCodexPanel
         hookItems={[MAJOR_HOOK]}
@@ -57,7 +57,6 @@ describe("HookCodexPanel 基础渲染", () => {
     );
 
     // 大伏笔 badge
-    expect(screen.getAllByText(/🔴/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/大伏笔/).length).toBeGreaterThan(0);
 
     // 章号信息（文本跨多 span 子节点，用 body.textContent 兜底）
@@ -70,7 +69,7 @@ describe("HookCodexPanel 基础渲染", () => {
     expect(document.body.textContent).toMatch(/已回收.*2/);
   });
 
-  it("minor thread 显示⚪小线索 badge", () => {
+  it("minor thread 显示小线索 badge", () => {
     render(
       <HookCodexPanel
         hookItems={[]}
@@ -80,7 +79,6 @@ describe("HookCodexPanel 基础渲染", () => {
         projectPath={null}
       />,
     );
-    expect(screen.getAllByText(/⚪/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/小线索/).length).toBeGreaterThan(0);
   });
 

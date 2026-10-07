@@ -12,7 +12,7 @@ import {
  *
  * 视觉照 codex.css #p-hooks 作用域（.codex-app）：
  *  - 两个桶：未回收（active hooks + open threads）/ 已回收（resolvedCount 计数 + 可选明细）
- *  - 每条标注大小（🔴大伏笔 / ⚪小线索）+ 埋章 / 回收章号 + relatedCount 折叠数
+ *  - 每条标注大小（大伏笔 / 小线索，小圆点区分）+ 埋章 / 回收章号 + relatedCount 折叠数
  *  - override：fetchForeshadowingOverrides 拉用户手动设定的大小，覆盖引擎派生 size
  *
  * 数据来源：
@@ -30,10 +30,10 @@ type ShownSize = "major" | "minor" | undefined;
 
 function SizeBadge({ size }: { readonly size: ShownSize }) {
   if (size === "major") {
-    return <span className="tag warn">🔴&nbsp;大伏笔</span>;
+    return <span className="tag warn"><i className="tag-dot" aria-hidden="true" />大伏笔</span>;
   }
   if (size === "minor") {
-    return <span className="tag">⚪&nbsp;小线索</span>;
+    return <span className="tag"><i className="tag-dot" aria-hidden="true" />小线索</span>;
   }
   return null;
 }
@@ -169,7 +169,7 @@ export default function HookCodexPanel({
           <h1>伏笔 / 线索</h1>
           <div className="panel-enrich-row"><PanelEnrichButton onSendMessage={onSendMessage} intent="把线索里没用的僵尸碎片清理一下" label="◌ 清理废弃线索" /><PanelEnrichButton onSendMessage={onSendMessage} intent="把讲同一件事的重复伏笔合并成一条" label="⇉ 合并重复伏笔" /></div>
           <p className="lead-sub">
-            按回收状态分桶。🔴大伏笔 是关键情节节点，⚪小线索 是辅助细节——写作前确认哪些还悬而未决，哪些已经兑现。
+            按回收状态分桶。大伏笔是关键情节节点，小线索是辅助细节——写作前确认哪些还悬而未决，哪些已经兑现。
           </p>
         </div>
         <div className="stats">
@@ -192,7 +192,7 @@ export default function HookCodexPanel({
       {totalUnresolved > 0 ? (
         <div className="asset-grp">
           <h5 className="h2">
-            ⏳ 未回收 <span className="cnt">{totalUnresolved}</span>
+            未回收 <span className="cnt">{totalUnresolved}</span>
           </h5>
 
           {activeHooks.map((item) => (

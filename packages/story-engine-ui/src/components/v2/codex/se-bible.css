@@ -20,6 +20,18 @@
   .se-bnav-note{margin:auto 6px 0;padding-top:16px;font-size:12px;line-height:1.6;color:var(--faint);}
   .se-bible .read{padding:28px 36px 64px;}
 
+  /* 面板顶上的英文/重复小标题（World Foundation、Hooks…）：标题本身已经说清，撤掉。 */
+  .se-bible .page-head .kicker{display:none;}
+  /* 线索大小标记：用小圆点代替表情符号 */
+  .se-bible .tag .tag-dot{display:inline-block;width:6px;height:6px;margin-right:5px;border-radius:50%;background:var(--faint);vertical-align:middle;}
+  .se-bible .tag.warn .tag-dot{background:var(--warn);}
+
+  /* 线索条目：标题一行 + 章号小字一行，行距收紧 */
+  .se-bible .asset-item{padding:10px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .se-bible .asset-item b{font-weight:500;color:var(--text);}
+  .se-bible .asset-item .h3{display:block;margin:2px 0 0;padding:0;font-size:12px;font-weight:400;line-height:1.5;color:var(--faint);letter-spacing:0;}
+  .se-bible .asset-item .h3::before,.se-bible .asset-item .h3::after{display:none;}
+
   /* ═══ 操作历史 ═══ */
   .op-history{height:100%;overflow-y:auto;}
   .op-history-body{max-width:860px;margin:0 auto;padding:28px 36px 56px;}
