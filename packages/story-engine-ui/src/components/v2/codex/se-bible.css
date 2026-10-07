@@ -170,6 +170,13 @@
   .op-history-error{color:var(--danger);border-color:rgba(224,137,124,.35);}
 
   @media (max-width:1279px){
+    /* 窄窗：分类导航改成内容上方的一排横向标签，把整宽让给资料内容（1024 下左 220 + 右 AI 只剩 400 来宽） */
+    .codex.se-bible{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);}
+    .se-bnav{flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px;overflow:visible;padding:8px 12px;
+      border-right:0;border-bottom:1px solid var(--line);}
+    .se-bnav .lib-search-wrap{flex:0 0 150px;margin:0 6px 0 0;}
+    .se-bnav-item{flex:none;width:auto;height:30px;padding:0 10px;white-space:nowrap;}
+    .se-bnav-note{display:none;}
     .se-bible .read,.op-history-body{padding:24px 24px 48px;}
     .op-history-confirm,.op-history-changes{margin-left:12px;}
   }
