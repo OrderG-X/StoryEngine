@@ -32,7 +32,6 @@ import { isPlaceholderUiValue } from "../../../shared/sparse-panel-honesty.js";
  * 可选 props（厚字段）按 location.locations 的下标对齐：thickFields[i] 对应第 i 张地点卡。
  * 后续做厚生成数据后，外壳把厚字段一并传入即可自动填满对应 section，本文件无需再改。
  */
-const GLYPHS = ["⌂", "⬛", "♞", "▲", "◈", "★", "⬡", "✦"];
 
 /** codex 比引擎厚、引擎暂未生成的「每地点」字段。有则渲染对应 .loc-cell，无则该格降级隐藏。 */
 export interface LocationThickFields {
@@ -117,7 +116,7 @@ function detailToCard(
   return {
     key: item.id || item.name || `loc-${index}`,
     name: uiText(item.name, "未命名地点"),
-    glyph: GLYPHS[index % GLYPHS.length] ?? "⌂",
+    glyph: uiText(item.name, "地").slice(0, 1),
     where: [kind, position].filter(Boolean).join(" · "),
     statusTag: thick?.statusTag || (isCurrent ? "当前地点" : status || undefined),
     statusTone: thick?.statusTone ?? (isCurrent ? "warn" : "neutral"),
@@ -150,7 +149,7 @@ function currentToCard(location: LocationStatus, thick?: LocationThickFields): L
   return {
     key: "current",
     name: uiText(location.currentLocation, "当前地点"),
-    glyph: GLYPHS[0] ?? "⌂",
+    glyph: uiText(location.currentLocation, "地").slice(0, 1),
     where: uiText(location.currentPosition, ""),
     statusTag: thick?.statusTag || "当前地点",
     statusTone: thick?.statusTone ?? "warn",
@@ -257,7 +256,7 @@ export default function LocationCodexPanel({
         <div>
           <div className="kicker">场景资料</div>
           <h1>地点</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我补全地点资料" label="✦ 补全地点" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我补全地点资料" label="补全地点" />
           {!isEmpty ? (
             <p className="lead-sub">每个地点的氛围、秘密、能发生什么和行动限制都在这里。已有资料会直接显示，暂时没有的内容不会硬凑。</p>
           ) : null}

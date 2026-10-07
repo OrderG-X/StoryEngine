@@ -19,6 +19,7 @@ import {
   isWorkspaceOperationTargetCurrent,
   type WorkspaceOperationToken,
 } from "../../../utils/workspaceOperation.js";
+import { IconHistory, IconPencil, IconPlus } from "./icons.js";
 
 /** 把 token 预算压成人话：300000 → 300k，1500000 → 1.5M。 */
 function fmtBudget(n: number): string {
@@ -285,29 +286,31 @@ export function ChatSessionBar() {
           aria-label="重命名会话"
         >
           <span className="csn-label">{displayName}</span>
-          <span className="csn-edit" aria-hidden="true">✎</span>
+          <span className="csn-edit" aria-hidden="true"><IconPencil size={12} /></span>
         </button>
       )}
 
       {/* ＋ 新会话 */}
       <button
-        className="codex-session-action"
+        className="codex-session-action is-icon"
         onClick={() => void onNew()}
         disabled={workspaceBusy}
+        aria-label="新会话"
         title={workspaceBusy ? "写作操作进行中，暂不能新建会话" : "开一条新的空白会话（旧会话进「历史」保留）"}
       >
-        <span className="csa-glyph" aria-hidden="true">＋</span>新会话
+        <IconPlus size={15} />
       </button>
 
       {/* ☰ 历史会话 */}
       <button
-        className={`codex-session-action${historyOpen ? " is-open" : ""}`}
+        className={`codex-session-action is-icon${historyOpen ? " is-open" : ""}`}
         onClick={() => { setHistoryOpen((v) => !v); setBudgetOpen(false); }}
         disabled={workspaceBusy}
+        aria-label="历史会话"
         title={workspaceBusy ? "写作操作进行中，暂不能切换会话" : "切换 / 管理历史会话"}
         aria-expanded={historyOpen}
       >
-        <span className="csa-glyph" aria-hidden="true">☰</span>历史
+        <IconHistory size={15} />
       </button>
 
       {/* ⚙ 上下文设置（按钮上常驻显示当前预算，如 300k） */}
@@ -322,8 +325,7 @@ export function ChatSessionBar() {
         title="设置 AI 最多保留多少对话记忆"
         aria-expanded={budgetOpen}
       >
-        <span className="csa-glyph" aria-hidden="true">⚙</span>对话记忆
-        <span className="csa-budget-tag">{fmtBudget(chatHistoryBudget)}</span>
+        记忆<span className="csa-budget-tag">{fmtBudget(chatHistoryBudget)}</span>
       </button>
       {budgetOpen && (
         <div className="codex-budget-pop">

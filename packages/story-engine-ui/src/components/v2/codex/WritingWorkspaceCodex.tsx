@@ -288,7 +288,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(ch.chapterNumber).includes(chapterFilter)
       || String(i + 1).includes(chapterFilter))
     : chapters;
-  const chapterRows = buildChapterRows(visibleChapters, Boolean(chapterFilter));
+  // 「还没写」的占位章不进列表：开新章走顶上的「写第 N 章」，翻到它走稿纸底部的「下一章」。
+  const chapterRows = buildChapterRows(visibleChapters.filter((ch) => ch.status !== "planned" || ch.id === currentId), Boolean(chapterFilter));
   // 当前章的状态以工作区的流程态为准（章节列表里它只标「current」，看不出是不是还没定稿）。
   const currentIsDraft = !["committed", "ready_for_next", "idle", "steering_ready"].includes(props.workspace.flowStatus)
     && Boolean(props.workspace.draft.content.trim());

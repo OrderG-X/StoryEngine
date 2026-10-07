@@ -29,7 +29,7 @@ import { parsePaletteCharacters } from "./CommandPalette.js";
 import { buildInboxTodos } from "./inboxTodos.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
-import { ChapterToolRail } from "./ChapterToolRail.js";
+import { railActionsForFlow } from "./ChapterToolRail.js";
 import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
@@ -294,8 +294,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           </div>
         ) : null}
       </div>
-      {/* ── 本章工具条（B1）：按阶段确定性列出该用的工具，点一下=给 agent 发预置意图（对话唯一控制面） ── */}
-      <ChapterToolRail flowStatus={flowStatus} onSendMessage={props.onSendMessage} disabled={workspaceBusy} />
 
       {/* ── 消息流（智能跟随滚动） ── */}
       {/* is-thinking：生成期间底部留白，避免「正在思考」浮层盖住正在流式输出的文字。 */}
@@ -411,7 +409,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       <ChatContextMeter />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
-      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} />
+      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={railActionsForFlow(flowStatus)} />
 
       {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
           作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），

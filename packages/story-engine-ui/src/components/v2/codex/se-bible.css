@@ -32,6 +32,30 @@
   .se-bible .asset-item .h3{display:block;margin:2px 0 0;padding:0;font-size:12px;font-weight:400;line-height:1.5;color:var(--faint);letter-spacing:0;}
   .se-bible .asset-item .h3::before,.se-bible .asset-item .h3::after{display:none;}
 
+  /* ── 面板内部降噪：统计数字改成标题下一行小字；小标题去金条与编号；标签一律淡色常规字 ── */
+  .se-bible .page-head{align-items:flex-start;}
+  .se-bible .page-head h1{font-size:22px;font-weight:600;}
+  .se-bible .page-head .lead-sub{font-size:13px;}
+  .se-bible .page-head .stats{gap:16px;align-self:flex-end;}
+  .se-bible .stat{display:flex;align-items:baseline;gap:4px;min-width:0;padding:0;border:0;border-radius:0;background:none;text-align:left;}
+  .se-bible .stat b{display:inline;font-size:15px;font-weight:600;color:var(--text);line-height:1.4;}
+  .se-bible .stat small{font-size:12px;letter-spacing:0;color:var(--faint);}
+  .se-bible .h2{gap:10px;margin:28px 0 12px;}
+  .se-bible .h2 .bar,.se-bible .h2 .no{display:none;}
+  .se-bible .h2 h2{font-size:15px;font-weight:600;}
+  .se-bible .h2 .cnt{font-size:12px;}
+  .se-bible .law .ix{width:22px;height:auto;border:0;border-radius:0;background:none;box-shadow:none;place-content:start;
+    font-size:13px;font-weight:500;color:var(--faint);}
+  .se-bible .law .ix small{display:none;}
+  .se-bible .read :is(h5,h6,.ck,.mcc-k,.fseg .k,.cbh,.wb-meta b,.tier .rank){
+    color:var(--faint);letter-spacing:0;text-transform:none;font-weight:500;font-size:12px;
+  }
+  /* 写作提醒（知识边界）：是给 AI 的提醒不是报错，用正文色 + 左侧提醒橙细线，不再整段红字 */
+  .se-bible .char-row .cv.risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
+  /* 两列格子里单数个时，最后一个占满整行（不留半行空白） */
+  .se-bible .voice .vc:last-child:nth-child(odd),
+  .se-bible .spec .cell:last-child:nth-child(odd){grid-column:1/-1;}
+
   /* ═══ 操作历史 ═══ */
   .op-history{height:100%;overflow-y:auto;}
   .op-history-body{max-width:860px;margin:0 auto;padding:28px 36px 56px;}

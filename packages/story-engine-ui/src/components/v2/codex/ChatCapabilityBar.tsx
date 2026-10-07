@@ -21,9 +21,9 @@ export interface CapabilityAction {
 
 /** 收起时常驻露脸的高频能力（写作/补全/整理 各露一个代表，一眼看见最常用的）。 */
 export const QUICK_ACTIONS: readonly CapabilityAction[] = [
-  { key: "quality", label: "✓ 硬伤检查", intent: QUALITY_BUTTON_INTENT },
-  { key: "char", label: "✦ 补全角色", intent: "帮我把现有角色补全一点" },
-  { key: "rel", label: "⬡ 整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+  { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
+  { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
+  { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
 ];
 
 /**
@@ -35,37 +35,39 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   {
     title: "写作",
     actions: [
-      { key: "review", label: "◈ 内容审阅", intent: REVIEW_BUTTON_INTENT },
-      { key: "deai", label: "✦ 检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
-      { key: "quality", label: "✓ 硬伤检查", intent: QUALITY_BUTTON_INTENT },
+      { key: "review", label: "内容审阅", intent: REVIEW_BUTTON_INTENT },
+      { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
+      { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
       // 定稿按钮 = 定稿流程入口，确定性走预览（commit_preview）；预览卡再引导「确认定稿」走 commit_apply。
-      { key: "commit", label: "↻ 定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
+      { key: "commit", label: "定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
     ],
   },
   {
     title: "补全",
     actions: [
-      { key: "char", label: "✦ 补全角色", intent: "帮我把现有角色补全一点" },
-      { key: "world", label: "✦ 补全世界观", intent: "帮我把世界观补全" },
-      { key: "loc", label: "✦ 补全地点", intent: "帮我把地点补全" },
-      { key: "asset", label: "✦ 补全道具与资源", intent: "帮我把道具与资源补全" },
-      { key: "rules", label: "✦ 补全写作规则", intent: "帮我把写作规则补全、整理本书文风特点" },
+      { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
+      { key: "world", label: "补全世界观", intent: "帮我把世界观补全" },
+      { key: "loc", label: "补全地点", intent: "帮我把地点补全" },
+      { key: "asset", label: "补全道具与资源", intent: "帮我把道具与资源补全" },
+      { key: "rules", label: "补全写作规则", intent: "帮我把写作规则补全、整理本书文风特点" },
     ],
   },
 
   {
     title: "整理",
     actions: [
-      { key: "rel", label: "⬡ 整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
-      { key: "clean", label: "◌ 清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
-      { key: "merge", label: "⇉ 合并重复伏笔", intent: "把讲同一件事的重复伏笔合并成一条" },
+      { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+      { key: "clean", label: "清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
+      { key: "merge", label: "合并重复伏笔", intent: "把讲同一件事的重复伏笔合并成一条" },
     ],
   },
 ];
 
-export function ChatCapabilityBar({ onSendMessage, disabled }: {
+export function ChatCapabilityBar({ onSendMessage, disabled, leading = [] }: {
   readonly onSendMessage?: (content: string) => void;
   readonly disabled?: boolean;
+  /** 按本章进度派生的工具（ChapterToolRail.railActionsForFlow）：排在最前、第一个高亮；常驻快捷里同 key 的去重。 */
+  readonly leading?: readonly { readonly key: string; readonly label: string; readonly intent: string }[];
 }) {
   const [open, setOpen] = useState(false);
   if (!onSendMessage) return null;
@@ -79,7 +81,20 @@ export function ChatCapabilityBar({ onSendMessage, disabled }: {
   return (
     <div className="cap-bar" role="group" aria-label="可用能力">
       <div className="cap-quick">
-        {QUICK_ACTIONS.map((action) => (
+        {leading.map((action, index) => (
+          <button
+            key={`lead-${action.key}`}
+            type="button"
+            className={`cap-btn${index === 0 ? " is-lead" : ""}`}
+            disabled={disabled}
+            title={action.intent}
+            onClick={() => send(action.intent)}
+          >
+            {action.label}
+          </button>
+        ))}
+        {/* 一排最多放 3 个常用（本章进度工具优先），其余进「更多」：窄栏里也不折成两行。 */}
+        {QUICK_ACTIONS.filter((action) => !leading.some((lead) => lead.key === action.key)).slice(0, Math.max(0, 3 - leading.length)).map((action) => (
           <button
             key={action.key}
             type="button"
@@ -97,7 +112,7 @@ export function ChatCapabilityBar({ onSendMessage, disabled }: {
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          {open ? "收起" : "⋯ 更多"}
+          {open ? "收起" : "更多"}
         </button>
       </div>
       {open ? (

@@ -110,3 +110,11 @@ export function IconPlus(props: IconProps) {
 export function IconUndo(props: IconProps) {
   return <Icon {...props}><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></Icon>;
 }
+
+export function IconHistory(props: IconProps) {
+  return <Icon {...props}><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></Icon>;
+}
+
+export function IconPencil(props: IconProps) {
+  return <Icon {...props}><path d="M4 20h4L19 9l-4-4L4 16v4z" /></Icon>;
+}

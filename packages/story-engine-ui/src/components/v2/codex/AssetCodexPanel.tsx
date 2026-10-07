@@ -131,7 +131,7 @@ export default function AssetCodexPanel({
         <div>
           <div className="kicker">道具与资源</div>
           <h1>道具与资源</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把道具与资源补全" label="✦ 补全道具与资源" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把道具与资源补全" label="补全道具与资源" />
           {!isEmpty ? (
             <p className="lead-sub">
               按持有人分组，再按可用性分桶。每件标注读者可见性、角色知情状态与剧情风险——写作前据此判断「这个角色能不能突然拿出它」。

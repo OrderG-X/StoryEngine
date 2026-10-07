@@ -36,3 +36,28 @@ describe("CommitDeltaCard 入库 delta 卡", () => {
     expect(container.querySelector(".step-card")).toBeTruthy();
   });
 });
+
+describe("displayDeltaLines：定稿明细说人话", () => {
+  it("文件路径换章号、去掉没变化的行与 0 条的提醒分项", async () => {
+    const { displayDeltaLines } = await import("./CommitDeltaCard.js");
+    expect(displayDeltaLines([
+      "正式章节：已写入 chapters/0058.md",
+      "角色状态：1 项",
+      "时间线事件：1 条",
+      "伏笔更新：0 项",
+      "线索线程：15 项",
+      "主线目标：0 项，完成 0 项",
+      "世界状态：已更新",
+      "故事日历：无变更",
+      "过期提醒：伏笔 0 条，线索 7 条，主线目标 1 条",
+    ])).toEqual([
+      "正文：已写入第 58 章",
+      "角色状态：1 项",
+      "时间线事件：1 条",
+      "线索线程：15 项",
+      "世界状态：已更新",
+      "过期提醒：线索 7 条，主线目标 1 条",
+    ]);
+    expect(displayDeltaLines(["正式章节：已写入 chapters"])).toEqual(["正文：已写入"]);
+  });
+});

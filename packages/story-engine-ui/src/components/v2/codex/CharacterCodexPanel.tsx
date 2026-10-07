@@ -179,7 +179,7 @@ export default function CharacterCodexPanel({
         <div>
           <div className="kicker">角色档案</div>
           <h1>角色</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把现有角色补全一点" label="✦ 补全角色" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把现有角色补全一点" label="补全角色" />
           <p className="lead-sub">每个角色的性格、目标、成长、说话方式和知道的事都在这里。已有资料会直接显示，暂时没有的内容不会硬凑。</p>
         </div>
         <div className="stats">

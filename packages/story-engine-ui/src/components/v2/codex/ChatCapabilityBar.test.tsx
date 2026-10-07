@@ -24,13 +24,13 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
   it("点高频按钮 → 发对应用户面意图（补全角色）", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} />);
-    fireEvent.click(btnByText(container, "✦ 补全角色")!);
+    fireEvent.click(btnByText(container, "补全角色")!);
     expect(onSend).toHaveBeenCalledWith("帮我把现有角色补全一点");
   });
 
   it("点「更多」展开，显示 写作/补全/整理 分组与全部能力", () => {
     const { container } = render(<ChatCapabilityBar onSendMessage={() => {}} />);
-    fireEvent.click(btnByText(container, "⋯ 更多")!);
+    fireEvent.click(btnByText(container, "更多")!);
     const panel = container.querySelector(".cap-panel");
     expect(panel).toBeTruthy();
     const text = panel?.textContent ?? "";
@@ -46,21 +46,40 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
   it("写作辅助意图与 ChapterToolRail 一致（审稿）", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} />);
-    fireEvent.click(btnByText(container, "⋯ 更多")!);
-    fireEvent.click(btnByText(container, "◈ 内容审阅")!);
+    fireEvent.click(btnByText(container, "更多")!);
+    fireEvent.click(btnByText(container, "内容审阅")!);
     expect(onSend).toHaveBeenCalledWith("审阅这一章的内容，给我评分和改进建议");
   });
 
   it("用户面绝不出现「做厚」二字（纪律 2.6）", () => {
     const { container } = render(<ChatCapabilityBar onSendMessage={() => {}} />);
-    fireEvent.click(btnByText(container, "⋯ 更多")!);
+    fireEvent.click(btnByText(container, "更多")!);
     expect(container.textContent ?? "").not.toContain("做厚");
   });
 
   it("disabled 时点了不发", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} disabled />);
-    fireEvent.click(btnByText(container, "✦ 补全角色")!);
+    fireEvent.click(btnByText(container, "补全角色")!);
     expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChatCapabilityBar · 本章进度工具并入同一排", () => {
+  it("leading 排最前、第一个高亮；常驻快捷里同 key 的去重", () => {
+    const { container } = render(
+      <ChatCapabilityBar
+        onSendMessage={vi.fn()}
+        leading={[{ key: "quality", label: "硬伤检查", intent: "q" }, { key: "commit", label: "定稿", intent: "c" }]}
+      />,
+    );
+    const labels = [...container.querySelectorAll(".cap-quick button")].map((b) => b.textContent);
+    expect(labels[0]).toBe("硬伤检查");
+    expect(labels[1]).toBe("定稿");
+    expect(labels.filter((t) => t === "硬伤检查")).toHaveLength(1);
+    // 一排最多 3 个常用 + 「更多」
+    expect(labels).toHaveLength(4);
+    expect(labels[3]).toBe("更多");
+    expect(container.querySelector(".cap-btn.is-lead")?.textContent).toBe("硬伤检查");
   });
 });

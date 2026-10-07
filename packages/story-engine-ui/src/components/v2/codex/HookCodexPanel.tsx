@@ -151,7 +151,7 @@ export default function HookCodexPanel({
           <div>
             <div className="kicker">Hooks · 伏笔线索追踪</div>
             <h1>伏笔 / 线索</h1>
-          <div className="panel-enrich-row"><PanelEnrichButton onSendMessage={onSendMessage} intent="把线索里没用的僵尸碎片清理一下" label="◌ 清理废弃线索" /><PanelEnrichButton onSendMessage={onSendMessage} intent="把讲同一件事的重复伏笔合并成一条" label="⇉ 合并重复伏笔" /></div>
+          <div className="panel-enrich-row"><PanelEnrichButton onSendMessage={onSendMessage} intent="把线索里没用的僵尸碎片清理一下" label="清理废弃线索" /><PanelEnrichButton onSendMessage={onSendMessage} intent="把讲同一件事的重复伏笔合并成一条" label="合并重复伏笔" /></div>
           </div>
         </div>
         <div className="catrail-foot" style={{ marginTop: 40 }}>
@@ -167,7 +167,7 @@ export default function HookCodexPanel({
         <div>
           <div className="kicker">Hooks · 伏笔线索追踪</div>
           <h1>伏笔 / 线索</h1>
-          <div className="panel-enrich-row"><PanelEnrichButton onSendMessage={onSendMessage} intent="把线索里没用的僵尸碎片清理一下" label="◌ 清理废弃线索" /><PanelEnrichButton onSendMessage={onSendMessage} intent="把讲同一件事的重复伏笔合并成一条" label="⇉ 合并重复伏笔" /></div>
+          <div className="panel-enrich-row"><PanelEnrichButton onSendMessage={onSendMessage} intent="把线索里没用的僵尸碎片清理一下" label="清理废弃线索" /><PanelEnrichButton onSendMessage={onSendMessage} intent="把讲同一件事的重复伏笔合并成一条" label="合并重复伏笔" /></div>
           <p className="lead-sub">
             按回收状态分桶。大伏笔是关键情节节点，小线索是辅助细节——写作前确认哪些还悬而未决，哪些已经兑现。
           </p>

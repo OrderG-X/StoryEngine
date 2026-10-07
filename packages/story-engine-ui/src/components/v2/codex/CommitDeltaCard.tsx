@@ -11,13 +11,38 @@ function splitLabel(line: string): { label: string; value: string } {
   return i >= 0 ? { label: line.slice(0, i), value: line.slice(i + 1) } : { label: "", value: line };
 }
 
+/**
+ * 给作者看的定稿明细（只改显示，不改 summarizeCommitReport）：
+ * - 「正式章节：已写入 chapters/0058.md」→「正文：已写入第 58 章」（文件路径是程序视角）；
+ * - 没变化的行（0 项 / 0 条 / 无变更）不显示；过期提醒里为 0 的分项去掉。
+ */
+export function displayDeltaLines(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("正式章节：")) {
+      const match = /(?:^|\/)(?:chapter-)?0*(\d+)\.md$/u.exec(line.trim());
+      out.push(match ? `正文：已写入第 ${match[1]} 章` : "正文：已写入");
+      continue;
+    }
+    if (line.startsWith("过期提醒：")) {
+      const parts = line.slice("过期提醒：".length).split("，").filter((part) => !/\s0\s*条$/u.test(part.trim()));
+      if (parts.length) out.push(`过期提醒：${parts.join("，")}`);
+      continue;
+    }
+    const value = line.slice(line.indexOf("：") + 1).trim();
+    if (/^0\s*(项|条)(，完成 0 项)?$/u.test(value) || value === "无变更") continue;
+    out.push(line);
+  }
+  return out;
+}
+
 export function CommitDeltaCard({ report, elapsedMs }: { readonly report: unknown; readonly elapsedMs?: number }) {
   const { statusLine, detailLines } = summarizeCommitReport(report);
   return (
     <StepCard title="定稿" status="done" statusLabel="已定稿" elapsedMs={elapsedMs} defaultOpen>
       <p className="cdc-status">{statusLine}</p>
       <ul className="cdc-list">
-        {detailLines.map((line) => {
+        {displayDeltaLines(detailLines).map((line) => {
           const { label, value } = splitLabel(line);
           return (
             <li className="cdc-row" key={line}>

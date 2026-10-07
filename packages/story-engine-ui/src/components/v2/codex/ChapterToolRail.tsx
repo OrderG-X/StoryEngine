@@ -18,23 +18,23 @@ export interface ChapterToolAction {
 }
 
 export const BEFORE_DRAFT: readonly ChapterToolAction[] = [
-  { key: "draft", label: "✎ 写这一章", intent: DRAFT_BUTTON_INTENT },
-  { key: "steer", label: "◇ 先给方案", intent: "先给这一章一个写作方案，先别直接出正文" },
+  { key: "draft", label: "写这一章", intent: DRAFT_BUTTON_INTENT },
+  { key: "steer", label: "先给方案", intent: "先给这一章一个写作方案，先别直接出正文" },
 ];
 
 export const HAS_DRAFT: readonly ChapterToolAction[] = [
-  { key: "review", label: "◈ 内容审阅", intent: REVIEW_BUTTON_INTENT },
+  { key: "review", label: "内容审阅", intent: REVIEW_BUTTON_INTENT },
   // 措辞要落在 check_ai_flavor 守卫上、且不是问句：旧「查…有没有…」会被当提问旁路掉、点了没兜底。
   // 新旧术语双写：机器腔 = AI 味（honesty 守卫新旧词都认）。
-  { key: "deai", label: "✦ 检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
-  { key: "quality", label: "✓ 硬伤检查", intent: QUALITY_BUTTON_INTENT },
+  { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
+  { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
   // 定稿按钮 = 定稿流程入口，确定性走预览（commit_preview）；预览卡再引导「确认定稿」走 commit_apply。
-  { key: "commit", label: "↻ 定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
+  { key: "commit", label: "定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
 ];
 
 export const COMMITTED: readonly ChapterToolAction[] = [
   // 含换章触发词「继续写」+ 直接出稿措辞；避开「方案/思路」等 WRITING_PLAN_ONLY 词，否则守卫会把它当「只讨论」放过。
-  { key: "next", label: "→ 写下一章", intent: "继续写下一章的正文，现在就动笔直接出稿" },
+  { key: "next", label: "写下一章", intent: "继续写下一章的正文，现在就动笔直接出稿" },
 ];
 
 /**

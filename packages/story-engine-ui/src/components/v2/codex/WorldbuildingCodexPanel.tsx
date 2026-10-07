@@ -14,7 +14,6 @@ import {
  * generate_worldbuilding 生成；旧数据缺这些字段时对应 section 自动降级隐藏，不造假。
  */
 const ROMAN = ["Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ"];
-const GLYPHS = ["⌂", "♛", "♜", "◉", "◈", "★", "⬡", "✦"];
 
 function has(s?: string): s is string {
   return typeof s === "string" && s.trim().length > 0;
@@ -93,7 +92,7 @@ export default function WorldbuildingCodexPanel({
           <div>
             <div className="kicker">World Foundation</div>
             <h1>故事设定 <em>·</em> 世界观</h1>
-            <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把世界观补全" label="✦ 补全世界观" />
+            <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把世界观补全" label="补全世界观" />
           </div>
         </div>
         <div className="catrail-foot panel-empty-center" style={{ marginTop: 40 }}>
@@ -121,7 +120,7 @@ export default function WorldbuildingCodexPanel({
         <div>
           <div className="kicker">World Foundation</div>
           <h1>故事设定 <em>·</em> 世界观</h1>
-          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把世界观补全" label="✦ 补全世界观" />
+          <PanelEnrichButton onSendMessage={onSendMessage} intent="帮我把世界观补全" label="补全世界观" />
           <p className="lead-sub">{has(w.overview.worldSentence) ? w.overview.worldSentence : w.overview.coreConflict}</p>
         </div>
         <div className="stats">
@@ -168,7 +167,7 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
   return (
     <div className="subpanel on">
       <SpecGridSection
-        no="01" title="世界概要 World Profile" cnt="定调 · 非细节"
+        no="01" title="世界概要" cnt="定调 · 非细节"
         cells={[
           { k: "世界名称", v: o.worldName },
           { k: "题材基底", v: o.genreBase },
@@ -198,7 +197,7 @@ function OverviewSub({ w }: { readonly w: WorldbuildingData }) {
 
       {r && (has(r.realityStability) || has(r.supernaturalVisibility) || has(r.truthAccessibility) || has(r.narrativeLimit)) ? (
         <>
-          <H2 no="03" title="世界法则 World Rules" cnt="上位约束 · 不可违反" />
+          <H2 no="03" title="世界法则" cnt="上位约束 · 不可违反" />
           <div className="h3"><span className="dot" />现实 / 超常 / 信息 规则</div>
           <SpecGrid
             mb
@@ -256,11 +255,11 @@ function ResourcesSub({ w }: { readonly w: WorldbuildingData }) {
     <div className="subpanel on">
       {w.factions && w.factions.length > 0 ? (
         <>
-          <H2 no={`02·${next()}`} title="阵营 Factions" cnt="思想立场 · 非组织" />
+          <H2 no={`02·${next()}`} title="阵营" cnt="思想立场 · 非组织" />
           <div className="res-grid">
             {w.factions.map((f, i) => (
               <div key={i} className="res-card">
-                <div className="rch"><span className="ric">{i % 2 === 0 ? "◆" : "◇"}</span><b>{f.name}</b></div>
+                <div className="rch"><b>{f.name}</b></div>
                 <div className="rcr"><span className="k">核心立场</span><span className="v">{f.stance}</span></div>
                 <div className="rcr"><span className="k">长期目标</span><span className="v">{f.longTermGoal}</span></div>
                 <div className="rcr"><span className="k">最大恐惧</span><span className="v">{f.fear}</span></div>
@@ -273,12 +272,12 @@ function ResourcesSub({ w }: { readonly w: WorldbuildingData }) {
 
       {w.forces.length > 0 ? (
         <>
-          <H2 no={`02·${next()}`} title="势力 Forces" cnt={`${w.forces.length} 方角力 · 含施压方式`} />
+          <H2 no={`02·${next()}`} title="势力" cnt={`${w.forces.length} 方角力 · 含施压方式`} />
           <div className="forces">
             {w.forces.map((f, i) => (
               <article key={i} className={`force ${i === 0 ? "lead" : ""}`}>
                 <div className="force-head">
-                  <div className="glyph">{GLYPHS[i % GLYPHS.length]}</div>
+                  <div className="glyph">{(f.name || "势").slice(0, 1)}</div>
                   <div className="force-name"><h3>{f.name}</h3>{f.type ? <div className="role">{f.type}</div> : null}</div>
                 </div>
                 {f.resources ? <div className="fseg"><span className="k">资源</span><span className="v">{f.resources}</span></div> : null}
@@ -293,7 +292,7 @@ function ResourcesSub({ w }: { readonly w: WorldbuildingData }) {
 
       {w.specialElements && w.specialElements.length > 0 ? (
         <>
-          <H2 no={`02·${next()}`} title="特殊要素 Special Elements" cnt="推动情节的机关" />
+          <H2 no={`02·${next()}`} title="特殊要素" cnt="推动情节的机关" />
           <div className="res-grid">
             {w.specialElements.map((e, i) => (
               <div key={i} className="res-card">
@@ -387,7 +386,7 @@ function BindingSub({ w }: { readonly w: WorldbuildingData }) {
   const visible = cells.filter((c) => c.items && c.items.length > 0);
   return (
     <div className="subpanel on">
-      <H2 no="04" title="本卷故事绑定 Story Binding" cnt="从世界全量裁出的有效切片" />
+      <H2 no="04" title="本卷故事绑定" cnt="从世界全量裁出的有效切片" />
       <p className="lede" style={{ marginBottom: 18 }}>
         世界里存的是「全量可能性」，本卷只激活其中少量有效元素——下面是本卷从世界资源中挑出的局部舞台。
       </p>

@@ -239,7 +239,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             title={draftWordCount > 0 || draft.content.trim() ? "会保留当前版本，再生成 2–3 个候选版本供你挑选" : "生成第一版工作稿"}
             type="button"
           >
-            {rerolling ? "生成候选中…" : draftWordCount > 0 || draft.content.trim() ? "↻ 再来一版" : "✎ 写第一版"}
+            {rerolling ? "生成候选中…" : draftWordCount > 0 || draft.content.trim() ? "再来一版" : "写第一版"}
           </button>
         ) : <span />}
         {nextChapter ? (
