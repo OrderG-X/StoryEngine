@@ -25,6 +25,7 @@ import {
   readString,
   requireBodyString,
   requirePositiveBodyInteger,
+  stripTitleLineForEditor,
   withUiOverviewDetails,
   writeJson,
   type MiddlewareStack,
@@ -137,7 +138,8 @@ async function handleDraftRevisionApply(req: import("node:http").IncomingMessage
         draftPath: outcome.draftPath,
         updatedWordCount: countDraftWords(outcome.updatedContent),
       },
-      draftContent: `${outcome.updatedContent.trimEnd()}\n`,
+      // 编辑器只要正文：草稿文件首行的「# 章名」不回给编辑器（否则应用修改后稿纸顶上冒出一行标题）。
+      draftContent: stripTitleLineForEditor(`${outcome.updatedContent.trimEnd()}\n`),
       overview,
     });
   } catch (error) {

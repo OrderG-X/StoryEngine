@@ -232,4 +232,7 @@
   .cssp-btn:hover{color:var(--text);border-color:var(--line-strong);background:var(--hover);}
   .codex-budget-hint{font-size:12px;line-height:1.6;}
   .codex-budget-preview strong{color:var(--text);font-weight:600;}
+
+  /* 「正在思考」胶囊的锚点：零高度、贴在记忆条上方，胶囊往上浮进消息流底部的空当 */
+  .se-ai-dock-anchor{position:relative;height:0;}
 }

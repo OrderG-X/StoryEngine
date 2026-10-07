@@ -6,6 +6,7 @@ describe("operationCaption 不走对话的操作也要看得见", () => {
     expect(operationCaption("ai-review")).toBe("正在做内容审阅，推理模型可能要几分钟");
     expect(operationCaption("something-new")).toBe("正在处理");
     expect(operationCaption(null)).toBeNull();
+    expect(operationCaption("selection-rewrite-polish")).toBe("正在润色选中的段落");
   });
 
   it("找出进行中的卡", () => {

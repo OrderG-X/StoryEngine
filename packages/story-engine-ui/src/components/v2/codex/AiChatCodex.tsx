@@ -274,6 +274,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           flowStatus={flowStatus}
           live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))}
           operation={operationCaption(props.draftActionLoading)}
+          busy={Boolean(props.chatLoading)}
         />
         <button
           type="button"
@@ -420,11 +421,19 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         </div>
       ) : null}
 
-      {/* ── 上下文提示条（消息列表与输入框之间） ── */}
+      {/* ── 上下文提示条（消息列表与输入框之间） ──
+          「正在思考」胶囊挂在这一段的顶上（浮在消息流底部留出的空当里），不再压住下面的快捷按钮。 */}
+      <div className="se-ai-dock-anchor">
+        {props.chatLoading ? (
+          <div className="se-v2-thinking-dock">
+            <ThinkingIndicator />
+          </div>
+        ) : null}
+      </div>
       <ChatContextMeter />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
-      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions)} />
+      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />
 
       {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
           作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），
@@ -446,14 +455,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         </div>
       ) : null}
 
-      {/* ── 输入区（含「正在思考」浮层） ── */}
+      {/* ── 输入区 ── */}
       <div style={{ position: "relative" }}>
-        {/* 「正在思考」浮层——复用旧版那套受喜爱的动效（错峰跳动金点 + 流光扫过 + 呼吸辉光，纯 CSS，v2.css 全局生效）。 */}
-        {props.chatLoading ? (
-          <div className="se-v2-thinking-dock">
-            <ThinkingIndicator />
-          </div>
-        ) : null}
         {mentionOpen ? (
           <div className="se-mention" role="listbox" aria-label="引用角色、地点或章节">
             <div className="se-mention-h">引用角色、地点或章节 · ↑↓ 选，回车插入</div>
@@ -625,15 +628,17 @@ function liveCaption(live: LiveFlow | null): { readonly text: string; readonly r
   return { text: lp.detail ? oneLine(lp.detail, 52) : `${last.label}完成`, running: false };
 }
 
-function AiStatusLine({ flowStatus, live, operation }: {
+function AiStatusLine({ flowStatus, live, operation, busy = false }: {
   readonly flowStatus: ChapterFlowStatus;
   readonly live: LiveFlow | null;
   /** 不走对话的操作（审稿/质检/修改方案…）进行中时的一句话。 */
   readonly operation?: string | null;
+  /** AI 这一轮还在跑（在想、还没调工具）：别还挂着「本章已就绪」这类静态提示。 */
+  readonly busy?: boolean;
 }) {
   const caption = liveCaption(live);
-  const running = Boolean(caption?.running) || Boolean(operation);
-  const text = caption?.running ? caption.text : operation ?? flowHint(flowStatus);
+  const running = Boolean(caption?.running) || Boolean(operation) || busy;
+  const text = caption?.running ? caption.text : operation ?? (busy ? "AI 正在处理…" : flowHint(flowStatus));
   return (
     <div className={`se-ai-ctx${running ? " is-running" : ""}`} role="status" aria-live="polite">
       <span className="se-ai-ctx-dot" aria-hidden="true" />

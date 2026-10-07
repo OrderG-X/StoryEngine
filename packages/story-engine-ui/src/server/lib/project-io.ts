@@ -1369,7 +1369,7 @@ export function stripLeadingMarkdownChapterHeading(content: string): string {
 }
 
 /** 编辑器只要正文：首行是「# 章名」就去掉（保留原文末换行），否则原样不动。 */
-function stripTitleLineForEditor(content: string): string {
+export function stripTitleLineForEditor(content: string): string {
   const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim() ?? "";
   if (!isMarkdownChapterHeading(firstLine)) return content;
   const body = stripLeadingMarkdownChapterHeading(content);

@@ -7,6 +7,7 @@ import type { DraftPreview } from "../../types.js";
 import { uiText } from "./v2Utils.js";
 import { decideExternalDraftSync, draftTextToHtml } from "./draftEditorSync.js";
 import SelectionToolbar from "./SelectionToolbar.js";
+import { sentenceSpan } from "./sentenceSnap.js";
 import type { SelectionRevisionKey } from "./selectionRevisionTemplates.js";
 import FindReplacePanel from "./FindReplacePanel.js";
 import {
@@ -66,6 +67,31 @@ export default function WritingPaper({ draft, fontSize = 18, onEdit, onSelection
   );
 }
 
+/**
+ * 把编辑器选区两端各自对齐到所在段落里的句子边界。段落文字用 textBetween(leafText="\n") 取，
+ * 每个字符/换行正好占一个文档位置，偏移量可以直接加回段落起点。
+ */
+function snapToSentences(instance: Editor, from: number, to: number): { from: number; to: number } | null {
+  try {
+    const { doc } = instance.state;
+    const $from = doc.resolve(from);
+    const $to = doc.resolve(to);
+    if (!$from.parent.isTextblock || !$to.parent.isTextblock) return null;
+    const fromStart = $from.start();
+    const fromText = doc.textBetween(fromStart, $from.end(), "\n", "\n");
+    const toStart = $to.start();
+    const toText = doc.textBetween(toStart, $to.end(), "\n", "\n");
+    const fromOffset = from - fromStart;
+    const toOffset = to - toStart;
+    // 选区刚好停在段首/段尾（如三击选整段）就不往旁边段落里扩。
+    const nextFrom = fromOffset >= fromText.length ? from : fromStart + sentenceSpan(fromText, fromOffset, fromOffset).start;
+    const nextTo = toOffset === 0 ? to : toStart + sentenceSpan(toText, toOffset, toOffset).end;
+    return nextFrom < nextTo ? { from: nextFrom, to: nextTo } : null;
+  } catch {
+    return null;
+  }
+}
+
 function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelectionRewriteCustom, onAskAboutSelection }: {
   readonly draft: DraftPreview;
   readonly onEdit: (content: string) => void;
@@ -107,8 +133,16 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const refreshSelection = useCallback((instance: Editor) => {
     // 查找替换开着时不出选区浮动条——否则查找导航选中匹配会误触发块②的润色条。
     if (!(canRewrite || canAsk) || findOpen) { setSelection(null); return; }
-    const { from, to, empty } = instance.state.selection;
+    const { from: rawFrom, to: rawTo, empty } = instance.state.selection;
     if (empty) { setSelection(null); return; }
+    // 能改写时把选区对齐到整句（见 sentenceSnap.ts）：只选半句去润色，模型会补全句子，应用后后半句重复。
+    // 对齐后把编辑器选区也改过去，作者看到的就是会被改的那一整段。
+    const snapped = canRewrite ? snapToSentences(instance, rawFrom, rawTo) : null;
+    if (snapped && (snapped.from !== rawFrom || snapped.to !== rawTo)) {
+      instance.commands.setTextSelection(snapped);
+    }
+    const from = snapped?.from ?? rawFrom;
+    const to = snapped?.to ?? rawTo;
     // leafText 必须用 "\n" 与 draft.content 的 getText 对齐：Tiptap 的 hardBreak（段内单换行 → <br>）
     // 在 getText 里序列化成 "\n"，若这里用 " " 则选区跨段内换行时与 draft.content 不匹配、revision 路由 400。
     const text = instance.state.doc.textBetween(from, to, BLOCK_SEPARATOR, "\n");

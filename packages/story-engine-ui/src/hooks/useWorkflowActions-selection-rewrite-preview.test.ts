@@ -167,7 +167,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     expect(request?.targetText).toBe(SELECTION_TEXT);
 
     const applied = useWorkspaceStore.getState().workspace.messages.find(
-      (m) => m.role === "assistant" && m.content.includes("手动改写"),
+      (m) => m.role === "assistant" && m.content.includes("改好"),
     );
     expect(applied).toBeTruthy();
     expect(applied!.content).toContain(before); // 具体原文进了对话 → agent 看得到

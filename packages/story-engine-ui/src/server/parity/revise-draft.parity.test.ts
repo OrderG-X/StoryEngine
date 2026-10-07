@@ -138,8 +138,8 @@ describe("parity: /api/draft/revision/* ↔ revise_draft（共享行为面）", 
     expect(routeDraft).toContain(REVISE_REPLACEMENT_B);
     expect(routeDraft).not.toContain(REVISE_SENTENCE_B);
 
-    // 关键输出字段：HTTP 回写后全文；工具回 draftBody（去标题正文）
-    expect(String(apply.payload.draftContent)).toBe(routeDraft);
+    // 关键输出字段：HTTP 回写去标题正文（编辑器只要正文，首行「# 章名」不回）；工具回 draftBody（去标题正文）
+    expect(String(apply.payload.draftContent)).toBe(routeDraft.replace(/^# 第1章\n\n/u, ""));
     expect(tool.draftBody).toBe(routeDraft.replace(/^# 第1章\n\n/u, "").trim());
     // 两侧都建了覆盖前快照（HTTP createSnapshot / 工具 snapshotBeforeDraftOverwrite）
     expect(typeof tool.snapshotId).toBe("string");

@@ -17,8 +17,15 @@ const CAPTIONS: Readonly<Record<string, string>> = {
   "direct-edit": "正在改稿",
 };
 
+/** 选区改写按钮（selection-rewrite-<key>）对应的动作名。 */
+const SELECTION_ACTIONS: Readonly<Record<string, string>> = {
+  polish: "润色", rewrite: "改写", deai: "去 AI 味", expand: "扩写", condense: "缩写", continue: "续写", custom: "改写",
+};
+
 export function operationCaption(loading: string | null | undefined): string | null {
   if (!loading) return null;
+  const selection = /^selection-rewrite-(.+)$/u.exec(loading);
+  if (selection) return `正在${SELECTION_ACTIONS[selection[1]!] ?? "改写"}选中的段落`;
   return CAPTIONS[loading] ?? "正在处理";
 }
 

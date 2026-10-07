@@ -10,6 +10,16 @@ import { VISIBLE_SELECTION_REVISION_TEMPLATES, type SelectionRevisionKey } from 
  * 容器 onMouseDown + preventDefault：避免按下按钮时浏览器先清掉编辑器选区（拿不到 targetText）；
  * 唯独输入框用 stopPropagation 隔离，使容器的 preventDefault 不挡住它聚焦。
  */
+/** 按钮悬停说明（给作者看的话；problemSummary 是写给模型的，不拿来当提示）。 */
+const SELECTION_BUTTON_HINTS: Readonly<Partial<Record<SelectionRevisionKey, string>>> = {
+  polish: "不改意思，让这段读起来更顺",
+  rewrite: "意思不变，换一种写法",
+  deai: "去掉套话和机器腔",
+  expand: "补细节，写得更丰满",
+  condense: "删掉啰嗦的地方，写得更紧凑",
+  continue: "顺着这段往下写一小段",
+};
+
 export default function SelectionToolbar({ top, left, busyKey, askOnly = false, onPick, onPickCustom, onAsk }: {
   readonly top: number;
   readonly left: number;
@@ -89,7 +99,7 @@ export default function SelectionToolbar({ top, left, busyKey, askOnly = false, 
               type="button"
               disabled={busy}
               aria-busy={busyKey === template.key}
-              title={template.problemSummary}
+              title={SELECTION_BUTTON_HINTS[template.key] ?? template.label}
               onMouseDown={(event) => {
                 event.preventDefault();
                 if (!busy) onPick(template.key);

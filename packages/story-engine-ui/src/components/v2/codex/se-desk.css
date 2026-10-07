@@ -158,4 +158,7 @@
     .codex-desk-stage > .se-v2-writing-canvas,
     .codex-desk-stage > .se-v2-paper{padding:36px 40px 48px;}
   }
+
+  /* 修改预览里的「留意」是提醒不是报错：正文色 + 左侧提醒橙细线，不再整段红字 */
+  .revision-preview-modal .rpm-risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
 }

@@ -1330,10 +1330,10 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       updateAgentFlow(messageId, {
         role: "assistant",
         content:
-          "已把选中的这段手动改写并应用到工作稿（只动工作稿正文，已定稿版未变）：\n"
+          "已把选中的这段改好，写进了工作稿（只动工作稿正文，已定稿版未变）：\n"
           + `· 原文：「${brief(appliedPreview.beforeText)}」\n`
           + `· 改为：「${brief(appliedPreview.afterText)}」\n`
-          + "（这是在编辑器里手动改的，后续涉及这段以改写后为准。）建议重新质检或再次内容审阅。",
+          + "后续涉及这段以改后的为准。想再确认整章，可以再做一次硬伤检查或内容审阅。",
         card: completedAgentCard({
           id: messageId.replace(/^assistant-/u, "agent-"),
           kind: "revision",
