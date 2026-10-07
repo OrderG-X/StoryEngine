@@ -78,6 +78,7 @@ export default function AssetCodexPanel({
   ownerDescriptions,
   continuityRisks,
   onSendMessage,
+  protagonistName,
 }: {
   readonly assets: AssetSummary;
   /**
@@ -92,6 +93,8 @@ export default function AssetCodexPanel({
   readonly ownerDescriptions?: AssetOwnerDescriptionMap;
   /** codex 厚版：连续性风险提示（.continuity）。引擎暂无 → 缺省时该 section 降级隐藏。 */
   readonly continuityRisks?: readonly AssetContinuityRisk[];
+  /** 主角真名：数据里写「主角」/ protagonist 的持有人显示成这个名字。 */
+  readonly protagonistName?: string;
 }) {
   const [fetched, setFetched] = useState<AssetEnrichmentData | null>(null);
   useEffect(() => {
@@ -114,7 +117,7 @@ export default function AssetCodexPanel({
   const effContinuityRisks = continuityRisks ?? fetched?.continuityRisks;
 
   const cards = buildAssetCards(assets, effVisibility);
-  const owners = buildAssetOwners(cards, effOwnerDescriptions);
+  const owners = buildAssetOwners(cards, effOwnerDescriptions, protagonistName);
   const limits = uniqueUiList([...assets.assetRules, ...assets.resources]).filter(isLimitText);
   const criticalCount = cards.filter((card) => card.critical).length;
 
@@ -193,7 +196,7 @@ function OwnerLedger({ owner }: { readonly owner: AssetOwnerView }) {
       <div className="ao-head">
         <div className="ao-av">{avatarText(owner.name)}</div>
         <div>
-          <h3>{uiText(owner.name, "未命名归属")} 持有</h3>
+          <h3>{owner.name === UNOWNED_ASSET_GROUP ? owner.name : `${uiText(owner.name, "未命名归属")} 持有`}</h3>
           <div className="ao-sub">{has(owner.description) ? owner.description : ownerSummary(owner)}</div>
         </div>
       </div>
@@ -275,13 +278,23 @@ function ownerSummary(owner: AssetOwnerView): string {
 
 // ───────────────────────── 数据处理（复刻 AssetPanel 的口径，保持名单一致） ─────────────────────────
 
-function buildAssetOwners(
+/** 资料里没写持有人的物品单独成组，不默认算到主角头上（不替作者编归属）。 */
+export const UNOWNED_ASSET_GROUP = "还没写明在谁手里";
+
+export function buildAssetOwners(
   cards: readonly AssetCardData[],
   descriptions?: AssetOwnerDescriptionMap,
+  protagonistName?: string,
 ): readonly AssetOwnerView[] {
+  const lead = protagonistName?.trim() || "主角";
+  const displayOwner = (owner: string | undefined): string => {
+    const text = uiText(owner, "").trim();
+    if (!text || isPlaceholderUiValue(text)) return UNOWNED_ASSET_GROUP;
+    return /^(主角|protagonist)$/iu.test(text) ? lead : text;
+  };
   const grouped = new Map<string, AssetCardData[]>();
   cards.forEach((card) => {
-    const owner = uiText(card.owner, "主角");
+    const owner = displayOwner(card.owner);
     grouped.set(owner, [...(grouped.get(owner) ?? []), card]);
   });
   return [...grouped.entries()]
@@ -289,11 +302,12 @@ function buildAssetOwners(
       name,
       items,
       ...partitionBuckets(items),
-      description: descriptions?.[name],
+      description: descriptions?.[name] ?? (name === lead ? descriptions?.["主角"] : undefined),
     }))
     .sort(
       (a, b) =>
-        Number(b.name === "主角") - Number(a.name === "主角") ||
+        Number(b.name === lead) - Number(a.name === lead) ||
+        Number(a.name === UNOWNED_ASSET_GROUP) - Number(b.name === UNOWNED_ASSET_GROUP) ||
         b.items.length - a.items.length ||
         a.name.localeCompare(b.name, "zh-CN"),
     );
@@ -394,7 +408,8 @@ function assetCardFromDetail(asset: AssetDetailStatus): AssetCardData {
   return {
     name: asset.name,
     type: asset.type,
-    owner: asset.owner ?? asset.carriedBy ?? "主角",
+    // 详情里没写持有人也没写谁随身带着 → 不默认归主角（分到「还没写明在谁手里」）。
+    owner: asset.owner ?? asset.carriedBy ?? "",
     location: asset.currentLocation ?? (asset.carriedBy ? "随身" : ""),
     carried: Boolean(asset.carriedBy),
     status: asset.status,
