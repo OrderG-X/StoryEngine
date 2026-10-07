@@ -63,7 +63,7 @@ describe("saveChapterWorkspaceBeacon 页面还活着时回报新 revision", () =
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       ok: true,
       snapshot: { chapter: 1, messages: [], selectedAdviceCardKeys: [], revision: 8 },
-    })));
+    }, 200)));
     const onSaved = vi.fn();
     saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSaved);
     await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ revision: 8 })));
@@ -71,7 +71,7 @@ describe("saveChapterWorkspaceBeacon 页面还活着时回报新 revision", () =
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "冲突" }, 409)));
     const onSavedConflict = vi.fn();
     saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSavedConflict);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
     expect(onSavedConflict).not.toHaveBeenCalled();
   });
 });
