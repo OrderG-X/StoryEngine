@@ -330,7 +330,7 @@ export function ChatSessionBar() {
       {budgetOpen && (
         <div className="codex-budget-pop">
           <div className="codex-budget-label">对话记忆上限</div>
-          <div className="codex-budget-hint">这是 AI 一次能参考的对话内容总量；上限越高，越能记住早先内容。1M 模型建议 300000，小模型可用默认 96000。</div>
+          <div className="codex-budget-hint">AI 一次能回看多少聊天。调大记得更久，但更慢更贵；一般用默认 96000，超长上下文的模型可调到 300000。故事资料不受影响。</div>
           <input
             className="codex-session-budget"
             type="number"
@@ -355,7 +355,7 @@ export function ChatSessionBar() {
               if (e.key === "Escape") setBudgetOpen(false);
             }}
           />
-          <div className="codex-budget-preview">≈ <strong>{fmtBudget(budgetDraft)}</strong> tokens</div>
+          <div className="codex-budget-preview">约 <strong>{fmtBudget(budgetDraft)}</strong></div>
         </div>
       )}
 

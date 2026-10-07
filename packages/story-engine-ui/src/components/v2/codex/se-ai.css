@@ -224,4 +224,12 @@
   .msg.se-op-row{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;text-align:left;font-size:13px;color:var(--faint);}
   .msg.se-op-row.is-running{color:var(--muted);}
   .se-op-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+
+  /* 历史会话 / 记忆浮层：标题淡字，当前会话只用底色区分，不再金字 */
+  .cssp-head{color:var(--faint);letter-spacing:0;text-transform:none;font-weight:500;}
+  .cssp-item.is-active .cssp-name{color:var(--text);font-weight:500;}
+  .cssp-cur-dot{background:var(--accent);}
+  .cssp-btn:hover{color:var(--text);border-color:var(--line-strong);background:var(--hover);}
+  .codex-budget-hint{font-size:12px;line-height:1.6;}
+  .codex-budget-preview strong{color:var(--text);font-weight:600;}
 }
