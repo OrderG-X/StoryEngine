@@ -1440,7 +1440,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。` +
       candidateLine +
-      `${characterSelection.summary}。工作稿尚未定稿，可在写作区查看修改；满意后再走 commit_preview / commit_apply 定稿。` +
+      `${characterSelection.summary}。工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
       // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。

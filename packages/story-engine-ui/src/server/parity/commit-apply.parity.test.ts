@@ -210,7 +210,7 @@ describe("parity: POST /api/commit/apply ↔ commit_apply（共享行为面）",
     expect(tool.ok).toBe(false);
     expect(tool.committed).toBe(false);
     expect(tool.refused).toBe(true);
-    expect(String(tool.refusalReason)).toContain("commit_preview");
+    expect(String(tool.refusalReason)).toContain("定稿预览");
 
     expect(await pathExists(defaultCommittedChapterPath(routeDir, 1))).toBe(false);
     expect(await pathExists(defaultCommittedChapterPath(toolDir, 1))).toBe(false);

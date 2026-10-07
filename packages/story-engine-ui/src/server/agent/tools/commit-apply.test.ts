@@ -106,7 +106,7 @@ describe("commit_apply 守卫", () => {
     expect(out.ok).toBe(false); // 统一诚实标志：被拒=未入库=ok:false（前端防谎报只认它）
     expect(out.committed).toBe(false);
     expect(out.refused).toBe(true);
-    expect(out.refusalReason).toContain("commit_preview");
+    expect(out.refusalReason).toContain("定稿预览");
   });
 
   it("没有有效预览时，占位 previewToken 仍拒绝，伪造 token 偷不到入库", async () => {
@@ -116,7 +116,7 @@ describe("commit_apply 守卫", () => {
     expect(out.ok).toBe(false);
     expect(out.committed).toBe(false);
     expect(out.refused).toBe(true);
-    expect(out.refusalReason).toContain("commit_preview");
+    expect(out.refusalReason).toContain("定稿预览");
   });
 
   it("预览仍在 store 时，不传 previewToken 也能正式入库", async () => {
@@ -156,7 +156,7 @@ describe("commit_apply 守卫", () => {
     expect(out.ok).toBe(false);
     expect(out.committed).toBe(false);
     expect(out.refused).toBe(true);
-    expect(out.refusalReason).toContain("commit_preview");
+    expect(out.refusalReason).toContain("定稿预览");
   });
 
   it("预览后草稿又改动且不传 token → 仍拒绝，不能现算 token 偷过握手", async () => {
@@ -170,7 +170,7 @@ describe("commit_apply 守卫", () => {
     expect(out.ok).toBe(false);
     expect(out.committed).toBe(false);
     expect(out.refused).toBe(true);
-    expect(out.refusalReason).toContain("重新 commit_preview");
+    expect(out.refusalReason).toContain("重新做一次定稿预览");
   });
 
   it("store 蒸发后 token 错误 → 拒绝", async () => {
@@ -193,7 +193,7 @@ describe("commit_apply 守卫", () => {
     const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
     expect(out.committed).toBe(false);
     expect(out.refused).toBe(true);
-    expect(out.refusalReason).toContain("重新 commit_preview");
+    expect(out.refusalReason).toContain("重新做一次定稿预览");
   });
 
   it("合格流程：预览→带 token 入库成功；同章再入库走 A7 幂等（已入库同内容→幂等成功、不重复写入）", async () => {

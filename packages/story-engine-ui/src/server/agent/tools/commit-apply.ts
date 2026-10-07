@@ -95,10 +95,10 @@ const outputSchema = z.object({
 });
 
 const GUARD_FAILURE_MESSAGE: Record<CommitPreviewGuardFailure, string> = {
-  no_preview: "尚未对该章执行 commit_preview，按规则不能直接定稿；请先预览确认。",
-  chapter_mismatch: "预览的章节与本次定稿章节不一致；请对该章重新 commit_preview。",
-  token_mismatch: "previewToken 无效或与该章不匹配；请先 commit_preview 取得有效令牌。",
-  draft_changed_since_preview: "工作稿在预览之后又改动过；为避免定稿与预览不一致，请重新 commit_preview。",
+  no_preview: "这一章还没做定稿预览，按规则不能直接定稿；请先预览确认。",
+  chapter_mismatch: "预览的章节与本次定稿章节不一致；请对这一章重新做一次定稿预览。",
+  token_mismatch: "预览凭证无效或与这一章不匹配；请先做一次定稿预览。",
+  draft_changed_since_preview: "工作稿在预览之后又改动过；为避免定稿与预览不一致，请重新做一次定稿预览。",
 };
 
 export interface CommitApplyToolOutput {
@@ -186,7 +186,7 @@ export async function applyCommitToolLogic(input: {
       return refusal(
         projectDir,
         chapter,
-        `定稿影响不可用：${result.issues.length > 0 ? result.issues.join("；") : "计划未通过"}。请重新 commit_preview。`,
+        `定稿影响不可用：${result.issues.length > 0 ? result.issues.join("；") : "计划未通过"}。请重新做一次定稿预览。`,
       );
     case "commit_failed": {
       const report = result.report;

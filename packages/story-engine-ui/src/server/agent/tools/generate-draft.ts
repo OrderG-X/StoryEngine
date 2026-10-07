@@ -305,7 +305,7 @@ export function buildSequencingBlockedOutput(
     summary:
       `第 ${priorChapter} 章还没定稿——它的新状态（人物变化/伏笔/世界事实）还没写进故事，` +
       `现在直接写第 ${chapter} 章会读到旧状态、容易前后穿帮。` +
-      `建议先把第 ${priorChapter} 章定稿（commit_preview → commit_apply）再写第 ${chapter} 章；` +
+      `建议先把第 ${priorChapter} 章定稿（先预览、再点「确认定稿」）再写第 ${chapter} 章；` +
       `若确认要冒险先写，请明确说「知道风险，仍要先写第 ${chapter} 章」。`,
     refreshScope: "full",
   };
