@@ -38,6 +38,21 @@ function SizeBadge({ size }: { readonly size: ShownSize }) {
   return null;
 }
 
+/** 未回收条目右侧的「问问能不能收口」：只把问题填进输入框，发不发由作者定。 */
+function AskResolveButton({ title, onAskAi }: { readonly title: string; readonly onAskAi?: (text: string) => void }) {
+  if (!onAskAi) return null;
+  const clean = title.replace(/(?:\.{3}|…)+$/u, "").trim();
+  return (
+    <button
+      type="button"
+      className="hook-ask"
+      onClick={() => onAskAi(`线索「${clean}」可以收口了吗？如果可以，帮我标记收口。`)}
+    >
+      问能否收口
+    </button>
+  );
+}
+
 function ChapterInfo({
   firstSeenChapter,
   resolvedAtChapter,
@@ -97,6 +112,7 @@ export default function HookCodexPanel({
   doneThreadCount,
   projectPath,
   onSendMessage,
+  onAskAi,
 }: {
   readonly hookItems: readonly StateOverviewHookItem[];
   readonly threadItems: readonly StateOverviewThreadItem[];
@@ -104,6 +120,8 @@ export default function HookCodexPanel({
   readonly doneThreadCount: number;
   readonly projectPath?: string | null;
   readonly onSendMessage?: (message: string) => void;
+  /** 把一句话填进右侧输入框（不发送），作者看过再发。 */
+  readonly onAskAi?: (text: string) => void;
 }) {
   const [overrides, setOverrides] = useState<ForeshadowingOverrides>({});
 
@@ -209,6 +227,7 @@ export default function HookCodexPanel({
                   isResolved={false}
                 />
               </div>
+              <AskResolveButton title={item.title} onAskAi={onAskAi} />
             </div>
           ))}
 
@@ -226,6 +245,7 @@ export default function HookCodexPanel({
                   isResolved={false}
                 />
               </div>
+              <AskResolveButton title={item.title} onAskAi={onAskAi} />
             </div>
           ))}
         </div>

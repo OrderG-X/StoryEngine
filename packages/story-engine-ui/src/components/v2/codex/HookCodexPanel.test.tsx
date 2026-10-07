@@ -163,3 +163,30 @@ describe("HookCodexPanel override 生效", () => {
     expect(hasMinorBadge).toBe(true);
   });
 });
+
+describe("HookCodexPanel 问能否收口", () => {
+  it("只给未回收条目；点了把问题填给输入框（去掉标题末尾的省略号），不直接发送", async () => {
+    const onAskAi = vi.fn();
+    const onSendMessage = vi.fn();
+    render(
+      <HookCodexPanel
+        hookItems={[MAJOR_HOOK, RESOLVED_HOOK]}
+        threadItems={[{ ...MINOR_THREAD, title: "父亲的负债线索..." }]}
+        resolvedHookCount={1}
+        doneThreadCount={0}
+        onAskAi={onAskAi}
+        onSendMessage={onSendMessage}
+      />,
+    );
+    const buttons = screen.getAllByRole("button", { name: "问能否收口" });
+    expect(buttons).toHaveLength(2);
+    buttons[1]!.click();
+    expect(onAskAi).toHaveBeenCalledWith("线索「父亲的负债线索」可以收口了吗？如果可以，帮我标记收口。");
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("没接 onAskAi 时不出按钮", () => {
+    render(<HookCodexPanel hookItems={[MAJOR_HOOK]} threadItems={[]} resolvedHookCount={0} doneThreadCount={0} />);
+    expect(screen.queryByRole("button", { name: "问能否收口" })).toBeNull();
+  });
+});

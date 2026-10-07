@@ -104,6 +104,15 @@
   .se-bible .wb-hero{border-color:var(--line);background:var(--surface);}
   .se-bible .wb-hero::after{display:none;}
   .se-bible .wb-hero .one::before{color:var(--faint);opacity:.6;}
+  /* 线索条目右侧「问能否收口」：悬停才出，触屏常显 */
+  .se-bible .asset-item:has(.hook-ask){align-items:center;}
+  .se-bible .hook-ask{
+    flex:none;margin-left:auto;height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
+    color:var(--faint);font-size:12px;cursor:pointer;opacity:0;transition:opacity .12s;
+  }
+  .se-bible .asset-item:hover .hook-ask,.se-bible .hook-ask:focus-visible{opacity:1;}
+  .se-bible .hook-ask:hover{background:var(--hover);color:var(--text);}
+  @media (hover:none){.se-bible .hook-ask{opacity:1;}}
   /* 两列格子里单数个时，最后一个占满整行（不留半行空白） */
   .se-bible .voice .vc:last-child:nth-child(odd),
   .se-bible .spec .cell:last-child:nth-child(odd){grid-column:1/-1;}

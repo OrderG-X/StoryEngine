@@ -69,6 +69,10 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly onToggleRight: () => void;
   /** 拖动右栏左缘改宽（pointerdown 起拖，宽度状态由外层 codex 壳持有）。 */
   readonly onResizeStart?: (event: ReactPointerEvent) => void;
+  /** 双击拖宽手柄：宽度回到默认。 */
+  readonly onResizeReset?: () => void;
+  /** 非写作页（设定本 / 历史）的输入框提示；写作台不传，按写作进度提示。 */
+  readonly composerHint?: string;
   /** 点头部模型标签：打开模型设置（工作区设置弹窗）。 */
   readonly onOpenModelSettings?: () => void;
   /** 变了就重读一次当前模型（设置弹窗关闭时 +1）。 */
@@ -217,10 +221,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         <div
           className="ai-resize"
           onPointerDown={props.onResizeStart}
+          onDoubleClick={props.onResizeReset}
           role="separator"
           aria-orientation="vertical"
           aria-label="拖动调整对话宽度"
-          title="拖动调整对话宽度"
+          title="拖动调整宽度，双击还原"
         />
       ) : null}
       {/* ── 头部：标题 + 清空 / 收起 ── */}
@@ -501,7 +506,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
               event.preventDefault();
               sendCurrent();
             }}
-            placeholder={getPlaceholder(flowStatus, isBookCreationGreeting(props.workspace.messages))}
+            placeholder={
+              props.composerHint && !props.chatLoading && !isBookCreationGreeting(props.workspace.messages)
+                ? props.composerHint
+                : getPlaceholder(flowStatus, isBookCreationGreeting(props.workspace.messages))
+            }
             rows={3}
             style={composerInputStyle}
           />

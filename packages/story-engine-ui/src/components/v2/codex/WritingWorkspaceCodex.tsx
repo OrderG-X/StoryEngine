@@ -232,6 +232,19 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   ];
   const librarySearchResults = searchLibraryIndex(librarySearchSources, libQuery);
 
+  // 资料面板里的「问 AI」：把一句话填进右侧输入框（不发送），打开 AI 栏并把光标放到句末，作者看过再发。
+  function fillComposer(text: string) {
+    props.onSteeringDirectionChange(text);
+    setAiManualToggled(true);
+    setRightOpen(true);
+    window.setTimeout(() => {
+      const box = document.querySelector<HTMLTextAreaElement>(".codex-app .composer textarea");
+      if (!box) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }, 60);
+  }
+
   // 拖动右缘改宽：pointer 拖动期间实时夹在 [min,max] 设宽，松手解绑监听。
   function handleResizeStart(event: ReactPointerEvent) {
     event.preventDefault();
@@ -458,7 +471,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                     {cat === "chars" ? <CharacterCodexPanel assets={props.workspace.assets} characterMatrix={props.workspace.characterMatrix} location={props.workspace.location} projectPath={props.projectPath} protagonist={props.workspace.protagonist} sidebar={props.sidebar} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "assets" ? <AssetCodexPanel assets={props.workspace.assets} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "places" ? <LocationCodexPanel location={props.workspace.location} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
-                    {cat === "hooks" ? <HookCodexPanel hookItems={props.overview?.hooks.activeItems ?? []} threadItems={props.overview?.threads.keyOpenItems ?? []} resolvedHookCount={props.overview?.hooks.resolvedCount ?? 0} doneThreadCount={props.overview?.threads.done ?? 0} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
+                    {cat === "hooks" ? <HookCodexPanel hookItems={props.overview?.hooks.activeItems ?? []} threadItems={props.overview?.threads.keyOpenItems ?? []} resolvedHookCount={props.overview?.hooks.resolvedCount ?? 0} doneThreadCount={props.overview?.threads.done ?? 0} projectPath={props.projectPath} onSendMessage={props.onSendMessage} onAskAi={fillComposer} /> : null}
                     {cat === "timeline" ? <TimelineCodexPanel timeline={props.overview?.timeline} /> : null}
                   </div>
                 </div>
@@ -546,6 +559,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
           onToggleRight={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
           onResizeStart={handleResizeStart}
+          onResizeReset={() => setRightWidth(AI_DEFAULT_WIDTH)}
+          // 输入框提示跟着当前页走：设定本里说改设定，历史里说撤销；写作台按写作进度提示。
+          composerHint={view === "library" ? "想改哪条设定，直接说" : view === "history" ? "比如「撤销上一步」" : undefined}
           onOpenModelSettings={() => setSettingsTab("model")}
           // 设置弹窗开 / 关都会翻转这个值 → AI 栏重读当前模型（改完模型关弹窗即生效）。
           modelRefreshKey={settingsTab === null ? 1 : 0}
