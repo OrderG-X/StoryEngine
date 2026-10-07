@@ -333,20 +333,23 @@ export async function applyFoundationWriteToolLogic(input: {
 
   const overview = await buildStateOverview({ projectDir: input.projectDir, maxTimelineEvents: 8 });
 
+  // 绝不泄露裸 id（铁律④）：引擎回报里只认得 targetId 时会写成「要给「char-ffe5af」改名…」，进给用户看的摘要前换成角色名。
+  const nameById = await readCharacterNameById(input.projectDir);
+  const named = (text: string): string => nameCharacterIds(text, nameById);
   const writes = result.writes.map((w) => ({
     action: w.action,
     targetFile: w.targetFile,
-    ...(w.targetName ? { targetName: w.targetName } : {}),
-    summary: w.summary,
+    ...(w.targetName ? { targetName: named(w.targetName) } : {}),
+    summary: named(w.summary),
   }));
   const skipped = (result.skipped ?? []).map((s) => ({
     reason: s.reason,
     action: s.action,
-    summary: s.summary,
+    summary: named(s.summary),
   }));
   const blocked = (result.blockedWrites ?? []).map((b) => ({
     level: b.level,
-    reason: b.reason,
+    reason: named(b.reason),
     targetFile: b.targetFile,
   }));
   const needsConfirmation = blocked.some((b) => b.level === "needs_confirmation");
@@ -424,7 +427,13 @@ export function buildFoundationWriteSummary(args: {
     parts.push("已定稿章节不会自动改动（如需同步修改历史章节，请明确告诉我）");
   }
   parts.push("本次操作已建快照，可一键撤销");
-  return parts.join("。");
+  // 各段自带句号时去掉再拼，免得出现「…内容。。本次操作…」。
+  return parts.map((part) => part.replace(/[。\s]+$/u, "")).join("。");
+}
+
+/** 文本里的角色内部 id（char-xxxx）换成名字；解析不到用中性说法，绝不原样露出。 */
+export function nameCharacterIds(text: string, nameById: ReadonlyMap<string, string>): string {
+  return text.replace(/\bchar-[0-9a-z]{4,12}\b/giu, (id) => nameById.get(id) ?? "这个角色");
 }
 
 // 操作历史快照细节（rerun2 P2：几十条同名「资料写入」不可辨）：动作 + 实体名，让用户能分辨恢复到哪一步。题材中立。
@@ -464,6 +473,9 @@ export const foundationWriteTool = writeTool({
         ...(input.targetId !== undefined ? { targetId: input.targetId } : {}),
         ...(input.targetName !== undefined ? { targetName: input.targetName } : {}),
         ...(input.before !== undefined ? { before: input.before } : {}),
+        // 改名的顶层 newName 必须透传：此前 run 里漏了它，模型按说明传 newName 仍报「没有给出新名字」、
+        // 只能换 after.name 重试一次（2026-10-07 真 agent 复现，两本新书都撞）。
+        ...(input.newName !== undefined ? { newName: input.newName } : {}),
         after: input.after,
         ...(input.confirmed !== undefined ? { confirmed: input.confirmed } : {}),
         ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),

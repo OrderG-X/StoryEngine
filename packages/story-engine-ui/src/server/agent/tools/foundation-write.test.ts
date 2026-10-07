@@ -704,3 +704,32 @@ describe("foundation_write 已确立设定覆盖确认链路", () => {
     },
   );
 });
+
+describe("foundation_write 工具包装层：改名 newName 透传 + 摘要不露裸 id（2026-10-07 真 agent 复现）", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const execute = async (input: Record<string, unknown>, projectDir: string) => {
+    const { buildProjectRequestContext } = await import("../request-context.js");
+    const { foundationWriteTool } = await import("./foundation-write.js");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (foundationWriteTool as any).execute(input, { requestContext: buildProjectRequestContext(projectDir) });
+  };
+
+  it("模型按说明只传顶层 newName → 一次改成，不再报「没有给出新名字」", async () => {
+    const projectDir = await makeProject("改名透传", "主角");
+    const id = toSafeCharacterId("主角");
+    const out = await execute({ actionType: "rename_character", category: "characters", targetId: id, newName: "周远" }, projectDir);
+    expect(out.ok).toBe(true);
+    const bible = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
+    expect(bible.characters.find((c) => c.id === id)?.name).toBe("周远");
+  });
+
+  it("真缺新名字时如实失败，摘要里是角色名不是 char-xxxx，也没有「。。」", async () => {
+    const projectDir = await makeProject("改名缺参", "林远");
+    const id = toSafeCharacterId("林远");
+    const out = await execute({ actionType: "rename_character", category: "characters", targetId: id }, projectDir);
+    expect(out.ok).toBe(false);
+    expect(out.summary).not.toMatch(/char-[0-9a-z]+/u);
+    expect(out.summary).toContain("林远");
+    expect(out.summary).not.toContain("。。");
+  });
+});
