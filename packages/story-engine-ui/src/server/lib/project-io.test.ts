@@ -210,7 +210,8 @@ describe("project io asset helpers", () => {
     const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
 
     expect(snapshot.flowStatus).toBe("committed");
-    expect(snapshot.draftContent).toBe(chapterContent);
+    // 编辑器只拿正文：首行「# 章名」去掉（章名走 draftTitle）
+    expect(snapshot.draftContent).toBe(chapterContent.replace(/^# [^\n]*\n\n/u, ""));
     expect(snapshot.messages).toEqual([]);
   });
 
@@ -339,7 +340,7 @@ describe("project io asset helpers", () => {
       hasDraftFile: false,
       draftTitle: "正式三",
     });
-    expect(snapshot.draftContent).toContain("# 第三章 · 正式三");
+    expect(snapshot.draftContent).not.toContain("# 第三章");
     expect(snapshot.draftContent).toContain("正式章节三。");
     expect(snapshot.draftContent).not.toContain("还没有草稿正文");
     await expect(access(chapterWorkspacePath(projectDir, 3))).rejects.toThrow();
@@ -369,7 +370,7 @@ describe("project io asset helpers", () => {
       draftTitle: "正式三",
       messages: [],
     });
-    expect(snapshot.draftContent).toContain("# 第三章 · 正式三");
+    expect(snapshot.draftContent).not.toContain("# 第三章");
     expect(snapshot.draftContent).not.toContain("还没有草稿正文");
   });
 
@@ -393,7 +394,7 @@ describe("project io asset helpers", () => {
     const snapshot = await readChapterWorkspaceSnapshot(projectDir, 4);
 
     expect(snapshot.flowStatus).toBe("draft_ready");
-    expect(snapshot.draftContent).toBe(fullDraft);
+    expect(snapshot.draftContent).toBe(fullDraft.replace(/^# [^\n]*\n\n/u, ""));
     expect(snapshot.recoveredFromDraftFile).toBe(true);
     expect(snapshot.generationInterrupted).toBe(true);
   });
@@ -418,7 +419,7 @@ describe("project io asset helpers", () => {
     expect(snapshot.recoveredFromDraftFile).toBeUndefined();
     expect(snapshot.flowStatus).toBe("draft_ready");
     // 既有口径：有 drafts/fast 时以文件为准（与生成中断恢复无关）
-    expect(snapshot.draftContent).toBe(fileDraft);
+    expect(snapshot.draftContent).toBe(fileDraft.replace(/^# [^\n]*\n\n/u, ""));
   });
 
   it("includes workspace-only snapshots in UI chapter file details", async () => {

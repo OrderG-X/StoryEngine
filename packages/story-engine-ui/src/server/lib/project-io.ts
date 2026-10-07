@@ -1363,6 +1363,14 @@ export function stripLeadingMarkdownChapterHeading(content: string): string {
   return nextLines.join("\n").trim();
 }
 
+/** 编辑器只要正文：首行是「# 章名」就去掉（保留原文末换行），否则原样不动。 */
+function stripTitleLineForEditor(content: string): string {
+  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim() ?? "";
+  if (!isMarkdownChapterHeading(firstLine)) return content;
+  const body = stripLeadingMarkdownChapterHeading(content);
+  return /\n$/u.test(content) ? `${body}\n` : body;
+}
+
 function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false;
   const title = line.replace(/^#{1,6}\s+/u, "").trim();
@@ -1446,7 +1454,8 @@ export async function readChapterWorkspaceSnapshot(projectDir: string, chapter: 
       flowStatus === "committed"
       || flowStatus === "ready_for_next"
       || recoveredMisroutedDraft
-      || normalizedContent(savedDraftContent) === normalizedContent(committedChapterContent)
+      // 比正文不比标题行：工作稿文件第一行带「# 章名」（定稿取章名用），定稿正文可能没有。
+      || normalizedContent(stripLeadingMarkdownChapterHeading(savedDraftContent ?? "")) === normalizedContent(stripLeadingMarkdownChapterHeading(committedChapterContent))
     );
   // dogfood F1：仅在「生成被打断」证据在场时启用恢复——generationInterrupted，或遗留的
   // draft_generating（刷新后不可能仍在生成）。此时若 drafts/fast 明显长于 workspace.draftContent，
@@ -1493,7 +1502,9 @@ export async function readChapterWorkspaceSnapshot(projectDir: string, chapter: 
     messages: recoveredMisroutedDraft || stalePreCommitSnapshot || committedWithoutCompletionMessage ? [] : workspaceMessages,
     selectedAdviceCardKeys: recoveredMisroutedDraft || stalePreCommitSnapshot ? [] : readStringList(record.selectedAdviceCardKeys),
     ...(effectiveFlowStatus ? { flowStatus: effectiveFlowStatus } : {}),
-    ...(draftContent !== undefined ? { draftContent } : {}),
+    // 给编辑器的只是正文：第一行「# 章名」走 draftTitle 单独给（保存时服务端再补回文件第一行），
+    // 否则重开书时稿纸顶上会露出「# 第34章 · 看手」这种标题行（2026-10-07 改版走查）。
+    ...(draftContent !== undefined ? { draftContent: stripTitleLineForEditor(draftContent) } : {}),
     ...(draftTitle ? { draftTitle } : {}),
     hasDraftFile,
     hasCommittedChapter,

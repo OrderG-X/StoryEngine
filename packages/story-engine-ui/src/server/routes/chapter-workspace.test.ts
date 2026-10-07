@@ -157,7 +157,8 @@ describe("chapter workspace revision compare-and-swap", () => {
     expect(response.status).toBe(200);
     expect(response.payload).toMatchObject({
       ok: true,
-      snapshot: { draftContent: original, hasCommittedChapter: true },
+      // 编辑器只拿正文（首行「# 章名」去掉）；磁盘字节仍是原始正式正文（下一行断言）。
+      snapshot: { draftContent: "已完成的原始正式正文。\n", hasCommittedChapter: true },
     });
     await expect(readFile(chapterPath, "utf-8")).resolves.toBe(original);
   });

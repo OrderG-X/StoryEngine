@@ -56,6 +56,7 @@ import {
   retargetWorkspaceOperation,
 } from "../utils/workspaceOperation.js";
 import { recordWorkspaceRevision } from "../utils/workspaceRevisionTracker.js";
+import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helper: firstChapterSetupDirection                                 */
@@ -1574,8 +1575,10 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               streamedDraft += text;
-              const wordCount = countTextWords(streamedDraft); // 字数跟着流式长，别残留上一章旧字数。
-              store.updateDraft({ content: streamedDraft, wordCount });
+              // 显示用正文：去掉模型开头的「# 第N章 · 标题」行（出稿完成后引擎本就会剥掉，别在流式期间先露出来）。
+              const displayDraft = streamingDraftDisplay(streamedDraft);
+              const wordCount = countTextWords(displayDraft); // 字数跟着流式长，别残留上一章旧字数。
+              store.updateDraft({ content: displayDraft, wordCount });
             },
             onToolResult: (info) => {
               if (!ownsCurrentWorkspace()) return;

@@ -289,7 +289,10 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       || String(i + 1).includes(chapterFilter))
     : chapters;
   const chapterRows = buildChapterRows(visibleChapters, Boolean(chapterFilter));
-  const draftChapterCount = chapters.filter((ch) => ch.status === "draft" || (ch.status === "current" && ch.hasDraftFile && !ch.hasCommittedChapter)).length;
+  // 当前章的状态以工作区的流程态为准（章节列表里它只标「current」，看不出是不是还没定稿）。
+  const currentIsDraft = !["committed", "ready_for_next", "idle", "steering_ready"].includes(props.workspace.flowStatus)
+    && Boolean(props.workspace.draft.content.trim());
+  const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && ch.status === "draft").length + (currentIsDraft ? 1 : 0);
   // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
   const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
   const nextToWrite = latestReal && (latestReal.status === "committed" || latestReal.hasCommittedChapter) && draftChapterCount === 0
@@ -500,7 +503,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         className={`se-ch${row.ch.id === currentId ? " on" : ""}`}
                         disabled={workspaceBusy}
                         aria-current={row.ch.id === currentId ? "page" : undefined}
-                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${CHAPTER_STATUS_LABEL[row.ch.status]}`}
+                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentIsDraft ? "工作稿还没定稿" : CHAPTER_STATUS_LABEL[row.ch.status]) : CHAPTER_STATUS_LABEL[row.ch.status]}`}
                         onClick={() => {
                           if (workspaceBusy) {
                             useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
@@ -513,7 +516,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       >
                         <span className="se-ch-n">{row.ch.chapterNumber}</span>
                         <span className={`se-ch-t${chapterBareTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterBareTitle(row.ch.title ?? "") || "未命名"}</span>
-                        <span className={`se-dot ${CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
+                        <span className={`se-dot ${row.ch.id === currentId ? (currentIsDraft ? "warn" : "") : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
                       </button>
                     ))}
                     {visibleChapters.length === 0 ? (
