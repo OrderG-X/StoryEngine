@@ -1,0 +1,16 @@
+/* 2026-10-07 改版 · 全局小件（不在 .codex-app 作用域内的）：顶层提示条。:root 前缀压过 styles.css 旧规则。 */
+:root .app-toast{
+  background:var(--toolbar-bg);
+  color:var(--toolbar-ink);
+  border:0;
+  border-radius:10px;
+  padding:10px 16px;
+  font-size:13px;
+  box-shadow:var(--shadow-pop);
+  max-width:calc(100vw - 32px);
+}
+
+/* 改版用到的动画关键帧放顶层（嵌套在 .codex-app{} 里的 @keyframes 不保证生效）。 */
+@keyframes se-fade{from{opacity:0}to{opacity:1}}
+@keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes se-drawer-in{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}

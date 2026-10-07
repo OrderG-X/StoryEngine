@@ -44,6 +44,21 @@
   .se-new-ch:disabled{opacity:.5;cursor:default;}
   .se-ch-foot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--faint);}
 
+  /* 窄窗抽屉：浮在稿纸上，点遮罩或选章后收起 */
+  .se-desk-wrap{position:relative;}
+  .se-chapters.is-drawer{
+    position:absolute;left:0;top:0;bottom:0;z-index:20;width:calc(260px * var(--codex-ui-zoom,1));box-shadow:var(--shadow-pop);
+    animation:se-drawer-in .16s ease-out;
+  }
+  .se-drawer-scrim{position:absolute;inset:0;z-index:19;border:0;padding:0;background:var(--scrim);cursor:default;animation:se-fade .14s ease-out;}
+  @keyframes se-drawer-in{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}
+
+  /* 保存状态小标签：中性浮签，跟主题走 */
+  .desk > .save-pill{box-shadow:var(--shadow-pop);font-size:12px;}
+  .save-pill-saving{background:var(--surface-2);border:1px solid var(--line-strong);color:var(--muted);}
+  .save-pill-saved{background:var(--surface-2);border:1px solid var(--line-strong);color:var(--success);}
+  .save-pill-dot{background:var(--accent);}
+
   /* ═══ 写作台 ═══ */
   .codex-desk{background:var(--bg);}
   .codex-desk-bar{background:var(--bg);backdrop-filter:none;padding:10px 24px;font-size:13px;}

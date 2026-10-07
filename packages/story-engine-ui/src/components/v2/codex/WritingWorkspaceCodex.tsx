@@ -88,6 +88,7 @@ function readStoredAiWidth(): number {
 
 // 写作台章节栏基准宽度（px，随 uiZoom 放大）。窄视口让位计算要扣掉它。
 const CHAPTER_RAIL_BASE_WIDTH = 248;
+const CHAPTER_DRAWER_BREAKPOINT = 1280;
 
 type SettingsTab = "model" | "display";
 
@@ -167,7 +168,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [cat, setCat] = useState<string>("world");
-  const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting);
+  // 窄窗开局收起章节抽屉（不挡稿纸）；宽窗按专注写作开关决定。
+  const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
   const [chapterQuery, setChapterQuery] = useState("");
   const [libQuery, setLibQuery] = useState("");
   // 三处字号已上提到 displaySettingsStore（设置面板也读写同一份）。这里只读聊天/界面缩放。
@@ -175,7 +177,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
 
   // P1-8：专注写作 = 复用两侧收起（章节栏 + AI 栏），状态由 displaySettings 记住。
   useEffect(() => {
-    setDeskRailOpen(!focusWriting);
+    setDeskRailOpen(!focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
     setRightOpen(!focusWriting);
   }, [focusWriting]);
 
@@ -295,17 +297,19 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     : null;
 
   // 写作台章节栏展开时占的宽度（随界面字号放大），窄视口让位要扣掉它。
-  const chapterRailWidth = view === "desk" && deskRailOpen ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
-
-  // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
-  // 连右栏硬下限都装不下时默认自动收成 44px 竖条；用户没碰过展开/收起时窗口变宽自动恢复，
-  // 点过之后以手动意愿为准（resolveRightPanelOpen，复审返工：修掉自动收起后展开钮死点击）。
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  // 窄窗（<1280）章节栏改成浮在稿纸上的抽屉，不再挤占稿纸宽度。
+  const chapterDrawer = viewportWidth < CHAPTER_DRAWER_BREAKPOINT;
+  const chapterRailWidth = view === "desk" && deskRailOpen && !chapterDrawer ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
+
+  // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
+  // 连右栏硬下限都装不下时默认自动收成 44px 竖条；用户没碰过展开/收起时窗口变宽自动恢复，
+  // 点过之后以手动意愿为准（resolveRightPanelOpen，复审返工：修掉自动收起后展开钮死点击）。
   const aiWidthThatFits = viewportWidth - chapterRailWidth - MID_MIN_WIDTH;
   const aiAutoCollapsed = aiWidthThatFits < AI_FIT_MIN_WIDTH;
   const effectiveRightOpen = resolveRightPanelOpen(rightOpen, aiAutoCollapsed, aiManualToggled);
@@ -458,9 +462,12 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             </>
           ) : (
             // 写作台视图：左侧章节列表（顶栏按钮开合 + 搜索，每 10 章一组）+ 右侧 WritingDeskCodex 稿纸。
-            <div className="codex" style={{ gridTemplateColumns: deskRailOpen ? `calc(${CHAPTER_RAIL_BASE_WIDTH}px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "minmax(0, 1fr)" }}>
+            <div className="codex se-desk-wrap" style={{ gridTemplateColumns: deskRailOpen && !chapterDrawer ? `calc(${CHAPTER_RAIL_BASE_WIDTH}px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "minmax(0, 1fr)" }}>
+              {deskRailOpen && chapterDrawer ? (
+                <button className="se-drawer-scrim" type="button" aria-label="收起章节列表" onClick={() => setDeskRailOpen(false)} />
+              ) : null}
               {deskRailOpen ? (
-                <nav className="se-chapters" aria-label="章节">
+                <nav className={`se-chapters${chapterDrawer ? " is-drawer" : ""}`} aria-label="章节">
                   <div className="se-ch-head"><b>章节</b><span>{realChapterCount} 章</span></div>
                   <label className="se-field-search">
                     <IconSearch size={14} strokeWidth={1.8} />
@@ -500,6 +507,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                             return;
                           }
                           props.onSelectChapter?.(row.ch.id);
+                          if (chapterDrawer) setDeskRailOpen(false);
                         }}
                         type="button"
                       >

@@ -4,6 +4,7 @@ import { App } from "./App.js";
 import "./styles.css";
 import "./v2.css";
 import "./components/v2/codex/se-tokens.css";
+import "./se-global.css";
 
 const root = createRoot(document.getElementById("root") as HTMLElement);
 root.render(
