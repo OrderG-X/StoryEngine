@@ -23,7 +23,7 @@ import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { contextActionsForView } from "./ChatCapabilityBar.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
-import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
+import { chapterBareTitle, chapterDisplayTitle, chapterHeading } from "../v2Utils.js";
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
@@ -536,7 +536,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         type="button"
                       >
                         <span className="se-ch-n">{row.ch.chapterNumber}</span>
-                        <span className={`se-ch-t${chapterBareTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterBareTitle(row.ch.title ?? "") || "未命名"}</span>
+                        <span className={`se-ch-t${chapterDisplayTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterDisplayTitle(row.ch.title ?? "") || "未命名"}</span>
                         <span className={`se-dot ${row.ch.id === currentId ? (currentIsDraft ? "warn" : "") : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
                       </button>
                     ))}

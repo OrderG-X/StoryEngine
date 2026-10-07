@@ -31,6 +31,7 @@ describe("chapterHeading", () => {
 
   it("does not strip a title that merely starts with 第X (no 章)", () => {
     expect(chapterHeading(2, "第七封印")).toBe("第2章 · 第七封印");
+    expect(chapterHeading(49, "第49章 · 待补")).toBe("第49章");
   });
 });
 

@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
-import { chapterBareTitle } from "../v2Utils.js";
+import { chapterBareTitle, chapterDisplayTitle } from "../v2Utils.js";
 import { searchLibraryIndex, type LibrarySearchSource } from "./librarySearch.js";
 import { IconArrowRight, IconBook, IconFile, IconSearch, IconUser } from "./icons.js";
 
@@ -76,7 +76,7 @@ export function buildPaletteGroups(input: {
     .map<PaletteItem>((ch) => ({
       key: `ch:${ch.id}`,
       kind: "chapter",
-      label: `第 ${ch.chapterNumber} 章 · ${chapterBareTitle(ch.title ?? "") || "未命名"}`,
+      label: `第 ${ch.chapterNumber} 章 · ${chapterDisplayTitle(ch.title ?? "") || "未命名"}`,
       hint: ch.status === "committed" || (ch.status === "current" && ch.hasCommittedChapter) ? "已定稿" : "工作稿",
       run: () => input.onPickChapter(ch.id),
     }));

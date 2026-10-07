@@ -4,7 +4,7 @@
  */
 import type { StateOverview } from "../../../api/types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
-import { chapterBareTitle } from "../v2Utils.js";
+import { chapterBareTitle, PLACEHOLDER_CHAPTER_TITLE } from "../v2Utils.js";
 
 export interface InboxTodo {
   readonly key: string;
@@ -14,7 +14,7 @@ export interface InboxTodo {
   readonly prefill: string;
 }
 
-const PLACEHOLDER_TITLE = /^(待补|待定|未命名|无题|标题待定|tbd)$/iu;
+const PLACEHOLDER_TITLE = PLACEHOLDER_CHAPTER_TITLE;
 const ARC_STALE_CHAPTERS = 8;
 
 function chapterList(numbers: readonly number[]): string {
