@@ -67,7 +67,7 @@ export function buildPaletteGroups(input: {
   const groups: PaletteGroup[] = [];
 
   const chapters = [...input.chapters]
-    .filter((ch) => ch.status !== "planned" || !q)
+    .filter((ch) => ch.status !== "planned")
     .filter((ch) => !q
       || chapterBareTitle(ch.title ?? "").toLowerCase().includes(q)
       || (digits !== "" && String(ch.chapterNumber) === digits))
@@ -77,7 +77,7 @@ export function buildPaletteGroups(input: {
       key: `ch:${ch.id}`,
       kind: "chapter",
       label: `第 ${ch.chapterNumber} 章 · ${chapterBareTitle(ch.title ?? "") || "未命名"}`,
-      hint: ch.status === "committed" ? "已定稿" : ch.status === "planned" ? "还没写" : "工作稿",
+      hint: ch.status === "committed" || (ch.status === "current" && ch.hasCommittedChapter) ? "已定稿" : "工作稿",
       run: () => input.onPickChapter(ch.id),
     }));
   if (chapters.length) groups.push({ title: "章节", items: chapters });

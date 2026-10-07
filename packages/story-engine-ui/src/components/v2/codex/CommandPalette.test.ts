@@ -12,11 +12,15 @@ describe("改版 ⌘K 面板：分组与过滤", () => {
     onPickChapter: vi.fn(), onPickCharacter: vi.fn(), onPickSetting: vi.fn(),
   };
 
-  it("空查询：最近章节（新章在上、剥掉重复章号前缀）+ 角色 + 命令", () => {
+  it("空查询：最近章节（新章在上、剥掉重复章号前缀、不含未写的占位章）+ 角色 + 命令", () => {
     const groups = buildPaletteGroups({ ...base, query: "" });
     expect(groups.map((g) => g.title)).toEqual(["章节", "角色", "命令"]);
-    expect(groups[0]?.items[0]?.label).toBe("第 59 章 · 下一章");
-    expect(groups[0]?.items[1]?.label).toBe("第 58 章 · 西侧二层");
+    expect(groups[0]?.items[0]?.label).toBe("第 58 章 · 西侧二层");
+  });
+
+  it("当前章已定稿时标「已定稿」，不误标「工作稿」", () => {
+    const groups = buildPaletteGroups({ ...base, query: "58", chapters: [{ id: "c58", chapterNumber: 58, title: "西侧二层", status: "current" as const, hasCommittedChapter: true }] });
+    expect(groups[0]?.items[0]?.hint).toBe("已定稿");
   });
 
   it("按章名或章号搜；未写的占位章不进搜索结果", () => {
