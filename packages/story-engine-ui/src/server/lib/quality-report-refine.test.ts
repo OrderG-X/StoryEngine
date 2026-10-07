@@ -34,7 +34,7 @@ describe("refineQualityReport · 质检分层 + 软误报降级", () => {
     expect(r.soft).toHaveLength(0); // 不再混进软提示「参考不拦」
     expect(r.passed).toBe(true); // 不硬拦入库（守「直接做+可撤销」）
     expect(r.summary).toContain("严重"); // 措辞点明严重、不再读成「全好了」
-    expect(r.summary).not.toContain("✅ 没硬伤、可以定稿"); // 不再单说「可以定稿」误导
+    expect(r.summary).not.toContain("没硬伤、可以定稿"); // 不再单说「可以定稿」误导
   });
 
   it("confirmed+medium 但 AI 建议修改(revise) → 也升 severe（retest：『能力使用违规·建议修改后再入库』不再漏成软提示）", () => {
@@ -47,7 +47,7 @@ describe("refineQualityReport · 质检分层 + 软误报降级", () => {
     ]));
     expect(r.severe.map((i) => i.type)).toEqual(["writing_context_knowledge_boundary"]);
     expect(r.soft).toHaveLength(0);
-    expect(r.summary).not.toContain("✅ 没硬伤、可以定稿");
+    expect(r.summary).not.toContain("没硬伤、可以定稿");
   });
 
   it("题材中立：任意 warning type 只要 confirmed+high 都升 severe（按 judgement 而非题材词/特定 type）", () => {
@@ -125,7 +125,7 @@ describe("refineQualityReport · 质检分层 + 软误报降级", () => {
   it("通过且无问题 → 干净 summary", () => {
     const r = refineQualityReport(report([]));
     expect(r.passed).toBe(true);
-    expect(r.summary).toBe("✅ 没硬伤、可以定稿。");
+    expect(r.summary).toBe("没硬伤、可以定稿。");
     expect(r.summary).not.toContain("软提示");
   });
 

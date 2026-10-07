@@ -162,14 +162,14 @@ export function refineQualityReport(report: CommitQualityReport): RefinedQuality
   // 4) 分层人话摘要。severe 存在时绝不把头部读成「✅ 没硬伤、可入库」（治自相矛盾）。
   const parts: string[] = [];
   if (!passed) {
-    parts.push(`❌ ${blocking.length} 处硬伤拦着定稿：${blocking.map((i) => i.label).join("、")}。先改这些再定稿`);
+    parts.push(`${blocking.length} 处硬伤拦着定稿：${blocking.map((i) => i.label).join("、")}。先改这些再定稿`);
     if (severe.length > 0) {
       parts.push(`另有 ${severe.length} 处严重问题：${severe.map((i) => i.label).join("、")}`);
     }
   } else if (severe.length > 0) {
-    parts.push(`⚠️ 没有拦截定稿的硬伤，但有 ${severe.length} 处严重问题（AI 已确认/判为高风险），强烈建议先改再定稿：${severe.map((i) => i.label).join("、")}（可以继续定稿，但请知悉）`);
+    parts.push(`没有拦截定稿的硬伤，但有 ${severe.length} 处严重问题（AI 已确认/判为高风险），强烈建议先改再定稿：${severe.map((i) => i.label).join("、")}（可以继续定稿，但请知悉）`);
   } else {
-    parts.push("✅ 没硬伤、可以定稿");
+    parts.push("没硬伤、可以定稿");
   }
   if (soft.length > 0) {
     parts.push(`另有 ${soft.length} 处软提示（参考、不拦）：${soft.map((i) => i.label).join("、")}`);

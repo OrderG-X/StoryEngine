@@ -246,7 +246,7 @@ export async function extractAndAppendFacts(input: {
   return {
     ok: true,
     added,
-    summary: added > 0 ? `📌 这章记下 ${added} 条硬事实（后文不得改写）。` : "",
+    summary: added > 0 ? `这章记下 ${added} 条硬事实（后文不得改写）。` : "",
     newCharacters,
   };
 }
