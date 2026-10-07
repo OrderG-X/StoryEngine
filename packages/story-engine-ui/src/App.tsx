@@ -14,7 +14,7 @@ import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
 import { useFoundationGaps } from "./hooks/useFoundationGaps.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
-import { ChapterWorkspaceConflictError, fetchListDefaultBooks, saveChapterWorkspaceBeacon } from "./api/client.js";
+import { ChapterWorkspaceConflictError, fetchDefaultBookLibrary, saveChapterWorkspaceBeacon } from "./api/client.js";
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { createWorkflowMessage } from "./utils/workflowHelpers.js";
 import { countTextWords } from "./utils/textUtils.js";
@@ -503,8 +503,8 @@ export function App() {
     // 别再逐本 upsertBook 头插——那会把服务端的「最近活跃降序」反转，最旧的书霸占 books[0]）
     void (async () => {
       try {
-        const defaultBooks = await fetchListDefaultBooks();
-        useRecentBooksStore.getState().syncScannedBooks(defaultBooks);
+        const library = await fetchDefaultBookLibrary();
+        useRecentBooksStore.getState().syncScannedBooks(library.books, library);
       } catch {
         // 扫描失败不影响首页加载
       }

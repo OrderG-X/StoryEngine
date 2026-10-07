@@ -774,7 +774,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       return true;
     } catch (error) {
       if (ownsNavigationOrigin(transition)) {
-        setOpenProjectError(`打开项目失败：${error instanceof Error ? error.message : String(error)}`);
+        const raw = error instanceof Error ? error.message : String(error);
+        setOpenProjectError(`打开项目失败：${raw}`);
+        // 从书架点开失败时，弹窗里的错误看不见——必须当场说清楚，不能点了没反应（铁律④ 不静默失败）。
+        showToast(describeOpenProjectFailure(raw, nextProjectPath, recentBooks), 6500);
       }
       return false;
     } finally {
@@ -1109,4 +1112,19 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     handleCreateBook,
     refreshWorkspaceFromOverview,
   };
+}
+
+/** 打开书失败时给作者看的一句话：找不到文件夹单独说清楚怎么办，其它错误去掉「Request failed with status 500」这类前缀。 */
+export function describeOpenProjectFailure(
+  raw: string,
+  projectPath: string,
+  books: readonly { readonly title: string; readonly projectPath: string }[],
+): string {
+  const title = books.find((book) => book.projectPath === projectPath)?.title;
+  const name = title ? `《${title}》` : "这本书";
+  if (/项目目录不存在|ENOENT|no such file/iu.test(raw)) {
+    return `找不到${name}的文件夹，可能被移走或删掉了。可以在书的「···」里把它从书架移除，或用「打开已有书籍」重新选位置。`;
+  }
+  const cleaned = raw.replace(/^Request failed with status \d+\s*/u, "").trim();
+  return `${name}没打开：${cleaned || "原因不明"}`;
 }

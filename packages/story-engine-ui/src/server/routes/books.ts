@@ -270,7 +270,8 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
       }),
     );
 
-    writeJson(res, 200, { ok: true, books: summaries });
+    // 书库根目录 + 盘上实际存在的全部书目录（不截 20）：前端据此把「默认书库里已经删掉/挪走的书」从书架清掉。
+    writeJson(res, 200, { ok: true, books: summaries, root: defaultRoot, existingPaths: books.map((book) => book.projectDir) });
   } catch (error) {
     writeJson(res, 500, {
       ok: false,

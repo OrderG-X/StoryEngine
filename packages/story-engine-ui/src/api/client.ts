@@ -486,13 +486,26 @@ export async function chatFoundationGapAssistant(
 import type { BookSummary } from "../types.js";
 
 export async function fetchListDefaultBooks(signal?: AbortSignal): Promise<BookSummary[]> {
-  const payload = await fetchJson<{ ok: boolean; books?: BookSummary[] }>(
+  return (await fetchDefaultBookLibrary(signal)).books;
+}
+
+/** 默认书库扫描：最近的书 + 书库根目录 + 盘上实际存在的全部书目录（判断书架上哪些已经不在了）。 */
+export async function fetchDefaultBookLibrary(signal?: AbortSignal): Promise<{
+  readonly books: BookSummary[];
+  readonly root?: string;
+  readonly existingPaths?: readonly string[];
+}> {
+  const payload = await fetchJson<{ ok: boolean; books?: BookSummary[]; root?: string; existingPaths?: string[] }>(
     "/api/books/list-default",
     { method: "GET" },
     signal,
   );
   if (!payload.ok) throw new Error("Failed to list default books");
-  return payload.books ?? [];
+  return {
+    books: payload.books ?? [],
+    ...(typeof payload.root === "string" ? { root: payload.root } : {}),
+    ...(Array.isArray(payload.existingPaths) ? { existingPaths: payload.existingPaths } : {}),
+  };
 }
 
 export async function createStoryProjectFromDraft(input: CreateProjectRequest, signal?: AbortSignal): Promise<{ readonly projectDir: string; readonly overview: StateOverview }> {

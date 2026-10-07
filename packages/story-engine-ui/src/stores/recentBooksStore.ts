@@ -31,7 +31,10 @@ function persist(books: readonly BookSummary[]): void {
 export interface RecentBooksStore {
   readonly books: readonly BookSummary[];
   readonly upsertBook: (book: BookSummary) => void;
-  readonly syncScannedBooks: (scanned: readonly BookSummary[]) => void;
+  readonly syncScannedBooks: (
+    scanned: readonly BookSummary[],
+    library?: { readonly root?: string; readonly existingPaths?: readonly string[] },
+  ) => void;
   readonly removeBook: (bookId: string) => void;
   readonly renameBook: (bookId: string, nextTitle: string) => void;
   readonly deleteBook: (bookId: string) => void;
@@ -67,9 +70,14 @@ export const useRecentBooksStore = create<RecentBooksStore>((set, get) => {
     // 老条目缺 lastActiveMs 当 0（稳定排序，沉底但保持相对顺序），下次打开即被补上。
     // 竞态防护（评审加固）：扫描在飞时用户可能刚打开/改名了某本书（本地 lastActiveMs=当下）——
     // 本地比扫描新时做字段级归并：保留本地的书名/时间/活跃度，扫描只补章数等盘上字段。
-    syncScannedBooks: (scanned) =>
+    syncScannedBooks: (scanned, library) =>
       set((state) => {
-        const byPath = new Map(state.books.map((book) => [book.projectPath, book]));
+        // 默认书库里已经删掉/挪走的书：书架上不再留着（点了只会报找不到）。只清书库根目录下的条目——
+        // 用户从别处「打开已有书籍」加进来的书不在扫描范围内，不能凭扫描结果判它没了。
+        const missingInLibrary = missingDefaultLibraryPaths(state.books, library);
+        const byPath = new Map(
+          state.books.filter((book) => !missingInLibrary.has(book.projectPath)).map((book) => [book.projectPath, book]),
+        );
         for (const book of scanned) {
           const local = byPath.get(book.projectPath);
           const localIsNewer = local !== undefined && (local.lastActiveMs ?? 0) > (book.lastActiveMs ?? 0);
@@ -118,3 +126,18 @@ export const useRecentBooksStore = create<RecentBooksStore>((set, get) => {
     },
   };
 });
+
+/** 书架上位于默认书库根目录下、但盘上已经不存在的书（路径集合）。缺扫描信息时返回空集（不误删）。 */
+export function missingDefaultLibraryPaths(
+  books: readonly BookSummary[],
+  library?: { readonly root?: string; readonly existingPaths?: readonly string[] },
+): ReadonlySet<string> {
+  if (!library?.root || !library.existingPaths) return new Set();
+  const root = library.root.replace(/\/+$/u, "");
+  const existing = new Set(library.existingPaths);
+  return new Set(
+    books
+      .filter((book) => book.projectPath.startsWith(`${root}/`) && !existing.has(book.projectPath))
+      .map((book) => book.projectPath),
+  );
+}
