@@ -216,4 +216,7 @@
   .step-card .cdc-undo-go{border:0;background:var(--text);color:var(--bg);}
   .step-card .cdc-undo-cancel{border:1px solid var(--line-strong);background:transparent;color:var(--text);}
   .step-card :is(.cdc-undo,.cdc-undo-go):disabled{opacity:.5;cursor:default;}
+
+  /* 回合收尾一句话（模型做完事没说话时，显示最后一步工具的原话结果） */
+  .se-turn-tail{margin:6px 0 0;font-size:13px;line-height:1.7;color:var(--muted);}
 }

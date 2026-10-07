@@ -31,6 +31,7 @@ import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { railActionsForFlow } from "./ChapterToolRail.js";
 import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
+import { turnTailSummary } from "./turnTail.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
@@ -741,6 +742,8 @@ function MessageBubbles({
     ? foldProcessSegments(renderSegments, { aggregate: aggregateProcess })
     : null;
   const firstTextIndex = folded ? folded.findIndex((seg) => seg.kind === "text") : -1;
+  // 模型做完事没再说话就结束时，补一句最后那步工具的原话结果（见 turnTail.ts）。
+  const tailSummary = turnTailSummary(folded, !isLiveAssistant);
   const bucketAggregate = shouldAggregateProcessBucket(
     message.thinking,
     toolSteps.length,
@@ -805,6 +808,8 @@ function MessageBubbles({
           ) : null}
         </>
       )}
+
+      {tailSummary ? <p className="se-turn-tail">{tailSummary}</p> : null}
 
       {/* 建议卡片 */}
       {message.adviceCards?.length ? (
