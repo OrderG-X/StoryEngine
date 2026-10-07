@@ -119,6 +119,13 @@
   .codex-desk-stage > .se-v2-writing-canvas:focus-within{border-color:var(--line-strong);box-shadow:none;}
   .codex-desk-stage .se-v2-paper-title{font-family:"Noto Serif SC","Songti SC",serif;}
 
+  /* 选区工具条：深色实底浮条（两套主题都用深色，压在正文上一眼可辨） */
+  .se-v2-selection-toolbar{background:var(--toolbar-bg);box-shadow:var(--shadow-pop);}
+  .se-v2-selection-toolbar-btn{color:var(--toolbar-ink);}
+  .se-v2-selection-toolbar-btn:hover:not(:disabled){background:rgba(255,255,255,.1);transform:none;}
+  /* 编辑器本身不画焦点框：稿纸框已有获得焦点时的描边反馈（.se-v2-writing-canvas:focus-within） */
+  .ProseMirror:focus-visible{outline:none;box-shadow:none;}
+
   @media (max-width:1279px){
     .codex-desk-stage{padding:16px 16px 0;}
     .codex-desk-stage > .se-v2-writing-canvas,
