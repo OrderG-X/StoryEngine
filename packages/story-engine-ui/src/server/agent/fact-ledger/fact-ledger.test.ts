@@ -180,12 +180,51 @@ describe("extractAndAppendFacts 编排", () => {
     expect(r).toMatchObject({ ok: true, added: 0 });
     expect(callModel).not.toHaveBeenCalled();
   });
-  it("模型/解析失败 → 非致命：ok:false + 可重抽提示，不抛", async () => {
+  it("模型/解析失败 → 自动重试一次；仍失败非致命：ok:false + 如实说明，不抛", async () => {
     const dir = await tmp();
     const callModel = vi.fn(async () => "模型挂了不是JSON");
     const r = await extractAndAppendFacts({ projectDir: dir, chapter: 1, draftText: "正文", callModel });
+    expect(callModel).toHaveBeenCalledTimes(2);
     expect(r.ok).toBe(false);
-    expect(r.summary).toContain("重抽");
+    expect(r.summary).toContain("已自动重试一次");
+    expect(r.summary).not.toContain("可让我重抽"); // 没有能重抽的工具，不许这么许诺
+  });
+  it("第一次失败、重试成功 → 照常写盘", async () => {
+    const dir = await tmp();
+    const callModel = vi.fn()
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce(JSON.stringify({ facts: [{ text: "南门菜场十年前就拆了" }] }));
+    const r = await extractAndAppendFacts({ projectDir: dir, chapter: 4, draftText: "正文", callModel });
+    expect(r).toMatchObject({ ok: true, added: 1 });
+  });
+});
+
+describe("parseFactExtraction 宽进（模型无关）", () => {
+  // 2026-10-08 十章验收第 8 章：旧 strict schema 下模型多给一个键，整章一条事实都没记上。
+  it("条目多给键 / 顶层多给键 → 照收，多余的丢掉", () => {
+    const out = parseFactExtraction(JSON.stringify({
+      facts: [{ text: "登记表上地址是南门槐树巷十七号", chapter: 4, importance: "high" }],
+      newCharacters: [{ name: "沈秀英", role: "配角" }],
+      note: "多余的顶层键",
+    }));
+    expect(out.facts).toEqual(["登记表上地址是南门槐树巷十七号"]);
+    expect(out.newCharacters).toEqual(["沈秀英"]);
+  });
+  it("条目给成纯字符串也收；坏条目逐条丢，不连坐整章", () => {
+    const out = parseFactExtraction(JSON.stringify({ facts: ["座钟已修好送回周婶", 42, { text: "" }, { text: "车胎已补好" }] }));
+    expect(out.facts).toEqual(["座钟已修好送回周婶", "车胎已补好"]);
+  });
+});
+
+describe("事实编号", () => {
+  it("删过条目后再加不撞号", async () => {
+    const dir = await tmp();
+    await appendFacts(dir, 3, ["甲", "乙", "丙"], "auto");
+    expect((await applyFactEdit(dir, "remove", { id: "fact-3-0" })).ok).toBe(true);
+    await appendFacts(dir, 3, ["丁"], "auto");
+    const ids = (await readFactLedger(dir)).facts.map((f) => f.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("fact-3-3");
   });
 });
 

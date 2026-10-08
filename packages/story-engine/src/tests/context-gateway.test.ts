@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWriterContext,
   estimateTokens,
+  type PreviousChapterContext,
   type PreviousUncommittedDraftContext,
   type StoryContinuityContext,
 } from "../context-gateway.js";
@@ -310,6 +311,81 @@ describe("StoryEngine-NG ContextGateway", () => {
     });
 
     expect(envelope.sections.some((section) => section.name === "previous_uncommitted_draft")).toBe(false);
+  });
+
+  // 2026-10-08 十章验收：上一章定稿后写手只剩 3 条各 100 字的摘要，物件状态、人物位置逐章漂移。
+  it("gives the writer the committed previous chapter's verbatim text", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-previous-chapter-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "海州账册",
+      genre: "urban",
+      premise: "审计员林澈追查账册篡改。",
+      mainCharacterName: "林澈",
+    });
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(
+      join(projectDir, "chapters", "0001.md"),
+      "# 第1章 · 雨夜账册\n\n林澈把蓝色账册锁进抽屉，钥匙揣进左边口袋。\n\n他关灯出门，雨还没停。\n",
+      "utf-8",
+    );
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。" });
+    const previous = envelope.sections.find((section) => section.name === "previous_chapter")
+      ?.content as PreviousChapterContext | undefined;
+    const prompt = renderFastDraftPromptText(envelope);
+
+    expect(previous).toMatchObject({ kind: "previous_chapter_text", status: "committed", chapter: 1, title: "第1章 · 雨夜账册", truncated: false });
+    expect(previous?.text).toContain("钥匙揣进左边口袋");
+    expect(previous?.text).toContain("他关灯出门，雨还没停。");
+    expect(previous?.continuityInstruction).toContain("一律以这段原文为准");
+    expect(prompt).toContain("## previous_chapter");
+    expect(prompt).toContain("never re-discover or redo");
+  });
+
+  it("gives only the ending of a long previous chapter, cut at a paragraph boundary", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-previous-chapter-long-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "海州账册",
+      genre: "urban",
+      premise: "审计员林澈追查账册篡改。",
+      mainCharacterName: "林澈",
+    });
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    const filler = Array.from({ length: 250 }, (_, i) => `第${i}段：林澈翻着账册，一页一页核对附件上的数字，窗外雨声不断。`).join("\n\n");
+    await writeFile(join(projectDir, "chapters", "0001.md"), `# 第1章 · 长章\n\n开头一句只在最前面。\n\n${filler}\n\n结尾：他把账册锁进抽屉。\n`, "utf-8");
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。" });
+    const previous = envelope.sections.find((section) => section.name === "previous_chapter")
+      ?.content as PreviousChapterContext | undefined;
+
+    expect(previous?.truncated).toBe(true);
+    expect(previous?.text.startsWith("（前略）\n第")).toBe(true);
+    expect(previous?.text).toContain("结尾：他把账册锁进抽屉。");
+    expect(previous?.text).not.toContain("开头一句只在最前面");
+  });
+
+  it("gives the ending (not the opening) of a long uncommitted previous draft", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-previous-draft-tail-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "海州账册",
+      genre: "urban",
+      premise: "审计员林澈追查账册篡改。",
+      mainCharacterName: "林澈",
+    });
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    const filler = Array.from({ length: 250 }, (_, i) => `第${i}段：林澈翻着账册，一页一页核对附件上的数字，窗外雨声不断。`).join("\n\n");
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0001.md"), `# 第1章 · 草稿\n\n开头一句。\n\n${filler}\n\n草稿结尾：他推门进了档案室。\n`, "utf-8");
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。" });
+    const previousDraft = envelope.sections.find((section) => section.name === "previous_uncommitted_draft")
+      ?.content as PreviousUncommittedDraftContext | undefined;
+
+    expect(previousDraft?.excerpt).toContain("草稿结尾：他推门进了档案室。");
+    expect(previousDraft?.excerpt).not.toContain("开头一句。");
+    expect(envelope.sections.some((section) => section.name === "previous_chapter")).toBe(false);
   });
 
   it("never emits an apocalypse_progression section regardless of timeline summary wording", async () => {

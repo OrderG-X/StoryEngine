@@ -180,6 +180,8 @@ export interface BuildWritingContextPackInput {
   readonly chapter: number;
   readonly userDirection: string;
   readonly currentChapterGoal?: string;
+  /** 上一章正文（接着写的原文）。用于从事实账本里翻出与它相关的旧事实；缺省 = 旧行为。 */
+  readonly continuityText?: string;
   readonly selectedCharacterIds?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   /**
@@ -255,7 +257,14 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   const bibleCharacter = findBibleCharacter(characterBible?.characters ?? [], profile);
   const firstChapterSetup = storyBible?.firstChapterSetup;
   const setupAssets = storyBible?.setupAssets;
-  const mainLocation = selectMainLocation(locationBible?.locations ?? [], firstChapterSetup?.openingScene);
+  // 2026-10-08 写作主链重设计·阶段 1：「本章必需地点」不再永远是第 1 章开场地点（十章验收实锤：第 3/6/9 章
+  // 发生在别处，质检却逐章要求出现开场店名，AI 照单往正文硬塞）。第 1 章仍按开场场景；之后只有作者方向里
+  // 点名了地点册里的地点才算「必需」，否则只作空间参考，本章地点由上一章结尾承接。
+  const chapterDirection = input.currentChapterGoal ?? input.userDirection;
+  const directedLocation = selectDirectedLocation(locationBible?.locations ?? [], chapterDirection);
+  const isOpeningChapter = input.chapter <= 1;
+  const mainLocation = directedLocation ?? selectMainLocation(locationBible?.locations ?? [], firstChapterSetup?.openingScene);
+  const requiredLocation = isOpeningChapter ? mainLocation : directedLocation;
   const assetView = buildAssetContextView(assetLedger.assets);
   const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds).slice(0, 3);
   // 按"本章仍有效 + 相关性"四维召回，替代纯 lastTouchedChapter 近章截断；
@@ -322,6 +331,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     relevantNames: relevantFactNames,
     // 接本章方向：不含人名但与本章要写的内容相关的硬设定（遗产3亿/密道在城西）也优先（洞#9）。
     chapterGoal: input.currentChapterGoal ?? input.userDirection,
+    ...(input.continuityText ? { continuityText: input.continuityText } : {}),
   }).facts;
   const trace: WritingContextSourceTrace[] = [];
   const addTrace = (path: string, source: WritingContextSource) => {
@@ -375,8 +385,8 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     },
     supportingCast,
     locationContext: {
-      ...(mainLocation?.name ? { requiredCurrentLocation: mainLocation.name } : {}),
-      ...(firstChapterSetup?.openingScene ?? mainLocation?.name ? { openingLocation: firstChapterSetup?.openingScene ?? mainLocation?.name } : {}),
+      ...(requiredLocation?.name ? { requiredCurrentLocation: requiredLocation.name } : {}),
+      ...(isOpeningChapter && (firstChapterSetup?.openingScene ?? mainLocation?.name) ? { openingLocation: firstChapterSetup?.openingScene ?? mainLocation?.name } : {}),
       ...(mainLocation?.spatialStructure ? {
         spatialStructure: {
           floors: mainLocation.spatialStructure.floors ?? [],
@@ -448,8 +458,9 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       styleExemplars: buildStyleExemplarPromptItems(normalizeStyleExemplars(writingRules?.styleExemplars).exemplars),
     },
     hardConstraints: buildHardConstraints({
-      location: mainLocation?.name,
-      openingScene: firstChapterSetup?.openingScene,
+      isOpeningChapter,
+      location: requiredLocation?.name,
+      ...(isOpeningChapter && firstChapterSetup?.openingScene ? { openingScene: firstChapterSetup.openingScene } : {}),
       unknownTruths: unique([...(bibleCharacter?.knowledgeUnknown ?? []), ...protectedSecrets]),
       forbiddenReveals,
       assets: unique([...(setupAssets?.initialAssets ?? []), ...(setupAssets?.keyItems ?? [])]),
@@ -531,6 +542,15 @@ function buildSupportingCast(
     if (cast.length >= 6) break;
   }
   return cast;
+}
+
+/** 作者本章方向里点名的地点册地点（取最长命中，防「南门」抢「南门菜场」）；没点名 → undefined。 */
+function selectDirectedLocation(locations: readonly LocationBibleEntry[], direction: string | undefined): LocationBibleEntry | undefined {
+  const text = direction?.trim();
+  if (!text) return undefined;
+  return locations
+    .filter((location) => location.name.trim().length >= 2 && text.includes(location.name.trim()))
+    .sort((a, b) => b.name.length - a.name.length)[0];
 }
 
 function selectMainLocation(locations: readonly LocationBibleEntry[], openingScene: string | undefined): LocationBibleEntry | undefined {
@@ -642,6 +662,7 @@ function readStateCharacterId(state: CharacterState): string | undefined {
 }
 
 function buildHardConstraints(input: {
+  readonly isOpeningChapter: boolean;
   readonly location?: string;
   readonly openingScene?: string;
   readonly unknownTruths: readonly string[];
@@ -662,7 +683,11 @@ function buildHardConstraints(input: {
       ? `必须在本章逐条落实这些要点，照写其中的具体名物 / 数字 / 编号，不得替换、合并或遗漏：${mustHit.join("；")}。`
       : undefined,
     "不要编造新的城市名。",
-    input.location ? `不要编造与 Location Bible 冲突的开场地点；开场优先使用：${input.location}。` : "不要编造与 Location Bible 冲突的开场地点。",
+    input.isOpeningChapter
+      ? (input.location ? `不要编造与 Location Bible 冲突的开场地点；开场优先使用：${input.location}。` : "不要编造与 Location Bible 冲突的开场地点。")
+      : (input.location
+        ? `本章地点按作者方向：${input.location}；从上一章结尾所在处过去要写出移动过程，不要编造与 Location Bible 冲突的地点。`
+        : "本章从上一章结尾所在的地方接着写；换场要写出移动过程，不要编造与 Location Bible 冲突的地点。"),
     input.openingScene ? `第一章开场强参考：${input.openingScene}。` : undefined,
     input.floors.length > 0 ? `不要改变已登记楼层结构：${input.floors.join("；")}。` : undefined,
     input.travelRules.length > 0 ? `不要违反移动规则：${input.travelRules.map(formatTravelRule).join("；")}。` : undefined,
@@ -674,7 +699,7 @@ function buildHardConstraints(input: {
     "不要编造未登记学校、组织、公司、车辆、住所等身份细节；没有底层信息就模糊处理。",
     input.age ? `不要让角色年龄漂移；当前年龄：${input.age}。` : undefined,
     input.speechSamples.length > 0 ? `不要让角色说话风格明显偏离样本：${input.speechSamples.slice(0, 3).join(" / ")}。` : undefined,
-    input.establishedFacts.length > 0 ? `不得改写或否认以下已确立事实：${input.establishedFacts.slice(0, 8).join("；")}。` : undefined,
+    input.establishedFacts.length > 0 ? `不得改写或否认以下已确立事实：${input.establishedFacts.slice(0, 12).join("；")}。` : undefined,
     "不要让角色使用未登记资产。",
     "不要凭空创建车辆 / 住所 / 大额现金。",
     "不要把世界规则一次性说明成设定说明书。",

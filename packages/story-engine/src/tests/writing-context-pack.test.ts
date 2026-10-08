@@ -306,6 +306,24 @@ describe("Writing Context Pack V0", () => {
     });
   });
 
+  // 2026-10-08 十章验收：第 3/6/9 章发生在别处，质检却逐章要求出现第 1 章开场地点，AI 照单往正文硬塞。
+  it("does not require the opening location after chapter 1 unless the chapter direction names a location", async () => {
+    const projectDir = await createSoulSteelFixture();
+    const free = await buildWritingContextPack({ projectDir, chapter: 3, userDirection: "继续第 3 章。" });
+    expect(free.locationContext.requiredCurrentLocation).toBeUndefined();
+    expect(free.locationContext.openingLocation).toBeUndefined();
+    expect(free.locationContext.spatialStructure?.floors).toEqual(expect.arrayContaining(["1楼大厅"]));
+    expect(free.hardConstraints.join("\n")).toContain("本章从上一章结尾所在的地方接着写");
+    expect(free.hardConstraints.join("\n")).not.toContain("第一章开场强参考");
+    expect(free.hardConstraints.join("\n")).not.toContain("开场优先使用");
+    expect(checkWritingContextPackDraft("林序坐在公交车上，窗外的雨越下越大。", free, 3).map((issue) => issue.type))
+      .not.toContain("writing_context_required_location_missing");
+
+    const directed = await buildWritingContextPack({ projectDir, chapter: 3, userDirection: "林序回到海天市旧城区创业孵化楼找人" });
+    expect(directed.locationContext.requiredCurrentLocation).toBe("海天市旧城区创业孵化楼");
+    expect(directed.hardConstraints.join("\n")).toContain("本章地点按作者方向：海天市旧城区创业孵化楼");
+  });
+
   it("warns when drafts drift from required location or reveal protected truths", async () => {
     const projectDir = await createSoulSteelFixture();
     const pack = await buildWritingContextPack({

@@ -60,6 +60,26 @@ export interface PreviousUncommittedDraftContext {
   readonly continuityInstruction: string;
 }
 
+/**
+ * 上一章（已定稿）正文原文（2026-10-08 写作主链重设计·阶段 1）。
+ * 十章真机验收实锤：此前上一章一旦定稿，写手就只剩 3 条各 100 字的摘要——座钟被送回三次、补好的车胎
+ * 第二天又瘪、同一个发现被重新发现。正文才是真值源：整章给（过长取结尾），并钉成受保护段。
+ */
+export interface PreviousChapterContext {
+  readonly kind: "previous_chapter_text";
+  readonly status: "committed";
+  readonly chapter: number;
+  readonly title?: string;
+  readonly text: string;
+  /** true = 章节过长，只给了结尾部分（开头以「（前略）」标出）。 */
+  readonly truncated: boolean;
+  readonly continuityInstruction: string;
+}
+
+/** 上一章正文给多少：整章不超过这个字符数就整章给，否则只给结尾 PREVIOUS_CHAPTER_TAIL_CHARS。 */
+const PREVIOUS_CHAPTER_FULL_MAX_CHARS = 6000;
+const PREVIOUS_CHAPTER_TAIL_CHARS = 5000;
+
 export interface HookTrackingContext {
   readonly activeHooks: readonly HookTrackingContextItem[];
   readonly recentlyTouchedHooks: readonly HookTrackingContextItem[];
@@ -185,7 +205,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       trackReadFailure("角色目录")(error);
       return [] as string[];
     });
-  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft] = await Promise.all([
+  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft, previousChapter] = await Promise.all([
     readStoryCore(input.projectDir),
     readWorldCore(input.projectDir),
     // 角色（profile+core+state）三件套按角色兜底：单个角色资料残缺不再炸掉整次出稿，
@@ -204,6 +224,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       // 永远不可能救回，只是把同一故障记两遍（且内层把权限错无痕吞成 []）。单跳：降级 + 留痕一次。
       .catch((error) => { trackReadFailure("时间线事件")(error); return [] as readonly TimelineEvent[]; }),
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
+    readPreviousChapterContext(input.projectDir, input.chapter)
+      .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
   ]);
   const { profiles, cores, states } = characterBundles;
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
@@ -221,6 +243,9 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     selectedHookIds: input.selectedHookIds,
     maxTimelineEvents: input.maxTimelineEvents,
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
+    ...(previousChapter?.text ?? previousUncommittedDraft?.excerpt
+      ? { continuityText: previousChapter?.text ?? previousUncommittedDraft?.excerpt }
+      : {}),
   });
   // 包内台账读盘失败（损坏 JSON 降级）与本层失败同一通道上浮——都进 read_failures 段。
   readFailures.push(...writingContextPack.readFailures);
@@ -233,6 +258,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("character_profile", profiles, "stable"),
     section("character_core", cores, "stable"),
     section("chapter_goal", { chapter: input.chapter, goal: input.chapterGoal }, "dynamic"),
+    ...(previousChapter ? [section("previous_chapter", previousChapter, "dynamic")] : []),
     ...(previousUncommittedDraft ? [section("previous_uncommitted_draft", previousUncommittedDraft, "dynamic")] : []),
     section("writing_context_pack", writingContextPack satisfies WritingContextPack, "dynamic"),
     section("story_calendar", calendar, "dynamic"),
@@ -295,13 +321,61 @@ async function readPreviousUncommittedDraftContext(
     status: "previous_uncommitted_draft",
     chapter: previousChapter,
     ...(title ? { title } : {}),
-    excerpt: truncateText(body, 1800),
+    // 接着写要的是上一章怎么收尾：过长时取结尾而不是开头（旧版取开头 1800 字，结尾场面恰恰看不见）。
+    excerpt: previousChapterExcerpt(body).text,
     continuityInstruction: [
       `第 ${previousChapter} 章尚未正式入库，但它是当前写作区保存的上一章工作稿。`,
       "生成本章时必须把它当作直接前情依据：保持主角身份、称谓、人称、地点承接、已出现物件和未解决压力一致。",
       "不要因为正式 timeline 还没有该章而重启剧情或改写主角设定。",
     ].join(""),
   };
+}
+
+/**
+ * 上一章已定稿时给它的正文原文（整章，过长取结尾）。没有上一章 / 上一章没定稿（ENOENT）→ undefined
+ * （未定稿走 readPreviousUncommittedDraftContext）；其它读盘错误上抛，由调用方降级 + 进 read_failures。
+ */
+async function readPreviousChapterContext(
+  projectDir: string,
+  chapter: number,
+): Promise<PreviousChapterContext | undefined> {
+  if (chapter <= 1) return undefined;
+  const previousChapter = chapter - 1;
+  const committedPath = join(projectDir, "chapters", `${padChapter(previousChapter)}.md`);
+  let content: string;
+  try {
+    content = await readFile(committedPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const body = stripMarkdownHeading(content);
+  if (!body.trim()) return undefined;
+  const title = extractMarkdownTitle(content);
+  const { text, truncated } = previousChapterExcerpt(body);
+  return {
+    kind: "previous_chapter_text",
+    status: "committed",
+    chapter: previousChapter,
+    ...(title ? { title } : {}),
+    text,
+    truncated,
+    continuityInstruction: [
+      `这是第 ${previousChapter} 章（上一章，已定稿）的正文原文${truncated ? "（结尾部分）" : ""}。本章紧接着它往下写。`,
+      "时间、地点、各人物此刻在哪、手里拿着什么、物件现在什么状态（修没修好、放在哪、上面写着什么）、谁已经知道了什么，一律以这段原文为准。",
+      "上一章已经发现、说过、做完的事，本章不要再重新发现一遍或重做一遍；要往前推进新的事。",
+    ].join(""),
+  };
+}
+
+/** 整章不长就整章给；过长取结尾（从段落边界切），开头标「（前略）」。 */
+function previousChapterExcerpt(body: string): { readonly text: string; readonly truncated: boolean } {
+  const trimmed = body.trim();
+  if (trimmed.length <= PREVIOUS_CHAPTER_FULL_MAX_CHARS) return { text: trimmed, truncated: false };
+  const tail = trimmed.slice(-PREVIOUS_CHAPTER_TAIL_CHARS);
+  const paragraphStart = tail.indexOf("\n");
+  const fromParagraph = paragraphStart >= 0 && paragraphStart < 400 ? tail.slice(paragraphStart + 1) : tail;
+  return { text: `（前略）\n${fromParagraph.trim()}`, truncated: true };
 }
 
 function padChapter(chapter: number): string {

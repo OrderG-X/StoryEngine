@@ -38,6 +38,7 @@ export function renderFastDraftPromptText(envelope: WriterContextEnvelope): stri
     "Use only the structured context sections below.",
     "Follow the 本章硬约束 section before any stylistic preference.",
     "If the previous_uncommitted_draft section exists, treat it as the immediate previous chapter even though it is not formal state; preserve protagonist identity, pronouns, scene facts, and unresolved pressure from it.",
+    "If the previous_chapter section exists, it is the verbatim text of the immediately previous chapter. Continue from where it ends; every object's state and location, every character's whereabouts, and who-knows-what must match it; never re-discover or redo what already happened there — move the story forward.",
     "正文开头必须是 markdown 章节标题，格式：# 第N章 · 标题。",
     "标题由你根据本章正文自然拟定，必须存在，但不要剧透 protectedSecrets / forbiddenReveals，也不要提前揭开 unknownTruths。",
     "连续章节必须避免重复上一章开头场面、首句结构和人物进场方式；除非用户明确要求原地续接，否则用新的动作、时间点或压力源切入。",

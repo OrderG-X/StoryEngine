@@ -11,9 +11,18 @@ const DEFAULT_DROP_ORDER = [
   "story_continuity",
 ] as const;
 
-const PROTECTED_DYNAMIC_SECTIONS = new Set(["chapter_goal", "writing_context_pack", "character_state"]);
+// 上一章正文（已定稿 previous_chapter / 未定稿 previous_uncommitted_draft）是接着写的真值源，永不裁
+// （2026-10-08 十章验收：写手只看摘要时物件状态、人物位置逐章漂移）。
+const PROTECTED_DYNAMIC_SECTIONS = new Set([
+  "chapter_goal",
+  "previous_chapter",
+  "previous_uncommitted_draft",
+  "writing_context_pack",
+  "character_state",
+]);
 const CORE_IMPACT_SECTIONS = new Set(["story_continuity"]);
-export const DEFAULT_TOKEN_BUDGET = 12_000;
+// 12k → 15k：给上一章正文（约 2.5–3.5k token）腾位置，不挤掉原有的线索/伏笔段。
+export const DEFAULT_TOKEN_BUDGET = 15_000;
 
 /**
  * 生产出稿路径用：把"用户/路由没显式给预算"解析成默认预算 DEFAULT_TOKEN_BUDGET，

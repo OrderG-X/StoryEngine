@@ -91,4 +91,57 @@ describe("selectEffectiveFacts", () => {
     const out = selectEffectiveFacts({ facts, chapter: 20, chapterGoal: "本章处理遗产", relevantNames: ["林远"], cap: 2 });
     expect(out.facts[0]).toBe("第3章：林远背着一笔旧债"); // 人名压过方向+recency
   });
+
+  // 2026-10-08 十章验收：主角名出现在一半以上事实里，+4 让排序退化成「最近 N 条」；
+  // 三章前「菜场十年前就拆了」这类不带人名的事实再也翻不出来，第 8 章就写成了「菜场还在」。
+  it("人人都带的主角名降权 + 上一章原文里的特有词把早期相关事实翻出来", () => {
+    const facts: FactEntry[] = [
+      fact({ id: "market", chapter: 4, text: "南门菜场十年前就拆了，原址盖了商场" }),
+      ...Array.from({ length: 20 }, (_, i) =>
+        fact({ id: `p${i}`, chapter: 5 + Math.floor(i / 4), text: `林舟在铺子里修表第${["一", "二", "三", "四", "五"][i % 5]}回，台灯亮着` }),
+      ),
+    ];
+    const out = selectEffectiveFacts({
+      facts,
+      chapter: 8,
+      relevantNames: ["林舟"],
+      continuityText: "林舟把登记表折好塞进口袋，决定明天一早骑车去南门菜场后街看看。",
+      cap: 5,
+    });
+    expect(out.facts[0]).toBe("第4章：南门菜场十年前就拆了，原址盖了商场");
+  });
+
+  it("事实不多时不判「人人都带」：名字仍 4 分；上一章正写到的物件/地点（多个特有词）排得更前", () => {
+    const facts = [
+      fact({ id: "named", chapter: 2, text: "林舟背着一笔旧债" }),
+      fact({ id: "ctx", chapter: 3, text: "南门菜场十年前就拆了" }),
+      fact({ id: "noise", chapter: 4, text: "天气转凉了" }),
+    ];
+    const out = selectEffectiveFacts({ facts, chapter: 5, relevantNames: ["林舟"], continuityText: "去南门菜场", cap: 2 });
+    expect(out.facts).toEqual(["第3章：南门菜场十年前就拆了", "第2章：林舟背着一笔旧债"]);
+  });
+
+  it("没有上一章原文时与旧行为一致", () => {
+    const facts = [fact({ id: "a", chapter: 3, text: "近期A" }), fact({ id: "b", chapter: 9, text: "近期B" })];
+    expect(selectEffectiveFacts({ facts, chapter: 10, cap: 1, continuityText: "" }).facts).toEqual(["第9章：近期B"]);
+  });
+
+  it("小卡司里条条带配角名时，上一章正写到的物件的旧事实也有保底名额", () => {
+    const names = ["许棠", "周婶", "林溪", "老赵"];
+    const facts: FactEntry[] = [
+      fact({ id: "ledger", chapter: 2, text: "登记表上的地址是南门槐树巷十七号" }),
+      ...Array.from({ length: 40 }, (_, i) =>
+        fact({ id: `c${i}`, chapter: 3 + (i % 5), text: `${names[i % 4]}第${i}次来铺子里坐了一会儿` }),
+      ),
+    ];
+    const out = selectEffectiveFacts({
+      facts,
+      chapter: 9,
+      relevantNames: names,
+      continuityText: "他又把登记表摊开，盯着槐树巷那一行看了很久。",
+      cap: 10,
+    });
+    expect(out.facts).toContain("第2章：登记表上的地址是南门槐树巷十七号");
+    expect(out.facts).toHaveLength(10);
+  });
 });

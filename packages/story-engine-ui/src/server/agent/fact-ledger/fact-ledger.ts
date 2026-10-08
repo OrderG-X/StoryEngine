@@ -25,10 +25,23 @@ export type FactCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
 ) => Promise<string>;
 
+// 模型无关（2026-10-08）：旧版 .strict() 让模型多给一个键（如 {text, chapter}）就整章抽取失败、这章一条事实都没有
+// （十章验收第 8 章实锤）。改成宽进：多余键丢掉、条目给成纯字符串也收；空条目逐条丢弃，不连坐整章。
+const factItemSchema = z.union([
+  z.string(),
+  z.object({ text: z.string() }).passthrough().transform((item) => item.text),
+]);
+const nameItemSchema = z.union([
+  z.string(),
+  z.object({ name: z.string() }).passthrough().transform((item) => item.name),
+]);
 const extractionSchema = z.object({
-  facts: z.array(z.object({ text: z.string().trim().min(1) }).strict()).default([]),
-  newCharacters: z.array(z.object({ name: z.string().trim().min(1) }).strict()).default([]),
-}).strict();
+  facts: z.array(factItemSchema.catch("")).default([]),
+  newCharacters: z.array(nameItemSchema.catch("")).default([]),
+}).passthrough();
+
+/** 抽取失败（模型挂了 / 不是 JSON）自动再试的次数。 */
+const EXTRACTION_RETRIES = 1;
 
 export function buildFactExtractionMessages(
   draftText: string,
@@ -52,8 +65,8 @@ export function parseFactExtraction(
   if (!match) throw new Error("硬事实抽取结果不是 JSON。");
   const parsed = extractionSchema.parse(JSON.parse(match[0]));
   return {
-    facts: parsed.facts.map((fact) => fact.text.trim()).filter((text) => text.length > 0),
-    newCharacters: parsed.newCharacters.map((c) => c.name.trim()).filter((name) => name.length > 0),
+    facts: parsed.facts.map((fact) => fact.trim()).filter((text) => text.length > 0),
+    newCharacters: parsed.newCharacters.map((name) => name.trim()).filter((name) => name.length > 0),
   };
 }
 
@@ -111,6 +124,18 @@ async function writeLedger(projectDir: string, facts: readonly FactEntry[]): Pro
   await writeFileAtomic(path, JSON.stringify({ version: "v0", facts }, null, 2));
 }
 
+/** 本章下一个事实序号：取已有最大序号 + 1（按条数算的旧法在删过条目后会撞号）。 */
+function nextFactSeq(facts: readonly FactEntry[], chapter: number): number {
+  const prefix = `fact-${chapter}-`;
+  let max = -1;
+  for (const fact of facts) {
+    if (!fact.id.startsWith(prefix)) continue;
+    const seq = Number(fact.id.slice(prefix.length));
+    if (Number.isInteger(seq) && seq > max) max = seq;
+  }
+  return Math.max(max + 1, facts.filter((fact) => fact.chapter === chapter).length);
+}
+
 export async function appendFacts(
   projectDir: string,
   chapter: number,
@@ -126,7 +151,7 @@ export async function appendFacts(
     throw error;
   }
   const seen = new Set(facts.map((fact) => normalize(fact.text)));
-  let seq = facts.filter((fact) => fact.chapter === chapter).length;
+  let seq = nextFactSeq(facts, chapter);
   const added: FactEntry[] = [];
   for (const raw of texts) {
     const text = raw.trim();
@@ -202,7 +227,7 @@ export async function applyFactEdit(
     if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
       return { ok: false, summary: "记硬事实需要『发生在第几章』(正整数章号)——没定位到当前章的话，先告诉我章号。" };
     }
-    const seq = facts.filter((fact) => fact.chapter === chapter).length;
+    const seq = nextFactSeq(facts, chapter);
     await writeLedger(projectDir, [...facts, { id: `fact-${chapter}-${seq}`, chapter, text, source: "manual" }]);
     return { ok: true, summary: `已记一条硬事实：${text}` };
   }
@@ -235,12 +260,25 @@ export async function extractAndAppendFacts(input: {
   if (!input.draftText.trim()) return { ok: true, added: 0, summary: "", newCharacters: [] };
   let facts: readonly string[];
   let rawNew: readonly string[];
-  try {
-    const out = await input.callModel(buildFactExtractionMessages(input.draftText, input.knownNames ?? []));
-    ({ facts, newCharacters: rawNew } = parseFactExtraction(out));
-  } catch {
-    return { ok: false, added: 0, summary: "（这章的硬事实没抽成，可让我重抽一次。）", newCharacters: [] };
+  const messages = buildFactExtractionMessages(input.draftText, input.knownNames ?? []);
+  let extracted: ReturnType<typeof parseFactExtraction> | undefined;
+  for (let attempt = 0; attempt <= EXTRACTION_RETRIES && !extracted; attempt += 1) {
+    try {
+      extracted = parseFactExtraction(await input.callModel(messages));
+    } catch {
+      extracted = undefined;
+    }
   }
+  if (!extracted) {
+    // 旧文案「可让我重抽一次」背后没有能重抽的工具——如实说清：自动重试过、仍没成、影响是什么。
+    return {
+      ok: false,
+      added: 0,
+      summary: "（这章的硬事实没抽成，已自动重试一次仍失败；定稿不受影响，只是后面写作时少了这一章的事实参照。）",
+      newCharacters: [],
+    };
+  }
+  ({ facts, newCharacters: rawNew } = extracted);
   const added = await appendFacts(input.projectDir, input.chapter, facts, "auto");
   const newCharacters = validateNewCharacterNames(rawNew, new Set(input.knownNames ?? []));
   return {
