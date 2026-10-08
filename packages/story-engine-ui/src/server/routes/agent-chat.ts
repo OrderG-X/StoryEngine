@@ -31,6 +31,7 @@ import {
   detectUnbackedCompletionClaim,
   inferClaimedWriteTool,
   isGroundedRefusalReply,
+  missingExecutionWithUnbackedVerdict,
   isVerdictToolName,
   OBEDIENCE_RETRY_TRANSITION_TEXT,
   sanitizeCorrectedAssistantHistory,
@@ -219,11 +220,11 @@ export function serverHonestyCorrectionText(args: {
   if (detectUnbackedCompletionClaim(assistantText, args.toolSteps)) {
     return `\n\n⚠️ 系统更正：${unbackedCompletionNoticeText(assistantText, userText)}`;
   }
-  // 有磁盘依据、无完成声称的回合豁免（审计 A-4 + 复审 T4 三轮：读/预览工具已返回裁决（completed/verdict），
-  // 如实答「第 99 章不存在没法定稿」「预览通过可以定稿」是正确回合，不是口头声称）——不追加更正；
-  // runObedientAgentTurn 只在 A1（无背书完成声称）时重做，A2 缺执行不再触发重做。
+  // 有磁盘依据、无完成声称的回合豁免（审计 A-4 + 复审 T4 三轮）。
   if (isGroundedRefusalReply(assistantText, args.toolSteps)) return null;
-  const missingExecution = detectMissingExecutionForRequest(userText, args.toolSteps);
+  // 2026-10-08 阶段 5：「请求了却没做」只在回复声称了那个结果（质检通过 / 可以定稿）时才更正——
+  // 十章验收误报：用户只是提到「定稿预览」、AI 也没说预览过，就被更正成「定稿影响预览没有执行」。
+  const missingExecution = missingExecutionWithUnbackedVerdict(userText, assistantText, args.toolSteps);
   if (missingExecution) {
     return `\n\n⚠️ 系统更正：${missingExecution.notice}`;
   }

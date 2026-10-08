@@ -43,6 +43,18 @@ export interface SummarizedEvidence extends ChapterDeltaEvidence {
   readonly summary: string;
 }
 
+/**
+ * 本章关键线索声明（2026-10-08 写作主链重设计·阶段 4「记账对号」）：
+ * 十章验收里同一个问题被开成 3 条线索、「N 章没推进」一半是误报——根因是线索声明只能新建、不能指向旧条目。
+ * 现在与 arcGoalProgress 同构：progress=advanced 且 targetThreadHint 指向已开着的线索 → 推进那一条，不新建。
+ */
+export interface LeadDeclaration extends SummarizedEvidence {
+  /** introduced=本章新冒出来的线索；advanced=本章推进了一条已开着的线索。缺省按 introduced（旧行为）。 */
+  readonly progress?: "introduced" | "advanced";
+  /** 推进的是哪条已开着的线索（逐字取其标题）。 */
+  readonly targetThreadHint?: string;
+}
+
 /** 本章留下的未完成待办/下一步意图。 */
 export interface PendingIntentDeclaration extends ChapterDeltaEvidence {
   readonly summary: string;
@@ -98,7 +110,7 @@ export interface ChapterDeltaDeclaration {
   readonly seededForeshadowing: readonly ForeshadowingDeclaration[];
   readonly resolvedForeshadowing: readonly ForeshadowingDeclaration[];
   readonly resourceDeltas: readonly ResourceDeltaDeclaration[];
-  readonly keyLeads: readonly SummarizedEvidence[];
+  readonly keyLeads: readonly LeadDeclaration[];
   /** 本章留下的未完成待办/下一步意图（可选；缺省视为空）。 */
   readonly pendingIntents?: readonly PendingIntentDeclaration[];
   /** 本章出现的角色名册（可选；缺省视为未声明，名字漂移校验自动跳过）。 */
@@ -140,7 +152,7 @@ export interface VerifiedChapterDelta {
   readonly seededForeshadowing: readonly ForeshadowingDeclaration[];
   readonly resolvedForeshadowing: readonly ForeshadowingDeclaration[];
   readonly resourceDeltas: readonly ResourceDeltaDeclaration[];
-  readonly keyLeads: readonly SummarizedEvidence[];
+  readonly keyLeads: readonly LeadDeclaration[];
   /** 校验通过的未完成待办/下一步意图。 */
   readonly pendingIntents: readonly PendingIntentDeclaration[];
   /** 校验通过的人物名册（名字逐字出现在证据句、且证据句在草稿里）。 */

@@ -212,6 +212,8 @@ export interface RepairResult {
   readonly draftBody: string;
   /** 实际改掉的段落数。 */
   readonly repairedParagraphs: number;
+  /** 改掉的段落在新正文里的编号（复核只看这几段）。 */
+  readonly changedIndexes?: readonly number[];
   readonly error?: string;
 }
 
@@ -246,18 +248,33 @@ export async function repairContinuityIssues(input: {
   } catch {
     return { draftBody: input.draftBody, repairedParagraphs: 0, error: "改稿结果不是 JSON" };
   }
-  let repaired = 0;
+  const changedIndexes: number[] = [];
   for (const item of rewritten) {
     const record = asRecord(item);
     const index = Number(record?.index);
     const text = String(record?.text ?? "").trim();
-    if (!byIndex.has(index) || !text) continue;
+    if (!byIndex.has(index) || !text || changedIndexes.includes(index)) continue;
     // 改出来比原段短一半以上 → 多半是删光了或只回了半句，不用。
     if (text.length < paragraphs[index].length * 0.5) continue;
     paragraphs[index] = text;
-    repaired += 1;
+    changedIndexes.push(index);
   }
-  return { draftBody: repaired > 0 ? paragraphs.join("\n\n") : input.draftBody, repairedParagraphs: repaired };
+  return changedIndexes.length > 0
+    ? { draftBody: paragraphs.join("\n\n"), repairedParagraphs: changedIndexes.length, changedIndexes }
+    : { draftBody: input.draftBody, repairedParagraphs: 0 };
+}
+
+/**
+ * 复核只看改过的段落（连同前后各一段作语境）：比整章重审快得多，又能抓住「改出了新冲突 / 没改掉」。
+ * 漏写要点不在复核范围（整章级的问题，第一次审读已经报过）。
+ */
+export function buildSegmentForRecheck(draftBody: string, changedIndexes: readonly number[]): string {
+  const paragraphs = splitParagraphs(draftBody);
+  const keep = new Set<number>();
+  for (const index of changedIndexes) {
+    for (const near of [index - 1, index, index + 1]) if (near >= 0 && near < paragraphs.length) keep.add(near);
+  }
+  return [...keep].sort((a, b) => a - b).map((index) => paragraphs[index]).join("\n\n");
 }
 
 export interface CheckAndRepairResult {
@@ -271,7 +288,13 @@ export interface CheckAndRepairResult {
   readonly repairError?: string;
 }
 
-/** 核一遍 → 有冲突就修一轮 → 再核一遍。最多一轮修，绝不循环。 */
+/** 自动修最多几轮（每轮：改冲突段 → 只复核改过的段）。 */
+const MAX_REPAIR_ROUNDS = 2;
+
+/**
+ * 整章核一遍 → 有冲突就改涉及的段 → 只复核改过的段 → 还有就再改一轮（最多两轮），绝不无限循环。
+ * 复核没跑成不能说「已一致」：把那一轮要修的问题原样留给作者。漏写要点（整章级）不自动改，直接留给作者。
+ */
 export async function checkAndRepairContinuity(input: {
   readonly chapter: number;
   readonly draftBody: string;
@@ -281,28 +304,38 @@ export async function checkAndRepairContinuity(input: {
   readonly repairCallModel: CheckCallModel;
 }): Promise<CheckAndRepairResult> {
   const firstCheck = await checkContinuity({ ...input, callModel: input.checkCallModel });
-  const fixable = firstCheck.issues.filter((issue) => issue.type !== "missing_beat");
-  if (!firstCheck.checked || fixable.length === 0) {
+  const missingBeats = firstCheck.issues.filter((issue) => issue.type === "missing_beat");
+  let pending = firstCheck.issues.filter((issue) => issue.type !== "missing_beat");
+  if (!firstCheck.checked || pending.length === 0) {
     return { draftBody: input.draftBody, changed: false, firstCheck, repairedParagraphs: 0, remaining: firstCheck.issues };
   }
-  const repair = await repairContinuityIssues({
-    draftBody: input.draftBody, issues: fixable, references: input.references, callModel: input.repairCallModel,
-  });
-  if (repair.repairedParagraphs === 0) {
-    return {
-      draftBody: input.draftBody, changed: false, firstCheck, repairedParagraphs: 0, remaining: firstCheck.issues,
-      ...(repair.error ? { repairError: repair.error } : {}),
-    };
+  let body = input.draftBody;
+  let repairedParagraphs = 0;
+  let repairError: string | undefined;
+  let recheck: ContinuityCheckResult | undefined;
+  for (let round = 0; round < MAX_REPAIR_ROUNDS && pending.length > 0; round += 1) {
+    const repair = await repairContinuityIssues({ draftBody: body, issues: pending, references: input.references, callModel: input.repairCallModel });
+    if (repair.repairedParagraphs === 0 || !repair.changedIndexes) {
+      if (repair.error) repairError = repair.error;
+      break;
+    }
+    body = repair.draftBody;
+    repairedParagraphs += repair.repairedParagraphs;
+    const segment = buildSegmentForRecheck(body, repair.changedIndexes);
+    recheck = await checkContinuity({ chapter: input.chapter, draftBody: segment, references: input.references, callModel: input.checkCallModel });
+    // 复核没跑成：不能说已一致——这一轮要修的问题原样留给作者。
+    if (!recheck.checked) break;
+    pending = recheck.issues.filter((issue) => issue.type !== "missing_beat");
   }
-  const recheck = await checkContinuity({ ...input, draftBody: repair.draftBody, callModel: input.checkCallModel });
+  const changed = body !== input.draftBody;
   return {
-    draftBody: repair.draftBody,
-    changed: true,
+    draftBody: body,
+    changed,
     firstCheck,
-    repairedParagraphs: repair.repairedParagraphs,
-    // 复核没跑成：不能说「已一致」——把第一次发现的问题原样留给作者。
-    remaining: recheck.checked ? recheck.issues : firstCheck.issues,
-    recheck,
+    repairedParagraphs,
+    remaining: [...pending, ...missingBeats],
+    ...(recheck ? { recheck } : {}),
+    ...(repairError ? { repairError } : {}),
   };
 }
 

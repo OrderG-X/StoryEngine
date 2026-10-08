@@ -108,7 +108,10 @@ export async function collectPlanMaterials(projectDir: string, chapter: number):
     recentChapters,
     openThreads,
     openGoals,
-    characters: (characterBible?.characters ?? []).map((character) => character.name).filter(Boolean),
+    // 带身份：只给名字时拟章纲会把人用错（验收第 1 章把拆迁办干部许棠写成了送表的熟客）。
+    characters: (characterBible?.characters ?? [])
+      .filter((character) => Boolean(character.name))
+      .map((character) => (character.role?.trim() ? `${character.name}（${character.role.trim().slice(0, 30)}）` : character.name)),
     entities: [
       ...assetLedger.assets.map((asset) => asset.name).filter(Boolean),
       ...(locationBible?.locations ?? []).map((location) => location.name).filter(Boolean),
@@ -145,7 +148,7 @@ export function buildPlanMessages(
     materials.openGoals.length > 0 ? `【目标】\n${materials.openGoals.join("\n")}` : "",
     materials.openThreads.length > 0 ? `【开着的线索】\n${materials.openThreads.join("\n")}` : "",
     materials.recentChapters.length > 0 ? `【前面几章发生了什么】\n${materials.recentChapters.join("\n")}` : "",
-    materials.characters.length > 0 ? `【已有人物】${materials.characters.join("、")}` : "",
+    materials.characters.length > 0 ? `【已有人物（括号里是身份，别用错人）】${materials.characters.join("、")}` : "",
     materials.entities.length > 0 ? `【已登记的物件/地点】${materials.entities.join("、")}` : "",
     materials.protectedSecrets.length > 0 ? `【受保护的秘密（不要揭开）】${materials.protectedSecrets.join("；")}` : "",
     materials.previousChapter

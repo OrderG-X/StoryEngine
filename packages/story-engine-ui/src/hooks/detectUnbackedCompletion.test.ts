@@ -659,9 +659,14 @@ describe("有依据的拒绝豁免·复审 T4 返工钉档（7 句探针 + commi
       expect(isGroundedRefusalReply(content, [step("read_state_overview", status)])).toBe(false);
       expect(isGroundedRefusalReply(content, [step("commit_preview", status)])).toBe(false);
     }
-    // 读失败的拒绝落到 A2 兜底：「定稿没有执行」照样更正（不是静默放行）
-    const patch = honestyRewritePatch({
+    // 阶段 5：调了工具的回合（哪怕读失败），如实拒绝、没声称做成 → 不替换；声称了没跑的结果 → 照样替换。
+    expect(honestyRewritePatch({
       content,
+      toolSteps: [step("read_state_overview", "failed")],
+      userText: T4_USER,
+    })).toBeNull();
+    const patch = honestyRewritePatch({
+      content: "看过了，可以定稿。",
       toolSteps: [step("read_state_overview", "failed")],
       userText: T4_USER,
     });

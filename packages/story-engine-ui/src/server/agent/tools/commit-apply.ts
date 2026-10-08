@@ -25,7 +25,8 @@ import { coerceNumber } from "./lenient-args.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
-import { extractAndAppendFacts, type FactCallModel } from "../fact-ledger/fact-ledger.js";
+import { type FactCallModel } from "../fact-ledger/fact-ledger.js";
+import { extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
 import { writeTool } from "../withSnapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
@@ -432,7 +433,8 @@ export const commitApplyTool = writeTool({
       const knownNames = (ov?.characterMatrix?.characters ?? [])
         .map((c) => c.name)
         .filter((n): n is string => typeof n === "string" && n.length > 0);
-      const fact = await extractAndAppendFacts({
+      // 阶段 4「记账对号」：抽事实时对照本章相关的旧事实——明写的变化让旧条失效，对不上的不动账本、交给作者定。
+      const fact = await extractAndReconcileFacts({
         projectDir,
         chapter: resolvedChapter,
         draftText: result.draftBody,

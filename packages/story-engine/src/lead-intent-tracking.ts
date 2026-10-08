@@ -1,4 +1,4 @@
-import type { ForeshadowingDeclaration, PendingIntentDeclaration, VerifiedChapterDelta } from "./chapter-delta.js";
+import type { ForeshadowingDeclaration, LeadDeclaration, PendingIntentDeclaration, VerifiedChapterDelta } from "./chapter-delta.js";
 import type { ChapterSemanticSummary } from "./commit-plan-builder.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import { bigramSimilarity } from "./text-similarity.js";
@@ -247,14 +247,34 @@ function extractDeclaredThreadCandidates(input: {
       targetThreadId: target.id,
     });
   }
-  const newLeadDeclarations = [
-    ...input.verifiedDelta.seededForeshadowing,
-    ...input.verifiedDelta.keyLeads,
-  ];
+  // 阶段 4「记账对号」：声明说本章推进的是某条已开着的线索 → 触碰那一条（touched、更新最近推进章），不新建。
+  // 指不到（标题对不上）→ 当新线索处理（下面的新建路径），宁可多一条也不丢。
+  const newLeadDeclarations: (ForeshadowingDeclaration | LeadDeclaration)[] = [...input.verifiedDelta.seededForeshadowing];
+  for (const declared of input.verifiedDelta.keyLeads) {
+    const target = declared.progress === "advanced" || declared.targetThreadHint
+      ? findAdvancedTargetThread(declared, activeThreads)
+      : undefined;
+    if (target) {
+      if (!candidates.some((candidate) => candidate.targetThreadId === target.id)) {
+        candidates.push({
+          type: target.type,
+          title: target.title,
+          evidence: truncateText(declared.quote, 120),
+          isDone: false,
+          targetThreadId: target.id,
+        });
+      }
+      continue;
+    }
+    newLeadDeclarations.push(declared);
+  }
   for (const declared of newLeadDeclarations) {
     const title = cleanTitle(declared.summary);
     if (!title) continue;
     if (!isQualityLead(title, declared.quote)) continue;
+    // 同一批声明里 seeded 与 keyLeads 常是同一件事换个说法：批内去重（标题互相包含 / 字面相近），只留第一条。
+    if (candidates.some((candidate) => !candidate.targetThreadId && candidate.type === "lead"
+      && (titlesOverlap(candidate.title, title) || bigramSimilarity(candidate.title, title) >= BATCH_DUPLICATE_SIMILARITY))) continue;
     candidates.push({
       type: "lead",
       title,
@@ -303,6 +323,30 @@ export function expireStaleIntents(input: {
     pool: { threads },
     expired,
   };
+}
+
+/** 同一批新线索之间算重复的字面相近度阈值（bigram 相似度）。 */
+const BATCH_DUPLICATE_SIMILARITY = 0.5;
+
+/**
+ * 推进声明指向哪条已开着的线索：targetThreadHint 与标题逐字相同（去空白、去截断省略号）优先，其次标题互相包含；
+ * 不走「任意两字片段」的宽松锚点——推进只是触碰，指错了会让真线索被误判在推进。
+ */
+function findAdvancedTargetThread(
+  declared: LeadDeclaration,
+  activeThreads: readonly NarrativeThread[],
+): NarrativeThread | undefined {
+  const bare = (value: string) => value.replace(/[\s…]+/gu, "").replace(/\.{3}$/u, "");
+  const hint = declared.targetThreadHint?.trim();
+  if (hint) {
+    // 入库标题过长会被截成「前 16 字…」：提示给的是完整说法时，按「以截断标题开头」也算同一条。
+    const exact = activeThreads.find((thread) => bare(thread.title) === bare(hint)
+      || (thread.title.trim().endsWith("…") && bare(thread.title).length >= 6 && bare(hint).startsWith(bare(thread.title))));
+    if (exact) return exact;
+    const overlap = activeThreads.find((thread) => titlesOverlap(thread.title, hint));
+    if (overlap) return overlap;
+  }
+  return activeThreads.find((thread) => titlesOverlap(thread.title, declared.summary));
 }
 
 /**

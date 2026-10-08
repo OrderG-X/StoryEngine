@@ -624,12 +624,33 @@ export function honestyRewritePatch(args: {
     const isCommit = claimMatches(COMMIT_COMPLETION_CLAIM, args.content) || COMMIT_APPLY_REQUEST.test(args.userText);
     return clearedPatch(notice, isCommit);
   }
-  // 有磁盘依据、且无完成声称的回合不是违令（审计 A-4 + 复审 T4 三轮）：读/预览工具已给出裁决
-  // （completed/verdict），如实说「不存在/没法定稿/预览通过可以定稿」，别盖「没有执行」文案。
   if (isGroundedRefusalReply(args.content, args.toolSteps)) return null;
-  const missingExecution = detectMissingExecutionForRequest(args.userText, args.toolSteps);
+  const missingExecution = missingExecutionWithUnbackedVerdict(args.userText, args.content, args.toolSteps);
   if (missingExecution) {
     return clearedPatch(missingExecution.notice, missingExecution.intent === "commit_apply");
   }
   return null;
+}
+
+/**
+ * 回复里「报了只读裁决的结果」：质检/检查/预览/核对通过、没问题，可以定稿/入库。
+ * 只认模型自己的话（不是用户原话）——没跑对应工具却这么说，就是编造了一个裁决。
+ */
+const UNBACKED_VERDICT_CLAIM = /(?:质检|检查|预览|核对|审稿|审阅)[^。！？\n]{0,8}(?:通过|没问题|无误|合格|过了)|(?:可以|能)(?:直接)?(?:入库|定稿)/u;
+
+/**
+ * 「请求了却没做」的更正收窄（2026-10-08 写作主链重设计·阶段 5）。
+ * 十章验收实锤：用户说「按定稿预览里说的问题修好…改完先别定稿」，AI 真调改稿工具补了 4 处字、没说预览通过，
+ * 整段回复却被换成「定稿影响预览没有执行」——正则把用户原话里的「定稿预览」当成了请求。
+ * 现在：这一轮一个工具都没调（空口回话）→ 照旧兜底更正；调了工具 → 只有回复声称了没跑的那个结果
+ * （质检通过 / 可以定稿）才更正，正常干活的回合不再被盖掉。
+ */
+export function missingExecutionWithUnbackedVerdict(
+  userText: string,
+  assistantText: string,
+  toolSteps: readonly ToolStep[] | undefined,
+): MissingExecutionResult | null {
+  const ranAnyTool = (toolSteps ?? []).length > 0;
+  if (ranAnyTool && !UNBACKED_VERDICT_CLAIM.test(assistantText)) return null;
+  return detectMissingExecutionForRequest(userText, toolSteps);
 }

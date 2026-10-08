@@ -140,12 +140,29 @@ describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
     })).toBeNull();
   });
 
-  it("复审 T4：读/预览步 failed 的拒绝没有磁盘依据 → 仍追加更正（不豁免）", () => {
+  // 2026-10-08 阶段 5：调了工具的回合，只有声称了没跑的结果才更正（如实拒绝不是谎报）。
+  it("复审 T4：读步 failed 后如实拒绝、没声称做成 → 不更正（阶段 5）", () => {
     expect(serverHonestyCorrectionText({
       userText: "把第 99 章正式入库",
       assistantText: "第 99 章不存在，没法入库。",
       toolSteps: [{ toolName: "read_state_overview", status: "failed" }],
+    })).toBeNull();
+  });
+
+  it("没跑预览却说「预览通过、可以定稿」（只调了改稿工具）→ 照样更正（编造裁决）", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "生成第 3 章定稿预览",
+      assistantText: "改好了，预览通过了，可以定稿。",
+      toolSteps: [{ toolName: "revise_draft", status: "completed" }],
     })).toContain("⚠️ 系统更正");
+  });
+
+  it("十章验收误报：用户只是提到「定稿预览」、AI 调改稿工具补完字、没说预览过 → 不更正", () => {
+    expect(serverHonestyCorrectionText({
+      userText: "按定稿预览里说的问题把第 5 章修好：字数不够就扩写到下限以上。改完先别定稿。",
+      assistantText: "第一处补好了，匾额已经点明。再补修座钟那一段。",
+      toolSteps: [{ toolName: "read_draft", status: "completed" }, { toolName: "revise_draft", status: "completed" }],
+    })).toBeNull();
   });
 
   it("复审 T4：拒绝话术混着把字句/帮你句假完成声称 → 豁免不挡，照抓更正", () => {
@@ -656,9 +673,9 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(text).toContain("「确认定稿」按钮");
   });
 
-  it("写完生成预览：正文跑了、预览尾步没跑 → 不补做，只追加预览缺失更正", async () => {
+  it("写完生成预览：正文跑了、预览尾步没跑却说可以定稿 → 不补做，只追加预览缺失更正", async () => {
     const fake = makeStreamAttempt([
-      [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成。")],
+      [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成，可以定稿。")],
     ]);
     const events: { event: string; data: unknown }[] = [];
     const { attempts } = await runObedientAgentTurn({

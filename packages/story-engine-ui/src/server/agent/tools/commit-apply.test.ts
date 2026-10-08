@@ -11,7 +11,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
-import { extractAndAppendFacts } from "../fact-ledger/fact-ledger.js";
+import { extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
 import { listSnapshots } from "../../lib/snapshot.js";
 import {
   appendLifecycleNotesToSummary,
@@ -34,8 +34,8 @@ import { __resetCommitPreviewStore } from "./commit-preview-store.js";
 // 入库后抽硬事实是非致命附加步骤，且会真连 LLM 网络（writer.example.com）——单测 mock 掉，
 // 避免走完整 execute 路径的「currentChapter 兜底」测试依赖网络变 flaky（CI/离线必超时）。
 // 入库主逻辑（applyCommitToolLogic）不经此函数，不受影响。
-vi.mock("../fact-ledger/fact-ledger.js", () => ({
-  extractAndAppendFacts: vi.fn(async () => ({ ok: true, added: 0, summary: "", newCharacters: [] })),
+vi.mock("../fact-ledger/reconcile-facts.js", () => ({
+  extractAndReconcileFacts: vi.fn(async () => ({ ok: true, added: 0, superseded: [], conflicts: [], summary: "", newCharacters: [] })),
 }));
 
 // 硬事实抽取的模型调用边界（P2：走 streamChatModelToText 空闲超时，不再是非流式 20s 固定死表）。其余 llm-client 走真实现。
@@ -702,8 +702,8 @@ describe("buildThreadMaintenanceNote（入库后线索堆积提醒）", () => {
 });
 
 describe("commit_apply 入库后告知：knownNames 用真实显示名（防主角被误报为新人物）", () => {
-  it("execute 给 extractAndAppendFacts 传的 knownNames 是真名、不含 slug", async () => {
-    const mocked = vi.mocked(extractAndAppendFacts);
+  it("execute 给抽事实（对照旧事实）传的 knownNames 是真名、不含 slug", async () => {
+    const mocked = vi.mocked(extractAndReconcileFacts);
     mocked.mockClear();
     const projectDir = await makeProject("knownNames真名", "林远");
     await writeDraft(projectDir, 1, longDraft(1, "林远"));

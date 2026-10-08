@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildSegmentForRecheck,
   checkAndRepairContinuity,
   collectContinuityReferences,
   describeContinuityOutcome,
@@ -122,3 +123,41 @@ describe("collectContinuityReferences", () => {
     expect(refs.previousChapterTail).toBe("上一章结尾。");
   });
 });
+
+describe("复核只看改过的段 + 最多两轮", () => {
+  it("buildSegmentForRecheck：改过的段连同前后各一段", () => {
+    const body = ["一", "二", "三", "四", "五"].join("\n\n");
+    expect(buildSegmentForRecheck(body, [2])).toBe("二\n\n三\n\n四");
+    expect(buildSegmentForRecheck(body, [0, 4])).toBe("一\n\n二\n\n四\n\n五");
+  });
+
+  it("第一轮没改干净 → 第二轮再改；复核喂的是片段不是整章", async () => {
+    const check = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场的豆腐摊", conflict: "第4章：菜场已拆", fix: "去掉豆腐摊" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
+    const repair = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早拆了，可原址门口还剩菜场的豆腐摊，摆着几块豆腐。" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早拆了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
+    const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
+    expect(repair).toHaveBeenCalledTimes(2);
+    expect(result.repairedParagraphs).toBe(2);
+    expect(result.remaining).toEqual([]);
+    expect(result.draftBody).toContain("原址立着一排商场");
+    // 复核调用里的「本章正文」只是改过的段与前后段，不含与改动无关的段落之外的内容。
+    const recheckUser = String((check.mock.calls[1][0] as { content: string }[])[1].content);
+    expect(recheckUser).toContain("菜场早拆了");
+  });
+
+  it("两轮都没改干净 → 剩下的留给作者，不无限循环", async () => {
+    // 引文要逐字命中（≥4 字）：原文与两次改稿里都有「门口摆着几摊卖豆腐的」。
+    const stubborn = JSON.stringify({ issues: [{ type: "contradiction", quote: "门口摆着几摊卖豆腐的", conflict: "第4章：菜场已拆", fix: "改" }] });
+    const check = vi.fn(async () => stubborn);
+    const repair = vi.fn(async () => JSON.stringify({ paragraphs: [{ index: 1, text: "菜场还是在那里，门口摆着几摊卖豆腐的。" }] }));
+    const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
+    expect(repair).toHaveBeenCalledTimes(2);
+    expect(check).toHaveBeenCalledTimes(3);
+    expect(result.remaining).toHaveLength(1);
+  });
+});
+

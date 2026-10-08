@@ -42,6 +42,8 @@ export interface QualityPipelineInput {
 }
 
 export interface QualityPipelineInfo {
+  /** 各环节耗时（毫秒）：长篇里「写一章要多久」要看得见，慢在哪一步才能对症。 */
+  readonly timings?: { readonly continueMs?: number; readonly continuityMs?: number };
   readonly continuation?: { readonly before: number; readonly after: number; readonly rounds: number; readonly failures: readonly string[] };
   readonly continuity?: {
     readonly checked: boolean;
@@ -76,8 +78,10 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   const notes: string[] = [];
   let info: QualityPipelineInfo = {};
 
+  const timings: { continueMs?: number; continuityMs?: number } = {};
   // ① 字数在出稿这一步写够（接着写，不在中间插句）。
   if (input.continueCallModel && countDraftChineseCharacters(body) < input.lengthTarget.lowerBound) {
+    const startedAt = Date.now();
     const continued = await continueDraftToLength({
       chapter: input.chapter,
       draftBody: body,
@@ -85,6 +89,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       callModel: input.continueCallModel,
       ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
     });
+    timings.continueMs = Date.now() - startedAt;
     info = { ...info, continuation: { before: continued.before, after: continued.after, rounds: continued.rounds, failures: continued.failures } };
     if (continued.rounds > 0) {
       body = continued.draftBody;
@@ -96,8 +101,9 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     }
   }
 
-  // ② 前后核对 + ③ 有冲突自动修一轮。
+  // ② 前后核对 + ③ 有冲突自动修（最多两轮，只复核改过的段）。
   if (input.checkCallModel && input.repairCallModel && body.trim()) {
+    const startedAt = Date.now();
     const passages = input.chapterPlan
       ? await findEarlierPassages({
         projectDir: input.projectDir,
@@ -134,7 +140,12 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     };
     if (result.changed) body = result.draftBody;
     notes.push(describeContinuityOutcome(result));
+    timings.continuityMs = Date.now() - startedAt;
   }
+  info = { ...info, timings };
+  console.info(
+    `[draft-pipeline] ch${input.chapter} 续写 ${Math.round((timings.continueMs ?? 0) / 1000)}s / 核对与修改 ${Math.round((timings.continuityMs ?? 0) / 1000)}s`,
+  );
 
   const changed = body !== input.draftBody;
   if (!changed) return { draftBody: input.draftBody, changed: false, info, notes };
