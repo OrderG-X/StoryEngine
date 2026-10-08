@@ -84,6 +84,11 @@ vi.mock("../agent/ai-flavor/de-ai-flavor-batch.js", () => ({
   runDeAiFlavorBatch: vi.fn(),
 }));
 
+const planMocks = vi.hoisted(() => ({
+  resolveChapterPlanForDraft: vi.fn(),
+}));
+vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({ ...planMocks }));
+
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
@@ -431,3 +436,76 @@ describe("restoreDraftFile CAS（R1：写盘窗口内的第三方改动不得被
     expect(await readFile(path, "utf-8")).toBe("旧稿");
   });
 });
+
+describe("runGenerateDraft 先拟章纲（阶段 2「先想后写」）", () => {
+  let projectDir: string | undefined;
+  const PLAN = {
+    version: 1, chapter: 2, source: "model", summary: "林澈去档案室对出缺页",
+    beats: ["去档案室", "对出缺页"], newInformation: ["缺页是境外汇款"], scene: { location: "档案室" },
+    characters: ["林澈"], entities: ["蓝色账册"], threadsAdvanced: [], avoid: [], createdAt: "2026-10-08T00:00:00.000Z",
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-plan-"));
+    const draftPath = defaultDraftPath(projectDir, 2);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+    storyEngineMocks.runFastDraft.mockResolvedValue({
+      chapter: 2,
+      passed: true,
+      draftPath,
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: {},
+      issues: [],
+    });
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("拟成 → 章纲进写手输入、作者没给方向时本章目标用章纲一句话；结果带 chapterPlan、summary 首行交代章纲", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ plan: PLAN, note: "本章章纲：林澈去档案室对出缺页", reused: false });
+    const planCallModel = vi.fn();
+    const result = await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), planCallModel,
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(planMocks.resolveChapterPlanForDraft).toHaveBeenCalledWith(expect.objectContaining({ chapter: 2, callModel: planCallModel }));
+    expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ chapterPlan: PLAN, chapterGoal: "林澈去档案室对出缺页" }));
+    expect(result.chapterPlan).toEqual({ summary: "林澈去档案室对出缺页", beats: ["去档案室", "对出缺页"], newInformation: ["缺页是境外汇款"], scene: { location: "档案室" }, reused: false });
+    expect(result.summary.split("\n")[0]).toBe("本章章纲：林澈去档案室对出缺页");
+  });
+
+  it("作者给了方向 → 方向原话交给拟章纲，本章目标仍用作者原话", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ plan: PLAN, note: "本章章纲：…", reused: false });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, chapterGoal: "让他去档案室", writerClient: stubWriterClient(), planCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(planMocks.resolveChapterPlanForDraft).toHaveBeenCalledWith(expect.objectContaining({ direction: "让他去档案室" }));
+    expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ chapterGoal: "让他去档案室", chapterPlan: PLAN }));
+  });
+
+  it("拟不成 → 照常出稿（无章纲）、summary 如实说明", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ note: "章纲没拟成（已自动重试一次）：socket；这次按没有章纲出稿。", reused: false });
+    const result = await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), planCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.chapterPlan).toBeUndefined();
+    expect(storyEngineMocks.runFastDraft.mock.calls[0][0]).not.toHaveProperty("chapterPlan");
+    expect(result.summary).toContain("这次按没有章纲出稿");
+  });
+
+  it("不注入拟章纲调用 → 完全旧行为", async () => {
+    await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
+    expect(planMocks.resolveChapterPlanForDraft).not.toHaveBeenCalled();
+  });
+});
+

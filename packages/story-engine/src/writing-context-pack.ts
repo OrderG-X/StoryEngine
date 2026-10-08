@@ -182,6 +182,10 @@ export interface BuildWritingContextPackInput {
   readonly currentChapterGoal?: string;
   /** 上一章正文（接着写的原文）。用于从事实账本里翻出与它相关的旧事实；缺省 = 旧行为。 */
   readonly continuityText?: string;
+  /** 章纲点名的检索词（物件/地点/人物）。用于翻相关旧事实；缺省 = 旧行为。 */
+  readonly retrievalTerms?: readonly string[];
+  /** 章纲定的开场地点：地点册里有它就当本章必需地点（与作者方向点名同权）。 */
+  readonly plannedLocation?: string;
   readonly selectedCharacterIds?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   /**
@@ -260,7 +264,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   // 2026-10-08 写作主链重设计·阶段 1：「本章必需地点」不再永远是第 1 章开场地点（十章验收实锤：第 3/6/9 章
   // 发生在别处，质检却逐章要求出现开场店名，AI 照单往正文硬塞）。第 1 章仍按开场场景；之后只有作者方向里
   // 点名了地点册里的地点才算「必需」，否则只作空间参考，本章地点由上一章结尾承接。
-  const chapterDirection = input.currentChapterGoal ?? input.userDirection;
+  const chapterDirection = [input.currentChapterGoal ?? input.userDirection, input.plannedLocation].filter(Boolean).join("；");
   const directedLocation = selectDirectedLocation(locationBible?.locations ?? [], chapterDirection);
   const isOpeningChapter = input.chapter <= 1;
   const mainLocation = directedLocation ?? selectMainLocation(locationBible?.locations ?? [], firstChapterSetup?.openingScene);
@@ -332,6 +336,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
     // 接本章方向：不含人名但与本章要写的内容相关的硬设定（遗产3亿/密道在城西）也优先（洞#9）。
     chapterGoal: input.currentChapterGoal ?? input.userDirection,
     ...(input.continuityText ? { continuityText: input.continuityText } : {}),
+    ...(input.retrievalTerms && input.retrievalTerms.length > 0 ? { retrievalTerms: input.retrievalTerms } : {}),
   }).facts;
   const trace: WritingContextSourceTrace[] = [];
   const addTrace = (path: string, source: WritingContextSource) => {

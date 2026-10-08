@@ -16,6 +16,13 @@ import { defaultDraftPath } from "../../lib/project-io.js";
 import { buildProjectRequestContext } from "../request-context.js";
 import { generateDraftTool, runGenerateDraftToolLogic } from "./generate-draft.js";
 
+// 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
+vi.mock("../chapter-plan/plan-chapter.js", () => ({
+  callConfiguredPlanModel: vi.fn(),
+  resolveChapterPlanForDraft: vi.fn(async () => ({ note: "", reused: false })),
+}));
+
+
 async function makeProject(title: string, mainCharacterName = "林远"): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "gen-draft-adjud-"));
   const { projectDir } = await createStoryProject({

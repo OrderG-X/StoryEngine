@@ -85,6 +85,7 @@ import {
   runGenerateDraft,
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
+import { callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
 
 /**
  * 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。
@@ -178,7 +179,14 @@ const outputSchema = z.object({
   }).optional().describe("引擎对本版正文的字数核对（成功/失败均可能带）。低于下限不代表出稿失败，只是如实标注。"),
   issues: z.array(z.string()).describe("出稿过程中的问题（失败时含拒绝原因，诚实回报）。"),
   overview: z.unknown().describe("出稿后重新读取的 StateOverview，供前端刷新写作区/总览。"),
-  summary: z.string().describe("出稿结果的自然语言摘要。"),
+  summary: z.string().describe("出稿结果的自然语言摘要（首行是本章章纲一句话，或章纲没拟成的原因）。"),
+  chapterPlan: z.object({
+    summary: z.string(),
+    beats: z.array(z.string()),
+    newInformation: z.array(z.string()),
+    scene: z.object({ location: z.string().optional(), time: z.string().optional() }).optional(),
+    reused: z.boolean(),
+  }).optional().describe("本章章纲：出稿前先拟的要点（推进什么、新信息是什么）。沿用 = 同一方向重写时用了这章已有的章纲。"),
   refreshScope: z.literal("full"),
   snapshotId: z.string().optional().describe("覆盖现有非空工作稿前建的快照 id（M6：让『再写一版』可撤销）；首次出稿无此值。"),
   contextBudget: z.object({
@@ -336,6 +344,8 @@ export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
     "为某章生成一版正文并写入工作稿（drafts/fast，未定稿）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
+    "出稿前会先自动拟本章章纲（接住上一章结尾、推进开着的线索、至少一条新信息、写明不要重复什么），并按章纲翻出前文相关原文和旧事实再写；" +
+    "用户这章有方向就把原话放进 chapterGoal，章纲照它展开；同一方向重写会沿用已有章纲。章纲见 chapterPlan——转达时用一两句话说这章写了什么、新信息是什么。" +
     "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。一次成稿、不自动补写重试：" +
     "正文低于目标字数下限不会被拒绝，会在 draftLength 和 summary 里如实标注（⚠ 低于下限）——请如实转达用户，由其决定重写或接受，别假装字数达标。" +
@@ -448,6 +458,8 @@ export const generateDraftTool = createTool({
       // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
       // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
       beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
+      // 阶段 2「先想后写」：出稿前拟章纲（chapterSteering 槽）。拟不成如实进 summary、照旧出稿。
+      planCallModel: callConfiguredPlanModel,
       writerClient,
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。

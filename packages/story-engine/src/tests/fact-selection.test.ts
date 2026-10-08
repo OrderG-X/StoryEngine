@@ -144,4 +144,20 @@ describe("selectEffectiveFacts", () => {
     expect(out.facts).toContain("第2章：登记表上的地址是南门槐树巷十七号");
     expect(out.facts).toHaveLength(10);
   });
+
+  it("章纲点名的地点/物件把不在上一章原文里的旧事实也翻出来（主角名不算检索词）", () => {
+    const facts: FactEntry[] = [
+      fact({ id: "market", chapter: 4, text: "南门菜场十年前就拆了，原址盖了商场" }),
+      ...Array.from({ length: 20 }, (_, i) => fact({ id: `p${i}`, chapter: 5 + (i % 3), text: `林舟和周婶第${i}回说起拆迁补偿` })),
+    ];
+    const out = selectEffectiveFacts({
+      facts,
+      chapter: 8,
+      relevantNames: ["林舟", "周婶"],
+      continuityText: "他躺下，听着挂钟一下一下地走。",
+      retrievalTerms: ["南门菜场", "林舟"],
+      cap: 3,
+    });
+    expect(out.facts[0]).toBe("第4章：南门菜场十年前就拆了，原址盖了商场");
+  });
 });

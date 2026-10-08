@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { ChapterPlan } from "./chapter-plan.js";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -78,6 +79,8 @@ export interface FastDraftInput {
   readonly maxTimelineEvents?: number;
   /** 用户/agent 指定的本章必须命中要点：注入「本章硬约束」让模型逐条落实，出稿后确定性核对（Codex 复测：首稿跑偏）。 */
   readonly mustHitBeats?: readonly string[];
+  /** 本章章纲（阶段 2「先想后写」）：进受保护段并驱动翻旧资料，见 buildWriterContext。 */
+  readonly chapterPlan?: ChapterPlan;
   readonly rankContext?: (envelope: WriterContextEnvelope) => WriterContextEnvelope;
   readonly maxOutputTokens?: number;
   readonly requestedDraftLength?: number;
@@ -172,6 +175,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       selectedHookIds: input.selectedHookIds,
       maxTimelineEvents: input.maxTimelineEvents,
       ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
+      ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
     });
     context = input.rankContext ? input.rankContext(builtContext) : builtContext;
   } catch (error) {

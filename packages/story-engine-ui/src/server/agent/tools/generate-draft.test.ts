@@ -44,6 +44,13 @@ import {
   type DraftCandidateScoreInput,
 } from "./generate-draft.js";
 
+// 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
+vi.mock("../chapter-plan/plan-chapter.js", () => ({
+  callConfiguredPlanModel: vi.fn(),
+  resolveChapterPlanForDraft: vi.fn(async () => ({ note: "", reused: false })),
+}));
+
+
 describe("positiveOrUndefined（模型把 0 当『默认/不限』用 → 归一成 undefined，让 ?? 默认 兜底）", () => {
   it("0/负/NaN/undefined → undefined；正数原样", () => {
     expect(positiveOrUndefined(0)).toBeUndefined();

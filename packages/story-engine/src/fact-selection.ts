@@ -20,6 +20,11 @@ export interface EffectiveFactsInput {
    * 在这段原文里出现 → 加分：上一章提到菜场，第 4 章记下的「菜场十年前就拆了」才会被翻出来。
    */
   readonly continuityText?: string;
+  /**
+   * 章纲点名的检索词（物件/地点/出场人物）。事实里出现这些词 → 加分并进保底名额：章纲说这章要去「南门菜场」，
+   * 三章前记下的「菜场十年前就拆了」就得翻出来，哪怕上一章原文没提菜场。几乎条条都有的词（主角名）不算。
+   */
+  readonly retrievalTerms?: readonly string[];
   /** 进 prompt 的事实条数上限（避免长篇几百条全塞爆）。默认 30。 */
   readonly cap?: number;
 }
@@ -122,6 +127,13 @@ function buildContinuityScorer(facts: readonly FactEntry[], continuityText: stri
   };
 }
 
+/** 章纲检索词去掉几乎条条事实都带的（主角名之类）：它们分不出谁相关。事实太少时不判。 */
+function usableRetrievalTerms(facts: readonly FactEntry[], terms: readonly string[] | undefined): readonly string[] {
+  const cleaned = [...new Set((terms ?? []).map((term) => term.trim()).filter((term) => term.length >= 2))];
+  if (facts.length < UBIQUITY_MIN_FACTS) return cleaned;
+  return cleaned.filter((term) => facts.filter((fact) => fact.text.includes(term)).length / facts.length < COMMON_MAX_SHARE);
+}
+
 /** 事实在第 chapter 章是否仍有效（生效且未被取代）。无区间字段=从来源章起一直有效（向后兼容）。 */
 export function isFactValidAtChapter(fact: FactEntry, chapter: number): boolean {
   if (chapter < effectiveFromChapter(fact)) return false;
@@ -158,14 +170,17 @@ export function selectEffectiveFacts(input: EffectiveFactsInput): EffectiveFacts
       : [],
   );
   const continuityScore = buildContinuityScorer(valid, input.continuityText);
+  const retrievalTerms = usableRetrievalTerms(valid, input.retrievalTerms);
   const recency = (a: { readonly fact: FactEntry }, b: { readonly fact: FactEntry }) => (b.fact.chapter ?? 0) - (a.fact.chapter ?? 0);
   const scored = valid
     .map((fact) => {
-      const continuity = continuityScore(fact.text);
+      const termHits = retrievalTerms.filter((term) => fact.text.includes(term)).length;
+      // 保底名额的排序键：章纲点名的词命中一个顶两份「上一章原文重合」。
+      const continuity = continuityScore(fact.text) + termHits * 2;
       return {
         fact,
         continuity,
-        // 分级：在场角色名(4，人人都带的名字只算 1) + 与上一章原文的重合(每单位 2 分，封顶 6)
+        // 分级：在场角色名(4，人人都带的名字只算 1) + 与上一章原文/章纲检索词的重合(每单位 2 分，封顶 6)
         // + 本章方向文本重叠(2) + 含硬 token 数字/金额(1)；可叠加。
         score:
           nameScore(fact.text, relevantNames, ubiquitousNames) +

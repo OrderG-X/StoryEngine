@@ -1,6 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatStaleGoalMessage } from "./arc-goal-tracking.js";
+import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, type ChapterPlan } from "./chapter-plan.js";
+import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
 import { formatStaleHookMessage } from "./hook-tracking.js";
 import { formatStaleThreadMessage } from "./lead-intent-tracking.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
@@ -187,6 +189,11 @@ export interface BuildWriterContextInput {
    */
   readonly maxTimelineEvents?: number;
   readonly mustHitBeats?: readonly string[];
+  /**
+   * 本章章纲（阶段 2「先想后写」）。给了就：① 章纲进受保护段 chapter_plan；② 按它点名的物件/地点翻旧章原文
+   * 进受保护段 earlier_passages；③ 按它的检索词挑旧事实；④ 它定的开场地点算本章地点。不给 = 旧行为。
+   */
+  readonly chapterPlan?: ChapterPlan;
 }
 
 export async function buildWriterContext(input: BuildWriterContextInput): Promise<WriterContextEnvelope> {
@@ -227,6 +234,16 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
   ]);
+  const plan = input.chapterPlan;
+  const earlierPassages = plan
+    ? await findEarlierPassages({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      terms: collectPlanEntityTerms(plan),
+      // 上一章已整章给出，不重复翻。
+      excludeChapters: [input.chapter - 1],
+    }).catch((error) => { trackReadFailure("旧章原文")(error); return [] as readonly EarlierPassage[]; })
+    : [];
   const { profiles, cores, states } = characterBundles;
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
   const storyContinuity = buildStoryContinuityContext(timelineEvents);
@@ -246,6 +263,8 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     ...(previousChapter?.text ?? previousUncommittedDraft?.excerpt
       ? { continuityText: previousChapter?.text ?? previousUncommittedDraft?.excerpt }
       : {}),
+    ...(plan ? { retrievalTerms: collectPlanRetrievalTerms(plan) } : {}),
+    ...(plan?.scene.location ? { plannedLocation: plan.scene.location } : {}),
   });
   // 包内台账读盘失败（损坏 JSON 降级）与本层失败同一通道上浮——都进 read_failures 段。
   readFailures.push(...writingContextPack.readFailures);
@@ -258,8 +277,15 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("character_profile", profiles, "stable"),
     section("character_core", cores, "stable"),
     section("chapter_goal", { chapter: input.chapter, goal: input.chapterGoal }, "dynamic"),
+    ...(plan ? [section("chapter_plan", buildChapterPlanSection(plan), "dynamic")] : []),
     ...(previousChapter ? [section("previous_chapter", previousChapter, "dynamic")] : []),
     ...(previousUncommittedDraft ? [section("previous_uncommitted_draft", previousUncommittedDraft, "dynamic")] : []),
+    ...(earlierPassages.length > 0
+      ? [section("earlier_passages", {
+        instruction: "这些是前面章节里写到本章涉及的物件/地点时的原文。它们现在的样子、位置、上面写着什么，以原文为准；本章不要写出与之矛盾的说法，也不要把已经写过的发现再发现一遍。",
+        passages: earlierPassages.map((item) => ({ chapter: item.chapter, about: item.term, text: item.text })),
+      }, "dynamic")]
+      : []),
     section("writing_context_pack", writingContextPack satisfies WritingContextPack, "dynamic"),
     section("story_calendar", calendar, "dynamic"),
     section("hook_pool", selectedHooks, "dynamic"),

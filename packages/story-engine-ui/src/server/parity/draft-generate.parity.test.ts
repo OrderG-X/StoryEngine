@@ -86,6 +86,13 @@ import {
   writeParityDraft,
 } from "./parity-kit.js";
 
+// 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
+vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({
+  callConfiguredPlanModel: vi.fn(),
+  resolveChapterPlanForDraft: vi.fn(async () => ({ note: "", reused: false })),
+}));
+
+
 const CHAPTER_GOAL = "第 1 章：主角拿到账册。";
 /** 写类对拍驱动 generate_draft 时带的用户原话：明确写作意图（意图门放行口径内的canonical句式）。 */
 const WRITE_TURN_TEXT = "写第 1 章正文";

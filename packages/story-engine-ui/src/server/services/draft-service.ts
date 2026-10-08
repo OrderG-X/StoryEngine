@@ -66,6 +66,7 @@ import {
   type AiFlavorRule,
   type AiFlavorSeverity,
   type AiFlavorViolation,
+  type ChapterPlan,
   type DraftLengthReport,
   type DraftLengthStatus,
   type DraftLengthTarget,
@@ -87,6 +88,7 @@ import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, 
 import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../agent/presence/in-scene-detector.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../agent/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
+import { resolveChapterPlanForDraft, type PlanCallModel } from "../agent/chapter-plan/plan-chapter.js";
 
 /* ---------------------------------------------------------------------------
  * 长度目标解析与执法（D1：原 routes/draft.ts 的 enforce 栈整体迁入，逻辑一字未动）
@@ -949,6 +951,11 @@ export interface GenerateDraftInput {
   readonly candidateTemperatures?: readonly number[];
   /** 判漏要点的 AI 复核调用（工具 execute 注入 triage 任务槽；测试注入 mock）。缺失=跳过复核、维持确定性结论。 */
   readonly beatAdjudicationCallModel?: (prompt: string) => Promise<string>;
+  /**
+   * 出稿前拟章纲的模型调用（阶段 2「先想后写」；工具 execute 注入 chapterSteering 任务槽；测试注入 mock）。
+   * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
+   */
+  readonly planCallModel?: PlanCallModel;
 }
 
 /** HTTP 适配层投影料：工具 execute 投影时剥掉（不进 LLM 视野），路由据此组装 200/422 响应。 */
@@ -964,6 +971,15 @@ export interface GenerateDraftHttpProjection {
   readonly warnings?: readonly string[];
 }
 
+export interface GenerateDraftPlanInfo {
+  readonly summary: string;
+  readonly beats: readonly string[];
+  readonly newInformation: readonly string[];
+  readonly scene?: { readonly location?: string; readonly time?: string };
+  /** 沿用了这章已有的章纲（同一方向重写）。 */
+  readonly reused: boolean;
+}
+
 /** 主编排 canonical 结果：工具输出契约的全部字段 + HTTP 投影料 + 执法拒稿标记。 */
 export interface GenerateDraftOutcome {
   readonly ok: boolean;
@@ -976,6 +992,8 @@ export interface GenerateDraftOutcome {
   readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
   readonly candidatesReport?: readonly DraftCandidateReportEntry[];
   readonly beatFidelity?: GenerateDraftBeatFidelityInfo;
+  /** 本章章纲（拟成/沿用时）：要点、新信息、开场——agent 据此向作者一句话交代这章写了什么。 */
+  readonly chapterPlan?: GenerateDraftPlanInfo;
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -1019,6 +1037,7 @@ interface DraftRunContext {
   readonly characterSelection: CharacterPresenceResult;
   readonly selectedCharacterIds?: readonly string[];
   readonly aiFlavorRules?: readonly AiFlavorRule[];
+  readonly chapterPlan?: ChapterPlan;
 }
 
 async function resolveDraftRunContext(input: {
@@ -1030,8 +1049,10 @@ async function resolveDraftRunContext(input: {
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly aiFlavorRecheck: boolean;
+  readonly chapterPlan?: ChapterPlan;
 }): Promise<DraftRunContext> {
-  const chapterGoal = input.chapterGoal?.trim() || `继续第 ${input.chapter} 章。`;
+  // 有章纲而作者没给方向：本章目标用章纲的一句话，不再是空话「继续第 N 章。」。
+  const chapterGoal = input.chapterGoal?.trim() || input.chapterPlan?.summary || `继续第 ${input.chapter} 章。`;
   // 模型无关：模型常把 maxTimelineEvents/contextTokenBudget 传成 `0`（当"默认/不限"用），而 `0` 在
   // 引擎里是"显式锁定/极限裁剪"——会静默砍掉时间线 + 全部非保护上下文段（长篇慢性失忆，真机 ch2/ch3
   // 已被 contextTokenBudget:"0" 触发）。这里把模型面的非正数一律当"未提供→默认"，绝不当显式锁定。
@@ -1045,7 +1066,10 @@ async function resolveDraftRunContext(input: {
   const characterSelection = await resolveSelectedCharacterIds({
     projectDir: input.projectDir,
     chapter: input.chapter,
-    chapterGoal,
+    // 章纲点名的出场人物/要点也参与在场检测（检测按名字词面命中）。
+    chapterGoal: input.chapterPlan
+      ? [chapterGoal, input.chapterPlan.characters.join("、"), ...input.chapterPlan.beats].join("\n")
+      : chapterGoal,
     explicit: input.selectedCharacterIds,
   });
   const selectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
@@ -1067,6 +1091,7 @@ async function resolveDraftRunContext(input: {
     characterSelection,
     ...(selectedCharacterIds !== undefined ? { selectedCharacterIds } : {}),
     ...(aiFlavorRules !== undefined ? { aiFlavorRules } : {}),
+    ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
   };
 }
 
@@ -1091,6 +1116,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
     maxTimelineEvents: run.maxTimelineEvents,
     maxOutputTokens: positiveOrUndefined(input.maxOutputTokens) ?? resolveDraftMaxOutputTokens(run.lengthTarget),
     rankContext: run.contextRanking.rankContext,
+    ...(run.chapterPlan ? { chapterPlan: run.chapterPlan } : {}),
   };
 }
 
@@ -1135,9 +1161,40 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
  *   模型挂→维持原结论+unavailable）。零判漏零调用。
  */
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
+  // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
+  const planning = input.planCallModel
+    ? await resolveChapterPlanForDraft({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
+      callModel: input.planCallModel,
+    })
+    : undefined;
+  const outcome = await runGenerateDraftWithPlan(input, planning?.plan);
+  if (!planning) return outcome;
+  const plan = planning.plan;
+  return {
+    ...outcome,
+    ...(plan
+      ? {
+        chapterPlan: {
+          summary: plan.summary,
+          beats: plan.beats,
+          newInformation: plan.newInformation,
+          ...(plan.scene.location || plan.scene.time ? { scene: plan.scene } : {}),
+          reused: planning.reused,
+        },
+      }
+      : {}),
+    summary: planning.note ? `${planning.note}\n${outcome.summary}` : outcome.summary,
+  };
+}
+
+async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: ChapterPlan | undefined): Promise<GenerateDraftOutcome> {
   const { projectDir, chapter, writerClient } = input;
   const lengthPolicy = input.policies?.lengthPolicy ?? "annotate";
   const run = await resolveDraftRunContext({
+    ...(chapterPlan ? { chapterPlan } : {}),
     projectDir,
     chapter,
     ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
