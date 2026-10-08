@@ -44,15 +44,16 @@ describe("parseContinuityIssues", () => {
 });
 
 describe("repairContinuityIssues", () => {
-  it("只换冲突段，其余一字不动；改得太短的段不用", async () => {
+  // 2026-10-08 第六轮验收：整段重写的自动修补改出 13 处新矛盾、删掉后文还在引用的台词——改为只换出问题的那一句。
+  it("只换出问题的那一句，其余一字不动；改得太短的不用", async () => {
     const issues = [
       { type: "contradiction" as const, quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" },
       { type: "repeat" as const, quote: "四月十七对上了", conflict: "第3章已核对过", fix: "改成新进展" },
     ];
     const callModel = vi.fn(async () => JSON.stringify({
-      paragraphs: [
-        { index: 1, text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" },
-        { index: 2, text: "短" },
+      fixes: [
+        { id: "S1", text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" },
+        { id: "S2", text: "短" },
       ],
     }));
     const result = await repairContinuityIssues({ draftBody: DRAFT, issues, references: REFS, callModel });
@@ -70,11 +71,11 @@ describe("checkAndRepairContinuity", () => {
     const check = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
-    const repair = vi.fn(async () => JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
+    const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
     expect(result.changed).toBe(true);
     expect(result.remaining).toEqual([]);
-    expect(describeContinuityOutcome(result)).toBe("前后核对：对照了 1 条旧设定和前文，发现 1 处问题，已改好 1 段，复核已无冲突。");
+    expect(describeContinuityOutcome(result)).toBe("前后核对：对照了 1 条旧设定和前文，发现 1 处问题，已改好 1 处，复核已无冲突。");
   });
 
   it("没有冲突 → 不修不改", async () => {
@@ -99,7 +100,7 @@ describe("checkAndRepairContinuity", () => {
     const check = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改" }] }))
       .mockRejectedValueOnce(new Error("idle timeout"));
-    const repair = vi.fn(async () => JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
+    const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
     expect(result.changed).toBe(true);
     expect(result.remaining).toHaveLength(1);
@@ -137,8 +138,8 @@ describe("复核只看改过的段 + 最多两轮", () => {
       .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场的豆腐摊", conflict: "第4章：菜场已拆", fix: "去掉豆腐摊" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
     const repair = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早拆了，可原址门口还剩菜场的豆腐摊，摆着几块豆腐。" }] }))
-      .mockResolvedValueOnce(JSON.stringify({ paragraphs: [{ index: 1, text: "菜场早拆了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
+      .mockResolvedValueOnce(JSON.stringify({ fixes: [{ id: "S1", text: "菜场早拆了，可原址门口还剩菜场的豆腐摊，摆着几块豆腐。" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ fixes: [{ id: "S1", text: "菜场早拆了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
     expect(repair).toHaveBeenCalledTimes(2);
     expect(result.repairedParagraphs).toBe(2);
@@ -153,11 +154,20 @@ describe("复核只看改过的段 + 最多两轮", () => {
     // 引文要逐字命中（≥4 字）：原文与两次改稿里都有「门口摆着几摊卖豆腐的」。
     const stubborn = JSON.stringify({ issues: [{ type: "contradiction", quote: "门口摆着几摊卖豆腐的", conflict: "第4章：菜场已拆", fix: "改" }] });
     const check = vi.fn(async () => stubborn);
-    const repair = vi.fn(async () => JSON.stringify({ paragraphs: [{ index: 1, text: "菜场还是在那里，门口摆着几摊卖豆腐的。" }] }));
+    const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场还是在那里，门口摆着几摊卖豆腐的。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
+    // 第二轮改出来和原句一样 → 不算改动、不再复核，剩下的留给作者。
     expect(repair).toHaveBeenCalledTimes(2);
-    expect(check).toHaveBeenCalledTimes(3);
+    expect(check).toHaveBeenCalledTimes(2);
     expect(result.remaining).toHaveLength(1);
+  });
+});
+
+describe("sentenceContaining", () => {
+  it("取引文所在的整句（带后引号）", async () => {
+    const { sentenceContaining } = await import("./continuity-check.js");
+    expect(sentenceContaining("他说：“菜场还在呢。”她没接话。", "菜场还在")).toBe("他说：“菜场还在呢。”");
+    expect(sentenceContaining(DRAFT, "四月十七对上了")).toBe("他又看了一遍登记表，四月十七对上了。");
   });
 });
 

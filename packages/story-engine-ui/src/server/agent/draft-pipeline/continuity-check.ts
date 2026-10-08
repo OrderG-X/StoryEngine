@@ -197,86 +197,104 @@ export function findParagraphIndex(paragraphs: readonly string[], quote: string)
   return paragraphs.findIndex((paragraph) => normalizeSpace(paragraph).includes(target));
 }
 
+/** 引文所在的整句（按句末标点切，带上紧跟的引号）；找不到 → undefined。 */
+export function sentenceContaining(body: string, quote: string): string | undefined {
+  const target = normalizeSpace(quote);
+  const sentences = body.match(/[^。！？…\n]+[。！？…]*[」』”’]?/gu) ?? [];
+  const hit = sentences.find((sentence) => normalizeSpace(sentence).includes(target));
+  if (hit) return hit.trim();
+  // 引文跨了句：退回到含引文的整段里第一句起、最后一句止的那一截。
+  const paragraph = splitParagraphs(body).find((item) => normalizeSpace(item).includes(target));
+  return paragraph && paragraph.length <= 200 ? paragraph : undefined;
+}
+
 export function buildRepairMessages(input: {
-  readonly paragraphs: readonly string[];
-  readonly targets: readonly { readonly index: number; readonly issues: readonly ContinuityIssue[] }[];
+  readonly targets: readonly { readonly id: string; readonly sentence: string; readonly paragraph: string; readonly issues: readonly ContinuityIssue[] }[];
   readonly references: ContinuityReferences;
 }): { readonly role: "system" | "user"; readonly content: string }[] {
   const system = [
-    "你是小说改稿编辑。下面列出本章里有连续性问题的几段，以及每段的问题和应以哪条设定为准。",
-    "只改这些段：把冲突的说法改成与已知设定一致，把重演前文的内容改成往前推进的新内容；尽量保留原段的其余文字、语气和长度，不要删光、不要加解释。",
-    "只输出一个 JSON：{\"paragraphs\":[{\"index\":段落编号,\"text\":\"改好的整段\"}]}。",
+    "你是小说改稿编辑。下面列出本章里有连续性问题的几句话，以及每句的问题和应以哪条设定为准。",
+    "只改列出的这一句：把冲突的说法改成与已知设定一致，把重演前文的说法改成往前推进；改完仍是一两句话，长短与原句相近。",
+    "原句里与问题无关的信息（说话人、关键台词、动作）原样保留；不要删掉后文可能会引用的台词。所在段落只给你看语境，不要改。",
+    "只输出一个 JSON：{\"fixes\":[{\"id\":\"S1\",\"text\":\"改好的这一句\"}]}。",
   ].join("\n");
   const user = [
     input.references.facts.length > 0 ? `【已确立事实】\n${input.references.facts.join("\n")}` : "",
-    "【要改的段落】",
+    "【要改的句子】",
     ...input.targets.map((target) => [
-      `#${target.index}：${input.paragraphs[target.index]}`,
+      `${target.id}：${target.sentence}`,
       ...target.issues.map((issue) => `  问题（${issue.type === "repeat" ? "重演前文" : "与设定冲突"}）：${issue.conflict}；改法：${issue.fix}`),
+      `  所在段落（只读）：${target.paragraph}`,
     ].join("\n")),
-    "【前后文（只读，不要改）】",
-    ...input.targets.map((target) => [
-      target.index > 0 ? `#${target.index - 1}：${input.paragraphs[target.index - 1]}` : "",
-      target.index + 1 < input.paragraphs.length ? `#${target.index + 1}：${input.paragraphs[target.index + 1]}` : "",
-    ].filter(Boolean).join("\n")),
   ].filter(Boolean).join("\n\n");
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
 export interface RepairResult {
   readonly draftBody: string;
-  /** 实际改掉的段落数。 */
+  /** 实际改掉的句子数。 */
   readonly repairedParagraphs: number;
-  /** 改掉的段落在新正文里的编号（复核只看这几段）。 */
+  /** 改过的句子所在段落在新正文里的编号（复核只看这几段）。 */
   readonly changedIndexes?: readonly number[];
   readonly error?: string;
 }
 
-/** 一次调用改完所有冲突段（只换这些段，其余一字不动）。改出来过短/空的段不用。 */
+/**
+ * 一次调用改完所有冲突句——只换出问题的那一句，段里其余文字一字不动（十章验收第六轮：整段重写的自动修补
+ * 改出 13 处新矛盾、删掉了后文还在引用的关键台词）。改出来过短 / 过长 / 空的一律不用。
+ */
 export async function repairContinuityIssues(input: {
   readonly draftBody: string;
   readonly issues: readonly ContinuityIssue[];
   readonly references: ContinuityReferences;
   readonly callModel: CheckCallModel;
 }): Promise<RepairResult> {
-  const paragraphs = [...splitParagraphs(input.draftBody)];
-  const byIndex = new Map<number, ContinuityIssue[]>();
+  const paragraphs = splitParagraphs(input.draftBody);
+  const bySentence = new Map<string, { sentence: string; paragraph: string; issues: ContinuityIssue[] }>();
   for (const issue of input.issues) {
     if (issue.type === "missing_beat" || !issue.quote) continue;
-    const index = findParagraphIndex(paragraphs, issue.quote);
-    if (index < 0) continue;
-    byIndex.set(index, [...(byIndex.get(index) ?? []), issue]);
+    const sentence = sentenceContaining(input.draftBody, issue.quote);
+    if (!sentence) continue;
+    const paragraph = paragraphs.find((item) => item.includes(sentence)) ?? sentence;
+    const entry = bySentence.get(sentence) ?? { sentence, paragraph, issues: [] };
+    entry.issues.push(issue);
+    bySentence.set(sentence, entry);
   }
-  if (byIndex.size === 0) return { draftBody: input.draftBody, repairedParagraphs: 0 };
-  const targets = [...byIndex.entries()].sort((a, b) => a[0] - b[0]).map(([index, issues]) => ({ index, issues }));
+  if (bySentence.size === 0) return { draftBody: input.draftBody, repairedParagraphs: 0 };
+  const targets = [...bySentence.values()].slice(0, MAX_ISSUES).map((entry, index) => ({ id: `S${index + 1}`, ...entry }));
   let out: string;
   try {
-    out = await input.callModel(buildRepairMessages({ paragraphs, targets, references: input.references }));
+    out = await input.callModel(buildRepairMessages({ targets, references: input.references }));
   } catch (error) {
     return { draftBody: input.draftBody, repairedParagraphs: 0, error: error instanceof Error ? error.message : String(error) };
   }
   const match = out.match(/\{[\s\S]*\}/u);
-  let rewritten: unknown[] = [];
+  let fixes: unknown[] = [];
   try {
     const parsed = match ? asRecord(JSON.parse(match[0])) : undefined;
-    rewritten = Array.isArray(parsed?.paragraphs) ? parsed.paragraphs : [];
+    fixes = Array.isArray(parsed?.fixes) ? parsed.fixes : [];
   } catch {
     return { draftBody: input.draftBody, repairedParagraphs: 0, error: "改稿结果不是 JSON" };
   }
-  const changedIndexes: number[] = [];
-  for (const item of rewritten) {
+  let body = input.draftBody;
+  const changed: string[] = [];
+  for (const item of fixes) {
     const record = asRecord(item);
-    const index = Number(record?.index);
+    const target = targets.find((candidate) => candidate.id === String(record?.id ?? "").trim().toUpperCase());
     const text = String(record?.text ?? "").trim();
-    if (!byIndex.has(index) || !text || changedIndexes.includes(index)) continue;
-    // 改出来比原段短一半以上 → 多半是删光了或只回了半句，不用。
-    if (text.length < paragraphs[index].length * 0.5) continue;
-    paragraphs[index] = text;
-    changedIndexes.push(index);
+    if (!target || !text || text === target.sentence || changed.includes(text)) continue;
+    // 改出来比原句短一半以上或长两倍半以上：多半删了要紧的话或趁机加戏，不用。
+    if (text.length < target.sentence.length * 0.5 || text.length > target.sentence.length * 2.5) continue;
+    if (!body.includes(target.sentence)) continue;
+    body = body.replace(target.sentence, text);
+    changed.push(text);
   }
-  return changedIndexes.length > 0
-    ? { draftBody: paragraphs.join("\n\n"), repairedParagraphs: changedIndexes.length, changedIndexes }
-    : { draftBody: input.draftBody, repairedParagraphs: 0 };
+  if (changed.length === 0) return { draftBody: input.draftBody, repairedParagraphs: 0 };
+  const newParagraphs = splitParagraphs(body);
+  const changedIndexes = [...new Set(changed
+    .map((text) => newParagraphs.findIndex((paragraph) => paragraph.includes(text)))
+    .filter((index) => index >= 0))];
+  return { draftBody: body, repairedParagraphs: changed.length, changedIndexes };
 }
 
 /**
@@ -361,7 +379,7 @@ export function describeContinuityOutcome(result: CheckAndRepairResult): string 
   const parts = [`前后核对：对照了 ${first.referenceCount} 条旧设定和前文`];
   if (first.issues.length === 0) return `${parts[0]}，没发现冲突。`;
   parts.push(`发现 ${first.issues.length} 处问题`);
-  if (result.repairedParagraphs > 0) parts.push(`已改好 ${result.repairedParagraphs} 段`);
+  if (result.repairedParagraphs > 0) parts.push(`已改好 ${result.repairedParagraphs} 处`);
   if (result.repairError) parts.push(`自动修改没成（${result.repairError}）`);
   const remaining = result.remaining;
   if (remaining.length === 0) return `${parts.join("，")}，复核已无冲突。`;

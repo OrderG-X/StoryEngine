@@ -35,7 +35,7 @@ describe("runDraftQualityPipeline", () => {
       .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场十来年前就拆了", fix: "改成原址商场" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
     const repairCallModel = vi.fn(async () => JSON.stringify({
-      paragraphs: [{ index: 1, text: "菜场早没了，原址立着一排商场，他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。" }],
+      fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。" }],
     }));
 
     const result = await runDraftQualityPipeline({
