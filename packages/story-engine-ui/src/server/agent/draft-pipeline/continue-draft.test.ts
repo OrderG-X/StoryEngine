@@ -21,7 +21,8 @@ describe("buildContinuationMessages", () => {
         scene: {}, characters: [], entities: [], threadsAdvanced: [], avoid: [], createdAt: "2026-10-08T00:00:00.000Z",
       },
     });
-    expect(system.content).toContain("至少写 124 个汉字"); // 120 + 原最后一段 4 字
+    // 120 + 原最后一段 4 字；上限 = 目标区间上限 345 − 前文 4 个汉字。
+    expect(system.content).toContain("写 124–341 个汉字（不少于 124，不要超过 341）");
     expect(user.content).toContain("1. 出门");
     expect(user.content).toContain("本章新信息（必须写明）：缺页是汇款");
     expect(user.content).toContain("【原最后一段】\n他关了灯。");

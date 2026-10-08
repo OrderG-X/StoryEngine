@@ -51,11 +51,14 @@ export function buildContinuationMessages(input: {
   readonly lengthTarget: DraftLengthTarget;
   readonly chapterPlan?: ChapterPlan;
 }): { readonly role: "system" | "user"; readonly content: string }[] {
-  const target = input.need + countDraftChineseCharacters(input.lastParagraph);
+  const lastLength = countDraftChineseCharacters(input.lastParagraph);
+  const target = input.need + lastLength;
+  // 上限：整章不超过目标区间上限（验收：首稿只差 100 字，一口气续到 4465 字，目标才 3000）。
+  const ceiling = Math.max(target, input.lengthTarget.upperBound - countDraftChineseCharacters(input.prefix));
   const system = [
     "你是小说写手，正在写同一章的后半部分。只输出接下来的正文，不要标题、不要解释、不要重复前文。",
     `从「前文」最后一句之后接着写；「原最后一段」由你重写并扩展（可以吸收它的内容，但不要原样照抄后再接着写）。`,
-    `这一段续写至少写 ${target} 个汉字：把章纲里还没写到或写得太简略的要点写充分——用具体的动作、对话、场面推进，不要堆形容词、不要回顾前文、不要总结感想。`,
+    `这一段续写写 ${target}–${ceiling} 个汉字（不少于 ${target}，不要超过 ${ceiling}）：把章纲里还没写到或写得太简略的要点写充分——用具体的动作、对话、场面推进，不要堆形容词、不要回顾前文、不要总结感想。`,
     "人物、物件、地点、时间必须和前文一致，不要新开与本章无关的大事件。最后自然收住本章。",
   ].join("\n");
   const plan = input.chapterPlan
