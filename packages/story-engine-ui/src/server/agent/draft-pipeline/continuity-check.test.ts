@@ -171,3 +171,15 @@ describe("sentenceContaining", () => {
   });
 });
 
+describe("只核对、不自动改（第八轮验收：自动改了 32 句，18 句改出新毛病）", () => {
+  it("不给改写调用 → 问题原样留给作者，正文不动，说明里请作者定", async () => {
+    const check = vi.fn(async () => JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }));
+    const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check });
+    expect(result.changed).toBe(false);
+    expect(result.draftBody).toBe(DRAFT);
+    expect(result.remaining).toHaveLength(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(describeContinuityOutcome(result)).toContain("没有自动改（你定）：「菜场还在」与第4章：菜场已拆");
+  });
+});
+

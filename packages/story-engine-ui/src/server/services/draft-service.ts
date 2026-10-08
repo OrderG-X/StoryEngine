@@ -1395,7 +1395,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   if (
     lengthPolicy === "annotate"
     && draftBody.trim()
-    && (input.continueCallModel || (input.continuityCheckCallModel && input.continuityRepairCallModel))
+    && (input.continueCallModel || input.continuityCheckCallModel)
   ) {
     qualityPipeline = await runDraftQualityPipeline({
       projectDir,

@@ -334,12 +334,13 @@ export async function checkAndRepairContinuity(input: {
   readonly references: ContinuityReferences;
   readonly chapterPlan?: ChapterPlan;
   readonly checkCallModel: CheckCallModel;
-  readonly repairCallModel: CheckCallModel;
+  /** 缺省 = 只核对、不自动改（问题全部留给作者定）。 */
+  readonly repairCallModel?: CheckCallModel;
 }): Promise<CheckAndRepairResult> {
   const firstCheck = await checkContinuity({ ...input, callModel: input.checkCallModel });
   const missingBeats = firstCheck.issues.filter((issue) => issue.type === "missing_beat");
   let pending = firstCheck.issues.filter((issue) => issue.type !== "missing_beat");
-  if (!firstCheck.checked || pending.length === 0) {
+  if (!firstCheck.checked || pending.length === 0 || !input.repairCallModel) {
     return { draftBody: input.draftBody, changed: false, firstCheck, repairedParagraphs: 0, remaining: firstCheck.issues };
   }
   let body = input.draftBody;
@@ -347,7 +348,7 @@ export async function checkAndRepairContinuity(input: {
   let repairError: string | undefined;
   let recheck: ContinuityCheckResult | undefined;
   for (let round = 0; round < MAX_REPAIR_ROUNDS && pending.length > 0; round += 1) {
-    const repair = await repairContinuityIssues({ draftBody: body, issues: pending, references: input.references, callModel: input.repairCallModel });
+    const repair = await repairContinuityIssues({ draftBody: body, issues: pending, references: input.references, callModel: input.repairCallModel! });
     if (repair.repairedParagraphs === 0 || !repair.changedIndexes) {
       if (repair.error) repairError = repair.error;
       break;
@@ -383,6 +384,12 @@ export function describeContinuityOutcome(result: CheckAndRepairResult): string 
   if (result.repairError) parts.push(`自动修改没成（${result.repairError}）`);
   const remaining = result.remaining;
   if (remaining.length === 0) return `${parts.join("，")}，复核已无冲突。`;
+  if (result.repairedParagraphs === 0 && !result.repairError) {
+    const all = remaining.slice(0, 4).map((issue) => (issue.type === "missing_beat"
+      ? `漏写要点：${issue.conflict || issue.fix}`
+      : `「${issue.quote}」与${issue.conflict}`)).join("；");
+    return `${parts.join("，")}，没有自动改（你定）：${all}${remaining.length > 4 ? "等" : ""}。要按旧设定改，就说「按核对结果改」。`;
+  }
   const listed = remaining.slice(0, 3).map((issue) => (issue.type === "missing_beat"
     ? `漏写要点：${issue.conflict || issue.fix}`
     : `「${issue.quote}」与${issue.conflict}`)).join("；");

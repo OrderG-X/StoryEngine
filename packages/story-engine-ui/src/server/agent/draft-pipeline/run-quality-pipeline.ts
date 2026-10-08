@@ -113,8 +113,8 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     }
   }
 
-  // ② 前后核对 + ③ 有冲突自动修（最多两轮，只复核改过的段）。
-  if (input.checkCallModel && input.repairCallModel && body.trim()) {
+  // ② 前后核对（+ ③ 注入了改写调用时才自动修；生产路默认不自动修，问题留给作者定）。
+  if (input.checkCallModel && body.trim()) {
     const startedAt = Date.now();
     const passages = input.chapterPlan
       ? await findEarlierPassages({
@@ -139,7 +139,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       draftBody: body,
       references,
       checkCallModel: input.checkCallModel,
-      repairCallModel: input.repairCallModel,
+      ...(input.repairCallModel ? { repairCallModel: input.repairCallModel } : {}),
       ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
     });
     info = {

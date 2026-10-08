@@ -89,7 +89,6 @@ import { callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
 import {
   callConfiguredContinueModel,
   callConfiguredContinuityCheckModel,
-  callConfiguredContinuityRepairModel,
 } from "../draft-pipeline/production-call-models.js";
 
 /**
@@ -371,8 +370,8 @@ export const generateDraftTool = createTool({
     "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。" +
     "首稿低于字数下限时，在出稿这一步就从结尾接着写够（最多两轮，不在中间插句）；仍不够会在 draftLength 和 summary 里如实标注——别假装字数达标。" +
-    "写完自动做一遍前后核对（对照旧设定、前文原文、上一章结尾），有冲突自动改一轮并复核；改不掉的列在 qualityPipeline.continuity.remaining 和 summary 里，" +
-    "请原样转达让用户定，别替用户拍板、别说「已经一致」。这些都在本工具内跑完，不需要你再调预览或改稿来补字。" +
+    "写完自动做一遍前后核对（对照旧设定、前文原文、上一章结尾），查出的问题不自动改，列在 qualityPipeline.continuity.remaining 和 summary 里——" +
+    "请原样转达让用户定（用户说按核对结果改，你再用 revise_draft 按旧设定逐处改），别替用户拍板、别说「已经一致」。这些都在本工具内跑完，不需要你再调预览或改稿来补字。" +
     "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +
     "最多一轮不循环、落盘前自动快照），结果如实进 autoDeAi 字段，summary 如实说明修掉几处/复检还剩几处（剩下的可引导用户说「去AI味」逐条修订）；" +
     "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。" +
@@ -487,7 +486,7 @@ export const generateDraftTool = createTool({
       // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（qualityCheck 槽）与冲突段改写（repair 槽）。
       continueCallModel: callConfiguredContinueModel,
       continuityCheckCallModel: callConfiguredContinuityCheckModel,
-      continuityRepairCallModel: callConfiguredContinuityRepairModel,
+      // 不自动改冲突句（第八轮验收：自动改了 32 句，18 句改出新毛病、真正修好 3 句）：核对出的问题原样交作者定。
       // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
       segmentByPlan: true,
       writerClient,
