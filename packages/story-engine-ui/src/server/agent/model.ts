@@ -8,6 +8,7 @@ import {
   learnAlwaysOnThinkingModel,
   omitThinkingParams,
   resolveConfiguredChatModel,
+  STREAM_IDLE_TIMEOUT_MS,
   type ModelTaskProfileKey,
   type ResolvedChatModel,
 } from "../lib/llm-client.js";
@@ -74,6 +75,100 @@ async function maybeRetryWithoutThinking(
  * extraHeaders（可选）：每请求追加的出站头（opencode 会话头/自定义头，由 buildProviderRequestHeaders 组装），
  * 经 Headers.set 覆盖同名头——opencode 网关缺 x-opencode-session 会直接 400（MissingSessionID），agent 路也必须带。
  */
+/**
+ * 主对话请求的「上游没反应」防线（2026-10-08 十章验收第三轮）：服务商临时故障时，请求发出去一直等不到响应头，
+ * 底层默认 5 分钟才判死，而且不重试——第 4 章起每次都白等 5 分钟、连报「AI 服务暂时没响应」。
+ * 守空闲超时铁律（只判「彻底静默」，不设总时长）：
+ *  - 响应头迟迟不来（彻底静默 idleMs）→ 掐掉，自动重发一次（还没开始生成，重发不会重复做事）；
+ *  - 已开始流式后彻底静默 idleMs → 掐断流、如实报错（流到一半无法安全重发，交给作者点重试）。
+ * 模型还在吐字节（含思考 token）就一直续命，长回合不受影响。
+ */
+export function withUpstreamSilenceGuard(
+  baseFetch: typeof fetch,
+  idleMs: number = STREAM_IDLE_TIMEOUT_MS,
+  retries = 1,
+): typeof fetch {
+  return async (input, init) => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const callerSignal = init?.signal ?? undefined;
+      if (callerSignal?.aborted) throw callerSignal.reason ?? new Error("aborted");
+      const controller = new AbortController();
+      const onCallerAbort = () => controller.abort(callerSignal?.reason);
+      callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+      let silent = false;
+      let timer = setTimeout(() => { silent = true; controller.abort(new Error(`上游 ${Math.round(idleMs / 1000)} 秒没有任何响应`)); }, idleMs);
+      const unref = (t: ReturnType<typeof setTimeout>) => (t as unknown as { unref?: () => void }).unref?.();
+      unref(timer);
+      try {
+        const response = await baseFetch(input, { ...init, signal: controller.signal });
+        clearTimeout(timer);
+        if (!response.body) {
+          callerSignal?.removeEventListener("abort", onCallerAbort);
+          return response;
+        }
+        // 流式阶段：每来一块就续命；彻底静默 idleMs 才掐断（连同下游流一起报错，不依赖底层是否响应 abort）。
+        const reader = response.body.getReader();
+        let output: ReadableStreamDefaultController<Uint8Array> | undefined;
+        const kick = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            const stalled = new Error(`上游流式输出中断：${Math.round(idleMs / 1000)} 秒没有新内容`);
+            controller.abort(stalled);
+            reader.cancel(stalled).catch(() => undefined);
+            try { output?.error(stalled); } catch { /* 已关闭 */ }
+          }, idleMs);
+          unref(timer);
+        };
+        kick();
+        const body = new ReadableStream<Uint8Array>({
+          start(streamController) {
+            output = streamController;
+          },
+          async pull(streamController) {
+            try {
+              const { done, value } = await reader.read();
+              if (done) {
+                clearTimeout(timer);
+                callerSignal?.removeEventListener("abort", onCallerAbort);
+                streamController.close();
+                return;
+              }
+              kick();
+              streamController.enqueue(value);
+            } catch (error) {
+              clearTimeout(timer);
+              callerSignal?.removeEventListener("abort", onCallerAbort);
+              streamController.error(error);
+            }
+          },
+          cancel(reason) {
+            clearTimeout(timer);
+            callerSignal?.removeEventListener("abort", onCallerAbort);
+            return reader.cancel(reason);
+          },
+        });
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      } catch (error) {
+        clearTimeout(timer);
+        callerSignal?.removeEventListener("abort", onCallerAbort);
+        lastError = error;
+        // 作者自己停了 → 不重发；上游静默 / 连接级错误（还没拿到响应）→ 重发一次。
+        if (callerSignal?.aborted) throw error;
+        if (!silent && !isConnectionLevelError(error)) throw error;
+        console.warn(`[agent-upstream] 第 ${attempt + 1} 次请求${silent ? `等了 ${Math.round(idleMs / 1000)} 秒没有响应` : `连接失败（${String((error as Error)?.message ?? error).slice(0, 120)}）`}${attempt < retries ? "，自动重发一次" : ""}`);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  };
+}
+
+/** 还没拿到响应就失败的连接级错误（断连、拒连、DNS、重置）：可以安全重发。 */
+function isConnectionLevelError(error: unknown): boolean {
+  const text = `${(error as { code?: string })?.code ?? ""} ${(error as Error)?.message ?? ""} ${((error as { cause?: { code?: string } })?.cause?.code) ?? ""}`;
+  return /UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up/iu.test(text);
+}
+
 export function makeAgentRequestFetch(
   thinking: boolean,
   dialect: ThinkingDialect,
@@ -129,7 +224,7 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
     name: provider.id,
     baseURL,
     apiKey,
-    fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, fetch, outboundHeaders),
+    fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, withUpstreamSilenceGuard(fetch), outboundHeaders),
   });
   return { model: openaiCompatible(profile.model), profile };
 }

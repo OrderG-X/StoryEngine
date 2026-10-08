@@ -11,7 +11,7 @@ import type { CheckCallModel } from "./continuity-check.js";
 
 type Messages = Parameters<ContinueCallModel>[0];
 
-async function callSlot(
+async function callSlotOnce(
   task: "fastDraft" | "qualityCheck" | "repair",
   messages: Messages,
   json: boolean,
@@ -24,6 +24,23 @@ async function callSlot(
   });
   if (!content.trim()) throw new Error("模型返回了空内容");
   return content;
+}
+
+/**
+ * 服务商临时故障（静默超时 / 断连 / 空回）自动再试一次（十章验收第三轮：服务商故障两小时，
+ * 核对环节每次都直接「没核成」）。仍失败就抛，由各环节如实报「这次没跑成、原稿不动」。
+ */
+async function callSlot(
+  task: "fastDraft" | "qualityCheck" | "repair",
+  messages: Messages,
+  json: boolean,
+): Promise<string> {
+  try {
+    return await callSlotOnce(task, messages, json);
+  } catch (error) {
+    console.warn(`[draft-pipeline] ${task} 调用失败，自动重试一次：${String((error as Error)?.message ?? error).slice(0, 160)}`);
+    return callSlotOnce(task, messages, json);
+  }
 }
 
 export const callConfiguredContinueModel: ContinueCallModel = (messages) => callSlot("fastDraft", messages, false);
