@@ -968,6 +968,8 @@ export interface GenerateDraftInput {
   readonly continueCallModel?: ContinueCallModel;
   readonly continuityCheckCallModel?: CheckCallModel;
   readonly continuityRepairCallModel?: CheckCallModel;
+  /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
+  readonly segmentByPlan?: boolean;
 }
 
 /** HTTP 适配层投影料：工具 execute 投影时剥掉（不进 LLM 视野），路由据此组装 200/422 响应。 */
@@ -1115,6 +1117,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
   readonly selectedHookIds?: readonly string[];
   readonly mustHitBeats?: readonly string[];
   readonly maxOutputTokens?: number;
+  readonly segmentByPlan?: boolean;
 }): Omit<FastDraftInput, "writerClient" | "persist" | "dryRun"> {
   return {
     projectDir: input.projectDir,
@@ -1131,6 +1134,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
     maxOutputTokens: positiveOrUndefined(input.maxOutputTokens) ?? resolveDraftMaxOutputTokens(run.lengthTarget),
     rankContext: run.contextRanking.rankContext,
     ...(run.chapterPlan ? { chapterPlan: run.chapterPlan } : {}),
+    ...(run.chapterPlan && input.segmentByPlan ? { segmentByPlan: true } : {}),
   };
 }
 

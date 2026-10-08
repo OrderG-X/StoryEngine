@@ -7,6 +7,7 @@ import {
   type AiFlavorRule,
 } from "./ai-flavor-detection.js";
 import {
+  estimateTokens,
   buildWriterContext,
   type ArcGoalsContext,
   type StoryContinuityContext,
@@ -81,6 +82,12 @@ export interface FastDraftInput {
   readonly mustHitBeats?: readonly string[];
   /** 本章章纲（阶段 2「先想后写」）：进受保护段并驱动翻旧资料，见 buildWriterContext。 */
   readonly chapterPlan?: ChapterPlan;
+  /**
+   * 按章纲分前后两半写（2026-10-08 十章验收第五轮）：写手一次只写得出一千八到两千字，「先写短、再接着续」的续写
+   * 会越过章纲最后一步自己编新的一天、新地点（第五轮 58 处矛盾里 27 处出在续写）。有章纲且要点够多时，
+   * 前半章只写前一半要点、后半章接着写剩下的要点并收尾——字数靠要点撑起来，而不是事后硬续。缺省 = 一次写完（旧行为）。
+   */
+  readonly segmentByPlan?: boolean;
   readonly rankContext?: (envelope: WriterContextEnvelope) => WriterContextEnvelope;
   readonly maxOutputTokens?: number;
   readonly requestedDraftLength?: number;
@@ -139,6 +146,84 @@ export async function persistFastDraftBody(input: {
   // 进程被杀（OOM/断电）会留下截断的半章稿，且截断文件无解析校验、下次被当正常稿读走。
   await writeFileAtomic(draftPath, `# ${input.title}\n\n${input.draftBody.trim()}\n`);
   return draftPath;
+}
+
+/** 章纲要点至少几条才分两半写（太少就一次写完）。 */
+const MIN_BEATS_TO_SEGMENT = 4;
+
+/** 改写某一段的内容（token 估算随之更新），其余段原样。 */
+function withSectionContent(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
+  return {
+    ...context,
+    sections: context.sections.map((section) => (section.name === name ? { ...section, content, tokenEstimate: estimateTokens(content) } : section)),
+  };
+}
+
+function withExtraSection(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
+  return {
+    ...context,
+    sections: [...context.sections, { name, content, tokenEstimate: estimateTokens(content), cachePolicy: "dynamic" as const }],
+  };
+}
+
+/**
+ * 前半章：只写前一半要点、停在半途（不收尾）；后半章：带上已写好的前半章原文，接着写剩下的要点并收住本章。
+ * 后半章没写成 → 只交前半章（如实记一条 issue），后续的「续写够字数」环节会兜底。
+ */
+async function generateBySegments(input: {
+  readonly writerClient: WriterClient;
+  readonly context: WriterContextEnvelope;
+  readonly plan: ChapterPlan;
+  readonly rawChapterGoal: string;
+  readonly lengthTarget: ReturnType<typeof resolveDraftLengthTarget>;
+  readonly maxOutputTokens: number;
+}): Promise<{ readonly generated: Awaited<ReturnType<WriterClient["generateDraft"]>>; readonly secondHalfError?: string }> {
+  const beats = input.plan.beats;
+  const split = Math.ceil(beats.length / 2);
+  const half = Math.round(input.lengthTarget.requested / 2);
+  const numbered = (from: number, to: number) => beats.slice(from, to).map((beat, index) => `${from + index + 1}. ${beat}`).join("  ");
+  const planSection = input.context.sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown> | undefined;
+
+  const firstGoal = [
+    input.rawChapterGoal,
+    "",
+    `【本章分前后两半写，这次是前半章】只写章纲要点 1–${split}：${numbered(0, split)}。`,
+    `前半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}）。写到第 ${split} 个要点结束处就停，不要收尾、不要总结、不要提前写后面的要点。`,
+  ].join("\n");
+  let firstContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
+  if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", { ...planSection, segment: `前半章：只写要点 1–${split}` });
+  const first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
+  const firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
+
+  const secondGoal = [
+    input.rawChapterGoal,
+    "",
+    `【本章分前后两半写，这次是后半章】前半章已经写好（见 already_written，那是本章正文，一个字都不要重写、不要复述）。`,
+    `紧接前半章最后一句往下写，只写章纲要点 ${split + 1}–${beats.length}：${numbered(split, beats.length)}。`,
+    `后半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
+  ].join("\n");
+  let secondContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: secondGoal });
+  if (planSection) secondContext = withSectionContent(secondContext, "chapter_plan", { ...planSection, segment: `后半章：只写要点 ${split + 1}–${beats.length}` });
+  secondContext = withExtraSection(secondContext, "already_written", {
+    instruction: "这是本章已经写好的前半章正文。从它最后一句之后接着写，人物所在位置、手里的东西、时间都从这里接上。",
+    text: firstBody,
+  });
+  try {
+    const second = await input.writerClient.generateDraft({ context: secondContext, maxOutputTokens: input.maxOutputTokens });
+    const secondBody = stripLeadingMarkdownChapterHeading(second.content).trim();
+    if (!secondBody) throw new Error("后半章是空的");
+    return {
+      generated: {
+        ...first,
+        content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
+      },
+    };
+  } catch (error) {
+    return {
+      generated: first,
+      secondHalfError: `后半章没写成（${describeErrorBriefly(error)}），只交了前半章，字数不够的部分由后续续写环节补。`,
+    };
+  }
 }
 
 export async function runFastDraft(input: FastDraftInput): Promise<FastDraftReport> {
@@ -207,10 +292,19 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
   }
 
   try {
-    const generated = await input.writerClient.generateDraft({
-      context,
-      maxOutputTokens: input.maxOutputTokens ?? resolveDraftMaxOutputTokens(draftLengthTarget),
-    });
+    const maxOutputTokens = input.maxOutputTokens ?? resolveDraftMaxOutputTokens(draftLengthTarget);
+    const segmented = input.segmentByPlan && input.chapterPlan && input.chapterPlan.beats.length >= MIN_BEATS_TO_SEGMENT
+      ? await generateBySegments({
+        writerClient: input.writerClient,
+        context,
+        plan: input.chapterPlan,
+        rawChapterGoal: input.chapterGoal,
+        lengthTarget: draftLengthTarget,
+        maxOutputTokens,
+      })
+      : undefined;
+    const generated = segmented?.generated ?? await input.writerClient.generateDraft({ context, maxOutputTokens });
+    if (segmented?.secondHalfError) writingRulesFailure.push(segmented.secondHalfError);
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
     const rawDraftBody = stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content));
     const rawDraftLength = buildDraftLengthReport({

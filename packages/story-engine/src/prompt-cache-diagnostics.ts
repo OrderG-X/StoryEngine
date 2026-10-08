@@ -39,6 +39,7 @@ export function renderFastDraftPromptText(envelope: WriterContextEnvelope): stri
     "Follow the 本章硬约束 section before any stylistic preference.",
     "If the previous_uncommitted_draft section exists, treat it as the immediate previous chapter even though it is not formal state; preserve protagonist identity, pronouns, scene facts, and unresolved pressure from it.",
     "If the chapter_plan section exists, write this chapter by its beats in order; every beat must actually happen on the page, and its newInformation must be stated explicitly. If the earlier_passages section exists, those are verbatim passages from earlier chapters about the objects/places this chapter involves: keep their state and wording consistent.",
+    "If the already_written section exists, it is the first half of THIS chapter, already written: continue right after its last sentence; never rewrite, summarize or repeat it, and do not write a title.",
     "If the previous_chapter section exists, it is the verbatim text of the immediately previous chapter. Continue from where it ends; every object's state and location, every character's whereabouts, and who-knows-what must match it; never re-discover or redo what already happened there — move the story forward.",
     "正文开头必须是 markdown 章节标题，格式：# 第N章 · 标题。",
     "标题由你根据本章正文自然拟定，必须存在，但不要剧透 protectedSecrets / forbiddenReveals，也不要提前揭开 unknownTruths。",

@@ -509,6 +509,23 @@ describe("runGenerateDraft 先拟章纲（阶段 2「先想后写」）", () => 
     expect(result.summary).toContain("这次按没有章纲出稿");
   });
 
+  it("有章纲且要求分段 → 交给引擎按要点分前后两半写；没章纲时不分", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ plan: PLAN, note: "本章章纲：…", reused: false });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), planCallModel: vi.fn(), segmentByPlan: true,
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ chapterPlan: PLAN, segmentByPlan: true }));
+
+    storyEngineMocks.runFastDraft.mockClear();
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ note: "章纲没拟成…", reused: false });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), planCallModel: vi.fn(), segmentByPlan: true,
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(storyEngineMocks.runFastDraft.mock.calls[0][0]).not.toHaveProperty("segmentByPlan");
+  });
+
   it("不注入拟章纲调用 → 完全旧行为", async () => {
     await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
     expect(planMocks.resolveChapterPlanForDraft).not.toHaveBeenCalled();

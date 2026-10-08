@@ -488,6 +488,8 @@ export const generateDraftTool = createTool({
       continueCallModel: callConfiguredContinueModel,
       continuityCheckCallModel: callConfiguredContinuityCheckModel,
       continuityRepairCallModel: callConfiguredContinuityRepairModel,
+      // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
+      segmentByPlan: true,
       writerClient,
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
