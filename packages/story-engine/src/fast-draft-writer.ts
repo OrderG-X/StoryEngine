@@ -199,6 +199,7 @@ async function generateBySegments(input: {
     input.rawChapterGoal,
     "",
     `【本章分前后两半写，这次是后半章】前半章已经写好（见 already_written，那是本章正文，一个字都不要重写、不要复述）。`,
+    `前半章已经写过要点 1–${split}（${numbered(0, split)}）：这些事已经发生了，后半章不要再写一遍、不要换个说法再来一次，人物也不要再「第一次」看见或说起它们。`,
     `紧接前半章最后一句往下写，只写章纲要点 ${split + 1}–${beats.length}：${numbered(split, beats.length)}。`,
     `后半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
   ].join("\n");
