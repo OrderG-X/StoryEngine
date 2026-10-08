@@ -39,13 +39,13 @@ describe("parseReconcile 宽进", () => {
   it("条目给成字符串、ref 小写、多余键都收；缺字段的丢", () => {
     const parsed = parseReconcile(JSON.stringify({
       facts: ["座钟已修好送回周婶", { text: "" }],
-      changes: [{ ref: "f2", text: "周婶的座钟已修好送回", why: "多余" }, { ref: "F9" }],
+      changes: [{ ref: "f2", text: "周婶的座钟已修好送回", quote: "座钟昨天已经修好送回去了", why: "多余" }, { ref: "F9" }],
       conflicts: [{ ref: "F1", quote: "菜场还在", note: "第4章说已拆" }, { ref: "F1", note: "没引文" }],
       newCharacters: ["吴师傅"],
       extra: true,
     }));
     expect(parsed.facts).toEqual(["座钟已修好送回周婶"]);
-    expect(parsed.changes).toEqual([{ ref: "F2", text: "周婶的座钟已修好送回" }]);
+    expect(parsed.changes).toEqual([{ ref: "F2", text: "周婶的座钟已修好送回", quote: "座钟昨天已经修好送回去了" }]);
     expect(parsed.conflicts).toEqual([{ ref: "F1", quote: "菜场还在", note: "第4章说已拆" }]);
     expect(parsed.newCharacters).toEqual(["吴师傅"]);
   });
@@ -59,7 +59,11 @@ describe("extractAndReconcileFacts", () => {
     const refOf = (id: string) => related.find((item) => item.fact.id === id)!.ref;
     const callModel = vi.fn(async () => JSON.stringify({
       facts: [{ text: "林舟骑车去了南门" }],
-      changes: [{ ref: refOf("fact-4-1"), text: "周婶的座钟已修好送回周婶家" }],
+      changes: [
+        { ref: refOf("fact-4-1"), text: "周婶的座钟已修好送回周婶家", quote: "他想起周婶那座钟昨天已经修好送回去了。" },
+        // 没引原句（或引的不在正文里）的「变化」不让旧条失效——防把仍有效的事实误标过期。
+        { ref: refOf("fact-4-2"), text: "许棠改了量面积的时间" },
+      ],
       conflicts: [
         { ref: refOf("fact-4-0"), quote: "菜场还在，门口摆着几摊卖豆腐的。", note: "第4章说菜场已拆" },
         { ref: refOf("fact-4-0"), quote: "正文里没有这句", note: "幻觉引文" },
@@ -75,6 +79,7 @@ describe("extractAndReconcileFacts", () => {
     const after = (await readFactLedger(dir)).facts;
     expect(after.find((fact) => fact.id === "fact-4-1")?.supersededByChapter).toBe(8);
     expect(after.find((fact) => fact.id === "fact-4-0")?.supersededByChapter).toBeUndefined(); // 冲突不动账本
+    expect(after.find((fact) => fact.id === "fact-4-2")?.supersededByChapter).toBeUndefined(); // 没有原句为证的「变化」不算
     expect(result.summary).toContain("这章记下 2 条硬事实");
     expect(result.summary).toContain("更新了 1 条旧设定");
     expect(result.summary).toContain("需要你定以哪个为准");

@@ -233,12 +233,26 @@ function parsePlanJson(text: string): unknown {
   return JSON.parse(match[0]);
 }
 
+/** 精简版材料：上一章只留结尾 600 字，事实与线索减半。 */
+function slimMaterials(materials: PlanChapterMaterials): PlanChapterMaterials {
+  const previous = materials.previousChapter;
+  return {
+    ...materials,
+    ...(previous ? { previousChapter: { chapter: previous.chapter, text: `（前略）${previous.text.slice(-600)}` } } : {}),
+    facts: materials.facts.slice(0, Math.ceil(materials.facts.length / 2)),
+    openThreads: materials.openThreads.slice(0, 8),
+    recentChapters: materials.recentChapters.slice(-3),
+  };
+}
+
 /** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
 export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
-  const messages = buildPlanMessages(input.chapter, materials, input.direction);
   let lastError = "";
   for (let attempt = 0; attempt <= PLAN_RETRIES; attempt += 1) {
+    // 第二次换精简材料：验收第四轮第 8、9 章两次都被服务商内容过滤（content_filter）拦下，同样的输入重发必然再拦；
+    // 去掉上一章原文、只留结尾几百字与事实/线索，输入变了才有机会过。
+    const messages = attempt === 0 ? buildPlanMessages(input.chapter, materials, input.direction) : buildPlanMessages(input.chapter, slimMaterials(materials), input.direction);
     try {
       const plan = normalizeChapterPlan(parsePlanJson(await input.callModel(messages)), {
         chapter: input.chapter,

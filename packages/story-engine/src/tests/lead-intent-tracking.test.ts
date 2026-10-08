@@ -597,7 +597,9 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
   });
 
   // 阶段 3·核心：同义不同表述的回收证据，有声明时归到同一条既有线索（不新建，治线索分裂）。
-  it("声明回收：同义证据（无共享锚点）经 targetThreadHint 归到既有线索、标 done、不新建", async () => {
+  // 2026-10-08 十章验收：模型拿无关句子关掉核心谜题。收口改为要求原句与线索沾边；完全换了说法的收口
+  // 只算推进（touched、仍不新建），由作者或 resolve_thread 明确关——错关核心谜题的代价远大于多挂几章。
+  it("声明回收：同义证据（无共享锚点）经 targetThreadHint 归到既有线索、只算推进不关、不新建", async () => {
     const projectDir = await createThreadProject();
     await seedThreads(projectDir, {
       threads: [
@@ -638,9 +640,9 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     const plan = await buildCommitPlanFromProject({ projectDir, chapter: 5, declaration });
 
     expect(plan.passed).toBe(true);
-    // 回收归到既有线索、标 done
+    // 归到既有线索；原句与线索不沾边 → 只算推进（touched），不关
     expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "lead-hemei", type: "lead", status: "done", lastTouchedChapter: 5 }),
+      expect.objectContaining({ id: "lead-hemei", type: "lead", status: "touched", lastTouchedChapter: 5 }),
     ]));
     // 绝不新建「恩师」相关的第二条线索（治分裂）
     const leadUpdates = plan.threadTrackingUpdates?.filter((update) => update.type === "lead") ?? [];

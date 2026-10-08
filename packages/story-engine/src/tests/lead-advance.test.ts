@@ -74,4 +74,18 @@ describe("线索声明推进旧线索（阶段 4 记账对号）", () => {
     });
     expect(result.introducedThreads).toHaveLength(1);
   });
+
+  it("收口引的原句和线索不沾边 → 只算推进、不关（防拿无关句子关掉核心谜题）", () => {
+    const result = plan({
+      resolvedForeshadowing: [{ summary: "揭晓了送修人", quote: "他把怀表翻过来", targetThreadHint: "登记表送修人只写了一个沈字" }],
+    });
+    expect(result.updates).toEqual([expect.objectContaining({ id: "lead-a", status: "touched" })]);
+  });
+
+  it("收口原句真在说这条线索 → 关掉", () => {
+    const result = plan({
+      resolvedForeshadowing: [{ summary: "送修人就是沈家", quote: "还是只有一个沈字", targetThreadHint: "登记表送修人只写了一个沈字" }],
+    });
+    expect(result.updates).toEqual([expect.objectContaining({ id: "lead-a", status: "done" })]);
+  });
 });

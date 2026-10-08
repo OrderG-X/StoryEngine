@@ -239,11 +239,13 @@ function extractDeclaredThreadCandidates(input: {
   for (const resolved of input.verifiedDelta.resolvedForeshadowing) {
     const target = findDeclaredTargetThread(resolved, activeThreads);
     if (!target) continue; // 指向不存在线索 → 不新建（避免制造分裂）
+    // 收口证据必须真的在说这条线索（十章验收：拿「是一枚硬币」关掉凭物线索、核心谜底第 3 章就被关）：
+    // 引的原句与线索标题/证据至少共享两个字面片段才算收口；对不上就只算推进，不关。
     candidates.push({
       type: target.type,
       title: target.title,
       evidence: truncateText(resolved.quote, 120),
-      isDone: true,
+      isDone: resolutionQuoteIsRelevant(resolved.quote, target),
       targetThreadId: target.id,
     });
   }
@@ -323,6 +325,29 @@ export function expireStaleIntents(input: {
     pool: { threads },
     expired,
   };
+}
+
+/** 收口原句与线索至少共享几个两字片段才算在说同一件事。 */
+const RESOLUTION_MIN_SHARED_BIGRAMS = 2;
+
+function hanBigrams(text: string): Set<string> {
+  const grams = new Set<string>();
+  for (const run of text.match(/[\u3400-\u9fff]+/gu) ?? []) {
+    const chars = Array.from(run);
+    for (let i = 0; i + 1 < chars.length; i += 1) grams.add(chars[i] + chars[i + 1]);
+  }
+  return grams;
+}
+
+/** 收口引的原句是否真的在说这条线索：与线索标题 + 首条证据共享 ≥ 2 个两字片段。 */
+function resolutionQuoteIsRelevant(quote: string, thread: NarrativeThread): boolean {
+  const threadGrams = hanBigrams(`${thread.title.replace(/…$/u, "")} ${thread.evidence?.[0] ?? ""}`);
+  let shared = 0;
+  for (const gram of hanBigrams(quote)) {
+    if (threadGrams.has(gram)) shared += 1;
+    if (shared >= RESOLUTION_MIN_SHARED_BIGRAMS) return true;
+  }
+  return false;
 }
 
 /** 同一批新线索之间算重复的字面相近度阈值（bigram 相似度）。 */

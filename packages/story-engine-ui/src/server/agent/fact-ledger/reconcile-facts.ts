@@ -63,10 +63,10 @@ export function buildReconcileMessages(
   const system = [
     "你是中文小说的『硬事实记录员』。读这章正文，对照【已记下的旧事实】，做三件事：",
     "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。",
-    "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法。",
+    "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
     "3. conflicts：本章说法和某条旧事实对不上、但正文并没有写它发生了变化（多半是写错了）。ref 填旧事实编号，quote 逐字抄本章正文里对不上的那句，note 说怎么对不上。",
     "另外列出本章首次出现、且不在『已知角色』名单里的具名新人物（真名，宁缺毋滥）。",
-    "只输出一个 JSON：{\"facts\":[{\"text\":\"\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
+    "只输出一个 JSON：{\"facts\":[{\"text\":\"\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\",\"quote\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
   ].join("\n");
   const user = [
     related.length > 0
@@ -80,7 +80,7 @@ export function buildReconcileMessages(
 
 interface ParsedReconcile {
   readonly facts: readonly string[];
-  readonly changes: readonly { readonly ref: string; readonly text: string }[];
+  readonly changes: readonly { readonly ref: string; readonly text: string; readonly quote: string }[];
   readonly conflicts: readonly { readonly ref: string; readonly quote: string; readonly note: string }[];
   readonly newCharacters: readonly string[];
 }
@@ -98,7 +98,7 @@ export function parseReconcile(text: string): ParsedReconcile {
   return {
     facts: asArray(parsed.facts).map((item) => str(asRecord(item)?.text ?? item)).filter(Boolean),
     changes: asArray(parsed.changes)
-      .map((item) => ({ ref: str(asRecord(item)?.ref).toUpperCase(), text: str(asRecord(item)?.text) }))
+      .map((item) => ({ ref: str(asRecord(item)?.ref).toUpperCase(), text: str(asRecord(item)?.text), quote: str(asRecord(item)?.quote) }))
       .filter((item) => item.ref && item.text),
     conflicts: asArray(parsed.conflicts)
       .map((item) => ({ ref: str(asRecord(item)?.ref).toUpperCase(), quote: str(asRecord(item)?.quote), note: str(asRecord(item)?.note) }))
@@ -153,22 +153,25 @@ export async function extractAndReconcileFacts(input: {
   }
 
   const byRef = new Map(related.map((item) => [item.ref, item.fact]));
+  const draft = normalizeSpace(input.draftText);
+  const quoted = (quote: string) => normalizeSpace(quote).length >= 4 && draft.includes(normalizeSpace(quote));
+  // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
+  const changes = parsed.changes.filter((change) => byRef.has(change.ref) && quoted(change.quote));
   const added = await appendFacts(input.projectDir, input.chapter, [
     ...parsed.facts,
-    ...parsed.changes.filter((change) => byRef.has(change.ref)).map((change) => change.text),
+    ...changes.map((change) => change.text),
   ], "auto");
   // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。
   const superseded: string[] = [];
-  for (const change of parsed.changes) {
+  for (const change of changes) {
     const old = byRef.get(change.ref);
     if (!old || old.supersededByChapter !== undefined) continue;
     const edited = await applyFactEdit(input.projectDir, "supersede", { id: old.id, chapter: input.chapter });
     if (edited.ok) superseded.push(old.text);
   }
   // 冲突：引文必须逐字在本章正文里，编号必须对得上；账本不动。
-  const draft = normalizeSpace(input.draftText);
   const conflicts: FactConflict[] = parsed.conflicts
-    .filter((item) => byRef.has(item.ref) && normalizeSpace(item.quote).length >= 4 && draft.includes(normalizeSpace(item.quote)))
+    .filter((item) => byRef.has(item.ref) && quoted(item.quote))
     .map((item) => {
       const old = byRef.get(item.ref)!;
       return { old: `第${old.chapter}章「${old.text}」`, quote: item.quote, note: item.note };

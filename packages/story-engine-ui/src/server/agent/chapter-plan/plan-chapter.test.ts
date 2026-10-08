@@ -55,12 +55,16 @@ describe("planChapter", () => {
     expect((await readChapterPlan(projectDir, 2))?.summary).toBe("林澈去档案室对出缺页");
   });
 
-  it("第一次坏 JSON、重试成功", async () => {
+  it("第一次坏 JSON、重试成功；重试换精简材料（服务商内容过滤误伤时，同样输入重发必然再拦）", async () => {
     const projectDir = await makeBook();
+    await writeFile(join(projectDir, "chapters", "0001.md"), `# 第1章 · 账册\n\n${"林澈翻账册，一页页核对。".repeat(120)}\n\n结尾：他决定明天去档案室。\n`, "utf-8");
     const callModel = vi.fn().mockResolvedValueOnce("不是JSON").mockResolvedValueOnce(GOOD_PLAN);
     const result = await planChapter({ projectDir, chapter: 2, callModel });
     expect(callModel).toHaveBeenCalledTimes(2);
     expect(result.ok).toBe(true);
+    const size = (call: number) => (callModel.mock.calls[call][0] as { content: string }[]).map((m) => m.content.length).reduce((a, b) => a + b, 0);
+    expect(size(1)).toBeLessThan(size(0));
+    expect(JSON.stringify(callModel.mock.calls[1][0])).toContain("结尾：他决定明天去档案室");
   });
 
   it("两次都不成 → ok:false + 原因，不抛、不落盘", async () => {
