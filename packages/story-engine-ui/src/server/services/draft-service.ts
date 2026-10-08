@@ -50,6 +50,7 @@
  */
 import { readFile, rm, stat as statFile, writeFile } from "node:fs/promises";
 import {
+  buildAiFlavorReport,
   buildDraftLengthReport,
   buildStateOverview,
   checkDraftBeatFidelity,
@@ -89,6 +90,9 @@ import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../ag
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../agent/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft, type PlanCallModel } from "../agent/chapter-plan/plan-chapter.js";
+import type { ContinueCallModel } from "../agent/draft-pipeline/continue-draft.js";
+import type { CheckCallModel } from "../agent/draft-pipeline/continuity-check.js";
+import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "../agent/draft-pipeline/run-quality-pipeline.js";
 
 /* ---------------------------------------------------------------------------
  * 长度目标解析与执法（D1：原 routes/draft.ts 的 enforce 栈整体迁入，逻辑一字未动）
@@ -956,6 +960,14 @@ export interface GenerateDraftInput {
    * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
    */
   readonly planCallModel?: PlanCallModel;
+  /**
+   * 阶段 3 出稿后的固定质量环节（工具 execute 注入；测试注入 mock）：
+   * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）+
+   * continuityRepairCallModel（repair 槽）——前后核对、有冲突自动修一轮。缺失 = 不跑该环节（旧行为）。
+   */
+  readonly continueCallModel?: ContinueCallModel;
+  readonly continuityCheckCallModel?: CheckCallModel;
+  readonly continuityRepairCallModel?: CheckCallModel;
 }
 
 /** HTTP 适配层投影料：工具 execute 投影时剥掉（不进 LLM 视野），路由据此组装 200/422 响应。 */
@@ -994,6 +1006,8 @@ export interface GenerateDraftOutcome {
   readonly beatFidelity?: GenerateDraftBeatFidelityInfo;
   /** 本章章纲（拟成/沿用时）：要点、新信息、开场——agent 据此向作者一句话交代这章写了什么。 */
   readonly chapterPlan?: GenerateDraftPlanInfo;
+  /** 出稿后的质量环节：续写够字数、前后核对与自动修改的结果（剩下要作者定的问题在 continuity.remaining）。 */
+  readonly qualityPipeline?: QualityPipelineInfo;
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -1363,6 +1377,38 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     draftBody = await readDraftBodyWithRetry(report.draftPath);
   }
 
+  // 阶段 3：出稿后的固定质量环节——字数不够就接着写够 → 前后核对 → 有冲突自动修一轮（注入了模型调用才跑；
+  // HTTP enforce 路不注入，保持现状）。真改了正文就以新正文重算字数 / AI 腔 / 要点核对，后续环节都基于新正文。
+  let effectiveAiFlavor = report.aiFlavor;
+  let effectiveBeatFidelity = report.beatFidelity;
+  let qualityPipeline: QualityPipelineResult | undefined;
+  if (
+    lengthPolicy === "annotate"
+    && draftBody.trim()
+    && (input.continueCallModel || (input.continuityCheckCallModel && input.continuityRepairCallModel))
+  ) {
+    qualityPipeline = await runDraftQualityPipeline({
+      projectDir,
+      chapter,
+      draftPath: report.draftPath,
+      title: finalReport.title ?? `第${chapter}章`,
+      draftBody,
+      lengthTarget,
+      ...(chapterPlan ? { chapterPlan } : {}),
+      ...(input.continueCallModel ? { continueCallModel: input.continueCallModel } : {}),
+      ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
+      ...(input.continuityRepairCallModel ? { repairCallModel: input.continuityRepairCallModel } : {}),
+    });
+    if (qualityPipeline.changed) {
+      draftBody = qualityPipeline.draftBody;
+      finalReport = { ...finalReport, draftLength: buildDraftLengthReport({ draftBody, lengthTarget }) };
+      if (run.aiFlavorRules) effectiveAiFlavor = buildAiFlavorReport(detectAiFlavorViolations(draftBody, run.aiFlavorRules));
+      if (input.mustHitBeats && input.mustHitBeats.length > 0) {
+        effectiveBeatFidelity = checkDraftBeatFidelity({ draftContent: draftBody, mustHitBeats: input.mustHitBeats });
+      }
+    }
+  }
+
   // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带；enforce 裁剪后为重建版），透传关键信息进输出，绝不藏起来。
   // T14 统一口径：对外 actualLength 与稿纸顶栏同函数（countTextWords：去标题/frontmatter 的中文字符数），
   // 杜绝顶栏「851 字」vs 回执「704 字」双口径；执法内部仍用引擎 CJK 计数（lengthStatus/bounds 不动）。
@@ -1378,7 +1424,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   // 用裁决后结果如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。复核没跑成 → 维持确定性结论
   // + adjudication:"unavailable" 如实标注。零判漏零调用（连裁决模型都不碰）。无锚点 beat 规则不检，不在此列。
   // 多候选路径的复核已在采样选优前逐候选跑完（beatAdjudication=优胜者那份），这里不重复调。
-  const deterministicMissingBeats = report.beatFidelity?.missingBeats ?? [];
+  const deterministicMissingBeats = effectiveBeatFidelity?.missingBeats ?? [];
   if (!sampling && deterministicMissingBeats.length > 0 && input.beatAdjudicationCallModel) {
     beatAdjudication = await adjudicateMissingBeats({
       draftContent: draftBody,
@@ -1397,12 +1443,12 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
 
   // AI 腔回检（warning-only）：检出 high/medium 默认接一轮自动去味（批量改写 + 复检，最多一轮）；
   // autoDeAi:false 或未注入改写模型 → 只标注不改写。改写失败=原稿不动+如实报，绝不影响本出稿的 ok。
-  const aiFlavorInfo = report.aiFlavor ? buildAiFlavorInfo(report.aiFlavor) : undefined;
+  const aiFlavorInfo = effectiveAiFlavor ? buildAiFlavorInfo(effectiveAiFlavor) : undefined;
   let autoDeAiInfo: GenerateDraftAutoDeAiInfo | undefined;
   let autoDeAiSnapshotId: string | undefined;
-  if (report.aiFlavor) {
-    const targets = pickAutoDeAiTargets(report.aiFlavor);
-    const initialHighMedium = report.aiFlavor.bySeverity.high + report.aiFlavor.bySeverity.medium;
+  if (effectiveAiFlavor) {
+    const targets = pickAutoDeAiTargets(effectiveAiFlavor);
+    const initialHighMedium = effectiveAiFlavor.bySeverity.high + effectiveAiFlavor.bySeverity.medium;
     if (targets.length > 0) {
       if ((input.autoDeAi ?? true) && input.deAiCallModel) {
         const round = await runAutoDeAiRound({
@@ -1490,14 +1536,16 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
     ...(sampling ? { candidatesReport: sampling.entries } : {}),
     ...(beatFidelityInfo ? { beatFidelity: beatFidelityInfo } : {}),
-    // 自动去味真落了改动时，snapshotId 用它的快照（最近的撤销点）；否则由工具 execute 挂「再写一版」快照。
-    ...(autoDeAiSnapshotId ? { snapshotId: autoDeAiSnapshotId } : {}),
+    // 自动去味 / 补写核对真落了改动时，snapshotId 用最近的那个快照（撤销回改动前）；否则由工具 execute 挂「再写一版」快照。
+    ...(autoDeAiSnapshotId ?? qualityPipeline?.snapshotId ? { snapshotId: autoDeAiSnapshotId ?? qualityPipeline?.snapshotId } : {}),
+    ...(qualityPipeline ? { qualityPipeline: qualityPipeline.info } : {}),
     issues: report.issues,
     overview,
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。` +
       candidateLine +
       `${characterSelection.summary}。工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
+      (qualityPipeline && qualityPipeline.notes.length > 0 ? `\n${qualityPipeline.notes.join("\n")}` : "") +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
       // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。

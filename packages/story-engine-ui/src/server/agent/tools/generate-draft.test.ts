@@ -44,6 +44,11 @@ import {
   type DraftCandidateScoreInput,
 } from "./generate-draft.js";
 
+// 阶段 3 出稿后的质量环节（续写/前后核对）走真模型槽——本文件只测出稿本身，桩成「什么都没改、不说话」（旧行为）。
+vi.mock("../draft-pipeline/run-quality-pipeline.js", () => ({
+  runDraftQualityPipeline: vi.fn(async (input: { draftBody: string }) => ({ draftBody: input.draftBody, changed: false, info: {}, notes: [] })),
+}));
+
 // 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
 vi.mock("../chapter-plan/plan-chapter.js", () => ({
   callConfiguredPlanModel: vi.fn(),

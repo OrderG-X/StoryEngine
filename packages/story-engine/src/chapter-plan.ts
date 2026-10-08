@@ -81,10 +81,10 @@ function cleanList(value: unknown, max = MAX_LIST, maxText = MAX_TEXT): readonly
   return out;
 }
 
-/** 名字类数组：额外按顿号/逗号拆、限长（名字不会超过 20 字）。 */
+/** 名字类数组：先去掉括号注释（「送表的客人（中年男客，未具名）」），再按顿号/逗号拆、限长（名字不会超过 20 字）。 */
 function cleanNames(value: unknown): readonly string[] {
   const expanded = (Array.isArray(value) ? value : [value]).flatMap((item) =>
-    typeof item === "string" ? item.split(/[、，,]+/u) : [item]);
+    typeof item === "string" ? item.replace(/[（(][^）)]*[）)]/gu, "").split(/[、，,]+/u) : [item]);
   return cleanList(expanded, MAX_LIST, 20).filter((name) => name.length >= 2);
 }
 

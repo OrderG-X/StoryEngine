@@ -30,6 +30,7 @@ const storyEngineMocks = vi.hoisted(() => ({
     whetherTrimmed: false,
   })),
   buildStateOverview: vi.fn(async () => ({ overview: true })),
+  buildAiFlavorReport: vi.fn(() => ({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, violations: [] })),
   checkDraftBeatFidelity: vi.fn(() => ({ missingBeats: [] })),
   countDraftChineseCharacters: vi.fn(() => 500),
   detectAiFlavorViolations: vi.fn(() => ({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, violations: [] })),
@@ -88,6 +89,11 @@ const planMocks = vi.hoisted(() => ({
   resolveChapterPlanForDraft: vi.fn(),
 }));
 vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({ ...planMocks }));
+
+const pipelineMocks = vi.hoisted(() => ({
+  runDraftQualityPipeline: vi.fn(),
+}));
+vi.mock("../agent/draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks }));
 
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
@@ -506,6 +512,56 @@ describe("runGenerateDraft 先拟章纲（阶段 2「先想后写」）", () => 
   it("不注入拟章纲调用 → 完全旧行为", async () => {
     await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
     expect(planMocks.resolveChapterPlanForDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数 + 前后核对）", () => {
+  let projectDir: string | undefined;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-pipeline-"));
+    const draftPath = defaultDraftPath(projectDir, 3);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+    storyEngineMocks.runFastDraft.mockResolvedValue({
+      chapter: 3, passed: true, draftPath, title: "账册",
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: {}, issues: [],
+    });
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("注入了续写/核对调用 → 跑质量环节；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
+    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({
+      draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, snapshotId: "snap-pipeline",
+      info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
+      notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。", "前后核对：对照了 3 条旧设定和前文，没发现冲突。"],
+    });
+    const continueCallModel = vi.fn();
+    const result = await runGenerateDraft({
+      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
+      continueCallModel, continuityCheckCallModel: vi.fn(), continuityRepairCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ chapter: 3, title: "账册", continueCallModel }));
+    expect(result.draftBody).toBe("主角拿到账册，连夜翻看，又接着写了很多。");
+    expect(storyEngineMocks.buildDraftLengthReport).toHaveBeenCalledWith(expect.objectContaining({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。" }));
+    expect(result.snapshotId).toBe("snap-pipeline");
+    expect(result.qualityPipeline).toEqual({ continuation: { before: 12, after: 2500, rounds: 1, failures: [] } });
+    expect(result.summary).toContain("已接着写到 2500 字");
+    expect(result.summary).toContain("没发现冲突");
+  });
+
+  it("没注入 → 不跑（HTTP 路与旧行为不变）", async () => {
+    await runGenerateDraft({ projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
+    expect(pipelineMocks.runDraftQualityPipeline).not.toHaveBeenCalled();
   });
 });
 

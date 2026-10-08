@@ -59,6 +59,13 @@ describe("normalizeChapterPlan 宽进（模型无关）", () => {
     expect(plan?.direction).toBe("去城东");
   });
 
+  it("人名带括号注释时不被拆坏", () => {
+    const plan = normalizeChapterPlan({
+      summary: "s", beats: ["b"], characters: ["林舟", "送表的客人（中年男客，未具名）"],
+    }, { chapter: 1, now: NOW });
+    expect(plan?.characters).toEqual(["林舟", "送表的客人"]);
+  });
+
   it("既没有 summary 也没有 beats → undefined（不拿空章纲冒充）", () => {
     expect(normalizeChapterPlan({ characters: ["林舟"] }, { chapter: 3 })).toBeUndefined();
     expect(normalizeChapterPlan("不是对象", { chapter: 3 })).toBeUndefined();
