@@ -11,15 +11,18 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  findRecurringPhrases,
   normalizeChapterPlan,
   readArcGoalPool,
   readAssetLedger,
   readCharacterBible,
   readChapterPlan,
+  readFactLedger,
   readLocationBible,
   readStoryBible,
   readThreadPool,
   readTimelineEvents,
+  selectEffectiveFacts,
   writeChapterPlan,
   type ChapterPlan,
 } from "@actalk/story-engine";
@@ -46,6 +49,9 @@ const PLAN_RETRIES = 1;
 const PREVIOUS_TAIL_CHARS = 3000;
 const MAX_OPEN_THREADS = 15;
 const RECENT_CHAPTER_SUMMARIES = 6;
+const PLAN_FACT_CAP = 25;
+const RECENT_PLAN_TIMES = 5;
+const RECURRING_WINDOW = 5;
 
 export interface PlanChapterMaterials {
   readonly premise?: string;
@@ -57,6 +63,14 @@ export interface PlanChapterMaterials {
   readonly characters: readonly string[];
   readonly entities: readonly string[];
   readonly protectedSecrets: readonly string[];
+  /** 与接下来要写的内容相关的已确立事实（拟章纲时就得避开前后矛盾——验收：三分之一的矛盾在章纲里就写错了）。 */
+  readonly facts: readonly string[];
+  /** 主谜 / 核心冲突：每 2–3 章要有实质进展。 */
+  readonly coreMysteries: readonly string[];
+  /** 前几章的时间（取各章章纲的开场时间）：让日期、星期顺得下去。 */
+  readonly recentTimes: readonly string[];
+  /** 近几章反复出现的描写（确定性检出）：本章别再用。 */
+  readonly recurringPhrases: readonly string[];
 }
 
 const settle = async <T>(promise: Promise<T>, fallback: T): Promise<T> => promise.catch(() => fallback);
@@ -72,9 +86,30 @@ async function readPreviousChapterText(projectDir: string, chapter: number): Pro
   return { chapter: chapter - 1, text: body.length > PREVIOUS_TAIL_CHARS ? `（前略）${body.slice(-PREVIOUS_TAIL_CHARS)}` : body };
 }
 
+/** 最近几章的正文（不含标题），找跨章复用的描写用。 */
+async function readRecentChapterBodies(projectDir: string, chapter: number): Promise<readonly { readonly chapter: number; readonly body: string }[]> {
+  const out: { chapter: number; body: string }[] = [];
+  for (let n = Math.max(1, chapter - RECURRING_WINDOW); n < chapter; n += 1) {
+    const content = await readFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), "utf-8").catch(() => "");
+    const body = content.replace(/^#[^\n]*\n/u, "").trim();
+    if (body) out.push({ chapter: n, body });
+  }
+  return out;
+}
+
+/** 前几章章纲里的开场时间：「第 8 章：六月十六（周日）下午」。 */
+async function readRecentPlanTimes(projectDir: string, chapter: number): Promise<readonly string[]> {
+  const out: string[] = [];
+  for (let n = Math.max(1, chapter - RECENT_PLAN_TIMES); n < chapter; n += 1) {
+    const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
+    if (plan?.scene.time) out.push(`第 ${n} 章：${plan.scene.time}${plan.scene.location ? `，${plan.scene.location}` : ""}`);
+  }
+  return out;
+}
+
 /** 读盘收集拟章纲的材料。全部读失败即空、绝不阻断（拟不成就回落无章纲出稿）。 */
-export async function collectPlanMaterials(projectDir: string, chapter: number): Promise<PlanChapterMaterials> {
-  const [storyBible, threadPool, goalPool, timeline, characterBible, assetLedger, locationBible, previousChapter] = await Promise.all([
+export async function collectPlanMaterials(projectDir: string, chapter: number, direction?: string): Promise<PlanChapterMaterials> {
+  const [storyBible, threadPool, goalPool, timeline, characterBible, assetLedger, locationBible, previousChapter, factLedger, recentBodies, recentTimes] = await Promise.all([
     settle(readStoryBible(projectDir), null),
     settle(readThreadPool(projectDir), { threads: [] }),
     settle(readArcGoalPool(projectDir), { goals: [] }),
@@ -83,7 +118,28 @@ export async function collectPlanMaterials(projectDir: string, chapter: number):
     settle(readAssetLedger(projectDir), { version: "v0" as const, assets: [], containers: [] }),
     settle(readLocationBible(projectDir), null),
     readPreviousChapterText(projectDir, chapter),
+    settle(readFactLedger(projectDir), null),
+    readRecentChapterBodies(projectDir, chapter),
+    readRecentPlanTimes(projectDir, chapter),
   ]);
+  const characterNames = (characterBible?.characters ?? []).map((character) => character.name).filter(Boolean);
+  const entityNames = [
+    ...assetLedger.assets.map((asset) => asset.name).filter(Boolean),
+    ...(locationBible?.locations ?? []).map((location) => location.name).filter(Boolean),
+  ];
+  const facts = selectEffectiveFacts({
+    facts: factLedger?.facts ?? [],
+    chapter,
+    relevantNames: characterNames,
+    continuityText: [previousChapter?.text, direction].filter(Boolean).join("\n"),
+    cap: PLAN_FACT_CAP,
+  }).facts;
+  const recurringPhrases = findRecurringPhrases({
+    chapters: recentBodies,
+    knownNames: [...characterNames, ...entityNames],
+    domainText: (factLedger?.facts ?? []).map((fact) => fact.text).join("\n"),
+    limit: 10,
+  }).map((item) => item.phrase);
   const openThreads = threadPool.threads
     .filter((thread) => thread.status === "open" || thread.status === "touched")
     .sort((a, b) => b.lastTouchedChapter - a.lastTouchedChapter)
@@ -108,15 +164,20 @@ export async function collectPlanMaterials(projectDir: string, chapter: number):
     recentChapters,
     openThreads,
     openGoals,
-    // 带身份：只给名字时拟章纲会把人用错（验收第 1 章把拆迁办干部许棠写成了送表的熟客）。
+    // 带身份和年龄：只给名字时拟章纲会把人用错（验收第 1 章把拆迁办干部许棠写成了送表的熟客），
+    // 不给年龄就算不通年代（验收：五十多岁的周婶「六二年亲手换壶」）。
     characters: (characterBible?.characters ?? [])
       .filter((character) => Boolean(character.name))
-      .map((character) => (character.role?.trim() ? `${character.name}（${character.role.trim().slice(0, 30)}）` : character.name)),
-    entities: [
-      ...assetLedger.assets.map((asset) => asset.name).filter(Boolean),
-      ...(locationBible?.locations ?? []).map((location) => location.name).filter(Boolean),
-    ],
+      .map((character) => {
+        const notes = [character.role?.trim().slice(0, 30), character.age?.trim() ? `${character.age.trim()}岁`.replace(/岁岁$/u, "岁") : undefined].filter(Boolean);
+        return notes.length > 0 ? `${character.name}（${notes.join("，")}）` : character.name;
+      }),
+    entities: entityNames,
     protectedSecrets: storyBible?.protectedSecrets ?? [],
+    facts,
+    coreMysteries: [...(storyBible?.coreMysteries ?? []), ...(storyBible?.centralConflicts ?? [])].filter(Boolean).slice(0, 6),
+    recentTimes,
+    recurringPhrases,
   };
 }
 
@@ -134,6 +195,10 @@ export function buildPlanMessages(
     "4. 作者给了方向就照方向展开，不要改方向。",
     "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
     "6. 不要揭开「受保护的秘密」，除非作者方向明确要求。",
+    "7. 不能和【已确立事实】矛盾；那里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍。",
+    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；涉及年份时，人物当年多大要对得上他现在的年龄。",
+    "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
+    "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
     "JSON 字段：",
     "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
     "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"characters\":[\"出场人物名\"],",
@@ -148,7 +213,11 @@ export function buildPlanMessages(
     materials.openGoals.length > 0 ? `【目标】\n${materials.openGoals.join("\n")}` : "",
     materials.openThreads.length > 0 ? `【开着的线索】\n${materials.openThreads.join("\n")}` : "",
     materials.recentChapters.length > 0 ? `【前面几章发生了什么】\n${materials.recentChapters.join("\n")}` : "",
-    materials.characters.length > 0 ? `【已有人物（括号里是身份，别用错人）】${materials.characters.join("、")}` : "",
+    materials.characters.length > 0 ? `【已有人物（括号里是身份和年龄，别用错人、别算错年代）】${materials.characters.join("、")}` : "",
+    materials.coreMysteries.length > 0 ? `【主谜/核心冲突】${materials.coreMysteries.join("；")}` : "",
+    materials.facts.length > 0 ? `【已确立事实（不能矛盾，做过的别再做）】\n${materials.facts.join("\n")}` : "",
+    materials.recentTimes.length > 0 ? `【前几章的时间】\n${materials.recentTimes.join("\n")}` : "",
+    materials.recurringPhrases.length > 0 ? `【近几章反复出现的描写（本章别再用）】${materials.recurringPhrases.join("、")}` : "",
     materials.entities.length > 0 ? `【已登记的物件/地点】${materials.entities.join("、")}` : "",
     materials.protectedSecrets.length > 0 ? `【受保护的秘密（不要揭开）】${materials.protectedSecrets.join("；")}` : "",
     materials.previousChapter
@@ -166,7 +235,7 @@ function parsePlanJson(text: string): unknown {
 
 /** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
 export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
-  const materials = await collectPlanMaterials(input.projectDir, input.chapter);
+  const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
   const messages = buildPlanMessages(input.chapter, materials, input.direction);
   let lastError = "";
   for (let attempt = 0; attempt <= PLAN_RETRIES; attempt += 1) {
@@ -180,8 +249,12 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
         lastError = "章纲缺要点";
         continue;
       }
-      await writeChapterPlan(input.projectDir, plan);
-      return { ok: true, plan };
+      // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
+      const withAvoid = materials.recurringPhrases.length > 0
+        ? { ...plan, avoid: [...plan.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
+        : plan;
+      await writeChapterPlan(input.projectDir, withAvoid);
+      return { ok: true, plan: withAvoid };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }

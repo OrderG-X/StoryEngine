@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStoryProject, readChapterPlan } from "@actalk/story-engine";
+import { createStoryProject, normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "@actalk/story-engine";
 import { describe, expect, it, vi } from "vitest";
 import { buildPlanMessages, collectPlanMaterials, planChapter, resolveChapterPlanForDraft } from "./plan-chapter.js";
 
@@ -94,3 +94,30 @@ describe("resolveChapterPlanForDraft", () => {
     expect(resolved.note).toContain("这次按没有章纲出稿");
   });
 });
+
+describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写（十章验收第二轮）", () => {
+  it("带上与前文相关的旧事实、前几章章纲里的时间，并把跨章反复的描写确定性并进 avoid", async () => {
+    const projectDir = await makeBook();
+    const ending = "他把台灯拧暗了一格，一屋子的钟在黑暗里响着。";
+    for (const n of [2, 3, 4]) {
+      await writeFile(join(projectDir, "chapters", `000${n}.md`), `# 第${n}章\n\n第${n}章各写各的事，编号${n}。\n\n${ending}\n`, "utf-8");
+      await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: `第${n}章`, beats: ["b"], scene: { time: `六月${10 + n}日上午` } }, { chapter: n })!);
+    }
+    await writeFile(join(projectDir, "story", "fact-ledger.json"), JSON.stringify({
+      version: "v0", facts: [{ id: "fact-3-0", chapter: 3, text: "异议书已在第3章递交并拿到回执编号。", source: "auto" }],
+    }), "utf-8");
+
+    const materials = await collectPlanMaterials(projectDir, 5);
+    expect(materials.facts.join("\n")).toContain("异议书已在第3章递交");
+    expect(materials.recentTimes).toEqual(["第 2 章：六月12日上午", "第 3 章：六月13日上午", "第 4 章：六月14日上午"]);
+    expect(materials.recurringPhrases.some((phrase) => phrase.includes("一屋子的钟在黑暗里响"))).toBe(true);
+    const [system, user] = buildPlanMessages(5, materials);
+    expect(system.content).toContain("不要连续两章做同一类事");
+    expect(user.content).toContain("【前几章的时间】");
+    expect(user.content).toContain("【已确立事实（不能矛盾，做过的别再做）】");
+
+    const result = await planChapter({ projectDir, chapter: 5, callModel: vi.fn(async () => GOOD_PLAN) });
+    expect(result.ok && result.plan.avoid.at(-1)).toContain("别再用这些说法：");
+  });
+});
+

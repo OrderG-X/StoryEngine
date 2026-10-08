@@ -32,6 +32,7 @@ export * from "./lead-intent-tracking.js";
 export * from "./model-settings.js";
 export * from "./project-store.js";
 export * from "./prompt-cache-diagnostics.js";
+export * from "./recurring-phrases.js";
 export * from "./stale-reminder-policy.js";
 export * from "./quality-judgement.js";
 export * from "./post-chapter-change-plan.js";

@@ -39,6 +39,10 @@ export interface ContinuityReferences {
   readonly facts: readonly string[];
   readonly passages: readonly EarlierPassage[];
   readonly previousChapterTail?: string;
+  /** 人物身份与年龄（查「谁在哪一年多大」这类年代算术）。 */
+  readonly characterSheet?: readonly string[];
+  /** 前几章与本章的时间（查日期、星期、先后顺序）。 */
+  readonly timeline?: readonly string[];
 }
 
 export interface ContinuityCheckResult {
@@ -67,6 +71,7 @@ export async function collectContinuityReferences(input: {
   readonly draftBody: string;
   readonly passages?: readonly EarlierPassage[];
   readonly previousChapterText?: string;
+  readonly timeline?: readonly string[];
 }): Promise<ContinuityReferences> {
   const [ledger, characterBible] = await Promise.all([
     readFactLedger(input.projectDir).catch(() => null),
@@ -80,9 +85,17 @@ export async function collectContinuityReferences(input: {
     cap: CHECK_FACT_CAP,
   }).facts;
   const tail = input.previousChapterText?.trim();
+  const characterSheet = (characterBible?.characters ?? [])
+    .filter((character) => Boolean(character.name))
+    .map((character) => {
+      const notes = [character.role?.trim().slice(0, 30), character.age?.trim() ? `${character.age.trim()}岁`.replace(/岁岁$/u, "岁") : undefined].filter(Boolean);
+      return notes.length > 0 ? `${character.name}（${notes.join("，")}）` : character.name;
+    });
   return {
     facts,
     passages: input.passages ?? [],
+    ...(characterSheet.length > 0 ? { characterSheet } : {}),
+    ...(input.timeline && input.timeline.length > 0 ? { timeline: input.timeline } : {}),
     ...(tail ? { previousChapterTail: tail.length > PREVIOUS_TAIL_CHARS ? tail.slice(-PREVIOUS_TAIL_CHARS) : tail } : {}),
   };
 }
@@ -96,8 +109,8 @@ export function buildContinuityCheckMessages(input: {
   const system = [
     "你是长篇小说的连续性审读员。对照下面的【已确立事实】【前文原文】【上一章结尾】，检查【本章正文】。只报确实的问题，不报文风、不提建议性修改。",
     "要找三类：",
-    "contradiction：正文里和已知设定/前文对不上的说法——物件在哪、在谁手里、上面写着什么、坏没坏；地点在不在、远近；时间、天数；谁已经知道什么；人名称谓。注意：本章明确写了「发生了变化」（如修好了、搬走了）不算矛盾。",
-    "repeat：把前文已经发现、确认、发生过的事又当成新发现写了一遍，或把前文的场面换个地方重演。",
+    "contradiction：正文里和已知设定/前文对不上的说法——物件在哪、在谁手里、上面写着什么、坏没坏；地点在不在、远近；时间、天数、日期与星期（和【时间线】对得上吗）；年代算术（照【人物】的年龄，某人在某一年多大、那时能不能做那件事）；谁已经知道什么（人物有没有说出他还不可能知道的东西）；人名称谓；数字（几个字、几样东西）。注意：本章明确写了「发生了变化」（如修好了、搬走了）不算矛盾。",
+    "repeat：把前文已经发现、确认、做过的事又当成新的写了一遍（又认出同一个记号、又递一次已经递过的材料），或把前文的场面换个地方重演。",
     "missing_beat：章纲要点或「本章新信息」在正文里根本没写到。",
     "每条 contradiction / repeat 的 quote 必须逐字抄正文原句（一句即可）；conflict 写清和哪条已知设定或第几章原文冲突；fix 写怎么改。",
     "只输出一个 JSON：{\"issues\":[{\"type\":\"contradiction\",\"quote\":\"\",\"conflict\":\"\",\"fix\":\"\"}]}；没有问题就给空数组。",
@@ -108,6 +121,8 @@ export function buildContinuityCheckMessages(input: {
     input.chapterPlan
       ? `【本章章纲】${input.chapterPlan.summary}\n要点：${input.chapterPlan.beats.join("；")}${input.chapterPlan.newInformation.length > 0 ? `\n本章新信息：${input.chapterPlan.newInformation.join("；")}` : ""}`
       : "",
+    refs.characterSheet && refs.characterSheet.length > 0 ? `【人物】${refs.characterSheet.join("、")}` : "",
+    refs.timeline && refs.timeline.length > 0 ? `【时间线】\n${refs.timeline.join("\n")}` : "",
     refs.facts.length > 0 ? `【已确立事实】\n${refs.facts.join("\n")}` : "【已确立事实】（无）",
     refs.passages.length > 0
       ? `【前文原文】\n${refs.passages.map((item) => `第 ${item.chapter} 章（${item.term}）：${item.text}`).join("\n")}`

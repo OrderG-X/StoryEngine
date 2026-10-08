@@ -9,6 +9,7 @@ import {
   countDraftChineseCharacters,
   findEarlierPassages,
   collectPlanEntityTerms,
+  readChapterPlan,
   withProjectCommitLock,
   type ChapterPlan,
   type DraftLengthTarget,
@@ -73,6 +74,17 @@ async function readPreviousChapterText(projectDir: string, chapter: number): Pro
   return content.replace(/^#[^\n]*\n/u, "").trim() || undefined;
 }
 
+/** 前几章与本章章纲里的开场时间，给审读查日期/星期/先后。 */
+async function readPlanTimeline(projectDir: string, chapter: number, plan: ChapterPlan | undefined): Promise<readonly string[]> {
+  const out: string[] = [];
+  for (let n = Math.max(1, chapter - 5); n < chapter; n += 1) {
+    const previous = await readChapterPlan(projectDir, n).catch(() => undefined);
+    if (previous?.scene.time) out.push(`第 ${n} 章：${previous.scene.time}`);
+  }
+  if (plan?.scene.time) out.push(`第 ${chapter} 章（本章）：${plan.scene.time}`);
+  return out;
+}
+
 export async function runDraftQualityPipeline(input: QualityPipelineInput): Promise<QualityPipelineResult> {
   let body = input.draftBody;
   const notes: string[] = [];
@@ -113,12 +125,14 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       }).catch(() => [])
       : [];
     const previousChapterText = await readPreviousChapterText(input.projectDir, input.chapter);
+    const timeline = await readPlanTimeline(input.projectDir, input.chapter, input.chapterPlan);
     const references = await collectContinuityReferences({
       projectDir: input.projectDir,
       chapter: input.chapter,
       draftBody: body,
       passages,
       ...(previousChapterText ? { previousChapterText } : {}),
+      ...(timeline.length > 0 ? { timeline } : {}),
     });
     const result = await checkAndRepairContinuity({
       chapter: input.chapter,

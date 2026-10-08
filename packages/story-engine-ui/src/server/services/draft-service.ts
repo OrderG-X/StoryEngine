@@ -1176,6 +1176,7 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
  */
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
   // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
+  const planStartedAt = Date.now();
   const planning = input.planCallModel
     ? await resolveChapterPlanForDraft({
       projectDir: input.projectDir,
@@ -1184,7 +1185,12 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
       callModel: input.planCallModel,
     })
     : undefined;
+  const draftStartedAt = Date.now();
   const outcome = await runGenerateDraftWithPlan(input, planning?.plan);
+  if (planning) {
+    // 长篇里「写一章要多久」要看得见：章纲 / 出稿（含续写与核对，细分见 [draft-pipeline] 行）。
+    console.info(`[draft-pipeline] ch${input.chapter} 章纲 ${Math.round((draftStartedAt - planStartedAt) / 1000)}s / 出稿全程 ${Math.round((Date.now() - draftStartedAt) / 1000)}s`);
+  }
   if (!planning) return outcome;
   const plan = planning.plan;
   return {
