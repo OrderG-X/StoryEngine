@@ -194,8 +194,10 @@ function withExtraSection(context: WriterContextEnvelope, name: string, content:
 const DAY_CHANGE = /第二天|第二日|次日|翌日|隔天|隔日|转天|两天后|三天后|几天后|数日后|过了[一两三几\d]+天/u;
 
 /**
- * 分半写时每一半只看见自己的要点（第十四轮验收：章纲段原样给前半章，「每个要点都要真正写到」压过了
+ * 分半写时每一半只写自己的要点（第十四轮验收：章纲段原样给前半章，「每个要点都要真正写到」压过了
  * 「只写前一半」——第 8、10 章前半就写完全部要点，后半无事可写只好重演或凭空多出一天）。
+ * 前半章仍看得到后半章要写什么（标成「这次不写」）：第十五轮完全不给，前半章不知道场面还要接着演，
+ * 自己把人送出门、把匣子当场打开，后半章再按要点写就跟它打架。
  */
 function planSectionForHalf(
   planSection: Record<string, unknown>,
@@ -207,8 +209,13 @@ function planSectionForHalf(
   if (half === "first") {
     return {
       ...rest,
-      instruction: `这是本章前半章要写的部分：只写下面这 ${split} 个要点，按顺序写，写完最后一个就停。本章后面还有 ${beats.length - split} 个要点留给后半章另写，这次一个字都不写、也不提前透露或预告。`,
+      instruction: [
+        `这是本章前半章要写的部分：只写 beats 里这 ${split} 个要点，按顺序写。`,
+        `laterBeats 是后半章另写的要点，这次一个字都不写、不提前透露；前半章也不要写出和它们对不上的事（后面还要出场的人别先送走，后面才出现的东西别先拿出来）。`,
+        "写到最后一个要点刚写完就停：场面不收尾、人物不离场、不总结。",
+      ].join(""),
       beats: beats.slice(0, split),
+      laterBeats: beats.slice(split),
     };
   }
   return {

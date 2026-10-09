@@ -227,15 +227,50 @@ export function collectPlanRetrievalTerms(plan: ChapterPlan): readonly string[] 
   return cleanTerms([plan.scene.location, ...plan.entities, ...plan.characters]);
 }
 
+const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const WEEKDAY_MENTION = /(?:周|星期|礼拜)([一二三四五六日天])/u;
+
+function weekdayIndex(text: string | undefined): number | undefined {
+  const match = text ? WEEKDAY_MENTION.exec(text) : null;
+  if (!match) return undefined;
+  const index = "一二三四五六日".indexOf(match[1] === "天" ? "日" : match[1]);
+  return index >= 0 ? index : undefined;
+}
+
+/** 从本章往回数的说法：台词里说「昨天 / 前天 / 几天前」照这个说。 */
+function relativeDayLabel(delta: number): string {
+  if (delta <= 0) return "今天早些时候";
+  if (delta === 1) return "昨天";
+  if (delta === 2) return "前天";
+  return `${delta} 天前`;
+}
+
+/**
+ * 故事日历换成「从本章看是哪天」：第十五轮台词里的相对时间错了 11 处（「昨天贴的」其实是前天、「上周」其实是本周）——
+ * 只给天数让写手自己减，它算不对；直接标好昨天 / 前天 / 几天前、星期几（章纲里写过星期的那天当锚）。
+ */
+function buildStoryClock(plan: ChapterPlan, clock: readonly StoryClockEntry[]): Record<string, unknown> | undefined {
+  const today = plan.storyDay;
+  if (!today) return undefined;
+  const anchors = [
+    ...clock.map((entry) => ({ day: entry.storyDay, weekday: weekdayIndex(entry.time) })),
+    { day: today, weekday: weekdayIndex(plan.scene.time) },
+  ].filter((item): item is { day: number; weekday: number } => item.weekday !== undefined);
+  const anchor = anchors.at(-1);
+  const weekdayOf = (day: number): string => (anchor ? WEEKDAY_NAMES[(((anchor.weekday + day - anchor.day) % 7) + 7) % 7] : "");
+  const withWeekday = (day: number): string => (anchor ? `，${weekdayOf(day)}` : "");
+  return {
+    today: `本章是故事第 ${today} 天${withWeekday(today)}${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
+    earlier: clock
+      .filter((entry) => entry.storyDay <= today)
+      .map((entry) => `${relativeDayLabel(today - entry.storyDay)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}）：第 ${entry.chapter} 章${entry.time ? `，${entry.time}` : ""}，${entry.summary}`),
+    rule: "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的。",
+  };
+}
+
 /** 给写手看的章纲段内容（受保护段 chapter_plan）。clock = 前面各章的故事天数（见 readStoryClock）。 */
 export function buildChapterPlanSection(plan: ChapterPlan, clock: readonly StoryClockEntry[] = []): Record<string, unknown> {
-  const storyClock = plan.storyDay
-    ? {
-      today: `本章是故事第 ${plan.storyDay} 天${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
-      earlier: clock.map((entry) => `第 ${entry.chapter} 章：故事第 ${entry.storyDay} 天${entry.time ? `（${entry.time}）` : ""}，${entry.summary}`),
-      rule: "说到过去的事，按天数差算「几天前 / 上周」，不要照抄前文里的「三天前」「昨天」；星期几也要按天数往后推。",
-    }
-    : undefined;
+  const storyClock = buildStoryClock(plan, clock);
   return {
     instruction: [
       "这是本章章纲。按要点顺序写，每个要点都要真正写到；可以自然补细节、对话和过渡，但不要另起与章纲无关的大事件。",

@@ -182,9 +182,28 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(clock.map((entry) => [entry.chapter, entry.storyDay])).toEqual([[1, 1], [3, 4]]);
     const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 9 }, { chapter: 4, now: NOW })!;
     const section = buildChapterPlanSection(plan, clock) as { storyClock: { today: string; earlier: string[]; rule: string } };
-    expect(section.storyClock.today).toBe("本章是故事第 9 天");
-    expect(section.storyClock.earlier[0]).toBe("第 1 章：故事第 1 天（周一上午），怀表送到铺子");
-    expect(section.storyClock.rule).toContain("按天数差算");
+    // 第十五轮：只给天数让写手自己减，台词里的「昨天 / 上周」错了 11 处 → 直接标好从本章看是哪天、星期几。
+    expect(section.storyClock.today).toBe("本章是故事第 9 天，周二");
+    expect(section.storyClock.earlier).toEqual([
+      "8 天前（故事第 1 天，周一）：第 1 章，周一上午，怀表送到铺子",
+      "5 天前（故事第 4 天，周四）：第 3 章，去档案馆",
+    ]);
+    expect(section.storyClock.rule).toContain("不要自己推算");
+  });
+
+  it("相对说法：同一天 / 昨天 / 前天；没有星期锚就不编星期", () => {
+    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 5 }, { chapter: 6, now: NOW })!;
+    const section = buildChapterPlanSection(plan, [
+      { chapter: 3, storyDay: 3, summary: "a" },
+      { chapter: 4, storyDay: 4, summary: "b" },
+      { chapter: 5, storyDay: 5, time: "上午", summary: "c" },
+    ]) as { storyClock: { today: string; earlier: string[] } };
+    expect(section.storyClock.today).toBe("本章是故事第 5 天");
+    expect(section.storyClock.earlier).toEqual([
+      "前天（故事第 3 天）：第 3 章，a",
+      "昨天（故事第 4 天）：第 4 章，b",
+      "今天早些时候（故事第 5 天）：第 5 章，上午，c",
+    ]);
   });
 });
 

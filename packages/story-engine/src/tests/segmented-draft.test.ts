@@ -49,7 +49,7 @@ describe("按章纲分前后两半写", () => {
     expect(report.passed).toBe(true);
   });
 
-  it("每一半只看见自己的要点：前半章看不到后半章的要点；后半章拿到已写要点清单（第十四轮：前半章越界写完全章）", async () => {
+  it("每一半只写自己的要点：前半章的后半要点标成「这次不写」；后半章拿到已写要点清单（第十四轮越界、第十五轮前半章不知后事自己收场）", async () => {
     const projectDir = await makeBook();
     const contexts: WriterContextEnvelope[] = [];
     const writer: WriterClient = {
@@ -60,10 +60,12 @@ describe("按章纲分前后两半写", () => {
     };
     await runFastDraft({ projectDir, chapter: 2, chapterGoal: PLAN.summary, writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
     const firstPrompt = renderFastDraftPromptText(contexts[0]);
-    expect(firstPrompt).toContain("管理员拦人");
-    expect(firstPrompt).not.toContain("回家路上被跟踪");
-    expect(firstPrompt).not.toContain("对出缺页是境外汇款");
     expect(firstPrompt).not.toContain("每个要点都要真正写到");
+    const firstPlan = contexts[0].sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown>;
+    expect(firstPlan.beats).toEqual(["一早出门", "管理员拦人", "翻到底册"]);
+    expect(firstPlan.laterBeats).toEqual(["对出缺页是境外汇款", "回家路上被跟踪"]);
+    expect(String(firstPlan.instruction)).toContain("这次一个字都不写");
+    expect(String(firstPlan.instruction)).toContain("人物不离场");
     const secondPlan = contexts[1].sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown>;
     expect(secondPlan.alreadyDone).toEqual(["一早出门", "管理员拦人", "翻到底册"]);
     expect(secondPlan.beats).toEqual(["对出缺页是境外汇款", "回家路上被跟踪"]);
