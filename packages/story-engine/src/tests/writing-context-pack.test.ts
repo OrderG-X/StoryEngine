@@ -120,6 +120,25 @@ describe("Writing Context Pack V0", () => {
     expect(assetHardRules).not.toContain("欠费手机不能突然正常联网");
   });
 
+  it("第 2 章起：没被任何一章更新过的物件状态只当开书设定，不再当硬约束（第二十轮怀表第 2 章被取走、后面仍写在铺里）", async () => {
+    const projectDir = await createSoulSteelFixture();
+    await writeJson(projectDir, "story/assets.json", {
+      version: "v0",
+      assets: [
+        { id: "asset-watch", name: "旧怀表", type: "item", status: "待拆检", isPlotCritical: true, canAiModify: false, extraFields: { 当前保管人: "林序（代修期间）" } },
+        { id: "asset-key", name: "铺子钥匙", type: "item", status: "丢了", lastSeenChapter: 2, isPlotCritical: false, canAiModify: false },
+      ],
+      containers: [],
+    });
+    const later = await buildWritingContextPack({ projectDir, chapter: 3, userDirection: "第三章" });
+    const rules = later.assetContext.assetHardRules.join("\n");
+    expect(rules).not.toContain("旧怀表 当前不可用");
+    expect(rules).toContain("铺子钥匙 当前不可用（丢了）");
+    expect(later.assetContext.extraFields.join("\n")).toContain("当前保管人：林序（代修期间）（开书时的设定");
+    const opening = await buildWritingContextPack({ projectDir, chapter: 1, userDirection: "第一章" });
+    expect(opening.assetContext.assetHardRules.join("\n")).toContain("旧怀表 当前不可用（待拆检）");
+  });
+
   it("never hardcodes 题材专名 in the asset hard-rule source", async () => {
     const source = await readFile(new URL("../writing-context-pack.ts", import.meta.url), "utf-8");
     for (const banned of ["欠费手机", "联网", "末日", "财团"]) {

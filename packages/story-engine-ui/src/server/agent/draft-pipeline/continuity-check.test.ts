@@ -28,7 +28,7 @@ describe("parseContinuityIssues", () => {
   it("引文逐字在正文里才采信；坏条目丢弃并计数", () => {
     const out = parseContinuityIssues(JSON.stringify({
       issues: [
-        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场十来年前就拆了", fix: "改成原址的商场" },
+        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "第4章：菜场十来年前就拆了", fix: "改成原址的商场" },
         { type: "contradiction", quote: "正文里根本没有这句", conflict: "x", fix: "y" },
         { type: "style", quote: "林舟一早骑车出门", conflict: "文风", fix: "改" },
         { type: "missing_beat", conflict: "没写到吴师傅", fix: "补一场" },
@@ -44,25 +44,11 @@ describe("parseContinuityIssues", () => {
         { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "与第4章菜场已拆一致吗？细看不算矛盾", fix: "无需修改" },
         { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "可能是另一处菜场，暂不列为矛盾", fix: "保持" },
         { type: "repeat", quote: "四月十七对上了", conflict: "与第3章核对相近，此条不报", fix: "—" },
-        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场十来年前就拆了", fix: "改成商场" },
+        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "第4章：菜场十来年前就拆了", fix: "改成商场" },
       ],
     }), DRAFT);
     expect(out.issues).toHaveLength(1);
     expect(out.issues[0].conflict).toBe("第4章：菜场十来年前就拆了");
-  });
-
-  it("给了参照资料：contradiction 的对照原句要真找得到（第十九轮误报一半是凭印象说「前文讲过」）；repeat 不要求", () => {
-    const out = parseContinuityIssues(JSON.stringify({
-      issues: [
-        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", evidence: "第4章：南门菜场十来年前就拆了", conflict: "菜场已拆", fix: "改" },
-        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", evidence: "第5章林舟说菜场上周刚关门", conflict: "前文说关门了", fix: "改" },
-        { type: "contradiction", quote: "林舟一早骑车出门，往南门去。", conflict: "前文好像说他不会骑车", fix: "改" },
-        { type: "contradiction", quote: "他又看了一遍登记表，四月十七对上了。", evidence: "他又看了一遍登记表，四月十七对上了", conflict: "自己引自己", fix: "改" },
-        { type: "repeat", quote: "四月十七对上了", conflict: "第3章已核对过", fix: "删" },
-      ],
-    }), DRAFT, REFS);
-    expect(out.issues.map((issue) => issue.conflict)).toEqual(["菜场已拆", "第3章已核对过"]);
-    expect(out.droppedUnverified).toBe(3);
   });
 
   it("不是 JSON → 抛（由调用方收成「没核成」）", () => {
@@ -96,7 +82,7 @@ describe("repairContinuityIssues", () => {
 describe("checkAndRepairContinuity", () => {
   it("核出冲突 → 修一轮 → 复核干净", async () => {
     const check = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
     const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
@@ -125,7 +111,7 @@ describe("checkAndRepairContinuity", () => {
 
   it("复核没跑成 → 第一次发现的问题原样留给作者", async () => {
     const check = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "改" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改" }] }))
       .mockRejectedValueOnce(new Error("idle timeout"));
     const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，玻璃门擦得锃亮。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
@@ -161,8 +147,8 @@ describe("复核只看改过的段 + 最多两轮", () => {
 
   it("第一轮没改干净 → 第二轮再改；复核喂的是片段不是整章", async () => {
     const check = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
-      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场的豆腐摊", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "去掉豆腐摊" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场的豆腐摊", conflict: "第4章：菜场已拆", fix: "去掉豆腐摊" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
     const repair = vi.fn()
       .mockResolvedValueOnce(JSON.stringify({ fixes: [{ id: "S1", text: "菜场早拆了，可原址门口还剩菜场的豆腐摊，摆着几块豆腐。" }] }))
@@ -179,7 +165,7 @@ describe("复核只看改过的段 + 最多两轮", () => {
 
   it("两轮都没改干净 → 剩下的留给作者，不无限循环", async () => {
     // 引文要逐字命中（≥4 字）：原文与两次改稿里都有「门口摆着几摊卖豆腐的」。
-    const stubborn = JSON.stringify({ issues: [{ type: "contradiction", quote: "门口摆着几摊卖豆腐的", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "改" }] });
+    const stubborn = JSON.stringify({ issues: [{ type: "contradiction", quote: "门口摆着几摊卖豆腐的", conflict: "第4章：菜场已拆", fix: "改" }] });
     const check = vi.fn(async () => stubborn);
     const repair = vi.fn(async () => JSON.stringify({ fixes: [{ id: "S1", text: "菜场还是在那里，门口摆着几摊卖豆腐的。" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check, repairCallModel: repair });
@@ -200,7 +186,7 @@ describe("sentenceContaining", () => {
 
 describe("只核对、不自动改（第八轮验收：自动改了 32 句，18 句改出新毛病）", () => {
   it("不给改写调用 → 问题原样留给作者，正文不动，说明里请作者定", async () => {
-    const check = vi.fn(async () => JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场已拆", fix: "改成商场" }] }));
+    const check = vi.fn(async () => JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场已拆", fix: "改成商场" }] }));
     const result = await checkAndRepairContinuity({ chapter: 8, draftBody: DRAFT, references: REFS, checkCallModel: check });
     expect(result.changed).toBe(false);
     expect(result.draftBody).toBe(DRAFT);

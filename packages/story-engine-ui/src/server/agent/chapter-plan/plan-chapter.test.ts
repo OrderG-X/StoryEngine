@@ -147,3 +147,19 @@ describe("reconcileStoryDay：天数由程序按上一章往后加（第十九�
     expect(readDayOffset({})).toBeUndefined();
   });
 });
+
+describe("骨架章纲重拟（第二十轮第 5、7 章只有要点，日历少记一天）", () => {
+  it("人物/开场/新信息全空 → 重拟一次用完整的；两次都是骨架就用骨架，不判失败", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "se-plan-skeleton-"));
+    await mkdir(join(dir, "story"), { recursive: true });
+    const skeleton = JSON.stringify({ summary: "林舟去档案馆", beats: ["去档案馆", "查到底册"] });
+    const full = JSON.stringify({ summary: "林舟去档案馆", beats: ["去档案馆", "查到底册"], characters: ["林舟"], scene: { time: "第二天上午" }, dayOffset: 1 });
+    const retried = vi.fn().mockResolvedValueOnce(skeleton).mockResolvedValueOnce(full);
+    const ok = await planChapter({ projectDir: dir, chapter: 3, callModel: retried });
+    expect(retried).toHaveBeenCalledTimes(2);
+    expect(ok.ok && ok.plan.characters).toEqual(["林舟"]);
+    const stubborn = vi.fn(async () => skeleton);
+    const still = await planChapter({ projectDir: dir, chapter: 3, callModel: stubborn });
+    expect(still.ok && still.plan.summary).toBe("林舟去档案馆");
+  });
+});

@@ -306,9 +306,28 @@ export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefin
 }
 
 /** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
+/**
+ * 只有一句话加几个要点、人物 / 开场 / 新信息全空的章纲（第二十轮第 5、7 章）：算不出过了几天（日历少记一天）、
+ * 翻旧资料的检索词也没了。这种重拟一次；重拟还是这样就用它，不为此判失败。
+ */
+function isSkeletonPlan(plan: ChapterPlan, dayOffset: number | undefined): boolean {
+  return plan.characters.length === 0 && plan.newInformation.length === 0 && !plan.scene.location && !plan.scene.time && dayOffset === undefined;
+}
+
 export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
   let lastError = "";
+  let skeleton: { readonly plan: ChapterPlan; readonly dayOffset: number | undefined } | undefined;
+  const finish = async (plan: ChapterPlan, dayOffset: number | undefined): Promise<PlanChapterResult> => {
+    const lastDay = (await readStoryClock(input.projectDir, input.chapter).catch(() => [])).at(-1)?.storyDay;
+    const dated = reconcileStoryDay(plan, dayOffset, lastDay);
+    // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
+    const withAvoid = materials.recurringPhrases.length > 0
+      ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
+      : dated;
+    await writeChapterPlan(input.projectDir, withAvoid);
+    return { ok: true, plan: withAvoid };
+  };
   for (let attempt = 0; attempt <= PLAN_RETRIES; attempt += 1) {
     // 第二次换精简材料：验收第四轮第 8、9 章两次都被服务商内容过滤（content_filter）拦下，同样的输入重发必然再拦；
     // 去掉上一章原文、只留结尾几百字与事实/线索，输入变了才有机会过。
@@ -324,18 +343,18 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
         lastError = "章纲缺要点";
         continue;
       }
-      const lastDay = (await readStoryClock(input.projectDir, input.chapter).catch(() => [])).at(-1)?.storyDay;
-      const dated = reconcileStoryDay(plan, readDayOffset(raw), lastDay);
-      // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
-      const withAvoid = materials.recurringPhrases.length > 0
-        ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
-        : dated;
-      await writeChapterPlan(input.projectDir, withAvoid);
-      return { ok: true, plan: withAvoid };
+      const dayOffset = readDayOffset(raw);
+      if (isSkeletonPlan(plan, dayOffset) && attempt < PLAN_RETRIES) {
+        console.warn(`[draft-pipeline] ch${input.chapter} 章纲只有要点、人物/开场/新信息全空，重拟一次`);
+        skeleton = { plan, dayOffset };
+        continue;
+      }
+      return await finish(plan, dayOffset);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
   }
+  if (skeleton) return finish(skeleton.plan, skeleton.dayOffset);
   return { ok: false, reason: `章纲没拟成（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
 }
 

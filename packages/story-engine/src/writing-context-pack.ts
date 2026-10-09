@@ -269,7 +269,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
   const isOpeningChapter = input.chapter <= 1;
   const mainLocation = directedLocation ?? selectMainLocation(locationBible?.locations ?? [], firstChapterSetup?.openingScene);
   const requiredLocation = isOpeningChapter ? mainLocation : directedLocation;
-  const assetView = buildAssetContextView(assetLedger.assets);
+  const assetView = buildAssetContextView(assetLedger.assets, isOpeningChapter);
   const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds).slice(0, 3);
   // 按"本章仍有效 + 相关性"四维召回，替代纯 lastTouchedChapter 近章截断；
   // 早期未收口线索/目标只要章号差 ≥ ancientThreshold 就获得加分，不被最近章淘汰（根治长篇早期记忆塌陷）。
@@ -442,6 +442,7 @@ export async function buildWritingContextPack(input: BuildWritingContextPackInpu
       assetHardRules: assetView.assetHardRules,
       extraFields: assetView.extraFields,
       assetDoNotInventRule: "不要凭空增加关键资产；只能自然使用开书资产或正文中明确获得的普通小物件。",
+      ...(isOpeningChapter ? {} : { assetStateRule: "物件卡记的多是开书时的状态；物件此刻在谁手里、在哪、坏没坏，以【已确立事实】和前文为准。" }),
     },
     continuityFocus: {
       recentTimelineEvents: recentTimelineEvents.map(formatTimelineEvent),
@@ -601,7 +602,16 @@ function formatArcGoal(goal: ArcGoal): string {
   return [goal.title, goal.nextActionHint, ...goal.evidence.slice(-1)].filter(Boolean).join(" / ");
 }
 
-function buildAssetContextView(assets: readonly AssetItem[]): {
+/**
+ * 物件卡里开书时写下、之后没有任何一章更新过（没有 lastSeenChapter）的状态与自定义字段，第 2 章起只当开书设定：
+ * 第二十轮「旧怀表 · 当前保管人：林舟（代修期间）」「当前不可用（待拆检）」每章当硬约束给写手，怀表第 2 章已被取走，
+ * 第 8–10 章仍写成在铺里。物件现状以已确立事实和前文为准。
+ */
+function isOpeningSnapshotOnly(asset: AssetItem, isOpeningChapter: boolean): boolean {
+  return !isOpeningChapter && asset.lastSeenChapter === undefined;
+}
+
+function buildAssetContextView(assets: readonly AssetItem[], isOpeningChapter = true): {
   readonly carriedAssets: readonly string[];
   readonly ownedAssets: readonly string[];
   readonly usableAssets: readonly string[];
@@ -618,13 +628,14 @@ function buildAssetContextView(assets: readonly AssetItem[]): {
   const assetHardRules = unique([
     ...assets.flatMap((asset) => asset.rules ?? []),
     ...assets
-      .filter((asset) => asset.status !== "available")
+      .filter((asset) => asset.status !== "available" && !isOpeningSnapshotOnly(asset, isOpeningChapter))
       .map((asset) => `${asset.name} 当前不可用（${asset.status}），不能写成可正常使用。`),
     assets.every((asset) => asset.type !== "vehicle") ? "没有登记车辆时，AI 不能默认主角有车。" : undefined,
     assets.every((asset) => asset.type !== "money") ? "没有现金/打车条件时，AI 不能随便写打车。" : undefined,
   ].filter((item): item is string => Boolean(item)));
   const extraFields = assets.flatMap((asset) =>
-    renderExtraFieldLines(asset.extraFields).map((line) => `${asset.name} · ${line}`),
+    renderExtraFieldLines(asset.extraFields).map((line) =>
+      `${asset.name} · ${line}${isOpeningSnapshotOnly(asset, isOpeningChapter) ? "（开书时的设定，之后可能已变，以已确立事实和前文为准）" : ""}`),
   ).slice(0, 24);
   return {
     carriedAssets: carriedAssets.slice(0, 12),
