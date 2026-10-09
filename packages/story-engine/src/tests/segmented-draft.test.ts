@@ -102,6 +102,29 @@ describe("按章纲分前后两半写", () => {
     expect(report.issues.join("\n")).toContain("不从结尾裁");
   });
 
+  it("前半章照抄上一章 → 带提示重写前半章一次（第二十一轮第 3 章前半把第 2 章整章重写了一遍）", async () => {
+    const projectDir = await makeBook();
+    const p1 = "林澈推开档案室的门，管理员抬头看了他一眼，说今天不对外开放，让他明天再来，他把介绍信递过去，对方翻了翻又还给他。";
+    const p2 = "他在走廊的长椅上坐了一个钟头，窗外的梧桐叶子一片片往下掉，楼下有人在吵架，声音隔着两层楼还听得清清楚楚。";
+    await writeFile(join(projectDir, "chapters", "0001.md"), `# 第1章 · 账册\n\n${p1}\n\n${p2}\n\n林澈把账册锁进抽屉。\n`, "utf-8");
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        if (contexts.length === 1) return { title: "档案室", content: `${p1}\n\n${p2}\n\n林澈${han(600, "前")}。` };
+        if (contexts.length === 2) return { title: "档案室", content: `林澈一早出门，${han(900, "新")}。` };
+        return { title: "", content: `${han(900, "后")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(3);
+    expect(renderFastDraftPromptText(contexts[1])).toContain("把上一章的原文又写了一遍");
+    const written = await readFile(report.draftPath!, "utf-8");
+    expect(written).not.toContain(p2);
+    expect(written).toContain("林澈一早出门");
+    expect(report.issues.join("\n")).toContain("前半章首稿照抄了上一章 2 段，已重写前半章");
+  });
+
   it("后半章没写成 → 只交前半章并如实记一条", async () => {
     const projectDir = await makeBook();
     const writer: WriterClient = {
@@ -144,7 +167,7 @@ describe("按章纲分前后两半写", () => {
     };
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
-    expect(renderFastDraftPromptText(contexts[2])).toContain("把前半章已经写过的场面又写了一遍");
+    expect(renderFastDraftPromptText(contexts[2])).toContain("把前半章（或上一章）已经写过的场面又写了一遍");
     const written = await readFile(report.draftPath!, "utf-8");
     expect(written.split(scene).length - 1).toBe(1);
     expect(written).toContain("管理员终于松了口");

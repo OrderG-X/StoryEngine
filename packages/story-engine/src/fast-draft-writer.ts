@@ -242,6 +242,17 @@ export interface SegmentedDraftInfo {
   readonly retried: boolean;
   /** 最终留下的后半章里还重演着的段数。 */
   readonly replayedRemaining: number;
+  /** 前半章首稿照抄上一章的段数，与重写后还剩的段数。 */
+  readonly copiedFromPrevious: number;
+  readonly copiedRemaining: number;
+}
+
+/** 前半章与上一章原文至少这么多段高度重合才重写（偶尔一段回顾不算照抄）。 */
+const COPY_RETRY_MIN_PARAGRAPHS = 2;
+
+function previousChapterText(context: WriterContextEnvelope): string | undefined {
+  const content = context.sections.find((section) => section.name === "previous_chapter")?.content as { readonly text?: unknown } | undefined;
+  return typeof content?.text === "string" && content.text.trim() ? content.text : undefined;
 }
 
 /**
@@ -280,8 +291,30 @@ async function generateBySegments(input: {
   ].filter(Boolean).join("\n");
   let firstContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
   if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", planSectionForHalf(planSection, "first", beats, split));
-  const first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
-  const firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
+  let first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
+  let firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
+  // 前半章照抄上一章（第二十一轮第 3 章前半把第 2 章 3500 字一字不差重写了一遍，本章要点一个没写）：
+  // 与上一章原文有两段以上高度重合 → 带提示重写前半章一次，取照抄更少的那版。
+  const previousText = previousChapterText(input.context);
+  const copied = previousText ? findReplayedParagraphs(previousText, firstBody) : [];
+  let copiedRemaining = copied.length;
+  if (copied.length >= COPY_RETRY_MIN_PARAGRAPHS) {
+    const retryGoal = [
+      firstGoal,
+      `【上一次的前半章把上一章的原文又写了一遍】例如：「${copied.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。上一章已经写完了，本章从上一章结尾之后接着写本章的要点，一句都不要照抄上一章。`,
+    ].join("\n");
+    const retry = await input.writerClient.generateDraft({
+      context: withSectionContent(firstContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
+      maxOutputTokens: input.maxOutputTokens,
+    }).catch(() => undefined);
+    const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
+    const retryCopied = retryBody && previousText ? findReplayedParagraphs(previousText, retryBody).length : copied.length;
+    if (retry && retryBody && retryCopied < copied.length) {
+      first = retry;
+      firstBody = retryBody;
+      copiedRemaining = retryCopied;
+    }
+  }
 
   const secondGoal = [
     input.rawChapterGoal,
@@ -304,13 +337,15 @@ async function generateBySegments(input: {
     if (!secondBody) throw new Error("后半章是空的");
     // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
     // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
-    const replays = findReplayedParagraphs(firstBody, secondBody);
+    // 后半章既不能重演前半章，也不能照抄上一章。
+    const alreadyWritten = previousText ? `${firstBody}\n${previousText}` : firstBody;
+    const replays = findReplayedParagraphs(alreadyWritten, secondBody);
     let retried = false;
     let replayedRemaining = replays.length;
     if (replays.length > 0) {
       const retryGoal = [
         secondGoal,
-        `【上一次的后半章把前半章已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从前半章最后一句之后往前推进新的事。`,
+        `【上一次的后半章把前半章（或上一章）已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从前半章最后一句之后往前推进新的事。`,
       ].join("\n");
       const retry = await input.writerClient.generateDraft({
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
@@ -318,7 +353,7 @@ async function generateBySegments(input: {
       }).catch(() => undefined);
       const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
       retried = retryBody.length > 0;
-      const retryReplays = retryBody ? findReplayedParagraphs(firstBody, retryBody).length : replays.length;
+      const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
         secondBody = retryBody;
         replayedRemaining = retryReplays;
@@ -329,7 +364,7 @@ async function generateBySegments(input: {
         ...first,
         content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
       },
-      info: { split, replayedFound: replays.length, retried, replayedRemaining },
+      info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining },
     };
   } catch (error) {
     return {
@@ -420,6 +455,11 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       : undefined;
     const generated = segmented?.generated ?? await input.writerClient.generateDraft({ context, maxOutputTokens });
     if (segmented?.secondHalfError) writingRulesFailure.push(segmented.secondHalfError);
+    if (segmented?.info && segmented.info.copiedFromPrevious >= COPY_RETRY_MIN_PARAGRAPHS) {
+      writingRulesFailure.push(segmented.info.copiedRemaining < COPY_RETRY_MIN_PARAGRAPHS
+        ? `前半章首稿照抄了上一章 ${segmented.info.copiedFromPrevious} 段，已重写前半章。`
+        : `前半章首稿照抄了上一章 ${segmented.info.copiedFromPrevious} 段，重写后仍有 ${segmented.info.copiedRemaining} 段与上一章相近，请留意。`);
+    }
     // 接缝重演留痕（第十四轮审读：检出与重写都没留下记录，事后查不到这一步做了什么）。
     if (segmented?.info && segmented.info.replayedFound > 0) {
       writingRulesFailure.push(segmented.info.replayedRemaining === 0

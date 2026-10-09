@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readFactLedger } from "./fact-ledger.js";
-import { buildReconcileMessages, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
+import { absolutizeRelativeDays, buildReconcileMessages, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
 
 const DRAFT = "林舟骑车到了南门。菜场还在，门口摆着几摊卖豆腐的。他想起周婶那座钟昨天已经修好送回去了。";
 
@@ -124,5 +124,15 @@ describe("factSwapsKinshipForName（第十九轮「爸的老同事」记成祖�
     expect(factSwapsKinshipForName({ text: "吴德发是林舟父亲的老同事", quote: "他是我爸的老同事" }, names)).toBe(false);
     expect(factSwapsKinshipForName({ text: "林溪是林舟的妹妹", quote: "妹妹林溪打来电话" }, names)).toBe(false);
     expect(factSwapsKinshipForName({ text: "林舟把表放在柜上", quote: "他把表放在柜上" }, names)).toBe(false);
+  });
+});
+
+describe("absolutizeRelativeDays（第二十一轮账本 30 条留着昨天 / 明天）", () => {
+  it("按本章天数换成故事第几天；大前天 / 大后天不被拆错；天数未知原样", () => {
+    expect(absolutizeRelativeDays("许棠说明天来量铺子，昨晚有人敲门", 5)).toBe("许棠说故事第6天来量铺子，故事第4天晚上有人敲门");
+    expect(absolutizeRelativeDays("大前天送来的表，后天取", 5)).toBe("故事第2天送来的表，故事第7天取");
+    expect(absolutizeRelativeDays("前天的事", 1)).toBe("前天的事");
+    expect(absolutizeRelativeDays("目前天气转凉，然后天亮了", 5)).toBe("目前天气转凉，然后天亮了");
+    expect(absolutizeRelativeDays("明天来", undefined)).toBe("明天来");
   });
 });

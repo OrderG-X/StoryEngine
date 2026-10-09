@@ -127,6 +127,36 @@ function hanBigrams(text: string): readonly string[] {
   return out;
 }
 
+const RELATIVE_DAY_WORDS: readonly (readonly [RegExp, number, string])[] = [
+  [/大前天/gu, -3, ""],
+  // 「目前天气」「眼前天色」「然后天亮」里的前天 / 后天不是日子。
+  [/(?<![目眼面跟门提当之以空从向往日])前天/gu, -2, ""],
+  [/昨晚|昨夜/gu, -1, "晚上"],
+  [/昨天|昨日/gu, -1, ""],
+  [/今晚/gu, 0, "晚上"],
+  [/今天|今日/gu, 0, ""],
+  [/明早/gu, 1, "早上"],
+  [/明晚/gu, 1, "晚上"],
+  [/明天|明日/gu, 1, ""],
+  [/大后天/gu, 3, ""],
+  [/(?<![然最之以随此其落背身先午稍过])后天/gu, 2, ""],
+];
+
+/**
+ * 事实里的「昨天 / 明天」换成故事第几天（第二十一轮：要求模型换，169 条里一条没换、30 条留着相对说法——
+ * 过几章再读，「明天来」已不知是哪天）。本章天数未知就原样。
+ */
+export function absolutizeRelativeDays(text: string, storyDay: number | undefined): string {
+  if (!storyDay) return text;
+  let out = text;
+  for (const [pattern, delta, suffix] of RELATIVE_DAY_WORDS) {
+    const day = storyDay + delta;
+    if (day < 1) continue;
+    out = out.replace(pattern, `故事第${day}天${suffix}`);
+  }
+  return out;
+}
+
 const KINSHIP_TERM = /爸|妈|爹|娘|父|母|爷|奶|外公|外婆|祖|哥|姐|弟|妹|叔|伯|姑|舅|姨|老爷子|老太太/u;
 
 /**
@@ -206,7 +236,7 @@ export async function extractAndReconcileFacts(input: {
     console.info(`[fact-ledger] 第${input.chapter}章 ${parsed.facts.length - supportedFacts.length} 条事实引的原句在正文里找不到，没记`);
   }
   const added = await appendFacts(input.projectDir, input.chapter, [
-    ...supportedFacts.map((fact) => fact.text),
+    ...supportedFacts.map((fact) => absolutizeRelativeDays(fact.text, plan?.storyDay)),
     ...changes.map((change) => change.text),
   ], "auto");
   // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。

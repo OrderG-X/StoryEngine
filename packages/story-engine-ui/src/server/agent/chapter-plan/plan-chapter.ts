@@ -214,7 +214,7 @@ export function buildPlanMessages(
     "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
     "6. 不要揭开「受保护的秘密」，除非作者方向明确要求。",
     "7. 不能和【已确立事实】矛盾；那里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍。",
-    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；天数由程序往后加，你不用数第几天）；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
+    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；天数由程序往后加，你不用数第几天）；本章中途要换天的，那个要点开头就写「第二天上午，……」；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
     "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
     "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
     "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
@@ -314,12 +314,37 @@ function isSkeletonPlan(plan: ChapterPlan, dayOffset: number | undefined): boole
   return plan.characters.length === 0 && plan.newInformation.length === 0 && !plan.scene.location && !plan.scene.time && dayOffset === undefined;
 }
 
+/** 要点开头就写了换天（「第二天上午，……」「三天后，……」）：本章到这里跨了几天。转述里的「约好第二天去」不算。 */
+const BEAT_OPENS_WITH_DAY_CHANGE = /^[^，。,]{0,2}?(第二天|第二日|次日|翌日|隔天|隔日|转天|([一两二三四五六七八九十\d]+)\s*天(?:以)?后)/u;
+
+/**
+ * 上一章结束时是故事第几天：开场那天加上章内要点写明的换天（第二十一轮第 2 章跨了夜，
+ * 按开场那天往后推，此后全书少一天）。
+ */
+export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | undefined {
+  if (!plan?.storyDay) return undefined;
+  let day = plan.storyDay;
+  for (const beat of plan.beats) {
+    const match = BEAT_OPENS_WITH_DAY_CHANGE.exec(beat);
+    if (!match) continue;
+    day += match[2] ? (CJK_DIGITS[match[2]] ?? (Number(match[2]) || 1)) : 1;
+  }
+  return day;
+}
+
+async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | undefined> {
+  const last = (await readStoryClock(projectDir, chapter).catch(() => [])).at(-1);
+  if (!last) return undefined;
+  const previous = await readChapterPlan(projectDir, last.chapter).catch(() => undefined);
+  return storyDayAtChapterEnd(previous) ?? last.storyDay;
+}
+
 export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
   let lastError = "";
   let skeleton: { readonly plan: ChapterPlan; readonly dayOffset: number | undefined } | undefined;
   const finish = async (plan: ChapterPlan, dayOffset: number | undefined): Promise<PlanChapterResult> => {
-    const lastDay = (await readStoryClock(input.projectDir, input.chapter).catch(() => [])).at(-1)?.storyDay;
+    const lastDay = await previousChapterEndDay(input.projectDir, input.chapter);
     const dated = reconcileStoryDay(plan, dayOffset, lastDay);
     // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
     const withAvoid = materials.recurringPhrases.length > 0

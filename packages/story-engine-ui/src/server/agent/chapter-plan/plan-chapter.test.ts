@@ -163,3 +163,14 @@ describe("骨架章纲重拟（第二十轮第 5、7 章只有要点，日历少
     expect(still.ok && still.plan.summary).toBe("林舟去档案馆");
   });
 });
+
+describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后全书少一天）", () => {
+  it("开场那天加上要点开头写明的换天；转述里的「约好第二天」不算", async () => {
+    const { storyDayAtChapterEnd } = await import("./plan-chapter.js");
+    const make = (beats: string[]) => normalizeChapterPlan({ summary: "s", beats, storyDay: 2 }, { chapter: 2 })!;
+    expect(storyDayAtChapterEnd(make(["傍晚回铺子", "第二天上午，许棠上门"]))).toBe(3);
+    expect(storyDayAtChapterEnd(make(["傍晚回铺子", "三天后，林溪来了"]))).toBe(5);
+    expect(storyDayAtChapterEnd(make(["许棠约好第二天来量铺子", "林舟关门"]))).toBe(2);
+    expect(storyDayAtChapterEnd(undefined)).toBeUndefined();
+  });
+});
