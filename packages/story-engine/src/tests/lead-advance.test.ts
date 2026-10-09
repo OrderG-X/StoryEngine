@@ -89,3 +89,21 @@ describe("线索声明推进旧线索（阶段 4 记账对号）", () => {
     expect(result.updates).toEqual([expect.objectContaining({ id: "lead-a", status: "done" })]);
   });
 });
+
+describe("待办声明对号（第十四轮：同一件「补继承材料」立了 6 条待办）", () => {
+  it("待办给了已开着的编号对应标题 → 触碰那一条，不另立", () => {
+    const result = plan({
+      pendingIntents: [{ summary: "再去查送修人", quote: "还是只有一个沈字", targetThreadHint: "登记表送修人只写了一个沈字" }],
+    });
+    expect(result.introducedThreads).toEqual([]);
+    expect(result.updates).toEqual([expect.objectContaining({ id: "lead-a", status: "touched" })]);
+  });
+
+  it("对不上任何已开着的 → 照常新立一条待办", () => {
+    const result = plan({
+      pendingIntents: [{ summary: "明天去档案馆调底册", quote: "表盖内侧的日期在灯下发亮" }],
+    });
+    expect(result.introducedThreads).toHaveLength(1);
+    expect(result.updates[0]).toMatchObject({ type: "intent", title: "明天去档案馆调底册" });
+  });
+});

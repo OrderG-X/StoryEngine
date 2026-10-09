@@ -848,7 +848,19 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     ]));
   });
 
-  it("commit 时自动把超过 9 章未触碰的 open intent 标 stale，并写进报告", async () => {
+  it("expireStaleIntents：4 章没碰的待办（open 或 touched）蛰伏；3 章的不动（第十四轮 touched 待办永不蛰伏）", () => {
+    const intent = (id: string, status: "open" | "touched", lastTouchedChapter: number) => ({
+      id, type: "intent" as const, title: id, status, firstSeenChapter: 1, lastTouchedChapter, evidence: [id],
+    });
+    const result = expireStaleIntents({
+      pool: { threads: [intent("a", "touched", 6), intent("b", "open", 6), intent("c", "touched", 7)] },
+      chapter: 10,
+    });
+    expect(result.expired.map((item) => item.id)).toEqual(["a", "b"]);
+    expect(result.pool.threads.find((thread) => thread.id === "c")?.status).toBe("touched");
+  });
+
+  it("commit 时自动把多章未触碰的 open intent 标 stale，并写进报告", async () => {
     const projectDir = await createThreadProject();
     await seedThreads(projectDir, {
       threads: [

@@ -285,6 +285,14 @@ function extractDeclaredThreadCandidates(input: {
     });
   }
   for (const declared of input.verifiedDelta.pendingIntents) {
+    // 还是那件没办完的事（模型给了已开着的编号，或标题互相包含）→ 触碰那一条，不另立一条（第十四轮「继承公证材料」立了 6 条）。
+    const target = findAdvancedTargetThread(declared, activeThreads);
+    if (target) {
+      if (!candidates.some((candidate) => candidate.targetThreadId === target.id)) {
+        candidates.push({ type: target.type, title: target.title, evidence: truncateText(declared.quote, 120), isDone: false, targetThreadId: target.id });
+      }
+      continue;
+    }
     const candidate = declaredPendingIntentCandidate(declared);
     if (candidate) candidates.push(candidate);
   }
@@ -303,15 +311,21 @@ function declaredPendingIntentCandidate(declared: PendingIntentDeclaration): Thr
   };
 }
 
+/**
+ * 待办多久没人碰就蛰伏（stale，不算完成；再被提到会恢复）。待办是「下一步要做什么」，几章不碰多半已办完或作罢：
+ * 第十四轮十章里「明天上午工作组来丈量」第 3 章立、第 4 章就丈量完，到第 10 章还开着；touched 的待办过去永不蛰伏。
+ */
+const INTENT_STALE_AFTER_CHAPTERS = 4;
+
 export function expireStaleIntents(input: {
   readonly pool: ThreadPool;
   readonly chapter: number;
 }): { readonly pool: ThreadPool; readonly expired: readonly ExpiredIntentThread[] } {
   const expired: ExpiredIntentThread[] = [];
   const threads = input.pool.threads.map((thread) => {
-    if (thread.type !== "intent" || thread.status !== "open") return thread;
+    if (thread.type !== "intent" || (thread.status !== "open" && thread.status !== "touched")) return thread;
     const idleChapters = chaptersSinceTouched(thread.lastTouchedChapter, input.chapter);
-    if (idleChapters < 9) return thread;
+    if (idleChapters < INTENT_STALE_AFTER_CHAPTERS) return thread;
     expired.push({
       id: thread.id,
       type: "intent",
@@ -358,7 +372,7 @@ const BATCH_DUPLICATE_SIMILARITY = 0.5;
  * 不走「任意两字片段」的宽松锚点——推进只是触碰，指错了会让真线索被误判在推进。
  */
 function findAdvancedTargetThread(
-  declared: LeadDeclaration,
+  declared: Pick<LeadDeclaration, "summary" | "targetThreadHint">,
   activeThreads: readonly NarrativeThread[],
 ): NarrativeThread | undefined {
   const bare = (value: string) => value.replace(/[\s…]+/gu, "").replace(/\.{3}$/u, "");

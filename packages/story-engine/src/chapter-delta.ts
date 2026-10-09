@@ -58,6 +58,8 @@ export interface LeadDeclaration extends SummarizedEvidence {
 /** 本章留下的未完成待办/下一步意图。 */
 export interface PendingIntentDeclaration extends ChapterDeltaEvidence {
   readonly summary: string;
+  /** 还是某条已开着的待办/线索（逐字取其标题）：触碰那一条，不另立。 */
+  readonly targetThreadHint?: string;
 }
 
 /**
