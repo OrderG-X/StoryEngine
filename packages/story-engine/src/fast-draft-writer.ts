@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { ChapterPlan } from "./chapter-plan.js";
+import { cjkBigrams } from "./text-similarity.js";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -148,6 +149,27 @@ export async function persistFastDraftBody(input: {
   return draftPath;
 }
 
+/** 后半章里某段的两字片段有这么大比例出现在前半章同一段里，就算重演。 */
+const REPLAY_CONTAINMENT = 0.55;
+const REPLAY_MIN_CHARS = 24;
+
+/** 后半章里重演前半章的段落（确定性：两字片段包含率）。 */
+export function findReplayedParagraphs(firstHalf: string, secondHalf: string): readonly string[] {
+  const firstParagraphs = firstHalf.split(/\n+/u).map((item) => item.trim()).filter(Boolean).map((text) => cjkBigrams(text));
+  const replayed: string[] = [];
+  for (const paragraph of secondHalf.split(/\n+/u).map((item) => item.trim()).filter(Boolean)) {
+    const grams = cjkBigrams(paragraph);
+    if (grams.size < REPLAY_MIN_CHARS) continue;
+    const hit = firstParagraphs.some((first) => {
+      let shared = 0;
+      for (const gram of grams) if (first.has(gram)) shared += 1;
+      return shared / grams.size >= REPLAY_CONTAINMENT;
+    });
+    if (hit) replayed.push(paragraph);
+  }
+  return replayed;
+}
+
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
 /** 目标字数至少这么多才分两半写：写手一次自然写一千八到两千字，目标在这以内一次写完更连贯。 */
@@ -213,8 +235,23 @@ async function generateBySegments(input: {
   });
   try {
     const second = await input.writerClient.generateDraft({ context: secondContext, maxOutputTokens: input.maxOutputTokens });
-    const secondBody = stripLeadingMarkdownChapterHeading(second.content).trim();
+    let secondBody = stripLeadingMarkdownChapterHeading(second.content).trim();
     if (!secondBody) throw new Error("后半章是空的");
+    // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
+    // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
+    const replays = findReplayedParagraphs(firstBody, secondBody);
+    if (replays.length > 0) {
+      const retryGoal = [
+        secondGoal,
+        `【上一次的后半章把前半章已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从前半章最后一句之后往前推进新的事。`,
+      ].join("\n");
+      const retry = await input.writerClient.generateDraft({
+        context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
+        maxOutputTokens: input.maxOutputTokens,
+      }).catch(() => undefined);
+      const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
+      if (retryBody && findReplayedParagraphs(firstBody, retryBody).length < replays.length) secondBody = retryBody;
+    }
     return {
       generated: {
         ...first,

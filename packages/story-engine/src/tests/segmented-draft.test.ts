@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan } from "../chapter-plan.js";
 import type { WriterContextEnvelope } from "../context-gateway.js";
-import { runFastDraft, type WriterClient } from "../fast-draft-writer.js";
+import { findReplayedParagraphs, runFastDraft, type WriterClient } from "../fast-draft-writer.js";
 import { renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
 import { createStoryProject } from "../project-store.js";
 
@@ -75,5 +75,31 @@ describe("按章纲分前后两半写", () => {
     const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "t", content: `# 第2章 · t\n\n林澈${han(1700, "全")}。` })) };
     await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 1800 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("后半章重演了前半章的一场戏 → 带提示重写后半章一次，取重演更少的那版", async () => {
+    const projectDir = await makeBook();
+    const scene = "林澈推开档案室的门，管理员抬头看了他一眼，说今天不对外开放，让他明天再来，他把介绍信递过去，对方翻了翻又还给他。";
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(600, "前")}。\n\n${scene}` };
+        if (contexts.length === 2) return { title: "", content: `${scene}\n\n${han(600, "后")}。` };
+        return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(600, "新")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(3);
+    expect(renderFastDraftPromptText(contexts[2])).toContain("把前半章已经写过的场面又写了一遍");
+    const written = await readFile(report.draftPath!, "utf-8");
+    expect(written.split(scene).length - 1).toBe(1);
+    expect(written).toContain("管理员终于松了口");
+  });
+
+  it("findReplayedParagraphs：换几个字重演也认得；不相干的段不算", () => {
+    const first = "林澈推开档案室的门，管理员抬头看了他一眼，说今天不对外开放，让他明天再来。";
+    expect(findReplayedParagraphs(first, "林澈又推开档案室的门，管理员抬头瞥了他一眼，说今天不对外开放，叫他明天再来。")).toHaveLength(1);
+    expect(findReplayedParagraphs(first, "傍晚下起了雨，他沿着河堤往回走，街灯一盏一盏亮起来，卖馄饨的摊子刚刚支起。")).toHaveLength(0);
   });
 });

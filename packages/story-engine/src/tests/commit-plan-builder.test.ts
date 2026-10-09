@@ -115,6 +115,18 @@ describe("commit plan builder", () => {
     });
   });
 
+  // 2026-10-09 十章验收：日历每章 +1 等于章号，和正文对不上一整天——有章纲记的天数就用它。
+  it("calendar uses the chapter plan's storyDay when there is one", async () => {
+    const projectDir = await createFixtureProject("林远");
+    await writeDraft(projectDir, 2, "# 第二章\n\n林远站在组织石阶前，握住了那枚外院信物。");
+    const { normalizeChapterPlan, writeChapterPlan } = await import("../chapter-plan.js");
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 6 }, { chapter: 2 })!);
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
+
+    expect(result.commitPlan?.calendar).toEqual({ storyDay: 6, timeOfDay: "unknown" });
+  });
+
   it("prefers the character whose name appears in the draft", async () => {
     const projectDir = await createFixtureProject("林远");
     await addCharacter(projectDir, {

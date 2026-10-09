@@ -1,3 +1,4 @@
+import { readChapterPlan } from "./chapter-plan.js";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -143,6 +144,7 @@ export interface ChapterSemanticSummary {
 
 export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): Promise<BuildCommitPlanResult> {
   const issues: string[] = [];
+  const plannedStoryDay = (await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined))?.storyDay;
   const draftPath = input.draftPath ?? defaultDraftPath(input.projectDir, input.chapter);
   const [draft, characters, hookPool, threadPool, arcGoalPool, previewContextRead] = await Promise.all([
     input.draftContent !== undefined
@@ -327,7 +329,8 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
       ...(arcGoalTracking.updates.length > 0 ? { arcGoalUpdates: arcGoalTracking.updates } : {}),
       ...(arcGoalTracking.staleGoalWarnings.length > 0 ? { staleGoalWarnings: arcGoalTracking.staleGoalWarnings } : {}),
       calendar: {
-        storyDay: input.chapter === 1 ? 1 : input.chapter,
+        // 有章纲记的「故事第几天」就用它（十章验收：日历每章 +1 等于章号，和正文对不上一整天）；没有沿用旧推算。
+        storyDay: plannedStoryDay ?? (input.chapter === 1 ? 1 : input.chapter),
         timeOfDay: "unknown",
       },
     },
