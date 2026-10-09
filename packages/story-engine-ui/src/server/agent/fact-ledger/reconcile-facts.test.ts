@@ -44,7 +44,7 @@ describe("parseReconcile 宽进", () => {
       newCharacters: ["吴师傅"],
       extra: true,
     }));
-    expect(parsed.facts).toEqual(["座钟已修好送回周婶"]);
+    expect(parsed.facts).toEqual([{ text: "座钟已修好送回周婶", quote: "" }]);
     expect(parsed.changes).toEqual([{ ref: "F2", text: "周婶的座钟已修好送回", quote: "座钟昨天已经修好送回去了" }]);
     expect(parsed.conflicts).toEqual([{ ref: "F1", quote: "菜场还在", note: "第4章说已拆" }]);
     expect(parsed.newCharacters).toEqual(["吴师傅"]);
@@ -83,6 +83,24 @@ describe("extractAndReconcileFacts", () => {
     expect(result.summary).toContain("这章记下 2 条硬事实");
     expect(result.summary).toContain("更新了 1 条旧设定");
     expect(result.summary).toContain("需要你定以哪个为准");
+  });
+
+  it("新事实引的原句在正文里找不到 → 不入账（第十四轮：推断出的改期、把交还记成卖给）；抄错一两个字的照收", async () => {
+    const dir = await makeLedger();
+    const callModel = vi.fn(async () => JSON.stringify({
+      facts: [
+        { text: "林舟骑车去了南门", quote: "林舟骑车到了南门。" },
+        { text: "南门菜场门口有豆腐摊", quote: "菜场还在，门口摆着几摊卖豆腐的摊子。" },
+        { text: "周婶把座钟卖给了杂货铺", quote: "周婶把座钟卖给了街口杂货铺" },
+        { text: "没给原句的照收" },
+      ],
+      changes: [], conflicts: [], newCharacters: [],
+    }));
+    const result = await extractAndReconcileFacts({ projectDir: dir, chapter: 8, draftText: DRAFT, callModel, knownNames: ["林舟", "周婶"] });
+    expect(result.added).toBe(3);
+    const texts = (await readFactLedger(dir)).facts.map((fact) => fact.text);
+    expect(texts).not.toContain("周婶把座钟卖给了杂货铺");
+    expect(texts).toContain("南门菜场门口有豆腐摊");
   });
 
   it("两次都抽不成 → ok:false，账本不动，如实说明", async () => {

@@ -62,11 +62,11 @@ export function buildReconcileMessages(
 ): { readonly role: "system" | "user"; readonly content: string }[] {
   const system = [
     "你是中文小说的『硬事实记录员』。读这章正文，对照【已记下的旧事实】，做三件事：",
-    "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。",
+    "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。quote 逐字抄本章里写到这件事的原句；正文没明写、要靠推断才得出的不要记（由「换了日子」推出「改过期」、把「交还」说成「卖给」）。",
     "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
     "3. conflicts：本章说法和某条旧事实对不上、但正文并没有写它发生了变化（多半是写错了）。ref 填旧事实编号，quote 逐字抄本章正文里对不上的那句，note 说怎么对不上。",
     "另外列出本章首次出现、且不在『已知角色』名单里的具名新人物（真名，宁缺毋滥）。",
-    "只输出一个 JSON：{\"facts\":[{\"text\":\"\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\",\"quote\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
+    "只输出一个 JSON：{\"facts\":[{\"text\":\"\",\"quote\":\"\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\",\"quote\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
   ].join("\n");
   const user = [
     related.length > 0
@@ -79,7 +79,8 @@ export function buildReconcileMessages(
 }
 
 interface ParsedReconcile {
-  readonly facts: readonly string[];
+  /** quote 空 = 模型没给原句（宽进照收）；给了就要在正文里找得到。 */
+  readonly facts: readonly { readonly text: string; readonly quote: string }[];
   readonly changes: readonly { readonly ref: string; readonly text: string; readonly quote: string }[];
   readonly conflicts: readonly { readonly ref: string; readonly quote: string; readonly note: string }[];
   readonly newCharacters: readonly string[];
@@ -96,7 +97,9 @@ export function parseReconcile(text: string): ParsedReconcile {
   if (!match) throw new Error("抽取结果不是 JSON");
   const parsed = asRecord(JSON.parse(match[0])) ?? {};
   return {
-    facts: asArray(parsed.facts).map((item) => str(asRecord(item)?.text ?? item)).filter(Boolean),
+    facts: asArray(parsed.facts)
+      .map((item) => ({ text: str(asRecord(item)?.text ?? item), quote: str(asRecord(item)?.quote) }))
+      .filter((item) => item.text),
     changes: asArray(parsed.changes)
       .map((item) => ({ ref: str(asRecord(item)?.ref).toUpperCase(), text: str(asRecord(item)?.text), quote: str(asRecord(item)?.quote) }))
       .filter((item) => item.ref && item.text),
@@ -108,6 +111,26 @@ export function parseReconcile(text: string): ParsedReconcile {
 }
 
 const normalizeSpace = (text: string): string => text.replace(/\s+/gu, "");
+
+function hanBigrams(text: string): readonly string[] {
+  const out: string[] = [];
+  for (const run of text.match(/[\u3400-\u9fff]+/gu) ?? []) {
+    const chars = Array.from(run);
+    for (let i = 0; i + 1 < chars.length; i += 1) out.push(chars[i] + chars[i + 1]);
+  }
+  return out;
+}
+
+/** 新事实引的原句在正文里找得到：逐字命中，或八成两字片段都在正文里（模型抄原句常改一两个字、多带几个字）。 */
+export function factQuoteIsSupported(quote: string, draftText: string): boolean {
+  const draft = normalizeSpace(draftText);
+  const normalized = normalizeSpace(quote);
+  if (normalized.length >= 4 && draft.includes(normalized)) return true;
+  const grams = hanBigrams(normalized);
+  if (grams.length < 4) return false;
+  const draftGrams = new Set(hanBigrams(draft));
+  return grams.filter((gram) => draftGrams.has(gram)).length / grams.length >= 0.8;
+}
 
 function describe(result: Omit<ReconcileFactsResult, "summary" | "ok">): string {
   const parts: string[] = [];
@@ -157,8 +180,13 @@ export async function extractAndReconcileFacts(input: {
   const quoted = (quote: string) => normalizeSpace(quote).length >= 4 && draft.includes(normalizeSpace(quote));
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
   const changes = parsed.changes.filter((change) => byRef.has(change.ref) && quoted(change.quote));
+  // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
+  const supportedFacts = parsed.facts.filter((fact) => !fact.quote || factQuoteIsSupported(fact.quote, input.draftText));
+  if (supportedFacts.length < parsed.facts.length) {
+    console.info(`[fact-ledger] 第${input.chapter}章 ${parsed.facts.length - supportedFacts.length} 条事实引的原句在正文里找不到，没记`);
+  }
   const added = await appendFacts(input.projectDir, input.chapter, [
-    ...parsed.facts,
+    ...supportedFacts.map((fact) => fact.text),
     ...changes.map((change) => change.text),
   ], "auto");
   // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。

@@ -43,6 +43,10 @@ describe("线索编号与推进声明（阶段 4 记账对号）", () => {
       ],
     }, OPEN);
     expect(resolved.resolvedForeshadowing[0].targetThreadHint).toBe("怀表来历");
+    expect(resolveThreadRefs({
+      chapter: 5, mainEvent: { summary: "s", quote: DRAFT }, seededForeshadowing: [], resolvedForeshadowing: [], resourceDeltas: [], keyLeads: [],
+      pendingIntents: [{ summary: "再去查送修人", quote: "q", targetThreadHint: "T1" }],
+    }, OPEN).pendingIntents?.[0].targetThreadHint).toBe("登记表送修人只写了一个沈字");
     expect(resolved.keyLeads.map((item) => item.targetThreadHint)).toEqual(["登记表送修人只写了一个沈字", undefined, "怀表来历"]);
   });
 

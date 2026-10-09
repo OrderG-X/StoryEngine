@@ -73,7 +73,7 @@ const arcGoalItem = z.object({
   quote: z.string().trim().min(1),
 });
 
-const pendingIntentItem = evidenceItem;
+const pendingIntentItem = evidenceItem.extend({ targetThreadHint: optionalHint });
 
 const continuityWithPreviousItem = z.object({
   connects: z.boolean(),
@@ -154,8 +154,8 @@ export function buildChapterDeltaMessages(input: {
     "· seededForeshadowing[]：本章【新埋下】、预期后文回收的跨章悬念（之前没出现过；下方【已开着的线索】里已有的不算新伏笔）。summary=这条伏笔是什么，quote=埋设它的原句。本章内已经解决的紧张/障碍不算伏笔，不要报。",
     "· resolvedForeshadowing[]：本章【回收/揭晓】的、【之前已埋下】的伏笔或线索——正文必须写出了答案/结论才算回收；只是又提到、又核对一遍、有了新进展，那是推进，报进 keyLeads（progress=advanced），不要报在这里。summary=揭晓了什么，quote=揭晓的原句；对应下方【已开着的线索】里的哪一条，就把它的编号（如 T3）填进 targetThreadHint。之前挂着的计划/待办（尤其是『决定/需要/打算』类条目）本章做完了/不再需要了，也算回收，同样报进 resolvedForeshadowing 并给编号；别只回收谜题类伏笔。",
     "· resourceDeltas[]：本章主角实际完成的获得/失去/消耗的具体资源（物品/货币/数量）。item=资源名，change=gain|loss|spend，amount=原文数量字符串（如『十二枚』，不要换算单位、不要自己算），quote=写到该变化的原句。程序逐字核对 amount 在 quote 里；正文没写明数量就省略 amount，只报 item+change+quote，别猜数、别选无数量的句子。交易未成交、对方没收下/推回、只是拿出来展示的，都不算得失（如把灵石放在柜台上但对方没收=没有失去）。",
-    "· keyLeads[]：本章浮现或推进的关键线索/悬念（不同于已回收的）。summary+quote，再加 progress：introduced=本章新冒出来的问题；advanced=推进了下方【已开着的线索】里的某一条（有了新进展但还没解开），这时把那条的编号（如 T3）填进 targetThreadHint。同一件事只报一条：seededForeshadowing 里报过的，不要在 keyLeads 再报一遍；已开着的线索有新进展，一律报 advanced，不要换个说法当新线索。",
-    "· pendingIntents[]：本章留下的未完成待办/下一步意图（不同于已完成决定）。summary=还要做什么，quote=写到该待办/意图的原句。只有正文明确留下后续行动时才报；已经完成的行动不要报。",
+    "· keyLeads[]：本章浮现或推进的关键线索/悬念（不同于已回收的）。summary+quote，再加 progress：introduced=本章新冒出来的问题；advanced=推进了下方【已开着的线索】里的某一条（有了新进展但还没解开），这时把那条的编号（如 T3）填进 targetThreadHint。同一件事只报一条：seededForeshadowing 里报过的，不要在 keyLeads 再报一遍；已开着的线索有新进展，一律报 advanced，不要换个说法当新线索。introduced 只报正文里【还没有答案】的问题，summary 写成问句（「谁…？」「为什么…？」）；本章查到的结果、看到的东西本身是事实（会另记进事实账本），不是线索。",
+    "· pendingIntents[]：本章留下的未完成待办/下一步意图（不同于已完成决定）。summary=还要做什么，quote=写到该待办/意图的原句。只有正文明确留下后续行动时才报；已经完成的行动不要报。和下方【已开着的线索】里某条是同一件事的，把它的编号填进 targetThreadHint，不要换个说法另报一条。",
     "· charactersPresent[]：本章正文里【出现的每个有名字的角色】各报一条。name=正文里用到的名字（逐字照抄，含姓氏，不要改写），quote=含该名字的原句；若该角色对应下方【本书已确立的角色名】里的某人，name 必须与已确立写法【完全一致】，别写成形近的错名；若能指明是谁，用 identityHint 备注（如『主角』『主角的妹妹』）。",
     "· arcGoalProgress[]：本章对【主线/阶段目标】的推进。目标=主角这条线在图谋/追求什么（题材中立，不要套任何题材模板）。长篇里主角几乎每章都在为某个目标使劲——本章只要主角在为某个目标查/找/争/守/逃/达成什么，就【至少报一条】（哪怕只是 advanced 一个已存在的目标）；只有纯过渡、主角完全没有任何目标性行动时才给空数组。每条：summary=目标是什么（一句话，尽量简短、像个标题，跨章尽量用同一个说法），progress=introduced(本章新确立这个目标)|advanced(本章朝它推进了一步)|completed(本章达成/了结了它)，scope=main_arc(贯穿全书的大目标)|mini_arc(近几章的小目标)（introduced 时给），quote=最能代表该推进的【正文里连续的一整句原文】（不要拼接多句）。若推进/达成的是下方【已存在的主线/阶段目标】里的某一条，把它的标题填进 targetGoalHint（务必对应已有条目、逐字沿用其标题，不要新造），让它归到同一条、别把一个目标拆成好几个。",
     "· continuityWithPrevious：如果下方给了【上一章结尾】，判断本章开头是否自然承接上一章结尾。connects=true|false；若 false，note 用一句话说明断裂点。这个字段不带 quote，也不要把上一章结尾内容当作任何字段的 quote 来源。未给上一章结尾时省略。",
@@ -279,6 +279,7 @@ export function resolveThreadRefs(declaration: ChapterDeltaDeclaration, openThre
     ...declaration,
     resolvedForeshadowing: declaration.resolvedForeshadowing.map(withHint),
     keyLeads: declaration.keyLeads.map(withHint),
+    ...(declaration.pendingIntents ? { pendingIntents: declaration.pendingIntents.map(withHint) } : {}),
   };
 }
 
