@@ -125,6 +125,25 @@ describe("按章纲分前后两半写", () => {
     expect(report.issues.join("\n")).toContain("前半章首稿照抄了上一章 2 段，已重写前半章");
   });
 
+  it("两半的提示词前面那一大段完全相同（各自不同的本章目标、章纲排在最后），后半章能吃到服务商缓存", async () => {
+    const projectDir = await makeBook();
+    const prompts: string[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        prompts.push(renderFastDraftPromptText(context));
+        return { title: "档案室", content: `林澈${han(900, prompts.length === 1 ? "前" : "后")}。` };
+      }),
+    };
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const [first, second] = prompts;
+    let shared = 0;
+    while (shared < first.length && first[shared] === second[shared]) shared += 1;
+    const firstGoalAt = first.indexOf("## chapter_plan");
+    expect(firstGoalAt).toBeGreaterThan(0);
+    expect(shared).toBeGreaterThanOrEqual(firstGoalAt);
+    expect(first.indexOf("## previous_chapter")).toBeLessThan(firstGoalAt);
+  });
+
   it("后半章没写成 → 只交前半章并如实记一条", async () => {
     const projectDir = await makeBook();
     const writer: WriterClient = {

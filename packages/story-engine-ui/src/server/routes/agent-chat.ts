@@ -623,14 +623,17 @@ async function handleAgentChat(
 
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
-      await runUserAction({
+      const { usage: actionUsage } = await withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
         executeTool: executeUserActionTool,
         sendEvent,
         scrubber: createStreamingScrubber(),
         scrubError: stringifyError,
-      });
+      }));
+      // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
+      console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
+      sendEvent("usage", actionUsage);
       sendEvent("done", {});
       res.end();
       return;

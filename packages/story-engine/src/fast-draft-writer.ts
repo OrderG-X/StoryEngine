@@ -186,6 +186,19 @@ function withSectionContent(context: WriterContextEnvelope, name: string, conten
   };
 }
 
+/**
+ * 把分半写时每一半不同的段（本章目标、章纲）挪到最后：服务商缓存只认开头完全相同的前缀，
+ * 原先它们排在上一章原文、事实、线索这一大片前面，后半章调用从这里起就和前半章不同，后面整片都吃不到缓存
+ * （2026-10-10 实测：内部调用 7.2 万输入只命中 0.3 万）。
+ */
+function withSectionsLast(context: WriterContextEnvelope, names: readonly string[]): WriterContextEnvelope {
+  const moved = names.flatMap((name) => context.sections.filter((section) => section.name === name));
+  return { ...context, sections: [...context.sections.filter((section) => !names.includes(section.name)), ...moved] };
+}
+
+/** 每一半各自不同的段，放在最后（见 withSectionsLast）。 */
+const PER_HALF_SECTIONS = ["chapter_plan", "chapter_goal"] as const;
+
 function withExtraSection(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
   return {
     ...context,
@@ -292,7 +305,7 @@ async function generateBySegments(input: {
     `前半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}）。写到第 ${split} 个要点结束处就停，不要收尾、不要总结、不要提前写后面的要点。`,
     sameDay,
   ].filter(Boolean).join("\n");
-  let firstContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
+  let firstContext = withSectionContent(withSectionsLast(input.context, PER_HALF_SECTIONS), "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
   if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", planSectionForHalf(planSection, "first", beats, split));
   let first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
   let firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
@@ -328,7 +341,7 @@ async function generateBySegments(input: {
     `后半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
     sameDay ? `后半章紧接前半章最后一句的时刻往下写。${sameDay}` : "",
   ].filter(Boolean).join("\n");
-  let secondContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: secondGoal });
+  let secondContext = withSectionContent(withSectionsLast(input.context, PER_HALF_SECTIONS), "chapter_goal", { chapter: input.plan.chapter, goal: secondGoal });
   if (planSection) secondContext = withSectionContent(secondContext, "chapter_plan", planSectionForHalf(planSection, "second", beats, split));
   secondContext = withExtraSection(secondContext, "already_written", {
     instruction: "这是本章已经写好的前半章正文。从它最后一句之后接着写，人物所在位置、手里的东西、时间都从这里接上。",

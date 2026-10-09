@@ -13,6 +13,7 @@ import { Agent } from "@mastra/core/agent";
 
 import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
+import { withSlimModelOutput } from "./tool-model-output.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
 import { readTimelineTool } from "./tools/read-timeline.js";
 import { readFoundationTool } from "./tools/read-foundation.js";
@@ -267,7 +268,8 @@ export async function getStoryAgent(): Promise<Agent> {
     name: "写作总控助手",
     instructions: buildInstructions(),
     model,
-    tools: {
+    // 工具结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果。
+    tools: withSlimModelOutput({
       read_state_overview: readStateOverviewTool,
       read_chapters_overview: readChaptersOverviewTool,
       read_timeline: readTimelineTool,
@@ -300,7 +302,7 @@ export async function getStoryAgent(): Promise<Agent> {
       undo_last_change: undoLastChangeTool,
       prune_snapshots: pruneSnapshotsTool,
       web_search: webSearchTool,
-    },
+    }),
   });
   return cachedAgent;
 }
