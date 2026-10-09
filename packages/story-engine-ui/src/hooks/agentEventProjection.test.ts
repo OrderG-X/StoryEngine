@@ -523,6 +523,15 @@ describe("projectAgentEvent", () => {
     expect(msg.content).toBe("我看了一下。");
   });
 
+  it("usage 事件 → 挂到这条回复上（作者看得见每轮用了多少 token），不进正文", () => {
+    const msg = project([
+      { type: "text-delta", text: "第 8 章写好了。" },
+      { type: "usage", usage: { input: 155000, cachedInput: 106000, output: 9000 } },
+    ]);
+    expect(msg.tokenUsage).toEqual({ input: 155000, cachedInput: 106000, output: 9000 });
+    expect(msg.content).toBe("第 8 章写好了。");
+  });
+
   it("多条 status 事件按序累加（R4）", () => {
     const msg = project([
       { type: "status", text: "第一条说明。" },

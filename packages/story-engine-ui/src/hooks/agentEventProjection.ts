@@ -84,6 +84,7 @@ export type AgentProjectionEvent =
   | { readonly type: "text-delta"; readonly text: string }
   | { readonly type: "reasoning-delta"; readonly text: string }
   | { readonly type: "status"; readonly text: string }
+  | { readonly type: "usage"; readonly usage: { readonly input: number; readonly cachedInput: number; readonly output: number } }
   | { readonly type: "tool-call"; readonly toolCallId: string; readonly toolName: string; readonly startedAt: number }
   | {
       readonly type: "tool-result";
@@ -225,6 +226,8 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
     case "status":
       // R4：服务端状态说明（如历史窗口被裁剪）照实挂上展示，绝不静默吞掉；不进正文——不替模型说话。
       return { ...message, statusNotes: [...(message.statusNotes ?? []), event.text] };
+    case "usage":
+      return { ...message, tokenUsage: event.usage };
     case "tool-call":
       return applyToolCall(message, event);
     case "tool-result": {

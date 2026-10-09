@@ -557,6 +557,30 @@ describe("streamAgentChat", () => {
     expect(statuses).toEqual(["对话历史较长，本次只把最近 12 条发给模型。"]);
   });
 
+  it("routes an SSE usage event to onUsage（这一轮真实 token 用量）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("text-delta", { text: "好了。" }),
+        frame("usage", { agent: {}, pipeline: {}, total: { calls: 10, input: 155000, cachedInput: 106000, output: 9000, reasoning: 3000 } }),
+        frame("done", {}),
+      ]),
+    ));
+    const usages: unknown[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 8 章" }] },
+      {
+        onTextDelta: () => undefined,
+        onUsage: (usage) => usages.push(usage),
+        onToolCall: () => undefined,
+        onToolResult: () => undefined,
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+    expect(usages).toEqual([{ input: 155000, cachedInput: 106000, output: 9000 }]);
+  });
+
   it("routes an SSE error event to onError with retryable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

@@ -90,6 +90,8 @@ export interface ChapterMessage {
   readonly commitPreview?: CommitPreviewCardData;
   /** 服务端状态说明（R4：如「历史窗口被裁剪」）：照实展示给用户、不进助手正文（不替模型说话）。 */
   readonly statusNotes?: readonly string[];
+  /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
+  readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
 }
 
 /** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */

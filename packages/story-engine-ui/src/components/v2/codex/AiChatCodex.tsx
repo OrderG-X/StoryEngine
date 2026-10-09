@@ -942,7 +942,7 @@ function MessageBubbles({
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
       {/* 回复下方的小动作（悬停才显）：复制回复文字 / 撤销到此。 */}
-      {(canCopy || canUndo) ? (
+      {(canCopy || canUndo || message.tokenUsage) ? (
         <div className="se-msg-acts">
           {canCopy ? (
             <button
@@ -967,10 +967,20 @@ function MessageBubbles({
               <IconUndo size={13} />撤销到此
             </button>
           ) : null}
+          {message.tokenUsage && message.tokenUsage.input > 0 ? (
+            <span className="se-msg-usage" title="这一轮用了多少 token（对话 AI 加上写章纲、出稿、核对等内部调用）；命中缓存的部分服务商通常只收一成左右">
+              {formatWan(message.tokenUsage.input + message.tokenUsage.output)} · 缓存 {formatWan(message.tokenUsage.cachedInput)}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
+}
+
+/** 「15.5 万」：作者看得懂的量级。 */
+function formatWan(value: number): string {
+  return value >= 10000 ? `${(value / 10000).toFixed(1)} 万` : String(value);
 }
 
 const adviceCardStyle: React.CSSProperties = {

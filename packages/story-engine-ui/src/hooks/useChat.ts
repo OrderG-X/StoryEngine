@@ -1510,6 +1510,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             onTextDelta: (delta) => project({ type: "text-delta", text: delta }),
             // R4：服务端裁了历史窗口/其它状态说明，照实投影成助手消息前的一条系统提示，不静默吞掉。
             onStatus: (message) => project({ type: "status", text: message }),
+            onUsage: (usage) => project({ type: "usage", usage }),
             onReasoningDelta: (delta) => project({ type: "reasoning-delta", text: delta }),
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;

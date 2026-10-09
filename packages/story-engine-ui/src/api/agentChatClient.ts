@@ -116,6 +116,15 @@ export interface AgentChatHandlers {
   readonly onToolError: (info: AgentToolError) => void;
   readonly onError: (message: string, retryable: boolean) => void;
   readonly onDone: () => void;
+  /** 本轮真实 token 用量（服务端轮末发；服务商没回用量时为 0）。 */
+  readonly onUsage?: (usage: AgentTurnUsage) => void;
+}
+
+/** 一轮对话的 token 用量（合计：对话 AI + 工具内部调用）。 */
+export interface AgentTurnUsage {
+  readonly input: number;
+  readonly cachedInput: number;
+  readonly output: number;
 }
 
 /** 空闲看门狗超时：上游/网络半挂时多久没有任何 SSE 数据就判超时、中止流（M3：治「永久转圈」）。 */
@@ -345,6 +354,12 @@ export async function streamAgentChat(
             parsed.retryable !== false,
           );
           return;
+        case "usage": {
+          const total = parsed.total && typeof parsed.total === "object" ? parsed.total as Record<string, unknown> : undefined;
+          const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+          if (total) handlers.onUsage?.({ input: num(total.input), cachedInput: num(total.cachedInput), output: num(total.output) });
+          return;
+        }
         case "done":
           emitDone();
           return;
