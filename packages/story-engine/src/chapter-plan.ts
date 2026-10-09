@@ -34,6 +34,11 @@ export interface ChapterPlan {
   readonly newInformation: readonly string[];
   /** 开场在哪、什么时候。 */
   readonly scene: { readonly location?: string; readonly time?: string };
+  /**
+   * 故事第几天（第 1 章 = 第 1 天，按天数往后数）。十章验收：「三天前送来的表」过了一周还是三天前、星期一路算错——
+   * 写手只看得到相对说法，算不了日子。有了逐章的天数，提到过去的事就能按天数差算「几天前」。缺省 = 老章纲没有。
+   */
+  readonly storyDay?: number;
   /** 出场人物名。 */
   readonly characters: readonly string[];
   /** 涉及的物件 / 地点 / 文书 / 组织名（翻旧资料的检索词）。 */
@@ -128,12 +133,40 @@ export function normalizeChapterPlan(
     beats,
     newInformation: cleanList(record.newInformation ?? record.newInfo ?? record.reveals, 6),
     scene: { ...(location ? { location } : {}), ...(time ? { time } : {}) },
+    ...(normalizeStoryDay(record.storyDay ?? scene?.storyDay) !== undefined ? { storyDay: normalizeStoryDay(record.storyDay ?? scene?.storyDay)! } : {}),
     characters: cleanNames(record.characters),
     entities: cleanNames(record.entities ?? record.objects ?? record.items),
     threadsAdvanced: cleanThreadSteps(record.threadsAdvanced ?? record.threads),
     avoid: cleanList(record.avoid ?? record.doNotRepeat, 8),
     createdAt: (meta.now ?? new Date()).toISOString(),
   };
+}
+
+/** 故事第几天：正整数（「第12天」「12」都收），其它一律当没给。 */
+function normalizeStoryDay(value: unknown): number | undefined {
+  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
+  const match = /(\d{1,5})/u.exec(text);
+  if (!match) return undefined;
+  const day = Number(match[1]);
+  return Number.isInteger(day) && day >= 1 && day <= 100_000 ? day : undefined;
+}
+
+export interface StoryClockEntry {
+  readonly chapter: number;
+  readonly storyDay: number;
+  readonly time?: string;
+  readonly summary: string;
+}
+
+/** 前面各章章纲里记下的「故事第几天」（近的在后），最多 limit 条。没有天数的老章纲跳过。 */
+export async function readStoryClock(projectDir: string, chapter: number, limit = 12): Promise<readonly StoryClockEntry[]> {
+  const out: StoryClockEntry[] = [];
+  for (let n = chapter - 1; n >= 1 && out.length < limit; n -= 1) {
+    const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
+    if (!plan?.storyDay) continue;
+    out.push({ chapter: n, storyDay: plan.storyDay, ...(plan.scene.time ? { time: plan.scene.time } : {}), summary: plan.summary.slice(0, 60) });
+  }
+  return out.reverse();
 }
 
 export function chapterPlanPath(projectDir: string, chapter: number): string {
@@ -191,8 +224,15 @@ export function collectPlanRetrievalTerms(plan: ChapterPlan): readonly string[] 
   return cleanTerms([plan.scene.location, ...plan.entities, ...plan.characters]);
 }
 
-/** 给写手看的章纲段内容（受保护段 chapter_plan）。 */
-export function buildChapterPlanSection(plan: ChapterPlan): Record<string, unknown> {
+/** 给写手看的章纲段内容（受保护段 chapter_plan）。clock = 前面各章的故事天数（见 readStoryClock）。 */
+export function buildChapterPlanSection(plan: ChapterPlan, clock: readonly StoryClockEntry[] = []): Record<string, unknown> {
+  const storyClock = plan.storyDay
+    ? {
+      today: `本章是故事第 ${plan.storyDay} 天${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
+      earlier: clock.map((entry) => `第 ${entry.chapter} 章：故事第 ${entry.storyDay} 天${entry.time ? `（${entry.time}）` : ""}，${entry.summary}`),
+      rule: "说到过去的事，按天数差算「几天前 / 上周」，不要照抄前文里的「三天前」「昨天」；星期几也要按天数往后推。",
+    }
+    : undefined;
   return {
     instruction: [
       "这是本章章纲。按要点顺序写，每个要点都要真正写到；可以自然补细节、对话和过渡，但不要另起与章纲无关的大事件。",
@@ -207,5 +247,6 @@ export function buildChapterPlanSection(plan: ChapterPlan): Record<string, unkno
     ...(plan.threadsAdvanced.length > 0 ? { threadsAdvanced: plan.threadsAdvanced } : {}),
     ...(plan.avoid.length > 0 ? { avoid: plan.avoid } : {}),
     ...(plan.direction ? { authorDirection: plan.direction } : {}),
+    ...(storyClock ? { storyClock } : {}),
   };
 }

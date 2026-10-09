@@ -79,9 +79,13 @@ async function readPlanTimeline(projectDir: string, chapter: number, plan: Chapt
   const out: string[] = [];
   for (let n = Math.max(1, chapter - 5); n < chapter; n += 1) {
     const previous = await readChapterPlan(projectDir, n).catch(() => undefined);
-    if (previous?.scene.time) out.push(`第 ${n} 章：${previous.scene.time}`);
+    if (previous?.scene.time || previous?.storyDay) {
+      out.push(`第 ${n} 章：${previous.storyDay ? `故事第 ${previous.storyDay} 天，` : ""}${previous.scene.time ?? ""}`);
+    }
   }
-  if (plan?.scene.time) out.push(`第 ${chapter} 章（本章）：${plan.scene.time}`);
+  if (plan?.scene.time || plan?.storyDay) {
+    out.push(`第 ${chapter} 章（本章）：${plan.storyDay ? `故事第 ${plan.storyDay} 天，` : ""}${plan.scene.time ?? ""}`);
+  }
   return out;
 }
 

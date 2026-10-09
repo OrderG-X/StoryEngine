@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatStaleGoalMessage } from "./arc-goal-tracking.js";
-import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, type ChapterPlan } from "./chapter-plan.js";
+import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "./chapter-plan.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
 import { formatStaleHookMessage } from "./hook-tracking.js";
 import { formatStaleThreadMessage } from "./lead-intent-tracking.js";
@@ -235,6 +235,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
   ]);
   const plan = input.chapterPlan;
+  const storyClock = plan?.storyDay ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
   const earlierPassages = plan
     ? await findEarlierPassages({
       projectDir: input.projectDir,
@@ -277,7 +278,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("character_profile", profiles, "stable"),
     section("character_core", cores, "stable"),
     section("chapter_goal", { chapter: input.chapter, goal: input.chapterGoal }, "dynamic"),
-    ...(plan ? [section("chapter_plan", buildChapterPlanSection(plan), "dynamic")] : []),
+    ...(plan ? [section("chapter_plan", buildChapterPlanSection(plan, storyClock), "dynamic")] : []),
     ...(previousChapter ? [section("previous_chapter", previousChapter, "dynamic")] : []),
     ...(previousUncommittedDraft ? [section("previous_uncommitted_draft", previousUncommittedDraft, "dynamic")] : []),
     ...(earlierPassages.length > 0

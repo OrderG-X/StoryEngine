@@ -27,6 +27,7 @@ import {
   type ChapterPlan,
 } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { checkAndRevisePlan } from "./plan-check.js";
 
 export type PlanCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -102,7 +103,9 @@ async function readRecentPlanTimes(projectDir: string, chapter: number): Promise
   const out: string[] = [];
   for (let n = Math.max(1, chapter - RECENT_PLAN_TIMES); n < chapter; n += 1) {
     const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
-    if (plan?.scene.time) out.push(`第 ${n} 章：${plan.scene.time}${plan.scene.location ? `，${plan.scene.location}` : ""}`);
+    if (plan?.scene.time || plan?.storyDay) {
+      out.push(`第 ${n} 章：${plan.storyDay ? `故事第 ${plan.storyDay} 天，` : ""}${plan.scene.time ?? ""}${plan.scene.location ? `，${plan.scene.location}` : ""}`);
+    }
   }
   return out;
 }
@@ -196,12 +199,12 @@ export function buildPlanMessages(
     "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
     "6. 不要揭开「受保护的秘密」，除非作者方向明确要求。",
     "7. 不能和【已确立事实】矛盾；那里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍。",
-    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；涉及年份时，人物当年多大要对得上他现在的年龄。",
+    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；storyDay 写本章是故事第几天（第 1 章是第 1 天；照【前几章的时间】里的天数往后数，同一天不加）；涉及年份时，人物当年多大要对得上他现在的年龄。",
     "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
     "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
     "JSON 字段：",
     "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
-    "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"characters\":[\"出场人物名\"],",
+    "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"storyDay\":故事第几天（整数）,\"characters\":[\"出场人物名\"],",
     "\"entities\":[\"本章涉及的物件/地点/文书名，用前文里的原名\"],\"threadsAdvanced\":[{\"title\":\"推进的线索或目标（照抄下面列表里的说法）\",\"how\":\"怎么推进\"}],",
     "\"avoid\":[\"本章不要重复的东西\"]}",
   ].join("\n");
@@ -311,5 +314,10 @@ export async function resolveChapterPlanForDraft(input: PlanChapterInput): Promi
   }
   const planned = await planChapter({ ...input, ...(direction ? { direction } : {}) });
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
-  return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}`, reused: false };
+  // 动笔前审校一遍：按章纲自己写了什么去翻旧事实，对不上就当场改章纲（第十轮验收：近一半矛盾出在章纲）。
+  const checked = await checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.callModel });
+  const reviewNote = checked.revised
+    ? `（章纲审校改了 ${checked.issues.length} 处与前文对不上的地方：${checked.issues.slice(0, 2).join("；")}${checked.issues.length > 2 ? "等" : ""}）`
+    : checked.error ? `（章纲审校这次没跑成：${checked.error}）` : "";
+  return { plan: checked.plan, note: `本章章纲：${checked.plan.summary}${reviewNote}`, reused: false };
 }

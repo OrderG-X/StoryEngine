@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  readStoryClock,
   buildChapterPlanSection,
   chapterPlanPath,
   collectPlanEntityTerms,
@@ -160,3 +161,29 @@ describe("buildWriterContext 带章纲", () => {
     expect(names).not.toContain("earlier_passages");
   });
 });
+
+describe("故事日历（十章验收：「三天前」一直是三天前、星期算错）", () => {
+  it("storyDay 宽进：数字、「第12天」都收，非正数/乱写不收", () => {
+    const base = { summary: "s", beats: ["b"] };
+    expect(normalizeChapterPlan({ ...base, storyDay: 12 }, { chapter: 3 })?.storyDay).toBe(12);
+    expect(normalizeChapterPlan({ ...base, storyDay: "第12天" }, { chapter: 3 })?.storyDay).toBe(12);
+    expect(normalizeChapterPlan({ ...base, scene: { storyDay: "5" } }, { chapter: 3 })?.storyDay).toBe(5);
+    expect(normalizeChapterPlan({ ...base, storyDay: 0 }, { chapter: 3 })?.storyDay).toBeUndefined();
+    expect(normalizeChapterPlan({ ...base, storyDay: "过几天" }, { chapter: 3 })?.storyDay).toBeUndefined();
+  });
+
+  it("读前面各章的天数（跳过没天数的老章纲），写手段里给出今天第几天和前文天数", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "story-engine-story-clock-"));
+    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "怀表送到铺子", beats: ["b"], storyDay: 1, scene: { time: "周一上午" } }, { chapter: 1, now: NOW })!);
+    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "没天数的老章纲", beats: ["b"] }, { chapter: 2, now: NOW })!);
+    await writeChapterPlan(dir, normalizeChapterPlan({ summary: "去档案馆", beats: ["b"], storyDay: 4 }, { chapter: 3, now: NOW })!);
+    const clock = await readStoryClock(dir, 4);
+    expect(clock.map((entry) => [entry.chapter, entry.storyDay])).toEqual([[1, 1], [3, 4]]);
+    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 9 }, { chapter: 4, now: NOW })!;
+    const section = buildChapterPlanSection(plan, clock) as { storyClock: { today: string; earlier: string[]; rule: string } };
+    expect(section.storyClock.today).toBe("本章是故事第 9 天");
+    expect(section.storyClock.earlier[0]).toBe("第 1 章：故事第 1 天（周一上午），怀表送到铺子");
+    expect(section.storyClock.rule).toContain("按天数差算");
+  });
+});
+

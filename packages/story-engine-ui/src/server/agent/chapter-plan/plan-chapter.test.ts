@@ -82,12 +82,14 @@ describe("resolveChapterPlanForDraft", () => {
     const callModel = vi.fn(async () => GOOD_PLAN);
     const first = await resolveChapterPlanForDraft({ projectDir, chapter: 2, callModel });
     expect(first.reused).toBe(false);
+    // 新拟一份 = 拟章纲 + 审校各一次调用；沿用不再调。
+    expect(callModel).toHaveBeenCalledTimes(2);
     const again = await resolveChapterPlanForDraft({ projectDir, chapter: 2, callModel });
     expect(again.reused).toBe(true);
-    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(callModel).toHaveBeenCalledTimes(2);
     const redirected = await resolveChapterPlanForDraft({ projectDir, chapter: 2, direction: "改成去银行", callModel });
     expect(redirected.reused).toBe(false);
-    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(callModel).toHaveBeenCalledTimes(4);
     expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
   });
 
