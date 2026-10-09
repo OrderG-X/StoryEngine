@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readFactLedger } from "./fact-ledger.js";
-import { buildReconcileMessages, extractAndReconcileFacts, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
+import { buildReconcileMessages, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
 
 const DRAFT = "林舟骑车到了南门。菜场还在，门口摆着几摊卖豆腐的。他想起周婶那座钟昨天已经修好送回去了。";
 
@@ -114,5 +114,15 @@ describe("extractAndReconcileFacts", () => {
     expect(callModel).toHaveBeenCalledTimes(2);
     expect(result.ok).toBe(false);
     expect((await readFactLedger(dir)).facts).toHaveLength(3);
+  });
+});
+
+describe("factSwapsKinshipForName（第十九轮「爸的老同事」记成祖父的老同事）", () => {
+  it("原句用称呼、事实换成人名 → 不收；称呼和名字都在、或原句就有名字的照收", () => {
+    const names = ["林舟", "林德昌", "林溪"];
+    expect(factSwapsKinshipForName({ text: "吴德发是林德昌的老同事", quote: "他是我爸的老同事" }, names)).toBe(true);
+    expect(factSwapsKinshipForName({ text: "吴德发是林舟父亲的老同事", quote: "他是我爸的老同事" }, names)).toBe(false);
+    expect(factSwapsKinshipForName({ text: "林溪是林舟的妹妹", quote: "妹妹林溪打来电话" }, names)).toBe(false);
+    expect(factSwapsKinshipForName({ text: "林舟把表放在柜上", quote: "他把表放在柜上" }, names)).toBe(false);
   });
 });

@@ -32,7 +32,7 @@ describe("runDraftQualityPipeline", () => {
     const { projectDir, draftPath } = await makeBook(draft);
     const continueCallModel = vi.fn(async () => "菜场还在，门口摆着几摊卖豆腐的，他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。");
     const checkCallModel = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", conflict: "第4章：菜场十来年前就拆了", fix: "改成原址商场" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ issues: [{ type: "contradiction", quote: "菜场还在", evidence: "南门菜场十来年前就拆了", conflict: "第4章：菜场十来年前就拆了", fix: "改成原址商场" }] }))
       .mockResolvedValueOnce(JSON.stringify({ issues: [] }));
     const repairCallModel = vi.fn(async () => JSON.stringify({
       fixes: [{ id: "S1", text: "菜场早没了，原址立着一排商场，他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。" }],

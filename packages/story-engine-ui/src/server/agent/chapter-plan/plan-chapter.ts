@@ -214,7 +214,7 @@ export function buildPlanMessages(
     "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
     "6. 不要揭开「受保护的秘密」，除非作者方向明确要求。",
     "7. 不能和【已确立事实】矛盾；那里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍。",
-    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；storyDay 写本章是故事第几天（第 1 章是第 1 天；照【前几章的时间】里的天数往后数，同一天不加）；涉及年份时，人物当年多大要对得上他现在的年龄。",
+    "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；天数由程序往后加，你不用数第几天）；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
     "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
     "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
     "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
@@ -222,7 +222,7 @@ export function buildPlanMessages(
     "12. 每个要点写清谁、在哪、做了什么、局面怎么变；牵涉到的关键物件（文书、信物、钥匙、证据）写明此刻在谁手里或放在哪——照【已确立事实】和上一章结尾抄，不要另编；不写对白原话；不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）。每个要点不超过 120 字。",
     "JSON 字段：",
     "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事（人、地点、关键物件在谁手里）\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
-    "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"storyDay\":故事第几天（整数）,\"characters\":[\"出场人物名\"],",
+    "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"dayOffset\":离上一章结尾过了几天（整数，同一天 0）,\"characters\":[\"出场人物名\"],",
     "\"entities\":[\"本章涉及的物件/地点/文书名，用前文里的原名\"],\"threadsAdvanced\":[{\"title\":\"推进的线索或目标（照抄下面列表里的说法）\",\"how\":\"怎么推进\"}],",
     "\"avoid\":[\"本章不要重复的东西\"]}",
   ].join("\n");
@@ -272,16 +272,37 @@ const NEXT_DAY = /第二天|第二日|次日|翌日|隔天|隔日|转天/u;
 const DAYS_LATER = /([一两二三四五六七八九十\d]+)\s*天(?:以)?后/u;
 const CJK_DIGITS: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 
-/**
- * 章纲没给天数时按上一章的天数和开场时间补上（第十七轮第 10 章章纲没写 storyDay，日历停住不走）：
- * 写了「第二天 / 次日」就加一天，写了「三天后」加三天，否则当同一天。第 1 章由引擎记为第 1 天。
- */
-export function inferMissingStoryDay(plan: ChapterPlan, lastDay: number | undefined): ChapterPlan {
-  if (plan.storyDay !== undefined || lastDay === undefined) return plan;
-  const time = plan.scene.time ?? "";
+const SAME_DAY = /当天|当日|当晚|同一天|同日|紧接上一?章(?:结尾)?/u;
+
+/** 模型给的「离上一章过了几天」：数字、「第二天」「同一天」都收；给不出就 undefined。 */
+export function readDayOffset(raw: unknown): number | undefined {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>).dayOffset : undefined;
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 && value <= 365 ? value : undefined;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const digits = /\d+/u.exec(value);
+  if (digits) return Math.min(Number(digits[0]), 365);
+  return stepFromTimeText(value);
+}
+
+function stepFromTimeText(time: string): number | undefined {
+  if (NEXT_DAY.test(time)) return 1;
   const later = DAYS_LATER.exec(time);
-  const step = later ? (CJK_DIGITS[later[1]] ?? (Number(later[1]) || 0)) : NEXT_DAY.test(time) ? 1 : 0;
-  return { ...plan, storyDay: lastDay + step };
+  if (later) return CJK_DIGITS[later[1]] ?? (Number(later[1]) || undefined);
+  if (SAME_DAY.test(time)) return 0;
+  return undefined;
+}
+
+/**
+ * 故事第几天由程序按上一章往后加，不让模型数（第十九轮：章纲 storyDay 第 4、7 章各少记一天、第 5 章开场写「第 4 天」
+ * 天数却记 5——日历跟着错，写手把前天标成「昨天」）。先用模型给的 dayOffset（离上一章结尾过了几天），没给就看开场时间
+ * 里的「第二天 / 三天后 / 当天」；都没有才用模型的 storyDay，且不许比上一章早；全没有当同一天。第 1 章由引擎记为第 1 天。
+ */
+export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefined, lastDay: number | undefined): ChapterPlan {
+  if (lastDay === undefined) return plan;
+  const step = dayOffset ?? stepFromTimeText(plan.scene.time ?? "");
+  if (step !== undefined) return { ...plan, storyDay: lastDay + step };
+  if (plan.storyDay === undefined || plan.storyDay < lastDay) return { ...plan, storyDay: lastDay };
+  return plan;
 }
 
 /** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
@@ -293,7 +314,8 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
     // 去掉上一章原文、只留结尾几百字与事实/线索，输入变了才有机会过。
     const messages = attempt === 0 ? buildPlanMessages(input.chapter, materials, input.direction) : buildPlanMessages(input.chapter, slimMaterials(materials), input.direction);
     try {
-      const plan = normalizeChapterPlan(parsePlanJson(await input.callModel(messages)), {
+      const raw = parsePlanJson(await input.callModel(messages));
+      const plan = normalizeChapterPlan(raw, {
         chapter: input.chapter,
         source: "model",
         ...(input.direction?.trim() ? { direction: input.direction } : {}),
@@ -303,7 +325,7 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
         continue;
       }
       const lastDay = (await readStoryClock(input.projectDir, input.chapter).catch(() => [])).at(-1)?.storyDay;
-      const dated = inferMissingStoryDay(plan, lastDay);
+      const dated = reconcileStoryDay(plan, readDayOffset(raw), lastDay);
       // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
       const withAvoid = materials.recurringPhrases.length > 0
         ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }

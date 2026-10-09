@@ -115,8 +115,9 @@ function cleanThreadSteps(value: unknown): readonly ChapterPlanThreadStep[] {
  * 「故事第 N 天」只是记日子的内部编号，不该进要点和开场时间（第十八轮：章纲要点写「故事第 7 天上午」，
  * 正文照抄出「受理回执日期栏印着第十一天」「今天是第几天你自己算」）。天数只留在 storyDay 字段。
  */
-const STORY_DAY_NUMBERING = /[（(]?\s*故事第\s*[\d一二三四五六七八九十百]+\s*天\s*[）)]?[，,、]?\s*/gu;
-const STORY_DAY_IN_TEXT = /故事第\s*(\d+)\s*天/u;
+// 阿拉伯数字的「第2天」也是编号（第十九轮章纲写「第3天上午」）；汉字的「第二天」是正常说法，不动。
+const STORY_DAY_NUMBERING = /[（(]?\s*(?:故事第\s*[\d一二三四五六七八九十百]+|第\s*\d+)\s*天\s*[）)]?[，,、]?\s*/gu;
+const STORY_DAY_IN_TEXT = /(?:故事)?第\s*(\d+)\s*天/u;
 
 function stripStoryDayNumbering(text: string): string {
   return text.replace(STORY_DAY_NUMBERING, "").replace(/[（(]\s*[）)]/gu, "").trim();

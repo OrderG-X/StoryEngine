@@ -127,15 +127,23 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
   });
 });
 
-describe("inferMissingStoryDay（第十七轮第 10 章章纲没写天数，日历停住）", () => {
-  it("按开场时间补：第二天 +1、三天后 +3、否则同一天；给了天数的不动", async () => {
-    const { inferMissingStoryDay } = await import("./plan-chapter.js");
-    const { normalizeChapterPlan } = await import("@actalk/story-engine");
+describe("reconcileStoryDay：天数由程序按上一章往后加（第十九轮模型数错第 4、7 章）", () => {
+  it("dayOffset 优先；没有就看开场时间；都没有用模型天数但不许倒退；全没有当同一天", async () => {
+    const { reconcileStoryDay, readDayOffset } = await import("./plan-chapter.js");
     const make = (time?: string, storyDay?: number) => normalizeChapterPlan({ summary: "s", beats: ["b"], ...(time ? { scene: { time } } : {}), ...(storyDay ? { storyDay } : {}) }, { chapter: 10 })!;
-    expect(inferMissingStoryDay(make("第二天上午"), 12).storyDay).toBe(13);
-    expect(inferMissingStoryDay(make("三天后傍晚"), 12).storyDay).toBe(15);
-    expect(inferMissingStoryDay(make("当天傍晚"), 12).storyDay).toBe(12);
-    expect(inferMissingStoryDay(make("次日", 20), 12).storyDay).toBe(20);
-    expect(inferMissingStoryDay(make("次日"), undefined).storyDay).toBeUndefined();
+    expect(reconcileStoryDay(make("上午", 9), 1, 12).storyDay).toBe(13);
+    expect(reconcileStoryDay(make("紧接第5章次日", 6), undefined, 6).storyDay).toBe(7);
+    expect(reconcileStoryDay(make("三天后傍晚"), undefined, 12).storyDay).toBe(15);
+    expect(reconcileStoryDay(make("紧接上一章结尾，傍晚", 5), undefined, 4).storyDay).toBe(4);
+    expect(reconcileStoryDay(make("清晨", 20), undefined, 12).storyDay).toBe(20);
+    expect(reconcileStoryDay(make("清晨", 3), undefined, 12).storyDay).toBe(12);
+    expect(reconcileStoryDay(make("清晨"), undefined, 12).storyDay).toBe(12);
+    expect(reconcileStoryDay(make("次日"), undefined, undefined).storyDay).toBeUndefined();
+    expect(readDayOffset({ dayOffset: 2 })).toBe(2);
+    expect(readDayOffset({ dayOffset: "1天" })).toBe(1);
+    expect(readDayOffset({ dayOffset: "第二天" })).toBe(1);
+    expect(readDayOffset({ dayOffset: "同一天" })).toBe(0);
+    expect(readDayOffset({ dayOffset: "" })).toBeUndefined();
+    expect(readDayOffset({})).toBeUndefined();
   });
 });

@@ -201,6 +201,10 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(plan.beats).toEqual(["上午，林舟锁好铺子去房管所", "下午回铺子"]);
     expect(plan.scene.time).toBe("第二天上午");
     expect(plan.storyDay).toBe(11);
+    const digits = normalizeChapterPlan({ summary: "s", beats: ["第3天上午，林舟开门", "第二天一早他又去了"], scene: { time: "第3天上午" } }, { chapter: 3, now: NOW })!;
+    expect(digits.beats).toEqual(["上午，林舟开门", "第二天一早他又去了"]);
+    expect(digits.scene.time).toBe("上午");
+    expect(digits.storyDay).toBe(3);
   });
 
   it("describeStoryDay：本章第几天、星期几（给记事实环节换掉「下周三」）", async () => {

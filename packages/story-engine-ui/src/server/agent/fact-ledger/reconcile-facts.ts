@@ -64,6 +64,8 @@ export function buildReconcileMessages(
   const system = [
     "你是中文小说的『硬事实记录员』。读这章正文，对照【已记下的旧事实】，做三件事：",
     // 第十七轮：「下周三」原样入账，过几章没人知道指哪天，评估日悄悄消失、后面还被说成「提前」。
+    // 第十九轮：「爸的老同事」被记成「林德昌（祖父）的老同事」，下一章章纲照着让林溪自称祖父的女儿。
+    "正文用称呼（爸、妈、爷爷、哥）指人时，事实里照写成「林舟的父亲」这类关系说法，不要自己换成人名（容易把父亲和祖父弄混）。",
     "事实里提到日子，一律按【本章日子】换成「故事第几天」或星期几写（「下周三」写成「故事第 N 天（周三）」），不要写明天、后天、下周、前天这类相对说法。",
     "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。quote 逐字抄本章里写到这件事的原句；正文没明写、要靠推断才得出的不要记（由「换了日子」推出「改过期」、把「交还」说成「卖给」）。",
     "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
@@ -123,6 +125,17 @@ function hanBigrams(text: string): readonly string[] {
     for (let i = 0; i + 1 < chars.length; i += 1) out.push(chars[i] + chars[i + 1]);
   }
   return out;
+}
+
+const KINSHIP_TERM = /爸|妈|爹|娘|父|母|爷|奶|外公|外婆|祖|哥|姐|弟|妹|叔|伯|姑|舅|姨|老爷子|老太太/u;
+
+/**
+ * 原句里用称呼指人、事实却换成了人名（不含任何称呼）→ 记录员自己把称呼对到了人，辈分常对错，不入账。
+ * 「林舟的妹妹林溪」这类称呼和名字都在的照收。
+ */
+export function factSwapsKinshipForName(fact: { readonly text: string; readonly quote: string }, knownNames: readonly string[]): boolean {
+  if (!fact.quote || !KINSHIP_TERM.test(fact.quote) || KINSHIP_TERM.test(fact.text)) return false;
+  return knownNames.some((name) => name.length >= 2 && fact.text.includes(name) && !fact.quote.includes(name));
 }
 
 /** 新事实引的原句在正文里找得到：逐字命中，或八成两字片段都在正文里（模型抄原句常改一两个字、多带几个字）。 */
@@ -187,7 +200,8 @@ export async function extractAndReconcileFacts(input: {
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
   const changes = parsed.changes.filter((change) => byRef.has(change.ref) && quoted(change.quote));
   // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
-  const supportedFacts = parsed.facts.filter((fact) => !fact.quote || factQuoteIsSupported(fact.quote, input.draftText));
+  const supportedFacts = parsed.facts.filter((fact) => (!fact.quote || factQuoteIsSupported(fact.quote, input.draftText))
+    && !factSwapsKinshipForName(fact, knownNames));
   if (supportedFacts.length < parsed.facts.length) {
     console.info(`[fact-ledger] 第${input.chapter}章 ${parsed.facts.length - supportedFacts.length} 条事实引的原句在正文里找不到，没记`);
   }
