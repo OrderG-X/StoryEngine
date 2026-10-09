@@ -28,7 +28,38 @@ export interface StreamAgentChatRequest {
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
-  | { readonly toolName: "prune_snapshots"; readonly keep?: number };
+  | { readonly toolName: "prune_snapshots"; readonly keep?: number }
+  | { readonly toolName: "check_continuity"; readonly chapter: number };
+
+/** 核账结果里的一条：本章原句 ↔ 前文原句。 */
+export interface ContinuityCheckItem {
+  readonly quote: string;
+  readonly earlierQuote: string;
+  readonly earlierChapter: number;
+  readonly reason: string;
+}
+
+/** check_continuity 结果（投影到消息上渲染「核账」卡）。 */
+export interface ContinuityCheckView {
+  readonly chapter: number;
+  readonly sure: readonly ContinuityCheckItem[];
+  readonly maybe: readonly ContinuityCheckItem[];
+}
+
+function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.quote !== "string" || typeof record.earlierQuote !== "string") return [];
+    return [{
+      quote: record.quote,
+      earlierQuote: record.earlierQuote,
+      earlierChapter: typeof record.earlierChapter === "number" ? record.earlierChapter : 0,
+      reason: typeof record.reason === "string" ? record.reason : "",
+    }];
+  });
+}
 
 export interface AgentToolResult {
   readonly toolCallId?: string;
@@ -69,6 +100,8 @@ export interface AgentToolResult {
   readonly commitReport?: unknown;
   /** quality_check 专属：分层质检报告（RefinedQualityReport 子集）。前端据此渲染「质检」明细卡。 */
   readonly qualityReport?: QualityCardReport;
+  /** check_continuity 专属：核账结果。 */
+  readonly continuityCheck?: ContinuityCheckView;
   /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。 */
   readonly nextStepPrompt?: {
     readonly question: string;
@@ -282,6 +315,10 @@ export async function streamAgentChat(
             // commit_apply 专属：入库成功且带 report（整份 CommitReport，不在轻量白名单里）→ 透传，前端渲染「入库」delta 卡。
             ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
               ? { commitReport: output.report }
+              : {}),
+            // check_continuity 专属：核账结果（确定 / 可能两档，两边原句）→ 透传，前端渲染「核账」卡。
+            ...(parsed.toolName === "check_continuity" && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
+              ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe) } }
               : {}),
             // quality_check 专属：分层报告 refined（blocking/soft/reference 不在轻量白名单里）→ 透传，前端渲染「质检」明细卡。
             ...(parsed.toolName === "quality_check" && isRecord(output.refined)

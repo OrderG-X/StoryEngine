@@ -10,7 +10,7 @@
  * 纯前端、确定性渲染；样式在 codex.css，作用域 .codex-app。
  */
 import { useState } from "react";
-import { COMMIT_PREVIEW_BUTTON_INTENT, QUALITY_BUTTON_INTENT, REVIEW_BUTTON_INTENT } from "../../../utils/chapterActionIntents.js";
+import { CHECK_CONTINUITY_BUTTON_INTENT, COMMIT_PREVIEW_BUTTON_INTENT, QUALITY_BUTTON_INTENT, REVIEW_BUTTON_INTENT } from "../../../utils/chapterActionIntents.js";
 
 export interface CapabilityAction {
   readonly key: string;
@@ -21,7 +21,7 @@ export interface CapabilityAction {
 
 /** 收起时常驻露脸的高频能力（写作/补全/整理 各露一个代表，一眼看见最常用的）。 */
 export const QUICK_ACTIONS: readonly CapabilityAction[] = [
-  { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
+  { key: "continuity", label: "核账", intent: CHECK_CONTINUITY_BUTTON_INTENT },
   { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
   { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
 ];
@@ -35,6 +35,7 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   {
     title: "写作",
     actions: [
+      { key: "continuity", label: "核账", intent: CHECK_CONTINUITY_BUTTON_INTENT },
       { key: "review", label: "内容审阅", intent: REVIEW_BUTTON_INTENT },
       { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
       { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },

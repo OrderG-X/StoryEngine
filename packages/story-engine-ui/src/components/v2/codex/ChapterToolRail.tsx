@@ -8,7 +8,7 @@
  * 纯前端、确定性渲染（不依赖 agent 是否调过 suggest_next_steps）；样式在 codex.css，作用域 .codex-app。
  */
 import type { ChapterFlowStatus } from "../../../types.js";
-import { COMMIT_PREVIEW_BUTTON_INTENT, DRAFT_BUTTON_INTENT, QUALITY_BUTTON_INTENT, REVIEW_BUTTON_INTENT } from "../../../utils/chapterActionIntents.js";
+import { COMMIT_PREVIEW_BUTTON_INTENT, DRAFT_BUTTON_INTENT, REVIEW_BUTTON_INTENT, CHECK_CONTINUITY_BUTTON_INTENT } from "../../../utils/chapterActionIntents.js";
 
 export interface ChapterToolAction {
   readonly key: string;
@@ -23,11 +23,12 @@ export const BEFORE_DRAFT: readonly ChapterToolAction[] = [
 ];
 
 export const HAS_DRAFT: readonly ChapterToolAction[] = [
+  // 核账＝写完一章的头一步：拿这一章对前文原文找对不上的地方（作者自己写的章也一样）。确定性直达，不经模型。
+  { key: "continuity", label: "核账", intent: CHECK_CONTINUITY_BUTTON_INTENT },
   { key: "review", label: "内容审阅", intent: REVIEW_BUTTON_INTENT },
   // 措辞要落在 check_ai_flavor 守卫上、且不是问句：旧「查…有没有…」会被当提问旁路掉、点了没兜底。
   // 新旧术语双写：机器腔 = AI 味（honesty 守卫新旧词都认）。
   { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
-  { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
   // 定稿按钮 = 定稿流程入口，确定性走预览（commit_preview）；预览卡再引导「确认定稿」走 commit_apply。
   { key: "commit", label: "定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
 ];

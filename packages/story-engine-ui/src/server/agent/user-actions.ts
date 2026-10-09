@@ -10,13 +10,15 @@ import type { RequestContext } from "@mastra/core/di";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots"] as const;
+export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity"] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
-  | { readonly toolName: "prune_snapshots"; readonly keep?: number };
+  | { readonly toolName: "prune_snapshots"; readonly keep?: number }
+  /** 「核账」：只读，拿这一章对前文原文找对不上的地方。 */
+  | { readonly toolName: "check_continuity"; readonly chapter: number };
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -44,6 +46,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
+  if (toolName === "check_continuity") return { kind: "action", action: { toolName: "check_continuity", chapter } };
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
     : undefined;
@@ -114,6 +117,10 @@ export async function runUserAction(args: {
     await runPruneAction({ ...args, action });
     return;
   }
+  if (action.toolName === "check_continuity") {
+    await runCheckContinuityAction({ ...args, action });
+    return;
+  }
   const stamp = Date.now();
   const toolCallId = `user-action-${action.toolName}-${stamp}`;
   const emitText = (text: string): void => {
@@ -159,6 +166,61 @@ export async function runUserAction(args: {
     toolCallId: nextCallId,
     toolName: "suggest_next_steps",
     output: { ok: true, question: nextSteps.question, choices: nextSteps.choices },
+  });
+}
+
+interface CheckContinuityLikeOutput {
+  readonly ok?: unknown;
+  readonly summary?: unknown;
+  readonly sure?: readonly unknown[];
+  readonly maybe?: readonly unknown[];
+}
+
+/** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
+async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "check_continuity" }>;
+}): Promise<void> {
+  const { action } = args;
+  const stamp = Date.now();
+  const toolCallId = `user-action-check_continuity-${stamp}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter: action.chapter } });
+  let output: unknown;
+  try {
+    output = await args.executeTool("check_continuity", { chapter: action.chapter }, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "check_continuity", error: message, retryable: true });
+    emitText(`第 ${action.chapter} 章核账没跑成：${message}。可以再点一次「核账」。`);
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
+  const result = output as CheckContinuityLikeOutput | undefined;
+  emitText(typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : `第 ${action.chapter} 章核账做完了。`);
+  const rest = args.scrubber.flush();
+  if (rest) args.sendEvent("text-delta", { text: rest });
+  const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
+  const choices: NextStepChoice[] = sureCount > 0
+    ? [
+      { label: `改掉确定的 ${sureCount} 处`, intent: `按核账结果把第 ${action.chapter} 章确定对不上的那几处改掉，别的不动`, recommended: true },
+      { label: "我自己改", intent: "我自己改，先放着" },
+      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动` },
+    ]
+    : [
+      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动`, recommended: true },
+      { label: "写下一章", intent: "继续写下一章的正文" },
+    ];
+  const nextCallId = `user-action-next-${stamp}`;
+  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
+  args.sendEvent("tool-result", {
+    toolCallId: nextCallId,
+    toolName: "suggest_next_steps",
+    output: { ok: true, question: sureCount > 0 ? "核账做完了，这几处怎么处理？" : "核账做完了，接下来？", choices },
   });
 }
 

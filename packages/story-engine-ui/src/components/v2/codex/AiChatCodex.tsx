@@ -34,6 +34,7 @@ import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
+import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
@@ -771,6 +772,7 @@ function MessageBubbles({
     || Boolean(message.staleThreadWarnings?.length)
     || Boolean(message.commitPreview)
     || Boolean(message.statusNotes?.length)
+    || Boolean(message.continuityCheck)
     || Boolean(message.thinking?.trim());
   // 流式开始前的空占位助手气泡不渲染。
   if (!hasAnything) return null;
@@ -909,6 +911,11 @@ function MessageBubbles({
           report={message.draftReview}
           onRevise={onSendMessage ? (issue) => onSendMessage(buildReviseIntent(issue)) : undefined}
         />
+      ) : null}
+
+      {/* 核账卡：本章原句 ↔ 前文原句，确定的列出、可能的收起；「改这处」给 agent 发只改这一处的意图。 */}
+      {message.continuityCheck ? (
+        <ContinuityCheckCard check={message.continuityCheck} onRevise={onSendMessage} />
       ) : null}
 
       {/* 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。 */}

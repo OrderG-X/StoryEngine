@@ -68,6 +68,8 @@ export interface AgentToolResultOutput {
   readonly commitReport?: ChapterMessage["commitReport"];
   /** quality_check 专属：分层质检报告（agentChatClient 透传）。投影时挂到该消息→渲染「质检」明细卡。 */
   readonly qualityReport?: ChapterMessage["qualityReport"];
+  /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
+  readonly continuityCheck?: ChapterMessage["continuityCheck"];
   /** commit_preview 专属：人物名一致性提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「人物名一致性」提醒卡。 */
   readonly nameConsistencyWarnings?: ChapterMessage["nameConsistencyWarnings"];
   /** commit_preview 专属：伏笔/线索待收口提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「伏笔/线索待收口」提醒卡。 */
@@ -148,6 +150,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   revise_draft: { stepLabel: "修改工作稿", card: null },
   // 审校簇
   quality_check: { stepLabel: "硬伤检查", card: null },
+  check_continuity: { stepLabel: "核账", card: null },
   ai_review: { stepLabel: "内容审阅", card: null },
   check_ai_flavor: { stepLabel: "检查机器腔", card: null },
   // 入库簇
@@ -180,6 +183,7 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "read_foundation",
   "generate_chapter_steering",
   "quality_check",
+  "check_continuity",
   "ai_review",
   "commit_preview",
 ]);
@@ -286,6 +290,9 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。
       if (event.toolName === "quality_check" && event.output?.qualityReport) {
         return { ...withEffects, qualityReport: event.output.qualityReport };
+      }
+      if (event.toolName === "check_continuity" && event.output?.continuityCheck) {
+        return { ...withEffects, continuityCheck: event.output.continuityCheck };
       }
       // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
       //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。

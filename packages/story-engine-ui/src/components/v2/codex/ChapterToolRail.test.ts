@@ -8,8 +8,8 @@ describe("railActionsForFlow B1 本章工具条按阶段确定性派生", () => 
     expect(railActionsForFlow("steering_ready").map((a) => a.key)).toEqual(["draft", "steer"]);
   });
 
-  it("有草稿 → 审稿 / 去AI味 / 质检 / 入库（含此前对用户隐形的去AI味）", () => {
-    expect(railActionsForFlow("draft_ready").map((a) => a.key)).toEqual(["review", "deai", "quality", "commit"]);
+  it("有草稿 → 核账 / 审稿 / 去AI味 / 定稿（2026-10-10：核账排第一，替下老的硬伤检查）", () => {
+    expect(railActionsForFlow("draft_ready").map((a) => a.key)).toEqual(["continuity", "review", "deai", "commit"]);
     expect(railActionsForFlow("quality_checked").map((a) => a.key)).toContain("deai");
     expect(railActionsForFlow("waiting_commit_confirmation").map((a) => a.key)).toContain("commit");
   });

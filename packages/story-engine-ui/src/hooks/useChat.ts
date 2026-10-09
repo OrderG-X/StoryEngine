@@ -2040,6 +2040,16 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 只读(审稿/质检)与写工作稿(生成草稿)都与 agent 工具共享同一份磁盘状态、无内存票据接缝；
       // 入库(commit_preview/apply 涉及服务端票据)与开书资料(开放式)仍走 agent。
       const deterministicAction = matchDeterministicChapterAction(text);
+      if (deterministicAction === "check_continuity") {
+        // 核账：结构化动作直达服务端（只读），结果照常进对话、渲染「核账」卡；不经模型判断要不要调。
+        const chapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
+        if (typeof chapterNumber !== "number") {
+          appendMessage({ id: `assistant-check-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「核账」。" });
+          return;
+        }
+        await runAgentDispatch(text, conversation, { toolName: "check_continuity", chapter: chapterNumber });
+        return;
+      }
       if (deterministicAction) {
         if (deterministicAction === "ai_review") await handleDraftAIReview();
         else if (deterministicAction === "quality_check") await handleQualityCheck();

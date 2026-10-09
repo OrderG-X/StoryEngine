@@ -14,6 +14,7 @@ import { Agent } from "@mastra/core/agent";
 import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
 import { withSlimModelOutput } from "./tool-model-output.js";
+import { checkContinuityTool } from "./tools/check-continuity.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
 import { readTimelineTool } from "./tools/read-timeline.js";
 import { readFoundationTool } from "./tools/read-foundation.js";
@@ -66,6 +67,7 @@ export function buildInstructions(): string {
     "",
     "你现在可以直接调用的工具：",
     "- read_state_overview：读取当前项目状态总览（进度、角色、世界、伏笔线索等）。",
+    "- check_continuity：核账——拿这一章去对前文原文，找前后对不上的地方（东西在哪、人物行踪身份、时间天数、谁该知道什么），分「确定 / 可能」两档、两边都附原句。作者说「核账 / 有没有吃书 / 前后对不对」时用；只读不改。",
     "- read_chapters_overview：列出全书每章状态（空/有工作稿未定稿/已定稿）。需要全书进度地图——判断下一章是第几、某章写到哪、用户说『继续』时本章/相邻章什么状态——时调用，别凭印象猜。",
     "- read_timeline：查询某章或某区间的 timeline 事件（含 summary、mainEvent、参与角色等）。想知道早期某章/某段发生了啥——如第 2 章的伏笔、某角色第一次出场的状态——调用本工具精确查询，不依赖状态总览里只能看到近章的窗口。",
     "- read_foundation：按需读取某一类资料片段（角色/资产/地点/资料完整度报告 gap_report；角色可带 id 读单个）。",
@@ -288,6 +290,7 @@ export async function getStoryAgent(): Promise<Agent> {
       generate_draft: generateDraftTool,
       revise_draft: reviseDraftTool,
       quality_check: qualityCheckTool,
+      check_continuity: checkContinuityTool,
       ai_review: aiReviewTool,
       check_ai_flavor: checkAiFlavorTool,
       commit_preview: commitPreviewTool,

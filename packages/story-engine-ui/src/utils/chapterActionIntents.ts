@@ -26,6 +26,8 @@ export const DRAFT_BUTTON_INTENT = "写这一章的正文";
 // commit_apply 才取得到）。**不**在前端确定性拦截——R4 曾用 REST 预览导致票据接缝：第一次确认定稿找不到 commit_preview
 // 票据而失败（R5 P1-4）。改回让 agent 走工具，保票据连续。旧 intent「把这一章正式入库」会让守卫误期望 commit_apply。
 export const COMMIT_PREVIEW_BUTTON_INTENT = "预览这一章的定稿改动";
+/** 「核账」按钮：拿这一章对前文原文找对不上的地方（只读、确定性直达，不经模型猜）。作者直接打「核账」也走这条。 */
+export const CHECK_CONTINUITY_BUTTON_INTENT = "核账：拿这一章对一遍前文，看有没有前后对不上的地方";
 /** @deprecated 旧「入库」预览按钮文案 */
 export const LEGACY_COMMIT_PREVIEW_BUTTON_INTENT = "预览这一章的入库改动";
 
@@ -39,7 +41,7 @@ export function resolveDirectWriteChapterGoal(explicit: string, fallback: string
   return explicit.trim() || fallback;
 }
 
-export type DeterministicChapterAction = "ai_review" | "quality_check" | "generate_draft";
+export type DeterministicChapterAction = "ai_review" | "quality_check" | "generate_draft" | "check_continuity";
 
 /**
  * 文本完全等于某个【固定动作】按钮常量 → 返回其确定性动作；否则 null（交给 agent 对话链路）。
@@ -52,5 +54,6 @@ export function matchDeterministicChapterAction(text: string): DeterministicChap
   if (trimmed === REVIEW_BUTTON_INTENT || trimmed === LEGACY_REVIEW_BUTTON_INTENT) return "ai_review";
   if (trimmed === QUALITY_BUTTON_INTENT || trimmed === LEGACY_QUALITY_BUTTON_INTENT) return "quality_check";
   if (trimmed === DRAFT_BUTTON_INTENT) return "generate_draft";
+  if (trimmed === CHECK_CONTINUITY_BUTTON_INTENT || trimmed === "核账") return "check_continuity";
   return null;
 }

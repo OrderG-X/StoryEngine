@@ -90,6 +90,12 @@ export interface ChapterMessage {
   readonly commitPreview?: CommitPreviewCardData;
   /** 服务端状态说明（R4：如「历史窗口被裁剪」）：照实展示给用户、不进助手正文（不替模型说话）。 */
   readonly statusNotes?: readonly string[];
+  /** 核账结果（check_continuity）：确定 / 可能两档，每条本章原句 ↔ 前文原句。随消息走、渲染「核账」卡。 */
+  readonly continuityCheck?: {
+    readonly chapter: number;
+    readonly sure: readonly { readonly quote: string; readonly earlierQuote: string; readonly earlierChapter: number; readonly reason: string }[];
+    readonly maybe: readonly { readonly quote: string; readonly earlierQuote: string; readonly earlierChapter: number; readonly reason: string }[];
+  };
   /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
 }

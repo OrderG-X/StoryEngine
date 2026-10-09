@@ -39,6 +39,7 @@ import {
   type HonestyToolStep,
 } from "../../shared/honesty-detection.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -706,6 +707,13 @@ async function handleAgentChat(
 /** 结构化动作的工具执行器：按白名单取工具、带同一 requestContext 直接 execute。 */
 const executeUserActionTool: UserActionToolExecutor = async (toolName, input, requestContext) => {
   switch (toolName) {
+    case "check_continuity": {
+      const execute = checkContinuityTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
     case "commit_apply": {
       const execute = commitApplyTool.execute as unknown as (
         input: Record<string, unknown>,
