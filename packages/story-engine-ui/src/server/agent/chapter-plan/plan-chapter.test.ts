@@ -127,3 +127,15 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
   });
 });
 
+describe("inferMissingStoryDay（第十七轮第 10 章章纲没写天数，日历停住）", () => {
+  it("按开场时间补：第二天 +1、三天后 +3、否则同一天；给了天数的不动", async () => {
+    const { inferMissingStoryDay } = await import("./plan-chapter.js");
+    const { normalizeChapterPlan } = await import("@actalk/story-engine");
+    const make = (time?: string, storyDay?: number) => normalizeChapterPlan({ summary: "s", beats: ["b"], ...(time ? { scene: { time } } : {}), ...(storyDay ? { storyDay } : {}) }, { chapter: 10 })!;
+    expect(inferMissingStoryDay(make("第二天上午"), 12).storyDay).toBe(13);
+    expect(inferMissingStoryDay(make("三天后傍晚"), 12).storyDay).toBe(15);
+    expect(inferMissingStoryDay(make("当天傍晚"), 12).storyDay).toBe(12);
+    expect(inferMissingStoryDay(make("次日", 20), 12).storyDay).toBe(20);
+    expect(inferMissingStoryDay(make("次日"), undefined).storyDay).toBeUndefined();
+  });
+});

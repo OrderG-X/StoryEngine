@@ -245,6 +245,28 @@ function relativeDayLabel(delta: number): string {
   return `${delta} 天前`;
 }
 
+/** 星期几的推算锚：最近一个写了星期的日子。 */
+function weekdayAnchor(plan: ChapterPlan, clock: readonly StoryClockEntry[]): { readonly day: number; readonly weekday: number } | undefined {
+  return [
+    ...clock.map((entry) => ({ day: entry.storyDay, weekday: weekdayIndex(entry.time) })),
+    ...(plan.storyDay ? [{ day: plan.storyDay, weekday: weekdayIndex(plan.scene.time) }] : []),
+  ].filter((item): item is { day: number; weekday: number } => item.weekday !== undefined).at(-1);
+}
+
+function weekdayName(anchor: { readonly day: number; readonly weekday: number }, day: number): string {
+  return WEEKDAY_NAMES[(((anchor.weekday + day - anchor.day) % 7) + 7) % 7];
+}
+
+/**
+ * 「本章是故事第 8 天，周二」——给记事实 / 记线索的环节用：把「明天、下周三」换成绝对的日子再入账
+ * （第十七轮：「下周三」原样进了线索标题、账本和后面的章纲，过几章没人知道指哪天，评估日悄悄消失）。
+ */
+export function describeStoryDay(plan: ChapterPlan | undefined, clock: readonly StoryClockEntry[] = []): string | undefined {
+  if (!plan?.storyDay) return undefined;
+  const anchor = weekdayAnchor(plan, clock);
+  return `本章是故事第 ${plan.storyDay} 天${anchor ? `，${weekdayName(anchor, plan.storyDay)}` : ""}`;
+}
+
 /**
  * 故事日历换成「从本章看是哪天」：第十五轮台词里的相对时间错了 11 处（「昨天贴的」其实是前天、「上周」其实是本周）——
  * 只给天数让写手自己减，它算不对；直接标好昨天 / 前天 / 几天前、星期几（章纲里写过星期的那天当锚）。
@@ -252,13 +274,8 @@ function relativeDayLabel(delta: number): string {
 function buildStoryClock(plan: ChapterPlan, clock: readonly StoryClockEntry[]): Record<string, unknown> | undefined {
   const today = plan.storyDay;
   if (!today) return undefined;
-  const anchors = [
-    ...clock.map((entry) => ({ day: entry.storyDay, weekday: weekdayIndex(entry.time) })),
-    { day: today, weekday: weekdayIndex(plan.scene.time) },
-  ].filter((item): item is { day: number; weekday: number } => item.weekday !== undefined);
-  const anchor = anchors.at(-1);
-  const weekdayOf = (day: number): string => (anchor ? WEEKDAY_NAMES[(((anchor.weekday + day - anchor.day) % 7) + 7) % 7] : "");
-  const withWeekday = (day: number): string => (anchor ? `，${weekdayOf(day)}` : "");
+  const anchor = weekdayAnchor(plan, clock);
+  const withWeekday = (day: number): string => (anchor ? `，${weekdayName(anchor, day)}` : "");
   return {
     today: `本章是故事第 ${today} 天${withWeekday(today)}${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
     earlier: clock

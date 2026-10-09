@@ -20,6 +20,7 @@ import {
   readFactLedger,
   readLocationBible,
   readStoryBible,
+  readStoryClock,
   readThreadPool,
   readTimelineEvents,
   selectEffectiveFacts,
@@ -217,9 +218,10 @@ export function buildPlanMessages(
     "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
     "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
     "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
-    "12. 每个要点 15–60 字，只写谁在哪、做成了什么、局面怎么变了；不写细节描写、动作分解、对白原话，也不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）——这些写正文时对着前文原文补，章纲里多编一个细节就多一处可能和前文对不上。",
+    // 第十五、十七轮要点限到 60 字后矛盾翻倍（物件位置错 15 条）：章纲不再交代东西在哪，写手就乱放。要点写细，但物件状态照事实抄、不另编。
+    "12. 每个要点写清谁、在哪、做了什么、局面怎么变；牵涉到的关键物件（文书、信物、钥匙、证据）写明此刻在谁手里或放在哪——照【已确立事实】和上一章结尾抄，不要另编；不写对白原话；不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）。每个要点不超过 120 字。",
     "JSON 字段：",
-    "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个 15–60 字，是一件具体发生的事\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
+    "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事（人、地点、关键物件在谁手里）\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
     "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"storyDay\":故事第几天（整数）,\"characters\":[\"出场人物名\"],",
     "\"entities\":[\"本章涉及的物件/地点/文书名，用前文里的原名\"],\"threadsAdvanced\":[{\"title\":\"推进的线索或目标（照抄下面列表里的说法）\",\"how\":\"怎么推进\"}],",
     "\"avoid\":[\"本章不要重复的东西\"]}",
@@ -266,6 +268,22 @@ function slimMaterials(materials: PlanChapterMaterials): PlanChapterMaterials {
   };
 }
 
+const NEXT_DAY = /第二天|第二日|次日|翌日|隔天|隔日|转天/u;
+const DAYS_LATER = /([一两二三四五六七八九十\d]+)\s*天(?:以)?后/u;
+const CJK_DIGITS: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+
+/**
+ * 章纲没给天数时按上一章的天数和开场时间补上（第十七轮第 10 章章纲没写 storyDay，日历停住不走）：
+ * 写了「第二天 / 次日」就加一天，写了「三天后」加三天，否则当同一天。第 1 章由引擎记为第 1 天。
+ */
+export function inferMissingStoryDay(plan: ChapterPlan, lastDay: number | undefined): ChapterPlan {
+  if (plan.storyDay !== undefined || lastDay === undefined) return plan;
+  const time = plan.scene.time ?? "";
+  const later = DAYS_LATER.exec(time);
+  const step = later ? (CJK_DIGITS[later[1]] ?? (Number(later[1]) || 0)) : NEXT_DAY.test(time) ? 1 : 0;
+  return { ...plan, storyDay: lastDay + step };
+}
+
 /** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
 export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
   const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
@@ -284,10 +302,12 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
         lastError = "章纲缺要点";
         continue;
       }
+      const lastDay = (await readStoryClock(input.projectDir, input.chapter).catch(() => [])).at(-1)?.storyDay;
+      const dated = inferMissingStoryDay(plan, lastDay);
       // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
       const withAvoid = materials.recurringPhrases.length > 0
-        ? { ...plan, avoid: [...plan.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
-        : plan;
+        ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
+        : dated;
       await writeChapterPlan(input.projectDir, withAvoid);
       return { ok: true, plan: withAvoid };
     } catch (error) {

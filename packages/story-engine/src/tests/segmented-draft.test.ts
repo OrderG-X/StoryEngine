@@ -88,6 +88,20 @@ describe("按章纲分前后两半写", () => {
     expect(renderFastDraftPromptText(contexts[3])).not.toContain("本章都在同一天里");
   });
 
+  it("两半拼起来超了上限 → 不从结尾裁（第十七轮第 4 章被裁掉最后两个要点），如实记一条", async () => {
+    const projectDir = await makeBook();
+    let calls = 0;
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async () => {
+        calls += 1;
+        return { title: "档案室", content: calls === 1 ? `林澈${han(2000, "前")}。` : `${han(1990, "后")}。结尾一句。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(await readFile(report.draftPath!, "utf-8")).toContain("结尾一句。");
+    expect(report.issues.join("\n")).toContain("不从结尾裁");
+  });
+
   it("后半章没写成 → 只交前半章并如实记一条", async () => {
     const projectDir = await makeBook();
     const writer: WriterClient = {

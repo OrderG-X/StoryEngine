@@ -191,6 +191,14 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(section.storyClock.rule).toContain("不要自己推算");
   });
 
+  it("describeStoryDay：本章第几天、星期几（给记事实环节换掉「下周三」）", async () => {
+    const { describeStoryDay } = await import("../chapter-plan.js");
+    const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 8 }, { chapter: 9, now: NOW })!;
+    expect(describeStoryDay(plan, [{ chapter: 1, storyDay: 1, time: "周三上午", summary: "a" }])).toBe("本章是故事第 8 天，周三");
+    expect(describeStoryDay(plan)).toBe("本章是故事第 8 天");
+    expect(describeStoryDay(undefined)).toBeUndefined();
+  });
+
   it("相对说法：同一天 / 昨天 / 前天；没有星期锚就不编星期", () => {
     const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 5 }, { chapter: 6, now: NOW })!;
     const section = buildChapterPlanSection(plan, [

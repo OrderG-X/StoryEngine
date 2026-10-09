@@ -32,6 +32,10 @@ describe("pickRelatedFacts / buildReconcileMessages", () => {
     expect(related[0].ref).toBe("F1");
     const [, user] = buildReconcileMessages(DRAFT, related, ["林舟"]);
     expect(user.content).toContain("（第4章）南门菜场十来年前就拆了");
+    // 第十七轮「下周三」原样入账：给本章日子，要求换成故事第几天 / 星期几。
+    const [system, dated] = buildReconcileMessages(DRAFT, related, ["林舟"], "本章是故事第 8 天，周三");
+    expect(dated.content).toContain("【本章日子】本章是故事第 8 天，周三");
+    expect(system.content).toContain("不要写明天、后天、下周、前天这类相对说法");
   });
 });
 

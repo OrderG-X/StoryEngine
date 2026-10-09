@@ -8,7 +8,7 @@
  *  - conflicts：本章说法与旧事实对不上、又不是剧情里的变化 → 账本不动，交给作者定（绝不替作者拍板）。
  * 模型无关：宽进逐条打捞；编号对不上的、引文不在正文里的一律丢弃；失败自动重试一次，仍不成如实说明。
  */
-import { selectEffectiveFacts } from "@actalk/story-engine";
+import { describeStoryDay, readChapterPlan, readStoryClock, selectEffectiveFacts } from "@actalk/story-engine";
 import { readFactLedger, appendFacts, applyFactEdit, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
 
 const RELATED_FACT_CAP = 40;
@@ -59,9 +59,12 @@ export function buildReconcileMessages(
   draftText: string,
   related: readonly RelatedFact[],
   knownNames: readonly string[],
+  storyDayLabel?: string,
 ): { readonly role: "system" | "user"; readonly content: string }[] {
   const system = [
     "你是中文小说的『硬事实记录员』。读这章正文，对照【已记下的旧事实】，做三件事：",
+    // 第十七轮：「下周三」原样入账，过几章没人知道指哪天，评估日悄悄消失、后面还被说成「提前」。
+    "事实里提到日子，一律按【本章日子】换成「故事第几天」或星期几写（「下周三」写成「故事第 N 天（周三）」），不要写明天、后天、下周、前天这类相对说法。",
     "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。quote 逐字抄本章里写到这件事的原句；正文没明写、要靠推断才得出的不要记（由「换了日子」推出「改过期」、把「交还」说成「卖给」）。",
     "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
     "3. conflicts：本章说法和某条旧事实对不上、但正文并没有写它发生了变化（多半是写错了）。ref 填旧事实编号，quote 逐字抄本章正文里对不上的那句，note 说怎么对不上。",
@@ -73,6 +76,7 @@ export function buildReconcileMessages(
       ? `【已记下的旧事实】\n${related.map((item) => `${item.ref}（第${item.fact.chapter}章）${item.fact.text}`).join("\n")}`
       : "【已记下的旧事实】（无）",
     knownNames.length > 0 ? `【已知角色（这些都不是新人物）】${knownNames.join("、")}` : "",
+    storyDayLabel ? `【本章日子】${storyDayLabel}` : "",
     `【本章正文】\n${draftText}`,
   ].filter(Boolean).join("\n\n");
   return [{ role: "system", content: system }, { role: "user", content: user }];
@@ -162,7 +166,9 @@ export async function extractAndReconcileFacts(input: {
     return { ok: false, ...empty, summary: `（事实账本读不了，这章的硬事实没记：${error instanceof Error ? error.message : String(error)}）` };
   }
   const related = pickRelatedFacts(ledger.facts, input.chapter, input.draftText, knownNames);
-  const messages = buildReconcileMessages(input.draftText, related, knownNames);
+  const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
+  const clock = plan ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
+  const messages = buildReconcileMessages(input.draftText, related, knownNames, describeStoryDay(plan, clock));
   let parsed: ParsedReconcile | undefined;
   for (let attempt = 0; attempt <= RETRIES && !parsed; attempt += 1) {
     try {

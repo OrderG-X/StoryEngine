@@ -432,7 +432,13 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       draftBody: rawDraftBody,
       lengthTarget: draftLengthTarget,
     });
-    const trimResult = rawDraftLength.lengthStatus === "above_upper_bound"
+    // 分两半写的稿超了上限不裁：裁只能从结尾往前砍，砍掉的正是章纲最后几个要点
+    // （第十七轮第 4 章停在半句对白上，要点 5 后半和要点 6 全丢）。超出多少如实记一条，交作者定。
+    const overLengthKept = Boolean(segmented) && rawDraftLength.lengthStatus === "above_upper_bound";
+    if (overLengthKept) {
+      writingRulesFailure.push(`正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；分两半写的稿不从结尾裁（会截掉最后的要点），留给你定。`);
+    }
+    const trimResult = rawDraftLength.lengthStatus === "above_upper_bound" && !overLengthKept
       ? trimDraftBodyToLengthTarget(rawDraftBody, draftLengthTarget)
       : undefined;
     const draftBody = trimResult?.ok ? trimResult.draftBody : rawDraftBody;
