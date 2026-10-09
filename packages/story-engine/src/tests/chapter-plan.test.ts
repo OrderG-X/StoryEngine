@@ -170,6 +170,7 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(normalizeChapterPlan({ ...base, scene: { storyDay: "5" } }, { chapter: 3 })?.storyDay).toBe(5);
     expect(normalizeChapterPlan({ ...base, storyDay: 0 }, { chapter: 3 })?.storyDay).toBeUndefined();
     expect(normalizeChapterPlan({ ...base, storyDay: "过几天" }, { chapter: 3 })?.storyDay).toBeUndefined();
+    expect(normalizeChapterPlan(base, { chapter: 1 })?.storyDay).toBe(1);
   });
 
   it("读前面各章的天数（跳过没天数的老章纲），写手段里给出今天第几天和前文天数", async () => {

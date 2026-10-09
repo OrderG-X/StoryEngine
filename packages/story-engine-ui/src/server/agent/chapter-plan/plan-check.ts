@@ -60,7 +60,7 @@ export function buildPlanCheckMessages(input: {
     "· storyDay 与【故事日历】是否顺得下去、星期几是否算得对、「几天前」是否按天数差算；人物在某一年多大是否对得上；",
     "· 前文已经发现、确认、做过的事，章纲又安排一遍；上一章结尾的人物位置、时间与章纲开场接不上。",
     "没有问题就只输出 {\"ok\":true}。",
-    "有问题就输出 {\"issues\":[\"每条一句：哪里和哪条前文对不上\"],\"plan\":{修正后的完整章纲，字段与原章纲相同：summary, beats, newInformation, scene, storyDay, characters, entities, threadsAdvanced, avoid}}——只改有问题的地方，其余照抄原章纲。",
+    "有问题就输出 {\"issues\":[\"每条一句：哪里和哪条前文对不上\"],\"plan\":{修正后的完整章纲，字段与原章纲相同：summary, beats, newInformation, scene, storyDay, characters, entities, threadsAdvanced, avoid}}——只改有问题的那几条，其余逐字照抄原章纲；改过的要点也保持原来的长短，不要借机添细节。",
     "只输出一个 JSON，不要解释、不要 Markdown。",
   ].join("\n");
   const user = [
@@ -145,11 +145,19 @@ export async function checkAndRevisePlan(input: {
     ...(plan.direction ? { direction: plan.direction } : {}),
   });
   if (!revised) return { plan, revised: false, issues, error: "审校给的修正章纲不完整，沿用原章纲" };
-  // 原章纲里确定性并进的「别再用这些说法」不能丢；没给天数就沿用原来的。
-  const keptAvoid = plan.avoid.filter((item) => item.startsWith("别再用这些说法：") && !revised.avoid.includes(item));
+  // 审校常只回 summary + beats（第十四轮第 6、7 章：人物 / 物件 / 新信息 / 线索 / 开场全丢，翻旧资料的检索词跟着没了）：
+  // 修正章纲缺的栏一律沿用原章纲；原章纲的 avoid 全部保留（含确定性并进的「别再用这些说法」）；没给天数就沿用原来的。
+  const keep = <T,>(next: readonly T[], previous: readonly T[]): readonly T[] => (next.length > 0 ? next : previous);
+  const location = revised.scene.location ?? plan.scene.location;
+  const time = revised.scene.time ?? plan.scene.time;
   const merged: ChapterPlan = {
     ...revised,
-    avoid: [...revised.avoid, ...keptAvoid],
+    newInformation: keep(revised.newInformation, plan.newInformation),
+    characters: keep(revised.characters, plan.characters),
+    entities: keep(revised.entities, plan.entities),
+    threadsAdvanced: keep(revised.threadsAdvanced, plan.threadsAdvanced),
+    scene: { ...(location ? { location } : {}), ...(time ? { time } : {}) },
+    avoid: [...new Set([...revised.avoid, ...plan.avoid])],
     ...(revised.storyDay === undefined && plan.storyDay !== undefined ? { storyDay: plan.storyDay } : {}),
   };
   await writeChapterPlan(input.projectDir, merged);

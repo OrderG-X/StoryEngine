@@ -190,6 +190,53 @@ function withExtraSection(context: WriterContextEnvelope, name: string, content:
   };
 }
 
+/** 要点里明写了换天（第二天 / 次日 / 几天后……）才允许一章跨天。 */
+const DAY_CHANGE = /第二天|第二日|次日|翌日|隔天|隔日|转天|两天后|三天后|几天后|数日后|过了[一两三几\d]+天/u;
+
+/**
+ * 分半写时每一半只看见自己的要点（第十四轮验收：章纲段原样给前半章，「每个要点都要真正写到」压过了
+ * 「只写前一半」——第 8、10 章前半就写完全部要点，后半无事可写只好重演或凭空多出一天）。
+ */
+function planSectionForHalf(
+  planSection: Record<string, unknown>,
+  half: "first" | "second",
+  beats: readonly string[],
+  split: number,
+): Record<string, unknown> {
+  const { summary: _summary, newInformation, threadsAdvanced, beats: _beats, instruction: _instruction, ...rest } = planSection;
+  if (half === "first") {
+    return {
+      ...rest,
+      instruction: `这是本章前半章要写的部分：只写下面这 ${split} 个要点，按顺序写，写完最后一个就停。本章后面还有 ${beats.length - split} 个要点留给后半章另写，这次一个字都不写、也不提前透露或预告。`,
+      beats: beats.slice(0, split),
+    };
+  }
+  return {
+    ...rest,
+    instruction: [
+      `这是本章后半章要写的部分。前半章（already_written）已经写完了 alreadyDone 里的要点，那些事都发生过了，不再写一遍、不换个说法再来一次。`,
+      `只写下面这 ${beats.length - split} 个要点，按顺序写，写到最后一个自然收住本章。`,
+      newInformation ? "「本章新信息」前半章没写出来的，要在后半章明确写出。" : "",
+      "「本章不要重复」里的内容不得再写一遍。",
+    ].join(""),
+    alreadyDone: beats.slice(0, split),
+    beats: beats.slice(split),
+    ...(newInformation ? { newInformation } : {}),
+    ...(threadsAdvanced ? { threadsAdvanced } : {}),
+  };
+}
+
+export interface SegmentedDraftInfo {
+  /** 前半章写到第几个要点。 */
+  readonly split: number;
+  /** 后半章首稿里重演前半章的段数。 */
+  readonly replayedFound: number;
+  /** 检出重演后是否重写过后半章。 */
+  readonly retried: boolean;
+  /** 最终留下的后半章里还重演着的段数。 */
+  readonly replayedRemaining: number;
+}
+
 /**
  * 前半章：只写前一半要点、停在半途（不收尾）；后半章：带上已写好的前半章原文，接着写剩下的要点并收住本章。
  * 后半章没写成 → 只交前半章（如实记一条 issue），后续的「续写够字数」环节会兜底。
@@ -201,21 +248,31 @@ async function generateBySegments(input: {
   readonly rawChapterGoal: string;
   readonly lengthTarget: ReturnType<typeof resolveDraftLengthTarget>;
   readonly maxOutputTokens: number;
-}): Promise<{ readonly generated: Awaited<ReturnType<WriterClient["generateDraft"]>>; readonly secondHalfError?: string }> {
+}): Promise<{
+  readonly generated: Awaited<ReturnType<WriterClient["generateDraft"]>>;
+  readonly secondHalfError?: string;
+  readonly info?: SegmentedDraftInfo;
+}> {
   const beats = input.plan.beats;
   const split = Math.ceil(beats.length / 2);
   const half = Math.round(input.lengthTarget.requested / 2);
   const numbered = (from: number, to: number) => beats.slice(from, to).map((beat, index) => `${from + index + 1}. ${beat}`).join("  ");
   const planSection = input.context.sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown> | undefined;
+  // 一章默认在同一天里（章纲只记一个故事日）：第十四轮后半章凭空写「第二天」，正文比日历多走两天、截止日无声越过。
+  const sameDay = beats.some((beat) => DAY_CHANGE.test(beat))
+    ? ""
+    : `本章都在同一天里${input.plan.storyDay ? `（故事第 ${input.plan.storyDay} 天）` : ""}，不要写「第二天」「次日」「几天后」这类跳天。`;
 
+  // 作者没给方向时本章目标就是章纲的整章一句话——前半章看到它也会往全章结局写，前半章不给。
   const firstGoal = [
-    input.rawChapterGoal,
+    input.rawChapterGoal.trim() === input.plan.summary.trim() ? "" : input.rawChapterGoal,
     "",
     `【本章分前后两半写，这次是前半章】只写章纲要点 1–${split}：${numbered(0, split)}。`,
     `前半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}）。写到第 ${split} 个要点结束处就停，不要收尾、不要总结、不要提前写后面的要点。`,
-  ].join("\n");
+    sameDay,
+  ].filter(Boolean).join("\n");
   let firstContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
-  if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", { ...planSection, segment: `前半章：只写要点 1–${split}` });
+  if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", planSectionForHalf(planSection, "first", beats, split));
   const first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
   const firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
 
@@ -226,9 +283,10 @@ async function generateBySegments(input: {
     `前半章已经写过要点 1–${split}（${numbered(0, split)}）：这些事已经发生了，后半章不要再写一遍、不要换个说法再来一次，人物也不要再「第一次」看见或说起它们。`,
     `紧接前半章最后一句往下写，只写章纲要点 ${split + 1}–${beats.length}：${numbered(split, beats.length)}。`,
     `后半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
-  ].join("\n");
+    sameDay ? `后半章紧接前半章最后一句的时刻往下写。${sameDay}` : "",
+  ].filter(Boolean).join("\n");
   let secondContext = withSectionContent(input.context, "chapter_goal", { chapter: input.plan.chapter, goal: secondGoal });
-  if (planSection) secondContext = withSectionContent(secondContext, "chapter_plan", { ...planSection, segment: `后半章：只写要点 ${split + 1}–${beats.length}` });
+  if (planSection) secondContext = withSectionContent(secondContext, "chapter_plan", planSectionForHalf(planSection, "second", beats, split));
   secondContext = withExtraSection(secondContext, "already_written", {
     instruction: "这是本章已经写好的前半章正文。从它最后一句之后接着写，人物所在位置、手里的东西、时间都从这里接上。",
     text: firstBody,
@@ -240,6 +298,8 @@ async function generateBySegments(input: {
     // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
     // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
     const replays = findReplayedParagraphs(firstBody, secondBody);
+    let retried = false;
+    let replayedRemaining = replays.length;
     if (replays.length > 0) {
       const retryGoal = [
         secondGoal,
@@ -250,13 +310,19 @@ async function generateBySegments(input: {
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
       const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
-      if (retryBody && findReplayedParagraphs(firstBody, retryBody).length < replays.length) secondBody = retryBody;
+      retried = retryBody.length > 0;
+      const retryReplays = retryBody ? findReplayedParagraphs(firstBody, retryBody).length : replays.length;
+      if (retryBody && retryReplays < replays.length) {
+        secondBody = retryBody;
+        replayedRemaining = retryReplays;
+      }
     }
     return {
       generated: {
         ...first,
         content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
       },
+      info: { split, replayedFound: replays.length, retried, replayedRemaining },
     };
   } catch (error) {
     return {
@@ -347,6 +413,12 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       : undefined;
     const generated = segmented?.generated ?? await input.writerClient.generateDraft({ context, maxOutputTokens });
     if (segmented?.secondHalfError) writingRulesFailure.push(segmented.secondHalfError);
+    // 接缝重演留痕（第十四轮审读：检出与重写都没留下记录，事后查不到这一步做了什么）。
+    if (segmented?.info && segmented.info.replayedFound > 0) {
+      writingRulesFailure.push(segmented.info.replayedRemaining === 0
+        ? `后半章首稿重演了前半章 ${segmented.info.replayedFound} 段，已重写后半章。`
+        : `后半章首稿重演了前半章 ${segmented.info.replayedFound} 段，${segmented.info.retried ? "重写后" : ""}仍有 ${segmented.info.replayedRemaining} 段与前半章相近。`);
+    }
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
     const rawDraftBody = stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content));
     const rawDraftLength = buildDraftLengthReport({

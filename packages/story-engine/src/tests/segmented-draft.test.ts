@@ -49,6 +49,43 @@ describe("按章纲分前后两半写", () => {
     expect(report.passed).toBe(true);
   });
 
+  it("每一半只看见自己的要点：前半章看不到后半章的要点；后半章拿到已写要点清单（第十四轮：前半章越界写完全章）", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "档案室", content: `${han(900, contexts.length === 1 ? "前" : "后")}。` };
+      }),
+    };
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: PLAN.summary, writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const firstPrompt = renderFastDraftPromptText(contexts[0]);
+    expect(firstPrompt).toContain("管理员拦人");
+    expect(firstPrompt).not.toContain("回家路上被跟踪");
+    expect(firstPrompt).not.toContain("对出缺页是境外汇款");
+    expect(firstPrompt).not.toContain("每个要点都要真正写到");
+    const secondPlan = contexts[1].sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown>;
+    expect(secondPlan.alreadyDone).toEqual(["一早出门", "管理员拦人", "翻到底册"]);
+    expect(secondPlan.beats).toEqual(["对出缺页是境外汇款", "回家路上被跟踪"]);
+  });
+
+  it("要点里没写换天 → 两半都要求同一天；要点写了「第二天」就不加这条", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "t", content: `${han(900, "文")}。` };
+      }),
+    };
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(renderFastDraftPromptText(contexts[0])).toContain("本章都在同一天里");
+    expect(renderFastDraftPromptText(contexts[1])).toContain("本章都在同一天里");
+    const crossDay = normalizeChapterPlan({ summary: "s", beats: ["一早出门", "管理员拦人", "翻到底册", "第二天再去档案室"] }, { chapter: 2 })!;
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: crossDay, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(renderFastDraftPromptText(contexts[3])).not.toContain("本章都在同一天里");
+  });
+
   it("后半章没写成 → 只交前半章并如实记一条", async () => {
     const projectDir = await makeBook();
     const writer: WriterClient = {
@@ -95,6 +132,7 @@ describe("按章纲分前后两半写", () => {
     const written = await readFile(report.draftPath!, "utf-8");
     expect(written.split(scene).length - 1).toBe(1);
     expect(written).toContain("管理员终于松了口");
+    expect(report.issues.join("\n")).toContain("后半章首稿重演了前半章 1 段，已重写后半章");
   });
 
   it("findReplayedParagraphs：换几个字重演也认得；不相干的段不算", () => {

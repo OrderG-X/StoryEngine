@@ -123,6 +123,8 @@ export function normalizeChapterPlan(
   const scene = asRecord(record.scene);
   const location = cleanText(scene?.location ?? record.location, 40);
   const time = cleanText(scene?.time ?? record.time, 40);
+  // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。
+  const storyDay = normalizeStoryDay(record.storyDay ?? scene?.storyDay) ?? (meta.chapter === 1 ? 1 : undefined);
   const direction = cleanText(meta.direction, 400);
   return {
     version: 1,
@@ -133,7 +135,8 @@ export function normalizeChapterPlan(
     beats,
     newInformation: cleanList(record.newInformation ?? record.newInfo ?? record.reveals, 6),
     scene: { ...(location ? { location } : {}), ...(time ? { time } : {}) },
-    ...(normalizeStoryDay(record.storyDay ?? scene?.storyDay) !== undefined ? { storyDay: normalizeStoryDay(record.storyDay ?? scene?.storyDay)! } : {}),
+    // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。
+    ...(storyDay !== undefined ? { storyDay } : {}),
     characters: cleanNames(record.characters),
     entities: cleanNames(record.entities ?? record.objects ?? record.items),
     threadsAdvanced: cleanThreadSteps(record.threadsAdvanced ?? record.threads),

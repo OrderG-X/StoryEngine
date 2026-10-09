@@ -48,6 +48,29 @@ describe("checkAndRevisePlan 章纲审校", () => {
     expect((await readChapterPlan(dir, 7))?.beats[1]).toContain("表一直收着");
   });
 
+  it("修正章纲只回了 summary + beats → 人物 / 物件 / 开场 / 原 avoid 沿用原章纲（第十四轮第 6、7 章全丢）", async () => {
+    const dir = await makeBook();
+    const plan = normalizeChapterPlan({
+      ...PLAN,
+      newInformation: ["怀表背面刻着字"],
+      scene: { location: "林记修表铺", time: "第二天上午" },
+      avoid: ["别再写林晓哭", "别再用这些说法：一屋子的钟在黑暗里响"],
+    }, { chapter: 7 })!;
+    const callModel = vi.fn(async () => JSON.stringify({
+      issues: ["表的下落与第 4 章不符"],
+      plan: { summary: plan.summary, beats: ["林晓上门", "林晓承认表一直收着", "林舟没接话"] },
+    }));
+    const result = await checkAndRevisePlan({ projectDir: dir, plan, callModel });
+    expect(result.revised).toBe(true);
+    expect(result.plan.beats[1]).toBe("林晓承认表一直收着");
+    expect(result.plan.characters).toEqual(["林晓", "林舟"]);
+    expect(result.plan.entities).toEqual(["怀表"]);
+    expect(result.plan.newInformation).toEqual(["怀表背面刻着字"]);
+    expect(result.plan.scene).toEqual({ location: "林记修表铺", time: "第二天上午" });
+    expect(result.plan.avoid).toEqual(["别再写林晓哭", "别再用这些说法：一屋子的钟在黑暗里响"]);
+    expect(result.plan.storyDay).toBe(7);
+  });
+
   it("没问题 → 原章纲照用", async () => {
     const dir = await makeBook();
     const result = await checkAndRevisePlan({ projectDir: dir, plan: PLAN, callModel: vi.fn(async () => "{\"ok\":true}") });
