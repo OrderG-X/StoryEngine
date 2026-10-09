@@ -9,6 +9,8 @@ export interface DraftLengthTarget {
   readonly lowerBound: number;
   readonly upperBound: number;
   readonly source: DraftLengthTargetSource;
+  /** lowerBound 是作者写明的「至少 N 字」（chapterLength.minWords）：定稿侧按它硬拦，不够就得补到它。 */
+  readonly hardMinimum?: boolean;
 }
 
 export interface DraftLengthReport {
@@ -72,7 +74,7 @@ function withExplicitMinimum(target: DraftLengthTarget, minimum: number | undefi
   if (min === undefined) return target;
   const requested = Math.max(target.requested, min);
   const { upperBound } = requestedDraftLengthBounds(requested);
-  return { ...target, requested, lowerBound: min, upperBound };
+  return { ...target, requested, lowerBound: min, upperBound, hardMinimum: true };
 }
 
 export function buildDraftLengthTarget(requested: number, source: DraftLengthTargetSource): DraftLengthTarget {

@@ -67,6 +67,14 @@ describe("runDraftQualityPipeline", () => {
     expect(continueCallModel).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.notes.join("\n")).toContain("只差一点就没自动续写");
+    // 作者写明了「至少 N 字」（定稿硬拦）→ 差一点也补到下限。
+    const hard = await makeBook(draft);
+    const continueHard = vi.fn(async () => "他推着车往后街走，修鞋摊还在，吴师傅抬头看了他一眼。");
+    await runDraftQualityPipeline({
+      projectDir: hard.projectDir, chapter: 8, draftPath: hard.draftPath, title: "第8章", draftBody: draft,
+      lengthTarget: { ...TARGET, lowerBound: 60, hardMinimum: true }, continueCallModel: continueHard,
+    });
+    expect(continueHard).toHaveBeenCalled();
   });
 
   it("什么都没改 → 不建快照、不写盘", async () => {

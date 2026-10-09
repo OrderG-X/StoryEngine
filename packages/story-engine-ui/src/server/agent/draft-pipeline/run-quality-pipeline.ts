@@ -100,8 +100,10 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   const timings: { continueMs?: number; continuityMs?: number } = {};
   // ① 字数严重不够才接着写（不在中间插句）。2026-10-10 真机试写：首稿只差两三百字也续，续出的一段挤成一大段、
   // 凭空编出前文没有的对话（「韩德胜说钥匙交给孟叔了」），历轮审读里续写段也是矛盾最密的地方——略短就如实说短了多少、交作者定。
+  // 作者写明了「至少 N 字」（定稿侧按它硬拦）时仍补到下限——不补作者也得手动再要一次续写，还卡着定不了稿。
   const firstLength = countDraftChineseCharacters(body);
-  if (input.continueCallModel && firstLength < input.lengthTarget.lowerBound * CONTINUE_ONLY_BELOW_RATIO) {
+  const continueBelow = input.lengthTarget.hardMinimum ? input.lengthTarget.lowerBound : input.lengthTarget.lowerBound * CONTINUE_ONLY_BELOW_RATIO;
+  if (input.continueCallModel && firstLength < continueBelow) {
     const startedAt = Date.now();
     const continued = await continueDraftToLength({
       chapter: input.chapter,
