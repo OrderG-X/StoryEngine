@@ -120,7 +120,7 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
     case "draft_generating":
       return "正在生成工作稿…";
     case "draft_ready":
-      return "说说修改意见，或说「硬伤检查」检查穿帮…";
+      return "说说修改意见，或说「核账」查前后对不上…";
     case "quality_checked":
       return "说「定稿预览」生成定稿预览，或让 AI 做内容审阅…";
     case "commit_preview_ready":

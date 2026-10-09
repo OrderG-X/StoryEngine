@@ -6,7 +6,7 @@ export function workflowPromptText(state: ChapterWorkflowState): string {
     idle: "我已读取当前故事状态。你可以说说这章想写什么，比如角色行动、场景、情节转折。",
     steering_ready: "方案已整理好。说「写吧」开始生成，或继续补充你的想法。",
     draft_generating: "正在生成工作稿…",
-    draft_ready: "工作稿已生成。看看左侧工作稿，说「硬伤检查」检查穿帮，或告诉我要改哪里。",
+    draft_ready: "工作稿已生成。看看左侧工作稿，点「核账」查前后对不上，或告诉我要改哪里。",
     quality_checked: "硬伤检查通过。说「定稿预览」查看定稿后会怎么变化，或让 AI 做内容审阅。",
     commit_preview_ready: "定稿预览已生成。点「确认定稿」即可写入已定稿版，可在操作历史撤销。",
     waiting_commit_confirmation: "定稿预览已生成。点「确认定稿」即可写入，写入前会自动存档，可撤销。",
