@@ -191,6 +191,18 @@ describe("故事日历（十章验收：「三天前」一直是三天前、星�
     expect(section.storyClock.rule).toContain("不要自己推算");
   });
 
+  it("「故事第 N 天」不进要点 / 摘要 / 开场时间，只留在 storyDay（第十八轮正文照抄出「第十一天」）", () => {
+    const plan = normalizeChapterPlan({
+      summary: "故事第11天，林舟去房管所",
+      beats: ["故事第11天上午，林舟锁好铺子去房管所", "（故事第11天）下午回铺子"],
+      scene: { time: "第二天上午（故事第11天）" },
+    }, { chapter: 10, now: NOW })!;
+    expect(plan.summary).toBe("林舟去房管所");
+    expect(plan.beats).toEqual(["上午，林舟锁好铺子去房管所", "下午回铺子"]);
+    expect(plan.scene.time).toBe("第二天上午");
+    expect(plan.storyDay).toBe(11);
+  });
+
   it("describeStoryDay：本章第几天、星期几（给记事实环节换掉「下周三」）", async () => {
     const { describeStoryDay } = await import("../chapter-plan.js");
     const plan = normalizeChapterPlan({ summary: "s", beats: ["b"], storyDay: 8 }, { chapter: 9, now: NOW })!;

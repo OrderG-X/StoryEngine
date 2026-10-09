@@ -111,20 +111,34 @@ function cleanThreadSteps(value: unknown): readonly ChapterPlanThreadStep[] {
  * 宽进归一：任何合理模型可能给的形状（多余键、数组给成字符串、空串、数字）都收；缺关键字段（summary 与 beats
  * 都没有）→ undefined，由调用方如实说「章纲没拟成」并回落旧路径，绝不拿空章纲冒充。
  */
+/**
+ * 「故事第 N 天」只是记日子的内部编号，不该进要点和开场时间（第十八轮：章纲要点写「故事第 7 天上午」，
+ * 正文照抄出「受理回执日期栏印着第十一天」「今天是第几天你自己算」）。天数只留在 storyDay 字段。
+ */
+const STORY_DAY_NUMBERING = /[（(]?\s*故事第\s*[\d一二三四五六七八九十百]+\s*天\s*[）)]?[，,、]?\s*/gu;
+const STORY_DAY_IN_TEXT = /故事第\s*(\d+)\s*天/u;
+
+function stripStoryDayNumbering(text: string): string {
+  return text.replace(STORY_DAY_NUMBERING, "").replace(/[（(]\s*[）)]/gu, "").trim();
+}
+
 export function normalizeChapterPlan(
   raw: unknown,
   meta: { readonly chapter: number; readonly source?: "model" | "author"; readonly direction?: string; readonly now?: Date },
 ): ChapterPlan | undefined {
   const record = asRecord(raw);
   if (!record) return undefined;
-  const beats = cleanList(record.beats ?? record.outline ?? record.steps, MAX_BEATS);
-  const summary = cleanText(record.summary ?? record.goal) ?? beats[0];
+  const beats = cleanList(record.beats ?? record.outline ?? record.steps, MAX_BEATS).map(stripStoryDayNumbering).filter(Boolean);
+  const rawSummary = cleanText(record.summary ?? record.goal);
+  const summary = (rawSummary ? stripStoryDayNumbering(rawSummary) : "") || beats[0];
   if (!summary || beats.length === 0) return undefined;
   const scene = asRecord(record.scene);
   const location = cleanText(scene?.location ?? record.location, 40);
-  const time = cleanText(scene?.time ?? record.time, 40);
-  // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。
-  const storyDay = normalizeStoryDay(record.storyDay ?? scene?.storyDay) ?? (meta.chapter === 1 ? 1 : undefined);
+  const rawTime = cleanText(scene?.time ?? record.time, 40);
+  const time = rawTime ? stripStoryDayNumbering(rawTime) || undefined : undefined;
+  // 第 1 章就是故事第 1 天（第十四轮第 1 章章纲没给天数，日历从第 2 章才有起点）。只写在开场时间里的「故事第 N 天」也认。
+  const dayInTime = rawTime ? STORY_DAY_IN_TEXT.exec(rawTime)?.[1] : undefined;
+  const storyDay = normalizeStoryDay(record.storyDay ?? scene?.storyDay ?? dayInTime) ?? (meta.chapter === 1 ? 1 : undefined);
   const direction = cleanText(meta.direction, 400);
   return {
     version: 1,
@@ -281,7 +295,7 @@ function buildStoryClock(plan: ChapterPlan, clock: readonly StoryClockEntry[]): 
     earlier: clock
       .filter((entry) => entry.storyDay <= today)
       .map((entry) => `${relativeDayLabel(today - entry.storyDay)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}）：第 ${entry.chapter} 章${entry.time ? `，${entry.time}` : ""}，${entry.summary}`),
-    rule: "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的。",
+    rule: "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的。「故事第几天」只是给你对日子的内部编号，正文和台词里绝不出现「第 N 天」这种说法。",
   };
 }
 
@@ -293,6 +307,8 @@ export function buildChapterPlanSection(plan: ChapterPlan, clock: readonly Story
       "这是本章章纲。按要点顺序写，每个要点都要真正写到；可以自然补细节、对话和过渡，但不要另起与章纲无关的大事件。",
       "「本章新信息」必须在正文里明确出现（写出来，不是暗示）。「本章不要重复」里的内容不得再写一遍。",
     ].join(""),
+    // 第十八轮：要点交代了物件在哪，正文第 7–10 章开头都机械点名一遍「身份证、死亡证明、户口本」。
+    objectsNote: "要点里写的物件在谁手里、放在哪，是给你对照用的：正文用到它时照着写，不要在开头把随身带的东西逐一点名。",
     summary: plan.summary,
     beats: plan.beats,
     ...(plan.newInformation.length > 0 ? { newInformation: plan.newInformation } : {}),

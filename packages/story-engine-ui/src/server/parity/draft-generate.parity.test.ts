@@ -100,8 +100,11 @@ vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({
 
 
 const CHAPTER_GOAL = "第 1 章：主角拿到账册。";
-/** 写类对拍驱动 generate_draft 时带的用户原话：明确写作意图（意图门放行口径内的canonical句式）。 */
-const WRITE_TURN_TEXT = "写第 1 章正文";
+/**
+ * 写类对拍驱动 generate_draft 时带的用户原话：明确写作意图（意图门放行口径内的canonical句式），并带上方向——
+ * 只说「写第 1 章正文」时工具路不再采用模型自拟的 chapterGoal（第十八轮），两侧方向就不对等了。
+ */
+const WRITE_TURN_TEXT = "写第 1 章正文，主角拿到账册";
 
 /** mock writer：固定正文 + 记录入参（装配面可见性）。 */
 function recordingWriterClient(): WriterClient {

@@ -132,6 +132,18 @@ export function advancePastCommittedFrontier(input: {
   return input.resolvedChapter;
 }
 
+const GENERIC_CONTINUE_WORDS = /第\s*[\d一二三四五六七八九十百零两]+\s*章|下一章|这一章|上一章|本章|接着|往下|继续|开始|动笔|正文|一下|帮我|好的|然后|[写走吧请好行嗯再就]|[\s，。！？!?、,.~～…]/gu;
+
+/**
+ * 作者这轮只说了「写第 N 章 / 接着往下写」、没给方向 → 章纲不用模型自拟的 chapterGoal（第十八轮：助手每章自编一大段
+ * 「方向」，带着上一轮核对的误报、把剧情反复推回同一条手续线，章纲当作者原话照办，第 6–10 章原地打转）。
+ * 缺原话（按钮直调）不判；作者话里有任何具体内容（「让林溪回来」「按你说的」）都保留模型转述的方向。
+ */
+export function authorGaveNoDirection(userText: string | undefined): boolean {
+  if (userText === undefined) return false;
+  return userText.replace(GENERIC_CONTINUE_WORDS, "").length <= 1;
+}
+
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要出稿的章号。")),
   chapterGoal: z.string().optional().describe(
@@ -366,7 +378,7 @@ export const generateDraftTool = createTool({
   description:
     "为某章生成一版正文并写入工作稿（drafts/fast，未定稿）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
     "出稿前会先自动拟本章章纲（接住上一章结尾、推进开着的线索、至少一条新信息、写明不要重复什么），并按章纲翻出前文相关原文和旧事实再写；" +
-    "用户这章有方向就把原话放进 chapterGoal，章纲照它展开；同一方向重写会沿用已有章纲。章纲见 chapterPlan——转达时用一两句话说这章写了什么、新信息是什么。" +
+    "用户这章有方向就把原话放进 chapterGoal，章纲照它展开；用户没给方向就别填（不要自拟方向，章纲会按故事现状往下推）；同一方向重写会沿用已有章纲。章纲见 chapterPlan——转达时用一两句话说这章写了什么、新信息是什么。" +
     "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。" +
     "首稿低于字数下限时，在出稿这一步就从结尾接着写够（最多两轮，不在中间插句）；仍不够会在 draftLength 和 summary 里如实标注——别假装字数达标。" +
@@ -465,7 +477,7 @@ export const generateDraftTool = createTool({
     const outcome = await runGenerateDraft({
       projectDir,
       chapter: resolvedChapter,
-      ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
+      ...(input.chapterGoal !== undefined && !authorGaveNoDirection(userTurnText) ? { chapterGoal: input.chapterGoal } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
       ...(input.selectedCharacterIds !== undefined ? { selectedCharacterIds: input.selectedCharacterIds } : {}),
       ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
