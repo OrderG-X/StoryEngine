@@ -42,6 +42,8 @@ describe("parseContinuityIssues", () => {
     const out = parseContinuityIssues(JSON.stringify({
       issues: [
         { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "与第4章菜场已拆一致吗？细看不算矛盾", fix: "无需修改" },
+        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "可能是另一处菜场，暂不列为矛盾", fix: "保持" },
+        { type: "repeat", quote: "四月十七对上了", conflict: "与第3章核对相近，此条不报", fix: "—" },
         { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "第4章：菜场十来年前就拆了", fix: "改成商场" },
       ],
     }), DRAFT);

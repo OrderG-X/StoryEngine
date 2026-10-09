@@ -71,6 +71,16 @@ describe("checkAndRevisePlan 章纲审校", () => {
     expect(result.plan.storyDay).toBe(7);
   });
 
+  it("审校改天数：原天数顺得下去就不动；原天数倒退才用审校的（第十五轮对的第 8 天被改成第 9 天）", async () => {
+    const dir = await makeBook(); // 第 6 章：故事第 6 天
+    const fix = (storyDay: number) => vi.fn(async () => JSON.stringify({ issues: ["x"], plan: { summary: "s", beats: ["b"], storyDay } }));
+    const ok = await checkAndRevisePlan({ projectDir: dir, plan: PLAN, callModel: fix(8) }); // 原第 7 天
+    expect(ok.plan.storyDay).toBe(7);
+    const backwards = normalizeChapterPlan({ ...PLAN, storyDay: 5 }, { chapter: 7 })!;
+    const fixed = await checkAndRevisePlan({ projectDir: dir, plan: backwards, callModel: fix(7) });
+    expect(fixed.plan.storyDay).toBe(7);
+  });
+
   it("没问题 → 原章纲照用", async () => {
     const dir = await makeBook();
     const result = await checkAndRevisePlan({ projectDir: dir, plan: PLAN, callModel: vi.fn(async () => "{\"ok\":true}") });

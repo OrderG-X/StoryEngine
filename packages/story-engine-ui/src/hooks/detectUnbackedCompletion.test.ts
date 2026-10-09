@@ -205,6 +205,12 @@ describe("detectUnbackedCompletionClaim A1 谎报探针", () => {
     )).toBe(false);
   });
 
+  it("「第 9 章预览已生成 / 预览通过」+ commit_preview 成功 → 不命中（第十五轮误挂系统更正）；没跑预览照样命中", () => {
+    const text = "第 9 章预览通过，可以定稿。第 9 章预览已生成，想直接定稿就点预览卡上的「确认定稿」按钮。";
+    expect(detectUnbackedCompletionClaim(text, [step("commit_preview", "completed")])).toBe(false);
+    expect(detectUnbackedCompletionClaim(text, [])).toBe(true);
+  });
+
   it("未成功 commit_apply 却说已正式入库时，失败文案必须盖掉假成功正文", () => {
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("定稿未完成");
     expect(unbackedCompletionNoticeText("第1章已正式入库完成。")).toContain("没有检测到定稿成功执行");

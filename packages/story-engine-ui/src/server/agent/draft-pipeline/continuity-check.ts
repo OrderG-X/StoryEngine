@@ -139,7 +139,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 const ISSUE_TYPES = new Set<ContinuityIssueType>(["contradiction", "repeat", "missing_beat"]);
-const SELF_DISMISSED = /不算矛盾|不构成矛盾|并不矛盾|无矛盾|没有矛盾|不冲突|并无冲突|无需修改|不需要修改|可以接受/u;
+const SELF_DISMISSED = /不算(?:矛盾|冲突|问题)|不构成(?:矛盾|冲突|问题)|并不矛盾|无矛盾|没有矛盾|不冲突|并无冲突|无需修改|不需要修改|无需改动|不必改|可以接受|暂不列|不列为|不列入|此条不报|不报此条|可忽略|忽略此条/u;
 
 /** 宽进解析：坏条目逐条丢；contradiction/repeat 引的原句必须逐字（忽略空白）在正文里，否则丢弃并计数。 */
 export function parseContinuityIssues(text: string, draftBody: string): { readonly issues: readonly ContinuityIssue[]; readonly droppedUnverified: number } {
