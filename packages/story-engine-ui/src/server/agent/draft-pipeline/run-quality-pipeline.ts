@@ -89,14 +89,19 @@ async function readPlanTimeline(projectDir: string, chapter: number, plan: Chapt
   return out;
 }
 
+/** 首稿低于下限的这个比例才自动续写。 */
+const CONTINUE_ONLY_BELOW_RATIO = 0.8;
+
 export async function runDraftQualityPipeline(input: QualityPipelineInput): Promise<QualityPipelineResult> {
   let body = input.draftBody;
   const notes: string[] = [];
   let info: QualityPipelineInfo = {};
 
   const timings: { continueMs?: number; continuityMs?: number } = {};
-  // ① 字数在出稿这一步写够（接着写，不在中间插句）。
-  if (input.continueCallModel && countDraftChineseCharacters(body) < input.lengthTarget.lowerBound) {
+  // ① 字数严重不够才接着写（不在中间插句）。2026-10-10 真机试写：首稿只差两三百字也续，续出的一段挤成一大段、
+  // 凭空编出前文没有的对话（「韩德胜说钥匙交给孟叔了」），历轮审读里续写段也是矛盾最密的地方——略短就如实说短了多少、交作者定。
+  const firstLength = countDraftChineseCharacters(body);
+  if (input.continueCallModel && firstLength < input.lengthTarget.lowerBound * CONTINUE_ONLY_BELOW_RATIO) {
     const startedAt = Date.now();
     const continued = await continueDraftToLength({
       chapter: input.chapter,
@@ -115,6 +120,8 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     } else if (continued.failures.length > 0) {
       notes.push(`首稿 ${continued.before} 字低于下限 ${input.lengthTarget.lowerBound}，自动续写没成（${continued.failures.at(-1)}）。`);
     }
+  } else if (firstLength < input.lengthTarget.lowerBound) {
+    notes.push(`首稿 ${firstLength} 字，比下限 ${input.lengthTarget.lowerBound} 少 ${input.lengthTarget.lowerBound - firstLength} 字；只差一点就没自动续写（续写容易写出和前文对不上的内容），要补就说一声。`);
   }
 
   // ② 前后核对（+ ③ 注入了改写调用时才自动修；生产路默认不自动修，问题留给作者定）。

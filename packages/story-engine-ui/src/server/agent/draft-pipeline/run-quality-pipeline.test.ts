@@ -57,6 +57,18 @@ describe("runDraftQualityPipeline", () => {
     expect(result.notes.join("\n")).toContain("复核已无冲突");
   });
 
+  it("只比下限少一点 → 不续写，如实说短了多少（2026-10-10 真机试写：续出的段凭空编对话）", async () => {
+    const draft = "林舟一早骑车出门，往南门去。他在后街口停下，找修鞋的吴师傅打听当年钟表厂宿舍的事，吴师傅想了很久才开口，说那片宿舍早拆了。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    const continueCallModel = vi.fn(async () => "续写的一段。");
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, draftPath, title: "第8章", draftBody: draft, lengthTarget: { ...TARGET, lowerBound: 60 }, continueCallModel,
+    });
+    expect(continueCallModel).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.notes.join("\n")).toContain("只差一点就没自动续写");
+  });
+
   it("什么都没改 → 不建快照、不写盘", async () => {
     const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场早没了，原址立着一排商场。";
     const { projectDir, draftPath } = await makeBook(draft);
