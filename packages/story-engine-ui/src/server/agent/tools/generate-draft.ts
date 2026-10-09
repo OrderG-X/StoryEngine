@@ -85,7 +85,7 @@ import {
   runGenerateDraft,
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
-import { callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
+import { callConfiguredPlanCheckModel, callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
 import {
   callConfiguredContinueModel,
   callConfiguredContinuityCheckModel,
@@ -483,6 +483,7 @@ export const generateDraftTool = createTool({
       beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
       // 阶段 2「先想后写」：出稿前拟章纲（chapterSteering 槽）。拟不成如实进 summary、照旧出稿。
       planCallModel: callConfiguredPlanModel,
+      planCheckCallModel: callConfiguredPlanCheckModel,
       // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（qualityCheck 槽）与冲突段改写（repair 槽）。
       continueCallModel: callConfiguredContinueModel,
       continuityCheckCallModel: callConfiguredContinuityCheckModel,

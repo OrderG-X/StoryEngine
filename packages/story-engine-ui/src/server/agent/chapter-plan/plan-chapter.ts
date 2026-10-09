@@ -26,7 +26,7 @@ import {
   writeChapterPlan,
   type ChapterPlan,
 } from "@actalk/story-engine";
-import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../../lib/llm-client.js";
 import { checkAndRevisePlan } from "./plan-check.js";
 
 export type PlanCallModel = (
@@ -283,14 +283,39 @@ export async function planChapter(input: PlanChapterInput): Promise<PlanChapterR
  * 生产用 callModel：chapterSteering 任务槽（思考开关随作者的任务设置），json_object。
  * 走 streamChatModelToText：流式 + 空闲超时（有字节就续命、无总时长上限）；一律不传 max_tokens（铁律）。
  */
+/** 拟章纲「光想不写」的上限：超过就改用关思考重拟（第十一轮验收：开思考陷进去 20 分钟，整章卡死）。 */
+const PLAN_MAX_THINKING_MS = 150_000;
+
 export const callConfiguredPlanModel: PlanCallModel = async (messages) => {
   const configured = await resolveConfiguredChatModel("chapterSteering");
+  const call = async (thinking: boolean) => {
+    const { content } = await streamChatModelToText({
+      configured: { ...configured, thinking },
+      messages: messages.map((message) => ({ role: message.role, content: message.content })),
+      responseFormat: { type: "json_object" },
+      ...(thinking ? { maxThinkingMs: PLAN_MAX_THINKING_MS } : {}),
+    });
+    if (!content.trim()) throw new Error("章纲模型返回了空内容");
+    return content;
+  };
+  try {
+    return await call(configured.thinking);
+  } catch (error) {
+    if (!(error instanceof ThinkingTooLongError)) throw error;
+    console.warn(`[draft-pipeline] 拟章纲思考超过 ${PLAN_MAX_THINKING_MS / 1000} 秒还没出结果，改用不思考重拟`);
+    return call(false);
+  }
+};
+
+/** 章纲审校：输入短、按格式出 JSON，强制关思考（同核对环节；开着它容易陷进长思考）。 */
+export const callConfiguredPlanCheckModel: PlanCallModel = async (messages) => {
+  const configured = await resolveConfiguredChatModel("chapterSteering");
   const { content } = await streamChatModelToText({
-    configured,
+    configured: { ...configured, thinking: false },
     messages: messages.map((message) => ({ role: message.role, content: message.content })),
     responseFormat: { type: "json_object" },
   });
-  if (!content.trim()) throw new Error("章纲模型返回了空内容");
+  if (!content.trim()) throw new Error("章纲审校返回了空内容");
   return content;
 };
 
@@ -306,7 +331,10 @@ export interface ResolvedChapterPlan {
  * 出稿前拿到本章章纲：这章已有章纲、且作者方向没变（同为空或原话相同）→ 沿用（「重写这一章」保持同一份章纲）；
  * 否则重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
  */
-export async function resolveChapterPlanForDraft(input: PlanChapterInput): Promise<ResolvedChapterPlan> {
+export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
+  /** 章纲审校用的调用（生产注入关思考版）；缺省用拟章纲同一个调用。 */
+  readonly checkCallModel?: PlanCallModel;
+}): Promise<ResolvedChapterPlan> {
   const direction = input.direction?.trim() ?? "";
   const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
   if (existing && (existing.direction ?? "") === direction) {
@@ -315,7 +343,7 @@ export async function resolveChapterPlanForDraft(input: PlanChapterInput): Promi
   const planned = await planChapter({ ...input, ...(direction ? { direction } : {}) });
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
   // 动笔前审校一遍：按章纲自己写了什么去翻旧事实，对不上就当场改章纲（第十轮验收：近一半矛盾出在章纲）。
-  const checked = await checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.callModel });
+  const checked = await checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.checkCallModel ?? input.callModel });
   const reviewNote = checked.revised
     ? `（章纲审校改了 ${checked.issues.length} 处与前文对不上的地方：${checked.issues.slice(0, 2).join("；")}${checked.issues.length > 2 ? "等" : ""}）`
     : checked.error ? `（章纲审校这次没跑成：${checked.error}）` : "";

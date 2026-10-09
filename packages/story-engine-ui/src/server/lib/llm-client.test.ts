@@ -24,7 +24,7 @@ vi.mock("./task-assignments.js", async (importOriginal) => {
   return { ...actual, readTaskAssignments: taskAssignMocks.readTaskAssignments };
 });
 
-import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse } from "./llm-client.js";
+import { buildProviderRequestHeaders, callOpenAICompatibleChatModel, createIdleAbort, createOpenAICompatibleWriterClient, describeTruncatedFinish, getOpencodeSessionId, globalOpencodeSessionPath, isAlwaysOnThinkingModel, isOpencodeHost, isThinkingCannotBeDisabledError, isTruncatedFinishReason, learnAlwaysOnThinkingModel, modelCapabilityKey, resolveConfiguredChatModel, STORY_ENGINE_USER_AGENT, streamChatModelToText, streamOpenAICompatibleResponse, ThinkingTooLongError } from "./llm-client.js";
 
 const { loadModelSettingsV0 } = storyEngineMocks;
 
@@ -363,6 +363,52 @@ describe("callOpenAICompatibleChatModel 超时（非流式短调用：signal 传
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// 2026-10-09 十一轮验收：拟章纲开思考陷进去 20 分钟——思考 token 一直在续命，空闲超时管不住。
+describe("streamChatModelToText 「光想不写」上限（maxThinkingMs）", () => {
+  const configured = {
+    provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
+    profile: { id: "m", provider: "p", model: "m" },
+    apiKey: "",
+    thinking: true,
+    thinkingDialect: "none",
+  } as unknown as Parameters<typeof streamChatModelToText>[0]["configured"];
+
+  /** 每 15ms 吐一块：先 reasoningCount 块思考，再 contentCount 块正文（0 = 只思考、永不收尾），被 abort 就报错。 */
+  function pacedStream(signal: AbortSignal | null | undefined, reasoningCount: number, contentCount: number): globalThis.Response {
+    const encoder = new TextEncoder();
+    let i = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        if (signal?.aborted) { controller.error(new Error("aborted")); return; }
+        if (contentCount === 0 || i < reasoningCount) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "想" } }] })}\n\n`));
+        } else if (i < reasoningCount + contentCount) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "写" } }] })}\n\n`));
+        } else {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        }
+        i += 1;
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }
+
+  it("一直只思考、超过上限还没出正文 → 抛 ThinkingTooLongError（调用方据此关思考重试）", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => pacedStream(init?.signal, 0, 0));
+    await expect(streamChatModelToText({ configured, messages: [], maxThinkingMs: 120 })).rejects.toBeInstanceOf(ThinkingTooLongError);
+    spy.mockRestore();
+  });
+
+  it("上限内开始出正文 → 之后写多久都不掐（不是总时长上限）", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => pacedStream(init?.signal, 2, 20));
+    const out = await streamChatModelToText({ configured, messages: [], maxThinkingMs: 120 });
+    expect(out.content).toBe("写".repeat(20));
+    spy.mockRestore();
   });
 });
 

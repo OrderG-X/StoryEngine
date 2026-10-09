@@ -960,6 +960,8 @@ export interface GenerateDraftInput {
    * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
    */
   readonly planCallModel?: PlanCallModel;
+  /** 章纲审校的调用（生产注入关思考版）；缺省用 planCallModel。 */
+  readonly planCheckCallModel?: PlanCallModel;
   /**
    * 阶段 3 出稿后的固定质量环节（工具 execute 注入；测试注入 mock）：
    * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）+
@@ -1187,6 +1189,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
       callModel: input.planCallModel,
+      ...(input.planCheckCallModel ? { checkCallModel: input.planCheckCallModel } : {}),
     })
     : undefined;
   const draftStartedAt = Date.now();

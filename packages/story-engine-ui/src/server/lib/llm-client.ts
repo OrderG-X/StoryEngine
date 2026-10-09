@@ -857,9 +857,21 @@ export async function streamChatModelToText(input: {
   readonly idleTimeoutMs?: number;
   /** 每段正文 delta 实时回调（出稿流式进编辑器用）；不传则照常只聚合、不外发。 */
   readonly onDelta?: (delta: string) => void;
+  /**
+   * 「光想不写」上限（毫秒）：从发请求起这么久还一个正文字都没出（只在吐思考 token）→ 掐掉并抛 ThinkingTooLongError，
+   * 由调用方改用关思考重试。不是总时长上限：一旦开始出正文就不再计时，正文写多久都行（守超时铁律）。
+   * 十章验收实锤：拟章纲开思考陷进去 20 分钟（单回合思考 11 万字）——空闲超时管不住，因为思考 token 一直在续命。
+   */
+  readonly maxThinkingMs?: number;
 }): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
   const idleTimeoutMs = input.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   const idle = createIdleAbort(idleTimeoutMs);
+  let thinkingTooLong = false;
+  const thinkingTimer = input.maxThinkingMs
+    ? setTimeout(() => { thinkingTooLong = true; idle.controller.abort(); }, input.maxThinkingMs)
+    : undefined;
+  (thinkingTimer as unknown as { unref?: () => void } | undefined)?.unref?.();
+  const stopThinkingTimer = () => { if (thinkingTimer) clearTimeout(thinkingTimer); };
   let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实（治审查 #5）
   try {
     const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
@@ -914,7 +926,8 @@ export async function streamChatModelToText(input: {
     }
     const { content, thinking, finishReason } = await streamOpenAICompatibleResponse(
       response,
-      input.onDelta ?? (() => undefined), // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合
+      // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合；一出正文就停「光想不写」计时。
+      (delta) => { if (delta) stopThinkingTimer(); input.onDelta?.(delta); },
       () => undefined,
       () => { gotBytes = true; idle.kick(); }, // 收到任何字节就续命，并记下「收过字节」
     );
@@ -925,6 +938,9 @@ export async function streamChatModelToText(input: {
     }
     return { content, thinking, finishReason };
   } catch (error) {
+    if (thinkingTooLong) {
+      throw new ThinkingTooLongError(input.maxThinkingMs ?? 0);
+    }
     if (idle.controller.signal.aborted) {
       const secs = Math.round(idleTimeoutMs / 1000);
       throw new Error(
@@ -935,7 +951,16 @@ export async function streamChatModelToText(input: {
     }
     throw error;
   } finally {
+    stopThinkingTimer();
     idle.dispose();
+  }
+}
+
+/** 「光想不写」超过上限（见 streamChatModelToText 的 maxThinkingMs）：调用方应改用关思考重试。 */
+export class ThinkingTooLongError extends Error {
+  constructor(readonly maxThinkingMs: number) {
+    super(`模型思考超过 ${Math.round(maxThinkingMs / 1000)} 秒还没开始输出，已停下（可改用不思考重试）`);
+    this.name = "ThinkingTooLongError";
   }
 }
 

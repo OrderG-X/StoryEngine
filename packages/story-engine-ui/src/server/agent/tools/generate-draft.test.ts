@@ -52,6 +52,7 @@ vi.mock("../draft-pipeline/run-quality-pipeline.js", () => ({
 // 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
 vi.mock("../chapter-plan/plan-chapter.js", () => ({
   callConfiguredPlanModel: vi.fn(),
+  callConfiguredPlanCheckModel: vi.fn(),
   resolveChapterPlanForDraft: vi.fn(async () => ({ note: "", reused: false })),
 }));
 
