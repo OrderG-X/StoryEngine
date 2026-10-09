@@ -2,7 +2,7 @@
  * fact-ledger —— 硬事实账本：抽取提示词/解析 + 读写 story/fact-ledger.json + 编排 + 改账本。
  * 纯逻辑、callModel 注入便于单测。题材中立、绝不静默失败（抽取失败非致命、如实回报）。
  */
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -120,6 +120,8 @@ export async function readFactLedger(projectDir: string): Promise<{ readonly ver
 
 async function writeLedger(projectDir: string, facts: readonly FactEntry[]): Promise<void> {
   const path = ledgerPath(projectDir);
+  // 书已被删/移走时不再写（定稿后的事实抽取要跑一阵，期间书被删会凭空重建出只有账本的空书目录）。
+  await stat(projectDir);
   await mkdir(dirname(path), { recursive: true });
   await writeFileAtomic(path, JSON.stringify({ version: "v0", facts }, null, 2));
 }

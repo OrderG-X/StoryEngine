@@ -228,6 +228,14 @@ describe("事实编号", () => {
   });
 });
 
+describe("书已删除", () => {
+  it("书目录不在了 → 写账本报错，不凭空重建书目录", async () => {
+    const dir = join(await tmp(), "gone");
+    await expect(appendFacts(dir, 2, ["甲"], "auto")).rejects.toThrow();
+    await expect(readFile(join(dir, "story", "fact-ledger.json"), "utf-8")).rejects.toThrow();
+  });
+});
+
 describe("fact-ledger 数据完整性（Codex P1·2/3）", () => {
   it("修 P1·2：账本损坏(坏 JSON) → applyFactEdit ok:false，且坏文件不被覆盖", async () => {
     const dir = await tmp();
