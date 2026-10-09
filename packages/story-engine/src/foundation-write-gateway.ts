@@ -211,7 +211,7 @@ export async function classifyFoundationWriteSuggestion(input: {
     if (risk) return risk;
   }
   if (input.suggestion.actionType === "update_writing_rule") {
-    const risk = await classifyStructuredScalarRisk(input.projectDir, input.suggestion, targetPath, "story/writing-rules.json", ["narrativePerspective", "pacing", "revealPolicy"]);
+    const risk = await classifyStructuredScalarRisk(input.projectDir, input.suggestion, targetPath, "story/writing-rules.json", ["narrativePerspective", "pacing", "revealPolicy"], WRITING_RULE_CREATION_DEFAULTS);
     if (risk) return risk;
   }
   if (input.suggestion.actionType === "update_character_detail") {
@@ -2318,12 +2318,24 @@ async function classifyCharacterScalarRisk(
   return undefined;
 }
 
+/**
+ * 建书时系统自动填的写作规则默认值（见 project-store createDefaultWritingRules）。它们不是作者定的长期设定：
+ * 十章验收第十二轮，作者在开头说了「每章至少 2400 字」，AI 写规则时顺带把节奏从默认「中等」改了，
+ * 被当成「替换已有长期设定」要求确认，整条（连字数下限）都没写进去。默认值可以直接改，作者自己定过的才要确认。
+ */
+const WRITING_RULE_CREATION_DEFAULTS: Readonly<Record<string, string>> = {
+  narrativePerspective: "第三人称有限视角",
+  pacing: "中等",
+  revealPolicy: "均衡",
+};
+
 async function classifyStructuredScalarRisk(
   projectDir: string,
   suggestion: FoundationWriteSuggestionLike,
   targetPath: string,
   targetFile: string,
   scalarKeys: readonly string[],
+  creationDefaults: Readonly<Record<string, string>> = {},
 ): Promise<FoundationWriteRisk | undefined> {
   if (!isRecord(suggestion.after)) return undefined;
   const existing = await readJson<Record<string, unknown>>(join(projectDir, targetFile), defaultDocument(targetFile));
@@ -2331,7 +2343,8 @@ async function classifyStructuredScalarRisk(
     const suggestedValue = suggestion.after[key];
     if (!hasStrongConcreteValue(suggestedValue)) continue;
     const existingValue = existing[key];
-    if (hasStrongConcreteValue(existingValue) && !valuesEquivalent(existingValue, suggestedValue) && !isExplicitReplaceIntent(suggestion)) {
+    const isCreationDefault = typeof existingValue === "string" && creationDefaults[key] === existingValue.trim();
+    if (hasStrongConcreteValue(existingValue) && !isCreationDefault && !valuesEquivalent(existingValue, suggestedValue) && !isExplicitReplaceIntent(suggestion)) {
       return {
         level: "needs_confirmation",
         reason: "这次写入会替换已有长期设定，需要用户明确覆盖。",
