@@ -171,6 +171,7 @@ describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后�
     expect(storyDayAtChapterEnd(make(["傍晚回铺子", "第二天上午，许棠上门"]))).toBe(3);
     expect(storyDayAtChapterEnd(make(["傍晚回铺子", "三天后，林溪来了"]))).toBe(5);
     expect(storyDayAtChapterEnd(make(["许棠约好第二天来量铺子", "林舟关门"]))).toBe(2);
+    expect(storyDayAtChapterEnd(make(["第二天上午，林舟开门", "傍晚关门"]))).toBe(2);
     expect(storyDayAtChapterEnd(undefined)).toBeUndefined();
   });
 });

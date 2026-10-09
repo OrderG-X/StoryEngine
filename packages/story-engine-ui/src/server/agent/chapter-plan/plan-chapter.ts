@@ -324,7 +324,8 @@ const BEAT_OPENS_WITH_DAY_CHANGE = /^[^，。,]{0,2}?(第二天|第二日|次日
 export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | undefined {
   if (!plan?.storyDay) return undefined;
   let day = plan.storyDay;
-  for (const beat of plan.beats) {
+  // 第 1 个要点写的是本章开场（「第二天上午，……」），那一天已经算进 storyDay 了，不能再加（第二十二轮第 3、4、6、9 章各多记一天）。
+  for (const beat of plan.beats.slice(1)) {
     const match = BEAT_OPENS_WITH_DAY_CHANGE.exec(beat);
     if (!match) continue;
     day += match[2] ? (CJK_DIGITS[match[2]] ?? (Number(match[2]) || 1)) : 1;

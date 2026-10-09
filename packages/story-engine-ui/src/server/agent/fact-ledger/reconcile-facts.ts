@@ -154,7 +154,8 @@ export function absolutizeRelativeDays(text: string, storyDay: number | undefine
     if (day < 1) continue;
     out = out.replace(pattern, `故事第${day}天${suffix}`);
   }
-  return out;
+  // 模型自己已写了「明天（故事第 2 天）」时换完会叠成「故事第2天（故事第2天）」（第二十二轮账本残渣）。
+  return out.replace(/(故事第\s*(\d+)\s*天)\s*[（(]\s*故事第\s*\2\s*天\s*[）)]/gu, "$1");
 }
 
 const KINSHIP_TERM = /爸|妈|爹|娘|父|母|爷|奶|外公|外婆|祖|哥|姐|弟|妹|叔|伯|姑|舅|姨|老爷子|老太太/u;
