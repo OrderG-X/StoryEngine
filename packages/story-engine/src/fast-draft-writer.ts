@@ -172,8 +172,11 @@ export function findReplayedParagraphs(firstHalf: string, secondHalf: string): r
 
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
-/** 目标字数至少这么多才分两半写：写手一次自然写一千八到两千字，目标在这以内一次写完更连贯。 */
-const MIN_TARGET_TO_SEGMENT = 2600;
+/**
+ * 目标字数至少这么多才分两半写。原为 2600：2026-10-10 真机试写目标 2500 的书一次只写出一千六七，
+ * 剩下一千多字靠续写补，硬伤几乎全出在续写段——一次写不够目标的都该分两半。1800 这类短章仍一次写完。
+ */
+const MIN_TARGET_TO_SEGMENT = 2000;
 
 /** 改写某一段的内容（token 估算随之更新），其余段原样。 */
 function withSectionContent(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {

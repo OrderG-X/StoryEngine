@@ -339,6 +339,26 @@ describe("commit quality check", () => {
     expect(report.issues.map((issue) => issue.message).join("\n")).not.toContain("林远 之前按女性/她");
   });
 
+  it("「许微看着他。他鬓角的白发」里的他指别人，不算许微的称谓（2026-10-10 真机试写每章误报）", async () => {
+    const projectDir = await createFixtureProject();
+    await writeFile(
+      join(projectDir, "chapters", "0001.md"),
+      ["# 第一章", "", "许微看着他。他鬓角的白发在灯下很扎眼。", "许微把信收好。她转身走了。"].join("\n"),
+      "utf-8",
+    );
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 2,
+      draftContent: [
+        "# 第二章",
+        "",
+        "许微站在台边。她把麻绳绕回手上，开始分信。",
+        longDraft({ characterName: "林远", withTitle: false, withDialogue: true }),
+      ].join("\n"),
+    });
+    expect(report.issues.filter((issue) => issue.type === "cross_chapter_pronoun_drift")).toEqual([]);
+  });
+
   it("does not reference legacy InkOS packages", async () => {
     const sourcePath = join(import.meta.dirname, "..", "commit-quality-check.ts");
     const source = await import("node:fs/promises").then((fs) => fs.readFile(sourcePath, "utf-8"));

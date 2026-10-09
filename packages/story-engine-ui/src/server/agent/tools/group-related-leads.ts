@@ -85,7 +85,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `GLM 分组调用失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
+      summary: `模型分组调用失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -96,7 +96,7 @@ export async function runGroupRelatedLeads(
   } catch (error) {
     return {
       ok: false,
-      summary: `解析 GLM 分组输出失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
+      summary: `解析模型分组输出失败：${scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error))}`,
     };
   }
 
@@ -141,7 +141,7 @@ const inputSchema = z.object({
   note: z
     .string()
     .optional()
-    .describe("可选备注，一般留空——工具自动读取项目线索并调 GLM 分组合并。"),
+    .describe("可选备注，一般留空——工具自动读取项目线索并调模型分组合并。"),
 });
 
 const outputSchema = z.object({
@@ -149,7 +149,7 @@ const outputSchema = z.object({
   ok: z.boolean().describe("是否成功；false 时 summary 含原因。"),
   summary: z.string().describe("自然语言结果，供回答用户。"),
   blockedReason: z.string().optional().describe("写入前守卫拦截原因，如本轮用户原话没有清理/归并线索意图。"),
-  groupCount: z.number().optional().describe("GLM 识别出的可合并组数。"),
+  groupCount: z.number().optional().describe("模型识别出的可合并组数。"),
   mergedCount: z.number().optional().describe("实际合并（标 stale）的 loser 条数。"),
 });
 
@@ -171,7 +171,7 @@ export const groupRelatedLeadsTool = writeTool({
   id: "group_related_leads",
   description:
     "当用户说『把讲同一件事的线索合并收拢 / 线索里有重复的 / 响动写了好多遍 / 把重复伏笔归一条』时调用：" +
-    "读取 story/threads.json，调 GLM 识别哪些 open/touched lead 是在讲同一件事，" +
+    "读取 story/threads.json，调模型识别哪些 open/touched lead 是在讲同一件事，" +
     "再把同一组 lead 合并收拢成一条（firstSeenChapter 最早的保留为 winner，其余标 stale、" +
     "evidence 并入 winner），原子写回；写前自动快照、可一键撤销。" +
     "无可合并线索时如实回报『没有可合并的同类线索』。" +

@@ -249,6 +249,36 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     return { streamAttempt, seenMessages, seenOptions, calls: () => call };
   }
 
+  it("步数用完、最后一步还是工具调用 → 如实说没做完（真机：7 处修改改到第 4 处就停）；正常说完的不加", async () => {
+    const cut = makeStreamAttempt([[
+      ...toolChunks("revise_draft", { ok: true, summary: "已改第 4 处。" }),
+      textChunk("第四处改好，接着改第五处。"),
+      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } } as ObedientTurnChunk,
+    ]]);
+    const cutEvents: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "按这七处改" }],
+      userText: "按这七处改",
+      streamAttempt: cut.streamAttempt as never,
+      sendEvent: (event, data) => cutEvents.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(collectText(cutEvents)).toContain("步数用完了");
+    const done = makeStreamAttempt([[
+      textChunk("七处都改好了。"),
+      { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
+    ]]);
+    const doneEvents: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "按这七处改" }],
+      userText: "按这七处改",
+      streamAttempt: done.streamAttempt as never,
+      sendEvent: (event, data) => doneEvents.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    expect(collectText(doneEvents)).not.toContain("步数用完了");
+  });
+
   it("模型/网络中途出错：只发 error 帧，不再叠「抱歉没能回应」和「正文生成没有执行」", async () => {
     const fake = makeStreamAttempt([
       [{ type: "error", payload: { error: new Error("terminated") } } as ObedientTurnChunk],

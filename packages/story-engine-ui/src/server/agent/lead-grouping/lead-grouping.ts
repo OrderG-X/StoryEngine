@@ -72,10 +72,25 @@ export function buildLeadGroupingMessages(
  * 从模型原始输出中抠出 JSON 并用 leadGroupsSchema 校验。
  * 无 JSON 或不合法（如单成员组）时抛 Error。
  */
+/**
+ * 宽进（模型无关铁律）：多给的字段丢掉、单条成组的跳过、id 给成数字也收、groups 直接给成数组也认。
+ * 2026-10-10 真机试写：严格 schema 下模型多带一个字段 / 某组只放一条，整次归并就「没跑成」。不是 JSON 才抛。
+ */
 export function parseLeadGroups(text: string): LeadGroups {
-  const match = text.match(/\{[\s\S]*\}/u);
+  const match = text.match(/[[{][\s\S]*[\]}]/u);
   if (!match) throw new Error("lead-grouping: 模型输出未含 JSON 对象");
-  return leadGroupsSchema.parse(JSON.parse(match[0]));
+  const raw = JSON.parse(match[0]) as unknown;
+  const record = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
+  const groupsRaw: readonly unknown[] = Array.isArray(record?.groups) ? record.groups : Array.isArray(raw) ? raw : [];
+  const groups = groupsRaw
+    .map((group) => {
+      const item = group && typeof group === "object" && !Array.isArray(group) ? (group as Record<string, unknown>) : undefined;
+      const ids: readonly unknown[] = Array.isArray(item?.memberIds) ? item.memberIds : Array.isArray(item?.ids) ? item.ids : Array.isArray(group) ? group : [];
+      const memberIds = [...new Set(ids.map((id) => (typeof id === "string" || typeof id === "number" ? String(id).trim() : "")).filter(Boolean))];
+      return { memberIds };
+    })
+    .filter((group) => group.memberIds.length >= 2);
+  return { groups };
 }
 
 // ─── applyLeadGroups ──────────────────────────────────────────────────────────

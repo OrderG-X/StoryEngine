@@ -11,8 +11,11 @@ describe("parseLeadGroups", () => {
     const r = parseLeadGroups('好:{"groups":[{"memberIds":["a","b","c"]}]}尾');
     expect(r.groups[0].memberIds).toEqual(["a", "b", "c"]);
   });
-  it("单成员组被 zod 拒(min 2)", () => {
-    expect(() => parseLeadGroups('{"groups":[{"memberIds":["a"]}]}')).toThrow();
+  it("宽进：单成员组跳过、多余字段丢掉、id 给成数字也收；不是 JSON 才抛（2026-10-10 真机：严格校验让整次归并没跑成）", () => {
+    expect(parseLeadGroups('{"groups":[{"memberIds":["a"]}]}')).toEqual({ groups: [] });
+    expect(parseLeadGroups('{"groups":[{"memberIds":["a","b"],"reason":"同一件事"},{"memberIds":[7,8,8]}],"note":"x"}'))
+      .toEqual({ groups: [{ memberIds: ["a", "b"] }, { memberIds: ["7", "8"] }] });
+    expect(() => parseLeadGroups("没有可合并的")).toThrow();
   });
 });
 

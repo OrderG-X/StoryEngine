@@ -252,6 +252,15 @@ export function toolResultStatus(toolName: string | undefined, output: unknown):
 export const MAX_OBEDIENCE_RETRIES = 1;
 
 /**
+ * 一轮对话最多走几步（Mastra 默认 5）。2026-10-10 真机试写：作者一次列 7 处修改，改到第 4 处步数用完就停了，
+ * 回复读起来像全改完了。改稿 / 补资料这类多处操作一步一处，5 步不够。
+ */
+export const AGENT_TURN_MAX_STEPS = 12;
+
+/** 步数用完、模型还停在工具调用上：如实告诉作者没做完。 */
+export const STEP_LIMIT_NOTICE = "\n\n（这一轮能走的步数用完了，事情可能还没做完。说「继续」我接着做。）";
+
+/**
  * 聊天历史窗口上限（r8 二轮·治「回执模式污染」的源头）。
  *
  * 真机实锤（ch84/ch88/ch93 三个病例完全一致）：聊天历史堆到 ≥5 章「出稿→回执→入库→回执」
@@ -505,6 +514,11 @@ export async function runObedientAgentTurn(args: {
       const scrubbed = args.scrubber.push(fallback);
       if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
     }
+    // 正常回合（非强制重做）最后一步还是工具调用 = 步数用完被截停，不是模型自己说完了。
+    if (finishReason === "tool-calls" && !attemptOptions && !sawStreamError) {
+      const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
+      if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    }
     const remainingText = args.scrubber.flush();
     if (remainingText) args.sendEvent("text-delta", { text: remainingText });
 
@@ -650,7 +664,7 @@ async function handleAgentChat(
             // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
             abortSignal: disconnectAbort.signal,
             ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
-            ...(options?.maxSteps ? { maxSteps: options.maxSteps } : {}),
+            maxSteps: options?.maxSteps ?? AGENT_TURN_MAX_STEPS,
           })
         ).fullStream as AsyncIterable<ObedientTurnChunk>,
       sendEvent,

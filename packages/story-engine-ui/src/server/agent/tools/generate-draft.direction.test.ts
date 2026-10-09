@@ -5,7 +5,7 @@ import { authorGaveNoDirection } from "./generate-draft.js";
 // 第十八轮：作者每章只说「写第 N 章，接着上一章往下走」，助手却自拟一大段「方向」塞给章纲，章纲当作者原话照办。
 describe("authorGaveNoDirection", () => {
   it("只说了写哪章 / 接着写 → 没给方向", () => {
-    for (const text of ["写第 3 章，接着上一章往下走。", "继续写", "写下一章吧", "好的，写第十章。", "开始写正文"]) {
+    for (const text of ["写第 3 章，接着上一章往下走。", "继续写", "写下一章吧", "好的，写第十章。", "开始写正文", "继续写下一章的正文，现在就动笔直接出稿", "继续写第 3 章的正文"]) {
       expect(authorGaveNoDirection(text)).toBe(true);
     }
   });

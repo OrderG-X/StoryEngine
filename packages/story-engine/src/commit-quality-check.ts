@@ -551,12 +551,29 @@ function extractPronounNameCandidates(content: string): readonly string[] {
   return unique(names);
 }
 
+/**
+ * 名字作主语的句子 + 下一句开头的他/她，全文投票定性别（不再只看第一处）。
+ * 本句里名字之后已出现他/她（「许微看着他。他鬓角的白发……」），下一句的代词多半指那个人，不计票——
+ * 2026-10-10 真机试写：这类句子让「许微」每章都被报「称谓漂移」。
+ */
 function inferNamePronounUsage(content: string, name: string): { readonly gender?: "male" | "female"; readonly evidence?: string } {
+  let femaleVotes = 0;
+  let maleVotes = 0;
+  let femaleVoteEvidence: string | undefined;
+  let maleVoteEvidence: string | undefined;
   for (const context of collectNameSentencePairs(content, name)) {
     if (!isNameSubjectLike(context.sentence, name)) continue;
-    if (/^(?:她|她的)/u.test(context.nextSentence)) return { gender: "female", evidence: `${context.sentence}${context.nextSentence}` };
-    if (/^(?:他|他的)/u.test(context.nextSentence)) return { gender: "male", evidence: `${context.sentence}${context.nextSentence}` };
+    if (/[他她]/u.test(context.sentence.slice(context.sentence.indexOf(name) + name.length))) continue;
+    if (/^(?:她|她的)/u.test(context.nextSentence)) {
+      femaleVotes += 1;
+      femaleVoteEvidence ??= `${context.sentence}${context.nextSentence}`;
+    } else if (/^(?:他|他的)/u.test(context.nextSentence)) {
+      maleVotes += 1;
+      maleVoteEvidence ??= `${context.sentence}${context.nextSentence}`;
+    }
   }
+  if (femaleVotes > maleVotes) return { gender: "female", evidence: femaleVoteEvidence };
+  if (maleVotes > femaleVotes) return { gender: "male", evidence: maleVoteEvidence };
   let maleEvidence: string | undefined;
   let femaleEvidence: string | undefined;
   for (const context of collectNameSentencePairs(content, name)) {
