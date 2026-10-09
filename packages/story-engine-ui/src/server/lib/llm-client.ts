@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { loadModelSettingsV0, renderFastDraftPromptText } from "@actalk/story-engine";
 import type { ModelSettingsLoadResult, WriterClient } from "@actalk/story-engine";
 import { writeFileAtomic } from "./project-io.js";
+import { recordPipelineUsage, sampleFromOpenAIUsage } from "./token-meter.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
@@ -603,8 +604,10 @@ function parseFirstChoiceContent(raw: string): string {
   const parsed = JSON.parse(raw) as {
     readonly choices?: readonly { readonly message?: { readonly content?: string; readonly reasoning_content?: string }; readonly finish_reason?: string }[];
     readonly error?: { readonly message?: string };
+    readonly usage?: unknown;
   };
   if (parsed.error?.message) throw new Error(`模型返回错误：${parsed.error.message}`);
+  recordPipelineUsage(sampleFromOpenAIUsage(parsed.usage));
   const choice = parsed.choices?.[0];
   const content = choice?.message?.content?.trim() ?? "";
   if (content) return content;
@@ -668,6 +671,8 @@ interface StreamFrame {
   }[];
   /** 上游在流中途/开头塞的错误帧：OpenAI 形 `{error:{message}}`，也有网关直接给字符串。 */
   readonly error?: { readonly message?: string; readonly code?: string | number; readonly type?: string } | string;
+  /** stream_options.include_usage 打开时末帧带的用量（各家字段不一，见 token-meter 的宽进解析）。 */
+  readonly usage?: unknown;
 }
 
 /**
@@ -718,14 +723,14 @@ export async function streamOpenAICompatibleResponse(
   // 每收到一块原始字节就回调（含 keepalive / 仅 role 的首块）——用于空闲超时「有字节就续命」，
   // 比只盯 content/thinking delta 更准：思考阶段 content 为空但 reasoning 在流，连接其实活着。
   onActivity?: () => void,
-): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
+): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string; readonly usage?: unknown }> {
   if (!response.body) {
     const parsed = await response.json() as StreamFrame;
     const errorText = describeStreamErrorFrame(parsed);
     if (errorText) throw new Error(`模型返回错误：${errorText}`);
     const content = parsed.choices?.[0]?.message?.content ?? "";
     if (content) onDelta(content);
-    return { content, thinking: "", finishReason: parsed.choices?.[0]?.finish_reason ?? undefined };
+    return { content, thinking: "", finishReason: parsed.choices?.[0]?.finish_reason ?? undefined, usage: parsed.usage };
   }
 
   const decoder = new TextDecoder();
@@ -734,10 +739,12 @@ export async function streamOpenAICompatibleResponse(
   let content = "";
   let thinking = "";
   let finishReason: string | undefined;
+  let usage: unknown;
 
   const consumeFrame = (parsed: StreamFrame): void => {
     const errorText = describeStreamErrorFrame(parsed);
     if (errorText) throw new Error(`模型返回错误：${errorText}`);
+    if (parsed.usage) usage = parsed.usage;
     const choice = parsed.choices?.[0];
     const delta = choice?.delta;
     const textDelta = delta?.content ?? choice?.message?.content ?? "";
@@ -772,7 +779,7 @@ export async function streamOpenAICompatibleResponse(
         if (!data) continue;
         if (data === "[DONE]") {
           await reader.cancel().catch(() => undefined);
-          return { content, thinking, finishReason };
+          return { content, thinking, finishReason, usage };
         }
         let parsed: StreamFrame | undefined;
         try {
@@ -801,7 +808,7 @@ export async function streamOpenAICompatibleResponse(
     }
   }
 
-  return { content, thinking, finishReason };
+  return { content, thinking, finishReason, usage };
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +905,8 @@ export async function streamChatModelToText(input: {
         stream: true,
       })),
       stream: true,
+      // 末帧带真实用量（记进本轮 token 计量，见 token-meter）。不认这个参数的网关会 400，下面去掉重发一次。
+      stream_options: { include_usage: true },
     };
     const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
       fetch(`${baseUrl}/chat/completions`, {
@@ -907,6 +916,13 @@ export async function streamChatModelToText(input: {
         signal: idle.controller.signal,
       });
     let response = await postChat(body);
+    if (!response.ok && response.status === 400) {
+      const firstErrorText = await response.clone().text().catch(() => "");
+      if (/stream_options|include_usage/iu.test(firstErrorText)) {
+        delete body.stream_options;
+        response = await postChat(body);
+      }
+    }
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
       // always-on 思考自适应：只认「cannot be disabled」这一个 400，省略思考参数重试一次（让模型用自身默认）；
@@ -924,7 +940,7 @@ export async function streamChatModelToText(input: {
         throw new Error(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`);
       }
     }
-    const { content, thinking, finishReason } = await streamOpenAICompatibleResponse(
+    const { content, thinking, finishReason, usage } = await streamOpenAICompatibleResponse(
       response,
       // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合；一出正文就停「光想不写」计时。
       (delta) => { if (delta) stopThinkingTimer(); input.onDelta?.(delta); },
@@ -933,6 +949,7 @@ export async function streamChatModelToText(input: {
     );
     // 末帧 finish_reason 说「没收尾」（length / content_filter …）→ 半截正文不能当完整结果：诚实抛错，
     // 调用方按 ok=false 如实回报，绝不把截断稿当成功。认不出的非 stop 值只原样带回，不赌陌生网关的枚举。
+    recordPipelineUsage(sampleFromOpenAIUsage(usage));
     if (isTruncatedFinishReason(finishReason)) {
       throw new Error(describeTruncatedFinish(finishReason as string, content.length));
     }

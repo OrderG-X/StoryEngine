@@ -38,6 +38,7 @@ import {
   unbackedCompletionNoticeText,
   type HonestyToolStep,
 } from "../../shared/honesty-detection.js";
+import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -300,6 +301,8 @@ export interface ObedientTurnChunk {
     readonly result?: unknown;
     readonly error?: unknown;
     readonly stepResult?: { readonly reason?: string };
+    /** finish 帧：这次尝试（可能多步）的总用量与步骤。 */
+    readonly output?: { readonly usage?: unknown; readonly steps?: readonly unknown[] };
   };
 }
 
@@ -460,6 +463,7 @@ export async function runObedientAgentTurn(args: {
         }
         case "finish": {
           finishReason = chunk.payload?.stepResult?.reason;
+          recordAgentUsage(sampleFromSdkUsage(chunk.payload?.output?.usage), chunk.payload?.output?.steps?.length || 1);
           break;
         }
         default:
@@ -654,7 +658,7 @@ async function handleAgentChat(
 
     // 带服从重试的回合执行（r8 任务①）：空转声称 → 自动重做一次 → 仍空转才诚实更正收场。
     // streamAttempt 每次沿用同一 requestContext（用户原话不变 → 写入意图门对合法重做不误拦）。
-    const { finishReason } = await runObedientAgentTurn({
+    const { result: { finishReason }, usage } = await withTokenMeter(() => runObedientAgentTurn({
       initialMessages: modelMessages,
       userText: readLatestUserTurnText(messages),
       streamAttempt: async (attemptMessages, options) =>
@@ -670,8 +674,11 @@ async function handleAgentChat(
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
-    });
+    }));
 
+    // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
+    console.info(`[token-usage] ${describeTokenUsage(usage)}`);
+    sendEvent("usage", usage);
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });
     res.end();
   } catch (error) {

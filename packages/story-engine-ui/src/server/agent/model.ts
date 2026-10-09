@@ -224,6 +224,8 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
     name: provider.id,
     baseURL,
     apiKey,
+    // 流式末帧带真实用量（对话 AI 每轮记 token，见 lib/token-meter）。
+    includeUsage: true,
     fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, withUpstreamSilenceGuard(fetch), outboundHeaders),
   });
   return { model: openaiCompatible(profile.model), profile };
