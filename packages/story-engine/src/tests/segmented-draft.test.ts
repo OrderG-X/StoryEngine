@@ -36,7 +36,7 @@ describe("按章纲分前后两半写", () => {
           : { title: "", content: `${han(900, "后")}。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 2000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
     expect(writer.generateDraft).toHaveBeenCalledTimes(2);
     const firstPrompt = renderFastDraftPromptText(contexts[0]);
     expect(firstPrompt).toContain("这次是前半章】只写章纲要点 1–3");
@@ -56,7 +56,7 @@ describe("按章纲分前后两半写", () => {
         .mockResolvedValueOnce({ title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(900, "前")}。` })
         .mockRejectedValueOnce(new Error("socket hang up")),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 2000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
     expect(report.issues.join("\n")).toContain("后半章没写成");
     expect(await readFile(report.draftPath!, "utf-8")).not.toContain("后");
   });
@@ -64,9 +64,16 @@ describe("按章纲分前后两半写", () => {
   it("没开分段 / 要点太少 → 一次写完（旧行为）", async () => {
     const projectDir = await makeBook();
     const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "t", content: `# 第2章 · t\n\n林澈${han(900, "全")}。` })) };
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, requestedDraftLength: 2000 });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, requestedDraftLength: 3000 });
     const short = normalizeChapterPlan({ summary: "s", beats: ["a", "b", "c"] }, { chapter: 2 })!;
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: short, segmentByPlan: true, requestedDraftLength: 2000, persist: true });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: short, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
     expect(writer.generateDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("目标字数不高（写手一次写得出）→ 不分两半（第十二轮：目标 1800 也拆成两个 900，平白多出接缝）", async () => {
+    const projectDir = await makeBook();
+    const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "t", content: `# 第2章 · t\n\n林澈${han(1700, "全")}。` })) };
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 1800 });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(1);
   });
 });

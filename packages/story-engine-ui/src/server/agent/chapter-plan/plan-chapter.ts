@@ -72,6 +72,8 @@ export interface PlanChapterMaterials {
   readonly recentTimes: readonly string[];
   /** 近几章反复出现的描写（确定性检出）：本章别再用。 */
   readonly recurringPhrases: readonly string[];
+  /** 前几章用过的桥段（各章章纲要点）：本章换推进方式。 */
+  readonly recentBeats: readonly string[];
 }
 
 const settle = async <T>(promise: Promise<T>, fallback: T): Promise<T> => promise.catch(() => fallback);
@@ -94,6 +96,16 @@ async function readRecentChapterBodies(projectDir: string, chapter: number): Pro
     const content = await readFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), "utf-8").catch(() => "");
     const body = content.replace(/^#[^\n]*\n/u, "").trim();
     if (body) out.push({ chapter: n, body });
+  }
+  return out;
+}
+
+/** 前几章章纲的要点（用过的桥段）：本章换别的推进方式，别套同一个路数。 */
+async function readRecentPlanBeats(projectDir: string, chapter: number): Promise<readonly string[]> {
+  const out: string[] = [];
+  for (let n = Math.max(1, chapter - 4); n < chapter; n += 1) {
+    const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
+    if (plan) out.push(`第 ${n} 章：${plan.beats.join(" / ").slice(0, 160)}`);
   }
   return out;
 }
@@ -125,6 +137,7 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     readRecentChapterBodies(projectDir, chapter),
     readRecentPlanTimes(projectDir, chapter),
   ]);
+  const recentBeats = await readRecentPlanBeats(projectDir, chapter);
   const characterNames = (characterBible?.characters ?? []).map((character) => character.name).filter(Boolean);
   const entityNames = [
     ...assetLedger.assets.map((asset) => asset.name).filter(Boolean),
@@ -181,6 +194,7 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     coreMysteries: [...(storyBible?.coreMysteries ?? []), ...(storyBible?.centralConflicts ?? [])].filter(Boolean).slice(0, 6),
     recentTimes,
     recurringPhrases,
+    recentBeats,
   };
 }
 
@@ -202,6 +216,7 @@ export function buildPlanMessages(
     "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；storyDay 写本章是故事第几天（第 1 章是第 1 天；照【前几章的时间】里的天数往后数，同一天不加）；涉及年份时，人物当年多大要对得上他现在的年龄。",
     "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
     "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
+    "11. 【前几章用过的桥段】里反复出现的推进方式（又有人来打听、又去档案处查、又接到催期限的电话），本章不要再用同一个路数，换一种让局面变化的方式。",
     "JSON 字段：",
     "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
     "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"storyDay\":故事第几天（整数）,\"characters\":[\"出场人物名\"],",
@@ -221,6 +236,7 @@ export function buildPlanMessages(
     materials.facts.length > 0 ? `【已确立事实（不能矛盾，做过的别再做）】\n${materials.facts.join("\n")}` : "",
     materials.recentTimes.length > 0 ? `【前几章的时间】\n${materials.recentTimes.join("\n")}` : "",
     materials.recurringPhrases.length > 0 ? `【近几章反复出现的描写（本章别再用）】${materials.recurringPhrases.join("、")}` : "",
+    materials.recentBeats.length > 0 ? `【前几章用过的桥段】\n${materials.recentBeats.join("\n")}` : "",
     materials.entities.length > 0 ? `【已登记的物件/地点】${materials.entities.join("、")}` : "",
     materials.protectedSecrets.length > 0 ? `【受保护的秘密（不要揭开）】${materials.protectedSecrets.join("；")}` : "",
     materials.previousChapter
@@ -245,6 +261,7 @@ function slimMaterials(materials: PlanChapterMaterials): PlanChapterMaterials {
     facts: materials.facts.slice(0, Math.ceil(materials.facts.length / 2)),
     openThreads: materials.openThreads.slice(0, 8),
     recentChapters: materials.recentChapters.slice(-3),
+    recentBeats: materials.recentBeats.slice(-2),
   };
 }
 

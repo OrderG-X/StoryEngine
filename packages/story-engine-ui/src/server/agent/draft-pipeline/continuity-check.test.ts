@@ -38,6 +38,17 @@ describe("parseContinuityIssues", () => {
     expect(out.droppedUnverified).toBe(1);
   });
 
+  it("审读自己都说「不算矛盾」的条目丢掉（第十二轮误报里的一大类）", () => {
+    const out = parseContinuityIssues(JSON.stringify({
+      issues: [
+        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "与第4章菜场已拆一致吗？细看不算矛盾", fix: "无需修改" },
+        { type: "contradiction", quote: "菜场还在，门口摆着几摊卖豆腐的。", conflict: "第4章：菜场十来年前就拆了", fix: "改成商场" },
+      ],
+    }), DRAFT);
+    expect(out.issues).toHaveLength(1);
+    expect(out.issues[0].conflict).toBe("第4章：菜场十来年前就拆了");
+  });
+
   it("不是 JSON → 抛（由调用方收成「没核成」）", () => {
     expect(() => parseContinuityIssues("审读完毕，没有问题", DRAFT)).toThrow();
   });

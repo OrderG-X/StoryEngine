@@ -113,6 +113,7 @@ export function buildContinuityCheckMessages(input: {
     "repeat：把前文已经发现、确认、做过的事又当成新的写了一遍（又认出同一个记号、又递一次已经递过的材料），或把前文的场面换个地方重演；也包括本章前半段已经写过的事，后半段又写了一遍。",
     "missing_beat：章纲要点或「本章新信息」在正文里根本没写到。",
     "每条 contradiction / repeat 的 quote 必须逐字抄正文原句（一句即可）；conflict 写清和哪条已知设定或第几章原文冲突；fix 写怎么改。",
+    "【本章章纲】是本章的写作计划，不是前文：正文措辞和章纲不一样不算矛盾（只有漏写要点才报 missing_beat）。人物正常地拿起、放下、挪动东西不算矛盾。自己判断「不算矛盾 / 一致」的条目不要列出来。",
     "只输出一个 JSON：{\"issues\":[{\"type\":\"contradiction\",\"quote\":\"\",\"conflict\":\"\",\"fix\":\"\"}]}；没有问题就给空数组。",
   ].join("\n");
   const refs = input.references;
@@ -138,6 +139,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 const ISSUE_TYPES = new Set<ContinuityIssueType>(["contradiction", "repeat", "missing_beat"]);
+const SELF_DISMISSED = /不算矛盾|不构成矛盾|并不矛盾|无矛盾|没有矛盾|不冲突|并无冲突|无需修改|不需要修改|可以接受/u;
 
 /** 宽进解析：坏条目逐条丢；contradiction/repeat 引的原句必须逐字（忽略空白）在正文里，否则丢弃并计数。 */
 export function parseContinuityIssues(text: string, draftBody: string): { readonly issues: readonly ContinuityIssue[]; readonly droppedUnverified: number } {
@@ -163,6 +165,8 @@ export function parseContinuityIssues(text: string, draftBody: string): { readon
       }
     }
     if (!conflict && !fix) continue;
+    // 审读自己都说「不算矛盾 / 一致 / 无需修改」的条目丢掉（第十二轮：误报约三分之二，其中一类就是这种自我否定的条目）。
+    if (SELF_DISMISSED.test(`${conflict} ${fix}`)) continue;
     issues.push({ type, ...(quote ? { quote } : {}), conflict, fix });
     if (issues.length >= MAX_ISSUES) break;
   }

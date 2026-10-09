@@ -150,6 +150,8 @@ export async function persistFastDraftBody(input: {
 
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
+/** 目标字数至少这么多才分两半写：写手一次自然写一千八到两千字，目标在这以内一次写完更连贯。 */
+const MIN_TARGET_TO_SEGMENT = 2600;
 
 /** 改写某一段的内容（token 估算随之更新），其余段原样。 */
 function withSectionContent(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
@@ -294,7 +296,9 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
 
   try {
     const maxOutputTokens = input.maxOutputTokens ?? resolveDraftMaxOutputTokens(draftLengthTarget);
+    // 目标字数不高（写手一次就写得出）时不分：第十二轮目标 1800 也拆成两个 900，平白多出接缝和重演。
     const segmented = input.segmentByPlan && input.chapterPlan && input.chapterPlan.beats.length >= MIN_BEATS_TO_SEGMENT
+      && draftLengthTarget.requested >= MIN_TARGET_TO_SEGMENT
       ? await generateBySegments({
         writerClient: input.writerClient,
         context,
