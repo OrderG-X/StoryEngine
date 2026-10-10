@@ -399,6 +399,8 @@ const CHECKER_MAX_OUTPUT_CHARS = 40_000;
  * 服务商偶尔吐字极慢：评测里同一章单跑 42 秒、并发时一次调用拖到 6 分钟，整章核账跟着等。
  */
 const CHECKER_HEDGE_AFTER_MS = 45_000;
+/** 核对的随机性（评测可用环境变量改）。 */
+const CHECKER_TEMPERATURE = process.env.CHECKER_TEMPERATURE !== undefined ? Number(process.env.CHECKER_TEMPERATURE) : 0.1;
 
 /** 先发一份；afterMs 后还没结果就再发一份；先成功的为准，两份都失败才算失败。 */
 export function hedged<T>(run: () => Promise<T>, afterMs: number): Promise<T> {
@@ -447,7 +449,7 @@ async function callChecker(messages: Parameters<CheckCallModel>[0], thinking: bo
     const { content } = await streamChatModelToText({
       configured: { ...resolved, thinking },
       messages: messages.map((message) => ({ role: message.role, content: message.content })),
-      temperature: 0.1,
+      temperature: CHECKER_TEMPERATURE,
       responseFormat: { type: "json_object" },
       maxThinkingMs: CHECKER_FIRST_TOKEN_MS,
       maxContentChars: CHECKER_MAX_OUTPUT_CHARS,
@@ -581,6 +583,15 @@ export async function checkChapterByFullRead(input: {
   return { claims: 0, checkedClaims: 0, issues, failures };
 }
 
+/** 上次报的问题两边原句是否都还在（本章那句在本章；前文那句在它标的那一章或本章更早处）。改掉了的不再带上。 */
+export function issueStillPresent(issue: ContinuityIssueV2, chapter: number, draftBody: string, earlier: EarlierText): boolean {
+  const body = normalize(draftBody);
+  if (!containsQuote(body, issue.quote)) return false;
+  if (issue.earlierChapter === chapter) return containsQuote(body, issue.earlierQuote);
+  const earlierChapter = earlier.chapters.find((item) => item.chapter === issue.earlierChapter);
+  return Boolean(earlierChapter) && containsQuote(normalize(earlierChapter!.sentences.join("")), issue.earlierQuote);
+}
+
 // ---------- 组合：通读三遍 + 逐条判，合并后复核 ----------
 
 function sentenceWithContext(text: string, quote: string): string {
@@ -625,6 +636,11 @@ export async function checkChapterContinuity(input: {
   /** 是否复核（评测对比用；缺省复核）。 */
   readonly adjudicate?: boolean;
   readonly earlier?: EarlierText;
+  /**
+   * 上次核出、两边原句都还在的问题（核账记忆）：和这次的候选一起复核。复核判「不是」才删，
+   * 否则保留上次的把握——没改掉的问题不会因为模型这次没看到就消失。
+   */
+  readonly carryOver?: readonly ContinuityIssueV2[];
 }): Promise<CheckChapterResult & { readonly candidates: number }> {
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   const [full, claims] = await Promise.all([
@@ -633,12 +649,14 @@ export async function checkChapterContinuity(input: {
   ]);
   const failures = [...full.failures, ...claims.failures];
   const merged: ContinuityIssueV2[] = [];
+  const carried = new Set<ContinuityIssueV2>();
   const seen = new Set<string>();
-  for (const issue of [...full.issues, ...claims.issues]) {
+  for (const issue of [...(input.carryOver ?? []), ...full.issues, ...claims.issues]) {
     const key = normalize(issue.quote).slice(0, 16);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(issue);
+    if (input.carryOver?.includes(issue)) carried.add(issue);
   }
   if (input.adjudicate === false || merged.length === 0) {
     return { claims: claims.claims, checkedClaims: claims.checkedClaims, issues: merged, failures, candidates: merged.length };
@@ -661,7 +679,9 @@ export async function checkChapterContinuity(input: {
       .map((candidate) => {
         const verdict = verdicts.get(candidate.id) ?? "maybe";
         if (/^(?:no|false|不是|否)$/u.test(verdict)) return undefined;
-        return { ...candidate.issue, confidence: /^(?:sure|true|确定|是)$/u.test(verdict) ? "sure" as const : "maybe" as const };
+        const fresh = /^(?:sure|true|确定|是)$/u.test(verdict) ? "sure" as const : "maybe" as const;
+        // 上次报过的：沿用上次的把握（不让「确定 / 可能」随复核的随机性来回跳）。
+        return { ...candidate.issue, confidence: carried.has(candidate.issue) ? candidate.issue.confidence ?? fresh : fresh };
       })
       .filter((issue): issue is ContinuityIssueV2 & { confidence: "sure" | "maybe" } => Boolean(issue))
       .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));

@@ -13,6 +13,15 @@ import {
   resolveDirectWriteChapterGoal,
 } from "./chapterActionIntents.js";
 
+describe("核账 / 再细核一遍走确定性动作", () => {
+  it("按钮意图和两个字的短说法都认", () => {
+    expect(matchDeterministicChapterAction("核账")).toBe("check_continuity");
+    expect(matchDeterministicChapterAction("再细核一遍：这一章重新对一遍前文")).toBe("check_continuity_fresh");
+    expect(matchDeterministicChapterAction(" 再细核一遍 ")).toBe("check_continuity_fresh");
+    expect(matchDeterministicChapterAction("再细核一遍第三章吧")).toBeNull();
+  });
+});
+
 describe("matchDeterministicChapterAction（固定动作按钮确定性）", () => {
   it("审稿/质检/写这一章 按钮精确意图 → 对应确定性动作", () => {
     expect(matchDeterministicChapterAction(REVIEW_BUTTON_INTENT)).toBe("ai_review");

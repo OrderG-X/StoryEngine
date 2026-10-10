@@ -27,6 +27,17 @@ describe("parseUserAction 结构化动作解析", () => {
     });
   });
 
+  it("核账动作：fresh=true 才带上（再细核一遍）", () => {
+    expect(parseUserAction({ toolName: "check_continuity", chapter: 3, fresh: true })).toEqual({
+      kind: "action",
+      action: { toolName: "check_continuity", chapter: 3, fresh: true },
+    });
+    expect(parseUserAction({ toolName: "check_continuity", chapter: 3, fresh: "yes" })).toEqual({
+      kind: "action",
+      action: { toolName: "check_continuity", chapter: 3 },
+    });
+  });
+
   it("账本清单去掉的条目随定稿动作带上（去空白、去重、丢非字符串）", () => {
     expect(parseUserAction({ toolName: "commit_apply", chapter: 5, excluded: [" fact:1 ", "fact:1", 3, "", "hook:hook-a"] })).toEqual({
       kind: "action",

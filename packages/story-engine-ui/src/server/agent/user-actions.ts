@@ -23,8 +23,8 @@ export type UserAction =
     readonly excluded?: readonly string[];
   }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
-  /** 「核账」：只读，拿这一章对前文原文找对不上的地方。 */
-  | { readonly toolName: "check_continuity"; readonly chapter: number };
+  /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
+  | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -55,7 +55,9 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
-  if (toolName === "check_continuity") return { kind: "action", action: { toolName: "check_continuity", chapter } };
+  if (toolName === "check_continuity") {
+    return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
+  }
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
     : undefined;
@@ -187,6 +189,7 @@ export async function runUserAction(args: {
 
 interface CheckContinuityLikeOutput {
   readonly ok?: unknown;
+  readonly reused?: unknown;
   readonly summary?: unknown;
   readonly sure?: readonly unknown[];
   readonly maybe?: readonly unknown[];
@@ -203,10 +206,11 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
     const scrubbed = args.scrubber.push(text);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   };
-  args.sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter: action.chapter } });
+  const input = { chapter: action.chapter, ...(action.fresh ? { fresh: true } : {}) };
+  args.sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: input });
   let output: unknown;
   try {
-    output = await args.executeTool("check_continuity", { chapter: action.chapter }, args.requestContext);
+    output = await args.executeTool("check_continuity", input, args.requestContext);
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "check_continuity", error: message, retryable: true });
@@ -221,15 +225,19 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
+  // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
+  const fresh: NextStepChoice[] = result?.reused === true ? [{ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文" }] : [];
   const choices: NextStepChoice[] = sureCount > 0
     ? [
       { label: `改掉确定的 ${sureCount} 处`, intent: `按核账结果把第 ${action.chapter} 章确定对不上的那几处改掉，别的不动`, recommended: true },
       { label: "我自己改", intent: "我自己改，先放着" },
       { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动` },
+      ...fresh,
     ]
     : [
       { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动`, recommended: true },
       { label: "写下一章", intent: "继续写下一章的正文" },
+      ...fresh,
     ];
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });

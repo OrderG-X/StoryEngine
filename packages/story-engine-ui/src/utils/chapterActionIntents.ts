@@ -28,6 +28,8 @@ export const DRAFT_BUTTON_INTENT = "写这一章的正文";
 export const COMMIT_PREVIEW_BUTTON_INTENT = "预览这一章的定稿改动";
 /** 「核账」按钮：拿这一章对前文原文找对不上的地方（只读、确定性直达，不经模型猜）。作者直接打「核账」也走这条。 */
 export const CHECK_CONTINUITY_BUTTON_INTENT = "核账：拿这一章对一遍前文，看有没有前后对不上的地方";
+/** 正文没改时核账直接给上次结果；作者想多找找就点这个——重新核，上次的问题照样带上（越核越全）。 */
+export const CHECK_CONTINUITY_FRESH_INTENT = "再细核一遍：这一章重新对一遍前文";
 /** @deprecated 旧「入库」预览按钮文案 */
 export const LEGACY_COMMIT_PREVIEW_BUTTON_INTENT = "预览这一章的入库改动";
 
@@ -41,7 +43,7 @@ export function resolveDirectWriteChapterGoal(explicit: string, fallback: string
   return explicit.trim() || fallback;
 }
 
-export type DeterministicChapterAction = "ai_review" | "quality_check" | "generate_draft" | "check_continuity";
+export type DeterministicChapterAction = "ai_review" | "quality_check" | "generate_draft" | "check_continuity" | "check_continuity_fresh";
 
 /**
  * 文本完全等于某个【固定动作】按钮常量 → 返回其确定性动作；否则 null（交给 agent 对话链路）。
@@ -55,5 +57,6 @@ export function matchDeterministicChapterAction(text: string): DeterministicChap
   if (trimmed === QUALITY_BUTTON_INTENT || trimmed === LEGACY_QUALITY_BUTTON_INTENT) return "quality_check";
   if (trimmed === DRAFT_BUTTON_INTENT) return "generate_draft";
   if (trimmed === CHECK_CONTINUITY_BUTTON_INTENT || trimmed === "核账") return "check_continuity";
+  if (trimmed === CHECK_CONTINUITY_FRESH_INTENT || trimmed === "再细核一遍") return "check_continuity_fresh";
   return null;
 }
