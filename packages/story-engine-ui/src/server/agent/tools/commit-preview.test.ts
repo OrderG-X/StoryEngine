@@ -16,6 +16,11 @@ vi.mock("./chapter-delta-declaration.js", () => ({
   declareChapterDeltaWithStatus: vi.fn(async () => ({ status: "fallback", reason: "单测桩：未启用声明模型" })),
   callConfiguredDeclareModel: vi.fn(async () => "{}"),
 }));
+// 2026-10-10 起预览还会并行抽硬事实（账本清单）：生产版同样真连 LLM——单测桩成「抽到 0 条」。
+vi.mock("../fact-ledger/reconcile-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../fact-ledger/reconcile-facts.js")>()),
+  proposeFactChanges: vi.fn(async () => ({ ok: true, adds: [], changes: [], conflicts: [], newCharacters: [] })),
+}));
 
 import { buildProjectRequestContext } from "../request-context.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
