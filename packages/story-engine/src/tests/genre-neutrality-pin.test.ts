@@ -126,7 +126,6 @@ describe("genre neutrality pins", () => {
       "arc-goal-tracking.ts",
       "lead-intent-tracking.ts",
       "hook-tracking.ts",
-      "continuity-quality-check.ts",
       "intent-lifecycle-diagnostics.ts",
       // R5b 扩 pin：纳入数据驱动化后的引擎文件，防专名再溜回
       "commit-quality-check.ts",

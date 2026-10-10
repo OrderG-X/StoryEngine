@@ -564,7 +564,7 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     const continueCallModel = vi.fn();
     const result = await runGenerateDraft({
       projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
-      continueCallModel, continuityCheckCallModel: vi.fn(), continuityRepairCallModel: vi.fn(),
+      continueCallModel, continuityCheckCallModel: vi.fn(),
       policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
     });
     expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ chapter: 3, title: "账册", continueCallModel }));

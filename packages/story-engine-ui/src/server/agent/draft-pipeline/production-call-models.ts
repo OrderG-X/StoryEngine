@@ -1,19 +1,16 @@
 /**
- * 出稿后质量环节的生产用模型调用（阶段 3）。都走 streamChatModelToText：流式 + 空闲超时
- * （有字节就续命、无总时长上限），一律不传 max_tokens（铁律）。续写的思考开关随作者对写手的设置；
- * 核对与改写是出 JSON 的机械步骤，强制关思考（见 callSlotOnce）。
+ * 出稿后质量环节的生产用模型调用（阶段 3）。走 streamChatModelToText：流式 + 空闲超时
+ * （有字节就续命、无总时长上限），一律不传 max_tokens（铁律）。续写的思考开关随作者对写手的设置。
  * - 续写：fastDraft 槽（写手本身，文风一致）。
- * - 前后核对：qualityCheck 槽，要 JSON。
- * - 冲突段改写：repair 槽，要 JSON。
+ * 前后核对 2026-10-10 起和「核账」同一套（continuity-v2 的 callConfiguredCheckerModel），不在这里。
  */
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import type { ContinueCallModel } from "./continue-draft.js";
-import type { CheckCallModel } from "./continuity-check.js";
 
 type Messages = Parameters<ContinueCallModel>[0];
 
 async function callSlotOnce(
-  task: "fastDraft" | "qualityCheck" | "repair",
+  task: "fastDraft",
   messages: Messages,
   json: boolean,
 ): Promise<string> {
@@ -36,7 +33,7 @@ async function callSlotOnce(
  * 核对环节每次都直接「没核成」）。仍失败就抛，由各环节如实报「这次没跑成、原稿不动」。
  */
 async function callSlot(
-  task: "fastDraft" | "qualityCheck" | "repair",
+  task: "fastDraft",
   messages: Messages,
   json: boolean,
 ): Promise<string> {
@@ -49,5 +46,3 @@ async function callSlot(
 }
 
 export const callConfiguredContinueModel: ContinueCallModel = (messages) => callSlot("fastDraft", messages, false);
-export const callConfiguredContinuityCheckModel: CheckCallModel = (messages) => callSlot("qualityCheck", messages, true);
-export const callConfiguredContinuityRepairModel: CheckCallModel = (messages) => callSlot("repair", messages, true);

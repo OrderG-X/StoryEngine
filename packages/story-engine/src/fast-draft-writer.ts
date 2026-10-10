@@ -10,12 +10,8 @@ import {
 import {
   estimateTokens,
   buildWriterContext,
-  type ArcGoalsContext,
-  type StoryContinuityContext,
-  type StoryThreadsContext,
   type WriterContextEnvelope,
 } from "./context-gateway.js";
-import { checkDraftContinuity, type ContinuityQualityReport } from "./continuity-quality-check.js";
 import { checkDraftBeatFidelity, type BeatFidelityReport } from "./draft-beat-fidelity.js";
 import {
   applyDraftLengthConstraint,
@@ -123,7 +119,6 @@ export interface FastDraftReport {
   readonly cacheMetrics?: CacheMetrics;
   readonly promptFingerprint: PromptFingerprint;
   readonly draftLength?: DraftLengthReport;
-  readonly continuityQuality?: ContinuityQualityReport;
   readonly beatFidelity?: BeatFidelityReport;
   /** AI 腔确定性回检（warning-only）：仅 input.aiFlavorRules 非空时出现。 */
   readonly aiFlavor?: AiFlavorReport;
@@ -509,13 +504,6 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         : {}),
     });
     const normalizedGenerated = { ...generated, title: generatedTitle, content: draftBody };
-    const continuityQuality = checkDraftContinuity({
-      draftContent: normalizedGenerated.content,
-      continuity: storyContinuityFromContext(context),
-      storyThreads: storyThreadsFromContext(context),
-      arcGoals: arcGoalsFromContext(context),
-      chapter: input.chapter,
-    });
     // 出稿后确定性保真核对：用户/agent 指定的必命中要点里的具体锚点（编号/数字+量词+名物）漏了就软警告（不阻塞）。
     const beatFidelity = input.mustHitBeats && input.mustHitBeats.length > 0
       ? checkDraftBeatFidelity({ draftContent: normalizedGenerated.content, mustHitBeats: input.mustHitBeats })
@@ -539,7 +527,6 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         draftLength,
         tokenUsage: generated.tokenUsage,
         cacheMetrics: generated.cacheMetrics,
-        continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
         ...(aiFlavor ? { aiFlavor } : {}),
         // 校验失败早退同样并 writingRulesFailure——降级留痕不能因稿子没过校验被吞
@@ -560,7 +547,6 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         draftLength,
         tokenUsage: generated.tokenUsage,
         cacheMetrics: generated.cacheMetrics,
-        continuityQuality,
         ...(beatFidelity ? { beatFidelity } : {}),
         ...(aiFlavor ? { aiFlavor } : {}),
         issues: writingRulesFailure,
@@ -583,7 +569,6 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       draftLength,
       tokenUsage: generated.tokenUsage,
       cacheMetrics: generated.cacheMetrics,
-      continuityQuality,
       ...(beatFidelity ? { beatFidelity } : {}),
       ...(aiFlavor ? { aiFlavor } : {}),
       issues: writingRulesFailure,
@@ -644,16 +629,6 @@ async function withFastDraftDiagnostics(
       promptFingerprint: report.promptFingerprint,
       ...(report.draftLength !== undefined ? { draftLength: report.draftLength } : {}),
       ...(report.cacheMetrics !== undefined ? { cacheMetrics: report.cacheMetrics } : {}),
-      ...(report.continuityQuality !== undefined
-        ? {
-          continuityQuality: {
-            passed: report.continuityQuality.passed,
-            score: report.continuityQuality.score,
-            issueCount: report.continuityQuality.issues.length,
-            matched: report.continuityQuality.matched,
-          },
-        }
-        : {}),
     },
   });
   } catch (error) {
@@ -663,60 +638,6 @@ async function withFastDraftDiagnostics(
     };
   }
   return attachDiagnostics(report, diagnostics);
-}
-
-function storyContinuityFromContext(context: WriterContextEnvelope): StoryContinuityContext {
-  const section = context.sections.find((item) => item.name === "story_continuity");
-  if (isStoryContinuityContext(section?.content)) return section.content;
-  return {
-    recentEvents: [],
-    openLeads: [],
-    activeConflicts: [],
-    discoveries: [],
-    recentLocations: [],
-    recentCharacters: [],
-    carryForwardInstruction: "暂无前情承接要求。",
-  };
-}
-
-function storyThreadsFromContext(context: WriterContextEnvelope): StoryThreadsContext | undefined {
-  const section = context.sections.find((item) => item.name === "story_threads");
-  if (isStoryThreadsContext(section?.content)) return section.content;
-  return undefined;
-}
-
-function arcGoalsFromContext(context: WriterContextEnvelope): ArcGoalsContext | undefined {
-  const section = context.sections.find((item) => item.name === "arc_goals");
-  if (isArcGoalsContext(section?.content)) return section.content;
-  return undefined;
-}
-
-function isStoryContinuityContext(value: unknown): value is StoryContinuityContext {
-  return typeof value === "object"
-    && value !== null
-    && Array.isArray((value as StoryContinuityContext).recentEvents)
-    && Array.isArray((value as StoryContinuityContext).openLeads)
-    && Array.isArray((value as StoryContinuityContext).activeConflicts)
-    && Array.isArray((value as StoryContinuityContext).discoveries)
-    && Array.isArray((value as StoryContinuityContext).recentLocations)
-    && Array.isArray((value as StoryContinuityContext).recentCharacters);
-}
-
-function isStoryThreadsContext(value: unknown): value is StoryThreadsContext {
-  return typeof value === "object"
-    && value !== null
-    && Array.isArray((value as StoryThreadsContext).openLeads)
-    && Array.isArray((value as StoryThreadsContext).openIntents)
-    && Array.isArray((value as StoryThreadsContext).recentlyTouchedThreads)
-    && Array.isArray((value as StoryThreadsContext).staleThreadWarnings);
-}
-
-function isArcGoalsContext(value: unknown): value is ArcGoalsContext {
-  return typeof value === "object"
-    && value !== null
-    && Array.isArray((value as ArcGoalsContext).activeGoals)
-    && Array.isArray((value as ArcGoalsContext).recentlyTouchedGoals)
-    && Array.isArray((value as ArcGoalsContext).staleGoalWarnings);
 }
 
 function buildContextStats(context: WriterContextEnvelope): FastDraftReport["contextStats"] {

@@ -91,7 +91,7 @@ import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../age
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft, type PlanCallModel } from "../agent/chapter-plan/plan-chapter.js";
 import type { ContinueCallModel } from "../agent/draft-pipeline/continue-draft.js";
-import type { CheckCallModel } from "../agent/draft-pipeline/continuity-check.js";
+import type { CheckCallModel } from "../agent/continuity-v2/check-chapter.js";
 import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "../agent/draft-pipeline/run-quality-pipeline.js";
 
 /* ---------------------------------------------------------------------------
@@ -964,12 +964,11 @@ export interface GenerateDraftInput {
   readonly planCheckCallModel?: PlanCallModel;
   /**
    * 阶段 3 出稿后的固定质量环节（工具 execute 注入；测试注入 mock）：
-   * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）+
-   * continuityRepairCallModel（repair 槽）——前后核对、有冲突自动修一轮。缺失 = 不跑该环节（旧行为）。
+   * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）——
+   * 前后核对，和「核账」同一套，不自动改。缺失 = 不跑该环节（旧行为）。
    */
   readonly continueCallModel?: ContinueCallModel;
   readonly continuityCheckCallModel?: CheckCallModel;
-  readonly continuityRepairCallModel?: CheckCallModel;
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
 }
@@ -1410,7 +1409,6 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       ...(chapterPlan ? { chapterPlan } : {}),
       ...(input.continueCallModel ? { continueCallModel: input.continueCallModel } : {}),
       ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
-      ...(input.continuityRepairCallModel ? { repairCallModel: input.continuityRepairCallModel } : {}),
     });
     if (qualityPipeline.changed) {
       draftBody = qualityPipeline.draftBody;

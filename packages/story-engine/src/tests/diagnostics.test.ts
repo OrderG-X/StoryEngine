@@ -96,13 +96,6 @@ describe("StoryEngine-NG Diagnostics", () => {
       chapter: 1,
       tokenUsage: { promptTokens: 30, completionTokens: 20, totalTokens: 50 },
       contextStats: report.contextStats,
-      details: {
-        continuityQuality: {
-          passed: true,
-          score: 1,
-          issueCount: 0,
-        },
-      },
     });
     expect(diagnostics!.runtimeLatency.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(diagnostics!.diagnosticsPath).toBe(join(projectDir, "diagnostics", "fast-draft-chapter-0001.json"));

@@ -15,7 +15,7 @@ import { writeFileAtomic } from "../../lib/project-io.js";
 import type { ContinuityIssueV2, EarlierText } from "./check-chapter.js";
 
 /** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。 */
-export const CHECK_MEMORY_VERSION = 2;
+export const CHECK_MEMORY_VERSION = 3;
 
 export interface CheckMemory {
   readonly version: number;
@@ -37,12 +37,13 @@ export function hashBody(body: string): string {
   return sha(body.replace(/\s+/gu, ""));
 }
 
-export function hashEarlier(earlier: EarlierText): string {
+/** 前文 + 账本（v3 起账本数字对账也算核账的输入：账本改了，上次的结果不能原样复用）。 */
+export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = []): string {
   return sha([...earlier.chapters]
     .sort((a, b) => a.chapter - b.chapter)
     .map((item) => `${item.chapter}:${item.sentences.join("")}`)
     .join("\n")
-    .replace(/\s+/gu, ""));
+    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : ""));
 }
 
 export async function readCheckMemory(projectDir: string, chapter: number): Promise<CheckMemory | undefined> {

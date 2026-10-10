@@ -6,23 +6,14 @@
  * 结果分「确定」「可能」两档，每条带本章原句和前文原句（含章号）。不改正文、不写账本。
  * 作者点「核账」按钮走结构化动作直达（user-actions），对话里说「核一下」也由 agent 调用。
  */
-import { describeTimelineForChapter, readStoryTimeline } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceBoolean, coerceNumber } from "./lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import {
-  callConfiguredCheckerModel,
-  checkChapterContinuity,
-  issueStillPresent,
-  readEarlierChapters,
-  type CheckCallModel,
-  type ContinuityIssueV2,
-} from "../continuity-v2/check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory } from "../continuity-v2/check-memory.js";
-import { isDismissed, readDismissals } from "../continuity-v2/dismissals.js";
+import { callConfiguredCheckerModel, type CheckCallModel } from "../continuity-v2/check-chapter.js";
+import { checkChapterBody } from "../continuity-v2/check-service.js";
 
 const issueSchema = z.object({
   quote: z.string().describe("本章里有问题的那一句（原文）。"),
@@ -45,13 +36,6 @@ const outputSchema = z.object({
 
 export type CheckContinuityToolOutput = z.infer<typeof outputSchema>;
 
-const toItem = (issue: ContinuityIssueV2) => ({
-  quote: issue.quote,
-  earlierQuote: issue.earlierQuote,
-  earlierChapter: issue.earlierChapter,
-  reason: issue.reason,
-});
-
 export async function runCheckContinuity(
   projectDir: string,
   chapter: number,
@@ -72,48 +56,8 @@ export async function runCheckContinuity(
       summary: `第 ${chapter} 章还没有正文，没法核账。`,
     };
   }
-  const body = draft.content.replace(/^#[^\n]*\n/u, "").trim();
-  const earlier = await readEarlierChapters(projectDir, chapter);
-  // 故事时间线对照表（引擎排好的日子），附给通读和复核：判「前天 / 周几」照表，不让模型自己算。
-  const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
-  const timelineTable = timeline ? describeTimelineForChapter(timeline, chapter) : undefined;
-  const bodyHash = hashBody(body);
-  const earlierHash = hashEarlier(earlier);
-  // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
-  const memory = await readCheckMemory(projectDir, chapter);
-  const reused = !options.fresh
-    && Boolean(memory && memory.version === CHECK_MEMORY_VERSION && memory.bodyHash === bodyHash && memory.earlierHash === earlierHash);
-  // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
-  const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
-    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier))
-    : [];
-  const result = reused
-    ? { issues: memory!.issues, failures: [] as readonly string[] }
-    : await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver, ...(timelineTable ? { timelineTable } : {}) });
-  if (!reused && (result.failures.length === 0 || result.issues.length > 0)) {
-    await writeCheckMemory(projectDir, { chapter, bodyHash, earlierHash, issues: result.issues }).catch((error) => {
-      console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
-    });
-  }
-  // 作者点过「不是问题」的不再报（只认同一章、两边原句都对得上的）。
-  const dismissals = await readDismissals(projectDir);
-  const shown = result.issues.filter((issue) => !isDismissed(chapter, issue, dismissals));
-  const dismissed = result.issues.length - shown.length;
-  const sure = shown.filter((issue) => issue.confidence === "sure").map(toItem);
-  const maybe = shown.filter((issue) => issue.confidence !== "sure").map(toItem);
-  const ok = result.failures.length === 0 || result.issues.length > 0;
-  const where = (issue: { readonly earlierChapter: number }) => (issue.earlierChapter === chapter ? "本章前文" : `第 ${issue.earlierChapter} 章`);
-  const dismissedNote = dismissed > 0 ? `（另有 ${dismissed} 处你标过「不是问题」，没再报。）` : "";
-  const reusedNote = reused ? "这一章和前文都没改过，结果同上次。" : "";
-  const summary = !ok
-    ? `第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。`
-    : sure.length + maybe.length === 0
-      ? `${reusedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
-      : [
-        `${reusedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}`,
-        ...sure.slice(0, 3).map((issue) => `· 「${issue.quote.slice(0, 40)}」和${where(issue)}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`),
-      ].join("\n");
-  return { ok, chapter, source: draft.source, sure, maybe, failures: [...result.failures], dismissed, reused, summary };
+  const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), callModel, options);
+  return { ...result, sure: [...result.sure], maybe: [...result.maybe], failures: [...result.failures], source: draft.source };
 }
 
 const inputSchema = z.object({

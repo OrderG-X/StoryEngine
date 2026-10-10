@@ -86,10 +86,8 @@ import {
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
 import { callConfiguredPlanCheckModel, callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
-import {
-  callConfiguredContinueModel,
-  callConfiguredContinuityCheckModel,
-} from "../draft-pipeline/production-call-models.js";
+import { callConfiguredCheckerModel } from "../continuity-v2/check-chapter.js";
+import { callConfiguredContinueModel } from "../draft-pipeline/production-call-models.js";
 
 /**
  * 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。
@@ -203,17 +201,11 @@ const outputSchema = z.object({
     }).optional(),
     continuity: z.object({
       checked: z.boolean(),
-      referenceCount: z.number(),
-      found: z.number(),
-      repairedParagraphs: z.number(),
-      remaining: z.array(z.object({
-        type: z.enum(["contradiction", "repeat", "missing_beat"]),
-        quote: z.string().optional(),
-        conflict: z.string(),
-        fix: z.string(),
-      })),
+      sure: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
+      maybe: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
+      failures: z.array(z.string()),
     }).optional(),
-  }).optional().describe("出稿后的质量环节：续写够字数、前后核对与自动修改。continuity.remaining 是修完仍在、需要用户定的问题。"),
+  }).optional().describe("出稿后的质量环节：续写够字数、前后核对（和「核账」同一套，不自动改）。continuity.sure / maybe 是要用户定的问题。"),
   chapterPlan: z.object({
     summary: z.string(),
     beats: z.array(z.string()),
@@ -383,7 +375,7 @@ export const generateDraftTool = createTool({
     "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
     "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。" +
     "首稿低于字数下限时，在出稿这一步就从结尾接着写够（最多两轮，不在中间插句）；仍不够会在 draftLength 和 summary 里如实标注——别假装字数达标。" +
-    "写完自动做一遍前后核对（对照旧设定、前文原文、上一章结尾），查出的问题不自动改，列在 qualityPipeline.continuity.remaining 和 summary 里——" +
+    "写完自动核一遍账（和「核账」按钮同一套：账本对账 + 对全书前文），查出的问题不自动改，列在 qualityPipeline.continuity（sure 确定 / maybe 可能）和 summary 里——" +
     "请原样转达让用户定（用户说按核对结果改，你再用 revise_draft 按旧设定逐处改），别替用户拍板、别说「已经一致」。这些都在本工具内跑完，不需要你再调预览或改稿来补字。" +
     "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +
     "最多一轮不循环、落盘前自动快照），结果如实进 autoDeAi 字段，summary 如实说明修掉几处/复检还剩几处（剩下的可引导用户说「去AI味」逐条修订）；" +
@@ -499,7 +491,7 @@ export const generateDraftTool = createTool({
       planCheckCallModel: callConfiguredPlanCheckModel,
       // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（qualityCheck 槽）与冲突段改写（repair 槽）。
       continueCallModel: callConfiguredContinueModel,
-      continuityCheckCallModel: callConfiguredContinuityCheckModel,
+      continuityCheckCallModel: callConfiguredCheckerModel,
       // 不自动改冲突句（第八轮验收：自动改了 32 句，18 句改出新毛病、真正修好 3 句）：核对出的问题原样交作者定。
       // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
       segmentByPlan: true,

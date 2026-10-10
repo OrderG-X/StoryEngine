@@ -224,11 +224,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       passed: true,
       title: "开局",
       tokenUsage: { promptTokens: 100, completionTokens: 60, totalTokens: 160 },
-      continuityQuality: {
-        passed: true,
-        score: 1,
-        issues: [],
-      },
       issues: [],
     });
     expect(report.draftPath).toBe(join(projectDir, "drafts", "fast", "chapter-0001.md"));
@@ -624,47 +619,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
       "# 第1章\n\nGuo Xu 捏着半张申请表，纸面在掌心里一点点发热。\n",
     );
-  });
-
-  it("records continuity warnings without blocking fast draft persistence", async () => {
-    const projectDir = await createFixtureProject();
-    await seedSemanticTimeline(projectDir);
-    const writerClient: WriterClient = {
-      generateDraft: vi.fn(async () => ({
-        title: "偏离承接",
-        content: "Guo Xu 在大门外整理衣袖，转而观看晨雾，没有追查旧线索。",
-        tokenUsage: { promptTokens: 90, completionTokens: 40, totalTokens: 130 },
-      })),
-    };
-
-    const report = await runFastDraft({
-      projectDir,
-      chapter: 2,
-      chapterGoal: "承接后墙线索。",
-      writerClient,
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.draftPath).toBe(join(projectDir, "drafts", "fast", "chapter-0002.md"));
-    expect(report.continuityQuality).toMatchObject({
-      passed: true,
-      matched: {
-        characters: ["Guo Xu / 主角"],
-      },
-    });
-    expect(report.continuityQuality?.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        severity: "warning",
-        type: "open_leads_not_referenced",
-      }),
-    ]));
-    expect(report.diagnostics?.details).toMatchObject({
-      continuityQuality: {
-        passed: true,
-        issueCount: expect.any(Number),
-      },
-    });
-    await expect(readFile(report.draftPath!, "utf-8")).resolves.toContain("偏离承接");
   });
 
   it("rejects empty content and does not save a draft", async () => {

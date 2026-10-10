@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { checkDraftContinuity } from "../continuity-quality-check.js";
 import { analyzeIntentLifecycle } from "../intent-lifecycle-diagnostics.js";
 import type { NarrativeThread, ThreadPool } from "../types.js";
 
@@ -139,33 +138,6 @@ describe("Intent Lifecycle Diagnostics V1", () => {
     });
   });
 
-  it("does not affect continuityQuality reference calibration behavior", () => {
-    const referenceReport = checkDraftContinuity({
-      draftContent: "林澈进入地下车库后一路摸到北墙，终于看见消防水箱。他蹲下来检查阀门，确认水箱里还有水，开始接水。",
-      continuity: emptyContinuity(),
-      storyThreads: {
-        openLeads: [
-          {
-            id: "lead-garage-water",
-            type: "lead",
-            title: "地下车库通道与水源",
-            status: "open",
-            lastTouchedChapter: 7,
-            nextActionHint: "检查消防水箱",
-            evidence: ["水箱在地下车库北墙，可能有饮用水。"],
-            relatedLocations: ["地下车库"],
-            relatedCharacters: ["林澈"],
-          },
-        ],
-        openIntents: [],
-        recentlyTouchedThreads: [],
-        staleThreadWarnings: [],
-        threadCarryForwardInstruction: "",
-      },
-      chapter: 8,
-    });
-    expect(referenceReport.issues.some((issue) => issue.type === "open_threads_not_referenced")).toBe(false);
-  });
 });
 
 function intentThread(

@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { expireStaleArcGoals } from "../arc-goal-tracking.js";
 import { commitFastDraft } from "../commit-engine.js";
 import { buildCommitPlanFromProject } from "../commit-plan-builder.js";
-import { checkDraftContinuity } from "../continuity-quality-check.js";
 import { buildWriterContext, type ArcGoalsContext } from "../context-gateway.js";
 import { createStoryProject, readArcGoalPool, readHookPool, readThreadPool } from "../project-store.js";
 import { chaptersSinceTouched } from "../stale-reminder-policy.js";
@@ -46,7 +45,7 @@ describe("StoryEngine-NG Arc Goal Tracking", () => {
     expect(diagnostics.details.arcGoalTracking.staleGoalWarnings).toEqual(plan.staleGoalWarnings);
   });
 
-  it("adds arc_goals context and continuity warnings for missed active goals", async () => {
+  it("adds arc_goals context for active goals", async () => {
     const projectDir = await createArcProject();
     await seedArcGoals(projectDir, {
       goals: [
@@ -70,26 +69,6 @@ describe("StoryEngine-NG Arc Goal Tracking", () => {
     });
     expect(arcGoals?.arcCarryForwardInstruction).toContain("当前小卷目标");
     expect(arcGoals?.arcCarryForwardInstruction).toContain("查清资源账目");
-
-    const continuityReport = checkDraftContinuity({
-      chapter: 6,
-      draftContent: "林远只在大门看云，和路边弟子闲谈天气。",
-      continuity: {
-        recentEvents: [],
-        openLeads: [],
-        activeConflicts: [],
-        discoveries: [],
-        recentLocations: [],
-        recentCharacters: [],
-        carryForwardInstruction: "暂无前情承接要求。",
-      },
-      arcGoals,
-    });
-
-    expect(continuityReport.passed).toBe(true);
-    expect(continuityReport.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: "warning", type: "arc_goals_not_referenced" }),
-    ]));
   });
 
   it("从 ChapterDelta 声明题材中立地确立主线目标（旧关键词正则在非修仙正文上颗粒无收）", async () => {

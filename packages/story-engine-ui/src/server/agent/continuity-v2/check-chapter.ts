@@ -10,6 +10,7 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { findLedgerNumberConflicts, readFactLedgerStrict, type FactEntry } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 
 export type CheckCallModel = (messages: readonly { readonly role: "system" | "user"; readonly content: string }[]) => Promise<string>;
@@ -39,6 +40,8 @@ export interface ContinuityIssueV2 {
   readonly kind: ClaimKind;
   /** 复核把握：sure＝确定是矛盾（排前面）；maybe＝可能（收起来给作者看）。未复核时缺省。 */
   readonly confidence?: "sure" | "maybe";
+  /** ledger＝账本数字对账（确定性层）查出来的，不是模型找的。 */
+  readonly source?: "ledger";
 }
 
 export interface CheckChapterResult {
@@ -52,8 +55,14 @@ export interface CheckChapterResult {
 }
 
 const KINDS = new Set<ClaimKind>(["object", "place", "time", "identity", "knowledge", "number", "event"]);
-/** 一章分 CLAIM_CHUNKS 段并行拆，每段最多 CLAIMS_PER_CHUNK 条（评测可用环境变量改，比快慢和查全）。 */
+/**
+ * 一章至少分 CLAIM_CHUNKS 段并行拆，每段最多 CLAIMS_PER_CHUNK 条（评测可用环境变量改，比快慢和查全）。
+ * 长章按每段约 SENTENCES_PER_CHUNK 句多分几段（2026-10-10 跨全书埋雷：第 58 章 274 句只分 4 段、每段 15 条，
+ * 末尾那句「外墙是青灰的砖」没被拆出来），最多 MAX_CLAIM_CHUNKS 段。
+ */
 const CLAIM_CHUNKS = Number(process.env.CHECKER_CLAIM_CHUNKS) || 4;
+const SENTENCES_PER_CHUNK = 40;
+const MAX_CLAIM_CHUNKS = 8;
 const CLAIMS_PER_CHUNK = Number(process.env.CHECKER_CLAIMS_PER_CHUNK) || 15;
 const EVIDENCE_PER_CLAIM = 7;
 const CLAIMS_PER_BATCH = 14;
@@ -103,8 +112,9 @@ export function buildClaimMessages(chapter: number, sentences: readonly string[]
     "⑥ 数字：数量、编号、金额、距离；",
     "⑦ 事件：人物提到前文发生过的事（谁做了什么、说了什么）；",
     "⑧ 搬动东西的动作：拿出、放回、塞进、摸出、交给、锁进、带走——它们说明东西此刻在哪；",
-    "⑨ 时辰与天色：几点、上午 / 傍晚、天黑没黑、日头在哪。",
-    "不要列情绪、景色、比喻。",
+    "⑨ 时辰与天色：几点、上午 / 傍晚、天黑没黑、日头在哪；",
+    "⑩ 地方和房子的样子：几层、什么颜色什么材质、朝向、门牌、招牌或门上的字、屋里摆设在哪。",
+    "不要列情绪、天气、比喻。",
     `每条：s＝句子编号；t＝这句里的人名 / 物名 / 地名（照正文写法，2～6 字）；k＝类型，选 object|place|time|identity|knowledge|number|event。最多 ${CLAIMS_PER_CHUNK} 条，宁可多列。`,
     "只输出一个 JSON：{\"claims\":[{\"s\":3,\"t\":[\"怀表\",\"抽屉\"],\"k\":\"object\"}]}，不要解释。",
   ].join("\n");
@@ -165,7 +175,11 @@ export interface EarlierText {
   readonly chapters: readonly { readonly chapter: number; readonly sentences: readonly string[] }[];
 }
 
-export async function readEarlierChapters(projectDir: string, chapter: number, limit = 30): Promise<EarlierText> {
+/**
+ * 前面各章原文。缺省读全书（2026-10-10 引擎升级：原来只读最近 30 章，第 200 章写错第 1 章的设定根本对不上）；
+ * 通读那一路自己按字数只取最近的若干章，逐条判这一路按名字在全书里找。
+ */
+export async function readEarlierChapters(projectDir: string, chapter: number, limit = Number.POSITIVE_INFINITY): Promise<EarlierText> {
   const files = await readdir(join(projectDir, "chapters")).catch(() => [] as string[]);
   const numbers = files
     .map((file) => /^(\d{4})\.md$/u.exec(file))
@@ -205,6 +219,51 @@ export function searchForms(term: string): readonly string[] {
   return [...forms].filter((form) => form.length >= 2);
 }
 
+interface PreparedEarlier {
+  /** 前文各句，由近到远、章内由后往前（和找证据时往回看的顺序一致）。 */
+  readonly items: readonly (EvidenceSentence & { readonly grams: ReadonlySet<string> })[];
+  /** 两字片段 → 含它的句子下标。 */
+  readonly postings: ReadonlyMap<string, readonly number[]>;
+  /** 名字检索形 → 含它的句子下标（按需算、算过就记住）。 */
+  readonly formHits: Map<string, readonly number[]>;
+}
+
+const preparedEarlier = new WeakMap<EarlierText, PreparedEarlier>();
+
+/** 全书前文只建一次索引（同一次核账里几十条说法共用）：看全书以后逐句逐条比太慢。 */
+function prepareEarlier(earlier: EarlierText): PreparedEarlier {
+  const cached = preparedEarlier.get(earlier);
+  if (cached) return cached;
+  const items = earlier.chapters.flatMap((item) => [...item.sentences].reverse()
+    .map((text) => ({ chapter: item.chapter, sameChapter: false, text, grams: bigrams(text) })));
+  const postings = new Map<string, number[]>();
+  items.forEach((item, index) => {
+    for (const gram of item.grams) {
+      const list = postings.get(gram);
+      if (list) list.push(index);
+      else postings.set(gram, [index]);
+    }
+  });
+  const prepared = { items, postings, formHits: new Map<string, readonly number[]>() };
+  preparedEarlier.set(earlier, prepared);
+  return prepared;
+}
+
+function earlierHitsForForm(prepared: PreparedEarlier, form: string): readonly number[] {
+  const cached = prepared.formHits.get(form);
+  if (cached) return cached;
+  // 先用两字片段缩小范围再逐句确认（名字都是两字以上）。
+  const grams = [...bigrams(form)];
+  let candidates: readonly number[] | undefined;
+  for (const gram of grams) {
+    const list = prepared.postings.get(gram) ?? [];
+    if (!candidates || list.length < candidates.length) candidates = list;
+  }
+  const hits = (candidates ?? []).filter((index) => prepared.items[index]!.text.includes(form));
+  prepared.formHits.set(form, hits);
+  return hits;
+}
+
 export function findEvidence(
   claim: ChapterClaim,
   earlier: EarlierText,
@@ -213,17 +272,25 @@ export function findEvidence(
 ): readonly EvidenceSentence[] {
   const ownIndex = chapterSentences.findIndex((sentence) => normalize(sentence).includes(normalize(claim.quote)) || normalize(claim.quote).includes(normalize(sentence)));
   // 往回看的顺序：本章这句之前（由近到远），再前面各章（由近到远、章内由后往前）。
-  const backward: EvidenceSentence[] = [
-    ...chapterSentences.slice(0, ownIndex > 0 ? ownIndex : 0).reverse().map((text) => ({ chapter, sameChapter: true, text })),
-    ...earlier.chapters.flatMap((item) => [...item.sentences].reverse().map((text) => ({ chapter: item.chapter, sameChapter: false, text }))),
-  ];
-  if (backward.length === 0) return [];
+  const own: EvidenceSentence[] = chapterSentences.slice(0, ownIndex > 0 ? ownIndex : 0).reverse().map((text) => ({ chapter, sameChapter: true, text }));
+  const prepared = prepareEarlier(earlier);
+  const total = own.length + prepared.items.length;
+  if (total === 0) return [];
   const forms = claim.terms.map(searchForms);
-  // 名字越少见越有区分力（第一版评测：「周婶」「林溪」这类满篇都是的名字把真正相关的句子挤掉了）。
-  const weights = forms.map((group) => {
-    const df = backward.filter((item) => group.some((form) => item.text.includes(form))).length;
-    return df === 0 ? 0 : Math.log((backward.length + 1) / df);
+  // 每组名字：本章前文里命中的下标（0 起），前文里命中的下标（own.length 起）。
+  const groupHits = forms.map((group) => {
+    const hits = new Set<number>();
+    own.forEach((item, index) => { if (group.some((form) => item.text.includes(form))) hits.add(index); });
+    for (const form of group) for (const index of earlierHitsForForm(prepared, form)) hits.add(own.length + index);
+    return [...hits].sort((a, b) => a - b);
   });
+  const at = (order: number): EvidenceSentence => {
+    if (order < own.length) return own[order]!;
+    const { grams: _grams, ...item } = prepared.items[order - own.length]!;
+    return item;
+  };
+  // 名字越少见越有区分力（第一版评测：「周婶」「林溪」这类满篇都是的名字把真正相关的句子挤掉了）。
+  const weights = groupHits.map((hits) => (hits.length === 0 ? 0 : Math.log((total + 1) / hits.length)));
   const claimGrams = bigrams(`${claim.claim}${claim.quote}`);
   const picked: EvidenceSentence[] = [];
   const seen = new Set<string>();
@@ -235,21 +302,33 @@ export function findEvidence(
     picked.push(item);
   };
   // ① 每个名字「最近一次被提到」的那句：东西在哪、人在哪，要对的是最近一次的说法。少见的名字先取。
-  forms
-    .map((group, index) => ({ group, weight: weights[index] }))
+  groupHits
+    .map((hits, index) => ({ hits, weight: weights[index]! }))
     .filter((item) => item.weight > 0)
     .sort((a, b) => b.weight - a.weight)
-    .forEach(({ group }) => take(backward.find((item) => group.some((form) => item.text.includes(form)))));
-  // ② 再按「少见名字命中 + 和说法字面相近」补满；名字都没命中的只收字面很近的。
-  const scored = backward.map((item, order) => {
-    let termScore = 0;
-    forms.forEach((group, index) => { if (group.some((form) => item.text.includes(form))) termScore += weights[index]; });
-    let overlap = 0;
-    for (const gram of bigrams(item.text)) if (claimGrams.has(gram)) overlap += 1;
-    return { item, score: termScore * 3 + Math.min(overlap, 12) - order / 2000, termScore, overlap };
-  }).filter((entry) => entry.termScore > 0 || entry.overlap >= 6);
+    .forEach(({ hits }) => take(hits.length > 0 ? at(hits[0]!) : undefined));
+  // ② 再按「少见名字命中 + 和说法字面相近」在全书里补满；名字都没命中的只收字面很近的。
+  const termScore = new Map<number, number>();
+  groupHits.forEach((hits, index) => { for (const order of hits) termScore.set(order, (termScore.get(order) ?? 0) + weights[index]!); });
+  const overlap = new Map<number, number>();
+  own.forEach((item, order) => {
+    let count = 0;
+    for (const gram of bigrams(item.text)) if (claimGrams.has(gram)) count += 1;
+    if (count > 0) overlap.set(order, count);
+  });
+  for (const gram of claimGrams) {
+    for (const index of prepared.postings.get(gram) ?? []) overlap.set(own.length + index, (overlap.get(own.length + index) ?? 0) + 1);
+  }
+  const candidates = new Set<number>([...termScore.keys(), ...[...overlap.entries()].filter(([, count]) => count >= 6).map(([order]) => order)]);
+  const scored = [...candidates].map((order) => {
+    const terms = termScore.get(order) ?? 0;
+    const shared = overlap.get(order) ?? 0;
+    // 远近只在平手时分先后：最近的说法①已经取了；这里按相似度在全书里挑（原来按句数扣分，
+    // 看全书后第 1 章那句扣到 -4 分，隔 57 章的矛盾永远排不进来）。
+    return { order, score: terms * 3 + Math.min(shared, 12) - order / 1_000_000 };
+  });
   scored.sort((a, b) => b.score - a.score);
-  for (const entry of scored) take(entry.item);
+  for (const entry of scored) take(at(entry.order));
   return picked;
 }
 
@@ -343,7 +422,8 @@ export async function checkChapterAgainstEarlierText(input: {
 }): Promise<CheckChapterResult> {
   const failures: string[] = [];
   const chapterSentences = splitSentences(input.draftBody);
-  const chunkResults = await Promise.allSettled(chunkSentences(chapterSentences, CLAIM_CHUNKS).map(async (chunk) =>
+  const chunkCount = Math.min(MAX_CLAIM_CHUNKS, Math.max(CLAIM_CHUNKS, Math.ceil(chapterSentences.length / SENTENCES_PER_CHUNK)));
+  const chunkResults = await Promise.allSettled(chunkSentences(chapterSentences, chunkCount).map(async (chunk) =>
     parseClaims(await input.callModel(buildClaimMessages(input.chapter, chunk.sentences, chunk.firstIndex)), chunk.sentences, chunk.firstIndex).slice(0, CLAIMS_PER_CHUNK)));
   const seenQuotes = new Set<string>();
   const claims: ChapterClaim[] = [];
@@ -637,6 +717,36 @@ export function buildAdjudicationMessages(
 }
 
 /**
+ * 确定性层：账本里带数字的硬设定 vs 本章（引擎 findLedgerNumberConflicts，不调模型）。
+ * 账本读不了如实记进 failures（不吞掉），模型那两路照跑。
+ */
+async function ledgerNumberIssues(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftBody: string;
+  readonly ledgerFacts?: readonly FactEntry[];
+}): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[] }> {
+  let facts = input.ledgerFacts;
+  if (!facts) {
+    try {
+      facts = (await readFactLedgerStrict(input.projectDir)).facts;
+    } catch (error) {
+      return { issues: [], failures: [`账本读不了，这次没对账：${error instanceof Error ? error.message : String(error)}`] };
+    }
+  }
+  const issues = findLedgerNumberConflicts({ chapter: input.chapter, draftBody: input.draftBody, facts }).map((conflict) => ({
+    quote: conflict.quote,
+    earlierQuote: conflict.earlierQuote,
+    earlierChapter: conflict.earlierChapter,
+    reason: conflict.reason,
+    kind: "number" as const,
+    confidence: "sure" as const,
+    source: "ledger" as const,
+  }));
+  return { issues, failures: [] };
+}
+
+/**
  * 组合查错（第 1 期定型）：整章通读三遍（盯东西 / 盯人 / 盯时间与信息）+ 拆说法逐条判，合并去重，再复核一遍压误报。
  * 评测（4 本书 127 条标注）：单用通读 查全 28%；通读 ∪ 逐条判 查全 42%。复核只删不加。
  */
@@ -655,17 +765,21 @@ export async function checkChapterContinuity(input: {
    * 否则保留上次的把握——没改掉的问题不会因为模型这次没看到就消失。
    */
   readonly carryOver?: readonly ContinuityIssueV2[];
+  /** 账本事实（测试 / 评测注入）；缺省读书里的账本。 */
+  readonly ledgerFacts?: readonly FactEntry[];
 }): Promise<CheckChapterResult & { readonly candidates: number }> {
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
+  const ledger = await ledgerNumberIssues(input);
   const [full, claims] = await Promise.all([
     checkChapterByFullRead({ ...input, earlier }),
     checkChapterAgainstEarlierText({ ...input, earlier }),
   ]);
-  const failures = [...full.failures, ...claims.failures];
+  const failures = [...ledger.failures, ...full.failures, ...claims.failures];
   const merged: ContinuityIssueV2[] = [];
   const carried = new Set<ContinuityIssueV2>();
   const seen = new Set<string>();
-  for (const issue of [...(input.carryOver ?? []), ...full.issues, ...claims.issues]) {
+  // 账本对账的排最前：同一句模型也报了的，留账本这条（两边原句、理由都是确定的）。
+  for (const issue of [...ledger.issues, ...(input.carryOver ?? []), ...full.issues, ...claims.issues]) {
     const key = normalize(issue.quote).slice(0, 16);
     if (seen.has(key)) continue;
     // 同一句（一条的原句包含另一条的）只留一条：通读和逐条判常从同一句里各抄一段报同一个问题，作者看到两三遍。
@@ -696,7 +810,8 @@ export async function checkChapterContinuity(input: {
       .map((candidate) => {
         const verdict = verdicts.get(candidate.id) ?? "maybe";
         if (/^(?:no|false|不是|否)$/u.test(verdict)) return undefined;
-        const fresh = /^(?:sure|true|确定|是)$/u.test(verdict) ? "sure" as const : "maybe" as const;
+        // 账本对账查出来的：复核只能否决（说明这句其实不是在说那件事），不能降成「可能」。
+        const fresh = candidate.issue.source === "ledger" || /^(?:sure|true|确定|是)$/u.test(verdict) ? "sure" as const : "maybe" as const;
         // 上次报过的：沿用上次的把握（不让「确定 / 可能」随复核的随机性来回跳）。
         return { ...candidate.issue, confidence: carried.has(candidate.issue) ? candidate.issue.confidence ?? fresh : fresh };
       })

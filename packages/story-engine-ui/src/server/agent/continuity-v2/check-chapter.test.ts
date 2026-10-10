@@ -207,3 +207,26 @@ describe("合并去重：同一句只报一次", () => {
     expect(result.issues.map((item) => item.reason)).toEqual(["位置对不上"]);
   });
 });
+
+describe("账本数字对账（确定性层）并进核账", () => {
+  const ledgerFacts = [{
+    id: "fact-2-6", chapter: 2, text: "扉页写着林秋，一九八七年春", source: "auto",
+    quote: "扉页上写着两行字：林秋，一九八七年春。", subject: "城南旧事", kind: "hard" as const,
+  }];
+  const body = "他翻开扉页，看着那两行字——林秋，一九八五年春——看了很久。";
+  const respond = (verdict: string) => vi.fn(async (messages: readonly { readonly role: string; readonly content: string }[]) => {
+    if (messages[0].content.includes("复核编辑")) return JSON.stringify({ verdicts: [{ id: "K1", verdict }] });
+    return JSON.stringify({ contradictions: [], claims: [] });
+  });
+
+  it("模型两路都没报，账本对出来的照样报「确定」，复核说「可能」也不降档", async () => {
+    const result = await checkChapterContinuity({ projectDir: "/nonexistent", chapter: 4, draftBody: body, callModel: respond("maybe"), earlier: EARLIER, ledgerFacts });
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]).toMatchObject({ source: "ledger", confidence: "sure", earlierChapter: 2, kind: "number" });
+  });
+
+  it("复核明确说「不是」→ 否决（这句其实不是在说那件事）", async () => {
+    const result = await checkChapterContinuity({ projectDir: "/nonexistent", chapter: 4, draftBody: body, callModel: respond("no"), earlier: EARLIER, ledgerFacts });
+    expect(result.issues).toEqual([]);
+  });
+});

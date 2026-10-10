@@ -316,7 +316,6 @@ describe("story-engine draft CLI", () => {
     const printed = JSON.parse(stdout.output()) as {
       passed: boolean;
       draftPath: string;
-      continuityQuality: { passed: boolean; score: number };
       tokenUsage: { promptTokens: number; completionTokens: number; totalTokens: number };
       cacheMetrics: { promptCacheHitTokens: number | null; promptCacheMissTokens: number | null; cacheHitRatio: number | null; cacheMetricsAvailable: boolean };
       promptFingerprint: { firstDynamicCharOffset: number | null; firstDynamicSectionName: string | null; firstDynamicSectionIndex: number | null };
@@ -324,7 +323,6 @@ describe("story-engine draft CLI", () => {
     expect(printed).toMatchObject({
       passed: true,
       draftPath: join(projectDir, "drafts", "fast", "chapter-0001.md"),
-      continuityQuality: { passed: true, score: 1 },
       tokenUsage: { promptTokens: 111, completionTokens: 22, totalTokens: 133 },
       cacheMetrics: {
         provider: "deepseek",

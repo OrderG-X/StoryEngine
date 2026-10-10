@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { commitFastDraft } from "../commit-engine.js";
 import { buildCommitPlanFromProject } from "../commit-plan-builder.js";
-import { checkDraftContinuity } from "../continuity-quality-check.js";
 import { buildWriterContext, type StoryThreadsContext } from "../context-gateway.js";
 import { mergeThreadTrackingUpdates, expireStaleIntents } from "../lead-intent-tracking.js";
 import { createStoryProject, readHookPool, readThreadPool } from "../project-store.js";
@@ -551,36 +550,6 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     expect(instructionTitles.length).toBeLessThanOrEqual(5);
   });
 
-  it("continuity quality only checks prioritized story_threads injected into context", () => {
-    const report = checkDraftContinuity({
-      chapter: 10,
-      draftContent: "林远赶到后墙，继续听那阵异常响动。",
-      continuity: {
-        recentEvents: [],
-        openLeads: [],
-        activeConflicts: [],
-        discoveries: [],
-        recentLocations: [],
-        recentCharacters: [],
-        carryForwardInstruction: "暂无前情承接要求。",
-      },
-      storyThreads: {
-        openLeads: [threadContextItem("lead-wall", "lead", "后墙异常响动")],
-        openIntents: [],
-        recentlyTouchedThreads: [],
-        staleThreadWarnings: [],
-        threadCarryForwardInstruction: "下一章优先处理未完成线索/意图：后墙异常响动。",
-      },
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.issues.some((issue) => issue.type === "open_intents_not_referenced")).toBe(false);
-    expect(report.matched.leads).toEqual(["后墙异常响动"]);
-  });
-
-  // 阶段 3·核心：同义不同表述的回收证据，有声明时归到同一条既有线索（不新建，治线索分裂）。
-  // 2026-10-08 十章验收：模型拿无关句子关掉核心谜题。收口改为要求原句与线索沾边；完全换了说法的收口
-  // 只算推进（touched、仍不新建），由作者或 resolve_thread 明确关——错关核心谜题的代价远大于多挂几章。
   it("声明回收：同义证据（无共享锚点）经 targetThreadHint 归到既有线索、只算推进不关、不新建", async () => {
     const projectDir = await createThreadProject();
     await seedThreads(projectDir, {
@@ -903,36 +872,6 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         status: "touched",
         lastTouchedChapter: 11,
       }),
-    ]));
-  });
-
-  it("checks open story threads even when continuity is empty", () => {
-    const report = checkDraftContinuity({
-      chapter: 4,
-      draftContent: "林远只顾着看大门晨雾，没有提及旧线索和行动计划。",
-      continuity: {
-        recentEvents: [],
-        openLeads: [],
-        activeConflicts: [],
-        discoveries: [],
-        recentLocations: [],
-        recentCharacters: [],
-        carryForwardInstruction: "暂无前情承接要求。",
-      },
-      storyThreads: {
-        openLeads: [threadContextItem("lead-wall", "lead", "后墙异常响动")],
-        openIntents: [threadContextItem("intent-night", "intent", "林远夜探账房")],
-        recentlyTouchedThreads: [],
-        staleThreadWarnings: [],
-        threadCarryForwardInstruction: "下一章优先处理未完成线索/意图。",
-      },
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.score).toBeLessThan(1);
-    expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: "warning", type: "open_threads_not_referenced" }),
-      expect.objectContaining({ severity: "warning", type: "open_intents_not_referenced" }),
     ]));
   });
 
