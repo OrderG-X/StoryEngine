@@ -103,6 +103,9 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const isCommitted = draft.status === "committed";
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。
   const revisionHighlightTexts = useWorkspaceStore((s) => s.revisionHighlightTexts);
+  // AI 出稿中：稿纸空着时说清 AI 在干什么（拟章纲要一两分钟），别显示「你可以在这里手动输入」。
+  const draftPhase = useWorkspaceStore((s) => s.draftPhase);
+  const generating = useWorkspaceStore((s) => s.workspace.flowStatus === "draft_generating");
   // 最近一次与编辑器同步过的「外部草稿内容」基准（首次为 null，用编辑器归一化后的初值兜底）。
   const lastExternal = useRef<string | null>(null);
   // 记上次同步的章号：换章时强制硬加载新章正文，不被「保留本地脏编辑」挡住（治切章点两下还显示上一章）。
@@ -426,7 +429,11 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
           <EditorContent editor={editor} />
           {isEmpty && !isCommitted ? (
             <p className="se-v2-draft-editor-hint" aria-hidden="true">
-              当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。
+              {draftPhase === "plan"
+                ? "AI 先拟这一章的章纲（一般要一两分钟），拟好就开始写正文……"
+                : generating || draftPhase === "write"
+                  ? "AI 正在写正文……"
+                  : "当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。"}
             </p>
           ) : null}
           {(canRewrite || canAsk) && selection ? (

@@ -90,6 +90,7 @@ import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../ag
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../agent/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft, type PlanCallModel } from "../agent/chapter-plan/plan-chapter.js";
+import { withStep } from "../lib/token-meter.js";
 import type { ContinueCallModel } from "../agent/draft-pipeline/continue-draft.js";
 import type { CheckCallModel } from "../agent/continuity-v2/check-chapter.js";
 import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "../agent/draft-pipeline/run-quality-pipeline.js";
@@ -960,6 +961,8 @@ export interface GenerateDraftInput {
    * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
    */
   readonly planCallModel?: PlanCallModel;
+  /** 出稿阶段回报（拟章纲 / 写正文）：工具接到流式 sink 上，稿纸空着时给作者看进度。缺失=不回报。 */
+  readonly onPhase?: (phase: "plan" | "write") => void;
   /** 章纲审校的调用（生产注入关思考版）；缺省用 planCallModel。 */
   readonly planCheckCallModel?: PlanCallModel;
   /**
@@ -1200,17 +1203,20 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
   // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
   const planStartedAt = Date.now();
-  const planning = input.planCallModel
-    ? await resolveChapterPlanForDraft({
+  const planCallModel = input.planCallModel;
+  if (planCallModel) input.onPhase?.("plan");
+  const planning = planCallModel
+    ? await withStep("章纲", () => resolveChapterPlanForDraft({
       projectDir: input.projectDir,
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
-      callModel: input.planCallModel,
+      callModel: planCallModel,
       ...(input.planCheckCallModel ? { checkCallModel: input.planCheckCallModel } : {}),
-    })
+    }))
     : undefined;
   const draftStartedAt = Date.now();
-  const outcome = await runGenerateDraftWithPlan(input, planning?.plan);
+  input.onPhase?.("write");
+  const outcome = await withStep("写正文", () => runGenerateDraftWithPlan(input, planning?.plan));
   if (planning) {
     // 长篇里「写一章要多久」要看得见：章纲 / 出稿（含续写与核对，细分见 [draft-pipeline] 行）。
     console.info(`[draft-pipeline] ch${input.chapter} 章纲 ${Math.round((draftStartedAt - planStartedAt) / 1000)}s / 出稿全程 ${Math.round((Date.now() - draftStartedAt) / 1000)}s`);

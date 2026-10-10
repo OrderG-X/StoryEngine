@@ -43,7 +43,11 @@ export function isUserConfirmedTool(context: ToolExecutionContext | undefined, t
   return context?.requestContext?.get(REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY) === toolName;
 }
 
-export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string }) => void;
+/**
+ * 出稿流式 sink：text = 正文增量；phase = 出稿进行到哪一步（plan 拟章纲 / write 写正文，text 为空串）。
+ * 拟章纲要一两分钟、这期间稿纸是空的，作者得知道 AI 在干什么。
+ */
+export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string; readonly phase?: "plan" | "write" }) => void;
 
 function isPositiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;

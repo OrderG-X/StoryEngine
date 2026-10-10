@@ -1540,6 +1540,10 @@ export function useChat(params: UseChatParams): UseChatResult {
                 commitReconciliationDraft = useWorkspaceStore.getState().workspace.draft.content;
               }
             },
+            onDraftPhase: ({ phase }) => {
+              if (!ownsCurrentWorkspace()) return;
+              useWorkspaceStore.getState().setDraftPhase(phase);
+            },
             onDraftDelta: ({ chapter, text }) => {
               if (!ownsCurrentWorkspace()) return;
               const store = useWorkspaceStore.getState();
@@ -1769,6 +1773,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         // 「只在确实卡在 draft_generating 时才动」守门，正常回合零影响。此时 operation token 还没释放，
         // 不会有下一轮出稿并发置位（beginWorkspaceOperation 单槽互斥）。
         if (!wasAborted) unstickGeneratingFlow();
+        useWorkspaceStore.getState().setDraftPhase(null);
         // 保持 operation 所有权直到盘上真值读完；否则异步 fetch 刚返回，finally 已释放 token，
         // 对账会把本应恢复的成功结果误当成迟到数据丢掉。
         if (reconciliationPromise) await reconciliationPromise;

@@ -153,6 +153,9 @@ export function emptyCommitSelections(): CommitSelectiveConfirmationState {
 /** 抽卡候选（块③）：「再来一版」临时生成的一版正文（含标题），挑中才落盘。 */
 export type DraftCandidate = WorkspaceDraftCandidate;
 
+/** AI 出稿的阶段：拟章纲 / 写正文。 */
+export type DraftPhase = "plan" | "write";
+
 /* ------------------------------------------------------------------ */
 /*  Store interface                                                    */
 /* ------------------------------------------------------------------ */
@@ -172,6 +175,8 @@ export interface WorkspaceStore {
   /** 改稿低把握度「先问」时暂存的待确认改稿指令；下一轮用户确认即执行。 */
   pendingDirectEditInstruction: string | null;
   draftActionLoading: string | null;
+  /** AI 出稿进行到哪一步（服务端 draft-delta 带 phase 推过来）：plan=拟章纲，write=写正文；不在出稿为 null。稿纸空着时显示给作者看。 */
+  draftPhase: DraftPhase | null;
   /** 抽卡（块③）：「再来一版」生成的 2–3 个临时候选；非 null 即展开并排候选面板，挑中才落盘。 */
   draftCandidates: readonly DraftCandidate[] | null;
   selectedAdviceCards: readonly SelectedAdviceCard[];
@@ -214,6 +219,7 @@ export interface WorkspaceStore {
   setChatError: (error: string | null) => void;
   setPendingDirectEditInstruction: (instruction: string | null) => void;
   setDraftActionLoading: (loading: string | null) => void;
+  setDraftPhase: (phase: DraftPhase | null) => void;
   setDraftCandidates: (candidates: readonly DraftCandidate[] | null) => void;
   setSelectedAdviceCards: (cards: readonly SelectedAdviceCard[]) => void;
   setCommitPreviewReport: (report: CommitPreviewUiReport | null) => void;
@@ -291,6 +297,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   clearedChatBackup: null,
   pendingDirectEditInstruction: null,
   draftActionLoading: null,
+  draftPhase: null,
   draftCandidates: null,
   selectedAdviceCards: [],
   commitPreviewReport: null,
@@ -332,6 +339,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   setChatError: (error) => set({ chatError: error }),
   setPendingDirectEditInstruction: (instruction) => set({ pendingDirectEditInstruction: instruction }),
   setDraftActionLoading: (loading) => set({ draftActionLoading: loading }),
+  setDraftPhase: (phase) => set({ draftPhase: phase }),
   setDraftCandidates: (candidates) => set({ draftCandidates: candidates }),
   setSelectedAdviceCards: (cards) => set({ selectedAdviceCards: cards }),
   setCommitPreviewReport: (report) => set({ commitPreviewReport: report }),

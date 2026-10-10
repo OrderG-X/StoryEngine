@@ -1024,6 +1024,27 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useNavigationStore.getState().toast ?? "").toContain("第 4 章");
   });
 
+  it("出稿阶段（拟章纲 / 写正文）推给稿纸；回合结束清掉", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftPhase?.({ chapter: 3, phase: "plan" });
+      await gate;
+      handlers.onDraftPhase?.({ chapter: 3, phase: "write" });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("写这一章"); });
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().draftPhase).toBe("plan"));
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_generating");
+    release();
+    await act(async () => { await pending; });
+    expect(useWorkspaceStore.getState().draftPhase).toBeNull();
+  });
+
   it("回合正常结束但出稿结果没复位（守卫拦下定稿等中途分支）→ 收尾兜底把 draft_generating 复位，不永久转圈", async () => {
     // 最小复刻：tool-call(generate_draft) 后回合正常收尾（结果事件因故没推进流程态的任何形态）。
     scriptAgentStream((handlers) => {
