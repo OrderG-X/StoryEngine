@@ -60,11 +60,32 @@ describe("commit plan semantic summary", () => {
       activeHooks: expect.arrayContaining(["h-ledger"]),
       activeConflicts: [expect.stringContaining("克扣")],
     });
-    expect(result.commitPlan?.characterUpdates?.[0]).toMatchObject({
-      characterId: protagonistId,
-      emotion: "警觉",
-      goal: expect.stringContaining("查清账册来源"),
-    });
+    // 2026-10-10：没声明就不改人物状态（删了「有冲突就记警觉」「继续追查：…」两条猜测）
+    expect(result.commitPlan?.characterUpdates).toBeUndefined();
+  });
+
+  it("声明了关键决定：主角当前目标取声明摘要，不再凭冲突编情绪", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 1, semanticDraft());
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 1,
+      mainEvent: {
+        summary: "林远发现管事暗中克扣外院资源的账目",
+        quote: "他发现账房角落里藏着一本账目，意识到组织管事暗中克扣外院资源。",
+      },
+      decision: { summary: "林远要查清账册来源", quote: "他发现账房角落里藏着一本账目，意识到组织管事暗中克扣外院资源。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 1, declaration });
+
+    expect(result.commitPlan?.characterUpdates).toEqual([
+      { characterId: toSafeCharacterId("林远"), goal: "林远要查清账册来源" },
+    ]);
   });
 
   // 阶段 2·① 向后兼容：不传 declaration 时，走完整旧正则路径（本用例作为下面「传声明」用例的对照锚点）。

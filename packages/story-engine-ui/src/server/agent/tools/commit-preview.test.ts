@@ -328,7 +328,7 @@ describe("commit_preview", () => {
     expect(out.canCommit).toBe(true);
     expect(out.previewToken).toBeTruthy();
     expect(findCommitPreview(projectDir, 1)?.declaration).toBeUndefined();
-    // P1（2026-10-02）：降级不再对用户静默——状态 + 原因进工具输出，summary 固定带【章节语义声明未生效】。
+    // P1（2026-10-02）：降级不再对用户静默——状态 + 原因进工具输出，summary 固定带【这章的线索没记上】。
     expect(out.declarationStatus).toBe("fallback");
     expect(out.declarationReason).toContain("模型超时");
     expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
@@ -463,7 +463,7 @@ describe("commit_preview", () => {
     expect(seenTitles).not.toContain("已收口的伏笔");
   });
 
-  it("declareDelta 的 openThreadTitles：活跃伏笔全保留在前，thread 按 lastTouched 倒序截取 40 条", async () => {
+  it("declareDelta 的 openThreadTitles：活跃伏笔在前，开着的线索全给（按 lastTouched 倒序，不再只给 40 条）", async () => {
     const projectDir = await makeProject("喂线索排序截断", "林远");
     await writeDraft(projectDir, 9, longDraft(9, "林远"));
     await writeFile(
@@ -503,10 +503,9 @@ describe("commit_preview", () => {
     });
 
     expect(seenTitles?.slice(0, 2)).toEqual(["活跃伏笔A", "活跃伏笔B"]);
-    expect(seenTitles).toHaveLength(42);
+    expect(seenTitles).toHaveLength(47);
     expect(seenTitles?.slice(2, 6)).toEqual(["线索44", "线索43", "线索42", "线索41"]);
-    expect(seenTitles).toContain("线索05");
-    expect(seenTitles).not.toContain("线索04");
+    expect(seenTitles).toContain("线索00");
   });
 
   it("端到端：声明把已确立角色名写歪 → 结构化固定提醒 + 语义 warning + 摘要点名，且不阻断入库", async () => {

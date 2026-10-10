@@ -13,113 +13,6 @@ import type { ChapterDeltaDeclaration } from "../chapter-delta.js";
 import type { ArcGoalPool } from "../types.js";
 
 describe("StoryEngine-NG Arc Goal Tracking", () => {
-  it("creates arc goals from ledger pressure and damaged token clues", async () => {
-    const projectDir = await createArcProject();
-    await writeDraft(projectDir, 1, [
-      "林远在外院园圃被克扣月钱，发现账目牵出账目。",
-      "他又看见破损信物上的暗号，意识到信物用途可能和账房有关。",
-    ].join("\n\n"));
-
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
-
-    expect(plan.arcGoalUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: "查清资源账目",
-        status: "active",
-        scope: "main_arc",
-        firstSeenChapter: 1,
-        lastTouchedChapter: 1,
-        evidence: expect.arrayContaining([expect.stringContaining("账目")]),
-        relatedCharacters: ["林远"],
-        relatedLocations: expect.arrayContaining(["外院", "园圃", "账房"]),
-      }),
-      expect.objectContaining({
-        title: "查明破损信物用途",
-        status: "active",
-        scope: "mini_arc",
-      }),
-    ]));
-
-    const report = await commitFastDraft({ projectDir, chapter: 1, commitPlan: plan.commitPlan! });
-
-    expect(report.passed).toBe(true);
-    expect(report.arcGoalTracking?.introducedGoals.length).toBeGreaterThan(0);
-    await expect(readArcGoalPool(projectDir)).resolves.toMatchObject({
-      goals: expect.arrayContaining([
-        expect.objectContaining({ title: "查清资源账目", status: "active" }),
-        expect.objectContaining({ title: "查明破损信物用途", status: "active" }),
-      ]),
-    });
-    await expect(readHookPool(projectDir)).resolves.toMatchObject({
-      hooks: expect.not.arrayContaining([
-        expect.objectContaining({ title: "查清资源账目" }),
-      ]),
-    });
-    await expect(readThreadPool(projectDir)).resolves.toMatchObject({
-      threads: expect.not.arrayContaining([
-        expect.objectContaining({ title: "查清资源账目" }),
-      ]),
-    });
-  });
-
-  it("touches existing goals, bounds evidence, and keeps completed goals completed", async () => {
-    const projectDir = await createArcProject();
-    await seedArcGoals(projectDir, {
-      goals: [
-        {
-          id: "arc-ledger",
-          title: "查清资源账目",
-          status: "active",
-          scope: "main_arc",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 1,
-          targetChapters: 10,
-          evidence: ["旧证据1", "旧证据2", "旧证据3", "旧证据4", "旧证据5"],
-          nextActionHint: "继续查外院账目。",
-          relatedCharacters: ["林远"],
-          relatedLocations: ["外院"],
-        },
-        {
-          id: "arc-token",
-          title: "查明破损信物用途",
-          status: "completed",
-          scope: "mini_arc",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 3,
-          targetChapters: 5,
-          evidence: ["林远已经解决破损信物用途。"],
-        },
-      ],
-    });
-    await writeDraft(projectDir, 4, "林远再次看见账目和账目，确认账房仍在转移外院资源。破损信物也被旁人提起。");
-
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 4 });
-
-    expect(plan.arcGoalUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: "arc-ledger",
-        status: "touched",
-        lastTouchedChapter: 4,
-      }),
-      expect.objectContaining({
-        id: "arc-token",
-        status: "completed",
-        lastTouchedChapter: 4,
-      }),
-    ]));
-    await commitFastDraft({ projectDir, chapter: 4, commitPlan: plan.commitPlan! });
-    const pool = await readArcGoalPool(projectDir);
-    expect(pool.goals.find((goal) => goal.id === "arc-ledger")).toMatchObject({
-      status: "touched",
-      lastTouchedChapter: 4,
-    });
-    expect(pool.goals.find((goal) => goal.id === "arc-ledger")?.evidence.length).toBeLessThanOrEqual(5);
-    expect(pool.goals.find((goal) => goal.id === "arc-token")).toMatchObject({
-      status: "completed",
-      lastTouchedChapter: 4,
-    });
-  });
-
   it("warns about stale arc goals without blocking commit", async () => {
     const projectDir = await createArcProject();
     await seedArcGoals(projectDir, {
@@ -504,3 +397,18 @@ function arcGoal(id: string, title: string, lastTouchedChapter: number): ArcGoal
     nextActionHint: `继续推进${title}。`,
   };
 }
+
+describe("目标只由声明产出（2026-10-10 删掉写死旧测试书目标的关键词表）", () => {
+  it("正文里有「库房」「暗号」「克扣」但没有声明 → 不凭空造目标", async () => {
+    const { buildArcGoalTrackingPlan } = await import("../arc-goal-tracking.js");
+    const plan = buildArcGoalTrackingPlan({
+      chapter: 3,
+      draft: "她去库房对账，发现月钱被克扣，暗号写在破损信物上。",
+      semanticSummary: { mainEvent: "库房对账发现克扣", conflict: "被克扣", discovery: "暗号", nextLead: "查清资源账目" } as never,
+      hookTrackingUpdates: [],
+      threadTrackingUpdates: [],
+      arcGoalPool: { goals: [] },
+    });
+    expect(plan.updates).toEqual([]);
+  });
+});

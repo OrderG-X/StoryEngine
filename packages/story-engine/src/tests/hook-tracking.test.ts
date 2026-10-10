@@ -9,6 +9,19 @@ import { buildWriterContext, type HookTrackingContext } from "../context-gateway
 import { createStoryProject, readHookPool } from "../project-store.js";
 import type { HookPool } from "../types.js";
 
+// 2026-10-10 起伏笔收口只认声明（完成词表已删）：本章声明「账目」这条伏笔回收了。
+const LEDGER_RESOLVED = "林远终于将账目的来源查清了，账房黑幕水落石出，真相大白于天下。";
+function ledgerResolvedDeclaration(chapter: number): ChapterDeltaDeclaration {
+  return {
+    chapter,
+    mainEvent: { summary: "林远查清账目来源", quote: LEDGER_RESOLVED },
+    seededForeshadowing: [],
+    resolvedForeshadowing: [{ summary: "账目来源查清", quote: LEDGER_RESOLVED, targetThreadHint: "账目" }],
+    resourceDeltas: [],
+    keyLeads: [],
+  };
+}
+
 describe("StoryEngine-NG Hook Tracking Pack", () => {
   // 2026-08-12 契约翻转：HOOK_KEYWORDS 悬疑词表已摘除（题材中立铁律——50 章武侠实测词表只误中 1 次，
   // 换成商战文则会拿「账目」「失踪」乱造伏笔）。新伏笔只走「模型声明 seededForeshadowing → 线索池」；
@@ -157,7 +170,7 @@ describe("StoryEngine-NG Hook Tracking Pack", () => {
     expect(diagnostics.details.hookTracking.staleHookWarnings).toEqual(plan.staleHookWarnings);
   });
 
-  it("per-hook resolution: resolves hook A mentioned with resolution phrase but keeps hook B active when merely mentioned (regression Fix 1)", async () => {
+  it("逐条收口：声明回收伏笔 A → resolved；B 只是被提到 → 仍 active（regression Fix 1）", async () => {
     // Seed two active hooks
     const projectDir = await createHookProject();
     await seedHooks(projectDir, {
@@ -191,7 +204,7 @@ describe("StoryEngine-NG Hook Tracking Pack", () => {
       "他的口袋里还揣着那枚破损信物，但其中的秘密依然未解。",
     ].join("\n\n"));
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
+    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration: ledgerResolvedDeclaration(2) });
     expect(plan.passed).toBe(true);
 
     const report = await commitFastDraft({
@@ -237,7 +250,7 @@ describe("StoryEngine-NG Hook Tracking Pack", () => {
       "林远终于将账目的来源查清了，账房黑幕水落石出，真相大白于天下。",
     ].join("\n\n"));
 
-    const planN = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
+    const planN = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration: ledgerResolvedDeclaration(2) });
     expect(planN.passed).toBe(true);
 
     const reportN = await commitFastDraft({

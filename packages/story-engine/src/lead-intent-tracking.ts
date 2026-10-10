@@ -57,7 +57,6 @@ export interface ThreadTrackingPlan {
   readonly threadHygieneReport: ThreadHygieneReport;
 }
 
-const MAX_CANDIDATES = 12;
 const MAX_EVIDENCE = 5;
 const MAX_TITLE_LENGTH = 18;
 
@@ -66,95 +65,6 @@ const THREAD_STALE_THRESHOLD = 3;
 
 /** 每章最多提醒的停滞线索条数（按停滞时长降序截断；全量底数走 threadHygieneReport.staleWarningCount）。 */
 const MAX_STALE_THREAD_WARNINGS = 8;
-
-const LEAD_KEYWORDS = [
-  "线索",
-  "指向",
-  "暗号",
-  "响动",
-  "转移",
-  "留下",
-  "带走",
-  "藏在",
-  "后墙",
-  "明日",
-  "失踪",
-  "另一页",
-  "残页",
-  "踪迹",
-  "异常",
-];
-
-const INTENT_KEYWORDS = [
-  "决定",
-  "准备",
-  "打算",
-  "必须",
-  "要去",
-  "先去",
-  "明日去",
-  "夜探",
-  "查清",
-  "问清楚",
-  "寻找",
-  "前往",
-  "隐藏",
-  "突破",
-  "离开",
-  "已经去过",
-  "赶到",
-  "抵达",
-  "完成",
-  "做完",
-  "拿到",
-  "取回",
-  "成功藏好",
-  "成功进入",
-  "已经调查",
-  "已经见到",
-  "已经交给",
-];
-
-const LEAD_DONE_KEYWORDS = [
-  "查清",
-  "查明",
-  "确认",
-  "弄清",
-  "找到来源",
-  "找到证据",
-  "证实",
-  "验明",
-  "对上了",
-  "线索闭合",
-  "暗号已解",
-];
-
-const INTENT_DONE_KEYWORDS = [
-  "已经去过",
-  "赶到",
-  "抵达",
-  "已查清",
-  "完成",
-  "做完",
-  "问清楚",
-  "拿到",
-  "取回",
-  "成功藏好",
-  "成功进入",
-  "已经调查",
-  "已经见到",
-  "已经交给",
-  "成功取回",
-];
-
-const HOOK_ONLY_KEYWORDS = [
-  "账目",
-  "破损信物",
-  "封条",
-  "密信",
-  "血痕",
-  "假账本",
-];
 
 export function buildThreadTrackingPlan(input: {
   readonly chapter: number;
@@ -165,7 +75,7 @@ export function buildThreadTrackingPlan(input: {
   /**
    * 可选：已核实的章节语义声明。传入时，线索回收/埋设优先走声明——
    * resolvedForeshadowing 指向**已存在**线索（标 done，绝不新建，治线索分裂）；
-   * seededForeshadowing 才新建（标题用声明 summary）。缺失时完全走现有正则 fallback（旧行为不变）。
+   * seededForeshadowing 才新建（标题用声明 summary）。缺失时本章不动线索（不再从正文正则猜）。
    */
   readonly verifiedDelta?: VerifiedChapterDelta;
 }): ThreadTrackingPlan {
@@ -173,17 +83,10 @@ export function buildThreadTrackingPlan(input: {
   const declaredCandidates = input.verifiedDelta
     ? extractDeclaredThreadCandidates({ verifiedDelta: input.verifiedDelta, threadPool: input.threadPool })
     : [];
-  // 声明可用（有任一条通过校验）时：本章【新埋线索/待办意图】只由声明的 seededForeshadowing/keyLeads/pendingIntents 负责，
-  // 正则 extractThreadCandidates 让位——否则正则会从多句同义表述各切一条，把「师父失踪」/「明日查账」
-  // 拆成多条（真机冒烟证实）。extractResolvedExistingThreadCandidates 只【触碰已存在线索】、从不新建，无论有无声明都保留。
-  const suppressRegexThreads = input.verifiedDelta?.hasAnyVerified ?? false;
-  const regexCandidates = extractThreadCandidates(input);
-  // 声明候选放最前：uniqueById 保留首个，声明的回收/埋设优先于正则从正文猜的同一线索。
-  const candidates = [
-    ...declaredCandidates,
-    ...extractResolvedExistingThreadCandidates(input),
-    ...(suppressRegexThreads ? [] : regexCandidates),
-  ];
+  // 2026-10-10 引擎升级：线索的新开、推进、了结只听章节语义声明（原句已核、作者在定稿清单上勾过）。
+  // 删掉了从正文正则猜线索的两条路——关键词表里还留着旧测试书的词（后墙、暗号、残页），
+  // 正则「了结」更是有声明也照跑，常把还开着的线索按「查清 / 确认」字样关掉。没拿到声明 = 本章线索没记，由上层如实提示。
+  const candidates = [...declaredCandidates];
   const updates = uniqueById(candidates.map((candidate) => {
     const existing = candidate.targetThreadId
       ? existingById.get(candidate.targetThreadId)
@@ -410,26 +313,6 @@ function findDeclaredTargetThread(
   return undefined;
 }
 
-function extractResolvedExistingThreadCandidates(input: {
-  readonly draft: string;
-  readonly threadPool: ThreadPool;
-}): readonly ThreadCandidate[] {
-  const sentences = splitSentences(input.draft);
-  const candidates: ThreadCandidate[] = [];
-  for (const thread of input.threadPool.threads) {
-    if (thread.status !== "open" && thread.status !== "touched") continue;
-    const evidence = sentences.find((sentence) => resolvesExistingThread(sentence, thread));
-    if (!evidence) continue;
-    candidates.push({
-      type: thread.type,
-      title: thread.title,
-      evidence: truncateText(evidence, 120),
-      isDone: true,
-    });
-  }
-  return candidates;
-}
-
 export function mergeThreadTrackingUpdates(
   previous: ThreadPool,
   updates: readonly ThreadTrackingUpdate[],
@@ -482,67 +365,6 @@ export function isQualityLead(title: string, evidence: string): boolean {
   return true;
 }
 
-function extractThreadCandidates(input: {
-  readonly draft: string;
-  readonly semanticSummary: ChapterSemanticSummary;
-  readonly protagonistName?: string;
-}): readonly ThreadCandidate[] {
-  const sentences = splitSentences(input.draft);
-  const sources: ThreadCandidateSource[] = [
-    ...(input.semanticSummary.nextLead ? [{ type: "lead" as const, text: input.semanticSummary.nextLead }] : []),
-    ...(input.semanticSummary.discovery && containsAny(input.semanticSummary.discovery, LEAD_KEYWORDS)
-      ? [{ type: "lead" as const, text: input.semanticSummary.discovery }]
-      : []),
-    ...(input.semanticSummary.decision ? [{ type: "intent" as const, text: input.semanticSummary.decision }] : []),
-    ...sentences
-      .filter((sentence) => containsAny(sentence, LEAD_KEYWORDS))
-      .map((text) => ({ type: "lead" as const, text })),
-    ...sentences
-      .filter((sentence) => containsAny(sentence, INTENT_KEYWORDS))
-      .filter((sentence) => isThreadworthyIntentSentence(sentence, input.protagonistName ?? input.semanticSummary.protagonist))
-      .map((text) => ({ type: "intent" as const, text })),
-  ];
-  const candidates: ThreadCandidate[] = [];
-  for (const source of sources) {
-    const title = titleForSource(source, input.protagonistName ?? input.semanticSummary.protagonist);
-    if (!title) continue;
-    if (source.type === "lead" && !isQualityLead(title, source.text)) continue;
-    if (candidates.some((candidate) => candidate.type === source.type && titlesOverlap(candidate.title, title))) continue;
-    candidates.push({
-      type: source.type,
-      title,
-      evidence: truncateText(source.text, 120),
-      isDone: isDoneSource(source.text, source.type),
-    });
-    if (candidates.length >= MAX_CANDIDATES) break;
-  }
-  return candidates;
-}
-
-// 退场尾动作：转身/起身/说完/话音落…紧接 离开/离去/走开/远去。这是舞台指示，不是被追踪的故事意图。
-const STAGE_EXIT_CODA = /(?:转身|转头|起身|站起身?|说完|说罢|话音.{0,3}落|语毕|话毕|拍.{0,3}手|顿了顿).{0,6}(?:离开|离去|走开|走出|走远|远去)/u;
-// 目的性意图词：带这些时「离开/赶到/抵达」是有指向的真意图，退场尾动作判定让位（不误杀「决定离开X去查Y」）。
-const GOAL_INTENT_WORDS = /决定|打算|必须|要去|先去|明日去|夜探|查清|查明|问清楚|寻找|前往|调查|追查|核对|确认/u;
-
-export function isThreadworthyIntentSentence(sentence: string, protagonistName: string | undefined): boolean {
-  const text = sentence.trim();
-  if (isAdministrativeIntentNoise(text)) return false;
-  // 退场尾动作（「他说完，转身离开」）若不带任何目的性意图词 = 舞台指示，非可追踪意图（Codex 复测：垃圾线索「苏晚说完，转身离开」）。
-  if (STAGE_EXIT_CODA.test(text) && !GOAL_INTENT_WORDS.test(text)) return false;
-  if (protagonistName && text.includes(protagonistName)) return true;
-  if (/(?:^|[。！？\n])(?:他|她|自己|少年|少女|主角).{0,12}(?:决定|打算|必须|要去|查清|问清楚|寻找|前往|离开|赶到|抵达|拿到|取回|继续|确认)/u.test(text)) return true;
-  return /(?:夜探|明日去)/u.test(text);
-}
-
-function isAdministrativeIntentNoise(text: string): boolean {
-  return /准备好了的话|先去酒店|放行李|分批次.{0,8}分阶段|法律过户|资产交割|第一阶段.{0,12}程序.{0,8}完成|程序就算.{0,8}完成|等着.{0,10}做决定|自己做决定/u.test(text);
-}
-
-interface ThreadCandidateSource {
-  readonly type: NarrativeThread["type"];
-  readonly text: string;
-}
-
 interface ThreadCandidate {
   readonly type: NarrativeThread["type"];
   readonly title: string;
@@ -550,91 +372,6 @@ interface ThreadCandidate {
   readonly isDone: boolean;
   /** 声明回收专用：直接指向某条已存在线索的 id（跳过模糊相似度匹配，确保归到同一条、不新建）。 */
   readonly targetThreadId?: string;
-}
-
-function titleForSource(source: ThreadCandidateSource, protagonistName: string | undefined): string | undefined {
-  if (source.type === "lead") return leadTitle(source.text);
-  return intentTitle(source.text, protagonistName);
-}
-
-// 线索标题里的核心名词锚点——半句截断时从这里重新起头，避免标题从词中切起（rerun2 P2）。
-const LEAD_TITLE_ANCHORS = /(?:线索|踪迹|异常|响动|失踪|残页|暗号|账册|转移|带走)/u;
-
-/**
- * 若捕获的标题在原文里「前一个字仍是汉字」（= 前向窗口把一个词切成了两半，如『确认』被切成『认』、
- * 『未来/后来』被切成『来』），就从标题内第一个核心名词锚点重新起头，去掉切半的前缀（rerun2 P2：半句截断）。
- * 只在确实被切（前字是汉字、且锚点不在词首）时重锚，正常起于句首/标点后的标题原样保留。
- */
-export function reanchorTruncatedLeadTitle(text: string, raw: string, matchIndex: number): string {
-  if (matchIndex > 0 && /\p{Script=Han}/u.test(text[matchIndex - 1] ?? "")) {
-    const kw = LEAD_TITLE_ANCHORS.exec(raw);
-    if (kw && kw.index !== undefined && kw.index > 0) return raw.slice(kw.index);
-  }
-  return raw;
-}
-
-function leadTitle(text: string): string | undefined {
-  if (isHookOnly(text)) return undefined;
-  if (/后墙.{0,12}异常响动/u.test(text)) return "后墙异常响动";
-  const patterns = [
-    /明日(?:清晨|傍晚|夜里)?[\p{Script=Han}]{0,8}(?:转移|带走)[\p{Script=Han}]{0,8}/u,
-    /[\p{Script=Han}]{0,8}暗号指向[\p{Script=Han}]{1,8}/u,
-    /[\p{Script=Han}]{0,8}账册暗号指向[\p{Script=Han}]{1,8}/u,
-    /另一页[\p{Script=Han}]{0,8}残页(?:被)?带走/u,
-    /[\p{Script=Han}]{0,8}(?:线索|踪迹|异常|响动|失踪|残页)[\p{Script=Han}]{0,8}/u,
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (match?.[0] && match.index !== undefined) return cleanTitle(reanchorTruncatedLeadTitle(text, match[0], match.index));
-  }
-  return undefined;
-}
-
-function intentTitle(text: string, protagonistName: string | undefined): string | undefined {
-  const intentWords = "(?:已经去过|已经调查|已经见到|已经交给|成功藏好|成功进入|准备|打算|决定|必须|要去|先去|明日去|夜探|查清|问清楚|寻找|前往|隐藏|突破|离开|赶到|抵达|完成|做完|拿到|取回)";
-  const patterns = [
-    new RegExp(`[\\p{Script=Han}]{1,6}.{0,8}${intentWords}.{0,14}`, "u"),
-    new RegExp(`${intentWords}.{0,14}`, "u"),
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (match?.[0]) return normalizeIntentTitle(match[0], protagonistName);
-  }
-  return undefined;
-}
-
-function normalizeIntentTitle(value: string, protagonistName: string | undefined): string {
-  const actor = protagonistName?.trim() || "主角";
-  const clean = cleanTitle(value)
-    .replace(/^(?:他|她|主角)/u, actor)
-    .replace(/^必须/u, `${actor}必须`)
-    .replace(/^准备/u, `${actor}准备`)
-    .replace(/^打算/u, `${actor}打算`)
-    .replace(/^决定/u, `${actor}决定`)
-    .replace(/^要去/u, `${actor}要去`)
-    .replace(/^先去/u, `${actor}先去`)
-    .replace(/^明日去/u, `${actor}明日去`)
-    .replace(/^夜探/u, `${actor}夜探`)
-    .replace(/^查清/u, `${actor}查清`)
-    .replace(/^问清楚/u, `${actor}问清楚`)
-    .replace(/^寻找/u, `${actor}寻找`)
-    .replace(/^前往/u, `${actor}前往`)
-    .replace(/^隐藏/u, `${actor}隐藏`)
-    .replace(/^突破/u, `${actor}突破`)
-    .replace(/^离开/u, `${actor}离开`)
-    .replace(/^已经去过/u, `${actor}已经去过`)
-    .replace(/^赶到/u, `${actor}赶到`)
-    .replace(/^抵达/u, `${actor}抵达`)
-    .replace(/^完成/u, `${actor}完成`)
-    .replace(/^做完/u, `${actor}做完`)
-    .replace(/^拿到/u, `${actor}拿到`)
-    .replace(/^取回/u, `${actor}取回`)
-    .replace(/^成功藏好/u, `${actor}成功藏好`)
-    .replace(/^成功进入/u, `${actor}成功进入`)
-    .replace(/^已经调查/u, `${actor}已经调查`)
-    .replace(/^已经见到/u, `${actor}已经见到`)
-    .replace(/^已经交给/u, `${actor}已经交给`);
-  return clean;
 }
 
 function buildThreadTrackingUpdate(input: {
@@ -762,43 +499,11 @@ function findSimilarThread(threads: readonly NarrativeThread[], candidate: Threa
   });
 }
 
-function isHookOnly(text: string): boolean {
-  const clean = cleanText(text);
-  return HOOK_ONLY_KEYWORDS.includes(clean);
-}
-
 function cleanTitle(value: string): string {
   const clean = cleanText(value)
     .replace(/[。！？!?；;，,\s]+$/u, "")
     .replace(/^(?:他|她)\s*/u, "主角");
   return truncateText(clean, MAX_TITLE_LENGTH);
-}
-
-function containsAny(value: string, keywords: readonly string[]): boolean {
-  return keywords.some((keyword) => value.includes(keyword));
-}
-
-function isDoneSource(value: string, type: NarrativeThread["type"]): boolean {
-  if (/没有|还没|尚未|仍未|并未|未曾|未能.{0,6}(?:问清楚|查清|找到|解决|完成|确认完毕|成功取回)/u.test(value)) return false;
-  if (/未(?:问清楚|查清|找到|解决|完成|确认完毕|成功取回)/u.test(value)) return false;
-  if (/(?:准备|明日|必须|决定|打算|要去|先去|还要|需要).{0,10}(?:查清|查明|确认|弄清|问清楚|完成|抵达|赶到|拿到|取回|进入)/u.test(value)) {
-    return false;
-  }
-  return containsAny(value, type === "lead" ? LEAD_DONE_KEYWORDS : INTENT_DONE_KEYWORDS);
-}
-
-const UNRESOLVED_THREAD_PATTERN = /(?:还没|没有|并未|未曾|未能|不知道|不清楚|无法确认|不能确认|尚未).{0,12}(?:查清|查明|确认|弄清|问清楚|找到|对上|解决|完成|保管人|来源|指向)/u;
-const ANSWERED_LEAD_PATTERN = /(?:查清|查明|确认|弄清|证实|验明|对上了?|对应|指向|来源是|保管人[，,、]?(?:是|就是)|(?:^|[，。！？；;])[^。！？；;]{0,24}(?:是|就是|原来是|其实是)[^。！？；;]{1,24})/u;
-
-function resolvesExistingThread(sentence: string, thread: NarrativeThread): boolean {
-  if (UNRESOLVED_THREAD_PATTERN.test(sentence)) return false;
-  if (!threadOverlapsSentence(thread, sentence)) return false;
-  if (thread.type === "intent") return isDoneSource(sentence, "intent");
-  return isDoneSource(sentence, "lead") || ANSWERED_LEAD_PATTERN.test(sentence);
-}
-
-function threadOverlapsSentence(thread: NarrativeThread, sentence: string): boolean {
-  return concreteThreadAnchors(thread).some((anchor) => sentence.includes(anchor));
 }
 
 function concreteThreadAnchors(thread: NarrativeThread): readonly string[] {
@@ -817,13 +522,6 @@ function concreteThreadAnchors(thread: NarrativeThread): readonly string[] {
 
 function isGenericThreadAnchor(value: string): boolean {
   return /^(?:主角|线索|来源|异常|响动|踪迹|残页|暗号|保管人|证据|记录|编号|查清|确认|继续|已经|仍未|还没|没有)$/u.test(value);
-}
-
-function splitSentences(content: string): readonly string[] {
-  return content
-    .split(/(?<=[。！？!?；;])|\n+/u)
-    .map(cleanText)
-    .filter(Boolean);
 }
 
 function mergeEvidence(previous: readonly string[], additions: readonly string[]): readonly string[] {

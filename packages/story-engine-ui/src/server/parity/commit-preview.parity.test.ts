@@ -116,7 +116,7 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
     // P1：降级对用户不静默——工具输出标 fallback、summary 带固定提示。
     expect(tool.declarationStatus).toBe("fallback");
-    expect(String(tool.summary)).toContain("【章节语义声明未生效】");
+    expect(String(tool.summary)).toContain("【这章的线索没记上】");
 
     // ok 契约与门禁结论
     expect(route.statusCode).toBe(200);
@@ -229,6 +229,6 @@ describe("parity: commit_preview 对拍——显式策略分歧（declarationCha
     // 票据缓存了声明（供 commit_apply 复用、不重复调模型）。
     expect(findCommitPreview(projectDir, 1)?.declaration?.mainEvent?.summary).toBe("林远从老王手里接过账册并决定查下去");
     expect(tool.declarationStatus).toBe("model");
-    expect(String(tool.summary)).not.toContain("【章节语义声明未生效】");
+    expect(String(tool.summary)).not.toContain("【这章的线索没记上】");
   });
 });

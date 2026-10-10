@@ -3,10 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { commitFastDraft } from "../commit-engine.js";
+import type { ChapterDeltaDeclaration } from "../chapter-delta.js";
 import { buildCommitPlanFromProject } from "../commit-plan-builder.js";
 import { mergeHookTrackingUpdates } from "../hook-tracking.js";
 import { createStoryProject, readHookPool } from "../project-store.js";
 import type { HookPool } from "../types.js";
+
+// 2026-10-10 起伏笔收口只认声明（完成词表已删）：本章声明「账目」这条伏笔回收了。
+const LEDGER_RESOLVED = "林远终于将账目的来源查清了，账房黑幕水落石出，真相大白于天下。";
+function ledgerResolvedDeclaration(chapter: number): ChapterDeltaDeclaration {
+  return {
+    chapter,
+    mainEvent: { summary: "林远查清账目来源", quote: LEDGER_RESOLVED },
+    seededForeshadowing: [],
+    resolvedForeshadowing: [{ summary: "账目来源查清", quote: LEDGER_RESOLVED, targetThreadHint: "账目" }],
+    resourceDeltas: [],
+    keyLeads: [],
+  };
+}
 
 // Task B4: 伏笔回收章号 resolvedAtChapter
 // 已回收 hook 记录「在第几章回收」，供伏笔线索面板显示「第N章埋→第M章回收」。
@@ -34,7 +48,7 @@ describe("StoryEngine-NG Hook resolvedAtChapter (B4)", () => {
       "林远终于将账目的来源查清了，账房黑幕水落石出，真相大白于天下。",
     ].join("\n\n"));
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 41 });
+    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 41, declaration: ledgerResolvedDeclaration(41) });
     expect(plan.passed).toBe(true);
 
     const report = await commitFastDraft({
@@ -125,7 +139,7 @@ describe("StoryEngine-NG Hook resolvedAtChapter (B4)", () => {
     await writeDraft(projectDir, 41, [
       "林远终于将账目的来源查清了，账房黑幕水落石出，真相大白于天下。",
     ].join("\n\n"));
-    const plan41 = await buildCommitPlanFromProject({ projectDir, chapter: 41 });
+    const plan41 = await buildCommitPlanFromProject({ projectDir, chapter: 41, declaration: ledgerResolvedDeclaration(41) });
     expect(plan41.passed).toBe(true);
     const report41 = await commitFastDraft({ projectDir, chapter: 41, commitPlan: plan41.commitPlan! });
     expect(report41.passed).toBe(true);

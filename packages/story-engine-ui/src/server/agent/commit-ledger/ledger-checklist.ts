@@ -9,7 +9,7 @@
  */
 import { factKey, type FactProposal, type FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
 
-export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed";
+export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed" | "structure_failed";
 
 export interface LedgerChecklistItem {
   readonly id: string;
@@ -71,10 +71,23 @@ export function buildLedgerChecklist(input: {
   readonly time?: ChecklistTimeLike;
   /** 事实文字的显示换算（日子按时间线换）；条目 id 仍按原文算，作者改了天数也认得出勾掉的是哪条。 */
   readonly displayFact?: (text: string) => string;
+  /** AI 没读出这章的结构（章节语义声明没拿到）时的原因：线索、目标、人物状态这次都不会记，清单上要明说。 */
+  readonly structureMissing?: string;
 }): readonly LedgerChecklistItem[] {
   const show = input.displayFact ?? ((text: string) => text);
   const { chapter, plan, facts } = input;
   const items: LedgerChecklistItem[] = [];
+  if (input.structureMissing !== undefined) {
+    // 2026-10-10 起线索只听声明：没拿到就一条线索都不记，绝不让清单看起来「这章没线索可记」。
+    const reason = input.structureMissing.trim();
+    items.push({
+      id: "structure_failed",
+      kind: "structure_failed",
+      label: `AI 没读出这章的结构${reason ? `（${reason}）` : ""}，线索、目标、人物状态这次都不记；想记就重新预览一次`,
+      removable: false,
+      needsConfirm: true,
+    });
+  }
   if (input.time) {
     const guessed = input.time.source === "fallback";
     const why = guessed

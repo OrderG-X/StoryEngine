@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { verifyChapterDelta } from "../chapter-delta.js";
 import { buildThreadTrackingPlan } from "../lead-intent-tracking.js";
 import type { NarrativeThread, ThreadPool } from "../types.js";
 
@@ -26,6 +27,18 @@ const minimalSummary = {
   mentionedCharacterNames: [] as readonly string[],
   locations: [] as readonly string[],
   };
+
+/** 2026-10-10 起线索只听声明：把「本章新埋这条线索、原句是整段草稿」包成已核声明。 */
+function leadDelta(chapter: number, draft: string, summary: string) {
+  return verifyChapterDelta({
+    chapter,
+    mainEvent: { summary, quote: draft },
+    seededForeshadowing: [{ summary, quote: draft }],
+    resolvedForeshadowing: [],
+    resourceDeltas: [],
+    keyLeads: [],
+  }, draft);
+}
 
 /** 构造一条 open lead 的辅助函数 */
 function makeOpenLead(
@@ -67,6 +80,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
       draft: "林远再次注意到了不连续的响动，感觉有人在监视。",
       semanticSummary: { ...minimalSummary, chapter: 2, nextLead: "不连续的响动" },
       threadPool,
+      verifiedDelta: leadDelta(2, "林远再次注意到了不连续的响动，感觉有人在监视。", "不连续的响动"),
     });
 
     const soundUpdates = plan.updates.filter(
@@ -99,6 +113,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
         discovery: "后墙出现了异常响动，十分可疑。",
       },
       threadPool,
+      verifiedDelta: leadDelta(2, "后墙出现了异常响动，十分可疑。", "响动"),
     });
 
     const soundUpdates = plan.updates.filter(
@@ -132,6 +147,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
         discovery: "邻居的债务线索浮出水面，与林远家无关。",
       },
       threadPool,
+      verifiedDelta: leadDelta(2, "邻居的债务线索浮出水面，与林远家无关。", "邻居的债"),
     });
 
     // 新候选「邻居的债」不应归并进「父亲的债」
@@ -193,6 +209,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
         discovery: "楼上传来的响动线索让林远心生疑惑。",
       },
       threadPool,
+      verifiedDelta: leadDelta(2, "楼上传来的响动线索让林远心生疑惑。", "楼上的响动"),
     });
 
     // 「楼上的响动」不应归并进「工地的响动」
@@ -241,6 +258,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
         discovery: "被烧掉的借条线索指向幕后黑手。",
       },
       threadPool,
+      verifiedDelta: leadDelta(3, "被烧掉的借条线索指向幕后黑手。", "烧掉的借条"),
     });
 
     // 「烧掉的借条」不应归并进「藏起来的借条」
@@ -291,6 +309,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
       draft: "林远又听到了不连续的响动，但这次更奇怪。",
       semanticSummary: { ...minimalSummary, chapter: 5, nextLead: "不连续的响动" },
       threadPool,
+      verifiedDelta: leadDelta(5, "林远又听到了不连续的响动，但这次更奇怪。", "不连续的响动"),
     });
 
     // 新候选「不连续的响动」应新建（因既有线索 status=done）
@@ -329,6 +348,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
       draft: "林远注意到后墙的响动，显然还没查清。",
       semanticSummary: { ...minimalSummary, chapter: 3, nextLead: "后墙的响动仍未查明" },
       threadPool,
+      verifiedDelta: leadDelta(3, "林远注意到后墙的响动，显然还没查清。", "后墙的响动仍未查明"),
     });
 
     const soundUpdates = plan.updates.filter((u) =>
@@ -358,6 +378,7 @@ describe("B2-2 lead 去重 — 近重复归并进既有线索", () => {
         discovery: "后墙发出异常响动，黑影一闪而过。",
       },
       threadPool,
+      verifiedDelta: leadDelta(2, "后墙发出异常响动，黑影一闪而过。", "后墙响动线索"),
     });
 
     // 后墙响动相关 update 应有独立 id（新建），不复用抽屉借条的 id

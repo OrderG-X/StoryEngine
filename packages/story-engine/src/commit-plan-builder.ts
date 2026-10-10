@@ -274,8 +274,7 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
   const highRiskIssueCount = countHighRiskIssues({ assetChanges, locationChanges });
   const conservativeCharacterUpdate = buildConservativeCharacterUpdate({
     characterId,
-    semanticSummary,
-    draft,
+    ...(verifiedDelta ? { verifiedDelta } : {}),
   });
   const characterKnowledgeChanges = buildCharacterKnowledgeChangePlan({
     characterId,
@@ -646,40 +645,23 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/**
+ * 主角本章的「当前目标」：只取声明里原句已核的关键决定。
+ * 2026-10-10 引擎升级删掉了两条猜测：有冲突就记情绪「警觉」（任何题材、任何冲突都一样，是凭空造的状态），
+ * 以及把正文猜出的下一步包成「继续追查：…」「确认发现：…」（悬疑题材的口吻）。没声明就不改人物状态。
+ */
 function buildConservativeCharacterUpdate(input: {
   readonly characterId: string;
-  readonly semanticSummary: ChapterSemanticSummary;
-  readonly draft: string;
+  readonly verifiedDelta?: VerifiedChapterDelta;
 }): CharacterStateUpdate | undefined {
-  const goal = chooseCharacterGoal(input.semanticSummary);
-  const emotion = chooseCharacterEmotion(input.semanticSummary, input.draft);
-  if (!goal && !emotion) return undefined;
-  return {
-    characterId: input.characterId,
-    ...(emotion ? { emotion } : {}),
-    ...(goal ? { goal } : {}),
-  };
-}
-
-function chooseCharacterGoal(summary: ChapterSemanticSummary): string | undefined {
-  const decision = cleanGoalSource(summary.decision);
-  const nextLead = cleanGoalSource(summary.nextLead);
-  const discovery = cleanGoalSource(summary.discovery);
-  if (decision) return trimSentence(decision, 48);
-  if (nextLead) return `继续追查：${trimSentence(nextLead, 38)}`;
-  if (discovery) return `确认发现：${trimSentence(discovery, 38)}`;
-  return undefined;
+  const goal = cleanGoalSource(input.verifiedDelta?.decision?.summary);
+  if (!goal) return undefined;
+  return { characterId: input.characterId, goal: trimSentence(goal, 48) };
 }
 
 function cleanGoalSource(value: string | undefined): string | undefined {
   if (!value || isGenericStateText(value) || isGenericLongEnoughFiller(value) || isActionOnlySentence(value) || isAttitudeOnlySentence(value)) return undefined;
   return value;
-}
-
-function chooseCharacterEmotion(summary: ChapterSemanticSummary, draft: string): string | undefined {
-  if (summary.conflict) return "警觉";
-  if (/紧张|怀疑|警惕|迟疑|压低声音|皱眉|沉默/u.test(draft)) return "克制警觉";
-  return undefined;
 }
 
 function isGenericStateText(value: string): boolean {

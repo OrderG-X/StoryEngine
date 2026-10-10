@@ -138,7 +138,6 @@ describe("commit plan builder", () => {
     const result = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
 
     expect(result.passed).toBe(true);
-    expect(result.commitPlan?.characterUpdates?.[0]?.characterId).toBe("lin-wanqing");
     expect(result.commitPlan?.timelineEvents?.[0]?.participants).toEqual(["lin-wanqing"]);
     expect(result.commitPlan?.calendar).toEqual({
       storyDay: 2,

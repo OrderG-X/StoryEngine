@@ -118,8 +118,8 @@ const outputSchema = z.object({
   summary: z.string().describe("预览结果的自然语言摘要（用户可见文案，UI 会直接展示；不含内部工具名）。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引：下一步流程与转达要求。仅你可见，UI 不展示。"),
   declarationStatus: z.enum(["model", "fallback"]).optional().describe(
-    "章节语义声明来源：model=模型声明已拿到并经引擎证据校验；fallback=没拿到（模型失败/超时/坏 JSON），本章按确定性规则兜底。" +
-      "fallback 时 summary 已带【章节语义声明未生效】提示，必须如实转达给用户、不得隐去。缺草稿时省略。",
+    "章节语义声明来源：model=模型声明已拿到并经引擎证据校验；fallback=没拿到（模型失败/超时/坏 JSON），这章的线索/目标/人物状态不会记。" +
+      "fallback 时 summary 已带【这章的线索没记上】提示，必须如实转达给用户、不得隐去，并建议重新预览。缺草稿时省略。",
   ),
   declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案，已消毒）。"),
   ledgerChecklist: z.array(z.object({
@@ -312,6 +312,7 @@ export async function buildCommitPreviewToolOutput(input: {
       chapter,
       plan: commitPlan.commitPlan,
       ...(factProposal ? { facts: factProposal } : {}),
+      ...(declarationOutcome.status === "fallback" ? { structureMissing: declarationOutcome.reason ?? "" } : {}),
       ...(timelineEntry && storyTimeline
         ? {
           time: { day: timelineEntry.day, label: formatStoryDay(storyTimeline, timelineEntry.day), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },

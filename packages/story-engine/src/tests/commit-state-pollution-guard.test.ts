@@ -220,7 +220,21 @@ describe("Commit State Pollution Guard V0", () => {
       longEnoughText("李明远只是被提到的法务联系人，不应该抢走本章主角的状态更新目标。"),
     ].join("\n"));
 
-    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
+    // 2026-10-10 起人物目标只取声明里的关键决定；这里钉的是「目标记在主角身上，不被配角抢走」。
+    const decisionQuote = "林序决定去海天市确认后续安排，并要求自己先看清楚每份文件。";
+    const result = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 2,
+      declaration: {
+        chapter: 2,
+        mainEvent: { summary: "林序决定去海天市", quote: decisionQuote },
+        decision: { summary: "去海天市确认后续安排", quote: decisionQuote },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
 
     expect(result.semanticSummary?.protagonist).toBe("林序");
     expect(result.semanticSummary?.mentionedCharacterNames[0]).toBe("林序");
@@ -276,7 +290,20 @@ describe("Commit State Pollution Guard V0", () => {
       longEnoughText("这一次决定是本章结尾的明确行动方向，不是普通肢体动作。"),
     ].join("\n"));
 
-    const preview = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
+    const decisionQuote = "林序决定去旧城区公交站查清魂钢检测记录。";
+    const preview = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 3,
+      declaration: {
+        chapter: 3,
+        mainEvent: { summary: "林序决定查魂钢检测记录", quote: decisionQuote },
+        decision: { summary: "去旧城区公交站查清魂钢检测记录", quote: decisionQuote },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
     const goalCandidate = preview.characterKnowledgeChanges?.stateChanges.find((item) => item.changeType === "character_state_goal");
     expect(goalCandidate).toBeDefined();
 
@@ -420,7 +447,7 @@ describe("Commit State Pollution Guard V0", () => {
 
     const preview = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
 
-    expect(preview.commitPlan?.characterUpdates?.[0]?.goal ?? "").toMatch(/确认|线索|公交站/u);
+    expect(preview.semanticSummary?.decision ?? "").toMatch(/确认|线索|公交站/u);
   });
 
   it("keeps logistics dialogue out of character goals and thread tracking", async () => {
@@ -436,7 +463,7 @@ describe("Commit State Pollution Guard V0", () => {
     ].join("\n"));
 
     const preview = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
-    const goal = preview.commitPlan?.characterUpdates?.[0]?.goal ?? "";
+    const goal = preview.semanticSummary?.decision ?? "";
     const threadTitles = preview.threadTrackingUpdates?.map((thread) => thread.title).join("\n") ?? "";
 
     expect(goal).toMatch(/自己判断|能做什么|不能做什么/u);
@@ -507,7 +534,6 @@ describe("Commit State Pollution Guard V0", () => {
     const preview = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
 
     expect(preview.semanticSummary?.decision ?? "").toMatch(/不能再|自己判断|能做什么|不能做什么/u);
-    expect(preview.commitPlan?.characterUpdates?.[0]?.goal ?? "").toMatch(/不能再|自己判断|能做什么|不能做什么/u);
     expect(preview.semanticSummary?.mainEvent ?? "").not.toMatch(/接机牌|放行李/u);
   });
 
@@ -528,7 +554,6 @@ describe("Commit State Pollution Guard V0", () => {
 
     expect(preview.semanticSummary?.discovery ?? "").toMatch(/对不上|替换|审批|原件|意识到|发现/u);
     expect(preview.semanticSummary?.decision ?? "").toMatch(/档案室|核对|原件|合同|纠纷|查清/u);
-    expect(preview.commitPlan?.characterUpdates?.[0]?.goal ?? "").toMatch(/档案室|核对|原件|合同|纠纷|查清/u);
     expect(preview.semanticSummary?.mainEvent ?? "").not.toMatch(/窗帘|早餐|清粥|胃口/u);
     expect(keyEvents).toMatch(/对不上|替换|审批|原件|档案室/u);
     expect(keyEvents).not.toMatch(/窗帘|早餐|清粥|胃口|没有新消息/u);

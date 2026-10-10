@@ -44,22 +44,6 @@ export interface HookTrackingPlan {
 
 const MAX_CANDIDATES = 5;
 const MAX_EVIDENCE = 5;
-const HOOK_DONE_KEYWORDS = [
-  "水落石出",
-  "真相大白",
-  "谜底揭晓",
-  "查清了",
-  "查明了",
-  "弄清了",
-  "真相揭开",
-  "已查清",
-  "已解开",
-  "暗号已解",
-  "线索闭合",
-  "解开了",
-  "证实了",
-  "找到了答案",
-];
 // 2026-08-12 摘除 HOOK_KEYWORDS 悬疑词表（后墙异常响动/假账本/血痕…）：它是早期测试书的题材残留，
 // 违反题材中立——50 章武侠实测只误中 1 次，换成商战/都市文则会拿「账目」「失踪」乱造伏笔。
 // 新伏笔的正路早已迁到「模型声明 seededForeshadowing（证据校验）→ 线索池」（见 lead-intent-tracking）；
@@ -74,11 +58,11 @@ export function buildHookTrackingPlan(input: {
   /**
    * 可选：已核实的章节语义声明。传入时，本章模型声明的 resolvedForeshadowing 若命中某条【已存在的活跃伏笔】，
    * 直接标该伏笔 resolved——补齐「伏笔只能靠完成词正则收口」的缺口（线索早已走这条声明通道，伏笔漏了）。
-   * 缺失时完全走现有正则 fallback（旧行为不变）。题材中立：只做标题/证据比对，不加任何完成词表。
+   * 缺失时本章只记触达、不收口。题材中立：只做标题/证据比对，不加任何完成词表。
    */
   readonly verifiedDelta?: VerifiedChapterDelta;
 }): HookTrackingPlan {
-  // 声明驱动的伏笔收口放最前：uniqueById 保留首个，声明的收口优先于正则从正文猜的同一伏笔。
+  // 声明驱动的伏笔收口放最前：uniqueById 保留首个，声明的收口优先于正文提到的同一伏笔（后者只算触达）。
   const declaredResolvedCandidates = input.verifiedDelta
     ? extractDeclaredResolvedHookCandidates(input.verifiedDelta, input.hookPool)
     : [];
@@ -163,12 +147,12 @@ function extractHookCandidates(input: {
   for (const title of mentionedHookTitles) {
     const cleanTitle = cleanHookTitle(title);
     if (!cleanTitle || candidates.some((candidate) => normalize(candidate.title) === normalize(cleanTitle))) continue;
-    const relevantSentences = sentences.filter((sentence) => sentence.includes(cleanTitle));
-    const relevantText = relevantSentences.join("　");
+    // 正文提到只算触达；收口只认声明的 resolvedForeshadowing（2026-10-10 删掉「水落石出 / 查清了」完成词表：
+    // 「还没查清了」「以为查清了」这类句子也会被它关掉）。
     candidates.push({
       title: truncateText(cleanTitle, 24),
       evidence: evidenceFor(cleanTitle, input.draft, input.semanticSummary),
-      isDone: relevantText.length > 0 && isHookDone(relevantText),
+      isDone: false,
     });
     if (candidates.length >= MAX_CANDIDATES) return candidates;
   }
@@ -211,10 +195,6 @@ function findDeclaredTargetHook(
     if (match) return match;
   }
   return undefined;
-}
-
-function isHookDone(text: string): boolean {
-  return HOOK_DONE_KEYWORDS.some((keyword) => text.includes(keyword));
 }
 
 function buildHookTrackingUpdate(input: {

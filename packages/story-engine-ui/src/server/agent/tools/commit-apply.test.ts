@@ -429,10 +429,22 @@ describe("commit_apply 角色候选持久化（Task 8）", () => {
 
   it("用例D：入库 summary 用真实显示名点名已更新角色，不暴露 slug", async () => {
     const projectDir = await makeProject("点名已更新角色", "林远");
-    // 含『决定/怀疑』触发主角状态更新；report.updatedCharacters 是 slug，需按 overview 映射回真名。
+    // 声明了关键决定 → 主角目标更新（2026-10-10 起人物状态只听声明）；report.updatedCharacters 是 slug，需按 overview 映射回真名。
     const sentence = "林远在会议室外停下脚步，反复掂量手里那份账册的分量，决定接下来每一步该怎么走，心里却隐隐生出怀疑。";
     await writeDraft(projectDir, 1, `# 第1章\n\n${Array.from({ length: 12 }, () => sentence).join("")}\n`);
-    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+    const preview = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 1,
+      declareDelta: async () => ({
+        chapter: 1,
+        mainEvent: { summary: "林远掂量账册", quote: sentence },
+        decision: { summary: "林远想清每一步怎么走", quote: sentence },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      }),
+    });
     expect(preview.canCommit).toBe(true);
     const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
     expect(out.committed).toBe(true);
@@ -493,7 +505,7 @@ describe("commit_apply 复用预览缓存的章节语义声明", () => {
   });
 
   // P1（2026-10-02）：ChapterDelta 声明失败不再对用户静默——apply 摘要里必须明说「本章按确定性规则兜底」。
-  it("预览阶段声明失败（fallback）→ 入库成功，但 summary 带【章节语义声明未生效】且 declarationStatus=fallback", async () => {
+  it("预览阶段声明失败（fallback）→ 入库成功，但 summary 带【这章的线索没记上】且 declarationStatus=fallback", async () => {
     const projectDir = await makeProject("声明失败入库提示", "林远");
     await writeDraft(projectDir, 1, longDraft(1, "林远"));
     const preview = await buildCommitPreviewToolOutput({
@@ -557,7 +569,7 @@ describe("commit_apply 复用预览缓存的章节语义声明", () => {
     expect(out.committed).toBe(true);
     expect(out.declarationStatus).toBe("fallback");
     expect(out.summary).toContain(DECLARATION_FALLBACK_NOTICE);
-    expect(out.summary).toContain("预览票据里取不到");
+    expect(out.summary).toContain("这章结构找不到了");
   });
 
   it("声明失败原因里的裸 id / 本地绝对路径不进用户可见摘要", async () => {

@@ -12,44 +12,40 @@ import type { ChapterDeltaDeclaration } from "../chapter-delta.js";
 import type { NarrativeThread, ThreadPool } from "../types.js";
 
 describe("StoryEngine-NG Lead / Intent Tracking", () => {
-  it("extracts nextLead as lead and decision as intent without polluting HookPool", async () => {
+  // 2026-10-10 引擎升级：线索只听声明。声明里的关键线索 → lead、待办 → intent，伏笔池不被污染。
+  it("声明的关键线索记成 lead、待办记成 intent，定稿后写进线索池，伏笔池不被污染", async () => {
     const projectDir = await createThreadProject();
-    await writeDraft(projectDir, 1, [
-      "林远发现账册暗号指向库房。",
-      "林远决定先去库房查账，并准备隐藏破损信物。",
-    ].join("\n\n"));
+    const lines = ["林远发现账册暗号指向库房。", "林远决定先去库房查账，并准备隐藏破损信物。"];
+    await writeDraft(projectDir, 1, lines.join("\n\n"));
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 1,
+      mainEvent: { summary: "林远发现账册暗号", quote: lines[0]! },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [{ summary: "账册暗号指向库房", quote: lines[0]! }],
+      pendingIntents: [{ summary: "林远先去库房查账", quote: lines[1]! }],
+    };
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
+    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1, declaration });
 
     expect(plan.passed).toBe(true);
     expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: "lead",
-        title: expect.stringContaining("账册暗号指向库房"),
+        title: "账册暗号指向库房",
         status: "open",
         firstSeenChapter: 1,
         lastTouchedChapter: 1,
-        evidence: expect.arrayContaining([expect.stringContaining("账册暗号指向库房")]),
-        relatedCharacters: ["林远"],
-        relatedLocations: expect.arrayContaining(["库房"]),
+        evidence: [lines[0]],
       }),
-      expect.objectContaining({
-        type: "intent",
-        title: expect.stringContaining("林远决定先去库房"),
-        status: "open",
-        evidence: expect.arrayContaining([expect.stringContaining("决定先去库房查账")]),
-      }),
+      expect.objectContaining({ type: "intent", title: "林远先去库房查账", status: "open" }),
     ]));
-    expect(plan.threadTrackingUpdates?.every((update) => update.title.length <= 18)).toBe(true);
 
-    const report = await commitFastDraft({
-      projectDir,
-      chapter: 1,
-      commitPlan: plan.commitPlan!,
-    });
+    const report = await commitFastDraft({ projectDir, chapter: 1, commitPlan: plan.commitPlan! });
 
     expect(report.passed).toBe(true);
-    expect(report.threadTracking?.introducedThreads.length).toBeGreaterThan(0);
+    expect(report.threadTracking?.introducedThreads.length).toBe(2);
     await expect(readThreadPool(projectDir)).resolves.toMatchObject({
       threads: expect.arrayContaining([
         expect.objectContaining({ type: "lead", status: "open", lastTouchedChapter: 1 }),
@@ -59,49 +55,35 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     await expect(readHookPool(projectDir)).resolves.toMatchObject({
       hooks: expect.not.arrayContaining([
         expect.objectContaining({ title: expect.stringContaining("去库房") }),
-        expect.objectContaining({ title: expect.stringContaining("准备隐藏") }),
       ]),
     });
   });
 
-  it("悬念线索由 lead/intent 通道追踪；伏笔池不再从正文自发建条目（词表已摘除）", async () => {
+  // 2026-10-10 引擎升级：删掉从正文正则猜线索——关键词表里留着旧测试书的词（后墙、暗号、残页），
+  // 「查清 / 确认」字样还会把开着的线索误关。没拿到声明 = 本章不动线索、也不造伏笔。
+  it("没有声明：不从正文猜线索、不造伏笔，开着的线索也不会因「查清」字样被关", async () => {
     const projectDir = await createThreadProject();
-    await writeDraft(projectDir, 1, [
+    await seedThreads(projectDir, {
+      threads: [
+        trackedThread("lead-wall", "lead", "后墙异常响动", 1),
+      ],
+    });
+    await writeDraft(projectDir, 2, [
       "后墙异常响动，黑影暗号仍未解开。",
-      "林远打算夜探账房，查清后墙异常响动。",
+      "林远打算夜探账房，已经查清后墙异常响动的来源。",
     ].join("\n\n"));
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
-
-    // 2026-08-12：HOOK_KEYWORDS 题材词表摘除后，纯正文不再自发造伏笔——同一悬念仍由线索通道完整追踪，不丢。
-    expect(plan.hookTrackingUpdates ?? []).toEqual([]);
-    expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "lead", title: "后墙异常响动" }),
-      expect.objectContaining({ type: "intent", title: expect.stringContaining("林远打算夜探账房") }),
-    ]));
-  });
-
-  it("uses the actual protagonist name for pronoun intent titles", async () => {
-    const projectDir = await createThreadProject("林澈");
-    await writeDraft(projectDir, 1, [
-      "林澈发现账册暗号指向库房。",
-      "他决定先去库房查账，并准备隐藏破损信物。",
-    ].join("\n\n"));
-
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
+    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
 
     expect(plan.passed).toBe(true);
-    expect(plan.semanticSummary?.protagonist).toBe("林澈");
-    expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "intent",
-        title: expect.stringContaining("林澈决定先去库房"),
-      }),
-    ]));
-    expect(plan.threadTrackingUpdates?.some((update) => update.title.includes("林远"))).toBe(false);
+    expect(plan.hookTrackingUpdates ?? []).toEqual([]);
+    expect(plan.threadTrackingUpdates ?? []).toEqual([]);
+    await commitFastDraft({ projectDir, chapter: 2, commitPlan: plan.commitPlan! });
+    const pool = await readThreadPool(projectDir);
+    expect(pool.threads.find((thread) => thread.id === "lead-wall")?.status).toBe("open");
   });
 
-  it("touches existing threads, bounds evidence, and only marks done on explicit completion", async () => {
+  it("声明推进既有线索 → touched、证据封顶；声明收口且原句沾边 → done", async () => {
     const projectDir = await createThreadProject();
     await seedThreads(projectDir, {
       threads: [
@@ -119,33 +101,45 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         },
       ],
     });
-    await writeDraft(projectDir, 2, "林远重新核对账册暗号指向库房，仍没有完全问清楚来源。");
-
-    const touched = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
-
-    expect(touched.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: "lead-ledger-code",
-        status: "touched",
-        lastTouchedChapter: 2,
-      }),
-    ]));
-
-    const touchedReport = await commitFastDraft({
+    const ch2 = "林远重新核对账册暗号指向库房，仍没有完全问清楚来源。";
+    await writeDraft(projectDir, 2, ch2);
+    const touched = await buildCommitPlanFromProject({
       projectDir,
       chapter: 2,
-      commitPlan: touched.commitPlan!,
+      declaration: {
+        chapter: 2,
+        mainEvent: { summary: "林远再核账册暗号", quote: ch2 },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [{ summary: "再核账册暗号", quote: ch2, progress: "advanced", targetThreadHint: "账册暗号指向库房" }],
+      },
     });
 
+    expect(touched.threadTrackingUpdates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "lead-ledger-code", status: "touched", lastTouchedChapter: 2 }),
+    ]));
+    const touchedReport = await commitFastDraft({ projectDir, chapter: 2, commitPlan: touched.commitPlan! });
     expect(touchedReport.passed).toBe(true);
     let threadPool = await readThreadPool(projectDir);
     const thread = threadPool.threads.find((item) => item.id === "lead-ledger-code");
     expect(thread?.status).toBe("touched");
-    expect(thread?.lastTouchedChapter).toBe(2);
     expect(thread?.evidence.length).toBeLessThanOrEqual(5);
 
-    await writeDraft(projectDir, 3, "林远已经找到账册暗号指向库房的来源，确认完毕。");
-    const done = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
+    const ch3 = "林远已经找到账册暗号指向库房的来源，确认完毕。";
+    await writeDraft(projectDir, 3, ch3);
+    const done = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 3,
+      declaration: {
+        chapter: 3,
+        mainEvent: { summary: "林远查明账册暗号来源", quote: ch3 },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [{ summary: "账册暗号来源查明", quote: ch3, targetThreadHint: "账册暗号指向库房" }],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
 
     expect(done.threadTrackingUpdates).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "lead-ledger-code", status: "done" }),
@@ -155,58 +149,7 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     expect(threadPool.threads.find((item) => item.id === "lead-ledger-code")?.status).toBe("done");
   });
 
-  it("keeps future completion language open but marks explicit lead and intent completion done", async () => {
-    const projectDir = await createThreadProject();
-    await writeDraft(projectDir, 1, "林远准备查清后墙异常响动，明日再确认后墙暗号。");
-
-    const futurePlan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
-
-    expect(futurePlan.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "lead",
-        title: "后墙异常响动",
-        status: "open",
-      }),
-    ]));
-    expect(futurePlan.threadTrackingUpdates?.some((update) => update.status === "done")).toBe(false);
-
-    await commitFastDraft({ projectDir, chapter: 1, commitPlan: futurePlan.commitPlan! });
-    await writeDraft(projectDir, 2, "林远已经查清后墙异常响动的来源，确认暗号已解。");
-    const leadDone = await buildCommitPlanFromProject({ projectDir, chapter: 2 });
-
-    expect(leadDone.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "lead",
-        title: "后墙异常响动",
-        status: "done",
-      }),
-    ]));
-
-    await commitFastDraft({ projectDir, chapter: 2, commitPlan: leadDone.commitPlan! });
-    await writeDraft(projectDir, 3, "林远决定去库房查账，准备问清楚账册来源。");
-    const intentOpen = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
-
-    expect(intentOpen.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "intent",
-        status: "open",
-      }),
-    ]));
-    expect(intentOpen.threadTrackingUpdates?.filter((update) => update.type === "intent").some((update) => update.status === "done")).toBe(false);
-
-    await commitFastDraft({ projectDir, chapter: 3, commitPlan: intentOpen.commitPlan! });
-    await writeDraft(projectDir, 4, "林远已经去过库房查账，并问清楚账册来源，完成这次追查。");
-    const intentDone = await buildCommitPlanFromProject({ projectDir, chapter: 4 });
-
-    expect(intentDone.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "intent",
-        status: "done",
-      }),
-    ]));
-  });
-
-  it("marks an existing open lead done when a later chapter answers it with the same concrete anchor", async () => {
+  it("声明收口：原句含同一具体锚点（K-15 保管人）→ 既有线索 done", async () => {
     const projectDir = await createThreadProject("周砚");
     await seedThreads(projectDir, {
       threads: [
@@ -223,9 +166,21 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         },
       ],
     });
-    await writeDraft(projectDir, 12, "周砚翻到封存库登记表，K-15的保管人，是乔宁的父亲。");
+    const quote = "周砚翻到封存库登记表，K-15的保管人，是乔宁的父亲。";
+    await writeDraft(projectDir, 12, quote);
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 12 });
+    const plan = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 12,
+      declaration: {
+        chapter: 12,
+        mainEvent: { summary: "周砚查到K-15保管人", quote },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [{ summary: "K-15保管人揭晓", quote }],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
 
     expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -240,7 +195,7 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     expect(threadPool.threads.find((thread) => thread.id === "lead-k15-owner")?.status).toBe("done");
   });
 
-  it("merges similar intent and lead threads while bounding evidence and deduping relations", async () => {
+  it("声明收口 + 线索池整理：相近待办归并、证据封顶、关联去重", async () => {
     const projectDir = await createThreadProject();
     await seedThreads(projectDir, {
       threads: [
@@ -291,9 +246,24 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         },
       ],
     });
-    await writeDraft(projectDir, 3, "林远已经去过库房查账，并查清后墙异常响动的来源。");
+    const ch3 = "林远已经去过库房查账，并查清后墙异常响动的来源。";
+    await writeDraft(projectDir, 3, ch3);
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 3 });
+    const plan = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 3,
+      declaration: {
+        chapter: 3,
+        mainEvent: { summary: "林远查账并查明后墙响动", quote: ch3 },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [
+          { summary: "库房查账办完", quote: ch3, targetThreadHint: "去库房查账" },
+          { summary: "后墙异常响动查明", quote: ch3, targetThreadHint: "后墙异常响动" },
+        ],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
 
     // 2026-09-04 题材中立修复：持久层坍缩摘除了「库房+账→库房查账」「后墙.*响动→后墙异常响动」
     // 等题材专名别名（老测试书残留，会跨题材熔掉不同语义的真线索，如「库房丢账/库房对账」）。
@@ -369,9 +339,21 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         },
       ],
     });
-    await writeDraft(projectDir, 5, "林远路过库房时再次提到账册暗号指向库房，但没有新的追查动作。");
+    const ch5 = "林远路过库房时再次提到账册暗号指向库房，但没有新的追查动作。";
+    await writeDraft(projectDir, 5, ch5);
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 5 });
+    const plan = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 5,
+      declaration: {
+        chapter: 5,
+        mainEvent: { summary: "林远路过库房", quote: ch5 },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [{ summary: "账册暗号指向库房", quote: ch5 }],
+      },
+    });
 
     expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -836,18 +818,6 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     expect(plan.threadTrackingUpdates?.some((update) => update.type === "intent")).toBe(false);
   });
 
-  it("无声明时：regex intent 旧行为仍保留", async () => {
-    const projectDir = await createThreadProject();
-    await writeDraft(projectDir, 1, "林远决定先去库房查清账册来源。");
-
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1 });
-
-    expect(plan.passed).toBe(true);
-    expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "intent", title: expect.stringContaining("林远决定先去库房") }),
-    ]));
-  });
-
   it("expireStaleIntents：4 章没碰的待办（open 或 touched）蛰伏；3 章的不动（第十四轮 touched 待办永不蛰伏）", () => {
     const intent = (id: string, status: "open" | "touched", lastTouchedChapter: number) => ({
       id, type: "intent" as const, title: id, status, firstSeenChapter: 1, lastTouchedChapter, evidence: [id],
@@ -910,9 +880,22 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
         },
       ],
     });
-    await writeDraft(projectDir, 11, "林远重新决定夜探账房，把后墙那阵响动查清。");
+    const ch11 = "林远重新决定夜探账房，把后墙那阵响动查清。";
+    await writeDraft(projectDir, 11, ch11);
 
-    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 11 });
+    const plan = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 11,
+      declaration: {
+        chapter: 11,
+        mainEvent: { summary: "林远重提夜探账房", quote: ch11 },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+        pendingIntents: [{ summary: "林远夜探账房", quote: ch11 }],
+      },
+    });
     expect(plan.threadTrackingUpdates).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "intent-night-ledger",

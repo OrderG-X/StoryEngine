@@ -685,7 +685,8 @@ describe("story-engine commit-draft CLI", () => {
       chapter: 1,
       passed: true,
       chapterPath: join(projectDir, "chapters", "0001.md"),
-      updatedCharacters: ["guo-xu"],
+      // 2026-10-10 引擎升级：人物状态、线索、目标只听章节语义声明；命令行定稿不带声明 → 不改人物状态。
+      updatedCharacters: [],
       timelineEventIds: ["ch0001-001"],
       updatedHooks: ["h-ledger"],
       updatedWorld: true,
@@ -694,10 +695,8 @@ describe("story-engine commit-draft CLI", () => {
     });
     expect(writerClient.generateDraft).not.toHaveBeenCalled();
     await expect(readFile(join(projectDir, "chapters", "0001.md"), "utf-8")).resolves.toContain("Ledger hook");
-    await expect(readCharacterState(projectDir, "guo-xu")).resolves.toMatchObject({
-      emotion: "平静",
+    await expect(readCharacterState(projectDir, "guo-xu")).resolves.not.toMatchObject({
       goal: expect.stringContaining("Ledger hook"),
-      lastUpdatedChapter: 1,
     });
     await expect(readTimelineEvents(projectDir)).resolves.toEqual([
       expect.objectContaining({
@@ -856,7 +855,7 @@ describe("story-engine commit-draft CLI", () => {
       chapter: 1,
       passed: true,
       summary: {
-        characterUpdates: 1,
+        characterUpdates: 0,
         timelineEvents: 1,
         worldUpdates: true,
         hookUpdates: 0,
@@ -876,25 +875,10 @@ describe("story-engine commit-draft CLI", () => {
     // 2026-08-12 契约翻转：HOOK_KEYWORDS 题材词表已摘除（题材中立）——纯正文不再自发新建伏笔，
     // 「账目/异常响动」这类悬念由下方 lead/intent 线索通道完整追踪（见 threadTrackingUpdates 断言）。
     expect(("hookTrackingUpdates" in report ? report.hookTrackingUpdates : undefined) ?? []).toEqual([]);
-    expect("threadTrackingUpdates" in report ? report.threadTrackingUpdates : undefined).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "intent",
-        title: expect.stringContaining("林远决定先去库房"),
-        evidence: expect.arrayContaining([expect.stringContaining("决定先去库房")]),
-      }),
-      expect.objectContaining({
-        type: "lead",
-        title: "后墙异常响动",
-        evidence: expect.arrayContaining([expect.stringContaining("后墙")]),
-      }),
-    ]));
-    expect("arcGoalUpdates" in report ? report.arcGoalUpdates : undefined).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: "查清资源账目",
-        evidence: expect.arrayContaining([expect.stringContaining("账目")]),
-      }),
-    ]));
-    expect("commitPlan" in report ? report.commitPlan?.characterUpdates?.[0]?.characterId : undefined).toBe(characterId);
+    // 2026-10-10 引擎升级：线索、目标、人物状态只听声明；没声明的命令行预览不再从正文猜（「库房 / 后墙」是旧测试书的词）。
+    expect(("threadTrackingUpdates" in report ? report.threadTrackingUpdates : undefined) ?? []).toEqual([]);
+    expect(("arcGoalUpdates" in report ? report.arcGoalUpdates : undefined) ?? []).toEqual([]);
+    expect("commitPlan" in report ? report.commitPlan?.characterUpdates : undefined).toBeUndefined();
     const printed = JSON.parse(stdout.output()) as {
       passed: boolean;
       commitPlan: unknown;
@@ -946,30 +930,16 @@ describe("story-engine commit-draft CLI", () => {
     });
     // 词表已摘除：JSON 输出同样不再有正文自发新建的伏笔（线索通道断言在下方，悬念不丢）
     expect(printed.hookTrackingUpdates ?? []).toEqual([]);
-    expect(printed.threadTrackingUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "intent",
-        title: expect.stringContaining("林远决定先去库房"),
-      }),
-      expect.objectContaining({
-        type: "lead",
-        title: "后墙异常响动",
-      }),
-    ]));
+    expect(printed.threadTrackingUpdates ?? []).toEqual([]);
     expect(printed.threadHygieneReport).toMatchObject({
       beforeCount: 0,
       afterCount: expect.any(Number),
       mergedCount: 0,
       markedDoneCount: 0,
     });
-    expect(printed.arcGoalUpdates).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: "查清资源账目",
-        evidence: expect.arrayContaining([expect.stringContaining("账目")]),
-      }),
-    ]));
+    expect(printed.arcGoalUpdates ?? []).toEqual([]);
     expect(printed.summary).toEqual({
-      characterUpdates: 1,
+      characterUpdates: 0,
       timelineEvents: 1,
       worldUpdates: true,
       hookUpdates: 0,

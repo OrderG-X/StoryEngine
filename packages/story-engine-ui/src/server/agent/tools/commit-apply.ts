@@ -92,7 +92,7 @@ const outputSchema = z.object({
   refreshScope: z.literal("full"),
   chapter: z.number().int().positive().optional().describe("本次定稿的章号。"),
   declarationStatus: z.enum(["model", "fallback"]).optional().describe(
-    "本次定稿用的章节语义声明来源：model=模型声明已生效；fallback=没拿到声明、本章按确定性规则兜底（summary 里已有【章节语义声明未生效】提示，须如实转达）。",
+    "本次定稿用的章节语义声明来源：model=模型声明已生效；fallback=没拿到声明、这章的线索/目标/人物状态没记（summary 里已有【这章的线索没记上】提示，须如实转达）。",
   ),
   declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案）。"),
   threadMaintenanceHint: z.literal("escalated").optional().describe(
@@ -539,7 +539,8 @@ export function scrubBareEntityIdsFromText(text: string, nameById: ReadonlyMap<s
 }
 
 /** 用户可见的「声明未生效」固定提示（commit_preview / commit_apply 两处同款，便于前端与测试对齐）。 */
-export const DECLARATION_FALLBACK_NOTICE = "【章节语义声明未生效】本章按确定性规则兜底";
+// 2026-10-10 起线索、目标、人物状态只听声明：没拿到声明 = 这章这几样都没记（不再从正文猜），必须明说。
+export const DECLARATION_FALLBACK_NOTICE = "【这章的线索没记上】AI 没读出这章的结构，线索、目标、人物状态这次都不记";
 
 /**
  * 把章节语义声明状态翻成给用户看的一句（fallback 才有；model → undefined）。

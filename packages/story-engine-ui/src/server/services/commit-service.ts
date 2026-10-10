@@ -298,6 +298,8 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
  * 线索=open/touched thread；伏笔=active hook。两者都是「已埋下、还没收口」的东西，一并喂给模型。
  * 读失败/无库 → 忽略该来源，绝不阻断预览。
  */
+const MAX_OPEN_THREAD_TITLES_FOR_DECLARATION = 200;
+
 async function readOpenThreadTitles(projectDir: string): Promise<readonly string[]> {
   const hookTitles: string[] = [];
   const threadTitles: { readonly title: string; readonly lastTouchedChapter: number }[] = [];
@@ -328,9 +330,11 @@ async function readOpenThreadTitles(projectDir: string): Promise<readonly string
     unique.add(title);
     result.push(title);
   }
+  // 开着的线索全给（2026-10-10 前只给最近 40 条：长篇里老线索不在名单上，模型对不上号就另开一条重复的，
+  // 或者该收口的收不了）。标题最长 18 字，200 条约两三千 token；再多是线索池本身该整理了。
   for (const { title } of threadTitles
     .sort((left, right) => right.lastTouchedChapter - left.lastTouchedChapter)
-    .slice(0, 40)) {
+    .slice(0, MAX_OPEN_THREAD_TITLES_FOR_DECLARATION)) {
     if (unique.has(title)) continue;
     unique.add(title);
     result.push(title);
@@ -724,7 +728,7 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     }
     cachedDeclaration = ticket?.declaration;
     if (!ticket) {
-      declarationOutcome = { status: "fallback", reason: "预览票据里取不到章节语义声明（进程重启或凭令牌无状态放行），本次入库按确定性规则兜底" };
+      declarationOutcome = { status: "fallback", reason: "预览时读出的这章结构找不到了（服务重启过），重新预览一次就有" };
     } else if (ticket.declarationOutcome) {
       declarationOutcome = ticket.declarationOutcome;
     } else {

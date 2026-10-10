@@ -82,10 +82,11 @@ export function buildArcGoalTrackingPlan(input: {
    */
   readonly verifiedDelta?: VerifiedChapterDelta;
 }): ArcGoalTrackingPlan {
-  const candidates =
-    input.verifiedDelta && input.verifiedDelta.arcGoalProgress.length > 0
-      ? arcGoalCandidatesFromDeclaration(input.arcGoalPool, input.verifiedDelta)
-      : extractArcGoalCandidates(input);
+  // 目标只由章节语义声明产出（原句已核）。2026-10-10 引擎升级删掉了关键词兜底：那张表写死了旧测试书的三条目标
+  //（「查清资源账目」等，其中一条是主线），任何书只要出现「库房」「暗号」「克扣」就会被凭空造出这些目标。
+  const candidates = input.verifiedDelta && input.verifiedDelta.arcGoalProgress.length > 0
+    ? arcGoalCandidatesFromDeclaration(input.arcGoalPool, input.verifiedDelta)
+    : [];
   const existingById = new Map(input.arcGoalPool.goals.map((goal) => [goal.id, goal]));
   const activeMiniArcCount = input.arcGoalPool.goals
     .filter((goal) => (goal.status === "active" || goal.status === "touched") && goal.scope === "mini_arc")
@@ -176,40 +177,6 @@ interface ArcGoalCandidate {
   readonly isCompleted: boolean;
 }
 
-function extractArcGoalCandidates(input: {
-  readonly draft: string;
-  readonly semanticSummary: ChapterSemanticSummary;
-  readonly hookTrackingUpdates: readonly HookTrackingUpdate[];
-  readonly threadTrackingUpdates: readonly ThreadTrackingUpdate[];
-}): readonly ArcGoalCandidate[] {
-  const sources = unique([
-    input.semanticSummary.mainEvent,
-    input.semanticSummary.conflict,
-    input.semanticSummary.discovery,
-    input.semanticSummary.decision,
-    input.semanticSummary.nextLead,
-    input.semanticSummary.chapterSummary,
-    ...(input.semanticSummary.keyEvents ?? []),
-    ...(input.semanticSummary.foreshadowingTerms ?? []),
-    ...(input.semanticSummary.locations ?? []),
-    ...input.hookTrackingUpdates.flatMap((update) => [update.title, update.nextActionHint]),
-    ...input.threadTrackingUpdates.flatMap((update) => [update.title, update.nextActionHint]),
-  ].filter((value): value is string => value !== undefined && value.trim().length > 0));
-
-  const candidates: ArcGoalCandidate[] = [];
-  for (const source of sources) {
-    const title = classifyGoalTitle(source);
-    if (!title) continue;
-    if (candidates.some((candidate) => titlesOverlap(candidate.title, title))) continue;
-    candidates.push({
-      title,
-      scope: scopeForGoalTitle(title),
-      evidence: evidenceFor(title, input.draft, input.semanticSummary),
-      isCompleted: isCompletedSource(source),
-    });
-  }
-  return candidates;
-}
 
 /**
  * 声明驱动的目标候选（题材中立，替代 classifyGoalTitle 关键词表）：
@@ -246,25 +213,7 @@ function arcGoalCandidatesFromDeclaration(
   return candidates;
 }
 
-function classifyGoalTitle(text: string): string | undefined {
-  if (containsAny(text, ["账目", "克扣月钱", "管事打压", "账房", "库房", "外院资源"])) {
-    return "查清资源账目";
-  }
-  if (containsAny(text, ["破损信物", "信物用途", "暗号"])) {
-    return "查明破损信物用途";
-  }
-  if (containsAny(text, ["被打压", "被克扣", "不能再任人打压", "外院翻身", "翻身机会", "克扣"])) {
-    return "摆脱外院管事打压";
-  }
-  return undefined;
-}
 
-function scopeForGoalTitle(title: string): ArcGoal["scope"] {
-  if (title === "查清资源账目") {
-    return "main_arc";
-  }
-  return "mini_arc";
-}
 
 function buildArcGoalUpdate(input: {
   readonly chapter: number;
@@ -389,32 +338,8 @@ function findSimilarGoal(goals: readonly ArcGoal[], title: string): ArcGoal | un
   });
 }
 
-function evidenceFor(
-  title: string,
-  draft: string,
-  semanticSummary: ChapterSemanticSummary,
-): string {
-  const sentences = splitSentences(draft);
-  const keywords = titleKeywords(title);
-  const direct = sentences.find((sentence) => keywords.some((keyword) => sentence.includes(keyword)));
-  return truncateText(direct ?? semanticSummary.mainEvent, 120);
-}
 
-function titleKeywords(title: string): readonly string[] {
-  if (title === "查清资源账目") return ["账目", "克扣", "账房", "库房", "外院资源"];
-  if (title === "查明破损信物用途") return ["破损信物", "信物用途", "暗号"];
-  if (title === "摆脱外院管事打压") return ["打压", "克扣", "翻身", "管事"];
-  return [title];
-}
 
-function isCompletedSource(value: string): boolean {
-  if (/没有.{0,6}(?:查清|揭开|确认真相|摆脱|击败|完成|解决|成功)/u.test(value)) return false;
-  if (/未(?:查清|揭开|确认真相|摆脱|击败|完成|解决|成功)/u.test(value)) return false;
-  if (/(?:决定|准备|打算|必须|要去|先去|明日|夜探|寻找|前往|去).{0,16}(?:查清|揭开|确认真相|摆脱|击败|完成|解决|成功)/u.test(value)) {
-    return false;
-  }
-  return containsAny(value, ["查清", "揭开", "确认真相", "摆脱", "击败", "完成", "解决", "成功"]);
-}
 
 function defaultTargetChapters(scope: ArcGoal["scope"]): number {
   return scope === "main_arc" ? 10 : scope === "mini_arc" ? 5 : 1;
