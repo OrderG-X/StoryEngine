@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   absoluteDayForRelative,
+  chapterEndDay,
   deriveTimelineFromLegacy,
   describeTimelineForChapter,
   emptyStoryTimeline,
@@ -79,6 +80,27 @@ describe("故事时间线", () => {
     expect(draftView).toContain("本章（第 6 章）：还没定稿");
     expect(draftView).toContain("第 5 章：故事第 7 天（周二）");
     expect(describeTimelineForChapter(banye(), 6, { currentDay: 8 })).toContain("第 5 章：故事第 7 天（周二），昨天");
+  });
+
+  it("章内换了天：下一章从章末那天往后算（第 6 章周二写到第二天，第 7 章「第二天上午」是周四）", () => {
+    let t = banye();
+    t = placeChapter(t, { chapter: 6, daysInChapter: 1, declared: { daysSincePrevious: 0, timeOfDay: "傍晚", quote: "周二傍晚" } }).timeline;
+    t = placeChapter(t, { chapter: 7, declared: { daysSincePrevious: 1, quote: "第二天上午" } }).timeline;
+    expect(timelineEntryFor(t, 6)).toMatchObject({ day: 7, daysInChapter: 1 });
+    expect(chapterEndDay(timelineEntryFor(t, 6)!)).toBe(8);
+    expect(timelineEntryFor(t, 7)!.day).toBe(9);
+    expect(weekdayOfDay(t, 9)).toBe(parseWeekday("周四"));
+    // 没说法的 fallback 也从章末 +1；作者改了第 5 章，跨天的第 6 章顺延时跨度保留
+    expect(placeChapter(t, { chapter: 8 }).entry.day).toBe(10);
+    const moved = placeChapter(t, { chapter: 5, author: { day: 8 } }).timeline;
+    expect(timelineEntryFor(moved, 6)).toMatchObject({ day: 8, daysInChapter: 1 });
+    expect(timelineEntryFor(moved, 7)!.day).toBe(10);
+    // 撤销第 6 章：第 7 章回到第 5 章的第二天
+    expect(timelineEntryFor(removeChapter(t, 6), 7)!.day).toBe(8);
+    // 对照表标出两天、两个相对说法；读写往返不丢跨度
+    const text = describeTimelineForChapter(t, 7)!;
+    expect(text).toContain("第 6 章：故事第 7 天（周二）～第 8 天（周三），前天～昨天");
+    expect(validateStoryTimeline(JSON.parse(JSON.stringify(t))).timeline).toEqual(t);
   });
 
   it("相对说法换算；星期写法宽进", () => {

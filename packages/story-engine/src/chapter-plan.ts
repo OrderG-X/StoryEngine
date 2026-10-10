@@ -11,7 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "./project-store.js";
-import { readStoryTimeline } from "./story-timeline.js";
+import { chapterEndDay, readStoryTimeline } from "./story-timeline.js";
 
 export interface ChapterPlanThreadStep {
   /** 推进的线索/目标标题（尽量逐字取自现有开着的线索）。 */
@@ -173,6 +173,8 @@ function normalizeStoryDay(value: unknown): number | undefined {
 export interface StoryClockEntry {
   readonly chapter: number;
   readonly storyDay: number;
+  /** 正文里写了章内换天时：这章结束是第几天（没写 = 同 storyDay）。 */
+  readonly endDay?: number;
   readonly time?: string;
   readonly summary: string;
 }
@@ -192,7 +194,7 @@ export async function readStoryClock(projectDir: string, chapter: number, limit 
     const plan = await readChapterPlan(projectDir, entry.chapter).catch(() => undefined);
     const summary = (plan?.summary ?? eventSummaries.get(entry.chapter) ?? "").slice(0, 60);
     const time = plan?.scene.time ?? (entry.weekday !== undefined ? `${WEEKDAY_NAMES[entry.weekday]}${entry.timeOfDay ?? ""}` : entry.timeOfDay);
-    out.push({ chapter: entry.chapter, storyDay: entry.day, ...(time ? { time } : {}), summary });
+    out.push({ chapter: entry.chapter, storyDay: entry.day, ...(entry.daysInChapter ? { endDay: chapterEndDay(entry) } : {}), ...(time ? { time } : {}), summary });
   }
   return out;
 }
@@ -316,7 +318,14 @@ function buildStoryClock(plan: ChapterPlan, clock: readonly StoryClockEntry[]): 
     today: `本章是故事第 ${today} 天${withWeekday(today)}${plan.scene.time ? `（${plan.scene.time}）` : ""}`,
     earlier: clock
       .filter((entry) => entry.storyDay <= today)
-      .map((entry) => `${relativeDayLabel(today - entry.storyDay)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}）：第 ${entry.chapter} 章${entry.time ? `，${entry.time}` : ""}，${entry.summary}`),
+      .map((entry) => {
+        // 那章写跨了天：标出开头和结尾两天（「前天到昨天」），写手才知道「昨天」说的是那章后半截。
+        const end = entry.endDay !== undefined && entry.endDay > entry.storyDay && entry.endDay <= today ? entry.endDay : undefined;
+        const when = end === undefined
+          ? `${relativeDayLabel(today - entry.storyDay)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}）`
+          : `${relativeDayLabel(today - entry.storyDay)}到${relativeDayLabel(today - end)}（故事第 ${entry.storyDay} 天${withWeekday(entry.storyDay)}到第 ${end} 天${withWeekday(end)}）`;
+        return `${when}：第 ${entry.chapter} 章${entry.time ? `，${entry.time}` : ""}，${entry.summary}`;
+      }),
     rule: "人物台词和叙述里说到过去的事，照这里标好的「昨天 / 前天 / 几天前」和星期几说，不要自己推算，也不要照抄前文当时说的「三天前」「昨天」——那是站在当时说的。「故事第几天」只是给你对日子的内部编号，正文和台词里绝不出现「第 N 天」这种说法。",
   };
 }

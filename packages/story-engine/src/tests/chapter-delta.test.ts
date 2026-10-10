@@ -344,4 +344,14 @@ describe("时间声明（故事时间线）", () => {
     const next = verifyChapterDelta({ ...base, mainEvent: { summary: "雨停", quote: "第二天雨停了" }, time: { daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" } }, "第二天雨停了，天还阴着。");
     expect(next.time).toEqual({ daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" });
   });
+
+  it("章内换天：原句在正文里、写着换天说法、天数 1～60 才收；否则当整章同一天", () => {
+    const text = "周二傍晚，苏晚把牌子翻了个面。第二天上午，她把店交给王婶，去了槐树巷。";
+    const own = { ...base, mainEvent: { summary: "去槐树巷", quote: "她把店交给王婶" } };
+    expect(verifyChapterDelta({ ...own, timeSpan: { days: 1, quote: "第二天上午，她把店交给王婶，去了槐树巷。" } }, text).timeSpan)
+      .toEqual({ days: 1, quote: "第二天上午，她把店交给王婶，去了槐树巷。" });
+    expect(verifyChapterDelta({ ...own, timeSpan: { days: 1, quote: "周二傍晚，苏晚把牌子翻了个面。" } }, text).timeSpan).toBeUndefined();
+    expect(verifyChapterDelta({ ...own, timeSpan: { days: 0, quote: "第二天上午，她把店交给王婶，去了槐树巷。" } }, text).timeSpan).toBeUndefined();
+    expect(verifyChapterDelta({ ...own, timeSpan: { days: 1, quote: "第三天她又来了。" } }, text).timeSpan).toBeUndefined();
+  });
 });

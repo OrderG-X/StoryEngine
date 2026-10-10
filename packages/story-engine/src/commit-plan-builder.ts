@@ -209,6 +209,7 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
   const declaredTime = verifiedDelta?.time;
   const placed = placeChapter(storyTimeline, {
     chapter: input.chapter,
+    ...(verifiedDelta?.timeSpan ? { daysInChapter: verifiedDelta.timeSpan.days } : {}),
     ...(input.timeOverride ? { author: input.timeOverride } : {}),
     ...(declaredTime
       ? {

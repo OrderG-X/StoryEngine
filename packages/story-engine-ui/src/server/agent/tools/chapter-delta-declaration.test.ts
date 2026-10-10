@@ -187,6 +187,15 @@ describe("parseChapterDeltaDeclaration", () => {
     expect(result?.charactersPresent?.[1]?.name).toBe("林宁");
   });
 
+  it("章内换天 timeSpan：天数宽进（「一」「1」都收）；0 / 坏值当没报，不连坐别的字段", () => {
+    const parse = (timeSpan: unknown) => parseChapterDeltaDeclaration(JSON.stringify({ mainEvent: { summary: "事", quote: "原句。" }, timeSpan }), 6);
+    expect(parse({ days: "一", quote: "第二天上午，她去了槐树巷。" })?.timeSpan).toEqual({ days: 1, quote: "第二天上午，她去了槐树巷。" });
+    expect(parse({ days: 2, quote: "过了两天。" })?.timeSpan).toEqual({ days: 2, quote: "过了两天。" });
+    expect(parse({ days: 0, quote: "当天。" })?.timeSpan).toBeUndefined();
+    expect(parse({ days: "", quote: "" })?.mainEvent?.summary).toBe("事");
+    expect(parse(null)?.timeSpan).toBeUndefined();
+  });
+
   it("未给 charactersPresent → 默认空数组", () => {
     const result = parseChapterDeltaDeclaration(JSON.stringify({ mainEvent: { summary: "事", quote: "原句。" } }), 1);
     expect(result?.charactersPresent).toEqual([]);

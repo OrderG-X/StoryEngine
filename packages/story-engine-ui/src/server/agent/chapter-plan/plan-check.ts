@@ -95,10 +95,11 @@ async function readPreviousEnding(projectDir: string, chapter: number): Promise<
  * 审校改天数只在原章纲的天数倒退（比前一章还早）时才用；原来的天数顺得下去就不动
  * （第十五轮第 10 章：前一章第 7 天、章纲第 8 天是对的，审校改成第 9 天，日历跟着多走一天）。
  */
-function keepOriginalStoryDay(plan: ChapterPlan, revised: ChapterPlan, clock: readonly { readonly storyDay: number }[]): boolean {
+function keepOriginalStoryDay(plan: ChapterPlan, revised: ChapterPlan, clock: readonly { readonly storyDay: number; readonly endDay?: number }[]): boolean {
   if (plan.storyDay === undefined) return false;
   if (revised.storyDay === undefined) return true;
-  const lastDay = clock.at(-1)?.storyDay;
+  const last = clock.at(-1);
+  const lastDay = last ? last.endDay ?? last.storyDay : undefined;
   return lastDay === undefined || plan.storyDay >= lastDay;
 }
 
@@ -132,7 +133,7 @@ export async function checkAndRevisePlan(input: {
   const messages = buildPlanCheckMessages({
     plan,
     facts,
-    clock: clock.map((entry) => `第 ${entry.chapter} 章：故事第 ${entry.storyDay} 天${entry.time ? `（${entry.time}）` : ""}，${entry.summary}`),
+    clock: clock.map((entry) => `第 ${entry.chapter} 章：故事第 ${entry.storyDay} 天${entry.endDay ? `到第 ${entry.endDay} 天` : ""}${entry.time ? `（${entry.time}）` : ""}，${entry.summary}`),
     characters,
     ...(previousEnding ? { previousEnding } : {}),
   });

@@ -29,6 +29,7 @@ import {
 } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../../lib/llm-client.js";
 import { checkAndRevisePlan } from "./plan-check.js";
+import { withStep } from "../../lib/token-meter.js";
 
 export type PlanCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -336,6 +337,8 @@ export function storyDayAtChapterEnd(plan: ChapterPlan | undefined): number | un
 async function previousChapterEndDay(projectDir: string, chapter: number): Promise<number | undefined> {
   const last = (await readStoryClock(projectDir, chapter).catch(() => [])).at(-1);
   if (!last) return undefined;
+  // 时间线记了章内换天（定稿时正文声明、原句核过）就用它；没记再按那章章纲的要点推。
+  if (last.endDay !== undefined) return last.endDay;
   const previous = await readChapterPlan(projectDir, last.chapter).catch(() => undefined);
   return storyDayAtChapterEnd(previous) ?? last.storyDay;
 }
@@ -445,10 +448,10 @@ export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
   if (existing && (existing.direction ?? "") === direction) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}`, reused: true };
   }
-  const planned = await planChapter({ ...input, ...(direction ? { direction } : {}) });
+  const planned = await withStep("拟", () => planChapter({ ...input, ...(direction ? { direction } : {}) }));
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
   // 动笔前审校一遍：按章纲自己写了什么去翻旧事实，对不上就当场改章纲（第十轮验收：近一半矛盾出在章纲）。
-  const checked = await checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.checkCallModel ?? input.callModel });
+  const checked = await withStep("审", () => checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.checkCallModel ?? input.callModel }));
   const reviewNote = checked.revised
     ? `（章纲审校改了 ${checked.issues.length} 处与前文对不上的地方：${checked.issues.slice(0, 2).join("；")}${checked.issues.length > 2 ? "等" : ""}）`
     : checked.error ? `（章纲审校这次没跑成：${checked.error}）` : "";

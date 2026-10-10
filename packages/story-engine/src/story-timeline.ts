@@ -28,6 +28,11 @@ export interface TimelineEntry {
   readonly timeOfDay?: string;
   /** 正文说和上一章隔了几天（0 = 同一天）。只有 declared 才有。 */
   readonly daysSincePrevious?: number;
+  /**
+   * 本章内过了几天（章末 = day + daysInChapter；缺省 = 整章同一天）。下一章的「隔几天」「上一章 +1」都从章末那天算
+   * （2026-10-11 真机验收：第 6 章写到「第二天上午」，只记开场那天，第 7 章少算一天）。
+   */
+  readonly daysInChapter?: number;
   readonly source: TimelineSource;
   /** 依据的原句（declared 必有）。 */
   readonly quote?: string;
@@ -39,6 +44,11 @@ export interface StoryTimeline {
 }
 
 export const STORY_TIMELINE_SCHEMA_VERSION = 1;
+
+/** 一章结束时是故事第几天。 */
+export function chapterEndDay(entry: TimelineEntry): number {
+  return entry.day + (entry.daysInChapter ?? 0);
+}
 export const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"] as const;
 
 const SOURCES: readonly TimelineSource[] = ["author", "declared", "plan", "fallback"];
@@ -93,12 +103,14 @@ export function validateStoryTimeline(raw: unknown, file = "story/timeline.json"
     const since = typeof record.daysSincePrevious === "number" && Number.isInteger(record.daysSincePrevious) && record.daysSincePrevious >= 0
       ? record.daysSincePrevious
       : undefined;
+    const span = positiveInt(record.daysInChapter);
     entries.push({
       chapter,
       day,
       ...(weekday !== undefined ? { weekday } : {}),
       ...(typeof record.timeOfDay === "string" && record.timeOfDay.trim() ? { timeOfDay: record.timeOfDay.trim() } : {}),
       ...(since !== undefined ? { daysSincePrevious: since } : {}),
+      ...(span !== undefined ? { daysInChapter: span } : {}),
       source,
       ...(typeof record.quote === "string" && record.quote.trim() ? { quote: record.quote.trim() } : {}),
     });
@@ -183,6 +195,8 @@ export interface PlaceChapterInput {
   readonly declared?: { readonly daysSincePrevious?: number; readonly weekday?: number; readonly timeOfDay?: string; readonly quote?: string };
   /** 章纲里的天数。 */
   readonly plan?: { readonly day: number; readonly time?: string };
+  /** 本章内过了几天（正文里换天的说法已由调用方核过）；不论天数从哪来都带上。 */
+  readonly daysInChapter?: number;
 }
 
 function previousEntry(entries: readonly TimelineEntry[], chapter: number): TimelineEntry | undefined {
@@ -199,8 +213,14 @@ export function weekdayOfDay(timeline: StoryTimeline, day: number): number | und
 
 /** 按来源算一章的天数（不含顺延）。 */
 function computeEntry(entries: readonly TimelineEntry[], input: PlaceChapterInput): TimelineEntry {
+  const entry = computeStartEntry(entries, input);
+  return input.daysInChapter && input.daysInChapter > 0 ? { ...entry, daysInChapter: input.daysInChapter } : entry;
+}
+
+function computeStartEntry(entries: readonly TimelineEntry[], input: PlaceChapterInput): TimelineEntry {
   const previous = previousEntry(entries, input.chapter);
-  const base = previous?.day;
+  // 从上一章结束那天往后算（上一章写到第二天，这章的「第二天」是再往后一天）。
+  const base = previous ? chapterEndDay(previous) : undefined;
   // 前面一章都没有（第 1 章，或老书缺章）：按「一章一天」从章号起算，和旧日历口径一致。
   const firstDay = Math.max(1, input.chapter);
   if (input.author) {
@@ -256,6 +276,7 @@ export function placeChapter(timeline: StoryTimeline, input: PlaceChapterInput):
     }
     const recomputed = computeEntry(reflowed, {
       chapter: item.chapter,
+      ...(item.daysInChapter ? { daysInChapter: item.daysInChapter } : {}),
       ...(item.source === "declared"
         ? { declared: { ...(item.daysSincePrevious !== undefined ? { daysSincePrevious: item.daysSincePrevious } : {}), ...(item.weekday !== undefined ? { weekday: item.weekday } : {}), ...(item.timeOfDay ? { timeOfDay: item.timeOfDay } : {}), ...(item.quote ? { quote: item.quote } : {}) } }
         : {}),
@@ -278,6 +299,11 @@ export function removeChapter(timeline: StoryTimeline, chapter: number): StoryTi
 }
 
 function toPlaceInput(entry: TimelineEntry): PlaceChapterInput {
+  const base = toPlaceSource(entry);
+  return entry.daysInChapter ? { ...base, daysInChapter: entry.daysInChapter } : base;
+}
+
+function toPlaceSource(entry: TimelineEntry): PlaceChapterInput {
   switch (entry.source) {
     case "author":
       return { chapter: entry.chapter, author: { day: entry.day, ...(entry.weekday !== undefined ? { weekday: entry.weekday } : {}) } };
@@ -308,6 +334,18 @@ export function formatStoryDay(timeline: StoryTimeline, day: number): string {
   return `故事第 ${day} 天${weekday !== undefined ? `（${WEEKDAY_NAMES[weekday]}）` : ""}`;
 }
 
+/** 一章占的日子：「故事第 7 天（周二）」，跨了天就是「故事第 7 天（周二）～第 8 天（周三）」。 */
+function formatChapterDays(timeline: StoryTimeline, entry: TimelineEntry): string {
+  const end = chapterEndDay(entry);
+  if (end === entry.day) return formatStoryDay(timeline, entry.day);
+  return `${formatStoryDay(timeline, entry.day)}～${formatStoryDay(timeline, end).replace(/^故事/u, "")}`;
+}
+
+function relativeSpanLabel(current: number, entry: TimelineEntry): string {
+  const end = chapterEndDay(entry);
+  return end === entry.day ? relativeLabel(current - entry.day) : `${relativeLabel(current - entry.day)}～${relativeLabel(current - end)}`;
+}
+
 function relativeLabel(delta: number): string {
   if (delta === 0) return "同一天";
   if (delta === 1) return "昨天";
@@ -333,14 +371,15 @@ export function describeTimelineForChapter(
     if (earlier.length === 0) return undefined;
     return [
       `本章（第 ${chapter} 章）：还没定稿，是哪天以正文里的说法为准，对照下表`,
-      ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatStoryDay(timeline, entry.day)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
+      ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatChapterDays(timeline, entry)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
       "前面各章是哪天以这张表为准，不要自己推算。",
       ...(unsure ? ["（表里有的章天数是按「上一章 +1」估的，作者还没确认。）"] : []),
     ].join("\n");
   }
+  const own = options.currentDay === undefined ? timelineEntryFor(timeline, chapter) : undefined;
   return [
-    `本章（第 ${chapter} 章）：${formatStoryDay(timeline, current)}`,
-    ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatStoryDay(timeline, entry.day)}，${relativeLabel(current - entry.day)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
+    `本章（第 ${chapter} 章）：${own ? formatChapterDays(timeline, own) : formatStoryDay(timeline, current)}`,
+    ...earlier.reverse().map((entry) => `第 ${entry.chapter} 章：${formatChapterDays(timeline, entry)}，${relativeSpanLabel(current, entry)}${entry.timeOfDay ? `，${entry.timeOfDay}` : ""}`),
     "日子以这张表为准，说「昨天、前天、几天前、周几」照表来，不要自己推算；正文和台词里不写「故事第几天」。",
     ...(unsure ? ["（表里有的章天数是按「上一章 +1」估的，作者还没确认。）"] : []),
   ].join("\n");

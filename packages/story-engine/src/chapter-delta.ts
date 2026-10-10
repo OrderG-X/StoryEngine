@@ -114,6 +114,16 @@ export interface TimeDeclaration {
   readonly quote: string;
 }
 
+/**
+ * 本章内过了几天（2026-10-11 真机验收：第 6 章从周二傍晚写到「第二天上午」，时间线只记了开场那天，
+ * 第 7 章的「第二天」就从周二算、少了一天，长篇里越积越多）。days = 从本章开头到结尾一共过了几天，
+ * quote = 正文里交代换天的那句（「第二天上午，她把店交给王婶」）。整章在同一天里就不声明。
+ */
+export interface TimeSpanDeclaration {
+  readonly days: number;
+  readonly quote: string;
+}
+
 /** 模型对本章的完整语义声明。 */
 export interface ChapterDeltaDeclaration {
   readonly chapter: number;
@@ -138,6 +148,8 @@ export interface ChapterDeltaDeclaration {
   readonly continuityWithPrevious?: ContinuityWithPreviousDeclaration;
   /** 本章的时间（可选；正文没交代就缺省）。 */
   readonly time?: TimeDeclaration;
+  /** 本章内过了几天（可选；整章同一天就缺省）。 */
+  readonly timeSpan?: TimeSpanDeclaration;
 }
 
 /** 被拒绝的声明条目（诚实回报，绝不静默丢弃）。 */
@@ -182,6 +194,8 @@ export interface VerifiedChapterDelta {
   readonly continuityWithPrevious?: ContinuityWithPreviousDeclaration;
   /** 校验通过的时间声明（原句在正文里；星期写在原句里才收星期）。 */
   readonly time?: TimeDeclaration;
+  /** 校验通过的章内换天（原句在正文里、且写着换天的说法）。 */
+  readonly timeSpan?: TimeSpanDeclaration;
   readonly rejected: readonly RejectedDeltaEntry[];
   /** 是否有任何一条声明通过校验（全拒 → 上层整体回退正则）。 */
   readonly hasAnyVerified: boolean;
@@ -189,6 +203,9 @@ export interface VerifiedChapterDelta {
 
 /** 原句里交代「隔了多久」的说法。 */
 const TIME_SPAN_EXPRESSION = /第二天|第三天|次日|翌日|隔天|隔日|当天|同一天|这天|当晚|当夜|那天晚上|这天晚上|那天夜里|过了(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|星期|个月|月|年)|(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|个?星期|个月|月|年)(?:后|以后|之后|过去|过后)|一周后|周末|下周|上周|昨天|前天|今天|明天|后天/u;
+
+/** 原句里交代「章内换了天」的说法（不认「当天 / 昨天」这类不换天或往回说的）。 */
+const IN_CHAPTER_DAY_CHANGE = /第[二三四五六七八九十]天|第二日|次日|翌日|隔天|隔日|转天|过了(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|个?星期|个月)|(?:[一二两三四五六七八九十百\d]+|几)(?:天|日|周|个?星期|个月)(?:后|以后|之后|过去|过后)|一周后|又过了/u;
 
 /** 归一化：压掉所有空白（空格/换行/制表符/全角空格），便于「原句是否出现在草稿」的宽松逐字比对。 */
 function normalizeForMatch(text: string): string {
@@ -307,6 +324,17 @@ export function verifyChapterDelta(
     };
   })();
 
+  // 章内换天：原句在正文里、写着换天的说法、天数是 1..60 的整数（一章写过两个月的极少，多半是模型算错）。
+  const timeSpan = ((): TimeSpanDeclaration | undefined => {
+    const declared = declaration.timeSpan;
+    if (!declared || !checkEvidence(declared.quote, "timeSpan")) return undefined;
+    const days = declared.days;
+    // 和 time 一样：核不上就当没声明（这章按同一天记），不进拒收清单。
+    if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 60) return undefined;
+    if (!IN_CHAPTER_DAY_CHANGE.test(declared.quote)) return undefined;
+    return { days, quote: declared.quote };
+  })();
+
   const hasAnyVerified =
     mainEvent !== undefined ||
     conflict !== undefined ||
@@ -335,6 +363,7 @@ export function verifyChapterDelta(
     arcGoalProgress,
     ...(declaration.continuityWithPrevious ? { continuityWithPrevious: declaration.continuityWithPrevious } : {}),
     ...(time ? { time } : {}),
+    ...(timeSpan ? { timeSpan } : {}),
     rejected,
     hasAnyVerified,
   };

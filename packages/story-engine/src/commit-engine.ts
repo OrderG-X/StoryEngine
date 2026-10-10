@@ -1,4 +1,4 @@
-import type { StoryTimeline } from "./story-timeline.js";
+import { chapterEndDay, type StoryTimeline } from "./story-timeline.js";
 import { applyChapterFactUpdate, CorruptFactLedgerError, FACT_LEDGER_RELATIVE_PATH, factLedgerText, readFactLedgerStrict, type ChapterFactUpdate } from "./fact-ledger-store.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1025,7 +1025,7 @@ async function buildStoryCalendarFile(
       relativePath: join("time", "calendar.json"),
       content: jsonText({
         ...previous,
-        currentStoryDay: lastEntry.day,
+        currentStoryDay: chapterEndDay(lastEntry),
         currentTimeOfDay: update.timeOfDay === "unknown" && previous.currentTimeOfDay !== "unknown" ? previous.currentTimeOfDay : update.timeOfDay,
       } satisfies StoryCalendar),
     }];
