@@ -88,8 +88,11 @@ export async function checkDraftBeforeCommit(input: {
   for (const degradation of characterNameDegradations) {
     issues.push({ type: "character_names_degraded", severity: "warning", message: degradation });
   }
-  if (content && characterNames.length > 0 && !characterNames.some((name) => content.includes(name))) {
-    issues.push(errorIssue("missing_character_name", "Draft does not mention any known character name."));
+  // 只认真名：新书的占位主角（「主角」）和角色 id 不会出现在正文里——拿它们当门，作者没先改名就永远定不了稿
+  // （2026-10-10 作者自写验收）。作者自己写的章也可能整章写一个还没登记的人，所以只提醒、不挡定稿。
+  const realNames = characterNames.filter((name) => !PLACEHOLDER_CHARACTER_NAME.test(name) && !/^char-/u.test(name));
+  if (content && realNames.length > 0 && !realNames.some((name) => content.includes(name))) {
+    issues.push({ type: "missing_character_name", severity: "warning", message: "Draft does not mention any known character name." });
   }
   if (content) {
     // P2 铁律④：上下文包构造失败时此前静默跳过连续性检查——检查于是「通过」了，却没查任何东西，
@@ -407,6 +410,9 @@ function issueToCandidate(issue: CommitQualityIssue, source: RuleQualityCandidat
     status: "candidate",
   };
 }
+
+/** 新书种的占位角色名：不是真名，不拿来核对正文。 */
+const PLACEHOLDER_CHARACTER_NAME = /^(?:主角|男主|女主|主人公|男主角|女主角|未命名(?:角色)?|待定)\d*$/u;
 
 async function listCharacterNames(projectDir: string): Promise<{ readonly names: readonly string[]; readonly degradations: readonly string[] }> {
   // 审计 Med：角色目录/资料读取失败不再无痕清空——EACCES 时 names=[] 会让 missing_character_name

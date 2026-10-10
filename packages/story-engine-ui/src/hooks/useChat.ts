@@ -2041,6 +2041,16 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 只读(审稿/质检)与写工作稿(生成草稿)都与 agent 工具共享同一份磁盘状态、无内存票据接缝；
       // 入库(commit_preview/apply 涉及服务端票据)与开书资料(开放式)仍走 agent。
       const deterministicAction = matchDeterministicChapterAction(text);
+      if (deterministicAction === "commit_preview") {
+        // 定稿预览：结构化动作直达服务端跑 commit_preview（票据照登记），不再等对话 AI 想。结果渲染定稿预览卡（含账本清单）。
+        const chapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
+        if (typeof chapterNumber !== "number") {
+          appendMessage({ id: `assistant-preview-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「定稿」。" });
+          return;
+        }
+        await runAgentDispatch(text, conversation, { toolName: "commit_preview", chapter: chapterNumber });
+        return;
+      }
       if (deterministicAction === "check_continuity" || deterministicAction === "check_continuity_fresh") {
         // 核账：结构化动作直达服务端（只读），结果照常进对话、渲染「核账」卡；不经模型判断要不要调。
         const chapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;

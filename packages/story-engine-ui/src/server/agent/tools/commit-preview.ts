@@ -29,6 +29,7 @@ import {
 import { callConfiguredDeclareModel, declareChapterDeltaWithStatus } from "./chapter-delta-declaration.js";
 import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
+import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
 import { readFile } from "node:fs/promises";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
@@ -287,6 +288,12 @@ export async function buildCommitPreviewToolOutput(input: {
   if (draftQualityIssues.some((issue) => issue.severity === "error")) {
     blockingReasons.push("正文质量存在硬伤级问题");
     if (lengthShortfall) blockingReasons.push(lengthShortfall);
+    // 点名是哪几条（定稿按钮直达后没有对话 AI 帮着解释，卡上只写「有硬伤」作者不知道改什么）。
+    for (const issue of draftQualityIssues) {
+      if (issue.severity !== "error" || issue.type === "too_short") continue;
+      const label = QUALITY_TYPE_LABELS[issue.type];
+      blockingReasons.push(label ? `具体：${label}` : `具体：${scrubLocalAbsolutePaths(issue.message)}`);
+    }
   }
   if (semanticQualityIssues.some((issue) => issue.severity === "error")) {
     blockingReasons.push("语义质量存在硬伤级问题");

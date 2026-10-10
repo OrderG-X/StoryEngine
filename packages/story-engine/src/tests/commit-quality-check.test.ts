@@ -86,7 +86,7 @@ describe("commit quality check", () => {
     ]));
   });
 
-  it("rejects drafts that do not mention a known character name", async () => {
+  it("warns (does not block) when the draft mentions no known character name — author may write an unregistered character", async () => {
     const projectDir = await createFixtureProject();
 
     const report = await checkDraftBeforeCommit({
@@ -95,10 +95,22 @@ describe("commit quality check", () => {
       draftContent: longDraft({ characterName: "少年", withTitle: true, withDialogue: true }),
     });
 
-    expect(report.passed).toBe(false);
     expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: "error", type: "missing_character_name" }),
+      expect.objectContaining({ severity: "warning", type: "missing_character_name" }),
     ]));
+    expect(report.issues.filter((issue) => issue.type === "missing_character_name" && issue.severity === "error")).toEqual([]);
+  });
+
+  it("ignores the placeholder protagonist name of a fresh book (「主角」 never appears in real prose)", async () => {
+    const projectDir = await createFixtureProject("主角");
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: longDraft({ characterName: "苏晚", withTitle: true, withDialogue: true }),
+    });
+
+    expect(report.issues.some((issue) => issue.type === "missing_character_name")).toBe(false);
   });
 
   it("rejects drafts shorter than 300 Chinese characters", async () => {
@@ -525,14 +537,14 @@ describe("commit quality writing-context-pack checks (genre-neutral)", () => {
   });
 });
 
-async function createFixtureProject(): Promise<string> {
+async function createFixtureProject(mainCharacterName = "林远"): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "story-engine-quality-"));
   const { projectDir } = await createStoryProject({
     rootDir,
     title: "质量检查测试",
     genre: "修仙爽文",
     premise: "用户自己当主角，从外院废柴逆袭到掌控组织。",
-    mainCharacterName: "林远",
+    mainCharacterName,
   });
   await writeFile(
     join(projectDir, "drafts", "fast", "chapter-0001.md"),

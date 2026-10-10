@@ -180,6 +180,31 @@ describe("runUserAction 执行结构化动作", () => {
   });
 });
 
+describe("「定稿」按钮结构化动作（commit_preview）", () => {
+  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 工具自己的摘要（工具名换人话），不调模型", async () => {
+    expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
+    const requestContext = new RequestContext();
+    let marked = true;
+    const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {
+      marked = isUserConfirmedTool({ requestContext: context } as never, toolName);
+      return { ok: true, canCommit: true, chapter: 4, summary: "第 4 章可以定稿，点 commit_apply 前先看清单。" };
+    };
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "commit_preview", chapter: 4 },
+      requestContext,
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(marked).toBe(false);
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+    expect(events[1]!.data.output).toMatchObject({ canCommit: true });
+    expect(events[2]!.data.text).toBe("第 4 章可以定稿，点 定稿 前先看清单。");
+  });
+});
+
 describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
   it("parseUserAction：keep 可缺省、数字字符串宽容、0=缺省、负数/小数拒绝；不需要章号", () => {
     expect(parseUserAction({ toolName: "prune_snapshots" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });

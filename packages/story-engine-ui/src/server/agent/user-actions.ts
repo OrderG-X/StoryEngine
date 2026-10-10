@@ -10,7 +10,7 @@ import type { RequestContext } from "@mastra/core/di";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity"] as const;
+export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity", "commit_preview"] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
@@ -24,7 +24,9 @@ export type UserAction =
   }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
-  | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean };
+  | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
+  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。 */
+  | { readonly toolName: "commit_preview"; readonly chapter: number };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -55,6 +57,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
+  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter } };
   if (toolName === "check_continuity") {
     return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
   }
@@ -133,6 +136,10 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "check_continuity") {
     await runCheckContinuityAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "commit_preview") {
+    await runCommitPreviewAction({ ...args, action });
     return;
   }
   const stamp = Date.now();
@@ -246,6 +253,48 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
     toolName: "suggest_next_steps",
     output: { ok: true, question: sureCount > 0 ? "核账做完了，这几处怎么处理？" : "核账做完了，接下来？", choices },
   });
+}
+
+interface CommitPreviewLikeOutput {
+  readonly canCommit?: unknown;
+  readonly summary?: unknown;
+}
+
+/**
+ * 「定稿」按钮：服务端直接跑 commit_preview（只读；可定稿时登记票据），结果按 agent 回合同款事件推给前端，
+ * 前端照常渲染定稿预览卡（账本清单 + 确认定稿按钮）。收尾只回工具自己的用户可见摘要，不调模型。
+ */
+async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "commit_preview" }>;
+}): Promise<void> {
+  const { action } = args;
+  const toolCallId = `user-action-commit_preview-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  };
+  const flush = (): void => {
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter: action.chapter } });
+  let output: unknown;
+  try {
+    output = await args.executeTool("commit_preview", { chapter: action.chapter }, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "commit_preview", error: message, retryable: true });
+    emitText(`第 ${action.chapter} 章的定稿预览没生成出来：${humanizeToolNames(message)}。可以再点一次「定稿」。`);
+    flush();
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output });
+  const result = output as CommitPreviewLikeOutput | undefined;
+  const summary = typeof result?.summary === "string" && result.summary.trim()
+    ? result.summary.trim()
+    : result?.canCommit === true ? `第 ${action.chapter} 章可以定稿。` : `第 ${action.chapter} 章暂时不能定稿。`;
+  emitText(humanizeToolNames(summary));
+  flush();
 }
 
 interface PruneLikeOutput {

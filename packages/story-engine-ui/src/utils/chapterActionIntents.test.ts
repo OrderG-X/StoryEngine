@@ -29,14 +29,18 @@ describe("matchDeterministicChapterAction（固定动作按钮确定性）", () 
     expect(matchDeterministicChapterAction(DRAFT_BUTTON_INTENT)).toBe("generate_draft");
   });
 
-  it("入库预览按钮不在前端确定性拦截（须走 agent commit_preview 工具，保服务端票据连续）", () => {
-    expect(matchDeterministicChapterAction(COMMIT_PREVIEW_BUTTON_INTENT)).toBeNull();
+  it("定稿预览按钮走结构化动作直达（2026-10-10 起；服务端跑同一个 commit_preview 工具，票据照登记）", () => {
+    expect(matchDeterministicChapterAction(COMMIT_PREVIEW_BUTTON_INTENT)).toBe("commit_preview");
+    expect(matchDeterministicChapterAction("生成定稿预览")).toBe("commit_preview");
+    expect(matchDeterministicChapterAction("预览第 8 章的定稿改动")).toBe("commit_preview");
+    expect(matchDeterministicChapterAction("生成第 3 章定稿预览")).toBe("commit_preview");
+    expect(matchDeterministicChapterAction("先别定稿，我再看看")).toBeNull();
   });
 
-  it("迁移期仍识别旧审稿/质检按钮，旧入库预览仍交给 agent", () => {
+  it("迁移期仍识别旧审稿/质检/入库预览按钮", () => {
     expect(matchDeterministicChapterAction(LEGACY_REVIEW_BUTTON_INTENT)).toBe("ai_review");
     expect(matchDeterministicChapterAction(LEGACY_QUALITY_BUTTON_INTENT)).toBe("quality_check");
-    expect(matchDeterministicChapterAction(LEGACY_COMMIT_PREVIEW_BUTTON_INTENT)).toBeNull();
+    expect(matchDeterministicChapterAction(LEGACY_COMMIT_PREVIEW_BUTTON_INTENT)).toBe("commit_preview");
   });
 
   it("前后空白容错（按钮发文仍命中）", () => {

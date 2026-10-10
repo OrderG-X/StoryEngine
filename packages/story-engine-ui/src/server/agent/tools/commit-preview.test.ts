@@ -103,6 +103,15 @@ describe("commit_preview", () => {
     expect(out.draftQualityIssues.some((issue) => issue.severity === "error")).toBe(true);
   });
 
+  it("被硬伤挡住时卡上点名是哪条（人话），不只写「有硬伤」", async () => {
+    const projectDir = await makeProject("点名硬伤", "林远");
+    const body = Array.from({ length: 40 }, () => "林远在会议室外停下脚步，反复掂量手里那份账册的分量。").join("");
+    await writeDraft(projectDir, 1, `# 第1章\n\n以下是本章正文：\n\n${body}\n`);
+    const out = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+    expect(out.canCommit).toBe(false);
+    expect(out.blockingReasons).toContain("具体：夹带模型解释/拒答话术");
+  });
+
   // 长跑 2026-10-04 #5b/#4：写作规则显式 minWords=3000 时，400 字短稿（>旧 300 封顶）必须被硬阻断；
   // blockingReasons/summary 点名字数下限（人话），modelHint 指路「扩写」——别让模型在不达标稿上反复尝试定稿。
   it("写作规则显式 minWords → 短稿被硬阻断，阻断原因点名字数下限（人话）", async () => {

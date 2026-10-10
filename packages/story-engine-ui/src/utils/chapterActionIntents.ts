@@ -22,9 +22,9 @@ export const LEGACY_QUALITY_BUTTON_INTENT = "对这一章做质检，列出硬�
 // 「✎ 写这一章」按钮 = 写本章草稿这一固定动作，确定性直调 handleGenerateDraft（写的是 drafts/fast 工作稿、
 // 可撤销、与 agent 工具读同一份草稿文件，无内存票据接缝），不再靠模型 NL 猜（R5 首次点击常不触发 generate_draft）。
 export const DRAFT_BUTTON_INTENT = "写这一章的正文";
-// 「↻ 定稿」按钮 = 定稿流程入口，intent 走【预览】措辞让 agent 调 commit_preview 工具（票据登记进服务端 store，
-// commit_apply 才取得到）。**不**在前端确定性拦截——R4 曾用 REST 预览导致票据接缝：第一次确认定稿找不到 commit_preview
-// 票据而失败（R5 P1-4）。改回让 agent 走工具，保票据连续。旧 intent「把这一章正式入库」会让守卫误期望 commit_apply。
+// 「定稿」按钮 = 定稿流程入口：结构化动作直达服务端执行 commit_preview 工具（2026-10-10 起，和核账同一通道）。
+// 原先发给对话 AI、由它决定调 commit_preview，每次要等它想 30～100 秒（作者自写验收实测）。
+// 仍是同一个工具、同一个进程内票据 store，所以不会有 R4 那种 REST 预览的票据接缝（R5 P1-4：REST 路和工具路票据不通）。
 export const COMMIT_PREVIEW_BUTTON_INTENT = "预览这一章的定稿改动";
 /** 「核账」按钮：拿这一章对前文原文找对不上的地方（只读、确定性直达，不经模型猜）。作者直接打「核账」也走这条。 */
 export const CHECK_CONTINUITY_BUTTON_INTENT = "核账：拿这一章对一遍前文，看有没有前后对不上的地方";
@@ -43,12 +43,21 @@ export function resolveDirectWriteChapterGoal(explicit: string, fallback: string
   return explicit.trim() || fallback;
 }
 
-export type DeterministicChapterAction = "ai_review" | "quality_check" | "generate_draft" | "check_continuity" | "check_continuity_fresh";
+export type DeterministicChapterAction =
+  | "ai_review"
+  | "quality_check"
+  | "generate_draft"
+  | "check_continuity"
+  | "check_continuity_fresh"
+  | "commit_preview";
+
+/** 定稿预览的几种固定说法：按钮、旧按钮、已定稿空态的按钮、核账后的下一步选项「预览第 N 章的定稿改动」。 */
+const COMMIT_PREVIEW_TEXTS = new Set(["预览这一章的定稿改动", "预览这一章的入库改动", "生成定稿预览", "预览定稿"]);
 
 /**
  * 文本完全等于某个【固定动作】按钮常量 → 返回其确定性动作；否则 null（交给 agent 对话链路）。
  * 只确定性接管：内容审阅/硬伤检查（只读）、写这一章（写工作稿、无票据接缝）。
- * 定稿（commit_preview/commit_apply 涉及服务端票据）与开书资料（开放式多实体）仍走 agent，不在此。
+ * 定稿预览（2026-10-10 起）也在此：前端发结构化动作，服务端直接跑 commit_preview 工具（票据照登记）；开书资料（开放式多实体）仍走 agent。
  * 新旧意图常量都放行（术语迁移兼容）。
  */
 export function matchDeterministicChapterAction(text: string): DeterministicChapterAction | null {
@@ -58,5 +67,6 @@ export function matchDeterministicChapterAction(text: string): DeterministicChap
   if (trimmed === DRAFT_BUTTON_INTENT) return "generate_draft";
   if (trimmed === CHECK_CONTINUITY_BUTTON_INTENT || trimmed === "核账") return "check_continuity";
   if (trimmed === CHECK_CONTINUITY_FRESH_INTENT || trimmed === "再细核一遍") return "check_continuity_fresh";
+  if (COMMIT_PREVIEW_TEXTS.has(trimmed) || /^(?:预览第\s*\d+\s*章的定稿改动|生成第\s*\d+\s*章定稿预览)$/u.test(trimmed)) return "commit_preview";
   return null;
 }
