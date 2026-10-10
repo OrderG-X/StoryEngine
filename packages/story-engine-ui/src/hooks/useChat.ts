@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { clearLedgerExclusions, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { directEditDraft, fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
 import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
 import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
@@ -2151,7 +2152,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("没找到要定稿的章节，请先打开那一章。", 4200);
         return;
       }
-      const excluded = target?.excluded ?? [];
+      // 作者在预览卡上勾掉的账本条目：从卡上点带着；从建议条点的没带，按章取回（否则会把勾掉的照写）。
+      const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
+      clearLedgerExclusions(chapter);
       const text = excluded.length > 0 ? `确认定稿第 ${chapter} 章（账本清单去掉了 ${excluded.length} 条）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });

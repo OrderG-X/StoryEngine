@@ -15,17 +15,13 @@
 import { useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import { StepCard } from "./StepCard.js";
+import { ledgerExclusionsForCard, rememberLedgerExclusions } from "../../../utils/ledgerExclusions.js";
 
 type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[number];
 
 /** 清单先露几条，其余收起（一屏读得完）。 */
 const LEDGER_VISIBLE = 6;
 
-/**
- * 作者勾掉的条目按「章 + 预览令牌」记在模块里：回合收尾时消息列表会重建、卡片重新挂载，
- * 勾选放在组件状态里会悄悄丢掉（浏览器实测第一次勾就丢了），丢了就会把作者去掉的照写进账本。
- */
-const removedByPreview = new Map<string, ReadonlySet<string>>();
 
 function LedgerChecklist({ items, removed, onToggle, disabled }: {
   readonly items: readonly ChecklistItem[];
@@ -84,13 +80,13 @@ export function CommitPreviewCard({
   const blocked = !canCommit || blocking.length > 0;
   const chapterLabel = typeof preview.chapter === "number" && preview.chapter > 0 ? `第 ${preview.chapter} 章` : "本章";
   const ledger = preview.ledgerChecklist ?? [];
-  const previewKey = `${preview.chapter}#${preview.previewToken ?? ""}`;
-  const [removed, setRemoved] = useState<ReadonlySet<string>>(() => removedByPreview.get(previewKey) ?? new Set());
+  // 勾选记在共享处（utils/ledgerExclusions）：卡片重挂载不丢，建议条上的「确认定稿」也带得上。
+  const [removed, setRemoved] = useState<ReadonlySet<string>>(() => ledgerExclusionsForCard(preview.chapter, preview.previewToken));
   const toggle = (id: string) => setRemoved((current) => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    removedByPreview.set(previewKey, next);
+    rememberLedgerExclusions(preview.chapter, preview.previewToken, next);
     return next;
   });
   const canTick = !blocked && Boolean(onConfirm);

@@ -41,14 +41,22 @@ describe("定稿前的账本清单", () => {
     expect(items.find((item) => item.id === "hook:hook-a1")?.detail).toBe("她摸出一把铜钥匙。");
   });
 
+  it("事实条目的 id 按内容（同一句两次预览 id 一样，换了顺序也不会删错）", () => {
+    const first = buildLedgerChecklist({ chapter: 5, plan: undefined, facts });
+    const swapped = buildLedgerChecklist({ chapter: 5, plan: undefined, facts: { ...facts, adds: [...facts.adds].reverse() } });
+    const idOf = (items: typeof first, text: string) => items.find((item) => item.label === `记下：${text}`)?.id;
+    expect(idOf(first, "老周住在码头")).toBe(idOf(swapped, "老周住在码头"));
+    expect(idOf(first, "老周住在码头")).not.toBe(idOf(first, "铜钥匙在林溪手里"));
+  });
+
   it("没抽成事实就只列计划里的", () => {
     const items = buildLedgerChecklist({ chapter: 5, plan, facts: { ...facts, ok: false } });
     expect(items.some((item) => item.kind === "fact")).toBe(false);
   });
 
   it("勾掉的伏笔从计划里拿掉：跟踪更新、状态更新、活跃伏笔都不留；其它不动", () => {
-    const exclusions = splitExclusions(["hook:hook-b2", "thread:intent-c3", "fact:1", "change:fact-9", "乱写的"]);
-    expect([...exclusions.facts.adds!]).toEqual([1]);
+    const exclusions = splitExclusions(["hook:hook-b2", "thread:intent-c3", "fact:abc123", "change:fact-9", "乱写的"]);
+    expect([...exclusions.facts.adds!]).toEqual(["abc123"]);
     expect([...exclusions.facts.changes!]).toEqual(["fact-9"]);
     const next = excludeFromCommitPlan(plan, exclusions);
     expect(next.hookTrackingUpdates.map((update) => update.id)).toEqual(["hook-a1"]);

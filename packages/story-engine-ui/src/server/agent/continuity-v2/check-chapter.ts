@@ -52,9 +52,9 @@ export interface CheckChapterResult {
 }
 
 const KINDS = new Set<ClaimKind>(["object", "place", "time", "identity", "knowledge", "number", "event"]);
-/** 每段最多拆多少条；一章分 CLAIM_CHUNKS 段并行拆。 */
-const CLAIMS_PER_CHUNK = 20;
-const CLAIM_CHUNKS = 4;
+/** 一章分 CLAIM_CHUNKS 段并行拆，每段最多 CLAIMS_PER_CHUNK 条（评测可用环境变量改，比快慢和查全）。 */
+const CLAIM_CHUNKS = Number(process.env.CHECKER_CLAIM_CHUNKS) || 4;
+const CLAIMS_PER_CHUNK = Number(process.env.CHECKER_CLAIMS_PER_CHUNK) || 15;
 const EVIDENCE_PER_CLAIM = 7;
 const CLAIMS_PER_BATCH = 14;
 const MIN_TERM_CHARS = 2;
@@ -387,6 +387,14 @@ export const callConfiguredCheckerModel: CheckCallModel = (messages) => callChec
 /** 逐条判（要推算天数、年龄、谁该知道什么）：开思考判得准不准，用评测比（CHECKER_VERIFY_THINKING=1）。 */
 export const callConfiguredVerifierModel: CheckCallModel = (messages) => callChecker(messages, process.env.CHECKER_VERIFY_THINKING === "1");
 
+/**
+ * 核对调用的两道闸（评测里偶发单次调用十几分钟不收尾，整章核账跟着卡死）：
+ * 迟迟不出字（只发心跳 / 光想）超过 CHECKER_FIRST_TOKEN_MS 就停；输出超过 CHECKER_MAX_OUTPUT_CHARS 字（原地打转）就停。
+ * 都不是总时长上限——正常出字时写多久都行；停下后自动重试一次。
+ */
+const CHECKER_FIRST_TOKEN_MS = 120_000;
+const CHECKER_MAX_OUTPUT_CHARS = 40_000;
+
 async function callChecker(messages: Parameters<CheckCallModel>[0], thinking: boolean): Promise<string> {
   const once = async () => {
     const resolved = await resolveConfiguredChatModel("qualityCheck");
@@ -395,6 +403,8 @@ async function callChecker(messages: Parameters<CheckCallModel>[0], thinking: bo
       messages: messages.map((message) => ({ role: message.role, content: message.content })),
       temperature: 0.1,
       responseFormat: { type: "json_object" },
+      maxThinkingMs: CHECKER_FIRST_TOKEN_MS,
+      maxContentChars: CHECKER_MAX_OUTPUT_CHARS,
     });
     if (!content.trim()) throw new Error("模型返回了空内容");
     return content;

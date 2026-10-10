@@ -5,9 +5,9 @@
  * 本章记为故事第几天。作者去掉不对的，定稿时这些条目不写（伏笔线索目标从计划里拿掉，事实不入账）。
  * 和旧设定对不上的、新出现的人物只提示，不写账本，所以不能勾。
  *
- * 条目 id 稳定：伏笔 / 线索 / 目标用引擎的 id（标题哈希，同一版草稿重算一致）；事实按提案下标、改记按旧事实 id。
+ * 条目 id 稳定：伏笔 / 线索 / 目标用引擎的 id（标题哈希，同一版草稿重算一致）；事实按内容短哈希、改记按旧事实 id。
  */
-import type { FactProposal, FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
+import { factKey, type FactProposal, type FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
 
 export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character";
 
@@ -94,9 +94,9 @@ export function buildLedgerChecklist(input: {
     });
   }
   if (facts?.ok) {
-    facts.adds.forEach((fact, index) => {
-      items.push({ id: `fact:${index}`, kind: "fact", label: `记下：${fact.text}`, ...(clip(fact.quote) ? { detail: clip(fact.quote) } : {}), removable: true });
-    });
+    for (const fact of facts.adds) {
+      items.push({ id: `fact:${factKey(fact.text)}`, kind: "fact", label: `记下：${fact.text}`, ...(clip(fact.quote) ? { detail: clip(fact.quote) } : {}), removable: true });
+    }
     for (const change of facts.changes) {
       items.push({
         id: `change:${change.factId}`,
@@ -122,7 +122,7 @@ export function buildLedgerChecklist(input: {
   return items;
 }
 
-/** 把作者去掉的条目 id 分到各处：计划里的伏笔 / 线索 / 目标 id，事实提案的下标 / 旧事实 id。 */
+/** 把作者去掉的条目 id 分到各处：计划里的伏笔 / 线索 / 目标 id，事实的内容短哈希 / 旧事实 id。 */
 export function splitExclusions(excluded: readonly string[]): {
   readonly hookIds: ReadonlySet<string>;
   readonly threadIds: ReadonlySet<string>;
@@ -132,7 +132,7 @@ export function splitExclusions(excluded: readonly string[]): {
   const hookIds = new Set<string>();
   const threadIds = new Set<string>();
   const goalIds = new Set<string>();
-  const adds = new Set<number>();
+  const adds = new Set<string>();
   const changes = new Set<string>();
   for (const raw of excluded) {
     const [kind, ...rest] = raw.split(":");
@@ -141,7 +141,7 @@ export function splitExclusions(excluded: readonly string[]): {
     if (kind === "hook") hookIds.add(value);
     else if (kind === "thread") threadIds.add(value);
     else if (kind === "goal") goalIds.add(value);
-    else if (kind === "fact" && /^\d+$/u.test(value)) adds.add(Number(value));
+    else if (kind === "fact") adds.add(value);
     else if (kind === "change") changes.add(value);
   }
   return { hookIds, threadIds, goalIds, facts: { adds, changes } };

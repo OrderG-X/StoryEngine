@@ -8,6 +8,7 @@
  *  - conflicts：本章说法与旧事实对不上、又不是剧情里的变化 → 账本不动，交给作者定（绝不替作者拍板）。
  * 模型无关：宽进逐条打捞；编号对不上的、引文不在正文里的一律丢弃；失败自动重试一次，仍不成如实说明。
  */
+import { createHash } from "node:crypto";
 import { describeStoryDay, readChapterPlan, readStoryClock, selectEffectiveFacts } from "@actalk/story-engine";
 import { readFactLedger, appendFacts, applyFactEdit, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
 
@@ -210,10 +211,18 @@ export interface FactProposal {
   readonly failureSummary?: string;
 }
 
-/** 作者在定稿前去掉的条目：adds 按下标、changes 按旧事实 id。 */
+/** 作者在定稿前去掉的条目：adds 按事实内容的短哈希（factKey）、changes 按旧事实 id。 */
 export interface FactProposalExclusions {
-  readonly adds?: ReadonlySet<number>;
+  readonly adds?: ReadonlySet<string>;
   readonly changes?: ReadonlySet<string>;
+}
+
+/**
+ * 新事实的稳定钥匙（内容短哈希，不用下标）：同一版草稿预览两次，模型抽出的条目和顺序会变，
+ * 按下标去掉会删错条；按内容只会删掉作者看到并勾掉的那一句。
+ */
+export function factKey(text: string): string {
+  return createHash("sha1").update(text.replace(/\s+/gu, ""), "utf-8").digest("hex").slice(0, 12);
 }
 
 export async function proposeFactChanges(input: {
@@ -288,7 +297,7 @@ export async function applyFactProposal(
   if (!proposal.ok) {
     return { ok: false, added: 0, superseded: [], conflicts: [], newCharacters: [], summary: proposal.failureSummary ?? "" };
   }
-  const adds = proposal.adds.filter((_, index) => !exclusions.adds?.has(index));
+  const adds = proposal.adds.filter((fact) => !exclusions.adds?.has(factKey(fact.text)));
   const changes = proposal.changes.filter((change) => !exclusions.changes?.has(change.factId));
   const added = await appendFacts(projectDir, chapter, [...adds.map((fact) => fact.text), ...changes.map((change) => change.newText)], "auto");
   // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。

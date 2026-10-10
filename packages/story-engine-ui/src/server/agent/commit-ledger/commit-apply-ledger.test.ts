@@ -62,7 +62,8 @@ describe("定稿前看账：勾掉的不写", () => {
 
     const requestContext = buildProjectRequestContext(projectDir, 1);
     markUserConfirmedTool(requestContext, "commit_apply");
-    const out = await execute({ chapter: 1, excluded: [lead!.id, "fact:1"] }, { requestContext } as unknown as ToolExecutionContext);
+    const secondFact = checklist.find((item) => item.label === "记下：林远在会议室外")!;
+    const out = await execute({ chapter: 1, excluded: [lead!.id, secondFact.id] }, { requestContext } as unknown as ToolExecutionContext);
     expect(out.committed).toBe(true);
     expect(String(out.summary)).toContain("你去掉的 1 条没记");
 

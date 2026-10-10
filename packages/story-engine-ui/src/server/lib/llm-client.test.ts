@@ -410,6 +410,14 @@ describe("streamChatModelToText 「光想不写」上限（maxThinkingMs）", ()
     expect(out.content).toBe("写".repeat(20));
     spy.mockRestore();
   });
+
+  it("正文字数上限（maxContentChars）：原地打转吐不停 → 掐掉并如实抛错；没超就照常收尾", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => pacedStream(init?.signal, 0, 30));
+    await expect(streamChatModelToText({ configured, messages: [], maxContentChars: 10 })).rejects.toThrow("原地打转");
+    const out = await streamChatModelToText({ configured, messages: [], maxContentChars: 100 });
+    expect(out.content).toBe("写".repeat(30));
+    spy.mockRestore();
+  });
 });
 
 describe("streamChatModelToText 思考透传（审稿/质检主路径，补覆盖空档）", () => {

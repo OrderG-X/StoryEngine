@@ -870,10 +870,17 @@ export async function streamChatModelToText(input: {
    * 十章验收实锤：拟章纲开思考陷进去 20 分钟（单回合思考 11 万字）——空闲超时管不住，因为思考 token 一直在续命。
    */
   readonly maxThinkingMs?: number;
+  /**
+   * 正文字数上限：超过就掐掉并抛错（只给输出本该很短的 JSON 调用用，如核账）。不是时长上限、也不是 max_tokens——
+   * 治的是模型原地打转一直吐：评测里偶发单次调用 14 分钟不收尾，空闲超时管不住（一直有字节在续命）。
+   */
+  readonly maxContentChars?: number;
 }): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
   const idleTimeoutMs = input.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   const idle = createIdleAbort(idleTimeoutMs);
   let thinkingTooLong = false;
+  let contentChars = 0;
+  let runaway = false;
   const thinkingTimer = input.maxThinkingMs
     ? setTimeout(() => { thinkingTooLong = true; idle.controller.abort(); }, input.maxThinkingMs)
     : undefined;
@@ -943,7 +950,15 @@ export async function streamChatModelToText(input: {
     const { content, thinking, finishReason, usage } = await streamOpenAICompatibleResponse(
       response,
       // 正文 delta：传了 onDelta 就逐字外发（出稿流式），否则只聚合；一出正文就停「光想不写」计时。
-      (delta) => { if (delta) stopThinkingTimer(); input.onDelta?.(delta); },
+      (delta) => {
+        if (delta) stopThinkingTimer();
+        contentChars += delta.length;
+        if (input.maxContentChars && contentChars > input.maxContentChars && !runaway) {
+          runaway = true;
+          idle.controller.abort();
+        }
+        input.onDelta?.(delta);
+      },
       () => undefined,
       () => { gotBytes = true; idle.kick(); }, // 收到任何字节就续命，并记下「收过字节」
     );
@@ -957,6 +972,9 @@ export async function streamChatModelToText(input: {
   } catch (error) {
     if (thinkingTooLong) {
       throw new ThinkingTooLongError(input.maxThinkingMs ?? 0);
+    }
+    if (runaway) {
+      throw new Error(`模型输出超过 ${input.maxContentChars} 字还没收尾（多半在原地打转），已停下，请重试。`);
     }
     if (idle.controller.signal.aborted) {
       const secs = Math.round(idleTimeoutMs / 1000);
