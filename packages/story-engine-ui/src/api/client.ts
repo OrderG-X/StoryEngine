@@ -649,9 +649,9 @@ export async function generateDraft(input: GenerateDraftRequest, signal?: AbortS
 export async function generateDraftCandidate(
   input: GenerateDraftRequest,
   signal?: AbortSignal,
-): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] } }> {
+): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }> {
   const payload = await fetchJson<
-    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] } }
+    | { readonly ok: true; readonly draftContent: string; readonly draftTitle?: string; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly planNote?: string }
     | { readonly ok: false; readonly error: string }
   >(
     "/api/draft/generate",
@@ -665,7 +665,7 @@ export async function generateDraftCandidate(
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, contextBudget: payload.contextBudget };
+  return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, contextBudget: payload.contextBudget, ...(payload.planNote ? { planNote: payload.planNote } : {}) };
 }
 
 /** 抽卡「挑中落盘」（块③）：把选中的候选正文写进工作稿，服务端写前留可撤销快照。 */

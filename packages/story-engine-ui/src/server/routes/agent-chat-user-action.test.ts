@@ -94,7 +94,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     const { handlerPromise, res } = callAgentChatRoute({
       projectPath: projectDir,
       messages: [{ role: "user", content: "写第 1 章" }],
-      action: { toolName: "generate_draft", chapter: 1 },
+      action: { toolName: "foundation_write", chapter: 1 },
     });
     await handlerPromise;
 

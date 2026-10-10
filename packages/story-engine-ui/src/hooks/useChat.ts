@@ -16,7 +16,7 @@ import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
 import { honestyRewritePatch } from "./detectUnbackedCompletion.js";
-import { DIRECT_WRITE_FALLBACK_GOAL, matchDeterministicChapterAction } from "../utils/chapterActionIntents.js";
+import { matchDeterministicChapterAction } from "../utils/chapterActionIntents.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
 import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
@@ -2065,11 +2065,28 @@ export function useChat(params: UseChatParams): UseChatResult {
         });
         return;
       }
+      if (deterministicAction === "generate_draft") {
+        // 写这一章（2026-10-10 引擎升级第 5 期「出稿一条路」）：结构化动作直达服务端执行 generate_draft——
+        // 先拿章纲、写、字数不够接着写、写完核账，和对话里让 AI 写同一套；正文照常流式进稿纸。
+        // 方向：作者在方向框里写了就带上；没写就不带（章纲按故事现状往下推，不再塞题材中立的空话目标）。
+        const ws = useWorkspaceStore.getState();
+        const chapterNumber = ws.workspace.currentChapter?.chapterNumber;
+        if (typeof chapterNumber !== "number") {
+          appendMessage({ id: `assistant-draft-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「写这一章」。" });
+          return;
+        }
+        const chapterGoal = `${ws.steeringDirection.trim()}`.trim();
+        useNavigationStore.getState().requestCenterView("desk");
+        await runAgentDispatch(text, conversation, {
+          toolName: "generate_draft",
+          chapter: chapterNumber,
+          ...(chapterGoal ? { chapterGoal } : {}),
+        });
+        return;
+      }
       if (deterministicAction) {
         if (deterministicAction === "ai_review") await handleDraftAIReview();
         else if (deterministicAction === "quality_check") await handleQualityCheck();
-        // 写这一章：没显式方向也用题材中立默认目标直接出稿；错误进聊天区（不落「方案整理失败」）。
-        else await handleGenerateDraft(undefined, { errorTarget: "chat", fallbackGoalWhenEmpty: DIRECT_WRITE_FALLBACK_GOAL });
         return;
       }
 

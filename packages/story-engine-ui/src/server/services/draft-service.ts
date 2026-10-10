@@ -1036,9 +1036,17 @@ export interface GenerateDraftCandidateInput {
   readonly contextTokenBudget?: number;
   readonly maxOutputTokens?: number;
   readonly writerClient: WriterClient;
+  /**
+   * 拟章纲（2026-10-10 引擎升级第 5 期「出稿一条路」）：写作台「写第一版 / 再来一版」也先拿章纲再写，
+   * 和对话里让 AI 写同一套（沿用已有章纲；没有就拟一份并审校）。缺省 = 不拟（旧行为，测试用）。
+   */
+  readonly planCallModel?: PlanCallModel;
+  readonly planCheckCallModel?: PlanCallModel;
 }
 
 export interface GenerateDraftCandidateOutcome {
+  /** 章纲一句话（或拟不成的原因），给作者看。 */
+  readonly planNote?: string;
   readonly candidate: FastDraftReport;
   readonly characterSelection: CharacterPresenceResult;
   readonly contextRanking: WriterRankContextPlan;
@@ -1145,7 +1153,17 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
  * 按钮路一致）。失败如实：candidate.passed=false + issues，路由投影 422。
  */
 export async function generateDraftCandidate(input: GenerateDraftCandidateInput): Promise<GenerateDraftCandidateOutcome> {
+  const planning = input.planCallModel
+    ? await resolveChapterPlanForDraft({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
+      callModel: input.planCallModel,
+      ...(input.planCheckCallModel ? { checkCallModel: input.planCheckCallModel } : {}),
+    })
+    : undefined;
   const run = await resolveDraftRunContext({
+    ...(planning?.plan ? { chapterPlan: planning.plan } : {}),
     projectDir: input.projectDir,
     chapter: input.chapter,
     ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
@@ -1161,7 +1179,7 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
     dryRun: false,
     persist: false,
   });
-  return { candidate, characterSelection: run.characterSelection, contextRanking: run.contextRanking };
+  return { candidate, characterSelection: run.characterSelection, contextRanking: run.contextRanking, ...(planning?.note ? { planNote: planning.note } : {}) };
 }
 
 /**

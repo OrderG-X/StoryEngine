@@ -10,7 +10,7 @@ import type { RequestContext } from "@mastra/core/di";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity", "commit_preview"] as const;
+export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity", "commit_preview", "generate_draft"] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
@@ -28,7 +28,12 @@ export type UserAction =
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。 */
-  | { readonly toolName: "commit_preview"; readonly chapter: number };
+  | { readonly toolName: "commit_preview"; readonly chapter: number }
+  /**
+   * 「写这一章」按钮（2026-10-10 引擎升级第 5 期「出稿一条路」）：直接执行 generate_draft——先拿章纲、写、
+   * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
+   */
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -60,6 +65,10 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
   if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter } };
+  if (toolName === "generate_draft") {
+    const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
+    return { kind: "action", action: { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) } };
+  }
   if (toolName === "check_continuity") {
     return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
   }
@@ -150,6 +159,10 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "commit_preview") {
     await runCommitPreviewAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "generate_draft") {
+    await runGenerateDraftAction({ ...args, action });
     return;
   }
   const stamp = Date.now();
@@ -349,4 +362,58 @@ async function runPruneAction(args: Omit<Parameters<typeof runUserAction>[0], "a
     : result?.ok === true ? "操作历史已裁剪。" : "操作历史没有裁剪。";
   emitText(summary);
   flush();
+}
+
+interface GenerateDraftLikeOutput {
+  readonly ok?: unknown;
+  readonly summary?: unknown;
+}
+
+/** 「写这一章」按钮：服务端直接出稿（正文照常经 draft-delta 流进稿纸），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
+async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "generate_draft" }>;
+}): Promise<void> {
+  const { action } = args;
+  const stamp = Date.now();
+  const toolCallId = `user-action-generate_draft-${stamp}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  };
+  const input = { chapter: action.chapter, ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}) };
+  args.sendEvent("tool-call", { toolCallId, toolName: "generate_draft", args: input });
+  let output: unknown;
+  try {
+    output = await args.executeTool("generate_draft", input, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "generate_draft", error: message, retryable: true });
+    emitText(`第 ${action.chapter} 章没写成：${message}。原来的稿子没动，可以再点一次「写这一章」。`);
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "generate_draft", output });
+  const result = output as GenerateDraftLikeOutput | undefined;
+  const written = result?.ok === true;
+  emitText(typeof result?.summary === "string" && result.summary.trim()
+    ? humanizeToolNames(result.summary.trim())
+    : written ? `第 ${action.chapter} 章写好了，在工作稿里。` : `第 ${action.chapter} 章没写成，原来的稿子没动。`);
+  const rest = args.scrubber.flush();
+  if (rest) args.sendEvent("text-delta", { text: rest });
+  const choices: NextStepChoice[] = written
+    ? [
+      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动`, recommended: true },
+      // 写完已经核过一遍账（结果记在核账记忆里），点这个直接出核账卡，不再调模型。
+      { label: "看核账结果", intent: "核账" },
+      { label: "我自己改", intent: "我自己改，先放着" },
+    ]
+    : [{ label: "再写一次", intent: "写这一章的正文", recommended: true }];
+  const nextCallId = `user-action-next-${stamp}`;
+  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
+  args.sendEvent("tool-result", {
+    toolCallId: nextCallId,
+    toolName: "suggest_next_steps",
+    output: { ok: true, question: written ? `第 ${action.chapter} 章写好了，接下来？` : `第 ${action.chapter} 章没写成，接下来？`, choices },
+  });
 }

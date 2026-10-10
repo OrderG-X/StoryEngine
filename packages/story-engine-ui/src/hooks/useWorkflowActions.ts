@@ -1921,9 +1921,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       // 每版各自 try：某版失败不丢掉已成功的版（部分成功也展示，别白烧 token）。
       const candidates: { readonly content: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
       let lastError: unknown;
+      // 章纲一句话（先拟章纲再写，和对话里让 AI 写同一套；第二版沿用第一版拟的章纲）
+      let planNote: string | undefined;
       for (let index = 0; index < 2; index += 1) {
         try {
           const result = await generateDraftCandidate({ projectPath, chapter, chapterGoal: direction });
+          planNote ??= result.planNote;
           if (!ownsCurrentWorkspace(operation)) {
             notifyStaleOperation();
             return;
@@ -1940,6 +1943,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       useWorkspaceStore.getState().setDraftCandidates(candidates);
       if (candidates.length < 2) {
         nav.showToast(`只生成出 ${candidates.length} 版候选（另一版生成失败），可先看这版或再试一次。`);
+      } else if (planNote) {
+        nav.showToast(planNote, 6000);
       }
     } finally {
       finishOwnedOperation(operation);

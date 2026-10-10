@@ -46,6 +46,7 @@ import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
+import { callConfiguredPlanCheckModel, callConfiguredPlanModel } from "../agent/chapter-plan/plan-chapter.js";
 import { runDraftQualityCheck } from "../services/quality-service.js";
 import { runDraftAIReview } from "../services/review-service.js";
 import {
@@ -127,7 +128,11 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     };
     // 抽卡候选（persist:false，D5 的 HTTP 侧）：生成一版正文【不写盘、不快照】，临时返回给前端并排展示，挑中才落盘。
     if (body.persist === false) {
-      const { candidate, characterSelection, contextRanking } = await generateDraftCandidate(baseInput);
+      const { candidate, characterSelection, contextRanking, planNote } = await generateDraftCandidate({
+        ...baseInput,
+        planCallModel: callConfiguredPlanModel,
+        planCheckCallModel: callConfiguredPlanCheckModel,
+      });
       if (!candidate.passed || !candidate.draftBody) {
         writeJson(res, 422, { ok: false, error: candidate.issues?.[0] ?? "候选生成失败，请重试。" });
         return;
@@ -140,6 +145,7 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
         draftTitle: candidateTitle,
         contextBudget: contextBudgetPayload(contextRanking),
         characterSelection,
+        ...(planNote ? { planNote } : {}),
       });
       return;
     }

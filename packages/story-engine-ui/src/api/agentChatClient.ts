@@ -30,7 +30,8 @@ export type AgentUserAction =
   | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
-  | { readonly toolName: "commit_preview"; readonly chapter: number };
+  | { readonly toolName: "commit_preview"; readonly chapter: number }
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string };
 
 /** 定稿预览账本清单里的一条（与服务端 commit-ledger/ledger-checklist.ts 同形）。 */
 export interface LedgerChecklistItemView {

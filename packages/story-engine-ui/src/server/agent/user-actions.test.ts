@@ -59,7 +59,7 @@ describe("parseUserAction 结构化动作解析", () => {
   it.each([
     ["非对象", "commit_apply"],
     ["数组", []],
-    ["白名单外工具", { toolName: "generate_draft", chapter: 1 }],
+    ["白名单外工具", { toolName: "foundation_write", chapter: 1 }],
     ["缺章号", { toolName: "commit_apply" }],
     ["章号 0", { toolName: "commit_apply", chapter: 0 }],
     ["章号小数", { toolName: "commit_apply", chapter: 1.5 }],
@@ -252,5 +252,44 @@ describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
     expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
     expect(String(events[2]!.data.text)).toContain("没有完成");
     expect(String(events[2]!.data.text)).toContain("确认裁剪");
+  });
+});
+
+describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", () => {
+  it("解析章号和可选方向；方向去空白、过长截断", async () => {
+    const { parseUserAction } = await import("./user-actions.js");
+    expect(parseUserAction({ toolName: "generate_draft", chapter: 3 })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3 } });
+    expect(parseUserAction({ toolName: "generate_draft", chapter: "3", chapterGoal: "  苏晚去槐树巷  " })).toEqual({
+      kind: "action",
+      action: { toolName: "generate_draft", chapter: 3, chapterGoal: "苏晚去槐树巷" },
+    });
+    expect(parseUserAction({ toolName: "generate_draft" })).toMatchObject({ kind: "invalid" });
+  });
+
+  it("执行 generate_draft、推结果和下一步选项；工具抛错如实说没写成", async () => {
+    const { runUserAction } = await import("./user-actions.js");
+    const events: { event: string; data: unknown }[] = [];
+    const scrubber = { push: (text: string) => text, flush: () => "" };
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext: {} as never,
+      executeTool: async () => ({ ok: true, summary: "本章章纲：苏晚找书。写好了。" }),
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber,
+      scrubError: (error) => String(error),
+    });
+    expect(events.map((item) => item.event)).toEqual(["tool-call", "tool-result", "text-delta", "tool-call", "tool-result"]);
+    expect(JSON.stringify(events.at(-1)!.data)).toContain("预览定稿");
+    const failed: { event: string; data: unknown }[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext: {} as never,
+      executeTool: async () => { throw new Error("服务商超时"); },
+      sendEvent: (event, data) => failed.push({ event, data }),
+      scrubber,
+      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+    expect(failed.map((item) => item.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
+    expect(JSON.stringify(failed.at(-1)!.data)).toContain("原来的稿子没动");
   });
 });
