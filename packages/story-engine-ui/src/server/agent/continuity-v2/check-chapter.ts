@@ -380,7 +380,7 @@ export async function checkChapterAgainstEarlierText(input: {
 
 /**
  * 核对用的模型调用（qualityCheck 槽）：关思考、要 JSON、低随机性——同一章每次核出来应当一样
- * （评测：沿用 0.7 时同一本书两次跑命中数差一倍）。失败自动重试一次。
+ * （评测：沿用 0.7 时同一本书两次跑命中数差一倍）。失败或太慢自动再发一份（见 hedged）。
  */
 export const callConfiguredCheckerModel: CheckCallModel = (messages) => callChecker(messages, false);
 
@@ -394,6 +394,52 @@ export const callConfiguredVerifierModel: CheckCallModel = (messages) => callChe
  */
 const CHECKER_FIRST_TOKEN_MS = 120_000;
 const CHECKER_MAX_OUTPUT_CHARS = 40_000;
+/**
+ * 对冲：一次核对调用这么久还没回来，就并行再发一份，谁先回来用谁（不掐原请求、不是总时长上限）。
+ * 服务商偶尔吐字极慢：评测里同一章单跑 42 秒、并发时一次调用拖到 6 分钟，整章核账跟着等。
+ */
+const CHECKER_HEDGE_AFTER_MS = 45_000;
+
+/** 先发一份；afterMs 后还没结果就再发一份；先成功的为准，两份都失败才算失败。 */
+export function hedged<T>(run: () => Promise<T>, afterMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let started = 0;
+    let failed = 0;
+    let lastError: unknown;
+    const attempt = () => {
+      started += 1;
+      run().then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          failed += 1;
+          lastError = error;
+          if (!settled && failed >= started && (started >= 2 || timerFired)) {
+            settled = true;
+            reject(lastError);
+          } else if (!settled && started < 2) {
+            // 第一份先失败了：不用等对冲时间，马上补发一份（就是原先的「失败重试一次」）。
+            clearTimeout(timer);
+            timerFired = true;
+            attempt();
+          }
+        },
+      );
+    };
+    let timerFired = false;
+    const timer = setTimeout(() => {
+      timerFired = true;
+      if (!settled && started < 2) attempt();
+    }, afterMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    attempt();
+  });
+}
 
 async function callChecker(messages: Parameters<CheckCallModel>[0], thinking: boolean): Promise<string> {
   const once = async () => {
@@ -409,11 +455,7 @@ async function callChecker(messages: Parameters<CheckCallModel>[0], thinking: bo
     if (!content.trim()) throw new Error("模型返回了空内容");
     return content;
   };
-  try {
-    return await once();
-  } catch {
-    return once();
-  }
+  return hedged(once, CHECKER_HEDGE_AFTER_MS);
 }
 
 // ---------- 整章通读版：前文全文 + 本章，一次找矛盾 ----------
@@ -496,8 +538,11 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
     const claimedChapter = Number(record.earlierChapter);
     let earlierChapter: number | undefined;
     // 本章自己和自己比：两句互相包含就是同一处（浏览器实测：「兜里只剩这一张纸了」对上含它的那一整句，报成「重复」）。
+    // 真重复（同一句在本章出现两次）照报——分两半写偶尔会把段落写两遍。
     const sameSpot = normalize(earlierQuote).includes(normalize(quote)) || normalize(quote).includes(normalize(earlierQuote));
-    if (containsQuote(body, earlierQuote) && sameSpot) continue;
+    const shorter = normalize(quote).length <= normalize(earlierQuote).length ? normalize(quote) : normalize(earlierQuote);
+    const appearsTwice = shorter.length >= 4 && body.indexOf(shorter) !== body.lastIndexOf(shorter);
+    if (containsQuote(body, earlierQuote) && sameSpot && !appearsTwice) continue;
     if (containsQuote(body, earlierQuote)) earlierChapter = chapter;
     else if (Number.isInteger(claimedChapter) && earlierByChapter.has(claimedChapter) && containsQuote(earlierByChapter.get(claimedChapter)!, earlierQuote)) earlierChapter = claimedChapter;
     else earlierChapter = [...earlierByChapter.entries()].find(([, text]) => containsQuote(text, earlierQuote))?.[0];

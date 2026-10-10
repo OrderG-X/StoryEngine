@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   checkChapterContinuity,
   findEvidence,
+  hedged,
   parseClaims,
   parseFullReadIssues,
   parseVerdicts,
@@ -96,6 +97,11 @@ describe("查错 v2：整章通读", () => {
       contradictions: [{ quote: "表盖还开着", earlierQuote: "他从工作台上拿起那块怀表，表盖还开着。", earlierChapter: 3, reason: "重复" }],
     }), 3, BODY, EARLIER);
     expect(issues).toEqual([]);
+    const doubled = `${BODY}他从工作台上拿起那块怀表，表盖还开着。`;
+    const repeated = parseFullReadIssues(JSON.stringify({
+      contradictions: [{ quote: "表盖还开着", earlierQuote: "他从工作台上拿起那块怀表，表盖还开着。", earlierChapter: 3, reason: "同一句写了两遍" }],
+    }), 3, doubled, EARLIER);
+    expect(repeated).toHaveLength(1);
   });
 });
 
@@ -134,5 +140,41 @@ describe("组合查错：通读 + 逐条判，合并去重后分三档复核", (
     const result = await checkChapterContinuity({ projectDir: "/nonexistent", chapter: 3, draftBody: BODY, callModel, earlier: EARLIER });
     expect(result.issues).toHaveLength(1);
     expect(result.failures.join("")).toContain("复核没跑成");
+  });
+});
+
+describe("核对调用的对冲", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("第一份很慢 → 过了对冲时间再发一份，先回来的为准", async () => {
+    let calls = 0;
+    const run = vi.fn(async () => {
+      calls += 1;
+      const mine = calls;
+      await sleep(mine === 1 ? 200 : 10);
+      return `第${mine}份`;
+    });
+    await expect(hedged(run, 30)).resolves.toBe("第2份");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("第一份很快 → 不再发第二份", async () => {
+    const run = vi.fn(async () => "快");
+    await expect(hedged(run, 50)).resolves.toBe("快");
+    await sleep(80);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("第一份失败 → 马上补发一份（不等对冲时间）；两份都失败才算失败", async () => {
+    let calls = 0;
+    const flaky = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("断了");
+      return "好了";
+    });
+    await expect(hedged(flaky, 10_000)).resolves.toBe("好了");
+    const broken = vi.fn(async () => { throw new Error("一直断"); });
+    await expect(hedged(broken, 10_000)).rejects.toThrow("一直断");
+    expect(broken).toHaveBeenCalledTimes(2);
   });
 });
