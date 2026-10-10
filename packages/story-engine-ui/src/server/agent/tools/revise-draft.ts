@@ -46,13 +46,11 @@ const inputSchema = z.object({
   // afterfix·精确替换：用户给了「替换成的确切文本」时带上它——工具会**原样落地、不再让模型改写**（治真机：
   // 模型拿到精确文本却自行改写成别的）。仅做精确 find-replace 时用；要 AI 改写/润色时省略，走模型路。
   replacementText: z.string().optional().describe(
-    "可选：用户指定的【精确替换文本】。给了就把 targetText 原样替换成它（确定性、不调模型改写）；"
-    + "用户说『把这句换成「……」』这种点名了确切新文本时填它。要 AI 自行改写/润色则不要填。",
+    "用户点名了确切新文本（『把这句换成「……」』）就填，原样替换、不调模型；要 AI 改写就别填。",
   ),
   // 模型无关：枚举大小写宽容（模型传 "DeAI"/"DEAI" 不再硬失败）。
   style: coerceEnum(z.enum(["deai"]).optional().describe(
-    "可选风格模板。deai=去 AI 味改写：自动注入去 AI 腔的写作手法（删空泛形容词/套路排比升华/被滥用的过渡抒情，改用具体动作与可感细节）。"
-    + "用户看完 check_ai_flavor 体检后要求『改掉 AI 味/去 AI 腔』时，对命中句逐句调本工具并设 style:deai（仍一次一句、targetText 逐字取自工作稿）。",
+    "deai=去机器腔改写（用户要求改掉 AI 味时，按检查结果一次改一句）。",
   )),
   problemSummary: z.string().optional().describe("可选：这段当前的问题一句话概括。"),
   constraints: coerceStringArray(z.array(z.string()).optional().describe("可选：修订约束（如『保留人物关系』『不新增剧情』）。")),

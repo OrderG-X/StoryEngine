@@ -144,6 +144,9 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   generate_character_relationships: { stepLabel: "整理角色关系", card: null },
   generate_writing_rules_enrichment: { stepLabel: "重新整理写作规则", card: null },
   generate_alias_table: { stepLabel: "补全别名表", card: null },
+  // 2026-10-10 对话 AI 瘦身：上面 8 个合成 enrich_foundation、下面 4 个线索工具合成 manage_threads（原名保留给老会话回放）
+  enrich_foundation: { stepLabel: "补全资料", card: null },
+  manage_threads: { stepLabel: "管理线索", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },

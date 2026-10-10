@@ -349,8 +349,9 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
     expect(text.match(new RegExp(OBEDIENCE_RETRY_TRANSITION_TEXT.trim().replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "gu"))?.length).toBe(1);
     expect(text).toContain("定稿未完成");
     expect(text).not.toContain("commit_apply");
-    // 入库意图 → 重做轮点名强制 commit_apply
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    // 入库意图 → 重做轮点名强制定稿预览（对话 AI 没有定稿工具）
+    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
   });
 
   it("只有声称、意图定位不到期望工具 → 重做轮至少强制调一个工具（required）", async () => {
@@ -406,7 +407,8 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
     });
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
     expect(collectText(events)).not.toContain("⚠️ 系统更正");
   });
 
@@ -588,7 +590,8 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       scrubber: passthroughScrubber(),
     });
     expect(attempts).toBe(2);
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
     expect(collectText(events)).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
   });
 
@@ -682,7 +685,8 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       scrubber: passthroughScrubber(),
     });
     expect(attempts).toBe(2);
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_apply" }, maxSteps: 1 });
+    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
+    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
     expect(collectText(events).match(/⚠️ 系统更正/gu)?.length).toBe(1);
   });
 

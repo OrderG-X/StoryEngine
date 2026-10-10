@@ -38,11 +38,7 @@ export type ReadFoundationKind = (typeof READ_FOUNDATION_KINDS)[number];
 const inputSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Character"）。
   kind: coerceEnum(z.enum(READ_FOUNDATION_KINDS).describe(
-    "想读哪一类资料：\n" +
-      "- character：角色资料（角色册条目；给了 id 还会附该角色的运行时 state）。\n" +
-      "- asset：资产清单。\n" +
-      "- location：地点资料。\n" +
-      "- gap_report：资料完整度报告（缺哪些、有哪些风险/冲突，供判断还要补什么）。",
+    "character=角色（给 id 还附运行时状态）；asset=资产；location=地点；gap_report=资料缺口与风险。",
   )),
   id: z.string().optional().describe(
     "可选：当 kind=character 时填角色 id，可额外读出该角色的运行时 state（情绪/目标/认知边界等）。其它 kind 忽略。",

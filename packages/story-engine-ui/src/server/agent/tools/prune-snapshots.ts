@@ -117,11 +117,7 @@ const outputSchema = z.object({
 export const pruneSnapshotsTool = createTool({
   id: "prune_snapshots",
   description:
-    "管理快照操作历史的磁盘占用：把太长的历史裁到最近 keep 条（默认 200、下限 20），更早的折成一条 base 存档点（仍可整体恢复），真裁前自动把裁前完整历史备份到项目目录外。" +
-    "【两步】你调用它永远只预览（dry-run）、如实回报将裁多少条；有可裁内容时界面会给用户出「确认裁剪」按钮，用户点了按钮系统才真裁——你没有真裁的能力，别说成「已裁剪」，告诉用户点按钮即可。" +
-    "全程只动快照仓库的 git 引用，工作树/正文分毫不动；不足 keep 条时如实回报无需裁剪。" +
-    "confirm 参数对你无效（传了也只预览）。" +
-    "【不在撤销链】undo_last_change 撤不到裁剪（它撤的是内容写操作，裁剪没动工作树）；要回退只能用裁前 bundle 备份 / base 存档点整体恢复——用户说『撤销刚才的裁剪』时如实说明这一点，别拿 undo 顶替。",
+    "把太长的操作历史裁到最近 keep 条（默认 200），正文和资料不动，裁前完整历史自动备份。你调用永远只预览；有可裁的界面会出「确认裁剪」按钮，用户点了才真裁，别说成已裁剪。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

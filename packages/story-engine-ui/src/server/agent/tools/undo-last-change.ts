@@ -30,10 +30,7 @@ const outputSchema = z.object({
 export const undoLastChangeTool = createTool({
   id: "undo_last_change",
   description:
-    "撤销上一步写操作（恢复到该操作前的自动快照）。当用户说「撤销 / 撤回 / 反悔 / 回退上一步 / 刚才那步不要了 / 取消刚才的入库/改动」时调用。" +
-    "用户说一次「撤销上一步」就只调一次——撤一步就停下回报；用户明确要退几步（如「撤销最近三步」）才调几次。" +
-    "连续调用会逐步往回退。撤销本身也会建快照、可再被撤销，历史不丢。" +
-    "没有可撤销的改动时如实回报（undone:false）、绝不谎称已撤销；想回到更早的某个时间点可让用户用界面的快照列表挑。",
+    "撤销上一步写操作。用户说一次撤销就只调一次，明确要退几步才调几次。没有可撤销的就如实说（undone:false）。",
   inputSchema,
   outputSchema,
   execute: async (_input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

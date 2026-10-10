@@ -25,11 +25,12 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).not.toContain("确认策略：");
   });
 
-  it("仍保留底层能力的读写/触发线索（只去掉确认策略行，不丢能力信息）", () => {
-    expect(instructions).toContain("foundationAgent");
-    expect(instructions).toContain("satelliteUpdateAgent");
+  // 2026-10-10 瘦身：底层能力清单（foundationAgent 之类的内部分工，约 2 千字）不再注入，工具自己的说明管用途。
+  it("不再注入底层能力清单；工具怎么选写在对照里", () => {
+    expect(instructions).not.toContain("foundationAgent");
     expect(instructions).toContain("read_state_overview");
     expect(instructions).toContain("foundation_write");
+    expect(instructions.length).toBeLessThan(10_000);
   });
 
   it("快照裁剪两步哲学：prune_snapshots 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
@@ -41,7 +42,8 @@ describe("story agent instructions（确认口径唯一）", () => {
   });
 
   it("公开 generate_alias_table 工具作为后续在场检测的别名表入口", () => {
-    expect(instructions).toContain("generate_alias_table");
+    // 2026-10-10 瘦身：8 个补全工具合成 enrich_foundation，别名表是 kind=aliases
+    expect(instructions).toContain("kind=aliases");
     expect(instructions).toContain("别名");
   });
 
@@ -93,7 +95,7 @@ describe("story agent instructions（确认口径唯一）", () => {
   // R2#2：开书给具名角色登记关系应走 update_character_detail 的 relationshipToProtagonist，
   // 别去调 generate_character_relationships（它只整理已入库章节、开书撞空且失败提示误导）。
   it("关系登记纪律：开书登记关系走 update_character_detail，generate_character_relationships 仅整理已定稿章节", () => {
-    expect(instructions).toContain("generate_character_relationships 只");
+    expect(instructions).toContain("enrich_foundation 的 relationships 只");
     expect(instructions).toContain("已定稿章节");
   });
 
@@ -231,12 +233,12 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
 
   it("入库后遇到待收口/陈旧线索提醒只能转告并给选项，不能自动清理归并", () => {
     expect(instructions).toContain("待收口提醒只转告");
-    expect(instructions).toContain("绝不自动调用 clean_legacy_threads / group_related_leads");
+    expect(instructions).toContain("绝不自动调用 manage_threads 的 clean / group");
     expect(instructions).toContain("用户点了再做");
   });
 
   it("单条线索明确已完结时用 resolve_thread，不用全局清理工具凑", () => {
-    expect(instructions).toContain("resolve_thread");
+    expect(instructions).toContain("manage_threads op=resolve");
     expect(instructions).toContain("用户明确说某一条提醒其实已经完了");
     expect(instructions).toContain("不要用全局清理工具替代");
   });
@@ -256,9 +258,10 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).toContain("请用户点预览卡上的「确认定稿」按钮");
   });
 
-  it("commit_apply 由模型调用时不写入，只给用户出确认按钮", () => {
-    expect(instructions).toContain("你调用它不会直接写入");
-    expect(instructions).toContain("needsConfirmation=true");
+  // 2026-10-10 瘦身：commit_apply 不再给对话 AI（它调了也只是再出一个按钮），定稿只能点按钮。
+  it("对话 AI 没有定稿工具，定稿只能由用户点按钮", () => {
+    expect(instructions).toContain("你没有定稿工具");
+    expect(instructions).not.toContain("commit_apply");
   });
 
   it("绝不说已定稿；不可定稿时如实说明、不让用户去点按钮", () => {
@@ -276,7 +279,7 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).toContain("出稿不越权");
     expect(instructions).toContain("用户只说『写第 N 章正文/继续写』");
     expect(instructions).toContain("出稿落工作稿后必须停");
-    expect(instructions).toContain("commit_preview / commit_apply 都等用户明确点了或说了再动");
+    expect(instructions).toContain("commit_preview 都等用户明确点了或说了再动");
   });
 
   it("纯出稿不越权覆盖审稿/质检/AI味：generate_draft 后除 suggest_next_steps 外不追加未请求工具", () => {

@@ -68,9 +68,7 @@ const inputSchema = z.object({
 export const checkContinuityTool = createTool({
   id: "check_continuity",
   description:
-    "核账：拿这一章（工作稿优先，没有就读已定稿）去对前文原文，找前后对不上的地方（东西在哪、在谁手里、人物行踪身份、时间天数、谁该知道什么）。" +
-    "只读，不改正文、不写账本。结果分「确定」「可能」两档，每条带本章原句和前文原句。" +
-    "作者说「核账 / 查一下前后对不对 / 有没有吃书 / 有没有穿帮」时用。转述时先说确定的几处，可能的让作者自己看卡片。",
+    "核账：拿这一章对账本和全书前文，找前后对不上的地方，分「确定」「可能」两档、两边附原句。只读。转述先说确定的几处，可能的让作者看卡片。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

@@ -496,7 +496,9 @@ export async function runObedientAgentTurn(args: {
       // 的动作（ch96 实锤：真跑了 commit_preview、编造了 commit_apply——组合意图里 apply 让位、missing 为空，
       // 但「已正式入库」的声称本身指认了该强制哪个工具）。都定位不到才 required 兜底。
       const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
-      const forcedTool = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
+      // 对话 AI 没有定稿工具（2026-10-10：定稿只能点按钮）——它谎称已定稿时强制它去做定稿预览，预览卡上有按钮。
+      const expected = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
+      const forcedTool = expected === "commit_apply" ? "commit_preview" : expected;
       // required 也必须限步（真机实锤）：forced choice 每一步都强制调工具、永远到不了纯文本收尾，
       // 不限步会一直跑到框架步数上限（弱模型开思考时一步一分钟，整轮挂十来分钟）。
       attemptOptions = forcedTool

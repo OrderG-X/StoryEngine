@@ -346,11 +346,8 @@ export const manageStyleExemplarsTool = writeTool({
     return title ? `${verb} ${title}` : verb;
   },
   description:
-    "管理本书的「作者文风样本」（add 存 / list 看 / update 改 / remove 删）：" +
-    "用户给出自己写过的满意段落、说『以后照这个感觉写 / 学我的文风 / 把这段当范文』时用 add 存进；" +
-    `最多 ${STYLE_EXEMPLAR_MAX_COUNT} 条、单条正文 ≤${STYLE_EXEMPLAR_MAX_TEXT_CHARS} 字，超限会如实拒绝、不截断硬塞。` +
-    "存进后每章写正文都会作为风格锚喂给模型——模仿句法节奏、用词偏好与叙事温度，但不得照抄样本内容、情节或具体名物。" +
-    "写前自动快照、可一键撤销；update/remove 前最好先 action=list 看现有样本。",
+    "作者文风样本（用户给出满意段落、说『照这个感觉写 / 学我的文风』时 add 存进；" +
+    `最多 ${STYLE_EXEMPLAR_MAX_COUNT} 条、每条 ≤${STYLE_EXEMPLAR_MAX_TEXT_CHARS} 字）。写正文时会模仿它的节奏和用词，不照抄内容。改/删前先 list。`,
   inputSchema,
   outputSchema,
   // list 只读：走 preflight 直接返回，不建 no-op 快照污染操作历史。

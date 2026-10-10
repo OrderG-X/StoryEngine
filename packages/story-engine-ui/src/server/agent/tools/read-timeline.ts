@@ -17,13 +17,13 @@ import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe(
-    "查某一章的事件（章号）。与 fromChapter/toChapter 互斥，优先使用 chapter。",
+    "查某一章。",
   )),
   fromChapter: coerceNumber(z.number().int().positive().optional().describe(
-    "查某区间起始章号（含）。与 chapter 互斥，配合 toChapter 使用。",
+    "区间起始章（含）。",
   )),
   toChapter: coerceNumber(z.number().int().positive().optional().describe(
-    "查某区间结束章号（含）。与 chapter 互斥，配合 fromChapter 使用。",
+    "区间结束章（含）。",
   )),
 });
 

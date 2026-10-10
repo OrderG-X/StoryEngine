@@ -68,17 +68,15 @@ const inputSchema = z.object({
   // （characterRelationships/writingRules）→ coerceEnumValues 大小写不敏感映射回 canonical。这是唯一写资料工具，
   // 模型一旦传错大小写就 InputValidationError 写不进，宽容很值。
   actionType: coerceEnum(z.enum(FOUNDATION_WRITE_ACTION_TYPES).describe(
-    "写入动作：记进已有角色卡=update_character_detail；新建角色=create_character；给角色改名=rename_character；" +
-      "地点/资产/世界规则/写作规则各有建/改动作；删除任意资料条目=delete_foundation_entry（配 category 指明删哪类）。",
+    "记进已有角色卡=update_character_detail；新建=create_*；改名=rename_character；删除=delete_foundation_entry（配 category）。",
   )),
   category: coerceEnumValues(FOUNDATION_WRITE_CATEGORIES, z.enum(FOUNDATION_WRITE_CATEGORIES).describe(
-    "资料类别（所有写入动作都需指明）：characters / characterRelationships（角色关系条目）/ locations / assets / world / writingRules。" +
-      "删除时据此定位删哪一类；建/改时指明写哪类资料。",
+    "写或删哪一类资料（characterRelationships=角色关系条目）。",
   )),
   targetId: z.string().optional().describe(
     "目标实体 id（更新/改名/删除已有角色·地点·资产时必填，先用 read_foundation/read_state_overview 取得）。新建留空。",
   ),
-  targetName: z.string().optional().describe("目标实体名字，作为按名定位的兜底——仅对 update_character_detail / update_location_detail / update_asset_status 生效（书里只一个该类实体时也兜底）。rename_character、delete_foundation_entry 不走按名兜底，必须给准确 targetId（先 read_foundation/read_state_overview 取）。"),
+  targetName: z.string().optional().describe("按名字定位（只对 update_* 生效）；改名和删除必须给 targetId。"),
   before: z.unknown().optional().describe(
     "删除关系条目 / 世界规则 / 写作规则这类「按内容删」时，填要删除的原文字符串（引擎据此精确定位）。",
   ),
@@ -91,40 +89,22 @@ const inputSchema = z.object({
   // 长跑 #3：after 允许整体省略（默认 {}）——省略时引擎按缺字段诚实 skip 回报，
   // 不再让整次调用死在 zod 硬校验 InputValidationError 上（边界宽容，见 CLAUDE.md 模型无关原则）。
   after: coerceJsonObject(z.record(z.string(), z.unknown()).default({}).describe(
-    "写入后的结构化内容，键名必须用引擎认得的字段，否则不会落盘（删除动作可填空对象 {}）。常用字段：\n" +
-      "- 给角色改名（rename_character）：新名字写进 {\"name\":\"新名\"}（或 newName 键；也可用顶层 newName 参数）。\n" +
+    // 2026-10-10 对话 AI 瘦身：键名对照保留（写错键就不落盘），去掉重复的说明文字。
+    "要写入的内容，键名必须用下面的引擎字段，否则不落盘（删除可填 {}）。\n" +
       `${FOUNDATION_WRITE_ASSETIZATION_GUIDANCE}\n` +
-      "- 外貌/疤痕/体貌特征 → appearanceAnchors（字符串数组），如『左手有疤』写成 " +
-      '{"appearanceAnchors":["左手有一道明显的疤痕"]}。\n' +
-      "- 角色其它属性：age/gender/identity/desire/fear/weakness/contradiction/moralBoundary/" +
-      "privateMotive/relationshipToProtagonist/trustLevel/speechStyle（字符串）、" +
-      "relationshipDynamics/speechSamples/personalityBaseline/behaviorBoundaries/knowledgeKnown/" +
-      "knowledgeUnknown/cannotReveal/cannotDo（字符串数组）。\n" +
-      "- 新建角色（create_character）需含 name。\n" +
-      "- 地点（create_location/update_location_detail）：name/type/floors/rooms/narrativeFunction/risks 等。\n" +
-      "- 资产（create_asset/update_asset_status）：name/status 等。\n" +
-      "- 世界规则（update_world_rule）：rules/socialOrder/historyFacts/powerOrSurvivalSystems（字符串数组）。\n" +
-      "- 写作规则（update_writing_rule）：proseStyle/forbiddenContent/doNotDo 等（字符串数组）；customNotes=用户自定义的整段自由 Markdown 全局规矩（传一段字符串，原样保存、每章必喂模型；空字符串=清空）。\n" +
-      "- 章节字数：目标字数=targetChapterWords（数字，如 3000）。用户说『每章至少 N 字 / 不少于 N 字』是硬下限语义——必须同时传 minChapterChineseCharacters=N（出稿与定稿都会按它执法；传 0=清除下限），别只写 targetChapterWords 把『至少 N』稀释成 N×0.85。\n" +
-      "- 没有专用字段的杂项事实，放进 {\"extraFields\":{\"自定义键\":\"值\"}}。\n" +
-      "【纠错·删/改/整列重写写错的资料（角色 update_character_detail 与 update_writing_rule 都支持）】：\n" +
-      "- 删数组里某几条（精确匹配原文）：{\"removeFromArrays\":{\"字段名\":[\"要删的原文\"]}}，如把外貌某条删掉 " +
-      '{"removeFromArrays":{"appearanceAnchors":["右手有一道疤"]}}。\n' +
-      "- 改某一条 = 同一次调用里删旧 + 加新：{\"removeFromArrays\":{\"appearanceAnchors\":[\"右手有一道疤\"]},\"appearanceAnchors\":[\"左手有一道疤\"]}。\n" +
-      "- 整列重写/清空：{\"replaceArrays\":{\"字段名\":[\"新的完整列表\"]}}（给 [] = 清空该字段）。\n" +
-      "- 删自定义字段键：{\"removeExtraFieldKeys\":[\"要删的键名\"]}。\n" +
-      "删/改前最好先 read_foundation 看现有原文，removeFromArrays 的字符串要与现有条目逐字一致；没匹配上工具会 ok:false 如实回报『没找到』，绝不静默。\n" +
-      "⚠️ read_foundation 现在按中文标签展示资料，但这里的「字段名」仍必须用引擎英文键，对照：" +
-      "外貌特征=appearanceAnchors、性格基线=personalityBaseline、行为边界=behaviorBoundaries、说话示例=speechSamples、" +
-      "关系动态=relationshipDynamics、已知信息=knowledgeKnown、未知信息=knowledgeUnknown、不可透露=cannotReveal、不会做的事=cannotDo。" +
-      "（要删/改的「值」照抄中文原文逐字一致即可，变的只是用英文键来指明字段。）",
+      "- 改名：{\"name\":\"新名\"}（或顶层 newName）。新建角色要有 name。\n" +
+      "- 角色字符串字段：age/gender/identity/desire/fear/weakness/contradiction/moralBoundary/privateMotive/relationshipToProtagonist/trustLevel/speechStyle；" +
+      "字符串数组：appearanceAnchors（外貌特征）/relationshipDynamics（关系动态）/speechSamples（说话示例）/personalityBaseline（性格基线）/behaviorBoundaries（行为边界）/" +
+      "knowledgeKnown（已知）/knowledgeUnknown（未知）/cannotReveal（不可透露）/cannotDo（不会做的事）。\n" +
+      "- 地点：name/type/floors/rooms/narrativeFunction/risks；资产：name/status；世界规则：rules/socialOrder/historyFacts/powerOrSurvivalSystems（数组）。\n" +
+      "- 写作规则：proseStyle/forbiddenContent/doNotDo（数组）；customNotes=整段自由 Markdown（空串=清空）；targetChapterWords=每章目标字数；" +
+      "用户说『每章至少 N 字』要同时传 minChapterChineseCharacters=N（0=清除下限）。\n" +
+      "- 没有专用字段的杂项：{\"extraFields\":{\"键\":\"值\"}}。\n" +
+      "- 纠错（角色和写作规则）：删某几条 {\"removeFromArrays\":{\"字段\":[\"原文\"]}}（原文逐字照抄 read_foundation）；改一条=同一次删旧+加新；" +
+      "整列重写 {\"replaceArrays\":{\"字段\":[...]}}（[]=清空）；删自定义键 {\"removeExtraFieldKeys\":[\"键\"]}。没匹配上会 ok:false。",
   )),
   confirmed: coerceBoolean(z.boolean().optional().describe(
-    "用户已明确确认后设 true 重试：" +
-      "①删除角色；②覆盖已确立长期设定（如改年龄/性别）。" +
-      "默认 false。首次会回报『需用户确认』、不写入；" +
-      "注意：覆盖已确立设定时，工具还会核对【本轮用户原话】是否含同意语（允许覆盖/确定/同意…），" +
-      "仅模型自填 confirmed=true 不够——用户没明确同意仍会拦。",
+    "删除角色、覆盖已确立设定：工具先回『需用户确认』，用户明确同意后带 true 重试（工具还会核对用户原话）。",
   )),
   rationale: z.string().optional().describe("为什么写这条（一句话，便于结果卡说明）。"),
 });

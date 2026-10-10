@@ -144,30 +144,20 @@ export function authorGaveNoDirection(userText: string | undefined): boolean {
 }
 
 const inputSchema = z.object({
-  chapter: coerceNumber(z.number().int().positive().optional().describe("要出稿的章号。")),
-  chapterGoal: z.string().optional().describe(
-    "本章方向/目标（一句话即可，如『主角与对手第一次正面交锋』）。省略时默认『继续第 N 章』。",
-  ),
-  requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("可选：本章期望字数（中文字符数）；省略或填 0=由写作规则/方向推断。")),
-  selectedCharacterIds: coerceStringArray(z.array(z.string()).optional().describe("可选：本章明确在场/相关角色 id 列表，用于收窄写作上下文。")),
-  selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("可选：本章明确相关伏笔 id 列表，用于收窄写作上下文。")),
+  // 2026-10-10 对话 AI 瘦身：参数说明只留模型要知道的（原来约 1700 字，每轮都发）。
+  chapter: coerceNumber(z.number().int().positive().optional().describe("章号；省略=用户当前所在章。")),
+  chapterGoal: z.string().optional().describe("本章方向（用户原话）；用户没给就别填，章纲会按故事现状往下推。"),
+  requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。")),
+  selectedCharacterIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
+  selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
-    "可选但强烈建议：当用户给了本章必须落实的【具体要点】（具体名物 / 数字 / 编号 / 关键动作，如『第三块砖』『债权池A-17』『买胶带』），逐条原样填进来，别压成一句话、别替换具体名词。" +
-    "引擎会把这些注入『本章硬约束』让模型逐条落实，并在出稿后确定性核对哪条漏了/写歪了；判漏条目还会先经 AI 复核摘除误报（带正文引证才摘），最终以 beatFidelity 字段的裁决后结果为准。",
+    "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。",
   )),
-  maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("可选：最多读取多少条时间线事件。")),
-  contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("可选：动态上下文 token 预算；超出时只裁剪低优先动态块。")),
-  allowWriteAhead: coerceBoolean(z.boolean().optional().describe(
-    "章序护栏的知情 override：默认 false。前一章未定稿时本工具会拦下（防穿帮）；仅当用户被告知风险后明确表示『仍要先写本章』，才带 true 再调一次放行。不要默认带 true。",
-  )),
-  autoDeAi: coerceBoolean(z.boolean().optional().describe(
-    "出稿检出 high/medium AI 腔后是否自动去味一轮（默认 true：repair 任务槽批量改写 + 改后复检，最多一轮不循环，落盘前自动快照，只改文风不动剧情）。false=只检测标注、不改写。",
-  )),
-  candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe(
-    "可选：多候选采样数（1–3，默认 1=一次成稿）。>1 时先后生成 N 个候选（temperature 依次错开），按确定性规则" +
-    "（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）选出最优稿落盘，逐候选得分与落选原因进 candidatesReport——防长篇连载文风坍缩。" +
-    "注意：token 消耗与生成时间都约为 N 倍，用户没明确要求多版挑选/防文风雷同时保持默认 1。",
-  )),
+  maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
+  contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
+  allowWriteAhead: coerceBoolean(z.boolean().optional().describe("前一章没定稿被拦下时，只有用户明确说仍要先写才带 true。")),
+  autoDeAi: coerceBoolean(z.boolean().optional().describe("false=检出机器腔只标注、不自动去味（默认自动去味一轮）。")),
+  candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe("1–3，默认 1；用户明确要多版挑选才填，耗时和 token 约 N 倍。")),
 });
 
 const outputSchema = z.object({
@@ -369,23 +359,9 @@ export function buildNoWriteIntentBlockedOutput(
 export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
-    "为某章生成一版正文并写入工作稿（drafts/fast，未定稿）。当用户说『写第 N 章 / 出一版正文 / 把方案写成正文』时调用。" +
-    "出稿前会先自动拟本章章纲（接住上一章结尾、推进开着的线索、至少一条新信息、写明不要重复什么），并按章纲翻出前文相关原文和旧事实再写；" +
-    "用户这章有方向就把原话放进 chapterGoal，章纲照它展开；用户没给方向就别填（不要自拟方向，章纲会按故事现状往下推）；同一方向重写会沿用已有章纲。章纲见 chapterPlan——转达时用一两句话说这章写了什么、新信息是什么。" +
-    "工作稿待保存、不建 git 快照（改坏了走操作历史撤销）；满意后再用 commit_preview / commit_apply 正式定稿。" +
-    "引擎校验不过（空正文/伪正文等）会拒绝写盘并如实回报 ok:false。" +
-    "首稿低于字数下限时，在出稿这一步就从结尾接着写够（最多两轮，不在中间插句）；仍不够会在 draftLength 和 summary 里如实标注——别假装字数达标。" +
-    "写完自动核一遍账（和「核账」按钮同一套：账本对账 + 对全书前文），查出的问题不自动改，列在 qualityPipeline.continuity（sure 确定 / maybe 可能）和 summary 里——" +
-    "请原样转达让用户定（用户说按核对结果改，你再用 revise_draft 按旧设定逐处改），别替用户拍板、别说「已经一致」。这些都在本工具内跑完，不需要你再调预览或改稿来补字。" +
-    "出稿后自动跑 AI 腔确定性回检（warning-only，不影响成败）：检出 high/medium 时默认自动去味一轮（repair 槽批量改写、只改文风不动剧情、" +
-    "最多一轮不循环、落盘前自动快照），结果如实进 autoDeAi 字段，summary 如实说明修掉几处/复检还剩几处（剩下的可引导用户说「去AI味」逐条修订）；" +
-    "改写模型没跑成会如实报告、原稿不动。用户明确不要自动改时传 autoDeAi:false（只标注不改写）；total=0 或只有 low 时不触发也不标注。" +
-    "默认一次成稿（candidates:1）；用户想多版挑选、或嫌连载文风越来越雷同时，传 candidates:2–3：先后生成 N 个候选（temperature 依次错开），" +
-    "按确定性规则（必命中要点 > 字数下限 > AI 腔计权 high×3+medium）自动选出最优稿落盘，逐候选得分与落选原因见 candidatesReport——请如实转达。" +
-    "注意多候选的 token 消耗与生成时间都约为 N 倍，别默认开。" +
-    "mustHitBeats 的判漏会先经 AI 复核（带正文逐字引证才摘除误报、模型没跑成则维持原结论），裁决后的剩余漏写与" +
-    "被摘除条目分别见 beatFidelity.missingBeats / beatFidelity.adjudicatedCovered——summary 的「首稿核对」警告以裁决后结果为准，请如实转达。" +
-    "若自动去味真改了稿，会对最终正文再做一遍确定性核对，被改写吃掉锚点的新漏见 beatFidelity.postDeAiNewMisses 与 summary 的「去味后新漏」标注。",
+    "为某章写一版正文进工作稿（未定稿）。一次调用里完成：先拟章纲、按章纲翻前文写，字数不够接着写，写完自动核账，检出机器腔默认自动去味一轮。" +
+    "核账查出的问题不自动改，在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」。" +
+    "summary 里的「首稿核对」漏写、「去味后新漏」、字数不够都要如实转达。引擎拒稿会 ok:false，如实说没写成。章纲见 chapterPlan，转达时一两句话说这章写了什么。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

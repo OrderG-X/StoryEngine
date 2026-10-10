@@ -11,8 +11,7 @@ import { applyFactEdit, readFactLedger, CorruptFactLedgerError } from "../fact-l
 const inputSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Add"/"REMOVE"），否则核心写分发偶发硬 InputValidationError。
   op: coerceEnum(z.enum(["add", "update", "remove", "supersede"]).describe(
-    "add=新增一条；update=改某条（要 id+text）；remove=删某条（要 id）；" +
-    "supersede=标记某条旧事实从某章起被取代（合法演进，用户说『主角的钱现在能动了/某设定变了』时用，要 id+chapter=从第几章起失效）。",
+    "add 新增；update 改（id+text）；remove 删（id）；supersede=某设定从某章起变了（targetText 或 id + chapter）。",
   )),
   id: z.string().optional().describe("update/remove/supersede 的目标条目 id（形如 fact-7-0）。不知道 id 时 supersede 用 targetText 描述即可。"),
   chapter: coerceNumber(z.number().int().positive().optional().describe("add 时该事实属于第几章；supersede 时=从第几章起失效（通常填用户当前所在章）。")),
@@ -65,11 +64,7 @@ export async function editFactLedgerLogic(input: {
 export const editFactLedgerTool = writeTool({
   id: "edit_fact_ledger",
   description:
-    "增删改『硬事实账本』。当用户说『把第N章那条硬事实改成…/删掉某条硬事实/帮我记一条硬事实』时调用；" +
-    "当用户说某条旧设定『现在变了/不成立了/已经能…了』(合法演进)时，用 op=supersede 把那条标记为从本章起被取代——" +
-    "旧设定从此不再喂正文、但不删除可撤销。写前自动建快照、可一键撤销。" +
-    "只记客观已确认的事实（地点/物件/编号/谁做了什么），不要把角色台词里的威胁/猜测/未证实说法" +
-    "（如『你碰了就回不了头』『他肯定是凶手』）直接当成世界规则记进账本——除非正文已独立证实它是真的。",
+    "增删改硬事实账本；某设定变了用 op=supersede。只记客观已确认的事实，角色台词里的威胁、猜测不当事实记。可撤销。",
   inputSchema,
   outputSchema,
   run: async ({ input, projectDir }) => {

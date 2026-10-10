@@ -47,6 +47,8 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   "generate_character_enrichment", "generate_matrix_enrichment", "generate_character_relationships",
   "generate_writing_rules_enrichment", "generate_alias_table",
   "edit_fact_ledger", "set_foreshadowing_importance", "clean_legacy_threads", "group_related_leads",
+  // 2026-10-10 合并入口（按 kind / op 转给上面的原工具）
+  "enrich_foundation", "manage_threads",
 ]);
 
 /**

@@ -28,13 +28,13 @@ const PACINGS = ["slow", "medium", "fast"] as const;
 const REVEAL_LEVELS = ["none", "small", "large"] as const;
 
 const inputSchema = z.object({
-  userDirection: z.string().describe("用户对下一章的方向描述（必填，不能为空白）。例如想推进的剧情、想引入的冲突。"),
-  chapter: coerceNumber(z.number().int().positive().optional().describe("可选：目标章号；省略时引擎按项目当前进度推断。")),
-  pacing: coerceEnum(z.enum(PACINGS).optional().describe("可选：节奏。slow=慢热铺陈 / medium=均衡（默认）/ fast=快节奏推进。")),
-  revealLevel: coerceEnum(z.enum(REVEAL_LEVELS).optional().describe("可选：本章信息揭示程度。none=不揭示 / small=小揭示（默认）/ large=大揭示。")),
-  mustInclude: coerceStringArray(z.array(z.string()).optional().describe("可选：本章必须包含的要素（线索/伏笔/动作等的关键词）。")),
-  mustAvoid: coerceStringArray(z.array(z.string()).optional().describe("可选：本章必须避免触碰的内容（如尚不能揭穿的真相）。")),
-  maxSuggestions: coerceNumber(z.number().int().nonnegative().optional().describe("可选：最多返回多少条剧情建议。省略或填 0=用默认。")),
+  userDirection: z.string().describe("用户对这章的方向（必填）。"),
+  chapter: coerceNumber(z.number().int().positive().optional().describe("章号；省略=按进度推断。")),
+  pacing: coerceEnum(z.enum(PACINGS).optional().describe("节奏，默认 medium。")),
+  revealLevel: coerceEnum(z.enum(REVEAL_LEVELS).optional().describe("揭示程度，默认 small。")),
+  mustInclude: coerceStringArray(z.array(z.string()).optional().describe("必须包含的要素。")),
+  mustAvoid: coerceStringArray(z.array(z.string()).optional().describe("必须避开的内容。")),
+  maxSuggestions: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
 });
 
 const outputSchema = z.object({

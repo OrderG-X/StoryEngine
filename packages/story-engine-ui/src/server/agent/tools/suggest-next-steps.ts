@@ -13,14 +13,14 @@ import { z } from "zod";
 import { coerceBoolean, coerceJsonArray } from "./lenient-args.js";
 
 const choiceSchema = z.object({
-  label: z.string().trim().min(1).describe("按钮短文案（如『先补地点和资产』『开始写第二章』『先放着』）。"),
-  intent: z.string().trim().min(1).describe("用户点这个按钮后，作为一句话发回给你的意图，你据此继续做事（如『帮我把地点和资产补上』）。"),
-  recommended: coerceBoolean(z.boolean().optional().describe("是否为推荐项（这一步最顺的选择）；至多一个标 true。")),
+  label: z.string().trim().min(1).describe("按钮短文案。"),
+  intent: z.string().trim().min(1).describe("用户点了以后发回给你的一句话。"),
+  recommended: coerceBoolean(z.boolean().optional().describe("推荐项，至多一个。")),
 });
 
 const inputSchema = z.object({
   question: z.string().trim().optional().describe("一句话问用户接下来想怎么走（如『这章定稿了，接下来？』）。"),
-  choices: coerceJsonArray(z.array(choiceSchema).max(4).describe("2–4 个下一步选项；建议含一个推荐项，并留一个『先放着/我自己说』之类的兜底。")).optional(),
+  choices: coerceJsonArray(z.array(choiceSchema).max(4).describe("2–4 个选项，留一个『我自己说』兜底。")).optional(),
 });
 
 const outputSchema = z.discriminatedUnion("ok", [
