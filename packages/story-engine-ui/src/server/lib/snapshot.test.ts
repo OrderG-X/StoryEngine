@@ -675,12 +675,12 @@ describe("undo 首次入库不留事务空壳（P1-B 真引擎+真 git 端到端
     expect(await readFile(chapterPath, "utf-8")).toContain("主角推开大门");
     await access(join(txDir, "manifest.json")); // 事务证据按设计留存
 
-    // 真 undo：撤销首次入库——章节文件与事务文件都被撤回
+    // 真 undo：撤销首次入库——章节文件撤回；事务目录不入快照（2026-10-10 第 4 期），原样留着、带完整 manifest
     const undo = await undoLastChange(projectDir);
     expect(undo?.undoneLabel).toBe("定稿");
     await expect(access(chapterPath)).rejects.toThrow();
-    // 核心断言①：.story-engine-tx/commit-chapter-0001 不许留下无 manifest 的空目录壳
-    await expect(access(txDir)).rejects.toThrow();
+    // 核心断言①：不许出现无 manifest 的空目录壳（要么没有目录，要么 manifest 完整）
+    await access(join(txDir, "manifest.json"));
     // 核心断言②：recover 健康——后续任何操作的第一道门不再 fail-closed 抛错
     await recoverProjectCommitTransactions(projectDir);
 
@@ -692,8 +692,13 @@ describe("undo 首次入库不留事务空壳（P1-B 真引擎+真 git 端到端
     const undo2 = await undoLastChange(projectDir);
     expect(undo2?.undoneLabel).toBe("定稿");
     await expect(access(chapterPath)).rejects.toThrow();
-    await expect(access(txDir)).rejects.toThrow();
+    await access(join(txDir, "manifest.json"));
     await recoverProjectCommitTransactions(projectDir);
+    // 事务目录不进书的 git 仓库（不然每次快照都多一份整书备份）。
+    const tracked = await new Promise<string>((resolveTracked, reject) => {
+      execFile("git", ["ls-files", ".story-engine-tx"], { cwd: projectDir }, (error, stdout) => (error ? reject(error) : resolveTracked(stdout)));
+    });
+    expect(tracked.trim()).toBe("");
   }, 60_000);
 });
 
