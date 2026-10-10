@@ -1,4 +1,5 @@
 import type { StoryTimeline } from "./story-timeline.js";
+import { applyChapterFactUpdate, CorruptFactLedgerError, FACT_LEDGER_RELATIVE_PATH, factLedgerText, readFactLedgerStrict, type ChapterFactUpdate } from "./fact-ledger-store.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
@@ -94,6 +95,8 @@ export interface CommitDraftInput {
     readonly calendar?: CalendarUpdate;
     /** 放好本章之后的整条故事时间线（写 story/timeline.json；日历的「当前第几天」由它推出）。 */
     readonly storyTimeline?: StoryTimeline;
+    /** 本章的事实变更（作者勾过的）：和章节一起写进 story/fact-ledger.json；重定稿先撤本章旧的。 */
+    readonly factUpdate?: ChapterFactUpdate;
   };
 }
 
@@ -229,6 +232,8 @@ export interface CommitReport {
     readonly expiredArcGoals?: readonly ExpiredArcGoal[];
   };
   readonly diagnostics?: DiagnosticsRecord;
+  /** 本章事实入账情况（有 factUpdate 才有）：ok=false 时 reason 说清没记上的原因，章节照常定稿。 */
+  readonly factLedger?: { readonly ok: boolean; readonly added: number; readonly superseded: readonly string[]; readonly reason?: string };
   readonly issues: readonly string[];
 }
 
@@ -353,6 +358,24 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
   }
 
   const timelineEvents = await buildTimelineEvents(input.projectDir, input.chapter, input.commitPlan.timelineEvents ?? []);
+  // 本章事实：和章节同一个事务写。账本坏了不拦章节定稿，但如实回报「这章的事实没记上」。
+  let factLedger: CommitReport["factLedger"];
+  let factLedgerFile: TransactionFile | undefined;
+  if (input.commitPlan.factUpdate) {
+    try {
+      const current = await readFactLedgerStrict(input.projectDir);
+      const result = applyChapterFactUpdate(current.facts, input.chapter, input.commitPlan.factUpdate, input.commitPlan.storyTimeline);
+      factLedgerFile = { relativePath: FACT_LEDGER_RELATIVE_PATH, content: factLedgerText(result.facts) };
+      factLedger = { ok: true, added: result.added, superseded: result.superseded };
+    } catch (error) {
+      factLedger = {
+        ok: false,
+        added: 0,
+        superseded: [],
+        reason: error instanceof CorruptFactLedgerError ? "事实账本文件损坏" : `读事实账本失败（${describeErrorBriefly(error, input.projectDir)}）`,
+      };
+    }
+  }
   const threadPoolFiles = buildThreadPoolFiles(input.chapter, threadPool, threadTrackingUpdates);
   const arcGoalPoolFiles = buildArcGoalPoolFiles(input.chapter, arcGoalPool, arcGoalUpdates);
   const transactionFiles = [
@@ -370,6 +393,7 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
     ...(input.commitPlan.storyTimeline
       ? [{ relativePath: join("story", "timeline.json"), content: jsonText(input.commitPlan.storyTimeline) }]
       : []),
+    ...(factLedgerFile ? [factLedgerFile] : []),
     {
       relativePath: join("chapters", `${padChapter(input.chapter)}.md`),
       content: draft,
@@ -396,6 +420,7 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
     updatedHooks: unique([...hookUpdates.map((update) => update.hookId), ...hookTrackingUpdates.map((update) => update.id)]),
     updatedWorld: input.commitPlan.worldUpdates !== undefined,
     updatedCalendar: input.commitPlan.calendar !== undefined,
+    ...(factLedger ? { factLedger } : {}),
     ...(hookTrackingUpdates.length > 0 || (input.commitPlan.staleHookWarnings?.length ?? 0) > 0
       ? {
         hookTracking: {

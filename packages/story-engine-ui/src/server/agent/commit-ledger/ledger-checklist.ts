@@ -9,7 +9,7 @@
  */
 import { factKey, type FactProposal, type FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
 
-export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character";
+export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed";
 
 export interface LedgerChecklistItem {
   readonly id: string;
@@ -151,6 +151,15 @@ export function buildLedgerChecklist(input: {
     if (facts.newCharacters.length > 0) {
       items.push({ id: "new_character", kind: "new_character", label: `新出现的人物（不建卡，要建就说一声）：${facts.newCharacters.join("、")}`, removable: false });
     }
+  } else if (facts && !facts.ok) {
+    // 事实没抽成：绝不让清单看起来「这章没什么可记的」。定稿时会再抽一次。
+    items.push({
+      id: "fact_failed",
+      kind: "fact_failed",
+      label: `这章的事实没抽成${facts.failureSummary ? `（${facts.failureSummary.replace(/^（|）$/gu, "")}）` : ""}，确认定稿时会再抽一次`,
+      removable: false,
+      needsConfirm: true,
+    });
   }
   return items;
 }

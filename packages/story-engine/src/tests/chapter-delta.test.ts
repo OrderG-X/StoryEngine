@@ -336,4 +336,12 @@ describe("时间声明（故事时间线）", () => {
     const negative = verifyChapterDelta({ ...base, time: { daysSincePrevious: -1, weekday: "周二", quote: "三天后，周二下午，苏晚才又见到周屿。" } }, draft);
     expect(negative.time).toEqual({ weekday: "周二", quote: "三天后，周二下午，苏晚才又见到周屿。" });
   });
+
+  it("隔几天必须写在原句里：原句只有「周五下午」时不收模型推的「隔 0 天」，只收星期", () => {
+    const text = "周五下午，苏晚提前一个钟头关了店。";
+    const verified = verifyChapterDelta({ ...base, mainEvent: { summary: "关店", quote: "苏晚提前一个钟头关了店" }, time: { daysSincePrevious: 0, weekday: "周五", timeOfDay: "下午", quote: "周五下午，苏晚提前一个钟头关了店。" } }, text);
+    expect(verified.time).toEqual({ weekday: "周五", timeOfDay: "下午", quote: "周五下午，苏晚提前一个钟头关了店。" });
+    const next = verifyChapterDelta({ ...base, mainEvent: { summary: "雨停", quote: "第二天雨停了" }, time: { daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" } }, "第二天雨停了，天还阴着。");
+    expect(next.time).toEqual({ daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" });
+  });
 });

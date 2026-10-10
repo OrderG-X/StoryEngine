@@ -7,7 +7,8 @@ export type FormalCommitV0StateArea =
   | "character_state"
   | "world_state"
   | "calendar"
-  | "story_timeline";
+  | "story_timeline"
+  | "fact_ledger";
 
 export type FormalCommitV0ForbiddenArea =
   | "asset_ledger"
@@ -23,6 +24,7 @@ export const FORMAL_COMMIT_V0_STATIC_ALLOWED_PATHS = [
   "world/state.json",
   "time/calendar.json",
   "story/timeline.json",
+  "story/fact-ledger.json",
 ] as const;
 
 export const FORMAL_COMMIT_V0_FORBIDDEN_PATHS = [
@@ -79,6 +81,7 @@ export function formalCommitV0StateAreaForPath(file: string): FormalCommitV0Stat
   if (file === "world/state.json") return "world_state";
   if (file === "time/calendar.json") return "calendar";
   if (file === "story/timeline.json") return "story_timeline";
+  if (file === "story/fact-ledger.json") return "fact_ledger";
   return undefined;
 }
 

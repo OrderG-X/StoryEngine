@@ -14,7 +14,7 @@
  * 守卫（铁律：绝不谎报）：必须先对「同一章节」commit_preview 过、且草稿在预览之后没改动
  *   （系统内预览票据/previewToken + 草稿哈希一致），否则诚实拒绝，不入库、不谎称成功。
  */
-import { readStoryTimeline } from "@actalk/story-engine";
+import type { ChapterFactUpdate } from "@actalk/story-engine";
 import {
   buildStateOverview,
   type StateOverview,
@@ -27,16 +27,17 @@ import { coerceNumber } from "./lenient-args.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { type FactCallModel } from "../fact-ledger/fact-ledger.js";
-import { applyFactProposal, extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
+import { describeFactOutcome, factKey, proposeFactChanges, toChapterFactUpdate, type FactProposal } from "../fact-ledger/reconcile-facts.js";
 import { splitExclusions } from "../commit-ledger/ledger-checklist.js";
 import { writeTool } from "../withSnapshot.js";
-import { defaultDraftPath } from "../../lib/project-io.js";
+import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   runCommitApply,
   type ChapterDeltaDeclarationOutcome,
   type ChapterDeltaDeclarationStatus,
   type CommitApplyPreviewTicketStore,
+  readEstablishedCharacterNames,
 } from "../../services/commit-service.js";
 import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from "./uncarded-character-memo.js";
 import {
@@ -160,6 +161,7 @@ export async function applyCommitToolLogic(input: {
   readonly previewToken?: string;
   readonly excluded?: readonly string[];
   readonly dayOverride?: number;
+  readonly factUpdate?: ChapterFactUpdate;
 }): Promise<CommitApplyToolOutput> {
   const result = await runCommitApply({
     projectDir: input.projectDir,
@@ -170,6 +172,7 @@ export async function applyCommitToolLogic(input: {
       previewStore: PREVIEW_TICKET_STORE,
       ...(input.excluded && input.excluded.length > 0 ? { excluded: input.excluded } : {}),
       ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
+      ...(input.factUpdate ? { factUpdate: input.factUpdate } : {}),
     },
   });
   const { projectDir, chapter } = input;
@@ -425,58 +428,58 @@ export const commitApplyTool = writeTool({
     if (resolvedChapter === undefined) {
       throw new Error("commit_apply 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
-    // 预览时算好的记账提案：定稿成功后票据会被消费，先拿出来。
-    const factProposal = findCommitPreview(projectDir, resolvedChapter)?.factProposal;
+    // 记账（账本 v2）：预览时算好、作者勾过的提案，和章节同一个事务写进账本。
+    // 预览时没抽成（ok=false）或票据没了（进程重启）→ 定稿前现抽一次（自带重试）；仍不成就照常定稿、如实说「这章的事实没记上」。
     const excluded = input.excluded ?? [];
+    const exclusions = splitExclusions(excluded).facts;
+    const ticketProposal = findCommitPreview(projectDir, resolvedChapter)?.factProposal;
+    const proposal = ticketProposal?.ok ? ticketProposal : await proposeFactsForCommit(projectDir, resolvedChapter);
+    const factUpdate = toChapterFactUpdate(proposal, exclusions);
     const result = await applyCommitToolLogic({
       projectDir,
       chapter: resolvedChapter,
       previewToken: input.previewToken,
       ...(excluded.length > 0 ? { excluded } : {}),
       ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
+      ...(factUpdate ? { factUpdate } : {}),
     });
     if (!result.committed || !result.draftBody) return result;
-    try {
-      // 入库成功后非致命地抽硬事实 + 新出现人物，透明折进回报；抽取整体失败也绝不影响已成功的入库、绝不编造。
-      // knownNames 用 overview 的真实显示名【全量】角色：report.updatedCharacters 是 slug ID（中文名会变 char-<hash>）、
-      // 且只含本章被改的——拿它当已知名单会让中文名整条排不掉，主角可能被 LLM 误报为「新出现」。
-      const ov = result.overview as
-        | { readonly characterMatrix?: { readonly characters?: readonly { readonly name?: string }[] } }
-        | undefined;
-      const knownNames = (ov?.characterMatrix?.characters ?? [])
-        .map((c) => c.name)
-        .filter((n): n is string => typeof n === "string" && n.length > 0);
-      // 阶段 4「记账对号」：抽事实时对照本章相关的旧事实——明写的变化让旧条失效，对不上的不动账本、交给作者定。
-      // 「AI 记账、作者核账」：预览时作者已经看过这份提案、去掉了不对的 → 只写留下的；没有提案（预览时没抽成 / 进程重启）才现抽。
-      // 事实里的日子按定稿后的时间线换算（作者可能刚改过本章是第几天）。
-      const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
-      const entry = timeline?.entries.find((item) => item.chapter === resolvedChapter);
-      const timelineDay = timeline && entry ? { today: entry.day, timeline } : undefined;
-      const fact = factProposal
-        ? await applyFactProposal(projectDir, resolvedChapter, factProposal, splitExclusions(excluded).facts, timelineDay)
-        : await extractAndReconcileFacts({
-          projectDir,
-          chapter: resolvedChapter,
-          draftText: result.draftBody,
-          callModel: callConfiguredFactModel,
-          knownNames,
-          ...(timelineDay ? { timelineDay } : {}),
-        });
-      const withFacts = appendFactNoteToSummary(result.summary, fact.summary);
-      const withNew = appendNewCharactersToSummary(withFacts, fact.newCharacters);
-      // 反复出场未建卡 → 确定性升级点名一次（50 章实测：每章一句「要建卡就说一声」没人接茬，需要升级语气）。
-      // 备忘失败自扛（评审加固：让它抛进外层 catch 会把已成功的硬事实/新人物摘要一并吞掉）。
-      const recurring = await updateUncardedCharacterMemo(projectDir, resolvedChapter, fact.newCharacters)
-        .catch((error) => {
-          console.warn("[commit_apply] 未建卡角色备忘更新失败（不影响入库与摘要）", error);
-          return [] as readonly string[];
-        });
-      return { ...result, summary: appendRecurringUncardedToSummary(withNew, recurring) };
-    } catch {
-      return result;
-    }
+    const report = result.report as { readonly factLedger?: { readonly ok: boolean; readonly added: number; readonly superseded: readonly string[]; readonly reason?: string } } | undefined;
+    const ledger = report?.factLedger;
+    const skipped = proposal?.ok
+      ? proposal.adds.filter((fact) => exclusions.adds?.has(factKey(fact.text))).length
+        + proposal.changes.filter((change) => exclusions.changes?.has(change.factId)).length
+      : 0;
+    const factNote = !factUpdate
+      ? `这章的事实没抽成${proposal?.failureSummary ? `：${proposal.failureSummary.replace(/^（|）$/gu, "")}` : ""}，账里少了这一章的事实——想补记就说「补记第 ${resolvedChapter} 章的事实」。`
+      : ledger && !ledger.ok
+        ? `这章的事实没记上（${ledger.reason ?? "原因不明"}），章节已正常定稿。`
+        : describeFactOutcome({ added: ledger?.added ?? 0, superseded: ledger?.superseded ?? [], conflicts: proposal?.conflicts ?? [], skipped });
+    const newCharacters = proposal?.ok ? proposal.newCharacters : [];
+    const withFacts = appendFactNoteToSummary(result.summary, factNote);
+    const withNew = appendNewCharactersToSummary(withFacts, newCharacters);
+    // 反复出场未建卡 → 确定性升级点名一次（50 章实测：每章一句「要建卡就说一声」没人接茬，需要升级语气）。
+    const recurring = await updateUncardedCharacterMemo(projectDir, resolvedChapter, newCharacters)
+      .catch((error) => {
+        console.warn("[commit_apply] 未建卡角色备忘更新失败（不影响入库与摘要）", error);
+        return [] as readonly string[];
+      });
+    return { ...result, summary: appendRecurringUncardedToSummary(withNew, recurring) };
   },
 });
+
+/** 定稿前现抽一次事实（预览时没抽成 / 票据丢了）。读不到草稿就当没抽成。 */
+async function proposeFactsForCommit(projectDir: string, chapter: number): Promise<FactProposal | undefined> {
+  const draft = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
+  if (!draft) return undefined;
+  return proposeFactChanges({
+    projectDir,
+    chapter,
+    draftText: stripLeadingMarkdownChapterHeading(draft).trim(),
+    callModel: callConfiguredFactModel,
+    knownNames: await readEstablishedCharacterNames(projectDir, chapter).catch(() => []),
+  }).catch(() => undefined);
+}
 
 /**
  * 模型发起的 commit_apply：不写盘，按预览票据给出「确认定稿」按钮或如实拒绝。

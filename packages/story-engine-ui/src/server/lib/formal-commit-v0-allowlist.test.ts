@@ -189,6 +189,7 @@ describe("formal commit V0 allowlist", () => {
       "world/state.json",
       "time/calendar.json",
       "story/timeline.json",
+      "story/fact-ledger.json",
     ]);
     expect(FORMAL_COMMIT_V0_FORBIDDEN_PATHS).toEqual([
       "story/assets.json",

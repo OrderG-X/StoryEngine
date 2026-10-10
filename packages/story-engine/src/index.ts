@@ -22,6 +22,7 @@ export * from "./draft-ai-review.js";
 export * from "./draft-length-control.js";
 export * from "./draft-revision.js";
 export * from "./fact-selection.js";
+export * from "./fact-ledger-store.js";
 export * from "./fast-draft-writer.js";
 export * from "./foundation-completeness.js";
 export * from "./foundation-gap-assistant.js";

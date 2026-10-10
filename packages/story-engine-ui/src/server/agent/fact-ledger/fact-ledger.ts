@@ -4,19 +4,13 @@
  */
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { writeFileAtomic } from "../../lib/project-io.js";
+import { withProjectCommitLock } from "@actalk/story-engine";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
-export interface FactEntry {
-  readonly id: string;
-  readonly chapter: number;
-  readonly text: string;
-  readonly source: "auto" | "manual";
-  /** 有效区间（章为单位）。缺省=从来源章起、永不失效（向后兼容旧账本）。与引擎 types.ts FactEntry 同步。 */
-  readonly effectiveFromChapter?: number;
-  readonly supersededByChapter?: number;
-  readonly supersededByFactId?: string;
-}
+/** 事实条目：类型只在引擎定义一份（2026-10-10 账本 v2；以前两个包各一份靠注释同步）。 */
+export type { FactEntry } from "@actalk/story-engine";
+import type { FactEntry } from "@actalk/story-engine";
 export interface FactLedgerFile {
   readonly version: "v0";
   readonly facts: readonly FactEntry[];
@@ -123,7 +117,8 @@ async function writeLedger(projectDir: string, facts: readonly FactEntry[]): Pro
   // 书已被删/移走时不再写（定稿后的事实抽取要跑一阵，期间书被删会凭空重建出只有账本的空书目录）。
   await stat(projectDir);
   await mkdir(dirname(path), { recursive: true });
-  await writeFileAtomic(path, JSON.stringify({ version: "v0", facts }, null, 2));
+  // 手改账本和定稿事务都写这个文件：排进同一把书的写锁，免得交叠互相覆盖。
+  await withProjectCommitLock(projectDir, () => writeFileAtomic(path, JSON.stringify({ version: "v0", facts }, null, 2)));
 }
 
 /** 本章下一个事实序号：取已有最大序号 + 1（按条数算的旧法在删过条目后会撞号）。 */
@@ -138,7 +133,17 @@ function nextFactSeq(facts: readonly FactEntry[], chapter: number): number {
   return Math.max(max + 1, facts.filter((fact) => fact.chapter === chapter).length);
 }
 
-export async function appendFacts(
+/** 追加事实（整个读改写在书的写锁里，不和定稿事务交叠）。 */
+export function appendFacts(
+  projectDir: string,
+  chapter: number,
+  texts: readonly string[],
+  source: "auto" | "manual" = "auto",
+): Promise<number> {
+  return withProjectCommitLock(projectDir, () => appendFactsUnlocked(projectDir, chapter, texts, source));
+}
+
+async function appendFactsUnlocked(
   projectDir: string,
   chapter: number,
   texts: readonly string[],
@@ -166,7 +171,16 @@ export async function appendFacts(
   return added.length;
 }
 
-export async function applyFactEdit(
+/** 手改账本（整个读改写在书的写锁里，不和定稿事务交叠）。 */
+export function applyFactEdit(
+  projectDir: string,
+  op: "add" | "update" | "remove" | "supersede",
+  args: { readonly id?: string; readonly chapter?: number; readonly text?: string; readonly targetText?: string; readonly supersededByFactId?: string },
+): Promise<{ readonly ok: boolean; readonly summary: string }> {
+  return withProjectCommitLock(projectDir, () => applyFactEditUnlocked(projectDir, op, args));
+}
+
+async function applyFactEditUnlocked(
   projectDir: string,
   op: "add" | "update" | "remove" | "supersede",
   args: { readonly id?: string; readonly chapter?: number; readonly text?: string; readonly targetText?: string; readonly supersededByFactId?: string },

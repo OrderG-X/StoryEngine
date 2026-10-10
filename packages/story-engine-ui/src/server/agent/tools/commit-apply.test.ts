@@ -11,7 +11,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
-import { extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
+import { proposeFactChanges } from "../fact-ledger/reconcile-facts.js";
 import { listSnapshots } from "../../lib/snapshot.js";
 import {
   appendLifecycleNotesToSummary,
@@ -34,8 +34,10 @@ import { __resetCommitPreviewStore } from "./commit-preview-store.js";
 // 入库后抽硬事实是非致命附加步骤，且会真连 LLM 网络（writer.example.com）——单测 mock 掉，
 // 避免走完整 execute 路径的「currentChapter 兜底」测试依赖网络变 flaky（CI/离线必超时）。
 // 入库主逻辑（applyCommitToolLogic）不经此函数，不受影响。
-vi.mock("../fact-ledger/reconcile-facts.js", () => ({
-  extractAndReconcileFacts: vi.fn(async () => ({ ok: true, added: 0, superseded: [], conflicts: [], summary: "", newCharacters: [] })),
+vi.mock("../fact-ledger/reconcile-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../fact-ledger/reconcile-facts.js")>()),
+  // 定稿前现抽事实（预览时没抽或票据没了）：单测桩成「抽到 0 条」，不连网。
+  proposeFactChanges: vi.fn(async () => ({ ok: true, adds: [], changes: [], conflicts: [], newCharacters: [] })),
 }));
 
 // 硬事实抽取的模型调用边界（P2：走 streamChatModelToText 空闲超时，不再是非流式 20s 固定死表）。其余 llm-client 走真实现。
@@ -703,7 +705,7 @@ describe("buildThreadMaintenanceNote（入库后线索堆积提醒）", () => {
 
 describe("commit_apply 入库后告知：knownNames 用真实显示名（防主角被误报为新人物）", () => {
   it("execute 给抽事实（对照旧事实）传的 knownNames 是真名、不含 slug", async () => {
-    const mocked = vi.mocked(extractAndReconcileFacts);
+    const mocked = vi.mocked(proposeFactChanges);
     mocked.mockClear();
     const projectDir = await makeProject("knownNames真名", "林远");
     await writeDraft(projectDir, 1, longDraft(1, "林远"));

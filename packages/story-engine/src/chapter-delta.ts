@@ -187,6 +187,9 @@ export interface VerifiedChapterDelta {
   readonly hasAnyVerified: boolean;
 }
 
+/** 原句里交代「隔了多久」的说法。 */
+const TIME_SPAN_EXPRESSION = /第二天|第三天|次日|翌日|隔天|隔日|当天|同一天|这天|当晚|当夜|那天晚上|这天晚上|那天夜里|过了(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|星期|个月|月|年)|(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|个?星期|个月|月|年)(?:后|以后|之后|过去|过后)|一周后|周末|下周|上周|昨天|前天|今天|明天|后天/u;
+
 /** 归一化：压掉所有空白（空格/换行/制表符/全角空格），便于「原句是否出现在草稿」的宽松逐字比对。 */
 function normalizeForMatch(text: string): string {
   return text.replace(/[\s\u3000]+/gu, "");
@@ -292,7 +295,9 @@ export function verifyChapterDelta(
     const weekdayOk = declaredWeekday !== undefined
       && [...declared.quote.matchAll(/(?:周|星期|礼拜)[一二三四五六日天]/gu)].some((match) => parseWeekday(match[0]) === declaredWeekday);
     const days = declared.daysSincePrevious;
-    const daysOk = typeof days === "number" && Number.isInteger(days) && days >= 0 && days <= 3650;
+    // 「隔了几天」必须是原句里写出来的（第二天 / 三天后 / 当晚 …），不能是模型推的
+    // （2026-10-10 记账考卷：原句只有「周五下午」，模型声明「隔 0 天」，第 3 章被记成和第 2 章同一天）。
+    const daysOk = typeof days === "number" && Number.isInteger(days) && days >= 0 && days <= 3650 && TIME_SPAN_EXPRESSION.test(declared.quote);
     if (!weekdayOk && !daysOk && !declared.timeOfDay) return undefined;
     return {
       quote: declared.quote,

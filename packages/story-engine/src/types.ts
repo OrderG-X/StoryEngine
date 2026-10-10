@@ -222,6 +222,14 @@ export interface FactEntry {
   readonly supersededByChapter?: number;
   /** 被哪条事实取代（登记合法演进链，可选）。 */
   readonly supersededByFactId?: string;
+  /** 出处：本章里写到这件事的原句（2026-10-10 账本 v2；老账本没有）。 */
+  readonly quote?: string;
+  /** 结构化三元组（可选）：谁 / 哪方面 / 是什么，供确定性比对（同一主体同一属性值不同 = 对不上）。 */
+  readonly subject?: string;
+  readonly attribute?: string;
+  readonly value?: string;
+  /** hard = 不该变的（年龄、门牌、写着的字）；state = 会变的状态（在哪、在谁手里）；event = 发生过的事。 */
+  readonly kind?: "hard" | "state" | "event";
 }
 
 export interface FactLedger {

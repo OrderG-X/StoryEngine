@@ -51,6 +51,7 @@
  *      回执 payload 记录的入库内容逐字一致，才允许报 replayed；对不上（章未入库/被撤销/内容被改）
  *      fall through 走真 apply，磁盘真相为准，绝不做「200 但磁盘什么都没写」的假成功。
  */
+import type { ChapterFactUpdate } from "@actalk/story-engine";
 import { excludeFromCommitPlan, splitExclusions } from "../agent/commit-ledger/ledger-checklist.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -527,6 +528,8 @@ export type CommitApplyPolicy =
     readonly excluded?: readonly string[];
     /** 作者在定稿清单里改的「第几天」（故事时间线，优先级最高）。 */
     readonly dayOverride?: number;
+    /** 本章事实变更（作者勾过的）：和章节同一个事务写进账本。 */
+    readonly factUpdate?: ChapterFactUpdate;
   };
 
 export interface CommitApplyServiceInput {
@@ -745,9 +748,13 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
   });
   // 作者在账本清单上去掉的伏笔 / 线索 / 目标：从计划里拿掉，不写（同一版草稿 + 同一份声明重算，条目 id 一致）。
   const excluded = policy.kind === "agent_preview_ticket" ? policy.excluded ?? [] : [];
-  const commitPlan = excluded.length > 0 && builtPlan.commitPlan
+  const excludedPlan = excluded.length > 0 && builtPlan.commitPlan
     ? { ...builtPlan, commitPlan: excludeFromCommitPlan(builtPlan.commitPlan, splitExclusions(excluded)) }
     : builtPlan;
+  const factUpdate = policy.kind === "agent_preview_ticket" ? policy.factUpdate : undefined;
+  const commitPlan = factUpdate && excludedPlan.commitPlan
+    ? { ...excludedPlan, commitPlan: { ...excludedPlan.commitPlan, factUpdate } }
+    : excludedPlan;
   const transaction = buildCommitPreviewTransaction({ projectDir, chapter, draftContent, commitPlan });
 
   // ── HTTP 机制外皮：三绑死 preflight（previewHash/transactionId/idempotencyKey 与当前事务身份比对）。 ──

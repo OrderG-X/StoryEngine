@@ -9,7 +9,7 @@
  * 模型无关：宽进逐条打捞；编号对不上的、引文不在正文里的一律丢弃；失败自动重试一次，仍不成如实说明。
  */
 import { createHash } from "node:crypto";
-import { absolutizeRelativeDaysInText, selectEffectiveFacts, type StoryTimeline } from "@actalk/story-engine";
+import { absolutizeRelativeDaysInText, selectEffectiveFacts, type ChapterFactUpdate, type StoryTimeline } from "@actalk/story-engine";
 import { readFactLedger, appendFacts, applyFactEdit, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
 
 const RELATED_FACT_CAP = 40;
@@ -72,10 +72,12 @@ export function buildReconcileMessages(
       // 作者自己写的章没有章纲、不知道是故事第几天：模型会自己编（2026-10-10 验收：三章里三次把周六记成「故事第 3 天」「第 5 天」）。
       : "不知道本章是故事第几天：事实里提到日子，照正文写星期几或具体日期（「周六上午」）；正文只有明天、后天这种说法时，写成「本章说的后天」。绝不自己换算成「故事第几天」。",
     "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、人物住在哪/和谁住、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。quote 逐字抄本章里写到这件事的原句；正文没明写、要靠推断才得出的不要记（由「换了日子」推出「改过期」、把「交还」说成「卖给」）。",
+    // 账本 v2（2026-10-10）：能拆成「谁 / 哪方面 / 是什么」的就拆，后文同一主体同一方面写成别的值，引擎直接比对出来（不靠模型判）。
+    "   能拆的事实再给三项：subject=说的是谁或什么（人名 / 物名 / 地名，照正文写法），attribute=哪方面（年龄、住址、门牌、扉页写的字、在哪、在谁手里、职业、亲属关系……用短词），value=是什么（照正文）。kind：hard=不该变的（年龄、门牌、写着的字、亲属关系）；state=会变的状态（在哪、在谁手里、好坏）；event=发生过的事。拆不开的只给 text 和 quote。",
     "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
     "3. conflicts：本章说法和某条旧事实对不上、但正文并没有写它发生了变化（多半是写错了）。ref 填旧事实编号，quote 逐字抄本章正文里对不上的那句，note 说怎么对不上。",
     "另外列出本章首次出现、且不在『已知角色』名单里的具名新人物（真名，宁缺毋滥）。",
-    "只输出一个 JSON：{\"facts\":[{\"text\":\"\",\"quote\":\"\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\",\"quote\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
+    "只输出一个 JSON：{\"facts\":[{\"text\":\"\",\"quote\":\"\",\"subject\":\"\",\"attribute\":\"\",\"value\":\"\",\"kind\":\"hard\"}],\"changes\":[{\"ref\":\"F1\",\"text\":\"\",\"quote\":\"\"}],\"conflicts\":[{\"ref\":\"F2\",\"quote\":\"\",\"note\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。没有的给空数组。不要 Markdown、不要解释。",
   ].join("\n");
   const user = [
     related.length > 0
@@ -88,9 +90,12 @@ export function buildReconcileMessages(
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
+type FactKind = "hard" | "state" | "event";
+interface FactTriple { readonly subject?: string; readonly attribute?: string; readonly value?: string; readonly kind?: FactKind }
+
 interface ParsedReconcile {
   /** quote 空 = 模型没给原句（宽进照收）；给了就要在正文里找得到。 */
-  readonly facts: readonly { readonly text: string; readonly quote: string }[];
+  readonly facts: readonly ({ readonly text: string; readonly quote: string } & FactTriple)[];
   readonly changes: readonly { readonly ref: string; readonly text: string; readonly quote: string }[];
   readonly conflicts: readonly { readonly ref: string; readonly quote: string; readonly note: string }[];
   readonly newCharacters: readonly string[];
@@ -101,6 +106,20 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 const asArray = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 const str = (value: unknown): string => (typeof value === "string" || typeof value === "number" ? String(value).trim() : "");
 
+/** 三元组宽进：三项都得有才收（缺一项就当没拆）；kind 认不出就不填。 */
+function readTriple(record: Record<string, unknown> | undefined): FactTriple {
+  if (!record) return {};
+  const subject = str(record.subject);
+  const attribute = str(record.attribute);
+  const value = str(record.value);
+  const kindRaw = str(record.kind).toLowerCase();
+  const kind = kindRaw === "hard" || kindRaw === "state" || kindRaw === "event" ? kindRaw : undefined;
+  return {
+    ...(subject && attribute && value ? { subject, attribute, value } : {}),
+    ...(kind ? { kind } : {}),
+  };
+}
+
 /** 宽进解析：条目给成字符串也收、多余键丢掉、坏条目逐条丢。不是 JSON 才抛（由调用方重试）。 */
 export function parseReconcile(text: string): ParsedReconcile {
   const match = text.match(/\{[\s\S]*\}/u);
@@ -108,7 +127,7 @@ export function parseReconcile(text: string): ParsedReconcile {
   const parsed = asRecord(JSON.parse(match[0])) ?? {};
   return {
     facts: asArray(parsed.facts)
-      .map((item) => ({ text: str(asRecord(item)?.text ?? item), quote: str(asRecord(item)?.quote) }))
+      .map((item) => ({ text: str(asRecord(item)?.text ?? item), quote: str(asRecord(item)?.quote), ...readTriple(asRecord(item)) }))
       .filter((item) => item.text),
     changes: asArray(parsed.changes)
       .map((item) => ({ ref: str(asRecord(item)?.ref).toUpperCase(), text: str(asRecord(item)?.text), quote: str(asRecord(item)?.quote) }))
@@ -192,6 +211,16 @@ export function factQuoteIsSupported(quote: string, draftText: string): boolean 
   return grams.filter((gram) => draftGrams.has(gram)).length / grams.length >= 0.8;
 }
 
+/** 定稿回执里「这章记了什么事实」的一句话（engine report.factLedger + 提案里的对不上 / 新人物）。 */
+export function describeFactOutcome(input: {
+  readonly added: number;
+  readonly superseded: readonly string[];
+  readonly conflicts: readonly FactConflict[];
+  readonly skipped: number;
+}): string {
+  return `${describe({ added: input.added, superseded: input.superseded, conflicts: input.conflicts, newCharacters: [] })}${input.skipped > 0 ? `你去掉的 ${input.skipped} 条没记。` : ""}`;
+}
+
 function describe(result: Omit<ReconcileFactsResult, "summary" | "ok">): string {
   const parts: string[] = [];
   if (result.added > 0) parts.push(`这章记下 ${result.added} 条硬事实（后文不得改写）。`);
@@ -211,8 +240,8 @@ function describe(result: Omit<ReconcileFactsResult, "summary" | "ok">): string 
  */
 export interface FactProposal {
   readonly ok: boolean;
-  /** 新记的事实（相对天数已换成故事第几天）。 */
-  readonly adds: readonly { readonly text: string; readonly quote?: string }[];
+  /** 新记的事实（日子由引擎定稿时按时间线换算）。 */
+  readonly adds: readonly ({ readonly text: string; readonly quote?: string } & FactTriple)[];
   /** 本章明写变化的旧事实：旧条从本章起失效、新说法入账。 */
   readonly changes: readonly { readonly factId: string; readonly oldText: string; readonly newText: string; readonly quote: string }[];
   readonly conflicts: readonly FactConflict[];
@@ -293,10 +322,26 @@ export async function proposeFactChanges(input: {
     adds: supportedFacts.map((fact) => ({
       text: stripInventedStoryDays(fact.text),
       ...(fact.quote ? { quote: fact.quote } : {}),
+      ...(fact.subject && fact.attribute && fact.value ? { subject: fact.subject, attribute: fact.attribute, value: stripInventedStoryDays(fact.value) } : {}),
+      ...(fact.kind ? { kind: fact.kind } : {}),
     })),
     changes,
     conflicts,
     newCharacters: validateNewCharacterNames(parsed.newCharacters, new Set(knownNames)),
+  };
+}
+
+/**
+ * 记账提案 → 交给引擎的本章事实变更（去掉作者勾掉的）。提案没抽成（ok=false）→ undefined。
+ * 日子不在这里换：引擎定稿时按最终时间线换（作者可能刚改了本章是第几天）。
+ */
+export function toChapterFactUpdate(proposal: FactProposal | undefined, exclusions: FactProposalExclusions = {}): ChapterFactUpdate | undefined {
+  if (!proposal?.ok) return undefined;
+  return {
+    adds: proposal.adds.filter((fact) => !exclusions.adds?.has(factKey(fact.text))),
+    changes: proposal.changes
+      .filter((change) => !exclusions.changes?.has(change.factId))
+      .map((change) => ({ factId: change.factId, newText: change.newText, ...(change.quote ? { quote: change.quote } : {}) })),
   };
 }
 
