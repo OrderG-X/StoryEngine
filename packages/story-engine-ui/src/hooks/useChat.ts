@@ -2151,13 +2151,15 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("没找到要定稿的章节，请先打开那一章。", 4200);
         return;
       }
-      const text = `确认定稿第 ${chapter} 章`;
+      const excluded = target?.excluded ?? [];
+      const text = excluded.length > 0 ? `确认定稿第 ${chapter} 章（账本清单去掉了 ${excluded.length} 条）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
         chapter,
         ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
+        ...(excluded.length > 0 ? { excluded } : {}),
       });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],

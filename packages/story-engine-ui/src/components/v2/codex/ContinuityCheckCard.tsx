@@ -3,7 +3,8 @@
  *
  * 每条 = 本章原句 ↔ 前文原句（标第几章）+ 哪里对不上 +「改这处」「不是问题」。
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
- * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」只在本卡上划掉。
+ * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
+ * 下次核这一章不再报；存失败如实提示「没记住」。可撤回。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
  */
 import { useState } from "react";
@@ -39,16 +40,29 @@ function ItemView({ chapter, item, onRevise, onDismiss }: {
   );
 }
 
-export function ContinuityCheckCard({ check, onRevise }: {
+export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
   readonly check: ContinuityCheck;
   readonly onRevise?: (intent: string) => void;
+  /** 记下 / 撤回「不是问题」；返回是否存成。缺省只在本卡上划掉。 */
+  readonly onDismiss?: (item: Item, undo: boolean) => Promise<boolean>;
 }) {
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
+  const [dismissed, setDismissed] = useState<readonly Item[]>([]);
+  const [unsaved, setUnsaved] = useState(false);
   const [showMaybe, setShowMaybe] = useState(false);
   const keyOf = (item: Item) => `${item.quote}#${item.earlierQuote}`;
-  const sure = check.sure.filter((item) => !dismissed.has(keyOf(item)));
-  const maybe = check.maybe.filter((item) => !dismissed.has(keyOf(item)));
-  const dismiss = (item: Item) => setDismissed((current) => new Set([...current, keyOf(item)]));
+  const dismissedKeys = new Set(dismissed.map(keyOf));
+  const sure = check.sure.filter((item) => !dismissedKeys.has(keyOf(item)));
+  const maybe = check.maybe.filter((item) => !dismissedKeys.has(keyOf(item)));
+  const dismiss = (item: Item) => {
+    setDismissed((current) => [...current, item]);
+    if (onDismiss) void onDismiss(item, false).then((saved) => { if (!saved) setUnsaved(true); });
+  };
+  const undoLast = () => {
+    const last = dismissed.at(-1);
+    if (!last) return;
+    setDismissed((current) => current.slice(0, -1));
+    if (onDismiss) void onDismiss(last, true);
+  };
   const revise = onRevise ? (item: Item) => onRevise(buildContinuityFixIntent(check.chapter, item)) : undefined;
   const total = sure.length + maybe.length;
   return (
@@ -79,6 +93,15 @@ export function ContinuityCheckCard({ check, onRevise }: {
             </ul>
           ) : null}
         </>
+      ) : null}
+      {dismissed.length > 0 ? (
+        <p className="drc-summary">
+          {unsaved
+            ? `标了 ${dismissed.length} 处不是问题，但没记住（存盘出错），下次核账可能还会报。`
+            : `标了 ${dismissed.length} 处不是问题${onDismiss ? "，下次核这一章不再报" : ""}。`}
+          {" "}
+          <button type="button" className="chip" onClick={undoLast}>撤回上一处</button>
+        </p>
       ) : null}
     </StepCard>
   );

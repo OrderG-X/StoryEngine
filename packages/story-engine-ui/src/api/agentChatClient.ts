@@ -27,9 +27,18 @@ export interface StreamAgentChatRequest {
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[] }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number };
+
+/** 定稿预览账本清单里的一条（与服务端 commit-ledger/ledger-checklist.ts 同形）。 */
+export interface LedgerChecklistItemView {
+  readonly id: string;
+  readonly kind: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly removable: boolean;
+}
 
 /** 核账结果里的一条：本章原句 ↔ 前文原句。 */
 export interface ContinuityCheckItem {
@@ -346,6 +355,7 @@ export async function streamAgentChat(
                     ...(Array.isArray(output.draftQualityIssues) ? { draftIssueCount: output.draftQualityIssues.length } : {}),
                     ...(Array.isArray(output.semanticQualityIssues) ? { semanticIssueCount: output.semanticQualityIssues.length } : {}),
                     ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
+                    ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
                   },
                 }
               : {}),
@@ -446,6 +456,21 @@ export async function streamAgentChat(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 定稿预览的账本清单（防御解析：缺 id / label 的条目丢掉）。 */
+function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.id !== "string" || !item.id || typeof item.label !== "string" || !item.label.trim()) return [];
+    return [{
+      id: item.id,
+      kind: typeof item.kind === "string" ? item.kind : "",
+      label: item.label,
+      ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
+      removable: item.removable === true,
+    }];
+  });
 }
 
 function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {

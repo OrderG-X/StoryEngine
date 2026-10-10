@@ -155,7 +155,8 @@ export function absolutizeRelativeDays(text: string, storyDay: number | undefine
     out = out.replace(pattern, `故事第${day}天${suffix}`);
   }
   // 模型自己已写了「明天（故事第 2 天）」时换完会叠成「故事第2天（故事第2天）」（第二十二轮账本残渣）。
-  return out.replace(/(故事第\s*(\d+)\s*天)\s*[（(]\s*故事第\s*\2\s*天\s*[）)]/gu, "$1");
+  // 也有「故事第13天上午（故事第13天）」——括号前多了个时段（浏览器试写第 8 章账本）。
+  return out.replace(/(故事第\s*(\d+)\s*天(?:早上|上午|中午|下午|傍晚|晚上|夜里|凌晨)?)\s*[（(]\s*故事第\s*\2\s*天\s*[）)]/gu, "$1");
 }
 
 const KINSHIP_TERM = /爸|妈|爹|娘|父|母|爷|奶|外公|外婆|祖|哥|姐|弟|妹|叔|伯|姑|舅|姨|老爷子|老太太/u;
@@ -193,21 +194,43 @@ function describe(result: Omit<ReconcileFactsResult, "summary" | "ok">): string 
   return parts.join("");
 }
 
-export async function extractAndReconcileFacts(input: {
+/**
+ * 记账提案（2026-10-10 第 2 期「定稿前看账」）：模型抽出、校验过、但还没写进账本的事实变化。
+ * 定稿预览时算好给作者看，作者去掉不对的，定稿时只写留下的（applyFactProposal）。
+ */
+export interface FactProposal {
+  readonly ok: boolean;
+  /** 新记的事实（相对天数已换成故事第几天）。 */
+  readonly adds: readonly { readonly text: string; readonly quote?: string }[];
+  /** 本章明写变化的旧事实：旧条从本章起失效、新说法入账。 */
+  readonly changes: readonly { readonly factId: string; readonly oldText: string; readonly newText: string; readonly quote: string }[];
+  readonly conflicts: readonly FactConflict[];
+  readonly newCharacters: readonly string[];
+  /** ok=false 时给作者的说明。 */
+  readonly failureSummary?: string;
+}
+
+/** 作者在定稿前去掉的条目：adds 按下标、changes 按旧事实 id。 */
+export interface FactProposalExclusions {
+  readonly adds?: ReadonlySet<number>;
+  readonly changes?: ReadonlySet<string>;
+}
+
+export async function proposeFactChanges(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly draftText: string;
   readonly callModel: FactCallModel;
   readonly knownNames?: readonly string[];
-}): Promise<ReconcileFactsResult> {
-  const empty = { added: 0, superseded: [], conflicts: [], newCharacters: [] } as const;
-  if (!input.draftText.trim()) return { ok: true, ...empty, summary: "" };
+}): Promise<FactProposal> {
+  const empty = { adds: [], changes: [], conflicts: [], newCharacters: [] } as const;
+  if (!input.draftText.trim()) return { ok: true, ...empty };
   const knownNames = input.knownNames ?? [];
   let ledger: Awaited<ReturnType<typeof readFactLedger>>;
   try {
     ledger = await readFactLedger(input.projectDir);
   } catch (error) {
-    return { ok: false, ...empty, summary: `（事实账本读不了，这章的硬事实没记：${error instanceof Error ? error.message : String(error)}）` };
+    return { ok: false, ...empty, failureSummary: `（事实账本读不了，这章的硬事实没记：${error instanceof Error ? error.message : String(error)}）` };
   }
   const related = pickRelatedFacts(ledger.facts, input.chapter, input.draftText, knownNames);
   const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
@@ -222,31 +245,22 @@ export async function extractAndReconcileFacts(input: {
     }
   }
   if (!parsed) {
-    return { ok: false, ...empty, summary: "（这章的硬事实没抽成，已自动重试一次仍失败；定稿不受影响，只是后面写作时少了这一章的事实参照。）" };
+    return { ok: false, ...empty, failureSummary: "（这章的硬事实没抽成，已自动重试一次仍失败；定稿不受影响，只是后面写作时少了这一章的事实参照。）" };
   }
 
   const byRef = new Map(related.map((item) => [item.ref, item.fact]));
   const draft = normalizeSpace(input.draftText);
   const quoted = (quote: string) => normalizeSpace(quote).length >= 4 && draft.includes(normalizeSpace(quote));
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
-  const changes = parsed.changes.filter((change) => byRef.has(change.ref) && quoted(change.quote));
+  const changes = parsed.changes
+    .filter((change) => byRef.has(change.ref) && quoted(change.quote))
+    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: absolutizeRelativeDays(change.text, plan?.storyDay), quote: change.quote }))
+    .filter((change, index, all) => all.findIndex((other) => other.factId === change.factId) === index);
   // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
   const supportedFacts = parsed.facts.filter((fact) => (!fact.quote || factQuoteIsSupported(fact.quote, input.draftText))
     && !factSwapsKinshipForName(fact, knownNames));
   if (supportedFacts.length < parsed.facts.length) {
     console.info(`[fact-ledger] 第${input.chapter}章 ${parsed.facts.length - supportedFacts.length} 条事实引的原句在正文里找不到，没记`);
-  }
-  const added = await appendFacts(input.projectDir, input.chapter, [
-    ...supportedFacts.map((fact) => absolutizeRelativeDays(fact.text, plan?.storyDay)),
-    ...changes.map((change) => change.text),
-  ], "auto");
-  // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。
-  const superseded: string[] = [];
-  for (const change of changes) {
-    const old = byRef.get(change.ref);
-    if (!old || old.supersededByChapter !== undefined) continue;
-    const edited = await applyFactEdit(input.projectDir, "supersede", { id: old.id, chapter: input.chapter });
-    if (edited.ok) superseded.push(old.text);
   }
   // 冲突：引文必须逐字在本章正文里，编号必须对得上；账本不动。
   const conflicts: FactConflict[] = parsed.conflicts
@@ -255,7 +269,45 @@ export async function extractAndReconcileFacts(input: {
       const old = byRef.get(item.ref)!;
       return { old: `第${old.chapter}章「${old.text}」`, quote: item.quote, note: item.note };
     });
-  const newCharacters = validateNewCharacterNames(parsed.newCharacters, new Set(knownNames));
-  const result = { added, superseded, conflicts, newCharacters };
-  return { ok: true, ...result, summary: describe(result) };
+  return {
+    ok: true,
+    adds: supportedFacts.map((fact) => ({ text: absolutizeRelativeDays(fact.text, plan?.storyDay), ...(fact.quote ? { quote: fact.quote } : {}) })),
+    changes,
+    conflicts,
+    newCharacters: validateNewCharacterNames(parsed.newCharacters, new Set(knownNames)),
+  };
+}
+
+/** 把提案写进账本（去掉作者排除的条目）。 */
+export async function applyFactProposal(
+  projectDir: string,
+  chapter: number,
+  proposal: FactProposal,
+  exclusions: FactProposalExclusions = {},
+): Promise<ReconcileFactsResult> {
+  if (!proposal.ok) {
+    return { ok: false, added: 0, superseded: [], conflicts: [], newCharacters: [], summary: proposal.failureSummary ?? "" };
+  }
+  const adds = proposal.adds.filter((_, index) => !exclusions.adds?.has(index));
+  const changes = proposal.changes.filter((change) => !exclusions.changes?.has(change.factId));
+  const added = await appendFacts(projectDir, chapter, [...adds.map((fact) => fact.text), ...changes.map((change) => change.newText)], "auto");
+  // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。
+  const superseded: string[] = [];
+  for (const change of changes) {
+    const edited = await applyFactEdit(projectDir, "supersede", { id: change.factId, chapter });
+    if (edited.ok) superseded.push(change.oldText);
+  }
+  const skipped = proposal.adds.length - adds.length + proposal.changes.length - changes.length;
+  const result = { added, superseded, conflicts: proposal.conflicts, newCharacters: proposal.newCharacters };
+  return { ok: true, ...result, summary: `${describe(result)}${skipped > 0 ? `你去掉的 ${skipped} 条没记。` : ""}` };
+}
+
+export async function extractAndReconcileFacts(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftText: string;
+  readonly callModel: FactCallModel;
+  readonly knownNames?: readonly string[];
+}): Promise<ReconcileFactsResult> {
+  return applyFactProposal(input.projectDir, input.chapter, await proposeFactChanges(input));
 }

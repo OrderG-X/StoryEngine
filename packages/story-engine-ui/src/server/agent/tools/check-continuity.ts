@@ -13,6 +13,7 @@ import { coerceNumber } from "./lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { callConfiguredCheckerModel, checkChapterContinuity, type ContinuityIssueV2 } from "../continuity-v2/check-chapter.js";
+import { isDismissed, readDismissals } from "../continuity-v2/dismissals.js";
 
 const issueSchema = z.object({
   quote: z.string().describe("本章里有问题的那一句（原文）。"),
@@ -28,6 +29,7 @@ const outputSchema = z.object({
   sure: z.array(issueSchema).describe("确定对不上的地方（排在前面给作者看）。"),
   maybe: z.array(issueSchema).describe("可能对不上的地方（作者自己判断）。"),
   failures: z.array(z.string()).describe("没跑成的步骤（如实说明）。"),
+  dismissed: z.number().int().describe("作者以前标过「不是问题」、这次没再报的条数。"),
   summary: z.string().describe("给作者看的一句话结论。"),
 });
 
@@ -50,24 +52,30 @@ export async function runCheckContinuity(projectDir: string, chapter: number): P
       sure: [],
       maybe: [],
       failures: [],
+      dismissed: 0,
       summary: `第 ${chapter} 章还没有正文，没法核账。`,
     };
   }
   const body = draft.content.replace(/^#[^\n]*\n/u, "").trim();
   const result = await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel: callConfiguredCheckerModel });
-  const sure = result.issues.filter((issue) => issue.confidence === "sure").map(toItem);
-  const maybe = result.issues.filter((issue) => issue.confidence !== "sure").map(toItem);
+  // 作者点过「不是问题」的不再报（只认同一章、两边原句都对得上的）。
+  const dismissals = await readDismissals(projectDir);
+  const shown = result.issues.filter((issue) => !isDismissed(chapter, issue, dismissals));
+  const dismissed = result.issues.length - shown.length;
+  const sure = shown.filter((issue) => issue.confidence === "sure").map(toItem);
+  const maybe = shown.filter((issue) => issue.confidence !== "sure").map(toItem);
   const ok = result.failures.length === 0 || result.issues.length > 0;
   const where = (issue: { readonly earlierChapter: number }) => (issue.earlierChapter === chapter ? "本章前文" : `第 ${issue.earlierChapter} 章`);
+  const dismissedNote = dismissed > 0 ? `（另有 ${dismissed} 处你标过「不是问题」，没再报。）` : "";
   const summary = !ok
     ? `第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。`
     : sure.length + maybe.length === 0
-      ? `核了第 ${chapter} 章，没发现和前文对不上的地方。${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
+      ? `核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
       : [
-        `核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。`,
+        `核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}`,
         ...sure.slice(0, 3).map((issue) => `· 「${issue.quote.slice(0, 40)}」和${where(issue)}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`),
       ].join("\n");
-  return { ok, chapter, source: draft.source, sure, maybe, failures: [...result.failures], summary };
+  return { ok, chapter, source: draft.source, sure, maybe, failures: [...result.failures], dismissed, summary };
 }
 
 const inputSchema = z.object({

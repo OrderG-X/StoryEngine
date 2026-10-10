@@ -51,6 +51,7 @@
  *      回执 payload 记录的入库内容逐字一致，才允许报 replayed；对不上（章未入库/被撤销/内容被改）
  *      fall through 走真 apply，磁盘真相为准，绝不做「200 但磁盘什么都没写」的假成功。
  */
+import { excludeFromCommitPlan, splitExclusions } from "../agent/commit-ledger/ledger-checklist.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
@@ -361,7 +362,7 @@ async function readOpenArcGoalTitles(projectDir: string): Promise<readonly strin
  * 来源：已登记角色库（character-bible）+ 之前各章时间线里出现过的角色名（跨章累积）。
  * 读失败/无库 → 空数组，绝不阻断预览。题材中立、纯读盘。
  */
-async function readEstablishedCharacterNames(projectDir: string, chapter: number): Promise<readonly string[]> {
+export async function readEstablishedCharacterNames(projectDir: string, chapter: number): Promise<readonly string[]> {
   const names = new Set<string>();
   try {
     const bible = await readCharacterBible(projectDir);
@@ -522,6 +523,8 @@ export type CommitApplyPolicy =
     readonly kind: "agent_preview_ticket";
     readonly previewToken?: string;
     readonly previewStore: CommitApplyPreviewTicketStore;
+    /** 作者在定稿预览的账本清单上去掉的条目 id（伏笔 / 线索 / 目标从计划里拿掉；事实由工具层处理）。 */
+    readonly excluded?: readonly string[];
   };
 
 export interface CommitApplyServiceInput {
@@ -710,6 +713,10 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     // 复用预览阶段算好的章节语义声明（不重复调模型）；取不到（进程重启/凭 token 无状态放行）→ 引擎走正则回退，
     // 但状态+原因随结果带出（工具层折进 summary），绝不让「票据里没声明」变成用户看不见的静默退化。
     const ticket = policy.previewStore.find(projectDir, chapter);
+    // 作者去掉了清单条目、但票据没了（进程重启）：重算的计划未必和作者看到的那份一致，去掉的可能照写——宁可让作者重新预览。
+    if (!ticket && (policy.excluded?.length ?? 0) > 0) {
+      return { kind: "preview_guard_refused", chapter, failure: "no_preview" };
+    }
     cachedDeclaration = ticket?.declaration;
     if (!ticket) {
       declarationOutcome = { status: "fallback", reason: "预览票据里取不到章节语义声明（进程重启或凭令牌无状态放行），本次入库按确定性规则兜底" };
@@ -725,13 +732,18 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     }
   }
 
-  const commitPlan = await buildCommitPlanFromProject({
+  const builtPlan = await buildCommitPlanFromProject({
     projectDir,
     chapter,
     draftPath,
     draftContent,
     ...(cachedDeclaration ? { declaration: cachedDeclaration } : {}),
   });
+  // 作者在账本清单上去掉的伏笔 / 线索 / 目标：从计划里拿掉，不写（同一版草稿 + 同一份声明重算，条目 id 一致）。
+  const excluded = policy.kind === "agent_preview_ticket" ? policy.excluded ?? [] : [];
+  const commitPlan = excluded.length > 0 && builtPlan.commitPlan
+    ? { ...builtPlan, commitPlan: excludeFromCommitPlan(builtPlan.commitPlan, splitExclusions(excluded)) }
+    : builtPlan;
   const transaction = buildCommitPreviewTransaction({ projectDir, chapter, draftContent, commitPlan });
 
   // ── HTTP 机制外皮：三绑死 preflight（previewHash/transactionId/idempotencyKey 与当前事务身份比对）。 ──

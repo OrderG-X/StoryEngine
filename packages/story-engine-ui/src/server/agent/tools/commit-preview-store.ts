@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import type { ChapterDeltaDeclaration } from "@actalk/story-engine";
 import type { ChapterDeltaDeclarationOutcome } from "../../services/commit-service.js";
+import type { FactProposal } from "../fact-ledger/reconcile-facts.js";
 
 export interface CommitPreviewTokenRecord {
   readonly token: string;
@@ -30,6 +31,8 @@ export interface CommitPreviewTokenRecord {
   readonly declaration?: ChapterDeltaDeclaration;
   /** 预览阶段声明步骤的状态+原因（fallback 时 apply 要把「本章按确定性规则兜底」如实带给用户）。 */
   readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
+  /** 预览阶段算好的记账提案（硬事实）：作者在清单上去掉不对的，定稿时只写留下的，不再重新抽。 */
+  readonly factProposal?: FactProposal;
   readonly createdAt: number;
 }
 
@@ -58,6 +61,7 @@ export function recordCommitPreview(input: {
   readonly draftHash: string;
   readonly declaration?: ChapterDeltaDeclaration;
   readonly declarationOutcome?: ChapterDeltaDeclarationOutcome;
+  readonly factProposal?: FactProposal;
 }): CommitPreviewTokenRecord {
   const token = expectedToken(input.projectDir, input.chapter, input.draftHash);
   const record: CommitPreviewTokenRecord = {
@@ -68,6 +72,7 @@ export function recordCommitPreview(input: {
     passed: true,
     ...(input.declaration ? { declaration: input.declaration } : {}),
     ...(input.declarationOutcome ? { declarationOutcome: input.declarationOutcome } : {}),
+    ...(input.factProposal ? { factProposal: input.factProposal } : {}),
     createdAt: Date.now(),
   };
   store.set(keyFor(input.projectDir, input.chapter), record);

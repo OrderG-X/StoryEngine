@@ -268,6 +268,7 @@ export type WorkspaceCommitPreview = {
   readonly draftIssueCount?: number;
   readonly semanticIssueCount?: number;
   readonly previewToken?: string;
+  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean }[];
 };
 
 export type WorkspaceNextStepPrompt = {
@@ -296,6 +297,8 @@ export function readWorkspaceMessages(value: unknown): {
   readonly aiFlavorFixedIds?: readonly string[];
   readonly aiReviewReport?: Record<string, unknown>;
   readonly draftReview?: Record<string, unknown>;
+  readonly continuityCheck?: Record<string, unknown>;
+  readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   readonly qualityReport?: Record<string, unknown>;
   readonly commitReport?: unknown;
   readonly nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
@@ -327,6 +330,8 @@ export function readWorkspaceMessages(value: unknown): {
     aiFlavorFixedIds?: readonly string[];
     aiReviewReport?: Record<string, unknown>;
     draftReview?: Record<string, unknown>;
+    continuityCheck?: Record<string, unknown>;
+    tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
     qualityReport?: Record<string, unknown>;
     commitReport?: unknown;
     nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
@@ -373,6 +378,9 @@ export function readWorkspaceMessages(value: unknown): {
     const aiFlavorFixedIds = readStringList(item.aiFlavorFixedIds).slice(0, 50);
     const aiReviewReport = isRecord(item.aiReviewReport) ? item.aiReviewReport : undefined;
     const draftReview = isRecord(item.draftReview) ? item.draftReview : undefined;
+    // 核账卡 / 本轮用量（2026-10-10）：存盘时漏收，对话重载后核账卡和用量行凭空消失。
+    const continuityCheck = isRecord(item.continuityCheck) ? item.continuityCheck : undefined;
+    const tokenUsage = readWorkspaceTokenUsage(item.tokenUsage);
     const qualityReport = isRecord(item.qualityReport) ? item.qualityReport : undefined;
     const commitReport = item.commitReport !== undefined && item.commitReport !== null
       ? item.commitReport
@@ -404,6 +412,8 @@ export function readWorkspaceMessages(value: unknown): {
       ...(aiFlavorFixedIds.length > 0 ? { aiFlavorFixedIds } : {}),
       ...(aiReviewReport ? { aiReviewReport } : {}),
       ...(draftReview ? { draftReview } : {}),
+      ...(continuityCheck ? { continuityCheck } : {}),
+      ...(tokenUsage ? { tokenUsage } : {}),
       ...(qualityReport ? { qualityReport } : {}),
       ...(commitReport !== undefined ? { commitReport } : {}),
       ...(nameConsistencyWarnings.length > 0 ? { nameConsistencyWarnings } : {}),
@@ -542,6 +552,15 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
   const previewToken = readString(value.previewToken);
   const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
   const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
+  const ledgerChecklist = Array.isArray(value.ledgerChecklist)
+    ? value.ledgerChecklist.filter(isRecord).slice(0, 200).flatMap((item) => {
+      const id = readString(item.id);
+      const label = readString(item.label);
+      if (!id || !label) return [];
+      const detail = readString(item.detail);
+      return [{ id, kind: readString(item.kind) ?? "", label, ...(detail ? { detail } : {}), removable: item.removable === true }];
+    })
+    : [];
   return {
     chapter,
     canCommit: value.canCommit,
@@ -550,7 +569,17 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
     ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
     ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
     ...(previewToken ? { previewToken } : {}),
+    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
   };
+}
+
+function readWorkspaceTokenUsage(value: unknown): { readonly input: number; readonly cachedInput: number; readonly output: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = readNonNegativeInteger(value.input);
+  const cachedInput = readNonNegativeInteger(value.cachedInput);
+  const output = readNonNegativeInteger(value.output);
+  if (input === undefined || output === undefined) return undefined;
+  return { input, cachedInput: cachedInput ?? 0, output };
 }
 
 function readNonNegativeInteger(value: unknown): number | undefined {

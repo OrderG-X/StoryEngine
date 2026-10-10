@@ -27,6 +27,17 @@ describe("parseUserAction 结构化动作解析", () => {
     });
   });
 
+  it("账本清单去掉的条目随定稿动作带上（去空白、去重、丢非字符串）", () => {
+    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, excluded: [" fact:1 ", "fact:1", 3, "", "hook:hook-a"] })).toEqual({
+      kind: "action",
+      action: { toolName: "commit_apply", chapter: 5, excluded: ["fact:1", "hook:hook-a"] },
+    });
+    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, excluded: "fact:1" })).toEqual({
+      kind: "action",
+      action: { toolName: "commit_apply", chapter: 5 },
+    });
+  });
+
   it("章号数字字符串宽容还原；空 previewToken 丢掉", () => {
     expect(parseUserAction({ toolName: "commit_apply", chapter: "7", previewToken: "" })).toEqual({
       kind: "action",

@@ -35,6 +35,7 @@ import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
+import { saveContinuityDismissal } from "../../../api/continuityDismissalsClient.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
@@ -367,6 +368,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSuggestedAction={props.onSuggestedAction}
             onCreateRevisionTask={props.onCreateRevisionTask}
             commitConfirmable={message.id === confirmablePreviewId}
+            projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
           );
@@ -679,6 +681,7 @@ function MessageBubbles({
   onPrefillComposer,
   liveOperation = null,
   isLatestMessage = true,
+  projectPath = null,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -706,6 +709,8 @@ function MessageBubbles({
   readonly liveOperation?: string | null;
   /** 是不是对话里最后一条（旧的出错卡不再给「重试」——后面已经重试过/往下走了，再点会重复跑）。 */
   readonly isLatestMessage?: boolean;
+  /** 当前书目录（核账卡「不是问题」存盘用）。 */
+  readonly projectPath?: string | null;
 }) {
   if (message.role === "system") {
     // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
@@ -755,9 +760,10 @@ function MessageBubbles({
   const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
   const commitPreview = message.commitPreview;
   const confirmCommit = commitPreview && commitConfirmable && onSuggestedAction
-    ? () => onSuggestedAction(commitConfirmAction({
+    ? (excluded: readonly string[] = []) => onSuggestedAction(commitConfirmAction({
       chapter: commitPreview.chapter,
       ...(commitPreview.previewToken ? { previewToken: commitPreview.previewToken } : {}),
+      ...(excluded.length > 0 ? { excluded } : {}),
     }))
     : undefined;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
@@ -915,7 +921,11 @@ function MessageBubbles({
 
       {/* 核账卡：本章原句 ↔ 前文原句，确定的列出、可能的收起；「改这处」给 agent 发只改这一处的意图。 */}
       {message.continuityCheck ? (
-        <ContinuityCheckCard check={message.continuityCheck} onRevise={onSendMessage} />
+        <ContinuityCheckCard
+          check={message.continuityCheck}
+          onRevise={onSendMessage}
+          onDismiss={projectPath ? (item, undo) => saveContinuityDismissal(projectPath, { chapter: message.continuityCheck!.chapter, ...item }, undo) : undefined}
+        />
       ) : null}
 
       {/* 质检明细卡：blocking 硬伤突出、soft 软提示默认折叠（防噪音），紧靠审校。 */}

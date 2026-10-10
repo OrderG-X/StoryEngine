@@ -30,6 +30,28 @@ import { callConfiguredDeclareModel, declareChapterDeltaWithStatus } from "./cha
 import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
+import { readFile } from "node:fs/promises";
+import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { readEstablishedCharacterNames } from "../../services/commit-service.js";
+import { callConfiguredFactModel } from "./commit-apply.js";
+import { proposeFactChanges, type FactProposal } from "../fact-ledger/reconcile-facts.js";
+import { buildLedgerChecklist, type LedgerChecklistItem } from "../commit-ledger/ledger-checklist.js";
+
+/** 预览时算记账提案（硬事实）的注入点：单测不传 = 清单里只有伏笔线索目标和天数。 */
+export type ProposeFactsFn = (args: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftText: string;
+}) => Promise<FactProposal>;
+
+const defaultProposeFacts: ProposeFactsFn = async ({ projectDir, chapter, draftText }) =>
+  proposeFactChanges({
+    projectDir,
+    chapter,
+    draftText,
+    callModel: callConfiguredFactModel,
+    knownNames: await readEstablishedCharacterNames(projectDir, chapter).catch(() => []),
+  });
 
 /**
  * 预览阶段生成章节语义声明的注入点（单测可传假实现；缺省=不声明，走引擎正则）。
@@ -99,6 +121,15 @@ const outputSchema = z.object({
       "fallback 时 summary 已带【章节语义声明未生效】提示，必须如实转达给用户、不得隐去。缺草稿时省略。",
   ),
   declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案，已消毒）。"),
+  ledgerChecklist: z.array(z.object({
+    id: z.string(),
+    kind: z.string(),
+    label: z.string(),
+    detail: z.string().optional(),
+    removable: z.boolean(),
+  })).optional().describe(
+    "定稿会往账本里写的东西（硬事实、伏笔线索目标的新开推进收回、故事第几天）。界面列成清单给作者勾，作者去掉的定稿时不写；你不用逐条转述。",
+  ),
 });
 
 export interface StaleThreadWarningView {
@@ -126,6 +157,8 @@ export interface CommitPreviewToolOutput {
   /** 章节语义声明来源（fallback=本章按确定性规则兜底，summary 已明说）；缺草稿分支省略。 */
   readonly declarationStatus?: ChapterDeltaDeclarationStatus;
   readonly declarationReason?: string;
+  /** 定稿会往账本里写的东西（作者在卡上勾选）。 */
+  readonly ledgerChecklist?: readonly LedgerChecklistItem[];
 }
 
 /**
@@ -140,7 +173,21 @@ export async function buildCommitPreviewToolOutput(input: {
    * 不传（纯逻辑单测/无模型环境）→ declaration=undefined，完全走引擎正则（旧行为）。
    */
   readonly declareDelta?: DeclareDeltaFn;
+  /** 预览时一并算好硬事实（和建计划并行，不拖慢预览）；不传就不算。 */
+  readonly proposeFacts?: ProposeFactsFn;
 }): Promise<CommitPreviewToolOutput> {
+  const factProposalPromise: Promise<{ readonly draftContent: string; readonly proposal: FactProposal } | undefined> = input.proposeFacts
+    ? readFile(defaultDraftPath(input.projectDir, input.chapter), "utf-8")
+      .then(async (draftContent) => ({
+        draftContent,
+        proposal: await input.proposeFacts!({
+          projectDir: input.projectDir,
+          chapter: input.chapter,
+          draftText: stripLeadingMarkdownChapterHeading(draftContent).trim(),
+        }),
+      }))
+      .catch(() => undefined)
+    : Promise.resolve(undefined);
   const result = await runCommitPreview({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -246,6 +293,13 @@ export async function buildCommitPreviewToolOutput(input: {
   }
 
   const canCommit = blockingReasons.length === 0;
+  // 记账提案只认和这次预览同一版草稿算出来的（两次读之间草稿被改了就不用，定稿时再现抽）。
+  const factDraft = await factProposalPromise;
+  const factProposal = factDraft && factDraft.draftContent === result.draftContent ? factDraft.proposal : undefined;
+  const ledgerChecklist = commitPlan.commitPlan
+    ? buildLedgerChecklist({ chapter, plan: commitPlan.commitPlan, ...(factProposal ? { facts: factProposal } : {}) })
+      .map((item) => ({ ...item, label: scrubBareEntityIdsFromText(item.label, nameById), ...(item.detail ? { detail: scrubBareEntityIdsFromText(item.detail, nameById) } : {}) }))
+    : [];
   let previewToken: string | undefined;
   if (canCommit) {
     // previewToken 内存 store 的所有权在本适配层（D7 机制外皮）：登记草稿哈希 + 预览声明，供 apply 守卫/复用。
@@ -255,6 +309,7 @@ export async function buildCommitPreviewToolOutput(input: {
       draftHash: hashDraftContent(result.draftContent),
       ...(declaration ? { declaration } : {}),
       declarationOutcome,
+      ...(factProposal ? { factProposal } : {}),
     });
     previewToken = record.token;
   }
@@ -290,6 +345,7 @@ export async function buildCommitPreviewToolOutput(input: {
     ...(declarationOutcome.status === "fallback" && declarationOutcome.reason
       ? { declarationReason: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(declarationOutcome.reason, nameById)) }
       : {}),
+    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
   };
 }
 
@@ -509,7 +565,7 @@ export const commitPreviewTool = createTool({
     if (resolvedChapter === undefined) {
       throw new Error("commit_preview 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
-    return buildCommitPreviewToolOutput({ projectDir, chapter: resolvedChapter, declareDelta: defaultDeclareDelta });
+    return buildCommitPreviewToolOutput({ projectDir, chapter: resolvedChapter, declareDelta: defaultDeclareDelta, proposeFacts: defaultProposeFacts });
   },
 });
 

@@ -110,8 +110,9 @@ describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面�
     const tool = await driveToolExecute(commitPreviewTool, { chapter: 1 }, { projectDir });
     // D6 另一侧：工具预览注入透传桩，全程不调 AI 判定（仍是 2 次，没有新增）。
     expect(judgeMocks.judgeDraftQualityWithModel).toHaveBeenCalledTimes(2);
-    // D7 另一侧：工具预览带声明通道、调了 1 次声明模型（流式空闲超时路；本用例它吐非 JSON → 声明降级 fallback，等价纯正则）。
-    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(1);
+    // D7 另一侧：工具预览带声明通道、调了 1 次声明模型（流式空闲超时路；本用例它吐非 JSON → 声明降级 fallback，等价纯正则）；
+    // 2026-10-10 起预览还并行抽硬事实给作者核（账本清单）：同样吐非 JSON → 重试一次仍失败 = 再 2 次。
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(3);
     expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
     // P1：降级对用户不静默——工具输出标 fallback、summary 带固定提示。
     expect(tool.declarationStatus).toBe("fallback");

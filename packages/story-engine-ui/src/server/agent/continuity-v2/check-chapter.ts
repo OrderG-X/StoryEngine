@@ -52,7 +52,9 @@ export interface CheckChapterResult {
 }
 
 const KINDS = new Set<ClaimKind>(["object", "place", "time", "identity", "knowledge", "number", "event"]);
-const MAX_CLAIMS = 60;
+/** 每段最多拆多少条；一章分 CLAIM_CHUNKS 段并行拆。 */
+const CLAIMS_PER_CHUNK = 20;
+const CLAIM_CHUNKS = 4;
 const EVIDENCE_PER_CLAIM = 7;
 const CLAIMS_PER_BATCH = 14;
 const MIN_TERM_CHARS = 2;
@@ -86,9 +88,13 @@ export function splitSentences(text: string): readonly string[] {
 
 // ---------- 1. 拆说法 ----------
 
-export function buildClaimMessages(chapter: number, draftBody: string): { role: "system" | "user"; content: string }[] {
+/**
+ * 拆说法只让模型报「第几句 + 名字 + 类型」，不抄原句、不复述（2026-10-10 提速：原先逐字抄句加一句复述，
+ * 一章输出 5 千多 token、光这一步 39 秒，占核账总时长的九成）。正文先切成编号的句子，原句由编号取回。
+ */
+export function buildClaimMessages(chapter: number, sentences: readonly string[], firstIndex = 0): { role: "system" | "user"; content: string }[] {
   const system = [
-    "你是长篇小说的核对员。从【本章正文】里找出所有「后文必须和前文一致」的具体说法，每条对应正文里的一句原文。重点找：",
+    "你是长篇小说的核对员。【本章正文】已按句编号。找出所有「后文必须和前文一致」的具体说法所在的句子。重点找：",
     "① 物件：在哪、在谁手里、什么样（材质颜色、上面写着什么、坏没坏、有几个）；",
     "② 人物行踪：在哪、什么时候来 / 走、住在哪、和谁住；",
     "③ 时间：提到过去的事（几天前、昨天、上次、那天）、日期星期、期限还剩几天、几点；",
@@ -99,28 +105,40 @@ export function buildClaimMessages(chapter: number, draftBody: string): { role: 
     "⑧ 搬动东西的动作：拿出、放回、塞进、摸出、交给、锁进、带走——它们说明东西此刻在哪；",
     "⑨ 时辰与天色：几点、上午 / 傍晚、天黑没黑、日头在哪。",
     "不要列情绪、景色、比喻。",
-    `每条：quote 逐字抄正文里的那一句；claim 用一句话说它断言了什么；terms 列出其中的人名 / 物名 / 地名（照正文写法，2～6 字）；kind 选 object|place|time|identity|knowledge|number|event。最多 ${MAX_CLAIMS} 条，宁可多列。`,
-    "只输出一个 JSON：{\"claims\":[{\"quote\":\"\",\"claim\":\"\",\"terms\":[\"\"],\"kind\":\"object\"}]}，不要解释。",
+    `每条：s＝句子编号；t＝这句里的人名 / 物名 / 地名（照正文写法，2～6 字）；k＝类型，选 object|place|time|identity|knowledge|number|event。最多 ${CLAIMS_PER_CHUNK} 条，宁可多列。`,
+    "只输出一个 JSON：{\"claims\":[{\"s\":3,\"t\":[\"怀表\",\"抽屉\"],\"k\":\"object\"}]}，不要解释。",
   ].join("\n");
-  return [{ role: "system", content: system }, { role: "user", content: `【第 ${chapter} 章正文】\n${draftBody}` }];
+  const numbered = sentences.map((sentence, index) => `[${firstIndex + index + 1}] ${sentence}`).join("\n");
+  return [{ role: "system", content: system }, { role: "user", content: `【第 ${chapter} 章正文】\n${numbered}` }];
 }
 
-export function parseClaims(text: string, draftBody: string): readonly ChapterClaim[] {
+/**
+ * 解析拆说法：认句子编号（s / sentence，数字或「[12]」；编号从 firstIndex+1 起），也宽进认老格式的逐字原句 quote。
+ * 编号越界、原句不在正文里的丢掉；同一句只留一条。
+ */
+export function parseClaims(text: string, sentences: readonly string[], firstIndex = 0): readonly ChapterClaim[] {
   const parsed = parseJson(text);
   const raw = Array.isArray(parsed.claims) ? parsed.claims : [];
-  const body = normalize(draftBody);
+  const normalized = sentences.map(normalize);
+  const body = normalized.join("");
   const out: ChapterClaim[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     const record = asRecord(item);
     if (!record) continue;
-    const quote = String(record.quote ?? "").trim();
-    if (normalize(quote).length < 4 || !body.includes(normalize(quote)) || seen.has(normalize(quote))) continue;
+    const index = Number(String(record.s ?? record.sentence ?? "").replace(/[^\d]/gu, "")) - 1 - firstIndex;
+    let quote = Number.isInteger(index) && index >= 0 && index < sentences.length ? sentences[index] : "";
+    if (!quote) {
+      const literal = String(record.quote ?? "").trim();
+      if (normalize(literal).length >= 4 && body.includes(normalize(literal))) quote = literal;
+    }
+    if (!quote || seen.has(normalize(quote))) continue;
     seen.add(normalize(quote));
-    const terms = (Array.isArray(record.terms) ? record.terms : typeof record.terms === "string" ? String(record.terms).split(/[,，、\s]+/u) : [])
+    const rawTerms = record.t ?? record.terms;
+    const terms = (Array.isArray(rawTerms) ? rawTerms : typeof rawTerms === "string" ? String(rawTerms).split(/[,，、\s]+/u) : [])
       .map((term) => String(term ?? "").trim())
       .filter((term) => term.length >= MIN_TERM_CHARS && term.length <= 8);
-    const kindRaw = String(record.kind ?? "").trim().toLowerCase() as ClaimKind;
+    const kindRaw = String(record.k ?? record.kind ?? "").trim().toLowerCase() as ClaimKind;
     out.push({
       id: `C${out.length + 1}`,
       quote,
@@ -128,8 +146,15 @@ export function parseClaims(text: string, draftBody: string): readonly ChapterCl
       terms: [...new Set(terms)],
       kind: KINDS.has(kindRaw) ? kindRaw : "event",
     });
-    if (out.length >= MAX_CLAIMS) break;
   }
+  return out;
+}
+
+/** 正文按句切成几段并行拆（一段一次调用），各段编号连续。 */
+export function chunkSentences(sentences: readonly string[], chunks: number): readonly { readonly firstIndex: number; readonly sentences: readonly string[] }[] {
+  const size = Math.max(1, Math.ceil(sentences.length / Math.max(1, chunks)));
+  const out = [];
+  for (let start = 0; start < sentences.length; start += size) out.push({ firstIndex: start, sentences: sentences.slice(start, start + size) });
   return out;
 }
 
@@ -249,7 +274,7 @@ export function buildVerifyMessages(
     "只输出一个 JSON：{\"contradictions\":[{\"id\":\"C1\",\"earlierQuote\":\"\",\"reason\":\"\"}]}；都不矛盾就给空数组。",
   ].join("\n");
   const blocks = batch.map(({ claim, evidence }) => [
-    `【${claim.id}】本章说法：${claim.quote}（${claim.claim}）`,
+    `【${claim.id}】本章说法：${claim.quote}${claim.claim !== claim.quote ? `（${claim.claim}）` : ""}`,
     ...evidence.map((item) => `  - ${item.sameChapter ? "本章前文" : `第 ${item.chapter} 章`}：${item.text}`),
   ].join("\n"));
   const user = [
@@ -317,14 +342,24 @@ export async function checkChapterAgainstEarlierText(input: {
   readonly earlier?: EarlierText;
 }): Promise<CheckChapterResult> {
   const failures: string[] = [];
-  let claims: readonly ChapterClaim[] = [];
-  try {
-    claims = parseClaims(await input.callModel(buildClaimMessages(input.chapter, input.draftBody)), input.draftBody);
-  } catch (error) {
-    return { claims: 0, checkedClaims: 0, issues: [], failures: [`拆说法没成：${error instanceof Error ? error.message : String(error)}`] };
-  }
-  const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   const chapterSentences = splitSentences(input.draftBody);
+  const chunkResults = await Promise.allSettled(chunkSentences(chapterSentences, CLAIM_CHUNKS).map(async (chunk) =>
+    parseClaims(await input.callModel(buildClaimMessages(input.chapter, chunk.sentences, chunk.firstIndex)), chunk.sentences, chunk.firstIndex).slice(0, CLAIMS_PER_CHUNK)));
+  const seenQuotes = new Set<string>();
+  const claims: ChapterClaim[] = [];
+  chunkResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      failures.push(`第 ${index + 1} 段拆说法没成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      return;
+    }
+    for (const claim of result.value) {
+      if (seenQuotes.has(normalize(claim.quote))) continue;
+      seenQuotes.add(normalize(claim.quote));
+      claims.push({ ...claim, id: `C${claims.length + 1}` });
+    }
+  });
+  if (claims.length === 0 && failures.length > 0) return { claims: 0, checkedClaims: 0, issues: [], failures };
+  const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   const withEvidence = claims
     .map((claim) => ({ claim, evidence: findEvidence(claim, earlier, input.chapter, chapterSentences) }))
     .filter((item) => item.evidence.length > 0);
@@ -450,7 +485,10 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
     if (!containsQuote(body, quote) || SELF_DISMISSED.test(reason)) continue;
     const claimedChapter = Number(record.earlierChapter);
     let earlierChapter: number | undefined;
-    if (containsQuote(body, earlierQuote) && normalize(earlierQuote) !== normalize(quote)) earlierChapter = chapter;
+    // 本章自己和自己比：两句互相包含就是同一处（浏览器实测：「兜里只剩这一张纸了」对上含它的那一整句，报成「重复」）。
+    const sameSpot = normalize(earlierQuote).includes(normalize(quote)) || normalize(quote).includes(normalize(earlierQuote));
+    if (containsQuote(body, earlierQuote) && sameSpot) continue;
+    if (containsQuote(body, earlierQuote)) earlierChapter = chapter;
     else if (Number.isInteger(claimedChapter) && earlierByChapter.has(claimedChapter) && containsQuote(earlierByChapter.get(claimedChapter)!, earlierQuote)) earlierChapter = claimedChapter;
     else earlierChapter = [...earlierByChapter.entries()].find(([, text]) => containsQuote(text, earlierQuote))?.[0];
     if (earlierChapter === undefined) continue;

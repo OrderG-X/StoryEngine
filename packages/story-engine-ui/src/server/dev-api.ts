@@ -30,6 +30,7 @@ import { registerMatrixEnrichmentRoutes } from "./routes/matrix-enrichment.js";
 import { registerWritingRulesEnrichmentRoutes } from "./routes/writing-rules-enrichment.js";
 import { registerForeshadowingOverridesRoutes } from "./routes/foreshadowing-overrides.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerContinuityDismissalsRoutes } from "./routes/continuity-dismissals.js";
 
 // ---------------------------------------------------------------------------
 // Public entry point — Vite 插件(server.middlewares)与独立 server(connect 实例)都满足
@@ -62,5 +63,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerMatrixEnrichmentRoutes(router);
   registerWritingRulesEnrichmentRoutes(router);
   registerForeshadowingOverridesRoutes(router);
+  registerContinuityDismissalsRoutes(router);
   registerHealthRoutes(router);
 }

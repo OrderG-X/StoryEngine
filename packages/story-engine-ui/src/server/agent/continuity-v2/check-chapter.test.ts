@@ -21,17 +21,29 @@ const EARLIER: EarlierText = {
 const BODY = "林舟一早开门。他从工作台上拿起那块怀表，表盖还开着。周婶在门口喊他。";
 
 describe("查错 v2：拆说法", () => {
-  it("原句必须逐字在本章里；名字去重、过滤过长过短；类型认不出当 event", () => {
+  it("按句子编号取回原句（分段时编号连续）；越界的丢掉；同一句只留一条；名字去重、过滤过长过短；类型认不出当 event", () => {
+    const sentences = splitSentences(BODY);
     const claims = parseClaims(JSON.stringify({
       claims: [
-        { quote: "他从工作台上拿起那块怀表，表盖还开着。", claim: "怀表在工作台上", terms: ["怀表", "工作台", "怀表", "x"], kind: "object" },
-        { quote: "正文里没有这句", claim: "x", terms: ["x"], kind: "object" },
-        { quote: "周婶在门口喊他。", claim: "周婶在门口", terms: "周婶、门口", kind: "随便" },
+        { s: 2, t: ["怀表", "工作台", "怀表", "x"], k: "object" },
+        { s: 9, t: ["x"], k: "object" },
+        { s: "[3]", t: "周婶、门口", k: "随便" },
+        { s: 3, t: ["周婶"], k: "place" },
       ],
-    }), BODY);
+    }), sentences.slice(1), 1);
     expect(claims).toHaveLength(2);
-    expect(claims[0]).toMatchObject({ id: "C1", terms: ["怀表", "工作台"], kind: "object" });
-    expect(claims[1]).toMatchObject({ terms: ["周婶", "门口"], kind: "event" });
+    expect(claims[0]).toMatchObject({ id: "C1", quote: sentences[1], terms: ["怀表", "工作台"], kind: "object" });
+    expect(claims[1]).toMatchObject({ quote: sentences[2], terms: ["周婶", "门口"], kind: "event" });
+  });
+
+  it("宽进：模型照老格式逐字抄原句也认，抄不出原文的不收", () => {
+    const claims = parseClaims(JSON.stringify({
+      claims: [
+        { quote: "他从工作台上拿起那块怀表，表盖还开着。", terms: ["怀表"], kind: "object" },
+        { quote: "正文里没有这句", terms: ["x"], kind: "object" },
+      ],
+    }), splitSentences(BODY));
+    expect(claims.map((claim) => claim.quote)).toEqual(["他从工作台上拿起那块怀表，表盖还开着。"]);
   });
 });
 
@@ -77,6 +89,13 @@ describe("查错 v2：整章通读", () => {
     }), 3, BODY, EARLIER);
     expect(issues).toHaveLength(1);
     expect(issues[0].earlierChapter).toBe(2);
+  });
+
+  it("本章那句和「本章前文」那句是同一处（互相包含）→ 不报", () => {
+    const issues = parseFullReadIssues(JSON.stringify({
+      contradictions: [{ quote: "表盖还开着", earlierQuote: "他从工作台上拿起那块怀表，表盖还开着。", earlierChapter: 3, reason: "重复" }],
+    }), 3, BODY, EARLIER);
+    expect(issues).toEqual([]);
   });
 });
 

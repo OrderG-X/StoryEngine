@@ -135,5 +135,6 @@ describe("absolutizeRelativeDays（第二十一轮账本 30 条留着昨天 / �
     expect(absolutizeRelativeDays("目前天气转凉，然后天亮了", 5)).toBe("目前天气转凉，然后天亮了");
     expect(absolutizeRelativeDays("明天来", undefined)).toBe("明天来");
     expect(absolutizeRelativeDays("明天（故事第6天）来量", 5)).toBe("故事第6天来量");
+    expect(absolutizeRelativeDays("定在后天上午（故事第13天）拉走", 11)).toBe("定在故事第13天上午拉走");
   });
 });

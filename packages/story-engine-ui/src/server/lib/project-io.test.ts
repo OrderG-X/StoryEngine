@@ -615,6 +615,26 @@ describe("resolveFoundationUpdateTargetId", () => {
   });
 });
 
+describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
+  it("核账卡、本轮用量、定稿预览的账本清单都随消息存下来", () => {
+    const [message] = readWorkspaceMessages([{
+      id: "assistant-1",
+      role: "assistant",
+      content: "核了第 8 章",
+      continuityCheck: { chapter: 8, source: "draft", sure: [], maybe: [{ quote: "a", earlierQuote: "b", earlierChapter: 7, reason: "c" }] },
+      tokenUsage: { input: 90000, cachedInput: 43000, output: 4000 },
+      commitPreview: {
+        chapter: 8,
+        canCommit: true,
+        ledgerChecklist: [{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }, { id: "", label: "坏条目" }],
+      },
+    }]);
+    expect(message.continuityCheck).toMatchObject({ chapter: 8 });
+    expect(message.tokenUsage).toEqual({ input: 90000, cachedInput: 43000, output: 4000 });
+    expect(message.commitPreview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+  });
+});
+
 describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
   it("drops legacy mock seed messages (msg-0*) while keeping real messages", () => {
     // Simulates an already-polluted chapter-0001.json snapshot on disk:

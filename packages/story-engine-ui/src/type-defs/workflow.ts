@@ -39,4 +39,6 @@ export interface SuggestedAction {
 export interface CommitConfirmTarget {
   readonly chapter?: number;
   readonly previewToken?: string;
+  /** 作者在账本清单上去掉的条目 id（定稿时不写）。 */
+  readonly excluded?: readonly string[];
 }

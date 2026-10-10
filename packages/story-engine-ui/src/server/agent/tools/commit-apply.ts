@@ -26,7 +26,8 @@ import { coerceNumber } from "./lenient-args.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { type FactCallModel } from "../fact-ledger/fact-ledger.js";
-import { extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
+import { applyFactProposal, extractAndReconcileFacts } from "../fact-ledger/reconcile-facts.js";
+import { splitExclusions } from "../commit-ledger/ledger-checklist.js";
 import { writeTool } from "../withSnapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
@@ -58,6 +59,7 @@ const inputSchema = z.object({
   previewToken: z.string().optional().describe(
     "commit_preview 返回的真实令牌。可省略：系统会优先使用同进程内最近一次有效 commit_preview 票据；没有有效预览时会拒绝定稿。",
   ),
+  excluded: z.array(z.string()).optional().describe("作者在账本清单上去掉的条目（只由「确认定稿」按钮带来，你不用传）。"),
 });
 
 const outputSchema = z.object({
@@ -154,6 +156,7 @@ export async function applyCommitToolLogic(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly previewToken?: string;
+  readonly excluded?: readonly string[];
 }): Promise<CommitApplyToolOutput> {
   const result = await runCommitApply({
     projectDir: input.projectDir,
@@ -162,6 +165,7 @@ export async function applyCommitToolLogic(input: {
       kind: "agent_preview_ticket",
       ...(input.previewToken !== undefined ? { previewToken: input.previewToken } : {}),
       previewStore: PREVIEW_TICKET_STORE,
+      ...(input.excluded && input.excluded.length > 0 ? { excluded: input.excluded } : {}),
     },
   });
   const { projectDir, chapter } = input;
@@ -417,10 +421,14 @@ export const commitApplyTool = writeTool({
     if (resolvedChapter === undefined) {
       throw new Error("commit_apply 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
+    // 预览时算好的记账提案：定稿成功后票据会被消费，先拿出来。
+    const factProposal = findCommitPreview(projectDir, resolvedChapter)?.factProposal;
+    const excluded = input.excluded ?? [];
     const result = await applyCommitToolLogic({
       projectDir,
       chapter: resolvedChapter,
       previewToken: input.previewToken,
+      ...(excluded.length > 0 ? { excluded } : {}),
     });
     if (!result.committed || !result.draftBody) return result;
     try {
@@ -434,13 +442,16 @@ export const commitApplyTool = writeTool({
         .map((c) => c.name)
         .filter((n): n is string => typeof n === "string" && n.length > 0);
       // 阶段 4「记账对号」：抽事实时对照本章相关的旧事实——明写的变化让旧条失效，对不上的不动账本、交给作者定。
-      const fact = await extractAndReconcileFacts({
-        projectDir,
-        chapter: resolvedChapter,
-        draftText: result.draftBody,
-        callModel: callConfiguredFactModel,
-        knownNames,
-      });
+      // 「AI 记账、作者核账」：预览时作者已经看过这份提案、去掉了不对的 → 只写留下的；没有提案（预览时没抽成 / 进程重启）才现抽。
+      const fact = factProposal
+        ? await applyFactProposal(projectDir, resolvedChapter, factProposal, splitExclusions(excluded).facts)
+        : await extractAndReconcileFacts({
+          projectDir,
+          chapter: resolvedChapter,
+          draftText: result.draftBody,
+          callModel: callConfiguredFactModel,
+          knownNames,
+        });
       const withFacts = appendFactNoteToSummary(result.summary, fact.summary);
       const withNew = appendNewCharactersToSummary(withFacts, fact.newCharacters);
       // 反复出场未建卡 → 确定性升级点名一次（50 章实测：每章一句「要建卡就说一声」没人接茬，需要升级语气）。

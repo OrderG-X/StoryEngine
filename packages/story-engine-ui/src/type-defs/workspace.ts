@@ -112,6 +112,14 @@ export interface CommitPreviewCardData {
   readonly semanticIssueCount?: number;
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
+  /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写。 */
+  readonly ledgerChecklist?: readonly {
+    readonly id: string;
+    readonly kind: string;
+    readonly label: string;
+    readonly detail?: string;
+    readonly removable: boolean;
+  }[];
 }
 
 export interface DraftPreview {

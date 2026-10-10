@@ -15,10 +15,19 @@ export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string }
+  | {
+    readonly toolName: "commit_apply";
+    readonly chapter: number;
+    readonly previewToken?: string;
+    /** 作者在定稿预览的账本清单上去掉的条目 id（这些不写进账本）。 */
+    readonly excluded?: readonly string[];
+  }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。 */
   | { readonly toolName: "check_continuity"; readonly chapter: number };
+
+/** 账本清单一次最多去掉多少条（防异常请求体）。 */
+const MAX_EXCLUDED = 500;
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -50,9 +59,12 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
     : undefined;
+  const excluded = Array.isArray(record.excluded)
+    ? [...new Set(record.excluded.filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.length <= 200).map((id) => id.trim()))].slice(0, MAX_EXCLUDED)
+    : [];
   return {
     kind: "action",
-    action: { toolName: "commit_apply", chapter, ...(previewToken ? { previewToken } : {}) },
+    action: { toolName: "commit_apply", chapter, ...(previewToken ? { previewToken } : {}), ...(excluded.length > 0 ? { excluded } : {}) },
   };
 }
 
@@ -134,7 +146,11 @@ export async function runUserAction(args: {
   try {
     output = await args.executeTool(
       action.toolName,
-      { chapter: action.chapter, ...(action.previewToken ? { previewToken: action.previewToken } : {}) },
+      {
+        chapter: action.chapter,
+        ...(action.previewToken ? { previewToken: action.previewToken } : {}),
+        ...(action.excluded && action.excluded.length > 0 ? { excluded: action.excluded } : {}),
+      },
       args.requestContext,
     );
   } catch (error) {

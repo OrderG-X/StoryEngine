@@ -99,4 +99,42 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     );
     expect(blocked.querySelector("button.cpc-decline")).toBeNull();
   });
+
+  it("账本清单：列出会记的条目，勾掉的随「确认定稿」带上；只提示的条目没有勾选框", () => {
+    const preview: CommitPreviewCardData = {
+      chapter: 7,
+      canCommit: true,
+      ledgerChecklist: [
+        { id: "day", kind: "day", label: "这一章记为故事第 3 天", removable: false },
+        { id: "fact:0", kind: "fact", label: "记下：铜钥匙在林溪手里", detail: "她摸出一把铜钥匙。", removable: true },
+        { id: "thread:lead-1", kind: "thread", label: "新线索：去码头", removable: true },
+      ],
+    };
+    const onConfirm = vi.fn();
+    const { container, getByRole, getAllByRole } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
+    expect(container.textContent ?? "").toContain("这次入账会记下 2 条");
+    expect(getAllByRole("checkbox")).toHaveLength(2);
+    fireEvent.click(getAllByRole("checkbox")[0]);
+    expect(container.textContent ?? "").toContain("这次入账会记下 1 条");
+    fireEvent.click(getByRole("button", { name: "确认定稿（去掉 1 条）" }));
+    expect(onConfirm).toHaveBeenCalledWith(["fact:0"]);
+  });
+
+  it("卡片重新挂载（回合收尾重建消息）后勾选还在", () => {
+    const preview: CommitPreviewCardData = {
+      chapter: 9,
+      canCommit: true,
+      previewToken: "tok-remount",
+      ledgerChecklist: [{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }],
+    };
+    const first = render(<CommitPreviewCard preview={preview} onConfirm={vi.fn()} />);
+    fireEvent.click(first.container.querySelector("input[type=checkbox]")!);
+    first.unmount();
+    const onConfirm = vi.fn();
+    const second = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
+    const confirm = [...second.container.querySelectorAll("button")].find((button) => button.textContent === "确认定稿（去掉 1 条）");
+    expect(confirm).toBeTruthy();
+    fireEvent.click(confirm!);
+    expect(onConfirm).toHaveBeenCalledWith(["fact:0"]);
+  });
 });

@@ -144,6 +144,18 @@
   .step-card .cpc-decline:hover:not(:disabled){background:var(--hover);}
   .step-card .cpc-decline:disabled{opacity:.55;cursor:default;}
 
+  /* 定稿前的账本清单：一条一行，依据原句小一号；勾掉的划线变淡。 */
+  .step-card .cpc-ledger{margin:0 0 10px;}
+  .step-card .cpc-ledger-title{margin:0 0 6px;font-size:12.5px;font-weight:600;color:var(--text);}
+  .step-card .cpc-ledger-list{list-style:none;margin:0 0 6px;padding:0;display:flex;flex-direction:column;gap:5px;}
+  .step-card .cpc-ledger-item{display:flex;flex-direction:column;gap:2px;font-size:12.5px;line-height:1.5;color:var(--text);}
+  .step-card .cpc-ledger-item label{display:flex;align-items:flex-start;gap:7px;cursor:pointer;}
+  .step-card .cpc-ledger-item input{margin:3px 0 0;accent-color:var(--accent);flex:none;}
+  .step-card .cpc-ledger-item.is-note .cpc-ledger-label{color:var(--muted);}
+  .step-card .cpc-ledger-item.is-removed .cpc-ledger-label{text-decoration:line-through;color:var(--faint);}
+  .step-card .cpc-ledger-detail{padding-left:21px;font-size:11.5px;color:var(--muted);}
+  .step-card .cpc-ledger-item.is-note .cpc-ledger-detail{padding-left:0;}
+
   .agent-error-card{background:var(--danger-soft);border-color:rgba(224,137,124,.3);}
   .agent-error-card .aec-retry{color:var(--accent-ink);background:var(--accent);border:0;}
   .agent-error-card .aec-detail-toggle{background:transparent;}
