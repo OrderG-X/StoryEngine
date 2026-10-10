@@ -95,6 +95,8 @@ export interface AgentToolResult {
    *  前端据此把真正文载入工作区——否则只能用不含正文的 overview 刷新，草稿被占位覆盖、autosave 抹掉真正文。 */
   readonly draftBody?: string;
   readonly draftTitle?: string;
+  /** 这份正文写回时的版本号（revise_draft 带，同一进程严格递增）：并行改稿的结果到达顺序不等于写入顺序，前端只套用更新的。 */
+  readonly draftVersion?: number;
   /** commit_apply 入库成功标志：前端据此把 draftBody 以 committed 状态（而非 draft_ready）载入工作区，防 autosave 复活已入库章节。 */
   readonly committed?: boolean;
   /** undo_last_change 专属：true=磁盘真的被 git 回退了。前端据此冻结 autosave、改读磁盘真值、回合收尾后整页重载——
@@ -310,6 +312,7 @@ export async function streamAgentChat(
             // 改草稿工具的真正文必须透传，前端据此把真正文载入工作区（防占位覆盖+autosave 抹稿）。
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),
             ...(typeof output.draftTitle === "string" ? { draftTitle: output.draftTitle } : {}),
+            ...(typeof output.draftVersion === "number" && Number.isFinite(output.draftVersion) ? { draftVersion: output.draftVersion } : {}),
             // 入库成功标志：让 draftBody 以 committed 状态载入（commit_apply 专用）。
             ...(output.committed === true ? { committed: true } : {}),
             // 撤销标志（undo_last_change 专用）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。

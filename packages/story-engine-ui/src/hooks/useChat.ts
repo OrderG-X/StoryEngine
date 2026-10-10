@@ -1242,6 +1242,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       setChatError(null);
 
       let sawError = false;
+      // 本回合已套用到编辑器的最新正文版本（按章）：并行改稿的结果到达顺序不等于写入顺序，旧版本不再盖新版本。
+      const appliedDraftVersion = new Map<number, number>();
       // 出稿流式缓冲：generate_draft 的正文 delta 逐字累加到这里、灌进当前章编辑器；
       // 每次出稿（generate_draft tool-call）重置；完成时 onToolResult 用引擎处理过的终稿落定（覆盖这份原始流）。
       let streamedDraft = "";
@@ -1668,7 +1670,11 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               if (info.refreshScope === "full") {
-                if (typeof info.draftBody === "string" && info.draftBody.trim()) {
+                const versionChapter = info.chapter ?? useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
+                const staleDraft = typeof info.draftVersion === "number"
+                  && info.draftVersion < (appliedDraftVersion.get(versionChapter) ?? 0);
+                if (typeof info.draftVersion === "number" && !staleDraft) appliedDraftVersion.set(versionChapter, info.draftVersion);
+                if (typeof info.draftBody === "string" && info.draftBody.trim() && !staleDraft) {
                   // 改草稿/入库工具：把真正文作为 draftContent 载入工作区。
                   // - generate_draft/revise_draft → draft_ready（草稿待保存）。
                   // - commit_apply 成功（committed=true）→ committed（已入库；让 autosave 不再把章节写回 drafts/fast）。

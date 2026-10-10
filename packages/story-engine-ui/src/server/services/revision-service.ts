@@ -150,6 +150,8 @@ export interface RevisionApplySuccess {
   readonly draftPath: string;
   /** 替换后的全文（未做落盘归一；落盘文本统一 `${updatedContent.trimEnd()}\n`）。 */
   readonly updatedContent: string;
+  /** 这次写回的版本号（见 nextDraftVersion）。 */
+  readonly draftVersion?: number;
 }
 
 export interface RevisionOneShotSuccess extends RevisionApplySuccess {
@@ -290,9 +292,20 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
   return draftContent.slice(0, beforeSpan.start) + afterText.trim() + draftContent.slice(beforeSpan.end);
 }
 
-async function persistRevisionUpdate(draftPath: string, updatedContent: string): Promise<void> {
+/**
+ * 工作稿写回的版本号：同一进程里严格递增（2026-10-10 真机验收：模型把两处修改并行发出，两个结果几乎同时到前端，
+ * 前端按到达顺序套用，后到的那份是更早写的正文，编辑器显示少了一处）。前端只认版本更新的那份。
+ */
+let lastDraftVersion = 0;
+export function nextDraftVersion(): number {
+  lastDraftVersion = Math.max(Date.now() * 1000, lastDraftVersion + 1);
+  return lastDraftVersion;
+}
+
+async function persistRevisionUpdate(draftPath: string, updatedContent: string): Promise<number> {
   // 审计：覆盖写原子化（tmp+rename）——进程被杀不留半截稿。
   await writeFileAtomic(draftPath, `${updatedContent.trimEnd()}\n`);
+  return nextDraftVersion();
 }
 
 /* ---------------------------------------------------------------------------
@@ -477,8 +490,8 @@ async function reviseDraftOneShotLocked(
     }
     const preview = exactReplacementPreview(resolvedTask, resolvedTarget, exactReplacement);
     const updatedContent = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
-    await persistRevisionUpdate(draftPath, updatedContent);
-    return { ok: true, applied: true, mode: "exact", task: resolvedTask, preview, draftPath, updatedContent };
+    const draftVersion = await persistRevisionUpdate(draftPath, updatedContent);
+    return { ok: true, applied: true, mode: "exact", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
   }
 
   let preview: DraftRevisionPreview;
@@ -510,6 +523,6 @@ async function reviseDraftOneShotLocked(
     return { ok: false, code: "target_unchanged", task: resolvedTask, preview };
   }
 
-  await persistRevisionUpdate(draftPath, updatedContent);
-  return { ok: true, applied: true, mode: "model", task: resolvedTask, preview, draftPath, updatedContent };
+  const draftVersion = await persistRevisionUpdate(draftPath, updatedContent);
+  return { ok: true, applied: true, mode: "model", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
 }

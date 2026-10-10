@@ -15,6 +15,7 @@
 import {
   buildStateOverview,
   stripMarkdownEmphasis,
+  withProjectCommitLock,
   type DraftRevisionPreview,
   type StateOverview,
 } from "@actalk/story-engine";
@@ -66,6 +67,7 @@ const outputSchema = z.object({
   overview: z.unknown().describe("修订后重新读取的 StateOverview，供前端刷新写作区/总览。"),
   summary: z.string().describe("修订结果的自然语言摘要。"),
   refreshScope: z.literal("full"),
+  draftVersion: z.number().optional().describe("这次写回的版本号（同一进程严格递增）；前端只套用版本更新的正文。"),
   snapshotId: z.string().optional().describe("修订覆盖工作稿前建的快照 id（M6：让修订可撤销）；未命中/未写回时无此值。"),
   chapter: z.number().int().positive().optional().describe("被修订工作稿的章号。"),
 });
@@ -152,6 +154,7 @@ async function toToolOutput(
       : `已在第 ${chapter} 章工作稿上完成局部修订：${`${outcome.preview.changeSummary ?? ""}`.trim().replace(/[。.\s]+$/u, "")}。工作稿未定稿，可继续修改或撤销。`,
     refreshScope: "full",
     chapter,
+    ...(outcome.draftVersion !== undefined ? { draftVersion: outcome.draftVersion } : {}),
   };
 }
 
@@ -196,6 +199,9 @@ export const reviseDraftTool = createTool({
       throw new Error("revise_draft 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
     }
     const channel = await createRevisionModelChannel();
+    // 快照 + 改稿写回放进同一把项目锁，和其他写类工具（writeTool）一样：撤销、定稿不会切进快照和写盘中间。
+    // （同一份稿子的读改写本身已由 revision-service 的 runExclusive 串行。）
+    return withProjectCommitLock(projectDir, async () => {
     // M6：修订会覆盖现有草稿，覆盖前建快照让修订可撤销（修订必有非空草稿）。
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章修订前快照`);
     const outcome = await reviseDraftOneShot({
@@ -212,5 +218,6 @@ export const reviseDraftTool = createTool({
     const result = await toToolOutput(projectDir, resolvedChapter, outcome);
     // 只在真改了草稿时挂 snapshotId（未命中/未写回=没覆盖，无需撤销点）。
     return result.ok && result.applied && snapshotId ? { ...result, snapshotId } : result;
+    });
   },
 });

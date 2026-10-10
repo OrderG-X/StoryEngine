@@ -142,6 +142,10 @@ export function App() {
             if (useNavigationStore.getState().projectPath === payload.request.projectPath
               && liveStore.workspace.currentChapter.chapterNumber === payload.request.chapter) {
               liveStore.setWorkspaceRevision(revision);
+              // 工作稿写进去了：记下写进去的正文，之后没再改就不重复写（见 buildWorkspaceAutosaveRequest 的 savedContent）。
+              if (payload.request.writeDraftFile === true && typeof payload.request.draftContent === "string") {
+                liveStore.updateDraft({ savedContent: payload.request.draftContent });
+              }
             }
           },
         });
@@ -381,6 +385,8 @@ export function App() {
       title: draft.title,
       suppressed: suppressDraftWrite,
       committed: draft.status === "committed",
+      // 作者没改过（和最近一次载入/写盘的一样）就不写工作稿：别拿旧正文覆盖对话 AI 刚在服务端改好的稿子。
+      ...(draft.savedContent !== undefined ? { savedContent: draft.savedContent } : {}),
       // 刷新/关页打断生成：落 generationInterrupted，下次打开优先以盘上更完整稿恢复。
       ...(suppressDraftWrite && options.keepalive ? { generationInterrupted: true } : {}),
     });

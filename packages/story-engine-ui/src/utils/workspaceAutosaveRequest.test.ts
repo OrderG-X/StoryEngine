@@ -57,3 +57,16 @@ describe("buildWorkspaceAutosaveRequest", () => {
     expect(request).not.toHaveProperty("writeDraftFile");
   });
 });
+
+describe("作者没改过就不写工作稿（2026-10-10 真机验收：自动保存把旧正文写回去，盖掉了对话 AI 刚改好的稿子）", () => {
+  const base = { projectPath: "/book", chapter: 4, selectedAdviceCardKeys: [] as string[], flowStatus: "draft_ready" as const };
+  it("正文和最近一次载入/写盘的一样 → 不带 writeDraftFile", () => {
+    const request = buildWorkspaceAutosaveRequest({ ...base, content: "林秋，一九八七年春。", savedContent: "林秋，一九八七年春。" });
+    expect(request.writeDraftFile).toBeUndefined();
+    expect(request.draftContent).toBeUndefined();
+  });
+  it("作者改过 → 照写；没给 savedContent（老调用方）→ 照旧写", () => {
+    expect(buildWorkspaceAutosaveRequest({ ...base, content: "林秋，一九八五年春。", savedContent: "林秋，一九八七年春。" }).writeDraftFile).toBe(true);
+    expect(buildWorkspaceAutosaveRequest({ ...base, content: "林秋，一九八五年春。" }).writeDraftFile).toBe(true);
+  });
+});

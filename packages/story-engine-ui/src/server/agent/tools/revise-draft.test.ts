@@ -394,3 +394,25 @@ describe("revise_draft execute 章号缺省回退", () => {
     ).rejects.toThrow(/缺少章号/u);
   });
 });
+
+// 2026-10-10 真机验收：模型把两处修改并行发出。服务端两次改稿必须串行、两处都落在稿上
+// （那次丢的一处是界面自动保存拿旧正文覆盖了，见 workspaceAutosaveRequest 的 savedContent）。
+describe("revise_draft 并行两处精确替换", () => {
+  it("同一章同时改两处 → 两处都落在稿子上（读改写串行），两次都报成功", async () => {
+    const projectDir = await makeProject("并行两处");
+    await writeDraft(projectDir, 4, "# 第4章\n\n扉页上写着：林秋，一九八五年春。\n\n他说你们以前住槐树巷九号，就隔他家一个门。\n");
+    // 快照要花时间（真机里是 git 操作）：两次调用都先停在快照这一步，没有串行的话会同时读到旧稿。
+    snapshotBeforeDraftOverwrite.mockImplementation(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); return undefined; });
+    resolveConfiguredChatModel.mockResolvedValue({ profile: { temperature: 0.45, maxTokens: 1800 } });
+    const context = makeContext(projectDir, 4);
+    const [first, second] = await Promise.all([
+      executeRevise({ chapter: 4, targetText: "林秋，一九八五年春", replacementText: "林秋，一九八七年春", revisionGoal: "改年份" }, context),
+      executeRevise({ chapter: 4, targetText: "槐树巷九号", replacementText: "槐树巷五号", revisionGoal: "改门牌" }, context),
+    ]) as { ok: boolean; applied: boolean }[];
+    expect(first?.applied).toBe(true);
+    expect(second?.applied).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 4), "utf-8");
+    expect(onDisk).toContain("林秋，一九八七年春");
+    expect(onDisk).toContain("槐树巷五号");
+  });
+});
