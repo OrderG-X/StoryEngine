@@ -18,6 +18,7 @@ import { ChapterWorkspaceConflictError, fetchDefaultBookLibrary, saveChapterWork
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { createWorkflowMessage } from "./utils/workflowHelpers.js";
 import { countTextWords } from "./utils/textUtils.js";
+import { carryChapterFileFlags } from "./utils/bookUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
 import { settlePendingDraftAgentCards } from "./utils/draftAgentSettlement.js";
 import { createDraftSaveRaceGuard } from "./utils/draftSaveRaceGuard.js";
@@ -235,10 +236,19 @@ export function App() {
     const preferredChapter = pickPreferredChapter(store.workspace.currentChapter?.chapterNumber, targetChapter);
     const nextWorkspace = workspaceFromStateOverview(overview, preferredChapter);
     const nextTitle = draftTitle ?? extractDraftTitle(draftContent) ?? undefined;
+    const activeChapter = nextWorkspace.currentChapter.chapterNumber;
+    const titled = nextTitle ? updateChapterListTitle(nextWorkspace.chapters, activeChapter, nextTitle) : nextWorkspace.chapters;
+    const chapters = carryChapterFileFlags(titled, store.workspace.chapters, flowStatus === "committed" ? activeChapter : undefined);
+    const activeFlags = chapters.find((chapter) => chapter.chapterNumber === activeChapter);
     store.setWorkspace({
       ...nextWorkspace,
-      currentChapter: nextTitle ? { ...nextWorkspace.currentChapter, title: nextTitle } : nextWorkspace.currentChapter,
-      chapters: nextTitle ? updateChapterListTitle(nextWorkspace.chapters, nextWorkspace.currentChapter.chapterNumber, nextTitle) : nextWorkspace.chapters,
+      currentChapter: {
+        ...nextWorkspace.currentChapter,
+        ...(nextTitle ? { title: nextTitle } : {}),
+        ...(activeFlags?.hasDraftFile !== undefined ? { hasDraftFile: activeFlags.hasDraftFile } : {}),
+        ...(activeFlags?.hasCommittedChapter !== undefined ? { hasCommittedChapter: activeFlags.hasCommittedChapter } : {}),
+      },
+      chapters,
       flowStatus,
       messages: store.workspace.messages,
       draft: {

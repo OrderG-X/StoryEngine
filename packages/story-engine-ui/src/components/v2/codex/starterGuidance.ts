@@ -26,6 +26,7 @@ export interface StarterWorkspaceProbe {
   readonly chapters: readonly {
     readonly hasDraftFile?: boolean;
     readonly hasCommittedChapter?: boolean;
+    readonly status?: string;
   }[];
 }
 
@@ -35,8 +36,10 @@ export interface StarterWorkspaceProbe {
  */
 export function isStarterEmptyWorkspace(workspace: StarterWorkspaceProbe): boolean {
   if (isRealDraftContent(workspace.draft.content)) return false;
+  // 章节列表有几条路径只带 status、不带文件标记（2026-10-11 真机验收：7 章的书刷新后点「下一章」，
+  // 第 8 章空稿纸冒出新书引导）——列表里标了已定稿的也算动过。
   return !workspace.chapters.some(
-    (chapter) => chapter.hasDraftFile === true || chapter.hasCommittedChapter === true,
+    (chapter) => chapter.hasDraftFile === true || chapter.hasCommittedChapter === true || chapter.status === "committed",
   );
 }
 

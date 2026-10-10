@@ -150,6 +150,29 @@ export function sidebarFromBook(book: BookSummary): SidebarData {
   };
 }
 
+/**
+ * 整表刷新时沿用旧的章节文件标记（2026-10-11 真机验收）：工具回传的故事概览不带章节文件状态，
+ * 按它重建的章节表全丢了「有稿 / 已定稿」——下一章空稿纸冒出新书引导、刚定稿的章被当成没定稿。
+ * 新表自己带了标记就用新的；刚定稿的那章直接标已定稿。
+ */
+export function carryChapterFileFlags(
+  next: readonly ChapterNavItem[],
+  previous: readonly ChapterNavItem[],
+  committedChapter?: number,
+): readonly ChapterNavItem[] {
+  const before = new Map(previous.map((chapter) => [chapter.chapterNumber, chapter]));
+  return next.map((chapter) => {
+    const old = before.get(chapter.chapterNumber);
+    return {
+      ...chapter,
+      ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
+      ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
+      ...(chapter.hasWorkspaceSnapshot === undefined && old?.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: old.hasWorkspaceSnapshot } : {}),
+      ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),
+    };
+  });
+}
+
 export function updateChapterListTitle(chapters: readonly ChapterNavItem[], chapterNumber: number, title: string): readonly ChapterNavItem[] {
   return chapters.map((chapter) => (
     chapter.chapterNumber === chapterNumber ? { ...chapter, title } : chapter

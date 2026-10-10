@@ -66,6 +66,16 @@ describe("starterGuidance", () => {
     ).toBe(false);
   });
 
+  it("列表只带 status、没带文件标记（刷新后点「下一章」）：前面有已定稿章 → 非空书，不弹新书引导", () => {
+    expect(
+      isStarterEmptyWorkspace({
+        draft: { content: "", wordCount: 0 },
+        chapters: [{ status: "committed" }, { status: "committed" }, { status: "current", hasDraftFile: false, hasCommittedChapter: false }],
+      }),
+    ).toBe(false);
+    expect(isStarterEmptyWorkspace({ draft: { content: "" }, chapters: [{ status: "current" }, { status: "planned" }] })).toBe(true);
+  });
+
   it("空书、非空书打开都落写作台（书架点的是「继续写」）", () => {
     expect(
       defaultCenterViewForWorkspace({
