@@ -29,6 +29,7 @@ import {
 import { callConfiguredDeclareModel, declareChapterDeltaWithStatus } from "./chapter-delta-declaration.js";
 import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
+import { withStep } from "../../lib/token-meter.js";
 import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
 import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
 import { readFile } from "node:fs/promises";
@@ -183,11 +184,11 @@ export async function buildCommitPreviewToolOutput(input: {
     ? readFile(defaultDraftPath(input.projectDir, input.chapter), "utf-8")
       .then(async (draftContent) => ({
         draftContent,
-        proposal: await input.proposeFacts!({
+        proposal: await withStep("记账提案", () => input.proposeFacts!({
           projectDir: input.projectDir,
           chapter: input.chapter,
           draftText: stripLeadingMarkdownChapterHeading(draftContent).trim(),
-        }),
+        })),
       }))
       .catch(() => undefined)
     : Promise.resolve(undefined);

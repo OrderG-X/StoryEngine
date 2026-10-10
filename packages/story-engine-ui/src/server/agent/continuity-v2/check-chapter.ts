@@ -12,6 +12,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { findLedgerNumberConflicts, readFactLedgerStrict, type FactEntry } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { withStep } from "../../lib/token-meter.js";
 
 export type CheckCallModel = (messages: readonly { readonly role: "system" | "user"; readonly content: string }[]) => Promise<string>;
 
@@ -769,10 +770,10 @@ export async function checkChapterContinuity(input: {
   readonly ledgerFacts?: readonly FactEntry[];
 }): Promise<CheckChapterResult & { readonly candidates: number }> {
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
-  const ledger = await ledgerNumberIssues(input);
+  const ledger = await withStep("账本对账", () => ledgerNumberIssues(input));
   const [full, claims] = await Promise.all([
-    checkChapterByFullRead({ ...input, earlier }),
-    checkChapterAgainstEarlierText({ ...input, earlier }),
+    withStep("通读", () => checkChapterByFullRead({ ...input, earlier })),
+    withStep("拆说法逐条判", () => checkChapterAgainstEarlierText({ ...input, earlier })),
   ]);
   const failures = [...ledger.failures, ...full.failures, ...claims.failures];
   const merged: ContinuityIssueV2[] = [];
@@ -800,7 +801,7 @@ export async function checkChapterContinuity(input: {
     there: sentenceWithContext(issue.earlierChapter === input.chapter ? input.draftBody : earlierText.get(issue.earlierChapter) ?? issue.earlierQuote, issue.earlierQuote),
   }));
   try {
-    const parsed = parseJson(await input.callModel(buildAdjudicationMessages(input.chapter, candidates, input.timelineTable)));
+    const parsed = parseJson(await withStep("复核", () => input.callModel(buildAdjudicationMessages(input.chapter, candidates, input.timelineTable))));
     const verdicts = new Map((Array.isArray(parsed.verdicts) ? parsed.verdicts : [])
       .map((item) => asRecord(item))
       .filter((record): record is Record<string, unknown> => Boolean(record))

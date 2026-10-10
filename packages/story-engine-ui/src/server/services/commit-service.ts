@@ -86,6 +86,7 @@ import {
 import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { createSnapshot } from "../lib/snapshot.js";
+import { withStep } from "../lib/token-meter.js";
 import {
   buildCommitPreviewTransaction,
   validateCommitApplyPreflight,
@@ -228,14 +229,14 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
           readOpenThreadTitles(projectDir),
           readOpenArcGoalTitles(projectDir),
         ]);
-        declarationOutcome = normalizeDeclarationOutcome(await channel.declareDelta({
+        declarationOutcome = normalizeDeclarationOutcome(await withStep("章节声明", () => channel.declareDelta!({
           chapter,
           draft: draftContent,
           openThreadTitles,
           ...(establishedCharacterNames.length > 0 ? { establishedNames: establishedCharacterNames } : {}),
           ...(openGoalTitles.length > 0 ? { openGoalTitles } : {}),
           ...(previousChapterEnding ? { previousChapterEnding } : {}),
-        }));
+        })));
       } catch (error) {
         // 回退正则是设计内降级（ChapterDelta 不回退到纯正则猜结构，只是本章兜底），但绝不静默：
         // 状态+原因随结果带出，工具层会在给用户看的 summary 里明说；server 日志同时留痕。

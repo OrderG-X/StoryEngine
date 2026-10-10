@@ -49,3 +49,27 @@ describe("token-meter 一轮对话的真实用量", () => {
     expect(sampleFromOpenAIUsage(parsed.usage)).toEqual({ input: 321, cachedInput: 0, output: 7, reasoning: 0 });
   });
 });
+
+describe("分步计量（2026-10-10 引擎升级第 4 期）", () => {
+  it("withStep：耗时和这一步里的内部调用记在步骤名下，嵌套名字带层级；没包的只进 pipeline", async () => {
+    const { withStep } = await import("./token-meter.js");
+    const { usage } = await withTokenMeter(async () => {
+      await withStep("核账", async () => {
+        recordPipelineUsage({ input: 100, cachedInput: 0, output: 10, reasoning: 0 });
+        await withStep("复核", async () => {
+          recordPipelineUsage({ input: 50, cachedInput: 0, output: 5, reasoning: 0 });
+        });
+      });
+      recordPipelineUsage({ input: 7, cachedInput: 0, output: 1, reasoning: 0 });
+    });
+    expect(usage.pipeline).toMatchObject({ calls: 3, input: 157 });
+    expect(usage.steps?.["核账"]).toMatchObject({ calls: 1, input: 100 });
+    expect(usage.steps?.["核账/复核"]).toMatchObject({ calls: 1, input: 50 });
+    expect(usage.steps?.["核账"]!.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("没套计量器时 withStep 照常执行、不报错", async () => {
+    const { withStep } = await import("./token-meter.js");
+    await expect(withStep("核账", async () => 42)).resolves.toBe(42);
+  });
+});

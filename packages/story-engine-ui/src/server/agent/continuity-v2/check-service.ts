@@ -16,6 +16,7 @@ import {
 } from "./check-chapter.js";
 import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory } from "./check-memory.js";
 import { isDismissed, readDismissals } from "./dismissals.js";
+import { withStep } from "../../lib/token-meter.js";
 
 export interface ChapterCheckItem {
   readonly quote: string;
@@ -71,7 +72,7 @@ export async function checkChapterBody(
     : [];
   const result = reused
     ? { issues: memory!.issues, failures: [] as readonly string[] }
-    : await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), ...(timelineTable ? { timelineTable } : {}) });
+    : await withStep("核账", () => checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), ...(timelineTable ? { timelineTable } : {}) }));
   if (!reused && (result.failures.length === 0 || result.issues.length > 0)) {
     await writeCheckMemory(projectDir, { chapter, bodyHash, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);

@@ -72,11 +72,15 @@ const CHAT_SESSIONS_EXCLUDE_MARKER = "# story-engine-ui: 对话历史不入快�
 export const SNAPSHOT_EXCLUDED_TX_DIR = ".story-engine-tx";
 const TX_EXCLUDE_LINE = `/${SNAPSHOT_EXCLUDED_TX_DIR}/`;
 const TX_EXCLUDE_MARKER = "# story-engine-ui: 定稿事务目录不入快照（引擎自管，进快照会让仓库按章数平方涨）";
+/** 分步计量记录（作者的运行日志）：撤销不该把它回退。 */
+const METRICS_EXCLUDE_DIR = ".story-engine-ui/metrics";
+const METRICS_EXCLUDE_MARKER = "# story-engine-ui: 分步计量记录不入快照（运行日志，撤销不回退）";
 
 /** 快照排除的目录（info/exclude 一行 + diff/checkout 路径魔法）。 */
 const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: string; readonly marker: string }[] = [
   { dir: SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR, line: CHAT_SESSIONS_EXCLUDE_LINE, marker: CHAT_SESSIONS_EXCLUDE_MARKER },
   { dir: SNAPSHOT_EXCLUDED_TX_DIR, line: TX_EXCLUDE_LINE, marker: TX_EXCLUDE_MARKER },
+  { dir: METRICS_EXCLUDE_DIR, line: `/${METRICS_EXCLUDE_DIR}/`, marker: METRICS_EXCLUDE_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);

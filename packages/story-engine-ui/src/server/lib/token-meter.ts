@@ -21,12 +21,22 @@ export interface TokenUsageTotals extends TokenUsageSample {
   readonly calls: number;
 }
 
+export interface StepTotals extends TokenUsageTotals {
+  /** 这一步累计耗时（毫秒；同名步骤多次进入时相加）。 */
+  readonly ms: number;
+}
+
 export interface TokenMeterSnapshot {
   /** 对话 AI（聊天大脑）自己的调用。 */
   readonly agent: TokenUsageTotals;
   /** 工具内部的调用（拟章纲、出稿、核对、记账……）。 */
   readonly pipeline: TokenUsageTotals;
   readonly total: TokenUsageTotals;
+  /**
+   * 分步（2026-10-10 引擎升级第 4 期）：withStep 包起来的步骤各自的耗时和内部调用用量，
+   * 名字带层级（「核账/通读」）。没包的内部调用不进这里，只进 pipeline。
+   */
+  readonly steps?: Readonly<Record<string, StepTotals>>;
 }
 
 const EMPTY: TokenUsageTotals = { calls: 0, input: 0, cachedInput: 0, output: 0, reasoning: 0 };
@@ -34,9 +44,11 @@ const EMPTY: TokenUsageTotals = { calls: 0, input: 0, cachedInput: 0, output: 0,
 class TokenMeter {
   private agent: TokenUsageTotals = EMPTY;
   private pipeline: TokenUsageTotals = EMPTY;
+  private readonly steps = new Map<string, StepTotals>();
 
-  record(kind: "agent" | "pipeline", sample: TokenUsageSample, calls = 1): void {
-    const add = (base: TokenUsageTotals): TokenUsageTotals => ({
+  record(kind: "agent" | "pipeline", sample: TokenUsageSample, calls = 1, step?: string): void {
+    const add = <T extends TokenUsageTotals>(base: T): T => ({
+      ...base,
       calls: base.calls + calls,
       input: base.input + sample.input,
       cachedInput: base.cachedInput + sample.cachedInput,
@@ -45,6 +57,12 @@ class TokenMeter {
     });
     if (kind === "agent") this.agent = add(this.agent);
     else this.pipeline = add(this.pipeline);
+    if (kind === "pipeline" && step) this.steps.set(step, add(this.steps.get(step) ?? { ...EMPTY, ms: 0 }));
+  }
+
+  addTime(step: string, ms: number): void {
+    const base = this.steps.get(step) ?? { ...EMPTY, ms: 0 };
+    this.steps.set(step, { ...base, ms: base.ms + ms });
   }
 
   snapshot(): TokenMeterSnapshot {
@@ -55,11 +73,32 @@ class TokenMeter {
       output: a.output + b.output,
       reasoning: a.reasoning + b.reasoning,
     });
-    return { agent: this.agent, pipeline: this.pipeline, total: sum(this.agent, this.pipeline) };
+    return {
+      agent: this.agent,
+      pipeline: this.pipeline,
+      total: sum(this.agent, this.pipeline),
+      ...(this.steps.size > 0 ? { steps: Object.fromEntries(this.steps) } : {}),
+    };
   }
 }
 
 const storage = new AsyncLocalStorage<TokenMeter>();
+const stepStorage = new AsyncLocalStorage<string>();
+
+/**
+ * 把一步包起来计量：耗时 + 这一步里内部模型调用的用量记在步骤名下（嵌套时名字是「外层/里层」）。
+ * 没套计量器时照常执行、什么都不记。
+ */
+export async function withStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const parent = stepStorage.getStore();
+  const path = parent ? `${parent}/${name}` : name;
+  const started = Date.now();
+  try {
+    return await stepStorage.run(path, fn);
+  } finally {
+    storage.getStore()?.addTime(path, Date.now() - started);
+  }
+}
 
 /** 在一个计量器里跑 fn；返回 fn 的结果和这段时间记下的用量。 */
 export async function withTokenMeter<T>(fn: () => Promise<T>): Promise<{ readonly result: T; readonly usage: TokenMeterSnapshot }> {
@@ -108,7 +147,7 @@ export function sampleFromSdkUsage(usage: unknown): TokenUsageSample | undefined
 
 /** 工具内部的一次模型调用用量记进当前计量器（没有计量器就忽略）。 */
 export function recordPipelineUsage(sample: TokenUsageSample | undefined): void {
-  if (sample) storage.getStore()?.record("pipeline", sample);
+  if (sample) storage.getStore()?.record("pipeline", sample, 1, stepStorage.getStore());
 }
 
 /** 对话 AI 一次尝试（可能含多步）的用量记进当前计量器。 */

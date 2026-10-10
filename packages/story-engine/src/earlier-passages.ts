@@ -79,17 +79,23 @@ export async function findEarlierPassages(input: FindEarlierPassagesInput): Prom
   const window = input.windowChars ?? DEFAULT_WINDOW;
   const chapters = (await readCommittedChapters(input.projectDir, input.chapter)).filter((item) => !exclude.has(item.chapter));
 
-  // 每个词各自取近章优先的前 maxPerTerm 段（同一章里只取它第一次出现的那段）；再轮流取「各词第 1 段 → 各词第 2 段」，
-  // 让总量封顶时每个词都先分到一段，而不是前几个词把名额吃光。最后按章号正序给写手读。
+  // 每个词：先取最近一次写到它的那段，再取第一次写到它的那段（它是怎么被介绍的——2026-10-10 引擎升级第 4 期：
+  // 原来只取最近两处，长篇里第 1 章介绍某物的原句再也回不来），名额还有再按近章补。同一章只取它第一次出现的那段。
+  // 再轮流取「各词第 1 段 → 各词第 2 段」，让总量封顶时每个词都先分到一段。最后按章号正序给写手读。
   const byTerm = terms.map((term) => {
-    const found: EarlierPassage[] = [];
+    const hits: EarlierPassage[] = [];
     for (const { chapter, body } of chapters) {
-      if (found.length >= maxPerTerm) break;
       const paragraph = body.split(/\n+/u).map((item) => item.trim()).find((item) => item.includes(term));
       if (!paragraph) continue;
-      found.push({ chapter, term, text: excerptAround(paragraph, paragraph.indexOf(term), term.length, window) });
+      hits.push({ chapter, term, text: excerptAround(paragraph, paragraph.indexOf(term), term.length, window) });
     }
-    return found;
+    if (hits.length <= maxPerTerm) return hits;
+    const picked = [hits[0]!, hits.at(-1)!];
+    for (const hit of hits.slice(1, -1)) {
+      if (picked.length >= maxPerTerm) break;
+      picked.push(hit);
+    }
+    return picked.slice(0, Math.max(1, maxPerTerm));
   });
   const seenText = new Set<string>();
   const out: EarlierPassage[] = [];

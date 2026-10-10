@@ -528,9 +528,17 @@ async function findCrossChapterPronounDrift(input: {
   return issues.slice(0, 6);
 }
 
+/**
+ * 代词比对用的前文：开头 PRONOUN_HEAD_CHAPTERS 章（人物多在这时交代）+ 最近 PRONOUN_RECENT_CHAPTERS 章。
+ * 原来把前面每一章都拼起来，500 章约 240 万字、每次定稿预览都读一遍（2026-10-10 引擎升级第 4 期）。
+ */
+const PRONOUN_HEAD_CHAPTERS = 10;
+const PRONOUN_RECENT_CHAPTERS = 30;
+
 async function readPriorFormalChapters(projectDir: string, chapter: number): Promise<string> {
-  const texts = await Promise.all(Array.from({ length: chapter - 1 }, async (_, index) => {
-    const chapterNumber = index + 1;
+  const numbers = Array.from({ length: chapter - 1 }, (_, index) => index + 1)
+    .filter((n) => n <= PRONOUN_HEAD_CHAPTERS || n >= chapter - PRONOUN_RECENT_CHAPTERS);
+  const texts = await Promise.all(numbers.map(async (chapterNumber) => {
     return readFile(join(projectDir, "chapters", `${String(chapterNumber).padStart(4, "0")}.md`), "utf-8")
       .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return "";

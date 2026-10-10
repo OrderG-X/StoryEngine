@@ -40,6 +40,7 @@ import {
   type HonestyToolStep,
 } from "../../shared/honesty-detection.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import {
   assertStoryEngineProject,
@@ -625,6 +626,7 @@ async function handleAgentChat(
 
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
+      const actionStarted = Date.now();
       const { usage: actionUsage } = await withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
@@ -636,6 +638,13 @@ async function handleAgentChat(
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       sendEvent("usage", actionUsage);
+      const action = parsedAction.action;
+      await appendTurnMetrics(projectDir, "chapter" in action ? action.chapter : currentChapter, {
+        kind: "action",
+        label: action.toolName,
+        ms: Date.now() - actionStarted,
+        usage: actionUsage,
+      });
       sendEvent("done", {});
       res.end();
       return;
@@ -663,6 +672,7 @@ async function handleAgentChat(
 
     // 带服从重试的回合执行（r8 任务①）：空转声称 → 自动重做一次 → 仍空转才诚实更正收场。
     // streamAttempt 每次沿用同一 requestContext（用户原话不变 → 写入意图门对合法重做不误拦）。
+    const turnStarted = Date.now();
     const { result: { finishReason }, usage } = await withTokenMeter(() => runObedientAgentTurn({
       initialMessages: modelMessages,
       userText: readLatestUserTurnText(messages),
@@ -684,6 +694,7 @@ async function handleAgentChat(
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);
     sendEvent("usage", usage);
+    await appendTurnMetrics(projectDir, currentChapter, { kind: "chat", ms: Date.now() - turnStarted, usage });
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });
     res.end();
   } catch (error) {

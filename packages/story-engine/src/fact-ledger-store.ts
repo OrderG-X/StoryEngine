@@ -100,6 +100,10 @@ export interface ChapterFactUpdateResult {
 
 const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
+/** 状态事实的「主体 + 属性」键：去空白和书名号引号，大小写不敏感。 */
+const factStateKey = (subject: string, attribute: string): string =>
+  `${subject.replace(/[\s《》「」“”"']/gu, "").toLowerCase()}|${attribute.replace(/[\s《》「」“”"']/gu, "").toLowerCase()}`;
+
 /**
  * 纯函数：把本章的事实变更落到账本上（重定稿先撤旧）。日子按时间线换算（本章那天 = today）。
  */
@@ -140,9 +144,22 @@ export function applyChapterFactUpdate(
     });
     return id;
   };
-  for (const item of update.adds) push(item);
-  // 2. 变化：新说法入账，旧条从本章起作废（只作废仍有效的；原文保留、可撤销）。
   const supersede = new Map<string, string | undefined>();
+  for (const item of update.adds) {
+    const id = push(item);
+    // 会变的状态（在哪、在谁手里）有了新值：同一主体同一属性、更早记的、还有效的旧值自动作废
+    // （2026-10-10 引擎升级第 4 期：《梧桐街九号》1104 条事实没有一条被作废，旧位置一直当真）。
+    // 不该变的（hard）不自动作废——值不同是矛盾，交给核账报给作者。
+    if (!id || item.kind !== "state" || !item.subject || !item.attribute) continue;
+    const key = factStateKey(item.subject, item.attribute);
+    for (const fact of restored) {
+      if (fact.kind !== "state" || fact.chapter >= chapter || fact.supersededByChapter !== undefined || supersede.has(fact.id)) continue;
+      if (!fact.subject || !fact.attribute || factStateKey(fact.subject, fact.attribute) !== key) continue;
+      if (fact.value !== undefined && item.value !== undefined && normalize(fact.value) === normalize(item.value)) continue;
+      supersede.set(fact.id, id);
+    }
+  }
+  // 2. 变化：新说法入账，旧条从本章起作废（只作废仍有效的；原文保留、可撤销）。
   for (const change of update.changes) {
     const target = restored.find((fact) => fact.id === change.factId);
     const id = push({ ...change, text: change.newText });
