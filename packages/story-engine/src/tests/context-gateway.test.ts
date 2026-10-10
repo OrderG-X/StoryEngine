@@ -188,7 +188,10 @@ describe("StoryEngine-NG ContextGateway", () => {
       title: "查清资源账目",
       lastTouchedChapter: 7,
     });
-    expect(arcGoals?.recentlyTouchedGoals.map((goal) => goal.title)).toContain("查明破损信物用途");
+    expect(arcGoals?.activeGoals.map((goal) => goal.title)).toContain("查明破损信物用途");
+    // 最近碰过的只给 activeGoals 里没有的（2026-10-10：原来同一批目标给两遍）
+    const activeTitles = new Set(arcGoals?.activeGoals.map((goal) => goal.title));
+    expect(arcGoals?.recentlyTouchedGoals.some((goal) => activeTitles.has(goal.title))).toBe(false);
     expect(arcGoals?.staleGoalWarnings).toEqual([
       expect.objectContaining({ id: "arc-stale", chaptersSinceTouched: 6 }),
     ]);

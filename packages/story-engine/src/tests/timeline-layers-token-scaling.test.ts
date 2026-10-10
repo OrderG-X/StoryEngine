@@ -73,3 +73,18 @@ describe("timeline 分层 token 随章数缩放（followup-3 长跑收敛）", (
     expect(total).toBeLessThan(60_000);
   });
 });
+
+describe("远期分层有上限（2026-10-10 引擎升级第 4 期）", () => {
+  it("500 章：远期至多 12 块、整段不随章数涨；最早一章仍被覆盖、最近的远期保持 5 章一块", () => {
+    const at300 = buildTimelineLayers(synthEvents(300), 300);
+    const at500 = buildTimelineLayers(synthEvents(500), 500);
+    expect(at500.l3.length).toBeLessThanOrEqual(12);
+    expect(at500.l3[0]!.fromChapter).toBe(1);
+    const last = at500.l3.at(-1)!;
+    expect(last.toChapter - last.fromChapter).toBe(4);
+    expect(JSON.stringify(at500.l3).length).toBeLessThanOrEqual(JSON.stringify(at300.l3).length * 1.1);
+    for (const block of at500.l3) expect(block.summary.length).toBeLessThanOrEqual(200);
+    // 块与块首尾相接、不重叠
+    for (let i = 1; i < at500.l3.length; i += 1) expect(at500.l3[i]!.fromChapter).toBe(at500.l3[i - 1]!.toChapter + 1);
+  });
+});

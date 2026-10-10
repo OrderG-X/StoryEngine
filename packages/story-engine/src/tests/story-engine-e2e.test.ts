@@ -300,12 +300,15 @@ describe("StoryEngine E2E V1", () => {
     expect(continuity.recentCharacters).toContain("林远");
     expect(continuity.carryForwardInstruction).toContain("不要重新开局");
 
+    // 2026-10-10 第 4 期：给写手的近几章事件只留要点（章号、摘要、主事件、关键事件…），不再整份语义摘要原样塞进去。
     const timelineSection = chapter4Context.sections.find((section) => section.name === "timeline_events")?.content as Array<{
-      effects?: { semanticSummary?: unknown };
+      chapter: number;
       summary: string;
+      effects?: unknown;
     }>;
     expect(timelineSection).toHaveLength(3);
-    expect(timelineSection.every((event) => event.effects?.semanticSummary !== undefined)).toBe(true);
+    expect(timelineSection.map((event) => event.chapter)).toEqual([1, 2, 3]);
+    expect(timelineSection.every((event) => event.summary.length > 0 && event.effects === undefined)).toBe(true);
   });
 
   it("has no legacy package, old runner, or live-provider references in the package", async () => {

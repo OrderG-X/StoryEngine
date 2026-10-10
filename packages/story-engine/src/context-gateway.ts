@@ -294,9 +294,9 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("story_threads", storyThreads, "dynamic"),
     section("arc_goals", arcGoals, "dynamic"),
     section("character_state", states, "dynamic"),
-    section("world_state", worldState, "dynamic"),
+    section("world_state", capWorldStateForContext(worldState), "dynamic"),
     section("story_continuity", storyContinuity, "dynamic"),
-    section("timeline_events", timelineEvents, "dynamic"),
+    section("timeline_events", timelineEvents.map(compactTimelineEventForWriter), "dynamic"),
     ...(hasEarlierContent ? [section("timeline_earlier_summary", { earlierSummary: timelineLayers.l2, macroSummary: timelineLayers.l3 }, "dynamic")] : []),
     // P2：坏读盘的降级原因要进上下文——模型拿到空历史时知道自己正盲写，并如实告知用户
     ...(readFailures.length > 0 ? [section("read_failures", { failures: readFailures }, "dynamic")] : []),
@@ -590,6 +590,22 @@ function buildHookCarryForwardInstruction(activeHooks: readonly HookTrackingCont
   return truncateText(`下一章可优先自然推进这些伏笔，但不要一次性全部解开：${titles}。`, 120);
 }
 
+/** 世界状态每项给写手看的上限：只增不减的老书里冲突能攒到几十条（《梧桐街九号》58 章 55 条）。最新的在后面。 */
+const WORLD_STATE_ITEMS_IN_CONTEXT = 12;
+
+function capWorldStateForContext<T extends { readonly activeConflicts: readonly string[]; readonly activeHooks: readonly string[]; readonly knownSecrets: readonly string[] }>(state: T): T & { readonly omittedOlderItems?: number } {
+  const keep = (items: readonly string[]) => items.slice(-WORLD_STATE_ITEMS_IN_CONTEXT);
+  const omitted = [state.activeConflicts, state.activeHooks, state.knownSecrets]
+    .reduce((sum, items) => sum + Math.max(0, items.length - WORLD_STATE_ITEMS_IN_CONTEXT), 0);
+  return {
+    ...state,
+    activeConflicts: keep(state.activeConflicts),
+    activeHooks: keep(state.activeHooks),
+    knownSecrets: keep(state.knownSecrets),
+    ...(omitted > 0 ? { omittedOlderItems: omitted } : {}),
+  };
+}
+
 function buildStoryThreadsContext(
   threads: readonly NarrativeThread[],
   chapter: number,
@@ -615,7 +631,9 @@ function buildStoryThreadsContext(
 
   const openLeads = ranked.filter((thread) => thread.type === "lead").slice(0, 8).map(compactThread);
   const openIntents = ranked.filter((thread) => thread.type === "intent").slice(0, 8).map(compactThread);
-  const recentlyTouchedThreads = ranked.slice(0, 5).map(compactThread);
+  // 最近碰过的：只给上面两组里没有的（原来直接取排名前 5，和 openLeads / openIntents 重复，整段多出一倍）。
+  const listed = new Set([...openLeads, ...openIntents].map((thread) => thread.id));
+  const recentlyTouchedThreads = ranked.filter((thread) => !listed.has(thread.id)).slice(0, 5).map(compactThread);
   // r7 里程碑制（镜像 lead-intent-tracking.findStaleThreadWarnings）：新停滞头两章提醒、长期停滞每 10 章重提。
   const staleThreadWarnings = ranked
     .map((thread) => ({
@@ -692,7 +710,10 @@ function buildArcGoalsContext(goals: readonly ArcGoal[], chapter: number, chapte
     relevantCharacterIds,
     closedStatuses: [],
   }).selected.slice(0, 6).map(compactGoal);
+  // 最近碰过的目标：只给 activeGoals 里没有的（多半是刚完成的）；原来和 activeGoals 是同一批，整段重复一遍。
+  const activeIds = new Set(activeGoals.map((goal) => goal.id));
   const recentlyTouchedGoals = [...goals]
+    .filter((goal) => !activeIds.has(goal.id))
     .sort(compareGoalRecency)
     .slice(0, 4)
     .map(compactGoal);
@@ -755,6 +776,29 @@ function buildArcCarryForwardInstruction(activeGoals: readonly ArcGoalContextIte
 // 从全量 timeline 在内存里挑近 N 段（出稿上下文用）。纯函数——全量已在 buildWriterContext 读过一次，避免重复读盘。
 // 本段是可裁段（ranker 可整段裁掉），吃 maxTimelineEvents 全量；受保护的 writing_context_pack 内摘要
 // 另自限 ≤3 条。两侧排序键同口径（章号→同章 id），选出的「最近 N 条」集合一致（2026-09-15 P1-7 对齐）。
+/**
+ * 给写手看的近几章事件：只留这章发生了什么（主事件、关键事件前三条、发现、决定、冲突、出场的人）。
+ * 原来整条事件原样给，带着整份语义摘要（章节全文摘要、提到的伏笔 id……），一条 1 千多字，
+ * 而上一章全文、前情承接段里已经有这些信息（2026-10-10 引擎升级第 4 期：《梧桐街九号》这一段 2.9K token）。
+ */
+function compactTimelineEventForWriter(event: TimelineEvent): Record<string, unknown> {
+  const semantic = readSemanticSummary(event);
+  const keyEvents = Array.isArray((semantic as { keyEvents?: unknown } | undefined)?.keyEvents)
+    ? ((semantic as { keyEvents: unknown[] }).keyEvents).filter((item): item is string => typeof item === "string").slice(0, 3).map((item) => truncateText(item, 80))
+    : [];
+  const names = semantic?.mentionedCharacterNames;
+  return {
+    chapter: event.chapter,
+    summary: truncateText(event.summary, 120),
+    ...(semantic?.mainEvent && semantic.mainEvent !== event.summary ? { mainEvent: truncateText(semantic.mainEvent, 120) } : {}),
+    ...(keyEvents.length > 0 ? { keyEvents } : {}),
+    ...(semantic?.discovery ? { discovery: truncateText(semantic.discovery, 100) } : {}),
+    ...(semantic?.decision ? { decision: truncateText(semantic.decision, 100) } : {}),
+    ...(semantic?.conflict ? { conflict: truncateText(semantic.conflict, 100) } : {}),
+    ...(Array.isArray(names) && names.length > 0 ? { characters: names.filter((name): name is string => typeof name === "string").slice(0, 8) } : {}),
+  };
+}
+
 function selectRecentTimelineEvents(events: readonly TimelineEvent[], maxTimelineEvents: number | undefined): readonly TimelineEvent[] {
   const limit = Math.max(0, Math.trunc(maxTimelineEvents ?? 5));
   if (limit === 0) return [];
@@ -797,6 +841,7 @@ function readSemanticSummary(event: TimelineEvent): Partial<{
   readonly mainEvent: string;
   readonly conflict: string;
   readonly discovery: string;
+  readonly decision: string;
   readonly nextLead: string;
   readonly locations: readonly string[];
   readonly mentionedCharacterNames: readonly string[];
@@ -807,6 +852,7 @@ function readSemanticSummary(event: TimelineEvent): Partial<{
     readonly mainEvent: string;
     readonly conflict: string;
     readonly discovery: string;
+    readonly decision: string;
     readonly nextLead: string;
     readonly locations: readonly string[];
     readonly mentionedCharacterNames: readonly string[];

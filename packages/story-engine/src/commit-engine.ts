@@ -264,11 +264,19 @@ interface TransactionFile {
  * #7：事务目录的活跃保留窗口——`.story-engine-tx/` 顶层按章号只保留最近 N 个
  * `commit-chapter-NNNN` 目录，更旧的「终态干净」目录（applied，或回滚干净的 recovered）
  * 归档进 `.story-engine-tx/archive/`（恢复扫描/残留通知只扫顶层，归档目录天然出扫描面）。
- * 归档用单次 rename(2)（同盘原子、无递归删除竞态），证据全保留、不删任何字节。
+ * 归档用单次 rename(2)（同盘原子、无递归删除竞态）；归档区只留最近 COMMIT_TRANSACTION_ARCHIVE_RETENTION 份。
  * 永不归档：recovered-with-issues（listCommitRecoveryNotices 的持续上浮证据）、
  * staged/failed（未决事务，交给恢复路径收尾）、snapshot-manifest 目录（历史审计证据）。
  */
 export const COMMIT_TRANSACTION_ACTIVE_RETENTION = 5;
+
+/**
+ * 归档区只留最近这么多份（2026-10-10 引擎升级第 4 期）。每份事务都备份了当时要改的整份故事文件，
+ * 书越长每份越大，原来只搬不删：58 章的书事务目录 27MB，按章数平方涨，500 章约 1.8GB。
+ * 归档区是已经收敛的旧事务（applied / 干净回滚），不参与恢复扫描；超过上限的按章号从旧到新删掉。
+ * 未决的（staged / failed）和带分歧证据的（recovered-with-issues）从来不进归档区，不受影响。
+ */
+export const COMMIT_TRANSACTION_ARCHIVE_RETENTION = 20;
 
 const commitTransactionTails = new Map<string, Promise<void>>();
 interface CommitLockContext {
@@ -1115,7 +1123,7 @@ async function applyCommitTransaction(
   // Preserve the applied manifest and backups as durable evidence. Recursive
   // path cleanup cannot be made race-free with Node's fs API (no unlinkat).
   // A later transaction reuses this manifest-controlled directory safely.
-  // (#7) Evidence is never deleted: once the retention window rolls past this
+  // (#7) Once the retention window rolls past this
   // chapter, the whole directory is atomically renamed into .story-engine-tx/archive/
   // (see archiveSettledCommitTransactionsUnlocked).
   return { passed: true };
@@ -1219,7 +1227,7 @@ async function recoverProjectCommitTransactionsUnlocked(projectDir: string): Pro
  * #7：把超出保留窗口的「终态干净」事务目录原子归档进 `.story-engine-tx/archive/`。
  * 只做 rename(2)（同盘原子、整目录 all-or-nothing），不递归删除——旧实现刻意保留
  * applied 目录当证据（"recursive path cleanup cannot be made race-free"），本函数不改这个
- * 约束：证据一个字节都不删，只是搬出恢复扫描/残留通知的视野（两者只扫顶层 `commit-chapter-\d+`），
+ * 约束：活跃区只搬不删，搬出恢复扫描/残留通知的视野（两者只扫顶层 `commit-chapter-\d+`）；归档区超过上限的最旧几份删掉，
  * 顶层从此只留最近 N 章，长跑不再无限堆积。调用方必须已持有 project commit 锁。
  */
 async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Promise<void> {
@@ -1237,8 +1245,7 @@ async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Pro
     if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
     chapters.push({ chapter: Number(match[1]), dirName: entry.name });
   }
-  if (chapters.length <= COMMIT_TRANSACTION_ACTIVE_RETENTION) return;
-  // 章号最新的 N 个保持在原位（近期取证窗口），更旧的才候选归档。
+  // 章号最新的 N 个保持在原位（近期取证窗口），更旧的才候选归档（不够 N 个时没有候选，照样整理归档区）。
   const candidates = chapters
     .sort((left, right) => right.chapter - left.chapter)
     .slice(COMMIT_TRANSACTION_ACTIVE_RETENTION);
@@ -1283,6 +1290,34 @@ async function archiveSettledCommitTransactionsUnlocked(projectDir: string): Pro
         // EEXIST/ENOTEMPTY：归档目标被占，换下一个后缀重试。
       }
     }
+  }
+  await pruneTransactionArchiveUnlocked(projectDir);
+}
+
+/**
+ * 归档区超过 COMMIT_TRANSACTION_ARCHIVE_RETENTION 份就删最旧的（按章号，同章按重提序号）。
+ * 只删归档区里名字对得上 `commit-chapter-NNNN[--N]`、本身是真目录（不是符号链接）的；调用方持有项目锁。
+ * 删不掉就留着，下次再试——这是空间治理，不是正确性前提。
+ */
+async function pruneTransactionArchiveUnlocked(projectDir: string): Promise<void> {
+  const archiveRoot = join(projectDir, ".story-engine-tx", "archive");
+  const rootStats = await lstat(archiveRoot).catch(() => undefined);
+  if (!rootStats || !rootStats.isDirectory() || rootStats.isSymbolicLink()) return;
+  const archived: { readonly name: string; readonly chapter: number; readonly attempt: number }[] = [];
+  for (const entry of await readdir(archiveRoot, { withFileTypes: true })) {
+    const match = /^commit-chapter-(\d+)(?:--(\d+))?$/u.exec(entry.name);
+    if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    archived.push({ name: entry.name, chapter: Number(match[1]), attempt: Number(match[2] ?? 1) });
+  }
+  if (archived.length <= COMMIT_TRANSACTION_ARCHIVE_RETENTION) return;
+  const oldest = archived
+    .sort((left, right) => left.chapter - right.chapter || left.attempt - right.attempt)
+    .slice(0, archived.length - COMMIT_TRANSACTION_ARCHIVE_RETENTION);
+  for (const item of oldest) {
+    const target = join(archiveRoot, item.name);
+    const stats = await lstat(target).catch(() => undefined);
+    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) continue;
+    await rm(target, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

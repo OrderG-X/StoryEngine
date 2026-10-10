@@ -97,6 +97,14 @@ const DEFAULT_L2_WINDOW = 15;
 const DEFAULT_L3_BLOCK_SIZE = 5;
 const L2_TRUNCATE = 120;
 const L3_BLOCK_TRUNCATE = 200;
+/**
+ * 远期块数上限（2026-10-10 引擎升级第 4 期）：原来每 5 章一块、块数随章数一直涨，500 章时这一段约 6 千 token。
+ * 现在最近 L3_FINE_BLOCKS 块保持 5 章一块，更早的合成至多 L3_COARSE_BLOCKS 块（越早越粗），整段有上限。
+ */
+const L3_FINE_BLOCKS = 6;
+const L3_COARSE_BLOCKS = 6;
+/** 粗块里每章取一句的最长字数（均匀抽样，保证整段时间都有代表，而不是只剩块里最早几章）。 */
+const L3_COARSE_LINE = 40;
 
 /**
  * 同章多事件合并：取 participants 并集，summary/mainEvent 取首条非空。
@@ -238,40 +246,49 @@ function buildMacroBlocks(
   blockSize: number,
 ): TimelineMacroBlock[] {
   if (events.length === 0) return [];
-
   const minChapter = events[0].chapter;
   const maxChapter = events[events.length - 1].chapter;
-
-  // 块起点 = 向下对齐到 blockSize 的倍数（从 1 开始对齐）
-  // e.g. blockSize=5: 1-5, 6-10, 11-15…
-  const firstBlockStart = Math.floor((minChapter - 1) / blockSize) * blockSize + 1;
-
+  // 细块区：最后 L3_FINE_BLOCKS 个 blockSize 对齐块
+  const lastBlockStart = Math.floor((maxChapter - 1) / blockSize) * blockSize + 1;
+  const fineStart = Math.max(Math.floor((minChapter - 1) / blockSize) * blockSize + 1, lastBlockStart - (L3_FINE_BLOCKS - 1) * blockSize);
   const blocks: TimelineMacroBlock[] = [];
-
-  for (let blockStart = firstBlockStart; blockStart <= maxChapter; blockStart += blockSize) {
-    const blockEnd = blockStart + blockSize - 1;
-    const blockEvents = events.filter(
-      (e) => e.chapter >= blockStart && e.chapter <= blockEnd,
-    );
-    if (blockEvents.length === 0) continue;
-
-    // summary = 各章 bestSingleLine 拼接（保早期 mainEvent）
-    const parts = blockEvents.map((e) => {
-      const line = bestSingleLine(e);
-      return line.trim().length > 0 ? line : e.summary;
-    });
-    const joined = parts.join("；");
-    const summary =
-      joined.length > L3_BLOCK_TRUNCATE
-        ? joined.slice(0, L3_BLOCK_TRUNCATE)
-        : joined;
-
-    blocks.push({
-      fromChapter: blockStart,
-      toChapter: Math.min(blockEnd, maxChapter),
-      summary,
-    });
+  // 粗块区：fineStart 之前的章，分成至多 L3_COARSE_BLOCKS 块（块长是 blockSize 的倍数）
+  if (minChapter < fineStart) {
+    const coarseFirst = Math.floor((minChapter - 1) / blockSize) * blockSize + 1;
+    const span = fineStart - coarseFirst;
+    const coarseSize = Math.max(blockSize, Math.ceil(span / L3_COARSE_BLOCKS / blockSize) * blockSize);
+    for (let start = coarseFirst; start < fineStart; start += coarseSize) {
+      const end = Math.min(start + coarseSize - 1, fineStart - 1);
+      const inBlock = events.filter((e) => e.chapter >= start && e.chapter <= end);
+      if (inBlock.length === 0) continue;
+      blocks.push({ fromChapter: start, toChapter: Math.min(end, maxChapter), summary: sampledSummary(inBlock, coarseSize > blockSize) });
+    }
   }
-
+  for (let blockStart = fineStart; blockStart <= maxChapter; blockStart += blockSize) {
+    const blockEnd = blockStart + blockSize - 1;
+    const blockEvents = events.filter((e) => e.chapter >= blockStart && e.chapter <= blockEnd);
+    if (blockEvents.length === 0) continue;
+    blocks.push({ fromChapter: blockStart, toChapter: Math.min(blockEnd, maxChapter), summary: sampledSummary(blockEvents, false) });
+  }
   return blocks;
+}
+
+/**
+ * 块摘要：各章 bestSingleLine（mainEvent 优先）用「；」拼接、截到 L3_BLOCK_TRUNCATE。
+ * 粗块（跨好几十章）均匀抽几章、每句截到 L3_COARSE_LINE，整块时间都有代表。
+ */
+function sampledSummary(blockEvents: readonly TimelineEvent[], coarse: boolean): string {
+  const lines = blockEvents.map((e) => {
+    const line = bestSingleLine(e);
+    return line.trim().length > 0 ? line : e.summary;
+  });
+  let parts = lines;
+  if (coarse) {
+    const take = Math.max(1, Math.floor(L3_BLOCK_TRUNCATE / (L3_COARSE_LINE + 1)));
+    const step = lines.length / take;
+    parts = lines.length <= take ? lines : Array.from({ length: take }, (_, index) => lines[Math.floor(index * step)]!);
+    parts = parts.map((line) => line.slice(0, L3_COARSE_LINE));
+  }
+  const joined = parts.join("；");
+  return joined.length > L3_BLOCK_TRUNCATE ? joined.slice(0, L3_BLOCK_TRUNCATE) : joined;
 }

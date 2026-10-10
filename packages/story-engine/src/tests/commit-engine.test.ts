@@ -1250,3 +1250,24 @@ async function createFixtureProject(): Promise<string> {
 async function writeDraft(projectDir: string, chapter: number, content: string): Promise<void> {
   await writeFile(join(projectDir, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), content, "utf-8");
 }
+
+describe("事务归档区有上限（2026-10-10 引擎升级第 4 期）", () => {
+  it("归档区超过上限 → 按章号删最旧的；未决的活跃事务不动", async () => {
+    const { COMMIT_TRANSACTION_ARCHIVE_RETENTION, recoverProjectCommitTransactions } = await import("../commit-engine.js");
+    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-archive-prune-"));
+    const archiveRoot = join(projectDir, ".story-engine-tx", "archive");
+    await mkdir(archiveRoot, { recursive: true });
+    const total = COMMIT_TRANSACTION_ARCHIVE_RETENTION + 5;
+    for (let chapter = 1; chapter <= total; chapter += 1) {
+      const dir = join(archiveRoot, `commit-chapter-${String(chapter).padStart(4, "0")}`);
+      await mkdir(join(dir, "backups"), { recursive: true });
+      await writeFile(join(dir, "manifest.json"), JSON.stringify({ version: 2, chapter, status: "applied" }), "utf-8");
+    }
+    await mkdir(join(archiveRoot, "commit-chapter-0003--2"), { recursive: true });
+    await recoverProjectCommitTransactions(projectDir);
+    const left = (await readdir(archiveRoot)).sort();
+    expect(left).toHaveLength(COMMIT_TRANSACTION_ARCHIVE_RETENTION);
+    expect(left[0]).toBe(`commit-chapter-${String(total - COMMIT_TRANSACTION_ARCHIVE_RETENTION + 1).padStart(4, "0")}`);
+    expect(left.at(-1)).toBe(`commit-chapter-${String(total).padStart(4, "0")}`);
+  });
+});
