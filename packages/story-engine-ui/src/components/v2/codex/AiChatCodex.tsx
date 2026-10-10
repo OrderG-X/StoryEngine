@@ -760,10 +760,11 @@ function MessageBubbles({
   const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
   const commitPreview = message.commitPreview;
   const confirmCommit = commitPreview && commitConfirmable && onSuggestedAction
-    ? (excluded: readonly string[] = []) => onSuggestedAction(commitConfirmAction({
+    ? (excluded: readonly string[] = [], dayOverride?: number) => onSuggestedAction(commitConfirmAction({
       chapter: commitPreview.chapter,
       ...(commitPreview.previewToken ? { previewToken: commitPreview.previewToken } : {}),
       ...(excluded.length > 0 ? { excluded } : {}),
+      ...(dayOverride !== undefined ? { dayOverride } : {}),
     }))
     : undefined;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。

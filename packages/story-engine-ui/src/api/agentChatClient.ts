@@ -27,7 +27,7 @@ export interface StreamAgentChatRequest {
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[] }
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number };
@@ -39,6 +39,10 @@ export interface LedgerChecklistItemView {
   readonly label: string;
   readonly detail?: string;
   readonly removable: boolean;
+  /** 作者能改的「第几天」（故事时间线）。 */
+  readonly editableDay?: number;
+  /** 引擎没把握、请作者确认。 */
+  readonly needsConfirm?: boolean;
 }
 
 /** 核账结果里的一条：本章原句 ↔ 前文原句。 */
@@ -470,6 +474,8 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       label: item.label,
       ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
       removable: item.removable === true,
+      ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),
+      ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
     }];
   });
 }

@@ -1,5 +1,5 @@
 import { useCallback, useRef } from "react";
-import { clearLedgerExclusions, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
+import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
 import { directEditDraft, fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
 import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
 import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
@@ -2168,8 +2168,13 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       // 作者在预览卡上勾掉的账本条目：从卡上点带着；从建议条点的没带，按章取回（否则会把勾掉的照写）。
       const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
+      const dayOverride = target?.dayOverride ?? ledgerDayOverrideForConfirm(chapter, target?.previewToken);
       clearLedgerExclusions(chapter);
-      const text = excluded.length > 0 ? `确认定稿第 ${chapter} 章（账本清单去掉了 ${excluded.length} 条）` : `确认定稿第 ${chapter} 章`;
+      const notes = [
+        ...(excluded.length > 0 ? [`账本清单去掉了 ${excluded.length} 条`] : []),
+        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
+      ];
+      const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, {
@@ -2177,6 +2182,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         chapter,
         ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
         ...(excluded.length > 0 ? { excluded } : {}),
+        ...(dayOverride !== undefined ? { dayOverride } : {}),
       });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],

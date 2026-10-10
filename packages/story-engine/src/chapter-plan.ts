@@ -11,6 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "./project-store.js";
+import { readStoryTimeline } from "./story-timeline.js";
 
 export interface ChapterPlanThreadStep {
   /** 推进的线索/目标标题（尽量逐字取自现有开着的线索）。 */
@@ -176,15 +177,35 @@ export interface StoryClockEntry {
   readonly summary: string;
 }
 
-/** 前面各章章纲里记下的「故事第几天」（近的在后），最多 limit 条。没有天数的老章纲跳过。 */
+/**
+ * 前面各章的「故事第几天」（近的在后），最多 limit 条。
+ * 2026-10-10 起读故事时间线（story/timeline.json；老书由章纲和已定稿章节现推）：以前只认章纲，
+ * 作者自己写、没有章纲的章整段缺席，新章的天数会静默偏小。摘要优先章纲，没有就用时间线事件。
+ */
 export async function readStoryClock(projectDir: string, chapter: number, limit = 12): Promise<readonly StoryClockEntry[]> {
+  const { timeline } = await readStoryTimeline(projectDir);
+  const entries = timeline.entries.filter((entry) => entry.chapter < chapter).slice(-limit);
+  if (entries.length === 0) return [];
+  const eventSummaries = await readEventSummaries(projectDir);
   const out: StoryClockEntry[] = [];
-  for (let n = chapter - 1; n >= 1 && out.length < limit; n -= 1) {
-    const plan = await readChapterPlan(projectDir, n).catch(() => undefined);
-    if (!plan?.storyDay) continue;
-    out.push({ chapter: n, storyDay: plan.storyDay, ...(plan.scene.time ? { time: plan.scene.time } : {}), summary: plan.summary.slice(0, 60) });
+  for (const entry of entries) {
+    const plan = await readChapterPlan(projectDir, entry.chapter).catch(() => undefined);
+    const summary = (plan?.summary ?? eventSummaries.get(entry.chapter) ?? "").slice(0, 60);
+    const time = plan?.scene.time ?? (entry.weekday !== undefined ? `${WEEKDAY_NAMES[entry.weekday]}${entry.timeOfDay ?? ""}` : entry.timeOfDay);
+    out.push({ chapter: entry.chapter, storyDay: entry.day, ...(time ? { time } : {}), summary });
   }
-  return out.reverse();
+  return out;
+}
+
+async function readEventSummaries(projectDir: string): Promise<ReadonlyMap<number, string>> {
+  try {
+    const events = JSON.parse(await readFile(join(projectDir, "timeline", "events.json"), "utf-8")) as { chapter?: unknown; summary?: unknown }[];
+    return new Map(events
+      .filter((event) => typeof event.chapter === "number" && typeof event.summary === "string")
+      .map((event) => [event.chapter as number, event.summary as string]));
+  } catch {
+    return new Map();
+  }
 }
 
 export function chapterPlanPath(projectDir: string, chapter: number): string {

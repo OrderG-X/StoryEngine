@@ -38,6 +38,7 @@ export * from "./quality-judgement.js";
 export * from "./post-chapter-change-plan.js";
 export * from "./review-plan.js";
 export * from "./state-overview.js";
+export * from "./story-timeline.js";
 export * from "./style-exemplars.js";
 export * from "./timeline-layers.js";
 export * from "./writing-context-pack.js";

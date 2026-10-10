@@ -1,3 +1,4 @@
+import type { StoryTimeline } from "./story-timeline.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
@@ -91,6 +92,8 @@ export interface CommitDraftInput {
     readonly characterBibleUpdates?: readonly CharacterBibleUpdate[];
     readonly characterMatrixUpdates?: readonly CharacterMatrixUpdate[];
     readonly calendar?: CalendarUpdate;
+    /** 放好本章之后的整条故事时间线（写 story/timeline.json；日历的「当前第几天」由它推出）。 */
+    readonly storyTimeline?: StoryTimeline;
   };
 }
 
@@ -363,7 +366,10 @@ async function commitFastDraftUnlocked(input: CommitDraftInput): Promise<CommitR
     ...(await buildLocationBibleFile(input.projectDir, input.chapter, input.commitPlan.locationBibleUpdates ?? [])),
     ...(await buildCharacterBibleFile(input.projectDir, input.commitPlan.characterBibleUpdates ?? [])),
     ...(await buildCharacterMatrixFile(input.projectDir, input.chapter, input.commitPlan.characterMatrixUpdates ?? [])),
-    ...(await buildStoryCalendarFile(input.projectDir, input.commitPlan.calendar)),
+    ...(await buildStoryCalendarFile(input.projectDir, input.commitPlan.calendar, input.commitPlan.storyTimeline)),
+    ...(input.commitPlan.storyTimeline
+      ? [{ relativePath: join("story", "timeline.json"), content: jsonText(input.commitPlan.storyTimeline) }]
+      : []),
     {
       relativePath: join("chapters", `${padChapter(input.chapter)}.md`),
       content: draft,
@@ -975,9 +981,22 @@ function buildArcGoalPoolFiles(
 async function buildStoryCalendarFile(
   projectDir: string,
   update: CalendarUpdate | undefined,
+  storyTimeline?: StoryTimeline,
 ): Promise<readonly TransactionFile[]> {
   if (!update) return [];
   const previous = await readStoryCalendar(projectDir);
+  // 有故事时间线：「当前第几天」就是时间线上最后一章那天（作者改小了也照改，不再被 Math.max 锁死）。
+  const lastEntry = storyTimeline?.entries.at(-1);
+  if (lastEntry) {
+    return [{
+      relativePath: join("time", "calendar.json"),
+      content: jsonText({
+        ...previous,
+        currentStoryDay: lastEntry.day,
+        currentTimeOfDay: update.timeOfDay === "unknown" && previous.currentTimeOfDay !== "unknown" ? previous.currentTimeOfDay : update.timeOfDay,
+      } satisfies StoryCalendar),
+    }];
+  }
   // P2：自动路径按章号推一天，但绝不让「第 3 章已明确写到第 10 天」被后续章节回压成第 4 天——
   // 故事日只许前进不许后退。时刻同理：没有时间证据时沿用上次已知时刻，不回退成 unknown。
   const requestedDay = Number.isFinite(update.storyDay) && update.storyDay > 0

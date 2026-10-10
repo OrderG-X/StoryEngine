@@ -268,7 +268,7 @@ export type WorkspaceCommitPreview = {
   readonly draftIssueCount?: number;
   readonly semanticIssueCount?: number;
   readonly previewToken?: string;
-  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean }[];
+  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean; readonly editableDay?: number; readonly needsConfirm?: boolean }[];
 };
 
 export type WorkspaceNextStepPrompt = {
@@ -558,7 +558,16 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
       const label = readString(item.label);
       if (!id || !label) return [];
       const detail = readString(item.detail);
-      return [{ id, kind: readString(item.kind) ?? "", label, ...(detail ? { detail } : {}), removable: item.removable === true }];
+      const editableDay = readPositiveInteger(item.editableDay);
+      return [{
+        id,
+        kind: readString(item.kind) ?? "",
+        label,
+        ...(detail ? { detail } : {}),
+        removable: item.removable === true,
+        ...(editableDay !== undefined ? { editableDay } : {}),
+        ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
+      }];
     })
     : [];
   return {

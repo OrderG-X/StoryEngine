@@ -8,12 +8,41 @@
 interface Entry {
   readonly previewToken: string;
   readonly removed: ReadonlySet<string>;
+  /** 作者改过的「第几天」。 */
+  readonly dayOverride?: number;
 }
 
 const byChapter = new Map<number, Entry>();
 
 export function rememberLedgerExclusions(chapter: number, previewToken: string | undefined, removed: ReadonlySet<string>): void {
-  byChapter.set(chapter, { previewToken: previewToken ?? "", removed });
+  const previous = byChapter.get(chapter);
+  const sameCard = previous && previous.previewToken === (previewToken ?? "");
+  byChapter.set(chapter, { previewToken: previewToken ?? "", removed, ...(sameCard && previous.dayOverride !== undefined ? { dayOverride: previous.dayOverride } : {}) });
+}
+
+/** 记下作者在清单上改的「第几天」（undefined = 改回原值）。 */
+export function rememberLedgerDayOverride(chapter: number, previewToken: string | undefined, day: number | undefined): void {
+  const previous = byChapter.get(chapter);
+  const sameCard = previous && previous.previewToken === (previewToken ?? "");
+  byChapter.set(chapter, {
+    previewToken: previewToken ?? "",
+    removed: sameCard ? previous.removed : new Set(),
+    ...(day !== undefined ? { dayOverride: day } : {}),
+  });
+}
+
+/** 这张预览卡此前改过的「第几天」。 */
+export function ledgerDayOverrideForCard(chapter: number, previewToken: string | undefined): number | undefined {
+  const entry = byChapter.get(chapter);
+  return entry && entry.previewToken === (previewToken ?? "") ? entry.dayOverride : undefined;
+}
+
+/** 点「确认定稿」时该带上的「第几天」（规则同 ledgerExclusionsForConfirm）。 */
+export function ledgerDayOverrideForConfirm(chapter: number, previewToken: string | undefined): number | undefined {
+  const entry = byChapter.get(chapter);
+  if (!entry) return undefined;
+  if (previewToken && entry.previewToken && previewToken !== entry.previewToken) return undefined;
+  return entry.dayOverride;
 }
 
 /** 这张预览卡此前勾掉的条目（卡片重挂载时恢复用）；不是同一张预览就当没勾过。 */

@@ -525,6 +525,8 @@ export type CommitApplyPolicy =
     readonly previewStore: CommitApplyPreviewTicketStore;
     /** 作者在定稿预览的账本清单上去掉的条目 id（伏笔 / 线索 / 目标从计划里拿掉；事实由工具层处理）。 */
     readonly excluded?: readonly string[];
+    /** 作者在定稿清单里改的「第几天」（故事时间线，优先级最高）。 */
+    readonly dayOverride?: number;
   };
 
 export interface CommitApplyServiceInput {
@@ -732,12 +734,14 @@ async function runCommitApplyUnlocked(input: CommitApplyServiceInput): Promise<C
     }
   }
 
+  const dayOverride = policy.kind === "agent_preview_ticket" ? policy.dayOverride : undefined;
   const builtPlan = await buildCommitPlanFromProject({
     projectDir,
     chapter,
     draftPath,
     draftContent,
     ...(cachedDeclaration ? { declaration: cachedDeclaration } : {}),
+    ...(dayOverride !== undefined ? { timeOverride: { day: dayOverride } } : {}),
   });
   // 作者在账本清单上去掉的伏笔 / 线索 / 目标：从计划里拿掉，不写（同一版草稿 + 同一份声明重算，条目 id 一致）。
   const excluded = policy.kind === "agent_preview_ticket" ? policy.excluded ?? [] : [];

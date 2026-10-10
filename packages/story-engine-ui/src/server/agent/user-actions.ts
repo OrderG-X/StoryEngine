@@ -21,6 +21,8 @@ export type UserAction =
     readonly previewToken?: string;
     /** 作者在定稿预览的账本清单上去掉的条目 id（这些不写进账本）。 */
     readonly excluded?: readonly string[];
+    /** 作者改的「第几天」。 */
+    readonly dayOverride?: number;
   }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
@@ -67,9 +69,17 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   const excluded = Array.isArray(record.excluded)
     ? [...new Set(record.excluded.filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.length <= 200).map((id) => id.trim()))].slice(0, MAX_EXCLUDED)
     : [];
+  const rawDay = typeof record.dayOverride === "string" ? Number(record.dayOverride.trim()) : record.dayOverride;
+  const dayOverride = typeof rawDay === "number" && Number.isInteger(rawDay) && rawDay >= 1 && rawDay <= 100_000 ? rawDay : undefined;
   return {
     kind: "action",
-    action: { toolName: "commit_apply", chapter, ...(previewToken ? { previewToken } : {}), ...(excluded.length > 0 ? { excluded } : {}) },
+    action: {
+      toolName: "commit_apply",
+      chapter,
+      ...(previewToken ? { previewToken } : {}),
+      ...(excluded.length > 0 ? { excluded } : {}),
+      ...(dayOverride !== undefined ? { dayOverride } : {}),
+    },
   };
 }
 
@@ -159,6 +169,7 @@ export async function runUserAction(args: {
         chapter: action.chapter,
         ...(action.previewToken ? { previewToken: action.previewToken } : {}),
         ...(action.excluded && action.excluded.length > 0 ? { excluded: action.excluded } : {}),
+        ...(action.dayOverride !== undefined ? { dayOverride: action.dayOverride } : {}),
       },
       args.requestContext,
     );

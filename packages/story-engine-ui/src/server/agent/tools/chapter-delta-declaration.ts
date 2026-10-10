@@ -75,6 +75,23 @@ const arcGoalItem = z.object({
 
 const pendingIntentItem = evidenceItem.extend({ targetThreadHint: optionalHint });
 
+/** 本章的时间（故事时间线）：宽进——天数给成「3」「三」都收，星期给成「星期二」也收；原句必须有。 */
+const CHINESE_SMALL_NUMBERS: Record<string, number> = { 零: 0, 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+const timeItem = z.object({
+  daysSincePrevious: z.preprocess((value) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^\d+$/u.test(trimmed)) return Number(trimmed);
+      if (trimmed in CHINESE_SMALL_NUMBERS) return CHINESE_SMALL_NUMBERS[trimmed];
+      return undefined;
+    }
+    return value === null ? undefined : value;
+  }, z.number().int().min(0).max(3650).optional()),
+  weekday: z.preprocess((value) => (typeof value === "string" && value.trim() ? value.trim() : undefined), z.string().optional()),
+  timeOfDay: z.preprocess((value) => (typeof value === "string" && value.trim() ? value.trim() : undefined), z.string().optional()),
+  quote: z.string().trim().min(1),
+});
+
 const continuityWithPreviousItem = z.object({
   connects: z.boolean(),
   note: z.string().trim().min(1).optional(),
@@ -158,10 +175,11 @@ export function buildChapterDeltaMessages(input: {
     "· pendingIntents[]：本章留下的未完成待办/下一步意图（不同于已完成决定）。summary=还要做什么，quote=写到该待办/意图的原句。只有正文明确留下后续行动时才报；已经完成的行动不要报。和下方【已开着的线索】里某条是同一件事的，把它的编号填进 targetThreadHint，不要换个说法另报一条。",
     "· charactersPresent[]：本章正文里【出现的每个有名字的角色】各报一条。name=正文里用到的名字（逐字照抄，含姓氏，不要改写），quote=含该名字的原句；若该角色对应下方【本书已确立的角色名】里的某人，name 必须与已确立写法【完全一致】，别写成形近的错名；若能指明是谁，用 identityHint 备注（如『主角』『主角的妹妹』）。",
     "· arcGoalProgress[]：本章对【主线/阶段目标】的推进。目标=主角这条线在图谋/追求什么（题材中立，不要套任何题材模板）。长篇里主角几乎每章都在为某个目标使劲——本章只要主角在为某个目标查/找/争/守/逃/达成什么，就【至少报一条】（哪怕只是 advanced 一个已存在的目标）；只有纯过渡、主角完全没有任何目标性行动时才给空数组。每条：summary=目标是什么（一句话，尽量简短、像个标题，跨章尽量用同一个说法），progress=introduced(本章新确立这个目标)|advanced(本章朝它推进了一步)|completed(本章达成/了结了它)，scope=main_arc(贯穿全书的大目标)|mini_arc(近几章的小目标)（introduced 时给），quote=最能代表该推进的【正文里连续的一整句原文】（不要拼接多句）。若推进/达成的是下方【已存在的主线/阶段目标】里的某一条，把它的标题填进 targetGoalHint（务必对应已有条目、逐字沿用其标题，不要新造），让它归到同一条、别把一个目标拆成好几个。",
+    "· time：本章正文交代了时间就报（和上一章隔了几天 / 星期几 / 时段），没交代就省略整个字段。daysSincePrevious=和上一章隔了几天（同一天 0，「第二天」1，「三天后」3；正文没说隔几天就不填）；weekday=正文明写的星期（「周二」，没写就不填，不要自己推算）；timeOfDay=正文写的时段（「下午」）；quote=交代时间的那句原文。不要写「故事第几天」，也不要根据上下文自己推日子。",
     "· continuityWithPrevious：如果下方给了【上一章结尾】，判断本章开头是否自然承接上一章结尾。connects=true|false；若 false，note 用一句话说明断裂点。这个字段不带 quote，也不要把上一章结尾内容当作任何字段的 quote 来源。未给上一章结尾时省略。",
     "通用摘要规则：summary 必须是你自己组织的一句话概括（谁+做了什么+结果），禁止把 quote 原句照抄或近乎照抄当 summary。summary 是给时间线看的干净摘要，quote 才是证据原文。",
     "写名字的铁律：本书已确立的角色，名字每次都必须与【本书已确立的角色名】里的写法逐字一致，禁止把『林宁』写成『林棠』这类形近漂移。",
-    "只输出一个 JSON 对象，键为：mainEvent, conflict, discovery, decision, seededForeshadowing, resolvedForeshadowing, resourceDeltas, keyLeads, pendingIntents, charactersPresent, arcGoalProgress, continuityWithPrevious。不要 Markdown、不要解释、不要多余文字。",
+    "只输出一个 JSON 对象，键为：mainEvent, conflict, discovery, decision, seededForeshadowing, resolvedForeshadowing, resourceDeltas, keyLeads, pendingIntents, charactersPresent, arcGoalProgress, continuityWithPrevious, time。不要 Markdown、不要解释、不要多余文字。",
   ].join("\n");
   const openThreads = input.openThreadTitles && input.openThreadTitles.length > 0
     ? `\n【已开着的线索（编号 标题；推进或回收时把编号填进 targetThreadHint，不要新造；本章写出答案的记得报进 resolvedForeshadowing）】\n${input.openThreadTitles.map((title, index) => `T${index + 1} ${title}`).join("\n")}`
@@ -241,6 +259,13 @@ export function parseChapterDeltaDeclaration(
   const discovery = salvageScalar(raw.discovery, "discovery", onDrop);
   const decision = salvageScalar(raw.decision, "decision", onDrop);
   const continuityWithPrevious = salvageContinuityWithPrevious(raw.continuityWithPrevious, "continuityWithPrevious", onDrop);
+  const time = ((): z.infer<typeof timeItem> | undefined => {
+    if (raw.time === undefined || raw.time === null) return undefined;
+    const result = timeItem.safeParse(raw.time);
+    if (result.success) return result.data;
+    onDrop?.("time", result.error.issues.map((issue) => issue.message).join("; "));
+    return undefined;
+  })();
   return {
     chapter,
     // mainEvent 是引擎契约里的必填项；模型没给/给坏时用空证据占位，引擎会以 empty_quote 拒收并回退正则（等价老行为）。
@@ -256,6 +281,7 @@ export function parseChapterDeltaDeclaration(
     charactersPresent: salvageList(raw.charactersPresent, characterItem, "charactersPresent", onDrop),
     arcGoalProgress: salvageList(raw.arcGoalProgress, arcGoalItem, "arcGoalProgress", onDrop),
     ...(continuityWithPrevious ? { continuityWithPrevious } : {}),
+    ...(time ? { time: { quote: time.quote, ...(time.daysSincePrevious !== undefined ? { daysSincePrevious: time.daysSincePrevious } : {}), ...(time.weekday ? { weekday: time.weekday } : {}), ...(time.timeOfDay ? { timeOfDay: time.timeOfDay } : {}) } } : {}),
   };
 }
 

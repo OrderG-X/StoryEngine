@@ -6,7 +6,8 @@ export type FormalCommitV0StateArea =
   | "arc_goals"
   | "character_state"
   | "world_state"
-  | "calendar";
+  | "calendar"
+  | "story_timeline";
 
 export type FormalCommitV0ForbiddenArea =
   | "asset_ledger"
@@ -21,6 +22,7 @@ export const FORMAL_COMMIT_V0_STATIC_ALLOWED_PATHS = [
   "story/arc-goals.json",
   "world/state.json",
   "time/calendar.json",
+  "story/timeline.json",
 ] as const;
 
 export const FORMAL_COMMIT_V0_FORBIDDEN_PATHS = [
@@ -76,6 +78,7 @@ export function formalCommitV0StateAreaForPath(file: string): FormalCommitV0Stat
   if (/^characters\/[A-Za-z0-9_-]+\/state\.json$/u.test(file)) return "character_state";
   if (file === "world/state.json") return "world_state";
   if (file === "time/calendar.json") return "calendar";
+  if (file === "story/timeline.json") return "story_timeline";
   return undefined;
 }
 

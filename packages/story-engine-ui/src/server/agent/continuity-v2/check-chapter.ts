@@ -481,6 +481,7 @@ export function buildFullReadMessages(
   draftBody: string,
   earlier: EarlierText,
   focus: FullReadFocus,
+  timelineTable?: string,
 ): { role: "system" | "user"; content: string }[] {
   const ordered = [...earlier.chapters].sort((a, b) => a.chapter - b.chapter);
   let budget = FULL_CONTEXT_MAX_CHARS;
@@ -501,6 +502,8 @@ export function buildFullReadMessages(
     "【前文】",
     ...kept.map((item) => `第 ${item.chapter} 章\n${item.sentences.join("")}`),
     "",
+    // 故事时间线（引擎排好的）：判「昨天 / 前天 / 几天前 / 周几」对不对时照表，不自己推算。放在前文后面、本章前面，几遍共用缓存。
+    ...(timelineTable ? [`【故事时间线】\n${timelineTable}`, ""] : []),
     `【本章】第 ${chapter} 章\n${draftBody}`,
     "",
     `【这一遍的任务】${FOCUS_LINES[focus]}`,
@@ -561,11 +564,12 @@ export async function checkChapterByFullRead(input: {
   readonly draftBody: string;
   readonly callModel: CheckCallModel;
   readonly earlier?: EarlierText;
+  readonly timelineTable?: string;
 }): Promise<CheckChapterResult> {
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   const failures: string[] = [];
   const passes = await Promise.allSettled((["objects", "people", "time-knowledge"] as const).map(async (focus) =>
-    parseFullReadIssues(await input.callModel(buildFullReadMessages(input.chapter, input.draftBody, earlier, focus)), input.chapter, input.draftBody, earlier)));
+    parseFullReadIssues(await input.callModel(buildFullReadMessages(input.chapter, input.draftBody, earlier, focus, input.timelineTable)), input.chapter, input.draftBody, earlier)));
   const issues: ContinuityIssueV2[] = [];
   const seen = new Set<string>();
   passes.forEach((result, index) => {
@@ -611,6 +615,7 @@ function sentenceWithContext(text: string, quote: string): string {
 export function buildAdjudicationMessages(
   chapter: number,
   candidates: readonly { readonly id: string; readonly issue: ContinuityIssueV2; readonly here: string; readonly there: string }[],
+  timelineTable?: string,
 ): { role: "system" | "user"; content: string }[] {
   const system = [
     "你是长篇小说的复核编辑。下面每条是别人标出的「前后矛盾」，附了本章那句和前文那句的上下文。逐条给一个判断：",
@@ -621,6 +626,7 @@ export function buildAdjudicationMessages(
   ].join("\n");
   const user = [
     `【本章】第 ${chapter} 章`,
+    ...(timelineTable ? [`【故事时间线（日子以此为准，不要自己推算）】\n${timelineTable}`] : []),
     ...candidates.map(({ id, issue, here, there }) => [
       `【${id}】标注理由：${issue.reason}`,
       `  本章：${here}`,
@@ -641,6 +647,8 @@ export async function checkChapterContinuity(input: {
   readonly callModel: CheckCallModel;
   /** 是否复核（评测对比用；缺省复核）。 */
   readonly adjudicate?: boolean;
+  /** 引擎排好的故事时间线对照表（describeTimelineForChapter）：通读和复核都附上，不让模型自己算日子。 */
+  readonly timelineTable?: string;
   readonly earlier?: EarlierText;
   /**
    * 上次核出、两边原句都还在的问题（核账记忆）：和这次的候选一起复核。复核判「不是」才删，
@@ -678,7 +686,7 @@ export async function checkChapterContinuity(input: {
     there: sentenceWithContext(issue.earlierChapter === input.chapter ? input.draftBody : earlierText.get(issue.earlierChapter) ?? issue.earlierQuote, issue.earlierQuote),
   }));
   try {
-    const parsed = parseJson(await input.callModel(buildAdjudicationMessages(input.chapter, candidates)));
+    const parsed = parseJson(await input.callModel(buildAdjudicationMessages(input.chapter, candidates, input.timelineTable)));
     const verdicts = new Map((Array.isArray(parsed.verdicts) ? parsed.verdicts : [])
       .map((item) => asRecord(item))
       .filter((record): record is Record<string, unknown> => Boolean(record))

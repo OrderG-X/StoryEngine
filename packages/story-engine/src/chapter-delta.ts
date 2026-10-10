@@ -11,6 +11,7 @@
  * 已被 commit-plan-builder.ts 消费：传入章节语义声明时由 verifyChapterDelta 做证据校验，核不上的条目进 issues（绝不静默），
  * 上层据此逐字段回退到旧正则——这是刻意的兼容设计，声明能力不可用时旧链路行为不变。
  */
+import { parseWeekday } from "./story-timeline.js";
 
 /** 一条声明必带的正文证据：模型引用的原句，校验时必须逐字（归一化空白后）命中草稿。 */
 export interface ChapterDeltaEvidence {
@@ -99,6 +100,20 @@ export interface ContinuityWithPreviousDeclaration {
   readonly note?: string;
 }
 
+/**
+ * 本章的时间（2026-10-10 引擎升级：故事时间线）：正文里交代了「和上一章隔了几天 / 星期几 / 时段」就声明，
+ * 附交代时间的原句。没交代就不声明——引擎按上一章 +1 估、并请作者确认，绝不让模型自己推算「第几天」。
+ */
+export interface TimeDeclaration {
+  /** 和上一章隔了几天（0 = 同一天，1 = 第二天，3 = 三天后）。正文没交代就不填。 */
+  readonly daysSincePrevious?: number;
+  /** 正文明写的星期（「周二」「星期天」）。 */
+  readonly weekday?: string;
+  /** 正文里的时段（「下午」「傍晚」）。 */
+  readonly timeOfDay?: string;
+  readonly quote: string;
+}
+
 /** 模型对本章的完整语义声明。 */
 export interface ChapterDeltaDeclaration {
   readonly chapter: number;
@@ -121,6 +136,8 @@ export interface ChapterDeltaDeclaration {
   readonly arcGoalProgress?: readonly ArcGoalProgressDeclaration[];
   /** 本章开头与上一章结尾是否自然衔接（可选；不附 quote，不参与证据校验，只用于提醒）。 */
   readonly continuityWithPrevious?: ContinuityWithPreviousDeclaration;
+  /** 本章的时间（可选；正文没交代就缺省）。 */
+  readonly time?: TimeDeclaration;
 }
 
 /** 被拒绝的声明条目（诚实回报，绝不静默丢弃）。 */
@@ -163,6 +180,8 @@ export interface VerifiedChapterDelta {
   readonly arcGoalProgress: readonly ArcGoalProgressDeclaration[];
   /** 原样透传的跨章衔接判断；不参与证据校验。 */
   readonly continuityWithPrevious?: ContinuityWithPreviousDeclaration;
+  /** 校验通过的时间声明（原句在正文里；星期写在原句里才收星期）。 */
+  readonly time?: TimeDeclaration;
   readonly rejected: readonly RejectedDeltaEntry[];
   /** 是否有任何一条声明通过校验（全拒 → 上层整体回退正则）。 */
   readonly hasAnyVerified: boolean;
@@ -265,6 +284,24 @@ export function verifyChapterDelta(
     checkEvidence(entry.quote, `arcGoalProgress[${index}]`),
   );
 
+  // 时间：原句必须在正文里；声明的星期必须在原句里出现（防模型自己推出一个星期）；隔几天要是 0..3650 的整数。
+  const time = ((): TimeDeclaration | undefined => {
+    const declared = declaration.time;
+    if (!declared || !checkEvidence(declared.quote, "time")) return undefined;
+    const declaredWeekday = parseWeekday(declared.weekday);
+    const weekdayOk = declaredWeekday !== undefined
+      && [...declared.quote.matchAll(/(?:周|星期|礼拜)[一二三四五六日天]/gu)].some((match) => parseWeekday(match[0]) === declaredWeekday);
+    const days = declared.daysSincePrevious;
+    const daysOk = typeof days === "number" && Number.isInteger(days) && days >= 0 && days <= 3650;
+    if (!weekdayOk && !daysOk && !declared.timeOfDay) return undefined;
+    return {
+      quote: declared.quote,
+      ...(daysOk ? { daysSincePrevious: days } : {}),
+      ...(weekdayOk ? { weekday: declared.weekday } : {}),
+      ...(declared.timeOfDay ? { timeOfDay: declared.timeOfDay } : {}),
+    };
+  })();
+
   const hasAnyVerified =
     mainEvent !== undefined ||
     conflict !== undefined ||
@@ -292,6 +329,7 @@ export function verifyChapterDelta(
     charactersPresent,
     arcGoalProgress,
     ...(declaration.continuityWithPrevious ? { continuityWithPrevious: declaration.continuityWithPrevious } : {}),
+    ...(time ? { time } : {}),
     rejected,
     hasAnyVerified,
   };

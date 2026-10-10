@@ -117,7 +117,7 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     fireEvent.click(getAllByRole("checkbox")[0]);
     expect(container.textContent ?? "").toContain("这次入账会记下 1 条");
     fireEvent.click(getByRole("button", { name: "确认定稿（去掉 1 条）" }));
-    expect(onConfirm).toHaveBeenCalledWith(["fact:0"]);
+    expect(onConfirm).toHaveBeenCalledWith(["fact:0"], undefined);
   });
 
   it("卡片重新挂载（回合收尾重建消息）后勾选还在", () => {
@@ -135,6 +135,27 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     const confirm = [...second.container.querySelectorAll("button")].find((button) => button.textContent === "确认定稿（去掉 1 条）");
     expect(confirm).toBeTruthy();
     fireEvent.click(confirm!);
-    expect(onConfirm).toHaveBeenCalledWith(["fact:0"]);
+    expect(onConfirm).toHaveBeenCalledWith(["fact:0"], undefined);
+  });
+
+  it("天数条：没把握的标出来；作者改了天数随「确认定稿」带上，改回原值就不带", () => {
+    const preview: CommitPreviewCardData = {
+      chapter: 5,
+      canCommit: true,
+      previewToken: "tok-day",
+      ledgerChecklist: [
+        { id: "day", kind: "day", label: "这一章记为故事第 5 天（正文里没找到时间说法，按上一章的第二天估的，不对就改）", removable: false, editableDay: 5, needsConfirm: true },
+      ],
+    };
+    const onConfirm = vi.fn();
+    const { container } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
+    expect(container.querySelector(".cpc-ledger-item.is-confirm")).toBeTruthy();
+    const input = container.querySelector<HTMLInputElement>(".cpc-ledger-day-edit input")!;
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.click(container.querySelector(".cpc-confirm")!);
+    expect(onConfirm).toHaveBeenLastCalledWith([], 7);
+    fireEvent.change(input, { target: { value: "5" } });
+    fireEvent.click(container.querySelector(".cpc-confirm")!);
+    expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
   });
 });

@@ -15,7 +15,7 @@
 import { useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import { StepCard } from "./StepCard.js";
-import { ledgerExclusionsForCard, rememberLedgerExclusions } from "../../../utils/ledgerExclusions.js";
+import { ledgerDayOverrideForCard, ledgerExclusionsForCard, rememberLedgerDayOverride, rememberLedgerExclusions } from "../../../utils/ledgerExclusions.js";
 
 type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[number];
 
@@ -23,11 +23,13 @@ type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[numbe
 const LEDGER_VISIBLE = 6;
 
 
-function LedgerChecklist({ items, removed, onToggle, disabled }: {
+function LedgerChecklist({ items, removed, onToggle, disabled, dayOverride, onDayChange }: {
   readonly items: readonly ChecklistItem[];
   readonly removed: ReadonlySet<string>;
   readonly onToggle?: (id: string) => void;
   readonly disabled: boolean;
+  readonly dayOverride?: number;
+  readonly onDayChange?: (day: number | undefined) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, LEDGER_VISIBLE);
@@ -39,8 +41,27 @@ function LedgerChecklist({ items, removed, onToggle, disabled }: {
       </p>
       <ul className="cpc-ledger-list">
         {shown.map((item) => (
-          <li key={item.id} className={`cpc-ledger-item${removed.has(item.id) ? " is-removed" : ""}${item.removable ? "" : " is-note"}`}>
-            {item.removable && onToggle ? (
+          <li key={item.id} className={`cpc-ledger-item${removed.has(item.id) ? " is-removed" : ""}${item.removable ? "" : " is-note"}${item.needsConfirm ? " is-confirm" : ""}`}>
+            {item.editableDay !== undefined && onDayChange ? (
+              <span className="cpc-ledger-day">
+                <span className="cpc-ledger-label">{item.label}</span>
+                <label className="cpc-ledger-day-edit">
+                  改成第
+                  <input
+                    type="number"
+                    min={1}
+                    aria-label="这一章是故事第几天"
+                    value={dayOverride ?? item.editableDay}
+                    disabled={disabled}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      onDayChange(Number.isInteger(next) && next >= 1 && next !== item.editableDay ? next : undefined);
+                    }}
+                  />
+                  天
+                </label>
+              </span>
+            ) : item.removable && onToggle ? (
               <label>
                 <input type="checkbox" checked={!removed.has(item.id)} disabled={disabled} onChange={() => onToggle(item.id)} />
                 <span className="cpc-ledger-label">{item.label}</span>
@@ -68,8 +89,8 @@ export function CommitPreviewCard({
   onDecline,
 }: {
   readonly preview: CommitPreviewCardData;
-  /** 传了且可定稿 → 渲染「确认定稿」按钮；参数是作者在账本清单上勾掉的条目 id。 */
-  readonly onConfirm?: (excluded: readonly string[]) => void;
+  /** 传了且可定稿 → 渲染「确认定稿」按钮；参数是作者在账本清单上勾掉的条目 id、改过的「第几天」。 */
+  readonly onConfirm?: (excluded: readonly string[], dayOverride?: number) => void;
   readonly confirmDisabled?: boolean;
   /** 「先不定」：把「先不定稿，」填进输入框让作者接着说原因（不发送、不写盘）。 */
   readonly onDecline?: () => void;
@@ -90,6 +111,11 @@ export function CommitPreviewCard({
     return next;
   });
   const canTick = !blocked && Boolean(onConfirm);
+  const [dayOverride, setDayOverride] = useState<number | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
+  const changeDay = (day: number | undefined) => {
+    setDayOverride(day);
+    rememberLedgerDayOverride(preview.chapter, preview.previewToken, day);
+  };
 
   return (
     <StepCard
@@ -105,11 +131,17 @@ export function CommitPreviewCard({
           : `${chapterLabel}已满足定稿条件，点「确认定稿」即写入（写入前自动存档，可撤销）。`}
       </p>
       {ledger.length > 0 ? (
-        <LedgerChecklist items={ledger} removed={removed} {...(canTick ? { onToggle: toggle } : {})} disabled={confirmDisabled} />
+        <LedgerChecklist
+          items={ledger}
+          removed={removed}
+          {...(canTick ? { onToggle: toggle, onDayChange: changeDay } : {})}
+          {...(dayOverride !== undefined ? { dayOverride } : {})}
+          disabled={confirmDisabled}
+        />
       ) : null}
       {!blocked && onConfirm ? (
         <div className="cpc-actions">
-          <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={() => onConfirm([...removed])}>
+          <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={() => onConfirm([...removed], dayOverride)}>
             {removed.size > 0 ? `确认定稿（去掉 ${removed.size} 条）` : "确认定稿"}
           </button>
           {onDecline ? (

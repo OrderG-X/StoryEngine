@@ -41,4 +41,6 @@ export interface CommitConfirmTarget {
   readonly previewToken?: string;
   /** 作者在账本清单上去掉的条目 id（定稿时不写）。 */
   readonly excluded?: readonly string[];
+  /** 作者在账本清单上改的「第几天」。 */
+  readonly dayOverride?: number;
 }

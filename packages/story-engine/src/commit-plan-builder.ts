@@ -1,4 +1,5 @@
 import { readChapterPlan } from "./chapter-plan.js";
+import { parseWeekday, placeChapter, readStoryTimeline, StoryModelFileError, type StoryTimeline, type TimelineEntry } from "./story-timeline.js";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,6 +38,8 @@ export interface BuildCommitPlanInput {
    * 与已登记角色名合并成名册；缺省时只用已登记角色名。别名用「名字|别名1|别名2」竖线分隔。
    */
   readonly establishedCharacterNames?: readonly string[];
+  /** 作者在定稿清单里给本章定的天数（故事时间线，优先级最高）。 */
+  readonly timeOverride?: { readonly day: number; readonly weekday?: number };
 }
 
 export interface BuildCommitPlanResult {
@@ -61,6 +64,8 @@ export interface BuildCommitPlanResult {
    * establishedName/driftedVariant）。上层据此把它固定展示成明确 warning，不让模型在回执里说软。
    */
   readonly nameDriftFindings?: readonly NameDriftFinding[];
+  /** 本章在故事时间线上的位置（source=fallback 时上层要请作者确认）。 */
+  readonly timelineEntry?: TimelineEntry;
   readonly issues: readonly string[];
 }
 
@@ -144,7 +149,15 @@ export interface ChapterSemanticSummary {
 
 export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): Promise<BuildCommitPlanResult> {
   const issues: string[] = [];
-  const plannedStoryDay = (await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined))?.storyDay;
+  const chapterPlan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
+  const plannedStoryDay = chapterPlan?.storyDay;
+  // 故事时间线是正式状态：文件坏了如实报、不定稿，绝不拿「第几天 = 章号」顶上。
+  let storyTimeline: StoryTimeline | undefined;
+  try {
+    storyTimeline = (await readStoryTimeline(input.projectDir)).timeline;
+  } catch (error) {
+    issues.push(error instanceof StoryModelFileError ? error.message : `读取故事时间线失败（${describeErrorBriefly(error, input.projectDir)}）。`);
+  }
   const draftPath = input.draftPath ?? defaultDraftPath(input.projectDir, input.chapter);
   const [draft, characters, hookPool, threadPool, arcGoalPool, previewContextRead] = await Promise.all([
     input.draftContent !== undefined
@@ -185,13 +198,30 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
   if (characters.length === 0) {
     return { passed: false, issues: [...issues, "No characters found in project."] };
   }
-  if (!hookPool || !threadPool || !arcGoalPool) return { passed: false, issues };
+  if (!hookPool || !threadPool || !arcGoalPool || !storyTimeline) return { passed: false, issues };
 
   const mainCharacter = selectMainCharacter(characters, draft);
   const matchedHooks = selectMatchingHooks(hookPool.hooks, draft);
   const characterId = toSafeCharacterId(mainCharacter.id);
   // 章节语义声明：仅在传入时做确定性证据校验；核不上的条目进 issues（绝不静默），并逐字段回退旧正则。
   const verifiedDelta = input.declaration ? verifyChapterDelta(input.declaration, draft) : undefined;
+  // 本章放到故事时间线上：作者定的 > 正文里的时间说法（已核原句）> 章纲 > 上一章 +1（fallback，上层请作者确认）。
+  const declaredTime = verifiedDelta?.time;
+  const placed = placeChapter(storyTimeline, {
+    chapter: input.chapter,
+    ...(input.timeOverride ? { author: input.timeOverride } : {}),
+    ...(declaredTime
+      ? {
+        declared: {
+          ...(declaredTime.daysSincePrevious !== undefined ? { daysSincePrevious: declaredTime.daysSincePrevious } : {}),
+          ...(parseWeekday(declaredTime.weekday) !== undefined ? { weekday: parseWeekday(declaredTime.weekday) } : {}),
+          ...(declaredTime.timeOfDay ? { timeOfDay: declaredTime.timeOfDay } : {}),
+          quote: declaredTime.quote,
+        },
+      }
+      : {}),
+    ...(plannedStoryDay !== undefined ? { plan: { day: plannedStoryDay, ...(chapterPlan?.scene.time ? { time: chapterPlan.scene.time } : {}) } } : {}),
+  });
   if (verifiedDelta && verifiedDelta.rejected.length > 0) {
     for (const entry of verifiedDelta.rejected) {
       if (entry.reason === "amount_not_in_evidence") {
@@ -329,11 +359,13 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
       ...(arcGoalTracking.updates.length > 0 ? { arcGoalUpdates: arcGoalTracking.updates } : {}),
       ...(arcGoalTracking.staleGoalWarnings.length > 0 ? { staleGoalWarnings: arcGoalTracking.staleGoalWarnings } : {}),
       calendar: {
-        // 有章纲记的「故事第几天」就用它（十章验收：日历每章 +1 等于章号，和正文对不上一整天）；没有沿用旧推算。
-        storyDay: plannedStoryDay ?? (input.chapter === 1 ? 1 : input.chapter),
+        // 故事第几天取自故事时间线（作者 > 正文时间说法 > 章纲 > 上一章 +1）；以前没有章纲就等于章号。
+        storyDay: placed.entry.day,
         timeOfDay: "unknown",
       },
+      storyTimeline: placed.timeline,
     },
+    timelineEntry: placed.entry,
     semanticSummary,
     assetChanges,
     locationChanges,

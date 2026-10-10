@@ -9,7 +9,7 @@
  * 模型无关：宽进逐条打捞；编号对不上的、引文不在正文里的一律丢弃；失败自动重试一次，仍不成如实说明。
  */
 import { createHash } from "node:crypto";
-import { describeStoryDay, readChapterPlan, readStoryClock, selectEffectiveFacts } from "@actalk/story-engine";
+import { absolutizeRelativeDaysInText, selectEffectiveFacts, type StoryTimeline } from "@actalk/story-engine";
 import { readFactLedger, appendFacts, applyFactEdit, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
 
 const RELATED_FACT_CAP = 40;
@@ -252,9 +252,9 @@ export async function proposeFactChanges(input: {
     return { ok: false, ...empty, failureSummary: `（事实账本读不了，这章的硬事实没记：${error instanceof Error ? error.message : String(error)}）` };
   }
   const related = pickRelatedFacts(ledger.facts, input.chapter, input.draftText, knownNames);
-  const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-  const clock = plan ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
-  const messages = buildReconcileMessages(input.draftText, related, knownNames, describeStoryDay(plan, clock));
+  // 日子不让模型换算（2026-10-10 引擎升级）：模型照正文写「周六」「本章说的后天」，
+  // 「故事第几天」由引擎按故事时间线换（withTimelineDates），定稿时本章是哪天才最终确定（作者可能改）。
+  const messages = buildReconcileMessages(input.draftText, related, knownNames);
   let parsed: ParsedReconcile | undefined;
   for (let attempt = 0; attempt <= RETRIES && !parsed; attempt += 1) {
     try {
@@ -273,7 +273,7 @@ export async function proposeFactChanges(input: {
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
   const changes = parsed.changes
     .filter((change) => byRef.has(change.ref) && quoted(change.quote))
-    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: plan?.storyDay ? absolutizeRelativeDays(change.text, plan.storyDay) : stripInventedStoryDays(change.text), quote: change.quote }))
+    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: stripInventedStoryDays(change.text), quote: change.quote }))
     .filter((change, index, all) => all.findIndex((other) => other.factId === change.factId) === index);
   // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
   const supportedFacts = parsed.facts.filter((fact) => (!fact.quote || factQuoteIsSupported(fact.quote, input.draftText))
@@ -291,7 +291,7 @@ export async function proposeFactChanges(input: {
   return {
     ok: true,
     adds: supportedFacts.map((fact) => ({
-      text: plan?.storyDay ? absolutizeRelativeDays(fact.text, plan.storyDay) : stripInventedStoryDays(fact.text),
+      text: stripInventedStoryDays(fact.text),
       ...(fact.quote ? { quote: fact.quote } : {}),
     })),
     changes,
@@ -300,19 +300,28 @@ export async function proposeFactChanges(input: {
   };
 }
 
+/** 事实文字里的日子按时间线换成「故事第 N 天（周X）」（today = 本章是第几天）。只换显示 / 入账的文字，条目钥匙仍按原文算。 */
+export function withTimelineDates(text: string, timelineDay: { readonly today: number; readonly timeline: StoryTimeline } | undefined): string {
+  return timelineDay ? absolutizeRelativeDaysInText(text, timelineDay.today, timelineDay.timeline) : text;
+}
+
 /** 把提案写进账本（去掉作者排除的条目）。 */
 export async function applyFactProposal(
   projectDir: string,
   chapter: number,
   proposal: FactProposal,
   exclusions: FactProposalExclusions = {},
+  timelineDay?: { readonly today: number; readonly timeline: StoryTimeline },
 ): Promise<ReconcileFactsResult> {
   if (!proposal.ok) {
     return { ok: false, added: 0, superseded: [], conflicts: [], newCharacters: [], summary: proposal.failureSummary ?? "" };
   }
   const adds = proposal.adds.filter((fact) => !exclusions.adds?.has(factKey(fact.text)));
   const changes = proposal.changes.filter((change) => !exclusions.changes?.has(change.factId));
-  const added = await appendFacts(projectDir, chapter, [...adds.map((fact) => fact.text), ...changes.map((change) => change.newText)], "auto");
+  const added = await appendFacts(projectDir, chapter, [
+    ...adds.map((fact) => withTimelineDates(fact.text, timelineDay)),
+    ...changes.map((change) => withTimelineDates(change.newText, timelineDay)),
+  ], "auto");
   // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。
   const superseded: string[] = [];
   for (const change of changes) {
@@ -330,6 +339,7 @@ export async function extractAndReconcileFacts(input: {
   readonly draftText: string;
   readonly callModel: FactCallModel;
   readonly knownNames?: readonly string[];
+  readonly timelineDay?: { readonly today: number; readonly timeline: StoryTimeline };
 }): Promise<ReconcileFactsResult> {
-  return applyFactProposal(input.projectDir, input.chapter, await proposeFactChanges(input));
+  return applyFactProposal(input.projectDir, input.chapter, await proposeFactChanges(input), {}, input.timelineDay);
 }

@@ -119,6 +119,8 @@ export interface CommitPreviewCardData {
     readonly label: string;
     readonly detail?: string;
     readonly removable: boolean;
+    readonly editableDay?: number;
+    readonly needsConfirm?: boolean;
   }[];
 }
 

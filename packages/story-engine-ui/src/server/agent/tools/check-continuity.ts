@@ -6,6 +6,7 @@
  * 结果分「确定」「可能」两档，每条带本章原句和前文原句（含章号）。不改正文、不写账本。
  * 作者点「核账」按钮走结构化动作直达（user-actions），对话里说「核一下」也由 agent 调用。
  */
+import { describeTimelineForChapter, readStoryTimeline } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
@@ -73,6 +74,9 @@ export async function runCheckContinuity(
   }
   const body = draft.content.replace(/^#[^\n]*\n/u, "").trim();
   const earlier = await readEarlierChapters(projectDir, chapter);
+  // 故事时间线对照表（引擎排好的日子），附给通读和复核：判「前天 / 周几」照表，不让模型自己算。
+  const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
+  const timelineTable = timeline ? describeTimelineForChapter(timeline, chapter) : undefined;
   const bodyHash = hashBody(body);
   const earlierHash = hashEarlier(earlier);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
@@ -85,7 +89,7 @@ export async function runCheckContinuity(
     : [];
   const result = reused
     ? { issues: memory!.issues, failures: [] as readonly string[] }
-    : await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver });
+    : await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver, ...(timelineTable ? { timelineTable } : {}) });
   if (!reused && (result.failures.length === 0 || result.issues.length > 0)) {
     await writeCheckMemory(projectDir, { chapter, bodyHash, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);

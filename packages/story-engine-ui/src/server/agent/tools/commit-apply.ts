@@ -14,6 +14,7 @@
  * 守卫（铁律：绝不谎报）：必须先对「同一章节」commit_preview 过、且草稿在预览之后没改动
  *   （系统内预览票据/previewToken + 草稿哈希一致），否则诚实拒绝，不入库、不谎称成功。
  */
+import { readStoryTimeline } from "@actalk/story-engine";
 import {
   buildStateOverview,
   type StateOverview,
@@ -60,6 +61,7 @@ const inputSchema = z.object({
     "commit_preview 返回的真实令牌。可省略：系统会优先使用同进程内最近一次有效 commit_preview 票据；没有有效预览时会拒绝定稿。",
   ),
   excluded: z.array(z.string()).optional().describe("作者在账本清单上去掉的条目（只由「确认定稿」按钮带来，你不用传）。"),
+  dayOverride: z.number().int().positive().optional().describe("作者在账本清单上改的「第几天」（只由「确认定稿」按钮带来，你不用传）。"),
 });
 
 const outputSchema = z.object({
@@ -157,6 +159,7 @@ export async function applyCommitToolLogic(input: {
   readonly chapter: number;
   readonly previewToken?: string;
   readonly excluded?: readonly string[];
+  readonly dayOverride?: number;
 }): Promise<CommitApplyToolOutput> {
   const result = await runCommitApply({
     projectDir: input.projectDir,
@@ -166,6 +169,7 @@ export async function applyCommitToolLogic(input: {
       ...(input.previewToken !== undefined ? { previewToken: input.previewToken } : {}),
       previewStore: PREVIEW_TICKET_STORE,
       ...(input.excluded && input.excluded.length > 0 ? { excluded: input.excluded } : {}),
+      ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
     },
   });
   const { projectDir, chapter } = input;
@@ -429,6 +433,7 @@ export const commitApplyTool = writeTool({
       chapter: resolvedChapter,
       previewToken: input.previewToken,
       ...(excluded.length > 0 ? { excluded } : {}),
+      ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
     });
     if (!result.committed || !result.draftBody) return result;
     try {
@@ -443,14 +448,19 @@ export const commitApplyTool = writeTool({
         .filter((n): n is string => typeof n === "string" && n.length > 0);
       // 阶段 4「记账对号」：抽事实时对照本章相关的旧事实——明写的变化让旧条失效，对不上的不动账本、交给作者定。
       // 「AI 记账、作者核账」：预览时作者已经看过这份提案、去掉了不对的 → 只写留下的；没有提案（预览时没抽成 / 进程重启）才现抽。
+      // 事实里的日子按定稿后的时间线换算（作者可能刚改过本章是第几天）。
+      const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
+      const entry = timeline?.entries.find((item) => item.chapter === resolvedChapter);
+      const timelineDay = timeline && entry ? { today: entry.day, timeline } : undefined;
       const fact = factProposal
-        ? await applyFactProposal(projectDir, resolvedChapter, factProposal, splitExclusions(excluded).facts)
+        ? await applyFactProposal(projectDir, resolvedChapter, factProposal, splitExclusions(excluded).facts, timelineDay)
         : await extractAndReconcileFacts({
           projectDir,
           chapter: resolvedChapter,
           draftText: result.draftBody,
           callModel: callConfiguredFactModel,
           knownNames,
+          ...(timelineDay ? { timelineDay } : {}),
         });
       const withFacts = appendFactNoteToSummary(result.summary, fact.summary);
       const withNew = appendNewCharactersToSummary(withFacts, fact.newCharacters);

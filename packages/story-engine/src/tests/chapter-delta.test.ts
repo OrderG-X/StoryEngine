@@ -319,3 +319,21 @@ describe("verifyChapterDelta", () => {
     expect(result.hasAnyVerified).toBe(true);
   });
 });
+
+describe("时间声明（故事时间线）", () => {
+  const draft = "三天后，周二下午，苏晚才又见到周屿。他手里拎着一个牛皮纸袋。";
+  const base = { chapter: 5, mainEvent: { summary: "见面", quote: "苏晚才又见到周屿" }, seededForeshadowing: [], resolvedForeshadowing: [], resourceDeltas: [], keyLeads: [] };
+
+  it("原句在正文里、星期写在原句里 → 收；隔几天要是合理整数", () => {
+    const verified = verifyChapterDelta({ ...base, time: { daysSincePrevious: 3, weekday: "周二", timeOfDay: "下午", quote: "三天后，周二下午，苏晚才又见到周屿。" } }, draft);
+    expect(verified.time).toEqual({ daysSincePrevious: 3, weekday: "周二", timeOfDay: "下午", quote: "三天后，周二下午，苏晚才又见到周屿。" });
+  });
+
+  it("原句不在正文 → 拒；星期没写在原句里（模型自己推的）→ 只丢星期；隔几天是负数 → 只丢天数", () => {
+    expect(verifyChapterDelta({ ...base, time: { daysSincePrevious: 3, quote: "五天后" } }, draft).time).toBeUndefined();
+    const guessed = verifyChapterDelta({ ...base, time: { daysSincePrevious: 3, weekday: "周三", quote: "三天后，周二下午，苏晚才又见到周屿。" } }, draft);
+    expect(guessed.time).toEqual({ daysSincePrevious: 3, quote: "三天后，周二下午，苏晚才又见到周屿。" });
+    const negative = verifyChapterDelta({ ...base, time: { daysSincePrevious: -1, weekday: "周二", quote: "三天后，周二下午，苏晚才又见到周屿。" } }, draft);
+    expect(negative.time).toEqual({ weekday: "周二", quote: "三天后，周二下午，苏晚才又见到周屿。" });
+  });
+});

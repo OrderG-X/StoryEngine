@@ -13,7 +13,7 @@
  *     (项目, 章节, 草稿哈希, 声明) 登记成 previewToken，供 commit_apply 守卫「必须先预览过且草稿未变」。
  * 读类工具不建快照、不带 snapshotId。
  */
-import type { ChapterDeltaDeclaration, NameDriftFinding } from "@actalk/story-engine";
+import { formatStoryDay, type ChapterDeltaDeclaration, type NameDriftFinding } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
@@ -35,7 +35,7 @@ import { readFile } from "node:fs/promises";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readEstablishedCharacterNames } from "../../services/commit-service.js";
 import { callConfiguredFactModel } from "./commit-apply.js";
-import { proposeFactChanges, type FactProposal } from "../fact-ledger/reconcile-facts.js";
+import { proposeFactChanges, withTimelineDates, type FactProposal } from "../fact-ledger/reconcile-facts.js";
 import { buildLedgerChecklist, type LedgerChecklistItem } from "../commit-ledger/ledger-checklist.js";
 
 /** 预览时算记账提案（硬事实）的注入点：单测不传 = 清单里只有伏笔线索目标和天数。 */
@@ -128,6 +128,8 @@ const outputSchema = z.object({
     label: z.string(),
     detail: z.string().optional(),
     removable: z.boolean(),
+    editableDay: z.number().int().optional(),
+    needsConfirm: z.boolean().optional(),
   })).optional().describe(
     "定稿会往账本里写的东西（硬事实、伏笔线索目标的新开推进收回、故事第几天）。界面列成清单给作者勾，作者去掉的定稿时不写；你不用逐条转述。",
   ),
@@ -303,8 +305,20 @@ export async function buildCommitPreviewToolOutput(input: {
   // 记账提案只认和这次预览同一版草稿算出来的（两次读之间草稿被改了就不用，定稿时再现抽）。
   const factDraft = await factProposalPromise;
   const factProposal = factDraft && factDraft.draftContent === result.draftContent ? factDraft.proposal : undefined;
+  const timelineEntry = commitPlan.timelineEntry;
+  const storyTimeline = commitPlan.commitPlan?.storyTimeline;
   const ledgerChecklist = commitPlan.commitPlan
-    ? buildLedgerChecklist({ chapter, plan: commitPlan.commitPlan, ...(factProposal ? { facts: factProposal } : {}) })
+    ? buildLedgerChecklist({
+      chapter,
+      plan: commitPlan.commitPlan,
+      ...(factProposal ? { facts: factProposal } : {}),
+      ...(timelineEntry && storyTimeline
+        ? {
+          time: { day: timelineEntry.day, label: formatStoryDay(storyTimeline, timelineEntry.day), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },
+          displayFact: (text: string) => withTimelineDates(text, { today: timelineEntry.day, timeline: storyTimeline }),
+        }
+        : {}),
+    })
       .map((item) => ({ ...item, label: scrubBareEntityIdsFromText(item.label, nameById), ...(item.detail ? { detail: scrubBareEntityIdsFromText(item.detail, nameById) } : {}) }))
     : [];
   let previewToken: string | undefined;

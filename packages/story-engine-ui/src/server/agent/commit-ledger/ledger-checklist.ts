@@ -20,6 +20,18 @@ export interface LedgerChecklistItem {
   readonly detail?: string;
   /** 作者能不能去掉（只提示、不写账本的条目不能勾）。 */
   readonly removable: boolean;
+  /** 作者能改的值（目前只有「第几天」）：界面给输入框，改了随「确认定稿」带上。 */
+  readonly editableDay?: number;
+  /** 引擎没把握、要作者确认（如没在正文里找到时间说法，天数是按上一章 +1 估的）。 */
+  readonly needsConfirm?: boolean;
+}
+
+/** 本章在故事时间线上的位置（引擎 BuildCommitPlanResult.timelineEntry + 格式化好的「故事第 N 天（周X）」）。 */
+export interface ChecklistTimeLike {
+  readonly day: number;
+  readonly label: string;
+  readonly source: string;
+  readonly quote?: string;
 }
 
 interface TrackingUpdateLike {
@@ -55,12 +67,33 @@ export function buildLedgerChecklist(input: {
   readonly chapter: number;
   readonly plan: ChecklistPlanLike | undefined;
   readonly facts?: FactProposal;
+  /** 故事时间线上的位置；缺省时退回计划里的日历天数（老调用方）。 */
+  readonly time?: ChecklistTimeLike;
+  /** 事实文字的显示换算（日子按时间线换）；条目 id 仍按原文算，作者改了天数也认得出勾掉的是哪条。 */
+  readonly displayFact?: (text: string) => string;
 }): readonly LedgerChecklistItem[] {
+  const show = input.displayFact ?? ((text: string) => text);
   const { chapter, plan, facts } = input;
   const items: LedgerChecklistItem[] = [];
-  const storyDay = plan?.calendar?.storyDay;
-  if (typeof storyDay === "number" && storyDay > 0) {
-    items.push({ id: "day", kind: "day", label: `这一章记为故事第 ${storyDay} 天`, removable: false });
+  if (input.time) {
+    const guessed = input.time.source === "fallback";
+    const why = guessed
+      ? "（正文里没找到时间说法，按上一章的第二天估的，不对就改）"
+      : input.time.source === "author" ? "（你定的）" : "";
+    items.push({
+      id: "day",
+      kind: "day",
+      label: `这一章记为${input.time.label}${why}`,
+      ...(input.time.quote ? { detail: clip(input.time.quote) } : {}),
+      removable: false,
+      editableDay: input.time.day,
+      ...(guessed ? { needsConfirm: true } : {}),
+    });
+  } else {
+    const storyDay = plan?.calendar?.storyDay;
+    if (typeof storyDay === "number" && storyDay > 0) {
+      items.push({ id: "day", kind: "day", label: `这一章记为故事第 ${storyDay} 天`, removable: false });
+    }
   }
   for (const update of plan?.hookTrackingUpdates ?? []) {
     const verb = trackingVerb(update, chapter, ["resolved"]);
@@ -95,13 +128,13 @@ export function buildLedgerChecklist(input: {
   }
   if (facts?.ok) {
     for (const fact of facts.adds) {
-      items.push({ id: `fact:${factKey(fact.text)}`, kind: "fact", label: `记下：${fact.text}`, ...(clip(fact.quote) ? { detail: clip(fact.quote) } : {}), removable: true });
+      items.push({ id: `fact:${factKey(fact.text)}`, kind: "fact", label: `记下：${show(fact.text)}`, ...(clip(fact.quote) ? { detail: clip(fact.quote) } : {}), removable: true });
     }
     for (const change of facts.changes) {
       items.push({
         id: `change:${change.factId}`,
         kind: "change",
-        label: `改记：「${change.oldText}」→「${change.newText}」`,
+        label: `改记：「${change.oldText}」→「${show(change.newText)}」`,
         ...(clip(change.quote) ? { detail: clip(change.quote) } : {}),
         removable: true,
       });
