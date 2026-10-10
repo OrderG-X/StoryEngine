@@ -8,7 +8,6 @@ import type { MiddlewareStack } from "./lib/project-io.js";
 import { createSecurityGate } from "./lib/request-guard.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
 import { registerChapterSteeringRoutes } from "./routes/chapter-steering.js";
-import { registerChapterChatRoutes } from "./routes/chapter-chat.js";
 import { registerDraftRoutes } from "./routes/draft.js";
 import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
 import { registerDeAiFlavorRoutes } from "./routes/de-ai-flavor.js";
@@ -42,7 +41,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   router.use(createSecurityGate());
   registerStateOverviewRoutes(router);
   registerChapterSteeringRoutes(router);
-  registerChapterChatRoutes(router);
   registerDraftRoutes(router);
   registerDraftRevisionRoutes(router);
   registerDeAiFlavorRoutes(router);

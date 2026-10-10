@@ -166,22 +166,6 @@ export async function fetchChapterSteering(input: ChapterSteeringRequest, signal
   return payload.draft;
 }
 
-export async function fetchChapterChat(input: ChapterChatRequest, signal?: AbortSignal): Promise<ChapterChatResponse> {
-  const payload = await fetchJson<ChapterChatApiResponse>(
-    "/api/chapter-chat",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.result;
-}
-
 export async function fetchChapterWorkspace(input: ChapterWorkspaceRequest, signal?: AbortSignal): Promise<ChapterWorkspaceSnapshot> {
   const params = new URLSearchParams();
   params.set("project", input.projectPath);
