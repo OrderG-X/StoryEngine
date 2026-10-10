@@ -4,6 +4,7 @@ import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
+import { isRealDraftContent } from "../../../utils/draftContent.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -70,7 +71,11 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const applyingCandidate = draftActionLoading === "apply-candidate";
   const canReroll = draft.status !== "committed" && Boolean(props.onReroll) && !workspaceBusy;
   const draftWordCount = draft.wordCount ?? 0;
-  const showStarter = isStarterEmptyWorkspace(props.workspace);
+  // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
+  const [authorStarted, setAuthorStarted] = useState(false);
+  const showStarter = isStarterEmptyWorkspace(props.workspace) && !authorStarted;
+  // 新书种的占位引导稿（「还没有草稿正文…」）不能出现在作者的稿纸上。
+  const paperDraft = authorStarted && !isRealDraftContent(draft.content) ? { ...draft, content: "", wordCount: 0 } : draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed";
   const targetWords = parseTargetChapterWords(props.sidebar?.writingRules);
   const goalPct = targetWords ? Math.min(100, Math.round((draftWordCount / targetWords) * 100)) : 0;
@@ -161,13 +166,16 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
           showStarter ? (
             <div className="cd-starter" aria-label="新书起步引导">
               <h2 className="cd-starter-title">从一句话开始</h2>
-              <p className="cd-starter-sub">不必先填资料。选一个方向，右侧 AI 会陪你搭起来。</p>
+              <p className="cd-starter-sub">直接在稿纸上写，AI 帮你记人物、东西、伏笔，查前后对不对得上。也可以先跟 AI 聊聊。</p>
               <div className="cd-starter-actions" role="group" aria-label="起步意图">
+                <button type="button" className="cd-starter-btn" onClick={() => setAuthorStarted(true)}>
+                  自己动笔写
+                </button>
                 {STARTER_INTENTS.map((item) => (
                   <button
                     key={item.key}
                     type="button"
-                    className="cd-starter-btn"
+                    className="cd-starter-btn is-ghost"
                     disabled={workspaceBusy || !props.onSendMessage}
                     onClick={() => props.onSendMessage?.(item.intent)}
                   >
@@ -177,7 +185,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
               </div>
             </div>
           ) : (
-            <WritingPaper draft={draft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} onAskAboutSelection={props.onAskAboutSelection} />
+            <WritingPaper draft={paperDraft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} onAskAboutSelection={props.onAskAboutSelection} />
           )
         ) : (
           <div className="se-v2-editor-wrap se-v2-paper">

@@ -19,6 +19,8 @@ describe("chapterHeading", () => {
   it("strips a cross-numbering duplicated prefix (Arabic + Chinese)", () => {
     // Bug 现场：UI 停在第1章却拼了模型的「第二章」标题 → 「第1章 · 第二章 · 灰烬之下」。前缀须全部剥掉。
     expect(chapterHeading(2, "第1章 · 第二章 · 灰烬之下")).toBe("第2章 · 灰烬之下");
+    // 章节列表给没写的章垫的「下一章」不是章名（2026-10-10 验收：作者写完第 2 章，标题还是「第2章 · 下一章」）。
+    expect(chapterHeading(3, "下一章")).toBe("第3章");
   });
 
   it("normalizes a bare Chinese-numeral chapter title to the canonical number", () => {

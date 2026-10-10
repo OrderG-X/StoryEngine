@@ -73,8 +73,8 @@ export function chapterHeading(chapterNumber: number, title: string): string {
   return withoutPrefix && !PLACEHOLDER_CHAPTER_TITLE.test(withoutPrefix) ? `第${chapterNumber}章 · ${withoutPrefix}` : `第${chapterNumber}章`;
 }
 
-/** 占位章名（「待补」「未命名」之类）：列表里按没名字显示，不把占位词当章名摆出来。 */
-export const PLACEHOLDER_CHAPTER_TITLE = /^(待补|待定|未命名|无题|标题待定|tbd)$/iu;
+/** 占位章名（「待补」「未命名」，还有章节列表给没写的章垫的「下一章」）：按没名字显示，不把占位词当章名摆出来。 */
+export const PLACEHOLDER_CHAPTER_TITLE = /^(待补|待定|未命名|无题|标题待定|下一章|tbd)$/iu;
 
 /** 列表/面板里显示用的章名：去章号前缀，占位词当没名字（返回空串，调用方显示「未命名」）。 */
 export function chapterDisplayTitle(title: string): string {

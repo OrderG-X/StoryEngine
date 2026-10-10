@@ -67,7 +67,10 @@ export function buildReconcileMessages(
     // 第十七轮：「下周三」原样入账，过几章没人知道指哪天，评估日悄悄消失、后面还被说成「提前」。
     // 第十九轮：「爸的老同事」被记成「林德昌（祖父）的老同事」，下一章章纲照着让林溪自称祖父的女儿。
     "正文用称呼（爸、妈、爷爷、哥）指人时，事实里照写成「林舟的父亲」这类关系说法，不要自己换成人名（容易把父亲和祖父弄混）。",
-    "事实里提到日子，一律按【本章日子】换成「故事第几天」或星期几写（「下周三」写成「故事第 N 天（周三）」），不要写明天、后天、下周、前天这类相对说法。",
+    storyDayLabel
+      ? "事实里提到日子，一律按【本章日子】换成「故事第几天」或星期几写（「下周三」写成「故事第 N 天（周三）」），不要写明天、后天、下周、前天这类相对说法。"
+      // 作者自己写的章没有章纲、不知道是故事第几天：模型会自己编（2026-10-10 验收：三章里三次把周六记成「故事第 3 天」「第 5 天」）。
+      : "不知道本章是故事第几天：事实里提到日子，照正文写星期几或具体日期（「周六上午」）；正文只有明天、后天这种说法时，写成「本章说的后天」。绝不自己换算成「故事第几天」。",
     "1. facts：本章新确立、后文必须保持一致的硬事实（人物关系与身份、人物住在哪/和谁住、物件在哪/在谁手里/上面写着什么/好坏、地点状况、约定与期限、数字日期）。每条一句话、具体可核对；旧事实里已有的不要重复记；不要记情绪感受。quote 逐字抄本章里写到这件事的原句；正文没明写、要靠推断才得出的不要记（由「换了日子」推出「改过期」、把「交还」说成「卖给」）。",
     "2. changes：本章正文【明确写了发生变化】的旧事实（如修好了、搬走了、送回去了、拆了）。ref 填旧事实编号，text 写变化后的新说法，quote 逐字抄本章里写这个变化的原句。只是没再提到、或者补充了细节的，都不算变化，不要报。",
     "3. conflicts：本章说法和某条旧事实对不上、但正文并没有写它发生了变化（多半是写错了）。ref 填旧事实编号，quote 逐字抄本章正文里对不上的那句，note 说怎么对不上。",
@@ -158,6 +161,13 @@ export function absolutizeRelativeDays(text: string, storyDay: number | undefine
   // 模型自己已写了「明天（故事第 2 天）」时换完会叠成「故事第2天（故事第2天）」（第二十二轮账本残渣）。
   // 也有「故事第13天上午（故事第13天）」——括号前多了个时段（浏览器试写第 8 章账本）。
   return out.replace(/(故事第\s*(\d+)\s*天(?:早上|上午|中午|下午|傍晚|晚上|夜里|凌晨)?)\s*[（(]\s*故事第\s*\2\s*天\s*[）)]/gu, "$1");
+}
+
+/**
+ * 不知道本章是故事第几天时，模型照样会编「故事第 3 天（周六）」——编的天数是错的，括号里的星期才是正文写的：只留星期。
+ */
+export function stripInventedStoryDays(text: string): string {
+  return text.replace(/故事第\s*\d+\s*天\s*[（(]\s*((?:周|星期|礼拜)[一二三四五六日天])\s*[）)]/gu, "$1");
 }
 
 const KINSHIP_TERM = /爸|妈|爹|娘|父|母|爷|奶|外公|外婆|祖|哥|姐|弟|妹|叔|伯|姑|舅|姨|老爷子|老太太/u;
@@ -263,7 +273,7 @@ export async function proposeFactChanges(input: {
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
   const changes = parsed.changes
     .filter((change) => byRef.has(change.ref) && quoted(change.quote))
-    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: absolutizeRelativeDays(change.text, plan?.storyDay), quote: change.quote }))
+    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: plan?.storyDay ? absolutizeRelativeDays(change.text, plan.storyDay) : stripInventedStoryDays(change.text), quote: change.quote }))
     .filter((change, index, all) => all.findIndex((other) => other.factId === change.factId) === index);
   // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
   const supportedFacts = parsed.facts.filter((fact) => (!fact.quote || factQuoteIsSupported(fact.quote, input.draftText))
@@ -280,7 +290,10 @@ export async function proposeFactChanges(input: {
     });
   return {
     ok: true,
-    adds: supportedFacts.map((fact) => ({ text: absolutizeRelativeDays(fact.text, plan?.storyDay), ...(fact.quote ? { quote: fact.quote } : {}) })),
+    adds: supportedFacts.map((fact) => ({
+      text: plan?.storyDay ? absolutizeRelativeDays(fact.text, plan.storyDay) : stripInventedStoryDays(fact.text),
+      ...(fact.quote ? { quote: fact.quote } : {}),
+    })),
     changes,
     conflicts,
     newCharacters: validateNewCharacterNames(parsed.newCharacters, new Set(knownNames)),

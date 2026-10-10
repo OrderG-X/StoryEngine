@@ -15,7 +15,7 @@ import { writeFileAtomic } from "../../lib/project-io.js";
 import type { ContinuityIssueV2, EarlierText } from "./check-chapter.js";
 
 /** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。 */
-export const CHECK_MEMORY_VERSION = 1;
+export const CHECK_MEMORY_VERSION = 2;
 
 export interface CheckMemory {
   readonly version: number;

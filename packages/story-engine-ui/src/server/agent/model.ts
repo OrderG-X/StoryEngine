@@ -169,6 +169,107 @@ function isConnectionLevelError(error: unknown): boolean {
   return /UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up/iu.test(text);
 }
 
+/**
+ * 对话 AI「光想不动」上限（2026-10-10 真机验收：记三个人物，它用英文来回纠结了 2.7 万字思考、5 分钟、19.6 万 token 才动手）。
+ * 用户开着思考就照开；只是一次请求从发出起这么久还没开始回答、也没调工具（只在吐思考），就掐掉，
+ * 关思考重发一次，新回答接在同一条流后面（已经吐出的思考留着）。不是总时长上限：一开始回答就不再计时。
+ */
+export const AGENT_THINKING_CAP_MS = 90_000;
+
+/** SSE 一帧里有没有正文或工具调用（只有思考的不算）。 */
+function frameAnswers(frame: string): boolean {
+  for (const line of frame.split("\n")) {
+    const data = line.startsWith("data:") ? line.slice(5).trim() : "";
+    if (!data || data === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(data) as { choices?: { delta?: { content?: unknown; tool_calls?: unknown } }[] };
+      const delta = parsed.choices?.[0]?.delta;
+      if ((typeof delta?.content === "string" && delta.content.length > 0) || (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0)) return true;
+    } catch { /* 半截或非 JSON：不算 */ }
+  }
+  return false;
+}
+
+export function withThinkingCap(
+  baseFetch: typeof fetch,
+  makeThinkingOffInit: (init: RequestInit) => RequestInit,
+  capMs: number = AGENT_THINKING_CAP_MS,
+): typeof fetch {
+  return async (input, init) => {
+    const callerSignal = init?.signal ?? undefined;
+    const first = new AbortController();
+    const onCallerAbort = () => first.abort(callerSignal?.reason);
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    const response = await baseFetch(input, { ...init, signal: first.signal });
+    if (!response.ok || !response.body) {
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      return response;
+    }
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let reader = response.body.getReader();
+    let answered = false;
+    let switched = false;
+    let pending = "";
+    let capFired = false;
+    const timer = setTimeout(() => { capFired = true; }, capMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+    const done = () => { clearTimeout(timer); callerSignal?.removeEventListener("abort", onCallerAbort); };
+    const switchToThinkingOff = async (): Promise<void> => {
+      switched = true;
+      pending = ""; // 没收完的半帧丢掉，保证下游拿到的都是完整的帧
+      await reader.cancel(new Error("思考超时，改用不思考重发")).catch(() => undefined);
+      first.abort(new Error("思考超时"));
+      console.warn(`[agent-thinking] 对话 AI 思考 ${Math.round(capMs / 1000)} 秒还没开始回答，关思考重发一次`);
+      const retry = await baseFetch(input, { ...makeThinkingOffInit(init ?? {}), ...(callerSignal ? { signal: callerSignal } : {}) });
+      if (!retry.ok || !retry.body) throw new Error(`关思考重发失败：${retry.status}`);
+      reader = retry.body.getReader();
+      answered = true; // 重发的这条照单全收
+    };
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          for (;;) {
+            if (!answered && !switched && capFired) await switchToThinkingOff();
+            const { done: finished, value } = await reader.read();
+            if (finished) {
+              if (pending) controller.enqueue(encoder.encode(pending));
+              pending = "";
+              done();
+              controller.close();
+              return;
+            }
+            if (answered) {
+              controller.enqueue(value);
+              return;
+            }
+            // 还没开始回答：按整帧往下游送（切换时不会留下半帧），顺便看这帧是不是开始回答了。
+            pending += decoder.decode(value, { stream: true });
+            const cut = pending.lastIndexOf("\n\n");
+            if (cut < 0) continue;
+            const frames = pending.slice(0, cut + 2);
+            pending = pending.slice(cut + 2);
+            if (frameAnswers(frames)) {
+              answered = true;
+              clearTimeout(timer);
+            }
+            controller.enqueue(encoder.encode(frames));
+            return;
+          }
+        } catch (error) {
+          done();
+          controller.error(error);
+        }
+      },
+      cancel(reason) {
+        done();
+        return reader.cancel(reason);
+      },
+    });
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
+}
+
 export function makeAgentRequestFetch(
   thinking: boolean,
   dialect: ThinkingDialect,
@@ -200,8 +301,19 @@ export function makeAgentRequestFetch(
       for (const [name, value] of Object.entries(extraHeaders)) headers.set(name, value);
       init = { ...init, headers };
     }
-    // 3. 先发请求；命中 always-on 400 才省略思考参数重试一次
-    const response = await baseFetch(input, init);
+    // 3. 先发请求；命中 always-on 400 才省略思考参数重试一次。开着思考的流式请求加「光想不动」上限。
+    const sendBody = typeof init?.body === "string" ? init.body : "";
+    const capped = thinking && dialect !== "none" && /"stream"\s*:\s*true/u.test(sendBody) && /"messages"\s*:/u.test(sendBody)
+      ? withThinkingCap(baseFetch, (original) => {
+        try {
+          const parsed = JSON.parse(String(original.body)) as Record<string, unknown>;
+          return { ...original, body: JSON.stringify({ ...parsed, ...thinkingRequestParams({ dialect, thinking: false, stream: true }) }) };
+        } catch {
+          return original;
+        }
+      })
+      : baseFetch;
+    const response = await capped(input, init);
     return maybeRetryWithoutThinking(input, init, modelId, baseFetch, response);
   };
 }

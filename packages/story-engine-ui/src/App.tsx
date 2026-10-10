@@ -709,8 +709,14 @@ export function App() {
             onDraftContentChange: (content: string) => {
               const ws = useWorkspaceStore.getState();
               const draftTitle = extractDraftTitle(content) ?? ws.workspace.draft.title;
+              // 作者自己写出了正文：章节状态跟着进「有草稿」，下面的按钮换成核账 / 审稿 / 定稿
+              // （2026-10-10 验收：作者贴完一整章，状态还是「待开始」，只给「写这一章 / 先给方案」两个让 AI 写的按钮）。
+              const flowStatus = (ws.workspace.flowStatus === "idle" || ws.workspace.flowStatus === "steering_ready") && isRealDraftContent(content)
+                ? "draft_ready" as const
+                : ws.workspace.flowStatus;
               ws.setWorkspace({
                 ...ws.workspace,
+                flowStatus,
                 draft: {
                   ...ws.workspace.draft,
                   title: draftTitle,

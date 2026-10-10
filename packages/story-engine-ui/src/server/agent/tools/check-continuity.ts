@@ -79,7 +79,10 @@ export async function runCheckContinuity(
   const memory = await readCheckMemory(projectDir, chapter);
   const reused = !options.fresh
     && Boolean(memory && memory.version === CHECK_MEMORY_VERSION && memory.bodyHash === bodyHash && memory.earlierHash === earlierHash);
-  const carryOver = memory && !reused ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier)) : [];
+  // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
+  const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
+    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier))
+    : [];
   const result = reused
     ? { issues: memory!.issues, failures: [] as readonly string[] }
     : await checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver });

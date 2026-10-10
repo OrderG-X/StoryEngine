@@ -583,13 +583,19 @@ export async function checkChapterByFullRead(input: {
   return { claims: 0, checkedClaims: 0, issues, failures };
 }
 
-/** 上次报的问题两边原句是否都还在（本章那句在本章；前文那句在它标的那一章或本章更早处）。改掉了的不再带上。 */
+/**
+ * 上次报的问题两边原句是否都还在（本章那句在本章；前文那句在它标的那一章或本章更早处）。改掉了的不再带上。
+ * 必须逐字还在：作者改错往往只改一两个字（「一九八五」→「一九八七」），模糊比对会把改好的当成还在
+ * （2026-10-10 真机验收：改完三处再核，三处原样又报了一遍）。逐字对不上就不带，交给这次重新核。
+ */
 export function issueStillPresent(issue: ContinuityIssueV2, chapter: number, draftBody: string, earlier: EarlierText): boolean {
   const body = normalize(draftBody);
-  if (!containsQuote(body, issue.quote)) return false;
-  if (issue.earlierChapter === chapter) return containsQuote(body, issue.earlierQuote);
+  const quote = normalize(issue.quote);
+  const earlierQuote = normalize(issue.earlierQuote);
+  if (quote.length < 4 || !body.includes(quote)) return false;
+  if (issue.earlierChapter === chapter) return body.includes(earlierQuote);
   const earlierChapter = earlier.chapters.find((item) => item.chapter === issue.earlierChapter);
-  return Boolean(earlierChapter) && containsQuote(normalize(earlierChapter!.sentences.join("")), issue.earlierQuote);
+  return Boolean(earlierChapter) && normalize(earlierChapter!.sentences.join("")).includes(earlierQuote);
 }
 
 // ---------- 组合：通读三遍 + 逐条判，合并后复核 ----------
@@ -654,6 +660,9 @@ export async function checkChapterContinuity(input: {
   for (const issue of [...(input.carryOver ?? []), ...full.issues, ...claims.issues]) {
     const key = normalize(issue.quote).slice(0, 16);
     if (seen.has(key)) continue;
+    // 同一句（一条的原句包含另一条的）只留一条：通读和逐条判常从同一句里各抄一段报同一个问题，作者看到两三遍。
+    const quote = normalize(issue.quote);
+    if (merged.some((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); })) continue;
     seen.add(key);
     merged.push(issue);
     if (input.carryOver?.includes(issue)) carried.add(issue);

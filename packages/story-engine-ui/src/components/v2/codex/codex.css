@@ -845,6 +845,9 @@
     transition:filter .15s;}
   .codex-desk-stage .cd-starter-btn:hover:not(:disabled){filter:brightness(1.06);}
   .codex-desk-stage .cd-starter-btn:disabled{opacity:.45;cursor:default;}
+  /* 「自己动笔写」是主按钮；让 AI 帮忙的几个退成描边次按钮。 */
+  .codex-desk-stage .cd-starter-btn.is-ghost{color:var(--text);background:transparent;border-color:var(--line-strong);}
+  .codex-desk-stage .cd-starter-btn.is-ghost:hover:not(:disabled){background:var(--hover);filter:none;}
   /* 草稿框内层 .se-v2-paper 退成纯内容（卡片样式已上移到 canvas 框）。 */
   .codex-desk-stage .se-v2-writing-canvas .se-v2-paper{
     max-width:none;width:auto;margin:0;padding:0;min-height:0;

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readFactLedger } from "./fact-ledger.js";
-import { absolutizeRelativeDays, buildReconcileMessages, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
+import { absolutizeRelativeDays, buildReconcileMessages, stripInventedStoryDays, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts } from "./reconcile-facts.js";
 
 const DRAFT = "林舟骑车到了南门。菜场还在，门口摆着几摊卖豆腐的。他想起周婶那座钟昨天已经修好送回去了。";
 
@@ -136,5 +136,20 @@ describe("absolutizeRelativeDays（第二十一轮账本 30 条留着昨天 / �
     expect(absolutizeRelativeDays("明天来", undefined)).toBe("明天来");
     expect(absolutizeRelativeDays("明天（故事第6天）来量", 5)).toBe("故事第6天来量");
     expect(absolutizeRelativeDays("定在后天上午（故事第13天）拉走", 11)).toBe("定在故事第13天上午拉走");
+  });
+});
+
+describe("作者自己写的章（没有章纲、不知道第几天）", () => {
+  it("提示词让模型照正文写星期，不许自己换算故事第几天", () => {
+    const [system] = buildReconcileMessages("周屿说他周六一早过来。", [], []);
+    expect(system.content).toContain("绝不自己换算成「故事第几天」");
+    const [withDay] = buildReconcileMessages("周屿说他周六一早过来。", [], [], "本章是故事第 2 天");
+    expect(withDay.content).toContain("按【本章日子】");
+  });
+
+  it("模型还是编了「故事第 3 天（周六）」→ 只留星期", () => {
+    expect(stripInventedStoryDays("周屿在外地出差，故事第3天（周六）一早会去半页书店。")).toBe("周屿在外地出差，周六一早会去半页书店。");
+    expect(stripInventedStoryDays("故事第 5 天(周五)之后")).toBe("周五之后");
+    expect(stripInventedStoryDays("没有日子的事实")).toBe("没有日子的事实");
   });
 });

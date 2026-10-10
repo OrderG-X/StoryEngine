@@ -4,6 +4,7 @@ import {
   checkChapterContinuity,
   findEvidence,
   hedged,
+  issueStillPresent,
   parseClaims,
   parseFullReadIssues,
   parseVerdicts,
@@ -176,5 +177,33 @@ describe("核对调用的对冲", () => {
     const broken = vi.fn(async () => { throw new Error("一直断"); });
     await expect(hedged(broken, 10_000)).rejects.toThrow("一直断");
     expect(broken).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("核账记忆：上次的问题还在不在", () => {
+  const issue = { quote: "他从工作台上拿起那块怀表，表盖还开着。", earlierQuote: "林舟把怀表锁进了柜台下的抽屉。", earlierChapter: 2, reason: "x", kind: "object" as const };
+
+  it("两边原句逐字都在 → 在；作者只改了一个字 → 不在（不能模糊算还在）", () => {
+    expect(issueStillPresent(issue, 3, BODY, EARLIER)).toBe(true);
+    expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER)).toBe(false);
+    expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER)).toBe(false);
+  });
+});
+
+describe("合并去重：同一句只报一次", () => {
+  it("一条的原句包含另一条的 → 只留先来的", async () => {
+    const callModel = vi.fn(async (messages: readonly { readonly role: string; readonly content: string }[]) => {
+      const system = messages[0].content;
+      if (system.includes("复核编辑")) return JSON.stringify({ verdicts: [{ id: "K1", verdict: "sure" }, { id: "K2", verdict: "sure" }] });
+      if (system.includes("连续性审读员") && messages[1].content.includes("只盯东西")) {
+        return JSON.stringify({ contradictions: [{ quote: "他从工作台上拿起那块怀表，表盖还开着。", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "位置对不上" }] });
+      }
+      if (system.includes("连续性审读员") && messages[1].content.includes("只盯人")) {
+        return JSON.stringify({ contradictions: [{ quote: "拿起那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "同一件事又报一遍" }] });
+      }
+      return JSON.stringify({ contradictions: [], claims: [] });
+    });
+    const result = await checkChapterContinuity({ projectDir: "/nonexistent", chapter: 3, draftBody: BODY, callModel, earlier: EARLIER });
+    expect(result.issues.map((item) => item.reason)).toEqual(["位置对不上"]);
   });
 });
