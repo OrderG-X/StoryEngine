@@ -56,7 +56,7 @@ export function parseNumberToken(token: string): number | undefined {
 
 const NUMBER_RUN = /[0-9０-９]+|[零〇一二两三四五六七八九十百千万]+/gu;
 /** 量词：数字后面紧跟这些字才当设定里的数（「一片叶子」「一直」不算）。 */
-const UNIT_AFTER = /^(?:号|年|岁|层|楼|室|栋|幢|元|块|米|公里|斤|页|届|级|班|路|封|本|张|把|间|户|座|辆|口)/u;
+const UNIT_AFTER = /^(?:号|年|岁|层|楼|室|栋|幢|元|块|米|公里|斤|页|届|级|班|路|封|本|张|把|间|户|座)/u;
 /** 约数、相对时间、时长：会随故事推移变，不是死设定。 */
 const NOT_FIXED_AFTER = /^(?:[几多来余]|年[前后间来多底初]|岁[前后多]|号[前后])/u;
 const HAN_RUN_BEFORE = /([\p{Script=Han}]+)[，,、：:\s“”"'「」]{0,2}$/u;
@@ -84,7 +84,8 @@ function numberSlots(sentence: string): readonly (NumberSlot & { readonly index:
     if (/第$/u.test(before)) continue;
     const run = HAN_RUN_BEFORE.exec(before)?.[1] ?? "";
     // 前缀去掉尾部的数字字（「十一月九号」的「月」前面是数，模板不可靠）
-    if (run.length < 2 || /[零〇一二两三四五六七八九十百千万]$/u.test(run)) continue;
+    // 前缀里带数字的不当模板：「十一月九号」的「月」前面是数；「一栋三层」的「一栋」谁家的楼都能说。
+    if (run.length < 2 || /[零〇一二两三四五六七八九十百千万]/u.test(run.slice(-2)) || /[零〇一二两三四五六七八九十百千万]$/u.test(run)) continue;
     const value = parseNumberToken(match[0]);
     if (value === undefined) continue;
     out.push({ left: run.slice(-2), unit: UNIT_AFTER.exec(after)![0], value, text: match[0], index });
@@ -108,11 +109,15 @@ function bareSubject(subject: string | undefined): string | undefined {
   return bare && bare.length >= 2 ? bare : undefined;
 }
 
-/** 这条事实到本章还算数：前面章节记的、没被取代、不是只记「发生过的事」。 */
+/**
+ * 这条事实到本章还算数、能拿来对账：前面章节记的、没被取代、标了「不该变」（hard）。
+ * 老账本（2026-10-10 之前记的）没有类型和主体，分不清是死设定还是会变的状态、说的是哪栋楼：
+ * 大考卷上拿它对出来的 3 条全是误报（两栋楼的层数、门口停了几辆车），所以不参与，等导入时重建账本。
+ */
 function factInForce(fact: FactEntry, chapter: number): boolean {
   if (!(fact.chapter < chapter)) return false;
   if (fact.supersededByChapter !== undefined && fact.supersededByChapter <= chapter) return false;
-  return fact.kind !== "event" && fact.kind !== "state";
+  return fact.kind === "hard";
 }
 
 export function findLedgerNumberConflicts(input: {

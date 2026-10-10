@@ -78,4 +78,15 @@ describe("账本数字对账（确定性层）", () => {
     ];
     expect(findLedgerNumberConflicts({ chapter: 4, draftBody: "半页书店在青石巷六号。便签在收银台第三层。", facts })).toEqual([]);
   });
+
+  it("大考卷上的误报：「一栋两层 / 一栋三层」（两栋楼）、门口停了几辆车（会变）、老账本没类型 → 都不报", () => {
+    const facts = [
+      fact("f-dong", 2, "片区动迁办在街口往东，是一栋两层的老办公楼。", { subject: "动迁办" }),
+      fact("f-car", 3, "街道办门口台阶上停着两辆电动车。", { subject: "街道办" }),
+      { id: "f-old", chapter: 2, text: "老宅门牌是梧桐街九号。", source: "auto" },
+    ];
+    expect(findLedgerNumberConflicts({ chapter: 4, draftBody: "街道办是一栋三层的白瓷砖楼。", facts })).toEqual([]);
+    expect(findLedgerNumberConflicts({ chapter: 9, draftBody: "门口牌子底下停着三辆电动车，多了一辆。", facts })).toEqual([]);
+    expect(findLedgerNumberConflicts({ chapter: 5, draftBody: "老宅门牌是梧桐街七号。", facts })).toEqual([]);
+  });
 });
