@@ -131,6 +131,13 @@ export function buildThreadTrackingPlan(input: {
  * - 声明 summary 同样过 isQualityLead 质量闸：模型无关铁律，不信模型会传干净输入——
  *   退化 summary（「什么线索」这类指代模糊短语）拦在门外，绝不当标题落库。
  */
+/** 两条线索引的是不是同一句原文（压掉空白和标点再比；太短的不算，免得「嗯。」这类句子误并）。 */
+function sameEvidence(a: string | undefined, b: string): boolean {
+  const squash = (text: string) => text.replace(/[\s\p{P}]+/gu, "");
+  const left = squash(a ?? "");
+  return left.length >= 6 && left === squash(b);
+}
+
 function extractDeclaredThreadCandidates(input: {
   readonly verifiedDelta: VerifiedChapterDelta;
   readonly threadPool: ThreadPool;
@@ -177,13 +184,16 @@ function extractDeclaredThreadCandidates(input: {
     const title = cleanTitle(declared.summary);
     if (!title) continue;
     if (!isQualityLead(title, declared.quote)) continue;
-    // 同一批声明里 seeded 与 keyLeads 常是同一件事换个说法：批内去重（标题互相包含 / 字面相近），只留第一条。
+    // 同一批声明里 seeded 与 keyLeads 常是同一件事换个说法：批内去重（标题互相包含 / 字面相近 / 引的是同一句原文），只留第一条
+    // （2026-10-11 真机验收：「郑德海与林秋同届」「能否找到郑德海问出…」引同一句，记成两条新线索）。
+    const evidence = truncateText(declared.quote, 120);
     if (candidates.some((candidate) => !candidate.targetThreadId && candidate.type === "lead"
-      && (titlesOverlap(candidate.title, title) || bigramSimilarity(candidate.title, title) >= BATCH_DUPLICATE_SIMILARITY))) continue;
+      && (titlesOverlap(candidate.title, title) || bigramSimilarity(candidate.title, title) >= BATCH_DUPLICATE_SIMILARITY
+        || sameEvidence(candidate.evidence, evidence)))) continue;
     candidates.push({
       type: "lead",
       title,
-      evidence: truncateText(declared.quote, 120),
+      evidence,
       isDone: false,
     });
   }

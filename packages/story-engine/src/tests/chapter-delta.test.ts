@@ -345,6 +345,27 @@ describe("时间声明（故事时间线）", () => {
     expect(next.time).toEqual({ daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" });
   });
 
+  it("模型漏填星期、原句里只写了一个星期 → 照原句取；原句写了两个星期 → 不猜", () => {
+    const text = "周四晚上，苏晚关店比平时晚。她想起周二那天的事。";
+    const own = { ...base, mainEvent: { summary: "关店", quote: "苏晚关店比平时晚" } };
+    expect(verifyChapterDelta({ ...own, time: { timeOfDay: "晚上", quote: "周四晚上，苏晚关店比平时晚。" } }, text).time)
+      .toEqual({ weekday: "周四", timeOfDay: "晚上", quote: "周四晚上，苏晚关店比平时晚。" });
+    expect(verifyChapterDelta({ ...own, time: { timeOfDay: "晚上", quote: "周四晚上，苏晚关店比平时晚。她想起周二那天的事。" } }, text).time)
+      .toEqual({ timeOfDay: "晚上", quote: "周四晚上，苏晚关店比平时晚。她想起周二那天的事。" });
+  });
+
+  it("开头时间和章内换天引的是同一句 → 只算在开头，不再算章内过了一天", () => {
+    const text = "苏晚想了一夜。第二天一早，她骑车去了槐树巷。";
+    const verified = verifyChapterDelta({
+      ...base,
+      mainEvent: { summary: "去槐树巷", quote: "她骑车去了槐树巷" },
+      time: { daysSincePrevious: 1, quote: "第二天一早，她骑车去了槐树巷。" },
+      timeSpan: { days: 1, quote: "第二天一早，她骑车去了槐树巷。" },
+    }, text);
+    expect(verified.time?.daysSincePrevious).toBe(1);
+    expect(verified.timeSpan).toBeUndefined();
+  });
+
   it("章内换天：原句在正文里、写着换天说法、天数 1～60 才收；否则当整章同一天", () => {
     const text = "周二傍晚，苏晚把牌子翻了个面。第二天上午，她把店交给王婶，去了槐树巷。";
     const own = { ...base, mainEvent: { summary: "去槐树巷", quote: "她把店交给王婶" } };

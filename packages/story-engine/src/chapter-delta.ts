@@ -11,7 +11,7 @@
  * 已被 commit-plan-builder.ts 消费：传入章节语义声明时由 verifyChapterDelta 做证据校验，核不上的条目进 issues（绝不静默），
  * 上层据此逐字段回退到旧正则——这是刻意的兼容设计，声明能力不可用时旧链路行为不变。
  */
-import { parseWeekday } from "./story-timeline.js";
+import { parseWeekday, WEEKDAY_NAMES } from "./story-timeline.js";
 
 /** 一条声明必带的正文证据：模型引用的原句，校验时必须逐字（归一化空白后）命中草稿。 */
 export interface ChapterDeltaEvidence {
@@ -308,9 +308,11 @@ export function verifyChapterDelta(
   const time = ((): TimeDeclaration | undefined => {
     const declared = declaration.time;
     if (!declared || !checkEvidence(declared.quote, "time")) return undefined;
-    const declaredWeekday = parseWeekday(declared.weekday);
-    const weekdayOk = declaredWeekday !== undefined
-      && [...declared.quote.matchAll(/(?:周|星期|礼拜)[一二三四五六日天]/gu)].some((match) => parseWeekday(match[0]) === declaredWeekday);
+    const quotedWeekdays = [...new Set([...declared.quote.matchAll(/(?:周|星期|礼拜)[一二三四五六日天]/gu)].map((match) => parseWeekday(match[0])))];
+    // 模型漏填星期、但原句里明写了（且只写了一个）：照原句取（2026-10-11 真机验收：原句「周四晚上」，
+    // 模型只给了时段，这章被当成「没说时间」按上一章 +1 估）。原句写了两个星期的不猜。
+    const declaredWeekday = parseWeekday(declared.weekday) ?? (quotedWeekdays.length === 1 ? quotedWeekdays[0] : undefined);
+    const weekdayOk = declaredWeekday !== undefined && quotedWeekdays.includes(declaredWeekday);
     const days = declared.daysSincePrevious;
     // 「隔了几天」必须是原句里写出来的（第二天 / 三天后 / 当晚 …），不能是模型推的
     // （2026-10-10 记账考卷：原句只有「周五下午」，模型声明「隔 0 天」，第 3 章被记成和第 2 章同一天）。
@@ -319,7 +321,7 @@ export function verifyChapterDelta(
     return {
       quote: declared.quote,
       ...(daysOk ? { daysSincePrevious: days } : {}),
-      ...(weekdayOk ? { weekday: declared.weekday } : {}),
+      ...(weekdayOk ? { weekday: declared.weekday?.trim() || WEEKDAY_NAMES[declaredWeekday!] } : {}),
       ...(declared.timeOfDay ? { timeOfDay: declared.timeOfDay } : {}),
     };
   })();
@@ -332,6 +334,8 @@ export function verifyChapterDelta(
     // 和 time 一样：核不上就当没声明（这章按同一天记），不进拒收清单。
     if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 60) return undefined;
     if (!IN_CHAPTER_DAY_CHANGE.test(declared.quote)) return undefined;
+    // 开头时间和章内换天引的是同一句：模型把这句既当「和上一章隔了一天」又当「章内过了一天」，只能算一次——算在开头。
+    if (time && normalizeForMatch(time.quote) === normalizeForMatch(declared.quote)) return undefined;
     return { days, quote: declared.quote };
   })();
 

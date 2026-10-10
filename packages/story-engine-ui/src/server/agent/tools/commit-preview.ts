@@ -13,7 +13,7 @@
  *     (项目, 章节, 草稿哈希, 声明) 登记成 previewToken，供 commit_apply 守卫「必须先预览过且草稿未变」。
  * 读类工具不建快照、不带 snapshotId。
  */
-import { formatStoryDay, type ChapterDeltaDeclaration, type NameDriftFinding } from "@actalk/story-engine";
+import { chapterEndDay, formatStoryDay, type ChapterDeltaDeclaration, type NameDriftFinding, type StoryTimeline, type TimelineEntry } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
@@ -38,6 +38,13 @@ import { readEstablishedCharacterNames } from "../../services/commit-service.js"
 import { callConfiguredFactModel } from "./commit-apply.js";
 import { proposeFactChanges, withTimelineDates, type FactProposal } from "../fact-ledger/reconcile-facts.js";
 import { buildLedgerChecklist, type LedgerChecklistItem } from "../commit-ledger/ledger-checklist.js";
+
+/** 定稿清单上的日子：章内跨了天就写「故事第 9 天（周四）到第 10 天（周五）」，作者一眼看出这章过了夜。 */
+function formatChapterSpan(timeline: StoryTimeline, entry: TimelineEntry): string {
+  const end = chapterEndDay(entry);
+  const start = formatStoryDay(timeline, entry.day);
+  return end === entry.day ? start : `${start}到${formatStoryDay(timeline, end).replace(/^故事/u, "")}`;
+}
 
 /** 预览时算记账提案（硬事实）的注入点：单测不传 = 清单里只有伏笔线索目标和天数。 */
 export type ProposeFactsFn = (args: {
@@ -316,7 +323,7 @@ export async function buildCommitPreviewToolOutput(input: {
       ...(declarationOutcome.status === "fallback" ? { structureMissing: declarationOutcome.reason ?? "" } : {}),
       ...(timelineEntry && storyTimeline
         ? {
-          time: { day: timelineEntry.day, label: formatStoryDay(storyTimeline, timelineEntry.day), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },
+          time: { day: timelineEntry.day, label: formatChapterSpan(storyTimeline, timelineEntry), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },
           displayFact: (text: string) => withTimelineDates(text, { today: timelineEntry.day, timeline: storyTimeline }),
         }
         : {}),

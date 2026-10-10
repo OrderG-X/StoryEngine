@@ -75,6 +75,14 @@ describe("线索声明推进旧线索（阶段 4 记账对号）", () => {
     expect(result.introducedThreads).toHaveLength(1);
   });
 
+  it("标题说法差得远、但引的是同一句原文 → 还是同一件事，只新建一条", () => {
+    const result = plan({
+      seededForeshadowing: [{ summary: "怀表日期是谁刻的", quote: "表盖内侧的日期在灯下发亮" }],
+      keyLeads: [{ summary: "林舟能否查清这块表的来路", quote: "表盖内侧的日期在灯下发亮。" }],
+    });
+    expect(result.introducedThreads).toHaveLength(1);
+  });
+
   it("收口引的原句和线索不沾边 → 只算推进、不关（防拿无关句子关掉核心谜题）", () => {
     const result = plan({
       resolvedForeshadowing: [{ summary: "揭晓了送修人", quote: "他把怀表翻过来", targetThreadHint: "登记表送修人只写了一个沈字" }],
