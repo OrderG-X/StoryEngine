@@ -489,7 +489,9 @@ describe("runWithSnapshot 落盘收尾·写后工作树干净（Codex afterfix #
     expect(await gitStatusPorcelain(dir)).toBe(""); // 撤销后也干净
   });
 
-  it("连续两次 runWithSnapshot 逐步撤销：先撤入库、再撤出稿——收尾 commit 绝不被误当『重做』目标", async () => {
+  // 2026-10-13 修复轮：根套件满载并行时这条 5s 默认超时偶发不够（单独重跑全绿），放宽到 20s——
+  // 它连跑两次快照+两次撤销共 4 轮真 git 操作，本就比同文件其他用例重。
+  it("连续两次 runWithSnapshot 逐步撤销：先撤入库、再撤出稿——收尾 commit 绝不被误当『重做』目标", { timeout: 20_000 }, async () => {
     const dir = await makeProject();
     await runWithSnapshot(dir, "agent:generate_draft", async () => {
       await mkdir(join(dir, "drafts"), { recursive: true });

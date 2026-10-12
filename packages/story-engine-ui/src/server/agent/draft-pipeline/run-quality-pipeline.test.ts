@@ -124,4 +124,33 @@ describe("runDraftQualityPipeline", () => {
     expect(snapshotBeforeDraftOverwrite).not.toHaveBeenCalled();
     expect(await readFile(draftPath, "utf-8")).toContain("修鞋的吴师傅");
   });
+
+  // 修复轮（2026-10-13）：出稿内嵌核账走冷窗口（核账员还没读完全书）时，0 处也不许只说「没发现对不上」——
+  // 对照范围必须跟上（和「核账」按钮路同一个口径），info.continuity 同时带上 coverage 供上层用。
+  it("老书没读完就出稿：核账冷窗口 0 处 → 回执如实说只对照了第 5～12 章原文 + 账本，更早的细节可能漏", async () => {
+    const draft = "林舟一早骑车出门，往南门去。路上想着祖父那张登记表上的字，想着钟表厂宿舍还没拆掉的年月，脚步慢了下来。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    // 另一本 12 章的老书（和 check-service.test.ts 同款构造）：要补的笔记超过 10 章 → 冷窗口。
+    for (let chapter = 1; chapter <= 12; chapter += 1) {
+      await writeFile(join(projectDir, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n第${chapter}章的内容，林舟照常开门。\n`, "utf-8");
+    }
+    const quiet = vi.fn(async (_messages: readonly { readonly role: string; readonly content: string }[], options: { readonly json?: boolean }) => {
+      if (!options.json) return "笔记";
+      return JSON.stringify({ checks: [], contradictions: [] });
+    });
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 13, draftPath, title: "第13章", draftBody: draft, lengthTarget: TARGET,
+      checkCallModel: quiet,
+    });
+    expect(result.changed).toBe(false);
+    expect(result.info.continuity?.checked).toBe(true);
+    expect(result.info.continuity?.coverage).toEqual({ mode: "cold", notedThrough: 0, rawFrom: 5, rawTo: 12 });
+    const text = result.notes.join("\n");
+    expect(text).toContain("没发现和前文对不上的地方");
+    expect(text).toContain("核账员还没读完全书");
+    expect(text).toContain("这次只对照了第 5～12 章原文 + 账本");
+    expect(text).toContain("更早的细节可能漏");
+    // 冷窗口结果不写核账记忆（小范围不能当全书核过来缓存）——出稿路和「核账」按钮路同规矩。
+    await expect(readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0013.json"), "utf-8")).rejects.toThrow();
+  });
 });

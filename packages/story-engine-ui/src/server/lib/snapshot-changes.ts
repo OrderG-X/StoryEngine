@@ -46,6 +46,7 @@ export function describeSnapshotChanges(
 ): string[] {
   const committed = { added: [] as number[], changed: [] as number[], removed: [] as number[] };
   const drafts: number[] = [];
+  const plans: number[] = [];
   const newCharacters: string[] = [];
   const updatedCharacters: string[] = [];
   let unknownCharacter = false;
@@ -56,6 +57,11 @@ export function describeSnapshotChanges(
     if (chapter) {
       const n = Number(chapter[1]);
       (status === "A" ? committed.added : status === "D" ? committed.removed : committed.changed).push(n);
+      continue;
+    }
+    const plan = /^drafts\/plans\/chapter-(\d+)\.json$/u.exec(path);
+    if (plan) {
+      plans.push(Number(plan[1]));
       continue;
     }
     const draft = /^drafts\/[^/]+\/chapter-(\d+)\.md$/u.exec(path);
@@ -80,6 +86,7 @@ export function describeSnapshotChanges(
   if (committed.changed.length) lines.push(`正文：${chapterList(committed.changed)}的定稿有改动`);
   if (committed.removed.length) lines.push(`正文：${chapterList(committed.removed)}的定稿被移除`);
   if (drafts.length) lines.push(`工作稿：${chapterList(drafts)}有改动`);
+  if (plans.length) lines.push(`章纲：${chapterList(plans)}有改动`);
   if (newCharacters.length) lines.push(`新增角色：${nameList(newCharacters)}`);
   const updated = updatedCharacters.filter((name) => !newCharacters.includes(name));
   if (updated.length) lines.push(`角色：${nameList(updated)} 的资料有更新`);
@@ -152,8 +159,8 @@ const REVERT_MAX_ITEMS = 8;
 
 /**
  * 「这次退回了什么」的名词短语列表（纯函数）：chapters 下的章文件→「第 N 章定稿」、工作稿
- * drafts/<目录>/chapter-N→「第 N 章工作稿」、characters/<id>/ 下→「角色卡：名字」（认不出的 id 不吐，
- * 说「角色卡资料」）、story/*.json 等资料区→短语。
+ * drafts/<目录>/chapter-N→「第 N 章工作稿」、章纲 drafts/plans/chapter-N→「第 N 章章纲」、
+ * characters/<id>/ 下→「角色卡：名字」（认不出的 id 不吐，说「角色卡资料」）、story/*.json 等资料区→短语。
  * D 状态（目标里有、后来被删，恢复把它找回来）加「（重新找回）」标注。同章多文件去重。
  */
 export function describeRevertedPaths(
@@ -162,6 +169,7 @@ export function describeRevertedPaths(
 ): string[] {
   const committed = new Set<number>();
   const drafts = new Set<number>();
+  const plans = new Set<number>();
   const recovered = new Set<string>(); // 「（重新找回）」标注的原始短语
   const characterNames = new Set<string>();
   let unknownCharacter = false;
@@ -174,6 +182,13 @@ export function describeRevertedPaths(
       const n = Number(chapter[1]);
       committed.add(n);
       if (status === "D") recovered.add(`第 ${n} 章定稿`);
+      continue;
+    }
+    const plan = /^drafts\/plans\/chapter-(\d+)\.json$/u.exec(path);
+    if (plan) {
+      const n = Number(plan[1]);
+      plans.add(n);
+      if (status === "D") recovered.add(`第 ${n} 章章纲`);
       continue;
     }
     const draft = /^drafts\/[^/]+\/chapter-(\d+)\.md$/u.exec(path);
@@ -199,6 +214,7 @@ export function describeRevertedPaths(
   const withRecover = (phrase: string) => (recovered.has(phrase) ? `${phrase}（重新找回）` : phrase);
   for (const n of [...committed].sort((a, b) => a - b)) items.push(withRecover(`第 ${n} 章定稿`));
   for (const n of [...drafts].sort((a, b) => a - b)) items.push(withRecover(`第 ${n} 章工作稿`));
+  for (const n of [...plans].sort((a, b) => a - b)) items.push(withRecover(`第 ${n} 章章纲`));
   const names = [...characterNames];
   if (names.length > 0) items.push(`角色卡：${names.length > 3 ? `${names.slice(0, 3).join("、")} 等 ${names.length} 张` : names.join("、")}`);
   else if (unknownCharacter) items.push("角色卡资料");

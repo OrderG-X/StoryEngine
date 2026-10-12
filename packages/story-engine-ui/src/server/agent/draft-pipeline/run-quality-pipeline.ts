@@ -15,7 +15,7 @@ import {
 } from "@actalk/story-engine";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { snapshotBeforeDraftOverwrite } from "../tools/snapshot-on-draft-overwrite.js";
-import { checkChapterBody, type ChapterCheckItem } from "../continuity-v2/check-service.js";
+import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../continuity-v2/check-service.js";
 import type { BrainCallModel } from "../../brain/index.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";
 
@@ -45,6 +45,8 @@ export interface QualityPipelineInfo {
     readonly sure: readonly ChapterCheckItem[];
     readonly maybe: readonly ChapterCheckItem[];
     readonly failures: readonly string[];
+    /** 冷窗口核账（R4.4）：核账员还没读完全书也照核，对照范围在这里，notes 已如实说明。 */
+    readonly coverage?: ChapterCheckResult["coverage"];
   };
 }
 
@@ -99,12 +101,22 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   if (input.checkCallModel && body.trim()) {
     const startedAt = Date.now();
     const result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel });
-    info = { ...info, continuity: { checked: result.ok, sure: result.sure, maybe: result.maybe, failures: result.failures } };
+    info = { ...info, continuity: { checked: result.ok, sure: result.sure, maybe: result.maybe, failures: result.failures, ...(result.coverage ? { coverage: result.coverage } : {}) } };
+    // 冷窗口（R4.4）：核账员还没读完全书时绝不只说「没发现对不上」——对照范围（已读笔记+第 a～b 章原文+账本）必须跟上。
+    const coldNote = result.coverage
+      ? `核账员还没读完全书，这次只对照了${
+        [
+          ...(result.coverage.notedThrough > 0 ? [`已读笔记（到第 ${result.coverage.notedThrough} 章）`] : []),
+          ...(result.coverage.rawTo > 0 ? [`第 ${result.coverage.rawFrom}～${result.coverage.rawTo} 章原文`] : []),
+          "账本",
+        ].join(" + ")
+      }，更早的细节可能漏。`
+      : "";
     notes.push(result.ok
       ? result.sure.length + result.maybe.length === 0
-        ? "前后核对：没发现和前文对不上的地方。"
-        : `前后核对：确定对不上 ${result.sure.length} 处${result.maybe.length > 0 ? `、可能 ${result.maybe.length} 处` : ""}，没自动改，点「核账」看是哪几句。`
-      : `前后核对这次没跑成（${result.failures[0] ?? "原因不明"}），稿子没动；可以点「核账」再核一次。`);
+        ? `前后核对：没发现和前文对不上的地方。${coldNote}`
+        : `前后核对：确定对不上 ${result.sure.length} 处${result.maybe.length > 0 ? `、可能 ${result.maybe.length} 处` : ""}，没自动改，点「核账」看是哪几句。${coldNote}`
+      : `前后核对这次没跑成（${result.failures[0] ?? "原因不明"}），稿子没动；可以点「核账」再核一次。${coldNote}`);
     timings.continuityMs = Date.now() - startedAt;
   }
   info = { ...info, timings };

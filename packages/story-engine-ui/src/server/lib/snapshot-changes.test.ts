@@ -45,9 +45,12 @@ describe("操作历史「查看改动」：文件 → 人话", () => {
     expect(unknown.join("")).not.toMatch(/char-/u);
   });
 
-  it("工作稿多章合并成一行；只有内部文件时没有改动可列", () => {
+  it("工作稿多章合并成一行；章纲（drafts/plans/）单列不再落进「其他文件」；只有内部文件时没有改动可列", () => {
     expect(describeSnapshotChanges([m("drafts/fast/chapter-0057.md"), m("drafts/fast/chapter-0056.md")], names))
       .toEqual(["工作稿：第 56、57 章有改动"]);
+    // 修复轮（2026-10-13）：章纲 drafts/plans/chapter-N.json 原先折进「其他文件」，作者看不出是哪章的纲。
+    expect(describeSnapshotChanges([m("drafts/plans/chapter-0002.json"), m("drafts/plans/chapter-0003.json")], names))
+      .toEqual(["章纲：第 2、3 章有改动"]);
     expect(describeSnapshotChanges([m(".story-engine-ui/chapter-workspaces/chapter-0056.json")], names)).toEqual([]);
   });
 
@@ -106,15 +109,17 @@ describe("操作历史条目名", () => {
 });
 
 describe("撤销/恢复回执：路径 → 人话（R4.2·验收 3.2）", () => {
-  it("chapters/、drafts/fast/、characters/、story/*.json 四类都翻成短语，认不出的角色不吐 id", () => {
+  it("chapters/、drafts/fast/、drafts/plans/、characters/、story/*.json 都翻成短语，认不出的角色不吐 id", () => {
     expect(describeRevertedPaths([
       a("chapters/0004.md"),
       a("drafts/fast/chapter-0005.md"),
+      // 修复轮（2026-10-13）：章纲也翻成「第 N 章章纲」，不再折进「其他文件」。
+      m("drafts/plans/chapter-0005.json"),
       m("characters/char-ffe5af/core.json"),
       m("characters/char-ffe5af/state.json"),
       m("story/fact-ledger.json"),
       m("story/threads.json"),
-    ], names)).toEqual(["第 4 章定稿", "第 5 章工作稿", "角色卡：周屿", "线索", "账本"]);
+    ], names)).toEqual(["第 4 章定稿", "第 5 章工作稿", "第 5 章章纲", "角色卡：周屿", "线索", "账本"]);
     // 认不出 id 的角色：中性短语，绝不把 char- 吐给作者（铁律④）。
     const unknown = describeRevertedPaths([m("characters/char-999999/state.json")], names);
     expect(unknown).toEqual(["角色卡资料"]);
