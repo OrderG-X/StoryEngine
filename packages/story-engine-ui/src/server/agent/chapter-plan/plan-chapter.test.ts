@@ -228,6 +228,27 @@ const fakePlanCheckCallModel = (reply: string): BrainCallModel & { readonly call
   return Object.assign(callModel, { calls });
 };
 
+/** 假核账员审章纲：按调用次序回不同回复（审一轮、复审一轮各一份；Error 抛出）。 */
+const fakePlanCheckCallModels = (replies: readonly (string | Error)[]): BrainCallModel & { readonly calls: number[] } => {
+  let used = 0;
+  const calls: number[] = [];
+  const callModel: BrainCallModel = async (messages, options) => {
+    if (!options.json) return `第${/第 (\d+) 章/u.exec(messages.at(-1)!.content)?.[1] ?? "?"}章笔记`;
+    used += 1;
+    calls.push(used);
+    const reply = replies[Math.min(used - 1, replies.length - 1)]!;
+    if (reply instanceof Error) throw reply;
+    return reply;
+  };
+  return Object.assign(callModel, { calls });
+};
+
+/** 旧章纲员要点的固定问题（point 3，earlierQuote 真在第 1 章正文里）。 */
+const ONE_PROBLEM = JSON.stringify({
+  problems: [{ point: 3, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
+});
+const NO_PROBLEM = JSON.stringify({ problems: [] });
+
 describe("resolveChapterPlanForDraft：章纲员路", () => {
   beforeEach(() => {
     vi.stubEnv("STORY_PLANNER", "reader");
@@ -259,21 +280,24 @@ describe("resolveChapterPlanForDraft：章纲员路", () => {
   });
 
   it("审出问题 → 交回章纲员改一轮（不循环），落盘的是改过的章纲", async () => {
+    // R2.3 起缺省还会复审 + 第二轮改；这里显式关掉，单测「只改一轮」的旧行为（回退排查用）。
+    vi.stubEnv("STORY_PLANNER_SECOND_PASS", "off");
     const projectDir = await makeBook();
     const fixed = JSON.stringify({
       ...JSON.parse(READER_PLAN),
       beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款", "林澈把缺页拍照留证"],
     });
     const planner = fakePlannerCallModel([READER_PLAN, fixed]);
-    const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 3, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
-    }));
+    const checker = fakePlanCheckCallModel(ONE_PROBLEM);
     const result = await resolveChapterPlanForDraft({
       projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(result.plan?.beats).toHaveLength(4);
     expect(result.note).toContain("核账员审出 1 处");
     expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
+    // 改一轮就收：核账员只审一次，章纲员只拟 + 改一次。
+    expect(checker.calls).toEqual([1]);
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
   });
 
   it("章纲员要补的笔记太多 → 这次走旧路拟纲 + 审校，note 里说清楚", async () => {
@@ -312,5 +336,98 @@ describe("resolveChapterPlanForDraft：章纲员路", () => {
     });
     expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
     expect(planner.calls).toHaveLength(0);
+  });
+});
+
+describe("resolveChapterPlanForDraft：改第二轮（R2.3，缺省开）", () => {
+  beforeEach(() => {
+    vi.stubEnv("STORY_PLANNER", "reader");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const FIXED_1 = JSON.stringify({ ...JSON.parse(READER_PLAN), beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款", "林澈把缺页拍照留证"] });
+  const FIXED_2 = JSON.stringify({ ...JSON.parse(READER_PLAN), beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款", "林澈把缺页拍照留证", "缺页复印件存进银行保险箱"] });
+
+  it("改完一轮复审没问题 → 到此为止；复审这一次要跑", async () => {
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel([READER_PLAN, FIXED_1]);
+    const checker = fakePlanCheckCallModels([ONE_PROBLEM, NO_PROBLEM]);
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.beats).toHaveLength(4);
+    expect(result.note).toContain("已让章纲员改掉");
+    expect(result.note).toContain("改后复审：没再发现");
+    // 核账员审了两次（审 + 复审），章纲员拟 + 改各一次。
+    expect(checker.calls).toEqual([1, 2]);
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
+  });
+
+  it("复审还有确定问题 → 再改一轮（关思考快路），最多两轮（改完不再有第三次审 / 改）", async () => {
+    const projectDir = await makeBook();
+    // 复审永远还能审出问题（同一条）：也只许再改一轮。
+    const planner = fakePlannerCallModel([READER_PLAN, FIXED_1]);
+    const quick = fakePlannerCallModel([FIXED_2]);
+    const checker = fakePlanCheckCallModel(ONE_PROBLEM);
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel,
+      plannerQuickCallModel: quick.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.beats).toHaveLength(5);
+    expect(result.note).toContain("核账员审出 1 处、改后复审又审出 1 处");
+    expect(result.note).toContain("改了两轮");
+    expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(5);
+    // 两轮封顶：核账员审两次；第一轮改纲走 planner，第二轮改纲走快路 quick（各拟 + 改一次）。
+    expect(checker.calls).toEqual([1, 2]);
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
+    expect(quick.calls.filter((call) => call.json)).toHaveLength(1);
+    // 第二轮的任务消息说清这是改过一轮后复审剩下的，且带第一轮改完的章纲当原章纲。
+    const secondRevise = quick.calls.filter((call) => call.json).map((call) => call.task)[0]!;
+    expect(secondRevise).toContain("已经按核账员的意见改过一轮");
+    expect(secondRevise).toContain("林澈把缺页拍照留证");
+  });
+
+  it("复审没跑成 → 用第一轮改完的章纲，如实说明", async () => {
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel([READER_PLAN, FIXED_1]);
+    const quick = fakePlannerCallModel([FIXED_2]);
+    const checker = fakePlanCheckCallModels([ONE_PROBLEM, new Error("网关 502")]);
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel,
+      plannerQuickCallModel: quick.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.beats).toHaveLength(4);
+    expect(result.note).toContain("改后复审这次没跑成：审章纲没跑成：网关 502");
+    expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
+    expect(quick.calls).toHaveLength(0); // 复审没跑成就不进第二轮
+  });
+
+  it("第二轮改纲没成 → 用第一轮改完的章纲，如实说明", async () => {
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel([READER_PLAN, FIXED_1]);
+    const quick = fakePlannerCallModel([new Error("又挂了")]);
+    const checker = fakePlanCheckCallModel(ONE_PROBLEM);
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel,
+      plannerQuickCallModel: quick.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.beats).toHaveLength(4);
+    expect(result.note).toContain("改后复审又审出 1 处");
+    expect(result.note).toContain("第二轮改纲没成");
+    expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
+  });
+
+  it("第一轮没问题 → 不进复审（两轮循环不启动）", async () => {
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel([READER_PLAN]);
+    const checker = fakePlanCheckCallModels([NO_PROBLEM, ONE_PROBLEM]);
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.beats).toHaveLength(3);
+    expect(checker.calls).toEqual([1]);
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
   });
 });

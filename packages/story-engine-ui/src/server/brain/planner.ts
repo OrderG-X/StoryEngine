@@ -46,6 +46,16 @@ const PLAN_RETRIES = 1;
 /** 拟章纲「光想不写」的上限：超过就改用关思考重拟（同旧路 PLAN_MAX_THINKING_MS，别两处改出不一样的数）。 */
 const PLAN_MAX_THINKING_MS = 150_000;
 
+/**
+ * R2.3「允许改第二轮」（STORY_PLANNER_SECOND_PASS）：改完一轮后核账员审章纲再审一次，
+ * 还有「确定」问题（earlierQuote 已由代码核对过的）就再改一轮（只改有问题的要点），最多两轮、不更多。
+ * 没设（或设 on / 1 / true）＝开；显式设 off / 0 / false / no ＝关（回到只改一轮的旧行为）。
+ */
+const SECOND_PASS_OFF_VALUES = new Set(["off", "0", "false", "no", "legacy"]);
+export function isPlannerSecondPassEnabled(): boolean {
+  return !SECOND_PASS_OFF_VALUES.has((process.env.STORY_PLANNER_SECOND_PASS ?? "").trim().toLowerCase());
+}
+
 export type PlanChapterByPlannerResult =
   | { readonly ok: true; readonly plan: ChapterPlan }
   | { readonly ok: false; readonly reason: string; readonly skipped?: "not_ready" };
@@ -98,6 +108,21 @@ async function finalizePlan(projectDir: string, plan: ChapterPlan, dayOffset: nu
   await writeChapterPlan(projectDir, withAvoid);
   return withAvoid;
 }
+
+/**
+ * 第二轮改纲的模型调用（R2.3）：关思考走快路。第二轮只改复审剩下的确定要点（范围小），而第一轮改纲开思考
+ * 常要一两分钟——再思考一轮就把「拟 + 审 + 改」的总用时顶穿 120 秒的留用线，所以第二轮不思考、快改。
+ */
+export const callConfiguredPlannerModelQuick: BrainCallModel = async (messages, options) => {
+  const configured = await resolveConfiguredChatModel("chapterSteering");
+  const { content } = await streamChatModelToText({
+    configured: { ...configured, thinking: false },
+    messages: messages.map((message) => ({ role: message.role, content: message.content })),
+    ...(options.json ? { responseFormat: { type: "json_object" as const } } : {}),
+  });
+  if (!content.trim()) throw new Error("章纲员模型返回了空内容");
+  return content;
+};
 
 /**
  * 章纲员拟第 N 章章纲（读到 N-1 的窗口 + 方向 + 章纲 JSON 要求），拟成落盘 drafts/plans/chapter-NNNN.json。
@@ -192,10 +217,19 @@ function quoteContext(body: string, quote: string): string | undefined {
   return nb.slice(Math.max(0, at - 80), Math.min(nb.length, at + nq.length + 80));
 }
 
-/** 把核账员审出的问题交回章纲员窗口的那条任务消息：只改有问题的要点，其余逐字照抄。 */
-export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonly PlanProblem[], contexts: readonly (string | undefined)[] = []): string {
+/** 把核账员审出的问题交回章纲员窗口的那条任务消息：只改有问题的要点，其余逐字照抄。round≥2 表示这是改完一轮后的第二轮。 */
+export function reviseTask(
+  chapter: number,
+  plan: ChapterPlan,
+  problems: readonly PlanProblem[],
+  contexts: readonly (string | undefined)[] = [],
+  round = 1,
+): string {
+  const lead = round >= 2
+    ? `你为第 ${chapter} 章拟的章纲已经按核账员的意见改过一轮，他把改完的章纲又复审了一遍，还审出 ${problems.length} 处和前文对不上：`
+    : `你为第 ${chapter} 章拟的章纲，核账员审出 ${problems.length} 处和前文对不上：`;
   return [
-    `你为第 ${chapter} 章拟的章纲，核账员审出 ${problems.length} 处和前文对不上：`,
+    lead,
     ...problems.map((problem, index) => [
       `${index + 1}. 第 ${problem.point} 条要点「${problem.beat ?? plan.beats[problem.point - 1] ?? ""}」：和第 ${problem.earlierChapter} 章对不上——${problem.reason}`,
       contexts[index] ? `   前文第 ${problem.earlierChapter} 章那段：「…${contexts[index]}…」` : `   冲突的前文原句：「${problem.earlierQuote}」`,
@@ -215,6 +249,7 @@ export type RevisePlanResult =
 /**
  * 核账员审出问题后，把问题列表交回章纲员窗口改一轮（只改有问题的要点，不循环）。
  * 模型常只回 summary + beats：缺的栏一律沿用原章纲；avoid 取并集；天数原章纲有就不许改丢。改不成 → ok:false，调用方用原章纲。
+ * round ≥ 2 表示改完一轮后的第二轮（R2.3）：任务消息里说清这是复审后还剩下的确定问题。
  */
 export async function revisePlanByPlanner(input: {
   readonly projectDir: string;
@@ -225,6 +260,7 @@ export async function revisePlanByPlanner(input: {
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
   readonly now?: Date;
+  readonly round?: number;
 }): Promise<RevisePlanResult> {
   let window: BrainMessage[];
   try {
@@ -251,7 +287,7 @@ export async function revisePlanByPlanner(input: {
       return body ? quoteContext(body, problem.earlierQuote) : undefined;
     });
     const text = await withStep("章纲员改纲", () => input.callModel(
-      [...window, { role: "user", content: reviseTask(input.chapter, input.plan, input.problems, contexts) }],
+      [...window, { role: "user", content: reviseTask(input.chapter, input.plan, input.problems, contexts, input.round ?? 1) }],
       { json: true },
     ));
     raw = parsePlanJson(text) as Record<string, unknown>;

@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, readChapterPlan } from "@actalk/story-engine";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   callConfiguredPlannerModel,
+  callConfiguredPlannerModelQuick,
+  isPlannerSecondPassEnabled,
   PLANNER_ROLE,
   planChapterByPlanner,
   plannerTask,
@@ -213,6 +215,14 @@ describe("章纲员的模型调用", () => {
     expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
     expect(llmMocks.streamChatModelToText.mock.calls[1]![0]).toMatchObject({ configured: { thinking: false } });
   });
+
+  it("第二轮改纲走快路（R2.3）：无论任务设置开不开思考，一律关思考、不传 max_tokens / maxThinkingMs", async () => {
+    await callConfiguredPlannerModelQuick([{ role: "user", content: "改" }], { json: true });
+    expect(llmMocks.resolveConfiguredChatModel).toHaveBeenCalledWith("chapterSteering");
+    const options = llmMocks.streamChatModelToText.mock.calls[0]![0];
+    expect(options).toMatchObject({ configured: { thinking: false }, responseFormat: { type: "json_object" } });
+    expect(Object.keys(options).filter((key) => /max_?tokens|maxThinkingMs|idleTimeout|timeout/iu.test(key))).toEqual([]);
+  });
 });
 
 describe("提示词文本", () => {
@@ -237,5 +247,32 @@ describe("提示词文本", () => {
     expect(check).toContain("1. 许棠在铺子里等信");
     expect(check).toContain("还没写正文");
     expect(check).toContain('"problems"');
+  });
+
+  it("reviseTask 第二轮说清是改过一轮后复审剩下的（R2.3）", () => {
+    const round1 = reviseTask(3, BASE_PLAN, PROBLEMS, [], 1);
+    const round2 = reviseTask(3, BASE_PLAN, PROBLEMS, [], 2);
+    expect(round1).toContain("核账员审出 1 处和前文对不上");
+    expect(round1).not.toContain("已经按核账员的意见改过一轮");
+    expect(round2).toContain("已经按核账员的意见改过一轮");
+    expect(round2).toContain("还审出 1 处和前文对不上");
+  });
+});
+
+describe("R2.3 开关：允许改第二轮（STORY_PLANNER_SECOND_PASS）", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("没设 / on / 1 / true ＝开；off / 0 / false / no / legacy ＝关（大小写、空白都认）", () => {
+    expect(isPlannerSecondPassEnabled()).toBe(true);
+    for (const value of ["on", "1", "true", " ON "]) {
+      vi.stubEnv("STORY_PLANNER_SECOND_PASS", value);
+      expect(isPlannerSecondPassEnabled(), value).toBe(true);
+    }
+    for (const value of ["off", "0", "false", "no", "legacy", " OFF "]) {
+      vi.stubEnv("STORY_PLANNER_SECOND_PASS", value);
+      expect(isPlannerSecondPassEnabled(), value).toBe(false);
+    }
   });
 });
