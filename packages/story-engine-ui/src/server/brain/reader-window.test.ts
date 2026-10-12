@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   assembleReaderWindow,
+  buildColdReaderWindow,
+  COLD_RECENT_CHAPTERS,
   ensureReaderWindow,
   READER_WINDOW_MAX_CHARS,
   type BrainCallModel,
@@ -379,5 +381,75 @@ describe("专员窗口：卷笔记（T5 长书）", () => {
     const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
     expect(second.calls).toHaveLength(0);
     expect(out).toMatchObject({ built: 0, reused: 25, volumesBuilt: 0 });
+  });
+});
+
+describe("冷窗口（R4.4：没读完也先干活）", () => {
+  it("一章笔记都没有：只剩 [system] + 最近 K 章原文一条消息；coverage 说清范围；不调模型、不落盘", async () => {
+    const dir = await makeBook(12);
+    const cold = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12 });
+    expect(cold.coverage).toEqual({ notedThrough: 0, rawFrom: 12 - COLD_RECENT_CHAPTERS + 1, rawTo: 12 });
+    expect(cold.foldedChapters).toBe(12 - COLD_RECENT_CHAPTERS);
+    expect(cold.messages).toHaveLength(2);
+    expect(cold.messages[0]).toEqual({ role: "system", content: ROLE.system });
+    const from = 12 - COLD_RECENT_CHAPTERS + 1;
+    expect(cold.messages[1]!.content).toBe([
+      `【第 ${from}～12 章 定稿原文（你还没读过这些章、也没写过笔记，这次直接给你原文）】`,
+      `（第 1～${from - 1} 章这次没给你——既没笔记也没原文，那些章的细节这次对不到。）`,
+      ...Array.from({ length: COLD_RECENT_CHAPTERS }, (_, index) => `【第 ${from + index} 章】\n正文${from + index}。`),
+    ].join("\n\n"));
+    expect(await notesOf(dir)).toEqual([]);
+    expect(await readdir(join(dir, "agents")).catch(() => [])).toEqual([]);
+  });
+
+  it("已有笔记按折叠形态进前缀；原文从笔记断点之后起（中间没有空档就不写空档说明）", async () => {
+    const dir = await makeBook(12);
+    const { callModel } = fakeModel();
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel });
+    const cold = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12 });
+    expect(cold.coverage).toEqual({ notedThrough: 3, rawFrom: 5, rawTo: 12 });
+    expect(cold.messages).toHaveLength(1 + 3 * 2 + 1);
+    expect(cold.messages[1]).toEqual({ role: "user", content: "【第 1 章（原文已省略，见你当时的笔记）】" });
+    expect(cold.messages[2]).toEqual({ role: "assistant", content: "第1章的笔记" });
+    // 笔记到第 3 章、原文从第 5 章起：中间第 4 章这次没给，如实写进原文块的开头。
+    expect(cold.messages[7]!.content).toContain("【第 5～12 章 定稿原文");
+    expect(cold.messages[7]!.content).toContain("第 4～4 章这次没给你");
+  });
+
+  it("笔记只差几章：原文从断点起、到 upTo 止（不会把有笔记的章再塞一遍原文）", async () => {
+    const dir = await makeBook(12);
+    const { callModel } = fakeModel();
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 10, callModel });
+    const cold = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12 });
+    expect(cold.coverage).toEqual({ notedThrough: 10, rawFrom: 11, rawTo: 12 });
+    expect(cold.messages[1 + 10 * 2]!.content).toContain("【第 11～12 章 定稿原文");
+    expect(cold.messages[1 + 10 * 2]!.content).not.toContain("这次没给你");
+  });
+
+  it("K 和字数上限：最近原文最多 maxRecentChapters 章、这部分超了 maxRecentChars 从最老的一章起让位（至少留一章）", async () => {
+    const dir = await makeBook(12, (chapter) => `第${chapter}章的正文，`.repeat(40));
+    const byChapters = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, maxRecentChapters: 3 });
+    expect(byChapters.coverage).toEqual({ notedThrough: 0, rawFrom: 10, rawTo: 12 });
+    // 每章 8 字 × 40 遍 = 320 字：700 字装得下 2 章（640）、装不下 3 章（960+）。
+    const byChars = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, maxRecentChars: 700 });
+    expect(byChars.coverage).toEqual({ notedThrough: 0, rawFrom: 11, rawTo: 12 });
+    const atLeastOne = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, maxRecentChars: 10 });
+    expect(atLeastOne.coverage).toEqual({ notedThrough: 0, rawFrom: 12, rawTo: 12 });
+  });
+
+  it("总预算超了：从最老的笔记起丢（最近的状态最要紧），原文保住；coverage 仍如实报盘上的笔记数", async () => {
+    const dir = await makeBook(12, (chapter) => `第${chapter}章的正文，`.repeat(10));
+    const { callModel } = fakeModel();
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 8, callModel });
+    const sizeOf = (messages: readonly BrainMessage[]): number => messages.reduce((sum, message) => sum + message.content.length, 0);
+    const full = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12 });
+    expect(full.messages).toHaveLength(1 + 8 * 2 + 1); // system + 8 对笔记 + 原文块
+    // 预算恰好装得下「system + 最近 6 对笔记 + 原文块」（第 3～8 章的笔记）。
+    const budget = sizeOf([full.messages[0]!, ...full.messages.slice(5, 17), full.messages[17]!]);
+    const trimmed = await buildColdReaderWindow({ projectDir: dir, role: ROLE, upTo: 12, maxChars: budget });
+    expect(trimmed.coverage).toEqual({ notedThrough: 8, rawFrom: 9, rawTo: 12 }); // 原文从笔记断点（第 9 章）起
+    expect(trimmed.messages).toHaveLength(1 + 6 * 2 + 1);
+    expect(trimmed.messages[1]!.content).toBe("【第 3 章（原文已省略，见你当时的笔记）】"); // 最老的两对被丢掉
+    expect(sizeOf(trimmed.messages)).toBeLessThanOrEqual(budget);
   });
 });

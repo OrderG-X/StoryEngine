@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -31,6 +31,9 @@ vi.mock("../lib/llm-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/llm-client.js")>()),
   ...llmMocks,
 }));
+
+/** 路径存在与否（冷窗口「绝不写笔记」的断言用）。 */
+const exists = (path: string): Promise<boolean> => stat(path).then(() => true, () => false);
 
 const CH1 = "客人把怀表放在绒布上就走了。周婶说这表是前天送来的。";
 const CH2 = "周婶端着茶进来。林舟把怀表锁进了柜台下的抽屉。林溪说她后天走。";
@@ -78,7 +81,7 @@ describe("核账员：三遍合并", () => {
       time: [{ ...AUNT, quote: "周婶在门口喊他", confidence: "确定" }],
     });
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.failures).toEqual([]);
     expect(result.issues.map((issue) => [issue.quote, issue.reason, issue.confidence])).toEqual([
       ["他从工作台上拿起那块怀表", "怀表锁在抽屉里，本章却在工作台上", "sure"],
@@ -178,19 +181,51 @@ describe("核账员：窗口和提示", () => {
     expect(again.calls.filter((call) => !call.json)).toHaveLength(0);
   });
 
-  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready，不核也不写笔记；进度说清读到第几章", async () => {
+  it("要补的笔记太多（超过 maxCatchUp）→ 冷窗口照核：最近 K 章原文进窗口、cold 说清范围、一个笔记都不写", async () => {
     const dir = await makeBook();
-    const { callModel, calls } = fakeModel({});
+    const { callModel, calls, checkCalls } = fakeModel({ objects: [{ ...WATCH, confidence: "sure" }] });
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, maxCatchUp: 1 });
-    expect(result).toMatchObject({ issues: [], failures: [], skipped: "not_ready", pending: { done: 0, total: 2 } });
-    expect(calls).toHaveLength(0);
+    expect(result.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
+    expect(result.failures).toEqual([]);
+    expect(result.issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表"]);
+    expect(checkCalls()).toHaveLength(3);
+    for (const { messages } of checkCalls()) {
+      expect(messages).toHaveLength(3); // system + 冷窗口原文块 + 任务
+      expect(messages[1]).toEqual({
+        role: "user",
+        content: `【第 1～2 章 定稿原文（你还没读过这些章、也没写过笔记，这次直接给你原文）】\n\n【第 1 章】\n${CH1}\n\n【第 2 章】\n${CH2}`,
+      });
+    }
+    // 冷窗口绝不写笔记：agents/ 目录都不该出现
+    expect(await exists(join(dir, "agents"))).toBe(false);
+    expect(calls.filter((call) => !call.json)).toHaveLength(0);
+  });
+
+  it("冷窗口带已有笔记：笔记按折叠形态进前缀、原文从笔记断点之后起、cold.notedThrough 说清", async () => {
+    const dir = await makeBook();
+    await writeFile(join(dir, "chapters", "0003.md"), `# 第3章\n\n${BODY}\n`, "utf-8");
+    const noteModel = fakeModel({});
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: noteModel.callModel, maxCatchUp: 10 });
+    // 第 1 章笔记已在盘上（第 2 章的故意删掉），第 4 章要补 2 章 > 1 → 冷窗口，notedThrough=1
+    await rm(join(dir, "agents", "checker", "notes", "0002.json"), { force: true });
+    const { callModel, checkCalls } = fakeModel({});
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 4, draftBody: "林舟又开门了。", callModel, maxCatchUp: 1 });
+    expect(result.cold).toEqual({ notedThrough: 1, rawFrom: 2, rawTo: 3 });
+    for (const { messages } of checkCalls()) {
+      expect(messages[0]).toEqual({ role: "system", content: CHECKER_ROLE.system });
+      expect(messages[1]!.content).toBe("【第 1 章（原文已省略，见你当时的笔记）】");
+      expect(messages[2]!.role).toBe("assistant");
+      expect(messages[3]!.content).toContain("【第 2～3 章 定稿原文");
+      // 笔记到第 1 章、原文从第 2 章起——中间没有空档，就不该出现「这次没给你」的说明
+      expect(messages[3]!.content).not.toContain("这次没给你");
+    }
   });
 
   it("补笔记中途失败：不核，如实说读前文没成（不是 not_ready）", async () => {
     const dir = await makeBook();
     const callModel: BrainCallModel = async () => { throw new Error("限流了"); };
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.issues).toEqual([]);
     expect(result.failures).toEqual(["核账员读前文没成：限流了"]);
   });
@@ -682,7 +717,7 @@ describe("核账员审章纲：checkPlanByReader", () => {
       { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "表在抽屉里锁着，不能直接取出" },
     ));
     const result = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.failures).toEqual([]);
     expect(result.problems).toHaveLength(1);
     expect(result.problems[0]).toMatchObject({ point: 1, earlierChapter: 2, reason: "表在抽屉里锁着，不能直接取出" });
@@ -700,12 +735,19 @@ describe("核账员审章纲：checkPlanByReader", () => {
     expect(calls.filter((call) => call.json)[0]!.messages).toHaveLength(2);
   });
 
-  it("要补的笔记太多 → skipped: not_ready；调用失败 → failures 如实", async () => {
+  it("要补的笔记太多 → 冷窗口照审（cold 说清范围）；调用失败 → failures 如实", async () => {
     const dir = await makeBook();
-    const notReady = fakePlanChecker(problems());
-    expect(await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: notReady.callModel, maxCatchUp: 1 }))
-      .toMatchObject({ problems: [], failures: [], skipped: "not_ready", pending: { done: 0, total: 2 } });
-    expect(notReady.calls).toHaveLength(0);
+    const coldModel = fakePlanChecker(problems(
+      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "表在抽屉里锁着，不能直接取出" },
+    ));
+    const cold = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: coldModel.callModel, maxCatchUp: 1 });
+    expect(cold.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
+    expect(cold.problems).toHaveLength(1);
+    expect(cold.problems[0]).toMatchObject({ point: 1, earlierChapter: 2 });
+    const checkCall = coldModel.calls.filter((call) => call.json)[0]!;
+    expect(checkCall.messages).toHaveLength(3); // system + 冷窗口原文块 + 任务
+    expect(checkCall.messages[1]!.content).toContain("【第 1～2 章 定稿原文");
+    expect(coldModel.calls.filter((call) => !call.json)).toHaveLength(0);
     const broken = fakePlanChecker(new Error("断流了"));
     const failed = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: broken.callModel });
     expect(failed.problems).toEqual([]);

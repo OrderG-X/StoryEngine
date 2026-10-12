@@ -65,12 +65,17 @@ export {
 } from "./planner.js";
 export {
   assembleReaderWindow,
+  buildColdReaderWindow,
+  COLD_RECENT_CHAPTERS,
+  COLD_RECENT_MAX_CHARS,
   countCommittedChapters,
   ensureReaderWindow,
   READER_WINDOW_MAX_CHARS,
   writeAtomically,
   type BrainCallModel,
   type BrainMessage,
+  type ColdCoverage,
+  type ColdReaderWindow,
   type ReaderRole,
   type VolumeNoteEntry,
 } from "./reader-window.js";

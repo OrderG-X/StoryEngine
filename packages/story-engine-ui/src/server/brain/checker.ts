@@ -26,7 +26,7 @@ import {
   type EarlierText,
 } from "../agent/continuity-v2/check-chapter.js";
 import type { ChapterPlan } from "@actalk/story-engine";
-import { ensureReaderWindow, type BrainCallModel, type BrainMessage, type ReaderRole } from "./reader-window.js";
+import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 
 export const CHECKER_ROLE: ReaderRole = {
   id: "checker",
@@ -124,10 +124,10 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  */
 export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true };
 
-/** 翻原文那一轮的问法：窗口里有被折叠的章（只看得到笔记）时，问它要翻哪些词的前文原文。 */
-export function keywordTask(chapter: number): string {
+/** 翻原文那一轮的问法：窗口里有看不到原文的章（折叠只剩笔记，或冷窗口没给到）时，问它要翻哪些词的前文原文。 */
+export function keywordTask(chapter: number, cold = false): string {
   return [
-    `这是作者刚交的第 ${chapter} 章新稿。前面的章节你只留下了笔记、看不到原文。`,
+    `这是作者刚交的第 ${chapter} 章新稿。${cold ? "你还没读完全书：更早的章节这次只有笔记或什么都没给你，看不到原文。" : "前面的章节你只留下了笔记、看不到原文。"}`,
     "要核对的地方里，有没有需要翻前文原文的？列关键词（最多 5 个）：人名、称呼、物件名、地点，以及新稿里写样子、颜色、材质、数目、方位的词——这类细节最容易和前文对不上。前文原文会按关键词检给你。都装得下就不用翻。",
     "只输出一个 JSON：{\"keywords\":[\"…\"]}",
   ].join("\n");
@@ -292,9 +292,9 @@ export interface ReaderCheckResult {
   readonly issues: ContinuityIssueV2[];
   /** 没跑成的步骤（如实说明）。三遍全失败才算这次没核成。 */
   readonly failures: string[];
-  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没核；pending＝已读到第 done 章、总共 total 章。 */
-  readonly skipped?: "not_ready";
-  readonly pending?: { readonly done: number; readonly total: number };
+  /** 冷窗口＝核账员还没读完全书（笔记要补的太多，后台在补），这次对照的是已有笔记 + 最近 K 章原文；
+   *  cold 说清范围，回执文字据此如实说「更早的细节可能漏」。R4.4 起不再跳过。 */
+  readonly cold?: ColdCoverage;
 }
 
 /**
@@ -307,8 +307,10 @@ async function lookupEarlierPassages(input: {
   readonly draftBody: string;
   readonly window: readonly BrainMessage[];
   readonly callModel: BrainCallModel;
+  /** 冷窗口口径：问法如实说「还没读完全书」，不说「只留下了笔记」。 */
+  readonly cold?: boolean;
 }): Promise<{ readonly prefix: readonly BrainMessage[]; readonly passages?: string; readonly failure?: string }> {
-  const ask: BrainMessage = { role: "user", content: `【新稿：第 ${input.chapter} 章】\n${input.draftBody}\n\n${keywordTask(input.chapter)}` };
+  const ask: BrainMessage = { role: "user", content: `【新稿：第 ${input.chapter} 章】\n${input.draftBody}\n\n${keywordTask(input.chapter, input.cold === true)}` };
   try {
     const reply = (await input.callModel([...input.window, ask], { json: true })).trim();
     const keywords = parseKeywords(reply);
@@ -349,6 +351,7 @@ export async function checkChapterByReader(input: {
   const role = checkerRoleFor(variant.structuredNotes);
   let window: BrainMessage[];
   let foldedChapters: number;
+  let cold: ColdCoverage | undefined;
   try {
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
@@ -360,10 +363,20 @@ export async function checkChapterByReader(input: {
       ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
     }));
     if (ready.missing > 0) {
-      return { issues: [], failures: [], skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
+      // R4.4 冷窗口兜底：要补的笔记太多（后台补读还在跑）不再跳过——已有笔记 + 最近 K 章原文先核，范围如实带回执。
+      const built = await buildColdReaderWindow({
+        projectDir: input.projectDir,
+        role,
+        upTo: input.chapter - 1,
+        ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      });
+      window = built.messages;
+      foldedChapters = built.foldedChapters;
+      cold = built.coverage;
+    } else {
+      window = ready.messages;
+      foldedChapters = ready.foldedChapters;
     }
-    window = ready.messages;
-    foldedChapters = ready.foldedChapters;
   } catch (error) {
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成。
     return { issues: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
@@ -376,9 +389,9 @@ export async function checkChapterByReader(input: {
       .then((read) => describeTimelineForChapter(read.timeline, input.chapter))
       .catch(() => undefined)
     : undefined;
-  // 前文有被折叠的章（原文不在窗口里）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。
+  // 前文有看不到原文的章（折叠只剩笔记 / 冷窗口没给到）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。
   const lookup = foldedChapters > 0
-    ? await lookupEarlierPassages({ projectDir: input.projectDir, chapter: input.chapter, draftBody: input.draftBody, window, callModel: input.callModel })
+    ? await lookupEarlierPassages({ projectDir: input.projectDir, chapter: input.chapter, draftBody: input.draftBody, window, callModel: input.callModel, ...(cold ? { cold: true } : {}) })
     : { prefix: window };
   // 新稿这条消息三遍共用：新稿本体 + 时间线表（B，且 F 没开）+ 翻到的原文（T5）——都拼在新稿后面、核账提示前面（离要判的话最近）。
   const draftParts = (timeline: string | undefined): string => [
@@ -433,7 +446,7 @@ export async function checkChapterByReader(input: {
   }
   // D「确定」门槛：最后加一道确定性的闸，压「确定」的误报和波动。
   if (variant.sureGate) issues = applySureGate(issues, input.chapter, input.draftBody, earlier);
-  return { issues, failures };
+  return { issues, failures, ...(cold ? { cold } : {}) };
 }
 
 // ---------- 审章纲（2026-10-12 编辑部第 3 步） ----------
@@ -451,9 +464,8 @@ export interface ReaderPlanCheckResult {
   /** earlierQuote 已由代码逐字核对过真在前文里（抄不出的在解析时丢掉）。 */
   readonly problems: readonly PlanProblem[];
   readonly failures: string[];
-  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没审；pending＝已读到第 done 章、总共 total 章。 */
-  readonly skipped?: "not_ready";
-  readonly pending?: { readonly done: number; readonly total: number };
+  /** 冷窗口＝核账员还没读完全书，这次按已有笔记 + 最近 K 章原文审的纲（R4.4 起不再跳过）。 */
+  readonly cold?: ColdCoverage;
 }
 
 /** 审章纲提示：核账员窗口（读到 N-1）后接「这是第 N 章的章纲（还没写正文）」+ 章纲要点，找和前文矛盾的要点。 */
@@ -539,6 +551,7 @@ export async function checkPlanByReader(input: {
   readonly earlier?: EarlierText;
 }): Promise<ReaderPlanCheckResult> {
   let window: BrainMessage[];
+  let cold: ColdCoverage | undefined;
   try {
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
@@ -548,8 +561,19 @@ export async function checkPlanByReader(input: {
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
     }));
-    if (ready.missing > 0) return { problems: [], failures: [], skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
-    window = ready.messages;
+    if (ready.missing > 0) {
+      // R4.4 冷窗口兜底：没读完也照审（已有笔记 + 最近 K 章原文），范围如实带回执。
+      const built = await buildColdReaderWindow({
+        projectDir: input.projectDir,
+        role: CHECKER_ROLE,
+        upTo: input.plan.chapter - 1,
+        ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      });
+      window = built.messages;
+      cold = built.coverage;
+    } else {
+      window = ready.messages;
+    }
   } catch (error) {
     return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
@@ -559,7 +583,7 @@ export async function checkPlanByReader(input: {
       [...window, { role: "user", content: planCheckTask(input.plan.chapter, input.plan) }],
       { json: true },
     ));
-    return { problems: parsePlanProblems(text, input.plan, earlier), failures: [] };
+    return { problems: parsePlanProblems(text, input.plan, earlier), failures: [], ...(cold ? { cold } : {}) };
   } catch (error) {
     return { problems: [], failures: [`审章纲没跑成：${error instanceof Error ? error.message : String(error)}`] };
   }

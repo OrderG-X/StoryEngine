@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, readChapterPlan } from "@actalk/story-engine";
@@ -109,13 +109,20 @@ describe("章纲员：拟章纲", () => {
     expect(await readChapterPlan(failedDir, 3)).toBeUndefined();
   });
 
-  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready + pending（读到第几章），不调模型", async () => {
+  it("要补的笔记太多（超过 maxCatchUp）→ 冷窗口照拟：最近 K 章原文进窗口、cold 说清范围、一个笔记都不写", async () => {
     const dir = await makeBook();
     const { callModel, calls } = fakePlanner();
     const result = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel, maxCatchUp: 1 });
-    expect(result).toMatchObject({ ok: false, skipped: "not_ready", reason: expect.stringContaining("章纲员要补的读书笔记超过 1 章") });
-    expect(result.ok === false && result.pending).toEqual({ done: 0, total: 2 });
-    expect(calls).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    expect(result.ok === true && result.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
+    expect(result.ok === true && result.plan.summary).toBe("许棠等林溪的回信");
+    const jsonCalls = calls.filter((call) => call.json);
+    expect(jsonCalls).toHaveLength(1);
+    expect(jsonCalls[0]!.messages[0]).toEqual({ role: "system", content: PLANNER_ROLE.system });
+    expect(jsonCalls[0]!.messages[1]!.content).toContain("【第 1～2 章 定稿原文");
+    expect(jsonCalls[0]!.messages).toHaveLength(3); // system + 冷窗口原文块 + 任务
+    expect(calls.filter((call) => !call.json)).toHaveLength(0);
+    expect(await stat(join(dir, "agents")).then(() => true, () => false)).toBe(false); // 冷窗口不落盘
   });
 
   it("补笔记中途失败 → ok:false 如实说读前文没成（不是 not_ready）；已写的笔记留着", async () => {

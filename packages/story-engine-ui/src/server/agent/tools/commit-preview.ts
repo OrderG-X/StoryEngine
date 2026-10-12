@@ -58,7 +58,7 @@ export type ProposeFactsFn = (args: {
   readonly draftText: string;
 }) => Promise<FactProposal>;
 
-const defaultProposeFacts: ProposeFactsFn = async ({ projectDir, chapter, draftText }) =>
+export const defaultProposeFacts: ProposeFactsFn = async ({ projectDir, chapter, draftText }) =>
   proposeFactChanges({
     projectDir,
     chapter,
@@ -78,13 +78,15 @@ const LEDGER_MAX_CATCH_UP = 10;
 
 /**
  * 生产用声明路由（2026-10-12 编辑部 T2 起 = 记账员；R3 删旧声明后只有这一条路）：拿得到 projectDir 就走记账员
- * （跟读窗口里声明，读过前文）。记账员要补的笔记太多（not_ready）→ 这次按 fallback 如实标注
- * （declarationStatus=fallback 的通道会把「这章的线索没记上」带进 summary），笔记在后台补（点名 ledger）。
- * 任何失败 → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。
- * ledgerCallModel 注入点供单测（假模型），生产用配置的模型。
+ * （跟读窗口里声明，读过前文）。记账员要补的笔记太多 → 冷窗口（R4.4）：已有笔记 + 最近 K 章原文照记账
+ * （不是 fallback，账照记），范围并进 outcome.cold 让预览卡如实标，笔记在后台补（点名 ledger）。
+ * 模型调用失败 / 坏 JSON → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。
+ * ledgerCallModel / ledgerMaxCatchUp 注入点供单测和评测（评测传 0 强制每章都走冷窗口），生产用配置的模型。
  */
 export function buildDeclareDeltaRouter(options: {
   readonly ledgerCallModel?: BrainCallModel;
+  /** 记账员当场最多补多少章笔记（缺的超过就走冷窗口）；缺省 LEDGER_MAX_CATCH_UP。传 0 = 一律冷窗口。 */
+  readonly ledgerMaxCatchUp?: number;
 } = {}): DeclareDeltaFn {
   return async (input) => {
     const { chapter, draft, projectDir, openThreadTitles, establishedNames, openGoalTitles } = input;
@@ -96,13 +98,13 @@ export function buildDeclareDeltaRouter(options: {
       chapter,
       draft,
       callModel: options.ledgerCallModel ?? callConfiguredBrainModel,
-      maxCatchUp: LEDGER_MAX_CATCH_UP,
+      maxCatchUp: options.ledgerMaxCatchUp ?? LEDGER_MAX_CATCH_UP,
       ...(openThreadTitles ? { openThreadTitles } : {}),
       ...(establishedNames ? { establishedNames } : {}),
       ...(openGoalTitles ? { openGoalTitles } : {}),
     });
-    if (viaLedger.skipped === "not_ready") {
-      // 记账员还在读前文：这次声明按 fallback 如实标注，笔记在后台补（点名 ledger，补不成只 warn，下次接着补）。
+    if (viaLedger.cold) {
+      // 记账员还没读完全书：账照记了（冷窗口），笔记后台接着补（点名 ledger，补不成只 warn，下次接着补）。
       void catchUpReaders(projectDir, chapter - 1, { ...(options.ledgerCallModel ? { callModel: options.ledgerCallModel } : {}), roles: ["ledger"] });
     }
     return viaLedger.outcome;
@@ -291,6 +293,8 @@ export async function buildCommitPreviewToolOutput(input: {
   // 可能塞裸 entity id / 本地绝对路径），进 semanticQualityIssues 与 summary 前必须同款消毒。
   const deltaRejectedWarnings = collectDeltaRejectedWarnings(commitPlan, nameById);
   const continuityBreakWarning = collectContinuityBreakWarning(declaration);
+  // 冷窗口记账（R4.4）：账照记了，但记账员还没读完全书——范围如实说，摘要和账本清单各标一句。
+  const declarationColdNotice = describeDeclarationCold(declarationOutcome, chapter);
   // 伏笔/线索/目标待收口：引擎按里程碑制（新停滞头两章 + 长期停滞每 10 章重提）确定性选出本章该提醒的条目，
   // 这里合并成一份结构化提醒（含 r7 新接入的停滞目标——此前 staleGoalWarnings 从没到过用户面前），
   // 升级成带类型的 warning，供 UI 固定展示 + 模型忠实转达。全量底数走 staleBacklog 进 digest，绝不静默。题材中立。
@@ -353,6 +357,7 @@ export async function buildCommitPreviewToolOutput(input: {
       plan: commitPlan.commitPlan,
       ...(factProposal ? { facts: factProposal } : {}),
       ...(declarationOutcome.status === "fallback" ? { structureMissing: declarationOutcome.reason ?? "" } : {}),
+      ...(declarationColdNotice ? { coldLedgerNote: declarationColdNotice } : {}),
       ...(timelineEntry && storyTimeline
         ? {
           time: { day: timelineEntry.day, label: formatChapterSpan(storyTimeline, timelineEntry), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },
@@ -389,6 +394,7 @@ export async function buildCommitPreviewToolOutput(input: {
     continuityBreakWarning,
     ...(lengthShortfall ? { lengthShortfall } : {}),
     ...(declarationFallbackNotice ? { declarationFallbackNotice } : {}),
+    ...(declarationColdNotice ? { declarationColdNotice } : {}),
   });
   return {
     chapter,
@@ -458,6 +464,18 @@ function collectContinuityBreakWarning(declaration: ChapterDeltaDeclaration | un
     type: "continuity_break",
     message: `本章开头与上一章结尾疑似衔接断裂${safeNote ? `：${safeNote}` : ""}。请确认这是有意的时间跳转，还是需要改稿补足承接。`,
   };
+}
+
+/** 冷窗口记账的人话标注（R4.4）：记账员还没读完全书、这次按最近 K 章原文 + 已读笔记记的账。不是 fallback，账照记。 */
+function describeDeclarationCold(outcome: ChapterDeltaDeclarationOutcome, chapter: number): string | undefined {
+  const cold = outcome.status === "model" ? outcome.cold : undefined;
+  if (!cold) return undefined;
+  const parts = [
+    ...(cold.notedThrough > 0 ? [`已读笔记（到第 ${cold.notedThrough} 章）` ] : []),
+    ...(cold.rawTo > 0 ? [`第 ${cold.rawFrom}～${cold.rawTo} 章原文`] : []),
+  ];
+  const basis = parts.length > 0 ? parts.join(" + ") : "最近几章原文";
+  return `记账员还没读完全书（第 ${cold.notedThrough} / ${Math.max(chapter - 1, cold.rawTo)} 章），这次按${basis}记账，更早的细节可能没记全；它读完全书后，之后的定稿按全书记`;
 }
 
 interface PlanStaleWarningLike {
@@ -549,6 +567,8 @@ function buildPreviewSummary(input: {
   readonly lengthShortfall?: string;
   /** 已消毒的「声明未生效」整句（describeDeclarationFallback 产出）；model 状态不传。 */
   readonly declarationFallbackNotice?: string;
+  /** 冷窗口记账的整句（describeDeclarationCold 产出，status=model 时才有）；账照记，但范围要如实说。 */
+  readonly declarationColdNotice?: string;
 }): { readonly summary: string; readonly modelHint?: string } {
   const base = input.canCommit
     ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。点预览卡上的「确认定稿」即可写入。`
@@ -587,6 +607,10 @@ function buildPreviewSummary(input: {
   // 声明未生效：本章 mainEvent/伏笔/线索等按引擎确定性规则兜底（不是坏事、但不能瞒）——用户据此决定是否重跑预览。
   if (input.declarationFallbackNotice) {
     summary += input.declarationFallbackNotice;
+  }
+  // 冷窗口记账：账照记，但记账员还没读完全书——范围如实说，别让作者以为这章是按全书核着记的（R4.4）。
+  if (input.declarationColdNotice) {
+    summary += `【${input.declarationColdNotice}】`;
   }
   const hints: string[] = [];
   if (input.canCommit) {

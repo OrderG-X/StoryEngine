@@ -264,6 +264,37 @@ describe("commit_preview", () => {
     expect(out.summary).toContain("跨章衔接提醒");
   });
 
+  it("冷窗口记账（outcome.cold，R4.4）→ 账照记（declarationStatus=model），摘要和账本清单都如实标对照范围", async () => {
+    const projectDir = await makeProject("冷窗口记账", "林远");
+    await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n林远已经在黑龙潭边等候。\n", "utf-8");
+    await writeDraft(projectDir, 2, longDraft(2, "林远"));
+
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 2,
+      declareDelta: async () => ({
+        status: "model" as const,
+        declaration: {
+          chapter: 2,
+          mainEvent: { summary: "林远掂量账册", quote: "林远在会议室外停下脚步" },
+          seededForeshadowing: [],
+          resolvedForeshadowing: [],
+          resourceDeltas: [],
+          keyLeads: [],
+        },
+        cold: { notedThrough: 0, rawFrom: 1, rawTo: 1 },
+      }),
+    });
+
+    expect(out.canCommit).toBe(true);
+    expect(out.declarationStatus).toBe("model");
+    expect(out.summary).toContain("【记账员还没读完全书（第 0 / 1 章），这次按第 1～1 章原文记账，更早的细节可能没记全；它读完全书后，之后的定稿按全书记】");
+    expect(out.ledgerChecklist?.[0]).toMatchObject({ id: "cold_ledger", kind: "cold_ledger", removable: false });
+    expect(out.ledgerChecklist?.[0]?.label).toContain("记账员还没读完全书");
+    // 冷窗口不是 fallback：没有「这章的线索没记上」那类兜底提示。
+    expect(out.summary).not.toContain("没记上");
+  });
+
   it("声明 continuityWithPrevious=true 或缺省 → 不产生 continuity_break warning", async () => {
     const projectDir = await makeProject("衔接正常", "林远");
     await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n林远已经在黑龙潭边等候。\n", "utf-8");

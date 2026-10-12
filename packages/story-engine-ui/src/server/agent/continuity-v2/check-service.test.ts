@@ -129,52 +129,51 @@ describe("核账服务：核账记忆", () => {
   });
 });
 
-describe("核账服务：核账员还没读完前文（T5 后台补读）", () => {
-  it("要补的笔记超过 10 章 → 如实说读到第几章、这次没核；笔记在后台补；补好后下次走核账员", async () => {
+describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + 后台补读）", () => {
+  it("要补的笔记超过 10 章 → 冷窗口照核（ok:true、coverage 说清范围），笔记后台接着补；补好后下次按全书核", async () => {
     const dir = await makeBook(12);
     const reader = readerModel();
     const first = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
-    // 不装作核过：ok=false，summary 说清读到第几章；结构化 pending 让消费方区分「还在读」和「出错」（R4.1）。
-    expect(first.ok).toBe(false);
-    expect(first.summary).toContain("还在读这本书的前文：第 0 / 12 章");
-    expect(first.summary).toContain("这次没有核");
-    expect(first.sure).toEqual([]);
-    expect(first.maybe).toEqual([]);
-    expect(first.pending).toEqual({ done: 0, total: 12 });
-    expect(reader.calls.checks).toBe(0);
-    // 笔记在后台按顺序补（每个角色一条队列），进度落盘给界面
+    // 不跳过也不装作核了全书：核了（ok:true、问题照出），范围如实说。
+    expect(first.ok).toBe(true);
+    expect(first.coverage).toEqual({ mode: "cold", notedThrough: 0, rawFrom: 5, rawTo: 12 });
+    expect(first.summary).toContain("核账员还没读完全书（第 0 / 12 章）");
+    expect(first.summary).toContain("第 5～12 章原文 + 账本");
+    expect(first.summary).toContain("更早的细节可能漏");
+    expect(first.sure.map((item) => item.quote)).toContain(AUNT.quote);
+    expect(first.reused).toBe(false);
+    // 冷窗口不写核账记忆（小范围的结果不能当全书核过来缓存）；笔记在后台按顺序补，进度落盘给界面
     await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
     const readProgress = () => readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text));
     await vi.waitFor(async () => expect(await readProgress()).toMatchObject({ role: "checker", reading: false, done: 12, total: 12 }), { timeout: 5_000 });
-    // 补好了：同一份正文再核就走核账员（这次没核不写核账记忆，不会拿「没核」复用）
+    // 补好了：同一份正文再核就是读完全书的核账员（没有 coverage，也不会拿冷窗口结果复用）
     const second = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
     expect(second.reused).toBe(false);
     expect(second.ok).toBe(true);
+    expect(second.coverage).toBeUndefined();
     expect(second.sure.map((item) => item.quote)).toContain(AUNT.quote);
-    expect(reader.calls.checks).toBe(3);
   });
 
   it("R4.3 分母统一：核已定稿章的稿子时，回执和进度行同口径（共 y 章＝已定稿章数）", async () => {
     const dir = await makeBook(12);
     const reader = readerModel();
     const result = await checkChapterBody(dir, 12, BODY, { readerCallModel: reader.callModel });
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.coverage).toEqual({ mode: "cold", notedThrough: 0, rawFrom: 4, rawTo: 11 });
     // 旧口径的分母是「本章 − 1」＝11（验收 3.3 里 57 对 58 就是这个差）；统一成已定稿章数 12。
-    expect(result.pending).toEqual({ done: 0, total: 12 });
     expect(result.summary).toContain("第 0 / 12 章");
     // 后台补读也按统一后的总数排（补齐 12 章，读完就能按读完全书核）。
     await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
   });
 
-  it("后台补笔记失败：只 warn、进度如实记错；这次的结果不受影响", async () => {
+  it("冷窗口三遍全失败：如实说没核成（ok:false + 范围），后台补读失败只 warn、进度如实记错", async () => {
     const dir = await makeBook(12);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const broken: BrainCallModel = async () => { throw new Error("限流了"); };
     const result = await checkChapterBody(dir, 13, BODY, { readerCallModel: broken });
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain("还在读");
-    // 「还在读」的结构化进度照给（后台补读失败也不影响这次回执的形状）。
-    expect(result.pending).toEqual({ done: 0, total: 12 });
+    expect(result.summary).toContain("核账没跑成");
+    expect(result.summary).toContain("还没读完全书");
     await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5_000 });
     // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）
     const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));

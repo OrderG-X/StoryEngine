@@ -205,26 +205,30 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
   });
 
-  it("章纲员要补的笔记太多 → 这次按没有章纲出稿、如实说读到第几章（不阻断出稿）", async () => {
+  it("章纲员要补的笔记太多 → 冷窗口照拟照审，note 如实标对照范围（不再「按没有章纲出稿」）", async () => {
     const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
-    // 12 章都没笔记、maxCatchUp 是 10 → not_ready。
+    // 12 章都没笔记、maxCatchUp 是 10 → 冷窗口（已有笔记 0 章 + 最近 8 章原文）。
     const projectDir = await makeBook();
     for (let n = 2; n <= 12; n += 1) {
       await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
     }
     const planner = fakePlannerCallModel();
+    const checker = fakePlanCheckCallModel("{}");
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
+      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(result.reused).toBe(false);
-    expect(result.plan).toBeUndefined();
-    expect(result.note).toContain("章纲员还在读这本书的前文（第 0 / 12 章）");
-    expect(result.note).toContain("这次按没有章纲出稿");
-    // 这次没有让章纲员拟纲（后台补笔记不算拟纲）。
-    expect(planner.calls.filter((call) => call.json)).toHaveLength(0);
+    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
+    expect(result.note).toContain("章纲员还没读完全书（第 0 / 12 章）");
+    expect(result.note).toContain("这次按第 5～12 章原文拟的纲");
+    expect(result.note).toContain("核账员还没读完全书（第 0 / 12 章）");
+    expect(result.note).toContain("这次按第 5～12 章原文审的纲");
+    // 拟了纲、也审了纲（不是空手出稿）。
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
+    expect(checker.calls).toEqual([1]);
   });
 
-  it("核账员还没读完前文 → 章纲照用、这次没审（如实说），不拿没读过前文的路顶", async () => {
+  it("核账员还没读完前文 → 冷窗口照审（note 如实标），章纲照用", async () => {
     const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const { rm } = await import("node:fs/promises");
     const projectDir = await makeBook();
@@ -245,8 +249,10 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
       projectDir, chapter: 15, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    expect(result.note).toContain("核账员还在读前文");
-    expect(result.note).toContain("这次没审章纲");
+    // 章纲员只缺 3 份（当场补齐、正常拟）；核账员缺 13 份 → 冷窗口审（已有笔记 0 章 + 第 7～14 章原文）。
+    expect(result.note).toContain("核账员还没读完全书（第 0 / 14 章）");
+    expect(result.note).toContain("这次按第 7～14 章原文审的纲");
+    expect(result.note).not.toContain("这次没审章纲");
   });
 
   it("章纲员拟不成 → 没有章纲 + 如实说明照常出稿", async () => {
