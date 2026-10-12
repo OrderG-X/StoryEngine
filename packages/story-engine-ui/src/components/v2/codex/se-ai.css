@@ -86,6 +86,13 @@
   .cap-bar{margin:6px 14px 4px;}
   .cap-group-title{color:var(--faint);font-weight:500;letter-spacing:0;font-size:12px;}
 
+  /* ── 核账员后台补读进度（T5 长书）：核账按钮上方一行安静的小字，点跟着金点闪 ── */
+  .se-checker-reading{
+    display:flex;align-items:center;gap:7px;margin:8px 14px 0;padding:0 2px;
+    font-size:12px;color:var(--muted);
+  }
+  .se-checker-reading-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+
   /* ── 消息 ── */
   .ai-body{padding:16px 14px 8px;gap:14px;animation:none;}
   .msg{font-size:14px;line-height:1.7;}

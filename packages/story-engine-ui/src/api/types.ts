@@ -77,6 +77,8 @@ export interface StateOverview {
   readonly characterDetailSummary?: StateOverviewCharacterDetailSummary;
   readonly foundationCompleteness?: StateOverviewFoundationCompleteness;
   readonly uiChapterFiles?: readonly StateOverviewChapterFileState[];
+  /** 核账员后台补读进度（agents/checker/progress.json 有才带）：reading 时界面在核账按钮旁显示读到第几章。 */
+  readonly checkerReading?: { readonly reading: boolean; readonly done: number; readonly total: number };
   readonly maintenance: {
     readonly diagnosticsAvailable: boolean;
     readonly cleanupVisibleCount: number;

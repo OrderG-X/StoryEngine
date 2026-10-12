@@ -86,6 +86,22 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
 };
 
 /**
+ * 核账员后台补读进度（T5 长书）：只在还在读时显示（读了多少见 progress.json，随 overview 刷新，不新开轮询）。
+ * 读停了（出错 / 读完）不显示——读完自然消失，出错时点「核账」会说清原因，不在这行里谎称还在读。
+ */
+export function CheckerReadingNote({ progress }: {
+  readonly progress?: { readonly reading: boolean; readonly done: number; readonly total: number } | null;
+}) {
+  if (!progress?.reading) return null;
+  return (
+    <div className="se-checker-reading" role="status">
+      <span className="se-checker-reading-dot" aria-hidden="true" />
+      核账员在读前文：第 {progress.done} / {progress.total} 章，读完就能按读完全书核账
+    </div>
+  );
+}
+
+/**
  * 折叠态竖条。展开 handler 只挂在 aside 上：button 不自带 onClick，点击经冒泡触发一次。
  * （此前 aside+button 双 handler 各自取反，一次点击展开两次=净零，「点按钮等于没点」。）
  */
@@ -436,6 +452,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         ) : null}
       </div>
       <ChatContextMeter />
+
+      {/* ── 核账员后台补读进度（T5 长书）：数据随现有的 overview 刷新走（开书 / 各工具回包），不新开轮询 ── */}
+      <CheckerReadingNote progress={props.overview?.checkerReading} />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
       <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />

@@ -41,7 +41,7 @@ describe("专员窗口：补笔记", () => {
     const dir = await makeBook(3);
     const { callModel, calls } = fakeModel();
     const progress: number[] = [];
-    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel, onProgress: (chapter) => progress.push(chapter) });
+    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel, onProgress: (chapter) => { progress.push(chapter); } });
     expect(out).toMatchObject({ built: 3, reused: 0, missing: 0 });
     expect(progress).toEqual([1, 2, 3]);
     expect(calls).toHaveLength(3);
@@ -63,7 +63,7 @@ describe("专员窗口：补笔记", () => {
     const dir = await makeBook(2);
     const { callModel, calls } = fakeModel();
     const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 0, callModel });
-    expect(out).toEqual({ messages: [{ role: "system", content: "你是测试专员。" }], built: 0, reused: 0, missing: 0 });
+    expect(out).toMatchObject({ messages: [{ role: "system", content: "你是测试专员。" }], built: 0, reused: 0, missing: 0, volumesBuilt: 0, foldedChapters: 0, readThrough: 0 });
     expect(calls).toHaveLength(0);
   });
 
@@ -158,7 +158,7 @@ describe("专员窗口：maxCatchUp", () => {
     const dir = await makeBook(5);
     const { callModel, calls } = fakeModel();
     const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel, maxCatchUp: 3 });
-    expect(out).toEqual({ messages: [], built: 0, reused: 0, missing: 5 });
+    expect(out).toMatchObject({ messages: [], built: 0, reused: 0, missing: 5, volumesBuilt: 0, foldedChapters: 0, readThrough: 0 });
     expect(calls).toHaveLength(0);
     expect(await notesOf(dir)).toEqual([]);
   });
@@ -277,5 +277,107 @@ describe("专员窗口：折叠和缓存前缀", () => {
       const sent = calls[chapter - 1]!.messages;
       expect(out.messages.slice(0, sent.length)).toEqual(sent);
     }
+  });
+});
+
+describe("专员窗口：卷笔记（T5 长书）", () => {
+  const VOLUME_ROLE: ReaderRole = { ...ROLE, volumeTask: "缩写成一份卷笔记。" };
+  /** 长正文 + 长笔记的书：让折叠和卷笔记都真的触发（预算 12000 时折光 25 章笔记仍超，非卷不可）。 */
+  const longBook = (chapters: number) =>
+    makeBook(chapters, (chapter) => `第${chapter}章的正文。${"内容".repeat(400)}`);
+  const VOLUME_BUDGET = 12_000;
+  /** 假模型：笔记回 600 字；卷笔记（消息里带卷笔记要求）回 900 字。笔记里带个标签，改标签就能让笔记内容真的变。 */
+  function volumeFakeModel(noteChars = 600, volumeChars = 900, tag = "") {
+    const calls: { readonly messages: readonly BrainMessage[]; readonly json: boolean }[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      calls.push({ messages: [...messages], json: options.json });
+      const last = messages.at(-1)!.content;
+      if (last.includes("缩写成一份卷笔记")) return `${tag}${"卷".repeat(volumeChars - 1)}。`;
+      return `${tag}${"笔".repeat(noteChars - 2)}第${/第 (\d+) 章/u.exec(last)?.[1]}章。`;
+    };
+    return { callModel, calls };
+  }
+  const volumesOf = async (dir: string) =>
+    (await readdir(join(dir, "agents", VOLUME_ROLE.id, "volumes")).catch(() => [] as string[])).sort();
+
+  it("折掉原文还超预算：把整块的十份笔记缩写成一份卷笔记，窗口里一条卷笔记代替十章、总字数 ≤ 预算", async () => {
+    const dir = await longBook(25);
+    const { callModel, calls } = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel, maxChars: VOLUME_BUDGET });
+    // 卷笔记真的生成了、存了盘（带十章笔记的哈希）
+    expect(out.volumesBuilt).toBeGreaterThan(0);
+    expect(await volumesOf(dir)).toContain("1-10.json");
+    const stored = JSON.parse(await readFile(join(dir, "agents", VOLUME_ROLE.id, "volumes", "1-10.json"), "utf-8"));
+    expect(stored).toMatchObject({ from: 1, to: 10 });
+    expect(stored.note).toContain("卷");
+    expect(stored.textHash).toMatch(/^[0-9a-f]{16}$/u);
+    // 窗口：第 1～10 章只剩一条 user 卷笔记标 + 一条 assistant 卷笔记；11 章起照旧
+    expect(out.messages[1]).toEqual({ role: "user", content: "【第 1～10 章（只留卷笔记）】" });
+    expect(out.messages[2]).toEqual({ role: "assistant", content: stored.note });
+    expect(out.messages[3]!.content).toContain("【第 11 章");
+    // 预算：任何消息加起来不超
+    expect(out.messages.reduce((sum, message) => sum + message.content.length, 0)).toBeLessThanOrEqual(VOLUME_BUDGET);
+    // 生成卷笔记的调用：材料是那十章的笔记（带章标），不是正文
+    const volumeCall = calls.find((call) => call.messages.at(-1)!.content.includes("缩写成一份卷笔记"))!;
+    expect(volumeCall.messages.at(-1)!.content).toContain("【1 章的读书笔记】");
+    expect(volumeCall.messages.at(-1)!.content).toContain("【10 章的读书笔记】");
+    expect(volumeCall.messages.at(-1)!.content).not.toContain("第1章的正文");
+  });
+
+  it("卷笔记里的笔记变了（某章正文改了）→ 哈希对不上，卷笔记作废重写", async () => {
+    const dir = await longBook(25);
+    const first = volumeFakeModel();
+    await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: first.callModel, maxChars: VOLUME_BUDGET });
+    // 改第 3 章正文 → 3 及以后的笔记重写（内容也真的不一样）→ 盖着它们的卷笔记（1-10）哈希对不上、重生成
+    await writeChapter(dir, 3, "第3章的正文，改过了。");
+    const second = volumeFakeModel(600, 900, "改");
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
+    expect(out.built).toBe(23); // 3～25 章的笔记重写
+    expect(out.volumesBuilt).toBeGreaterThan(0);
+    const volumeCalls = second.calls.filter((call) => call.messages.at(-1)!.content.includes("缩写成一份卷笔记"));
+    expect(volumeCalls.length).toBeGreaterThan(0);
+    expect(volumeCalls[0]!.messages.at(-1)!.content).toContain("改"); // 材料用的是重写后的笔记
+  });
+
+  it("卷笔记的提示词改了 → 卷笔记作废重写（笔记不作废）", async () => {
+    const dir = await longBook(25);
+    await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: volumeFakeModel().callModel, maxChars: VOLUME_BUDGET });
+    const second = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: { ...VOLUME_ROLE, volumeTask: "换一种缩写法。" }, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
+    expect(out.built).toBe(0); // 笔记全复用
+    expect(out.volumesBuilt).toBeGreaterThan(0); // 卷笔记重写
+  });
+
+  it("全卷完还超预算：同层卷笔记再合成更高级的卷笔记，窗口照样 ≤ 预算（任何章数都不超）", async () => {
+    const dir = await longBook(115); // 11 个整块 + 5 章散章
+    const { callModel } = volumeFakeModel(600, 900);
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 115, callModel, maxChars: 6_000 });
+    expect(out.messages.reduce((sum, message) => sum + message.content.length, 0)).toBeLessThanOrEqual(6_000);
+    // 逐级合成过：盘上有盖超过 10 章的卷笔记（十条一卷合成的）
+    const names = await volumesOf(dir);
+    const spans = names.map((name) => name.replace(/\.json$/u, "").split("-").map(Number));
+    expect(spans.some(([from, to]) => to - from + 1 > 10)).toBe(true);
+    // 窗口开头是最高级那条
+    expect(out.messages[1]!.content).toMatch(/^【第 1～\d+ 章（只留卷笔记）】$/u);
+  });
+
+  it("卷笔记盖住的章记进 foldedChapters；写每一章笔记用的窗口也 ≤ 预算（发给模型的从不超）", async () => {
+    const dir = await longBook(25);
+    const { callModel, calls } = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel, maxChars: VOLUME_BUDGET });
+    expect(out.foldedChapters).toBe(25); // 25 章原文全折掉（卷笔记 + 折叠）
+    for (const call of calls) {
+      const size = call.messages.reduce((sum, message) => sum + message.content.length, 0);
+      expect(size).toBeLessThanOrEqual(VOLUME_BUDGET + 3_000); // 写下一章那条 user 消息（正文 + 要求）在预算外
+    }
+  });
+
+  it("第二次调用：卷笔记全复用，不调模型", async () => {
+    const dir = await longBook(25);
+    await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: volumeFakeModel().callModel, maxChars: VOLUME_BUDGET });
+    const second = volumeFakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
+    expect(second.calls).toHaveLength(0);
+    expect(out).toMatchObject({ built: 0, reused: 25, volumesBuilt: 0 });
   });
 });

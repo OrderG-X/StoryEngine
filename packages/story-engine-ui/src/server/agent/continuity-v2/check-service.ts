@@ -8,9 +8,10 @@
 import { describeTimelineForChapter, readFactLedgerStrict, readStoryTimeline, type FactEntry } from "@actalk/story-engine";
 import {
   callConfiguredBrainModel,
-  catchUpReaders,
   checkChapterByReader,
+  CHECKER_ROLE,
   isReaderCheckerEnabled,
+  startReaderCatchUp,
   type BrainCallModel,
 } from "../../brain/index.js";
 import {
@@ -57,9 +58,8 @@ const toItem = (issue: ContinuityIssueV2): ChapterCheckItem => ({
   reason: issue.reason,
 });
 
-/** 核账员那一路最多当场补多少章笔记；超过就这次改走旧核账，笔记在后台补。 */
+/** 核账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补（T5），这次不硬核。 */
 const READER_MAX_CATCH_UP = 10;
-const FALLBACK_NOTE = "（核账员还在读前文，这次用的是旧核账。）";
 
 export interface ChapterCheckOptions {
   /** 正文没改也重新核。 */
@@ -73,7 +73,7 @@ export interface ChapterCheckOptions {
 /**
  * 核账员那一路：账本数字对账（确定性层）+ 核账员三遍，按组合查错同样的规则合并去重（账本的排前面）。
  * 上次的问题两边原句还在的照带，把握沿用上次；不再复核（核账员自己给把握）。
- * 返回 undefined＝补笔记太多、这次没核（调用方改走旧核账）。
+ * 返回 notReady＝要补的笔记太多、这次没核（补到第几章在里面，调用方如实说、后台接着补）。
  */
 async function checkByReader(input: {
   readonly projectDir: string;
@@ -83,7 +83,7 @@ async function checkByReader(input: {
   readonly carryOver: readonly ContinuityIssueV2[];
   readonly ledgerFacts?: readonly FactEntry[];
   readonly callModel: BrainCallModel;
-}): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[] } | undefined> {
+}): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[] } | { readonly notReady: { readonly done: number; readonly total: number } }> {
   const reader = await checkChapterByReader({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -92,7 +92,7 @@ async function checkByReader(input: {
     maxCatchUp: READER_MAX_CATCH_UP,
     earlier: input.earlier,
   });
-  if (reader.skipped === "not_ready") return undefined;
+  if (reader.skipped === "not_ready") return { notReady: reader.pending ?? { done: 0, total: input.chapter - 1 } };
   const ledger = await withStep("账本对账", () => ledgerNumberIssues({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -132,21 +132,29 @@ export async function checkChapterBody(
     ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier))
     : [];
   const runCombo = () => withStep("核账", () => checkChapterContinuity({ projectDir, chapter, draftBody: body, callModel, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), ...(timelineTable ? { timelineTable } : {}) }));
-  let ranEngine: CheckerEngine = engine;
-  let fellBack = false;
+  const ranEngine: CheckerEngine = engine;
   let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[] };
   if (reused) {
     result = { issues: memory!.issues, failures: [] };
   } else if (engine === "reader") {
     const viaReader = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
-    if (viaReader) {
+    if (!("notReady" in viaReader)) {
       result = viaReader;
     } else {
-      // 核账员要补的笔记太多：这次先用旧核账，笔记在后台补（补不成只记一笔，下次接着补）。结果按旧路的键记忆。
-      fellBack = true;
-      ranEngine = "combo";
-      void catchUpReaders(projectDir, chapter - 1, { callModel: readerCallModel });
-      result = await runCombo();
+      // 核账员还没读完前文（T5 后台补读）：如实说读到第几章、这次没核，不拿旧核账顶、更不装作核过。
+      // 笔记在后台按顺序补（补不成只记一笔，下次接着补），读完后作者再点一次「核账」就是读完全书的核账员。
+      const { done, total } = viaReader.notReady;
+      void startReaderCatchUp(projectDir, CHECKER_ROLE, chapter - 1, { callModel: readerCallModel });
+      return {
+        ok: false,
+        chapter,
+        sure: [],
+        maybe: [],
+        failures: [`核账员还在读前文（第 ${done} / ${total} 章），这次没核`],
+        dismissed: 0,
+        reused: false,
+        summary: `核账员还在读这本书的前文：第 ${done} / ${total} 章。这次没有核（不糊弄）；它读完后你再点一次「核账」，就是按读完全书来核的。`,
+      };
     }
   } else {
     result = await runCombo();
@@ -174,6 +182,5 @@ export async function checkChapterBody(
         `${reusedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}`,
         ...sure.slice(0, 3).map((issue) => `· 「${issue.quote.slice(0, 40)}」和${where(issue)}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`),
       ].join("\n");
-  const summary = fellBack ? `${baseSummary}${baseSummary.includes("\n") ? "\n" : ""}${FALLBACK_NOTE}` : baseSummary;
-  return { ok, chapter, sure, maybe, failures: [...result.failures], dismissed, reused, summary };
+  return { ok, chapter, sure, maybe, failures: [...result.failures], dismissed, reused, summary: baseSummary };
 }

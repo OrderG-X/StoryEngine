@@ -1831,6 +1831,8 @@ async function readCharacterDetailViews(projectDir: string): Promise<readonly Ch
 export async function withUiOverviewDetails(projectDir: string, overview: StateOverview): Promise<StateOverview & {
   readonly calendar?: StoryCalendarView;
   readonly characterDetails?: readonly CharacterDetailView[];
+  /** 核账员后台补读进度（T5 长书）：progress.json 有才带，界面在核账按钮旁显示。 */
+  readonly checkerReading?: { readonly reading: boolean; readonly done: number; readonly total: number };
   readonly uiChapterFiles?: readonly {
     readonly chapter: number;
     readonly hasDraftFile: boolean;
@@ -1843,16 +1845,26 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
   }[];
 }> {
   const calendar = await readStoryCalendarView(projectDir);
-  const [characterDetails, uiChapterFiles] = await Promise.all([
+  const [characterDetails, uiChapterFiles, checkerReading] = await Promise.all([
     readCharacterDetailViews(projectDir),
     readUiChapterFileStates(projectDir),
+    readCheckerReadingProgress(projectDir),
   ]);
   return {
     ...overview,
     ...(calendar ? { calendar } : {}),
     ...(characterDetails.length ? { characterDetails } : {}),
+    ...(checkerReading ? { checkerReading } : {}),
     ...(uiChapterFiles.length ? { uiChapterFiles } : {}),
   };
+}
+
+/** 核账员的补读进度（agents/checker/progress.json）：没有就不带这个字段（老书没开核账员时界面不显示）。 */
+async function readCheckerReadingProgress(projectDir: string): Promise<{ readonly reading: boolean; readonly done: number; readonly total: number } | undefined> {
+  const { readReaderProgress } = await import("../brain/catch-up.js");
+  const progress = await readReaderProgress(projectDir, "checker").catch(() => undefined);
+  if (!progress) return undefined;
+  return { reading: progress.reading, done: progress.done, total: progress.total };
 }
 
 // ---------------------------------------------------------------------------
