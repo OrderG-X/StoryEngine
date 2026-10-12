@@ -201,12 +201,26 @@ export async function listSnapshots(projectDir: string, limit = 100): Promise<Sn
   });
 }
 
+/** 恢复实际退回的内容：目标存档点与「恢复前自动快照」之间的文件差异 + 哪些是「目标那一步之后才写的」。 */
+export interface RestoreOutcome {
+  /** 「恢复到：X」那条提交（历史最新一条）。 */
+  readonly restored: SnapshotEntry;
+  /**
+   * 这次恢复实际动到的全部文件（状态方向=目标→恢复前：A=恢复后不再有、D=被恢复回来、M=内容回退）。
+   * R4.2（验收 3.2）：撤销/恢复的回执必须写清实际退回了什么——只说「只撤了这一步」会给了模型
+   * 编「没受影响」的空间（真机实锤：第 5 章草稿被删了，模型却说「还在磁盘上」）。
+   */
+  readonly reverted: readonly CommitFileChange[];
+  /** reverted 里属于「目标那一步之后才写的」文件——超出所撤步骤本身的连带退回，回执要单独说明。 */
+  readonly revertedLater: readonly CommitFileChange[];
+}
+
 /**
  * 恢复到目标快照。先校验目标存在，再把当前状态自动存档（可反悔），
  * 然后删掉目标之后新增的文件、还原全部内容，最后记一条"恢复到：X"。
  * 历史永不丢失，恢复操作本身也能被恢复。
  */
-export async function restoreSnapshot(projectDir: string, id: string): Promise<SnapshotEntry> {
+export async function restoreSnapshot(projectDir: string, id: string): Promise<RestoreOutcome> {
   return withProjectLock(projectDir, async () => {
     if (!/^[0-9a-f]{40}$/.test(id)) {
       throw new Error("无效的快照 id");
@@ -220,6 +234,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<S
     const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", "恢复前自动快照"]);
+    // 恢复前自动快照即此刻 HEAD；回执的「实际退回了什么」= 它与目标之间的全部文件差异。
+    const preRestoreId = (await git(projectDir, ["rev-parse", "HEAD"]));
     // --no-renames：禁用 rename 侦测，改名产生的新文件按 A 计，否则会被判为 R 而残留
     // 对话目录用 :(exclude) 跳过：旧快照里曾被跟踪的会话文件既不被 unlink、也不被下面的 checkout 盖回磁盘。
     const addedSince = await git(projectDir, [
@@ -237,8 +253,85 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<S
     await git(projectDir, ["checkout", id, "--", ".", ...EXCLUDE_PATHSPECS]);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
-    return parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`]));
+    const receipt = await buildRestoreReceiptFacts(projectDir, id, preRestoreId);
+    return { restored: parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`])), ...receipt };
   });
+}
+
+/** 两个提交之间的文件差异（--name-status，状态方向 from→to；排除对话/事务/笔记等非写作状态目录）。 */
+async function diffFileChangesBetween(projectDir: string, fromId: string, toId: string): Promise<CommitFileChange[]> {
+  const out = await git(projectDir, [
+    "diff", "--name-status", "--no-renames", `${fromId}..${toId}`, "--", ".", ...EXCLUDE_PATHSPECS,
+  ]);
+  return parseFileStatusLines(out);
+}
+
+/** `--name-status` 输出 → CommitFileChange[]（认不出的行丢弃，绝不猜）。 */
+function parseFileStatusLines(out: string): CommitFileChange[] {
+  const files: CommitFileChange[] = [];
+  for (const line of out.split("\n")) {
+    const match = /^([A-Z])[0-9]*\t(.+)$/u.exec(line.trim());
+    if (match) files.push({ status: match[1]!, path: match[2]!.trim() });
+  }
+  return files;
+}
+
+/** 提交区间（fromId..toId，新→旧）里每个提交：id + label + 它改动的文件。 */
+interface RangeCommit {
+  readonly id: string;
+  readonly label: string;
+  readonly files: readonly CommitFileChange[];
+}
+
+async function readRangeCommits(projectDir: string, fromId: string, toId: string): Promise<RangeCommit[]> {
+  const out = await git(projectDir, [
+    "log", "--name-status", "--no-renames", `--pretty=format:@@%H%x1f%s`, `${fromId}..${toId}`,
+  ]);
+  const commits: RangeCommit[] = [];
+  let current: { id: string; label: string; files: CommitFileChange[] } | null = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("@@")) {
+      const [id, label] = line.slice(2).split("\x1f");
+      current = { id: (id ?? "").trim(), label: label ?? "", files: [] };
+      commits.push(current);
+      continue;
+    }
+    const match = /^([A-Z])[0-9]*\t(.+)$/u.exec(line);
+    if (current && match) current.files.push({ status: match[1]!, path: match[2]!.trim() });
+  }
+  return commits;
+}
+
+/**
+ * 回执事实：这次恢复实际退回了哪些文件、其中哪些是「目标那一步之后才写的」。
+ *
+ * 归因沿用操作历史的既有约定（attachSnapshotChanges）：一个存档点所-guard 的操作，其写出的文件
+ * 落在它上方更旧侧的第一段提交里（「落盘收尾」工程提交，或没有收尾时被下一个存档点的 add -A 收走）。
+ * 从目标往上找到第一个真存档点（非落盘收尾/恢复产物）为止收「这一步」的文件；它之上（更新侧）的
+ * 一律算「这步之后写的」。中间没有真存档点 = 没有别的写操作插进来，全部差异都算这一步本身。
+ */
+async function buildRestoreReceiptFacts(
+  projectDir: string,
+  targetId: string,
+  preRestoreId: string,
+): Promise<Pick<RestoreOutcome, "reverted" | "revertedLater">> {
+  const reverted = await diffFileChangesBetween(projectDir, targetId, preRestoreId).catch(() => [] as CommitFileChange[]);
+  if (reverted.length === 0) return { reverted: [], revertedLater: [] };
+  const commits = await readRangeCommits(projectDir, targetId, preRestoreId).catch(() => [] as RangeCommit[]);
+  // commits 新→旧；从最旧端（紧贴目标）往上找第一个真存档点 = boundary（含它，它的提交承载上一步未收尾的写产物）。
+  let boundary = -1;
+  for (let index = commits.length - 1; index >= 0; index -= 1) {
+    const label = commits[index]!.label;
+    if (!isRestoreArtifact(label) && !isPostWriteSettlementSnapshot(label)) { boundary = index; break; }
+  }
+  const laterPaths = new Set<string>();
+  if (boundary >= 0) {
+    for (let index = 0; index < boundary; index += 1) {
+      for (const file of commits[index]!.files) laterPaths.add(file.path);
+    }
+  }
+  const revertedLater = reverted.filter((file) => laterPaths.has(file.path));
+  return { reverted, revertedLater };
 }
 
 /**
@@ -443,7 +536,14 @@ export function humanizeUndoLabel(label: string): string {
  */
 export async function undoLastChange(
   projectDir: string,
-): Promise<{ readonly undoneLabel: string; readonly restored: SnapshotEntry } | null> {
+): Promise<{
+  readonly undoneLabel: string;
+  readonly restored: SnapshotEntry;
+  /** 这次撤销实际退回的文件（R4.2：回执要写清，不能只说「只撤了这一步」）。 */
+  readonly reverted: readonly CommitFileChange[];
+  /** 其中「撤的那一步之后才写的」——连带退回，回执要单独说明。 */
+  readonly revertedLater: readonly CommitFileChange[];
+} | null> {
   await ensureSnapshotRepo(projectDir);
   const snaps = await listSnapshots(projectDir, 200);
   const untracked = await hasUntrackedFiles(projectDir);
@@ -475,8 +575,8 @@ export async function undoLastChange(
   // 认出来了、只是下面没有更早的改动 = 真到头了，如实返回 null。
   const target = (await findTarget(true)) ?? (lostRestoreTarget ? await findTarget(false) : undefined);
   if (!target) return null;
-  const restored = await restoreSnapshot(projectDir, target.id);
-  return { undoneLabel: humanizeUndoLabel(target.label), restored };
+  const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, target.id);
+  return { undoneLabel: humanizeUndoLabel(target.label), restored, reverted, revertedLater };
 }
 
 // ---------------------------------------------------------------------------

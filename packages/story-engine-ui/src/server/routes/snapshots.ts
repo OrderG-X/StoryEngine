@@ -22,7 +22,7 @@ import {
   readCommitFileChanges,
   restoreSnapshot,
 } from "../lib/snapshot.js";
-import { attachSnapshotChanges, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
+import { attachSnapshotChanges, buildRestoreReceipt, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
 import { readCharacterNameById } from "../agent/presence/entity-labels.js";
 
 // ---------------------------------------------------------------------------
@@ -70,8 +70,17 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         if (!guardProjectPath(res, projectDir)) return;
         await assertStoryEngineProject(projectDir);
         const id = requireBodyString(body.id, "快照 id 不能为空。");
-        const restored = await restoreSnapshot(projectDir, id);
-        writeJson(res, 200, { ok: true, restored });
+        const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, id);
+        // R4.2：恢复到更早的存档点会把那之后的所有写入一并退回，回执如实列清单 + 指明找回办法。
+        const nameById = await readCharacterNameById(projectDir).catch(() => new Map<string, string>());
+        const targetLabel = /^恢复到：(.+)$/u.exec(restored.label)?.[1] ?? restored.label;
+        const receipt = buildRestoreReceipt({
+          title: `已恢复到「${humanizeHistoryLabel(targetLabel)}」之前。`,
+          reverted,
+          revertedLater,
+          nameById,
+        });
+        writeJson(res, 200, { ok: true, restored, receipt });
         return;
       }
 

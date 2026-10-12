@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// M6 真机冒烟：覆盖现有非空草稿前建快照、首次出稿不建（对真实 GLM=writer.example.com 出稿）。
+// M6 真机冒烟：覆盖现有非空草稿前建快照；首次出稿建「出稿：第N章」（R4.2，对真实 GLM=writer.example.com 出稿）。
 // Codex 沙箱连不上 writer.example.com，本测试在能直连的本机补验那两条。
 //
 // 需真实网络 + 真实 GLM key（~/.story-engine/model-secrets.json 的 glm），默认 skip；手动跑：
@@ -71,7 +71,7 @@ describe.skipIf(!ENABLED)("M6 覆盖现有非空草稿前建快照（真机 GLM�
     expect(afterUndo).toContain("DRAFT_A_SENTINEL");
   }, 180_000);
 
-  it("空章首次出稿（无旧稿可丢）→ 出稿成功但不带 snapshotId（无撤销点，符合预期）", async () => {
+  it("空章首次出稿（R4.2：首稿也建「出稿：第N章」存档点、可撤销）→ snapshotId 透出、历史里有该条", async () => {
     const projectDir = await makeProject();
     const out = await generate(
       { chapter: 1, chapterGoal: "主角林远读到失踪同事的短信，决定独自前往约定地点；不揭开真相。" },
@@ -81,6 +81,8 @@ describe.skipIf(!ENABLED)("M6 覆盖现有非空草稿前建快照（真机 GLM�
     console.log("[m6] first-draft ok=", out.ok, "snapshotId=", out.snapshotId);
 
     expect(out.ok).toBe(true);
-    expect(out.snapshotId).toBeUndefined();
+    expect(typeof out.snapshotId).toBe("string");
+    const snaps = await listSnapshots(projectDir);
+    expect(snaps.some((s) => s.label === "出稿：第1章")).toBe(true);
   }, 180_000);
 });

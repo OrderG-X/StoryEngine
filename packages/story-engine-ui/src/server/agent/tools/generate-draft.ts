@@ -14,9 +14,9 @@
  *   - 输出投影：剥掉 HTTP 适配料（http 袋），ok 时把覆盖前快照的 snapshotId 挂进输出。
  *
  * 快照策略（铁律「直接做+可撤销」的边界）：草稿是「待保存」的工作稿，不是状态入库，
- *   因此**不建入库级 git 快照**；但「再写一版」/自动去味会**覆盖**已有草稿，覆盖前用
- *   snapshotBeforeDraftOverwrite 建轻量快照（M6），output.snapshotId 挂最近一个撤销点。
- *   （D4 已收敛：HTTP 非流式路同调同一 helper 同一语义——仅覆盖已有非空草稿前建，首次出稿不建。）
+ *   因此**不建入库级 git 快照**；写盘前用 snapshotBeforeDraftOverwrite 建这一步的存档点（M6+R4.2）：
+ *   覆盖已有草稿建「再次出稿前」、首次出稿建「出稿：第N章」（首稿也是作者眼里的一步，撤销要能撤它），
+ *   output.snapshotId 挂最近一个撤销点。（D4 已收敛：HTTP 非流式路同调同一 helper 同一语义。）
  *   故本工具用 createTool 而非 writeTool。涉及草稿 → refreshScope:"full"（前端刷新写作区/总览）。
  *
  * 自动去味闭环、多候选采样防坍缩、beats 判漏 AI 复核降噪的实现全部在 services/draft-service.ts
@@ -406,9 +406,14 @@ export const generateDraftTool = createTool({
       const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
       return buildSequencingBlockedOutput(resolvedChapter, prior, overview);
     }
-    // M6（D4 收敛后与 HTTP 非流式路同 helper 同语义）：覆盖现有非空草稿前建快照，让「再写一版」可撤销
-    // （首次出稿无旧稿可丢则不建）。
-    const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章再次出稿前快照`);
+    // M6 + R4.2（D4 收敛后与 HTTP 非流式路同 helper 同语义）：写盘前建这一步的存档点——覆盖现有非空草稿
+    // 用「再次出稿前」；首次出稿用「出稿：第N章」（首稿也是作者眼里的一步，撤销必须能撤它）。
+    const snapshotId = await snapshotBeforeDraftOverwrite(
+      projectDir,
+      resolvedChapter,
+      `第${resolvedChapter}章再次出稿前快照`,
+      `出稿：第${resolvedChapter}章`,
+    );
     // 出稿流式：路由注入了 sink 就把正文 delta 逐字喂前端编辑器（带本次章号，前端只往当前章追）；缺失=不流式。
     const draftDeltaSink = readDraftDeltaSinkFromContext(context);
     // 多候选采样（第四层防坍缩）：N 个 writer 的 temperature 依次错开（基准 / ±0.15 / ±0.3——向上封顶 1.0，
@@ -453,6 +458,9 @@ export const generateDraftTool = createTool({
       ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
       ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
       policies: { lengthPolicy: "annotate", aiFlavorRecheck: true },
+      // R4.2：出稿内部第二次落盘（自动去味/续写补字）不再各建存档点——本步的存档点已建（snapshotId），
+      // 一次出稿在操作历史里就是一步，撤销一键退回这步之前。
+      ...(snapshotId ? { preWriteSnapshotId: snapshotId } : {}),
       autoDeAi: autoDeAiEnabled,
       ...(deAiCallModel ? { deAiCallModel } : {}),
       candidates: candidateCount,
@@ -475,7 +483,7 @@ export const generateDraftTool = createTool({
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;
-    // 只在真出稿成功时挂 snapshotId（失败=未覆盖旧稿，无需撤销点）；自动去味已落改动时它自带更近的快照，不覆盖。
+    // 只在真出稿成功时挂 snapshotId（失败=没写成稿，无需撤销点）；service 已把本步存档点带出来，这里兜底。
     return outcome.ok && snapshotId ? { ...toolOutput, snapshotId: toolOutput.snapshotId ?? snapshotId } : toolOutput;
   },
 });

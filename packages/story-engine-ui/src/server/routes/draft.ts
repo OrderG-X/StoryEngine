@@ -148,10 +148,18 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       });
       return;
     }
-    await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章再次出稿前快照`);
+    // M6 + R4.2（与工具路同 helper 同语义）：写盘前建这一步的存档点——覆盖旧稿用「再次出稿前」、
+    // 首次出稿用「出稿：第N章」（首稿也是可撤销的一步）；出稿内部的第二次落盘并进同一步。
+    const snapshotId = await snapshotBeforeDraftOverwrite(
+      projectDir,
+      chapter,
+      `第${chapter}章再次出稿前快照`,
+      `出稿：第${chapter}章`,
+    );
     const result = await runGenerateDraft({
       ...baseInput,
       policies: { lengthPolicy: "enforce_or_rollback", aiFlavorRecheck: false },
+      ...(snapshotId ? { preWriteSnapshotId: snapshotId } : {}),
     });
     if (result.rejection) {
       writeJson(res, 422, { ok: false, error: result.rejection.error });
