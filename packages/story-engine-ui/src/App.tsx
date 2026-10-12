@@ -346,7 +346,7 @@ export function App() {
 
   const foundationGaps = useFoundationGaps(projectPath);
 
-  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, undoToTurn, stopAgent } = useChat({
+  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, undoToTurn, stopAgent } = useChat({
     projectPath,
     resolveChapterDirection,
     handleGenerateDraft: workflow.handleGenerateDraft,
@@ -675,6 +675,7 @@ export function App() {
             onSelectAdviceCard: handleSelectAdviceCard,
             onSuggestedAction: handleSuggestedAction,
             onSendMessage: handleSendMessage,
+            onSendUserAction: handleSendUserAction,
             onStopAgent: stopAgent,
             onClearChat: () => {
               const backup = useWorkspaceStore.getState().workspace.messages;

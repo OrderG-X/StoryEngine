@@ -96,6 +96,12 @@ interface NextStepChoice {
   readonly label: string;
   readonly intent: string;
   readonly recommended?: boolean;
+  /**
+   * 结构化动作（R4.7/验收 3.8）：带上它的选项，前端点击直接发 body.action 到 /api/agent/chat，
+   * 不再发一句意图给模型（一次省 3～5 万输入）。只给**服务端自己生成**的确定性选项填
+   * （预览定稿/再核一次/写下一章…）；模型 suggest_next_steps 生成的选项没有这个字段，照旧发文本。
+   */
+  readonly action?: UserAction;
 }
 
 interface CommitApplyLikeOutput {
@@ -119,14 +125,24 @@ export function commitApplyNextSteps(
     return {
       question: `第 ${chapter} 章定稿了，接下来？`,
       choices: [
-        { label: `写第 ${chapter + 1} 章`, intent: `继续写第 ${chapter + 1} 章的正文`, recommended: true },
+        {
+          label: `写第 ${chapter + 1} 章`,
+          intent: `继续写第 ${chapter + 1} 章的正文`,
+          recommended: true,
+          action: { toolName: "generate_draft", chapter: chapter + 1 },
+        },
         ...(output.threadMaintenanceHint === "escalated" ? [{ label: "清理线索", intent: "清理线索" }] : []),
       ],
     };
   }
   return {
     question: `第 ${chapter} 章还没定稿，接下来？`,
-    choices: [{ label: "重新预览", intent: `生成第 ${chapter} 章定稿预览`, recommended: true }],
+    choices: [{
+      label: "重新预览",
+      intent: `生成第 ${chapter} 章定稿预览`,
+      recommended: true,
+      action: { toolName: "commit_preview", chapter },
+    }],
   };
 }
 
@@ -277,8 +293,17 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
         ok: true,
         question: "这次没核成，接下来？",
         choices: [
-          { label: "再核一次", intent: `重新核第 ${action.chapter} 章的账`, recommended: true },
-          { label: "先写下一章", intent: "继续写下一章的正文" },
+          {
+            label: "再核一次",
+            intent: `重新核第 ${action.chapter} 章的账`,
+            recommended: true,
+            action: { toolName: "check_continuity", chapter: action.chapter },
+          },
+          {
+            label: "先写下一章",
+            intent: "继续写下一章的正文",
+            action: { toolName: "generate_draft", chapter: action.chapter + 1 },
+          },
         ],
       },
     });
@@ -286,18 +311,37 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   }
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
   // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
-  const fresh: NextStepChoice[] = result?.reused === true ? [{ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文" }] : [];
+  const fresh: NextStepChoice[] = result?.reused === true
+    ? [{
+        label: "再细核一遍",
+        intent: "再细核一遍：这一章重新对一遍前文",
+        action: { toolName: "check_continuity", chapter: action.chapter, fresh: true },
+      }]
+    : [];
   // R4.5（验收 3.4）：确定 N 处的主修复动作挪进核账卡——按钮随「不是问题」实时变 N、intent 逐条现拼。
   // 下一步只给次要选项，不再出笼统的「改掉确定的 N 处」（那句话没圈范围，模型会把划掉的也改了）。
   const choices: NextStepChoice[] = sureCount > 0
     ? [
       { label: "我自己改", intent: "我自己改，先放着", recommended: true },
-      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动` },
+      {
+        label: "预览定稿",
+        intent: `预览第 ${action.chapter} 章的定稿改动`,
+        action: { toolName: "commit_preview", chapter: action.chapter },
+      },
       ...fresh,
     ]
     : [
-      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动`, recommended: true },
-      { label: "写下一章", intent: "继续写下一章的正文" },
+      {
+        label: "预览定稿",
+        intent: `预览第 ${action.chapter} 章的定稿改动`,
+        recommended: true,
+        action: { toolName: "commit_preview", chapter: action.chapter },
+      },
+      {
+        label: "写下一章",
+        intent: "继续写下一章的正文",
+        action: { toolName: "generate_draft", chapter: action.chapter + 1 },
+      },
       ...fresh,
     ];
   const nextCallId = `user-action-next-${stamp}`;
@@ -433,12 +477,22 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   if (rest) args.sendEvent("text-delta", { text: rest });
   const choices: NextStepChoice[] = written
     ? [
-      { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动`, recommended: true },
+      {
+        label: "预览定稿",
+        intent: `预览第 ${action.chapter} 章的定稿改动`,
+        recommended: true,
+        action: { toolName: "commit_preview", chapter: action.chapter },
+      },
       // 写完已经核过一遍账（结果记在核账记忆里），点这个直接出核账卡，不再调模型。
-      { label: "看核账结果", intent: "核账" },
+      { label: "看核账结果", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
       { label: "我自己改", intent: "我自己改，先放着" },
     ]
-    : [{ label: "再写一次", intent: "写这一章的正文", recommended: true }];
+    : [{
+        label: "再写一次",
+        intent: "写这一章的正文",
+        recommended: true,
+        action: { toolName: "generate_draft", chapter: action.chapter },
+      }];
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {

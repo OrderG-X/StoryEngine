@@ -19,6 +19,7 @@ import type {
 } from "@actalk/story-engine";
 import { normalizeDraftRevisionPreview } from "@actalk/story-engine";
 import type { FoundationGapSuggestion } from "../../api/types.js";
+import { parseNextStepUserAction, type AgentUserAction } from "../../api/agentChatClient.js";
 
 // ---------------------------------------------------------------------------
 // Middleware types
@@ -273,7 +274,7 @@ export type WorkspaceCommitPreview = {
 
 export type WorkspaceNextStepPrompt = {
   readonly question: string;
-  readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean }[];
+  readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
 };
 
 export function readWorkspaceMessages(value: unknown): {
@@ -512,14 +513,22 @@ function readWorkspaceNextStepPrompt(value: unknown): WorkspaceNextStepPrompt | 
   if (!isRecord(value)) return undefined;
   const question = readString(value.question);
   if (!question || !Array.isArray(value.choices)) return undefined;
-  const choices: { label: string; intent: string; recommended?: boolean }[] = [];
+  const choices: { label: string; intent: string; recommended?: boolean; action?: AgentUserAction }[] = [];
   for (const item of value.choices) {
     if (!isRecord(item)) continue;
     const label = readString(item.label);
     const intent = readString(item.intent);
     if (!label || !intent) continue;
     if ("recommended" in item && typeof item.recommended !== "boolean") continue;
-    choices.push({ label, intent, ...(typeof item.recommended === "boolean" ? { recommended: item.recommended } : {}) });
+    // choice.action（R4.7）：服务端生成的确定性选项带结构化动作，刷新/重开后照旧直达；
+    // 白名单外/形状不对的（历史存档里不可能有、防上游异常）丢掉 action，选项退回发文本意图。
+    const action = parseNextStepUserAction(item.action);
+    choices.push({
+      label,
+      intent,
+      ...(typeof item.recommended === "boolean" ? { recommended: item.recommended } : {}),
+      ...(action ? { action } : {}),
+    });
   }
   if (choices.length === 0) return undefined;
   return { question, choices: choices.slice(0, 8) };

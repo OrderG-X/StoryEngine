@@ -16,7 +16,7 @@ import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
 import { honestyRewritePatch } from "./detectUnbackedCompletion.js";
-import { matchDeterministicChapterAction } from "../utils/chapterActionIntents.js";
+import { matchDeterministicChapterAction, userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
 import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
@@ -810,6 +810,8 @@ export interface UseChatResult {
   handleSendMessage: (message: string) => Promise<void>;
   handleSelectAdviceCard: (key: string, card: ChapterAdviceCard) => void;
   handleSuggestedAction: (action: SuggestedAction) => void;
+  /** 「下一步」选项的结构化动作直达（R4.7）：点击直接发 body.action，不经模型。 */
+  handleSendUserAction: (action: AgentUserAction) => Promise<void>;
   /** 块级「撤销到此」：把该回合 git 改动整块回退 + 截断该回合及其后对话 + 重拉 overview 刷工作台。 */
   undoToTurn: (message: ChapterMessage) => Promise<void>;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出内容保留、不报错。无在跑流时调用是 no-op。 */
@@ -2239,6 +2241,32 @@ export function useChat(params: UseChatParams): UseChatResult {
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
 
+  /* ---- handleSendUserAction：「下一步」选项的结构化动作直达（R4.7） ---- */
+
+  // 服务端自己生成的确定性选项（预览定稿/再核一次/写下一章…）带 action：点击直接发 body.action，
+  // 服务端执行对应工具、结果照常进对话——不再发一句意图给模型白跑一轮（一次 3～5 万输入）。
+  // 与「确认定稿」「确认裁剪」同一通道；对话里照留一句「你：…」回显（userActionChoiceText）。
+  const handleSendUserAction = useCallback(
+    async (action: AgentUserAction): Promise<void> => {
+      if (!projectPath) {
+        setChatError("请先打开真实本地项目。");
+        return;
+      }
+      const live = useWorkspaceStore.getState();
+      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+        showToast("已有操作正在进行，请等它结束再点。", 4200);
+        return;
+      }
+      const text = userActionChoiceText(action);
+      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
+      if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
+      await runAgentDispatch(text, conversation, action);
+    },
+    [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
+  );
+
   /* ---- handleSuggestedAction ---- */
 
   // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
@@ -2406,6 +2434,7 @@ export function useChat(params: UseChatParams): UseChatResult {
     handleSendMessage,
     handleSelectAdviceCard,
     handleSuggestedAction,
+    handleSendUserAction,
     undoToTurn,
     stopAgent,
   };

@@ -70,3 +70,23 @@ export function matchDeterministicChapterAction(text: string): DeterministicChap
   if (COMMIT_PREVIEW_TEXTS.has(trimmed) || /^(?:预览第\s*\d+\s*章的定稿改动|生成第\s*\d+\s*章定稿预览)$/u.test(trimmed)) return "commit_preview";
   return null;
 }
+
+/**
+ * 「下一步」结构化动作选项（R4.7）点击后落在对话里的「你：…」一句话——动作本身经 body.action 直达服务端，
+ * 这句只是对话里给作者看的回显，文案与选项 intent 同口径。定稿预览那句刻意写成
+ * 「预览第 N 章的定稿改动」（matchDeterministicChapterAction 认识的形状），万一有旧路径把它当文本重放也能被接住。
+ */
+export function userActionChoiceText(action: import("../api/agentChatClient.js").AgentUserAction): string {
+  switch (action.toolName) {
+    case "commit_preview":
+      return `预览第 ${action.chapter} 章的定稿改动`;
+    case "check_continuity":
+      return action.fresh ? `再细核一遍：重新核第 ${action.chapter} 章的账` : `重新核第 ${action.chapter} 章的账`;
+    case "generate_draft":
+      return `写第 ${action.chapter} 章的正文`;
+    case "commit_apply":
+      return `确认定稿第 ${action.chapter} 章`;
+    case "prune_snapshots":
+      return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
+  }
+}

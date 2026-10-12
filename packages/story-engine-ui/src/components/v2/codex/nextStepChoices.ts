@@ -1,4 +1,5 @@
 import type { ChapterMessage } from "../../../types.js";
+import type { AgentUserAction } from "../../../api/agentChatClient.js";
 
 /**
  * 「下一步」选项卡数据——只取 agent 主动调 suggest_next_steps 给出的上下文相关提议
@@ -7,6 +8,7 @@ import type { ChapterMessage } from "../../../types.js";
  * 回合就不出卡（顺着正文走或直接打字）。
  *
  * 选项点击 = 给 agent 发一句**自然语言意图**（intent），驱动它调对应工具；引导≠强制，可直接打字无视。
+ * 例外（R4.7）：服务端自己生成的确定性选项带 action——点击直接发结构化动作（body.action），不经模型。
  */
 
 export interface NextStepChoice {
@@ -14,6 +16,9 @@ export interface NextStepChoice {
   /** 点击后作为一条用户消息发给 agent（对话里会留下「你：…」，再由 agent 接着做）。 */
   readonly intent: string;
   readonly primary?: boolean;
+  /** 结构化动作（R4.7）：服务端生成的确定性选项才有——点击直接发 body.action，不发文本给模型。
+   *  模型 suggest_next_steps 生成的选项没有 action，照旧走 intent 文本。 */
+  readonly action?: AgentUserAction;
 }
 
 export interface NextStepPrompt {
@@ -37,6 +42,7 @@ export function lastAssistantNextStepPrompt(messages: readonly ChapterMessage[])
         label: choice.label,
         intent: choice.intent,
         ...(choice.recommended ? { primary: true } : {}),
+        ...(choice.action ? { action: choice.action } : {}),
       })),
     };
   }

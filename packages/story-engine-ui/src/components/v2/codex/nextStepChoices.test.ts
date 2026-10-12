@@ -37,4 +37,26 @@ describe("lastAssistantNextStepPrompt（下一步选项卡只来自 agent 提议
     expect(lastAssistantNextStepPrompt([msg({ id: "u1", role: "user" })])).toBeNull();
     expect(lastAssistantNextStepPrompt([])).toBeNull();
   });
+
+  it("choice 带 action（R4.7：服务端生成的确定性选项）→ 原样透传，点击侧据此直发结构化动作", () => {
+    const messages = [
+      msg({ id: "a1", role: "assistant", nextStepPrompt: {
+        question: "核账做完了，接下来？",
+        choices: [
+          { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
+          { label: "我自己改", intent: "我自己改，先放着" },
+        ],
+      } }),
+    ];
+    const p = lastAssistantNextStepPrompt(messages);
+    expect(p?.choices[0]).toEqual({
+      label: "预览定稿",
+      intent: "预览第 5 章的定稿改动",
+      primary: true,
+      action: { toolName: "commit_preview", chapter: 5 },
+    });
+    // 模型生成的选项没有 action，照旧只带 label/intent——点击走发文本的老路。
+    expect(p?.choices[1]).toEqual({ label: "我自己改", intent: "我自己改，先放着" });
+    expect(p?.choices[1]).not.toHaveProperty("action");
+  });
 });

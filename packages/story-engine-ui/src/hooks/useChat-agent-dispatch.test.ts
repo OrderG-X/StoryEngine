@@ -1295,3 +1295,53 @@ describe("「确认定稿」按钮 → 结构化动作", () => {
     expect(messages()).toBe(before);
   });
 });
+
+describe("handleSendUserAction：「下一步」选项的结构化动作直达（R4.7）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    resetStore();
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "commit_preview", toolCallId: "cp1", ok: true });
+      handlers.onDone();
+    });
+  });
+
+  it("选项带的 action 直接进 streamAgentChat 请求体（body.action），对话里留一句作者看得懂的回显", async () => {
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendUserAction({ toolName: "commit_preview", chapter: 5 });
+    });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+
+    const request = mockedStreamAgentChat.mock.calls[0]![0];
+    expect(request.action).toEqual({ toolName: "commit_preview", chapter: 5 });
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "预览第 5 章的定稿改动" });
+    expect(messages().some((m) => m.role === "user" && m.content === "预览第 5 章的定稿改动")).toBe(true);
+  });
+
+  it("出稿类动作把作者带回写作台；已有操作在跑 → 不发动作、不追加消息", async () => {
+    const { result } = renderHook(() => useChat(buildParams({})));
+    const requestCenterView = vi.fn();
+    useNavigationStore.setState({ requestCenterView });
+
+    await act(async () => {
+      await result.current.handleSendUserAction({ toolName: "generate_draft", chapter: 6 });
+    });
+    await vi.waitFor(() => expect(mockedStreamAgentChat).toHaveBeenCalledTimes(1));
+    expect(mockedStreamAgentChat.mock.calls[0]![0].action).toEqual({ toolName: "generate_draft", chapter: 6 });
+    expect(requestCenterView).toHaveBeenCalledWith("desk");
+
+    mockedStreamAgentChat.mockClear();
+    useWorkspaceStore.setState({ chatLoading: true });
+    const before = messages();
+    await act(async () => {
+      await result.current.handleSendUserAction({ toolName: "check_continuity", chapter: 5 });
+    });
+    expect(mockedStreamAgentChat).not.toHaveBeenCalled();
+    expect(messages()).toBe(before);
+    expect(useNavigationStore.getState().toast).toContain("正在进行");
+  });
+});

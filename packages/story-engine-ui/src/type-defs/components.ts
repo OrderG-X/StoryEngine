@@ -24,6 +24,8 @@ export interface WritingWorkspaceLayoutProps {
   /** 自动保存失败时「重试」回调（App 侧按上次失败 payload 原样重发）；缺省时 Pill 退回 flushAutosaveNow。 */
   readonly onRetryAutosave?: () => void;
   readonly onSendMessage?: (message: string) => void;
+  /** 「下一步」选项带结构化动作时（R4.7，服务端生成的确定性选项）：点击直接发 body.action，不经模型。 */
+  readonly onSendUserAction?: (action: import("../api/agentChatClient.js").AgentUserAction) => void;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出的内容保留、不报错。chatLoading 时展示「停止」按钮调用。 */
   readonly onStopAgent?: () => void;
   /** 清空当前对话（不影响正文与资料）。聊天头部「清空」按钮调用。 */

@@ -11,6 +11,7 @@ import {
   REVIEW_BUTTON_INTENT,
   matchDeterministicChapterAction,
   resolveDirectWriteChapterGoal,
+  userActionChoiceText,
 } from "./chapterActionIntents.js";
 
 describe("核账 / 再细核一遍走确定性动作", () => {
@@ -69,5 +70,18 @@ describe("resolveDirectWriteChapterGoal（写这一章按钮：没方向也直�
   it("默认目标题材中立（不预设题材/世界观）", () => {
     expect(DIRECT_WRITE_FALLBACK_GOAL).not.toMatch(/悬疑|武侠|玄幻|科幻|爱情/u);
     expect(DIRECT_WRITE_FALLBACK_GOAL.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你：…」回显文案）", () => {
+  it("各动作给作者看得懂的一句话；定稿预览那句是确定性意图认识的形状", () => {
+    expect(userActionChoiceText({ toolName: "commit_preview", chapter: 5 })).toBe("预览第 5 章的定稿改动");
+    expect(matchDeterministicChapterAction(userActionChoiceText({ toolName: "commit_preview", chapter: 5 }))).toBe("commit_preview");
+    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5 })).toBe("重新核第 5 章的账");
+    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5, fresh: true })).toBe("再细核一遍：重新核第 5 章的账");
+    expect(userActionChoiceText({ toolName: "generate_draft", chapter: 6 })).toBe("写第 6 章的正文");
+    expect(userActionChoiceText({ toolName: "commit_apply", chapter: 5 })).toBe("确认定稿第 5 章");
+    expect(userActionChoiceText({ toolName: "prune_snapshots" })).toBe("确认裁剪操作历史");
+    expect(userActionChoiceText({ toolName: "prune_snapshots", keep: 50 })).toBe("确认裁剪操作历史（保留最近 50 条）");
   });
 });

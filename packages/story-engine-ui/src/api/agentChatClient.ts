@@ -124,10 +124,12 @@ export interface AgentToolResult {
   /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
    *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
-  /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。 */
+  /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。
+   *  choice.action（R4.7）：服务端自己生成的确定性选项带结构化动作，点击直接发 body.action 不经模型；
+   *  模型生成的选项没有 action。 */
   readonly nextStepPrompt?: {
     readonly question: string;
-    readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean }[];
+    readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
   };
   /** commit_preview 专属：人物名近形漂移提醒（引擎确定性判定）。透传给投影层挂到消息→渲染固定「人物名一致性」提醒卡，不靠模型转述。 */
   readonly nameConsistencyWarnings?: readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[];
@@ -341,8 +343,10 @@ export async function streamAgentChat(
               ? { draftReview: (output as { review?: unknown }).review as DraftReviewView }
               : {}),
             // suggest_next_steps 专属：agent 提议的下一步选项（question/choices 不在轻量白名单里），透传给投影层挂到消息。
+            // choice.action（R4.7）按白名单防御解析（toNextStepPrompt）：只放行下一步级的只读/写稿工具，
+            // commit_apply、prune_snapshots 这类授权写盘动作必须走各自的确认按钮，不许藏在选项里被点击直达。
             ...(parsed.toolName === "suggest_next_steps" && isNextStepPrompt(output)
-              ? { nextStepPrompt: output as unknown as AgentToolResult["nextStepPrompt"] }
+              ? { nextStepPrompt: toNextStepPrompt(output) }
               : {}),
             // commit_apply 专属：入库成功且带 report（整份 CommitReport，不在轻量白名单里）→ 透传，前端渲染「入库」delta 卡。
             ...(parsed.toolName === "commit_apply" && output.committed === true && isRecord(output.report)
@@ -538,6 +542,47 @@ function isNextStepPrompt(value: Record<string, unknown>): boolean {
   return typeof value.question === "string"
     && Array.isArray(value.choices)
     && value.choices.length > 0;
+}
+
+/**
+ * 「下一步」选项里允许直达的结构化动作白名单（R4.7）：只有下一步级的动作能藏在选项里被点击直达——
+ * 定稿预览（只读）、核账（只读）、出稿（写工作稿、可撤销）。commit_apply / prune_snapshots 这类
+ * 授权写盘动作**不在**白名单：定稿要走定稿预览卡的「确认定稿」、裁剪要走「确认裁剪」，各带各的授权语义。
+ */
+export function parseNextStepUserAction(value: unknown): AgentUserAction | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0
+    ? value.chapter
+    : undefined;
+  if (chapter === undefined) return undefined;
+  // 下面的逐个相等判断就是白名单本身：别的工具名（含 commit_apply / prune_snapshots）一律 undefined。
+  if (value.toolName === "commit_preview") return { toolName: "commit_preview", chapter };
+  if (value.toolName === "check_continuity") {
+    return { toolName: "check_continuity", chapter, ...(value.fresh === true ? { fresh: true } : {}) };
+  }
+  if (value.toolName === "generate_draft") {
+    const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
+      ? value.chapterGoal.trim().slice(0, 2000)
+      : undefined;
+    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) };
+  }
+  return undefined;
+}
+
+/** suggest_next_steps 输出 → 「下一步」卡数据（choices 的 action 字段经白名单防御解析，坏的丢掉、选项保留）。 */
+function toNextStepPrompt(output: Record<string, unknown>): NonNullable<AgentToolResult["nextStepPrompt"]> {
+  const question = typeof output.question === "string" ? output.question : "";
+  const choices = (Array.isArray(output.choices) ? output.choices : []).flatMap((item) => {
+    if (!isRecord(item) || typeof item.label !== "string" || typeof item.intent !== "string") return [];
+    const action = parseNextStepUserAction(item.action);
+    return [{
+      label: item.label,
+      intent: item.intent,
+      ...(typeof item.recommended === "boolean" ? { recommended: item.recommended } : {}),
+      ...(action ? { action } : {}),
+    }];
+  });
+  return { question, choices };
 }
 
 /** check_continuity 的 pending 形状守卫：done/total 是整数、total>0（残缺的进度不当「还在读」透传）。 */

@@ -69,10 +69,11 @@ export interface ChapterMessage {
   /** AI 审稿（ai_review 工具）报告：随这条 assistant 消息走，渲染「审校问题清单」可点卡（点一条=给 agent 发改写意图）。 */
   readonly draftReview?: DraftReviewView;
   /** agent 主动提议的「下一步」选项（suggest_next_steps 工具输出）。最新一条消息有它时，「下一步」卡渲染它，
-   *  否则退回按 flowStatus 写死的兜底选项。点选项=把对应 intent 当用户消息发回给 agent。 */
+   *  否则退回按 flowStatus 写死的兜底选项。点选项=把对应 intent 当用户消息发回给 agent；
+   *  choice.action（R4.7）：服务端生成的确定性选项带结构化动作，点击直接发 body.action 不经模型。 */
   readonly nextStepPrompt?: {
     readonly question: string;
-    readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean }[];
+    readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: import("../api/agentChatClient.js").AgentUserAction }[];
   };
   readonly isErrorNotice?: boolean;
   /** 错误卡「技术详情」里展示的原始报错（不进主文案）。 */

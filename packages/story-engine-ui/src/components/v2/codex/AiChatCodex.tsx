@@ -41,7 +41,8 @@ import { ChatContextMeter } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
-import { lastAssistantNextStepPrompt } from "./nextStepChoices.js";
+import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
+import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { commitChapterFromChoiceIntent, confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
@@ -97,6 +98,51 @@ export function CheckerReadingNote({ progress }: {
     <div className="se-checker-reading" role="status">
       <span className="se-checker-reading-dot" aria-hidden="true" />
       核账员在读前文：第 {progress.done} / {progress.total} 章，读完就能按读完全书核账
+    </div>
+  );
+}
+
+/**
+ * 「下一步：AI 带路选项」行（从主组件抽出便于单测点击分派）。三档点击优先级：
+ *  1. choice 带 action（R4.7：服务端自己生成的确定性选项）→ 直接发结构化动作（body.action，不经模型）；
+ *  2. intent 是「确认定稿第 N 章」（模型提议的定稿确认）→ 按钮通道 commitConfirmAction（服务端直接定稿）；
+ *  3. 其余（模型 suggest_next_steps 生成的选项）→ 照旧把 intent 当一句话发给 agent。
+ */
+export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSuggestedAction, onSendUserAction }: {
+  readonly nextStep: NextStepPrompt;
+  readonly busy: boolean;
+  readonly onSendMessage?: (message: string) => void;
+  readonly onSuggestedAction?: (action: SuggestedAction) => void;
+  readonly onSendUserAction?: (action: AgentUserAction) => void;
+}) {
+  return (
+    <div className="nextstep">
+      <span className="nextstep-q">{nextStep.question}</span>
+      <div className="nextstep-row">
+        {nextStep.choices.map((choice) => (
+          <button
+            key={choice.label}
+            type="button"
+            className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
+            disabled={busy}
+            onMouseMove={trackChoiceLight}
+            onClick={() => {
+              if (choice.action && onSendUserAction) {
+                onSendUserAction(choice.action);
+                return;
+              }
+              const commitChapter = commitChapterFromChoiceIntent(choice.intent);
+              if (commitChapter !== null && onSuggestedAction) {
+                onSuggestedAction(commitConfirmAction({ chapter: commitChapter }));
+                return;
+              }
+              onSendMessage?.(choice.intent);
+            }}
+          >
+            <span>{choice.label}{choice.primary ? <em className="nextstep-rec">推荐</em> : null}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -415,31 +461,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 下一步：AI 带路选项 ── 点选项=给 agent 发一句意图（对话里留「你：…」、再由 agent 接着做）；
           引导≠强制：可直接打字无视。idle/进行态不出（空态卡/思考浮层自有提示）。 */}
       {nextStep && props.onSendMessage && !workspaceBusy ? (
-        <div className="nextstep">
-          <span className="nextstep-q">{nextStep.question}</span>
-          <div className="nextstep-row">
-            {nextStep.choices.map((choice) => (
-              <button
-                key={choice.label}
-                type="button"
-                className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
-                disabled={busy}
-                onMouseMove={trackChoiceLight}
-                onClick={() => {
-                  // 定稿选项走按钮通道（结构化动作，服务端直接执行）；其余选项照旧作为一句话发给 agent。
-                  const commitChapter = commitChapterFromChoiceIntent(choice.intent);
-                  if (commitChapter !== null && props.onSuggestedAction) {
-                    props.onSuggestedAction(commitConfirmAction({ chapter: commitChapter }));
-                    return;
-                  }
-                  props.onSendMessage?.(choice.intent);
-                }}
-              >
-                <span>{choice.label}{choice.primary ? <em className="nextstep-rec">推荐</em> : null}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <NextStepChoicesRow
+          nextStep={nextStep}
+          busy={busy}
+          onSendMessage={props.onSendMessage}
+          onSuggestedAction={props.onSuggestedAction}
+          onSendUserAction={props.onSendUserAction}
+        />
       ) : null}
 
       {/* ── 上下文提示条（消息列表与输入框之间） ──

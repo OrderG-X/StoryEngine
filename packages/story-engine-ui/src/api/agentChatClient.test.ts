@@ -491,6 +491,54 @@ describe("streamAgentChat", () => {
     expect(received?.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
   });
 
+  it("suggest_next_steps 的 choice.action（R4.7）→ 白名单内透传、白名单外/形状不对丢掉（选项保留，退回发文本）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "ns1",
+          toolName: "suggest_next_steps",
+          output: {
+            ok: true,
+            question: "核账做完了，接下来？",
+            choices: [
+              { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
+              { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+              { label: "我自己改", intent: "我自己改，先放着" },
+              // 白名单外（授权写盘动作不许藏在选项里直达）→ action 丢掉，选项照旧发文本。
+              { label: "假确认定稿", intent: "x", action: { toolName: "commit_apply", chapter: 5 } },
+              { label: "坏章号", intent: "y", action: { toolName: "commit_preview", chapter: 0 } },
+              { label: "认不出的工具", intent: "z", action: { toolName: "web_search" } },
+            ],
+          },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+
+    let received: { nextStepPrompt?: unknown } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received = info; },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    const prompt = received?.nextStepPrompt as { question: string; choices: { label: string; action?: { toolName: string } }[] };
+    expect(prompt.question).toBe("核账做完了，接下来？");
+    expect(prompt.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview" } });
+    expect(prompt.choices[1]).toMatchObject({ label: "再细核一遍", action: { toolName: "check_continuity" } });
+    expect(prompt.choices[1].action).toMatchObject({ fresh: true });
+    expect(prompt.choices[2]).not.toHaveProperty("action");
+    expect(prompt.choices[3]).not.toHaveProperty("action");
+    expect(prompt.choices[4]).not.toHaveProperty("action");
+    expect(prompt.choices[5]).not.toHaveProperty("action");
+  });
+
   it("quality_check ok:false（防御位）→ 不透传 refined 质检卡（今天失败走抛错，ok:false+refined 一旦出现不能显成「质检通过」卡）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

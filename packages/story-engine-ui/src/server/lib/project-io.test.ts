@@ -1028,6 +1028,33 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(out[2]).not.toHaveProperty("nextStepPrompt");
   });
 
+  it("nextStepPrompt 的 choice.action（R4.7）：白名单内随存档 round-trip（刷新/重开后照旧直达），白名单外丢掉、选项保留", () => {
+    const out = readWorkspaceMessages([
+      {
+        id: "assistant-next-step-action",
+        role: "assistant",
+        content: "核账做完了，接下来？",
+        nextStepPrompt: {
+          question: "核账做完了，接下来？",
+          choices: [
+            { label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
+            { label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } },
+            { label: "我自己改", intent: "我自己改，先放着" },
+            { label: "坏动作丢", intent: "a", action: { toolName: "commit_apply", chapter: 5 } },
+            { label: "残缺动作丢", intent: "b", action: { toolName: "commit_preview" } },
+          ],
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+    ]);
+    const choices = out[0].nextStepPrompt!.choices;
+    expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
+    expect(choices[1]).toEqual({ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
+    expect(choices[2]).not.toHaveProperty("action");
+    expect(choices[3]).not.toHaveProperty("action");
+    expect(choices[4]).not.toHaveProperty("action");
+  });
+
   it("isErrorNotice/errorDetail round-trip：错误卡字段保留，旧消息不多写", () => {
     const out = readWorkspaceMessages([
       {
