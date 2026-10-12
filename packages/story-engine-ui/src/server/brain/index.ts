@@ -8,7 +8,7 @@
  *
  * R1（2026-10-12）起三个专员都是默认：STORY_CHECKER / STORY_LEDGER / STORY_PLANNER 没设（或设成 reader）走新路；
  * 显式设成 legacy（核账也认 combo）才走旧路——回退只留到 R3 删旧路为止，作排查用。
- * 核账员默认带 T1 选出的 A 自复核（DEFAULT_READER_VARIANT，check-service 的产品路传它）。
+ * 核账员默认带 T1 选出的 A 自复核 + R2.1 赢下的 F 时间线只进自复核（DEFAULT_READER_VARIANT，check-service 的产品路传它）。
  * 预热和后台补读对三个角色都生效，且共用同一条补读队列、按角色依次补（见 catch-up.ts）。
  */
 import {

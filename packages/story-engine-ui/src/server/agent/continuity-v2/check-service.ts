@@ -64,7 +64,7 @@ const READER_MAX_CATCH_UP = 10;
 export interface ChapterCheckOptions {
   /** 正文没改也重新核。 */
   readonly fresh?: boolean;
-  /** 核账走哪一路：reader＝核账员（缺省，带 A 自复核）；combo＝旧（通读三遍 + 拆说法 + 复核）。缺省读环境变量 STORY_CHECKER，没设就是 reader；显式 legacy / combo 才走旧路（回退排查用，R3 删）。 */
+  /** 核账走哪一路：reader＝核账员（缺省，带 A 自复核 + F 时间线只进自复核）；combo＝旧（通读三遍 + 拆说法 + 复核）。缺省读环境变量 STORY_CHECKER，没设就是 reader；显式 legacy / combo 才走旧路（回退排查用，R3 删）。 */
   readonly engine?: CheckerEngine;
   /** 核账员那一路的模型调用（测试注入）；缺省走配置的 qualityCheck 模型。 */
   readonly readerCallModel?: BrainCallModel;
