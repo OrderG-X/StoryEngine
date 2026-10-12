@@ -31,10 +31,8 @@ import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
-  callConfiguredPlannerModelQuick,
   catchUpReaders,
   checkPlanByReader,
-  isPlannerSecondPassEnabled,
   isReaderPlannerEnabled,
   planChapterByPlanner,
   revisePlanByPlanner,
@@ -470,15 +468,12 @@ const PLANNER_MAX_CATCH_UP = 10;
 const PLANNER_FALLBACK_NOTE = "（章纲员还在读前文，这次用的是旧路拟纲。）";
 
 /**
- * 章纲员那一路（STORY_PLANNER=reader）：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改。
- * R2.3 起（STORY_PLANNER_SECOND_PASS，缺省开）改完一轮后核账员再审一次，还有确定问题再改一轮，最多两轮、不更多。
+ * 章纲员那一路（STORY_PLANNER=reader）：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改一轮（不循环）。
  * 补笔记太多 → 返回 undefined，调用方这次走旧路（拟 + 审校都是旧的），笔记在后台补。
  */
 async function planByEditorialRoom(input: PlanChapterInput & {
   readonly checkCallModel?: PlanCallModel;
   readonly plannerCallModel?: BrainCallModel;
-  /** 第二轮改纲的模型调用（测试注入）；缺省走关思考快路（第二轮只改复审剩下的确定要点）。 */
-  readonly plannerQuickCallModel?: BrainCallModel;
   readonly planCheckReaderCallModel?: BrainCallModel;
 }, direction: string): Promise<ResolvedChapterPlan | undefined> {
   const plannerCallModel = input.plannerCallModel ?? callConfiguredPlannerModel;
@@ -516,7 +511,7 @@ async function planByEditorialRoom(input: PlanChapterInput & {
   if (checked.problems.length === 0) {
     return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}`, reused: false };
   }
-  // 有问题：把问题列表交回章纲员窗口，只改有问题的要点。改不成就用原章纲（如实说明）。
+  // 有问题：把问题列表交回章纲员窗口，只改有问题的要点，改一轮、不循环。改不成就用原章纲（如实说明）。
   const revised = await withStep("改", () => revisePlanByPlanner({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -525,49 +520,16 @@ async function planByEditorialRoom(input: PlanChapterInput & {
     callModel: plannerCallModel,
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
-  if (!revised.ok) {
+  if (revised.ok) {
     return {
-      plan: planned.plan,
-      note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.skipped === "not_ready" ? "章纲员还在读前文" : revised.reason}。）`,
-      reused: false,
-    };
-  }
-  const firstNote = `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉：${brief(checked.problems.map((problem) => problem.reason))}）`;
-  if (!isPlannerSecondPassEnabled()) return { plan: revised.plan, note: firstNote, reused: false };
-  // R2.3 第二轮：改完一轮后核账员再审一次；还有「确定」问题（earlierQuote 已由代码核对）就再改一轮，最多两轮、不更多。
-  const rechecked = await withStep("审", () => checkPlanByReader({
-    projectDir: input.projectDir,
-    plan: revised.plan,
-    callModel: input.planCheckReaderCallModel ?? callConfiguredBrainModel,
-    maxCatchUp: PLANNER_MAX_CATCH_UP,
-  }));
-  if (rechecked.skipped === "not_ready" || rechecked.failures.length > 0) {
-    const why = rechecked.skipped === "not_ready" ? "核账员还在读前文" : rechecked.failures[0]!;
-    return { plan: revised.plan, note: `${firstNote}（改后复审这次没跑成：${why}，章纲就用这一版。）`, reused: false };
-  }
-  if (rechecked.problems.length === 0) {
-    return { plan: revised.plan, note: `${firstNote}（改后复审：没再发现和前文对不上的要点。）`, reused: false };
-  }
-  // 复审还有确定问题：再改一轮（最后一轮，改完不再循环复审）。第二轮只改剩下的确定要点，走关思考快路。
-  const revisedAgain = await withStep("改", () => revisePlanByPlanner({
-    projectDir: input.projectDir,
-    chapter: input.chapter,
-    plan: revised.plan,
-    problems: rechecked.problems,
-    callModel: input.plannerQuickCallModel ?? callConfiguredPlannerModelQuick,
-    maxCatchUp: PLANNER_MAX_CATCH_UP,
-    round: 2,
-  }));
-  if (revisedAgain.ok) {
-    return {
-      plan: revisedAgain.plan,
-      note: `本章章纲：${revisedAgain.plan.summary}（核账员审出 ${checked.problems.length} 处、改后复审又审出 ${rechecked.problems.length} 处和前文对不上，已让章纲员改了两轮。）`,
+      plan: revised.plan,
+      note: `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉：${brief(checked.problems.map((problem) => problem.reason))}）`,
       reused: false,
     };
   }
   return {
-    plan: revised.plan,
-    note: `${firstNote}（改后复审又审出 ${rechecked.problems.length} 处，但第二轮改纲没成：${revisedAgain.skipped === "not_ready" ? "章纲员还在读前文" : revisedAgain.reason}，章纲就用第一轮改完的。）`,
+    plan: planned.plan,
+    note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.skipped === "not_ready" ? "章纲员还在读前文" : revised.reason}。）`,
     reused: false,
   };
 }
@@ -575,15 +537,13 @@ async function planByEditorialRoom(input: PlanChapterInput & {
 /**
  * 出稿前拿到本章章纲：这章已有章纲、且作者方向没变（同为空或原话相同）→ 沿用（「重写这一章」保持同一份章纲）；
  * 否则重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
- * R1 起 STORY_PLANNER 没设（缺省）就走编辑部（章纲员拟 → 核账员审 → 改，R2.3 起缺省最多改两轮）；显式设 legacy 才走旧路（拟 + 审校）。
+ * R1 起 STORY_PLANNER 没设（缺省）就走编辑部（章纲员拟 → 核账员审 → 改一轮）；显式设 legacy 才走旧路（拟 + 审校）。
  */
 export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
   /** 章纲审校用的调用（生产注入关思考版）；缺省用拟章纲同一个调用。 */
   readonly checkCallModel?: PlanCallModel;
   /** 章纲员那一路的模型调用（测试注入）；缺省走 chapterSteering 槽（思考开关随作者的任务设置）。 */
   readonly plannerCallModel?: BrainCallModel;
-  /** 第二轮改纲的模型调用（测试注入）；缺省走关思考快路（R2.3）。 */
-  readonly plannerQuickCallModel?: BrainCallModel;
   /** 核账员审章纲的模型调用（测试注入）；缺省走 qualityCheck 槽。 */
   readonly planCheckReaderCallModel?: BrainCallModel;
 }): Promise<ResolvedChapterPlan> {

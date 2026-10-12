@@ -45,8 +45,6 @@ export { LEDGER_ROLE, declareChapterDeltaByLedger, type LedgerDeclareInput, type
 export {
   PLANNER_ROLE,
   callConfiguredPlannerModel,
-  callConfiguredPlannerModelQuick,
-  isPlannerSecondPassEnabled,
   planChapterByPlanner,
   revisePlanByPlanner,
   plannerTask,
