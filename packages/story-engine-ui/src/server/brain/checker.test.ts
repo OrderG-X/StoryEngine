@@ -3,12 +3,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { normalizeChapterPlan } from "@actalk/story-engine";
 import {
   callConfiguredBrainModel,
   checkChapterByReader,
+  checkPlanByReader,
   checkTask,
   CHECKER_FOCUS,
   CHECKER_ROLE,
+  parsePlanProblems,
+  planCheckTask,
 } from "./checker.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 
@@ -221,5 +225,86 @@ describe("核账员的模型调用", () => {
   it("模型返回空内容 → 抛错，不当成没问题", async () => {
     llmMocks.streamChatModelToText.mockResolvedValue({ content: "  ", thinking: "" });
     await expect(callConfiguredBrainModel([{ role: "user", content: "问" }], { json: true })).rejects.toThrow("空内容");
+  });
+});
+
+// ---------- 审章纲（编辑部第 3 步） ----------
+
+const PLAN = normalizeChapterPlan({
+  summary: "林舟去取怀表",
+  beats: ["林舟从抽屉里取出怀表", "他把怀表交给周婶", "两人约好三天后再见"],
+  newInformation: ["怀表的下落"],
+  scene: { location: "铺子", time: "第二天上午" },
+  characters: ["林舟", "周婶"],
+}, { chapter: 3 })!;
+
+const problems = (...items: Record<string, unknown>[]) => JSON.stringify({ problems: items });
+
+describe("核账员审章纲：解析", () => {
+  it("earlierQuote 由代码核对：报错章号时按章序搜；抄不出前文原文的丢掉；point 越界的丢掉", () => {
+    const parsed = parsePlanProblems(problems(
+      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 9, reason: "怀表第 2 章已锁进抽屉，本章却直接取出" },
+      { point: 2, earlierQuote: "前文里根本没有的一句话", earlierChapter: 2, reason: "抄不出来" },
+      { point: 7, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "要点序号越界" },
+      { point: "第 3 条", earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "日子对不上" },
+    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    expect(parsed).toEqual([
+      { point: 1, beat: "林舟从抽屉里取出怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "怀表第 2 章已锁进抽屉，本章却直接取出" },
+      { point: 3, beat: "两人约好三天后再见", earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "日子对不上" },
+    ]);
+  });
+
+  it("不是 JSON 抛错（调用方记失败，不当成没问题）", () => {
+    expect(() => parsePlanProblems("没问题", PLAN, { chapters: [] })).toThrow("不是 JSON");
+  });
+});
+
+describe("核账员审章纲：checkPlanByReader", () => {
+  /** 假模型：checker 笔记（json:false）+ 审章纲（json:true，最后一条消息含「章纲」任务）。 */
+  const fakePlanChecker = (reply: string | Error) => {
+    const calls: { readonly messages: readonly BrainMessage[]; readonly json: boolean }[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      calls.push({ messages: [...messages], json: options.json });
+      if (!options.json) return `第${/第 (\d+) 章/u.exec(messages.at(-1)!.content)?.[1]}章笔记`;
+      if (reply instanceof Error) throw reply;
+      return reply;
+    };
+    return { callModel, calls };
+  };
+
+  it("一遍核完：窗口（读到 N-1）+ 审章纲提示；问题经代码核过原句", async () => {
+    const dir = await makeBook();
+    const { callModel, calls } = fakePlanChecker(problems(
+      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "表在抽屉里锁着，不能直接取出" },
+    ));
+    const result = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel });
+    expect(result.skipped).toBeUndefined();
+    expect(result.failures).toEqual([]);
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toMatchObject({ point: 1, earlierChapter: 2, reason: "表在抽屉里锁着，不能直接取出" });
+    const checkCalls = calls.filter((call) => call.json);
+    expect(checkCalls).toHaveLength(1);
+    expect(checkCalls[0]!.messages).toHaveLength(6); // system + 两章各两条 + 任务
+    expect(checkCalls[0]!.messages.at(-1)!.content).toBe(planCheckTask(3, PLAN));
+  });
+
+  it("第 1 章没有前文：窗口只有 system，照审", async () => {
+    const dir = await makeBook();
+    const { callModel, calls } = fakePlanChecker(problems());
+    const result = await checkPlanByReader({ projectDir: dir, plan: { ...PLAN, chapter: 1 }, callModel });
+    expect(result.failures).toEqual([]);
+    expect(calls.filter((call) => call.json)[0]!.messages).toHaveLength(2);
+  });
+
+  it("要补的笔记太多 → skipped: not_ready；调用失败 → failures 如实", async () => {
+    const dir = await makeBook();
+    const notReady = fakePlanChecker(problems());
+    expect(await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: notReady.callModel, maxCatchUp: 1 }))
+      .toEqual({ problems: [], failures: [], skipped: "not_ready" });
+    expect(notReady.calls).toHaveLength(0);
+    const broken = fakePlanChecker(new Error("断流了"));
+    const failed = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: broken.callModel });
+    expect(failed.problems).toEqual([]);
+    expect(failed.failures).toEqual(["审章纲没跑成：断流了"]);
   });
 });

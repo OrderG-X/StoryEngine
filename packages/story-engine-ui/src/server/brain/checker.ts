@@ -8,6 +8,7 @@
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import {
+  containsQuote,
   hedged,
   normalize,
   parseFullReadIssues,
@@ -15,6 +16,7 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "../agent/continuity-v2/check-chapter.js";
+import type { ChapterPlan } from "@actalk/story-engine";
 import { ensureReaderWindow, type BrainCallModel, type BrainMessage, type ReaderRole } from "./reader-window.js";
 
 export const CHECKER_ROLE: ReaderRole = {
@@ -167,4 +169,130 @@ export async function checkChapterByReader(input: {
     else failures.push(`${CHECKER_PASSES[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
   return { issues: mergePasses(passes), failures };
+}
+
+// ---------- 审章纲（2026-10-12 编辑部第 3 步） ----------
+
+/** 核账员审章纲审出的一条问题：point 指 beats 的序号（1 起），beat 由代码按序号取回（不信模型抄写）。 */
+export interface PlanProblem {
+  readonly point: number;
+  readonly beat?: string;
+  readonly earlierQuote: string;
+  readonly earlierChapter: number;
+  readonly reason: string;
+}
+
+export interface ReaderPlanCheckResult {
+  /** earlierQuote 已由代码逐字核对过真在前文里（抄不出的在解析时丢掉）。 */
+  readonly problems: readonly PlanProblem[];
+  readonly failures: string[];
+  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没审。 */
+  readonly skipped?: "not_ready";
+}
+
+/** 审章纲提示：核账员窗口（读到 N-1）后接「这是第 N 章的章纲（还没写正文）」+ 章纲要点，找和前文矛盾的要点。 */
+export function planCheckTask(chapter: number, plan: ChapterPlan): string {
+  return [
+    `这是作者准备照着写第 ${chapter} 章的章纲（还没写正文），上面还没给过你。对照你读过的前文原文和笔记，找出章纲里和前文对不上的要点：`,
+    "- 谁手里有什么：物件此刻在哪、在谁手上，章纲是不是安排拿错了、放错了、又交了一遍",
+    "- 谁在哪：人物的位置和行程按前文接不接得上",
+    "- 谁知道什么：章纲安排人物说出或用到的信息，他按前文还不可能知道",
+    "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
+    "- 前文已经做过、发现、确认过的事，章纲又安排一遍",
+    "章纲明确安排了变化过程的、作者方向明确要求的，不算。",
+    "每条 problems：point 写第几条要点（下面要点列表的序号）；earlierQuote 逐字抄前文和它冲突的那一句；earlierChapter 写那句在第几章；reason 一句话说哪里对不上。抄不出原文的不要报。",
+    `【第 ${chapter} 章章纲】`,
+    `一句话：${plan.summary}`,
+    `要点：\n${plan.beats.map((beat, index) => `${index + 1}. ${beat}`).join("\n")}`,
+    ...(plan.newInformation.length > 0 ? [`新信息：\n${plan.newInformation.map((item, index) => `${index + 1}. ${item}`).join("\n")}`] : []),
+    `开场：${plan.scene.location ?? "（没写）"}，${plan.scene.time ?? "（没写）"}`,
+    ...(plan.characters.length > 0 ? [`人物：${plan.characters.join("、")}`] : []),
+    ...(plan.entities.length > 0 ? [`物件/地点：${plan.entities.join("、")}`] : []),
+    '只输出一个 JSON：{"problems":[{"point":1,"earlierQuote":"","earlierChapter":1,"reason":""}]}；没有问题就给空数组。',
+  ].join("\n");
+}
+
+/** 前文按章号 → 归一后的全文（核 earlierQuote 用）。 */
+function earlierByText(earlier: EarlierText): ReadonlyMap<number, string> {
+  return new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
+}
+
+/** 要点序号：数字、「第 2 条」都收；越界（或没写）丢掉。 */
+function readPoint(raw: unknown, beats: readonly string[]): number | undefined {
+  const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw : "";
+  const digits = /\d+/u.exec(text);
+  if (!digits) return undefined;
+  const point = Number(digits[0]);
+  return Number.isInteger(point) && point >= 1 && point <= beats.length ? point : undefined;
+}
+
+/**
+ * 解析审章纲输出：earlierQuote 由代码核对真在前文里（先信它报的章号，对不上按章序搜），抄不出原文的丢掉；
+ * point 越界的丢掉（模型没指到具体要点的问题没法只改那条要点）。
+ */
+export function parsePlanProblems(text: string, plan: ChapterPlan, earlier: EarlierText): readonly PlanProblem[] {
+  let parsed: { problems?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { problems?: unknown };
+  } catch {
+    throw new Error("审章纲结果不是 JSON");
+  }
+  const byChapter = earlierByText(earlier);
+  const out: PlanProblem[] = [];
+  for (const item of Array.isArray(parsed.problems) ? parsed.problems : []) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const earlierQuote = String(record.earlierQuote ?? "").trim();
+    const reason = String(record.reason ?? "").trim();
+    const point = readPoint(record.point ?? record.beat, plan.beats);
+    if (!point || !earlierQuote || !reason) continue;
+    const claimed = Number(record.earlierChapter);
+    const inClaimed = Number.isInteger(claimed) && claimed >= 1 && byChapter.has(claimed) && containsQuote(byChapter.get(claimed)!, earlierQuote);
+    const chapter = inClaimed
+      ? claimed
+      : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, earlierQuote));
+    if (chapter === undefined) continue;
+    out.push({ point, beat: plan.beats[point - 1], earlierQuote, earlierChapter: chapter, reason });
+  }
+  return out;
+}
+
+/**
+ * 核账员审章纲：在读完第 N-1 章的窗口后面接「第 N 章的章纲（还没写正文）」+ 要点，一遍找出和前文矛盾的要点。
+ * 章纲短，不用像核正文那样分三遍。earlierQuote 全部经代码核对。
+ */
+export async function checkPlanByReader(input: {
+  readonly projectDir: string;
+  readonly plan: ChapterPlan;
+  readonly callModel: BrainCallModel;
+  readonly notesRoot?: string;
+  readonly maxCatchUp?: number;
+  /** 前面各章原文（调用方已读过就传进来）；缺省从书目录读。 */
+  readonly earlier?: EarlierText;
+}): Promise<ReaderPlanCheckResult> {
+  let window: BrainMessage[];
+  try {
+    const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
+      projectDir: input.projectDir,
+      role: CHECKER_ROLE,
+      upTo: input.plan.chapter - 1,
+      callModel: input.callModel,
+      ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+    }));
+    if (ready.missing > 0) return { problems: [], failures: [], skipped: "not_ready" };
+    window = ready.messages;
+  } catch (error) {
+    return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
+  }
+  const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.plan.chapter);
+  try {
+    const text = await withStep("核账员审纲", () => input.callModel(
+      [...window, { role: "user", content: planCheckTask(input.plan.chapter, input.plan) }],
+      { json: true },
+    ));
+    return { problems: parsePlanProblems(text, input.plan, earlier), failures: [] };
+  } catch (error) {
+    return { problems: [], failures: [`审章纲没跑成：${error instanceof Error ? error.message : String(error)}`] };
+  }
 }
