@@ -109,11 +109,12 @@ describe("章纲员：拟章纲", () => {
     expect(await readChapterPlan(failedDir, 3)).toBeUndefined();
   });
 
-  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready，不调模型", async () => {
+  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready + pending（读到第几章），不调模型", async () => {
     const dir = await makeBook();
     const { callModel, calls } = fakePlanner();
     const result = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel, maxCatchUp: 1 });
-    expect(result).toEqual({ ok: false, skipped: "not_ready", reason: expect.stringContaining("章纲员要补的读书笔记超过 1 章") });
+    expect(result).toMatchObject({ ok: false, skipped: "not_ready", reason: expect.stringContaining("章纲员要补的读书笔记超过 1 章") });
+    expect(result.ok === false && result.pending).toEqual({ done: 0, total: 2 });
     expect(calls).toHaveLength(0);
   });
 
@@ -216,15 +217,13 @@ describe("章纲员的模型调用", () => {
 });
 
 describe("提示词文本", () => {
-  it("plannerTask 与旧路 buildPlanMessages 的要求逐字同源（改提示词两条路一起比分）", async () => {
+  it("plannerTask 带全章纲要求（PLAN_REQUIREMENT_LINES 逐条 + PLAN_JSON_FIELDS，改提示词先在题库比分）", async () => {
     const dir = await makeBook();
     const materials = await collectPlanMaterials(dir, 3, "许棠收到回信");
     const task = plannerTask(3, materials, "许棠收到回信");
-    const { PLAN_REQUIREMENT_LINES, PLAN_JSON_FIELDS, buildPlanMessages } = await import("../agent/chapter-plan/plan-chapter.js");
-    const [system] = buildPlanMessages(3, materials, "许棠收到回信");
+    const { PLAN_REQUIREMENT_LINES, PLAN_JSON_FIELDS } = await import("../agent/chapter-plan/plan-chapter.js");
     for (const line of PLAN_REQUIREMENT_LINES) {
       expect(task).toContain(line);
-      expect(system.content).toContain(line);
     }
     expect(task).toContain(PLAN_JSON_FIELDS);
   });

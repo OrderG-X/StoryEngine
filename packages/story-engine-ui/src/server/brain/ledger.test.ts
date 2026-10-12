@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("declareChapterDeltaByLedger", () => {
-  it("先补笔记到 N-1 章，再在窗口后接一条 user 消息要 JSON 声明；解析与编号换算复用旧路", async () => {
+  it("先补笔记到 N-1 章，再在窗口后接一条 user 消息要 JSON 声明；解析与编号换算复用 chapter-delta-declaration 的契约函数", async () => {
     const dir = await makeBook([CH1, CH2]);
     const { callModel, calls } = fakeModel(DECLARATION_JSON);
     const result = await declareChapterDeltaByLedger({
@@ -160,13 +160,12 @@ describe("declareChapterDeltaByLedger", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("声明的字段契约与旧路一字不差（buildChapterDeltaSystemSpec 原文出现在消息里）", async () => {
+  it("声明的字段契约用 chapter-delta-declaration 的确定性工具（buildChapterDeltaSystemSpec 原文出现在消息里）", async () => {
     const dir = await makeBook([CH1]);
     const { callModel, calls } = fakeModel(DECLARATION_JSON);
     await declareChapterDeltaByLedger({ projectDir: dir, chapter: 2, draft: DRAFT, callModel });
-    const { buildChapterDeltaMessages } = await import("../agent/tools/chapter-delta-declaration.js");
-    const legacy = buildChapterDeltaMessages({ chapter: 2, draft: DRAFT });
-    const spec = legacy[0]!.content;
+    const { buildChapterDeltaSystemSpec } = await import("../agent/tools/chapter-delta-declaration.js");
+    const spec = buildChapterDeltaSystemSpec();
     const declarationCall = calls.find((call) => call.json)!;
     expect(declarationCall.messages.at(-1)?.content).toContain(spec);
   });

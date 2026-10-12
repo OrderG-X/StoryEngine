@@ -1,18 +1,20 @@
 /**
- * 拟章纲（2026-10-08 写作主链重设计·阶段 2「先想后写」）。
+ * 拟章纲（2026-10-08 写作主链重设计·阶段 2「先想后写」；2026-10-12 编辑部 T3 起只剩章纲员一条路）。
  *
  * 十章真机验收：作者只说「接着写」时写手拿到的目标是空话，剧情原地打转（同一个发现被重新发现 5 次）。
- * 出稿前先用一次模型调用拟章纲：接住上一章结尾、至少推进一条开着的线索、至少给一条新信息、写明不要重复什么，
+ * 出稿前先拟章纲：接住上一章结尾、至少推进一条开着的线索、至少给一条新信息、写明不要重复什么，
  * 并点名本章涉及的人/物/地——引擎据此翻旧章原文与旧事实（见引擎 chapter-plan.ts / earlier-passages.ts）。
  *
- * 模型无关：输出宽进归一（normalizeChapterPlan）；坏 JSON / 挂了 → 自动重试一次；仍不成 → ok:false + 原因，
- * 由调用方如实告知并回落「无章纲出稿」，绝不拿空章纲冒充。题材中立：提示词不预设任何题材。
+ * 编排见 resolveChapterPlanForDraft：章纲员窗口拟纲（brain/planner.ts）→ 核账员窗口审纲（brain/checker.ts）
+ * → 有问题交回章纲员改一轮（不循环）。本文件留着的是章纲员复用的纯函数：材料收集（collectPlanMaterials）、
+ * 章纲 JSON 要求（PLAN_REQUIREMENT_LINES / PLAN_JSON_FIELDS / planMaterialBlocks）、解析与天数归一
+ * （parsePlanJson / readDayOffset / reconcileStoryDay / storyDayAtChapterEnd / previousChapterEndDay）。
+ * 改提示词必须在题库上比分（docs/editorial-room/ 的规矩），别凭感觉改。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   findRecurringPhrases,
-  normalizeChapterPlan,
   readArcGoalPool,
   readAssetLedger,
   readCharacterBible,
@@ -24,41 +26,19 @@ import {
   readThreadPool,
   readTimelineEvents,
   selectEffectiveFacts,
-  writeChapterPlan,
   type ChapterPlan,
 } from "@actalk/story-engine";
-import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../../lib/llm-client.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
   catchUpReaders,
   checkPlanByReader,
-  isReaderPlannerEnabled,
   planChapterByPlanner,
   revisePlanByPlanner,
   type BrainCallModel,
 } from "../../brain/index.js";
-import { checkAndRevisePlan } from "./plan-check.js";
 import { withStep } from "../../lib/token-meter.js";
 
-export type PlanCallModel = (
-  messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
-) => Promise<string>;
-
-export interface PlanChapterInput {
-  readonly projectDir: string;
-  readonly chapter: number;
-  /** 作者这章的方向原话；没给 = 模型按现状自己拟。 */
-  readonly direction?: string;
-  readonly callModel: PlanCallModel;
-}
-
-export type PlanChapterResult =
-  | { readonly ok: true; readonly plan: ChapterPlan }
-  | { readonly ok: false; readonly reason: string };
-
-/** 拟章纲失败（模型挂了 / 不是 JSON / 缺要点）自动再试的次数。 */
-const PLAN_RETRIES = 1;
 const PREVIOUS_TAIL_CHARS = 3000;
 const MAX_OPEN_THREADS = 15;
 const RECENT_CHAPTER_SUMMARIES = 6;
@@ -210,8 +190,7 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
   };
 }
 
-/** 章纲 JSON 要求（章纲员路和旧路共用同一份文本，改提示词必须两条路一起在题库上比分）。 */
-export const PLAN_SYSTEM_ROLE = "你是长篇小说的章纲策划。读前文和故事现状，为下一章拟一份章纲。只输出一个 JSON，不要解释、不要 Markdown。";
+/** 章纲 JSON 要求（章纲员路用的同一份文本，改提示词必须在题库上比分——见文件头）。 */
 export const PLAN_REQUIREMENT_LINES: readonly string[] = [
   "1. 紧接上一章结尾：时间、地点、人物各自在哪、手里有什么，都从上一章结尾接上；换场要交代怎么过去的。",
   "2. 这章必须让故事往前走：至少推进一条「开着的线索」或「目标」，并且至少给出一条读者此前不知道的新信息或局面变化（newInformation）。前文已经发现、说过、确认过的东西不算新信息。",
@@ -268,32 +247,10 @@ export function planMaterialBlocks(
   ].filter(Boolean);
 }
 
-export function buildPlanMessages(
-  chapter: number,
-  materials: PlanChapterMaterials,
-  direction?: string,
-): { readonly role: "system" | "user"; readonly content: string }[] {
-  const system = [PLAN_SYSTEM_ROLE, "要求：", ...PLAN_REQUIREMENT_LINES, "JSON 字段：", PLAN_JSON_FIELDS].join("\n");
-  return [{ role: "system", content: system }, { role: "user", content: planMaterialBlocks(chapter, materials, direction).join("\n\n") }];
-}
-
 export function parsePlanJson(text: string): unknown {
   const match = text.match(/\{[\s\S]*\}/u);
   if (!match) throw new Error("章纲不是 JSON");
   return JSON.parse(match[0]);
-}
-
-/** 精简版材料：上一章只留结尾 600 字，事实与线索减半。 */
-function slimMaterials(materials: PlanChapterMaterials): PlanChapterMaterials {
-  const previous = materials.previousChapter;
-  return {
-    ...materials,
-    ...(previous ? { previousChapter: { chapter: previous.chapter, text: `（前略）${previous.text.slice(-600)}` } } : {}),
-    facts: materials.facts.slice(0, Math.ceil(materials.facts.length / 2)),
-    openThreads: materials.openThreads.slice(0, 8),
-    recentChapters: materials.recentChapters.slice(-3),
-    recentBeats: materials.recentBeats.slice(-2),
-  };
 }
 
 const NEXT_DAY = /第二天|第二日|次日|翌日|隔天|隔日|转天/u;
@@ -333,11 +290,8 @@ export function reconcileStoryDay(plan: ChapterPlan, dayOffset: number | undefin
   return plan;
 }
 
-/** 拟章纲并落盘（drafts/plans/chapter-NNNN.json）。失败自动重试一次；仍失败 ok:false + 原因，不抛。 */
-/**
- * 只有一句话加几个要点、人物 / 开场 / 新信息全空的章纲（第二十轮第 5、7 章）：算不出过了几天（日历少记一天）、
- * 翻旧资料的检索词也没了。这种重拟一次；重拟还是这样就用它，不为此判失败。
- */
+/** 只有一句话加几个要点、人物 / 开场 / 新信息全空的章纲（第二十轮第 5、7 章）：算不出过了几天（日历少记一天）、
+ * 翻旧资料的检索词也没了。章纲员路也用它判骨架章纲（重拟一次；重拟还是这样就用它，不为此判失败）。 */
 export function isSkeletonPlan(plan: ChapterPlan, dayOffset: number | undefined): boolean {
   return plan.characters.length === 0 && plan.newInformation.length === 0 && !plan.scene.location && !plan.scene.time && dayOffset === undefined;
 }
@@ -371,90 +325,6 @@ export async function previousChapterEndDay(projectDir: string, chapter: number)
   return storyDayAtChapterEnd(previous) ?? last.storyDay;
 }
 
-export async function planChapter(input: PlanChapterInput): Promise<PlanChapterResult> {
-  const materials = await collectPlanMaterials(input.projectDir, input.chapter, input.direction);
-  let lastError = "";
-  let skeleton: { readonly plan: ChapterPlan; readonly dayOffset: number | undefined } | undefined;
-  const finish = async (plan: ChapterPlan, dayOffset: number | undefined): Promise<PlanChapterResult> => {
-    const lastDay = await previousChapterEndDay(input.projectDir, input.chapter);
-    const dated = reconcileStoryDay(plan, dayOffset, lastDay);
-    // 反复出现的描写确定性地并进 avoid（不赌模型抄没抄进去），写手在章纲段里一定看得到。
-    const withAvoid = materials.recurringPhrases.length > 0
-      ? { ...dated, avoid: [...dated.avoid, `别再用这些说法：${materials.recurringPhrases.join("、")}`] }
-      : dated;
-    await writeChapterPlan(input.projectDir, withAvoid);
-    return { ok: true, plan: withAvoid };
-  };
-  for (let attempt = 0; attempt <= PLAN_RETRIES; attempt += 1) {
-    // 第二次换精简材料：验收第四轮第 8、9 章两次都被服务商内容过滤（content_filter）拦下，同样的输入重发必然再拦；
-    // 去掉上一章原文、只留结尾几百字与事实/线索，输入变了才有机会过。
-    const messages = attempt === 0 ? buildPlanMessages(input.chapter, materials, input.direction) : buildPlanMessages(input.chapter, slimMaterials(materials), input.direction);
-    try {
-      const raw = parsePlanJson(await input.callModel(messages));
-      const plan = normalizeChapterPlan(raw, {
-        chapter: input.chapter,
-        source: "model",
-        ...(input.direction?.trim() ? { direction: input.direction } : {}),
-      });
-      if (!plan) {
-        lastError = "章纲缺要点";
-        continue;
-      }
-      const dayOffset = readDayOffset(raw);
-      if (isSkeletonPlan(plan, dayOffset) && attempt < PLAN_RETRIES) {
-        console.warn(`[draft-pipeline] ch${input.chapter} 章纲只有要点、人物/开场/新信息全空，重拟一次`);
-        skeleton = { plan, dayOffset };
-        continue;
-      }
-      return await finish(plan, dayOffset);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  if (skeleton) return finish(skeleton.plan, skeleton.dayOffset);
-  return { ok: false, reason: `章纲没拟成（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
-}
-
-/**
- * 生产用 callModel：chapterSteering 任务槽（思考开关随作者的任务设置），json_object。
- * 走 streamChatModelToText：流式 + 空闲超时（有字节就续命、无总时长上限）；一律不传 max_tokens（铁律）。
- */
-/** 拟章纲「光想不写」的上限：超过就改用关思考重拟（第十一轮验收：开思考陷进去 20 分钟，整章卡死）。 */
-const PLAN_MAX_THINKING_MS = 150_000;
-
-export const callConfiguredPlanModel: PlanCallModel = async (messages) => {
-  const configured = await resolveConfiguredChatModel("chapterSteering");
-  const call = async (thinking: boolean) => {
-    const { content } = await streamChatModelToText({
-      configured: { ...configured, thinking },
-      messages: messages.map((message) => ({ role: message.role, content: message.content })),
-      responseFormat: { type: "json_object" },
-      ...(thinking ? { maxThinkingMs: PLAN_MAX_THINKING_MS } : {}),
-    });
-    if (!content.trim()) throw new Error("章纲模型返回了空内容");
-    return content;
-  };
-  try {
-    return await call(configured.thinking);
-  } catch (error) {
-    if (!(error instanceof ThinkingTooLongError)) throw error;
-    console.warn(`[draft-pipeline] 拟章纲思考超过 ${PLAN_MAX_THINKING_MS / 1000} 秒还没出结果，改用不思考重拟`);
-    return call(false);
-  }
-};
-
-/** 章纲审校：输入短、按格式出 JSON，强制关思考（同核对环节；开着它容易陷进长思考）。 */
-export const callConfiguredPlanCheckModel: PlanCallModel = async (messages) => {
-  const configured = await resolveConfiguredChatModel("chapterSteering");
-  const { content } = await streamChatModelToText({
-    configured: { ...configured, thinking: false },
-    messages: messages.map((message) => ({ role: message.role, content: message.content })),
-    responseFormat: { type: "json_object" },
-  });
-  if (!content.trim()) throw new Error("章纲审校返回了空内容");
-  return content;
-};
-
 export interface ResolvedChapterPlan {
   readonly plan?: ChapterPlan;
   /** 给作者看的一句话：章纲是什么 / 为什么没有。 */
@@ -463,19 +333,21 @@ export interface ResolvedChapterPlan {
   readonly reused: boolean;
 }
 
-/** 章纲员那一路最多当场补多少章笔记；超过就这次走旧路拟纲，笔记在后台补。 */
+/** 章纲员 / 核账员审纲当场最多补多少章笔记；超过就如实说「还在读前文」，笔记在后台补，这次不硬等。 */
 const PLANNER_MAX_CATCH_UP = 10;
-const PLANNER_FALLBACK_NOTE = "（章纲员还在读前文，这次用的是旧路拟纲。）";
 
 /**
- * 章纲员那一路（STORY_PLANNER=reader）：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改一轮（不循环）。
- * 补笔记太多 → 返回 undefined，调用方这次走旧路（拟 + 审校都是旧的），笔记在后台补。
+ * 编辑部拟章纲：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改一轮（不循环）。
+ * 章纲员要补的笔记太多（not_ready）→ 这次按没有章纲出稿，笔记在后台补（下次出稿就是读完全书的章纲员）；
+ * 核账员没读完（not_ready）→ 章纲照用、这次没审，同样后台补。都不阻断出稿。
  */
-async function planByEditorialRoom(input: PlanChapterInput & {
-  readonly checkCallModel?: PlanCallModel;
+async function planByEditorialRoom(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly direction?: string;
   readonly plannerCallModel?: BrainCallModel;
   readonly planCheckReaderCallModel?: BrainCallModel;
-}, direction: string): Promise<ResolvedChapterPlan | undefined> {
+}, direction: string): Promise<ResolvedChapterPlan> {
   const plannerCallModel = input.plannerCallModel ?? callConfiguredPlannerModel;
   const planned = await withStep("拟", () => planChapterByPlanner({
     projectDir: input.projectDir,
@@ -485,25 +357,33 @@ async function planByEditorialRoom(input: PlanChapterInput & {
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
   if (!planned.ok && planned.skipped === "not_ready") {
-    // 这次先用旧路拟纲，章纲员的笔记在后台补（补不成只记一笔，下次接着补）。
+    // 章纲员还在读前文：这次不拟纲（不拿没读过前文的拼材料路顶），笔记在后台补，出稿照常。
+    const pending = planned.pending;
     void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: plannerCallModel });
-    return undefined;
+    return {
+      note: `章纲员还在读这本书的前文${pending ? `（第 ${pending.done} / ${pending.total} 章）` : ""}，这次按没有章纲出稿；它读完后下一次出稿就按读完全书来拟。`,
+      reused: false,
+    };
   }
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
   // 动笔前核账员先审章纲：它读过前文，找章纲里和前文对不上的要点（照片那种：第 5 章已带回家，章纲又安排来取）。
+  const checkCallModel = input.planCheckReaderCallModel ?? callConfiguredBrainModel;
   const checked = await withStep("审", () => checkPlanByReader({
     projectDir: input.projectDir,
     plan: planned.plan,
-    callModel: input.planCheckReaderCallModel ?? callConfiguredBrainModel,
+    callModel: checkCallModel,
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
   const brief = (lines: readonly string[]) => `${lines.slice(0, 2).join("；")}${lines.length > 2 ? "等" : ""}`;
   if (checked.skipped === "not_ready") {
-    // 核账员没读完前文：章纲用旧审校顶一遍，笔记后台补。
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: input.planCheckReaderCallModel ?? callConfiguredBrainModel });
-    const legacy = await withStep("审", () => checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.checkCallModel ?? input.callModel }));
-    const note = `本章章纲：${legacy.plan.summary}${legacy.revised ? `（旧审校改了 ${legacy.issues.length} 处：${brief(legacy.issues)}）` : ""}（核账员还在读前文，章纲这次是旧审校过的。）`;
-    return { plan: legacy.plan, note, reused: false };
+    // 核账员没读完前文：章纲照用、这次没审（如实说），笔记后台补（点名 checker）。
+    const pending = checked.pending;
+    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: checkCallModel, roles: ["checker"] });
+    return {
+      plan: planned.plan,
+      note: `本章章纲：${planned.plan.summary}（核账员还在读前文${pending ? `（第 ${pending.done} / ${pending.total} 章）` : ""}，这次没审章纲。）`,
+      reused: false,
+    };
   }
   if (checked.failures.length > 0) {
     return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（章纲审校这次没跑成：${checked.failures[0]}）`, reused: false };
@@ -536,12 +416,13 @@ async function planByEditorialRoom(input: PlanChapterInput & {
 
 /**
  * 出稿前拿到本章章纲：这章已有章纲、且作者方向没变（同为空或原话相同）→ 沿用（「重写这一章」保持同一份章纲）；
- * 否则重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
- * R1 起 STORY_PLANNER 没设（缺省）就走编辑部（章纲员拟 → 核账员审 → 改一轮）；显式设 legacy 才走旧路（拟 + 审校）。
+ * 否则编辑部重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
  */
-export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
-  /** 章纲审校用的调用（生产注入关思考版）；缺省用拟章纲同一个调用。 */
-  readonly checkCallModel?: PlanCallModel;
+export async function resolveChapterPlanForDraft(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  /** 作者这章的方向原话；没给 = 章纲员按现状自己拟。 */
+  readonly direction?: string;
   /** 章纲员那一路的模型调用（测试注入）；缺省走 chapterSteering 槽（思考开关随作者的任务设置）。 */
   readonly plannerCallModel?: BrainCallModel;
   /** 核账员审章纲的模型调用（测试注入）；缺省走 qualityCheck 槽。 */
@@ -552,23 +433,5 @@ export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
   if (existing && (existing.direction ?? "") === direction) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}`, reused: true };
   }
-  if (isReaderPlannerEnabled()) {
-    const editorial = await planByEditorialRoom(input, direction);
-    if (editorial) return editorial;
-    const legacy = await resolveLegacyPlan(input, direction);
-    return { ...legacy, note: `${legacy.note}${legacy.note.includes("\n") ? "\n" : ""}${PLANNER_FALLBACK_NOTE}` };
-  }
-  return resolveLegacyPlan(input, direction);
-}
-
-/** 旧路：拟章纲（失败自动重试一次）+ 动笔前审校一遍。 */
-async function resolveLegacyPlan(input: PlanChapterInput & { readonly checkCallModel?: PlanCallModel }, direction: string): Promise<ResolvedChapterPlan> {
-  const planned = await withStep("拟", () => planChapter({ ...input, ...(direction ? { direction } : {}) }));
-  if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
-  // 动笔前审校一遍：按章纲自己写了什么去翻旧事实，对不上就当场改章纲（第十轮验收：近一半矛盾出在章纲）。
-  const checked = await withStep("审", () => checkAndRevisePlan({ projectDir: input.projectDir, plan: planned.plan, callModel: input.checkCallModel ?? input.callModel }));
-  const reviewNote = checked.revised
-    ? `（章纲审校改了 ${checked.issues.length} 处与前文对不上的地方：${checked.issues.slice(0, 2).join("；")}${checked.issues.length > 2 ? "等" : ""}）`
-    : checked.error ? `（章纲审校这次没跑成：${checked.error}）` : "";
-  return { plan: checked.plan, note: `本章章纲：${checked.plan.summary}${reviewNote}`, reused: false };
+  return planByEditorialRoom(input, direction);
 }

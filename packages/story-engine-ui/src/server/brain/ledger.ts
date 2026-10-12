@@ -5,8 +5,8 @@
  * 同一件事记成三条线索、做完的打算不会收口、新称呼认不出是已有人物。记账员在读完第 N-1 章那一刻的
  * 窗口后面接上本章新稿 + 声明要求，让它带着读过的全文和自己的账目笔记来声明。
  *
- * 声明契约与旧路一字不差：字段说明和 JSON 键复用 buildChapterDeltaSystemSpec / buildChapterDeltaContextSections，
- * 解析复用 parseChapterDeltaDeclaration + resolveThreadRefs，引擎的证据校验（verifyChapterDelta）不动。
+ * 声明契约：字段说明和 JSON 键复用 buildChapterDeltaSystemSpec / buildChapterDeltaContextSections（chapter-delta-declaration
+ * 的确定性工具），解析复用 parseChapterDeltaDeclaration + resolveThreadRefs，引擎的证据校验（verifyChapterDelta）不动。
  * 提示词额外强调的几条（只报一条 / 做完的打算报进 resolvedForeshadowing / 新称呼用 aliasOf 归并）是通用写法，
  * 不含任何具体书名、人名。
  */
@@ -61,15 +61,17 @@ export interface LedgerDeclareInput {
   readonly openGoalTitles?: readonly string[];
   /** 笔记存放的根目录；缺省就是书目录。 */
   readonly notesRoot?: string;
-  /** 需要新写的笔记超过这个数就不写了（返回 skipped=not_ready，调用方改走旧声明并后台补）。 */
+  /** 需要新写的笔记超过这个数就不写了（返回 skipped=not_ready，调用方如实说「还在读前文」并后台补）。 */
   readonly maxCatchUp?: number;
 }
 
 export interface LedgerDeclareResult {
-  /** 声明结果（status=model/fallback），与旧声明同一形状，调用方直接当声明通道的返回用。 */
+  /** 声明结果（status=model/fallback），调用方直接当声明通道的返回用。 */
   readonly outcome: ChapterDeltaDeclarationOutcome;
-  /** not_ready＝要补的笔记太多，这次没走记账员（调用方改走旧声明，笔记在后台补）。 */
+  /** not_ready＝要补的笔记太多，这次没走记账员（调用方如实说「还在读前文」，笔记在后台补）。 */
   readonly skipped?: "not_ready";
+  /** not_ready 时已读到第 done 章、总共 total 章。 */
+  readonly pending?: { readonly done: number; readonly total: number };
 }
 
 /** 把异常文本压成一行、截短（不含草稿正文）。 */
@@ -99,8 +101,8 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
     }));
     if (ready.missing > 0) {
-      // 补笔记太多：这次不用记账员（调用方改走旧声明），笔记由调用方在后台补。
-      return { outcome: { status: "fallback", reason: "记账员还在读前文，这次没有用它声明" }, skipped: "not_ready" };
+      // 补笔记太多：这次不用记账员，如实说（这章的声明按 fallback 兜底），笔记由调用方在后台补。
+      return { outcome: { status: "fallback", reason: "记账员还在读前文，这次没有记账" }, skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
     }
     window = ready.messages;
   } catch (error) {
@@ -127,13 +129,13 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
     ));
     const declaration = parseChapterDeltaDeclaration(text, input.chapter, onDrop);
     if (!declaration) {
-      console.warn(`[chapter-delta] ch${input.chapter} 记账员声明整体失败（输出无法解析成 JSON），回退旧声明`);
+      console.warn(`[chapter-delta] ch${input.chapter} 记账员声明整体失败（输出无法解析成 JSON），这章按确定性规则兜底`);
       return fallback("记账员的输出无法解析成结构化 JSON");
     }
     warnLikelyCopiedSummaries(input.chapter, declaration);
     return { outcome: { status: "model", declaration: resolveThreadRefs(declaration, input.openThreadTitles ?? []) } };
   } catch (error) {
-    console.warn(`[chapter-delta] ch${input.chapter} 记账员声明调用异常（${error instanceof Error ? error.message : String(error)}），回退旧声明`);
+    console.warn(`[chapter-delta] ch${input.chapter} 记账员声明调用异常（${error instanceof Error ? error.message : String(error)}），这章按确定性规则兜底`);
     return fallback(`记账员声明模型调用失败：${compactErrorText(error)}`);
   }
 }

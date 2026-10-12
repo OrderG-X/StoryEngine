@@ -15,8 +15,8 @@ import {
 } from "@actalk/story-engine";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { snapshotBeforeDraftOverwrite } from "../tools/snapshot-on-draft-overwrite.js";
-import type { CheckCallModel } from "../continuity-v2/check-chapter.js";
 import { checkChapterBody, type ChapterCheckItem } from "../continuity-v2/check-service.js";
+import type { BrainCallModel } from "../../brain/index.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";
 
 export interface QualityPipelineInput {
@@ -29,8 +29,8 @@ export interface QualityPipelineInput {
   readonly chapterPlan?: ChapterPlan;
   /** 续写（fastDraft 槽）。缺失 = 不补写。 */
   readonly continueCallModel?: ContinueCallModel;
-  /** 前后核对（qualityCheck 槽，和「核账」同一套）。缺失 = 不核对。 */
-  readonly checkCallModel?: CheckCallModel;
+  /** 前后核对（qualityCheck 槽，和「核账」同一套，核账员那一路）。缺失 = 不核对。 */
+  readonly checkCallModel?: BrainCallModel;
 }
 
 export interface QualityPipelineInfo {
@@ -96,7 +96,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   // 结果记进核账记忆：作者随后点「核账」，正文没改就直接出这次的结果。
   if (input.checkCallModel && body.trim()) {
     const startedAt = Date.now();
-    const result = await checkChapterBody(input.projectDir, input.chapter, body, input.checkCallModel);
+    const result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel });
     info = { ...info, continuity: { checked: result.ok, sure: result.sure, maybe: result.maybe, failures: result.failures } };
     notes.push(result.ok
       ? result.sure.length + result.maybe.length === 0

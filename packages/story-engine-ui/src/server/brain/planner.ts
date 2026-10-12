@@ -1,10 +1,10 @@
 /**
  * 章纲员（2026-10-12 编辑部第 3 步）：从第 1 章起一章一章跟读的责任编辑，为下一章拟章纲。
  *
- * 拟第 N 章时，在「读完第 N-1 章」那一刻的窗口后面接上：作者给的方向（可为空）+ 现有拟章纲的章纲 JSON 要求
- * （和旧路 plan-chapter 的 buildPlanMessages 同一份文本——改提示词必须两条路一起在题库上比分）。
- * 输出结构和旧路完全一样：照用 normalizeChapterPlan 宽进归一 + reconcileStoryDay 天数归一，落盘 drafts/plans/。
- * 比旧路强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
+ * 拟第 N 章时，在「读完第 N-1 章」那一刻的窗口后面接上：作者给的方向（可为空）+ 章纲 JSON 要求
+ * （plan-chapter 的 PLAN_REQUIREMENT_LINES / PLAN_JSON_FIELDS / planMaterialBlocks 同一份文本——改提示词必须在题库上比分）。
+ * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一，落盘 drafts/plans/。
+ * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
 import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
@@ -48,7 +48,7 @@ const PLAN_MAX_THINKING_MS = 150_000;
 
 export type PlanChapterByPlannerResult =
   | { readonly ok: true; readonly plan: ChapterPlan }
-  | { readonly ok: false; readonly reason: string; readonly skipped?: "not_ready" };
+  | { readonly ok: false; readonly reason: string; readonly skipped?: "not_ready"; readonly pending?: { readonly done: number; readonly total: number } };
 
 /** 窗口（读到 N-1）后面接的那条任务消息：作者方向 + 账本材料 + 和旧路同一份的章纲 JSON 要求。 */
 export function plannerTask(chapter: number, materials: PlanChapterMaterials, direction?: string): string {
@@ -101,7 +101,7 @@ async function finalizePlan(projectDir: string, plan: ChapterPlan, dayOffset: nu
 
 /**
  * 章纲员拟第 N 章章纲（读到 N-1 的窗口 + 方向 + 章纲 JSON 要求），拟成落盘 drafts/plans/chapter-NNNN.json。
- * 补笔记太多 → skipped:"not_ready"（调用方这次走旧路，笔记在后台补）；拟不成 → ok:false + 原因，不抛、不落盘。
+ * 补笔记太多 → skipped:"not_ready" + pending（调用方如实说「还在读前文」并后台补笔记）；拟不成 → ok:false + 原因，不抛、不落盘。
  */
 export async function planChapterByPlanner(input: {
   readonly projectDir: string;
@@ -126,7 +126,7 @@ export async function planChapterByPlanner(input: {
       ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     }));
     if (ready.missing > 0) {
-      return { ok: false, skipped: "not_ready", reason: `章纲员要补的读书笔记超过 ${input.maxCatchUp} 章` };
+      return { ok: false, skipped: "not_ready", reason: `章纲员要补的读书笔记超过 ${input.maxCatchUp} 章`, pending: { done: ready.reused, total: ready.reused + ready.missing } };
     }
     window = ready.messages;
   } catch (error) {
@@ -210,7 +210,7 @@ export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonl
 /** 审章纲结果：earlierQuote 逐字核对过（代码核），point 指 beats 的序号（1 起）。改一轮的结果，ok=false 时调用方用原章纲。 */
 export type RevisePlanResult =
   | { readonly ok: true; readonly plan: ChapterPlan }
-  | { readonly ok: false; readonly reason: string; readonly skipped?: "not_ready" };
+  | { readonly ok: false; readonly reason: string; readonly skipped?: "not_ready"; readonly pending?: { readonly done: number; readonly total: number } };
 
 /**
  * 核账员审出问题后，把问题列表交回章纲员窗口改一轮（只改有问题的要点，不循环）。
@@ -236,7 +236,7 @@ export async function revisePlanByPlanner(input: {
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
     }));
-    if (ready.missing > 0) return { ok: false, skipped: "not_ready", reason: `章纲员要补的读书笔记超过 ${input.maxCatchUp} 章` };
+    if (ready.missing > 0) return { ok: false, skipped: "not_ready", reason: `章纲员要补的读书笔记超过 ${input.maxCatchUp} 章`, pending: { done: ready.reused, total: ready.reused + ready.missing } };
     window = ready.messages;
   } catch (error) {
     return { ok: false, reason: `章纲员读前文没成：${error instanceof Error ? error.message : String(error)}` };

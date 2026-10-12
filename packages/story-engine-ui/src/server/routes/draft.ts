@@ -46,7 +46,7 @@ import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget } from "../agent/context-budget/rank-writer-context.js";
 import { resolveSelectedCharacterIds } from "../agent/presence/in-scene-detector.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
-import { callConfiguredPlanCheckModel, callConfiguredPlanModel } from "../agent/chapter-plan/plan-chapter.js";
+import { callConfiguredPlannerModel } from "../brain/index.js";
 import { runDraftQualityCheck } from "../services/quality-service.js";
 import { runDraftAIReview } from "../services/review-service.js";
 import {
@@ -130,8 +130,7 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     if (body.persist === false) {
       const { candidate, characterSelection, contextRanking, planNote } = await generateDraftCandidate({
         ...baseInput,
-        planCallModel: callConfiguredPlanModel,
-        planCheckCallModel: callConfiguredPlanCheckModel,
+        plannerCallModel: callConfiguredPlannerModel,
       });
       if (!candidate.passed || !candidate.draftBody) {
         writeJson(res, 422, { ok: false, error: candidate.issues?.[0] ?? "候选生成失败，请重试。" });

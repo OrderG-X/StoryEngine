@@ -9,14 +9,16 @@ import { createStoryProject } from "@actalk/story-engine";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// 工具 execute 路径会走生产版 declareChapterDelta（真连 LLM 网络）——单测 mock 掉、恒返回 undefined，
-// 避免 execute 测试依赖网络变 flaky/超时。纯逻辑测试直接给 buildCommitPreviewToolOutput 传假 declareDelta，不受影响。
-// R1 起记账员是缺省路：这里测的是预览 / token 语义，不是声明路——beforeEach 显式设 legacy 走旧声明（已 mock），
-// 别让 execute 去真连记账员的跟读窗口。
-vi.mock("./chapter-delta-declaration.js", () => ({
-  declareChapterDelta: vi.fn(async () => undefined),
-  declareChapterDeltaWithStatus: vi.fn(async () => ({ status: "fallback", reason: "单测桩：未启用声明模型" })),
-  callConfiguredDeclareModel: vi.fn(async () => "{}"),
+// 工具 execute 路径会走生产版声明路由（记账员真连 LLM 网络）——单测 mock 掉 declareChapterDeltaByLedger、
+// 恒返回 fallback，避免 execute 测试依赖网络变 flaky/超时。这里测的是预览 / token 语义，不是声明路本身
+// （记账员见 brain/ledger.test.ts，路由见 commit-preview.ledger-routing.test.ts）。纯逻辑测试直接给
+// buildCommitPreviewToolOutput 传假 declareDelta，不受影响。
+const ledgerDeclareMocks = vi.hoisted(() => ({
+  declareChapterDeltaByLedger: vi.fn(async () => ({ outcome: { status: "fallback", reason: "单测桩：未启用记账员" } })),
+}));
+vi.mock("../../brain/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../brain/index.js")>()),
+  declareChapterDeltaByLedger: ledgerDeclareMocks.declareChapterDeltaByLedger,
 }));
 // 2026-10-10 起预览还会并行抽硬事实（账本清单）：生产版同样真连 LLM——单测桩成「抽到 0 条」。
 vi.mock("../fact-ledger/reconcile-facts.js", async (importOriginal) => ({
@@ -34,12 +36,7 @@ type ToolExec = (input: Record<string, unknown>, context: ToolExecutionContext) 
 const execute = commitPreviewTool.execute as unknown as ToolExec;
 
 beforeEach(() => {
-  vi.stubEnv("STORY_LEDGER", "legacy"); // 见文件头注释：本文件测预览 / token 语义，声明显式走已 mock 的旧路
   __resetCommitPreviewStore();
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 async function makeProject(title: string, mainCharacterName = "林远"): Promise<string> {

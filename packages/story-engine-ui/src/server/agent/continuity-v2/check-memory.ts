@@ -14,9 +14,6 @@ import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import type { ContinuityIssueV2, EarlierText } from "./check-chapter.js";
 
-/** 核账走哪一路：combo＝通读三遍 + 拆说法逐条判 + 复核（旧）；reader＝跟读核账员（编辑部第 1 步）。 */
-export type CheckerEngine = "combo" | "reader";
-
 /** 查错逻辑有实质改动时加一，旧记忆作废（不再原样复用）。 */
 export const CHECK_MEMORY_VERSION = 3;
 
@@ -42,15 +39,15 @@ export function hashBody(body: string): string {
 
 /**
  * 前文 + 账本（v3 起账本数字对账也算核账的输入：账本改了，上次的结果不能原样复用）。
- * 核账员那一路（engine=reader）把引擎名也拼进键：两路查出来的东西不一样，切换后不复用另一路的结果；
- * 旧路（combo）的键不变，已有的记忆照样有效。
+ * 键尾固定拼 |engine:reader（R3 前新旧两路的记忆键不一样，防切换后互相复用；旧组合查错留下的记忆
+ * 没带这个尾巴，自然对不上、会重新核一次——两路查出来的东西本来就不一样）。
  */
-export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = [], engine: CheckerEngine = "combo"): string {
+export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = []): string {
   return sha([...earlier.chapters]
     .sort((a, b) => a.chapter - b.chapter)
     .map((item) => `${item.chapter}:${item.sentences.join("")}`)
     .join("\n")
-    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : "") + (engine === "combo" ? "" : `|engine:${engine}`));
+    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : "") + "|engine:reader");
 }
 
 export async function readCheckMemory(projectDir: string, chapter: number): Promise<CheckMemory | undefined> {

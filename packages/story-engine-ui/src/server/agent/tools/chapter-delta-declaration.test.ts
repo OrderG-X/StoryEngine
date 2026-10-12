@@ -1,154 +1,113 @@
 // @vitest-environment node
 //
-// chapter-delta-declaration 纯逻辑单测：prompt 题材中立、JSON 解析健壮、坏 JSON/超时/空正文全部降级为 undefined。
-// callModel 注入，不真连网络。
-import { afterEach, describe, expect, it, vi } from "vitest";
+// chapter-delta-declaration 确定性契约层单测：字段说明题材中立、JSON 解析健壮（逐条打捞，坏条目只丢那一条）。
+// R3 删旧声明调用后这里只剩纯函数；声明编排（记账员）见 brain/ledger.test.ts。
+import { describe, expect, it } from "vitest";
 
-const llmMocks = vi.hoisted(() => ({
-  resolveConfiguredChatModel: vi.fn(),
-  streamChatModelToText: vi.fn(),
-  callOpenAICompatibleChatModel: vi.fn(),
-}));
-vi.mock("../../lib/llm-client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../lib/llm-client.js")>();
-  return { ...actual, ...llmMocks };
-});
+import { buildChapterDeltaContextSections, buildChapterDeltaSystemSpec, parseChapterDeltaDeclaration } from "./chapter-delta-declaration.js";
 
-import {
-  buildChapterDeltaMessages,
-  callConfiguredDeclareModel,
-  DECLARE_IDLE_TIMEOUT_MS,
-  declareChapterDelta,
-  declareChapterDeltaWithStatus,
-  parseChapterDeltaDeclaration,
-} from "./chapter-delta-declaration.js";
-
-describe("buildChapterDeltaMessages", () => {
-  it("system 提示题材中立、要求逐字证据；user 带章号与正文", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 3, draft: "正文内容。" });
-    expect(messages).toHaveLength(2);
-    expect(messages[0]?.role).toBe("system");
-    expect(messages[0]?.content).toContain("题材中立");
-    expect(messages[0]?.content).toContain("quote");
-    expect(messages[1]?.role).toBe("user");
-    expect(messages[1]?.content).toContain("第 3 章");
-    expect(messages[1]?.content).toContain("正文内容。");
+describe("buildChapterDeltaSystemSpec / ContextSections", () => {
+  it("字段说明题材中立、要求逐字证据", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("题材中立");
+    expect(spec).toContain("quote");
+    expect(spec).toContain("只输出一个 JSON 对象");
   });
 
-  it("传入未决线索标题 → 提示模型回收时从既有线索里选", () => {
-    const messages = buildChapterDeltaMessages({
-      chapter: 4,
-      draft: "正文。",
-      openThreadTitles: ["玄鹤失踪之谜", "账房后墙响动"],
-    });
-    expect(messages[1]?.content).toContain("玄鹤失踪之谜");
-    expect(messages[1]?.content).toContain("账房后墙响动");
+  it("传入未决线索标题 → 上下文段带编号，提示回收时从既有线索里选", () => {
+    const context = buildChapterDeltaContextSections({ openThreadTitles: ["玄鹤失踪之谜", "账房后墙响动"] });
+    expect(context).toContain("已开着的线索");
+    expect(context).toContain("玄鹤失踪之谜");
+    expect(context).toContain("账房后墙响动");
   });
 
-  it("system 提醒计划/待办自然完成也要报进 resolvedForeshadowing", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 4, draft: "正文。" });
-    expect(messages[0]?.content).toContain("之前挂着的计划/待办");
-    expect(messages[0]?.content).toContain("本章做完了/不再需要了");
-    expect(messages[0]?.content).toContain("也算回收");
+  it("字段说明提醒计划/待办自然完成也要报进 resolvedForeshadowing", () => {
+    expect(buildChapterDeltaSystemSpec()).toContain("之前挂着的计划/待办");
+    expect(buildChapterDeltaSystemSpec()).toContain("本章做完了/不再需要了");
+    expect(buildChapterDeltaSystemSpec()).toContain("也算回收");
   });
 
-  it("system 要求声明 charactersPresent，并明令角色名逐字沿用、别写形近错名", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 1, draft: "正文。" });
-    expect(messages[0]?.content).toContain("charactersPresent");
-    expect(messages[0]?.content).toContain("形近");
+  it("字段说明要求声明 charactersPresent，并明令角色名逐字沿用、别写形近错名", () => {
+    expect(buildChapterDeltaSystemSpec()).toContain("charactersPresent");
+    expect(buildChapterDeltaSystemSpec()).toContain("形近");
   });
 
-  it("传入已确立角色名 → user 提示逐字沿用这些名字", () => {
-    const messages = buildChapterDeltaMessages({
-      chapter: 2,
-      draft: "正文。",
-      establishedNames: ["林澈", "林宁"],
-    });
-    expect(messages[1]?.content).toContain("本书已确立的角色名");
-    expect(messages[1]?.content).toContain("林澈");
-    expect(messages[1]?.content).toContain("林宁");
+  it("传入已确立角色名 → 上下文段提示逐字沿用这些名字", () => {
+    const context = buildChapterDeltaContextSections({ establishedNames: ["林澈", "林宁"] });
+    expect(context).toContain("本书已确立的角色名");
+    expect(context).toContain("林澈");
+    expect(context).toContain("林宁");
   });
 
-  it("system 要求声明 arcGoalProgress（主线/阶段目标推进），题材中立", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 1, draft: "正文。" });
-    expect(messages[0]?.content).toContain("arcGoalProgress");
-    expect(messages[0]?.content).toContain("主线");
+  it("字段说明要求声明 arcGoalProgress（主线/阶段目标推进），题材中立", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("arcGoalProgress");
+    expect(spec).toContain("主线");
   });
 
-  it("system 要求声明 conflict/discovery/decision 三个可选语义标量", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 1, draft: "正文。" });
-    expect(messages[0]?.content).toContain("conflict");
-    expect(messages[0]?.content).toContain("discovery");
-    expect(messages[0]?.content).toContain("decision");
+  it("字段说明要求声明 conflict/discovery/decision 三个可选语义标量", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("conflict");
+    expect(spec).toContain("discovery");
+    expect(spec).toContain("decision");
   });
 
-  it("system 要求声明 pendingIntents（未完成待办/下一步意图）", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 1, draft: "正文。" });
-    expect(messages[0]?.content).toContain("pendingIntents");
-    expect(messages[0]?.content).toContain("未完成待办");
-    expect(messages[0]?.content).toContain("只输出一个 JSON 对象");
+  it("字段说明要求声明 pendingIntents（未完成待办/下一步意图）", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("pendingIntents");
+    expect(spec).toContain("未完成待办");
   });
 
-  it("system 要求 resourceDeltas 只报实际完成得失，交易未成交不算", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 53, draft: "正文。" });
-    expect(messages[0]?.content).toContain("实际完成");
-    expect(messages[0]?.content).toContain("交易未成交");
-    expect(messages[0]?.content).toContain("对方没收下");
-    expect(messages[0]?.content).toContain("把灵石放在柜台上但对方没收=没有失去");
+  it("字段说明要求 resourceDeltas 只报实际完成得失，交易未成交不算", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("实际完成");
+    expect(spec).toContain("交易未成交");
+    expect(spec).toContain("对方没收下");
+    expect(spec).toContain("把灵石放在柜台上但对方没收=没有失去");
   });
 
-  it("system 要求 resourceDeltas 的 amount 必须出现在 quote 中，否则省略 amount", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 53, draft: "正文。" });
-    expect(messages[0]?.content).toContain("程序逐字核对 amount 在 quote 里");
-    expect(messages[0]?.content).toContain("正文没写明数量就省略 amount");
+  it("字段说明要求 resourceDeltas 的 amount 必须出现在 quote 中，否则省略 amount", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("程序逐字核对 amount 在 quote 里");
+    expect(spec).toContain("正文没写明数量就省略 amount");
   });
 
-  it("system 要求 seededForeshadowing 只报后文回收的跨章悬念，本章内解决的不算", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 53, draft: "正文。" });
-    expect(messages[0]?.content).toContain("预期后文回收");
-    expect(messages[0]?.content).toContain("跨章悬念");
-    expect(messages[0]?.content).toContain("本章内已经解决");
-    expect(messages[0]?.content).toContain("不要报");
+  it("字段说明要求 seededForeshadowing 只报后文回收的跨章悬念，本章内解决的不算", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("预期后文回收");
+    expect(spec).toContain("跨章悬念");
+    expect(spec).toContain("本章内已经解决");
+    expect(spec).toContain("不要报");
   });
 
-  it("system 明确 mainEvent 只能选本章最大推动事件，不能选望风/赶路/环境铺垫", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 26, draft: "正文。" });
-
-    expect(messages[0]?.content).toContain("本章推动故事的最大一件事");
-    expect(messages[0]?.content).toContain("看见某人/某物");
-    expect(messages[0]?.content).toContain("赶路");
-    expect(messages[0]?.content).toContain("环境与气氛铺垫都不是 mainEvent");
+  it("字段说明明确 mainEvent 只能选本章最大推动事件，不能选望风/赶路/环境铺垫", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("本章推动故事的最大一件事");
+    expect(spec).toContain("看见某人/某物");
+    expect(spec).toContain("赶路");
+    expect(spec).toContain("环境与气氛铺垫都不是 mainEvent");
   });
 
-  it("system 要求 summary 是干净概括，禁止照抄 quote 原句", () => {
-    const messages = buildChapterDeltaMessages({ chapter: 26, draft: "正文。" });
-
-    expect(messages[0]?.content).toContain("summary 必须是你自己组织的一句话概括");
-    expect(messages[0]?.content).toContain("禁止把 quote 原句照抄");
-    expect(messages[0]?.content).toContain("summary 是给时间线看的干净摘要");
+  it("字段说明要求 summary 是干净概括，禁止照抄 quote 原句", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("summary 必须是你自己组织的一句话概括");
+    expect(spec).toContain("禁止把 quote 原句照抄");
+    expect(spec).toContain("summary 是给时间线看的干净摘要");
   });
 
-  it("传入已存在目标标题 → user 提示推进时对号入座既有目标（targetGoalHint 从这里选）", () => {
-    const messages = buildChapterDeltaMessages({
-      chapter: 6,
-      draft: "正文。",
-      openGoalTitles: ["查明码头凶案真凶", "摆脱漕帮控制"],
-    });
-    expect(messages[1]?.content).toContain("已存在的主线/阶段目标");
-    expect(messages[1]?.content).toContain("查明码头凶案真凶");
-    expect(messages[1]?.content).toContain("摆脱漕帮控制");
+  it("传入已存在目标标题 → 上下文段提示推进时对号入座既有目标（targetGoalHint 从这里选）", () => {
+    const context = buildChapterDeltaContextSections({ openGoalTitles: ["查明码头凶案真凶", "摆脱漕帮控制"] });
+    expect(context).toContain("已存在的主线/阶段目标");
+    expect(context).toContain("查明码头凶案真凶");
+    expect(context).toContain("摆脱漕帮控制");
   });
 
-  it("传入上一章结尾 → user 单列摘录并禁止作为 quote 来源", () => {
-    const messages = buildChapterDeltaMessages({
-      chapter: 6,
-      draft: "本章开头。",
-      previousChapterEnding: "上一章结尾：主角已在黑龙潭等待。",
-    });
-    expect(messages[1]?.content).toContain("上一章结尾");
-    expect(messages[1]?.content).toContain("主角已在黑龙潭等待");
-    expect(messages[1]?.content).toContain("绝不能作为任何字段的 quote 来源");
-    expect(messages[0]?.content).toContain("continuityWithPrevious");
+  it("传入上一章结尾 → 上下文段单列摘录并禁止作为 quote 来源", () => {
+    const context = buildChapterDeltaContextSections({ previousChapterEnding: "上一章结尾：主角已在黑龙潭等待。" });
+    expect(context).toContain("上一章结尾");
+    expect(context).toContain("主角已在黑龙潭等待");
+    expect(context).toContain("绝不能作为任何字段的 quote 来源");
+    expect(buildChapterDeltaSystemSpec()).toContain("continuityWithPrevious");
   });
 });
 
@@ -375,13 +334,14 @@ describe("parseChapterDeltaDeclaration", () => {
     expect(drops).toContain("mainEvent");
   });
 
-  it("summary 疑似照抄 quote → console.warn 记录告警但保留该条目", async () => {
+  it("warnLikelyCopiedSummaries：summary 疑似照抄 quote → console.warn 记录告警但保留该条目", async () => {
+    const { warnLikelyCopiedSummaries } = await import("./chapter-delta-declaration.js");
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => {
       warnings.push(String(message));
     };
-    const payload = {
+    const declaration = parseChapterDeltaDeclaration(JSON.stringify({
       mainEvent: {
         summary: "他贴着墙根往阴影里缩了缩，看见两个穿灰布衫的汉子走了过去。",
         quote: "他贴着墙根往阴影里缩了缩，看见两个穿灰布衫的汉子走了过去。",
@@ -390,158 +350,13 @@ describe("parseChapterDeltaDeclaration", () => {
         summary: "发现铜腰牌",
         quote: "腰间隐约露出执法殿的铜腰牌。",
       },
-    };
-
+    }), 26);
     try {
-      const result = await declareChapterDelta({
-        chapter: 26,
-        draft: "他贴着墙根往阴影里缩了缩，看见两个穿灰布衫的汉子走了过去。腰间隐约露出执法殿的铜腰牌。",
-        callModel: async () => JSON.stringify(payload),
-      });
-
-      expect(result?.mainEvent?.summary).toBe("他贴着墙根往阴影里缩了缩，看见两个穿灰布衫的汉子走了过去。");
+      expect(declaration?.mainEvent?.summary).toBe("他贴着墙根往阴影里缩了缩，看见两个穿灰布衫的汉子走了过去。");
+      warnLikelyCopiedSummaries(26, declaration!);
       expect(warnings.some((entry) => entry.includes("ch26 mainEvent.summary 疑似照抄 quote 原句"))).toBe(true);
     } finally {
       console.warn = originalWarn;
     }
-  });
-});
-
-describe("declareChapterDelta", () => {
-  it("正常路径：注入 callModel 返回合法 JSON → 得到 declaration", async () => {
-    const result = await declareChapterDelta({
-      chapter: 5,
-      draft: "本章正文。",
-      callModel: async () => JSON.stringify({ mainEvent: { summary: "事", quote: "本章正文。" } }),
-    });
-    expect(result?.chapter).toBe(5);
-    expect(result?.mainEvent?.summary).toBe("事");
-  });
-
-  it("空正文 → 直接 undefined，不调模型", async () => {
-    let called = false;
-    const result = await declareChapterDelta({
-      chapter: 1,
-      draft: "   ",
-      callModel: async () => {
-        called = true;
-        return "{}";
-      },
-    });
-    expect(result).toBeUndefined();
-    expect(called).toBe(false);
-  });
-
-  it("模型抛错（超时/网络）→ undefined（非致命降级）", async () => {
-    const result = await declareChapterDelta({
-      chapter: 1,
-      draft: "正文。",
-      callModel: async () => {
-        throw new Error("模型请求超时：20000ms");
-      },
-    });
-    expect(result).toBeUndefined();
-  });
-
-  it("模型返回坏 JSON → undefined", async () => {
-    const result = await declareChapterDelta({
-      chapter: 1,
-      draft: "正文。",
-      callModel: async () => "对不起我无法输出 JSON",
-    });
-    expect(result).toBeUndefined();
-  });
-});
-
-// P1（2026-10-02）：声明失败不再静默——带状态的编排返回 status + 原因，供 commit_preview/commit_apply 折进用户可见摘要。
-describe("declareChapterDeltaWithStatus（状态 + 原因，绝不静默）", () => {
-  it("合法 JSON → status=model，带 declaration", async () => {
-    const out = await declareChapterDeltaWithStatus({
-      chapter: 5,
-      draft: "本章正文。",
-      callModel: async () => JSON.stringify({ mainEvent: { summary: "事", quote: "本章正文。" } }),
-    });
-    expect(out.status).toBe("model");
-    expect(out.declaration?.chapter).toBe(5);
-    expect(out.reason).toBeUndefined();
-  });
-
-  it("空正文 → fallback + 原因，不调模型", async () => {
-    let called = false;
-    const out = await declareChapterDeltaWithStatus({
-      chapter: 1,
-      draft: "  ",
-      callModel: async () => {
-        called = true;
-        return "{}";
-      },
-    });
-    expect(called).toBe(false);
-    expect(out.status).toBe("fallback");
-    expect(out.reason).toContain("正文为空");
-  });
-
-  it("模型抛错（空闲超时/流中 error 帧/截断）→ fallback，原因含错误摘要且压成一行截短", async () => {
-    const out = await declareChapterDeltaWithStatus({
-      chapter: 1,
-      draft: "正文。",
-      callModel: async () => {
-        throw new Error(`模型返回错误：${"x".repeat(500)}\n多行`);
-      },
-    });
-    expect(out.status).toBe("fallback");
-    expect(out.declaration).toBeUndefined();
-    expect(out.reason).toMatch(/^声明模型调用失败：模型返回错误：x+…$/u);
-    expect(out.reason?.length).toBeLessThan(200);
-  });
-
-  it("坏 JSON → fallback，原因说明无法解析", async () => {
-    const out = await declareChapterDeltaWithStatus({
-      chapter: 1,
-      draft: "正文。",
-      callModel: async () => "对不起我无法输出 JSON",
-    });
-    expect(out.status).toBe("fallback");
-    expect(out.reason).toContain("无法解析");
-  });
-});
-
-describe("callConfiguredDeclareModel（走 streamChatModelToText 空闲超时，不再是 45s 固定死表）", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("用 chapterSteering 档、强制 thinking:false、json_object、idleTimeoutMs=DECLARE_IDLE_TIMEOUT_MS；不走非流式固定超时", async () => {
-    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
-      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
-      profile: { id: "m", provider: "p", model: "m" },
-      apiKey: "",
-      thinking: true,
-      thinkingDialect: "glm",
-    });
-    llmMocks.streamChatModelToText.mockResolvedValue({ content: "{\"mainEvent\":{\"summary\":\"a\",\"quote\":\"b\"}}", thinking: "" });
-    const text = await callConfiguredDeclareModel([{ role: "user", content: "声明" }]);
-    expect(text).toContain("mainEvent");
-    expect(llmMocks.resolveConfiguredChatModel).toHaveBeenCalledWith("chapterSteering");
-    expect(llmMocks.callOpenAICompatibleChatModel).not.toHaveBeenCalled();
-    const call = llmMocks.streamChatModelToText.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect((call.configured as { thinking: boolean }).thinking).toBe(false);
-    expect(call.responseFormat).toEqual({ type: "json_object" });
-    expect(call.idleTimeoutMs).toBe(DECLARE_IDLE_TIMEOUT_MS);
-    expect(DECLARE_IDLE_TIMEOUT_MS).toBeLessThan(90_000); // 预览路径收紧的空闲窗口（不是总时长上限）
-    expect("timeoutMs" in call).toBe(false);
-    expect("max_tokens" in call || "maxTokens" in call).toBe(false);
-  });
-
-  it("流式返回空正文 → 抛错（由上层收成 fallback，不把空串当成功声明）", async () => {
-    llmMocks.resolveConfiguredChatModel.mockResolvedValue({
-      provider: { id: "p", baseUrl: "https://x.invalid/v1" },
-      profile: { id: "m", provider: "p", model: "m" },
-      apiKey: "",
-      thinking: false,
-      thinkingDialect: "none",
-    });
-    llmMocks.streamChatModelToText.mockResolvedValue({ content: "   ", thinking: "" });
-    await expect(callConfiguredDeclareModel([{ role: "user", content: "声明" }])).rejects.toThrow("空内容");
   });
 });

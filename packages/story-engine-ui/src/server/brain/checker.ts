@@ -117,7 +117,7 @@ export interface ReaderCheckVariant {
 export const SURE_GATE_MIN_SENTENCE_GAP = 3;
 
 /**
- * 产品里核账员（STORY_CHECKER=reader）缺省用的组合：A 自复核 + F 时间线只进自复核。
+ * 产品核账缺省用的组合：A 自复核 + F 时间线只进自复核。
  * A 是 T1.1 题库比分选出来的；F 是 R2.1 比分赢的（「确定」查准下限 46.1→47.2、查全 33.9→35.5、小考题误报 0/1/1→0/0/0，
  * 差距和口径见 docs/editorial-room/reports/R2.1-2026-10-12.md）。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
@@ -451,8 +451,9 @@ export interface ReaderPlanCheckResult {
   /** earlierQuote 已由代码逐字核对过真在前文里（抄不出的在解析时丢掉）。 */
   readonly problems: readonly PlanProblem[];
   readonly failures: string[];
-  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没审。 */
+  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没审；pending＝已读到第 done 章、总共 total 章。 */
   readonly skipped?: "not_ready";
+  readonly pending?: { readonly done: number; readonly total: number };
 }
 
 /** 审章纲提示：核账员窗口（读到 N-1）后接「这是第 N 章的章纲（还没写正文）」+ 章纲要点，找和前文矛盾的要点。 */
@@ -547,7 +548,7 @@ export async function checkPlanByReader(input: {
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
     }));
-    if (ready.missing > 0) return { problems: [], failures: [], skipped: "not_ready" };
+    if (ready.missing > 0) return { problems: [], failures: [], skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
     window = ready.messages;
   } catch (error) {
     return { problems: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };

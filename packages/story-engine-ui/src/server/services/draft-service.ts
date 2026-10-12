@@ -89,10 +89,10 @@ import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, 
 import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../agent/presence/in-scene-detector.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../agent/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
-import { resolveChapterPlanForDraft, type PlanCallModel } from "../agent/chapter-plan/plan-chapter.js";
+import { resolveChapterPlanForDraft } from "../agent/chapter-plan/plan-chapter.js";
 import { withStep } from "../lib/token-meter.js";
 import type { ContinueCallModel } from "../agent/draft-pipeline/continue-draft.js";
-import type { CheckCallModel } from "../agent/continuity-v2/check-chapter.js";
+import type { BrainCallModel } from "../brain/index.js";
 import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "../agent/draft-pipeline/run-quality-pipeline.js";
 
 /* ---------------------------------------------------------------------------
@@ -957,21 +957,22 @@ export interface GenerateDraftInput {
   /** 判漏要点的 AI 复核调用（工具 execute 注入 triage 任务槽；测试注入 mock）。缺失=跳过复核、维持确定性结论。 */
   readonly beatAdjudicationCallModel?: (prompt: string) => Promise<string>;
   /**
-   * 出稿前拟章纲的模型调用（阶段 2「先想后写」；工具 execute 注入 chapterSteering 任务槽；测试注入 mock）。
+   * 出稿前拟章纲（阶段 2「先想后写」，编辑部：章纲员拟 → 核账员审 → 改一轮）。
+   * 章纲员的模型调用（生产注入 chapterSteering 槽的 callConfiguredPlannerModel；测试注入 mock）。
    * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
    */
-  readonly planCallModel?: PlanCallModel;
+  readonly plannerCallModel?: BrainCallModel;
   /** 出稿阶段回报（拟章纲 / 写正文）：工具接到流式 sink 上，稿纸空着时给作者看进度。缺失=不回报。 */
   readonly onPhase?: (phase: "plan" | "write") => void;
-  /** 章纲审校的调用（生产注入关思考版）；缺省用 planCallModel。 */
-  readonly planCheckCallModel?: PlanCallModel;
+  /** 核账员审章纲的模型调用（生产走 qualityCheck 槽）；缺省由编排自己取配置。 */
+  readonly planCheckReaderCallModel?: BrainCallModel;
   /**
    * 阶段 3 出稿后的固定质量环节（工具 execute 注入；测试注入 mock）：
    * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）——
    * 前后核对，和「核账」同一套，不自动改。缺失 = 不跑该环节（旧行为）。
    */
   readonly continueCallModel?: ContinueCallModel;
-  readonly continuityCheckCallModel?: CheckCallModel;
+  readonly continuityCheckCallModel?: BrainCallModel;
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
 }
@@ -1043,8 +1044,8 @@ export interface GenerateDraftCandidateInput {
    * 拟章纲（2026-10-10 引擎升级第 5 期「出稿一条路」）：写作台「写第一版 / 再来一版」也先拿章纲再写，
    * 和对话里让 AI 写同一套（沿用已有章纲；没有就拟一份并审校）。缺省 = 不拟（旧行为，测试用）。
    */
-  readonly planCallModel?: PlanCallModel;
-  readonly planCheckCallModel?: PlanCallModel;
+  readonly plannerCallModel?: BrainCallModel;
+  readonly planCheckReaderCallModel?: BrainCallModel;
 }
 
 export interface GenerateDraftCandidateOutcome {
@@ -1156,13 +1157,13 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
  * 按钮路一致）。失败如实：candidate.passed=false + issues，路由投影 422。
  */
 export async function generateDraftCandidate(input: GenerateDraftCandidateInput): Promise<GenerateDraftCandidateOutcome> {
-  const planning = input.planCallModel
+  const planning = input.plannerCallModel
     ? await resolveChapterPlanForDraft({
       projectDir: input.projectDir,
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
-      callModel: input.planCallModel,
-      ...(input.planCheckCallModel ? { checkCallModel: input.planCheckCallModel } : {}),
+      plannerCallModel: input.plannerCallModel,
+      ...(input.planCheckReaderCallModel ? { planCheckReaderCallModel: input.planCheckReaderCallModel } : {}),
     })
     : undefined;
   const run = await resolveDraftRunContext({
@@ -1203,15 +1204,15 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
   // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
   const planStartedAt = Date.now();
-  const planCallModel = input.planCallModel;
-  if (planCallModel) input.onPhase?.("plan");
-  const planning = planCallModel
+  const plannerCallModel = input.plannerCallModel;
+  if (plannerCallModel) input.onPhase?.("plan");
+  const planning = plannerCallModel
     ? await withStep("章纲", () => resolveChapterPlanForDraft({
       projectDir: input.projectDir,
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
-      callModel: planCallModel,
-      ...(input.planCheckCallModel ? { checkCallModel: input.planCheckCallModel } : {}),
+      plannerCallModel,
+      ...(input.planCheckReaderCallModel ? { planCheckReaderCallModel: input.planCheckReaderCallModel } : {}),
     }))
     : undefined;
   const draftStartedAt = Date.now();

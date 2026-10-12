@@ -85,8 +85,7 @@ import {
   runGenerateDraft,
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
-import { callConfiguredPlanCheckModel, callConfiguredPlanModel } from "../chapter-plan/plan-chapter.js";
-import { callConfiguredCheckerModel } from "../continuity-v2/check-chapter.js";
+import { callConfiguredBrainModel, callConfiguredPlannerModel } from "../../brain/index.js";
 import { callConfiguredContinueModel } from "../draft-pipeline/production-call-models.js";
 
 /**
@@ -462,12 +461,11 @@ export const generateDraftTool = createTool({
       // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
       // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
       beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
-      // 阶段 2「先想后写」：出稿前拟章纲（chapterSteering 槽）。拟不成如实进 summary、照旧出稿。
-      planCallModel: callConfiguredPlanModel,
-      planCheckCallModel: callConfiguredPlanCheckModel,
-      // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（qualityCheck 槽）与冲突段改写（repair 槽）。
+      // 阶段 2「先想后写」：出稿前编辑部拟章纲（章纲员 chapterSteering 槽 → 核账员审）。拟不成如实进 summary、照旧出稿。
+      plannerCallModel: callConfiguredPlannerModel,
+      // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（核账员，qualityCheck 槽）与冲突段改写（repair 槽）。
       continueCallModel: callConfiguredContinueModel,
-      continuityCheckCallModel: callConfiguredCheckerModel,
+      continuityCheckCallModel: callConfiguredBrainModel,
       // 不自动改冲突句（第八轮验收：自动改了 32 句，18 句改出新毛病、真正修好 3 句）：核对出的问题原样交作者定。
       // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
       segmentByPlan: true,

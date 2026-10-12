@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../tools/snapshot-on-draft-overwrite.js", () => ({
   snapshotBeforeDraftOverwrite: vi.fn(async () => "snap-1"),
@@ -10,14 +10,8 @@ vi.mock("../tools/snapshot-on-draft-overwrite.js", () => ({
 
 import { runDraftQualityPipeline } from "./run-quality-pipeline.js";
 
-// 假查错模型说的是旧核账（combo）那套话术——R1 起核账员是默认，这里测的是续写 / 快照 / 如实汇报语义，
-// 显式设 legacy 走旧路测（核账员路的行为见 continuity-v2/check-service.test.ts）。
-beforeEach(() => {
-  vi.stubEnv("STORY_CHECKER", "legacy");
-});
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+// 假查错模型说的是核账员那套话术（写笔记 / 三遍核账 / 自复核），经 checkCallModel 注入；
+// 核账员本身的行为见 brain/checker.test.ts 和 continuity-v2/check-service.test.ts。
 
 const TARGET = { requested: 60, lowerBound: 40, upperBound: 70, source: "writing_rules" as const };
 
@@ -35,15 +29,19 @@ async function makeBook(draft: string): Promise<{ projectDir: string; draftPath:
   return { projectDir, draftPath };
 }
 
-/** 假的查错模型：通读那一路报「菜场还在」对不上第 7 章，复核判确定。 */
+/** 假的核账员：写笔记回一句；三遍里「盯东西」那遍报「菜场还在」对不上第 7 章；自复核判确定。 */
 function fakeChecker() {
-  return vi.fn(async (messages: readonly { readonly role: string; readonly content: string }[]) => {
-    const system = messages[0]!.content;
-    if (system.includes("复核编辑")) return JSON.stringify({ verdicts: [{ id: "K1", verdict: "sure" }] });
-    if (system.includes("连续性审读员") && messages[1]!.content.includes("只盯东西")) {
-      return JSON.stringify({ contradictions: [{ quote: "菜场还在", earlierQuote: "南门菜场十来年前就拆了", earlierChapter: 7, reason: "菜场早拆了" }] });
+  return vi.fn(async (messages: readonly { readonly role: string; readonly content: string }[], options: { readonly json?: boolean }) => {
+    if (!options.json) return "笔记";
+    const last = messages.at(-1)!.content;
+    if (last.includes("你刚才核完报了")) {
+      const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+      return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
     }
-    return JSON.stringify({ contradictions: [], claims: [] });
+    if (last.includes("这一遍只盯东西")) {
+      return JSON.stringify({ checks: [], contradictions: [{ quote: "菜场还在", earlierQuote: "南门菜场十来年前就拆了", earlierChapter: 7, reason: "菜场早拆了", confidence: "sure" }] });
+    }
+    return JSON.stringify({ checks: [], contradictions: [] });
   });
 }
 
@@ -99,7 +97,10 @@ describe("runDraftQualityPipeline", () => {
     const before = await readFile(draftPath, "utf-8");
     const result = await runDraftQualityPipeline({
       projectDir, chapter: 8, draftPath, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
-      continueCallModel: vi.fn(), checkCallModel: vi.fn(async () => { throw new Error("idle timeout"); }),
+      continueCallModel: vi.fn(), checkCallModel: vi.fn(async (_messages: unknown, options: { readonly json?: boolean }) => {
+        if (!options.json) return "笔记";
+        throw new Error("idle timeout");
+      }),
     });
     expect(result.changed).toBe(false);
     expect(result.snapshotId).toBeUndefined();

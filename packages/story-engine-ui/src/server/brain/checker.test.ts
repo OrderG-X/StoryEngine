@@ -704,7 +704,7 @@ describe("核账员审章纲：checkPlanByReader", () => {
     const dir = await makeBook();
     const notReady = fakePlanChecker(problems());
     expect(await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: notReady.callModel, maxCatchUp: 1 }))
-      .toEqual({ problems: [], failures: [], skipped: "not_ready" });
+      .toMatchObject({ problems: [], failures: [], skipped: "not_ready", pending: { done: 0, total: 2 } });
     expect(notReady.calls).toHaveLength(0);
     const broken = fakePlanChecker(new Error("断流了"));
     const failed = await checkPlanByReader({ projectDir: dir, plan: PLAN, callModel: broken.callModel });

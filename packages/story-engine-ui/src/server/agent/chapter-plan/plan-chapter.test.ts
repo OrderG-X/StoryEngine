@@ -1,11 +1,14 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+// R3 删旧拟纲路后，这里测章纲员复用的纯函数：材料收集（collectPlanMaterials / planMaterialBlocks）、
+// 天数归一（reconcileStoryDay / storyDayAtChapterEnd）、骨架章纲判定。编排（章纲员拟 → 核账员审 → 改一轮）
+// 见 resolveChapterPlanForDraft 的用例和 brain/planner.test.ts。
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStoryProject, normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "@actalk/story-engine";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPlanMessages, collectPlanMaterials, planChapter, resolveChapterPlanForDraft } from "./plan-chapter.js";
+import { describe, expect, it } from "vitest";
 import type { BrainCallModel } from "../../brain/reader-window.js";
+import { collectPlanMaterials, planMaterialBlocks } from "./plan-chapter.js";
 
 async function makeBook(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "se-plan-chapter-"));
@@ -23,91 +26,16 @@ async function makeBook(): Promise<string> {
   return projectDir;
 }
 
-const GOOD_PLAN = JSON.stringify({
-  summary: "林澈去档案室对出缺页",
-  beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款"],
-  newInformation: ["缺页记的是一笔境外汇款"],
-  scene: { location: "档案室", time: "第二天上午" },
-  characters: ["林澈"],
-  entities: ["蓝色账册", "档案室"],
-  threadsAdvanced: [{ title: "账册第三页被谁撕掉了", how: "对出缺页内容" }],
-  avoid: ["不要再写锁抽屉"],
-});
-
-describe("拟章纲材料与提示词", () => {
+describe("拟章纲材料与提示词块", () => {
   it("带上一章原文、开着的线索（截断标题补证据）、不带已收口的", async () => {
     const projectDir = await makeBook();
     const materials = await collectPlanMaterials(projectDir, 2);
     expect(materials.previousChapter?.text).toContain("决定明天去档案室");
     expect(materials.openThreads).toEqual(["账册第三页被谁撕掉了…（账册第三页被谁撕掉了，撕口很新）（上次第 1 章）"]);
-    const [system, user] = buildPlanMessages(2, materials, "让他去档案室");
-    expect(system.content).toContain("至少给出一条读者此前不知道的新信息");
-    expect(user.content).toContain("【作者这章的方向】让他去档案室");
-    expect(user.content).toContain("决定明天去档案室");
-    expect(user.content).not.toContain("已经收口的旧事");
-  });
-});
-
-describe("planChapter", () => {
-  it("拟成即落盘", async () => {
-    const projectDir = await makeBook();
-    const result = await planChapter({ projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN) });
-    expect(result.ok).toBe(true);
-    expect((await readChapterPlan(projectDir, 2))?.summary).toBe("林澈去档案室对出缺页");
-  });
-
-  it("第一次坏 JSON、重试成功；重试换精简材料（服务商内容过滤误伤时，同样输入重发必然再拦）", async () => {
-    const projectDir = await makeBook();
-    await writeFile(join(projectDir, "chapters", "0001.md"), `# 第1章 · 账册\n\n${"林澈翻账册，一页页核对。".repeat(120)}\n\n结尾：他决定明天去档案室。\n`, "utf-8");
-    const callModel = vi.fn().mockResolvedValueOnce("不是JSON").mockResolvedValueOnce(GOOD_PLAN);
-    const result = await planChapter({ projectDir, chapter: 2, callModel });
-    expect(callModel).toHaveBeenCalledTimes(2);
-    expect(result.ok).toBe(true);
-    const size = (call: number) => (callModel.mock.calls[call][0] as { content: string }[]).map((m) => m.content.length).reduce((a, b) => a + b, 0);
-    expect(size(1)).toBeLessThan(size(0));
-    expect(JSON.stringify(callModel.mock.calls[1][0])).toContain("结尾：他决定明天去档案室");
-  });
-
-  it("两次都不成 → ok:false + 原因，不抛、不落盘", async () => {
-    const projectDir = await makeBook();
-    const callModel = vi.fn(async () => JSON.stringify({ characters: ["林澈"] }));
-    const result = await planChapter({ projectDir, chapter: 2, callModel });
-    expect(result).toEqual({ ok: false, reason: expect.stringContaining("章纲没拟成（已自动重试一次）") });
-    expect(await readChapterPlan(projectDir, 2)).toBeUndefined();
-  });
-});
-
-describe("resolveChapterPlanForDraft（旧路，显式 legacy）", () => {
-  beforeEach(() => {
-    // R1 起章纲员是缺省路；这个 describe 测的是旧路的沿用 / 重拟 / 失败语义（假模型只会说旧路的话），
-    // 显式设 legacy 再测。章纲员路见下面的 describe。
-    vi.stubEnv("STORY_PLANNER", "legacy");
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("同一方向重写沿用已有章纲；方向变了重拟", async () => {
-    const projectDir = await makeBook();
-    const callModel = vi.fn(async () => GOOD_PLAN);
-    const first = await resolveChapterPlanForDraft({ projectDir, chapter: 2, callModel });
-    expect(first.reused).toBe(false);
-    // 新拟一份 = 拟章纲 + 审校各一次调用；沿用不再调。
-    expect(callModel).toHaveBeenCalledTimes(2);
-    const again = await resolveChapterPlanForDraft({ projectDir, chapter: 2, callModel });
-    expect(again.reused).toBe(true);
-    expect(callModel).toHaveBeenCalledTimes(2);
-    const redirected = await resolveChapterPlanForDraft({ projectDir, chapter: 2, direction: "改成去银行", callModel });
-    expect(redirected.reused).toBe(false);
-    expect(callModel).toHaveBeenCalledTimes(4);
-    expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
-  });
-
-  it("拟不成 → 没有章纲 + 如实说明照常出稿", async () => {
-    const projectDir = await makeBook();
-    const resolved = await resolveChapterPlanForDraft({ projectDir, chapter: 2, callModel: vi.fn(async () => { throw new Error("socket hang up"); }) });
-    expect(resolved.plan).toBeUndefined();
-    expect(resolved.note).toContain("这次按没有章纲出稿");
+    const blocks = planMaterialBlocks(2, materials, "让他去档案室").join("\n\n");
+    expect(blocks).toContain("【作者这章的方向】让他去档案室");
+    expect(blocks).toContain("决定明天去档案室");
+    expect(blocks).not.toContain("已经收口的旧事");
   });
 });
 
@@ -127,13 +55,9 @@ describe("拟章纲材料：旧事实 / 前几章时间 / 反复出现的描写�
     expect(materials.facts.join("\n")).toContain("异议书已在第3章递交");
     expect(materials.recentTimes).toEqual(["第 2 章：六月12日上午", "第 3 章：六月13日上午", "第 4 章：六月14日上午"]);
     expect(materials.recurringPhrases.some((phrase) => phrase.includes("一屋子的钟在黑暗里响"))).toBe(true);
-    const [system, user] = buildPlanMessages(5, materials);
-    expect(system.content).toContain("不要连续两章做同一类事");
-    expect(user.content).toContain("【前几章的时间】");
-    expect(user.content).toContain("【已确立事实（不能矛盾，做过的别再做）】");
-
-    const result = await planChapter({ projectDir, chapter: 5, callModel: vi.fn(async () => GOOD_PLAN) });
-    expect(result.ok && result.plan.avoid.at(-1)).toContain("别再用这些说法：");
+    const blocks = planMaterialBlocks(5, materials).join("\n\n");
+    expect(blocks).toContain("【前几章的时间】");
+    expect(blocks).toContain("【已确立事实（不能矛盾，做过的别再做）】");
   });
 });
 
@@ -159,18 +83,26 @@ describe("reconcileStoryDay：天数由程序按上一章往后加（第十九�
 });
 
 describe("骨架章纲重拟（第二十轮第 5、7 章只有要点，日历少记一天）", () => {
-  it("人物/开场/新信息全空 → 重拟一次用完整的；两次都是骨架就用骨架，不判失败", async () => {
+  it("人物/开场/新信息全空 → 章纲员重拟一次用完整的；两次都是骨架就用骨架，不判失败", async () => {
     const dir = await mkdtemp(join(tmpdir(), "se-plan-skeleton-"));
-    await mkdir(join(dir, "story"), { recursive: true });
+    await mkdir(join(dir, "chapters"), { recursive: true });
     const skeleton = JSON.stringify({ summary: "林舟去档案馆", beats: ["去档案馆", "查到底册"] });
     const full = JSON.stringify({ summary: "林舟去档案馆", beats: ["去档案馆", "查到底册"], characters: ["林舟"], scene: { time: "第二天上午" }, dayOffset: 1 });
-    const retried = vi.fn().mockResolvedValueOnce(skeleton).mockResolvedValueOnce(full);
-    const ok = await planChapter({ projectDir: dir, chapter: 3, callModel: retried });
-    expect(retried).toHaveBeenCalledTimes(2);
-    expect(ok.ok && ok.plan.characters).toEqual(["林舟"]);
-    const stubborn = vi.fn(async () => skeleton);
-    const still = await planChapter({ projectDir: dir, chapter: 3, callModel: stubborn });
+    const { planChapterByPlanner } = await import("../../brain/planner.js");
+    // 两次拟章纲任务消息之间夹着写笔记的调用：假模型 json:false 回笔记、json:true 按序回章纲。
+    const queue: (string | Error)[] = [skeleton, full];
+    const callModel: BrainCallModel = async (_messages, options) => {
+      if (!options.json) return "笔记";
+      const reply = queue.shift() ?? skeleton;
+      if (reply instanceof Error) throw reply;
+      return reply;
+    };
+    const retried = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel });
+    expect(retried.ok && retried.plan.characters).toEqual(["林舟"]);
+    const stubborn: BrainCallModel = async (_messages, options) => (options.json ? skeleton : "笔记");
+    const still = await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel: stubborn });
     expect(still.ok && still.plan.summary).toBe("林舟去档案馆");
+    expect((await readChapterPlan(dir, 3))?.summary).toBe("林舟去档案馆");
   });
 });
 
@@ -186,7 +118,7 @@ describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后�
   });
 });
 
-// ---------- 章纲员路（编辑部第 3 步，STORY_PLANNER=reader） ----------
+// ---------- 出稿前的章纲编排：章纲员拟 → 核账员审 → 改一轮（R3 后唯一一条路） ----------
 
 const READER_PLAN = JSON.stringify({
   summary: "林澈去档案室对出缺页",
@@ -228,37 +160,34 @@ const fakePlanCheckCallModel = (reply: string): BrainCallModel & { readonly call
   return Object.assign(callModel, { calls });
 };
 
-describe("resolveChapterPlanForDraft：章纲员路", () => {
-  beforeEach(() => {
-    vi.stubEnv("STORY_PLANNER", "reader");
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("拟 → 核账员审 → 没问题直接用；沿用已有章纲的规则不变", async () => {
+describe("resolveChapterPlanForDraft：编辑部编排", () => {
+  it("拟 → 核账员审 → 没问题直接用；同一方向重写沿用已有章纲，方向变了重拟", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const projectDir = await makeBook();
     const planner = fakePlannerCallModel();
     const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
-    const legacy = vi.fn(async () => GOOD_PLAN);
     const first = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, callModel: legacy, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(first.reused).toBe(false);
     expect(first.plan?.summary).toBe("林澈去档案室对出缺页");
-    expect(first.note).not.toContain("旧路");
-    // 旧路没被调；章纲员 1 次拟纲 + 2 次笔记；核账员 1 次审纲 + 2 次笔记。
-    expect(legacy).not.toHaveBeenCalled();
+    // 章纲员 1 次拟纲 + 2 次笔记；核账员 1 次审纲 + 2 次笔记。
     expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
     expect(checker.calls).toEqual([1]);
     const again = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, callModel: legacy, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(again.reused).toBe(true);
     expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
+    const redirected = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "改成去银行", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(redirected.reused).toBe(false);
+    expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
   });
 
   it("审出问题 → 交回章纲员改一轮（不循环），落盘的是改过的章纲", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const projectDir = await makeBook();
     const fixed = JSON.stringify({
       ...JSON.parse(READER_PLAN),
@@ -269,48 +198,65 @@ describe("resolveChapterPlanForDraft：章纲员路", () => {
       problems: [{ point: 3, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
     }));
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(result.plan?.beats).toHaveLength(4);
     expect(result.note).toContain("核账员审出 1 处");
     expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
   });
 
-  it("章纲员要补的笔记太多 → 这次走旧路拟纲 + 审校，note 里说清楚", async () => {
-    // 12 章都没笔记、maxCatchUp 是 10 → not_ready，这次走旧路。
+  it("章纲员要补的笔记太多 → 这次按没有章纲出稿、如实说读到第几章（不阻断出稿）", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    // 12 章都没笔记、maxCatchUp 是 10 → not_ready。
     const projectDir = await makeBook();
     for (let n = 2; n <= 12; n += 1) {
       await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
     }
     const planner = fakePlannerCallModel();
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 13, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
+      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
     });
     expect(result.reused).toBe(false);
-    expect(result.note).toContain("章纲员还在读前文，这次用的是旧路拟纲");
-    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
+    expect(result.plan).toBeUndefined();
+    expect(result.note).toContain("章纲员还在读这本书的前文（第 0 / 12 章）");
+    expect(result.note).toContain("这次按没有章纲出稿");
     // 这次没有让章纲员拟纲（后台补笔记不算拟纲）。
     expect(planner.calls.filter((call) => call.json)).toHaveLength(0);
   });
 
+  it("核账员还没读完前文 → 章纲照用、这次没审（如实说），不拿没读过前文的路顶", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const { rm } = await import("node:fs/promises");
+    const projectDir = await makeBook();
+    for (let n = 2; n <= 11; n += 1) {
+      await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
+    }
+    const planner = fakePlannerCallModel();
+    const checker = fakePlanCheckCallModel("{}");
+    // 第一轮（第 11 章）：两个角色当场补齐各自的 10 份笔记。
+    await resolveChapterPlanForDraft({ projectDir, chapter: 11, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker });
+    // 删掉核账员的全部笔记、再往书里加 3 章：下一轮章纲员只缺 3 份（补得起），
+    // 核账员缺 13 份（超过 10）→ not_ready。
+    await rm(join(projectDir, "agents", "checker", "notes"), { recursive: true, force: true });
+    for (const n of [12, 13, 14]) {
+      await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
+    }
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 15, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
+    expect(result.note).toContain("核账员还在读前文");
+    expect(result.note).toContain("这次没审章纲");
+  });
+
   it("章纲员拟不成 → 没有章纲 + 如实说明照常出稿", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const projectDir = await makeBook();
     const planner = fakePlannerCallModel([new Error("网关挂了"), new Error("还是挂")]);
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
     });
     expect(result.plan).toBeUndefined();
     expect(result.note).toContain("这次按没有章纲出稿");
-  });
-
-  it("显式设 legacy → 走旧路，不碰章纲员（回退排查用，R3 删）", async () => {
-    vi.stubEnv("STORY_PLANNER", "legacy");
-    const projectDir = await makeBook();
-    const planner = fakePlannerCallModel();
-    const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, callModel: vi.fn(async () => GOOD_PLAN), plannerCallModel: planner.callModel, planCheckReaderCallModel: fakePlanCheckCallModel("{}"),
-    });
-    expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    expect(planner.calls).toHaveLength(0);
   });
 });

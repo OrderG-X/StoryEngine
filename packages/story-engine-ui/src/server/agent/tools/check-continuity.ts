@@ -12,8 +12,7 @@ import { z } from "zod";
 import { coerceBoolean, coerceNumber } from "./lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { callConfiguredCheckerModel, type CheckCallModel } from "../continuity-v2/check-chapter.js";
-import { checkChapterBody } from "../continuity-v2/check-service.js";
+import { checkChapterBody, type ChapterCheckOptions } from "../continuity-v2/check-service.js";
 
 const issueSchema = z.object({
   quote: z.string().describe("本章里有问题的那一句（原文）。"),
@@ -39,8 +38,7 @@ export type CheckContinuityToolOutput = z.infer<typeof outputSchema>;
 export async function runCheckContinuity(
   projectDir: string,
   chapter: number,
-  callModel: CheckCallModel = callConfiguredCheckerModel,
-  options: { readonly fresh?: boolean } = {},
+  options: ChapterCheckOptions = {},
 ): Promise<CheckContinuityToolOutput> {
   const draft = await readDraftContent({ projectDir, chapter });
   if (!draft.found || !draft.content.trim()) {
@@ -56,7 +54,7 @@ export async function runCheckContinuity(
       summary: `第 ${chapter} 章还没有正文，没法核账。`,
     };
   }
-  const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), callModel, options);
+  const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), options);
   return { ...result, sure: [...result.sure], maybe: [...result.maybe], failures: [...result.failures], source: draft.source };
 }
 
@@ -76,6 +74,6 @@ export const checkContinuityTool = createTool({
     if (!projectDir) throw new Error("没有打开的书，没法核账。");
     const chapter = resolveChapterFromInputOrContext(input.chapter, context);
     if (chapter === undefined) throw new Error("不知道要核哪一章：请说一下章号。");
-    return runCheckContinuity(projectDir, chapter, callConfiguredCheckerModel, { fresh: input.fresh === true });
+    return runCheckContinuity(projectDir, chapter, { fresh: input.fresh === true });
   },
 });

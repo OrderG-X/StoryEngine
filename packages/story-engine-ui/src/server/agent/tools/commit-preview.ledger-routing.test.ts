@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
- * 声明路由（2026-10-12 编辑部 T2；R1 起记账员是默认）：预览的章节声明先走记账员（读过前文），
- * 没准备好（not_ready）回旧声明并后台补笔记；STORY_LEDGER 显式设 legacy 才直接旧声明（回退排查用，R3 删）。
- * 这里只测路由，不测两条路本身（旧声明见 chapter-delta-declaration.test.ts，记账员见 brain/ledger.test.ts）。
+ * 声明路由（2026-10-12 编辑部 T2 起 = 记账员一路；R3 删旧声明后没有回退）：
+ * 预览的章节声明走记账员（读过前文）；没准备好（not_ready）→ 这次按 fallback 如实标注（「这章的线索没记上」进 summary），
+ * 笔记在后台补。这里只测路由，不测记账员本身（见 brain/ledger.test.ts）。
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -22,11 +22,9 @@ const { buildDeclareDeltaRouter } = await import("./commit-preview.js");
 const { LEDGER_ROLE } = await import("../../brain/ledger.js");
 
 beforeEach(() => {
-  vi.stubEnv("STORY_LEDGER", undefined as unknown as string);
   ledgerMock.declareChapterDeltaByLedger.mockReset();
 });
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -43,14 +41,12 @@ const MODEL_OUTCOME = {
   },
 };
 
-describe("buildDeclareDeltaRouter（STORY_LEDGER 开关，R1 起缺省走记账员）", () => {
-  it("缺省（没设）→ 走记账员，声明结果原样透传", async () => {
-    const legacy = vi.fn(async () => ({ status: "fallback" as const }));
+describe("buildDeclareDeltaRouter（记账员一路）", () => {
+  it("走记账员，声明结果原样透传", async () => {
     ledgerMock.declareChapterDeltaByLedger.mockResolvedValue({ outcome: MODEL_OUTCOME } satisfies LedgerDeclareResult);
-    const router = buildDeclareDeltaRouter({ legacyDeclare: legacy });
+    const router = buildDeclareDeltaRouter();
     const outcome = await router({ ...INPUT, openThreadTitles: ["线索一"] });
     expect(outcome).toEqual(MODEL_OUTCOME);
-    expect(legacy).not.toHaveBeenCalled();
     expect(ledgerMock.declareChapterDeltaByLedger).toHaveBeenCalledWith(expect.objectContaining({
       projectDir: INPUT.projectDir,
       chapter: 3,
@@ -59,31 +55,22 @@ describe("buildDeclareDeltaRouter（STORY_LEDGER 开关，R1 起缺省走记账�
     }));
   });
 
-  it("显式设 legacy → 直接旧声明，不碰记账员（回退排查用，R3 删）", async () => {
-    vi.stubEnv("STORY_LEDGER", "legacy");
-    const legacy = vi.fn(async () => ({ status: "fallback" as const, reason: "旧路" }));
-    const router = buildDeclareDeltaRouter({ legacyDeclare: legacy });
-    const outcome = await router({ ...INPUT });
-    expect(outcome).toEqual({ status: "fallback", reason: "旧路" });
-    expect(ledgerMock.declareChapterDeltaByLedger).not.toHaveBeenCalled();
-  });
-
-  it("记账员没准备好（not_ready）→ 这次走旧声明，后台补它的笔记", async () => {
+  it("记账员没准备好（not_ready）→ 这次声明按 fallback 如实说「还在读前文」，后台补它的笔记", async () => {
     const dir = await makeHomeTempDir("ledger-route-");
     await mkdir(join(dir, "chapters"), { recursive: true });
     await writeFile(join(dir, "chapters", "0001.md"), "# 第1章\n\n正文1。\n", "utf-8");
     await writeFile(join(dir, "chapters", "0002.md"), "# 第2章\n\n正文2。\n", "utf-8");
-    const legacy = vi.fn(async () => ({ status: "fallback" as const, reason: "旧声明" }));
     ledgerMock.declareChapterDeltaByLedger.mockResolvedValue({
-      outcome: { status: "fallback", reason: "记账员还在读前文" },
+      outcome: { status: "fallback", reason: "记账员还在读前文，这次没有记账" },
       skipped: "not_ready",
+      pending: { done: 0, total: 2 },
     } satisfies LedgerDeclareResult);
     const router = buildDeclareDeltaRouter({
-      legacyDeclare: legacy,
       ledgerCallModel: async () => "记账笔记",
     });
     const outcome = await router({ chapter: 3, draft: "正文。", projectDir: dir });
-    expect(outcome).toEqual({ status: "fallback", reason: "旧声明" });
+    // 不拿旧声明顶：如实 fallback，原因一路带进 declarationStatus=fallback 的通道。
+    expect(outcome).toEqual({ status: "fallback", reason: "记账员还在读前文，这次没有记账" });
     // 后台补笔记（void 不等待）：轮询等到记账员第 1、2 章笔记落盘。
     const notesPath = join(dir, "agents", LEDGER_ROLE.id, "notes");
     for (let i = 0; i < 40 && !(await readFile(join(notesPath, "0002.json"), "utf-8").then(() => true, () => false)); i += 1) {
@@ -92,11 +79,10 @@ describe("buildDeclareDeltaRouter（STORY_LEDGER 开关，R1 起缺省走记账�
     expect(await readFile(join(notesPath, "0002.json"), "utf-8")).toContain("记账笔记");
   });
 
-  it("拿不到 projectDir（老调用方没传）→ 即使开着也走旧声明", async () => {
-    const legacy = vi.fn(async () => ({ status: "fallback" as const, reason: "旧路" }));
-    const router = buildDeclareDeltaRouter({ legacyDeclare: legacy });
-    await router({ chapter: 2, draft: "正文。" });
-    expect(legacy).toHaveBeenCalledTimes(1);
+  it("拿不到 projectDir → 如实 fallback（没有打开的书，没法记账），不碰记账员", async () => {
+    const router = buildDeclareDeltaRouter();
+    const outcome = await router({ chapter: 2, draft: "正文。" });
+    expect(outcome).toEqual({ status: "fallback", reason: expect.stringContaining("没有打开的书") });
     expect(ledgerMock.declareChapterDeltaByLedger).not.toHaveBeenCalled();
   });
 });

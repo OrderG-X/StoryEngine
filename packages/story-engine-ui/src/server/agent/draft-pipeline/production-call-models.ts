@@ -2,7 +2,7 @@
  * 出稿后质量环节的生产用模型调用（阶段 3）。走 streamChatModelToText：流式 + 空闲超时
  * （有字节就续命、无总时长上限），一律不传 max_tokens（铁律）。续写的思考开关随作者对写手的设置。
  * - 续写：fastDraft 槽（写手本身，文风一致）。
- * 前后核对 2026-10-10 起和「核账」同一套（continuity-v2 的 callConfiguredCheckerModel），不在这里。
+ * 前后核对 2026-10-10 起和「核账」同一套（编辑部核账员，brain 的 callConfiguredBrainModel），不在这里。
  */
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import type { ContinueCallModel } from "./continue-draft.js";
