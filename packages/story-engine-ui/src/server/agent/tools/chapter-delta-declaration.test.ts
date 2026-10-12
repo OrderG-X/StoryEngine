@@ -187,6 +187,17 @@ describe("parseChapterDeltaDeclaration", () => {
     expect(result?.charactersPresent?.[1]?.name).toBe("林宁");
   });
 
+  it("charactersPresent 的 aliasOf：宽进——空串/空白当没给，不丢整条", () => {
+    const parse = (aliasOf: unknown) => parseChapterDeltaDeclaration(JSON.stringify({
+      mainEvent: { summary: "事", quote: "原句。" },
+      charactersPresent: [{ name: "林师傅", aliasOf, quote: "林师傅走进来。" }],
+    }), 2);
+    expect(parse("林澈")?.charactersPresent?.[0]).toMatchObject({ name: "林师傅", aliasOf: "林澈" });
+    expect(parse("  ")?.charactersPresent?.[0]?.aliasOf).toBeUndefined();
+    expect(parse("")?.charactersPresent).toHaveLength(1);
+    expect(parse(null)?.charactersPresent?.[0]?.name).toBe("林师傅");
+  });
+
   it("章内换天 timeSpan：天数宽进（「一」「1」都收）；0 / 坏值当没报，不连坐别的字段", () => {
     const parse = (timeSpan: unknown) => parseChapterDeltaDeclaration(JSON.stringify({ mainEvent: { summary: "事", quote: "原句。" }, timeSpan }), 6);
     expect(parse({ days: "一", quote: "第二天上午，她去了槐树巷。" })?.timeSpan).toEqual({ days: 1, quote: "第二天上午，她去了槐树巷。" });

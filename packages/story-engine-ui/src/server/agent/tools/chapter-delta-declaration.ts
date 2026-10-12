@@ -62,6 +62,8 @@ const resourceItem = z.object({
 const characterItem = z.object({
   name: z.string().trim().min(1),
   identityHint: z.string().trim().min(1).optional(),
+  /** 可选：这个称呼指向的已确立人物名字（编辑部记账员用；旧声明不写这个字段照旧）。 */
+  aliasOf: optionalHint,
   quote: z.string().trim().min(1),
 });
 
@@ -165,15 +167,13 @@ function salvageContinuityWithPrevious(
   return undefined;
 }
 
-export function buildChapterDeltaMessages(input: {
-  readonly chapter: number;
-  readonly draft: string;
-  readonly openThreadTitles?: readonly string[];
-  readonly establishedNames?: readonly string[];
-  readonly openGoalTitles?: readonly string[];
-  readonly previousChapterEnding?: string;
-}): { readonly role: "system" | "user"; readonly content: string }[] {
-  const system = [
+/**
+ * 声明字段的说明与 JSON 键（buildChapterDeltaMessages 的 system 原文，原样抽出）。
+ * 2026-10-12 编辑部 T2 起有两处消费：旧声明（一次性 system+user）和记账员（拼在跟读窗口后的 user 消息里），
+ * 两条路的字段契约必须一字不差，抽成函数共用，防止两边漂移。
+ */
+export function buildChapterDeltaSystemSpec(): string {
+  return [
     "你是中文小说的『章节语义记录员』。只读这一章正文，声明本章发生的结构化语义，供后续状态追踪使用。",
     "题材中立：不要假设任何题材套路。只声明正文【真实写到】的，禁臆造、禁补剧情、禁预设走向；本章没有的类别就给空数组。",
     "每一条都必须附 quote：一句【逐字摘自正文的原句】作为证据（可含标点，但不能改写、不能拼接、不能自己造句）。程序会逐字复核，对不上的条目会被丢弃。",
@@ -196,6 +196,18 @@ export function buildChapterDeltaMessages(input: {
     "写名字的铁律：本书已确立的角色，名字每次都必须与【本书已确立的角色名】里的写法逐字一致，禁止把『林宁』写成『林棠』这类形近漂移。",
     "只输出一个 JSON 对象，键为：mainEvent, conflict, discovery, decision, seededForeshadowing, resolvedForeshadowing, resourceDeltas, keyLeads, pendingIntents, charactersPresent, arcGoalProgress, continuityWithPrevious, time, timeSpan。不要 Markdown、不要解释、不要多余文字。",
   ].join("\n");
+}
+
+/**
+ * 声明的附加上下文段（开着的线索 / 已确立角色名 / 已存在目标 / 上一章结尾），按这个顺序拼在正文后面。
+ * 记账员复用同一段（上一章结尾那段它不需要——窗口里刚读过全文，调用方不传就没有）。
+ */
+export function buildChapterDeltaContextSections(input: {
+  readonly openThreadTitles?: readonly string[];
+  readonly establishedNames?: readonly string[];
+  readonly openGoalTitles?: readonly string[];
+  readonly previousChapterEnding?: string;
+}): string {
   const openThreads = input.openThreadTitles && input.openThreadTitles.length > 0
     ? `\n【已开着的线索（编号 标题；推进或回收时把编号填进 targetThreadHint，不要新造；本章写出答案的记得报进 resolvedForeshadowing）】\n${input.openThreadTitles.map((title, index) => `T${index + 1} ${title}`).join("\n")}`
     : "";
@@ -208,8 +220,19 @@ export function buildChapterDeltaMessages(input: {
   const previousEnding = input.previousChapterEnding && input.previousChapterEnding.trim().length > 0
     ? `\n【上一章结尾（仅用于判断衔接，绝不能作为任何字段的 quote 来源）】\n${input.previousChapterEnding.trim()}`
     : "";
-  const user = `【第 ${input.chapter} 章正文】\n${input.draft}${previousEnding}${openThreads}${establishedNames}${openGoals}`;
-  return [{ role: "system", content: system }, { role: "user", content: user }];
+  return `${previousEnding}${openThreads}${establishedNames}${openGoals}`;
+}
+
+export function buildChapterDeltaMessages(input: {
+  readonly chapter: number;
+  readonly draft: string;
+  readonly openThreadTitles?: readonly string[];
+  readonly establishedNames?: readonly string[];
+  readonly openGoalTitles?: readonly string[];
+  readonly previousChapterEnding?: string;
+}): { readonly role: "system" | "user"; readonly content: string }[] {
+  const user = `【第 ${input.chapter} 章正文】\n${input.draft}${buildChapterDeltaContextSections(input)}`;
+  return [{ role: "system", content: buildChapterDeltaSystemSpec() }, { role: "user", content: user }];
 }
 
 function normalizeSummaryForCopyCheck(text: string): string {
@@ -225,7 +248,8 @@ function isSummaryLikelyCopiedFromQuote(summary: string, quote: string): boolean
   return diff < 6 && (normalizedSummary.includes(normalizedQuote) || normalizedQuote.includes(normalizedSummary));
 }
 
-function warnLikelyCopiedSummaries(chapter: number, declaration: ChapterDeltaDeclaration): void {
+/** summary 疑似照抄 quote 的提醒（记账员路也复用：两路同一套诊断）。 */
+export function warnLikelyCopiedSummaries(chapter: number, declaration: ChapterDeltaDeclaration): void {
   const fields = [
     ["mainEvent", declaration.mainEvent],
     ["conflict", declaration.conflict],

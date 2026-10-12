@@ -245,6 +245,47 @@ describe("verifyChapterDelta", () => {
     expect(result.rejected[0]?.reason).toBe("evidence_not_in_draft");
   });
 
+  it("人物名册 aliasOf：非空且不等于称呼本身则随条目保留（语义核对在计划层）", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。", aliasOf: "陆青岚" },
+        ],
+      }),
+      DRAFT,
+    );
+    expect(result.charactersPresent).toHaveLength(1);
+    expect(result.charactersPresent[0]?.aliasOf).toBe("陆青岚");
+    expect(result.charactersPresent[0]?.name).toBe("青岚");
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it("人物名册 aliasOf：空串 / 等于称呼本身 → 剥掉字段、条目照留（向后兼容老数据）", () => {
+    const blank = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。", aliasOf: "   " },
+        ],
+      }),
+      DRAFT,
+    );
+    expect(blank.charactersPresent).toHaveLength(1);
+    expect(blank.charactersPresent[0]?.aliasOf).toBeUndefined();
+    expect(blank.rejected).toHaveLength(0);
+
+    const selfReference = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。", aliasOf: "陆青岚" },
+        ],
+      }),
+      DRAFT,
+    );
+    expect(selfReference.charactersPresent).toHaveLength(1);
+    expect(selfReference.charactersPresent[0]?.aliasOf).toBeUndefined();
+    expect(selfReference.rejected).toHaveLength(0);
+  });
+
   it("主线目标推进：证据命中则保留、计入 hasAnyVerified", () => {
     const result = verifyChapterDelta(
       baseDeclaration({

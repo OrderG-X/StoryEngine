@@ -17,7 +17,7 @@ import {
   type ThreadTrackingUpdate,
 } from "./lead-intent-tracking.js";
 import { describeErrorBriefly, readArcGoalPool, readCharacterProfile, readHookPool, readThreadPool, toSafeCharacterId } from "./project-store.js";
-import { verifyChapterDelta, type ChapterDeltaDeclaration, type VerifiedChapterDelta } from "./chapter-delta.js";
+import { verifyChapterDelta, type ChapterDeltaDeclaration, type CharacterPresenceDeclaration, type VerifiedChapterDelta } from "./chapter-delta.js";
 import { detectNameDrift, type EstablishedCharacter, type NameDriftFinding } from "./character-name-consistency.js";
 import type { AssetLedger, CharacterMatrixLedger, CharacterProfile, HookItem, LocationBible } from "./types.js";
 
@@ -144,6 +144,11 @@ export interface ChapterSemanticSummary {
    * 持久化进时间线，供后续章节组装「已确立角色名册」做名字漂移写前校验（跨章累积）。
    */
   readonly presentCharacterNames?: readonly string[];
+  /**
+   * 本章核对成立的称呼归并（2026-10-12 编辑部 T2）：name=已确立人物名，alias=本章正文里出现的新称呼。
+   * 随时间线持久化，供上层把「同一个人的不同叫法」对齐（不另立新人物）；没有归并就缺省。
+   */
+  readonly characterAliases?: readonly { readonly name: string; readonly alias: string }[];
   readonly locations: readonly string[];
 }
 
@@ -243,14 +248,38 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
       issues.push(`资源变化待同步资产卡：${delta.item}${amount} ${kind}——证据「${delta.quote}」。可用 foundation_write 更新对应资产。`);
     }
   }
+  // 人物称呼归并（2026-10-12 编辑部 T2）：声明的 charactersPresent 里带 aliasOf（本章新称呼指向已确立人物）时，
+  // 引擎核对 aliasOf 真在已确立名册里（已登记角色名 + 上层传入的跨章名，含「名字|别名」竖线段里的每一段）。
+  // 核对成立的：称呼记成那个人的别名（characterAliases，随 semanticSummary 进时间线持久化），
+  // 出场名单记已确立名字、不把称呼另立成新人物；核对不成立的：剥掉 aliasOf 按普通出场名处理，并如实记一条 issue（绝不静默）。
+  const establishedNameSet = new Set<string>();
+  for (const character of characters) {
+    const name = character.name?.trim();
+    if (name) establishedNameSet.add(name);
+  }
+  for (const raw of input.establishedCharacterNames ?? []) {
+    for (const part of raw.split(/[|｜]/u).map((piece) => piece.trim()).filter(Boolean)) establishedNameSet.add(part);
+  }
+  const declaredCharacterAliases: { readonly name: string; readonly alias: string }[] = [];
+  const presentWithoutUntrustedAliases: readonly CharacterPresenceDeclaration[] = (verifiedDelta?.charactersPresent ?? []).map((entry): CharacterPresenceDeclaration => {
+    if (!entry.aliasOf) return entry;
+    if (establishedNameSet.has(entry.aliasOf)) {
+      declaredCharacterAliases.push({ name: entry.aliasOf, alias: entry.name });
+      return entry;
+    }
+    issues.push(`人物称呼归并未采信：本章的「${entry.name}」被标注为「${entry.aliasOf}」的称呼，但后者不在已确立名册里，按本章新出场名记录。`);
+    const { aliasOf: _untrusted, ...rest } = entry;
+    return rest;
+  });
   // 人物名字漂移写前校验（题材中立）：把模型声明的「本章用名」和已确立角色名做确定性形近比对，
   // 逮住「已确立角色的正确名字本章没用、却用了个形近错名」（如 林宁→林棠）。只提示、不阻塞。
+  // 已核对成立的别名称呼（aliasOf 在名册里）不进比对——那是同一个人的另一个叫法，不是写歪。
   // 除了塞进 issues（供 plan 可读/向后兼容），也结构化保留在 nameDriftFindings，供上层固定展示成明确 warning。
   let nameDriftFindings: readonly NameDriftFinding[] = [];
   if (verifiedDelta && verifiedDelta.charactersPresent.length > 0) {
     const establishedRegistry = buildEstablishedCharacterRegistry(characters, input.establishedCharacterNames);
     nameDriftFindings = detectNameDrift({
-      chapterNames: verifiedDelta.charactersPresent.map((entry) => entry.name),
+      chapterNames: presentWithoutUntrustedAliases.filter((entry) => !entry.aliasOf).map((entry) => entry.name),
       established: establishedRegistry,
       draft,
     });
@@ -258,7 +287,7 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
       issues.push(`人物名疑似写歪：本章出现「${finding.driftedVariant}」，与已确立角色「${finding.establishedName}」形近；请确认是否应写作「${finding.establishedName}」。`);
     }
   }
-  const semanticSummary = extractChapterSemanticSummary({
+  const extractedSummary = extractChapterSemanticSummary({
     chapter: input.chapter,
     draft,
     characters,
@@ -266,8 +295,13 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
     defaultCharacterId: characterId,
     genreContext: previewContext.genreContext,
     knownLocations: knownLocationNames(previewContext.locationBible),
-    ...(verifiedDelta ? { verifiedDelta } : {}),
+    // 出场名册用「归并后」的那份：别名称呼换成它指向的已确立名字（不新建人物），未采信的 aliasOf 已剥掉。
+    ...(verifiedDelta ? { verifiedDelta: { ...verifiedDelta, charactersPresent: presentWithoutUntrustedAliases.map((entry) => entry.aliasOf ? { ...entry, name: entry.aliasOf } : entry) } } : {}),
   });
+  const semanticSummary: ChapterSemanticSummary = {
+    ...extractedSummary,
+    ...(declaredCharacterAliases.length > 0 ? { characterAliases: declaredCharacterAliases } : {}),
+  };
   const knownCharacterNames = collectKnownCharacterNames(characters, semanticSummary.protagonist);
   const assetChanges = buildAssetChangePlan(draft, previewContext.assetLedger, knownCharacterNames);
   const locationChanges = buildLocationChangePlan(draft, previewContext.locationBible, assetChanges, knownCharacterNames);
