@@ -205,6 +205,92 @@ describe("「定稿」按钮结构化动作（commit_preview）", () => {
   });
 });
 
+describe("「核账」按钮结构化动作（check_continuity，R4.1：没核成不装作核过）", () => {
+  const runCheck = async (executeTool: UserActionToolExecutor) => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "check_continuity", chapter: 5 },
+      requestContext: new RequestContext(),
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    return events;
+  };
+  const nextStepsOutput = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
+    events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string; recommended?: boolean }[] };
+  const textOf = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
+    events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
+
+  it("没核成（还在读，ok:false + pending）→ 问句「这次没核成，接下来？」，只有再核一次/先写下一章；不写「做完了」、不给「预览定稿」", async () => {
+    const events = await runCheck(async () => ({
+      ok: false,
+      chapter: 5,
+      sure: [],
+      maybe: [],
+      failures: ["核账员还在读前文（第 4 / 57 章），这次没核"],
+      pending: { done: 4, total: 57 },
+      summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
+    }));
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta", "tool-call", "tool-result"]);
+    // 收尾文本只回工具自己的如实 summary（说清还在读、这次没核）。
+    expect(textOf(events)).toContain("这次没有核");
+    expect(textOf(events)).not.toContain("做完了");
+    const next = nextStepsOutput(events);
+    expect(next.question).toBe("这次没核成，接下来？");
+    expect(next.question).not.toContain("做完了");
+    expect(next.choices.map((c) => c.label)).toEqual(["再核一次", "先写下一章"]);
+    const labels = JSON.stringify(next.choices);
+    expect(labels).not.toContain("预览定稿");
+    expect(labels).not.toContain("改掉确定");
+  });
+
+  it("没核成（出错，ok:false 无 pending）且 summary 缺失 → 兜底文案也不写「核账做完了」", async () => {
+    const events = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], failures: ["第 1 遍（盯东西）没跑成"] }));
+    expect(textOf(events)).toContain("没核成");
+    expect(textOf(events)).not.toContain("做完了");
+    const next = nextStepsOutput(events);
+    expect(next.question).toBe("这次没核成，接下来？");
+    expect(next.choices.map((c) => c.label)).toEqual(["再核一次", "先写下一章"]);
+  });
+
+  it("没核成（还在读）且 summary 缺失 → 兜底文案用结构化 pending 说「还在读」，不解析 failures 文字", async () => {
+    const events = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], pending: { done: 4, total: 57 } }));
+    expect(textOf(events)).toContain("还在读前文（第 4 / 57 章）");
+  });
+
+  it("核成且 0 处（ok:true）→ 问句「核账做完了，接下来？」、推荐「预览定稿」照旧（正常路不回归）", async () => {
+    const events = await runCheck(async () => ({
+      ok: true,
+      chapter: 5,
+      sure: [],
+      maybe: [],
+      failures: [],
+      summary: "核了第 5 章，没发现和前文对不上的地方。",
+    }));
+    expect(textOf(events)).toContain("没发现和前文对不上的地方");
+    const next = nextStepsOutput(events);
+    expect(next.question).toBe("核账做完了，接下来？");
+    expect(next.choices.map((c) => c.label)).toEqual(["预览定稿", "写下一章"]);
+    expect(next.choices[0]).toMatchObject({ label: "预览定稿", recommended: true });
+  });
+
+  it("核成且确定 N 处 → 「改掉确定的 N 处」那组选项照旧", async () => {
+    const events = await runCheck(async () => ({
+      ok: true,
+      chapter: 5,
+      sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }],
+      maybe: [],
+      failures: [],
+      summary: "核了第 5 章：确定对不上 1 处。",
+    }));
+    const next = nextStepsOutput(events);
+    expect(next.question).toBe("核账做完了，这几处怎么处理？");
+    expect(next.choices[0]).toMatchObject({ label: "改掉确定的 1 处", recommended: true });
+  });
+});
+
 describe("「确认裁剪」结构化动作（prune_snapshots）", () => {
   it("parseUserAction：keep 可缺省、数字字符串宽容、0=缺省、负数/小数拒绝；不需要章号", () => {
     expect(parseUserAction({ toolName: "prune_snapshots" })).toEqual({ kind: "action", action: { toolName: "prune_snapshots" } });

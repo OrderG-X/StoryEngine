@@ -134,12 +134,13 @@ describe("核账服务：核账员还没读完前文（T5 后台补读）", () =
     const dir = await makeBook(12);
     const reader = readerModel();
     const first = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
-    // 不装作核过：ok=false，summary 说清读到第几章。
+    // 不装作核过：ok=false，summary 说清读到第几章；结构化 pending 让消费方区分「还在读」和「出错」（R4.1）。
     expect(first.ok).toBe(false);
     expect(first.summary).toContain("还在读这本书的前文：第 0 / 12 章");
     expect(first.summary).toContain("这次没有核");
     expect(first.sure).toEqual([]);
     expect(first.maybe).toEqual([]);
+    expect(first.pending).toEqual({ done: 0, total: 12 });
     expect(reader.calls.checks).toBe(0);
     // 笔记在后台按顺序补（每个角色一条队列），进度落盘给界面
     await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
@@ -160,6 +161,8 @@ describe("核账服务：核账员还没读完前文（T5 后台补读）", () =
     const result = await checkChapterBody(dir, 13, BODY, { readerCallModel: broken });
     expect(result.ok).toBe(false);
     expect(result.summary).toContain("还在读");
+    // 「还在读」的结构化进度照给（后台补读失败也不影响这次回执的形状）。
+    expect(result.pending).toEqual({ done: 0, total: 12 });
     await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5_000 });
     // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）
     const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));

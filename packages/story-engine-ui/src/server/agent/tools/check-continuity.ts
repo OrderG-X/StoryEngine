@@ -28,6 +28,10 @@ const outputSchema = z.object({
   sure: z.array(issueSchema).describe("确定对不上的地方（排在前面给作者看）。"),
   maybe: z.array(issueSchema).describe("可能对不上的地方（作者自己判断）。"),
   failures: z.array(z.string()).describe("没跑成的步骤（如实说明）。"),
+  pending: z.object({
+    done: z.number().int().describe("已读到第几章。"),
+    total: z.number().int().describe("共多少章。"),
+  }).optional().describe("只在「还在读、这次没核」时有：核账员读到第 done / total 章。要区分「还在读」和「出错」用这个字段，别解析 failures 文字。"),
   dismissed: z.number().int().describe("作者以前标过「不是问题」、这次没再报的条数。"),
   reused: z.boolean().describe("这一章和前文都没改过，直接用的上次核账结果（没调模型）。"),
   summary: z.string().describe("给作者看的一句话结论。"),

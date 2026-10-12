@@ -39,6 +39,9 @@ export interface ChapterCheckResult {
   readonly sure: readonly ChapterCheckItem[];
   readonly maybe: readonly ChapterCheckItem[];
   readonly failures: readonly string[];
+  /** 只在「还在读、这次没核」（notReady）时有：核账员已读到第 done 章、共 total 章。
+   *  消费方要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
+  readonly pending?: { readonly done: number; readonly total: number };
   /** 作者标过「不是问题」、这次没再报的条数。 */
   readonly dismissed: number;
   /** 正文、前文、账本都没改过，直接用的上次结果（没调模型）。 */
@@ -136,6 +139,8 @@ export async function checkChapterBody(
         sure: [],
         maybe: [],
         failures: [`核账员还在读前文（第 ${done} / ${total} 章），这次没核`],
+        // 结构化的「读到第几章」：前端/下一步据此区分「还在读」和「出错」，别解析 failures 文字（R4.1）。
+        pending: { done, total },
         dismissed: 0,
         reused: false,
         summary: `核账员还在读这本书的前文：第 ${done} / ${total} 章。这次没有核（不糊弄）；它读完后你再点一次「核账」，就是按读完全书来核的。`,

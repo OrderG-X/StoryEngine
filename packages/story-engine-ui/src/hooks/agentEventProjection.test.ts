@@ -401,6 +401,50 @@ describe("projectAgentEvent", () => {
     expect(msg.toolSteps![0].status).toBe("failed");
   });
 
+  it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
+    let msg = emptyAssistantMessage("check-ok");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "c1",
+      toolName: "check_continuity",
+      endedAt: 2,
+      output: {
+        ok: true,
+        chapter: 4,
+        continuityCheck: { chapter: 4, sure: [], maybe: [] },
+        summary: "核了第 4 章，没发现和前文对不上的地方。",
+      },
+    });
+    expect(msg.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
+    expect(msg.toolSteps![0].status).toBe("completed");
+  });
+
+  it("check_continuity 没核成（ok:false，还在读/出错）→ 消息上没有 continuityCheck，不出「没发现对不上」卡（R4.1/验收 3.1）", () => {
+    // fixture 模拟「还在读」时投影层真实收到的 payload（客户端层只透传白名单字段：ok/summary/chapter/
+    // continuityPending；sure/maybe 根本不过来）。另故意塞一个 continuityCheck 验证第二道守卫：
+    // 即便某个上游把卡塞进来了，ok:false 也不许挂——空数组不是「没问题」。
+    let msg = emptyAssistantMessage("check-not-ready");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "c1",
+      toolName: "check_continuity",
+      endedAt: 2,
+      output: {
+        ok: false,
+        chapter: 5,
+        continuityPending: { done: 4, total: 57 },
+        continuityCheck: { chapter: 5, sure: [], maybe: [] },
+        summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
+      },
+    });
+    expect(msg.continuityCheck).toBeUndefined();
+    // 步骤如实落 failed（不是绿色完成），详情带工具的真实 summary——只留工具文字，不装作核过。
+    expect(msg.toolSteps![0].status).toBe("failed");
+    expect(msg.toolSteps![0].detail).toContain("这次没有核");
+  });
+
   it("commit_preview 带 nameConsistencyWarnings → 挂到消息（固定展示提醒卡，不靠模型转述）", () => {
     let msg = emptyAssistantMessage("preview-name-drift");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });

@@ -47,6 +47,39 @@ function fakeModel(verdicts: Record<string, string>): BrainCallModel {
   };
 }
 
+describe("没核成的结构化回执（R4.1）", () => {
+  it("还在读（notReady）→ 工具输出带 pending { done, total }，消费方据此区分「还在读」和「出错」", async () => {
+    const dir = await makeHomeTempDir("check-pending-");
+    await mkdir(join(dir, "chapters"), { recursive: true });
+    await mkdir(join(dir, "drafts", "fast"), { recursive: true });
+    // 12 章已定稿、第 13 章有工作稿：要补的笔记超过 10 章 → notReady（假模型不该被调到）。
+    for (let chapter = 1; chapter <= 12; chapter += 1) {
+      await writeFile(join(dir, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n林舟照常开门。\n`, "utf-8");
+    }
+    await writeFile(join(dir, "drafts", "fast", "chapter-0013.md"), "# 第13章\n\n林舟把怀表拿出来。\n", "utf-8");
+    // 前台核账在 notReady 直接短路、不该调模型；这个假模型只可能被后台补读撞到（它抛错也无妨，只 warn）。
+    const refuse: BrainCallModel = async () => {
+      throw new Error("前台不该调模型：notReady 直接短路");
+    };
+    const result = await runCheckContinuity(dir, 13, { readerCallModel: refuse });
+    expect(result.ok).toBe(false);
+    expect(result.sure).toEqual([]);
+    expect(result.maybe).toEqual([]);
+    expect(result.pending).toEqual({ done: 0, total: 12 });
+    expect(result.summary).toContain("还在读");
+  });
+
+  it("没正文 → ok:false 如实说，没有 pending（不是「还在读」）", async () => {
+    const dir = await makeHomeTempDir("check-nodraft-");
+    await mkdir(join(dir, "chapters"), { recursive: true });
+    await writeFile(join(dir, "chapters", "0001.md"), `# 第1章\n\n${CH1}\n`, "utf-8");
+    const result = await runCheckContinuity(dir, 2);
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain("还没有正文");
+    expect(result.pending).toBeUndefined();
+  });
+});
+
 describe("核账记忆", () => {
   it("正文和前文都没改 → 直接给上次结果、不调模型；「再细核一遍」才重新核", async () => {
     const dir = await makeBook();

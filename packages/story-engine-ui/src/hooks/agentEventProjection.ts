@@ -72,6 +72,9 @@ export interface AgentToolResultOutput {
   readonly qualityReport?: ChapterMessage["qualityReport"];
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ChapterMessage["continuityCheck"];
+  /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
+   *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
+  readonly continuityPending?: { readonly done: number; readonly total: number };
   /** commit_preview 专属：人物名一致性提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「人物名一致性」提醒卡。 */
   readonly nameConsistencyWarnings?: ChapterMessage["nameConsistencyWarnings"];
   /** commit_preview 专属：伏笔/线索待收口提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「伏笔/线索待收口」提醒卡。 */
@@ -299,7 +302,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       if (event.toolName === "quality_check" && event.output?.qualityReport) {
         return { ...withEffects, qualityReport: event.output.qualityReport };
       }
-      if (event.toolName === "check_continuity" && event.output?.continuityCheck) {
+      // 核账卡随这条消息走（渲染「核账」卡）。ok:false（还在读 / 出错 / 没正文）不挂——
+      // sure/maybe 空数组不是「没问题」，否则显成「没发现对不上」的假成功卡（R4.1/验收 3.1），
+      // 只留工具文字如实说。与上面 check_ai_flavor 的 ok!==false 守卫同款（双保险：客户端层已先拦一道）。
+      if (event.toolName === "check_continuity" && event.output?.continuityCheck && event.output?.ok !== false) {
         return { ...withEffects, continuityCheck: event.output.continuityCheck };
       }
       // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：

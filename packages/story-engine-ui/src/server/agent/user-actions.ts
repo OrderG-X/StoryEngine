@@ -224,6 +224,8 @@ interface CheckContinuityLikeOutput {
   readonly summary?: unknown;
   readonly sure?: readonly unknown[];
   readonly maybe?: readonly unknown[];
+  /** 只在「还在读、这次没核」时有：核账员读到第 done / total 章（区分「还在读」和「出错」用这个字段，别解析 failures 文字）。 */
+  readonly pending?: { readonly done: number; readonly total: number };
 }
 
 /** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
@@ -252,9 +254,36 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   }
   args.sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
   const result = output as CheckContinuityLikeOutput | undefined;
-  emitText(typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : `第 ${action.chapter} 章核账做完了。`);
+  // 没核成（ok:false：还在读 / 出错 / 没正文）绝不写「核账做完了」。summary 缺失时的兜底也按 pending
+  // 区分「还在读」和「出错」（结构化字段，不解析 failures 文字）——R4.1/验收 3.1。
+  const notChecked = result?.ok === false;
+  const fallbackSummary = notChecked
+    ? result?.pending
+      ? `第 ${action.chapter} 章这次没核成：核账员还在读前文（第 ${result.pending.done} / ${result.pending.total} 章）。`
+      : `第 ${action.chapter} 章这次没核成。`
+    : `第 ${action.chapter} 章核账做完了。`;
+  emitText(typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : fallbackSummary);
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
+  // 没核成：下一步只给「再核一次」「先写下一章」——不给「预览定稿」（没核过不该推荐定稿）、
+  // 不给「改掉确定的 N 处」（sure 是空的），问句也不写「做完了」。
+  if (notChecked) {
+    const failedCallId = `user-action-next-${stamp}`;
+    args.sendEvent("tool-call", { toolCallId: failedCallId, toolName: "suggest_next_steps", args: {} });
+    args.sendEvent("tool-result", {
+      toolCallId: failedCallId,
+      toolName: "suggest_next_steps",
+      output: {
+        ok: true,
+        question: "这次没核成，接下来？",
+        choices: [
+          { label: "再核一次", intent: `重新核第 ${action.chapter} 章的账`, recommended: true },
+          { label: "先写下一章", intent: "继续写下一章的正文" },
+        ],
+      },
+    });
+    return;
+  }
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
   // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
   const fresh: NextStepChoice[] = result?.reused === true ? [{ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文" }] : [];

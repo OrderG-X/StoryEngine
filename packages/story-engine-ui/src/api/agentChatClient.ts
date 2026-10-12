@@ -121,6 +121,9 @@ export interface AgentToolResult {
   readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果。 */
   readonly continuityCheck?: ContinuityCheckView;
+  /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
+   *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
+  readonly continuityPending?: { readonly done: number; readonly total: number };
   /** suggest_next_steps 专属：agent 提议的下一步选项，透传给投影层挂到消息→驱动「下一步」卡。 */
   readonly nextStepPrompt?: {
     readonly question: string;
@@ -346,11 +349,19 @@ export async function streamAgentChat(
               ? { commitReport: output.report }
               : {}),
             // check_continuity 专属：核账结果（确定 / 可能两档，两边原句）→ 透传，前端渲染「核账」卡。
-            ...(parsed.toolName === "check_continuity" && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
+            // ok:false（还在读 / 出错 / 没正文）一律不建卡——sure/maybe 空数组只说明「没有条目」，不代表「没问题」，
+            // 否则会显成「没发现对不上」的假成功卡（R4.1/验收 3.1）。没核成就只留工具文字如实说。
+            ...(parsed.toolName === "check_continuity" && output.ok !== false && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
               ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe) } }
               : {}),
+            // check_continuity 专属：还在读的结构化进度（pending 只在「还在读、没核」时出现）→ 透传。
+            // 前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。
+            ...(parsed.toolName === "check_continuity" && isPendingProgress(output.pending)
+              ? { continuityPending: output.pending }
+              : {}),
             // quality_check 专属：分层报告 refined（blocking/soft/reference 不在轻量白名单里）→ 透传，前端渲染「质检」明细卡。
-            ...(parsed.toolName === "quality_check" && isRecord(output.refined)
+            // ok:false 不透传（防御：质检失败今天走抛错→tool-error，但 ok:false+refined 一旦出现不能显成「质检通过」卡）。
+            ...(parsed.toolName === "quality_check" && output.ok !== false && isRecord(output.refined)
               ? { qualityReport: output.refined as unknown as QualityCardReport }
               : {}),
             // commit_preview 专属：人物名一致性提醒（不在轻量白名单里）→ 透传，前端渲染固定提醒卡（不靠模型转述、不被说软）。
@@ -510,11 +521,13 @@ function isAiFlavorReport(value: Record<string, unknown>): boolean {
 
 /**
  * ai_review 输出形状守卫：output.review 是对象且有 issues 数组（防把别的工具输出误当审稿报告）。
- * **审稿没跑成（usedFallback=true）→ 返回 false**：引擎此时回 fallback 报告（含一条假 issue「AI 审稿结果不可用」），
+ * **审稿没跑成（ok:false / usedFallback=true）→ 返回 false**：引擎此时回 fallback 报告（含一条假 issue「AI 审稿结果不可用」），
  * 不能当「审校问题」卡渲染（否则显成『1 处问题』+ 可点改这处，点了让 agent 去改不存在的问题）；
  * 让 agent 的文本摘要「这次没审完、要不要重试」如实告知。与 check_ai_flavor 的 ok!==false 守卫对称。
+ * ok:false 是 R4.1 同类排查补的防御位（今天 ok:false ⟺ usedFallback，字段双保险）。
  */
 function isDraftReview(value: Record<string, unknown>): boolean {
+  if (value.ok === false) return false;
   if (value.usedFallback === true) return false;
   const review = value.review;
   return typeof review === "object" && review !== null && Array.isArray((review as { issues?: unknown }).issues);
@@ -525,6 +538,13 @@ function isNextStepPrompt(value: Record<string, unknown>): boolean {
   return typeof value.question === "string"
     && Array.isArray(value.choices)
     && value.choices.length > 0;
+}
+
+/** check_continuity 的 pending 形状守卫：done/total 是整数、total>0（残缺的进度不当「还在读」透传）。 */
+function isPendingProgress(value: unknown): value is { readonly done: number; readonly total: number } {
+  return isRecord(value)
+    && typeof value.done === "number" && Number.isInteger(value.done) && value.done >= 0
+    && typeof value.total === "number" && Number.isInteger(value.total) && value.total > 0;
 }
 
 /** commit_preview 人物名一致性提醒形状守卫：非空数组，每条有 establishedName/driftedVariant/message 字符串。 */
