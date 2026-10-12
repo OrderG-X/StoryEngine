@@ -15,6 +15,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
+import { isReaderCheckerEnabled, maybeStartCheckerCatchUp } from "../brain/index.js";
 
 export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {
@@ -48,6 +49,8 @@ export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void 
         });
         return withUiOverviewDetails(projectDir, coreOverview);
       });
+      // 打开书 / 刷新工作台都走这里（T5 长书）：核账员开着而前文笔记还没读齐 → 后台接着补，进度随 overview 给界面。
+      if (isReaderCheckerEnabled()) void maybeStartCheckerCatchUp(projectDir);
 
       writeJson(res, 200, { ok: true, overview });
     } catch (error) {

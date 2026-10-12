@@ -15,6 +15,7 @@ import {
   CHECKER_ROLE,
   CHECKER_ROLE_STRUCTURED,
   checkerRoleFor,
+  parseKeywords,
   parsePlanProblems,
   planCheckTask,
   selfReviewTask,
@@ -176,11 +177,11 @@ describe("核账员：窗口和提示", () => {
     expect(again.calls.filter((call) => !call.json)).toHaveLength(0);
   });
 
-  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready，不核也不写笔记", async () => {
+  it("要补的笔记太多（超过 maxCatchUp）→ skipped: not_ready，不核也不写笔记；进度说清读到第几章", async () => {
     const dir = await makeBook();
     const { callModel, calls } = fakeModel({});
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, maxCatchUp: 1 });
-    expect(result).toEqual({ issues: [], failures: [], skipped: "not_ready" });
+    expect(result).toMatchObject({ issues: [], failures: [], skipped: "not_ready", pending: { done: 0, total: 2 } });
     expect(calls).toHaveLength(0);
   });
 
@@ -200,6 +201,108 @@ describe("核账员：窗口和提示", () => {
     expect(task).toContain(CHECKER_FOCUS.time);
     expect(task).toContain("confidence 写 sure");
     expect(checkTask(7)).not.toContain("【这一遍的重点】");
+  });
+});
+
+describe("核账员：翻原文（窗口里有被折叠的章时）", () => {
+  /** 一本能让窗口折叠的书：12 章、每章两千多字，预算压到 6000 → 原文全折掉、只留笔记。 */
+  async function makeLongBook(): Promise<string> {
+    const dir = await makeHomeTempDir("checker-fold-");
+    await mkdir(join(dir, "chapters"), { recursive: true });
+    for (let chapter = 1; chapter <= 12; chapter += 1) {
+      const filler = `${chapter}号那天，巷子里的一切照旧。`.repeat(140);
+      const key = chapter === 1 ? CH1 : chapter === 2 ? CH2 : `第${chapter}章里，林舟照常看店。`;
+      await writeFile(join(dir, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n${key}${filler}\n`, "utf-8");
+    }
+    return dir;
+  }
+
+  /** 假模型：笔记回一句；翻原文那轮（带 keywordTask 的记号）按需回关键词；三遍照 fakeModel 的规矩回。 */
+  function foldingModel(keywordsReply: string | Error) {
+    const calls: { readonly messages: readonly BrainMessage[]; readonly json: boolean }[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      calls.push({ messages: [...messages], json: options.json });
+      const last = messages.at(-1)!.content;
+      if (!options.json) return `第${/第 (\d+) 章/u.exec(last)?.[1]}章笔记`;
+      if (last.includes("有没有需要翻前文原文的")) {
+        if (keywordsReply instanceof Error) throw keywordsReply;
+        return keywordsReply;
+      }
+      return pass(...[]);
+    };
+    return { callModel, calls };
+  }
+
+  it("先问一轮关键词，把翻到的原句（带章号）放进三遍的消息里（新稿后面、核账提示前面）", async () => {
+    const dir = await makeLongBook();
+    const { callModel, calls } = foldingModel(JSON.stringify({ keywords: ["怀表"] }));
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 13, draftBody: BODY, callModel, maxChars: 6_000 });
+    expect(result.failures).toEqual([]);
+    // 1 次问关键词 + 3 遍核账（json 调用共 4 次）
+    const jsonCalls = calls.filter((call) => call.json);
+    expect(jsonCalls).toHaveLength(4);
+    const keywordCall = jsonCalls[0]!;
+    expect(keywordCall.messages.at(-1)!.content).toContain(`【新稿：第 13 章】\n${BODY}`);
+    expect(keywordCall.messages.at(-1)!.content).toContain("最多 5 个");
+    // 翻到的原文：第 1、2 章里带「怀表」的原句，带章号，贴在三遍各自的核账消息里（新稿后面）
+    const checkCalls = jsonCalls.slice(1);
+    for (const call of checkCalls) {
+      const last = call.messages.at(-1)!.content;
+      expect(last).toContain(`【新稿：第 13 章】\n${BODY}`);
+      expect(last).toContain("【翻到的原文】");
+      expect(last).toContain("第 1 章（怀表）：");
+      expect(last).toContain("客人把怀表放在绒布上就走了");
+      expect(last).toContain("第 2 章（怀表）：");
+      // 前缀 = 窗口（第 1 章起原文已折掉）+ 问关键词 + 答
+      expect(call.messages[1]!.content).toBe("【第 1 章（原文已省略，见你当时的笔记）】");
+    }
+    // 三遍的关键词问答逐字一样（服务商缓存）
+    expect(new Set(checkCalls.map((call) => JSON.stringify(call.messages.slice(0, -1)))).size).toBe(1);
+  });
+
+  it("关键词抠不出来（不是 JSON / 空数组）→ 不翻原文，照常三遍，不算失败", async () => {
+    const dir = await makeLongBook();
+    const { callModel, calls } = foldingModel("我觉得没问题");
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 13, draftBody: BODY, callModel, maxChars: 6_000 });
+    expect(result.failures).toEqual([]);
+    expect(result.issues).toEqual([]);
+    expect(calls.filter((call) => call.json)).toHaveLength(4);
+    // 三遍的核账消息里没有翻到的原文，前缀就是窗口本身（没有问答那两条）
+    const checkCalls = calls.filter((call) => call.json).slice(1);
+    expect(checkCalls[0]!.messages.at(-1)!.content).not.toContain("【翻到的原文】");
+    expect(checkCalls[0]!.messages.at(-2)!.role).toBe("assistant"); // 窗口最后一条：第 12 章的笔记
+  });
+
+  it("翻原文那一轮失败：如实记一笔，三遍按原窗口照核", async () => {
+    const dir = await makeLongBook();
+    const { callModel } = foldingModel(new Error("断流了"));
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 13, draftBody: BODY, callModel, maxChars: 6_000 });
+    expect(result.failures).toEqual(["翻原文那一轮没跑成（断流了），这次只按窗口核"]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("窗口里没有折叠的章 → 不问关键词（保持第 1 步的调用形状）", async () => {
+    const dir = await makeBook();
+    const { callModel, calls } = foldingModel(JSON.stringify({ keywords: ["怀表"] }));
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
+    expect(calls.filter((call) => call.json).every((call) => !call.messages.at(-1)!.content.includes("有没有需要翻前文原文的"))).toBe(true);
+  });
+
+  it("关键词去重、太短的丢掉、最多 5 个", () => {
+    expect(parseKeywords('前缀 {"keywords":["怀表","怀表 ","周","  ","林溪","抽屉","青砖","表盖"]} 后缀')).toEqual(["怀表", "林溪", "抽屉", "青砖", "表盖"]);
+    expect(parseKeywords("完全不是 JSON")).toEqual([]);
+  });
+
+  it("关键词写成短语（带空格）也拆得开：翻原文按拆出来的词检索，照样翻到", async () => {
+    const dir = await makeLongBook();
+    const { callModel, calls } = foldingModel(JSON.stringify({ keywords: ["怀表 放在 绒布", "周婶"] }));
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 13, draftBody: BODY, callModel, maxChars: 6_000 });
+    expect(result.failures).toEqual([]);
+    const last = calls.filter((call) => call.json)[1]!.messages.at(-1)!.content;
+    // 短语拆成了单词（怀表 / 放在 / 绒布 / 周婶）逐个检索：第 1 章的原句翻回来了（同一原句按词去重，只带一次）
+    expect(last).toMatch(/第 1 章（(怀表|放在|绒布|周婶)）：/u);
+    expect(last).toContain("客人把怀表放在绒布上就走了");
+    expect(last).toContain("第 2 章（怀表）：");
   });
 });
 

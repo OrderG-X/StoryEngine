@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../../brain/index.js";
@@ -182,39 +182,44 @@ describe("核账服务：核账记忆不串", () => {
   });
 });
 
-describe("核账服务：核账员还没读完前文", () => {
-  it("要补的笔记超过 10 章 → 这次改走旧核账，summary 说明，笔记在后台补；补好后下次走核账员", async () => {
+describe("核账服务：核账员还没读完前文（T5 后台补读）", () => {
+  it("要补的笔记超过 10 章 → 如实说读到第几章、这次没核；旧路一次不调，笔记在后台补；补好后下次走核账员", async () => {
     const dir = await makeBook(12);
     const combo = comboModel();
     const reader = readerModel();
     const first = await checkChapterBody(dir, 13, BODY, combo, { engine: "reader", readerCallModel: reader.callModel });
-    expect(first.ok).toBe(true);
-    expect(first.summary.endsWith("（核账员还在读前文，这次用的是旧核账。）")).toBe(true);
-    expect(first.sure.map((item) => item.quote)).toContain(WATCH.quote);
-    expect(combo).toHaveBeenCalled();
+    // 不拿旧核账顶、也不装作核过：ok=false，summary 说清读到第几章。
+    expect(first.ok).toBe(false);
+    expect(first.summary).toContain("还在读这本书的前文：第 0 / 12 章");
+    expect(first.summary).toContain("这次没有核");
+    expect(first.sure).toEqual([]);
+    expect(first.maybe).toEqual([]);
+    expect(combo).not.toHaveBeenCalled();
     expect(reader.calls.checks).toBe(0);
-    // 后台补笔记（编辑部第 3 步起核账员和章纲员一起补：12 + 12）
-    await vi.waitFor(async () => {
-      expect(await notesCount(dir)).toBe(12);
-      expect(await plannerNotesCount(dir)).toBe(12);
-    }, { timeout: 10_000 });
-    expect(reader.calls.notes).toBe(24);
-    // 补好了：同一份正文再核走核账员（旧路的结果记在旧路的键下，不被当成核账员的结果复用）
+    // 笔记在后台按顺序补（每个角色一条队列），进度落盘给界面
+    await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
+    const readProgress = () => readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text));
+    await vi.waitFor(async () => expect(await readProgress()).toMatchObject({ role: "checker", reading: false, done: 12, total: 12 }), { timeout: 5_000 });
+    // 补好了：同一份正文再核就走核账员（这次没核不写核账记忆，不会拿「没核」复用）
     const second = await checkChapterBody(dir, 13, BODY, comboModel(), { engine: "reader", readerCallModel: reader.callModel });
     expect(second.reused).toBe(false);
-    expect(second.summary).not.toContain("旧核账");
+    expect(second.ok).toBe(true);
     expect(second.sure.map((item) => item.quote)).toContain(AUNT.quote);
     expect(reader.calls.checks).toBe(3);
   });
 
-  it("后台补笔记失败：只 warn，不影响这次核账结果", async () => {
+  it("后台补笔记失败：只 warn、进度如实记错；这次的结果不受影响", async () => {
     const dir = await makeBook(12);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const broken: BrainCallModel = async () => { throw new Error("限流了"); };
     const result = await checkChapterBody(dir, 13, BODY, comboModel(), { engine: "reader", readerCallModel: broken });
-    expect(result.ok).toBe(true);
-    expect(result.summary).toContain("旧核账");
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain("还在读");
     await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5_000 });
+    // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）
+    const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));
+    expect(progress).toMatchObject({ reading: false, done: 0, total: 12 });
+    expect(progress.error).toContain("限流了");
     warn.mockRestore();
   });
 });

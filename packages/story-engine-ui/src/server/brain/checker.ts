@@ -7,8 +7,10 @@
  *
  * T1 收尾（2026-10-12）加了四个可独立开关的做法（ReaderCheckVariant），在题库上比分后选定默认组合（DEFAULT_READER_VARIANT）：
  * A 自复核（三遍合并后同一窗口再判一轮）、B 时间线表进核账、C 结构化笔记、D「确定」门槛（纯确定性，不调模型）。
+ * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
+ * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
-import { describeTimelineForChapter, readStoryTimeline } from "@actalk/story-engine";
+import { describeTimelineForChapter, findEarlierPassages, readStoryTimeline } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import {
@@ -38,6 +40,15 @@ export const CHECKER_ROLE: ReaderRole = {
     "- 人物：年龄或能推出年龄的线索、住处、职业、身份、亲属关系、称呼；本章结束时各自在哪",
     "- 信息：谁知道了什么、谁还不知道什么",
     "- 地点：方位、距离、路上用多久、样子",
+  ].join("\n"),
+  volumeTask: [
+    "把上面这些读书笔记缩写成一份卷笔记（纯文本，1500 字以内），按章序保住以后核对要用的硬信息，不复述情节：",
+    "- 时间：这几章各自发生在哪天、跨了哪些日子；约好的日子、期限到这几章结束时还剩多少",
+    "- 物件：要紧的东西到这几章结束时在哪、在谁手里、样子、写着什么、有几个；中间经过哪些转手",
+    "- 人物：年龄、住处、职业、身份、亲属、称呼；谁在这几章里去了哪、知道了什么",
+    "- 信息：到这几章结束，谁知道什么、谁还不知道什么",
+    "- 地点：方位、距离、路上用多久、样子",
+    "同一条信息前后有变化时，记最后的状态，再用半句话带出之前的状态。",
   ].join("\n"),
 };
 
@@ -107,6 +118,43 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
 export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true };
+
+/** 翻原文那一轮的问法：窗口里有被折叠的章（只看得到笔记）时，问它要翻哪些词的前文原文。 */
+export function keywordTask(chapter: number): string {
+  return [
+    `这是作者刚交的第 ${chapter} 章新稿。前面的章节你只留下了笔记、看不到原文。`,
+    "要核对的地方里，有没有需要翻前文原文的？列关键词（最多 5 个）：人名、称呼、物件名、地点，以及新稿里写样子、颜色、材质、数目、方位的词——这类细节最容易和前文对不上。前文原文会按关键词检给你。都装得下就不用翻。",
+    "只输出一个 JSON：{\"keywords\":[\"…\"]}",
+  ].join("\n");
+}
+
+/** 关键词那一轮最多翻几个词、每个词最多带几段原文。 */
+const KEYWORD_LIMIT = 5;
+/** 模型常把关键词写成带空格的短语（「某地名 外墙 颜色」），按词面检索会整串落空——拆开再查，最多这么多词。 */
+const TERM_LIMIT = 8;
+const PASSAGES_PER_TERM = 5;
+const PASSAGES_TOTAL = 25;
+
+/** 从模型回复里抠关键词：JSON 里 keywords 数组、每条去空格、太短的不要，最多 KEYWORD_LIMIT 个。抠不出来当没词。 */
+export function parseKeywords(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { keywords?: unknown };
+    const list = Array.isArray(parsed.keywords) ? parsed.keywords : [];
+    return [...new Set(list.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter((item) => item.length >= 2))].slice(0, KEYWORD_LIMIT);
+  } catch {
+    // 不是 JSON / 没有 keywords → 当没词（不翻原文，照常核）
+    return [];
+  }
+}
+
+/** 贴回窗口的原文消息：带章号、按章排；一条没翻到也说清楚。 */
+function passagesMessage(passages: readonly { readonly chapter: number; readonly term: string; readonly text: string }[]): string {
+  if (passages.length === 0) return "【翻到的原文】\n没按关键词翻到前文原句，就按你读过的笔记核。";
+  const lines = [...passages]
+    .sort((a, b) => a.chapter - b.chapter)
+    .map((passage) => `第 ${passage.chapter} 章（${passage.term}）：${passage.text}`);
+  return `【翻到的原文】\n${lines.join("\n")}`;
+}
 
 /**
  * 核账员 / 跟读用的模型调用（qualityCheck 槽）：关思考、低随机性、流式。
@@ -239,8 +287,42 @@ export interface ReaderCheckResult {
   readonly issues: ContinuityIssueV2[];
   /** 没跑成的步骤（如实说明）。三遍全失败才算这次没核成。 */
   readonly failures: string[];
-  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没核。 */
+  /** not_ready＝要补的笔记太多（超过 maxCatchUp），这次没核；pending＝已读到第 done 章、总共 total 章。 */
   readonly skipped?: "not_ready";
+  readonly pending?: { readonly done: number; readonly total: number };
+}
+
+/**
+ * 翻原文那一轮：问关键词、把命中的前文原句找回来。返回贴回用的原文段（三遍各带一份，放在新稿后面、
+ * 核账提示前面——离要判的话最近，模型不容易看漏）。这一轮失败不拦着核：如实记一笔失败、按原窗口照核。
+ */
+async function lookupEarlierPassages(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftBody: string;
+  readonly window: readonly BrainMessage[];
+  readonly callModel: BrainCallModel;
+}): Promise<{ readonly prefix: readonly BrainMessage[]; readonly passages?: string; readonly failure?: string }> {
+  const ask: BrainMessage = { role: "user", content: `【新稿：第 ${input.chapter} 章】\n${input.draftBody}\n\n${keywordTask(input.chapter)}` };
+  try {
+    const reply = (await input.callModel([...input.window, ask], { json: true })).trim();
+    const keywords = parseKeywords(reply);
+    if (keywords.length === 0) return { prefix: input.window };
+    // 关键词可能带修饰（「周屿父 城东」）或写成短语：拆成单词再检索，防整串落空。
+    const terms = [...new Set(keywords.flatMap((keyword) => keyword.split(/[\s,，、/／|]+/u)).filter((term) => term.length >= 2))].slice(0, TERM_LIMIT);
+    if (terms.length === 0) return { prefix: input.window };
+    const passages = await findEarlierPassages({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      terms,
+      maxPerTerm: PASSAGES_PER_TERM,
+      maxTotal: PASSAGES_TOTAL,
+    });
+    return { prefix: [...input.window, ask, { role: "assistant", content: reply }], passages: passagesMessage(passages) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { prefix: input.window, failure: `翻原文那一轮没跑成（${message}），这次只按窗口核` };
+  }
 }
 
 /** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A）和「确定」门槛（D）。 */
@@ -251,6 +333,8 @@ export async function checkChapterByReader(input: {
   readonly callModel: BrainCallModel;
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 窗口字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值，好让折叠和翻原文真的发生）。 */
+  readonly maxChars?: number;
   /** 前面各章原文（核账服务已读过就传进来，省得再读一遍）；缺省从书目录读。 */
   readonly earlier?: EarlierText;
   /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
@@ -259,6 +343,7 @@ export async function checkChapterByReader(input: {
   const variant = input.variant ?? {};
   const role = checkerRoleFor(variant.structuredNotes);
   let window: BrainMessage[];
+  let foldedChapters: number;
   try {
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
@@ -267,9 +352,13 @@ export async function checkChapterByReader(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
     }));
-    if (ready.missing > 0) return { issues: [], failures: [], skipped: "not_ready" };
+    if (ready.missing > 0) {
+      return { issues: [], failures: [], skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
+    }
     window = ready.messages;
+    foldedChapters = ready.foldedChapters;
   } catch (error) {
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成。
     return { issues: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
@@ -281,20 +370,26 @@ export async function checkChapterByReader(input: {
       .then((read) => describeTimelineForChapter(read.timeline, input.chapter))
       .catch(() => undefined)
     : undefined;
+  // 前文有被折叠的章（原文不在窗口里）→ 先翻一轮原文贴回去，三遍和自复核共用这一段前缀。
+  const lookup = foldedChapters > 0
+    ? await lookupEarlierPassages({ projectDir: input.projectDir, chapter: input.chapter, draftBody: input.draftBody, window, callModel: input.callModel })
+    : { prefix: window };
+  // 新稿这条消息三遍共用：新稿本体 + 时间线表（B）+ 翻到的原文（T5）——都拼在新稿后面、核账提示前面（离要判的话最近）。
   const draftMessage = [
     `【新稿：第 ${input.chapter} 章】\n${input.draftBody}`,
     ...(timelineTable ? ["", `【故事时间线（日子以这张表为准）】\n${timelineTable}`] : []),
+    ...(lookup.passages ? ["", lookup.passages] : []),
   ].join("\n");
   const settled = await withStep("核账员", () => Promise.allSettled(CHECKER_PASSES.map(async ({ focus }) => {
     const text = await input.callModel(
-      [...window, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
+      [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
       { json: true },
     );
     const confidences = readConfidences(text);
     return parseFullReadIssues(text, input.chapter, input.draftBody, earlier)
       .map((issue): ContinuityIssueV2 => ({ ...issue, confidence: confidences.get(issue.quote) ?? "maybe" }));
   })));
-  const failures: string[] = [];
+  const failures: string[] = lookup.failure ? [lookup.failure] : [];
   const passes: ContinuityIssueV2[][] = [];
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") passes.push(result.value);
@@ -305,7 +400,7 @@ export async function checkChapterByReader(input: {
   if (variant.selfReview && issues.length > 0) {
     try {
       const text = await withStep("核账员自复核", () => input.callModel(
-        [...window, { role: "user", content: `${draftMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
+        [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
         { json: true },
       ));
       const verdicts = parseVerdicts(text);
