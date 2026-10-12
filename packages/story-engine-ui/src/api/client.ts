@@ -55,6 +55,8 @@ import type {
   DeleteBookRequest,
   RenameBookRequest,
   SaveChapterWorkspaceRequest,
+  ReaderProgressApiResponse,
+  ReaderCatchUpStatus,
   SnapshotEntryDto,
   SnapshotListApiResponse,
   SnapshotRestoreApiResponse,
@@ -140,6 +142,21 @@ export async function fetchStateOverview(input: StateOverviewRequest, signal?: A
     throw new Error(payload.error);
   }
   return payload.overview;
+}
+
+/** 编辑部三个跟读角色的补读进度（R4.3）：在读期间前端 5 秒一次的轻量轮询走这里，别拿整个概况当轮询。 */
+export async function fetchReaderCatchUp(projectPath: string, signal?: AbortSignal): Promise<ReaderCatchUpStatus> {
+  const params = new URLSearchParams();
+  params.set("project", projectPath);
+  const payload = await fetchJson<ReaderProgressApiResponse>(
+    `/api/reader-progress?${params.toString()}`,
+    {},
+    signal,
+  );
+  if (!payload.ok) {
+    throw new Error(payload.error);
+  }
+  return { reading: payload.reading, roles: payload.roles };
 }
 
 export async function fetchChapterSteering(input: ChapterSteeringRequest, signal?: AbortSignal): Promise<ChapterSteeringDraft> {

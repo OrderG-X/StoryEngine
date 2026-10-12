@@ -74,8 +74,8 @@ export interface StateOverview {
   readonly characterDetailSummary?: StateOverviewCharacterDetailSummary;
   readonly foundationCompleteness?: StateOverviewFoundationCompleteness;
   readonly uiChapterFiles?: readonly StateOverviewChapterFileState[];
-  /** 核账员后台补读进度（agents/checker/progress.json 有才带）：reading 时界面在核账按钮旁显示读到第几章。 */
-  readonly checkerReading?: { readonly reading: boolean; readonly done: number; readonly total: number };
+  /** 编辑部三个跟读角色的后台补读进度（R4.3）：任一角色在读时才带（开书概况的初值；在读期间前端轮询 /api/reader-progress 自走）。 */
+  readonly readerCatchUp?: ReaderCatchUpStatus;
   readonly maintenance: {
     readonly diagnosticsAvailable: boolean;
     readonly cleanupVisibleCount: number;
@@ -106,6 +106,20 @@ export interface StateOverviewChapterFileState {
   readonly draftTitle?: string;
   readonly committedTitle?: string;
   readonly workspaceTitle?: string;
+}
+
+/** 编辑部一个跟读角色（checker/ledger/planner）的补读进度：done/total＝读到第几章 / 共几章（已定稿）。 */
+export interface ReaderCatchUpRoleState {
+  readonly role: string;
+  readonly reading: boolean;
+  readonly done: number;
+  readonly total: number;
+}
+
+/** 三个跟读角色的补读进度一览（开书概况和 /api/reader-progress 共用）：reading＝任一角色还在读。 */
+export interface ReaderCatchUpStatus {
+  readonly reading: boolean;
+  readonly roles: readonly ReaderCatchUpRoleState[];
 }
 
 export interface StateOverviewHookItem {
@@ -501,6 +515,11 @@ export interface StateOverviewRequest {
 
 export type StateOverviewApiResponse =
   | { readonly ok: true; readonly overview: StateOverview }
+  | { readonly ok: false; readonly error: string };
+
+/** GET /api/reader-progress 的响应（R4.3 在读期间 5 秒一次的轻量轮询）。 */
+export type ReaderProgressApiResponse =
+  | { readonly ok: true; readonly reading: boolean; readonly roles: readonly ReaderCatchUpRoleState[] }
   | { readonly ok: false; readonly error: string };
 
 export interface BookFileActionRequest {

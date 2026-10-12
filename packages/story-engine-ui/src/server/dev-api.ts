@@ -7,6 +7,7 @@
 import type { MiddlewareStack } from "./lib/project-io.js";
 import { createSecurityGate } from "./lib/request-guard.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
+import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
 import { registerChapterSteeringRoutes } from "./routes/chapter-steering.js";
 import { registerDraftRoutes } from "./routes/draft.js";
 import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
@@ -37,6 +38,7 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   // 安全闸必须最先挂（审查 #2）：Host 白名单 + 写路由 Origin/Content-Type 校验，挡 DNS rebinding / CSRF。
   router.use(createSecurityGate());
   registerStateOverviewRoutes(router);
+  registerReaderProgressRoutes(router);
   registerChapterSteeringRoutes(router);
   registerDraftRoutes(router);
   registerDraftRevisionRoutes(router);

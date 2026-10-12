@@ -10,6 +10,7 @@ import {
   callConfiguredBrainModel,
   catchUpReaders,
   checkChapterByReader,
+  countCommittedChapters,
   DEFAULT_READER_VARIANT,
   type BrainCallModel,
 } from "../../brain/index.js";
@@ -131,8 +132,11 @@ export async function checkChapterBody(
       // 核账员还没读完前文（T5 后台补读）：如实说读到第几章、这次没核，不装作核过。
       // 笔记在后台按顺序补（走三个角色共用的补读队列、点名 checker；补不成只记一笔，下次接着补），
       // 读完后作者再点一次「核账」就是读完全书的核账员。
-      const { done, total } = viaReader.notReady;
-      void catchUpReaders(projectDir, chapter - 1, { callModel: readerCallModel, roles: ["checker"] });
+      const { done } = viaReader.notReady;
+      // 分母统一（R4.3 验收 3.3）：回执和界面进度行同一个口径——共 y 章（已定稿）取已定稿章数，
+      // 不用「本章 − 1」（核已定稿章的稿子时两个分母差 1，验收里 57 对 58 就是这么来的）。
+      const total = Math.max(viaReader.notReady.total, await countCommittedChapters(projectDir));
+      void catchUpReaders(projectDir, total, { callModel: readerCallModel, roles: ["checker"] });
       return {
         ok: false,
         chapter,

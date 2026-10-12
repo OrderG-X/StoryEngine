@@ -118,4 +118,23 @@ describe("开书时看一眼要不要补（maybeStartReadersCatchUp）", () => {
     await maybeStartReadersCatchUp(empty, { callModel: async () => "笔记" });
     expect(await readReaderProgress(empty, "checker")).toBeUndefined();
   });
+
+  it("R4.3 开书那次概况就带进度：排进队后、返回之前，第一个要读的角色已经标成 reading", async () => {
+    const dir = await makeBook(3);
+    // 模型卡住不动（补读在队里慢慢排）：maybeStartReadersCatchUp 自己必须先落 progress 再返回，
+    // 不然开书概况读到的还是「没在读」，要等刷新页面才看得到进度。
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slow: BrainCallModel = async () => { await gate; return "笔记"; };
+    await maybeStartReadersCatchUp(dir, { callModel: slow });
+    // 返回那一刻：第一个要读的角色（checker）已在读，0/3（一章还没读完是事实，不装）。
+    await expect(readReaderProgress(dir, "checker")).resolves.toMatchObject({ reading: true, done: 0, total: 3 });
+    // 后面排队的角色此刻还没标（它们排在 checker 后面）。
+    await expect(readReaderProgress(dir, "ledger")).resolves.toBeUndefined();
+    await expect(readReaderProgress(dir, "planner")).resolves.toBeUndefined();
+    release();
+    await vi.waitFor(async () => {
+      await expect(readReaderProgress(dir, "planner")).resolves.toMatchObject({ reading: false, done: 3, total: 3 });
+    }, { timeout: 5_000 });
+  });
 });

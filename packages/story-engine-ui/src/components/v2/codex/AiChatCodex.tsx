@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { ChapterAdviceCard, ToolStep, DraftReviewIssueView } from "../../../api/types.js";
+import type { ChapterAdviceCard, ToolStep, DraftReviewIssueView, ReaderCatchUpStatus } from "../../../api/types.js";
 import type { ChapterFlowStatus, ChapterMessage, WritingWorkspaceLayoutProps, AiFlavorViolation } from "../../../types.js";
 import { shouldSendOnEnterKey } from "../../../utils/imeEnterGuard.js";
 import { resolveToolStepLabel } from "../../../hooks/agentEventProjection.js";
@@ -67,6 +67,7 @@ import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
+import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly rightOpen: boolean;
@@ -85,18 +86,40 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   readonly modelRefreshKey?: number;
 };
 
+/** 进度行里角色 id → 叫法（和服务端 brain 的角色对应：checker / ledger / planner）。 */
+const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
+  checker: "核账员",
+  ledger: "记账员",
+  planner: "章纲员",
+};
+
 /**
- * 核账员后台补读进度（T5 长书）：只在还在读时显示（读了多少见 progress.json，随 overview 刷新，不新开轮询）。
- * 读停了（出错 / 读完）不显示——读完自然消失，出错时点「核账」会说清原因，不在这行里谎称还在读。
+ * 编辑部「在读前文」进度行（R4.3 验收 3.3）：三个角色一行写全，例如
+ * 「编辑部在读前文：核账员 34/58 · 记账员 排队 · 章纲员 排队」。在读的带 done/total（分母和核账回执同口径：
+ * 共 y 章（已定稿））；还没轮到的或这次没读成的显示「排队」（下一次开书 / 核账会重排）；读完的划掉；
+ * 全读完（reading:false）这行消失。数据：开书概况带初值，在读期间 useReaderCatchUp 每 5 秒轮询轻量接口自走。
  */
-export function CheckerReadingNote({ progress }: {
-  readonly progress?: { readonly reading: boolean; readonly done: number; readonly total: number } | null;
+export function ReadersCatchUpNote({ status }: {
+  readonly status?: ReaderCatchUpStatus | null;
 }) {
-  if (!progress?.reading) return null;
+  if (!status?.reading) return null;
   return (
     <div className="se-checker-reading" role="status">
       <span className="se-checker-reading-dot" aria-hidden="true" />
-      核账员在读前文：第 {progress.done} / {progress.total} 章，读完就能按读完全书核账
+      <span className="se-checker-reading-text">
+        编辑部在读前文：
+        {status.roles.map((role, index) => {
+          const label = READER_ROLE_LABELS[role.role] ?? role.role;
+          const finished = !role.reading && role.total > 0 && role.done >= role.total;
+          const text = role.reading || finished ? `${label} ${role.done}/${role.total}` : `${label} 排队`;
+          return (
+            <span key={role.role}>
+              {index > 0 ? " · " : ""}
+              {finished ? <s className="se-checker-reading-done">{text}</s> : text}
+            </span>
+          );
+        })}
+      </span>
     </div>
   );
 }
@@ -142,6 +165,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const { activeArchivedCount } = useWorkspaceStore();
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
   const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
+  // 编辑部「在读前文」进度（R4.3）：开书概况带初值；任一角色在读时每 5 秒轮询，全读完自动停。
+  // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
+  const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp);
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -453,8 +479,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       </div>
       <ChatContextMeter />
 
-      {/* ── 核账员后台补读进度（T5 长书）：数据随现有的 overview 刷新走（开书 / 各工具回包），不新开轮询 ── */}
-      <CheckerReadingNote progress={props.overview?.checkerReading} />
+      {/* ── 编辑部在读前文进度（R4.3）：开书概况带初值 + 在读期间 5 秒轻量轮询，全读完这行消失 ── */}
+      <ReadersCatchUpNote status={readerCatchUp} />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
       <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />

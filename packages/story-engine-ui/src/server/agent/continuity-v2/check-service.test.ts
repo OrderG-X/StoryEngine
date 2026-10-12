@@ -154,6 +154,18 @@ describe("核账服务：核账员还没读完前文（T5 后台补读）", () =
     expect(reader.calls.checks).toBe(3);
   });
 
+  it("R4.3 分母统一：核已定稿章的稿子时，回执和进度行同口径（共 y 章＝已定稿章数）", async () => {
+    const dir = await makeBook(12);
+    const reader = readerModel();
+    const result = await checkChapterBody(dir, 12, BODY, { readerCallModel: reader.callModel });
+    expect(result.ok).toBe(false);
+    // 旧口径的分母是「本章 − 1」＝11（验收 3.3 里 57 对 58 就是这个差）；统一成已定稿章数 12。
+    expect(result.pending).toEqual({ done: 0, total: 12 });
+    expect(result.summary).toContain("第 0 / 12 章");
+    // 后台补读也按统一后的总数排（补齐 12 章，读完就能按读完全书核）。
+    await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
+  });
+
   it("后台补笔记失败：只 warn、进度如实记错；这次的结果不受影响", async () => {
     const dir = await makeBook(12);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
