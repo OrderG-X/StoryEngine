@@ -296,6 +296,85 @@ describe("resolveSelectedCharacterIds", () => {
     expect(resolved.trace.explicit).toBe(true);
   });
 
+  // ── 编辑部 R4.6（验收 3.7）：名册只有开书占位卡的新书 ─────────────────────────────
+  // UI 建书模板未填主角名时落固定占位名「主角」；作者手写章节不会建卡。此时改用最近几章
+  // 已定稿 ChapterDelta 的 charactersPresent（时间线 presentCharacterNames）当本章角色。
+  describe("名册全是开书占位卡（编辑部 R4.6）", () => {
+    async function placeholderRosterProject(): Promise<string> {
+      const projectDir = await mkdtemp(join(tmpdir(), "presence-placeholder-"));
+      await mkdir(join(projectDir, "story"), { recursive: true });
+      await mkdir(join(projectDir, "chapters"), { recursive: true });
+      await mkdir(join(projectDir, "timeline"), { recursive: true });
+      await writeFile(join(projectDir, "project.json"), `${JSON.stringify({ title: "Placeholder Roster" }, null, 2)}\n`, "utf-8");
+      await writeFile(join(projectDir, "story", "character-bible.json"), `${JSON.stringify({
+        version: "v0",
+        characters: [{ id: "zhu-jue", name: "主角", role: "主角", desire: "进入开篇情境", speechRules: [], behaviorBoundaries: [] }],
+      }, null, 2)}\n`, "utf-8");
+      await seedCharacterFiles(projectDir, "zhu-jue", "主角");
+      await writeFile(join(projectDir, "chapters", "0001.md"), "# 第一章\n\n陆沉在灯塔下修表。", "utf-8");
+      await writeFile(join(projectDir, "timeline", "events.json"), `${JSON.stringify([
+        {
+          id: "ch0001-001",
+          chapter: 1,
+          summary: "陆沉接下修表活。",
+          participants: ["zhu-jue"],
+          effects: { semanticSummary: { chapter: 1, mainEvent: "陆沉接下修表活。", presentCharacterNames: ["陆沉"] } },
+        },
+      ], null, 2)}\n`, "utf-8");
+      return projectDir;
+    }
+
+    it("占位名册 + 已定稿声明有出场名 → chapterCharactersFromDeltas 带真名，summary 如实说明没拿占位名把关", async () => {
+      const projectDir = await placeholderRosterProject();
+
+      const resolved = await resolveSelectedCharacterIds({
+        projectDir,
+        chapter: 2,
+        chapterGoal: "继续第二章。",
+      });
+
+      expect(resolved.chapterCharactersFromDeltas).toEqual(["陆沉"]);
+      expect(resolved.summary).toContain("陆沉");
+      expect(resolved.summary).toContain("按最近定稿章");
+      expect(resolved.summary).toContain("没拿占位名把关");
+      // 选择仍包含占位卡 id（喂引擎上下文用；关卡豁免在引擎侧按同一份占位标记做）。
+      expect(resolved.selectedCharacterIds).toEqual(["zhu-jue"]);
+    });
+
+    it("占位名册 + 没有已定稿声明 → 无出场名，summary 如实说（不编名字）", async () => {
+      const projectDir = await placeholderRosterProject();
+      await writeFile(join(projectDir, "timeline", "events.json"), "[]\n", "utf-8");
+
+      const resolved = await resolveSelectedCharacterIds({
+        projectDir,
+        chapter: 2,
+        chapterGoal: "继续第二章。",
+      });
+
+      expect(resolved.chapterCharactersFromDeltas).toBeUndefined();
+      expect(resolved.summary).toContain("开书占位");
+      expect(resolved.summary).toContain("没拿占位名把关");
+    });
+
+    it("名册有真名（哪怕只一张真卡）→ 不走占位兜底，chapterCharactersFromDeltas 缺省（行为不变）", async () => {
+      const projectDir = await placeholderRosterProject();
+      // 把占位卡改成真名（作者已改名/起过真名的书）。
+      await writeFile(join(projectDir, "story", "character-bible.json"), `${JSON.stringify({
+        version: "v0",
+        characters: [{ id: "zhu-jue", name: "陆沉", role: "主角", desire: "修表", speechRules: [], behaviorBoundaries: [] }],
+      }, null, 2)}\n`, "utf-8");
+
+      const resolved = await resolveSelectedCharacterIds({
+        projectDir,
+        chapter: 2,
+        chapterGoal: "继续第二章。",
+      });
+
+      expect(resolved.chapterCharactersFromDeltas).toBeUndefined();
+      expect(resolved.summary).toBe("本章相关角色：陆沉");
+    });
+  });
+
   // P1 残留（复审实锤）：下游 buildWriterContext 对每个 id 直读 characters/<id>/{profile,core,state}.json（无 catch、
   // 缺一即 ENOENT 崩）。所以「bible 里有、但没有角色目录/三件套文件」的 id 同样不能放行——必须按【可读性】过滤，
   // 不能只看 bible 成员（旧 bible∪dir 并集就漏了这类）。

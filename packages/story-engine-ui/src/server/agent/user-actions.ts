@@ -7,6 +7,7 @@
  */
 import type { RequestContext } from "@mastra/core/di";
 
+import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
@@ -163,6 +164,8 @@ export async function runUserAction(args: {
   readonly sendEvent: (event: string, data: unknown) => void;
   readonly scrubber: { push(text: string): string; flush(): string };
   readonly scrubError: (error: unknown) => string;
+  /** 项目目录（编辑部 R4.6 建议项用：定稿后判占位主角卡要不要给改名建议）；缺省不给建议，行为不变。 */
+  readonly projectDir?: string;
 }): Promise<void> {
   const { action } = args;
   if (action.toolName === "prune_snapshots") {
@@ -225,12 +228,21 @@ export async function runUserAction(args: {
   if (rest) args.sendEvent("text-delta", { text: rest });
 
   const nextSteps = commitApplyNextSteps(action.chapter, result);
+  // 编辑部 R4.6 建议项（只追加选项，不动上面 commitApplyNextSteps 的生成逻辑）：定稿成功后，主角卡
+  // 还是开书占位、已定稿声明里有出场最多的真名 → 多给一个「把主角卡改成『X』」。只是建议：作者点了
+  // 才把 intent 发给模型，由模型走 foundation_write 改名（可撤销）；建议判不了/判挂了按无建议处理。
+  const renameSuggestion = result?.committed === true && args.projectDir
+    ? await buildProtagonistRenameSuggestion(args.projectDir, action.chapter).catch(() => undefined)
+    : undefined;
+  const choices = renameSuggestion
+    ? [...nextSteps.choices, { label: renameSuggestion.label, intent: renameSuggestion.intent }]
+    : nextSteps.choices;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {
     toolCallId: nextCallId,
     toolName: "suggest_next_steps",
-    output: { ok: true, question: nextSteps.question, choices: nextSteps.choices },
+    output: { ok: true, question: nextSteps.question, choices },
   });
 }
 

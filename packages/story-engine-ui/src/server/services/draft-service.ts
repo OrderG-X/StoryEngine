@@ -1116,6 +1116,14 @@ async function resolveDraftRunContext(input: {
     explicit: input.selectedCharacterIds,
   });
   const selectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
+  // 编辑部 R4.6：名册只有开书占位卡的新书，在场检测改用最近定稿章的出场名（chapterCharactersFromDeltas）。
+  // 把出场名点进写作方向（作者方向里还没点到它们时才加，避免重复），出稿模型才知道本章写谁；
+  // 占位卡本身不进引擎选角关卡（引擎侧按同一份占位标记豁免）。长度目标仍按作者原方向解析，
+  // 不让出场名里的数字/汉字数字干扰字数解析。
+  const deltaChapterCharacters = characterSelection.chapterCharactersFromDeltas ?? [];
+  const goalWithDeltaCharacters = deltaChapterCharacters.length > 0 && !deltaChapterCharacters.some((name) => chapterGoal.includes(name))
+    ? `${chapterGoal}\n本章出场角色（按最近定稿章）：${deltaChapterCharacters.join("、")}`
+    : chapterGoal;
   const lengthTarget = await resolveProjectDraftLengthTarget(input.projectDir, chapterGoal, requestedDraftLength);
 
   // D2 出稿即自动回检（warning-only）的开关：内置确定性规则（7 条模式 + 虚弱副词频率闸）+ 项目写作规则的
@@ -1126,7 +1134,7 @@ async function resolveDraftRunContext(input: {
     : undefined;
 
   return {
-    chapterGoal,
+    chapterGoal: goalWithDeltaCharacters,
     ...(requestedDraftLength !== undefined ? { requestedDraftLength } : {}),
     maxTimelineEvents,
     lengthTarget,

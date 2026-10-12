@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommitDraftInput } from "./commit-engine.js";
-import { describeErrorBriefly, listCharacterDirectoryEntries, readCharacterProfile } from "./project-store.js";
+import { describeErrorBriefly, listCharacterDirectoryEntries, PLACEHOLDER_CHARACTER_NAME, readCharacterProfile } from "./project-store.js";
 import { countDraftChineseCharacters, readWritingRulesLengthIntent } from "./draft-length-control.js";
 import {
   defaultQualityJudgement,
@@ -411,8 +411,7 @@ function issueToCandidate(issue: CommitQualityIssue, source: RuleQualityCandidat
   };
 }
 
-/** 新书种的占位角色名：不是真名，不拿来核对正文。 */
-const PLACEHOLDER_CHARACTER_NAME = /^(?:主角|男主|女主|主人公|男主角|女主角|未命名(?:角色)?|待定)\d*$/u;
+/** 新书种的占位角色名（固定标记）：不是真名，不拿来核对正文。2026-10-13 上移到 project-store 导出共用。 */
 
 async function listCharacterNames(projectDir: string): Promise<{ readonly names: readonly string[]; readonly degradations: readonly string[] }> {
   // 审计 Med：角色目录/资料读取失败不再无痕清空——EACCES 时 names=[] 会让 missing_character_name

@@ -691,6 +691,76 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report.passed).toBe(true);
   });
 
+  // 编辑部 R4.6（验收 3.7）：开书占位主角卡不得挡出稿——UI 新建书未填主角名时模板落「主角」，
+  // 作者手写几章后再让 AI 出稿，正文写的是真名（如 陆沉），不该因为没写到「主角」被关卡拒掉。
+  it("placeholder-only roster (UI new-book template) does not block drafts that omit the placeholder name", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-fast-draft-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "灯塔修表人",
+      genre: "长篇故事",
+      premise: "主角进入一个等待展开的故事世界。",
+      mainCharacterName: "主角", // books.ts 建书模板未填主角名时的固定占位名
+    });
+    const writerClient: WriterClient = {
+      generateDraft: vi.fn(async () => ({
+        title: "第二天",
+        content: "陆沉把工具箱收好，天色一点点暗下来。",
+      })),
+    };
+
+    const report = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "接着前文写。",
+      writerClient,
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.issues).toEqual([]);
+  });
+
+  it("keeps gating on real names when the roster mixes a placeholder card with a real one", async () => {
+    const projectDir = await createFixtureProject();
+    const placeholderDir = join(projectDir, "characters", "placeholder-zhu-jue");
+    await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
+      await mkdir(placeholderDir, { recursive: true });
+      await Promise.all([
+        writeFile(join(placeholderDir, "profile.json"), JSON.stringify({ id: "placeholder-zhu-jue", name: "主角" }, null, 2), "utf-8"),
+        writeFile(join(placeholderDir, "core.json"), JSON.stringify({ characterId: "placeholder-zhu-jue", personality: ["自主行动"] }, null, 2), "utf-8"),
+        writeFile(join(placeholderDir, "state.json"), JSON.stringify({ characterId: "placeholder-zhu-jue", emotion: "平静", goal: "推进", lastUpdatedChapter: null }, null, 2), "utf-8"),
+      ]);
+    });
+
+    // 只写真名（没写占位名「主角」）→ 过。
+    const passing = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "林婉清出场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "秘书登场", content: "林婉清把日程表放在桌上。" })),
+      },
+    });
+    expect(passing.passed).toBe(true);
+
+    // 真名和占位名都没写 → 仍被挡，且提示只点名真名候选（占位名不进提示）。
+    const blocked = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "陌生人登场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "陌生人", content: "来客放下信，转身走进雨里。" })),
+      },
+    });
+    expect(blocked.passed).toBe(false);
+    const gateIssue = blocked.issues.find((issue) => issue.includes("must mention at least one selected character"));
+    expect(gateIssue).toBeDefined();
+    expect(gateIssue).toContain("Guo Xu");
+    expect(gateIssue).toContain("林婉清");
+    // 占位名「主角」不进候选清单（「Guo Xu / 主角」这种复名里的段不算占位卡）。
+    expect(gateIssue?.split(", ")).not.toContain("主角");
+  });
+
   // 「先 persist:false 出候选、选出优胜再落盘」的写盘通道：与 runFastDraft persist:true 同路径同标题行格式。
   it("persistFastDraftBody writes the canonical draft file (same path + heading format as persist:true)", async () => {
     const projectDir = await createFixtureProject();

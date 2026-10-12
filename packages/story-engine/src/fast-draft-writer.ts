@@ -31,7 +31,7 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { describeErrorBriefly, readWritingRules, writeFileAtomic } from "./project-store.js";
+import { describeErrorBriefly, PLACEHOLDER_CHARACTER_NAME, readWritingRules, writeFileAtomic } from "./project-store.js";
 import type { CharacterProfile } from "./types.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
@@ -681,7 +681,12 @@ function selectedCharacterMentionCandidates(context: WriterContextEnvelope): str
   const profiles = Array.isArray(profilesSection?.content)
     ? profilesSection.content as CharacterProfile[]
     : [];
-  return unique(profiles.flatMap((profile) => nameCandidates(profile.name)));
+  // 开书占位名（模板固定标记，如 UI 新建书未填主角名落的「主角」）不进选角关卡：占位名不是真名，
+  // 正文当然不会写到它——拿它当门，作者没先改名就永远出不了稿（编辑部 R4.6，2026-10-13 真机验收 3.7）。
+  // 与 commit-quality-check 的角色名门共用同一份 PLACEHOLDER_CHARACTER_NAME。真名（含「真名 / 主角」
+  // 这类竖线复名拆出的真名段）照旧把关。
+  return unique(profiles.flatMap((profile) => nameCandidates(profile.name)))
+    .filter((name) => !PLACEHOLDER_CHARACTER_NAME.test(name));
 }
 
 function nameCandidates(name: string): string[] {
