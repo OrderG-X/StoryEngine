@@ -7,6 +7,8 @@
  *
  * T1 收尾（2026-10-12）加了四个可独立开关的做法（ReaderCheckVariant），在题库上比分后选定默认组合（DEFAULT_READER_VARIANT）：
  * A 自复核（三遍合并后同一窗口再判一轮）、B 时间线表进核账、C 结构化笔记、D「确定」门槛（纯确定性，不调模型）。
+ * R2.1（2026-10-12）再加两个：E 同一底层问题去重（earlierChapter 相同且 earlierQuote 相似的多条只留一条）、
+ * F 时间线表只进自复核（三遍不带表，A 那一轮带表并写明日子以表为准）。
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
@@ -97,7 +99,7 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
   ].join("\n");
 }
 
-/** T1 的四个做法，各自独立开关（评测用 --variant=a,b,c,d 组合着比分，产品默认见 DEFAULT_READER_VARIANT）。 */
+/** T1 的四个做法 + R2.1 的两个做法，各自独立开关（评测用 --variant=a,b,c,d,e,f 组合着比分，产品默认见 DEFAULT_READER_VARIANT）。 */
 export interface ReaderCheckVariant {
   /** A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（sure / maybe / no），no 的删掉、把握以复核为准。 */
   readonly selfReview?: boolean;
@@ -107,6 +109,10 @@ export interface ReaderCheckVariant {
   readonly structuredNotes?: boolean;
   /** D「确定」门槛：两句原文都逐字抄对、且（跨章，或同章但两句相隔超过 3 句）才允许保留 sure，其余降成 maybe。不调模型。 */
   readonly sureGate?: boolean;
+  /** E 同一底层问题去重：三遍合并后，earlierChapter 相同且 earlierQuote 相似（打分脚本同一套 similar 规则）的多条只留一条；sure 优先、同档留最早出现的。不调模型。 */
+  readonly rootCauseDedupe?: boolean;
+  /** F 时间线表只进自复核：三遍核账不附时间线表（B 对三遍的效果关掉），只在 A 自复核那一轮附表并写明「日子以表为准，不要自己推算」。要 selfReview 开着才有那一轮。 */
+  readonly timelineInReview?: boolean;
 }
 
 /** D 同章的两句至少相隔几句才可能算「确定」：同一个节拍里的两个说法（比如门开着又关上）常被误读成矛盾。 */
@@ -282,6 +288,45 @@ function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): Continu
   return merged;
 }
 
+// ---------- E 同一底层问题去重（R2.1，纯代码不调模型） ----------
+
+/** 打分的 similar 规则（与 scripts/eval/run-continuity-eval.mjs 逐字一致）：去空白标点后互相包含，或二元组重合率 ≥ 0.5。 */
+const evalNorm = (text: string): string => text.replace(/[\s「」『』“”"'…—，。！？；：、,.!?;:（）()]/gu, "");
+function evalBigrams(text: string): Set<string> {
+  const out = new Set<string>();
+  const chars = Array.from(evalNorm(text));
+  for (let index = 0; index + 1 < chars.length; index += 1) out.add(`${chars[index]}${chars[index + 1]}`);
+  return out;
+}
+/** 两句原句按打分脚本的 similar 规则算不算同一句。 */
+export function quotesSimilar(a: string, b: string): boolean {
+  const na = evalNorm(a);
+  const nb = evalNorm(b);
+  if (!na || !nb) return false;
+  if (na.length >= 4 && nb.includes(na)) return true;
+  if (nb.length >= 4 && na.includes(nb)) return true;
+  const ga = evalBigrams(a);
+  const gb = evalBigrams(b);
+  if (ga.size === 0 || gb.size === 0) return false;
+  let shared = 0;
+  for (const gram of ga) if (gb.has(gram)) shared += 1;
+  return shared / Math.min(ga.size, gb.size) >= 0.5;
+}
+
+/**
+ * E 同一底层问题去重：三遍合并后，earlierChapter 相同且 earlierQuote 相似的多条（同一处前文、本章从不同句子各报一条）
+ * 只留一条——留 sure 优先、同档留最早出现的，留在第一条出现的位置。不调模型。
+ */
+export function dedupeRootCauses(issues: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
+  const kept: ContinuityIssueV2[] = [];
+  for (const issue of issues) {
+    const index = kept.findIndex((other) => other.earlierChapter === issue.earlierChapter && quotesSimilar(other.earlierQuote, issue.earlierQuote));
+    if (index < 0) kept.push(issue);
+    else if (issue.confidence === "sure" && kept[index]!.confidence !== "sure") kept[index] = issue; // 来的档更高才换，位置不动（同档留最早）
+  }
+  return kept;
+}
+
 export interface ReaderCheckResult {
   /** 带 confidence。 */
   readonly issues: ContinuityIssueV2[];
@@ -325,7 +370,7 @@ async function lookupEarlierPassages(input: {
   }
 }
 
-/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A）和「确定」门槛（D）。 */
+/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做同一底层问题去重（E）、自复核（A）和「确定」门槛（D）。 */
 export async function checkChapterByReader(input: {
   readonly projectDir: string;
   readonly chapter: number;
@@ -365,7 +410,8 @@ export async function checkChapterByReader(input: {
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   // B 时间线表：引擎排好的日子，核账时照表判「昨天 / 前天 / 周几」，不让模型自己推算（压「换了一天」那类误报）。
-  const timelineTable = variant.timeline
+  // F（时间线只进自复核）开着时三遍不带表、只在 A 那一轮带（表照样读一次）。
+  const timelineTable = variant.timeline || variant.timelineInReview
     ? await readStoryTimeline(input.projectDir)
       .then((read) => describeTimelineForChapter(read.timeline, input.chapter))
       .catch(() => undefined)
@@ -374,12 +420,19 @@ export async function checkChapterByReader(input: {
   const lookup = foldedChapters > 0
     ? await lookupEarlierPassages({ projectDir: input.projectDir, chapter: input.chapter, draftBody: input.draftBody, window, callModel: input.callModel })
     : { prefix: window };
-  // 新稿这条消息三遍共用：新稿本体 + 时间线表（B）+ 翻到的原文（T5）——都拼在新稿后面、核账提示前面（离要判的话最近）。
-  const draftMessage = [
+  // 新稿这条消息三遍共用：新稿本体 + 时间线表（B，且 F 没开）+ 翻到的原文（T5）——都拼在新稿后面、核账提示前面（离要判的话最近）。
+  const draftParts = (timeline: string | undefined): string => [
     `【新稿：第 ${input.chapter} 章】\n${input.draftBody}`,
-    ...(timelineTable ? ["", `【故事时间线（日子以这张表为准）】\n${timelineTable}`] : []),
+    ...(timeline ? ["", timeline] : []),
     ...(lookup.passages ? ["", lookup.passages] : []),
   ].join("\n");
+  const passesTimeline = variant.timeline && !variant.timelineInReview && timelineTable ? `【故事时间线（日子以这张表为准）】\n${timelineTable}` : undefined;
+  // F：三遍不带表；A 自复核那一轮带表，并写明日子以表为准、不要自己推算（B 单开时复核沿用三遍那张表，第 1 步行为不变）。
+  const reviewTimeline = variant.timelineInReview && timelineTable
+    ? `【故事时间线（日子以这张表为准，不要自己推算）】\n${timelineTable}`
+    : passesTimeline;
+  const draftMessage = draftParts(passesTimeline);
+  const reviewMessage = draftParts(reviewTimeline);
   const settled = await withStep("核账员", () => Promise.allSettled(CHECKER_PASSES.map(async ({ focus }) => {
     const text = await input.callModel(
       [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
@@ -396,11 +449,13 @@ export async function checkChapterByReader(input: {
     else failures.push(`${CHECKER_PASSES[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
   let issues = mergePasses(passes);
+  // E 同一底层问题去重：同一处前文从本章不同句子各报一条的，只留一条（sure 优先、同档留最早）。不调模型。
+  if (variant.rootCauseDedupe) issues = dedupeRootCauses(issues);
   // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
   if (variant.selfReview && issues.length > 0) {
     try {
       const text = await withStep("核账员自复核", () => input.callModel(
-        [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
+        [...lookup.prefix, { role: "user", content: `${reviewMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
         { json: true },
       ));
       const verdicts = parseVerdicts(text);
