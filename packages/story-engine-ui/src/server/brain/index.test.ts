@@ -3,7 +3,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { catchUpReaders, isReaderCheckerEnabled, isReaderLedgerEnabled, warmUpReaders } from "./index.js";
+import { catchUpReaders, isReaderCheckerEnabled, isReaderLedgerEnabled, isReaderPlannerEnabled, warmUpReaders } from "./index.js";
 import type { BrainCallModel } from "./reader-window.js";
 
 async function makeBook(chapters: number): Promise<string> {
@@ -20,6 +20,7 @@ const notes = async (dir: string, role: string) => (await readdir(join(dir, "age
 beforeEach(() => {
   vi.stubEnv("STORY_CHECKER", undefined as unknown as string);
   vi.stubEnv("STORY_LEDGER", undefined as unknown as string);
+  vi.stubEnv("STORY_PLANNER", undefined as unknown as string);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -41,6 +42,15 @@ describe("定稿后预热", () => {
     const dir = await makeBook(4);
     await warmUpReaders(dir, 3, { callModel: async () => "笔记" });
     expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json", "0003.json"]);
+  });
+
+  it("STORY_PLANNER=reader → 预热也给章纲员补笔记（编辑部第 3 步）", async () => {
+    vi.stubEnv("STORY_PLANNER", "reader");
+    expect(isReaderPlannerEnabled()).toBe(true);
+    const dir = await makeBook(3);
+    await warmUpReaders(dir, 2, { callModel: async () => "笔记" });
+    expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json"]);
+    expect(await notes(dir, "planner")).toEqual(["0001.json", "0002.json"]);
   });
 
   it("补笔记失败：不抛错（只 warn），已有的笔记不受影响", async () => {

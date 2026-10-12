@@ -592,7 +592,8 @@ export function buildFullReadMessages(
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
-function containsQuote(haystack: string, quote: string): boolean {
+/** 一句「原文」是否真在一段文本里（宽进：模型抄原句常改一两个字）。审章纲核 earlierQuote 也用它。 */
+export function containsQuote(haystack: string, quote: string): boolean {
   const target = normalize(quote);
   if (target.length < 4) return false;
   if (haystack.includes(target)) return true;

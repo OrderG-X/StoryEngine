@@ -72,6 +72,7 @@ afterEach(() => {
 });
 
 const notesCount = async (dir: string) => (await readdir(join(dir, "agents", "checker", "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).length;
+const plannerNotesCount = async (dir: string) => (await readdir(join(dir, "agents", "planner", "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).length;
 
 describe("核账服务：新旧两路的开关", () => {
   it("缺省走旧路（combo）：用旧的模型调用，不碰核账员，也不写读书笔记", async () => {
@@ -192,9 +193,12 @@ describe("核账服务：核账员还没读完前文", () => {
     expect(first.sure.map((item) => item.quote)).toContain(WATCH.quote);
     expect(combo).toHaveBeenCalled();
     expect(reader.calls.checks).toBe(0);
-    // 后台补笔记
-    await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
-    expect(reader.calls.notes).toBe(12);
+    // 后台补笔记（编辑部第 3 步起核账员和章纲员一起补：12 + 12）
+    await vi.waitFor(async () => {
+      expect(await notesCount(dir)).toBe(12);
+      expect(await plannerNotesCount(dir)).toBe(12);
+    }, { timeout: 10_000 });
+    expect(reader.calls.notes).toBe(24);
     // 补好了：同一份正文再核走核账员（旧路的结果记在旧路的键下，不被当成核账员的结果复用）
     const second = await checkChapterBody(dir, 13, BODY, comboModel(), { engine: "reader", readerCallModel: reader.callModel });
     expect(second.reused).toBe(false);
