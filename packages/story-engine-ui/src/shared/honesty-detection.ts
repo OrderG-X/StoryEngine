@@ -17,6 +17,11 @@ export interface HonestyToolStep {
    * 写背书只认 add/update/remove。
    */
   readonly action?: string;
+  /**
+   * 合并入口（2026-10-12 R3b）的 op：manage_snapshots 按 op=prune 走 dryRun 判定
+   * （op=undo 是回退操作，不背书「已写入/已保存」类声称，同旧 undo_last_change 口径）。
+   */
+  readonly op?: string;
 }
 
 type ToolStep = HonestyToolStep;
@@ -49,6 +54,9 @@ const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   "edit_fact_ledger", "set_foreshadowing_importance", "clean_legacy_threads", "group_related_leads",
   // 2026-10-10 合并入口（按 kind / op 转给上面的原工具）
   "enrich_foundation", "manage_threads",
+  // 2026-10-12 R3b 合并入口：manage_ledger 的全部 op（硬事实 add/update/remove/supersede + 线索
+  // resolve/clean/group/importance）都是写；undo/prune 的 manage_snapshots 不进这表（见 stepBacksWriteClaim 逐 op 判）。
+  "manage_ledger",
 ]);
 
 /**
@@ -66,6 +74,11 @@ function stepBacksWriteClaim(step: ToolStep): boolean {
   if (step.toolName === "manage_style_exemplars") {
     return step.action === "add" || step.action === "update" || step.action === "remove";
   }
+  // foundation_write 今兼管文风样本（style_exemplar_*）：list 只读不背书，其余照旧（completed 即背书）。
+  if (step.toolName === "foundation_write") return step.action !== "list";
+  // manage_snapshots（undo+prune 二合一，2026-10-12 R3b）：只有 op=prune 且真裁落盘（dryRun=false）才背书；
+  // op=undo 是回退（旧 undo_last_change 本就不在写背书集），不背书「已写入/已保存」类声称。
+  if (step.toolName === "manage_snapshots") return step.op === "prune" && step.dryRun !== true;
   return WRITE_TOOL_NAMES.has(step.toolName);
 }
 
@@ -168,8 +181,17 @@ function hasCompletedTool(toolSteps: readonly ToolStep[] | undefined, toolName: 
   return (toolSteps ?? []).some((step) => step.toolName === toolName && step.status === "completed");
 }
 
+/**
+ * 期望工具 → 也算「尝试过」的合并入口名（2026-10-12 R3b：edit_fact_ledger 并入 manage_ledger 后，
+ * 模型调 manage_ledger op=add 就是「记账尝试过」，不能再误报「事实账本没有写入」逼它重调）。
+ */
+const TOOL_ATTEMPT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  edit_fact_ledger: ["edit_fact_ledger", "manage_ledger"],
+};
+
 function hasToolAttempt(toolSteps: readonly ToolStep[] | undefined, toolName: string): boolean {
-  return (toolSteps ?? []).some((step) => step.toolName === toolName);
+  const names = TOOL_ATTEMPT_ALIASES[toolName] ?? [toolName];
+  return (toolSteps ?? []).some((step) => typeof step.toolName === "string" && names.includes(step.toolName));
 }
 
 function isBackedCommitPreviewClaim(content: string, toolSteps: readonly ToolStep[] | undefined): boolean {

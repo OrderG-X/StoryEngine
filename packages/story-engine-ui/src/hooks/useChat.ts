@@ -1618,9 +1618,10 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               if (info.toolName === "commit_apply") commitReconciliationDraft = null;
-              // undo_last_change 真撤销（undone=true）：先冻结 autosave 再做任何事——从此刻起本页不再有任何 PUT 能把
-              // 撤销前的旧稿写回磁盘；下面的 overview 刷新照常跑（资料面板），草稿由磁盘真值异步接管。undone=false（没东西可撤）不触发。
-              if (info.toolName === "undo_last_change" && info.undone === true) {
+              // undo 真撤销（undone=true；undo_last_change / 今并入 manage_snapshots op=undo）：先冻结 autosave
+              // 再做任何事——从此刻起本页不再有任何 PUT 能把撤销前的旧稿写回磁盘；下面的 overview 刷新照常跑
+              // （资料面板），草稿由磁盘真值异步接管。undone=false（没东西可撤）不触发。
+              if (info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots")) {
                 suspendAutosave();
                 markRecentWorkspaceUndo();
                 agentUndoSyncPromise ??= syncWorkspaceAfterAgentUndo();

@@ -33,10 +33,10 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions.length).toBeLessThan(10_000);
   });
 
-  it("快照裁剪两步哲学：prune_snapshots 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
-    expect(instructions).toContain("prune_snapshots");
+  it("快照裁剪两步哲学：manage_snapshots op=prune 在工具清单里，默认预览、用户明确「确认裁剪」才真裁", () => {
+    expect(instructions).toContain("manage_snapshots op=prune");
     expect(instructions).toContain("确认裁剪");
-    expect(instructions).toMatch(/prune_snapshots（先预览、用户确认才真裁）/u);
+    expect(instructions).toMatch(/manage_snapshots op=prune（先预览、用户确认才真裁）/u);
     // 如实声明撤销边界：undo 撤不到裁剪（不动工作树），别拿 undo 撤别的顶替（复审实锤的误撤风险）
     expect(instructions).toContain("不在撤销链");
   });
@@ -233,12 +233,12 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
 
   it("入库后遇到待收口/陈旧线索提醒只能转告并给选项，不能自动清理归并", () => {
     expect(instructions).toContain("待收口提醒只转告");
-    expect(instructions).toContain("绝不自动调用 manage_threads 的 clean / group");
+    expect(instructions).toContain("绝不自动调用 manage_ledger 的 clean / group");
     expect(instructions).toContain("用户点了再做");
   });
 
-  it("单条线索明确已完结时用 resolve_thread，不用全局清理工具凑", () => {
-    expect(instructions).toContain("manage_threads op=resolve");
+  it("单条线索明确已完结时用 manage_ledger op=resolve，不用全局清理工具凑", () => {
+    expect(instructions).toContain("manage_ledger op=resolve");
     expect(instructions).toContain("用户明确说某一条提醒其实已经完了");
     expect(instructions).toContain("不要用全局清理工具替代");
   });

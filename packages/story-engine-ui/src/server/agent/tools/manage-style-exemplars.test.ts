@@ -12,7 +12,8 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it } from "vitest";
 
 import { buildProjectRequestContext } from "../request-context.js";
-import { manageStyleExemplarsLogic, manageStyleExemplarsTool } from "./manage-style-exemplars.js";
+import { manageStyleExemplarsLogic } from "./manage-style-exemplars.js";
+import { foundationWriteTool } from "./foundation-write.js";
 
 const WRITING_RULES_PATH = join("story", "writing-rules.json");
 
@@ -44,12 +45,23 @@ async function seedExemplars(projectDir: string, count: number): Promise<void> {
   await writeFile(join(projectDir, WRITING_RULES_PATH), JSON.stringify(record), "utf-8");
 }
 
+// 2026-10-12 R3b：manage_style_exemplars 并入 foundation_write（actionType=style_exemplar_*），包装层语义经新入口测。
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const execute = (input: Record<string, unknown>, projectDir: string) =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (manageStyleExemplarsTool as any).execute(input, {
-    requestContext: buildProjectRequestContext(projectDir),
-  } as unknown as ToolExecutionContext);
+  (foundationWriteTool as any).execute(
+    {
+      actionType: `style_exemplar_${String(input.action)}`,
+      category: "writingRules",
+      ...(input.id ? { targetId: input.id } : {}),
+      ...(input.title ? { exemplarTitle: input.title } : {}),
+      ...(input.text ? { exemplarText: input.text } : {}),
+      ...(input.note ? { exemplarNote: input.note } : {}),
+    },
+    {
+      requestContext: buildProjectRequestContext(projectDir),
+    } as unknown as ToolExecutionContext,
+  );
 
 describe("manage_style_exemplars · add", () => {
   it("add 落盘可读回，保留 proseStyle/customNotes 等其它字段；summary 用标题不带裸 id", async () => {
@@ -271,7 +283,7 @@ describe("manage_style_exemplars · 坏文件", () => {
   });
 });
 
-describe("manage_style_exemplars · writeTool 包装层（快照 + 坏输入归一）", () => {
+describe("foundation_write · style_exemplar_* 入口（快照 + 只读 list + 坏输入归一）", () => {
   it("add 经包装层：建快照、snapshotId 透出、落盘成功", async () => {
     const projectDir = await tempProject();
 
@@ -304,10 +316,14 @@ describe("manage_style_exemplars · writeTool 包装层（快照 + 坏输入归�
     expect(result.snapshotId).toBe("");
   });
 
-  it("action 大小写/空白归一：『 Add 』按 add 执行", async () => {
+  it("actionType 大小写/空白归一：『 STYLE_EXEMPLAR_ADD 』按 add 执行", async () => {
     const projectDir = await tempProject();
 
-    const result = await execute({ action: " Add ", title: "大小写样本", text: "正文。" }, projectDir);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (foundationWriteTool as any).execute(
+      { actionType: " STYLE_EXEMPLAR_ADD ", category: "writingRules", exemplarTitle: "大小写样本", exemplarText: "正文。" },
+      { requestContext: buildProjectRequestContext(projectDir) } as unknown as ToolExecutionContext,
+    );
 
     expect(result.ok).toBe(true);
     expect(result.action).toBe("add");

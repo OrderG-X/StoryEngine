@@ -20,10 +20,9 @@ import { readFoundationTool } from "./tools/read-foundation.js";
 import { readDraftTool } from "./tools/read-draft.js";
 import { foundationWriteTool } from "./tools/foundation-write.js";
 import { commitPreviewTool } from "./tools/commit-preview.js";
-import { editFactLedgerTool } from "./tools/edit-fact-ledger.js";
+import { manageLedgerTool } from "./tools/manage-ledger.js";
 import { generateChapterSteeringTool } from "./tools/generate-chapter-steering.js";
 import { enrichFoundationTool } from "./tools/enrich-foundation.js";
-import { manageThreadsTool } from "./tools/manage-threads.js";
 import { generateDraftTool } from "./tools/generate-draft.js";
 import { reviseDraftTool } from "./tools/revise-draft.js";
 import { qualityCheckTool } from "./tools/quality-check.js";
@@ -31,9 +30,7 @@ import { aiReviewTool } from "./tools/ai-review.js";
 import { checkAiFlavorTool } from "./tools/check-ai-flavor.js";
 import { suggestNextStepsTool } from "./tools/suggest-next-steps.js";
 import { webSearchTool } from "./tools/web-search.js";
-import { manageStyleExemplarsTool } from "./tools/manage-style-exemplars.js";
-import { undoLastChangeTool } from "./tools/undo-last-change.js";
-import { pruneSnapshotsTool } from "./tools/prune-snapshots.js";
+import { manageSnapshotsTool } from "./tools/manage-snapshots.js";
 
 export const STORY_AGENT_ID = "story-writing-agent";
 
@@ -49,10 +46,10 @@ export function buildInstructions(): string {
     "作者的主流程（写这一章、核账、定稿、改这处）大多是界面按钮直接执行的；对话里你负责问答、商量剧情、按需起草/改写、改资料和账本。",
     "",
     "执行类请求必须工具先行：写正文=generate_draft，改稿=revise_draft，写资料=foundation_write，改资料=foundation_write，删资料=foundation_write，" +
-      "补全资料=enrich_foundation（kind 选哪一类；别名表 kind=aliases），定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
+      "存作者文风样本=foundation_write 的 style_exemplar_add，补全资料=enrich_foundation（kind 选哪一类；别名表 kind=aliases），定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
       "核账（前后对不对、有没有吃书）=check_continuity，硬伤检查=quality_check，内容审阅=ai_review，检查机器腔=check_ai_flavor，" +
-      "硬事实=edit_fact_ledger，线索单条收口=manage_threads op=resolve、清理/归并=op=clean 或 op=group、调大小=op=importance，撤销=undo_last_change，" +
-      "裁剪操作历史=prune_snapshots（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
+      "硬事实与线索=manage_ledger（记硬事实 op=add/update/remove/supersede；线索收口/清理/归并/调大小 op=resolve/clean/group/importance），" +
+      "撤销=manage_snapshots op=undo，裁剪操作历史=manage_snapshots op=prune（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
     "读数据：全局概况 read_state_overview；全书每章状态 read_chapters_overview；早期某章发生了什么 read_timeline；资料细节 read_foundation；正文全文 read_draft。凡涉及现状，先读再说，绝不凭印象。复述一律用中文，别把英文字段名念给用户。",
     "",
     "红线：",
@@ -86,11 +83,11 @@ export function buildInstructions(): string {
     "定稿与账本：",
     "- 【定稿 = 你预览、用户点按钮】你没有定稿工具。用户想定稿时先对该章 commit_preview；canCommit=true 就转告要点，请用户点预览卡上的「确认定稿」按钮；canCommit=false 时如实说明阻断原因。**绝不说『已定稿/已入库』**。",
     "- 定稿后的下一步：用户点按钮后，系统会直接转告定稿结果并给出选项，你不用补。定稿结果里提到新出现的人物只转告、不替用户建卡，没有就别提，绝不编造『新出现了谁』。",
-    "- 待收口提醒只转告：线索待收口、陈旧线索这类提醒照实转告，可给『清理 / 归并线索』选项；绝不自动调用 manage_threads 的 clean / group，用户点了再做。用户明确说某一条提醒其实已经完了，就用 manage_threads op=resolve 收这一条，不要用全局清理工具替代。",
-    "- 硬事实：用户要记/改/删/标记取代，调 edit_fact_ledger，ok=true 才说记好了。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实，chapter=当前章，别自己编 id。" +
+    "- 待收口提醒只转告：线索待收口、陈旧线索这类提醒照实转告，可给『清理 / 归并线索』选项；绝不自动调用 manage_ledger 的 clean / group，用户点了再做。用户明确说某一条提醒其实已经完了，就用 manage_ledger op=resolve 收这一条，不要用全局清理工具替代。",
+    "- 硬事实：用户要记/改/删/标记取代，调 manage_ledger（op=add/update/remove/supersede），ok=true 才说记好了。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实，chapter=当前章，别自己编 id。" +
       "记完只简洁确认，绝不回头反问『你确定要保留这条吗』；觉得以后可能变，就给前瞻提议（以后真变了告诉我，我来标记取代）。",
     "- 审稿报过严重问题而用户要定稿：提醒一句还有几处要紧问题，可给『仍要定稿 / 先去改』选项——这是提醒、不是拦。",
-    "- 撤销：用户说撤销 / 反悔 / 刚才那步不要了，就调 undo_last_change，按它的结果回报；没有可撤销的就如实说。prune_snapshots 永远只预览，真裁要用户点「确认裁剪」按钮；裁剪不在撤销链里，用户要撤销裁剪时如实说明只能靠裁前备份恢复。",
+    "- 撤销：用户说撤销 / 反悔 / 刚才那步不要了，就调 manage_snapshots op=undo，按它的结果回报；没有可撤销的就如实说。manage_snapshots op=prune 永远只预览，真裁要用户点「确认裁剪」按钮；裁剪不在撤销链里，用户要撤销裁剪时如实说明只能靠裁前备份恢复。",
     "",
     "下一步选项：",
     "- 做完一步、下一步明确时，调 suggest_next_steps 给 2～4 个可点选项（至多一个推荐，留一个『我自己说』兜底），文字里别再罗列一遍。" +
@@ -149,13 +146,12 @@ export async function getStoryAgent(): Promise<Agent> {
       check_ai_flavor: checkAiFlavorTool,
       commit_preview: commitPreviewTool,
       // commit_apply 不给对话 AI（2026-10-10）：定稿只能由作者点「确认定稿」按钮（结构化动作直达，不经模型）。
-      edit_fact_ledger: editFactLedgerTool,
       suggest_next_steps: suggestNextStepsTool,
-      // 4 个线索工具合成一个入口（按 op 转给原工具）。
-      manage_threads: manageThreadsTool,
-      manage_style_exemplars: manageStyleExemplarsTool,
-      undo_last_change: undoLastChangeTool,
-      prune_snapshots: pruneSnapshotsTool,
+      // 2026-10-12 编辑部 R3b 瘦身：硬事实+线索合成 manage_ledger（按 op 转给原工具）；
+      // 文风样本并入 foundation_write（style_exemplar_* 动作）；撤销+裁剪合成 manage_snapshots（按 op 转给原工具，
+      // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
+      manage_ledger: manageLedgerTool,
+      manage_snapshots: manageSnapshotsTool,
       web_search: webSearchTool,
     }),
   });

@@ -424,7 +424,7 @@ export async function runObedientAgentTurn(args: {
           sawToolActivity = true;
           const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
           const resultPayload = chunk.payload?.result as
-            | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown }
+            | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown; readonly op?: unknown }
             | undefined;
           const summary = resultPayload?.summary;
           if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
@@ -432,9 +432,11 @@ export async function runObedientAgentTurn(args: {
             toolName: chunk.payload?.toolName,
             status: toolResultStatus(chunk.payload?.toolName, chunk.payload?.result),
             // 诚实背书粒度（honesty-detection stepBacksWriteClaim）：prune 的 dryRun（预览不背书）/
-            // exemplars 的 action（list 不背书）随步骤带上；没有这两字段的工具自然缺省、维持旧口径。
+            // exemplars 的 action（list 不背书）/ 合并入口的 op（manage_snapshots 只认 op=prune 的真裁）随步骤带上；
+            // 没有这几字段的工具自然缺省、维持旧口径。
             ...(typeof resultPayload?.dryRun === "boolean" ? { dryRun: resultPayload.dryRun } : {}),
             ...(typeof resultPayload?.action === "string" ? { action: resultPayload.action } : {}),
+            ...(typeof resultPayload?.op === "string" ? { op: resultPayload.op } : {}),
           });
           args.sendEvent("tool-result", {
             toolCallId,
@@ -497,8 +499,9 @@ export async function runObedientAgentTurn(args: {
       // 但「已正式入库」的声称本身指认了该强制哪个工具）。都定位不到才 required 兜底。
       const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
       // 对话 AI 没有定稿工具（2026-10-10：定稿只能点按钮）——它谎称已定稿时强制它去做定稿预览，预览卡上有按钮。
+      // 期望名是已删并入口径时映射到注册名（2026-10-12 R3b：edit_fact_ledger 并入 manage_ledger）。
       const expected = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
-      const forcedTool = expected === "commit_apply" ? "commit_preview" : expected;
+      const forcedTool = expected === "commit_apply" ? "commit_preview" : expected === "edit_fact_ledger" ? "manage_ledger" : expected;
       // required 也必须限步（真机实锤）：forced choice 每一步都强制调工具、永远到不了纯文本收尾，
       // 不限步会一直跑到框架步数上限（弱模型开思考时一步一分钟，整轮挂十来分钟）。
       attemptOptions = forcedTool

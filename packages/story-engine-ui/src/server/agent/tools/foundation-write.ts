@@ -16,11 +16,13 @@
 import {
   applyFoundationWriteSuggestion,
   buildStateOverview,
+  STYLE_EXEMPLAR_MAX_COUNT,
+  STYLE_EXEMPLAR_MAX_TEXT_CHARS,
   type FoundationWriteResult,
   type FoundationWriteSuggestionLike,
 } from "@actalk/story-engine";
 import { z } from "zod";
-import { coerceBoolean, coerceEnum, coerceEnumValues, coerceJsonObject } from "./lenient-args.js";
+import { blankToUndefined, coerceBoolean, coerceEnum, coerceEnumValues, coerceJsonObject } from "./lenient-args.js";
 
 import { writeTool } from "../withSnapshot.js";
 import { readCharacterNameById, resolveEntityLabel } from "../presence/entity-labels.js";
@@ -28,8 +30,10 @@ import { resolveFoundationUpdateTargetId } from "../../lib/project-io.js";
 import { buildFoundationKnownEntities } from "../../routes/foundation-gaps.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsEstablishedOverride } from "./turn-intent-gate.js";
+import { manageStyleExemplarsLogic, type ManageStyleExemplarsOutput, type StyleExemplarAction } from "./manage-style-exemplars.js";
 
-/** 支持的资料写入动作。覆盖 foundation-write-gateway 的全部建/改/删/改名动作。 */
+/** 支持的资料写入动作。覆盖 foundation-write-gateway 的全部建/改/删/改名动作；style_exemplar_* 四个在工具内
+ * 转给 manageStyleExemplarsLogic（作者文风样本，同是 writing-rules.json 一族），不进引擎网关。 */
 export const FOUNDATION_WRITE_ACTION_TYPES = [
   "create_character",
   "update_character_detail",
@@ -41,8 +45,27 @@ export const FOUNDATION_WRITE_ACTION_TYPES = [
   "update_world_rule",
   "update_writing_rule",
   "delete_foundation_entry",
+  "style_exemplar_add",
+  "style_exemplar_list",
+  "style_exemplar_update",
+  "style_exemplar_remove",
 ] as const;
 export type FoundationWriteActionType = (typeof FOUNDATION_WRITE_ACTION_TYPES)[number];
+
+/** style_exemplar_* 动作（2026-10-12 编辑部 R3b：manage_style_exemplars 并入本工具）。 */
+export const STYLE_EXEMPLAR_ACTION_TYPES = ["style_exemplar_add", "style_exemplar_list", "style_exemplar_update", "style_exemplar_remove"] as const;
+export type StyleExemplarActionType = (typeof STYLE_EXEMPLAR_ACTION_TYPES)[number];
+
+export function isStyleExemplarActionType(actionType: string): actionType is StyleExemplarActionType {
+  return (STYLE_EXEMPLAR_ACTION_TYPES as readonly string[]).includes(actionType);
+}
+
+function styleExemplarActionOf(actionType: StyleExemplarActionType): StyleExemplarAction {
+  return actionType === "style_exemplar_add" ? "add"
+    : actionType === "style_exemplar_list" ? "list"
+      : actionType === "style_exemplar_update" ? "update"
+        : "remove";
+}
 
 export const FOUNDATION_WRITE_CATEGORIES = [
   "characters",
@@ -68,13 +91,14 @@ const inputSchema = z.object({
   // （characterRelationships/writingRules）→ coerceEnumValues 大小写不敏感映射回 canonical。这是唯一写资料工具，
   // 模型一旦传错大小写就 InputValidationError 写不进，宽容很值。
   actionType: coerceEnum(z.enum(FOUNDATION_WRITE_ACTION_TYPES).describe(
-    "记进已有角色卡=update_character_detail；新建=create_*；改名=rename_character；删除=delete_foundation_entry（配 category）。",
+    "记进已有角色卡=update_character_detail；新建=create_*；改名=rename_character；删除=delete_foundation_entry（配 category）；" +
+      "作者文风样本=style_exemplar_add/list/update/remove（category 填 writingRules）。",
   )),
   category: coerceEnumValues(FOUNDATION_WRITE_CATEGORIES, z.enum(FOUNDATION_WRITE_CATEGORIES).describe(
     "写或删哪一类资料（characterRelationships=角色关系条目）。",
   )),
   targetId: z.string().optional().describe(
-    "目标实体 id（更新/改名/删除已有角色·地点·资产时必填，先用 read_foundation/read_state_overview 取得）。新建留空。",
+    "目标实体 id（更新/改名/删除已有角色·地点·资产时必填，先用 read_foundation/read_state_overview 取得）；style_exemplar_update/remove 也可作样本 id（先 style_exemplar_list 取得）。新建留空。",
   ),
   targetName: z.string().optional().describe("按名字定位（只对 update_* 生效）；改名和删除必须给 targetId。"),
   before: z.unknown().optional().describe(
@@ -106,6 +130,15 @@ const inputSchema = z.object({
   confirmed: coerceBoolean(z.boolean().optional().describe(
     "删除角色、覆盖已确立设定：工具先回『需用户确认』，用户明确同意后带 true 重试（工具还会核对用户原话）。",
   )),
+  exemplarTitle: blankToUndefined(z.string().optional().describe(
+    "style_exemplar_*：样本标题。add 必填；没给 targetId 时 update/remove 按标题定位；同给时是要改成的新标题。",
+  )),
+  exemplarText: blankToUndefined(z.string().optional().describe(
+    `style_exemplar_*：样本正文（作者自己写的、想让 AI 模仿风格的段落）。add 必填；update 给了才替换。最多 ${STYLE_EXEMPLAR_MAX_COUNT} 条、单条 ≤${STYLE_EXEMPLAR_MAX_TEXT_CHARS} 字，超限如实拒绝。`,
+  )),
+  exemplarNote: blankToUndefined(z.string().optional().describe(
+    "style_exemplar_*：可选备注（这段是什么/想让 AI 学什么）。add/update 给了才写。",
+  )),
   rationale: z.string().optional().describe("为什么写这条（一句话，便于结果卡说明）。"),
 });
 
@@ -136,14 +169,26 @@ const outputSchema = z.object({
   })).describe("被风险拦截或需确认而未写入的项（含 level=needs_confirmation/blocked）。"),
   overview: z.unknown().describe("落盘后重新读取的 StateOverview，供前端刷新资料面板。"),
   summary: z.string().describe("写入结果的自然语言摘要。"),
-  refreshScope: z.literal("foundation"),
+  refreshScope: z.literal("foundation").optional().describe("影响面提示；style_exemplar_list 只读不带。"),
+  // style_exemplar_* 专属（原 manage_style_exemplars 的结果形状；action=list 只读，前端诚实探针据此不给写背书）。
+  action: z.string().optional().describe("style_exemplar_*：本次动作（add/list/update/remove）。"),
+  count: z.number().optional().describe("style_exemplar_*：动作后的样本总数。"),
+  exemplars: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    text: z.string(),
+    note: z.string().optional(),
+    createdAtMs: z.number(),
+  })).optional().describe("style_exemplar_*：动作后的全量样本（list 时即现有清单）。"),
+  droppedBad: z.array(z.string()).optional().describe("style_exemplar_*：被跳过的损坏样本条目及原因。"),
 });
 
-/** 由 actionType + category 推导引擎期望的 targetFile（与 foundation-write-gateway 的校验一致）。 */
+/** 由 actionType + category 推导引擎期望的 targetFile（与 foundation-write-gateway 的校验一致；style_exemplar_* 不进引擎，归写作规则文件）。 */
 export function foundationTargetFileFor(
   actionType: FoundationWriteActionType,
   category: FoundationWriteCategory,
 ): string {
+  if (isStyleExemplarActionType(actionType)) return "story/writing-rules.json";
   if (actionType === "delete_foundation_entry") {
     if (category === "locations") return "story/location-bible.json";
     if (category === "assets") return "story/assets.json";
@@ -177,6 +222,10 @@ export interface FoundationWriteToolInput {
   /** 可省略（zod default {}）：引擎对缺字段按诚实 skip 回报，不硬崩。 */
   readonly after?: Record<string, unknown>;
   readonly confirmed?: boolean;
+  /** style_exemplar_* 专属：样本标题/正文/备注（2026-10-12 R3b 并入）。 */
+  readonly exemplarTitle?: string;
+  readonly exemplarText?: string;
+  readonly exemplarNote?: string;
   readonly rationale?: string;
 }
 
@@ -206,7 +255,48 @@ export interface FoundationWriteToolOutput {
   readonly blocked: { level: string; reason: string; targetFile: string }[];
   readonly overview: unknown;
   readonly summary: string;
-  readonly refreshScope: "foundation";
+  readonly refreshScope?: "foundation";
+  /** style_exemplar_* 专属（原 manage_style_exemplars 的结果形状）。 */
+  readonly action?: string;
+  readonly count?: number;
+  readonly exemplars?: ManageStyleExemplarsOutput["exemplars"];
+  readonly droppedBad?: string[];
+}
+
+/** style_exemplar_* 路径：转给 manageStyleExemplarsLogic（纯逻辑，不走引擎网关），结果映射成本工具的诚实回报形状。 */
+async function applyStyleExemplarLogic(input: {
+  readonly projectDir: string;
+  readonly toolInput: FoundationWriteToolInput;
+}): Promise<FoundationWriteToolOutput> {
+  const action = styleExemplarActionOf(input.toolInput.actionType as StyleExemplarActionType);
+  const out = await manageStyleExemplarsLogic({
+    projectDir: input.projectDir,
+    toolInput: {
+      action,
+      ...(input.toolInput.targetId ? { id: input.toolInput.targetId } : {}),
+      ...(input.toolInput.exemplarTitle ? { title: input.toolInput.exemplarTitle } : {}),
+      ...(input.toolInput.exemplarText ? { text: input.toolInput.exemplarText } : {}),
+      ...(input.toolInput.exemplarNote ? { note: input.toolInput.exemplarNote } : {}),
+    },
+  });
+  const isList = out.action === "list";
+  return {
+    ok: out.ok,
+    applied: out.ok && !isList,
+    needsConfirmation: false,
+    partialMiss: false,
+    writes: [],
+    skipped: [],
+    blocked: [],
+    overview: undefined,
+    summary: out.summary,
+    // list 只读：不 refreshScope（不给「影响范围·资料」徽标）、不建快照（走 preflight）。
+    ...(isList ? {} : { refreshScope: "foundation" as const }),
+    action: out.action,
+    count: out.count,
+    exemplars: [...out.exemplars],
+    droppedBad: [...out.droppedBad],
+  };
 }
 
 /** 把 agent 的结构化意图组装成引擎建议。抽出以便单测构造逻辑。 */
@@ -250,6 +340,10 @@ export async function applyFoundationWriteToolLogic(input: {
   /** 本轮用户原话（由 RequestContext 注入）；覆盖已确立设定时只认这里的明确同意。 */
   readonly userTurnText?: string;
 }): Promise<FoundationWriteToolOutput> {
+  // 文风样本（style_exemplar_*）：不进引擎网关，转给 manageStyleExemplarsLogic（同是 writing-rules.json 一族，2026-10-12 R3b 并入）。
+  if (isStyleExemplarActionType(input.toolInput.actionType)) {
+    return applyStyleExemplarLogic({ projectDir: input.projectDir, toolInput: input.toolInput });
+  }
   // 删任何角色都先确认（用户 2026-06-16 拍板）：引擎只对「已 commit 的晋升/已出场角色」强制确认，
   // 这里把保护扩到所有角色——删角色未带 confirmed 时不调引擎删除，统一回报 needsConfirmation，
   // 由 agent 在对话里问用户、确认后带 confirmed=true 重试。整角色删除较重，先问一句更稳（删后仍可撤销）。
@@ -423,12 +517,16 @@ const FOUNDATION_ACTION_SNAPSHOT_VERB: Record<string, string> = {
   create_asset: "建资产", update_asset_status: "改资产",
   update_world_rule: "改世界规则", update_writing_rule: "改写作规则",
   delete_foundation_entry: "删条目",
+  style_exemplar_add: "加文风样本", style_exemplar_list: "查文风样本",
+  style_exemplar_update: "改文风样本", style_exemplar_remove: "删文风样本",
 };
-export function foundationWriteSnapshotDetail(input: { readonly actionType?: string; readonly targetName?: string; readonly after?: unknown }): string {
+export function foundationWriteSnapshotDetail(input: { readonly actionType?: string; readonly targetName?: string; readonly after?: unknown; readonly exemplarTitle?: string }): string {
   const verb = FOUNDATION_ACTION_SNAPSHOT_VERB[input.actionType ?? ""] ?? "写资料";
   const afterName = (input.after && typeof input.after === "object" && !Array.isArray(input.after))
     ? (input.after as { readonly name?: unknown }).name : undefined;
-  const name = (input.targetName ?? (typeof afterName === "string" ? afterName : undefined) ?? "").trim();
+  const name = (isStyleExemplarActionType(input.actionType ?? "")
+    ? input.exemplarTitle ?? ""
+    : input.targetName ?? (typeof afterName === "string" ? afterName : undefined) ?? "").trim();
   return name ? `${verb} ${name}` : verb;
 }
 
@@ -437,6 +535,7 @@ export const foundationWriteTool = writeTool({
   snapshotDetail: foundationWriteSnapshotDetail,
   description:
     "把结构化的资料写入意图落盘：建/改/删/改名 角色、地点、资产、世界规则、写作规则。" +
+    "作者文风样本也走这里：用户给满意段落说『照这个感觉写』时 style_exemplar_add 存进（写正文时模仿节奏用词、不照抄内容）；改/删前先 style_exemplar_list。" +
     "更新或删除已有实体前应先用 read_foundation/read_state_overview 取得 targetId。" +
     "落盘前自动建快照，可一键撤销。【删除任何角色都需用户确认】：首次删角色会回报『需用户确认』、不删除，" +
     "此时不要谎称已删除，应在对话里问用户确认，确认后再带 confirmed=true 重试。" +
@@ -444,6 +543,11 @@ export const foundationWriteTool = writeTool({
     "再调一次即可（系统核对用户原话，勿只靠自填 confirmed）。被拦后勿无限重试；改不成须如实告诉用户没改成与原因。",
   inputSchema,
   outputSchema,
+  // style_exemplar_list 只读：走 preflight 直接返回，不建 no-op 快照污染操作历史（原 manage_style_exemplars 同款）。
+  preflight: async ({ input, projectDir }) => {
+    if (input.actionType !== "style_exemplar_list") return undefined;
+    return applyStyleExemplarLogic({ projectDir, toolInput: input });
+  },
   run: async ({ input, projectDir, context }) => {
     const output = await applyFoundationWriteToolLogic({
       projectDir,
@@ -458,6 +562,9 @@ export const foundationWriteTool = writeTool({
         ...(input.newName !== undefined ? { newName: input.newName } : {}),
         after: input.after,
         ...(input.confirmed !== undefined ? { confirmed: input.confirmed } : {}),
+        ...(input.exemplarTitle !== undefined ? { exemplarTitle: input.exemplarTitle } : {}),
+        ...(input.exemplarText !== undefined ? { exemplarText: input.exemplarText } : {}),
+        ...(input.exemplarNote !== undefined ? { exemplarNote: input.exemplarNote } : {}),
         ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
       },
       userTurnText: readUserTurnTextFromContext(context),

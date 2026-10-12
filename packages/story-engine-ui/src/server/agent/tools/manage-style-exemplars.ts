@@ -1,12 +1,15 @@
 /**
- * manage_style_exemplars — 写类工具：管理本书的「作者文风样本」（story/writing-rules.json 的
- * styleExemplars 数组），add / list / update / remove 四个动作。
+ * 作者文风样本的核心逻辑（story/writing-rules.json 的 styleExemplars 数组）：
+ * add / list / update / remove 四个动作的纯逻辑 manageStyleExemplarsLogic。
+ *
+ * 2026-10-12 编辑部 R3b 起，独立工具 manage_style_exemplars 并入 foundation_write
+ * （actionType=style_exemplar_*，见 foundation-write.ts 的 applyStyleExemplarLogic——快照/撤销/
+ * list 只读不建快照的语义由 foundation_write 的 writeTool 包装承接）；本文件只留这份可单测的纯逻辑。
  *
  * 文风样本是写正文的正向锚：存进后每章写正文都会喂给模型（模仿句法节奏、用词偏好与叙事温度，
  * 不得照抄样本内容）。引擎侧限额：最多 5 条、单条正文 ≤2000 字——超限如实拒绝，不截断硬塞。
  *
  * 铁律：
- * - 直接做 + 可撤销：writeTool 包装，落盘前已建快照（list 只读，走 preflight 不建快照）。
  * - 绝不静默失败 / 绝不谎报：ok 字段如实回报；坏输入（空标题/空正文/超长/超 5 条/目标没找到）
  *   一律 ok:false + 原因，绝不假装写入。
  * - 绝不泄露裸 id：summary 只用样本标题；id 只在 exemplars 结构里供 agent 定位用。
@@ -16,7 +19,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { z } from "zod";
 import {
   normalizeStyleExemplars,
   STYLE_EXEMPLAR_MAX_COUNT,
@@ -24,9 +26,7 @@ import {
 } from "@actalk/story-engine";
 import type { StyleExemplar } from "@actalk/story-engine";
 
-import { blankToUndefined, coerceEnum } from "./lenient-args.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
-import { writeTool } from "../withSnapshot.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
 
 export const STYLE_EXEMPLAR_ACTIONS = ["add", "list", "update", "remove"] as const;
@@ -300,60 +300,3 @@ export async function manageStyleExemplarsLogic(input: {
     summary: `已删除文风样本「${target.title}」（还剩 ${next.length} 条），可一键撤销。`,
   };
 }
-
-const inputSchema = z.object({
-  // 模型无关：枚举大小写宽容（模型常传 "Add"/"LIST"）。
-  action: coerceEnum(z.enum(STYLE_EXEMPLAR_ACTIONS).describe(
-    "add=存一条新样本；list=看现有样本（只读）；update=改某条的标题/正文/备注；remove=删某条。",
-  )),
-  id: blankToUndefined(z.string().optional().describe(
-    "样本 id（update/remove 优先按它定位；先 action=list 取得）。只对 agent 定位用，别念给用户听。",
-  )),
-  title: blankToUndefined(z.string().optional().describe(
-    "样本标题。add 必填；没给 id 时 update/remove 按标题精确定位；id 和 title 同时给时，title 是要改成的新标题。",
-  )),
-  text: blankToUndefined(z.string().optional().describe(
-    `样本正文（作者自己写的、想让 AI 模仿风格的段落）。add 必填非空；update 给了才替换。单条上限 ${STYLE_EXEMPLAR_MAX_TEXT_CHARS} 字，超限会被如实拒绝。`,
-  )),
-  note: blankToUndefined(z.string().optional().describe(
-    "可选备注（这段是什么/想让 AI 学什么，如「我满意的开头节奏」）。add/update 给了才写。",
-  )),
-});
-
-const exemplarSchema = z.object({
-  id: z.string().describe("样本内部 id，供 update/remove 定位用；绝不对用户展示。"),
-  title: z.string(),
-  text: z.string(),
-  note: z.string().optional(),
-  createdAtMs: z.number(),
-});
-
-const outputSchema = z.object({
-  snapshotId: z.string().describe("本次写入前的快照 id，前端凭此可一键撤销；list（只读）与动作失败时为空串。"),
-  ok: z.boolean().describe("统一诚实成功标志：true=确实完成动作（add/update/remove 真落了盘，list 真读到了）；false=没做成，summary 含原因。"),
-  action: z.enum(STYLE_EXEMPLAR_ACTIONS),
-  count: z.number().describe("动作后的样本总数。"),
-  exemplars: z.array(exemplarSchema).describe("动作后的全量样本（list 时即现有清单）。"),
-  droppedBad: z.array(z.string()).describe("文件里被跳过的损坏样本条目及原因（诚实报告，正常条目不受影响）。"),
-  summary: z.string().describe("自然语言结果，供回答用户。"),
-});
-
-export const manageStyleExemplarsTool = writeTool({
-  id: "manage_style_exemplars",
-  snapshotDetail: (input) => {
-    const verb = { add: "加文风样本", update: "改文风样本", remove: "删文风样本", list: "查文风样本" }[input.action];
-    const title = input.title?.trim();
-    return title ? `${verb} ${title}` : verb;
-  },
-  description:
-    "作者文风样本（用户给出满意段落、说『照这个感觉写 / 学我的文风』时 add 存进；" +
-    `最多 ${STYLE_EXEMPLAR_MAX_COUNT} 条、每条 ≤${STYLE_EXEMPLAR_MAX_TEXT_CHARS} 字）。写正文时会模仿它的节奏和用词，不照抄内容。改/删前先 list。`,
-  inputSchema,
-  outputSchema,
-  // list 只读：走 preflight 直接返回，不建 no-op 快照污染操作历史。
-  preflight: async ({ input, projectDir }) => {
-    if (input.action !== "list") return undefined;
-    return manageStyleExemplarsLogic({ projectDir, toolInput: input });
-  },
-  run: async ({ input, projectDir }) => manageStyleExemplarsLogic({ projectDir, toolInput: input }),
-});

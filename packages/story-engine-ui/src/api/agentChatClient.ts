@@ -86,10 +86,12 @@ export interface AgentToolResult {
   /** 部分纠错失败（写成功但有要删的目标没命中）：前端据此把该步骤置 partial（部分完成·琥珀色），不当全成功绿色（修#1）。 */
   readonly partialMiss?: boolean;
   /** 诚实背书粒度（服务端 agent-chat tool-result 已随步骤带上、honesty-detection stepBacksWriteClaim 认的字段名）：
-   *  prune_snapshots 的 dryRun（预览不背书「已裁剪」）/ manage_style_exemplars 的 action（list 不背书「已添加」）。
+   *  prune_snapshots 的 dryRun（预览不背书「已裁剪」）/ manage_style_exemplars（今并入 foundation_write）的 action
+   *  （list 不背书「已添加」）/ 合并入口 manage_snapshots 的 op。
    *  不透传会让 exemplars add 成功在前端被诚实探针误判成「操作未完成」（复审 P2③）。 */
   readonly dryRun?: boolean;
   readonly action?: string;
+  readonly op?: string;
   readonly summary?: string;
   /** 改草稿类工具（generate_draft/revise_draft）返回的「当前章完整草稿正文（去 Markdown 标题）」。
    *  前端据此把真正文载入工作区——否则只能用不含正文的 overview 刷新，草稿被占位覆盖、autosave 抹掉真正文。 */
@@ -311,9 +313,10 @@ export async function streamAgentChat(
             ...(output.needsConfirmation === true ? { needsConfirmation: true } : {}),
             ...(output.partialMiss === true ? { partialMiss: true } : {}),
             // 诚实背书粒度（honesty-detection stepBacksWriteClaim 认的字段名）：prune 的 dryRun /
-            // exemplars 的 action 必须透传给投影层累加进 step——否则 add 真成功也被前端诚实探针误判「操作未完成」。
+            // exemplars 的 action / 合并入口的 op 必须透传给投影层累加进 step——否则 add 真成功也被前端诚实探针误判「操作未完成」。
             ...(typeof output.dryRun === "boolean" ? { dryRun: output.dryRun } : {}),
             ...(typeof output.action === "string" ? { action: output.action } : {}),
+            ...(typeof output.op === "string" ? { op: output.op } : {}),
             ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
             // 改草稿工具的真正文必须透传，前端据此把真正文载入工作区（防占位覆盖+autosave 抹稿）。
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),
@@ -321,8 +324,10 @@ export async function streamAgentChat(
             ...(typeof output.draftVersion === "number" && Number.isFinite(output.draftVersion) ? { draftVersion: output.draftVersion } : {}),
             // 入库成功标志：让 draftBody 以 committed 状态载入（commit_apply 专用）。
             ...(output.committed === true ? { committed: true } : {}),
-            // 撤销标志（undo_last_change 专用）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。
-            ...(parsed.toolName === "undo_last_change" && typeof output.undone === "boolean" ? { undone: output.undone } : {}),
+            // 撤销标志（undo_last_change / 今并入 manage_snapshots op=undo）：只在布尔时透传，前端据此冻结 autosave、改读磁盘真值。
+            ...(typeof output.undone === "boolean" && (parsed.toolName === "undo_last_change" || parsed.toolName === "manage_snapshots")
+              ? { undone: output.undone }
+              : {}),
             // check_ai_flavor 专属：整份体检报告（violations/usedFallback 不在上面的轻量白名单里），
             // 仅在该工具且 output 形状符合 AiFlavorReport 时透传，前端据此落 store 渲染体检卡。
             ...(parsed.toolName === "check_ai_flavor" && isAiFlavorReport(output)
@@ -383,7 +388,8 @@ export async function streamAgentChat(
                   },
                 }
               : {}),
-            ...(parsed.toolName === "prune_snapshots" && output.needsConfirmation === true
+            ...((parsed.toolName === "prune_snapshots" || parsed.toolName === "manage_snapshots")
+              && output.needsConfirmation === true
               && typeof output.confirmAction === "object" && output.confirmAction !== null
               ? {
                   pruneConfirmAction: {

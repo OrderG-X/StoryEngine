@@ -51,6 +51,8 @@ export interface AgentToolResultOutput {
    *  （list 只读不背书；写背书只认 add/update/remove）。累加进 toolStep 供回合收尾的诚实探针判定。 */
   readonly dryRun?: boolean;
   readonly action?: string;
+  /** 合并入口（manage_snapshots / manage_ledger）的 op：随步骤累加，供回合收尾的诚实探针按 op 判写背书。 */
+  readonly op?: string;
   readonly summary?: string;
   readonly issues?: readonly string[];
   readonly overview?: unknown;
@@ -112,8 +114,8 @@ interface ToolPresentation {
 /**
  * 工具 id → 时间线展示。stepLabel 是动作块「块体详情」里这一步的人话标签，
  * 对照 packages/story-engine/src/agent-capabilities.ts 的 label（只读不改它），
- * **覆盖 story-agent.ts 注册的全部 32 个工具**——时间线里「调用工具 · XX」一律说中文，
- * 不让任何工具回退到生硬的「执行 generate_worldbuilding」之类英文（与整套中文 UI 对不齐）。
+ * **覆盖 story-agent.ts 注册的全部工具（2026-10-12 R3b 后 19 个）及其合并前的原工具名**（老会话回放仍显示原名）——
+ * 时间线里「调用工具 · XX」一律说中文，不让任何工具回退到生硬的「执行 generate_worldbuilding」之类英文（与整套中文 UI 对不齐）。
  * 新增工具务必在这里补一行中文标签；漏了才会落到 presentationFor 的英文兜底。
  *
  * card 只给 read_state_overview / foundation_write 两个保留——它们的 agentName 命中
@@ -147,6 +149,9 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 2026-10-10 对话 AI 瘦身：上面 8 个合成 enrich_foundation、下面 4 个线索工具合成 manage_threads（原名保留给老会话回放）
   enrich_foundation: { stepLabel: "补全资料", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
+  // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
+  manage_ledger: { stepLabel: "记账", card: null },
+  manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },
@@ -283,7 +288,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         };
       }
       // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
-      if (event.toolName === "prune_snapshots" && event.output?.pruneConfirmAction) {
+      if ((event.toolName === "prune_snapshots" || event.toolName === "manage_snapshots") && event.output?.pruneConfirmAction) {
         const button = pruneConfirmAction(event.output.pruneConfirmAction);
         return {
           ...withEffects,
@@ -403,10 +408,12 @@ function settleTool(
         endedAt,
         ...(detail ? { detail } : {}),
         // 诚实背书粒度累加进 step（对齐服务端 honesty-detection 认的字段名）：dryRun（prune 预览
-        // 不背书）/ action（exemplars 的 list 不背书）；没有这两字段的工具自然缺省、维持旧口径。
+        // 不背书）/ action（exemplars 的 list 不背书）/ op（manage_snapshots 只认 op=prune 的真裁）；
+        // 没有这几字段的工具自然缺省、维持旧口径。
         // 缺了这层累加，exemplars add 真成功也会被回合收尾的诚实探针误判成「操作未完成」（复审 P2③）。
         ...(typeof output?.dryRun === "boolean" ? { dryRun: output.dryRun } : {}),
         ...(typeof output?.action === "string" ? { action: output.action } : {}),
+        ...(typeof output?.op === "string" ? { op: output.op } : {}),
       }
       : step,
   );
