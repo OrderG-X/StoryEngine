@@ -15,11 +15,10 @@ import {
   CHECKER_ROLE,
   CHECKER_ROLE_STRUCTURED,
   checkerRoleFor,
-  dedupeRootCauses,
+  DEFAULT_READER_VARIANT,
   parseKeywords,
   parsePlanProblems,
   planCheckTask,
-  quotesSimilar,
   selfReviewTask,
 } from "./checker.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
@@ -553,60 +552,6 @@ describe("D「确定」门槛（applySureGate）", () => {
   });
 });
 
-describe("E 同一底层问题去重（R2.1）", () => {
-  /** 同一处前文（第 2 章那句怀表），本章从两句各报一条——T1 差距分析里「营业执照一口气 3 条」的同款。 */
-  const WATCH_AGAIN = { quote: "表盖还开着", earlierQuote: "林舟把怀表锁进了柜台下的抽屉里", earlierChapter: 2, reason: "怀表锁着，表盖不该开着" };
-
-  it("quotesSimilar：与打分脚本同一套规则——去空白标点后互相包含、或二元组重合率过半", () => {
-    expect(quotesSimilar("林舟把怀表锁进了柜台下的抽屉", "林舟把怀表锁进了柜台下的抽屉里头")).toBe(true); // 包含
-    expect(quotesSimilar("周婶端着茶进来", "周婶 端着茶 进来。")).toBe(true); // 标点空白不影响
-    expect(quotesSimilar("他把柜台擦了一遍", "他给绿萝浇了水")).toBe(false); // 不相似
-    expect(quotesSimilar("", "随便什么")).toBe(false); // 空串不相似
-  });
-
-  it("earlierChapter 相同且 earlierQuote 相似的多条只留一条：sure 优先，留下的保持在先出现的位置", async () => {
-    const dir = await makeBook();
-    const { callModel } = fakeModel({
-      objects: [
-        { ...WATCH_AGAIN, confidence: "maybe" }, // 先出现，maybe
-        { ...WATCH, confidence: "sure" }, // 同一处前文、前文那句只差两个字 → 同一底层问题，sure 换上
-        { ...AUNT, confidence: "sure" }, // 前文那句不同 → 不受影响
-      ],
-      people: [{ quote: "林舟一早开门", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "第三遍又报同一处", confidence: "sure" }],
-    });
-    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { rootCauseDedupe: true } });
-    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([
-      ["他从工作台上拿起那块怀表", "sure"], // 换成 sure 的那条，位置在第一条出现的地方
-      ["周婶在门口喊他", "sure"],
-    ]);
-  });
-
-  it("同档留最早出现的：两条都是 maybe 时留先报的那条；earlierChapter 不同不去重", async () => {
-    const dir = await makeBook();
-    const { callModel } = fakeModel({
-      objects: [
-        { ...WATCH, quote: "表盖还开着", reason: "先报的", confidence: "maybe" },
-        { ...WATCH, confidence: "maybe" }, // 同一处前文、也是 maybe → 留先报的那条
-      ],
-      people: [{ quote: "林舟一早开门", earlierQuote: "客人把怀表放在绒布上", earlierChapter: 1, reason: "前文在第 1 章", confidence: "sure" }], // 章不同，不去重
-    });
-    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { rootCauseDedupe: true } });
-    expect(result.issues.map((issue) => [issue.quote, issue.earlierChapter])).toEqual([
-      ["表盖还开着", 2],
-      ["林舟一早开门", 1],
-    ]);
-  });
-
-  it("开关不开（现状）：同一处前文从两句各报一条，两条都留", async () => {
-    const dir = await makeBook();
-    const { callModel } = fakeModel({
-      objects: [{ ...WATCH_AGAIN, confidence: "maybe" }, { ...WATCH, confidence: "sure" }],
-    });
-    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
-    expect(result.issues.map((issue) => issue.quote)).toEqual(["表盖还开着", "他从工作台上拿起那块怀表"]);
-  });
-});
-
 describe("F 时间线表只进自复核（R2.1）", () => {
   async function writeTimeline(dir: string): Promise<void> {
     await mkdir(join(dir, "story"), { recursive: true });
@@ -672,6 +617,10 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     expect(result.failures).toEqual([]);
     expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"]]);
     for (const { messages } of [...byKind().passes, ...byKind().review]) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
+  });
+
+  it("产品默认组合带上 F（R2.1 比分赢下）：A 自复核 + 时间线只进自复核", () => {
+    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true });
   });
 });
 

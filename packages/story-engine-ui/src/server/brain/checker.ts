@@ -7,8 +7,8 @@
  *
  * T1 收尾（2026-10-12）加了四个可独立开关的做法（ReaderCheckVariant），在题库上比分后选定默认组合（DEFAULT_READER_VARIANT）：
  * A 自复核（三遍合并后同一窗口再判一轮）、B 时间线表进核账、C 结构化笔记、D「确定」门槛（纯确定性，不调模型）。
- * R2.1（2026-10-12）再加两个：E 同一底层问题去重（earlierChapter 相同且 earlierQuote 相似的多条只留一条）、
- * F 时间线表只进自复核（三遍不带表，A 那一轮带表并写明日子以表为准）。
+ * R2.1（2026-10-12）比分后加了 F 时间线表只进自复核（三遍不带表，A 那一轮带表并写明日子以表为准）进默认组合；
+ * 同一轮试过 E 同一底层问题去重（earlierChapter 相同且 earlierQuote 相似只留一条），大考卷查准/查全都掉，比分输了已删（数字见 docs/editorial-room/reports/R2.1-2026-10-12.md）。
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
@@ -99,7 +99,7 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
   ].join("\n");
 }
 
-/** T1 的四个做法 + R2.1 的两个做法，各自独立开关（评测用 --variant=a,b,c,d,e,f 组合着比分，产品默认见 DEFAULT_READER_VARIANT）。 */
+/** T1 的四个做法 + R2.1 的 F，各自独立开关（评测用 --variant=a,b,c,d,f 组合着比分，产品默认见 DEFAULT_READER_VARIANT）。 */
 export interface ReaderCheckVariant {
   /** A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（sure / maybe / no），no 的删掉、把握以复核为准。 */
   readonly selfReview?: boolean;
@@ -109,8 +109,6 @@ export interface ReaderCheckVariant {
   readonly structuredNotes?: boolean;
   /** D「确定」门槛：两句原文都逐字抄对、且（跨章，或同章但两句相隔超过 3 句）才允许保留 sure，其余降成 maybe。不调模型。 */
   readonly sureGate?: boolean;
-  /** E 同一底层问题去重：三遍合并后，earlierChapter 相同且 earlierQuote 相似（打分脚本同一套 similar 规则）的多条只留一条；sure 优先、同档留最早出现的。不调模型。 */
-  readonly rootCauseDedupe?: boolean;
   /** F 时间线表只进自复核：三遍核账不附时间线表（B 对三遍的效果关掉），只在 A 自复核那一轮附表并写明「日子以表为准，不要自己推算」。要 selfReview 开着才有那一轮。 */
   readonly timelineInReview?: boolean;
 }
@@ -119,11 +117,12 @@ export interface ReaderCheckVariant {
 export const SURE_GATE_MIN_SENTENCE_GAP = 3;
 
 /**
- * 产品里核账员（STORY_CHECKER=reader）缺省用的组合：A 自复核。题库比分选出来的（T1.1 四种做法各跑两次，
- * A 的「确定」查准下限 46.5%、两次重合 63% 都是四种里最好的；差距分析见 docs/editorial-room/reports/T1-2026-10-12.md）。
+ * 产品里核账员（STORY_CHECKER=reader）缺省用的组合：A 自复核 + F 时间线只进自复核。
+ * A 是 T1.1 题库比分选出来的；F 是 R2.1 比分赢的（「确定」查准下限 46.1→47.2、查全 33.9→35.5、小考题误报 0/1/1→0/0/0，
+ * 差距和口径见 docs/editorial-room/reports/R2.1-2026-10-12.md）。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
-export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true };
+export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true };
 
 /** 翻原文那一轮的问法：窗口里有被折叠的章（只看得到笔记）时，问它要翻哪些词的前文原文。 */
 export function keywordTask(chapter: number): string {
@@ -288,45 +287,6 @@ function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): Continu
   return merged;
 }
 
-// ---------- E 同一底层问题去重（R2.1，纯代码不调模型） ----------
-
-/** 打分的 similar 规则（与 scripts/eval/run-continuity-eval.mjs 逐字一致）：去空白标点后互相包含，或二元组重合率 ≥ 0.5。 */
-const evalNorm = (text: string): string => text.replace(/[\s「」『』“”"'…—，。！？；：、,.!?;:（）()]/gu, "");
-function evalBigrams(text: string): Set<string> {
-  const out = new Set<string>();
-  const chars = Array.from(evalNorm(text));
-  for (let index = 0; index + 1 < chars.length; index += 1) out.add(`${chars[index]}${chars[index + 1]}`);
-  return out;
-}
-/** 两句原句按打分脚本的 similar 规则算不算同一句。 */
-export function quotesSimilar(a: string, b: string): boolean {
-  const na = evalNorm(a);
-  const nb = evalNorm(b);
-  if (!na || !nb) return false;
-  if (na.length >= 4 && nb.includes(na)) return true;
-  if (nb.length >= 4 && na.includes(nb)) return true;
-  const ga = evalBigrams(a);
-  const gb = evalBigrams(b);
-  if (ga.size === 0 || gb.size === 0) return false;
-  let shared = 0;
-  for (const gram of ga) if (gb.has(gram)) shared += 1;
-  return shared / Math.min(ga.size, gb.size) >= 0.5;
-}
-
-/**
- * E 同一底层问题去重：三遍合并后，earlierChapter 相同且 earlierQuote 相似的多条（同一处前文、本章从不同句子各报一条）
- * 只留一条——留 sure 优先、同档留最早出现的，留在第一条出现的位置。不调模型。
- */
-export function dedupeRootCauses(issues: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
-  const kept: ContinuityIssueV2[] = [];
-  for (const issue of issues) {
-    const index = kept.findIndex((other) => other.earlierChapter === issue.earlierChapter && quotesSimilar(other.earlierQuote, issue.earlierQuote));
-    if (index < 0) kept.push(issue);
-    else if (issue.confidence === "sure" && kept[index]!.confidence !== "sure") kept[index] = issue; // 来的档更高才换，位置不动（同档留最早）
-  }
-  return kept;
-}
-
 export interface ReaderCheckResult {
   /** 带 confidence。 */
   readonly issues: ContinuityIssueV2[];
@@ -370,7 +330,7 @@ async function lookupEarlierPassages(input: {
   }
 }
 
-/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做同一底层问题去重（E）、自复核（A）和「确定」门槛（D）。 */
+/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A，可带时间线表 F）和「确定」门槛（D）。 */
 export async function checkChapterByReader(input: {
   readonly projectDir: string;
   readonly chapter: number;
@@ -449,8 +409,6 @@ export async function checkChapterByReader(input: {
     else failures.push(`${CHECKER_PASSES[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
   let issues = mergePasses(passes);
-  // E 同一底层问题去重：同一处前文从本章不同句子各报一条的，只留一条（sure 优先、同档留最早）。不调模型。
-  if (variant.rootCauseDedupe) issues = dedupeRootCauses(issues);
   // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
   if (variant.selfReview && issues.length > 0) {
     try {
