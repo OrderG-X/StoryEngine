@@ -5,6 +5,8 @@
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
  * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
  * 下次核这一章不再报；存失败如实提示「没记住」。可撤回。
+ * 主按钮「改掉这 N 处」在卡上（R4.5）：N 随「不是问题」实时变，intent 由卡片现拼——逐条列要改的原句，
+ * 末尾写明作者标过不是问题的几处别动（服务端下一步不再给笼统的「改掉确定的 N 处」）。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
  */
 import { useState } from "react";
@@ -14,9 +16,31 @@ import type { ChapterMessage } from "../../../types.js";
 type ContinuityCheck = NonNullable<ChapterMessage["continuityCheck"]>;
 type Item = ContinuityCheck["sure"][number];
 
-export function buildContinuityFixIntent(chapter: number, item: Item): string {
+/** 单条「改这处」的那句话（本章原句 ↔ 前文原句 + 理由），单条按钮和批量 intent 共用同一句式。 */
+function continuityItemSentence(chapter: number, item: Item): string {
   const where = item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
-  return `把第 ${chapter} 章里「${item.quote}」这处改掉：它和${where}「${item.earlierQuote}」对不上（${item.reason}）。只改这一处，别的不动。`;
+  const reason = item.reason ? `（${item.reason}）` : "";
+  return `把第 ${chapter} 章里「${item.quote}」这处改掉：它和${where}「${item.earlierQuote}」对不上${reason}。`;
+}
+
+export function buildContinuityFixIntent(chapter: number, item: Item): string {
+  return `${continuityItemSentence(chapter, item)}只改这一处，别的不动。`;
+}
+
+/**
+ * 批量「改掉这 N 处」的 intent（R4.5）：逐条列要改的本章原句（句式同单条），末尾圈死范围——
+ * 只改列出的这几处；作者标过「不是问题」的 dismissedCount 处（含「可能」档划掉的）明确别动，
+ * 免得模型自己复查时把划掉的也顺手改了（验收 3.4）。
+ */
+export function buildContinuityFixAllIntent(
+  chapter: number,
+  items: readonly Item[],
+  dismissedCount: number,
+): string {
+  const entries = items.map((item) => continuityItemSentence(chapter, item)).join("");
+  return dismissedCount > 0
+    ? `${entries}只改这几处；作者标过不是问题的 ${dismissedCount} 处别动。`
+    : `${entries}只改这几处，别的不动。`;
 }
 
 function ItemView({ chapter, item, onRevise, onDismiss }: {
@@ -73,6 +97,16 @@ export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
       defaultOpen
     >
       {total === 0 ? <p className="drc-summary">拿这一章对了前文，没发现前后对不上的地方。</p> : null}
+      {/* 主按钮（R4.5）：改掉还没划掉的「确定」N 处，文字随「不是问题」实时变；intent 现拼、圈死范围。 */}
+      {sure.length > 0 && onRevise ? (
+        <button
+          type="button"
+          className="chip drc-fix-all"
+          onClick={() => onRevise(buildContinuityFixAllIntent(check.chapter, sure, dismissed.length))}
+        >
+          改掉这 {sure.length} 处
+        </button>
+      ) : null}
       {sure.length > 0 ? (
         <ul className="drc-list">
           {sure.map((item) => (

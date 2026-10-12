@@ -276,7 +276,7 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     expect(next.choices[0]).toMatchObject({ label: "预览定稿", recommended: true });
   });
 
-  it("核成且确定 N 处 → 「改掉确定的 N 处」那组选项照旧", async () => {
+  it("核成且确定 N 处 → 下一步只给次要选项（我自己改/预览定稿），不再出笼统的「改掉确定的 N 处」（R4.5：主按钮挪进核账卡）", async () => {
     const events = await runCheck(async () => ({
       ok: true,
       chapter: 5,
@@ -287,7 +287,23 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     }));
     const next = nextStepsOutput(events);
     expect(next.question).toBe("核账做完了，这几处怎么处理？");
-    expect(next.choices[0]).toMatchObject({ label: "改掉确定的 1 处", recommended: true });
+    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿"]);
+    expect(next.choices[0]).toMatchObject({ label: "我自己改", recommended: true });
+    expect(JSON.stringify(next.choices)).not.toContain("改掉确定");
+  });
+
+  it("核成且确定 N 处、结果复用 → 次要选项后仍带「再细核一遍」", async () => {
+    const events = await runCheck(async () => ({
+      ok: true,
+      chapter: 5,
+      reused: true,
+      sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }],
+      maybe: [],
+      failures: [],
+      summary: "核了第 5 章：确定对不上 1 处。",
+    }));
+    const next = nextStepsOutput(events);
+    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿", "再细核一遍"]);
   });
 });
 

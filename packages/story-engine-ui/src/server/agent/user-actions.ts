@@ -287,10 +287,11 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
   // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
   const fresh: NextStepChoice[] = result?.reused === true ? [{ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文" }] : [];
+  // R4.5（验收 3.4）：确定 N 处的主修复动作挪进核账卡——按钮随「不是问题」实时变 N、intent 逐条现拼。
+  // 下一步只给次要选项，不再出笼统的「改掉确定的 N 处」（那句话没圈范围，模型会把划掉的也改了）。
   const choices: NextStepChoice[] = sureCount > 0
     ? [
-      { label: `改掉确定的 ${sureCount} 处`, intent: `按核账结果把第 ${action.chapter} 章确定对不上的那几处改掉，别的不动`, recommended: true },
-      { label: "我自己改", intent: "我自己改，先放着" },
+      { label: "我自己改", intent: "我自己改，先放着", recommended: true },
       { label: "预览定稿", intent: `预览第 ${action.chapter} 章的定稿改动` },
       ...fresh,
     ]
