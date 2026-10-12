@@ -1840,8 +1840,8 @@ async function readCharacterDetailViews(projectDir: string): Promise<readonly Ch
 export async function withUiOverviewDetails(projectDir: string, overview: StateOverview): Promise<StateOverview & {
   readonly calendar?: StoryCalendarView;
   readonly characterDetails?: readonly CharacterDetailView[];
-  /** 核账员后台补读进度（T5 长书）：progress.json 有才带，界面在核账按钮旁显示。 */
-  readonly checkerReading?: { readonly reading: boolean; readonly done: number; readonly total: number };
+  /** 编辑部三个跟读角色的后台补读进度（R4.3）：核账员/记账员/章纲员各读到第几章，任一在读才带。 */
+  readonly readerCatchUp?: { readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] };
   readonly uiChapterFiles?: readonly {
     readonly chapter: number;
     readonly hasDraftFile: boolean;
@@ -1854,26 +1854,25 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
   }[];
 }> {
   const calendar = await readStoryCalendarView(projectDir);
-  const [characterDetails, uiChapterFiles, checkerReading] = await Promise.all([
+  const [characterDetails, uiChapterFiles, readerCatchUp] = await Promise.all([
     readCharacterDetailViews(projectDir),
     readUiChapterFileStates(projectDir),
-    readCheckerReadingProgress(projectDir),
+    readReadersCatchUpProgress(projectDir),
   ]);
   return {
     ...overview,
     ...(calendar ? { calendar } : {}),
     ...(characterDetails.length ? { characterDetails } : {}),
-    ...(checkerReading ? { checkerReading } : {}),
+    ...(readerCatchUp ? { readerCatchUp } : {}),
     ...(uiChapterFiles.length ? { uiChapterFiles } : {}),
   };
 }
 
-/** 核账员的补读进度（agents/checker/progress.json）：没有就不带这个字段（老书没开核账员时界面不显示）。 */
-async function readCheckerReadingProgress(projectDir: string): Promise<{ readonly reading: boolean; readonly done: number; readonly total: number } | undefined> {
-  const { readReaderProgress } = await import("../brain/catch-up.js");
-  const progress = await readReaderProgress(projectDir, "checker").catch(() => undefined);
-  if (!progress) return undefined;
-  return { reading: progress.reading, done: progress.done, total: progress.total };
+/** 三个跟读角色的补读进度（agents/<角色>/progress.json，形状同 catch-up 的 ReadersCatchUpStatus）：全读完就不带（进度行消失）。 */
+async function readReadersCatchUpProgress(projectDir: string): Promise<{ readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] } | undefined> {
+  const { readReadersCatchUpStatus } = await import("../brain/catch-up.js");
+  const status = await readReadersCatchUpStatus(projectDir).catch(() => undefined);
+  return status?.reading ? status : undefined;
 }
 
 // ---------------------------------------------------------------------------

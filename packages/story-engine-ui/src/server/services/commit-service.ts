@@ -127,6 +127,9 @@ export interface ChapterDeltaDeclarationOutcome {
   readonly status: ChapterDeltaDeclarationStatus;
   readonly declaration?: ChapterDeltaDeclaration;
   readonly reason?: string;
+  /** 冷窗口记账（R4.4）：status=model 且记账员还没读完全书时带——这次按已有笔记 + 最近 K 章原文记的账，
+   *  预览卡和摘要据此如实标「更早的细节可能没记全」。 */
+  readonly cold?: { readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number };
 }
 
 function isDeclarationOutcome(value: unknown): value is ChapterDeltaDeclarationOutcome {

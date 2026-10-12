@@ -49,6 +49,50 @@ export async function readReaderProgress(notesRoot: string, roleId: string): Pro
   }
 }
 
+/**
+ * 把一个角色标成「在读」（R4.3 开书时显示）：done 接着上次已有的章数、total 按这轮要读到的章（不小于上次的总数）。
+ * 排进补读队列和真正开读之间有间隔（队列前面可能还有活），先落这个盘，开书那次概况就带得上进度；
+ * 真开读后 startReaderCatchUp 会接着写同一份文件，口径一致。已经在读（reading:true）就不重写。
+ */
+export async function writeReaderReadingProgress(root: string, roleId: string, upTo: number): Promise<void> {
+  const previous = await readReaderProgress(root, roleId);
+  if (previous?.reading) return;
+  const total = Math.max(upTo, previous?.total ?? 0);
+  await writeProgress(root, {
+    role: roleId,
+    reading: true,
+    done: Math.min(previous?.done ?? 0, total),
+    total,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** 编辑部三个跟读角色的 id（跟 index.ts 的 readerRoles() 同序：checker → ledger → planner）。 */
+export const READER_ROLE_IDS: readonly string[] = ["checker", "ledger", "planner"];
+
+/** 一个角色的补读进度（进度行 / 轻量轮询接口用的形状）：没写过 progress.json 的角色当 0/0、不在读。 */
+export interface ReaderCatchUpRoleState {
+  readonly role: string;
+  readonly reading: boolean;
+  readonly done: number;
+  readonly total: number;
+}
+
+/** 三个角色的补读进度一览：reading＝还有任一角色在读（全读完为 false，界面这行进度就消失）。 */
+export interface ReadersCatchUpStatus {
+  readonly reading: boolean;
+  readonly roles: readonly ReaderCatchUpRoleState[];
+}
+
+/** 三个角色的补读进度一览（开书概况和 /api/reader-progress 轮询共用这一份形状）。 */
+export async function readReadersCatchUpStatus(notesRoot: string, roleIds: readonly string[] = READER_ROLE_IDS): Promise<ReadersCatchUpStatus> {
+  const roles = await Promise.all(roleIds.map(async (roleId): Promise<ReaderCatchUpRoleState> => {
+    const progress = await readReaderProgress(notesRoot, roleId).catch(() => undefined);
+    return progress ? { role: roleId, reading: progress.reading, done: progress.done, total: progress.total } : { role: roleId, reading: false, done: 0, total: 0 };
+  }));
+  return { reading: roles.some((role) => role.reading), roles };
+}
+
 /** 正在补的角色（进程内）：同一本书同一角色只排一个，后来的直接回。 */
 const activeCatchUps = new Set<string>();
 

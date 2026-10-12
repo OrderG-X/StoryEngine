@@ -17,6 +17,7 @@ import {
   runInReaderCatchUpQueue,
   startReaderCatchUp,
   unmarkReaderCatchUpQueued,
+  writeReaderReadingProgress,
 } from "./catch-up.js";
 import { DEFAULT_READER_VARIANT, callConfiguredBrainModel, checkerRoleFor } from "./checker.js";
 import { LEDGER_ROLE } from "./ledger.js";
@@ -39,7 +40,18 @@ export {
   type PlanProblem,
   type ReaderCheckVariant,
 } from "./checker.js";
-export { isReaderCatchUpQueued, readReaderProgress, runInReaderCatchUpQueue, startReaderCatchUp, type ReaderProgress } from "./catch-up.js";
+export {
+  isReaderCatchUpQueued,
+  readReaderProgress,
+  readReadersCatchUpStatus,
+  runInReaderCatchUpQueue,
+  startReaderCatchUp,
+  writeReaderReadingProgress,
+  READER_ROLE_IDS,
+  type ReaderCatchUpRoleState,
+  type ReaderProgress,
+  type ReadersCatchUpStatus,
+} from "./catch-up.js";
 export { LEDGER_ROLE, declareChapterDeltaByLedger, type LedgerDeclareInput, type LedgerDeclareResult } from "./ledger.js";
 export {
   PLANNER_ROLE,
@@ -53,12 +65,17 @@ export {
 } from "./planner.js";
 export {
   assembleReaderWindow,
+  buildColdReaderWindow,
+  COLD_RECENT_CHAPTERS,
+  COLD_RECENT_MAX_CHARS,
   countCommittedChapters,
   ensureReaderWindow,
   READER_WINDOW_MAX_CHARS,
   writeAtomically,
   type BrainCallModel,
   type BrainMessage,
+  type ColdCoverage,
+  type ColdReaderWindow,
   type ReaderRole,
   type VolumeNoteEntry,
 } from "./reader-window.js";
@@ -115,6 +132,8 @@ export function warmUpReaders(
 /**
  * 打开书（state-overview）时看一眼：哪个专员的笔记还没读齐 → 后台按共用队列接着补。
  * 已经在读（队列里去重）/ 已经读齐就不再排；没有定稿章节的书不排。永不抛错。
+ * R4.3：排进队后、返回之前，先把第一个要读的角色标成 reading（done 接着已有的），
+ * 这样路由紧接着建的开书概况就带得上进度，不用刷新页面才看到。
  */
 export async function maybeStartReadersCatchUp(
   projectDir: string,
@@ -127,6 +146,9 @@ export async function maybeStartReadersCatchUp(
     for (const role of wanted) {
       const progress = await readReaderProgress(projectDir, role.id);
       if (!progress || progress.reading || progress.done < total) {
+        // 队列按 checker → ledger → planner 依次补，第一个没读齐的就是第一个要读的；
+        // 它已经在读（上次开着开着又刷新了页面）就不用重写，盘上的进度本来就是真的。
+        await writeReaderReadingProgress(projectDir, role.id, total).catch(() => undefined);
         void catchUpReaders(projectDir, total, options);
         return;
       }

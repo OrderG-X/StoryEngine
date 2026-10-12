@@ -31,7 +31,13 @@ const outputSchema = z.object({
   pending: z.object({
     done: z.number().int().describe("已读到第几章。"),
     total: z.number().int().describe("共多少章。"),
-  }).optional().describe("只在「还在读、这次没核」时有：核账员读到第 done / total 章。要区分「还在读」和「出错」用这个字段，别解析 failures 文字。"),
+  }).optional().describe("只在「还在读、这次没核」时有：核账员读到第 done / total 章。要区分「还在读」和「出错」用这个字段，别解析 failures 文字。（R4.4 冷窗口起「还在读」也照核 ok:true，此字段保留给未来真没核成的情况。）"),
+  coverage: z.object({
+    mode: z.literal("cold"),
+    notedThrough: z.number().int().describe("已读笔记到第几章（0＝一章笔记都还没有）。"),
+    rawFrom: z.number().int().describe("这次给了原文的第几章起（0＝一章都没给）。"),
+    rawTo: z.number().int().describe("这次给了原文到第几章（含）。"),
+  }).optional().describe("冷窗口核账＝核账员还没读完全书也先核（R4.4）：notedThrough / rawFrom～rawTo 说清这次实际对照的范围；summary 已如实说明，转述时别把范围说成全书。"),
   dismissed: z.number().int().describe("作者以前标过「不是问题」、这次没再报的条数。"),
   reused: z.boolean().describe("这一章和前文都没改过，直接用的上次核账结果（没调模型）。"),
   summary: z.string().describe("给作者看的一句话结论。"),

@@ -78,6 +78,98 @@ export interface ReaderWindowEntry {
   readonly note: string;
 }
 
+// ---------------------------------------------------------------------------
+// 冷窗口（2026-10-13 编辑部 R4.4）：专员还没读完全书时先干活用的窗口
+// ---------------------------------------------------------------------------
+
+/** 冷窗口里「最近 K 章原文」的 K 上限（章数）。 */
+export const COLD_RECENT_CHAPTERS = 8;
+/** 冷窗口里「最近 K 章原文」这部分最多多少字（超了从最老的一章起让位，至少保住最近一章）。 */
+export const COLD_RECENT_MAX_CHARS = 60_000;
+
+/** 冷窗口实际对照到哪里（回执如实用，不给作者看裸结构）。 */
+export interface ColdCoverage {
+  /** 已有笔记到第几章（0＝一章笔记都还没有）。 */
+  readonly notedThrough: number;
+  /** 这次给了原文的第几章起（0＝一章原文都没给）。 */
+  readonly rawFrom: number;
+  /** 这次给了原文到第几章（含）。 */
+  readonly rawTo: number;
+}
+
+export interface ColdReaderWindow {
+  readonly messages: BrainMessage[];
+  readonly coverage: ColdCoverage;
+  /** 前文里这次看不到原文的章数（只剩笔记的 + 什么都没有的）：核账员据此决定要不要翻原文。 */
+  readonly foldedChapters: number;
+}
+
+/** 冷窗口原文块（一条 user 消息）：先说清「只给了最近这几章、中间哪些章没给」，再按章给原文。 */
+function coldRawMessage(chapters: readonly { readonly chapter: number; readonly body: string }[], notedThrough: number): string {
+  if (chapters.length === 0) return "【前文原文】这次一章原文都没给你，前面只有已写下的笔记（见上）。";
+  const from = chapters[0]!.chapter;
+  const to = chapters[chapters.length - 1]!.chapter;
+  const parts = [`【第 ${from}～${to} 章 定稿原文（你还没读过这些章、也没写过笔记，这次直接给你原文）】`];
+  if (from > notedThrough + 1) {
+    parts.push(`（第 ${notedThrough + 1}～${from - 1} 章这次没给你——既没笔记也没原文，那些章的细节这次对不到。）`);
+  }
+  for (const item of chapters) parts.push(`【第 ${item.chapter} 章】\n${item.body}`);
+  return parts.join("\n\n");
+}
+
+/**
+ * 冷窗口（R4.4 冷窗口兜底）：要补的笔记太多（后台补读还在跑）时不跳过，先拿这个窗口干活——
+ * 角色说明 + 已有笔记（有几章算几章，按「原文已省略」的折叠形态，和正常窗口折过的前缀同构）
+ * + 最近 K 章原文（默认最多 COLD_RECENT_CHAPTERS 章、这部分 ≤ COLD_RECENT_MAX_CHARS 字）。
+ * 只读磁盘：不调模型、一个字都不落盘（绝不把冷窗口当成读书笔记写进 agents/<role>/notes，免得和正常补读混在一起）。
+ * 总预算超了先从最老的笔记起丢（最近的状态最要紧），实在装不下时至少保住最近一章原文。
+ */
+export async function buildColdReaderWindow(input: {
+  readonly projectDir: string;
+  readonly role: ReaderRole;
+  /** 要对照到的最后一章（核第 N 章时是 N-1）。 */
+  readonly upTo: number;
+  /** 笔记存放的根目录；缺省就是书目录。 */
+  readonly notesRoot?: string;
+  readonly maxRecentChapters?: number;
+  readonly maxRecentChars?: number;
+  /** 窗口总字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值）。 */
+  readonly maxChars?: number;
+}): Promise<ColdReaderWindow> {
+  const root = input.notesRoot ?? input.projectDir;
+  const maxRecentChapters = input.maxRecentChapters ?? COLD_RECENT_CHAPTERS;
+  const maxRecentChars = input.maxRecentChars ?? COLD_RECENT_MAX_CHARS;
+  const maxChars = input.maxChars ?? READER_WINDOW_MAX_CHARS;
+  const state = await inspectNotes({ projectDir: input.projectDir, root, role: input.role, upTo: input.upTo });
+  // 最近 K 章原文：从「笔记断点的下一章」和「倒数第 K 章」里取更靠后的那个起，能读到的正文读不到就停。
+  const recent: { readonly chapter: number; readonly body: string }[] = [];
+  for (let chapter = Math.max(state.valid.length + 1, state.upTo - maxRecentChapters + 1); chapter <= state.upTo; chapter += 1) {
+    const body = state.bodies[chapter - 1] ?? "";
+    if (!body) break;
+    recent.push({ chapter, body });
+  }
+  while (recent.length > 1 && recent.reduce((sum, item) => sum + item.body.length, 0) > maxRecentChars) recent.shift();
+  const rawText = coldRawMessage(recent, state.valid.length);
+  const noteSize = (entry: ReaderWindowEntry): number => foldedUserContent(entry.chapter).length + entry.note.length;
+  const totalWith = (notes: readonly ReaderWindowEntry[]): number =>
+    input.role.system.length + notes.reduce((sum, entry) => sum + noteSize(entry), 0) + rawText.length;
+  let notes = state.valid;
+  while (notes.length > 0 && totalWith(notes) > maxChars) notes = notes.slice(1);
+  const messages: BrainMessage[] = [
+    { role: "system", content: input.role.system },
+    ...notes.flatMap((entry): BrainMessage[] => [
+      { role: "user", content: foldedUserContent(entry.chapter) },
+      { role: "assistant", content: entry.note },
+    ]),
+    { role: "user", content: rawText },
+  ];
+  return {
+    messages,
+    coverage: { notedThrough: state.valid.length, rawFrom: recent[0]?.chapter ?? 0, rawTo: recent[recent.length - 1]?.chapter ?? 0 },
+    foldedChapters: Math.max(0, state.upTo - recent.length),
+  };
+}
+
 const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex").slice(0, 16);
 
 const chapterFile = (projectDir: string, chapter: number): string =>

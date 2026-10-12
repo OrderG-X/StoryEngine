@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -70,7 +70,7 @@ describe("declareChapterDeltaByLedger", () => {
       establishedNames: ["林舟", "陈老师"],
       openGoalTitles: ["把店开下去"],
     });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.outcome.status).toBe("model");
     // 编号 T1 换算回线索标题（resolveThreadRefs 的行为）
     expect(result.outcome.declaration?.resolvedForeshadowing[0]?.targetThreadHint).toBe("陈老师周五取书");
@@ -100,7 +100,7 @@ describe("declareChapterDeltaByLedger", () => {
     const dir = await makeBook([]);
     const { callModel, calls } = fakeModel(DECLARATION_JSON);
     const result = await declareChapterDeltaByLedger({ projectDir: dir, chapter: 1, draft: CH1, callModel });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.outcome.status).toBe("model");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.messages).toHaveLength(2);
@@ -108,13 +108,18 @@ describe("declareChapterDeltaByLedger", () => {
     expect(calls[0]?.messages.at(-1)?.content).not.toContain("【上一章结尾（仅用于判断衔接");
   });
 
-  it("要补的笔记超过 maxCatchUp → skipped=not_ready，不发声明调用", async () => {
+  it("要补的笔记超过 maxCatchUp → 冷窗口照记账（cold 带范围、并进 outcome.cold），不补笔记也不落盘", async () => {
     const dir = await makeBook([CH1, CH2]);
     const { callModel, calls } = fakeModel(DECLARATION_JSON);
     const result = await declareChapterDeltaByLedger({ projectDir: dir, chapter: 3, draft: DRAFT, callModel, maxCatchUp: 1 });
-    expect(result.skipped).toBe("not_ready");
-    expect(result.outcome.status).toBe("fallback");
-    expect(calls).toHaveLength(0);
+    expect(result.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
+    expect(result.outcome.status).toBe("model");
+    expect(result.outcome.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
+    // 只发声明那一次调用（json:true），一个笔记都不写；agents/ 目录不该出现
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.json).toBe(true);
+    expect(calls[0]!.messages[1]!.content).toContain("【第 1～2 章 定稿原文");
+    expect(await stat(join(dir, "agents")).then(() => true, () => false)).toBe(false);
   });
 
   it("补笔记失败 → fallback + 原因（已写下的笔记留着）", async () => {
@@ -129,7 +134,7 @@ describe("declareChapterDeltaByLedger", () => {
       return DECLARATION_JSON;
     };
     const result = await declareChapterDeltaByLedger({ projectDir: dir, chapter: 3, draft: DRAFT, callModel });
-    expect(result.skipped).toBeUndefined();
+    expect(result.cold).toBeUndefined();
     expect(result.outcome.status).toBe("fallback");
     expect(result.outcome.reason).toContain("记账员读前文没成");
     expect(await readFile(join(dir, "agents", LEDGER_ROLE.id, "notes", "0001.json"), "utf-8")).toContain("笔记");

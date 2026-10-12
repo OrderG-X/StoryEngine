@@ -55,28 +55,35 @@ describe("buildDeclareDeltaRouter（记账员一路）", () => {
     }));
   });
 
-  it("记账员没准备好（not_ready）→ 这次声明按 fallback 如实说「还在读前文」，后台补它的笔记", async () => {
+  it("记账员还没读完全书 → 冷窗口照记账（声明 + outcome.cold 范围），后台照补它的笔记", async () => {
     const dir = await makeHomeTempDir("ledger-route-");
     await mkdir(join(dir, "chapters"), { recursive: true });
     await writeFile(join(dir, "chapters", "0001.md"), "# 第1章\n\n正文1。\n", "utf-8");
     await writeFile(join(dir, "chapters", "0002.md"), "# 第2章\n\n正文2。\n", "utf-8");
+    const cold = { notedThrough: 0, rawFrom: 1, rawTo: 2 };
     ledgerMock.declareChapterDeltaByLedger.mockResolvedValue({
-      outcome: { status: "fallback", reason: "记账员还在读前文，这次没有记账" },
-      skipped: "not_ready",
-      pending: { done: 0, total: 2 },
+      outcome: { ...MODEL_OUTCOME, cold },
+      cold,
     } satisfies LedgerDeclareResult);
     const router = buildDeclareDeltaRouter({
       ledgerCallModel: async () => "记账笔记",
     });
     const outcome = await router({ chapter: 3, draft: "正文。", projectDir: dir });
-    // 不拿旧声明顶：如实 fallback，原因一路带进 declarationStatus=fallback 的通道。
-    expect(outcome).toEqual({ status: "fallback", reason: "记账员还在读前文，这次没有记账" });
+    // 账照记（status=model），范围原样带出——预览卡据此标「按最近 K 章记账」。
+    expect(outcome).toEqual({ ...MODEL_OUTCOME, cold });
     // 后台补笔记（void 不等待）：轮询等到记账员第 1、2 章笔记落盘。
     const notesPath = join(dir, "agents", LEDGER_ROLE.id, "notes");
     for (let i = 0; i < 40 && !(await readFile(join(notesPath, "0002.json"), "utf-8").then(() => true, () => false)); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect(await readFile(join(notesPath, "0002.json"), "utf-8")).toContain("记账笔记");
+  });
+
+  it("ledgerMaxCatchUp 注入点：传 0 = 一律冷窗口（评测强制冷窗口用）", async () => {
+    ledgerMock.declareChapterDeltaByLedger.mockResolvedValue({ outcome: MODEL_OUTCOME } satisfies LedgerDeclareResult);
+    const router = buildDeclareDeltaRouter({ ledgerMaxCatchUp: 0 });
+    await router(INPUT);
+    expect(ledgerMock.declareChapterDeltaByLedger).toHaveBeenCalledWith(expect.objectContaining({ maxCatchUp: 0 }));
   });
 
   it("拿不到 projectDir → 如实 fallback（没有打开的书，没法记账），不碰记账员", async () => {

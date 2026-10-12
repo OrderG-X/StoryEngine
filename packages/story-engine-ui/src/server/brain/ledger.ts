@@ -20,7 +20,7 @@ import {
   type DeclarationDropListener,
 } from "../agent/tools/chapter-delta-declaration.js";
 import type { ChapterDeltaDeclarationOutcome } from "../services/commit-service.js";
-import { ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
+import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 
 export const LEDGER_ROLE: ReaderRole = {
   id: "ledger",
@@ -61,17 +61,16 @@ export interface LedgerDeclareInput {
   readonly openGoalTitles?: readonly string[];
   /** 笔记存放的根目录；缺省就是书目录。 */
   readonly notesRoot?: string;
-  /** 需要新写的笔记超过这个数就不写了（返回 skipped=not_ready，调用方如实说「还在读前文」并后台补）。 */
+  /** 需要新写的笔记超过这个数就不当场补，改走冷窗口（已有笔记 + 最近 K 章原文先记账，R4.4）。 */
   readonly maxCatchUp?: number;
 }
 
 export interface LedgerDeclareResult {
   /** 声明结果（status=model/fallback），调用方直接当声明通道的返回用。 */
   readonly outcome: ChapterDeltaDeclarationOutcome;
-  /** not_ready＝要补的笔记太多，这次没走记账员（调用方如实说「还在读前文」，笔记在后台补）。 */
-  readonly skipped?: "not_ready";
-  /** not_ready 时已读到第 done 章、总共 total 章。 */
-  readonly pending?: { readonly done: number; readonly total: number };
+  /** 冷窗口＝记账员还没读完全书（笔记要补的太多，后台在补），这次按已有笔记 + 最近 K 章原文记的账。
+   *  已并进 outcome.cold（预览卡据此如实标「按最近 K 章记账」）；这里单独留一份给调用方触发后台补读。 */
+  readonly cold?: ColdCoverage;
 }
 
 /** 把异常文本压成一行、截短（不含草稿正文）。 */
@@ -91,6 +90,7 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
     return fallback("正文为空，没有可声明的章节语义");
   }
   let window;
+  let cold: ColdCoverage | undefined;
   try {
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
@@ -101,10 +101,19 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
     }));
     if (ready.missing > 0) {
-      // 补笔记太多：这次不用记账员，如实说（这章的声明按 fallback 兜底），笔记由调用方在后台补。
-      return { outcome: { status: "fallback", reason: "记账员还在读前文，这次没有记账" }, skipped: "not_ready", pending: { done: ready.reused, total: ready.reused + ready.missing } };
+      // R4.4 冷窗口兜底：要补的笔记太多不再走 fallback 空转——已有笔记 + 最近 K 章原文先记账，
+      // 冷窗口的范围随声明带回（预览卡如实标），笔记由调用方在后台接着补。冷窗口不落盘任何笔记。
+      const built = await buildColdReaderWindow({
+        projectDir: input.projectDir,
+        role: LEDGER_ROLE,
+        upTo: input.chapter - 1,
+        ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      });
+      window = built.messages;
+      cold = built.coverage;
+    } else {
+      window = ready.messages;
     }
-    window = ready.messages;
   } catch (error) {
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没声明成。
     return fallback(`记账员读前文没成：${compactErrorText(error)}`);
@@ -133,7 +142,11 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
       return fallback("记账员的输出无法解析成结构化 JSON");
     }
     warnLikelyCopiedSummaries(input.chapter, declaration);
-    return { outcome: { status: "model", declaration: resolveThreadRefs(declaration, input.openThreadTitles ?? []) } };
+    const resolved = resolveThreadRefs(declaration, input.openThreadTitles ?? []);
+    // 冷窗口记账：范围并进 outcome（预览卡据此如实标），单独一份让调用方好触发后台补读。
+    return cold
+      ? { outcome: { status: "model", declaration: resolved, cold }, cold }
+      : { outcome: { status: "model", declaration: resolved } };
   } catch (error) {
     console.warn(`[chapter-delta] ch${input.chapter} 记账员声明调用异常（${error instanceof Error ? error.message : String(error)}），这章按确定性规则兜底`);
     return fallback(`记账员声明模型调用失败：${compactErrorText(error)}`);

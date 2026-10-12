@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { readReaderProgress, startReaderCatchUp, type ReaderProgress } from "./catch-up.js";
+import { readReaderProgress, readReadersCatchUpStatus, startReaderCatchUp, writeReaderReadingProgress, type ReaderProgress } from "./catch-up.js";
 import type { BrainCallModel, BrainMessage, ReaderRole } from "./reader-window.js";
 
 const ROLE: ReaderRole = { id: "tester", system: "你是测试专员。", noteTask: "写笔记。", volumeTask: "缩写成一份卷笔记。" };
@@ -94,6 +94,50 @@ describe("后台补读：进度落盘", () => {
     expect(await progressOf(dir)).toBeUndefined();
   });
 });
+
+describe("开书时先把第一个要读的角色标成在读（R4.3）", () => {
+  it("writeReaderReadingProgress：没进度 → reading:true、done 接着已有的、total 不小于上次", async () => {
+    const dir = await makeBook(6);
+    // 没写过：0/6 起步。
+    await writeReaderReadingProgress(dir, ROLE.id, 6);
+    expect(await progressOf(dir)).toMatchObject({ role: ROLE.id, reading: true, done: 0, total: 6 });
+    // 上次读到 2、目标是 8：done 接着 2，total 抬到 8。
+    await writeAtomicallyHelper(dir, ROLE.id, { role: ROLE.id, reading: false, done: 2, total: 6, updatedAt: "t" });
+    await writeReaderReadingProgress(dir, ROLE.id, 8);
+    expect(await progressOf(dir)).toMatchObject({ reading: true, done: 2, total: 8 });
+  });
+
+  it("writeReaderReadingProgress：已经在读就不重写（不把正在走的进度打回）", async () => {
+    const dir = await makeBook(4);
+    await writeAtomicallyHelper(dir, ROLE.id, { role: ROLE.id, reading: true, done: 3, total: 4, updatedAt: "t" });
+    const before = await readFile(join(dir, "agents", ROLE.id, "progress.json"), "utf-8");
+    await writeReaderReadingProgress(dir, ROLE.id, 4);
+    expect(await readFile(join(dir, "agents", ROLE.id, "progress.json"), "utf-8")).toBe(before);
+  });
+
+  it("readReadersCatchUpStatus：三个角色按 checker→ledger→planner 带，没写过的 0/0、全读完 reading:false", async () => {
+    const dir = await makeBook(3);
+    await writeAtomicallyHelper(dir, "checker", { role: "checker", reading: true, done: 1, total: 3, updatedAt: "t" });
+    await writeAtomicallyHelper(dir, "ledger", { role: "ledger", reading: false, done: 3, total: 3, updatedAt: "t" });
+    expect(await readReadersCatchUpStatus(dir)).toEqual({
+      reading: true,
+      roles: [
+        { role: "checker", reading: true, done: 1, total: 3 },
+        { role: "ledger", reading: false, done: 3, total: 3 },
+        { role: "planner", reading: false, done: 0, total: 0 },
+      ],
+    });
+    // checker 也读完：整体 reading:false（界面这行进度就该消失）。
+    await writeAtomicallyHelper(dir, "checker", { role: "checker", reading: false, done: 3, total: 3, updatedAt: "t" });
+    expect((await readReadersCatchUpStatus(dir)).reading).toBe(false);
+  });
+});
+
+/** 测试里直接摆一个 progress.json（readReaderProgress 认的形状）。 */
+async function writeAtomicallyHelper(dir: string, roleId: string, payload: ReaderProgress): Promise<void> {
+  await mkdir(join(dir, "agents", roleId), { recursive: true });
+  await writeFile(join(dir, "agents", roleId, "progress.json"), `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+}
 
 // 开书时看一眼要不要补（maybeStartReadersCatchUp，三个角色版）的测试在 index.test.ts——函数在 index.ts，
 // 要看三个角色的开关和共用队列。

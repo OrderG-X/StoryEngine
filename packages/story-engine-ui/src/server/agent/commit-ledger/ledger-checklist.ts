@@ -9,7 +9,7 @@
  */
 import { factKey, type FactProposal, type FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
 
-export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed" | "structure_failed";
+export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed" | "structure_failed" | "cold_ledger";
 
 export interface LedgerChecklistItem {
   readonly id: string;
@@ -73,10 +73,20 @@ export function buildLedgerChecklist(input: {
   readonly displayFact?: (text: string) => string;
   /** AI 没读出这章的结构（章节语义声明没拿到）时的原因：线索、目标、人物状态这次都不会记，清单上要明说。 */
   readonly structureMissing?: string;
+  /** 冷窗口记账的整句（R4.4：记账员还没读完全书、按最近 K 章记的账）：清单顶上标一行，不能勾。 */
+  readonly coldLedgerNote?: string;
 }): readonly LedgerChecklistItem[] {
   const show = input.displayFact ?? ((text: string) => text);
   const { chapter, plan, facts } = input;
   const items: LedgerChecklistItem[] = [];
+  if (input.coldLedgerNote?.trim()) {
+    items.push({
+      id: "cold_ledger",
+      kind: "cold_ledger",
+      label: input.coldLedgerNote.trim(),
+      removable: false,
+    });
+  }
   if (input.structureMissing !== undefined) {
     // 2026-10-10 起线索只听声明：没拿到就一条线索都不记，绝不让清单看起来「这章没线索可记」。
     const reason = input.structureMissing.trim();

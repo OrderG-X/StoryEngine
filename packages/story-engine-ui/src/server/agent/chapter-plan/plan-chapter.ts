@@ -338,8 +338,8 @@ const PLANNER_MAX_CATCH_UP = 10;
 
 /**
  * 编辑部拟章纲：章纲员窗口拟纲 → 核账员窗口审纲 → 有问题交回章纲员改一轮（不循环）。
- * 章纲员要补的笔记太多（not_ready）→ 这次按没有章纲出稿，笔记在后台补（下次出稿就是读完全书的章纲员）；
- * 核账员没读完（not_ready）→ 章纲照用、这次没审，同样后台补。都不阻断出稿。
+ * R4.4 冷窗口兜底：章纲员 / 核账员还没读完全书（要补的笔记太多）不再「按没有章纲出稿」——
+ * 拿已有笔记 + 最近 K 章原文照拟照审，note 里如实标「这次对照了多少」，笔记在后台接着补，读齐自动回正常路。
  */
 async function planByEditorialRoom(input: {
   readonly projectDir: string;
@@ -356,16 +356,18 @@ async function planByEditorialRoom(input: {
     callModel: plannerCallModel,
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
-  if (!planned.ok && planned.skipped === "not_ready") {
-    // 章纲员还在读前文：这次不拟纲（不拿没读过前文的拼材料路顶），笔记在后台补，出稿照常。
-    const pending = planned.pending;
-    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: plannerCallModel });
-    return {
-      note: `章纲员还在读这本书的前文${pending ? `（第 ${pending.done} / ${pending.total} 章）` : ""}，这次按没有章纲出稿；它读完后下一次出稿就按读完全书来拟。`,
-      reused: false,
-    };
-  }
   if (!planned.ok) return { note: `${planned.reason}；这次按没有章纲出稿。`, reused: false };
+  // 冷窗口拟纲：章纲员还没读完全书（拟是照已有笔记 + 最近 K 章原文拟的），笔记后台接着补。
+  let planColdNote = "";
+  if (planned.cold) {
+    void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: plannerCallModel });
+    planColdNote = `章纲员还没读完全书（第 ${planned.cold.notedThrough} / ${input.chapter - 1} 章），这次按${
+      [
+        ...(planned.cold.notedThrough > 0 ? ["已读笔记"] : []),
+        ...(planned.cold.rawTo > 0 ? [`第 ${planned.cold.rawFrom}～${planned.cold.rawTo} 章原文`] : []),
+      ].join(" + ")
+    }拟的纲，更早的细节可能漏。`;
+  }
   // 动笔前核账员先审章纲：它读过前文，找章纲里和前文对不上的要点（照片那种：第 5 章已带回家，章纲又安排来取）。
   const checkCallModel = input.planCheckReaderCallModel ?? callConfiguredBrainModel;
   const checked = await withStep("审", () => checkPlanByReader({
@@ -375,21 +377,23 @@ async function planByEditorialRoom(input: {
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
   const brief = (lines: readonly string[]) => `${lines.slice(0, 2).join("；")}${lines.length > 2 ? "等" : ""}`;
-  if (checked.skipped === "not_ready") {
-    // 核账员没读完前文：章纲照用、这次没审（如实说），笔记后台补（点名 checker）。
-    const pending = checked.pending;
+  const coldBasis = (cold: { readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number }): string =>
+    [
+      ...(cold.notedThrough > 0 ? ["已读笔记"] : []),
+      ...(cold.rawTo > 0 ? [`第 ${cold.rawFrom}～${cold.rawTo} 章原文`] : []),
+    ].join(" + ");
+  // 冷窗口审纲：核账员还没读完全书，这次按已有笔记 + 最近 K 章原文审的，笔记后台接着补（点名 checker）。
+  let checkColdNote = "";
+  if (checked.cold) {
     void catchUpReaders(input.projectDir, input.chapter - 1, { callModel: checkCallModel, roles: ["checker"] });
-    return {
-      plan: planned.plan,
-      note: `本章章纲：${planned.plan.summary}（核账员还在读前文${pending ? `（第 ${pending.done} / ${pending.total} 章）` : ""}，这次没审章纲。）`,
-      reused: false,
-    };
+    checkColdNote = `核账员还没读完全书（第 ${checked.cold.notedThrough} / ${input.chapter - 1} 章），这次按${coldBasis(checked.cold)}审的纲，更早的细节可能漏。`;
   }
+  const coldNote = [planColdNote, checkColdNote].filter(Boolean).map((note) => `（${note}）`).join("");
   if (checked.failures.length > 0) {
-    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（章纲审校这次没跑成：${checked.failures[0]}）`, reused: false };
+    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（章纲审校这次没跑成：${checked.failures[0]}）${coldNote}`, reused: false };
   }
   if (checked.problems.length === 0) {
-    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}`, reused: false };
+    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}${coldNote}`, reused: false };
   }
   // 有问题：把问题列表交回章纲员窗口，只改有问题的要点，改一轮、不循环。改不成就用原章纲（如实说明）。
   const revised = await withStep("改", () => revisePlanByPlanner({
@@ -401,15 +405,16 @@ async function planByEditorialRoom(input: {
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
   if (revised.ok) {
+    const reviseColdNote = revised.cold && !planned.cold ? "（改纲这次按最近几章原文改的。）" : "";
     return {
       plan: revised.plan,
-      note: `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉：${brief(checked.problems.map((problem) => problem.reason))}）`,
+      note: `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉：${brief(checked.problems.map((problem) => problem.reason))}）${coldNote}${reviseColdNote}`,
       reused: false,
     };
   }
   return {
     plan: planned.plan,
-    note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.skipped === "not_ready" ? "章纲员还在读前文" : revised.reason}。）`,
+    note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.reason}。）${coldNote}`,
     reused: false,
   };
 }
