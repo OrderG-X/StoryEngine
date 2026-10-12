@@ -41,8 +41,11 @@ export const LEDGER_ROLE: ReaderRole = {
 /** 记账员比旧路多强调的几条（通用写法，绝不写进具体书名、人名）。 */
 const LEDGER_EXTRA_RULES: readonly string[] = [
   "你读过前文：同一件事只报一条；前文已经立过的问题不要当成新开的线索再报一遍。",
-  "前文立过的打算 / 待办，本章正文写出了做完或兑现，就报进 resolvedForeshadowing 并把那条的编号（如 T2）填进 targetThreadHint；谜底揭开也一样，不要新建目标。",
-  "正文里出现的新称呼如果指的是已有人物：charactersPresent 的 name 写正文里那个称呼（必须逐字出现在 quote 里），aliasOf 填那个人的已确立名字，identityHint 写「即 某某」。",
+  "本章第一次冒出来的一个悬念也只开一条线索：同一个谜不要既开「它是什么」又开「为什么是它」两条——角度不同也算同一条，报成一条，把疑点写进 summary。",
+  "前文立过的打算 / 待办，本章正文写出了做完或兑现，就报进 resolvedForeshadowing 并把那条的编号（如 T2）填进 targetThreadHint。报 keyLeads advanced 或留 pendingIntents 之前先想一遍：它是不是其实已经做完了？做完了的一律报回收，别让它一直挂着；谜底揭开也一样，不要新建目标。",
+  "判断待办做没做完，只看那个动作本身：正文写到这个动作做成了（问过了、找到了、交出去了、打开了、办下来了），这条待办就算完成，报回收；动作完成之后又冒出的新问题，是另外的事，另开新线索，不影响旧待办回收。",
+  "正文里出现的新称呼如果指的是已有人物：charactersPresent 的 name 写正文里那个称呼（必须逐字出现在 quote 里），aliasOf 填那个人的已确立名字，identityHint 写「即 某某」。同一个人本章的多种叫法只报一条，用最主要的那个。",
+  "可选字段（conflict / discovery / decision / continuityWithPrevious）没有就整个键都不写；写了就每个子键都写全，不要只写一半或给空对象。",
 ];
 
 export interface LedgerDeclareInput {
