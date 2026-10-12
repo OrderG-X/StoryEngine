@@ -198,8 +198,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     "- 谁在哪：人物的位置和行程按前文接不接得上",
     "- 谁知道什么：章纲安排人物说出或用到的信息，他按前文还不可能知道",
     "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
-    "- 前文已经做过、发现、确认过的事，章纲又安排一遍",
-    "章纲明确安排了变化过程的、作者方向明确要求的，不算。",
+    "只报按前文不可能成立的安排；章纲明确安排了变化过程的、作者方向明确要求的，不算。",
     "每条 problems：point 写第几条要点（下面要点列表的序号）；earlierQuote 逐字抄前文和它冲突的那一句；earlierChapter 写那句在第几章；reason 一句话说哪里对不上。抄不出原文的不要报。",
     `【第 ${chapter} 章章纲】`,
     `一句话：${plan.summary}`,
@@ -216,6 +215,9 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
 function earlierByText(earlier: EarlierText): ReadonlyMap<number, string> {
   return new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
 }
+
+/** 理由自己就否决了的（「此点成立，不报」「与前文一致」）：模型把自我否决的候选也输出了，不当问题收。 */
+const SELF_DISMISSED_PLAN = /不报|不矛盾|没有矛盾|无矛盾|前后一致|说法一致|不冲突|不算|说得通|此点成立/u;
 
 /** 要点序号：数字、「第 2 条」都收；越界（或没写）丢掉。 */
 function readPoint(raw: unknown, beats: readonly string[]): number | undefined {
@@ -245,7 +247,7 @@ export function parsePlanProblems(text: string, plan: ChapterPlan, earlier: Earl
     const earlierQuote = String(record.earlierQuote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     const point = readPoint(record.point ?? record.beat, plan.beats);
-    if (!point || !earlierQuote || !reason) continue;
+    if (!point || !earlierQuote || !reason || SELF_DISMISSED_PLAN.test(reason)) continue;
     const claimed = Number(record.earlierChapter);
     const inClaimed = Number.isInteger(claimed) && claimed >= 1 && byChapter.has(claimed) && containsQuote(byChapter.get(claimed)!, earlierQuote);
     const chapter = inClaimed

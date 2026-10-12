@@ -9,6 +9,7 @@
 import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
+import { normalize, readEarlierChapters } from "../agent/continuity-v2/check-chapter.js";
 import {
   collectPlanMaterials,
   isSkeletonPlan,
@@ -182,12 +183,25 @@ function planJson(plan: ChapterPlan): Record<string, unknown> {
   };
 }
 
+/** 冲突原句在前文里的上下文（归一化后定位，前后各 80 字）。窗口十几万字，模型常定位不到原句才改不对，把那段直接贴给它。 */
+function quoteContext(body: string, quote: string): string | undefined {
+  const nb = normalize(body);
+  const nq = normalize(quote);
+  const at = nq.length >= 4 ? nb.indexOf(nq) : -1;
+  if (at < 0) return undefined;
+  return nb.slice(Math.max(0, at - 80), Math.min(nb.length, at + nq.length + 80));
+}
+
 /** 把核账员审出的问题交回章纲员窗口的那条任务消息：只改有问题的要点，其余逐字照抄。 */
-export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonly PlanProblem[]): string {
+export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonly PlanProblem[], contexts: readonly (string | undefined)[] = []): string {
   return [
     `你为第 ${chapter} 章拟的章纲，核账员审出 ${problems.length} 处和前文对不上：`,
-    ...problems.map((problem, index) => `${index + 1}. 第 ${problem.point} 条要点「${problem.beat ?? plan.beats[problem.point - 1] ?? ""}」：和第 ${problem.earlierChapter} 章「${problem.earlierQuote}」对不上——${problem.reason}`),
-    "按前文把有问题的那几条要点改对（东西在谁手里就照前文安排、日子照前文算、人物还不知道的就改成他不知道），其余内容逐字照抄原章纲；改过的要点保持原来的长短，不要借机添细节。",
+    ...problems.map((problem, index) => [
+      `${index + 1}. 第 ${problem.point} 条要点「${problem.beat ?? plan.beats[problem.point - 1] ?? ""}」：和第 ${problem.earlierChapter} 章对不上——${problem.reason}`,
+      contexts[index] ? `   前文第 ${problem.earlierChapter} 章那段：「…${contexts[index]}…」` : `   冲突的前文原句：「${problem.earlierQuote}」`,
+    ].join("\n")),
+    "按前文把这几条要点改对：可以整条重写（东西在谁手里就照前文安排、人在哪就照前文安排、日子照前文算、人物还不知道的事就改成他不知道的），不要只换说法糊弄过去；其余要点逐字照抄原章纲，改过的要点保持原来的长短。",
+    "改完自己把改过的每条要点对照上面的前文原段再核一遍：别让人物说出按前文他还不可能知道的话。",
     `只输出修正后的完整章纲 JSON（字段同原来）：\n${PLAN_JSON_FIELDS}`,
     `【原章纲（第 ${chapter} 章）】\n${JSON.stringify(planJson(plan), null, 1)}`,
   ].join("\n\n");
@@ -229,8 +243,15 @@ export async function revisePlanByPlanner(input: {
   }
   let raw: Record<string, unknown>;
   try {
+    // 每条问题的冲突原句在前文里的上下文：直接贴进任务消息（窗口太长，模型自己翻不到就改不对）。
+    const earlier = await readEarlierChapters(input.projectDir, input.chapter);
+    const byChapter = new Map(earlier.chapters.map((item) => [item.chapter, item.sentences.join("")]));
+    const contexts = input.problems.map((problem) => {
+      const body = byChapter.get(problem.earlierChapter);
+      return body ? quoteContext(body, problem.earlierQuote) : undefined;
+    });
     const text = await withStep("章纲员改纲", () => input.callModel(
-      [...window, { role: "user", content: reviseTask(input.chapter, input.plan, input.problems) }],
+      [...window, { role: "user", content: reviseTask(input.chapter, input.plan, input.problems, contexts) }],
       { json: true },
     ));
     raw = parsePlanJson(text) as Record<string, unknown>;

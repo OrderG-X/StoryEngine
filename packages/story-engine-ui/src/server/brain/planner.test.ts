@@ -231,7 +231,7 @@ describe("提示词文本", () => {
 
   it("reviseTask 带原章纲和每条问题；planCheckTask 带编号要点", () => {
     const revise = reviseTask(3, BASE_PLAN, PROBLEMS);
-    expect(revise).toContain("把有问题的那几条要点改对");
+    expect(revise).toContain("可以整条重写");
     for (const beat of BASE_PLAN.beats) expect(revise).toContain(beat);
     const check = planCheckTask(3, BASE_PLAN);
     expect(check).toContain("1. 许棠在铺子里等信");

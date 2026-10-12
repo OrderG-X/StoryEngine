@@ -254,6 +254,14 @@ describe("核账员审章纲：解析", () => {
     ]);
   });
 
+  it("理由自己否决了的（「此点成立，不报」）不当问题收", () => {
+    const parsed = parsePlanProblems(problems(
+      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "位置对得上，此点成立，不报" },
+      { point: 2, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "前后一致" },
+    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    expect(parsed).toEqual([]);
+  });
+
   it("不是 JSON 抛错（调用方记失败，不当成没问题）", () => {
     expect(() => parsePlanProblems("没问题", PLAN, { chapters: [] })).toThrow("不是 JSON");
   });
