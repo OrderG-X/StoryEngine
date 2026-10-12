@@ -44,16 +44,21 @@ function comboModel() {
   return callModel;
 }
 
-/** 核账员假模型：记笔记回一句；核账那三遍，「盯人」那遍报周婶。 */
-function readerModel(confidence = "sure") {
-  const calls = { notes: 0, checks: 0 };
+/** 核账员假模型：记笔记回一句；三遍核账里「盯人」那遍报周婶，报了东西就再发一轮自复核（按 verdicts 表回）。 */
+function readerModel(confidence = "sure", verdict = confidence) {
+  const calls = { notes: 0, checks: 0, reviews: 0 };
   const callModel: BrainCallModel = async (messages, options) => {
     if (!options.json) {
       calls.notes += 1;
       return "笔记";
     }
-    calls.checks += 1;
     const last = messages.at(-1)!.content;
+    if (last.includes("你刚才核完报了")) {
+      calls.reviews += 1;
+      const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+      return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict })) });
+    }
+    calls.checks += 1;
     return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence }] : [] });
   };
   return { callModel, calls };
@@ -76,11 +81,11 @@ describe("核账服务：新旧两路的开关", () => {
     const result = await checkChapterBody(dir, 3, BODY, combo, { readerCallModel: reader.callModel });
     expect(result.sure.map((item) => item.quote)).toEqual([WATCH.quote]);
     expect(combo).toHaveBeenCalled();
-    expect(reader.calls).toEqual({ notes: 0, checks: 0 });
+    expect(reader.calls).toEqual({ notes: 0, checks: 0, reviews: 0 });
     expect(await notesCount(dir)).toBe(0);
   });
 
-  it("engine: reader 走核账员：补前文笔记、三遍核账，旧路的模型一次不调", async () => {
+  it("engine: reader 走核账员：补前文笔记、三遍核账加一轮自复核，旧路的模型一次不调", async () => {
     const dir = await makeBook();
     const combo = comboModel();
     const reader = readerModel();
@@ -90,7 +95,7 @@ describe("核账服务：新旧两路的开关", () => {
     expect(result.summary).toContain("确定对不上 1 处");
     expect(result.summary).not.toContain("旧核账");
     expect(combo).not.toHaveBeenCalled();
-    expect(reader.calls).toEqual({ notes: 2, checks: 3 });
+    expect(reader.calls).toEqual({ notes: 2, checks: 3, reviews: 1 });
     expect(await notesCount(dir)).toBe(2);
   });
 

@@ -10,6 +10,7 @@ import {
   callConfiguredBrainModel,
   catchUpReaders,
   checkChapterByReader,
+  DEFAULT_READER_VARIANT,
   isReaderCheckerEnabled,
   type BrainCallModel,
 } from "../../brain/index.js";
@@ -91,6 +92,7 @@ async function checkByReader(input: {
     callModel: input.callModel,
     maxCatchUp: READER_MAX_CATCH_UP,
     earlier: input.earlier,
+    variant: DEFAULT_READER_VARIANT,
   });
   if (reader.skipped === "not_ready") return undefined;
   const ledger = await withStep("账本对账", () => ledgerNumberIssues({

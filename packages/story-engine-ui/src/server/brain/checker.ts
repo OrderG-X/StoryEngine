@@ -4,7 +4,11 @@
  * 核第 N 章时，在「读完第 N-1 章」那一刻的窗口后面接上新稿，分三遍（盯东西 / 盯人 / 盯时间与信息）让它先逐条对照、再列矛盾。
  * 提示词来自评测脚本 scripts/eval/run-reader-agent.mjs（那一版在题库上验证过）：改提示词先在题库上比分，别凭感觉改。
  * 比旧核账（临时拼材料判一次）查得全：窗口里是读过的全文和它自己的笔记，不靠检索拼证据。
+ *
+ * T1 收尾（2026-10-12）加了四个可独立开关的做法（ReaderCheckVariant），在题库上比分后选定默认组合（DEFAULT_READER_VARIANT）：
+ * A 自复核（三遍合并后同一窗口再判一轮）、B 时间线表进核账、C 结构化笔记、D「确定」门槛（纯确定性，不调模型）。
  */
+import { describeTimelineForChapter, readStoryTimeline } from "@actalk/story-engine";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import {
@@ -12,6 +16,7 @@ import {
   normalize,
   parseFullReadIssues,
   readEarlierChapters,
+  splitSentences,
   type ContinuityIssueV2,
   type EarlierText,
 } from "../agent/continuity-v2/check-chapter.js";
@@ -33,6 +38,24 @@ export const CHECKER_ROLE: ReaderRole = {
     "- 地点：方位、距离、路上用多久、样子",
   ].join("\n"),
 };
+
+/** C 结构化笔记：笔记按固定小节、一行一条硬信息。提示词变了，旧格式笔记作废（roleHash 变了），这是预期的。 */
+export const CHECKER_NOTE_TASK_STRUCTURED = [
+  "读完写这一章的笔记（纯文本，900 字以内），按下面的固定小节组织，一行一条硬信息，不复述情节：",
+  "【时间】本章是哪天（按前文推：第几天 / 几月几日 / 星期几，写清怎么推的）、几点到几点；离上一章过了几天；约好的日子、期限",
+  "【物件】每样要紧的东西一行：物件 | 在哪 / 在谁手里 | 本章变化（谁交给谁、带来带走、放回、用掉）",
+  "【人物】每个人一行：人物 | 年龄 / 身份 / 职业 / 住处 / 亲属和称呼 | 本章结束时在哪",
+  "【信息】谁知道什么、谁还不知道什么（谁说的、哪一章知道的）",
+  "【地点】方位、距离、路上用多久、样子",
+].join("\n");
+
+/** C 结构化笔记的角色：id 不变（笔记还在同一目录），noteTask 变了 → roleHash 变了 → 旧笔记自动作废重写。 */
+export const CHECKER_ROLE_STRUCTURED: ReaderRole = { ...CHECKER_ROLE, noteTask: CHECKER_NOTE_TASK_STRUCTURED };
+
+/** 按变体取核账员角色（笔记提示词决定 roleHash，也决定旧笔记能不能复用）。 */
+export function checkerRoleFor(structuredNotes?: boolean): ReaderRole {
+  return structuredNotes ? CHECKER_ROLE_STRUCTURED : CHECKER_ROLE;
+}
 
 export type CheckerFocus = "objects" | "people" | "time";
 
@@ -60,6 +83,28 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
 }
+
+/** T1 的四个做法，各自独立开关（评测用 --variant=a,b,c,d 组合着比分，产品默认见 DEFAULT_READER_VARIANT）。 */
+export interface ReaderCheckVariant {
+  /** A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（sure / maybe / no），no 的删掉、把握以复核为准。 */
+  readonly selfReview?: boolean;
+  /** B 时间线表进核账：核账提示附上引擎排好的故事时间线（日子以表为准，不要自己推算）。 */
+  readonly timeline?: boolean;
+  /** C 结构化笔记：读书笔记按固定小节写（笔记提示词变了，旧笔记作废是预期的）。 */
+  readonly structuredNotes?: boolean;
+  /** D「确定」门槛：两句原文都逐字抄对、且（跨章，或同章但两句相隔超过 3 句）才允许保留 sure，其余降成 maybe。不调模型。 */
+  readonly sureGate?: boolean;
+}
+
+/** D 同章的两句至少相隔几句才可能算「确定」：同一个节拍里的两个说法（比如门开着又关上）常被误读成矛盾。 */
+export const SURE_GATE_MIN_SENTENCE_GAP = 3;
+
+/**
+ * 产品里核账员（STORY_CHECKER=reader）缺省用的组合：A 自复核。题库比分选出来的（T1.1 四种做法各跑两次，
+ * A 的「确定」查准下限 46.5%、两次重合 63% 都是四种里最好的；差距分析见 docs/editorial-room/reports/T1-2026-10-12.md）。
+ * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
+ */
+export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true };
 
 /**
  * 核账员 / 跟读用的模型调用（qualityCheck 槽）：关思考、低随机性、流式。
@@ -102,6 +147,79 @@ function readConfidences(text: string): Map<string, "sure" | "maybe"> {
   return out;
 }
 
+/** A 自复核的提示：把三遍合并后的候选逐条列出（本章那句、前文那句、理由），让它再判一轮。 */
+export function selfReviewTask(chapter: number, issues: readonly ContinuityIssueV2[]): string {
+  return [
+    `上面是作者刚交的第 ${chapter} 章新稿，你刚才核完报了下面这些对不上的地方。逐条复核一遍：`,
+    ...issues.map((issue, index) => [
+      `【K${index + 1}】本章那句：${issue.quote}`,
+      `  ${issue.earlierChapter === chapter ? "本章更早处" : `第 ${issue.earlierChapter} 章`}那句：${issue.earlierQuote}`,
+      `  当时的理由：${issue.reason}`,
+    ].join("\n")),
+    "每条给一个判断：",
+    "sure＝确定是矛盾：同一件事、同一样东西、同一个人，两处说法不可能同时成立，文中也没交代变化过程；",
+    "maybe＝可能是：看着对不上，但也说得通（时间没写清、可能是两样东西、中间可能发生了没写的事）；",
+    "no＝不是：说的明显不是同一件事或同一时刻（比如前后其实换了一天、换了一个人、换了一样东西），或文中明写了变化，或人物在撒谎记错。",
+    "拿不准就给 maybe，不要轻易给 no。只输出一个 JSON：{\"verdicts\":[{\"id\":\"K1\",\"verdict\":\"sure\"}]}，每条都要给。",
+  ].join("\n\n");
+}
+
+/** A 自复核的判断（判别规则与旧核账的复核一致）：K1 → sure / maybe / no。解析不了返回空表，按原把握保留。 */
+export function parseVerdicts(text: string): Map<string, "sure" | "maybe" | "no"> {
+  const out = new Map<string, "sure" | "maybe" | "no">();
+  try {
+    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { verdicts?: unknown };
+    for (const item of Array.isArray(parsed.verdicts) ? parsed.verdicts : []) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as Record<string, unknown>;
+      const id = String(record.id ?? "").trim().toUpperCase();
+      const verdict = String(record.verdict ?? record.real ?? "").trim().toLowerCase();
+      if (!id) continue;
+      if (/^(?:no|false|不是|否)$/u.test(verdict)) out.set(id, "no");
+      else if (/^(?:sure|true|确定|是)$/u.test(verdict)) out.set(id, "sure");
+      else out.set(id, "maybe");
+    }
+  } catch {
+    // 解析不了：一条判断都取不到，调用方按原把握保留并如实记失败
+  }
+  return out;
+}
+
+/**
+ * D「确定」门槛（纯确定性，不调模型）：两句原文都逐字抄对（去空白后逐字含于原文，比 parseFullReadIssues 的
+ * 模糊核对更严），且 earlierChapter 不等于本章（同章则要求两句相隔超过 N 句），才允许保留 sure，其余降成 maybe。
+ * 同一个小节拍里的两个说法（门开着又关上、人进来又出去）最容易被误读成矛盾，离得远的才是真对不上。
+ */
+export function applySureGate(
+  issues: readonly ContinuityIssueV2[],
+  chapter: number,
+  draftBody: string,
+  earlier: EarlierText,
+  minGap: number = SURE_GATE_MIN_SENTENCE_GAP,
+): ContinuityIssueV2[] {
+  const body = normalize(draftBody);
+  const earlierByChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
+  const sentences = splitSentences(draftBody).map(normalize);
+  /** 这句原文（去空白）在正文第几句：取它的前 12 个字找。找不到返回 -1（同章的就算不过门槛）。 */
+  const locate = (target: string): number => sentences.findIndex((sentence) => sentence.includes(target.slice(0, Math.min(target.length, 12))));
+  return issues.map((issue) => {
+    if (issue.confidence !== "sure") return issue;
+    const quote = normalize(issue.quote);
+    const earlierQuote = normalize(issue.earlierQuote);
+    // 1. 两句原文都逐字抄对（本章那句在正文里、前文那句在它标的那一章里）
+    const source = issue.earlierChapter === chapter ? body : earlierByChapter.get(issue.earlierChapter);
+    if (quote.length < 4 || !body.includes(quote) || !source || !earlierQuote || !source.includes(earlierQuote)) {
+      return { ...issue, confidence: "maybe" as const };
+    }
+    // 2. 跨章的可以；同章的要两句离得够远
+    if (issue.earlierChapter !== chapter) return issue;
+    const here = locate(quote);
+    const there = locate(earlierQuote);
+    if (here < 0 || there < 0 || Math.abs(here - there) <= minGap) return { ...issue, confidence: "maybe" as const };
+    return issue;
+  });
+}
+
 /** 三遍合并：一条的原句包含另一条的算同一条，留先出现的；同一句一遍判 sure、一遍判 maybe 取 sure。 */
 function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): ContinuityIssueV2[] {
   const merged: ContinuityIssueV2[] = [];
@@ -123,7 +241,7 @@ export interface ReaderCheckResult {
   readonly skipped?: "not_ready";
 }
 
-/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿。 */
+/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A）和「确定」门槛（D）。 */
 export async function checkChapterByReader(input: {
   readonly projectDir: string;
   readonly chapter: number;
@@ -133,12 +251,16 @@ export async function checkChapterByReader(input: {
   readonly maxCatchUp?: number;
   /** 前面各章原文（核账服务已读过就传进来，省得再读一遍）；缺省从书目录读。 */
   readonly earlier?: EarlierText;
+  /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
+  readonly variant?: ReaderCheckVariant;
 }): Promise<ReaderCheckResult> {
+  const variant = input.variant ?? {};
+  const role = checkerRoleFor(variant.structuredNotes);
   let window: BrainMessage[];
   try {
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
-      role: CHECKER_ROLE,
+      role,
       upTo: input.chapter - 1,
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
@@ -151,9 +273,19 @@ export async function checkChapterByReader(input: {
     return { issues: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
+  // B 时间线表：引擎排好的日子，核账时照表判「昨天 / 前天 / 周几」，不让模型自己推算（压「换了一天」那类误报）。
+  const timelineTable = variant.timeline
+    ? await readStoryTimeline(input.projectDir)
+      .then((read) => describeTimelineForChapter(read.timeline, input.chapter))
+      .catch(() => undefined)
+    : undefined;
+  const draftMessage = [
+    `【新稿：第 ${input.chapter} 章】\n${input.draftBody}`,
+    ...(timelineTable ? ["", `【故事时间线（日子以这张表为准）】\n${timelineTable}`] : []),
+  ].join("\n");
   const settled = await withStep("核账员", () => Promise.allSettled(CHECKER_PASSES.map(async ({ focus }) => {
     const text = await input.callModel(
-      [...window, { role: "user", content: `【新稿：第 ${input.chapter} 章】\n${input.draftBody}\n\n${checkTask(input.chapter, focus)}` }],
+      [...window, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
       { json: true },
     );
     const confidences = readConfidences(text);
@@ -166,5 +298,30 @@ export async function checkChapterByReader(input: {
     if (result.status === "fulfilled") passes.push(result.value);
     else failures.push(`${CHECKER_PASSES[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
-  return { issues: mergePasses(passes), failures };
+  let issues = mergePasses(passes);
+  // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
+  if (variant.selfReview && issues.length > 0) {
+    try {
+      const text = await withStep("核账员自复核", () => input.callModel(
+        [...window, { role: "user", content: `${draftMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
+        { json: true },
+      ));
+      const verdicts = parseVerdicts(text);
+      if (verdicts.size === 0) throw new Error("复核输出不是 JSON");
+      const verdictOf = (index: number) => verdicts.get(`K${index + 1}`);
+      // 判 no 的删掉，其余把握以复核为准；没给判断的按原把握保留。
+      issues = issues
+        .map((issue, index) => {
+          const verdict = verdictOf(index);
+          return verdict === undefined ? issue : { ...issue, confidence: verdict === "sure" ? "sure" as const : "maybe" as const };
+        })
+        .filter((_, index) => verdictOf(index) !== "no");
+    } catch (error) {
+      // 复核没跑成：候选原样交出（宁可多报），如实记一笔。
+      failures.push(`自复核没跑成：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  // D「确定」门槛：最后加一道确定性的闸，压「确定」的误报和波动。
+  if (variant.sureGate) issues = applySureGate(issues, input.chapter, input.draftBody, earlier);
+  return { issues, failures };
 }

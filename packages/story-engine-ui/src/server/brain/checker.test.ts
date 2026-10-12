@@ -4,11 +4,16 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
+  applySureGate,
   callConfiguredBrainModel,
   checkChapterByReader,
   checkTask,
   CHECKER_FOCUS,
+  CHECKER_NOTE_TASK_STRUCTURED,
   CHECKER_ROLE,
+  CHECKER_ROLE_STRUCTURED,
+  checkerRoleFor,
+  selfReviewTask,
 } from "./checker.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 
@@ -219,7 +224,222 @@ describe("核账员的模型调用", () => {
   });
 
   it("模型返回空内容 → 抛错，不当成没问题", async () => {
-    llmMocks.streamChatModelToText.mockResolvedValue({ content: "  ", thinking: "" });
+    llmMocks.streamChatModelToText.mockReset().mockResolvedValue({ content: "  ", thinking: "" });
     await expect(callConfiguredBrainModel([{ role: "user", content: "问" }], { json: true })).rejects.toThrow("空内容");
+  });
+});
+
+// ---------- T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛） ----------
+
+describe("A 自复核", () => {
+  /** 三遍都报怀表，第 4 次（自复核）按 verdicts 表回。 */
+  function modelWithReview(verdicts: Record<string, string> | string | Error) {
+    const calls: { readonly messages: readonly BrainMessage[]; readonly json: boolean }[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      calls.push({ messages: [...messages], json: options.json });
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        if (verdicts instanceof Error) throw verdicts;
+        if (typeof verdicts === "string") return verdicts;
+        return JSON.stringify({ verdicts: Object.entries(verdicts).map(([id, verdict]) => ({ id, verdict })) });
+      }
+      return pass({ ...WATCH, confidence: "sure" });
+    };
+    return { callModel, calls };
+  }
+
+  it("三遍合并后同一窗口再判一轮：判 no 的删掉，把握以复核为准（sure→maybe 降、maybe→sure 升）", async () => {
+    const dir = await makeBook();
+    const { callModel } = modelWithReview({ K1: "sure", K2: "no", K3: "maybe" });
+    const three = fakeModel({
+      objects: [{ ...WATCH, confidence: "maybe" }],
+      people: [{ ...AUNT, confidence: "sure" }],
+      time: [{ quote: "林舟一早开门", earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "时间对不上", confidence: "maybe" }],
+    });
+    // 三遍各自报一条 + 第 4 轮自复核
+    const merged: BrainCallModel = async (messages, options) => {
+      if (options.json && !messages.at(-1)!.content.includes("你刚才核完报了")) return three.callModel(messages, options);
+      return callModel(messages, options);
+    };
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: merged, variant: { selfReview: true } });
+    expect(result.failures).toEqual([]);
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([
+      ["他从工作台上拿起那块怀表", "sure"], // 三遍报 maybe，复核判 sure → 升
+      ["林舟一早开门", "maybe"], // 复核判 maybe → 保持
+      // 「周婶在门口喊他」复核判 no → 删掉
+    ]);
+  });
+
+  it("自复核的调用 = 窗口 + 新稿 + 候选清单（本章那句、前文那句、理由）", async () => {
+    const dir = await makeBook();
+    const { callModel, calls } = modelWithReview({ K1: "sure" });
+    const three = fakeModel({ objects: [{ ...WATCH, confidence: "sure" }] });
+    const merged: BrainCallModel = async (messages, options) => {
+      if (options.json && !messages.at(-1)!.content.includes("你刚才核完报了")) return three.callModel(messages, options);
+      return callModel(messages, options);
+    };
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: merged, variant: { selfReview: true } });
+    const review = calls.filter((call) => call.messages.at(-1)!.content.includes("你刚才核完报了"));
+    expect(review).toHaveLength(1);
+    const task = review[0]!.messages.at(-1)!.content;
+    expect(task).toContain(`【新稿：第 3 章】\n${BODY}`);
+    expect(task).toContain(`【K1】本章那句：${WATCH.quote}`);
+    expect(task).toContain(`第 2 章那句：${WATCH.earlierQuote}`);
+    expect(task).toContain(`当时的理由：${WATCH.reason}`);
+  });
+
+  it("三遍没报出东西 → 不发自复核这一轮（省调用）", async () => {
+    const dir = await makeBook();
+    const quiet = fakeModel({});
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: quiet.callModel, variant: { selfReview: true } });
+    expect(result.issues).toEqual([]);
+    expect(quiet.checkCalls()).toHaveLength(3); // 只有三遍
+    expect(quiet.calls.filter((call) => call.messages.at(-1)!.content.includes("你刚才核完报了"))).toHaveLength(0);
+  });
+
+  it("自复核失败 / 输出不是 JSON：候选原样交出，如实记一笔", async () => {
+    const dir = await makeBook();
+    for (const broken of [new Error("断流了"), "我觉得没问题"] as const) {
+      const { callModel } = modelWithReview(broken);
+      const three = fakeModel({ objects: [{ ...WATCH, confidence: "sure" }] });
+      const merged: BrainCallModel = async (messages, options) => {
+        if (options.json && !messages.at(-1)!.content.includes("你刚才核完报了")) return three.callModel(messages, options);
+        return callModel(messages, options);
+      };
+      const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: merged, variant: { selfReview: true } });
+      expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"]]);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain("自复核没跑成");
+    }
+  });
+
+  it("selfReviewTask：候选逐条列出，判断标准和旧核账的复核一致（sure / maybe / no，拿不准给 maybe）", () => {
+    const task = selfReviewTask(7, [{ ...WATCH, kind: "event" }]);
+    expect(task).toContain("第 7 章新稿");
+    expect(task).toContain(`【K1】本章那句：${WATCH.quote}`);
+    expect(task).toContain("拿不准就给 maybe");
+    expect(task).toContain("verdicts");
+  });
+});
+
+describe("B 时间线表进核账", () => {
+  async function writeTimeline(dir: string): Promise<void> {
+    await mkdir(join(dir, "story"), { recursive: true });
+    await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { chapter: 1, day: 1, weekday: 0, source: "author" },
+        { chapter: 2, day: 2, weekday: 1, source: "author" },
+      ],
+    }), "utf-8");
+  }
+
+  it("variant.timeline → 三遍的新稿消息后面附上引擎排好的时间线表", async () => {
+    const dir = await makeBook();
+    await writeTimeline(dir);
+    const { callModel, checkCalls } = fakeModel({});
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { timeline: true } });
+    expect(checkCalls()).toHaveLength(3);
+    for (const { messages } of checkCalls()) {
+      const last = messages.at(-1)!.content;
+      expect(last).toContain(`【新稿：第 3 章】\n${BODY}`);
+      expect(last).toContain("【故事时间线");
+      expect(last).toContain("第 1 章");
+    }
+    // 不开 timeline：一条都不带表
+    const plain = fakeModel({});
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: plain.callModel });
+    for (const { messages } of plain.checkCalls()) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
+  });
+
+  it("时间线文件读不了 → 不附表也不算失败，三遍照核", async () => {
+    const dir = await makeBook();
+    await mkdir(join(dir, "story"), { recursive: true });
+    await writeFile(join(dir, "story", "timeline.json"), "{{{坏掉的 JSON", "utf-8");
+    const { callModel, checkCalls } = fakeModel({});
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { timeline: true } });
+    expect(result.failures).toEqual([]);
+    expect(checkCalls()).toHaveLength(3);
+    for (const { messages } of checkCalls()) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
+  });
+});
+
+describe("C 结构化笔记", () => {
+  it("角色说明一样、记笔记要求换成固定小节；checkerRoleFor 按开关取角色", () => {
+    expect(checkerRoleFor()).toBe(CHECKER_ROLE);
+    expect(checkerRoleFor(false)).toBe(CHECKER_ROLE);
+    expect(checkerRoleFor(true)).toBe(CHECKER_ROLE_STRUCTURED);
+    expect(CHECKER_ROLE_STRUCTURED.id).toBe(CHECKER_ROLE.id); // 笔记还在同一目录
+    expect(CHECKER_ROLE_STRUCTURED.system).toBe(CHECKER_ROLE.system);
+    expect(CHECKER_NOTE_TASK_STRUCTURED).toContain("【时间】");
+    expect(CHECKER_NOTE_TASK_STRUCTURED).toContain("【物件】");
+    expect(CHECKER_NOTE_TASK_STRUCTURED).toContain("【人物】");
+    expect(CHECKER_NOTE_TASK_STRUCTURED).toContain("【信息】");
+    expect(CHECKER_NOTE_TASK_STRUCTURED).toContain("【地点】");
+  });
+
+  it("structuredNotes → 写笔记的提示用固定小节版（核账三遍的提示不变）", async () => {
+    const dir = await makeBook();
+    const { callModel, calls, checkCalls } = fakeModel({});
+    await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { structuredNotes: true } });
+    expect(calls.filter((call) => !call.json)).toHaveLength(2);
+    for (const call of calls.filter((call) => !call.json)) {
+      expect(call.messages.at(-1)!.content).toContain(CHECKER_NOTE_TASK_STRUCTURED);
+    }
+    for (const { messages } of checkCalls()) expect(messages.at(-1)!.content).toContain(checkTask(3, "objects").slice(0, 10));
+  });
+});
+
+describe("D「确定」门槛（applySureGate）", () => {
+  const EARLIER = { chapters: [{ chapter: 2, sentences: ["周婶端着茶进来。", "林舟把怀表锁进了柜台下的抽屉。", "林溪说她后天走。"] }] };
+  const SAME_CHAPTER_FAR = [
+    "林舟一早开门。",
+    "他把柜台擦了一遍。",
+    "他数了数抽屉里的零钱。",
+    "他给绿萝浇了水。",
+    "他翻开账本看了一眼。",
+    "他从工作台上拿起那块怀表，表盖还开着。",
+  ].join("");
+
+  it("跨章、两句都逐字抄对 → 保留 sure", () => {
+    const gated = applySureGate([{ ...WATCH, confidence: "sure", kind: "event" }], 3, BODY, EARLIER);
+    expect(gated[0]!.confidence).toBe("sure");
+  });
+
+  it("前文那句只是模糊抄对（不是逐字）→ 降成 maybe", () => {
+    const gated = applySureGate([{ ...WATCH, earlierQuote: "林舟把怀表锁进抽屉（原文没有这句）", confidence: "sure", kind: "event" }], 3, BODY, EARLIER);
+    expect(gated[0]!.confidence).toBe("maybe");
+  });
+
+  it("同章、两句紧挨着（相隔不超过 3 句）→ 降成 maybe；隔得远 → 保留 sure", () => {
+    const near = { quote: "他把柜台擦了一遍", earlierQuote: "林舟一早开门", earlierChapter: 3, reason: "同章两句挨着", kind: "event" as const, confidence: "sure" as const };
+    const far = { quote: "他从工作台上拿起那块怀表，表盖还开着", earlierQuote: "林舟一早开门", earlierChapter: 3, reason: "同章两句离得远", kind: "event" as const, confidence: "sure" as const };
+    const gated = applySureGate([near, far], 3, SAME_CHAPTER_FAR, EARLIER);
+    expect(gated[0]!.confidence).toBe("maybe"); // 挨着：第 0 句对第 1 句
+    expect(gated[1]!.confidence).toBe("sure"); // 离得远：第 5 句对第 0 句
+  });
+
+  it("本来就是 maybe 的不动；quote 在正文里找不到 → 降成 maybe", () => {
+    const maybe = { ...WATCH, confidence: "maybe" as const, kind: "event" as const };
+    const ghost = { ...WATCH, quote: "新稿里没有的句子", confidence: "sure" as const, kind: "event" as const };
+    const gated = applySureGate([maybe, ghost], 3, BODY, EARLIER);
+    expect(gated[0]!.confidence).toBe("maybe");
+    expect(gated[1]!.confidence).toBe("maybe");
+  });
+
+  it("核账全流程带上 sureGate：报出的「确定」过了门槛，被降级的收进「可能」", async () => {
+    const dir = await makeBook();
+    const { callModel } = fakeModel({
+      objects: [
+        { ...WATCH, confidence: "sure" },
+        { quote: "周婶在门口喊他", earlierQuote: "林舟一早开门", earlierChapter: 3, reason: "同章挨着报的", confidence: "sure" },
+      ],
+    });
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { sureGate: true } });
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([
+      ["他从工作台上拿起那块怀表", "sure"], // 跨章 + 两句逐字 → 保留
+      ["周婶在门口喊他", "maybe"], // 同章两句只隔 2 句 → 降级
+    ]);
   });
 });
