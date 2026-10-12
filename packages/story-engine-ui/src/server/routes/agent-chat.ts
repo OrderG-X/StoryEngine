@@ -640,6 +640,8 @@ async function handleAgentChat(
         sendEvent,
         scrubber: createStreamingScrubber(),
         scrubError: stringifyError,
+        // 编辑部 R4.6：定稿后判「占位主角卡改名建议」用（缺省不给建议）。
+        projectDir,
       }));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);

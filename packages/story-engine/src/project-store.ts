@@ -32,6 +32,14 @@ export interface CreateStoryProjectInput {
   readonly mainCharacterName: string;
 }
 
+/**
+ * 开书种的占位角色名（createStoryProject 模板固定名，UI 未填主角名时落为「主角」，books.ts）：
+ * 不是真名，不拿来核对正文。commit-quality-check 的角色名门与 fast-draft-writer 的选角关卡共用
+ * 这同一份固定标记——按模板标记识别，不按名字猜。2026-10-13 从 commit-quality-check 上移到模板
+ * 所在处并导出（编辑部 R4.6：占位主角卡不得挡出稿）。
+ */
+export const PLACEHOLDER_CHARACTER_NAME = /^(?:主角|男主|女主|主人公|男主角|女主角|未命名(?:角色)?|待定)\d*$/u;
+
 export interface CreateStoryProjectResult {
   readonly projectDir: string;
   readonly project: StoryProject;

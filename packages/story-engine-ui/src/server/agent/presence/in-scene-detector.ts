@@ -5,12 +5,14 @@ import {
   readCharacterBible,
   readThreadPool,
   toSafeCharacterId,
+  PLACEHOLDER_CHARACTER_NAME,
   type ArcGoal,
   type CharacterBibleEntry,
   type NarrativeThread,
 } from "@actalk/story-engine";
 
 import { readAliasTable, type AliasTable } from "../alias-generator/alias-generator.js";
+import { readRecentPresentCharacterNames } from "./delta-present-names.js";
 import { resolveEntityLabel } from "./entity-labels.js";
 
 export interface CharacterPresenceTraceItem {
@@ -42,6 +44,13 @@ export interface CharacterPresenceResult {
   readonly selectedCharacterIds: readonly string[];
   readonly trace: CharacterPresenceTrace;
   readonly summary: string;
+  /**
+   * 名册全是开书占位卡（建书模板固定名，PLACEHOLDER_CHARACTER_NAME 标记）时，从最近几章已定稿
+   * ChapterDelta 的 charactersPresent（时间线 presentCharacterNames）取的本章角色名，最新章在前。
+   * 出稿编排把它点进写作方向，占位卡本身不进引擎选角关卡（编辑部 R4.6）。有名册真名或没有已定稿
+   * 声明时缺省。
+   */
+  readonly chapterCharactersFromDeltas?: readonly string[];
 }
 
 export interface DetectInSceneCharactersInput {
@@ -213,7 +222,7 @@ export async function resolveSelectedCharacterIds(input: ResolveSelectedCharacte
     readActiveRelatedCharacterIds(input.projectDir, input.chapter),
   ]);
 
-  return detectInSceneCharacters({
+  const detected = detectInSceneCharacters({
     characters: characterBible?.characters ?? [],
     aliasTable,
     chapterGoal: input.chapterGoal,
@@ -222,6 +231,28 @@ export async function resolveSelectedCharacterIds(input: ResolveSelectedCharacte
     activeRelatedCharacterIds,
     ...(input.maxInScene !== undefined ? { maxInScene: input.maxInScene } : {}),
   });
+
+  // 编辑部 R4.6：名册只有开书占位卡（模板固定名，按标记识别、不按名字猜）的新书——作者手写开局是常态，
+  // 章节声明里的出场名才是真实名册。改用最近几章已定稿声明的出场名当本章角色：占位卡不进关卡
+  // （引擎侧 fast-draft-writer 用同一份标记豁免），出场名交给出稿编排点进写作方向。summary 如实说明来源。
+  const roster = characterBible?.characters ?? [];
+  const rosterAllPlaceholder = roster.length > 0
+    && roster.every((character) => PLACEHOLDER_CHARACTER_NAME.test(character.name?.trim() ?? ""));
+  if (rosterAllPlaceholder) {
+    const deltaNames = await readRecentPresentCharacterNames(input.projectDir, input.chapter);
+    if (deltaNames.length > 0) {
+      return {
+        ...detected,
+        chapterCharactersFromDeltas: deltaNames,
+        summary: `本章相关角色（按最近定稿章的出场记账）：${deltaNames.join("、")}。角色名册还是开书占位「${roster.map((character) => character.name).join("、")}」，本次没拿占位名把关。`,
+      };
+    }
+    return {
+      ...detected,
+      summary: `本章相关角色：名册只有开书占位「${roster.map((character) => character.name).join("、")}」，最近定稿章也没有出场记账，本次没拿占位名把关。`,
+    };
+  }
+  return detected;
 }
 
 function matchingTermsFor(character: CharacterBibleEntry, aliasTable: AliasTable): readonly string[] {
