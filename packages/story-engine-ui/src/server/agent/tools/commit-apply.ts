@@ -223,7 +223,7 @@ export async function applyCommitToolLogic(input: {
       };
     }
     case "committed": {
-      // 编辑部预热（STORY_CHECKER=reader 才干活）：后台给核账员把读书笔记补到这一章，失败只 warn、不阻塞定稿返回。
+      // 编辑部预热（R1 起默认干活）：后台给开着的专员把读书笔记补到这一章（共用队列依次补），失败只 warn、不阻塞定稿返回。
       void warmUpReaders(projectDir, chapter);
       const report = result.report;
       const overview = result.overview ?? undefined;

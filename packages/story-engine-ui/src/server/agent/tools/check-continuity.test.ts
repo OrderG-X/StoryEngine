@@ -1,9 +1,10 @@
 // @vitest-environment node
 //
 // 核账记忆：同样的输入同样的输出；改掉一处只少那一处；「再细核一遍」重新核。
+// 这里的假模型说的是旧核账（combo）那套话术——R1 起核账员是默认，旧路显式设 legacy 再测（回退排查用，R3 删）。
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { runCheckContinuity } from "./check-continuity.js";
@@ -42,6 +43,13 @@ function fakeModel(verdicts: Record<string, string>) {
 }
 
 describe("核账记忆", () => {
+  beforeEach(() => {
+    vi.stubEnv("STORY_CHECKER", "legacy"); // 假模型说的是旧核账的话术：显式走旧路测（核账员路的记忆见 check-service.test.ts）
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("正文和前文都没改 → 直接给上次结果、不调模型；「再细核一遍」才重新核", async () => {
     const dir = await makeBook();
     const first = fakeModel({ K1: "sure", K2: "maybe" });

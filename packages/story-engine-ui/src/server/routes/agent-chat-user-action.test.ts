@@ -32,6 +32,11 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
 
   beforeEach(() => {
     __resetCommitPreviewStore();
+    // 本文件测的是「确认定稿」按钮的结构化动作：R1 起三个专员缺省都开，显式 legacy 关掉编辑部
+    // （定稿后的后台预热不跑），别让单测真去补读笔记。
+    vi.stubEnv("STORY_CHECKER", "legacy");
+    vi.stubEnv("STORY_LEDGER", "legacy");
+    vi.stubEnv("STORY_PLANNER", "legacy");
     storyAgentMocks.getStoryAgent.mockResolvedValue({
       stream: vi.fn(async () => {
         throw new Error("结构化动作不应调用模型");
@@ -40,6 +45,7 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     storyAgentMocks.getStoryAgent.mockReset();
     await Promise.all([...rootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
     rootDirs.clear();

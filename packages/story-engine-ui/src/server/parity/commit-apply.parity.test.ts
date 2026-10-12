@@ -45,7 +45,7 @@
 //     下方用例锁定现状。
 import { readFile } from "node:fs/promises";
 import type { CommitQualityReport } from "@actalk/story-engine";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const llmMocks = vi.hoisted(() => ({
   resolveConfiguredChatModel: vi.fn(),
@@ -104,6 +104,11 @@ interface CommitReportLike {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetCommitPreviewStore();
+  // 本文件对拍的是 route ↔ 工具的编排一致性：R1 起三个专员缺省都开，显式 legacy 关掉编辑部
+  // （声明走旧路桩、定稿后的后台预热不跑），计数和「不写盘」断言不跟着漂。
+  vi.stubEnv("STORY_CHECKER", "legacy");
+  vi.stubEnv("STORY_LEDGER", "legacy");
+  vi.stubEnv("STORY_PLANNER", "legacy");
   llmMocks.resolveConfiguredChatModel.mockImplementation(async () => fakeResolvedChatModel());
   // 声明模型吐非 JSON → 预览声明降级 undefined（两侧同为引擎正则路径，计划同构）。
   llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({
@@ -115,6 +120,10 @@ beforeEach(() => {
   judgeMocks.judgeDraftQualityWithModel.mockImplementation(
     async ({ deterministicQuality }: { readonly deterministicQuality: CommitQualityReport }) => deterministicQuality,
   );
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 async function seedTwinDrafts(prefix: string, draft: string): Promise<{ readonly routeDir: string; readonly toolDir: string }> {

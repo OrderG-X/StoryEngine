@@ -1,15 +1,17 @@
 /**
- * 后台补读（2026-10-12 T5 长书）：老书第一次用核账员（或笔记被改动作废）时，后台按顺序把前文笔记补齐。
+ * 后台补读（2026-10-12 T5 长书）：老书第一次用专员（或笔记被改动作废）时，后台按顺序把前文笔记补齐。
  *
- * 补读本身还是 ensureReaderWindow（同一本书同一角色进程内排队，笔记按章落盘）；这里只加两件事：
+ * 补读本身还是 ensureReaderWindow（同一本书同一角色进程内排队，笔记按章落盘）；这里只加三件事：
  *   - 进度写盘（agents/<角色>/progress.json）：读到第几章、共几章、还剩没剩错。界面靠现有的 workspace 刷新（state-overview）看它，
  *     不新开轮询；
- *   - 进程内去重：已经在补就不重复排一遍（服务重启后 progress 残留 reading=true 也照样接着补——笔记在盘上，不会从头来）。
+ *   - 进程内去重：已经在补就不重复排一遍（服务重启后 progress 残留 reading=true 也照样接着补——笔记在盘上，不会从头来）；
+ *   - 每本书一条共用队列（2026-10-12 R1）：三个角色依次补（checker → ledger → planner），
+ *     不同时并发打模型服务商；不同轮次也按先来后到排在这条队上。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CHECKER_ROLE, callConfiguredBrainModel } from "./checker.js";
-import { countCommittedChapters, ensureReaderWindow, writeAtomically, type BrainCallModel, type ReaderRole } from "./reader-window.js";
+import { callConfiguredBrainModel } from "./checker.js";
+import { ensureReaderWindow, writeAtomically, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 
 export interface ReaderProgress {
   readonly role: string;
@@ -49,6 +51,44 @@ export async function readReaderProgress(notesRoot: string, roleId: string): Pro
 
 /** 正在补的角色（进程内）：同一本书同一角色只排一个，后来的直接回。 */
 const activeCatchUps = new Set<string>();
+
+/** 每本书一条补读队列（R1）：三个角色共用，按角色依次补，不同时并发打模型。 */
+const bookCatchUpQueues = new Map<string, Promise<unknown>>();
+
+/** 同一本书的补读任务排成一条队：先来后到，一条跑完再跑下一条（前一条失败不拦后面的）。 */
+export async function runInReaderCatchUpQueue<T>(root: string, task: () => Promise<T>): Promise<T> {
+  const previous = bookCatchUpQueues.get(root) ?? Promise.resolve();
+  const current = previous.then(task);
+  const tail = current.catch(() => undefined);
+  bookCatchUpQueues.set(root, tail);
+  try {
+    return await current;
+  } finally {
+    if (bookCatchUpQueues.get(root) === tail) bookCatchUpQueues.delete(root);
+  }
+}
+
+/** 已排队 / 在跑的补读目标（书目录＋角色组 → 要读到的章）。 */
+const queuedCatchUps = new Map<string, number>();
+
+const catchUpQueueKey = (root: string, roles: readonly string[]): string => `${root}\u0000${[...roles].sort().join(",")}`;
+
+/** 这本书这组角色已有一轮要读到 ≥ upTo 的补读在队里 → 不用再排一轮（角色不同不算，照排）。 */
+export function isReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): boolean {
+  const queued = queuedCatchUps.get(catchUpQueueKey(root, roles));
+  return queued !== undefined && queued >= upTo;
+}
+
+/** 登记 / 撤销一轮补读目标（catchUpReaders 用；导出供测试确认队列状态）。 */
+export function markReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): void {
+  const key = catchUpQueueKey(root, roles);
+  queuedCatchUps.set(key, Math.max(queuedCatchUps.get(key) ?? 0, upTo));
+}
+
+export function unmarkReaderCatchUpQueued(root: string, roles: readonly string[], upTo: number): void {
+  const key = catchUpQueueKey(root, roles);
+  if (queuedCatchUps.get(key) === upTo) queuedCatchUps.delete(key); // 只撤自己那轮：后面排的更大目标还在
+}
 
 /**
  * 后台补一个角色的前文笔记到第 upTo 章，进度落盘。失败不抛（调用方放心 void）：如实写进 progress 的 error，
@@ -112,24 +152,5 @@ export async function startReaderCatchUp(
     }).catch(() => undefined);
   } finally {
     activeCatchUps.delete(key);
-  }
-}
-
-/**
- * 打开书（state-overview）时看一眼：核账员的笔记还没读齐 → 后台接着补。
- * 已经在读 / 已经读齐就不再排。永不抛错。（核账员开没开由调用方看 STORY_CHECKER。）
- */
-export async function maybeStartCheckerCatchUp(
-  projectDir: string,
-  options: { readonly callModel?: BrainCallModel } = {},
-): Promise<void> {
-  try {
-    const total = await countCommittedChapters(projectDir);
-    if (total <= 0) return;
-    const progress = await readReaderProgress(projectDir, CHECKER_ROLE.id);
-    if (progress && !progress.reading && progress.done >= total) return; // 读齐了
-    void startReaderCatchUp(projectDir, CHECKER_ROLE, total, options);
-  } catch (error) {
-    console.warn("[brain] 看要不要后台补读时出错（不影响开书）", error);
   }
 }

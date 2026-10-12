@@ -32,7 +32,7 @@
 //     严格度差：模型会发字符串化参数 vs 前端恒发 number），收进 service 无意义（路由连 service
 //     都到不了），下方用例锁定现状。
 import type { CommitQualityReport } from "@actalk/story-engine";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // LLM 边界 mock：声明模型（streamChatModelToText·流式空闲超时，2026-10-02 起不再走非流式固定死表）默认吐非 JSON
@@ -79,6 +79,11 @@ const P1 = "林远在走廊尽头停下脚步，反复掂量手里这份账册�
 beforeEach(() => {
   vi.clearAllMocks();
   __resetCommitPreviewStore();
+  // 本文件对拍的是 route ↔ 工具的编排一致性，不是声明走哪条路：R1 起记账员是缺省路，显式 legacy
+  // 让工具侧声明走旧路（下面的 mock 桩），计数断言不跟着编辑部预热 / 补读漂。
+  vi.stubEnv("STORY_LEDGER", "legacy");
+  vi.stubEnv("STORY_CHECKER", "legacy");
+  vi.stubEnv("STORY_PLANNER", "legacy");
   llmMocks.resolveConfiguredChatModel.mockImplementation(async () => fakeResolvedChatModel());
   // 默认：声明模型吐非 JSON → 声明降级 fallback（等价 HTTP 路的纯正则计划）。
   llmMocks.callOpenAICompatibleChatModel.mockResolvedValue({
@@ -93,6 +98,10 @@ beforeEach(() => {
       modelJudge: { used: false, fallbackUsed: false, summary: "parity 桩：跳过 AI 判定。" },
     }),
   );
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("parity: POST /api/commit/preview ↔ commit_preview（共享行为面）", () => {

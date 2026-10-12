@@ -2,13 +2,22 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../tools/snapshot-on-draft-overwrite.js", () => ({
   snapshotBeforeDraftOverwrite: vi.fn(async () => "snap-1"),
 }));
 
 import { runDraftQualityPipeline } from "./run-quality-pipeline.js";
+
+// 假查错模型说的是旧核账（combo）那套话术——R1 起核账员是默认，这里测的是续写 / 快照 / 如实汇报语义，
+// 显式设 legacy 走旧路测（核账员路的行为见 continuity-v2/check-service.test.ts）。
+beforeEach(() => {
+  vi.stubEnv("STORY_CHECKER", "legacy");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const TARGET = { requested: 60, lowerBound: 40, upperBound: 70, source: "writing_rules" as const };
 

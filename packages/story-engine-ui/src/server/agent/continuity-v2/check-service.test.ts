@@ -75,7 +75,20 @@ const notesCount = async (dir: string) => (await readdir(join(dir, "agents", "ch
 const plannerNotesCount = async (dir: string) => (await readdir(join(dir, "agents", "planner", "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).length;
 
 describe("核账服务：新旧两路的开关", () => {
-  it("缺省走旧路（combo）：用旧的模型调用，不碰核账员，也不写读书笔记", async () => {
+  it("缺省（STORY_CHECKER 没设）→ 走核账员：不碰旧路的模型调用，补前文笔记", async () => {
+    const dir = await makeBook();
+    const combo = comboModel();
+    const reader = readerModel();
+    const result = await checkChapterBody(dir, 3, BODY, combo, { readerCallModel: reader.callModel });
+    expect(result.ok).toBe(true);
+    expect(result.sure.map((item) => item.quote)).toEqual([AUNT.quote]);
+    expect(combo).not.toHaveBeenCalled();
+    expect(reader.calls).toEqual({ notes: 2, checks: 3, reviews: 1 });
+    expect(await notesCount(dir)).toBe(2);
+  });
+
+  it("显式设 legacy → 走旧路（回退排查用，R3 删）：用旧的模型调用，不碰核账员，也不写读书笔记", async () => {
+    vi.stubEnv("STORY_CHECKER", "legacy");
     const dir = await makeBook();
     const combo = comboModel();
     const reader = readerModel();
@@ -100,16 +113,16 @@ describe("核账服务：新旧两路的开关", () => {
     expect(await notesCount(dir)).toBe(2);
   });
 
-  it("环境变量 STORY_CHECKER=reader 也切到核账员；options.engine 优先于环境变量", async () => {
-    vi.stubEnv("STORY_CHECKER", "reader");
+  it("环境变量 STORY_CHECKER=legacy 切回旧路；options.engine 优先于环境变量", async () => {
+    vi.stubEnv("STORY_CHECKER", "legacy");
     const dir = await makeBook();
     const reader = readerModel();
     const viaEnv = await checkChapterBody(dir, 3, BODY, comboModel(), { readerCallModel: reader.callModel });
-    expect(viaEnv.sure.map((item) => item.quote)).toEqual([AUNT.quote]);
+    expect(viaEnv.sure.map((item) => item.quote)).toContain(WATCH.quote);
     const combo = comboModel();
-    const viaOption = await checkChapterBody(dir, 3, `${BODY}。`, combo, { engine: "combo", readerCallModel: reader.callModel });
-    expect(viaOption.sure.map((item) => item.quote)).toContain(WATCH.quote);
-    expect(combo).toHaveBeenCalled();
+    const viaOption = await checkChapterBody(dir, 3, `${BODY}。`, combo, { engine: "reader", readerCallModel: reader.callModel });
+    expect(viaOption.sure.map((item) => item.quote)).toContain(AUNT.quote); // 核账员报的周婶在（旧路的结果照带，见下面的记忆测试）
+    expect(combo).not.toHaveBeenCalled();
   });
 
   it("核账员这一路：账本数字对账照跑、排在前面；核账员的「可能」排在「确定」后面", async () => {

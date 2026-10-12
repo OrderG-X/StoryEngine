@@ -77,7 +77,16 @@ describe("planChapter", () => {
   });
 });
 
-describe("resolveChapterPlanForDraft", () => {
+describe("resolveChapterPlanForDraft（旧路，显式 legacy）", () => {
+  beforeEach(() => {
+    // R1 起章纲员是缺省路；这个 describe 测的是旧路的沿用 / 重拟 / 失败语义（假模型只会说旧路的话），
+    // 显式设 legacy 再测。章纲员路见下面的 describe。
+    vi.stubEnv("STORY_PLANNER", "legacy");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("同一方向重写沿用已有章纲；方向变了重拟", async () => {
     const projectDir = await makeBook();
     const callModel = vi.fn(async () => GOOD_PLAN);
@@ -294,8 +303,8 @@ describe("resolveChapterPlanForDraft：章纲员路", () => {
     expect(result.note).toContain("这次按没有章纲出稿");
   });
 
-  it("开关没开（缺省）→ 走旧路，不碰章纲员", async () => {
-    vi.stubEnv("STORY_PLANNER", undefined as unknown as string);
+  it("显式设 legacy → 走旧路，不碰章纲员（回退排查用，R3 删）", async () => {
+    vi.stubEnv("STORY_PLANNER", "legacy");
     const projectDir = await makeBook();
     const planner = fakePlannerCallModel();
     const result = await resolveChapterPlanForDraft({

@@ -91,9 +91,10 @@ const declareViaLegacy: DeclareDeltaFn = async ({ chapter, draft, openThreadTitl
   });
 
 /**
- * 生产用声明路由（2026-10-12 编辑部 T2）：STORY_LEDGER=reader 且拿得到 projectDir 时先走记账员
- * （跟读窗口里声明，读过前文）；记账员要补的笔记太多（not_ready）→ 这次走旧声明、后台补笔记；
- * 其余情况直接旧声明。任何失败 → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。
+ * 生产用声明路由（2026-10-12 编辑部 T2；R1 起记账员是默认）：拿得到 projectDir 时先走记账员
+ * （跟读窗口里声明，读过前文；STORY_LEDGER 显式设 legacy 时直接旧声明）；
+ * 记账员要补的笔记太多（not_ready）→ 这次走旧声明、后台补笔记。任何失败 → status=fallback + 原因
+ * （非致命，本章降级到引擎确定性规则，但对用户不静默）。
  * ledgerCallModel / legacyDeclare 注入点供单测（假模型），生产用配置的模型。
  */
 export function buildDeclareDeltaRouter(options: {

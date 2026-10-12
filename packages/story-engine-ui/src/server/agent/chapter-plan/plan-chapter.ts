@@ -537,7 +537,7 @@ async function planByEditorialRoom(input: PlanChapterInput & {
 /**
  * 出稿前拿到本章章纲：这章已有章纲、且作者方向没变（同为空或原话相同）→ 沿用（「重写这一章」保持同一份章纲）；
  * 否则重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
- * STORY_PLANNER=reader 时拟和审都走编辑部（章纲员 + 核账员）；缺省走旧路（拟 + 审校）。
+ * R1 起 STORY_PLANNER 没设（缺省）就走编辑部（章纲员拟 → 核账员审 → 改一轮）；显式设 legacy 才走旧路（拟 + 审校）。
  */
 export async function resolveChapterPlanForDraft(input: PlanChapterInput & {
   /** 章纲审校用的调用（生产注入关思考版）；缺省用拟章纲同一个调用。 */

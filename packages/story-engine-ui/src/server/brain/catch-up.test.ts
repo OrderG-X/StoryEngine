@@ -3,8 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { maybeStartCheckerCatchUp, readReaderProgress, startReaderCatchUp, type ReaderProgress } from "./catch-up.js";
-import { CHECKER_ROLE } from "./checker.js";
+import { readReaderProgress, startReaderCatchUp, type ReaderProgress } from "./catch-up.js";
 import type { BrainCallModel, BrainMessage, ReaderRole } from "./reader-window.js";
 
 const ROLE: ReaderRole = { id: "tester", system: "你是测试专员。", noteTask: "写笔记。", volumeTask: "缩写成一份卷笔记。" };
@@ -96,20 +95,5 @@ describe("后台补读：进度落盘", () => {
   });
 });
 
-describe("后台补读：开书时看一眼要不要补", () => {
-  it("还没读齐 → 后台接着补；读齐了 / 没有定稿章节 → 不排", async () => {
-    const dir = await makeBook(3);
-    await maybeStartCheckerCatchUp(dir, { callModel: stepModel().callModel }); // 没笔记 → 排上
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(await readReaderProgress(dir, CHECKER_ROLE.id)).toMatchObject({ reading: false, done: 3, total: 3 });
-    // 读齐了：再来一次直接回（进度文件不动，说明没再排）
-    const before = await readFile(join(dir, "agents", CHECKER_ROLE.id, "progress.json"), "utf-8");
-    await maybeStartCheckerCatchUp(dir, { callModel: stepModel().callModel });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(await readFile(join(dir, "agents", CHECKER_ROLE.id, "progress.json"), "utf-8")).toBe(before);
-    // 没有定稿章节的书：不排
-    const empty = await makeHomeTempDir("catch-up-empty-");
-    await maybeStartCheckerCatchUp(empty, { callModel: stepModel().callModel });
-    expect(await readReaderProgress(empty, CHECKER_ROLE.id)).toBeUndefined();
-  });
-});
+// 开书时看一眼要不要补（maybeStartReadersCatchUp，三个角色版）的测试在 index.test.ts——函数在 index.ts，
+// 要看三个角色的开关和共用队列。

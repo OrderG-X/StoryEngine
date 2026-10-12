@@ -8,11 +8,10 @@
 import { describeTimelineForChapter, readFactLedgerStrict, readStoryTimeline, type FactEntry } from "@actalk/story-engine";
 import {
   callConfiguredBrainModel,
+  catchUpReaders,
   checkChapterByReader,
-  CHECKER_ROLE,
   DEFAULT_READER_VARIANT,
   isReaderCheckerEnabled,
-  startReaderCatchUp,
   type BrainCallModel,
 } from "../../brain/index.js";
 import {
@@ -65,7 +64,7 @@ const READER_MAX_CATCH_UP = 10;
 export interface ChapterCheckOptions {
   /** 正文没改也重新核。 */
   readonly fresh?: boolean;
-  /** 核账走哪一路：combo＝旧（通读三遍 + 拆说法 + 复核）；reader＝核账员。缺省读环境变量 STORY_CHECKER，没设就是 combo。 */
+  /** 核账走哪一路：reader＝核账员（缺省，带 A 自复核）；combo＝旧（通读三遍 + 拆说法 + 复核）。缺省读环境变量 STORY_CHECKER，没设就是 reader；显式 legacy / combo 才走旧路（回退排查用，R3 删）。 */
   readonly engine?: CheckerEngine;
   /** 核账员那一路的模型调用（测试注入）；缺省走配置的 qualityCheck 模型。 */
   readonly readerCallModel?: BrainCallModel;
@@ -144,9 +143,10 @@ export async function checkChapterBody(
       result = viaReader;
     } else {
       // 核账员还没读完前文（T5 后台补读）：如实说读到第几章、这次没核，不拿旧核账顶、更不装作核过。
-      // 笔记在后台按顺序补（补不成只记一笔，下次接着补），读完后作者再点一次「核账」就是读完全书的核账员。
+      // 笔记在后台按顺序补（走三个角色共用的补读队列、点名 checker；补不成只记一笔，下次接着补），
+      // 读完后作者再点一次「核账」就是读完全书的核账员。
       const { done, total } = viaReader.notReady;
-      void startReaderCatchUp(projectDir, CHECKER_ROLE, chapter - 1, { callModel: readerCallModel });
+      void catchUpReaders(projectDir, chapter - 1, { callModel: readerCallModel, roles: ["checker"] });
       return {
         ok: false,
         chapter,

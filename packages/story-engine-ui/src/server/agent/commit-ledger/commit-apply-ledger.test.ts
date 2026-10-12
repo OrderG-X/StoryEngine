@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createStoryProject } from "@actalk/story-engine";
 import type { ToolExecutionContext } from "@mastra/core/tools";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
@@ -25,6 +25,15 @@ const DRAFT = `# 第1章\n\n${Array.from({ length: 12 }, () => SENTENCE).join(""
 beforeEach(() => {
   __resetCommitPreviewStore();
   vi.clearAllMocks();
+  // 本文件测的是账本清单语义：R1 起三个专员缺省都开，显式 legacy 关掉编辑部（定稿后的后台预热不跑），
+  // 别让 apply 在单测里去补读笔记。
+  vi.stubEnv("STORY_CHECKER", "legacy");
+  vi.stubEnv("STORY_LEDGER", "legacy");
+  vi.stubEnv("STORY_PLANNER", "legacy");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("定稿前看账：勾掉的不写", () => {
