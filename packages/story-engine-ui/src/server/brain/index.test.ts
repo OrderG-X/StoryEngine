@@ -6,9 +6,6 @@ import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   catchUpReaders,
   isReaderCatchUpQueued,
-  isReaderCheckerEnabled,
-  isReaderLedgerEnabled,
-  isReaderPlannerEnabled,
   maybeStartReadersCatchUp,
   readReaderProgress,
   warmUpReaders,
@@ -26,40 +23,12 @@ async function makeBook(chapters: number): Promise<string> {
 
 const notes = async (dir: string, role: string) => (await readdir(join(dir, "agents", role, "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).sort();
 
-const disableOthers = (...keep: string[]) => {
-  for (const name of ["STORY_CHECKER", "STORY_LEDGER", "STORY_PLANNER"]) {
-    if (!keep.includes(name)) vi.stubEnv(name, "legacy");
-  }
-};
-
-beforeEach(() => {
-  vi.stubEnv("STORY_CHECKER", undefined as unknown as string);
-  vi.stubEnv("STORY_LEDGER", undefined as unknown as string);
-  vi.stubEnv("STORY_PLANNER", undefined as unknown as string);
-});
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-describe("三个开关的默认（R1：没设都走新路）", () => {
-  it("没设 → 三个都是开；显式 legacy（核账也认 combo）→ 关", () => {
-    expect(isReaderCheckerEnabled()).toBe(true);
-    expect(isReaderLedgerEnabled()).toBe(true);
-    expect(isReaderPlannerEnabled()).toBe(true);
-    vi.stubEnv("STORY_CHECKER", "legacy");
-    vi.stubEnv("STORY_LEDGER", "legacy");
-    vi.stubEnv("STORY_PLANNER", "legacy");
-    expect(isReaderCheckerEnabled()).toBe(false);
-    expect(isReaderLedgerEnabled()).toBe(false);
-    expect(isReaderPlannerEnabled()).toBe(false);
-    vi.stubEnv("STORY_CHECKER", "combo"); // 旧核账的值也当旧路
-    expect(isReaderCheckerEnabled()).toBe(false);
-    vi.stubEnv("STORY_CHECKER", "reader");
-    expect(isReaderCheckerEnabled()).toBe(true);
-  });
-
-  it("缺省预热：三个角色的笔记都补到刚定稿的这一章", async () => {
+describe("预热 / 补读（R3 后三个角色都常开，没有开关）", () => {
+  it("预热：三个角色的笔记都补到刚定稿的这一章", async () => {
     const dir = await makeBook(3);
     await warmUpReaders(dir, 2, { callModel: async () => "笔记" });
     expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json"]);
@@ -67,36 +36,7 @@ describe("三个开关的默认（R1：没设都走新路）", () => {
     expect(await notes(dir, "planner")).toEqual(["0001.json", "0002.json"]);
   });
 
-  it("三个都设 legacy → 预热什么都不干，不调模型", async () => {
-    disableOthers();
-    const dir = await makeBook(3);
-    const callModel = vi.fn<BrainCallModel>(async () => "笔记");
-    expect(isReaderCheckerEnabled()).toBe(false);
-    await warmUpReaders(dir, 3, { callModel });
-    expect(callModel).not.toHaveBeenCalled();
-    expect(await notes(dir, "checker")).toEqual([]);
-  });
-
-  it("只留章纲员开（另两个 legacy）→ 预热只补章纲员的笔记", async () => {
-    disableOthers("STORY_PLANNER");
-    expect(isReaderPlannerEnabled()).toBe(true);
-    const dir = await makeBook(3);
-    await warmUpReaders(dir, 2, { callModel: async () => "笔记" });
-    expect(await notes(dir, "checker")).toEqual([]);
-    expect(await notes(dir, "planner")).toEqual(["0001.json", "0002.json"]);
-  });
-
-  it("只留记账员开（另两个 legacy）→ 预热只补记账员的笔记", async () => {
-    disableOthers("STORY_LEDGER");
-    expect(isReaderLedgerEnabled()).toBe(true);
-    const dir = await makeBook(3);
-    await warmUpReaders(dir, 2, { callModel: async () => "笔记" });
-    expect(await notes(dir, "ledger")).toEqual(["0001.json", "0002.json"]);
-    expect(await notes(dir, "checker")).toEqual([]);
-  });
-
   it("补笔记失败：不抛错（只 warn），已有的笔记不受影响", async () => {
-    disableOthers("STORY_CHECKER");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const dir = await makeBook(3);
     let count = 0;
@@ -110,18 +50,16 @@ describe("三个开关的默认（R1：没设都走新路）", () => {
     expect(await notes(dir, "checker")).toEqual(["0001.json"]);
   });
 
-  it("catchUpReaders 只补开着的角色（都关了就不调模型）", async () => {
-    disableOthers();
+  it("catchUpReaders 点名只补指定的角色", async () => {
     const dir = await makeBook(2);
-    const callModel = vi.fn<BrainCallModel>(async () => "笔记");
-    await catchUpReaders(dir, 2, { callModel });
-    expect(callModel).not.toHaveBeenCalled();
-    expect(await notes(dir, "checker")).toEqual([]);
+    await catchUpReaders(dir, 2, { callModel: async () => "笔记", roles: ["checker"] });
+    expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json"]);
     expect(await notes(dir, "ledger")).toEqual([]);
+    expect(await notes(dir, "planner")).toEqual([]);
   });
 });
 
-describe("三个角色共用一条补读队列（R1：按角色依次补，不并发）", () => {
+describe("三个角色共用一条补读队列（按角色依次补，不并发）", () => {
   it("任何时刻最多一个模型调用在飞，且按 checker → ledger → planner 依次补完", async () => {
     const dir = await makeBook(2);
     let inFlight = 0;
@@ -162,7 +100,7 @@ describe("三个角色共用一条补读队列（R1：按角色依次补，不�
 });
 
 describe("开书时看一眼要不要补（maybeStartReadersCatchUp）", () => {
-  it("缺省三个角色都开：没读齐 → 后台接着补齐三个角色；读齐了再来直接回；没有定稿章节的书不排", async () => {
+  it("没读齐 → 后台接着补齐三个角色；读齐了再来直接回；没有定稿章节的书不排", async () => {
     const dir = await makeBook(3);
     await maybeStartReadersCatchUp(dir, { callModel: async () => "笔记" }); // 没笔记 → 排上
     await vi.waitFor(async () => {

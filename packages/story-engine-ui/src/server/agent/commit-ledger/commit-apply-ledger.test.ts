@@ -15,6 +15,13 @@ import { __resetCommitPreviewStore } from "../tools/commit-preview-store.js";
 
 const llmMocks = vi.hoisted(() => ({ streamChatModelToText: vi.fn(), resolveConfiguredChatModel: vi.fn() }));
 vi.mock("../../lib/llm-client.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../lib/llm-client.js")>()), ...llmMocks }));
+// 本文件测账本清单语义，不定稿后的编辑部后台预热：mock 掉 warmUpReaders（R3 后三个专员常开、没有开关可关），
+// 别让单测真去补读笔记。
+const brainMocks = vi.hoisted(() => ({ warmUpReaders: vi.fn(async () => undefined) }));
+vi.mock("../../brain/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../brain/index.js")>()),
+  warmUpReaders: brainMocks.warmUpReaders,
+}));
 
 type ToolExec = (input: Record<string, unknown>, context: ToolExecutionContext) => Promise<Record<string, unknown>>;
 const execute = commitApplyTool.execute as unknown as ToolExec;
@@ -25,15 +32,10 @@ const DRAFT = `# 第1章\n\n${Array.from({ length: 12 }, () => SENTENCE).join(""
 beforeEach(() => {
   __resetCommitPreviewStore();
   vi.clearAllMocks();
-  // 本文件测的是账本清单语义：R1 起三个专员缺省都开，显式 legacy 关掉编辑部（定稿后的后台预热不跑），
-  // 别让 apply 在单测里去补读笔记。
-  vi.stubEnv("STORY_CHECKER", "legacy");
-  vi.stubEnv("STORY_LEDGER", "legacy");
-  vi.stubEnv("STORY_PLANNER", "legacy");
 });
 
 afterEach(() => {
-  vi.unstubAllEnvs();
+  // warmUpReaders 被 mock 后不真跑；无需再清 env（开关已删）。
 });
 
 describe("定稿前看账：勾掉的不写", () => {

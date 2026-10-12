@@ -412,7 +412,7 @@ export async function ensureReaderWindow(input: {
   readonly callModel: BrainCallModel;
   /** 笔记存放的根目录；缺省就是书目录（评测时传临时目录，不动书）。 */
   readonly notesRoot?: string;
-  /** 需要新写的笔记超过这个数就不写了，直接返回 missing > 0（调用方改走旧路，并在后台补）。缺省不限。 */
+  /** 需要新写的笔记超过这个数就不写了，直接返回 missing > 0（调用方如实说「还在读前文」，笔记在后台补）。缺省不限。 */
   readonly maxCatchUp?: number;
   /** 窗口字数预算；缺省 READER_WINDOW_MAX_CHARS（测试用小值）。 */
   readonly maxChars?: number;
