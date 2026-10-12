@@ -103,10 +103,12 @@ import type { QualityJudge } from "./quality-service.js";
 /**
  * 预览阶段生成章节语义声明的注入点（单测可传假实现；缺省=不声明，走引擎正则）。
  * openThreadTitles：现有未决线索标题——喂给模型，让它回收时对号入座既有线索、而非每章重埋新线索（治线索堆积）。
+ * projectDir（2026-10-12 T2）：记账员路要拿它读跟读笔记；旧声明用不上，老注入实现不传也兼容。
  */
 export type CommitPreviewDeclareDelta = (input: {
   readonly chapter: number;
   readonly draft: string;
+  readonly projectDir?: string;
   readonly openThreadTitles?: readonly string[];
   readonly establishedNames?: readonly string[];
   readonly openGoalTitles?: readonly string[];
@@ -232,6 +234,7 @@ async function runCommitPreviewUnlocked(input: CommitPreviewServiceInput): Promi
         declarationOutcome = normalizeDeclarationOutcome(await withStep("章节声明", () => channel.declareDelta!({
           chapter,
           draft: draftContent,
+          projectDir,
           openThreadTitles,
           ...(establishedCharacterNames.length > 0 ? { establishedNames: establishedCharacterNames } : {}),
           ...(openGoalTitles.length > 0 ? { openGoalTitles } : {}),

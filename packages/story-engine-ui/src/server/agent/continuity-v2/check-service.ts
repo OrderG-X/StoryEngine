@@ -143,9 +143,10 @@ export async function checkChapterBody(
       result = viaReader;
     } else {
       // 核账员要补的笔记太多：这次先用旧核账，笔记在后台补（补不成只记一笔，下次接着补）。结果按旧路的键记忆。
+      // roles 点名 checker：engine 可能是调用方显式传的（环境变量没开），后台补的得是刚要走核账员的那位。
       fellBack = true;
       ranEngine = "combo";
-      void catchUpReaders(projectDir, chapter - 1, { callModel: readerCallModel });
+      void catchUpReaders(projectDir, chapter - 1, { callModel: readerCallModel, roles: ["checker"] });
       result = await runCombo();
     }
   } else {

@@ -27,6 +27,13 @@ import {
   type CommitPreviewDeclareDelta,
 } from "../../services/commit-service.js";
 import { callConfiguredDeclareModel, declareChapterDeltaWithStatus } from "./chapter-delta-declaration.js";
+import {
+  callConfiguredBrainModel,
+  catchUpReaders,
+  declareChapterDeltaByLedger,
+  isReaderLedgerEnabled,
+  type BrainCallModel,
+} from "../../brain/index.js";
 import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { withStep } from "../../lib/token-meter.js";
@@ -68,8 +75,11 @@ const defaultProposeFacts: ProposeFactsFn = async ({ projectDir, chapter, draftT
  */
 export type DeclareDeltaFn = CommitPreviewDeclareDelta;
 
-/** 生产用：调用配置模型声明本章语义；任何失败 → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。 */
-const defaultDeclareDelta: DeclareDeltaFn = async ({ chapter, draft, openThreadTitles, establishedNames, openGoalTitles, previousChapterEnding }) =>
+/** 记账员那一路最多当场补多少章笔记；超过就这次改走旧声明，笔记在后台补。 */
+const LEDGER_MAX_CATCH_UP = 10;
+
+/** 旧声明路（一次性 system+user 调用），独立出来供记账员没准备好时回退。 */
+const declareViaLegacy: DeclareDeltaFn = async ({ chapter, draft, openThreadTitles, establishedNames, openGoalTitles, previousChapterEnding }) =>
   declareChapterDeltaWithStatus({
     chapter,
     draft,
@@ -79,6 +89,41 @@ const defaultDeclareDelta: DeclareDeltaFn = async ({ chapter, draft, openThreadT
     ...(openGoalTitles ? { openGoalTitles } : {}),
     ...(previousChapterEnding ? { previousChapterEnding } : {}),
   });
+
+/**
+ * 生产用声明路由（2026-10-12 编辑部 T2）：STORY_LEDGER=reader 且拿得到 projectDir 时先走记账员
+ * （跟读窗口里声明，读过前文）；记账员要补的笔记太多（not_ready）→ 这次走旧声明、后台补笔记；
+ * 其余情况直接旧声明。任何失败 → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。
+ * ledgerCallModel / legacyDeclare 注入点供单测（假模型），生产用配置的模型。
+ */
+export function buildDeclareDeltaRouter(options: {
+  readonly ledgerCallModel?: BrainCallModel;
+  readonly legacyDeclare?: DeclareDeltaFn;
+} = {}): DeclareDeltaFn {
+  const legacy = options.legacyDeclare ?? declareViaLegacy;
+  return async (input) => {
+    const { chapter, draft, projectDir, openThreadTitles, establishedNames, openGoalTitles, previousChapterEnding } = input;
+    if (projectDir && isReaderLedgerEnabled()) {
+      const viaLedger = await declareChapterDeltaByLedger({
+        projectDir,
+        chapter,
+        draft,
+        callModel: options.ledgerCallModel ?? callConfiguredBrainModel,
+        maxCatchUp: LEDGER_MAX_CATCH_UP,
+        ...(openThreadTitles ? { openThreadTitles } : {}),
+        ...(establishedNames ? { establishedNames } : {}),
+        ...(openGoalTitles ? { openGoalTitles } : {}),
+      });
+      if (viaLedger.skipped !== "not_ready") return viaLedger.outcome;
+      // 记账员还在读前文：这次用旧声明，笔记在后台补（点名 ledger，补不成只 warn，下次接着补）。
+      void catchUpReaders(projectDir, chapter - 1, { ...(options.ledgerCallModel ? { callModel: options.ledgerCallModel } : {}), roles: ["ledger"] });
+    }
+    return legacy({ chapter, draft, ...(projectDir ? { projectDir } : {}), ...(openThreadTitles ? { openThreadTitles } : {}), ...(establishedNames ? { establishedNames } : {}), ...(openGoalTitles ? { openGoalTitles } : {}), ...(previousChapterEnding ? { previousChapterEnding } : {}) });
+  };
+}
+
+/** 生产用声明路由实例（注册进工具）。 */
+const defaultDeclareDelta: DeclareDeltaFn = buildDeclareDeltaRouter();
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要预览入库的章号。")),

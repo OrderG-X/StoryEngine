@@ -640,6 +640,138 @@ describe("commit plan semantic summary", () => {
     expect(persisted?.presentCharacterNames).toEqual(expect.arrayContaining(["林远", "林宁"]));
   });
 
+  // —— 人物称呼归并（2026-10-12 编辑部 T2）：charactersPresent.aliasOf 指向已确立人物时的别名记账 ——
+
+  it("aliasOf 指向已确立人物：称呼记成别名、出场名单记已确立名字（不另立新人物）、不报名字漂移", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    // 本章正文用称谓「林师傅」叫已登记主角「林远」（前文确立过）。
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林师傅走进账房，翻看那本账目。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "查看账目", quote: "林师傅走进账房，翻看那本账目。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林师傅", quote: "林师傅走进账房，翻看那本账目。", aliasOf: "林远", identityHint: "即林远" },
+      ],
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    // 出场名单只记已确立名字，称呼不进名单（不新建人物）。
+    expect(result.semanticSummary?.presentCharacterNames).toEqual(["林远"]);
+    expect(result.semanticSummary?.presentCharacterNames).not.toContain("林师傅");
+    // 别名关系随 semanticSummary 持久化进时间线。
+    expect(result.semanticSummary?.characterAliases).toEqual([{ name: "林远", alias: "林师傅" }]);
+    const persisted = result.commitPlan?.timelineEvents?.[0]?.effects?.semanticSummary as { characterAliases?: { name: string; alias: string }[] } | undefined;
+    expect(persisted?.characterAliases).toEqual([{ name: "林远", alias: "林师傅" }]);
+    // 已核对成立的别名称呼不是写歪，不报漂移（空发现不进结构化字段）。
+    expect(result.issues.some((issue) => issue.includes("人物名疑似写歪"))).toBe(false);
+    expect(result.nameDriftFindings ?? []).toEqual([]);
+  });
+
+  it("aliasOf 不在已确立名册里：剥掉归并按普通出场名记录，并如实记 issue（绝不静默）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远走进账房，翻看那本账目。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "查看账目", quote: "林远走进账房，翻看那本账目。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远走进账房，翻看那本账目。", aliasOf: "查无此人" },
+      ],
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.presentCharacterNames).toEqual(["林远"]);
+    expect(result.semanticSummary?.characterAliases).toBeUndefined();
+    expect(result.issues.some((issue) => issue.includes("人物称呼归并未采信") && issue.includes("查无此人"))).toBe(true);
+  });
+
+  it("establishedCharacterNames 里的竖线别名段也算已确立（aliasOf 指向别名对应的名册条目可归并）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远提起妹妹小宁去年失踪的事。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "提起妹妹失踪", quote: "林远提起妹妹小宁去年失踪的事。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远提起妹妹小宁去年失踪的事。" },
+        { name: "小宁", quote: "林远提起妹妹小宁去年失踪的事。", aliasOf: "林宁", identityHint: "妹妹" },
+      ],
+    };
+
+    const result = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 2,
+      declaration,
+      establishedCharacterNames: ["林宁|小宁"],
+    });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.characterAliases).toEqual([{ name: "林宁", alias: "小宁" }]);
+    expect(result.semanticSummary?.presentCharacterNames).toEqual(expect.arrayContaining(["林宁"]));
+    expect(result.semanticSummary?.presentCharacterNames).not.toContain("小宁");
+  });
+
+  it("老数据没有 aliasOf：照旧处理（出场名原样进名单、无 characterAliases）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远提起妹妹林宁去年失踪的事。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "提起妹妹失踪", quote: "林远提起妹妹林宁去年失踪的事。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远提起妹妹林宁去年失踪的事。" },
+        { name: "林宁", quote: "林远提起妹妹林宁去年失踪的事。", identityHint: "妹妹" },
+      ],
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.presentCharacterNames).toEqual(expect.arrayContaining(["林远", "林宁"]));
+    expect(result.semanticSummary?.characterAliases).toBeUndefined();
+  });
+
   it("keeps mentionedHooks empty when HookPool is empty", async () => {
     const projectDir = await createFixtureProject();
     await writeDraft(projectDir, 1, semanticDraft());

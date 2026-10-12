@@ -88,6 +88,12 @@ export interface CharacterPresenceDeclaration extends ChapterDeltaEvidence {
   readonly name: string;
   /** 可选：指向一个已确立身份（角色 id / 关系锚点如「主角的妹妹」），用于把「同一个人」跨章对齐。 */
   readonly identityHint?: string;
+  /**
+   * 可选（2026-10-12 编辑部 T2）：这个称呼指向的【已确立人物】的名字——正文用新称呼叫了一个前文已有的人物时填。
+   * 引擎核对成立（aliasOf 在已确立名册里、且称呼逐字出现在证据句里）才把称呼记成那个人的别名、不另立新名；
+   * 老数据没有这个字段照旧处理。「aliasOf 是不是已确立名字」这层语义校验在 commit-plan-builder（那里有名册）。
+   */
+  readonly aliasOf?: string;
 }
 
 /**
@@ -288,16 +294,21 @@ export function verifyChapterDelta(
     return [entry];
   });
 
-  const charactersPresent = (declaration.charactersPresent ?? []).filter((entry, index) => {
+  const charactersPresent = (declaration.charactersPresent ?? []).flatMap((entry, index): CharacterPresenceDeclaration[] => {
     const field = `charactersPresent[${index}]`;
-    if (!checkEvidence(entry.quote, field)) return false;
+    if (!checkEvidence(entry.quote, field)) return [];
     // 名字必须逐字出现在证据句里，杜绝「声明了名字但证据句根本没这个名字」的空报。
     const nameInEvidence = normalizeForMatch(entry.quote).includes(normalizeForMatch(entry.name ?? ""));
     if (!nameInEvidence) {
       rejected.push({ field, quote: entry.quote, reason: "name_not_in_evidence" });
-      return false;
+      return [];
     }
-    return true;
+    // aliasOf 只做句法归一（非空、不等于称呼本身；指向的是不是已确立人物由 commit-plan-builder 核）：
+    // 坏值剥掉这个字段、条目照留——不因一个坏的可选字段丢掉一条合法的出场记录。
+    const aliasOf = typeof entry.aliasOf === "string" ? entry.aliasOf.trim() : "";
+    if (aliasOf && aliasOf !== entry.name) return [{ ...entry, aliasOf }];
+    const { aliasOf: _dropped, ...withoutAlias } = entry;
+    return [withoutAlias];
   });
 
   const arcGoalProgress = (declaration.arcGoalProgress ?? []).filter((entry, index) =>
