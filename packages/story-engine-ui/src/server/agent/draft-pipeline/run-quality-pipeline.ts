@@ -31,6 +31,8 @@ export interface QualityPipelineInput {
   readonly continueCallModel?: ContinueCallModel;
   /** 前后核对（qualityCheck 槽，和「核账」同一套，核账员那一路）。缺失 = 不核对。 */
   readonly checkCallModel?: BrainCallModel;
+  /** true=本出稿流程已有「写盘前」存档点（适配层建），补写重写不再另建（R4.2：一次出稿=操作历史里的一步）。 */
+  readonly skipOverwriteSnapshot?: boolean;
 }
 
 export interface QualityPipelineInfo {
@@ -114,7 +116,10 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   if (!changed) return { draftBody: input.draftBody, changed: false, info, notes };
   let snapshotId: string | undefined;
   await withProjectCommitLock(input.projectDir, async () => {
-    snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章补写与前后核对前快照`);
+    // 独立跑（如修订后的核对）照旧建覆盖前快照；出稿流程内（有「写盘前」存档点）不另建（R4.2）。
+    if (!input.skipOverwriteSnapshot) {
+      snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章补写与前后核对前快照`);
+    }
     await writeFileAtomic(input.draftPath, `# ${input.title}\n\n${body.trim()}\n`);
   });
   return { draftBody: body.trim(), changed: true, ...(snapshotId ? { snapshotId } : {}), info, notes };

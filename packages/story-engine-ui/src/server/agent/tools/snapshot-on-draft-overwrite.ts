@@ -1,14 +1,15 @@
 /**
- * 覆盖现有非空草稿前建一次轻量快照（M6）。
+ * 出稿/改稿写盘前的可撤销存档点（M6 + R4.2）。
  *
- * generate_draft / revise_draft 用 createTool（非 writeTool）刻意不建 git 快照——草稿是「待保存」的工作稿。
- * 但「再写一版」或局部修订会**覆盖**已有草稿，没快照则旧稿既无「撤销到此」也无快照历史、不可恢复
- * （存档面板还写「每次 AI 写入前自动存档」打脸）。
+ * generate_draft / revise_draft 用 createTool（非 writeTool）刻意不走 runWithSnapshot——草稿是「待保存」的工作稿。
+ * M6 起的规则：**覆盖**已有非空草稿前建快照（旧稿无撤销点就再也找不回）。
+ * R4.2（验收 3.2）补上另一半：**首次出稿也建**——作者眼里「AI 出了第 N 章首稿」就是一步，撤销必须能撤它；
+ * 此前首稿无存档点，撤销会跳到更早一步、把首稿之后新增的草稿一并删掉。存档点记的是写稿之前的状态，
+ * 撤销用得上，不算无意义提交。带 firstDraftLabel 的调用（两条出稿适配层）无旧稿时用它建点；
+ * 不带（revise_draft / 质量环节：都要有稿才动得了）维持 M6 语义：无旧稿不建。
+ * 返回 snapshotId，由工具并入 output（ok 时）→ agentChatClient 透传 → recordTurnEffects 据此挂「撤销到此回合」。
  *
- * 本 helper：当前章已有非空草稿才建快照（首次出稿无旧稿可丢，不建、不留无意义提交）；返回 snapshotId，
- * 由工具并入 output（ok 时）→ agentChatClient 透传 → recordTurnEffects 据此挂「撤销到此」。
- *
- * 读稿 fail-closed（P2-5）：ENOENT=真无旧稿（不建快照）；其余读错误按 FS 抖动重试（L1 口径 3×60ms），
+ * 读稿 fail-closed（P2-5）：ENOENT=真无旧稿（按上述规则决定建不建）；其余读错误按 FS 抖动重试（L1 口径 3×60ms），
  * 仍失败则抛错——绝不能把「旧稿存在但读不到」当「无旧稿」跳过快照：紧接的覆盖写会让旧稿从此
  * 无撤销点、不可恢复。抛错由调用方如实上报（工具 → 工具错误；路由 → 500 JSON），旧稿分毫不动。
  */
@@ -37,6 +38,8 @@ export async function snapshotBeforeDraftOverwrite(
   projectDir: string,
   chapter: number,
   label: string,
+  /** 无旧稿（首次出稿）时也建存档点用的标签（如「出稿：第5章」）；缺省=首次不建（M6 语义，revise/质量环节用）。 */
+  firstDraftLabel?: string,
 ): Promise<string | undefined> {
   const draftPath = defaultDraftPath(projectDir, chapter);
   let existing: string;
@@ -49,7 +52,12 @@ export async function snapshotBeforeDraftOverwrite(
       "为避免无快照覆盖旧稿，本次操作已中止；请检查该文件后重试。",
     );
   }
-  if (stripLeadingMarkdownChapterHeading(existing).trim().length === 0) return undefined;
+  if (stripLeadingMarkdownChapterHeading(existing).trim().length === 0) {
+    // 首次出稿：有 firstDraftLabel 就建「出稿：第N章」存档点（R4.2：首稿也是可撤销的一步）。
+    if (!firstDraftLabel) return undefined;
+    const snapshot = await createSnapshot(projectDir, firstDraftLabel);
+    return snapshot.id;
+  }
   const snapshot = await createSnapshot(projectDir, label);
   return snapshot.id;
 }

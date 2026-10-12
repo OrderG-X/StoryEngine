@@ -15,10 +15,10 @@
 //   D3 护栏簇【留在工具层】：章序护栏/写作意图门/已入库前沿推进是 agent 语义不是编排语义——只在
 //      generate-draft.ts execute 内（evaluateChapterSequencingGuard / userTurnAllowsDraftWrite /
 //      advancePastCommittedFrontier）；HTTP 按钮路无护栏、直接写。
-//   D4 快照时机【刻意收敛，已统一】：两侧适配层同调 snapshotBeforeDraftOverwrite——仅覆盖已有非空草稿前建
-//      可撤销快照；首次出稿无旧稿不建空快照。HTTP 路原「每次出稿前无条件 createSnapshot」收敛到该 M6 语义
-//      （无旧稿时快照无可保护内容、纯噪音；覆盖写前必有撤销点的安全不变量两侧如一。代价：HTTP 首次出稿不再
-//      进操作历史，与工具路自 M6 起的行为一致——视为合理收敛而非能力损失）。
+//   D4 快照时机【R4.2 修订，两侧同一语义】：两侧适配层同调 snapshotBeforeDraftOverwrite——出稿写盘前
+//      总是建这一步的存档点：覆盖已有非空草稿建「第N章再次出稿前快照」、首次出稿建「出稿：第N章」
+//      （首稿也是可撤销的一步；旧 D4「首稿不建」被真机验收 3.2 推翻：撤销跳步连带删稿）。
+//      出稿内部的第二次落盘（自动去味/续写）经 preWriteSnapshotId 并进同一步，不另建存档点。
 //   D5 输入面【刻意保留】：persist:false 抽卡与 maxOutputTokens 显式覆盖均为 HTTP 路独有入参
 //      （抽卡=service generateDraftCandidate 能力，路由继续用，工具 schema 无 persist；maxOutputTokens
 //      缺省时两侧同一来源 resolveDraftMaxOutputTokens(lengthTarget)，工具入参面无此项——SWE P1-3 登记补漏）。
@@ -197,11 +197,13 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     const toolSelection = tool.characterSelection as { selectedCharacterIds: readonly string[] };
     expect([...toolSelection.selectedCharacterIds]).toEqual([...routeSelection.selectedCharacterIds]);
 
-    // D4（已收敛·快照时机统一）：首次出稿两侧都不建 git 快照（无旧稿可丢）；snapshotId 两侧都不透。
-    expect(await pathExists(join(routeDir, ".git"))).toBe(false);
-    expect(await pathExists(join(toolDir, ".git"))).toBe(false);
+    // D4（R4.2 修订·快照时机统一）：首次出稿两侧都建「出稿：第N章」存档点——首稿也是作者眼里的一步，
+    // 撤销必须能撤它（旧语义首稿不建，撤销会跳到更早一步、连带删掉首稿，真机验收 3.2）。
+    // HTTP 路响应不带 snapshotId（靠操作历史面板），工具把它透出给前端挂「撤销到此回合」。
+    expect(await pathExists(join(routeDir, ".git"))).toBe(true);
+    expect(await pathExists(join(toolDir, ".git"))).toBe(true);
     expect("snapshotId" in route.payload).toBe(false);
-    expect("snapshotId" in tool).toBe(false);
+    expect(typeof tool.snapshotId).toBe("string");
   });
 
   it("覆盖已有草稿再出稿：两侧都先建可撤销快照（D4 收敛后同一语义：仅覆盖才建；工具把 snapshotId 透出给前端）", { timeout: 30_000 }, async () => {
@@ -337,7 +339,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const toolDraft = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
     expect(toolDraft).not.toContain("殊不知");
     expect(toolDraft).toContain(PARITY_DEAI_AFTER);
-    // 去味覆盖草稿前建了快照（M6 轻量快照），snapshotId 透出
+    // 撤销点=本步「写盘前」存档点（R4.2 后去味不再另建，撤销一键退回这步出稿之前），snapshotId 透出
     expect(typeof tool.snapshotId).toBe("string");
   });
 

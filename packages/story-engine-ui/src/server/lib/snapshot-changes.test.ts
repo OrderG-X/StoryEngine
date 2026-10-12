@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { attachSnapshotChanges, describeSnapshotChanges } from "./snapshot-changes.js";
+import { attachSnapshotChanges, buildRestoreReceipt, describeRevertedPaths, describeSnapshotChanges } from "./snapshot-changes.js";
 import { readCommitFileChanges } from "./snapshot.js";
 
 const run = promisify(execFile);
 const names = new Map([["char-ffe5af", "周屿"], ["char-c6008d", "阿琴"]]);
 const m = (path: string) => ({ status: "M", path });
 const a = (path: string) => ({ status: "A", path });
+const d = (path: string) => ({ status: "D", path });
 
 describe("操作历史「查看改动」：文件 → 人话", () => {
   it("定稿：正文写入 + 角色/线索/时间线等资料，内部文件不列", () => {
@@ -101,5 +102,94 @@ describe("操作历史条目名", () => {
     expect(humanizeHistoryLabel("恢复到：agent:commit_apply")).toBe("恢复到「定稿」之前");
     expect(humanizeHistoryLabel("恢复前自动快照")).toBe("恢复前的自动存档");
     expect(humanizeHistoryLabel("初始快照")).toBe("建书时的初始状态");
+  });
+});
+
+describe("撤销/恢复回执：路径 → 人话（R4.2·验收 3.2）", () => {
+  it("chapters/、drafts/fast/、characters/、story/*.json 四类都翻成短语，认不出的角色不吐 id", () => {
+    expect(describeRevertedPaths([
+      a("chapters/0004.md"),
+      a("drafts/fast/chapter-0005.md"),
+      m("characters/char-ffe5af/core.json"),
+      m("characters/char-ffe5af/state.json"),
+      m("story/fact-ledger.json"),
+      m("story/threads.json"),
+    ], names)).toEqual(["第 4 章定稿", "第 5 章工作稿", "角色卡：周屿", "线索", "账本"]);
+    // 认不出 id 的角色：中性短语，绝不把 char- 吐给作者（铁律④）。
+    const unknown = describeRevertedPaths([m("characters/char-999999/state.json")], names);
+    expect(unknown).toEqual(["角色卡资料"]);
+    expect(unknown.join("")).not.toMatch(/char-/u);
+  });
+
+  it("角色多于 3 张合并；同章多文件去重；D 状态（恢复找回来的）加标注", () => {
+    const many = describeRevertedPaths([
+      a("characters/char-ffe5af/core.json"),
+      a("characters/char-c6008d/core.json"),
+      m("story/character-bible.json"),
+    ], names);
+    expect(many).toEqual(["角色卡：周屿、阿琴"]);
+    const dedup = describeRevertedPaths([
+      m("drafts/fast/chapter-0007.md"),
+      a("drafts/fast/chapter-0007.md"),
+      d("chapters/0003.md"),
+    ], names);
+    expect(dedup).toEqual(["第 3 章定稿（重新找回）", "第 7 章工作稿"]);
+  });
+
+  it("资料区其余路径各有短语；认不出的折成「其他文件 N 个」；超 8 项折成「等 N 项」", () => {
+    expect(describeRevertedPaths([
+      m("story/character-matrix.json"),
+      m("timeline/events.json"),
+      m("story/arc-goals.json"),
+      m("world/state.json"),
+      m("story/location-bible.json"),
+      m("story/assets.json"),
+      m("story/writing-rules.json"),
+      m("time/calendar.json"),
+    ], names)).toEqual([
+      "角色关系", "时间线", "主线目标", "世界状态", "地点设定", "道具与资源", "写作规则", "故事日历",
+    ]);
+    expect(describeRevertedPaths([m("diagnostics/whatever.json")], names)).toEqual(["其他文件 1 个"]);
+    const overflow = describeRevertedPaths(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => m(`drafts/fast/chapter-${String(n).padStart(4, "0")}.md`)),
+      names,
+    );
+    expect(overflow.at(-1)).toBe("等 10 项");
+    expect(overflow.length).toBe(8);
+  });
+});
+
+describe("撤销/恢复回执全文：buildRestoreReceipt", () => {
+  const empty: never[] = [];
+
+  it("只撤这一步：列出退回清单 + 找回办法，不说「只撤了这一步」这种空话", () => {
+    const text = buildRestoreReceipt({
+      title: "已撤销上一步（出稿：第5章）。",
+      reverted: [a("drafts/fast/chapter-0005.md")],
+      revertedLater: empty,
+      nameById: names,
+    });
+    expect(text).toBe("已撤销上一步（出稿：第5章）。这次退回：第 5 章工作稿。要找回，去「历史」页点「恢复前的自动存档」。");
+  });
+
+  it("连带退回「这步之后写的」单独一句说清；主清单只列这一步本身的", () => {
+    const text = buildRestoreReceipt({
+      title: "已恢复到「更新故事资料：改名 主角→陆沉」之前。",
+      reverted: [
+        m("characters/char-ffe5af/core.json"),
+        a("drafts/fast/chapter-0005.md"),
+      ],
+      revertedLater: [a("drafts/fast/chapter-0005.md")],
+      nameById: names,
+    });
+    expect(text).toBe(
+      "已恢复到「更新故事资料：改名 主角→陆沉」之前。这次退回：角色卡：周屿。" +
+      "这步之后写的第 5 章工作稿也一并退回了。要找回，去「历史」页点「恢复前的自动存档」。",
+    );
+  });
+
+  it("没有文件差异时如实说没有文件被退回，仍指明找回入口", () => {
+    const text = buildRestoreReceipt({ title: "已撤销上一步（出稿：第5章）。", reverted: empty, revertedLater: empty, nameById: names });
+    expect(text).toBe("已撤销上一步（出稿：第5章）。这次没有文件被退回。要找回，去「历史」页点「恢复前的自动存档」。");
   });
 });

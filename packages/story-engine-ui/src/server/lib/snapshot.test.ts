@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { commitFastDraft, createStoryProject, recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
+import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
   SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR,
@@ -230,13 +231,13 @@ describe("undoLastChange 对话撤销", () => {
     expect(r).not.toBeNull();
     expect(r?.undoneLabel).toBe("更新故事资料");
     await expect(access(join(dir, "world.json"))).rejects.toThrow(); // 写入被撤销
-  });
+  }, 30_000);
 
   it("没有可撤销的改动 → 返回 null（绝不谎称已撤销）", async () => {
     const dir = await makeProject();
     await createSnapshot(dir, "agent:foundation_write"); // 检查点后无任何改动
     expect(await undoLastChange(dir)).toBeNull();
-  });
+  }, 30_000);
 
   it("连续撤销逐步回退，跳过撤销产物、不卡原地", async () => {
     const dir = await makeProject();
@@ -249,7 +250,7 @@ describe("undoLastChange 对话撤销", () => {
     expect(await readFile(join(dir, "a.md"), "utf-8")).toBe("A"); // a.md 仍在
     expect((await undoLastChange(dir))?.undoneLabel).toBe("出稿"); // 再撤 step1
     await expect(access(join(dir, "a.md"))).rejects.toThrow();
-  });
+  }, 30_000);
 
   it("连续撤销三步一路往回退，不在两个状态之间来回跳（恢复产物指向的存档点之下再找）", async () => {
     const dir = await makeProject();
@@ -267,7 +268,7 @@ describe("undoLastChange 对话撤销", () => {
     await expect(access(join(dir, "a.md"))).rejects.toThrow();
     await expect(access(join(dir, "b.md"))).rejects.toThrow();
     expect(await undoLastChange(dir)).toBeNull(); // 到头了如实说没有
-  });
+  }, 30_000);
 
   it("老书旧前缀快照链照常识别：列表/人话化透传/落盘收尾产物/逐步撤销目标（T15 读侧兼容）", async () => {
     // 复审探针 3c 收编：写侧早已只写新词（定稿前快照/工作稿生成前快照），老书 git 史里躺着的
@@ -295,7 +296,86 @@ describe("undoLastChange 对话撤销", () => {
     const second = await undoLastChange(dir);
     expect(second?.undoneLabel).toBe("入库前快照：第1章");
     expect(JSON.parse(await readFile(join(dir, "story", "threads.json"), "utf-8"))).toEqual({ threads: [] });
-  });
+  }, 30_000);
+});
+
+// R4.2（验收 3.2）：首稿也进操作历史（存档点「出稿：第N章」由出稿适配层建，这里按生产链模拟），
+// 撤销回执必须写清实际退回了什么、哪些是这步之后写的一并退回。
+describe("R4.2 首稿可撤销 + 撤销回执写清退回内容", () => {
+  const names = new Map([["char-protag", "陆沉"]]);
+
+  async function makeRenamableProject(): Promise<string> {
+    const dir = await makeProject();
+    await mkdir(join(dir, "characters", "char-protag"), { recursive: true });
+    await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "主角" }), "utf-8");
+    return dir;
+  }
+
+  async function writeChapter5Draft(dir: string, body = "# 第 5 章\n\n阿禾拆了信。"): Promise<void> {
+    await mkdir(join(dir, "drafts", "fast"), { recursive: true });
+    await writeFile(join(dir, "drafts", "fast", "chapter-0005.md"), body, "utf-8");
+  }
+
+  it("改名 → 首稿 → 撤销：撤的是首稿（草稿删掉、改名还在）；再撤一次撤的才是改名", async () => {
+    const dir = await makeRenamableProject();
+    // ① AI 改主角卡名（foundation_write 同款链：runWithSnapshot 检查点 + 落盘收尾）。
+    await runWithSnapshot(dir, "agent:foundation_write:改名 主角→陆沉", async () => {
+      await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "陆沉" }), "utf-8");
+    });
+    // ② AI 出第 5 章首稿：适配层先建「出稿：第5章」存档点，草稿落盘（untracked）。
+    await createSnapshot(dir, "出稿：第5章");
+    await writeChapter5Draft(dir);
+
+    // ③ 撤销上一步 —— 撤的必须是这次出稿，不是更早的改名。
+    const first = await undoLastChange(dir);
+    expect(first?.undoneLabel).toBe("出稿：第5章");
+    await expect(access(join(dir, "drafts", "fast", "chapter-0005.md"))).rejects.toThrow(); // 首稿被撤掉
+    expect(JSON.parse(await readFile(join(dir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("陆沉"); // 改名还在
+    // 回执事实：退回的就是第 5 章工作稿，没有「这步之后写的」连带。
+    expect(first?.reverted).toEqual([{ status: "A", path: "drafts/fast/chapter-0005.md" }]);
+    expect(first?.revertedLater).toEqual([]);
+    const receipt = buildRestoreReceipt({
+      title: `已撤销上一步（${first?.undoneLabel}）。`,
+      reverted: first?.reverted ?? [],
+      revertedLater: [],
+      nameById: names,
+    });
+    expect(receipt).toContain("第 5 章工作稿");
+    expect(receipt).toContain("恢复前的自动存档");
+    expect(receipt).not.toContain("也一并退回");
+
+    // ④ 再撤一次 —— 这回才是改名。
+    const second = await undoLastChange(dir);
+    expect(second?.undoneLabel).toBe("更新故事资料：改名 主角→陆沉");
+    expect(JSON.parse(await readFile(join(dir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("主角");
+  }, 30_000);
+
+  it("恢复到更早存档点：这步之后写的首稿也一并退回，回执单独点名 + 指明找回办法", async () => {
+    const dir = await makeRenamableProject();
+    const { snapshot: renameSnap } = await runWithSnapshot(dir, "agent:foundation_write:改名 主角→陆沉", async () => {
+      await writeFile(join(dir, "characters", "char-protag", "core.json"), JSON.stringify({ id: "char-protag", name: "陆沉" }), "utf-8");
+    });
+    await createSnapshot(dir, "出稿：第5章");
+    await writeChapter5Draft(dir);
+
+    // 作者从「历史」页恢复到改名那一步之前的存档点（更早）。
+    const outcome = await restoreSnapshot(dir, renameSnap.id);
+    expect(outcome.reverted.map((file) => `${file.status} ${file.path}`).sort()).toEqual([
+      "A drafts/fast/chapter-0005.md",
+      "M characters/char-protag/core.json",
+    ]);
+    expect(outcome.revertedLater).toEqual([{ status: "A", path: "drafts/fast/chapter-0005.md" }]);
+    await expect(access(join(dir, "drafts", "fast", "chapter-0005.md"))).rejects.toThrow(); // 连带退回实锤
+    const receipt = buildRestoreReceipt({
+      title: "已恢复到「更新故事资料：改名 主角→陆沉」之前。",
+      reverted: outcome.reverted,
+      revertedLater: outcome.revertedLater,
+      nameById: names,
+    });
+    expect(receipt).toContain("角色卡：陆沉");
+    expect(receipt).toContain("这步之后写的第 5 章工作稿也一并退回了");
+    expect(receipt).toContain("要找回，去「历史」页点「恢复前的自动存档」");
+  }, 30_000);
 });
 
 // P2（2026-10-02）对话历史不入快照：撤销只回退写作状态，用户已看到的聊天记录不随 undo 消失。
@@ -750,7 +830,7 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
 
     // 撤销线恢复可用：restoreSnapshot 不再被残留事务砖住，正常落「恢复到：撤销目标」。
     const restored = await restoreSnapshot(projectDir, target.id);
-    expect(restored.label).toBe("恢复到：撤销目标");
+    expect(restored.restored.label).toBe("恢复到：撤销目标");
     // 恢复目标之后新增的文件由 restoreSnapshot 按 git diff 正常清理（这是它的设计语义，
     // 与事务回滚的不可判定删除是两回事）。
     await expect(access(chapterPath)).rejects.toThrow();

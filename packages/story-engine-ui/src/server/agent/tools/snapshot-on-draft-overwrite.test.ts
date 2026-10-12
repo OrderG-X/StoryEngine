@@ -1,6 +1,7 @@
 // @vitest-environment node
 //
-// snapshotBeforeDraftOverwrite（M6）：覆盖现有非空草稿前建快照、首次出稿不建。用临时项目 + 真实 git 快照验。
+// snapshotBeforeDraftOverwrite（M6 + R4.2）：覆盖现有非空草稿前建快照；带 firstDraftLabel（出稿适配层）时
+// 首次出稿也建「出稿：第N章」；不带（revise/质量环节）首稿不建。用临时项目 + 真实 git 快照验。
 import { lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -37,6 +38,26 @@ describe("snapshotBeforeDraftOverwrite（M6 覆盖现有非空草稿前建快照
     expect(id).toBeUndefined();
     const after = await listSnapshots(projectDir);
     expect(after.length).toBe(before.length);
+  });
+
+  // R4.2（验收 3.2）：出稿适配层带 firstDraftLabel 时，首稿也建存档点「出稿：第N章」——
+  // 首稿也是作者眼里的一步，没有它撤销会跳到更早一步、连带删掉首稿。
+  it("无草稿但带 firstDraftLabel（出稿适配层）→ 建「出稿：第N章」存档点，进操作历史", async () => {
+    const projectDir = await makeProject();
+    const before = await listSnapshots(projectDir);
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 5, "第5章再次出稿前快照", "出稿：第5章");
+    expect(id).toMatch(/^[0-9a-f]{40}$/u);
+    const after = await listSnapshots(projectDir);
+    expect(after.length).toBe(before.length + 1);
+    expect(after[0].label).toBe("出稿：第5章");
+  });
+
+  it("有旧稿时 firstDraftLabel 不参与：照旧建「再次出稿前」存档点", async () => {
+    const projectDir = await makeProject();
+    await writeDraft(projectDir, 2, "# 第二章\n\n这是已经写好的一版草稿正文。");
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 2, "第2章再次出稿前快照", "出稿：第2章");
+    expect(id).toMatch(/^[0-9a-f]{40}$/u);
+    expect((await listSnapshots(projectDir))[0].label).toBe("第2章再次出稿前快照");
   });
 
   it("当前章有非空草稿 → 建快照，返回 40-hex snapshotId 且历史多一条", async () => {

@@ -758,7 +758,7 @@ describe("commit_apply 入库后告知：knownNames 用真实显示名（防主�
     const known = mocked.mock.calls[0]![0].knownNames ?? [];
     expect(known).toContain("林远"); // 真实显示名（全量角色 roster）
     expect(known.some((n) => /^char-/.test(n))).toBe(false); // 不含 slug ID
-  });
+  }, 30_000); // 真引擎预览+入库（磁盘 IO 重）：满载下会蹭过 vitest 默认 5s（CLAUDE.md 纪律给显式超时）
 });
 
 // 铁律④·绝不泄露裸 id/path：入库失败分支会把引擎 report.issues 逐字摊进给用户看的 summary/refusalReason，

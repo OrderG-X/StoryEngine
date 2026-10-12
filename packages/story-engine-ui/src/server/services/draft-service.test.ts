@@ -404,6 +404,28 @@ describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）"
     // 原稿分毫不动（降级承诺）。
     expect(await readFile(draftPath, "utf-8")).toBe(DRAFT_TEXT);
   });
+
+  // R4.2（验收 3.2）：出稿流程内已有「写盘前」存档点，去味覆盖不再另建——一次出稿=操作历史里的一步。
+  it("skipOverwriteSnapshot → 覆盖前不再另建快照（撤销点由流程级存档点兜着），改写照落", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+    vi.mocked(runDeAiFlavorBatch).mockResolvedValue({
+      ok: true, detected: 1, rewritten: 1, skipped: 0,
+      skippedByReason: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
+      changes: [], updatedContent: "# 第1章\n\n改写后的正文，与原文不同。\n", summary: "一键全修：1 处 AI 腔，改了 1 处。",
+    });
+    // 复检那步要的是「违规数组」（引擎真实签名）；本文件的引擎 mock 默认给报告对象，这里按需给一次。
+    storyEngineMocks.detectAiFlavorViolations.mockReturnValueOnce([] as never);
+    const result = await runAutoDeAiRound({
+      projectDir: projectDir!, chapter: 1, draftPath, initialHighMedium: 1, targets: [], rules: [], antiRules: [],
+      callModel: vi.fn(async () => ""), skipOverwriteSnapshot: true,
+    });
+    expect(snapshotBeforeDraftOverwrite).not.toHaveBeenCalled();
+    expect(result.snapshotId).toBeUndefined();
+    expect(result.info.fixedCount).toBe(1);
+    expect(await readFile(draftPath, "utf-8")).toContain("改写后的正文");
+  });
 });
 
 describe("restoreDraftFile CAS（R1：写盘窗口内的第三方改动不得被静默覆盖）", () => {
@@ -579,6 +601,34 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
   it("没注入 → 不跑（HTTP 路与旧行为不变）", async () => {
     await runGenerateDraft({ projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
     expect(pipelineMocks.runDraftQualityPipeline).not.toHaveBeenCalled();
+  });
+
+  // R4.2（验收 3.2）：适配层建好本步存档点（首稿「出稿：第N章」/覆盖「再次出稿前」）后，
+  // 内部第二次落盘不再各建快照——一次出稿=操作历史里的一步，撤销一键退回这步之前。
+  it("preWriteSnapshotId → 质量环节带 skipOverwriteSnapshot、输出撤销点用它", async () => {
+    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({
+      draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true,
+      info: {}, notes: [],
+    });
+    const result = await runGenerateDraft({
+      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
+      continueCallModel: vi.fn(), continuityCheckCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+      preWriteSnapshotId: "snap-flow",
+    });
+    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ skipOverwriteSnapshot: true }));
+    expect(result.snapshotId).toBe("snap-flow");
+  });
+
+  it("不传 preWriteSnapshotId → 质量环节照旧自建覆盖前快照（独立调用方行为不变）", async () => {
+    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({ draftBody: DRAFT_TEXT, changed: false, info: {}, notes: [] });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
+      continueCallModel: vi.fn(), continuityCheckCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalled();
+    expect(pipelineMocks.runDraftQualityPipeline.mock.calls[0][0]).not.toHaveProperty("skipOverwriteSnapshot");
   });
 });
 

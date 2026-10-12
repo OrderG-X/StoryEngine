@@ -8,6 +8,7 @@ vi.mock("../tools/snapshot-on-draft-overwrite.js", () => ({
   snapshotBeforeDraftOverwrite: vi.fn(async () => "snap-1"),
 }));
 
+import { snapshotBeforeDraftOverwrite } from "../tools/snapshot-on-draft-overwrite.js";
 import { runDraftQualityPipeline } from "./run-quality-pipeline.js";
 
 // 假查错模型说的是核账员那套话术（写笔记 / 三遍核账 / 自复核），经 checkCallModel 注入；
@@ -106,5 +107,21 @@ describe("runDraftQualityPipeline", () => {
     expect(result.snapshotId).toBeUndefined();
     expect(await readFile(draftPath, "utf-8")).toBe(before);
     expect(result.notes.join("\n")).toContain("没跑成");
+  });
+
+  // R4.2（验收 3.2）：出稿流程内已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
+  it("skipOverwriteSnapshot → 补写重写不再建快照（撤销点由流程级存档点兜着），写盘照旧", async () => {
+    const draft = "林舟一早骑车出门，往南门去。\n\n菜场还在，门口摆着几摊卖豆腐的。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    vi.mocked(snapshotBeforeDraftOverwrite).mockClear(); // 本文件无全局 clearAllMocks，清掉前面用例的调用记录
+    const continueCallModel = vi.fn(async () => "菜场还在，门口摆着几摊卖豆腐的，他推着车往后街走，找修鞋的吴师傅打听钟表厂宿舍的事。");
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, draftPath, title: "第8章", draftBody: draft, lengthTarget: TARGET,
+      continueCallModel, skipOverwriteSnapshot: true,
+    });
+    expect(result.changed).toBe(true);
+    expect(result.snapshotId).toBeUndefined();
+    expect(snapshotBeforeDraftOverwrite).not.toHaveBeenCalled();
+    expect(await readFile(draftPath, "utf-8")).toContain("修鞋的吴师傅");
   });
 });

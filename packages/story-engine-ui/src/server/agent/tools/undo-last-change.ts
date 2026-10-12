@@ -7,6 +7,10 @@
  * 实现：恢复到「上一步写操作前的自动快照」（snapshot.undoLastChange）。每个写工具运行前都建检查点，
  * 故恢复到最近一个 differing 检查点即撤销上一步；连续撤销逐步回退；撤销本身也建快照、可再撤销，历史不丢。
  * 没有可撤销的改动时如实回报（undone:false），绝不谎称已撤销。
+ *
+ * R4.2（验收 3.2）：回执必须写清**实际退回了什么**——恢复是把状态整个搬回存档点，超出「这一步」的
+ * 后续写入也会一并退回；旧回执只说「只撤了这一步」，模型顺着编了句「第 5 章草稿没受影响」（假的）。
+ * 现在 summary 列出退回清单（路径→人话），「这步之后写的」单独说明，并指明去「历史」页找回。
  */
 import { buildStateOverview } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
@@ -14,7 +18,9 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
 import { withUiOverviewDetails } from "../../lib/project-io.js";
+import { buildRestoreReceipt } from "../../lib/snapshot-changes.js";
 import { undoLastChange } from "../../lib/snapshot.js";
+import { readCharacterNameById } from "../presence/entity-labels.js";
 import { readProjectDirFromContext } from "../request-context.js";
 
 const inputSchema = z.object({});
@@ -22,7 +28,7 @@ const inputSchema = z.object({});
 const outputSchema = z.object({
   ok: z.boolean(),
   undone: z.boolean().describe("是否真的撤销了一步（false=没有可撤销的改动，不是失败）。"),
-  summary: z.string().describe("撤销结果的自然语言摘要，供回答用户。"),
+  summary: z.string().describe("撤销结果的自然语言摘要，供回答用户：撤了哪一步、实际退回了什么、去哪找回。"),
   overview: z.unknown().describe("撤销后的 StateOverview，供前端刷新到回退后的状态。"),
   refreshScope: z.literal("full"),
 });
@@ -30,7 +36,7 @@ const outputSchema = z.object({
 export const undoLastChangeTool = createTool({
   id: "undo_last_change",
   description:
-    "撤销上一步写操作。用户说一次撤销就只调一次，明确要退几步才调几次。没有可撤销的就如实说（undone:false）。",
+    "撤销上一步写操作。用户说一次撤销就只调一次，明确要退几步才调几次。没有可撤销的就如实说（undone:false）。回执会列出实际退回的内容，回报时只说回执里列出的，别自己补。",
   inputSchema,
   outputSchema,
   execute: async (_input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -51,10 +57,18 @@ export const undoLastChangeTool = createTool({
         refreshScope: "full" as const,
       };
     }
+    // 路径→人话要认角色名；认不出（书读不了）就用空表，短语退到「角色卡资料」，绝不吐裸 id。
+    const nameById = await readCharacterNameById(projectDir).catch(() => new Map<string, string>());
+    const summary = buildRestoreReceipt({
+      title: `已撤销上一步（${result.undoneLabel}）。`,
+      reverted: result.reverted,
+      revertedLater: result.revertedLater,
+      nameById,
+    });
     return {
       ok: true,
       undone: true,
-      summary: `已撤销上一步（${result.undoneLabel}），项目已回到该操作前的状态。只撤了这一步；还要往回退就再说一次，这步撤销本身也可以再撤销。`,
+      summary,
       overview,
       refreshScope: "full" as const,
     };

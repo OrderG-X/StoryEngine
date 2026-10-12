@@ -25,11 +25,15 @@
  *   - input.autoDeAi（默认 true）：检出 high/medium 后自动去味一轮（批量改写+复检，最多一轮不循环，
  *       覆盖落盘前快照）；false=只标注不改写。
  *
- * 快照时机（D4，刻意收敛为统一语义）：两侧适配层同调 snapshotBeforeDraftOverwrite——仅覆盖已有
- *   非空草稿前建可撤销快照；首次出稿无旧稿可丢，不建、不留无意义提交（M6 语义）。HTTP 路原「每次
- *   出稿前无条件 createSnapshot」收敛到此：首次出稿不再产生空快照/不再进操作历史（与工具路自 M6 起
- *   的行为一致；「覆盖写前必有撤销点」的安全不变量两侧一寸未让）。自动去味覆盖刚落盘的草稿前同样
- *   先快照（本 service 内 runAutoDeAiRound，行为未动）。
+ * 快照时机（D4，R4.2 修订）：两侧适配层同调 snapshotBeforeDraftOverwrite——出稿写盘前**总是**建这一步的
+ *   存档点：覆盖已有非空草稿建「第N章再次出稿前快照」；首次出稿建「出稿：第N章」。D4 原版刻意让首稿
+ *   不建（怕空快照/无意义提交），真机验收 3.2 实锤了代价：首稿没有存档点，作者说「撤销上一步」时撤销
+ *   跳到更早一步（比如改角色名），restoreSnapshot 会把那之后新增的首稿草稿一并删掉——存档点记的是
+ *   写稿之前的状态，撤销要用它，不是无意义提交；一次出稿在操作历史里也该有自己的一行。HTTP 路原
+ *   「每次出稿前无条件快照」与工具路 M6 由此真正收敛为同一语义。「覆盖写前必有撤销点」的安全不变量未动。
+ *   出稿内部的第二次落盘（自动去味覆盖、续写补字重写）不再各建存档点：适配层把 preWriteSnapshotId 传进来，
+ *   本 service 内 runAutoDeAiRound / runDraftQualityPipeline 据此跳过各自的覆盖前快照——撤销一键退回这步
+ *   出稿之前，别一次出稿产生好几条历史。
  *
  * HTTP 专属能力（保留在 service，工具 schema 不变）：
  *   - generateDraftCandidate（D5 persist:false 抽卡）：只生成不落盘、不快照，候选正文交路由临时展示。
@@ -453,6 +457,8 @@ export async function runAutoDeAiRound(input: {
   readonly rules: readonly AiFlavorRule[];
   readonly antiRules: readonly string[];
   readonly callModel: (prompt: string) => Promise<string>;
+  /** true=本出稿流程已有「写盘前」存档点，这次覆盖不再另建（R4.2：一次出稿=操作历史里的一步）。 */
+  readonly skipOverwriteSnapshot?: boolean;
 }): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string; readonly snapshotId?: string }> {
   const notRun = (error?: string): { readonly info: GenerateDraftAutoDeAiInfo } => ({
     info: {
@@ -494,16 +500,18 @@ export async function runAutoDeAiRound(input: {
       },
     };
   }
-  // 覆盖刚写盘的工作稿前先快照（对齐 revise_draft），让自动去味可撤销。
-  // 快照读稿 fail-closed 抛错时（P2-5）：本出稿的草稿确已落盘——绝不因去味中止而谎报整稿失败；
-  // 放弃本轮改写、原稿不动，error 如实报（与「改写失败=原稿不动+如实报」同款降级）。
-  // 审计 High-2：读旧稿→快照→覆盖写整段进同一临界区（commit_apply 在锁内读同一工作稿并定稿，
-  // 锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
+  // 覆盖刚写盘的工作稿前先快照（对齐 revise_draft），让自动去味可撤销；本流程已有「写盘前」存档点时
+  // 不再另建（R4.2：一次出稿=一步，撤销退回整步之前）。快照读稿 fail-closed 抛错时（P2-5）：本出稿的
+  // 草稿确已落盘——绝不因去味中止而谎报整稿失败；放弃本轮改写、原稿不动，error 如实报（与「改写失败=
+  // 原稿不动+如实报」同款降级）。审计 High-2：读旧稿→快照→覆盖写整段进同一临界区（commit_apply 在锁内
+  // 读同一工作稿并定稿，锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
   let snapshotId: string | undefined;
   const written = `${result.updatedContent.trimEnd()}\n`;
   try {
     await withProjectCommitLock(input.projectDir, async () => {
-      snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+      if (!input.skipOverwriteSnapshot) {
+        snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
+      }
       await writeFileAtomic(input.draftPath, written);
     });
   } catch (error) {
@@ -975,6 +983,12 @@ export interface GenerateDraftInput {
   readonly continuityCheckCallModel?: BrainCallModel;
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
+  /**
+   * 适配层已建的「这一步写盘前」存档点（R4.2：两条出稿路首稿/覆盖都建）。传了它，本编排内部的
+   * 第二次落盘（自动去味覆盖、续写补字重写）不再各建存档点——一次出稿在操作历史里就是一步，
+   * 撤销一键退回这步之前；它同时作为 output.snapshotId 的兜底（内部没建更近的快照时）。
+   */
+  readonly preWriteSnapshotId?: string;
 }
 
 /** HTTP 适配层投影料：工具 execute 投影时剥掉（不进 LLM 视野），路由据此组装 200/422 响应。 */
@@ -1434,6 +1448,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       ...(chapterPlan ? { chapterPlan } : {}),
       ...(input.continueCallModel ? { continueCallModel: input.continueCallModel } : {}),
       ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
+      // R4.2：本流程已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
+      ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
     });
     if (qualityPipeline.changed) {
       draftBody = qualityPipeline.draftBody;
@@ -1496,6 +1512,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
           rules: run.aiFlavorRules ?? ALL_BUILTIN_AI_FLAVOR_RULES,
           antiRules: await readAntiRules(projectDir),
           callModel: input.deAiCallModel,
+          // R4.2：本流程已有「写盘前」存档点，去味覆盖不再另建——一次出稿=操作历史里的一步。
+          ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
         });
         autoDeAiInfo = round.info;
         autoDeAiSnapshotId = round.snapshotId;
@@ -1572,8 +1590,11 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
     ...(sampling ? { candidatesReport: sampling.entries } : {}),
     ...(beatFidelityInfo ? { beatFidelity: beatFidelityInfo } : {}),
-    // 自动去味 / 补写核对真落了改动时，snapshotId 用最近的那个快照（撤销回改动前）；否则由工具 execute 挂「再写一版」快照。
-    ...(autoDeAiSnapshotId ?? qualityPipeline?.snapshotId ? { snapshotId: autoDeAiSnapshotId ?? qualityPipeline?.snapshotId } : {}),
+    // 撤销点：内部第二次落盘（去味/补写）真建了自己的快照就用最近的；否则用适配层的「写盘前」存档点
+    // （R4.2 后内部不再另建，通常就是它）；都没有（旧调用方不传）则由工具 execute 自行挂。
+    ...(autoDeAiSnapshotId ?? qualityPipeline?.snapshotId ?? input.preWriteSnapshotId
+      ? { snapshotId: autoDeAiSnapshotId ?? qualityPipeline?.snapshotId ?? input.preWriteSnapshotId }
+      : {}),
     ...(qualityPipeline ? { qualityPipeline: qualityPipeline.info } : {}),
     issues: report.issues,
     overview,
