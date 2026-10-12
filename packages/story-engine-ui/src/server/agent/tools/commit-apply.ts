@@ -24,6 +24,7 @@ import { basename, isAbsolute, relative } from "node:path";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
+import { warmUpReaders } from "../../brain/index.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { type FactCallModel } from "../fact-ledger/fact-ledger.js";
@@ -222,6 +223,8 @@ export async function applyCommitToolLogic(input: {
       };
     }
     case "committed": {
+      // 编辑部预热（STORY_CHECKER=reader 才干活）：后台给核账员把读书笔记补到这一章，失败只 warn、不阻塞定稿返回。
+      void warmUpReaders(projectDir, chapter);
       const report = result.report;
       const overview = result.overview ?? undefined;
       // report.updatedCharacters 是引擎的安全 slug ID（中文名会被 toSafeCharacterId 剥成 char-<hash>）；

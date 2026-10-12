@@ -69,7 +69,7 @@ const EVIDENCE_PER_CLAIM = 7;
 const CLAIMS_PER_BATCH = 14;
 const MIN_TERM_CHARS = 2;
 
-const normalize = (text: string): string => text.replace(/\s+/gu, "");
+export const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
 const SELF_DISMISSED = /不矛盾|并不矛盾|没有矛盾|无矛盾|一致[，。；,;]?(?:没有|无|不)|说法一致|前后一致|不冲突|并不冲突|不算矛盾|可以解释|说得通/u;
 
@@ -721,7 +721,7 @@ export function buildAdjudicationMessages(
  * 确定性层：账本里带数字的硬设定 vs 本章（引擎 findLedgerNumberConflicts，不调模型）。
  * 账本读不了如实记进 failures（不吞掉），模型那两路照跑。
  */
-async function ledgerNumberIssues(input: {
+export async function ledgerNumberIssues(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly draftBody: string;
@@ -745,6 +745,24 @@ async function ledgerNumberIssues(input: {
     source: "ledger" as const,
   }));
   return { issues, failures: [] };
+}
+
+/**
+ * 合并去重：先来的留下。同一句（一条的原句包含另一条的）只留一条——通读和逐条判常从同一句里各抄一段报同一个问题，
+ * 作者看到两三遍。组合查错和核账员那一路共用。
+ */
+export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
+  const merged: ContinuityIssueV2[] = [];
+  const seen = new Set<string>();
+  for (const issue of ordered) {
+    const key = normalize(issue.quote).slice(0, 16);
+    if (seen.has(key)) continue;
+    const quote = normalize(issue.quote);
+    if (merged.some((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); })) continue;
+    seen.add(key);
+    merged.push(issue);
+  }
+  return merged;
 }
 
 /**
@@ -776,20 +794,9 @@ export async function checkChapterContinuity(input: {
     withStep("拆说法逐条判", () => checkChapterAgainstEarlierText({ ...input, earlier })),
   ]);
   const failures = [...ledger.failures, ...full.failures, ...claims.failures];
-  const merged: ContinuityIssueV2[] = [];
-  const carried = new Set<ContinuityIssueV2>();
-  const seen = new Set<string>();
   // 账本对账的排最前：同一句模型也报了的，留账本这条（两边原句、理由都是确定的）。
-  for (const issue of [...ledger.issues, ...(input.carryOver ?? []), ...full.issues, ...claims.issues]) {
-    const key = normalize(issue.quote).slice(0, 16);
-    if (seen.has(key)) continue;
-    // 同一句（一条的原句包含另一条的）只留一条：通读和逐条判常从同一句里各抄一段报同一个问题，作者看到两三遍。
-    const quote = normalize(issue.quote);
-    if (merged.some((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); })) continue;
-    seen.add(key);
-    merged.push(issue);
-    if (input.carryOver?.includes(issue)) carried.add(issue);
-  }
+  const merged = mergeContinuityIssues([...ledger.issues, ...(input.carryOver ?? []), ...full.issues, ...claims.issues]);
+  const carried = new Set(merged.filter((issue) => input.carryOver?.includes(issue)));
   if (input.adjudicate === false || merged.length === 0) {
     return { claims: claims.claims, checkedClaims: claims.checkedClaims, issues: merged, failures, candidates: merged.length };
   }

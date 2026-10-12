@@ -75,12 +75,16 @@ const TX_EXCLUDE_MARKER = "# story-engine-ui: 定稿事务目录不入快照（�
 /** 分步计量记录（作者的运行日志）：撤销不该把它回退。 */
 const METRICS_EXCLUDE_DIR = ".story-engine-ui/metrics";
 const METRICS_EXCLUDE_MARKER = "# story-engine-ui: 分步计量记录不入快照（运行日志，撤销不回退）";
+/** 专员读书笔记（编辑部，2026-10-12）：按定稿正文哈希自校验的缓存，撤销回退了正文它自己会作废重写，不必随快照。 */
+const AGENTS_EXCLUDE_DIR = "agents";
+const AGENTS_EXCLUDE_MARKER = "# story-engine-ui: 专员读书笔记不入快照（按正文哈希自校验的缓存）";
 
 /** 快照排除的目录（info/exclude 一行 + diff/checkout 路径魔法）。 */
 const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: string; readonly marker: string }[] = [
   { dir: SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR, line: CHAT_SESSIONS_EXCLUDE_LINE, marker: CHAT_SESSIONS_EXCLUDE_MARKER },
   { dir: SNAPSHOT_EXCLUDED_TX_DIR, line: TX_EXCLUDE_LINE, marker: TX_EXCLUDE_MARKER },
   { dir: METRICS_EXCLUDE_DIR, line: `/${METRICS_EXCLUDE_DIR}/`, marker: METRICS_EXCLUDE_MARKER },
+  { dir: AGENTS_EXCLUDE_DIR, line: `/${AGENTS_EXCLUDE_DIR}/`, marker: AGENTS_EXCLUDE_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);

@@ -51,6 +51,13 @@ vi.mock("../../lib/llm-client.js", async (importOriginal) => {
   return { ...actual, ...llmMocks };
 });
 
+// 定稿后给核账员预热读书笔记（后台、不阻塞定稿）：单测里只看有没有被叫到，不真去补。
+const warmUpReadersMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../brain/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../brain/index.js")>()),
+  warmUpReaders: warmUpReadersMock,
+}));
+
 // 把 @actalk/story-engine 换成可 spy 的可变副本（importOriginal 保留所有真实实现）。
 // 默认行为：透传真实引擎，其余测试不受影响。
 // 目的：让用例C能用 vi.spyOn(storyEngineModule, 'buildCommitPlanFromProject') 注入失败，
@@ -65,6 +72,7 @@ const execute = commitApplyTool.execute as unknown as ToolExec;
 
 beforeEach(() => {
   __resetCommitPreviewStore();
+  warmUpReadersMock.mockClear();
 });
 
 /** 用户点了「确认定稿」按钮的执行上下文（结构化动作通道设的标记）——只有它才真写盘。 */
@@ -242,6 +250,28 @@ describe("commit_apply 守卫", () => {
     expect(out.ok).toBe(true); // 草稿没变 → 重算 token 仍匹配 → 首次入库照样成功
     expect(out.committed).toBe(true);
     expect(out.refused).toBe(false);
+  });
+});
+
+describe("commit_apply 定稿后预热核账员", () => {
+  it("定稿成功 → 后台预热到这一章（不等它，定稿照常返回）", async () => {
+    const projectDir = await makeProject("定稿预热", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 1 });
+    // 预热永远挂起也不能拖住定稿返回
+    warmUpReadersMock.mockImplementationOnce(() => new Promise<undefined>(() => undefined));
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: preview.previewToken! });
+    expect(out.committed).toBe(true);
+    expect(warmUpReadersMock).toHaveBeenCalledTimes(1);
+    expect(warmUpReadersMock).toHaveBeenCalledWith(projectDir, 1);
+  });
+
+  it("定稿被拒 → 不预热", async () => {
+    const projectDir = await makeProject("拒绝不预热", "林远");
+    await writeDraft(projectDir, 1, longDraft(1, "林远"));
+    const out = await applyCommitToolLogic({ projectDir, chapter: 1, previewToken: "fake-token" });
+    expect(out.refused).toBe(true);
+    expect(warmUpReadersMock).not.toHaveBeenCalled();
   });
 });
 
