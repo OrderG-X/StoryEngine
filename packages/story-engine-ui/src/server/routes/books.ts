@@ -3,8 +3,6 @@
  * POST /api/books/rename
  * POST /api/books/delete
  * POST /api/books/open-folder
- * POST /api/books/story-settings
- * POST /api/books/writing-rules
  * GET  /api/usage-summary
  */
 import { execFile } from "node:child_process";
@@ -29,10 +27,7 @@ import {
   writeFileAtomic,
   readString,
   readStringList,
-  readPositiveInteger,
   requireBodyString,
-  mergeWorldBibleFactions,
-  parseWritingRuleLines,
   splitChineseList,
   withUiOverviewDetails,
   readUsageSummary,
@@ -42,7 +37,6 @@ import {
   stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { createSnapshot } from "../lib/snapshot.js";
 import { formatRelativeTimeMs } from "../../utils/textUtils.js";
 
 const execFileAsync = promisify(execFile);
@@ -71,14 +65,6 @@ export function registerBooksRoutes(middlewares: MiddlewareStack): void {
     }
     if (req.url?.startsWith("/api/books/rename")) {
       await handleRenameBook(req, res);
-      return;
-    }
-    if (req.url?.startsWith("/api/books/story-settings")) {
-      await handleUpdateStorySettings(req, res);
-      return;
-    }
-    if (req.url?.startsWith("/api/books/writing-rules")) {
-      await handleUpdateWritingRules(req, res);
       return;
     }
     if (req.url?.startsWith("/api/books/delete")) {
@@ -393,142 +379,6 @@ async function handleRenameBook(req: import("node:http").IncomingMessage, res: i
     });
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
     writeJson(res, 200, { ok: true, title, overview });
-  } catch (error) {
-    writeJson(res, 500, {
-      ok: false,
-      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Update story settings
-// ---------------------------------------------------------------------------
-
-async function handleUpdateStorySettings(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
-  try {
-    if (req.method !== "POST") {
-      writeJson(res, 405, { ok: false, error: "Only POST is supported." });
-      return;
-    }
-    const body = await readJsonBody(req);
-    const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
-    if (!guardProjectPath(res, projectDir)) return;
-    const title = requireBodyString(body.title, "书名不能为空。").trim();
-    const genre = requireBodyString(body.genre, "类型不能为空。").trim();
-    const logline = requireBodyString(body.logline, "一句话故事不能为空。").trim();
-    const currentPhase = readString(body.currentPhase) ?? "开篇";
-    const firstVolumeGoal = readString(body.firstVolumeGoal);
-    const longFormGoals = [
-      ...(firstVolumeGoal ? [firstVolumeGoal] : []),
-      ...readStringList(body.longFormGoals),
-    ];
-    const worldRules = readStringList(body.worldRules);
-    const socialRules = readStringList(body.socialRules);
-    const importantFacts = readStringList(body.importantFacts);
-    const currentMainGoal = readString(body.currentMainGoal);
-    const centralConflicts = readStringList(body.centralConflicts);
-    const forbiddenReveals = readStringList(body.forbiddenReveals);
-    const openQuestions = readStringList(body.openQuestions);
-    await assertStoryEngineProject(projectDir);
-
-    const now = new Date().toISOString();
-    const projectPath = join(projectDir, "project.json");
-    const worldCorePath = join(projectDir, "world", "core.json");
-    const worldStatePath = join(projectDir, "world", "state.json");
-    const storyCorePath = join(projectDir, "story", "core.json");
-    const storyBiblePath = join(projectDir, "story", "bible.json");
-    const worldBiblePath = join(projectDir, "story", "world-bible.json");
-    // 审计 High-1：读-改-写整段进项目级写锁（可重入，createSnapshot 内部的锁嵌套安全）——
-    // agent 侧 foundation_write/worldbuilding/commit 持同一把锁写这批 story|world 文件，锁外交错会丢更新。
-    // 写全部走 writeFileAtomic（tmp+rename）：中途失败/崩溃不留半截 JSON。
-    await withProjectCommitLock(projectDir, async () => {
-      const [project, worldCore, worldState, storyCore, storyBible, worldBible] = await Promise.all([
-        readJsonFile(projectPath),
-        readJsonFile(worldCorePath),
-        readJsonFile(worldStatePath),
-        readJsonFile(storyCorePath),
-        readJsonFile(storyBiblePath),
-        readJsonFile(worldBiblePath),
-      ]);
-
-      await createSnapshot(projectDir, "故事设定修改前快照");
-      const writeJsonAtomic = (path: string, value: unknown) =>
-        writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
-      await Promise.all([
-        writeJsonAtomic(projectPath, { ...project, title, updatedAt: now }),
-        writeJsonAtomic(worldCorePath, { ...worldCore, genre, premise: logline, rules: worldRules }),
-        writeJsonAtomic(worldStatePath, { ...worldState, currentPhase, activeConflicts: importantFacts }),
-        writeJsonAtomic(storyCorePath, { ...storyCore, readerPromise: currentMainGoal ?? logline }),
-        writeJsonAtomic(storyBiblePath, {
-          ...storyBible,
-          projectLogline: logline,
-          premise: logline,
-          genre,
-          readerPromise: logline,
-          longFormGoals,
-          centralConflicts,
-          forbiddenChanges: forbiddenReveals,
-          canonFacts: importantFacts,
-          openQuestions,
-        }),
-        writeJsonAtomic(worldBiblePath, { ...worldBible, rules: worldRules, factions: mergeWorldBibleFactions(worldBible.factions, socialRules) }),
-      ]);
-    });
-
-    const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
-    writeJson(res, 200, { ok: true, overview });
-  } catch (error) {
-    writeJson(res, 500, {
-      ok: false,
-      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Update writing rules
-// ---------------------------------------------------------------------------
-
-async function handleUpdateWritingRules(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
-  try {
-    if (req.method !== "POST") {
-      writeJson(res, 405, { ok: false, error: "Only POST is supported." });
-      return;
-    }
-    const body = await readJsonBody(req);
-    const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
-    if (!guardProjectPath(res, projectDir)) return;
-    await assertStoryEngineProject(projectDir);
-
-    const writingRulesPath = join(projectDir, "story", "writing-rules.json");
-    const parsed = Array.isArray(body.rules)
-      ? parseWritingRuleLines(readStringList(body.rules))
-      : {
-        narrativePerspective: readString(body.narrativePerspective),
-        proseStyle: readStringList(body.proseStyle),
-        pacing: readString(body.pacing),
-        revealPolicy: readString(body.revealPolicy),
-        chapterLength: readPositiveInteger(body.targetChapterWords) ? { targetWords: readPositiveInteger(body.targetChapterWords) } : undefined,
-        genreRequirements: readStringList(body.genreRequirements),
-        forbiddenContent: readStringList(body.forbiddenContent),
-        doNotDo: readStringList(body.doNotDo),
-        readerExperienceRules: readStringList(body.readerExperienceRules),
-      };
-    // 审计 High-1 同款：读-改-写整段进锁 + 原子写（writing-rules.json 与 agent 的
-    // manage_style_exemplars / 生成流程共享，锁外裸写会交错丢更新）。
-    await withProjectCommitLock(projectDir, async () => {
-      const current = await readJsonFile(writingRulesPath);
-      await createSnapshot(projectDir, "写作规则修改前快照");
-      await writeFileAtomic(writingRulesPath, `${JSON.stringify({
-        ...current,
-        version: "v0",
-        ...parsed,
-      }, null, 2)}\n`);
-    });
-
-    const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
-    writeJson(res, 200, { ok: true, overview });
   } catch (error) {
     writeJson(res, 500, {
       ok: false,

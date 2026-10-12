@@ -8,9 +8,6 @@ import type {
   ChapterSteeringApiResponse,
   ChapterSteeringDraft,
   ChapterSteeringRequest,
-  CharacterMatrixPreviewPreflightApiResponse,
-  CharacterMatrixPreviewPreflightPlan,
-  CharacterMatrixPreviewPreflightRequest,
   BookFileActionApiResponse,
   CommitApplyApiResponse,
   CommitApplySuccessResult,
@@ -54,10 +51,7 @@ import type {
   FoundationGapReportApiResponse,
   FoundationGapSuggestion,
   FoundationGapSuggestionsApiResponse,
-  GenerateDraftApiResponse,
   GenerateDraftRequest,
-  MemoryContextReadRouteRequest,
-  MemoryContextReadRouteResult,
   DeleteBookRequest,
   RenameBookRequest,
   SaveChapterWorkspaceRequest,
@@ -67,8 +61,6 @@ import type {
   StateOverview,
   StateOverviewApiResponse,
   StateOverviewRequest,
-  UpdateStorySettingsRequest,
-  UpdateWritingRulesRequest,
   UsageSummary,
   UsageSummaryApiResponse,
 } from "./types.js";
@@ -405,29 +397,6 @@ export async function confirmFoundationGapCharacterStateWrite(
   return payload.result;
 }
 
-export async function previewCharacterMatrixConfirmPreflight(
-  input: CharacterMatrixPreviewPreflightRequest,
-  signal?: AbortSignal,
-): Promise<CharacterMatrixPreviewPreflightPlan> {
-  const payload = await fetchJson<CharacterMatrixPreviewPreflightApiResponse>(
-    "/api/character-matrix/preview-preflight",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        projectPath: input.projectPath,
-        expectedTargetFile: input.expectedTargetFile,
-        candidates: input.candidates,
-      }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.plan;
-}
-
 export async function chatFoundationGapAssistant(
   input: {
     readonly projectPath: string;
@@ -527,44 +496,6 @@ export async function renameBookProject(input: RenameBookRequest, signal?: Abort
   return { title: payload.title, overview: payload.overview };
 }
 
-export async function updateStorySettings(input: UpdateStorySettingsRequest, signal?: AbortSignal): Promise<StateOverview> {
-  const payload = await fetchJson<BookFileActionApiResponse>(
-    "/api/books/story-settings",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  if (!payload.overview) {
-    throw new Error("故事设定保存结果不完整。");
-  }
-  return payload.overview;
-}
-
-export async function updateWritingRules(input: UpdateWritingRulesRequest, signal?: AbortSignal): Promise<StateOverview> {
-  const payload = await fetchJson<BookFileActionApiResponse>(
-    "/api/books/writing-rules",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  if (!payload.overview) {
-    throw new Error("写作规则保存结果不完整。");
-  }
-  return payload.overview;
-}
-
 export async function removeBookProject(input: DeleteBookRequest, signal?: AbortSignal): Promise<void> {
   const payload = await fetchJson<BookFileActionApiResponse>(
     "/api/books/delete",
@@ -593,53 +524,6 @@ export async function openBookProjectFolder(projectPath: string, signal?: AbortS
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-}
-
-export async function fetchMemoryContextRead(
-  input: MemoryContextReadRouteRequest,
-  signal?: AbortSignal,
-): Promise<MemoryContextReadRouteResult> {
-  const body = {
-    projectPath: input.projectPath,
-    memoryTargetPath: input.memoryTargetPath,
-    ...(input.limits ? { limits: input.limits } : {}),
-    ...(input.requestId ? { requestId: input.requestId } : {}),
-  };
-
-  try {
-    return await fetchJson<MemoryContextReadRouteResult>(
-      "/api/memory/context/read",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-      signal,
-    );
-  } catch (error) {
-    const payload = (error as { readonly payload?: unknown }).payload;
-    if (isMemoryContextReadRouteResult(payload)) {
-      return payload;
-    }
-    return failedMemoryContextReadResult(input.requestId, error);
-  }
-}
-
-export async function generateDraft(input: GenerateDraftRequest, signal?: AbortSignal): Promise<{ readonly report: unknown; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: { readonly droppedSections: readonly string[] }; readonly warnings?: readonly string[] }> {
-  const payload = await fetchJson<GenerateDraftApiResponse>(
-    "/api/draft/generate",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  // warnings（enforce 降级留痕）逐字透传——藏住就是 ok:true 假成功。
-  return { report: payload.report, draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview, contextBudget: payload.contextBudget, warnings: payload.warnings };
 }
 
 /**
@@ -1012,50 +896,6 @@ function uniqueApiPayloadStrings(values: readonly (string | undefined)[]): reado
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isMemoryContextReadRouteResult(value: unknown): value is MemoryContextReadRouteResult {
-  return isRecord(value)
-    && typeof value.ok === "boolean"
-    && typeof value.status === "string"
-    && ["idle", "loading", "ready", "warning", "blocked", "failed"].includes(value.status)
-    && ("viewModel" in value)
-    && Array.isArray(value.warnings)
-    && Array.isArray(value.blockingReasons)
-    && typeof value.normalizedPath === "string"
-    && value.readOnly === true
-    && value.canWrite === false
-    && value.canInjectAutomatically === false
-    && typeof value.didReadFile === "boolean"
-    && value.didWriteMemory === false
-    && value.didInjectAutomatically === false
-    && isRecord(value.safety);
-}
-
-function failedMemoryContextReadResult(requestId: string | undefined, error: unknown): MemoryContextReadRouteResult {
-  return {
-    ok: false,
-    status: "failed",
-    viewModel: null,
-    warnings: [`memory context route request failed: ${error instanceof Error ? error.message : String(error)}`],
-    blockingReasons: [],
-    normalizedPath: "",
-    readOnly: true,
-    canWrite: false,
-    canInjectAutomatically: false,
-    didReadFile: false,
-    didWriteMemory: false,
-    didInjectAutomatically: false,
-    ...(requestId ? { requestId } : {}),
-    safety: {
-      noStateJsonWrite: true,
-      noMemoryWrite: true,
-      noMarkdownWrite: true,
-      noFormalCommit: true,
-      noPromptInjection: true,
-      noConfirmApplyEffect: true,
-    },
-  };
 }
 
 function readChapterChatDecision(value: unknown): ChapterChatResponse["decision"] | undefined {

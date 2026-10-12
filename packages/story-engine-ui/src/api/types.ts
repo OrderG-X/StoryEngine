@@ -1,10 +1,7 @@
 import type {
-  CharacterMatrixConfirmCandidate,
-  CharacterMatrixConfirmPreflightPlan,
   TimelineLayerEvent,
   TimelineMacroBlock,
 } from "@actalk/story-engine";
-import type { MemoryReadViewModel } from "../agent-command-center/memory-read-viewmodel.js";
 
 export interface StateOverview {
   readonly project: {
@@ -512,35 +509,6 @@ export interface BookFileActionRequest {
 
 export interface RenameBookRequest extends BookFileActionRequest {
   readonly title: string;
-}
-
-export interface UpdateStorySettingsRequest extends BookFileActionRequest {
-  readonly title: string;
-  readonly genre: string;
-  readonly logline: string;
-  readonly currentPhase: string;
-  readonly firstVolumeGoal?: string;
-  readonly longFormGoals?: readonly string[];
-  readonly worldRules?: readonly string[];
-  readonly socialRules?: readonly string[];
-  readonly importantFacts?: readonly string[];
-  readonly currentMainGoal?: string;
-  readonly centralConflicts?: readonly string[];
-  readonly forbiddenReveals?: readonly string[];
-  readonly openQuestions?: readonly string[];
-}
-
-export interface UpdateWritingRulesRequest extends BookFileActionRequest {
-  readonly narrativePerspective?: string;
-  readonly proseStyle?: readonly string[];
-  readonly pacing?: string;
-  readonly revealPolicy?: string;
-  readonly targetChapterWords?: number;
-  readonly genreRequirements?: readonly string[];
-  readonly forbiddenContent?: readonly string[];
-  readonly doNotDo?: readonly string[];
-  readonly readerExperienceRules?: readonly string[];
-  readonly rules?: readonly string[];
 }
 
 export interface DeleteBookRequest extends BookFileActionRequest {
@@ -1168,18 +1136,6 @@ export type FoundationGapConfirmCharacterStateWriteApiResponse =
   | { readonly ok: true; readonly result: FoundationGapConfirmCharacterStateWriteResult }
   | { readonly ok: false; readonly result: FoundationGapConfirmCharacterStateWriteResult; readonly error: string };
 
-export interface CharacterMatrixPreviewPreflightRequest {
-  readonly projectPath: string;
-  readonly expectedTargetFile: "story/character-matrix.json";
-  readonly candidates: readonly CharacterMatrixConfirmCandidate[];
-}
-
-export type CharacterMatrixPreviewPreflightPlan = CharacterMatrixConfirmPreflightPlan;
-
-export type CharacterMatrixPreviewPreflightApiResponse =
-  | { readonly ok: true; readonly plan: CharacterMatrixConfirmPreflightPlan }
-  | { readonly ok: false; readonly error: string };
-
 export type FoundationGapChatApiResponse =
   | { readonly ok: true; readonly result: FoundationGapChatResult }
   | { readonly ok: false; readonly error: string };
@@ -1585,47 +1541,6 @@ export type DraftRevisionPreviewApiResponse =
 export type DraftRevisionApplyApiResponse =
   | { readonly ok: true; readonly result: DraftRevisionApplyResult; readonly draftContent: string; readonly overview: StateOverview }
   | { readonly ok: false; readonly error: string };
-
-export type MemoryContextReadRouteStatus = "idle" | "loading" | "ready" | "warning" | "blocked" | "failed";
-
-export interface MemoryContextReadRouteLimits {
-  readonly maxFileBytes?: number;
-  readonly maxMemoryItems?: number;
-  readonly maxTextLengthPerItem?: number;
-}
-
-export interface MemoryContextReadRouteRequest {
-  readonly projectPath: string;
-  readonly memoryTargetPath: string;
-  readonly limits?: MemoryContextReadRouteLimits;
-  readonly requestId?: string;
-}
-
-export interface MemoryContextReadRouteSafety {
-  readonly noStateJsonWrite: true;
-  readonly noMemoryWrite: true;
-  readonly noMarkdownWrite: true;
-  readonly noFormalCommit: true;
-  readonly noPromptInjection: true;
-  readonly noConfirmApplyEffect: true;
-}
-
-export interface MemoryContextReadRouteResult {
-  readonly ok: boolean;
-  readonly status: MemoryContextReadRouteStatus;
-  readonly viewModel: MemoryReadViewModel | null;
-  readonly warnings: readonly string[];
-  readonly blockingReasons: readonly string[];
-  readonly normalizedPath: string;
-  readonly readOnly: true;
-  readonly canWrite: false;
-  readonly canInjectAutomatically: false;
-  readonly didReadFile: boolean;
-  readonly didWriteMemory: false;
-  readonly didInjectAutomatically: false;
-  readonly requestId?: string;
-  readonly safety: MemoryContextReadRouteSafety;
-}
 
 export interface CommitRequest {
   readonly projectPath: string;

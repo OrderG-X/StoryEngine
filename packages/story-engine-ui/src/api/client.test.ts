@@ -7,13 +7,11 @@ import {
   chatFoundationGapAssistant,
   applyCommit,
   confirmFoundationGapCharacterStateWrite,
-  fetchMemoryContextRead,
   fetchModelSettings,
   FOUNDATION_GAP_APPLY_TIMEOUT_MESSAGE,
   FOUNDATION_GAP_APPLY_TIMEOUT_MS,
   FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE,
   FOUNDATION_GAP_CHAT_TIMEOUT_MS,
-  generateDraft,
   previewCommit,
   saveChapterWorkspace,
   saveChapterWorkspaceBeacon,
@@ -230,113 +228,6 @@ describe("applyDraftRevision", () => {
   });
 });
 
-describe("fetchMemoryContextRead", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("posts only display-safe read request fields to the memory context route", async () => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => jsonResponse({
-      ok: true,
-      status: "ready",
-      viewModel: null,
-      warnings: [],
-      blockingReasons: [],
-      normalizedPath: "memory/project.json",
-      readOnly: true,
-      canWrite: false,
-      canInjectAutomatically: false,
-      didReadFile: true,
-      didWriteMemory: false,
-      didInjectAutomatically: false,
-      requestId: "req-1",
-      safety: safetyFlags(),
-    }, 200));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await fetchMemoryContextRead({
-      projectPath: "/tmp/story-project",
-      memoryTargetPath: "memory/project.json",
-      limits: { maxFileBytes: 65536, maxMemoryItems: 50, maxTextLengthPerItem: 500 },
-      requestId: "req-1",
-      testHooks: { shouldNotForward: true },
-      sourcePath: "/tmp/story-project/memory/project.json",
-      apply: true,
-      confirm: true,
-      write: true,
-    } as never);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/memory/context/read",
-      expect.objectContaining({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          projectPath: "/tmp/story-project",
-          memoryTargetPath: "memory/project.json",
-          limits: { maxFileBytes: 65536, maxMemoryItems: 50, maxTextLengthPerItem: 500 },
-          requestId: "req-1",
-        }),
-      }),
-    );
-    expect(result.status).toBe("ready");
-    expect(result.normalizedPath).toBe("memory/project.json");
-    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-    expect(body).not.toHaveProperty("testHooks");
-    expect(body).not.toHaveProperty("sourcePath");
-    expect(body).not.toHaveProperty("apply");
-    expect(body).not.toHaveProperty("confirm");
-    expect(body).not.toHaveProperty("write");
-  });
-
-  it("returns controlled blocked payloads for route errors", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
-      ok: false,
-      status: "blocked",
-      viewModel: null,
-      warnings: [],
-      blockingReasons: ["blocked path"],
-      normalizedPath: "",
-      readOnly: true,
-      canWrite: false,
-      canInjectAutomatically: false,
-      didReadFile: false,
-      didWriteMemory: false,
-      didInjectAutomatically: false,
-      requestId: "req-2",
-      safety: safetyFlags(),
-    }, 400)));
-
-    const result = await fetchMemoryContextRead({
-      projectPath: "/tmp/story-project",
-      memoryTargetPath: "../memory/project.json",
-      requestId: "req-2",
-    });
-
-    expect(result.status).toBe("blocked");
-    expect(result.blockingReasons).toContain("blocked path");
-    expect(result.didWriteMemory).toBe(false);
-    expect(result.didInjectAutomatically).toBe(false);
-  });
-
-  it("converts network failures into controlled failed display results", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      throw new TypeError("network down");
-    }));
-
-    const result = await fetchMemoryContextRead({
-      projectPath: "/tmp/story-project",
-      memoryTargetPath: "memory/project.json",
-      requestId: "req-3",
-    });
-
-    expect(result.status).toBe("failed");
-    expect(result.warnings.join("\n")).toContain("memory context route request failed");
-    expect(result.didReadFile).toBe(false);
-    expect(result.safety.noMemoryWrite).toBe(true);
-  });
-});
-
 describe("confirmFoundationGapCharacterStateWrite", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -540,42 +431,6 @@ describe("saveModelSettings warnings passthrough", () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okPayload(), 200)));
 
     const result = await saveModelSettings("{\"version\":1}");
-
-    expect(result.warnings).toBeUndefined();
-  });
-});
-
-describe("generateDraft warnings passthrough", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  function okDraftPayload(warnings?: readonly string[]) {
-    return {
-      ok: true,
-      report: { passed: true },
-      draftContent: "# 第1章\n\n正文。",
-      draftTitle: "第1章",
-      overview: {},
-      ...(warnings ? { warnings } : {}),
-    };
-  }
-
-  const request = { projectPath: "/tmp/story-project", chapter: 1, chapterGoal: "开场" };
-
-  it("透传 200 响应的 warnings（enforce 降级留痕绝不能藏在类型层外）", async () => {
-    const warnings = ["draft enforce re-read failed: body not reloaded, serving buffered draft"];
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okDraftPayload(warnings), 200)));
-
-    const result = await generateDraft(request);
-
-    expect(result.warnings).toEqual(warnings);
-  });
-
-  it("响应不带 warnings 字段时结果为 undefined（无降级不造警告）", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(okDraftPayload(), 200)));
-
-    const result = await generateDraft(request);
 
     expect(result.warnings).toBeUndefined();
   });

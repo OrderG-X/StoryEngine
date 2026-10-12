@@ -180,7 +180,7 @@ export interface AgentTurnUsage {
 }
 
 /** 空闲看门狗超时：上游/网络半挂时多久没有任何 SSE 数据就判超时、中止流（M3：治「永久转圈」）。 */
-export const AGENT_IDLE_TIMEOUT_MS = 90_000;
+const AGENT_IDLE_TIMEOUT_MS = 90_000;
 
 export async function streamAgentChat(
   input: StreamAgentChatRequest,
@@ -508,7 +508,7 @@ function isAiFlavorReport(value: Record<string, unknown>): boolean {
  * 不能当「审校问题」卡渲染（否则显成『1 处问题』+ 可点改这处，点了让 agent 去改不存在的问题）；
  * 让 agent 的文本摘要「这次没审完、要不要重试」如实告知。与 check_ai_flavor 的 ok!==false 守卫对称。
  */
-export function isDraftReview(value: Record<string, unknown>): boolean {
+function isDraftReview(value: Record<string, unknown>): boolean {
   if (value.usedFallback === true) return false;
   const review = value.review;
   return typeof review === "object" && review !== null && Array.isArray((review as { issues?: unknown }).issues);

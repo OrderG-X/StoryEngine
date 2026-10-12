@@ -23,8 +23,6 @@ import type {
   FoundationGapDecision,
   FoundationGapSuggestion,
   StateOverview,
-  UpdateStorySettingsRequest,
-  UpdateWritingRulesRequest,
 } from "../api/types.js";
 import { useWorkspaceStore, type SelectedAdviceCard } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
@@ -117,7 +115,20 @@ function draftAgentProgressCard(input: {
   };
 }
 
-function writingRulesSaveSuggestion(input: UpdateWritingRulesRequest): FoundationGapSuggestion {
+/** 设置弹窗「写作规则」页保存时收集的字段（原 UpdateWritingRulesRequest，随 /api/books/writing-rules 死路由删除改为本地形状；只用于拼 foundation-gaps 保存建议）。 */
+interface WritingRulesSaveInput {
+  readonly narrativePerspective?: string;
+  readonly proseStyle?: readonly string[];
+  readonly pacing?: string;
+  readonly revealPolicy?: string;
+  readonly targetChapterWords?: number;
+  readonly genreRequirements?: readonly string[];
+  readonly forbiddenContent?: readonly string[];
+  readonly doNotDo?: readonly string[];
+  readonly readerExperienceRules?: readonly string[];
+}
+
+function writingRulesSaveSuggestion(input: WritingRulesSaveInput): FoundationGapSuggestion {
   return {
     id: `manual-writing-rules-${Date.now()}`,
     gapId: "manual-writing-rules",
@@ -145,7 +156,24 @@ function writingRulesSaveSuggestion(input: UpdateWritingRulesRequest): Foundatio
   };
 }
 
-function storySettingsSaveSuggestions(input: UpdateStorySettingsRequest): readonly FoundationGapSuggestion[] {
+/** 设置弹窗「故事设定」页保存时收集的字段（原 UpdateStorySettingsRequest，随 /api/books/story-settings 死路由删除改为本地形状；只用于拼 foundation-gaps 保存建议）。 */
+interface StorySettingsSaveInput {
+  readonly title: string;
+  readonly genre: string;
+  readonly logline: string;
+  readonly currentPhase: string;
+  readonly firstVolumeGoal?: string;
+  readonly longFormGoals?: readonly string[];
+  readonly worldRules?: readonly string[];
+  readonly socialRules?: readonly string[];
+  readonly importantFacts?: readonly string[];
+  readonly currentMainGoal?: string;
+  readonly centralConflicts?: readonly string[];
+  readonly forbiddenReveals?: readonly string[];
+  readonly openQuestions?: readonly string[];
+}
+
+function storySettingsSaveSuggestions(input: StorySettingsSaveInput): readonly FoundationGapSuggestion[] {
   const entries: Array<readonly [FoundationGapSuggestion["category"], string, string, unknown]> = [
     ["story", "project.json", "title", input.title],
     ["world", "world/core.json", "genre", input.genre],

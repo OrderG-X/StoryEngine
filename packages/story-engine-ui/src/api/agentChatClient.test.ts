@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AGENT_IDLE_TIMEOUT_MS, streamAgentChat, isDraftReview } from "./agentChatClient.js";
+import { streamAgentChat } from "./agentChatClient.js";
 
 /** 把若干 SSE 帧拼成一个文本，返回带 body(ReadableStream) 的 Response。 */
 function sseResponse(frames: readonly string[], init?: { ok?: boolean; status?: number }): Response {
@@ -703,7 +703,7 @@ describe("streamAgentChat", () => {
 
     const p = streamAgentChat({ projectPath: "/tmp/p", messages: [{ role: "user", content: "现状？" }] }, h);
     // 推进到看门狗触发：abort 内部 controller → reader.read() reject → 走超时收尾。
-    await vi.advanceTimersByTimeAsync(AGENT_IDLE_TIMEOUT_MS + 10);
+    await vi.advanceTimersByTimeAsync(90_000 + 10);
     await p;
 
     expect(h.onError).toHaveBeenCalledTimes(1);
@@ -731,18 +731,5 @@ describe("streamAgentChat", () => {
     // 用户停止：不报错（无错误气泡），但要收尾 done（解锁 loading）。
     expect(h.onError).not.toHaveBeenCalled();
     expect(h.onDone).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("isDraftReview（审稿失败 fallback 不当审校问题卡渲染）", () => {
-  it("正常审稿（有 issues 数组、非 fallback）→ true", () => {
-    expect(isDraftReview({ review: { issues: [{ id: "x" }] }, usedFallback: false })).toBe(true);
-  });
-  it("usedFallback=true（审稿没跑成）→ false，绝不渲染成『审校问题 1 处』误导", () => {
-    expect(isDraftReview({ review: { issues: [{ id: "ai-review-format-error" }] }, usedFallback: true })).toBe(false);
-  });
-  it("形状不符（无 issues 数组）→ false", () => {
-    expect(isDraftReview({ review: {} })).toBe(false);
-    expect(isDraftReview({})).toBe(false);
   });
 });
