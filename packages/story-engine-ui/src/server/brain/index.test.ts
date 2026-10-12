@@ -49,7 +49,8 @@ describe("定稿后预热", () => {
     expect(isReaderPlannerEnabled()).toBe(true);
     const dir = await makeBook(3);
     await warmUpReaders(dir, 2, { callModel: async () => "笔记" });
-    expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json"]);
+    // 合并语义：没开的角色不白调模型（T2），核账员没开就不补它的笔记
+    expect(await notes(dir, "checker")).toEqual([]);
     expect(await notes(dir, "planner")).toEqual(["0001.json", "0002.json"]);
   });
 
