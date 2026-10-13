@@ -76,7 +76,7 @@ export type {
 
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext } from "../request-context.js";
+import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext, isUserConfirmedTool } from "../request-context.js";
 import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
 import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
@@ -348,9 +348,10 @@ export function buildNoWriteIntentBlockedOutput(
     blockedReason: "no_write_intent_this_turn",
     issues: ["本轮用户原话没有写正文/续写的意图"],
     overview,
+    // R7.1：拦下的原因直说，模型照这句转告即可，别自己编（此前模型编过「可能是我把要点拆成清单传过去」）。
     summary:
-      `这一轮我没收到明确要写正文的指令，就没有自动生成第 ${chapter} 章正文——避免擅自往下写，也不白费你的额度。` +
-      `想写就直接说「写这一章」或「写下一章」；如果你是想改设定/资料或做别的，告诉我就行。`,
+      `你这句话里我没认出要写正文的意思，就没有生成第 ${chapter} 章正文——避免擅自往下写，也不白费你的额度。` +
+      `想写就直接说「写第 ${chapter} 章」或「写下一章」；如果你是想改设定/资料或做别的，告诉我就行。`,
     refreshScope: "full",
   };
 }
@@ -385,9 +386,16 @@ export const generateDraftTool = createTool({
     });
     // A（写作意图门，防「入库后自主续写」）：那一轮用户原话只有定稿/审稿等意图、没有任何写作意图时，
     // 模型不得擅自 generate_draft 往下写整章（纪律 145「出稿不越权」的确定性护栏——不赌弱模型守规矩）。
-    // 缺原话放行（向后兼容/前端按钮直调）；组合意图「定稿并接着写下一章」含写作意图仍放行。拦在调模型之前。
+    // 缺原话放行（向后兼容/前端按钮直调）；R7.1 起口径收敛为「正向表命中即放行」——不再用否定词
+    // 否决（角色台词「谁也别想再动它」曾被误拦，见 turn-intent-gate.ts 头注）。按钮/选项点出来的出稿
+    // 带 body.action 结构化动作，runGenerateDraftAction 会打上用户确认标记，这里优先认标记（按钮点击
+    // 本身就是写作授权，不赌回显文案命中词表）。拦在建快照/调模型之前。
     const userTurnText = readUserTurnTextFromContext(context);
-    if (userTurnText !== undefined && !userTurnAllowsDraftWrite(userTurnText)) {
+    if (
+      userTurnText !== undefined
+      && !isUserConfirmedTool(context, "generate_draft")
+      && !userTurnAllowsDraftWrite(userTurnText)
+    ) {
       console.warn("[turn-intent-gate] 拦下未授权 generate_draft（本轮用户原话无写作意图，防入库后自主续写）");
       const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
       return buildNoWriteIntentBlockedOutput(resolvedChapter, overview);

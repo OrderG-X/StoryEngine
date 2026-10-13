@@ -15,7 +15,7 @@ import { writeFile } from "node:fs/promises";
 import { ALIAS_TABLE_RELATIVE_PATH } from "../alias-generator/alias-generator.js";
 import { defaultCommittedChapterPath, defaultDraftPath } from "../../lib/project-io.js";
 import { makeWriterRankContext } from "../context-budget/rank-writer-context.js";
-import { buildProjectRequestContext } from "../request-context.js";
+import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
   aiFlavorWeightedScore,
@@ -595,6 +595,52 @@ describe("写作意图门（防入库后自主续写）", () => {
       const context = {
         requestContext: buildProjectRequestContext(projectDir, 1, undefined, "继续写第1章正文。只写这一章，不要写其他章。"),
       } as unknown as ToolExecutionContext;
+
+      const out = await execute({}, context) as { ok: boolean; chapter: number };
+      expect(out.ok).toBe(true);
+      expect(out.chapter).toBe(1);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // R7.1（十章试写报告 3.1）：角色台词里的「别想再动它」曾被否定词否决误拦，第 9 章两次没写成。
+  it("R7.1 台词里的否定说法不再否决（报告原句改第1章）→ 放行照常出稿", async () => {
+    const projectDir = await makeProject("意图门台词放行", "林远");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(
+          projectDir,
+          1,
+          undefined,
+          "写第1章：第二天爷爷用铁丝缠死了摆锤，说：『钟停在这儿，谁也别想再动它。』",
+        ),
+      } as unknown as ToolExecutionContext;
+
+      const out = await execute({}, context) as { ok: boolean; chapter: number };
+      expect(out.ok).toBe(true);
+      expect(out.chapter).toBe(1);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // R7.1 结构化意图标记优先：按钮/选项点出来的出稿（body.action 直达，runGenerateDraftAction 打标记）
+  // 即使回显文案一个写作说法都没有，也放行——按钮点击本身就是写作授权。
+  it("R7.1 用户确认标记优先于文本门：标记在场 → 原话无写作说法也放行出稿", async () => {
+    const projectDir = await makeProject("意图门标记放行", "林远");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+
+    try {
+      const requestContext = buildProjectRequestContext(projectDir, 1, undefined, "来一版第1章");
+      markUserConfirmedTool(requestContext, "generate_draft");
+      const context = { requestContext } as unknown as ToolExecutionContext;
 
       const out = await execute({}, context) as { ok: boolean; chapter: number };
       expect(out.ok).toBe(true);

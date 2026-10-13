@@ -469,6 +469,10 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   const input = { chapter: action.chapter, ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}) };
   args.sendEvent("tool-call", { toolCallId, toolName: "generate_draft", args: input });
   let output: unknown;
+  // R7.1 结构化意图标记：按钮/选项点击本身就是写作授权。generate_draft 工具的写作意图门
+  // （防定稿后自主续写）见此标记优先放行，不赌回显文案命中正向词表。标记只在本次执行期间存在，
+  // 结束即清（与 prune 同款）；本通道不跑模型，不存在模型调用蹭标记的窗口。
+  markUserConfirmedTool(args.requestContext, "generate_draft");
   try {
     output = await args.executeTool("generate_draft", input, args.requestContext);
   } catch (error) {
@@ -478,6 +482,8 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
     const rest = args.scrubber.flush();
     if (rest) args.sendEvent("text-delta", { text: rest });
     return;
+  } finally {
+    markUserConfirmedTool(args.requestContext, undefined);
   }
   args.sendEvent("tool-result", { toolCallId, toolName: "generate_draft", output });
   const result = output as GenerateDraftLikeOutput | undefined;
