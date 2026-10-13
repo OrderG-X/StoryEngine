@@ -401,6 +401,53 @@ describe("projectAgentEvent", () => {
     expect(msg.toolSteps![0].status).toBe("failed");
   });
 
+  it("R7.9：Mastra 校验失败（toolValidationFailure）→ 步骤落 failed、summary 进详情，点开不再空——即便裁决类工具也不是「裁决未过」", () => {
+    // 服务端 agent-chat normalizeForwardedToolResult 归一后的形状：ok:false + 中文 summary + 标记。
+    let msg = emptyAssistantMessage("draft-validation-fail");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "g1",
+      toolName: "generate_draft",
+      endedAt: 78,
+      output: { ok: false, toolValidationFailure: true, summary: "AI 传的参数没通过校验（mustHitBeats），这一步没有执行，具体原因已回给 AI 处理。" },
+    });
+    const step = msg.toolSteps![0];
+    expect(step.status).toBe("failed");
+    expect(step.label).toBe("生成正文");
+    expect(step.detail).toContain("没通过校验");
+    // 裁决类工具的校验失败也不是 verdict：工具根本没跑，没有「裁决」。
+    let preview = emptyAssistantMessage("preview-validation-fail");
+    preview = projectAgentEvent(preview, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
+    preview = projectAgentEvent(preview, {
+      type: "tool-result",
+      toolCallId: "p1",
+      toolName: "commit_preview",
+      endedAt: 2,
+      output: { ok: false, toolValidationFailure: true, summary: "AI 传的参数没通过校验（chapter），这一步没有执行，具体原因已回给 AI 处理。" },
+    });
+    expect(preview.toolSteps![0].status).toBe("failed");
+  });
+
+  it("R7.9：failed 却没带 summary 的工具结果 → 详情兜底一句话，失败步骤仍可展开（不编成功也不留空）", () => {
+    let msg = emptyAssistantMessage("fail-no-summary");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "f1", toolName: "generate_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, {
+      type: "tool-result",
+      toolCallId: "f1",
+      toolName: "generate_draft",
+      endedAt: 2,
+      output: { ok: false },
+    });
+    expect(msg.toolSteps![0].status).toBe("failed");
+    expect(msg.toolSteps![0].detail).toBeTruthy();
+    // 非失败状态不带兜底（没说失败的绝不编原因）。
+    let ok = emptyAssistantMessage("ok-no-summary");
+    ok = projectAgentEvent(ok, { type: "tool-call", toolCallId: "o1", toolName: "read_state_overview", startedAt: 1 });
+    ok = projectAgentEvent(ok, { type: "tool-result", toolCallId: "o1", toolName: "read_state_overview", endedAt: 2, output: {} });
+    expect(ok.toolSteps![0].detail).toBeUndefined();
+  });
+
   it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
     let msg = emptyAssistantMessage("check-ok");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
