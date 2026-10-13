@@ -5,7 +5,7 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import { readFactLedgerStrict, type FactEntry } from "@actalk/story-engine";
+import { readFactLedgerStrict, readStoryTimeline, type FactEntry } from "@actalk/story-engine";
 import {
   callConfiguredBrainModel,
   catchUpReaders,
@@ -18,6 +18,7 @@ import {
   type ReaderWaited,
 } from "../../brain/index.js";
 import {
+  applyRelativeDayAlignment,
   issueStillPresent,
   ledgerNumberIssues,
   mergeContinuityIssues,
@@ -34,6 +35,10 @@ export interface ChapterCheckItem {
   readonly earlierQuote: string;
   readonly earlierChapter: number;
   readonly reason: string;
+  /** R7.3 对的是设定本（人物卡 / 地点 / 资产 / 世界规则）：earlierQuote＝设定原文，不是某一章的正文。 */
+  readonly againstSetting?: { readonly label: string };
+  /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝当前核的章。 */
+  readonly fixChapter?: number;
 }
 
 export interface ChapterCheckResult {
@@ -65,6 +70,8 @@ const toItem = (issue: ContinuityIssueV2): ChapterCheckItem => ({
   earlierQuote: issue.earlierQuote,
   earlierChapter: issue.earlierChapter,
   reason: issue.reason,
+  ...(issue.againstSetting ? { againstSetting: { ...issue.againstSetting } } : {}),
+  ...(issue.fixChapter !== undefined ? { fixChapter: issue.fixChapter } : {}),
 });
 
 /** 核账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补（T5），这次不硬核。 */
@@ -105,7 +112,10 @@ async function checkByReader(input: {
     draftBody: input.body,
     ...(input.ledgerFacts ? { ledgerFacts: input.ledgerFacts } : {}),
   }));
-  const issues = mergeContinuityIssues([...ledger.issues, ...input.carryOver, ...reader.issues])
+  // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
+  // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
+  const timeline = await readStoryTimeline(input.projectDir).then((read) => read.timeline).catch(() => undefined);
+  const issues = applyRelativeDayAlignment(mergeContinuityIssues([...ledger.issues, ...input.carryOver, ...reader.issues]), input.chapter, timeline)
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const }))
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
@@ -134,7 +144,10 @@ export async function checkChapterBody(
   let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited };
   let coldTotal: number | undefined;
   if (reused) {
-    result = { issues: memory!.issues, failures: [] };
+    // R7.3：复用上次结果也照过一遍相对日子换算（纯确定性、不调模型）——作者后来改了故事日时，
+    // 旧缓存里「明天 / 后天」那类条目按新时间线重新换算，不会把该收掉的误报又端出来。
+    const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
+    result = { issues: applyRelativeDayAlignment(memory!.issues, chapter, timeline), failures: [] };
   } else {
     result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
     if (result.coverage) {
@@ -159,7 +172,10 @@ export async function checkChapterBody(
   const sure = shown.filter((issue) => issue.confidence === "sure").map(toItem);
   const maybe = shown.filter((issue) => issue.confidence !== "sure").map(toItem);
   const ok = result.failures.length === 0 || result.issues.length > 0;
-  const where = (issue: { readonly earlierChapter: number }) => (issue.earlierChapter === chapter ? "本章前文" : `第 ${issue.earlierChapter} 章`);
+  // 回执里一句问题的措辞：对设定本的写清「第 N 章那句和设定（人物卡）对不上」（错在那章就指那章），其余照旧「和第 N 章」。
+  const issueLine = (issue: Readonly<Pick<ChapterCheckItem, "quote" | "earlierQuote" | "earlierChapter" | "reason" | "againstSetting" | "fixChapter">>): string => issue.againstSetting
+    ? `${issue.fixChapter !== undefined && issue.fixChapter !== chapter ? `第 ${issue.fixChapter} 章那句` : "本章那句"}「${issue.quote.slice(0, 40)}」和设定（${issue.againstSetting.label}）「${issue.earlierQuote.slice(0, 40)}」对不上：${issue.reason}`
+    : `「${issue.quote.slice(0, 40)}」和${issue.earlierChapter === chapter ? "本章前文" : `第 ${issue.earlierChapter} 章`}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`;
   const dismissedNote = dismissed > 0 ? `（另有 ${dismissed} 处你标过「不是问题」，没再报。）` : "";
   const reusedNote = reused ? "这一章和前文都没改过，结果同上次。" : "";
   // 等读那一句（R5.2 必做 2）：这次核账前先等核账员当场补了笔记，如实说补了哪几章、花了多久。
@@ -182,7 +198,7 @@ export async function checkChapterBody(
       ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
       : [
         `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`,
-        ...sure.slice(0, 3).map((issue) => `· 「${issue.quote.slice(0, 40)}」和${where(issue)}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`),
+        ...sure.slice(0, 3).map((issue) => `· ${issueLine(issue)}`),
       ].join("\n");
   return {
     ok,

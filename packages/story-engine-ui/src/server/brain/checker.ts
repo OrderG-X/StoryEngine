@@ -21,11 +21,13 @@ import {
   normalize,
   parseFullReadIssues,
   readEarlierChapters,
+  SELF_DISMISSED,
   splitSentences,
   type ContinuityIssueV2,
   type EarlierText,
 } from "../agent/continuity-v2/check-chapter.js";
 import type { ChapterPlan } from "@actalk/story-engine";
+import { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
 import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 
@@ -94,9 +96,27 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
-    "每条 contradictions：quote 逐字抄新稿里有问题的那一句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
+    "每条 contradictions：quote 逐字抄有问题的那一句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
+  ].join("\n");
+}
+
+/**
+ * R7.3 第 4 遍（对设定本）的提示：把新稿和前文里碰到设定本写到的硬信息的句子逐句列出，每句判和设定一致不一致。
+ * 逐句二元判定（agrees）而不是让模型挑「哪边错」——实测让它挑边会把对的挑成错的（deepseek-flash），
+ * 逐句判一致性能判对，谁错由代码按「哪句和设定不一致」推。
+ */
+export function settingCheckTask(chapter: number): string {
+  return [
+    `这是作者刚交的第 ${chapter} 章新稿，上面附了这本书的设定本（作者定的硬设定）。这一遍只对设定本，不看别的：`,
+    "把新稿和前文各章里、写到设定本也写到的那些硬信息（年龄、亲属、去世时间、身体特征、物件归属、地点方位、世界规则等）的原句逐句列出，每句判它和设定一致不一致：",
+    `- quote 逐字抄那一句原句；quoteChapter 写它在第几章（新稿里的句子写 ${chapter}）；`,
+    "- settingQuote 逐字抄设定本里写这件事的那句原文；",
+    "- agrees：那句和设定本一致写 true，对不上写 false；",
+    "- reason 一句话说它和设定说什么、一致还是对不上；confidence 写 sure（那句和设定不可能同时成立）或 maybe。",
+    "写了变化过程的、人物明确在撒谎或记错的，不算对不上。设定原文抄不出（和上面设定本逐字对不上）的不要列。只列和设定本写到的同一件事直接相关的句子，最多 12 句。",
+    '只输出一个 JSON：{"checks":[{"quote":"","quoteChapter":0,"settingQuote":"","agrees":true,"reason":"","confidence":"maybe"}]}',
   ].join("\n");
 }
 
@@ -203,26 +223,55 @@ function readConfidences(text: string): Map<string, "sure" | "maybe"> {
   return out;
 }
 
-/** A 自复核的提示：把三遍合并后的候选逐条列出（本章那句、前文那句、理由），让它再判一轮。 */
-export function selfReviewTask(chapter: number, issues: readonly ContinuityIssueV2[]): string {
+/** A 自复核的提示：把三遍合并后的候选逐条列出（本章那句、另一侧那句、理由），让它再判一轮。
+ *  R7.3 有设定本时多要三个字段：设定原句（settingQuote）＋两句各自和设定一致不一致（draftAgrees / earlierAgrees）。 */
+export function selfReviewTask(chapter: number, issues: readonly ContinuityIssueV2[], withSetting = false): string {
   return [
     `上面是作者刚交的第 ${chapter} 章新稿，你刚才核完报了下面这些对不上的地方。逐条复核一遍：`,
     ...issues.map((issue, index) => [
-      `【K${index + 1}】本章那句：${issue.quote}`,
-      `  ${issue.earlierChapter === chapter ? "本章更早处" : `第 ${issue.earlierChapter} 章`}那句：${issue.earlierQuote}`,
+      `【K${index + 1}】${issue.fixChapter && issue.fixChapter !== chapter ? `第 ${issue.fixChapter} 章` : "本章"}那句：${issue.quote}`,
+      `  ${
+        issue.againstSetting
+          ? `设定本（${issue.againstSetting.label}）`
+          : issue.earlierChapter === chapter ? "本章更早处" : `第 ${issue.earlierChapter} 章`
+      }那句：${issue.earlierQuote}`,
       `  当时的理由：${issue.reason}`,
     ].join("\n")),
     "每条给一个判断：",
-    "sure＝确定是矛盾：同一件事、同一样东西、同一个人，两处说法不可能同时成立，文中也没交代变化过程；",
+    "sure＝确定是矛盾：同一件事、同一样东西、同一个人，两处说法不可能同时成立，文中也没交代变化过程；设定本（作者定的硬设定）和正文对不上也算；",
     "maybe＝可能是：看着对不上，但也说得通（时间没写清、可能是两样东西、中间可能发生了没写的事）；",
     "no＝不是：说的明显不是同一件事或同一时刻（比如前后其实换了一天、换了一个人、换了一样东西），或文中明写了变化，或人物在撒谎记错。",
-    "拿不准就给 maybe，不要轻易给 no。只输出一个 JSON：{\"verdicts\":[{\"id\":\"K1\",\"verdict\":\"sure\"}]}，每条都要给。",
+    ...(withSetting
+      ? [
+        "另外每条查一下设定本（上面消息里那份）：两边说法不一（年数、归属、方位、身份各说各的）时，设定本多半写到了这件事，按条目查（人物卡：年龄、亲属、去世时间、身体特征；地点：方位；资产：归属；世界规则）。写到的话，",
+        "- settingQuote 逐字抄设定本里写这件事的那句原文（没写就留空，别自己编）；",
+        "- draftAgrees：本章那句和设定本一致写 true，对不上写 false；",
+        "- earlierAgrees：另一侧那句和设定本一致写 true，对不上写 false；",
+        "设定本没写到的，这三个字段都留空。",
+      ]
+      : []),
+    `拿不准就给 maybe，不要轻易给 no。只输出一个 JSON：{"verdicts":[{"id":"K1","verdict":"sure"${
+      withSetting ? ',"settingQuote":"","draftAgrees":true,"earlierAgrees":true' : ""
+    }]}，每条都要给。`,
   ].join("\n\n");
 }
 
-/** A 自复核的判断（判别规则与旧核账的复核一致）：K1 → sure / maybe / no。解析不了返回空表，按原把握保留。 */
-export function parseVerdicts(text: string): Map<string, "sure" | "maybe" | "no"> {
-  const out = new Map<string, "sure" | "maybe" | "no">();
+/** A 自复核一条的判断：verdict（K1 → sure / maybe / no）＋ R7.3 的设定裁定（可缺省）。 */
+export interface ReviewVerdict {
+  readonly verdict: "sure" | "maybe" | "no";
+  /** 设定本里写这件事的原句（模型抄的，收之前由代码核对真在设定本里）。 */
+  readonly settingQuote?: string;
+  /** 本章那句和设定一致吗：false＝对不上；undefined＝设定没写到 / 没判。 */
+  readonly draftAgrees?: boolean;
+  /** 另一侧那句和设定一致吗：false＝对不上；undefined＝设定没写到 / 没判。 */
+  readonly earlierAgrees?: boolean;
+}
+
+const agreesFalse = (value: unknown): boolean => value === false || /^(?:false|no|f|否|对不上|不一致)$/iu.test(String(value ?? "").trim());
+
+/** 解析复核判断：K1 → verdict＋设定裁定。解析不了返回空表，按原把握保留。 */
+export function parseVerdicts(text: string): Map<string, ReviewVerdict> {
+  const out = new Map<string, ReviewVerdict>();
   try {
     const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { verdicts?: unknown };
     for (const item of Array.isArray(parsed.verdicts) ? parsed.verdicts : []) {
@@ -231,9 +280,20 @@ export function parseVerdicts(text: string): Map<string, "sure" | "maybe" | "no"
       const id = String(record.id ?? "").trim().toUpperCase();
       const verdict = String(record.verdict ?? record.real ?? "").trim().toLowerCase();
       if (!id) continue;
-      if (/^(?:no|false|不是|否)$/u.test(verdict)) out.set(id, "no");
-      else if (/^(?:sure|true|确定|是)$/u.test(verdict)) out.set(id, "sure");
-      else out.set(id, "maybe");
+      const settingQuote = typeof record.settingQuote === "string" && record.settingQuote.trim() ? record.settingQuote.trim() : undefined;
+      const hasDraft = record.draftAgrees !== undefined;
+      const hasEarlier = record.earlierAgrees !== undefined;
+      const judged: ReviewVerdict["verdict"] = /^(?:no|false|不是|否)$/u.test(verdict)
+        ? "no"
+        : /^(?:sure|true|确定|是)$/u.test(verdict)
+          ? "sure"
+          : "maybe";
+      out.set(id, {
+        verdict: judged,
+        ...(settingQuote ? { settingQuote } : {}),
+        ...(hasDraft ? { draftAgrees: !agreesFalse(record.draftAgrees) } : {}),
+        ...(hasEarlier ? { earlierAgrees: !agreesFalse(record.earlierAgrees) } : {}),
+      });
     }
   } catch {
     // 解析不了：一条判断都取不到，调用方按原把握保留并如实记失败
@@ -260,6 +320,8 @@ export function applySureGate(
   const locate = (target: string): number => sentences.findIndex((sentence) => sentence.includes(target.slice(0, Math.min(target.length, 12))));
   return issues.map((issue) => {
     if (issue.confidence !== "sure") return issue;
+    // 对设定本的条目有自己的核对（设定原文对设定本、quote 对它所在的那一章），不走这道闸。
+    if (issue.againstSetting) return issue;
     const quote = normalize(issue.quote);
     const earlierQuote = normalize(issue.earlierQuote);
     // 1. 两句原文都逐字抄对（本章那句在正文里、前文那句在它标的那一章里）
@@ -286,6 +348,133 @@ function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): Continu
     else if (issue.confidence === "sure" && merged[index]!.confidence !== "sure") merged[index] = { ...merged[index]!, confidence: "sure" };
   }
   return merged;
+}
+
+/**
+ * R7.3 解析对设定本的矛盾（模型输出里带 settingQuote 的条目）：
+ * - 新稿和设定对不上：quote 在新稿里 → earlierChapter＝本章，按钮改本章；
+ * - 新稿和设定一致、前文某章和设定对不上：quote 在前文那章 → fixChapter＝那章（问题指向前文那章，
+ *   「第 3 章和人物卡不一致」，按钮也改那章，别让作者把对的改成错的）。
+ * 设定原文必须按 containsQuote 口径真在设定本里、quote 必须真在新稿或某章前文里，抄不出的丢掉。
+ * 填了 earlierQuote 的条目走老路（parseFullReadIssues），这里只收「对照设定本」的。
+ */
+export function parseSettingIssues(
+  text: string,
+  chapter: number,
+  draftBody: string,
+  earlier: EarlierText,
+  digest: FoundationDigest,
+): ContinuityIssueV2[] {
+  let parsed: { contradictions?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { contradictions?: unknown };
+  } catch {
+    return [];
+  }
+  const body = normalize(draftBody);
+  const byChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
+  const out: ContinuityIssueV2[] = [];
+  for (const item of Array.isArray(parsed.contradictions) ? parsed.contradictions : []) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (String(record.earlierQuote ?? "").trim()) continue;
+    const settingQuote = String(record.settingQuote ?? "").trim();
+    const quote = String(record.quote ?? "").trim();
+    const reason = String(record.reason ?? "").trim();
+    if (!settingQuote || !quote || !reason || SELF_DISMISSED.test(reason)) continue;
+    const label = settingQuoteLabel(digest, settingQuote);
+    if (!label) continue; // 设定原文和设定本对不上：不收
+    if (containsQuote(body, quote)) {
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: { label } });
+      continue;
+    }
+    // quote 在前文哪一章：先信它报的 quoteChapter，对不上按章序搜。
+    const claimed = Number(record.quoteChapter);
+    const inClaimed = Number.isInteger(claimed) && byChapter.has(claimed) && containsQuote(byChapter.get(claimed)!, quote);
+    const found = inClaimed
+      ? claimed
+      : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
+    if (found === undefined) continue;
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: { label } });
+  }
+  return out;
+}
+
+/** 第 4 遍 agrees 判定里「对不上」的写法：只认明确的 false / 否，其余（true / 没写）都当一致。 */
+const AGREES_FALSE = /^(?:false|no|f|否|对不上|不一致)$/iu;
+
+/**
+ * R7.3 解析第 4 遍（对设定本）的逐句判定：checks 里每条＝一句正文原句＋设定原句＋agrees。
+ * 只收 agrees=false 的（和设定对不上的那句）；quote 定位到新稿（→ 指向本章）或前文某章（→ fixChapter 指向那章）。
+ * 设定原文必须真在设定本里（settingQuoteLabel），quote 必须真在新稿或某章前文里；对不上的才收。
+ */
+export function parseSettingChecks(
+  text: string,
+  chapter: number,
+  draftBody: string,
+  earlier: EarlierText,
+  digest: FoundationDigest,
+): ContinuityIssueV2[] {
+  let parsed: { checks?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { checks?: unknown };
+  } catch {
+    return [];
+  }
+  const body = normalize(draftBody);
+  const byChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
+  const out: ContinuityIssueV2[] = [];
+  for (const item of Array.isArray(parsed.checks) ? parsed.checks : []) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (!AGREES_FALSE.test(String(record.agrees ?? "").trim())) continue;
+    const settingQuote = String(record.settingQuote ?? "").trim();
+    const quote = String(record.quote ?? "").trim();
+    const reason = String(record.reason ?? "").trim();
+    if (!settingQuote || !quote || !reason || SELF_DISMISSED.test(reason)) continue;
+    const label = settingQuoteLabel(digest, settingQuote);
+    if (!label) continue; // 设定原文和设定本对不上：不收
+    const confidence = /sure|确定/u.test(String(record.confidence ?? "")) && !/unsure|不确定/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
+    if (containsQuote(body, quote)) {
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: { label } });
+      continue;
+    }
+    const claimed = Number(record.quoteChapter);
+    const inClaimed = Number.isInteger(claimed) && byChapter.has(claimed) && containsQuote(byChapter.get(claimed)!, quote);
+    const found = inClaimed
+      ? claimed
+      : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
+    if (found === undefined) continue;
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: { label } });
+  }
+  return out;
+}
+
+/** 两句是不是同一句（互相包含，或按 containsQuote 的宽口径对得上）——设定裁定的比对用。 */
+function sameSettingText(a: string, b: string): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na.length < 4 || nb.length < 4) return false;
+  return na.includes(nb) || nb.includes(na) || containsQuote(na, b) || containsQuote(nb, a);
+}
+
+/**
+ * R7.3 确定性裁定（不调模型）：某条「本章 vs 前文」的正常条目，如果它的前文那句已经被第 4 遍裁定
+ * 「和设定本对不上」（存在 fixChapter 指向那章、原句对得上的设定条目），而本章这句没被设定标错
+ * ——说明本章那句其实和设定一致、错的是前文那章，这条的矛头指错了方向（按钮会让人把对的改成错的），
+ * 收掉不报；那条设定条目（指向前文那章）已经在管这件事。本章这句也被设定标错的（两边都错）照旧两条都报。
+ */
+export function dropMisdirectedBySetting(issues: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
+  const settingIssues = issues.filter((issue) => issue.againstSetting);
+  if (settingIssues.length === 0) return [...issues];
+  const draftFlagged = (quote: string): boolean =>
+    settingIssues.some((setting) => setting.fixChapter === undefined && sameSettingText(setting.quote, quote));
+  return issues.filter((issue) => {
+    if (issue.againstSetting) return true;
+    const earlierAdjudicated = settingIssues.some((setting) =>
+      setting.fixChapter === issue.earlierChapter && sameSettingText(setting.quote, issue.earlierQuote));
+    return !(earlierAdjudicated && !draftFlagged(issue.quote));
+  });
 }
 
 export interface ReaderCheckResult {
@@ -395,6 +584,16 @@ export async function checkChapterByReader(input: {
     return { issues: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
+  // R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则拼一份「设定」对照材料，三遍和自复核都带上。
+  // 读不了如实记一笔失败、照常核（只是没对照设定）；哪类资料都没有（新建的书）就不带、提示里也不提设定。
+  let foundation: FoundationDigest | undefined;
+  let foundationFailure: string | undefined;
+  try {
+    foundation = await readFoundationDigest(input.projectDir);
+  } catch (error) {
+    foundationFailure = `设定本读不了，这次没对照设定核：${error instanceof Error ? error.message : String(error)}`;
+  }
+  const settingMessage = foundation ? foundationMessage(foundation) : undefined;
   // B 时间线表：引擎排好的日子，核账时照表判「昨天 / 前天 / 周几」，不让模型自己推算（压「换了一天」那类误报）。
   // F（时间线只进自复核）开着时三遍不带表、只在 A 那一轮带（表照样读一次）。
   const timelineTable = variant.timeline || variant.timelineInReview
@@ -406,11 +605,12 @@ export async function checkChapterByReader(input: {
   const lookup = foldedChapters > 0
     ? await lookupEarlierPassages({ projectDir: input.projectDir, chapter: input.chapter, draftBody: input.draftBody, window, callModel: input.callModel, ...(cold ? { cold: true } : {}) })
     : { prefix: window };
-  // 新稿这条消息三遍共用：新稿本体 + 时间线表（B，且 F 没开）+ 翻到的原文（T5）——都拼在新稿后面、核账提示前面（离要判的话最近）。
+  // 新稿这条消息三遍共用：新稿本体 + 时间线表（B，且 F 没开）+ 翻到的原文（T5）+ 设定本（R7.3）——都拼在新稿后面、核账提示前面（离要判的话最近）。
   const draftParts = (timeline: string | undefined): string => [
     `【新稿：第 ${input.chapter} 章】\n${input.draftBody}`,
     ...(timeline ? ["", timeline] : []),
     ...(lookup.passages ? ["", lookup.passages] : []),
+    ...(settingMessage ? ["", settingMessage] : []),
   ].join("\n");
   const passesTimeline = variant.timeline && !variant.timelineInReview && timelineTable ? `【故事时间线（日子以这张表为准）】\n${timelineTable}` : undefined;
   // F：三遍不带表；A 自复核那一轮带表，并写明日子以表为准、不要自己推算（B 单开时复核沿用三遍那张表，第 1 步行为不变）。
@@ -419,39 +619,96 @@ export async function checkChapterByReader(input: {
     : passesTimeline;
   const draftMessage = draftParts(passesTimeline);
   const reviewMessage = draftParts(reviewTimeline);
-  const settled = await withStep("核账员", () => Promise.allSettled(CHECKER_PASSES.map(async ({ focus }) => {
-    const text = await input.callModel(
-      [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
-      { json: true },
-    );
-    const confidences = readConfidences(text);
-    return parseFullReadIssues(text, input.chapter, input.draftBody, earlier)
-      .map((issue): ContinuityIssueV2 => ({ ...issue, confidence: confidences.get(issue.quote) ?? "maybe" }));
-  })));
-  const failures: string[] = lookup.failure ? [lookup.failure] : [];
-  const passes: ContinuityIssueV2[][] = [];
+  // 三遍（盯东西 / 盯人 / 盯时间）+ R7.3 第 4 遍（对设定本，有设定本才跑）。第 4 遍用专用小 schema，只收「对设定本」的条目。
+  // 合并去重按先来留下：同一句新稿既被三遍按「对前文」报、又被第 4 遍按「对设定」报时，留带裁定的设定条目
+  // （fixChapter 指得准），所以第 4 遍排在合并序列最前（执行仍是并行的，只是标签叫第 4 遍）。
+  const passPlans: readonly { readonly label: string; readonly run: () => Promise<readonly ContinuityIssueV2[]> }[] = [
+    ...(foundation
+      ? [{
+        label: "第 4 遍（对设定本）",
+        run: async () => {
+          const text = await input.callModel(
+            [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${settingCheckTask(input.chapter)}` }],
+            { json: true },
+          );
+          return parseSettingChecks(text, input.chapter, input.draftBody, earlier, foundation);
+        },
+      }]
+      : []),
+    ...CHECKER_PASSES.map(({ focus, label }) => ({
+      label,
+      run: async () => {
+        const text = await input.callModel(
+          [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
+          { json: true },
+        );
+        const confidences = readConfidences(text);
+        return [
+          ...parseFullReadIssues(text, input.chapter, input.draftBody, earlier),
+          ...(foundation ? parseSettingIssues(text, input.chapter, input.draftBody, earlier, foundation) : []),
+        ].map((issue): ContinuityIssueV2 => ({ ...issue, confidence: confidences.get(issue.quote) ?? "maybe" }));
+      },
+    })),
+  ];
+  const settled = await withStep("核账员", () => Promise.allSettled(passPlans.map((plan) => plan.run())));
+  const failures: string[] = [...(lookup.failure ? [lookup.failure] : []), ...(foundationFailure ? [foundationFailure] : [])];
+  const passes: (readonly ContinuityIssueV2[])[] = [];
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") passes.push(result.value);
-    else failures.push(`${CHECKER_PASSES[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    else failures.push(`${passPlans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
-  let issues = mergePasses(passes);
+  let issues = dropMisdirectedBySetting(mergePasses(passes));
   // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
   if (variant.selfReview && issues.length > 0) {
     try {
       const text = await withStep("核账员自复核", () => input.callModel(
-        [...lookup.prefix, { role: "user", content: `${reviewMessage}\n\n${selfReviewTask(input.chapter, issues)}` }],
+        [...lookup.prefix, { role: "user", content: `${reviewMessage}\n\n${selfReviewTask(input.chapter, issues, Boolean(foundation))}` }],
         { json: true },
       ));
       const verdicts = parseVerdicts(text);
       if (verdicts.size === 0) throw new Error("复核输出不是 JSON");
-      const verdictOf = (index: number) => verdicts.get(`K${index + 1}`);
+      const rulingOf = (index: number) => verdicts.get(`K${index + 1}`);
       // 判 no 的删掉，其余把握以复核为准；没给判断的按原把握保留。
+      // R7.3 设定裁定：复核逐句判了两边各自和设定一致不一致（settingQuote 已由代码核对真在设定本里）→
+      // 另一侧对不上、本章这句一致：错的是另一侧那句，那条原地改成「错的那句 vs 设定原文」、指向改那章
+      // （fixChapter），别让「本章 vs 前文」的矛头指向其实和设定一致的一侧、诱导作者把对的改成错的；
+      // 本章这句对不上、另一侧一致 → 对设定本报（earlierQuote 换成设定原文，改本章）。
       issues = issues
-        .map((issue, index) => {
-          const verdict = verdictOf(index);
-          return verdict === undefined ? issue : { ...issue, confidence: verdict === "sure" ? "sure" as const : "maybe" as const };
+        .map((issue, index): ContinuityIssueV2 => {
+          const ruling = rulingOf(index);
+          if (!ruling) return issue;
+          const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
+          if (foundation && !issue.againstSetting && ruling.settingQuote) {
+            const label = settingQuoteLabel(foundation, ruling.settingQuote);
+            const draftWrong = ruling.draftAgrees === false;
+            const earlierWrong = ruling.earlierAgrees === false;
+            if (label && earlierWrong && !draftWrong) {
+              return {
+                quote: issue.earlierQuote,
+                earlierQuote: ruling.settingQuote,
+                earlierChapter: issue.earlierChapter,
+                fixChapter: issue.earlierChapter,
+                reason: issue.reason,
+                kind: "event",
+                confidence,
+                againstSetting: { label },
+              };
+            }
+            if (label && draftWrong && !earlierWrong) {
+              return {
+                quote: issue.quote,
+                earlierQuote: ruling.settingQuote,
+                earlierChapter: input.chapter,
+                reason: issue.reason,
+                kind: "event",
+                confidence,
+                againstSetting: { label },
+              };
+            }
+          }
+          return { ...issue, confidence };
         })
-        .filter((_, index) => verdictOf(index) !== "no");
+        .filter((_, index) => rulingOf(index)?.verdict !== "no");
     } catch (error) {
       // 复核没跑成：候选原样交出（宁可多报），如实记一笔。
       failures.push(`自复核没跑成：${error instanceof Error ? error.message : String(error)}`);

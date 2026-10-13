@@ -46,12 +46,16 @@ export interface LedgerChecklistItemView {
   readonly needsConfirm?: boolean;
 }
 
-/** 核账结果里的一条：本章原句 ↔ 前文原句。 */
+/** 核账结果里的一条：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文（R7.3）。 */
 export interface ContinuityCheckItem {
   readonly quote: string;
   readonly earlierQuote: string;
   readonly earlierChapter: number;
   readonly reason: string;
+  /** R7.3 对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章。 */
+  readonly againstSetting?: { readonly label: string };
+  /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
+  readonly fixChapter?: number;
 }
 
 /** check_continuity 结果（投影到消息上渲染「核账」卡）。 */
@@ -67,11 +71,17 @@ function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
     if (!item || typeof item !== "object") return [];
     const record = item as Record<string, unknown>;
     if (typeof record.quote !== "string" || typeof record.earlierQuote !== "string") return [];
+    const againstSetting = record.againstSetting && typeof record.againstSetting === "object"
+      && typeof (record.againstSetting as { label?: unknown }).label === "string" && (record.againstSetting as { label: string }).label.trim()
+      ? { label: (record.againstSetting as { label: string }).label }
+      : undefined;
     return [{
       quote: record.quote,
       earlierQuote: record.earlierQuote,
       earlierChapter: typeof record.earlierChapter === "number" ? record.earlierChapter : 0,
       reason: typeof record.reason === "string" ? record.reason : "",
+      ...(againstSetting ? { againstSetting } : {}),
+      ...(Number.isInteger(record.fixChapter) && (record.fixChapter as number) > 0 ? { fixChapter: record.fixChapter as number } : {}),
     }];
   });
 }

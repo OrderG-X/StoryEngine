@@ -120,8 +120,10 @@ describe("核账记忆", () => {
     await runCheckContinuity(dir, 2, { readerCallModel: fakeModel({ K1: "sure", K2: "sure" }) });
     await writeFile(join(dir, "drafts", "fast", "chapter-0002.md"), "# 第2章\n\n林舟从抽屉里取出怀表擦了擦。周婶说伞她昨天就拿走了。\n", "utf-8");
     const after = await runCheckContinuity(dir, 2, { readerCallModel: fakeModel({}) });
-    // 怀表那句没了 → 不再带；伞那句还在 → 照带，把握沿用上次（sure）。
-    expect(after.sure.map((item) => item.reason)).toEqual(["取伞的日子对不上"]);
-    expect(after.maybe).toEqual([]);
+    // 怀表那句没了 → 不再带；伞那句还在 → 照带。
+    // R7.3（改断言）：伞这条两句都是「明天 / 昨天」固定说法，这本书没有可靠故事日（第 2 章按 fallback 估），
+    // 相对日子换算不了 → 最多「可能」，不进「确定」——原句没改掉还是真带下来了，只是不装「确定」。
+    expect(after.sure).toEqual([]);
+    expect(after.maybe.map((item) => item.reason)).toEqual(["取伞的日子对不上"]);
   });
 });

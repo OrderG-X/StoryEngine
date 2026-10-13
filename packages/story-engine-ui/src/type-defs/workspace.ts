@@ -91,14 +91,26 @@ export interface ChapterMessage {
   readonly commitPreview?: CommitPreviewCardData;
   /** 服务端状态说明（R4：如「历史窗口被裁剪」）：照实展示给用户、不进助手正文（不替模型说话）。 */
   readonly statusNotes?: readonly string[];
-  /** 核账结果（check_continuity）：确定 / 可能两档，每条本章原句 ↔ 前文原句。随消息走、渲染「核账」卡。 */
+  /** 核账结果（check_continuity）：确定 / 可能两档，每条本章原句 ↔ 前文原句（对设定本的条目 ↔ 设定原文）。随消息走、渲染「核账」卡。 */
   readonly continuityCheck?: {
     readonly chapter: number;
-    readonly sure: readonly { readonly quote: string; readonly earlierQuote: string; readonly earlierChapter: number; readonly reason: string }[];
-    readonly maybe: readonly { readonly quote: string; readonly earlierQuote: string; readonly earlierChapter: number; readonly reason: string }[];
+    readonly sure: readonly ContinuityCheckItemData[];
+    readonly maybe: readonly ContinuityCheckItemData[];
   };
   /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
+}
+
+/** 核账卡上的一条（check_continuity 投影）：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文。 */
+export interface ContinuityCheckItemData {
+  readonly quote: string;
+  readonly earlierQuote: string;
+  readonly earlierChapter: number;
+  readonly reason: string;
+  /** R7.3 对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章。 */
+  readonly againstSetting?: { readonly label: string };
+  /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
+  readonly fixChapter?: number;
 }
 
 /** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */

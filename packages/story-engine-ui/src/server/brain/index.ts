@@ -32,14 +32,19 @@ export {
   checkChapterByReader,
   checkPlanByReader,
   checkerRoleFor,
+  dropMisdirectedBySetting,
   keywordTask,
   parseKeywords,
   planCheckTask,
   parsePlanProblems,
+  parseSettingChecks,
+  parseSettingIssues,
   selfReviewTask,
+  settingCheckTask,
   type PlanProblem,
   type ReaderCheckVariant,
 } from "./checker.js";
+export { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
 export {
   isReaderCatchUpQueued,
   readReaderProgress,

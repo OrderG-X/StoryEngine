@@ -12,7 +12,7 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { findLedgerNumberConflicts, readFactLedgerStrict, type FactEntry } from "@actalk/story-engine";
+import { findLedgerNumberConflicts, readFactLedgerStrict, timelineEntryFor, type FactEntry, type StoryTimeline } from "@actalk/story-engine";
 
 export type ClaimKind = "object" | "place" | "time" | "identity" | "knowledge" | "number" | "event";
 
@@ -26,6 +26,13 @@ export interface ContinuityIssueV2 {
   readonly confidence?: "sure" | "maybe";
   /** ledger＝账本数字对账（确定性层）查出来的，不是模型找的。 */
   readonly source?: "ledger";
+  /**
+   * R7.3 对的是设定本而不是某一章：earlierQuote＝设定原文（已由代码核对真在设定本里），
+   * quote＝有问题的那句原句（在当前稿，或在 fixChapter 指的那一章）。
+   */
+  readonly againstSetting?: { readonly label: string };
+  /** R7.3 错在哪一章、按钮就改哪一章（quote 抄自前文某章时由代码定）；缺省＝当前核的章。 */
+  readonly fixChapter?: number;
 }
 
 export interface EarlierText {
@@ -45,7 +52,8 @@ function parseJson(text: string): Record<string, unknown> {
 
 export const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
-const SELF_DISMISSED = /不矛盾|并不矛盾|没有矛盾|无矛盾|一致[，。；,;]?(?:没有|无|不)|说法一致|前后一致|不冲突|并不冲突|不算矛盾|可以解释|说得通/u;
+/** 理由自己就否决了的（「此点成立，不报」「与前文一致」）：模型把自我否决的候选也输出了，不当问题收。R7.3 起核账对设定本的解析共用。 */
+export const SELF_DISMISSED = /不矛盾|并不矛盾|没有矛盾|无矛盾|一致[，。；,;]?(?:没有|无|不)|说法一致|前后一致|不冲突|并不冲突|不算矛盾|可以解释|说得通/u;
 
 /** 句子切分：保留引号内的完整句。 */
 export function splitSentences(text: string): readonly string[] {
@@ -237,4 +245,100 @@ export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): Co
     merged.push(issue);
   }
   return merged;
+}
+
+// ---------- 相对日子换算（2026-10-14 编辑部 R7.3，确定性、不调模型） ----------
+
+/**
+ * 固定说法（任务单 R7.3 点名这六个，别扩词表）；delta＝相对「说话那天」的偏移天数。
+ * 报告 3.3：第 1 章（第 1 天）「后天上午陆川来」对第 2 章（第 2 天）「明天上午陆川来」，其实是同一天，
+ * 按字面比会把对的改成错的。修法：两句里都有这几个说法时，先按时间线里两章各自的故事日换算成绝对第几天再比。
+ */
+const RELATIVE_DAY_WORDS: readonly { readonly word: string; readonly delta: number }[] = [
+  { word: "大后天", delta: 3 },
+  { word: "后天", delta: 2 },
+  { word: "明天", delta: 1 },
+  { word: "今天", delta: 0 },
+  { word: "昨天", delta: -1 },
+  { word: "前天", delta: -2 },
+];
+
+/**
+ * 「目前天气」「眼前天色」「然后天亮」这类前一个字里的前天 / 后天不是在说日子（守卫口径沿用引擎
+ * story-timeline 的 RELATIVE_DAY_PATTERNS）；「大前天」不在这六个说法里，也别把它吃成「前天」。
+ */
+const RELATIVE_DAY_GUARDS = new Set([..."目眼面跟门提当之以空从向往日然最随之其落背身先午稍过", "大"]);
+
+/** 一句话里认到的相对日子说法，按出现顺序（大后天先认，不会吃成后天；守卫字后的不算）。 */
+export function relativeDayMentions(text: string): readonly { readonly word: string; readonly delta: number }[] {
+  const out: { readonly word: string; readonly delta: number }[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const hit = RELATIVE_DAY_WORDS.find(({ word }) => text.startsWith(word, index));
+    if (!hit) {
+      index += 1;
+      continue;
+    }
+    const guarded = (hit.word === "前天" || hit.word === "后天") && index > 0 && RELATIVE_DAY_GUARDS.has(text[index - 1]!);
+    if (!guarded) out.push(hit);
+    index += hit.word.length;
+  }
+  return out;
+}
+
+/**
+ * 一章可靠的故事日：时间线里没有它的条目、或条目是 fallback（「上一章 +1」估的，作者还没确认，
+ * R7.6 之前常估错——拿估的日子当真去删「确定」会错杀）都算换算不了。
+ * 唯一例外：第 1 章的 fallback，day＝1 不是估出来的（前面没有章），引擎口径里必然是 1。
+ */
+function reliableStoryDay(timeline: StoryTimeline | undefined, chapter: number): number | undefined {
+  const entry = timeline ? timelineEntryFor(timeline, chapter) : undefined;
+  if (!entry) return undefined;
+  if (entry.source === "fallback" && !(chapter === 1 && entry.day === 1)) return undefined;
+  return entry.day;
+}
+
+/**
+ * 相对日子换算（产品路专用，核账服务合并后过一遍）：
+ * - 两句里都有固定说法、且两章都有可靠故事日 → 各自换算成绝对第几天再比：是同一天就不报
+ *   （字面「明天 / 后天」不同不是错，报告 3.3）；换算出来不足第 1 天（日子在故事开始前）算换算不了。
+ * - 两边只有一处说法才比：两边各有好几处说法的（把两个日子对调了那类），代码分不出谁对谁，交给模型。
+ * - 换算不了（缺可靠故事日）→ 最多算「可能」，不进「确定」。
+ * 对的是设定本的条目不适用（设定原文不锚在某一天上）。
+ */
+export function applyRelativeDayAlignment(
+  issues: readonly ContinuityIssueV2[],
+  chapter: number,
+  timeline: StoryTimeline | undefined,
+): ContinuityIssueV2[] {
+  const out: ContinuityIssueV2[] = [];
+  for (const issue of issues) {
+    if (issue.againstSetting) {
+      out.push(issue);
+      continue;
+    }
+    const here = relativeDayMentions(issue.quote);
+    const there = relativeDayMentions(issue.earlierQuote);
+    if (here.length === 0 || there.length === 0) {
+      out.push(issue);
+      continue;
+    }
+    const dayHere = reliableStoryDay(timeline, chapter);
+    const dayThere = reliableStoryDay(timeline, issue.earlierChapter);
+    if (dayHere === undefined || dayThere === undefined) {
+      out.push({ ...issue, confidence: "maybe" });
+      continue;
+    }
+    if (here.length === 1 && there.length === 1) {
+      const absHere = dayHere + here[0]!.delta;
+      const absThere = dayThere + there[0]!.delta;
+      if (absHere < 1 || absThere < 1) {
+        out.push({ ...issue, confidence: "maybe" });
+        continue;
+      }
+      if (absHere === absThere) continue; // 换算后是同一天：不报
+    }
+    out.push(issue);
+  }
+  return out;
 }

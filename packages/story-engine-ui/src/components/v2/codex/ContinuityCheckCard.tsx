@@ -16,11 +16,20 @@ import type { ChapterMessage } from "../../../types.js";
 type ContinuityCheck = NonNullable<ChapterMessage["continuityCheck"]>;
 type Item = ContinuityCheck["sure"][number];
 
-/** 单条「改这处」的那句话（本章原句 ↔ 前文原句 + 理由），单条按钮和批量 intent 共用同一句式。 */
+/** 这条的错在哪一章（R7.3 对设定本的条目可能指向前文那章）；缺省＝当前核的章。 */
+const fixChapterOf = (chapter: number, item: Item): number =>
+  item.fixChapter !== undefined && item.fixChapter > 0 && item.fixChapter !== chapter ? item.fixChapter : chapter;
+
+/** 单条「改这处」的那句话（本章原句 ↔ 前文原句 + 理由），单条按钮和批量 intent 共用同一句式。
+ *  R7.3 对设定本的条目：另一边是设定原文；错在前文那章的，改的就是那章，别让作者把对的改成错的。 */
 function continuityItemSentence(chapter: number, item: Item): string {
-  const where = item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
   const reason = item.reason ? `（${item.reason}）` : "";
-  return `把第 ${chapter} 章里「${item.quote}」这处改掉：它和${where}「${item.earlierQuote}」对不上${reason}。`;
+  const fix = fixChapterOf(chapter, item);
+  if (item.againstSetting) {
+    return `把第 ${fix} 章里「${item.quote}」这处改掉：它和设定本${item.againstSetting.label}里的「${item.earlierQuote}」对不上${reason}。`;
+  }
+  const where = item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
+  return `把第 ${fix} 章里「${item.quote}」这处改掉：它和${where}「${item.earlierQuote}」对不上${reason}。`;
 }
 
 export function buildContinuityFixIntent(chapter: number, item: Item): string {
@@ -49,14 +58,15 @@ function ItemView({ chapter, item, onRevise, onDismiss }: {
   readonly onRevise?: (item: Item) => void;
   readonly onDismiss: () => void;
 }) {
+  const fix = fixChapterOf(chapter, item);
   return (
     <li className="drc-item">
-      <p className="drc-evi serif">本章：「{item.quote}」</p>
-      <p className="drc-evi serif">{item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`}：「{item.earlierQuote}」</p>
+      <p className="drc-evi serif">{fix === chapter ? "本章" : `第 ${fix} 章`}：「{item.quote}」</p>
+      <p className="drc-evi serif">{item.againstSetting ? `设定（${item.againstSetting.label}）` : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`}：「{item.earlierQuote}」</p>
       {item.reason ? <p className="drc-desc">{item.reason}</p> : null}
       <div style={{ display: "flex", gap: 6 }}>
         {onRevise ? (
-          <button type="button" className="chip drc-fix" onClick={() => onRevise(item)}>改这处</button>
+          <button type="button" className="chip drc-fix" onClick={() => onRevise(item)}>{fix === chapter ? "改这处" : `改第 ${fix} 章`}</button>
         ) : null}
         <button type="button" className="chip drc-fix" onClick={onDismiss}>不是问题</button>
       </div>
