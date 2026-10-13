@@ -172,6 +172,18 @@ describe("declareChapterDeltaByLedger", () => {
     await bgRound;
   });
 
+  it("笔记本来就齐 → 没等就不说（R6.1）：不带 waited、进度不标在等", async () => {
+    const dir = await makeBook([CH1, CH2]);
+    // 先把第 1～2 章笔记补齐（同一角色，哈希对得上），再记第 3 章的账：开口时笔记就齐。
+    await startReaderCatchUp(dir, LEDGER_ROLE, 2, { callModel: async () => "笔记" });
+    const { callModel } = fakeModel(DECLARATION_JSON);
+    const result = await declareChapterDeltaByLedger({ projectDir: dir, chapter: 3, draft: DRAFT, callModel });
+    expect(result.outcome.status).toBe("model");
+    expect(result.waited).toBeUndefined();
+    expect(result.outcome.waited).toBeUndefined();
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "ledger")).not.toHaveProperty("waiting");
+  });
+
   it("补笔记失败 → fallback + 原因（已写下的笔记留着）", async () => {
     const dir = await makeBook([CH1, CH2]);
     let count = 0;

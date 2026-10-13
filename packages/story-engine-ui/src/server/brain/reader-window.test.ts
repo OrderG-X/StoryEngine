@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   assembleReaderWindow,
@@ -266,7 +266,8 @@ describe("专员窗口：等读（R6.1）——等没等按「开口时缺的章
     // 一个全补、一个一个没补：两个都等过（第二个等的是第一个补）。
     expect(a.waited).toMatchObject({ from: 1, to: 4 });
     expect(b.waited).toMatchObject({ from: 1, to: 4 });
-    expect(b.built).toBe(0);
+    // 谁先拿到锁由调度定（全量并发下顺序一换就对调）：断「有一个 built=0」，不写死是 b。
+    expect(Math.min(a.built, b.built)).toBe(0);
   });
 
   it("开口时已有一部分、别人又补了一段、自己补剩下的：waited 从开口那一刻接着数，中间谁补的不管", async () => {
@@ -339,14 +340,17 @@ describe("专员窗口：并发", () => {
 
   it("前一个失败了，后一个照样排上来接着补", async () => {
     const dir = await makeBook(2);
-    const broken: BrainCallModel = async () => { throw new Error("挂了"); };
+    let brokenStarted = false;
+    const broken: BrainCallModel = async () => { brokenStarted = true; throw new Error("挂了"); };
+    // 先让前一个真跑起来（拿到锁、第一次写笔记就抛）再开口第二个——排队先后不靠调度碰运气（全量并发下顺序会换）。
+    const first = ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 2, callModel: broken });
+    const quiet = first.catch(() => undefined); // 立刻挂住拒绝，断言放后面，中间不留未处理拒绝
+    await vi.waitFor(() => expect(brokenStarted).toBe(true), { timeout: 5_000 });
     const { callModel, calls } = fakeModel();
-    const [first, second] = await Promise.allSettled([
-      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 2, callModel: broken }),
-      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 2, callModel }),
-    ]);
-    expect(first.status).toBe("rejected");
-    expect(second.status).toBe("fulfilled");
+    const second = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 2, callModel });
+    await expect(first).rejects.toThrow("挂了");
+    await quiet;
+    expect(second).toMatchObject({ built: 2, reused: 0 });
     expect(calls).toHaveLength(2);
   });
 });
