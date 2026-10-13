@@ -189,20 +189,63 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
   it("审出问题 → 交回章纲员改一轮（不循环），落盘的是改过的章纲", async () => {
     const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const projectDir = await makeBook();
-    const fixed = JSON.stringify({
-      ...JSON.parse(READER_PLAN),
-      beats: ["一早去档案室", "管理员拦人", "对出缺页是一笔境外汇款", "林澈把缺页拍照留证"],
-    });
+    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
     const planner = fakePlannerCallModel([READER_PLAN, fixed]);
     const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 3, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
+      problems: [{ point: 3, conflict: true, authorWilled: false, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
     }));
     const result = await resolveChapterPlanForDraft({
       projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
-    expect(result.plan?.beats).toHaveLength(4);
+    expect(result.plan?.beats).toHaveLength(3);
+    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
     expect(result.note).toContain("核账员审出 1 处");
-    expect((await readChapterPlan(projectDir, 2))?.beats).toHaveLength(4);
+    expect(result.note).toContain("改掉 1 处");
+    expect((await readChapterPlan(projectDir, 2))?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
+  });
+
+  it("R7.5 作者方向和前文冲突（authorWilled）→ 不自动改、不叫改纲，回执问作者以哪个为准、照原要点出稿", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel([READER_PLAN]);
+    const checker = fakePlanCheckCallModel(JSON.stringify({
+      problems: [{ point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要当天去，但账册第 1 章已锁进抽屉" }],
+    }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "当天就去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    // 没叫改纲（只有拟纲那一次 json 调用），要点原样保留。
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
+    expect(result.plan?.beats).toEqual(JSON.parse(READER_PLAN).beats);
+    expect(result.note).toContain("都来自你给的方向");
+    expect(result.note).toContain("以哪个为准");
+    expect(result.note).toContain("这次先照你的方向出稿");
+    expect(result.note).toContain("第 1 条要点");
+  });
+
+  it("R7.5 混合：章纲员自己的错照改，作者方向的另报一条问作者", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
+    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
+    const checker = fakePlanCheckCallModel(JSON.stringify({
+      problems: [
+        { point: 3, conflict: true, authorWilled: false, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" },
+        { point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要一早去，第 1 章写的是明天" },
+      ],
+    }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    // 改纲只收到非 authorWilled 的那条（point 3）；作者那条（point 1）保留原样。
+    const reviseTaskText = planner.calls.filter((call) => call.json)[1]?.task ?? "";
+    expect(reviseTaskText).toContain("第 3 条要点");
+    expect(reviseTaskText).not.toContain("第 1 条要点");
+    expect(result.plan?.beats[0]).toBe("一早去档案室");
+    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
+    expect(result.note).toContain("改掉 1 处");
+    expect(result.note).toContain("另有 1 处来自你给的方向");
+    expect(result.note).toContain("以哪个为准");
   });
 
   it("章纲员要补的笔记太多 → 冷窗口照拟照审，note 如实标对照范围（不再「按没有章纲出稿」）", async () => {

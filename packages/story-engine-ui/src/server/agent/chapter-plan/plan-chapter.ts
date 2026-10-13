@@ -403,12 +403,23 @@ async function planByEditorialRoom(input: {
   if (checked.problems.length === 0) {
     return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}${coldNote}${waitNote}`, reused: false };
   }
+  // R7.5 作者方向和前文既成事实对不上（authorWilled）：不自动改——改了等于替作者改主意，回执问以哪个为准。
+  // 只有章纲员自己拟错的（非 authorWilled）才交回改一轮；全是作者方向时连改纲那一步都省了。
+  const asked = checked.problems.filter((problem) => problem.authorWilled);
+  const autoFix = checked.problems.filter((problem) => !problem.authorWilled);
+  const short = (text: string) => (text.length > 30 ? `${text.slice(0, 30)}…` : text);
+  const askSentence = asked.length > 0
+    ? `第 ${asked[0]!.point} 条要点「${short(asked[0]!.beat ?? planned.plan.beats[asked[0]!.point - 1] ?? "")}」和第 ${asked[0]!.earlierChapter} 章「${short(asked[0]!.earlierQuote)}」对不上——以哪个为准？这次先照你的方向出稿；要按前文的话说一声，我改这条要点。`
+    : "";
+  if (autoFix.length === 0) {
+    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，都来自你给的方向：${askSentence}）${coldNote}${waitNote}`, reused: false };
+  }
   // 有问题：把问题列表交回章纲员窗口，只改有问题的要点，改一轮、不循环。改不成就用原章纲（如实说明）。
   const revised = await withStep("改", () => revisePlanByPlanner({
     projectDir: input.projectDir,
     chapter: input.chapter,
     plan: planned.plan,
-    problems: checked.problems,
+    problems: autoFix,
     callModel: plannerCallModel,
     maxCatchUp: PLANNER_MAX_CATCH_UP,
   }));
@@ -417,13 +428,13 @@ async function planByEditorialRoom(input: {
     const reviseWaitNote = revised.waited && !planned.waited ? `（${describeReaderWait("planner", revised.waited, "改章纲")}。）` : "";
     return {
       plan: revised.plan,
-      note: `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉：${brief(checked.problems.map((problem) => problem.reason))}）${coldNote}${reviseColdNote}${waitNote}${reviseWaitNote}`,
+      note: `本章章纲：${revised.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，已让章纲员改掉 ${autoFix.length} 处：${brief(autoFix.map((problem) => problem.reason))}${askSentence ? `；另有 ${asked.length} 处来自你给的方向：${askSentence}` : ""}）${coldNote}${reviseColdNote}${waitNote}${reviseWaitNote}`,
       reused: false,
     };
   }
   return {
     plan: planned.plan,
-    note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.reason}。）${coldNote}${waitNote}`,
+    note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，但改章纲没成：${revised.reason}。${askSentence ? `另有 ${asked.length} 处来自你给的方向：${askSentence}` : ""}）${coldNote}${waitNote}`,
     reused: false,
   };
 }

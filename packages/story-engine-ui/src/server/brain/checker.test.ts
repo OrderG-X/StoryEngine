@@ -693,8 +693,48 @@ describe("核账员审章纲：解析", () => {
     expect(parsed).toEqual([]);
   });
 
+  it("R7.5 结构化判定：conflict:false 不收（理由写「不构成矛盾」这种词表没盖到的说法也收得住）；conflict:true 照收", () => {
+    const parsed = parsePlanProblems(problems(
+      { point: 1, conflict: false, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "核对过，不构成矛盾" },
+      { point: 2, conflict: "true", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },
+    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    expect(parsed).toEqual([
+      { point: 2, beat: "他把怀表交给周婶", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },
+    ]);
+  });
+
+  it("R7.5 没给 conflict 字段的老形状：词表兜底照旧（不加词）", () => {
+    const parsed = parsePlanProblems(problems(
+      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "不构成矛盾" },
+      { point: 2, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },
+    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    // 「不构成矛盾」不在词表里（R7.5 明确不加词）：老形状兜不住它，这正是要靠 conflict 字段根治的白报。
+    expect(parsed).toEqual([
+      { point: 1, beat: "林舟从抽屉里取出怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "不构成矛盾" },
+      { point: 2, beat: "他把怀表交给周婶", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },
+    ]);
+  });
+
+  it("R7.5 authorWilled:true 收下来（要报，调用方问作者）；false / 没写不带", () => {
+    const parsed = parsePlanProblems(problems(
+      { point: 1, conflict: true, authorWilled: true, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "作者方向要取表，但表第 2 章已锁进抽屉" },
+      { point: 2, conflict: true, authorWilled: false, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡" },
+      { point: 3, conflict: true, earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "日子对不上" },
+    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    expect(parsed.map((problem) => [problem.point, problem.authorWilled])).toEqual([[1, true], [2, undefined], [3, undefined]]);
+  });
+
   it("不是 JSON 抛错（调用方记失败，不当成没问题）", () => {
     expect(() => parsePlanProblems("没问题", PLAN, { chapters: [] })).toThrow("不是 JSON");
+  });
+
+  it("R7.5 planCheckTask：带作者方向时显示出来、要求报方向和前文的冲突；没方向不提这一段", () => {
+    const withDirection = planCheckTask(4, { ...PLAN, chapter: 4, direction: "外公把铜盒拿出来看" });
+    expect(withDirection).toContain("【作者这章给的方向】\n外公把铜盒拿出来看");
+    expect(withDirection).toContain("conflict");
+    expect(withDirection).toContain("authorWilled");
+    expect(withDirection).toContain("不要因为方向是作者给的就不报");
+    expect(planCheckTask(3, PLAN)).not.toContain("【作者这章给的方向】");
   });
 });
 

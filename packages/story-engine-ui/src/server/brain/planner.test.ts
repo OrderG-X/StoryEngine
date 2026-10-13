@@ -187,40 +187,68 @@ const PROBLEMS: readonly PlanProblem[] = [
   { point: 1, beat: "许棠在铺子里等信", earlierQuote: "许棠把那封信锁进抽屉", earlierChapter: 1, reason: "信第 1 章已寄出，不在抽屉里" },
 ];
 
-describe("章纲员：改章纲（一轮，不循环）", () => {
-  it("把问题列表交回窗口：只改有问题的要点；缺的栏沿用原章纲、avoid 并集、天数不丢", async () => {
+describe("章纲员：改章纲（一轮，不循环；R7.5 只改被指出的要点，其余由代码照原章纲保留）", () => {
+  it("模型只回被改的要点：代码按序号换进去，其余栏（人物/新信息/开场/avoid/天数）逐字保留", async () => {
     const dir = await makeBook();
     // 先把窗口的笔记补上（拟一次），再改。
     await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel: fakePlanner().callModel });
-    const revisedJson = JSON.stringify({
-      summary: "许棠等林溪的回信",
-      beats: ["许棠在铺子里盘点账目", "邮差送来林溪的回信", "信里约好周末见面"],
-      scene: { time: "第二天上午" },
-    });
+    const revisedJson = JSON.stringify({ revised: [{ point: 1, beat: "许棠在铺子里盘点账目" }], summary: "" });
     const { callModel, calls } = fakePlanner([revisedJson]);
     const result = await revisePlanByPlanner({ projectDir: dir, chapter: 3, plan: BASE_PLAN, problems: PROBLEMS, callModel });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.plan.beats[0]).toBe("许棠在铺子里盘点账目");
     expect(result.plan.beats.slice(1)).toEqual(BASE_PLAN.beats.slice(1));
-    // 模型只回了 summary/beats/scene：其余栏沿用原章纲，avoid 并集，天数不丢。
+    // 其余栏不靠模型重抄：原章纲是什么就是什么（summary 留空 → 保留原话）。
+    expect(result.plan.summary).toBe(BASE_PLAN.summary);
     expect(result.plan.characters).toEqual(["许棠", "林溪"]);
     expect(result.plan.newInformation).toEqual(["林溪约好周末见面"]);
-    expect(result.plan.avoid).toContain("别再写抽屉");
+    expect(result.plan.avoid).toEqual(["别再写抽屉"]);
+    expect(result.plan.scene).toEqual(BASE_PLAN.scene);
     expect(result.plan.storyDay).toBe(3);
     expect((await readChapterPlan(dir, 3))?.beats[0]).toBe("许棠在铺子里盘点账目");
     const task = calls.find((call) => call.json)!.messages.at(-1)!.content;
     expect(task).toContain("核账员审出 1 处和前文对不上");
     expect(task).toContain("第 1 条要点「许棠在铺子里等信」");
     expect(task).toContain("许棠把那封信锁进抽屉");
+    // R7.5：不再要整份章纲 JSON，只要被改的要点。
+    expect(task).toContain('{"revised":[{"point":1,"beat":"改好的那条要点全文"}]');
+    expect(task).not.toContain("只输出修正后的完整章纲 JSON");
   });
 
-  it("改纲输出不完整 → ok:false，调用方用原章纲", async () => {
+  it("summary 给了就换、留空就保留；多条要点各自换各自的位置", async () => {
     const dir = await makeBook();
     await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel: fakePlanner().callModel });
-    const { callModel } = fakePlanner([JSON.stringify({ characters: ["许棠"] })]);
-    const result = await revisePlanByPlanner({ projectDir: dir, chapter: 3, plan: BASE_PLAN, problems: PROBLEMS, callModel });
-    expect(result.ok).toBe(false);
+    const revisedJson = JSON.stringify({
+      revised: [{ point: 2, beat: "邮差送来林溪的电报" }, { point: 1, beat: "许棠在铺子里等电报" }],
+      summary: "许棠等林溪的电报",
+    });
+    const { callModel } = fakePlanner([revisedJson]);
+    const result = await revisePlanByPlanner({
+      projectDir: dir, chapter: 3, plan: BASE_PLAN,
+      problems: [PROBLEMS[0]!, { ...PROBLEMS[0]!, point: 2 }],
+      callModel,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.beats).toEqual(["许棠在铺子里等电报", "邮差送来林溪的电报", "信里约好周末见面"]);
+    expect(result.plan.summary).toBe("许棠等林溪的电报");
+  });
+
+  it("改纲输出不完整（revised 为空 / 序号越界 / 要点是空串）→ ok:false，调用方用原章纲", async () => {
+    const dir = await makeBook();
+    await planChapterByPlanner({ projectDir: dir, chapter: 3, callModel: fakePlanner().callModel });
+    for (const junk of [
+      JSON.stringify({ characters: ["许棠"] }),
+      JSON.stringify({ revised: [] }),
+      JSON.stringify({ revised: [{ point: 9, beat: "越界" }] }),
+      JSON.stringify({ revised: [{ point: 1, beat: "  " }] }),
+    ]) {
+      const { callModel } = fakePlanner([junk]);
+      const result = await revisePlanByPlanner({ projectDir: dir, chapter: 3, plan: BASE_PLAN, problems: PROBLEMS, callModel });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("没改出任何要点");
+    }
   });
 });
 
@@ -276,9 +304,11 @@ describe("提示词文本", () => {
     const revise = reviseTask(3, BASE_PLAN, PROBLEMS);
     expect(revise).toContain("可以整条重写");
     for (const beat of BASE_PLAN.beats) expect(revise).toContain(beat);
+    expect(revise).toContain('"revised"');
     const check = planCheckTask(3, BASE_PLAN);
     expect(check).toContain("1. 许棠在铺子里等信");
     expect(check).toContain("还没写正文");
     expect(check).toContain('"problems"');
+    expect(check).toContain('"conflict"');
   });
 });

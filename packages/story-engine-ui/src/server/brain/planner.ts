@@ -24,7 +24,7 @@ import {
 } from "../agent/chapter-plan/plan-chapter.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
-import type { PlanProblem } from "./checker.js";
+import { readPoint, type PlanProblem } from "./checker.js";
 
 export const PLANNER_ROLE: ReaderRole = {
   id: "planner",
@@ -216,7 +216,8 @@ function quoteContext(body: string, quote: string): string | undefined {
   return nb.slice(Math.max(0, at - 80), Math.min(nb.length, at + nq.length + 80));
 }
 
-/** 把核账员审出的问题交回章纲员窗口的那条任务消息：只改有问题的要点，其余逐字照抄。 */
+/** 把核账员审出的问题交回章纲员窗口的那条任务消息：只改被指出的那几条要点，其余由程序照原章纲保留（R7.5）。
+ *  输出只要被改的要点（不要整份重拟）——旧口径「重发完整章纲 JSON」一次 100 秒、思考 1.2 万字，窄输出把要改的东西缩到几条。 */
 export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonly PlanProblem[], contexts: readonly (string | undefined)[] = []): string {
   return [
     `你为第 ${chapter} 章拟的章纲，核账员审出 ${problems.length} 处和前文对不上：`,
@@ -224,9 +225,8 @@ export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonl
       `${index + 1}. 第 ${problem.point} 条要点「${problem.beat ?? plan.beats[problem.point - 1] ?? ""}」：和第 ${problem.earlierChapter} 章对不上——${problem.reason}`,
       contexts[index] ? `   前文第 ${problem.earlierChapter} 章那段：「…${contexts[index]}…」` : `   冲突的前文原句：「${problem.earlierQuote}」`,
     ].join("\n")),
-    "按前文把这几条要点改对：可以整条重写（东西在谁手里就照前文安排、人在哪就照前文安排、日子照前文算、人物还不知道的事就改成他不知道的），不要只换说法糊弄过去；其余要点逐字照抄原章纲，改过的要点保持原来的长短。",
-    "改完自己把改过的每条要点对照上面的前文原段再核一遍：别让人物说出按前文他还不可能知道的话。",
-    `只输出修正后的完整章纲 JSON（字段同原来）：\n${PLAN_JSON_FIELDS}`,
+    "按前文把这几条要点改对：可以整条重写（东西在谁手里就照前文安排、人在哪就照前文安排、日子照前文算、人物还不知道的事就改成他不知道的），不要只换说法糊弄过去。没被指出的要点一个字都不用管，程序会照原章纲保留。",
+    `只输出一个 JSON：{"revised":[{"point":1,"beat":"改好的那条要点全文"}],"summary":""}。revised 只列被改的要点（point 写序号）；一句话（summary）只有也提到被改的要点时才换新的，否则留空。除此之外不要输出任何别的内容。`,
     `【原章纲（第 ${chapter} 章）】\n${JSON.stringify(planJson(plan), null, 1)}`,
   ].join("\n\n");
 }
@@ -238,7 +238,8 @@ export type RevisePlanResult =
 
 /**
  * 核账员审出问题后，把问题列表交回章纲员窗口改一轮（只改有问题的要点，不循环）。
- * 模型常只回 summary + beats：缺的栏一律沿用原章纲；avoid 取并集；天数原章纲有就不许改丢。改不成 → ok:false，调用方用原章纲。
+ * R7.5 起模型只回被改的要点（{"revised":[{"point":1,"beat":"…"}],"summary":""}），代码按序号确定性拼回原章纲：
+ * 其余栏（人物/新信息/开场/avoid/天数）原样保留，不靠模型重抄。改不出任何要点 → ok:false，调用方用原章纲。
  */
 export async function revisePlanByPlanner(input: {
   readonly projectDir: string;
@@ -303,32 +304,27 @@ export async function revisePlanByPlanner(input: {
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
-  const revised = normalizeChapterPlan(raw, {
-    chapter: input.chapter,
-    source: input.plan.source,
-    ...(input.plan.direction ? { direction: input.plan.direction } : {}),
-    ...(input.now ? { now: input.now } : {}),
-  });
-  if (!revised) return { ok: false, reason: "修正章纲不完整（缺要点）" };
-  const keep = <T,>(next: readonly T[], previous: readonly T[]): readonly T[] => (next.length > 0 ? next : previous);
-  const location = revised.scene.location ?? input.plan.scene.location;
-  const time = revised.scene.time ?? input.plan.scene.time;
-  const merged: ChapterPlan = {
-    ...revised,
-    newInformation: keep(revised.newInformation, input.plan.newInformation),
-    characters: keep(revised.characters, input.plan.characters),
-    entities: keep(revised.entities, input.plan.entities),
-    threadsAdvanced: keep(revised.threadsAdvanced, input.plan.threadsAdvanced),
-    scene: { ...(location ? { location } : {}), ...(time ? { time } : {}) },
-    avoid: [...new Set([...revised.avoid, ...input.plan.avoid])],
-    // 天数：改纲不该动日历——原章纲有天数就沿用；没有（或改纲给了新的）交给 reconcileStoryDay 归一。
-    ...(input.plan.storyDay !== undefined && revised.storyDay === undefined ? { storyDay: input.plan.storyDay } : {}),
+  // R7.5 确定性拼回：模型只回被改的要点（{"revised":[{"point":1,"beat":"…"}],"summary":""}），
+  // 代码按序号换进原章纲——其余栏（人物/新信息/开场/avoid/天数）原样保留，不靠模型重抄。
+  const beats = [...input.plan.beats];
+  const revisedSummary = typeof raw.summary === "string" ? raw.summary.replace(/\s+/gu, " ").trim() : "";
+  let changed = 0;
+  for (const item of Array.isArray(raw.revised) ? raw.revised : []) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const beat = typeof record.beat === "string" ? record.beat.replace(/\s+/gu, " ").trim() : "";
+    const point = readPoint(record.point ?? record.beat, input.plan.beats);
+    if (!point || !beat || beat.length > 400) continue;
+    if (beats[point - 1] === beat) continue;
+    beats[point - 1] = beat;
+    changed += 1;
+  }
+  if (changed === 0 && !revisedSummary) return { ok: false, reason: "改纲没改出任何要点（revised 为空或序号越界）" };
+  const settled: ChapterPlan = {
+    ...input.plan,
+    beats,
+    ...(revisedSummary ? { summary: revisedSummary } : {}),
   };
-  const dayOffset = readDayOffset(raw);
-  const lastDay = await previousChapterEndDay(input.projectDir, input.chapter);
-  const settled = input.plan.storyDay !== undefined && revised.storyDay === undefined
-    ? { ...merged, storyDay: reconcileStoryDay(merged, dayOffset, lastDay).storyDay ?? input.plan.storyDay }
-    : reconcileStoryDay(merged, dayOffset, lastDay);
   await writeChapterPlan(input.projectDir, settled);
   return { ok: true, plan: settled, ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
 }
