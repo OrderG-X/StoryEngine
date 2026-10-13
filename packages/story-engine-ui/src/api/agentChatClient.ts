@@ -76,6 +76,20 @@ function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
   });
 }
 
+/** commit_preview 的质量问题明细（{severity,type,message} → 给作者看的文案）。防御解析：非字符串丢掉、截超长、最多 20 条。 */
+function toIssueMessages(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((item): string[] => {
+      if (typeof item === "string") return [item];
+      if (!item || typeof item !== "object") return [];
+      const message = (item as Record<string, unknown>).message;
+      return typeof message === "string" && message.trim() ? [message.trim()] : [];
+    })
+    .map((message) => (message.length > 300 ? `${message.slice(0, 300)}…` : message))
+    .slice(0, 20);
+}
+
 export interface AgentToolResult {
   readonly toolCallId?: string;
   readonly toolName: string;
@@ -144,6 +158,9 @@ export interface AgentToolResult {
     readonly summary?: string;
     readonly draftIssueCount?: number;
     readonly semanticIssueCount?: number;
+    /** R7.7·报告 4.3：质量问题明细直接进卡（默认折叠），不再指向界面上不存在的「质检卡」。 */
+    readonly draftIssues?: readonly string[];
+    readonly semanticIssues?: readonly string[];
     readonly previewToken?: string;
   };
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认——投影层据此挂「确认定稿」按钮。 */
@@ -389,6 +406,9 @@ export async function streamAgentChat(
                     ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
                     ...(Array.isArray(output.draftQualityIssues) ? { draftIssueCount: output.draftQualityIssues.length } : {}),
                     ...(Array.isArray(output.semanticQualityIssues) ? { semanticIssueCount: output.semanticQualityIssues.length } : {}),
+                    // R7.7·报告 4.3：明细文案直接带进卡（默认折叠展示），不再让作者去找不存在的「质检卡」。
+                    ...(toIssueMessages(output.draftQualityIssues).length > 0 ? { draftIssues: toIssueMessages(output.draftQualityIssues) } : {}),
+                    ...(toIssueMessages(output.semanticQualityIssues).length > 0 ? { semanticIssues: toIssueMessages(output.semanticQualityIssues) } : {}),
                     ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
                     ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
                   },

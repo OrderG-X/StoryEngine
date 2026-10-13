@@ -212,7 +212,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       trackReadFailure("角色目录")(error);
       return [] as string[];
     });
-  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft, previousChapter] = await Promise.all([
+  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft, previousChapter, existingChapterTitles] = await Promise.all([
     readStoryCore(input.projectDir),
     readWorldCore(input.projectDir),
     // 角色（profile+core+state）三件套按角色兜底：单个角色资料残缺不再炸掉整次出稿，
@@ -233,6 +233,9 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
+    // 已有各章标题（R7.7·报告 5：拟标题防重名，第 7、9 章都叫「铁丝」）。读不到按空（不出段），不炸出稿。
+    readExistingChapterTitles(input.projectDir, input.chapter)
+      .catch(() => [] as readonly { chapter: number; title: string }[]),
   ]);
   const plan = input.chapterPlan;
   const storyClock = plan?.storyDay ? await readStoryClock(input.projectDir, input.chapter).catch(() => []) : [];
@@ -278,6 +281,10 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("character_profile", profiles, "stable"),
     section("character_core", cores, "stable"),
     section("chapter_goal", { chapter: input.chapter, goal: input.chapterGoal }, "dynamic"),
+    ...(existingChapterTitles.length > 0 ? [section("chapter_titles", {
+      instruction: "这些是本书已有各章的标题（含尚未定稿的工作稿）。给本章起标题时不要与它们重名。",
+      titles: existingChapterTitles,
+    }, "dynamic")] : []),
     ...(plan ? [section("chapter_plan", buildChapterPlanSection(plan, storyClock), "dynamic")] : []),
     ...(previousChapter ? [section("previous_chapter", previousChapter, "dynamic")] : []),
     ...(previousUncommittedDraft ? [section("previous_uncommitted_draft", previousUncommittedDraft, "dynamic")] : []),
@@ -407,6 +414,48 @@ function previousChapterExcerpt(body: string): { readonly text: string; readonly
 
 function padChapter(chapter: number): string {
   return String(chapter).padStart(4, "0");
+}
+
+/** 拟标题防重名时最多带多少章的已有标题（长书只看最近的，防上下文膨胀）。 */
+const MAX_EXISTING_CHAPTER_TITLES = 60;
+
+/**
+ * 已有各章标题（2026-10-14 编辑部 R7.7·报告 5）：定稿章（chapters/000N.md）+ 工作稿（drafts/fast/chapter-NNNN.md），
+ * 取章号最大的最近 MAX_EXISTING_CHAPTER_TITLES 章、不含本章（重写本章时不能把自己的标题当「重名」）。
+ * 定稿标题优先（正稿为准），只有工作稿的章用工作稿标题；读不出标题的章跳过。纯读盘、题材中立。
+ */
+async function readExistingChapterTitles(
+  projectDir: string,
+  currentChapter: number,
+): Promise<readonly { chapter: number; title: string }[]> {
+  const chapters = new Set<number>();
+  const [committedFiles, draftFiles] = await Promise.all([
+    readdir(join(projectDir, "chapters")).catch(() => [] as string[]),
+    readdir(join(projectDir, "drafts", "fast")).catch(() => [] as string[]),
+  ]);
+  for (const file of committedFiles) {
+    const chapter = Number(/^(\d{4})\.md$/u.exec(file)?.[1]);
+    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
+  }
+  for (const file of draftFiles) {
+    const chapter = Number(/^chapter-(\d{4})\.md$/u.exec(file)?.[1]);
+    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
+  }
+  const recent = [...chapters]
+    .filter((chapter) => chapter !== currentChapter)
+    .sort((a, b) => b - a)
+    .slice(0, MAX_EXISTING_CHAPTER_TITLES);
+  const withTitles = await Promise.all(recent.map(async (chapter) => {
+    const [committedTitle, draftTitle] = await Promise.all([
+      extractMarkdownTitle(await readFile(join(projectDir, "chapters", `${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
+      extractMarkdownTitle(await readFile(join(projectDir, "drafts", "fast", `chapter-${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
+    ]);
+    const title = committedTitle ?? draftTitle;
+    return title ? { chapter, title } : undefined;
+  }));
+  return withTitles
+    .filter((item): item is { chapter: number; title: string } => item !== undefined)
+    .sort((a, b) => a.chapter - b.chapter);
 }
 
 function extractMarkdownTitle(content: string | undefined): string | undefined {

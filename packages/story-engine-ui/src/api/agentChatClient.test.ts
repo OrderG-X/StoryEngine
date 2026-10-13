@@ -644,7 +644,46 @@ describe("streamAgentChat", () => {
       summary: "暂不可定稿。",
       draftIssueCount: 1,
       semanticIssueCount: 0,
+      // R7.7·报告 4.3：明细文案直接透传进卡（默认折叠展示），不再指向不存在的「质检卡」。
+      draftIssues: ["正文过短"],
     });
+  });
+
+  it("commit_preview 质量问题明细防御解析：非对象丢掉、无 message 丢掉、裸字符串宽容保留（R7.7）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "p1",
+          toolName: "commit_preview",
+          output: {
+            chapter: 7,
+            canCommit: false,
+            semanticQualityIssues: [
+              { severity: "warning", type: "stale_thread", message: "伏笔「钥匙」已 4 章未推进。" },
+              { severity: "warning", type: "no_message" },
+              "裸字符串不算",
+              null,
+            ],
+          },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+
+    let received: { commitPreview?: { semanticIssues?: readonly string[] } } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "预览定稿" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received = info; },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    expect(received?.commitPreview?.semanticIssues).toEqual(["伏笔「钥匙」已 4 章未推进。", "裸字符串不算"]);
   });
 
   it("结构化动作（「确认定稿」按钮）→ 请求体带 action；commit_preview 的 previewToken 透传给卡（按钮带回）", async () => {

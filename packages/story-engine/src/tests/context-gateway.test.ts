@@ -346,6 +346,53 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(prompt).toContain("never re-discover or redo");
   });
 
+  // R7.7·报告第 5 节：拟标题防重名——已有各章标题（定稿优先、工作稿兜底）进 chapter_titles 段，不含本章。
+  it("lists existing chapter titles for the writer to avoid duplicates（R7.7）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-chapter-titles-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "旧钟楼",
+      genre: "urban",
+      premise: "修表匠追查停摆的钟。",
+      mainCharacterName: "陈拾",
+    });
+    await Promise.all([
+      mkdir(join(projectDir, "chapters"), { recursive: true }),
+      mkdir(join(projectDir, "drafts", "fast"), { recursive: true }),
+    ]);
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 停摆\n\u6b63\u6587\u4e00。\n", "utf-8");
+    // 第 2 章只有工作稿（没定稿）：标题也带上。
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0002.md"), "# 第2章 · 铁丝\n\u6b63\u6587\u4e8c。\n", "utf-8");
+    // 第 3 章定稿与工作稿标题不同：以定稿为准。
+    await writeFile(join(projectDir, "chapters", "0003.md"), "# 第3章 · 正稿题\n\u6b63\u6587\u4e09。\n", "utf-8");
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0003.md"), "# 第3章 · 旧稿题\n\u6b63\u6587\u4e09。\n", "utf-8");
+    // 本章（第 4 章）自己的工作稿不算「已有标题」。
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0004.md"), "# 第4章 · 我自己\n\u6b63\u6587\u56db。\n", "utf-8");
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 4, chapterGoal: "继续写。" });
+    const titlesSection = envelope.sections.find((section) => section.name === "chapter_titles")?.content as
+      | { instruction: string; titles: readonly { chapter: number; title: string }[] }
+      | undefined;
+    expect(titlesSection?.titles).toEqual([
+      { chapter: 1, title: "第1章 · 停摆" },
+      { chapter: 2, title: "第2章 · 铁丝" },
+      { chapter: 3, title: "第3章 · 正稿题" },
+    ]);
+    const prompt = renderFastDraftPromptText(envelope);
+    expect(prompt).toContain("## chapter_titles");
+    expect(prompt).toContain("第2章 · 铁丝");
+    expect(prompt).not.toContain("我自己");
+    expect(prompt).toContain("不要起与之重复的标题");
+  });
+
+  it("没有任何已有章节文件 → 不出 chapter_titles 段（新书写第 1 章不背空清单）", async () => {
+    const projectDir = await createFixtureProject();
+    const envelope = await buildWriterContext({ projectDir, chapter: 1, chapterGoal: "开局。" });
+    expect(envelope.sections.some((section) => section.name === "chapter_titles")).toBe(false);
+    const prompt = renderFastDraftPromptText(envelope);
+    expect(prompt).not.toContain("## chapter_titles");
+  });
+
   it("gives only the ending of a long previous chapter, cut at a paragraph boundary", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-previous-chapter-long-"));
     const { projectDir } = await createStoryProject({

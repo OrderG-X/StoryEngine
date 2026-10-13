@@ -735,9 +735,25 @@ function stripLeadingMarkdownChapterHeading(content: string): string {
 function chooseDraftTitle(chapter: number, title: string, content: string): string {
   const modelHeadingTitle = extractLeadingChapterTitle(content);
   const cleanTitle = title.trim();
-  if (modelHeadingTitle && !isGenericChapterTitle(modelHeadingTitle, chapter)) return modelHeadingTitle;
+  if (modelHeadingTitle && !isGenericChapterTitle(modelHeadingTitle, chapter)) {
+    return normalizeModelChapterTitle(chapter, modelHeadingTitle);
+  }
   if (cleanTitle && !isGenericChapterTitle(cleanTitle, chapter)) return cleanTitle;
   return `第${chapter}章`;
+}
+
+/**
+ * 模型写的开头标题统一成「第N章 · 标题」（2026-10-14 编辑部 R7.7，报告第 5 节）：
+ * 章号一律用代码里的本章章号（阿拉伯数字）——模型会写成「第九章」「第十章」，还会数错章；
+ * 分隔符统一「 · 」。把模型自己写的第X章前缀（汉字/阿拉伯数字、带不带分隔符都认）剥掉后按规范重拼，
+ * 纯确定性后处理，不改标题文字本身。剥完没有剩余（模型只写了「第九章」这类章号行）→ 只留「第N章」。
+ */
+function normalizeModelChapterTitle(chapter: number, modelTitle: string): string {
+  const bare = modelTitle
+    .trim()
+    .replace(/^第[一二三四五六七八九十百千万〇零\d]+\s*章[\s·：:、\-—]*/u, "")
+    .trim();
+  return bare ? `第${chapter}章 · ${bare}` : `第${chapter}章`;
 }
 
 function extractLeadingChapterTitle(content: string): string | undefined {

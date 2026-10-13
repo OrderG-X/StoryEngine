@@ -77,6 +77,33 @@ describe("chatRenderShared", () => {
       const texts = blocks.map((block) => (block.kind === "paragraph" ? block.text : "")).filter(Boolean);
       expect(texts).toContain("1.");
     });
+
+    // R7.7·报告 4.3：只有行首、或紧跟句末标点后的编号才算列表；句子中间的枚举/小数不拆。
+    it("「第 1、2 章」不被当列表编号拆开（R7.7：句中枚举不拆行）", () => {
+      const blocks = formatMessageBlocks("我把第 1、2 章的开头都改过了。");
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].kind).toBe("paragraph");
+      expect(blocks[0].kind === "paragraph" && blocks[0].text).toBe("我把第 1、2 章的开头都改过了。");
+    });
+
+    it("「用时 1.5 分钟」不被当列表编号拆开（R7.7：句中小数不拆行）", () => {
+      const blocks = formatMessageBlocks("这次核账用时 1.5 分钟，查了 3 处。");
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].kind === "paragraph" && blocks[0].text).toBe("这次核账用时 1.5 分钟，查了 3 处。");
+    });
+
+    it("行首编号仍是列表；句末标点后的编号也另起成列表（R7.7 新口径保留的两种合法位置）", () => {
+      const blocks = formatMessageBlocks("两件事。1. 先改开头\n2. 再改结尾");
+      expect(blocks.some((block) => block.kind === "paragraph" && block.text === "两件事。")).toBe(true);
+      const list = blocks.find((block) => block.kind === "list");
+      expect(list && list.kind === "list" && list.items).toEqual(["先改开头", "再改结尾"]);
+    });
+
+    it("行首的「1.5 分钟」不当列表（编号后紧跟数字不是序号）", () => {
+      const blocks = formatMessageBlocks("用时 1.5 分钟\n下一行");
+      expect(blocks.every((block) => block.kind === "paragraph")).toBe(true);
+      expect(blocks[0].kind === "paragraph" && blocks[0].text).toBe("用时 1.5 分钟");
+    });
   });
 
   describe("getPlaceholder", () => {

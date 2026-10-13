@@ -545,13 +545,15 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       },
       {
         title: "开端",
+        // R7.7：模型把章号写错（写第 3 章却标「第1章」）→ 按本章章号重拼成「第3章 · 开端」。
         content: "# 第1章 · 开端\n\nGuo Xu 站在大门前，确认自己不能回头。",
-        expected: "# 第1章 · 开端\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
+        expected: "# 第3章 · 开端\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
       },
       {
+        // R7.7：同上，第 4 章写成「第1章」→ 重拼为「第4章 · 半张申请表」。
         title: "第1章 · 半张申请表",
         content: "# 第1章 · 半张申请表\n\nGuo Xu 站在大门前，确认自己不能回头。",
-        expected: "# 第1章 · 半张申请表\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
+        expected: "# 第4章 · 半张申请表\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
       },
     ];
 
@@ -618,6 +620,57 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report.title).toBe("第1章");
     await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
       "# 第1章\n\nGuo Xu 捏着半张申请表，纸面在掌心里一点点发热。\n",
+    );
+  });
+
+  // R7.7·报告第 5 节：AI 起的章标题统一「第N章 · 标题」、章号用阿拉伯数字（模型会写「第九章」「第十章」，还会数错章）。
+  // 纯确定性后处理：剥掉模型自己写的第X章前缀后按规范重拼，标题文字本身不动。
+  it("normalizes model heading titles to 第N章 · 标题 with arabic chapter number（R7.7）", async () => {
+    const cases = [
+      { chapter: 9, heading: "# 第九章 · 铁丝", expected: "# 第9章 · 铁丝" },
+      { chapter: 9, heading: "# 铁丝", expected: "# 第9章 · 铁丝" },
+      { chapter: 10, heading: "# 第十章——旧钟摆", expected: "# 第10章 · 旧钟摆" },
+      { chapter: 5, heading: "# 第三章 · 夜访（模型数错章）", expected: "# 第5章 · 夜访（模型数错章）" },
+      { chapter: 7, heading: "# 第7章 铁丝圈", expected: "# 第7章 · 铁丝圈" },
+    ];
+    for (const item of cases) {
+      const projectDir = await createFixtureProject();
+      const writerClient: WriterClient = {
+        generateDraft: vi.fn(async () => ({
+          title: `第${item.chapter}章`,
+          content: `${item.heading}\n\nGuo Xu 站在大门前，确认自己不能回头。`,
+        })),
+      };
+      const report = await runFastDraft({
+        projectDir,
+        chapter: item.chapter,
+        chapterGoal: "主角推进剧情。",
+        writerClient,
+      });
+      expect(report.passed).toBe(true);
+      await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+        `${item.expected}\n\nGuo Xu 站在大门前，确认自己不能回头。\n`,
+      );
+    }
+  });
+
+  it("model writes only a chinese-numeral chapter label（第十章）→ generic path keeps 第N章", async () => {
+    const projectDir = await createFixtureProject();
+    const writerClient: WriterClient = {
+      generateDraft: vi.fn(async () => ({
+        title: "第10章",
+        content: "# 第十章\n\nGuo Xu 站在大门前，确认自己不能回头。",
+      })),
+    };
+    const report = await runFastDraft({
+      projectDir,
+      chapter: 10,
+      chapterGoal: "主角推进剧情。",
+      writerClient,
+    });
+    expect(report.title).toBe("第10章");
+    await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+      "# 第10章\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
     );
   });
 

@@ -268,6 +268,9 @@ export type WorkspaceCommitPreview = {
   readonly summary?: string;
   readonly draftIssueCount?: number;
   readonly semanticIssueCount?: number;
+  /** R7.7·报告 4.3：质量问题明细文案（卡内折叠展示），不再指向不存在的「质检卡」。 */
+  readonly draftIssues?: readonly string[];
+  readonly semanticIssues?: readonly string[];
   readonly previewToken?: string;
   readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean; readonly editableDay?: number; readonly needsConfirm?: boolean }[];
 };
@@ -561,6 +564,8 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
   const previewToken = readString(value.previewToken);
   const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
   const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
+  const draftIssues = readStringList(value.draftIssues).slice(0, 20);
+  const semanticIssues = readStringList(value.semanticIssues).slice(0, 20);
   const ledgerChecklist = Array.isArray(value.ledgerChecklist)
     ? value.ledgerChecklist.filter(isRecord).slice(0, 200).flatMap((item) => {
       const id = readString(item.id);
@@ -586,6 +591,8 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
     ...(summary ? { summary } : {}),
     ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
     ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
+    ...(draftIssues.length > 0 ? { draftIssues } : {}),
+    ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
     ...(previewToken ? { previewToken } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
   };
