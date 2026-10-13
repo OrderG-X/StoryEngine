@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../../brain/index.js";
-import { CHECKER_ROLE, ensureReaderWindow } from "../../brain/index.js";
+import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../../brain/index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { checkChapterBody } from "./check-service.js";
 
@@ -193,8 +193,8 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     const reader = readerModel();
     const wrapped: BrainCallModel = async (messages, options) => {
       if (!options.json) {
-        // 补笔记的那一刻：进度盘上应标着「核账在等它读完」（R5.2 必做 1，走的就是 R4.3 那份 progress.json）。
-        seenWhileWaiting.push(JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8")));
+        // 补笔记的那一刻：进度行应标着「核账在等它读完」（R6.1：waiting 在进程内登记表里，读进度时合并显示）。
+        seenWhileWaiting.push((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker"));
       }
       return reader.callModel(messages, options);
     };
@@ -204,11 +204,12 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     expect(result.summary).toContain("这次先等核账员读完第 2～3 章（用时");
     expect(result.summary).toContain("再核");
     expect(result.coverage).toBeUndefined();
-    // 等读期间：reading:true、waiting:「核账」，分母是这次要读到的章数。
-    expect(seenWhileWaiting[0]).toMatchObject({ role: "checker", reading: true, done: 1, total: 3, waiting: "核账" });
-    // 收尾：reading:false、waiting 清掉。
+    // 等读期间：reading:true、waiting:「核账」；分母按 R5.3 现算成已定稿章数（这本书定稿到第 4 章，盘上记的是 3）。
+    expect(seenWhileWaiting[0]).toMatchObject({ role: "checker", reading: true, done: 1, total: 4, waiting: "核账" });
+    // 收尾：reading:false、waiting 消失。
     await expect(readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text)))
       .resolves.toMatchObject({ reading: false, done: 3, total: 3 });
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).not.toHaveProperty("waiting");
   });
 
   it("缺 9～10 章仍当场补读（老行为）：等读一句照加", async () => {
@@ -220,5 +221,47 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     expect(result.coverage).toBeUndefined();
     expect(result.waited).toMatchObject({ from: 3, to: 12 });
     expect(result.summary).toContain("这次先等核账员读完第 3～12 章（用时");
+  });
+
+  it("笔记本来就齐 → 没等就不说（R6.1）：不带 waited、回执不提等、进度不标在等", async () => {
+    const dir = await makeBook(4);
+    // 后台补读先把 1～3 章一口气读完（读到第 3 章收尾），再核第 4 章：开口时笔记就齐。
+    await startReaderCatchUp(dir, CHECKER_ROLE, 3, { callModel: async () => "笔记" });
+    const reader = readerModel();
+    const result = await checkChapterBody(dir, 4, BODY, { readerCallModel: reader.callModel });
+    expect(result.ok).toBe(true);
+    expect(result.waited).toBeUndefined();
+    expect(result.summary).not.toContain("先等核账员读完");
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).not.toHaveProperty("waiting");
+  });
+});
+
+describe("核账服务：排在后台补读后面等（R6.1，新发现 1）", () => {
+  it("后台拿着核账员的锁读第 1～10 章时点核账（第 11 章）→ 等待中进度行标「核账在等它读完」，回执如实说等过", async () => {
+    const dir = await makeBook(11);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // 后台补读的假模型：第一次调用（写第 1 章笔记）就卡住，把核账员的锁拿在手里。
+    const bg: BrainCallModel = async () => { started = true; await gate; return "笔记"; };
+    const bgRound = startReaderCatchUp(dir, CHECKER_ROLE, 10, { callModel: bg });
+    await vi.waitFor(() => expect(started).toBe(true), { timeout: 5_000 });
+    // 并发点核账（第 11 章）：开口时一章笔记都还没有（waited.from=1），排在锁后面等。
+    const reader = readerModel();
+    const resultPromise = checkChapterBody(dir, 11, BODY, { readerCallModel: reader.callModel });
+    await vi.waitFor(async () => {
+      expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).toMatchObject({ reading: true, waiting: "核账" });
+    }, { timeout: 5_000 });
+    release();
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
+    // 等的是谁补的不重要：开口时缺的第 1～10 章等完都补上了，就算等过。
+    expect(result.waited).toMatchObject({ from: 1, to: 10 });
+    expect(result.summary).toContain("这次先等核账员读完第 1～10 章（用时");
+    expect(result.summary).toContain("再核");
+    expect(result.coverage).toBeUndefined();
+    // 结束后 waiting 消失。
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).not.toHaveProperty("waiting");
+    await bgRound;
   });
 });

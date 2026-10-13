@@ -72,7 +72,7 @@ export interface LedgerDeclareResult {
   /** 冷窗口＝记账员还没读完全书（笔记要补的太多，后台在补），这次按已有笔记 + 最近 K 章原文记的账。
    *  已并进 outcome.cold（预览卡据此如实标「按最近 K 章记账」）；这里单独留一份给调用方触发后台补读。 */
   readonly cold?: ColdCoverage;
-  /** 这次先当场补了笔记（R5.2）：回执据此加「这次先等记账员读完…再记账」。已并进 outcome.waited。 */
+  /** 这次先等了补读（R5.2＋R6.1，谁补的都算）：回执据此加「这次先等记账员读完…再记账」。已并进 outcome.waited。 */
   readonly waited?: ReaderWaited;
 }
 
@@ -96,10 +96,10 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
   let cold: ColdCoverage | undefined;
   let waited: ReaderWaited | undefined;
   try {
-    // 等读标注（R5.2）：当场补笔记期间把「记账在等它读完」写进 progress.json，进度行走 R4.3 的轮询自己显示。
+    // 等读（R5.2＋R6.1）：补读期间进度行标「记账在等它读完」（进程内登记，进锁前后都算）；
+    // 等过了（笔记是谁补上的都算）由 ensureReaderWindow 带回 waited，回执如实说等了哪几章。
     const root = input.notesRoot ?? input.projectDir;
-    const waiting = readerWaitingHandlers(root, LEDGER_ROLE.id, input.chapter - 1, "记账");
-    const ensureStartedAt = Date.now();
+    const waiting = readerWaitingHandlers(root, LEDGER_ROLE.id, input.chapter - 1);
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role: LEDGER_ROLE,
@@ -107,11 +107,12 @@ export async function declareChapterDeltaByLedger(input: LedgerDeclareInput): Pr
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      waitingAs: "记账",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
       onCatchUpEnd: waiting.onCatchUpEnd,
     }));
-    if (ready.built > 0) waited = { from: ready.reused + 1, to: ready.readThrough, ms: Date.now() - ensureStartedAt };
+    waited = ready.waited;
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：要补的笔记太多不再走 fallback 空转——已有笔记 + 最近 K 章原文先记账，
       // 冷窗口的范围随声明带回（预览卡如实标），笔记由调用方在后台接着补。冷窗口不落盘任何笔记。

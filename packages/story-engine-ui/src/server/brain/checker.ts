@@ -296,7 +296,7 @@ export interface ReaderCheckResult {
   /** 冷窗口＝核账员还没读完全书（笔记要补的太多，后台在补），这次对照的是已有笔记 + 最近 K 章原文；
    *  cold 说清范围，回执文字据此如实说「更早的细节可能漏」。R4.4 起不再跳过。 */
   readonly cold?: ColdCoverage;
-  /** 这次先当场补了笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒——回执据此加「这次先等核账员读完…再核」。 */
+  /** 这次先当场补了笔记（R5.2＋R6.1）：等完笔记多了第 from～to 章（谁补的都算）、花了 ms 毫秒——回执据此加「这次先等核账员读完…再核」。 */
   readonly waited?: ReaderWaited;
 }
 
@@ -357,10 +357,10 @@ export async function checkChapterByReader(input: {
   let cold: ColdCoverage | undefined;
   let waited: ReaderWaited | undefined;
   try {
-    // 等读标注（R5.2）：当场补笔记期间把「核账在等它读完」写进 progress.json，进度行走 R4.3 的轮询自己显示。
+    // 等读（R5.2＋R6.1）：补读期间进度行标「核账在等它读完」（进程内登记，进锁前后都算）；
+    // 等过了（笔记是谁补上的都算）由 ensureReaderWindow 带回 waited，回执如实说等了哪几章。
     const root = input.notesRoot ?? input.projectDir;
-    const waiting = readerWaitingHandlers(root, role.id, input.chapter - 1, "核账");
-    const ensureStartedAt = Date.now();
+    const waiting = readerWaitingHandlers(root, role.id, input.chapter - 1);
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role,
@@ -369,14 +369,12 @@ export async function checkChapterByReader(input: {
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
       ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
+      waitingAs: "核账",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
       onCatchUpEnd: waiting.onCatchUpEnd,
     }));
-    if (ready.built > 0) {
-      // 等过了：补了哪几章、花了多久，如实带回执（R5.2 必做 2）。
-      waited = { from: ready.reused + 1, to: ready.readThrough, ms: Date.now() - ensureStartedAt };
-    }
+    waited = ready.waited;
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：要补的笔记太多（后台补读还在跑）不再跳过——已有笔记 + 最近 K 章原文先核，范围如实带回执。
       const built = await buildColdReaderWindow({
@@ -481,7 +479,7 @@ export interface ReaderPlanCheckResult {
   readonly failures: string[];
   /** 冷窗口＝核账员还没读完全书，这次按已有笔记 + 最近 K 章原文审的纲（R4.4 起不再跳过）。 */
   readonly cold?: ColdCoverage;
-  /** 这次先当场补了笔记（R5.2）：回执据此加「这次先等核账员读完…再审章纲」。 */
+  /** 这次先等了补读（R5.2＋R6.1，谁补的都算）：回执据此加「这次先等核账员读完…再审章纲」。 */
   readonly waited?: ReaderWaited;
 }
 
@@ -571,10 +569,9 @@ export async function checkPlanByReader(input: {
   let cold: ColdCoverage | undefined;
   let waited: ReaderWaited | undefined;
   try {
-    // 等读标注（R5.2）：审纲在拟纲流程里，当场补笔记期间标「拟纲在等它读完」。
+    // 等读（R5.2＋R6.1）：审纲在拟纲流程里，补读期间进度行标「拟纲在等它读完」；等没等由 ensureReaderWindow 判（谁补的都算）。
     const root = input.notesRoot ?? input.projectDir;
-    const waiting = readerWaitingHandlers(root, CHECKER_ROLE.id, input.plan.chapter - 1, "拟纲");
-    const ensureStartedAt = Date.now();
+    const waiting = readerWaitingHandlers(root, CHECKER_ROLE.id, input.plan.chapter - 1);
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role: CHECKER_ROLE,
@@ -582,11 +579,12 @@ export async function checkPlanByReader(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      waitingAs: "拟纲",
       onCatchUpBegin: waiting.onCatchUpBegin,
       onProgress: waiting.onProgress,
       onCatchUpEnd: waiting.onCatchUpEnd,
     }));
-    if (ready.built > 0) waited = { from: ready.reused + 1, to: ready.readThrough, ms: Date.now() - ensureStartedAt };
+    waited = ready.waited;
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：没读完也照审（已有笔记 + 最近 K 章原文），范围如实带回执。
       const built = await buildColdReaderWindow({

@@ -11,6 +11,7 @@
 import { callConfiguredBrainModel } from "./checker.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "./reader-progress.js";
+import { readerWaitingActions } from "./waiting-registry.js";
 
 export type { ReaderProgress };
 export { readReaderProgress };
@@ -37,7 +38,7 @@ export async function writeReaderReadingProgress(root: string, roleId: string, u
 export const READER_ROLE_IDS: readonly string[] = ["checker", "ledger", "planner"];
 
 /** 一个角色的补读进度（进度行 / 轻量轮询接口用的形状）：没写过 progress.json 的角色当 0/0、不在读。
- *  waiting＝哪个动作在等它读完（R5.2：核账 / 拟纲 / 记账当场补笔记期间才带）。 */
+ *  waiting＝哪个动作在等它读完（R6.1：进程内登记表合进来的，当场补笔记 / 排在后台补读后面干等都带；那个角色在读才带）。 */
 export interface ReaderCatchUpRoleState {
   readonly role: string;
   readonly reading: boolean;
@@ -60,9 +61,13 @@ export async function readReadersCatchUpStatus(notesRoot: string, roleIds: reado
   const committed = await countCommittedChapters(notesRoot).catch(() => 0);
   const roles = await Promise.all(roleIds.map(async (roleId): Promise<ReaderCatchUpRoleState> => {
     const progress = await readReaderProgress(notesRoot, roleId).catch(() => undefined);
-    return progress
-      ? { role: roleId, reading: progress.reading, done: progress.done, total: Math.max(progress.total, committed), ...(progress.waiting ? { waiting: progress.waiting } : {}) }
-      : { role: roleId, reading: false, done: 0, total: 0 };
+    if (!progress) return { role: roleId, reading: false, done: 0, total: 0 };
+    // R6.1：「（核账在等它读完）」那截不进 progress.json（后台补读会抹掉它），从进程内登记表合进来——
+    // 自己当场补、排在后台补读后面等，显示一个样。那个角色在读才带：没在读就没有「等它读完」一说。
+    // 盘上残留的 waiting（R5.2 落过的旧文件）不认，进程重启后登记表是空的，不会显示幽灵标注。
+    const waitingActions = readerWaitingActions(notesRoot, roleId);
+    const waiting = progress.reading && waitingActions.length > 0 ? waitingActions.join("、") : undefined;
+    return { role: roleId, reading: progress.reading, done: progress.done, total: Math.max(progress.total, committed), ...(waiting ? { waiting } : {}) };
   }));
   return { reading: roles.some((role) => role.reading), roles };
 }

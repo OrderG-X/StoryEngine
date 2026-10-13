@@ -16,6 +16,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { registerReaderWaiting, unregisterReaderWaiting } from "./waiting-registry.js";
+import type { ReaderWaited } from "./reader-progress.js";
 
 export type BrainMessage = { readonly role: "system" | "user" | "assistant"; readonly content: string };
 export type BrainCallModel = (messages: readonly BrainMessage[], options: { readonly json: boolean }) => Promise<string>;
@@ -489,6 +491,9 @@ export interface EnsuredReaderWindow {
   readonly foldedChapters: number;
   /** 实际读到第几章（某章定稿读不到时停在它前一章）。 */
   readonly readThrough: number;
+  /** 这次等过补读（R6.1）：开口那一刻之后笔记多出来的章（第 from～to 章）、等了 ms 毫秒——
+   *  不管笔记是谁补上的（自己当场补 / 排在后台补读后面等它补完），回执据此如实说等过。笔记本来就齐不带。 */
+  readonly waited?: ReaderWaited;
 }
 
 /**
@@ -514,6 +519,9 @@ export async function ensureReaderWindow(input: {
   readonly onCatchUpBegin?: (done: number, total: number) => void | Promise<void>;
   /** 当场补读结束（含中途失败）调一次（done＝落下的笔记数；R5.2 等读标注收尾用）。 */
   readonly onCatchUpEnd?: (done: number, total: number) => void | Promise<void>;
+  /** 等读期间进度行标注的动作名（R6.1）：核账 / 拟纲 / 记账。进锁前在进程内登记「这个动作在等这个角色」、
+   *  finally 里注销——排在后台补读后面干等也标出来；冷窗口（超额）没等就不登记。 */
+  readonly waitingAs?: string;
 }): Promise<EnsuredReaderWindow> {
   const root = input.notesRoot ?? input.projectDir;
   const maxChars = input.maxChars ?? READER_WINDOW_MAX_CHARS;
@@ -522,12 +530,14 @@ export async function ensureReaderWindow(input: {
     ({ messages: [], built: 0, reused: state.valid.length, missing: state.upTo - state.valid.length, volumesBuilt: 0, foldedChapters: 0, readThrough: state.valid.length });
   const tooMany = (state: NotesState): boolean => input.maxCatchUp !== undefined && state.upTo - state.valid.length > input.maxCatchUp;
 
-  if (input.maxCatchUp !== undefined) {
-    // 进队前先看一眼：要补的太多就马上说没准备好，别排在后台补笔记的长队后面干等。
-    const peek = await inspect();
-    if (tooMany(peek)) return notReady(peek);
-  }
-  return withCatchUpLock(`${root}\u0000${input.role.id}`, async () => {
+  // 开口那一刻（R6.1）：进锁前先看一眼已有几章有效笔记＋记下时间。等没等、等的是哪几章都按它算——
+  // 排在后台补读后面时，轮到我们笔记已经齐了（built=0），但「开口时缺的章等完补上了」照样算等过。
+  // maxCatchUp 没传（后台补读自己用）也要记：谁都能拿到 waited，调用方不用自己按 built>0 猜。
+  const startedAt = Date.now();
+  const peek = await inspect();
+  if (tooMany(peek)) return notReady(peek); // 缺得太多走冷窗口：没等，不登记
+  const spokeWith = peek.valid.length;
+  const run = (): Promise<EnsuredReaderWindow> => withCatchUpLock(`${root}\u0000${input.role.id}`, async () => {
     const state = await inspect();
     if (tooMany(state)) return notReady(state);
     const entries = [...state.valid];
@@ -630,6 +640,15 @@ export async function ensureReaderWindow(input: {
       volumesBuilt,
       foldedChapters: final.foldedChapters,
       readThrough: state.upTo,
+      // 等过了（R6.1）：拿到窗口时读到的章比开口时多——多的就是这中间补上的（谁补的都算），如实带回执。
+      ...(state.upTo > spokeWith ? { waited: { from: spokeWith + 1, to: state.upTo, ms: Date.now() - startedAt } satisfies ReaderWaited } : {}),
     };
   });
+  if (!input.waitingAs) return run();
+  registerReaderWaiting(root, input.role.id, input.waitingAs);
+  try {
+    return await run();
+  } finally {
+    unregisterReaderWaiting(root, input.role.id, input.waitingAs);
+  }
 }

@@ -13,6 +13,7 @@ import {
   type BrainMessage,
   type ReaderRole,
 } from "./reader-window.js";
+import { readerWaitingActions } from "./waiting-registry.js";
 
 const ROLE: ReaderRole = { id: "tester", system: "你是测试专员。", noteTask: "写笔记。" };
 
@@ -241,6 +242,80 @@ describe("专员窗口：等读回调（R5.2 必做 1）", () => {
     });
     expect(out.missing).toBe(5);
     expect(events).toEqual([]);
+  });
+});
+
+describe("专员窗口：等读（R6.1）——等没等按「开口时缺的章等完补上了」算，谁补的都算", () => {
+  it("自己当场补：waited = 开口时已有 + 1 ～ 读到，带上用时", async () => {
+    const dir = await makeBook(3);
+    const before = Date.now();
+    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel: fakeModel().callModel });
+    expect(out.waited).toMatchObject({ from: 1, to: 3 });
+    expect(out.waited!.ms).toBeGreaterThanOrEqual(0);
+    expect(out.waited!.ms).toBeLessThanOrEqual(Date.now() - before + 5_000);
+  });
+
+  it("排在别人后面等：轮到时笔记齐了（built=0）也带 waited——开口时缺的章是别人补的，照样算等过", async () => {
+    const dir = await makeBook(4);
+    const slow: BrainCallModel = async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return "笔记"; };
+    const [a, b] = await Promise.all([
+      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: slow }),
+      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: slow }),
+    ]);
+    expect(a.built + b.built).toBe(4);
+    // 一个全补、一个一个没补：两个都等过（第二个等的是第一个补）。
+    expect(a.waited).toMatchObject({ from: 1, to: 4 });
+    expect(b.waited).toMatchObject({ from: 1, to: 4 });
+    expect(b.built).toBe(0);
+  });
+
+  it("开口时已有一部分、别人又补了一段、自己补剩下的：waited 从开口那一刻接着数，中间谁补的不管", async () => {
+    const dir = await makeBook(4);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 1, callModel: fakeModel().callModel }); // 已有第 1 章
+    const slow: BrainCallModel = async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return "笔记"; };
+    // 第一个调用补 2～4；第二个同时开口（只看到第 1 章），排队等它补完——waited 覆盖 2～4。
+    const [, second] = await Promise.all([
+      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: slow }),
+      ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: slow }),
+    ]);
+    expect(second.waited).toMatchObject({ from: 2, to: 4 });
+  });
+
+  it("笔记本来就齐：不带 waited（没等不装等）", async () => {
+    const dir = await makeBook(3);
+    const callModel = fakeModel().callModel;
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel });
+    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel });
+    expect(out.built).toBe(0);
+    expect(out.waited).toBeUndefined();
+  });
+
+  it("超额走冷窗口（tooMany）：没等，不带 waited", async () => {
+    const dir = await makeBook(5);
+    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel, maxCatchUp: 3 });
+    expect(out.missing).toBe(5);
+    expect(out.waited).toBeUndefined();
+  });
+
+  it("waitingAs：补读期间登记着、结束注销；失败也注销；冷窗口不登记", async () => {
+    const dir = await makeBook(2);
+    let midBuild = false;
+    const gated: BrainCallModel = async () => { midBuild = readerWaitingActions(dir, ROLE.id).length > 0; return "笔记"; };
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 2, callModel: gated, waitingAs: "核账" });
+    expect(midBuild).toBe(true); // 补读进行中确实登记着
+    expect(readerWaitingActions(dir, ROLE.id)).toEqual([]);
+    // 失败也注销（finally）。
+    const failing = await makeBook(2);
+    await expect(ensureReaderWindow({
+      projectDir: failing, role: ROLE, upTo: 2,
+      callModel: async () => { throw new Error("挂了"); },
+      waitingAs: "核账",
+    })).rejects.toThrow("挂了");
+    expect(readerWaitingActions(failing, ROLE.id)).toEqual([]);
+    // 冷窗口（超额）：没等不登记。
+    const cold = await ensureReaderWindow({ projectDir: await makeBook(2), role: ROLE, upTo: 2, callModel: fakeModel().callModel, maxCatchUp: 0, waitingAs: "核账" });
+    expect(cold.missing).toBeGreaterThan(0);
+    expect(cold.waited).toBeUndefined();
   });
 });
 

@@ -3,6 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { readReadersCatchUpStatus, startReaderCatchUp } from "./catch-up.js";
 import { declareChapterDeltaByLedger, LEDGER_ROLE } from "./ledger.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 
@@ -122,13 +123,14 @@ describe("declareChapterDeltaByLedger", () => {
     expect(await stat(join(dir, "agents")).then(() => true, () => false)).toBe(false);
   });
 
-  it("当场补了笔记（R5.2）→ waited 带补章范围并进 outcome，进度盘上「记账在等它读完」读完即清", async () => {
+  it("当场补了笔记（R5.2）→ waited 带补章范围并进 outcome，进度行标「记账在等它读完」读完即清", async () => {
     const dir = await makeBook([CH1, CH2]);
     const seenWhileWaiting: unknown[] = [];
     const { callModel } = fakeModel(DECLARATION_JSON);
     const wrapped: BrainCallModel = async (messages, options) => {
       if (!options.json) {
-        seenWhileWaiting.push(JSON.parse(await readFile(join(dir, "agents", LEDGER_ROLE.id, "progress.json"), "utf-8")));
+        // 补笔记的那一刻：进度行应标着「记账在等它读完」（R6.1：waiting 在进程内登记表里，读进度时合并显示）。
+        seenWhileWaiting.push((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "ledger"));
       }
       return callModel(messages, options);
     };
@@ -138,9 +140,36 @@ describe("declareChapterDeltaByLedger", () => {
     expect(result.outcome.waited).toMatchObject({ from: 1, to: 2 });
     // 等读期间：标着「记账在等它读完」。
     expect(seenWhileWaiting[0]).toMatchObject({ role: "ledger", reading: true, done: 0, total: 2, waiting: "记账" });
-    // 读完：reading 翻回 false、waiting 清掉。
+    // 读完：reading 翻回 false、waiting 消失。
     await expect(readFile(join(dir, "agents", LEDGER_ROLE.id, "progress.json"), "utf-8").then((text) => JSON.parse(text)))
       .resolves.toMatchObject({ reading: false, done: 2, total: 2 });
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "ledger")).not.toHaveProperty("waiting");
+  });
+
+  it("排在后台补读后面等（R6.1 新发现 1）→ 也算等过：等待中进度行标「记账在等它读完」，waited 覆盖补上的章", async () => {
+    const dir = await makeBook([CH1, CH2]);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started = false;
+    // 后台补读的假模型：第一次调用（写第 1 章笔记）就卡住，把记账员的锁拿在手里。
+    const bg: BrainCallModel = async () => { started = true; await gate; return "笔记"; };
+    const bgRound = startReaderCatchUp(dir, LEDGER_ROLE, 2, { callModel: bg });
+    await vi.waitFor(() => expect(started).toBe(true), { timeout: 5_000 });
+    // 并发记账（第 3 章定稿声明）：开口时一章笔记都还没有（waited.from=1），排在锁后面等。
+    const { callModel } = fakeModel(DECLARATION_JSON);
+    const resultPromise = declareChapterDeltaByLedger({ projectDir: dir, chapter: 3, draft: DRAFT, callModel });
+    await vi.waitFor(async () => {
+      expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "ledger")).toMatchObject({ reading: true, waiting: "记账" });
+    }, { timeout: 5_000 });
+    release();
+    const result = await resultPromise;
+    expect(result.outcome.status).toBe("model");
+    // 轮到它时笔记已经齐了（一个没补）：等的是谁补的不重要，开口时缺的第 1～2 章等完补上了就算等过。
+    expect(result.waited).toMatchObject({ from: 1, to: 2 });
+    expect(result.outcome.waited).toMatchObject({ from: 1, to: 2 });
+    // 结束后 waiting 消失。
+    expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "ledger")).not.toHaveProperty("waiting");
+    await bgRound;
   });
 
   it("补笔记失败 → fallback + 原因（已写下的笔记留着）", async () => {
