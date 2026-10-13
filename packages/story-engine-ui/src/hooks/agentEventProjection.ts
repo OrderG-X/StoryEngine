@@ -46,6 +46,12 @@ export interface AgentToolResultOutput {
    * 部分失败显示成全成功（修#1）。优先级低于 needsConfirmation / ok===false。
    */
   readonly partialMiss?: boolean;
+  /**
+   * 工具参数/输出没过 Mastra 校验（服务端 agent-chat 归一时打上的标记；见 normalizeForwardedToolResult）。
+   * 为 true 时步骤一律显示「失败」——即便它是裁决类工具（commit_preview 的 ok:false 语义是「裁决未过」，
+   * 但校验失败意味着工具根本没跑、没有裁决），且 summary 里带给人话原因，步骤卡点开不再空白。
+   */
+  readonly toolValidationFailure?: boolean;
   /** 诚实背书粒度（agentChatClient 透传；与服务端 honesty-detection stepBacksWriteClaim 认的字段名对齐）：
    *  prune_snapshots 的 dryRun（true=预览没落盘不背书）/ manage_style_exemplars 的 action
    *  （list 只读不背书；写背书只认 add/update/remove）。累加进 toolStep 供回合收尾的诚实探针判定。 */
@@ -254,13 +260,15 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
       // - dryRun/action（prune 只读预览 / exemplars 只读 list）随步骤累加进 toolStep，
       //   供回合收尾的诚实探针（honesty-detection stepBacksWriteClaim）按粒度判写背书。
-      const status = event.output?.needsConfirmation === true
-        ? "needs_confirmation"
-        : event.output?.ok === false
-          ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
-          : event.output?.partialMiss === true
-            ? "partial"
-            : "completed";
+      const status = event.output?.toolValidationFailure === true
+        ? "failed"
+        : event.output?.needsConfirmation === true
+          ? "needs_confirmation"
+          : event.output?.ok === false
+            ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
+            : event.output?.partialMiss === true
+              ? "partial"
+              : "completed";
       const settled = settleTool(message, event.toolCallId, status, event.endedAt, event.output?.summary, event.output);
       // 块级撤销的命门：snapshotId 已从后端流到 event.output（agentChatClient→onToolResult），
       // 这里把它（连同 refreshScope）回写到消息上，建立「回合↔git 快照」映射，供 M3 块脚「撤销到此」。
@@ -405,7 +413,9 @@ function settleTool(
   output?: AgentToolResultOutput,
 ): ChapterMessage {
   const cardId = cardIdFor(toolCallId);
-  const detail = summary?.trim();
+  // R7.9：失败的步骤不许「点开是空的」——工具没带 summary 时给一句如实的兜底（真原因在 AI 回复里），
+  // 步骤卡至少可展开、作者不至于对着一行「失败」猜。其余状态维持原样（没说失败的绝不编原因）。
+  const detail = summary?.trim() || (status === "failed" ? "这一步没执行成功，工具结果里没带回具体原因。" : undefined);
   const toolSteps = message.toolSteps?.map((step) =>
     step.id === toolCallId
       ? {

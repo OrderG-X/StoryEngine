@@ -351,7 +351,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: {} as never,
+      requestContext: new RequestContext(),
       executeTool: async () => ({ ok: true, summary: "本章章纲：苏晚找书。写好了。" }),
       sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
       scrubber: { push: (t: string) => t, flush: () => "" },
@@ -368,7 +368,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: {} as never,
+      requestContext: new RequestContext(),
       executeTool: async () => ({ ok: false, summary: "没写成。" }),
       sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
       scrubber: { push: (t: string) => t, flush: () => "" },
@@ -376,6 +376,29 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     });
     const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
     expect(next.choices[0]).toMatchObject({ label: "再写一次", action: { toolName: "generate_draft", chapter: 2 } });
+  });
+
+  // R7.1 结构化意图标记：按钮/选项点击本身就是写作授权，generate_draft 的写作意图门见标记优先放行
+  // （不赌回显文案命中正向词表）。标记只在执行期间存在，结束即清（与 prune 同款）。
+  it("出稿动作带用户确认标记：执行期间在场、结束即清（写作意图门优先认标记）", async () => {
+    const requestContext = new RequestContext();
+    let markedDuringExecution = false;
+    const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {
+      markedDuringExecution = isUserConfirmedTool({ requestContext: context } as never, toolName);
+      return { ok: true, summary: "写好了。" };
+    };
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext,
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(markedDuringExecution).toBe(true);
+    expect(isUserConfirmedTool({ requestContext } as never, "generate_draft")).toBe(false);
+    expect(events.at(-1)!.event).toBe("tool-result");
   });
 });
 
@@ -446,7 +469,7 @@ describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", ()
     const scrubber = { push: (text: string) => text, flush: () => "" };
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: {} as never,
+      requestContext: new RequestContext(),
       executeTool: async () => ({ ok: true, summary: "本章章纲：苏晚找书。写好了。" }),
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber,
@@ -457,7 +480,7 @@ describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", ()
     const failed: { event: string; data: unknown }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
-      requestContext: {} as never,
+      requestContext: new RequestContext(),
       executeTool: async () => { throw new Error("服务商超时"); },
       sendEvent: (event, data) => failed.push({ event, data }),
       scrubber,

@@ -95,6 +95,8 @@ export interface AgentToolResult {
   readonly needsConfirmation?: boolean;
   /** 部分纠错失败（写成功但有要删的目标没命中）：前端据此把该步骤置 partial（部分完成·琥珀色），不当全成功绿色（修#1）。 */
   readonly partialMiss?: boolean;
+  /** R7.9：工具参数/输出没过 Mastra 校验（服务端归一标记）——投影层一律置「失败」，即便裁决类工具（没跑≠裁决未过）。 */
+  readonly toolValidationFailure?: boolean;
   /** 诚实背书粒度（服务端 agent-chat tool-result 已随步骤带上、honesty-detection stepBacksWriteClaim 认的字段名）：
    *  prune_snapshots 的 dryRun（预览不背书「已裁剪」）/ manage_style_exemplars（今并入 foundation_write）的 action
    *  （list 不背书「已添加」）/ 合并入口 manage_snapshots 的 op。
@@ -327,6 +329,9 @@ export async function streamAgentChat(
             // 需确认（删除角色未确认等）：透传给投影层置「待确认」步骤态，区别于失败。
             ...(output.needsConfirmation === true ? { needsConfirmation: true } : {}),
             ...(output.partialMiss === true ? { partialMiss: true } : {}),
+            // R7.9：Mastra 校验失败标记（服务端 agent-chat 归一时带上）——投影层据此一律置「失败」，
+            // 即便是裁决类工具（校验失败=工具没跑，不是「裁决未过」）。
+            ...(output.toolValidationFailure === true ? { toolValidationFailure: true } : {}),
             // 诚实背书粒度（honesty-detection stepBacksWriteClaim 认的字段名）：prune 的 dryRun /
             // exemplars 的 action / 合并入口的 op 必须透传给投影层累加进 step——否则 add 真成功也被前端诚实探针误判「操作未完成」。
             ...(typeof output.dryRun === "boolean" ? { dryRun: output.dryRun } : {}),

@@ -17,6 +17,8 @@ import {
   capChatHistoryWindow,
   closingFallbackText,
   formatChapterStatusLine,
+  isMastraToolValidationError,
+  normalizeForwardedToolResult,
   readCurrentChapter,
   readLatestUserTurnText,
   runObedientAgentTurn,
@@ -862,6 +864,99 @@ describe("toolResultStatus：裁决类只读工具的 ok:false ≠ 工具崩了�
     expect(toolResultStatus("foundation_write", { ok: false, needsConfirmation: true })).toBe("needs_confirmation");
     expect(toolResultStatus("foundation_write", { partialMiss: true })).toBe("partial");
     expect(toolResultStatus("read_state_overview", { overview: {} })).toBe("completed");
+  });
+});
+
+describe("R7.9：Mastra 工具校验失败结果的归一（步骤卡不再「已完成 + 空」）", () => {
+  // @mastra/core tools/validation.ts validateToolInput 的真实返回形状（1.42.0 dist 源码核对）：
+  // execute 不跑、无 ok/summary；框架把它当 tool-result 回给模型，模型看到 message 后通常自行修正重调。
+  const MASTRA_VALIDATION_FAILURE = {
+    error: true,
+    message:
+      'Tool input validation failed for generate_draft. Please fix the following errors and try again:\n' +
+      "- mustHitBeats: Expected array, received object\n\n" +
+      'Provided arguments: {"chapter":5,"mustHitBeats":{"1":"要点一"}}',
+    validationErrors: { errors: [], fields: { mustHitBeats: { errors: ["Expected array, received object"] } } },
+  };
+
+  it("isMastraToolValidationError：只认结构化标记（error+message+validationErrors），不误伤正常工具结果", () => {
+    expect(isMastraToolValidationError(MASTRA_VALIDATION_FAILURE)).toBe(true);
+    expect(isMastraToolValidationError({ ok: false, summary: "第 4 章还没定稿。" })).toBe(false);
+    expect(isMastraToolValidationError({ error: "出错了" })).toBe(false);
+    expect(isMastraToolValidationError("Tool input validation failed")).toBe(false);
+    expect(isMastraToolValidationError(null)).toBe(false);
+  });
+
+  it("归一：ok:false + 中文 summary（列 schema 字段名）+ 标记；状态 failed——裁决类工具也不是 verdict（它根本没跑）", () => {
+    const forwarded = normalizeForwardedToolResult("generate_draft", MASTRA_VALIDATION_FAILURE);
+    expect(forwarded.status).toBe("failed");
+    const result = forwarded.result as { ok: boolean; summary: string; toolValidationFailure: boolean };
+    expect(result.ok).toBe(false);
+    expect(result.toolValidationFailure).toBe(true);
+    expect(result.summary).toContain("mustHitBeats");
+    expect(result.summary).toContain("没通过校验");
+    // 不把 Mastra 的 message 原文（内嵌模型原始参数）进步骤卡。
+    expect(result.summary).not.toContain("Provided arguments");
+    expect(normalizeForwardedToolResult("commit_preview", MASTRA_VALIDATION_FAILURE).status).toBe("failed");
+  });
+
+  it("归一：非校验失败结果逐字节原样转发、裁决语义不变（回归护栏）", () => {
+    const verdictResult = { chapter: 99, ok: false, canCommit: false, blockingReasons: ["第 99 章还没有工作稿。"], summary: "第 99 章还没有工作稿。" };
+    const forwarded = normalizeForwardedToolResult("commit_preview", verdictResult);
+    expect(forwarded.result).toBe(verdictResult);
+    expect(forwarded.status).toBe("verdict");
+    const okResult = { ok: true, summary: "第 5 章已生成正文。" };
+    expect(normalizeForwardedToolResult("generate_draft", okResult)).toEqual({ result: okResult, status: "completed" });
+  });
+
+  it("runObedientAgentTurn：校验失败的 tool-result 转发给前端时带 ok:false+summary，且不算写背书（谎报仍触发重做）", async () => {
+    const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
+    const attempts: ObedientTurnChunk[][] = [
+      [
+        { type: "tool-call", payload: { toolCallId: "gd-1", toolName: "generate_draft", args: { mustHitBeats: { "1": "要点一" } } } },
+        { type: "tool-result", payload: { toolCallId: "gd-1", toolName: "generate_draft", result: MASTRA_VALIDATION_FAILURE } },
+        { type: "text-delta", payload: { text: "第 11 章已写好并放进工作稿。" } },
+        { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
+      ],
+      [
+        { type: "tool-call", payload: { toolCallId: "gd-2", toolName: "generate_draft", args: { mustHitBeats: ["要点一"] } } },
+        { type: "tool-result", payload: { toolCallId: "gd-2", toolName: "generate_draft", result: { ok: true, summary: "第 11 章已生成正文。" } } },
+        { type: "text-delta", payload: { text: "第 11 章写好了。" } },
+        { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
+      ],
+    ];
+    let call = 0;
+    const seenOptions: (ObedienceAttemptOptions | undefined)[] = [];
+    const streamAttempt = async (_messages: readonly unknown[], options?: ObedienceAttemptOptions) => {
+      seenOptions.push(options);
+      const chunks = attempts[Math.min(call, attempts.length - 1)]!;
+      call += 1;
+      return (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })();
+    };
+    const events: { event: string; data: unknown }[] = [];
+    await runObedientAgentTurn({
+      initialMessages: [{ role: "user", content: "写第 11 章" }],
+      userText: "写第 11 章",
+      streamAttempt: streamAttempt as never,
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    // 转发出去的 tool-result 带归一后的 ok:false + summary（步骤卡有原因、状态失败）。
+    const toolResultEvents = events.filter((e) => e.event === "tool-result");
+    expect(toolResultEvents).toHaveLength(2);
+    const first = toolResultEvents[0]!.data as { output: { ok?: boolean; summary?: string; toolValidationFailure?: boolean } };
+    expect(first.output.ok).toBe(false);
+    expect(first.output.toolValidationFailure).toBe(true);
+    expect(first.output.summary).toContain("没通过校验");
+    expect(JSON.stringify(first)).not.toContain("Provided arguments");
+    // 校验失败不算写背书：模型谎称「已写好」仍触发服从重做（修前该步骤会被记成 completed、
+    // 谎报被当成「有背书」而不重做）。重做带强制工具选择（草稿声称不在反推表里 → required 兜底）。
+    expect(call).toBe(2);
+    expect(seenOptions[1]?.toolChoice).toBeTruthy();
+    const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
+    expect(text).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
   });
 });
 

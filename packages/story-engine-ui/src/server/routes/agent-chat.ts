@@ -250,6 +250,49 @@ export function toolResultStatus(toolName: string | undefined, output: unknown):
   return "completed";
 }
 
+/** Mastra 工具入参/出参校验失败时框架返回的错误形状（@mastra/core tools/validation.ts 的 validateToolInput/Output：
+ *  { error:true, message, validationErrors }）。execute 不会跑，模型下一步能看到 message 自行修正重试。 */
+export interface MastraToolValidationFailure {
+  readonly error: true;
+  readonly message: string;
+  readonly validationErrors?: { readonly errors?: readonly string[]; readonly fields?: Record<string, { readonly errors?: readonly string[] }> };
+}
+
+/** 判别 Mastra 校验失败结果。只认结构化标记（error===true + message 字符串 + validationErrors），不猜文案。 */
+export function isMastraToolValidationError(result: unknown): result is MastraToolValidationFailure {
+  if (typeof result !== "object" || result === null) return false;
+  const r = result as { error?: unknown; message?: unknown; validationErrors?: unknown };
+  return r.error === true && typeof r.message === "string" && r.validationErrors !== undefined;
+}
+
+/** 校验失败 → 给作者看的一句话。只列 schema 字段名（结构性信息、无裸 id）；不转述 message 原文——
+ *  里面带着模型传来的原始参数全文，原样进步骤卡既啰嗦也可能带正文片段。 */
+export function toolValidationFailureSummary(failure: MastraToolValidationFailure): string {
+  const fields = Object.keys(failure.validationErrors?.fields ?? {});
+  const fieldText = fields.length > 0 ? `（${fields.join("、")}）` : "";
+  return `AI 传的参数没通过校验${fieldText}，这一步没有执行，具体原因已回给 AI 处理。`;
+}
+
+/** 工具结果转发前的归一：Mastra 校验失败结果没有 ok/summary，前端会当成「已完成 + 空」——
+ *  步骤卡 1 秒内结束、点开没有任何原因（十章真机第 5/7 章出稿都出现过，见 R7.9）。归一成
+ *  ok:false + 中文 summary + toolValidationFailure 标记，步骤卡如实显示失败与原因；
+ *  诚实检测里它也不算「写背书」（此前会被误当成 completed，模型谎称已写也拦不住）。
+ *  非校验失败结果逐字节原样转发（含裁决类 ok:false 的既有语义）。 */
+export function normalizeForwardedToolResult(
+  toolName: string | undefined,
+  result: unknown,
+): { readonly result: unknown; readonly status: HonestyToolStep["status"] } {
+  if (!isMastraToolValidationError(result)) {
+    return { result, status: toolResultStatus(toolName, result) };
+  }
+  // 只发干净的三字段：Mastra 的 message 原文里嵌着模型传来的完整参数（可能带正文片段），
+  // 不落到客户端（模型那边仍由框架喂原始 message，自行修正重试，不受影响）。
+  return {
+    result: { ok: false, summary: toolValidationFailureSummary(result), toolValidationFailure: true },
+    status: "failed",
+  };
+}
+
 /**
  * 服从重试上限（r8）：检出「口头声称完成但零工具调用」后自动重做的次数（1 = 初跑 + 最多 1 次重做）。
  * 绝不无限重试：重做后仍空转就按老路径追加诚实更正、如实收场。
@@ -423,14 +466,17 @@ export async function runObedientAgentTurn(args: {
         case "tool-result": {
           sawToolActivity = true;
           const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
-          const resultPayload = chunk.payload?.result as
+          // Mastra 校验失败结果在此归一（ok:false + summary + 标记），前端步骤卡不再「已完成 + 空」；
+          // 诚实状态同步取归一后的 failed（校验失败不是写背书，裁决类工具也不算「裁决未过」——它根本没跑）。
+          const forwarded = normalizeForwardedToolResult(chunk.payload?.toolName, chunk.payload?.result);
+          const resultPayload = forwarded.result as
             | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown; readonly op?: unknown }
             | undefined;
           const summary = resultPayload?.summary;
           if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
           toolSteps.set(toolCallId, {
             toolName: chunk.payload?.toolName,
-            status: toolResultStatus(chunk.payload?.toolName, chunk.payload?.result),
+            status: forwarded.status,
             // 诚实背书粒度（honesty-detection stepBacksWriteClaim）：prune 的 dryRun（预览不背书）/
             // exemplars 的 action（list 不背书）/ 合并入口的 op（manage_snapshots 只认 op=prune 的真裁）随步骤带上；
             // 没有这几字段的工具自然缺省、维持旧口径。
@@ -441,7 +487,7 @@ export async function runObedientAgentTurn(args: {
           args.sendEvent("tool-result", {
             toolCallId,
             toolName: chunk.payload?.toolName,
-            output: chunk.payload?.result,
+            output: forwarded.result,
           });
           break;
         }

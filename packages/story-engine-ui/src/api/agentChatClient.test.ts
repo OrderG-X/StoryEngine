@@ -162,6 +162,42 @@ describe("streamAgentChat", () => {
     expect(received?.snapshotId).toBe("snap-7");
   });
 
+  it("R7.9：校验失败标记 toolValidationFailure + ok:false + summary 随 tool-result 透传（投影层据此置「失败」并显示原因）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "g1",
+          toolName: "generate_draft",
+          output: {
+            ok: false,
+            toolValidationFailure: true,
+            summary: "AI 传的参数没通过校验（mustHitBeats），这一步没有执行，具体原因已回给 AI 处理。",
+          },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+
+    let received: { ok?: boolean; toolValidationFailure?: boolean; summary?: string } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 5 章" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => {
+          received = info;
+        },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+
+    expect(received?.ok).toBe(false);
+    expect(received?.toolValidationFailure).toBe(true);
+    expect(received?.summary).toContain("没通过校验");
+  });
+
   it("passes dryRun/action (诚实背书粒度) through onToolResult — exemplars add 不再被前端误判「操作未完成」(P2③)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([
