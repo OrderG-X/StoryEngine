@@ -49,4 +49,51 @@ describe("线索编号与推进声明（阶段 4 记账对号）", () => {
     }, OPEN).pendingIntents?.[0].targetThreadHint).toBe("登记表送修人只写了一个沈字");
     expect(resolved.keyLeads.map((item) => item.targetThreadHint)).toEqual(["登记表送修人只写了一个沈字", undefined, "怀表来历"]);
   });
+
+  // R7.8 线索降噪：同一谜团拆成的多条，推进/回收要把相关编号都挂上——
+  // targetThreadHint 写多个编号（字符串「T1、T2」或数组）时展开成多条声明，每条各挂一个；
+  // 单个编号、直接写标题、编号越界（拼不出第二个有效标题）行为都不变。
+  it("targetThreadHint 多编号展开：一条推进拆成多条、各挂一个编号；数组写法也收", () => {
+    const resolved = resolveThreadRefs({
+      chapter: 5,
+      mainEvent: { summary: "s", quote: DRAFT },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [{ summary: "揭晓", quote: "q", targetThreadHint: "T1、T2" }],
+      resourceDeltas: [],
+      keyLeads: [{ summary: "推进", quote: "q", progress: "advanced", targetThreadHint: "T2、T9" }],
+      pendingIntents: [{ summary: "待办", quote: "q", targetThreadHint: "T1" }],
+    }, OPEN);
+    expect(resolved.resolvedForeshadowing.map((item) => item.targetThreadHint))
+      .toEqual(["登记表送修人只写了一个沈字", "怀表来历"]);
+    // T9 越界：只剩一个有效标题 → 不拆，按单编号换算。
+    expect(resolved.keyLeads.map((item) => item.targetThreadHint)).toEqual(["怀表来历"]);
+    expect(resolved.pendingIntents?.[0].targetThreadHint).toBe("登记表送修人只写了一个沈字");
+
+    const asArray = parseChapterDeltaDeclaration(JSON.stringify({
+      mainEvent: { summary: "s", quote: DRAFT },
+      keyLeads: [{ summary: "推进", quote: "q", progress: "advanced", targetThreadHint: ["T1", "T2"] }],
+      pendingIntents: [{ summary: "p", quote: "q", targetThreadHint: [] }],
+    }), 5);
+    expect(asArray?.keyLeads[0].targetThreadHint).toBe("T1、T2");
+    expect(asArray?.pendingIntents?.[0].targetThreadHint).toBeUndefined();
+    const expanded = resolveThreadRefs(asArray!, OPEN);
+    expect(expanded.keyLeads.map((item) => item.targetThreadHint))
+      .toEqual(["登记表送修人只写了一个沈字", "怀表来历"]);
+  });
+
+  it("多编号里只有一个有效标题（其余越界）→ 不拆条；纯文本混着编号的 hint 不当多编号", () => {
+    const resolved = resolveThreadRefs({
+      chapter: 5,
+      mainEvent: { summary: "s", quote: DRAFT },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [
+        { summary: "b", quote: "q", progress: "advanced", targetThreadHint: "T2、T9" },
+        { summary: "c", quote: "q", progress: "advanced", targetThreadHint: "查T1这条线" },
+      ],
+    }, OPEN);
+    expect(resolved.keyLeads[0].targetThreadHint).toBe("怀表来历");
+    expect(resolved.keyLeads[1].targetThreadHint).toBe("查T1这条线");
+  });
 });

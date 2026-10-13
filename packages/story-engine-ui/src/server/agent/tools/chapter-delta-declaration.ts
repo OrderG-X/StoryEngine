@@ -25,15 +25,32 @@ const optionalHint = z.preprocess(
   z.string().optional(),
 );
 
+/**
+ * 线索编号引用宽进（R7.8）：除了单个字符串，数组（模型常把多个编号写成 ["T3","T5"]）也收——
+ * 过滤非字符串项后用「、」拼成一个字符串，交给 resolveThreadRefs 展开成多条；拼不出内容当「没给」。
+ */
+const refListHint = z.preprocess(
+  (value) => {
+    if (Array.isArray(value)) {
+      const parts = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+      return parts.length > 0 ? parts.map((item) => item.trim()).join("、") : undefined;
+    }
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  },
+  z.string().optional(),
+);
+
 const foreshadowingItem = z.object({
   summary: z.string().trim().min(1),
   quote: z.string().trim().min(1),
-  targetThreadHint: optionalHint,
+  targetThreadHint: refListHint,
 });
 
 /**
  * 关键线索（阶段 4「记账对号」）：progress=advanced + targetThreadHint 指向已开着的线索 → 推进那一条、不新建。
  * progress 宽进：中英文说法都认，认不出就当没给（按新线索处理），不丢整条。
+ * targetThreadHint 宽进「多个编号」（R7.8 线索降噪）：同一谜团拆成的多条，推进/回收时要能把相关编号都挂上——
+ * 字符串里写多个（T3、T5）或直接给数组都收，展开在 resolveThreadRefs 做。
  */
 const keyLeadItem = z.object({
   summary: z.string().trim().min(1),
@@ -44,7 +61,7 @@ const keyLeadItem = z.object({
     if (text === "introduced" || text === "新" || text === "新增" || text === "new") return "introduced";
     return undefined;
   }, z.enum(["introduced", "advanced"]).optional()),
-  targetThreadHint: optionalHint,
+  targetThreadHint: refListHint,
 });
 
 const resourceItem = z.object({
@@ -70,7 +87,7 @@ const arcGoalItem = z.object({
   quote: z.string().trim().min(1),
 });
 
-const pendingIntentItem = evidenceItem.extend({ targetThreadHint: optionalHint });
+const pendingIntentItem = evidenceItem.extend({ targetThreadHint: refListHint });
 
 /** 本章的时间（故事时间线）：宽进——天数给成「3」「三」都收，星期给成「星期二」也收；原句必须有。 */
 const CHINESE_SMALL_NUMBERS: Record<string, number> = { 零: 0, 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
@@ -178,7 +195,7 @@ export function buildChapterDeltaSystemSpec(): string {
     "· seededForeshadowing[]：本章【新埋下】、预期后文回收的跨章悬念（之前没出现过；下方【已开着的线索】里已有的不算新伏笔）。summary=这条伏笔是什么，quote=埋设它的原句。本章内已经解决的紧张/障碍不算伏笔，不要报。",
     "· resolvedForeshadowing[]：本章【回收/揭晓】的、【之前已埋下】的伏笔或线索——正文必须写出了答案/结论才算回收；只是又提到、又核对一遍、有了新进展，那是推进，报进 keyLeads（progress=advanced），不要报在这里。summary=揭晓了什么，quote=揭晓的原句；对应下方【已开着的线索】里的哪一条，就把它的编号（如 T3）填进 targetThreadHint。之前挂着的计划/待办（尤其是『决定/需要/打算』类条目）本章做完了/不再需要了，也算回收，同样报进 resolvedForeshadowing 并给编号；别只回收谜题类伏笔。",
     "· resourceDeltas[]：本章主角实际完成的获得/失去/消耗的具体资源（物品/货币/数量）。item=资源名，change=gain|loss|spend，amount=原文数量字符串（如『十二枚』，不要换算单位、不要自己算），quote=写到该变化的原句。程序逐字核对 amount 在 quote 里；正文没写明数量就省略 amount，只报 item+change+quote，别猜数、别选无数量的句子。交易未成交、对方没收下/推回、只是拿出来展示的，都不算得失（如把灵石放在柜台上但对方没收=没有失去）。",
-    "· keyLeads[]：本章浮现或推进的关键线索/悬念（不同于已回收的）。summary+quote，再加 progress：introduced=本章新冒出来的问题；advanced=推进了下方【已开着的线索】里的某一条（有了新进展但还没解开），这时把那条的编号（如 T3）填进 targetThreadHint。同一件事只报一条：seededForeshadowing 里报过的，不要在 keyLeads 再报一遍；已开着的线索有新进展，一律报 advanced，不要换个说法当新线索。introduced 只报正文里【还没有答案】的问题，summary 写成问句（「谁…？」「为什么…？」）；本章查到的结果、看到的东西本身是事实（会另记进事实账本），不是线索。",
+    "· keyLeads[]：本章浮现或推进的关键线索/悬念（不同于已回收的）。summary+quote，再加 progress：introduced=本章新冒出来的问题；advanced=推进了下方【已开着的线索】里的某一条（有了新进展但还没解开），这时把那条的编号（如 T3）填进 targetThreadHint；同一谜团在【已开着的线索】里拆成了多条的，把相关编号都填上（如 T3、T5），让每条都算推进。同一件事只报一条：seededForeshadowing 里报过的，不要在 keyLeads 再报一遍；已开着的线索有新进展，一律报 advanced，不要换个说法当新线索。introduced 只报正文里【还没有答案】的问题，summary 写成问句（「谁…？」「为什么…？」）；本章查到的结果、看到的东西本身是事实（会另记进事实账本），不是线索。",
     "· pendingIntents[]：本章留下的未完成待办/下一步意图（不同于已完成决定）。summary=还要做什么，quote=写到该待办/意图的原句。只有正文明确留下后续行动时才报；已经完成的行动不要报。和下方【已开着的线索】里某条是同一件事的，把它的编号填进 targetThreadHint，不要换个说法另报一条。",
     "· charactersPresent[]：本章正文里【出现的每个有名字的角色】各报一条。name=正文里用到的名字（逐字照抄，含姓氏，不要改写），quote=含该名字的原句；若该角色对应下方【本书已确立的角色名】里的某人，name 必须与已确立写法【完全一致】，别写成形近的错名；若能指明是谁，用 identityHint 备注（如『主角』『主角的妹妹』）。",
     "· viewpoint：这一章主要跟着谁的眼睛走（视角人物）——写那个人的名字，且要与 charactersPresent 里该角色的写法一致；多视角或全知叙事就省略整个字段。",
@@ -323,6 +340,9 @@ export function parseChapterDeltaDeclaration(
 /**
  * 把线索编号（T3）换回给模型看的那条标题原文：引擎按标题归到同一条线索。
  * 不是编号的（模型直接写了标题）原样保留；编号越界的当没给（按新线索处理，宁可多一条也不指错）。
+ * 多编号展开（R7.8 线索降噪）：targetThreadHint 整串只由编号和分隔符组成（T3、T5）时，拆成多条声明、
+ * 每条各挂一个编号——同一谜团拆成的几条线索，一次推进/回收能挂到所有相关条目上，不再只记其中一条、
+ * 让其余的白白吃「多章没推进」。单个编号（或混着其他文字的）行为不变。
  */
 export function resolveThreadRefs(declaration: ChapterDeltaDeclaration, openThreadTitles: readonly string[]): ChapterDeltaDeclaration {
   const resolve = (hint: string | undefined): string | undefined => {
@@ -336,10 +356,26 @@ export function resolveThreadRefs(declaration: ChapterDeltaDeclaration, openThre
     const resolved = resolve(targetThreadHint);
     return (resolved ? { ...rest, targetThreadHint: resolved } : rest) as T;
   };
+  const MULTI_REF_HINT = /^(?:\s*[Tt]\d+[\s、,，;；/]\s*)+[Tt]\d+\s*$/u;
+  const expandRefHints = <T extends { readonly targetThreadHint?: string }>(items: readonly T[]): readonly T[] =>
+    items.flatMap((item) => {
+      const hint = item.targetThreadHint?.trim();
+      if (!hint || !MULTI_REF_HINT.test(hint)) return [withHint(item)];
+      const titles = [...hint.matchAll(/[Tt](\d+)/gu)]
+        .map((match) => openThreadTitles[Number(match[1]) - 1])
+        .filter((title): title is string => typeof title === "string" && title.length > 0);
+      const uniqueTitles = [...new Set(titles)];
+      const { targetThreadHint: _dropped, ...rest } = item;
+      // 全部越界 → 当没给（与单个越界编号同口径，按新线索处理）；
+      // 只剩一个有效标题 → 不拆条，直接换成那个标题（别把「T2、T9」这种原串留在 hint 里指不到任何线索）。
+      if (uniqueTitles.length === 0) return [rest as T];
+      if (uniqueTitles.length === 1) return [{ ...rest, targetThreadHint: uniqueTitles[0] } as T];
+      return uniqueTitles.map((title) => ({ ...rest, targetThreadHint: title }) as T);
+    });
   return {
     ...declaration,
-    resolvedForeshadowing: declaration.resolvedForeshadowing.map(withHint),
-    keyLeads: declaration.keyLeads.map(withHint),
-    ...(declaration.pendingIntents ? { pendingIntents: declaration.pendingIntents.map(withHint) } : {}),
+    resolvedForeshadowing: expandRefHints(declaration.resolvedForeshadowing),
+    keyLeads: expandRefHints(declaration.keyLeads),
+    ...(declaration.pendingIntents ? { pendingIntents: expandRefHints(declaration.pendingIntents) } : {}),
   };
 }

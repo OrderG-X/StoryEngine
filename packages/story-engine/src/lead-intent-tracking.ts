@@ -1,7 +1,7 @@
 import type { ForeshadowingDeclaration, LeadDeclaration, PendingIntentDeclaration, VerifiedChapterDelta } from "./chapter-delta.js";
 import type { ChapterSemanticSummary } from "./commit-plan-builder.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
-import { bigramSimilarity } from "./text-similarity.js";
+import { bigramOverlapCoefficient, bigramSimilarity } from "./text-similarity.js";
 import type { NarrativeThread, ThreadPool } from "./types.js";
 
 export interface ThreadTrackingUpdate {
@@ -186,10 +186,31 @@ function extractDeclaredThreadCandidates(input: {
     if (!isQualityLead(title, declared.quote)) continue;
     // 同一批声明里 seeded 与 keyLeads 常是同一件事换个说法：批内去重（标题互相包含 / 字面相近 / 引的是同一句原文），只留第一条
     // （2026-10-11 真机验收：「郑德海与林秋同届」「能否找到郑德海问出…」引同一句，记成两条新线索）。
+    // R7.8 补重叠系数一档：短标题 bigram 被长标题覆盖过半也算同批同一件事（Jaccard 对「一条比另一条长一截」
+    // 的同谜团对只到 0.36，十章重放第 10 章「提议腾地段」两条就是这么漏掉的）。只作用于同批；跨章不动。
     const evidence = truncateText(declared.quote, 120);
     if (candidates.some((candidate) => !candidate.targetThreadId && candidate.type === "lead"
       && (titlesOverlap(candidate.title, title) || bigramSimilarity(candidate.title, title) >= BATCH_DUPLICATE_SIMILARITY
+        || bigramOverlapCoefficient(candidate.title, title) >= BATCH_DUPLICATE_SIMILARITY
         || sameEvidence(candidate.evidence, evidence)))) continue;
+    // 跨章同引文归并（R7.8 线索降噪）：新开声明引的原句和某条活跃线索的既有证据是同一句（压掉空白标点后
+    // 完全相同）→ 这不是新谜团，是同一条又被写到：触碰那一条，不另立。批内去重早有 sameEvidence，
+    // 这里补跨章一路（十章试写：同一口钟的句子隔几章又开一条）。确定性字面比对，不做标题模糊熔合。
+    const sameQuoteTarget = activeThreads.find(
+      (thread) => (thread.evidence ?? []).some((existingEvidence) => sameEvidence(existingEvidence, evidence)),
+    );
+    if (sameQuoteTarget) {
+      if (!candidates.some((candidate) => candidate.targetThreadId === sameQuoteTarget.id)) {
+        candidates.push({
+          type: sameQuoteTarget.type,
+          title: sameQuoteTarget.title,
+          evidence,
+          isDone: false,
+          targetThreadId: sameQuoteTarget.id,
+        });
+      }
+      continue;
+    }
     candidates.push({
       type: "lead",
       title,
