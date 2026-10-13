@@ -2218,12 +2218,16 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("没找到要定稿的章节，请先打开那一章。", 4200);
         return;
       }
-      // 作者在预览卡上勾掉的账本条目：从卡上点带着；从建议条点的没带，按章取回（否则会把勾掉的照写）。
+      // 作者在预览卡上动过的账本条目：从卡上点带着；从建议条点的没带，按章取回（否则会把勾掉的照写）。
+      // 两类混在一个数组里、按前缀分流：勾掉的（fact:/change:…）＝去掉不写；勾上的要确认改记（change_confirm:）＝确认作废旧条。
       const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
+      const confirmedChanges = excluded.filter((id) => id.startsWith("change_confirm:")).length;
+      const removedCount = excluded.length - confirmedChanges;
       const dayOverride = target?.dayOverride ?? ledgerDayOverrideForConfirm(chapter, target?.previewToken);
       clearLedgerExclusions(chapter);
       const notes = [
-        ...(excluded.length > 0 ? [`账本清单去掉了 ${excluded.length} 条`] : []),
+        ...(removedCount > 0 ? [`账本清单去掉了 ${removedCount} 条`] : []),
+        ...(confirmedChanges > 0 ? [`确认改记 ${confirmedChanges} 条`] : []),
         ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;

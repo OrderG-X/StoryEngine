@@ -698,6 +698,83 @@ describe("StoryEngine-NG Lead / Intent Tracking", () => {
     ]));
   });
 
+  // R7.8 线索降噪：跨章同引文归并——隔了几章又拿同一句原文来开新线索（标题说法变了、相似度对不上），
+  // 只要引的原句和某条活跃线索的既有证据压掉空白标点后是同一句，就触碰那一条、不另立。
+  it("新开声明引的原句与活跃线索证据同句 → 触碰那一条，不再开第二条", async () => {
+    const projectDir = await createThreadProject();
+    const sharedQuote = "钟楼顶层那间锁着的钟室，钥匙孔里插着一根断掉的铜钥。";
+    await seedThreads(projectDir, {
+      threads: [
+        {
+          id: "lead-broken-key",
+          type: "lead",
+          title: "断掉的铜钥开什么",
+          status: "open",
+          firstSeenChapter: 1,
+          lastTouchedChapter: 1,
+          evidence: [sharedQuote],
+          nextActionHint: "查清断钥的用处。",
+          relatedCharacters: ["林远"],
+        },
+      ],
+    });
+    await writeDraft(projectDir, 4, sharedQuote);
+
+    const plan = await buildCommitPlanFromProject({
+      projectDir,
+      chapter: 4,
+      declaration: {
+        chapter: 4,
+        mainEvent: { summary: "林远再查钟室", quote: sharedQuote },
+        // 换了个说法的 summary（字面与旧标题对不上），但 quote 是同一句原文。
+        seededForeshadowing: [{ summary: "钟室钥匙孔的断钥悬案", quote: sharedQuote }],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+      },
+    });
+
+    expect(plan.passed).toBe(true);
+    const updates = plan.threadTrackingUpdates ?? [];
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "lead-broken-key", status: "touched", lastTouchedChapter: 4 }),
+    ]));
+    expect(updates.some((update) => update.id !== "lead-broken-key" && update.type === "lead")).toBe(false);
+    const report = await commitFastDraft({ projectDir, chapter: 4, commitPlan: plan.commitPlan! });
+    expect(report.passed).toBe(true);
+    const pool = await readThreadPool(projectDir);
+    expect(pool.threads.filter((thread) => thread.type === "lead")).toHaveLength(1);
+  });
+
+  // R7.8 补充：同批两条「说法不同、字面过半重合」的新线索（Jaccard 0.32、重叠系数 0.50——十章重放第 10 章
+  // 「提议腾地段」两条就是这么漏掉的）也要并成一条。引文不同（sameEvidence 不触发）、互不包含，只靠重叠系数拦。
+  it("同批新线索标题重叠系数过半 → 只开一条（Jaccard 被稀释也拦得住）", async () => {
+    const projectDir = await createThreadProject();
+    await writeDraft(projectDir, 1, [
+      "议事厅里有人提议，把钟楼那块地段腾出来另作他用。",
+      "散会后陆川私下说，评估结论没出之前，谁也别想动那块地。",
+    ].join("\n\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 1,
+      mainEvent: { summary: "有人提议腾钟楼地段", quote: "议事厅里有人提议，把钟楼那块地段腾出来另作他用。" },
+      seededForeshadowing: [
+        { summary: "会上有人提议把钟楼地段腾出另作他用", quote: "议事厅里有人提议，把钟楼那块地段腾出来另作他用。" },
+      ],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [
+        { summary: "钟楼地段可能被腾出另作他用，评估结论未定", quote: "散会后陆川私下说，评估结论没出之前，谁也别想动那块地。" },
+      ],
+    };
+
+    const plan = await buildCommitPlanFromProject({ projectDir, chapter: 1, declaration });
+
+    expect(plan.passed).toBe(true);
+    const newLeads = (plan.threadTrackingUpdates ?? []).filter((update) => update.type === "lead");
+    expect(newLeads).toHaveLength(1);
+  });
+
   it("声明待办：pendingIntents 新建 intent，标题取声明 summary", async () => {
     const projectDir = await createThreadProject();
     await writeDraft(projectDir, 2, "林远把账册收进袖中，决定明日去库房核对账册来源。");

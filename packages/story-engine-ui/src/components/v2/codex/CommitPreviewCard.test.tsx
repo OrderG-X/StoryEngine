@@ -138,6 +138,40 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(onConfirm).toHaveBeenCalledWith(["fact:0"], undefined);
   });
 
+  it("要确认的改记（R7.4）：默认不勾＝这条改记不作数；勾上才随「确认定稿」带上（change_confirm 前缀）", () => {
+    const preview: CommitPreviewCardData = {
+      chapter: 9,
+      canCommit: true,
+      previewToken: "tok-confirm",
+      ledgerChecklist: [
+        { id: "change_confirm:fact-1-4", kind: "change_confirm", label: "要你确认：改记「茶馆在斜对面」→「竹桌收进墙根」", detail: "门口两张竹桌已经收进墙根。", removable: true, needsConfirm: true, defaultUnchecked: true },
+        { id: "fact:0", kind: "fact", label: "记下：x", removable: true },
+      ],
+    };
+    const onConfirm = vi.fn();
+    // 本文件不做自动 cleanup，前面的卡还叠在 document 上——勾选框一律在自己 container 内查（getAllByRole 认整个 body）。
+    const { container } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
+    const boxes = () => Array.from(container.querySelectorAll<HTMLInputElement>("input[type=checkbox]"));
+    // 默认：待确认的没勾（不作数）、常规的勾着；计数只算会写的，另提示有几条要确认。
+    expect(boxes()[0].checked).toBe(false);
+    expect(boxes()[1].checked).toBe(true);
+    expect(container.textContent ?? "").toContain("这次入账会记下 1 条");
+    expect(container.textContent ?? "").toContain("有 1 条要你确认，默认不改");
+    // 什么都不动 → 不带 change_confirm（服务端据此不作废旧条），按钮也不说「去掉」。
+    fireEvent.click(container.querySelector(".cpc-confirm")!);
+    expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
+    // 勾上要确认的那条 → change_confirm 前缀随确认带上。
+    fireEvent.click(boxes()[0]);
+    fireEvent.click(container.querySelector(".cpc-confirm")!);
+    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:fact-1-4"], undefined);
+    // 常规条目勾掉照旧走「去掉」。
+    fireEvent.click(boxes()[1]);
+    const confirm = [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith("确认定稿（"));
+    expect(confirm?.textContent).toBe("确认定稿（去掉 1 条）");
+    fireEvent.click(confirm!);
+    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:fact-1-4", "fact:0"], undefined);
+  });
+
   it("天数条：没把握的标出来；作者改了天数随「确认定稿」带上，改回原值就不带", () => {
     const preview: CommitPreviewCardData = {
       chapter: 5,

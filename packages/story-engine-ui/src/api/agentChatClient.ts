@@ -49,6 +49,8 @@ export interface LedgerChecklistItemView {
   readonly editableDay?: number;
   /** 引擎没把握、请作者确认。 */
   readonly needsConfirm?: boolean;
+  /** 默认不勾（要确认的改记）：不勾＝这条改记不作数，勾上才算确认。 */
+  readonly defaultUnchecked?: boolean;
 }
 
 /** 核账结果里的一条：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文（R7.3）。 */
@@ -528,6 +530,7 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       removable: item.removable === true,
       ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),
       ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
+      ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
     }];
   });
 }

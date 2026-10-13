@@ -11,6 +11,7 @@
  *
  * 账本清单（2026-10-10「AI 记账、作者核账」）：定稿会往账本里写的东西逐条列出（硬事实、伏笔线索目标、第几天），
  * 默认都勾上；作者把不对的勾掉，点「确认定稿」时一并带上，勾掉的不写。只提示、不写账本的条目没有勾选框。
+ * 要确认的改记（R7.4）反过来：默认不勾（这条改记不作数、旧设定不动），作者勾上（change_confirm 前缀随确认带上）才写。
  */
 import { useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
@@ -21,6 +22,20 @@ type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[numbe
 
 /** 清单先露几条，其余收起（一屏读得完）。 */
 const LEDGER_VISIBLE = 6;
+
+/** 这条最终写不写：默认勾的条目不勾才去掉；要确认的改记（defaultUnchecked，R7.4）反过来——勾上才算确认。 */
+const isItemChecked = (item: ChecklistItem, toggled: ReadonlySet<string>): boolean =>
+  item.defaultUnchecked ? toggled.has(item.id) : !toggled.has(item.id);
+
+/** 作者实际去掉（不写）的常规条目数：要确认的改记没勾不算「去掉」——那是没确认，不是拒收。 */
+function countRemoved(items: readonly ChecklistItem[], toggled: ReadonlySet<string>): number {
+  return items.filter((item) => item.removable && !item.defaultUnchecked && toggled.has(item.id)).length;
+}
+
+/** 作者勾上（确认）的待确认改记数。 */
+function countConfirmed(items: readonly ChecklistItem[], toggled: ReadonlySet<string>): number {
+  return items.filter((item) => item.removable && item.defaultUnchecked && toggled.has(item.id)).length;
+}
 
 
 function LedgerChecklist({ items, removed, onToggle, disabled, dayOverride, onDayChange }: {
@@ -33,15 +48,18 @@ function LedgerChecklist({ items, removed, onToggle, disabled, dayOverride, onDa
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, LEDGER_VISIBLE);
-  const writes = items.filter((item) => item.removable).length;
+  const removables = items.filter((item) => item.removable);
+  const activeCount = removables.filter((item) => isItemChecked(item, removed)).length;
+  const confirmTotal = removables.filter((item) => item.defaultUnchecked).length;
   return (
     <div className="cpc-ledger">
       <p className="cpc-ledger-title">
-        这次入账会记下{writes > 0 ? ` ${writes - removed.size} 条` : ""}{onToggle && writes > 0 ? "（不对的勾掉，勾掉的不写）" : ""}
+        这次入账会记下{removables.length > 0 ? ` ${activeCount} 条` : ""}{onToggle && removables.length > 0 ? "（不对的勾掉，勾掉的不写）" : ""}
+        {confirmTotal > 0 ? `；有 ${confirmTotal} 条要你确认，默认不改` : ""}
       </p>
       <ul className="cpc-ledger-list">
         {shown.map((item) => (
-          <li key={item.id} className={`cpc-ledger-item${removed.has(item.id) ? " is-removed" : ""}${item.removable ? "" : " is-note"}${item.needsConfirm ? " is-confirm" : ""}`}>
+          <li key={item.id} className={`cpc-ledger-item${isItemChecked(item, removed) ? "" : " is-removed"}${item.removable ? "" : " is-note"}${item.needsConfirm ? " is-confirm" : ""}`}>
             {item.editableDay !== undefined && onDayChange ? (
               <span className="cpc-ledger-day">
                 <span className="cpc-ledger-label">{item.label}</span>
@@ -63,7 +81,7 @@ function LedgerChecklist({ items, removed, onToggle, disabled, dayOverride, onDa
               </span>
             ) : item.removable && onToggle ? (
               <label>
-                <input type="checkbox" checked={!removed.has(item.id)} disabled={disabled} onChange={() => onToggle(item.id)} />
+                <input type="checkbox" checked={isItemChecked(item, removed)} disabled={disabled} onChange={() => onToggle(item.id)} />
                 <span className="cpc-ledger-label">{item.label}</span>
               </label>
             ) : (
@@ -142,7 +160,11 @@ export function CommitPreviewCard({
       {!blocked && onConfirm ? (
         <div className="cpc-actions">
           <button type="button" className="chip cpc-confirm" disabled={confirmDisabled} onClick={() => onConfirm([...removed], dayOverride)}>
-            {removed.size > 0 ? `确认定稿（去掉 ${removed.size} 条）` : "确认定稿"}
+            {countRemoved(ledger, removed) > 0
+              ? `确认定稿（去掉 ${countRemoved(ledger, removed)} 条）`
+              : countConfirmed(ledger, removed) > 0
+                ? `确认定稿（含要确认的改记 ${countConfirmed(ledger, removed)} 条）`
+                : "确认定稿"}
           </button>
           {onDecline ? (
             <button type="button" className="cpc-decline" disabled={confirmDisabled} onClick={onDecline}>

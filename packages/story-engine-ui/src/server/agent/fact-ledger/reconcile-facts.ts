@@ -211,14 +211,41 @@ export function factQuoteIsSupported(quote: string, draftText: string): boolean 
   return grams.filter((gram) => draftGrams.has(gram)).length / grams.length >= 0.8;
 }
 
+/**
+ * 改记要不要作者确认（R7.4，十章试写报告 3.4）——纯确定性，不猜说法：
+ *  - 旧条是 hard（不该变的事实：年龄、门牌、写着的字、亲属关系……）：值不同是矛盾不是变化，绝不自动作废；
+ *  - 旧条带主语（账本 v2 的 subject）：新说法和原句里都对不上这个主语 → 说的不是同一件事（十章书里
+ *    「老周的茶馆在钟楼斜对面」被当晚「竹桌收进墙根」顶掉），也不自动作废。
+ * 老数据没有 kind / subject 两个字段 → 两关都过，照旧自动作废（向后兼容）。
+ */
+export function changeNeedsConfirmation(
+  old: Pick<FactEntry, "kind" | "subject">,
+  newText: string,
+  quote: string,
+): boolean {
+  if (old.kind === "hard") return true;
+  const subject = old.subject?.trim();
+  if (!subject) return false;
+  return !normalizeSpace(`${newText}${quote}`).includes(normalizeSpace(subject));
+}
+
+/** 两个主语是不是不同的：去掉空白后互不包含才算真不同（「铜盒」和「铜盒和两把钥匙」算同一个）。 */
+function subjectsDiffer(a: string, b: string): boolean {
+  const x = normalizeSpace(a);
+  const y = normalizeSpace(b);
+  return x !== y && !x.includes(y) && !y.includes(x);
+}
+
 /** 定稿回执里「这章记了什么事实」的一句话（engine report.factLedger + 提案里的对不上 / 新人物）。 */
 export function describeFactOutcome(input: {
   readonly added: number;
   readonly superseded: readonly string[];
   readonly conflicts: readonly FactConflict[];
   readonly skipped: number;
+  /** 要作者确认的改记里没勾的条数（R7.4）：旧设定没动，回执里如实说一句。 */
+  readonly unconfirmed?: number;
 }): string {
-  return `${describe({ added: input.added, superseded: input.superseded, conflicts: input.conflicts, newCharacters: [] })}${input.skipped > 0 ? `你去掉的 ${input.skipped} 条没记。` : ""}`;
+  return `${describe({ added: input.added, superseded: input.superseded, conflicts: input.conflicts, newCharacters: [] })}${input.skipped > 0 ? `你去掉的 ${input.skipped} 条没记。` : ""}${(input.unconfirmed ?? 0) > 0 ? `还有 ${input.unconfirmed} 条要你确认的改记没勾，旧设定没动。` : ""}`;
 }
 
 function describe(result: Omit<ReconcileFactsResult, "summary" | "ok">): string {
@@ -242,18 +269,24 @@ export interface FactProposal {
   readonly ok: boolean;
   /** 新记的事实（日子由引擎定稿时按时间线换算）。 */
   readonly adds: readonly ({ readonly text: string; readonly quote?: string } & FactTriple)[];
-  /** 本章明写变化的旧事实：旧条从本章起失效、新说法入账。 */
+  /** 本章明写变化、且过确定性检查（旧条会变、主语对得上）的改记：旧条从本章起失效、新说法入账。 */
   readonly changes: readonly { readonly factId: string; readonly oldText: string; readonly newText: string; readonly quote: string }[];
+  /**
+   * 要作者确认才作的改记（R7.4，十章试写报告 3.4）：旧条是 hard 这类不该变的事实、或旧条主语和新说法对不上——
+   * 不自动作废。清单顶上标「要你确认」、默认不勾；作者勾了（change_confirm 前缀随排除数组回来）才写。
+   */
+  readonly changesToConfirm?: readonly { readonly factId: string; readonly oldChapter: number; readonly oldText: string; readonly newText: string; readonly quote: string; readonly why: "hard" | "subject" }[];
   readonly conflicts: readonly FactConflict[];
   readonly newCharacters: readonly string[];
   /** ok=false 时给作者的说明。 */
   readonly failureSummary?: string;
 }
 
-/** 作者在定稿前去掉的条目：adds 按事实内容的短哈希（factKey）、changes 按旧事实 id。 */
+/** 作者在定稿前去掉的条目：adds 按事实内容的短哈希（factKey）、changes 按旧事实 id；confirmChanges 是勾上的待确认改记。 */
 export interface FactProposalExclusions {
   readonly adds?: ReadonlySet<string>;
   readonly changes?: ReadonlySet<string>;
+  readonly confirmChanges?: ReadonlySet<string>;
 }
 
 /**
@@ -300,19 +333,70 @@ export async function proposeFactChanges(input: {
   const draft = normalizeSpace(input.draftText);
   const quoted = (quote: string) => normalizeSpace(quote).length >= 4 && draft.includes(normalizeSpace(quote));
   // 「变化」必须引本章写这个变化的原句（逐字命中）才让旧条失效——验收第四轮：仍然有效的事实（信的全文、照片）被标成过期。
-  const changes = parsed.changes
+  // 再过确定性检查（R7.4）：旧条是 hard 或主语对不上 → 不自动作废，进「要你确认」清单（默认不勾）。
+  const allChanges = parsed.changes
     .filter((change) => byRef.has(change.ref) && quoted(change.quote))
-    .map((change) => ({ factId: byRef.get(change.ref)!.id, oldText: byRef.get(change.ref)!.text, newText: stripInventedStoryDays(change.text), quote: change.quote }))
-    .filter((change, index, all) => all.findIndex((other) => other.factId === change.factId) === index);
+    .map((change) => ({ entry: byRef.get(change.ref)!, newText: stripInventedStoryDays(change.text), quote: change.quote }))
+    .filter((change, index, all) => all.findIndex((other) => other.entry.id === change.entry.id) === index);
+  const changes: FactProposal["changes"][number][] = [];
+  const changesToConfirm: NonNullable<FactProposal["changesToConfirm"]>[number][] = [];
+  for (const change of allChanges) {
+    if (changeNeedsConfirmation(change.entry, change.newText, change.quote)) {
+      changesToConfirm.push({
+        factId: change.entry.id,
+        oldChapter: change.entry.chapter,
+        oldText: change.entry.text,
+        newText: change.newText,
+        quote: change.quote,
+        why: change.entry.kind === "hard" ? "hard" : "subject",
+      });
+    } else {
+      changes.push({ factId: change.entry.id, oldText: change.entry.text, newText: change.newText, quote: change.quote });
+    }
+  }
   // 新事实引了原句却在正文里找不到 → 多半是推断出来的，不入账（第十四轮：凭空推出一次改期、把交还记成卖给）。
   const supportedFacts = parsed.facts.filter((fact) => (!fact.quote || factQuoteIsSupported(fact.quote, input.draftText))
     && !factSwapsKinshipForName(fact, knownNames));
   if (supportedFacts.length < parsed.facts.length) {
     console.info(`[fact-ledger] 第${input.chapter}章 ${parsed.facts.length - supportedFacts.length} 条事实引的原句在正文里找不到，没记`);
   }
-  // 冲突：引文必须逐字在本章正文里，编号必须对得上；账本不动。
+  // 本章新事实的主语（账本 v2 三元组），按引文索引——回执里比对旧设定时用来看「这句说的是谁」。
+  const addSubjectByQuote = new Map<string, string>();
+  for (const fact of supportedFacts) {
+    const subject = fact.subject?.trim();
+    if (subject && fact.quote && !addSubjectByQuote.has(normalizeSpace(fact.quote))) addSubjectByQuote.set(normalizeSpace(fact.quote), subject);
+  }
+  const newSubjectForQuote = (quote: string): string | undefined => {
+    const key = normalizeSpace(quote);
+    if (key.length < 4) return undefined;
+    const exact = addSubjectByQuote.get(key);
+    if (exact) return exact;
+    for (const [other, subject] of addSubjectByQuote) {
+      if (other.length >= 4 && (other.includes(key) || key.includes(other))) return subject;
+    }
+    return undefined;
+  };
+  // 冲突：引文必须逐字在本章正文里，编号必须对得上；账本不动。再过两道确定性过滤（R7.4，十章试写报告 3.4 的误报）：
+  //  - 引文是问句（带问号）→ 角色在发问、不是在下结论，不当断言比（「怀表是那个外乡人留下的？」）；
+  //  - 只比同一个主语：本章新事实同引文那条的主语、和旧事实主语互不包含 → 两个人的事不比
+  //    （老周右手腕的疤对上周晓兰手背的疤）；旧事实主语是已确立人物、引文点的是另一个已确立人物 → 同理不比。
   const conflicts: FactConflict[] = parsed.conflicts
-    .filter((item) => byRef.has(item.ref) && quoted(item.quote))
+    .filter((item) => byRef.has(item.ref) && quoted(item.quote) && !/[？?]/u.test(item.quote))
+    .filter((item) => {
+      const old = byRef.get(item.ref)!;
+      const oldSubject = old.subject?.trim();
+      if (!oldSubject) return true;
+      const newSubject = newSubjectForQuote(item.quote);
+      if (newSubject && subjectsDiffer(newSubject, oldSubject)) return false;
+      if (knownNames.includes(oldSubject) && !normalizeSpace(item.quote).includes(normalizeSpace(oldSubject))) {
+        const quoteNorm = normalizeSpace(item.quote);
+        const namesOtherKnown = knownNames.some((name) => name !== oldSubject
+          && subjectsDiffer(name, oldSubject)
+          && quoteNorm.includes(normalizeSpace(name)));
+        if (namesOtherKnown) return false;
+      }
+      return true;
+    })
     .map((item) => {
       const old = byRef.get(item.ref)!;
       return { old: `第${old.chapter}章「${old.text}」`, quote: item.quote, note: item.note };
@@ -326,22 +410,34 @@ export async function proposeFactChanges(input: {
       ...(fact.kind ? { kind: fact.kind } : {}),
     })),
     changes,
+    ...(changesToConfirm.length > 0 ? { changesToConfirm } : {}),
     conflicts,
     newCharacters: validateNewCharacterNames(parsed.newCharacters, new Set(knownNames)),
   };
 }
 
 /**
- * 记账提案 → 交给引擎的本章事实变更（去掉作者勾掉的）。提案没抽成（ok=false）→ undefined。
+ * 记账提案 → 交给引擎的本章事实变更（去掉作者勾掉的、带上作者确认的改记）。提案没抽成（ok=false）→ undefined。
  * 日子不在这里换：引擎定稿时按最终时间线换（作者可能刚改了本章是第几天）。
+ * 待确认的改记（R7.4）默认不作数：只有作者勾了（id 以 change_confirm: 前缀随排除数组回来，拆到 confirmChanges）才写。
  */
 export function toChapterFactUpdate(proposal: FactProposal | undefined, exclusions: FactProposalExclusions = {}): ChapterFactUpdate | undefined {
   if (!proposal?.ok) return undefined;
+  const toChange = (change: { readonly factId: string; readonly newText: string; readonly quote: string }) => ({
+    factId: change.factId,
+    newText: change.newText,
+    ...(change.quote ? { quote: change.quote } : {}),
+  });
   return {
     adds: proposal.adds.filter((fact) => !exclusions.adds?.has(factKey(fact.text))),
-    changes: proposal.changes
-      .filter((change) => !exclusions.changes?.has(change.factId))
-      .map((change) => ({ factId: change.factId, newText: change.newText, ...(change.quote ? { quote: change.quote } : {}) })),
+    changes: [
+      ...proposal.changes
+        .filter((change) => !exclusions.changes?.has(change.factId))
+        .map(toChange),
+      ...(proposal.changesToConfirm ?? [])
+        .filter((change) => exclusions.confirmChanges?.has(change.factId))
+        .map(toChange),
+    ],
   };
 }
 
@@ -373,8 +469,19 @@ export async function applyFactProposal(
     const edited = await applyFactEdit(projectDir, "supersede", { id: change.factId, chapter });
     if (edited.ok) superseded.push(change.oldText);
   }
+  // 要确认的改记（R7.4）：这一路没有清单可勾，一律不作数，折成「和旧设定对不上」交给作者定——绝不自动作废。
+  const conflicts = [...proposal.conflicts];
+  for (const change of proposal.changesToConfirm ?? []) {
+    conflicts.push({
+      old: `第${change.oldChapter}章「${change.oldText}」`,
+      quote: change.quote,
+      note: change.why === "hard"
+        ? `本章说「${change.newText}」，旧条是不该变的事实，没有自动作废——要改记请明确说一声`
+        : `本章说「${change.newText}」，和旧条说的不是同一件事，没有自动作废——要改记请明确说一声`,
+    });
+  }
   const skipped = proposal.adds.length - adds.length + proposal.changes.length - changes.length;
-  const result = { added, superseded, conflicts: proposal.conflicts, newCharacters: proposal.newCharacters };
+  const result = { added, superseded, conflicts, newCharacters: proposal.newCharacters };
   return { ok: true, ...result, summary: `${describe(result)}${skipped > 0 ? `你去掉的 ${skipped} 条没记。` : ""}` };
 }
 
