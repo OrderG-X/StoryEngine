@@ -55,6 +55,7 @@ import {
   type UiChapterFileState,
 } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
+import { shouldSendHistoryTrimNoticeOnce } from "../lib/history-trim-notice.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 
 /** body.currentChapter 容错解析：只接受正整数，其余（缺省/非法/0/负/小数）一律 undefined。 */
@@ -707,7 +708,8 @@ async function handleAgentChat(
       return;
     }
 
-    if (droppedHistoryCount > 0) {
+    // R7.7·报告 4.6：同一本书只提示一次（进程内登记），不再每回合都弹——作者从第 3 章起每回合看到这条，烦且看不懂。
+    if (droppedHistoryCount > 0 && shouldSendHistoryTrimNoticeOnce(projectDir)) {
       sendEvent("status", {
         message:
           `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；故事资料不受影响。` +

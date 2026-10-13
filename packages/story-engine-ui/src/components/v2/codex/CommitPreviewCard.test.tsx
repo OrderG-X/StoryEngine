@@ -38,16 +38,48 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(container.textContent ?? "").toContain("不满足定稿条件");
   });
 
-  it("质量问题计数行只在有计数时渲染（明细见质检卡，不重复展开）", () => {
+  it("质量问题计数行只在有计数时渲染（R7.7：明细直接进卡默认折叠，不再指向「质检卡」）", () => {
     const { container, rerender } = render(
       <CommitPreviewCard preview={{ chapter: 1, canCommit: false, blockingReasons: ["缺稿。"], draftIssueCount: 3, semanticIssueCount: 2 }} />,
     );
     expect(container.textContent ?? "").toContain("文稿问题 3 项");
     expect(container.textContent ?? "").toContain("语义/连续性问题 2 项");
+    expect(container.textContent ?? "").not.toContain("质检卡");
 
     rerender(<CommitPreviewCard preview={{ chapter: 1, canCommit: true }} />);
     expect(container.textContent ?? "").not.toContain("文稿问题");
     expect(container.textContent ?? "").not.toContain("语义/连续性问题");
+  });
+
+  // R7.7·报告 4.3：明细文案直接列在卡里——默认折叠（一屏读得完），点开才列出。
+  it("带明细文案 → 默认折叠不露明细，点 chip 展开；不出现「质检卡」字样", () => {
+    const { container } = render(
+      <CommitPreviewCard
+        preview={{
+          chapter: 1,
+          canCommit: false,
+          blockingReasons: ["缺稿。"],
+          draftIssueCount: 2,
+          draftIssues: ["正文过短，疑似只返回标题。", "段落不足。"],
+        }}
+      />,
+    );
+    expect(container.textContent ?? "").toContain("文稿问题 2 项（点开看）");
+    expect(container.textContent ?? "").not.toContain("正文过短");
+    fireEvent.click(container.querySelector("button.chip")!);
+    expect(container.textContent ?? "").toContain("正文过短，疑似只返回标题。");
+    expect(container.textContent ?? "").toContain("段落不足。");
+    expect(container.textContent ?? "").toContain("文稿问题 2 项（收起）");
+    expect(container.textContent ?? "").not.toContain("质检卡");
+  });
+
+  it("旧数据只有计数（无明细文案）→ 只报数字，不指任何卡、不出折叠按钮", () => {
+    const { container } = render(
+      <CommitPreviewCard preview={{ chapter: 1, canCommit: false, blockingReasons: ["缺稿。"], draftIssueCount: 3 }} />,
+    );
+    expect(container.textContent ?? "").toContain("文稿问题 3 项。");
+    expect(container.querySelector("button.chip")).toBeNull();
+    expect(container.textContent ?? "").not.toContain("质检卡");
   });
 
   it("空阻断项被过滤（残缺输出里塞空串不渲染空行）", () => {

@@ -13,7 +13,7 @@
  * 默认都勾上；作者把不对的勾掉，点「确认定稿」时一并带上，勾掉的不写。只提示、不写账本的条目没有勾选框。
  * 要确认的改记（R7.4）反过来：默认不勾（这条改记不作数、旧设定不动），作者勾上（change_confirm 前缀随确认带上）才写。
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import { StepCard } from "./StepCard.js";
 import { ledgerDayOverrideForCard, ledgerExclusionsForCard, rememberLedgerDayOverride, rememberLedgerExclusions } from "../../../utils/ledgerExclusions.js";
@@ -35,6 +35,36 @@ function countRemoved(items: readonly ChecklistItem[], toggled: ReadonlySet<stri
 /** 作者勾上（确认）的待确认改记数。 */
 function countConfirmed(items: readonly ChecklistItem[], toggled: ReadonlySet<string>): number {
   return items.filter((item) => item.removable && item.defaultUnchecked && toggled.has(item.id)).length;
+}
+
+/**
+ * 质量问题计数 + 明细（R7.7·报告 4.3）：明细直接列在卡里、默认折叠——旧版写「明细见质检卡」，
+ * 但走定稿预览时界面上根本没有质检卡（quality_check 没跑），作者被指去一张不存在的卡。
+ * 没带明细文案的旧数据（只有计数）就只报数字，不指任何卡。
+ */
+function IssueCountSection({ label, count, items }: {
+  readonly label: string;
+  readonly count: number;
+  readonly items: readonly string[];
+}): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  if (items.length > 0) {
+    return (
+      <div className="cpc-issues">
+        <button type="button" className="chip" onClick={() => setExpanded((open) => !open)}>
+          {expanded ? `${label} ${count} 项（收起）` : `${label} ${count} 项（点开看）`}
+        </button>
+        {expanded ? (
+          <ul className="cpc-list">
+            {items.map((item) => (
+              <li className="cpc-item" key={item}>{item}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  }
+  return <p className="cpc-count">{label} {count} 项。</p>;
 }
 
 
@@ -181,10 +211,10 @@ export function CommitPreviewCard({
         </ul>
       ) : null}
       {typeof draftIssueCount === "number" && draftIssueCount > 0 ? (
-        <p className="cpc-count">文稿问题 {draftIssueCount} 项（明细见质检卡）。</p>
+        <IssueCountSection label="文稿问题" count={draftIssueCount} items={preview.draftIssues ?? []} />
       ) : null}
       {typeof semanticIssueCount === "number" && semanticIssueCount > 0 ? (
-        <p className="cpc-count">语义/连续性问题 {semanticIssueCount} 项（明细见质检卡）。</p>
+        <IssueCountSection label="语义/连续性问题" count={semanticIssueCount} items={preview.semanticIssues ?? []} />
       ) : null}
       {typeof summary === "string" && summary.trim() ? (
         <p className="cpc-summary">{summary}</p>

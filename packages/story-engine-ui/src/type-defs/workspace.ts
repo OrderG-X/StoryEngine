@@ -120,9 +120,12 @@ export interface CommitPreviewCardData {
   /** 阻断理由（引擎确定性判定：缺稿/质检硬伤/名字漂移等）。非空时 canCommit 必为 false。 */
   readonly blockingReasons?: readonly string[];
   readonly summary?: string;
-  /** 质量问题分层计数（不展开明细，明细走质检卡）；缺省时不渲染该行。 */
+  /** 质量问题分层计数；缺省时不渲染该行。 */
   readonly draftIssueCount?: number;
   readonly semanticIssueCount?: number;
+  /** R7.7·报告 4.3：质量问题明细文案，卡内默认折叠展开；不再指向界面上不存在的「质检卡」。 */
+  readonly draftIssues?: readonly string[];
+  readonly semanticIssues?: readonly string[];
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */

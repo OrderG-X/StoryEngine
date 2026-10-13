@@ -54,6 +54,30 @@ describe("定稿前的账本清单", () => {
     expect(items.some((item) => item.kind === "fact")).toBe(false);
   });
 
+  it("日子条目（R7.6）：fallback 才请作者确认；第 1 章没有上一章，提示里不说「上一章」", () => {
+    // 记账员声明了隔几天（source=declared）：不再标「估的」，也不请作者确认，依据原句照样给。
+    const declared = buildLedgerChecklist({
+      chapter: 6,
+      plan,
+      time: { day: 4, label: "故事第 4 天", source: "declared", quote: "她在床上躺到快十点，还是爬了起来。" },
+    });
+    const declaredDay = declared.find((item) => item.id === "day")!;
+    expect(declaredDay.label).toBe("这一章记为故事第 4 天");
+    expect(declaredDay.detail).toBe("她在床上躺到快十点，还是爬了起来。");
+    expect(declaredDay.needsConfirm).toBeUndefined();
+    // 判断不了走了 fallback（第 6 章）：照旧「按上一章的第二天估的，不对就改」＋请确认。
+    const fallback = buildLedgerChecklist({ chapter: 6, plan, time: { day: 5, label: "故事第 5 天", source: "fallback" } });
+    const fallbackDay = fallback.find((item) => item.id === "day")!;
+    expect(fallbackDay.label).toContain("按上一章的第二天估的，不对就改");
+    expect(fallbackDay.needsConfirm).toBe(true);
+    // 第 1 章没有上一章：提示里不出现「上一章」。
+    const first = buildLedgerChecklist({ chapter: 1, plan, time: { day: 1, label: "故事第 1 天", source: "fallback" } });
+    const firstDay = first.find((item) => item.id === "day")!;
+    expect(firstDay.label).toBe("这一章记为故事第 1 天（正文里没找到时间说法，先按故事第 1 天记的，不对就改）");
+    expect(firstDay.label).not.toContain("上一章");
+    expect(firstDay.needsConfirm).toBe(true);
+  });
+
   it("勾掉的伏笔从计划里拿掉：跟踪更新、状态更新、活跃伏笔都不留；其它不动", () => {
     const exclusions = splitExclusions(["hook:hook-b2", "thread:intent-c3", "fact:abc123", "change:fact-9", "乱写的"]);
     expect([...exclusions.facts.adds!]).toEqual(["abc123"]);

@@ -236,4 +236,19 @@ describe("declareChapterDeltaByLedger", () => {
     const declarationCall = calls.find((call) => call.json)!;
     expect(declarationCall.messages.at(-1)?.content).toContain(spec);
   });
+
+  it("声明要求带 R7.6 的日子规则：每章都给 daysSincePrevious、第 1 章省略整个 time、同一天报 0", async () => {
+    const dir = await makeBook([CH1]);
+    const { callModel, calls } = fakeModel(DECLARATION_JSON);
+    await declareChapterDeltaByLedger({ projectDir: dir, chapter: 2, draft: DRAFT, callModel });
+    const task = calls.at(-1)!.messages.at(-1)!.content;
+    // 字段契约（共享 spec）：隔几天=本章开头离上一章结尾，第 1 章没有上一章。
+    expect(task).toContain("daysSincePrevious=本章开头离上一章结尾隔了几天");
+    expect(task).toContain("第 1 章没有上一章，省略整个字段");
+    expect(task).toContain("依据上一章的结尾和本章的开头判断");
+    // 记账员的额外强调（读过前文，才判断得了）。
+    expect(task).toContain("time 每章都给 daysSincePrevious");
+    expect(task).toContain("第 1 章没有上一章，整个 time 省略");
+    expect(task).toContain("只有确实判断不了才不填这个数");
+  });
 });

@@ -232,6 +232,35 @@ describe("commit_preview", () => {
     expect((seenEnding ?? "").length).toBeLessThanOrEqual(520);
   });
 
+  // R7.6 故事日估算：记账员声明「承接上一章结尾当晚」（daysSincePrevious=0），quote 是本章开头的承接句
+  // （句里没有「第二天 / 当晚」这类时间词）——引擎只核原句逐字在正文里，时间线不再落「上一章 +1」的 fallback。
+  it("声明的隔几天没写在原句里（承接当晚=0）→ 照样记成同一天，清单不再标「估的」", async () => {
+    const projectDir = await makeProject("承接当晚", "林远");
+    await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n夜里，林远把灯熄了，和衣躺下。\n", "utf-8");
+    await writeFile(join(projectDir, "story", "timeline.json"), `${JSON.stringify({ schemaVersion: 1, entries: [{ chapter: 1, day: 1, source: "author" }] })}\n`, "utf-8");
+    const opening = "林远在床上躺到快十点，还是爬了起来。";
+    const filler = "他把窗子推开一条缝，听见巷子里有人走动，又把窗子合上了。";
+    await writeDraft(projectDir, 2, `# 第2章\n\n${opening}${Array.from({ length: 18 }, () => filler).join("")}\n`);
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 2,
+      declareDelta: async () => ({
+        chapter: 2,
+        mainEvent: { summary: "守夜", quote: "林远在床上躺到快十点" },
+        seededForeshadowing: [],
+        resolvedForeshadowing: [],
+        resourceDeltas: [],
+        keyLeads: [],
+        time: { daysSincePrevious: 0, timeOfDay: "夜里", quote: `${opening}` },
+      }),
+    });
+    const day = out.ledgerChecklist?.find((item) => item.id === "day");
+    expect(day?.label).toBe("这一章记为故事第 1 天");
+    expect(day?.label).not.toContain("估的");
+    expect(day?.needsConfirm).toBeUndefined();
+    expect(day?.detail).toBe(opening);
+  });
+
   it("声明 continuityWithPrevious=false → 固定 continuity_break warning + 摘要提醒，且不阻断入库", async () => {
     const projectDir = await makeProject("衔接断裂提醒", "林远");
     await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n林远已经在黑龙潭边等候。\n", "utf-8");

@@ -1,11 +1,16 @@
 import { RequestContext } from "@mastra/core/di";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { isUserConfirmedTool } from "./request-context.js";
 import {
   commitApplyNextSteps,
   humanizeToolNames,
+  nextDraftChapterAfter,
   parseUserAction,
+  readCommittedChapterNumbers,
   runUserAction,
   type UserActionToolExecutor,
 } from "./user-actions.js";
@@ -88,6 +93,108 @@ describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
       { label: "重新预览", intent: "生成第 5 章定稿预览", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
     ]);
   });
+});
+
+describe("nextDraftChapterAfter 写作前沿章（R7.7·报告 4.2：重定旧章后别推荐回去写旧章）", () => {
+  it("重定第 3 章、第 1～5 章都已定稿 → 推荐第 6 章（不是第 4 章）", () => {
+    expect(nextDraftChapterAfter(3, [1, 2, 3, 4, 5])).toBe(6);
+  });
+
+  it("正常路：第 5 章刚定稿、第 6 章还没写 → 仍是 6（旧行为不回归）", () => {
+    expect(nextDraftChapterAfter(5, [1, 2, 3, 4, 5])).toBe(6);
+  });
+
+  it("N 之后有空洞（1、2、3、5 定稿，重定第 3 章）→ 推荐补第 4 章", () => {
+    expect(nextDraftChapterAfter(3, [1, 2, 3, 5])).toBe(4);
+  });
+
+  it("脏输入（0/负数/小数）不算定稿章", () => {
+    expect(nextDraftChapterAfter(2, [1, 2, 0, -3, 2.5])).toBe(3);
+  });
+});
+
+describe("runUserAction 定稿收尾按书目录现算前沿章（R7.7）", () => {
+  const tempDirs = new Set<string>();
+  const cleanup = async (): Promise<void> => {
+    await Promise.all([...tempDirs].map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.clear();
+  };
+
+  it("重定第 3 章（1～5 章已定稿）→ 建议条推荐「写第 6 章」、直达 generate_draft 第 6 章", async () => {
+    const projectDir = await makeProjectWithCommittedChapters([1, 2, 3, 4, 5]);
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "commit_apply", chapter: 3 },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({ ok: true, committed: true, chapter: 3, summary: "第 3 章已定稿。" }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+      projectDir,
+    });
+    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
+    expect(next.choices[0]).toMatchObject({ label: "写第 6 章", action: { toolName: "generate_draft", chapter: 6 } });
+    await cleanup();
+  });
+
+  it("第 6 章还没定稿时重定第 3 章 → 推荐接着写第 6 章（当前没定稿的前沿章）", async () => {
+    const projectDir = await makeProjectWithCommittedChapters([1, 2, 3, 4, 5]);
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "check_continuity", chapter: 3 },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({
+        ok: false,
+        chapter: 3,
+        sure: [],
+        maybe: [],
+        pending: { done: 4, total: 57 },
+        summary: "核账员还在读前文。",
+      }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+      projectDir,
+    });
+    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
+    expect(next.choices[1]).toMatchObject({ label: "先写下一章", action: { toolName: "generate_draft", chapter: 6 } });
+    await cleanup();
+  });
+
+  it("书目录读不到定稿章（chapters/ 缺失）→ 旧口径 N+1 兜底，不炸", async () => {
+    const projectDir = await makeProjectWithCommittedChapters([]);
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "commit_apply", chapter: 5 },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({ ok: true, committed: true, chapter: 5, summary: "第 5 章已定稿。" }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+      projectDir,
+    });
+    const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
+    expect(next.choices[0]).toMatchObject({ label: "写第 6 章", action: { toolName: "generate_draft", chapter: 6 } });
+    await cleanup();
+  });
+
+  it("readCommittedChapterNumbers 只认 chapters/ 下的 000N.md，别的文件不算", async () => {
+    const projectDir = await makeProjectWithCommittedChapters([1, 3]);
+    await writeFile(join(projectDir, "chapters", "notes.txt"), "不是章", "utf-8");
+    expect(await readCommittedChapterNumbers(projectDir)).toEqual([1, 3]);
+    expect(await readCommittedChapterNumbers(join(projectDir, "不存在"))).toEqual([]);
+    await cleanup();
+  });
+
+  async function makeProjectWithCommittedChapters(chapters: readonly number[]): Promise<string> {
+    const projectDir = await mkdtemp(join(tmpdir(), "user-actions-frontier-"));
+    tempDirs.add(projectDir);
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    for (const chapter of chapters) {
+      await writeFile(join(projectDir, "chapters", `${String(chapter).padStart(4, "0")}.md`), `# 第${chapter}章\n\n正文。\n`, "utf-8");
+    }
+    return projectDir;
+  }
 });
 
 describe("humanizeToolNames", () => {
