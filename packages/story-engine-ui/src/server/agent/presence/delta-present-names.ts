@@ -1,19 +1,22 @@
 /**
- * delta-present-names — 从已定稿章的记账声明里读「本章出场角色名」（编辑部 R4.6，2026-10-13）。
+ * delta-present-names — 从已定稿章的记账声明里读「本章出场角色名」「本章视角人物」（编辑部 R4.6 / R5.1）。
  *
- * 数据源：时间线 events.json 里每章事件的 effects.semanticSummary.presentCharacterNames——
- * 这正是定稿时 ChapterDelta 声明经引擎证据校验后持久化的「本章出场角色名」（commit-plan-builder
- * extractChapterSemanticSummary）。老事件没有这个字段就当空（向后兼容，不猜）。
+ * 数据源：时间线 events.json 里每章事件的 effects.semanticSummary——这正是定稿时 ChapterDelta 声明
+ * 经引擎证据校验后持久化的章节语义（commit-plan-builder extractChapterSemanticSummary）：
+ * presentCharacterNames＝本章出场角色名；viewpointCharacter＝本章视角人物（R5.1 起）。
+ * 老事件没有这些字段就当空（向后兼容，不猜）。
  *
  * 用途（都是只读，不写盘）：
  * 1. 出稿选角兜底：新书名册只有开书占位卡（模板固定名「主角」）时，用最近几章的出场名当本章角色，
  *    占位卡不进关卡（关卡豁免在引擎侧 fast-draft-writer，同一份 PLACEHOLDER_CHARACTER_NAME 标记）。
- * 2. 定稿后的改名建议：主角卡还是占位、而已定稿声明里有出场最多的真名时，建议作者把占位卡改成那个名。
+ * 2. 定稿后的改名建议（R5.1 起改判据）：主角卡还是占位时，建议作者把它改成「已定稿章节里
+ *    声明视角最多」的那个名字——不再数出场次数（视角人物是林小满、别的名字出现再多也不抢）。
  */
 import { readTimelineEvents, PLACEHOLDER_CHARACTER_NAME } from "@actalk/story-engine";
 
 interface SemanticSummaryLike {
   readonly presentCharacterNames?: readonly unknown[];
+  readonly viewpointCharacter?: unknown;
 }
 
 /** 单条时间线事件里经校验的出场名（老事件缺字段 → 空，不猜）。 */
@@ -33,6 +36,15 @@ export function presentNamesOfEvent(event: { readonly chapter?: unknown; readonl
     names.push(name);
   }
   return names;
+}
+
+/** 单条时间线事件里持久化的视角人物（老事件缺字段 → undefined，不猜）。 */
+export function viewpointOfEvent(event: { readonly chapter?: unknown; readonly effects?: unknown }): string | undefined {
+  const effects = typeof event.effects === "object" && event.effects !== null ? event.effects as { readonly semanticSummary?: unknown } : undefined;
+  const semantic = effects?.semanticSummary;
+  if (typeof semantic !== "object" || semantic === null) return undefined;
+  const raw = (semantic as SemanticSummaryLike).viewpointCharacter;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 /**
@@ -71,23 +83,29 @@ export async function readRecentPresentCharacterNames(
   return names.slice(0, options.cap ?? 8);
 }
 
-/** 出场名 → 出现章数（在 beforeChapter 之前的已定稿声明里），供「出场最多」的改名建议用。 */
-export async function readPresentNameChapterCounts(
+/**
+ * 视角人物 → 已定稿声明的视角章数（beforeChapter 之前），供「视角最多」的改名建议用（R5.1 判据）。
+ * 一章只算一次（同章多条事件取第一个非空视角）；老事件没有 viewpointCharacter 就整章不算——
+ * 一章都没有视角声明时结果为空，调用方据此不给建议，绝不退回数出场次数。
+ */
+export async function readViewpointChapterCounts(
   projectDir: string,
   beforeChapter: number,
 ): Promise<readonly { readonly name: string; readonly chapters: number; readonly latestChapter: number }[]> {
   const events = await readTimelineEvents(projectDir).catch(() => []);
   const stats = new Map<string, { chapters: Set<number>; latest: number }>();
+  const seenChapters = new Map<number, string>();
   for (const event of events) {
     const chapter = typeof event.chapter === "number" && Number.isFinite(event.chapter) ? event.chapter : Number.NaN;
     if (!Number.isFinite(chapter) || chapter >= beforeChapter) continue;
-    for (const name of presentNamesOfEvent(event)) {
-      if (PLACEHOLDER_CHARACTER_NAME.test(name)) continue;
-      const entry = stats.get(name) ?? { chapters: new Set<number>(), latest: chapter };
-      entry.chapters.add(chapter);
-      entry.latest = Math.max(entry.latest, chapter);
-      stats.set(name, entry);
-    }
+    if (seenChapters.has(chapter)) continue; // 同章后续事件的视角不重复计
+    const viewpoint = viewpointOfEvent(event);
+    if (!viewpoint || PLACEHOLDER_CHARACTER_NAME.test(viewpoint)) continue; // 这条事件没视角：看同章下一条
+    seenChapters.set(chapter, viewpoint);
+    const entry = stats.get(viewpoint) ?? { chapters: new Set<number>(), latest: chapter };
+    entry.chapters.add(chapter);
+    entry.latest = Math.max(entry.latest, chapter);
+    stats.set(viewpoint, entry);
   }
   return [...stats.entries()]
     .map(([name, entry]) => ({ name, chapters: entry.chapters.size, latestChapter: entry.latest }))

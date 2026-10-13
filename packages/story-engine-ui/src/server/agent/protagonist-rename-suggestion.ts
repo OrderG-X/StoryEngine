@@ -8,11 +8,13 @@
  * 本建议里直接写盘。
  *
  * 判据全部确定性、题材中立：主角卡是否占位按建书模板固定标记（PLACEHOLDER_CHARACTER_NAME，不按名字猜）；
- * 人名按已定稿声明（时间线 presentCharacterNames）的出场章数取最多。
+ * 人名只看已定稿章节声明的**视角人物**（时间线 semanticSummary.viewpointCharacter，R5.1 起）取最多——
+ * 不再数出场次数（第 1 章视角是林小满、宋伯名字出现再多，也是建议林小满）。
+ * 一章都没有视角声明就不给建议，绝不退回数出场次数（老书老数据没有这字段就没有建议）。
  */
 import { readCharacterBible, PLACEHOLDER_CHARACTER_NAME, type CharacterBibleEntry } from "@actalk/story-engine";
 
-import { readPresentNameChapterCounts } from "./presence/delta-present-names.js";
+import { readViewpointChapterCounts } from "./presence/delta-present-names.js";
 
 /** 主角判定：与在场检测（in-scene-detector）同语义——isMainCharacter/role=protagonist/role 含「主角」。 */
 function isProtagonistEntry(character: CharacterBibleEntry): boolean {
@@ -27,8 +29,9 @@ export interface ProtagonistRenameSuggestion {
 }
 
 /**
- * 定稿（committedChapter 已入库）后：主角卡还是开书占位、已定稿声明里有出场最多的真名 → 给改名建议；
- * 否则 undefined。读盘失败按「没有建议」处理（绝不因为建议挂掉定稿收尾；调用方另有 catch 兜底）。
+ * 定稿（committedChapter 已入库）后：主角卡还是开书占位、已定稿章节声明的视角人物里取出现最多的真名
+ * → 给改名建议；一章都没有视角声明 → undefined（没有依据就不建议，不退回数出场）。
+ * 读盘失败按「没有建议」处理（绝不因为建议挂掉定稿收尾；调用方另有 catch 兜底）。
  */
 export async function buildProtagonistRenameSuggestion(
   projectDir: string,
@@ -39,12 +42,12 @@ export async function buildProtagonistRenameSuggestion(
   const placeholderName = protagonist?.name?.trim() ?? "";
   if (!placeholderName || !PLACEHOLDER_CHARACTER_NAME.test(placeholderName)) return undefined;
 
-  const ranked = await readPresentNameChapterCounts(projectDir, committedChapter + 1);
+  const ranked = await readViewpointChapterCounts(projectDir, committedChapter + 1);
   const top = ranked[0];
   if (!top || top.chapters < 1) return undefined;
 
   return {
     label: `把主角卡改成『${top.name}』`,
-    intent: `把开书占位的主角卡（现在的名字是「${placeholderName}」）改名为「${top.name}」——这是已定稿章节里出场最多的名字。只改名字，别的不动。`,
+    intent: `把开书占位的主角卡（现在的名字是「${placeholderName}」）改名为「${top.name}」——这是已定稿章节的视角人物（${top.chapters} 章都是跟着${top.name}的眼睛走）。只改名字，别的不动。`,
   };
 }

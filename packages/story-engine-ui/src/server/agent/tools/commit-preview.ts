@@ -658,6 +658,7 @@ export const commitPreviewTool = createTool({
 /** 标注字段 → 作者看得懂的叫法。 */
 const DELTA_FIELD_WORDS: readonly (readonly [RegExp, string])[] = [
   [/^charactersPresent/u, "出场人物"],
+  [/^viewpoint/u, "视角人物"],
   [/^mainEvent/u, "本章主事件"],
   [/^(threads|newThreads|threadUpdates|leads)/u, "线索"],
   [/^(hooks|newHooks|hookUpdates)/u, "伏笔"],

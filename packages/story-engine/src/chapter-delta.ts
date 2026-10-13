@@ -156,6 +156,12 @@ export interface ChapterDeltaDeclaration {
   readonly time?: TimeDeclaration;
   /** 本章内过了几天（可选；整章同一天就缺省）。 */
   readonly timeSpan?: TimeSpanDeclaration;
+  /**
+   * 本章的视角人物（2026-10-13 编辑部 R5.1，可选）：这一章主要跟着谁的眼睛走，写那个人的名字；
+   * 多视角或全知就不声明。校验只认 charactersPresent 里有的名字（经 aliasOf 归并后再比），
+   * 对不上就丢弃并记一条 rejected（绝不静默）。老数据没有这个字段照旧处理。
+   */
+  readonly viewpoint?: string;
 }
 
 /** 被拒绝的声明条目（诚实回报，绝不静默丢弃）。 */
@@ -171,7 +177,8 @@ export type DeltaRejectReason =
   | "empty_quote" // 证据为空
   | "evidence_not_in_draft" // 证据原句不在草稿里
   | "amount_not_in_evidence" // 声明了数量，但数量字符串不在证据句里；剥掉 amount、保留资源得失条目
-  | "name_not_in_evidence"; // 声明了角色名，但名字不在证据句里
+  | "name_not_in_evidence" // 声明了角色名，但名字不在证据句里
+  | "viewpoint_not_present"; // 声明了视角人物，但不在本章出场名单里（经 aliasOf 归并后再比）；整条丢弃
 
 /**
  * 校验后的声明：只保留证据核实通过的条目；被拒条目集中在 rejected（供诊断/降级判断）。
@@ -202,6 +209,11 @@ export interface VerifiedChapterDelta {
   readonly time?: TimeDeclaration;
   /** 校验通过的章内换天（原句在正文里、且写着换天的说法）。 */
   readonly timeSpan?: TimeSpanDeclaration;
+  /**
+   * 校验通过的视角人物（2026-10-13 编辑部 R5.1）：名字直接对上出场名、或对上某条出场的
+   * aliasOf 指向的已确立名；值按声明原样保留，canonical 化（称呼→已确立名）在计划层随名册归并做。
+   */
+  readonly viewpoint?: string;
   readonly rejected: readonly RejectedDeltaEntry[];
   /** 是否有任何一条声明通过校验（全拒 → 上层整体回退正则）。 */
   readonly hasAnyVerified: boolean;
@@ -315,6 +327,23 @@ export function verifyChapterDelta(
     checkEvidence(entry.quote, `arcGoalProgress[${index}]`),
   );
 
+  // 视角人物（R5.1）：只认本章出场名单里有的名字——直接对上出场名，或对上某条出场的 aliasOf
+  // 指向的已确立名（经 aliasOf 归并后再比）。对不上就丢弃并如实记一条 rejected，绝不静默。
+  // 值按声明原样保留；aliasOf 是否真在已确立名册里由 commit-plan-builder 核（那里有名册），
+  // 核不成立导致视角人物落不进出场的极端情况也在那里丢并记 issue。
+  const viewpoint = ((): string | undefined => {
+    const declared = typeof declaration.viewpoint === "string" ? declaration.viewpoint.trim() : "";
+    if (!declared) return undefined;
+    const inPresentList = charactersPresent.some(
+      (entry) => entry.name === declared || entry.aliasOf === declared,
+    );
+    if (!inPresentList) {
+      rejected.push({ field: "viewpoint", quote: declared, reason: "viewpoint_not_present" });
+      return undefined;
+    }
+    return declared;
+  })();
+
   // 时间：原句必须在正文里；声明的星期必须在原句里出现（防模型自己推出一个星期）；隔几天要是 0..3650 的整数。
   const time = ((): TimeDeclaration | undefined => {
     const declared = declaration.time;
@@ -379,6 +408,7 @@ export function verifyChapterDelta(
     ...(declaration.continuityWithPrevious ? { continuityWithPrevious: declaration.continuityWithPrevious } : {}),
     ...(time ? { time } : {}),
     ...(timeSpan ? { timeSpan } : {}),
+    ...(viewpoint ? { viewpoint } : {}),
     rejected,
     hasAnyVerified,
   };

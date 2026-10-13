@@ -149,6 +149,12 @@ export interface ChapterSemanticSummary {
    * 随时间线持久化，供上层把「同一个人的不同叫法」对齐（不另立新人物）；没有归并就缺省。
    */
   readonly characterAliases?: readonly { readonly name: string; readonly alias: string }[];
+  /**
+   * 本章声明的视角人物（2026-10-13 编辑部 R5.1）：这一章主要跟着谁的眼睛走。引擎已核「在出场名单里
+   * （经 aliasOf 归并后再比）」，这里再按名册归并结果定成 canonical 名（称呼归并成立 → 已确立名）。
+   * 随时间线持久化，供改名建议按「视角最多的已定稿章」取人（不再数出场次数）。没有声明就缺省。
+   */
+  readonly viewpointCharacter?: string;
   readonly locations: readonly string[];
 }
 
@@ -271,6 +277,24 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
     const { aliasOf: _untrusted, ...rest } = entry;
     return rest;
   });
+  // 视角人物（R5.1）：引擎已核「在出场名单里（经 aliasOf 归并后再比）」，这里按名册归并结果定成
+  // canonical 名随 semanticSummary 持久化（供改名建议按视角取人）。称呼归并成立 → 记已确立名；
+  // 归并被剥（aliasOf 不在名册里）→ 按本章出场名记；归并被剥导致视角人物落不进出场的极端情况 →
+  // 丢弃并如实记一条 issue（绝不静默）。
+  let viewpointCharacter: string | undefined;
+  const declaredViewpoint = verifiedDelta?.viewpoint?.trim();
+  if (declaredViewpoint) {
+    const entry = presentWithoutUntrustedAliases.find(
+      (item) => item.name === declaredViewpoint || item.aliasOf === declaredViewpoint,
+    );
+    if (entry?.aliasOf) {
+      viewpointCharacter = entry.aliasOf;
+    } else if (entry) {
+      viewpointCharacter = declaredViewpoint;
+    } else {
+      issues.push(`视角人物未采信：声明的「${declaredViewpoint}」不在本章出场名单（经称呼归并后）里，已丢弃。`);
+    }
+  }
   // 人物名字漂移写前校验（题材中立）：把模型声明的「本章用名」和已确立角色名做确定性形近比对，
   // 逮住「已确立角色的正确名字本章没用、却用了个形近错名」（如 林宁→林棠）。只提示、不阻塞。
   // 已核对成立的别名称呼（aliasOf 在名册里）不进比对——那是同一个人的另一个叫法，不是写歪。
@@ -301,6 +325,7 @@ export async function buildCommitPlanFromProject(input: BuildCommitPlanInput): P
   const semanticSummary: ChapterSemanticSummary = {
     ...extractedSummary,
     ...(declaredCharacterAliases.length > 0 ? { characterAliases: declaredCharacterAliases } : {}),
+    ...(viewpointCharacter ? { viewpointCharacter } : {}),
   };
   const knownCharacterNames = collectKnownCharacterNames(characters, semanticSummary.protagonist);
   const assetChanges = buildAssetChangePlan(draft, previewContext.assetLedger, knownCharacterNames);

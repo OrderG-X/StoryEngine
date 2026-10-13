@@ -1,13 +1,13 @@
 // @vitest-environment node
 //
-// delta-present-names 单测（编辑部 R4.6）：从已定稿章的时间线语义摘要里读「本章出场角色名」。
-// 全部假数据落临时目录，不调模型。
+// delta-present-names 单测（编辑部 R4.6 / R5.1）：从已定稿章的时间线语义摘要里读
+// 「本章出场角色名」「本章视角人物」。全部假数据落临时目录，不调模型。
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { readPresentNameChapterCounts, readRecentPresentCharacterNames } from "./delta-present-names.js";
+import { readRecentPresentCharacterNames, readViewpointChapterCounts } from "./delta-present-names.js";
 
 describe("delta-present-names（编辑部 R4.6：已定稿声明的出场名）", () => {
   let projectDir: string | undefined;
@@ -28,13 +28,20 @@ describe("delta-present-names（编辑部 R4.6：已定稿声明的出场名）"
     await writeFile(join(projectDir!, "timeline", "events.json"), `${JSON.stringify(events, null, 2)}\n`, "utf-8");
   }
 
-  function event(chapter: number, names: readonly string[]): unknown {
+  function event(chapter: number, names: readonly string[], viewpoint?: string): unknown {
     return {
       id: `ch${String(chapter).padStart(4, "0")}-001`,
       chapter,
       summary: `第${chapter}章事件`,
       participants: [],
-      effects: { semanticSummary: { chapter, mainEvent: `第${chapter}章主事件`, presentCharacterNames: names } },
+      effects: {
+        semanticSummary: {
+          chapter,
+          mainEvent: `第${chapter}章主事件`,
+          presentCharacterNames: names,
+          ...(viewpoint ? { viewpointCharacter: viewpoint } : {}),
+        },
+      },
     };
   }
 
@@ -75,17 +82,38 @@ describe("delta-present-names（编辑部 R4.6：已定稿声明的出场名）"
     await expect(readRecentPresentCharacterNames(projectDir!, 2)).resolves.toEqual([]);
   });
 
-  it("readPresentNameChapterCounts：按出场章数排序（并列按最新章），供「出场最多」的改名建议用", async () => {
+  it("readViewpointChapterCounts（R5.1）：按视角章数排序（并列按最新章），只算已定稿章、同章只计一次", async () => {
+    await seedTimeline([
+      event(1, ["陆沉", "阿禾"], "陆沉"),
+      event(2, ["陆沉", "阿禾"], "阿禾"),
+      event(3, ["陆沉"], "陆沉"),
+      event(5, ["未来章的人"], "未来章的人"), // chapter >= beforeChapter(4)：没定稿，不该进来
+    ]);
+
+    const counts = await readViewpointChapterCounts(projectDir!, 4);
+    expect(counts.map((item) => [item.name, item.chapters])).toEqual([
+      ["陆沉", 2],
+      ["阿禾", 1],
+    ]);
+  });
+
+  it("readViewpointChapterCounts：出场再多也不算（只看视角声明）；占位视角不算", async () => {
+    await seedTimeline([
+      event(1, ["林小满", "宋伯", "宋伯他弟"], "林小满"),
+      event(2, ["宋伯", "宋伯他弟", "周婶"]), // 这章宋伯出场最多、但没有视角声明
+      event(3, ["宋伯"], "主角"), // 视角是占位名 → 不算
+    ]);
+
+    const counts = await readViewpointChapterCounts(projectDir!, 4);
+    expect(counts.map((item) => [item.name, item.chapters])).toEqual([["林小满", 1]]);
+  });
+
+  it("readViewpointChapterCounts：一章都没有视角声明（老数据）→ 空结果（不猜、不数出场）", async () => {
     await seedTimeline([
       event(1, ["陆沉", "阿禾"]),
       event(2, ["陆沉"]),
-      event(3, ["阿禾", "陆沉"]),
     ]);
 
-    const counts = await readPresentNameChapterCounts(projectDir!, 4);
-    expect(counts.map((item) => [item.name, item.chapters])).toEqual([
-      ["陆沉", 3],
-      ["阿禾", 2],
-    ]);
+    await expect(readViewpointChapterCounts(projectDir!, 3)).resolves.toEqual([]);
   });
 });

@@ -286,6 +286,77 @@ describe("verifyChapterDelta", () => {
     expect(selfReference.rejected).toHaveLength(0);
   });
 
+  it("视角人物：名字直接对上出场名 → 保留（R5.1）", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。" },
+        ],
+        viewpoint: "陆青岚",
+      }),
+      DRAFT,
+    );
+    expect(result.viewpoint).toBe("陆青岚");
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it("视角人物：对上某条出场的 aliasOf 指向的已确立名（经归并后再比）→ 保留", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。", aliasOf: "陆青岚" },
+        ],
+        viewpoint: "陆青岚",
+      }),
+      DRAFT,
+    );
+    expect(result.viewpoint).toBe("陆青岚");
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it("视角人物：不在出场名单里（也对不上任何 aliasOf）→ 丢弃并如实记 rejected（绝不静默）", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。" },
+        ],
+        viewpoint: "王二",
+      }),
+      DRAFT,
+    );
+    expect(result.viewpoint).toBeUndefined();
+    expect(result.rejected).toEqual([
+      { field: "viewpoint", quote: "王二", reason: "viewpoint_not_present" },
+    ]);
+  });
+
+  it("视角人物：老数据没有这个字段 → 照旧处理（undefined、无 rejected）", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。" },
+        ],
+      }),
+      DRAFT,
+    );
+    expect(result.viewpoint).toBeUndefined();
+    expect(result.rejected).toHaveLength(0);
+  });
+
+  it("视角人物：声明成空白字符串 → 当没声明（多视角/全知的宽松输入），不记 rejected", () => {
+    const result = verifyChapterDelta(
+      baseDeclaration({
+        charactersPresent: [
+          { name: "陆青岚", quote: "陆青岚蹲在药垄边，指尖沾着湿泥。" },
+        ],
+        viewpoint: "   ",
+      }),
+      DRAFT,
+    );
+    expect(result.viewpoint).toBeUndefined();
+    expect(result.rejected).toHaveLength(0);
+  });
+
   it("主线目标推进：证据命中则保留、计入 hasAnyVerified", () => {
     const result = verifyChapterDelta(
       baseDeclaration({

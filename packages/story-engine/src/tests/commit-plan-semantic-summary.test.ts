@@ -772,6 +772,157 @@ describe("commit plan semantic summary", () => {
     expect(result.semanticSummary?.characterAliases).toBeUndefined();
   });
 
+  // —— 视角人物（2026-10-13 编辑部 R5.1）：viewpoint 声明经「在出场名单里」校验后随时间线持久化 ——
+
+  it("viewpoint 对上出场名：写入 semanticSummary.viewpointCharacter 并持久化进时间线", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远提起妹妹林宁去年失踪的事。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "提起妹妹失踪", quote: "林远提起妹妹林宁去年失踪的事。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远提起妹妹林宁去年失踪的事。" },
+        { name: "林宁", quote: "林远提起妹妹林宁去年失踪的事。", identityHint: "妹妹" },
+      ],
+      viewpoint: "林远",
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.viewpointCharacter).toBe("林远");
+    const persisted = result.commitPlan?.timelineEvents?.[0]?.effects?.semanticSummary as { viewpointCharacter?: string } | undefined;
+    expect(persisted?.viewpointCharacter).toBe("林远");
+    expect(result.issues.some((issue) => issue.includes("视角人物"))).toBe(false);
+  });
+
+  it("viewpoint 是本章称呼、aliasOf 归并成立：按已确立名记（canonical 化，不记称呼）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林师傅走进账房，翻看那本账目。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "查看账目", quote: "林师傅走进账房，翻看那本账目。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林师傅", quote: "林师傅走进账房，翻看那本账目。", aliasOf: "林远", identityHint: "即林远" },
+      ],
+      viewpoint: "林师傅",
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.viewpointCharacter).toBe("林远");
+    expect(result.issues.some((issue) => issue.includes("视角人物"))).toBe(false);
+  });
+
+  it("viewpoint 不在出场名单里：丢弃并如实记 issue（绝不静默）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远提起妹妹林宁去年失踪的事。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "提起妹妹失踪", quote: "林远提起妹妹林宁去年失踪的事。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远提起妹妹林宁去年失踪的事。" },
+      ],
+      viewpoint: "王二",
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.viewpointCharacter).toBeUndefined();
+    // 引擎 verify 的拒收如实进了 issues（章节语义声明被拒（viewpoint·viewpoint_not_present））
+    expect(result.issues.some((issue) => issue.includes("viewpoint") && issue.includes("王二"))).toBe(true);
+  });
+
+  it("viewpoint 只对得上被剥掉的 aliasOf（指向名册外名字）：丢弃并如实记 issue", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林师傅走进账房，翻看那本账目。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "查看账目", quote: "林师傅走进账房，翻看那本账目。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林师傅", quote: "林师傅走进账房，翻看那本账目。", aliasOf: "查无此人" },
+      ],
+      // 引擎层对上了 aliasOf（查无此人）；名册层把这条 aliasOf 剥掉后，视角人物落不进出场的极端情况。
+      viewpoint: "查无此人",
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.viewpointCharacter).toBeUndefined();
+    expect(result.issues.some((issue) => issue.includes("视角人物未采信") && issue.includes("查无此人"))).toBe(true);
+  });
+
+  it("老数据没有 viewpoint：照旧处理（无 viewpointCharacter、无视角相关 issue）", async () => {
+    const projectDir = await createFixtureProject();
+    await seedHookPool(projectDir);
+    await writeDraft(projectDir, 2, [
+      "# 第二章",
+      "",
+      "林远提起妹妹林宁去年失踪的事。",
+    ].join("\n"));
+
+    const declaration: ChapterDeltaDeclaration = {
+      chapter: 2,
+      mainEvent: { summary: "提起妹妹失踪", quote: "林远提起妹妹林宁去年失踪的事。" },
+      seededForeshadowing: [],
+      resolvedForeshadowing: [],
+      resourceDeltas: [],
+      keyLeads: [],
+      charactersPresent: [
+        { name: "林远", quote: "林远提起妹妹林宁去年失踪的事。" },
+      ],
+    };
+
+    const result = await buildCommitPlanFromProject({ projectDir, chapter: 2, declaration });
+
+    expect(result.passed).toBe(true);
+    expect(result.semanticSummary?.viewpointCharacter).toBeUndefined();
+    expect(result.issues.some((issue) => issue.includes("视角人物"))).toBe(false);
+  });
+
   it("keeps mentionedHooks empty when HookPool is empty", async () => {
     const projectDir = await createFixtureProject();
     await writeDraft(projectDir, 1, semanticDraft());

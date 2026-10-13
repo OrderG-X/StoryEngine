@@ -32,6 +32,13 @@ describe("buildChapterDeltaSystemSpec / ContextSections", () => {
     expect(buildChapterDeltaSystemSpec()).toContain("形近");
   });
 
+  it("字段说明要求声明 viewpoint（R5.1 视角人物）：跟着谁的眼睛走写谁，多视角/全知就省略", () => {
+    const spec = buildChapterDeltaSystemSpec();
+    expect(spec).toContain("viewpoint");
+    expect(spec).toContain("视角人物");
+    expect(spec).toContain("多视角或全知");
+  });
+
   it("传入已确立角色名 → 上下文段提示逐字沿用这些名字", () => {
     const context = buildChapterDeltaContextSections({ establishedNames: ["林澈", "林宁"] });
     expect(context).toContain("本书已确立的角色名");
@@ -155,6 +162,20 @@ describe("parseChapterDeltaDeclaration", () => {
     expect(parse("  ")?.charactersPresent?.[0]?.aliasOf).toBeUndefined();
     expect(parse("")?.charactersPresent).toHaveLength(1);
     expect(parse(null)?.charactersPresent?.[0]?.name).toBe("林师傅");
+  });
+
+  it("viewpoint（R5.1 视角人物）：字符串归一后透传；空串/空白/非字符串当没给（多视角/全知），不连坐别的字段", () => {
+    const parse = (viewpoint: unknown) => parseChapterDeltaDeclaration(JSON.stringify({
+      mainEvent: { summary: "事", quote: "原句。" },
+      charactersPresent: [{ name: "林澈", quote: "林澈走进来。" }],
+      viewpoint,
+    }), 2);
+    expect(parse("  林澈 ")?.viewpoint).toBe("林澈");
+    expect(parse("林澈")?.viewpoint).toBe("林澈");
+    expect(parse("")?.viewpoint).toBeUndefined();
+    expect(parse("   ")?.viewpoint).toBeUndefined();
+    expect(parse(null)?.viewpoint).toBeUndefined();
+    expect(parse(42)?.mainEvent?.summary).toBe("事"); // 坏值不丢整份声明
   });
 
   it("章内换天 timeSpan：天数宽进（「一」「1」都收）；0 / 坏值当没报，不连坐别的字段", () => {
