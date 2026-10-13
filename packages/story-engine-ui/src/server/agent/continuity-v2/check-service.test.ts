@@ -5,6 +5,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../../brain/index.js";
+import { CHECKER_ROLE, ensureReaderWindow } from "../../brain/index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { checkChapterBody } from "./check-service.js";
 
@@ -180,5 +181,44 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
     expect(progress).toMatchObject({ reading: false, done: 0, total: 12 });
     expect(progress.error).toContain("限流了");
     warn.mockRestore();
+  });
+});
+
+describe("核账服务：等读标注与回执（R5.2 必做）", () => {
+  it("当场补了笔记（缺 ≤2）→ 回执加「这次先等核账员读完第 a～b 章（用时 …）再核」，结果带 waited；进度盘上等读已收尾", async () => {
+    const dir = await makeBook(4);
+    // 预置第 1 章笔记（产品同一个角色，哈希对得上）；核第 4 章时缺第 2～3 章 → 当场补（缺 2 ≤ 2）。
+    await ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 1, callModel: async () => "笔记" });
+    const seenWhileWaiting: unknown[] = [];
+    const reader = readerModel();
+    const wrapped: BrainCallModel = async (messages, options) => {
+      if (!options.json) {
+        // 补笔记的那一刻：进度盘上应标着「核账在等它读完」（R5.2 必做 1，走的就是 R4.3 那份 progress.json）。
+        seenWhileWaiting.push(JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8")));
+      }
+      return reader.callModel(messages, options);
+    };
+    const result = await checkChapterBody(dir, 4, BODY, { readerCallModel: wrapped });
+    expect(result.ok).toBe(true);
+    expect(result.waited).toMatchObject({ from: 2, to: 3 });
+    expect(result.summary).toContain("这次先等核账员读完第 2～3 章（用时");
+    expect(result.summary).toContain("再核");
+    expect(result.coverage).toBeUndefined();
+    // 等读期间：reading:true、waiting:「核账」，分母是这次要读到的章数。
+    expect(seenWhileWaiting[0]).toMatchObject({ role: "checker", reading: true, done: 1, total: 3, waiting: "核账" });
+    // 收尾：reading:false、waiting 清掉。
+    await expect(readFile(join(dir, "agents", "checker", "progress.json"), "utf-8").then((text) => JSON.parse(text)))
+      .resolves.toMatchObject({ reading: false, done: 3, total: 3 });
+  });
+
+  it("缺 9～10 章仍当场补读（老行为）：等读一句照加", async () => {
+    const dir = await makeBook(12);
+    await ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 2, callModel: async () => "笔记" });
+    const reader = readerModel();
+    const result = await checkChapterBody(dir, 13, BODY, { readerCallModel: reader.callModel });
+    expect(result.ok).toBe(true);
+    expect(result.coverage).toBeUndefined();
+    expect(result.waited).toMatchObject({ from: 3, to: 12 });
+    expect(result.summary).toContain("这次先等核账员读完第 3～12 章（用时");
   });
 });

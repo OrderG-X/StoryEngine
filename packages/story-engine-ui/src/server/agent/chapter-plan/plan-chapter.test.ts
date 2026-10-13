@@ -239,19 +239,20 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     const checker = fakePlanCheckCallModel("{}");
     // 第一轮（第 11 章）：两个角色当场补齐各自的 10 份笔记。
     await resolveChapterPlanForDraft({ projectDir, chapter: 11, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker });
-    // 删掉核账员的全部笔记、再往书里加 3 章：下一轮章纲员只缺 3 份（补得起），
-    // 核账员缺 13 份（超过 10）→ not_ready。
+    // 删掉核账员的全部笔记、再往书里加 1 章：下一轮章纲员只缺 2 份（缺得少仍当场补读，R5.2），
+    // 核账员缺 12 份（超过 10）→ not_ready。
     await rm(join(projectDir, "agents", "checker", "notes"), { recursive: true, force: true });
-    for (const n of [12, 13, 14]) {
-      await writeFile(join(projectDir, "chapters", `${String(n).padStart(4, "0")}.md`), `# 第${n}章\n\n第${n}章各自推进。\n`, "utf-8");
-    }
+    await writeFile(join(projectDir, "chapters", "0012.md"), "# 第12章\n\n第12章各自推进。\n", "utf-8");
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 15, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+      projectDir, chapter: 13, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
-    // 章纲员只缺 3 份（当场补齐、正常拟）；核账员缺 13 份 → 冷窗口审（已有笔记 0 章 + 第 7～14 章原文）。
-    expect(result.note).toContain("核账员还没读完全书（第 0 / 14 章）");
-    expect(result.note).toContain("这次按第 7～14 章原文审的纲");
+    // 章纲员只缺 2 份（当场补齐、正常拟），note 如实说等过它（R5.2 必做 2）；
+    expect(result.note).toContain("这次先等章纲员读完第 11～12 章（用时");
+    expect(result.note).toContain("再拟纲");
+    // 核账员缺 12 份 → 冷窗口审（已有笔记 0 章 + 第 5～12 章原文），缺口没被原文补全、老措辞照说。
+    expect(result.note).toContain("核账员还没读完全书（第 0 / 12 章）");
+    expect(result.note).toContain("这次按第 5～12 章原文审的纲");
     expect(result.note).not.toContain("这次没审章纲");
   });
 

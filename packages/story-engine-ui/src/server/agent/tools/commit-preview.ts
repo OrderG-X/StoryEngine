@@ -30,6 +30,7 @@ import {
   callConfiguredBrainModel,
   catchUpReaders,
   declareChapterDeltaByLedger,
+  describeReaderWait,
   type BrainCallModel,
 } from "../../brain/index.js";
 import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
@@ -295,6 +296,8 @@ export async function buildCommitPreviewToolOutput(input: {
   const continuityBreakWarning = collectContinuityBreakWarning(declaration);
   // 冷窗口记账（R4.4）：账照记了，但记账员还没读完全书——范围如实说，摘要和账本清单各标一句。
   const declarationColdNotice = describeDeclarationCold(declarationOutcome, chapter);
+  // 等读（R5.2）：记账前先等记账员补了笔记——摘要标一句。
+  const declarationWaitNotice = describeDeclarationWait(declarationOutcome);
   // 伏笔/线索/目标待收口：引擎按里程碑制（新停滞头两章 + 长期停滞每 10 章重提）确定性选出本章该提醒的条目，
   // 这里合并成一份结构化提醒（含 r7 新接入的停滞目标——此前 staleGoalWarnings 从没到过用户面前），
   // 升级成带类型的 warning，供 UI 固定展示 + 模型忠实转达。全量底数走 staleBacklog 进 digest，绝不静默。题材中立。
@@ -395,6 +398,7 @@ export async function buildCommitPreviewToolOutput(input: {
     ...(lengthShortfall ? { lengthShortfall } : {}),
     ...(declarationFallbackNotice ? { declarationFallbackNotice } : {}),
     ...(declarationColdNotice ? { declarationColdNotice } : {}),
+    ...(declarationWaitNotice ? { declarationWaitNotice } : {}),
   });
   return {
     chapter,
@@ -476,6 +480,12 @@ function describeDeclarationCold(outcome: ChapterDeltaDeclarationOutcome, chapte
   ];
   const basis = parts.length > 0 ? parts.join(" + ") : "最近几章原文";
   return `记账员还没读完全书（第 ${cold.notedThrough} / ${Math.max(chapter - 1, cold.rawTo)} 章），这次按${basis}记账，更早的细节可能没记全；它读完全书后，之后的定稿按全书记`;
+}
+
+/** 等读那一句（R5.2 必做 2）：记账前先等记账员当场补了笔记，如实说补了哪几章、花了多久。 */
+function describeDeclarationWait(outcome: ChapterDeltaDeclarationOutcome): string | undefined {
+  const waited = outcome.status === "model" ? outcome.waited : undefined;
+  return waited ? describeReaderWait("ledger", waited, "记账") : undefined;
 }
 
 interface PlanStaleWarningLike {
@@ -569,6 +579,8 @@ function buildPreviewSummary(input: {
   readonly declarationFallbackNotice?: string;
   /** 冷窗口记账的整句（describeDeclarationCold 产出，status=model 时才有）；账照记，但范围要如实说。 */
   readonly declarationColdNotice?: string;
+  /** 等读那一句（R5.2，status=model 时才有）：记账前先等记账员当场补了笔记。 */
+  readonly declarationWaitNotice?: string;
 }): { readonly summary: string; readonly modelHint?: string } {
   const base = input.canCommit
     ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。点预览卡上的「确认定稿」即可写入。`
@@ -611,6 +623,10 @@ function buildPreviewSummary(input: {
   // 冷窗口记账：账照记，但记账员还没读完全书——范围如实说，别让作者以为这章是按全书核着记的（R4.4）。
   if (input.declarationColdNotice) {
     summary += `【${input.declarationColdNotice}】`;
+  }
+  // 等读（R5.2）：记账前先等记账员补了笔记——如实说补了哪几章、花了多久。
+  if (input.declarationWaitNotice) {
+    summary += `【${input.declarationWaitNotice}】`;
   }
   const hints: string[] = [];
   if (input.canCommit) {

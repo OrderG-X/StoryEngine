@@ -108,12 +108,14 @@ export interface StateOverviewChapterFileState {
   readonly workspaceTitle?: string;
 }
 
-/** 编辑部一个跟读角色（checker/ledger/planner）的补读进度：done/total＝读到第几章 / 共几章（已定稿）。 */
+/** 编辑部一个跟读角色（checker/ledger/planner）的补读进度：done/total＝读到第几章 / 共几章（已定稿）。
+ *  waiting＝哪个动作在等它读完（R5.2：核账 / 拟纲 / 记账当场补笔记期间才带），进度行据此标「（核账在等它读完）」。 */
 export interface ReaderCatchUpRoleState {
   readonly role: string;
   readonly reading: boolean;
   readonly done: number;
   readonly total: number;
+  readonly waiting?: string;
 }
 
 /** 三个跟读角色的补读进度一览（开书概况和 /api/reader-progress 共用）：reading＝任一角色还在读。 */

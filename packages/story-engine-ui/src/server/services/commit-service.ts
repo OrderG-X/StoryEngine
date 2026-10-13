@@ -130,6 +130,8 @@ export interface ChapterDeltaDeclarationOutcome {
   /** 冷窗口记账（R4.4）：status=model 且记账员还没读完全书时带——这次按已有笔记 + 最近 K 章原文记的账，
    *  预览卡和摘要据此如实标「更早的细节可能没记全」。 */
   readonly cold?: { readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number };
+  /** 这次先当场补了记账笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒——摘要据此加「这次先等记账员读完…再记账」。 */
+  readonly waited?: { readonly from: number; readonly to: number; readonly ms: number };
 }
 
 function isDeclarationOutcome(value: unknown): value is ChapterDeltaDeclarationOutcome {

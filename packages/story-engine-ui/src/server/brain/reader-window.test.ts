@@ -189,6 +189,61 @@ describe("专员窗口：maxCatchUp", () => {
   });
 });
 
+describe("专员窗口：等读回调（R5.2 必做 1）", () => {
+  it("当场补笔记时 onCatchUpBegin / onProgress / onCatchUpEnd 按序带对参数；笔记齐了就一个都不调", async () => {
+    const dir = await makeBook(3);
+    const events: string[] = [];
+    const callModel = fakeModel().callModel;
+    await ensureReaderWindow({
+      projectDir: dir, role: ROLE, upTo: 3, callModel,
+      onCatchUpBegin: (done, total) => { events.push(`begin ${done}/${total}`); },
+      onProgress: (chapter) => { events.push(`note ${chapter}`); },
+      onCatchUpEnd: (done, total) => { events.push(`end ${done}/${total}`); },
+    });
+    expect(events).toEqual(["begin 0/3", "note 1", "note 2", "note 3", "end 3/3"]);
+    // 笔记齐了再来一次：不等、不标。
+    const quiet: string[] = [];
+    await ensureReaderWindow({
+      projectDir: dir, role: ROLE, upTo: 3, callModel,
+      onCatchUpBegin: () => { quiet.push("begin"); },
+      onProgress: () => { quiet.push("note"); },
+      onCatchUpEnd: () => { quiet.push("end"); },
+    });
+    expect(quiet).toEqual([]);
+  });
+
+  it("补到一半失败：onCatchUpEnd 照样收尾，done 停在落下的那章", async () => {
+    const dir = await makeBook(4);
+    const events: string[] = [];
+    let chapter = 0;
+    const broken: BrainCallModel = async () => {
+      chapter += 1;
+      if (chapter >= 3) throw new Error("第 3 章笔记没写成");
+      return "笔记";
+    };
+    await expect(ensureReaderWindow({
+      projectDir: dir, role: ROLE, upTo: 4, callModel: broken,
+      onCatchUpBegin: (done) => { events.push(`begin ${done}`); },
+      onProgress: (c) => { events.push(`note ${c}`); },
+      onCatchUpEnd: (done) => { events.push(`end ${done}`); },
+    })).rejects.toThrow("第 3 章笔记没写成");
+    expect(events).toEqual(["begin 0", "note 1", "note 2", "end 2"]);
+  });
+
+  it("超额走冷窗口（tooMany）不等，回调一个不调", async () => {
+    const dir = await makeBook(5);
+    const events: string[] = [];
+    const out = await ensureReaderWindow({
+      projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel, maxCatchUp: 3,
+      onCatchUpBegin: () => { events.push("begin"); },
+      onProgress: () => { events.push("note"); },
+      onCatchUpEnd: () => { events.push("end"); },
+    });
+    expect(out.missing).toBe(5);
+    expect(events).toEqual([]);
+  });
+});
+
 describe("专员窗口：并发", () => {
   it("同一本书同一角色同时来两个调用：只补一遍，模型调用次数不翻倍", async () => {
     const dir = await makeBook(4);

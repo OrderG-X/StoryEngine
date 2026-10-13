@@ -52,6 +52,13 @@ export {
   type ReaderProgress,
   type ReadersCatchUpStatus,
 } from "./catch-up.js";
+export {
+  describeReaderWait,
+  formatReaderWaitDuration,
+  readerWaitingHandlers,
+  READER_ROLE_LABELS,
+  type ReaderWaited,
+} from "./reader-progress.js";
 export { LEDGER_ROLE, declareChapterDeltaByLedger, type LedgerDeclareInput, type LedgerDeclareResult } from "./ledger.js";
 export {
   PLANNER_ROLE,

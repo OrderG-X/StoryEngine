@@ -80,4 +80,68 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
     );
     expect(container.querySelector(".se-checker-reading")).toBeNull();
   });
+
+  it("动作在等谁读完就在谁后面标出来（R5.2）：核账等核账员、拟纲等章纲员、记账等记账员，各标各的", () => {
+    render(
+      <ReadersCatchUpNote
+        status={{
+          reading: true,
+          roles: [
+            { role: "checker", reading: true, done: 50, total: 58, waiting: "核账" },
+            { role: "ledger", reading: false, done: 0, total: 58 },
+            { role: "planner", reading: false, done: 0, total: 58 },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent)
+      .toBe("编辑部在读前文：核账员 50/58（核账在等它读完） · 记账员 排队 · 章纲员 排队");
+    cleanup();
+    render(
+      <ReadersCatchUpNote
+        status={{
+          reading: true,
+          roles: [
+            { role: "checker", reading: false, done: 58, total: 58 },
+            { role: "ledger", reading: false, done: 0, total: 58 },
+            { role: "planner", reading: true, done: 55, total: 58, waiting: "拟纲" },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent)
+      .toBe("编辑部在读前文：核账员 58/58 · 记账员 排队 · 章纲员 55/58（拟纲在等它读完）");
+    cleanup();
+    render(
+      <ReadersCatchUpNote
+        status={{
+          reading: true,
+          roles: [
+            { role: "checker", reading: false, done: 58, total: 58 },
+            { role: "ledger", reading: true, done: 57, total: 58, waiting: "记账" },
+            { role: "planner", reading: false, done: 58, total: 58 },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent)
+      .toBe("编辑部在读前文：核账员 58/58 · 记账员 57/58（记账在等它读完） · 章纲员 58/58");
+  });
+
+  it("waiting 是残留脏值（reading 已翻 false）：不标——等读完了就不说还在等", () => {
+    render(
+      <ReadersCatchUpNote
+        status={{
+          reading: true,
+          roles: [
+            { role: "checker", reading: false, done: 58, total: 58, waiting: "核账" },
+            { role: "ledger", reading: true, done: 12, total: 58 },
+            { role: "planner", reading: false, done: 0, total: 58 },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent)
+      .toBe("编辑部在读前文：核账员 58/58 · 记账员 12/58 · 章纲员 排队");
+  });
 });
