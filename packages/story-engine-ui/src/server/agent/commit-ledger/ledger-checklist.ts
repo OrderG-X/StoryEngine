@@ -9,7 +9,7 @@
  */
 import { factKey, type FactProposal, type FactProposalExclusions } from "../fact-ledger/reconcile-facts.js";
 
-export type LedgerChecklistKind = "fact" | "change" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed" | "structure_failed" | "cold_ledger";
+export type LedgerChecklistKind = "fact" | "change" | "change_confirm" | "hook" | "thread" | "goal" | "day" | "conflict" | "new_character" | "fact_failed" | "structure_failed" | "cold_ledger";
 
 export interface LedgerChecklistItem {
   readonly id: string;
@@ -24,6 +24,11 @@ export interface LedgerChecklistItem {
   readonly editableDay?: number;
   /** 引擎没把握、要作者确认（如没在正文里找到时间说法，天数是按上一章 +1 估的）。 */
   readonly needsConfirm?: boolean;
+  /**
+   * 默认不勾（R7.4 要确认的改记）：旧条是不该变的事实或主语对不上，不自动作废——
+   * 界面默认不勾（这条改记不作数），作者勾上（id 随排除数组回来）才写。其余条目默认勾（不勾才去掉）。
+   */
+  readonly defaultUnchecked?: boolean;
 }
 
 /** 本章在故事时间线上的位置（引擎 BuildCommitPlanResult.timelineEntry + 格式化好的「故事第 N 天（周X）」）。 */
@@ -79,6 +84,19 @@ export function buildLedgerChecklist(input: {
   const show = input.displayFact ?? ((text: string) => text);
   const { chapter, plan, facts } = input;
   const items: LedgerChecklistItem[] = [];
+  // 要确认的改记排最上面（R7.4，十章试写报告 3.4）：旧条是不该变的事实（hard）、或和新说法主语对不上——
+  // 不自动作废，默认不勾；作者勾上（change_confirm 前缀随排除数组回来）这条改记才写。
+  for (const change of facts?.changesToConfirm ?? []) {
+    items.push({
+      id: `change_confirm:${change.factId}`,
+      kind: "change_confirm",
+      label: `要你确认：改记「${change.oldText}」→「${show(change.newText)}」（${change.why === "hard" ? "旧条是不该变的设定" : "旧条和新说法说的不是同一件事"}，默认不改，勾上才改）`,
+      ...(clip(change.quote) ? { detail: clip(change.quote) } : {}),
+      removable: true,
+      needsConfirm: true,
+      defaultUnchecked: true,
+    });
+  }
   if (input.coldLedgerNote?.trim()) {
     items.push({
       id: "cold_ledger",
@@ -187,7 +205,10 @@ export function buildLedgerChecklist(input: {
   return items;
 }
 
-/** 把作者去掉的条目 id 分到各处：计划里的伏笔 / 线索 / 目标 id，事实的内容短哈希 / 旧事实 id。 */
+/**
+ * 把作者在清单上动过的条目 id 分到各处：计划里的伏笔 / 线索 / 目标 id，事实的内容短哈希 / 旧事实 id；
+ * 要确认的改记勾上算「确认」（change_confirm: 前缀 → confirmChanges），和勾掉（排除）走同一个数组、按前缀分流。
+ */
 export function splitExclusions(excluded: readonly string[]): {
   readonly hookIds: ReadonlySet<string>;
   readonly threadIds: ReadonlySet<string>;
@@ -199,6 +220,7 @@ export function splitExclusions(excluded: readonly string[]): {
   const goalIds = new Set<string>();
   const adds = new Set<string>();
   const changes = new Set<string>();
+  const confirmChanges = new Set<string>();
   for (const raw of excluded) {
     const [kind, ...rest] = raw.split(":");
     const value = rest.join(":");
@@ -208,8 +230,9 @@ export function splitExclusions(excluded: readonly string[]): {
     else if (kind === "goal") goalIds.add(value);
     else if (kind === "fact") adds.add(value);
     else if (kind === "change") changes.add(value);
+    else if (kind === "change_confirm") confirmChanges.add(value);
   }
-  return { hookIds, threadIds, goalIds, facts: { adds, changes } };
+  return { hookIds, threadIds, goalIds, facts: { adds, changes, confirmChanges } };
 }
 
 interface PlanWithHooks {

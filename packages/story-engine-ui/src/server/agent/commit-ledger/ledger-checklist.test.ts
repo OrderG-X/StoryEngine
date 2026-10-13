@@ -66,4 +66,39 @@ describe("定稿前的账本清单", () => {
     expect(next.arcGoalUpdates).toHaveLength(1);
     expect(excludeFromCommitPlan(plan, splitExclusions([]))).toBe(plan);
   });
+
+  it("要确认的改记（R7.4）排最上面：标「要你确认」、默认不勾；勾上算确认（change_confirm 前缀进 confirmChanges，不进 changes）", () => {
+    const items = buildLedgerChecklist({
+      chapter: 9,
+      plan,
+      facts: {
+        ok: true,
+        adds: [],
+        changes: [{ factId: "fact-9", oldText: "信没拆", newText: "信拆开了", quote: "信终于拆开了。" }],
+        changesToConfirm: [{
+          factId: "fact-1-4",
+          oldChapter: 1,
+          oldText: "老周的茶馆在钟楼斜对面。",
+          newText: "茶馆门口竹桌收进墙根",
+          quote: "门口两张竹桌已经收进墙根。",
+          why: "hard",
+        }],
+        conflicts: [],
+        newCharacters: [],
+      },
+    });
+    const top = items[0];
+    expect(top).toMatchObject({ id: "change_confirm:fact-1-4", kind: "change_confirm", removable: true, needsConfirm: true, defaultUnchecked: true });
+    expect(top?.label).toContain("要你确认");
+    expect(top?.label).toContain("不该变");
+    expect(top?.label).toContain("老周的茶馆在钟楼斜对面");
+    expect(top?.detail).toBe("门口两张竹桌已经收进墙根。");
+    // 排在冷窗口提示、天数、常规改记之前。
+    expect(items.findIndex((item) => item.kind === "change")).toBeGreaterThan(0);
+    expect(items.findIndex((item) => item.kind === "day")).toBeGreaterThan(0);
+    // 作者动过的 id 按前缀分流：勾上的待确认改记进 confirmChanges（确认），勾掉的常规改记进 changes（去掉）。
+    const { facts } = splitExclusions(["change_confirm:fact-1-4", "change:fact-9"]);
+    expect([...facts.confirmChanges!]).toEqual(["fact-1-4"]);
+    expect([...facts.changes!]).toEqual(["fact-9"]);
+  });
 });

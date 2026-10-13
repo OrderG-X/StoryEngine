@@ -456,11 +456,15 @@ export const commitApplyTool = writeTool({
       ? proposal.adds.filter((fact) => exclusions.adds?.has(factKey(fact.text))).length
         + proposal.changes.filter((change) => exclusions.changes?.has(change.factId)).length
       : 0;
+    // 要确认的改记（R7.4）没勾的条数：旧设定没动，回执里如实说一句，绝不装作「已经核过」。
+    const unconfirmed = proposal?.ok
+      ? (proposal.changesToConfirm ?? []).filter((change) => !exclusions.confirmChanges?.has(change.factId)).length
+      : 0;
     const factNote = !factUpdate
       ? `这章的事实没抽成${proposal?.failureSummary ? `：${proposal.failureSummary.replace(/^（|）$/gu, "")}` : ""}，账里少了这一章的事实——想补记就说「补记第 ${resolvedChapter} 章的事实」。`
       : ledger && !ledger.ok
         ? `这章的事实没记上（${ledger.reason ?? "原因不明"}），章节已正常定稿。`
-        : describeFactOutcome({ added: ledger?.added ?? 0, superseded: ledger?.superseded ?? [], conflicts: proposal?.conflicts ?? [], skipped });
+        : describeFactOutcome({ added: ledger?.added ?? 0, superseded: ledger?.superseded ?? [], conflicts: proposal?.conflicts ?? [], skipped, unconfirmed });
     const newCharacters = proposal?.ok ? proposal.newCharacters : [];
     const withFacts = appendFactNoteToSummary(result.summary, factNote);
     const withNew = appendNewCharactersToSummary(withFacts, newCharacters);

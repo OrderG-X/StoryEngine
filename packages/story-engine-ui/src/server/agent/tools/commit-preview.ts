@@ -173,8 +173,10 @@ const outputSchema = z.object({
     removable: z.boolean(),
     editableDay: z.number().int().optional(),
     needsConfirm: z.boolean().optional(),
+    defaultUnchecked: z.boolean().optional(),
   })).optional().describe(
-    "定稿会往账本里写的东西（硬事实、伏笔线索目标的新开推进收回、故事第几天）。界面列成清单给作者勾，作者去掉的定稿时不写；你不用逐条转述。",
+    "定稿会往账本里写的东西（硬事实、伏笔线索目标的新开推进收回、故事第几天）。界面列成清单给作者勾，作者去掉的定稿时不写；" +
+      "要确认的改记（change_confirm）默认不勾、作者勾上才作数；你不用逐条转述。",
   ),
 });
 
