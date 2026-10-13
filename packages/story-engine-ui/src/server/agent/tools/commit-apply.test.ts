@@ -705,8 +705,10 @@ describe("appendLifecycleNotesToSummary（r7 自动蛰伏必须折进可见摘�
 // 线索池体检提示（确定性、只提醒不动手）：长篇实测 10 章即可积到近 30 条 open 而作者毫无察觉——
 // 工具/快照/意图门都在，缺的是提醒时机。清理本身仍要用户点头（意图门拦着），这里只补盲区。
 describe("buildThreadMaintenanceNote（入库后线索堆积提醒）", () => {
-  const overviewWith = (open: number, cleanupVisible: number) =>
-    ({ threads: { open, cleanupVisibleCount: cleanupVisible } }) as unknown as storyEngine.StateOverview;
+  const overviewWith = (open: number, cleanupVisible: number, cleanupVisibleUnresolved = cleanupVisible, touched = 0) =>
+    ({
+      threads: { open, touched, cleanupVisibleCount: cleanupVisible, cleanupVisibleUnresolvedCount: cleanupVisibleUnresolved },
+    }) as unknown as storyEngine.StateOverview;
 
   it("open 达阈值 → 提醒带条数与「清理线索」说法", () => {
     const note = buildThreadMaintenanceNote(overviewWith(28, 0));
@@ -742,6 +744,42 @@ describe("buildThreadMaintenanceNote（入库后线索堆积提醒）", () => {
     const normalNote = buildThreadMaintenanceNote(overviewWith(OPEN_THREADS_HINT_THRESHOLD, 0));
     expect(normalNote).not.toContain("明显堆积");
     expect(threadMaintenanceEscalated(overviewWith(OPEN_THREADS_HINT_THRESHOLD, 0))).toBe(false);
+  });
+
+  // R5.4·新发现 4：真机曾写出「未收口的线索已积到 55 条，其中 78 条已经低价值或过期」——78 把已收口（done/stale）
+  // 的意图线索也算进去，和 55（open+touched，全类型）不是同一个集合。「其中 X 条」改用同一集合的
+  // cleanupVisibleUnresolvedCount，永远 ≤ 总数。
+  it("「其中 X 条」与总数同一集合：复现真机形状（55 条里 78）→ 55 条里 23 条，其中 ≤ 总数", () => {
+    const note = buildThreadMaintenanceNote(overviewWith(30, 78, 23, 25));
+    expect(note).toContain("未收口的线索已积到 55 条，其中 23 条已经低价值或过期");
+    expect(note).not.toContain("78");
+    const parsed = /未收口的线索已积到 (\d+) 条(?:，其中 (\d+) 条已经低价值或过期)?/u.exec(note);
+    expect(parsed).not.toBeNull();
+    expect(Number(parsed![2])).toBeLessThanOrEqual(Number(parsed![1]));
+  });
+
+  it("「其中 X 条」永远 ≤ 总数：一组形状各异的 overview 全都守界", () => {
+    const shapes = [
+      [30, 25, 78, 23],
+      [20, 0, 5, 5],
+      [19, 0, 3, 2],
+      [40, 0, 99, 0],
+      [35, 12, 12, 0],
+    ] as const;
+    for (const [open, touched, cleanupVisible, cleanupUnresolved] of shapes) {
+      const note = buildThreadMaintenanceNote(overviewWith(open, cleanupVisible, cleanupUnresolved, touched));
+      const parsed = /未收口的线索已积到 (\d+) 条(?:，其中 (\d+) 条已经低价值或过期)?/u.exec(note);
+      if (!parsed) {
+        expect(note).toBe(""); // 没触发提醒就什么都不说，不冒半句
+        continue;
+      }
+      expect(Number(parsed[1])).toBe(open + touched);
+      if (parsed[2] !== undefined) expect(Number(parsed[2])).toBeLessThanOrEqual(Number(parsed[1]));
+    }
+  });
+
+  it("已收口的堆积（cleanupVisibleCount 大、未收口的为 0 且未达阈值）→ 不再触发「未收口」提醒；清理入口仍在收件箱/维护面板", () => {
+    expect(buildThreadMaintenanceNote(overviewWith(10, 78, 0))).toBe("");
   });
 });
 

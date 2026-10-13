@@ -321,16 +321,19 @@ export const CLEANUP_VISIBLE_HINT_THRESHOLD = 3;
  * 入库后的线索池体检提示（确定性，不赌模型自觉）：线索堆积到阈值就在入库摘要里带一行提醒。
  * 只提醒、不动手——清理本身仍要用户点头（清理意图门拦着），这里补的是「用户不知道积了多少」的盲区。
  * 「未收口」= open + touched（touched 只是被提到过、同样没完结——评审加固：只数 open 会在
- * 全 touched 的堆积下完全沉默）。文案面向用户：不出现工具名/英文行话（铁律④）。
+ * 全 touched 的堆积下完全沉默）。「其中 X 条」用 cleanupVisibleUnresolvedCount（同一集合，R5.4·
+ * 新发现 4：旧口径 cleanupVisibleCount 把已收口的也数进去，曾写出「积到 55 条，其中 78 条」；
+ * 已收口的堆积由收件箱「可以清理」和维护面板另行提醒）。老概览对象缺该字段 → 视为 0，只报总数。
+ * 文案面向用户：不出现工具名/英文行话（铁律④）。
  * overview 缺失（刷新失败）→ 不提醒，绝不因提醒功能影响入库回报。
  */
 export function buildThreadMaintenanceNote(overview: StateOverview | undefined): string {
   const unresolved = (overview?.threads.open ?? 0) + (overview?.threads.touched ?? 0);
-  const cleanupVisible = overview?.threads.cleanupVisibleCount ?? 0;
-  if (unresolved < OPEN_THREADS_HINT_THRESHOLD && cleanupVisible < CLEANUP_VISIBLE_HINT_THRESHOLD) return "";
+  const cleanupVisibleUnresolved = overview?.threads.cleanupVisibleUnresolvedCount ?? 0;
+  if (unresolved < OPEN_THREADS_HINT_THRESHOLD && cleanupVisibleUnresolved < CLEANUP_VISIBLE_HINT_THRESHOLD) return "";
   const escalated = unresolved >= THREAD_STALE_ESCALATION_THRESHOLD;
-  const detail = cleanupVisible > 0
-    ? `未收口的线索已积到 ${unresolved} 条，其中 ${cleanupVisible} 条已经低价值或过期`
+  const detail = cleanupVisibleUnresolved > 0
+    ? `未收口的线索已积到 ${unresolved} 条，其中 ${cleanupVisibleUnresolved} 条已经低价值或过期`
     : `未收口的线索已积到 ${unresolved} 条`;
   return `另外，${detail}${escalated ? "，已经明显堆积、建议尽快清理" : ""}——积多了会拖累后面的章节方向。想清就说「清理线索」，我会先归并整理、建好存档点，可一键撤销。`;
 }

@@ -416,7 +416,7 @@ function createOverview(): StateOverview {
       currentObjective: "进入总部",
     },
     hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, keyOpenItems: [] },
+    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
     characters: { protagonist: "林远", knownCharacters: [{ id: "char-guo-xu", name: "林远", role: "主角" }] },

@@ -158,9 +158,33 @@ const REVERT_AREA_FILES: readonly (readonly [RegExp, string])[] = [
 const REVERT_MAX_ITEMS = 8;
 
 /**
+ * 内部记录路径（撤销回执不列、也不计数）：工作台缓存、查错记录、诊断日志、定稿事务、计量、专员笔记缓存
+ * ——都不是作者写的故事内容。复验实锤：撤销出稿那步连带回退 chapter-workspaces / continuity-checks /
+ * diagnostics 各一份，回执却报「其他文件 4 个」，作者看不出是什么。agents/、.story-engine-tx/、
+ * metrics（=.story-engine-ui/metrics/）与 snapshot.ts 的快照排除目录同源：本就不入快照，
+ * 老书残留里可能仍出现，一并跳过。
+ */
+const INTERNAL_REVERT_PATH = /^(?:\.story-engine-ui\/|\.story-engine-tx\/|diagnostics\/|metrics\/|agents\/)/u;
+
+/**
+ * 作者看得懂的目录的兜底短语：目录里没被具体规则认出的文件按目录给人话，绝不折进「其他文件」
+ * （引擎以后往这些目录加新文件也不用改这里）。真认不出的（根目录杂项、陌生目录）才计「其他文件 N 个」。
+ */
+const REVERT_DIR_PHRASES: readonly (readonly [RegExp, string])[] = [
+  [/^story\//u, "设定资料"],
+  [/^world\//u, "世界设定"],
+  [/^characters\//u, "角色卡资料"],
+  [/^timeline\//u, "时间线资料"],
+  [/^time\//u, "时间资料"],
+  [/^chapters\//u, "章节文件"],
+  [/^drafts\//u, "草稿文件"],
+];
+
+/**
  * 「这次退回了什么」的名词短语列表（纯函数）：chapters 下的章文件→「第 N 章定稿」、工作稿
  * drafts/<目录>/chapter-N→「第 N 章工作稿」、章纲 drafts/plans/chapter-N→「第 N 章章纲」、
- * characters/<id>/ 下→「角色卡：名字」（认不出的 id 不吐，说「角色卡资料」）、story/*.json 等资料区→短语。
+ * characters/<id>/ 下→「角色卡：名字」（认不出的 id 不吐，说「角色卡资料」）、story/*.json 等资料区→短语、
+ * 其余作者看得懂的目录→目录短语（REVERT_DIR_PHRASES）、内部记录不列不计数、真认不出才「其他文件 N 个」。
  * D 状态（目标里有、后来被删，恢复把它找回来）加「（重新找回）」标注。同章多文件去重。
  */
 export function describeRevertedPaths(
@@ -177,6 +201,7 @@ export function describeRevertedPaths(
   let others = 0;
 
   for (const { status, path } of files) {
+    if (INTERNAL_REVERT_PATH.test(path)) continue;
     const chapter = /^chapters\/(\d+)\.md$/u.exec(path);
     if (chapter) {
       const n = Number(chapter[1]);
@@ -206,7 +231,12 @@ export function describeRevertedPaths(
       continue;
     }
     const area = REVERT_AREA_FILES.find(([pattern]) => pattern.test(path));
-    if (area) areas.add(area[1]);
+    if (area) {
+      areas.add(area[1]);
+      continue;
+    }
+    const dirPhrase = REVERT_DIR_PHRASES.find(([pattern]) => pattern.test(path));
+    if (dirPhrase) areas.add(dirPhrase[1]);
     else others += 1;
   }
 
@@ -221,6 +251,9 @@ export function describeRevertedPaths(
   // 角色卡本身动了，角色名册（character-bible.json）的随动改动不再单列（与 describeSnapshotChanges 同规矩）。
   if (names.length > 0 || unknownCharacter) areas.delete("角色名册");
   for (const [, label] of REVERT_AREA_FILES) {
+    if (areas.has(label)) { items.push(label); areas.delete(label); }
+  }
+  for (const [, label] of REVERT_DIR_PHRASES) {
     if (areas.has(label)) { items.push(label); areas.delete(label); }
   }
   if (others > 0) items.push(`其他文件 ${others} 个`);

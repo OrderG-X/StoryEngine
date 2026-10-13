@@ -28,6 +28,8 @@ export interface StateOverview {
     readonly done: number;
     readonly openIntents: number;
     readonly cleanupVisibleCount: number;
+    /** cleanup 候选里仍是未收口（open/touched）的条数（编辑部 R5.4）：与 open+touched 同一集合，恒 ≤ open+touched。老概览对象可能缺省。 */
+    readonly cleanupVisibleUnresolvedCount?: number;
     readonly keyOpenItems: readonly StateOverviewThreadItem[];
   };
   readonly arcGoals: {

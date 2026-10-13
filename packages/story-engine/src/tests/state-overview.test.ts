@@ -159,6 +159,44 @@ describe("State Overview Pack V0", () => {
     await expect(snapshotStateFiles(projectDir)).resolves.toEqual(before);
   });
 
+  // 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进候选，
+  // 入库回执拿它当「其中 X 条」曾写出「积到 55 条，其中 78 条」。threads.cleanupVisibleUnresolvedCount
+  // 只数仍未收口（open/touched）的候选——与 open+touched 同一集合，恒 ≤ open+touched。
+  it("cleanupVisibleUnresolvedCount 与 open+touched 同一集合：done/stale 的候选不计入（R5.4）", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-r54-"));
+    const { projectDir } = await createStoryProject({
+      rootDir,
+      title: "线索口径测试",
+      genre: "都市",
+      premise: "测试线索计数口径。",
+      mainCharacterName: "林澈",
+    });
+    await writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
+      threads: [
+        // 低价值 generic 意图、未收口（open）→ cleanup 候选，且算进未收口。
+        { id: "t-open-low", type: "intent", title: "想了想", status: "open", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
+        // 同样低价值、但已收口（done）→ 仍是 cleanup 候选（manual_review_mark_done），不算未收口。
+        { id: "t-done-low", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
+        // 高价值线索（信号/来源类）、未收口（touched）→ 不算 cleanup 候选。
+        { id: "t-open-high", type: "intent", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: ["确认记录里的线索来源"] },
+        // 已过期（stale）、低价值 → cleanup 候选，不算未收口。
+        { id: "t-stale-low", type: "intent", title: "先不管", status: "stale", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
+      ],
+    }, null, 2)}\n`, "utf-8");
+
+    const overview = await buildStateOverview({ projectDir, chapter: 5 });
+
+    expect(overview.threads.open).toBe(1);
+    expect(overview.threads.touched).toBe(1);
+    // 老口径：4 条意图里 3 条是候选（open 低价值、done、stale；高价值不算）——done/stale 也数进去。
+    expect(overview.threads.cleanupVisibleCount).toBe(3);
+    // 同集合口径：未收口（open/touched）的候选只有 open 那条低价值。
+    expect(overview.threads.cleanupVisibleUnresolvedCount).toBe(1);
+    expect(overview.threads.cleanupVisibleUnresolvedCount)
+      .toBeLessThanOrEqual(overview.threads.open + overview.threads.touched);
+    await rm(rootDir, { recursive: true, force: true });
+  });
+
   it("透出角色/地点/资产/世界观的 extraFields（受控破例⑦：展示路与喂模型路同源）", async () => {
     const projectDir = await createOverviewFixture();
 

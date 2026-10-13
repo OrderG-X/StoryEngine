@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStoryProject, type WriterClient, type WriterContextEnvelope } from "@actalk/story-engine";
 
-import { generateDraftCandidate } from "./draft-service.js";
+import { generateDraftCandidate, runGenerateDraft } from "./draft-service.js";
 
 describe("R4.6：占位主角卡不挡出稿（新书：占位卡 + 第 1 章定稿 → 第 2 章出稿）", () => {
   let projectDir: string | undefined;
@@ -121,5 +121,26 @@ describe("R4.6：占位主角卡不挡出稿（新书：占位卡 + 第 1 章定
     expect(outcome.candidate.issues).toEqual([]);
     expect(outcome.characterSelection.chapterCharactersFromDeltas).toBeUndefined();
     expect(outcome.characterSelection.summary).toContain("没拿占位名把关");
+  }, 20_000);
+
+  // 编辑部 R5.4·新发现 4：上两条占位名册回执自带句号，出稿回执拼接处曾拼出「把关。。」。
+  // 真引擎 + 真 in-scene-detector 全链：runGenerateDraft 的 summary 里不许再出现「。。」。
+  it("出稿回执不出现「。。」（占位名册回执自带句号，拼接处去重）", async () => {
+    await finalizeChapterOneWithLuchen();
+    const writerClient: WriterClient = {
+      generateDraft: vi.fn(async () => ({ title: "第二天", content: "陆沉把游码归位，表针在晨光里重新走起来。" })),
+    };
+
+    const result = await runGenerateDraft({
+      projectDir: projectDir!,
+      chapter: 2,
+      writerClient,
+      policies: { aiFlavorRecheck: false },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toContain("按最近定稿章的出场记账");
+    expect(result.summary).toContain("没拿占位名把关");
+    expect(result.summary).not.toContain("。。");
   }, 20_000);
 });
