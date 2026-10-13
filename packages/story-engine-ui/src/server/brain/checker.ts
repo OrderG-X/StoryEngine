@@ -267,7 +267,8 @@ export interface ReviewVerdict {
   readonly earlierAgrees?: boolean;
 }
 
-const agreesFalse = (value: unknown): boolean => value === false || /^(?:false|no|f|否|对不上|不一致)$/iu.test(String(value ?? "").trim());
+/** R7 修复口径：布尔/枚举字段只认 schema 里的英文写法（false/no/f），不猜中文说法——模型真写了中文就当「没判」放过，不误报。 */
+const agreesFalse = (value: unknown): boolean => value === false || /^(?:false|no|f)$/iu.test(String(value ?? "").trim());
 
 /** 解析复核判断：K1 → verdict＋设定裁定。解析不了返回空表，按原把握保留。 */
 export function parseVerdicts(text: string): Map<string, ReviewVerdict> {
@@ -283,9 +284,9 @@ export function parseVerdicts(text: string): Map<string, ReviewVerdict> {
       const settingQuote = typeof record.settingQuote === "string" && record.settingQuote.trim() ? record.settingQuote.trim() : undefined;
       const hasDraft = record.draftAgrees !== undefined;
       const hasEarlier = record.earlierAgrees !== undefined;
-      const judged: ReviewVerdict["verdict"] = /^(?:no|false|不是|否)$/u.test(verdict)
+      const judged: ReviewVerdict["verdict"] = /^(?:no|false)$/u.test(verdict)
         ? "no"
-        : /^(?:sure|true|确定|是)$/u.test(verdict)
+        : /^(?:sure|true)$/u.test(verdict)
           ? "sure"
           : "maybe";
       out.set(id, {
@@ -400,8 +401,8 @@ export function parseSettingIssues(
   return out;
 }
 
-/** 第 4 遍 agrees 判定里「对不上」的写法：只认明确的 false / 否，其余（true / 没写）都当一致。 */
-const AGREES_FALSE = /^(?:false|no|f|否|对不上|不一致)$/iu;
+/** 第 4 遍 agrees 判定里「对不上」的写法：只认明确的 false / no / f，其余（true / 没写 / 中文说法）都当一致——宁可放过不误报。 */
+const AGREES_FALSE = /^(?:false|no|f)$/iu;
 
 /**
  * R7.3 解析第 4 遍（对设定本）的逐句判定：checks 里每条＝一句正文原句＋设定原句＋agrees。
@@ -434,7 +435,7 @@ export function parseSettingChecks(
     if (!settingQuote || !quote || !reason || SELF_DISMISSED.test(reason)) continue;
     const label = settingQuoteLabel(digest, settingQuote);
     if (!label) continue; // 设定原文和设定本对不上：不收
-    const confidence = /sure|确定/u.test(String(record.confidence ?? "")) && !/unsure|不确定/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
+    const confidence = /sure/u.test(String(record.confidence ?? "")) && !/unsure/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
     if (containsQuote(body, quote)) {
       out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: { label } });
       continue;

@@ -6,7 +6,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, selfReviewTask, settingCheckTask } from "./checker.js";
+import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
 import { foundationMessage, readFoundationDigest, settingQuoteLabel } from "./foundation-digest.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 import type { ContinuityIssueV2, EarlierText } from "../agent/continuity-v2/check-chapter.js";
@@ -189,6 +189,53 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
       { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, agrees: false, reason: "此点成立，说法一致不算矛盾" },
     ]), 6, BODY, earlier(), digest!);
     expect(issues).toEqual([]);
+  });
+
+  it("R7 修复口径：agrees 写中文说法（否/对不上/不一致）当一致放过；confidence 写「确定」不升 sure", () => {
+    const issues = parseSettingChecks(raw([
+      { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, agrees: "对不上", reason: "人物卡写三年前过世，第 3 章说五年" },
+      { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, agrees: "否", reason: "人物卡写三年前过世，第 3 章说五年" },
+      { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, agrees: "不一致", reason: "人物卡写三年前过世，第 3 章说五年" },
+      { quote: "陆川说她爷爷走了五年", quoteChapter: 6, settingQuote: "爷爷三年前过世", agrees: false, reason: "人物卡写爷爷三年前过世，新稿说走了五年", confidence: "确定" },
+    ]), 6, BODY, earlier(), digest!);
+    // 前三条中文 agrees 不宽进 → 当一致不收（宁可放过不误报）；第四条布尔 false 照收，confidence 中文不升 sure。
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ quote: "陆川说她爷爷走了五年", confidence: "maybe" });
+  });
+});
+
+describe("parseVerdicts：布尔/枚举字段只认 schema 的英文写法（R7 修复口径，中文说法不猜）", () => {
+  const raw = (verdicts: Record<string, unknown>[]) => JSON.stringify({ verdicts });
+
+  it("英文照旧：sure→sure、no→no、maybe→maybe、false→no、true→sure、真布尔 agrees 也认", () => {
+    const out = parseVerdicts(raw([
+      { id: "K1", verdict: "sure" },
+      { id: "K2", verdict: "no" },
+      { id: "K3", verdict: "maybe" },
+      { id: "K4", verdict: "false" },
+      { id: "K5", verdict: "true" },
+      { id: "K6", verdict: "sure", settingQuote: CARD_LINE, draftAgrees: false, earlierAgrees: "true" },
+    ]));
+    expect(out.get("K1")?.verdict).toBe("sure");
+    expect(out.get("K2")?.verdict).toBe("no");
+    expect(out.get("K3")?.verdict).toBe("maybe");
+    expect(out.get("K4")?.verdict).toBe("no");
+    expect(out.get("K5")?.verdict).toBe("sure");
+    expect(out.get("K6")).toMatchObject({ draftAgrees: false, earlierAgrees: true });
+  });
+
+  it("中文说法不宽进：确定/是 → maybe（不升 sure），不是/否 → maybe（不判 no）；draftAgrees「否」当一致放过", () => {
+    const out = parseVerdicts(raw([
+      { id: "K1", verdict: "确定" },
+      { id: "K2", verdict: "是" },
+      { id: "K3", verdict: "不是" },
+      { id: "K4", verdict: "sure", settingQuote: CARD_LINE, draftAgrees: "否", earlierAgrees: "对不上" },
+    ]));
+    expect(out.get("K1")?.verdict).toBe("maybe");
+    expect(out.get("K2")?.verdict).toBe("maybe");
+    expect(out.get("K3")?.verdict).toBe("maybe");
+    // K4 的 verdict 是英文 sure 照判；两句 agrees 写中文 → 都当「没判到对不上」（一致），方向是放过不是误报。
+    expect(out.get("K4")).toMatchObject({ verdict: "sure", draftAgrees: true, earlierAgrees: true });
   });
 });
 
