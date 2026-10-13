@@ -103,6 +103,7 @@ const readerRoles = (): readonly ReaderRole[] => [
  * （下次核账或定稿会接着补），所以调用方可以放心 `void`。
  * 三个角色共用同一条补读队列（每本书一条），按 checker → ledger → planner 依次补，不同时并发打服务商；
  * 同一本书、同一组角色已有一轮要读到 ≥ upTo 的补读在队里时，这次不重排（角色不同不算，照排）。
+ * R5.3：一轮读的途中作者又定稿了新章的话，这轮自己追到新末尾（见 catch-up.ts 的追新），不靠后面的预热补漏。
  * roles：显式点名要补的角色（调用方自己知道刚才等的是哪个角色，比如核账服务点名 checker）；缺省补全部三个角色。
  */
 export async function catchUpReaders(
@@ -120,7 +121,9 @@ export async function catchUpReaders(
   markReaderCatchUpQueued(root, roleIds, upTo);
   try {
     await runInReaderCatchUpQueue(root, async () => {
-      for (const role of wanted) await startReaderCatchUp(projectDir, role, upTo, options);
+      // R5.3 追新的基线：这轮真正开跑那一刻的已定稿章数，三个角色共用——读的途中新定稿的章，没轮到的角色也要追。
+      const chaseFrom = await countCommittedChapters(projectDir).catch(() => 0);
+      for (const role of wanted) await startReaderCatchUp(projectDir, role, upTo, { ...options, chaseFrom });
     });
   } finally {
     unmarkReaderCatchUpQueued(root, roleIds, upTo);

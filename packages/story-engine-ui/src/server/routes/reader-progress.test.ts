@@ -54,6 +54,26 @@ describe("GET /api/reader-progress（R4.3 在读前文轻量轮询）", () => {
     });
   });
 
+  it("R5.3 分母跟定稿走：progress.json 记的 58 是开读时的数，chapters/ 已定稿到 0059 → total 现算成 59", async () => {
+    const dir = await projectWithProgress("reader-progress-chase-", {
+      checker: { role: "checker", reading: true, done: 34, total: 58, updatedAt: "2026-10-13T00:00:00.000Z" },
+      planner: { role: "planner", reading: true, done: 8, total: 58, updatedAt: "2026-10-13T00:00:00.000Z" },
+    });
+    await mkdir(join(dir, "chapters"), { recursive: true });
+    await writeFile(join(dir, "chapters", "0059.md"), "# 第59章\n\n正文。\n", "utf-8");
+    const { statusCode, payload } = await get(dir);
+    expect(statusCode).toBe(200);
+    expect(payload).toEqual({
+      ok: true,
+      reading: true,
+      roles: [
+        { role: "checker", reading: true, done: 34, total: 59 },
+        { role: "ledger", reading: false, done: 0, total: 0 },
+        { role: "planner", reading: true, done: 8, total: 59 },
+      ],
+    });
+  });
+
   it("老书没开过编辑部（一个 progress 都没有）：reading:false、三角色 0/0，不炸", async () => {
     const dir = await makeHomeTempDir("reader-progress-fresh-");
     const { statusCode, payload } = await get(dir);

@@ -9,7 +9,7 @@
  *     不同时并发打模型服务商；不同轮次也按先来后到排在这条队上。
  */
 import { callConfiguredBrainModel } from "./checker.js";
-import { ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
+import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "./reader-progress.js";
 
 export type { ReaderProgress };
@@ -54,10 +54,14 @@ export interface ReadersCatchUpStatus {
 
 /** 三个角色的补读进度一览（开书概况和 /api/reader-progress 轮询共用这一份形状）。 */
 export async function readReadersCatchUpStatus(notesRoot: string, roleIds: readonly string[] = READER_ROLE_IDS): Promise<ReadersCatchUpStatus> {
+  // R5.3：total 读的时候现算——progress.json 里记的是开读那一刻的总数，读的途中作者又定稿了新章的话它是旧的。
+  // 分母跟当前已定稿章数走（chapters/ 就在 notesRoot 下；评测把笔记挪去临时目录时那里没有 chapters/，
+  // 数出来是 0、照旧用记下的数）。没写过 progress 的角色当没这回事，不硬造 0/N。
+  const committed = await countCommittedChapters(notesRoot).catch(() => 0);
   const roles = await Promise.all(roleIds.map(async (roleId): Promise<ReaderCatchUpRoleState> => {
     const progress = await readReaderProgress(notesRoot, roleId).catch(() => undefined);
     return progress
-      ? { role: roleId, reading: progress.reading, done: progress.done, total: progress.total, ...(progress.waiting ? { waiting: progress.waiting } : {}) }
+      ? { role: roleId, reading: progress.reading, done: progress.done, total: Math.max(progress.total, committed), ...(progress.waiting ? { waiting: progress.waiting } : {}) }
       : { role: roleId, reading: false, done: 0, total: 0 };
   }));
   return { reading: roles.some((role) => role.reading), roles };
@@ -112,7 +116,7 @@ export async function startReaderCatchUp(
   projectDir: string,
   role: ReaderRole,
   upTo: number,
-  options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string } = {},
+  options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string; readonly chaseFrom?: number } = {},
 ): Promise<void> {
   const root = options.notesRoot ?? projectDir;
   const key = `${root}\u0000${role.id}`;
@@ -122,7 +126,7 @@ export async function startReaderCatchUp(
   try {
     // 接着上次的进度标（重启 / 上次没成后 done 已经在盘上），别把界面上看到的章数打回 0。
     const previous = await readReaderProgress(root, role.id);
-    const total = Math.max(upTo, previous?.total ?? 0);
+    let total = Math.max(upTo, previous?.total ?? 0);
     await writeReaderProgress(root, {
       role: role.id,
       reading: true,
@@ -130,21 +134,30 @@ export async function startReaderCatchUp(
       total,
       updatedAt: new Date().toISOString(),
     });
-    await ensureReaderWindow({
-      projectDir,
-      role,
-      upTo,
-      callModel: options.callModel ?? callConfiguredBrainModel,
-      ...(options.notesRoot ? { notesRoot: options.notesRoot } : {}),
-      onProgress: async (chapter) => {
-        // 每读完一章落一次盘（等落完再写下一章，进度不回跳）：界面刷新（开书、各工具回包）就能看到最新进度。
-        await writeReaderProgress(root, { role: role.id, reading: true, done: chapter, total, updatedAt: new Date().toISOString() })
-          .catch(() => undefined);
-      },
-    }).then((result) => {
-      // 读到第几章如实记（某章定稿读不到时 ensure 会停在它前一章，不能谎报读到了 upTo）。
+    // R5.3 追新：一轮读完再看一眼已定稿到第几章——读的途中作者又定稿了新章（定稿预热和正在跑的这轮去重了、
+    // 没延伸到新章）就接着读到新末尾。基线 chaseFrom 是整轮开跑那一刻的已定稿数（catchUpReaders 传下来，
+    // 三个角色共用；直接单点调用时现取），只追「这轮读的途中新出现的」章：开跑前书里就比目标多的不吞
+    // （预热 / 点名补读本来就可能只补到某一章）。已写的笔记哈希对得上会直接复用，不会重复读同一章；
+    // 有章读不到（ensure 停在它前一章）时追了也停在原地，不空转。
+    const committedAtStart = options.chaseFrom ?? (await countCommittedChapters(projectDir).catch(() => 0));
+    for (;;) {
+      const result = await ensureReaderWindow({
+        projectDir,
+        role,
+        upTo: total,
+        callModel: options.callModel ?? callConfiguredBrainModel,
+        ...(options.notesRoot ? { notesRoot: options.notesRoot } : {}),
+        onProgress: async (chapter) => {
+          // 每读完一章落一次盘（等落完再写下一章，进度不回跳）：界面刷新（开书、各工具回包）就能看到最新进度。
+          await writeReaderProgress(root, { role: role.id, reading: true, done: chapter, total, updatedAt: new Date().toISOString() })
+            .catch(() => undefined);
+        },
+      });
       readThrough = result.readThrough;
-    });
+      const committed = await countCommittedChapters(projectDir).catch(() => 0);
+      if (committed <= Math.max(total, committedAtStart) || readThrough < total) break;
+      total = committed;
+    }
     await writeReaderProgress(root, {
       role: role.id,
       reading: false,

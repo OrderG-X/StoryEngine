@@ -8,6 +8,7 @@ import {
   isReaderCatchUpQueued,
   maybeStartReadersCatchUp,
   readReaderProgress,
+  readReadersCatchUpStatus,
   warmUpReaders,
 } from "./index.js";
 import type { BrainCallModel } from "./reader-window.js";
@@ -96,6 +97,66 @@ describe("三个角色共用一条补读队列（按角色依次补，不并发�
     await first;
     expect((await notes(dir, "checker")).length + (await notes(dir, "ledger")).length + (await notes(dir, "planner")).length).toBeGreaterThan(callsBefore);
     expect(isReaderCatchUpQueued(dir, ["checker", "ledger", "planner"], 2)).toBe(false); // 跑完撤了
+  });
+});
+
+describe("补读追上读的途中新定稿的章（R5.3）", () => {
+  it("补读到第 58 章途中定稿第 59 章：结束三个角色都有 0059.json、进度 x/59、同一章笔记不重复写", async () => {
+    const dir = await makeBook(58);
+    // 每个角色每章写笔记的模型调用次数——同一角色同一章调了两次就是重复读。
+    const noteCalls = new Map<string, number>();
+    let warmAfter59: Promise<void> | undefined;
+    let finalized = false;
+    const callModel: BrainCallModel = async (messages) => {
+      const chapter = Number(/第 (\d+) 章/u.exec(messages.at(-1)!.content)?.[1] ?? 0);
+      const role = messages[0]!.content.includes("连续性编辑") ? "checker" : messages[0]!.content.includes("记账员") ? "ledger" : "planner";
+      if (chapter > 0) {
+        noteCalls.set(`${role}:${chapter}`, (noteCalls.get(`${role}:${chapter}`) ?? 0) + 1);
+        // 任一角色读到第 30 章时作者定稿第 59 章：落章文件 + 走真路径的定稿预热（commit-apply 同款入口）。
+        if (!finalized && chapter >= 30) {
+          finalized = true;
+          await writeFile(join(dir, "chapters", "0059.md"), "# 第59章\n\n正文59。\n", "utf-8");
+          warmAfter59 = warmUpReaders(dir, 59, { callModel });
+        }
+      }
+      return `第${chapter}章笔记`;
+    };
+    await catchUpReaders(dir, 58, { callModel });
+    await warmAfter59; // 预热那轮也走完（排在后面，笔记已齐时它不读任何章）
+    // 三个角色都追到第 59 章：笔记文件在、进度行同款数据源显示 59/59。
+    for (const role of ["checker", "ledger", "planner"]) {
+      const files = await notes(dir, role);
+      expect(files).toContain("0059.json");
+      expect(files).toHaveLength(59);
+      await expect(readReaderProgress(dir, role)).resolves.toMatchObject({ reading: false, done: 59, total: 59 });
+    }
+    const status = await readReadersCatchUpStatus(dir);
+    expect(status.reading).toBe(false);
+    expect(status.roles.map((role) => [role.done, role.total])).toEqual([[59, 59], [59, 59], [59, 59]]);
+    // 全程每个角色每章只写一次笔记（记账员复验里漏得最狠，专门点它）。
+    expect(noteCalls.get("ledger:59")).toBe(1);
+    expect(noteCalls.get("checker:59")).toBe(1);
+    expect(noteCalls.get("planner:59")).toBe(1);
+    expect(noteCalls.size).toBe(3 * 59);
+    expect([...noteCalls.values()].every((count) => count === 1)).toBe(true);
+  });
+
+  it("读的途中不触发预热也会追：一轮跑完时自己看已定稿章数，变多了接着读到新末尾", async () => {
+    const dir = await makeBook(4);
+    let finalized = false;
+    const callModel: BrainCallModel = async (messages) => {
+      const chapter = Number(/第 (\d+) 章/u.exec(messages.at(-1)!.content)?.[1] ?? 0);
+      if (!finalized && chapter >= 2) {
+        finalized = true;
+        await writeFile(join(dir, "chapters", "0005.md"), "# 第5章\n\n正文5。\n", "utf-8");
+      }
+      return `第${chapter}章笔记`;
+    };
+    await catchUpReaders(dir, 4, { callModel }); // 没有任何预热触发，只靠补读自己追
+    for (const role of ["checker", "ledger", "planner"]) {
+      expect(await notes(dir, role)).toHaveLength(5);
+      await expect(readReaderProgress(dir, role)).resolves.toMatchObject({ reading: false, done: 5, total: 5 });
+    }
   });
 });
 
