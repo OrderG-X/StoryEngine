@@ -1263,6 +1263,16 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   };
 }
 
+/**
+ * 拼接点句号去重（编辑部 R5.4·新发现 4）：占位名册的两句选角回执自带句号（in-scene-detector 的
+ * 「本次没拿占位名把关。」），出稿回执在它后面再拼「。」曾得到「把关。。」。选角回执单独展示时
+ * 仍应带句号，所以不去改它，在这里归一：末尾句号收干净、补回恰好一个。
+ */
+function presenceSummarySentence(summary: string): string {
+  const trimmed = summary.trim().replace(/。+$/u, "");
+  return trimmed.length === 0 ? "" : `${trimmed}。`;
+}
+
 async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: ChapterPlan | undefined): Promise<GenerateDraftOutcome> {
   const { projectDir, chapter, writerClient } = input;
   const lengthPolicy = input.policies?.lengthPolicy ?? "annotate";
@@ -1359,7 +1369,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
           : `第 ${chapter} 章已生成 ${candidateCount} 个候选并选出第 ${(sampling.chosenIndex ?? 0) + 1} 个，但优胜稿写入工作稿失败：` +
             `${failureIssues.join("；")}。各候选情况见 candidatesReport。`
         : `第 ${chapter} 章出稿未通过，未写入工作稿：` +
-          `${failureIssues.length > 0 ? failureIssues.join("；") : "引擎拒绝写盘"}。${characterSelection.summary}。请重试或调整本章方向。`,
+          `${failureIssues.length > 0 ? failureIssues.join("；") : "引擎拒绝写盘"}。${presenceSummarySentence(characterSelection.summary)}请重试或调整本章方向。`,
       refreshScope: "full",
       characterSelection,
       ...contextBudget,
@@ -1609,7 +1619,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     summary:
       `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。` +
       candidateLine +
-      `${characterSelection.summary}。工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
+      `${presenceSummarySentence(characterSelection.summary)}工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
       (qualityPipeline && qualityPipeline.notes.length > 0 ? `\n${qualityPipeline.notes.join("\n")}` : "") +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +

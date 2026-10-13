@@ -98,6 +98,7 @@ vi.mock("../agent/draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineM
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
+import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../agent/presence/in-scene-detector.js";
 import { readFileContentWithRetry, readPreviousDraftForRollback, restoreDraftFile, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
@@ -221,6 +222,76 @@ describe("runGenerateDraft D1 enforce 路回读降级（GLM P3 旧账④）", ()
     expect(result.http.draftContent).toContain("主角拿到账册");
     // 无降级 → warnings 字段缺省，不打扰正常 200。
     expect(result.http.warnings).toBeUndefined();
+  }, 10_000);
+});
+
+// 编辑部 R5.4·新发现 4：占位名册的两句选角回执（in-scene-detector.ts:247/252）自带句号，
+// 出稿回执在拼接处再补「。」曾拼出「把关。。」。修复在拼接处去重：末尾句号归一成恰好一个。
+describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () => {
+  let projectDir: string | undefined;
+  // 原句照抄 in-scene-detector.ts:252（占位名册、无出场记账那支）——带句号收尾。
+  const presenceWithPeriod = (): CharacterPresenceResult => ({
+    selectedCharacterIds: [],
+    trace: { selectedCharacterIds: [], selectedNames: [], byId: {}, prevChapterFound: false },
+    summary: "本章相关角色：名册只有开书占位「主角」，最近定稿章也没有出场记账，本次没拿占位名把关。",
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-r54-"));
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("引擎拒稿（单候选）→ 失败回执不出现「。。」，选角句完整保留", async () => {
+    vi.mocked(resolveSelectedCharacterIds).mockResolvedValueOnce(presenceWithPeriod());
+    storyEngineMocks.runFastDraft.mockResolvedValueOnce({
+      chapter: 2,
+      passed: false,
+      issues: ["正文为空"],
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: {},
+    });
+
+    const result = await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient() });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain("没拿占位名把关。请重试或调整本章方向");
+    expect(result.summary).not.toContain("。。");
+  }, 10_000);
+
+  it("出稿成功 → 回执不出现「。。」，选角句照常收尾接下一句", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 2);
+    vi.mocked(resolveSelectedCharacterIds).mockResolvedValueOnce(presenceWithPeriod());
+    storyEngineMocks.runFastDraft.mockImplementationOnce(async () => {
+      await mkdir(dirname(draftPath), { recursive: true });
+      await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+      return {
+        chapter: 2,
+        passed: true,
+        draftPath,
+        title: "账册",
+        contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+        promptFingerprint: {},
+        issues: [],
+      };
+    });
+
+    const result = await runGenerateDraft({
+      projectDir: projectDir!,
+      chapter: 2,
+      writerClient: stubWriterClient(),
+      policies: { aiFlavorRecheck: false },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toContain("没拿占位名把关。工作稿尚未定稿");
+    expect(result.summary).not.toContain("。。");
   }, 10_000);
 });
 

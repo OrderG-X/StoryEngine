@@ -79,6 +79,10 @@ export interface StateOverview {
     readonly done: number;
     readonly openIntents: number;
     readonly cleanupVisibleCount: number;
+    /** cleanup 候选（低价值/过期）里仍是未收口（open/touched）的条数——与 open+touched 同一集合，恒 ≤ open+touched。
+     * 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进去，入库回执曾写出
+     * 「未收口的线索已积到 55 条，其中 78 条已经低价值或过期」。「其中 X 条」要用这个数。 */
+    readonly cleanupVisibleUnresolvedCount: number;
     readonly keyOpenItems: readonly StateOverviewThreadItem[];
   };
   readonly arcGoals: {
@@ -535,6 +539,11 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
   const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
   const intentDiagnostics = analyzeIntentLifecycle(threadPool, { currentChapter: currentChapter ?? undefined, sampleLimit: MAX_ITEMS });
   const cleanupVisibleCount = intentDiagnostics.totalIntents - intentDiagnostics.cleanupCandidateCounts.none;
+  // R5.4·新发现 4：「其中 X 条」与 open+touched 同一集合——只数仍未收口（open/touched）的 cleanup 候选，
+  // 已收口（done/stale）的不算（它们由 maintenance 面板和 cleanupVisibleCount 另行可见）。
+  const cleanupVisibleUnresolvedCount = intentDiagnostics.diagnostics.filter(
+    (item) => (item.status === "open" || item.status === "touched") && item.cleanupCandidateClass !== "none",
+  ).length;
   const diagnosticsByThread = new Map(intentDiagnostics.diagnostics.map((item) => [item.threadId, item]));
   const recentEvents = timelineEvents
     .slice()
@@ -620,6 +629,7 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
       done: threadPool.threads.filter((thread) => thread.status === "done").length,
       openIntents: threadPool.threads.filter((thread) => thread.type === "intent" && thread.status === "open").length,
       cleanupVisibleCount,
+      cleanupVisibleUnresolvedCount,
       keyOpenItems: (() => {
         const threadSelectChapter = currentChapter ?? Math.max(0, ...threadPool.threads.map((t) => t.firstSeenChapter ?? 0));
         const selected = selectRelevant({

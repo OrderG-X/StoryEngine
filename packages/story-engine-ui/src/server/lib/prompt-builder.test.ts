@@ -258,7 +258,7 @@ function minimalOverview(): StateOverview {
     project: { title: "测试书", genre: "都市", currentChapter: 1 },
     storyStatus: {},
     hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, keyOpenItems: [] },
+    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
     characters: { protagonist: "林远", knownCharacters: [{ id: "guo-xu", name: "林远", role: "主角" }] },

@@ -141,7 +141,7 @@ describe("撤销/恢复回执：路径 → 人话（R4.2·验收 3.2）", () => 
     expect(dedup).toEqual(["第 3 章定稿（重新找回）", "第 7 章工作稿"]);
   });
 
-  it("资料区其余路径各有短语；认不出的折成「其他文件 N 个」；超 8 项折成「等 N 项」", () => {
+  it("资料区其余路径各有短语；作者看得懂的目录兜底短语；认不出的才折成「其他文件 N 个」；超 8 项折成「等 N 项」", () => {
     expect(describeRevertedPaths([
       m("story/character-matrix.json"),
       m("timeline/events.json"),
@@ -154,13 +154,60 @@ describe("撤销/恢复回执：路径 → 人话（R4.2·验收 3.2）", () => 
     ], names)).toEqual([
       "角色关系", "时间线", "主线目标", "世界状态", "地点设定", "道具与资源", "写作规则", "故事日历",
     ]);
-    expect(describeRevertedPaths([m("diagnostics/whatever.json")], names)).toEqual(["其他文件 1 个"]);
+    // R5.4·新发现 4：具体规则认不出、但目录作者看得懂 → 按目录给人话，不折「其他文件」。
+    expect(describeRevertedPaths([
+      m("story/unknown-ledger.json"),
+      m("world/other.json"),
+      a("characters/roster-note.json"),
+      m("timeline/extra.json"),
+      m("time/other.json"),
+      m("chapters/0009.meta.json"),
+      m("drafts/scratch.txt"),
+    ], names)).toEqual(["设定资料", "世界设定", "角色卡资料", "时间线资料", "时间资料", "章节文件", "草稿文件"]);
+    // 真认不出（根目录杂项、陌生目录）才说「其他文件 N 个」。
+    expect(describeRevertedPaths([m("notes/whatever.txt"), m("README.md")], names)).toEqual(["其他文件 2 个"]);
     const overflow = describeRevertedPaths(
       [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => m(`drafts/fast/chapter-${String(n).padStart(4, "0")}.md`)),
       names,
     );
     expect(overflow.at(-1)).toBe("等 10 项");
     expect(overflow.length).toBe(8);
+  });
+
+  it("R5.4·新发现 4：内部记录（.story-engine-ui/、diagnostics/、metrics、.story-engine-tx/、agents/）不列不计数", () => {
+    // 复验那组真实路径：撤销出稿那步连带回退的工作台缓存/查错记录/诊断日志。
+    const items = describeRevertedPaths([
+      m("drafts/fast/chapter-0002.md"),
+      m("drafts/plans/chapter-0002.json"),
+      m(".story-engine-ui/chapter-workspaces/chapter-0002.json"),
+      m(".story-engine-ui/continuity-checks/0002.json"),
+      a(".story-engine-ui/uncarded-character-memo.json"),
+      a("diagnostics/commit-chapter-0002.json"),
+    ], names);
+    expect(items).toEqual(["第 2 章工作稿", "第 2 章章纲"]);
+    // 其余内部目录（快照排除同源 + 老书残留）同样静默跳过，绝不折「其他文件」。
+    expect(describeRevertedPaths([
+      m(".story-engine-tx/commit-chapter-0002/manifest.json"),
+      m("agents/checker/notes/0002.json"),
+      m(".story-engine-ui/metrics/chapter-0002.jsonl"),
+    ], names)).toEqual([]);
+  });
+
+  it("R5.4·新发现 4：撤销回执全文只报「第 2 章工作稿、第 2 章的章纲」，不再出现「其他文件」", () => {
+    const text = buildRestoreReceipt({
+      title: "已撤销上一步（出稿：第2章）。",
+      reverted: [
+        m("drafts/fast/chapter-0002.md"),
+        m("drafts/plans/chapter-0002.json"),
+        m(".story-engine-ui/chapter-workspaces/chapter-0002.json"),
+        m(".story-engine-ui/continuity-checks/0002.json"),
+        a(".story-engine-ui/uncarded-character-memo.json"),
+        a("diagnostics/commit-chapter-0002.json"),
+      ],
+      revertedLater: [],
+      nameById: names,
+    });
+    expect(text).toBe("已撤销上一步（出稿：第2章）。这次退回：第 2 章工作稿、第 2 章章纲。要找回，去「历史」页点「恢复前的自动存档」。");
   });
 });
 

@@ -376,6 +376,38 @@ describe("R4.2 首稿可撤销 + 撤销回执写清退回内容", () => {
     expect(receipt).toContain("这步之后写的第 5 章工作稿也一并退回了");
     expect(receipt).toContain("要找回，去「历史」页点「恢复前的自动存档」");
   }, 30_000);
+
+  // R5.4·新发现 4：真机撤销回执说「另外还有 4 个文件」——其实是出稿那步连带落盘的内部记录
+  // （工作台缓存/查错记录/诊断日志）。真 git 全链：这些文件确实进了 revert 集合，回执必须滤掉它们。
+  it("出稿连带落盘的内部记录进了 revert 集合 → 回执只报工作稿和章纲，不出现「其他文件」", async () => {
+    const dir = await makeRenamableProject();
+    await createSnapshot(dir, "出稿：第5章");
+    // 出稿那步真实会写的文件形状（复验实锤）：工作稿 + 章纲 + 四处内部记录。
+    await writeChapter5Draft(dir);
+    await mkdir(join(dir, "drafts", "plans"), { recursive: true });
+    await writeFile(join(dir, "drafts", "plans", "chapter-0005.json"), JSON.stringify({ beats: [] }), "utf-8");
+    await mkdir(join(dir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
+    await writeFile(join(dir, ".story-engine-ui", "chapter-workspaces", "chapter-0005.json"), "{}", "utf-8");
+    await mkdir(join(dir, ".story-engine-ui", "continuity-checks"), { recursive: true });
+    await writeFile(join(dir, ".story-engine-ui", "continuity-checks", "0005.json"), "{}", "utf-8");
+    await writeFile(join(dir, ".story-engine-ui", "uncarded-character-memo.json"), "{}", "utf-8");
+    await mkdir(join(dir, "diagnostics"), { recursive: true });
+    await writeFile(join(dir, "diagnostics", "commit-chapter-0005.json"), "{}", "utf-8");
+
+    const undone = await undoLastChange(dir);
+    expect(undone?.undoneLabel).toBe("出稿：第5章");
+    // 内部记录确实被 git 卷进了 revert 集合（修复前回执会把它们数成「其他文件 4 个」）。
+    expect(undone?.reverted.some((file) => file.path.startsWith(".story-engine-ui/"))).toBe(true);
+    expect(undone?.reverted.some((file) => file.path.startsWith("diagnostics/"))).toBe(true);
+    const receipt = buildRestoreReceipt({
+      title: `已撤销上一步（${undone?.undoneLabel}）。`,
+      reverted: undone?.reverted ?? [],
+      revertedLater: undone?.revertedLater ?? [],
+      nameById: names,
+    });
+    expect(receipt).toContain("这次退回：第 5 章工作稿、第 5 章章纲。");
+    expect(receipt).not.toContain("其他文件");
+  }, 30_000);
 });
 
 // P2（2026-10-02）对话历史不入快照：撤销只回退写作状态，用户已看到的聊天记录不随 undo 消失。
