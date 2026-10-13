@@ -510,6 +510,10 @@ export async function ensureReaderWindow(input: {
   readonly maxChars?: number;
   /** 每写完一章笔记调一次（后台补读拿它落进度）；返回 Promise 会等它落完再写下一章。 */
   readonly onProgress?: (chapter: number) => void | Promise<void>;
+  /** 当场补读真正开始前调一次（done＝已有笔记数；R5.2 等读标注用）。不会补（笔记齐了 / 超额走冷窗口）就不调。 */
+  readonly onCatchUpBegin?: (done: number, total: number) => void | Promise<void>;
+  /** 当场补读结束（含中途失败）调一次（done＝落下的笔记数；R5.2 等读标注收尾用）。 */
+  readonly onCatchUpEnd?: (done: number, total: number) => void | Promise<void>;
 }): Promise<EnsuredReaderWindow> {
   const root = input.notesRoot ?? input.projectDir;
   const maxChars = input.maxChars ?? READER_WINDOW_MAX_CHARS;
@@ -596,17 +600,26 @@ export async function ensureReaderWindow(input: {
       });
       return { messages: renderWindowLayout(input.role, entries, layout, volumeNotes), foldedChapters: layout.foldedThrough };
     };
-    for (let chapter = firstStale; chapter <= state.upTo; chapter += 1) {
-      const body = state.bodies[chapter - 1]!;
-      const window = await renderWindow();
-      const note = (await input.callModel(
-        [...window.messages, { role: "user", content: readUserContent(input.role, chapter, body) }],
-        { json: false },
-      )).trim();
-      if (!note) throw new Error(`第 ${chapter} 章的读书笔记是空的`);
-      await writeNote(input.projectDir, root, input.role.id, { chapter, textHash: sha(body), note, createdAt: new Date().toISOString(), roleHash });
-      entries.push({ chapter, body, note });
-      await input.onProgress?.(chapter);
+    if (firstStale <= state.upTo) {
+      // 真要当场补笔记了：先标一笔「开始等」（R5.2 等读标注），再一章一章补。
+      await input.onCatchUpBegin?.(entries.length, state.upTo);
+    }
+    try {
+      for (let chapter = firstStale; chapter <= state.upTo; chapter += 1) {
+        const body = state.bodies[chapter - 1]!;
+        const window = await renderWindow();
+        const note = (await input.callModel(
+          [...window.messages, { role: "user", content: readUserContent(input.role, chapter, body) }],
+          { json: false },
+        )).trim();
+        if (!note) throw new Error(`第 ${chapter} 章的读书笔记是空的`);
+        await writeNote(input.projectDir, root, input.role.id, { chapter, textHash: sha(body), note, createdAt: new Date().toISOString(), roleHash });
+        entries.push({ chapter, body, note });
+        await input.onProgress?.(chapter);
+      }
+    } finally {
+      // 等读收尾（含中途失败）：把进度从「在读」翻回「读完」，失败时 done 如实停在落下的那章。
+      if (firstStale <= state.upTo) await input.onCatchUpEnd?.(entries.length, state.upTo);
     }
     const final = await renderWindow();
     return {

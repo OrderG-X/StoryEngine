@@ -122,6 +122,27 @@ describe("declareChapterDeltaByLedger", () => {
     expect(await stat(join(dir, "agents")).then(() => true, () => false)).toBe(false);
   });
 
+  it("当场补了笔记（R5.2）→ waited 带补章范围并进 outcome，进度盘上「记账在等它读完」读完即清", async () => {
+    const dir = await makeBook([CH1, CH2]);
+    const seenWhileWaiting: unknown[] = [];
+    const { callModel } = fakeModel(DECLARATION_JSON);
+    const wrapped: BrainCallModel = async (messages, options) => {
+      if (!options.json) {
+        seenWhileWaiting.push(JSON.parse(await readFile(join(dir, "agents", LEDGER_ROLE.id, "progress.json"), "utf-8")));
+      }
+      return callModel(messages, options);
+    };
+    const result = await declareChapterDeltaByLedger({ projectDir: dir, chapter: 3, draft: DRAFT, callModel: wrapped });
+    expect(result.outcome.status).toBe("model");
+    expect(result.waited).toMatchObject({ from: 1, to: 2 });
+    expect(result.outcome.waited).toMatchObject({ from: 1, to: 2 });
+    // 等读期间：标着「记账在等它读完」。
+    expect(seenWhileWaiting[0]).toMatchObject({ role: "ledger", reading: true, done: 0, total: 2, waiting: "记账" });
+    // 读完：reading 翻回 false、waiting 清掉。
+    await expect(readFile(join(dir, "agents", LEDGER_ROLE.id, "progress.json"), "utf-8").then((text) => JSON.parse(text)))
+      .resolves.toMatchObject({ reading: false, done: 2, total: 2 });
+  });
+
   it("补笔记失败 → fallback + 原因（已写下的笔记留着）", async () => {
     const dir = await makeBook([CH1, CH2]);
     let count = 0;

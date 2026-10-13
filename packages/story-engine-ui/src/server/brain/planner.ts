@@ -23,6 +23,7 @@ import {
   type PlanChapterMaterials,
 } from "../agent/chapter-plan/plan-chapter.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
+import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import type { PlanProblem } from "./checker.js";
 
 export const PLANNER_ROLE: ReaderRole = {
@@ -47,7 +48,7 @@ const PLAN_RETRIES = 1;
 const PLAN_MAX_THINKING_MS = 150_000;
 
 export type PlanChapterByPlannerResult =
-  | { readonly ok: true; readonly plan: ChapterPlan; /** 冷窗口＝章纲员还没读完全书，这次按已有笔记 + 最近 K 章原文拟的纲（R4.4 起不再跳过）。 */ readonly cold?: ColdCoverage }
+  | { readonly ok: true; readonly plan: ChapterPlan; /** 冷窗口＝章纲员还没读完全书，这次按已有笔记 + 最近 K 章原文拟的纲（R4.4 起不再跳过）。 */ readonly cold?: ColdCoverage; /** 这次先当场补了笔记（R5.2）：回执据此加「这次先等章纲员读完…再拟纲」。 */ readonly waited?: ReaderWaited }
   | { readonly ok: false; readonly reason: string };
 
 /** 窗口（读到 N-1）后面接的那条任务消息：作者方向 + 账本材料 + 和旧路同一份的章纲 JSON 要求。 */
@@ -116,7 +117,15 @@ export async function planChapterByPlanner(input: {
 }): Promise<PlanChapterByPlannerResult> {
   let window: BrainMessage[];
   let cold: ColdCoverage | undefined;
+  let waited: ReaderWaited | undefined;
   try {
+    // 等读标注（R5.2）：当场补笔记期间把「拟纲在等它读完」写进 progress.json，进度行走 R4.3 的轮询自己显示。
+    const root = input.notesRoot ?? input.projectDir;
+    const waiting = readerWaitingHandlers(root, PLANNER_ROLE.id, input.chapter - 1, "拟纲");
+    const onProgress = input.onProgress
+      ? async (chapter: number) => { await waiting.onProgress(chapter); await input.onProgress?.(chapter); }
+      : waiting.onProgress;
+    const ensureStartedAt = Date.now();
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role: PLANNER_ROLE,
@@ -124,8 +133,11 @@ export async function planChapterByPlanner(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
-      ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+      onCatchUpBegin: waiting.onCatchUpBegin,
+      onProgress,
+      onCatchUpEnd: waiting.onCatchUpEnd,
     }));
+    if (ready.built > 0) waited = { from: ready.reused + 1, to: ready.readThrough, ms: Date.now() - ensureStartedAt };
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：要补的笔记太多不再「按没有章纲出稿」——已有笔记 + 最近 K 章原文先拟，
       // 冷窗口的范围随结果带回（章纲的 note 如实标），笔记由调用方在后台接着补。冷窗口不落盘任何笔记。
@@ -170,12 +182,12 @@ export async function planChapterByPlanner(input: {
         skeleton = { plan, dayOffset };
         continue;
       }
-      return { ok: true, plan: await finalizePlan(input.projectDir, plan, dayOffset, materials), ...(cold ? { cold } : {}) };
+      return { ok: true, plan: await finalizePlan(input.projectDir, plan, dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
   }
-  if (skeleton) return { ok: true, plan: await finalizePlan(input.projectDir, skeleton.plan, skeleton.dayOffset, materials), ...(cold ? { cold } : {}) };
+  if (skeleton) return { ok: true, plan: await finalizePlan(input.projectDir, skeleton.plan, skeleton.dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   return { ok: false, reason: `章纲没拟成（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
 }
 
@@ -220,7 +232,7 @@ export function reviseTask(chapter: number, plan: ChapterPlan, problems: readonl
 
 /** 审章纲结果：earlierQuote 逐字核对过（代码核），point 指 beats 的序号（1 起）。改一轮的结果，ok=false 时调用方用原章纲。 */
 export type RevisePlanResult =
-  | { readonly ok: true; readonly plan: ChapterPlan; /** 冷窗口＝章纲员还没读完全书，这次按已有笔记 + 最近 K 章原文改的纲。 */ readonly cold?: ColdCoverage }
+  | { readonly ok: true; readonly plan: ChapterPlan; /** 冷窗口＝章纲员还没读完全书，这次按已有笔记 + 最近 K 章原文改的纲。 */ readonly cold?: ColdCoverage; /** 这次先当场补了笔记（R5.2）。 */ readonly waited?: ReaderWaited }
   | { readonly ok: false; readonly reason: string };
 
 /**
@@ -239,7 +251,12 @@ export async function revisePlanByPlanner(input: {
 }): Promise<RevisePlanResult> {
   let window: BrainMessage[];
   let cold: ColdCoverage | undefined;
+  let waited: ReaderWaited | undefined;
   try {
+    // 等读标注（R5.2）：改纲也在拟纲流程里，当场补笔记期间标「拟纲在等它读完」。
+    const root = input.notesRoot ?? input.projectDir;
+    const waiting = readerWaitingHandlers(root, PLANNER_ROLE.id, input.chapter - 1, "拟纲");
+    const ensureStartedAt = Date.now();
     const ready = await withStep("跟读补笔记", () => ensureReaderWindow({
       projectDir: input.projectDir,
       role: PLANNER_ROLE,
@@ -247,7 +264,11 @@ export async function revisePlanByPlanner(input: {
       callModel: input.callModel,
       ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
       ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      onCatchUpBegin: waiting.onCatchUpBegin,
+      onProgress: waiting.onProgress,
+      onCatchUpEnd: waiting.onCatchUpEnd,
     }));
+    if (ready.built > 0) waited = { from: ready.reused + 1, to: ready.readThrough, ms: Date.now() - ensureStartedAt };
     if (ready.missing > 0) {
       // R4.4 冷窗口兜底：没读完也照改（已有笔记 + 最近 K 章原文，冲突的前文原段本来就贴在任务消息里）。
       const built = await buildColdReaderWindow({
@@ -308,5 +329,5 @@ export async function revisePlanByPlanner(input: {
     ? { ...merged, storyDay: reconcileStoryDay(merged, dayOffset, lastDay).storyDay ?? input.plan.storyDay }
     : reconcileStoryDay(merged, dayOffset, lastDay);
   await writeChapterPlan(input.projectDir, settled);
-  return { ok: true, plan: settled, ...(cold ? { cold } : {}) };
+  return { ok: true, plan: settled, ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
 }

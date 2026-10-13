@@ -131,6 +131,22 @@ describe("开书时先把第一个要读的角色标成在读（R4.3）", () => 
     await writeAtomicallyHelper(dir, "checker", { role: "checker", reading: false, done: 3, total: 3, updatedAt: "t" });
     expect((await readReadersCatchUpStatus(dir)).reading).toBe(false);
   });
+
+  it("readReadersCatchUpStatus 的 total 现算（R5.3）：开读时记的 58 旧了，chapters/ 定稿到 0059 就按 59 给", async () => {
+    const dir = await makeBook(58);
+    await writeAtomicallyHelper(dir, "checker", { role: "checker", reading: true, done: 34, total: 58, updatedAt: "t" });
+    await writeAtomicallyHelper(dir, "ledger", { role: "ledger", reading: false, done: 58, total: 58, updatedAt: "t" });
+    // 读的途中作者定稿第 59 章（progress.json 里的 58 还是开读那一刻的数）。
+    await writeFile(join(dir, "chapters", "0059.md"), "# 第59章\n\n第59章的正文。\n", "utf-8");
+    expect(await readReadersCatchUpStatus(dir)).toEqual({
+      reading: true,
+      roles: [
+        { role: "checker", reading: true, done: 34, total: 59 },
+        { role: "ledger", reading: false, done: 58, total: 59 },
+        { role: "planner", reading: false, done: 0, total: 0 }, // 没写过的角色不硬造 0/59
+      ],
+    });
+  });
 });
 
 /** 测试里直接摆一个 progress.json（readReaderProgress 认的形状）。 */

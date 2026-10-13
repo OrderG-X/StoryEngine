@@ -99,6 +99,7 @@ const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
  * 「编辑部在读前文：核账员 34/58 · 记账员 排队 · 章纲员 排队」。在读的带 done/total（分母和核账回执同口径：
  * 共 y 章（已定稿））；还没轮到的或这次没读成的显示「排队」（下一次开书 / 核账会重排）；读完的划掉；
  * 全读完（reading:false）这行消失。数据：开书概况带初值，在读期间 useReaderCatchUp 每 5 秒轮询轻量接口自走。
+ * R5.2：核账 / 拟纲 / 记账在等哪个角色当场补笔记，那个角色后面标「（核账在等它读完）」——走的还是这条轮询链路。
  */
 export function ReadersCatchUpNote({ status }: {
   readonly status?: ReaderCatchUpStatus | null;
@@ -112,7 +113,8 @@ export function ReadersCatchUpNote({ status }: {
         {status.roles.map((role, index) => {
           const label = READER_ROLE_LABELS[role.role] ?? role.role;
           const finished = !role.reading && role.total > 0 && role.done >= role.total;
-          const text = role.reading || finished ? `${label} ${role.done}/${role.total}` : `${label} 排队`;
+          const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
+          const text = role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}` : `${label} 排队`;
           return (
             <span key={role.role}>
               {index > 0 ? " · " : ""}

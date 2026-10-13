@@ -295,6 +295,61 @@ describe("commit_preview", () => {
     expect(out.summary).not.toContain("没记上");
   });
 
+  it("冷窗口缺口没被原文补全（笔记和原文之间还有章没给）→ 仍如实说「更早的细节可能没记全」", async () => {
+    const projectDir = await makeProject("冷窗口记账漏口", "林远");
+    for (const chapter of [1, 2, 3]) {
+      await writeFile(defaultCommittedChapterPath(projectDir, chapter), `# 第${chapter}章\n\n林远在第${chapter}天推进。\n`, "utf-8");
+    }
+    await writeDraft(projectDir, 4, longDraft(4, "林远"));
+
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 4,
+      declareDelta: async () => ({
+        status: "model" as const,
+        declaration: {
+          chapter: 4,
+          mainEvent: { summary: "林远掂量账册", quote: "林远在会议室外停下脚步" },
+          seededForeshadowing: [],
+          resolvedForeshadowing: [],
+          resourceDeltas: [],
+          keyLeads: [],
+        },
+        cold: { notedThrough: 1, rawFrom: 3, rawTo: 3 },
+      }),
+    });
+
+    expect(out.declarationStatus).toBe("model");
+    // 笔记到第 1 章、原文只给了第 3 章：第 2 章这次对不到——老措辞照说。
+    expect(out.summary).toContain("记账员还没读完全书（第 1 / 3 章），这次按已读笔记（到第 1 章） + 第 3～3 章原文记账，更早的细节可能没记全");
+  });
+
+  it("记账前等过记账员补笔记（outcome.waited，R5.2）→ 摘要如实标「这次先等记账员读完…再记账」", async () => {
+    const projectDir = await makeProject("等读记账", "林远");
+    await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n林远已经在黑龙潭边等候。\n", "utf-8");
+    await writeDraft(projectDir, 2, longDraft(2, "林远"));
+
+    const out = await buildCommitPreviewToolOutput({
+      projectDir,
+      chapter: 2,
+      declareDelta: async () => ({
+        status: "model" as const,
+        declaration: {
+          chapter: 2,
+          mainEvent: { summary: "林远掂量账册", quote: "林远在会议室外停下脚步" },
+          seededForeshadowing: [],
+          resolvedForeshadowing: [],
+          resourceDeltas: [],
+          keyLeads: [],
+        },
+        waited: { from: 1, to: 1, ms: 45_000 },
+      }),
+    });
+
+    expect(out.declarationStatus).toBe("model");
+    expect(out.summary).toContain("【这次先等记账员读完第 1 章（用时 45 秒）再记账】");
+  });
+
   it("声明 continuityWithPrevious=true 或缺省 → 不产生 continuity_break warning", async () => {
     const projectDir = await makeProject("衔接正常", "林远");
     await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第1章\n\n林远已经在黑龙潭边等候。\n", "utf-8");

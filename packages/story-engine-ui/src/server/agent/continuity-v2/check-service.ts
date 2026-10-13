@@ -12,8 +12,10 @@ import {
   checkChapterByReader,
   countCommittedChapters,
   DEFAULT_READER_VARIANT,
+  describeReaderWait,
   type BrainCallModel,
   type ColdCoverage,
+  type ReaderWaited,
 } from "../../brain/index.js";
 import {
   issueStillPresent,
@@ -48,6 +50,8 @@ export interface ChapterCheckResult {
   /** 冷窗口核账（R4.4：核账员还没读完全书也先核，不跳过）：notedThrough=已读笔记到第几章、
    *  rawFrom～rawTo=这次给了原文的章（0＝一章都没给）。summary 已如实说明对照范围。 */
   readonly coverage?: { readonly mode: "cold"; readonly notedThrough: number; readonly rawFrom: number; readonly rawTo: number };
+  /** 这次核账前先当场补了笔记（R5.2）：补了第 from～to 章、花了 ms 毫秒。summary 已带「这次先等核账员读完…再核」。 */
+  readonly waited?: ReaderWaited;
   /** 作者标过「不是问题」、这次没再报的条数。 */
   readonly dismissed: number;
   /** 正文、前文、账本都没改过，直接用的上次结果（没调模型）。 */
@@ -85,7 +89,7 @@ async function checkByReader(input: {
   readonly carryOver: readonly ContinuityIssueV2[];
   readonly ledgerFacts?: readonly FactEntry[];
   readonly callModel: BrainCallModel;
-}): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage }> {
+}): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited }> {
   const reader = await checkChapterByReader({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -104,7 +108,7 @@ async function checkByReader(input: {
   const issues = mergeContinuityIssues([...ledger.issues, ...input.carryOver, ...reader.issues])
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const }))
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
-  return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}) };
+  return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
 }
 
 export async function checkChapterBody(
@@ -127,7 +131,7 @@ export async function checkChapterBody(
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
     ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier))
     : [];
-  let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage };
+  let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited };
   let coldTotal: number | undefined;
   if (reused) {
     result = { issues: memory!.issues, failures: [] };
@@ -158,7 +162,11 @@ export async function checkChapterBody(
   const where = (issue: { readonly earlierChapter: number }) => (issue.earlierChapter === chapter ? "本章前文" : `第 ${issue.earlierChapter} 章`);
   const dismissedNote = dismissed > 0 ? `（另有 ${dismissed} 处你标过「不是问题」，没再报。）` : "";
   const reusedNote = reused ? "这一章和前文都没改过，结果同上次。" : "";
+  // 等读那一句（R5.2 必做 2）：这次核账前先等核账员当场补了笔记，如实说补了哪几章、花了多久。
+  const waitedNote = !reused && result.waited ? `${describeReaderWait("checker", result.waited, "核")}。` : "";
   // 冷窗口的对照范围（R4.4）：如实说「已读笔记 + 第 a～b 章原文 + 账本，更早的细节可能漏」，绝不装作核了全书。
+  // （R5.2 试过「缺 3～8 章不等、直接冷窗口」并把缺口补全时的措辞改成「还差 N 章笔记、直接对照原文」——
+  //   大考卷比分输了（33.3%/43.9% 查全、46.6s>30s，见 scripts/eval/results/r52-cold-gap-*.json），已删，只留等读标注。）
   const coldNote = result.coverage
     ? `核账员还没读完全书（第 ${result.coverage.notedThrough} / ${coldTotal ?? result.coverage.rawTo} 章），这次对照的是${
       [
@@ -169,11 +177,11 @@ export async function checkChapterBody(
     }，更早的细节可能漏。`
     : "";
   const baseSummary = !ok
-    ? `第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
+    ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
     : sure.length + maybe.length === 0
-      ? `${reusedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
+      ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
       : [
-        `${reusedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`,
+        `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`,
         ...sure.slice(0, 3).map((issue) => `· 「${issue.quote.slice(0, 40)}」和${where(issue)}「${issue.earlierQuote.slice(0, 40)}」：${issue.reason}`),
       ].join("\n");
   return {
@@ -183,6 +191,7 @@ export async function checkChapterBody(
     maybe,
     failures: [...result.failures],
     ...(result.coverage ? { coverage: { mode: "cold" as const, ...result.coverage } } : {}),
+    ...(!reused && result.waited ? { waited: result.waited } : {}),
     dismissed,
     reused,
     summary: baseSummary,
