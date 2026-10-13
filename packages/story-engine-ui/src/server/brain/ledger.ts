@@ -46,6 +46,7 @@ const LEDGER_EXTRA_RULES: readonly string[] = [
   "前文立过的打算 / 待办，本章正文写出了做完或兑现，就报进 resolvedForeshadowing 并把那条的编号（如 T2）填进 targetThreadHint。报 keyLeads advanced 或留 pendingIntents 之前先想一遍：它是不是其实已经做完了？做完了的一律报回收，别让它一直挂着；谜底揭开也一样，不要新建目标。",
   "判断待办做没做完，只看那个动作本身：正文写到这个动作做成了（问过了、找到了、交出去了、打开了、办下来了），这条待办就算完成，报回收；动作完成之后又冒出的新问题，是另外的事，另开新线索，不影响旧待办回收。",
   "正文里出现的新称呼如果指的是已有人物：charactersPresent 的 name 写正文里那个称呼（必须逐字出现在 quote 里），aliasOf 填那个人的已确立名字，identityHint 写「即 某某」。同一个人本章的多种叫法只报一条，用最主要的那个。",
+  "time 每章都给 daysSincePrevious（第 1 章没有上一章，整个 time 省略）：正文明写隔几天就照写；没明写就对照你读过的上一章结尾和本章开头判断——上一章结尾在夜里、本章开头接着当晚的事就是 0（同一天），隔了一夜才是 1。quote 给本章开头最能说明时间的那句原句（代码会逐字核对在正文里）。只有确实判断不了才不填这个数。",
   "可选字段（conflict / discovery / decision / continuityWithPrevious）没有就整个键都不写；写了就每个子键都写全，不要只写一半或给空对象。",
 ];
 

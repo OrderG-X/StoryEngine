@@ -449,10 +449,13 @@ describe("时间声明（故事时间线）", () => {
     expect(negative.time).toEqual({ weekday: "周二", quote: "三天后，周二下午，苏晚才又见到周屿。" });
   });
 
-  it("隔几天必须写在原句里：原句只有「周五下午」时不收模型推的「隔 0 天」，只收星期", () => {
+  it("原句没写「第二天」这类时间词也收隔几天（R7.6：记账员读过前文，依上一章结尾和本章开头判断；引擎只核原句在正文）", () => {
     const text = "周五下午，苏晚提前一个钟头关了店。";
     const verified = verifyChapterDelta({ ...base, mainEvent: { summary: "关店", quote: "苏晚提前一个钟头关了店" }, time: { daysSincePrevious: 0, weekday: "周五", timeOfDay: "下午", quote: "周五下午，苏晚提前一个钟头关了店。" } }, text);
-    expect(verified.time).toEqual({ weekday: "周五", timeOfDay: "下午", quote: "周五下午，苏晚提前一个钟头关了店。" });
+    expect(verified.time).toEqual({ daysSincePrevious: 0, weekday: "周五", timeOfDay: "下午", quote: "周五下午，苏晚提前一个钟头关了店。" });
+    // 依据上下文判断的承接句（句里没有「第二天 / 当晚」这类词）同样收：原句逐字在正文里就行。
+    const carried = verifyChapterDelta({ ...base, mainEvent: { summary: "守钟", quote: "她翻出旧棉袄披上" }, time: { daysSincePrevious: 0, timeOfDay: "夜里", quote: "她在床上躺到快十点，还是爬了起来。" } }, "她在床上躺到快十点，还是爬了起来。她翻出旧棉袄披上，出了门。");
+    expect(carried.time).toEqual({ daysSincePrevious: 0, timeOfDay: "夜里", quote: "她在床上躺到快十点，还是爬了起来。" });
     const next = verifyChapterDelta({ ...base, mainEvent: { summary: "雨停", quote: "第二天雨停了" }, time: { daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" } }, "第二天雨停了，天还阴着。");
     expect(next.time).toEqual({ daysSincePrevious: 1, quote: "第二天雨停了，天还阴着。" });
   });

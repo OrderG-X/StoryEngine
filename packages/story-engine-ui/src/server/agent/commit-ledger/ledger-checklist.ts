@@ -100,8 +100,11 @@ export function buildLedgerChecklist(input: {
   }
   if (input.time) {
     const guessed = input.time.source === "fallback";
+    // 第 1 章没有上一章（R7.6）：别说「按上一章的第二天估的」——它只是从故事第 1 天开篇记起。
     const why = guessed
-      ? "（正文里没找到时间说法，按上一章的第二天估的，不对就改）"
+      ? chapter === 1
+        ? "（正文里没找到时间说法，先按故事第 1 天记的，不对就改）"
+        : "（正文里没找到时间说法，按上一章的第二天估的，不对就改）"
       : input.time.source === "author" ? "（你定的）" : "";
     items.push({
       id: "day",

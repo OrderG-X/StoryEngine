@@ -107,11 +107,14 @@ export interface ContinuityWithPreviousDeclaration {
 }
 
 /**
- * 本章的时间（2026-10-10 引擎升级：故事时间线）：正文里交代了「和上一章隔了几天 / 星期几 / 时段」就声明，
- * 附交代时间的原句。没交代就不声明——引擎按上一章 +1 估、并请作者确认，绝不让模型自己推算「第几天」。
+ * 本章的时间（2026-10-10 引擎升级：故事时间线；2026-10-14 编辑部 R7.6 放宽）：
+ * 「和上一章隔了几天」由声明方（读过前文的记账员）每章声明——正文明写了隔几天就照写；
+ * 没明写就依据上一章结尾和本章开头判断（承接当晚 / 同一天报 0），quote 附本章开头最能说明时间的那句原句。
+ * 引擎只做确定性核对：原句逐字在正文里、天数是 0..3650 的整数；星期仍必须明写在原句里（防模型自己推）。
+ * 确实判断不了才不声明 daysSincePrevious——引擎按上一章 +1 估、并请作者确认。
  */
 export interface TimeDeclaration {
-  /** 和上一章隔了几天（0 = 同一天，1 = 第二天，3 = 三天后）。正文没交代就不填。 */
+  /** 和上一章隔了几天（0 = 同一天，1 = 第二天，3 = 三天后）。正文明写或依上下文判断；判断不了就不填。 */
   readonly daysSincePrevious?: number;
   /** 正文明写的星期（「周二」「星期天」）。 */
   readonly weekday?: string;
@@ -218,9 +221,6 @@ export interface VerifiedChapterDelta {
   /** 是否有任何一条声明通过校验（全拒 → 上层整体回退正则）。 */
   readonly hasAnyVerified: boolean;
 }
-
-/** 原句里交代「隔了多久」的说法。 */
-const TIME_SPAN_EXPRESSION = /第二天|第三天|次日|翌日|隔天|隔日|当天|同一天|这天|当晚|当夜|那天晚上|这天晚上|那天夜里|过了(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|星期|个月|月|年)|(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|个?星期|个月|月|年)(?:后|以后|之后|过去|过后)|一周后|周末|下周|上周|昨天|前天|今天|明天|后天/u;
 
 /** 原句里交代「章内换了天」的说法（不认「当天 / 昨天」这类不换天或往回说的）。 */
 const IN_CHAPTER_DAY_CHANGE = /第[二三四五六七八九十]天|第二日|次日|翌日|隔天|隔日|转天|过了(?:[一二两三四五六七八九十百\d]+|几|半)(?:天|日|周|个?星期|个月)|(?:[一二两三四五六七八九十百\d]+|几)(?:天|日|周|个?星期|个月)(?:后|以后|之后|过去|过后)|一周后|又过了/u;
@@ -354,9 +354,11 @@ export function verifyChapterDelta(
     const declaredWeekday = parseWeekday(declared.weekday) ?? (quotedWeekdays.length === 1 ? quotedWeekdays[0] : undefined);
     const weekdayOk = declaredWeekday !== undefined && quotedWeekdays.includes(declaredWeekday);
     const days = declared.daysSincePrevious;
-    // 「隔了几天」必须是原句里写出来的（第二天 / 三天后 / 当晚 …），不能是模型推的
-    // （2026-10-10 记账考卷：原句只有「周五下午」，模型声明「隔 0 天」，第 3 章被记成和第 2 章同一天）。
-    const daysOk = typeof days === "number" && Number.isInteger(days) && days >= 0 && days <= 3650 && TIME_SPAN_EXPRESSION.test(declared.quote);
+    // 「隔了几天」不再要求原句里写着时间词（2026-10-14 编辑部 R7.6）：声明方是读过前文的记账员，
+    // 依据上一章结尾和本章开头判断同一天 / 隔几天，quote 是本章开头锚定时间的原句（如「她在床上躺到快十点」），
+    // 词表门（原句必须含「第二天 / 当晚 …」）会把这类合法声明全打掉、落回「上一章 +1」——第 6、8 章都估错。
+    // 旧的词表门防的是没读过前文的单章模型瞎推（2026-10-10 记账考卷），那条路已删；确定性核对保留：原句逐字在正文 + 整数范围。
+    const daysOk = typeof days === "number" && Number.isInteger(days) && days >= 0 && days <= 3650;
     if (!weekdayOk && !daysOk && !declared.timeOfDay) return undefined;
     return {
       quote: declared.quote,
