@@ -34,7 +34,7 @@ import { isRealDraftContent } from "./utils/draftContent.js";
 import { isDraftFileWriteSuppressed } from "./utils/draftWriteGuard.js";
 import { buildWorkspaceAutosaveRequest } from "./utils/workspaceAutosaveRequest.js";
 import { prepareVersionedWorkspaceSave, recordWorkspaceRevision } from "./utils/workspaceRevisionTracker.js";
-import { describeWorkspaceRevisionConflict, reloadAfterWorkspaceRevisionConflict, workspaceRevisionConflictCause } from "./utils/workspaceRevisionConflict.js";
+import { describeDeferredWorkspaceRevisionConflict, describeWorkspaceRevisionConflict, hasPendingRevisionReload, reloadAfterWorkspaceRevisionConflict, workspaceRevisionConflictCause } from "./utils/workspaceRevisionConflict.js";
 import {
   persistCapturedAutosavePayload,
   type CapturedAutosavePayload,
@@ -63,6 +63,12 @@ function reconcileWorkspaceConflict(
     // 文案按成因：本页刚做过撤销（agent undo_last_change / 块级撤销）→ 说「撤销回退」，不再误导成「另一窗口」。
     notify: () => nav.showToast(describeWorkspaceRevisionConflict(workspaceRevisionConflictCause()), 6500),
     reload: () => window.location.reload(),
+    // R7.2：AI 回合进行中撞 409 不立刻 reload（会腰斩回合、丢这轮回复）——记「回合收尾要重载」，
+    // useChat 的回合 finally 走「写回会话文件 → 重载」收尾。已挂起待重载时，迟到的第二笔 409 同样并入
+    // （回合刚结束、会话正往回写的那几百毫秒里，立刻刷还是会丢回复）。没有回合在跑时行为不变。
+    turnActive: () => useWorkspaceStore.getState().chatLoading || hasPendingRevisionReload(),
+    notifyDeferred: () =>
+      nav.showToast(describeDeferredWorkspaceRevisionConflict(workspaceRevisionConflictCause()), 6500),
   });
 }
 

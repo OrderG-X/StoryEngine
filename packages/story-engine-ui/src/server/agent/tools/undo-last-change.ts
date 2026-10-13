@@ -11,6 +11,10 @@
  * R4.2（验收 3.2）：回执必须写清**实际退回了什么**——恢复是把状态整个搬回存档点，超出「这一步」的
  * 后续写入也会一并退回；旧回执只说「只撤了这一步」，模型顺着编了句「第 5 章草稿没受影响」（假的）。
  * 现在 summary 列出退回清单（路径→人话），「这步之后写的」单独说明，并指明去「历史」页找回。
+ *
+ * R7.2（十章验收 3.2）：作者说「撤销上一步」指上一回合的全部改动。前端请求带「上一个有写盘回合的
+ * 首个快照」（turnSnapshots[0]）时优先整回合回退；带不了/锚点失效时按原逻辑撤最后一个工具步，
+ * 回执明说「上一回合改了 N 处，这次只退回了最后 1 处」，绝不留给模型编「都撤干净了」的空间。
  */
 import { buildStateOverview } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
@@ -21,7 +25,7 @@ import { withUiOverviewDetails } from "../../lib/project-io.js";
 import { buildRestoreReceipt } from "../../lib/snapshot-changes.js";
 import { undoLastChange } from "../../lib/snapshot.js";
 import { readCharacterNameById } from "../presence/entity-labels.js";
-import { readProjectDirFromContext } from "../request-context.js";
+import { readLastTurnUndoHintFromContext, readProjectDirFromContext } from "../request-context.js";
 
 const inputSchema = z.object({});
 
@@ -44,7 +48,9 @@ export const undoLastChangeTool = createTool({
     if (!projectDir) {
       throw new Error("undo_last_change 缺少 projectDir：请确认调用 agent 时通过 RequestContext 注入了 projectDir。");
     }
-    const result = await undoLastChange(projectDir);
+    // R7.2：前端带的「上一个有写盘回合的首个快照」——优先整回合回退（一回合改两处也全撤）。
+    const turnHint = readLastTurnUndoHintFromContext(context);
+    const result = await undoLastChange(projectDir, turnHint);
     const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 })
       .then((value) => withUiOverviewDetails(projectDir, value))
       .catch(() => undefined);
@@ -59,12 +65,17 @@ export const undoLastChangeTool = createTool({
     }
     // 路径→人话要认角色名；认不出（书读不了）就用空表，短语退到「角色卡资料」，绝不吐裸 id。
     const nameById = await readCharacterNameById(projectDir).catch(() => new Map<string, string>());
-    const summary = buildRestoreReceipt({
+    let summary = buildRestoreReceipt({
       title: `已撤销上一步（${result.undoneLabel}）。`,
       reverted: result.reverted,
       revertedLater: result.revertedLater,
       nameById,
     });
+    // 做不到整回合撤时如实说清（R7.2）：hint 说上一回合改了 N 处而本次只退回 1 处，绝不留给模型
+    // 顺着「已撤销」编「都撤干净了」的空间。再说一次「撤销上一步」即可接着整回合回退（锚点仍在）。
+    if (!result.viaTurnHint && turnHint && turnHint.changes > 1) {
+      summary += `\n注意：上一回合共改了 ${turnHint.changes} 处，这次只退回了最后 1 处；要整回合回退，再说一次「撤销上一步」。`;
+    }
     return {
       ok: true,
       undone: true,

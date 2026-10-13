@@ -19,7 +19,7 @@
  */
 import type { ModelMessage } from "ai";
 
-import { buildProjectRequestContext } from "../agent/request-context.js";
+import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
 import { getStoryAgent } from "../agent/story-agent.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
@@ -657,6 +657,8 @@ async function handleAgentChat(
 
     // H3：把用户当前所在章注入 RequestContext（工具缺省回退用）+ system 上下文（引导 agent 默认作用于该章）。
     const currentChapter = readCurrentChapter(body.currentChapter);
+    // R7.2：带上「上一个有写盘回合的首个快照」（前端 turnSnapshots[0]）——undo 工具优先整回合回退。
+    const lastTurnUndoHint = parseLastTurnUndoHint(body.lastTurnUndoHint);
 
     const agent = await getStoryAgent();
     // 出稿流式：注入 sink，让 generate_draft 工具把正文 delta 实时转成 draft-delta SSE 事件（前端逐字进编辑器）。
@@ -666,6 +668,7 @@ async function handleAgentChat(
       currentChapter,
       (payload) => sendEvent("draft-delta", payload),
       readLatestUserTurnText(messages),
+      lastTurnUndoHint,
     );
 
     res.writeHead(200, {

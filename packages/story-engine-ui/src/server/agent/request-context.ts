@@ -33,6 +33,30 @@ export const REQUEST_CONTEXT_USER_TURN_TEXT_KEY = "userTurnText";
  */
 export const REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY = "userConfirmedTool";
 
+/**
+ * R7.2：上一个有写盘回合的首个快照（该回合第一次写盘前）+ 该回合写盘处数。
+ * 前端从 turnSnapshots[0] 带来；undo 工具优先按它整回合回退（作者说「撤销上一步」指上一回合全部改动）。
+ */
+export const REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY = "lastTurnUndoHint";
+
+export interface LastTurnUndoHint {
+  /** git commit id（40 位十六进制）。 */
+  readonly snapshotId: string;
+  /** 上一回合写盘改动的处数（turnSnapshots 条数）。 */
+  readonly changes: number;
+}
+
+/** 容错解析：snapshotId 必须是 40 位十六进制 commit id，changes 必须是正整数；其余（缺省/非法）一律 undefined。 */
+export function parseLastTurnUndoHint(raw: unknown): LastTurnUndoHint | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const snapshotId = record.snapshotId;
+  const changes = record.changes;
+  if (typeof snapshotId !== "string" || !/^[0-9a-f]{40}$/u.test(snapshotId)) return undefined;
+  if (typeof changes !== "number" || !Number.isInteger(changes) || changes < 1) return undefined;
+  return { snapshotId, changes };
+}
+
 /** 标记「本次执行是用户点按钮确认过的」（undefined 清除）。 */
 export function markUserConfirmedTool(context: RequestContext | undefined, toolName: string | undefined): void {
   context?.set(REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY, toolName);
@@ -54,19 +78,21 @@ function isPositiveInt(value: unknown): value is number {
 }
 
 /**
- * 路由层：把当前请求的 projectDir（+ 可选 currentChapter）包成 RequestContext，喂给 agent.stream/generate。
- * currentChapter 非正整数时不注入（由工具各自的默认行为兜底）。
+ * 路由层：把当前请求的 projectDir（+ 可选 currentChapter / lastTurnUndoHint）包成 RequestContext，
+ * 喂给 agent.stream/generate。currentChapter 非正整数时不注入（由工具各自的默认行为兜底）。
  */
 export function buildProjectRequestContext(
   projectDir: string,
   currentChapter?: number,
   draftDeltaSink?: DraftDeltaSink,
   userTurnText?: string,
+  lastTurnUndoHint?: LastTurnUndoHint,
 ): RequestContext {
   const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir]];
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
   if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   if (typeof userTurnText === "string" && userTurnText.trim()) entries.push([REQUEST_CONTEXT_USER_TURN_TEXT_KEY, userTurnText]);
+  if (lastTurnUndoHint) entries.push([REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY, lastTurnUndoHint]);
   return new RequestContext(entries);
 }
 
@@ -92,6 +118,12 @@ export function readDraftDeltaSinkFromContext(context: ToolExecutionContext | un
 export function readUserTurnTextFromContext(context: ToolExecutionContext | undefined): string | undefined {
   const raw = context?.requestContext?.get(REQUEST_CONTEXT_USER_TURN_TEXT_KEY);
   return typeof raw === "string" && raw.trim() ? raw : undefined;
+}
+
+/** 工具层：读出「上一个有写盘回合的首个快照」锚点（缺失/形状不对返回 undefined，undo 走默认逐步回退）。 */
+export function readLastTurnUndoHintFromContext(context: ToolExecutionContext | undefined): LastTurnUndoHint | undefined {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY);
+  return parseLastTurnUndoHint(raw);
 }
 
 /**

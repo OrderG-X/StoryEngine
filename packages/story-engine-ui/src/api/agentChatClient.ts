@@ -21,6 +21,11 @@ export interface StreamAgentChatRequest {
   readonly messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
   /** 用户当前打开/停留的章号。后端据此引导 agent 默认作用于该章、工具缺省回退该值（H3：回看旧章不写错章）。 */
   readonly currentChapter?: number;
+  /**
+   * R7.2：上一个有写盘回合的首个快照（该回合第一次写盘前）。后端 undo 工具优先按它整回合回退，
+   * 与作者说「撤销上一步」= 撤上一回合全部改动 的理解一致。
+   */
+  readonly lastTurnUndoHint?: { readonly snapshotId: string; readonly changes: number };
   /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
   readonly action?: AgentUserAction;
 }
@@ -243,6 +248,7 @@ export async function streamAgentChat(
         projectPath: input.projectPath,
         messages: input.messages,
         ...(typeof input.currentChapter === "number" ? { currentChapter: input.currentChapter } : {}),
+        ...(input.lastTurnUndoHint ? { lastTurnUndoHint: input.lastTurnUndoHint } : {}),
         ...(input.action ? { action: input.action } : {}),
       }),
       signal: idleController.signal,

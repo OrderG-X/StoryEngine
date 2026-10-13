@@ -21,7 +21,7 @@ import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
 import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
 import { reloadPage } from "../utils/pageReload.js";
-import { markRecentWorkspaceUndo } from "../utils/workspaceRevisionConflict.js";
+import { markRecentWorkspaceUndo, takePendingRevisionReload } from "../utils/workspaceRevisionConflict.js";
 import type {
   ChapterAdviceCard,
   ChapterAgentCard,
@@ -57,6 +57,8 @@ import {
   retargetWorkspaceOperation,
 } from "../utils/workspaceOperation.js";
 import { recordWorkspaceRevision } from "../utils/workspaceRevisionTracker.js";
+import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
+import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 
 /* ------------------------------------------------------------------ */
@@ -1504,11 +1506,15 @@ export function useChat(params: UseChatParams): UseChatResult {
       try {
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
         const currentChapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
+        // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
+        // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
+        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useWorkspaceStore.getState().workspace.messages);
         await streamAgentChat(
           {
             projectPath,
             messages: [...conversation, { role: "user", content: text }],
             ...(typeof currentChapterNumber === "number" ? { currentChapter: currentChapterNumber } : {}),
+            ...(lastTurnUndoHint ? { lastTurnUndoHint } : {}),
             ...(action ? { action } : {}),
           },
           {
@@ -1811,8 +1817,15 @@ export function useChat(params: UseChatParams): UseChatResult {
             }
           }
         }
-        // agent 撤销收尾：接管已完成（autosave 仍冻结）且用户没切书/切章 → 回合最末整页重载（在释放 token 之前判定）。
+        // 回合收尾的重载裁定（在释放 token 之前判定）：
+        //   ① agent 撤销接管已完成（autosave 仍冻结）且用户没切书/切章 → 回合最末整页重载；
+        //   ② R7.2 回合中撞过 409（reloadAfterWorkspaceRevisionConflict 延迟了重载）→ 走同一段收尾，
+        //      先把整回合回复写回会话文件再重载，绝不腰斩。
+        const pendingConflictReload = takePendingRevisionReload();
         const reloadAfterAgentUndo = agentUndoSyncPromise !== null && ownsCurrentWorkspace();
+        const reloadAfterTurnConflict = pendingConflictReload !== null
+          && ownsCurrentWorkspace()
+          && useNavigationStore.getState().projectPath === pendingConflictReload.projectPath;
         if (isWorkspaceOperationCurrent(operation)) {
           if (ownsCurrentWorkspace()) setChatLoading(false);
           finishWorkspaceOperation(operation);
@@ -1820,7 +1833,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         agentAbortRef.current = null; // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）。
         // 把对话同步冲进 sessionStorage 并标记「下一次开书优先 session 对话」（磁盘上的旧按章对话文件可能被 git 回退），
         // 再整页重载——与 undoToTurn 同一收尾；放在回合最末，不腰斩 agent 的收尾文字。
-        if (reloadAfterAgentUndo) {
+        if (reloadAfterAgentUndo || reloadAfterTurnConflict) {
+          // R7.2：撤销/回退后，旧回合挂着的建议条（确认定稿 / 确认写入资料…）已过时——落盘前剥掉，
+          // 重载后不再显示（sessionStorage 与会话文件同源，都要走剥掉后的版本）。
+          const liveMessages = useWorkspaceStore.getState().workspace.messages;
+          const withoutStaleSuggestions = stripStaleTurnSuggestions(liveMessages);
+          if (withoutStaleSuggestions !== liveMessages) {
+            useWorkspaceStore.getState().updateWorkspace({ messages: withoutStaleSuggestions });
+          }
           markUndoReloadPreferSession();
           flushPendingMessageSave();
           // 重载后对话以后端会话文件为准（readChatSession），而撤销期间 autosave 冻结、会话文件停在回合中途——
@@ -1831,8 +1851,9 @@ export function useChat(params: UseChatParams): UseChatResult {
               .catch(() => undefined);
           }
           reloadPage();
-        } else if (agentUndoSyncPromise !== null) {
-          // 用户已切书/切章：撤销前的旧稿已随工作区替换消失，不重载；解冻 autosave 让新工作区照常保存。
+        } else if (agentUndoSyncPromise !== null || pendingConflictReload !== null) {
+          // 用户已切书/切章：撤销前的旧稿已随工作区替换消失，不重载；解冻 autosave 让新工作区照常保存
+          // （延迟的冲突重载同理：不重载就必须解冻，否则本页 autosave 永久停摆）。
           resumeAutosave();
         }
       }
