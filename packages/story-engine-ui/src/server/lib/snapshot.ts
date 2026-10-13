@@ -533,9 +533,21 @@ export function humanizeUndoLabel(label: string): string {
  * 每个 agent 写操作前都建检查点（runWithSnapshot/createSnapshot），故恢复到最近一个 differing 检查点即撤销上一步；
  * 跳过恢复操作自身的产物，使「连续撤销」逐步回退、不卡在原地。无可撤销改动 → null（诚实，调用方据此如实回报）。
  * restoreSnapshot 会先存档当前态，故「撤销」本身也能被再撤销，历史永不丢。
+ *
+ * R7.2：带 turnHint（前端「上一个有写盘回合的首个快照」= 该回合第一次写盘前）时优先整回合回退——
+ * 作者说「撤销上一步」指的是上一回合的全部改动，默认按工具步回退会把一回合改的两处只撤掉最后一处。
+ * 锚点不在回看窗口里 / 与当前工作树一致（已撤过）→ 落回默认逐步回退，viaTurnHint=false 如实标记。
  */
+export interface TurnUndoHint {
+  /** 上一个有写盘回合第一次写盘前的快照 id（git commit）。 */
+  readonly snapshotId: string;
+  /** 该回合写盘改动的处数，供调用方回执「只撤了最后 1 处」时说清 N。 */
+  readonly changes: number;
+}
+
 export async function undoLastChange(
   projectDir: string,
+  turnHint?: TurnUndoHint,
 ): Promise<{
   readonly undoneLabel: string;
   readonly restored: SnapshotEntry;
@@ -543,10 +555,19 @@ export async function undoLastChange(
   readonly reverted: readonly CommitFileChange[];
   /** 其中「撤的那一步之后才写的」——连带退回，回执要单独说明。 */
   readonly revertedLater: readonly CommitFileChange[];
+  /** true=按前端带的整回合锚点回退；false=默认逐步回退（hint 缺失/失效，或已撤到锚点继续往前走）。 */
+  readonly viaTurnHint: boolean;
 } | null> {
   await ensureSnapshotRepo(projectDir);
   const snaps = await listSnapshots(projectDir, 200);
   const untracked = await hasUntrackedFiles(projectDir);
+  if (turnHint && snaps.some((snap) => snap.id === turnHint.snapshotId)) {
+    // 与当前工作树一致（这回合已整回合撤过）→ 不重复 no-op 恢复，落回默认逻辑继续往前走（连续撤销）。
+    if (await snapshotDiffersFromWorkingTree(projectDir, turnHint.snapshotId, untracked)) {
+      const outcome = await restoreSnapshot(projectDir, turnHint.snapshotId);
+      return { undoneLabel: "上一回合全部改动", ...outcome, viaTurnHint: true };
+    }
+  }
   const trees = await readCommitTrees(projectDir, 200);
   let lostRestoreTarget = false;
   const findTarget = async (followRestores: boolean): Promise<SnapshotEntry | undefined> => {
@@ -576,7 +597,7 @@ export async function undoLastChange(
   const target = (await findTarget(true)) ?? (lostRestoreTarget ? await findTarget(false) : undefined);
   if (!target) return null;
   const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, target.id);
-  return { undoneLabel: humanizeUndoLabel(target.label), restored, reverted, revertedLater };
+  return { undoneLabel: humanizeUndoLabel(target.label), restored, reverted, revertedLater, viaTurnHint: false };
 }
 
 // ---------------------------------------------------------------------------

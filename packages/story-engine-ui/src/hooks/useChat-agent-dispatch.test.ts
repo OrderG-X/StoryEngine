@@ -10,9 +10,9 @@ import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsC
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
-import { __resetAutosaveControlForTest, isAutosaveSuspended } from "../utils/autosaveControl.js";
+import { __resetAutosaveControlForTest, isAutosaveSuspended, suspendAutosave } from "../utils/autosaveControl.js";
 import { __setPageReloaderForTest } from "../utils/pageReload.js";
-import { __resetRecentWorkspaceUndoForTest, hasRecentWorkspaceUndo } from "../utils/workspaceRevisionConflict.js";
+import { __resetRecentWorkspaceUndoForTest, hasRecentWorkspaceUndo, reloadAfterWorkspaceRevisionConflict } from "../utils/workspaceRevisionConflict.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -1229,6 +1229,162 @@ describe("useChat agent undo_last_change × autosave（P2）", () => {
     expect(isAutosaveSuspended()).toBe(true);
     expect(reloads).toHaveLength(1);
     expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
+  });
+});
+
+// R7.2（十章验收 3.2）：回合进行中撞 409 不再立刻整页重载——立刻刷会腰斩正在跑的 AI 回合、这轮回复
+// 丢失（会话文件里也没有）。现在 App 的冲突兜底带 turnActive=chatLoading：回合中只记「要重载」，
+// 回合收尾由 useChat finally 走与 agent 撤销同一段「写回会话文件 → 重载」。
+describe("useChat 回合中撞 409（R7.2：回复不丢、重载延到回合收尾）", () => {
+  const reloads: number[] = [];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    resetStore();
+    __resetAutosaveControlForTest();
+    __resetRecentWorkspaceUndoForTest();
+    reloads.length = 0;
+    __setPageReloaderForTest(() => { reloads.push(Date.now()); });
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+  });
+  afterEach(() => {
+    __setPageReloaderForTest(null);
+    __resetAutosaveControlForTest();
+    __resetRecentWorkspaceUndoForTest();
+  });
+
+  /** 复刻 App.reconcileWorkspaceConflict 的冲突兜底调用（同一 util、同一 turnActive 口径）。 */
+  function triggerConflict409(): void {
+    reloadAfterWorkspaceRevisionConflict({
+      projectPath: "/tmp/story-engine-agent",
+      chapter: 3,
+      revision: 6,
+      recordRevision: () => undefined,
+      suspend: suspendAutosave,
+      notify: () => undefined,
+      reload: () => reloads.push(Date.now()),
+      turnActive: () => useWorkspaceStore.getState().chatLoading,
+      notifyDeferred: () => undefined,
+    });
+  }
+
+  it("回合进行中收到 409：不立刻重载；回合收尾先把含回复的对话写进会话文件，然后再重载；过时建议条被清掉", async () => {
+    // 上一回合挂着建议条（如「确认写入资料」）：撤销/回退后已过时，重载后不应再显示。
+    useWorkspaceStore.setState({
+      workspace: {
+        ...mockWorkspaceData,
+        messages: [{
+          id: "prev-assistant",
+          role: "assistant",
+          content: "已改好，请确认写入资料。",
+          suggestedActions: [{
+            id: "confirm-write",
+            label: "确认写入资料",
+            description: "写入资料",
+            permission: "project_config_write",
+            requiresConfirmation: true,
+            endpoint: "suggestion-1",
+          }],
+        }],
+      },
+    });
+    scriptAgentStream((handlers) => {
+      // 回合进行中（chatLoading=true）：撤销前发出的 autosave PUT 撞上 409（真实链路由 App 的
+      // autosave 错误处理触发；这里在回合中直接调同一兜底，等价复刻）。
+      triggerConflict409();
+      expect(reloads).toHaveLength(0); // 关键：回合中绝不立刻 reload
+      expect(isAutosaveSuspended()).toBe(true); // autosave 已冻结，旧内容不再写回
+      handlers.onTextDelta("撤销完成，两处都退回去了。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
+
+    // 回合正常收尾后才重载（恰好一次），回复没被腰斩。
+    expect(reloads).toHaveLength(1);
+    expect(useWorkspaceStore.getState().chatLoading).toBe(false);
+    // 重载前把整回合（含 AI 回复）写回会话文件——这是回复不丢的关键。
+    const saved = vi.mocked(saveChatSessionMessages).mock.calls.at(-1)?.[2] as readonly { content?: string; suggestedActions?: unknown }[] | undefined;
+    expect(saved?.at(-1)?.content).toBe("撤销完成，两处都退回去了。");
+    // 落盘的消息里旧建议条已被剥掉（重载后不再显示）。
+    expect((saved ?? []).every((m) => !m.suggestedActions)).toBe(true);
+    expect(window.sessionStorage.getItem("se-undo-prefer-session")).toBe("1");
+  });
+
+  it("回合进行中收到 409 但用户中途切了书：不重载，解冻 autosave（不留永久停摆）", async () => {
+    scriptAgentStream((handlers) => {
+      triggerConflict409();
+      useNavigationStore.setState({ projectPath: "/tmp/another-book" });
+      handlers.onTextDelta("已处理。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
+
+    expect(reloads).toHaveLength(0);
+    expect(isAutosaveSuspended()).toBe(false);
+  });
+
+  it("没有 409 的普通回合：行为不变（不重载、不动会话收尾）", async () => {
+    scriptAgentStream((handlers) => {
+      handlers.onTextDelta("普通回复。");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("现在写到哪了"); });
+
+    expect(reloads).toHaveLength(0);
+    expect(useWorkspaceStore.getState().chatLoading).toBe(false);
+  });
+});
+
+// R7.2：请求带上「上一个有写盘回合的首个快照」——服务端 undo 工具优先按它整回合回退。
+describe("useChat 请求携带整回合撤销锚点 lastTurnUndoHint（R7.2）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    resetStore();
+    mockedRenameChatSession.mockResolvedValue({ ok: true, index: { sessions: [], activeSessionId: "session-a" } });
+    scriptAgentStream((handlers) => handlers.onDone());
+  });
+
+  it("上一回合写了两个快照 → 请求带 { snapshotId: 首个, changes: 2 }", async () => {
+    useWorkspaceStore.setState({
+      workspace: {
+        ...mockWorkspaceData,
+        messages: [{
+          id: "prev-assistant",
+          role: "assistant",
+          content: "两处都改好了。",
+          turnSnapshots: [
+            { toolName: "revise_draft", snapshotId: `${"a".repeat(40)}` },
+            { toolName: "foundation_write", snapshotId: `${"b".repeat(40)}` },
+          ],
+        }],
+      },
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
+
+    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
+    expect(input.lastTurnUndoHint).toEqual({ snapshotId: "a".repeat(40), changes: 2 });
+  });
+
+  it("纯聊天会话没有写盘快照 → 不带该字段（服务端走默认逐步回退）", async () => {
+    useWorkspaceStore.setState({
+      workspace: { ...mockWorkspaceData, messages: [{ id: "prev", role: "assistant", content: "聊聊天。" }] },
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("撤销上一步"); });
+
+    const [input] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
+    expect(input.lastTurnUndoHint).toBeUndefined();
   });
 });
 
