@@ -119,3 +119,94 @@ describe("useReaderCatchUp 在读前文轮询（R4.3）", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("useReaderCatchUp 新的盖旧的＋动作进行中也轮询（R6.2 复验新发现 2）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchMock.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  it("轮询拿到 reading:false 停了之后，概况刷新带来新初值（reading:true）：旧快照作废、显示新初值并重新轮询", async () => {
+    fetchMock.mockResolvedValue(allDone);
+    const { result, rerender } = renderHook(
+      ({ initial }: { readonly initial: ReaderCatchUpStatus }) => useReaderCatchUp("/books/demo", initial),
+      { initialProps: { initial: reading } },
+    );
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current).toBe(allDone); // 全读完：照收、停轮询
+    await advancePoll();
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // 停了
+
+    // 同一次打开里后来的补读：定稿预热 / 点核账让服务端又开读，概况刷新带来新初值（reading:true、新对象）。
+    const freshInitial: ReaderCatchUpStatus = {
+      reading: true,
+      roles: [
+        { role: "checker", reading: false, done: 10, total: 10 },
+        { role: "ledger", reading: true, done: 3, total: 10 },
+        { role: "planner", reading: false, done: 0, total: 10 },
+      ],
+    };
+    rerender({ initial: freshInitial });
+    expect(result.current).toBe(freshInitial); // 旧轮询快照（reading:false）盖不过新初值
+    const next: ReaderCatchUpStatus = {
+      reading: true,
+      roles: [
+        { role: "checker", reading: false, done: 10, total: 10 },
+        { role: "ledger", reading: true, done: 7, total: 10 },
+        { role: "planner", reading: false, done: 0, total: 10 },
+      ],
+    };
+    fetchMock.mockResolvedValue(next);
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // 轮询重新起步
+    expect(fetchMock).toHaveBeenLastCalledWith("/books/demo");
+    expect(result.current).toBe(next);
+  });
+
+  it("动作进行中（actionInFlight）即使 reading:false 也轮询；回包到了（翻 false）按 reading 停", async () => {
+    fetchMock.mockResolvedValue(allDone);
+    const { rerender } = renderHook(
+      ({ busy }: { readonly busy: boolean }) => useReaderCatchUp("/books/demo", allDone, busy),
+      { initialProps: { busy: true } },
+    );
+    await advancePoll();
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // reading:false 但动作在等回包：照轮
+    // 回包到了：动作结束、补读没在读 → 停。
+    rerender({ busy: false });
+    await advancePoll();
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("动作进行中轮到补读在读（reading:true）：回包到了也继续轮，全读完才停", async () => {
+    fetchMock.mockResolvedValue(allDone);
+    const { rerender } = renderHook(
+      ({ busy }: { readonly busy: boolean }) => useReaderCatchUp("/books/demo", allDone, busy),
+      { initialProps: { busy: true } },
+    );
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 动作触发的补读还在读（比如核账在等它读完）：轮询如实看到 reading:true。
+    fetchMock.mockResolvedValue(reading);
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 回包到了，但 reading:true——照旧轮。
+    rerender({ busy: false });
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // 补读全读完：照收这份结果，之后停。
+    fetchMock.mockResolvedValue(allDone);
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await advancePoll();
+    await advancePoll();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+});

@@ -100,6 +100,7 @@ const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
  * 共 y 章（已定稿））；还没轮到的或这次没读成的显示「排队」（下一次开书 / 核账会重排）；读完的划掉；
  * 全读完（reading:false）这行消失。数据：开书概况带初值，在读期间 useReaderCatchUp 每 5 秒轮询轻量接口自走。
  * R5.2：核账 / 拟纲 / 记账在等哪个角色当场补笔记，那个角色后面标「（核账在等它读完）」——走的还是这条轮询链路。
+ * R6.2：概况刷新的新初值盖过旧轮询快照（同一次打开里后来的补读也显示）；动作等回包期间也轮询，这行不等回包落地就能现出来。
  */
 export function ReadersCatchUpNote({ status }: {
   readonly status?: ReaderCatchUpStatus | null;
@@ -213,9 +214,18 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const { activeArchivedCount } = useWorkspaceStore();
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
   const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
+  // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
+  // 传给 useReaderCatchUp——动作等回包期间即使补读没在读也按 5 秒轮询（R6.2），「（核账在等它读完）」一出来就能看到。
+  const workspaceBusy = Boolean(
+    props.chatLoading
+    || props.steeringLoading
+    || props.draftActionLoading
+    || isWorkspaceBusy(),
+  );
   // 编辑部「在读前文」进度（R4.3）：开书概况带初值；任一角色在读时每 5 秒轮询，全读完自动停。
+  // R6.2：概况刷新带来的新初值盖过旧轮询结果（同一次打开里后来的补读也显示）；动作进行中（busy）也轮询，回包到了再按 reading 停。
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
-  const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp);
+  const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp, workspaceBusy);
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -270,12 +280,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
     });
   };
-  const workspaceBusy = Boolean(
-    props.chatLoading
-    || props.steeringLoading
-    || props.draftActionLoading
-    || isWorkspaceBusy(),
-  );
+  // 「动作进行中」的判断已上移到 useReaderCatchUp 调用之前（workspaceBusy，R6.2），这里直接用。
   const chatEnabled = Boolean(props.onSendMessage) && !workspaceBusy;
   const sendCurrent = () => {
     const message = props.steeringDirection.trim();
