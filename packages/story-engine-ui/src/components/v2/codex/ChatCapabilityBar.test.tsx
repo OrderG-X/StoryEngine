@@ -43,12 +43,24 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     expect([...panel!.querySelectorAll(".cap-group-title")].map((e) => e.textContent)).toEqual(["写作", "补全", "整理"]);
   });
 
-  it("写作辅助意图与 ChapterToolRail 一致（审稿）", () => {
+  it("固定动作按钮（内容审阅）走 onChapterButton 发结构化动作，不给 AI 发话（重构 P4）", () => {
     const onSend = vi.fn();
-    const { container } = render(<ChatCapabilityBar onSendMessage={onSend} />);
+    const onChapterButton = vi.fn();
+    const { container } = render(<ChatCapabilityBar onSendMessage={onSend} onChapterButton={onChapterButton} />);
     fireEvent.click(btnByText(container, "更多")!);
     fireEvent.click(btnByText(container, "内容审阅")!);
-    expect(onSend).toHaveBeenCalledWith("审阅这一章的内容，给我评分和改进建议");
+    expect(onChapterButton).toHaveBeenCalledWith("ai_review");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("不带 button 的（检查机器腔）照常给 AI 发一句话", () => {
+    const onSend = vi.fn();
+    const onChapterButton = vi.fn();
+    const { container } = render(<ChatCapabilityBar onSendMessage={onSend} onChapterButton={onChapterButton} />);
+    fireEvent.click(btnByText(container, "更多")!);
+    fireEvent.click(btnByText(container, "检查机器腔")!);
+    expect(onSend).toHaveBeenCalledWith("检查这一章的机器腔，把有机器腔的句子列出来");
+    expect(onChapterButton).not.toHaveBeenCalled();
   });
 
   it("用户面绝不出现「做厚」二字（纪律 2.6）", () => {

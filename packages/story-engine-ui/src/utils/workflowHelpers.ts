@@ -86,7 +86,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "读取当前状态，生成本章写作方案和本章目标预览。",
       permission: "safe_read",
       requiresConfirmation: false,
-      endpoint: "/api/chapter-steering",
+      endpoint: "/api/agent/chat",
     },
     "generate-draft": {
       id: "generate-draft",
@@ -94,7 +94,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "调用模型生成正文，只写 drafts/fast，不更新正式状态。",
       permission: ["model_call", "draft_write"],
       requiresConfirmation: true,
-      endpoint: "/api/draft/stream",
+      endpoint: "/api/agent/chat",
     },
     "generate-draft-direct": {
       id: "generate-draft-direct",
@@ -102,7 +102,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "跳过本章方案确认，调用模型写入 drafts/fast；不会更新正式状态。",
       permission: ["model_call", "draft_write"],
       requiresConfirmation: true,
-      endpoint: "/api/draft/stream",
+      endpoint: "/api/agent/chat",
     },
     "quality-check": {
       id: "quality-check",
@@ -110,7 +110,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "只读取当前工作稿并检查问题，不做真实修补。",
       permission: "safe_read",
       requiresConfirmation: false,
-      endpoint: "/api/draft/quality",
+      endpoint: "/api/agent/chat",
     },
     "ai-review": {
       id: "ai-review",
@@ -118,7 +118,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "调用 AI 审查剧情、人物、节奏、文风和连续性，只给建议不改正文。",
       permission: "model_call",
       requiresConfirmation: true,
-      endpoint: "/api/draft/ai-review",
+      endpoint: "/api/agent/chat",
     },
     "revision-preview": {
       id: "revision-preview",
@@ -164,6 +164,20 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: "formal_state_write",
       requiresConfirmation: false,
     },
+    "rewrite-confirm": {
+      id: "rewrite-confirm",
+      label: "重写这一章",
+      description: "整章重写（重写前自动存档，可在操作历史撤销）。",
+      permission: ["model_call", "draft_write"],
+      requiresConfirmation: false,
+    },
+    "foundation-confirm": {
+      id: "foundation-confirm",
+      label: "确认改设定",
+      description: "按 AI 提的改动改资料（改前自动存档，可在操作历史撤销）。",
+      permission: "project_config_write",
+      requiresConfirmation: false,
+    },
     "continue-next": {
       id: "continue-next",
       label: "继续下一章",
@@ -191,6 +205,25 @@ export function pruneConfirmAction(target?: { readonly keep?: number }): Suggest
 /** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
 export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }): SuggestedAction {
   return { ...suggestedAction("ledger-confirm"), ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}) } };
+}
+
+/** 「重写这一章」按钮：有稿的章 AI 不覆盖，作者点了才由服务端整章重写（重构 P4）。 */
+export function rewriteConfirmAction(target: { readonly chapter: number; readonly chapterGoal?: string }): SuggestedAction {
+  return {
+    ...suggestedAction("rewrite-confirm"),
+    label: `重写第 ${target.chapter} 章`,
+    rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}) },
+  };
+}
+
+/** 「确认改设定」按钮：删角色、覆盖已确立设定是作者档，作者点了才由服务端执行（重构 P4）。 */
+export function foundationConfirmAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }): SuggestedAction {
+  const base = suggestedAction("foundation-confirm");
+  return {
+    ...base,
+    ...(target.label ? { description: `${target.label}（改前自动存档，可在操作历史撤销）。` } : {}),
+    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}) },
+  };
 }
 
 function withDisabledReason(action: SuggestedAction, disabledReason: string | undefined): SuggestedAction {
@@ -232,7 +265,7 @@ export function verdictLabel(verdict: DraftAIReviewReport["verdict"]): string {
   return labels[verdict];
 }
 
-export function ensureWorkflowPrompt<T extends { readonly suggestedActions?: readonly SuggestedAction[]; readonly id?: string; readonly role?: string; readonly content?: string }>(messages: readonly T[], state: ChapterWorkflowState): readonly T[] {
+export function ensureWorkflowPrompt<T extends { readonly suggestedActions?: readonly SuggestedAction[]; readonly id?: string; readonly role?: string; readonly content?: string; readonly kind?: string }>(messages: readonly T[], state: ChapterWorkflowState): readonly T[] {
   if (messages.some((message) => message.suggestedActions?.length)) return messages;
   return [...messages, createWorkflowMessage(state) as T];
 }
@@ -241,6 +274,7 @@ export function createWorkflowMessage(state: ChapterWorkflowState, content?: str
   return {
     id: `assistant-workflow-${state}-${Date.now()}`,
     role: "assistant" as const,
+    kind: "scaffolding" as const,
     content: content ?? workflowPromptText(state),
     suggestedActions: actionsForWorkflowState(state),
   };

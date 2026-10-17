@@ -303,6 +303,7 @@ function workspaceFromBook(book: BookSummary) {
     messages: [
       {
         id: `${book.id}-system`,
+        kind: "scaffolding" as const,
         role: "assistant" as const,
         content: `已进入《${book.title}》的章节工作台。当前章节：第${book.currentChapterNumber}章 · ${book.currentChapterTitle}。`,
       },
@@ -383,10 +384,8 @@ function isInjectedEntryScaffolding(message: ChapterMessage): boolean {
   const id = message.id ?? "";
   // 注入的流程 idle 招呼（assistant-workflow-*）/ 开书开场白（assistant-book-creation-*）。
   if (id.startsWith("assistant-workflow-") || id.startsWith("assistant-book-creation-")) return true;
-  // 工作区 / 章节进入开场白。
-  const content = (message.content ?? "").trim();
-  if (content.startsWith("已进入《") || content.startsWith("已进入第")) return true;
-  return false;
+  // 工作区 / 章节进入开场白：按消息自带的 kind 认（重构 P4），不按文案。
+  return message.kind === "scaffolding";
 }
 
 /**

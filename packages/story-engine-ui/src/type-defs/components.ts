@@ -26,6 +26,8 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSendMessage?: (message: string) => void;
   /** 「下一步」选项带结构化动作时（R4.7，服务端生成的确定性选项）：点击直接发 body.action，不经模型。 */
   readonly onSendUserAction?: (action: import("../api/agentChatClient.js").AgentUserAction) => void;
+  /** 写作区固定按钮（重构 P4）：直接发对应的结构化动作，不经模型、不靠文案匹配。 */
+  readonly onChapterButton?: (button: import("../utils/chapterButtons.js").ChapterButton) => void;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出的内容保留、不报错。chatLoading 时展示「停止」按钮调用。 */
   readonly onStopAgent?: () => void;
   /** 清空当前对话（不影响正文与资料）。聊天头部「清空」按钮调用。 */
@@ -59,14 +61,10 @@ export interface WritingWorkspaceLayoutProps {
   readonly activeRevisionTask?: DraftRevisionTask | null;
   readonly activeRevisionPreview?: DraftRevisionPreview | null;
   readonly onSteeringDirectionChange: (value: string) => void;
-  readonly onGenerateSteering: () => void;
-  readonly onRepairDraft?: () => void;
-  readonly onDraftAIReview?: () => void;
   readonly onCreateRevisionTask?: (source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }) => void;
   readonly onGenerateRevisionPreview?: () => void;
   readonly onApplyRevisionPreview?: () => void;
   readonly onDismissRevisionTask?: () => void;
-  readonly onRegenerateDraft?: () => void;
   readonly onDraftContentChange?: (content: string) => void;
   /** 选区浮动操作条（阶段三块②）：选中正文 + 模板键 → 复用 draft-revision 改写选中段、可撤销。 */
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;

@@ -1,12 +1,10 @@
 /**
  * GET /api/snapshots?project=<dir> — list snapshot history newest-first.
  * POST /api/snapshots/restore — restore project to a snapshot.
- * POST /api/snapshots/prune — prune snapshot history (dry-run by default, confirm=true to apply).
  */
 import {
   readJsonBody,
   guardProjectPath,
-  readPositiveInteger,
   requireBodyString,
   assertStoryEngineProject,
   writeJson,
@@ -18,7 +16,6 @@ import {
   chapterHintsFromFileChanges,
   isPostWriteSettlementSnapshot,
   listSnapshots,
-  pruneSnapshots,
   readCommitFileChanges,
   restoreSnapshot,
 } from "../lib/snapshot.js";
@@ -84,28 +81,7 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         return;
       }
 
-      // 预览优先（对齐 commit_preview/commit_apply）：默认 dry-run，只回报将裁多少条/释放多少 commit；
-      // confirm=true 才真裁。真裁前 lib 自动把裁前完整历史打成 bundle，存到项目目录外的
-      // ~/.story-engine/snapshot-backups/（SE_DATA_DIR 可覆盖）。
-      // 返回的 dryRun 口径与工具侧（agent/tools/prune-snapshots.ts）统一=「没落盘」：confirm=true 但
-      // 无需裁剪（prunedCount=0）时 lib 回的是请求口径 false——什么都没改，须折成 true，别让调用方误以为落了盘。
-      if (req.method === "POST" && url.pathname === "/api/snapshots/prune") {
-        const body = await readJsonBody(req);
-        const projectDir = requireBodyString(body.projectPath, "项目路径不能为空。");
-        if (!guardProjectPath(res, projectDir)) return;
-        await assertStoryEngineProject(projectDir);
-        const keep = readPositiveInteger(body.keep);
-        const result = await pruneSnapshots(projectDir, {
-          ...(keep !== undefined ? { keep } : {}),
-          dryRun: body.confirm !== true,
-        });
-        writeJson(res, 200, {
-          ok: true,
-          result: { ...result, dryRun: result.dryRun || result.prunedCount === 0 },
-        });
-        return;
-      }
-
+      // 裁剪操作历史不再有 HTTP 入口（重构 P4）：只能由作者点「确认裁剪」按钮发结构化动作（prune_snapshots）。
       writeJson(res, 405, { ok: false, error: "Unsupported snapshots endpoint." });
     } catch (error) {
       writeJson(res, 500, {

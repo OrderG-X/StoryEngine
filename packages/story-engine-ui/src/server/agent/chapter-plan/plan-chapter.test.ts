@@ -235,7 +235,7 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
       ],
     }));
     const result = await resolveChapterPlanForDraft({
-      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+      projectDir, chapter: 2, direction: "一早去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
     });
     // 改纲只收到非 authorWilled 的那条（point 3）；作者那条（point 1）保留原样。
     const reviseTaskText = planner.calls.filter((call) => call.json)[1]?.task ?? "";
@@ -246,6 +246,23 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     expect(result.note).toContain("改掉 1 处");
     expect(result.note).toContain("另有 1 处来自你给的方向");
     expect(result.note).toContain("以哪个为准");
+  });
+
+  it("作者没给方向（写下一章）→ 模型标的 authorWilled 不作数，照章纲员的错改，回执不说「来自你给的方向」", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const fixed = JSON.stringify({ revised: [{ point: 1, beat: "第二天去档案室" }] });
+    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
+    const checker = fakePlanCheckCallModel(JSON.stringify({
+      problems: [{ point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "第 1 章写的是明天去" }],
+    }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
+    expect(result.plan?.beats[0]).toBe("第二天去档案室");
+    expect(result.note).toContain("改掉 1 处");
+    expect(result.note).not.toContain("你给的方向");
   });
 
   it("章纲员要补的笔记太多 → 冷窗口照拟照审，note 如实标对照范围（不再「按没有章纲出稿」）", async () => {

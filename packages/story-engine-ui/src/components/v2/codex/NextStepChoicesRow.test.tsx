@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextStepChoicesRow } from "./AiChatCodex.js";
 import type { NextStepPrompt } from "./nextStepChoices.js";
-import type { SuggestedAction } from "../../../type-defs/workflow.js";
 
 afterEach(() => cleanup());
 
@@ -14,7 +13,6 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
   it("choice 带 action → 只调 onSendUserAction（发 body.action，不经模型），不把 intent 当文本发", () => {
     const onSendUserAction = vi.fn();
     const onSendMessage = vi.fn();
-    const onSuggestedAction = vi.fn();
     render(
       <NextStepChoicesRow
         nextStep={prompt([
@@ -22,7 +20,6 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
         ])}
         busy={false}
         onSendMessage={onSendMessage}
-        onSuggestedAction={onSuggestedAction}
         onSendUserAction={onSendUserAction}
       />,
     );
@@ -30,7 +27,6 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
     expect(onSendUserAction).toHaveBeenCalledTimes(1);
     expect(onSendUserAction).toHaveBeenCalledWith({ toolName: "commit_preview", chapter: 5 });
     expect(onSendMessage).not.toHaveBeenCalled();
-    expect(onSuggestedAction).not.toHaveBeenCalled();
   });
 
   it("choice 不带 action（模型 suggest_next_steps 生成的选项）→ 照旧把 intent 当一句话发给 agent", () => {
@@ -49,21 +45,20 @@ describe("NextStepChoicesRow 点击分派（R4.7：有 action 直发结构化动
     expect(onSendUserAction).not.toHaveBeenCalled();
   });
 
-  it("无 action 但 intent 是「确认定稿第 N 章」（模型提议的定稿确认）→ 仍走按钮通道 commitConfirmAction，不退化成发文本", () => {
-    const onSuggestedAction = vi.fn((_action: SuggestedAction) => undefined);
+  it("无 action 的「确认定稿第 N 章」不再按措辞认成按钮（重构 P4）：当一句话发给 AI，AI 调定稿只会出确认按钮", () => {
+    const onSendUserAction = vi.fn();
     const onSendMessage = vi.fn();
     render(
       <NextStepChoicesRow
         nextStep={prompt([{ label: "确认定稿", intent: "确认定稿第 5 章" }])}
         busy={false}
         onSendMessage={onSendMessage}
-        onSuggestedAction={onSuggestedAction}
+        onSendUserAction={onSendUserAction}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /确认定稿/ }));
-    expect(onSuggestedAction).toHaveBeenCalledTimes(1);
-    expect(onSuggestedAction.mock.calls[0]![0]).toMatchObject({ commitTarget: { chapter: 5 } });
-    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(onSendMessage).toHaveBeenCalledWith("确认定稿第 5 章");
+    expect(onSendUserAction).not.toHaveBeenCalled();
   });
 
   it("带 action 但外层没接 onSendUserAction（老挂载路径）→ 退回发 intent 文本，不静默丢点击", () => {

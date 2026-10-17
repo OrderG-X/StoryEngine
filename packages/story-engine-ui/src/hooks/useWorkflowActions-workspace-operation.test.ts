@@ -57,9 +57,7 @@ async function actions() {
   const { useWorkflowActions } = await import("./useWorkflowActions.js");
   return useWorkflowActions({
     projectPath: "/tmp/story-project",
-    resolveChapterDirection: (value?: unknown) => typeof value === "string" ? value : "",
     appendMessage: useWorkspaceStore.getState().appendMessage,
-    appendWorkflowPrompt: vi.fn(),
     applyOverviewToWorkspace: vi.fn(),
   });
 }
@@ -112,90 +110,6 @@ describe("workspace-bound writing operations", () => {
     useNavigationStore.getState().clearToast();
     useNavigationStore.setState({ projectPath: "/tmp/story-project" });
     setChapter(1, A_DRAFT);
-  });
-
-  it("blocks quality review while direct draft generation is streaming", async () => {
-    const gate = deferred<void>();
-    apiMocks.generateDraftStream.mockImplementationOnce(async (_input, handlers) => {
-      handlers.onDelta(GENERATED);
-      await gate.promise;
-      handlers.onDone({ overview: {} as StateOverview, draftContent: GENERATED, draftTitle: "第一章" });
-    });
-    apiMocks.checkDraftQuality.mockResolvedValue({ passed: true, issues: [], candidates: [] });
-    const workflow = await actions();
-
-    const generating = workflow.handleGenerateDraft("继续第一章");
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.draft.content).toContain("流式生成"));
-    await workflow.handleQualityCheck();
-
-    expect(apiMocks.checkDraftQuality).not.toHaveBeenCalled();
-    expect(useNavigationStore.getState().toast).toContain("正在进行");
-    gate.resolve();
-    await generating;
-  });
-
-  it("blocks AI review while direct draft generation is streaming", async () => {
-    const gate = deferred<void>();
-    apiMocks.generateDraftStream.mockImplementationOnce(async (_input, handlers) => {
-      handlers.onDelta(GENERATED);
-      await gate.promise;
-      handlers.onDone({ overview: {} as StateOverview, draftContent: GENERATED, draftTitle: "第一章" });
-    });
-    apiMocks.reviewDraftWithAI.mockResolvedValue({
-      verdict: "ready_to_commit",
-      score: 90,
-      summary: "ok",
-      issues: [],
-      suggestedRevisions: [],
-    });
-    const workflow = await actions();
-
-    const generating = workflow.handleGenerateDraft("继续第一章");
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().workspace.draft.content).toContain("流式生成"));
-    await workflow.handleDraftAIReview();
-
-    expect(apiMocks.reviewDraftWithAI).not.toHaveBeenCalled();
-    expect(useNavigationStore.getState().toast).toContain("正在进行");
-    gate.resolve();
-    await generating;
-  });
-
-  it("does not restore chapter A content into chapter B when A generation fails late", async () => {
-    const gate = deferred<void>();
-    apiMocks.generateDraftStream.mockImplementationOnce(async (_input, handlers) => {
-      handlers.onDelta(GENERATED);
-      await gate.promise;
-    });
-    const workflow = await actions();
-
-    const generating = workflow.handleGenerateDraft("继续第一章");
-    await vi.waitFor(() => expect(apiMocks.generateDraftStream).toHaveBeenCalled());
-    setChapter(2, B_DRAFT, "session-b");
-    useWorkspaceStore.setState({ draftActionLoading: "new-workspace-loading" });
-    gate.reject(new Error("late failure"));
-    await generating;
-
-    expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).toBe(2);
-    expect(useWorkspaceStore.getState().workspace.draft.content).toBe(B_DRAFT);
-    expect(useWorkspaceStore.getState().draftActionLoading).toBe("new-workspace-loading");
-  });
-
-  it("treats returning home (null project path) as target invalidation even when chapter/session numbers match", async () => {
-    const gate = deferred<void>();
-    apiMocks.generateDraftStream.mockImplementationOnce(async (_input, handlers) => {
-      await gate.promise;
-      handlers.onDelta(GENERATED);
-    });
-    const workflow = await actions();
-
-    const generating = workflow.handleGenerateDraft("继续第一章");
-    await vi.waitFor(() => expect(apiMocks.generateDraftStream).toHaveBeenCalled());
-    useNavigationStore.setState({ projectPath: null });
-    setChapter(1, "首页切换后保留的内存态", "session-a");
-    gate.resolve();
-    await generating;
-
-    expect(useWorkspaceStore.getState().workspace.draft.content).toBe("首页切换后保留的内存态");
   });
 
   it("drops a late revision preview after the originating chapter changes", async () => {
@@ -256,9 +170,8 @@ describe("workspace-bound writing operations", () => {
   });
 
   it.each([
-    ["steering", "fetchChapterSteering"],
     ["de-ai batch", "applyDeAiFlavorBatch"],
-  ] as const)("atomically blocks %s when another foreground operation owns the slot", async (entry, apiName) => {
+  ] as const)("atomically blocks %s when another foreground operation owns the slot", async (_entry, apiName) => {
     seedCommitPreview();
     const owner = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/story-project",
@@ -268,30 +181,26 @@ describe("workspace-bound writing operations", () => {
     expect(owner).not.toBeNull();
     const workflow = await actions();
 
-    if (entry === "steering") await workflow.generateSteering("继续第一章");
-    else await workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
+    await workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
 
     expect(apiMocks[apiName]).not.toHaveBeenCalled();
     finishWorkspaceOperation(owner!);
   });
 
   it.each([
-    ["steering", "fetchChapterSteering", "steeringLoading"],
     ["de-ai batch", "applyDeAiFlavorBatch", "draftActionLoading"],
-  ] as const)("drops late %s failure without clearing replacement workspace state", async (entry, apiName, loadingField) => {
+  ] as const)("drops late %s failure without clearing replacement workspace state", async (_entry, apiName, loadingField) => {
     seedCommitPreview();
     const gate = deferred<never>();
     apiMocks[apiName].mockReturnValueOnce(gate.promise);
     const workflow = await actions();
 
-    let pending: Promise<void>;
-    if (entry === "steering") pending = workflow.generateSteering("继续第一章");
-    else pending = workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
+    const pending = workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
     await vi.waitFor(() => expect(apiMocks[apiName]).toHaveBeenCalled());
 
     setChapter(2, B_DRAFT, "session-b");
     useWorkspaceStore.setState({
-      [loadingField]: loadingField === "steeringLoading" ? true : "replacement-loading",
+      [loadingField]: "replacement-loading",
       steeringError: "replacement-safe",
       aiFlavorBatchPending: "replacement-batch",
     });
@@ -301,7 +210,6 @@ describe("workspace-bound writing operations", () => {
     const state = useWorkspaceStore.getState();
     expect(state.steeringError).toBe("replacement-safe");
     expect(state.aiFlavorBatchPending).toBe("replacement-batch");
-    if (loadingField === "steeringLoading") expect(state.steeringLoading).toBe(true);
-    else expect(state.draftActionLoading).toBe("replacement-loading");
+    expect(state.draftActionLoading).toBe("replacement-loading");
   });
 });

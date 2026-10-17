@@ -523,98 +523,34 @@ function warnAlwaysOnThinkingRetry(modelId: string, baseUrl: string, errorText: 
 // OpenAI-compatible HTTP helper
 // ---------------------------------------------------------------------------
 
+/**
+ * 一次性调模型拿全文（做厚 / 世界观 / 关系 / 写作规则等）。
+ *
+ * 重构 P4 起内部走流式 + 空闲超时（同 streamChatModelToText）：有字节就续命、**不设总时长上限**，
+ * 连接彻底静默超 STREAM_IDLE_TIMEOUT_MS 才判死。原来是非流式 + 固定总时长（调用方传 250s），
+ * 推理模型想得久、整段一次性返回时会撞代理超时或被总时长误杀。返回形状只剩 content（调用方本来只用它）。
+ *
+ * 不设人为上限——**一律不传 max_tokens**，让模型用自身上限跑完、自然收尾，绝不截断。
+ * 推理模型的思考(reasoning_content)也算进 max_tokens，实测光思考就要 6~9k token；任何小上限都会把思考
+ * 还没写完就截断、正文 content 一个字没出。故调用选项上根本没有 maxTokens 字段（传了直接编译失败）。
+ */
 export async function callOpenAICompatibleChatModel(input: {
   readonly configured: ResolvedChatModel;
   readonly messages: readonly { readonly role: string; readonly content: string }[];
   readonly temperature?: number;
   readonly responseFormat?: { readonly type: "json_object" };
-  readonly stream?: boolean;
-  readonly timeoutMs?: number;
-}): Promise<{ readonly content: string; readonly raw: string; readonly response: Response }> {
-  const controller = new AbortController();
-  const timeoutMs = input.timeoutMs ?? input.configured.profile.timeoutMs ?? 60000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // 不设人为上限——**一律不传 max_tokens**，让模型用自身上限跑完、自然收尾，绝不截断。
-  // 推理模型的思考(reasoning_content)也算进 max_tokens，实测光思考就要 6~9k token；任何小上限都会把思考
-  // 还没写完就截断、正文 content 一个字没出（真机：世界观/做厚/正文都中招）。实测本网关不传＝用模型上限
-  // （区间上限 393216、长输出 finish=stop 不截）；传 0 反被 DeepSeek 拒（"valid range [1,393216]"）。
-  // 故调用选项上根本没有 maxTokens 字段（传了直接编译失败）；输出长度由提示词约束、模型自然收尾。思考全程保留。
-  try {
-    const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
-    const headers = {
-      "content-type": "application/json",
-      ...(await buildProviderRequestHeaders({
-        baseUrl: input.configured.provider.baseUrl,
-        apiKey: input.configured.apiKey,
-        customHeaders: input.configured.customHeaders,
-      })),
-    };
-    const body: Record<string, unknown> = {
-      model: input.configured.profile.model,
-      messages: input.messages,
-      temperature: input.temperature ?? input.configured.profile.temperature ?? 0.7,
-      ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
-      // 思考链方言（请求侧模型无关·R7）：按 model id 翻成该模型认的开关（GLM thinking:{type} / Qwen enable_thinking /
-      // 认不出整键不发）。**这是非流式路**——Qwen 非流式会被强制 enable_thinking:false（否则 400）。开/关由 task-assignments 决定。
-      // always-on 自适应：已学到「不可关思考」的模型要关思考时整键省略（再发 disabled 必 400，不再付学费）。
-      ...(await thinkingParamsForRequest({
-        baseUrl: input.configured.provider.baseUrl,
-        modelId: input.configured.profile.model,
-        dialect: input.configured.thinkingDialect,
-        thinking: input.configured.thinking,
-        stream: input.stream ?? false,
-      })),
-      stream: input.stream ?? false,
-    };
-    const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
-      providerGate.fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
-    let response = await postChat(body);
-    let raw = await response.text();
-    // always-on 思考自适应：仅当本次真发了「关思考」且上游 400 明说 cannot be disabled 才省略思考参数重试一次；
-    // 其他 400 不吞——原样走 parseFirstChoiceContent 抛「模型返回错误」。
-    if (!response.ok && bodyRequestsThinkingOff(body) && isThinkingCannotBeDisabledError(response.status, raw)) {
-      warnAlwaysOnThinkingRetry(input.configured.profile.model, input.configured.provider.baseUrl, raw);
-      response = await postChat(omitThinkingParams(body));
-      raw = await response.text();
-      if (response.ok) {
-        await learnAlwaysOnThinkingModel(input.configured.provider.baseUrl, input.configured.profile.model);
-      }
-    }
-    return { content: parseFirstChoiceContent(raw), raw, response };
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(`模型请求超时：${timeoutMs}ms`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-/**
- * 抠出首个 choice 的正文。绝不静默返回空串——若 content 为空，抛带诊断的错：
- * 推理模型把 max_tokens 预算全耗在思考链上(finish_reason=length + 有 reasoning_content)、正文还没开始就被截断，
- * 是最常见真因（真机实测：世界观/做厚一直失败）。据此提示「调大 max_tokens」，而不是让下游报一句模糊的「不是 JSON」。
- */
-function parseFirstChoiceContent(raw: string): string {
-  const parsed = JSON.parse(raw) as {
-    readonly choices?: readonly { readonly message?: { readonly content?: string; readonly reasoning_content?: string }; readonly finish_reason?: string }[];
-    readonly error?: { readonly message?: string };
-    readonly usage?: unknown;
-  };
-  if (parsed.error?.message) throw new Error(`模型返回错误：${parsed.error.message}`);
-  recordPipelineUsage(sampleFromOpenAIUsage(parsed.usage));
-  const choice = parsed.choices?.[0];
-  const content = choice?.message?.content?.trim() ?? "";
-  if (content) return content;
-  const reasonedButNoOutput = (choice?.message?.reasoning_content?.length ?? 0) > 0 || choice?.finish_reason === "length";
-  if (reasonedButNoOutput) {
-    throw new Error("模型把额度全用在思考链上、正文(content)为空。本网关已不设 max_tokens 上限（用模型自身上限，见上注释），别再调 max_tokens；多为提示词过长或模型异常，可重试或换更快/更稳的模型。");
+}): Promise<{ readonly content: string }> {
+  const { content, thinking } = await streamChatModelToText({
+    configured: input.configured,
+    messages: input.messages,
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.responseFormat ? { responseFormat: input.responseFormat } : {}),
+  });
+  const trimmed = content.trim();
+  if (trimmed) return { content: trimmed };
+  // 绝不静默返回空串：推理模型把输出全花在思考链上、正文还没开始，是最常见真因。
+  if (thinking.length > 0) {
+    throw new Error("模型把输出全用在思考链上、正文(content)为空。本网关不设 max_tokens 上限（用模型自身上限），别调 max_tokens；多为提示词过长或模型异常，可重试或换更快/更稳的模型。");
   }
   throw new Error("模型返回了空内容。");
 }

@@ -9,15 +9,25 @@ import type { RequestContext } from "@mastra/core/di";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
-export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity", "commit_preview", "generate_draft"] as const;
+export const USER_ACTION_TOOL_NAMES = [
+  "commit_apply",
+  "prune_snapshots",
+  "check_continuity",
+  "commit_preview",
+  "generate_draft",
+  "ai_review",
+  "quality_check",
+  "manage_snapshots",
+] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定）。 */
-const DIRECT_ACTION_NAMES = ["ledger_decision"] as const;
+/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」）。 */
+const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo"] as const;
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
@@ -40,11 +50,21 @@ export type UserAction =
    * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
    */
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  /** 「内容审阅」「硬伤检查」按钮（重构 P4）：只读，走对话通道、结果和 AI 调的一样进对话（原来走单独的 HTTP 路由）。 */
+  | { readonly toolName: "ai_review"; readonly chapter: number }
+  | { readonly toolName: "quality_check"; readonly chapter: number }
+  /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
+  | { readonly toolName: "undo" }
   /**
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
+  /**
+   * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
+   * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
+   */
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -72,6 +92,19 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
   }
+  if (toolName === "foundation_decision") {
+    const key = typeof record.key === "string" ? record.key.trim() : "";
+    if (!key || key.length > 120) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
+    const input = record.input;
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return { kind: "invalid", reason: "改设定内容不对。" };
+    const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
+    return {
+      kind: "action",
+      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}) },
+    };
+  }
+  if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
+  if (toolName === "manage_snapshots") return { kind: "invalid", reason: "不支持的操作。" };
   if (toolName === "prune_snapshots") {
     const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
     if (rawKeep === undefined || rawKeep === null || rawKeep === "") return { kind: "action", action: { toolName: "prune_snapshots" } };
@@ -85,6 +118,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
   if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter } };
+  if (toolName === "ai_review" || toolName === "quality_check") return { kind: "action", action: { toolName, chapter } };
   if (toolName === "generate_draft") {
     const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
     return { kind: "action", action: { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) } };
@@ -250,6 +284,18 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "ledger_decision") {
     await runLedgerDecisionAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "foundation_decision") {
+    await runFoundationDecisionAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "ai_review" || action.toolName === "quality_check") {
+    await runReadOnlyChapterAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "undo") {
+    await runUndoAction(args);
     return;
   }
   const stamp = Date.now();
@@ -558,6 +604,107 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
   emitText(outcome.summary);
 }
 
+/** 「确认改设定」：作者点了按钮，带作者确认执行那次资料写入（改前存档、点两次只做一次），回执照实说。 */
+async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "foundation_decision" }>;
+}): Promise<void> {
+  const { action } = args;
+  const toolCallId = `user-action-foundation_write-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "foundation_write", args: { op: "confirm" } });
+  if (!args.projectDir) {
+    const message = "没改设定：没拿到书的位置，请重新打开这本书再点。";
+    args.sendEvent("tool-result", { toolCallId, toolName: "foundation_write", output: { ok: false, summary: message } });
+    emitText(message);
+    return;
+  }
+  let outcome: Awaited<ReturnType<typeof applyFoundationDecision>>;
+  try {
+    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input });
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "foundation_write", error: message, retryable: true });
+    emitText(`没改设定：${message}。可以再点一次「确认改设定」重试。`);
+    return;
+  }
+  args.sendEvent("tool-result", {
+    toolCallId,
+    toolName: "foundation_write",
+    // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改设定。
+    output: {
+      ...(outcome.output ?? {}),
+      ok: outcome.ok,
+      summary: outcome.summary,
+      refreshScope: "foundation",
+      ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}),
+    },
+  });
+  emitText(outcome.summary);
+}
+
+const READ_ONLY_ACTION_LABELS = { ai_review: "内容审阅", quality_check: "硬伤检查" } as const;
+
+/** 「内容审阅」「硬伤检查」按钮：服务端直接跑只读工具，结果按 agent 回合同款事件推给前端（审阅卡 / 硬伤卡照常渲染）。 */
+async function runReadOnlyChapterAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "ai_review" | "quality_check" }>;
+}): Promise<void> {
+  const { action } = args;
+  const label = READ_ONLY_ACTION_LABELS[action.toolName];
+  const toolCallId = `user-action-${action.toolName}-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: action.toolName, args: { chapter: action.chapter } });
+  let output: unknown;
+  try {
+    output = await args.executeTool(action.toolName, { chapter: action.chapter }, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: action.toolName, error: message, retryable: true });
+    emitText(`第 ${action.chapter} 章的${label}没做成：${humanizeToolNames(message)}。可以再点一次「${label}」。`);
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: action.toolName, output });
+  const result = output as { readonly ok?: unknown; readonly summary?: unknown } | undefined;
+  emitText(typeof result?.summary === "string" && result.summary.trim()
+    ? humanizeToolNames(result.summary.trim())
+    : result?.ok === false ? `第 ${action.chapter} 章的${label}这次没做成。` : `第 ${action.chapter} 章的${label}做完了，结果在上面。`);
+}
+
+/** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */
+async function runUndoAction(args: Omit<Parameters<typeof runUserAction>[0], "action">): Promise<void> {
+  const toolCallId = `user-action-manage_snapshots-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "manage_snapshots", args: { op: "undo" } });
+  let output: unknown;
+  try {
+    output = await args.executeTool("manage_snapshots", { op: "undo" }, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "manage_snapshots", error: message, retryable: true });
+    emitText(`没撤销成：${message}。什么都没改，可以再点一次「撤销上一步」。`);
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "manage_snapshots", output });
+  const result = output as { readonly undone?: unknown; readonly summary?: unknown } | undefined;
+  emitText(typeof result?.summary === "string" && result.summary.trim()
+    ? result.summary.trim()
+    : result?.undone === true ? "撤销好了。" : "没有可以撤销的改动。");
+}
+
 interface GenerateDraftLikeOutput {
   readonly ok?: unknown;
   readonly summary?: unknown;
@@ -577,9 +724,9 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   const input = { chapter: action.chapter, ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}) };
   args.sendEvent("tool-call", { toolCallId, toolName: "generate_draft", args: input });
   let output: unknown;
-  // R7.1 结构化意图标记：按钮/选项点击本身就是写作授权。generate_draft 工具的写作意图门
-  // （防定稿后自主续写）见此标记优先放行，不赌回显文案命中正向词表。标记只在本次执行期间存在，
-  // 结束即清（与 prune 同款）；本通道不跑模型，不存在模型调用蹭标记的窗口。
+  // 作者确认标记：按钮/选项点击本身就是作者授权，generate_draft 见此标记才允许整章重写有稿的章、
+  // 方向不用再找原句（按钮带的方向就是作者点的）。标记只在本次执行期间存在，结束即清（与 prune 同款）；
+  // 本通道不跑模型，不存在模型调用蹭标记的窗口。
   markUserConfirmedTool(args.requestContext, "generate_draft");
   try {
     output = await args.executeTool("generate_draft", input, args.requestContext);

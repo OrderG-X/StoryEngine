@@ -25,6 +25,7 @@ vi.mock("../brain/index.js", async (importOriginal) => ({
 
 import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
 import { runManageLedger } from "../agent/tools/manage-ledger.js";
+import { applyFoundationWriteToolLogic } from "../agent/tools/foundation-write.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
 import { registerAgentChatRoutes } from "./agent-chat.js";
 
@@ -152,6 +153,49 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     const undone = await projectBook(projectDir);
     expect(undone.chapters.map((chapter) => chapter.chapter)).toEqual([1]);
     expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
+  });
+
+  it("「确认改设定」：AI 删角色只出按钮不删 → 作者点了才删；点两次只删一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
+    const projectDir = await makeProjectWithDraft(1);
+    const created = await applyFoundationWriteToolLogic({
+      projectDir,
+      toolInput: { actionType: "create_character", category: "characters", after: { name: "顾明", identity: "配角" } },
+    });
+    expect(created.ok).toBe(true);
+    const readNames = async (): Promise<string[]> => {
+      const bible = JSON.parse(await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")) as { characters: { name: string }[] };
+      return bible.characters.map((character) => character.name);
+    };
+    const bible = JSON.parse(await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")) as { characters: { id: string; name: string }[] };
+    const targetId = bible.characters.find((character) => character.name === "顾明")?.id;
+    const proposal = await applyFoundationWriteToolLogic({
+      projectDir,
+      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId, targetName: "顾明", before: { name: "顾明" }, after: {} },
+    });
+    expect(proposal).toMatchObject({ ok: false, needsConfirmation: true });
+    expect(proposal.foundationConfirm?.key).toBeTruthy();
+    expect(await readNames()).toContain("顾明");
+
+    const action = { toolName: "foundation_decision", ...proposal.foundationConfirm };
+    const snapshotIds: unknown[] = [];
+    for (let click = 0; click < 2; click += 1) {
+      const { handlerPromise, res } = callAgentChatRoute({ projectPath: projectDir, messages: [{ role: "user", content: "确认改设定" }], action });
+      await handlerPromise;
+      const events = parseSse(res.written.join(""));
+      const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "foundation_write");
+      expect(result?.data.output).toMatchObject({ ok: true, refreshScope: "foundation" });
+      snapshotIds.push((result?.data.output as { snapshotId?: unknown } | undefined)?.snapshotId);
+      const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+      if (click === 1) expect(text).toContain("已经做过了");
+    }
+    expect(typeof snapshotIds[0]).toBe("string");
+    expect(snapshotIds[1]).toBeUndefined();
+    expect(await readNames()).not.toContain("顾明");
+    const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
+    expect(agent?.stream).not.toHaveBeenCalled();
+
+    await restoreSnapshot(projectDir, snapshotIds[0] as string);
+    expect(await readNames()).toContain("顾明");
   });
 
   it("非法动作（白名单外工具）→ 400，不当普通对话处理", async () => {

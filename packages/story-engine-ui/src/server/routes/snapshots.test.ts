@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
@@ -108,57 +108,16 @@ describe("snapshots routes", () => {
     expect(payload.ok).toBe(false);
   });
 
-  it("POST /api/snapshots/prune 默认 dry-run 不落盘，confirm=true 才真裁（bundle 落在 SE_DATA_DIR 下、项目目录之外）", async () => {
+  it("裁剪操作历史没有 HTTP 入口（重构 P4：只能由作者点「确认裁剪」按钮）：POST /api/snapshots/prune 带 confirm 也不裁", async () => {
     const dir = await makeProject();
-    await createSnapshot(dir, "起点"); // init + 本条 = 2
-    for (let i = 0; i < 28; i += 1) {
+    await createSnapshot(dir, "起点");
+    for (let i = 0; i < 5; i += 1) {
       await execFileAsync("git", ["-C", dir, "commit", "--allow-empty", "-m", `快照 ${i + 1}`]);
     }
-    expect((await listSnapshots(dir, 100)).length).toBe(30);
-
-    // 备份目录经 SE_DATA_DIR 重定向到测试临时区，不碰真实 ~/.story-engine
-    const seDataDir = join(TEST_ROOT, `se-data-${Date.now()}`);
-    await mkdir(seDataDir, { recursive: true });
-    process.env.SE_DATA_DIR = seDataDir;
-    try {
-      const dry = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, keep: 20 });
-      expect(dry.statusCode).toBe(200);
-      const dryResult = dry.payload.result as { dryRun: boolean; prunedCount: number; totalAfter: number; freedCommits: number };
-      expect(dryResult.dryRun).toBe(true);
-      expect(dryResult.prunedCount).toBe(10);
-      expect(dryResult.totalAfter).toBe(21);
-      expect(dryResult.freedCommits).toBe(9);
-      expect((await listSnapshots(dir, 100)).length).toBe(30); // 预览不动历史
-
-      const real = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, keep: 20, confirm: true });
-      expect(real.statusCode).toBe(200);
-      const realResult = real.payload.result as { dryRun: boolean; prunedCount: number; backupBundlePath?: string };
-      expect(realResult.dryRun).toBe(false);
-      expect(realResult.prunedCount).toBe(10);
-      expect((await listSnapshots(dir, 100)).length).toBe(21); // 20 保留 + 1 base
-      expect(realResult.backupBundlePath).toBeDefined();
-      expect(realResult.backupBundlePath!.startsWith(seDataDir)).toBe(true);
-      await access(realResult.backupBundlePath!);
-    } finally {
-      delete process.env.SE_DATA_DIR;
-    }
-  }, 60_000);
-
-  it("POST /api/snapshots/prune confirm=true 但无需裁剪时，dryRun 按「没落盘」口径回 true（与工具侧一致）", async () => {
-    const dir = await makeProject();
-    await createSnapshot(dir, "唯一快照"); // init + 本条 = 2，远低于 keep 默认 200 → 无需裁剪
-    // 预览 no-op：新旧口径都是 true（钉住不漂移）
-    const dry = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir });
-    expect(dry.statusCode).toBe(200);
-    const dryResult = dry.payload.result as { dryRun: boolean; prunedCount: number };
-    expect(dryResult.prunedCount).toBe(0);
-    expect(dryResult.dryRun).toBe(true);
-    // confirm=true 的 no-op：老口径回 false（请求口径），新口径须回 true（什么都没落盘）
-    const real = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, confirm: true });
-    expect(real.statusCode).toBe(200);
-    const realResult = real.payload.result as { dryRun: boolean; prunedCount: number };
-    expect(realResult.prunedCount).toBe(0);
-    expect(realResult.dryRun).toBe(true);
+    const before = (await listSnapshots(dir, 100)).length;
+    const res = await callSnapshotsRoute("POST", "/api/snapshots/prune", { projectPath: dir, keep: 1, confirm: true });
+    expect(res.statusCode).toBe(405);
+    expect((await listSnapshots(dir, 100)).length).toBe(before);
   });
 });
 

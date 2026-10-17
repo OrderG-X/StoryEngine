@@ -5,7 +5,7 @@ import type { ChapterMessage, ChapterNavItem, ChapterWorkspaceData } from "../ty
 import type { StateOverview } from "../api/types.js";
 
 const cleanGreeting: readonly ChapterMessage[] = [
-  { id: "state-overview-connected", role: "assistant", content: "已进入《测试项目》的章节工作区。" },
+  { id: "state-overview-connected", role: "assistant", kind: "scaffolding", content: "已进入《测试项目》的章节工作区。" },
 ];
 
 /**
@@ -343,6 +343,11 @@ describe("useProjectNavigation chapter status helpers", () => {
 
   it("entry：工作区「已进入《X》的章节工作区」开场白(无真实对话) → 空着进(用户实测场景)", () => {
     expect(__useProjectNavigationTest.entryChatMessages(cleanGreeting)).toEqual([]);
+  });
+
+  it("entry：按消息自带的 kind 认脚手架，不按文案（重构 P4）——AI 真回复里写了「已进入《X》」也照留", () => {
+    const reply: ChapterMessage = { id: "assistant-agent-2", role: "assistant", content: "已进入《测试项目》的第二卷，接下来写哪章？" };
+    expect(__useProjectNavigationTest.entryChatMessages([reply])).toEqual([reply]);
   });
 
   it("entry：真实对话里夹着注入脚手架(开书开场白/idle招呼/系统提示) → 只留真实发言与 AI 回复", () => {

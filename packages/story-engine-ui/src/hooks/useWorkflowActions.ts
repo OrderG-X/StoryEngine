@@ -1,32 +1,24 @@
 import {
-  fetchChapterSteering,
-  generateDraftStream,
-  checkDraftQuality,
-  reviewDraftWithAI,
   previewDraftRevision,
   applyDraftRevision,
   applyDeAiFlavorBatch,
   generateDraftCandidate,
   applyDraftCandidate,
-  saveChapterWorkspace,
 } from "../api/client.js";
 import type {
   DraftAIReviewIssue,
   DraftAIRevisionSuggestion,
   DraftRevisionTask,
   ChapterAgentCard,
-  FoundationGapDecision,
-  FoundationGapSuggestion,
   StateOverview,
 } from "../api/types.js";
-import { useWorkspaceStore, type SelectedAdviceCard } from "../stores/workspaceStore.js";
+import { useWorkspaceStore } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import type {
   ChapterMessage,
   ChapterWorkflowState,
-  SuggestedAction,
 } from "../types.js";
-import { compactStrings, countTextWords, extractDraftTitle, cleanUiText } from "../utils/textUtils.js";
+import { compactStrings, extractDraftTitle, cleanUiText } from "../utils/textUtils.js";
 import {
   SELECTION_REVISION_TEMPLATES,
   buildSelectionRevisionTask,
@@ -34,17 +26,7 @@ import {
   type SelectionRevisionKey,
 } from "../components/v2/selectionRevisionTemplates.js";
 import { isRevisionZeroDiff } from "../components/v2/codex/revisionZeroDiff.js";
-import {
-  workflowPromptText,
-  actionsForWorkflowState,
-  suggestedActionForPendingAction,
-  verdictLabel,
-  createWorkflowMessage,
-  suggestedAction,
-} from "../utils/workflowHelpers.js";
-import { summarizeDraftQualityReport } from "../utils/qualitySummary.js";
-import { summarizeCommitReport } from "../utils/commitReportSummary.js";
-import { isRealDraftContent } from "../utils/draftContent.js";
+import { suggestedAction } from "../utils/workflowHelpers.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -55,18 +37,10 @@ import {
   type WorkspaceOperationToken,
 } from "../utils/workspaceOperation.js";
 import type { WorkspaceOperationTarget } from "../type-defs/workspace.js";
-import { prepareVersionedWorkspaceSave, recordWorkspaceRevision } from "../utils/workspaceRevisionTracker.js";
 
 /* ------------------------------------------------------------------ */
 /*  File-scope helpers (extracted from App.tsx)                        */
 /* ------------------------------------------------------------------ */
-
-function buildSelectedAdvicePlan(cards: readonly SelectedAdviceCard[]): string {
-  if (cards.length === 0) return "";
-  return `\n\n用户已选中的写法方案：${cards
-    .map(({ card }) => `${card.title}：${card.content}`)
-    .join("；")}`;
-}
 
 function completedAgentCard(input: {
   readonly id: string;
@@ -88,124 +62,14 @@ function completedAgentCard(input: {
   };
 }
 
-function draftAgentProgressCard(input: {
-  readonly status: ChapterAgentCard["status"];
-  readonly title: string;
-  readonly summary: string;
-  readonly detail?: readonly string[];
-}): ChapterAgentCard {
-  return {
-    id: "agent-fast-draft",
-    kind: "draft",
-    agentName: "fastDraftAgent",
-    status: input.status,
-    title: input.title,
-    summary: input.summary,
-    ...(input.detail?.length ? { detail: input.detail } : {}),
-  };
-}
-
-/** 设置弹窗「写作规则」页保存时收集的字段（原 UpdateWritingRulesRequest，随 /api/books/writing-rules 死路由删除改为本地形状；只用于拼 foundation-gaps 保存建议）。 */
-interface WritingRulesSaveInput {
-  readonly narrativePerspective?: string;
-  readonly proseStyle?: readonly string[];
-  readonly pacing?: string;
-  readonly revealPolicy?: string;
-  readonly targetChapterWords?: number;
-  readonly genreRequirements?: readonly string[];
-  readonly forbiddenContent?: readonly string[];
-  readonly doNotDo?: readonly string[];
-  readonly readerExperienceRules?: readonly string[];
-}
-
-function writingRulesSaveSuggestion(input: WritingRulesSaveInput): FoundationGapSuggestion {
-  return {
-    id: `manual-writing-rules-${Date.now()}`,
-    gapId: "manual-writing-rules",
-    category: "writingRules",
-    actionType: "update_writing_rule",
-    targetFile: "story/writing-rules.json",
-    targetPath: "$",
-    before: null,
-    after: {
-      ...(input.narrativePerspective ? { narrativePerspective: input.narrativePerspective } : {}),
-      ...(input.pacing ? { pacing: input.pacing } : {}),
-      ...(input.revealPolicy ? { revealPolicy: input.revealPolicy } : {}),
-      ...(typeof input.targetChapterWords === "number" ? { targetChapterWords: input.targetChapterWords } : {}),
-      replaceArrays: {
-        proseStyle: input.proseStyle,
-        genreRequirements: input.genreRequirements,
-        forbiddenContent: input.forbiddenContent,
-        doNotDo: input.doNotDo,
-        readerExperienceRules: input.readerExperienceRules,
-      },
-    },
-    rationale: "用户在资料编辑弹窗中保存当前书籍写作规则。",
-    risk: "info",
-    requiresUserConfirm: true,
-  };
-}
-
-/** 设置弹窗「故事设定」页保存时收集的字段（原 UpdateStorySettingsRequest，随 /api/books/story-settings 死路由删除改为本地形状；只用于拼 foundation-gaps 保存建议）。 */
-interface StorySettingsSaveInput {
-  readonly title: string;
-  readonly genre: string;
-  readonly logline: string;
-  readonly currentPhase: string;
-  readonly firstVolumeGoal?: string;
-  readonly longFormGoals?: readonly string[];
-  readonly worldRules?: readonly string[];
-  readonly socialRules?: readonly string[];
-  readonly importantFacts?: readonly string[];
-  readonly currentMainGoal?: string;
-  readonly centralConflicts?: readonly string[];
-  readonly forbiddenReveals?: readonly string[];
-  readonly openQuestions?: readonly string[];
-}
-
-function storySettingsSaveSuggestions(input: StorySettingsSaveInput): readonly FoundationGapSuggestion[] {
-  const entries: Array<readonly [FoundationGapSuggestion["category"], string, string, unknown]> = [
-    ["story", "project.json", "title", input.title],
-    ["world", "world/core.json", "genre", input.genre],
-    ["world", "world/core.json", "premise", input.logline],
-    ["world", "world/core.json", "rules", input.worldRules ?? []],
-    ["world", "world/state.json", "currentPhase", input.currentPhase],
-    ["world", "world/state.json", "activeConflicts", input.importantFacts ?? []],
-    ["story", "story/core.json", "readerPromise", input.currentMainGoal ?? input.logline],
-    ["story", "story/bible.json", "projectLogline", input.logline],
-    ["story", "story/bible.json", "premise", input.logline],
-    ["story", "story/bible.json", "genre", input.genre],
-    ["story", "story/bible.json", "readerPromise", input.logline],
-    ["story", "story/bible.json", "longFormGoals", input.longFormGoals ?? (input.firstVolumeGoal ? [input.firstVolumeGoal] : [])],
-    ["story", "story/bible.json", "centralConflicts", input.centralConflicts ?? []],
-    ["story", "story/bible.json", "forbiddenChanges", input.forbiddenReveals ?? []],
-    ["story", "story/bible.json", "canonFacts", input.importantFacts ?? []],
-    ["story", "story/bible.json", "openQuestions", input.openQuestions ?? []],
-    ["world", "story/world-bible.json", "rules", input.worldRules ?? []],
-    ["world", "story/world-bible.json", "socialOrder", input.socialRules ?? []],
-  ];
-  return entries.map(([category, targetFile, targetPath, after], index) => ({
-    id: `manual-story-settings-${Date.now()}-${index}`,
-    gapId: `manual-story-settings-${targetFile}-${targetPath}`,
-    category,
-    actionType: "fill_missing_field",
-    targetFile,
-    targetPath,
-    before: null,
-    after,
-    rationale: "用户在资料编辑弹窗中保存当前书籍故事设定。",
-    risk: "info",
-    requiresUserConfirm: true,
-    writeMode: "replace",
-  }));
-}
-
-function inferRevisionTargetType(source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }): DraftRevisionTask["targetType"] {
-  const target = `${source.issue?.category ?? ""} ${source.suggestion?.target ?? ""}`;
-  if (/开头|开场/u.test(target)) return "opening";
-  if (/结尾|追读/u.test(target)) return "ending";
-  if (/dialogue|对话|口吻/u.test(target)) return "dialogue";
-  if (/pacing|节奏|中段/u.test(target)) return "section";
+/**
+ * 修订类型只看审稿结果里的结构化类目（重构 P4）：不再拿正则去猜建议文字里的「开头/结尾/对话」。
+ * 类目对不上的一律按通用修订（段落）。
+ */
+function revisionTargetTypeFromCategory(category: DraftAIReviewIssue["category"] | undefined): DraftRevisionTask["targetType"] {
+  if (category === "reader_hook") return "ending";
+  if (category === "dialogue") return "dialogue";
+  if (category === "pacing") return "section";
   return "paragraph";
 }
 
@@ -234,27 +98,16 @@ function resolveRevisionTarget(
     source.issue?.affectedParagraphHint,
     source.suggestion?.target,
   ].filter((item): item is string => Boolean(item?.trim()));
+  const targetType = revisionTargetTypeFromCategory(source.issue?.category);
   for (const candidate of sourceTexts) {
     const exact = findExactOrContainingParagraph(draftContent, candidate);
-    if (exact) return { targetText: exact, targetType: inferRevisionTargetType(source), guessed: false };
+    if (exact) return { targetText: exact, targetType, guessed: false };
   }
-  // B5：精确/含有匹配都落空 → 下面按类目「猜」一段。猜中的一律标 guessed=true，让调用方提示用户核对，
-  // 不再静默把猜测当成精确目标改错段（违『绝不静默』铁律④）。
+  // B5：找不到原句 → 退一段给作者核对（标 guessed=true，调用方明确提示「是猜的」，绝不静默当精确目标）。
+  // 只按结构化类目选：追读钩子取最后一段，其余取第一段；不按建议文字猜。
   const paragraphs = draftParagraphs(draftContent);
-  if (source.issue?.category === "reader_hook") {
-    const last = paragraphs.at(-1);
-    return last ? { targetText: last, targetType: "ending", guessed: true } : null;
-  }
-  if (source.issue?.category === "dialogue" || /对话|口吻/u.test(source.suggestion?.target ?? "")) {
-    const dialogue = paragraphs.find((paragraph) => /[""“”]/u.test(paragraph));
-    return dialogue ? { targetText: dialogue, targetType: "dialogue", guessed: true } : null;
-  }
-  if (/开头|开场/u.test(source.suggestion?.target ?? "") || source.issue?.category === "plot" || source.issue?.category === "pacing") {
-    const first = paragraphs[0];
-    return first ? { targetText: first, targetType: "opening", guessed: true } : null;
-  }
-  const fallback = paragraphs[0];
-  return fallback ? { targetText: fallback, targetType: inferRevisionTargetType(source), guessed: true } : null;
+  const fallback = source.issue?.category === "reader_hook" ? paragraphs.at(-1) : paragraphs[0];
+  return fallback ? { targetText: fallback, targetType, guessed: true } : null;
 }
 
 function revisionIssueConstraints(issue?: DraftAIReviewIssue): readonly string[] {
@@ -273,9 +126,7 @@ function revisionIssueConstraints(issue?: DraftAIReviewIssue): readonly string[]
 
 export interface UseWorkflowActionsParams {
   projectPath: string | null;
-  resolveChapterDirection: (value?: unknown) => string;
   appendMessage: (message: ChapterMessage) => void;
-  appendWorkflowPrompt: (state: ChapterWorkflowState, content?: string) => void;
   applyOverviewToWorkspace: (
     overview: StateOverview,
     draftContent?: string,
@@ -284,8 +135,6 @@ export interface UseWorkflowActionsParams {
     // 写类工具回传的「本次实际操作章号」——前端认领以推进当前章，修跨章草稿污染。
     targetChapter?: number,
   ) => void;
-  /** 把当前草稿直接持久化（写 drafts/fast 草稿文件 + 工作区快照）。 */
-  saveDraftChanges?: () => Promise<void>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,7 +142,7 @@ export interface UseWorkflowActionsParams {
 /* ------------------------------------------------------------------ */
 
 export function useWorkflowActions(params: UseWorkflowActionsParams) {
-  const { projectPath, resolveChapterDirection, appendMessage, appendWorkflowPrompt, applyOverviewToWorkspace, saveDraftChanges } = params;
+  const { projectPath, appendMessage, applyOverviewToWorkspace } = params;
 
   const currentOperationIdentity = () => {
     const store = useWorkspaceStore.getState();
@@ -333,12 +182,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     if (ownsCurrentWorkspace(token)) {
       useWorkspaceStore.getState().setDraftActionLoading(null);
     }
-    finishWorkspaceOperation(token);
-  };
-
-  const finishOwnedSteeringOperation = (token: WorkspaceOperationToken): void => {
-    if (!isWorkspaceOperationCurrent(token)) return;
-    if (ownsCurrentWorkspace(token)) useWorkspaceStore.getState().setSteeringLoading(false);
     finishWorkspaceOperation(token);
   };
 
@@ -405,474 +248,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         summary: message,
       }),
     });
-  };
-
-  /* -------------------------------------------------------------- */
-  /*  generateSteering  (App.tsx 1001-1042)                         */
-  /* -------------------------------------------------------------- */
-
-  const generateSteering = async (directionOverride?: unknown): Promise<void> => {
-    const direction = resolveChapterDirection(directionOverride);
-    const ws = useWorkspaceStore.getState();
-
-    if (!projectPath) {
-      ws.setSteeringError("请先从首页打开一个真实 StoryEngine 项目。");
-      return;
-    }
-    if (!direction) {
-      ws.setSteeringError("请先输入本章方向。");
-      appendMessage({
-        id: `assistant-direction-needed-${Date.now()}`,
-        role: "assistant",
-        content: "可以生成本章方案，但我还需要一个本章方向。请补一句这章要写什么。",
-      });
-      return;
-    }
-
-    const operation = beginOwnedOperation("generate-steering");
-    if (!operation) return;
-    ws.setSteeringLoading(true);
-    ws.setSteeringError(null);
-    try {
-      const draft = await fetchChapterSteering({
-        projectPath,
-        userDirection: direction,
-        chapter: operation.chapter,
-        pacing: "medium",
-        revealLevel: "small",
-        maxSuggestions: 6,
-      });
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      const s = useWorkspaceStore.getState();
-      s.setSteeringDraft(draft);
-      s.setWorkspace({ ...s.workspace, flowStatus: "steering_ready" });
-      s.setLastChapterDirection(direction);
-      appendMessage({
-        id: `assistant-steering-${Date.now()}`,
-        role: "assistant",
-        content: workflowPromptText("steering_ready"),
-        agentCards: [completedAgentCard({
-          id: "agent-steering",
-          kind: "steering",
-          agentName: "chapterSteeringAgent",
-          title: "本章方案已生成",
-          summary: `根据你的方向整理了第 ${s.workspace.currentChapter.chapterNumber} 章写作方案。`,
-          detail: [
-            `建议数：${draft.suggestions.length}`,
-            `本章目标：${draft.generatedChapterGoalPreview}`,
-            "未写正式状态",
-          ],
-        })],
-        suggestedActions: actionsForWorkflowState("steering_ready"),
-      });
-    } catch (error) {
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      useWorkspaceStore.getState().setSteeringError(error instanceof Error ? error.message : String(error));
-    } finally {
-      finishOwnedSteeringOperation(operation);
-    }
-  };
-
-  /* -------------------------------------------------------------- */
-  /*  handleGenerateDraft  (App.tsx 1044-1143)                      */
-  /* -------------------------------------------------------------- */
-
-  const handleGenerateDraft = async (
-    chapterGoalOverride?: string,
-    options: {
-      readonly errorTarget?: "chat" | "steering";
-      readonly progressMessageId?: string;
-      // 「写这一章」按钮直写：没显式方向/方案时用这个题材中立默认目标兜底，直接出稿——
-      // 不再因「没方向」落到「方案整理失败」（Kimi/Qwen 两轮真机都中）。见 resolveDirectWriteChapterGoal。
-      readonly fallbackGoalWhenEmpty?: string;
-    } = {},
-  ): Promise<void> => {
-    const ws = useWorkspaceStore.getState();
-
-    if (!projectPath) {
-      const message = "请先打开或创建一个项目。";
-      if (options.errorTarget === "chat") ws.setChatError(message);
-      else ws.setSteeringError(message);
-      return;
-    }
-
-    const explicitGoal = (chapterGoalOverride
-      ?? ws.steeringDraft?.generatedChapterGoalPreview
-      ?? `${ws.steeringDirection.trim()}${buildSelectedAdvicePlan(ws.selectedAdviceCards)}`).trim();
-    const chapterGoal = explicitGoal || (options.fallbackGoalWhenEmpty ?? "").trim();
-    if (!chapterGoal) {
-      const message = "请先输入本章方向，或先整理本章方案。";
-      if (options.errorTarget === "chat") ws.setChatError(message);
-      else ws.setSteeringError(message);
-      return;
-    }
-    const operation = beginOwnedOperation("generate-draft");
-    if (!operation) return;
-    ws.setDraftActionLoading("generate-draft");
-    // 出稿一开始就切到写作台，让用户看着正文流式出现（确定性按钮路也与 agent 路一致）。
-    useNavigationStore.getState().requestCenterView("desk");
-    ws.setCommitPreviewReport(null);
-    ws.setDraftAIReview(null);
-    ws.setActiveRevisionTask(null);
-    ws.setActiveRevisionPreview(null);
-
-    const chapter = ws.workspace.currentChapter.chapterNumber;
-    const savedBeforeGeneration = ws.workspace.draft.content;
-    const previousFlowStatus = ws.workspace.flowStatus;
-    const progressMessageId = options.progressMessageId ?? `assistant-draft-progress-${Date.now()}`;
-    const shouldAppendProgressMessage = !options.progressMessageId;
-
-    try {
-      const s1 = useWorkspaceStore.getState();
-      s1.setWorkspace({
-        ...s1.workspace,
-        flowStatus: "draft_generating",
-        draft: {
-          ...s1.workspace.draft,
-          chapterNumber: chapter,
-          title: s1.workspace.draft.title === `第${chapter}章` ? "生成中" : s1.workspace.draft.title,
-          content: "",
-          savedContent: savedBeforeGeneration,
-          status: "draft",
-          wordCount: 0,
-        },
-      });
-      const startingCard = draftAgentProgressCard({
-        status: "running",
-        title: "调取信息中",
-        summary: "正在读取故事状态、章节方向和写作约束。",
-        detail: ["准备构建本章写作上下文"],
-      });
-      if (shouldAppendProgressMessage) {
-        appendMessage({
-          id: progressMessageId,
-          role: "system",
-          content: "正文写作流程已启动。",
-          agentCards: [startingCard],
-        });
-      } else {
-        s1.updateMessage(progressMessageId, (current) => ({
-          ...current,
-          content: current.content || "正文写作流程已启动。",
-          agentCards: [startingCard],
-        }));
-      }
-
-      let streamedContent = "";
-      let writingCardShown = false;
-      await generateDraftStream(
-        { projectPath, chapter, chapterGoal },
-        {
-          onStatus(message) {
-            if (!ownsCurrentWorkspace(operation)) return;
-            const store = useWorkspaceStore.getState();
-            store.updateMessage(progressMessageId, (current) => ({
-              ...current,
-              content: "正文写作流程执行中。",
-              agentCards: [draftAgentProgressCard({
-                status: "running",
-                title: "调取信息中",
-                summary: message,
-                detail: ["正在构建上下文或等待模型开始输出"],
-              })],
-            }));
-            store.setChatError(null);
-            store.setSteeringError(null);
-            store.setWorkspace({
-              ...store.workspace,
-              draft: {
-                ...store.workspace.draft,
-                content: streamedContent,
-                savedContent: savedBeforeGeneration,
-                wordCount: countTextWords(streamedContent),
-              },
-            });
-          },
-          onDelta(delta) {
-            if (!ownsCurrentWorkspace(operation)) return;
-            if (!writingCardShown) {
-              writingCardShown = true;
-              useWorkspaceStore.getState().updateMessage(progressMessageId, (current) => ({
-                ...current,
-                content: "正文写作流程执行中。",
-                agentCards: [draftAgentProgressCard({
-                  status: "running",
-                  title: "写作中",
-                  summary: "模型正在流式生成正文，左侧工作稿区会同步更新。",
-                  detail: [
-                    "已完成上下文构建",
-                    "正在接收正文内容",
-                    "未写正式故事状态",
-                  ],
-                })],
-              }));
-            }
-            streamedContent += delta;
-            const store = useWorkspaceStore.getState();
-            store.setWorkspace({
-              ...store.workspace,
-              draft: {
-                ...store.workspace.draft,
-                content: streamedContent,
-                savedContent: savedBeforeGeneration,
-                wordCount: countTextWords(streamedContent),
-                status: "draft",
-              },
-            });
-          },
-          onDone(result) {
-            if (!ownsCurrentWorkspace(operation)) return;
-            // 认领本次出稿章号（与 SSE agent 路径同口径），杜绝跨章污染。
-            applyOverviewToWorkspace(result.overview, result.draftContent, "draft_ready", result.draftTitle, chapter);
-            useWorkspaceStore.getState().updateMessage(progressMessageId, (current) => ({
-              ...current,
-              content: "正文写作流程完成。",
-              agentCards: [completedAgentCard({
-                id: "agent-fast-draft",
-                kind: "draft",
-                agentName: "fastDraftAgent",
-                title: "正文工作稿已生成",
-                summary: `已生成第 ${chapter} 章工作稿，并自动保存。`,
-                detail: [
-                  `标题：${result.draftTitle ?? extractDraftTitle(result.draftContent) ?? "未生成"}`,
-                  `长度：${result.draftContent.length} 字符`,
-                  `目标文件：drafts/fast/chapter-${String(chapter).padStart(4, "0")}.md`,
-                  "未写正式状态",
-                ],
-              })],
-              toolOutput: [
-                "buildWriterContext: 已构建章节写作上下文",
-                "renderFastDraftPromptText: 已生成 FastDraft prompt",
-                "fastDraft stream: 已接收模型流式正文",
-                `draft target file: drafts/fast/chapter-${String(chapter).padStart(4, "0")}.md`,
-                `draft title: ${result.draftTitle ?? extractDraftTitle(result.draftContent) ?? "未生成"}`,
-                `draft length: ${result.draftContent.length} 字符`,
-              ],
-            }));
-          },
-        },
-      );
-
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      appendMessage({
-        id: `assistant-draft-${Date.now()}`,
-        role: "assistant",
-        content: workflowPromptText("draft_ready"),
-        suggestedActions: actionsForWorkflowState("draft_ready"),
-      });
-      // Persisting after a successful generation must not fall into the main
-      // catch: that would roll the draft back to its pre-generation content and
-      // mark the whole flow as failed over a transient save error. The debounced
-      // auto-save channel retries persistence, so a soft toast is enough here.
-      try {
-        await saveDraftChanges?.();
-      } catch {
-        useNavigationStore.getState().showToast("工作稿已生成，但自动保存失败，稍后会自动重试。", 5200);
-      }
-    } catch (error) {
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      const msg = error instanceof Error ? error.message : String(error);
-      const failedStore = useWorkspaceStore.getState();
-      failedStore.setWorkspace({
-        ...failedStore.workspace,
-        flowStatus: previousFlowStatus,
-        draft: {
-          ...failedStore.workspace.draft,
-          content: savedBeforeGeneration,
-          savedContent: savedBeforeGeneration,
-          wordCount: countTextWords(savedBeforeGeneration),
-          status: "draft",
-        },
-      });
-      failedStore.updateMessage(progressMessageId, (current) => ({
-        ...current,
-        content: `正文写作流程失败：${msg}`,
-        agentCards: [draftAgentProgressCard({
-          status: "failed",
-          title: "正文工作稿未写入",
-          summary: msg,
-          detail: [
-            "已恢复生成前的工作稿内容",
-            "未写正式故事状态",
-          ],
-        })],
-      }));
-      if (options.errorTarget === "chat") useWorkspaceStore.getState().setChatError(msg);
-      else useWorkspaceStore.getState().setSteeringError(msg);
-    } finally {
-      finishOwnedOperation(operation);
-    }
-  };
-
-  /* -------------------------------------------------------------- */
-  /*  handleQualityCheck  (App.tsx 1145-1167)                       */
-  /* -------------------------------------------------------------- */
-
-  const handleQualityCheck = async (): Promise<void> => {
-    if (!projectPath) return;
-    const ws = useWorkspaceStore.getState();
-    // #4：占位/空草稿不质检——否则会显示「质检完成」把占位当真稿（Kimi 真机）。诚实拦下、指路写正文。
-    if (!isRealDraftContent(ws.workspace.draft.content)) {
-      useNavigationStore.getState().showToast("这一章还没有正文，没法质检。请先点「写这一章」生成正文，再来质检。", 4600);
-      return;
-    }
-    const operation = beginOwnedOperation("quality-check");
-    if (!operation) return;
-    ws.setDraftActionLoading("quality-check");
-    const messageId = startAgentFlow({
-      messageId: `assistant-quality-progress-${Date.now()}`,
-      kind: "quality",
-      agentName: "qualityAgent",
-      title: "质检 Agent 运行中",
-      summary: "正在收集规则候选，并调用质量模型做上下文判定。",
-      detail: ["收集候选中", "AI 判定中"],
-    });
-    try {
-      const quality = await checkDraftQuality({
-        projectPath,
-        chapter: operation.chapter,
-        draftContent: ws.workspace.draft.content,
-      });
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      const qualitySummary = summarizeDraftQualityReport(quality);
-      const s = useWorkspaceStore.getState();
-      s.setWorkspace({ ...s.workspace, flowStatus: quality.passed ? "quality_checked" : "draft_ready" });
-      updateAgentFlow(messageId, {
-        role: "assistant",
-        content: qualitySummary.content,
-        card: completedAgentCard({
-          id: messageId.replace(/^assistant-/u, "agent-"),
-          kind: "quality",
-          agentName: "qualityAgent",
-          status: qualitySummary.cardStatus,
-          title: qualitySummary.cardTitle,
-          summary: `候选 ${quality.candidates?.length ?? quality.issues.length} 个；确认 ${qualitySummary.confirmed}，待确认 ${qualitySummary.needsConfirmation}，观察 ${qualitySummary.watch}，忽略 ${qualitySummary.dismissed}。`,
-          detail: qualitySummary.cardDetail,
-        }),
-        suggestedActions: qualitySummary.confirmed === 0
-          ? actionsForWorkflowState("quality_checked")
-          : [suggestedAction("ai-review"), suggestedAction("generate-draft")],
-      });
-    } catch (error) {
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      failAgentFlow(messageId, {
-        kind: "quality",
-        agentName: "qualityAgent",
-        title: "质检 Agent",
-        error,
-      });
-      useWorkspaceStore.getState().setSteeringError(error instanceof Error ? error.message : String(error));
-    } finally {
-      finishOwnedOperation(operation);
-    }
-  };
-
-  /* -------------------------------------------------------------- */
-  /*  handleDraftAIReview  (App.tsx 1169-1210)                      */
-  /* -------------------------------------------------------------- */
-
-  const handleDraftAIReview = async (): Promise<void> => {
-    if (!projectPath) return;
-    const ws = useWorkspaceStore.getState();
-    // #4 同类：占位/空草稿不审稿——避免把占位当真稿审。诚实拦下、指路写正文。
-    if (!isRealDraftContent(ws.workspace.draft.content)) {
-      useNavigationStore.getState().showToast("这一章还没有正文，没法做内容审阅。请先点「写这一章」生成正文，再来做内容审阅。", 4600);
-      return;
-    }
-    const operation = beginOwnedOperation("ai-review");
-    if (!operation) return;
-    ws.setDraftActionLoading("ai-review");
-    const messageId = startAgentFlow({
-      messageId: `assistant-ai-review-progress-${Date.now()}`,
-      kind: "review",
-      agentName: "reviewAgent",
-      title: "内容审阅 Agent 运行中",
-      summary: "正在读取工作稿、章节目标和质检结果，生成内容审阅报告。",
-      detail: ["读取上下文中", "内容审阅中"],
-    });
-    try {
-      const review = await reviewDraftWithAI({
-        projectPath,
-        chapter: operation.chapter,
-        draftContent: ws.workspace.draft.content || undefined,
-        chapterGoal: ws.steeringDraft?.generatedChapterGoalPreview,
-        userDirection: ws.lastChapterDirection || ws.steeringDirection || undefined,
-      });
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      useWorkspaceStore.getState().setDraftAIReview(review);
-      updateAgentFlow(messageId, {
-        role: "assistant",
-        content: [
-          `AI 内容审阅完成：${verdictLabel(review.verdict)}，评分 ${review.score}/100。`,
-          review.summary,
-          review.verdict === "ready_to_commit"
-            ? "可以继续生成定稿预览。"
-            : review.verdict === "needs_minor_revision"
-              ? "可以生成定稿预览，但建议先小修。"
-              : "暂不建议直接定稿，请先查看内容审阅的问题和修改建议。",
-        ].join("\n"),
-        suggestedActions: review.verdict === "ready_to_commit" || review.verdict === "needs_minor_revision"
-          ? [suggestedAction("commit-preview")]
-          : [suggestedAction("generate-draft"), suggestedAction("quality-check")],
-        card: completedAgentCard({
-          id: messageId.replace(/^assistant-/u, "agent-"),
-          kind: "review",
-          agentName: "reviewAgent",
-          title: "AI 内容审阅完成",
-          summary: `${verdictLabel(review.verdict)}，评分 ${review.score}/100。`,
-          detail: [
-            `问题：${review.issues.length}`,
-            `修改建议：${review.suggestedRevisions.length}`,
-            "未修改工作稿，未写正式状态",
-          ],
-        }),
-        toolOutput: [
-          "draftAIReview: 已调用 AI 内容审阅",
-          `verdict: ${review.verdict}`,
-          `score: ${review.score}`,
-          `issues: ${review.issues.length}`,
-          `suggestions: ${review.suggestedRevisions.length}`,
-          "safety: 未修改工作稿，未写正式状态",
-        ],
-        // 报告挂消息：时间线内折叠渲染；store.draftAIReview 仍写（分发/空态用），但展示不读它。
-        aiReviewReport: review,
-      });
-    } catch (error) {
-      if (!ownsCurrentWorkspace(operation)) {
-        notifyStaleOperation();
-        return;
-      }
-      failAgentFlow(messageId, {
-        kind: "review",
-        agentName: "reviewAgent",
-        title: "内容审阅 Agent",
-        error,
-      });
-      useWorkspaceStore.getState().setSteeringError(error instanceof Error ? error.message : String(error));
-    } finally {
-      finishOwnedOperation(operation);
-    }
   };
 
   /* -------------------------------------------------------------- */
@@ -1478,7 +853,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   /* -------------------------------------------------------------- */
 
   return {
-    generateSteering,
     handleSelectionRewrite,
     handleSelectionRewriteCustom,
     handleFixAiFlavorViolation,
@@ -1486,9 +860,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     handleRerollCandidates,
     handleApplyCandidate,
     handleCloseCandidates,
-    handleGenerateDraft,
-    handleQualityCheck,
-    handleDraftAIReview,
     handleCreateRevisionTask,
     handleGenerateRevisionPreview,
     handleApplyRevisionPreview,

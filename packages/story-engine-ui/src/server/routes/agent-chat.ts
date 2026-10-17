@@ -25,21 +25,11 @@ import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
+import { aiReviewTool } from "../agent/tools/ai-review.js";
+import { qualityCheckTool } from "../agent/tools/quality-check.js";
+import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
-import {
-  buildObedienceRetryNudgeMessage,
-  detectMissingExecutionForRequest,
-  detectUnbackedCompletionClaim,
-  inferClaimedWriteTool,
-  isGroundedRefusalReply,
-  missingExecutionWithUnbackedVerdict,
-  isVerdictToolName,
-  OBEDIENCE_RETRY_TRANSITION_TEXT,
-  sanitizeCorrectedAssistantHistory,
-  unbackedCompletionNoticeText,
-  type HonestyToolStep,
-} from "../../shared/honesty-detection.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
@@ -63,14 +53,9 @@ export function readCurrentChapter(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : undefined;
 }
 
-/** 取本轮最后一条用户原话，供 requestContext 注入工具层做写盘意图门。 */
-export function readLatestUserTurnText(messages: readonly { readonly role: string; readonly content: string }[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-    return message.content.trim() ? message.content : undefined;
-  }
-  return undefined;
+/** 作者在这段对话窗口里说过的话（user 消息原文，旧→新）：只给工具「找原句」用，不猜意图。 */
+export function readAuthorWords(messages: readonly { readonly role: string; readonly content: string }[]): readonly string[] {
+  return messages.filter((message) => message.role === "user" && message.content.trim()).map((message) => message.content);
 }
 
 /**
@@ -214,43 +199,6 @@ export function closingFallbackText(state: {
   return "抱歉，我这次没能生成回应。可以再说一次，或者换个说法吗？";
 }
 
-export function serverHonestyCorrectionText(args: {
-  readonly userText: string | undefined;
-  readonly assistantText: string;
-  readonly toolSteps: readonly HonestyToolStep[];
-}): string | null {
-  const userText = args.userText ?? "";
-  const assistantText = args.assistantText.trim();
-  if (!assistantText && !userText.trim()) return null;
-
-  if (detectUnbackedCompletionClaim(assistantText, args.toolSteps)) {
-    return `\n\n⚠️ 系统更正：${unbackedCompletionNoticeText(assistantText, userText)}`;
-  }
-  // 有磁盘依据、无完成声称的回合豁免（审计 A-4 + 复审 T4 三轮）。
-  if (isGroundedRefusalReply(assistantText, args.toolSteps)) return null;
-  // 2026-10-08 阶段 5：「请求了却没做」只在回复声称了那个结果（质检通过 / 可以定稿）时才更正——
-  // 十章验收误报：用户只是提到「定稿预览」、AI 也没说预览过，就被更正成「定稿影响预览没有执行」。
-  const missingExecution = missingExecutionWithUnbackedVerdict(userText, assistantText, args.toolSteps);
-  if (missingExecution) {
-    return `\n\n⚠️ 系统更正：${missingExecution.notice}`;
-  }
-  return null;
-}
-
-/**
- * 工具结果 → 诚实步骤状态。关键区分（复审 T4 三轮修法 2）：裁决类只读工具（isVerdictToolName，
- * 如 commit_preview 的 ok===canCommit）正常返回的 ok:false 是「裁决未过」（工具没崩、给出了
- * 真实否定答案）→ "verdict"，算「磁盘依据」；写类工具的 ok:false 仍是真失败 → "failed"；
- * 工具抛错/超时走 tool-error 分支（也是 "failed"）——只有这两类不算依据。
- */
-export function toolResultStatus(toolName: string | undefined, output: unknown): HonestyToolStep["status"] {
-  const result = output as { readonly needsConfirmation?: unknown; readonly ok?: unknown; readonly partialMiss?: unknown } | undefined;
-  if (result?.needsConfirmation === true) return "needs_confirmation";
-  if (result?.ok === false) return isVerdictToolName(toolName) ? "verdict" : "failed";
-  if (result?.partialMiss === true) return "partial";
-  return "completed";
-}
-
 /** Mastra 工具入参/出参校验失败时框架返回的错误形状（@mastra/core tools/validation.ts 的 validateToolInput/Output：
  *  { error:true, message, validationErrors }）。execute 不会跑，模型下一步能看到 message 自行修正重试。 */
 export interface MastraToolValidationFailure {
@@ -276,29 +224,13 @@ export function toolValidationFailureSummary(failure: MastraToolValidationFailur
 
 /** 工具结果转发前的归一：Mastra 校验失败结果没有 ok/summary，前端会当成「已完成 + 空」——
  *  步骤卡 1 秒内结束、点开没有任何原因（十章真机第 5/7 章出稿都出现过，见 R7.9）。归一成
- *  ok:false + 中文 summary + toolValidationFailure 标记，步骤卡如实显示失败与原因；
- *  诚实检测里它也不算「写背书」（此前会被误当成 completed，模型谎称已写也拦不住）。
- *  非校验失败结果逐字节原样转发（含裁决类 ok:false 的既有语义）。 */
-export function normalizeForwardedToolResult(
-  toolName: string | undefined,
-  result: unknown,
-): { readonly result: unknown; readonly status: HonestyToolStep["status"] } {
-  if (!isMastraToolValidationError(result)) {
-    return { result, status: toolResultStatus(toolName, result) };
-  }
-  // 只发干净的三字段：Mastra 的 message 原文里嵌着模型传来的完整参数（可能带正文片段），
-  // 不落到客户端（模型那边仍由框架喂原始 message，自行修正重试，不受影响）。
-  return {
-    result: { ok: false, summary: toolValidationFailureSummary(result), toolValidationFailure: true },
-    status: "failed",
-  };
+ *  ok:false + 中文 summary + toolValidationFailure 标记，步骤卡如实显示失败与原因。
+ *  只发干净的三字段：Mastra 的 message 原文里嵌着模型传来的完整参数（可能带正文片段），不落到客户端
+ *  （模型那边仍由框架喂原始 message，自行修正重试，不受影响）。其余结果逐字节原样转发。 */
+export function normalizeForwardedToolResult(result: unknown): unknown {
+  if (!isMastraToolValidationError(result)) return result;
+  return { ok: false, summary: toolValidationFailureSummary(result), toolValidationFailure: true };
 }
-
-/**
- * 服从重试上限（r8）：检出「口头声称完成但零工具调用」后自动重做的次数（1 = 初跑 + 最多 1 次重做）。
- * 绝不无限重试：重做后仍空转就按老路径追加诚实更正、如实收场。
- */
-export const MAX_OBEDIENCE_RETRIES = 1;
 
 /**
  * 一轮对话最多走几步（Mastra 默认 5）。2026-10-10 真机试写：作者一次列 7 处修改，改到第 4 处步数用完就停了，
@@ -310,13 +242,9 @@ export const AGENT_TURN_MAX_STEPS = 12;
 export const STEP_LIMIT_NOTICE = "\n\n（这一轮能走的步数用完了，事情可能还没做完。说「继续」我接着做。）";
 
 /**
- * 聊天历史窗口上限（r8 二轮·治「回执模式污染」的源头）。
- *
- * 真机实锤（ch84/ch88/ch93 三个病例完全一致）：聊天历史堆到 ≥5 章「出稿→回执→入库→回执」
- * 的重复剧本后，弱模型开始续写回执模式、不调工具——**正常成功回执也会诱发**，不只是被更正的
- * 编造回执（消毒治不了这一半）。故事状态的真值源本来就在磁盘/工具（read_state_overview、
- * 磁盘真相 system 行），聊天历史只承担近程对话连续性——截到最近 12 条（约 6 个回合），
- * 把模式先验掐在发病窗口（约 20 条）之下。确定性、模型无关。
+ * 聊天历史窗口上限：只带最近 12 条（约 6 个回合）给 AI。故事状态的真值在磁盘和工具里
+ * （read_state_overview、磁盘真相 system 行），聊天历史只承担近程对话连续性；带太多既费上下文，
+ * 也会让模型照着历史里的回执往下续写（r8 真机：堆到约 20 条起开始不调工具、续写回执）。
  */
 export const MAX_CHAT_HISTORY_MESSAGES = 12;
 
@@ -327,18 +255,8 @@ export function capChatHistoryWindow<T>(
   return messages.length <= limit ? messages : messages.slice(-limit);
 }
 
-/** 重做轮的工具选择策略（r8 二轮）：结构性强制，防止纠偏后模型交白卷/继续纯文本编造。 */
-export type ObedienceToolChoice = "required" | { readonly type: "tool"; readonly toolName: string };
-
-export interface ObedienceAttemptOptions {
-  /** 强制工具调用：能定位到期望工具就点名强制，否则至少强制调一个工具。 */
-  readonly toolChoice?: ObedienceToolChoice;
-  /** 点名强制时限 1 步：forced toolChoice 会作用于每一步，放多步会反复调同一工具。 */
-  readonly maxSteps?: number;
-}
-
 /** agent.stream fullStream chunk 的结构化最小面（只声明本路由真正读的字段，真实类型由 Mastra 提供）。 */
-export interface ObedientTurnChunk {
+export interface AgentTurnChunk {
   readonly type: string;
   readonly payload?: {
     readonly text?: string;
@@ -349,58 +267,39 @@ export interface ObedientTurnChunk {
     readonly result?: unknown;
     readonly error?: unknown;
     readonly stepResult?: { readonly reason?: string };
-    /** finish 帧：这次尝试（可能多步）的总用量与步骤。 */
+    /** finish 帧：这一轮（可能多步）的总用量与步骤。 */
     readonly output?: { readonly usage?: unknown; readonly steps?: readonly unknown[] };
   };
 }
 
 /**
- * 带「服从重试」的 agent 回合执行器（r8 治 ch88 阻断的核心）：
+ * 一个对话回合：消费 agent.stream 的 fullStream，转发成 SSE。
  *
- * 消费一次 agent.stream 的 fullStream 并转发 SSE；回合结束跑诚实检测——若检出「口头声称完成却无写类
- * 工具背书」（A1：`detectUnbackedCompletionClaim` 命中）且还有重试额度，则：
- *   ①向用户推一条过渡文案（可见记录保持诚实：上面的声称无效、下面才是真实执行）；
- *   ②把本轮产出文本 + 系统纠偏消息追加进模型消息序列，**沿用同一 requestContext**（用户原话
- *     不变 → TurnIntentGate 对合法写入不误拦），自动重跑一轮。
- * 重做后仍检出 → 按原路径追加「⚠️ 系统更正」诚实收场，绝不第三轮、绝不谎报。
- * A2「请求了执行类动作却没调对应工具」只产出诚实更正文案（`serverHonestyCorrectionText` 非空即
- * 追加）、不触发重做（复审 T4 三轮：有依据的拒绝/状态汇报天然不命中完成声称，不该被强制重做）。
- * 定稿不靠模型执行到底：真写盘只走用户点按钮的结构化动作（见 agent/user-actions.ts），
- * 模型漏调 commit_apply 时更正文案自带「确认定稿」按钮，一键补救。
+ * 重构 P4：不读作者原话、不改写 AI 的回复，也不自动重做。以前的「诚实检测 + 服从重试」用正则猜
+ * AI 有没有谎报、作者想让它做什么，猜错时会把正确回复整段换成「定稿没有执行」（P3 走查当场复现）。
+ * 现在真相看工具卡：卡片由工具的结构化结果渲染，AI 嘴上说什么都改不了卡片；作者档的写（定稿、改账……）
+ * 只能由按钮触发，AI 说「已定稿」也定不了稿。
  *
- * 为什么不能只靠更正文案：ch84/ch88 真机实锤——护栏只纠文本时，弱模型把历史里的成功回执当剧本续写，
- * 更正后下一回合继续编造，长跑三连败卡死。重试把「自愈」从赌模型素质变成系统机制（模型无关）。
- * 抽成独立函数并注入 streamAttempt，是为了单测能用假流覆盖重试路径（真机验证成本太高）。
+ * 收尾只做两件结构性的事：
+ * - 这一轮一个字都没说：有工具结果就转述最后一张卡的摘要，什么都没做就请作者重说（绝不静默）；
+ * - 最后一步还停在工具调用上 = 步数用完被截停，如实说没做完。
  */
-export async function runObedientAgentTurn(args: {
-  readonly initialMessages: readonly ModelMessage[];
-  readonly userText: string | undefined;
-  readonly streamAttempt: (
-    messages: readonly ModelMessage[],
-    options?: ObedienceAttemptOptions,
-  ) => Promise<AsyncIterable<ObedientTurnChunk>>;
+export async function runAgentTurn(args: {
+  readonly fullStream: AsyncIterable<AgentTurnChunk>;
   readonly sendEvent: (event: string, data: unknown) => void;
   readonly scrubber: { push(text: string): string; flush(): string };
-  readonly maxRetries?: number;
-  /** 客户端已断开（abortOnClientDisconnect）：立即停转发、且检出空转也不再自动重做（不再开新工具步骤）。 */
+  /** 客户端已断开（abortOnClientDisconnect）：立即停转发。 */
   readonly shouldStop?: () => boolean;
-}): Promise<{ readonly finishReason: string | undefined; readonly attempts: number }> {
-  const maxRetries = args.maxRetries ?? MAX_OBEDIENCE_RETRIES;
-  const modelMessages: ModelMessage[] = [...args.initialMessages];
+}): Promise<{ readonly finishReason: string | undefined }> {
   let finishReason: string | undefined;
-  // 跨尝试累计：工具活动/最近摘要供「绝不静默」兜底（重做轮真调了工具，兜底就该转述它的结果）。
   let sawToolActivity = false;
   let lastToolSummary: string | undefined;
-  // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」
-  // 和「正文生成没有执行」这两段——三句话说同一件失败，作者反而看不清（2026-10-08 浏览器走查）。
+  // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
-  let attemptOptions: ObedienceAttemptOptions | undefined;
-  // 诚实检测按【整回合累计】口径：首轮真跑了 commit_preview、重做轮只补 commit_apply 时，
-  // 只看重做轮会把 preview 误判成「没执行」（组合意图）。声称文本与工具集都跨尝试累计。
-  const toolSteps = new Map<string, HonestyToolStep>();
+  let emittedText = false;
   // 空工具调用 id 兜底：上游三层（ai-sdk / openai-compatible / Mastra）正常都保证带 id，但适配器
-  // 抽风给空串时，所有空 id 会塌进 toolSteps 的同一个 key —— 前一张工具卡被后一张覆盖、结果配错对、
-  // 时间线卡死。给空 id 分配确定性合成 id；同工具名的 call/result 按 FIFO 配对，保证仍能对上。
+  // 抽风给空串时，所有空 id 会塌成同一个——前一张工具卡被后一张覆盖、结果配错对、时间线卡死。
+  // 给空 id 分配确定性合成 id；同工具名的 call/result 按 FIFO 配对，保证仍能对上。
   const syntheticQueues = new Map<string, string[]>();
   let syntheticCounter = 0;
   const syntheticToolName = (raw: unknown): string =>
@@ -421,177 +320,88 @@ export async function runObedientAgentTurn(args: {
     const name = syntheticToolName(toolName);
     return syntheticQueues.get(name)?.shift() ?? `synthetic-${name}-${(syntheticCounter += 1)}`;
   };
-  let turnText = "";
 
-  for (let attempt = 0; ; attempt += 1) {
-    let attemptText = "";
-    let attemptEmittedText = false;
-
-    const fullStream = await args.streamAttempt(modelMessages, attemptOptions);
-    for await (const chunk of fullStream) {
-      // 客户端已断开：流还在吐也不再转发（write 到已关闭的 res 只是空转），尽快退出消费。
-      if (args.shouldStop?.()) break;
-      switch (chunk.type) {
-        case "text-delta": {
-          const text = chunk.payload?.text;
-          if (text) {
-            attemptEmittedText = true;
-            attemptText += text;
-            turnText += text;
-            const scrubbed = args.scrubber.push(text);
-            if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-          }
-          break;
+  for await (const chunk of args.fullStream) {
+    // 客户端已断开：流还在吐也不再转发（write 到已关闭的 res 只是空转），尽快退出消费。
+    if (args.shouldStop?.()) break;
+    switch (chunk.type) {
+      case "text-delta": {
+        const text = chunk.payload?.text;
+        if (text) {
+          emittedText = true;
+          const scrubbed = args.scrubber.push(text);
+          if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
         }
-        case "reasoning-delta": {
-          // 思考链增量（模型 reasoning_content → AI SDK reasoning-delta）。字段在 payload.text，
-          // 兼容 .delta 以防版本差异。前端累加成消息的「思考过程」。
-          const text = chunk.payload?.text ?? chunk.payload?.delta ?? "";
-          if (text) args.sendEvent("reasoning-delta", { text });
-          break;
-        }
-        case "tool-call": {
-          sawToolActivity = true;
-          const toolCallId = allocateSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
-          toolSteps.set(toolCallId, {
-            toolName: chunk.payload?.toolName,
-            status: "running",
-          });
-          args.sendEvent("tool-call", {
-            toolCallId,
-            toolName: chunk.payload?.toolName,
-            args: chunk.payload?.args ?? {},
-          });
-          break;
-        }
-        case "tool-result": {
-          sawToolActivity = true;
-          const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
-          // Mastra 校验失败结果在此归一（ok:false + summary + 标记），前端步骤卡不再「已完成 + 空」；
-          // 诚实状态同步取归一后的 failed（校验失败不是写背书，裁决类工具也不算「裁决未过」——它根本没跑）。
-          const forwarded = normalizeForwardedToolResult(chunk.payload?.toolName, chunk.payload?.result);
-          const resultPayload = forwarded.result as
-            | { readonly summary?: unknown; readonly dryRun?: unknown; readonly action?: unknown; readonly op?: unknown }
-            | undefined;
-          const summary = resultPayload?.summary;
-          if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
-          toolSteps.set(toolCallId, {
-            toolName: chunk.payload?.toolName,
-            status: forwarded.status,
-            // 诚实背书粒度（honesty-detection stepBacksWriteClaim）：prune 的 dryRun（预览不背书）/
-            // exemplars 的 action（list 不背书）/ 合并入口的 op（manage_snapshots 只认 op=prune 的真裁）随步骤带上；
-            // 没有这几字段的工具自然缺省、维持旧口径。
-            ...(typeof resultPayload?.dryRun === "boolean" ? { dryRun: resultPayload.dryRun } : {}),
-            ...(typeof resultPayload?.action === "string" ? { action: resultPayload.action } : {}),
-            ...(typeof resultPayload?.op === "string" ? { op: resultPayload.op } : {}),
-          });
-          args.sendEvent("tool-result", {
-            toolCallId,
-            toolName: chunk.payload?.toolName,
-            output: forwarded.result,
-          });
-          break;
-        }
-        case "tool-error": {
-          // 工具内部抛错（如缺 projectDir / 落盘失败）。绝不静默失败，且必须收尾正在 running 的
-          // 步骤/卡片：发独立 tool-error 事件（带 toolCallId+toolName），前端据此把对应步骤置 failed
-          // 再 append 错误消息——而非复用 error 事件（那样无法定位是哪张卡，时间线会卡在 running）。
-          const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
-          toolSteps.set(toolCallId, {
-            toolName: chunk.payload?.toolName,
-            status: "failed",
-          });
-          args.sendEvent("tool-error", {
-            toolCallId,
-            toolName: chunk.payload?.toolName,
-            error: stringifyError(chunk.payload?.error),
-            retryable: true,
-          });
-          break;
-        }
-        case "error": {
-          sawStreamError = true;
-          args.sendEvent("error", { error: stringifyError(chunk.payload?.error), retryable: true });
-          break;
-        }
-        case "finish": {
-          finishReason = chunk.payload?.stepResult?.reason;
-          recordAgentUsage(sampleFromSdkUsage(chunk.payload?.output?.usage), chunk.payload?.output?.steps?.length || 1);
-          break;
-        }
-        default:
-          break;
+        break;
       }
+      case "reasoning-delta": {
+        // 思考链增量（模型 reasoning_content → AI SDK reasoning-delta）。字段在 payload.text，
+        // 兼容 .delta 以防版本差异。前端累加成消息的「思考过程」。
+        const text = chunk.payload?.text ?? chunk.payload?.delta ?? "";
+        if (text) args.sendEvent("reasoning-delta", { text });
+        break;
+      }
+      case "tool-call": {
+        sawToolActivity = true;
+        const toolCallId = allocateSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
+        args.sendEvent("tool-call", {
+          toolCallId,
+          toolName: chunk.payload?.toolName,
+          args: chunk.payload?.args ?? {},
+        });
+        break;
+      }
+      case "tool-result": {
+        sawToolActivity = true;
+        const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
+        const output = normalizeForwardedToolResult(chunk.payload?.result);
+        const summary = (output as { readonly summary?: unknown } | undefined)?.summary;
+        if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
+        args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
+        break;
+      }
+      case "tool-error": {
+        // 工具内部抛错（如缺 projectDir / 落盘失败）。绝不静默失败，且必须收尾正在 running 的
+        // 步骤/卡片：发独立 tool-error 事件（带 toolCallId+toolName），前端据此把对应步骤置 failed
+        // 再 append 错误消息——而非复用 error 事件（那样无法定位是哪张卡，时间线会卡在 running）。
+        const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
+        args.sendEvent("tool-error", {
+          toolCallId,
+          toolName: chunk.payload?.toolName,
+          error: stringifyError(chunk.payload?.error),
+          retryable: true,
+        });
+        break;
+      }
+      case "error": {
+        sawStreamError = true;
+        args.sendEvent("error", { error: stringifyError(chunk.payload?.error), retryable: true });
+        break;
+      }
+      case "finish": {
+        finishReason = chunk.payload?.stepResult?.reason;
+        recordAgentUsage(sampleFromSdkUsage(chunk.payload?.output?.usage), chunk.payload?.output?.steps?.length || 1);
+        break;
+      }
+      default:
+        break;
     }
-
-    const stepsForDetection = [...toolSteps.values()];
-    const correction = serverHonestyCorrectionText({
-      userText: args.userText,
-      assistantText: turnText,
-      toolSteps: stepsForDetection,
-    });
-
-    // 重做硬门已拆（复审 T4 三轮修法 1）：只有「回复命中完成声称且无写背书」（A1 谎报）才自动重做——
-    // 有依据的拒绝/状态汇报/诚实失败汇报天然不命中完成声称，不再因「用户话里有入库/定稿关键词而本回合
-    // 没出现写工具」（A2 缺执行）被强制重做；A2 只保留诚实更正文案（下方最终收尾照实追加，不重跑模型）。
-    const unbackedClaim = detectUnbackedCompletionClaim(turnText, stepsForDetection);
-
-    // 客户端已断开时不重做：重试会再开一轮 agent.stream（新工具步骤），人已走茶凉纯属白费算力。
-    if (unbackedClaim && attempt < maxRetries && args.shouldStop?.() !== true) {
-      // 结构性强制（r8 二轮·ch93 实锤纯 prompt 纠偏无效——flash 重做轮直接交白卷）：
-      // 能从用户意图定位到期望工具就点名强制 + 限 1 步（forced choice 作用于每一步，多步会反复调
-      // 同一工具）；定位不到（只有声称、意图模糊）就至少强制调一个工具。协议层杜绝「纯文本再编一遍」。
-      // 期望工具定位：先用户意图（missing execution，A1/A2 尾步共用）；定位不到再从声称文本反推被编造
-      // 的动作（ch96 实锤：真跑了 commit_preview、编造了 commit_apply——组合意图里 apply 让位、missing 为空，
-      // 但「已正式入库」的声称本身指认了该强制哪个工具）。都定位不到才 required 兜底。
-      const missing = detectMissingExecutionForRequest(args.userText ?? "", stepsForDetection);
-      // 对话 AI 没有定稿工具（2026-10-10：定稿只能点按钮）——它谎称已定稿时强制它去做定稿预览，预览卡上有按钮。
-      // 期望名是已删并入口径时映射到注册名（2026-10-12 R3b：edit_fact_ledger 并入 manage_ledger）。
-      const expected = missing?.expectedTool ?? inferClaimedWriteTool(attemptText);
-      const forcedTool = expected === "commit_apply" ? "commit_preview" : expected === "edit_fact_ledger" ? "manage_ledger" : expected;
-      // required 也必须限步（真机实锤）：forced choice 每一步都强制调工具、永远到不了纯文本收尾，
-      // 不限步会一直跑到框架步数上限（弱模型开思考时一步一分钟，整轮挂十来分钟）。
-      attemptOptions = forcedTool
-        ? { toolChoice: { type: "tool", toolName: forcedTool }, maxSteps: 1 }
-        : { toolChoice: "required", maxSteps: 4 };
-      console.warn(
-        `[obedience-retry] 第 ${attempt + 1} 次回复口头声称未执行（零对应工具调用），自动重做一次` +
-          `（强制工具：${forcedTool ?? "required"}）`,
-      );
-      if (attemptText.trim()) modelMessages.push({ role: "assistant", content: attemptText });
-      modelMessages.push(buildObedienceRetryNudgeMessage(args.userText, forcedTool));
-      const transition = args.scrubber.push(OBEDIENCE_RETRY_TRANSITION_TEXT);
-      if (transition) args.sendEvent("text-delta", { text: transition });
-      continue;
-    }
-
-    // 最终尝试收尾。绝不静默：本轮一个 text 都没发就补一条收尾，别让用户对着无声的工具结果发懵（#2/#4）。
-    // emittedText 按【最终尝试】算——被作废的首轮声称不算「已回话」，重做轮闷头调完工具就该转述其结果。
-    const fallback = sawStreamError && !sawToolActivity
-      ? null
-      : closingFallbackText({ emittedText: attemptEmittedText, sawToolActivity, lastToolSummary });
-    if (fallback) {
-      const scrubbed = args.scrubber.push(fallback);
-      if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    }
-    // 正常回合（非强制重做）最后一步还是工具调用 = 步数用完被截停，不是模型自己说完了。
-    if (finishReason === "tool-calls" && !attemptOptions && !sawStreamError) {
-      const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
-      if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
-    }
-    const remainingText = args.scrubber.flush();
-    if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-
-    // 出错回合只保留「口头声称完成却没执行」那种更正（那是谎报，必须当场纠正）；「该做的没做」由错误卡说清。
-    if (correction && (!sawStreamError || unbackedClaim)) {
-      console.warn(`[honesty-guard] 追加服务端诚实更正：${correction.replace(/\s+/gu, " ").slice(0, 240)}`);
-      const correctionScrubber = createStreamingScrubber();
-      const text = correctionScrubber.push(correction) + correctionScrubber.flush();
-      if (text) args.sendEvent("text-delta", { text });
-    }
-
-    return { finishReason, attempts: attempt + 1 };
   }
+
+  const fallback = sawStreamError && !sawToolActivity
+    ? null
+    : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
+  if (fallback) {
+    const scrubbed = args.scrubber.push(fallback);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  }
+  if (finishReason === "tool-calls" && !sawStreamError) {
+    const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+  }
+  const remainingText = args.scrubber.flush();
+  if (remainingText) args.sendEvent("text-delta", { text: remainingText });
+  return { finishReason };
 }
 
 export function registerAgentChatRoutes(middlewares: MiddlewareStack): void {
@@ -641,10 +451,8 @@ async function handleAgentChat(
       return;
     }
 
-    // 进站消毒（r8 任务②）：把历史里被系统更正/作废过的编造回执换成短桩，打断「编造回执成为
-    // 后续回合造假范本」的正反馈污染（user 消息原样保留）。再截历史窗口（r8 二轮）：正常成功回执
-    // 堆多了同样诱发模式续写（ch93 实锤），只保留最近一段——故事状态真值源在磁盘/工具，不在聊天历史。
-    const incomingMessages = sanitizeCorrectedAssistantHistory(readChatMessages(body.messages));
+    // 截历史窗口：只带最近一段给 AI——故事状态的真值在磁盘和工具里，不在聊天历史。
+    const incomingMessages = readChatMessages(body.messages);
     const messages = capChatHistoryWindow(incomingMessages);
     // R4 绝不静默：历史被裁掉时必须告诉用户——不然用户以为前面说过的话 agent 还记得，
     // 得到的回复却像失忆。故事状态真值在磁盘/工具，但聊天上下文确实被截了。
@@ -668,7 +476,7 @@ async function handleAgentChat(
       projectDir,
       currentChapter,
       (payload) => sendEvent("draft-delta", payload),
-      readLatestUserTurnText(messages),
+      readAuthorWords(messages),
       lastTurnUndoHint,
     );
 
@@ -729,22 +537,16 @@ async function handleAgentChat(
     const modelMessages: ModelMessage[] = buildModelMessages(systemMessage, history);
     const visibleTextScrubber = createStreamingScrubber();
 
-    // 带服从重试的回合执行（r8 任务①）：空转声称 → 自动重做一次 → 仍空转才诚实更正收场。
-    // streamAttempt 每次沿用同一 requestContext（用户原话不变 → 写入意图门对合法重做不误拦）。
     const turnStarted = Date.now();
-    const { result: { finishReason }, usage } = await withTokenMeter(() => runObedientAgentTurn({
-      initialMessages: modelMessages,
-      userText: readLatestUserTurnText(messages),
-      streamAttempt: async (attemptMessages, options) =>
-        (
-          await agent.stream([...attemptMessages], {
-            requestContext,
-            // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
-            abortSignal: disconnectAbort.signal,
-            ...(options?.toolChoice ? { toolChoice: options.toolChoice } : {}),
-            maxSteps: options?.maxSteps ?? AGENT_TURN_MAX_STEPS,
-          })
-        ).fullStream as AsyncIterable<ObedientTurnChunk>,
+    const { result: { finishReason }, usage } = await withTokenMeter(async () => runAgentTurn({
+      fullStream: (
+        await agent.stream([...modelMessages], {
+          requestContext,
+          // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
+          abortSignal: disconnectAbort.signal,
+          maxSteps: AGENT_TURN_MAX_STEPS,
+        })
+      ).fullStream as AsyncIterable<AgentTurnChunk>,
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
@@ -801,6 +603,16 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "generate_draft": {
       const execute = generateDraftTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    case "ai_review":
+    case "quality_check":
+    case "manage_snapshots": {
+      const tool = toolName === "ai_review" ? aiReviewTool : toolName === "quality_check" ? qualityCheckTool : manageSnapshotsTool;
+      const execute = tool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

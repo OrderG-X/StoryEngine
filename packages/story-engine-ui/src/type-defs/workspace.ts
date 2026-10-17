@@ -46,6 +46,8 @@ export interface ChapterMessage {
   readonly id: string;
   readonly role: "user" | "assistant" | "system";
   readonly content: string;
+  /** 「scaffolding」= 界面自己塞的招呼/进度提示（进工作台、流程提示），不是对话；进书时滤掉、空状态据此判断（重构 P4：不再按文案认）。 */
+  readonly kind?: "scaffolding";
   readonly adviceCards?: readonly ChapterAdviceCard[];
   readonly suggestedActions?: readonly SuggestedAction[];
   readonly agentCards?: readonly ChapterAgentCard[];

@@ -1,8 +1,8 @@
 /**
  * generate_chapter_steering — 只读工具：为下一章生成一份「剧情方案」（建议清单 + 本章目标预览）。
  *
- * 双轨合一：共享编排（校验方向 → buildChapterSteeringDraft → canonical result）已收进
- * services/steering-service.ts（与 routes/chapter-steering.ts 同调）。本工具只剩适配层：
+ * 编排（校验方向 → buildChapterSteeringDraft → canonical result）在
+ * services/steering-service.ts。本工具只剩适配层：
  * RequestContext 取 projectDir/章号回退（D26 输入面）+ 用户可见 summary（D27 输出面）。
  * 引擎能力是确定性的（writesState:false），本工具同样只读：不调模型、不写盘、不建快照、
  * 不带 snapshotId / refreshScope。

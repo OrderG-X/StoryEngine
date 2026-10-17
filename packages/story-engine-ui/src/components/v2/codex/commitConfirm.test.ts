@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChapterMessage } from "../../../types.js";
-import { commitChapterFromChoiceIntent, confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 
 function assistant(id: string, extra: Partial<ChapterMessage> = {}): ChapterMessage {
   return { id, role: "assistant", content: "", ...extra };
@@ -43,19 +43,5 @@ describe("confirmableCommitPreviewMessageId：「确认定稿」按钮只挂最�
 
   it("没有预览 → null", () => {
     expect(confirmableCommitPreviewMessageId([assistant("a")])).toBeNull();
-  });
-});
-
-describe("commitChapterFromChoiceIntent：只认规范定稿意图整句", () => {
-  it.each([
-    ["确认定稿第5章", 5],
-    ["确认定稿第 12 章", 12],
-    ["  确认定稿第3章 ", 3],
-  ])("%s → %d", (intent, chapter) => {
-    expect(commitChapterFromChoiceIntent(intent)).toBe(chapter);
-  });
-
-  it.each(["确认定稿", "确认定稿第0章", "先别确认定稿第5章", "确认定稿第5章吧", "生成第5章定稿预览"])("%s → null（照旧作为一句话发给 agent）", (intent) => {
-    expect(commitChapterFromChoiceIntent(intent)).toBeNull();
   });
 });

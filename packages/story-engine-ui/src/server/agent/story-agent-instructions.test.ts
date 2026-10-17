@@ -113,11 +113,12 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toMatch(/没写成|没单独建成资产|宁可少报/u);
   });
 
-  it("已确立设定覆盖被拦：如实转告缺什么、勿无限重试、改不成要诚实收尾", () => {
-    expect(instructions).toMatch(/已确立|长期设定/u);
-    expect(instructions).toMatch(/允许覆盖|确定/u);
-    expect(instructions).toMatch(/勿无限重试|不要反复重试|不得无限重试/u);
-    expect(instructions).toMatch(/没改成|没成功|如实/u);
+  it("删角色 / 覆盖已确立设定 / 整章重写：作者档，只告诉作者点哪个按钮、不重试（重构 P4）", () => {
+    expect(instructions).toContain("确认改设定");
+    expect(instructions).toContain("重写这一章");
+    expect(instructions).toContain("别重试");
+    expect(instructions).not.toContain("允许覆盖");
+    expect(instructions).not.toContain("confirmed=true");
   });
 });
 

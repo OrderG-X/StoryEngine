@@ -15,12 +15,9 @@ import { useChat } from "./hooks/useChat.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
 import { ChapterWorkspaceConflictError, fetchDefaultBookLibrary, saveChapterWorkspaceBeacon } from "./api/client.js";
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
-import { createWorkflowMessage } from "./utils/workflowHelpers.js";
-import { countTextWords } from "./utils/textUtils.js";
+import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
 import { carryChapterFileFlags } from "./utils/bookUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
-import { settlePendingDraftAgentCards } from "./utils/draftAgentSettlement.js";
-import { createDraftSaveRaceGuard } from "./utils/draftSaveRaceGuard.js";
 import {
   createExactPayloadAutosaveRunner,
   isAutosaveSuspended,
@@ -71,44 +68,6 @@ function reconcileWorkspaceConflict(
   });
 }
 
-/* ------------------------------------------------------------------ */
-/*  Shared helper: resolveChapterDirection                             */
-/* ------------------------------------------------------------------ */
-
-function resolveChapterDirection(value?: unknown): string {
-  const store = useWorkspaceStore.getState();
-  const nav = useNavigationStore.getState();
-  const overview = store.currentOverview;
-  const candidates = [
-    typeof value === "string" ? value : "",
-    store.lastChapterDirection,
-    store.steeringDirection,
-    firstChapterSetupDirection(overview),
-    store.steeringDraft?.generatedChapterGoalPreview ?? "",
-  ];
-  return candidates.map(normalizeChapterDirection).find((c) => c.length > 0) ?? "";
-}
-
-function firstChapterSetupDirection(overview: import("./api/types.js").StateOverview | null): string {
-  const setup = overview?.storyBible?.firstChapterSetup;
-  if (!setup) return "";
-  return [setup.goal, setup.openingScene, setup.hook, setup.conflict]
-    .map((v) => v?.trim())
-    .filter(Boolean)
-    .join("；");
-}
-
-function normalizeChapterDirection(value: string): string {
-  const text = value.trim();
-  if (!text) return "";
-  const exactCommands = new Set([
-    "写吧", "开始写", "生成草稿", "直接写", "写一章", "开始生成",
-    "质检", "提交预览", "确认提交", "正式提交", "继续下一章",
-  ]);
-  if (exactCommands.has(text)) return "";
-  if (/^(?:写吧|开始写|生成草稿|直接写|写一章|开始生成|质检|提交预览|确认提交|正式提交|继续下一章)[。！!？?\s]*$/u.test(text)) return "";
-  return text;
-}
 
 function isCurrentChapterAlreadyFormallyCommitted(
   lastFormalCommitApply: LastFormalCommitApply | null,
@@ -129,7 +88,6 @@ function isCurrentChapterAlreadyFormallyCommitted(
 /* ------------------------------------------------------------------ */
 
 export function App() {
-  const draftSaveRaceGuard = useRef(createDraftSaveRaceGuard());
   const autosaveRunnerRef = useRef<ReturnType<typeof createExactPayloadAutosaveRunner<CapturedAutosavePayload<readonly ChapterMessage[]>>> | null>(null);
   if (!autosaveRunnerRef.current) {
     autosaveRunnerRef.current = createExactPayloadAutosaveRunner<CapturedAutosavePayload<readonly ChapterMessage[]>>(async (payload) => {
@@ -279,90 +237,17 @@ export function App() {
     useWorkspaceStore.getState().appendMessage(message);
   };
 
-  const appendWorkflowPrompt = (state: ChapterWorkflowState, content?: string) => {
-    appendMessage(createWorkflowMessage(state, content));
-  };
-
-  const saveDraftChanges = async (): Promise<void> => {
-    await draftSaveRaceGuard.current.run(async () => {
-      const store = useWorkspaceStore.getState();
-      const nav = useNavigationStore.getState();
-      const draft = store.workspace.draft;
-      const draftTitle = extractDraftTitle(draft.content) ?? draft.title;
-      const hasRealDraft = isRealDraftContent(draft.content);
-      const nextFlowStatus = hasRealDraft ? "draft_ready" as const : store.workspace.flowStatus;
-      const suppressDraftWrite = isDraftFileWriteSuppressed({
-        flowStatus: store.workspace.flowStatus,
-        draftActionLoading: store.draftActionLoading,
-      });
-      const settledMessages = settlePendingDraftAgentCards(store.workspace.messages, "saved");
-      useWorkspaceStore.getState().updateWorkspace({ messages: settledMessages });
-      const request = nav.projectPath
-        ? buildWorkspaceAutosaveRequest({
-          projectPath: nav.projectPath,
-          chapter: store.workspace.currentChapter.chapterNumber,
-          messages: settledMessages,
-          selectedAdviceCardKeys: store.selectedAdviceCards.map((item) => item.key),
-          flowStatus: nextFlowStatus,
-          content: draft.content,
-          title: draftTitle,
-          suppressed: suppressDraftWrite,
-          committed: draft.status === "committed",
-        })
-        : null;
-      if (request) {
-        const versionedRequest = prepareVersionedWorkspaceSave(request);
-        try {
-          const saved = await import("./api/client.js").then(({ saveChapterWorkspace }) => saveChapterWorkspace(versionedRequest));
-          const revision = saved.revision ?? versionedRequest.expectedRevision ?? 0;
-          recordWorkspaceRevision(versionedRequest.projectPath, versionedRequest.chapter, revision);
-          useWorkspaceStore.getState().setWorkspaceRevision(revision);
-        } catch (error) {
-          if (error instanceof ChapterWorkspaceConflictError) {
-            reconcileWorkspaceConflict(versionedRequest.projectPath, versionedRequest.chapter, error);
-          }
-          throw error;
-        }
-      }
-      useWorkspaceStore.getState().resetCommitState();
-      useWorkspaceStore.getState().setDraftAIReview(null);
-      useWorkspaceStore.getState().updateWorkspace({ flowStatus: nextFlowStatus });
-      if (request?.writeDraftFile === true) {
-        useWorkspaceStore.getState().updateDraft({
-          title: draftTitle,
-          savedContent: draft.content,
-          wordCount: countTextWords(draft.content),
-        });
-        nav.showToast("工作稿已保存。", 2200);
-      } else if (!hasRealDraft) {
-        nav.showToast("当前没有可安全保存的正文，未覆盖磁盘工作稿。", 4200);
-      }
-    });
-  };
-
   const workflow = useWorkflowActions({
     projectPath,
-    resolveChapterDirection,
     appendMessage,
-    appendWorkflowPrompt,
     applyOverviewToWorkspace,
-    saveDraftChanges,
   });
 
-  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, undoToTurn, stopAgent } = useChat({
+  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, handleChapterButton, undoToTurn, stopAgent } = useChat({
     projectPath,
-    resolveChapterDirection,
-    handleGenerateDraft: workflow.handleGenerateDraft,
-    handleQualityCheck: workflow.handleQualityCheck,
-    handleDraftAIReview: workflow.handleDraftAIReview,
-    handleGenerateRevisionPreview: workflow.handleGenerateRevisionPreview,
     handleApplyRevisionPreview: workflow.handleApplyRevisionPreview,
-    handleGenerateSteering: workflow.generateSteering,
-    handleContinueNextChapter: navigation.handleContinueNextChapter,
-    handleCreateRevisionTask: workflow.handleCreateRevisionTask,
     applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
-    saveDraftChanges,
   });
 
   /* ---- Auto-save：串行化 + 失败可见 + 退出/切换 flush（审查 #3/#4/#5） ---- */
@@ -638,16 +523,12 @@ export function App() {
             themeMode,
             workspace,
             selectedAdviceCardKeys: selectedAdviceCards.map((item) => item.key),
-            onGenerateSteering: () => void workflow.generateSteering(),
-            onRepairDraft: () => void workflow.handleQualityCheck(),
-            onDraftAIReview: () => void workflow.handleDraftAIReview(),
             onCreateRevisionTask: workflow.handleCreateRevisionTask,
             onFixAiFlavorViolation: workflow.handleFixAiFlavorViolation,
             onFixAllAiFlavorViolations: workflow.handleFixAiFlavorAll,
             onGenerateRevisionPreview: () => void workflow.handleGenerateRevisionPreview(),
             onApplyRevisionPreview: () => void workflow.handleApplyRevisionPreview(),
             onDismissRevisionTask: workflow.handleDismissRevisionTask,
-            onRegenerateDraft: () => void workflow.handleGenerateDraft(),
             onGoHome: () => navigation.openHome(),
             onOpenHistory: () => setHistoryOpen(true),
             onOpenSettings: openSettings,
@@ -674,6 +555,7 @@ export function App() {
             onSuggestedAction: handleSuggestedAction,
             onSendMessage: handleSendMessage,
             onSendUserAction: handleSendUserAction,
+            onChapterButton: handleChapterButton,
             onStopAgent: stopAgent,
             onClearChat: () => {
               const backup = useWorkspaceStore.getState().workspace.messages;
@@ -770,14 +652,6 @@ export function App() {
 /* ------------------------------------------------------------------ */
 /*  Helper functions (pure, non-component)                             */
 /* ------------------------------------------------------------------ */
-
-function extractDraftTitle(content: string | undefined): string | null {
-  if (!content) return null;
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!firstLine?.startsWith("#")) return null;
-  const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return title || null;
-}
 
 function updateChapterListTitle(chapters: readonly import("./types.js").ChapterNavItem[], chapterNumber: number, title: string): readonly import("./types.js").ChapterNavItem[] {
   return chapters.map((chapter) => (

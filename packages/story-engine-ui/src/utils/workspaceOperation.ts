@@ -15,7 +15,6 @@ export type WorkspaceOperationKind =
   | "commit-apply"
   | "navigation-transition"
   | "session-transition"
-  | "direct-edit"
   | "foundation-write"
   | "deai-fix-all"
   | "other-write";

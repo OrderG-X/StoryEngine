@@ -2,7 +2,7 @@
  * ai_review — 只读工具：对某章草稿做 AI 深度审稿（剧情/节奏/人物/对白/连续性/读者钩子），不改稿。
  *
  * 双轨合一：共享编排（取真草稿 → 确定性质检+上下文 → 组 prompt → callModel → 解析/回退）
- * 已收进 services/review-service.ts（与 routes/draft.ts 的 /api/draft/ai-review 同调）。
+ * 在 services/review-service.ts。
  * 本工具只剩适配层：RequestContext 取 projectDir/章号回退 + 用户可见 summary 投影（D20 输出面）。
  * 策略参数由本适配层显式声明：trustExplicit 默认 false（不信模型给的正文、盘稿优先，D19）。
  *

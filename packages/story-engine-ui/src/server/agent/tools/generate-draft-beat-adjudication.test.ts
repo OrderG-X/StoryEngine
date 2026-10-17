@@ -284,7 +284,7 @@ describe("generate_draft × beats 判漏 AI 复核（execute 接线：triage 任
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean;
@@ -317,7 +317,7 @@ describe("generate_draft × beats 判漏 AI 复核（execute 接线：triage 任
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean; summary: string; beatFidelity?: unknown;

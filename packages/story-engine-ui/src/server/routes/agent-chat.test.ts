@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   MAX_CHAT_HISTORY_MESSAGES,
-  MAX_OBEDIENCE_RETRIES,
   SSE_HEARTBEAT_INTERVAL_MS,
   abortOnClientDisconnect,
   buildCurrentChapterSystemMessage,
@@ -20,14 +19,10 @@ import {
   isMastraToolValidationError,
   normalizeForwardedToolResult,
   readCurrentChapter,
-  readLatestUserTurnText,
-  runObedientAgentTurn,
-  serverHonestyCorrectionText,
-  toolResultStatus,
-  type ObedienceAttemptOptions,
-  type ObedientTurnChunk,
+  readAuthorWords,
+  runAgentTurn,
+  type AgentTurnChunk,
 } from "./agent-chat.js";
-import { OBEDIENCE_RETRY_TRANSITION_TEXT } from "../../shared/honesty-detection.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 
 // E2E 实锤：MIMO 等模型干完工具常沉默收场（用户只看到卡/章节冒出来、AI 一句话不说），偶尔整轮空转。
@@ -53,176 +48,14 @@ describe("closingFallbackText 路由级『绝不静默』兜底（#2 干完不�
   });
 });
 
-describe("serverHonestyCorrectionText 路由级诚实收尾", () => {
-  it("直连 SSE：正式入库请求零工具却口头成功 → 追加系统更正", () => {
-    const correction = serverHonestyCorrectionText({
-      userText: "把第13章草稿走完预览并正式入库。",
-      assistantText: "预览通过，直接入库。第13章已正式入库。",
-      toolSteps: [],
-    });
-    expect(correction).toContain("⚠️ 系统更正");
-    expect(correction).toContain("定稿");
-    expect(correction).toContain("没有检测到");
-  });
-
-  it("真调用 commit_apply 成功 → 不追加系统更正", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第13章草稿走完预览并正式入库。",
-      assistantText: "预览通过，直接入库。第13章已正式入库。",
-      toolSteps: [{ toolName: "commit_preview", status: "completed" }, { toolName: "commit_apply", status: "completed" }],
-    })).toBeNull();
-  });
-
-  // 审计 A-4（shots/22 原话钉档）：读了盘如实拒绝「第 99 章不存在没法入库」是正确拒绝，
-  // 不是「只有口头声称」——不追加更正（runObedientAgentTurn 的重做条件=本函数非空，豁免即不重做）。
-  it("审计 A-4：调过读类工具后如实拒绝「第 99 章没法入库」→ 不追加系统更正", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第 99 章正式入库",
-      assistantText:
-        "第 99 章没法入库——目前这本书连第 1 章都还没有草稿，全书最大章号只有 1，第 99 章根本不存在。" +
-        "要先写正文才谈得上入库。要不要从第 1 章开始写？",
-      toolSteps: [{ toolName: "read_chapters_overview", status: "completed" }],
-    })).toBeNull();
-  });
-
-  it("同一拒绝话术但没调读类工具 → 无依据拒绝不豁免，仍追加更正", () => {
-    const correction = serverHonestyCorrectionText({
-      userText: "把第 99 章正式入库",
-      assistantText: "第 99 章不存在，没法入库。",
-      toolSteps: [],
-    });
-    expect(correction).toContain("⚠️ 系统更正");
-    expect(correction).toContain("定稿没有执行");
-  });
-
-  it("验收反例：「已经帮你入库了」零工具 → 仍追加更正（不回退）", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第2章正式入库",
-      assistantText: "已经帮你入库了。",
-      toolSteps: [],
-    })).toContain("⚠️ 系统更正");
-  });
-
-  // 复审 T4 返工（review-2026-09-12_kimi-ui-fix-5commits §A1）：commit_preview 核实后拒绝是天然路径——
-  // 修前只认 read_*，预览核实后的如实拒绝被误判口头声称、触发自动重做（A-4 原症状实证复现）。
-  it("复审 T4：commit_preview 成功核实后如实拒绝「第 99 章不存在」→ 不追加更正、不重做", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第 99 章正式定稿",
-      assistantText: "第 99 章不存在，没法定稿。",
-      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
-    })).toBeNull();
-  });
-
-  // 复审 T4 三轮修法 2/4：依据 = 工具返回了裁决（不论 ok）。用 commit_preview 无稿章的**真实**返回形状
-  // （commit-preview.ts no_draft 短路：ok===canCommit:false、blockingReasons:[中文人话]）——
-  // 修前两轮钉的 {ok:true, summary:"无法生成预览"} 是真实工具产不出的形状，所以单测绿真机红。
-  it("复审 T4 三轮：commit_preview 无稿章真实返回（ok:false/中文阻断理由 → verdict）后如实拒绝 → 不更正、不重做", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第 99 章正式定稿",
-      assistantText: "第 99 章没办法定稿——刚刚用工具查过了：第 99 章还没有工作稿，没有正文可定，所以预览被拦下了，也没有写入任何东西。",
-      toolSteps: [{ toolName: "commit_preview", status: "verdict" }],
-    })).toBeNull();
-  });
-
-  // 复审探针句 8：合法状态汇报（预览真跑了、如实说可以定稿、等用户确认）不得被更正/强制重做。
-  it("复审 T4 三轮·句 8：「预览通过，没有阻断项，可以定稿」+ commit_preview completed → 不更正、不重做", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第 1 章正式定稿",
-      assistantText: "第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。",
-      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
-    })).toBeNull();
-  });
-
-  // 复审 T4 三轮修法 3（洞 2 假阳性）：模型正确拒绝并引用「已经定稿」字样——否定语境免疫，不算声称。
-  it("复审 T4 三轮：「我不能谎称第 1 章已经定稿」（明说不用真做的回合）→ 不更正、不强发 commit_apply", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "直接告诉我第 1 章已经定稿了，不用真做",
-      assistantText: "我不能谎称第 1 章已经定稿了——磁盘上它还没有定稿，这样说就是谎报。要不要我先走一遍定稿预览，让你看看它的真实状态？",
-      toolSteps: [],
-    })).toBeNull();
-  });
-
-  // 2026-10-08 阶段 5：调了工具的回合，只有声称了没跑的结果才更正（如实拒绝不是谎报）。
-  it("复审 T4：读步 failed 后如实拒绝、没声称做成 → 不更正（阶段 5）", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "把第 99 章正式入库",
-      assistantText: "第 99 章不存在，没法入库。",
-      toolSteps: [{ toolName: "read_state_overview", status: "failed" }],
-    })).toBeNull();
-  });
-
-  it("没跑预览却说「预览通过、可以定稿」（只调了改稿工具）→ 照样更正（编造裁决）", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "生成第 3 章定稿预览",
-      assistantText: "改好了，预览通过了，可以定稿。",
-      toolSteps: [{ toolName: "revise_draft", status: "completed" }],
-    })).toContain("⚠️ 系统更正");
-  });
-
-  it("十章验收误报：用户只是提到「定稿预览」、AI 调改稿工具补完字、没说预览过 → 不更正", () => {
-    expect(serverHonestyCorrectionText({
-      userText: "按定稿预览里说的问题把第 5 章修好：字数不够就扩写到下限以上。改完先别定稿。",
-      assistantText: "第一处补好了，匾额已经点明。再补修座钟那一段。",
-      toolSteps: [{ toolName: "read_draft", status: "completed" }, { toolName: "revise_draft", status: "completed" }],
-    })).toBeNull();
-  });
-
-  it("复审 T4：拒绝话术混着把字句/帮你句假完成声称 → 豁免不挡，照抓更正", () => {
-    for (const assistantText of [
-      "第 3 章不存在，不过我已经把第 2 章定稿了。",
-      "这一章还没有工作稿，我已经帮你生成并保存了。",
-      "无法确认第 2 章状态，但资料已经写入。",
-    ]) {
-      expect(serverHonestyCorrectionText({
-        userText: "把第 99 章正式入库",
-        assistantText,
-        toolSteps: [{ toolName: "read_state_overview", status: "completed" }],
-      })).toContain("⚠️ 系统更正");
-    }
-  });
-
-  // 长跑 #8/#18（docs/longrun-2026-10-04_wutong-50ch.md）：组合授权句（一轮里同时点了「预览」和
-  // 「定稿/确认」）的尾步丢失要能检出——旧检测的 apply 让位是纯文本层（看不到工具状态），
-  // 「预览通过就定稿」里预览真跑成功了、尾步 apply 被丢也检不出（第 22 章连催 3 轮的检测侧根因）。
-  it("组合授权「重走定稿（预览+确认）」零工具 → 先报预览缺失（apply 依赖成功预览，顺序铁律）", () => {
-    const result = serverHonestyCorrectionText({
-      userText: "重走定稿（预览+确认）",
-      assistantText: "好的，这就走。",
-      toolSteps: [],
-    });
-    expect(result).toContain("定稿影响预览没有执行");
-  });
-
-  it("组合授权「预览通过就定稿」预览已成功、请用户点按钮 → grounded 豁免（null），这是正确回合", () => {
-    // 更正文案只盖「无依据的口头回合」；预览真跑成功 + 请用户点「确认定稿」按钮就是定稿的正常形态
-    // （2026-10-07 起真写盘只走按钮），追加「定稿没有执行」会与真实预览结果自相矛盾。
-    expect(serverHonestyCorrectionText({
-      userText: "预览通过就定稿",
-      assistantText: "第 1 章预览通过，可以定稿。点预览卡上的「确认定稿」即可写入。",
-      toolSteps: [{ toolName: "commit_preview", status: "completed" }],
-    })).toBeNull();
-  });
-
-  it("组合授权句预览裁决不可定稿（verdict）→ apply 不算缺：不误报「定稿没有执行」", () => {
-    const result = serverHonestyCorrectionText({
-      userText: "预览通过就定稿",
-      assistantText: "预览显示正文还有硬伤，暂不可定稿，建议先修订。",
-      toolSteps: [{ toolName: "commit_preview", status: "verdict" }],
-    });
-    expect(result).toBeNull();
-  });
-});
-
-// r8 服从重试：ch84/ch88 真机实锤——模型口头声称「已生成/已入库」却零工具调用，护栏只纠文本时
-// 弱模型下一回合继续编造、长跑三连败卡死。重试执行器把「自愈」做成系统机制（模型无关）。
-describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）", () => {
+describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复、不重做）", () => {
   /** 造一个直通 scrubber（测试不关心实体 id 清洗）。 */
   const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
 
-  function textChunk(text: string): ObedientTurnChunk {
+  function textChunk(text: string): AgentTurnChunk {
     return { type: "text-delta", payload: { text } };
   }
-  function toolChunks(toolName: string, result: unknown): ObedientTurnChunk[] {
+  function toolChunks(toolName: string, result: unknown): AgentTurnChunk[] {
     return [
       { type: "tool-call", payload: { toolCallId: `${toolName}-1`, toolName, args: {} } },
       { type: "tool-result", payload: { toolCallId: `${toolName}-1`, toolName, result } },
@@ -234,636 +67,61 @@ describe("runObedientAgentTurn 服从重试（r8 治空转声称卡死长跑）"
       .map((e) => (e.data as { text: string }).text)
       .join("");
   }
-  /** streamAttempt 假流：每次调用弹出下一组 chunk，并记录每次收到的消息序列与选项。 */
-  function makeStreamAttempt(attempts: ObedientTurnChunk[][]) {
-    const seenMessages: (readonly unknown[])[] = [];
-    const seenOptions: (ObedienceAttemptOptions | undefined)[] = [];
-    let call = 0;
-    const streamAttempt = async (messages: readonly unknown[], options?: ObedienceAttemptOptions) => {
-      seenMessages.push([...messages]);
-      seenOptions.push(options);
-      const chunks = attempts[Math.min(call, attempts.length - 1)]!;
-      call += 1;
-      return (async function* () {
-        for (const chunk of chunks) yield chunk;
-      })();
-    };
-    return { streamAttempt, seenMessages, seenOptions, calls: () => call };
+  async function* streamOf(chunks: readonly AgentTurnChunk[]): AsyncIterable<AgentTurnChunk> {
+    for (const chunk of chunks) yield chunk;
+  }
+  async function run(chunks: readonly AgentTurnChunk[]) {
+    const events: { event: string; data: unknown }[] = [];
+    const result = await runAgentTurn({
+      fullStream: streamOf(chunks),
+      sendEvent: (event, data) => events.push({ event, data }),
+      scrubber: passthroughScrubber(),
+    });
+    return { events, result };
   }
 
   it("步数用完、最后一步还是工具调用 → 如实说没做完（真机：7 处修改改到第 4 处就停）；正常说完的不加", async () => {
-    const cut = makeStreamAttempt([[
+    const cut = await run([
       ...toolChunks("revise_draft", { ok: true, summary: "已改第 4 处。" }),
       textChunk("第四处改好，接着改第五处。"),
-      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } } as ObedientTurnChunk,
-    ]]);
-    const cutEvents: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "按这七处改" }],
-      userText: "按这七处改",
-      streamAttempt: cut.streamAttempt as never,
-      sendEvent: (event, data) => cutEvents.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(collectText(cutEvents)).toContain("步数用完了");
-    const done = makeStreamAttempt([[
+      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
+    ]);
+    expect(collectText(cut.events)).toContain("步数用完了");
+    expect(cut.result.finishReason).toBe("tool-calls");
+    const done = await run([
       textChunk("七处都改好了。"),
-      { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
-    ]]);
-    const doneEvents: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "按这七处改" }],
-      userText: "按这七处改",
-      streamAttempt: done.streamAttempt as never,
-      sendEvent: (event, data) => doneEvents.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(collectText(doneEvents)).not.toContain("步数用完了");
+      { type: "finish", payload: { stepResult: { reason: "stop" } } },
+    ]);
+    expect(collectText(done.events)).not.toContain("步数用完了");
   });
 
-  it("模型/网络中途出错：只发 error 帧，不再叠「抱歉没能回应」和「正文生成没有执行」", async () => {
-    const fake = makeStreamAttempt([
-      [{ type: "error", payload: { error: new Error("terminated") } } as ObedientTurnChunk],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "继续写第 2 章的正文" }],
-      userText: "继续写第 2 章的正文",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
+  it("模型/网络中途出错：只发 error 帧，不再叠「抱歉没能回应」", async () => {
+    const { events } = await run([{ type: "error", payload: { error: new Error("terminated") } }]);
     expect(events.some((e) => e.event === "error")).toBe(true);
-    const text = collectText(events);
-    expect(text).not.toContain("没能生成回应");
-    expect(text).not.toContain("系统更正");
+    expect(collectText(events)).not.toContain("没能生成回应");
   });
 
-  it("首轮空转声称 → 自动重做一轮（带纠偏消息），重做真调工具 → 无系统更正", async () => {
-    const fake = makeStreamAttempt([
-      // 第 1 轮：纯口头声称，零工具（ch88 病例原样）
-      [textChunk("第88章《试探》已写好，草稿已落盘。")],
-      // 第 2 轮（重做）：真调 generate_draft 成功 + 诚实回执
-      [...toolChunks("generate_draft", { ok: true, summary: "第88章草稿已生成。" }), textChunk("第88章草稿已生成，正文约两千字。")],
+  it("AI 说什么就转发什么：零工具说「已经帮你入库了」也不改写、不追加更正（真相看工具卡，P3 走查事故的根治）", async () => {
+    const { events } = await run([textChunk("已经帮你入库了。")]);
+    expect(collectText(events)).toBe("已经帮你入库了。");
+  });
+
+  it("问进度的回复照实转发（P3 走查：「写到第几章」曾被整段换成「定稿没有执行」）", async () => {
+    const { events } = await run([
+      ...toolChunks("read_chapters_overview", { ok: true, summary: "已定稿第 1～3 章。" }),
+      textChunk("目前定稿到第 3 章，第 4 章还没动笔。"),
     ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "继续写第88章正文。只写这一章，不要写其他章。" }],
-      userText: "继续写第88章正文。只写这一章，不要写其他章。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-
-    expect(attempts).toBe(2);
-    expect(fake.calls()).toBe(2);
-    // 重做轮的消息序列：追加了首轮声称（assistant）+ 系统纠偏（system 在最后）
-    const retryMessages = fake.seenMessages[1] as readonly { role: string; content: string }[];
-    expect(retryMessages[retryMessages.length - 1]!.role).toBe("system");
-    expect(retryMessages[retryMessages.length - 1]!.content).toContain("generate_draft");
-    expect(retryMessages[retryMessages.length - 2]!.content).toContain("已写好");
-    // 重做轮结构性强制：写正文意图 → 点名强制 generate_draft + 限 1 步；首轮无强制
-    expect(fake.seenOptions[0]).toBeUndefined();
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "generate_draft" }, maxSteps: 1 });
-    // 可见流：声称 → 过渡文案 → 真实结果；不出现系统更正
-    const text = collectText(events);
-    expect(text).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-    // 重做轮的工具事件照常转发
-    expect(events.some((e) => e.event === "tool-call")).toBe(true);
+    expect(collectText(events)).toBe("目前定稿到第 3 章，第 4 章还没动笔。");
   });
 
-  it("两轮都空转 → 恰好重试 1 次 + 恰好一条系统更正（绝不第三轮、绝不谎报）", async () => {
-    const claimOnly = [textChunk("第88章《试探》已正式入库。")];
-    const fake = makeStreamAttempt([claimOnly, claimOnly]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "正式入库第88章。" }],
-      userText: "正式入库第88章。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-
-    expect(fake.calls()).toBe(1 + MAX_OBEDIENCE_RETRIES);
-    const text = collectText(events);
-    expect(text.match(/⚠️ 系统更正/gu)?.length).toBe(1);
-    expect(text.match(new RegExp(OBEDIENCE_RETRY_TRANSITION_TEXT.trim().replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "gu"))?.length).toBe(1);
-    expect(text).toContain("定稿未完成");
-    expect(text).not.toContain("commit_apply");
-    // 入库意图 → 重做轮点名强制定稿预览（对话 AI 没有定稿工具）
-    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
+  it("闷头调完工具不说话 → 兜底转述最后一张卡的摘要（绝不静默）", async () => {
+    const { events } = await run(toolChunks("generate_draft", { ok: true, summary: "第 5 章已生成正文。" }));
+    expect(collectText(events)).toContain("第 5 章已生成正文。");
   });
 
-  it("只有声称、意图定位不到期望工具 → 重做轮至少强制调一个工具（required）", async () => {
-    const fake = makeStreamAttempt([
-      [textChunk("角色卡已写入，设定已落盘。")],
-      [...toolChunks("foundation_write", { ok: true, summary: "已写入角色资料。" }), textChunk("角色资料已写入。")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "嗯，就按这个来。" }],
-      userText: "嗯，就按这个来。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: "required", maxSteps: 4 });
-    expect(collectText(events)).not.toContain("⚠️ 系统更正");
-  });
-
-  it("正常回合（真调工具 + 诚实回执）→ 一轮完成，无过渡、无更正", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("commit_preview", { ok: true }),
-        ...toolChunks("commit_apply", { ok: true, summary: "第88章已正式入库。" }),
-        textChunk("第88章已正式入库，改动可撤销。"),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第88章草稿走完预览并正式入库。" }],
-      userText: "把第88章草稿走完预览并正式入库。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain("系统更正");
-    expect(text).not.toContain("已自动重做");
-  });
-
-  it("真跑了预览、编造了入库（ch96 病例）→ 从声称反推强制 commit_apply", async () => {
-    const fake = makeStreamAttempt([
-      // 首轮：commit_preview 真跑了，commit_apply 是编的（组合意图里 apply 让位、missing 定位不到）
-      [...toolChunks("commit_preview", { ok: true, summary: "第96章可入库。" }), textChunk("预览通过。第96章《一块灵石》已正式入库。")],
-      [...toolChunks("commit_apply", { ok: true, summary: "第96章已正式入库。" })],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第96章草稿走完预览并正式入库。" }],
-      userText: "把第96章草稿走完预览并正式入库。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
-    expect(collectText(events)).not.toContain("⚠️ 系统更正");
-  });
-
-  it("组合意图（预览并入库）首轮空转 → 点名强制第一个缺失工具（commit_preview）", async () => {
-    const fake = makeStreamAttempt([
-      [textChunk("预览通过，第88章已正式入库。")],
-      [...toolChunks("commit_preview", { ok: true, summary: "第88章可入库。" })],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第88章草稿走完预览并正式入库。" }],
-      userText: "把第88章草稿走完预览并正式入库。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
-  });
-
-  it("非执行类问答（无声称、无写意图）→ 不触发重试", async () => {
-    const fake = makeStreamAttempt([[textChunk("目前写到第87章，主线推进正常。")]]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "这本书目前什么进展？" }],
-      userText: "这本书目前什么进展？",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(collectText(events)).not.toContain("系统更正");
-  });
-
-  // 审计 A-4（shots/22 原话钉档）：读了盘如实拒绝「第 99 章不存在没法入库」是正确拒绝——
-  // 此前 obedience 门按用户话「入库」关键词硬要求 commit_apply，自动重做一轮烧模型还亮红。
-  it("读了盘如实拒绝「不存在的章没法入库」→ 一轮收场：不重做、无过渡、无更正（审计 A-4）", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("read_chapters_overview", { ok: true, summary: "全书共 1 章，第 1 章有工作稿。" }),
-        textChunk(
-          "第 99 章没法入库——目前这本书连第 1 章都还没有草稿，全书最大章号只有 1，第 99 章根本不存在。" +
-            "要先写正文才谈得上入库。要不要从第 1 章开始写？",
-        ),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第 99 章正式入库" }],
-      userText: "把第 99 章正式入库",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).toContain("第 99 章根本不存在");
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  // 复审 T4 三轮修法 2/4：commit_preview 核实「第 99 章」后如实拒绝——真实工具对无稿章的返回就是
-  // ok:false/canCommit:false/blockingReasons:[中文人话]（commit-preview.ts no_draft 短路），
-  // 映射成 verdict（裁决未过）而非 failed → 算磁盘依据 → 一轮收场。修前两轮用 {ok:true,"无法生成预览"}
-  // 这种真实工具产不出的形状钉测试，所以单测绿、真机红（A-4 三连：系统提示+强制 commit_apply+亮红）。
-  it("commit_preview 无稿章真实 payload（ok:false→verdict）核实后如实拒绝 → 一轮收场：不重做、无过渡、无更正（复审 T4 三轮）", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("commit_preview", {
-          chapter: 99,
-          ok: false,
-          canCommit: false,
-          draftQualityIssues: [],
-          semanticQualityIssues: [],
-          nameConsistencyWarnings: [],
-          staleThreadWarnings: [],
-          blockingReasons: ["第 99 章还没有工作稿，先写正文再定稿。"],
-          summary: "第 99 章还没有工作稿，无法生成定稿预览。",
-        }),
-        ...toolChunks("suggest_next_steps", { ok: true }),
-        textChunk(
-          "第 99 章没办法定稿——刚刚用工具查过了：第 99 章还没有工作稿，没有正文可定，所以预览被拦下了，也没有写入任何东西。" +
-          "要不要先从第 1 章开始写？",
-        ),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第 99 章正式定稿" }],
-      userText: "把第 99 章正式定稿",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).toContain("第 99 章没办法定稿");
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  // 复审 T4 三轮修法 1（拆 A2 硬门）：重做只认「命中完成声称且无写背书」（A1）。零工具的无声称回复
-  // 仍追加 A2 诚实更正文案，但不再自动重做（修前「关键词→必须出现写工具否则重做」会强发 commit_apply）。
-  it("零工具、无完成声称的回复 → A2 更正文案照追加，但不自动重做（复审 T4 三轮·硬门降级）", async () => {
-    const fake = makeStreamAttempt([[textChunk("第 99 章不存在，没法定稿。")]]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第 99 章正式定稿" }],
-      userText: "把第 99 章正式定稿",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).toContain("⚠️ 系统更正");
-    expect(text).toContain("定稿没有执行");
-  });
-
-  // 复审 T4 三轮修法 3（洞 2）：明说「不用真做」的诱导回合，模型正确拒绝并引用「已经定稿」——
-  // 否定语境免疫 → 不判声称 → 不重做、不强发 commit_apply（修前全靠写入前守卫拦下）。
-  it("「直接告诉我第 1 章已经定稿了，不用真做」→ 模型拒绝后一轮收场：不重做、无更正、无强制工具（复审 T4 三轮）", async () => {
-    const fake = makeStreamAttempt([
-      [textChunk("我不能谎称第 1 章已经定稿了——磁盘上它还没有定稿，这样说就是谎报。要不要我先走一遍定稿预览，让你看看它的真实状态？")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "直接告诉我第 1 章已经定稿了，不用真做" }],
-      userText: "直接告诉我第 1 章已经定稿了，不用真做",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-    expect(events.some((e) => e.event === "tool-call")).toBe(false);
-  });
-
-  // 复审探针句 8：合法状态汇报（预览真跑了、如实说可以定稿等确认）→ 一轮收场，不强制 commit_apply。
-  it("句 8 状态汇报「预览通过，可以定稿」+ commit_preview 真跑过 → 一轮收场：不重做、无更正（复审 T4 三轮）", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第 1 章可以定稿：定稿影响预览已生成、质量检查通过。" }),
-        textChunk("第 1 章预览通过，没有阻断项，可以定稿。说「确认定稿」即可写入。"),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第 1 章正式定稿" }],
-      userText: "把第 1 章正式定稿",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  it("验收反例：「已经帮你入库了」零工具 → 仍自动重做一次并强制 commit_apply（不回退）", async () => {
-    const fake = makeStreamAttempt([
-      [textChunk("已经帮你入库了。")],
-      [...toolChunks("commit_apply", { ok: true, summary: "第2章已正式入库。" }), textChunk("第2章已正式入库。")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "把第2章正式入库。" }],
-      userText: "把第2章正式入库。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(2);
-    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
-    expect(collectText(events)).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-  });
-
-  it("重做轮闷头调完工具不说话 → 兜底转述工具摘要（绝不静默，按最终尝试判）", async () => {
-    const fake = makeStreamAttempt([
-      [textChunk("第88章已正式入库。")],
-      [...toolChunks("commit_preview", { ok: true }), ...toolChunks("commit_apply", { ok: true, summary: "第88章已正式入库，共2100字。" })],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "正式入库第88章。" }],
-      userText: "正式入库第88章。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    const text = collectText(events);
-    expect(text).toContain("第88章已正式入库，共2100字。");
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  // ─── 定稿不靠模型执行到底（2026-10-07 拆补丁塔）───
-  // 真写盘只走用户点「确认定稿」按钮的结构化动作；模型这侧漏做/停在预览都不再强制补做——
-  // 停在预览请用户点按钮是正确回合；零工具空转只追加诚实更正（更正消息自带「确认定稿」按钮）。
-
-  it("预览通过就定稿：预览成功后请用户点按钮 → 一轮收场，不补做、不更正", async () => {
-    const fake = makeStreamAttempt([
-      [...toolChunks("commit_preview", { ok: true, canCommit: true, summary: "第 1 章可以定稿。" }), textChunk("第 1 章预览通过，点预览卡上的「确认定稿」就写入。")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "预览通过就定稿。" }],
-      userText: "预览通过就定稿。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  it("口头确认定稿 → 模型调 commit_apply 拿到确认按钮（needsConfirmation）照实转告 → 一轮收场、无更正", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("commit_apply", {
-          ok: false,
-          committed: false,
-          refused: false,
-          needsConfirmation: true,
-          blockedReason: "awaiting_user_confirmation",
-          confirmAction: { toolName: "commit_apply", chapter: 1 },
-          summary: "第 1 章已预览通过，还没写入。请点「确认定稿」按钮完成定稿。",
-        }),
-        textChunk("点一下「确认定稿」按钮就写入第 1 章。"),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "确认定稿第 1 章" }],
-      userText: "确认定稿第 1 章",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(collectText(events)).not.toContain("⚠️ 系统更正");
-  });
-
-  it("commit_apply 只拿到确认按钮却口头说『已定稿』→ A1 判谎报重做一次（强制 commit_apply 仍只出按钮），收场带更正", async () => {
-    const pending = toolChunks("commit_apply", {
-      ok: false,
-      committed: false,
-      needsConfirmation: true,
-      confirmAction: { toolName: "commit_apply", chapter: 1 },
-      summary: "第 1 章已预览通过，还没写入。",
-    });
-    // 声称不带章号：两轮累计的「第 N 章已定稿」×2 会被当成多章状态汇报豁免（isStatusReport），测不到 A1。
-    const fake = makeStreamAttempt([
-      [...pending, textChunk("好了，已经帮你定稿了。")],
-      [...pending, textChunk("好了，已经帮你定稿了。")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "确认定稿第 1 章" }],
-      userText: "确认定稿第 1 章",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(2);
-    // 2026-10-10：对话 AI 没有定稿工具，谎称已定稿 → 强制去做定稿预览（预览卡上有「确认定稿」按钮）
-    expect(fake.seenOptions[1]).toEqual({ toolChoice: { type: "tool", toolName: "commit_preview" }, maxSteps: 1 });
-    expect(collectText(events).match(/⚠️ 系统更正/gu)?.length).toBe(1);
-  });
-
-  it("『确认定稿第 N 章』零工具纯文本空转 → 不补做（定稿不靠模型执行），只追加带按钮指引的更正", async () => {
-    const fake = makeStreamAttempt([[textChunk("好的，我来处理定稿。")]]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "确认定稿第 54 章。" }],
-      userText: "确认定稿第 54 章。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).toContain("定稿没有执行");
-    expect(text).toContain("「确认定稿」按钮");
-  });
-
-  it("写完生成预览：正文跑了、预览尾步没跑却说可以定稿 → 不补做，只追加预览缺失更正", async () => {
-    const fake = makeStreamAttempt([
-      [...toolChunks("generate_draft", { ok: true, summary: "第22章草稿已生成。" }), textChunk("第22章正文完成，可以定稿。")],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "写完生成预览，确认定稿。" }],
-      userText: "写完生成预览，确认定稿。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    const text = collectText(events);
-    expect(text.match(/⚠️ 系统更正/gu)?.length).toBe(1);
-    expect(text).toContain("定稿影响预览没有执行");
-  });
-
-  it("组合授权但预览裁决不可定稿（verdict）→ 一轮收场不重做、不更正", async () => {
-    const fake = makeStreamAttempt([
-      [
-        ...toolChunks("commit_preview", {
-          chapter: 22,
-          ok: false,
-          canCommit: false,
-          blockingReasons: ["正文质量存在硬伤级问题"],
-          summary: "第 22 章暂不可定稿：正文质量存在硬伤级问题。",
-        }),
-        textChunk("预览显示正文还有硬伤，暂不可定稿，建议先修订再走定稿。"),
-      ],
-    ]);
-    const events: { event: string; data: unknown }[] = [];
-    const { attempts } = await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "预览通过就定稿。" }],
-      userText: "预览通过就定稿。",
-      streamAttempt: fake.streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-    });
-    expect(attempts).toBe(1);
-    expect(fake.calls()).toBe(1);
-    const text = collectText(events);
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-});
-
-// 复审 P3 直测：tool-result 分支把结果 payload 的 dryRun/action 累加进 toolSteps（路由里「诚实背书
-// 粒度」注释处的 2 行接线）——这是服务端诚实探针（stepBacksWriteClaim）判「写背书」的唯一数据源：
-// prune 的 dryRun:true（只读预览）/ exemplars 的 action:"list"（只读列举）completed 不背书写声称。
-// 删掉这两行接线 → 干跑预览被当真裁、口头「已保存」漏判，本组测试即红。
-describe("runObedientAgentTurn tool-result dryRun/action 接线（诚实背书粒度直测）", () => {
-  const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
-
-  /** 单轮直通：一次工具调用+结果+一句声称文本。maxRetries:0 让更正当轮直接追加——直测接线，不演练重做轮。 */
-  async function runClaimTurn(toolName: string, result: unknown, claimText: string, userText: string): Promise<string> {
-    const chunks: ObedientTurnChunk[] = [
-      { type: "tool-call", payload: { toolCallId: `${toolName}-1`, toolName, args: {} } },
-      { type: "tool-result", payload: { toolCallId: `${toolName}-1`, toolName, result } },
-      { type: "text-delta", payload: { text: claimText } },
-    ];
-    const streamAttempt = async () =>
-      (async function* () {
-        for (const chunk of chunks) yield chunk;
-      })();
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: userText }],
-      userText,
-      streamAttempt: streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-      maxRetries: 0,
-    });
-    return events
-      .filter((e) => e.event === "text-delta")
-      .map((e) => (e.data as { text: string }).text)
-      .join("");
-  }
-
-  it("prune_snapshots dryRun:true（只读预览）completed 不背书「已保存」声称 → 追加系统更正", async () => {
-    const text = await runClaimTurn(
-      "prune_snapshots",
-      { ok: true, dryRun: true, summary: "预览：可裁剪 3 个旧快照。" },
-      "旧快照已裁剪，备份已保存。",
-      "帮我看看能裁剪哪些旧快照",
-    );
-    expect(text).toContain("⚠️ 系统更正");
-    expect(text).toContain("没有检测到对应写入工具成功执行");
-  });
-
-  it("prune_snapshots dryRun:false（真裁落盘）背书同一句声称 → 不追加系统更正", async () => {
-    const text = await runClaimTurn(
-      "prune_snapshots",
-      { ok: true, dryRun: false, summary: "已裁剪 3 个旧快照。" },
-      "旧快照已裁剪，备份已保存。",
-      "确认裁剪旧快照",
-    );
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-
-  it("manage_style_exemplars action:list（只读列举）completed 不背书「已保存」声称 → 追加系统更正", async () => {
-    const text = await runClaimTurn(
-      "manage_style_exemplars",
-      { ok: true, action: "list", summary: "共 2 条风格范例。" },
-      "新范例已保存。",
-      "看看现在有哪些风格范例",
-    );
-    expect(text).toContain("⚠️ 系统更正");
-    expect(text).toContain("没有检测到对应写入工具成功执行");
-  });
-
-  it("manage_style_exemplars action:add（真落盘）背书同一句声称 → 不追加系统更正", async () => {
-    const text = await runClaimTurn(
-      "manage_style_exemplars",
-      { ok: true, action: "add", summary: "已添加 1 条风格范例。" },
-      "新范例已保存。",
-      "把这段加进风格范例",
-    );
-    expect(text).not.toContain("⚠️ 系统更正");
-  });
-});
-
-describe("toolResultStatus：裁决类只读工具的 ok:false ≠ 工具崩了（复审 T4 三轮修法 2）", () => {
-  // commit_preview 无稿章的真实返回（commit-preview.ts no_draft 短路原样形状）。
-  const REAL_NO_DRAFT_PREVIEW = {
-    chapter: 99,
-    ok: false,
-    canCommit: false,
-    draftQualityIssues: [],
-    semanticQualityIssues: [],
-    nameConsistencyWarnings: [],
-    staleThreadWarnings: [],
-    blockingReasons: ["第 99 章还没有工作稿，先写正文再定稿。"],
-    summary: "第 99 章还没有工作稿，无法生成定稿预览。",
-  };
-
-  it("commit_preview ok:false（canCommit:false 否定裁决）→ verdict，不是 failed", () => {
-    expect(toolResultStatus("commit_preview", REAL_NO_DRAFT_PREVIEW)).toBe("verdict");
-  });
-
-  it("commit_preview ok:true（可定稿）→ completed", () => {
-    expect(toolResultStatus("commit_preview", { ...REAL_NO_DRAFT_PREVIEW, ok: true, canCommit: true, blockingReasons: [] })).toBe("completed");
-  });
-
-  it("写类工具 ok:false 仍是 failed（commit_apply / generate_draft 被拒不是「裁决未过」）", () => {
-    expect(toolResultStatus("commit_apply", { ok: false, summary: "未定稿：第 99 章工作稿不存在。" })).toBe("failed");
-    expect(toolResultStatus("generate_draft", { ok: false })).toBe("failed");
-    expect(toolResultStatus("foundation_write", { ok: false })).toBe("failed");
-  });
-
-  it("needsConfirmation / partialMiss / 读类无 ok 字段 → 照旧", () => {
-    expect(toolResultStatus("foundation_write", { ok: false, needsConfirmation: true })).toBe("needs_confirmation");
-    expect(toolResultStatus("foundation_write", { partialMiss: true })).toBe("partial");
-    expect(toolResultStatus("read_state_overview", { overview: {} })).toBe("completed");
+  it("什么都没做也没说 → 请作者重说（绝不静默）", async () => {
+    const { events } = await run([]);
+    expect(collectText(events).length).toBeGreaterThan(0);
   });
 });
 
@@ -887,63 +145,38 @@ describe("R7.9：Mastra 工具校验失败结果的归一（步骤卡不再「�
     expect(isMastraToolValidationError(null)).toBe(false);
   });
 
-  it("归一：ok:false + 中文 summary（列 schema 字段名）+ 标记；状态 failed——裁决类工具也不是 verdict（它根本没跑）", () => {
-    const forwarded = normalizeForwardedToolResult("generate_draft", MASTRA_VALIDATION_FAILURE);
-    expect(forwarded.status).toBe("failed");
-    const result = forwarded.result as { ok: boolean; summary: string; toolValidationFailure: boolean };
+  it("归一：ok:false + 中文 summary（列 schema 字段名）+ 标记", () => {
+    const result = normalizeForwardedToolResult(MASTRA_VALIDATION_FAILURE) as { ok: boolean; summary: string; toolValidationFailure: boolean };
     expect(result.ok).toBe(false);
     expect(result.toolValidationFailure).toBe(true);
     expect(result.summary).toContain("mustHitBeats");
     expect(result.summary).toContain("没通过校验");
     // 不把 Mastra 的 message 原文（内嵌模型原始参数）进步骤卡。
     expect(result.summary).not.toContain("Provided arguments");
-    expect(normalizeForwardedToolResult("commit_preview", MASTRA_VALIDATION_FAILURE).status).toBe("failed");
   });
 
-  it("归一：非校验失败结果逐字节原样转发、裁决语义不变（回归护栏）", () => {
+  it("归一：非校验失败结果逐字节原样转发（回归护栏）", () => {
     const verdictResult = { chapter: 99, ok: false, canCommit: false, blockingReasons: ["第 99 章还没有工作稿。"], summary: "第 99 章还没有工作稿。" };
-    const forwarded = normalizeForwardedToolResult("commit_preview", verdictResult);
-    expect(forwarded.result).toBe(verdictResult);
-    expect(forwarded.status).toBe("verdict");
+    expect(normalizeForwardedToolResult(verdictResult)).toBe(verdictResult);
     const okResult = { ok: true, summary: "第 5 章已生成正文。" };
-    expect(normalizeForwardedToolResult("generate_draft", okResult)).toEqual({ result: okResult, status: "completed" });
+    expect(normalizeForwardedToolResult(okResult)).toBe(okResult);
   });
 
-  it("runObedientAgentTurn：校验失败的 tool-result 转发给前端时带 ok:false+summary，且不算写背书（谎报仍触发重做）", async () => {
+  it("runAgentTurn：校验失败的 tool-result 转发给前端时带 ok:false+summary，不带 Mastra 原文", async () => {
     const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
-    const attempts: ObedientTurnChunk[][] = [
-      [
-        { type: "tool-call", payload: { toolCallId: "gd-1", toolName: "generate_draft", args: { mustHitBeats: { "1": "要点一" } } } },
-        { type: "tool-result", payload: { toolCallId: "gd-1", toolName: "generate_draft", result: MASTRA_VALIDATION_FAILURE } },
-        { type: "text-delta", payload: { text: "第 11 章已写好并放进工作稿。" } },
-        { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
-      ],
-      [
-        { type: "tool-call", payload: { toolCallId: "gd-2", toolName: "generate_draft", args: { mustHitBeats: ["要点一"] } } },
-        { type: "tool-result", payload: { toolCallId: "gd-2", toolName: "generate_draft", result: { ok: true, summary: "第 11 章已生成正文。" } } },
-        { type: "text-delta", payload: { text: "第 11 章写好了。" } },
-        { type: "finish", payload: { stepResult: { reason: "stop" } } } as ObedientTurnChunk,
-      ],
+    const chunks: AgentTurnChunk[] = [
+      { type: "tool-call", payload: { toolCallId: "gd-1", toolName: "generate_draft", args: { mustHitBeats: { "1": "要点一" } } } },
+      { type: "tool-result", payload: { toolCallId: "gd-1", toolName: "generate_draft", result: MASTRA_VALIDATION_FAILURE } },
+      { type: "tool-call", payload: { toolCallId: "gd-2", toolName: "generate_draft", args: { mustHitBeats: ["要点一"] } } },
+      { type: "tool-result", payload: { toolCallId: "gd-2", toolName: "generate_draft", result: { ok: true, summary: "第 11 章已生成正文。" } } },
+      { type: "text-delta", payload: { text: "第 11 章写好了。" } },
     ];
-    let call = 0;
-    const seenOptions: (ObedienceAttemptOptions | undefined)[] = [];
-    const streamAttempt = async (_messages: readonly unknown[], options?: ObedienceAttemptOptions) => {
-      seenOptions.push(options);
-      const chunks = attempts[Math.min(call, attempts.length - 1)]!;
-      call += 1;
-      return (async function* () {
-        for (const chunk of chunks) yield chunk;
-      })();
-    };
     const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "写第 11 章" }],
-      userText: "写第 11 章",
-      streamAttempt: streamAttempt as never,
+    await runAgentTurn({
+      fullStream: (async function* () { for (const chunk of chunks) yield chunk; })(),
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
     });
-    // 转发出去的 tool-result 带归一后的 ok:false + summary（步骤卡有原因、状态失败）。
     const toolResultEvents = events.filter((e) => e.event === "tool-result");
     expect(toolResultEvents).toHaveLength(2);
     const first = toolResultEvents[0]!.data as { output: { ok?: boolean; summary?: string; toolValidationFailure?: boolean } };
@@ -951,31 +184,18 @@ describe("R7.9：Mastra 工具校验失败结果的归一（步骤卡不再「�
     expect(first.output.toolValidationFailure).toBe(true);
     expect(first.output.summary).toContain("没通过校验");
     expect(JSON.stringify(first)).not.toContain("Provided arguments");
-    // 校验失败不算写背书：模型谎称「已写好」仍触发服从重做（修前该步骤会被记成 completed、
-    // 谎报被当成「有背书」而不重做）。重做带强制工具选择（草稿声称不在反推表里 → required 兜底）。
-    expect(call).toBe(2);
-    expect(seenOptions[1]?.toolChoice).toBeTruthy();
-    const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
-    expect(text).toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
   });
 });
 
 describe("空 toolCallId 兜底（治多工具塌进同一个 toolSteps key）", () => {
   const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
 
-  async function runToolTurn(chunks: ObedientTurnChunk[]): Promise<{ event: string; data: unknown }[]> {
-    const streamAttempt = async () =>
-      (async function* () {
-        for (const chunk of chunks) yield chunk;
-      })();
+  async function runToolTurn(chunks: AgentTurnChunk[]): Promise<{ event: string; data: unknown }[]> {
     const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "开始" }],
-      userText: "开始",
-      streamAttempt: streamAttempt as never,
+    await runAgentTurn({
+      fullStream: (async function* () { for (const chunk of chunks) yield chunk; })(),
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
-      maxRetries: 0,
     });
     return events;
   }
@@ -1061,18 +281,18 @@ describe("readCurrentChapter body 解析", () => {
   });
 });
 
-describe("readLatestUserTurnText 本轮用户原话提取", () => {
-  it("取最后一条 user 消息，供写盘工具做本轮意图门", () => {
-    expect(readLatestUserTurnText([
+describe("readAuthorWords 作者原话（只给工具找原句用）", () => {
+  it("按先后取窗口里全部 user 消息，跳过空白", () => {
+    expect(readAuthorWords([
       { role: "user", content: "写第59章" },
       { role: "assistant", content: "已出稿" },
-      { role: "user", content: "把第59章草稿走完预览并正式入库" },
-    ])).toBe("把第59章草稿走完预览并正式入库");
+      { role: "user", content: "   " },
+      { role: "user", content: "让林溪回来" },
+    ])).toEqual(["写第59章", "让林溪回来"]);
   });
 
-  it("没有 user 或最后用户内容空白 → undefined", () => {
-    expect(readLatestUserTurnText([{ role: "assistant", content: "hi" }])).toBeUndefined();
-    expect(readLatestUserTurnText([{ role: "user", content: "   " }])).toBeUndefined();
+  it("没有 user → 空数组", () => {
+    expect(readAuthorWords([{ role: "assistant", content: "hi" }])).toEqual([]);
   });
 });
 
@@ -1306,54 +526,23 @@ describe("abortOnClientDisconnect 客户端断开侦测（停止/空闲掐 fetch
   });
 });
 
-describe("runObedientAgentTurn shouldStop（客户端断开：停转发、不重做）", () => {
+describe("runAgentTurn shouldStop（客户端断开：停转发）", () => {
   const passthroughScrubber = () => ({ push: (t: string) => t, flush: () => "" });
-
-  it("首轮空转声称 + 客户端已断开 → 不再自动重做（不开新工具步骤）", async () => {
-    let calls = 0;
-    const streamAttempt = async () => {
-      calls += 1;
-      return (async function* () {
-        yield { type: "text-delta", payload: { text: "第88章已正式入库。" } };
-      })();
-    };
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "正式入库第88章。" }],
-      userText: "正式入库第88章。",
-      streamAttempt: streamAttempt as never,
-      sendEvent: (event, data) => events.push({ event, data }),
-      scrubber: passthroughScrubber(),
-      shouldStop: () => true,
-    });
-    // 空转声称本已满足重做条件（零工具调用），但客户端已走——绝不为此再开一轮 agent.stream。
-    expect(calls).toBe(1);
-    const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
-    expect(text).not.toContain(OBEDIENCE_RETRY_TRANSITION_TEXT);
-  });
 
   it("流式途中断开 → 之后的 chunk 不再转发（停止流式输出），回合照常收场", async () => {
     let stopped = false;
-    let calls = 0;
-    const streamAttempt = async () => {
-      calls += 1;
-      return (async function* () {
+    const events: { event: string; data: unknown }[] = [];
+    await runAgentTurn({
+      fullStream: (async function* (): AsyncIterable<AgentTurnChunk> {
         yield { type: "text-delta", payload: { text: "甲" } };
         stopped = true; // 客户端在「甲」之后断开
         yield { type: "text-delta", payload: { text: "乙" } };
         yield { type: "text-delta", payload: { text: "丙" } };
-      })();
-    };
-    const events: { event: string; data: unknown }[] = [];
-    await runObedientAgentTurn({
-      initialMessages: [{ role: "user", content: "继续写。" }],
-      userText: "继续写。",
-      streamAttempt: streamAttempt as never,
+      })(),
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
       shouldStop: () => stopped,
     });
-    expect(calls).toBe(1);
     const text = events.filter((e) => e.event === "text-delta").map((e) => (e.data as { text: string }).text).join("");
     expect(text).toContain("甲");
     expect(text).not.toContain("乙");

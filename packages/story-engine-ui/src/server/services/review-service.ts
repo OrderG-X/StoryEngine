@@ -7,6 +7,8 @@
  *   - 路由：HTTP 入参解析 + model/profileId 输出（D20）；失败时 ok:false + error 包装。
  *   - 工具：RequestContext 取 projectDir/章号回退 + 用户可见 summary（D20）。
  *
+ * 重构 P4：对应的 HTTP 路已删（按钮改发结构化动作走对话通道），下面「路由」一侧的说明只作历史由来。
+ *
  * 编排：取真草稿（与质检同源）→ 确定性质检 + 状态概览 + 写作上下文 → 组 prompt →
  * callModel(draftReview 槽，流式+空闲超时) → parseDraftAIReviewReport（失败回退）。只读：不写盘、不建快照。
  *

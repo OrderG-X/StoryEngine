@@ -99,7 +99,7 @@ const outputSchema = z.object({
   ok: z.boolean().describe("是否成功；false 时 summary 含原因。"),
   dryRun: z.boolean().describe("本次是否没有落盘任何改动：只读预览 / 无需裁剪 / 被守卫拦下 / 失败回滚都是 true；仅真裁成功、历史已改写时为 false。"),
   summary: z.string().describe("自然语言结果，供回答用户。"),
-  blockedReason: z.string().optional().describe("守卫拦截原因，如本轮用户原话没有确认裁剪意图。"),
+  blockedReason: z.string().optional().describe("守卫拦截原因，如还等作者点「确认裁剪」。"),
   keep: z.number().optional().describe("实际生效的保留条数。"),
   totalBefore: z.number().optional().describe("裁前历史提交总数。"),
   prunedCount: z.number().optional().describe("将裁/已裁的更早快照条数；0=无需裁剪。"),

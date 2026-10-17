@@ -198,43 +198,6 @@ describe("streamAgentChat", () => {
     expect(received?.summary).toContain("没通过校验");
   });
 
-  it("passes dryRun/action (诚实背书粒度) through onToolResult — exemplars add 不再被前端误判「操作未完成」(P2③)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      sseResponse([
-        frame("tool-result", {
-          toolCallId: "e1",
-          toolName: "manage_style_exemplars",
-          output: { ok: true, action: "add", summary: "已存文风样本「雨夜开场」。" },
-        }),
-        frame("tool-result", {
-          toolCallId: "p1",
-          toolName: "prune_snapshots",
-          output: { ok: true, dryRun: true, summary: "预览：将裁 3 条快照。" },
-        }),
-        frame("done", {}),
-      ]),
-    ));
-
-    const received: readonly { readonly toolName: string; readonly dryRun?: boolean; readonly action?: string }[] = [];
-    await streamAgentChat(
-      { projectPath: "/tmp/p", messages: [{ role: "user", content: "加一条文风样本" }] },
-      {
-        onTextDelta: () => undefined,
-        onToolCall: () => undefined,
-        onToolResult: (info) => {
-          (received as { toolName: string; dryRun?: boolean; action?: string }[]).push(info);
-        },
-        onToolError: () => undefined,
-        onError: () => undefined,
-        onDone: () => undefined,
-      },
-    );
-
-    // 与服务端 honesty-detection stepBacksWriteClaim 认的字段名逐字对齐。
-    expect(received[0]).toMatchObject({ toolName: "manage_style_exemplars", action: "add" });
-    expect(received[1]).toMatchObject({ toolName: "prune_snapshots", dryRun: true });
-  });
-
   it("工具结果无 dryRun/action → 不带这两个 key（读类工具轻量投影行为不变）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

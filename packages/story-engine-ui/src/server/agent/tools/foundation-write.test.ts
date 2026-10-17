@@ -65,15 +65,14 @@ describe("foundation_write 构造逻辑", () => {
     expect(foundationTargetFileFor("delete_foundation_entry", "characters")).toBe("story/character-bible.json");
   });
 
-  it("buildFoundationWriteSuggestion 带 confirmed 时映射为引擎的 confirmedByUser", () => {
+  it("buildFoundationWriteSuggestion 带作者确认时映射为引擎的 confirmedByUser", () => {
     const s = buildFoundationWriteSuggestion({
       actionType: "delete_foundation_entry",
       category: "characters",
       targetId: "char-x",
       before: { name: "某角色" },
       after: {},
-      confirmed: true,
-    });
+    }, { authorConfirmed: true });
     expect(s.confirmedByUser).toBe(true);
     expect(s.targetId).toBe("char-x");
     expect(s.targetFile).toBe("story/character-bible.json");
@@ -205,7 +204,7 @@ describe("foundation_write 诚实回报", () => {
     expect(JSON.stringify(bible)).not.toContain("180cm");
   });
 
-  it("删除已出场角色 → needsConfirmation=true，未写入，summary 明确要求确认", async () => {
+  it("删除已出场角色 → needsConfirmation=true，未写入，出「确认改设定」按钮", async () => {
     const projectDir = await makeProject("删除确认", "林远");
     // 新建一个配角并把它登记到角色矩阵且有出场记录（触发 needs_confirmation）
     await applyFoundationWriteSuggestion({
@@ -251,12 +250,13 @@ describe("foundation_write 诚实回报", () => {
     expect(out.applied).toBe(false);
     expect(out.needsConfirmation).toBe(true);
     expect(out.blocked[0]?.level).toBe("needs_confirmation");
-    expect(out.summary).toContain("先确认"); // 删角色未确认会先被工具门拦下（删任何角色都先问）
+    expect(out.summary).toContain("确认改设定"); // 删任何角色都是作者档
+    expect(out.foundationConfirm?.input).toMatchObject({ actionType: "delete_foundation_entry", targetId });
     // 没写：角色仍在
     const bible = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
     expect(bible.characters.some((c) => c.id === targetId)).toBe(true);
 
-    // 带 confirmed=true 重试 → 真的删除
+    // 作者点了按钮（authorConfirmed）→ 真的删除
     const confirmed = await applyFoundationWriteToolLogic({
       projectDir,
       toolInput: {
@@ -266,8 +266,8 @@ describe("foundation_write 诚实回报", () => {
         targetName: "苏晓薇",
         before: { name: "苏晓薇" },
         after: {},
-        confirmed: true,
       },
+      authorConfirmed: true,
     });
     expect(confirmed.applied).toBe(true);
     expect(confirmed.needsConfirmation).toBe(false);
@@ -279,7 +279,7 @@ describe("foundation_write 诚实回报", () => {
     const projectDir = await makeProject("删主角防护", "林远");
     const id = toSafeCharacterId("林远");
 
-    // 第一层（工具门）：删任何角色未带 confirmed → needsConfirmation、未删。
+    // 第一层（作者档）：删任何角色没有作者确认 → needsConfirmation、未删。
     const first = await applyFoundationWriteToolLogic({
       projectDir,
       toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId: id, before: { name: "林远" }, after: {} },
@@ -288,10 +288,11 @@ describe("foundation_write 诚实回报", () => {
     expect(first.applied).toBe(false);
     expect(first.needsConfirmation).toBe(true);
 
-    // 第二层（引擎）：即便用户确认（confirmed=true），主角仍被引擎硬挡，不可删。
+    // 第二层（引擎）：即便作者确认，主角仍被引擎硬挡，不可删。
     const confirmed = await applyFoundationWriteToolLogic({
       projectDir,
-      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId: id, before: { name: "林远" }, after: {}, confirmed: true },
+      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId: id, before: { name: "林远" }, after: {} },
+      authorConfirmed: true,
     });
     expect(confirmed.ok).toBe(false);
     expect(confirmed.applied).toBe(false);
@@ -564,7 +565,7 @@ describe("foundation_write 诚实回报", () => {
     });
   });
 
-  it("删任何角色都需确认：删一个普通(未晋升、引擎本不强制确认)配角，未带 confirmed → 工具门拦成 needsConfirmation/ok:false/未删；带 confirmed=true → 真删（Codex 顾明场景）", async () => {
+  it("删任何角色都是作者档：删一个普通(未晋升、引擎本不强制确认)配角，没作者确认 → needsConfirmation/ok:false/未删；作者确认 → 真删（Codex 顾明场景）", async () => {
     const projectDir = await makeProject("删配角确认", "林远");
     // 建一个普通配角，且**不**写 character-matrix（引擎对它本不会强制确认——证明是工具门在拦，对齐用户「删任何真角色都先问」）。
     await applyFoundationWriteSuggestion({
@@ -587,13 +588,14 @@ describe("foundation_write 诚实回报", () => {
     expect(first.ok).toBe(false);
     expect(first.applied).toBe(false);
     expect(first.needsConfirmation).toBe(true);
-    expect(first.summary).toContain("先确认");
+    expect(first.summary).toContain("确认改设定");
     const bibleAfterFirst = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
     expect(bibleAfterFirst.characters.some((c) => c.id === targetId)).toBe(true); // 顾明仍在
 
     const confirmed = await applyFoundationWriteToolLogic({
       projectDir,
-      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId, targetName: "顾明", before: { name: "顾明" }, after: {}, confirmed: true },
+      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId, targetName: "顾明", before: { name: "顾明" }, after: {} },
+      authorConfirmed: true,
     });
     expect(confirmed.ok).toBe(true);
     expect(confirmed.applied).toBe(true);
@@ -638,7 +640,7 @@ describe("foundation_write 已确立设定覆盖确认链路", () => {
     return id;
   }
 
-  it("仅「改成」请求、无用户覆盖同意 → 拦下，summary 指引差什么才放行", async () => {
+  it("AI 档：覆盖已确立的年龄 → 拦下、出「确认改设定」按钮，不读作者原话", async () => {
     const projectDir = await makeProject("年龄覆盖拦", "李默");
     const id = await seedAge(projectDir, "李默", "30");
     const out = await applyFoundationWriteToolLogic({
@@ -649,19 +651,18 @@ describe("foundation_write 已确立设定覆盖确认链路", () => {
         targetId: id,
         after: { age: "32" },
       },
-      userTurnText: "把主角李默的年龄改成32岁",
     });
     expect(out.ok).toBe(false);
     expect(out.applied).toBe(false);
     expect(out.needsConfirmation).toBe(true);
-    expect(out.summary).toMatch(/允许覆盖|确定/);
-    expect(out.summary).toMatch(/勿无限重试|不要反复重试|如实/);
+    expect(out.summary).toContain("确认改设定");
+    expect(out.foundationConfirm?.input).toMatchObject({ targetId: id, after: { age: "32" } });
     const bible = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
     expect(bible.characters.find((c) => c.id === id)?.age).toBe("30");
   });
 
-  it("agent 自说 confirmed=true 但本轮用户原话无同意 → 仍拦（不接受自说自话）", async () => {
-    const projectDir = await makeProject("年龄假确认", "李默");
+  it("作者点了「确认改设定」（authorConfirmed）→ 真改年龄，并提示已定稿章节不会自动改", async () => {
+    const projectDir = await makeProject("年龄覆盖放行", "李默");
     const id = await seedAge(projectDir, "李默", "30");
     const out = await applyFoundationWriteToolLogic({
       projectDir,
@@ -669,40 +670,18 @@ describe("foundation_write 已确立设定覆盖确认链路", () => {
         actionType: "update_character_detail",
         category: "characters",
         targetId: id,
-        after: { age: "32" },
-        confirmed: true,
+        after: { age: "33" },
       },
-      userTurnText: "把主角李默的年龄改成32岁",
+      authorConfirmed: true,
     });
-    expect(out.ok).toBe(false);
-    expect(out.needsConfirmation).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(out.applied).toBe(true);
+    expect(out.needsConfirmation).toBe(false);
+    expect(out.foundationConfirm).toBeUndefined();
+    expect(out.summary).toContain("已定稿章节不会自动改动");
     const bible = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
-    expect(bible.characters.find((c) => c.id === id)?.age).toBe("30");
+    expect(bible.characters.find((c) => c.id === id)?.age).toBe("33");
   });
-
-  it.each(["允许覆盖", "确定", "同意", "覆盖吧"])(
-    "本轮用户原话含明确同意「%s」→ 放行并真改年龄",
-    async (consent) => {
-      const projectDir = await makeProject(`年龄覆盖放行-${consent}`, "李默");
-      const id = await seedAge(projectDir, "李默", "30");
-      const out = await applyFoundationWriteToolLogic({
-        projectDir,
-        toolInput: {
-          actionType: "update_character_detail",
-          category: "characters",
-          targetId: id,
-          after: { age: "33" },
-        },
-        userTurnText: consent,
-      });
-      expect(out.ok).toBe(true);
-      expect(out.applied).toBe(true);
-      expect(out.needsConfirmation).toBe(false);
-      expect(out.summary).toContain("已定稿章节不会自动改动");
-      const bible = await readJson<CharacterBible>(projectDir, "story/character-bible.json");
-      expect(bible.characters.find((c) => c.id === id)?.age).toBe("33");
-    },
-  );
 });
 
 describe("foundation_write 工具包装层：改名 newName 透传 + 摘要不露裸 id（2026-10-07 真 agent 复现）", () => {

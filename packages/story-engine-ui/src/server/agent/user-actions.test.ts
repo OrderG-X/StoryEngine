@@ -27,6 +27,17 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: Array.from({ length: 21 }, () => decisions[0]) }).kind).toBe("invalid");
   });
 
+  it("「确认改设定」：带标识和写入对象才收；缺标识 / 写入不是对象都按非法处理", () => {
+    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
+    expect(parseUserAction({ toolName: "foundation_decision", key: " fw-1 ", input, label: "删条目 顾明" })).toEqual({
+      kind: "action",
+      action: { toolName: "foundation_decision", key: "fw-1", input, label: "删条目 顾明" },
+    });
+    expect(parseUserAction({ toolName: "foundation_decision", input }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: [input] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: "删掉" }).kind).toBe("invalid");
+  });
+
   it("缺省 → none（普通对话）", () => {
     expect(parseUserAction(undefined)).toEqual({ kind: "none" });
     expect(parseUserAction(null)).toEqual({ kind: "none" });
@@ -606,5 +617,72 @@ describe("「写这一章」结构化动作（2026-10-10 出稿一条路）", ()
     });
     expect(failed.map((item) => item.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
     expect(JSON.stringify(failed.at(-1)!.data)).toContain("原来的稿子没动");
+  });
+});
+
+describe("「内容审阅」「硬伤检查」「撤销上一步」按钮结构化动作（重构 P4：走对话通道，不再走 HTTP 只读路由）", () => {
+  const run = async (action: Parameters<typeof runUserAction>[0]["action"], executeTool: UserActionToolExecutor) => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action,
+      requestContext: new RequestContext(),
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    return events;
+  };
+
+  it("解析：ai_review / quality_check 要章号；undo 不要；manage_snapshots 不收（裁剪另有确认按钮）", () => {
+    expect(parseUserAction({ toolName: "ai_review", chapter: "3" })).toEqual({ kind: "action", action: { toolName: "ai_review", chapter: 3 } });
+    expect(parseUserAction({ toolName: "quality_check", chapter: 3 })).toEqual({ kind: "action", action: { toolName: "quality_check", chapter: 3 } });
+    expect(parseUserAction({ toolName: "ai_review" }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "undo" })).toEqual({ kind: "action", action: { toolName: "undo" } });
+    expect(parseUserAction({ toolName: "manage_snapshots", op: "prune" }).kind).toBe("invalid");
+  });
+
+  it("内容审阅：只读、不带确认标记；工具卡 + 工具自己的摘要", async () => {
+    let marked = true;
+    const calls: { toolName: string; input: unknown }[] = [];
+    const events = await run({ toolName: "ai_review", chapter: 3 }, async (toolName, input, context) => {
+      marked = isUserConfirmedTool({ requestContext: context } as never, toolName);
+      calls.push({ toolName, input });
+      return { ok: true, summary: "第 3 章审完了：节奏偏慢。" };
+    });
+    expect(marked).toBe(false);
+    expect(calls).toEqual([{ toolName: "ai_review", input: { chapter: 3 } }]);
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+    expect(events[2]!.data.text).toBe("第 3 章审完了：节奏偏慢。");
+  });
+
+  it("硬伤检查没做成（ok:false 无摘要）→ 如实说没做成，不说做完了", async () => {
+    const events = await run({ toolName: "quality_check", chapter: 3 }, async () => ({ ok: false }));
+    const text = events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
+    expect(text).toContain("没做成");
+    expect(text).not.toContain("做完了");
+  });
+
+  it("工具抛错 → tool-error（可重试）+ 如实文案", async () => {
+    const events = await run({ toolName: "ai_review", chapter: 3 }, async () => { throw new Error("连接断了"); });
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
+    expect(String(events[2]!.data.text)).toContain("没做成");
+  });
+
+  it("撤销上一步：调 manage_snapshots op=undo，工具卡名就是 manage_snapshots（前端据 undone 接管磁盘真值）", async () => {
+    const calls: { toolName: string; input: unknown }[] = [];
+    const events = await run({ toolName: "undo" }, async (toolName, input) => {
+      calls.push({ toolName, input });
+      return { ok: true, undone: true, summary: "撤销了上一步：写第 3 章。" };
+    });
+    expect(calls).toEqual([{ toolName: "manage_snapshots", input: { op: "undo" } }]);
+    expect(events[0]).toMatchObject({ event: "tool-call", data: { toolName: "manage_snapshots" } });
+    expect(events[1]).toMatchObject({ event: "tool-result", data: { toolName: "manage_snapshots", output: { undone: true } } });
+    expect(events.at(-1)!.data.text).toBe("撤销了上一步：写第 3 章。");
+  });
+
+  it("没东西可撤 → 如实说没有", async () => {
+    const events = await run({ toolName: "undo" }, async () => ({ ok: true, undone: false }));
+    expect(events.at(-1)!.data.text).toBe("没有可以撤销的改动。");
   });
 });

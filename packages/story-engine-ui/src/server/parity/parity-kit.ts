@@ -153,8 +153,8 @@ interface ExecutableTool {
 }
 
 /**
- * 驱动工具 execute 层（不是纯 logic 层）：RequestContext 注入 projectDir/currentChapter/userTurnText，
- * 让意图门、章号回退、章序护栏、快照包装这些 execute 级行为全部参与对拍。
+ * 驱动工具 execute 层（不是纯 logic 层）：RequestContext 注入 projectDir/currentChapter/authorWords，
+ * 让找原句、有稿不覆盖、章号回退、章序护栏、快照包装这些 execute 级行为全部参与对拍。
  */
 export async function driveToolExecute(
   tool: ExecutableTool,
@@ -162,14 +162,15 @@ export async function driveToolExecute(
   opts: {
     readonly projectDir: string;
     readonly currentChapter?: number;
-    readonly userTurnText?: string;
+    /** 作者在对话里说过的话（模拟对话通道；缺省=不是对话通道调的）。 */
+    readonly authorWords?: readonly string[];
     /** 模拟用户点了该工具的确认按钮（结构化动作通道设的标记，如定稿的「确认定稿」）。 */
     readonly userConfirmedTool?: string;
   },
 ): Promise<Record<string, unknown>> {
   const execute = tool.execute;
   if (!execute) throw new Error("tool has no execute");
-  const requestContext = buildProjectRequestContext(opts.projectDir, opts.currentChapter, undefined, opts.userTurnText);
+  const requestContext = buildProjectRequestContext(opts.projectDir, opts.currentChapter, undefined, opts.authorWords);
   if (opts.userConfirmedTool) markUserConfirmedTool(requestContext, opts.userConfirmedTool);
   const context = { requestContext } as unknown as ToolExecutionContext;
   return (await execute(input, context)) as Record<string, unknown>;

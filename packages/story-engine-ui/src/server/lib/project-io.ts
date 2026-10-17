@@ -254,6 +254,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly toolSteps?: readonly Record<string, unknown>[];
   readonly segments?: readonly WorkspaceMessageSegment[];
   readonly createdAt?: string;
+  readonly kind?: "scaffolding";
   readonly intentTitle?: string;
   readonly turnStartedAt?: number;
   readonly turnEndedAt?: number;
@@ -287,6 +288,7 @@ export function readWorkspaceMessages(value: unknown): {
     toolSteps?: readonly Record<string, unknown>[];
     segments?: readonly WorkspaceMessageSegment[];
     createdAt?: string;
+    kind?: "scaffolding";
     intentTitle?: string;
     turnStartedAt?: number;
     turnEndedAt?: number;
@@ -370,6 +372,7 @@ export function readWorkspaceMessages(value: unknown): {
       ...(segments.length > 0 ? { segments } : {}),
       ...(readString(item.createdAt) ? { createdAt: readString(item.createdAt) } : {}),
       ...(intentTitle ? { intentTitle } : {}),
+      ...(item.kind === "scaffolding" ? { kind: "scaffolding" as const } : {}),
       ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
       ...(turnEndedAt !== undefined ? { turnEndedAt } : {}),
       ...(turnSnapshots.length > 0 ? { turnSnapshots } : {}),
@@ -600,6 +603,9 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
     // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
     const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
+    // 「重写这一章」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
+    const rewriteTarget = readWorkspaceRewriteTarget(item.rewriteTarget);
+    const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
     actions.push({
       id,
       label,
@@ -612,9 +618,27 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(commitTarget ? { commitTarget } : {}),
       ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
       ...(ledgerTarget ? { ledgerTarget } : {}),
+      ...(rewriteTarget ? { rewriteTarget } : {}),
+      ...(foundationTarget ? { foundationTarget } : {}),
     });
   }
   return actions.slice(0, 8);
+}
+
+function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const chapter = readPositiveInteger(value.chapter);
+  if (chapter === undefined) return undefined;
+  const chapterGoal = readString(value.chapterGoal);
+  return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}) };
+}
+
+function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string } | undefined {
+  if (!isRecord(value) || !isRecord(value.input)) return undefined;
+  const key = readString(value.key);
+  if (!key) return undefined;
+  const label = readString(value.label);
+  return { key, input: value.input, ...(label ? { label } : {}) };
 }
 
 function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string } | undefined {

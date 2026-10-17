@@ -35,6 +35,10 @@ export interface SuggestedAction {
   readonly pruneTarget?: { readonly keep?: number };
   /** 「确认改账」按钮带的裁定草案（ledger-confirm 专用，manage_ledger 提的）。 */
   readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  /** 「重写这一章」按钮的目标（rewrite-confirm 专用，generate_draft 遇到有稿的章时给的）。 */
+  readonly rewriteTarget?: { readonly chapter: number; readonly chapterGoal?: string };
+  /** 「确认改设定」按钮带的写入（foundation-confirm 专用，foundation_write 被拦下的那次）。 */
+  readonly foundationTarget?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 }
 
 /** 「确认定稿」结构化动作的目标章与预览令牌（令牌让服务重启后仍能凭「这版草稿已预览」放行）。 */

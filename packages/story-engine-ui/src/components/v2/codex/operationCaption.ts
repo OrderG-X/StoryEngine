@@ -14,7 +14,6 @@ const CAPTIONS: Readonly<Record<string, string>> = {
   "reroll-candidates": "正在再写一版",
   "apply-candidate": "正在换用这一版",
   "deai-fix-all": "正在去 AI 味",
-  "direct-edit": "正在改稿",
 };
 
 /** 选区改写按钮（selection-rewrite-<key>）对应的动作名。 */

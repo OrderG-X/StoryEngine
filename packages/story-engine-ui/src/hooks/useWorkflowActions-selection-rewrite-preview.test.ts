@@ -90,9 +90,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace,
     }).handleSelectionRewrite(SELECTION_TEXT, "polish");
 
@@ -126,9 +124,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleSelectionRewrite(SELECTION_TEXT, "polish");
 
@@ -152,9 +148,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleApplyRevisionPreview();
 
@@ -182,9 +176,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleApplyRevisionPreview();
 

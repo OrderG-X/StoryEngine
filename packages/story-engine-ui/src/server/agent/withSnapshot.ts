@@ -42,7 +42,7 @@ export interface WriteToolDefinition<
   }) => Promise<Omit<z.infer<TOutput>, "snapshotId"> & { readonly snapshotId?: string }>;
   /**
    * 写入前守卫。发生在 createSnapshot 之前；返回结果时不建快照、不进入 run。
-   * 用于“本轮用户原话无对应写入意图”这类确定性拒绝，避免 no-op 快照污染历史。
+   * 用于「要作者点按钮才做」这类确定性拒绝，避免 no-op 快照污染历史。
    */
   readonly preflight?: (args: {
     readonly input: z.infer<TInput>;
