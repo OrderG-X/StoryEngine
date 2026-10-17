@@ -6,13 +6,11 @@ import { mockWorkspaceData } from "../mockData.js";
 import type { StateOverview } from "../api/types.js";
 
 const apiMocks = vi.hoisted(() => ({
-  applyCommit: vi.fn(),
   applyFoundationGapDecisions: vi.fn(),
   applyDraftRevision: vi.fn(),
   checkDraftQuality: vi.fn(),
   fetchChapterSteering: vi.fn(),
   generateDraftStream: vi.fn(),
-  previewCommit: vi.fn(),
   previewDraftRevision: vi.fn(),
   reviewDraftWithAI: vi.fn(),
   saveChapterWorkspace: vi.fn(),

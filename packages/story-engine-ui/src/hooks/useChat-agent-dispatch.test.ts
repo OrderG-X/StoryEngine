@@ -90,8 +90,6 @@ function buildParams(overrides: Partial<UseChatParams>): UseChatParams {
     handleDraftAIReview: async () => undefined,
     handleGenerateRevisionPreview: async () => undefined,
     handleApplyRevisionPreview: async () => undefined,
-    handleCommitPreview: async () => undefined,
-    handleCommitApply: () => undefined,
     handleGenerateSteering: async () => undefined,
     handleContinueNextChapter: async () => undefined,
     handleCreateRevisionTask: () => undefined,

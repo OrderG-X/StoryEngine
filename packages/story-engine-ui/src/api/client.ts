@@ -9,13 +9,6 @@ import type {
   ChapterSteeringDraft,
   ChapterSteeringRequest,
   BookFileActionApiResponse,
-  CommitApplyApiResponse,
-  CommitApplySuccessResult,
-  CommitPreviewApiResponse,
-  CommitPreviewRequest,
-  FormalCommitPreviewRouteResult,
-  CommitPreviewTransactionMetadata,
-  CommitRequest,
   CreateProjectApiResponse,
   CreateProjectRequest,
   DraftAIReviewApiResponse,
@@ -575,114 +568,6 @@ export async function applyDeAiFlavorBatch(
     throw new Error(payload.error ?? "一键去 AI 味失败。");
   }
   return { result: payload.result, summary: payload.summary, draftContent: payload.draftContent, ...(payload.snapshotId ? { snapshotId: payload.snapshotId } : {}) };
-}
-
-export async function previewCommit(
-  input: CommitPreviewRequest,
-  signal?: AbortSignal,
-): Promise<{
-  readonly commitPlan: unknown;
-  readonly draftQuality: DraftQualityReport;
-  readonly semanticQuality?: DraftQualityReport;
-  readonly transaction: CommitPreviewTransactionMetadata;
-  readonly transactionId: string;
-  readonly previewHash: string;
-  readonly formalCommitPreview: FormalCommitPreviewRouteResult;
-}> {
-  const body = {
-    projectPath: input.projectPath,
-    chapter: input.chapter,
-    ...(input.selectiveConfirmation ? { selectiveConfirmation: input.selectiveConfirmation } : {}),
-    ...(input.workspaceDraftId ? { workspaceDraftId: input.workspaceDraftId } : {}),
-    ...(input.baseHash ? { baseHash: input.baseHash } : {}),
-    ...(input.previewHash ? { previewHash: input.previewHash } : {}),
-    ...(input.readinessStatus ? { readinessStatus: input.readinessStatus } : {}),
-    ...(input.requestId ? { requestId: input.requestId } : {}),
-  };
-  const payload = await fetchJson<CommitPreviewApiResponse>(
-    "/api/commit/preview",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return {
-    commitPlan: payload.commitPlan,
-    draftQuality: payload.draftQuality,
-    semanticQuality: payload.semanticQuality,
-    transaction: payload.transaction,
-    transactionId: payload.transactionId,
-    previewHash: payload.previewHash,
-    formalCommitPreview: payload.formalCommitPreview,
-  };
-}
-
-export async function applyCommit(
-  input: CommitRequest,
-  signal?: AbortSignal,
-): Promise<CommitApplySuccessResult> {
-  const payload = await fetchJson<CommitApplyApiResponse>(
-    "/api/commit/apply",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, confirm: true }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw createApiPayloadError(payload);
-  }
-  return payload;
-}
-
-function createApiPayloadError(payload: unknown): Error & { readonly payload?: unknown } {
-  return Object.assign(new Error(buildApiPayloadErrorMessage(payload)), { payload });
-}
-
-function buildApiPayloadErrorMessage(payload: unknown): string {
-  const details = apiPayloadErrorDetails(payload);
-  if (details.length === 0) return "API request failed";
-  return details.join(" ");
-}
-
-function apiPayloadErrorDetails(payload: unknown): readonly string[] {
-  if (!isRecord(payload)) return [];
-  return uniqueApiPayloadStrings([
-    readApiPayloadString(payload.error),
-    readApiPayloadString(payload.reason),
-    nestedApiPayloadString(payload.transactionPreflight, "code"),
-    nestedApiPayloadString(payload.formalPreflight, "code"),
-    nestedApiPayloadString(payload.snapshotResult, "reason"),
-    nestedApiPayloadString(payload.snapshotResult, "code"),
-    readApiPayloadString(payload.finalizeError),
-    payload.transactionFinalized === false ? "transactionFinalized:false" : undefined,
-  ]);
-}
-
-function nestedApiPayloadString(value: unknown, key: string): string | undefined {
-  if (!isRecord(value)) return undefined;
-  return readApiPayloadString(value[key]);
-}
-
-function readApiPayloadString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function uniqueApiPayloadStrings(values: readonly (string | undefined)[]): readonly string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -357,8 +357,6 @@ export function App() {
     handleDraftAIReview: workflow.handleDraftAIReview,
     handleGenerateRevisionPreview: workflow.handleGenerateRevisionPreview,
     handleApplyRevisionPreview: workflow.handleApplyRevisionPreview,
-    handleCommitPreview: workflow.handleCommitPreview,
-    handleCommitApply: workflow.handleCommitApply,
     handleGenerateSteering: workflow.generateSteering,
     handleContinueNextChapter: navigation.handleContinueNextChapter,
     handleCreateRevisionTask: workflow.handleCreateRevisionTask,

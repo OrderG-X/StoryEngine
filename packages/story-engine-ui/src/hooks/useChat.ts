@@ -763,8 +763,6 @@ export interface UseChatParams {
   handleDraftAIReview: () => Promise<void>;
   handleGenerateRevisionPreview: () => Promise<void>;
   handleApplyRevisionPreview: () => Promise<void>;
-  handleCommitPreview: () => Promise<void>;
-  handleCommitApply: () => void;
   handleGenerateSteering: (directionOverride?: unknown) => Promise<void>;
   handleContinueNextChapter: () => Promise<void>;
   handleCreateRevisionTask: (source: { issue?: any; suggestion?: any }) => void;
@@ -806,8 +804,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     handleDraftAIReview,
     handleGenerateRevisionPreview,
     handleApplyRevisionPreview,
-    handleCommitPreview,
-    handleCommitApply,
     handleGenerateSteering,
     handleContinueNextChapter,
     handleCreateRevisionTask,
