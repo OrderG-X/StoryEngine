@@ -499,7 +499,14 @@ export function buildFoundationWriteSummary(args: {
   }
   parts.push("本次操作已建快照，可一键撤销");
   // 各段自带句号时去掉再拼，免得出现「…内容。。本次操作…」。
-  return parts.map((part) => part.replace(/[。\s]+$/u, "")).join("。");
+  return parts.map(trimTrailingFullStops).join("。");
+}
+
+/** 去掉末尾的句号和空白（纯格式，不读语义）。 */
+function trimTrailingFullStops(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === "。" || text[end - 1]!.trim() === "")) end -= 1;
+  return text.slice(0, end);
 }
 
 /** 文本里的角色内部 id（char-xxxx）换成名字；解析不到用中性说法，绝不原样露出。 */

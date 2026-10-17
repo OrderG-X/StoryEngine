@@ -15,7 +15,7 @@ import { useChat } from "./hooks/useChat.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
 import { ChapterWorkspaceConflictError, fetchDefaultBookLibrary, saveChapterWorkspaceBeacon } from "./api/client.js";
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
-import { countTextWords } from "./utils/textUtils.js";
+import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
 import { carryChapterFileFlags } from "./utils/bookUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
 import {
@@ -652,14 +652,6 @@ export function App() {
 /* ------------------------------------------------------------------ */
 /*  Helper functions (pure, non-component)                             */
 /* ------------------------------------------------------------------ */
-
-function extractDraftTitle(content: string | undefined): string | null {
-  if (!content) return null;
-  const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!firstLine?.startsWith("#")) return null;
-  const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
-  return title || null;
-}
 
 function updateChapterListTitle(chapters: readonly import("./types.js").ChapterNavItem[], chapterNumber: number, title: string): readonly import("./types.js").ChapterNavItem[] {
   return chapters.map((chapter) => (
