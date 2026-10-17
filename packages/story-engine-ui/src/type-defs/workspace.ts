@@ -151,7 +151,8 @@ export interface DraftPreview {
   readonly status: "draft" | "committed" | "needs_repair";
   readonly content: string;
   readonly wordCount?: number;
-  readonly savedContent?: string;
+  /** AI 正在往这一章流式出稿：稿纸只读显示流出来的字（不进作者的稿子）。 */
+  readonly streaming?: boolean;
 }
 
 export interface ProtagonistStatus {
@@ -287,7 +288,6 @@ export interface ChapterWorkspaceData {
   readonly workingDraftChain?: boolean;
   readonly previousUncommittedDraftContext?: boolean;
   readonly latestUncommittedDraftChapter?: number;
-  readonly draft: DraftPreview;
   readonly messages: readonly ChapterMessage[];
   readonly protagonist: ProtagonistStatus;
   readonly characterMatrix?: StateOverviewCharacterMatrix;

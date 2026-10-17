@@ -111,8 +111,17 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
     if (state.projectPath !== projectPath || state.chapter !== paper.chapter) return;
     const disk = diskText(paper);
     const dirty = isDraftDirty(state);
-    if (disk.version === state.baseVersion && disk.body === state.savedBody) {
+    // 版本号是盘上全文的哈希：一样 = 盘上没变（只有定稿那份可能变了）。没有工作稿时按字比。
+    const unchanged = disk.version !== null
+      ? disk.version === state.baseVersion
+      : state.baseVersion === null && sameText(disk.body, state.savedBody);
+    if (unchanged) {
       set({ committed: paper.committed });
+      return;
+    }
+    // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突。
+    if (dirty && sameText(disk.body, state.body)) {
+      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed });
       return;
     }
     if (options.force || !dirty) {

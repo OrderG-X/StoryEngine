@@ -10,15 +10,15 @@ import type {
   DraftAIRevisionSuggestion,
   DraftRevisionTask,
   ChapterAgentCard,
-  StateOverview,
 } from "../api/types.js";
 import { useWorkspaceStore } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import type {
-  ChapterMessage,
-  ChapterWorkflowState,
-} from "../types.js";
-import { compactStrings, extractDraftTitle, cleanUiText } from "../utils/textUtils.js";
+import type { ChapterMessage } from "../types.js";
+import { compactStrings, cleanUiText } from "../utils/textUtils.js";
+import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
+import { flushDraftSave, refreshPaper } from "../drafts/draftSync.js";
+import { currentPaperText, isPaperCommitted } from "../drafts/useDraftPreview.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import {
   SELECTION_REVISION_TEMPLATES,
   buildSelectionRevisionTask,
@@ -127,14 +127,17 @@ function revisionIssueConstraints(issue?: DraftAIReviewIssue): readonly string[]
 export interface UseWorkflowActionsParams {
   projectPath: string | null;
   appendMessage: (message: ChapterMessage) => void;
-  applyOverviewToWorkspace: (
-    overview: StateOverview,
-    draftContent?: string,
-    flowStatus?: ChapterWorkflowState,
-    draftTitle?: string,
-    // 写类工具回传的「本次实际操作章号」——前端认领以推进当前章，修跨章草稿污染。
-    targetChapter?: number,
-  ) => void;
+}
+
+/**
+ * 改稿类动作要读盘上的稿子：先把作者没存的字存掉（重构 P5）。
+ * 存不上（网络 / 撞版本）就不动手，免得服务端按旧稿改、把作者的字盖掉。
+ */
+async function saveBeforeDraftAction(): Promise<string | null> {
+  const flushed = await flushDraftSave();
+  if (!flushed.ok) return `稿子还没存上（${flushed.error}），这次没有动手。`;
+  if (useDraftStore.getState().incoming) return "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再来。";
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -142,7 +145,7 @@ export interface UseWorkflowActionsParams {
 /* ------------------------------------------------------------------ */
 
 export function useWorkflowActions(params: UseWorkflowActionsParams) {
-  const { projectPath, appendMessage, applyOverviewToWorkspace } = params;
+  const { projectPath, appendMessage } = params;
 
   const currentOperationIdentity = () => {
     const store = useWorkspaceStore.getState();
@@ -277,11 +280,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       detail: ["定位原文中", "生成修订草案中"],
     });
     try {
+      const blocked = await saveBeforeDraftAction();
+      if (blocked) throw new Error(blocked);
       const result = await previewDraftRevision({
         projectPath,
         chapter: operation.chapter,
         task: ws.activeRevisionTask,
-        draftContent: ws.workspace.draft.content,
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
@@ -339,11 +343,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const ws = useWorkspaceStore.getState();
     const nav = useNavigationStore.getState();
 
-    if (!ws.workspace.draft.content.trim()) {
+    const paperText = currentPaperText();
+    if (!paperText.trim()) {
       nav.showToast("当前没有可修订的工作稿。");
       return;
     }
-    const target = resolveRevisionTarget(source, ws.workspace.draft.content);
+    const target = resolveRevisionTarget(source, paperText);
     if (!target) {
       nav.showToast("无法自动定位原文片段。请先在内容审阅建议中选择更具体的问题，或把要修的段落发给我。", 4200);
       return;
@@ -446,6 +451,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       detail: ["写入工作稿中", "刷新章节状态中"],
     });
     try {
+      const blocked = await saveBeforeDraftAction();
+      if (blocked) throw new Error(blocked);
       const result = await applyDraftRevision({
         projectPath,
         chapter: operation.chapter,
@@ -458,12 +465,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         notifyStaleOperation();
         return;
       }
-      applyOverviewToWorkspace(
-        result.overview,
-        result.draftContent,
-        "draft_ready",
-        extractDraftTitle(result.draftContent) ?? ws.workspace.draft.title,
-      );
+      applyOverviewToWorkspace(result.overview, { flowStatus: "draft_ready" });
+      await refreshPaper();
       // 「刚改片段」黄高亮：用改写后的新文本作定位锚，正文里把刚改的那段标出来（WritingPaper 据此高亮）。
       ws.setRevisionHighlight(ws.activeRevisionPreview.afterText);
       // 体检「改掉这句」联动：若这次改写来自某条违规，应用成功后把它在卡片里标「已改 ✓」并清掉 pending。
@@ -549,7 +552,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       nav.showToast("请先打开本地项目。");
       return;
     }
-    if (ws.workspace.draft.status === "committed") {
+    if (isPaperCommitted()) {
       nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
@@ -580,11 +583,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       detail: ["定位选中片段中", "生成修订草案中"],
     });
     try {
+      const blocked = await saveBeforeDraftAction();
+      if (blocked) throw new Error(blocked);
       const previewResult = await previewDraftRevision({
         projectPath,
         chapter: operation.chapter,
         task,
-        draftContent: ws.workspace.draft.content,
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
@@ -684,7 +688,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const nav = useNavigationStore.getState();
     const ws = useWorkspaceStore.getState();
     if (!projectPath) { nav.showToast("请先打开本地项目。"); return; }
-    if (ws.workspace.draft.status === "committed") {
+    if (isPaperCommitted()) {
       nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
@@ -696,6 +700,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     ws.setRevisionHighlight(null);
     ws.setDraftActionLoading("deai-fix-all");
     try {
+      const blocked = await saveBeforeDraftAction();
+      if (blocked) throw new Error(blocked);
       const resp = await applyDeAiFlavorBatch({
         projectPath,
         chapter,
@@ -705,14 +711,13 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           ...(v.severity ? { severity: v.severity } : {}),
           ...(v.suggestedFix ? { suggestedFix: v.suggestedFix } : {}),
         })),
-        draftContent: ws.workspace.draft.content,
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;
       }
       if (resp.result.rewritten > 0) {
-        useWorkspaceStore.getState().updateDraft({ content: resp.draftContent });
+        await refreshPaper();
         const norm = (s: string): string => s.replace(/\s+/gu, "");
         const changedBefores = resp.result.changes.map((c) => norm(c.before));
         for (const v of violations) {
@@ -754,7 +759,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       nav.showToast("请先打开本地项目。");
       return;
     }
-    if (ws.workspace.draft.status === "committed") {
+    if (isPaperCommitted()) {
       nav.showToast("本章已定稿，正文只读；如需另写请通过 AI 助手发起修订。");
       return;
     }
@@ -820,17 +825,15 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const chapter = operation.chapter;
     ws.setDraftActionLoading("apply-candidate");
     try {
+      const blocked = await saveBeforeDraftAction();
+      if (blocked) throw new Error(blocked);
       const result = await applyDraftCandidate({ projectPath, chapter, draftContent: content });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;
       }
-      applyOverviewToWorkspace(
-        result.overview,
-        result.draftContent,
-        "draft_ready",
-        result.draftTitle ?? extractDraftTitle(result.draftContent) ?? ws.workspace.draft.title,
-      );
+      applyOverviewToWorkspace(result.overview, { flowStatus: "draft_ready" });
+      await refreshPaper();
       useWorkspaceStore.getState().setDraftCandidates(null);
       nav.showToast("已用这版替换工作稿，可在「操作历史」撤销。");
     } catch (error) {

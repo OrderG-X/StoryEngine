@@ -119,6 +119,22 @@
   .codex-desk-stage > .se-v2-writing-canvas:focus-within{border-color:var(--line-strong);box-shadow:none;}
   .codex-desk-stage .se-v2-paper-title{font-family:"Noto Serif SC","Songti SC",serif;}
 
+  /* 稿子在别处变了、作者手上还有没存的字（重构 P5）：稿纸上方一条提示，两边都不悄悄覆盖。 */
+  .codex-desk-stage > .cd-incoming{
+    position:relative;z-index:1;flex:none;width:100%;max-width:780px;box-sizing:border-box;margin:0 0 10px;
+    display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 14px;border-radius:8px;
+    background:var(--warn-soft);border:1px solid var(--line);color:var(--text);font-size:13px;line-height:1.6;
+  }
+  .codex-desk-stage > .cd-incoming.is-error{background:var(--danger-soft);}
+  .codex-desk-stage > .cd-incoming > span{flex:1 1 260px;min-width:0;}
+  .cd-incoming-actions{display:flex;gap:8px;flex:none;}
+  .cd-incoming-actions button{
+    padding:4px 12px;border-radius:var(--r-pill);border:1px solid var(--line-strong);background:transparent;
+    color:var(--text);font-size:13px;cursor:pointer;
+  }
+  .cd-incoming-actions button:hover{background:var(--hover);}
+  .cd-incoming-actions button.is-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);}
+
   /* 「本章已定稿」提示：一行淡字，不再是压在稿纸上的大框 */
   .codex-desk-stage .se-v2-notice{
     margin:0 0 22px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;

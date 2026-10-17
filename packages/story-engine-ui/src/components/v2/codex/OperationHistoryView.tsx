@@ -8,8 +8,9 @@
 import { useEffect, useState } from "react";
 import { fetchSnapshots, restoreSnapshotApi } from "../../../api/client.js";
 import type { SnapshotEntryDto } from "../../../api/types.js";
-import { drainAutosave, resumeAutosave, suspendAutosave } from "../../../utils/autosaveControl.js";
-import { restoreSnapshotSafely } from "../../../utils/safeSnapshotRestore.js";
+import { flushAllSaves } from "../../../sync/saveAll.js";
+import { syncWorkspaceAfterRestore } from "../../../workspace/syncAfterRestore.js";
+import { useNavigationStore } from "../../../stores/navigationStore.js";
 
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
@@ -77,7 +78,7 @@ export default function OperationHistoryView({ projectPath }: { readonly project
   const [snapshots, setSnapshots] = useState<SnapshotEntryDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
-  // 恢复要先在行内确认一次（恢复会整页重载，误点代价大）。
+  // 恢复要先在行内确认一次（会把整本书退回那个存档，误点代价大）。
   const [confirmId, setConfirmId] = useState<string | null>(null);
   // 「查看改动」一次只展开一条。
   const [changesId, setChangesId] = useState<string | null>(null);
@@ -91,20 +92,22 @@ export default function OperationHistoryView({ projectPath }: { readonly project
     return () => { alive = false; };
   }, [projectPath]);
 
+  // 恢复后原地重读（重构 P5）：不整页刷新，列表里多出「恢复前」那条存档。
   const handleRestore = async (id: string): Promise<void> => {
     if (!projectPath) return;
     setRestoring(id);
     setError(null);
     try {
-      await restoreSnapshotSafely({
-        suspend: suspendAutosave,
-        drain: drainAutosave,
-        restore: () => restoreSnapshotApi(projectPath, id),
-        reload: () => window.location.reload(),
-        resumeOnFailure: resumeAutosave,
-      });
+      const flushed = await flushAllSaves();
+      if (!flushed.ok) throw new Error(`${flushed.error}，先别恢复，等它存上再试`);
+      await restoreSnapshotApi(projectPath, id);
+      setConfirmId(null);
+      await syncWorkspaceAfterRestore(projectPath);
+      useNavigationStore.getState().showToast("已恢复到这个存档。恢复前的样子也存了一份，可以再恢复回去。", 4200);
+      setSnapshots(await fetchSnapshots(projectPath));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
       setRestoring(null);
     }
   };

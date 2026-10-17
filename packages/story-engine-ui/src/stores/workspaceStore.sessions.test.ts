@@ -9,10 +9,4 @@ describe("workspaceStore 会话状态", () => {
     s.setActiveArchivedCount(3);
     expect(useWorkspaceStore.getState().activeArchivedCount).toBe(3);
   });
-
-  it("tracks the revision of the currently loaded chapter snapshot", () => {
-    const s = useWorkspaceStore.getState();
-    s.setWorkspaceRevision(12);
-    expect(useWorkspaceStore.getState().workspaceRevision).toBe(12);
-  });
 });

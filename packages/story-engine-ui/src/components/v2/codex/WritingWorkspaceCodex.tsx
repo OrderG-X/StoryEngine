@@ -19,6 +19,7 @@ import OperationHistoryView from "./OperationHistoryView.js";
 import { ModelSettingsEmbedded } from "./ModelSettingsEmbedded.js";
 import { DisplaySettingsEmbedded } from "./DisplaySettingsEmbedded.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { contextActionsForView } from "./ChatCapabilityBar.js";
@@ -163,7 +164,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const [rightWidth, setRightWidth] = useState(readStoredAiWidth);
   // P1-5：空书首次进入默认落写作台（非资料中心）。
   const [view, setView] = useState<"library" | "desk" | "history">(() =>
-    defaultCenterViewForWorkspace(props.workspace),
+    defaultCenterViewForWorkspace(),
   );
   // 设置改成弹窗（不再占中栏整页），null = 关着。
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
@@ -301,6 +302,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 字号偏好落盘由 displaySettingsStore 负责（每次 set 自动写回 localStorage）。
 
   // 章节搜索过滤：标题 / 章号 / 序号匹配；空查询=全部。
+  const paperBody = useDraftStore((state) => state.body);
   const chapterFilter = chapterQuery.trim().toLowerCase();
   const visibleChapters = chapterFilter
     ? chapters.filter((ch, i) =>
@@ -312,7 +314,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const chapterRows = buildChapterRows(visibleChapters.filter((ch) => ch.status !== "planned" || ch.id === currentId), Boolean(chapterFilter));
   // 当前章的状态以工作区的流程态为准（章节列表里它只标「current」，看不出是不是还没定稿）。
   const currentIsDraft = !["committed", "ready_for_next", "idle", "steering_ready"].includes(props.workspace.flowStatus)
-    && Boolean(props.workspace.draft.content.trim());
+    && Boolean(paperBody.trim());
   const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && ch.status === "draft").length + (currentIsDraft ? 1 : 0);
   // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
   const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
@@ -559,7 +561,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           )}
           </div>
           {/* 保存状态 Pill：中栏底边右下角（.desk 相对定位），不再压右栏 AI 发送键（UI 审计 T8）。 */}
-          <SaveStatusPill onRetry={props.onRetryAutosave} />
+          <SaveStatusPill />
         </main>
 
         {/* ══ 右：AI 对话（codex 视觉，AiChatCodex；唯一控制面） ══ */}

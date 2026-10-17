@@ -1,25 +1,25 @@
 import {
   createStoryProjectFromDraft,
-  fetchChapterWorkspace,
   fetchStateOverview,
 } from "../api/client.js";
+import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.js";
 import { listChatSessions, readChatSession } from "../api/chatSessionsClient.js";
 import type { StateOverview } from "../api/types.js";
 import { sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { useWorkspaceStore, emptyCommitSelections, setProjectKey, readPersistedProjectMessages, type SelectedAdviceCard } from "../stores/workspaceStore.js";
+import { useWorkspaceStore, emptyCommitSelections } from "../stores/workspaceStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
 import {
   actionsForWorkflowState,
   workflowPromptText,
 } from "../utils/workflowHelpers.js";
-import { looksLikeDraftBody, extractDraftTitle } from "../utils/textUtils.js";
 import { bookCreationPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
-import { consumeUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
-import { flushAutosaveNow, isAutosaveSuspended, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
-import { recordWorkspaceRevision } from "../utils/workspaceRevisionTracker.js";
+import { flushAllSaves } from "../sync/saveAll.js";
+import { markChatLoaded } from "../sync/chatSync.js";
+import { flowStatusForPaper } from "../workspace/applyOverview.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -51,7 +51,7 @@ export interface UseProjectNavigationReturn {
   /**
    * onBusy:"silent"（长跑 #1）：忙碌守卫撞上时不弹「已有操作正在进行」toast、静默放弃本次导航。
    * 只给 App 启动/路由回放用——StrictMode 会在挂载时同步双跑初始路由 effect，第一次 openHome 还
-   * await 在 flushAutosaveNow 里没走完 finally，第二次就撞上单槽忙碌守卫误弹 toast（首页加载即弹的根源）。
+   * await 在 flushAllSaves 里没走完 finally，第二次就撞上单槽忙碌守卫误弹 toast（首页加载即弹的根源）。
    * 用户点击导航（onGoHome 等）保持默认 "toast"，忙碌仍要如实告知。
    */
   readonly openProject: (
@@ -125,18 +125,16 @@ function resolveChapterNavStatus(
   return chapter.status;
 }
 
-function fileStateFromSnapshot(snapshot: Awaited<ReturnType<typeof fetchChapterWorkspace>> | null | undefined): ChapterFileState | undefined {
-  if (!snapshot) return undefined;
+function fileStateFromPaper(paper: ChapterPaper): ChapterFileState {
   return {
-    hasDraftFile: snapshot.hasDraftFile === true,
-    hasCommittedChapter: snapshot.hasCommittedChapter === true,
+    hasDraftFile: paper.draft !== null,
+    hasCommittedChapter: paper.committed !== null,
   };
 }
 
 function resolveInitialChapterNumber(chapters: readonly ChapterNavItem[], fallbackChapterNumber: number): number {
   return maxChapterNumber(chapters.filter((chapter) => chapter.hasDraftFile === true))
     ?? maxChapterNumber(chapters.filter((chapter) => chapter.hasCommittedChapter === true))
-    ?? maxChapterNumber(chapters.filter((chapter) => chapter.hasWorkspaceSnapshot === true))
     ?? fallbackChapterNumber;
 }
 
@@ -156,52 +154,6 @@ function workingDraftChainState(chapters: readonly ChapterNavItem[], activeChapt
     previousUncommittedDraftContext: uncommittedDraftChapters.includes(activeChapterNumber - 1),
     ...(latestUncommittedDraftChapter !== undefined ? { latestUncommittedDraftChapter } : {}),
   };
-}
-
-function recoverMisroutedDraft(messages: readonly ChapterMessage[]): { readonly draftContent: string; readonly messages: readonly ChapterMessage[] } | null {
-  const draftMessage = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant" && !message.adviceCards?.length && looksLikeDraftBody(message.content));
-  if (!draftMessage) return null;
-  return {
-    draftContent: draftMessage.content,
-    messages: [
-      ...messages.filter((message) => message.id !== draftMessage.id),
-      {
-        id: `system-draft-recovered-${Date.now()}`,
-        role: "system",
-        content: "已将误入聊天区的正文移回左侧工作稿区。",
-        toolOutput: draftMessage.toolOutput,
-      },
-    ],
-  };
-}
-
-function resolveSelectedAdviceCards(keys: readonly string[], messages: readonly ChapterMessage[]): readonly SelectedAdviceCard[] {
-  const selected: SelectedAdviceCard[] = [];
-  const keySet = new Set(keys);
-  for (const message of messages) {
-    for (const card of message.adviceCards ?? []) {
-      const key = `${message.id}:${card.id}`;
-      if (keySet.has(key)) {
-        selected.push({ key, card });
-      }
-    }
-  }
-  return selected;
-}
-
-function isInProgressWorkspaceSnapshot(snapshot: Awaited<ReturnType<typeof fetchChapterWorkspace>> | null | undefined): boolean {
-  if (!isRestorableWorkspaceSnapshot(snapshot)) return false;
-  if (snapshot.flowStatus === "committed" || snapshot.flowStatus === "ready_for_next") return false;
-  if (!snapshot.flowStatus || snapshot.flowStatus === "idle") return false;
-  return Boolean(snapshot.draftContent?.trim() || snapshot.messages.length > 0);
-}
-
-function isRestorableWorkspaceSnapshot(snapshot: Awaited<ReturnType<typeof fetchChapterWorkspace>> | null | undefined): snapshot is Awaited<ReturnType<typeof fetchChapterWorkspace>> {
-  if (!snapshot) return false;
-  if (snapshot.flowStatus === "idle" && Boolean(snapshot.draftContent?.trim())) return false;
-  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,26 +232,11 @@ function workspaceFromBook(book: BookSummary) {
       ? "ready_for_next"
       : "idle";
 
-  const draftContent = [
-    `这里是《${book.title}》第${book.currentChapterNumber}章「${book.currentChapterTitle}」的章节工作区。`,
-    isRealProjectBook(book)
-      ? "本区域会读取项目状态、生成本章方案、工作稿和定稿预览。"
-      : "这条书架记录还没有绑定本地项目目录。打开或创建真实项目后，本区域会读取项目状态。",
-    book.logline,
-  ].join("\n\n");
-
   return {
     projectName: book.title,
     currentChapter,
     chapters: chapterWindow,
     flowStatus,
-    draft: {
-      chapterNumber: book.currentChapterNumber,
-      title: book.currentChapterTitle,
-      status: (flowStatus === "ready_for_next" ? "committed" : "draft") as "committed" | "draft",
-      content: draftContent,
-      wordCount: Math.max(1200, Math.round(book.totalWords / Math.max(book.writtenChapters, 1))),
-    },
     messages: [
       {
         id: `${book.id}-system`,
@@ -336,21 +273,6 @@ function sidebarFromBook(book: BookSummary): SidebarData {
   };
 }
 
-/**
- * A residual store session is only worth preserving when it represents a genuine
- * prior user conversation — i.e. it contains at least one real user turn whose id
- * is not a known seed/scaffolding marker. This guards against mockData demo seeds
- * (msg-001/msg-002) and workflow-only scaffolding leaking into a freshly opened
- * real project that has no backend snapshot.
- */
-function isGenuineUserSession(messages: readonly ChapterMessage[]): boolean {
-  if (messages.length === 0) return false;
-  // Workflow scaffolding (assistant-workflow-*) is regenerated, never a real session.
-  if (messages.every((m) => m.id.startsWith("assistant-workflow-"))) return false;
-  // A real session has a genuine user turn that is not a mockData demo seed.
-  return messages.some((m) => m.role === "user" && !m.id.startsWith("msg-0"));
-}
-
 /** 开书开场白消息的 id 前缀——reopen 时据此识别它，跳过章节 idle 追加（守住开书语气）。 */
 const BOOK_CREATION_GREETING_ID_PREFIX = "assistant-book-creation-";
 
@@ -363,7 +285,7 @@ function bookCreationGreetingMessage(): ChapterMessage {
   };
 }
 
-/** 这组消息是否就是单条开书开场白（由 selectOpenProjectMessages 为空书注入）。 */
+/** 这组消息是否就是单条开书开场白（空书开书时注入）。 */
 export function isBookCreationGreeting(messages: readonly ChapterMessage[]): boolean {
   return messages.length === 1 && (messages[0]?.id?.startsWith(BOOK_CREATION_GREETING_ID_PREFIX) ?? false);
 }
@@ -401,40 +323,6 @@ function entryChatMessages(messages: readonly ChapterMessage[]): readonly Chapte
 }
 
 /**
- * Decides which chat history to show when opening a project.
- * Priority: restorable backend snapshot → genuine prior session →
- * persisted book-creation greeting (untouched new book) → fresh-empty-book greeting → adapter clean greeting.
- *
- * 为什么有「persistedMessages 是开书开场白」这条（V4 真机教训）：新建空书时开书开场白会被 autosave 写进
- * chapter-workspace 缓存，但该缓存对「草稿恢复」不算可恢复快照（无真实草稿）→ snapshotMessages 为空，
- * 于是只能从原始当前章节快照的 messages 里把它捞回来。这是「这本是没动过的新书」的 ground truth，
- * 不受 overview 启发式被建书/autosave 产物（种下的 arc-goal、占位草稿致 hasDraftFile）干扰。
- * isFreshBook(overview) 仅作兜底（缓存尚未写入时，如刚建首开）。两条都只在没有真实历史会话时才会触达，
- * 绝不覆盖用户真实对话。
- */
-function selectOpenProjectMessages(params: {
-  readonly snapshotMessages: readonly ChapterMessage[] | null | undefined;
-  readonly persistedMessages?: readonly ChapterMessage[] | null | undefined;
-  readonly sessionMessages: readonly ChapterMessage[];
-  readonly workspaceMessages: readonly ChapterMessage[];
-  readonly overview?: StateOverview;
-  /** 「撤销到此」后的那一次 reload：忽略磁盘对话（被 git restore 还原成回合起点脏态、含孤儿消息），
-   *  改用 sessionStorage 里刚写好的干净截断（H5）。仅这一次为真，绝不影响后续正常开书。 */
-  readonly preferSession?: boolean;
-}): readonly ChapterMessage[] {
-  const { snapshotMessages, persistedMessages, sessionMessages, workspaceMessages, overview, preferSession } = params;
-  // H5：撤销 reload 时跳过磁盘 snapshotMessages（脏态孤儿），让下面的「真实历史会话 / 干净开场白」分支接管。
-  if (!preferSession && snapshotMessages && snapshotMessages.length > 0) return snapshotMessages;
-  if (isGenuineUserSession(sessionMessages)) return sessionMessages;
-  // 持久化消息就是「单条开书开场白」= 没动过的新书（建书时写入、用户没聊过）→ 保留开书语气。
-  if (persistedMessages && isBookCreationGreeting(persistedMessages)) return persistedMessages;
-  if (overview && isFreshBook(overview)) {
-    return [bookCreationGreetingMessage()];
-  }
-  return workspaceMessages;
-}
-
-/**
  * 开书时后端没读到会话历史（backendSessionLoaded=false）该用哪组消息。
  * 修「同名删后重建 / 新书串台」bug：书目录名按书名确定性生成（toSafeId），同名删后重建会拿到一模一样的
  * projectPath，内存里上一本书残留的消息会被误当成本书历史端出来。判据：
@@ -453,7 +341,7 @@ function messagesWhenBackendSessionMissing(params: {
 /**
  * 资料刷新（refreshScope:"foundation"，foundation_write 触发）的 workspace 合并：
  * 用 overview 派生的 base 刷资料/侧栏相关字段，但**保留**用户当前停留章 currentChapter/chapters、
- * 对话 messages、草稿 draft 与流程态 flowStatus。
+ * 对话 messages 与流程态 flowStatus（正文在 draftStore，不经这里）。
  *
  * H4：历史上这里直接铺开 base（含 overview 最新章的 currentChapter/chapters），用户在第2章顺手记资料
  * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。必须与 useFoundationGaps.ts 的 refreshWorkspaceFromOverview
@@ -469,12 +357,10 @@ export function mergeFoundationRefreshWorkspace(
     chapters: current.chapters,
     messages: current.messages,
     flowStatus: current.flowStatus,
-    draft: current.draft,
   };
 }
 
 export const __useProjectNavigationTest = {
-  selectOpenProjectMessages,
   messagesWhenBackendSessionMissing,
   entryChatMessages,
   isBookCreationGreeting,
@@ -524,7 +410,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setSessions,
     setActiveArchivedCount,
     setChatHistoryBudget,
-    setWorkspaceRevision,
   } = useWorkspaceStore();
 
   const currentNavigationIdentity = () => {
@@ -560,21 +445,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   ): Promise<boolean> => {
     const transition = beginNavigationTransition("切换书籍", options.onBusy);
     if (!transition) return false;
-    const wasSuspended = isAutosaveSuspended();
-    let suspendedForTransition = false;
     try {
-      // 旧书保存必须真正完成后才能替换 project/session/workspace。失败就留在原地，不能假装已经保存。
-      const flushed = await flushAutosaveNow();
+      // 旧书必须真正存完才能换。失败就留在原地，不能假装已经保存。
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         showToast(`保存失败，仍停留在当前书籍：${flushed.error}`, 5200);
         return false;
-      }
-      // 过渡期冻结 autosave：setProjectPath(新书) 与 setWorkspace(新内容) 之间有多个 await，
-      // 这个窗口里若有 350ms 防抖计时器/pagehide keepalive 触发，会拿「新 projectPath + 旧书草稿」
-      // 的混合态写盘 → 旧书内容串进新书。
-      if (!wasSuspended) {
-        suspendAutosave();
-        suspendedForTransition = true;
       }
       setOpenProjectLoading(true);
       setOpenProjectError(null);
@@ -582,35 +458,11 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       if (!ownsNavigationOrigin(transition)) return false;
       const nextWorkspace = workspaceFromStateOverview(overview);
       const baseChapterNumber = nextWorkspace.currentChapter.chapterNumber;
-      const initialChapterNumber = resolveInitialChapterNumber(nextWorkspace.chapters, baseChapterNumber);
-      const snapshotChapterNumbers = [...new Set([baseChapterNumber, baseChapterNumber + 1, initialChapterNumber])];
-      const snapshots = await Promise.all(snapshotChapterNumbers.map(async (chapterNumber) => [
-        chapterNumber,
-        await fetchChapterWorkspace({
-          projectPath: nextProjectPath,
-          chapter: chapterNumber,
-        }),
-      ] as const));
+      // 打开哪一章从盘上算：最新有工作稿的那章 → 最新定稿章 → 引擎当前章（重构 P5，不再读按章存的 JSON 去猜）。
+      const activeChapterNumber = resolveInitialChapterNumber(nextWorkspace.chapters, baseChapterNumber);
+      const paper = await fetchChapterPaper(nextProjectPath, activeChapterNumber);
       if (!ownsNavigationOrigin(transition)) return false;
-      const snapshotByChapter = new Map(snapshots);
-      const currentSnapshot = snapshotByChapter.get(baseChapterNumber) ?? null;
-      const nextChapterSnapshot = snapshotByChapter.get(baseChapterNumber + 1) ?? null;
-      const initialSnapshot = snapshotByChapter.get(initialChapterNumber) ?? null;
-      const snapshot = isRestorableWorkspaceSnapshot(initialSnapshot)
-        ? initialSnapshot
-        : isInProgressWorkspaceSnapshot(nextChapterSnapshot)
-        ? nextChapterSnapshot
-        : isRestorableWorkspaceSnapshot(currentSnapshot)
-          ? currentSnapshot
-          : null;
-      const fileStates = new Map<number, ChapterFileState>();
-      for (const [chapterNumber, chapterSnapshot] of snapshotByChapter) {
-        const fileState = fileStateFromSnapshot(chapterSnapshot);
-        if (fileState) fileStates.set(chapterNumber, fileState);
-      }
-      const activeChapterNumber = snapshot?.chapter ?? baseChapterNumber;
-      // 内容是否可恢复与 CAS 基线是两件事：即使占位/idle 内容被拒绝，也必须保留磁盘 raw revision。
-      const rawActiveSnapshot = snapshotByChapter.get(activeChapterNumber) ?? null;
+      const fileStates = new Map<number, ChapterFileState>([[activeChapterNumber, fileStateFromPaper(paper)]]);
       const activeChapter = nextWorkspace.chapters.find((chapter) => chapter.chapterNumber === activeChapterNumber) ?? {
         id: `ch-${activeChapterNumber}`,
         chapterNumber: activeChapterNumber,
@@ -618,37 +470,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         status: "current" as const,
       };
       const book = bookSummaryFromOverview(overview, nextProjectPath);
-      // Choose chat history: backend snapshot → genuine prior user session →
-      // adapter clean greeting. A real project with no backend snapshot must NOT
-      // keep mockData demo seeds or workflow scaffolding left in the store.
-      // storeMessages = store 内存里当前的消息（zustand workspace.messages）。既是 selectOpenProjectMessages
-      // 的候选输入，也是「一个聊天走天涯」改造后读取后端会话历史失败/为空时的兜底（见下方 backendSessionMessages 回退）。
       const storeMessages = useWorkspaceStore.getState().workspace.messages;
-      // selectedOpenProjectMessages = selectOpenProjectMessages 选出的最优历史候选。
-      // 注意（隐患C·保守保留）：自「一个聊天走天涯」改造后，最终写进 store 的 messages 改由下方
-      // backendSessionMessages（readChatSession 的活跃会话）决定；此返回值的 snapshotMessages 最高优先级
-      // 分支已不直接决定最终 messages，目前仅供 recoverMisroutedDraft 捞回误投草稿。
-      // TODO：若确认 selectOpenProjectMessages 的 snapshot 优先级分支对开书主流程已无其他作用，可评估精简；
-      //       未 100% 确认前保留全套逻辑，不为清理死代码冒险改坏开书主流程。
-      const selectedOpenProjectMessages = selectOpenProjectMessages({
-        snapshotMessages: snapshot?.messages,
-        // 原始当前章节快照的 messages：空书的开书开场白即便快照「不可恢复草稿」也能从这里捞回（V4）。
-        persistedMessages: currentSnapshot?.messages,
-        sessionMessages: storeMessages,
-        workspaceMessages: nextWorkspace.messages,
-        // 仅当既无 backend snapshot 也无真实历史、且这是刚建的空书时，
-        // 注入开书语气开场白；其余情况(有内容/有历史)一律不变。
-        overview,
-        // H5：「撤销到此」reload 的一次性标记——忽略被 restore 还原成脏态的磁盘对话，用 sessionStorage 干净截断。
-        preferSession: consumeUndoReloadPreferSession(),
-      });
-      const hasSnapshotDraft = snapshot?.draftContent !== undefined;
-      const recovered = hasSnapshotDraft ? null : recoverMisroutedDraft(selectedOpenProjectMessages);
-      const draftContent = snapshot?.draftContent ?? recovered?.draftContent;
-      // 开书时按当前活跃会话装载聊天（替代旧的按章快照取 messages）
+      // 对话只有一份：项目里的会话文件（重构 P5）。
       const sessionIndex = await listChatSessions(nextProjectPath).catch(() => null);
       if (!ownsNavigationOrigin(transition)) return false;
-      // backendSessionMessages = readChatSession 读到的后端活跃会话历史，最终写进 store 的消息以它为准。
       let backendSessionMessages: readonly ChapterMessage[] = [];
       let activeArchivedCount = 0;
       let backendSessionLoaded = false;
@@ -656,7 +481,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       if (sessionIndex?.index) {
         const activeSessionId = sessionIndex.index.activeSessionId;
         const active = await readChatSession(nextProjectPath, activeSessionId).catch((error) => {
-          console.warn("[openProject] 读取会话历史失败，回退到本地副本", { activeSessionId, error });
+          console.warn("[openProject] 读取会话历史失败", { activeSessionId, error });
           sessionReadFailed = true;
           return null;
         });
@@ -666,61 +491,47 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           activeArchivedCount = active.session.archivedCount ?? 0;
           backendSessionLoaded = true;
         }
+      } else {
+        sessionReadFailed = true;
       }
       // 没读到后端会话历史时，绝不把内存里上一本书的残留消息当成本书历史（见 messagesWhenBackendSessionMissing）。
       if (!backendSessionLoaded) {
-        if (!(overview && isFreshBook(overview))) {
-          console.warn("[openProject] 会话历史失败/为空，回退到内存消息", {
-            hasSessionIndex: Boolean(sessionIndex?.index),
-            storeMessageCount: storeMessages.length,
-          });
-        }
-        // 审计 Med：本项目 sessionStorage 副本优先——boot 时 transition.projectPath 为空串导致
-        // allowStoreFallback 恒 false、回退 []，随即 setWorkspace 空消息把刚水合的本地副本也覆盖销毁
-        // （用户只见空聊天）。副本是本项目的数据，无论切换身份如何都可安全回退；非空回退还保住该键不被清。
-        const persistedCopy = readPersistedProjectMessages(nextProjectPath);
-        if (persistedCopy.length > 0) {
-          backendSessionMessages = persistedCopy;
-        } else {
-          backendSessionMessages = messagesWhenBackendSessionMissing({
-            overview,
-            storeMessages,
-            allowStoreFallback: nextProjectPath === transition.projectPath,
-          });
-        }
+        backendSessionMessages = messagesWhenBackendSessionMissing({
+          overview,
+          storeMessages,
+          allowStoreFallback: nextProjectPath === transition.projectPath,
+        });
         if (sessionReadFailed) {
-          // 绝不静默：读失败要让用户看得见（回退了什么、怎么恢复），不再只有 console.warn。
-          showToast(
-            persistedCopy.length > 0
-              ? "聊天记录从服务器读取失败，已用本地副本显示；刷新页面可重试。"
-              : "聊天记录从服务器读取失败，且本地没有副本；刷新页面可重试。",
-            5200,
-          );
+          // 绝不静默：读失败要让用户看得见。
+          showToast("聊天记录从服务器读取失败；重新打开本书可重试。", 5200);
         }
       }
-      const draftTitle = snapshot?.draftTitle ?? extractDraftTitle(draftContent) ?? activeChapter.title;
-      const flowStatus: ChapterWorkflowState = snapshot?.flowStatus
-        ?? (draftContent?.trim() ? "draft_ready" : activeChapterNumber === baseChapterNumber ? nextWorkspace.flowStatus : "idle");
-      const chapters = activeChapterNumber === baseChapterNumber
-        ? updateChapterListForActive(updateChapterListTitle(nextWorkspace.chapters, activeChapterNumber, draftTitle), activeChapterNumber, draftTitle, fileStates)
-        : updateChapterListForActive(nextWorkspace.chapters, activeChapterNumber, draftTitle, fileStates);
-      // All asynchronous reads completed while the origin identity remained
-      // current. Commit the new project/session/workspace in one synchronous turn.
+      const draftTitle = paper.draft?.title ?? paper.committed?.title ?? activeChapter.title;
+      const paperState = { body: paper.draft?.body ?? paper.committed?.body ?? "", committed: paper.committed };
+      const paperFlow = flowStatusForPaper(paperState);
+      // 盘上这一章什么都没有：用引擎推的流程态（如「可以写下一章」）；有稿有定稿就按稿纸算。
+      const flowStatus: ChapterWorkflowState = paperFlow === "idle" && activeChapterNumber === baseChapterNumber ? nextWorkspace.flowStatus : paperFlow;
+      const chapters = updateChapterListForActive(
+        activeChapterNumber === baseChapterNumber ? updateChapterListTitle(nextWorkspace.chapters, activeChapterNumber, draftTitle) : nextWorkspace.chapters,
+        activeChapterNumber,
+        draftTitle,
+        fileStates,
+      );
+      const entryMessages = entryChatMessages(backendSessionMessages);
+      // 所有异步读取完成、来源身份没变：同一个同步回合里换上新书的项目 / 会话 / 工作区 / 稿纸。
       resetTransientWorkspaceState();
       setActiveBookId(null);
       setProjectPath(nextProjectPath);
       setCurrentOverview(overview);
-      setProjectKey(nextProjectPath);
       if (sessionIndex?.index) {
         setSessions(sessionIndex.index.sessions, sessionIndex.index.activeSessionId);
         if (sessionIndex.chatHistoryBudgetTokens) setChatHistoryBudget(sessionIndex.chatHistoryBudgetTokens);
+        if (backendSessionLoaded) markChatLoaded(nextProjectPath, sessionIndex.index.activeSessionId, entryMessages);
       } else {
-        // 后端会话不可用时也必须清掉上一本书的 index/active id，避免后续 autosave 写回旧会话。
+        // 后端会话不可用时也必须清掉上一本书的 index/active id，避免后续保存写回旧会话。
         setSessions([], "");
       }
       setActiveArchivedCount(activeArchivedCount);
-      recordWorkspaceRevision(nextProjectPath, activeChapterNumber, rawActiveSnapshot?.revision ?? 0);
-      setWorkspaceRevision(rawActiveSnapshot?.revision ?? 0);
       setWorkspace({
         ...nextWorkspace,
         ...workingDraftChainState(chapters, activeChapterNumber),
@@ -732,19 +543,9 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           ...fileStates.get(activeChapterNumber),
         },
         chapters,
-        messages: entryChatMessages(backendSessionMessages),
-        draft: draftContent !== undefined
-          ? {
-            ...nextWorkspace.draft,
-            chapterNumber: activeChapterNumber,
-            title: draftTitle,
-            content: draftContent,
-            savedContent: draftContent,
-            wordCount: countTextWords(draftContent),
-            status: flowStatus === "committed" || flowStatus === "ready_for_next" ? "committed" : "draft",
-          }
-          : nextWorkspace.draft,
+        messages: entryMessages,
       });
+      useDraftStore.getState().loadPaper(nextProjectPath, paper, activeChapter.title);
       setSidebar(sidebarFromStateOverview(overview));
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
@@ -757,16 +558,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
       resetFoundationGaps();
-      setSelectedAdviceCards(resolveSelectedAdviceCards(snapshot?.selectedAdviceCardKeys ?? [], backendSessionMessages));
+      setSelectedAdviceCards([]);
       setWorkspaceReady(true);
-      if (snapshot?.generationInterrupted || snapshot?.recoveredFromDraftFile) {
-        showToast(
-          snapshot.recoveredFromDraftFile
-            ? "上次生成被打断，已恢复磁盘上更完整的工作稿。"
-            : "上次生成被打断，工作稿未用中途内容覆写。",
-          4200,
-        );
-      }
       if (options.updateUrl !== false) {
         pushWorkspaceUrlForProject(nextProjectPath);
       }
@@ -780,7 +573,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       }
       return false;
     } finally {
-      if (suspendedForTransition) resumeAutosave();
       setOpenProjectLoading(false);
       finishWorkspaceOperation(transition);
     }
@@ -804,14 +596,14 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     if (!transition) return false;
 
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         showToast(`保存失败，仍停留在当前书籍：${flushed.error}`, 5200);
         return false;
       }
       setActiveBookId(book.id);
       setProjectPath(null);
-      setProjectKey(book.id);
+      useDraftStore.getState().reset();
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSidebar(sidebarFromBook(book));
@@ -828,7 +620,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       resetTransientWorkspaceState();
       setSessions([], "");
       setActiveArchivedCount(0);
-      setWorkspaceRevision(0);
       setSelectedAdviceCards([]);
       {
         const bookWorkspace = workspaceFromBook(book);
@@ -863,7 +654,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     const transition = beginNavigationTransition("返回首页", options.onBusy);
     if (!transition) return false;
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         showToast(`保存失败，仍停留在当前工作区：${flushed.error}`, 5200);
         return false;
@@ -871,7 +662,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setWorkspaceReady(false);
       setActiveBookId(null);
       setProjectPath(null);
-      setProjectKey(null);
+      useDraftStore.getState().reset();
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSteeringDirection("");
@@ -886,7 +677,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       resetFoundationGaps();
       setSessions([], "");
       setActiveArchivedCount(0);
-      setWorkspaceRevision(0);
       if (options.updateUrl !== false) pushHomeUrl();
       return true;
     } finally {
@@ -900,37 +690,24 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const openChapterWorkspace = async (chapter: ChapterNavItem): Promise<void> => {
     const transition = beginNavigationTransition("切换章节");
     if (!transition) return;
-    // 审查 #4：切章前把当前章未落盘的编辑刷盘（在替换 workspace store 前 capture 旧章内容）。
+    // 换章前先把手上那章没存的字存掉（存不上就留在原地）。
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         showToast(`保存失败，仍停留在当前章节：${flushed.error}`, 5200);
         return;
       }
-      let snapshot: Awaited<ReturnType<typeof fetchChapterWorkspace>> | null = null;
-      let rawSnapshot: Awaited<ReturnType<typeof fetchChapterWorkspace>> | null = null;
       const currentProjectPath = transition.projectPath || null;
-      if (currentProjectPath) {
-        rawSnapshot = await fetchChapterWorkspace({
-          projectPath: currentProjectPath,
-          chapter: chapter.chapterNumber,
-        });
-        if (!ownsNavigationOrigin(transition)) return;
-        snapshot = rawSnapshot;
-        if (!isRestorableWorkspaceSnapshot(snapshot)) snapshot = null;
-      }
-
-      const draftContent = snapshot?.draftContent ?? "";
-      const draftTitle = snapshot?.draftTitle ?? chapter.title;
-      const hasCommittedChapter = snapshot?.hasCommittedChapter === true
-        || (snapshot?.hasCommittedChapter === undefined && chapter.hasCommittedChapter !== false && chapter.status === "committed");
-      const flowStatus: ChapterWorkflowState = snapshot?.flowStatus ?? (draftContent.trim() ? "draft_ready" : hasCommittedChapter ? "committed" : "idle");
-
+      const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
+      if (!ownsNavigationOrigin(transition)) return;
+      const draftTitle = paper?.draft?.title ?? paper?.committed?.title ?? chapter.title;
+      const flowStatus: ChapterWorkflowState = paper
+        ? flowStatusForPaper({ body: paper.draft?.body ?? paper.committed?.body ?? "", committed: paper.committed })
+        : "idle";
       {
         const current = useWorkspaceStore.getState().workspace;
         const fileStates = new Map<number, ChapterFileState>();
-        const fileState = fileStateFromSnapshot(snapshot);
-        if (fileState) fileStates.set(chapter.chapterNumber, fileState);
+        if (paper) fileStates.set(chapter.chapterNumber, fileStateFromPaper(paper));
         const chapters = updateChapterListForActive(current.chapters, chapter.chapterNumber, draftTitle, fileStates);
         setWorkspace({
           ...current,
@@ -939,25 +716,13 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
             ...chapter,
             title: draftTitle,
             status: "current",
-            ...fileState,
+            ...fileStates.get(chapter.chapterNumber),
           },
           chapters,
           flowStatus,
-          draft: {
-            ...current.draft,
-            chapterNumber: chapter.chapterNumber,
-            title: draftTitle,
-            content: draftContent,
-            savedContent: draftContent,
-            wordCount: draftContent.trim() ? countTextWords(draftContent) : undefined,
-            status: flowStatus === "committed" || flowStatus === "ready_for_next" ? "committed" : "draft",
-          },
         });
       }
-      if (currentProjectPath) {
-        recordWorkspaceRevision(currentProjectPath, chapter.chapterNumber, rawSnapshot?.revision ?? 0);
-      }
-      setWorkspaceRevision(rawSnapshot?.revision ?? 0);
+      if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper, chapter.title);
       setSteeringDirection("");
       setLastChapterDirection("");
       setSteeringDraft(null);
@@ -1011,13 +776,20 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     const transition = beginNavigationTransition("创建新书");
     if (!transition) return;
     try {
+      // 手上这本书（如果开着）先存好再换。失败就不建，不能假装已经保存。
+      const flushed = await flushAllSaves();
+      if (!flushed.ok) {
+        showToast(`保存失败，没有新建书籍：${flushed.error}`, 5200);
+        return;
+      }
+      if (!ownsNavigationOrigin(transition)) return;
       const created = await createStoryProjectFromDraft({ draft });
       if (!ownsNavigationOrigin(transition)) {
         showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
         return;
       }
       // 新建书与 openProject 同款接线：引导会话索引 + 接上全局对话记忆上限。
-      // 不接的话 activeSessionId 一直是空串——聊天自动保存只写会话文件（见 performAutosaveFromStore），
+      // 不接的话 activeSessionId 一直是空串——对话只存会话文件（见 sync/chatSync），
       // sessionId 为空整段聊天不落盘，重启后首聊历史丢失；chatHistoryBudget 也会停在 96k 默认值，
       // 配置的上限被静默顶掉。读失败不阻塞开书：回退旧行为（空会话），重开本书时 openProject 会补正。
       const sessionBootstrap = await listChatSessions(created.projectDir).catch(() => null);
@@ -1039,12 +811,17 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           return;
         }
       }
+      const nextWorkspace = workspaceFromStateOverview(created.overview);
+      const firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber).catch(() => null);
+      if (!ownsNavigationOrigin(transition)) {
+        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
+        return;
+      }
       const book = bookSummaryFromOverview(created.overview, created.projectDir);
+      // 从这里起同步换上新书（中间不再 await，免得半新半旧的状态被存进新书）。
       setActiveBookId(null);
       setProjectPath(created.projectDir);
       setCurrentOverview(created.overview);
-      // App 的 useEffect 要到下一次 render 才切 key；这里必须先切，避免 B 的首条消息落进 A 的 sessionStorage。
-      setProjectKey(created.projectDir);
       if (sessionBootstrap?.index) {
         setSessions(sessionBootstrap.index.sessions, sessionBootstrap.index.activeSessionId);
         if (sessionBootstrap.chatHistoryBudgetTokens) setChatHistoryBudget(sessionBootstrap.chatHistoryBudgetTokens);
@@ -1052,12 +829,15 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         setSessions([], "");
       }
       setActiveArchivedCount(0);
-      setWorkspaceRevision(0);
-      const nextWorkspace = workspaceFromStateOverview(created.overview);
-      recordWorkspaceRevision(created.projectDir, nextWorkspace.currentChapter.chapterNumber, 0);
+      useDraftStore.getState().loadPaper(created.projectDir, firstPaper ?? {
+        chapter: nextWorkspace.currentChapter.chapterNumber,
+        draft: null,
+        committed: null,
+        editedSinceCommit: null,
+      }, nextWorkspace.currentChapter.title);
       setWorkspace({
         ...nextWorkspace,
-        // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 selectOpenProjectMessages）：
+        // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
         // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
         messages: [bookCreationGreetingMessage()],
       });

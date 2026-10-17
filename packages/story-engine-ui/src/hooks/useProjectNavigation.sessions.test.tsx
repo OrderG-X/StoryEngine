@@ -11,15 +11,23 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useProjectNavigation } from "./useProjectNavigation.js";
-import { createStoryProjectFromDraft, fetchChapterWorkspace, fetchStateOverview } from "../api/client.js";
+import { createStoryProjectFromDraft, fetchStateOverview } from "../api/client.js";
+import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.js";
 import { listChatSessions } from "../api/chatSessionsClient.js";
-import { flushPendingMessageSave, setProjectKey, useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
 import type { ChapterNavItem } from "../types.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
-import { setAutosaveFlusher } from "../utils/autosaveControl.js";
-import { prepareVersionedWorkspaceSave, resetWorkspaceRevisionTrackerForTests } from "../utils/workspaceRevisionTracker.js";
+
+const saveAll = vi.hoisted(() => ({ flushAllSaves: vi.fn(async () => ({ ok: true }) as { ok: true } | { ok: false; error: string }) }));
+vi.mock("../sync/saveAll.js", () => saveAll);
+function setAutosaveFlusher(impl: (() => Promise<{ ok: true } | { ok: false; error: string }>) | null): void {
+  saveAll.flushAllSaves.mockImplementation(impl ?? (async () => ({ ok: true })));
+}
+
+const emptyPaper = (chapter: number): ChapterPaper => ({ chapter, draft: null, committed: null, editedSinceCommit: null });
 
 const recentBooksState = vi.hoisted(() => ({ books: [] as any[] }));
 
@@ -32,8 +40,11 @@ function deferred<T>() {
 
 /* ---- mock 外部 API 与工具 ---- */
 
+vi.mock("../api/workingDraftClient.js", () => ({
+  fetchChapterPaper: vi.fn(async (_projectPath: string, chapter: number) => emptyPaper(chapter)),
+}));
+
 vi.mock("../api/client.js", () => ({
-  fetchChapterWorkspace: vi.fn(async () => null),
   fetchStateOverview: vi.fn(async () => ({
     project: { title: "测试书", genre: "测试", currentChapter: 1 },
     storyStatus: {},
@@ -73,10 +84,6 @@ vi.mock("../utils/routing.js", () => ({
   pushHomeUrl: vi.fn(),
 }));
 
-vi.mock("../utils/undoReloadFlag.js", () => ({
-  consumeUndoReloadPreferSession: vi.fn(() => false),
-}));
-
 vi.mock("../stores/recentBooksStore.js", () => ({
   useRecentBooksStore: vi.fn((selector: (state: { books: readonly unknown[] }) => unknown) => selector({ books: recentBooksState.books })),
 }));
@@ -90,10 +97,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
   beforeEach(() => {
     resetWorkspaceOperationForTests();
-    resetWorkspaceRevisionTrackerForTests();
     recentBooksState.books = [];
-    window.sessionStorage.clear();
-    setProjectKey("/tmp/test-book");
+    useDraftStore.getState().reset();
     // 设置 navigationStore 有 projectPath（openChapterWorkspace 依赖）
     useNavigationStore.setState({ projectPath: "/tmp/test-book" });
     // 设置 workspace 初始状态，带真实 messages（确保切章前有聊天记录）
@@ -115,7 +120,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     resetWorkspaceOperationForTests();
     setWorkspaceSpy.mockRestore();
     vi.clearAllMocks();
-    setProjectKey(null);
+    vi.mocked(fetchChapterPaper).mockImplementation(async (_projectPath: string, chapter: number) => emptyPaper(chapter));
   });
 
   it("切章时 setWorkspace 入参的 messages 等于切章前 store 里的 messages（原样 spread，未被 snapshot 覆盖）", async () => {
@@ -159,15 +164,13 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(useWorkspaceStore.getState().workspace.messages).toBe(messagesBefore);
   });
 
-  it("keeps raw snapshot revision when unsafe content is not restored on chapter switch", async () => {
-    vi.mocked(fetchChapterWorkspace).mockResolvedValueOnce({
+  it("切章把那一章盘上的稿子交给稿纸（重构 P5：稿子只有一个主人）", async () => {
+    vi.mocked(fetchChapterPaper).mockResolvedValueOnce({
       chapter: 2,
-      messages: [],
-      selectedAdviceCardKeys: [],
-      flowStatus: "idle",
-      draftContent: "不可恢复的占位内容",
-      revision: 5,
-    });
+      draft: { chapter: 2, title: "第二章 雨夜", body: "第二章盘上的稿子", version: "v-2" },
+      committed: null,
+      editedSinceCommit: null,
+    } as ChapterPaper);
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() },
       countTextWords: (text) => text.length,
@@ -175,45 +178,18 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     await act(async () => { await result.current.openChapterWorkspace(ch2); });
 
-    expect(useWorkspaceStore.getState().workspace.draft.content).toBe("");
-    expect(useWorkspaceStore.getState().workspaceRevision).toBe(5);
-    expect(prepareVersionedWorkspaceSave({
-      projectPath: "/tmp/test-book", chapter: 2, selectedAdviceCardKeys: [],
-    }).expectedRevision).toBe(5);
+    expect(fetchChapterPaper).toHaveBeenCalledWith("/tmp/test-book", 2);
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 2, body: "第二章盘上的稿子", baseVersion: "v-2" });
+    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_ready");
+    expect(useWorkspaceStore.getState().workspace.currentChapter.title).toBe("第二章 雨夜");
   });
 
-  it("keeps raw active snapshot revision when project reload rejects its content", async () => {
-    vi.mocked(fetchChapterWorkspace).mockResolvedValue({
-      chapter: 3,
-      messages: [],
-      selectedAdviceCardKeys: [],
-      flowStatus: "idle",
-      draftContent: "不可恢复的占位内容",
-      revision: 5,
-    });
-    const { result } = renderHook(() => useProjectNavigation({
-      bookManagement: { upsertRecentBook: vi.fn() },
-      countTextWords: (text) => text.length,
-    }));
-
-    await act(async () => { await result.current.openProject("/tmp/reload-book"); });
-
-    expect(useWorkspaceStore.getState().workspaceRevision).toBe(5);
-    expect(prepareVersionedWorkspaceSave({
-      projectPath: "/tmp/reload-book", chapter: 3, selectedAdviceCardKeys: [],
-    }).expectedRevision).toBe(5);
-  });
-
-  it("clears old sessions across home, mock recent books, and new-book creation before persisting B messages", async () => {
-    const aKey = "se-ng-chat-messages:/tmp/book-a";
-    const bKey = "se-ng-chat-messages:/tmp/book-b";
-    setProjectKey("/tmp/book-a");
+  it("clears old sessions across home and new-book creation, and never keeps chat in browser storage", async () => {
     useNavigationStore.setState({ projectPath: "/tmp/book-a", workspaceReady: true });
     useWorkspaceStore.setState({
       sessions: [{ id: "session-a", name: "A", updatedAt: "t" }],
       activeSessionId: "session-a",
       activeArchivedCount: 4,
-      workspaceRevision: 9,
     });
     useWorkspaceStore.getState().updateWorkspace({
       messages: [{ id: "a-message", role: "user", content: "A only" }],
@@ -226,26 +202,14 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     }));
 
     await act(async () => { await result.current.openHome(); });
-    expect(useWorkspaceStore.getState()).toMatchObject({
-      activeSessionId: "", activeArchivedCount: 0, sessions: [], workspaceRevision: 0,
-    });
+    expect(useWorkspaceStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
     await act(async () => { await result.current.handleCreateBook({ title: "B" } as never); });
-    expect(useWorkspaceStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [], workspaceRevision: 0 });
-    useWorkspaceStore.getState().updateWorkspace({
-      messages: [{ id: "b-message", role: "user", content: "B only" }],
-    });
-
-    // 消息持久化已节流（250ms 窗口，治流式逐 token 全量写卡主线程）：落盘前先冲盘。
-    // 生产路径里 openHome/openProject/handleCreateBook 都经 setProjectKey 内部冲盘，只有
-    // 「最后一条写完立刻关标签页」的 250ms 窗口内会丢——那是换 UI 不卡所付的代价。
-    flushPendingMessageSave();
-
-    expect(JSON.parse(window.sessionStorage.getItem(aKey) ?? "[]")).toEqual([
-      expect.objectContaining({ id: "a-message" }),
-    ]);
-    expect(JSON.parse(window.sessionStorage.getItem(bKey) ?? "[]")).toEqual([
-      expect.objectContaining({ id: "b-message" }),
-    ]);
+    expect(useWorkspaceStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
+    expect(useWorkspaceStore.getState().workspace.messages).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "a-message" })]),
+    );
+    // 对话只存会话文件，浏览器里不另存一份（重构 P5）。
+    expect(Object.keys(window.sessionStorage).filter((key) => key.startsWith("se-ng-chat-messages:"))).toEqual([]);
   });
 
   it("新建书引导会话索引并接上全局对话记忆上限（修「首聊不入会话盘 + 上限停 96k 默认」）", async () => {
@@ -280,7 +244,6 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     }];
     useWorkspaceStore.setState({
       sessions: [{ id: "session-a", name: "A", updatedAt: "t" }], activeSessionId: "session-a", activeArchivedCount: 2,
-      workspaceRevision: 9,
     });
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() }, countTextWords: (text) => text.length,
@@ -289,13 +252,13 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     await act(async () => { await result.current.openRecentBook("mock-book"); });
 
     expect(useWorkspaceStore.getState()).toMatchObject({
-      sessions: [], activeSessionId: "", activeArchivedCount: 0, workspaceRevision: 0,
+      sessions: [], activeSessionId: "", activeArchivedCount: 0,
     });
   });
 
   it("failed old-chapter flush blocks chapter navigation and releases the transition", async () => {
     setAutosaveFlusher(async () => ({ ok: false, error: "disk full" }));
-    vi.mocked(fetchChapterWorkspace).mockClear();
+    vi.mocked(fetchChapterPaper).mockClear();
     const chapterBefore = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() },
@@ -304,7 +267,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     await act(async () => { await result.current.openChapterWorkspace(ch2); });
 
-    expect(fetchChapterWorkspace).not.toHaveBeenCalled();
+    expect(fetchChapterPaper).not.toHaveBeenCalled();
     expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).toBe(chapterBefore);
     expect(useNavigationStore.getState().toast).toContain("保存失败");
     expect(isWorkspaceBusy()).toBe(false);
@@ -369,7 +332,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
-    vi.mocked(fetchChapterWorkspace).mockClear();
+    vi.mocked(fetchChapterPaper).mockClear();
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -382,14 +345,14 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       await result.current.openChapterWorkspace(ch2);
     });
 
-    expect(fetchChapterWorkspace).not.toHaveBeenCalled();
+    expect(fetchChapterPaper).not.toHaveBeenCalled();
     expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).not.toBe(2);
     expect(useNavigationStore.getState().toast).toContain("正在进行");
   });
 
   it("chapter transition owns the slot while fetch is in flight and then switches safely", async () => {
-    const gate = deferred<null>();
-    vi.mocked(fetchChapterWorkspace).mockReturnValueOnce(gate.promise as never);
+    const gate = deferred<ChapterPaper>();
+    vi.mocked(fetchChapterPaper).mockReturnValueOnce(gate.promise as never);
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -400,7 +363,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     let transition!: Promise<void>;
     act(() => { transition = result.current.openChapterWorkspace(ch2); });
-    await vi.waitFor(() => expect(fetchChapterWorkspace).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fetchChapterPaper).toHaveBeenCalled());
 
     const intruder = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
@@ -410,7 +373,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     if (intruder) finishWorkspaceOperation(intruder);
     expect(intruder).toBeNull();
 
-    gate.resolve(null);
+    gate.resolve(emptyPaper(2));
     await act(async () => transition);
     expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).toBe(2);
     expect(isWorkspaceBusy()).toBe(false);
@@ -478,7 +441,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     vi.mocked(fetchStateOverview).mockClear();
     const gate = deferred<{ projectDir: string; overview: typeof overview }>();
     vi.mocked(createStoryProjectFromDraft).mockReturnValueOnce(gate.promise as never);
-    vi.mocked(fetchChapterWorkspace).mockClear();
+    vi.mocked(fetchChapterPaper).mockClear();
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -500,7 +463,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(writer).toBeNull();
 
     await act(async () => { await result.current.openChapterWorkspace(ch2); });
-    expect(fetchChapterWorkspace).not.toHaveBeenCalled();
+    expect(fetchChapterPaper).not.toHaveBeenCalledWith("/tmp/test-book", 2);
 
     gate.resolve({ projectDir: "/tmp/created-book", overview });
     await act(async () => creation);
@@ -568,8 +531,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(isWorkspaceBusy()).toBe(false);
   });
 
-  it("章节快照读取失败时保留旧工作区，不进入新章节的 ready/save 状态", async () => {
-    vi.mocked(fetchChapterWorkspace).mockRejectedValueOnce(new Error("snapshot unavailable"));
+  it("章节稿子读取失败时保留旧工作区，不进入新章节的 ready/save 状态", async () => {
+    vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("paper unavailable"));
     useNavigationStore.setState({ workspaceReady: true });
     const workspaceBefore = useWorkspaceStore.getState().workspace;
 
@@ -589,8 +552,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(useNavigationStore.getState().workspaceReady).toBe(true);
   });
 
-  it("打开项目时任一章节快照读取失败都应保留旧工作区，不把新项目标记为 ready", async () => {
-    vi.mocked(fetchChapterWorkspace).mockRejectedValueOnce(new Error("snapshot unavailable"));
+  it("打开项目时当前章稿子读取失败应保留旧工作区，不把新项目标记为 ready", async () => {
+    vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("paper unavailable"));
     useNavigationStore.setState({ projectPath: "/tmp/old-book", workspaceReady: true });
     const workspaceBefore = useWorkspaceStore.getState().workspace;
 
@@ -632,8 +595,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(isWorkspaceBusy()).toBe(false);
   });
 
-  it("打开空书时合法空快照仍可正常进入工作区", async () => {
-    vi.mocked(fetchChapterWorkspace).mockResolvedValue(null as never);
+  it("打开空书时空稿纸仍可正常进入工作区", async () => {
 
     const { result } = renderHook(() =>
       useProjectNavigation({

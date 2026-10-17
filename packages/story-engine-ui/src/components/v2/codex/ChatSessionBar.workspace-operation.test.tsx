@@ -5,7 +5,6 @@ import { ChatSessionBar } from "./ChatSessionBar.js";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../../../utils/workspaceOperation.js";
-import { setAutosaveFlusher } from "../../../utils/autosaveControl.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -24,6 +23,12 @@ const sessionApi = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../api/chatSessionsClient.js", () => sessionApi);
+
+const saveAll = vi.hoisted(() => ({ flushAllSaves: vi.fn(async () => ({ ok: true }) as { ok: true } | { ok: false; error: string }) }));
+vi.mock("../../../sync/saveAll.js", () => saveAll);
+const setAutosaveFlusher = (fn: (() => Promise<{ ok: true } | { ok: false; error: string }>) | null): void => {
+  saveAll.flushAllSaves.mockImplementation(fn ?? (async () => ({ ok: true })));
+};
 
 afterEach(() => {
   cleanup();

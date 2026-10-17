@@ -4,7 +4,6 @@ import type {
   ChapterWorkspaceData,
   CommitPreviewUiReport,
   CommitSelectiveConfirmationState,
-  DraftPreview,
   LastFormalCommitApply,
   SidebarData,
 } from "../types.js";
@@ -20,118 +19,6 @@ import type {
   StateOverview,
 } from "../api/types.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
-import { useNavigationStore } from "./navigationStore.js";
-
-/* ------------------------------------------------------------------ */
-/*  Message persistence                                                */
-/* ------------------------------------------------------------------ */
-
-const MESSAGES_STORAGE_KEY = "se-ng-chat-messages";
-
-let currentProjectKey: string | null = null;
-
-function getProjectStorageKey(projectKey: string | null): string {
-  return `${MESSAGES_STORAGE_KEY}:${projectKey ?? "default"}`;
-}
-
-function loadMessages(projectKey: string | null): readonly ChapterMessage[] {
-  try {
-    const raw = sessionStorage.getItem(getProjectStorageKey(projectKey));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-let sessionStorageWriteNotified = false;
-
-function writeMessagesSync(messages: readonly ChapterMessage[], projectKey: string | null): void {
-  try {
-    sessionStorage.setItem(getProjectStorageKey(projectKey), JSON.stringify(messages));
-  } catch (error) {
-    // 审计 Low：不再无痕吞——配额溢出后本地副本会冻结在旧态，而它正是服务端会话读取失败时的回退源。
-    // 一次性 toast 如实告知（常态保存走服务端会话文件，不受影响）。
-    if (!sessionStorageWriteNotified) {
-      sessionStorageWriteNotified = true;
-      try {
-        useNavigationStore.getState().showToast(
-          `本地对话副本写入失败（${error instanceof Error ? error.message : String(error)}），已停更；聊天记录仍保存在项目里，不受影响。`,
-          5200,
-        );
-      } catch {
-        // 通知通道绝不反过来炸保存链。
-      }
-    }
-  }
-}
-
-// 流式更新期间 updateMessage 每个增量都调 saveMessages：整条历史 JSON.stringify + 同步 setItem
-// 在主线程上是 O(回合字数 × 历史条数)，长稿流到几千 token 会把 UI 卡顿成幻灯片。节流到至多每
-// 250ms 写一次，且总是写「最新一条」——首次调用排期、期间只刷新待写值、到点落盘最终状态。
-const MESSAGE_SAVE_THROTTLE_MS = 250;
-let pendingSave: { readonly messages: readonly ChapterMessage[]; readonly projectKey: string | null } | null = null;
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-function saveMessages(messages: readonly ChapterMessage[], projectKey: string | null): void {
-  pendingSave = { messages, projectKey };
-  if (saveTimer !== null) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    if (pendingSave === null) return;
-    const pending = pendingSave;
-    pendingSave = null;
-    writeMessagesSync(pending.messages, pending.projectKey);
-  }, MESSAGE_SAVE_THROTTLE_MS);
-}
-
-/**
- * 立即把节流里攒着的待写尾巴同步落盘。撤销重载（undoToTurn 写完截断立刻 window.location.reload）
- * 与切项目（setProjectKey）前必须调：节流窗口内的 reload 会读到旧 sessionStorage，孤儿气泡复活。
- */
-export function flushPendingMessageSave(): void {
-  if (saveTimer !== null) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
-  if (pendingSave === null) return;
-  const pending = pendingSave;
-  pendingSave = null;
-  writeMessagesSync(pending.messages, pending.projectKey);
-}
-
-function clearMessages(projectKey: string | null): void {
-  try {
-    sessionStorage.removeItem(getProjectStorageKey(projectKey));
-  } catch {
-    // Ignore
-  }
-}
-
-/**
- * 只读某项目的 sessionStorage 对话副本（不水合、不动 store）。openProject 的会话文件读取失败时
- * 用它做回退（审计 Med：此前回退到 [] 并顺手销毁该键——用户刷新只见空聊天，本地副本也陪葬）。
- */
-export function readPersistedProjectMessages(projectKey: string | null): readonly ChapterMessage[] {
-  return loadMessages(projectKey);
-}
-
-export function setProjectKey(projectKey: string | null): void {
-  // 切走前把上一项目的待写尾巴落盘（写的是它自己当时的 key），否则新项目的 sessionStorage 会覆盖掉尾巴。
-  flushPendingMessageSave();
-  currentProjectKey = projectKey;
-  const persistedMessages = loadMessages(projectKey);
-  if (persistedMessages.length === 0) return;
-  const state = useWorkspaceStore.getState();
-  if (!shouldHydrateProjectMessages(state.workspace.messages)) return;
-  state.updateWorkspace({ messages: persistedMessages });
-}
-
-function shouldHydrateProjectMessages(messages: readonly ChapterMessage[]): boolean {
-  if (messages.length === 0) return true;
-  return messages.every((message) => message.id.startsWith("assistant-workflow-"));
-}
 
 /* ------------------------------------------------------------------ */
 /*  Local helper types not exported from the types modules             */
@@ -201,8 +88,6 @@ export interface WorkspaceStore {
   activeSessionId: string;
   activeArchivedCount: number;
   chatHistoryBudget: number;
-  /** 当前已加载章节 workspace 的服务端 revision（CAS 基线）。 */
-  workspaceRevision: number;
 
   /* ---- setters ---- */
   setWorkspace: (workspace: ChapterWorkspaceData) => void;
@@ -236,14 +121,12 @@ export interface WorkspaceStore {
   setActiveSessionId: (activeSessionId: string) => void;
   setActiveArchivedCount: (activeArchivedCount: number) => void;
   setChatHistoryBudget: (budget: number) => void;
-  setWorkspaceRevision: (revision: number) => void;
 
   /* ---- compound setters ---- */
   setError: (field: "steering" | "chat", error: string | null) => void;
 
   /* ---- domain actions ---- */
   updateWorkspace: (partial: Partial<ChapterWorkspaceData>) => void;
-  updateDraft: (partial: Partial<DraftPreview>) => void;
   appendMessage: (message: ChapterMessage) => void;
   updateMessage: (id: string, updater: (message: ChapterMessage) => ChapterMessage) => void;
   /** 清空对话的回退备份：非 null 时可撤销刚才的清空（继续对话即清掉入口）。 */
@@ -264,18 +147,10 @@ export interface WorkspaceStore {
 /*  Store implementation                                               */
 /* ------------------------------------------------------------------ */
 
-const persistedMessages = loadMessages(currentProjectKey);
-// Initial chat history must never fall back to mockData's demo messages
-// (msg-001/msg-002 end-of-world seed): those leak into real projects and pollute
-// the chat conversation history. Real sessions start empty; openProject /
-// ensureWorkflowPrompt produce the clean greeting from the backend state overview.
-const initialMessages = persistedMessages.length > 0
-  ? persistedMessages
-  : [];
-
+// 对话不再在浏览器里另存一份（重构 P5）：开书时从项目里的会话文件读，见 useProjectNavigation。
 export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   /* ---- initial state ---- */
-  workspace: { ...mockWorkspaceData, messages: initialMessages },
+  workspace: { ...mockWorkspaceData, messages: [] },
   sidebar: { ...mockSidebarData },
   currentOverview: null,
   steeringDirection: "",
@@ -308,16 +183,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   activeSessionId: "",
   activeArchivedCount: 0,
   chatHistoryBudget: 96000,
-  workspaceRevision: 0,
 
   /* ---- simple setters ---- */
-  setWorkspace: (workspace) => {
-    // Clear persisted messages when switching to a fresh workspace
-    if (workspace.messages.length === 0) {
-      clearMessages(currentProjectKey);
-    }
-    set({ workspace });
-  },
+  setWorkspace: (workspace) => set({ workspace }),
   setSidebar: (sidebar) => set({ sidebar }),
   setCurrentOverview: (overview) => set({ currentOverview: overview }),
   setSteeringDirection: (value) => set({ steeringDirection: value }),
@@ -344,7 +212,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
           ? { ...message, aiFlavorFixedIds: [...(message.aiFlavorFixedIds ?? []), violationId] }
           : message
       ));
-      saveMessages(newMessages, currentProjectKey);
       return { workspace: { ...state.workspace, messages: newMessages } };
     }),
   setActiveRevisionTask: (task) => set({ activeRevisionTask: task }),
@@ -356,7 +223,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
   setActiveArchivedCount: (activeArchivedCount) => set({ activeArchivedCount }),
   setChatHistoryBudget: (budget) => set({ chatHistoryBudget: budget }),
-  setWorkspaceRevision: (workspaceRevision) => set({ workspaceRevision }),
 
   /* ---- compound setters ---- */
   setError: (field, error) => {
@@ -369,27 +235,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
 
   /* ---- domain actions ---- */
   updateWorkspace: (partial) =>
-    set((state) => {
-      if (partial.messages !== undefined) {
-        saveMessages(partial.messages, currentProjectKey);
-      }
-      return {
-        workspace: { ...state.workspace, ...partial },
-      };
-    }),
-
-  updateDraft: (partial) =>
     set((state) => ({
-      workspace: {
-        ...state.workspace,
-        draft: { ...state.workspace.draft, ...partial },
-      },
+      workspace: { ...state.workspace, ...partial },
     })),
 
   appendMessage: (message) =>
     set((state) => {
       const newMessages = [...state.workspace.messages, message];
-      saveMessages(newMessages, currentProjectKey);
       return {
         workspace: {
           ...state.workspace,
@@ -404,7 +256,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
     set((state) => {
       const current = state.workspace.messages;
       if (current.length === 0) return {};
-      saveMessages([], currentProjectKey);
       return {
         workspace: { ...state.workspace, messages: [] },
         clearedChatBackup: current,
@@ -415,7 +266,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
     set((state) => {
       const backup = state.clearedChatBackup;
       if (!backup) return {};
-      saveMessages(backup, currentProjectKey);
       return {
         workspace: { ...state.workspace, messages: backup },
         clearedChatBackup: null,
@@ -427,7 +277,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
       const newMessages = state.workspace.messages.map((message) => (
         message.id === id ? updater(message) : message
       ));
-      saveMessages(newMessages, currentProjectKey);
       return {
         workspace: {
           ...state.workspace,

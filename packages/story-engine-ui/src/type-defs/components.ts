@@ -17,12 +17,9 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSelectAdviceCard?: (key: string, card: ChapterAdviceCard) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   readonly onGoHome?: () => void;
-  readonly onOpenHistory?: () => void;
   readonly onOpenSettings?: () => void;
   readonly onOpenUsage?: () => void;
   readonly onToggleTheme?: () => void;
-  /** 自动保存失败时「重试」回调（App 侧按上次失败 payload 原样重发）；缺省时 Pill 退回 flushAutosaveNow。 */
-  readonly onRetryAutosave?: () => void;
   readonly onSendMessage?: (message: string) => void;
   /** 「下一步」选项带结构化动作时（R4.7，服务端生成的确定性选项）：点击直接发 body.action，不经模型。 */
   readonly onSendUserAction?: (action: import("../api/agentChatClient.js").AgentUserAction) => void;

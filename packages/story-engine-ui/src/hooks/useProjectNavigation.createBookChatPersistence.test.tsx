@@ -6,7 +6,7 @@
  * 聊了一整场一个字都不落盘（真机实测会话文件 messages=0）。
  *
  * 与 useProjectNavigation.sessions.test.tsx 的差别：这里**不 mock chatSessionsClient**，
- * 用真实客户端 + fetch 桩，端到端验证「建书 → 发消息 → autosave 终末一步真调 PUT save」。
+ * 用真实客户端 + fetch 桩，端到端验证「建书 → 发消息 → 对话存盘真调 PUT save」。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -17,12 +17,13 @@ import {
   setChatSessionSaveSkippedNotifier,
   __resetChatSessionsClientForTests,
 } from "../api/chatSessionsClient.js";
-import { setProjectKey, useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useWorkspaceStore } from "../stores/workspaceStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
 import { resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
-import { setAutosaveFlusher } from "../utils/autosaveControl.js";
-import { resetWorkspaceRevisionTrackerForTests } from "../utils/workspaceRevisionTracker.js";
+
+const saveAll = vi.hoisted(() => ({ flushAllSaves: vi.fn(async () => ({ ok: true as const })) }));
+vi.mock("../sync/saveAll.js", () => saveAll);
 
 vi.mock("../api/client.js", () => ({
   fetchChapterWorkspace: vi.fn(async () => null),
@@ -59,10 +60,6 @@ vi.mock("../utils/routing.js", () => ({
   pushHomeUrl: vi.fn(),
 }));
 
-vi.mock("../utils/undoReloadFlag.js", () => ({
-  consumeUndoReloadPreferSession: vi.fn(() => false),
-}));
-
 vi.mock("../stores/recentBooksStore.js", () => ({
   useRecentBooksStore: vi.fn((selector: (state: { books: readonly unknown[] }) => unknown) => selector({ books: [] })),
 }));
@@ -76,6 +73,9 @@ function stubChatSessionsFetch(options: { readonly readOk?: boolean } = {}) {
     const url = String(input);
     if (init?.method === "PUT") {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.includes("/api/working-draft")) {
+      return new Response(JSON.stringify({ ok: true, paper: { chapter: 1, draft: null, committed: null, editedSinceCommit: null } }), { status: 200 });
     }
     if (url.includes("list=1")) {
       return new Response(JSON.stringify({ ok: true, index: INDEX, chatHistoryBudgetTokens: 300000 }), { status: 200 });
@@ -101,28 +101,24 @@ function putBodies(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown>
 describe("UI审计 T1：新建书首开期间聊天落盘", () => {
   beforeEach(() => {
     resetWorkspaceOperationForTests();
-    resetWorkspaceRevisionTrackerForTests();
     __resetChatSessionsClientForTests();
     window.sessionStorage.clear();
-    setProjectKey("/tmp/test-book");
     useNavigationStore.setState({ projectPath: "/tmp/test-book", toast: null });
     useWorkspaceStore.getState().setWorkspace(mockWorkspaceData);
     useWorkspaceStore.setState({ chatLoading: false, steeringLoading: false, draftActionLoading: null, sessions: [], activeSessionId: "" });
-    setAutosaveFlusher(async () => ({ ok: true }));
+    saveAll.flushAllSaves.mockImplementation(async () => ({ ok: true as const }));
     vi.mocked(createStoryProjectFromDraft).mockReset();
   });
 
   afterEach(() => {
-    setAutosaveFlusher(null);
     setChatSessionSaveSkippedNotifier(null);
     __resetChatSessionsClientForTests();
     resetWorkspaceOperationForTests();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-    setProjectKey(null);
   });
 
-  it("建书→发消息→autosave 终末一步真调 PUT save（epoch 已由 handleCreateBook 登记）", async () => {
+  it("建书→发消息→对话存盘真调 PUT save（epoch 已由 handleCreateBook 登记）", async () => {
     const fetchMock = stubChatSessionsFetch();
     const overview = await vi.mocked(fetchStateOverview)({ projectPath: "/tmp/fixture" } as never);
     vi.mocked(createStoryProjectFromDraft).mockResolvedValueOnce({ projectDir: "/tmp/t1-persist-book", overview });
@@ -141,7 +137,7 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
     expect(useNavigationStore.getState().toast).toContain("已创建并打开");
     expect(useNavigationStore.getState().toast).not.toContain("初始化失败");
 
-    // 模拟用户聊了一回合：消息进 store（autosave 要持久化的对象就是它）
+    // 模拟用户聊了一回合：消息进 store（对话存盘要存的就是它）
     useWorkspaceStore.getState().updateWorkspace({
       messages: [
         { id: "user-1", role: "user", content: "主角叫林晚" },
@@ -149,7 +145,7 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
       ],
     });
 
-    // autosave 链路的终末一步（App.tsx persistCapturedAutosavePayload 的 saveSession）
+    // 对话存盘的最后一步（sync/chatSync 调的就是它）
     await saveChatSessionMessages("/tmp/t1-persist-book", "s-boot", useWorkspaceStore.getState().workspace.messages);
 
     const saves = putBodies(fetchMock).filter((body) => body.action === "save");
@@ -176,7 +172,7 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
     expect(useNavigationStore.getState().projectPath).toBe("/tmp/t1-readfail-book");
     expect(useNavigationStore.getState().toast).toContain("聊天会话初始化失败");
 
-    // epoch 未登记 → autosave 终末一步短路：不发 PUT，但发一次性 UI 信号（不随每次 autosave 刷屏）
+    // epoch 未登记 → 存盘短路：不发 PUT，但发一次性 UI 信号（不随每次存盘刷屏）
     await saveChatSessionMessages("/tmp/t1-readfail-book", "s-boot", [{ id: "user-1", role: "user", content: "第一句" }]);
     await saveChatSessionMessages("/tmp/t1-readfail-book", "s-boot", [{ id: "user-1", role: "user", content: "第一句" }]);
 

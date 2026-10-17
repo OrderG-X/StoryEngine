@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
 import type { DraftRevisionPreview, DraftRevisionTask, StateOverview } from "../api/types.js";
@@ -22,6 +23,20 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("../api/client.js", () => apiMocks);
 
+const paperMocks = vi.hoisted(() => ({
+  applyOverviewToWorkspace: vi.fn(),
+  flushDraftSave: vi.fn(async () => ({ ok: true })),
+  refreshPaper: vi.fn(async () => undefined),
+}));
+vi.mock("../workspace/applyOverview.js", () => ({
+  applyOverviewToWorkspace: paperMocks.applyOverviewToWorkspace,
+  flowStatusForPaper: () => "draft_ready",
+}));
+vi.mock("../drafts/draftSync.js", () => ({
+  flushDraftSave: paperMocks.flushDraftSave,
+  refreshPaper: paperMocks.refreshPaper,
+}));
+
 const A_DRAFT = "# 第一章\n\n这是第一章生成前已经存在的真实草稿内容。";
 const B_DRAFT = "# 第二章\n\n这是第二章自己的正文，绝对不能被第一章覆盖。";
 const GENERATED = "# 第一章\n\n这是第一章正在流式生成的新正文。";
@@ -39,7 +54,6 @@ function setChapter(chapter: number, content: string, sessionId = "session-a") {
       ...mockWorkspaceData,
       currentChapter: { id: `ch-${chapter}`, chapterNumber: chapter, title: `第${chapter}章`, status: "current" },
       flowStatus: "draft_ready",
-      draft: { chapterNumber: chapter, title: `第${chapter}章`, status: "draft", content, savedContent: content },
       messages: [],
     },
     activeSessionId: sessionId,
@@ -51,6 +65,7 @@ function setChapter(chapter: number, content: string, sessionId = "session-a") {
     activeRevisionTask: null,
     activeRevisionPreview: null,
   });
+  useDraftStore.getState().loadPaper("/tmp/story-project", { chapter, draft: { chapter, body: content, version: `v-${chapter}` }, committed: null, editedSinceCommit: null });
 }
 
 async function actions() {
@@ -58,7 +73,6 @@ async function actions() {
   return useWorkflowActions({
     projectPath: "/tmp/story-project",
     appendMessage: useWorkspaceStore.getState().appendMessage,
-    applyOverviewToWorkspace: vi.fn(),
   });
 }
 
@@ -106,6 +120,7 @@ function seedCommitPreview() {
 describe("workspace-bound writing operations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    paperMocks.flushDraftSave.mockImplementation(async () => ({ ok: true }));
     resetWorkspaceOperationForTests();
     useNavigationStore.getState().clearToast();
     useNavigationStore.setState({ projectPath: "/tmp/story-project" });
@@ -143,7 +158,7 @@ describe("workspace-bound writing operations", () => {
 
     expect(apiMocks.applyDraftCandidate).not.toHaveBeenCalled();
     expect(useNavigationStore.getState().toast).toContain("切换前的那本书");
-    expect(useWorkspaceStore.getState().workspace.draft.content).toBe(B_DRAFT);
+    expect(useDraftStore.getState().body).toBe(B_DRAFT);
   });
 
   it("fails closed when a candidate has no originating target", async () => {

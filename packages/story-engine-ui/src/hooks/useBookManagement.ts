@@ -103,20 +103,6 @@ export function workspaceFromBook(book: BookSummary): ChapterWorkspaceData {
     currentChapter,
     chapters: chapterWindow,
     flowStatus,
-    draft: {
-      ...mockWorkspaceData.draft,
-      chapterNumber: book.currentChapterNumber,
-      title: book.currentChapterTitle,
-      status: flowStatus === "ready_for_next" ? "committed" : "draft",
-      wordCount: Math.max(1200, Math.round(book.totalWords / Math.max(book.writtenChapters, 1))),
-      content: [
-        `这里是《${book.title}》第${book.currentChapterNumber}章「${book.currentChapterTitle}」的章节工作区。`,
-        isRealProjectBook(book)
-          ? "本区域会读取项目状态、生成本章方案、工作稿和定稿预览。"
-          : "这条书架记录还没有绑定本地项目目录。打开或创建真实项目后，本区域会读取项目状态。",
-        book.logline,
-      ].join("\n\n"),
-    },
     messages: [
       {
         id: `${book.id}-system`,

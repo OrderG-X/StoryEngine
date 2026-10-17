@@ -101,6 +101,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const isCommitted = draft.status === "committed";
+  // AI 正在流式出稿：稿纸只读显示流出来的字，作者这时打的字不会混进去（重构 P5）。
+  const locked = isCommitted || draft.streaming === true;
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。
   const revisionHighlightTexts = useWorkspaceStore((s) => s.revisionHighlightTexts);
   // AI 出稿中：稿纸空着时说清 AI 在干什么（拟章纲要一两分钟），别显示「你可以在这里手动输入」。
@@ -120,7 +122,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [selection, setSelection] = useState<{ readonly text: string; readonly top: number; readonly left: number } | null>(null);
   const [busyKey, setBusyKey] = useState<SelectionRevisionKey | null>(null);
-  const canRewrite = Boolean(onSelectionRewrite) && !isCommitted;
+  const canRewrite = Boolean(onSelectionRewrite) && !locked;
   // 定稿后不能就地改写，但仍可选中一段「问 AI」（不改稿）——浮动条只剩这一个按钮。
   const canAsk = Boolean(onAskAboutSelection);
 
@@ -188,7 +190,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       SentenceFocus,
     ],
     content: draftTextToHtml(draft.content),
-    editable: !isCommitted,
+    editable: !locked,
     immediatelyRender: true,
     editorProps: {
       attributes: { class: "se-v2-draft-editor", spellcheck: "false" },
@@ -229,8 +231,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   });
 
   useEffect(() => {
-    editor?.setEditable(!isCommitted);
-  }, [editor, isCommitted]);
+    editor?.setEditable(!locked);
+  }, [editor, locked]);
 
   // 鼠标松开 = 选区定型 → 此刻才弹浮动条（拖选过程中先不弹）。挂 document 级以兼容「拖出编辑器外松手」。
   useEffect(() => {

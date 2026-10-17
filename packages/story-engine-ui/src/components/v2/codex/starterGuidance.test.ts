@@ -77,17 +77,6 @@ describe("starterGuidance", () => {
   });
 
   it("空书、非空书打开都落写作台（书架点的是「继续写」）", () => {
-    expect(
-      defaultCenterViewForWorkspace({
-        draft: { content: "", wordCount: 0 },
-        chapters: [],
-      }),
-    ).toBe("desk");
-    expect(
-      defaultCenterViewForWorkspace({
-        draft: { content: "有字真正文", wordCount: 4 },
-        chapters: [],
-      }),
-    ).toBe("desk");
+    expect(defaultCenterViewForWorkspace()).toBe("desk");
   });
 });

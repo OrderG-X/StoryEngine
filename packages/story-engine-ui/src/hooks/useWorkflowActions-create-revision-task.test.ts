@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
 import type { DraftAIReviewIssue, DraftRevisionPreview, DraftRevisionTask } from "../api/types.js";
@@ -19,6 +20,20 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/client.js", () => apiMocks);
+
+const paperMocks = vi.hoisted(() => ({
+  applyOverviewToWorkspace: vi.fn(),
+  flushDraftSave: vi.fn(async () => ({ ok: true })),
+  refreshPaper: vi.fn(async () => undefined),
+}));
+vi.mock("../workspace/applyOverview.js", () => ({
+  applyOverviewToWorkspace: paperMocks.applyOverviewToWorkspace,
+  flowStatusForPaper: () => "draft_ready",
+}));
+vi.mock("../drafts/draftSync.js", () => ({
+  flushDraftSave: paperMocks.flushDraftSave,
+  refreshPaper: paperMocks.refreshPaper,
+}));
 
 const TARGET_TEXT = "林远站在落地窗前，望着楼下的车流。这是一段需要润色的原文。";
 const ORIGINAL_DRAFT = `# 第一章\n\n${TARGET_TEXT}`;
@@ -65,6 +80,7 @@ function makePreview(afterText: string): DraftRevisionPreview {
 describe("handleCreateRevisionTask 自动生成修订草案", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    paperMocks.flushDraftSave.mockImplementation(async () => ({ ok: true }));
     useNavigationStore.getState().clearToast();
     useNavigationStore.setState({ projectPath: "/tmp/story-project" });
     useWorkspaceStore.setState({
@@ -72,13 +88,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
         ...mockWorkspaceData,
         currentChapter: { id: "ch-001", chapterNumber: 1, title: "第一章", status: "current" },
         flowStatus: "draft_ready",
-        draft: {
-          chapterNumber: 1,
-          title: "第一章",
-          status: "draft",
-          content: ORIGINAL_DRAFT,
-          savedContent: ORIGINAL_DRAFT,
-        },
         messages: [],
       },
       draftActionLoading: null,
@@ -89,6 +98,7 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
       activeRevisionPreview: null,
       activeSessionId: "",
     });
+    useDraftStore.getState().loadPaper("/tmp/story-project", { chapter: 1, draft: { chapter: 1, body: ORIGINAL_DRAFT, version: "v-1" }, committed: null, editedSinceCommit: null });
   });
 
   it("创建任务后自动调用 previewDraftRevision，成功后 activeRevisionPreview 非空", async () => {
@@ -101,7 +111,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     useWorkflowActions({
       projectPath: "/tmp/story-project",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({ issue: makeIssue() });
 
     await vi.waitFor(() => {
@@ -133,7 +142,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     useWorkflowActions({
       projectPath: "/tmp/story-project",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({
       issue: makeIssue({
         category: "plot",
@@ -155,7 +163,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     useWorkflowActions({
       projectPath: "/tmp/story-project",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({ issue: makeIssue() });
 
     await vi.waitFor(() => {

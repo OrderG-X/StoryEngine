@@ -128,13 +128,6 @@ export function workspaceFromStateOverview(
       && chapter.hasCommittedChapter !== true
     )),
     ...(latestUncommittedDraftChapter !== undefined ? { latestUncommittedDraftChapter } : {}),
-    draft: {
-      chapterNumber: currentChapter.chapterNumber,
-      title: currentChapter.title,
-      status: "draft",
-      content: buildStateBackedDraftPlaceholder(overview),
-      savedContent: buildStateBackedDraftPlaceholder(overview),
-    },
     messages: [
       {
         id: "state-overview-connected",
@@ -701,27 +694,6 @@ function displayRuleValue(value: string): string {
     balanced: "均衡",
   };
   return labels[value] ?? value;
-}
-
-function buildStateBackedDraftPlaceholder(overview: StateOverview): string {
-  const recent = overview.timeline.recentEvents.at(-1);
-  if (!recent && overview.project.currentChapter === null) {
-    return compact([
-      "还没有工作稿正文。",
-      "你可以在右侧章节对话里输入第 1 章方向，先整理本章方案，再生成工作稿。",
-      cleanStorySummary(overview.world.summary) ? `故事简介：${cleanStorySummary(overview.world.summary)}` : undefined,
-      overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
-    ]).join("\n\n");
-  }
-
-  return compact([
-    "还没有载入本章工作稿正文。",
-    overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
-    overview.storyStatus.currentLocation ? `当前位置：${overview.storyStatus.currentLocation}` : undefined,
-    recent ? `最近时间线：第${recent.chapter}章，${recent.summary}` : undefined,
-    overview.hooks.activeItems.length > 0 ? `活跃伏笔：${overview.hooks.activeItems.map((hook) => hook.title).join("；")}` : undefined,
-    overview.threads.keyOpenItems.length > 0 ? `未闭合线索：${overview.threads.keyOpenItems.map((thread) => thread.title).join("；")}` : undefined,
-  ]).join("\n\n");
 }
 
 function buildRisks(overview: StateOverview): RiskWarning[] {

@@ -8,7 +8,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
-import { flushAutosaveNow } from "../../../utils/autosaveControl.js";
+import { flushAllSaves } from "../../../sync/saveAll.js";
+import { markChatLoaded } from "../../../sync/chatSync.js";
 import * as api from "../../../api/chatSessionsClient.js";
 import type { ChatSession, ChatSessionIndex } from "../../../type-defs/workspace.js";
 import { formatRelativeSessionTime } from "./formatRelativeSessionTime.js";
@@ -77,7 +78,10 @@ export function ChatSessionBar() {
 
   function applySessionTruth(result: { readonly index: ChatSessionIndex; readonly session: ChatSession }): void {
     setSessions(result.index.sessions, result.index.activeSessionId);
-    updateWorkspace({ messages: result.session.messages ?? [] });
+    const messages = result.session.messages ?? [];
+    // 刚从会话文件读来的：记成已存，免得原样回写一遍。
+    if (projectPath) markChatLoaded(projectPath, result.index.activeSessionId, messages);
+    updateWorkspace({ messages });
     setActiveArchivedCount(result.session.archivedCount ?? 0);
   }
 
@@ -159,7 +163,7 @@ export function ChatSessionBar() {
     const transition = beginSessionTransition();
     if (!transition) return;
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         notify(`保存失败，未新建会话：${flushed.error}`);
         return;
@@ -189,7 +193,7 @@ export function ChatSessionBar() {
     const transition = beginSessionTransition();
     if (!transition) return;
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         notify(`保存失败，仍停留在当前会话：${flushed.error}`);
         return;
@@ -233,7 +237,7 @@ export function ChatSessionBar() {
     const transition = beginSessionTransition();
     if (!transition) return;
     try {
-      const flushed = await flushAutosaveNow();
+      const flushed = await flushAllSaves();
       if (!flushed.ok) {
         notify(`保存失败，未删除会话：${flushed.error}`);
         return;
