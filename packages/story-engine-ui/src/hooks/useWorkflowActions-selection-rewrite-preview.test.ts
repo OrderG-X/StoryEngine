@@ -87,7 +87,6 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     });
     useUiStore.setState({
       draftActionLoading: null,
-      selectedAdviceCards: [],
       steeringError: null,
       activeRevisionTask: null,
       activeRevisionPreview: null,

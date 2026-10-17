@@ -7,9 +7,7 @@ import type { ChapterMessage } from "../type-defs/workspace.js";
  * 「已生成/已入库」谎报当真——以工具结果与磁盘真相为准。纯确定性、题材中立。
  */
 export function annotateOutboundContent(m: ChapterMessage & { role: "user" | "assistant" }): string {
-  const base = m.adviceCards?.length
-    ? `${m.content}\n\n已生成建议卡片：${m.adviceCards.map((card) => `${card.title}：${card.content}`).join("；")}`
-    : m.content;
+  const base = m.content;
   if (m.role !== "assistant") return base;
   const hadFailedTool = m.toolSteps?.some((s) => s.status === "failed") ?? false;
   if (!hadFailedTool) return base;

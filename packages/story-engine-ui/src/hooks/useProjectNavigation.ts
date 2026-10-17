@@ -295,7 +295,7 @@ export function isBookCreationGreeting(messages: readonly ChapterMessage[]): boo
 function isInjectedEntryScaffolding(message: ChapterMessage): boolean {
   if ((message.agentCards?.length ?? 0) > 0
     || (message.toolSteps?.length ?? 0) > 0
-    || (message.adviceCards?.length ?? 0) > 0) {
+    || (message.cards?.length ?? 0) > 0) {
     return false;
   }
   // 系统提示（「已将误入聊天区的正文移回左侧草稿区」等）全是注入通知，非用户/AI 对话。
@@ -398,7 +398,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setActiveRevisionTask,
     setActiveRevisionPreview,
     setCommitSelections,
-    setSelectedAdviceCards,
     resetFoundationGaps,
     resetTransientUiState,
   } = useUiStore.getState();
@@ -550,7 +549,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
       resetFoundationGaps();
-      setSelectedAdviceCards([]);
       setWorkspaceReady(true);
       if (options.updateUrl !== false) {
         pushWorkspaceUrlForProject(nextProjectPath);
@@ -612,7 +610,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       resetTransientUiState();
       setSessions([], "");
       setActiveArchivedCount(0);
-      setSelectedAdviceCards([]);
       {
         const bookWorkspace = workspaceFromBook(book);
         setWorkspace({
@@ -725,7 +722,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
       setCommitSelections(emptyCommitSelections());
-      setSelectedAdviceCards([]);
     } catch (error) {
       if (ownsNavigationOrigin(transition)) {
         setOpenProjectError(`打开章节失败：${error instanceof Error ? error.message : String(error)}`);

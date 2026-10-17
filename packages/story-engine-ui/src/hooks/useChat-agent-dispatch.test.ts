@@ -17,6 +17,7 @@ import { isPaperCommitted } from "../drafts/useDraftPreview.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
+import { cardOf, hasCard } from "../utils/messageCards.js";
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
@@ -111,7 +112,6 @@ function resetStore(): void {
     sessions: [{ id: "session-a", name: "新会话", updatedAt: "2026-07-13T00:00:00.000Z" }],
   });
   useUiStore.setState({
-    selectedAdviceCards: [],
     aiFlavorPending: null,
     draftActionLoading: null,
     steeringLoading: false,
@@ -644,7 +644,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       await result.current.handleSendMessage("帮我体检这章的 AI 味");
     });
 
-    const carried = lastAssistant()?.aiFlavorReport;
+    const carried = cardOf(lastAssistant()!, "ai-flavor")?.report;
     expect(carried).toBeTruthy();
     expect(carried?.violations).toHaveLength(1);
     expect(carried?.violations[0].text).toBe("心中五味杂陈。");
@@ -665,7 +665,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       await result.current.handleSendMessage("体检 AI 味");
     });
 
-    expect(lastAssistant()?.aiFlavorReport).toBeUndefined();
+    expect(cardOf(lastAssistant()!, "ai-flavor")?.report).toBeUndefined();
   });
 
   it("纯 agent 流程：质检工具（只读·无 overview）也把 flowStatus 推进到 quality_checked（A 修复，不再卡在写稿）", async () => {
@@ -718,10 +718,10 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
 
     // 如实回报：追加一条可重试的错误气泡。
     const errorMessages = messages().filter(
-      (m) => m.role === "assistant" && m.isErrorNotice,
+      (m) => m.role === "assistant" && hasCard(m, "error"),
     );
     expect(errorMessages).toHaveLength(1);
-    expect(errorMessages[0].errorDetail).toContain("落盘失败");
+    expect(cardOf(errorMessages[0], "error")?.detail).toContain("落盘失败");
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
 
@@ -738,11 +738,11 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
 
     const errorMessages = messages().filter(
-      (m) => m.role === "assistant" && m.isErrorNotice,
+      (m) => m.role === "assistant" && hasCard(m, "error"),
     );
     expect(errorMessages).toHaveLength(1);
     expect(errorMessages[0].content).toBe("AI 服务暂时没响应，本次没有改动。");
-    expect(errorMessages[0].errorDetail).toContain("落盘失败");
+    expect(cardOf(errorMessages[0], "error")?.detail).toContain("落盘失败");
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
 
@@ -806,7 +806,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     // 写类工具在飞 → 拉了一次盘上对账。
     expect(mockedFetchChapterPaper).toHaveBeenCalledWith(PROJECT, 3);
     // 停止不是失败：无错误气泡。
-    expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
+    expect(messages().filter((m) => hasCard(m, "error"))).toHaveLength(0);
     expect(useChatStore.getState().chatLoading).toBe(false);
   });
 
@@ -1077,7 +1077,7 @@ describe("useChat agent 撤销：稿纸原地换成盘上那版（重构 P5）",
     await act(async () => { await result.current.handleSendMessage("撤销"); });
 
     expect(useDraftStore.getState().body).toBe("第三章原有的工作稿。");
-    expect(messages().filter((m) => m.isErrorNotice)).toHaveLength(0);
+    expect(messages().filter((m) => hasCard(m, "error"))).toHaveLength(0);
     expect(useChatStore.getState().chatLoading).toBe(false);
     expect(isWorkspaceBusy()).toBe(false);
   });

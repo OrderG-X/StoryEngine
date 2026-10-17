@@ -14,7 +14,7 @@ const SEVERITY_LABEL: Record<AiFlavorViolation["severity"], string> = { high: "�
 
 export function AiFlavorCard({ report, fixedIds = [], pendingViolationId = null, awaitingApply = false, batchPending = false, onFix, onFixAll }: {
   readonly report: AiFlavorReport;
-  /** 已点「改掉这句」并应用成功的违规 id（来自该条消息的 aiFlavorFixedIds）。 */
+  /** 已点「改掉这句」并应用成功的违规 id（来自该条消息机器腔卡的 fixedIds）。 */
   readonly fixedIds?: readonly string[];
   /** 当前正在改写的违规 id（来自 store 的 aiFlavorPending，命中本卡时显示「改写中…」）。 */
   readonly pendingViolationId?: string | null;

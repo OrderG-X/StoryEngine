@@ -95,7 +95,7 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
         "err-1",
         "AI 服务暂时没响应，本次没有改动。",
         [action("retry-agent", "重试", "把这条记进资料")],
-        { isErrorNotice: true, errorDetail: "落盘失败" },
+        { cards: [{ type: "error", detail: "落盘失败" }] },
       ),
     ]);
 
@@ -115,7 +115,7 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
         "err-1",
         "AI 服务暂时没响应，本次没有改动。",
         [action("retry-agent", "重试", "把这条记进资料")],
-        { isErrorNotice: true, errorDetail: "断开" },
+        { cards: [{ type: "error", detail: "断开" }] },
       ),
       assistant("a2", "第 2 章已写好。", []),
     ]);

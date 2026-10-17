@@ -474,11 +474,11 @@ export function deleteChatSessionTransaction(
 }
 
 /** 注入的脚手架消息（开书开场白 assistant-book-creation-* / 流程招呼 assistant-workflow-*），且不带任何卡片或工具步骤。 */
-function isInjectedScaffoldingMessage(message: { readonly id?: unknown; readonly toolSteps?: unknown; readonly agentCards?: unknown; readonly adviceCards?: unknown }): boolean {
+function isInjectedScaffoldingMessage(message: { readonly id?: unknown; readonly toolSteps?: unknown; readonly agentCards?: unknown; readonly cards?: unknown }): boolean {
   const id = typeof message.id === "string" ? message.id : "";
   if (!id.startsWith("assistant-book-creation-") && !id.startsWith("assistant-workflow-")) return false;
   const nonEmpty = (value: unknown) => Array.isArray(value) && value.length > 0;
-  return !nonEmpty(message.toolSteps) && !nonEmpty(message.agentCards) && !nonEmpty(message.adviceCards);
+  return !nonEmpty(message.toolSteps) && !nonEmpty(message.agentCards) && !nonEmpty(message.cards);
 }
 
 async function saveChatSessionMessagesImpl(

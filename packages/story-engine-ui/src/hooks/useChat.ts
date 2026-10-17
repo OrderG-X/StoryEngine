@@ -16,10 +16,7 @@ import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
-import type {
-  ChapterAdviceCard,
-  StateOverview,
-} from "../api/types.js";
+import type { StateOverview } from "../api/types.js";
 import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
@@ -73,7 +70,6 @@ export interface UseChatParams {
 
 export interface UseChatResult {
   handleSendMessage: (message: string) => Promise<void>;
-  handleSelectAdviceCard: (key: string, card: ChapterAdviceCard) => void;
   handleSuggestedAction: (action: SuggestedAction) => void;
   /** 「下一步」选项的结构化动作直达（R4.7）：点击直接发 body.action，不经模型。 */
   handleSendUserAction: (action: AgentUserAction) => Promise<void>;
@@ -96,8 +92,6 @@ export function useChat(params: UseChatParams): UseChatResult {
   const updateMessage = useChatStore((s) => s.updateMessage);
   const setChatLoading = useChatStore((s) => s.setChatLoading);
   const setChatError = useChatStore((s) => s.setChatError);
-  const selectedAdviceCards = useUiStore((s) => s.selectedAdviceCards);
-  const setSelectedAdviceCards = useUiStore((s) => s.setSelectedAdviceCards);
 
   const showToast = useNavigationStore((s) => s.showToast);
   const autoRenameRequestSeqRef = useRef(0);
@@ -201,14 +195,13 @@ export function useChat(params: UseChatParams): UseChatResult {
       const track = (promise: Promise<unknown>): void => {
         pendingPaperSyncs.push(promise.catch(() => undefined));
       };
-      // 追加一条错误卡消息（isErrorNotice；可重试时带 retry-agent）。tool-error 与 error 共用。
+      // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
       const appendErrorMessage = (message: string, retryable: boolean) => {
         appendMessage({
           id: `assistant-agent-error-${Date.now()}`,
           role: "assistant",
           content: "AI 服务暂时没响应，本次没有改动。",
-          isErrorNotice: true,
-          errorDetail: message,
+          cards: [{ type: "error", detail: message }],
           ...(retryable
             ? {
               suggestedActions: [
@@ -500,8 +493,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             id: `assistant-agent-error-${Date.now()}`,
             role: "assistant",
             content: "AI 服务暂时没响应，本次没有改动。",
-            isErrorNotice: true,
-            errorDetail: message,
+            cards: [{ type: "error", detail: message }],
             suggestedActions: [
               {
                 id: "retry-agent",
@@ -718,20 +710,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     ],
   );
 
-
-  /* ---- handleSelectAdviceCard ---- */
-
-  const handleSelectAdviceCard = useCallback(
-    (key: string, card: ChapterAdviceCard) => {
-      const exists = selectedAdviceCards.some((item) => item.key === key);
-      if (exists) {
-        setSelectedAdviceCards(selectedAdviceCards.filter((item) => item.key !== key));
-      } else {
-        setSelectedAdviceCards([...selectedAdviceCards, { key, card }]);
-      }
-    },
-    [selectedAdviceCards, setSelectedAdviceCards],
-  );
 
   /* ---- handleConfirmCommit：「确认定稿」按钮 ---- */
 
@@ -973,7 +951,6 @@ export function useChat(params: UseChatParams): UseChatResult {
 
   return {
     handleSendMessage,
-    handleSelectAdviceCard,
     handleSuggestedAction,
     handleSendUserAction,
     handleChapterButton,

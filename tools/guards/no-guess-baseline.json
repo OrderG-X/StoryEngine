@@ -1,6 +1,6 @@
 {
   "note": "不猜棘轮基线：每个文件含中文正则的处数上限，只许降。由 check-no-guess.mjs --update 生成，别手工调高。",
-  "total": 479,
+  "total": 478,
   "files": {
     "packages/story-engine-ui/src/api/stateOverviewAdapter.ts": 4,
     "packages/story-engine-ui/src/components/ModelSettingsDialogLogic.ts": 2,
@@ -37,7 +37,7 @@
     "packages/story-engine-ui/src/server/brain/checker.ts": 4,
     "packages/story-engine-ui/src/server/lib/entity-id-scrubber.ts": 2,
     "packages/story-engine-ui/src/server/lib/llm-client.ts": 3,
-    "packages/story-engine-ui/src/server/lib/project-io.ts": 6,
+    "packages/story-engine-ui/src/server/lib/project-io.ts": 5,
     "packages/story-engine-ui/src/server/lib/quality-judge.ts": 5,
     "packages/story-engine-ui/src/server/lib/snapshot-changes.ts": 4,
     "packages/story-engine-ui/src/server/lib/snapshot.ts": 3,

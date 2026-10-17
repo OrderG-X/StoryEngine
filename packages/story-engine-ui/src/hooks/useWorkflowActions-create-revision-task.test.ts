@@ -99,7 +99,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     });
     useUiStore.setState({
       draftActionLoading: null,
-      selectedAdviceCards: [],
       steeringError: null,
       activeRevisionTask: null,
       activeRevisionPreview: null,

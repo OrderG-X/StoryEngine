@@ -17,6 +17,7 @@ import {
   writeFileAtomic,
   commitFilesAtomically,
 } from "./project-io.js";
+import { cardOf, hasCard } from "../../utils/messageCards.js";
 
 const EXPECTED_MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const EXPECTED_MAX_USAGE_SUMMARY_FILES = 200;
@@ -283,9 +284,53 @@ describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
         ledgerChecklist: [{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }, { id: "", label: "坏条目" }],
       },
     }]);
-    expect(message.continuityCheck).toMatchObject({ chapter: 8 });
+    expect(cardOf(message, "continuity")?.check).toMatchObject({ chapter: 8 });
     expect(message.tokenUsage).toEqual({ input: 90000, cachedInput: 43000, output: 4000 });
-    expect(message.commitPreview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+    expect(cardOf(message, "commit-preview")?.preview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+  });
+});
+
+describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
+  it("新格式的卡原样读回；认不出的 type、形状不对的卡丢掉；同一种只留最后一张", () => {
+    const [message] = readWorkspaceMessages([{
+      id: "assistant-cards",
+      role: "assistant",
+      content: "看卡",
+      cards: [
+        { type: "commit-preview", preview: { chapter: 3, canCommit: false, blockingReasons: ["缺稿"] } },
+        { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
+        { type: "error", detail: "boom" },
+        { type: "status-notes", notes: ["历史窗口被裁剪", ""] },
+        { type: "made-up", data: 1 },
+        { type: "name-drift", warnings: [{ establishedName: "", driftedVariant: "x", message: "坏" }] },
+        { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
+        "nope",
+      ],
+    }]);
+    expect(message.cards).toEqual([
+      { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
+      { type: "error", detail: "boom" },
+      { type: "status-notes", notes: ["历史窗口被裁剪"] },
+      { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
+    ]);
+  });
+
+  it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {
+    const [message] = readWorkspaceMessages([{
+      id: "assistant-legacy-cards",
+      role: "assistant",
+      content: "老格式",
+      isErrorNotice: true,
+      errorDetail: "provider down",
+      adviceCards: [{ id: "a1", type: "risk", title: "t", content: "c", defaultAction: "include" }],
+      nextStepPrompt: { question: "下一步？", choices: [{ label: "写下一章", intent: "写下一章" }] },
+    }]);
+    expect(message.cards).toEqual([
+      { type: "next-steps", prompt: { question: "下一步？", choices: [{ label: "写下一章", intent: "写下一章" }] } },
+      { type: "error", detail: "provider down" },
+    ]);
+    expect(message).not.toHaveProperty("adviceCards");
+    expect(message).not.toHaveProperty("isErrorNotice");
   });
 });
 
@@ -485,16 +530,18 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     const msg = out[0];
     expect(msg.intentTitle).toBe("审稿并入库");
     expect(msg.affectedScopes).toEqual(["full", "foundation"]);
-    expect(msg.aiFlavorReport).toEqual(aiFlavorReport);
-    expect(msg.aiFlavorFixedIds).toEqual(["v1", ...Array.from({ length: 49 }, (_, i) => `fix-${i}`)]);
-    expect(msg.aiReviewReport).toEqual(aiReviewReport);
-    expect(msg.draftReview).toEqual(draftReview);
-    expect(msg.qualityReport).toEqual(qualityReport);
-    expect(msg.commitReport).toEqual(commitReport);
-    expect(msg.nameConsistencyWarnings).toEqual([
+    expect(cardOf(msg, "ai-flavor")?.report).toEqual(aiFlavorReport);
+    expect(cardOf(msg, "ai-flavor")?.fixedIds).toEqual(["v1", ...Array.from({ length: 49 }, (_, i) => `fix-${i}`)]);
+    // 已没人写、也不再渲染的老字段：迁移时认出来丢掉。
+    expect(msg).not.toHaveProperty("aiReviewReport");
+    expect(msg.cards?.map((card) => card.type)).not.toContain("ai-review");
+    expect(cardOf(msg, "draft-review")?.review).toEqual(draftReview);
+    expect(cardOf(msg, "quality")?.report).toEqual(qualityReport);
+    expect(cardOf(msg, "commit-report")?.report).toEqual(commitReport);
+    expect(cardOf(msg, "name-drift")?.warnings).toEqual([
       { establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" },
     ]);
-    expect(msg.staleThreadWarnings).toEqual([
+    expect(cardOf(msg, "stale-threads")?.warnings).toEqual([
       {
         kind: "foreshadowing",
         title: "码头暗号",
@@ -550,7 +597,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
 
-    expect(out[0]!.commitPreview).toEqual({
+    expect(cardOf(out[0]!, "commit-preview")?.preview).toEqual({
       chapter: 2,
       canCommit: true,
       blockingReasons: ["x"],
@@ -669,7 +716,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       } as any,
     ]);
 
-    expect(out[0].nextStepPrompt).toEqual({
+    expect(cardOf(out[0], "next-steps")?.prompt).toEqual({
       question: "下一步想怎么走？",
       choices: [
         { label: "继续写第 3 章", intent: "写第 3 章草稿", recommended: true },
@@ -677,7 +724,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         ...Array.from({ length: 6 }, (_, i) => ({ label: `选项${i}`, intent: `意图${i}` })),
       ],
     });
-    expect(out[0].nextStepPrompt?.choices).toHaveLength(8);
+    expect(cardOf(out[0], "next-steps")?.prompt?.choices).toHaveLength(8);
     expect(out[1]).not.toHaveProperty("nextStepPrompt");
     expect(out[2]).not.toHaveProperty("nextStepPrompt");
   });
@@ -701,7 +748,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
-    const choices = out[0].nextStepPrompt!.choices;
+    const choices = cardOf(out[0], "next-steps")!.prompt.choices;
     expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
     expect(choices[1]).toEqual({ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
     expect(choices[2]).not.toHaveProperty("action");
@@ -728,11 +775,11 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
-    expect(out[0].isErrorNotice).toBe(true);
-    expect(out[0].errorDetail).toBe("Error from provider: boom");
-    expect(out[1].isErrorNotice).toBeUndefined();
-    expect(out[1].errorDetail).toBeUndefined();
-    expect(out[2].isErrorNotice).toBeUndefined();
+    expect(hasCard(out[0], "error")).toBe(true);
+    expect(cardOf(out[0], "error")?.detail).toBe("Error from provider: boom");
+    expect(hasCard(out[1], "error")).toBe(false);
+    expect(cardOf(out[1], "error")?.detail).toBeUndefined();
+    expect(hasCard(out[2], "error")).toBe(false);
   });
 });
 

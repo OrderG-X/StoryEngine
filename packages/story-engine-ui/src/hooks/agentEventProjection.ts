@@ -19,8 +19,10 @@
  *   foundation_write    → foundationAgent（显示「资料助手」）
  * 未知工具仍 push 一个带可读标签的 toolStep（保证不静默、不崩），但不强造一张可能误导的卡。
  */
-import type { ChapterAgentCard, ToolStep } from "../api/types.js";
+import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
+import type { CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
+import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
 function isVerdictToolName(toolName: string | undefined): boolean {
@@ -66,24 +68,24 @@ export interface AgentToolResultOutput {
   /** check_ai_flavor 专属：体检报告（agentChatClient 透传）。投影时挂到该消息→时间线渲染体检卡。 */
   readonly aiFlavorReport?: AiFlavorReport;
   /** ai_review 专属：审稿报告（agentChatClient 透传）。投影时挂到该消息→渲染「审校问题清单」可点卡。 */
-  readonly draftReview?: ChapterMessage["draftReview"];
+  readonly draftReview?: DraftReviewView;
   /** suggest_next_steps 专属：agent 提议的下一步选项（agentChatClient 透传）。投影时挂到该消息→驱动「下一步」卡。 */
-  readonly nextStepPrompt?: ChapterMessage["nextStepPrompt"];
+  readonly nextStepPrompt?: NextStepPrompt;
   /** commit_apply 专属：入库报告 CommitReport（agentChatClient 透传）。投影时挂到该消息→渲染「入库」delta 卡。 */
-  readonly commitReport?: ChapterMessage["commitReport"];
+  readonly commitReport?: unknown;
   /** quality_check 专属：分层质检报告（agentChatClient 透传）。投影时挂到该消息→渲染「质检」明细卡。 */
-  readonly qualityReport?: ChapterMessage["qualityReport"];
+  readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
-  readonly continuityCheck?: ChapterMessage["continuityCheck"];
+  readonly continuityCheck?: ContinuityCheckData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
    *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
   /** commit_preview 专属：人物名一致性提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「人物名一致性」提醒卡。 */
-  readonly nameConsistencyWarnings?: ChapterMessage["nameConsistencyWarnings"];
+  readonly nameConsistencyWarnings?: readonly NameDriftWarning[];
   /** commit_preview 专属：伏笔/线索待收口提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「伏笔/线索待收口」提醒卡。 */
-  readonly staleThreadWarnings?: ChapterMessage["staleThreadWarnings"];
+  readonly staleThreadWarnings?: readonly StaleThreadWarningData[];
   /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
-  readonly commitPreview?: ChapterMessage["commitPreview"];
+  readonly commitPreview?: CommitPreviewCardData;
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
@@ -249,7 +251,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       };
     case "status":
       // R4：服务端状态说明（如历史窗口被裁剪）照实挂上展示，绝不静默吞掉；不进正文——不替模型说话。
-      return { ...message, statusNotes: [...(message.statusNotes ?? []), event.text] };
+      return withCard(message, { type: "status-notes", notes: [...(cardOf(message, "status-notes")?.notes ?? []), event.text] });
     case "usage":
       return { ...message, tokenUsage: event.usage };
     case "tool-call":
@@ -277,19 +279,19 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 去 AI 味体检卡随这条消息走（替代旧的全局常驻挂件，治「一直钉底部」）：把报告挂到本条消息上，
       // 在时间线里随对话滚动。ok:false（体检没成）不挂、不把失败当结果。
       if (event.toolName === "check_ai_flavor" && event.output?.aiFlavorReport && event.output.aiFlavorReport.ok !== false) {
-        return { ...withEffects, aiFlavorReport: event.output.aiFlavorReport };
+        return withCard(withEffects, { type: "ai-flavor", report: event.output.aiFlavorReport });
       }
       // AI 审稿报告随这条消息走：渲染「审校问题清单」可点卡（点一条=给 agent 发改写意图）。
       if (event.toolName === "ai_review" && event.output?.draftReview) {
-        return { ...withEffects, draftReview: event.output.draftReview };
+        return withCard(withEffects, { type: "draft-review", review: event.output.draftReview });
       }
       // agent 主动提议的「下一步」选项：挂到这条消息，驱动「下一步」选项卡（替代写死选项）。
       if (event.toolName === "suggest_next_steps" && event.output?.nextStepPrompt) {
-        return { ...withEffects, nextStepPrompt: event.output.nextStepPrompt };
+        return withCard(withEffects, { type: "next-steps", prompt: event.output.nextStepPrompt });
       }
       // 入库 delta：commit_apply 的 CommitReport 随消息走，渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线）。
       if (event.toolName === "commit_apply" && event.output?.commitReport) {
-        return { ...withEffects, commitReport: event.output.commitReport };
+        return withCard(withEffects, { type: "commit-report", report: event.output.commitReport });
       }
       // 模型发起的定稿请求：没写盘，挂「确认定稿」按钮（建议条渲染），用户点了才由服务端直接执行。
       if (event.toolName === "commit_apply" && event.output?.commitConfirmAction) {
@@ -333,25 +335,24 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       }
       // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。
       if (event.toolName === "quality_check" && event.output?.qualityReport) {
-        return { ...withEffects, qualityReport: event.output.qualityReport };
+        return withCard(withEffects, { type: "quality", report: event.output.qualityReport });
       }
       // 核账卡随这条消息走（渲染「核账」卡）。ok:false（还在读 / 出错 / 没正文）不挂——
       // sure/maybe 空数组不是「没问题」，否则显成「没发现对不上」的假成功卡（R4.1/验收 3.1），
       // 只留工具文字如实说。与上面 check_ai_flavor 的 ok!==false 守卫同款（双保险：客户端层已先拦一道）。
       if (event.toolName === "check_continuity" && event.output?.continuityCheck && event.output?.ok !== false) {
-        return { ...withEffects, continuityCheck: event.output.continuityCheck };
+        return withCard(withEffects, { type: "continuity", check: event.output.continuityCheck });
       }
       // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
       //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。
       //   · nameConsistencyWarnings：本章名字疑似把已确立角色名写歪（近形错名）。
       //   · staleThreadWarnings：伏笔/线索超 3 章没推进（埋了不收的遗漏）。
       if (event.toolName === "commit_preview") {
-        return {
-          ...withEffects,
-          ...(event.output?.commitPreview ? { commitPreview: event.output.commitPreview } : {}),
-          ...(event.output?.nameConsistencyWarnings?.length ? { nameConsistencyWarnings: event.output.nameConsistencyWarnings } : {}),
-          ...(event.output?.staleThreadWarnings?.length ? { staleThreadWarnings: event.output.staleThreadWarnings } : {}),
-        };
+        return withCards(withEffects, [
+          ...(event.output?.commitPreview ? [{ type: "commit-preview" as const, preview: event.output.commitPreview }] : []),
+          ...(event.output?.nameConsistencyWarnings?.length ? [{ type: "name-drift" as const, warnings: event.output.nameConsistencyWarnings }] : []),
+          ...(event.output?.staleThreadWarnings?.length ? [{ type: "stale-threads" as const, warnings: event.output.staleThreadWarnings }] : []),
+        ]);
       }
       return withEffects;
     }

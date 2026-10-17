@@ -74,7 +74,7 @@ describe("chat-sessions-io CRUD", () => {
         role: "assistant",
         content: "已写入。",
         turnSnapshots: [{ toolName: "foundation_write", snapshotId: "snap-abc", chapterNumber: 1 }],
-        aiReviewReport: { ok: true, summary: "审稿完成" },
+        cards: [{ type: "commit-preview", preview: { chapter: 1, canCommit: true } }],
       },
     ]);
     const session = await readChatSession(dir, id);
@@ -84,7 +84,7 @@ describe("chat-sessions-io CRUD", () => {
     ]);
     // agentTimelineModel.canUndo 条件：turnSnapshots.length > 0
     expect((msg?.turnSnapshots?.length ?? 0) > 0).toBe(true);
-    expect(msg?.aiReviewReport).toEqual({ ok: true, summary: "审稿完成" });
+    expect(msg?.cards).toEqual([{ type: "commit-preview", preview: { chapter: 1, canCommit: true } }]);
   });
 
   it("删 active 自动转移；删到空自动建空会话；index 永远 >=1 且 active 有效", async () => {

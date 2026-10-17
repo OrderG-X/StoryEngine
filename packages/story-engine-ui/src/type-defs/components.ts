@@ -1,6 +1,6 @@
-import type { ChapterAdviceCard, ChapterSteeringDraft, CreateBookResult, DraftAIReviewIssue, DraftAIReviewReport, DraftAIRevisionSuggestion, DraftRevisionPreview, DraftRevisionTask, ModelSettingsLoadResult, StateOverview, StateOverviewCharacterMatrix } from "../api/types.js";
-import type { DevApiPermission, SuggestedAction, ThemeMode } from "./workflow.js";
-import type { ChapterNavItem, ChapterMessage, ProtagonistStatus, LocationStatus, TimeStatus, KnowledgeBoundary, AssetSummary, StoryMemory, RiskWarning, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
+import type { ChapterSteeringDraft, CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, StateOverview } from "../api/types.js";
+import type { SuggestedAction, ThemeMode } from "./workflow.js";
+import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
 import type { SelectionRevisionKey } from "../components/v2/selectionRevisionTemplates.js";
 
@@ -11,10 +11,8 @@ export interface WritingWorkspaceLayoutProps {
   readonly overview?: StateOverview | null;
   readonly sidebar: SidebarData;
   readonly themeMode: ThemeMode;
-  readonly selectedAdviceCardKeys?: readonly string[];
   readonly onSelectChapter?: (chapterId: string) => void;
   readonly onSelectSection?: (section: string) => void;
-  readonly onSelectAdviceCard?: (key: string, card: ChapterAdviceCard) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   readonly onGoHome?: () => void;
   readonly onOpenSettings?: () => void;
@@ -58,7 +56,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly activeRevisionTask?: DraftRevisionTask | null;
   readonly activeRevisionPreview?: DraftRevisionPreview | null;
   readonly onSteeringDirectionChange: (value: string) => void;
-  readonly onCreateRevisionTask?: (source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }) => void;
   readonly onGenerateRevisionPreview?: () => void;
   readonly onApplyRevisionPreview?: () => void;
   readonly onDismissRevisionTask?: () => void;

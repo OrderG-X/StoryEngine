@@ -2,6 +2,7 @@
  * 对话（重构 P5：从 workspaceStore 拆出）：消息、会话、回合进行中。
  * 消息只存会话文件一份，见 sync/chatSync。
  */
+import { updateCard } from "../utils/messageCards.js";
 import { create } from "zustand";
 import type { ChapterMessage } from "../types.js";
 import type { ChatSessionIndexEntry } from "../type-defs/workspace.js";
@@ -24,7 +25,7 @@ export interface ChatStore {
   clearChat: () => void;
   /** 撤销上一次清空，恢复对话。 */
   undoClearChat: () => void;
-  /** 把某条消息里的某条机器腔违规标为「已改」（追加进该消息的 aiFlavorFixedIds，去重）。 */
+  /** 把某条消息里的某条机器腔违规标为「已改」（追加进该消息机器腔卡的 fixedIds，去重）。 */
   markAiFlavorViolationFixed: (messageId: string, violationId: string) => void;
   setSessions: (sessions: readonly ChatSessionIndexEntry[], activeSessionId?: string) => void;
   setActiveSessionId: (activeSessionId: string) => void;
@@ -56,8 +57,10 @@ export const useChatStore = create<ChatStore>((set) => ({
   markAiFlavorViolationFixed: (messageId, violationId) =>
     set((state) => ({
       messages: state.messages.map((message) => (
-        message.id === messageId && !(message.aiFlavorFixedIds ?? []).includes(violationId)
-          ? { ...message, aiFlavorFixedIds: [...(message.aiFlavorFixedIds ?? []), violationId] }
+        message.id === messageId
+          ? updateCard(message, "ai-flavor", (card) => (
+            (card.fixedIds ?? []).includes(violationId) ? card : { ...card, fixedIds: [...(card.fixedIds ?? []), violationId] }
+          ))
           : message
       )),
     })),

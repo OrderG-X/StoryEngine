@@ -66,7 +66,6 @@ function setChapter(chapter: number, content: string, sessionId = "session-a") {
   useUiStore.setState({
     draftActionLoading: null,
     draftCandidates: null,
-    selectedAdviceCards: [],
     steeringError: null,
     activeRevisionTask: null,
     activeRevisionPreview: null,

@@ -1,6 +1,6 @@
 /**
  * QualityCheckCard — 质检明细卡：blocking 硬伤（拦入库·突出红）+ soft 软提示（参考不拦·默认折叠防噪音）。
- * 数据来自 quality_check 的 RefinedQualityReport（message.qualityReport）。用 StepCard 暗金外壳。
+ * 数据来自 quality_check 的 RefinedQualityReport（消息上的硬伤检查卡）。用 StepCard 暗金外壳。
  * 有硬伤 → status=attention、默认展开；无硬伤 → status=done、徽章「通过」、默认收起。
  */
 import { useState } from "react";

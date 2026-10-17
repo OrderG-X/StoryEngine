@@ -222,8 +222,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     readonly card: ChapterAgentCard;
     readonly suggestedActions?: ChapterMessage["suggestedActions"];
     readonly toolOutput?: readonly string[];
-    /** REST 深度审稿成功时挂到消息上，供时间线内折叠卡渲染（不再靠钉底 draftAIReview）。 */
-    readonly aiReviewReport?: ChapterMessage["aiReviewReport"];
   }): void => {
     useChatStore.getState().updateMessage(messageId, (current) => ({
       ...current,
@@ -232,7 +230,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       agentCards: [input.card],
       ...(input.suggestedActions ? { suggestedActions: input.suggestedActions } : {}),
       ...(input.toolOutput ? { toolOutput: input.toolOutput } : {}),
-      ...(input.aiReviewReport ? { aiReviewReport: input.aiReviewReport } : {}),
     }));
   };
 

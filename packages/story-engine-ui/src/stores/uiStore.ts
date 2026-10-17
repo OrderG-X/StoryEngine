@@ -10,7 +10,6 @@ import type {
 } from "../types.js";
 import type { WorkspaceDraftCandidate, WorkspaceRevisionPreview } from "../type-defs/workspace.js";
 import type {
-  ChapterAdviceCard,
   ChapterSteeringDraft,
   DraftAIReviewReport,
   DraftRevisionTask,
@@ -19,11 +18,6 @@ import type {
   FoundationGapReport,
   FoundationGapSuggestion,
 } from "../api/types.js";
-
-export interface SelectedAdviceCard {
-  readonly key: string;
-  readonly card: ChapterAdviceCard;
-}
 
 export function emptyCommitSelections(): CommitSelectiveConfirmationState {
   return { assets: {}, locations: {}, characterKnowledge: {} };
@@ -46,7 +40,6 @@ export interface UiStore {
   draftPhase: DraftPhase | null;
   /** 抽卡（块③）：「再来一版」生成的 2–3 个临时候选；非 null 即展开并排候选面板，挑中才落盘。 */
   draftCandidates: readonly DraftCandidate[] | null;
-  selectedAdviceCards: readonly SelectedAdviceCard[];
   commitPreviewReport: CommitPreviewUiReport | null;
   commitSelections: CommitSelectiveConfirmationState;
   lastFormalCommitApply: LastFormalCommitApply | null;
@@ -75,7 +68,6 @@ export interface UiStore {
   setDraftActionLoading: (loading: string | null) => void;
   setDraftPhase: (phase: DraftPhase | null) => void;
   setDraftCandidates: (candidates: readonly DraftCandidate[] | null) => void;
-  setSelectedAdviceCards: (cards: readonly SelectedAdviceCard[]) => void;
   setCommitPreviewReport: (report: CommitPreviewUiReport | null) => void;
   setCommitSelections: (selections: CommitSelectiveConfirmationState) => void;
   setLastFormalCommitApply: (result: LastFormalCommitApply | null) => void;
@@ -105,7 +97,6 @@ export const useUiStore = create<UiStore>((set) => ({
   draftActionLoading: null,
   draftPhase: null,
   draftCandidates: null,
-  selectedAdviceCards: [],
   commitPreviewReport: null,
   commitSelections: emptyCommitSelections(),
   lastFormalCommitApply: null,
@@ -130,7 +121,6 @@ export const useUiStore = create<UiStore>((set) => ({
   setDraftActionLoading: (loading) => set({ draftActionLoading: loading }),
   setDraftPhase: (phase) => set({ draftPhase: phase }),
   setDraftCandidates: (candidates) => set({ draftCandidates: candidates }),
-  setSelectedAdviceCards: (cards) => set({ selectedAdviceCards: cards }),
   setCommitPreviewReport: (report) => set({ commitPreviewReport: report }),
   setCommitSelections: (selections) => set({ commitSelections: selections }),
   setLastFormalCommitApply: (result) => set({ lastFormalCommitApply: result }),

@@ -66,7 +66,6 @@ export function App() {
   const activeRevisionTask = useUiStore((s) => s.activeRevisionTask);
   const activeRevisionPreview = useUiStore((s) => s.activeRevisionPreview);
   const draftActionLoading = useUiStore((s) => s.draftActionLoading);
-  const selectedAdviceCards = useUiStore((s) => s.selectedAdviceCards);
   const projectPath = useNavigationStore((s) => s.projectPath);
   const activeBookId = useNavigationStore((s) => s.activeBookId);
   const openProjectError = useNavigationStore((s) => s.openProjectError);
@@ -105,7 +104,7 @@ export function App() {
     appendMessage,
   });
 
-  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, handleChapterButton, undoToTurn, stopAgent } = useChat({
+  const { handleSendMessage, handleSuggestedAction, handleSendUserAction, handleChapterButton, undoToTurn, stopAgent } = useChat({
     projectPath,
     handleApplyRevisionPreview: workflow.handleApplyRevisionPreview,
     refreshWorkspaceFromOverview,
@@ -270,8 +269,6 @@ export function App() {
             activeRevisionPreview,
             themeMode,
             workspace,
-            selectedAdviceCardKeys: selectedAdviceCards.map((item) => item.key),
-            onCreateRevisionTask: workflow.handleCreateRevisionTask,
             onFixAiFlavorViolation: workflow.handleFixAiFlavorViolation,
             onFixAllAiFlavorViolations: workflow.handleFixAiFlavorAll,
             onGenerateRevisionPreview: () => void workflow.handleGenerateRevisionPreview(),
@@ -298,7 +295,6 @@ export function App() {
               }
             })(),
             onSelectChapter: navigation.handleSelectChapter,
-            onSelectAdviceCard: handleSelectAdviceCard,
             onSuggestedAction: handleSuggestedAction,
             onSendMessage: handleSendMessage,
             onSendUserAction: handleSendUserAction,

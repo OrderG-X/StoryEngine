@@ -13,7 +13,11 @@ import type {
   StateOverview,
 } from "@actalk/story-engine";
 import { normalizeDraftRevisionPreview } from "@actalk/story-engine";
-import { parseNextStepUserAction, type AgentUserAction } from "../../api/agentChatClient.js";
+import type { MessageCard } from "../../type-defs/workspace.js";
+import { legacyMessageCards, readMessageCards } from "./message-cards-io.js";
+import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
+
+export { isRecord, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
 // ---------------------------------------------------------------------------
 // Middleware types
@@ -128,21 +132,11 @@ export function runExclusive<T>(key: string, task: () => Promise<T>): Promise<T>
 // Type guards
 // ---------------------------------------------------------------------------
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // ---------------------------------------------------------------------------
 // String / number parsers
 // ---------------------------------------------------------------------------
 
-export function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-export function readStringAllowEmpty(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
 
 export function requireBodyString(value: unknown, message: string): string {
   const parsed = readString(value);
@@ -150,22 +144,6 @@ export function requireBodyString(value: unknown, message: string): string {
   return parsed;
 }
 
-export function readStringList(value: unknown): string[] {
-  const items = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/\r?\n|[；;]/u)
-      : [];
-  return items
-    .map((item) => readString(item))
-    .filter((item): item is string => Boolean(item));
-}
-
-export function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  const parsed = Math.trunc(value);
-  return parsed > 0 ? parsed : undefined;
-}
 
 export function requirePositiveBodyInteger(value: unknown, message: string): number {
   const parsed = readPositiveInteger(value);
@@ -207,46 +185,10 @@ export type WorkspaceTurnSnapshot = {
   readonly chapterNumber?: number;
 };
 
-export type WorkspaceNameConsistencyWarning = {
-  readonly establishedName: string;
-  readonly driftedVariant: string;
-  readonly message: string;
-};
-
-export type WorkspaceStaleThreadWarning = {
-  readonly kind: string;
-  readonly title: string;
-  readonly lastTouchedChapter: number;
-  readonly chaptersSinceTouched: number;
-  readonly message: string;
-};
-
-/** 定稿预览卡（R3）的持久化子集：此前不在白名单里，刷新后预览卡（连同「确认定稿」按钮）整张消失。 */
-export type WorkspaceCommitPreview = {
-  readonly chapter: number;
-  readonly canCommit: boolean;
-  readonly blockingReasons?: readonly string[];
-  readonly summary?: string;
-  readonly draftIssueCount?: number;
-  readonly semanticIssueCount?: number;
-  /** R7.7·报告 4.3：质量问题明细文案（卡内折叠展示），不再指向不存在的「质检卡」。 */
-  readonly draftIssues?: readonly string[];
-  readonly semanticIssues?: readonly string[];
-  readonly previewToken?: string;
-  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean; readonly editableDay?: number; readonly needsConfirm?: boolean; readonly defaultUnchecked?: boolean }[];
-  readonly notRecorded?: readonly string[];
-};
-
-export type WorkspaceNextStepPrompt = {
-  readonly question: string;
-  readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
-};
-
 export function readWorkspaceMessages(value: unknown): {
   readonly id: string;
   readonly role: "user" | "assistant" | "system";
   readonly content: string;
-  readonly adviceCards?: readonly Record<string, unknown>[];
   readonly suggestedActions?: readonly Record<string, unknown>[];
   readonly agentCards?: readonly Record<string, unknown>[];
   readonly toolOutput?: readonly string[];
@@ -260,27 +202,14 @@ export function readWorkspaceMessages(value: unknown): {
   readonly turnEndedAt?: number;
   readonly turnSnapshots?: readonly WorkspaceTurnSnapshot[];
   readonly affectedScopes?: readonly ("full" | "foundation")[];
-  readonly aiFlavorReport?: Record<string, unknown>;
-  readonly aiFlavorFixedIds?: readonly string[];
-  readonly aiReviewReport?: Record<string, unknown>;
-  readonly draftReview?: Record<string, unknown>;
-  readonly continuityCheck?: Record<string, unknown>;
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
-  readonly qualityReport?: Record<string, unknown>;
-  readonly commitReport?: unknown;
-  readonly nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
-  readonly staleThreadWarnings?: readonly WorkspaceStaleThreadWarning[];
-  readonly commitPreview?: WorkspaceCommitPreview;
-  readonly nextStepPrompt?: WorkspaceNextStepPrompt;
-  readonly isErrorNotice?: boolean;
-  readonly errorDetail?: string;
+  readonly cards?: readonly MessageCard[];
 }[] {
   if (!Array.isArray(value)) return [];
   const messages: {
     id: string;
     role: "user" | "assistant" | "system";
     content: string;
-    adviceCards?: readonly Record<string, unknown>[];
     suggestedActions?: readonly Record<string, unknown>[];
     agentCards?: readonly Record<string, unknown>[];
     toolOutput?: readonly string[];
@@ -294,20 +223,8 @@ export function readWorkspaceMessages(value: unknown): {
     turnEndedAt?: number;
     turnSnapshots?: readonly WorkspaceTurnSnapshot[];
     affectedScopes?: readonly ("full" | "foundation")[];
-    aiFlavorReport?: Record<string, unknown>;
-    aiFlavorFixedIds?: readonly string[];
-    aiReviewReport?: Record<string, unknown>;
-    draftReview?: Record<string, unknown>;
-    continuityCheck?: Record<string, unknown>;
     tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
-    qualityReport?: Record<string, unknown>;
-    commitReport?: unknown;
-    nameConsistencyWarnings?: readonly WorkspaceNameConsistencyWarning[];
-    staleThreadWarnings?: readonly WorkspaceStaleThreadWarning[];
-    commitPreview?: WorkspaceCommitPreview;
-    nextStepPrompt?: WorkspaceNextStepPrompt;
-    isErrorNotice?: boolean;
-    errorDetail?: string;
+    cards?: readonly MessageCard[];
   }[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
@@ -317,16 +234,14 @@ export function readWorkspaceMessages(value: unknown): {
     // 撤销快照——按「content 为空」丢掉等于把那一轮的执行记录和快照静默蒸发（复审 P3）。
     const carriesToolPayload = Array.isArray(item.toolSteps) && item.toolSteps.length > 0
       || Array.isArray(item.segments) && item.segments.length > 0
-      || Array.isArray(item.turnSnapshots) && item.turnSnapshots.length > 0;
+      || Array.isArray(item.turnSnapshots) && item.turnSnapshots.length > 0
+      || Array.isArray(item.cards) && item.cards.length > 0;
     if (!id || (!content && !carriesToolPayload)) continue;
     // Self-heal: scrub legacy mockData seed messages (msg-001/msg-002) that may
     // have been固化 onto real project disks before F1. Real runtime ids never use
     // the `msg-0` prefix (they are `${role}-${Date.now()}…`), so this is mock-only.
     if (id.startsWith("msg-0")) continue;
     if (item.role !== "assistant" && item.role !== "user" && item.role !== "system") continue;
-    const adviceCards = Array.isArray(item.adviceCards)
-      ? item.adviceCards.filter(isRecord).slice(0, 12)
-      : undefined;
     const agentCards = Array.isArray(item.agentCards)
       ? item.agentCards.filter(isRecord).slice(0, 12)
       : undefined;
@@ -342,28 +257,14 @@ export function readWorkspaceMessages(value: unknown): {
     const turnEndedAt = readFinitePositiveNumber(item.turnEndedAt);
     const turnSnapshots = readWorkspaceTurnSnapshots(item.turnSnapshots);
     const affectedScopes = readWorkspaceAffectedScopes(item.affectedScopes);
-    const aiFlavorReport = isRecord(item.aiFlavorReport) ? item.aiFlavorReport : undefined;
-    const aiFlavorFixedIds = readStringList(item.aiFlavorFixedIds).slice(0, 50);
-    const aiReviewReport = isRecord(item.aiReviewReport) ? item.aiReviewReport : undefined;
-    const draftReview = isRecord(item.draftReview) ? item.draftReview : undefined;
-    // 核账卡 / 本轮用量（2026-10-10）：存盘时漏收，对话重载后核账卡和用量行凭空消失。
-    const continuityCheck = isRecord(item.continuityCheck) ? item.continuityCheck : undefined;
+    // 本轮用量（2026-10-10）：存盘时漏收，对话重载后用量行凭空消失。
     const tokenUsage = readWorkspaceTokenUsage(item.tokenUsage);
-    const qualityReport = isRecord(item.qualityReport) ? item.qualityReport : undefined;
-    const commitReport = item.commitReport !== undefined && item.commitReport !== null
-      ? item.commitReport
-      : undefined;
-    const nameConsistencyWarnings = readWorkspaceNameConsistencyWarnings(item.nameConsistencyWarnings);
-    const staleThreadWarnings = readWorkspaceStaleThreadWarnings(item.staleThreadWarnings);
-    const commitPreview = readWorkspaceCommitPreview(item.commitPreview);
-    const nextStepPrompt = readWorkspaceNextStepPrompt(item.nextStepPrompt);
-    const isErrorNotice = item.isErrorNotice === true;
-    const errorDetail = readString(item.errorDetail);
+    // 卡：新格式按 type 校验；老会话没有 cards，把分散的老字段转成卡（只读迁移，写回就是新格式）。
+    const cards = Array.isArray(item.cards) ? readMessageCards(item.cards) : legacyMessageCards(item);
     messages.push({
       id,
       role: item.role,
       content: content ?? "",
-      ...(adviceCards && adviceCards.length > 0 ? { adviceCards } : {}),
       ...(suggestedActions.length > 0 ? { suggestedActions } : {}),
       ...(agentCards && agentCards.length > 0 ? { agentCards } : {}),
       ...(toolOutput.length > 0 ? { toolOutput } : {}),
@@ -377,20 +278,8 @@ export function readWorkspaceMessages(value: unknown): {
       ...(turnEndedAt !== undefined ? { turnEndedAt } : {}),
       ...(turnSnapshots.length > 0 ? { turnSnapshots } : {}),
       ...(affectedScopes.length > 0 ? { affectedScopes } : {}),
-      ...(aiFlavorReport ? { aiFlavorReport } : {}),
-      ...(aiFlavorFixedIds.length > 0 ? { aiFlavorFixedIds } : {}),
-      ...(aiReviewReport ? { aiReviewReport } : {}),
-      ...(draftReview ? { draftReview } : {}),
-      ...(continuityCheck ? { continuityCheck } : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
-      ...(qualityReport ? { qualityReport } : {}),
-      ...(commitReport !== undefined ? { commitReport } : {}),
-      ...(nameConsistencyWarnings.length > 0 ? { nameConsistencyWarnings } : {}),
-      ...(staleThreadWarnings.length > 0 ? { staleThreadWarnings } : {}),
-      ...(commitPreview ? { commitPreview } : {}),
-      ...(nextStepPrompt ? { nextStepPrompt } : {}),
-      ...(isErrorNotice ? { isErrorNotice: true } : {}),
-      ...(errorDetail ? { errorDetail } : {}),
+      ...(cards.length > 0 ? { cards } : {}),
     });
   }
   // Sanity 上限（防病态膨胀），不是功能性截断。⚠️ 触顶会静默丢最旧消息且【绕过冷归档】
@@ -457,113 +346,9 @@ function readWorkspaceAffectedScopes(value: unknown): ("full" | "foundation")[] 
   return scopes.slice(0, 2);
 }
 
-function readWorkspaceNameConsistencyWarnings(value: unknown): WorkspaceNameConsistencyWarning[] {
-  if (!Array.isArray(value)) return [];
-  const warnings: WorkspaceNameConsistencyWarning[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const establishedName = readString(item.establishedName);
-    const driftedVariant = readString(item.driftedVariant);
-    const message = readString(item.message);
-    if (!establishedName || !driftedVariant || !message) continue;
-    warnings.push({ establishedName, driftedVariant, message });
-  }
-  return warnings.slice(0, 20);
-}
-
 /** 回合起止毫秒时间戳：有限正数才保留（坏值不写，刷新后耗时显示宁缺毋假）。 */
 function readFinitePositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-/** 「下一步」选项卡：question 非空 + choices 逐项 label/intent 非空、recommended 若在须 boolean；清洗后为空 → 整字段不写；上限 8。 */
-function readWorkspaceNextStepPrompt(value: unknown): WorkspaceNextStepPrompt | undefined {
-  if (!isRecord(value)) return undefined;
-  const question = readString(value.question);
-  if (!question || !Array.isArray(value.choices)) return undefined;
-  const choices: { label: string; intent: string; recommended?: boolean; action?: AgentUserAction }[] = [];
-  for (const item of value.choices) {
-    if (!isRecord(item)) continue;
-    const label = readString(item.label);
-    const intent = readString(item.intent);
-    if (!label || !intent) continue;
-    if ("recommended" in item && typeof item.recommended !== "boolean") continue;
-    // choice.action（R4.7）：服务端生成的确定性选项带结构化动作，刷新/重开后照旧直达；
-    // 白名单外/形状不对的（历史存档里不可能有、防上游异常）丢掉 action，选项退回发文本意图。
-    const action = parseNextStepUserAction(item.action);
-    choices.push({
-      label,
-      intent,
-      ...(typeof item.recommended === "boolean" ? { recommended: item.recommended } : {}),
-      ...(action ? { action } : {}),
-    });
-  }
-  if (choices.length === 0) return undefined;
-  return { question, choices: choices.slice(0, 8) };
-}
-
-function readWorkspaceStaleThreadWarnings(value: unknown): WorkspaceStaleThreadWarning[] {
-  if (!Array.isArray(value)) return [];
-  const warnings: WorkspaceStaleThreadWarning[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const kind = readString(item.kind);
-    const title = readString(item.title);
-    const message = readString(item.message);
-    const lastTouchedChapter = readPositiveInteger(item.lastTouchedChapter);
-    const chaptersSinceTouched = readPositiveInteger(item.chaptersSinceTouched);
-    if (!kind || !title || !message || lastTouchedChapter === undefined || chaptersSinceTouched === undefined) {
-      continue;
-    }
-    warnings.push({ kind, title, lastTouchedChapter, chaptersSinceTouched, message });
-  }
-  return warnings.slice(0, 20);
-}
-
-function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | undefined {
-  if (!isRecord(value)) return undefined;
-  const chapter = readPositiveInteger(value.chapter);
-  if (chapter === undefined || typeof value.canCommit !== "boolean") return undefined;
-  const blockingReasons = readStringList(value.blockingReasons).slice(0, 20);
-  const summary = readString(value.summary);
-  const previewToken = readString(value.previewToken);
-  const draftIssueCount = readNonNegativeInteger(value.draftIssueCount);
-  const semanticIssueCount = readNonNegativeInteger(value.semanticIssueCount);
-  const draftIssues = readStringList(value.draftIssues).slice(0, 20);
-  const semanticIssues = readStringList(value.semanticIssues).slice(0, 20);
-  const ledgerChecklist = Array.isArray(value.ledgerChecklist)
-    ? value.ledgerChecklist.filter(isRecord).slice(0, 200).flatMap((item) => {
-      const id = readString(item.id);
-      const label = readString(item.label);
-      if (!id || !label) return [];
-      const detail = readString(item.detail);
-      const editableDay = readPositiveInteger(item.editableDay);
-      return [{
-        id,
-        kind: readString(item.kind) ?? "",
-        label,
-        ...(detail ? { detail } : {}),
-        removable: item.removable === true,
-        ...(editableDay !== undefined ? { editableDay } : {}),
-        ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
-        ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
-      }];
-    })
-    : [];
-  const notRecorded = readStringList(value.notRecorded).slice(0, 50);
-  return {
-    chapter,
-    canCommit: value.canCommit,
-    ...(blockingReasons.length > 0 ? { blockingReasons } : {}),
-    ...(summary ? { summary } : {}),
-    ...(draftIssueCount !== undefined ? { draftIssueCount } : {}),
-    ...(semanticIssueCount !== undefined ? { semanticIssueCount } : {}),
-    ...(draftIssues.length > 0 ? { draftIssues } : {}),
-    ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
-    ...(previewToken ? { previewToken } : {}),
-    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
-    ...(notRecorded.length > 0 ? { notRecorded } : {}),
-  };
 }
 
 function readWorkspaceTokenUsage(value: unknown): { readonly input: number; readonly cachedInput: number; readonly output: number } | undefined {
@@ -575,9 +360,6 @@ function readWorkspaceTokenUsage(value: unknown): { readonly input: number; read
   return { input, cachedInput: cachedInput ?? 0, output };
 }
 
-function readNonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
 
 /** 「确认定稿」按钮目标（commit-apply 的 commitTarget）：章号 + 可选预览令牌。 */
 function readWorkspaceCommitTarget(value: unknown): { chapter?: number; previewToken?: string } | undefined {

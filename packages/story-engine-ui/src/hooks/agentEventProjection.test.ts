@@ -8,6 +8,7 @@ import {
   settleStoppedAgentTurn,
   type AgentProjectionEvent,
 } from "./agentEventProjection.js";
+import { cardOf } from "../utils/messageCards.js";
 
 function project(events: readonly AgentProjectionEvent[], seed?: ChapterMessage): ChapterMessage {
   let message = seed ?? emptyAssistantMessage("assistant-1");
@@ -411,7 +412,7 @@ describe("projectAgentEvent", () => {
         summary: "核了第 4 章，没发现和前文对不上的地方。",
       },
     });
-    expect(msg.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
+    expect(cardOf(msg, "continuity")?.check).toEqual({ chapter: 4, sure: [], maybe: [] });
     expect(msg.toolSteps![0].status).toBe("completed");
   });
 
@@ -434,7 +435,7 @@ describe("projectAgentEvent", () => {
         summary: "核账员还在读这本书的前文：第 4 / 57 章。这次没有核（不糊弄）。",
       },
     });
-    expect(msg.continuityCheck).toBeUndefined();
+    expect(cardOf(msg, "continuity")?.check).toBeUndefined();
     // 步骤如实落 failed（不是绿色完成），详情带工具的真实 summary——只留工具文字，不装作核过。
     expect(msg.toolSteps![0].status).toBe("failed");
     expect(msg.toolSteps![0].detail).toContain("这次没有核");
@@ -453,7 +454,7 @@ describe("projectAgentEvent", () => {
         nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
       },
     });
-    expect(msg.nameConsistencyWarnings).toEqual([
+    expect(cardOf(msg, "name-drift")?.warnings).toEqual([
       { establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" },
     ]);
   });
@@ -468,7 +469,7 @@ describe("projectAgentEvent", () => {
       endedAt: 2,
       output: { ok: true },
     });
-    expect(msg.nameConsistencyWarnings).toBeUndefined();
+    expect(cardOf(msg, "name-drift")?.warnings).toBeUndefined();
   });
 
   it("commit_preview 带 staleThreadWarnings → 挂到消息（固定展示「伏笔/线索待收口」卡）", () => {
@@ -484,7 +485,7 @@ describe("projectAgentEvent", () => {
         staleThreadWarnings: [{ kind: "线索", title: "师父失踪之谜", lastTouchedChapter: 1, chaptersSinceTouched: 5, message: "已 5 章没推进" }],
       },
     });
-    expect(msg.staleThreadWarnings).toEqual([
+    expect(cardOf(msg, "stale-threads")?.warnings).toEqual([
       { kind: "线索", title: "师父失踪之谜", lastTouchedChapter: 1, chaptersSinceTouched: 5, message: "已 5 章没推进" },
     ]);
   });
@@ -503,8 +504,8 @@ describe("projectAgentEvent", () => {
         staleThreadWarnings: [{ kind: "伏笔", title: "破损信物", lastTouchedChapter: 2, chaptersSinceTouched: 4, message: "已 4 章没推进" }],
       },
     });
-    expect(msg.nameConsistencyWarnings).toHaveLength(1);
-    expect(msg.staleThreadWarnings).toHaveLength(1);
+    expect(cardOf(msg, "name-drift")?.warnings).toHaveLength(1);
+    expect(cardOf(msg, "stale-threads")?.warnings).toHaveLength(1);
   });
 
   it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
@@ -526,7 +527,7 @@ describe("projectAgentEvent", () => {
         },
       },
     });
-    expect(msg.commitPreview).toEqual({
+    expect(cardOf(msg, "commit-preview")?.preview).toEqual({
       chapter: 7,
       canCommit: false,
       blockingReasons: ["第 7 章还没有工作稿。"],
@@ -549,16 +550,16 @@ describe("projectAgentEvent", () => {
         nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
       },
     });
-    expect(msg.commitPreview?.canCommit).toBe(true);
-    expect(msg.nameConsistencyWarnings).toHaveLength(1);
+    expect(cardOf(msg, "commit-preview")?.preview?.canCommit).toBe(true);
+    expect(cardOf(msg, "name-drift")?.warnings).toHaveLength(1);
   });
 
-  it("status 事件（R4）→ 挂 statusNotes 照实展示，且不污染助手正文", () => {
+  it("status 事件（R4）→ 挂状态说明卡照实展示，且不污染助手正文", () => {
     const msg = project([
       { type: "status", text: "对话历史较长，本次只把最近 12 条发给模型。" },
       { type: "text-delta", text: "我看了一下。" },
     ]);
-    expect(msg.statusNotes).toEqual(["对话历史较长，本次只把最近 12 条发给模型。"]);
+    expect(cardOf(msg, "status-notes")?.notes).toEqual(["对话历史较长，本次只把最近 12 条发给模型。"]);
     expect(msg.content).toBe("我看了一下。");
   });
 
@@ -576,7 +577,7 @@ describe("projectAgentEvent", () => {
       { type: "status", text: "第一条说明。" },
       { type: "status", text: "第二条说明。" },
     ]);
-    expect(msg.statusNotes).toEqual(["第一条说明。", "第二条说明。"]);
+    expect(cardOf(msg, "status-notes")?.notes).toEqual(["第一条说明。", "第二条说明。"]);
   });
 
   it("generate_draft 出稿被拒(ok:false、无 snapshotId) → 步骤 failed 且不染「正文·草稿」徽标(M4)", () => {
@@ -777,25 +778,25 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
       { type: "tool-call", toolCallId: "ns-1", toolName: "suggest_next_steps", startedAt: 1 },
       { type: "tool-result", toolCallId: "ns-1", toolName: "suggest_next_steps", endedAt: 2, output: { ok: true, nextStepPrompt: prompt } },
     ]);
-    expect(message.nextStepPrompt).toEqual(prompt);
+    expect(cardOf(message, "next-steps")?.prompt).toEqual(prompt);
   });
 });
 
-describe("入库 delta 投影（commit_apply → message.commitReport）", () => {
-  it("入库成功带 commitReport → 挂到 message.commitReport", () => {
+describe("入库 delta 投影（commit_apply → message 的 commit-report 卡）", () => {
+  it("入库成功带 commitReport → 挂到 message 的 commit-report 卡", () => {
     const report = { updatedCharacters: ["c1"], timelineEventIds: [], updatedHooks: [] };
     const message = project([
       { type: "tool-call", toolCallId: "t1", toolName: "commit_apply", startedAt: 1 },
       { type: "tool-result", toolCallId: "t1", toolName: "commit_apply", endedAt: 2, output: { ok: true, commitReport: report } },
     ]);
-    expect(message.commitReport).toEqual(report);
+    expect(cardOf(message, "commit-report")?.report).toEqual(report);
   });
 
   it("入库未通过（无 commitReport）→ 不挂", () => {
     const message = project([
       { type: "tool-result", toolCallId: "t2", toolName: "commit_apply", endedAt: 2, output: { ok: false } },
     ]);
-    expect(message.commitReport).toBeUndefined();
+    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
   });
 });
 
@@ -812,7 +813,7 @@ describe("定稿待确认投影（模型发起的 commit_apply 只出「确认�
       },
     ]);
     expect(message.toolSteps?.[0]?.status).toBe("needs_confirmation");
-    expect(message.commitReport).toBeUndefined();
+    expect(cardOf(message, "commit-report")?.report).toBeUndefined();
     expect(message.suggestedActions).toEqual([
       expect.objectContaining({ id: "commit-apply", label: "确认定稿", commitTarget: { chapter: 4, previewToken: "t4" } }),
     ]);
@@ -897,14 +898,14 @@ describe("作者档按钮投影（重构 P4：「重写这一章」「确认改�
   });
 });
 
-describe("质检明细投影（quality_check → message.qualityReport）", () => {
-  it("带 qualityReport → 挂到 message.qualityReport", () => {
+describe("质检明细投影（quality_check → message 的 quality 卡）", () => {
+  it("带 qualityReport → 挂到 message 的 quality 卡", () => {
     const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };
     const message = project([
       { type: "tool-call", toolCallId: "q", toolName: "quality_check", startedAt: 1 },
       { type: "tool-result", toolCallId: "q", toolName: "quality_check", endedAt: 2, output: { ok: true, qualityReport: refined } },
     ]);
-    expect(message.qualityReport).toEqual(refined);
+    expect(cardOf(message, "quality")?.report).toEqual(refined);
   });
 });
 
