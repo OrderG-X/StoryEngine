@@ -43,6 +43,8 @@ export interface ImportBuild {
   readonly ledgers: readonly ChapterLedger[];
   /** 老账里手动作废、没写被谁取代的事实：导入成作者裁定「从第几章起不再成立」。 */
   readonly expiries: readonly ImportExpiry[];
+  /** 老账里的主线目标（scope = main_arc）：导入成作者裁定「这条重要」。 */
+  readonly majorThreads: readonly string[];
   readonly counts: ImportCounts;
   readonly skipped: readonly ImportSkip[];
   readonly adjusted: readonly ImportAdjustment[];
@@ -146,7 +148,11 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
     readonly closeAt?: number;
     readonly closeNote?: string;
     readonly evidence?: readonly string[];
+    readonly major?: boolean;
   }
+  // 老账的 stale：线索是清理工具判成没用、或合并时被并掉的；打算是放了几章没动、过期的；目标是搁置了的。
+  // 老代码一律不再当开着的读，导入成在最后一次提到的那章收掉（后文再推进，投影会重新打开）。
+  const STALE_NOTE = "旧账：不再追踪了";
   const sources: ThreadSource[] = [];
   data.threads.forEach((thread, index) => sources.push({
     file: LEGACY_FILES.threads,
@@ -157,7 +163,8 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
     note: thread.title,
     first: thread.firstSeenChapter,
     ...(thread.lastTouchedChapter !== undefined ? { last: thread.lastTouchedChapter } : {}),
-    ...(thread.status === "done" ? { closeAt: thread.lastTouchedChapter ?? thread.firstSeenChapter } : {}),
+    ...(thread.status === "done" || thread.status === "stale" ? { closeAt: thread.lastTouchedChapter ?? thread.firstSeenChapter } : {}),
+    ...(thread.status === "stale" ? { closeNote: STALE_NOTE } : {}),
     ...(thread.evidence ? { evidence: thread.evidence } : {}),
   }));
   data.hooks.forEach((hook, index) => {
@@ -185,9 +192,12 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
     note: goal.title,
     first: goal.firstSeenChapter,
     ...(goal.lastTouchedChapter !== undefined ? { last: goal.lastTouchedChapter } : {}),
-    ...(goal.status === "completed" ? { closeAt: goal.lastTouchedChapter ?? goal.firstSeenChapter } : {}),
+    ...(goal.status === "completed" || goal.status === "stale" ? { closeAt: goal.lastTouchedChapter ?? goal.firstSeenChapter } : {}),
+    ...(goal.status === "stale" ? { closeNote: STALE_NOTE } : {}),
     ...(goal.evidence ? { evidence: goal.evidence } : {}),
+    ...(goal.scope === "main_arc" ? { major: true } : {}),
   }));
+  const majorThreads: string[] = [];
   const threadIds = new Set<string>();
   for (const source of sources) {
     if (threadIds.has(source.id)) {
@@ -205,6 +215,7 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
       ...firstEvidenceIn(source.first, source.evidence),
     }, source.file, source.index)) continue;
     threadIds.add(source.id);
+    if (source.major) majorThreads.push(source.id);
     const closeAt = source.closeAt !== undefined && source.closeAt >= source.first ? source.closeAt : undefined;
     if (source.last !== undefined && source.last > source.first && source.last !== closeAt) {
       place(source.last, { kind: "thread", review: "auto", op: "advance", thread: source.id, note: source.title, ...firstEvidenceIn(source.last, source.evidence) }, source.file, source.index);
@@ -332,6 +343,7 @@ export function buildImportLedgers(data: LegacyData, texts: ReadonlyMap<number, 
   return {
     ledgers,
     expiries,
+    majorThreads,
     counts: { chapters: ledgers.length, ...counts, quotesDropped, factsWithoutKind },
     skipped,
     adjusted,

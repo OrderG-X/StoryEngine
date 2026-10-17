@@ -158,4 +158,32 @@ describe("导入老书", () => {
     expect(outcome.ok ? "" : outcome.message).toContain("story/threads.json");
     expect(await readAllLedgers(book)).toEqual([]);
   });
+  it("没有时间线文件：照老代码从章纲推天数；老账的 stale 收掉；主线目标记成重要", async () => {
+    for (const chapter of [1, 2, 3, 4]) await put(`chapters/000${chapter}.md`, `# 第${chapter}章\n\n第${chapter}章的正文，写了一些事。`);
+    await put("drafts/plans/chapter-0002.json", { storyDay: 5 });
+    await put("drafts/plans/chapter-0003.json", { storyDay: "七" });
+    await put("story/threads.json", {
+      threads: [
+        { id: "lead-junk", type: "lead", title: "清理掉的线索", status: "stale", firstSeenChapter: 1, lastTouchedChapter: 2 },
+        { id: "lead-open", type: "lead", title: "开着的线索", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1 },
+      ],
+    });
+    await put("story/arc-goals.json", {
+      goals: [
+        { id: "goal-main", title: "主线目标", status: "touched", scope: "main_arc", firstSeenChapter: 1, lastTouchedChapter: 3 },
+        { id: "goal-mini", title: "阶段目标", status: "stale", scope: "mini_arc", firstSeenChapter: 1, lastTouchedChapter: 1 },
+      ],
+    });
+    const outcome = ok(await run());
+    expect(outcome.result.counts).toMatchObject({ majorThreads: 1 });
+    const view = await projectBook(book);
+    // 第 1 章没章纲 → 第 1 天；第 2 章章纲第 5 天；第 3 章章纲写坏了 → 上一章 +1；第 4 章 +1。
+    expect(view.chapters.map((chapter) => chapter.day)).toEqual([1, 5, 6, 7]);
+    const byId = new Map(view.threads.map((thread) => [thread.id, thread]));
+    expect(byId.get("lead-junk")).toMatchObject({ status: "closed", closedAt: 2 });
+    expect(byId.get("lead-junk")?.touches.at(-1)?.note).toBe("旧账：不再追踪了");
+    expect(byId.get("lead-open")?.status).not.toBe("closed");
+    expect(byId.get("goal-main")).toMatchObject({ weight: "major" });
+    expect(byId.get("goal-mini")).toMatchObject({ status: "closed", weight: "normal" });
+  });
 });

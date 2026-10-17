@@ -17,7 +17,7 @@ export const BookImportArgs = z.object({});
 export type BookImportArgs = z.infer<typeof BookImportArgs>;
 
 export interface BookImportResult {
-  readonly counts: ImportCounts & { readonly expiries: number };
+  readonly counts: ImportCounts & { readonly expiries: number; readonly majorThreads: number };
   readonly skipped: readonly ImportSkip[];
   readonly adjusted: readonly ImportAdjustment[];
 }
@@ -44,23 +44,24 @@ export const bookImport: WriteCommandSpec<BookImportArgs, BookImportResult> = {
     const at = context.now.toISOString();
     const built = buildImportLedgers(legacy, texts, at);
     const writes = built.ledgers.map((ledger) => ({ path: chapterLedgerPath(ledger.chapter), content: `${JSON.stringify(ledger, null, 2)}\n` }));
-    if (built.expiries.length > 0) {
+    const decisionInputs: Omit<AuthorDecision, "id" | "at">[] = [
+      ...built.expiries.map((expiry) => ({ type: "fact.expire" as const, fact: expiry.fact, chapter: expiry.chapter, note: "老书导入：旧账在这章作废了它" })),
+      ...built.majorThreads.map((thread) => ({ type: "thread.weight" as const, thread, weight: "major" as const })),
+    ];
+    if (decisionInputs.length > 0) {
       const existing = await readDecisions(context.bookDir);
-      const decisions: AuthorDecision[] = built.expiries.map((expiry, index) => ({
-        type: "fact.expire",
-        fact: expiry.fact,
-        chapter: expiry.chapter,
-        note: "老书导入：旧账在这章作废了它",
-        id: `d-${existing.length + index + 1}`,
-        at,
-      }));
+      const decisions = decisionInputs.map((input, index) => ({ ...input, id: `d-${existing.length + index + 1}`, at }) as AuthorDecision);
       writes.push({ path: DECISIONS_PATH, content: decisionsFileText([...existing, ...decisions]) });
     }
     return {
       label: "导入老书的账",
       writes,
-      changed: { ledgers: built.ledgers.map((ledger) => ledger.chapter), ...(built.expiries.length > 0 ? { decisions: true } : {}) },
-      result: { counts: { ...built.counts, expiries: built.expiries.length }, skipped: built.skipped, adjusted: built.adjusted },
+      changed: { ledgers: built.ledgers.map((ledger) => ledger.chapter), ...(decisionInputs.length > 0 ? { decisions: true } : {}) },
+      result: {
+        counts: { ...built.counts, expiries: built.expiries.length, majorThreads: built.majorThreads.length },
+        skipped: built.skipped,
+        adjusted: built.adjusted,
+      },
     };
   },
 };

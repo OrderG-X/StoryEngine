@@ -6,7 +6,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { BookFileError } from "../store/book.js";
+import { BookFileError, listChapterTexts } from "../store/book.js";
 
 const text = z.string().trim().min(1);
 const chapter = z.number().int().min(1);
@@ -50,6 +50,7 @@ export const LegacyGoal = z.object({
   id: text,
   title: text,
   status: z.string(),
+  scope: z.string().optional(),
   firstSeenChapter: chapter,
   lastTouchedChapter: z.number().int().optional(),
   evidence: z.array(z.string()).optional(),
@@ -107,6 +108,8 @@ export interface LegacyData {
   readonly hooks: readonly LegacyHook[];
   readonly goals: readonly LegacyGoal[];
   readonly timeline: readonly LegacyTimelineEntry[];
+  /** 书里没有时间线文件，时间线是照老代码的办法从章纲天数推的（定稿的章：章纲写了天数就用，没写就上一章 +1）。 */
+  readonly timelineFromPlans: boolean;
   readonly events: readonly LegacyEvent[];
   readonly matrix: readonly LegacyMatrixEntry[];
   readonly aliases: readonly LegacyAliasEntry[];
@@ -121,6 +124,7 @@ export const LEGACY_FILES = {
   hooks: "story/hooks.json",
   goals: "story/arc-goals.json",
   timeline: "story/timeline.json",
+  plans: "drafts/plans",
   events: "timeline/events.json",
   matrix: "story/character-matrix.json",
   bible: "story/character-bible.json",
@@ -140,6 +144,24 @@ async function readJson(bookDir: string, file: string): Promise<unknown> {
   } catch {
     throw new BookFileError(file, "不是合法的 JSON，没法导入（先修好或删掉这个文件）");
   }
+}
+
+/**
+ * 老书没有 story/timeline.json 时，老代码读的时间线是现推的（deriveTimelineFromLegacy）：
+ * 定稿的章按顺序，章纲（drafts/plans/chapter-NNNN.json 的 storyDay）写了天数就用，没写就上一章 +1。
+ * 照同样的办法推出来，导入后投影算出的天数才和作者在老界面上看到的一样。
+ */
+async function timelineFromPlans(bookDir: string): Promise<LegacyTimelineEntry[]> {
+  const entries: LegacyTimelineEntry[] = [];
+  let previous: number | undefined;
+  for (const chapter of await listChapterTexts(bookDir)) {
+    const plan = (await readJson(bookDir, `${LEGACY_FILES.plans}/chapter-${String(chapter).padStart(4, "0")}.json`).catch(() => undefined)) as { storyDay?: unknown } | undefined;
+    const planned = typeof plan?.storyDay === "number" && Number.isInteger(plan.storyDay) && plan.storyDay >= 1 ? plan.storyDay : undefined;
+    const day = planned ?? (previous === undefined ? 1 : previous + 1);
+    entries.push({ chapter, day, source: planned === undefined ? "fallback" : "plan" });
+    previous = day;
+  }
+  return entries;
 }
 
 /** 从文件里取出那个列表；每条按 schema 收，坏的记进 skipped。 */
@@ -201,7 +223,8 @@ export async function readLegacyData(bookDir: string): Promise<LegacyData> {
     threads: collect(LEGACY_FILES.threads, threads, "threads", LegacyThread, skipped),
     hooks: collect(LEGACY_FILES.hooks, hooks, "hooks", LegacyHook, skipped),
     goals: collect(LEGACY_FILES.goals, goals, "goals", LegacyGoal, skipped),
-    timeline: collect(LEGACY_FILES.timeline, timeline, "entries", LegacyTimelineEntry, skipped),
+    timeline: timeline === undefined ? await timelineFromPlans(bookDir) : collect(LEGACY_FILES.timeline, timeline, "entries", LegacyTimelineEntry, skipped),
+    timelineFromPlans: timeline === undefined,
     events: collect(LEGACY_FILES.events, Array.isArray(events) ? events : (events as { events?: unknown } | undefined)?.events, undefined, LegacyEvent, skipped),
     matrix: collect(LEGACY_FILES.matrix, matrix, "entries", LegacyMatrixEntry, skipped),
     aliases: aliases === undefined
