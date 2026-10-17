@@ -28,10 +28,6 @@ import { applyCommitToolLogic } from "./commit-apply.js";
 import { buildCommitPreviewToolOutput } from "./commit-preview.js";
 import { __resetCommitPreviewStore } from "./commit-preview-store.js";
 
-// 入库后抽硬事实会真连 LLM——单测 mock 掉，保确定性
-vi.mock("../fact-ledger/fact-ledger.js", () => ({
-  extractAndAppendFacts: vi.fn(async () => ({ ok: true, added: 0, summary: "", newCharacters: [] })),
-}));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

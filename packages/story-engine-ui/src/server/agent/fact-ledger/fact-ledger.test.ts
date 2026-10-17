@@ -2,55 +2,17 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   appendFacts,
   applyFactEdit,
-  buildFactExtractionMessages,
-  extractAndAppendFacts,
-  parseFactExtraction,
   readFactLedger,
   validateNewCharacterNames,
 } from "./fact-ledger.js";
 
 const tmp = () => mkdtemp(join(tmpdir(), "fl-"));
 
-describe("fact-ledger 抽取/解析", () => {
-  it("buildFactExtractionMessages：含禁臆造/只抽正文真有/JSON-only，user 带正文", () => {
-    const m = buildFactExtractionMessages("第七章正文……");
-    expect(m[0].content).toContain("禁");
-    expect(m[0].content).toMatch(/承诺|交易|金额/);
-    expect(m[0].content).toContain("空数组");
-    expect(m[1].content).toContain("第七章正文");
-  });
-  it("parseFactExtraction：抠 JSON、空 facts 合法、非 JSON 抛", () => {
-    expect(parseFactExtraction('好的：{"facts":[{"text":"收3块、私下"}]}').facts).toEqual(["收3块、私下"]);
-    expect(parseFactExtraction('{"facts":[]}').facts).toEqual([]);
-    expect(() => parseFactExtraction("不是JSON")).toThrow();
-  });
-});
-
 describe("fact-ledger · newCharacters（停脏+告知 第一步）", () => {
-  it("parseFactExtraction：解析出 facts 与 newCharacters 两段", () => {
-    const out = parseFactExtraction(
-      '{"facts":[{"text":"林远转了3亿到离岸账户"}],"newCharacters":[{"name":"林静"}]}',
-    );
-    expect(out.facts).toEqual(["林远转了3亿到离岸账户"]);
-    expect(out.newCharacters).toEqual(["林静"]);
-  });
-
-  it("parseFactExtraction：旧格式（无 newCharacters）向后兼容 → 空", () => {
-    const out = parseFactExtraction('{"facts":[{"text":"约定私下交割"}]}');
-    expect(out.facts).toEqual(["约定私下交割"]);
-    expect(out.newCharacters).toEqual([]);
-  });
-
-  it("buildFactExtractionMessages：已知角色名喂进 prompt", () => {
-    const [, user] = buildFactExtractionMessages("正文……", ["林远", "李慧"]);
-    expect(user.content).toContain("林远");
-    expect(user.content).toContain("李慧");
-  });
-
   it("validateNewCharacterNames：留真名、丢畸形、排已知、去重", () => {
     const out = validateNewCharacterNames(
       ["林静", "林远", "", "这是一个很长的名字", "林 静", "李慧。", "周明", "周明"],
@@ -59,32 +21,6 @@ describe("fact-ledger · newCharacters（停脏+告知 第一步）", () => {
     expect(out).toEqual(["林静", "周明"]);
   });
 
-  it("extractAndAppendFacts：返回校验后的 newCharacters（排已知）", async () => {
-    const dir = await tmp();
-    const out = await extractAndAppendFacts({
-      projectDir: dir,
-      chapter: 1,
-      draftText: "林远见了林静。",
-      knownNames: ["林远"],
-      callModel: async () => '{"facts":[],"newCharacters":[{"name":"林静"},{"name":"林远"}]}',
-    });
-    expect(out.ok).toBe(true);
-    expect(out.newCharacters).toEqual(["林静"]);
-  });
-
-  it("extractAndAppendFacts：模型失败 → ok:false、newCharacters 空、不编造", async () => {
-    const dir = await tmp();
-    const out = await extractAndAppendFacts({
-      projectDir: dir,
-      chapter: 1,
-      draftText: "正文……",
-      callModel: async () => {
-        throw new Error("boom");
-      },
-    });
-    expect(out.ok).toBe(false);
-    expect(out.newCharacters).toEqual([]);
-  });
 });
 
 describe("fact-ledger 读写", () => {
@@ -161,58 +97,6 @@ describe("fact-ledger 读写", () => {
     const multi = await applyFactEdit(dir, "supersede", { targetText: "资金被冻结", chapter: 9 });
     expect(multi.ok).toBe(false); // 多条匹配 → 不猜
     expect(multi.summary).toContain("多条");
-  });
-});
-
-describe("extractAndAppendFacts 编排", () => {
-  it("有稿 → 调模型抽取 → 写盘 + 摘要带条数", async () => {
-    const dir = await tmp();
-    const callModel = vi.fn(async () => JSON.stringify({ facts: [{ text: "收3块、私下" }] }));
-    const r = await extractAndAppendFacts({ projectDir: dir, chapter: 7, draftText: "正文", callModel });
-    expect(r).toMatchObject({ ok: true, added: 1 });
-    expect(r.summary).toContain("1 条");
-    expect((await readFactLedger(dir)).facts).toHaveLength(1);
-  });
-  it("空稿 → 不抽、不报错", async () => {
-    const dir = await tmp();
-    const callModel = vi.fn();
-    const r = await extractAndAppendFacts({ projectDir: dir, chapter: 1, draftText: "   ", callModel });
-    expect(r).toMatchObject({ ok: true, added: 0 });
-    expect(callModel).not.toHaveBeenCalled();
-  });
-  it("模型/解析失败 → 自动重试一次；仍失败非致命：ok:false + 如实说明，不抛", async () => {
-    const dir = await tmp();
-    const callModel = vi.fn(async () => "模型挂了不是JSON");
-    const r = await extractAndAppendFacts({ projectDir: dir, chapter: 1, draftText: "正文", callModel });
-    expect(callModel).toHaveBeenCalledTimes(2);
-    expect(r.ok).toBe(false);
-    expect(r.summary).toContain("已自动重试一次");
-    expect(r.summary).not.toContain("可让我重抽"); // 没有能重抽的工具，不许这么许诺
-  });
-  it("第一次失败、重试成功 → 照常写盘", async () => {
-    const dir = await tmp();
-    const callModel = vi.fn()
-      .mockRejectedValueOnce(new Error("socket hang up"))
-      .mockResolvedValueOnce(JSON.stringify({ facts: [{ text: "南门菜场十年前就拆了" }] }));
-    const r = await extractAndAppendFacts({ projectDir: dir, chapter: 4, draftText: "正文", callModel });
-    expect(r).toMatchObject({ ok: true, added: 1 });
-  });
-});
-
-describe("parseFactExtraction 宽进（模型无关）", () => {
-  // 2026-10-08 十章验收第 8 章：旧 strict schema 下模型多给一个键，整章一条事实都没记上。
-  it("条目多给键 / 顶层多给键 → 照收，多余的丢掉", () => {
-    const out = parseFactExtraction(JSON.stringify({
-      facts: [{ text: "登记表上地址是南门槐树巷十七号", chapter: 4, importance: "high" }],
-      newCharacters: [{ name: "沈秀英", role: "配角" }],
-      note: "多余的顶层键",
-    }));
-    expect(out.facts).toEqual(["登记表上地址是南门槐树巷十七号"]);
-    expect(out.newCharacters).toEqual(["沈秀英"]);
-  });
-  it("条目给成纯字符串也收；坏条目逐条丢，不连坐整章", () => {
-    const out = parseFactExtraction(JSON.stringify({ facts: ["座钟已修好送回周婶", 42, { text: "" }, { text: "车胎已补好" }] }));
-    expect(out.facts).toEqual(["座钟已修好送回周婶", "车胎已补好"]);
   });
 });
 

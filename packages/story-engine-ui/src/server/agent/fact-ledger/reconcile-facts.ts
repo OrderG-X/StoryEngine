@@ -10,7 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import { absolutizeRelativeDaysInText, selectEffectiveFacts, type ChapterFactUpdate, type StoryTimeline } from "@actalk/story-engine";
-import { readFactLedger, appendFacts, applyFactEdit, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
+import { readFactLedger, validateNewCharacterNames, type FactCallModel, type FactEntry } from "./fact-ledger.js";
 
 const RELATED_FACT_CAP = 40;
 const RETRIES = 1;
@@ -148,38 +148,6 @@ function hanBigrams(text: string): readonly string[] {
     for (let i = 0; i + 1 < chars.length; i += 1) out.push(chars[i] + chars[i + 1]);
   }
   return out;
-}
-
-const RELATIVE_DAY_WORDS: readonly (readonly [RegExp, number, string])[] = [
-  [/大前天/gu, -3, ""],
-  // 「目前天气」「眼前天色」「然后天亮」里的前天 / 后天不是日子。
-  [/(?<![目眼面跟门提当之以空从向往日])前天/gu, -2, ""],
-  [/昨晚|昨夜/gu, -1, "晚上"],
-  [/昨天|昨日/gu, -1, ""],
-  [/今晚/gu, 0, "晚上"],
-  [/今天|今日/gu, 0, ""],
-  [/明早/gu, 1, "早上"],
-  [/明晚/gu, 1, "晚上"],
-  [/明天|明日/gu, 1, ""],
-  [/大后天/gu, 3, ""],
-  [/(?<![然最之以随此其落背身先午稍过])后天/gu, 2, ""],
-];
-
-/**
- * 事实里的「昨天 / 明天」换成故事第几天（第二十一轮：要求模型换，169 条里一条没换、30 条留着相对说法——
- * 过几章再读，「明天来」已不知是哪天）。本章天数未知就原样。
- */
-export function absolutizeRelativeDays(text: string, storyDay: number | undefined): string {
-  if (!storyDay) return text;
-  let out = text;
-  for (const [pattern, delta, suffix] of RELATIVE_DAY_WORDS) {
-    const day = storyDay + delta;
-    if (day < 1) continue;
-    out = out.replace(pattern, `故事第${day}天${suffix}`);
-  }
-  // 模型自己已写了「明天（故事第 2 天）」时换完会叠成「故事第2天（故事第2天）」（第二十二轮账本残渣）。
-  // 也有「故事第13天上午（故事第13天）」——括号前多了个时段（浏览器试写第 8 章账本）。
-  return out.replace(/(故事第\s*(\d+)\s*天(?:早上|上午|中午|下午|傍晚|晚上|夜里|凌晨)?)\s*[（(]\s*故事第\s*\2\s*天\s*[）)]/gu, "$1");
 }
 
 /**
@@ -444,54 +412,4 @@ export function toChapterFactUpdate(proposal: FactProposal | undefined, exclusio
 /** 事实文字里的日子按时间线换成「故事第 N 天（周X）」（today = 本章是第几天）。只换显示 / 入账的文字，条目钥匙仍按原文算。 */
 export function withTimelineDates(text: string, timelineDay: { readonly today: number; readonly timeline: StoryTimeline } | undefined): string {
   return timelineDay ? absolutizeRelativeDaysInText(text, timelineDay.today, timelineDay.timeline) : text;
-}
-
-/** 把提案写进账本（去掉作者排除的条目）。 */
-export async function applyFactProposal(
-  projectDir: string,
-  chapter: number,
-  proposal: FactProposal,
-  exclusions: FactProposalExclusions = {},
-  timelineDay?: { readonly today: number; readonly timeline: StoryTimeline },
-): Promise<ReconcileFactsResult> {
-  if (!proposal.ok) {
-    return { ok: false, added: 0, superseded: [], conflicts: [], newCharacters: [], summary: proposal.failureSummary ?? "" };
-  }
-  const adds = proposal.adds.filter((fact) => !exclusions.adds?.has(factKey(fact.text)));
-  const changes = proposal.changes.filter((change) => !exclusions.changes?.has(change.factId));
-  const added = await appendFacts(projectDir, chapter, [
-    ...adds.map((fact) => withTimelineDates(fact.text, timelineDay)),
-    ...changes.map((change) => withTimelineDates(change.newText, timelineDay)),
-  ], "auto");
-  // 变化：旧条从本章起失效（原文保留、可撤销）。新说法已随上面一起入账。
-  const superseded: string[] = [];
-  for (const change of changes) {
-    const edited = await applyFactEdit(projectDir, "supersede", { id: change.factId, chapter });
-    if (edited.ok) superseded.push(change.oldText);
-  }
-  // 要确认的改记（R7.4）：这一路没有清单可勾，一律不作数，折成「和旧设定对不上」交给作者定——绝不自动作废。
-  const conflicts = [...proposal.conflicts];
-  for (const change of proposal.changesToConfirm ?? []) {
-    conflicts.push({
-      old: `第${change.oldChapter}章「${change.oldText}」`,
-      quote: change.quote,
-      note: change.why === "hard"
-        ? `本章说「${change.newText}」，旧条是不该变的事实，没有自动作废——要改记请明确说一声`
-        : `本章说「${change.newText}」，和旧条说的不是同一件事，没有自动作废——要改记请明确说一声`,
-    });
-  }
-  const skipped = proposal.adds.length - adds.length + proposal.changes.length - changes.length;
-  const result = { added, superseded, conflicts, newCharacters: proposal.newCharacters };
-  return { ok: true, ...result, summary: `${describe(result)}${skipped > 0 ? `你去掉的 ${skipped} 条没记。` : ""}` };
-}
-
-export async function extractAndReconcileFacts(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly draftText: string;
-  readonly callModel: FactCallModel;
-  readonly knownNames?: readonly string[];
-  readonly timelineDay?: { readonly today: number; readonly timeline: StoryTimeline };
-}): Promise<ReconcileFactsResult> {
-  return applyFactProposal(input.projectDir, input.chapter, await proposeFactChanges(input), {}, input.timelineDay);
 }

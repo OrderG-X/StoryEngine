@@ -12,7 +12,6 @@
     "build:server": "esbuild src/server/standalone-entry.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
     "build:desktop": "pnpm run build && pnpm run build:server",
     "serve": "node dist-server/server.mjs",
-    "smoke:longform": "node scripts/longform-regression-smoke.mjs",
     "pretypecheck": "corepack pnpm --filter @actalk/story-engine build",
     "test": "node ../../tools/guards/check-no-guess.mjs && node ../../tools/guards/check-boundaries.mjs && node ../../test-tools/run-vitest.mjs run",
     "typecheck": "tsc --noEmit"

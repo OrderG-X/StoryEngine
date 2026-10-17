@@ -20,10 +20,6 @@ vi.mock("../brain/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../brain/index.js")>()),
   warmUpReaders: brainMocks.warmUpReaders,
 }));
-// 入库后抽硬事实会真连模型网络——非致命附加步骤，mock 掉（同 commit-apply.test.ts）。
-vi.mock("../agent/fact-ledger/fact-ledger.js", () => ({
-  extractAndAppendFacts: vi.fn(async () => ({ ok: true, added: 0, summary: "", newCharacters: [] })),
-}));
 
 import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
 import { __resetCommitPreviewStore } from "../agent/tools/commit-preview-store.js";

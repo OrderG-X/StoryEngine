@@ -24,13 +24,11 @@ vi.mock("./undo-last-change.js", () => ({ undoLastChangeTool: fakeTool("undo_las
 vi.mock("./prune-snapshots.js", () => ({ pruneSnapshotsTool: fakeTool("prune_snapshots") }));
 
 import { enrichFoundationTool } from "./enrich-foundation.js";
-import { manageThreadsTool } from "./manage-threads.js";
 import { manageLedgerTool } from "./manage-ledger.js";
 import { manageSnapshotsTool } from "./manage-snapshots.js";
 
 type Exec = (input: Record<string, unknown>, context: unknown) => Promise<Record<string, unknown>>;
 const enrich = enrichFoundationTool.execute as unknown as Exec;
-const threads = manageThreadsTool.execute as unknown as Exec;
 const ledger = manageLedgerTool.execute as unknown as Exec;
 const snapshots = manageSnapshotsTool.execute as unknown as Exec;
 
@@ -44,20 +42,6 @@ describe("合并入口（2026-10-10 对话 AI 瘦身）", () => {
     expect(calls.at(-1)).toEqual({ tool: "generate_worldbuilding", args: { premise: "八十年代南方小城" } });
     await enrich({ kind: "aliases" }, {});
     expect(calls.at(-1)).toEqual({ tool: "generate_alias_table", args: {} });
-  });
-
-  it("manage_threads 按 op 转给原工具；缺参数如实说缺什么、不调原工具", async () => {
-    calls.length = 0;
-    await threads({ op: "resolve", query: "安保盘问" }, {});
-    expect(calls).toEqual([{ tool: "resolve_thread", args: { query: "安保盘问" } }]);
-    await threads({ op: "importance", id: "hook-3", importance: "major" }, {});
-    expect(calls.at(-1)).toEqual({ tool: "set_foreshadowing_importance", args: { id: "hook-3", importance: "major" } });
-    await threads({ op: "clean" }, {});
-    expect(calls.at(-1)?.tool).toBe("clean_legacy_threads");
-    const before = calls.length;
-    expect(await threads({ op: "resolve" }, {})).toMatchObject({ ok: false });
-    expect(await threads({ op: "importance", id: "hook-3" }, {})).toMatchObject({ ok: false });
-    expect(calls.length).toBe(before);
   });
 });
 

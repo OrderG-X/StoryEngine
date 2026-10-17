@@ -1,7 +1,4 @@
 import type {
-  ChapterChatApiResponse,
-  ChapterChatRequest,
-  ChapterChatResponse,
   ChapterWorkspaceApiResponse,
   ChapterWorkspaceRequest,
   ChapterWorkspaceSnapshot,
@@ -9,13 +6,6 @@ import type {
   ChapterSteeringDraft,
   ChapterSteeringRequest,
   BookFileActionApiResponse,
-  CommitApplyApiResponse,
-  CommitApplySuccessResult,
-  CommitPreviewApiResponse,
-  CommitPreviewRequest,
-  FormalCommitPreviewRouteResult,
-  CommitPreviewTransactionMetadata,
-  CommitRequest,
   CreateProjectApiResponse,
   CreateProjectRequest,
   DraftAIReviewApiResponse,
@@ -34,23 +24,6 @@ import type {
   DraftQualityApiResponse,
   DraftQualityReport,
   DraftQualityRequest,
-  FoundationGapApplyApiResponse,
-  FoundationGapAppliedWrite,
-  FoundationGapApplyPlan,
-  FoundationGapSkippedWrite,
-  FoundationGapRollbackApiResponse,
-  FoundationGapChatApiResponse,
-  FoundationGapChatMessageInput,
-  FoundationGapChatResult,
-  FoundationGapConfirmCharacterStateWriteApiResponse,
-  FoundationGapConfirmCharacterStateWriteRequest,
-  FoundationGapConfirmCharacterStateWriteResult,
-  FoundationGapDecision,
-  FoundationGapPreviewApiResponse,
-  FoundationGapReport,
-  FoundationGapReportApiResponse,
-  FoundationGapSuggestion,
-  FoundationGapSuggestionsApiResponse,
   GenerateDraftRequest,
   DeleteBookRequest,
   RenameBookRequest,
@@ -68,59 +41,6 @@ import type {
 } from "./types.js";
 import { FetchJsonError, fetchJson, mergeSignals } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
-
-export const FOUNDATION_GAP_CHAT_TIMEOUT_MS = 60_000;
-export const FOUNDATION_GAP_APPLY_TIMEOUT_MS = 60_000;
-export const FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE = "资料处理超时，未写入任何文件。请重试。";
-export const FOUNDATION_GAP_APPLY_TIMEOUT_MESSAGE = "资料写入超时，未确认完成。请先刷新资料后再重试。";
-
-function createTimeoutSignal(input: {
-  readonly signal?: AbortSignal;
-  readonly timeoutMs: number;
-  readonly message: string;
-}): { readonly signal: AbortSignal; readonly cleanup: () => void; readonly didTimeout: () => boolean } {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeoutId = globalThis.setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error(input.message));
-  }, input.timeoutMs);
-  const abortFromUser = () => controller.abort(input.signal?.reason);
-  if (input.signal?.aborted) {
-    abortFromUser();
-  } else {
-    input.signal?.addEventListener("abort", abortFromUser, { once: true });
-  }
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      globalThis.clearTimeout(timeoutId);
-      input.signal?.removeEventListener("abort", abortFromUser);
-    },
-    didTimeout: () => timedOut,
-  };
-}
-
-async function withEndpointTimeout<T>(
-  request: (signal: AbortSignal) => Promise<T>,
-  input: {
-    readonly signal?: AbortSignal;
-    readonly timeoutMs: number;
-    readonly message: string;
-  },
-): Promise<T> {
-  const timeout = createTimeoutSignal(input);
-  try {
-    return await request(timeout.signal);
-  } catch (error) {
-    if (timeout.didTimeout()) {
-      throw new Error(input.message);
-    }
-    throw error;
-  } finally {
-    timeout.cleanup();
-  }
-}
 
 
 // ---------------------------------------------------------------------------
@@ -297,167 +217,7 @@ export async function restoreSnapshotApi(projectPath: string, id: string, signal
   }
 }
 
-export async function fetchFoundationGapReport(projectPath: string, signal?: AbortSignal): Promise<FoundationGapReport> {
-  const params = new URLSearchParams({ project: projectPath });
-  const payload = await fetchJson<FoundationGapReportApiResponse>(
-    `/api/foundation-gaps/report?${params.toString()}`,
-    {},
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.report;
-}
-
-export async function fetchFoundationGapSuggestions(projectPath: string, signal?: AbortSignal): Promise<{ readonly report: FoundationGapReport; readonly suggestions: readonly FoundationGapSuggestion[] }> {
-  const payload = await fetchJson<FoundationGapSuggestionsApiResponse>(
-    "/api/foundation-gaps/suggestions",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectPath }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return { report: payload.report, suggestions: payload.suggestions };
-}
-
-export async function previewFoundationGapApply(
-  projectPath: string,
-  decisions: readonly FoundationGapDecision[],
-  currentSuggestions?: readonly FoundationGapSuggestion[],
-  signal?: AbortSignal,
-): Promise<FoundationGapApplyPlan> {
-  const payload = await fetchJson<FoundationGapPreviewApiResponse>(
-    "/api/foundation-gaps/preview",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectPath, decisions, currentSuggestions }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.plan;
-}
-
-export async function applyFoundationGapDecisions(
-  projectPath: string,
-  decisions: readonly FoundationGapDecision[],
-  currentSuggestions?: readonly FoundationGapSuggestion[],
-  signal?: AbortSignal,
-): Promise<{ readonly plan: FoundationGapApplyPlan; readonly writes: readonly FoundationGapAppliedWrite[]; readonly skippedWrites: readonly FoundationGapSkippedWrite[]; readonly overview: StateOverview; readonly undo?: { readonly undoId: string; readonly changedFiles: readonly string[] } }> {
-  const payload = await withEndpointTimeout(
-    (requestSignal) => fetchJson<FoundationGapApplyApiResponse>(
-      "/api/foundation-gaps/apply",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ projectPath, decisions, currentSuggestions, confirm: true }),
-      },
-      requestSignal,
-    ),
-    {
-      signal,
-      timeoutMs: FOUNDATION_GAP_APPLY_TIMEOUT_MS,
-      message: FOUNDATION_GAP_APPLY_TIMEOUT_MESSAGE,
-    },
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return { plan: payload.result.plan, writes: payload.result.writes ?? [], skippedWrites: payload.result.skippedWrites ?? [], overview: payload.result.overview, undo: payload.result.undo };
-}
-
-export async function rollbackFoundationGapApply(
-  projectPath: string,
-  undoId: string,
-  signal?: AbortSignal,
-): Promise<{ readonly undoId: string; readonly restoredFiles: readonly string[]; readonly overview: StateOverview }> {
-  const payload = await fetchJson<FoundationGapRollbackApiResponse>(
-    "/api/foundation-gaps/rollback",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectPath, undoId }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.result;
-}
-
-export async function confirmFoundationGapCharacterStateWrite(
-  input: FoundationGapConfirmCharacterStateWriteRequest,
-  signal?: AbortSignal,
-): Promise<FoundationGapConfirmCharacterStateWriteResult> {
-  const payload = await fetchJson<FoundationGapConfirmCharacterStateWriteApiResponse>(
-    "/api/foundation-gaps/confirm-character-write",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    return payload.result;
-  }
-  return payload.result;
-}
-
-export async function chatFoundationGapAssistant(
-  input: {
-    readonly projectPath: string;
-    readonly userMessage: string;
-    readonly currentReport?: FoundationGapReport | null;
-    readonly currentSuggestions?: readonly FoundationGapSuggestion[];
-    readonly currentDecisions?: Readonly<Record<string, FoundationGapDecision["decision"]>>;
-    readonly currentDraft?: FoundationGapSuggestion | null;
-    readonly currentIntent?: string | null;
-    readonly selectedCategory?: string | null;
-    readonly chatHistory?: readonly FoundationGapChatMessageInput[];
-    readonly currentDraftContent?: string | null;
-    /** triage 分诊出的归档请求：走决断式直接抽取落盘模式（区别于交互面板的先问体验）。 */
-    readonly directArchive?: boolean;
-  },
-  signal?: AbortSignal,
-): Promise<FoundationGapChatResult> {
-  const payload = await withEndpointTimeout(
-    (requestSignal) => fetchJson<FoundationGapChatApiResponse>(
-      "/api/foundation-gaps/chat",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      },
-      requestSignal,
-    ),
-    {
-      signal,
-      timeoutMs: FOUNDATION_GAP_CHAT_TIMEOUT_MS,
-      message: FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE,
-    },
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.result;
-}
-
 import type { BookSummary } from "../types.js";
-
-export async function fetchListDefaultBooks(signal?: AbortSignal): Promise<BookSummary[]> {
-  return (await fetchDefaultBookLibrary(signal)).books;
-}
 
 /** 默认书库扫描：最近的书 + 书库根目录 + 盘上实际存在的全部书目录（判断书架上哪些已经不在了）。 */
 export async function fetchDefaultBookLibrary(signal?: AbortSignal): Promise<{
@@ -803,136 +563,8 @@ export async function applyDeAiFlavorBatch(
   return { result: payload.result, summary: payload.summary, draftContent: payload.draftContent, ...(payload.snapshotId ? { snapshotId: payload.snapshotId } : {}) };
 }
 
-export async function previewCommit(
-  input: CommitPreviewRequest,
-  signal?: AbortSignal,
-): Promise<{
-  readonly commitPlan: unknown;
-  readonly draftQuality: DraftQualityReport;
-  readonly semanticQuality?: DraftQualityReport;
-  readonly transaction: CommitPreviewTransactionMetadata;
-  readonly transactionId: string;
-  readonly previewHash: string;
-  readonly formalCommitPreview: FormalCommitPreviewRouteResult;
-}> {
-  const body = {
-    projectPath: input.projectPath,
-    chapter: input.chapter,
-    ...(input.selectiveConfirmation ? { selectiveConfirmation: input.selectiveConfirmation } : {}),
-    ...(input.workspaceDraftId ? { workspaceDraftId: input.workspaceDraftId } : {}),
-    ...(input.baseHash ? { baseHash: input.baseHash } : {}),
-    ...(input.previewHash ? { previewHash: input.previewHash } : {}),
-    ...(input.readinessStatus ? { readinessStatus: input.readinessStatus } : {}),
-    ...(input.requestId ? { requestId: input.requestId } : {}),
-  };
-  const payload = await fetchJson<CommitPreviewApiResponse>(
-    "/api/commit/preview",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return {
-    commitPlan: payload.commitPlan,
-    draftQuality: payload.draftQuality,
-    semanticQuality: payload.semanticQuality,
-    transaction: payload.transaction,
-    transactionId: payload.transactionId,
-    previewHash: payload.previewHash,
-    formalCommitPreview: payload.formalCommitPreview,
-  };
-}
-
-export async function applyCommit(
-  input: CommitRequest,
-  signal?: AbortSignal,
-): Promise<CommitApplySuccessResult> {
-  const payload = await fetchJson<CommitApplyApiResponse>(
-    "/api/commit/apply",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, confirm: true }),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw createApiPayloadError(payload);
-  }
-  return payload;
-}
-
-function createApiPayloadError(payload: unknown): Error & { readonly payload?: unknown } {
-  return Object.assign(new Error(buildApiPayloadErrorMessage(payload)), { payload });
-}
-
-function buildApiPayloadErrorMessage(payload: unknown): string {
-  const details = apiPayloadErrorDetails(payload);
-  if (details.length === 0) return "API request failed";
-  return details.join(" ");
-}
-
-function apiPayloadErrorDetails(payload: unknown): readonly string[] {
-  if (!isRecord(payload)) return [];
-  return uniqueApiPayloadStrings([
-    readApiPayloadString(payload.error),
-    readApiPayloadString(payload.reason),
-    nestedApiPayloadString(payload.transactionPreflight, "code"),
-    nestedApiPayloadString(payload.formalPreflight, "code"),
-    nestedApiPayloadString(payload.snapshotResult, "reason"),
-    nestedApiPayloadString(payload.snapshotResult, "code"),
-    readApiPayloadString(payload.finalizeError),
-    payload.transactionFinalized === false ? "transactionFinalized:false" : undefined,
-  ]);
-}
-
-function nestedApiPayloadString(value: unknown, key: string): string | undefined {
-  if (!isRecord(value)) return undefined;
-  return readApiPayloadString(value[key]);
-}
-
-function readApiPayloadString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function uniqueApiPayloadStrings(values: readonly (string | undefined)[]): readonly string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readChapterChatDecision(value: unknown): ChapterChatResponse["decision"] | undefined {
-  if (!isRecord(value)) return undefined;
-  if (
-    typeof value.agentId !== "string"
-    || typeof value.action !== "string"
-    || typeof value.target !== "string"
-    || typeof value.reason !== "string"
-    || typeof value.confidence !== "number"
-  ) {
-    return undefined;
-  }
-  return {
-    agentId: value.agentId,
-    action: value.action,
-    target: value.target,
-    confidence: value.confidence,
-    reason: value.reason,
-  };
 }
 
 function isStateOverviewLike(value: unknown): value is StateOverview {

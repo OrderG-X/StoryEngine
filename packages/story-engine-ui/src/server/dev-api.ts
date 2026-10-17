@@ -12,8 +12,6 @@ import { registerChapterSteeringRoutes } from "./routes/chapter-steering.js";
 import { registerDraftRoutes } from "./routes/draft.js";
 import { registerDraftRevisionRoutes } from "./routes/draft-revision.js";
 import { registerDeAiFlavorRoutes } from "./routes/de-ai-flavor.js";
-import { registerCommitRoutes } from "./routes/commit.js";
-import { registerFoundationGapsRoutes } from "./routes/foundation-gaps.js";
 import { registerBooksRoutes } from "./routes/books.js";
 import { registerModelSettingsRoutes } from "./routes/model-settings.js";
 import { registerChapterWorkspaceRoutes } from "./routes/chapter-workspace.js";
@@ -43,8 +41,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerDraftRoutes(router);
   registerDraftRevisionRoutes(router);
   registerDeAiFlavorRoutes(router);
-  registerCommitRoutes(router);
-  registerFoundationGapsRoutes(router);
   registerBooksRoutes(router);
   registerModelSettingsRoutes(router);
   registerChapterWorkspaceRoutes(router);
