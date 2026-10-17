@@ -27,7 +27,7 @@ import { blankToUndefined, coerceBoolean, coerceEnum, coerceEnumValues, coerceJs
 import { writeTool } from "../withSnapshot.js";
 import { readCharacterNameById, resolveEntityLabel } from "../presence/entity-labels.js";
 import { resolveFoundationUpdateTargetId } from "../../lib/project-io.js";
-import { buildFoundationKnownEntities } from "../../routes/foundation-gaps.js";
+import { buildFoundationKnownEntities } from "./foundation-known-entities.js";
 import { readUserTurnTextFromContext } from "../request-context.js";
 import { userTurnAllowsEstablishedOverride } from "./turn-intent-gate.js";
 import { manageStyleExemplarsLogic, type ManageStyleExemplarsOutput, type StyleExemplarAction } from "./manage-style-exemplars.js";

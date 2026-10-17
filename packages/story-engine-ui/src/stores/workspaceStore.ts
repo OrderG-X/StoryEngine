@@ -235,12 +235,6 @@ export interface WorkspaceStore {
   setRevisionHighlight: (text: string | null) => void;
   /** 一键全修：一次高亮多处改动（按改后文本定位）；传空清空。 */
   setRevisionHighlights: (texts: readonly string[]) => void;
-  setFoundationGapReport: (report: FoundationGapReport | null) => void;
-  setFoundationGapSuggestions: (suggestions: readonly FoundationGapSuggestion[]) => void;
-  setFoundationGapDecisions: (decisions: Readonly<Record<string, FoundationGapDecision["decision"]>>) => void;
-  setFoundationGapApplyPlan: (plan: FoundationGapApplyPlan | null) => void;
-  setFoundationGapLoading: (loading: string | null) => void;
-  setFoundationGapError: (error: string | null) => void;
   setSessions: (sessions: readonly ChatSessionIndexEntry[], activeSessionId?: string) => void;
   setActiveSessionId: (activeSessionId: string) => void;
   setActiveArchivedCount: (activeArchivedCount: number) => void;
@@ -362,12 +356,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   setActiveRevisionPreview: (preview) => set({ activeRevisionPreview: preview }),
   setRevisionHighlight: (text) => set({ revisionHighlightTexts: text ? [text] : [] }),
   setRevisionHighlights: (texts) => set({ revisionHighlightTexts: texts }),
-  setFoundationGapReport: (report) => set({ foundationGapReport: report }),
-  setFoundationGapSuggestions: (suggestions) => set({ foundationGapSuggestions: suggestions }),
-  setFoundationGapDecisions: (decisions) => set({ foundationGapDecisions: decisions }),
-  setFoundationGapApplyPlan: (plan) => set({ foundationGapApplyPlan: plan }),
-  setFoundationGapLoading: (loading) => set({ foundationGapLoading: loading }),
-  setFoundationGapError: (error) => set({ foundationGapError: error }),
   setSessions: (sessions, activeSessionId) =>
     set({ sessions, ...(activeSessionId !== undefined ? { activeSessionId } : {}) }),
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),

@@ -7,7 +7,6 @@ import type { DraftRevisionPreview, DraftRevisionTask, StateOverview } from "../
 import { beginWorkspaceOperation, finishWorkspaceOperation, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
 
 const apiMocks = vi.hoisted(() => ({
-  applyCommit: vi.fn(),
   applyDeAiFlavorBatch: vi.fn(),
   applyFoundationGapDecisions: vi.fn(),
   applyDraftRevision: vi.fn(),
@@ -16,7 +15,6 @@ const apiMocks = vi.hoisted(() => ({
   checkDraftQuality: vi.fn(),
   fetchChapterSteering: vi.fn(),
   generateDraftStream: vi.fn(),
-  previewCommit: vi.fn(),
   previewDraftRevision: vi.fn(),
   reviewDraftWithAI: vi.fn(),
   saveChapterWorkspace: vi.fn(),
@@ -259,8 +257,6 @@ describe("workspace-bound writing operations", () => {
 
   it.each([
     ["steering", "fetchChapterSteering"],
-    ["commit preview", "previewCommit"],
-    ["commit apply", "applyCommit"],
     ["de-ai batch", "applyDeAiFlavorBatch"],
   ] as const)("atomically blocks %s when another foreground operation owns the slot", async (entry, apiName) => {
     seedCommitPreview();
@@ -273,8 +269,6 @@ describe("workspace-bound writing operations", () => {
     const workflow = await actions();
 
     if (entry === "steering") await workflow.generateSteering("继续第一章");
-    else if (entry === "commit preview") await workflow.handleCommitPreview();
-    else if (entry === "commit apply") await workflow.executeCommitApply();
     else await workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
 
     expect(apiMocks[apiName]).not.toHaveBeenCalled();
@@ -283,8 +277,6 @@ describe("workspace-bound writing operations", () => {
 
   it.each([
     ["steering", "fetchChapterSteering", "steeringLoading"],
-    ["commit preview", "previewCommit", "draftActionLoading"],
-    ["commit apply", "applyCommit", "draftActionLoading"],
     ["de-ai batch", "applyDeAiFlavorBatch", "draftActionLoading"],
   ] as const)("drops late %s failure without clearing replacement workspace state", async (entry, apiName, loadingField) => {
     seedCommitPreview();
@@ -294,8 +286,6 @@ describe("workspace-bound writing operations", () => {
 
     let pending: Promise<void>;
     if (entry === "steering") pending = workflow.generateSteering("继续第一章");
-    else if (entry === "commit preview") pending = workflow.handleCommitPreview();
-    else if (entry === "commit apply") pending = workflow.executeCommitApply();
     else pending = workflow.handleFixAiFlavorAll([{ id: "v1", text: "需要改写" }], "message-1");
     await vi.waitFor(() => expect(apiMocks[apiName]).toHaveBeenCalled());
 

@@ -1,3 +1,4 @@
+import { providerGate } from "../lib/provider-gate.js";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 import {
@@ -338,7 +339,7 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
     apiKey,
     // 流式末帧带真实用量（对话 AI 每轮记 token，见 lib/token-meter）。
     includeUsage: true,
-    fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, withUpstreamSilenceGuard(fetch), outboundHeaders),
+    fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, providerGate.wrap(withUpstreamSilenceGuard(fetch)), outboundHeaders),
   });
   return { model: openaiCompatible(profile.model), profile };
 }
