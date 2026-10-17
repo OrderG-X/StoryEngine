@@ -51,7 +51,7 @@ async function writeDraft(projectDir: string, chapter: number, content: string):
   await writeFile(defaultDraftPath(projectDir, chapter), content, "utf-8");
 }
 
-// 写一份 workspace 草稿记录（编辑器/写作区看到的就是它的 draftContent）。
+// 写一份旧版写作台缓存（重构 P5 前编辑器会把正文另存在这里；现在不再写、也不该再被读）。
 async function writeWorkspaceDraft(projectDir: string, chapter: number, content: string): Promise<void> {
   const path = chapterWorkspacePath(projectDir, chapter);
   await mkdir(dirname(path), { recursive: true });
@@ -168,25 +168,16 @@ describe("quality_check 只读质检工具", () => {
 // 真机 QA bug（2026-06-26）：新书写完第1章「立刻质检」误报「正文为空」拦住入库，但正文在
 // 工作区+编辑器+磁盘都有，约2分钟后重跑才正常。根因=质检读裸文件、无重试、不过滤占位符——
 // 草稿落盘的时序竞争窗口里读到空/占位符（占位符约50字→误报「正文过短」），把真稿当没写。
-// 修后：质检按 真显式正文 → 文件(带重试) → workspace 原始草稿 → 诚实「无草稿」 顺序取真稿，
-// 真稿存在任一处就用真稿质检，绝不误报空/短；三处皆无才诚实回报「还没正文可质检」。
+// 修后：质检按 真显式正文 → 文件(带重试) → 诚实「无草稿」 顺序取真稿，绝不误报空/短。
+// 重构 P5 起不再回落旧版写作台缓存（不再更新，读它就是读过期稿）。
 describe("quality_check 防误报「正文为空/过短」（草稿落盘时序竞争）", () => {
-  it("工作稿文件暂空、但 workspace 有真草稿 → 用 workspace 真稿质检，不误报「正文为空」", async () => {
-    const projectDir = await makeProject("文件空回落workspace");
-    await writeDraft(projectDir, 1, ""); // 落盘瞬间文件为空
-    await writeWorkspaceDraft(projectDir, 1, longDraft(1)); // 编辑器/写作区已有真稿
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge, delayMs: 0 });
-    expect(out.passed).toBe(true);
-    expect(out.refined.blocking.some((b) => b.type === "empty_draft")).toBe(false);
-  });
-
-  it("工作稿文件是显示用占位符、但 workspace 有真草稿 → 用真稿，不把50字占位符误报成「正文过短」", async () => {
-    const projectDir = await makeProject("文件占位回落workspace");
-    await writeDraft(projectDir, 1, PLACEHOLDER_DRAFT);
+  it("工作稿文件为空、只有旧版写作台缓存里有旧稿 → 不拿过期缓存质检，诚实回报还没正文（重构 P5：稿子只有草稿文件一份）", async () => {
+    const projectDir = await makeProject("旧缓存不回落");
+    await writeDraft(projectDir, 1, "");
     await writeWorkspaceDraft(projectDir, 1, longDraft(1));
     const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge, delayMs: 0 });
-    expect(out.passed).toBe(true);
-    expect(out.refined.blocking.some((b) => b.type === "too_short" || b.type === "empty_draft")).toBe(false);
+    expect(out.passed).toBe(false);
+    expect(out.summary).toContain("还没有可质检的正文");
   });
 
   it("显式传入空 draftContent、但盘上有真稿 → 忽略空显式、读盘真稿质检（空串不被当成空稿）", async () => {

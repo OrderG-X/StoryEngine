@@ -67,15 +67,6 @@ describe("useProjectNavigation chapter status helpers", () => {
     expect(chapterNumber).toBe(2);
   });
 
-  it("uses workspace snapshots only after draft and committed files", () => {
-    const chapterNumber = __useProjectNavigationTest.resolveInitialChapterNumber([
-      { id: "ch-1", chapterNumber: 1, title: "第一章", status: "current" },
-      { id: "ch-4", chapterNumber: 4, title: "第四章", status: "draft", hasWorkspaceSnapshot: true },
-    ], 1);
-
-    expect(chapterNumber).toBe(4);
-  });
-
   it("does not auto-mark previous draft chapters as committed when switching active chapter", () => {
     const chapters = __useProjectNavigationTest.updateChapterListForActive(
       baseChapters,
@@ -129,173 +120,6 @@ describe("useProjectNavigation chapter status helpers", () => {
 
     expect(chapters.find((chapter) => chapter.chapterNumber === 3)).toMatchObject({ status: "current", title: "第三章" });
     expect(chapters.find((chapter) => chapter.chapterNumber === 10)).toMatchObject({ status: "draft" });
-  });
-
-  it("uses the adapter clean greeting (not store residue) when opening a real project with no backend snapshot", () => {
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: mockSeed,
-      workspaceMessages: cleanGreeting,
-    });
-
-    // No backend snapshot + residual mock seed in store → must fall back to the
-    // adapter's clean greeting, never the end-of-world demo seed.
-    expect(messages.some((m) => m.id === "msg-001" || m.id === "msg-002")).toBe(false);
-    expect(messages.some((m) => m.content.includes("地下车库") || m.content.includes("无线电"))).toBe(false);
-    expect(messages).toEqual(cleanGreeting);
-  });
-
-  it("prefers backend snapshot messages over everything when present", () => {
-    const snapshotMessages: readonly ChapterMessage[] = [
-      { id: "user-real", role: "user", content: "继续写下一章" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages,
-      sessionMessages: mockSeed,
-      workspaceMessages: cleanGreeting,
-    });
-
-    expect(messages).toEqual(snapshotMessages);
-  });
-
-  it("preserves a genuine prior session (real user turn) when no backend snapshot exists", () => {
-    const realSession: readonly ChapterMessage[] = [
-      { id: "user-1718000000", role: "user", content: "把主角名字改成林远" },
-      { id: "assistant-1718000001", role: "assistant", content: "已把主角名改为林远。" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: realSession,
-      workspaceMessages: cleanGreeting,
-    });
-
-    expect(messages).toEqual(realSession);
-  });
-
-  it("ignores workflow-only scaffolding sessions and uses the clean greeting", () => {
-    const scaffolding: readonly ChapterMessage[] = [
-      { id: "assistant-workflow-idle-1", role: "assistant", content: "我已读取当前故事状态。" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: scaffolding,
-      workspaceMessages: cleanGreeting,
-    });
-
-    expect(messages).toEqual(cleanGreeting);
-  });
-
-  it("再入空书（无 backend snapshot·无真实历史）走开书语气开场白，而非章节 greeting", () => {
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-      overview: freshBookOverview,
-    });
-
-    // 单条 assistant 开书开场白，与 handleCreateBook 同款文案。
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.role).toBe("assistant");
-    expect(messages[0]?.content).toBe(bookCreationPromptText());
-    // 不是章节 idle 的 workspace greeting。
-    expect(messages[0]?.content).not.toBe(cleanGreeting[0]?.content);
-  });
-
-  it("有内容的书（有章节）即便无 snapshot/历史，仍走章节 greeting，不注入开书语气", () => {
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-      overview: contentBookOverview,
-    });
-
-    expect(messages).toEqual(cleanGreeting);
-    expect(messages[0]?.content).not.toBe(bookCreationPromptText());
-  });
-
-  it("空书但有 backend snapshot：绝不覆盖，沿用 snapshot 不注开书语气", () => {
-    const snapshotMessages: readonly ChapterMessage[] = [
-      { id: "user-real", role: "user", content: "继续写下一章" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-      overview: freshBookOverview,
-    });
-
-    expect(messages).toEqual(snapshotMessages);
-  });
-
-  it("空书但有真实历史会话：绝不覆盖，沿用历史不注开书语气", () => {
-    const realSession: readonly ChapterMessage[] = [
-      { id: "user-1718000000", role: "user", content: "把主角名字改成林远" },
-      { id: "assistant-1718000001", role: "assistant", content: "已把主角名改为林远。" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: realSession,
-      workspaceMessages: cleanGreeting,
-      overview: freshBookOverview,
-    });
-
-    expect(messages).toEqual(realSession);
-  });
-
-  // H5：「撤销到此」reload 时，磁盘对话文件被 git restore 还原成回合起点脏态（含刚撤销的孤儿消息）。
-  // preferSession=true 让 openProject 忽略磁盘 snapshotMessages、改用 sessionStorage 的干净截断，避免孤儿复活。
-  it("preferSession=true：忽略磁盘脏对话，用 sessionStorage 的干净截断（撤销后不复活孤儿气泡）", () => {
-    const orphanOnDisk: readonly ChapterMessage[] = [
-      { id: "user-orphan", role: "user", content: "删掉顾明" },
-      { id: "assistant-orphan", role: "assistant", content: "已删除顾明。" },
-    ];
-    const cleanTruncated: readonly ChapterMessage[] = [
-      { id: "user-1718000000", role: "user", content: "继续写下一章" },
-      { id: "assistant-1718000001", role: "assistant", content: "好的。" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: orphanOnDisk, // 磁盘还原成脏态
-      sessionMessages: cleanTruncated, // sessionStorage 的干净截断
-      workspaceMessages: cleanGreeting,
-      preferSession: true,
-    });
-    expect(messages).toEqual(cleanTruncated);
-    expect(messages.some((m) => m.id === "user-orphan" || m.id === "assistant-orphan")).toBe(false);
-  });
-
-  it("preferSession=true 且截断到空（撤销首个回合）：落到干净开场白，绝不回退磁盘孤儿", () => {
-    const orphanOnDisk: readonly ChapterMessage[] = [
-      { id: "user-orphan", role: "user", content: "删掉顾明" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: orphanOnDisk,
-      sessionMessages: [], // 撤销首个回合后对话被清空
-      workspaceMessages: cleanGreeting,
-      preferSession: true,
-    });
-    // 不是磁盘孤儿，而是干净开场白。
-    expect(messages).toEqual(cleanGreeting);
-    expect(messages.some((m) => m.id === "user-orphan")).toBe(false);
-  });
-
-  it("preferSession 缺省（普通开书）：磁盘 snapshot 仍优先（行为不变）", () => {
-    const onDisk: readonly ChapterMessage[] = [{ id: "user-real", role: "user", content: "继续写下一章" }];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: onDisk,
-      sessionMessages: [{ id: "user-stale", role: "user", content: "旧 session" }],
-      workspaceMessages: cleanGreeting,
-    });
-    expect(messages).toEqual(onDisk);
-  });
-
-  it("不传 overview 时行为不变（仍回退到 workspace greeting）", () => {
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: null,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-    });
-
-    expect(messages).toEqual(cleanGreeting);
   });
 
   // 同名删后重建 / 新书串台 bug：书目录名按书名确定性生成(toSafeId)，同名删后重建拿到同一 projectPath，
@@ -374,72 +198,18 @@ describe("useProjectNavigation chapter status helpers", () => {
     expect(__useProjectNavigationTest.entryChatMessages(withCard)).toHaveLength(1);
   });
 
-  // V4 真机根因（headless 复现实证）：新建空书的开书开场白会被 autosave 写进 chapter-workspace 缓存，
-  // 但该快照对「草稿恢复」不算可恢复 → snapshotMessages 为空；同时建书种的 arc-goal + 占位草稿致 hasDraftFile
-  // 让 isFreshBook(overview) 也误判 false。唯一可靠的 ground truth = 原始快照里持久化的那条开书开场白。
-  it("persistedMessages 是开书开场白（缓存里捞回）→ 直接返回它，不落章节语气", () => {
-    const persisted: readonly ChapterMessage[] = [
-      { id: "assistant-book-creation-1781548839985", role: "assistant", content: bookCreationPromptText() },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: undefined, // 空书快照不可恢复
-      persistedMessages: persisted,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-      overview: contentBookOverview, // 即便 overview 因 hasDraftFile/arc-goal 看起来「非空书」
-    });
-    expect(messages).toEqual(persisted);
-    // 选择层仍命中 persisted（捞回了那条开书开场白），但进入展示层 entryChatMessages 因「无真实对话」清空它 → 空着进。
-    const finalized = __useProjectNavigationTest.entryChatMessages(messages);
-    expect(finalized).toEqual([]);
-  });
-
-  it("persistedMessages 是真实对话（不止开书开场白）→ 不误判，走正常分支", () => {
-    const persisted: readonly ChapterMessage[] = [
-      { id: "assistant-book-creation-1", role: "assistant", content: bookCreationPromptText() },
-      { id: "user-1", role: "user", content: "主角叫林晚" },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: undefined,
-      persistedMessages: persisted,
-      sessionMessages: [],
-      workspaceMessages: cleanGreeting,
-      overview: contentBookOverview,
-    });
-    // 不是单条开书开场白 → persisted 分支不命中 → 落到 workspace greeting。
-    expect(messages).toEqual(cleanGreeting);
-  });
-
-  it("有真实历史会话时优先于 persistedMessages（绝不覆盖用户对话）", () => {
-    const realSession: readonly ChapterMessage[] = [
-      { id: "user-1718000000", role: "user", content: "把主角名字改成林远" },
-    ];
-    const persisted: readonly ChapterMessage[] = [
-      { id: "assistant-book-creation-1", role: "assistant", content: bookCreationPromptText() },
-    ];
-    const messages = __useProjectNavigationTest.selectOpenProjectMessages({
-      snapshotMessages: undefined,
-      persistedMessages: persisted,
-      sessionMessages: realSession,
-      workspaceMessages: cleanGreeting,
-      overview: freshBookOverview,
-    });
-    expect(messages).toEqual(realSession);
-  });
-
   // H4：foundation_write 的资料刷新（refreshScope:"foundation"）走本 hook 的
   // refreshWorkspaceFromOverview。历史上它铺开 workspaceFromStateOverview(overview)（含 overview 最新章的
   // currentChapter/chapters）却没保留用户当前停留章 → 在第2章顺手记资料会被顶部跳到最新章、草稿仍停第2章。
   // 抽出的 mergeFoundationRefreshWorkspace 必须保留 currentChapter/chapters/messages/draft/flowStatus，
   // 与 useFoundationGaps 版同款，资料刷新只动资料/侧栏派生字段。
-  it("资料刷新合并：保留用户当前章/章节列表/对话/草稿/流程态，不被 overview 最新章覆盖（H4：记资料不跳章）", () => {
+  it("资料刷新合并：保留用户当前章/章节列表/对话/流程态，不被 overview 最新章覆盖（H4：记资料不跳章）", () => {
     const nextBase = {
       projectName: "记资料测试书",
       currentChapter: { chapterNumber: 5, title: "第五章", id: "ch-5", status: "current" },
       chapters: [{ id: "ch-5", chapterNumber: 5, title: "第五章", status: "current" }],
       messages: [{ id: "base-greeting", role: "assistant", content: "已进入工作区。" }],
       flowStatus: "committed",
-      draft: { chapterNumber: 5, title: "第五章", status: "draft", content: "overview 占位草稿", savedContent: "overview 占位草稿" },
     } as unknown as ChapterWorkspaceData;
     const current = {
       projectName: "记资料测试书",
@@ -453,16 +223,13 @@ describe("useProjectNavigation chapter status helpers", () => {
         { id: "assistant-real", role: "assistant", content: "已写入。" },
       ],
       flowStatus: "draft_ready",
-      draft: { chapterNumber: 2, title: "第二章", status: "draft", content: "用户正在第2章写的草稿正文", savedContent: "用户正在第2章写的草稿正文" },
     } as unknown as ChapterWorkspaceData;
 
     const merged = __useProjectNavigationTest.mergeFoundationRefreshWorkspace(nextBase, current);
 
-    // 用户停留章/章节列表/对话/草稿/流程态 全部保留 current（按引用相等），不被 overview 的第5章覆盖。
+    // 用户停留章/章节列表/草稿/流程态 全部保留 current（按引用相等），不被 overview 的第5章覆盖。
     expect(merged.currentChapter).toBe(current.currentChapter);
     expect(merged.chapters).toBe(current.chapters);
-    expect(merged.messages).toBe(current.messages);
-    expect(merged.draft).toBe(current.draft);
     expect(merged.flowStatus).toBe(current.flowStatus);
     // 其余资料/派生字段仍来自 overview base（如 projectName）。
     expect(merged.projectName).toBe("记资料测试书");

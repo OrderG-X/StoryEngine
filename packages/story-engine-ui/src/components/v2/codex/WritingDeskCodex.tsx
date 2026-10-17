@@ -4,9 +4,8 @@ import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
-import { isRealDraftContent } from "../../../utils/draftContent.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import {
   committedEmptySubtitle,
@@ -19,6 +18,9 @@ import {
 } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
+import { useDraftPreview } from "../../../drafts/useDraftPreview.js";
+import { scheduleDraftSave } from "../../../drafts/draftSync.js";
 
 /**
  * WritingDeskCodex — 沉浸聚光式 codex 写作台外壳。
@@ -58,9 +60,10 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
-  const draft = props.workspace.draft;
-  const draftCandidates = useWorkspaceStore((state) => state.draftCandidates);
-  const draftActionLoading = useWorkspaceStore((state) => state.draftActionLoading);
+  const draft = useDraftPreview({ chapterNumber: props.workspace.currentChapter.chapterNumber, title: props.workspace.currentChapter.title });
+  const committedBody = useDraftStore((state) => state.committed?.body ?? "");
+  const draftCandidates = useUiStore((state) => state.draftCandidates);
+  const draftActionLoading = useUiStore((state) => state.draftActionLoading);
   const workspaceBusy = Boolean(
     props.chatLoading
     || props.steeringLoading
@@ -73,10 +76,9 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const draftWordCount = draft.wordCount ?? 0;
   // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
   const [authorStarted, setAuthorStarted] = useState(false);
-  const showStarter = isStarterEmptyWorkspace(props.workspace) && !authorStarted;
-  // 新书种的占位引导稿（「还没有草稿正文…」）不能出现在作者的稿纸上。
-  const paperDraft = authorStarted && !isRealDraftContent(draft.content) ? { ...draft, content: "", wordCount: 0 } : draft;
-  const showEditHint = activeTab === "draft" && draft.status !== "committed";
+  const showStarter = isStarterEmptyWorkspace({ draft, chapters: props.workspace.chapters }) && !authorStarted;
+  const paperDraft = draft;
+  const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
   const targetWords = parseTargetChapterWords(props.sidebar?.writingRules);
   const goalPct = targetWords ? Math.min(100, Math.round((draftWordCount / targetWords) * 100)) : 0;
   // 低于目标 78%（≈「最少」口径）提醒橙，达标绿，其余强调色。
@@ -185,13 +187,16 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
               </div>
             </div>
           ) : (
+            <>
+            <PaperIncomingBanner />
             <WritingPaper draft={paperDraft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} onAskAboutSelection={props.onAskAboutSelection} />
+            </>
           )
         ) : (
           <div className="se-v2-editor-wrap se-v2-paper">
             <div className="se-v2-editor-text">
-              {draft.status === "committed" && draft.content.trim() ? (
-                cleanProseForDisplay(draft.content).split(/\n{2,}/u).map((para, i) => (
+              {committedBody.trim() ? (
+                cleanProseForDisplay(committedBody).split(/\n{2,}/u).map((para, i) => (
                   para.trim() ? <p key={i}>{para.trim()}</p> : null
                 ))
               ) : (
@@ -274,4 +279,45 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
       <RevisionPreviewModal {...props} />
     </div>
   );
+}
+
+/**
+ * 稿纸上方的提示条（重构 P5）：盘上的稿子在别处变了（AI 改稿、撤销）而作者手上还有没存的字。
+ * 两边都不悄悄覆盖，让作者选。
+ */
+function PaperIncomingBanner() {
+  const incoming = useDraftStore((state) => state.incoming);
+  const saveStatus = useDraftStore((state) => state.saveStatus);
+  const saveError = useDraftStore((state) => state.saveError);
+  if (incoming) {
+    const text = incoming.cause === "conflict"
+      ? "这一章的稿子刚在别处改过（比如 AI 改稿或撤销），你手上这版还没存进去。"
+      : "AI 刚写了这一章的新一版，你手上还有没存的字。";
+    return (
+      <div className="cd-incoming" role="alert">
+        <span>{text}</span>
+        <div className="cd-incoming-actions">
+          <button type="button" onClick={() => useDraftStore.getState().acceptIncoming()}>换成那一版</button>
+          <button
+            type="button"
+            className="is-primary"
+            onClick={() => { useDraftStore.getState().keepMine(); scheduleDraftSave(0); }}
+          >
+            保留我这版
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (saveStatus === "error") {
+    return (
+      <div className="cd-incoming is-error" role="alert">
+        <span>稿子没存上：{saveError ?? "原因不明"}</span>
+        <div className="cd-incoming-actions">
+          <button type="button" className="is-primary" onClick={() => scheduleDraftSave(0)}>再存一次</button>
+        </div>
+      </div>
+    );
+  }
+  return null;
 }

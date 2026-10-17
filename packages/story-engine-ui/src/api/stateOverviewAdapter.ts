@@ -128,26 +128,6 @@ export function workspaceFromStateOverview(
       && chapter.hasCommittedChapter !== true
     )),
     ...(latestUncommittedDraftChapter !== undefined ? { latestUncommittedDraftChapter } : {}),
-    draft: {
-      chapterNumber: currentChapter.chapterNumber,
-      title: currentChapter.title,
-      status: "draft",
-      content: buildStateBackedDraftPlaceholder(overview),
-      savedContent: buildStateBackedDraftPlaceholder(overview),
-    },
-    messages: [
-      {
-        id: "state-overview-connected",
-        role: "assistant",
-        kind: "scaffolding",
-        content: [
-          `已进入《${overview.project.title}》的章节工作区。`,
-          `当前目标：${currentObjective}`,
-          `当前地点：${currentLocation}`,
-          warnings.length > 0 ? `风险提醒：${warnings.slice(0, 2).join("；")}` : "风险提醒：当前后端未返回风险",
-        ].join("\n"),
-      },
-    ],
     characterMatrix: overview.characterMatrix,
     worldbuildingFallback: worldbuildingFromWorldBible(worldBible),
     protagonist: {
@@ -569,12 +549,11 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     byChapter.set(event.chapter, {
       id: `ch-${event.chapter}`,
       chapterNumber: event.chapter,
-      title: fileState?.committedTitle ?? fileState?.draftTitle ?? fileState?.workspaceTitle ?? event.title ?? titleFromSummary(event.mainEvent ?? event.summary, event.chapter),
+      title: fileState?.committedTitle ?? fileState?.draftTitle ?? event.title ?? titleFromSummary(event.mainEvent ?? event.summary, event.chapter),
       status: chapterStatusFromFileState(event.chapter, currentChapterNumber, fileState, event.chapter < currentChapterNumber ? "committed" : "planned"),
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
-        ...(fileState.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: fileState.hasWorkspaceSnapshot } : {}),
       } : {}),
     });
   }
@@ -584,11 +563,10 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     byChapter.set(fileState.chapter, {
       id: existing?.id ?? `ch-${fileState.chapter}`,
       chapterNumber: fileState.chapter,
-      title: fileState.committedTitle ?? fileState.draftTitle ?? fileState.workspaceTitle ?? existing?.title ?? `第${fileState.chapter}章`,
+      title: fileState.committedTitle ?? fileState.draftTitle ?? existing?.title ?? `第${fileState.chapter}章`,
       status: chapterStatusFromFileState(fileState.chapter, currentChapterNumber, fileState, existing?.status ?? "planned"),
       hasDraftFile: fileState.hasDraftFile,
       hasCommittedChapter: fileState.hasCommittedChapter,
-      ...(fileState.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: fileState.hasWorkspaceSnapshot } : {}),
     });
   }
 
@@ -597,12 +575,12 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     byChapter.set(currentChapterNumber, {
       id: `ch-${currentChapterNumber}`,
       chapterNumber: currentChapterNumber,
-      title: fileState?.committedTitle ?? fileState?.draftTitle ?? fileState?.workspaceTitle ?? (overview.storyStatus.lastTimelineEvent ? titleFromSummary(overview.storyStatus.lastTimelineEvent, currentChapterNumber) : `第${currentChapterNumber}章`),
+      // 不拿「最近一条时间线事件」当章名：那是上一章发生的事（工具回传的 overview 不带章节文件时就会把上一章的事挂到这一章头上）。
+      title: fileState?.committedTitle ?? fileState?.draftTitle ?? `第${currentChapterNumber}章`,
       status: "current",
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
-        ...(fileState.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: fileState.hasWorkspaceSnapshot } : {}),
       } : {}),
     });
   }
@@ -612,12 +590,11 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     byChapter.set(currentChapterNumber + 1, {
       id: `ch-${currentChapterNumber + 1}`,
       chapterNumber: currentChapterNumber + 1,
-      title: fileState?.committedTitle ?? fileState?.draftTitle ?? fileState?.workspaceTitle ?? "下一章",
+      title: fileState?.committedTitle ?? fileState?.draftTitle ?? "下一章",
       status: chapterStatusFromFileState(currentChapterNumber + 1, currentChapterNumber, fileState, "planned"),
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
-        ...(fileState.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: fileState.hasWorkspaceSnapshot } : {}),
       } : {}),
     });
   }
@@ -634,8 +611,6 @@ function chapterStatusFromFileState(
   if (chapter === currentChapterNumber) return "current";
   if (fileState?.hasCommittedChapter) return "committed";
   if (fileState?.hasDraftFile) return "draft";
-  // 光「开过」(hasWorkspaceSnapshot) 不算有草稿；只有 workspace 里有真草稿才标 draft（与 agent 状态口径一致）。
-  if (fileState?.hasWorkspaceDraft) return "draft";
   return fallback === "current" ? "draft" : fallback;
 }
 
@@ -701,27 +676,6 @@ function displayRuleValue(value: string): string {
     balanced: "均衡",
   };
   return labels[value] ?? value;
-}
-
-function buildStateBackedDraftPlaceholder(overview: StateOverview): string {
-  const recent = overview.timeline.recentEvents.at(-1);
-  if (!recent && overview.project.currentChapter === null) {
-    return compact([
-      "还没有工作稿正文。",
-      "你可以在右侧章节对话里输入第 1 章方向，先整理本章方案，再生成工作稿。",
-      cleanStorySummary(overview.world.summary) ? `故事简介：${cleanStorySummary(overview.world.summary)}` : undefined,
-      overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
-    ]).join("\n\n");
-  }
-
-  return compact([
-    "还没有载入本章工作稿正文。",
-    overview.storyStatus.currentObjective ? `当前目标：${overview.storyStatus.currentObjective}` : undefined,
-    overview.storyStatus.currentLocation ? `当前位置：${overview.storyStatus.currentLocation}` : undefined,
-    recent ? `最近时间线：第${recent.chapter}章，${recent.summary}` : undefined,
-    overview.hooks.activeItems.length > 0 ? `活跃伏笔：${overview.hooks.activeItems.map((hook) => hook.title).join("；")}` : undefined,
-    overview.threads.keyOpenItems.length > 0 ? `未闭合线索：${overview.threads.keyOpenItems.map((thread) => thread.title).join("；")}` : undefined,
-  ]).join("\n\n");
 }
 
 function buildRisks(overview: StateOverview): RiskWarning[] {

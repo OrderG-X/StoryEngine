@@ -1,8 +1,8 @@
 import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
-import { fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
+import { fetchStateOverview, restoreSnapshotApi } from "../api/client.js";
 import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
-import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
+import { renameChatSession } from "../api/chatSessionsClient.js";
 import {
   emptyAssistantMessage,
   projectAgentEvent,
@@ -12,28 +12,17 @@ import {
 import { deriveIntentTitle } from "./deriveIntentTitle.js";
 import { nextFlowAfterToolResult } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
-import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
-import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
+import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
-import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
-import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
-import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
-import { reloadPage } from "../utils/pageReload.js";
-import { markRecentWorkspaceUndo, takePendingRevisionReload } from "../utils/workspaceRevisionConflict.js";
-import type {
-  ChapterAdviceCard,
-  ChapterWorkspaceSnapshot,
-  StateOverview,
-} from "../api/types.js";
-import type { ChapterMessage, ChapterWorkflowState, CommitConfirmTarget, SuggestedAction } from "../types.js";
-import {
-  countTextWords,
-  extractDraftTitle,
-} from "../utils/textUtils.js";
-import { flushPendingMessageSave, useWorkspaceStore } from "../stores/workspaceStore.js";
+import type { StateOverview } from "../api/types.js";
+import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import {
   beginWorkspaceOperation,
   finishWorkspaceOperation,
@@ -42,10 +31,27 @@ import {
   isWorkspaceOperationTargetCurrent,
   retargetWorkspaceOperation,
 } from "../utils/workspaceOperation.js";
-import { recordWorkspaceRevision } from "../utils/workspaceRevisionTracker.js";
 import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
+import { editDraft, flushDraftSave, holdDraftSaves, openPaper, refreshPaper } from "../drafts/draftSync.js";
+import { saveChatNow } from "../sync/chatSync.js";
+import { flushAllSaves } from "../sync/saveAll.js";
+import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
+import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
+
+/** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
+const RESYNC_WAIT_MS = 5_000;
+
+async function settleWithin(promises: readonly Promise<unknown>[], ms: number): Promise<void> {
+  if (promises.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.allSettled(promises),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+}
 
 
 /* ------------------------------------------------------------------ */
@@ -55,14 +61,6 @@ import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 export interface UseChatParams {
   projectPath: string | null;
   handleApplyRevisionPreview: () => Promise<void>;
-  applyOverviewToWorkspace: (
-    overview: StateOverview,
-    draftContent?: string,
-    flowStatus?: ChapterWorkflowState,
-    draftTitle?: string,
-    // 写类工具回传的「本次实际操作章号」——前端认领以推进当前章，修跨章草稿污染。
-    targetChapter?: number,
-  ) => void;
   /**
    * 资料类刷新：仅按 StateOverview 重建资料/侧栏面板，保留当前章节/草稿/消息。
    * agent 的 foundation_write 结果（refreshScope:"foundation"）调它；可不传。
@@ -72,7 +70,6 @@ export interface UseChatParams {
 
 export interface UseChatResult {
   handleSendMessage: (message: string) => Promise<void>;
-  handleSelectAdviceCard: (key: string, card: ChapterAdviceCard) => void;
   handleSuggestedAction: (action: SuggestedAction) => void;
   /** 「下一步」选项的结构化动作直达（R4.7）：点击直接发 body.action，不经模型。 */
   handleSendUserAction: (action: AgentUserAction) => Promise<void>;
@@ -87,18 +84,14 @@ export function useChat(params: UseChatParams): UseChatResult {
   const {
     projectPath,
     handleApplyRevisionPreview,
-    applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
   } = params;
 
   /* ---- store access ---- */
-  const workspace = useWorkspaceStore((s) => s.workspace);
-  const appendMessage = useWorkspaceStore((s) => s.appendMessage);
-  const updateMessage = useWorkspaceStore((s) => s.updateMessage);
-  const setChatLoading = useWorkspaceStore((s) => s.setChatLoading);
-  const setChatError = useWorkspaceStore((s) => s.setChatError);
-  const selectedAdviceCards = useWorkspaceStore((s) => s.selectedAdviceCards);
-  const setSelectedAdviceCards = useWorkspaceStore((s) => s.setSelectedAdviceCards);
+  const appendMessage = useChatStore((s) => s.appendMessage);
+  const updateMessage = useChatStore((s) => s.updateMessage);
+  const setChatLoading = useChatStore((s) => s.setChatLoading);
+  const setChatError = useChatStore((s) => s.setChatError);
 
   const showToast = useNavigationStore((s) => s.showToast);
   const autoRenameRequestSeqRef = useRef(0);
@@ -112,7 +105,7 @@ export function useChat(params: UseChatParams): UseChatResult {
    * 流程：
    *   - 起一条空 assistant 消息，把 agent 事件经 agentEventProjection 增量投影进同一条消息。
    *   - text-delta 累加文本；tool-call/tool-result 投影成 toolSteps + agentCards（命中时间线字典）。
-   *   - onToolResult 按 refreshScope 刷新工作台：full → applyOverviewToWorkspace；
+   *   - onToolResult 按 refreshScope 刷新工作台：full → applyOverviewToWorkspace（随后按盘上重读稿纸）；
    *     foundation → refreshWorkspaceFromOverview（仅刷资料面板，保留章节/草稿/消息）。
    *   - onError 绝不静默失败：追加一条可重试的 assistant 消息（retry-agent，携带原始消息）。
    * 被 handleSendMessage 和「重试」按钮共用。
@@ -139,11 +132,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
 
-      const initialStore = useWorkspaceStore.getState();
+      const initialStoreBook = useBookStore.getState();
+      const initialStoreChat = useChatStore.getState();
       const claimedOperation = beginWorkspaceOperation("agent-chat", {
         projectPath,
-        chapter: initialStore.workspace.currentChapter.chapterNumber,
-        sessionId: initialStore.activeSessionId,
+        chapter: initialStoreBook.workspace.currentChapter.chapterNumber,
+        sessionId: initialStoreChat.activeSessionId,
       });
       if (!claimedOperation) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
@@ -151,11 +145,12 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       let operation = claimedOperation;
       const ownsCurrentWorkspace = (): boolean => {
-        const current = useWorkspaceStore.getState();
+        const currentBook = useBookStore.getState();
+        const currentChat = useChatStore.getState();
         return isWorkspaceOperationTargetCurrent(operation, {
           projectPath: useNavigationStore.getState().projectPath ?? "",
-          chapter: current.workspace.currentChapter.chapterNumber,
-          sessionId: current.activeSessionId,
+          chapter: currentBook.workspace.currentChapter.chapterNumber,
+          sessionId: currentChat.activeSessionId,
         });
       };
       const notifyStaleOperation = (): void => {
@@ -188,21 +183,25 @@ export function useChat(params: UseChatParams): UseChatResult {
       setChatError(null);
 
       let sawError = false;
-      // 本回合已套用到编辑器的最新正文版本（按章）：并行改稿的结果到达顺序不等于写入顺序，旧版本不再盖新版本。
-      const appliedDraftVersion = new Map<number, number>();
-      // 出稿流式缓冲：generate_draft 的正文 delta 逐字累加到这里、灌进当前章编辑器；
-      // 每次出稿（generate_draft tool-call）重置；完成时 onToolResult 用引擎处理过的终稿落定（覆盖这份原始流）。
+      // 出稿流式缓冲：generate_draft 的正文 delta 逐字累加到这里，显示在稿纸上（只读，不进作者的稿子，重构 P5）。
+      // 每次出稿（generate_draft tool-call）重置；出稿结束后稿纸按盘上终稿重读。
       let streamedDraft = "";
       let draftStreamChapter: number | null = null;
       let reportedDraftChapterMismatch = false;
-      // 追加一条错误卡消息（isErrorNotice；可重试时带 retry-agent）。tool-error 与 error 共用。
+      // 流式要换到另一章时，先把手上那章存掉、再换稿纸；这期间流来的字先攒着。
+      let paperSwitch: Promise<void> | null = null;
+      // 本回合发起的稿纸重读：回合收尾、释放操作所有权之前等它们读完。
+      const pendingPaperSyncs: Promise<unknown>[] = [];
+      const track = (promise: Promise<unknown>): void => {
+        pendingPaperSyncs.push(promise.catch(() => undefined));
+      };
+      // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
       const appendErrorMessage = (message: string, retryable: boolean) => {
         appendMessage({
           id: `assistant-agent-error-${Date.now()}`,
           role: "assistant",
           content: "AI 服务暂时没响应，本次没有改动。",
-          isErrorNotice: true,
-          errorDetail: message,
+          cards: [{ type: "error", detail: message }],
           ...(retryable
             ? {
               suggestedActions: [
@@ -219,238 +218,95 @@ export function useChat(params: UseChatParams): UseChatResult {
             : {}),
         });
       };
-      // R2 磁盘对账：SSE 在写类工具 tool-result 之前断流时，客户端只收到 error、看起来失败，但磁盘可能
-      // 已入库（commit_apply 真写盘在前、SSE 回执在后）。错误收尾时拉一次磁盘真值，若该章已入库而 UI 没体现，
-      // 用完整章节快照恢复正文/标题/文件标记/revision/流程态，而不是只改一个 flowStatus。
-      let reconciliationPromise: Promise<void> | null = null;
-      let commitReconciliationDraft: string | null = null;
-      // A-5：本轮是否出现过章节写类工具调用（generate_draft/revise_draft/commit_apply）——
-      // 「停止」收尾时据此决定要不要拉一次磁盘对账（纯读/问答回合不浪费这次 IO）。
+      // 本轮是否出现过章节写类工具调用（generate_draft/revise_draft/commit_apply）——出错 / 停止收尾时
+      // 据此重读一次盘上的稿纸和状态（回执可能丢了，盘上其实已写）。纯读 / 问答回合不浪费这次 IO。
       let sawChapterWriteToolCall = false;
-      // 磁盘真值读取：5s 超时兜底，绝不让对账把回合收尾卡死（对账尽力而为，失败当没拉到）。
-      const fetchChapterSnapshotWithTimeout = async (chapter: number): Promise<ChapterWorkspaceSnapshot | undefined> => {
-        if (!projectPath) return undefined;
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        const reconciliationAbort = new AbortController();
-        return Promise.race([
-          fetchChapterWorkspace({ projectPath, chapter }, reconciliationAbort.signal),
-          new Promise<undefined>((resolve) => {
-            timeoutId = setTimeout(() => {
-              reconciliationAbort.abort();
-              resolve(undefined);
-            }, 5_000);
-          }),
-        ]).finally(() => {
-          if (timeoutId !== undefined) clearTimeout(timeoutId);
-        });
+      // 定稿在飞：记下发起时盘上那份定稿，收尾时据它判断「其实已经定稿、只是回执丢了」。
+      let commitAttempt: { readonly committedBefore: string | null } | null = null;
+      // 出稿在飞：记下发起时稿纸上的字，停止收尾时据它判断「盘上其实已经写完了」。
+      let generateAttempt: { readonly bodyBefore: string } | null = null;
+      // AI 真撤销了（undo / manage_snapshots op=undo）：回合收尾时剥掉旧回合挂着的过时建议条。
+      let agentUndone = false;
+
+      const showStreaming = (): void => {
+        const paper = useDraftStore.getState();
+        if (draftStreamChapter === null || paper.chapter !== draftStreamChapter) return;
+        paper.setStreaming(streamingDraftDisplay(streamedDraft));
       };
-      // 据磁盘快照把「其实已入库」的完整章节态恢复进工作区（错误对账与停止对账共用同一恢复动作）。
-      const adoptCommittedSnapshot = (snap: ChapterWorkspaceSnapshot, chapter: number): void => {
-        const store = useWorkspaceStore.getState();
-        const current = store.workspace;
-        const draftContent = snap.draftContent ?? current.draft.content;
-        const draftTitle = snap.draftTitle ?? current.draft.title;
-        const flowStatus = snap.flowStatus ?? "committed";
-        store.updateWorkspace({
-          flowStatus,
-          currentChapter: {
-            ...current.currentChapter,
-            title: draftTitle,
-            hasCommittedChapter: snap.hasCommittedChapter === true,
-            hasDraftFile: snap.hasDraftFile === true,
-            hasWorkspaceSnapshot: true,
-          },
-          chapters: current.chapters.map((item) => item.chapterNumber === chapter
-            ? {
-              ...item,
-              title: draftTitle,
-              hasCommittedChapter: snap.hasCommittedChapter === true,
-              hasDraftFile: snap.hasDraftFile === true,
-              hasWorkspaceSnapshot: true,
-            }
-            : item),
-          draft: {
-            ...current.draft,
-            chapterNumber: chapter,
-            title: draftTitle,
-            content: draftContent,
-            savedContent: draftContent,
-            wordCount: draftContent.trim() ? countTextWords(draftContent) : undefined,
-            status: flowStatus === "committed" || flowStatus === "ready_for_next" ? "committed" : "draft",
-          },
-        });
-        const revision = snap.revision ?? 0;
-        recordWorkspaceRevision(projectPath, chapter, revision);
-        store.setWorkspaceRevision(revision);
-        appendMessage({
-          id: `assistant-reconcile-${Date.now()}`,
-          role: "assistant",
-          content: `（磁盘核对：第 ${chapter} 章其实已经定稿——上一步可能因网络/连接中断没收到结果、看起来像失败，但磁盘上确实已写入。已把状态更正为「已定稿」。）`,
-        });
-      };
-      const reconcileChapterFromDisk = async (): Promise<void> => {
-        try {
-          if (!projectPath) return;
-          const attemptedDraftContent = commitReconciliationDraft;
-          if (attemptedDraftContent === null) return;
-          const chapter = operation.chapter;
-          if (typeof chapter !== "number") return;
-          const snap = await fetchChapterSnapshotWithTimeout(chapter);
-          if (!snap) return;
-          if (!ownsCurrentWorkspace()) return;
-          const flowNow = useWorkspaceStore.getState().workspace.flowStatus;
-          if (shouldReconcileCommitAttempt(snap, flowNow, attemptedDraftContent)) {
-            adoptCommittedSnapshot(snap, chapter);
-          }
-        } catch {
-          // 对账尽力而为，绝不让它破坏错误收尾路径。
-        }
-      };
-      // A-5 停止对账：写类工具在飞时被「停止」腰斩，SSE 回执丢失，但服务端可能在停止前已写完整稿
-      // （generate_draft 落 drafts/fast）或已入库（commit_apply）。拉一次磁盘真值：
-      //   ① commit_apply 在飞且盘证一致 → 复用「其实已入库」整体恢复；
-      //   ② 盘上草稿比停止那刻编辑器里的更全 → 采用盘稿（停止后用户又动过编辑器则不盖）；
-      //   否则保留编辑器里已流出的内容（「已停止 · 已写出的内容保留」）， autosave 随后照常落盘。
-      const reconcileAbortedTurnFromDisk = async (): Promise<void> => {
-        try {
-          if (!projectPath) return;
-          const chapter = operation.chapter;
-          if (typeof chapter !== "number") return;
-          const attemptedDraftContent = commitReconciliationDraft;
-          const editorAtStop = useWorkspaceStore.getState().workspace.draft.content;
-          const snap = await fetchChapterSnapshotWithTimeout(chapter);
-          if (!snap) return;
-          if (!ownsCurrentWorkspace()) return;
-          const flowNow = useWorkspaceStore.getState().workspace.flowStatus;
-          if (attemptedDraftContent !== null && shouldReconcileCommitAttempt(snap, flowNow, attemptedDraftContent)) {
-            adoptCommittedSnapshot(snap, chapter);
-            return;
-          }
-          if (!shouldAdoptDiskDraftAfterStop(snap, editorAtStop)) return;
-          const live = useWorkspaceStore.getState();
-          if (live.workspace.draft.content !== editorAtStop) return;
-          const draftContent = snap.draftContent ?? "";
-          const draftTitle = snap.draftTitle ?? extractDraftTitle(draftContent) ?? live.workspace.draft.title;
-          live.updateWorkspace({ flowStatus: "draft_ready" });
-          live.updateDraft({
-            chapterNumber: chapter,
-            title: draftTitle,
-            content: draftContent,
-            savedContent: draftContent,
-            wordCount: countTextWords(draftContent),
-            status: "draft",
-          });
-          const revision = snap.revision ?? 0;
-          recordWorkspaceRevision(projectPath, chapter, revision);
-          live.setWorkspaceRevision(revision);
-          appendMessage({
-            id: `assistant-stop-reconcile-${Date.now()}`,
-            role: "assistant",
-            content: `（磁盘核对：第 ${chapter} 章的工作稿已按盘上更完整的一版恢复。）`,
-          });
-        } catch {
-          // 对账尽力而为，绝不让它破坏停止收尾路径。
-        }
-      };
-      const requestChapterReconciliation = (): void => {
-        if (commitReconciliationDraft === null) return;
-        reconciliationPromise ??= reconcileChapterFromDisk();
-      };
-      // P2（2026-10-02）agent 路 undo_last_change 真撤销：服务端已 git 回退磁盘，但内存里仍是撤销前的旧稿、
-      // revision 也过期；350ms 后的 autosave 会把旧稿 PUT 回去——此前只靠服务端 409 + 「另一窗口」误导 toast 兜底。
-      // 现在显式：冻结 autosave → 排空在途 PUT → 读磁盘真值接管草稿/标记/revision → 回合收尾后整页重载
-      // （与 undoToTurn 同一收尾：草稿正文不在 overview 里，重载才能让对话/草稿/资料三者从磁盘真值一致重建）。
-      let agentUndoSyncPromise: Promise<void> | null = null;
-      const syncWorkspaceAfterAgentUndo = async (): Promise<void> => {
-        try {
-          if (!projectPath) return;
-          const chapter = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
-          await drainAutosave();
-          const snap = await fetchChapterSnapshotWithTimeout(chapter);
-          if (!snap || !ownsCurrentWorkspace()) return;
-          const live = useWorkspaceStore.getState();
-          const patch = buildWorkspacePatchAfterAgentUndo(snap, chapter, live.workspace);
-          live.updateWorkspace({
-            flowStatus: patch.flowStatus,
-            currentChapter: patch.currentChapter,
-            chapters: patch.chapters,
-            draft: patch.draft,
-          });
-          recordWorkspaceRevision(projectPath, chapter, patch.revision);
-          live.setWorkspaceRevision(patch.revision);
-        } catch {
-          // 尽力而为：读不到磁盘也不解冻 autosave（旧稿绝不能写回），随后 reload 从磁盘重建。
-        }
+      const endStreaming = (): void => {
+        if (useDraftStore.getState().streaming !== null) useDraftStore.getState().setStreaming(null);
       };
       // 出稿失败收尾：onToolCall(generate_draft) 把 flowStatus 置「正在生成草稿」，失败路径若不复位，标题区
-      // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。同步据「编辑器是否已有草稿内容」复位成
-      // draft_ready/idle；「磁盘其实已入库」的特例由上面 reconcileChapterFromDisk 异步再升成 committed。
+      // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。据稿纸上有没有字复位成 draft_ready/idle。
       const unstickGeneratingFlow = (): void => {
         if (!ownsCurrentWorkspace()) return;
-        const ws = useWorkspaceStore.getState();
-        const next = flowStatusAfterGenerateFailure(ws.workspace.flowStatus, ws.workspace.draft.content.trim().length > 0);
-        if (next) ws.updateWorkspace({ flowStatus: next });
+        const wsBook = useBookStore.getState();
+        const next = flowStatusAfterGenerateFailure(wsBook.workspace.flowStatus, useDraftStore.getState().body.trim().length > 0);
+        if (next) wsBook.updateWorkspace({ flowStatus: next });
       };
-      // 审计 Med：agent 路出稿失败回滚——generate_draft 失败时编辑器里已流进半截稿（onDraftDelta 逐字写入），
-      // 引擎侧刻意「失败=未覆盖旧稿」，但 flowStatus 复位解除写盘护栏后，防抖 autosave 会把半截稿 PUT 回去
-      // 覆盖磁盘完整旧稿（chip 路有 savedBeforeGeneration 内存回滚，agent 路此前没有）。
-      // 与 undo 同款磁盘真值接管：冻结→排空→读盘→补丁（草稿/标记/revision 全以磁盘为准）；成功才解冻，
-      // 读不回旧稿就保持冻结 + 如实 toast（绝不给半截稿覆盖旧稿的机会，也绝不静默停摆）。
-      let generateDraftRollbackDone = false;
-      const rollbackStreamedDraftFromDisk = (): void => {
-        if (generateDraftRollbackDone || !streamedDraft.trim()) return;
-        generateDraftRollbackDone = true;
-        suspendAutosave();
-        void (async () => {
-          let restored = false;
-          try {
-            if (projectPath) {
-              const chapter = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
-              await drainAutosave();
-              // 同一回合里 AI 可能看到 ok:false 后已重调出稿：新一轮正在流式时
-              // 不覆盖它，交由新一轮自己的生命周期收尾。
-              if (useWorkspaceStore.getState().workspace.flowStatus !== "draft_generating") {
-                const snap = await fetchChapterSnapshotWithTimeout(chapter);
-                if (snap && ownsCurrentWorkspace()
-                  && useWorkspaceStore.getState().workspace.flowStatus !== "draft_generating") {
-                  const live = useWorkspaceStore.getState();
-                  const patch = buildWorkspacePatchAfterAgentUndo(snap, chapter, live.workspace);
-                  live.updateWorkspace({
-                    flowStatus: patch.flowStatus,
-                    currentChapter: patch.currentChapter,
-                    chapters: patch.chapters,
-                    draft: patch.draft,
-                  });
-                  recordWorkspaceRevision(projectPath, chapter, patch.revision);
-                  live.setWorkspaceRevision(patch.revision);
-                  restored = true;
-                }
-              }
-            }
-          } catch {
-            restored = false;
+      // 写类工具在飞时出错 / 被停止：SSE 回执丢了，但服务端可能已经写完（出稿落了 drafts/fast、定稿已入库）。
+      // 重读盘上这一章的稿纸和书的状态：
+      //   ① 定稿在飞、盘上的定稿变了 → 其实已经定稿，更正状态并说一声；
+      //   ② 停止时流出了半章、盘上没有更全的一版 → 把流出来的字留给作者（照常存盘）。
+      let resyncPromise: Promise<void> | null = null;
+      const resyncAfterInterruptedWrite = async (partial: string | null): Promise<void> => {
+        try {
+          if (!projectPath) return;
+          await Promise.allSettled(pendingPaperSyncs);
+          await refreshPaper();
+          if (!ownsCurrentWorkspace()) return;
+          const overview = await fetchStateOverview({ projectPath, maxTimelineEvents: 8 });
+          if (!ownsCurrentWorkspace()) return;
+          applyOverviewToWorkspace(overview);
+          const paper = useDraftStore.getState();
+          if (commitAttempt && paper.committed && paper.committed.body !== commitAttempt.committedBefore) {
+            const current = useBookStore.getState().workspace;
+            useBookStore.getState().updateWorkspace({
+              flowStatus: "committed",
+              currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
+            });
+            appendMessage({
+              id: `assistant-reconcile-${Date.now()}`,
+              role: "assistant",
+              content: `（核对盘上：第 ${paper.chapter} 章其实已经定稿——上一步可能因为连接中断没收到结果、看起来像失败，但确实已写入。状态已更正为「已定稿」。）`,
+            });
+            return;
           }
-          if (restored) {
-            resumeAutosave(); // 编辑器已回到磁盘真值，恢复常态保存
-          } else if (useWorkspaceStore.getState().workspace.flowStatus !== "draft_generating") {
-            useNavigationStore.getState().showToast(
-              "出稿失败后没能读回磁盘旧稿，已暂停自动保存以防半截稿覆盖旧稿；请刷新页面恢复。",
-              6000,
-            );
-          } else {
-            resumeAutosave(); // 新一轮出稿接管中：护栏会挡住写盘，恢复常态由它收尾
+          if (!partial?.trim()) return;
+          if (!paper.incoming && partial.trim().length > paper.body.trim().length) {
+            editDraft(partial);
+            return;
           }
-        })();
+          if (generateAttempt && !paper.incoming && paper.body !== generateAttempt.bodyBefore && paper.body.trim().length >= partial.trim().length) {
+            appendMessage({
+              id: `assistant-reconcile-${Date.now()}`,
+              role: "assistant",
+              content: `（核对盘上：停止前第 ${paper.chapter} 章其实已经写完了，稿纸上是盘上那一整版。）`,
+            });
+          }
+        } catch {
+          // 尽力而为，绝不让它破坏收尾路径。
+        }
+      };
+      const requestResync = (partial: string | null = null): void => {
+        if (!sawChapterWriteToolCall) return;
+        resyncPromise ??= resyncAfterInterruptedWrite(partial);
       };
       // M3：本轮的中止器——「停止」按钮 abort 它即可干净停掉这条流（streamAgentChat 据此不报错收尾）。
       const abortController = new AbortController();
       agentAbortRef.current = abortController;
+      let releaseDraftSaves: (() => void) | null = null;
       try {
+        // AI 读的是盘上的稿子：先把作者没存的字存掉。存不上也照常发（AI 写的稿回来时稿纸会提示作者选）。
+        const flushed = await flushDraftSave();
+        if (!flushed.ok) showToast(`稿子还没存上（${flushed.error}），AI 看到的是上一次存下的那版。`, 5200);
+        // 回合里作者接着打的字先不存：AI 改了稿，回来时稿纸出提示让作者选，不会把作者的字静默换掉。
+        releaseDraftSaves = holdDraftSaves();
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
-        const currentChapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
+        const currentChapterNumber = useBookStore.getState().workspace.currentChapter?.chapterNumber;
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
         // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
-        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useWorkspaceStore.getState().workspace.messages);
+        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
         await streamAgentChat(
           {
             projectPath,
@@ -468,7 +324,6 @@ export function useChat(params: UseChatParams): UseChatResult {
             onToolCall: ({ toolName, toolCallId }) => {
               if (!ownsCurrentWorkspace()) return;
               project({ type: "tool-call", toolCallId: stepIdFor(toolName, toolCallId), toolName, startedAt: Date.now() });
-              // A-5：记一笔「本轮有章节写类工具」——「停止」收尾时拉一次磁盘对账（回执可能被腰斩、盘上其实已写）。
               if (toolName === "generate_draft" || toolName === "revise_draft" || toolName === "commit_apply") {
                 sawChapterWriteToolCall = true;
               }
@@ -478,25 +333,22 @@ export function useChat(params: UseChatParams): UseChatResult {
                 streamedDraft = ""; // 新一次出稿：清空流式缓冲，逐字从头累加。
                 draftStreamChapter = null;
                 reportedDraftChapterMismatch = false;
+                generateAttempt = { bodyBefore: useDraftStore.getState().body };
                 // 出稿一开始就把流程态置「正在生成草稿」，否则续写时标题区会残留上一章的「已入库」误导用户。
-                useWorkspaceStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
+                useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
               } else if (toolName === "revise_draft") {
-                // 用户让 AI 改稿：也把中间区切到写作台，改完的正文/高亮就在眼前（和出稿、和体检卡「改掉这句」一致，
-                // 别让改动默默落进数据层、用户还停在资料中心以为没反应）。revise 不流式，故不动 streamedDraft/flowStatus。
+                // 用户让 AI 改稿：也把中间区切到写作台，改完的正文就在眼前。revise 不流式。
                 useNavigationStore.getState().requestCenterView("desk");
               } else if (toolName === "commit_apply") {
-                // Proof anchor for SSE-loss reconciliation. Unrelated tool
-                // errors never get permission to replace the editor draft.
-                commitReconciliationDraft = useWorkspaceStore.getState().workspace.draft.content;
+                commitAttempt = { committedBefore: useDraftStore.getState().committed?.body ?? null };
               }
             },
             onDraftPhase: ({ phase }) => {
               if (!ownsCurrentWorkspace()) return;
-              useWorkspaceStore.getState().setDraftPhase(phase);
+              useUiStore.getState().setDraftPhase(phase);
             },
             onDraftDelta: ({ chapter, text }) => {
               if (!ownsCurrentWorkspace()) return;
-              const store = useWorkspaceStore.getState();
               if (draftStreamChapter === null) {
                 const previousChapter = operation.chapter;
                 const adopted = retargetWorkspaceOperation(operation, { chapter });
@@ -504,8 +356,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 operation = adopted;
                 draftStreamChapter = chapter;
                 if (chapter !== previousChapter) {
-                  const cur = store.workspace.currentChapter;
-                  store.updateWorkspace({
+                  const storeBook = useBookStore.getState();
+                  const cur = storeBook.workspace.currentChapter;
+                  storeBook.updateWorkspace({
                     currentChapter: {
                       ...cur,
                       chapterNumber: chapter,
@@ -513,17 +366,18 @@ export function useChat(params: UseChatParams): UseChatResult {
                       title: `第${chapter}章`,
                       hasCommittedChapter: false,
                       hasDraftFile: false,
-                      hasWorkspaceSnapshot: false,
-                    },
-                    draft: {
-                      ...store.workspace.draft,
-                      chapterNumber: chapter,
-                      status: "draft",
-                      title: `第${chapter}章`,
-                      content: "",
-                      wordCount: 0,
                     },
                   });
+                }
+                if (useDraftStore.getState().chapter !== chapter && projectPath) {
+                  // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。
+                  const switchProject = projectPath;
+                  paperSwitch = openPaper(switchProject, chapter)
+                    .catch(() => {
+                      useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, committed: null, editedSinceCommit: null });
+                    })
+                    .then(() => { if (ownsCurrentWorkspace()) showStreaming(); });
+                  track(paperSwitch);
                 }
               } else if (chapter !== draftStreamChapter) {
                 if (!reportedDraftChapterMismatch) {
@@ -533,16 +387,12 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               streamedDraft += text;
-              // 显示用正文：去掉模型开头的「# 第N章 · 标题」行（出稿完成后引擎本就会剥掉，别在流式期间先露出来）。
-              const displayDraft = streamingDraftDisplay(streamedDraft);
-              const wordCount = countTextWords(displayDraft); // 字数跟着流式长，别残留上一章旧字数。
-              store.updateDraft({ content: displayDraft, wordCount });
+              showStreaming();
             },
             onToolResult: (info) => {
               if (!ownsCurrentWorkspace()) return;
               // 跨章工具结果（用户在第 1 章、agent 核实第 99 章的 commit_preview 等）也必须把对应步骤
-              // 落定——否则该步永远 running（金光不散、落盘成僵尸 partial，副产品 B）。章号不匹配只跳过
-              // 「工作区应用」（overview/草稿/流程态会写错章），不跳过步骤收尾。
+              // 落定——否则该步永远 running。章号不匹配只跳过「工作区应用」，不跳过步骤收尾。
               const chapterMismatch = typeof info.chapter === "number" && info.chapter !== operation.chapter;
               project({
                 type: "tool-result",
@@ -551,100 +401,59 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
+              if (info.toolName === "generate_draft") endStreaming();
               if (chapterMismatch) {
-                // 审计 Med：跨章工具结果只跳过「工作区草稿/流程态应用」（会写错当前章），但携带最新
-                // 章列表/入库状态的 overview 不能一起丢——否则章列表/侧栏停在旧态，与聊天里「已入库」
-                // 自相矛盾。资料面板按 foundation 口径刷新 + 如实提示（draft-delta 跨章同款）。
+                // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                 if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
                 showToast(
                   `这次操作写的是第 ${info.chapter} 章，不在当前章（第 ${operation.chapter} 章）；当前章的稿子没有变动，章节列表已按最新状态刷新。`,
                   4200,
                 );
-                // #13（长跑×3）：onToolCall(generate_draft) 曾乐观把【当前章】置成 draft_generating，
-                // 结果落定是「写的是另一章」（多候选采样不接 delta sink / retarget 用尽时不会有流式正文
-                // 把 operation 带过去）→ 当前章不可能还在生成，这里立即按编辑器现状复位，
-                // 别让「正在生成工作稿…」一直挂到回合结束（跨章分支原本直接 return、跳过全部复位链）。
                 unstickGeneratingFlow();
                 return;
               }
-              if (info.toolName === "commit_apply") commitReconciliationDraft = null;
-              // undo 真撤销（undone=true；undo_last_change / 今并入 manage_snapshots op=undo）：先冻结 autosave
-              // 再做任何事——从此刻起本页不再有任何 PUT 能把撤销前的旧稿写回磁盘；下面的 overview 刷新照常跑
-              // （资料面板），草稿由磁盘真值异步接管。undone=false（没东西可撤）不触发。
-              if (info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots")) {
-                suspendAutosave();
-                markRecentWorkspaceUndo();
-                agentUndoSyncPromise ??= syncWorkspaceAfterAgentUndo();
-              }
-              // 去 AI 味体检：报告已随上面 project(output:info) 挂到这条 assistant 消息上（见 agentEventProjection
-              // 的 check_ai_flavor 分支），在时间线里随对话渲染体检卡——不再写全局 store（旧挂件会一直钉底部）。
-              // A（2026-06-18）：让本章流程状态在纯 agent 流程也走完整生命周期——据刚完成的工具推进 flowStatus，
-              // 不再只有 draftBody 的工具才推进（质检/审稿/预览这些只读工具原本走 else 分支保留原状→顶部流程地图半死）。
-              // nextFlowAfterToolResult：在推进之上还管「出稿 ok=false（守卫拒绝走 tool-result，不是 tool-error）时
-              // 把卡在 draft_generating 的状态据草稿内容复位」——否则标题/输入框卡在「正在生成草稿」谎报（Codex 复测命中）。
-              if (info.toolName === "generate_draft" && info.ok === false) {
-                rollbackStreamedDraftFromDisk(); // 半截稿回滚：磁盘真值接管（见函数注释）
-              }
-              const flowBefore = useWorkspaceStore.getState().workspace.flowStatus;
-              const hasDraftContent = useWorkspaceStore.getState().workspace.draft.content.trim().length > 0;
+              if (info.toolName === "commit_apply") commitAttempt = null;
+              const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
+              if (undone) agentUndone = true;
+              const flowBefore = useBookStore.getState().workspace.flowStatus;
+              const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
               const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
-              // 按刷新范围更新工作台（保留各自的既有刷新函数，只调用不改它们）。
               if (!info.overview) {
-                if (info.toolName === "commit_apply" && info.committed === true && typeof info.draftBody === "string") {
-                  const store = useWorkspaceStore.getState();
-                  const current = store.workspace;
-                  const committedTitle = info.draftTitle ?? current.draft.title;
-                  const committedBody = info.draftBody;
-                  store.updateWorkspace({
+                if (info.toolName === "commit_apply" && info.committed === true) {
+                  const storeBook = useBookStore.getState();
+                  const current = storeBook.workspace;
+                  storeBook.updateWorkspace({
                     flowStatus: "committed",
-                    currentChapter: {
-                      ...current.currentChapter,
-                      chapterNumber: operation.chapter,
-                      title: committedTitle,
-                      hasCommittedChapter: true,
-                      hasDraftFile: true,
-                      hasWorkspaceSnapshot: true,
-                    },
+                    currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
                     chapters: current.chapters.map((item) => item.chapterNumber === operation.chapter
-                      ? { ...item, title: committedTitle, hasCommittedChapter: true, hasDraftFile: true, hasWorkspaceSnapshot: true }
+                      ? { ...item, hasCommittedChapter: true, hasDraftFile: true }
                       : item),
-                    draft: {
-                      ...current.draft,
-                      chapterNumber: operation.chapter,
-                      title: committedTitle,
-                      content: committedBody,
-                      savedContent: committedBody,
-                      wordCount: committedBody.trim() ? countTextWords(committedBody) : undefined,
-                      status: "committed",
-                    },
                   });
-                  return;
+                } else if (nextFlow !== flowBefore) {
+                  // 没带 overview 的工具（如质检 / 预览只读）也要推进流程状态，否则地图卡在写稿不动。
+                  useBookStore.getState().updateWorkspace({ flowStatus: nextFlow });
                 }
-                // 没带 overview 的工具（如质检/预览只读）也要推进流程状态，否则地图卡在写稿不动。
-                if (nextFlow !== flowBefore) useWorkspaceStore.getState().updateWorkspace({ flowStatus: nextFlow });
-                return;
-              }
-              if (info.refreshScope === "full") {
-                const versionChapter = info.chapter ?? useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
-                const staleDraft = typeof info.draftVersion === "number"
-                  && info.draftVersion < (appliedDraftVersion.get(versionChapter) ?? 0);
-                if (typeof info.draftVersion === "number" && !staleDraft) appliedDraftVersion.set(versionChapter, info.draftVersion);
-                if (typeof info.draftBody === "string" && info.draftBody.trim() && !staleDraft) {
-                  // 改草稿/入库工具：把真正文作为 draftContent 载入工作区。
-                  // - generate_draft/revise_draft → draft_ready（草稿待保存）。
-                  // - commit_apply 成功（committed=true）→ committed（已入库；让 autosave 不再把章节写回 drafts/fast）。
-                  // 与老路径（HTTP 出稿/定稿）同构——否则只用 overview 刷新会把草稿冲成占位、autosave 抹掉真正文。
-                  // 传 info.chapter（工具实际操作的章号）让前端认领权威章：写第2章时推进当前章到2，autosave 才会写 chapter-0002.md 而非覆盖 chapter-0001.md（修跨章污染）。
-                  applyOverviewToWorkspace(info.overview, info.draftBody, nextFlow, info.draftTitle, info.chapter);
-                } else {
-                  // 读类/未带正文的 full 刷新（如 read_state_overview）：回传工作区现有草稿正文，
-                  // 绝不让 applyOverviewToWorkspace 用 overview 占位重置草稿（否则 autosave 会把占位写回磁盘抹掉真正文）。
-                  const current = useWorkspaceStore.getState().workspace;
-                  applyOverviewToWorkspace(info.overview, current.draft.content, nextFlow, current.draft.title);
-                }
+              } else if (info.refreshScope === "full") {
+                // 传 info.chapter（工具实际操作的章号）让前端认领权威章。
+                applyOverviewToWorkspace(info.overview, {
+                  flowStatus: nextFlow,
+                  ...(typeof info.chapter === "number" ? { chapter: info.chapter } : {}),
+                  ...(info.draftTitle ? { title: info.draftTitle } : {}),
+                });
               } else if (info.refreshScope === "foundation") {
                 refreshWorkspaceFromOverview?.(info.overview);
               }
+              // 工具可能改了这一章的稿子（出稿、改稿、定稿、改名、撤销……）：按盘上重读稿纸。
+              // 盘上没变什么都不发生；变了而作者手上没有没存的字就换上，有就出提示让作者选。
+              // AI 撤销是作者自己要的：直接换上。
+              track((paperSwitch ?? Promise.resolve())
+                .then(() => refreshPaper(undone ? { force: true } : {}))
+                .then(() => {
+                  // 撤销后这一章回到哪一步，按盘上那版算（可能退回到「还没写过」）。
+                  if (undone && ownsCurrentWorkspace()) {
+                    useBookStore.getState().updateWorkspace({ flowStatus: flowStatusForPaper(useDraftStore.getState()) });
+                  }
+                }));
             },
             onToolError: (info) => {
               if (!ownsCurrentWorkspace()) return;
@@ -659,17 +468,17 @@ export function useChat(params: UseChatParams): UseChatResult {
               });
               // 再如实回报：追加一条可重试的错误气泡。
               appendErrorMessage(info.message, info.retryable);
-              if (info.toolName === "generate_draft") rollbackStreamedDraftFromDisk(); // 半截稿回滚（磁盘真值接管）
-              unstickGeneratingFlow();          // 出稿失败：标题区别卡在「正在生成草稿」
-              requestChapterReconciliation(); // R2：断流可能其实已入库，拉磁盘真值对账更正
+              if (info.toolName === "generate_draft") endStreaming(); // 半截流式稿只是显示，丢掉即可，盘上旧稿没动
+              unstickGeneratingFlow();
+              requestResync(); // 断流可能其实已写盘，重读盘上真值更正
             },
             onError: (message, retryable) => {
               if (!ownsCurrentWorkspace()) return;
               sawError = true;
               appendErrorMessage(message, retryable);
-              rollbackStreamedDraftFromDisk(); // 出稿流式中途断：半截稿同样回滚（非出稿场景 streamedDraft 为空，天然不触发）
-              unstickGeneratingFlow();          // 出稿失败：标题区别卡在「正在生成草稿」
-              requestChapterReconciliation(); // R2：同上
+              endStreaming();
+              unstickGeneratingFlow();
+              requestResync();
             },
             onDone: () => undefined,
           },
@@ -687,8 +496,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             id: `assistant-agent-error-${Date.now()}`,
             role: "assistant",
             content: "AI 服务暂时没响应，本次没有改动。",
-            isErrorNotice: true,
-            errorDetail: message,
+            cards: [{ type: "error", detail: message }],
             suggestedActions: [
               {
                 id: "retry-agent",
@@ -701,90 +509,60 @@ export function useChat(params: UseChatParams): UseChatResult {
             ],
           });
         }
-        unstickGeneratingFlow();          // 出稿失败：标题区别卡在「正在生成草稿」
-        requestChapterReconciliation(); // R2 兜底：未捕获异常路径也对账一次
+        endStreaming();
+        unstickGeneratingFlow();
+        requestResync();
       } finally {
-        // A-5 停止收尾：用户点「■」abort 只是断了流（streamAgentChat 对主动 abort 不报错、不收尾），
-        // 回合收尾必须在这里补齐——
-        //   ① 残留 running 的步骤/卡片结算成「已停止」（不是 failed：不是工具失败，是人喊停），金光/字幕随之静止；
-        //   ② 卡在「正在生成草稿」的流程态同步按编辑器现状复位（盘上真值随后异步再校）；
-        //   ③ 写类工具在飞 → 拉一次磁盘对账（回执丢了但盘上可能已写完整稿/已入库）。
+        // 停止收尾：用户点「■」abort 只是断了流（streamAgentChat 对主动 abort 不报错、不收尾），回合收尾在这里补齐——
+        //   ① 残留 running 的步骤/卡片结算成「已停止」，金光/字幕随之静止；
+        //   ② 流出来的半章：盘上没有更全的一版就留给作者（「已停止 · 已写出的内容保留」）；
+        //   ③ 写类工具在飞 → 重读一次盘上真值（回执丢了但盘上可能已写完整稿/已入库）。
         const wasAborted = abortController.signal.aborted;
         if (wasAborted && ownsCurrentWorkspace()) {
           updateMessage(assistantMsgId, (current) => settleStoppedAgentTurn(current, Date.now()));
+          const partial = useDraftStore.getState().streaming;
+          endStreaming();
           unstickGeneratingFlow();
-          if (sawChapterWriteToolCall) {
-            reconciliationPromise ??= reconcileAbortedTurnFromDisk();
-          }
+          requestResync(partial);
         }
-        // #13 回合收尾兜底（长跑×3：回合正常结束后标题区仍挂「正在生成工作稿…」）：SSE 回合走到
-        // finally 时 generate_draft 必然已结束（工具在流内串行执行），残留的 draft_generating 只能是
-        // 某条中途分支没复位（跨章出稿直接 return / 出稿后守卫拦下定稿、后续工具不推进流程态等）。
-        // 诚实按编辑器现状复位（有内容→draft_ready，一字未出→idle）；unstickGeneratingFlow 自带
-        // 「只在确实卡在 draft_generating 时才动」守门，正常回合零影响。此时 operation token 还没释放，
-        // 不会有下一轮出稿并发置位（beginWorkspaceOperation 单槽互斥）。
-        if (!wasAborted) unstickGeneratingFlow();
-        useWorkspaceStore.getState().setDraftPhase(null);
-        // 保持 operation 所有权直到盘上真值读完；否则异步 fetch 刚返回，finally 已释放 token，
-        // 对账会把本应恢复的成功结果误当成迟到数据丢掉。
-        if (reconciliationPromise) await reconciliationPromise;
-        // agent 撤销的磁盘真值接管同理：须在 token 释放前等完（接管内部用 ownsCurrentWorkspace 守门）。
-        if (agentUndoSyncPromise) await agentUndoSyncPromise;
+        // 回合收尾兜底：SSE 回合走到 finally 时 generate_draft 必然已结束，残留的流式显示 / draft_generating
+        // 只能是某条中途分支没复位，按稿纸现状复位（unstickGeneratingFlow 只在确实卡住时才动）。
+        if (!wasAborted) {
+          endStreaming();
+          unstickGeneratingFlow();
+        }
+        useUiStore.getState().setDraftPhase(null);
+        // 保持 operation 所有权直到盘上真值读完；否则异步读刚返回，finally 已释放 token，结果会被当成迟到数据丢掉。
+        // 但最多等 RESYNC_WAIT_MS：读盘卡住不能把整个工作区一直占着（迟到的结果按所有权丢掉，稿纸下次读盘自会对上）。
+        await settleWithin([...(resyncPromise ? [resyncPromise] : []), ...pendingPaperSyncs], RESYNC_WAIT_MS);
+        releaseDraftSaves?.();
         if (!ownsCurrentWorkspace() && isWorkspaceOperationCurrent(operation)) {
           notifyStaleOperation();
         }
-        // 回合终点打点：正常完成 / tool-error / onError / 未捕获兜底都走到这里，
-        // 保证块头耗时在失败路径也能落地（onDone 只在正常流末尾触发，覆盖不全）。
         if (ownsCurrentWorkspace()) {
+          // 回合终点打点：正常完成 / 失败 / 停止都走到这里，保证块头耗时落地。
           updateMessage(assistantMsgId, (current) => ({
             ...current,
             turnEndedAt: Date.now(),
           }));
+          // AI 撤销后，旧回合挂着的建议条（确认定稿 / 确认写入资料…）已过时，剥掉。
+          if (agentUndone) {
+            const liveMessages = useChatStore.getState().messages;
+            const withoutStaleSuggestions = stripStaleTurnSuggestions(liveMessages);
+            if (withoutStaleSuggestions !== liveMessages) {
+              useChatStore.getState().setMessages(withoutStaleSuggestions);
+            }
+          }
         }
-        // 回合收尾的重载裁定（在释放 token 之前判定）：
-        //   ① agent 撤销接管已完成（autosave 仍冻结）且用户没切书/切章 → 回合最末整页重载；
-        //   ② R7.2 回合中撞过 409（reloadAfterWorkspaceRevisionConflict 延迟了重载）→ 走同一段收尾，
-        //      先把整回合回复写回会话文件再重载，绝不腰斩。
-        const pendingConflictReload = takePendingRevisionReload();
-        const reloadAfterAgentUndo = agentUndoSyncPromise !== null && ownsCurrentWorkspace();
-        const reloadAfterTurnConflict = pendingConflictReload !== null
-          && ownsCurrentWorkspace()
-          && useNavigationStore.getState().projectPath === pendingConflictReload.projectPath;
         if (isWorkspaceOperationCurrent(operation)) {
           if (ownsCurrentWorkspace()) setChatLoading(false);
           finishWorkspaceOperation(operation);
         }
         agentAbortRef.current = null; // 本轮收尾，清掉中止器（避免「停止」误伤下一轮）。
-        // 把对话同步冲进 sessionStorage 并标记「下一次开书优先 session 对话」（磁盘上的旧按章对话文件可能被 git 回退），
-        // 再整页重载——与 undoToTurn 同一收尾；放在回合最末，不腰斩 agent 的收尾文字。
-        if (reloadAfterAgentUndo || reloadAfterTurnConflict) {
-          // R7.2：撤销/回退后，旧回合挂着的建议条（确认定稿 / 确认写入资料…）已过时——落盘前剥掉，
-          // 重载后不再显示（sessionStorage 与会话文件同源，都要走剥掉后的版本）。
-          const liveMessages = useWorkspaceStore.getState().workspace.messages;
-          const withoutStaleSuggestions = stripStaleTurnSuggestions(liveMessages);
-          if (withoutStaleSuggestions !== liveMessages) {
-            useWorkspaceStore.getState().updateWorkspace({ messages: withoutStaleSuggestions });
-          }
-          markUndoReloadPreferSession();
-          flushPendingMessageSave();
-          // 重载后对话以后端会话文件为准（readChatSession），而撤销期间 autosave 冻结、会话文件停在回合中途——
-          // 不先写回，重载后这一回合只剩半截「AI 分析」，撤销回报和收尾文字都没了（2026-10-07 真机走查实锤）。
-          const undoSessionId = useWorkspaceStore.getState().activeSessionId;
-          if (projectPath && undoSessionId) {
-            await saveChatSessionMessages(projectPath, undoSessionId, useWorkspaceStore.getState().workspace.messages)
-              .catch(() => undefined);
-          }
-          reloadPage();
-        } else if (agentUndoSyncPromise !== null || pendingConflictReload !== null) {
-          // 用户已切书/切章：撤销前的旧稿已随工作区替换消失，不重载；解冻 autosave 让新工作区照常保存
-          // （延迟的冲突重载同理：不重载就必须解冻，否则本页 autosave 永久停摆）。
-          resumeAutosave();
-        }
       }
     },
     [
       appendMessage,
-      applyOverviewToWorkspace,
       projectPath,
       refreshWorkspaceFromOverview,
       setChatError,
@@ -797,24 +575,20 @@ export function useChat(params: UseChatParams): UseChatResult {
   /* ---- undoToTurn：块级「撤销到此」 ---- */
 
   /**
-   * 块级精确撤销：把某个 AI 回合的 git 改动整块回退，并让对话历史与工作台同步回退，不整页刷。
+   * 块级精确撤销：把某个 AI 回合的 git 改动整块回退，并让对话历史与工作台同步回退，不整页刷新（重构 P5）。
    *
-   * 步骤（顺序谨慎）：
-   *  1. 防御：streaming 未结束（chatLoading）或该回合无 git 快照（turnSnapshots 空）→ 不动。
-   *  2. restore 该回合的「首次写入前快照」turnSnapshots[0] —— 磁盘整块回退到回合开始前。
-   *  3. 截断对话：去掉该回合 assistant 消息及其后的所有消息（保留触发它的用户消息，可重问）。
-   *  4. 重拉 overview 刷工作台：复用读类「无正文回传现有 draft.content」的防占位写法，
-   *     绝不用 overview 占位重置 draft（否则 autosave 会把占位写回磁盘抹掉真正文）。
-   *  5. 失败不静默：追加一条 system 错误气泡，并把对话/工作台留在原状（git restore 失败时未截断）。
-   *
-   * 与全局 SnapshotHistoryDialog 并存：两者共用同一 git 历史，这里是 inline 按回合的精确入口。
+   * 步骤：
+   *  1. 防御：回合还在跑（chatLoading）或该回合没有写盘快照（turnSnapshots 空）→ 不动。
+   *  2. 先把稿子和对话存掉（存不上就不撤，免得作者手上的字没进存档就被盖掉）。
+   *  3. restore 该回合的「首次写入前快照」turnSnapshots[0] —— 盘上整块回到回合开始前。
+   *  4. 截断对话：连同触发该回合的用户提问一起去掉该回合及其后，写回会话文件（对话只有这一份）。
+   *  5. 原地重读稿纸和书的状态（syncWorkspaceAfterRestore）。滚动位置、输入框里没发的字都还在。
+   *  失败不静默：restore 失败如实回报「没动盘」、不截断对话。
    */
   const undoToTurn = useCallback(
     async (message: ChapterMessage): Promise<void> => {
-      const store = useWorkspaceStore.getState();
-      // 防御①：streaming 中不允许撤上一回合（会回退正在写的中间态）。
-      if (store.chatLoading) return;
-      // 防御②：草稿/纯读回合无 git 快照，不可块级撤销（块脚本就不渲染按钮，这里再兜一道）。
+      const storeChat = useChatStore.getState();
+      if (storeChat.chatLoading) return;
       const undoSnapshotId = message.turnSnapshots?.[0]?.snapshotId;
       if (!undoSnapshotId) return;
       if (!projectPath) {
@@ -825,25 +599,23 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("当前项目已经变化，不能发送旧工作区请求。", 4200);
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
 
-      // M5：restore 前先冻结 autosave + 排空在途 PUT，否则一笔在途/待触发的 autosave 落在 restore 之后
-      //     会把回合后的旧草稿写回磁盘、抹掉回退（撤销时灵时不灵）。冻结挡住后续（含下面截断又触发的那次）；
-      //     drain 等掉已发出的在途 PUT，使它落在 restore 之前、随后被 restore 一并回退。冻结态随 reload 重置。
-      suspendAutosave();
-      await drainAutosave();
+      const flushed = await flushAllSaves();
+      if (!flushed.ok) {
+        showToast(`${flushed.error}。先别撤销，等它存上再试。`, 5200);
+        return;
+      }
 
-      // restore 是唯一动磁盘的步骤；先单独 try，失败时如实回报「没动磁盘」、不截断对话。
+      // restore 是唯一动盘的步骤；先单独 try，失败时如实回报「没动盘」、不截断对话。
       try {
-        // ② git 整块回退到该回合首次写入前。
         await restoreSnapshotApi(projectPath, undoSnapshotId);
       } catch (error) {
-        // 撤销失败、不会 reload：解冻 autosave，否则本页 autosave 永久停摆（M5 冻结的副作用）。
-        resumeAutosave();
         const messageText = error instanceof Error ? error.message : String(error);
         appendMessage({
           id: `assistant-undo-error-${Date.now()}`,
@@ -854,71 +626,26 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
 
-      // ③ 截断对话：连同触发该回合的用户提问一起去掉该回合及其后（回到「没问过」的干净态，
-      //    不留「你问了、AI 没回」的孤儿用户气泡）。updateWorkspace 同步把 messages 写进 sessionStorage。
-      const liveMessages = useWorkspaceStore.getState().workspace.messages;
+      // 截断对话：连同触发该回合的用户提问一起去掉该回合及其后（回到「没问过」的干净态）。
+      // git restore 刻意不回退会话文件——必须显式写回，否则下次开书被撤销的回合又整段回来。
+      const liveMessages = useChatStore.getState().messages;
       const truncated = truncateMessagesFrom(liveMessages, undoCutId(liveMessages, message.id));
-      useWorkspaceStore.getState().updateWorkspace({ messages: truncated });
-
-      // 审计 High-3（会话维度撤销）：reload 后消息一律取自会话文件（openProject → readChatSession），
-      // 而 git restore 又刻意不回退 chat-sessions——不显式写会话文件，被撤销的回合会在 reload 后整段复活，
-      // 「撤销到此」在对话维度静默失效。截断后立即写回会话文件（空截断=撤掉全部回合，走 allowEmpty 显式旁路）。
-      // 失败不静默：toast 如实告知（撤销本体已生效，仅历史文件的截断未持久，二次刷新可能复活）。
-      const sessionId = useWorkspaceStore.getState().activeSessionId;
-      if (sessionId) {
-        try {
-          await saveChatSessionMessages(
-            projectPath,
-            sessionId,
-            truncated,
-            truncated.length === 0 ? { allowEmpty: true } : undefined,
-          );
-        } catch (error) {
-          showToast(
-            `对话历史的撤销未能写入会话文件（${error instanceof Error ? error.message : String(error)}）。` +
-              "本次页面已回退，但再次刷新后对话可能恢复到撤销前；可重新打开本书再试一次撤销。",
-            5200,
-          );
-        }
+      useChatStore.getState().setMessages(truncated);
+      const saved = await saveChatNow(truncated.length === 0 ? { allowEmpty: true } : {});
+      if (!saved.ok) {
+        showToast(
+          `对话历史的撤销没写进会话文件（${saved.error}）。稿子和资料已经撤回去了，但重新打开本书后对话可能还是撤销前的样子。`,
+          5200,
+        );
       }
 
-      // H5 根治：把干净截断【显式写回当前章后端文件】，使磁盘成为干净真值——否则磁盘对话文件仍是被 git
-      //    restore 还原的回合起点脏态（含孤儿消息），reload 时（dev StrictMode 让 openProject 跑两次、
-      //    一次性 preferSession flag 被首次消费 → 二次回退读磁盘；或用户二次刷新）孤儿气泡复活。
-      //    读回 restore 后的快照拿回退草稿，只替换 messages，不重写 .md（草稿已被 git 还原）。失败则降级靠 flag。
-      // 优先用被撤销回合实际操作的章（工具回报、回写进 turnSnapshots[0].chapterNumber）：单聊天走天涯后用户
-      //    可能在第5章撤销一个属于第1章的回合，按当前停留章会错写到第5章。旧快照无 chapterNumber 时退化当前章。
-      const undoChapter =
-        message.turnSnapshots?.[0]?.chapterNumber ??
-        useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
       try {
-        const restored = await fetchChapterWorkspace({ projectPath, chapter: undoChapter });
-        const saved = await saveChapterWorkspace(buildUndoPersistRequest(projectPath, undoChapter, truncated, restored));
-        if (saved.revision !== undefined) {
-          recordWorkspaceRevision(projectPath, undoChapter, saved.revision);
-          const live = useWorkspaceStore.getState();
-          if (useNavigationStore.getState().projectPath === projectPath
-            && live.workspace.currentChapter.chapterNumber === undoChapter) {
-            live.setWorkspaceRevision(saved.revision);
-          }
-        }
-      } catch {
-        // 写回失败（极少，localhost）：不阻断撤销，降级靠下面的 preferSession flag。
+        await syncWorkspaceAfterRestore(projectPath);
+      } catch (error) {
+        showToast(`撤销已完成，但重读盘上状态没成功（${error instanceof Error ? error.message : String(error)}）；换一章再回来即可看到撤销后的稿子。`, 5200);
       }
-
-      // H5 兜底：标记下一次 openProject 优先 sessionStorage 干净截断、忽略磁盘对话（防显式写回未命中 openProject 实际读的章）。
-      markUndoReloadPreferSession();
-      // 节流窗口（250ms）内的截断还没落盘就 reload 会读到旧 sessionStorage → 孤儿气泡复活。同步冲盘后再重载。
-      flushPendingMessageSave();
-      // ④ 整页重载，从磁盘真值重建工作台 —— 与全局快照恢复（App.tsx 的 onRestored）同一收尾。
-      //    必须重载而非局部刷新：草稿正文不在 overview 里（overview 只是状态摘要），且 autosave
-      //    依赖前端 draft.content。若像读类刷新那样保留旧 draft.content，autosave（350ms 防抖、
-      //    依赖 messages 变化会重跑）会把「该回合之后生成的旧草稿」写回磁盘、抹掉刚 restore 的回退
-      //    —— 这正是 Codex M3 V2 实测到的状态不一致 bug。重载后：messages 取截断后的（sessionStorage），
-      //    草稿/资料取磁盘真值（已被 git restore 还原），三者一致，且页面重建前无旧稿可被 autosave 写回。
-      window.location.reload();
     },
-    [appendMessage, projectPath, setChatError],
+    [appendMessage, projectPath, setChatError, showToast],
   );
 
   /* ---- handleSendMessage ---- */
@@ -931,8 +658,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -944,9 +672,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       };
 
       const conversation = buildOutboundConversation(
-        workspace.messages,
-        useWorkspaceStore.getState().activeArchivedCount,
-        useWorkspaceStore.getState().chatHistoryBudget,
+        liveChat.messages,
+        liveChat.activeArchivedCount,
+        liveChat.chatHistoryBudget,
       );
 
       appendMessage(userMessage);
@@ -954,8 +682,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 自动起名：还叫默认「新会话」的会话，首条用户消息一发就用原话压成标题命名。
       // 手动/已自动命名过的会话名不是默认值，不会被覆盖；fire-and-forget，不阻塞发送。
       {
-        const st = useWorkspaceStore.getState();
-        const active = st.sessions.find((s) => s.id === st.activeSessionId);
+        const stChat = useChatStore.getState();
+        const active = stChat.sessions.find((s) => s.id === stChat.activeSessionId);
         if (active && (active.name === "新会话" || active.name === "会话")) {
           const requestSeq = ++autoRenameRequestSeqRef.current;
           const originProjectPath = projectPath;
@@ -964,11 +692,11 @@ export function useChat(params: UseChatParams): UseChatResult {
             // 只更新 sessions 列表（拿到新名），不传 activeSessionId：异步起名期间用户
             // 若已切到别的会话，传回旧的 activeSessionId 会把当前选择回拉，造成名/内容错乱。
             .then((r) => {
-              const live = useWorkspaceStore.getState();
+              const liveChatNow = useChatStore.getState();
               if (requestSeq !== autoRenameRequestSeqRef.current
                 || useNavigationStore.getState().projectPath !== originProjectPath
-                || live.activeSessionId !== originSessionId) return;
-              live.setSessions(r.index.sessions);
+                || liveChatNow.activeSessionId !== originSessionId) return;
+              liveChatNow.setSessions(r.index.sessions);
             })
             .catch((err) => console.error("[useChat] 会话自动起名失败", err));
         }
@@ -979,7 +707,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     },
     [
       projectPath,
-      workspace.messages,
       appendMessage,
       setChatError,
       runAgentDispatch,
@@ -987,20 +714,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     ],
   );
 
-
-  /* ---- handleSelectAdviceCard ---- */
-
-  const handleSelectAdviceCard = useCallback(
-    (key: string, card: ChapterAdviceCard) => {
-      const exists = selectedAdviceCards.some((item) => item.key === key);
-      if (exists) {
-        setSelectedAdviceCards(selectedAdviceCards.filter((item) => item.key !== key));
-      } else {
-        setSelectedAdviceCards([...selectedAdviceCards, { key, card }]);
-      }
-    },
-    [selectedAdviceCards, setSelectedAdviceCards],
-  );
 
   /* ---- handleConfirmCommit：「确认定稿」按钮 ---- */
 
@@ -1012,12 +725,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveBook = useBookStore.getState();
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
         return;
       }
-      const chapter = target?.chapter ?? live.workspace.currentChapter?.chapterNumber;
+      const chapter = target?.chapter ?? liveBook.workspace.currentChapter?.chapterNumber;
       if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
         showToast("没找到要定稿的章节，请先打开那一章。", 4200);
         return;
@@ -1035,7 +750,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
@@ -1057,13 +772,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
         return;
       }
       const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
     },
@@ -1081,13 +797,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }
       const text = userActionChoiceText(action);
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
       if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
@@ -1102,11 +819,12 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
-      const live = useWorkspaceStore.getState();
+      const liveBook = useBookStore.getState();
+      const liveUi = useUiStore.getState();
       const action = chapterButtonAction(button, {
-        chapter: live.workspace.currentChapter?.chapterNumber,
-        chapters: live.workspace.chapters,
-        direction: live.steeringDirection,
+        chapter: liveBook.workspace.currentChapter?.chapterNumber,
+        chapters: liveBook.workspace.chapters,
+        direction: liveUi.steeringDirection,
       });
       if (!action) {
         appendMessage({ id: `assistant-button-nochapter-${Date.now()}`, role: "assistant", content: NO_CHAPTER_HINT });
@@ -1123,8 +841,8 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 已完成的动作（如「撤销本次修改」撤销成功后还能再点），成假入口。失败/未执行不摘，留着重试。
   const consumeSuggestedAction = useCallback(
     (consumed: SuggestedAction): void => {
-      const store = useWorkspaceStore.getState();
-      const carrier = [...store.workspace.messages].reverse().find((m) =>
+      const storeChat = useChatStore.getState();
+      const carrier = [...storeChat.messages].reverse().find((m) =>
         m.role === "assistant"
         && (m.suggestedActions ?? []).some((a) => a.id === consumed.id && a.endpoint === consumed.endpoint));
       if (!carrier) return;
@@ -1210,9 +928,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           void runAgentDispatch(
             original,
             buildOutboundConversation(
-              useWorkspaceStore.getState().workspace.messages,
-              useWorkspaceStore.getState().activeArchivedCount,
-              useWorkspaceStore.getState().chatHistoryBudget,
+              useChatStore.getState().messages,
+              useChatStore.getState().activeArchivedCount,
+              useChatStore.getState().chatHistoryBudget,
             ),
           );
           return;
@@ -1237,7 +955,6 @@ export function useChat(params: UseChatParams): UseChatResult {
 
   return {
     handleSendMessage,
-    handleSelectAdviceCard,
     handleSuggestedAction,
     handleSendUserAction,
     handleChapterButton,

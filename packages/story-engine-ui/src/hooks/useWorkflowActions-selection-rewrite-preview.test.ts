@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
+import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
 import type { DraftRevisionPreview, DraftRevisionTask, StateOverview } from "../api/types.js";
@@ -19,6 +22,20 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/client.js", () => apiMocks);
+
+const paperMocks = vi.hoisted(() => ({
+  applyOverviewToWorkspace: vi.fn(),
+  flushDraftSave: vi.fn(async () => ({ ok: true })),
+  refreshPaper: vi.fn(async () => undefined),
+}));
+vi.mock("../workspace/applyOverview.js", () => ({
+  applyOverviewToWorkspace: paperMocks.applyOverviewToWorkspace,
+  flowStatusForPaper: () => "draft_ready",
+}));
+vi.mock("../drafts/draftSync.js", () => ({
+  flushDraftSave: paperMocks.flushDraftSave,
+  refreshPaper: paperMocks.refreshPaper,
+}));
 
 const ORIGINAL_DRAFT = "# 第一章\n\n林远站在落地窗前，望着楼下的车流。这是一段需要润色的原文。";
 const SELECTION_TEXT = "林远站在落地窗前，望着楼下的车流。";
@@ -53,30 +70,28 @@ function makePreview(afterText: string): DraftRevisionPreview {
 describe("handleSelectionRewrite preview-then-confirm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    paperMocks.flushDraftSave.mockImplementation(async () => ({ ok: true }));
     useNavigationStore.getState().clearToast();
     useNavigationStore.setState({ projectPath: "/tmp/story-project" });
-    useWorkspaceStore.setState({
+    useBookStore.setState({
       workspace: {
         ...mockWorkspaceData,
         currentChapter: { id: "ch-001", chapterNumber: 1, title: "第一章", status: "current" },
         flowStatus: "draft_ready",
-        draft: {
-          chapterNumber: 1,
-          title: "第一章",
-          status: "draft",
-          content: ORIGINAL_DRAFT,
-          savedContent: ORIGINAL_DRAFT,
-        },
-        messages: [],
       },
-      draftActionLoading: null,
-      selectedAdviceCards: [],
+    });
+    useChatStore.setState({
+      messages: [],
       chatError: null,
+      activeSessionId: "",
+    });
+    useUiStore.setState({
+      draftActionLoading: null,
       steeringError: null,
       activeRevisionTask: null,
       activeRevisionPreview: null,
-      activeSessionId: "",
     });
+    useDraftStore.getState().loadPaper("/tmp/story-project", { chapter: 1, draft: { chapter: 1, body: ORIGINAL_DRAFT, version: "v-1" }, committed: null, editedSinceCommit: null });
   });
 
   it("sets the revision preview state instead of applying directly", async () => {
@@ -86,15 +101,14 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
       preview: makePreview("林远独自立在落地窗边，俯瞰楼下川流不息的车阵。"),
     });
 
-    const applyOverviewToWorkspace = vi.fn();
+    const applyOverviewToWorkspace = paperMocks.applyOverviewToWorkspace;
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace,
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleSelectionRewrite(SELECTION_TEXT, "polish");
 
-    const state = useWorkspaceStore.getState();
+    const state = { ...useUiStore.getState(), ...useChatStore.getState() };
 
     // preview was generated
     expect(apiMocks.previewDraftRevision).toHaveBeenCalledTimes(1);
@@ -102,7 +116,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     expect(apiMocks.applyDraftRevision).not.toHaveBeenCalled();
     expect(applyOverviewToWorkspace).not.toHaveBeenCalled();
     // the draft content is untouched (still original) — apply happens only on confirm
-    expect(state.workspace.draft.content).toBe(ORIGINAL_DRAFT);
+    expect(useDraftStore.getState().body).toBe(ORIGINAL_DRAFT);
 
     // a preview state is set so the comparison card can render in the codex shell
     expect(state.activeRevisionPreview).not.toBeNull();
@@ -124,15 +138,14 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleSelectionRewrite(SELECTION_TEXT, "polish");
 
-    const state = useWorkspaceStore.getState();
+    const state = { ...useUiStore.getState(), ...useChatStore.getState() };
     expect(apiMocks.applyDraftRevision).not.toHaveBeenCalled();
     expect(state.activeRevisionPreview).toBeNull();
     expect(state.activeRevisionTask).toBeNull();
-    expect(state.workspace.draft.content).toBe(ORIGINAL_DRAFT);
+    expect(useDraftStore.getState().body).toBe(ORIGINAL_DRAFT);
     expect(useNavigationStore.getState().toast).toContain("原文未改动");
   });
 
@@ -140,7 +153,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     const { useWorkflowActions } = await import("./useWorkflowActions.js");
     const before = "他心中五味杂陈。";
     const after = "他捏紧了杯子，没说话。";
-    useWorkspaceStore.setState({
+    useUiStore.setState({
       activeRevisionTask: makeTask(),
       activeRevisionPreview: { ...makePreview(after), beforeText: before, afterText: after, originTarget: ORIGIN_TARGET },
     });
@@ -148,8 +161,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleApplyRevisionPreview();
 
     const request = apiMocks.applyDraftRevision.mock.calls[0]?.[0] as { preview?: Record<string, unknown>; targetText?: string } | undefined;
@@ -158,7 +170,7 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
     // 目标级诚实守卫回传链：任务里存着的用户点名片段随 apply 带上（服务端自解析目标区间）
     expect(request?.targetText).toBe(SELECTION_TEXT);
 
-    const applied = useWorkspaceStore.getState().workspace.messages.find(
+    const applied = useChatStore.getState().messages.find(
       (m) => m.role === "assistant" && m.content.includes("改好"),
     );
     expect(applied).toBeTruthy();
@@ -169,20 +181,19 @@ describe("handleSelectionRewrite preview-then-confirm", () => {
   it("P0-3：零差异应用入口拦下——不发请求、toast 诚实、清理任务态", async () => {
     const { useWorkflowActions } = await import("./useWorkflowActions.js");
     const same = "林远站在落地窗前。";
-    useWorkspaceStore.setState({
+    useUiStore.setState({
       activeRevisionTask: makeTask(),
       activeRevisionPreview: { ...makePreview(same), beforeText: same, afterText: `  ${same}  `, originTarget: ORIGIN_TARGET },
     });
 
     await useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
-      applyOverviewToWorkspace: vi.fn(),
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleApplyRevisionPreview();
 
     expect(apiMocks.applyDraftRevision).not.toHaveBeenCalled();
     expect(useNavigationStore.getState().toast).toContain("没有可应用的改动");
-    expect(useWorkspaceStore.getState().activeRevisionPreview).toBeNull();
-    expect(useWorkspaceStore.getState().activeRevisionTask).toBeNull();
+    expect(useUiStore.getState().activeRevisionPreview).toBeNull();
+    expect(useUiStore.getState().activeRevisionTask).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AiSettingsPage } from "./AiSettingsPage.js";
 import { TASK_LABELS } from "../../ModelSettingsDialogTypes.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
 
 const fetchModelSettings = vi.fn();
 const saveModelSettings = vi.fn();
@@ -208,7 +208,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
   });
 
   it("改对话记忆上限立刻同步 workspaceStore（聊天在用值），不用重开书", async () => {
-    useWorkspaceStore.setState({ chatHistoryBudget: 96000 });
+    useChatStore.setState({ chatHistoryBudget: 96000 });
     await renderAndWaitLoaded();
 
     // 页面回填的是配置里的 300000；点「短」预设改成 48000
@@ -218,7 +218,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     expect(screen.getByDisplayValue("48000")).toBeTruthy();
     // 关键断言：工作区在用值同步更新（useChat 裁剪与 ChatSessionBar 徽标都读它），
     // 否则改完要重开书才生效——静默退化。
-    expect(useWorkspaceStore.getState().chatHistoryBudget).toBe(48000);
+    expect(useChatStore.getState().chatHistoryBudget).toBe(48000);
   });
 
   it("删除服务商：两击确认，配置中移除该家并剥离其任务分配", async () => {

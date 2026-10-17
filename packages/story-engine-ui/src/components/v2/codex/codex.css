@@ -1052,19 +1052,6 @@
   .step-card .drc-evi{margin:5px 0 0;padding-left:26px;font-size:11.5px;color:var(--faint);line-height:1.5;}
   .step-card .drc-fix{margin:8px 0 0 26px;}
 
-  /* REST 深度审稿卡（DraftAIReviewCard·body；外壳走 StepCard）：随消息滚动，不再钉底。 */
-  .step-card .dair-meta{margin:0 0 6px;font-size:11.5px;color:var(--muted);}
-  .step-card .dair-summary{margin:0 0 8px;font-size:12.5px;color:var(--text);line-height:1.55;}
-  .step-card .dair-primary{margin:0 0 8px;border-color:var(--accent-line);color:var(--accent-hi);background:var(--accent-soft);}
-  .step-card .dair-section{margin-top:8px;}
-  .step-card .dair-h{margin:0 0 3px;font-size:11px;font-weight:600;color:var(--faint);letter-spacing:.04em;}
-  .step-card .dair-h-danger{color:var(--danger);}
-  .step-card .dair-list{margin:0;padding-left:18px;color:var(--muted);font-size:11.5px;line-height:1.6;}
-  .step-card .dair-item{margin-bottom:6px;}
-  .step-card .dair-item strong{color:var(--text);}
-  .step-card .dair-desc{display:block;color:var(--muted);}
-  .step-card .dair-item .chip{margin-top:4px;}
-
   /* ═══ 统一卡外壳 StepCard：折叠卡 + 状态徽章 + 计时，暗金（审稿/去AI味/质检/入库共用）═══ */
   .step-card{margin:10px 16px;border-radius:var(--r-md);border:1px solid var(--line-weak);background:var(--sunken);overflow:hidden;}
   .step-card .sc-head{width:100%;display:flex;align-items:center;gap:8px;padding:11px 14px;background:transparent;border:0;cursor:pointer;color:var(--text);text-align:left;}

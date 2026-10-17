@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ChatSessionBar } from "./ChatSessionBar.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useBookStore } from "../../../stores/bookStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
+import { useUiStore } from "../../../stores/uiStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../../../utils/workspaceOperation.js";
-import { setAutosaveFlusher } from "../../../utils/autosaveControl.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,6 +26,12 @@ const sessionApi = vi.hoisted(() => ({
 
 vi.mock("../../../api/chatSessionsClient.js", () => sessionApi);
 
+const saveAll = vi.hoisted(() => ({ flushAllSaves: vi.fn(async () => ({ ok: true }) as { ok: true } | { ok: false; error: string }) }));
+vi.mock("../../../sync/saveAll.js", () => saveAll);
+const setAutosaveFlusher = (fn: (() => Promise<{ ok: true } | { ok: false; error: string }>) | null): void => {
+  saveAll.flushAllSaves.mockImplementation(fn ?? (async () => ({ ok: true })));
+};
+
 afterEach(() => {
   cleanup();
   setAutosaveFlusher(null);
@@ -36,16 +43,18 @@ describe("ChatSessionBar workspace busy barrier", () => {
     resetWorkspaceOperationForTests();
     setAutosaveFlusher(async () => ({ ok: true }));
     useNavigationStore.setState({ projectPath: "/tmp/story-project", toast: null });
-    useWorkspaceStore.setState({
+    useChatStore.setState({
       chatLoading: false,
-      draftActionLoading: "generate-draft",
-      steeringLoading: false,
       activeSessionId: "session-a",
       sessions: [{ id: "session-a", name: "当前会话", updatedAt: new Date().toISOString() }],
     });
+    useUiStore.setState({
+      draftActionLoading: "generate-draft",
+      steeringLoading: false,
+    });
     beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/story-project",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
     sessionApi.createChatSession.mockResolvedValue({
@@ -53,7 +62,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
       index: { activeSessionId: "session-b", sessions: [] },
     });
     sessionApi.listChatSessions.mockResolvedValue({
-      index: { activeSessionId: "session-a", sessions: useWorkspaceStore.getState().sessions },
+      index: { activeSessionId: "session-a", sessions: useChatStore.getState().sessions },
     });
   });
 
@@ -68,13 +77,15 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
   it("session switch owns the slot while the atomic set-active response is in flight", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({
-      draftActionLoading: null,
+    useChatStore.setState({
       activeSessionId: "session-a",
       sessions: [
         { id: "session-a", name: "会话 A", updatedAt: new Date().toISOString() },
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
+    });
+    useUiStore.setState({
+      draftActionLoading: null,
     });
     const switchGate = deferred<{
       session: { id: string; name: string; messages: readonly []; archivedCount: number };
@@ -88,7 +99,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     const intruder = beginWorkspaceOperation("agent-chat", {
       projectPath: "/tmp/story-project",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
     if (intruder) finishWorkspaceOperation(intruder);
@@ -96,15 +107,15 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     switchGate.resolve({
       session: { id: "session-b", name: "B", messages: [], archivedCount: 0 },
-      index: { activeSessionId: "session-b", sessions: useWorkspaceStore.getState().sessions },
+      index: { activeSessionId: "session-b", sessions: useChatStore.getState().sessions },
     });
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("new-session creation owns the slot until the new session is fully loaded", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     const createGate = deferred<{
       session: { id: string; name: string; messages: readonly []; archivedCount: number };
       index: { activeSessionId: string; sessions: readonly [] };
@@ -116,7 +127,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     const intruder = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/story-project",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
     if (intruder) finishWorkspaceOperation(intruder);
@@ -126,13 +137,13 @@ describe("ChatSessionBar workspace busy barrier", () => {
       session: { id: "session-b", name: "B", messages: [], archivedCount: 0 },
       index: { activeSessionId: "session-b", sessions: [] },
     });
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("awaits the old-session flush before creating and activating a new session", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     const flushGate = deferred<void>();
     setAutosaveFlusher(async () => {
       await flushGate.promise;
@@ -147,22 +158,24 @@ describe("ChatSessionBar workspace busy barrier", () => {
     fireEvent.click(screen.getByRole("button", { name: /新会话/u }));
     await Promise.resolve();
     expect(sessionApi.createChatSession).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("session-a");
+    expect(useChatStore.getState().activeSessionId).toBe("session-a");
 
     flushGate.resolve();
     await waitFor(() => expect(sessionApi.createChatSession).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
   });
 
   it("failed old-session flush blocks switching and leaves the original session visible", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({
-      draftActionLoading: null,
+    useChatStore.setState({
       activeSessionId: "session-a",
       sessions: [
         { id: "session-a", name: "会话 A", updatedAt: new Date().toISOString() },
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
+    });
+    useUiStore.setState({
+      draftActionLoading: null,
     });
     setAutosaveFlusher(async () => ({ ok: false, error: "save failed" }));
     render(<ChatSessionBar />);
@@ -172,19 +185,21 @@ describe("ChatSessionBar workspace busy barrier", () => {
     await waitFor(() => expect(useNavigationStore.getState().toast).toContain("保存失败"));
     expect(sessionApi.readChatSession).not.toHaveBeenCalled();
     expect(sessionApi.setActiveChatSession).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("session-a");
+    expect(useChatStore.getState().activeSessionId).toBe("session-a");
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("failed flush blocks session deletion before the delete request", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({
-      draftActionLoading: null,
+    useChatStore.setState({
       activeSessionId: "session-a",
       sessions: [
         { id: "session-a", name: "会话 A", updatedAt: new Date().toISOString() },
         { id: "session-b", name: "会话 B", updatedAt: new Date().toISOString() },
       ],
+    });
+    useUiStore.setState({
+      draftActionLoading: null,
     });
     setAutosaveFlusher(async () => ({ ok: false, error: "save failed" }));
     render(<ChatSessionBar />);
@@ -193,13 +208,13 @@ describe("ChatSessionBar workspace busy barrier", () => {
 
     await waitFor(() => expect(useNavigationStore.getState().toast ?? "").toContain("保存失败"));
     expect(sessionApi.deleteChatSession).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("session-a");
+    expect(useChatStore.getState().activeSessionId).toBe("session-a");
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("drops a late rename response after the project/session list has changed", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     const renameGate = deferred<{ index: { activeSessionId: string; sessions: readonly { id: string; name: string; updatedAt: string }[] } }>();
     sessionApi.renameChatSession.mockReturnValueOnce(renameGate.promise);
     render(<ChatSessionBar />);
@@ -211,7 +226,7 @@ describe("ChatSessionBar workspace busy barrier", () => {
     await waitFor(() => expect(sessionApi.renameChatSession).toHaveBeenCalledTimes(1));
 
     useNavigationStore.setState({ projectPath: "/tmp/other-project" });
-    useWorkspaceStore.setState({
+    useChatStore.setState({
       activeSessionId: "session-z",
       sessions: [{ id: "session-z", name: "B session", updatedAt: new Date().toISOString() }],
     });
@@ -224,22 +239,22 @@ describe("ChatSessionBar workspace busy barrier", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("session-z");
-    expect(useWorkspaceStore.getState().sessions).toEqual([
+    expect(useChatStore.getState().activeSessionId).toBe("session-z");
+    expect(useChatStore.getState().sessions).toEqual([
       expect.objectContaining({ id: "session-z", name: "B session" }),
     ]);
   });
 
   it("successful create commits its session+index response without a second read", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.createChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [], archivedCount: 0, createdAt: "t", updatedAt: "t" },
       index: { activeSessionId: "session-b", sessions: [{ id: "session-b", name: "B", updatedAt: "t" }] },
     });
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /新会话/u }));
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
     expect(sessionApi.readChatSession).not.toHaveBeenCalled();
   });
 
@@ -249,7 +264,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-a", name: "A", updatedAt: "t" },
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
-    useWorkspaceStore.setState({ draftActionLoading: null, activeSessionId: "session-a", sessions });
+    useChatStore.setState({ activeSessionId: "session-a", sessions });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.setActiveChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [{ id: "b", role: "user", content: "B truth" }], archivedCount: 2 },
       index: { activeSessionId: "session-b", sessions },
@@ -257,9 +273,9 @@ describe("ChatSessionBar workspace busy barrier", () => {
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
     fireEvent.click(screen.getByRole("button", { name: /^B$/u }));
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
     expect(sessionApi.readChatSession).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().workspace.messages).toEqual([expect.objectContaining({ id: "b" })]);
+    expect(useChatStore.getState().messages).toEqual([expect.objectContaining({ id: "b" })]);
   });
 
   it("successful delete commits its active session+index response without a second read", async () => {
@@ -268,7 +284,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-a", name: "A", updatedAt: "t" },
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
-    useWorkspaceStore.setState({ draftActionLoading: null, activeSessionId: "session-a", sessions });
+    useChatStore.setState({ activeSessionId: "session-a", sessions });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.deleteChatSession.mockResolvedValueOnce({
       session: { id: "session-b", name: "B", messages: [{ id: "b", role: "user", content: "B truth" }], archivedCount: 0 },
       index: { activeSessionId: "session-b", sessions: [sessions[1]] },
@@ -276,13 +293,13 @@ describe("ChatSessionBar workspace busy barrier", () => {
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
     expect(sessionApi.readChatSession).not.toHaveBeenCalled();
   });
 
   it("reconciles disk truth after a create response is lost", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     const sessions = [{ id: "session-b", name: "B", updatedAt: "t" }];
     sessionApi.createChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({ index: { activeSessionId: "session-b", sessions } });
@@ -292,8 +309,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
     render(<ChatSessionBar />);
     fireEvent.click(screen.getByRole("button", { name: /新会话/u }));
 
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
-    expect(useWorkspaceStore.getState().workspace.messages).toEqual([expect.objectContaining({ id: "b" })]);
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
+    expect(useChatStore.getState().messages).toEqual([expect.objectContaining({ id: "b" })]);
     expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
@@ -304,7 +321,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-a", name: "A", updatedAt: "t" },
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
-    useWorkspaceStore.setState({ draftActionLoading: null, activeSessionId: "session-a", sessions });
+    useChatStore.setState({ activeSessionId: "session-a", sessions });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.setActiveChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({ index: { activeSessionId: "session-b", sessions } });
     sessionApi.readChatSession.mockResolvedValueOnce({
@@ -314,8 +332,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
     fireEvent.click(screen.getByRole("button", { name: /^B$/u }));
 
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
-    expect(useWorkspaceStore.getState().workspace.messages).toEqual([expect.objectContaining({ id: "b" })]);
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
+    expect(useChatStore.getState().messages).toEqual([expect.objectContaining({ id: "b" })]);
     expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
@@ -326,7 +344,8 @@ describe("ChatSessionBar workspace busy barrier", () => {
       { id: "session-a", name: "A", updatedAt: "t" },
       { id: "session-b", name: "B", updatedAt: "t" },
     ];
-    useWorkspaceStore.setState({ draftActionLoading: null, activeSessionId: "session-a", sessions });
+    useChatStore.setState({ activeSessionId: "session-a", sessions });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.deleteChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockResolvedValueOnce({
       index: { activeSessionId: "session-b", sessions: [sessions[1]] },
@@ -338,15 +357,15 @@ describe("ChatSessionBar workspace busy barrier", () => {
     fireEvent.click(screen.getByRole("button", { name: /历史/u }));
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]!);
 
-    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("session-b"));
-    expect(useWorkspaceStore.getState().sessions).toEqual([sessions[1]]);
+    await waitFor(() => expect(useChatStore.getState().activeSessionId).toBe("session-b"));
+    expect(useChatStore.getState().sessions).toEqual([sessions[1]]);
     expect(useNavigationStore.getState().toast).toContain("磁盘上的实际内容");
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("reports uncertain state when mutation response and reconciliation both fail", async () => {
     resetWorkspaceOperationForTests();
-    useWorkspaceStore.setState({ draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     sessionApi.createChatSession.mockRejectedValueOnce(new Error("response lost"));
     sessionApi.listChatSessions.mockRejectedValueOnce(new Error("reconcile failed"));
     render(<ChatSessionBar />);

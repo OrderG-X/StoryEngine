@@ -1,66 +1,56 @@
 // @vitest-environment jsdom
 /**
- * R4a：连续失败时第 2 次自动重试 delay 应为 4s（退避），不是每次都 2s。
+ * 保存失败要看得见、要自动退避重试：第 1 次 2s，第 2 次 4s（不是每次都 2s）。
  */
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  __resetAutosaveControlForTest,
-  scheduleAutosave,
-} from "../../../utils/autosaveControl.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
+import { __resetChatSyncForTests } from "../../../sync/chatSync.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
 
-describe("SaveStatusPill 退避重试（R4a）", () => {
+const retry = vi.hoisted(() => ({ fn: vi.fn() }));
+vi.mock("../../../drafts/draftSync.js", () => ({ scheduleDraftSave: retry.fn }));
+
+describe("SaveStatusPill", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    __resetAutosaveControlForTest();
+    useDraftStore.getState().reset();
+    __resetChatSyncForTests();
   });
   afterEach(() => {
     cleanup();
-    __resetAutosaveControlForTest();
+    retry.fn.mockReset();
     vi.useRealTimers();
   });
 
-  it("连续失败时第 2 次自动重试 delay 是 4s 而非 2s", async () => {
-    const onRetry = vi.fn(() => {
-      void scheduleAutosave("ch1", async () => {
-        throw new Error("仍失败");
-      });
+  it("稿子存失败：常驻提示，退避 2s、4s 重试", async () => {
+    retry.fn.mockImplementation(() => {
+      useDraftStore.getState().markSaving();
+      useDraftStore.getState().markSaveError("仍失败");
     });
+    render(<SaveStatusPill />);
+    act(() => { useDraftStore.getState().markSaveError("磁盘满了"); });
+    expect(screen.getByText("保存失败")).toBeTruthy();
+    expect(screen.getByText("磁盘满了")).toBeTruthy();
 
-    render(<SaveStatusPill onRetry={onRetry} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(retry.fn).toHaveBeenCalledTimes(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(retry.fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      await scheduleAutosave("ch1", async () => {
-        throw new Error("首次失败");
-      });
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(retry.fn).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(retry.fn).toHaveBeenCalledTimes(2);
+  });
 
-    // 第 1 次自动重试：2s
-    expect(onRetry).toHaveBeenCalledTimes(0);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1999);
-    });
-    expect(onRetry).toHaveBeenCalledTimes(0);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
-    });
-    expect(onRetry).toHaveBeenCalledTimes(1);
-
-    // 等重试写盘失败落定（微任务）
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // 第 2 次应等 4s（若 bug 会在 2s 就触发）
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
-    });
-    expect(onRetry).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
-    });
-    expect(onRetry).toHaveBeenCalledTimes(2);
+  it("存成功：短暂显示已保存后消失", async () => {
+    render(<SaveStatusPill />);
+    act(() => { useDraftStore.getState().markSaving(); });
+    expect(screen.getByText("保存中…")).toBeTruthy();
+    act(() => { useDraftStore.getState().markSaved("v1", "一。", ""); });
+    expect(screen.getByText("已保存")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
+    expect(screen.queryByText("已保存")).toBeNull();
   });
 });

@@ -11,9 +11,9 @@
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
-import type { ChapterMessage } from "../../../types.js";
+import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 
-type ContinuityCheck = NonNullable<ChapterMessage["continuityCheck"]>;
+type ContinuityCheck = ContinuityCheckData;
 type Item = ContinuityCheck["sure"][number];
 
 /** 这条的错在哪一章（R7.3 对设定本的条目可能指向前文那章）；缺省＝当前核的章。 */

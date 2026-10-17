@@ -8,17 +8,17 @@
  */
 import { useMemo, useState } from "react";
 import { estimateTokens } from "../../../lib/estimate-tokens.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { archiveChatSession, unarchiveChatSession } from "../../../api/chatSessionsClient.js";
 
 export function ChatContextMeter() {
   // 按字段订阅（不整店订阅）：流式逐 token 更新 draft/flowStatus 等无关切片时，本条不必跟着重渲染。
-  const messages = useWorkspaceStore((s) => s.workspace.messages);
-  const activeArchivedCount = useWorkspaceStore((s) => s.activeArchivedCount);
-  const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
-  const chatHistoryBudget = useWorkspaceStore((s) => s.chatHistoryBudget);
-  const setActiveArchivedCount = useWorkspaceStore((s) => s.setActiveArchivedCount);
+  const messages = useChatStore((s) => s.messages);
+  const activeArchivedCount = useChatStore((s) => s.activeArchivedCount);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const chatHistoryBudget = useChatStore((s) => s.chatHistoryBudget);
+  const setActiveArchivedCount = useChatStore((s) => s.setActiveArchivedCount);
   const projectPath = useNavigationStore((s) => s.projectPath);
   const [busy, setBusy] = useState(false);
   // canUndo 由服务端真值派生，不用组件局部 state：本条在视图切换卸载后重建，局部态会丢掉

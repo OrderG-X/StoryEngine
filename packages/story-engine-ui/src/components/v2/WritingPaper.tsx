@@ -21,7 +21,8 @@ import { FindHighlight, clearFindHighlight, setFindHighlight } from "./findHighl
 import { RevisionHighlight, setRevisionHighlight as applyRevisionHighlight, clearRevisionHighlight } from "./revisionHighlight.js";
 import { SentenceFocus } from "./sentenceFocusPlugin.js";
 import { typewriterScrollTop } from "./sentenceFocus.js";
-import { useWorkspaceStore } from "../../stores/workspaceStore.js";
+import { useBookStore } from "../../stores/bookStore.js";
+import { useUiStore } from "../../stores/uiStore.js";
 
 const BLOCK_SEPARATOR = "\n\n";
 const TOOLBAR_GAP = 44;
@@ -101,11 +102,13 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const isCommitted = draft.status === "committed";
+  // AI 正在流式出稿：稿纸只读显示流出来的字，作者这时打的字不会混进去（重构 P5）。
+  const locked = isCommitted || draft.streaming === true;
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。
-  const revisionHighlightTexts = useWorkspaceStore((s) => s.revisionHighlightTexts);
+  const revisionHighlightTexts = useUiStore((s) => s.revisionHighlightTexts);
   // AI 出稿中：稿纸空着时说清 AI 在干什么（拟章纲要一两分钟），别显示「你可以在这里手动输入」。
-  const draftPhase = useWorkspaceStore((s) => s.draftPhase);
-  const generating = useWorkspaceStore((s) => s.workspace.flowStatus === "draft_generating");
+  const draftPhase = useUiStore((s) => s.draftPhase);
+  const generating = useBookStore((s) => s.workspace.flowStatus === "draft_generating");
   // 最近一次与编辑器同步过的「外部草稿内容」基准（首次为 null，用编辑器归一化后的初值兜底）。
   const lastExternal = useRef<string | null>(null);
   // 记上次同步的章号：换章时强制硬加载新章正文，不被「保留本地脏编辑」挡住（治切章点两下还显示上一章）。
@@ -120,7 +123,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [selection, setSelection] = useState<{ readonly text: string; readonly top: number; readonly left: number } | null>(null);
   const [busyKey, setBusyKey] = useState<SelectionRevisionKey | null>(null);
-  const canRewrite = Boolean(onSelectionRewrite) && !isCommitted;
+  const canRewrite = Boolean(onSelectionRewrite) && !locked;
   // 定稿后不能就地改写，但仍可选中一段「问 AI」（不改稿）——浮动条只剩这一个按钮。
   const canAsk = Boolean(onAskAboutSelection);
 
@@ -188,7 +191,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       SentenceFocus,
     ],
     content: draftTextToHtml(draft.content),
-    editable: !isCommitted,
+    editable: !locked,
     immediatelyRender: true,
     editorProps: {
       attributes: { class: "se-v2-draft-editor", spellcheck: "false" },
@@ -214,8 +217,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       // onSelectionUpdate、不进这里，故不会被拽回（满足"翻看旧文不被拽"）。
       centerCaret(instance, hostRef.current);
       // 真人编辑就撤掉「刚改片段」黄高亮（onUpdate 只对真人输入触发——AI 应用走 setContent emitUpdate:false 不进这里）。
-      if (useWorkspaceStore.getState().revisionHighlightTexts.length > 0) {
-        useWorkspaceStore.getState().setRevisionHighlight(null);
+      if (useUiStore.getState().revisionHighlightTexts.length > 0) {
+        useUiStore.getState().setRevisionHighlight(null);
       }
       onEditRef.current(instance.getText({ blockSeparator: BLOCK_SEPARATOR }));
     },
@@ -229,8 +232,8 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   });
 
   useEffect(() => {
-    editor?.setEditable(!isCommitted);
-  }, [editor, isCommitted]);
+    editor?.setEditable(!locked);
+  }, [editor, locked]);
 
   // 鼠标松开 = 选区定型 → 此刻才弹浮动条（拖选过程中先不弹）。挂 document 级以兼容「拖出编辑器外松手」。
   useEffect(() => {

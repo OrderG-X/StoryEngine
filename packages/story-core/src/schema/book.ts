@@ -25,6 +25,8 @@ export const ChangeSet = z.object({
   ledgers: z.array(z.number().int().min(1)).optional(),
   /** 作者裁定变了。 */
   decisions: z.boolean().optional(),
+  /** 工作稿变了的章。 */
+  drafts: z.array(z.number().int().min(1)).optional(),
 });
 export type ChangeSet = z.infer<typeof ChangeSet>;
 

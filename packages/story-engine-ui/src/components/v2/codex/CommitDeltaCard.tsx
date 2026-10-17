@@ -1,6 +1,6 @@
 /**
  * CommitDeltaCard — 入库 delta 卡：这章正式入库后改了哪些角色/伏笔/线索/时间线/主线目标。
- * 数据来自 commit_apply 的 CommitReport（message.commitReport），复用 summarizeCommitReport 防御解析成
+ * 数据来自 commit_apply 的 CommitReport（消息上的定稿回执卡），复用 summarizeCommitReport 防御解析成
  * 状态行 + 分项清单。用 StepCard 暗金外壳。把每条 detailLine 按首个「：」切成 标签·值 两列展示。
  */
 import { useState } from "react";

@@ -1,7 +1,7 @@
 /**
  * CommitPreviewCard — 定稿预览卡（R3）：commit_preview 工具的结构化裁决。
  *
- * 数据来自 message.commitPreview（引擎确定性判定：canCommit + blockingReasons + 质量问题计数）。
+ * 数据来自消息上的定稿预览卡（引擎确定性判定：canCommit + blockingReasons + 质量问题计数）。
  * 关键：裁决结果固定展示，不靠助手转述——模型可能把「暂不可定稿（缺稿/硬伤）」说成「有点小问题」
  * 或干脆略过只说「可以定稿了」。卡里照实列出阻断项，用户自己判断要不要先修再定稿。
  * 与 NameConsistencyCard/StaleThreadCard 同出 commit_preview，三者可同时出现、互不顶掉。

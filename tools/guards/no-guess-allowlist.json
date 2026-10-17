@@ -1,1 +1,6 @@
-{ "note": "确属正当文本处理（切句、找原句、数字/日期归一）的文件整份免检；每条写明理由。新增要在审查时过 Claude。", "files": {} }
+{
+  "note": "确属正当文本处理（切句、找原句、数字/日期归一）的文件整份免检；每条写明理由。新增要在审查时过 Claude。",
+  "files": {
+    "packages/story-engine-ui/src/server/lib/value-readers.ts": "切句：存盘的字符串列表按换行或分号拆成条（从 project-io 挪来，重构 P5）；不判断意图或真假。"
+  }
+}

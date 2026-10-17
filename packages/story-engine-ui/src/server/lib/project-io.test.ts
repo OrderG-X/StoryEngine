@@ -5,11 +5,11 @@ import { homedir, tmpdir } from "node:os";
 import type { IncomingMessage } from "node:http";
 import {
   chapterWorkspacePath,
+  readUiChapterFileStates,
   defaultCommittedChapterPath,
   defaultDraftPath,
   isSafeProjectPath,
   readJsonBody,
-  readChapterWorkspaceSnapshot,
   readWorkspaceMessages,
   readUsageSummary,
   resolveFoundationUpdateTargetId,
@@ -17,6 +17,7 @@ import {
   writeFileAtomic,
   commitFilesAtomically,
 } from "./project-io.js";
+import { cardOf, hasCard } from "../../utils/messageCards.js";
 
 const EXPECTED_MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const EXPECTED_MAX_USAGE_SUMMARY_FILES = 200;
@@ -168,321 +169,23 @@ describe("project io asset helpers", () => {
     expect(JSON.stringify(summary.diagnosticsWarnings)).not.toContain(projectDir);
   });
 
-  it("does not let a stale workspace flow hide an already committed chapter", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-snapshot-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    const chapterContent = "# 第二章 纸灰\n\n沈砚从檐影里走出来，她拍了拍林远的肩膀。\n";
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(defaultDraftPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
-      chapter: 2,
-      flowStatus: "quality_checked",
-      draftContent: chapterContent,
-      messages: [{ id: "old-quality", role: "assistant", content: "旧质检消息" }],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
-
-    expect(snapshot.flowStatus).toBe("committed");
-    // 编辑器只拿正文：首行「# 章名」去掉（章名走 draftTitle）
-    expect(snapshot.draftContent).toBe(chapterContent.replace(/^# [^\n]*\n\n/u, ""));
-    expect(snapshot.messages).toEqual([]);
-  });
-
-  it("drops stale pre-commit messages from committed snapshots without a completion message", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-committed-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    const chapterContent = "# 第二章 纸灰\n\n沈砚从檐影里走出来，她拍了拍林远的肩膀。\n";
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(defaultDraftPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
-      chapter: 2,
-      flowStatus: "committed",
-      draftContent: chapterContent,
-      messages: [{ id: "old-block", role: "assistant", content: "入库被质检拦截" }],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
-
-    expect(snapshot.flowStatus).toBe("committed");
-    expect(snapshot.messages).toEqual([]);
-  });
-
-  it("老书旧口径落盘消息兼容：committed 章的「本章已入库」完成消息仍被识别、整段对话不清空", async () => {
-    // T15 读侧双匹配（复审探针 3d 收编）：老书盘上存的是旧口径完成消息；若读侧只认新词
-    // 「本章已定稿」，老书刷新后会被误判「已定稿但无完成消息」而清空整段对话。
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-legacy-terms-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    const chapterContent = "# 第二章 纸灰\n\n沈砚从檐影里走出来，她拍了拍林远的肩膀。\n";
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(defaultDraftPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
-      chapter: 2,
-      flowStatus: "committed",
-      draftContent: chapterContent,
-      messages: [
-        { id: "user-old-confirm", role: "user", content: "确认入库" },
-        { id: "assistant-old-commit-done", role: "assistant", content: "本章已入库。说「下一章」继续。" },
-      ],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
-
-    expect(snapshot.flowStatus).toBe("committed");
-    expect(snapshot.messages.map((message) => message.id)).toEqual([
-      "user-old-confirm",
-      "assistant-old-commit-done",
-    ]);
-  });
-
-  it("keeps post-commit foundation Agent chat messages after refresh", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-agent-chat-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    const chapterContent = "# 第二章 纸灰\n\n沈砚从檐影里走出来，她拍了拍林远的肩膀。\n";
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(defaultDraftPath(projectDir, 2), chapterContent, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
-      chapter: 2,
-      flowStatus: "committed",
-      draftContent: chapterContent,
-      messages: [
-        { id: "user-rename", role: "user", content: "把苏晓薇当前目标改成保护主角" },
-        {
-          id: "assistant-foundation-applied-1",
-          role: "assistant",
-          content: "已更新苏晓薇的角色资料。\n资料已更新，可撤回本次修改。",
-        },
-      ],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 2);
-
-    expect(snapshot.flowStatus).toBe("committed");
-    expect(snapshot.messages).toHaveLength(2);
-    expect(snapshot.messages.map((message) => message.content)).toEqual([
-      "把苏晓薇当前目标改成保护主角",
-      "已更新苏晓薇的角色资料。\n资料已更新，可撤回本次修改。",
-    ]);
-  });
-
-  it("reports draft and committed file presence separately", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-file-state-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await writeFile(defaultDraftPath(projectDir, 1), "# 第一章 · 草稿\n\n只有工作稿。", "utf-8");
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), "# 第二章 · 正式\n\n正式正文。", "utf-8");
-    await writeFile(defaultDraftPath(projectDir, 2), "# 第二章 · 草稿改动\n\n工作稿改动。", "utf-8");
-
-    const draftOnly = await readChapterWorkspaceSnapshot(projectDir, 1);
-    const committedWithDraft = await readChapterWorkspaceSnapshot(projectDir, 2);
-
-    expect(draftOnly).toMatchObject({
-      hasDraftFile: true,
-      hasCommittedChapter: false,
-      draftTitle: "草稿",
-    });
-    expect(committedWithDraft).toMatchObject({
-      hasDraftFile: true,
-      hasCommittedChapter: true,
-      draftTitle: "草稿改动",
-    });
-  });
-
-  it("uses committed chapter content when no draft or workspace snapshot exists", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-committed-only-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 第一章 · 正式一\n\n正式章节一。", "utf-8");
-    await writeFile(defaultCommittedChapterPath(projectDir, 2), "# 第二章 · 正式二\n\n正式章节二。", "utf-8");
-    await writeFile(defaultCommittedChapterPath(projectDir, 3), "# 第三章 · 正式三\n\n正式章节三。", "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 3);
-
-    expect(snapshot).toMatchObject({
-      chapter: 3,
-      flowStatus: "committed",
-      hasCommittedChapter: true,
-      hasDraftFile: false,
-      draftTitle: "正式三",
-    });
-    expect(snapshot.draftContent).not.toContain("# 第三章");
-    expect(snapshot.draftContent).toContain("正式章节三。");
-    expect(snapshot.draftContent).not.toContain("还没有草稿正文");
-    await expect(access(chapterWorkspacePath(projectDir, 3))).rejects.toThrow();
-  });
-
-  it("does not let a stale placeholder workspace override committed chapter content", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-committed-stale-workspace-"));
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    await writeFile(defaultCommittedChapterPath(projectDir, 3), "# 第三章 · 正式三\n\n正式章节三。", "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 3), JSON.stringify({
-      chapter: 3,
-      flowStatus: "idle",
-      draftTitle: "正式一",
-      draftContent: "还没有草稿正文。\n\n你可以在右侧章节对话里输入第 1 章方向。",
-      messages: [{ id: "stale", role: "assistant", content: "旧占位消息" }],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 3);
-
-    expect(snapshot).toMatchObject({
-      chapter: 3,
-      flowStatus: "committed",
-      hasCommittedChapter: true,
-      hasDraftFile: false,
-      draftTitle: "正式三",
-      messages: [],
-    });
-    expect(snapshot.draftContent).not.toContain("# 第三章");
-    expect(snapshot.draftContent).not.toContain("还没有草稿正文");
-  });
-
-  it("生成被打断：workspace 截断但 drafts/fast 更长 → 以文件为准并改成草稿中（dogfood F1）", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-gen-interrupt-"));
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    const fullDraft = `# 第四章 · 完整\n\n${"完整段落。".repeat(80)}\n`;
-    const truncated = "# 第四章 · 完整\n\n开头几个字。\n";
-    await writeFile(defaultDraftPath(projectDir, 4), fullDraft, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 4), JSON.stringify({
-      chapter: 4,
-      flowStatus: "draft_generating",
-      generationInterrupted: true,
-      draftTitle: "第四章 · 完整",
-      draftContent: truncated,
-      messages: [],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 4);
-
-    expect(snapshot.flowStatus).toBe("draft_ready");
-    expect(snapshot.draftContent).toBe(fullDraft.replace(/^# [^\n]*\n\n/u, ""));
-    expect(snapshot.recoveredFromDraftFile).toBe(true);
-    expect(snapshot.generationInterrupted).toBe(true);
-  });
-
-  it("非生成期故意短写：不因文件更长而强行覆盖 workspace（dogfood F1 护栏）", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-intentional-short-"));
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    // 无 generationInterrupted、非 draft_generating：读侧仍按既有口径（有草稿文件则用文件）。
-    // 本用例验证：没有中断标志时不会额外标 recoveredFromDraftFile。
-    const fileDraft = "# 短章\n\n磁盘稿。\n";
-    await writeFile(defaultDraftPath(projectDir, 1), fileDraft, "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 1), JSON.stringify({
-      chapter: 1,
-      flowStatus: "draft_ready",
-      draftContent: "我故意删短了。",
-      messages: [],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const snapshot = await readChapterWorkspaceSnapshot(projectDir, 1);
-    expect(snapshot.recoveredFromDraftFile).toBeUndefined();
-    expect(snapshot.flowStatus).toBe("draft_ready");
-    // 既有口径：有 drafts/fast 时以文件为准（与生成中断恢复无关）
-    expect(snapshot.draftContent).toBe(fileDraft.replace(/^# [^\n]*\n\n/u, ""));
-  });
-
-  it("includes workspace-only snapshots in UI chapter file details", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-workspace-only-state-"));
-    await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
-    await writeFile(chapterWorkspacePath(projectDir, 4), JSON.stringify({
-      chapter: 4,
-      flowStatus: "draft_ready",
-      draftTitle: "第四章工作区",
-      draftContent: "# 第四章工作区\n\n尚未保存到 drafts/fast。",
-      messages: [],
-      selectedAdviceCardKeys: [],
-    }), "utf-8");
-
-    const overview = await withUiOverviewDetails(projectDir, {
-      project: { title: "测试书", genre: "都市", currentChapter: 1 },
-      storyStatus: {},
-      hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-      threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
-      arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
-      timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
-      characters: { knownCharacters: [] },
-      world: { activeLocations: [], importantFacts: [], protectedSecrets: [] },
-      maintenance: {
-        diagnosticsAvailable: false,
-        cleanupVisibleCount: 0,
-        markDoneCandidateCount: 0,
-        mergeDisabled: true,
-        dropDisabled: true,
-        confirmPolicy: { markDone: "manual_only", merge: "disabled", drop: "disabled" },
-      },
-      uiHints: { recommendedNextPanels: [], warnings: [], disabledActions: [] },
-    } as unknown as Parameters<typeof withUiOverviewDetails>[1]);
-
-    expect(overview.uiChapterFiles).toContainEqual(expect.objectContaining({
-      chapter: 4,
-      hasWorkspaceSnapshot: true,
-      hasDraftFile: false,
-      hasCommittedChapter: false,
-      workspaceTitle: "第四章工作区",
-    }));
-  });
-
-  // 真机谎报 bug 根因：第1章只是被打开过（workspace 文件在）且 drafts/fast/.md 里只有显示用空草稿占位符，
-  // 旧逻辑按「文件存在 / 内容非空」判，把它当成「有草稿未入库」→ agent 说「第1章已有内容」、用户打开却是空的。
-  // 修后：占位符不算真草稿(hasDraftFile=false)、空 workspace 不算(hasWorkspaceDraft 缺)，但仍记「被打开过」供导航。
-  it("占位符 .md / 空 workspace 不算「有草稿」，真 workspace 草稿才算", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-placeholder-draft-"));
+  // 重构 P5：章节状态只看工作稿 / 定稿文件。旧版写作台缓存（chapter-workspaces/*.json）不再更新，
+  // 读它会在撤销后谎报「有工作稿」，所以不再参与；显示用空草稿占位符也不算真草稿。
+  it("章节状态只看工作稿 / 定稿文件：旧版写作台缓存不算，占位符 .md 不算有草稿", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-chapter-files-"));
     await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     await mkdir(join(projectDir, ".story-engine-ui", "chapter-workspaces"), { recursive: true });
     await writeFile(defaultDraftPath(projectDir, 1), "还没有草稿正文。\n\n你可以在右侧章节对话里输入第 1 章方向，先整理本章方案，再生成草稿。\n", "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 1), JSON.stringify({
-      chapter: 1, flowStatus: "idle", draftContent: "", messages: [], selectedAdviceCardKeys: [],
-    }), "utf-8");
-    await writeFile(chapterWorkspacePath(projectDir, 2), JSON.stringify({
-      chapter: 2, flowStatus: "draft_ready", draftTitle: "真章", draftContent: "# 真章\n\n这是真的草稿正文，足够长足够真。", messages: [], selectedAdviceCardKeys: [],
+    await writeFile(defaultDraftPath(projectDir, 3), "# 真章\n\n这是真的草稿正文。", "utf-8");
+    await writeFile(chapterWorkspacePath(projectDir, 4), JSON.stringify({
+      chapter: 4, flowStatus: "draft_ready", draftTitle: "旧缓存", draftContent: "# 旧缓存\n\n只在旧缓存里的正文。", messages: [], selectedAdviceCardKeys: [],
     }), "utf-8");
 
-    const overview = await withUiOverviewDetails(projectDir, {
-      project: { title: "测试书", genre: "都市", currentChapter: 1 },
-      storyStatus: {},
-      hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-      threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
-      arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
-      timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
-      characters: { knownCharacters: [] },
-      world: { activeLocations: [], importantFacts: [], protectedSecrets: [] },
-      maintenance: {
-        diagnosticsAvailable: false,
-        cleanupVisibleCount: 0,
-        markDoneCandidateCount: 0,
-        mergeDisabled: true,
-        dropDisabled: true,
-        confirmPolicy: { markDone: "manual_only", merge: "disabled", drop: "disabled" },
-      },
-      uiHints: { recommendedNextPanels: [], warnings: [], disabledActions: [] },
-    } as unknown as Parameters<typeof withUiOverviewDetails>[1]);
+    const states = await readUiChapterFileStates(projectDir);
 
-    const ch1 = (overview.uiChapterFiles ?? []).find((c) => c.chapter === 1);
-    expect(ch1, "第1章应在 uiChapterFiles 里").toBeDefined();
-    expect(ch1?.hasDraftFile, "占位符 .md 不算真草稿").toBe(false);
-    expect(ch1?.hasWorkspaceDraft ?? false, "空 workspace 不算有草稿").toBe(false);
-    expect(ch1?.hasWorkspaceSnapshot, "但确实被打开过(导航仍可用)").toBe(true);
-
-    const ch2 = (overview.uiChapterFiles ?? []).find((c) => c.chapter === 2);
-    expect(ch2?.hasWorkspaceDraft, "workspace 里有真草稿则算有草稿").toBe(true);
+    expect(states.find((c) => c.chapter === 1)?.hasDraftFile, "占位符 .md 不算真草稿").toBe(false);
+    expect(states.find((c) => c.chapter === 3)).toMatchObject({ hasDraftFile: true, hasCommittedChapter: false, draftTitle: "真章" });
+    expect(states.some((c) => c.chapter === 4), "只在旧缓存里出现的章不算").toBe(false);
   });
 
   it("projects committed character state fields into UI overview details", async () => {
@@ -581,9 +284,53 @@ describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
         ledgerChecklist: [{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }, { id: "", label: "坏条目" }],
       },
     }]);
-    expect(message.continuityCheck).toMatchObject({ chapter: 8 });
+    expect(cardOf(message, "continuity")?.check).toMatchObject({ chapter: 8 });
     expect(message.tokenUsage).toEqual({ input: 90000, cachedInput: 43000, output: 4000 });
-    expect(message.commitPreview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+    expect(cardOf(message, "commit-preview")?.preview?.ledgerChecklist).toEqual([{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }]);
+  });
+});
+
+describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
+  it("新格式的卡原样读回；认不出的 type、形状不对的卡丢掉；同一种只留最后一张", () => {
+    const [message] = readWorkspaceMessages([{
+      id: "assistant-cards",
+      role: "assistant",
+      content: "看卡",
+      cards: [
+        { type: "commit-preview", preview: { chapter: 3, canCommit: false, blockingReasons: ["缺稿"] } },
+        { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
+        { type: "error", detail: "boom" },
+        { type: "status-notes", notes: ["历史窗口被裁剪", ""] },
+        { type: "made-up", data: 1 },
+        { type: "name-drift", warnings: [{ establishedName: "", driftedVariant: "x", message: "坏" }] },
+        { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
+        "nope",
+      ],
+    }]);
+    expect(message.cards).toEqual([
+      { type: "continuity", check: { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] } },
+      { type: "error", detail: "boom" },
+      { type: "status-notes", notes: ["历史窗口被裁剪"] },
+      { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
+    ]);
+  });
+
+  it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {
+    const [message] = readWorkspaceMessages([{
+      id: "assistant-legacy-cards",
+      role: "assistant",
+      content: "老格式",
+      isErrorNotice: true,
+      errorDetail: "provider down",
+      adviceCards: [{ id: "a1", type: "risk", title: "t", content: "c", defaultAction: "include" }],
+      nextStepPrompt: { question: "下一步？", choices: [{ label: "写下一章", intent: "写下一章" }] },
+    }]);
+    expect(message.cards).toEqual([
+      { type: "next-steps", prompt: { question: "下一步？", choices: [{ label: "写下一章", intent: "写下一章" }] } },
+      { type: "error", detail: "provider down" },
+    ]);
+    expect(message).not.toHaveProperty("adviceCards");
+    expect(message).not.toHaveProperty("isErrorNotice");
   });
 });
 
@@ -783,16 +530,18 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     const msg = out[0];
     expect(msg.intentTitle).toBe("审稿并入库");
     expect(msg.affectedScopes).toEqual(["full", "foundation"]);
-    expect(msg.aiFlavorReport).toEqual(aiFlavorReport);
-    expect(msg.aiFlavorFixedIds).toEqual(["v1", ...Array.from({ length: 49 }, (_, i) => `fix-${i}`)]);
-    expect(msg.aiReviewReport).toEqual(aiReviewReport);
-    expect(msg.draftReview).toEqual(draftReview);
-    expect(msg.qualityReport).toEqual(qualityReport);
-    expect(msg.commitReport).toEqual(commitReport);
-    expect(msg.nameConsistencyWarnings).toEqual([
+    expect(cardOf(msg, "ai-flavor")?.report).toEqual(aiFlavorReport);
+    expect(cardOf(msg, "ai-flavor")?.fixedIds).toEqual(["v1", ...Array.from({ length: 49 }, (_, i) => `fix-${i}`)]);
+    // 已没人写、也不再渲染的老字段：迁移时认出来丢掉。
+    expect(msg).not.toHaveProperty("aiReviewReport");
+    expect(msg.cards?.map((card) => card.type)).not.toContain("ai-review");
+    expect(cardOf(msg, "draft-review")?.review).toEqual(draftReview);
+    expect(cardOf(msg, "quality")?.report).toEqual(qualityReport);
+    expect(cardOf(msg, "commit-report")?.report).toEqual(commitReport);
+    expect(cardOf(msg, "name-drift")?.warnings).toEqual([
       { establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" },
     ]);
-    expect(msg.staleThreadWarnings).toEqual([
+    expect(cardOf(msg, "stale-threads")?.warnings).toEqual([
       {
         kind: "foreshadowing",
         title: "码头暗号",
@@ -848,7 +597,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any);
 
-    expect(out[0]!.commitPreview).toEqual({
+    expect(cardOf(out[0]!, "commit-preview")?.preview).toEqual({
       chapter: 2,
       canCommit: true,
       blockingReasons: ["x"],
@@ -967,7 +716,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
       } as any,
     ]);
 
-    expect(out[0].nextStepPrompt).toEqual({
+    expect(cardOf(out[0], "next-steps")?.prompt).toEqual({
       question: "下一步想怎么走？",
       choices: [
         { label: "继续写第 3 章", intent: "写第 3 章草稿", recommended: true },
@@ -975,7 +724,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         ...Array.from({ length: 6 }, (_, i) => ({ label: `选项${i}`, intent: `意图${i}` })),
       ],
     });
-    expect(out[0].nextStepPrompt?.choices).toHaveLength(8);
+    expect(cardOf(out[0], "next-steps")?.prompt?.choices).toHaveLength(8);
     expect(out[1]).not.toHaveProperty("nextStepPrompt");
     expect(out[2]).not.toHaveProperty("nextStepPrompt");
   });
@@ -999,7 +748,7 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
-    const choices = out[0].nextStepPrompt!.choices;
+    const choices = cardOf(out[0], "next-steps")!.prompt.choices;
     expect(choices[0]).toEqual({ label: "预览定稿", intent: "预览第 5 章的定稿改动", recommended: true, action: { toolName: "commit_preview", chapter: 5 } });
     expect(choices[1]).toEqual({ label: "再细核一遍", intent: "再细核一遍：这一章重新对一遍前文", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
     expect(choices[2]).not.toHaveProperty("action");
@@ -1026,11 +775,11 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ]);
-    expect(out[0].isErrorNotice).toBe(true);
-    expect(out[0].errorDetail).toBe("Error from provider: boom");
-    expect(out[1].isErrorNotice).toBeUndefined();
-    expect(out[1].errorDetail).toBeUndefined();
-    expect(out[2].isErrorNotice).toBeUndefined();
+    expect(hasCard(out[0], "error")).toBe(true);
+    expect(cardOf(out[0], "error")?.detail).toBe("Error from provider: boom");
+    expect(hasCard(out[1], "error")).toBe(false);
+    expect(cardOf(out[1], "error")?.detail).toBeUndefined();
+    expect(hasCard(out[2], "error")).toBe(false);
   });
 });
 

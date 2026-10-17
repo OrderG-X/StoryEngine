@@ -396,7 +396,7 @@ describe("revise_draft execute 章号缺省回退", () => {
 });
 
 // 2026-10-10 真机验收：模型把两处修改并行发出。服务端两次改稿必须串行、两处都落在稿上
-// （那次丢的一处是界面自动保存拿旧正文覆盖了，见 workspaceAutosaveRequest 的 savedContent）。
+// （那次丢的一处是界面自动保存拿旧正文覆盖了；重构 P5 起存稿带版本号，旧字盖不回去）。
 describe("revise_draft 并行两处精确替换", () => {
   it("同一章同时改两处 → 两处都落在稿子上（读改写串行），两次都报成功", async () => {
     const projectDir = await makeProject("并行两处");

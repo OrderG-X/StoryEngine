@@ -1,5 +1,6 @@
 import type { ChapterMessage } from "../../../types.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { cardOf } from "../../../utils/messageCards.js";
 
 /**
  * 「下一步」选项卡数据——只取 agent 主动调 suggest_next_steps 给出的上下文相关提议
@@ -34,7 +35,7 @@ export function lastAssistantNextStepPrompt(messages: readonly ChapterMessage[])
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== "assistant") continue;
-    const prompt = message.nextStepPrompt;
+    const prompt = cardOf(message, "next-steps")?.prompt;
     if (!prompt || prompt.choices.length === 0) return null;
     return {
       question: prompt.question,

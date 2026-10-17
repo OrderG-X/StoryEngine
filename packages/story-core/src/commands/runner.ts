@@ -2,7 +2,7 @@
  * 写命令的执行器：所有写操作都从这里过，命令自己不碰盘。
  *
  * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放 → plan →
- * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 版本号，版本号最后写）→ 推事件。
+ * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 版本号，版本号最后写；工作稿不动版本号）→ 推事件。
  * 任何一步不成都如实返回失败，书保持原样。
  */
 import { createHash } from "node:crypto";
@@ -97,7 +97,8 @@ export async function runCommand<A, R>(
       }
     }
 
-    const version = head.version + 1;
+    const bumps = spec.bumpsVersion !== false;
+    const version = bumps ? head.version + 1 : head.version;
     const at = now.toISOString();
     const writes: TxWrite[] = [...planned.writes];
     if (key) {
@@ -112,7 +113,7 @@ export async function runCommand<A, R>(
       };
       writes.push({ path: receiptPath(keyHash(key)), content: `${JSON.stringify(receipt, null, 2)}\n` });
     }
-    writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
+    if (bumps) writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     try {
       await commitFiles(bookDir, writes);
     } catch (error) {

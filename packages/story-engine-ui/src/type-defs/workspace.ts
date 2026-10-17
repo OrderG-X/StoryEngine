@@ -1,4 +1,4 @@
-import type { ChapterAdviceCard, ChapterAgentCard, DraftAIReviewReport, DraftReviewView, DraftRevisionPreview, StateOverviewCharacterMatrix, ToolStep } from "../api/types.js";
+import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, StateOverviewCharacterMatrix, ToolStep } from "../api/types.js";
 import type { WorldbuildingData } from "../api/worldbuildingClient.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
 
@@ -27,7 +27,6 @@ export interface ChapterNavItem {
   readonly status: "committed" | "draft" | "current" | "planned";
   readonly hasDraftFile?: boolean;
   readonly hasCommittedChapter?: boolean;
-  readonly hasWorkspaceSnapshot?: boolean;
 }
 
 /**
@@ -48,7 +47,6 @@ export interface ChapterMessage {
   readonly content: string;
   /** 「scaffolding」= 界面自己塞的招呼/进度提示（进工作台、流程提示），不是对话；进书时滤掉、空状态据此判断（重构 P4：不再按文案认）。 */
   readonly kind?: "scaffolding";
-  readonly adviceCards?: readonly ChapterAdviceCard[];
   readonly suggestedActions?: readonly SuggestedAction[];
   readonly agentCards?: readonly ChapterAgentCard[];
   readonly toolOutput?: readonly string[];
@@ -62,45 +60,65 @@ export interface ChapterMessage {
   readonly turnEndedAt?: number;
   readonly turnSnapshots?: readonly { readonly toolName: string; readonly snapshotId: string; readonly chapterNumber?: number }[];
   readonly affectedScopes?: readonly ("full" | "foundation")[];
-  /** 去 AI 味体检报告：随这条 assistant 消息走（替代旧的全局常驻挂件），在时间线里渲染体检卡、随对话滚动。 */
-  readonly aiFlavorReport?: AiFlavorReport;
-  /** 本条体检报告里已点「改掉这句」并应用成功的违规 id 集合——卡片据此把那几条标「已改 ✓」；随消息持久化。 */
-  readonly aiFlavorFixedIds?: readonly string[];
-  /** REST 深度审稿报告（handleDraftAIReview）：随这条 assistant 消息走，渲染可折叠审稿卡（含「生成修订任务」）；勿与下方 draftReview 混淆。 */
-  readonly aiReviewReport?: DraftAIReviewReport;
-  /** AI 审稿（ai_review 工具）报告：随这条 assistant 消息走，渲染「审校问题清单」可点卡（点一条=给 agent 发改写意图）。 */
-  readonly draftReview?: DraftReviewView;
-  /** agent 主动提议的「下一步」选项（suggest_next_steps 工具输出）。最新一条消息有它时，「下一步」卡渲染它，
-   *  否则退回按 flowStatus 写死的兜底选项。点选项=把对应 intent 当用户消息发回给 agent；
-   *  choice.action（R4.7）：服务端生成的确定性选项带结构化动作，点击直接发 body.action 不经模型。 */
-  readonly nextStepPrompt?: {
-    readonly question: string;
-    readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: import("../api/agentChatClient.js").AgentUserAction }[];
-  };
-  readonly isErrorNotice?: boolean;
-  /** 错误卡「技术详情」里展示的原始报错（不进主文案）。 */
-  readonly errorDetail?: string;
-  /** commit_apply 入库报告（CommitReport）：随这条消息走，渲染「入库」delta 卡（这章改了哪些角色/伏笔/线索/时间线/主线目标）。原样存，渲染侧 summarizeCommitReport 防御解析。 */
-  readonly commitReport?: unknown;
-  /** quality_check 分层质检报告（RefinedQualityReport 子集）：随这条消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。 */
-  readonly qualityReport?: import("../api/types.js").QualityCardReport;
-  /** commit_preview 人物名一致性提醒：本章出现的名字疑似把已确立角色名写歪（引擎确定性判定）。随消息走，渲染固定提醒卡，不靠模型转述、不被说软。 */
-  readonly nameConsistencyWarnings?: readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[];
-  /** commit_preview 伏笔/线索待收口提醒：某伏笔/线索连续多章没推进（引擎确定性判定：active/open 超 3 章未触及）。随消息走，渲染固定提醒卡，不靠模型转述、不被隐去。 */
-  readonly staleThreadWarnings?: readonly { readonly kind: string; readonly title: string; readonly lastTouchedChapter: number; readonly chaptersSinceTouched: number; readonly message: string }[];
-  /** commit_preview 结构化定稿预览（R3）：裁决结果（可否定稿/不可定稿）+ 阻断项 + 质量问题计数随消息走，
-   *  渲染固定「定稿预览」卡——裁决不靠模型转述（模型可能把硬阻断说成「小问题」或干脆不提）。 */
-  readonly commitPreview?: CommitPreviewCardData;
-  /** 服务端状态说明（R4：如「历史窗口被裁剪」）：照实展示给用户、不进助手正文（不替模型说话）。 */
-  readonly statusNotes?: readonly string[];
-  /** 核账结果（check_continuity）：确定 / 可能两档，每条本章原句 ↔ 前文原句（对设定本的条目 ↔ 设定原文）。随消息走、渲染「核账」卡。 */
-  readonly continuityCheck?: {
-    readonly chapter: number;
-    readonly sure: readonly ContinuityCheckItemData[];
-    readonly maybe: readonly ContinuityCheckItemData[];
-  };
+  /** 这条消息挂的卡（定稿预览、核账、审稿……）：一个联合类型，按 type 区分、按 type 渲染（重构 P5）。 */
+  readonly cards?: readonly MessageCard[];
   /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
+}
+
+/**
+ * 消息上挂的卡（重构 P5：原来是消息上 15 个各管各的可选字段）。按 type 区分；存盘按 type 校验（server/lib/message-cards-io.ts），
+ * 老会话读的时候把老字段转成这里的卡。一条消息上同一种卡最多一张。
+ */
+export type MessageCard =
+  /** 定稿预览（commit_preview）：裁决照实显示，不靠模型转述。 */
+  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData }
+  /** 定稿回执（commit_apply 的入库报告）：这章改了哪些账。原样存，渲染侧防御解析。 */
+  | { readonly type: "commit-report"; readonly report: unknown }
+  /** 核账（check_continuity）。 */
+  | { readonly type: "continuity"; readonly check: ContinuityCheckData }
+  /** 审稿（ai_review）问题清单。 */
+  | { readonly type: "draft-review"; readonly review: DraftReviewView }
+  /** 硬伤检查（quality_check）。 */
+  | { readonly type: "quality"; readonly report: QualityCardReport }
+  /** 机器腔体检（check_ai_flavor）；fixedIds＝已点「改掉这句」改成功的几条。 */
+  | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[] }
+  /** AI 提的「下一步」选项（suggest_next_steps）。 */
+  | { readonly type: "next-steps"; readonly prompt: NextStepPrompt }
+  /** 名字写歪提醒（commit_preview）。 */
+  | { readonly type: "name-drift"; readonly warnings: readonly NameDriftWarning[] }
+  /** 线索久未推进提醒（commit_preview）。 */
+  | { readonly type: "stale-threads"; readonly warnings: readonly StaleThreadWarningData[] }
+  /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错。 */
+  | { readonly type: "error"; readonly detail?: string }
+  /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
+  | { readonly type: "status-notes"; readonly notes: readonly string[] };
+
+export type MessageCardType = MessageCard["type"];
+
+export interface ContinuityCheckData {
+  readonly chapter: number;
+  readonly sure: readonly ContinuityCheckItemData[];
+  readonly maybe: readonly ContinuityCheckItemData[];
+}
+
+export interface NextStepPrompt {
+  readonly question: string;
+  readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: import("../api/agentChatClient.js").AgentUserAction }[];
+}
+
+export interface NameDriftWarning {
+  readonly establishedName: string;
+  readonly driftedVariant: string;
+  readonly message: string;
+}
+
+export interface StaleThreadWarningData {
+  readonly kind: string;
+  readonly title: string;
+  readonly lastTouchedChapter: number;
+  readonly chaptersSinceTouched: number;
+  readonly message: string;
 }
 
 /** 核账卡上的一条（check_continuity 投影）：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文。 */
@@ -151,7 +169,8 @@ export interface DraftPreview {
   readonly status: "draft" | "committed" | "needs_repair";
   readonly content: string;
   readonly wordCount?: number;
-  readonly savedContent?: string;
+  /** AI 正在往这一章流式出稿：稿纸只读显示流出来的字（不进作者的稿子）。 */
+  readonly streaming?: boolean;
 }
 
 export interface ProtagonistStatus {
@@ -287,8 +306,6 @@ export interface ChapterWorkspaceData {
   readonly workingDraftChain?: boolean;
   readonly previousUncommittedDraftContext?: boolean;
   readonly latestUncommittedDraftChapter?: number;
-  readonly draft: DraftPreview;
-  readonly messages: readonly ChapterMessage[];
   readonly protagonist: ProtagonistStatus;
   readonly characterMatrix?: StateOverviewCharacterMatrix;
   readonly location: LocationStatus;

@@ -1,4 +1,4 @@
-import type { DraftCandidate } from "../../stores/workspaceStore.js";
+import type { DraftCandidate } from "../../stores/uiStore.js";
 import { countTextWords } from "../../utils/textUtils.js";
 
 /**

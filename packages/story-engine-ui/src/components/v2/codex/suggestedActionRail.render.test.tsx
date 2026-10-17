@@ -6,6 +6,7 @@ import { mockSidebarData, mockWorkspaceData } from "../../../mockData.js";
 import type { ChapterMessage, WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import AiChatCodex from "./AiChatCodex.js";
+import { useChatStore } from "../../../stores/chatStore.js";
 
 // A-6 建议条 rail JSX 渲染（复审 T6 缺口：此前只测了 latestTurnSuggestedActions 纯函数，
 // rail 本身零渲染测试、变异 0 红）。钉三条：最后一轮动作渲染、retry-agent 不在条上重复、busy 不渲染。
@@ -41,8 +42,9 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
 };
 
 function renderChat(messages: readonly ChapterMessage[], overrides: Record<string, unknown> = {}) {
+  useChatStore.getState().setMessages(messages);
   const props = {
-    workspace: { ...mockWorkspaceData, messages },
+    workspace: mockWorkspaceData,
     sidebar: mockSidebarData,
     themeMode: "dark",
     steeringDirection: "",
@@ -93,7 +95,7 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
         "err-1",
         "AI 服务暂时没响应，本次没有改动。",
         [action("retry-agent", "重试", "把这条记进资料")],
-        { isErrorNotice: true, errorDetail: "落盘失败" },
+        { cards: [{ type: "error", detail: "落盘失败" }] },
       ),
     ]);
 
@@ -113,7 +115,7 @@ describe("建议动作条 rail 渲染（AiChatCodex .suggest）", () => {
         "err-1",
         "AI 服务暂时没响应，本次没有改动。",
         [action("retry-agent", "重试", "把这条记进资料")],
-        { isErrorNotice: true, errorDetail: "断开" },
+        { cards: [{ type: "error", detail: "断开" }] },
       ),
       assistant("a2", "第 2 章已写好。", []),
     ]);

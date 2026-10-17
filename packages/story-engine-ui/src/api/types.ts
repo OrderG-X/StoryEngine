@@ -101,13 +101,8 @@ export interface StateOverviewChapterFileState {
   readonly chapter: number;
   readonly hasDraftFile: boolean;
   readonly hasCommittedChapter: boolean;
-  /** workspace 文件存在（章节被打开过）。导航判断用，不代表本章有真草稿。 */
-  readonly hasWorkspaceSnapshot?: boolean;
-  /** workspace 的 draftContent 里有真草稿内容（非空、非占位符）。「有草稿」状态看这个。 */
-  readonly hasWorkspaceDraft?: boolean;
   readonly draftTitle?: string;
   readonly committedTitle?: string;
-  readonly workspaceTitle?: string;
 }
 
 /** 编辑部一个跟读角色（checker/ledger/planner）的补读进度：done/total＝读到第几章 / 共几章（已定稿）。
@@ -615,66 +610,7 @@ export type WriteInstructionTarget =
   | "writing_rules"
   | "story_settings";
 
-export interface WriteInstruction {
-  readonly target: WriteInstructionTarget;
-  readonly mode: "set_fields" | "add_to_array" | "remove_from_array";
-  readonly fields?: Record<string, unknown>;
-  readonly arrayField?: string;
-  readonly values?: readonly string[];
-}
-
-export interface ChapterChatDecision {
-  readonly agentId: string;
-  readonly action: string;
-  readonly target: string;
-  readonly confidence: number;
-  readonly reason: string;
-}
-
 // 对话提取出的低风险资料更新候选；是否自动应用由客户端和写入网关共同裁决。
-export interface SilentFoundationUpdate {
-  readonly actionType: "create_character" | "update_character_detail" | "create_location" | "update_location_detail" | "create_asset" | "update_asset_status" | "update_world_rule" | "update_writing_rule";
-  readonly targetFile: string;
-  readonly targetPath: string;
-  readonly category: "characters" | "locations" | "assets" | "world" | "writingRules";
-  readonly after: Record<string, unknown>;
-  readonly isSecret?: boolean;
-}
-
-export interface ChapterChatResponse {
-  readonly reply: string;
-  readonly cards: readonly ChapterAdviceCard[];
-  readonly toolOutput: readonly string[];
-  readonly agentCards?: readonly ChapterAgentCard[];
-  readonly intent?: ChapterChatIntent;
-  readonly decision?: ChapterChatDecision;
-  readonly chapterGoal?: string;
-  readonly requiresConfirmation?: boolean;
-  readonly model?: string;
-  readonly profileId?: string;
-  readonly writeInstructions?: readonly WriteInstruction[];
-  readonly silentFoundationUpdates?: readonly SilentFoundationUpdate[];
-  readonly chapterCompleteSummary?: string;
-}
-
-export type ChapterChatIntent =
-  | "discuss"
-  | "suggest"
-  | "direct_edit"
-  | "generate_steering"
-  | "generate_draft"
-  | "quality_check"
-  | "ai_review"
-  | "revision_preview"
-  | "commit_preview"
-  | "commit_apply"
-  | "continue_next"
-  | "edit_foundation"
-  | "query_story_data"
-  | "write_writing_rules"
-  | "write_story_settings"
-  | "chapter_complete";
-
 /**
  * running=进行中；completed=正常完成；failed=工具失败/被拒绝（红）；needs_confirmation=待确认；
  * partial=部分完成；stopped=人喊停；verdict=裁决类只读工具（commit_preview）正常执行后的「否定裁决」
@@ -764,52 +700,6 @@ export interface ChapterAgentCard {
   readonly primaryActionId?: string;
 }
 
-export type ChapterAdviceCardType =
-  | "must_include"
-  | "can_weaken"
-  | "avoid"
-  | "risk"
-  | "chapter_goal"
-  | "forbidden_info"
-  | "alternative";
-
-export type ChapterAdviceAction = "include" | "skip" | "weaken" | "alternative";
-
-export interface ChapterAdviceCard {
-  readonly id: string;
-  readonly type: ChapterAdviceCardType;
-  readonly title: string;
-  readonly content: string;
-  readonly reason?: string;
-  readonly defaultAction: ChapterAdviceAction;
-}
-
-export type ChapterChatApiResponse =
-  | { readonly ok: true; readonly result: ChapterChatResponse }
-  | { readonly ok: false; readonly error: string };
-
-export interface ChapterWorkspaceMessage {
-  readonly id: string;
-  readonly role: "user" | "assistant" | "system";
-  readonly content: string;
-  readonly adviceCards?: readonly ChapterAdviceCard[];
-  readonly suggestedActions?: readonly ChapterWorkspaceSuggestedAction[];
-  readonly agentCards?: readonly ChapterAgentCard[];
-  readonly toolOutput?: readonly string[];
-  readonly createdAt?: string;
-}
-
-export type ChapterWorkspaceFlowStatus =
-  | "idle"
-  | "steering_ready"
-  | "draft_generating"
-  | "draft_ready"
-  | "quality_checked"
-  | "commit_preview_ready"
-  | "waiting_commit_confirmation"
-  | "committed"
-  | "ready_for_next";
-
 export type ChapterWorkspacePermission =
   | "safe_read"
   | "model_call"
@@ -818,53 +708,6 @@ export type ChapterWorkspacePermission =
   | "formal_state_write"
   | "destructive_write"
   | "local_side_effect";
-
-export interface ChapterWorkspaceSuggestedAction {
-  readonly id: string;
-  readonly label: string;
-  readonly description: string;
-  readonly permission: ChapterWorkspacePermission | readonly ChapterWorkspacePermission[];
-  readonly requiresConfirmation: boolean;
-  readonly endpoint?: string;
-}
-
-export interface ChapterWorkspaceSnapshot {
-  readonly chapter: number;
-  readonly messages: readonly ChapterWorkspaceMessage[];
-  readonly selectedAdviceCardKeys: readonly string[];
-  readonly flowStatus?: ChapterWorkspaceFlowStatus;
-  readonly draftContent?: string;
-  readonly draftTitle?: string;
-  readonly hasDraftFile?: boolean;
-  readonly hasCommittedChapter?: boolean;
-  readonly updatedAt?: string;
-  readonly generationInterrupted?: boolean;
-  readonly recoveredFromDraftFile?: boolean;
-  /** 服务端工作区代次；写入时作为 expectedRevision 做乐观并发校验。 */
-  readonly revision?: number;
-}
-
-export interface ChapterWorkspaceRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-}
-
-export interface SaveChapterWorkspaceRequest extends ChapterWorkspaceRequest {
-  readonly messages?: readonly ChapterWorkspaceMessage[];
-  readonly selectedAdviceCardKeys: readonly string[];
-  readonly flowStatus?: ChapterWorkspaceFlowStatus;
-  readonly draftContent?: string;
-  readonly draftTitle?: string;
-  readonly writeDraftFile?: boolean;
-  /** 生成中被刷新/关页打断：下次打开以盘上更完整稿为准（dogfood F1）。 */
-  readonly generationInterrupted?: boolean;
-  /** 本次编辑所基于的已加载 revision；旧客户端省略时保持兼容。 */
-  readonly expectedRevision?: number;
-}
-
-export type ChapterWorkspaceApiResponse =
-  | { readonly ok: true; readonly snapshot: ChapterWorkspaceSnapshot }
-  | { readonly ok: false; readonly error: string; readonly snapshot?: ChapterWorkspaceSnapshot };
 
 export interface UsageSummary {
   readonly diagnosticsAvailable: boolean;
