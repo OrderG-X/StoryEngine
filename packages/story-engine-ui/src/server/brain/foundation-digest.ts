@@ -57,6 +57,16 @@ const FIELD_LABELS: Record<string, string> = {
 /** 这些键不进摘要：内部 id 和 id 引用（给作者看的文字不出现裸 id）、布尔开关、纯结构对象。 */
 const SKIP_FIELDS = new Set(["id", "canAiModify", "arc", "voice", "ownerCharacterId", "currentLocationId", "carriedByCharacterId", "lastSeenChapter", "firstSeenChapter", "containsAssetIds", "locationId", "parentId"]);
 
+/**
+ * 会随剧情变的「现状」字段不进摘要（重构 P3，10-17 事故根治）：卡片上的现状是作者建卡时写的，
+ * 写到后面早就过时了，核账员拿它当设定去比，就会把正文里合理的变化报成矛盾。现状以前文正文和账本为准。
+ * 只认这几个固定的键；作者自定义字段（extraFields）不知道含义，照旧进摘要，不猜。
+ */
+const CURRENT_STATE_FIELDS = new Set([
+  "currentStateHint", "currentStatus", "currentKnownPosition", "lastKnownState", "status",
+  "ownerName", "currentLocationName", "carriedByName",
+]);
+
 const label = (key: string): string => FIELD_LABELS[key] ?? key;
 
 /** 数组项拼成一句：字符串直接用；对象（路程规则这类）把叶子字段拼出来，不递归嵌套对象。 */
@@ -87,7 +97,7 @@ function entityLine(name: string, header: string | undefined, entry: Record<stri
     ? entry.extraFields as Record<string, unknown>
     : undefined;
   for (const [key, value] of Object.entries(entry)) {
-    if (key === "name" || key === "extraFields" || SKIP_FIELDS.has(key)) continue;
+    if (key === "name" || key === "extraFields" || SKIP_FIELDS.has(key) || CURRENT_STATE_FIELDS.has(key)) continue;
     const text = describeValue(value);
     if (text) parts.push(`${label(key)}：${text}`);
   }
@@ -169,6 +179,7 @@ export async function readFoundationDigest(projectDir: string): Promise<Foundati
 export function foundationMessage(digest: FoundationDigest): string {
   return [
     "【设定本（作者定的硬设定：人物卡、地点、资产、世界规则）】",
+    "（东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准。）",
     digest.text,
     ...(digest.truncated ? ["（设定本太长，这里只给了前面一部分。）"] : []),
   ].join("\n");

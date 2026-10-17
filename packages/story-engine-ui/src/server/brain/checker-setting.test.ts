@@ -53,7 +53,7 @@ async function makeSettingBook(): Promise<string> {
   }), "utf-8");
   await writeFile(join(dir, "story", "assets.json"), JSON.stringify({
     version: "v0",
-    assets: [{ id: "asset-1", name: "钟楼钥匙（装在铜盒里）", status: "由老周保管" }], containers: [],
+    assets: [{ id: "asset-1", name: "钟楼钥匙（装在铜盒里）", status: "由老周保管", ownerName: "老周", currentLocationName: "钟楼", usageRules: ["只能开钟箱"] }], containers: [],
   }), "utf-8");
   return dir;
 }
@@ -81,6 +81,11 @@ describe("readFoundationDigest：按项目真实资料拼设定（题材中立�
     expect(card).toContain("已经知道：爷爷三年前过世");
     expect(digest!.sections[1]!.text).toContain("钥匙：钟楼钥匙装在铜盒里，由老周保管");
     expect(digest!.sections[2]!.text).toContain("钟楼钥匙（装在铜盒里）");
+    // 会变的现状（现状、在谁手里、现在在哪）不进摘要：卡片上的早就过时了，核账员拿去比会误报；不变的规矩照进。
+    expect(digest!.sections[2]!.text).toContain("使用规矩：只能开钟箱");
+    expect(digest!.sections[2]!.text).not.toContain("由老周保管");
+    expect(digest!.sections[2]!.text).not.toContain("在谁手里");
+    expect(digest!.sections[2]!.text).not.toContain("现在在哪");
     expect(digest!.sections[3]!.text).toContain("写实题材");
     expect(digest!.text).not.toContain("char-a1");
     expect(digest!.text).not.toContain("loc-1");
