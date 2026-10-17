@@ -181,6 +181,9 @@ export {
   type StoryTimeline,
   type TimelineEntry,
   timelineEntryFor,
+  type TimelineSource,
+  validateStoryTimeline,
+  weekdayOfDay,
 } from "./story-timeline.js";
 export {
   findLedgerNumberConflicts,
@@ -202,15 +205,21 @@ export {
 } from "./text-similarity.js";
 export {
   type ArcGoal,
+  type ArcGoalPool,
   type AssetItem,
   type CharacterBible,
   type CharacterBibleEntry,
   type CharacterMatrixEntry,
   type CharacterMatrixLedger,
   type FactEntry,
+  type FactLedger,
+  type HookPool,
   type LocationBibleEntry,
   type ModelSettingsLoadResult,
   type NarrativeThread,
+  type StoryCalendar,
   type StyleExemplar,
+  type ThreadPool,
+  type TimelineEvent,
   type WorldBible,
 } from "./types.js";
