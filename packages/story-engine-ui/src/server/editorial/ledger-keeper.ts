@@ -40,7 +40,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "把这一章引起的变化列成一份账单。题材中立：只记正文真实写到的，不臆造、不补剧情、不预设走向。",
   "每一条都必须附 quote：一句逐字摘自本章正文的原句（可以含标点，不能改写、拼接、自己造句）。代码会逐字核对，对不上的那条不记。",
   "",
-  "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样（不要照抄原句）；quote 引最能代表本章的那句。",
+  "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样，不超过 60 个字（不要照抄原句）；quote 引最能代表本章的那句。",
   "",
   "time：每章都给（第 1 章没有上一章，只写星期、时段，没有就省略整个 time）。",
   "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照你读过的上一章结尾和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事就是 0，隔了一夜才是 1）。只有确实判断不了才不填这个数。",
@@ -55,8 +55,9 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 本章主要跟着谁的眼睛走，就给那个人加 \"viewpoint\": true；多视角或全知叙事就都不加。",
   "",
   "facts：本章写明的、以后写作要守住的事实。",
-  "- nature：会随剧情变的（人在哪、东西在谁手里、关系、伤势、身份是否暴露）写 state；不会变的（年龄、出身、长相、过去发生的事、规则）写 hard；只是这一章发生过的事写 event。拿不准会不会变的写 event。",
-  "- state 和 hard 必须写清 subject（谁或什么）、attribute（哪一方面，如「在哪」「年纪」）、value（是什么）；text 用一句话说清这条事实。",
+  "- nature：会随剧情变的写 state——人在哪、东西在谁手里、人和人的关系、伤势病情、谁知道了什么 / 还不知道什么、身份暴没暴露、手头的打算。不会变的写 hard——出身、年纪、长相、过去发生过的事、世界的规则。只是这一章发生过的事写 event。拿不准会不会变的写 event。",
+  "- state 和 hard 必须写清 subject（谁或什么）、attribute（哪一方面）、value（是什么）；text 用一句话说清这条事实。",
+  "- 同一个人、同一样东西每次都用同一个名字当 subject；同一方面每次都用同一个说法当 attribute，尽量用短的常用说法（在哪、在谁手里、年纪、身份、关系、知道什么）。上面【现在有效的事实】里已经有的人、物和方面，照抄那里的写法——代码按写法认「同一方面」，写法一变，旧的现状就顶替不掉。",
   "- 本章明写推翻了上面【现在有效的事实】里某条不会变的事实（比如揭穿了假身份），在 replaces 里填它的编号（如 [\"F3\"]），quote 引推翻它的那句。会变的事实有了新值不用填 replaces，代码按最新一章算。",
   "- 前文已经记过、本章只是又提了一遍的，不要再记。",
   "",
@@ -84,6 +85,8 @@ export interface KeeperInput {
   readonly notesRoot?: string;
   /** 缺省 KEEPER_MAX_CATCH_UP。 */
   readonly maxCatchUp?: number;
+  /** 拿到记账员原始输出时调一次（考卷、排查用；不进清单）。 */
+  readonly onRawOutput?: (text: string) => void;
 }
 
 interface KeeperCommon {
@@ -170,6 +173,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   } catch (error) {
     return { ok: false, reason: `记账员没交上账单：${oneLine(error)}`, ...extra };
   }
+  input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
   if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
   return { ok: true, parsed, omittedThreads: context.omittedThreads, omittedFacts: context.omittedFacts, ...extra };

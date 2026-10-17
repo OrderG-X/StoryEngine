@@ -46,6 +46,12 @@ export function extractJsonObject(text: string): Raw | undefined {
 
 const isRecord = (value: unknown): value is Raw => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** 原句：模型有时把换行写成字面的反斜杠 n（多转义了一层），换回空白，代码核对时本来就不看空白。 */
+function quoteText(value: unknown): string | undefined {
+  const text = str(value);
+  return text === undefined ? undefined : str(text.split("\\r").join(" ").split("\\n").join(" ").split("\\t").join(" "));
+}
+
 /** 字符串去空白；空串、非字符串 → undefined（数字照转成字符串）。 */
 function str(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -141,7 +147,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
   if (root.summary !== undefined && root.summary !== null) {
     const raw = isRecord(root.summary) ? root.summary : {};
     const summary = str(raw.text) ?? str(raw.summary);
-    const quote = str(raw.quote);
+    const quote = quoteText(raw.quote);
     if (summary && quote) entries.push({ kind: "summary", review: "auto", text: summary, quote } satisfies SummaryInput);
     else drop("summary", summary ? "梗概没附原句" : "梗概是空的");
   }
@@ -149,7 +155,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
   // —— 时间 ——
   if (isRecord(root.time)) {
     const raw = root.time;
-    const quote = str(raw.quote);
+    const quote = quoteText(raw.quote);
     const basisText = str(raw.basis)?.toLowerCase();
     // 模型只能交正文明写 / 读前后文判断两种；写了别的（author、estimated）一律按判断记。
     const basis: TimeInput["basis"] = basisText === "text" ? "text" : "judged";
@@ -182,7 +188,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
     const name = str(item.name);
     const nameUsed = str(item.nameUsed) ?? name;
-    const quote = str(item.quote);
+    const quote = quoteText(item.quote);
     if (!name || !nameUsed || !quote) {
       drop(where, !name ? "没写名字" : "没附原句");
       continue;
@@ -200,7 +206,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       continue;
     }
     const factText = str(item.text);
-    const quote = str(item.quote);
+    const quote = quoteText(item.quote);
     if (!factText || !quote) {
       drop(where, !factText ? "事实没写内容" : "事实没附原句");
       continue;
@@ -250,7 +256,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     const opText = str(item.op)?.toLowerCase();
     const op = opText ? THREAD_OPS[opText] : undefined;
     const note = str(item.note) ?? str(item.title);
-    const quote = str(item.quote);
+    const quote = quoteText(item.quote);
     if (!op) {
       drop(where, opText ? `op 写成了「${opText}」，认不出` : "没写 op（开 / 推进 / 收）");
       continue;

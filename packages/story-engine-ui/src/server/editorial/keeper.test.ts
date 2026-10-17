@@ -95,6 +95,11 @@ describe("记账员交回的账单", () => {
     ]);
   });
 
+  it("原句里多转义了一层的换行（字面的反斜杠 n）换回空白", () => {
+    const parsed = parseKeeperOutput(JSON.stringify({ summary: { text: "找到书", quote: "林秋\\n一九八七年春" } }), handles);
+    expect(parsed?.entries[0]).toMatchObject({ kind: "summary", quote: "林秋 一九八七年春" });
+  });
+
   it("退化输入：逐条丢、记原因，不整份作废；抠不出 JSON 才算整份失败", () => {
     expect(parseKeeperOutput("我记不了", handles)).toBeUndefined();
     expect(parseKeeperOutput("[1,2]", handles)).toBeUndefined();

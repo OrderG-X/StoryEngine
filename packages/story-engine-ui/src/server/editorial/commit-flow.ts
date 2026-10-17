@@ -249,6 +249,8 @@ export interface PrepareInput {
   readonly knownNames?: readonly string[];
   readonly notesRoot?: string;
   readonly maxCatchUp?: number;
+  /** 记账员原始输出（考卷、排查用）。 */
+  readonly onRawOutput?: (text: string) => void;
   readonly now?: () => Date;
 }
 
@@ -274,6 +276,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     callModel: input.callModel,
     ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
     ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+    ...(input.onRawOutput ? { onRawOutput: input.onRawOutput } : {}),
   });
   const extra = { ...(keeper.cold ? { cold: keeper.cold } : {}), ...(keeper.waited ? { waited: keeper.waited } : {}) };
   if (!keeper.ok) return { ok: false, code: "keeper_failed", reason: keeper.reason, ...extra };
