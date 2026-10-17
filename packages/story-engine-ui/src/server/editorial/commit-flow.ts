@@ -33,7 +33,7 @@ import {
   type TimeInput,
 } from "@actalk/story-core";
 import type { KeeperDrop } from "./keeper-parse.js";
-import { runLedgerKeeper } from "./ledger-keeper.js";
+import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";
 import { writeAtomically, type BrainCallModel, type ColdCoverage } from "./reader-window.js";
 
@@ -133,6 +133,8 @@ export interface CommitPreview {
   };
   readonly omittedThreads: number;
   readonly omittedFacts: number;
+  /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
+  readonly quoteRepair?: QuoteRepair;
   readonly cold?: ColdCoverage;
   readonly waited?: ReaderWaited;
 }
@@ -327,6 +329,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     },
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
+    ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),
     ...extra,
   };
 }

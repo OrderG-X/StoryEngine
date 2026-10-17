@@ -186,6 +186,69 @@ describe("记账员跑一章", () => {
     }
   });
 
+  it("原句对不上的几条单独重摘一次：核得上才换；重摘失败照第一遍交；全对上就不多调", async () => {
+    const book = await makeHomeTempDir("keeper-quote-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      const before = sampleBook();
+      const draft = "# 第2章\n\n他把钥匙递过来，说：「拿着。」沈青禾接住了。";
+      const first = JSON.stringify({
+        summary: { text: "老周交出钥匙", quote: "老周把钥匙递过来" },
+        presence: [{ name: "沈青禾", nameUsed: "沈青禾", quote: "沈青禾接住了" }],
+        facts: [{ nature: "event", text: "老周交出钥匙", quote: "老周说拿着" }],
+      });
+      const run = (repair: (messages: readonly BrainMessage[]) => Promise<string>) => {
+        const calls: BrainMessage[][] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book,
+          chapter: 2,
+          draft,
+          before,
+          maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            calls.push([...messages]);
+            if (!options.json) return "笔记";
+            return messages.at(-1)?.content.includes("逐字找不到") ? repair(messages) : first;
+          },
+        });
+        return { calls, outcome };
+      };
+
+      const fixed = run(async () => JSON.stringify({ quotes: [{ n: 1, quote: "他把钥匙递过来" }, { n: "2", quote: "老周说拿着" }] }));
+      const ok = await fixed.outcome;
+      expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 1 } });
+      const ask = fixed.calls.at(-1) ?? [];
+      // 同一段对话里接着问：前面是第一遍的要求和它交的账单。
+      expect(ask.at(-2)).toMatchObject({ role: "assistant", content: first });
+      expect(ask.at(-1)?.content).toContain("1. 梗概：老周交出钥匙");
+      expect(ask.at(-1)?.content).toContain("你写的：老周把钥匙递过来");
+      if (ok.ok) {
+        expect(ok.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来" });
+        // 第 2 条重摘了还是对不上：保持原样，留给定稿清单如实列。
+        expect(ok.parsed.entries[2]).toMatchObject({ kind: "fact", quote: "老周说拿着" });
+      }
+
+      const thrown = await run(async () => { throw new Error("429 太忙"); }).outcome;
+      expect(thrown).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 0, failed: expect.stringContaining("429") } });
+      const junk = await run(async () => "好的").outcome;
+      expect(junk).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 0, failed: "补摘交回来的不是 JSON" } });
+
+      const clean = runLedgerKeeper({
+        projectDir: book,
+        chapter: 2,
+        draft,
+        before,
+        maxCatchUp: 0,
+        callModel: async (_messages, options) => (options.json ? JSON.stringify({ summary: { text: "交钥匙", quote: "他把钥匙递过来" } }) : "笔记"),
+      });
+      const cleanOutcome = await clean;
+      expect(cleanOutcome.ok && cleanOutcome.quoteRepair).toBeFalsy();
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
   it("提示词里不写任何具体书名、人名", () => {
     const text = buildKeeperTask(3, "正文", "");
     for (const name of ["沈青禾", "老周", "林舟", "苏晚", "陆川"]) expect(text).not.toContain(name);

@@ -9,10 +9,10 @@
  * 跟读窗口和笔记沿用旧记账员的角色（LEDGER_ROLE 一个字都不能改：笔记按角色说明的哈希作废，改了全书笔记重写）。
  * 规则里不写任何书名、人名、题材。模型调用由调用方注入，这里不碰模型 SDK。
  */
-import type { BookProjection } from "@actalk/story-core";
+import { checkEntries, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext } from "./keeper-context.js";
-import { parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 
@@ -39,6 +39,7 @@ export const KEEPER_MAX_CATCH_UP = 10;
 export const KEEPER_SPEC: readonly string[] = [
   "把这一章引起的变化列成一份账单。题材中立：只记正文真实写到的，不臆造、不补剧情、不预设走向。",
   "每一条都必须附 quote：一句逐字摘自本章正文的原句（可以含标点，不能改写、拼接、自己造句）。代码会逐字核对，对不上的那条不记。",
+  "- 摘法：照抄正文里连续的一段，至少 4 个字。正文写「他」「她」就照抄「他」「她」，不要换成名字（正文写名字也不要换成「他」）；不要换人称；对话中间夹着「某某说」时只摘一边，要跨过去就在中间写……；不要删字、加字、换词。",
   "",
   "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样，不超过 60 个字（不要照抄原句）；quote 引最能代表本章的那句。",
   "",
@@ -96,12 +97,22 @@ interface KeeperCommon {
   readonly waited?: ReaderWaited;
 }
 
+/** 原句补摘：第一遍交的账单里有几条原句在正文里找不到，单独让记账员重摘了一次。 */
+export interface QuoteRepair {
+  readonly asked: number;
+  /** 重摘后核得上的条数。 */
+  readonly fixed: number;
+  /** 补摘那次调用本身没成（原因）；没成就照第一遍的交，核不上的由定稿清单如实列出。 */
+  readonly failed?: string;
+}
+
 export type KeeperOutcome =
   | (KeeperCommon & {
       readonly ok: true;
       readonly parsed: KeeperParseResult;
       readonly omittedThreads: number;
       readonly omittedFacts: number;
+      readonly quoteRepair?: QuoteRepair;
     })
   | (KeeperCommon & { readonly ok: false; readonly reason: string });
 
@@ -176,5 +187,92 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
   if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
-  return { ok: true, parsed, omittedThreads: context.omittedThreads, omittedFacts: context.omittedFacts, ...extra };
+  const task = buildKeeperTask(input.chapter, input.draft, context.text);
+  const repaired = await repairQuotes(parsed, input, [...window, { role: "user", content: task }, { role: "assistant", content: text }]);
+  return {
+    ok: true,
+    parsed: repaired.parsed,
+    omittedThreads: context.omittedThreads,
+    omittedFacts: context.omittedFacts,
+    ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
+    ...extra,
+  };
+}
+
+/** 一次最多补摘几条（再多说明这份账单整体不靠谱，不值得再花一次长调用）。 */
+export const QUOTE_REPAIR_MAX = 12;
+
+/**
+ * 原句补摘：用和定稿同一个核对（checkEntries）找出原句对不上的条目，在同一段对话里请记账员只为这几条从正文里重摘一句。
+ * 重摘的原句也得核得上才换上去；补摘调用失败、交回来读不了，都照第一遍的交（最后由定稿清单如实列出没记上的）。
+ * 模型无关：任何模型都会偶尔把「他」写成名字、跨过「某某说」拼对话——这里不放宽核对，只给一次改正的机会。
+ */
+async function repairQuotes(
+  parsed: KeeperParseResult,
+  input: KeeperInput,
+  conversation: readonly BrainMessage[],
+): Promise<{ parsed: KeeperParseResult; repair?: QuoteRepair }> {
+  const broken = checkEntries(parsed.entries, input.draft, input.before).rejected.filter((item) => item.reason === "quote_not_in_text").slice(0, QUOTE_REPAIR_MAX);
+  if (broken.length === 0) return { parsed };
+  let reply: string;
+  try {
+    reply = await withStep("记账员补摘原句", () =>
+      input.callModel([...conversation, { role: "user", content: buildQuoteRepairTask(broken.map((item) => item.entry)) }], { json: true }),
+    );
+  } catch (error) {
+    return { parsed, repair: { asked: broken.length, fixed: 0, failed: oneLine(error) } };
+  }
+  input.onRawOutput?.(reply);
+  const quotes = parseQuoteRepairs(reply);
+  if (!quotes) return { parsed, repair: { asked: broken.length, fixed: 0, failed: "补摘交回来的不是 JSON" } };
+  const entries = [...parsed.entries];
+  let fixed = 0;
+  broken.forEach((item, position) => {
+    const quote = quotes.get(position + 1);
+    if (!quote) return;
+    const candidate = { ...item.entry, quote } as EntryInput;
+    if (checkEntries([candidate], input.draft, input.before).rejected.some((rejected) => rejected.reason === "quote_not_in_text")) return;
+    entries[item.index] = candidate;
+    fixed += 1;
+  });
+  return { parsed: { ...parsed, entries }, repair: { asked: broken.length, fixed } };
+}
+
+/** 补摘要求里每条怎么称呼（只给记账员看，不进清单）。 */
+function repairLabel(entry: EntryInput): string {
+  switch (entry.kind) {
+    case "summary":
+      return `梗概：${entry.text}`;
+    case "fact":
+      return `事实：${entry.text}`;
+    case "thread":
+      return entry.op === "open" ? `新开线索「${entry.title ?? entry.note}」：${entry.note}` : `${entry.op === "close" ? "收口" : "推进"}：${entry.note}`;
+    case "time":
+      return "时间";
+    case "presence":
+      return `出场人物：${entry.name}（原句里必须有「${entry.nameUsed}」这几个字）`;
+  }
+}
+
+export function buildQuoteRepairTask(entries: readonly EntryInput[]): string {
+  return [
+    "你刚交的账单里，下面几条附的 quote 在本章正文里逐字找不到：",
+    ...entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry ? (entry.quote ?? "（没写）") : "（没写）"}`),
+    "请为每条从本章正文里重新摘一句原句：照抄连续的一段，至少 4 个字；「他」「她」照正文抄，不换成名字；不换人称；不跨过「某某说」拼接（要跨就在中间写……）。",
+    "正文里实在没有能说明它的句子，就给空串，那条不记。",
+    '只交 JSON：{"quotes":[{"n":1,"quote":"…"}]}',
+  ].join("\n");
+}
+
+function parseQuoteRepairs(text: string): Map<number, string> | undefined {
+  const list = extractJsonObject(text)?.quotes;
+  if (!Array.isArray(list)) return undefined;
+  const quotes = new Map<number, string>();
+  for (const item of list) {
+    const record = item as { n?: unknown; quote?: unknown } | null;
+    const n = typeof record?.n === "number" ? record.n : typeof record?.n === "string" ? Number(record.n.trim()) : Number.NaN;
+    const quote = quoteText(record?.quote);
+    if (Number.isInteger(n) && n >= 1 && quote) quotes.set(n, quote);
+  }
+  return quotes;
 }

@@ -47,7 +47,7 @@ export function extractJsonObject(text: string): Raw | undefined {
 const isRecord = (value: unknown): value is Raw => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** 原句：模型有时把换行写成字面的反斜杠 n（多转义了一层），换回空白，代码核对时本来就不看空白。 */
-function quoteText(value: unknown): string | undefined {
+export function quoteText(value: unknown): string | undefined {
   const text = str(value);
   return text === undefined ? undefined : str(text.split("\\r").join(" ").split("\\n").join(" ").split("\\t").join(" "));
 }
