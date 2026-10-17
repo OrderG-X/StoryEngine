@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChapterPaper } from "../api/workingDraftClient.js";
 import { isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, holdDraftSaves, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
 
 const PROJECT = "/books/钟楼";
 
@@ -163,6 +163,40 @@ describe("存稿调度", () => {
     await saving;
     expect(server.disk[1]?.body).toBe("一。二。三。");
     expect(isDraftDirty(useDraftStore.getState())).toBe(false);
+  });
+
+  it("AI 回合里作者打字：先不存，AI 的稿回来出提示，作者的字一个不丢；放开后挂着提示也不存", async () => {
+    vi.useFakeTimers();
+    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 2);
+    const release = holdDraftSaves();
+    editDraft("原稿。作者趁 AI 改稿时加的一句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(server.puts).toHaveLength(0);
+    // AI 改稿落盘（不比版本），回执到了重读一次。
+    server.disk[2] = { version: "v-ai", body: "AI 改过的稿。" };
+    await refreshPaper();
+    expect(useDraftStore.getState()).toMatchObject({ body: "原稿。作者趁 AI 改稿时加的一句。" });
+    expect(useDraftStore.getState().incoming).toMatchObject({ body: "AI 改过的稿。", version: "v-ai" });
+    release();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(server.puts).toHaveLength(0);
+  });
+
+  it("AI 回合没动稿子：放开后照常存作者打的字", async () => {
+    vi.useFakeTimers();
+    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 2);
+    const release = holdDraftSaves();
+    editDraft("原稿。加一句。");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(server.puts).toHaveLength(0);
+    release();
+    release();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(server.puts).toEqual([expect.objectContaining({ chapter: 2, body: "原稿。加一句。", baseVersion: "v0" })]);
   });
 
   it("撤销后重读：force 直接换上盘上的旧版", async () => {

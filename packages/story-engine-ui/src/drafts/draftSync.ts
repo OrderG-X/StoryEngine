@@ -6,6 +6,8 @@
  *
  * - 停笔 600ms 存一次；同一时刻只发一笔，发的时候又改了就等这笔回来再发。
  * - 有冲突提示挂着（incoming）就先不存，等作者选。
+ * - AI 回合进行中先不自动存（holdDraftSaves）：作者这时打的字保持「没存」，AI 写的稿回来时稿纸出提示让作者选；
+ *   要是先存上了，AI 的稿落盘后稿纸会当作没改过、把作者刚打的字静默换掉。
  * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉。
  */
 import { fetchChapterPaper, saveWorkingDraft } from "../api/workingDraftClient.js";
@@ -17,6 +19,7 @@ export type DraftFlushResult = { readonly ok: true } | { readonly ok: false; rea
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight: Promise<DraftFlushResult> | null = null;
+let holds = 0;
 
 function clearTimer(): void {
   if (timer !== null) {
@@ -33,6 +36,7 @@ export function editDraft(body: string, title?: string): void {
 
 export function scheduleDraftSave(delay = DRAFT_SAVE_DELAY_MS): void {
   clearTimer();
+  if (holds > 0) return;
   timer = setTimeout(() => {
     timer = null;
     void saveDraftNow();
@@ -88,6 +92,24 @@ export async function saveDraftNow(): Promise<DraftFlushResult> {
   return result;
 }
 
+/**
+ * AI 回合开始：先不自动存稿，直到回合收尾（返回的函数调一次就放开）。放开时还有没存的字、又没有冲突提示挂着，就照常存。
+ * 换章、关窗这类明说要存的（flushDraftSave / 关窗那一笔）不受影响。
+ */
+export function holdDraftSaves(): () => void {
+  holds += 1;
+  clearTimer();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    holds -= 1;
+    if (holds > 0) return;
+    const state = useDraftStore.getState();
+    if (state.loaded && !state.incoming && isDraftDirty(state)) scheduleDraftSave();
+  };
+}
+
 /** 换章、撤销、关窗前：把没存的字存掉，等它落盘。 */
 export async function flushDraftSave(): Promise<DraftFlushResult> {
   return saveDraftNow();
@@ -132,4 +154,5 @@ export async function refreshPaper(options: { readonly force?: boolean; readonly
 export function __resetDraftSyncForTests(): void {
   clearTimer();
   inFlight = null;
+  holds = 0;
 }

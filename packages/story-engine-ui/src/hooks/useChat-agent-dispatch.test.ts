@@ -12,7 +12,7 @@ import { fetchStateOverview } from "../api/client.js";
 import { fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
-import { __resetDraftSyncForTests } from "../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft } from "../drafts/draftSync.js";
 import { isPaperCommitted } from "../drafts/useDraftPreview.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
@@ -1110,6 +1110,26 @@ describe("useChat AI 改稿撞上作者没存的字", () => {
     expect(paper.incoming).toMatchObject({ cause: "update" });
     expect(lastAssistant()?.content).toBe("改好了，换不换你来定。");
     expect(useChatStore.getState().chatLoading).toBe(false);
+  });
+
+  it("作者在回合里打了字、停笔过了存稿时间 → 回合里先不存，AI 稿回来照样出提示；收尾后不覆盖 AI 那版", async () => {
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      handlers.onToolCall({ toolName: "revise_draft", toolCallId: "r1" });
+      editDraft("作者停笔了一会儿的字。");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      writeDisk(3, { draft: "AI 改好的新一版。" });
+      handlers.onToolResult({ toolName: "revise_draft", toolCallId: "r1", ok: true, summary: "改好了。" });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => { await result.current.handleSendMessage("把第三章开头改紧一点"); });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const paper = useDraftStore.getState();
+    expect(paper.body).toBe("作者停笔了一会儿的字。");
+    expect(paper.incoming).toMatchObject({ cause: "update", body: "AI 改好的新一版。" });
+    expect(disk.get(3)?.draft?.body).toBe("AI 改好的新一版。");
   });
 
   it("AI 改稿落盘、作者没动稿 → 直接换上新一版", async () => {
