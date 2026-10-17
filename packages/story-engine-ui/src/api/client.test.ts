@@ -3,66 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyDraftRevision,
   fetchModelSettings,
-  saveChapterWorkspace,
-  saveChapterWorkspaceBeacon,
   saveModelSettings,
-  ChapterWorkspaceConflictError,
 } from "./client.js";
-
-describe("saveChapterWorkspace revision conflicts", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("surfaces HTTP 409 as a typed conflict carrying the current server snapshot", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
-      ok: false,
-      error: "工作区 revision 冲突",
-      snapshot: {
-        chapter: 1,
-        messages: [],
-        selectedAdviceCardKeys: [],
-        draftContent: "server wins",
-        revision: 4,
-      },
-    }, 409)));
-
-    const error = await saveChapterWorkspace({
-      projectPath: "/tmp/story-project",
-      chapter: 1,
-      messages: [],
-      selectedAdviceCardKeys: [],
-      expectedRevision: 3,
-    }).then(() => null, (reason: unknown) => reason);
-
-    expect(error).toBeInstanceOf(ChapterWorkspaceConflictError);
-    expect(error).toMatchObject({
-      snapshot: { chapter: 1, draftContent: "server wins", revision: 4 },
-    });
-  });
-});
-
-describe("saveChapterWorkspaceBeacon 页面还活着时回报新 revision", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("保存成功 → 回调拿到服务端新 revision；失败不回调", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
-      ok: true,
-      snapshot: { chapter: 1, messages: [], selectedAdviceCardKeys: [], revision: 8 },
-    }, 200)));
-    const onSaved = vi.fn();
-    saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSaved);
-    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ revision: 8 })));
-
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ ok: false, error: "冲突" }, 409)));
-    const onSavedConflict = vi.fn();
-    saveChapterWorkspaceBeacon({ projectPath: "/p", chapter: 1, messages: [], selectedAdviceCardKeys: [], expectedRevision: 7 }, onSavedConflict);
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    expect(onSavedConflict).not.toHaveBeenCalled();
-  });
-});
 
 describe("applyDraftRevision", () => {
   afterEach(() => {

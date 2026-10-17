@@ -67,15 +67,6 @@ describe("useProjectNavigation chapter status helpers", () => {
     expect(chapterNumber).toBe(2);
   });
 
-  it("章节工作区缓存不再决定开哪一章（重构 P5：只看草稿和定稿文件）", () => {
-    const chapterNumber = __useProjectNavigationTest.resolveInitialChapterNumber([
-      { id: "ch-1", chapterNumber: 1, title: "第一章", status: "current" },
-      { id: "ch-4", chapterNumber: 4, title: "第四章", status: "draft", hasWorkspaceSnapshot: true },
-    ], 1);
-
-    expect(chapterNumber).toBe(1);
-  });
-
   it("does not auto-mark previous draft chapters as committed when switching active chapter", () => {
     const chapters = __useProjectNavigationTest.updateChapterListForActive(
       baseChapters,

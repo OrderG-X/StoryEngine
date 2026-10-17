@@ -367,7 +367,6 @@ export function useChat(params: UseChatParams): UseChatResult {
                       title: `第${chapter}章`,
                       hasCommittedChapter: false,
                       hasDraftFile: false,
-                      hasWorkspaceSnapshot: false,
                     },
                   });
                 }

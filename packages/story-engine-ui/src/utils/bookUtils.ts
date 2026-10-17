@@ -154,7 +154,6 @@ export function carryChapterFileFlags(
       ...chapter,
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
-      ...(chapter.hasWorkspaceSnapshot === undefined && old?.hasWorkspaceSnapshot !== undefined ? { hasWorkspaceSnapshot: old.hasWorkspaceSnapshot } : {}),
       ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),
     };
   });

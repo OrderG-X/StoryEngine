@@ -24,11 +24,8 @@ import { readFile } from "node:fs/promises";
 import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "@actalk/story-engine";
 
 import {
-  chapterWorkspacePath,
   defaultDraftPath,
   hasRealDraftContent,
-  isRecord,
-  readStringAllowEmpty,
 } from "../lib/project-io.js";
 import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
 import { refineQualityReport, type RefinedQualityReport } from "../lib/quality-report-refine.js";
@@ -103,8 +100,8 @@ export async function runDraftQualityCheck(input: DraftQualityCheckInput): Promi
  * 把用户在编辑器/写作区明明看得见的真稿当没写。按可靠度取真稿：
  *   ① 显式正文（仅当是真稿；空串/占位符不算，治 generate_draft 偶发回空被透传当空稿）
  *   ② 工作稿文件 drafts/fast/*.md（带 FS 抖动重试：刚写盘偶发读空/读到占位符，重试即得真稿）
- *   ③ workspace 原始 draftContent（编辑器看到的就是它；文件暂空/占位时它常已有真稿）
- *   ④ 三处皆无真稿 → hasRealDraft=false，上层诚实回报「还没正文可质检」（不喂占位符给引擎误报）。
+ *   ③ 不可信显式正文（agent 路）末位兜底
+ *   ④ 都没有真稿 → hasRealDraft=false，上层诚实回报「还没正文可质检」（不喂占位符给引擎误报）。
  * retries/delayMs 仅为单测可注入（默认 3×60ms，与 generate_draft 的 readDraftBodyWithRetry 同源）。
  */
 export async function resolveDraftContentForQualityCheck(input: {
@@ -115,7 +112,7 @@ export async function resolveDraftContentForQualityCheck(input: {
    * 是否信任 explicitDraftContent 为权威真稿（afterfix·Codex 真机：质检读了模型臆想的正文）。
    * - true：编辑器/路由传的【用户实时正文】，可能比盘新 → 顶格优先（draft.ts 路由用）。
    * - false（默认）：**agent 工具路**——模型给的正文不可信（可能臆想/过期），一律不盖过磁盘真稿，
-   *   只在磁盘+workspace 都无真稿（FS 抖动）时才作末位兜底。质检/审稿评的必须是「真要入库的盘上正文」。
+   *   只在盘上无真稿（FS 抖动）时才作末位兜底。质检/审稿评的必须是「真要入库的盘上正文」。
    */
   readonly trustExplicit?: boolean;
   readonly retries?: number;
@@ -138,10 +135,8 @@ export async function resolveDraftContentForQualityCheck(input: {
     }
   }
 
-  const workspaceDraft = await readWorkspaceDraftContent(input.projectDir, input.chapter);
-  if (hasRealDraftContent(workspaceDraft)) return { content: workspaceDraft!, hasRealDraft: true };
-
-  // explicitDraftContent 末位兜底（不可信源/agent 路）：仅磁盘+workspace 都无真稿时才用，绝不盖过盘上真稿。
+  // explicitDraftContent 末位兜底（不可信源/agent 路）：仅盘上无真稿时才用，绝不盖过盘上真稿。
+  // 不再回落旧版写作台缓存（chapter-workspaces/*.json）：重构 P5 起稿子只有草稿文件一份，那份缓存不再更新，读它就是读过期稿。
   if (input.explicitDraftContent !== undefined && hasRealDraftContent(input.explicitDraftContent)) {
     return { content: input.explicitDraftContent, hasRealDraft: true };
   }
@@ -149,10 +144,3 @@ export async function resolveDraftContentForQualityCheck(input: {
   return { content: fileContent, hasRealDraft: false };
 }
 
-/** 直读 workspace 记录的原始 draftContent 字段（编辑器/写作区显示用的草稿，绕开 readChapterWorkspaceSnapshot 的文件优先解析）。 */
-async function readWorkspaceDraftContent(projectDir: string, chapter: number): Promise<string | undefined> {
-  const parsed = await readFile(chapterWorkspacePath(projectDir, chapter), "utf-8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => null);
-  return isRecord(parsed) ? readStringAllowEmpty(parsed.draftContent) : undefined;
-}

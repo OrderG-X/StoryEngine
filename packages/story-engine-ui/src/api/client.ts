@@ -1,7 +1,4 @@
 import type {
-  ChapterWorkspaceApiResponse,
-  ChapterWorkspaceRequest,
-  ChapterWorkspaceSnapshot,
   BookFileActionApiResponse,
   CreateProjectApiResponse,
   CreateProjectRequest,
@@ -15,7 +12,6 @@ import type {
   GenerateDraftRequest,
   DeleteBookRequest,
   RenameBookRequest,
-  SaveChapterWorkspaceRequest,
   ReaderProgressApiResponse,
   ReaderCatchUpStatus,
   SnapshotEntryDto,
@@ -27,7 +23,7 @@ import type {
   UsageSummary,
   UsageSummaryApiResponse,
 } from "./types.js";
-import { FetchJsonError, fetchJson } from "./fetchJson.js";
+import { fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
 
@@ -65,87 +61,6 @@ export async function fetchReaderCatchUp(projectPath: string, signal?: AbortSign
     throw new Error(payload.error);
   }
   return { reading: payload.reading, roles: payload.roles };
-}
-
-export async function fetchChapterWorkspace(input: ChapterWorkspaceRequest, signal?: AbortSignal): Promise<ChapterWorkspaceSnapshot> {
-  const params = new URLSearchParams();
-  params.set("project", input.projectPath);
-  params.set("chapter", String(input.chapter));
-  const payload = await fetchJson<ChapterWorkspaceApiResponse>(
-    `/api/chapter-workspace?${params.toString()}`,
-    {},
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.snapshot;
-}
-
-export async function saveChapterWorkspace(input: SaveChapterWorkspaceRequest, signal?: AbortSignal): Promise<ChapterWorkspaceSnapshot> {
-  let payload: ChapterWorkspaceApiResponse;
-  try {
-    payload = await fetchJson<ChapterWorkspaceApiResponse>(
-      "/api/chapter-workspace",
-      {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      },
-      signal,
-    );
-  } catch (error) {
-    if (error instanceof FetchJsonError && error.status === 409) {
-      const conflict = error.payload as ChapterWorkspaceApiResponse;
-      if (!conflict.ok && conflict.snapshot) {
-        throw new ChapterWorkspaceConflictError(conflict.error, conflict.snapshot);
-      }
-    }
-    throw error;
-  }
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.snapshot;
-}
-
-export class ChapterWorkspaceConflictError extends Error {
-  readonly snapshot: ChapterWorkspaceSnapshot;
-
-  constructor(message: string, snapshot: ChapterWorkspaceSnapshot) {
-    super(message);
-    this.name = "ChapterWorkspaceConflictError";
-    this.snapshot = snapshot;
-  }
-}
-
-/** 退出/切换前的「尽力而为」草稿保存（审查 #4）：keepalive fetch，页面卸载后仍能送达服务端。 */
-/**
- * 关窗/切后台时的「尽力而为」保存（keepalive，页面卸载后请求仍能送达）。
- * 页面若没卸载（只是切到别的应用、窗口被遮住），回调会收到服务端的新 revision——调用方必须记下来：
- * 否则下一笔常规自动保存还拿旧 revision，撞 409 → 整页重载，正在跑的 AI 回合被腰斩（2026-10-07 桌面版实锤）。
- */
-export function saveChapterWorkspaceBeacon(
-  input: SaveChapterWorkspaceRequest,
-  onSaved?: (snapshot: ChapterWorkspaceSnapshot) => void,
-): void {
-  try {
-    void fetch("/api/chapter-workspace", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-      keepalive: true,
-    })
-      .then((response) => (response.ok ? response.json() as Promise<ChapterWorkspaceApiResponse> : null))
-      .then((payload) => {
-        if (payload && payload.ok && onSaved) onSaved(payload.snapshot);
-      })
-      .catch(() => {
-        // 卸载途中或网络失败：无法补救，忽略。
-      });
-  } catch {
-    // 尽力而为：卸载途中失败无法补救，忽略。
-  }
 }
 
 export async function fetchUsageSummary(projectPath: string, signal?: AbortSignal): Promise<UsageSummary> {

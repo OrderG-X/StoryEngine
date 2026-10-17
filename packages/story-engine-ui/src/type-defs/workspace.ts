@@ -27,7 +27,6 @@ export interface ChapterNavItem {
   readonly status: "committed" | "draft" | "current" | "planned";
   readonly hasDraftFile?: boolean;
   readonly hasCommittedChapter?: boolean;
-  readonly hasWorkspaceSnapshot?: boolean;
 }
 
 /**

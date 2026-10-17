@@ -71,10 +71,9 @@ export function formatChapterStatusLine(chapter: number, status: UiChapterFileSt
     const title = status.committedTitle ?? status.draftTitle;
     return `本章（第 ${chapter} 章）已定稿${title ? `（标题：${title}）` : ""}。`;
   }
-  // 「有草稿」只认真草稿：.md 有真内容，或 workspace 里有真草稿。光「开过」(hasWorkspaceSnapshot) 不算，
-  // 否则用户只是打开/打了招呼、本章其实是空的，却被谎报「已有工作稿」，agent 跟着说「第N章已有内容」（真机实测 bug）。
-  if (status?.hasDraftFile || status?.hasWorkspaceDraft) {
-    const title = status.draftTitle ?? status.workspaceTitle;
+  // 「有草稿」只认工作稿文件里的真稿（重构 P5：稿子只有这一份；旧版写作台缓存不再更新，不看它）。
+  if (status?.hasDraftFile) {
+    const title = status.draftTitle;
     return `本章（第 ${chapter} 章）已有工作稿待处理${title ? `（标题：${title}）` : ""}，尚未定稿。`;
   }
   return `本章（第 ${chapter} 章）还没有工作稿，是空的。`;
@@ -125,7 +124,7 @@ export function buildCurrentChapterSystemMessage(
 export function buildWholeBookTruthLine(allStates: readonly UiChapterFileState[]): string {
   const committed = allStates.filter((s) => s.hasCommittedChapter).map((s) => s.chapter).sort((a, b) => a - b);
   const draftOnly = allStates
-    .filter((s) => !s.hasCommittedChapter && (s.hasDraftFile === true || s.hasWorkspaceDraft === true))
+    .filter((s) => !s.hasCommittedChapter && s.hasDraftFile === true)
     .map((s) => s.chapter)
     .sort((a, b) => a - b);
   const committedDesc = committed.length === 0

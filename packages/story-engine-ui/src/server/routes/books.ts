@@ -18,12 +18,12 @@ import {
   createStoryProject,
   withProjectCommitLock,
 } from "@actalk/story-engine";
+import { readChapterPaper } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
   isSafeProjectPath,
   readJsonBody,
-  readJsonFile,
   writeFileAtomic,
   readString,
   readStringList,
@@ -33,7 +33,6 @@ import {
   readUsageSummary,
   writeJson,
   isRecord,
-  chapterWorkspacePath,
   stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
@@ -227,13 +226,13 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
           const book = bookSummaryFromOverviewServer(overview, projectDir, lastActiveMs);
           // 书架字数：按定稿章节文件实数（与写作台、定稿执法同一计字口径），读不到才保留估算。
           const counted = await countCommittedChapterCharacters(projectDir);
-          // 章名：时间线里没有真章名（老数据只存了「第N章」）时，用写作台章节工作区记下的标题。
-          const workspaceTitle = await readChapterWorkspaceTitle(projectDir, book.currentChapterNumber);
+          // 章名：时间线里没有真章名（老数据只存了「第N章」）时，用这一章稿子第一行的章名。
+          const paperTitle = await readChapterPaperTitle(projectDir, book.currentChapterNumber);
           const { hasRealChapterTitle, ...summary } = book;
           return {
             ...summary,
             ...(counted > 0 ? { totalWords: counted } : {}),
-            ...(workspaceTitle && !hasRealChapterTitle ? { currentChapterTitle: workspaceTitle } : {}),
+            ...(paperTitle && !hasRealChapterTitle ? { currentChapterTitle: paperTitle } : {}),
           };
         } catch {
           // 回退：只用 title
@@ -266,10 +265,10 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
   }
 }
 
-/** 写作台章节工作区记下的章名（剥掉「第N章 ·」前缀；占位或读不到返回空串）。 */
-async function readChapterWorkspaceTitle(projectDir: string, chapter: number): Promise<string> {
-  const record = await readJsonFile(chapterWorkspacePath(projectDir, chapter)).catch(() => null);
-  const raw = typeof record?.draftTitle === "string" ? record.draftTitle : "";
+/** 这一章稿子（工作稿优先，没有就用定稿）第一行的章名（剥掉「第N章 ·」前缀；占位或读不到返回空串）。 */
+async function readChapterPaperTitle(projectDir: string, chapter: number): Promise<string> {
+  const paper = await readChapterPaper(projectDir, chapter).catch(() => null);
+  const raw = paper?.draft?.title ?? paper?.committed?.title ?? "";
   const bare = raw.replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
   return bare && !/^(下一章|未命名|待补|待定)$/u.test(bare) ? bare : "";
 }

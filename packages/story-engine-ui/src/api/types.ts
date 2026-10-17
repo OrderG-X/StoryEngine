@@ -101,13 +101,8 @@ export interface StateOverviewChapterFileState {
   readonly chapter: number;
   readonly hasDraftFile: boolean;
   readonly hasCommittedChapter: boolean;
-  /** workspace 文件存在（章节被打开过）。导航判断用，不代表本章有真草稿。 */
-  readonly hasWorkspaceSnapshot?: boolean;
-  /** workspace 的 draftContent 里有真草稿内容（非空、非占位符）。「有草稿」状态看这个。 */
-  readonly hasWorkspaceDraft?: boolean;
   readonly draftTitle?: string;
   readonly committedTitle?: string;
-  readonly workspaceTitle?: string;
 }
 
 /** 编辑部一个跟读角色（checker/ledger/planner）的补读进度：done/total＝读到第几章 / 共几章（已定稿）。

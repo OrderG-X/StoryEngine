@@ -26,9 +26,8 @@ const outputSchema = z.object({
 
 function statusOf(state: UiChapterFileState): "committed" | "draft" | "empty" {
   if (state.hasCommittedChapter) return "committed";
-  // 「有草稿」只认真草稿：.md 有真内容，或 workspace 里有真草稿。光「开过」(hasWorkspaceSnapshot) 不算，
-  // 否则空章会谎报「有草稿未入库」（真机实测 bug 根因之一）。
-  if (state.hasDraftFile || state.hasWorkspaceDraft) return "draft";
+  // 「有草稿」只认工作稿文件里的真稿（重构 P5：稿子只有这一份；旧版写作台缓存不再更新，不看它）。
+  if (state.hasDraftFile) return "draft";
   return "empty";
 }
 
@@ -48,7 +47,7 @@ export const readChaptersOverviewTool = createTool({
     }
     const states = await readUiChapterFileStates(projectDir);
     const chapters = states.map((state) => {
-      const title = state.committedTitle ?? state.draftTitle ?? state.workspaceTitle;
+      const title = state.committedTitle ?? state.draftTitle;
       return {
         chapter: state.chapter,
         status: statusOf(state),

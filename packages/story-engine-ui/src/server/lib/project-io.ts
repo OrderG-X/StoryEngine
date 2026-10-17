@@ -670,21 +670,6 @@ export function isDevApiPermission(value: string): boolean {
   ].includes(value);
 }
 
-export function readWorkspaceFlowStatus(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  return [
-    "idle",
-    "steering_ready",
-    "draft_generating",
-    "draft_ready",
-    "quality_checked",
-    "commit_preview_ready",
-    "waiting_commit_confirmation",
-    "committed",
-    "ready_for_next",
-  ].includes(value) ? value : undefined;
-}
-
 // ---------------------------------------------------------------------------
 // Draft quality / revision parsers
 // ---------------------------------------------------------------------------
@@ -1101,6 +1086,7 @@ export function padChapter(chapter: number): string {
   return String(chapter).padStart(4, "0");
 }
 
+/** 旧版写作台缓存路径（重构 P5 起不再读写；只剩测试用来布置老书残留）。 */
 export function chapterWorkspacePath(projectDir: string, chapter: number): string {
   return join(projectDir, ".story-engine-ui", "chapter-workspaces", `chapter-${padChapter(chapter)}.json`);
 }
@@ -1113,131 +1099,12 @@ export function extractDraftTitle(content: string | undefined): string | null {
   return title || null;
 }
 
-export async function readChapterWorkspaceSnapshot(projectDir: string, chapter: number): Promise<{
-  readonly chapter: number;
-  readonly messages: readonly {
-    readonly id: string;
-    readonly role: "user" | "assistant" | "system";
-    readonly content: string;
-    readonly adviceCards?: readonly Record<string, unknown>[];
-    readonly suggestedActions?: readonly Record<string, unknown>[];
-    readonly toolOutput?: readonly string[];
-    readonly createdAt?: string;
-  }[];
-  readonly selectedAdviceCardKeys: readonly string[];
-  readonly flowStatus?: string;
-  readonly draftContent?: string;
-  readonly draftTitle?: string;
-  readonly hasDraftFile?: boolean;
-  readonly hasCommittedChapter?: boolean;
-  readonly pendingBaseContent?: string;
-  readonly pendingChangeSource?: "ai" | "manual";
-  readonly updatedAt?: string;
-  readonly revision?: number;
-  /** 上次生成被刷新打断；为 true 时读侧以盘上更完整稿为准（dogfood F1）。 */
-  readonly generationInterrupted?: boolean;
-  /** 读侧已用磁盘稿覆盖了截断的 workspace.draftContent。 */
-  readonly recoveredFromDraftFile?: boolean;
-}> {
-  const parsed = await readFile(chapterWorkspacePath(projectDir, chapter), "utf-8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => null);
-  const record = isRecord(parsed) ? parsed : {};
-  const revision = typeof record.revision === "number" && Number.isFinite(record.revision) ? record.revision : 0;
-  const pendingChangeSource = record.pendingChangeSource === "ai" || record.pendingChangeSource === "manual"
-    ? record.pendingChangeSource
-    : undefined;
-  const pendingDraftContent = readStringAllowEmpty(record.draftContent);
-  const flowStatus = readWorkspaceFlowStatus(record.flowStatus);
-  const committedChapterContent = await readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(() => undefined);
-  const draftFileContent = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
-  const savedDraftContent = draftFileContent ?? readStringAllowEmpty(record.draftContent);
-  const hasCommittedChapter = committedChapterContent !== undefined;
-  const hasDraftFile = hasRealDraftContent(draftFileContent);
-  const recoveredMisroutedDraft = committedChapterContent !== undefined
-    && !pendingChangeSource
-    && isLikelyMisroutedWorkspaceDraft(savedDraftContent);
-  const shouldUseCommittedChapter = committedChapterContent !== undefined
-    && !pendingChangeSource
-    && (
-      !hasDraftFile ||
-      flowStatus === "committed"
-      || flowStatus === "ready_for_next"
-      || recoveredMisroutedDraft
-      // 比正文不比标题行：工作稿文件第一行带「# 章名」（定稿取章名用），定稿正文可能没有。
-      || normalizedContent(stripLeadingMarkdownChapterHeading(savedDraftContent ?? "")) === normalizedContent(stripLeadingMarkdownChapterHeading(committedChapterContent))
-    );
-  // dogfood F1：仅在「生成被打断」证据在场时启用恢复——generationInterrupted，或遗留的
-  // draft_generating（刷新后不可能仍在生成）。此时若 drafts/fast 明显长于 workspace.draftContent，
-  // 以文件为准，避免截断 workspace 态盖过完整盘稿。故意短写（非生成期）不走此分支。
-  const generationInterrupted = record.generationInterrupted === true || flowStatus === "draft_generating";
-  const workspaceDraftLen = (pendingDraftContent ?? "").trim().length;
-  const draftFileLen = (draftFileContent ?? "").trim().length;
-  const preferDraftFileAfterInterrupt = generationInterrupted
-    && !shouldUseCommittedChapter
-    && !pendingChangeSource
-    && draftFileContent !== undefined
-    && draftFileLen > workspaceDraftLen;
-  let effectiveFlowStatus = recoveredMisroutedDraft && flowStatus !== "committed" && flowStatus !== "ready_for_next"
-    ? "ready_for_next"
-    : shouldUseCommittedChapter && flowStatus !== "ready_for_next"
-      ? "committed"
-      : flowStatus;
-  // 刷新后残留 draft_generating → 诚实改成「工作稿中/待开始」，别渲染「正在生成」或空徽标。
-  if (effectiveFlowStatus === "draft_generating") {
-    const hasRecoverableDraft = preferDraftFileAfterInterrupt
-      || hasRealDraftContent(draftFileContent)
-      || hasRealDraftContent(pendingDraftContent);
-    effectiveFlowStatus = hasRecoverableDraft ? "draft_ready" : "idle";
-  }
-  const stalePreCommitSnapshot = shouldUseCommittedChapter
-    && !recoveredMisroutedDraft
-    && flowStatus !== "committed"
-    && flowStatus !== "ready_for_next";
-  const draftContent = pendingChangeSource && pendingDraftContent !== undefined
-    ? pendingDraftContent
-    : shouldUseCommittedChapter
-      ? committedChapterContent
-      : preferDraftFileAfterInterrupt
-        ? draftFileContent
-        : savedDraftContent;
-  const draftTitle = extractDraftTitle(draftContent) ?? readString(record.draftTitle);
-  const workspaceMessages = readWorkspaceMessages(record.messages);
-  const committedWithoutCompletionMessage = shouldUseCommittedChapter
-    && effectiveFlowStatus === "committed"
-    && workspaceMessages.length > 0
-    && !workspaceMessages.some((message) => isCommitCompletionMessage(message.content) || isPostCommitAgentMessage(message));
-  return {
-    chapter,
-    messages: recoveredMisroutedDraft || stalePreCommitSnapshot || committedWithoutCompletionMessage ? [] : workspaceMessages,
-    selectedAdviceCardKeys: recoveredMisroutedDraft || stalePreCommitSnapshot ? [] : readStringList(record.selectedAdviceCardKeys),
-    ...(effectiveFlowStatus ? { flowStatus: effectiveFlowStatus } : {}),
-    // 给编辑器的只是正文：第一行「# 章名」走 draftTitle 单独给（保存时服务端再补回文件第一行），
-    // 否则重开书时稿纸顶上会露出「# 第34章 · 看手」这种标题行（2026-10-07 改版走查）。
-    ...(draftContent !== undefined ? { draftContent: stripTitleLineForEditor(draftContent) } : {}),
-    ...(draftTitle ? { draftTitle } : {}),
-    hasDraftFile,
-    hasCommittedChapter,
-    ...(readStringAllowEmpty(record.pendingBaseContent) !== undefined ? { pendingBaseContent: readStringAllowEmpty(record.pendingBaseContent) } : {}),
-    ...(pendingChangeSource ? { pendingChangeSource } : {}),
-    ...(readString(record.updatedAt) ? { updatedAt: readString(record.updatedAt) } : {}),
-    revision,
-    ...(generationInterrupted ? { generationInterrupted: true } : {}),
-    ...(preferDraftFileAfterInterrupt ? { recoveredFromDraftFile: true } : {}),
-  };
-}
-
 export interface UiChapterFileState {
   readonly chapter: number;
   readonly hasDraftFile: boolean;
   readonly hasCommittedChapter: boolean;
-  /** workspace 文件存在（章节被打开过）。供导航判断「走到哪一章」，不代表本章有真草稿。 */
-  readonly hasWorkspaceSnapshot?: boolean;
-  /** workspace 的 draftContent 里有「真草稿」内容（非空、非占位符）。章节「有草稿」状态看这个，不看 hasWorkspaceSnapshot。 */
-  readonly hasWorkspaceDraft?: boolean;
   readonly draftTitle?: string;
   readonly committedTitle?: string;
-  readonly workspaceTitle?: string;
 }
 
 /** 扫全书章节文件，给出每章「有无草稿 / 是否入库 / 标题」状态。只读盘、题材中立，供 agent 章节状态可见性用。 */
@@ -1245,7 +1112,6 @@ export async function readUiChapterFileStates(projectDir: string): Promise<reado
   const chapters = new Set<number>();
   const committedFiles = await readdir(join(projectDir, "chapters")).catch(() => []);
   const draftFiles = await readdir(join(projectDir, "drafts", "fast")).catch(() => []);
-  const workspaceFiles = await readdir(join(projectDir, ".story-engine-ui", "chapter-workspaces")).catch(() => []);
 
   for (const file of committedFiles) {
     const chapter = chapterNumberFromCommittedFile(file);
@@ -1255,42 +1121,21 @@ export async function readUiChapterFileStates(projectDir: string): Promise<reado
     const chapter = chapterNumberFromDraftFile(file);
     if (chapter !== undefined) chapters.add(chapter);
   }
-  for (const file of workspaceFiles) {
-    const chapter = chapterNumberFromWorkspaceFile(file);
-    if (chapter !== undefined) chapters.add(chapter);
-  }
 
   const states = await Promise.all([...chapters].sort((a, b) => a - b).map(async (chapter) => {
-    const [committedContent, draftContent, workspaceContent] = await Promise.all([
+    const [committedContent, draftContent] = await Promise.all([
       readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(() => undefined),
       readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined),
-      readFile(chapterWorkspacePath(projectDir, chapter), "utf-8").catch(() => undefined),
     ]);
-    const workspaceRecord = parseWorkspaceRecord(workspaceContent);
-    const workspaceDraftContent = readStringAllowEmpty(workspaceRecord?.draftContent);
-    const workspaceTitle = readString(workspaceRecord?.draftTitle) ?? extractDraftTitle(workspaceDraftContent);
     return {
       chapter,
       hasDraftFile: hasRealDraftContent(draftContent),
       hasCommittedChapter: committedContent !== undefined,
-      ...(workspaceContent !== undefined ? { hasWorkspaceSnapshot: true } : {}),
-      ...(hasRealDraftContent(workspaceDraftContent) ? { hasWorkspaceDraft: true } : {}),
       ...(extractDraftTitle(draftContent) ? { draftTitle: extractDraftTitle(draftContent)! } : {}),
       ...(extractDraftTitle(committedContent) ? { committedTitle: extractDraftTitle(committedContent)! } : {}),
-      ...(workspaceTitle ? { workspaceTitle } : {}),
     };
   }));
   return states;
-}
-
-function parseWorkspaceRecord(content: string | undefined): Record<string, unknown> | null {
-  if (!content) return null;
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function chapterNumberFromCommittedFile(file: string): number | undefined {
@@ -1305,25 +1150,6 @@ function chapterNumberFromDraftFile(file: string): number | undefined {
   if (!match?.[1]) return undefined;
   const chapter = Number(match[1]);
   return Number.isInteger(chapter) && chapter > 0 ? chapter : undefined;
-}
-
-function chapterNumberFromWorkspaceFile(file: string): number | undefined {
-  const match = file.match(/^chapter-(\d{4})\.json$/u);
-  if (!match?.[1]) return undefined;
-  const chapter = Number(match[1]);
-  return Number.isInteger(chapter) && chapter > 0 ? chapter : undefined;
-}
-
-function isCommitCompletionMessage(content: string): boolean {
-  return /本章已入库|本章已定稿|正式入库完成|已提交到正式故事状态|写入正式故事状态/u.test(content);
-}
-
-function isPostCommitAgentMessage(message: {
-  readonly id: string;
-  readonly content: string;
-}): boolean {
-  if (/^assistant-foundation-(?:applied|rollback)-/u.test(message.id)) return true;
-  return /(?:资料已更新，可(?:撤回|撤销)本次修改|左侧资料已更新，可(?:撤回|撤销)本次修改|已(?:撤回|撤销)本次修改)/u.test(message.content);
 }
 
 function normalizedContent(content: string | undefined): string {
@@ -1359,17 +1185,6 @@ export function hasRealDraftContent(content: string | undefined): boolean {
   return normalizedContent(content).length > 0
     && !isStateBackedDraftPlaceholder(content)
     && !isSentinelDraftContent(content);
-}
-
-function isLikelyMisroutedWorkspaceDraft(content: string | undefined): boolean {
-  if (!content) return false;
-  const normalized = content.trim();
-  if (!normalized) return false;
-  if (/^(?:角色档案|资料卡|资料草案|写入结果|底层输出|正文写作流程完成|已整理|已写入|当前没有可写入)/u.test(normalized)) return true;
-  if (/以下是写入内容的最终摘要|确认前不会写入|满意就保存草稿，不满意就拒绝改动|你可以随时补充其他角色/u.test(normalized)) return true;
-  const lines = normalized.split(/\r?\n/u).filter((line) => line.trim());
-  const bulletLines = lines.filter((line) => /^\s*[-*]\s+/u.test(line));
-  return normalized.length < 1200 && bulletLines.length >= 4 && /(?:姓名|年龄|外貌|身份|目标|背景|欲望|恐惧|禁忌)/u.test(normalized);
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,16 +1315,7 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
   readonly characterDetails?: readonly CharacterDetailView[];
   /** 编辑部三个跟读角色的后台补读进度（R4.3）：核账员/记账员/章纲员各读到第几章，任一在读才带。 */
   readonly readerCatchUp?: { readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] };
-  readonly uiChapterFiles?: readonly {
-    readonly chapter: number;
-    readonly hasDraftFile: boolean;
-    readonly hasCommittedChapter: boolean;
-    readonly hasWorkspaceSnapshot?: boolean;
-    readonly hasWorkspaceDraft?: boolean;
-    readonly draftTitle?: string;
-    readonly committedTitle?: string;
-    readonly workspaceTitle?: string;
-  }[];
+  readonly uiChapterFiles?: readonly UiChapterFileState[];
 }> {
   const calendar = await readStoryCalendarView(projectDir);
   const [characterDetails, uiChapterFiles, readerCatchUp] = await Promise.all([
