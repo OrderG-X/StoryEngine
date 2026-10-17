@@ -1,0 +1,10 @@
+{
+  "note": "新代码目录不许 import 的旧模块。目录不存在的规则自动跳过。规则由 Claude 在每期任务单里增补。",
+  "rules": [
+    {
+      "dir": "packages/story-core/src",
+      "forbid": ["@actalk/story-engine", "packages/story-engine/", "packages/story-engine-ui/", "@mastra/", "ai", "@ai-sdk/"],
+      "why": "核心包只放真相、命令、投影，纯 TypeScript、不碰模型、不引用旧引擎和界面包"
+    }
+  ]
+}
