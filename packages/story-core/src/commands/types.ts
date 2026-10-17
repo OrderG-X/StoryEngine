@@ -8,6 +8,7 @@
 import type { z } from "zod";
 import type { ChangeSet } from "../schema/book.js";
 import type { TxWrite } from "../store/transaction.js";
+import type { RecoveryReport } from "../store/transaction.js";
 
 /**
  * author = 只能由作者按按钮触发（定稿、改账、裁定、删除、裁剪历史）；
@@ -72,6 +73,8 @@ export interface CommandSuccess<R> {
   readonly changed: ChangeSet;
   /** 同一个幂等键以前做过，这次是回放回执，什么都没再写。 */
   readonly replayed: boolean;
+  /** 开工前收拾了上次写断的事务（退回去了），或留证区攒太多了：如实带出来，界面要告诉作者。 */
+  readonly recovered?: RecoveryReport;
 }
 
 export type CommandOutcome<R> = CommandSuccess<R> | CommandFailure;

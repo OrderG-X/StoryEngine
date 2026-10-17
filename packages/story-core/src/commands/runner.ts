@@ -12,7 +12,7 @@ import { BOOK_HEAD_SCHEMA, COMMAND_RECEIPT_SCHEMA, CommandReceipt } from "../sch
 import { BookFileError, readHead } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
 import { HEAD_PATH, receiptPath } from "../store/paths.js";
-import { commitFiles, recoverTransactions, type TxWrite } from "../store/transaction.js";
+import { commitFiles, recoverTransactions, type RecoveryReport, type TxWrite } from "../store/transaction.js";
 import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec } from "./types.js";
 
 export function fail(code: string, message: string, details?: unknown): CommandFailure {
@@ -57,15 +57,21 @@ export async function runCommand<A, R>(
   }
 
   return withBookLock(bookDir, async () => {
-    const recovery = await recoverTransactions(bookDir);
-    if (recovery.problems.length > 0) {
-      return fail("transaction_residue", "上次写到一半的记录读不了，先不动这本书，免得丢数据。", recovery);
+    let recovery: RecoveryReport;
+    try {
+      recovery = await recoverTransactions(bookDir);
+    } catch (error) {
+      return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
     }
+    if (recovery.problems.length > 0) {
+      return fail("transaction_residue", "上次写到一半的记录读不了，先不动这本书，免得丢数据。作者确认后可以把它挪到一边留证，再继续写。", recovery);
+    }
+    const notice = recovery.rolledBack.length > 0 || recovery.keptOverLimit ? { recovered: recovery } : {};
     if (key) {
       const receipt = await readReceipt(bookDir, key);
       if (receipt) {
         if (receipt.command !== spec.name) return fail("idempotency_key_reused", "防重复标记被别的操作用过了，没有执行。");
-        return { ok: true, result: receipt.result as R, version: receipt.version, changed: receipt.changed, replayed: true };
+        return { ok: true, result: receipt.result as R, version: receipt.version, changed: receipt.changed, replayed: true, ...notice };
       }
     }
 
@@ -80,7 +86,7 @@ export async function runCommand<A, R>(
     if (isFailure(planned)) return planned;
     const head = await readHead(bookDir);
     if (planned.writes.length === 0) {
-      return { ok: true, result: planned.result, version: head.version, changed: {}, replayed: false };
+      return { ok: true, result: planned.result, version: head.version, changed: {}, replayed: false, ...notice };
     }
 
     if (spec.snapshot && options.snapshot) {
@@ -115,6 +121,6 @@ export async function runCommand<A, R>(
 
     const event: BookEvent = { book: bookKey(bookDir), version, command: spec.name, label: planned.label, changed: planned.changed, at };
     options.emit?.(event);
-    return { ok: true, result: planned.result, version, changed: planned.changed, replayed: false };
+    return { ok: true, result: planned.result, version, changed: planned.changed, replayed: false, ...notice };
   });
 }

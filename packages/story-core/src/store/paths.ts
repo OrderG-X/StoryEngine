@@ -9,6 +9,8 @@ export const LEDGER_DIR = "ledger";
 export const HEAD_PATH = "ledger/head.json";
 export const DECISIONS_PATH = "ledger/decisions.json";
 export const TX_DIR = ".story-core-tx";
+/** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
+export const KEPT_TX_DIR = ".story-core-kept";
 
 const pad = (chapter: number): string => String(chapter).padStart(4, "0");
 

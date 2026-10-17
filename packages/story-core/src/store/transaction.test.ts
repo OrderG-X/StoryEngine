@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TX_DIR } from "./paths.js";
-import { commitFiles, hasPendingTransactions, recoverTransactions } from "./transaction.js";
+import { KEPT_TX_DIR, TX_DIR } from "./paths.js";
+import { commitFiles, hasPendingTransactions, KEPT_REPORT_THRESHOLD, recoverTransactions, setAsideBrokenTransactions } from "./transaction.js";
 
 let book: string;
 
@@ -91,6 +91,64 @@ describe("多文件事务", () => {
     await expect(commitFiles(book, [{ path: "../outside.md", content: "x" }])).rejects.toThrow("不在书目录里");
     await expect(commitFiles(book, [{ path: "a.md", content: "1" }, { path: "a.md", content: "2" }])).rejects.toThrow("重复写");
     expect(await read("elsewhere.md")).toBe("别处");
+    expect(await hasPendingTransactions(book)).toBe(false);
+  });
+
+  it("上级目录是软链：拒绝写，链那头的目录一个字节不动", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "story-core-outside-"));
+    try {
+      await symlink(outside, join(book, "ledger"));
+      await expect(commitFiles(book, [{ path: "ledger/chapters/0001.json", content: "{}" }])).rejects.toThrow("上级目录是软链");
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await symlink(outside, join(book, "chapters", "sub"));
+      await expect(commitFiles(book, [{ path: "chapters/sub/x.md", content: "x" }])).rejects.toThrow("上级目录是软链");
+      // 事务根被换成软链也不写。
+      await rm(join(book, TX_DIR), { recursive: true, force: true });
+      await symlink(outside, join(book, TX_DIR));
+      await expect(commitFiles(book, [{ path: "a.md", content: "x" }])).rejects.toThrow("上级目录是软链");
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("书目录本身是软链：按真实路径写和恢复", async () => {
+    const link = `${book}-link`;
+    await symlink(book, link);
+    try {
+      await commitFiles(link, [{ path: "chapters/0001.md", content: "正文" }]);
+      expect(await read("chapters/0001.md")).toBe("正文");
+      await strandedTransaction("prepared", [{ path: "chapters/0001.md", existed: true, renamed: true, old: "正文", next: "改坏的" }]);
+      expect((await recoverTransactions(link)).rolledBack).toEqual(["t1"]);
+      expect(await read("chapters/0001.md")).toBe("正文");
+    } finally {
+      await rm(link, { force: true });
+    }
+  });
+
+  it("清单指到书外的事务：不回滚、原样留着报出来", async () => {
+    await strandedTransaction("prepared", [{ path: "chapters/0001.md", existed: false, renamed: true, next: "x" }]);
+    const manifestPath = join(book, TX_DIR, "t1", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    manifest.files[0].path = "../escape.md";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    expect((await recoverTransactions(book)).problems).toEqual(["t1"]);
+    expect(await hasPendingTransactions(book)).toBe(true);
+  });
+
+  it("坏事务：作者确认后挪进留证区（不删），之后恢复报告干净；留证超过上限就提醒", async () => {
+    for (let index = 0; index <= KEPT_REPORT_THRESHOLD; index += 1) {
+      await mkdir(join(book, KEPT_TX_DIR, `old-${index}`), { recursive: true });
+    }
+    await mkdir(join(book, TX_DIR, "bad"), { recursive: true });
+    await writeFile(join(book, TX_DIR, "bad", "manifest.json"), "{坏");
+    const moved = await setAsideBrokenTransactions(book);
+    expect(moved).toMatchObject({ moved: ["bad"], kept: KEPT_REPORT_THRESHOLD + 2, keptOverLimit: true });
+    const keptNames = await readdir(join(book, KEPT_TX_DIR));
+    const bad = keptNames.find((name) => name.endsWith("-bad"));
+    expect(await readFile(join(book, KEPT_TX_DIR, bad as string, "manifest.json"), "utf-8")).toBe("{坏");
+    const report = await recoverTransactions(book);
+    expect(report).toMatchObject({ problems: [], kept: KEPT_REPORT_THRESHOLD + 2, keptOverLimit: true });
     expect(await hasPendingTransactions(book)).toBe(false);
   });
 });

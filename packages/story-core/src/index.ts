@@ -40,11 +40,30 @@ export {
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
-export { chapterLedgerPath, chapterTextPath, DECISIONS_PATH, HEAD_PATH, LEDGER_DIR, TX_DIR } from "./store/paths.js";
-export { hasPendingTransactions, recoverTransactions, type RecoveryReport } from "./store/transaction.js";
+export { chapterLedgerPath, chapterTextPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
+export {
+  hasPendingTransactions,
+  KEPT_REPORT_THRESHOLD,
+  recoverTransactions,
+  setAsideBrokenTransactions,
+  type RecoveryReport,
+} from "./store/transaction.js";
 
 export { DEFAULT_STALE_AFTER, project, type ProjectionInput, type ProjectionOptions } from "./projection/project.js";
 export type * from "./projection/types.js";
+export {
+  chapterBrief,
+  currentFactsAbout,
+  DEFAULT_PROMPT_THREAD_LIMIT,
+  threadsForPrompt,
+  timelineTable,
+  timelineText,
+  type ChapterBrief,
+  type PromptThread,
+  type PromptThreads,
+  type SubjectFacts,
+  type TimelineRow,
+} from "./projection/queries.js";
 
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";

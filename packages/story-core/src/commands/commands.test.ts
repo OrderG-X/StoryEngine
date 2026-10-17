@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectBook } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readHead } from "../store/book.js";
+import { TX_DIR } from "../store/paths.js";
+import { setAsideBrokenTransactions } from "../store/transaction.js";
 import { chapterCommit, type ChapterCommitResult } from "./chapter-commit.js";
 import { decisionRecord } from "./decision-record.js";
 import { BookEventHub } from "./events.js";
@@ -127,6 +129,26 @@ describe("定稿命令", () => {
     expect(broken).toMatchObject({ ok: false, code: "snapshot_failed" });
     await expect(readFile(join(book, "chapters/0002.md"), "utf-8")).rejects.toThrow();
     expect((await readHead(book)).version).toBe(1);
+  });
+
+  it("上次写断了：开工前退回去并在结果里带出来；清单坏了就不开工，作者挪开后照常写", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const stranded = join(book, TX_DIR, "t1");
+    await mkdir(join(stranded, "staged"), { recursive: true });
+    await writeFile(join(book, "chapters/0001.md"), "写了一半的正文");
+    await mkdir(join(stranded, "backup"), { recursive: true });
+    await writeFile(join(stranded, "backup", "0"), CH1);
+    await writeFile(join(stranded, "manifest.json"), JSON.stringify({ schema: "story-core-tx/1", id: "t1", createdAt: "x", status: "prepared", files: [{ path: "chapters/0001.md", existed: true, slot: "0" }] }));
+    const next = expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [] }, author("k2")));
+    expect(next.recovered?.rolledBack).toEqual(["t1"]);
+    expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe(CH1);
+
+    await mkdir(join(book, TX_DIR, "bad"), { recursive: true });
+    await writeFile(join(book, TX_DIR, "bad", "manifest.json"), "{坏");
+    expect(await runCommand(book, chapterCommit, { chapter: 3, text: CH2, entries: [] }, author("k3"))).toMatchObject({ ok: false, code: "transaction_residue" });
+    expect((await setAsideBrokenTransactions(book)).moved).toEqual(["bad"]);
+    const after = expectOk(await runCommand(book, chapterCommit, { chapter: 3, text: CH2, entries: [] }, author("k3")));
+    expect(after.recovered).toBeUndefined();
   });
 
   it("参数不对如实报，不写", async () => {
