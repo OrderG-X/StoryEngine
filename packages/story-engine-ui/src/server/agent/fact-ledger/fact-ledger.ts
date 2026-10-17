@@ -6,7 +6,6 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { withProjectCommitLock } from "@actalk/story-engine";
 import { dirname, join } from "node:path";
-import { z } from "zod";
 
 /** 事实条目：类型只在引擎定义一份（2026-10-10 账本 v2；以前两个包各一份靠注释同步）。 */
 export type { FactEntry } from "@actalk/story-engine";
@@ -18,51 +17,6 @@ export interface FactLedgerFile {
 export type FactCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
 ) => Promise<string>;
-
-// 模型无关（2026-10-08）：旧版 .strict() 让模型多给一个键（如 {text, chapter}）就整章抽取失败、这章一条事实都没有
-// （十章验收第 8 章实锤）。改成宽进：多余键丢掉、条目给成纯字符串也收；空条目逐条丢弃，不连坐整章。
-const factItemSchema = z.union([
-  z.string(),
-  z.object({ text: z.string() }).passthrough().transform((item) => item.text),
-]);
-const nameItemSchema = z.union([
-  z.string(),
-  z.object({ name: z.string() }).passthrough().transform((item) => item.name),
-]);
-const extractionSchema = z.object({
-  facts: z.array(factItemSchema.catch("")).default([]),
-  newCharacters: z.array(nameItemSchema.catch("")).default([]),
-}).passthrough();
-
-/** 抽取失败（模型挂了 / 不是 JSON）自动再试的次数。 */
-const EXTRACTION_RETRIES = 1;
-
-export function buildFactExtractionMessages(
-  draftText: string,
-  knownNames: readonly string[] = [],
-): { readonly role: "system" | "user"; readonly content: string }[] {
-  const system = [
-    "你是中文小说的『硬事实记录员』。只读这章正文，抽出后文必须保持一致的硬事实，并指出本章首次出现的新人物。",
-    "只抽正文真实写到的，禁臆造、禁补剧情、禁预设走向。本章没有就给空数组。",
-    "硬事实重点：①主角做出的承诺/约定/交易条款（带金额/数量/时间/地点/方式）②事件性质（尤其『私下/非正式』vs『公开/官方』这类一旦定下不可改的属性）③关键数字/日期/场次/编号/身份等硬细节。每条一句话、具体可核对；不要抽『情绪/感受/评价』这类软信息。",
-    "新人物：只列本章正文里【首次出现、且不在『已知角色』名单里】的【具名】人物（真名，宁缺毋滥）；代词/泛称/职务（他、那人、保安）一律不算。",
-    "只输出一个 JSON：{\"facts\":[{\"text\":\"\"}],\"newCharacters\":[{\"name\":\"\"}]}。不要 Markdown、不要解释。",
-  ].join("\n");
-  const known = knownNames.length > 0 ? `\n【已知角色（这些都不是新人物）】\n${knownNames.join("、")}` : "";
-  return [{ role: "system", content: system }, { role: "user", content: `【本章正文】\n${draftText}${known}` }];
-}
-
-export function parseFactExtraction(
-  modelText: string,
-): { readonly facts: readonly string[]; readonly newCharacters: readonly string[] } {
-  const match = modelText.match(/\{[\s\S]*\}/u);
-  if (!match) throw new Error("硬事实抽取结果不是 JSON。");
-  const parsed = extractionSchema.parse(JSON.parse(match[0]));
-  return {
-    facts: parsed.facts.map((fact) => fact.trim()).filter((text) => text.length > 0),
-    newCharacters: parsed.newCharacters.map((name) => name.trim()).filter((name) => name.length > 0),
-  };
-}
 
 /** 名字含空白/标点/符号即判畸形（中文名不含这些）。 */
 const NAME_PUNCT_OR_SPACE = /[\s\p{P}\p{S}]/u;
@@ -264,43 +218,4 @@ async function applyFactEditUnlocked(
   if (!hit) return { ok: false, summary: `没找到 id=${id} 的硬事实。` };
   await writeLedger(projectDir, next);
   return { ok: true, summary: `已更新该条硬事实：${text}` };
-}
-
-export async function extractAndAppendFacts(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly draftText: string;
-  readonly callModel: FactCallModel;
-  readonly knownNames?: readonly string[];
-}): Promise<{ readonly ok: boolean; readonly added: number; readonly summary: string; readonly newCharacters: readonly string[] }> {
-  if (!input.draftText.trim()) return { ok: true, added: 0, summary: "", newCharacters: [] };
-  let facts: readonly string[];
-  let rawNew: readonly string[];
-  const messages = buildFactExtractionMessages(input.draftText, input.knownNames ?? []);
-  let extracted: ReturnType<typeof parseFactExtraction> | undefined;
-  for (let attempt = 0; attempt <= EXTRACTION_RETRIES && !extracted; attempt += 1) {
-    try {
-      extracted = parseFactExtraction(await input.callModel(messages));
-    } catch {
-      extracted = undefined;
-    }
-  }
-  if (!extracted) {
-    // 旧文案「可让我重抽一次」背后没有能重抽的工具——如实说清：自动重试过、仍没成、影响是什么。
-    return {
-      ok: false,
-      added: 0,
-      summary: "（这章的硬事实没抽成，已自动重试一次仍失败；定稿不受影响，只是后面写作时少了这一章的事实参照。）",
-      newCharacters: [],
-    };
-  }
-  ({ facts, newCharacters: rawNew } = extracted);
-  const added = await appendFacts(input.projectDir, input.chapter, facts, "auto");
-  const newCharacters = validateNewCharacterNames(rawNew, new Set(input.knownNames ?? []));
-  return {
-    ok: true,
-    added,
-    summary: added > 0 ? `这章记下 ${added} 条硬事实（后文不得改写）。` : "",
-    newCharacters,
-  };
 }

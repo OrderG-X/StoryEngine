@@ -24,7 +24,6 @@ import { useNavigationStore } from "../stores/navigationStore.js";
 import type {
   ChapterMessage,
   ChapterWorkflowState,
-  CommitSelectiveDecisionState,
   SuggestedAction,
 } from "../types.js";
 import { compactStrings, countTextWords, extractDraftTitle, cleanUiText } from "../utils/textUtils.js";
@@ -1149,25 +1148,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   };
 
   /* -------------------------------------------------------------- */
-  /*  handleCommitSelectionChange  (App.tsx 1409-1421)              */
-  /* -------------------------------------------------------------- */
-
-  const handleCommitSelectionChange = (
-    scope: "assets" | "locations" | "characterKnowledge",
-    candidateId: string,
-    decisionState: CommitSelectiveDecisionState,
-  ): void => {
-    const ws = useWorkspaceStore.getState();
-    ws.setCommitSelections({
-      ...ws.commitSelections,
-      [scope]: {
-        ...ws.commitSelections[scope],
-        [candidateId]: decisionState,
-      },
-    });
-  };
-
-  /* -------------------------------------------------------------- */
   /*  handleSelectionRewrite （阶段三块②：选区浮动操作条）           */
   /*  选中正文 → 点按钮（固定模板）→ 复用「审稿修订预览」流：             */
   /*  preview → 存进 activeRevisionTask/activeRevisionPreview → 出「改写前后对比卡」， */
@@ -1513,6 +1493,5 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     handleGenerateRevisionPreview,
     handleApplyRevisionPreview,
     handleDismissRevisionTask,
-    handleCommitSelectionChange,
   } as const;
 }

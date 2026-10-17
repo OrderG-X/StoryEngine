@@ -1,7 +1,4 @@
 import type {
-  ChapterChatApiResponse,
-  ChapterChatRequest,
-  ChapterChatResponse,
   ChapterWorkspaceApiResponse,
   ChapterWorkspaceRequest,
   ChapterWorkspaceSnapshot,
@@ -221,10 +218,6 @@ export async function restoreSnapshotApi(projectPath: string, id: string, signal
 }
 
 import type { BookSummary } from "../types.js";
-
-export async function fetchListDefaultBooks(signal?: AbortSignal): Promise<BookSummary[]> {
-  return (await fetchDefaultBookLibrary(signal)).books;
-}
 
 /** 默认书库扫描：最近的书 + 书库根目录 + 盘上实际存在的全部书目录（判断书架上哪些已经不在了）。 */
 export async function fetchDefaultBookLibrary(signal?: AbortSignal): Promise<{
@@ -572,26 +565,6 @@ export async function applyDeAiFlavorBatch(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readChapterChatDecision(value: unknown): ChapterChatResponse["decision"] | undefined {
-  if (!isRecord(value)) return undefined;
-  if (
-    typeof value.agentId !== "string"
-    || typeof value.action !== "string"
-    || typeof value.target !== "string"
-    || typeof value.reason !== "string"
-    || typeof value.confidence !== "number"
-  ) {
-    return undefined;
-  }
-  return {
-    agentId: value.agentId,
-    action: value.action,
-    target: value.target,
-    confidence: value.confidence,
-    reason: value.reason,
-  };
 }
 
 function isStateOverviewLike(value: unknown): value is StateOverview {

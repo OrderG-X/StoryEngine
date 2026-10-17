@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readFactLedger } from "./fact-ledger.js";
-import { absolutizeRelativeDays, buildReconcileMessages, stripInventedStoryDays, extractAndReconcileFacts, factSwapsKinshipForName, parseReconcile, pickRelatedFacts, proposeFactChanges, toChapterFactUpdate } from "./reconcile-facts.js";
+import { buildReconcileMessages, stripInventedStoryDays, factSwapsKinshipForName, parseReconcile, pickRelatedFacts, proposeFactChanges, toChapterFactUpdate } from "./reconcile-facts.js";
 
 const DRAFT = "林舟骑车到了南门。菜场还在，门口摆着几摊卖豆腐的。他想起周婶那座钟昨天已经修好送回去了。";
 
@@ -52,68 +52,6 @@ describe("parseReconcile 宽进", () => {
     expect(parsed.changes).toEqual([{ ref: "F2", text: "周婶的座钟已修好送回", quote: "座钟昨天已经修好送回去了" }]);
     expect(parsed.conflicts).toEqual([{ ref: "F1", quote: "菜场还在", note: "第4章说已拆" }]);
     expect(parsed.newCharacters).toEqual(["吴师傅"]);
-  });
-});
-
-describe("extractAndReconcileFacts", () => {
-  it("新事实入账；明写的变化让旧条失效；对不上的不动账本、交给作者定", async () => {
-    const dir = await makeLedger();
-    const { facts } = await readFactLedger(dir);
-    const related = pickRelatedFacts(facts, 8, DRAFT, ["林舟", "周婶"]);
-    const refOf = (id: string) => related.find((item) => item.fact.id === id)!.ref;
-    const callModel = vi.fn(async () => JSON.stringify({
-      facts: [{ text: "林舟骑车去了南门" }],
-      changes: [
-        { ref: refOf("fact-4-1"), text: "周婶的座钟已修好送回周婶家", quote: "他想起周婶那座钟昨天已经修好送回去了。" },
-        // 没引原句（或引的不在正文里）的「变化」不让旧条失效——防把仍有效的事实误标过期。
-        { ref: refOf("fact-4-2"), text: "许棠改了量面积的时间" },
-      ],
-      conflicts: [
-        { ref: refOf("fact-4-0"), quote: "菜场还在，门口摆着几摊卖豆腐的。", note: "第4章说菜场已拆" },
-        { ref: refOf("fact-4-0"), quote: "正文里没有这句", note: "幻觉引文" },
-      ],
-      newCharacters: [],
-    }));
-    const result = await extractAndReconcileFacts({ projectDir: dir, chapter: 8, draftText: DRAFT, callModel, knownNames: ["林舟", "周婶"] });
-
-    expect(result.ok).toBe(true);
-    expect(result.added).toBe(2);
-    expect(result.superseded).toEqual(["周婶的座钟停了，放在林舟铺子里等修。"]);
-    expect(result.conflicts).toEqual([expect.objectContaining({ quote: "菜场还在，门口摆着几摊卖豆腐的。" })]);
-    const after = (await readFactLedger(dir)).facts;
-    expect(after.find((fact) => fact.id === "fact-4-1")?.supersededByChapter).toBe(8);
-    expect(after.find((fact) => fact.id === "fact-4-0")?.supersededByChapter).toBeUndefined(); // 冲突不动账本
-    expect(after.find((fact) => fact.id === "fact-4-2")?.supersededByChapter).toBeUndefined(); // 没有原句为证的「变化」不算
-    expect(result.summary).toContain("这章记下 2 条硬事实");
-    expect(result.summary).toContain("更新了 1 条旧设定");
-    expect(result.summary).toContain("需要你定以哪个为准");
-  });
-
-  it("新事实引的原句在正文里找不到 → 不入账（第十四轮：推断出的改期、把交还记成卖给）；抄错一两个字的照收", async () => {
-    const dir = await makeLedger();
-    const callModel = vi.fn(async () => JSON.stringify({
-      facts: [
-        { text: "林舟骑车去了南门", quote: "林舟骑车到了南门。" },
-        { text: "南门菜场门口有豆腐摊", quote: "菜场还在，门口摆着几摊卖豆腐的摊子。" },
-        { text: "周婶把座钟卖给了杂货铺", quote: "周婶把座钟卖给了街口杂货铺" },
-        { text: "没给原句的照收" },
-      ],
-      changes: [], conflicts: [], newCharacters: [],
-    }));
-    const result = await extractAndReconcileFacts({ projectDir: dir, chapter: 8, draftText: DRAFT, callModel, knownNames: ["林舟", "周婶"] });
-    expect(result.added).toBe(3);
-    const texts = (await readFactLedger(dir)).facts.map((fact) => fact.text);
-    expect(texts).not.toContain("周婶把座钟卖给了杂货铺");
-    expect(texts).toContain("南门菜场门口有豆腐摊");
-  });
-
-  it("两次都抽不成 → ok:false，账本不动，如实说明", async () => {
-    const dir = await makeLedger();
-    const callModel = vi.fn(async () => "不是 JSON");
-    const result = await extractAndReconcileFacts({ projectDir: dir, chapter: 8, draftText: DRAFT, callModel });
-    expect(callModel).toHaveBeenCalledTimes(2);
-    expect(result.ok).toBe(false);
-    expect((await readFactLedger(dir)).facts).toHaveLength(3);
   });
 });
 
@@ -263,18 +201,6 @@ describe("回执「和旧设定对不上」的确定性过滤（R7.4 误报）",
     }));
     const proposal = await proposeFactChanges({ projectDir: dir, chapter: 9, draftText: draft, callModel, knownNames: V2_NAMES });
     expect(proposal.conflicts).toHaveLength(1);
-  });
-});
-
-describe("absolutizeRelativeDays（第二十一轮账本 30 条留着昨天 / 明天）", () => {
-  it("按本章天数换成故事第几天；大前天 / 大后天不被拆错；天数未知原样", () => {
-    expect(absolutizeRelativeDays("许棠说明天来量铺子，昨晚有人敲门", 5)).toBe("许棠说故事第6天来量铺子，故事第4天晚上有人敲门");
-    expect(absolutizeRelativeDays("大前天送来的表，后天取", 5)).toBe("故事第2天送来的表，故事第7天取");
-    expect(absolutizeRelativeDays("前天的事", 1)).toBe("前天的事");
-    expect(absolutizeRelativeDays("目前天气转凉，然后天亮了", 5)).toBe("目前天气转凉，然后天亮了");
-    expect(absolutizeRelativeDays("明天来", undefined)).toBe("明天来");
-    expect(absolutizeRelativeDays("明天（故事第6天）来量", 5)).toBe("故事第6天来量");
-    expect(absolutizeRelativeDays("定在后天上午（故事第13天）拉走", 11)).toBe("定在故事第13天上午拉走");
   });
 });
 
