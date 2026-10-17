@@ -2,18 +2,9 @@ import type {
   ChapterWorkspaceApiResponse,
   ChapterWorkspaceRequest,
   ChapterWorkspaceSnapshot,
-  ChapterSteeringApiResponse,
-  ChapterSteeringDraft,
-  ChapterSteeringRequest,
   BookFileActionApiResponse,
   CreateProjectApiResponse,
   CreateProjectRequest,
-  DraftAIReviewApiResponse,
-  DraftAIReviewReport,
-  DraftAIReviewRequest,
-  DraftDirectEditApiResponse,
-  DraftDirectEditRequest,
-  DraftDirectEditResult,
   DraftRevisionApplyApiResponse,
   DraftRevisionApplyRequest,
   DraftRevisionApplyResult,
@@ -21,9 +12,6 @@ import type {
   DraftRevisionPreviewApiResponse,
   DraftRevisionPreviewRequest,
   DraftRevisionTask,
-  DraftQualityApiResponse,
-  DraftQualityReport,
-  DraftQualityRequest,
   GenerateDraftRequest,
   DeleteBookRequest,
   RenameBookRequest,
@@ -39,7 +27,7 @@ import type {
   UsageSummary,
   UsageSummaryApiResponse,
 } from "./types.js";
-import { FetchJsonError, fetchJson, mergeSignals } from "./fetchJson.js";
+import { FetchJsonError, fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
 
@@ -77,22 +65,6 @@ export async function fetchReaderCatchUp(projectPath: string, signal?: AbortSign
     throw new Error(payload.error);
   }
   return { reading: payload.reading, roles: payload.roles };
-}
-
-export async function fetchChapterSteering(input: ChapterSteeringRequest, signal?: AbortSignal): Promise<ChapterSteeringDraft> {
-  const payload = await fetchJson<ChapterSteeringApiResponse>(
-    "/api/chapter-steering",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.draft;
 }
 
 export async function fetchChapterWorkspace(input: ChapterWorkspaceRequest, signal?: AbortSignal): Promise<ChapterWorkspaceSnapshot> {
@@ -352,129 +324,6 @@ export async function applyDraftCandidate(
   return { draftContent: payload.draftContent, draftTitle: payload.draftTitle, overview: payload.overview };
 }
 
-export async function generateDraftStream(
-  input: GenerateDraftRequest,
-  handlers: {
-    readonly onStatus?: (message: string) => void;
-    readonly onDelta: (text: string) => void;
-    readonly onDone: (result: { readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }) => void;
-  },
-  signal?: AbortSignal,
-): Promise<void> {
-  const { signal: mergedSignal, cleanup } = mergeSignals(signal);
-  try {
-    const response = await fetch("/api/draft/stream", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-      signal: mergedSignal,
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`流式生成请求失败：${response.status}`);
-    }
-
-    const decoder = new TextDecoder();
-    const reader = response.body.getReader();
-    let buffer = "";
-    let eventName = "message";
-    let dataLines: string[] = [];
-
-    const flush = () => {
-      if (dataLines.length === 0) return;
-      const raw = dataLines.join("\n");
-      dataLines = [];
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw) as unknown;
-      } catch {
-        return;
-      }
-      if (eventName === "status" && isRecord(parsed) && typeof parsed.message === "string") {
-        handlers.onStatus?.(parsed.message);
-      } else if (eventName === "delta" && isRecord(parsed) && typeof parsed.text === "string") {
-        handlers.onDelta(parsed.text);
-      } else if (eventName === "done" && isRecord(parsed) && typeof parsed.draftContent === "string" && isStateOverviewLike(parsed.overview)) {
-        handlers.onDone({
-          draftContent: parsed.draftContent,
-          ...(typeof parsed.draftTitle === "string" ? { draftTitle: parsed.draftTitle } : {}),
-          overview: parsed.overview,
-        });
-      } else if (eventName === "error" && isRecord(parsed) && typeof parsed.error === "string") {
-        throw new Error(parsed.error);
-      }
-      eventName = "message";
-    };
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/u);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line === "") {
-          flush();
-        } else if (line.startsWith("event:")) {
-          eventName = line.slice("event:".length).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice("data:".length).trim());
-        }
-      }
-    }
-    flush();
-  } finally {
-    cleanup();
-  }
-}
-
-export async function checkDraftQuality(input: DraftQualityRequest, signal?: AbortSignal): Promise<DraftQualityReport> {
-  const payload = await fetchJson<DraftQualityApiResponse>(
-    "/api/draft/quality",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.quality;
-}
-
-export async function directEditDraft(input: DraftDirectEditRequest, signal?: AbortSignal): Promise<DraftDirectEditResult> {
-  const payload = await fetchJson<DraftDirectEditApiResponse>(
-    "/api/draft/direct-edit",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.result;
-}
-
-export async function reviewDraftWithAI(input: DraftAIReviewRequest, signal?: AbortSignal): Promise<DraftAIReviewReport> {
-  const payload = await fetchJson<DraftAIReviewApiResponse>(
-    "/api/draft/ai-review",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    },
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.review;
-}
-
 export async function previewDraftRevision(
   input: DraftRevisionPreviewRequest,
   signal?: AbortSignal,
@@ -561,12 +410,4 @@ export async function applyDeAiFlavorBatch(
     throw new Error(payload.error ?? "一键去 AI 味失败。");
   }
   return { result: payload.result, summary: payload.summary, draftContent: payload.draftContent, ...(payload.snapshotId ? { snapshotId: payload.snapshotId } : {}) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isStateOverviewLike(value: unknown): value is StateOverview {
-  return isRecord(value) && isRecord(value.project) && typeof value.project.title === "string";
 }

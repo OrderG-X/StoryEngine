@@ -8,6 +8,9 @@
  * 落盘；或多候选 persist:false 采样 + 确定性评分选优 + persistFastDraftBody 优胜落盘）→ 字数执法
  * （显式策略参数）→ AI 腔回检/自动去味/beats 裁决（显式开关）→ 总览重建 + 诚实 summary。
  *
+ * 重构 P4：HTTP 落盘出稿路（/api/draft/generate 非 persist:false 分支）和流式出稿路（/api/draft/stream）已删，
+ * 落盘出稿只剩工具一条路；HTTP 只留抽卡候选（generateDraftCandidate）。下面「路由」一侧的说明只作历史由来。
+ *
  * 两侧只剩适配层：
  *   - 路由：HTTP 入参解析 + 200/422 投影（report/draftContent/draftTitle/overview/warnings 包装）。
  *   - 工具：RequestContext 章号回退与已入库前沿推进、写作意图门、章序护栏（D3：agent 语义，留在

@@ -86,7 +86,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "读取当前状态，生成本章写作方案和本章目标预览。",
       permission: "safe_read",
       requiresConfirmation: false,
-      endpoint: "/api/chapter-steering",
+      endpoint: "/api/agent/chat",
     },
     "generate-draft": {
       id: "generate-draft",
@@ -94,7 +94,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "调用模型生成正文，只写 drafts/fast，不更新正式状态。",
       permission: ["model_call", "draft_write"],
       requiresConfirmation: true,
-      endpoint: "/api/draft/stream",
+      endpoint: "/api/agent/chat",
     },
     "generate-draft-direct": {
       id: "generate-draft-direct",
@@ -102,7 +102,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "跳过本章方案确认，调用模型写入 drafts/fast；不会更新正式状态。",
       permission: ["model_call", "draft_write"],
       requiresConfirmation: true,
-      endpoint: "/api/draft/stream",
+      endpoint: "/api/agent/chat",
     },
     "quality-check": {
       id: "quality-check",
@@ -110,7 +110,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "只读取当前工作稿并检查问题，不做真实修补。",
       permission: "safe_read",
       requiresConfirmation: false,
-      endpoint: "/api/draft/quality",
+      endpoint: "/api/agent/chat",
     },
     "ai-review": {
       id: "ai-review",
@@ -118,7 +118,7 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "调用 AI 审查剧情、人物、节奏、文风和连续性，只给建议不改正文。",
       permission: "model_call",
       requiresConfirmation: true,
-      endpoint: "/api/draft/ai-review",
+      endpoint: "/api/agent/chat",
     },
     "revision-preview": {
       id: "revision-preview",

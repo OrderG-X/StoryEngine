@@ -7,6 +7,8 @@
  *   - 路由：HTTP 入参解析 + { ok, quality } 裸报告投影（无 refined/summary）。
  *   - 工具：ok/partialMiss/passed/refined/errorIssueCount + 用户可见 summary（D15 分层降噪输出面）。
  *
+ * 重构 P4：对应的 HTTP 路已删（按钮改发结构化动作走对话通道），下面「路由」一侧的说明只作历史由来。
+ *
  * 编排：取真草稿 → checkDraftBeforeCommit（确定性规则）→ judge（AI 判定层）→ refined。
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
  *

@@ -100,9 +100,7 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
 
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({ issue: makeIssue() });
 
@@ -134,9 +132,7 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     // evidence 对不上原文 → resolveRevisionTarget 走 category 猜测
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({
       issue: makeIssue({
@@ -158,9 +154,7 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
 
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      resolveChapterDirection: () => "",
       appendMessage: useWorkspaceStore.getState().appendMessage,
-      appendWorkflowPrompt: vi.fn(),
       applyOverviewToWorkspace: vi.fn(),
     }).handleCreateRevisionTask({ issue: makeIssue() });
 

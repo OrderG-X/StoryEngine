@@ -61,14 +61,10 @@ export interface WritingWorkspaceLayoutProps {
   readonly activeRevisionTask?: DraftRevisionTask | null;
   readonly activeRevisionPreview?: DraftRevisionPreview | null;
   readonly onSteeringDirectionChange: (value: string) => void;
-  readonly onGenerateSteering: () => void;
-  readonly onRepairDraft?: () => void;
-  readonly onDraftAIReview?: () => void;
   readonly onCreateRevisionTask?: (source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }) => void;
   readonly onGenerateRevisionPreview?: () => void;
   readonly onApplyRevisionPreview?: () => void;
   readonly onDismissRevisionTask?: () => void;
-  readonly onRegenerateDraft?: () => void;
   readonly onDraftContentChange?: (content: string) => void;
   /** 选区浮动操作条（阶段三块②）：选中正文 + 模板键 → 复用 draft-revision 改写选中段、可撤销。 */
   readonly onSelectionRewrite?: (selectionText: string, key: SelectionRevisionKey) => Promise<void>;

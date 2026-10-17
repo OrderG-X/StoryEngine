@@ -2,7 +2,7 @@
  * quality_check — 只读工具：对某章草稿做入库前质量检查（确定性规则 + AI 判定），不改稿。
  *
  * 双轨合一：共享编排（取真草稿 → checkDraftBeforeCommit → judge → refined）已收进
- * services/quality-service.ts（与 routes/draft.ts 的 /api/draft/quality 同调）。本工具只剩适配层：
+ * services/quality-service.ts。本工具只剩适配层：
  * RequestContext 取 projectDir/章号回退 + ok/partialMiss/refined/summary 的工具输出投影（D15）。
  * 策略参数由本适配层显式声明：trustExplicit 默认 false（不信模型给的正文，D14）、
  * onNoDraft "honest_short_circuit"（无稿诚实短路，D16）。

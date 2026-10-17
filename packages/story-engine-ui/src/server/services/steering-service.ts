@@ -1,21 +1,14 @@
 /**
- * steering-service — chapter-steering 的共享 application service（双轨合一·评审簇第一波）。
+ * steering-service — chapter-steering 的 application service（generate_chapter_steering 工具调用）。
  *
- * POST /api/chapter-steering（routes/chapter-steering.ts）与 generate_chapter_steering 工具
- * （agent/tools/generate-chapter-steering.ts）此前各自进程内复刻同一编排，已实际漂移过；
- * 现在同调本 service 拿 canonical result，两侧只剩适配层：
- *   - 路由：HTTP 入参解析（body/projectPath 必填/400 包装，D26）+ { ok, draft } 投影。
- *   - 工具：RequestContext 取 projectDir/章号回退（D26）+ 用户可见 summary（D27）。
+ * 原来还有 POST /api/chapter-steering 一条 HTTP 路同调本 service；重构 P4 删掉了那条路
+ * （前端早已不调它，方案只经对话里 AI 调工具出）。
  *
  * 引擎 buildChapterSteeringDraft 是确定性推导（零 LLM、只读），本 service 同样只读：
- * 不调模型、不写盘、不建快照。缺方向是共享编排判定（D28 已收敛为本 service 的统一拒绝），
- * 两侧差异只剩适配层渲染：路由 400 + error 字段，工具 ok:false + 诚实 summary。
+ * 不调模型、不写盘、不建快照。缺方向由本 service 统一拒绝，工具渲染成 ok:false + 诚实 summary。
  *
- * 入参归一（2026-09-11 收敛·lenient-args vs project-io 归一差）：chapter/pacing/revealLevel
- * 统一在本 service 做一次——章号数字字符串还原（"3"→3）、枚举 trim+小写+白名单（"Fast"→fast）、
- * 非法/空白一律 → undefined 走引擎默认。此前路由严格匹配（readPacing 非 canonical 即丢）而工具
- * coerceEnum/coerceNumber 宽容还原，同一输入两侧行为真实不同。mustInclude/mustAvoid 的字符串
- * 分隔符差（路由按 \n/; 拆、工具按 ,/JSON 拆）收不动（见 parity/chapter-steering.parity.test.ts 头注释登记）。
+ * 入参归一：chapter/pacing/revealLevel 在本 service 做一次——章号数字字符串还原（"3"→3）、
+ * 枚举 trim+小写+白名单（"Fast"→fast）、非法/空白一律 → undefined 走引擎默认。
  */
 import { buildChapterSteeringDraft } from "@actalk/story-engine";
 import type {

@@ -552,17 +552,6 @@ export type ChapterSteeringAction = "include" | "skip" | "weaken" | "alternative
 export type ChapterSteeringIntensity = "light" | "medium" | "strong";
 export type ChapterSteeringRisk = "low" | "medium" | "high";
 
-export interface ChapterSteeringRequest {
-  readonly projectPath: string;
-  readonly userDirection: string;
-  readonly chapter?: number;
-  readonly mustInclude?: readonly string[];
-  readonly mustAvoid?: readonly string[];
-  readonly pacing?: ChapterSteeringPacing;
-  readonly revealLevel?: ChapterSteeringRevealLevel;
-  readonly maxSuggestions?: number;
-}
-
 export interface ChapterSteeringDraft {
   readonly userDirection: string;
   readonly chapter: number | null;
@@ -613,10 +602,6 @@ export interface ChapterSteeringSuggestion {
   readonly sourceId?: string;
   readonly sourceStatus?: string;
 }
-
-export type ChapterSteeringApiResponse =
-  | { readonly ok: true; readonly draft: ChapterSteeringDraft }
-  | { readonly ok: false; readonly error: string };
 
 export interface ChapterChatRequest {
   readonly projectPath: string;
@@ -1056,7 +1041,6 @@ export interface FoundationGapSkippedWrite {
   readonly summary: string;
 }
 
-
 export type ModelSettingsStatus = "missing" | "loaded" | "invalid_json" | "invalid_schema";
 export type ModelSettingsIssueSeverity = "info" | "warning" | "error" | "high";
 
@@ -1266,31 +1250,6 @@ export type GenerateDraftApiResponse =
   | { readonly ok: true; readonly report: DraftActionReport; readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview; readonly contextBudget?: WriterContextBudgetApiPayload; readonly warnings?: readonly string[] }
   | { readonly ok: false; readonly error: string };
 
-export interface DraftQualityRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly draftContent?: string;
-}
-
-export interface DraftDirectEditRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly instruction: string;
-  readonly draftContent: string;
-}
-
-export interface DraftDirectEditResult {
-  readonly draftContent: string;
-  readonly reply: string;
-  readonly changeSummary: string;
-  readonly model?: string;
-  readonly profileId?: string;
-}
-
-export type DraftDirectEditApiResponse =
-  | { readonly ok: true; readonly result: DraftDirectEditResult }
-  | { readonly ok: false; readonly error: string };
-
 export type QualityCandidateSeverityHint = "low" | "medium" | "high";
 export type QualityAiJudgementVerdict = "confirmed" | "uncertain" | "dismissed" | "author_intent";
 export type QualityAiJudgementSeverity = "none" | "low" | "medium" | "high";
@@ -1345,10 +1304,6 @@ export interface DraftQualityReport {
   };
 }
 
-export type DraftQualityApiResponse =
-  | { readonly ok: true; readonly quality: DraftQualityReport }
-  | { readonly ok: false; readonly error: string };
-
 export type DraftAIReviewVerdict = "ready_to_commit" | "needs_minor_revision" | "needs_major_revision" | "blocked";
 
 export interface DraftAIReviewIssue {
@@ -1386,19 +1341,6 @@ export interface DraftAIReviewReport {
   readonly shouldCommit: boolean;
   readonly blockingReasons: readonly string[];
 }
-
-export interface DraftAIReviewRequest {
-  readonly projectPath: string;
-  readonly chapter: number;
-  readonly draftContent?: string;
-  readonly chapterGoal?: string;
-  readonly userDirection?: string;
-  readonly deterministicQuality?: DraftQualityReport;
-}
-
-export type DraftAIReviewApiResponse =
-  | { readonly ok: true; readonly review: DraftAIReviewReport; readonly model?: string; readonly profileId?: string; readonly usedFallback?: boolean }
-  | { readonly ok: false; readonly error: string };
 
 export type DraftRevisionTargetType = "paragraph" | "section" | "dialogue" | "opening" | "ending" | "whole_draft_note";
 export type DraftRevisionStatus = "pending" | "preview_generated" | "applied" | "dismissed";
