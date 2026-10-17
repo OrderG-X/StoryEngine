@@ -20,24 +20,12 @@ import {
   type DeclarationDropListener,
 } from "../agent/tools/chapter-delta-declaration.js";
 import type { ChapterDeltaDeclarationOutcome } from "../services/commit-service.js";
-import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type ColdCoverage, type ReaderRole } from "./reader-window.js";
+import { LEDGER_ROLE } from "../editorial/ledger-keeper.js";
+import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type ColdCoverage } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 
-export const LEDGER_ROLE: ReaderRole = {
-  id: "ledger",
-  system: [
-    "你是这本长篇小说的记账员，从第 1 章起一章一章跟读，管人物、线索、打算、目标。",
-    "每读完一章，你写一份记账笔记，只记以后记账要用的硬信息，不复述情节。",
-    "作者交来新的一章要定稿时，你对照读过的前文原文和你的笔记，把这一章引起的变化列成结构化声明。",
-  ].join("\n"),
-  noteTask: [
-    "读完写这一章的记账笔记（纯文本，800 字以内），只记硬信息：",
-    "- 人物：本名、别称、称呼（谁叫谁什么）、身份；本章新出现的称呼指的是谁",
-    "- 开着的问题 / 悬念：新冒出的、推进的、揭晓的各是哪条",
-    "- 人物的打算 / 待办：新立的、做完的、放弃的各是哪条",
-    "- 主角的目标：新立的、推进的、达成的各是哪条",
-  ].join("\n"),
-};
+// 角色说明和新记账员共用一份（笔记按它的哈希作废，两边必须一字不差）。
+export { LEDGER_ROLE };
 
 /** 记账员比旧路多强调的几条（通用写法，绝不写进具体书名、人名）。 */
 const LEDGER_EXTRA_RULES: readonly string[] = [

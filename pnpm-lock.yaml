@@ -71,6 +71,9 @@ importers:
 
   packages/story-engine-ui:
     dependencies:
+      '@actalk/story-core':
+        specifier: workspace:*
+        version: link:../story-core
       '@actalk/story-engine':
         specifier: workspace:*
         version: link:../story-engine

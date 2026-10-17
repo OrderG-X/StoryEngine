@@ -3,8 +3,30 @@
   "rules": [
     {
       "dir": "packages/story-core/src",
-      "forbid": ["@actalk/story-engine", "packages/story-engine/", "packages/story-engine-ui/", "@mastra/", "ai", "@ai-sdk/"],
+      "forbid": [
+        "@actalk/story-engine",
+        "packages/story-engine/",
+        "packages/story-engine-ui/",
+        "@mastra/",
+        "ai",
+        "@ai-sdk/"
+      ],
       "why": "核心包只放真相、命令、投影，纯 TypeScript、不碰模型、不引用旧引擎和界面包"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/editorial",
+      "forbid": [
+        "@actalk/story-engine",
+        "packages/story-engine/",
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/routes/",
+        "packages/story-engine-ui/src/server/brain/",
+        "@mastra/",
+        "ai",
+        "@ai-sdk/"
+      ],
+      "why": "新编辑部只用新核心 @actalk/story-core；模型调用由调用方注入，不引用旧引擎、旧服务端模块和模型 SDK"
     }
   ]
 }
