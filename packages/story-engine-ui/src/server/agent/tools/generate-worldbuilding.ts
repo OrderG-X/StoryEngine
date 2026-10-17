@@ -43,7 +43,6 @@ const callConfiguredModel = async (messages: readonly ChatMessage[]): Promise<st
     configured,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     responseFormat: { type: "json_object" }, // → json_object 自动拿高 max_tokens 上限（见 llm-client），思考+正文都装得下
-    timeoutMs: 250000,
   });
   return content;
 };

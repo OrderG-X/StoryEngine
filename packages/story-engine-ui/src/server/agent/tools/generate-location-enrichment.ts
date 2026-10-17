@@ -46,7 +46,6 @@ const callConfiguredModel = async (messages: readonly ChatMessage[]): Promise<st
     configured,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     responseFormat: { type: "json_object" },
-    timeoutMs: 250000,
   });
   return content;
 };

@@ -265,7 +265,18 @@ describe("resolveConfiguredChatModel 合成思考开关（旁路）", () => {
   });
 });
 
-describe("思考透传（非流式路）：按 configured.thinkingDialect 翻成各家方言（模型无关·R7）", () => {
+describe("callOpenAICompatibleChatModel（重构 P4：内部走流式 + 空闲超时，不设总时长上限）", () => {
+  function sse(chunks: readonly string[]): globalThis.Response {
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+        controller.close();
+      },
+    }), { status: 200 });
+  }
+  const frame = (delta: Record<string, unknown>, finish: string | null = null) =>
+    `data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }] })}\n\n`;
   function fakeConfigured(thinking: boolean, thinkingDialect = "glm"): Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"] {
     return {
       provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
@@ -276,89 +287,81 @@ describe("思考透传（非流式路）：按 configured.thinkingDialect 翻成
     } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
   }
   async function bodyOf(configured: Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"]): Promise<Record<string, unknown>> {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), { status: 200 }));
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => sse([frame({ content: "{}" }, "stop"), "data: [DONE]\n\n"]));
     await callOpenAICompatibleChatModel({ configured, messages: [{ role: "user", content: "x" }] });
     const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<string, unknown>;
     spy.mockRestore();
     return body;
   }
 
-  it("glm 方言 + thinking=false → body.thinking.type === 'disabled'", async () => {
-    expect((await bodyOf(fakeConfigured(false))).thinking).toEqual({ type: "disabled" });
+  it("发 stream:true，聚合正文并去首尾空白", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      sse([frame({ content: "  {\"a\"" }), frame({ content: ":1}  " }, "stop"), "data: [DONE]\n\n"]));
+    const out = await callOpenAICompatibleChatModel({ configured: fakeConfigured(false), messages: [{ role: "user", content: "x" }] });
+    expect(out).toEqual({ content: "{\"a\":1}" });
+    const body = JSON.parse((spy.mock.calls[0]?.[1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(body.stream).toBe(true);
+    expect(body.max_tokens).toBeUndefined();
+    spy.mockRestore();
   });
 
-  it("调用选项上不存在 maxTokens 字段（死参数陷阱已拔除：传了必须编译失败）", () => {
+  it("调用选项上不存在 maxTokens / timeoutMs 字段（max_tokens 铁律 + 不设总时长上限：传了必须编译失败）", () => {
     const configured = fakeConfigured(false);
-    // 该字段已从调用选项类型中删除（多余属性字面量检查会拦住）；若未来有人加回来，
-    // 这里会因「多余 @ts-expect-error」编译失败拦住。纯类型级断言，不发真实请求。
-    const attempted: Parameters<typeof callOpenAICompatibleChatModel>[0] = {
+    const withMaxTokens: Parameters<typeof callOpenAICompatibleChatModel>[0] = {
       configured,
       messages: [{ role: "user", content: "x" }],
       // @ts-expect-error — max_tokens 铁律：调用选项一律不得传 maxTokens（推理模型思考吃额度会截空正文）。
       maxTokens: 1024,
     };
-    expect(attempted.configured).toBe(configured);
+    const withTimeout: Parameters<typeof callOpenAICompatibleChatModel>[0] = {
+      configured,
+      messages: [{ role: "user", content: "x" }],
+      // @ts-expect-error — 超时铁律：不设总时长上限，只有空闲超时。
+      timeoutMs: 250_000,
+    };
+    expect(withMaxTokens.configured).toBe(configured);
+    expect(withTimeout.configured).toBe(configured);
   });
 
-  it("glm 方言 + thinking=true → body.thinking.type === 'enabled'", async () => {
+  it("思考开关按方言透传（glm thinking.type / qwen 流式跟随开关 / none 整键不发）", async () => {
+    expect((await bodyOf(fakeConfigured(false))).thinking).toEqual({ type: "disabled" });
     expect((await bodyOf(fakeConfigured(true))).thinking).toEqual({ type: "enabled" });
+    expect((await bodyOf(fakeConfigured(true, "qwen"))).enable_thinking).toBe(true);
+    expect((await bodyOf(fakeConfigured(false, "qwen"))).enable_thinking).toBe(false);
+    const none = await bodyOf(fakeConfigured(true, "none"));
+    expect(none.thinking).toBeUndefined();
+    expect(none.enable_thinking).toBeUndefined();
   });
 
-  it("qwen 方言（非流式）→ 强制 enable_thinking:false（即便要开；Qwen3 非流式不关会 400）", async () => {
-    for (const want of [true, false]) {
-      const body = await bodyOf(fakeConfigured(want, "qwen"));
-      expect(body.enable_thinking).toBe(false);
-      expect(body.thinking).toBeUndefined();
-    }
-  });
-
-  it("none 方言（认不出的模型）→ 整键不发（换 Kimi/DeepSeek 不因它报错）", async () => {
-    const body = await bodyOf(fakeConfigured(true, "none"));
-    expect(body.thinking).toBeUndefined();
-    expect(body.enable_thinking).toBeUndefined();
-  });
-});
-
-describe("callOpenAICompatibleChatModel 超时（非流式短调用：signal 传入 fetch，超时判死不挂住）", () => {
-  function fakeConfigured(): Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"] {
-    return {
-      provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
-      profile: { id: "m", provider: "p", model: "m" },
-      apiKey: "",
-      thinking: false,
-      thinkingDialect: "none",
-    } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
-  }
-
-  it("fetch 收到 AbortSignal；正常响应不触发 abort", async () => {
-    let captured: AbortSignal | null = null;
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      captured = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
-    });
-    const out = await callOpenAICompatibleChatModel({ configured: fakeConfigured(), messages: [{ role: "user", content: "x" }] });
-    expect(out.content).toBe("ok");
-    expect(captured).toBeInstanceOf(AbortSignal);
-    expect(captured!.aborted).toBe(false);
+  it("只吐思考、正文为空 → 如实抛错，不返回空串", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      sse([frame({ reasoning_content: "想了很久" }), frame({}, "stop"), "data: [DONE]\n\n"]));
+    await expect(callOpenAICompatibleChatModel({ configured: fakeConfigured(true), messages: [{ role: "user", content: "x" }] }))
+      .rejects.toThrow("正文(content)为空");
     spy.mockRestore();
   });
 
-  it("上游死连超过 timeoutMs → abort 并抛「模型请求超时」（章节标题等短调用的 120s 兜底走这条路）", async () => {
+  it("有字节就续命：慢速流总长超过空闲时限照常完成；彻底静默才判死", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      let captured: AbortSignal | null = null;
-      const spy = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
-        captured = ((init as RequestInit | undefined)?.signal as AbortSignal | null) ?? null;
-        return new Promise<Response>((_resolve, reject) => {
-          captured?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")), { once: true });
-        });
-      });
-      const pending = callOpenAICompatibleChatModel({ configured: fakeConfigured(), messages: [{ role: "user", content: "x" }], timeoutMs: 120_000 });
-      const assertion = expect(pending).rejects.toThrow("模型请求超时：120000ms");
-      await vi.advanceTimersByTimeAsync(120_001);
-      await assertion;
-      expect(captured!.aborted).toBe(true);
+      const encoder = new TextEncoder();
+      let push!: (text: string) => void;
+      let close!: () => void;
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (text) => controller.enqueue(encoder.encode(text));
+          close = () => controller.close();
+        },
+      }), { status: 200 }));
+      const pending = callOpenAICompatibleChatModel({ configured: fakeConfigured(false, "none"), messages: [{ role: "user", content: "x" }] });
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+      for (let i = 0; i < 4; i += 1) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        push(frame({ content: `段${i}` }));
+      }
+      push(frame({}, "stop"));
+      close();
+      await expect(pending).resolves.toEqual({ content: "段0段1段2段3" });
       spy.mockRestore();
     } finally {
       vi.useRealTimers();
@@ -741,10 +744,14 @@ describe("chat 出站请求带头（opencode MissingSessionID 修复·真机验�
     return ((spy.mock.calls[0]?.[1] as RequestInit).headers ?? {}) as Record<string, string>;
   }
 
-  it("非流式 callOpenAICompatibleChatModel：opencode 主机带 session+UA，非 opencode 不带", async () => {
+  it("callOpenAICompatibleChatModel：opencode 主机带 session+UA，非 opencode 不带", async () => {
     // 每次调用造新 Response（Body 只能读一次；mockResolvedValue 复用同一实例会 "Body has already been read"）。
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }));
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`));
+        controller.close();
+      },
+    }), { status: 200 }));
     await callOpenAICompatibleChatModel({
       configured: chatConfigured("https://opencode.ai/zen/go/v1"),
       messages: [{ role: "user", content: "x" }],
@@ -784,8 +791,12 @@ describe("chat 出站请求带头（opencode MissingSessionID 修复·真机验�
   });
 
   it("configured.customHeaders 随请求发出（备胎 relay 场景），值不泄漏进错误消息", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }));
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`));
+        controller.close();
+      },
+    }), { status: 200 }));
     await callOpenAICompatibleChatModel({
       configured: chatConfigured("http://10.0.0.8:3000/v1", { "x-opencode-session": "relay-session" }),
       messages: [{ role: "user", content: "x" }],
@@ -923,118 +934,6 @@ describe("model-capabilities 能力库（学习落盘 / 查询 / 坏文件保护
     await learnAlwaysOnThinkingModel("https://a.example.com/v1", "m");
     expect(await readFile(path, "utf-8")).toBe("{broken json"); // 原样保留，未被覆盖
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("model-capabilities"));
-  });
-});
-
-describe("always-on 思考自适应（非流式 callOpenAICompatibleChatModel）", () => {
-  let dir: string;
-  const originalDataDir = process.env.SE_DATA_DIR;
-  const cannotDisabled400 = () =>
-    new Response(JSON.stringify({ error: { message: "[1210] cannot be disabled; please use low, high, or max" } }), { status: 400 });
-  const ok200 = (content: string) =>
-    new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "se-cap-nonstream-"));
-    process.env.SE_DATA_DIR = dir;
-  });
-  afterEach(async () => {
-    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
-    else process.env.SE_DATA_DIR = originalDataDir;
-    vi.restoreAllMocks();
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  function glmConfigured(thinking: boolean, dialect = "glm") {
-    return {
-      provider: { id: "p", baseUrl: "https://x.invalid/v1", apiKeyStatus: "not_required" },
-      profile: { id: "m", provider: "p", model: "glm-5.3-flash", temperature: 0.5 },
-      apiKey: "",
-      thinking,
-      thinkingDialect: dialect,
-    } as unknown as Parameters<typeof callOpenAICompatibleChatModel>[0]["configured"];
-  }
-  function sentBody(spy: { mock: { calls: unknown[][] } }, call: number): Record<string, unknown> {
-    return JSON.parse((spy.mock.calls[call]?.[1] as RequestInit).body as string) as Record<string, unknown>;
-  }
-
-  it("关思考被 400「cannot be disabled」拒 → 省略思考参数重试成功 + warn 留痕 + 能力落盘", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const spy = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(cannotDisabled400())
-      .mockResolvedValueOnce(ok200("正文"));
-
-    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [{ role: "user", content: "x" }] });
-
-    expect(out.content).toBe("正文");
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(sentBody(spy, 0).thinking).toEqual({ type: "disabled" }); // 首发按方言照常关
-    const retryBody = sentBody(spy, 1);
-    expect(retryBody.thinking).toBeUndefined(); // 重试整键省略，让模型用自身默认
-    expect(retryBody.enable_thinking).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cannot be disabled")); // 诚实留痕
-    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(true); // 已学习落盘
-  });
-
-  it("学会后第二次调用直接跳过 disabled 注入（不再付 400 学费，只发一次请求）", async () => {
-    await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(ok200("ok"));
-
-    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] });
-
-    expect(out.content).toBe("ok");
-    expect(spy).toHaveBeenCalledTimes(1);
-    const body = sentBody(spy, 0);
-    expect(body.thinking).toBeUndefined();
-    expect(body.enable_thinking).toBeUndefined();
-  });
-
-  it("其他 400 → 不重试、原样抛「模型返回错误」、不学习", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ error: { message: "invalid request: messages malformed" } }), { status: 400 }));
-
-    await expect(callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] }))
-      .rejects.toThrow(/模型返回错误/);
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
-  });
-
-  it("用户显式开思考 → 即便模型已学 always-on 也照发 enabled（手动配置优先，绝不硬编码省略）", async () => {
-    await learnAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash");
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(ok200("ok"));
-
-    await callOpenAICompatibleChatModel({ configured: glmConfigured(true), messages: [] });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(sentBody(spy, 0).thinking).toEqual({ type: "enabled" });
-  });
-
-  it("qwen 方言关思考命中同样 400 → 重试省略 enable_thinking（方言无关的自适应）", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const spy = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(cannotDisabled400())
-      .mockResolvedValueOnce(ok200("ok"));
-
-    const out = await callOpenAICompatibleChatModel({ configured: glmConfigured(false, "qwen"), messages: [] });
-
-    expect(out.content).toBe("ok");
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(sentBody(spy, 0).enable_thinking).toBe(false); // 非流式 qwen 强制 false
-    expect(sentBody(spy, 1).enable_thinking).toBeUndefined();
-    expect(sentBody(spy, 1).thinking).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalled();
-  });
-
-  it("重试仍失败（400 还是 cannot be disabled）→ 错误原样抛、不学习（没确认的配方不记账）", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const spy = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(cannotDisabled400())
-      .mockResolvedValueOnce(cannotDisabled400());
-
-    await expect(callOpenAICompatibleChatModel({ configured: glmConfigured(false), messages: [] }))
-      .rejects.toThrow(/cannot be disabled/);
-    expect(spy).toHaveBeenCalledTimes(2); // 只重试一次，不循环
-    expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
   });
 });
 
