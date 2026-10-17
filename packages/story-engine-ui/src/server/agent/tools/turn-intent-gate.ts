@@ -36,22 +36,8 @@ const DRAFT_WRITE_PATTERNS = [
 // generate_draft 工具见用户确认标记优先放行（user-actions.ts 的 runGenerateDraftAction）。
 // 不再用正则猜中文否定说法（CLAUDE.md 铁律），代价见任务单 R7.1 报告。
 
-const THREAD_CLEANUP_PATTERNS = [
-  /(?:清理|归并|收拢|合并|整理)[^。！？；\n]{0,12}线索/u,
-  /线索[^。！？；\n]{0,12}(?:清理|归并|收拢|合并|太乱|重复)/u,
-];
-
-const THREAD_CLEANUP_NEGATION_PATTERN = /(?:先)?(?:别|不要|先不|暂不|无需|不用)[^，。；！？\n]{0,8}(?:清理|归并|收拢|合并|整理)?[^，。；！？\n]{0,8}线索/u;
-
-const THREAD_RESOLVE_PATTERNS = [
-  /(?:把|将)?[^。！？；\n]{0,24}(?:线索|伏笔|那条|这条)[^。！？；\n]{0,24}(?:收口|收掉|完结|标记完成|已经完了|结束了)/u,
-  /(?:收口|收掉|完结|标记完成)[^。！？；\n]{0,24}(?:线索|伏笔|那条|这条)/u,
-  /[^。！？；\n]{1,24}(?:这条|那条)?[^。！？；\n]{0,8}(?:已经完了|已经结束|已完成)/u,
-];
-
-const THREAD_RESOLVE_NEGATION_PATTERN = /(?:先)?(?:别|不要|先不|暂不|无需|不用|没|还没|未)[^，。；！？\n]{0,12}(?:收口|收掉|完结|标记完成|完成|完了|结束)/u;
-
-const REVERSAL_MARKER = /(?:算了|还是|但|不过|改成|现在|直接|确认)/u;
+// 线索清理 / 收口的原话门（userTurnAllowsThreadCleanup / userTurnAllowsResolveThread）已删（重构 P3）：
+// 改账是作者裁定，manage_ledger 只提草案、作者点「确认改账」才记，不再猜原话里有没有这个意思。
 
 function normalizeUserTurn(text: string | undefined): string | undefined {
   const normalized = text?.trim();
@@ -60,15 +46,6 @@ function normalizeUserTurn(text: string | undefined): string | undefined {
 
 function hasAnyPattern(text: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
-}
-
-function hasBlockingNegation(text: string, negationPattern: RegExp, allowPatterns: readonly RegExp[]): boolean {
-  const match = negationPattern.exec(text);
-  if (!match || match.index === undefined) return false;
-
-  const afterNegation = text.slice(match.index + match[0].length);
-  if (!REVERSAL_MARKER.test(afterNegation)) return true;
-  return !hasAnyPattern(afterNegation, allowPatterns);
 }
 
 /**
@@ -81,20 +58,6 @@ export function userTurnAllowsDraftWrite(userTurnText: string | undefined): bool
   const text = normalizeUserTurn(userTurnText);
   if (!text) return true;
   return hasAnyPattern(text, DRAFT_WRITE_PATTERNS);
-}
-
-export function userTurnAllowsThreadCleanup(userTurnText: string | undefined): boolean {
-  const text = normalizeUserTurn(userTurnText);
-  if (!text) return true;
-  if (!hasAnyPattern(text, THREAD_CLEANUP_PATTERNS)) return false;
-  return !hasBlockingNegation(text, THREAD_CLEANUP_NEGATION_PATTERN, THREAD_CLEANUP_PATTERNS);
-}
-
-export function userTurnAllowsResolveThread(userTurnText: string | undefined): boolean {
-  const text = normalizeUserTurn(userTurnText);
-  if (!text) return true;
-  if (!hasAnyPattern(text, THREAD_RESOLVE_PATTERNS)) return false;
-  return !hasBlockingNegation(text, THREAD_RESOLVE_NEGATION_PATTERN, THREAD_RESOLVE_PATTERNS);
 }
 
 /**

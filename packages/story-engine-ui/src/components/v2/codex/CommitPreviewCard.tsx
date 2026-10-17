@@ -216,6 +216,9 @@ export function CommitPreviewCard({
       {typeof semanticIssueCount === "number" && semanticIssueCount > 0 ? (
         <IssueCountSection label="语义/连续性问题" count={semanticIssueCount} items={preview.semanticIssues ?? []} />
       ) : null}
+      {preview.notRecorded && preview.notRecorded.length > 0 ? (
+        <IssueCountSection label="没记上" count={preview.notRecorded.length} items={preview.notRecorded} />
+      ) : null}
       {typeof summary === "string" && summary.trim() ? (
         <p className="cpc-summary">{summary}</p>
       ) : null}

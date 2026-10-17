@@ -178,6 +178,17 @@ describe("作者裁定命令", () => {
     expect(missing).toMatchObject({ ok: false, code: "unknown_thread" });
   });
 
+  it("补记事实：章要定稿过、改写的那条要还在、不会变的要写清谁哪方面是什么", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    const added = expectOk(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }, author("d1")));
+    expect(added.result).toEqual({ decision: "d-1" });
+    expect((await projectBook(book)).facts.find((fact) => fact.id === "d-1")).toMatchObject({ chapter: 1, text: "钟楼失过一次火", review: "author", status: "current" });
+
+    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 2, nature: "event", text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "x", corrects: "nope" }, author("d3"))).toMatchObject({ ok: false, code: "unknown_fact" });
+    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
+  });
+
   it("AI 调不了", async () => {
     const outcome = await runCommand(book, decisionRecord, { type: "issue.dismiss", issue: "x" }, { caller: "ai", idempotencyKey: "d" });
     expect(outcome).toMatchObject({ ok: false, code: "author_only" });

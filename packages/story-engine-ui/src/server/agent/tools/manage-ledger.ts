@@ -1,112 +1,106 @@
 /**
- * manage_ledger —— 账本管理一个入口（2026-10-12 编辑部 R3b·对话 AI 瘦身）。
+ * manage_ledger —— 改账一个入口（重构 P3 起：改账是作者裁定，你只能提议）。
  *
- * 原来 edit_fact_ledger（硬事实增删改/标记取代）和 manage_threads（线索收口/清理/归并/调大小）
- * 两个工具各占一份说明和参数。现在对话 AI 只看这一个，两套 op 合流：
- * - add / update / remove / supersede = 硬事实（story/fact-ledger.json）；
- * - resolve / clean / group / importance = 伏笔线索。
- * 按 op 转给原来的工具执行——快照、撤销标签、写前守卫（清理/归并要用户原话有这个意思）都是原工具的。
+ * 你调它不会改任何东西：它把要改的翻成裁定草案、查准指向哪条事实 / 线索（查不准就如实说、列候选），
+ * 然后界面给作者出「确认改账」按钮，作者点了才记（改前自动存档、可撤销）。见 ../ledger-decisions.ts。
  */
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { groupRelatedLeadsTool } from "./group-related-leads.js";
-import { cleanLegacyThreadsTool } from "./legacy-thread-cleanup.js";
-import { blankToUndefined, coerceEnum, coerceNumber } from "./lenient-args.js";
-import { resolveThreadTool } from "./resolve-thread.js";
-import { setForeshadowingImportanceTool } from "./set-foreshadowing-importance.js";
-import { editFactLedgerTool } from "./edit-fact-ledger.js";
+import { planLedgerChange, type LedgerChangeRequest } from "../ledger-decisions.js";
+import { readProjectDirFromContext } from "../request-context.js";
+import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "./lenient-args.js";
 
-export const LEDGER_OPS = [
-  "add",
-  "update",
-  "remove",
-  "supersede",
-  "resolve",
-  "clean",
-  "group",
-  "importance",
-] as const;
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "clean", "group", "importance"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];
 
-/** 原工具名（界面步骤名、撤销标签、诚实检测都认它）。 */
-export const LEDGER_OP_TOOL_NAMES: Record<LedgerOp, string> = {
-  add: "edit_fact_ledger",
-  update: "edit_fact_ledger",
-  remove: "edit_fact_ledger",
-  supersede: "edit_fact_ledger",
-  resolve: "resolve_thread",
-  clean: "clean_legacy_threads",
-  group: "group_related_leads",
-  importance: "set_foreshadowing_importance",
-};
-
-const FACT_OPS: readonly LedgerOp[] = ["add", "update", "remove", "supersede"];
-
-const TOOLS: Record<LedgerOp, { readonly execute?: unknown }> = {
-  add: editFactLedgerTool,
-  update: editFactLedgerTool,
-  remove: editFactLedgerTool,
-  supersede: editFactLedgerTool,
-  resolve: resolveThreadTool,
-  clean: cleanLegacyThreadsTool,
-  group: groupRelatedLeadsTool,
-  importance: setForeshadowingImportanceTool,
-};
+const groupList = z.array(z.union([z.string(), z.array(z.string())]));
 
 const inputSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Add"/"REMOVE"）。
   op: coerceEnum(z.enum(LEDGER_OPS).describe(
-    "硬事实：add 新增；update 改（id+text）；remove 删（id）；supersede=某设定从某章起变了（targetText 或 id + chapter）。" +
-      "线索：resolve=收口完结的单条线索；clean=清理碎片和字面重复；group=归并讲同一件事的线索；importance=定大伏笔或小线索。",
+    "事实：add 补记；update 改写（id 或 targetText + text）；remove 删掉记错的（id 或 targetText）；supersede=某事实从某章起不再成立（id 或 targetText + chapter）。" +
+      "线索：resolve=记为已收（query 或 id）；group=归并讲同一件事的几条（groups）；importance=定大伏笔 / 小线索（id 或 query + importance）。",
   )),
-  id: blankToUndefined(z.string().optional().describe(
-    "update/remove/supersede 的硬事实条目 id（形如 fact-7-0）；importance 的线索 id（先 read_state_overview 取）。别念给用户听。",
-  )),
+  id: blankToUndefined(z.string().optional().describe("事实或线索的编号（read_state_overview 里取）。别念给作者听。")),
   chapter: coerceNumber(z.number().int().positive().optional().describe(
-    "add 时该事实属于第几章；supersede 时=从第几章起失效（通常填用户当前所在章）。",
+    "add：算在第几章（缺省=最新定稿章）；supersede：从第几章起不再成立；resolve：在第几章收的（缺省=最新定稿章）。",
   )),
-  text: blankToUndefined(z.string().optional().describe("add/update 的事实内容（一句话、具体可核对）。")),
-  targetText: blankToUndefined(z.string().optional().describe(
-    "supersede 时：要取代的那条旧事实的描述/关键词（如『资金被冻结』），系统据此找到它，无需你知道 id。",
+  text: blankToUndefined(z.string().optional().describe("add / update 的事实内容（一句话、具体可核对）。")),
+  targetText: blankToUndefined(z.string().optional().describe("不知道编号时，用那条事实的原话或关键词指认（对上多条会如实请你说清）。")),
+  query: blankToUndefined(z.string().optional().describe("resolve / importance：线索的标题或关键词。")),
+  importance: coerceEnum(z.enum(["major", "normal", "minor"]).optional().describe("importance：major=大伏笔（不许丢），minor=小线索（停多久都不提醒），normal=普通。")),
+  nature: coerceEnum(z.enum(["hard", "state", "event"]).optional().describe(
+    "add：hard=不会变的（年龄、门牌）；state=会变的状态（在哪、在谁手里）；event=发生过的事。hard / state 要同时给 subject、attribute、value。",
   )),
-  supersededByFactId: blankToUndefined(z.string().optional().describe("supersede 时可选：被哪条新事实取代（登记演进链）。")),
-  query: blankToUndefined(z.string().optional().describe("resolve：要收口的线索标题或关键词。")),
-  importance: coerceEnum(z.enum(["major", "minor"]).optional().describe("importance：major=大伏笔，minor=小线索。")),
+  subject: blankToUndefined(z.string().optional().describe("add：谁 / 什么（hard、state 必填）。")),
+  attribute: blankToUndefined(z.string().optional().describe("add：哪方面（如「年纪」「在哪」）。")),
+  value: blankToUndefined(z.string().optional().describe("add / update：是什么。")),
+  groups: coerceJsonArray(groupList.optional().describe(
+    "group：几组线索（标题或编号），每组第一条留下、其余并进去，如 [[\"钟为什么停\",\"钟楼的钟停了\"]]。只有一组也可以直接给一个数组。",
+  )),
 });
+
+const outputSchema = z.object({
+  ok: z.boolean().describe("恒为 false：你调它不会改账。needsConfirmation=true 时界面已出「确认改账」按钮。"),
+  op: z.string(),
+  needsConfirmation: z.boolean().optional(),
+  blockedReason: z.string().optional(),
+  summary: z.string().describe("给作者看的结论。"),
+  ledgerConfirm: z.object({
+    key: z.string(),
+    label: z.string(),
+    decisions: z.array(z.unknown()),
+    lines: z.array(z.string()),
+  }).optional().describe("「确认改账」按钮带的东西（界面用，你不用转述）。"),
+});
+
+function normalizeGroups(value: z.infer<typeof groupList> | undefined): string[][] {
+  if (!value || value.length === 0) return [];
+  if (value.every((item) => typeof item === "string")) return [value as string[]];
+  return value.map((item) => (typeof item === "string" ? [item] : item));
+}
+
+export async function runManageLedger(projectDir: string, input: z.infer<typeof inputSchema>): Promise<z.infer<typeof outputSchema>> {
+  const request: LedgerChangeRequest = {
+    op: input.op,
+    ...(input.id ? { id: input.id } : {}),
+    ...(input.chapter ? { chapter: input.chapter } : {}),
+    ...(input.text ? { text: input.text } : {}),
+    ...(input.targetText ? { targetText: input.targetText } : {}),
+    ...(input.query ? { query: input.query } : {}),
+    ...(input.importance ? { importance: input.importance } : {}),
+    ...(input.nature ? { nature: input.nature } : {}),
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.attribute ? { attribute: input.attribute } : {}),
+    ...(input.value ? { value: input.value } : {}),
+    ...(input.op === "group" ? { groups: normalizeGroups(input.groups) } : {}),
+  };
+  const plan = await planLedgerChange(projectDir, request);
+  if (!plan.ok) return { ok: false, op: input.op, blockedReason: plan.code, summary: `没改账：${plan.reason}` };
+  const lines = plan.lines;
+  return {
+    ok: false,
+    op: input.op,
+    needsConfirmation: true,
+    blockedReason: "awaiting_user_confirmation",
+    summary: `要改的账：${lines.join("；")}。还没改——请点「确认改账」按钮（改前自动存档，可撤销）。`,
+    ledgerConfirm: { key: plan.key, label: lines[0] ?? "改账", decisions: [...plan.decisions], lines: [...lines] },
+  };
+}
 
 export const manageLedgerTool = createTool({
   id: "manage_ledger",
   description:
-    "记账：硬事实的增/删/改/标记取代（只记客观已确认的事实，台词里的威胁猜测不当事实记）；伏笔线索的收口/清理/归并/调大小（op 见参数）。写前自动存档、可撤销。清理和归并只在用户明确要时做，绝不自己顺手跑。",
+    "改账（事实的补记 / 改写 / 删掉 / 标不再成立；线索的记为已收 / 归并 / 定大小，op 见参数）。改账是作者的决定：" +
+    "你调它不会改任何东西，它给作者出「确认改账」按钮，作者点了才改。调完告诉作者点按钮，绝不说『已改好』。" +
+    "只在作者明说要改账时调；作者没说过的决定不要替作者做。",
   inputSchema,
+  outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
-    const execute = TOOLS[input.op].execute as ((args: Record<string, unknown>, context: ToolExecutionContext) => Promise<unknown>) | undefined;
-    if (!execute) throw new Error(`账本操作「${input.op}」暂不可用。`);
-    if (input.op === "resolve" && !input.query) {
-      return { ok: false, summary: "要收哪一条？请说出那条线索的标题或关键词。", op: input.op };
-    }
-    if (input.op === "importance" && (!input.id || !input.importance)) {
-      return { ok: false, summary: "调大小要知道是哪一条、调成大伏笔还是小线索。", op: input.op };
-    }
-    const args: Record<string, unknown> = FACT_OPS.includes(input.op)
-      ? {
-        op: input.op,
-        ...(input.id ? { id: input.id } : {}),
-        ...(input.chapter ? { chapter: input.chapter } : {}),
-        ...(input.text ? { text: input.text } : {}),
-        ...(input.targetText ? { targetText: input.targetText } : {}),
-        ...(input.supersededByFactId ? { supersededByFactId: input.supersededByFactId } : {}),
-      }
-      : input.op === "resolve"
-        ? { query: input.query }
-        : input.op === "importance"
-          ? { id: input.id, importance: input.importance }
-          : {};
-    const output = await execute(args, context);
-    return output && typeof output === "object" && !Array.isArray(output)
-      ? { ...(output as Record<string, unknown>), op: input.op }
-      : output;
+    const projectDir = readProjectDirFromContext(context);
+    if (!projectDir) throw new Error("manage_ledger 缺少 projectDir：请确认调用 agent 时通过 RequestContext 注入了 projectDir。");
+    return runManageLedger(projectDir, input);
   },
 });

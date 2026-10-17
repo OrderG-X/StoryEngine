@@ -233,7 +233,8 @@ export type WorkspaceCommitPreview = {
   readonly draftIssues?: readonly string[];
   readonly semanticIssues?: readonly string[];
   readonly previewToken?: string;
-  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean; readonly editableDay?: number; readonly needsConfirm?: boolean }[];
+  readonly ledgerChecklist?: readonly { readonly id: string; readonly kind: string; readonly label: string; readonly detail?: string; readonly removable: boolean; readonly editableDay?: number; readonly needsConfirm?: boolean; readonly defaultUnchecked?: boolean }[];
+  readonly notRecorded?: readonly string[];
 };
 
 export type WorkspaceNextStepPrompt = {
@@ -542,9 +543,11 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
         removable: item.removable === true,
         ...(editableDay !== undefined ? { editableDay } : {}),
         ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
+        ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
       }];
     })
     : [];
+  const notRecorded = readStringList(value.notRecorded).slice(0, 50);
   return {
     chapter,
     canCommit: value.canCommit,
@@ -556,6 +559,7 @@ function readWorkspaceCommitPreview(value: unknown): WorkspaceCommitPreview | un
     ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
     ...(previewToken ? { previewToken } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
+    ...(notRecorded.length > 0 ? { notRecorded } : {}),
   };
 }
 
@@ -594,6 +598,8 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const commitTarget = readWorkspaceCommitTarget(item.commitTarget);
     // 「确认裁剪」按钮的保留条数：不进白名单的话刷新后丢失，按钮会按默认 200 条裁（与预览不一致）。
     const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
+    // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
+    const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
     actions.push({
       id,
       label,
@@ -605,9 +611,18 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
       ...(readString(item.disabledReason) ? { disabledReason: readString(item.disabledReason) } : {}),
       ...(commitTarget ? { commitTarget } : {}),
       ...(isRecord(item.pruneTarget) ? { pruneTarget: { ...(pruneKeep !== undefined ? { keep: pruneKeep } : {}) } } : {}),
+      ...(ledgerTarget ? { ledgerTarget } : {}),
     });
   }
   return actions.slice(0, 8);
+}
+
+function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const key = readString(value.key);
+  if (!key || !Array.isArray(value.decisions) || value.decisions.length === 0) return undefined;
+  const label = readString(value.label);
+  return { key, decisions: value.decisions.filter(isRecord).slice(0, 20), ...(label ? { label } : {}) };
 }
 
 function readWorkspacePermission(value: unknown): string | readonly string[] | undefined {

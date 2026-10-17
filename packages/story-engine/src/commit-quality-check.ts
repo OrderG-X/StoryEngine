@@ -36,11 +36,14 @@ export interface CommitQualityReport {
   readonly modelJudge?: QualityModelJudgeMeta;
 }
 
-export async function checkDraftBeforeCommit(input: {
+/**
+ * 定稿硬闸（重构 P3）：只挡「这根本不是一章正文」的稿——空的、只有标题、太短、混进了工具 JSON 或模型的解释话。
+ * 语义问题不在这里猜，交给核账员。新定稿链只用这一组；checkDraftBeforeCommit 在它上面再加提醒类检查（质检、审稿在用）。
+ */
+export async function checkDraftHardGates(input: {
   readonly projectDir: string;
-  readonly chapter: number;
   readonly draftContent: string;
-}): Promise<CommitQualityReport> {
+}): Promise<readonly CommitQualityIssue[]> {
   const issues: CommitQualityIssue[] = [];
   const content = input.draftContent.trim();
   const body = stripMarkdownHeadings(content).trim();
@@ -69,6 +72,18 @@ export async function checkDraftBeforeCommit(input: {
   if (content && containsModelExplanation(content)) {
     issues.push(errorIssue("model_explanation", "Draft contains model explanation or refusal wording."));
   }
+  return issues;
+}
+
+export async function checkDraftBeforeCommit(input: {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftContent: string;
+}): Promise<CommitQualityReport> {
+  const issues: CommitQualityIssue[] = [...(await checkDraftHardGates(input))];
+  const content = input.draftContent.trim();
+  const body = stripMarkdownHeadings(content).trim();
+
   if (content && !hasMarkdownHeading(content)) {
     issues.push({
       severity: "warning",

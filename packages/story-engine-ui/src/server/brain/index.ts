@@ -2,7 +2,6 @@
  * 编辑部（brain）对外入口（2026-10-12 第 1 步：专员底座 + 核账员；T1 收尾：四个可开关的做法；T2：记账员；T3：章纲员；T5 长书：后台补读）。
  *
  * 新代码都在 brain/ 下，不 import 旧的 agent/tools、agent/story-agent；以后整块搬进独立包。
- * 唯一例外：记账员复用 agent/tools/chapter-delta-declaration.ts 里的确定性契约函数（字段说明 / 解析 / 编号换算）。
  * 三个专员：核账员（checker，核新稿 / 审章纲）、记账员（ledger，章节声明）、章纲员（planner，拟章纲 / 改章纲）。
  *
  * R3（2026-10-12）删旧路后三个专员就是仅有的路（combo 核账 / 旧声明 / 旧拟纲已删，STORY_CHECKER / STORY_LEDGER /
@@ -20,7 +19,7 @@ import {
   writeReaderReadingProgress,
 } from "./catch-up.js";
 import { DEFAULT_READER_VARIANT, callConfiguredBrainModel, checkerRoleFor } from "./checker.js";
-import { LEDGER_ROLE } from "./ledger.js";
+import { LEDGER_ROLE } from "../editorial/ledger-keeper.js";
 import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 
@@ -64,7 +63,7 @@ export {
   READER_ROLE_LABELS,
   type ReaderWaited,
 } from "./reader-progress.js";
-export { LEDGER_ROLE, declareChapterDeltaByLedger, type LedgerDeclareInput, type LedgerDeclareResult } from "./ledger.js";
+export { LEDGER_ROLE };
 export {
   PLANNER_ROLE,
   callConfiguredPlannerModel,

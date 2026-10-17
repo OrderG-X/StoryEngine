@@ -1,5 +1,5 @@
 /**
- * 「记一条作者裁定」命令（作者档）：归并线索、作者收口、线索分量、「不是问题」、这条事实记错了。
+ * 「记一条作者裁定」命令（作者档）：归并线索、作者收口、线索分量、「不是问题」、这条事实记错了、补记 / 改写一条事实。
  * 指向的线索或事实必须在现在的投影里，不在就不记、如实说。
  */
 import { DecisionInput, type AuthorDecision } from "../schema/decisions.js";
@@ -20,6 +20,7 @@ const LABELS: Record<DecisionInput["type"], string> = {
   "issue.dismiss": "裁定：不是问题",
   "fact.retract": "裁定：事实记错了",
   "fact.expire": "裁定：事实不再成立",
+  "fact.assert": "裁定：补记事实",
 };
 
 export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResult> = {
@@ -43,6 +44,14 @@ export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResul
     }
     if ((args.type === "fact.retract" || args.type === "fact.expire") && !current.facts.some((fact) => fact.id === args.fact)) {
       return fail("unknown_fact", "这条事实已经不在了。");
+    }
+    if (args.type === "fact.assert") {
+      if (!current.chapters.some((chapter) => chapter.chapter === args.chapter)) {
+        return fail("unknown_chapter", `第 ${args.chapter} 章还没定稿，事实没法算在那一章。`);
+      }
+      if (args.corrects !== undefined && !current.facts.some((fact) => fact.id === args.corrects && fact.status !== "retracted")) {
+        return fail("unknown_fact", "要改的那条事实已经不在了。");
+      }
     }
     let max = 0;
     for (const decision of decisions) {

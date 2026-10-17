@@ -896,6 +896,24 @@ describe("裁剪待确认投影（prune_snapshots 预览后挂「确认裁剪」
   });
 });
 
+describe("改账待确认投影（manage_ledger 提草案后挂「确认改账」按钮）", () => {
+  it("ledgerConfirmAction → 消息挂「确认改账」按钮（带裁定草案原样）", () => {
+    const decisions = [{ type: "fact.retract", fact: "c1-1" }];
+    const message = project([
+      {
+        type: "tool-result",
+        toolCallId: "l1",
+        toolName: "manage_ledger",
+        endedAt: 2,
+        output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions, label: "删掉一条" }, summary: "要改的账：…" },
+      },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "ledger-confirm", label: "确认改账", ledgerTarget: { key: "k1", decisions, label: "删掉一条" } }),
+    ]);
+  });
+});
+
 describe("质检明细投影（quality_check → message.qualityReport）", () => {
   it("带 qualityReport → 挂到 message.qualityReport", () => {
     const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };

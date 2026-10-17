@@ -31,6 +31,7 @@ export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./tex
 
 export {
   BookFileError,
+  listChapterTexts,
   readAllLedgers,
   readBookSnapshot,
   readChapterLedger,

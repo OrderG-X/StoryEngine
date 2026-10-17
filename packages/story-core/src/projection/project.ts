@@ -106,14 +106,42 @@ function buildFacts(
   names: Names,
   dismissed: ReadonlySet<string>,
 ): { facts: FactView[]; subjects: SubjectView[]; conflicts: ConflictView[]; dangling: DanglingView[] } {
-  const retracted = new Set(decisions.flatMap((decision) => (decision.type === "fact.retract" ? [decision.fact] : [])));
+  const retracted = new Set(
+    decisions.flatMap((decision) =>
+      decision.type === "fact.retract" ? [decision.fact] : decision.type === "fact.assert" && decision.corrects ? [decision.corrects] : [],
+    ),
+  );
   const expiries = decisions.filter((decision) => decision.type === "fact.expire");
+  // 作者补记的事实：当成那一章账单末尾多出来的一条（没有原句），和账单里的事实走同一套顶替 / 矛盾规则。
+  const asserted = new Map<number, FactEntry[]>();
+  const chapters = new Set(ledgers.map((ledger) => ledger.chapter));
+  const upTo = ledgers.at(-1)?.chapter ?? 0;
+  const assertDangling: DanglingView[] = [];
+  for (const decision of decisions) {
+    if (decision.type !== "fact.assert") continue;
+    if (!chapters.has(decision.chapter)) {
+      if (decision.chapter <= upTo) assertDangling.push({ kind: "decision", ref: `chapter:${decision.chapter}`, chapter: decision.chapter, source: decision.id });
+      continue;
+    }
+    const list = asserted.get(decision.chapter) ?? [];
+    list.push({
+      id: decision.id,
+      kind: "fact",
+      review: "author",
+      nature: decision.nature,
+      ...(decision.subject ? { subject: decision.subject } : {}),
+      ...(decision.attribute ? { attribute: decision.attribute } : {}),
+      ...(decision.value ? { value: decision.value } : {}),
+      text: decision.text,
+    });
+    asserted.set(decision.chapter, list);
+  }
   const byId = new Map<string, MutableFact>();
   const ordered: MutableFact[] = [];
   const currentState = new Map<string, string>();
   const currentHard = new Map<string, string[]>();
   const conflicts: ConflictView[] = [];
-  const dangling: DanglingView[] = [];
+  const dangling: DanglingView[] = [...assertDangling];
   const subjects = new Map<string, { name: string; attrs: Map<string, { attribute: string; nature: "hard" | "state"; history: string[] }> }>();
 
   const supersede = (target: MutableFact, chapter: number, by: string): void => {
@@ -129,7 +157,7 @@ function buildFacts(
   };
 
   for (const ledger of ledgers) {
-    for (const entry of ledger.entries) {
+    for (const entry of [...ledger.entries, ...(asserted.get(ledger.chapter) ?? [])]) {
       if (entry.kind !== "fact") continue;
       const fact = toFactView(entry, ledger.chapter, names, retracted.has(entry.id));
       byId.set(fact.id, fact);

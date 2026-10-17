@@ -47,6 +47,8 @@ export interface PreviewTicket {
   readonly entries: readonly EntryInput[];
   /** 要作者看的条目下标。 */
   readonly reviewIndexes: readonly number[];
+  /** 默认不写、作者勾上才写的条目下标（和前文不会变的事实对不上、要推翻前文不会变的事实）。 */
+  readonly optInIndexes?: readonly number[];
   readonly createdAt: string;
 }
 
@@ -102,6 +104,8 @@ export interface CommitItem {
   readonly quote?: string;
   /** 为什么要你看（自动记下的为空）。 */
   readonly reasons: readonly { readonly code: ReviewReason; readonly text: string }[];
+  /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改。 */
+  readonly optIn: boolean;
 }
 
 export interface NotRecorded {
@@ -222,6 +226,13 @@ function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (na
   });
 }
 
+/** 会改掉前文「不会变」的事实：和它对不上，或者明写要推翻它。 */
+function touchesHardFact(item: ClassifiedEntry, before: BookProjection): boolean {
+  if (item.reasons.includes("hard-conflict")) return true;
+  if (!item.reasons.includes("replaces-fact") || item.entry.kind !== "fact") return false;
+  return (item.entry.replaces ?? []).some((id) => before.facts.find((fact) => fact.id === id)?.nature === "hard");
+}
+
 /** 用核过的条目拼一份临时账单，算出「定稿后」这一章是第几天（只用来展示）。 */
 function previewDay(ledgers: readonly ChapterLedger[], chapter: number, entries: readonly EntryInput[], textSha: string) {
   const draft: ChapterLedger = {
@@ -294,6 +305,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     label: entryLabel(item.entry, before),
     ...("quote" in item.entry && item.entry.quote ? { quote: item.entry.quote } : {}),
     reasons: reasonTexts(item, before, resolve),
+    optIn: touchesHardFact(item, before),
   });
   const entries = checked.accepted.map((item) => item.entry);
   const textSha = sha256(input.text);
@@ -304,6 +316,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     textSha256: textSha,
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
+    optInIndexes: plan.review.filter((item) => touchesHardFact(item, before)).map((item) => position.get(item.index) ?? -1),
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
   await input.tickets.put(ticket);
@@ -343,6 +356,8 @@ export interface ConfirmInput {
   readonly text: string;
   /** 作者去掉的清单序号。 */
   readonly excluded?: readonly unknown[];
+  /** 作者勾上的「默认不写」条目序号（见 CommitItem.optIn）。 */
+  readonly optedIn?: readonly unknown[];
   /** 作者改的「故事第几天」。 */
   readonly day?: unknown;
   readonly tickets: TicketStore;
@@ -368,7 +383,12 @@ export async function confirmChapterCommit(input: ConfirmInput): Promise<Confirm
   if (sha256(input.text) !== ticket.textSha256) {
     return { ok: false, code: "text_changed", reason: "预览之后正文又改过，请重新点「定稿」预览一次" };
   }
-  const excluded = new Set((input.excluded ?? []).map(indexOf).filter((index) => index !== undefined));
+  const optedIn = new Set((input.optedIn ?? []).map(indexOf).filter((index) => index !== undefined));
+  const excluded = new Set([
+    ...(input.excluded ?? []).map(indexOf).filter((index) => index !== undefined),
+    // 默认不写的，作者没勾上就不写。
+    ...(ticket.optInIndexes ?? []).filter((index) => !optedIn.has(index)),
+  ]);
   const review = new Set(ticket.reviewIndexes);
   const day = indexOf(input.day);
   const entries: EntryInput[] = [];

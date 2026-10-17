@@ -77,6 +77,30 @@ describe("投影", () => {
     expect(result.dangling).toEqual([{ kind: "decision", ref: "c9-9", source: "d-2" }]);
   });
 
+  it("作者补记事实：算在那一章末尾、走同一套顶替和矛盾规则；改写的那条作废；章没定稿的摆进 dangling", () => {
+    const result = project({
+      ledgers: [ledger(1, [state("铜钥匙", "在哪", "老周手里"), hard("老周", "年纪", "六十")]), ledger(3, [state("铜钥匙", "在哪", "铜盒里")])],
+      decisions: [
+        decision({ type: "fact.assert", chapter: 1, nature: "state", subject: "铜钥匙", attribute: "在哪", value: "沈青禾包里", text: "钥匙其实在沈青禾包里" }, 1),
+        decision({ type: "fact.assert", chapter: 1, nature: "hard", subject: "老周", attribute: "年纪", value: "六十二", text: "老周六十二", corrects: "c1-2" }, 2),
+        decision({ type: "fact.assert", chapter: 2, nature: "event", text: "第二章没定稿" }, 3),
+        decision({ type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }, 4),
+      ],
+    });
+    expect(result.facts.map((fact) => [fact.id, fact.status])).toEqual([
+      ["c1-1", "superseded"],
+      ["c1-2", "retracted"],
+      ["d-1", "superseded"],
+      ["d-2", "current"],
+      ["d-4", "current"],
+      ["c3-1", "current"],
+    ]);
+    expect(result.facts.find((fact) => fact.id === "d-1")).toMatchObject({ chapter: 1, review: "author", supersededAt: 3, supersededBy: "c3-1" });
+    expect(result.facts.find((fact) => fact.id === "d-1")?.quote).toBeUndefined();
+    expect(result.conflicts).toEqual([]);
+    expect(result.dangling).toEqual([{ kind: "decision", ref: "chapter:2", chapter: 2, source: "d-3" }]);
+  });
+
   it("别名：正文里的新称呼归到已确立的人；主体名也按别名归并", () => {
     const result = project({
       ledgers: [

@@ -36,9 +36,10 @@ export type AgentUserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
-  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string };
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
 
-/** 定稿预览账本清单里的一条（与服务端 commit-ledger/ledger-checklist.ts 同形）。 */
+/** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
   readonly id: string;
   readonly kind: string;
@@ -186,6 +187,15 @@ export interface AgentToolResult {
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：模型只做了预览、有可裁内容，等用户点「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
+  /** manage_ledger 专属：改账是作者裁定，模型只提了草案，等作者点「确认改账」按钮。 */
+  readonly ledgerConfirmAction?: LedgerConfirmTarget;
+}
+
+/** 「确认改账」按钮带回服务端的东西（manage_ledger 提的裁定草案，服务端执行前再校验）。 */
+export interface LedgerConfirmTarget {
+  readonly key: string;
+  readonly decisions: readonly unknown[];
+  readonly label?: string;
 }
 
 export interface AgentToolError {
@@ -433,6 +443,7 @@ export async function streamAgentChat(
                     ...(toIssueMessages(output.draftQualityIssues).length > 0 ? { draftIssues: toIssueMessages(output.draftQualityIssues) } : {}),
                     ...(toIssueMessages(output.semanticQualityIssues).length > 0 ? { semanticIssues: toIssueMessages(output.semanticQualityIssues) } : {}),
                     ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
+                    ...(toIssueMessages(output.notRecorded).length > 0 ? { notRecorded: toIssueMessages(output.notRecorded) } : {}),
                     ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
                   },
                 }
@@ -454,6 +465,15 @@ export async function streamAgentChat(
                     ...(typeof (output.confirmAction as { keep?: unknown }).keep === "number"
                       ? { keep: (output.confirmAction as { keep: number }).keep }
                       : {}),
+                  },
+                }
+              : {}),
+            ...(parsed.toolName === "manage_ledger" && output.needsConfirmation === true && isLedgerConfirm(output.ledgerConfirm)
+              ? {
+                  ledgerConfirmAction: {
+                    key: output.ledgerConfirm.key,
+                    decisions: output.ledgerConfirm.decisions,
+                    ...(typeof output.ledgerConfirm.label === "string" && output.ledgerConfirm.label ? { label: output.ledgerConfirm.label } : {}),
                   },
                 }
               : {}),
@@ -553,6 +573,10 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
     }];
   });
+}
+
+function isLedgerConfirm(value: unknown): value is { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: unknown } {
+  return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
 }
 
 function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {

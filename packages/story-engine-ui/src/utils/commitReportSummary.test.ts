@@ -42,4 +42,21 @@ describe("summarizeCommitReport", () => {
     expect(summary.detailLines).toContain("正式章节：已写入 chapters");
     expect(summary.detailLines).toContain("世界状态：无变更");
   });
+
+  it("新定稿回执（report.ledger）：报这一章记了多少条账", () => {
+    const summary = summarizeCommitReport({
+      chapter: 2,
+      chapterPath: "chapters/0002.md",
+      ledger: { facts: 4, threadsOpened: 1, threadsAdvanced: 2, threadsClosed: 1, present: 3, day: 2, dayEnd: 3, notRecorded: 1 },
+    });
+    expect(summary.statusLine).toBe("账已记上：事实 4 条，线索新开 1、推进 2、收口 1 条，出场 3 人。");
+    expect(summary.detailLines).toEqual([
+      "正式章节：已写入 chapters/0002.md",
+      "故事时间：第 2～3 天",
+      "事实：4 条",
+      "线索：新开 1，推进 2，收口 1",
+      "出场人物：3 人",
+      "没记上：1 条",
+    ]);
+  });
 });

@@ -46,6 +46,7 @@ export {
 export {
   checkCommitPlanSemanticQuality,
   checkDraftBeforeCommit,
+  checkDraftHardGates,
   type CommitQualityIssue,
   type CommitQualityReport,
 } from "./commit-quality-check.js";

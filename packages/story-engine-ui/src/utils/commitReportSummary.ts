@@ -15,8 +15,38 @@ function booleanLabel(value: unknown): string {
   return value === true ? "已更新" : "无变更";
 }
 
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/** 重构 P3 起的定稿回执：只带这一章记了多少条账（commit_apply 的 report.ledger）。 */
+function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<string, unknown>): CommitReportSummary {
+  const chapterPath = typeof root.chapterPath === "string" && root.chapterPath.trim().length > 0 ? root.chapterPath.trim() : "chapters";
+  const facts = count(ledger.facts);
+  const opened = count(ledger.threadsOpened);
+  const advanced = count(ledger.threadsAdvanced);
+  const closed = count(ledger.threadsClosed);
+  const present = count(ledger.present);
+  const day = count(ledger.day);
+  const dayEnd = count(ledger.dayEnd);
+  const notRecorded = count(ledger.notRecorded);
+  return {
+    statusLine: `账已记上：事实 ${facts} 条，线索新开 ${opened}、推进 ${advanced}、收口 ${closed} 条，出场 ${present} 人。`,
+    detailLines: [
+      `正式章节：已写入 ${chapterPath}`,
+      ...(day > 0 ? [`故事时间：${dayEnd > day ? `第 ${day}～${dayEnd} 天` : `第 ${day} 天`}`] : []),
+      `事实：${facts} 条`,
+      `线索：新开 ${opened}，推进 ${advanced}，收口 ${closed}`,
+      `出场人物：${present} 人`,
+      ...(notRecorded > 0 ? [`没记上：${notRecorded} 条`] : []),
+    ],
+  };
+}
+
 export function summarizeCommitReport(report: unknown): CommitReportSummary {
   const root = asRecord(report);
+  const ledger = asRecord(root.ledger);
+  if (Object.keys(ledger).length > 0) return summarizeLedgerReport(root, ledger);
   const hookTracking = asRecord(root.hookTracking);
   const threadTracking = asRecord(root.threadTracking);
   const arcGoalTracking = asRecord(root.arcGoalTracking);
