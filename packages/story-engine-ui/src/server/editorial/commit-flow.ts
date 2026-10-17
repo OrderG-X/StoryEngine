@@ -39,9 +39,19 @@ import { writeAtomically, type BrainCallModel, type ColdCoverage } from "./reade
 
 // —— 预览票 ——
 
+/**
+ * 预览票认的正文指纹：换行统一、行尾空白去掉、连续空行并成一个后的 sha256。
+ * 稿纸重新载入时会把多余的空段落收掉再存一遍（字一个没动），不能因为这个就让作者重新预览。
+ */
+export function draftFingerprint(text: string): string {
+  const lines = text.replace(/\r\n?/gu, "\n").split("\n").map((line) => line.trimEnd());
+  return sha256(lines.join("\n").replace(/\n{3,}/gu, "\n\n").trim());
+}
+
 export interface PreviewTicket {
   readonly id: string;
   readonly chapter: number;
+  /** 预览时正文的指纹（见 draftFingerprint）。 */
   readonly textSha256: string;
   /** 核过的条目（清单上的序号 = 这里的下标）。 */
   readonly entries: readonly EntryInput[];
@@ -313,7 +323,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const ticket: PreviewTicket = {
     id: randomBytes(8).toString("hex"),
     chapter: input.chapter,
-    textSha256: textSha,
+    textSha256: draftFingerprint(input.text),
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
     optInIndexes: plan.review.filter((item) => touchesHardFact(item, before)).map((item) => position.get(item.index) ?? -1),
@@ -380,7 +390,7 @@ function indexOf(value: unknown): number | undefined {
 export async function confirmChapterCommit(input: ConfirmInput): Promise<ConfirmOutcome> {
   const ticket = await input.tickets.get(input.ticket);
   if (!ticket) return { ok: false, code: "ticket_missing", reason: "这次预览已经过期了，请重新点「定稿」预览一次" };
-  if (sha256(input.text) !== ticket.textSha256) {
+  if (draftFingerprint(input.text) !== ticket.textSha256) {
     return { ok: false, code: "text_changed", reason: "预览之后正文又改过，请重新点「定稿」预览一次" };
   }
   const optedIn = new Set((input.optedIn ?? []).map(indexOf).filter((index) => index !== undefined));

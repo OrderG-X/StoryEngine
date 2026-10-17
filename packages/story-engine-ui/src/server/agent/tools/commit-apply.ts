@@ -8,12 +8,12 @@
  * 定稿前由 writeTool 存撤销点。确认时不再调模型——要记的账在预览时就交齐了。
  */
 import { buildStateOverview, type StateOverview } from "@actalk/story-engine";
-import { nameKey, project, readBookSnapshot, readChapterLedger, sha256 } from "@actalk/story-core";
+import { nameKey, project, readBookSnapshot, readChapterLedger } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { warmUpReaders } from "../../brain/index.js";
-import { confirmChapterCommit } from "../../editorial/commit-flow.js";
+import { confirmChapterCommit, draftFingerprint } from "../../editorial/commit-flow.js";
 import { readCharacterIds, markdownTitle, syncLegacyMirror } from "../../legacy-mirror/sync.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
@@ -206,7 +206,7 @@ export async function buildConfirmationRequest(projectDir: string, chapter: numb
   const ticketId = latestTicketFor(projectDir, chapter);
   const ticket = ticketId ? await ticketStoreFor(projectDir).get(ticketId) : undefined;
   if (!ticketId || !ticket) return refusal(chapter, `第 ${chapter} 章还没做定稿预览，按规则不能直接定稿；请先预览。`, "no_preview");
-  if (ticket.textSha256 !== sha256(text)) {
+  if (ticket.textSha256 !== draftFingerprint(text)) {
     return refusal(chapter, "工作稿在预览之后又改过，请重新预览一次。", "draft_changed_since_preview");
   }
   return {

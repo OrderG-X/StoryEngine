@@ -131,6 +131,14 @@ describe("定稿编排", () => {
     }
   });
 
+  it("稿纸重新载入只收掉了多余空行（字没动）：照样能确认，定稿的是现在这份", async () => {
+    const tickets = memoryTicketStore();
+    const loose = CH1.replace(/\n\n/gu, "\n\n\n\n").concat("  \n");
+    const preview = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: loose, callModel: fakeModel(LEDGER1), tickets }));
+    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH1, tickets })).toMatchObject({ ok: true, version: 1 });
+    expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe(CH1);
+  });
+
   it("预览票存目录：进程重启（换一个 store 实例）也能确认；乱写的票号不读盘", async () => {
     const dir = join(book, ".cache", "tickets");
     const preview = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets: fileTicketStore(dir) }));
