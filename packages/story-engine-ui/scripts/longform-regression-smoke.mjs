@@ -2,7 +2,6 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPostChapterChangePlan,
   buildStateOverview,
   createStoryProject,
   toSafeCharacterId,
@@ -53,10 +52,6 @@ for (let index = 0; index < directions.length; index += 1) {
     || await readFile(join(projectDir, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), "utf-8");
   const quality = await post("/api/draft/quality", { projectPath: projectDir, chapter });
   const preview = await post("/api/commit/preview", { projectPath: projectDir, chapter });
-  const changePlan = buildPostChapterChangePlan({
-    draftBody: stripMarkdown(draftContent),
-    knownAssetIds: ["asset-phone", "asset-bus-card", "asset-laptop", "asset-half-form"],
-  });
   let apply = null;
   let applyError = null;
   try {
@@ -78,7 +73,6 @@ for (let index = 0; index < directions.length; index += 1) {
     regression: classifyRegressionSignals(driftScan, commitPreview, registeredContext),
     quality: summarizeQuality(quality.quality),
     commitPreview,
-    changePlan: summarizeChangePlan(changePlan),
     apply: apply ? summarizeApply(apply) : null,
     applyError,
     overview: summarizeOverview(overview),
@@ -425,16 +419,6 @@ function summarizeOverview(overview) {
     arcGoals: overview.arcGoals,
     risks: overview.risks,
     foundationCompleteness: overview.foundationCompleteness,
-  };
-}
-
-function summarizeChangePlan(plan) {
-  return {
-    characterChanges: plan.characterChanges,
-    locationChanges: plan.locationChanges,
-    assetChanges: plan.assetChanges,
-    knowledgeChanges: plan.knowledgeChanges,
-    relationshipChanges: plan.relationshipChanges,
   };
 }
 
