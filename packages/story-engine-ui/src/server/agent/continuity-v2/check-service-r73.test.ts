@@ -2,6 +2,7 @@
 // R7.3 用十章复现书（scripts/eval/books/ten-run-qingshi 的临时副本、id 改掉，不动原书）过一遍产品路（checkChapterBody）：
 // 1. 报告 3.3 的「后天 vs 明天」误报：第 1 章（第 1 天）「后天上午」对第 2 章（第 2 天）「明天上午」是同一天 → 不报；
 // 2. 人物卡写「三年前过世」、第 3 章写「五年」→ 核第 6 章（写的三年，和人物卡一致）时报「第 3 章和人物卡不一致」，按钮指向第 3 章。
+import { existsSync } from "node:fs";
 import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,8 @@ import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { checkChapterBody } from "./check-service.js";
 
 const REPRO_BOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "scripts", "eval", "books", "ten-run-qingshi");
+// 复现书在 scripts/ 下（不进 git）：新克隆、另开的工作区、CI 上都没有，这两组就标跳过（输出里看得见），不报假红。
+const describeWithBook = describe.skipIf(!existsSync(REPRO_BOOK));
 
 /** 复现书副本：先复制再改 id，绝不碰原书目录。 */
 async function copyReproBook(tag: string): Promise<string> {
@@ -40,7 +43,7 @@ function readerModel(contradictions: readonly Record<string, unknown>[]) {
   return { callModel };
 }
 
-describe("R7.3 复现书：相对时间按故事日换算（报告 3.3）", () => {
+describeWithBook("R7.3 复现书：相对时间按故事日换算（报告 3.3）", () => {
   it("第 1 章「后天上午陆川会来」对第 2 章「明天上午陆川来」是同一天（第 3 天）→ 不报；同遍报的真矛盾照报", async () => {
     const dir = await copyReproBook("relative");
     const body = await chapterBody(dir, 2);
@@ -85,7 +88,7 @@ describe("R7.3 复现书：相对时间按故事日换算（报告 3.3）", () =
   });
 });
 
-describe("R7.3 复现书：设定本进核账（报告 3.3）", () => {
+describeWithBook("R7.3 复现书：设定本进核账（报告 3.3）", () => {
   it("人物卡写「三年前过世」、第 3 章被改成「五年」→ 核第 6 章（三年，和人物卡一致）报第 3 章和人物卡不一致，按钮指向第 3 章", async () => {
     const dir = await copyReproBook("setting");
     // 把报告里作者后来改掉的那处埋错放回去：第 3 章「三年」→「五年」。
