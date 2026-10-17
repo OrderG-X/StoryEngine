@@ -22,7 +22,7 @@ import {
 
 import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
 import { syncLegacyMirror } from "../legacy-mirror/sync.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
@@ -212,6 +212,8 @@ export interface LedgerApplyOutcome {
   /** 记上了几条。 */
   readonly applied: number;
   readonly summary: string;
+  /** 改前存的撤销点：这次真改了账才有（界面凭它把这一步登记成可撤销的一步，「撤销上一步」只撤这一步）。 */
+  readonly snapshotId?: string;
 }
 
 /** 作者点了「确认改账」：存一个撤销点，逐条记裁定（幂等：点两次只记一次），再重生成老格式镜像。 */
@@ -223,29 +225,40 @@ export async function applyLedgerDecisions(projectDir: string, input: { readonly
     decisions.push(parsed.data);
   }
   if (decisions.length === 0) return { ok: false, applied: 0, summary: "没改账：按钮里没有要改的内容。" };
+  const label = `agent:manage_ledger${input.label ? `:${input.label.slice(0, 40)}` : ""}`;
+  let run: { readonly snapshot: { readonly id: string }; readonly result: { applied: number; replayed: number; failures: string[]; mirrorOk: boolean } };
   try {
-    await createSnapshot(projectDir, `agent:manage_ledger${input.label ? `:${input.label.slice(0, 40)}` : ""}`);
+    // 存撤销点和记裁定在同一把项目锁里：撤销不会插进改账中间。
+    run = await runWithSnapshot(projectDir, label, async () => {
+      let applied = 0;
+      let replayed = 0;
+      const failures: string[] = [];
+      for (const [index, decision] of decisions.entries()) {
+        const outcome = await runCommand(projectDir, decisionRecord, decision, { caller: "author", idempotencyKey: `${input.key}:${index}` });
+        if (outcome.ok) {
+          if (outcome.replayed) replayed += 1;
+          else applied += 1;
+        } else {
+          failures.push(outcome.message);
+        }
+      }
+      const mirror = await syncLegacyMirror(projectDir);
+      if (!mirror.ok) console.warn(`[manage_ledger] 改账后重生成老格式镜像没成：${mirror.reason}`);
+      return { applied, replayed, failures, mirrorOk: mirror.ok };
+    });
   } catch (error) {
     return { ok: false, applied: 0, summary: `没改账：没能先存撤销点（${error instanceof Error ? error.message : String(error)}），这次一条都没记。` };
   }
-  let applied = 0;
-  let replayed = 0;
-  const failures: string[] = [];
-  for (const [index, decision] of decisions.entries()) {
-    const outcome = await runCommand(projectDir, decisionRecord, decision, { caller: "author", idempotencyKey: `${input.key}:${index}` });
-    if (outcome.ok) {
-      if (outcome.replayed) replayed += 1;
-      else applied += 1;
-    } else {
-      failures.push(outcome.message);
-    }
-  }
-  const mirror = await syncLegacyMirror(projectDir);
-  if (!mirror.ok) console.warn(`[manage_ledger] 改账后重生成老格式镜像没成：${mirror.reason}`);
+  const { applied, replayed, failures, mirrorOk } = run.result;
   const parts = [
     applied > 0 ? `账改好了（${applied} 条），改前已存档，可撤销。` : replayed > 0 ? "这次改账刚才已经记过了，没有重复记。" : "没改账。",
     ...(failures.length > 0 ? [`有 ${failures.length} 条没记上：${failures.slice(0, 3).join("；")}`] : []),
-    ...(mirror.ok ? [] : ["（老格式资料没同步上，下次打开书会补；裁定本身已经记好。）"]),
+    ...(mirrorOk ? [] : ["（老格式资料没同步上，下次打开书会补；裁定本身已经记好。）"]),
   ];
-  return { ok: failures.length === 0 && applied + replayed > 0, applied, summary: parts.join(" ") };
+  return {
+    ok: failures.length === 0 && applied + replayed > 0,
+    applied,
+    summary: parts.join(" "),
+    ...(applied > 0 ? { snapshotId: run.snapshot.id } : {}),
+  };
 }

@@ -161,7 +161,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   enrich_foundation: { stepLabel: "补全资料", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
   // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
-  manage_ledger: { stepLabel: "记账", card: null },
+  manage_ledger: { stepLabel: "改账", card: null },
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "生成章节方向", card: null },

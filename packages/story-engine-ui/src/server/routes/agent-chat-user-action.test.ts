@@ -11,6 +11,7 @@ import { projectBook } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { restoreSnapshot } from "../lib/snapshot.js";
 
 const storyAgentMocks = vi.hoisted(() => ({ getStoryAgent: vi.fn() }));
 vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent }));
@@ -125,21 +126,32 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     expect((await projectBook(projectDir)).facts.every((fact) => fact.status !== "retracted")).toBe(true);
 
     const action = { toolName: "ledger_decision", ...proposal.ledgerConfirm };
+    const snapshotIds: unknown[] = [];
     for (let click = 0; click < 2; click += 1) {
       const { handlerPromise, res } = callAgentChatRoute({ projectPath: projectDir, messages: [{ role: "user", content: "确认改账" }], action });
       await handlerPromise;
       const events = parseSse(res.written.join(""));
       const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "manage_ledger");
       expect(result?.data.output).toMatchObject({ ok: true, refreshScope: "full" });
+      snapshotIds.push((result?.data.output as { snapshotId?: unknown } | undefined)?.snapshotId);
       const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
       expect(text).toContain(click === 0 ? "账改好了" : "已经记过了");
     }
+    // 真改了账才带撤销点（界面凭它登记成一步）；第二次点没改任何东西，不带。
+    expect(typeof snapshotIds[0]).toBe("string");
+    expect(snapshotIds[1]).toBeUndefined();
     const view = await projectBook(projectDir);
     expect(view.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("retracted");
     const legacy = JSON.parse(await readFile(join(projectDir, "story", "fact-ledger.json"), "utf-8")) as { facts: { text: string }[] };
     expect(legacy.facts.map((fact) => fact.text)).toEqual(["账册在林远手里"]);
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
+
+    // 按这次改账的撤销点撤销：只退改账，第 1 章定稿还在（10-18 走查：曾把前一回合的定稿一起撤了）。
+    await restoreSnapshot(projectDir, snapshotIds[0] as string);
+    const undone = await projectBook(projectDir);
+    expect(undone.chapters.map((chapter) => chapter.chapter)).toEqual([1]);
+    expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
   });
 
   it("非法动作（白名单外工具）→ 400，不当普通对话处理", async () => {

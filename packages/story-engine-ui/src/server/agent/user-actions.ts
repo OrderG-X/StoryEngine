@@ -552,7 +552,8 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
   args.sendEvent("tool-result", {
     toolCallId,
     toolName: "manage_ledger",
-    output: { ok: outcome.ok, op: "confirm", summary: outcome.summary, refreshScope: "full" },
+    // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改账。
+    output: { ok: outcome.ok, op: "confirm", summary: outcome.summary, refreshScope: "full", ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}) },
   });
   emitText(outcome.summary);
 }
