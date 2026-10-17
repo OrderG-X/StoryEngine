@@ -405,8 +405,10 @@ async function planByEditorialRoom(input: {
   }
   // R7.5 作者方向和前文既成事实对不上（authorWilled）：不自动改——改了等于替作者改主意，回执问以哪个为准。
   // 只有章纲员自己拟错的（非 authorWilled）才交回改一轮；全是作者方向时连改纲那一步都省了。
-  const asked = checked.problems.filter((problem) => problem.authorWilled);
-  const autoFix = checked.problems.filter((problem) => !problem.authorWilled);
+  // 作者这章没给方向（比如点「写下一章」）时，要点不可能「来自作者方向」：模型标的 authorWilled 不作数，全交章纲员改。
+  const hasDirection = direction.trim().length > 0;
+  const asked = hasDirection ? checked.problems.filter((problem) => problem.authorWilled) : [];
+  const autoFix = hasDirection ? checked.problems.filter((problem) => !problem.authorWilled) : checked.problems;
   const short = (text: string) => (text.length > 30 ? `${text.slice(0, 30)}…` : text);
   const askSentence = asked.length > 0
     ? `第 ${asked[0]!.point} 条要点「${short(asked[0]!.beat ?? planned.plan.beats[asked[0]!.point - 1] ?? "")}」和第 ${asked[0]!.earlierChapter} 章「${short(asked[0]!.earlierQuote)}」对不上——以哪个为准？这次先照你的方向出稿；要按前文的话说一声，我改这条要点。`
