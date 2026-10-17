@@ -105,6 +105,8 @@ export interface CommitItem {
 }
 
 export interface NotRecorded {
+  /** quote_not_in_text / unknown_thread / unknown_fact / shape / duplicate（核对没过），parse（记账员交的格式不对），adjusted（改过）。 */
+  readonly code: string;
   readonly label: string;
   readonly reason: string;
 }
@@ -308,10 +310,10 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     review: plan.review.map(toItem),
     auto: plan.auto.map(toItem),
     notRecorded: [
-      ...checked.rejected.map((item) => ({ label: entryLabel(item.entry, before), reason: item.message })),
-      ...keeper.parsed.drops.map((drop) => ({ label: dropLabel(drop), reason: drop.reason })),
+      ...checked.rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
+      ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),
     ],
-    adjusted: keeper.parsed.adjusted.map((drop) => ({ label: dropLabel(drop), reason: drop.reason })),
+    adjusted: keeper.parsed.adjusted.map((drop) => ({ code: "adjusted", label: dropLabel(drop), reason: drop.reason })),
     time: {
       day: day?.day ?? 1,
       dayEnd: day?.dayEnd ?? 1,

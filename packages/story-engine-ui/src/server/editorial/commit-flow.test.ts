@@ -93,7 +93,7 @@ describe("定稿编排", () => {
     const closing = preview.review.find((item) => item.kind === "thread");
     expect(closing?.label).toBe("收口「钟为什么停」：钟是被人故意拨停的");
     expect(preview.review.find((item) => item.kind === "presence")?.label).toBe("出场：外乡人");
-    expect(preview.notRecorded).toEqual([{ label: "事实（发生过的事）：外乡人闯进了钟楼", reason: "「外乡人闯进了钟楼」没记上：附的原句在正文里找不到" }]);
+    expect(preview.notRecorded).toEqual([{ code: "quote_not_in_text", label: "事实（发生过的事）：外乡人闯进了钟楼", reason: "「外乡人闯进了钟楼」没记上：附的原句在正文里找不到" }]);
     expect(preview.time).toMatchObject({ day: 2, basis: "text" });
 
     const stranger = preview.review.find((item) => item.label === "出场：外乡人");
