@@ -226,7 +226,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(assistant.content).toBe("当前写到第 2 章。");
   });
 
-  it("明确执行请求但 agent 没有调用对应工具时，用确定性文案盖掉空口回复", async () => {
+  it("重构 P4：AI 没调工具却说「整理好了」也原样显示（不改写；真相看步骤卡——这里一张卡都没有）", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
       handlers.onTextDelta("已经帮你整理好了。");
@@ -240,10 +240,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
 
     const assistant = lastAssistant()!;
     expect(assistant.toolSteps ?? []).toHaveLength(0);
-    expect(assistant.content).toContain("资料写入没有执行");
-    expect(assistant.content).toContain("没有检测到写入资料操作");
-    expect(assistant.content).not.toContain("foundation_write");
-    expect(assistant.content).not.toContain("已经帮你整理好了");
+    expect(assistant.content).toBe("已经帮你整理好了。");
   });
 
   it("onToolResult refreshScope=full calls applyOverviewToWorkspace", async () => {
@@ -772,15 +769,13 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
 
-  // 复审 P3：useChat finally 里的诚实收尾接线（回合终点 honestyRewritePatch(finished.content,
-  // finished.toolSteps) → updateMessage 盖掉假成功）此前零直测。链路：onToolResult(output:info)
-  // → toolStep 带 dryRun → finally 探针判「无写背书」→ 正文被确定性失败文案盖掉。
-  it("finally 诚实收尾：dry-run 预览态 prune 不背书「已保存」声称 → 盖掉假成功正文", async () => {
+  // 重构 P4：回合收尾不再改写 AI 的回复。AI 说什么就显示什么，真相看工具步骤卡。
+  it("回合收尾不改写回复：只读预览也照原文显示，步骤卡如实标完成", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     scriptAgentStream((handlers) => {
       handlers.onToolCall({ toolName: "prune_snapshots", toolCallId: "p1" });
-      handlers.onToolResult({ toolName: "prune_snapshots", toolCallId: "p1", ok: true, dryRun: true, summary: "预览：可裁剪 3 个旧快照。" });
-      handlers.onTextDelta("旧快照已裁剪，备份已保存。");
+      handlers.onToolResult({ toolName: "prune_snapshots", toolCallId: "p1", ok: true, summary: "预览：可裁剪 3 个旧快照。" });
+      handlers.onTextDelta("可以裁掉 3 个旧快照，要裁的话点下面的按钮。");
       handlers.onDone();
     });
     const { result } = renderHook(() => useChat(buildParams({})));
@@ -790,28 +785,8 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     });
 
     const assistant = lastAssistant()!;
-    expect(assistant.toolSteps![0]).toMatchObject({ status: "completed", dryRun: true });
-    expect(assistant.content).toContain("没有检测到对应写入工具成功执行");
-    expect(assistant.content).not.toContain("备份已保存");
-  });
-
-  it("finally 诚实收尾：prune 真裁（dryRun:false）背书同一句声称 → 不盖正文", async () => {
-    window.localStorage.setItem("chatBrain", "agent");
-    scriptAgentStream((handlers) => {
-      handlers.onToolCall({ toolName: "prune_snapshots", toolCallId: "p1" });
-      handlers.onToolResult({ toolName: "prune_snapshots", toolCallId: "p1", ok: true, dryRun: false, summary: "已裁剪 3 个旧快照。" });
-      handlers.onTextDelta("旧快照已裁剪，备份已保存。");
-      handlers.onDone();
-    });
-    const { result } = renderHook(() => useChat(buildParams({})));
-
-    await act(async () => {
-      await result.current.handleSendMessage("确认裁剪旧快照");
-    });
-
-    const assistant = lastAssistant()!;
-    expect(assistant.toolSteps![0]).toMatchObject({ status: "completed", dryRun: false });
-    expect(assistant.content).toContain("备份已保存");
+    expect(assistant.toolSteps![0]).toMatchObject({ status: "completed" });
+    expect(assistant.content).toBe("可以裁掉 3 个旧快照，要裁的话点下面的按钮。");
   });
 
   /* ---- A-5 「停止」收尾：abort 统一走回合收尾 ---- */

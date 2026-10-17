@@ -21,7 +21,11 @@
  */
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import { isVerdictToolName } from "../shared/honesty-detection.js";
+/** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
+const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
+function isVerdictToolName(toolName: string | undefined): boolean {
+  return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
+}
 import { commitConfirmAction, ledgerConfirmAction, pruneConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
@@ -52,13 +56,6 @@ export interface AgentToolResultOutput {
    * 但校验失败意味着工具根本没跑、没有裁决），且 summary 里带给人话原因，步骤卡点开不再空白。
    */
   readonly toolValidationFailure?: boolean;
-  /** 诚实背书粒度（agentChatClient 透传；与服务端 honesty-detection stepBacksWriteClaim 认的字段名对齐）：
-   *  prune_snapshots 的 dryRun（true=预览没落盘不背书）/ manage_style_exemplars 的 action
-   *  （list 只读不背书；写背书只认 add/update/remove）。累加进 toolStep 供回合收尾的诚实探针判定。 */
-  readonly dryRun?: boolean;
-  readonly action?: string;
-  /** 合并入口（manage_snapshots / manage_ledger）的 op：随步骤累加，供回合收尾的诚实探针按 op 判写背书。 */
-  readonly op?: string;
   readonly summary?: string;
   readonly issues?: readonly string[];
   readonly overview?: unknown;
@@ -260,8 +257,6 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       //   ok:false 是「裁决未过」（工具没崩、给了真实否定答案）→「裁决未过」落定形态，不红不绿；
       //   其余工具（写类/出稿）的 ok:false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
-      // - dryRun/action（prune 只读预览 / exemplars 只读 list）随步骤累加进 toolStep，
-      //   供回合收尾的诚实探针（honesty-detection stepBacksWriteClaim）按粒度判写背书。
       const status = event.output?.toolValidationFailure === true
         ? "failed"
         : event.output?.needsConfirmation === true
@@ -433,13 +428,6 @@ function settleTool(
         status,
         endedAt,
         ...(detail ? { detail } : {}),
-        // 诚实背书粒度累加进 step（对齐服务端 honesty-detection 认的字段名）：dryRun（prune 预览
-        // 不背书）/ action（exemplars 的 list 不背书）/ op（manage_snapshots 只认 op=prune 的真裁）；
-        // 没有这几字段的工具自然缺省、维持旧口径。
-        // 缺了这层累加，exemplars add 真成功也会被回合收尾的诚实探针误判成「操作未完成」（复审 P2③）。
-        ...(typeof output?.dryRun === "boolean" ? { dryRun: output.dryRun } : {}),
-        ...(typeof output?.action === "string" ? { action: output.action } : {}),
-        ...(typeof output?.op === "string" ? { op: output.op } : {}),
       }
       : step,
   );

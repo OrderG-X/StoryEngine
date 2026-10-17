@@ -32,7 +32,7 @@ const TOOLS: Record<EnrichKind, { readonly execute?: unknown }> = {
   aliases: generateAliasTableTool,
 };
 
-/** 原工具名（界面步骤名、撤销标签、诚实检测都认它）。 */
+/** 原工具名（界面步骤名、撤销标签都认它）。 */
 export const ENRICH_TOOL_NAMES: Record<EnrichKind, string> = {
   world: "generate_worldbuilding",
   characters: "generate_character_enrichment",

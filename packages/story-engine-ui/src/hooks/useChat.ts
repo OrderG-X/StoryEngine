@@ -15,7 +15,6 @@ import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
-import { honestyRewritePatch } from "./detectUnbackedCompletion.js";
 import { matchDeterministicChapterAction, userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
@@ -758,7 +757,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             if (projectPath) {
               const chapter = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
               await drainAutosave();
-              // 服从重试轮可能已开新一轮出稿（ok:false 会触发 r8 自动重做）：新一轮正在流式时
+              // 同一回合里 AI 可能看到 ok:false 后已重调出稿：新一轮正在流式时
               // 不覆盖它，交由新一轮自己的生命周期收尾。
               if (useWorkspaceStore.getState().workspace.flowStatus !== "draft_generating") {
                 const snap = await fetchChapterSnapshotWithTimeout(chapter);
@@ -1091,24 +1090,6 @@ export function useChat(params: UseChatParams): UseChatResult {
             ...current,
             turnEndedAt: Date.now(),
           }));
-        }
-        // A1 谎报探针：回合「看似成功」（无 error）却声称已生成/已写入/已入库、且零写类工具成功 → 用确定性失败文案盖掉假成功。
-        // 错误回合已有 error 气泡 + R2 对账，不在此重复。被「停止」腰斩的回合也不盖——流是被掐断的，
-        // 半截文本不等于「声称完成」，「已停止」步骤结算 + 字幕已如实表达，再叠「没有执行」是双重谎报。
-        if (!wasAborted && !sawError && ownsCurrentWorkspace()) {
-          const finished = useWorkspaceStore.getState().workspace.messages.find((m) => m.id === assistantMsgId);
-          if (finished) {
-            // 诚实收尾：盖掉假成功正文的同时，清掉同条消息上 agent 顺手挂的诱导卡（「直接入库」/「质检通过」），
-            // 否则「质检/入库没有执行」正文与「可入库」卡并存、自相矛盾（修 Bug3）。
-            const patch = honestyRewritePatch({
-              content: finished.content,
-              toolSteps: finished.toolSteps,
-              userText: text,
-            });
-            if (patch) {
-              updateMessage(assistantMsgId, (current) => ({ ...current, ...patch }));
-            }
-          }
         }
         // 回合收尾的重载裁定（在释放 token 之前判定）：
         //   ① agent 撤销接管已完成（autosave 仍冻结）且用户没切书/切章 → 回合最末整页重载；
