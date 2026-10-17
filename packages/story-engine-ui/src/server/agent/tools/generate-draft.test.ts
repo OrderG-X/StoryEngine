@@ -28,7 +28,8 @@ import {
   buildCandidateSummaryLine,
   buildDraftLengthInfo,
   buildDraftLengthWarning,
-  buildNoWriteIntentBlockedOutput,
+  buildGoalNotQuotedOutput,
+  buildRewriteAwaitingAuthorOutput,
   buildSequencingBlockedOutput,
   DRAFT_CANDIDATE_SCORE_WEIGHTS,
   DRAFT_CANDIDATE_TEMPERATURE_OFFSETS,
@@ -553,98 +554,115 @@ describe("advancePastCommittedFrontier（已入库前沿→推进下一章，治
   });
 });
 
-describe("写作意图门（防入库后自主续写）", () => {
+describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句，替代按原话猜意图）", () => {
   type ToolExec = (input: Record<string, unknown>, context: ToolExecutionContext) => Promise<unknown>;
   const execute = generateDraftTool.execute as unknown as ToolExec;
 
-  it("buildNoWriteIntentBlockedOutput：ok:false + 结构化 reason + 面向用户的 summary（不泄工具名）", () => {
-    const out = buildNoWriteIntentBlockedOutput(6, {} as StateOverview);
+  it("buildRewriteAwaitingAuthorOutput：ok:false + 待确认 + 按钮参数 + 面向作者的 summary（不泄工具名）", () => {
+    const out = buildRewriteAwaitingAuthorOutput(6, false, {} as StateOverview, "让林溪回来");
     expect(out.ok).toBe(false);
-    expect(out.blockedReason).toBe("no_write_intent_this_turn");
-    expect(out.refreshScope).toBe("full");
-    expect(out.summary).toContain("第 6 章");
+    expect(out.needsConfirmation).toBe(true);
+    expect(out.blockedReason).toBe("chapter_has_text");
+    expect(out.rewriteConfirm).toEqual({ chapter: 6, chapterGoal: "让林溪回来" });
+    expect(out.summary).toContain("重写这一章");
     expect(out.summary).not.toMatch(/generate_draft|commit_apply|commit_preview/u);
+    expect(buildRewriteAwaitingAuthorOutput(6, true, {} as StateOverview).summary).toContain("已经定稿");
   });
 
-  it("本轮原话只有定稿意图（入库后模型擅自续写的场景）→ 拦在调模型之前，不写盘、不烧额度", async () => {
-    const projectDir = await makeProject("意图门拦截");
+  it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
+    const out = buildGoalNotQuotedOutput(3, ["并埋下伏笔"], {} as StateOverview);
+    expect(out.ok).toBe(false);
+    expect(out.blockedReason).toBe("chapter_goal_not_author_words");
+    expect(out.summary).toContain("并埋下伏笔");
+    expect(out.summary).not.toMatch(/chapterGoal|generate_draft/u);
+  });
+
+  it("空章：不再看作者原话有没有「写」——只说了「确认定稿」也照写（先存档，可撤销）", async () => {
+    const projectDir = await makeProject("空章照写", "林远");
     const llmClientModule = await import("../../lib/llm-client.js");
     const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "确认定稿"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["确认定稿"]),
       } as unknown as ToolExecutionContext;
 
-      const out = await execute({}, context) as { ok: boolean; blockedReason?: string; summary: string };
+      const out = await execute({}, context) as { ok: boolean; chapter: number; snapshotId?: string };
+      expect(out.ok).toBe(true);
+      expect(out.chapter).toBe(1);
+      expect(typeof out.snapshotId).toBe("string");
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("这一章已有工作稿：AI 不覆盖，回「重写这一章」按钮，不调模型、原稿不动", async () => {
+    const projectDir = await makeProject("有稿不覆盖", "林远");
+    const draftPath = defaultDraftPath(projectDir, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, "# 第一章\n\n作者自己写的原稿。", "utf-8");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["把第1章重写一遍"]),
+      } as unknown as ToolExecutionContext;
+
+      const out = await execute({}, context) as { ok: boolean; blockedReason?: string; needsConfirmation?: boolean; rewriteConfirm?: unknown };
       expect(out.ok).toBe(false);
-      expect(out.blockedReason).toBe("no_write_intent_this_turn");
+      expect(out.blockedReason).toBe("chapter_has_text");
+      expect(out.needsConfirmation).toBe(true);
+      expect(out.rewriteConfirm).toEqual({ chapter: 1 });
       expect(spy).not.toHaveBeenCalled();
-      await expect(readFile(defaultDraftPath(projectDir, 1), "utf-8")).rejects.toThrow();
+      expect(await readFile(draftPath, "utf-8")).toContain("作者自己写的原稿");
     } finally {
       spy.mockRestore();
     }
   });
 
-  it("本轮原话带写作意图（含尾部范围限定否定的马拉松原话）→ 放行照常出稿", async () => {
-    const projectDir = await makeProject("意图门放行", "林远");
+  it("作者点了「重写这一章」（确认标记在场）→ 有稿也重写", async () => {
+    const projectDir = await makeProject("按钮重写", "林远");
+    const draftPath = defaultDraftPath(projectDir, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, "# 第一章\n\n旧稿。", "utf-8");
     const llmClientModule = await import("../../lib/llm-client.js");
     const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
 
     try {
-      const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "继续写第1章正文。只写这一章，不要写其他章。"),
-      } as unknown as ToolExecutionContext;
-
-      const out = await execute({}, context) as { ok: boolean; chapter: number };
-      expect(out.ok).toBe(true);
-      expect(out.chapter).toBe(1);
-      expect(spy).toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  // R7.1（十章试写报告 3.1）：角色台词里的「别想再动它」曾被否定词否决误拦，第 9 章两次没写成。
-  it("R7.1 台词里的否定说法不再否决（报告原句改第1章）→ 放行照常出稿", async () => {
-    const projectDir = await makeProject("意图门台词放行", "林远");
-    const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
-
-    try {
-      const context = {
-        requestContext: buildProjectRequestContext(
-          projectDir,
-          1,
-          undefined,
-          "写第1章：第二天爷爷用铁丝缠死了摆锤，说：『钟停在这儿，谁也别想再动它。』",
-        ),
-      } as unknown as ToolExecutionContext;
-
-      const out = await execute({}, context) as { ok: boolean; chapter: number };
-      expect(out.ok).toBe(true);
-      expect(out.chapter).toBe(1);
-      expect(spy).toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  // R7.1 结构化意图标记优先：按钮/选项点出来的出稿（body.action 直达，runGenerateDraftAction 打标记）
-  // 即使回显文案一个写作说法都没有，也放行——按钮点击本身就是写作授权。
-  it("R7.1 用户确认标记优先于文本门：标记在场 → 原话无写作说法也放行出稿", async () => {
-    const projectDir = await makeProject("意图门标记放行", "林远");
-    const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
-
-    try {
-      const requestContext = buildProjectRequestContext(projectDir, 1, undefined, "来一版第1章");
+      const requestContext = buildProjectRequestContext(projectDir, 1);
       markUserConfirmedTool(requestContext, "generate_draft");
-      const context = { requestContext } as unknown as ToolExecutionContext;
-
-      const out = await execute({}, context) as { ok: boolean; chapter: number };
+      const out = await execute({}, { requestContext } as unknown as ToolExecutionContext) as { ok: boolean; snapshotId?: string };
       expect(out.ok).toBe(true);
-      expect(out.chapter).toBe(1);
+      expect(typeof out.snapshotId).toBe("string");
+      expect(spy).toHaveBeenCalled();
+      expect(await readFile(draftPath, "utf-8")).not.toContain("旧稿。");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("chapterGoal 不是作者原话 → 退回（不调模型）；逐句出自作者的话（含台词）→ 照写", async () => {
+    const projectDir = await makeProject("方向找原句", "林远");
+    const llmClientModule = await import("../../lib/llm-client.js");
+    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    const authorWords = ["写第1章：第二天爷爷用铁丝缠死了摆锤，说：『钟停在这儿，谁也别想再动它。』"];
+
+    try {
+      const paraphrased = await execute(
+        { chapterGoal: "爷爷固定摆锤并禁止他人触碰" },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, authorWords) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; blockedReason?: string };
+      expect(paraphrased.ok).toBe(false);
+      expect(paraphrased.blockedReason).toBe("chapter_goal_not_author_words");
+      expect(spy).not.toHaveBeenCalled();
+
+      const quoted = await execute(
+        { chapterGoal: "第二天爷爷用铁丝缠死了摆锤，说：『钟停在这儿，谁也别想再动它。』" },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, authorWords) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean };
+      expect(quoted.ok).toBe(true);
       expect(spy).toHaveBeenCalled();
     } finally {
       spy.mockRestore();
@@ -1008,7 +1026,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean; autoDeAi?: { attempted: boolean; fixedCount: number; remainingHighMedium: number };
@@ -1036,7 +1054,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean; autoDeAi?: { attempted: boolean }; summary: string;
@@ -1621,7 +1639,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文，多写几版挑一挑。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文，多写几版挑一挑。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean; summary: string; candidatesReport?: readonly { index: number; chosen: boolean }[];
@@ -1676,7 +1694,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
 
     try {
       const context = {
-        requestContext: buildProjectRequestContext(projectDir, 1, undefined, "写第1章正文，多写几版挑一挑。"),
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["写第1章正文，多写几版挑一挑。"]),
       } as unknown as ToolExecutionContext;
       const execute = generateDraftTool.execute as unknown as (input: Record<string, unknown>, ctx: ToolExecutionContext) => Promise<{
         ok: boolean; summary: string; candidatesReport?: readonly { index: number; chosen: boolean; temperature?: number }[];

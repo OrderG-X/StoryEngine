@@ -21,10 +21,10 @@ export const REQUEST_CONTEXT_CURRENT_CHAPTER_KEY = "currentChapter";
  */
 export const REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY = "draftDeltaSink";
 /**
- * 本轮用户原话。写盘工具用它做确定性「本轮意图门」：模型想调写盘工具时，
- * 必须能在用户最新一轮里找到对应写入意图；缺失则向后兼容放行。
+ * 作者在这段对话窗口里说过的话（user 消息原文，旧→新）。重构 P4 起只用来「找原句」：
+ * 模型转述作者的话（如出稿的 chapterGoal）时，核对它确实出自作者之口。不用来猜意图。
  */
-export const REQUEST_CONTEXT_USER_TURN_TEXT_KEY = "userTurnText";
+export const REQUEST_CONTEXT_AUTHOR_WORDS_KEY = "authorWords";
 
 /**
  * 用户显式确认的工具（结构化动作，2026-10-07 拆补丁塔）：用户在界面上点了「确认定稿」这类按钮，
@@ -85,13 +85,14 @@ export function buildProjectRequestContext(
   projectDir: string,
   currentChapter?: number,
   draftDeltaSink?: DraftDeltaSink,
-  userTurnText?: string,
+  authorWords?: readonly string[],
   lastTurnUndoHint?: LastTurnUndoHint,
 ): RequestContext {
   const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir]];
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
   if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
-  if (typeof userTurnText === "string" && userTurnText.trim()) entries.push([REQUEST_CONTEXT_USER_TURN_TEXT_KEY, userTurnText]);
+  const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
+  if (words.length > 0) entries.push([REQUEST_CONTEXT_AUTHOR_WORDS_KEY, words]);
   if (lastTurnUndoHint) entries.push([REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY, lastTurnUndoHint]);
   return new RequestContext(entries);
 }
@@ -114,10 +115,12 @@ export function readDraftDeltaSinkFromContext(context: ToolExecutionContext | un
   return typeof raw === "function" ? (raw as DraftDeltaSink) : undefined;
 }
 
-/** 工具层：读出本轮用户原话（缺失/空白返回 undefined）。 */
-export function readUserTurnTextFromContext(context: ToolExecutionContext | undefined): string | undefined {
-  const raw = context?.requestContext?.get(REQUEST_CONTEXT_USER_TURN_TEXT_KEY);
-  return typeof raw === "string" && raw.trim() ? raw : undefined;
+/** 工具层：读出作者在这段对话里说过的话（缺失返回 undefined——不是对话通道调的，如按钮直达）。 */
+export function readAuthorWordsFromContext(context: ToolExecutionContext | undefined): readonly string[] | undefined {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_AUTHOR_WORDS_KEY);
+  if (!Array.isArray(raw)) return undefined;
+  const words = raw.filter((text): text is string => typeof text === "string" && text.trim().length > 0);
+  return words.length > 0 ? words : undefined;
 }
 
 /** 工具层：读出「上一个有写盘回合的首个快照」锚点（缺失/形状不对返回 undefined，undo 走默认逐步回退）。 */

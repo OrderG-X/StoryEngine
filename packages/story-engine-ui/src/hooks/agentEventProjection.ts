@@ -26,7 +26,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, ledgerConfirmAction, pruneConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -90,6 +90,10 @@ export interface AgentToolResultOutput {
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
   readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  /** generate_draft 专属：有稿的章 AI 不覆盖，挂「重写这一章」按钮。 */
+  readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string };
+  /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
+  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 }
 
 export type AgentProjectionEvent =
@@ -306,6 +310,22 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 改账草案：模型只提议，挂「确认改账」按钮（建议条渲染），作者点了才由服务端记成作者裁定。
       if (event.toolName === "manage_ledger" && event.output?.ledgerConfirmAction) {
         const button = ledgerConfirmAction(event.output.ledgerConfirmAction);
+        return {
+          ...withEffects,
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+        };
+      }
+      // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）。
+      if (event.toolName === "generate_draft" && event.output?.rewriteConfirmAction) {
+        const button = rewriteConfirmAction(event.output.rewriteConfirmAction);
+        return {
+          ...withEffects,
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+        };
+      }
+      // 删角色 / 覆盖已确立设定：挂「确认改设定」按钮（作者档，点了才由服务端执行）。
+      if (event.toolName === "foundation_write" && event.output?.foundationConfirmAction) {
+        const button = foundationConfirmAction(event.output.foundationConfirmAction);
         return {
           ...withEffects,
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],

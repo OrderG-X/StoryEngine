@@ -29,8 +29,8 @@
 //     passed:false / 全候选失败 / 优胜稿落盘失败）时，HTTP 路从「200 ok:true + 空 draftContent 假成功」
 //     收敛为 422 + ok:false + canonical summary（与工具路 ok:false 同向、与 D18 同先例）——SWE P1-3，
 //     下方用例锁定。
-//   - 意图门真参与对拍：generate_draft 的 driveToolExecute 一律带真实用户原话（userTurnText），写作
-//     意图门不再恒 undefined 放行；「本轮原话无写作意图被拦」成为可测分歧（D3 护栏簇的一条腿），下方用例锁定。
+//   - 找原句真参与对拍：generate_draft 的 driveToolExecute 一律带作者原话（authorWords，重构 P4 起替代
+//     userTurnText 意图门）；「chapterGoal 不在作者话里被退回」成为可测分歧（D3 护栏簇的一条腿），下方用例锁定。
 //   - writer mock 记录入参（context 段序列 / maxOutputTokens / 渲染 prompt 长度）：上下文装配面漂移会在
 //     happy path 红出来，不再被「mock 吞入参」掩盖。
 //   - 磁盘 IO 重（真引擎建项目 + 真 git 快照子进程）：全部用例给显式 timeout（CLAUDE.md 纪律）。
@@ -99,8 +99,8 @@ vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({
 
 const CHAPTER_GOAL = "第 1 章：主角拿到账册。";
 /**
- * 写类对拍驱动 generate_draft 时带的用户原话：明确写作意图（意图门放行口径内的canonical句式），并带上方向——
- * 只说「写第 1 章正文」时工具路不再采用模型自拟的 chapterGoal（第十八轮），两侧方向就不对等了。
+ * 写类对拍驱动 generate_draft 时带的作者原话，并带上方向——chapterGoal 要逐句出自作者的话（重构 P4 找原句），
+ * 否则工具路退回，两侧方向就不对等了。
  */
 const WRITE_TURN_TEXT = "写第 1 章正文，主角拿到账册";
 
@@ -160,7 +160,7 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     // ok 契约
@@ -206,7 +206,7 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     expect(typeof tool.snapshotId).toBe("string");
   });
 
-  it("覆盖已有草稿再出稿：两侧都先建可撤销快照（D4 收敛后同一语义：仅覆盖才建；工具把 snapshotId 透出给前端）", { timeout: 30_000 }, async () => {
+  it("覆盖已有草稿再出稿：两侧都先建可撤销快照（工具侧覆盖要作者点「重写这一章」：带作者确认标记；工具把 snapshotId 透出给前端）", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-overwrite-");
     await writeParityDraft(routeDir, 1, parityDraftFileText(1, `${PARITY_CLEAN_BODY.slice(0, 200)}旧版收尾。`));
     await writeParityDraft(toolDir, 1, parityDraftFileText(1, `${PARITY_CLEAN_BODY.slice(0, 200)}旧版收尾。`));
@@ -215,7 +215,7 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, userConfirmedTool: "generate_draft" },
     );
 
     expect(route.payload.ok).toBe(true);
@@ -239,7 +239,7 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     // 收敛后的 ok 契约：两侧都如实报失败；HTTP 侧 error 借与工具同一 canonical summary（逐字一致）。
@@ -260,23 +260,23 @@ describe("parity: POST /api/draft/generate ↔ generate_draft（共享行为面�
     expect(await readTextIfExists(defaultDraftPath(toolDir, 1))).toBeUndefined();
   });
 
-  it("写作意图门真参与对拍（D3 的一条腿）：本轮原话只有审稿意图 → 工具拦下不落盘；HTTP 按钮路无此门照常写", { timeout: 30_000 }, async () => {
+  it("方向找原句真参与对拍（D3 的一条腿）：chapterGoal 不在作者话里 → 工具退回不落盘；HTTP 按钮路无此检查照常写", { timeout: 30_000 }, async () => {
     const { routeDir, toolDir } = await makeParityTwinProjects("draft-gate-");
 
     const route = await callRoute(registerDraftRoutes, "POST", "/api/draft/generate", generateBody(routeDir));
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
-      { projectDir: toolDir, userTurnText: "审一下这一章" },
+      { projectDir: toolDir, authorWords: ["审一下这一章"] },
     );
 
-    // HTTP 路无意图门（按钮直调语义）：照写
+    // HTTP 路无此检查（按钮直调语义）：照写
     expect(route.payload.ok).toBe(true);
     expect(await readTextIfExists(defaultDraftPath(routeDir, 1))).toContain(PARITY_MAIN_CHARACTER);
 
-    // 工具路：原话无写作意图 → 拦在建快照/调模型之前，不落盘、不烧 writer
+    // 工具路：方向不是作者原话 → 拦在建快照/调模型之前，不落盘、不烧 writer
     expect(tool.ok).toBe(false);
-    expect(tool.blockedReason).toBe("no_write_intent_this_turn");
+    expect(tool.blockedReason).toBe("chapter_goal_not_author_words");
     expect(await readTextIfExists(defaultDraftPath(toolDir, 1))).toBeUndefined();
     expect(draftMocks.writerCalls).toHaveLength(1); // 唯一一次是 HTTP 侧
   });
@@ -290,7 +290,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 2000 },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     // HTTP 路：lengthPolicy:"enforce_or_rollback" → 低于下限 → 拒写 + 回滚（无旧稿 → 删除引擎已写的文件）→ 422
@@ -319,7 +319,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300 },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     expect(route.payload.ok).toBe(true);
@@ -351,7 +351,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300, autoDeAi: false },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     expect(route.payload.ok).toBe(true);
@@ -371,8 +371,8 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 2, chapterGoal: "第 2 章。", requestedDraftLength: 300 },
-      // 带写作意图原话：让意图门放行、被测的是章序护栏这条腿（防「门先拦」掩盖护栏行为）。
-      { projectDir: toolDir, userTurnText: "写第 2 章正文" },
+      // 带作者原话（方向逐句出自它），被测的是章序护栏这条腿（防「找原句先退回」掩盖护栏行为）。
+      { projectDir: toolDir, authorWords: ["写第 2 章正文"] },
     );
 
     // HTTP 路无护栏：第 2 章草稿照写
@@ -396,7 +396,7 @@ describe("parity: draft 对拍——显式策略分歧（两侧同调同一 serv
     const tool = await driveToolExecute(
       generateDraftTool,
       { chapter: 1, chapterGoal: CHAPTER_GOAL, requestedDraftLength: 300, mustHitBeats: ["第三块砖"] },
-      { projectDir: toolDir, userTurnText: WRITE_TURN_TEXT },
+      { projectDir: toolDir, authorWords: [WRITE_TURN_TEXT] },
     );
 
     // HTTP 路：不认识 mustHitBeats，引擎无核对 → report 无 beatFidelity

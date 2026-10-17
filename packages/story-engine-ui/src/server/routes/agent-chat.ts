@@ -50,14 +50,9 @@ export function readCurrentChapter(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : undefined;
 }
 
-/** 取本轮最后一条用户原话，供 requestContext 注入工具层做写盘意图门。 */
-export function readLatestUserTurnText(messages: readonly { readonly role: string; readonly content: string }[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-    return message.content.trim() ? message.content : undefined;
-  }
-  return undefined;
+/** 作者在这段对话窗口里说过的话（user 消息原文，旧→新）：只给工具「找原句」用，不猜意图。 */
+export function readAuthorWords(messages: readonly { readonly role: string; readonly content: string }[]): readonly string[] {
+  return messages.filter((message) => message.role === "user" && message.content.trim()).map((message) => message.content);
 }
 
 /**
@@ -478,7 +473,7 @@ async function handleAgentChat(
       projectDir,
       currentChapter,
       (payload) => sendEvent("draft-delta", payload),
-      readLatestUserTurnText(messages),
+      readAuthorWords(messages),
       lastTurnUndoHint,
     );
 

@@ -34,6 +34,12 @@ async function readExistingDraftWithRetry(draftPath: string): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+/** 这一章的工作稿有没有正文（去掉章标题后非空）。读不到（非 ENOENT）照样抛错，不当「没稿」。 */
+export async function hasWorkingDraftText(projectDir: string, chapter: number): Promise<boolean> {
+  const existing = await readExistingDraftWithRetry(defaultDraftPath(projectDir, chapter));
+  return stripLeadingMarkdownChapterHeading(existing).trim().length > 0;
+}
+
 export async function snapshotBeforeDraftOverwrite(
   projectDir: string,
   chapter: number,

@@ -37,7 +37,8 @@ export type AgentUserAction =
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 
 /** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
@@ -182,6 +183,23 @@ export interface AgentToolResult {
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** manage_ledger 专属：改账是作者裁定，模型只提了草案，等作者点「确认改账」按钮。 */
   readonly ledgerConfirmAction?: LedgerConfirmTarget;
+  /** generate_draft 专属（重构 P4）：这一章已有稿子，AI 不覆盖，等作者点「重写这一章」。 */
+  readonly rewriteConfirmAction?: RewriteConfirmTarget;
+  /** foundation_write 专属（重构 P4）：删角色 / 覆盖已确立设定是作者档，等作者点「确认改设定」。 */
+  readonly foundationConfirmAction?: FoundationConfirmTarget;
+}
+
+/** 「重写这一章」按钮带回的东西。 */
+export interface RewriteConfirmTarget {
+  readonly chapter: number;
+  readonly chapterGoal?: string;
+}
+
+/** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
+export interface FoundationConfirmTarget {
+  readonly key: string;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly label?: string;
 }
 
 /** 「确认改账」按钮带回服务端的东西（manage_ledger 提的裁定草案，服务端执行前再校验）。 */
@@ -465,6 +483,25 @@ export async function streamAgentChat(
                   },
                 }
               : {}),
+            ...(parsed.toolName === "generate_draft" && output.needsConfirmation === true && isRewriteConfirm(output.rewriteConfirm)
+              ? {
+                  rewriteConfirmAction: {
+                    chapter: output.rewriteConfirm.chapter,
+                    ...(typeof output.rewriteConfirm.chapterGoal === "string" && output.rewriteConfirm.chapterGoal.trim()
+                      ? { chapterGoal: output.rewriteConfirm.chapterGoal.trim() }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(parsed.toolName === "foundation_write" && output.needsConfirmation === true && isFoundationConfirm(output.foundationConfirm)
+              ? {
+                  foundationConfirmAction: {
+                    key: output.foundationConfirm.key,
+                    input: output.foundationConfirm.input,
+                    ...(typeof output.foundationConfirm.label === "string" && output.foundationConfirm.label ? { label: output.foundationConfirm.label } : {}),
+                  },
+                }
+              : {}),
             overview: output.overview as StateOverview | undefined,
             refreshScope: output.refreshScope as "full" | "foundation" | undefined,
             snapshotId: typeof output.snapshotId === "string" ? output.snapshotId : undefined,
@@ -565,6 +602,14 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
 
 function isLedgerConfirm(value: unknown): value is { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: unknown } {
   return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
+}
+
+function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown } {
+  return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
+}
+
+function isFoundationConfirm(value: unknown): value is { readonly key: string; readonly input: Record<string, unknown>; readonly label?: unknown } {
+  return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && isRecord(value.input);
 }
 
 function isCommitConfirmAction(value: unknown): value is { readonly chapter: number; readonly previewToken?: unknown } {

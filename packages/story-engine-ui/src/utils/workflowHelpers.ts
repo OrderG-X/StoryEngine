@@ -164,6 +164,20 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: "formal_state_write",
       requiresConfirmation: false,
     },
+    "rewrite-confirm": {
+      id: "rewrite-confirm",
+      label: "重写这一章",
+      description: "整章重写（重写前自动存档，可在操作历史撤销）。",
+      permission: ["model_call", "draft_write"],
+      requiresConfirmation: false,
+    },
+    "foundation-confirm": {
+      id: "foundation-confirm",
+      label: "确认改设定",
+      description: "按 AI 提的改动改资料（改前自动存档，可在操作历史撤销）。",
+      permission: "project_config_write",
+      requiresConfirmation: false,
+    },
     "continue-next": {
       id: "continue-next",
       label: "继续下一章",
@@ -191,6 +205,25 @@ export function pruneConfirmAction(target?: { readonly keep?: number }): Suggest
 /** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
 export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }): SuggestedAction {
   return { ...suggestedAction("ledger-confirm"), ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}) } };
+}
+
+/** 「重写这一章」按钮：有稿的章 AI 不覆盖，作者点了才由服务端整章重写（重构 P4）。 */
+export function rewriteConfirmAction(target: { readonly chapter: number; readonly chapterGoal?: string }): SuggestedAction {
+  return {
+    ...suggestedAction("rewrite-confirm"),
+    label: `重写第 ${target.chapter} 章`,
+    rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}) },
+  };
+}
+
+/** 「确认改设定」按钮：删角色、覆盖已确立设定是作者档，作者点了才由服务端执行（重构 P4）。 */
+export function foundationConfirmAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }): SuggestedAction {
+  const base = suggestedAction("foundation-confirm");
+  return {
+    ...base,
+    ...(target.label ? { description: `${target.label}（改前自动存档，可在操作历史撤销）。` } : {}),
+    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}) },
+  };
 }
 
 function withDisabledReason(action: SuggestedAction, disabledReason: string | undefined): SuggestedAction {

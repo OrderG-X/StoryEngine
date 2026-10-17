@@ -9,6 +9,7 @@ import type { RequestContext } from "@mastra/core/di";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
@@ -16,8 +17,8 @@ import { markUserConfirmedTool } from "./request-context.js";
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
 export const USER_ACTION_TOOL_NAMES = ["commit_apply", "prune_snapshots", "check_continuity", "commit_preview", "generate_draft"] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定）。 */
-const DIRECT_ACTION_NAMES = ["ledger_decision"] as const;
+/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」）。 */
+const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision"] as const;
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
@@ -44,7 +45,12 @@ export type UserAction =
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
+  /**
+   * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
+   * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
+   */
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
@@ -71,6 +77,17 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
+  }
+  if (toolName === "foundation_decision") {
+    const key = typeof record.key === "string" ? record.key.trim() : "";
+    if (!key || key.length > 120) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
+    const input = record.input;
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return { kind: "invalid", reason: "改设定内容不对。" };
+    const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
+    return {
+      kind: "action",
+      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}) },
+    };
   }
   if (toolName === "prune_snapshots") {
     const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
@@ -250,6 +267,10 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "ledger_decision") {
     await runLedgerDecisionAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "foundation_decision") {
+    await runFoundationDecisionAction({ ...args, action });
     return;
   }
   const stamp = Date.now();
@@ -558,6 +579,49 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
   emitText(outcome.summary);
 }
 
+/** 「确认改设定」：作者点了按钮，带作者确认执行那次资料写入（改前存档、点两次只做一次），回执照实说。 */
+async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "foundation_decision" }>;
+}): Promise<void> {
+  const { action } = args;
+  const toolCallId = `user-action-foundation_write-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "foundation_write", args: { op: "confirm" } });
+  if (!args.projectDir) {
+    const message = "没改设定：没拿到书的位置，请重新打开这本书再点。";
+    args.sendEvent("tool-result", { toolCallId, toolName: "foundation_write", output: { ok: false, summary: message } });
+    emitText(message);
+    return;
+  }
+  let outcome: Awaited<ReturnType<typeof applyFoundationDecision>>;
+  try {
+    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input });
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "foundation_write", error: message, retryable: true });
+    emitText(`没改设定：${message}。可以再点一次「确认改设定」重试。`);
+    return;
+  }
+  args.sendEvent("tool-result", {
+    toolCallId,
+    toolName: "foundation_write",
+    // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改设定。
+    output: {
+      ...(outcome.output ?? {}),
+      ok: outcome.ok,
+      summary: outcome.summary,
+      refreshScope: "foundation",
+      ...(outcome.snapshotId ? { snapshotId: outcome.snapshotId } : {}),
+    },
+  });
+  emitText(outcome.summary);
+}
+
 interface GenerateDraftLikeOutput {
   readonly ok?: unknown;
   readonly summary?: unknown;
@@ -577,9 +641,9 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   const input = { chapter: action.chapter, ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}) };
   args.sendEvent("tool-call", { toolCallId, toolName: "generate_draft", args: input });
   let output: unknown;
-  // R7.1 结构化意图标记：按钮/选项点击本身就是写作授权。generate_draft 工具的写作意图门
-  // （防定稿后自主续写）见此标记优先放行，不赌回显文案命中正向词表。标记只在本次执行期间存在，
-  // 结束即清（与 prune 同款）；本通道不跑模型，不存在模型调用蹭标记的窗口。
+  // 作者确认标记：按钮/选项点击本身就是作者授权，generate_draft 见此标记才允许整章重写有稿的章、
+  // 方向不用再找原句（按钮带的方向就是作者点的）。标记只在本次执行期间存在，结束即清（与 prune 同款）；
+  // 本通道不跑模型，不存在模型调用蹭标记的窗口。
   markUserConfirmedTool(args.requestContext, "generate_draft");
   try {
     output = await args.executeTool("generate_draft", input, args.requestContext);

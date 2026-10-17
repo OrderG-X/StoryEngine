@@ -19,7 +19,7 @@ import {
   isMastraToolValidationError,
   normalizeForwardedToolResult,
   readCurrentChapter,
-  readLatestUserTurnText,
+  readAuthorWords,
   runAgentTurn,
   type AgentTurnChunk,
 } from "./agent-chat.js";
@@ -281,18 +281,18 @@ describe("readCurrentChapter body 解析", () => {
   });
 });
 
-describe("readLatestUserTurnText 本轮用户原话提取", () => {
-  it("取最后一条 user 消息，供写盘工具做本轮意图门", () => {
-    expect(readLatestUserTurnText([
+describe("readAuthorWords 作者原话（只给工具找原句用）", () => {
+  it("按先后取窗口里全部 user 消息，跳过空白", () => {
+    expect(readAuthorWords([
       { role: "user", content: "写第59章" },
       { role: "assistant", content: "已出稿" },
-      { role: "user", content: "把第59章草稿走完预览并正式入库" },
-    ])).toBe("把第59章草稿走完预览并正式入库");
+      { role: "user", content: "   " },
+      { role: "user", content: "让林溪回来" },
+    ])).toEqual(["写第59章", "让林溪回来"]);
   });
 
-  it("没有 user 或最后用户内容空白 → undefined", () => {
-    expect(readLatestUserTurnText([{ role: "assistant", content: "hi" }])).toBeUndefined();
-    expect(readLatestUserTurnText([{ role: "user", content: "   " }])).toBeUndefined();
+  it("没有 user → 空数组", () => {
+    expect(readAuthorWords([{ role: "assistant", content: "hi" }])).toEqual([]);
   });
 });
 

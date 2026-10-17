@@ -9,8 +9,9 @@
  * 铁律：
  * - 直接做 + 可撤销：用 writeTool 包装，落盘前已建快照，output 带 snapshotId。
  * - 绝不静默失败 / 绝不谎报：看引擎真实 writes / skipped / blocked，写不进不报成功。
- * - 需用户确认的删除（如已晋升 / 已出场角色）：按引擎 classify 的 needs_confirmation 如实回报
- *   「需用户确认」，绝不强写；用户确认后由 agent 再带 confirmed=true 重试。
+ * - 作者档（重构 P4）：删角色、引擎判为 needs_confirmation 的写入（如覆盖已确立的年龄/性别）只出
+ *   「确认改设定」按钮（输出 foundationConfirm），作者点了由服务端带作者确认执行
+ *   （agent/foundation-decisions.ts）。AI 自己调永远不会真写这类改动，也不再读作者原话猜「同意」。
  * - 题材中立：description / 字段说明用中性词，不注入任何题材。
  */
 import {
@@ -22,14 +23,12 @@ import {
   type FoundationWriteSuggestionLike,
 } from "@actalk/story-engine";
 import { z } from "zod";
-import { blankToUndefined, coerceBoolean, coerceEnum, coerceEnumValues, coerceJsonObject } from "./lenient-args.js";
+import { blankToUndefined, coerceEnum, coerceEnumValues, coerceJsonObject } from "./lenient-args.js";
 
 import { writeTool } from "../withSnapshot.js";
 import { readCharacterNameById, resolveEntityLabel } from "../presence/entity-labels.js";
 import { resolveFoundationUpdateTargetId } from "../../lib/project-io.js";
 import { buildFoundationKnownEntities } from "./foundation-known-entities.js";
-import { readUserTurnTextFromContext } from "../request-context.js";
-import { userTurnAllowsEstablishedOverride } from "./turn-intent-gate.js";
 import { manageStyleExemplarsLogic, type ManageStyleExemplarsOutput, type StyleExemplarAction } from "./manage-style-exemplars.js";
 
 /** 支持的资料写入动作。覆盖 foundation-write-gateway 的全部建/改/删/改名动作；style_exemplar_* 四个在工具内
@@ -86,7 +85,8 @@ export const FOUNDATION_WRITE_ASSETIZATION_GUIDANCE =
   "世界和写作规则用对应数组字段。不得凭空补具体事实；不知道就留空，或写进 knowledgeUnknown/cannotReveal/" +
   "extraFields 这类边界字段。";
 
-const inputSchema = z.object({
+/** 入参 schema（「确认改设定」按钮带回的写入，服务端执行前也按它校验）。 */
+export const foundationWriteInputSchema = z.object({
   // 模型无关：枚举大小写宽容。actionType 全小写 snake → coerceEnum；category 含 camelCase
   // （characterRelationships/writingRules）→ coerceEnumValues 大小写不敏感映射回 canonical。这是唯一写资料工具，
   // 模型一旦传错大小写就 InputValidationError 写不进，宽容很值。
@@ -127,9 +127,6 @@ const inputSchema = z.object({
       "- 纠错（角色和写作规则）：删某几条 {\"removeFromArrays\":{\"字段\":[\"原文\"]}}（原文逐字照抄 read_foundation）；改一条=同一次删旧+加新；" +
       "整列重写 {\"replaceArrays\":{\"字段\":[...]}}（[]=清空）；删自定义键 {\"removeExtraFieldKeys\":[\"键\"]}。没匹配上会 ok:false。",
   )),
-  confirmed: coerceBoolean(z.boolean().optional().describe(
-    "删除角色、覆盖已确立设定：工具先回『需用户确认』，用户明确同意后带 true 重试（工具还会核对用户原话）。",
-  )),
   exemplarTitle: blankToUndefined(z.string().optional().describe(
     "style_exemplar_*：样本标题。add 必填；没给 targetId 时 update/remove 按标题定位；同给时是要改成的新标题。",
   )),
@@ -141,6 +138,8 @@ const inputSchema = z.object({
   )),
   rationale: z.string().optional().describe("为什么写这条（一句话，便于结果卡说明）。"),
 });
+
+const inputSchema = foundationWriteInputSchema;
 
 const outputSchema = z.object({
   snapshotId: z.string().describe("本次写入前的快照 id，前端凭此可一键撤销。"),
@@ -181,6 +180,11 @@ const outputSchema = z.object({
     createdAtMs: z.number(),
   })).optional().describe("style_exemplar_*：动作后的全量样本（list 时即现有清单）。"),
   droppedBad: z.array(z.string()).optional().describe("style_exemplar_*：被跳过的损坏样本条目及原因。"),
+  foundationConfirm: z.object({
+    key: z.string(),
+    label: z.string(),
+    input: z.record(z.string(), z.unknown()),
+  }).optional().describe("needsConfirmation=true 时「确认改设定」按钮带的东西（界面用，你不用转述）。"),
 });
 
 /** 由 actionType + category 推导引擎期望的 targetFile（与 foundation-write-gateway 的校验一致；style_exemplar_* 不进引擎，归写作规则文件）。 */
@@ -221,28 +225,11 @@ export interface FoundationWriteToolInput {
   readonly newName?: string;
   /** 可省略（zod default {}）：引擎对缺字段按诚实 skip 回报，不硬崩。 */
   readonly after?: Record<string, unknown>;
-  readonly confirmed?: boolean;
   /** style_exemplar_* 专属：样本标题/正文/备注（2026-10-12 R3b 并入）。 */
   readonly exemplarTitle?: string;
   readonly exemplarText?: string;
   readonly exemplarNote?: string;
   readonly rationale?: string;
-}
-
-/**
- * 是否把本次写入视为「用户已确认覆盖」交给引擎。
- * - 删角色：认工具参数 confirmed（agent 问过后带 true 重试），与既有行为一致。
- * - 其它写入（尤其 age/gender 冲突）：只认本轮用户原话里的明确同意语，不接受 agent 自说 confirmed。
- */
-export function resolveFoundationWriteConfirmedByUser(input: {
-  readonly actionType: FoundationWriteActionType;
-  readonly confirmed?: boolean;
-  readonly userTurnText?: string;
-}): boolean {
-  if (input.actionType === "delete_foundation_entry") {
-    return input.confirmed === true;
-  }
-  return userTurnAllowsEstablishedOverride(input.userTurnText);
 }
 
 export interface FoundationWriteToolOutput {
@@ -261,6 +248,60 @@ export interface FoundationWriteToolOutput {
   readonly count?: number;
   readonly exemplars?: ManageStyleExemplarsOutput["exemplars"];
   readonly droppedBad?: string[];
+  /** 作者档按钮（needsConfirmation 时才有）：作者点「确认改设定」后原样带回执行。 */
+  readonly foundationConfirm?: FoundationConfirmPayload;
+}
+
+export interface FoundationConfirmPayload {
+  /** 这一份提议的标识：点两次只执行一次。 */
+  readonly key: string;
+  /** 按钮旁的一句话（动作 + 对象，如「删条目 林溪」）。 */
+  readonly label: string;
+  /** 被拦下的那次写入，原样带回（服务端执行前再按入参 schema 校验）。 */
+  readonly input: Record<string, unknown>;
+}
+
+function buildFoundationConfirm(toolInput: FoundationWriteToolInput): FoundationConfirmPayload {
+  const key = `fw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return { key, label: foundationWriteSnapshotDetail(toolInput), input: { ...toolInput } as Record<string, unknown> };
+}
+
+/** 删角色是作者档：没有作者确认时不删，直接回「确认改设定」按钮（在建快照之前判，不留空存档点）。 */
+export async function deleteCharacterAwaitingAuthor(input: {
+  readonly projectDir: string;
+  readonly toolInput: FoundationWriteToolInput;
+  readonly authorConfirmed?: boolean;
+}): Promise<FoundationWriteToolOutput | undefined> {
+  if (
+    input.toolInput.actionType !== "delete_foundation_entry"
+    || input.toolInput.category !== "characters"
+    || input.authorConfirmed === true
+  ) {
+    return undefined;
+  }
+  const overview = await buildStateOverview({ projectDir: input.projectDir, maxTimelineEvents: 8 });
+  // 模型无关·绝不泄露裸 id：targetName / targetId 都可能是 char-id——选中的 ref 一律过
+  // resolveEntityLabel（命中→名字 / 像内部 char-hash→「未知角色」/ 真名→原样），绝不直接把裸 id 渲进确认摘要。
+  const nameById = await readCharacterNameById(input.projectDir);
+  const whoRef = input.toolInput.targetName ?? input.toolInput.targetId;
+  const who = whoRef ? resolveEntityLabel(whoRef, nameById) : "该角色";
+  return {
+    ok: false,
+    applied: false,
+    needsConfirmation: true,
+    partialMiss: false,
+    writes: [],
+    skipped: [],
+    blocked: [{
+      level: "needs_confirmation",
+      reason: `删除角色「${who}」要你确认`,
+      targetFile: "story/character-bible.json",
+    }],
+    overview,
+    summary: `删除角色「${who}」要你点「确认改设定」——目前没有删除任何内容（删了也能撤销）。`,
+    refreshScope: "foundation",
+    foundationConfirm: buildFoundationConfirm(input.toolInput),
+  };
 }
 
 /** style_exemplar_* 路径：转给 manageStyleExemplarsLogic（纯逻辑，不走引擎网关），结果映射成本工具的诚实回报形状。 */
@@ -302,14 +343,10 @@ async function applyStyleExemplarLogic(input: {
 /** 把 agent 的结构化意图组装成引擎建议。抽出以便单测构造逻辑。 */
 export function buildFoundationWriteSuggestion(
   input: FoundationWriteToolInput,
-  options: { readonly userTurnText?: string } = {},
+  options: { readonly authorConfirmed?: boolean } = {},
 ): FoundationWriteSuggestionLike {
   const targetFile = foundationTargetFileFor(input.actionType, input.category);
-  const confirmedByUser = resolveFoundationWriteConfirmedByUser({
-    actionType: input.actionType,
-    confirmed: input.confirmed,
-    userTurnText: options.userTurnText,
-  });
+  const confirmedByUser = options.authorConfirmed === true;
   // 长跑 #3（改名入参归一）：顶层 newName 是「新名字」的直达通道——引擎只认 after.name/after.newName，
   // 模型首调用常把新名字放错位（targetName 是旧名定位用）而吃「缺参数」重试。after 已写 name/newName
   // 时以 after 为准（更完整的结构化意图），否则把 newName 归一进 after.name。
@@ -337,47 +374,17 @@ export function buildFoundationWriteSuggestion(
 export async function applyFoundationWriteToolLogic(input: {
   readonly projectDir: string;
   readonly toolInput: FoundationWriteToolInput;
-  /** 本轮用户原话（由 RequestContext 注入）；覆盖已确立设定时只认这里的明确同意。 */
-  readonly userTurnText?: string;
+  /** 作者点了「确认改设定」（只由 foundation-decisions.ts 的按钮通道给 true）；AI 自己调永远是 false。 */
+  readonly authorConfirmed?: boolean;
 }): Promise<FoundationWriteToolOutput> {
   // 文风样本（style_exemplar_*）：不进引擎网关，转给 manageStyleExemplarsLogic（同是 writing-rules.json 一族，2026-10-12 R3b 并入）。
   if (isStyleExemplarActionType(input.toolInput.actionType)) {
     return applyStyleExemplarLogic({ projectDir: input.projectDir, toolInput: input.toolInput });
   }
-  // 删任何角色都先确认（用户 2026-06-16 拍板）：引擎只对「已 commit 的晋升/已出场角色」强制确认，
-  // 这里把保护扩到所有角色——删角色未带 confirmed 时不调引擎删除，统一回报 needsConfirmation，
-  // 由 agent 在对话里问用户、确认后带 confirmed=true 重试。整角色删除较重，先问一句更稳（删后仍可撤销）。
-  // 仅拦角色删除：地点/资产/世界规则等其它删除保持「直接做+可撤销」，不增确认负担。
-  if (
-    input.toolInput.actionType === "delete_foundation_entry"
-    && input.toolInput.category === "characters"
-    && input.toolInput.confirmed !== true
-  ) {
-    const overview = await buildStateOverview({ projectDir: input.projectDir, maxTimelineEvents: 8 });
-    // 模型无关·绝不泄露裸 id：模型只给 targetId（char-xxxx）时把它解析成角色名；解析不到回落「该角色」，
-    // 绝不在确认摘要里显「删除角色「char-3f2a」」。
-    const nameById = await readCharacterNameById(input.projectDir);
-    // 模型无关·绝不泄露裸 id：targetName 槽位也可能被模型错塞 char-id（不只 targetId）——选中的 ref 一律过
-    // resolveEntityLabel（命中→名字 / 像内部 char-hash→「未知角色」/ 真名→原样），绝不直接把裸 id 渲进确认摘要。
-    const whoRef = input.toolInput.targetName ?? input.toolInput.targetId;
-    const who = whoRef ? resolveEntityLabel(whoRef, nameById) : "该角色";
-    return {
-      ok: false,
-      applied: false,
-      needsConfirmation: true,
-      partialMiss: false,
-      writes: [],
-      skipped: [],
-      blocked: [{
-        level: "needs_confirmation",
-        reason: `删除角色「${who}」前需用户确认`,
-        targetFile: "story/character-bible.json",
-      }],
-      overview,
-      summary: `删除角色「${who}」需要你先确认——目前没有删除任何内容。确认要删，我再执行（删除后也可一键撤销）。`,
-      refreshScope: "foundation",
-    };
-  }
+  // 删任何角色都要作者确认（用户 2026-06-16 拍板；重构 P4 起是作者档按钮）。地点/资产/世界规则等其它删除
+  // 保持「直接做+可撤销」，不增确认负担。
+  const awaitingAuthor = await deleteCharacterAwaitingAuthor(input);
+  if (awaitingAuthor) return awaitingAuthor;
 
   // 写前解析更新类操作的目标 id：模型常漏带 targetId（尤其早期补主角人设），书里只有一个该类实体时
   // 兜底落到它，避免「没能找到对应角色」的吓人失败（见 resolveFoundationUpdateTargetId）。
@@ -398,7 +405,7 @@ export async function applyFoundationWriteToolLogic(input: {
       ...input.toolInput,
       targetId: shouldRewriteTargetId ? resolvedTargetId : input.toolInput.targetId,
     },
-    { userTurnText: input.userTurnText },
+    { authorConfirmed: input.authorConfirmed },
   );
   const result: FoundationWriteResult = await applyFoundationWriteSuggestion({
     projectDir: input.projectDir,
@@ -442,11 +449,7 @@ export async function applyFoundationWriteToolLogic(input: {
     blocked,
     establishedOverrideApplied: result.applied === true
       && input.toolInput.actionType !== "delete_foundation_entry"
-      && resolveFoundationWriteConfirmedByUser({
-        actionType: input.toolInput.actionType,
-        confirmed: input.toolInput.confirmed,
-        userTurnText: input.userTurnText,
-      }),
+      && input.authorConfirmed === true,
   });
 
   return {
@@ -461,6 +464,7 @@ export async function applyFoundationWriteToolLogic(input: {
     overview,
     summary,
     refreshScope: "foundation",
+    ...(needsConfirmation && input.authorConfirmed !== true ? { foundationConfirm: buildFoundationConfirm(input.toolInput) } : {}),
   };
 }
 
@@ -470,7 +474,7 @@ export function buildFoundationWriteSummary(args: {
   readonly writes: readonly { readonly summary: string }[];
   readonly skipped: readonly { readonly summary: string }[];
   readonly blocked: readonly { readonly level: string; readonly reason: string }[];
-  /** 用户明确同意后覆盖已确立设定成功时追加历史章不同步提示（dogfood 问题 6）。 */
+  /** 作者点了「确认改设定」、改成了时追加历史章不同步提示（dogfood 问题 6）。 */
   readonly establishedOverrideApplied?: boolean;
 }): string {
   const parts: string[] = [];
@@ -484,14 +488,7 @@ export function buildFoundationWriteSummary(args: {
   }
   if (args.needsConfirmation) {
     const reasons = args.blocked.filter((b) => b.level === "needs_confirmation").map((b) => b.reason);
-    parts.push(`需用户确认后才能执行（未写入）：${reasons.join("；")}`);
-    const isEstablishedOverride = reasons.some((reason) => /已确立|长期设定|明确覆盖/u.test(reason));
-    if (isEstablishedOverride) {
-      parts.push(
-        "放行条件：请用户在下一轮明确说「允许覆盖」或「确定／同意」后，再调一次 foundation_write；" +
-          "勿无限重试。若用户改口放弃，如实告诉用户这次没改成、设定未变",
-      );
-    }
+    parts.push(`要你点「确认改设定」才执行（还没写入）：${reasons.join("；")}`);
   }
   const otherBlocked = args.blocked.filter((b) => b.level !== "needs_confirmation");
   if (otherBlocked.length > 0) {
@@ -537,18 +534,17 @@ export const foundationWriteTool = writeTool({
     "把结构化的资料写入意图落盘：建/改/删/改名 角色、地点、资产、世界规则、写作规则。" +
     "作者文风样本也走这里：用户给满意段落说『照这个感觉写』时 style_exemplar_add 存进（写正文时模仿节奏用词、不照抄内容）；改/删前先 style_exemplar_list。" +
     "更新或删除已有实体前应先用 read_foundation/read_state_overview 取得 targetId。" +
-    "落盘前自动建快照，可一键撤销。【删除任何角色都需用户确认】：首次删角色会回报『需用户确认』、不删除，" +
-    "此时不要谎称已删除，应在对话里问用户确认，确认后再带 confirmed=true 重试。" +
-    "【覆盖已确立长期设定（如改年龄/性别）】：首次会被拦并回报需确认；请用户下一轮说「允许覆盖」或「确定」，" +
-    "再调一次即可（系统核对用户原话，勿只靠自填 confirmed）。被拦后勿无限重试；改不成须如实告诉用户没改成与原因。",
+    "落盘前自动建快照，可一键撤销。删角色、覆盖已确立的设定（如改年龄/性别）是作者的决定：你调它不会真改，" +
+    "会回 needsConfirmation=true 并给作者出「确认改设定」按钮。这时告诉作者点按钮，别说『已改好』，也别重试。",
   inputSchema,
   outputSchema,
   // style_exemplar_list 只读：走 preflight 直接返回，不建 no-op 快照污染操作历史（原 manage_style_exemplars 同款）。
+  // 删角色等作者确认也在这里回（不建空存档点）。
   preflight: async ({ input, projectDir }) => {
-    if (input.actionType !== "style_exemplar_list") return undefined;
-    return applyStyleExemplarLogic({ projectDir, toolInput: input });
+    if (input.actionType === "style_exemplar_list") return applyStyleExemplarLogic({ projectDir, toolInput: input });
+    return deleteCharacterAwaitingAuthor({ projectDir, toolInput: input });
   },
-  run: async ({ input, projectDir, context }) => {
+  run: async ({ input, projectDir }) => {
     const output = await applyFoundationWriteToolLogic({
       projectDir,
       toolInput: {
@@ -561,13 +557,13 @@ export const foundationWriteTool = writeTool({
         // 只能换 after.name 重试一次（2026-10-07 真 agent 复现，两本新书都撞）。
         ...(input.newName !== undefined ? { newName: input.newName } : {}),
         after: input.after,
-        ...(input.confirmed !== undefined ? { confirmed: input.confirmed } : {}),
         ...(input.exemplarTitle !== undefined ? { exemplarTitle: input.exemplarTitle } : {}),
         ...(input.exemplarText !== undefined ? { exemplarText: input.exemplarText } : {}),
         ...(input.exemplarNote !== undefined ? { exemplarNote: input.exemplarNote } : {}),
         ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
       },
-      userTurnText: readUserTurnTextFromContext(context),
+      // AI 档：永远不带作者确认。作者档的改动走「确认改设定」按钮（foundation-decisions.ts）。
+      authorConfirmed: false,
     });
     return output;
     // snapshotId 由 writeTool 强制并入，run 不必回填。

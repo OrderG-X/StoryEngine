@@ -86,7 +86,8 @@ function resolveChapterDirection(value?: unknown): string {
     firstChapterSetupDirection(overview),
     store.steeringDraft?.generatedChapterGoalPreview ?? "",
   ];
-  return candidates.map(normalizeChapterDirection).find((c) => c.length > 0) ?? "";
+  // 重构 P4：方向原样给章纲，不再用词表猜「写吧/质检」这类是不是命令。
+  return candidates.map((c) => c.trim()).find((c) => c.length > 0) ?? "";
 }
 
 function firstChapterSetupDirection(overview: import("./api/types.js").StateOverview | null): string {
@@ -96,18 +97,6 @@ function firstChapterSetupDirection(overview: import("./api/types.js").StateOver
     .map((v) => v?.trim())
     .filter(Boolean)
     .join("；");
-}
-
-function normalizeChapterDirection(value: string): string {
-  const text = value.trim();
-  if (!text) return "";
-  const exactCommands = new Set([
-    "写吧", "开始写", "生成草稿", "直接写", "写一章", "开始生成",
-    "质检", "提交预览", "确认提交", "正式提交", "继续下一章",
-  ]);
-  if (exactCommands.has(text)) return "";
-  if (/^(?:写吧|开始写|生成草稿|直接写|写一章|开始生成|质检|提交预览|确认提交|正式提交|继续下一章)[。！!？?\s]*$/u.test(text)) return "";
-  return text;
 }
 
 function isCurrentChapterAlreadyFormallyCommitted(

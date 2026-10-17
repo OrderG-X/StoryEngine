@@ -90,5 +90,7 @@ export function userActionChoiceText(action: import("../api/agentChatClient.js")
       return action.keep ? `确认裁剪操作历史（保留最近 ${action.keep} 条）` : "确认裁剪操作历史";
     case "ledger_decision":
       return action.label ? `确认改账：${action.label}` : "确认改账";
+    case "foundation_decision":
+      return action.label ? `确认改设定：${action.label}` : "确认改设定";
   }
 }

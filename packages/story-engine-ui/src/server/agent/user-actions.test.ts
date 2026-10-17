@@ -27,6 +27,17 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: Array.from({ length: 21 }, () => decisions[0]) }).kind).toBe("invalid");
   });
 
+  it("「确认改设定」：带标识和写入对象才收；缺标识 / 写入不是对象都按非法处理", () => {
+    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
+    expect(parseUserAction({ toolName: "foundation_decision", key: " fw-1 ", input, label: "删条目 顾明" })).toEqual({
+      kind: "action",
+      action: { toolName: "foundation_decision", key: "fw-1", input, label: "删条目 顾明" },
+    });
+    expect(parseUserAction({ toolName: "foundation_decision", input }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: [input] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "foundation_decision", key: "k", input: "删掉" }).kind).toBe("invalid");
+  });
+
   it("缺省 → none（普通对话）", () => {
     expect(parseUserAction(undefined)).toEqual({ kind: "none" });
     expect(parseUserAction(null)).toEqual({ kind: "none" });

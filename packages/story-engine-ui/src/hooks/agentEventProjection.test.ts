@@ -862,6 +862,41 @@ describe("改账待确认投影（manage_ledger 提草案后挂「确认改账�
   });
 });
 
+describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {
+  it("generate_draft 遇到有稿的章 → 步骤待确认 + 挂「重写第 N 章」按钮（带方向原样）", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
+      {
+        type: "tool-result",
+        toolCallId: "g1",
+        toolName: "generate_draft",
+        endedAt: 2,
+        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, chapterGoal: "让林溪回来" }, summary: "第 3 章已经有工作稿了…" },
+      },
+    ]);
+    expect(message.toolSteps![0].status).toBe("needs_confirmation");
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3, chapterGoal: "让林溪回来" } }),
+    ]);
+  });
+
+  it("foundation_write 作者档 → 挂「确认改设定」按钮（带被拦下的写入原样）", () => {
+    const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
+    const message = project([
+      {
+        type: "tool-result",
+        toolCallId: "f1",
+        toolName: "foundation_write",
+        endedAt: 2,
+        output: { ok: false, needsConfirmation: true, foundationConfirmAction: { key: "fw-1", input, label: "删条目 顾明" }, summary: "删除角色「顾明」要你点…" },
+      },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "foundation-confirm", label: "确认改设定", foundationTarget: { key: "fw-1", input, label: "删条目 顾明" } }),
+    ]);
+  });
+});
+
 describe("质检明细投影（quality_check → message.qualityReport）", () => {
   it("带 qualityReport → 挂到 message.qualityReport", () => {
     const refined = { passed: false, blocking: [{ type: "x", label: "硬伤", severity: "error" as const, message: "m" }], soft: [], reference: [], summary: "s" };

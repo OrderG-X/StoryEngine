@@ -11,7 +11,7 @@ import {
   readCurrentChapterFromContext,
   readLastTurnUndoHintFromContext,
   readProjectDirFromContext,
-  readUserTurnTextFromContext,
+  readAuthorWordsFromContext,
   resolveChapterFromInputOrContext,
 } from "./request-context.js";
 
@@ -43,16 +43,16 @@ describe("request-context projectDir + currentChapter 注入/读取", () => {
     expect(readCurrentChapterFromContext(undefined)).toBeUndefined();
   });
 
-  it("buildProjectRequestContext 带 userTurnText → 可读回本轮用户原话", () => {
-    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, "继续写第59章正文。只写这一章，不要写其他章。"));
+  it("buildProjectRequestContext 带作者原话 → 可读回（空白条丢掉）", () => {
+    const c = ctx(buildProjectRequestContext("/tmp/book", 3, undefined, ["写第59章", "  ", "让林溪回来"]));
 
-    expect(readUserTurnTextFromContext(c)).toBe("继续写第59章正文。只写这一章，不要写其他章。");
+    expect(readAuthorWordsFromContext(c)).toEqual(["写第59章", "让林溪回来"]);
   });
 
-  it("userTurnText 缺省或空白 → 读回 undefined（向后兼容）", () => {
-    expect(readUserTurnTextFromContext(ctx(buildProjectRequestContext("/tmp/book")))).toBeUndefined();
-    expect(readUserTurnTextFromContext(ctx(buildProjectRequestContext("/tmp/book", 3, undefined, "   ")))).toBeUndefined();
-    expect(readUserTurnTextFromContext(undefined)).toBeUndefined();
+  it("作者原话缺省或全空白 → 读回 undefined", () => {
+    expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book")))).toBeUndefined();
+    expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book", 3, undefined, ["   "])))).toBeUndefined();
+    expect(readAuthorWordsFromContext(undefined)).toBeUndefined();
   });
 });
 

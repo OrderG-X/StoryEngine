@@ -1601,6 +1601,22 @@ export function useChat(params: UseChatParams): UseChatResult {
           consumeSuggestedAction(action);
           void handleSendUserAction({ toolName: "ledger_decision", ...action.ledgerTarget });
           return;
+        case "rewrite-confirm":
+          if (!action.rewriteTarget) {
+            showToast("这个重写按钮已经失效了，请让 AI 重新提一次。", 4200);
+            return;
+          }
+          consumeSuggestedAction(action);
+          void handleSendUserAction({ toolName: "generate_draft", ...action.rewriteTarget });
+          return;
+        case "foundation-confirm":
+          if (!action.foundationTarget) {
+            showToast("这个改设定按钮已经失效了，请让 AI 重新提一次。", 4200);
+            return;
+          }
+          consumeSuggestedAction(action);
+          void handleSendUserAction({ toolName: "foundation_decision", ...action.foundationTarget });
+          return;
         case "continue-next": {
           void handleSendMessage("继续写下一章。");
           return;

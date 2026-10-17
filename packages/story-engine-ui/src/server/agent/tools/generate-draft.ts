@@ -4,7 +4,7 @@
  * 双轨合一（第二波）：出稿编排已抽进共享 application service（services/draft-service.ts，
  * runGenerateDraft），本文件只剩工具适配层 + 兼容再导出：
  *   - RequestContext 取 projectDir / 章号回退 / 已入库前沿推进（治 off-by-one）；
- *   - D3 护栏簇（agent 语义，不是编排语义，留在工具层）：写作意图门（防入库后自主续写）+
+ *   - D3 护栏簇（agent 语义，不是编排语义，留在工具层）：方向找原句 + 有稿不覆盖（重构 P4，作者档按钮）+
  *     章序护栏（前一章未入库防穿帮）——拦在建快照/调模型之前；
  *   - writer 装配：单候选 createConfiguredWriterClient("fastDraft")（可接 delta sink 逐字喂编辑器），
  *     多候选按 temperature 错开构建 N 个 client（采样不接 sink：N 版串进同一章编辑器会花屏）；
@@ -76,9 +76,9 @@ export type {
 
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readUserTurnTextFromContext, isUserConfirmedTool } from "../request-context.js";
-import { userTurnAllowsDraftWrite } from "./turn-intent-gate.js";
-import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, isUserConfirmedTool } from "../request-context.js";
+import { checkAuthorQuote } from "./author-quote.js";
+import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import {
   resolveCandidateTemperatures,
@@ -129,23 +129,12 @@ export function advancePastCommittedFrontier(input: {
   return input.resolvedChapter;
 }
 
-// 「继续写下一章的正文，现在就动笔直接出稿」是写作区按钮发的原话（2026-10-10 真机试写），同样算没给方向。
-const GENERIC_CONTINUE_WORDS = /第\s*[\d一二三四五六七八九十百零两]+\s*章|下一章|这一章|上一章|本章|接着|往下|继续|开始|动笔|正文|出稿|现在|马上|立刻|直接|一下|帮我|好的|然后|[写走吧请好行嗯再就的了来]|[\s，。！？!?、,.~～…]/gu;
-
-/**
- * 作者这轮只说了「写第 N 章 / 接着往下写」、没给方向 → 章纲不用模型自拟的 chapterGoal（第十八轮：助手每章自编一大段
- * 「方向」，带着上一轮核对的误报、把剧情反复推回同一条手续线，章纲当作者原话照办，第 6–10 章原地打转）。
- * 缺原话（按钮直调）不判；作者话里有任何具体内容（「让林溪回来」「按你说的」）都保留模型转述的方向。
- */
-export function authorGaveNoDirection(userText: string | undefined): boolean {
-  if (userText === undefined) return false;
-  return userText.replace(GENERIC_CONTINUE_WORDS, "").length <= 1;
-}
-
 const inputSchema = z.object({
   // 2026-10-10 对话 AI 瘦身：参数说明只留模型要知道的（原来约 1700 字，每轮都发）。
   chapter: coerceNumber(z.number().int().positive().optional().describe("章号；省略=用户当前所在章。")),
-  chapterGoal: z.string().optional().describe("本章方向（用户原话）；用户没给就别填，章纲会按故事现状往下推。"),
+  chapterGoal: z.string().optional().describe(
+    "本章方向：只能原样抄作者说过的话（可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
+  ),
   requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。")),
   selectedCharacterIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
@@ -213,12 +202,19 @@ const outputSchema = z.object({
   characterSelection: z.unknown().optional().describe("本章相关角色选择诊断。"),
   blockedReason: z.union([
     z.literal("previous_chapter_not_committed"),
-    z.literal("no_write_intent_this_turn"),
+    z.literal("chapter_has_text"),
+    z.literal("chapter_goal_not_author_words"),
   ]).optional().describe(
-    "被护栏拦下时为此值（ok=false），别当普通失败重试：" +
+    "被护栏拦下时为此值（ok=false）：" +
       "previous_chapter_not_committed=前一章没定稿、现在写本章会穿帮；" +
-      "no_write_intent_this_turn=本轮用户原话没有写正文/续写意图（防定稿后自主续写），按 summary 向用户讲清并给选项。",
+      "chapter_has_text=这一章已经有稿子，整章重写要作者点「重写这一章」按钮（界面已出），告诉作者点按钮或说要改哪里，别重试；" +
+      "chapter_goal_not_author_words=chapterGoal 不是作者原话，原样抄作者的话（或不填）重调。",
   ),
+  needsConfirmation: z.boolean().optional().describe("true=要作者点按钮才做（chapter_has_text）。"),
+  rewriteConfirm: z.object({
+    chapter: z.number().int().positive(),
+    chapterGoal: z.string().optional(),
+  }).optional().describe("「重写这一章」按钮带的东西（界面用，你不用转述）。"),
   pendingChapterToCommit: z.number().int().positive().optional().describe("被章序护栏拦下时，建议先定稿的那一章（= 本章号-1）。"),
   aiFlavor: z.object({
     total: z.number().int().nonnegative().describe("疑似 AI 腔命中总数（全量，含未截断进清单的）。"),
@@ -308,8 +304,10 @@ const outputSchema = z.object({
 
 /** 工具输出契约：共享编排 outcome 剥掉 HTTP 适配料（http 袋）与执法标记 + 护栏拦截字段（execute 护栏产出）。 */
 export type GenerateDraftToolOutput = Omit<GenerateDraftOutcome, "http" | "rejection"> & {
-  readonly blockedReason?: "previous_chapter_not_committed" | "no_write_intent_this_turn";
+  readonly blockedReason?: "previous_chapter_not_committed" | "chapter_has_text" | "chapter_goal_not_author_words";
   readonly pendingChapterToCommit?: number;
+  readonly needsConfirmation?: boolean;
+  readonly rewriteConfirm?: { readonly chapter: number; readonly chapterGoal?: string };
 };
 
 /** 章序护栏拦截时的工具输出（ok:false + 结构化 reason + 讲清穿帮原因的 summary）。纯逻辑、可测。 */
@@ -335,23 +333,47 @@ export function buildSequencingBlockedOutput(
 }
 
 /**
- * 本轮无写作意图被意图门拦下时的输出（ok:false + 结构化 reason + 面向用户的中性 summary）。
- * summary 是给用户看的（会进实时字幕/步骤卡），不含内部工具名（铁律④）。纯逻辑、可测。
+ * 这一章已经有稿子（工作稿或已定稿）时 AI 不覆盖：整章重写是作者档，出「重写这一章」按钮（重构 P4）。
+ * 替代原来按作者原话猜「有没有写作意图」的门——那道门的用途（防定稿后 AI 自己往下写把稿子冲掉）现在由结构保证：
+ * 空章 AI 照写（先存档、可撤销），有稿的章只有作者点了才重写。纯逻辑、可测。
  */
-export function buildNoWriteIntentBlockedOutput(
+export function buildRewriteAwaitingAuthorOutput(
   chapter: number,
+  committed: boolean,
   overview: StateOverview,
+  chapterGoal?: string,
 ): GenerateDraftToolOutput {
   return {
     ok: false,
     chapter,
-    blockedReason: "no_write_intent_this_turn",
-    issues: ["本轮用户原话没有写正文/续写的意图"],
+    blockedReason: "chapter_has_text",
+    needsConfirmation: true,
+    issues: [committed ? `第 ${chapter} 章已经定稿` : `第 ${chapter} 章已有工作稿`],
     overview,
-    // R7.1：拦下的原因直说，模型照这句转告即可，别自己编（此前模型编过「可能是我把要点拆成清单传过去」）。
+    summary: committed
+      ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写这一章」（重写前存档，可撤销；重写后要重新定稿）。`
+      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写这一章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
+    refreshScope: "full",
+    rewriteConfirm: { chapter, ...(chapterGoal ? { chapterGoal } : {}) },
+  };
+}
+
+/** chapterGoal 不是作者原话：退回让 AI 原样抄或不填（在建快照、调模型之前，不花额度）。纯逻辑、可测。 */
+export function buildGoalNotQuotedOutput(
+  chapter: number,
+  notFound: readonly string[],
+  overview: StateOverview,
+): GenerateDraftToolOutput {
+  const shown = notFound.slice(0, 3).map((clause) => `「${clause.slice(0, 30)}」`).join("");
+  return {
+    ok: false,
+    chapter,
+    blockedReason: "chapter_goal_not_author_words",
+    issues: notFound.map((clause) => `不是作者原话：${clause}`),
+    overview,
     summary:
-      `你这句话里我没认出要写正文的意思，就没有生成第 ${chapter} 章正文——避免擅自往下写，也不白费你的额度。` +
-      `想写就直接说「写第 ${chapter} 章」或「写下一章」；如果你是想改设定/资料或做别的，告诉我就行。`,
+      `这次还没动笔：AI 填的本章方向里有不是你原话的句子${shown}。` +
+      "AI 会改用你的原话（或不填方向、按故事现状往下推）再写。",
     refreshScope: "full",
   };
 }
@@ -384,21 +406,25 @@ export const generateDraftTool = createTool({
       resolvedCommitted: explicitChapter ? false : await isChapterCommitted(projectDir, resolvedFromInputOrContext),
       nextChapterCommitted: explicitChapter ? false : await isChapterCommitted(projectDir, resolvedFromInputOrContext + 1),
     });
-    // A（写作意图门，防「入库后自主续写」）：那一轮用户原话只有定稿/审稿等意图、没有任何写作意图时，
-    // 模型不得擅自 generate_draft 往下写整章（纪律 145「出稿不越权」的确定性护栏——不赌弱模型守规矩）。
-    // 缺原话放行（向后兼容/前端按钮直调）；R7.1 起口径收敛为「正向表命中即放行」——不再用否定词
-    // 否决（角色台词「谁也别想再动它」曾被误拦，见 turn-intent-gate.ts 头注）。按钮/选项点出来的出稿
-    // 带 body.action 结构化动作，runGenerateDraftAction 会打上用户确认标记，这里优先认标记（按钮点击
-    // 本身就是写作授权，不赌回显文案命中词表）。拦在建快照/调模型之前。
-    const userTurnText = readUserTurnTextFromContext(context);
-    if (
-      userTurnText !== undefined
-      && !isUserConfirmedTool(context, "generate_draft")
-      && !userTurnAllowsDraftWrite(userTurnText)
-    ) {
-      console.warn("[turn-intent-gate] 拦下未授权 generate_draft（本轮用户原话无写作意图，防入库后自主续写）");
-      const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
-      return buildNoWriteIntentBlockedOutput(resolvedChapter, overview);
+    // 作者档的两道结构护栏（重构 P4，替代按作者原话猜意图的门）。按钮点出来的出稿带作者确认标记，不受这两道约束。
+    const authorConfirmed = isUserConfirmedTool(context, "generate_draft");
+    const chapterGoal = input.chapterGoal?.trim() || undefined;
+    if (!authorConfirmed) {
+      // A1 找原句：chapterGoal 是「作者给的方向」，必须逐句出自作者在这段对话里说过的话（不是对话通道调的就没得核，照用）。
+      const authorWords = readAuthorWordsFromContext(context);
+      if (chapterGoal && authorWords) {
+        const quote = checkAuthorQuote(chapterGoal, authorWords);
+        if (quote.notFound.length > 0) {
+          const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+          return buildGoalNotQuotedOutput(resolvedChapter, quote.notFound, overview);
+        }
+      }
+      // A2 有稿不覆盖：这一章已有工作稿或已定稿，整章重写要作者点「重写这一章」。
+      const committedNow = await isChapterCommitted(projectDir, resolvedChapter);
+      if (committedNow || await hasWorkingDraftText(projectDir, resolvedChapter)) {
+        const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+        return buildRewriteAwaitingAuthorOutput(resolvedChapter, committedNow, overview, chapterGoal);
+      }
     }
     // B（章序护栏，防穿帮）：入库会把这章的跨章状态写进故事，下一章靠读它才不穿帮。
     // 前一章没入库就写本章 → 默认拦下（强护栏），知情后带 allowWriteAhead 再调才放行。
@@ -458,7 +484,7 @@ export const generateDraftTool = createTool({
     const outcome = await runGenerateDraft({
       projectDir,
       chapter: resolvedChapter,
-      ...(input.chapterGoal !== undefined && !authorGaveNoDirection(userTurnText) ? { chapterGoal: input.chapterGoal } : {}),
+      ...(chapterGoal ? { chapterGoal } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
       ...(input.selectedCharacterIds !== undefined ? { selectedCharacterIds: input.selectedCharacterIds } : {}),
       ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
