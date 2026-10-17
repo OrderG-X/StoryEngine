@@ -1,0 +1,32 @@
+{
+  "name": "@actalk/story-core",
+  "version": "0.0.0",
+  "description": "StoryEngine 新核心：真相（正文 / 章节账单 / 作者裁定）、命令、投影。纯 TypeScript，不调模型。",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "test": "node ../../test-tools/run-vitest.mjs run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

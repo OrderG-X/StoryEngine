@@ -1,0 +1,44 @@
+/**
+ * 书目录里核心认的路径（全部相对书目录）。
+ *
+ * 正文沿用老书的 `chapters/NNNN.md`；核心新增的东西都在 `ledger/` 下，老书没有这个目录就是「还没导入」。
+ */
+import { isAbsolute, normalize, sep } from "node:path";
+
+export const LEDGER_DIR = "ledger";
+export const HEAD_PATH = "ledger/head.json";
+export const DECISIONS_PATH = "ledger/decisions.json";
+export const TX_DIR = ".story-core-tx";
+
+const pad = (chapter: number): string => String(chapter).padStart(4, "0");
+
+export function chapterTextPath(chapter: number): string {
+  return `chapters/${pad(chapter)}.md`;
+}
+
+export function chapterLedgerPath(chapter: number): string {
+  return `ledger/chapters/${pad(chapter)}.json`;
+}
+
+export const CHAPTER_LEDGER_DIR = "ledger/chapters";
+
+export function receiptPath(keyHash: string): string {
+  return `ledger/receipts/${keyHash}.json`;
+}
+
+/** 文件名 → 章号（`0012.json` / `0012.md` → 12）；不是这个格式返回 undefined。 */
+export function chapterFromFileName(name: string): number | undefined {
+  const match = /^(\d{4,})\.(json|md)$/u.exec(name);
+  if (!match) return undefined;
+  const chapter = Number(match[1]);
+  return Number.isInteger(chapter) && chapter >= 1 ? chapter : undefined;
+}
+
+/** 相对路径必须留在书目录里：不许绝对路径、不许 `..` 出去。 */
+export function assertInsideBook(relativePath: string): string {
+  const cleaned = normalize(relativePath);
+  if (isAbsolute(cleaned) || cleaned === ".." || cleaned.startsWith(`..${sep}`) || cleaned.length === 0) {
+    throw new Error(`路径不在书目录里：${relativePath}`);
+  }
+  return cleaned;
+}
