@@ -255,6 +255,15 @@ describe("stateOverviewAdapter", () => {
     expect(workspaceFromStateOverview(overview, 0).currentChapter.chapterNumber).toBe(1);
   });
 
+  it("当前章还没有章名：显示「第N章」，不借上一章的时间线事件当章名", () => {
+    const overview = {
+      ...createOverview(),
+      project: { title: "测试书", genre: "都市", currentChapter: 11 },
+      storyStatus: { currentStage: "draft_ready", currentObjective: "写第十一章", lastTimelineEvent: "林舟拨通纸条上的陌生号码" },
+    } satisfies StateOverview;
+    expect(workspaceFromStateOverview(overview).currentChapter).toMatchObject({ chapterNumber: 11, title: "第11章" });
+  });
+
   it("treats draft-only chapter files as work drafts instead of committed chapters", () => {
     const overview = {
       ...createOverview(),

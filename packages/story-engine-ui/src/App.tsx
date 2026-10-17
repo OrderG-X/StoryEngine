@@ -121,7 +121,7 @@ export function App() {
     const onHide = () => saveAllKeepalive();
     // 只是切后台：页面还活着，走常规保存。
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") void flushAllSaves();
+      if (document.visibilityState === "hidden") void flushAllSaves({ background: true });
     };
     window.addEventListener("pagehide", onHide);
     window.addEventListener("beforeunload", onHide);

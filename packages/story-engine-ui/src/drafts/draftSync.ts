@@ -8,7 +8,7 @@
  * - 有冲突提示挂着（incoming）就先不存，等作者选。
  * - AI 回合进行中先不自动存（holdDraftSaves）：作者这时打的字保持「没存」，AI 写的稿回来时稿纸出提示让作者选；
  *   要是先存上了，AI 的稿落盘后稿纸会当作没改过、把作者刚打的字静默换掉。
- * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉。
+ * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉；只是切到后台（页面还活着）走 flushDraftSaveUnlessHeld，AI 回合里照样先不存。
  */
 import { fetchChapterPaper, saveWorkingDraft } from "../api/workingDraftClient.js";
 import { isDraftDirty, useDraftStore } from "../stores/draftStore.js";
@@ -112,6 +112,12 @@ export function holdDraftSaves(): () => void {
 
 /** 换章、撤销、关窗前：把没存的字存掉，等它落盘。 */
 export async function flushDraftSave(): Promise<DraftFlushResult> {
+  return saveDraftNow();
+}
+
+/** 切到后台这类「顺手存一下」：AI 回合里先不存（回合收尾放开时照常存），其余同 flushDraftSave。 */
+export async function flushDraftSaveUnlessHeld(): Promise<DraftFlushResult> {
+  if (holds > 0) return { ok: true };
   return saveDraftNow();
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChapterPaper } from "../api/workingDraftClient.js";
 import { isDraftDirty, paperStage, useDraftStore } from "../stores/draftStore.js";
-import { __resetDraftSyncForTests, editDraft, flushDraftSave, holdDraftSaves, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave, flushDraftSaveUnlessHeld, holdDraftSaves, openPaper, refreshPaper, saveDraftNow } from "./draftSync.js";
 
 const PROJECT = "/books/钟楼";
 
@@ -208,6 +208,19 @@ describe("存稿调度", () => {
     release();
     await vi.advanceTimersByTimeAsync(700);
     expect(server.puts).toEqual([expect.objectContaining({ chapter: 2, body: "原稿。加一句。", baseVersion: "v0" })]);
+  });
+
+  it("AI 回合里切到后台：不存作者刚打的字；回合外切后台照常存", async () => {
+    const server = fakeServer({ 2: { version: "v0", body: "原稿。" } });
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 2);
+    const release = holdDraftSaves();
+    editDraft("原稿。作者趁 AI 改稿时加的一句。");
+    await flushDraftSaveUnlessHeld();
+    expect(server.puts).toHaveLength(0);
+    release();
+    await flushDraftSaveUnlessHeld();
+    expect(server.puts).toEqual([expect.objectContaining({ chapter: 2, body: "原稿。作者趁 AI 改稿时加的一句。", baseVersion: "v0" })]);
   });
 
   it("撤销后重读：force 直接换上盘上的旧版", async () => {

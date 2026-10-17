@@ -575,7 +575,8 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     byChapter.set(currentChapterNumber, {
       id: `ch-${currentChapterNumber}`,
       chapterNumber: currentChapterNumber,
-      title: fileState?.committedTitle ?? fileState?.draftTitle ?? (overview.storyStatus.lastTimelineEvent ? titleFromSummary(overview.storyStatus.lastTimelineEvent, currentChapterNumber) : `第${currentChapterNumber}章`),
+      // 不拿「最近一条时间线事件」当章名：那是上一章发生的事（工具回传的 overview 不带章节文件时就会把上一章的事挂到这一章头上）。
+      title: fileState?.committedTitle ?? fileState?.draftTitle ?? `第${currentChapterNumber}章`,
       status: "current",
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
