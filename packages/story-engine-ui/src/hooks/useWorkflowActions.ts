@@ -11,7 +11,6 @@ import {
   previewCommit,
   applyCommit,
   saveChapterWorkspace,
-  applyFoundationGapDecisions,
 } from "../api/client.js";
 import type {
   CommitSelectiveConfirmation,

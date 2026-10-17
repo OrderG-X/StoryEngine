@@ -28,7 +28,6 @@ import type {
   ChapterWorkspaceSnapshot,
   FoundationGapAppliedWrite,
   FoundationGapApplyPlan,
-  FoundationGapChatResult,
   FoundationGapSkippedWrite,
   FoundationConflictItem,
   FoundationGapSuggestion,
@@ -387,17 +386,6 @@ export function buildNoExecutableFoundationChangeFeedback(sourceText: string): F
       "原因：没有生成可确认的资料修改",
       "下一步：请生成资料修改预览，或把要修改的字段说得更具体。",
     ],
-  };
-}
-
-function buildUndoFoundationWriteAction(undoId: string): SuggestedAction {
-  return {
-    id: "undo-foundation-write",
-    label: "撤销本次修改",
-    description: "恢复到这次 Agent 修改前的资料状态。",
-    permission: "project_config_write",
-    requiresConfirmation: false,
-    endpoint: undoId,
   };
 }
 
@@ -780,17 +768,6 @@ export interface UseChatParams {
   handleGenerateSteering: (directionOverride?: unknown) => Promise<void>;
   handleContinueNextChapter: () => Promise<void>;
   handleCreateRevisionTask: (source: { issue?: any; suggestion?: any }) => void;
-  handleFoundationGapChat?: (input: {
-    readonly userMessage: string;
-    readonly currentDraft?: FoundationGapSuggestion | null;
-    readonly currentIntent?: string | null;
-    readonly selectedCategory?: string | null;
-    readonly chatHistory?: readonly { readonly role: "assistant" | "user"; readonly content: string }[];
-    readonly currentDraftContent?: string | null;
-    readonly directArchive?: boolean;
-  }) => Promise<FoundationGapChatResult>;
-  handleApplyFoundationGapSuggestionsFromChat?: (suggestionIds?: readonly string[]) => Promise<{ readonly plan: FoundationGapApplyPlan; readonly writes: readonly FoundationGapAppliedWrite[]; readonly skippedWrites: readonly FoundationGapSkippedWrite[]; readonly undo?: { readonly undoId: string; readonly changedFiles: readonly string[] } } | null>;
-  handleRollbackFoundationGapApplyFromChat?: (undoId: string) => Promise<boolean>;
   applyOverviewToWorkspace: (
     overview: StateOverview,
     draftContent?: string,
@@ -834,9 +811,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     handleGenerateSteering,
     handleContinueNextChapter,
     handleCreateRevisionTask,
-    handleFoundationGapChat,
-    handleApplyFoundationGapSuggestionsFromChat,
-    handleRollbackFoundationGapApplyFromChat,
     applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
     saveDraftChanges,
@@ -2160,44 +2134,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     [selectedAdviceCards, setSelectedAdviceCards],
   );
 
-  const runOwnedFoundationWrite = useCallback(
-    async <T,>(write: () => Promise<T>): Promise<T | null> => {
-      if (!projectPath || useNavigationStore.getState().projectPath !== projectPath) return null;
-      const initial = useWorkspaceStore.getState();
-      const operation = beginWorkspaceOperation("foundation-write", {
-        projectPath,
-        chapter: initial.workspace.currentChapter.chapterNumber,
-        sessionId: initial.activeSessionId,
-      });
-      if (!operation) {
-        showToast("已有操作正在进行，请等它结束后再写入资料。", 4200);
-        return null;
-      }
-      const ownsTarget = (): boolean => {
-        const live = useWorkspaceStore.getState();
-        return isWorkspaceOperationTargetCurrent(operation, {
-          projectPath: useNavigationStore.getState().projectPath ?? "",
-          chapter: live.workspace.currentChapter.chapterNumber,
-          sessionId: live.activeSessionId,
-        });
-      };
-      try {
-        const result = await write();
-        if (!ownsTarget()) {
-          useNavigationStore.getState().showToast("你切换了书，那次资料写入的结果没有写进来。", 5000);
-          return null;
-        }
-        return result;
-      } catch (error) {
-        if (!ownsTarget()) return null;
-        throw error;
-      } finally {
-        finishWorkspaceOperation(operation);
-      }
-    },
-    [projectPath, showToast],
-  );
-
   /* ---- handleConfirmCommit：「确认定稿」按钮 ---- */
 
   // 结构化动作（2026-10-07 拆补丁塔）：按钮点击即授权，服务端直接执行 commit_apply——不经模型、
@@ -2361,66 +2297,6 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendMessage("继续写下一章。");
           return;
         }
-        case "confirm-foundation-delete": {
-          const ids = action.endpoint?.split(",").map((item) => item.trim()).filter(Boolean) ?? [];
-          if (ids.length === 0 || !handleApplyFoundationGapSuggestionsFromChat) return;
-          void runOwnedFoundationWrite(async () => {
-            const store = useWorkspaceStore.getState();
-            store.setFoundationGapSuggestions(store.foundationGapSuggestions.map((suggestion) => (
-              ids.includes(suggestion.id) ? { ...suggestion, confirmedByUser: true } : suggestion
-            )));
-            return handleApplyFoundationGapSuggestionsFromChat(ids);
-          }).then((result) => {
-            if (!result) return;
-            consumeSuggestedAction(action);
-            // 修3：只有真有写入才挂撤销按钮，避免「啥也没写却给假撤销」。
-            const undoActions = (result?.writes?.length ?? 0) > 0 && result?.undo ? [buildUndoFoundationWriteAction(result.undo.undoId)] : [];
-            appendMessage({
-              id: `assistant-foundation-delete-confirmed-${Date.now()}`,
-              role: "assistant",
-              content: foundationApplyResultText(result?.plan ?? null, result?.writes ?? [], result?.skippedWrites ?? []),
-              suggestedActions: undoActions,
-            });
-          });
-          return;
-        }
-        case "accept-foundation-suggestions": {
-          const ids = action.endpoint?.split(",").map((item) => item.trim()).filter(Boolean);
-          if (!handleApplyFoundationGapSuggestionsFromChat) return;
-          void runOwnedFoundationWrite(() => handleApplyFoundationGapSuggestionsFromChat(ids)).then((result) => {
-            if (!result) return;
-            consumeSuggestedAction(action);
-            const undoActions = (result?.writes?.length ?? 0) > 0 && result?.undo ? [buildUndoFoundationWriteAction(result.undo.undoId)] : [];
-            appendMessage({
-              id: `assistant-foundation-applied-${Date.now()}`,
-              role: "assistant",
-              content: foundationApplyResultText(result?.plan ?? null, result?.writes ?? [], result?.skippedWrites ?? []),
-              suggestedActions: undoActions,
-            });
-          });
-          return;
-        }
-        case "undo-foundation-write": {
-          const undoId = action.endpoint?.trim();
-          if (!undoId || !handleRollbackFoundationGapApplyFromChat) {
-            appendMessage({
-              id: `assistant-foundation-undo-missing-${Date.now()}`,
-              role: "assistant",
-              content: "没有找到可撤销的修改记录。",
-            });
-            return;
-          }
-          void runOwnedFoundationWrite(() => handleRollbackFoundationGapApplyFromChat(undoId)).then((ok) => {
-            if (ok === null) return;
-            if (ok) consumeSuggestedAction(action);
-            appendMessage({
-              id: `assistant-foundation-undone-${Date.now()}`,
-              role: "assistant",
-              content: ok ? "已撤销本次修改。" : "撤销失败，请查看资料补全面板错误。",
-            });
-          });
-          return;
-        }
         case "retry-agent": {
           // agent 大脑失败后重试：用按钮 endpoint 携带的原始消息重跑 agent 派发，不重复 append 用户消息。
           const original = action.endpoint?.trim();
@@ -2446,12 +2322,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       handleConfirmCommit,
       handleConfirmPrune,
       handleApplyRevisionPreview,
-      handleApplyFoundationGapSuggestionsFromChat,
-      handleRollbackFoundationGapApplyFromChat,
       appendMessage,
       consumeSuggestedAction,
       runAgentDispatch,
-      runOwnedFoundationWrite,
     ],
   );
 

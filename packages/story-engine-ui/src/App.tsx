@@ -12,7 +12,6 @@ import { useBookManagement, workspaceFromBook, sidebarFromBook } from "./hooks/u
 import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
-import { useFoundationGaps } from "./hooks/useFoundationGaps.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "./api/stateOverviewAdapter.js";
 import { ChapterWorkspaceConflictError, fetchDefaultBookLibrary, saveChapterWorkspaceBeacon } from "./api/client.js";
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon, setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
@@ -350,8 +349,6 @@ export function App() {
     saveDraftChanges,
   });
 
-  const foundationGaps = useFoundationGaps(projectPath);
-
   const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, undoToTurn, stopAgent } = useChat({
     projectPath,
     resolveChapterDirection,
@@ -365,9 +362,6 @@ export function App() {
     handleGenerateSteering: workflow.generateSteering,
     handleContinueNextChapter: navigation.handleContinueNextChapter,
     handleCreateRevisionTask: workflow.handleCreateRevisionTask,
-    handleFoundationGapChat: foundationGaps.handleFoundationGapChat,
-    handleApplyFoundationGapSuggestionsFromChat: foundationGaps.handleApplyFoundationGapSuggestionsFromChat,
-    handleRollbackFoundationGapApplyFromChat: foundationGaps.handleRollbackFoundationGapApplyFromChat,
     applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
     saveDraftChanges,

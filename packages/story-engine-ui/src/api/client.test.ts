@@ -2,16 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { summarizeFormalCommitApplyError } from "../utils/formalCommitApplyErrorCopy.js";
 import {
-  applyFoundationGapDecisions,
   applyDraftRevision,
-  chatFoundationGapAssistant,
   applyCommit,
-  confirmFoundationGapCharacterStateWrite,
   fetchModelSettings,
-  FOUNDATION_GAP_APPLY_TIMEOUT_MESSAGE,
-  FOUNDATION_GAP_APPLY_TIMEOUT_MS,
-  FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE,
-  FOUNDATION_GAP_CHAT_TIMEOUT_MS,
   previewCommit,
   saveChapterWorkspace,
   saveChapterWorkspaceBeacon,
@@ -225,112 +218,6 @@ describe("applyDraftRevision", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body.confirm).toBe(true);
     expect(body).not.toHaveProperty("targetText");
-  });
-});
-
-describe("confirmFoundationGapCharacterStateWrite", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("posts only the character state confirm contract to the unique foundation route", async () => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => jsonResponse({
-      ok: true,
-      result: {
-        status: "committed",
-        scope: "character_state_only",
-        changedFiles: ["characters/lin-xiao/state.json"],
-        didWriteCharacterState: true,
-        didWriteCharacterProfile: false,
-        didWriteCharacterBible: false,
-        didWriteCharacterMatrix: false,
-        didWriteChapterMarkdown: false,
-        didWriteTimeline: false,
-        didWriteWorld: false,
-        didWriteMemory: false,
-        didCallCommitEngine: false,
-        didCallApplyCommit: false,
-        stateOverviewRefreshRequested: true,
-        stateOverviewRefreshSucceeded: true,
-        stateOverviewRefreshError: null,
-        rollbackAttempted: false,
-        rollbackSucceeded: null,
-        residue: [],
-      },
-    }, 200));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await confirmFoundationGapCharacterStateWrite({
-      projectPath: "/tmp/story-project",
-      characterId: "lin-xiao",
-      targetFile: "characters/lin-xiao/state.json",
-      previewHash: "preview-hash",
-      baseHash: "base-hash",
-      idempotencyKey: "idem-1",
-      explicitConfirm: true,
-      suggestionIds: ["suggestion-1"],
-      statePatch: { mood: "冷静" },
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/foundation-gaps/confirm-character-write",
-      expect.objectContaining({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      projectPath: "/tmp/story-project",
-      characterId: "lin-xiao",
-      targetFile: "characters/lin-xiao/state.json",
-      previewHash: "preview-hash",
-      baseHash: "base-hash",
-      idempotencyKey: "idem-1",
-      explicitConfirm: true,
-      suggestionIds: ["suggestion-1"],
-      statePatch: { mood: "冷静" },
-    });
-    expect(JSON.stringify(body)).not.toContain("/api/commit/apply");
-    expect(JSON.stringify(body)).not.toContain("/api/formal-write/");
-    expect(JSON.stringify(body)).not.toContain("CommitEngine");
-  });
-});
-
-describe("foundation agent endpoint timeouts", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("times out foundation gap chat requests so the UI can unlock", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => abortableNeverResponse(init)));
-
-    const request = chatFoundationGapAssistant({
-      projectPath: "/tmp/story-project",
-      userMessage: "角色里好像有个多余的",
-    });
-    const expected = expect(request).rejects.toThrow(FOUNDATION_GAP_CHAT_TIMEOUT_MESSAGE);
-
-    await vi.advanceTimersByTimeAsync(FOUNDATION_GAP_CHAT_TIMEOUT_MS);
-    await expected;
-  });
-
-  it("times out foundation gap apply requests instead of waiting forever", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => abortableNeverResponse(init)));
-
-    const request = applyFoundationGapDecisions(
-      "/tmp/story-project",
-      [{ suggestionId: "suggestion-1", decision: "accept" }],
-      [],
-    );
-    const expected = expect(request).rejects.toThrow(FOUNDATION_GAP_APPLY_TIMEOUT_MESSAGE);
-
-    await vi.advanceTimersByTimeAsync(FOUNDATION_GAP_APPLY_TIMEOUT_MS);
-    await expected;
   });
 });
 

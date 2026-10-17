@@ -16,7 +16,6 @@ import { __resetRecentWorkspaceUndoForTest, hasRecentWorkspaceUndo, reloadAfterW
 
 // 前端接入：handleSendMessage 把对话交给 Mastra agent SSE。
 vi.mock("../api/client.js", () => ({
-  applyFoundationGapDecisions: vi.fn(),
   directEditDraft: vi.fn(),
   fetchChapterChatStream: vi.fn(async () => undefined),
   fetchChapterWorkspace: vi.fn(),
@@ -381,49 +380,6 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
 
     expect(useWorkspaceStore.getState().workspace.draft.content).toBe("第二章安全正文。");
     expect(useWorkspaceStore.getState().draftActionLoading).toBe("replacement-loading");
-  });
-
-  it("foundation write owns the slot and drops a late completion after workspace replacement", async () => {
-    const gate = deferred<any>();
-    const applyFoundation = vi.fn(() => gate.promise);
-    const { result } = renderHook(() => useChat(buildParams({
-      handleApplyFoundationGapSuggestionsFromChat: applyFoundation,
-    })));
-
-    act(() => {
-      result.current.handleSuggestedAction({
-        id: "accept-foundation-suggestions",
-        label: "确认写入资料",
-        description: "写入资料",
-        permission: "project_config_write",
-        requiresConfirmation: true,
-        endpoint: "suggestion-1",
-      });
-    });
-    await vi.waitFor(() => expect(applyFoundation).toHaveBeenCalled());
-    const intruder = beginWorkspaceOperation("generate-draft", {
-      projectPath: "/tmp/story-engine-agent",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: "session-a",
-    });
-    if (intruder) finishWorkspaceOperation(intruder);
-    expect(intruder).toBeNull();
-
-    useNavigationStore.setState({ projectPath: null });
-    useWorkspaceStore.setState({
-      activeSessionId: "session-b",
-      workspace: {
-        ...useWorkspaceStore.getState().workspace,
-        currentChapter: { id: "ch-2", chapterNumber: 2, title: "第二章", status: "current" },
-        messages: [{ id: "replacement-message", role: "user", content: "第二章安全消息" }],
-      },
-    });
-    gate.resolve({ plan: {}, writes: [], skippedWrites: [] });
-    await vi.waitFor(() => expect(isWorkspaceBusy()).toBe(false));
-
-    expect(useWorkspaceStore.getState().workspace.messages).toEqual([
-      { id: "replacement-message", role: "user", content: "第二章安全消息" },
-    ]);
   });
 
   it("onToolResult for commit_apply loads the committed body with committed flowStatus", async () => {
