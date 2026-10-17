@@ -200,12 +200,14 @@ function storySettingsSaveSuggestions(input: StorySettingsSaveInput): readonly F
   }));
 }
 
-function inferRevisionTargetType(source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }): DraftRevisionTask["targetType"] {
-  const target = `${source.issue?.category ?? ""} ${source.suggestion?.target ?? ""}`;
-  if (/开头|开场/u.test(target)) return "opening";
-  if (/结尾|追读/u.test(target)) return "ending";
-  if (/dialogue|对话|口吻/u.test(target)) return "dialogue";
-  if (/pacing|节奏|中段/u.test(target)) return "section";
+/**
+ * 修订类型只看审稿结果里的结构化类目（重构 P4）：不再拿正则去猜建议文字里的「开头/结尾/对话」。
+ * 类目对不上的一律按通用修订（段落）。
+ */
+function revisionTargetTypeFromCategory(category: DraftAIReviewIssue["category"] | undefined): DraftRevisionTask["targetType"] {
+  if (category === "reader_hook") return "ending";
+  if (category === "dialogue") return "dialogue";
+  if (category === "pacing") return "section";
   return "paragraph";
 }
 
@@ -234,27 +236,16 @@ function resolveRevisionTarget(
     source.issue?.affectedParagraphHint,
     source.suggestion?.target,
   ].filter((item): item is string => Boolean(item?.trim()));
+  const targetType = revisionTargetTypeFromCategory(source.issue?.category);
   for (const candidate of sourceTexts) {
     const exact = findExactOrContainingParagraph(draftContent, candidate);
-    if (exact) return { targetText: exact, targetType: inferRevisionTargetType(source), guessed: false };
+    if (exact) return { targetText: exact, targetType, guessed: false };
   }
-  // B5：精确/含有匹配都落空 → 下面按类目「猜」一段。猜中的一律标 guessed=true，让调用方提示用户核对，
-  // 不再静默把猜测当成精确目标改错段（违『绝不静默』铁律④）。
+  // B5：找不到原句 → 退一段给作者核对（标 guessed=true，调用方明确提示「是猜的」，绝不静默当精确目标）。
+  // 只按结构化类目选：追读钩子取最后一段，其余取第一段；不按建议文字猜。
   const paragraphs = draftParagraphs(draftContent);
-  if (source.issue?.category === "reader_hook") {
-    const last = paragraphs.at(-1);
-    return last ? { targetText: last, targetType: "ending", guessed: true } : null;
-  }
-  if (source.issue?.category === "dialogue" || /对话|口吻/u.test(source.suggestion?.target ?? "")) {
-    const dialogue = paragraphs.find((paragraph) => /[""“”]/u.test(paragraph));
-    return dialogue ? { targetText: dialogue, targetType: "dialogue", guessed: true } : null;
-  }
-  if (/开头|开场/u.test(source.suggestion?.target ?? "") || source.issue?.category === "plot" || source.issue?.category === "pacing") {
-    const first = paragraphs[0];
-    return first ? { targetText: first, targetType: "opening", guessed: true } : null;
-  }
-  const fallback = paragraphs[0];
-  return fallback ? { targetText: fallback, targetType: inferRevisionTargetType(source), guessed: true } : null;
+  const fallback = source.issue?.category === "reader_hook" ? paragraphs.at(-1) : paragraphs[0];
+  return fallback ? { targetText: fallback, targetType, guessed: true } : null;
 }
 
 function revisionIssueConstraints(issue?: DraftAIReviewIssue): readonly string[] {

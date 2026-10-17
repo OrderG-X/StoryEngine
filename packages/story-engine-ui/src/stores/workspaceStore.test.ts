@@ -128,7 +128,6 @@ describe("resetTransientWorkspaceState（M7 切项目清残留临时态，防跨
     store.setActiveRevisionTask({} as never);
     store.setActiveRevisionPreview({} as never);
     store.setSteeringDraft({} as never);
-    store.setPendingDirectEditInstruction("改这段");
     expect(useWorkspaceStore.getState().draftCandidates).not.toBeNull();
 
     useWorkspaceStore.getState().resetTransientWorkspaceState();
@@ -140,6 +139,5 @@ describe("resetTransientWorkspaceState（M7 切项目清残留临时态，防跨
     expect(s.activeRevisionTask).toBeNull();
     expect(s.activeRevisionPreview).toBeNull();
     expect(s.steeringDraft).toBeNull();
-    expect(s.pendingDirectEditInstruction).toBeNull();
   });
 });

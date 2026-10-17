@@ -30,7 +30,7 @@ import { buildInboxTodos } from "./inboxTodos.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { railActionsForFlow } from "./ChapterToolRail.js";
-import { ChatCapabilityBar } from "./ChatCapabilityBar.js";
+import { ChatCapabilityBar, type CapabilityAction } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { DraftAIReviewCard } from "./DraftAIReviewCard.js";
@@ -43,7 +43,7 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
-import { commitChapterFromChoiceIntent, confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
@@ -80,7 +80,7 @@ type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   /** 非写作页（设定本 / 历史）的输入框提示；写作台不传，按写作进度提示。 */
   readonly composerHint?: string;
   /** 非写作页时快捷条最前面的能力（跟当前页有关）；不传则按本章进度给写作工具。 */
-  readonly contextActions?: readonly { readonly key: string; readonly label: string; readonly intent: string }[] | null;
+  readonly contextActions?: readonly CapabilityAction[] | null;
   /** 点头部模型标签：打开模型设置（工作区设置弹窗）。 */
   readonly onOpenModelSettings?: () => void;
   /** 变了就重读一次当前模型（设置弹窗关闭时 +1）。 */
@@ -129,16 +129,15 @@ export function ReadersCatchUpNote({ status }: {
 }
 
 /**
- * 「下一步：AI 带路选项」行（从主组件抽出便于单测点击分派）。三档点击优先级：
- *  1. choice 带 action（R4.7：服务端自己生成的确定性选项）→ 直接发结构化动作（body.action，不经模型）；
- *  2. intent 是「确认定稿第 N 章」（模型提议的定稿确认）→ 按钮通道 commitConfirmAction（服务端直接定稿）；
- *  3. 其余（模型 suggest_next_steps 生成的选项）→ 照旧把 intent 当一句话发给 agent。
+ * 「下一步：AI 带路选项」行（从主组件抽出便于单测点击分派）。两档：
+ *  1. choice 带 action（服务端生成的确定性选项）→ 直接发结构化动作（body.action，不经模型）；
+ *  2. 其余（模型 suggest_next_steps 生成的选项）→ 把 intent 当一句话发给 AI。要定稿的，AI 调定稿只会出「确认定稿」按钮。
+ * 不再拿 intent 的措辞认回按钮（重构 P4）。
  */
-export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSuggestedAction, onSendUserAction }: {
+export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAction }: {
   readonly nextStep: NextStepPrompt;
   readonly busy: boolean;
   readonly onSendMessage?: (message: string) => void;
-  readonly onSuggestedAction?: (action: SuggestedAction) => void;
   readonly onSendUserAction?: (action: AgentUserAction) => void;
 }) {
   return (
@@ -155,11 +154,6 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSuggestedA
             onClick={() => {
               if (choice.action && onSendUserAction) {
                 onSendUserAction(choice.action);
-                return;
-              }
-              const commitChapter = commitChapterFromChoiceIntent(choice.intent);
-              if (commitChapter !== null && onSuggestedAction) {
-                onSuggestedAction(commitConfirmAction({ chapter: commitChapter }));
                 return;
               }
               onSendMessage?.(choice.intent);
@@ -498,7 +492,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           nextStep={nextStep}
           busy={busy}
           onSendMessage={props.onSendMessage}
-          onSuggestedAction={props.onSuggestedAction}
           onSendUserAction={props.onSendUserAction}
         />
       ) : null}
@@ -518,7 +511,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       <ReadersCatchUpNote status={readerCatchUp} />
 
       {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
-      <ChatCapabilityBar onSendMessage={props.onSendMessage} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />
+      <ChatCapabilityBar onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />
 
       {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
           作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），
@@ -1301,10 +1294,6 @@ function isInjectedWorkflowMessage(message: ChapterMessage): boolean {
   if (message.role === "system") return true;
   if (message.role !== "assistant") return false;
   if ((message.agentCards?.length ?? 0) > 0 || (message.adviceCards?.length ?? 0) > 0 || (message.toolSteps?.length ?? 0) > 0) return false;
-  const content = message.content.trim();
-  return content.startsWith("已进入《")
-    || content === "当前章节已就绪。"
-    // 新旧定稿文案都算（老会话落盘的是旧口径）。
-    || content === "本章已定稿。说「下一章」继续。"
-    || content === "本章已入库。说「下一章」继续。";
+  // 按消息自带的 kind 认（重构 P4），不按文案。
+  return message.kind === "scaffolding";
 }

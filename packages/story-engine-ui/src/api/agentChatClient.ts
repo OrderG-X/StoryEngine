@@ -37,6 +37,9 @@ export type AgentUserAction =
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  | { readonly toolName: "ai_review"; readonly chapter: number }
+  | { readonly toolName: "quality_check"; readonly chapter: number }
+  | { readonly toolName: "undo" }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 
@@ -661,6 +664,8 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
   if (value.toolName === "check_continuity") {
     return { toolName: "check_continuity", chapter, ...(value.fresh === true ? { fresh: true } : {}) };
   }
+  if (value.toolName === "ai_review") return { toolName: "ai_review", chapter };
+  if (value.toolName === "quality_check") return { toolName: "quality_check", chapter };
   if (value.toolName === "generate_draft") {
     const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
       ? value.chapterGoal.trim().slice(0, 2000)

@@ -139,6 +139,7 @@ export function workspaceFromStateOverview(
       {
         id: "state-overview-connected",
         role: "assistant",
+        kind: "scaffolding",
         content: [
           `已进入《${overview.project.title}》的章节工作区。`,
           `当前目标：${currentObjective}`,

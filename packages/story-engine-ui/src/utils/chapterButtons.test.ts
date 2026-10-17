@@ -1,0 +1,41 @@
+import { describe, expect, it } from "vitest";
+
+import { chapterButtonAction, nextUncommittedChapter } from "./chapterButtons.js";
+import type { ChapterNavItem } from "../types.js";
+
+const nav = (chapterNumber: number, status: ChapterNavItem["status"]): ChapterNavItem =>
+  ({ chapterNumber, title: `第${chapterNumber}章`, status }) as ChapterNavItem;
+
+describe("chapterButtonAction：按钮 → 结构化动作（不靠文案）", () => {
+  const chapters = [nav(1, "committed"), nav(2, "committed"), nav(3, "draft")];
+
+  it("各按钮带当前章号发对应动作", () => {
+    expect(chapterButtonAction("check_continuity", { chapter: 3, chapters })).toEqual({ toolName: "check_continuity", chapter: 3 });
+    expect(chapterButtonAction("ai_review", { chapter: 3, chapters })).toEqual({ toolName: "ai_review", chapter: 3 });
+    expect(chapterButtonAction("quality_check", { chapter: 3, chapters })).toEqual({ toolName: "quality_check", chapter: 3 });
+    expect(chapterButtonAction("commit_preview", { chapter: 3, chapters })).toEqual({ toolName: "commit_preview", chapter: 3 });
+  });
+
+  it("写这一章：方向框有字就带上（原样），空白不带", () => {
+    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "  林澈夜探旧泵站 " })).toEqual({ toolName: "generate_draft", chapter: 3, chapterGoal: "林澈夜探旧泵站" });
+    expect(chapterButtonAction("write", { chapter: 3, chapters, direction: "   " })).toEqual({ toolName: "generate_draft", chapter: 3 });
+  });
+
+  it("写下一章：跳过已定稿的章", () => {
+    expect(chapterButtonAction("write_next", { chapter: 1, chapters })).toEqual({ toolName: "generate_draft", chapter: 3 });
+    expect(chapterButtonAction("write_next", { chapter: 3, chapters })).toEqual({ toolName: "generate_draft", chapter: 4 });
+  });
+
+  it("撤销上一步不要章号；其余没选章返回 undefined（调用方如实提示）", () => {
+    expect(chapterButtonAction("undo", { chapters })).toEqual({ toolName: "undo" });
+    expect(chapterButtonAction("ai_review", { chapters })).toBeUndefined();
+    expect(chapterButtonAction("write", { chapter: 0, chapters })).toBeUndefined();
+  });
+});
+
+describe("nextUncommittedChapter", () => {
+  it("hasCommittedChapter 也算已定稿", () => {
+    const chapters = [{ ...nav(2, "current"), hasCommittedChapter: true } as ChapterNavItem];
+    expect(nextUncommittedChapter(1, chapters)).toBe(3);
+  });
+});

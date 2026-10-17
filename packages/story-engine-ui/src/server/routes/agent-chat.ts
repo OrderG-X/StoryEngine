@@ -25,6 +25,9 @@ import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
+import { aiReviewTool } from "../agent/tools/ai-review.js";
+import { qualityCheckTool } from "../agent/tools/quality-check.js";
+import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
@@ -600,6 +603,16 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "generate_draft": {
       const execute = generateDraftTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    case "ai_review":
+    case "quality_check":
+    case "manage_snapshots": {
+      const tool = toolName === "ai_review" ? aiReviewTool : toolName === "quality_check" ? qualityCheckTool : manageSnapshotsTool;
+      const execute = tool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

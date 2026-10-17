@@ -5,23 +5,27 @@
  * **散的、非阶段性的资料/整理能力**（补全角色/世界观/地点/资产/写作规则、整理关系/清理线索/合并伏笔）——
  * 它们此前只散落在各资料面板按钮里、用户在聊天时看不见。高频几个常驻露脸，点「⋯ 更多」展开全部。
  *
- * 点一下 = 给 agent 发一句**用户面中文意图**（onSendMessage），仍走「对话是唯一控制面」——不直调引擎、不 PUT。
+ * 点一下：带 `button` 的是固定动作，直接发结构化动作（onChapterButton，重构 P4）；其余给 AI 发一句用户面中文（onSendMessage）。
  * 【用户面措辞铁律】一律说「补全/补充」，绝不出现「做厚 / enrichment」（纪律 2.6：那是内部叫法）。
  * 纯前端、确定性渲染；样式在 codex.css，作用域 .codex-app。
  */
 import { useState } from "react";
-import { CHECK_CONTINUITY_BUTTON_INTENT, COMMIT_PREVIEW_BUTTON_INTENT, QUALITY_BUTTON_INTENT, REVIEW_BUTTON_INTENT } from "../../../utils/chapterActionIntents.js";
+import type { ChapterButton } from "../../../utils/chapterButtons.js";
 
 export interface CapabilityAction {
   readonly key: string;
   readonly label: string;
-  /** 点击后发给 agent 的中文意图（与各资料面板按钮 / story-agent 触发语一致）。 */
+  /** 不带 button 时：点击后发给 AI 的一句话（与各资料面板按钮 / story-agent 触发语一致）。带 button 时只做悬停提示。 */
   readonly intent: string;
+  /** 固定动作：点了直接发结构化动作，不经模型。 */
+  readonly button?: ChapterButton;
 }
+
+const CONTINUITY: CapabilityAction = { key: "continuity", label: "核账", intent: "拿这一章对一遍前文，看有没有前后对不上的地方", button: "check_continuity" };
 
 /** 收起时常驻露脸的高频能力（写作/补全/整理 各露一个代表，一眼看见最常用的）。 */
 export const QUICK_ACTIONS: readonly CapabilityAction[] = [
-  { key: "continuity", label: "核账", intent: CHECK_CONTINUITY_BUTTON_INTENT },
+  CONTINUITY,
   { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
   { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
 ];
@@ -35,12 +39,12 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   {
     title: "写作",
     actions: [
-      { key: "continuity", label: "核账", intent: CHECK_CONTINUITY_BUTTON_INTENT },
-      { key: "review", label: "内容审阅", intent: REVIEW_BUTTON_INTENT },
+      CONTINUITY,
+      { key: "review", label: "内容审阅", intent: "审阅这一章的内容，给评分和改进建议", button: "ai_review" },
       { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
-      { key: "quality", label: "硬伤检查", intent: QUALITY_BUTTON_INTENT },
+      { key: "quality", label: "硬伤检查", intent: "对这一章做硬伤检查，列出硬伤", button: "quality_check" },
       // 定稿按钮 = 定稿流程入口，确定性走预览（commit_preview）；预览卡再引导「确认定稿」走 commit_apply。
-      { key: "commit", label: "定稿", intent: COMMIT_PREVIEW_BUTTON_INTENT },
+      { key: "commit", label: "定稿", intent: "预览这一章的定稿改动", button: "commit_preview" },
     ],
   },
   {
@@ -73,7 +77,7 @@ export function capabilityByKey(key: string): CapabilityAction | undefined {
   return undefined;
 }
 
-const UNDO_LAST: CapabilityAction = { key: "undo", label: "撤销上一步", intent: "撤销上一步" };
+const UNDO_LAST: CapabilityAction = { key: "undo", label: "撤销上一步", intent: "撤销上一步", button: "undo" };
 
 /**
  * 不在写作台时，快捷条最前面换成跟当前页有关的能力（设定本按分类、历史给「撤销上一步」）；
@@ -96,20 +100,23 @@ export function contextActionsForView(view: "desk" | "library" | "history", cat:
   return keys.map(capabilityByKey).filter((action): action is CapabilityAction => Boolean(action));
 }
 
-export function ChatCapabilityBar({ onSendMessage, disabled, leading = [], leadingOnly = false }: {
+export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, leading = [], leadingOnly = false }: {
   readonly onSendMessage?: (content: string) => void;
+  /** 固定动作按钮（带 button 的）点了走这里：直接发结构化动作。 */
+  readonly onChapterButton?: (button: ChapterButton) => void;
   readonly disabled?: boolean;
   /** true：只放 leading（设定本/历史里不再拿写作工具凑满一排），其余进「更多」。 */
   readonly leadingOnly?: boolean;
   /** 按本章进度派生的工具（ChapterToolRail.railActionsForFlow）：排在最前、第一个高亮；常驻快捷里同 key 的去重。 */
-  readonly leading?: readonly { readonly key: string; readonly label: string; readonly intent: string }[];
+  readonly leading?: readonly CapabilityAction[];
 }) {
   const [open, setOpen] = useState(false);
   if (!onSendMessage) return null;
 
-  const send = (intent: string): void => {
+  const send = (action: CapabilityAction): void => {
     if (disabled) return;
-    onSendMessage(intent);
+    if (action.button && onChapterButton) onChapterButton(action.button);
+    else onSendMessage(action.intent);
     setOpen(false);
   };
 
@@ -123,7 +130,7 @@ export function ChatCapabilityBar({ onSendMessage, disabled, leading = [], leadi
             className={`cap-btn${index === 0 ? " is-lead" : ""}`}
             disabled={disabled}
             title={action.intent}
-            onClick={() => send(action.intent)}
+            onClick={() => send(action)}
           >
             {action.label}
           </button>
@@ -136,7 +143,7 @@ export function ChatCapabilityBar({ onSendMessage, disabled, leading = [], leadi
             className="cap-btn"
             disabled={disabled}
             title={action.intent}
-            onClick={() => send(action.intent)}
+            onClick={() => send(action)}
           >
             {action.label}
           </button>
@@ -163,7 +170,7 @@ export function ChatCapabilityBar({ onSendMessage, disabled, leading = [], leadi
                     className="cap-btn"
                     disabled={disabled}
                     title={action.intent}
-                    onClick={() => send(action.intent)}
+                    onClick={() => send(action)}
                   >
                     {action.label}
                   </button>

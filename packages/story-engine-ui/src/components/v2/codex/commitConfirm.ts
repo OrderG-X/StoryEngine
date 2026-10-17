@@ -14,14 +14,3 @@ export function confirmableCommitPreviewMessageId(messages: readonly ChapterMess
   }
   return null;
 }
-
-/**
- * 下一步选项卡的意图恰好是定稿的规范说法（instructions 让模型用「确认定稿第N章」）时，点击走按钮通道。
- * 只认整句精确形式：这是在识别「哪个按钮」，授权来自点击本身，不是在猜用户打字的意思。
- */
-export function commitChapterFromChoiceIntent(intent: string): number | null {
-  const match = /^确认定稿第\s*(\d+)\s*章$/u.exec(intent.trim());
-  if (!match) return null;
-  const chapter = Number(match[1]);
-  return Number.isInteger(chapter) && chapter > 0 ? chapter : null;
-}

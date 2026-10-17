@@ -265,7 +265,7 @@ export function verdictLabel(verdict: DraftAIReviewReport["verdict"]): string {
   return labels[verdict];
 }
 
-export function ensureWorkflowPrompt<T extends { readonly suggestedActions?: readonly SuggestedAction[]; readonly id?: string; readonly role?: string; readonly content?: string }>(messages: readonly T[], state: ChapterWorkflowState): readonly T[] {
+export function ensureWorkflowPrompt<T extends { readonly suggestedActions?: readonly SuggestedAction[]; readonly id?: string; readonly role?: string; readonly content?: string; readonly kind?: string }>(messages: readonly T[], state: ChapterWorkflowState): readonly T[] {
   if (messages.some((message) => message.suggestedActions?.length)) return messages;
   return [...messages, createWorkflowMessage(state) as T];
 }
@@ -274,6 +274,7 @@ export function createWorkflowMessage(state: ChapterWorkflowState, content?: str
   return {
     id: `assistant-workflow-${state}-${Date.now()}`,
     role: "assistant" as const,
+    kind: "scaffolding" as const,
     content: content ?? workflowPromptText(state),
     suggestedActions: actionsForWorkflowState(state),
   };

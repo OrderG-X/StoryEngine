@@ -338,20 +338,11 @@ export function App() {
     saveDraftChanges,
   });
 
-  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, undoToTurn, stopAgent } = useChat({
+  const { handleSendMessage, handleSelectAdviceCard, handleSuggestedAction, handleSendUserAction, handleChapterButton, undoToTurn, stopAgent } = useChat({
     projectPath,
-    resolveChapterDirection,
-    handleGenerateDraft: workflow.handleGenerateDraft,
-    handleQualityCheck: workflow.handleQualityCheck,
-    handleDraftAIReview: workflow.handleDraftAIReview,
-    handleGenerateRevisionPreview: workflow.handleGenerateRevisionPreview,
     handleApplyRevisionPreview: workflow.handleApplyRevisionPreview,
-    handleGenerateSteering: workflow.generateSteering,
-    handleContinueNextChapter: navigation.handleContinueNextChapter,
-    handleCreateRevisionTask: workflow.handleCreateRevisionTask,
     applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
-    saveDraftChanges,
   });
 
   /* ---- Auto-save：串行化 + 失败可见 + 退出/切换 flush（审查 #3/#4/#5） ---- */
@@ -663,6 +654,7 @@ export function App() {
             onSuggestedAction: handleSuggestedAction,
             onSendMessage: handleSendMessage,
             onSendUserAction: handleSendUserAction,
+            onChapterButton: handleChapterButton,
             onStopAgent: stopAgent,
             onClearChat: () => {
               const backup = useWorkspaceStore.getState().workspace.messages;

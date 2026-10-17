@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { clearLedgerExclusions, ledgerDayOverrideForConfirm, ledgerExclusionsForConfirm } from "../utils/ledgerExclusions.js";
-import { directEditDraft, fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
+import { fetchChapterWorkspace, restoreSnapshotApi, saveChapterWorkspace } from "../api/client.js";
 import { streamAgentChat, type AgentUserAction } from "../api/agentChatClient.js";
 import { renameChatSession, saveChatSessionMessages } from "../api/chatSessionsClient.js";
 import {
@@ -15,7 +15,8 @@ import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildUndoPersistRequest } from "./undoPersist.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure, shouldAdoptDiskDraftAfterStop, shouldReconcileCommitAttempt } from "./reconcileChapterState.js";
-import { matchDeterministicChapterAction, userActionChoiceText } from "../utils/chapterActionIntents.js";
+import { userActionChoiceText } from "../utils/chapterActionIntents.js";
+import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
 import { markUndoReloadPreferSession } from "../utils/undoReloadFlag.js";
 import { drainAutosave, resumeAutosave, suspendAutosave } from "../utils/autosaveControl.js";
 import { buildWorkspacePatchAfterAgentUndo } from "./agentUndoSync.js";
@@ -23,17 +24,10 @@ import { reloadPage } from "../utils/pageReload.js";
 import { markRecentWorkspaceUndo, takePendingRevisionReload } from "../utils/workspaceRevisionConflict.js";
 import type {
   ChapterAdviceCard,
-  ChapterAgentCard,
   ChapterWorkspaceSnapshot,
   StateOverview,
 } from "../api/types.js";
 import type { ChapterMessage, ChapterWorkflowState, CommitConfirmTarget, SuggestedAction } from "../types.js";
-import { suggestedAction } from "../utils/workflowHelpers.js";
-import {
-  isChapterAgentCancel,
-  isChapterAgentConfirm,
-  isClearDraftRequest,
-} from "../utils/chatTextHelpers.js";
 import {
   countTextWords,
   extractDraftTitle,
@@ -54,80 +48,13 @@ import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
 
 
-
-function mergeAgentCardPatch(card: ChapterAgentCard, patch: Partial<ChapterAgentCard>): ChapterAgentCard {
-  return {
-    ...card,
-    ...patch,
-    detail: mergeAgentCardDetails(card.detail, patch.detail),
-  };
-}
-
-function mergeAgentCardDetails(
-  existing: readonly string[] | undefined,
-  incoming: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (!existing?.length) return incoming;
-  if (!incoming?.length) return existing;
-  const auditLines = existing.filter(isRouteAuditDetailLine);
-  return uniqueStrings([...auditLines, ...incoming]);
-}
-
-function isRouteAuditDetailLine(line: string): boolean {
-  return /^(route|action|target|confidence|reason):\s*/u.test(line.trim()) || /^判断：/u.test(line.trim());
-}
-
-function uniqueStrings(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    result.push(normalized);
-  }
-  return result;
-}
-
-
-
-function lastSentenceReplacementFromInstruction(instruction: string): string | null {
-  const match = instruction.trim().match(
-    /最后一句(?:话)?(?:改成|改为|换成|改写成)[：:\s「“"']*(.+?)[」”"']*(?:[，,。；;\s]*(?:其他|其余|其它).*?(?:不要动|不动|保持不变))?$/u,
-  );
-  const replacement = match?.[1]?.trim()
-    .replace(/[，,。；;\s]*(?:其他|其余|其它).*?(?:不要动|不动|保持不变).*$/u, "")
-    .replace(/[」”"']$/u, "")
-    .trim();
-  if (!replacement) return null;
-  return /[。！？.!?]$/u.test(replacement) ? replacement : `${replacement}。`;
-}
-
-function replaceLastNonEmptyLine(content: string, replacement: string): string {
-  const match = content.match(/^([\s\S]*?)([^\n]*\S[^\n]*)(\s*)$/u);
-  if (!match) return replacement;
-  return `${match[1] ?? ""}${replacement}${match[3] ?? ""}`;
-}
-
-
 /* ------------------------------------------------------------------ */
 /*  useChat hook                                                        */
 /* ------------------------------------------------------------------ */
 
 export interface UseChatParams {
   projectPath: string | null;
-  resolveChapterDirection: (value?: unknown) => string;
-  handleGenerateDraft: (
-    chapterGoalOverride?: string,
-    options?: { errorTarget?: "chat" | "steering"; progressMessageId?: string; fallbackGoalWhenEmpty?: string },
-  ) => Promise<void>;
-  handleQualityCheck: () => Promise<void>;
-  handleDraftAIReview: () => Promise<void>;
-  handleGenerateRevisionPreview: () => Promise<void>;
   handleApplyRevisionPreview: () => Promise<void>;
-  handleGenerateSteering: (directionOverride?: unknown) => Promise<void>;
-  handleContinueNextChapter: () => Promise<void>;
-  handleCreateRevisionTask: (source: { issue?: any; suggestion?: any }) => void;
   applyOverviewToWorkspace: (
     overview: StateOverview,
     draftContent?: string,
@@ -141,8 +68,6 @@ export interface UseChatParams {
    * agent 的 foundation_write 结果（refreshScope:"foundation"）调它；可不传。
    */
   refreshWorkspaceFromOverview?: (overview: StateOverview) => void;
-  /** 把当前草稿直接持久化（写 drafts/fast 草稿文件 + 工作区快照）。 */
-  saveDraftChanges?: () => Promise<void>;
 }
 
 export interface UseChatResult {
@@ -151,6 +76,7 @@ export interface UseChatResult {
   handleSuggestedAction: (action: SuggestedAction) => void;
   /** 「下一步」选项的结构化动作直达（R4.7）：点击直接发 body.action，不经模型。 */
   handleSendUserAction: (action: AgentUserAction) => Promise<void>;
+  handleChapterButton: (button: ChapterButton) => void;
   /** 块级「撤销到此」：把该回合 git 改动整块回退 + 截断该回合及其后对话 + 重拉 overview 刷工作台。 */
   undoToTurn: (message: ChapterMessage) => Promise<void>;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出内容保留、不报错。无在跑流时调用是 no-op。 */
@@ -160,14 +86,9 @@ export interface UseChatResult {
 export function useChat(params: UseChatParams): UseChatResult {
   const {
     projectPath,
-    resolveChapterDirection,
-    handleGenerateDraft,
-    handleQualityCheck,
-    handleDraftAIReview,
     handleApplyRevisionPreview,
     applyOverviewToWorkspace,
     refreshWorkspaceFromOverview,
-    saveDraftChanges,
   } = params;
 
   /* ---- store access ---- */
@@ -176,8 +97,6 @@ export function useChat(params: UseChatParams): UseChatResult {
   const updateMessage = useWorkspaceStore((s) => s.updateMessage);
   const setChatLoading = useWorkspaceStore((s) => s.setChatLoading);
   const setChatError = useWorkspaceStore((s) => s.setChatError);
-  const pendingDirectEditInstruction = useWorkspaceStore((s) => s.pendingDirectEditInstruction);
-  const setPendingDirectEditInstruction = useWorkspaceStore((s) => s.setPendingDirectEditInstruction);
   const selectedAdviceCards = useWorkspaceStore((s) => s.selectedAdviceCards);
   const setSelectedAdviceCards = useWorkspaceStore((s) => s.setSelectedAdviceCards);
 
@@ -185,275 +104,6 @@ export function useChat(params: UseChatParams): UseChatResult {
   const autoRenameRequestSeqRef = useRef(0);
 
   /* ---- internal helpers ---- */
-
-  const updateAgentCard = useCallback(
-    (cardId: string | undefined, patch: Partial<ChapterAgentCard>) => {
-      if (!cardId) return;
-      const message = useWorkspaceStore.getState().workspace.messages.find((item) =>
-        item.agentCards?.some((card) => card.id === cardId),
-      );
-      if (!message) return;
-      updateMessage(message.id, (current) => ({
-        ...current,
-        agentCards: current.agentCards?.map((card) => (
-          card.id === cardId ? mergeAgentCardPatch(card, patch) : card
-        )),
-      }));
-    },
-    [updateMessage],
-  );
-
-  const updateAgentCardHostMessage = useCallback(
-    (
-      cardId: string | undefined,
-      content: string,
-      cardPatch: Partial<ChapterAgentCard>,
-      messagePatch?: Partial<Pick<ChapterMessage, "suggestedActions" | "toolOutput">>,
-    ): boolean => {
-      if (!cardId) return false;
-      const message = useWorkspaceStore.getState().workspace.messages.find((item) =>
-        item.agentCards?.some((card) => card.id === cardId),
-      );
-      if (!message) return false;
-      updateMessage(message.id, (current) => ({
-        ...current,
-        ...messagePatch,
-        content,
-        agentCards: current.agentCards?.map((card) => (
-          card.id === cardId ? mergeAgentCardPatch(card, cardPatch) : card
-        )),
-      }));
-      return true;
-    },
-    [updateMessage],
-  );
-
-  /**
-   * 直接改稿时没有流式宿主消息，这里新建一条带 draft-edit 卡片的助手消息，
-   * 返回卡片 id 供 directEditWorkingDraft 把进度/结果渲染进同一张卡片（而非散成独立消息）。
-   */
-  const createDraftEditHostCard = useCallback((): string => {
-    const messageId = `assistant-draft-edit-host-${Date.now()}`;
-    const cardId = `agent-draft-edit-${Date.now()}`;
-    appendMessage({
-      id: messageId,
-      role: "assistant",
-      content: "正在按你的要求修改左侧工作稿。",
-      agentCards: [{
-        id: cardId,
-        kind: "draft",
-        agentName: "draftEditAgent",
-        status: "running",
-        title: "正在直接修改工作稿",
-        summary: "正在按用户要求修改左侧工作稿。",
-        detail: [
-          "target: 左侧工作稿",
-          "write: 工作稿改动将自动保存",
-          "formal state: 不改正式故事",
-        ],
-      }],
-    });
-    return cardId;
-  }, [appendMessage]);
-
-  const directEditWorkingDraft = useCallback(
-    async (instruction: string, agentCardId?: string): Promise<void> => {
-      const current = useWorkspaceStore.getState();
-      const draft = current.workspace.draft;
-      if (!projectPath) {
-        setChatError("请先打开真实本地项目。");
-        return;
-      }
-      if (isClearDraftRequest(instruction) && !draft.content.trim()) {
-        appendMessage({
-          id: `assistant-direct-clear-empty-${Date.now()}`,
-          role: "assistant",
-          content: "左侧工作稿已经是空的。",
-        });
-        return;
-      }
-      if (!draft.content.trim()) {
-        appendMessage({
-          id: `assistant-direct-edit-empty-${Date.now()}`,
-          role: "assistant",
-          content: "当前工作稿为空，不能直接修改。你可以先让我生成工作稿。",
-          suggestedActions: [suggestedAction("generate-draft")],
-        });
-        return;
-      }
-      if (useNavigationStore.getState().projectPath !== projectPath) return;
-      const operation = beginWorkspaceOperation("direct-edit", {
-        projectPath,
-        chapter: current.workspace.currentChapter.chapterNumber,
-        sessionId: current.activeSessionId,
-      });
-      if (!operation) {
-        showToast("已有操作正在进行，请等它结束后再修改工作稿。", 4200);
-        return;
-      }
-      const ownsDirectEditTarget = (): boolean => {
-        const live = useWorkspaceStore.getState();
-        return isWorkspaceOperationTargetCurrent(operation, {
-          projectPath: useNavigationStore.getState().projectPath ?? "",
-          chapter: live.workspace.currentChapter.chapterNumber,
-          sessionId: live.activeSessionId,
-        });
-      };
-      const finishDirectEdit = (): void => {
-        if (!isWorkspaceOperationCurrent(operation)) return;
-        finishWorkspaceOperation(operation);
-      };
-      updateAgentCard(agentCardId, {
-        status: "running",
-        title: "正在直接修改工作稿",
-        summary: "正在按用户要求修改左侧工作稿。",
-      });
-      const completeDraftEdit = (
-        fallbackMessageId: string,
-        content: string,
-        toolOutput: readonly string[],
-        card: ChapterAgentCard,
-      ) => {
-        const updatedExistingCard = updateAgentCardHostMessage(agentCardId, content, {
-          ...card,
-          id: agentCardId ?? card.id,
-        }, { toolOutput });
-        if (!updatedExistingCard) {
-          appendMessage({
-            id: fallbackMessageId,
-            role: "assistant",
-            content,
-            toolOutput,
-            agentCards: [card],
-          });
-        }
-      };
-      const lastSentenceReplacement = lastSentenceReplacementFromInstruction(instruction);
-      if (lastSentenceReplacement) {
-        try {
-          const nextContent = replaceLastNonEmptyLine(draft.content, lastSentenceReplacement);
-          current.setWorkspace({
-            ...current.workspace,
-            flowStatus: "draft_ready",
-            draft: {
-              ...draft,
-              content: nextContent,
-              wordCount: countTextWords(nextContent),
-              status: "draft",
-            },
-          });
-          completeDraftEdit(
-            `assistant-direct-last-sentence-${Date.now()}`,
-            `已把最后一句改成「${lastSentenceReplacement}」，并自动保存到工作稿。不满意可以在操作历史中恢复快照。`,
-            ["draftEditAgent: 已执行本地精确改句", `change: 最后一句 -> ${lastSentenceReplacement}`, "safety: 已自动保存工作稿，未写正式状态"],
-            {
-              id: `direct-last-sentence-success-${Date.now()}`,
-              kind: "draft",
-              agentName: "draftEditAgent",
-              status: "completed",
-              title: "工作稿已直接修改",
-              summary: "已按用户要求修改左侧工作稿，并自动保存。",
-              detail: [`change: 最后一句 -> ${lastSentenceReplacement}`, "target: 左侧工作稿", "write: 工作稿改动已自动保存"],
-            },
-          );
-          await saveDraftChanges?.();
-        } finally {
-          finishDirectEdit();
-        }
-        return;
-      }
-      if (isClearDraftRequest(instruction)) {
-        try {
-          current.setWorkspace({
-            ...current.workspace,
-            flowStatus: "draft_ready",
-            draft: { ...draft, content: "", wordCount: 0, status: "draft" },
-          });
-          completeDraftEdit(
-            `assistant-direct-clear-${Date.now()}`,
-            "已清空左侧当前编辑区。为防误删，本次不会用空内容覆盖磁盘工作稿；刷新后仍可找回原稿。",
-            ["draftEditAgent: 已直接清空工作稿", "change: 当前工作稿内容已置空", "safety: 空内容未覆盖磁盘工作稿，未写正式状态"],
-            {
-              id: `direct-clear-success-${Date.now()}`,
-              kind: "draft",
-              agentName: "draftEditAgent",
-              status: "completed",
-              title: "工作稿已直接修改",
-              summary: "已清空当前编辑区；磁盘工作稿保留。",
-              detail: ["target: 左侧工作稿", "write: 未以空内容覆盖磁盘工作稿"],
-            },
-          );
-          await saveDraftChanges?.();
-        } finally {
-          finishDirectEdit();
-        }
-        return;
-      }
-      current.setDraftActionLoading("direct-edit");
-      try {
-        const result = await directEditDraft({
-          projectPath,
-          chapter: operation.chapter,
-          instruction,
-          draftContent: draft.content,
-        });
-        if (!ownsDirectEditTarget()) {
-          useNavigationStore.getState().showToast("你切换了书，那次改稿结果没有写进来。", 5000);
-          return;
-        }
-        const nextStore = useWorkspaceStore.getState();
-        nextStore.setWorkspace({
-          ...nextStore.workspace,
-          flowStatus: "draft_ready",
-          draft: {
-            ...nextStore.workspace.draft,
-            title: extractDraftTitle(result.draftContent) ?? nextStore.workspace.draft.title,
-            content: result.draftContent,
-            wordCount: countTextWords(result.draftContent),
-            status: "draft",
-          },
-        });
-        completeDraftEdit(
-          `assistant-direct-edit-${Date.now()}`,
-          `${result.reply} 改动已自动保存到工作稿，不满意可以在操作历史中恢复快照。`,
-          [
-            "draftEditAgent: 已调用 repair 模型直接修改工作稿",
-            `model profile: ${result.profileId ?? "unknown"} / ${result.model ?? "unknown"}`,
-            `change: ${result.changeSummary}`,
-            "safety: 已自动保存工作稿，未写正式状态",
-          ],
-          {
-            id: `direct-edit-success-${Date.now()}`,
-            kind: "draft",
-            agentName: "draftEditAgent",
-            status: "completed",
-            title: "工作稿已直接修改",
-            summary: "已按用户要求修改左侧工作稿，并自动保存。",
-            detail: [
-              `change: ${result.changeSummary}`,
-              "target: 左侧工作稿",
-              "write: 工作稿改动已自动保存",
-            ],
-          },
-        );
-        await saveDraftChanges?.();
-      } catch (error) {
-        if (!ownsDirectEditTarget()) return;
-        updateAgentCard(agentCardId, {
-          status: "failed",
-          title: "工作稿修改失败",
-          summary: error instanceof Error ? error.message : String(error),
-        });
-        setChatError(error instanceof Error ? error.message : String(error));
-      } finally {
-        if (isWorkspaceOperationCurrent(operation)) {
-          if (ownsDirectEditTarget()) useWorkspaceStore.getState().setDraftActionLoading(null);
-          finishWorkspaceOperation(operation);
-        }
-      }
-    },
-    [appendMessage, projectPath, saveDraftChanges, setChatError, showToast, updateAgentCard, updateAgentCardHostMessage],
-  );
 
   /**
    * agent 大脑总入口：右侧对话是唯一驱动面——直接把对话交给
@@ -983,7 +633,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                   // 改草稿/入库工具：把真正文作为 draftContent 载入工作区。
                   // - generate_draft/revise_draft → draft_ready（草稿待保存）。
                   // - commit_apply 成功（committed=true）→ committed（已入库；让 autosave 不再把章节写回 drafts/fast）。
-                  // 与老路径 handleGenerateDraft/handleCommitApply 同构——否则只用 overview 刷新会把草稿冲成占位、autosave 抹掉真正文。
+                  // 与老路径（HTTP 出稿/定稿）同构——否则只用 overview 刷新会把草稿冲成占位、autosave 抹掉真正文。
                   // 传 info.chapter（工具实际操作的章号）让前端认领权威章：写第2章时推进当前章到2，autosave 才会写 chapter-0002.md 而非覆盖 chapter-0001.md（修跨章污染）。
                   applyOverviewToWorkspace(info.overview, info.draftBody, nextFlow, info.draftTitle, info.chapter);
                 } else {
@@ -1324,97 +974,15 @@ export function useChat(params: UseChatParams): UseChatResult {
         }
       }
 
-      // 改稿低把握度先问后的待确认改稿指令消费：下一轮用户确认/取消在此消费。
-      if (pendingDirectEditInstruction) {
-        if (isChapterAgentConfirm(text)) {
-          const instruction = pendingDirectEditInstruction;
-          setPendingDirectEditInstruction(null);
-          await directEditWorkingDraft(instruction, createDraftEditHostCard());
-          return;
-        }
-        if (isChapterAgentCancel(text)) {
-          setPendingDirectEditInstruction(null);
-          appendMessage({
-            id: `assistant-direct-edit-cancel-${Date.now()}`,
-            role: "assistant",
-            content: "已取消修改。你可以继续告诉我接下来怎么做。",
-          });
-          return;
-        }
-      }
-
-      // R3#1：审稿/质检 这类只读分析按钮发出的固定意图，确定性直调对应 handler——不过模型（三轮封测证明模型
-      // 经常不调 ai_review/quality_check，靠 NL 让模型猜不可靠）。只读、结果照样渲染进时间线，不违铁律②。
-      // 只拦【精确等于】按钮常量的文本；用户自由打字仍走下方 agent 对话链路。
-      // 固定动作按钮（审稿/质检/写这一章）确定性直调对应 handler，不靠模型 NL 猜（多轮证明不可靠）。
-      // 只读(审稿/质检)与写工作稿(生成草稿)都与 agent 工具共享同一份磁盘状态、无内存票据接缝；
-      // 入库(commit_preview/apply 涉及服务端票据)与开书资料(开放式)仍走 agent。
-      const deterministicAction = matchDeterministicChapterAction(text);
-      if (deterministicAction === "commit_preview") {
-        // 定稿预览：结构化动作直达服务端跑 commit_preview（票据照登记），不再等对话 AI 想。结果渲染定稿预览卡（含账本清单）。
-        const chapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
-        if (typeof chapterNumber !== "number") {
-          appendMessage({ id: `assistant-preview-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「定稿」。" });
-          return;
-        }
-        await runAgentDispatch(text, conversation, { toolName: "commit_preview", chapter: chapterNumber });
-        return;
-      }
-      if (deterministicAction === "check_continuity" || deterministicAction === "check_continuity_fresh") {
-        // 核账：结构化动作直达服务端（只读），结果照常进对话、渲染「核账」卡；不经模型判断要不要调。
-        const chapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
-        if (typeof chapterNumber !== "number") {
-          appendMessage({ id: `assistant-check-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「核账」。" });
-          return;
-        }
-        await runAgentDispatch(text, conversation, {
-          toolName: "check_continuity",
-          chapter: chapterNumber,
-          ...(deterministicAction === "check_continuity_fresh" ? { fresh: true } : {}),
-        });
-        return;
-      }
-      if (deterministicAction === "generate_draft") {
-        // 写这一章（2026-10-10 引擎升级第 5 期「出稿一条路」）：结构化动作直达服务端执行 generate_draft——
-        // 先拿章纲、写、字数不够接着写、写完核账，和对话里让 AI 写同一套；正文照常流式进稿纸。
-        // 方向：作者在方向框里写了就带上；没写就不带（章纲按故事现状往下推，不再塞题材中立的空话目标）。
-        const ws = useWorkspaceStore.getState();
-        const chapterNumber = ws.workspace.currentChapter?.chapterNumber;
-        if (typeof chapterNumber !== "number") {
-          appendMessage({ id: `assistant-draft-nochapter-${Date.now()}`, role: "assistant", content: "先在左边选一章，再点「写这一章」。" });
-          return;
-        }
-        const chapterGoal = `${ws.steeringDirection.trim()}`.trim();
-        useNavigationStore.getState().requestCenterView("desk");
-        await runAgentDispatch(text, conversation, {
-          toolName: "generate_draft",
-          chapter: chapterNumber,
-          ...(chapterGoal ? { chapterGoal } : {}),
-        });
-        return;
-      }
-      if (deterministicAction) {
-        if (deterministicAction === "ai_review") await handleDraftAIReview();
-        else if (deterministicAction === "quality_check") await handleQualityCheck();
-        return;
-      }
-
-      // 唯一控制面：把对话交给 Mastra 写作总控 agent。
+      // 输入框的字一律交给 AI（重构 P4）：不再拿「原话等于按钮文案」认回按钮动作；按钮自己发结构化动作（handleChapterButton）。
       await runAgentDispatch(text, conversation);
     },
     [
       projectPath,
       workspace.messages,
-      pendingDirectEditInstruction,
       appendMessage,
       setChatError,
-      setPendingDirectEditInstruction,
-      createDraftEditHostCard,
-      directEditWorkingDraft,
       runAgentDispatch,
-      handleDraftAIReview,
-      handleQualityCheck,
-      handleGenerateDraft,
       showToast,
     ],
   );
@@ -1528,6 +1096,27 @@ export function useChat(params: UseChatParams): UseChatResult {
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
   );
 
+  /* ---- handleChapterButton：写作区固定按钮（重构 P4） ---- */
+
+  // 按钮直接发对应的结构化动作（写这一章 / 写下一章 / 核账 / 审阅 / 硬伤检查 / 定稿 / 撤销），
+  // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
+  const handleChapterButton = useCallback(
+    (button: ChapterButton): void => {
+      const live = useWorkspaceStore.getState();
+      const action = chapterButtonAction(button, {
+        chapter: live.workspace.currentChapter?.chapterNumber,
+        chapters: live.workspace.chapters,
+        direction: live.steeringDirection,
+      });
+      if (!action) {
+        appendMessage({ id: `assistant-button-nochapter-${Date.now()}`, role: "assistant", content: NO_CHAPTER_HINT });
+        return;
+      }
+      void handleSendUserAction(action);
+    },
+    [appendMessage, handleSendUserAction],
+  );
+
   /* ---- handleSuggestedAction ---- */
 
   // 动作消费（A-6 建议条配套）：动作成功执行后把它从携带它的消息上摘掉——否则建议条继续显示
@@ -1562,20 +1151,14 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendMessage("帮我读一下当前状态，整理这一章的承接建议。");
           return;
         case "generate-draft":
-          void handleSendMessage("帮我写这一章的工作稿。");
+        case "generate-draft-direct":
+          handleChapterButton("write");
           return;
-        case "generate-draft-direct": {
-          const direction = resolveChapterDirection().trim();
-          void handleSendMessage(
-            direction ? `帮我写这一章的工作稿，方向是：${direction}` : "帮我写这一章的工作稿。",
-          );
-          return;
-        }
         case "quality-check":
-          void handleSendMessage("帮我检查这一章的连续性和逻辑风险。");
+          handleChapterButton("quality_check");
           return;
         case "ai-review":
-          void handleSendMessage("帮我审一下这一章的稿子，给修改建议。");
+          handleChapterButton("ai_review");
           return;
         case "revision-preview":
           void handleSendMessage("按我的方向给这一章改一版，先出预览。");
@@ -1584,7 +1167,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleApplyRevisionPreview();
           return;
         case "commit-preview":
-          void handleSendMessage("帮我预览这一章的定稿改动。");
+          handleChapterButton("commit_preview");
           return;
         case "commit-apply":
           void handleConfirmCommit(action.commitTarget);
@@ -1617,10 +1200,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           consumeSuggestedAction(action);
           void handleSendUserAction({ toolName: "foundation_decision", ...action.foundationTarget });
           return;
-        case "continue-next": {
-          void handleSendMessage("继续写下一章。");
+        case "continue-next":
+          handleChapterButton("write_next");
           return;
-        }
         case "retry-agent": {
           // agent 大脑失败后重试：用按钮 endpoint 携带的原始消息重跑 agent 派发，不重复 append 用户消息。
           const original = action.endpoint?.trim();
@@ -1641,8 +1223,8 @@ export function useChat(params: UseChatParams): UseChatResult {
     },
     [
       showToast,
-      resolveChapterDirection,
       handleSendMessage,
+      handleChapterButton,
       handleConfirmCommit,
       handleConfirmPrune,
       handleSendUserAction,
@@ -1658,6 +1240,7 @@ export function useChat(params: UseChatParams): UseChatResult {
     handleSelectAdviceCard,
     handleSuggestedAction,
     handleSendUserAction,
+    handleChapterButton,
     undoToTurn,
     stopAgent,
   };
