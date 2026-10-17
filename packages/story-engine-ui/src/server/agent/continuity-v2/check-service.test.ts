@@ -176,10 +176,13 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
     expect(result.summary).toContain("核账没跑成");
     expect(result.summary).toContain("还没读完全书");
     await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5_000 });
-    // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）
-    const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));
-    expect(progress).toMatchObject({ reading: false, done: 0, total: 12 });
-    expect(progress.error).toContain("限流了");
+    // 读到哪里记哪里：一章都没写成就是 0 / 12，错误原因落盘（下次接着补）。
+    // 补读失败是先 warn、再落盘，机器忙时要等落盘那一下。
+    await vi.waitFor(async () => {
+      const progress = JSON.parse(await readFile(join(dir, "agents", "checker", "progress.json"), "utf-8"));
+      expect(progress).toMatchObject({ reading: false, done: 0, total: 12 });
+      expect(progress.error).toContain("限流了");
+    }, { timeout: 5_000 });
     warn.mockRestore();
   });
 });
