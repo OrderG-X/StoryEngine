@@ -9,7 +9,7 @@ import { fetchStateOverview } from "../api/client.js";
 import { refreshPaper } from "../drafts/draftSync.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { applyOverviewToWorkspace, flowStatusForPaper } from "./applyOverview.js";
 
 export async function syncWorkspaceAfterRestore(projectPath: string): Promise<void> {
@@ -19,6 +19,6 @@ export async function syncWorkspaceAfterRestore(projectPath: string): Promise<vo
   await refreshPaper({ force: true });
   if (useNavigationStore.getState().projectPath !== projectPath) return;
   // 撤销前挂着的审稿、改写预览、候选稿都对不上新稿了，清掉。
-  useWorkspaceStore.getState().resetTransientWorkspaceState();
+  useUiStore.getState().resetTransientUiState();
   applyOverviewToWorkspace(overview, { flowStatus: flowStatusForPaper(useDraftStore.getState()) });
 }

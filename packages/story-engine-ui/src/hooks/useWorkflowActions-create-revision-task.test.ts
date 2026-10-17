@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
@@ -83,20 +85,24 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     paperMocks.flushDraftSave.mockImplementation(async () => ({ ok: true }));
     useNavigationStore.getState().clearToast();
     useNavigationStore.setState({ projectPath: "/tmp/story-project" });
-    useWorkspaceStore.setState({
+    useBookStore.setState({
       workspace: {
         ...mockWorkspaceData,
         currentChapter: { id: "ch-001", chapterNumber: 1, title: "第一章", status: "current" },
         flowStatus: "draft_ready",
-        messages: [],
       },
+    });
+    useChatStore.setState({
+      messages: [],
+      chatError: null,
+      activeSessionId: "",
+    });
+    useUiStore.setState({
       draftActionLoading: null,
       selectedAdviceCards: [],
-      chatError: null,
       steeringError: null,
       activeRevisionTask: null,
       activeRevisionPreview: null,
-      activeSessionId: "",
     });
     useDraftStore.getState().loadPaper("/tmp/story-project", { chapter: 1, draft: { chapter: 1, body: ORIGINAL_DRAFT, version: "v-1" }, committed: null, editedSinceCommit: null });
   });
@@ -110,22 +116,22 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
 
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleCreateRevisionTask({ issue: makeIssue() });
 
     await vi.waitFor(() => {
       expect(apiMocks.previewDraftRevision).toHaveBeenCalledTimes(1);
     });
     await vi.waitFor(() => {
-      expect(useWorkspaceStore.getState().activeRevisionPreview).not.toBeNull();
+      expect(useUiStore.getState().activeRevisionPreview).not.toBeNull();
     });
 
-    const state = useWorkspaceStore.getState();
+    const state = { ...useUiStore.getState(), ...useChatStore.getState() };
     expect(state.activeRevisionTask).not.toBeNull();
     expect(state.activeRevisionPreview?.afterText).toContain("川流不息");
     expect(state.draftActionLoading).toBeNull();
 
-    const created = state.workspace.messages.find((m) => m.content.includes("已创建修订任务"));
+    const created = state.messages.find((m) => m.content.includes("已创建修订任务"));
     expect(created).toBeTruthy();
     expect(created!.content).toContain("正在生成修订草案");
     expect(created!.suggestedActions).toBeUndefined();
@@ -141,7 +147,7 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     // evidence 对不上原文 → resolveRevisionTarget 走 category 猜测
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleCreateRevisionTask({
       issue: makeIssue({
         category: "plot",
@@ -162,17 +168,17 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
 
     useWorkflowActions({
       projectPath: "/tmp/story-project",
-      appendMessage: useWorkspaceStore.getState().appendMessage,
+      appendMessage: useChatStore.getState().appendMessage,
     }).handleCreateRevisionTask({ issue: makeIssue() });
 
     await vi.waitFor(() => {
       expect(apiMocks.previewDraftRevision).toHaveBeenCalledTimes(1);
     });
     await vi.waitFor(() => {
-      expect(useWorkspaceStore.getState().draftActionLoading).toBeNull();
+      expect(useUiStore.getState().draftActionLoading).toBeNull();
     });
 
-    const state = useWorkspaceStore.getState();
+    const state = { ...useUiStore.getState(), ...useChatStore.getState() };
     expect(state.activeRevisionTask).not.toBeNull();
     expect(state.activeRevisionPreview).toBeNull();
     expect(state.chatError).toContain("模型超时");

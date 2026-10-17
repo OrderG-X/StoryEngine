@@ -6,7 +6,9 @@
  * 样式全部在 codex.css 的 .codex-app 作用域下（铁律 3）。
  */
 import { useEffect, useRef, useState } from "react";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useBookStore } from "../../../stores/bookStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
+import { useUiStore } from "../../../stores/uiStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { markChatLoaded } from "../../../sync/chatSync.js";
@@ -37,20 +39,15 @@ function fmtBudget(n: number): string {
 }
 
 export function ChatSessionBar() {
-  const {
-    sessions,
-    activeSessionId,
-    setSessions,
-    updateWorkspace,
-    setActiveArchivedCount,
-    chatHistoryBudget,
-    setChatHistoryBudget,
-  } = useWorkspaceStore();
+  const sessions = useChatStore((s) => s.sessions);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const chatHistoryBudget = useChatStore((s) => s.chatHistoryBudget);
+  const { setSessions, setMessages, setActiveArchivedCount, setChatHistoryBudget } = useChatStore.getState();
   const projectPath = useNavigationStore((s) => s.projectPath);
   // 审查 #6：生成进行中禁用会话操作，避免把 A 会话的流式内容存进刚切过去的 B。
-  const chatLoading = useWorkspaceStore((s) => s.chatLoading);
-  const draftActionLoading = useWorkspaceStore((s) => s.draftActionLoading);
-  const steeringLoading = useWorkspaceStore((s) => s.steeringLoading);
+  const chatLoading = useChatStore((s) => s.chatLoading);
+  const draftActionLoading = useUiStore((s) => s.draftActionLoading);
+  const steeringLoading = useUiStore((s) => s.steeringLoading);
   const workspaceBusy = chatLoading || Boolean(draftActionLoading) || steeringLoading || isWorkspaceBusy();
 
   function notify(message: string) {
@@ -58,11 +55,10 @@ export function ChatSessionBar() {
   }
 
   function currentSessionIdentity() {
-    const live = useWorkspaceStore.getState();
     return {
       projectPath: useNavigationStore.getState().projectPath ?? "",
-      chapter: live.workspace.currentChapter.chapterNumber,
-      sessionId: live.activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     };
   }
 
@@ -81,7 +77,7 @@ export function ChatSessionBar() {
     const messages = result.session.messages ?? [];
     // 刚从会话文件读来的：记成已存，免得原样回写一遍。
     if (projectPath) markChatLoaded(projectPath, result.index.activeSessionId, messages);
-    updateWorkspace({ messages });
+    setMessages(messages);
     setActiveArchivedCount(result.session.archivedCount ?? 0);
   }
 

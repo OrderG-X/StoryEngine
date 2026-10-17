@@ -21,7 +21,7 @@ import {
   type GroupedModelItems,
   type SavedProvider,
 } from "../../ModelSettingsDialogTypes.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
 import { AiServiceManager } from "./AiServiceManager.js";
 // 本页直接用 .ms-notice/.ms-warn-notice/.ms-error 等 ms-* 样式，显式引入其所在 css，不再隐式依赖单 bundle 里别人捎带。
 import "../../ModelSettingsDialog.css";
@@ -432,9 +432,9 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
   const handleBudgetChange = useCallback((tokens: number) => {
     setChatMemoryBudget(tokens);
-    // 同步工作区在用值：聊天记忆裁剪读 workspaceStore.chatHistoryBudget（useChat/ChatSessionBar 徽标），
+    // 同步工作区在用值：聊天记忆裁剪读 chatStore.chatHistoryBudget（useChat/ChatSessionBar 徽标），
     // 不同步的话这里改完要重开书才生效（与 ChatSessionBar 直改预算的行为对齐）。
-    useWorkspaceStore.getState().setChatHistoryBudget(tokens);
+    useChatStore.getState().setChatHistoryBudget(tokens);
     if (budgetTimer.current) clearTimeout(budgetTimer.current);
     budgetTimer.current = setTimeout(() => {
       persist({ budget: tokens })

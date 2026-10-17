@@ -10,7 +10,7 @@
 import { create } from "zustand";
 import { saveChatSessionMessages, saveChatSessionMessagesBeacon } from "../api/chatSessionsClient.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useChatStore } from "../stores/chatStore.js";
 import type { ChapterMessage } from "../types.js";
 
 export const CHAT_SAVE_DELAY_MS = 350;
@@ -47,9 +47,9 @@ function clearTimer(): void {
 
 function currentTarget(): ChatSaveTarget | null {
   const projectPath = useNavigationStore.getState().projectPath;
-  const store = useWorkspaceStore.getState();
-  if (!projectPath || !store.activeSessionId) return null;
-  return { projectPath, sessionId: store.activeSessionId, messages: store.workspace.messages };
+  const chat = useChatStore.getState();
+  if (!projectPath || !chat.activeSessionId) return null;
+  return { projectPath, sessionId: chat.activeSessionId, messages: chat.messages };
 }
 
 /** 刚从会话文件读进来的消息：记成已存，免得开书就原样回写一遍。 */

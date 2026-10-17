@@ -227,10 +227,9 @@ describe("useProjectNavigation chapter status helpers", () => {
 
     const merged = __useProjectNavigationTest.mergeFoundationRefreshWorkspace(nextBase, current);
 
-    // 用户停留章/章节列表/对话/草稿/流程态 全部保留 current（按引用相等），不被 overview 的第5章覆盖。
+    // 用户停留章/章节列表/草稿/流程态 全部保留 current（按引用相等），不被 overview 的第5章覆盖。
     expect(merged.currentChapter).toBe(current.currentChapter);
     expect(merged.chapters).toBe(current.chapters);
-    expect(merged.messages).toBe(current.messages);
     expect(merged.flowStatus).toBe(current.flowStatus);
     // 其余资料/派生字段仍来自 overview base（如 projectName）。
     expect(merged.projectName).toBe("记资料测试书");

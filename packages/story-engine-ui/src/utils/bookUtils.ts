@@ -113,14 +113,6 @@ export function workspaceFromBook(book: BookSummary): ChapterWorkspaceData {
     currentChapter,
     chapters: chapterWindow,
     flowStatus,
-    messages: [
-      {
-        id: `${book.id}-system`,
-        kind: "scaffolding" as const,
-        role: "assistant",
-        content: `已进入《${book.title}》的章节工作台。当前章节：第${book.currentChapterNumber}章 · ${book.currentChapterTitle}。`,
-      },
-    ],
     protagonist: {
       ...mockWorkspaceData.protagonist,
       name: book.protagonistName,

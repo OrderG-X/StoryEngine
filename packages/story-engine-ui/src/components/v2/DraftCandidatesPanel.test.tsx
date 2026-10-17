@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import DraftCandidatesPanel from "./DraftCandidatesPanel.js";
-import type { DraftCandidate } from "../../stores/workspaceStore.js";
+import type { DraftCandidate } from "../../stores/uiStore.js";
 
 afterEach(() => cleanup());
 

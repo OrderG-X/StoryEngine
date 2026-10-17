@@ -4,7 +4,9 @@ import ImmersiveAppShell from "./components/v2/ImmersiveAppShell.js";
 import ModelSettingsDialog from "./components/ModelSettingsDialog.js";
 import UsageDialog from "./components/UsageDialog.js";
 import { useNavigationStore } from "./stores/navigationStore.js";
-import { useWorkspaceStore } from "./stores/workspaceStore.js";
+import { useBookStore } from "./stores/bookStore.js";
+import { useChatStore } from "./stores/chatStore.js";
+import { useUiStore } from "./stores/uiStore.js";
 import { useRecentBooksStore } from "./stores/recentBooksStore.js";
 import { useThemeStore } from "./stores/themeStore.js";
 import { useBookManagement } from "./hooks/useBookManagement.js";
@@ -52,18 +54,19 @@ export function App() {
   const closeUsage = useNavigationStore((s) => s.closeUsage);
   const openSettings = useNavigationStore((s) => s.openSettings);
 
-  const workspace = useWorkspaceStore((s) => s.workspace);
-  const clearedChatBackup = useWorkspaceStore((s) => s.clearedChatBackup);
-  const currentOverview = useWorkspaceStore((s) => s.currentOverview);
-  const commitPreviewReport = useWorkspaceStore((s) => s.commitPreviewReport);
-  const lastFormalCommitApply = useWorkspaceStore((s) => s.lastFormalCommitApply);
-  const draftAIReview = useWorkspaceStore((s) => s.draftAIReview);
-  const aiFlavorPending = useWorkspaceStore((s) => s.aiFlavorPending);
-  const aiFlavorBatchPending = useWorkspaceStore((s) => s.aiFlavorBatchPending);
-  const activeRevisionTask = useWorkspaceStore((s) => s.activeRevisionTask);
-  const activeRevisionPreview = useWorkspaceStore((s) => s.activeRevisionPreview);
-  const draftActionLoading = useWorkspaceStore((s) => s.draftActionLoading);
-  const selectedAdviceCards = useWorkspaceStore((s) => s.selectedAdviceCards);
+  const workspace = useBookStore((s) => s.workspace);
+  const messages = useChatStore((s) => s.messages);
+  const clearedChatBackup = useChatStore((s) => s.clearedChatBackup);
+  const currentOverview = useBookStore((s) => s.currentOverview);
+  const commitPreviewReport = useUiStore((s) => s.commitPreviewReport);
+  const lastFormalCommitApply = useUiStore((s) => s.lastFormalCommitApply);
+  const draftAIReview = useUiStore((s) => s.draftAIReview);
+  const aiFlavorPending = useUiStore((s) => s.aiFlavorPending);
+  const aiFlavorBatchPending = useUiStore((s) => s.aiFlavorBatchPending);
+  const activeRevisionTask = useUiStore((s) => s.activeRevisionTask);
+  const activeRevisionPreview = useUiStore((s) => s.activeRevisionPreview);
+  const draftActionLoading = useUiStore((s) => s.draftActionLoading);
+  const selectedAdviceCards = useUiStore((s) => s.selectedAdviceCards);
   const projectPath = useNavigationStore((s) => s.projectPath);
   const activeBookId = useNavigationStore((s) => s.activeBookId);
   const openProjectError = useNavigationStore((s) => s.openProjectError);
@@ -94,7 +97,7 @@ export function App() {
   const refreshWorkspaceFromOverview = navigation.refreshWorkspaceFromOverview;
 
   const appendMessage = (message: import("./types.js").ChapterMessage) => {
-    useWorkspaceStore.getState().appendMessage(message);
+    useChatStore.getState().appendMessage(message);
   };
 
   const workflow = useWorkflowActions({
@@ -112,7 +115,7 @@ export function App() {
   useEffect(() => {
     if (!workspaceReady || !projectPath) return;
     scheduleChatSave();
-  }, [workspaceReady, projectPath, workspace.messages]);
+  }, [workspaceReady, projectPath, messages]);
 
   useEffect(() => {
     // 关窗 / 刷新：keepalive 发出最后一笔，不等回执。
@@ -170,13 +173,13 @@ export function App() {
   }, []);
 
   /* ---- Derived values for workspace props ---- */
-  const steeringDirection = useWorkspaceStore((s) => s.steeringDirection);
-  const steeringDraft = useWorkspaceStore((s) => s.steeringDraft);
-  const steeringError = useWorkspaceStore((s) => s.steeringError);
-  const steeringLoading = useWorkspaceStore((s) => s.steeringLoading);
-  const chatLoading = useWorkspaceStore((s) => s.chatLoading);
-  const chatError = useWorkspaceStore((s) => s.chatError);
-  const sidebar = useWorkspaceStore((s) => s.sidebar);
+  const steeringDirection = useUiStore((s) => s.steeringDirection);
+  const steeringDraft = useUiStore((s) => s.steeringDraft);
+  const steeringError = useUiStore((s) => s.steeringError);
+  const steeringLoading = useUiStore((s) => s.steeringLoading);
+  const chatLoading = useChatStore((s) => s.chatLoading);
+  const chatError = useChatStore((s) => s.chatError);
+  const sidebar = useBookStore((s) => s.sidebar);
 
   /* ---- Dialogs ---- */
   const settingsDialog = (
@@ -302,8 +305,8 @@ export function App() {
             onChapterButton: handleChapterButton,
             onStopAgent: stopAgent,
             onClearChat: () => {
-              if (useWorkspaceStore.getState().workspace.messages.length === 0) return;
-              useWorkspaceStore.getState().clearChat();
+              if (useChatStore.getState().messages.length === 0) return;
+              useChatStore.getState().clearChat();
               useNavigationStore.getState().showToast("已清空对话（正文和资料不受影响，可撤销）", 4000);
               // 清空是作者明确的动作：空对话也要写进会话文件，否则刷新后又回来。
               void saveChatNow({ allowEmpty: true }).then((result) => {
@@ -313,7 +316,7 @@ export function App() {
               });
             },
             onUndoClearChat: () => {
-              useWorkspaceStore.getState().undoClearChat();
+              useChatStore.getState().undoClearChat();
               void saveChatNow().then((result) => {
                 if (!result.ok) {
                   useNavigationStore.getState().showToast(`恢复没写进会话文件（${result.error}），刷新后可能仍是清空的。`, 5000);
@@ -323,17 +326,17 @@ export function App() {
             canUndoClearChat: clearedChatBackup !== null,
             onUndoToTurn: (message) => void undoToTurn(message),
             onSteeringDirectionChange: (value) => {
-              useWorkspaceStore.getState().setSteeringDirection(value);
-              if (useWorkspaceStore.getState().steeringError) useWorkspaceStore.getState().setSteeringError(null);
-              if (useWorkspaceStore.getState().chatError) useWorkspaceStore.getState().setChatError(null);
+              useUiStore.getState().setSteeringDirection(value);
+              if (useUiStore.getState().steeringError) useUiStore.getState().setSteeringError(null);
+              if (useChatStore.getState().chatError) useChatStore.getState().setChatError(null);
             },
             onDraftContentChange: (content: string) => {
               editDraft(content, extractDraftTitle(content) ?? undefined);
               // 作者自己写出了正文：章节状态跟着进「有草稿」，下面的按钮换成核账 / 审稿 / 定稿
               // （2026-10-10 验收：作者贴完一整章，状态还是「待开始」，只给「写这一章 / 先给方案」两个让 AI 写的按钮）。
-              const ws = useWorkspaceStore.getState();
-              if ((ws.workspace.flowStatus === "idle" || ws.workspace.flowStatus === "steering_ready") && isRealDraftContent(content)) {
-                ws.updateWorkspace({ flowStatus: "draft_ready" });
+              const wsBook = useBookStore.getState();
+              if ((wsBook.workspace.flowStatus === "idle" || wsBook.workspace.flowStatus === "steering_ready") && isRealDraftContent(content)) {
+                wsBook.updateWorkspace({ flowStatus: "draft_ready" });
               }
             },
             onSelectionRewrite: workflow.handleSelectionRewrite,

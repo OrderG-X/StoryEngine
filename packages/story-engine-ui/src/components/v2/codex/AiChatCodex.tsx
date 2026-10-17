@@ -66,7 +66,7 @@ import { QualityCheckCard } from "./QualityCheckCard.js";
 import { NameConsistencyCard } from "./NameConsistencyCard.js";
 import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
 
@@ -205,7 +205,9 @@ export function CollapsedAiRail({ onToggleRight }: { readonly onToggleRight: () 
 export default function AiChatCodex(props: AiChatCodexProps) {
   // 归档折叠行展开态。
   const [archivedExpanded, setArchivedExpanded] = useState(false);
-  const { activeArchivedCount } = useWorkspaceStore();
+  const activeArchivedCount = useChatStore((s) => s.activeArchivedCount);
+  // 对话直接订阅 chatStore（重构 P5），不再经 App 往下传。
+  const messages = useChatStore((s) => s.messages);
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
   const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
   // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
@@ -287,7 +289,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     if (!atBottomRef.current) return;
     const el = historyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [props.workspace.messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError]);
+  }, [messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError]);
 
   // 折叠态：整列只渲染一个极简竖条（点击展开）。codex.css 没有专用 class，用最小内联（codex 变量调色）。
   if (!props.rightOpen) {
@@ -301,13 +303,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 「下一步」选项卡只在 agent 主动调 suggest_next_steps 给出上下文相关提议时出现——已删掉按 flowStatus 写死的兜底
   // （那套死选项不看你这章具体情况、还会和 agent 正文打架，正是 suggest_next_steps 当初要治的病）。
   // agent 没提议的回合就不出卡，顺着它正文走或直接打字即可。点选项=给 agent 发一句意图。
-  const nextStep = busy ? null : lastAssistantNextStepPrompt(props.workspace.messages);
+  const nextStep = busy ? null : lastAssistantNextStepPrompt(messages);
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
-  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(props.workspace.messages));
+  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
-  const confirmablePreviewId = confirmableCommitPreviewMessageId(props.workspace.messages);
-  const canClear = Boolean(props.onClearChat) && props.workspace.messages.length > 0 && !workspaceBusy;
+  const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
+  const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
 
   return (
     <aside className="ai" aria-label="AI 写作助手">
@@ -363,10 +365,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       <div className="se-ai-ctx-row">
         <AiStatusLine
           flowStatus={flowStatus}
-          live={liveFlowFromMessage([...props.workspace.messages].reverse().find((m) => m.role === "assistant"))}
+          live={liveFlowFromMessage([...messages].reverse().find((m) => m.role === "assistant"))}
           operation={operationCaption(props.draftActionLoading)}
           busy={Boolean(props.chatLoading)}
-          runningStep={[...props.workspace.messages].reverse().find((m) => m.role === "assistant")?.toolSteps?.find((step) => step.status === "running")?.label ?? null}
+          runningStep={[...messages].reverse().find((m) => m.role === "assistant")?.toolSteps?.find((step) => step.status === "running")?.label ?? null}
         />
         <button
           type="button"
@@ -419,7 +421,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         {/* 展开归档段：只读显示 slice(0, activeArchivedCount) */}
         {archivedExpanded && activeArchivedCount > 0 ? (
           <div className="codex-archived-messages">
-            {props.workspace.messages.slice(0, activeArchivedCount).map((message) => (
+            {messages.slice(0, activeArchivedCount).map((message) => (
               <MessageBubbles
                 key={`archived-${message.id}`}
                 message={message}
@@ -431,7 +433,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
             「清理早先消息」后消息仍在、展开后同 N 条渲染两遍（2026-09-15 审计 P1-2） */}
-        {props.workspace.messages.slice(activeArchivedCount).map((message, index, all) => {
+        {messages.slice(activeArchivedCount).map((message, index, all) => {
           const isLatestAssistant = message.role === "assistant"
             && !all.slice(index + 1).some((m) => m.role === "assistant");
           const isLiveAssistant = Boolean(props.chatLoading) && isLatestAssistant;
@@ -463,7 +465,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           );
         })}
 
-        {shouldShowEmptyState(props) ? (
+        {shouldShowEmptyState(props, messages) ? (
           <div style={surfaceCardStyle}>
             <strong style={{ color: "var(--text)", fontSize: 13 }}>可以直接描述下一章方向</strong>
             <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>我会先帮你生成承接建议或工作稿。</p>
@@ -598,9 +600,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
               sendCurrent();
             }}
             placeholder={
-              props.composerHint && !props.chatLoading && !isBookCreationGreeting(props.workspace.messages)
+              props.composerHint && !props.chatLoading && !isBookCreationGreeting(messages)
                 ? props.composerHint
-                : getPlaceholder(flowStatus, isBookCreationGreeting(props.workspace.messages))
+                : getPlaceholder(flowStatus, isBookCreationGreeting(messages))
             }
             rows={3}
             style={composerInputStyle}
@@ -1278,8 +1280,8 @@ const extraHeadingStyle: React.CSSProperties = {
 
 // ─────────────────────────── 空状态判定 ───────────────────────────
 
-function shouldShowEmptyState(props: WritingWorkspaceLayoutProps): boolean {
-  const onlyInjected = props.workspace.messages.every((message) => isInjectedWorkflowMessage(message));
+function shouldShowEmptyState(props: WritingWorkspaceLayoutProps, messages: readonly ChapterMessage[]): boolean {
+  const onlyInjected = messages.every((message) => isInjectedWorkflowMessage(message));
   return onlyInjected
     && !props.steeringDraft
     && !props.draftAIReview

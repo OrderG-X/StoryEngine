@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData } from "../mockData.js";
@@ -49,18 +51,22 @@ function deferred<T>() {
 }
 
 function setChapter(chapter: number, content: string, sessionId = "session-a") {
-  useWorkspaceStore.setState({
+  useBookStore.setState({
     workspace: {
       ...mockWorkspaceData,
       currentChapter: { id: `ch-${chapter}`, chapterNumber: chapter, title: `第${chapter}章`, status: "current" },
       flowStatus: "draft_ready",
-      messages: [],
     },
+  });
+  useChatStore.setState({
+    messages: [],
     activeSessionId: sessionId,
+    chatError: null,
+  });
+  useUiStore.setState({
     draftActionLoading: null,
     draftCandidates: null,
     selectedAdviceCards: [],
-    chatError: null,
     steeringError: null,
     activeRevisionTask: null,
     activeRevisionPreview: null,
@@ -72,7 +78,7 @@ async function actions() {
   const { useWorkflowActions } = await import("./useWorkflowActions.js");
   return useWorkflowActions({
     projectPath: "/tmp/story-project",
-    appendMessage: useWorkspaceStore.getState().appendMessage,
+    appendMessage: useChatStore.getState().appendMessage,
   });
 }
 
@@ -103,7 +109,7 @@ function revisionPreview(): DraftRevisionPreview {
 }
 
 function seedCommitPreview() {
-  useWorkspaceStore.setState({
+  useUiStore.setState({
     commitPreviewReport: {
       chapter: 1,
       highRiskIssueCount: 0,
@@ -132,14 +138,14 @@ describe("workspace-bound writing operations", () => {
     apiMocks.previewDraftRevision.mockReturnValueOnce(gate.promise);
     const workflow = await actions();
 
-    useWorkspaceStore.getState().setActiveRevisionTask(revisionTask());
+    useUiStore.getState().setActiveRevisionTask(revisionTask());
     const pending = workflow.handleGenerateRevisionPreview();
     await vi.waitFor(() => expect(apiMocks.previewDraftRevision).toHaveBeenCalled());
     setChapter(2, B_DRAFT, "session-b");
     gate.resolve({ task: revisionTask(), preview: revisionPreview() });
     await pending;
 
-    expect(useWorkspaceStore.getState().activeRevisionPreview).toBeNull();
+    expect(useUiStore.getState().activeRevisionPreview).toBeNull();
     expect(useNavigationStore.getState().toast).toContain("你切换了书");
   });
 
@@ -150,10 +156,10 @@ describe("workspace-bound writing operations", () => {
     const workflow = await actions();
 
     await workflow.handleRerollCandidates();
-    const candidate = useWorkspaceStore.getState().draftCandidates?.[0];
+    const candidate = useUiStore.getState().draftCandidates?.[0];
     expect(candidate).toBeTruthy();
     setChapter(2, B_DRAFT, "session-b");
-    useWorkspaceStore.getState().setDraftCandidates(candidate ? [candidate] : []);
+    useUiStore.getState().setDraftCandidates(candidate ? [candidate] : []);
     await workflow.handleApplyCandidate(candidate?.content ?? "");
 
     expect(apiMocks.applyDraftCandidate).not.toHaveBeenCalled();
@@ -162,7 +168,7 @@ describe("workspace-bound writing operations", () => {
   });
 
   it("fails closed when a candidate has no originating target", async () => {
-    useWorkspaceStore.getState().setDraftCandidates([{ content: "# 无归属候选\n\n不能写入" } as never]);
+    useUiStore.getState().setDraftCandidates([{ content: "# 无归属候选\n\n不能写入" } as never]);
     const workflow = await actions();
 
     await workflow.handleApplyCandidate("# 无归属候选\n\n不能写入");
@@ -172,7 +178,7 @@ describe("workspace-bound writing operations", () => {
   });
 
   it("fails closed when a revision preview has no originating target", async () => {
-    useWorkspaceStore.setState({
+    useUiStore.setState({
       activeRevisionTask: revisionTask(),
       activeRevisionPreview: revisionPreview() as never,
     });
@@ -214,7 +220,7 @@ describe("workspace-bound writing operations", () => {
     await vi.waitFor(() => expect(apiMocks[apiName]).toHaveBeenCalled());
 
     setChapter(2, B_DRAFT, "session-b");
-    useWorkspaceStore.setState({
+    useUiStore.setState({
       [loadingField]: "replacement-loading",
       steeringError: "replacement-safe",
       aiFlavorBatchPending: "replacement-batch",
@@ -222,7 +228,7 @@ describe("workspace-bound writing operations", () => {
     gate.reject(new Error("late failure"));
     await pending;
 
-    const state = useWorkspaceStore.getState();
+    const state = { ...useUiStore.getState(), ...useChatStore.getState() };
     expect(state.steeringError).toBe("replacement-safe");
     expect(state.aiFlavorBatchPending).toBe("replacement-batch");
     expect(state.draftActionLoading).toBe("replacement-loading");

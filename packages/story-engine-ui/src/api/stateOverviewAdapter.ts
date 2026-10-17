@@ -128,19 +128,6 @@ export function workspaceFromStateOverview(
       && chapter.hasCommittedChapter !== true
     )),
     ...(latestUncommittedDraftChapter !== undefined ? { latestUncommittedDraftChapter } : {}),
-    messages: [
-      {
-        id: "state-overview-connected",
-        role: "assistant",
-        kind: "scaffolding",
-        content: [
-          `已进入《${overview.project.title}》的章节工作区。`,
-          `当前目标：${currentObjective}`,
-          `当前地点：${currentLocation}`,
-          warnings.length > 0 ? `风险提醒：${warnings.slice(0, 2).join("；")}` : "风险提醒：当前后端未返回风险",
-        ].join("\n"),
-      },
-    ],
     characterMatrix: overview.characterMatrix,
     worldbuildingFallback: worldbuildingFromWorldBible(worldBible),
     protagonist: {

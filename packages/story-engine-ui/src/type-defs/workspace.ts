@@ -287,7 +287,6 @@ export interface ChapterWorkspaceData {
   readonly workingDraftChain?: boolean;
   readonly previousUncommittedDraftContext?: boolean;
   readonly latestUncommittedDraftChapter?: number;
-  readonly messages: readonly ChapterMessage[];
   readonly protagonist: ProtagonistStatus;
   readonly characterMatrix?: StateOverviewCharacterMatrix;
   readonly location: LocationStatus;

@@ -17,7 +17,9 @@ import {
   setChatSessionSaveSkippedNotifier,
   __resetChatSessionsClientForTests,
 } from "../api/chatSessionsClient.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
 import { resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
@@ -104,8 +106,9 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
     __resetChatSessionsClientForTests();
     window.sessionStorage.clear();
     useNavigationStore.setState({ projectPath: "/tmp/test-book", toast: null });
-    useWorkspaceStore.getState().setWorkspace(mockWorkspaceData);
-    useWorkspaceStore.setState({ chatLoading: false, steeringLoading: false, draftActionLoading: null, sessions: [], activeSessionId: "" });
+    useBookStore.getState().setWorkspace(mockWorkspaceData);
+    useChatStore.setState({ chatLoading: false, sessions: [], activeSessionId: "" });
+    useUiStore.setState({ steeringLoading: false, draftActionLoading: null });
     saveAll.flushAllSaves.mockImplementation(async () => ({ ok: true as const }));
     vi.mocked(createStoryProjectFromDraft).mockReset();
   });
@@ -131,22 +134,20 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
 
     // 开书成功、会话索引接上
     expect(useNavigationStore.getState().projectPath).toBe("/tmp/t1-persist-book");
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("s-boot");
+    expect(useChatStore.getState().activeSessionId).toBe("s-boot");
     // 建书过程必须真的读过活跃会话（epoch 登记的来源；只 list 不读就是本次 bug）
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("session="))).toBe(true);
     expect(useNavigationStore.getState().toast).toContain("已创建并打开");
     expect(useNavigationStore.getState().toast).not.toContain("初始化失败");
 
     // 模拟用户聊了一回合：消息进 store（对话存盘要存的就是它）
-    useWorkspaceStore.getState().updateWorkspace({
-      messages: [
-        { id: "user-1", role: "user", content: "主角叫林晚" },
-        { id: "assistant-1", role: "assistant", content: "好，已记住。" },
-      ],
-    });
+    useChatStore.getState().setMessages([
+      { id: "user-1", role: "user", content: "主角叫林晚" },
+      { id: "assistant-1", role: "assistant", content: "好，已记住。" },
+    ]);
 
     // 对话存盘的最后一步（sync/chatSync 调的就是它）
-    await saveChatSessionMessages("/tmp/t1-persist-book", "s-boot", useWorkspaceStore.getState().workspace.messages);
+    await saveChatSessionMessages("/tmp/t1-persist-book", "s-boot", useChatStore.getState().messages);
 
     const saves = putBodies(fetchMock).filter((body) => body.action === "save");
     expect(saves).toHaveLength(1);

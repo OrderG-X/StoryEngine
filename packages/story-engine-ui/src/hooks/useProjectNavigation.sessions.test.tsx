@@ -1,12 +1,5 @@
 /**
- * Task 6 验收测试：切章不换 messages
- *
- * 测试策略（brief 推荐的 fallback）：
- * spy useWorkspaceStore 的 setWorkspace，断言切章调用时不会用新值覆盖 messages。
- *
- * 核心行为：openChapterWorkspace 的 setWorkspace({ ...current, ... }) 通过 spread 保留
- * current.messages，不再有 `messages: entryChatMessages(snapshot.messages)` 覆盖项。
- * 因此，setWorkspace 入参里的 messages === 切章前 store 里的 messages 引用（未被替换）。
+ * 切章不换对话：对话跟着会话走、不跟章走（重构 P5：对话单独一块 chatStore，切章根本不碰它）。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
@@ -14,7 +7,9 @@ import { useProjectNavigation } from "./useProjectNavigation.js";
 import { createStoryProjectFromDraft, fetchStateOverview } from "../api/client.js";
 import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.js";
 import { listChatSessions } from "../api/chatSessionsClient.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
@@ -94,6 +89,7 @@ const ch2: ChapterNavItem = { id: "ch-2", chapterNumber: 2, title: "第二章", 
 
 describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走）", () => {
   let setWorkspaceSpy: ReturnType<typeof vi.spyOn>;
+  let setMessagesSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     resetWorkspaceOperationForTests();
@@ -102,31 +98,29 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     // 设置 navigationStore 有 projectPath（openChapterWorkspace 依赖）
     useNavigationStore.setState({ projectPath: "/tmp/test-book" });
     // 设置 workspace 初始状态，带真实 messages（确保切章前有聊天记录）
-    useWorkspaceStore.getState().setWorkspace({
-      ...mockWorkspaceData,
-      messages: [
-        { id: "msg-before-chapter-switch", role: "user", content: "切章前这条消息应当保留" },
-        { id: "msg-resp", role: "assistant", content: "好的。" },
-      ],
-    });
-    useWorkspaceStore.setState({ chatLoading: false, steeringLoading: false, draftActionLoading: null });
+    useBookStore.getState().setWorkspace(mockWorkspaceData);
+    useChatStore.getState().setMessages([
+      { id: "msg-before-chapter-switch", role: "user", content: "切章前这条消息应当保留" },
+      { id: "msg-resp", role: "assistant", content: "好的。" },
+    ]);
+    useChatStore.setState({ chatLoading: false });
+    useUiStore.setState({ steeringLoading: false, draftActionLoading: null });
     setAutosaveFlusher(async () => ({ ok: true }));
-    // spy 必须在 setWorkspace 被切章调用之前设置
-    setWorkspaceSpy = vi.spyOn(useWorkspaceStore.getState(), "setWorkspace");
+    // spy 必须在切章调用之前设置
+    setWorkspaceSpy = vi.spyOn(useBookStore.getState(), "setWorkspace");
+    setMessagesSpy = vi.spyOn(useChatStore.getState(), "setMessages");
   });
 
   afterEach(() => {
     setAutosaveFlusher(null);
     resetWorkspaceOperationForTests();
     setWorkspaceSpy.mockRestore();
+    setMessagesSpy.mockRestore();
     vi.clearAllMocks();
     vi.mocked(fetchChapterPaper).mockImplementation(async (_projectPath: string, chapter: number) => emptyPaper(chapter));
   });
 
-  it("切章时 setWorkspace 入参的 messages 等于切章前 store 里的 messages（原样 spread，未被 snapshot 覆盖）", async () => {
-    // 记录切章前 store 的 messages 引用
-    const messagesBefore = useWorkspaceStore.getState().workspace.messages;
-
+  it("切章不改对话（不调 setMessages）", async () => {
     const { result } = renderHook(() =>
       useProjectNavigation({
         bookManagement: { upsertRecentBook: vi.fn() },
@@ -138,16 +132,12 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       await result.current.openChapterWorkspace(ch2);
     });
 
-    // setWorkspace 被调用了（章切换一定触发）
-    expect(setWorkspaceSpy).toHaveBeenCalled();
-
-    // 核心断言：setWorkspace 入参里的 messages === 切章前的引用（未被 entryChatMessages(snapshot.messages) 替换）
-    const lastCallArg = setWorkspaceSpy.mock.calls.at(-1)![0] as { messages?: unknown };
-    expect(lastCallArg.messages).toBe(messagesBefore);
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(2);
+    expect(setMessagesSpy).not.toHaveBeenCalled();
   });
 
   it("切章后 store 里的 messages 与切章前相同（聊天保持不动）", async () => {
-    const messagesBefore = useWorkspaceStore.getState().workspace.messages;
+    const messagesBefore = useChatStore.getState().messages;
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -161,7 +151,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     });
 
     // 切章后 store 里 messages 与切章前一致（引用相同）
-    expect(useWorkspaceStore.getState().workspace.messages).toBe(messagesBefore);
+    expect(useChatStore.getState().messages).toBe(messagesBefore);
   });
 
   it("切章把那一章盘上的稿子交给稿纸（重构 P5：稿子只有一个主人）", async () => {
@@ -180,20 +170,18 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     expect(fetchChapterPaper).toHaveBeenCalledWith("/tmp/test-book", 2);
     expect(useDraftStore.getState()).toMatchObject({ chapter: 2, body: "第二章盘上的稿子", baseVersion: "v-2" });
-    expect(useWorkspaceStore.getState().workspace.flowStatus).toBe("draft_ready");
-    expect(useWorkspaceStore.getState().workspace.currentChapter.title).toBe("第二章 雨夜");
+    expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
+    expect(useBookStore.getState().workspace.currentChapter.title).toBe("第二章 雨夜");
   });
 
   it("clears old sessions across home and new-book creation, and never keeps chat in browser storage", async () => {
     useNavigationStore.setState({ projectPath: "/tmp/book-a", workspaceReady: true });
-    useWorkspaceStore.setState({
+    useChatStore.setState({
       sessions: [{ id: "session-a", name: "A", updatedAt: "t" }],
       activeSessionId: "session-a",
       activeArchivedCount: 4,
     });
-    useWorkspaceStore.getState().updateWorkspace({
-      messages: [{ id: "a-message", role: "user", content: "A only" }],
-    });
+    useChatStore.getState().setMessages([{ id: "a-message", role: "user", content: "A only" }]);
     const overview = await vi.mocked(fetchStateOverview)({ projectPath: "/tmp/fixture" } as never);
     vi.mocked(createStoryProjectFromDraft).mockResolvedValueOnce({ projectDir: "/tmp/book-b", overview });
     const { result } = renderHook(() => useProjectNavigation({
@@ -202,10 +190,10 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     }));
 
     await act(async () => { await result.current.openHome(); });
-    expect(useWorkspaceStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
+    expect(useChatStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
     await act(async () => { await result.current.handleCreateBook({ title: "B" } as never); });
-    expect(useWorkspaceStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
-    expect(useWorkspaceStore.getState().workspace.messages).not.toEqual(
+    expect(useChatStore.getState()).toMatchObject({ activeSessionId: "", activeArchivedCount: 0, sessions: [] });
+    expect(useChatStore.getState().messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "a-message" })]),
     );
     // 对话只存会话文件，浏览器里不另存一份（重构 P5）。
@@ -213,7 +201,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
   });
 
   it("新建书引导会话索引并接上全局对话记忆上限（修「首聊不入会话盘 + 上限停 96k 默认」）", async () => {
-    useWorkspaceStore.setState({ chatHistoryBudget: 96000, sessions: [], activeSessionId: "" });
+    useChatStore.setState({ chatHistoryBudget: 96000, sessions: [], activeSessionId: "" });
     const overview = await vi.mocked(fetchStateOverview)({ projectPath: "/tmp/fixture" } as never);
     vi.mocked(createStoryProjectFromDraft).mockResolvedValueOnce({ projectDir: "/tmp/book-with-session", overview });
     vi.mocked(listChatSessions).mockResolvedValueOnce({
@@ -230,10 +218,10 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     expect(useNavigationStore.getState().projectPath).toBe("/tmp/book-with-session");
     // activeSessionId 必须是引导出的真实会话：空串会让聊天自动保存跳过会话落盘（重启即丢首聊历史）
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("session-boot");
-    expect(useWorkspaceStore.getState().sessions).toHaveLength(1);
+    expect(useChatStore.getState().activeSessionId).toBe("session-boot");
+    expect(useChatStore.getState().sessions).toHaveLength(1);
     // 全局记忆上限接上，不再停留在 store 默认 96k
-    expect(useWorkspaceStore.getState().chatHistoryBudget).toBe(300000);
+    expect(useChatStore.getState().chatHistoryBudget).toBe(300000);
   });
 
   it("clears sessions when opening a non-project recent book", async () => {
@@ -242,8 +230,10 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       protagonistName: "主角", status: "草稿中", updatedAt: "刚刚", logline: "", writtenChapters: 0,
       totalWords: 0, projectPath: "/mock/book",
     }];
-    useWorkspaceStore.setState({
-      sessions: [{ id: "session-a", name: "A", updatedAt: "t" }], activeSessionId: "session-a", activeArchivedCount: 2,
+    useChatStore.setState({
+      sessions: [{ id: "session-a", name: "A", updatedAt: "t" }],
+      activeSessionId: "session-a",
+      activeArchivedCount: 2,
     });
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() }, countTextWords: (text) => text.length,
@@ -251,7 +241,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     await act(async () => { await result.current.openRecentBook("mock-book"); });
 
-    expect(useWorkspaceStore.getState()).toMatchObject({
+    expect(useChatStore.getState()).toMatchObject({
       sessions: [], activeSessionId: "", activeArchivedCount: 0,
     });
   });
@@ -259,7 +249,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
   it("failed old-chapter flush blocks chapter navigation and releases the transition", async () => {
     setAutosaveFlusher(async () => ({ ok: false, error: "disk full" }));
     vi.mocked(fetchChapterPaper).mockClear();
-    const chapterBefore = useWorkspaceStore.getState().workspace.currentChapter.chapterNumber;
+    const chapterBefore = useBookStore.getState().workspace.currentChapter.chapterNumber;
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() },
       countTextWords: (text) => text.length,
@@ -268,7 +258,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     await act(async () => { await result.current.openChapterWorkspace(ch2); });
 
     expect(fetchChapterPaper).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).toBe(chapterBefore);
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(chapterBefore);
     expect(useNavigationStore.getState().toast).toContain("保存失败");
     expect(isWorkspaceBusy()).toBe(false);
   });
@@ -308,9 +298,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
   });
 
   it("opening a different book never reuses messages from the old book when backend history is unavailable", async () => {
-    useWorkspaceStore.getState().updateWorkspace({
-      messages: [{ id: "old-book-secret", role: "user", content: "只属于旧书" }],
-    });
+    useChatStore.getState().setMessages([{ id: "old-book-secret", role: "user", content: "只属于旧书" }]);
     const { result } = renderHook(() => useProjectNavigation({
       bookManagement: { upsertRecentBook: vi.fn() },
       countTextWords: (text) => text.length,
@@ -318,18 +306,19 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     await act(async () => { await result.current.openProject("/tmp/different-book"); });
 
-    expect(useWorkspaceStore.getState().workspace.messages).not.toEqual(
+    expect(useChatStore.getState().messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "old-book-secret" })]),
     );
-    expect(useWorkspaceStore.getState().sessions).toEqual([]);
-    expect(useWorkspaceStore.getState().activeSessionId).toBe("");
+    expect(useChatStore.getState().sessions).toEqual([]);
+    expect(useChatStore.getState().activeSessionId).toBe("");
   });
 
   it("direct generation in flight blocks chapter navigation before reading the target", async () => {
-    useWorkspaceStore.setState({ activeSessionId: "session-a", draftActionLoading: "generate-draft" });
+    useChatStore.setState({ activeSessionId: "session-a" });
+    useUiStore.setState({ draftActionLoading: "generate-draft" });
     beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
     vi.mocked(fetchChapterPaper).mockClear();
@@ -346,7 +335,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     });
 
     expect(fetchChapterPaper).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).not.toBe(2);
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).not.toBe(2);
     expect(useNavigationStore.getState().toast).toContain("正在进行");
   });
 
@@ -367,23 +356,24 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     const intruder = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     if (intruder) finishWorkspaceOperation(intruder);
     expect(intruder).toBeNull();
 
     gate.resolve(emptyPaper(2));
     await act(async () => transition);
-    expect(useWorkspaceStore.getState().workspace.currentChapter.chapterNumber).toBe(2);
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(2);
     expect(isWorkspaceBusy()).toBe(false);
   });
 
   it("direct generation in flight blocks switching to another project", async () => {
-    useWorkspaceStore.setState({ activeSessionId: "session-a", draftActionLoading: "generate-draft" });
+    useChatStore.setState({ activeSessionId: "session-a" });
+    useUiStore.setState({ draftActionLoading: "generate-draft" });
     beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
       sessionId: "session-a",
     });
     vi.mocked(fetchStateOverview).mockClear();
@@ -424,8 +414,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     const intruder = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     if (intruder) finishWorkspaceOperation(intruder);
     expect(intruder).toBeNull();
@@ -456,8 +446,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     const writer = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     if (writer) finishWorkspaceOperation(writer);
     expect(writer).toBeNull();
@@ -488,8 +478,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     await vi.waitFor(() => expect(createStoryProjectFromDraft).toHaveBeenCalledTimes(1));
     const during = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     if (during) finishWorkspaceOperation(during);
     expect(during).toBeNull();
@@ -501,8 +491,8 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     expect(useNavigationStore.getState().toast).toContain("创建失败");
     const after = beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/test-book",
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     expect(after).not.toBeNull();
     if (after) finishWorkspaceOperation(after);
@@ -534,7 +524,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
   it("章节稿子读取失败时保留旧工作区，不进入新章节的 ready/save 状态", async () => {
     vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("paper unavailable"));
     useNavigationStore.setState({ workspaceReady: true });
-    const workspaceBefore = useWorkspaceStore.getState().workspace;
+    const workspaceBefore = useBookStore.getState().workspace;
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -548,14 +538,14 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
     });
 
     expect(setWorkspaceSpy).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().workspace).toBe(workspaceBefore);
+    expect(useBookStore.getState().workspace).toBe(workspaceBefore);
     expect(useNavigationStore.getState().workspaceReady).toBe(true);
   });
 
   it("打开项目时当前章稿子读取失败应保留旧工作区，不把新项目标记为 ready", async () => {
     vi.mocked(fetchChapterPaper).mockRejectedValueOnce(new Error("paper unavailable"));
     useNavigationStore.setState({ projectPath: "/tmp/old-book", workspaceReady: true });
-    const workspaceBefore = useWorkspaceStore.getState().workspace;
+    const workspaceBefore = useBookStore.getState().workspace;
 
     const { result } = renderHook(() =>
       useProjectNavigation({
@@ -571,7 +561,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
 
     expect(opened).toBe(false);
     expect(setWorkspaceSpy).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().workspace).toBe(workspaceBefore);
+    expect(useBookStore.getState().workspace).toBe(workspaceBefore);
     expect(useNavigationStore.getState().projectPath).toBe("/tmp/old-book");
     expect(useNavigationStore.getState().workspaceReady).toBe(true);
   });

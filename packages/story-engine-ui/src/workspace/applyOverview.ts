@@ -6,7 +6,7 @@
 import type { StateOverview } from "../api/types.js";
 import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { paperStage, type DraftStoreState } from "../stores/draftStore.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
 import type { ChapterNavItem, ChapterWorkflowState } from "../types.js";
 import { carryChapterFileFlags, updateChapterListTitle } from "../utils/bookUtils.js";
 
@@ -23,7 +23,7 @@ export interface ApplyOverviewOptions {
 }
 
 export function applyOverviewToWorkspace(overview: StateOverview, options: ApplyOverviewOptions = {}): void {
-  const store = useWorkspaceStore.getState();
+  const store = useBookStore.getState();
   const flowStatus = options.flowStatus ?? store.workspace.flowStatus;
   const preferredChapter = pickPreferredChapter(store.workspace.currentChapter?.chapterNumber, options.chapter);
   const nextWorkspace = workspaceFromStateOverview(overview, preferredChapter);
@@ -42,7 +42,6 @@ export function applyOverviewToWorkspace(overview: StateOverview, options: Apply
     },
     chapters,
     flowStatus,
-    messages: store.workspace.messages,
   });
   store.setCurrentOverview(overview);
   store.setSidebar(sidebarFromStateOverview(overview));

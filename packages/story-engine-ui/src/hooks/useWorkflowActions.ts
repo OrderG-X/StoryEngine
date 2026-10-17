@@ -11,7 +11,9 @@ import type {
   DraftRevisionTask,
   ChapterAgentCard,
 } from "../api/types.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import type { ChapterMessage } from "../types.js";
 import { compactStrings, cleanUiText } from "../utils/textUtils.js";
@@ -148,11 +150,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   const { projectPath, appendMessage } = params;
 
   const currentOperationIdentity = () => {
-    const store = useWorkspaceStore.getState();
+    const storeBook = useBookStore.getState();
+    const storeChat = useChatStore.getState();
     return {
       projectPath: useNavigationStore.getState().projectPath ?? "",
-      chapter: store.workspace.currentChapter.chapterNumber,
-      sessionId: store.activeSessionId,
+      chapter: storeBook.workspace.currentChapter.chapterNumber,
+      sessionId: storeChat.activeSessionId,
     };
   };
 
@@ -164,8 +167,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     }
     const token = beginWorkspaceOperation(kind, {
       projectPath,
-      chapter: useWorkspaceStore.getState().workspace.currentChapter.chapterNumber,
-      sessionId: useWorkspaceStore.getState().activeSessionId,
+      chapter: useBookStore.getState().workspace.currentChapter.chapterNumber,
+      sessionId: useChatStore.getState().activeSessionId,
     });
     if (!token) {
       useNavigationStore.getState().showToast("已有写作操作正在进行，请等它结束后再试。", 4200);
@@ -183,7 +186,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   const finishOwnedOperation = (token: WorkspaceOperationToken): void => {
     if (!isWorkspaceOperationCurrent(token)) return;
     if (ownsCurrentWorkspace(token)) {
-      useWorkspaceStore.getState().setDraftActionLoading(null);
+      useUiStore.getState().setDraftActionLoading(null);
     }
     finishWorkspaceOperation(token);
   };
@@ -222,7 +225,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     /** REST 深度审稿成功时挂到消息上，供时间线内折叠卡渲染（不再靠钉底 draftAIReview）。 */
     readonly aiReviewReport?: ChapterMessage["aiReviewReport"];
   }): void => {
-    useWorkspaceStore.getState().updateMessage(messageId, (current) => ({
+    useChatStore.getState().updateMessage(messageId, (current) => ({
       ...current,
       role: input.role ?? current.role,
       content: input.content,
@@ -261,16 +264,16 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
 
   const handleGenerateRevisionPreview = async (): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsUi = useUiStore.getState();
 
-    if (!projectPath || !ws.activeRevisionTask) {
+    if (!projectPath || !wsUi.activeRevisionTask) {
       nav.showToast("请先创建修订任务。");
       return;
     }
 
     const operation = beginOwnedOperation("revision-preview");
     if (!operation) return;
-    ws.setDraftActionLoading("revision-preview");
+    wsUi.setDraftActionLoading("revision-preview");
     const messageId = startAgentFlow({
       messageId: `assistant-revision-preview-progress-${Date.now()}`,
       kind: "revision",
@@ -285,15 +288,15 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       const result = await previewDraftRevision({
         projectPath,
         chapter: operation.chapter,
-        task: ws.activeRevisionTask,
+        task: wsUi.activeRevisionTask,
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;
       }
-      const s = useWorkspaceStore.getState();
-      s.setActiveRevisionTask(result.task);
-      s.setActiveRevisionPreview({ ...result.preview, originTarget: operation });
+      const sUi = useUiStore.getState();
+      sUi.setActiveRevisionTask(result.task);
+      sUi.setActiveRevisionPreview({ ...result.preview, originTarget: operation });
       updateAgentFlow(messageId, {
         role: "assistant",
         content: "修订草案已生成。请查看原文 / 修订后的对比；确认后才会应用到工作稿。",
@@ -329,7 +332,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         title: "修订 Agent",
         error,
       });
-      useWorkspaceStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
     } finally {
       finishOwnedOperation(operation);
     }
@@ -340,7 +343,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   /* -------------------------------------------------------------- */
 
   const handleCreateRevisionTask = (source: { readonly issue?: DraftAIReviewIssue; readonly suggestion?: DraftAIRevisionSuggestion }): void => {
-    const ws = useWorkspaceStore.getState();
+    const wsBook = useBookStore.getState();
     const nav = useNavigationStore.getState();
 
     const paperText = currentPaperText();
@@ -362,7 +365,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       id: `revision-${Date.now().toString(36)}`,
       ...(source.issue ? { sourceIssueId: source.issue.id } : {}),
       ...(source.suggestion ? { sourceSuggestionId: source.suggestion.id } : {}),
-      chapter: ws.workspace.currentChapter.chapterNumber,
+      chapter: wsBook.workspace.currentChapter.chapterNumber,
       targetType: target.targetType,
       targetText: target.targetText,
       problemSummary: source.issue?.title ?? source.suggestion?.target ?? "局部修订",
@@ -377,9 +380,9 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       status: "pending",
     };
 
-    const s = useWorkspaceStore.getState();
-    s.setActiveRevisionTask(task);
-    s.setActiveRevisionPreview(null);
+    const sUi = useUiStore.getState();
+    sUi.setActiveRevisionTask(task);
+    sUi.setActiveRevisionPreview(null);
     appendMessage({
       id: `assistant-revision-task-${Date.now()}`,
       role: "assistant",
@@ -408,13 +411,13 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
 
   const handleApplyRevisionPreview = async (): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsUi = useUiStore.getState();
 
-    if (!projectPath || !ws.activeRevisionPreview) {
+    if (!projectPath || !wsUi.activeRevisionPreview) {
       nav.showToast("请先生成修订草案。");
       return;
     }
-    const revisionOrigin = (ws.activeRevisionPreview as { readonly originTarget?: WorkspaceOperationTarget }).originTarget;
+    const revisionOrigin = (wsUi.activeRevisionPreview as { readonly originTarget?: WorkspaceOperationTarget }).originTarget;
     if (!revisionOrigin) {
       nav.showToast("这份修订预览缺少工作区归属，已拒绝应用。", 5000);
       return;
@@ -424,16 +427,16 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     // P0-3 防御纵深：UI 零差异态可能被绕过；入口再拦一次，绝不假成功落盘。
-    if (isRevisionZeroDiff(ws.activeRevisionPreview.beforeText, ws.activeRevisionPreview.afterText)) {
+    if (isRevisionZeroDiff(wsUi.activeRevisionPreview.beforeText, wsUi.activeRevisionPreview.afterText)) {
       nav.showToast("没有可应用的改动，工作稿未变");
-      ws.setActiveRevisionTask(null);
-      ws.setActiveRevisionPreview(null);
+      wsUi.setActiveRevisionTask(null);
+      wsUi.setActiveRevisionPreview(null);
       return;
     }
     // B2：把这次「手动选区改写」的 before→after 留住，应用成功后写进对话记录——让 agent 不再对前端直改瞎眼
     // （两套改写体系彼此无感知的根因：路①前端 REST 改写应用后只刷工作区、不告诉 agent 改了什么）。
-    const appliedPreview = ws.activeRevisionPreview;
-    const { originTarget: _originTarget, ...revisionPreviewForApi } = ws.activeRevisionPreview;
+    const appliedPreview = wsUi.activeRevisionPreview;
+    const { originTarget: _originTarget, ...revisionPreviewForApi } = wsUi.activeRevisionPreview;
     const brief = (text: string): string => {
       const s = text.replace(/\s+/gu, " ").trim();
       return s.length > 60 ? `${s.slice(0, 60)}…` : s;
@@ -441,7 +444,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
 
     const operation = beginOwnedOperation("revision-apply");
     if (!operation) return;
-    ws.setDraftActionLoading("revision-apply");
+    wsUi.setDraftActionLoading("revision-apply");
     const messageId = startAgentFlow({
       messageId: `assistant-revision-apply-progress-${Date.now()}`,
       kind: "revision",
@@ -459,7 +462,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         preview: revisionPreviewForApi,
         // 目标级诚实守卫回传链：把任务里存着的用户点名片段带上——服务端在 apply 时的当前草稿上
         // 重新解析目标区间（解析不到 = 草稿已大变 → 诚实拒）；不回传 resolvedTarget，不信客户端字符串。
-        ...(ws.activeRevisionTask?.targetText ? { targetText: ws.activeRevisionTask.targetText } : {}),
+        ...(wsUi.activeRevisionTask?.targetText ? { targetText: wsUi.activeRevisionTask.targetText } : {}),
       });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
@@ -468,12 +471,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       applyOverviewToWorkspace(result.overview, { flowStatus: "draft_ready" });
       await refreshPaper();
       // 「刚改片段」黄高亮：用改写后的新文本作定位锚，正文里把刚改的那段标出来（WritingPaper 据此高亮）。
-      ws.setRevisionHighlight(ws.activeRevisionPreview.afterText);
+      wsUi.setRevisionHighlight(wsUi.activeRevisionPreview.afterText);
       // 体检「改掉这句」联动：若这次改写来自某条违规，应用成功后把它在卡片里标「已改 ✓」并清掉 pending。
-      const pending = useWorkspaceStore.getState().aiFlavorPending;
+      const pending = useUiStore.getState().aiFlavorPending;
       if (pending) {
-        useWorkspaceStore.getState().markAiFlavorViolationFixed(pending.messageId, pending.violationId);
-        useWorkspaceStore.getState().setAiFlavorPending(null);
+        useChatStore.getState().markAiFlavorViolationFixed(pending.messageId, pending.violationId);
+        useUiStore.getState().setAiFlavorPending(null);
       }
       updateAgentFlow(messageId, {
         role: "assistant",
@@ -492,9 +495,9 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         }),
         suggestedActions: [suggestedAction("quality-check"), suggestedAction("ai-review"), suggestedAction("commit-preview")],
       });
-      const s = useWorkspaceStore.getState();
-      s.setActiveRevisionTask(null);
-      s.setActiveRevisionPreview(null);
+      const sUi = useUiStore.getState();
+      sUi.setActiveRevisionTask(null);
+      sUi.setActiveRevisionPreview(null);
     } catch (error) {
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
@@ -506,7 +509,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         title: "应用修订",
         error,
       });
-      useWorkspaceStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
     } finally {
       finishOwnedOperation(operation);
     }
@@ -517,12 +520,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   /* -------------------------------------------------------------- */
 
   const handleDismissRevisionTask = (): void => {
-    const ws = useWorkspaceStore.getState();
-    const current = ws.activeRevisionTask;
-    ws.setActiveRevisionTask(current ? { ...current, status: "dismissed" } : null);
-    ws.setActiveRevisionTask(null);
-    ws.setActiveRevisionPreview(null);
-    ws.setAiFlavorPending(null); // 放弃改写：清掉「在改哪条违规」，卡片那条回到「待改」。
+    const wsUi = useUiStore.getState();
+    const current = wsUi.activeRevisionTask;
+    wsUi.setActiveRevisionTask(current ? { ...current, status: "dismissed" } : null);
+    wsUi.setActiveRevisionTask(null);
+    wsUi.setActiveRevisionPreview(null);
+    wsUi.setAiFlavorPending(null); // 放弃改写：清掉「在改哪条违规」，卡片那条回到「待改」。
   };
 
   /* -------------------------------------------------------------- */
@@ -546,7 +549,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     origin?: { readonly messageId: string; readonly violationId: string },
   ): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsBook = useBookStore.getState();
+    const wsUi = useUiStore.getState();
     const template = SELECTION_REVISION_TEMPLATES.find((item) => item.key === key);
     if (!projectPath) {
       nav.showToast("请先打开本地项目。");
@@ -556,7 +560,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
-    const chapter = ws.workspace.currentChapter.chapterNumber;
+    const chapter = wsBook.workspace.currentChapter.chapterNumber;
     const task = buildSelectionRevisionTask({ selectionText, key, chapter, ...(extraGoal ? { extraGoal } : {}) });
     if (!task || !template) {
       nav.showToast("请先在正文里选中一段文字。");
@@ -569,11 +573,11 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     // 浮动操作条路用户本就在写作台，这里是 no-op，安全共用。
     nav.requestCenterView("desk");
     // 点了立刻弹框进「正在改写」态——别等 previewDraftRevision 返回才建 task（否则框要等几秒才出现＝没反应）。
-    ws.setActiveRevisionTask(task);
-    ws.setActiveRevisionPreview(null);
-    ws.setRevisionHighlight(null); // 新一次改写开始：先撤掉上一段「刚改片段」黄高亮。
-    ws.setAiFlavorPending(origin ?? null); // 体检「改掉这句」带来源：记下「在改哪条违规」，应用成功后据它标已改、卡片显示「改写中…」。
-    ws.setDraftActionLoading(`selection-rewrite-${key}`);
+    wsUi.setActiveRevisionTask(task);
+    wsUi.setActiveRevisionPreview(null);
+    wsUi.setRevisionHighlight(null); // 新一次改写开始：先撤掉上一段「刚改片段」黄高亮。
+    wsUi.setAiFlavorPending(origin ?? null); // 体检「改掉这句」带来源：记下「在改哪条违规」，应用成功后据它标已改、卡片显示「改写中…」。
+    wsUi.setDraftActionLoading(`selection-rewrite-${key}`);
     const messageId = startAgentFlow({
       messageId: `assistant-selection-rewrite-progress-${Date.now()}`,
       kind: "revision",
@@ -604,18 +608,18 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           error: new Error("模型未能改写（可能调用失败或超时），原文未改动。"),
         });
         nav.showToast(`${template.label}失败：模型未能改写（可能调用失败或超时），原文未改动，请重试。`, 5000);
-        const fs = useWorkspaceStore.getState();
-        fs.setActiveRevisionTask(null);   // 失败：关掉刚弹出的框
-        fs.setActiveRevisionPreview(null);
-        fs.setAiFlavorPending(null);
+        const fsUi = useUiStore.getState();
+        fsUi.setActiveRevisionTask(null);   // 失败：关掉刚弹出的框
+        fsUi.setActiveRevisionPreview(null);
+        fsUi.setAiFlavorPending(null);
         return;
       }
       // 不直接 apply：把任务 + 预览存进「审稿修订预览」同一套状态，让 codex 出「改写前后对比卡」，
       // 用户在卡上点「应用到工作稿」才走 handleApplyRevisionPreview 落盘（写前快照=可撤销）。
       // task 里带着 targetText（=选区原文），即使等待确认期间编辑器选区丢了，apply/再改一版都不依赖即时选区。
-      const s = useWorkspaceStore.getState();
-      s.setActiveRevisionTask(previewResult.task);
-      s.setActiveRevisionPreview({ ...previewResult.preview, originTarget: operation });
+      const sUi = useUiStore.getState();
+      sUi.setActiveRevisionTask(previewResult.task);
+      sUi.setActiveRevisionPreview({ ...previewResult.preview, originTarget: operation });
       updateAgentFlow(messageId, {
         role: "assistant",
         content: `已生成${template.label}草案。请在中间的写作台查看「原文 / 修订后」对比，确认后点「应用到工作稿」才会改正文。`,
@@ -653,10 +657,10 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         error,
       });
       nav.showToast(`${template.label}失败：${error instanceof Error ? error.message : String(error)}`, 5000);
-      const fs = useWorkspaceStore.getState();
-      fs.setActiveRevisionTask(null);   // 失败：关掉刚弹出的框
-      fs.setActiveRevisionPreview(null);
-      fs.setAiFlavorPending(null);      // 治：体检「改掉这句」预览生成失败时，卡片别卡在「改写中…」。
+      const fsUi = useUiStore.getState();
+      fsUi.setActiveRevisionTask(null);   // 失败：关掉刚弹出的框
+      fsUi.setActiveRevisionPreview(null);
+      fsUi.setAiFlavorPending(null);      // 治：体检「改掉这句」预览生成失败时，卡片别卡在「改写中…」。
     } finally {
       finishOwnedOperation(operation);
     }
@@ -686,7 +690,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     messageId: string,
   ): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsUi = useUiStore.getState();
     if (!projectPath) { nav.showToast("请先打开本地项目。"); return; }
     if (isPaperCommitted()) {
       nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
@@ -696,9 +700,9 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const operation = beginOwnedOperation("deai-fix-all");
     if (!operation) return;
     const chapter = operation.chapter;
-    ws.setAiFlavorBatchPending(messageId);
-    ws.setRevisionHighlight(null);
-    ws.setDraftActionLoading("deai-fix-all");
+    wsUi.setAiFlavorBatchPending(messageId);
+    wsUi.setRevisionHighlight(null);
+    wsUi.setDraftActionLoading("deai-fix-all");
     try {
       const blocked = await saveBeforeDraftAction();
       if (blocked) throw new Error(blocked);
@@ -723,11 +727,11 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         for (const v of violations) {
           const t = norm(v.text);
           if (changedBefores.some((b) => b === t || b.includes(t) || t.includes(b))) {
-            useWorkspaceStore.getState().markAiFlavorViolationFixed(messageId, v.id);
+            useChatStore.getState().markAiFlavorViolationFixed(messageId, v.id);
           }
         }
         // 多处黄高亮 + 滚到首处改动（WritingPaper effect 据此联动）。
-        useWorkspaceStore.getState().setRevisionHighlights(resp.result.changes.map((c) => c.after));
+        useUiStore.getState().setRevisionHighlights(resp.result.changes.map((c) => c.after));
       }
       nav.showToast(resp.summary, 5000);
     } catch (error) {
@@ -739,8 +743,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     } finally {
       if (isWorkspaceOperationCurrent(operation)) {
         if (ownsCurrentWorkspace(operation)) {
-          useWorkspaceStore.getState().setAiFlavorBatchPending(null);
-          useWorkspaceStore.getState().setDraftActionLoading(null);
+          useUiStore.getState().setAiFlavorBatchPending(null);
+          useUiStore.getState().setDraftActionLoading(null);
         }
         finishWorkspaceOperation(operation);
       }
@@ -754,7 +758,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
 
   const handleRerollCandidates = async (): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsBook = useBookStore.getState();
+    const wsUi = useUiStore.getState();
     if (!projectPath) {
       nav.showToast("请先打开本地项目。");
       return;
@@ -763,12 +768,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       nav.showToast("本章已定稿，正文只读；如需另写请通过 AI 助手发起修订。");
       return;
     }
-    const chapter = ws.workspace.currentChapter.chapterNumber;
-    const direction = ws.lastChapterDirection || ws.steeringDirection || `继续第 ${chapter} 章。`;
+    const chapter = wsBook.workspace.currentChapter.chapterNumber;
+    const direction = wsUi.lastChapterDirection || wsUi.steeringDirection || `继续第 ${chapter} 章。`;
     const operation = beginOwnedOperation("reroll-candidates");
     if (!operation) return;
-    ws.setDraftActionLoading("reroll-candidates");
-    ws.setDraftCandidates(null);
+    wsUi.setDraftActionLoading("reroll-candidates");
+    wsUi.setDraftCandidates(null);
     try {
       // 顺序生成 2 版候选（避免并发把模型代理打满）；每版同方向、靠模型温度产生差异。
       // 每版各自 try：某版失败不丢掉已成功的版（部分成功也展示，别白烧 token）。
@@ -793,7 +798,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         nav.showToast(`再来一版失败：${lastError instanceof Error ? lastError.message : "候选生成失败，请重试。"}`, 5000);
         return;
       }
-      useWorkspaceStore.getState().setDraftCandidates(candidates);
+      useUiStore.getState().setDraftCandidates(candidates);
       if (candidates.length < 2) {
         nav.showToast(`只生成出 ${candidates.length} 版候选（另一版生成失败），可先看这版或再试一次。`);
       } else if (planNote) {
@@ -806,12 +811,12 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
 
   const handleApplyCandidate = async (content: string): Promise<void> => {
     const nav = useNavigationStore.getState();
-    const ws = useWorkspaceStore.getState();
+    const wsUi = useUiStore.getState();
     if (!projectPath || !content.trim()) {
       nav.showToast("没有可应用的候选。");
       return;
     }
-    const candidate = ws.draftCandidates?.find((item) => item.content === content);
+    const candidate = wsUi.draftCandidates?.find((item) => item.content === content);
     if (!candidate?.originTarget) {
       nav.showToast("这份候选稿缺少工作区归属，已拒绝应用。", 5000);
       return;
@@ -823,7 +828,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     const operation = beginOwnedOperation("apply-candidate");
     if (!operation) return;
     const chapter = operation.chapter;
-    ws.setDraftActionLoading("apply-candidate");
+    wsUi.setDraftActionLoading("apply-candidate");
     try {
       const blocked = await saveBeforeDraftAction();
       if (blocked) throw new Error(blocked);
@@ -834,7 +839,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       }
       applyOverviewToWorkspace(result.overview, { flowStatus: "draft_ready" });
       await refreshPaper();
-      useWorkspaceStore.getState().setDraftCandidates(null);
+      useUiStore.getState().setDraftCandidates(null);
       nav.showToast("已用这版替换工作稿，可在「操作历史」撤销。");
     } catch (error) {
       if (!ownsCurrentWorkspace(operation)) {
@@ -848,7 +853,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
   };
 
   const handleCloseCandidates = (): void => {
-    useWorkspaceStore.getState().setDraftCandidates(null);
+    useUiStore.getState().setDraftCandidates(null);
   };
 
   /* -------------------------------------------------------------- */

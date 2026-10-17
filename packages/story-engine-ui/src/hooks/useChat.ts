@@ -21,7 +21,9 @@ import type {
   StateOverview,
 } from "../api/types.js";
 import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
-import { useWorkspaceStore } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import {
@@ -90,13 +92,12 @@ export function useChat(params: UseChatParams): UseChatResult {
   } = params;
 
   /* ---- store access ---- */
-  const workspace = useWorkspaceStore((s) => s.workspace);
-  const appendMessage = useWorkspaceStore((s) => s.appendMessage);
-  const updateMessage = useWorkspaceStore((s) => s.updateMessage);
-  const setChatLoading = useWorkspaceStore((s) => s.setChatLoading);
-  const setChatError = useWorkspaceStore((s) => s.setChatError);
-  const selectedAdviceCards = useWorkspaceStore((s) => s.selectedAdviceCards);
-  const setSelectedAdviceCards = useWorkspaceStore((s) => s.setSelectedAdviceCards);
+  const appendMessage = useChatStore((s) => s.appendMessage);
+  const updateMessage = useChatStore((s) => s.updateMessage);
+  const setChatLoading = useChatStore((s) => s.setChatLoading);
+  const setChatError = useChatStore((s) => s.setChatError);
+  const selectedAdviceCards = useUiStore((s) => s.selectedAdviceCards);
+  const setSelectedAdviceCards = useUiStore((s) => s.setSelectedAdviceCards);
 
   const showToast = useNavigationStore((s) => s.showToast);
   const autoRenameRequestSeqRef = useRef(0);
@@ -137,11 +138,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         return;
       }
 
-      const initialStore = useWorkspaceStore.getState();
+      const initialStoreBook = useBookStore.getState();
+      const initialStoreChat = useChatStore.getState();
       const claimedOperation = beginWorkspaceOperation("agent-chat", {
         projectPath,
-        chapter: initialStore.workspace.currentChapter.chapterNumber,
-        sessionId: initialStore.activeSessionId,
+        chapter: initialStoreBook.workspace.currentChapter.chapterNumber,
+        sessionId: initialStoreChat.activeSessionId,
       });
       if (!claimedOperation) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
@@ -149,11 +151,12 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       let operation = claimedOperation;
       const ownsCurrentWorkspace = (): boolean => {
-        const current = useWorkspaceStore.getState();
+        const currentBook = useBookStore.getState();
+        const currentChat = useChatStore.getState();
         return isWorkspaceOperationTargetCurrent(operation, {
           projectPath: useNavigationStore.getState().projectPath ?? "",
-          chapter: current.workspace.currentChapter.chapterNumber,
-          sessionId: current.activeSessionId,
+          chapter: currentBook.workspace.currentChapter.chapterNumber,
+          sessionId: currentChat.activeSessionId,
         });
       };
       const notifyStaleOperation = (): void => {
@@ -244,9 +247,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 会卡在「正在生成草稿」=明明失败却谎称在生成（诚实铁律）。据稿纸上有没有字复位成 draft_ready/idle。
       const unstickGeneratingFlow = (): void => {
         if (!ownsCurrentWorkspace()) return;
-        const ws = useWorkspaceStore.getState();
-        const next = flowStatusAfterGenerateFailure(ws.workspace.flowStatus, useDraftStore.getState().body.trim().length > 0);
-        if (next) ws.updateWorkspace({ flowStatus: next });
+        const wsBook = useBookStore.getState();
+        const next = flowStatusAfterGenerateFailure(wsBook.workspace.flowStatus, useDraftStore.getState().body.trim().length > 0);
+        if (next) wsBook.updateWorkspace({ flowStatus: next });
       };
       // 写类工具在飞时出错 / 被停止：SSE 回执丢了，但服务端可能已经写完（出稿落了 drafts/fast、定稿已入库）。
       // 重读盘上这一章的稿纸和书的状态：
@@ -264,8 +267,8 @@ export function useChat(params: UseChatParams): UseChatResult {
           applyOverviewToWorkspace(overview);
           const paper = useDraftStore.getState();
           if (commitAttempt && paper.committed && paper.committed.body !== commitAttempt.committedBefore) {
-            const current = useWorkspaceStore.getState().workspace;
-            useWorkspaceStore.getState().updateWorkspace({
+            const current = useBookStore.getState().workspace;
+            useBookStore.getState().updateWorkspace({
               flowStatus: "committed",
               currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
             });
@@ -304,10 +307,10 @@ export function useChat(params: UseChatParams): UseChatResult {
         const flushed = await flushDraftSave();
         if (!flushed.ok) showToast(`稿子还没存上（${flushed.error}），AI 看到的是上一次存下的那版。`, 5200);
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
-        const currentChapterNumber = useWorkspaceStore.getState().workspace.currentChapter?.chapterNumber;
+        const currentChapterNumber = useBookStore.getState().workspace.currentChapter?.chapterNumber;
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
         // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
-        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useWorkspaceStore.getState().workspace.messages);
+        const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
         await streamAgentChat(
           {
             projectPath,
@@ -336,7 +339,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 reportedDraftChapterMismatch = false;
                 generateAttempt = { bodyBefore: useDraftStore.getState().body };
                 // 出稿一开始就把流程态置「正在生成草稿」，否则续写时标题区会残留上一章的「已入库」误导用户。
-                useWorkspaceStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
+                useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
               } else if (toolName === "revise_draft") {
                 // 用户让 AI 改稿：也把中间区切到写作台，改完的正文就在眼前。revise 不流式。
                 useNavigationStore.getState().requestCenterView("desk");
@@ -346,7 +349,7 @@ export function useChat(params: UseChatParams): UseChatResult {
             },
             onDraftPhase: ({ phase }) => {
               if (!ownsCurrentWorkspace()) return;
-              useWorkspaceStore.getState().setDraftPhase(phase);
+              useUiStore.getState().setDraftPhase(phase);
             },
             onDraftDelta: ({ chapter, text }) => {
               if (!ownsCurrentWorkspace()) return;
@@ -357,9 +360,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 operation = adopted;
                 draftStreamChapter = chapter;
                 if (chapter !== previousChapter) {
-                  const store = useWorkspaceStore.getState();
-                  const cur = store.workspace.currentChapter;
-                  store.updateWorkspace({
+                  const storeBook = useBookStore.getState();
+                  const cur = storeBook.workspace.currentChapter;
+                  storeBook.updateWorkspace({
                     currentChapter: {
                       ...cur,
                       chapterNumber: chapter,
@@ -416,14 +419,14 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (info.toolName === "commit_apply") commitAttempt = null;
               const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
               if (undone) agentUndone = true;
-              const flowBefore = useWorkspaceStore.getState().workspace.flowStatus;
+              const flowBefore = useBookStore.getState().workspace.flowStatus;
               const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
               const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
               if (!info.overview) {
                 if (info.toolName === "commit_apply" && info.committed === true) {
-                  const store = useWorkspaceStore.getState();
-                  const current = store.workspace;
-                  store.updateWorkspace({
+                  const storeBook = useBookStore.getState();
+                  const current = storeBook.workspace;
+                  storeBook.updateWorkspace({
                     flowStatus: "committed",
                     currentChapter: { ...current.currentChapter, hasCommittedChapter: true, hasDraftFile: true },
                     chapters: current.chapters.map((item) => item.chapterNumber === operation.chapter
@@ -432,7 +435,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                   });
                 } else if (nextFlow !== flowBefore) {
                   // 没带 overview 的工具（如质检 / 预览只读）也要推进流程状态，否则地图卡在写稿不动。
-                  useWorkspaceStore.getState().updateWorkspace({ flowStatus: nextFlow });
+                  useBookStore.getState().updateWorkspace({ flowStatus: nextFlow });
                 }
               } else if (info.refreshScope === "full") {
                 // 传 info.chapter（工具实际操作的章号）让前端认领权威章。
@@ -452,7 +455,7 @@ export function useChat(params: UseChatParams): UseChatResult {
                 .then(() => {
                   // 撤销后这一章回到哪一步，按盘上那版算（可能退回到「还没写过」）。
                   if (undone && ownsCurrentWorkspace()) {
-                    useWorkspaceStore.getState().updateWorkspace({ flowStatus: flowStatusForPaper(useDraftStore.getState()) });
+                    useBookStore.getState().updateWorkspace({ flowStatus: flowStatusForPaper(useDraftStore.getState()) });
                   }
                 }));
             },
@@ -533,7 +536,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           endStreaming();
           unstickGeneratingFlow();
         }
-        useWorkspaceStore.getState().setDraftPhase(null);
+        useUiStore.getState().setDraftPhase(null);
         // 保持 operation 所有权直到盘上真值读完；否则异步读刚返回，finally 已释放 token，结果会被当成迟到数据丢掉。
         // 但最多等 RESYNC_WAIT_MS：读盘卡住不能把整个工作区一直占着（迟到的结果按所有权丢掉，稿纸下次读盘自会对上）。
         await settleWithin([...(resyncPromise ? [resyncPromise] : []), ...pendingPaperSyncs], RESYNC_WAIT_MS);
@@ -548,10 +551,10 @@ export function useChat(params: UseChatParams): UseChatResult {
           }));
           // AI 撤销后，旧回合挂着的建议条（确认定稿 / 确认写入资料…）已过时，剥掉。
           if (agentUndone) {
-            const liveMessages = useWorkspaceStore.getState().workspace.messages;
+            const liveMessages = useChatStore.getState().messages;
             const withoutStaleSuggestions = stripStaleTurnSuggestions(liveMessages);
             if (withoutStaleSuggestions !== liveMessages) {
-              useWorkspaceStore.getState().updateWorkspace({ messages: withoutStaleSuggestions });
+              useChatStore.getState().setMessages(withoutStaleSuggestions);
             }
           }
         }
@@ -588,8 +591,8 @@ export function useChat(params: UseChatParams): UseChatResult {
    */
   const undoToTurn = useCallback(
     async (message: ChapterMessage): Promise<void> => {
-      const store = useWorkspaceStore.getState();
-      if (store.chatLoading) return;
+      const storeChat = useChatStore.getState();
+      if (storeChat.chatLoading) return;
       const undoSnapshotId = message.turnSnapshots?.[0]?.snapshotId;
       if (!undoSnapshotId) return;
       if (!projectPath) {
@@ -600,8 +603,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("当前项目已经变化，不能发送旧工作区请求。", 4200);
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -628,9 +632,9 @@ export function useChat(params: UseChatParams): UseChatResult {
 
       // 截断对话：连同触发该回合的用户提问一起去掉该回合及其后（回到「没问过」的干净态）。
       // git restore 刻意不回退会话文件——必须显式写回，否则下次开书被撤销的回合又整段回来。
-      const liveMessages = useWorkspaceStore.getState().workspace.messages;
+      const liveMessages = useChatStore.getState().messages;
       const truncated = truncateMessagesFrom(liveMessages, undoCutId(liveMessages, message.id));
-      useWorkspaceStore.getState().updateWorkspace({ messages: truncated });
+      useChatStore.getState().setMessages(truncated);
       const saved = await saveChatNow(truncated.length === 0 ? { allowEmpty: true } : {});
       if (!saved.ok) {
         showToast(
@@ -658,8 +662,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -671,9 +676,9 @@ export function useChat(params: UseChatParams): UseChatResult {
       };
 
       const conversation = buildOutboundConversation(
-        workspace.messages,
-        useWorkspaceStore.getState().activeArchivedCount,
-        useWorkspaceStore.getState().chatHistoryBudget,
+        liveChat.messages,
+        liveChat.activeArchivedCount,
+        liveChat.chatHistoryBudget,
       );
 
       appendMessage(userMessage);
@@ -681,8 +686,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 自动起名：还叫默认「新会话」的会话，首条用户消息一发就用原话压成标题命名。
       // 手动/已自动命名过的会话名不是默认值，不会被覆盖；fire-and-forget，不阻塞发送。
       {
-        const st = useWorkspaceStore.getState();
-        const active = st.sessions.find((s) => s.id === st.activeSessionId);
+        const stChat = useChatStore.getState();
+        const active = stChat.sessions.find((s) => s.id === stChat.activeSessionId);
         if (active && (active.name === "新会话" || active.name === "会话")) {
           const requestSeq = ++autoRenameRequestSeqRef.current;
           const originProjectPath = projectPath;
@@ -691,11 +696,11 @@ export function useChat(params: UseChatParams): UseChatResult {
             // 只更新 sessions 列表（拿到新名），不传 activeSessionId：异步起名期间用户
             // 若已切到别的会话，传回旧的 activeSessionId 会把当前选择回拉，造成名/内容错乱。
             .then((r) => {
-              const live = useWorkspaceStore.getState();
+              const liveChatNow = useChatStore.getState();
               if (requestSeq !== autoRenameRequestSeqRef.current
                 || useNavigationStore.getState().projectPath !== originProjectPath
-                || live.activeSessionId !== originSessionId) return;
-              live.setSessions(r.index.sessions);
+                || liveChatNow.activeSessionId !== originSessionId) return;
+              liveChatNow.setSessions(r.index.sessions);
             })
             .catch((err) => console.error("[useChat] 会话自动起名失败", err));
         }
@@ -706,7 +711,6 @@ export function useChat(params: UseChatParams): UseChatResult {
     },
     [
       projectPath,
-      workspace.messages,
       appendMessage,
       setChatError,
       runAgentDispatch,
@@ -739,12 +743,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveBook = useBookStore.getState();
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
         return;
       }
-      const chapter = target?.chapter ?? live.workspace.currentChapter?.chapterNumber;
+      const chapter = target?.chapter ?? liveBook.workspace.currentChapter?.chapterNumber;
       if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
         showToast("没找到要定稿的章节，请先打开那一章。", 4200);
         return;
@@ -762,7 +768,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
@@ -784,13 +790,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
         return;
       }
       const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
     },
@@ -808,13 +815,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         setChatError("请先打开真实本地项目。");
         return;
       }
-      const live = useWorkspaceStore.getState();
-      if (isWorkspaceBusy() || live.chatLoading || live.steeringLoading || Boolean(live.draftActionLoading)) {
+      const liveChat = useChatStore.getState();
+      const liveUi = useUiStore.getState();
+      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }
       const text = userActionChoiceText(action);
-      const conversation = buildOutboundConversation(live.workspace.messages, live.activeArchivedCount, live.chatHistoryBudget);
+      const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
       if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
@@ -829,11 +837,12 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
-      const live = useWorkspaceStore.getState();
+      const liveBook = useBookStore.getState();
+      const liveUi = useUiStore.getState();
       const action = chapterButtonAction(button, {
-        chapter: live.workspace.currentChapter?.chapterNumber,
-        chapters: live.workspace.chapters,
-        direction: live.steeringDirection,
+        chapter: liveBook.workspace.currentChapter?.chapterNumber,
+        chapters: liveBook.workspace.chapters,
+        direction: liveUi.steeringDirection,
       });
       if (!action) {
         appendMessage({ id: `assistant-button-nochapter-${Date.now()}`, role: "assistant", content: NO_CHAPTER_HINT });
@@ -850,8 +859,8 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 已完成的动作（如「撤销本次修改」撤销成功后还能再点），成假入口。失败/未执行不摘，留着重试。
   const consumeSuggestedAction = useCallback(
     (consumed: SuggestedAction): void => {
-      const store = useWorkspaceStore.getState();
-      const carrier = [...store.workspace.messages].reverse().find((m) =>
+      const storeChat = useChatStore.getState();
+      const carrier = [...storeChat.messages].reverse().find((m) =>
         m.role === "assistant"
         && (m.suggestedActions ?? []).some((a) => a.id === consumed.id && a.endpoint === consumed.endpoint));
       if (!carrier) return;
@@ -937,9 +946,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           void runAgentDispatch(
             original,
             buildOutboundConversation(
-              useWorkspaceStore.getState().workspace.messages,
-              useWorkspaceStore.getState().activeArchivedCount,
-              useWorkspaceStore.getState().chatHistoryBudget,
+              useChatStore.getState().messages,
+              useChatStore.getState().activeArchivedCount,
+              useChatStore.getState().chatHistoryBudget,
             ),
           );
           return;

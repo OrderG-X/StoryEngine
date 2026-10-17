@@ -59,21 +59,6 @@ export const mockWorkspaceData: ChapterWorkspaceData = {
     { id: "ch-008", chapterNumber: 8, title: "旧铜哨的回声", status: "planned" },
   ],
   flowStatus: "idle",
-  messages: [
-    {
-      id: "msg-001",
-      role: "user",
-      content: "我想让主角去地下车库确认无线电信号源，但不要立刻揭开真相。",
-      createdAt: "02:15",
-    },
-    {
-      id: "msg-002",
-      role: "assistant",
-      content:
-        "可以。当前主角昨晚通宵，状态疲惫；他知道无线电信号异常，但不知道广播坐标真假。建议本章推进信号源，穿插地下车库异响伏笔，结尾保留危险感。",
-      createdAt: "02:16",
-    },
-  ],
   protagonist: {
     name: "林澈",
     age: "尚未配置",

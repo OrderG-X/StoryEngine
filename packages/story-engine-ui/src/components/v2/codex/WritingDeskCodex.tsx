@@ -5,7 +5,7 @@ import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
-import { useWorkspaceStore } from "../../../stores/workspaceStore.js";
+import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import {
   committedEmptySubtitle,
@@ -62,8 +62,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const paperFontSize = useDisplaySettingsStore((s) => s.deskFontSize);
   const draft = useDraftPreview({ chapterNumber: props.workspace.currentChapter.chapterNumber, title: props.workspace.currentChapter.title });
   const committedBody = useDraftStore((state) => state.committed?.body ?? "");
-  const draftCandidates = useWorkspaceStore((state) => state.draftCandidates);
-  const draftActionLoading = useWorkspaceStore((state) => state.draftActionLoading);
+  const draftCandidates = useUiStore((state) => state.draftCandidates);
+  const draftActionLoading = useUiStore((state) => state.draftActionLoading);
   const workspaceBusy = Boolean(
     props.chatLoading
     || props.steeringLoading

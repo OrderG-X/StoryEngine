@@ -8,13 +8,11 @@ import type { StateOverview } from "../api/types.js";
 import { sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { useWorkspaceStore, emptyCommitSelections } from "../stores/workspaceStore.js";
+import { useBookStore } from "../stores/bookStore.js";
+import { useChatStore } from "../stores/chatStore.js";
+import { emptyCommitSelections, useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
-import {
-  actionsForWorkflowState,
-  workflowPromptText,
-} from "../utils/workflowHelpers.js";
 import { bookCreationPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
 import { flushAllSaves } from "../sync/saveAll.js";
@@ -33,7 +31,6 @@ import type {
   ChapterWorkspaceData,
   ChapterWorkflowState,
   SidebarData,
-  SuggestedAction,
 } from "../types.js";
 
 /* ------------------------------------------------------------------ */
@@ -340,8 +337,8 @@ function messagesWhenBackendSessionMissing(params: {
 
 /**
  * 资料刷新（refreshScope:"foundation"，foundation_write 触发）的 workspace 合并：
- * 用 overview 派生的 base 刷资料/侧栏相关字段，但**保留**用户当前停留章 currentChapter/chapters、
- * 对话 messages 与流程态 flowStatus（正文在 draftStore，不经这里）。
+ * 用 overview 派生的 base 刷资料/侧栏相关字段，但**保留**用户当前停留章 currentChapter/chapters
+ * 与流程态 flowStatus（正文在 draftStore、对话在 chatStore，都不经这里）。
  *
  * H4：历史上这里直接铺开 base（含 overview 最新章的 currentChapter/chapters），用户在第2章顺手记资料
  * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。必须与 useFoundationGaps.ts 的 refreshWorkspaceFromOverview
@@ -355,7 +352,6 @@ export function mergeFoundationRefreshWorkspace(
     ...nextBase,
     currentChapter: current.currentChapter,
     chapters: current.chapters,
-    messages: current.messages,
     flowStatus: current.flowStatus,
   };
 }
@@ -388,17 +384,15 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     showToast,
   } = useNavigationStore();
 
-  /* ---- workspace store ---- */
+  /* ---- 书 / 对话 / 界面临时态（重构 P5：拆成三块；setter 是稳定函数，直接取） ---- */
+  const workspace = useBookStore((s) => s.workspace);
+  const { setWorkspace, setSidebar, setCurrentOverview } = useBookStore.getState();
+  const { setMessages, setChatError, setSessions, setActiveArchivedCount, setChatHistoryBudget } = useChatStore.getState();
   const {
-    workspace,
-    setWorkspace,
-    setSidebar,
-    setCurrentOverview,
     setSteeringDirection,
     setLastChapterDirection,
     setSteeringDraft,
     setSteeringError,
-    setChatError,
     setCommitPreviewReport,
     setDraftAIReview,
     setActiveRevisionTask,
@@ -406,18 +400,16 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setCommitSelections,
     setSelectedAdviceCards,
     resetFoundationGaps,
-    resetTransientWorkspaceState,
-    setSessions,
-    setActiveArchivedCount,
-    setChatHistoryBudget,
-  } = useWorkspaceStore();
+    resetTransientUiState,
+  } = useUiStore.getState();
 
   const currentNavigationIdentity = () => {
-    const live = useWorkspaceStore.getState();
+    const liveBook = useBookStore.getState();
+    const liveChat = useChatStore.getState();
     return {
       projectPath: useNavigationStore.getState().projectPath ?? "",
-      chapter: live.workspace.currentChapter.chapterNumber,
-      sessionId: live.activeSessionId,
+      chapter: liveBook.workspace.currentChapter.chapterNumber,
+      sessionId: liveChat.activeSessionId,
     };
   };
 
@@ -470,7 +462,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         status: "current" as const,
       };
       const book = bookSummaryFromOverview(overview, nextProjectPath);
-      const storeMessages = useWorkspaceStore.getState().workspace.messages;
+      const storeMessages = useChatStore.getState().messages;
       // 对话只有一份：项目里的会话文件（重构 P5）。
       const sessionIndex = await listChatSessions(nextProjectPath).catch(() => null);
       if (!ownsNavigationOrigin(transition)) return false;
@@ -519,7 +511,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       );
       const entryMessages = entryChatMessages(backendSessionMessages);
       // 所有异步读取完成、来源身份没变：同一个同步回合里换上新书的项目 / 会话 / 工作区 / 稿纸。
-      resetTransientWorkspaceState();
+      resetTransientUiState();
       setActiveBookId(null);
       setProjectPath(nextProjectPath);
       setCurrentOverview(overview);
@@ -543,8 +535,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           ...fileStates.get(activeChapterNumber),
         },
         chapters,
-        messages: entryMessages,
       });
+      setMessages(entryMessages);
       useDraftStore.getState().loadPaper(nextProjectPath, paper, activeChapter.title);
       setSidebar(sidebarFromStateOverview(overview));
       bookManagement.upsertRecentBook(book);
@@ -617,7 +609,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
       resetFoundationGaps();
-      resetTransientWorkspaceState();
+      resetTransientUiState();
       setSessions([], "");
       setActiveArchivedCount(0);
       setSelectedAdviceCards([]);
@@ -634,8 +626,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           risks: workspace.risks,
           hardConstraints: workspace.hardConstraints,
           characterMatrix: workspace.characterMatrix,
-          messages: entryChatMessages(bookWorkspace.messages),
         });
+        setMessages([]);
       }
       setWorkspaceReady(true);
       if (options.updateUrl !== false) pushWorkspaceUrlForBook(book.id);
@@ -705,7 +697,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         ? flowStatusForPaper({ body: paper.draft?.body ?? paper.committed?.body ?? "", committed: paper.committed })
         : "idle";
       {
-        const current = useWorkspaceStore.getState().workspace;
+        const current = useBookStore.getState().workspace;
         const fileStates = new Map<number, ChapterFileState>();
         if (paper) fileStates.set(chapter.chapterNumber, fileStateFromPaper(paper));
         const chapters = updateChapterListForActive(current.chapters, chapter.chapterNumber, draftTitle, fileStates);
@@ -835,12 +827,10 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         committed: null,
         editedSinceCommit: null,
       }, nextWorkspace.currentChapter.title);
-      setWorkspace({
-        ...nextWorkspace,
-        // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
-        // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
-        messages: [bookCreationGreetingMessage()],
-      });
+      setWorkspace(nextWorkspace);
+      // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
+      // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
+      setMessages([bookCreationGreetingMessage()]);
       setSidebar(sidebarFromStateOverview(created.overview));
       bookManagement.upsertRecentBook(book);
       setWorkspaceReady(true);
@@ -872,7 +862,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const refreshWorkspaceFromOverview = (overview: StateOverview) => {
     setCurrentOverview(overview);
     {
-      const current = useWorkspaceStore.getState().workspace;
+      const current = useBookStore.getState().workspace;
       // H4：保留用户当前停留章/章节列表/对话/草稿，只让 overview 刷资料/侧栏派生字段。
       setWorkspace(mergeFoundationRefreshWorkspace(workspaceFromStateOverview(overview), current));
     }
