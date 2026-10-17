@@ -1,6 +1,7 @@
 /**
  * Shared LLM client logic: OpenAI-compatible HTTP calls and streaming.
  */
+import { providerGate } from "./provider-gate.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
@@ -566,7 +567,7 @@ export async function callOpenAICompatibleChatModel(input: {
       stream: input.stream ?? false,
     };
     const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
-      fetch(`${baseUrl}/chat/completions`, {
+      providerGate.fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),
@@ -916,12 +917,13 @@ export async function streamChatModelToText(input: {
       stream_options: { include_usage: true },
     };
     const postChat = (requestBody: Record<string, unknown>): Promise<Response> =>
-      fetch(`${baseUrl}/chat/completions`, {
+      // 限流闸：排队 / 429 退避期间给空闲计时器续命，排队不算「连接静默」（provider-gate.ts）。
+      providerGate.fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),
         signal: idle.controller.signal,
-      });
+      }, { onWait: idle.kick });
     let response = await postChat(body);
     if (!response.ok && response.status === 400) {
       const firstErrorText = await response.clone().text().catch(() => "");
