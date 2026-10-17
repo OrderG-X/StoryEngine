@@ -74,9 +74,9 @@ push("");
 
 // —— 线索 ——
 const oldThreads = [
-  ...((await readJson("story/threads.json"))?.threads ?? []).map((thread) => ({ ...thread, from: "threads", closed: thread.status === "done" })),
+  ...((await readJson("story/threads.json"))?.threads ?? []).map((thread) => ({ ...thread, from: "threads", closed: thread.status === "done" || thread.status === "stale" })),
   ...((await readJson("story/hooks.json"))?.hooks ?? []).map((hook) => ({ ...hook, from: "hooks", closed: hook.status === "resolved" || hook.status === "abandoned" })),
-  ...((await readJson("story/arc-goals.json"))?.goals ?? []).map((goal) => ({ ...goal, from: "arc-goals", closed: goal.status === "completed" })),
+  ...((await readJson("story/arc-goals.json"))?.goals ?? []).map((goal) => ({ ...goal, from: "arc-goals", closed: goal.status === "completed" || goal.status === "stale" })),
 ];
 const newThreads = new Map(view.threads.map((thread) => [thread.id, thread]));
 const threadRows = [];
@@ -92,8 +92,8 @@ for (const thread of oldThreads) {
     unexplained.push(`线索「${thread.title}」：老账${thread.closed ? "已收" : "未收"}，新投影${newClosed ? "已收" : "未收"}`);
     continue;
   }
-  if (thread.status === "stale" && next.status !== "stale") {
-    threadRows.push(`| ${thread.title} | stale | ${next.status} | 旧引擎把多章没动的打算直接标过期；新投影按最近一次推进算，${view.upTo - next.lastTouchedAt} 章没动，没到 ${DEFAULT_STALE_AFTER} 章 |`);
+  if (thread.status === "stale") {
+    threadRows.push(`| ${thread.title} | stale | ${next.status} | 老账 stale = 不再追踪（清理掉、并掉、过期、搁置），导入成在第 ${next.closedAt} 章收掉 |`);
   } else if (thread.status !== "stale" && !thread.closed && next.status === "stale") {
     threadRows.push(`| ${thread.title} | ${thread.status} | stale | 新投影 ${DEFAULT_STALE_AFTER} 章没动就提醒（只提醒、不关）；最近一次在第 ${next.lastTouchedAt} 章 |`);
   } else {
@@ -117,7 +117,8 @@ const last = view.chapters.at(-1);
 push("## 天数");
 push("");
 const basisCount = view.chapters.reduce((map, chapter) => ((map[chapter.dayBasis] = (map[chapter.dayBasis] ?? 0) + 1), map), {});
-push(`- 新投影每章天数的依据：${JSON.stringify(basisCount)}（missing = 老书没有 story/timeline.json，按上一章 +1 估）`);
+push(`- 新投影每章天数的依据：${JSON.stringify(basisCount)}`);
+if ((await readJson("story/timeline.json")) === undefined) push("- 老书没有 story/timeline.json：照老代码的办法从章纲天数推（章纲写了天数的记 judged，没写的按上一章 +1 记 estimated）");
 if (calendar?.currentStoryDay !== undefined && last) {
   const same = calendar.currentStoryDay === last.dayEnd;
   push(`- 最后一章：老日历第 ${calendar.currentStoryDay} 天，新投影第 ${last.dayEnd} 天${same ? "，一致" : ""}`);
