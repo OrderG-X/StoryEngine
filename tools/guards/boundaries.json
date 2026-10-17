@@ -27,6 +27,20 @@
         "@ai-sdk/"
       ],
       "why": "新编辑部只用新核心 @actalk/story-core；模型调用由调用方注入，不引用旧引擎、旧服务端模块和模型 SDK"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/legacy-mirror",
+      "forbid": [
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/routes/",
+        "packages/story-engine-ui/src/server/brain/",
+        "packages/story-engine-ui/src/server/editorial/",
+        "@mastra/",
+        "ai",
+        "@ai-sdk/"
+      ],
+      "why": "老格式镜像是新核心到老文件的桥：只用 @actalk/story-core 和旧引擎的类型；不引用旧服务端模块、编辑部和模型 SDK，不碰模型"
     }
   ]
 }
