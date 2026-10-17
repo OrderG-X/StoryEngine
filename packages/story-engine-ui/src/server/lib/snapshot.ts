@@ -4,6 +4,8 @@ import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
+import { recoverTransactions as recoverCoreTransactions } from "@actalk/story-core";
+import { mirrorIsStale, syncLegacyMirror } from "../legacy-mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
 
@@ -79,12 +81,25 @@ const METRICS_EXCLUDE_MARKER = "# story-engine-ui: 分步计量记录不入快�
 const AGENTS_EXCLUDE_DIR = "agents";
 const AGENTS_EXCLUDE_MARKER = "# story-engine-ui: 专员读书笔记不入快照（按正文哈希自校验的缓存）";
 
+/** 新核心的定稿预览票（重构 P3）：只是缓存，丢了重新预览；进快照的话撤销会把过期的票翻回来。 */
+const CORE_PREVIEW_DIR = "ledger/.preview";
+const CORE_PREVIEW_MARKER = "# story-engine-ui: 定稿预览票不入快照（缓存）";
+/** 新核心的写盘事务目录：核心自己收拾，和旧引擎的 .story-engine-tx 同理。 */
+const CORE_TX_DIR = ".story-core-tx";
+const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（核心自管）";
+/** 新核心留证的东西（坏事务、镜像前的老文件原样）：撤销不能把它们抹掉。 */
+const CORE_KEPT_DIR = ".story-core-kept";
+const CORE_KEPT_MARKER = "# story-engine-ui: 新核心留证目录不入快照（撤销不抹证据）";
+
 /** 快照排除的目录（info/exclude 一行 + diff/checkout 路径魔法）。 */
 const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: string; readonly marker: string }[] = [
   { dir: SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR, line: CHAT_SESSIONS_EXCLUDE_LINE, marker: CHAT_SESSIONS_EXCLUDE_MARKER },
   { dir: SNAPSHOT_EXCLUDED_TX_DIR, line: TX_EXCLUDE_LINE, marker: TX_EXCLUDE_MARKER },
   { dir: METRICS_EXCLUDE_DIR, line: `/${METRICS_EXCLUDE_DIR}/`, marker: METRICS_EXCLUDE_MARKER },
   { dir: AGENTS_EXCLUDE_DIR, line: `/${AGENTS_EXCLUDE_DIR}/`, marker: AGENTS_EXCLUDE_MARKER },
+  { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
+  { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
+  { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);
@@ -229,6 +244,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // formal transaction becomes part of the pre-restore history and may be
     // resurrected by a later undo.
     await recoverProjectCommitTransactions(projectDir);
+    // 新核心的写盘事务同理：先收拾完（写完或回滚），半截的事务不能进「恢复前自动快照」。
+    await recoverCoreTransactions(projectDir);
     await ensureRepoUnlocked(projectDir);
     // 先解析目标：失败即抛，不污染历史
     const target = parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`, id]));
@@ -253,6 +270,11 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     await git(projectDir, ["checkout", id, "--", ".", ...EXCLUDE_PATHSPECS]);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
+    // 账单和老格式镜像同在快照里，恢复后本该一致；万一对不上（镜像那次没写完就存了快照），按恢复后的账重生成一遍。
+    if (await mirrorIsStale(projectDir)) {
+      const mirror = await syncLegacyMirror(projectDir);
+      if (!mirror.ok) console.warn(`[snapshot] 恢复后重生成老格式镜像没成：${mirror.reason}`);
+    }
     const receipt = await buildRestoreReceiptFacts(projectDir, id, preRestoreId);
     return { restored: parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`])), ...receipt };
   });
@@ -503,6 +525,7 @@ const UNDO_TOOL_LABELS: Record<string, string> = {
   resolve_thread: "线索收口",
   clean_legacy_threads: "线索清理",
   group_related_leads: "线索归并",
+  manage_ledger: "改账",
 };
 
 /**

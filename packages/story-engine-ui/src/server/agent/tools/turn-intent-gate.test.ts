@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   userTurnAllowsDraftWrite,
   userTurnAllowsEstablishedOverride,
-  userTurnAllowsResolveThread,
-  userTurnAllowsThreadCleanup,
 } from "./turn-intent-gate.js";
 
 // 治「入库后模型自主续写下一章」：那一轮用户原话只有定稿/审稿等意图、没有任何写作意图，
@@ -103,56 +101,6 @@ describe("turn-intent-gate draft write（generate_draft 写作意图门）", () 
   it("缺失 userTurnText 默认放行，兼容前端按钮直调等不带原话的调用", () => {
     expect(userTurnAllowsDraftWrite(undefined)).toBe(true);
     expect(userTurnAllowsDraftWrite("   ")).toBe(true);
-  });
-});
-
-describe("turn-intent-gate thread cleanup", () => {
-  it.each([
-    "清理旧线索",
-    "把重复线索归并一下",
-    "整理一下线索，重复的合并",
-    "线索太乱了，帮我收拢",
-    "线索重复，合并一下",
-  ])("允许明确线索清理意图：%s", (text) => {
-    expect(userTurnAllowsThreadCleanup(text)).toBe(true);
-  });
-
-  it.each([
-    "继续写第60章正文",
-    "不要清理线索，先往下写",
-    "先别归并线索，我自己看",
-    "无需整理线索",
-  ])("拦截没有清理意图或否定清理：%s", (text) => {
-    expect(userTurnAllowsThreadCleanup(text)).toBe(false);
-  });
-
-  it("否定后有正向反转则允许", () => {
-    expect(userTurnAllowsThreadCleanup("先别清理线索，算了还是把重复线索归并一下")).toBe(true);
-  });
-
-  it("缺失 userTurnText 默认放行，兼容老调用点", () => {
-    expect(userTurnAllowsThreadCleanup(undefined)).toBe(true);
-    expect(userTurnAllowsThreadCleanup("   ")).toBe(true);
-  });
-});
-
-describe("turn-intent-gate resolve_thread", () => {
-  it.each([
-    "把安保盘问那条线索收掉",
-    "这条线索已经完结了，标记完成",
-    "应对安保人员的盘问这条已经完了",
-    "把『赶在A071换班前』那条收口",
-  ])("允许明确单条线索收口意图：%s", (text) => {
-    expect(userTurnAllowsResolveThread(text)).toBe(true);
-  });
-
-  it.each([
-    "继续写第11章正文",
-    "看到待收口提醒，先别收掉",
-    "不要标记完成，继续写",
-    "线索还没完结",
-  ])("拦截没有收口意图或否定收口：%s", (text) => {
-    expect(userTurnAllowsResolveThread(text)).toBe(false);
   });
 });
 

@@ -190,17 +190,13 @@ describe("buildInstructions 资料写入资产化（补资料第一轮不能只�
 // 踩中「禁反问」红线。规则原文「不要反问『你确定吗』」被读成「动作前别问许可」，
 // 没覆盖「事后回头质疑刚做的动作」。这里锁住：记完只简洁确认、不回头反问；
 // 真要帮忙就用「以后变了告诉我、我来标记取代」这种前瞻提议，而非反问用户要不要保留。
-describe("buildInstructions 硬事实记完不回头反问（computer-use 复验残留修复）", () => {
+describe("buildInstructions 改账 = 你提、作者点按钮（重构 P3）", () => {
   const instructions = buildInstructions();
 
-  it("记完硬事实后只简洁确认，禁止回头反问『你确定要保留这条吗』去质疑刚记的事实", () => {
-    expect(instructions).toContain("绝不回头反问");
-    expect(instructions).toContain("你确定要保留这条吗");
-  });
-
-  it("察觉这条日后可能变（如含『暂时』）时改用前瞻提议、而非反问用户要不要保留", () => {
-    expect(instructions).toContain("前瞻提议");
-    expect(instructions).toMatch(/以后真变了告诉我|我来标记取代/);
+  it("manage_ledger 只出「确认改账」按钮；绝不说已记好；作者没说过的决定不替作者做", () => {
+    expect(instructions).toContain("「确认改账」按钮");
+    expect(instructions).toContain("绝不说『已记好/已改好/已收口』");
+    expect(instructions).toContain("作者没说过的决定不要替作者做");
   });
 });
 
@@ -231,16 +227,10 @@ describe("buildInstructions 章节状态跟随规则（⑤⑥修复）", () => {
     expect(instructions).toContain("系统会直接转告定稿结果");
   });
 
-  it("入库后遇到待收口/陈旧线索提醒只能转告并给选项，不能自动清理归并", () => {
+  it("待收口提醒只转告并给归并选项；单条已完结用 manage_ledger op=resolve", () => {
     expect(instructions).toContain("待收口提醒只转告");
-    expect(instructions).toContain("绝不自动调用 manage_ledger 的 clean / group");
-    expect(instructions).toContain("用户点了再做");
-  });
-
-  it("单条线索明确已完结时用 manage_ledger op=resolve，不用全局清理工具凑", () => {
+    expect(instructions).toContain("manage_ledger op=group");
     expect(instructions).toContain("manage_ledger op=resolve");
-    expect(instructions).toContain("用户明确说某一条提醒其实已经完了");
-    expect(instructions).toContain("不要用全局清理工具替代");
   });
 
   it("出稿后下一步交给选项卡，文字不要重复口播工作稿保存/下一步提示", () => {

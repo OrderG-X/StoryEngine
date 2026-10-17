@@ -16,6 +16,17 @@ import {
 } from "./user-actions.js";
 
 describe("parseUserAction 结构化动作解析", () => {
+  it("「确认改账」：带标识和裁定草案才收；缺标识 / 空草案 / 超量都按非法处理", () => {
+    const decisions = [{ type: "fact.retract", fact: "c1-1" }];
+    expect(parseUserAction({ toolName: "ledger_decision", key: " k1 ", decisions, label: "删掉一条" })).toEqual({
+      kind: "action",
+      action: { toolName: "ledger_decision", key: "k1", decisions, label: "删掉一条" },
+    });
+    expect(parseUserAction({ toolName: "ledger_decision", decisions }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: [] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "ledger_decision", key: "k", decisions: Array.from({ length: 21 }, () => decisions[0]) }).kind).toBe("invalid");
+  });
+
   it("缺省 → none（普通对话）", () => {
     expect(parseUserAction(undefined)).toEqual({ kind: "none" });
     expect(parseUserAction(null)).toEqual({ kind: "none" });
@@ -82,9 +93,9 @@ describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
     });
   });
 
-  it("定稿成功 + 线索堆积加重档 → 加「清理线索」（开放式选项，不带结构化动作，照旧发文本给 agent）", () => {
+  it("定稿成功 + 线索堆积加重档 → 加「归并线索」（开放式选项，不带结构化动作，照旧发文本给 agent，改账要作者点确认）", () => {
     const steps = commitApplyNextSteps(5, { committed: true, threadMaintenanceHint: "escalated" });
-    expect(steps.choices.map((c) => c.label)).toEqual(["写第 6 章", "清理线索"]);
+    expect(steps.choices.map((c) => c.label)).toEqual(["写第 6 章", "归并线索"]);
     expect(steps.choices[1]).not.toHaveProperty("action");
   });
 

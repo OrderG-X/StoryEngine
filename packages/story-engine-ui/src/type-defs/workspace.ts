@@ -126,6 +126,8 @@ export interface CommitPreviewCardData {
   /** R7.7·报告 4.3：质量问题明细文案，卡内默认折叠展开；不再指向界面上不存在的「质检卡」。 */
   readonly draftIssues?: readonly string[];
   readonly semanticIssues?: readonly string[];
+  /** 记账员交了、但原句在正文里找不到或指向前文没有的东西，这次没记上的（带原因，人话）。 */
+  readonly notRecorded?: readonly string[];
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */

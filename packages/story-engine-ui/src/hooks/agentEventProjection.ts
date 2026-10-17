@@ -22,7 +22,7 @@
 import type { ChapterAgentCard, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
 import { isVerdictToolName } from "../shared/honesty-detection.js";
-import { commitConfirmAction, pruneConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, ledgerConfirmAction, pruneConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -91,6 +91,8 @@ export interface AgentToolResultOutput {
   readonly commitConfirmAction?: { readonly chapter: number; readonly previewToken?: string };
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
+  /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
+  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
 }
 
 export type AgentProjectionEvent =
@@ -159,7 +161,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   enrich_foundation: { stepLabel: "补全资料", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
   // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
-  manage_ledger: { stepLabel: "记账", card: null },
+  manage_ledger: { stepLabel: "改账", card: null },
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
@@ -301,6 +303,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
       if ((event.toolName === "prune_snapshots" || event.toolName === "manage_snapshots") && event.output?.pruneConfirmAction) {
         const button = pruneConfirmAction(event.output.pruneConfirmAction);
+        return {
+          ...withEffects,
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+        };
+      }
+      // 改账草案：模型只提议，挂「确认改账」按钮（建议条渲染），作者点了才由服务端记成作者裁定。
+      if (event.toolName === "manage_ledger" && event.output?.ledgerConfirmAction) {
+        const button = ledgerConfirmAction(event.output.ledgerConfirmAction);
         return {
           ...withEffects,
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],

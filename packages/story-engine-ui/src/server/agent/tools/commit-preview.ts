@@ -1,170 +1,73 @@
 /**
- * commit_preview — 只读工具：预览把某章草稿入库会产生哪些变更，并做入库前质量门槛检查。
+ * commit_preview — 定稿预览（重构 P3 起走新编辑部，见 docs/rebuild/P3-design.md 第二节）：
  *
- * 双轨合一（第二波·commit 簇）：共享编排（锁内 recover → 读草稿 → 声明通道 → 建计划 →
- * 质检 → 事务身份）已收进 services/commit-service.ts（与 routes/commit.ts 的
- * /api/commit/preview 同调 runCommitPreview）。本工具只剩适配层：
- *   - RequestContext 取 projectDir/章号回退 + zod schema；
- *   - 显式策略参数：declarationChannel（D7，生产路径带 declareDelta 声明模型通道）+
- *     judge 注入确定性透传桩（D6，工具预览不调判定模型）；
- *   - canonical result 的工具投影（D8/D9）：issues 裁三元组、名字漂移/待收口/声明被拒/衔接
- *     提醒组装、blockingReasons/canCommit 判定、summary/modelHint 文案；
- *   - previewToken 登记（commit-preview-store 的所有权在本适配层）：canCommit 时把
- *     (项目, 章节, 草稿哈希, 声明) 登记成 previewToken，供 commit_apply 守卫「必须先预览过且草稿未变」。
- * 读类工具不建快照、不带 snapshotId。
+ *   读工作稿 → 硬闸（空的 / 只有标题 / 太短 / 混进工具 JSON 或模型解释话）→ 书接到新核心（老书先导入）
+ *   → 记账员一次交账单 → 核原句 → 分流（要你看的 / 自动记下的 / 没记上的）→ 存预览票
+ *
+ * 不写真相；预览票只是缓存（`ledger/.preview/`，丢了重新预览）。清单投影成「定稿预览」卡认的 ledgerChecklist：
+ * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
-import { chapterEndDay, formatStoryDay, type ChapterDeltaDeclaration, type NameDriftFinding, type StoryTimeline, type TimelineEntry } from "@actalk/story-engine";
+import { checkDraftHardGates } from "@actalk/story-engine";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
+
+import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../brain/index.js";
+import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
+import { describeReaderWait } from "../../editorial/reader-progress.js";
+import { ensureBookOnCore } from "../../legacy-mirror/ensure.js";
+import { readCharacterIds } from "../../legacy-mirror/sync.js";
+import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
+import { createSnapshot } from "../../lib/snapshot.js";
+import { defaultDraftPath } from "../../lib/project-io.js";
+import { withStep } from "../../lib/token-meter.js";
+import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { coerceNumber } from "./lenient-args.js";
 
-import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import {
-  runCommitPreview,
-  type ChapterDeltaDeclarationOutcome,
-  type ChapterDeltaDeclarationStatus,
-  type CommitPreviewDeclareDelta,
-} from "../../services/commit-service.js";
-import {
-  callConfiguredBrainModel,
-  catchUpReaders,
-  declareChapterDeltaByLedger,
-  describeReaderWait,
-  type BrainCallModel,
-} from "../../brain/index.js";
-import { describeDeclarationFallback, scrubBareEntityIdsFromText } from "./commit-apply.js";
-import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
-import { withStep } from "../../lib/token-meter.js";
-import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
-import { hashDraftContent, recordCommitPreview } from "./commit-preview-store.js";
-import { readFile } from "node:fs/promises";
-import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
-import { readEstablishedCharacterNames } from "../../services/commit-service.js";
-import { callConfiguredFactModel } from "./commit-apply.js";
-import { proposeFactChanges, withTimelineDates, type FactProposal } from "../fact-ledger/reconcile-facts.js";
-import { buildLedgerChecklist, type LedgerChecklistItem } from "../commit-ledger/ledger-checklist.js";
-
-/** 定稿清单上的日子：章内跨了天就写「故事第 9 天（周四）到第 10 天（周五）」，作者一眼看出这章过了夜。 */
-function formatChapterSpan(timeline: StoryTimeline, entry: TimelineEntry): string {
-  const end = chapterEndDay(entry);
-  const start = formatStoryDay(timeline, entry.day);
-  return end === entry.day ? start : `${start}到${formatStoryDay(timeline, end).replace(/^故事/u, "")}`;
-}
-
-/** 预览时算记账提案（硬事实）的注入点：单测不传 = 清单里只有伏笔线索目标和天数。 */
-export type ProposeFactsFn = (args: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly draftText: string;
-}) => Promise<FactProposal>;
-
-export const defaultProposeFacts: ProposeFactsFn = async ({ projectDir, chapter, draftText }) =>
-  proposeFactChanges({
-    projectDir,
-    chapter,
-    draftText,
-    callModel: callConfiguredFactModel,
-    knownNames: await readEstablishedCharacterNames(projectDir, chapter).catch(() => []),
-  });
-
-/**
- * 预览阶段生成章节语义声明的注入点（单测可传假实现；缺省=不声明，走引擎正则）。
- * 类型的真家在 services/commit-service.ts（CommitPreviewDeclareDelta），此处保留别名兼容。
- */
-export type DeclareDeltaFn = CommitPreviewDeclareDelta;
-
-/** 记账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补，这次声明按 fallback 兜底。 */
+/** 记账员当场最多补多少章笔记；超过就按「已有笔记 + 最近几章原文」记（冷窗口），笔记在后台补。 */
 const LEDGER_MAX_CATCH_UP = 10;
+/** 默认不写、作者勾上才写的条目 id 前缀（「确认定稿」按钮按它分流）。 */
+export const OPT_IN_PREFIX = "change_confirm:";
+/** 预览票的目录（相对书目录）。只是缓存：不进撤销快照。 */
+export const PREVIEW_TICKET_DIR = "ledger/.preview";
 
-/**
- * 生产用声明路由（2026-10-12 编辑部 T2 起 = 记账员；R3 删旧声明后只有这一条路）：拿得到 projectDir 就走记账员
- * （跟读窗口里声明，读过前文）。记账员要补的笔记太多 → 冷窗口（R4.4）：已有笔记 + 最近 K 章原文照记账
- * （不是 fallback，账照记），范围并进 outcome.cold 让预览卡如实标，笔记在后台补（点名 ledger）。
- * 模型调用失败 / 坏 JSON → status=fallback + 原因（非致命，本章降级到引擎确定性规则，但对用户不静默）。
- * ledgerCallModel / ledgerMaxCatchUp 注入点供单测和评测（评测传 0 强制每章都走冷窗口），生产用配置的模型。
- */
-export function buildDeclareDeltaRouter(options: {
-  readonly ledgerCallModel?: BrainCallModel;
-  /** 记账员当场最多补多少章笔记（缺的超过就走冷窗口）；缺省 LEDGER_MAX_CATCH_UP。传 0 = 一律冷窗口。 */
-  readonly ledgerMaxCatchUp?: number;
-} = {}): DeclareDeltaFn {
-  return async (input) => {
-    const { chapter, draft, projectDir, openThreadTitles, establishedNames, openGoalTitles } = input;
-    if (!projectDir) {
-      return { status: "fallback", reason: "没有打开的书，记账员没法记账（这章的线索 / 目标不会记）" };
-    }
-    const viaLedger = await declareChapterDeltaByLedger({
-      projectDir,
-      chapter,
-      draft,
-      callModel: options.ledgerCallModel ?? callConfiguredBrainModel,
-      maxCatchUp: options.ledgerMaxCatchUp ?? LEDGER_MAX_CATCH_UP,
-      ...(openThreadTitles ? { openThreadTitles } : {}),
-      ...(establishedNames ? { establishedNames } : {}),
-      ...(openGoalTitles ? { openGoalTitles } : {}),
-    });
-    if (viaLedger.cold) {
-      // 记账员还没读完全书：账照记了（冷窗口），笔记后台接着补（点名 ledger，补不成只 warn，下次接着补）。
-      void catchUpReaders(projectDir, chapter - 1, { ...(options.ledgerCallModel ? { callModel: options.ledgerCallModel } : {}), roles: ["ledger"] });
-    }
-    return viaLedger.outcome;
-  };
+const ticketStores = new Map<string, TicketStore>();
+/** 每本书每章最近一次通过的预览票号（建议条上的「确认定稿」、模型发起的定稿请求没带票号时用）。进程重启就没了，如实请作者重新预览。 */
+const latestTickets = new Map<string, string>();
+
+export function latestTicketFor(projectDir: string, chapter: number): string | undefined {
+  return latestTickets.get(`${projectDir}\u0000${chapter}`);
 }
 
-/** 生产用声明路由实例（注册进工具）。 */
-const defaultDeclareDelta: DeclareDeltaFn = buildDeclareDeltaRouter();
+/** 每本书一个预览票仓库（内存 + 文件，进程重启后确认定稿也不用重新调模型）。 */
+export function ticketStoreFor(projectDir: string): TicketStore {
+  let store = ticketStores.get(projectDir);
+  if (!store) {
+    store = fileTicketStore(join(projectDir, PREVIEW_TICKET_DIR));
+    ticketStores.set(projectDir, store);
+  }
+  return store;
+}
 
 const inputSchema = z.object({
-  chapter: coerceNumber(z.number().int().positive().optional().describe("要预览入库的章号。")),
+  chapter: coerceNumber(z.number().int().positive().optional().describe("要预览定稿的章号。")),
 });
+
+const issueSchema = z.object({ severity: z.string(), type: z.string(), message: z.string() });
 
 const outputSchema = z.object({
   chapter: z.number().int().positive(),
-  ok: z.boolean().describe(
-    "统一诚实成功标志：等于 canCommit。false=本章暂不可定稿（缺工作稿/计划不通过/有 error 级问题）。" +
-      "前端据此把时间线步骤置 failed，避免「想定稿却不可定稿」被显示成绿色完成（谎报）。",
-  ),
-  canCommit: z.boolean().describe("是否可以定稿（计划构建通过 + 质量检查无 error 级问题）。"),
-  previewToken: z.string().optional().describe("预览通过时签发的一次性令牌；commit_apply 可省略它，由系统使用最近一次有效预览票据。canCommit=false 时省略。"),
-  plan: z.unknown().describe("定稿计划（角色/伏笔/线索/时间线等将发生的变更）。"),
-  draftQualityIssues: z.array(z.object({
-    severity: z.string(),
-    type: z.string(),
-    message: z.string(),
-  })).describe("工作稿定稿前的确定性质量检查问题（error 级会阻止定稿）。"),
-  semanticQualityIssues: z.array(z.object({
-    severity: z.string(),
-    type: z.string(),
-    message: z.string(),
-  })).describe("定稿计划语义质量检查问题（含 type=character_name_drift 的人物名近形漂移 warning）。"),
-  nameConsistencyWarnings: z.array(z.object({
-    establishedName: z.string(),
-    driftedVariant: z.string(),
-    message: z.string(),
-  })).describe(
-    "人物名一致性提醒：本章出现的名字与已确立角色名形近、疑似写歪（引擎确定性判定，非模型主观）。" +
-      "必须原样转达给用户、不得淡化为『有意设计/无关紧要』；这是写前一致性护栏，不阻断定稿。",
-  ),
-  staleThreadWarnings: z.array(z.object({
-    kind: z.string(),
-    title: z.string(),
-    lastTouchedChapter: z.number().int().nonnegative(),
-    chaptersSinceTouched: z.number().int().nonnegative(),
-    message: z.string(),
-  })).describe(
-    "伏笔/线索/目标待收口提醒（引擎确定性判定 + 里程碑制：新停滞头两章提醒、长期停滞每 10 章重提一次，" +
-      "不会每章重复刷全量；全量底数见 summary 的 digest）。kind 含 伏笔/线索/主线目标/阶段目标。" +
-      "必须原样转达给用户、不得淡化——这是防『埋了不收、开了没下文』的遗漏护栏，只提示、不阻断定稿。",
-  ),
-  blockingReasons: z.array(z.string()).describe("阻止定稿的原因（工作稿缺失/计划不通过/存在 error 级质量问题等）。"),
-  summary: z.string().describe("预览结果的自然语言摘要（用户可见文案，UI 会直接展示；不含内部工具名）。"),
-  modelHint: z.string().optional().describe("给你（模型）的行动指引：下一步流程与转达要求。仅你可见，UI 不展示。"),
-  declarationStatus: z.enum(["model", "fallback"]).optional().describe(
-    "章节语义声明来源：model=模型声明已拿到并经引擎证据校验；fallback=没拿到（模型失败/超时/坏 JSON），这章的线索/目标/人物状态不会记。" +
-      "fallback 时 summary 已带【这章的线索没记上】提示，必须如实转达给用户、不得隐去，并建议重新预览。缺草稿时省略。",
-  ),
-  declarationReason: z.string().optional().describe("declarationStatus=fallback 时的原因（用户可见文案，已消毒）。"),
+  ok: z.boolean().describe("等于 canCommit。false = 这章现在定不了（没有工作稿、正文过不了硬闸、记账员没交成账）。"),
+  canCommit: z.boolean(),
+  previewToken: z.string().optional().describe("预览票号（「确认定稿」按钮带回）。你不用转述。"),
+  draftQualityIssues: z.array(issueSchema).describe("正文硬闸没过的地方（会挡定稿）。"),
+  semanticQualityIssues: z.array(issueSchema).describe("保留字段，新定稿链不再猜语义，恒为空。"),
+  notRecorded: z.array(z.string()).describe("记账员交了、但原句对不上或指向前文没有的东西，这次没记上的（带原因）。"),
+  blockingReasons: z.array(z.string()),
+  summary: z.string().describe("给作者看的一句话结论。"),
+  modelHint: z.string().optional().describe("给你（模型）的行动指引，界面不展示。"),
   ledgerChecklist: z.array(z.object({
     id: z.string(),
     kind: z.string(),
@@ -174,527 +77,191 @@ const outputSchema = z.object({
     editableDay: z.number().int().optional(),
     needsConfirm: z.boolean().optional(),
     defaultUnchecked: z.boolean().optional(),
-  })).optional().describe(
-    "定稿会往账本里写的东西（硬事实、伏笔线索目标的新开推进收回、故事第几天）。界面列成清单给作者勾，作者去掉的定稿时不写；" +
-      "要确认的改记（change_confirm）默认不勾、作者勾上才作数；你不用逐条转述。",
-  ),
+  })).optional().describe("定稿要记的账：要作者看的排在前面；界面列成清单给作者勾，你不用逐条转述。"),
 });
 
-export interface StaleThreadWarningView {
-  readonly kind: string;
-  readonly title: string;
-  readonly lastTouchedChapter: number;
-  readonly chaptersSinceTouched: number;
-  readonly message: string;
-}
+export type CommitPreviewToolOutput = z.infer<typeof outputSchema>;
 
-export interface CommitPreviewToolOutput {
-  readonly chapter: number;
-  readonly ok: boolean;
-  readonly canCommit: boolean;
-  readonly previewToken?: string;
-  readonly plan: unknown;
-  readonly draftQualityIssues: { severity: string; type: string; message: string }[];
-  readonly semanticQualityIssues: { severity: string; type: string; message: string }[];
-  readonly nameConsistencyWarnings: { establishedName: string; driftedVariant: string; message: string }[];
-  readonly staleThreadWarnings: StaleThreadWarningView[];
-  readonly blockingReasons: string[];
-  readonly summary: string;
-  /** 给模型的行动指引（下一步调 commit_apply、转达要求）；UI 不渲染，summary 保持用户可见纯净。 */
-  readonly modelHint?: string;
-  /** 章节语义声明来源（fallback=本章按确定性规则兜底，summary 已明说）；缺草稿分支省略。 */
-  readonly declarationStatus?: ChapterDeltaDeclarationStatus;
-  readonly declarationReason?: string;
-  /** 定稿会往账本里写的东西（作者在卡上勾选）。 */
-  readonly ledgerChecklist?: readonly LedgerChecklistItem[];
-}
-
-/**
- * 工具适配层：调共享 service 拿 canonical result，投影成工具输出；canCommit 时登记 previewToken。
- * 读草稿失败（缺草稿）→ canCommit=false，blockingReasons 为中文人话（审计返工 B2，不再含 missing_draft 机器码），不发 token（D8 工具渲染）。
- */
+/** 定稿预览：硬闸 → 接新核心 → 记账员 → 清单。读不到工作稿、硬闸没过、记账员没交成，都如实给 canCommit=false。 */
 export async function buildCommitPreviewToolOutput(input: {
   readonly projectDir: string;
   readonly chapter: number;
-  /**
-   * 可选：生成本章语义声明的函数。传入时（生产路径）在预览阶段算一次声明，随 previewToken 缓存供 apply 复用；
-   * 不传（纯逻辑单测/无模型环境）→ declaration=undefined，完全走引擎正则（旧行为）。
-   */
-  readonly declareDelta?: DeclareDeltaFn;
-  /** 预览时一并算好硬事实（和建计划并行，不拖慢预览）；不传就不算。 */
-  readonly proposeFacts?: ProposeFactsFn;
+  /** 记账员用的模型调用（单测、考卷注入）；缺省用配置的模型。 */
+  readonly callModel?: BrainCallModel;
+  readonly maxCatchUp?: number;
 }): Promise<CommitPreviewToolOutput> {
-  const factProposalPromise: Promise<{ readonly draftContent: string; readonly proposal: FactProposal } | undefined> = input.proposeFacts
-    ? readFile(defaultDraftPath(input.projectDir, input.chapter), "utf-8")
-      .then(async (draftContent) => ({
-        draftContent,
-        proposal: await withStep("记账提案", () => input.proposeFacts!({
-          projectDir: input.projectDir,
-          chapter: input.chapter,
-          draftText: stripLeadingMarkdownChapterHeading(draftContent).trim(),
-        })),
-      }))
-      .catch(() => undefined)
-    : Promise.resolve(undefined);
-  const result = await runCommitPreview({
-    projectDir: input.projectDir,
-    chapter: input.chapter,
-    // D7 显式策略：工具路带声明通道（声明上下文收集 + 声明喂计划 + 名册进计划）。
-    declarationChannel: { ...(input.declareDelta ? { declareDelta: input.declareDelta } : {}) },
-    // D6 显式策略：工具预览只跑引擎确定性检查，不调判定模型（透传桩）。
-    judge: async ({ deterministicQuality }) => deterministicQuality,
-  });
-  if (result.kind === "no_draft") {
-    // 审计返工（P1-5 补短路分支）：blockingReasons 会被 CommitPreviewCard 逐条渲染给用户——
-    // 机器码「missing_draft」绝不能进；与主路 safeIssues 同款双消毒（字面量本无可刮内容，
-    // 接管线防日后回填机器码/路径的回归）。
-    const missingDraftReason = scrubLocalAbsolutePaths(
-      scrubBareEntityIdsFromText(`第 ${result.chapter} 章还没有工作稿，先写正文再定稿。`, new Map()),
-    );
+  const { projectDir, chapter } = input;
+  const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
+  if (text === undefined || text.trim().length === 0) {
+    return blocked(chapter, [`第 ${chapter} 章还没有工作稿，先写正文再定稿。`], `第 ${chapter} 章还没有工作稿，没法定稿。`);
+  }
+
+  const gates = (await checkDraftHardGates({ projectDir, draftContent: text })).map((issue) => ({ severity: issue.severity, type: issue.type, message: issue.message }));
+  if (gates.length > 0) {
+    const reasons = gates.map(describeGate);
     return {
-      chapter: result.chapter,
-      ok: false,
-      canCommit: false,
-      plan: undefined,
-      draftQualityIssues: [],
-      semanticQualityIssues: [],
-      nameConsistencyWarnings: [],
-      staleThreadWarnings: [],
-      blockingReasons: [missingDraftReason],
-      summary: `第 ${result.chapter} 章还没有工作稿，无法生成定稿预览。`,
+      ...blocked(chapter, reasons, `第 ${chapter} 章现在还定不了：${reasons.join("；")}。`),
+      draftQualityIssues: gates,
+      ...(gates.some((issue) => issue.type === "too_short")
+        ? { modelHint: "字数不足是硬阻断：先和作者商量扩写方向、把工作稿写够，再重新预览；不要在字数不足时反复预览。" }
+        : {}),
     };
   }
 
-  const { projectDir, chapter } = input;
-  const { commitPlan, draftQuality, semanticQuality, declaration } = result;
-  // 声明状态：工具路恒有通道；没传 declareDelta（纯逻辑/无模型环境）= 本次没启用声明模型，也如实算 fallback。
-  const declarationOutcome: ChapterDeltaDeclarationOutcome = result.declarationOutcome
-    ?? { status: "fallback", reason: "本次预览没有启用章节语义声明模型" };
-
-  const draftQualityIssues = draftQuality.issues.map((issue) => ({
-    severity: issue.severity,
-    type: issue.type,
-    message: issue.message,
-  }));
-  const baseSemanticQualityIssues = (semanticQuality?.issues ?? []).map((issue) => ({
-    severity: issue.severity,
-    type: issue.type,
-    message: issue.message,
-  }));
-  // 人物名近形漂移：引擎的确定性发现（结构化）升级成明确 warning，别让模型在回执里把它说软或说没。
-  // severity=warning（不阻断入库），type 固定为 character_name_drift，供 UI 固定展示、供模型忠实转述。
-  const nameDriftFindings: readonly NameDriftFinding[] = commitPlan.nameDriftFindings ?? [];
-  const nameConsistencyWarnings = nameDriftFindings.map((finding) => ({
-    establishedName: finding.establishedName,
-    driftedVariant: finding.driftedVariant,
-    message: `人物名疑似写歪：本章出现「${finding.driftedVariant}」，与已确立角色「${finding.establishedName}」形近。请确认应写作「${finding.establishedName}」，还是「${finding.driftedVariant}」确为另一个角色。`,
-  }));
-  // nameById 提到所有「进用户可见字段」的消毒点之前：safeIssues（blockingReasons）、
-  // deltaRejectedWarnings（semanticQualityIssues+summary）共用同一份，不必为消毒重读 overview。
-  const nameById = new Map(nameConsistencyWarnings.map((warning) => [warning.driftedVariant, warning.establishedName]));
-  // 审计返工（P1-5 补漏分支）：声明被拒的 issues 文本含模型提供的 quote 原文（模型可控字段，
-  // 可能塞裸 entity id / 本地绝对路径），进 semanticQualityIssues 与 summary 前必须同款消毒。
-  const deltaRejectedWarnings = collectDeltaRejectedWarnings(commitPlan, nameById);
-  const continuityBreakWarning = collectContinuityBreakWarning(declaration);
-  // 冷窗口记账（R4.4）：账照记了，但记账员还没读完全书——范围如实说，摘要和账本清单各标一句。
-  const declarationColdNotice = describeDeclarationCold(declarationOutcome, chapter);
-  // 等读（R5.2）：记账前先等记账员补了笔记——摘要标一句。
-  const declarationWaitNotice = describeDeclarationWait(declarationOutcome);
-  // 伏笔/线索/目标待收口：引擎按里程碑制（新停滞头两章 + 长期停滞每 10 章重提）确定性选出本章该提醒的条目，
-  // 这里合并成一份结构化提醒（含 r7 新接入的停滞目标——此前 staleGoalWarnings 从没到过用户面前），
-  // 升级成带类型的 warning，供 UI 固定展示 + 模型忠实转达。全量底数走 staleBacklog 进 digest，绝不静默。题材中立。
-  const staleThreadWarnings = collectStaleThreadWarnings(commitPlan);
-  const staleBacklog = readStaleBacklog(commitPlan);
-  const semanticQualityIssues = [
-    ...baseSemanticQualityIssues,
-    ...deltaRejectedWarnings,
-    ...nameConsistencyWarnings.map((warning) => ({
-      severity: "warning",
-      type: "character_name_drift",
-      message: warning.message,
-    })),
-    ...staleThreadWarnings.map((warning) => ({
-      severity: "warning",
-      type: warning.kind.includes("目标") ? "stale_arc_goal" : "stale_thread",
-      message: warning.message,
-    })),
-    ...(continuityBreakWarning ? [continuityBreakWarning] : []),
-  ];
-
-  // 铁律④·绝不泄露裸 id/path：commitPlan.issues 是引擎诊断文本，可能含裸 hook-/char- id
-  // （「Hook not found: hook-a3f9c1」）或本地绝对路径 errno 原文。同簇 commit-apply 已消毒，
-  // 预览侧此前漏接（2026-09-15 审计 P1-5）。
-  const safeIssues = commitPlan.issues.map(
-    (issue) => scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(issue, nameById)),
-  );
-
-  // 长跑 2026-10-04 #5b：字数不足（too_short，error 级）从泛泛的「硬伤级问题」里点名出来——
-  // 字数是用户硬约束，模型/用户得看出「该扩写正文」而不是重跑预览碰运气。
-  const lengthShortfall = describeLengthShortfall(draftQualityIssues);
-  const blockingReasons: string[] = [];
-  if (!commitPlan.passed || !commitPlan.commitPlan) {
-    blockingReasons.push("定稿计划未通过");
-    blockingReasons.push(...safeIssues);
-  }
-  if (draftQualityIssues.some((issue) => issue.severity === "error")) {
-    blockingReasons.push("正文质量存在硬伤级问题");
-    if (lengthShortfall) blockingReasons.push(lengthShortfall);
-    // 点名是哪几条（定稿按钮直达后没有对话 AI 帮着解释，卡上只写「有硬伤」作者不知道改什么）。
-    for (const issue of draftQualityIssues) {
-      if (issue.severity !== "error" || issue.type === "too_short") continue;
-      const label = QUALITY_TYPE_LABELS[issue.type];
-      blockingReasons.push(label ? `具体：${label}` : `具体：${scrubLocalAbsolutePaths(issue.message)}`);
-    }
-  }
-  if (semanticQualityIssues.some((issue) => issue.severity === "error")) {
-    blockingReasons.push("语义质量存在硬伤级问题");
+  const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+  if (!onCore.ok) {
+    return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
   }
 
-  const canCommit = blockingReasons.length === 0;
-  // 记账提案只认和这次预览同一版草稿算出来的（两次读之间草稿被改了就不用，定稿时再现抽）。
-  const factDraft = await factProposalPromise;
-  const factProposal = factDraft && factDraft.draftContent === result.draftContent ? factDraft.proposal : undefined;
-  const timelineEntry = commitPlan.timelineEntry;
-  const storyTimeline = commitPlan.commitPlan?.storyTimeline;
-  const ledgerChecklist = commitPlan.commitPlan
-    ? buildLedgerChecklist({
-      chapter,
-      plan: commitPlan.commitPlan,
-      ...(factProposal ? { facts: factProposal } : {}),
-      ...(declarationOutcome.status === "fallback" ? { structureMissing: declarationOutcome.reason ?? "" } : {}),
-      ...(declarationColdNotice ? { coldLedgerNote: declarationColdNotice } : {}),
-      ...(timelineEntry && storyTimeline
-        ? {
-          time: { day: timelineEntry.day, label: formatChapterSpan(storyTimeline, timelineEntry), source: timelineEntry.source, ...(timelineEntry.quote ? { quote: timelineEntry.quote } : {}) },
-          displayFact: (text: string) => withTimelineDates(text, { today: timelineEntry.day, timeline: storyTimeline }),
-        }
-        : {}),
-    })
-      .map((item) => ({ ...item, label: scrubBareEntityIdsFromText(item.label, nameById), ...(item.detail ? { detail: scrubBareEntityIdsFromText(item.detail, nameById) } : {}) }))
-    : [];
-  let previewToken: string | undefined;
-  if (canCommit) {
-    // previewToken 内存 store 的所有权在本适配层（D7 机制外皮）：登记草稿哈希 + 预览声明，供 apply 守卫/复用。
-    const record = recordCommitPreview({
-      projectDir,
-      chapter,
-      draftHash: hashDraftContent(result.draftContent),
-      ...(declaration ? { declaration } : {}),
-      declarationOutcome,
-      ...(factProposal ? { factProposal } : {}),
-    });
-    previewToken = record.token;
-  }
-
-  // 声明未生效 → 用户可见摘要里固定一句（原因已消毒），不让「模型声明挂了」藏在 server 日志里。
-  const declarationFallbackNotice = describeDeclarationFallback(declarationOutcome, nameById);
-  const preview = buildPreviewSummary({
+  const knownNames = [...(await readCharacterIds(projectDir)).ids.keys()];
+  const callModel = input.callModel ?? callConfiguredBrainModel;
+  const preview = await withStep("记账员", () => prepareChapterCommit({
+    bookDir: projectDir,
     chapter,
-    canCommit,
-    blockingReasons,
-    nameConsistencyWarnings,
-    staleThreadWarnings,
-    staleBacklog,
-    deltaRejectedWarnings,
-    continuityBreakWarning,
-    ...(lengthShortfall ? { lengthShortfall } : {}),
-    ...(declarationFallbackNotice ? { declarationFallbackNotice } : {}),
-    ...(declarationColdNotice ? { declarationColdNotice } : {}),
-    ...(declarationWaitNotice ? { declarationWaitNotice } : {}),
-  });
+    text,
+    callModel,
+    tickets: ticketStoreFor(projectDir),
+    knownNames,
+    maxCatchUp: input.maxCatchUp ?? LEDGER_MAX_CATCH_UP,
+  }));
+  if (preview.cold) {
+    // 记账员还没读完全书：这次按已有笔记 + 最近几章原文记的，笔记在后台接着补。
+    void catchUpReaders(projectDir, chapter - 1, { ...(input.callModel ? { callModel: input.callModel } : {}), roles: ["ledger"] });
+  }
+  if (!preview.ok) {
+    return blocked(chapter, [preview.reason], `第 ${chapter} 章现在还定不了：${preview.reason}`);
+  }
+  latestTickets.set(`${projectDir}\u0000${chapter}`, preview.ticket);
+  return fromPreview(preview);
+}
+
+function blocked(chapter: number, reasons: readonly string[], summary: string): CommitPreviewToolOutput {
   return {
     chapter,
-    ok: canCommit,
-    canCommit,
-    ...(previewToken ? { previewToken } : {}),
-    plan: commitPlan,
-    draftQualityIssues,
-    semanticQualityIssues,
-    nameConsistencyWarnings,
-    staleThreadWarnings,
-    blockingReasons,
-    summary: preview.summary,
-    ...(preview.modelHint ? { modelHint: preview.modelHint } : {}),
-    declarationStatus: declarationOutcome.status,
-    ...(declarationOutcome.status === "fallback" && declarationOutcome.reason
-      ? { declarationReason: scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(declarationOutcome.reason, nameById)) }
-      : {}),
-    ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
+    ok: false,
+    canCommit: false,
+    draftQualityIssues: [],
+    semanticQualityIssues: [],
+    notRecorded: [],
+    blockingReasons: [...reasons],
+    summary,
   };
 }
 
+function describeGate(issue: { readonly type: string; readonly message: string }): string {
+  if (issue.type === "too_short") return describeLengthShortfall(issue.message);
+  return QUALITY_TYPE_LABELS[issue.type] ?? "正文过不了定稿硬闸";
+}
+
 /**
- * too_short（error 级）→ 用户可读的中文 shortfall 文案；无 too_short 时 undefined。
- * 引擎消息形如 `Draft body is shorter than 2250 Chinese characters (current: 2000).`
- * （下限来自写作规则显式 minWords 或 targetWords×0.75，见 commit-quality-check.resolveMinBodyChineseCharacters）。
+ * too_short 的引擎消息形如 `Draft body is shorter than 2250 Chinese characters (current: 2000).`，
+ * 只从里面取两个数字；取不到也给定性文案，绝不吞掉长度阻断。
  */
-function describeLengthShortfall(
-  issues: readonly { readonly severity: string; readonly type: string; readonly message: string }[],
-): string | undefined {
-  const issue = issues.find((item) => item.type === "too_short");
-  if (!issue) return undefined;
-  const min = issue.message.match(/shorter than (\d+)/u)?.[1];
-  const current = issue.message.match(/current: (\d+)/u)?.[1];
-  // 数字从引擎消息解析，解析不到（消息格式变化）也要给定性文案，绝不静默吞掉长度阻断。
-  if (min === undefined) return "正文纯汉字字数低于写作规则要求的下限，需扩写后再定稿";
+function describeLengthShortfall(message: string): string {
+  const min = /shorter than (\d+)/u.exec(message)?.[1];
+  const current = /current: (\d+)/u.exec(message)?.[1];
+  if (min === undefined) return "正文字数低于写作规则要求的下限，需扩写后再定稿";
   return current === undefined
-    ? `正文纯汉字字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿`
-    : `正文纯汉字 ${current} 字，低于写作规则要求的下限 ${min} 字（纯汉字口径，不含标点与标题），需扩写后再定稿`;
+    ? `正文字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿`
+    : `正文 ${current} 字，低于写作规则要求的下限 ${min} 字（只数汉字，不含标点和标题），需扩写后再定稿`;
 }
 
-function collectDeltaRejectedWarnings(
-  commitPlan: { readonly issues?: readonly string[] },
-  nameById: ReadonlyMap<string, string>,
-): { severity: "warning"; type: "delta_rejected"; message: string }[] {
-  return (commitPlan.issues ?? [])
-    .filter((issue) => issue.startsWith("章节语义声明被拒（"))
-    .map((message) => ({
-      severity: "warning",
-      type: "delta_rejected",
-      // message 尾部是模型声明里的 quote 原文（模型可控）：同款双消毒，防裸 id/绝对路径透进
-      // semanticQualityIssues 与 summary（此前只消毒 blockingReasons 一支，审计返工补齐）。
-      message: `AI 对本章的标注和正文对不上：${humanizeDeltaRejection(
-        scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(message, nameById)),
-      )}（已按正文为准处理）`,
-    }));
-}
+type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[number];
 
-function collectContinuityBreakWarning(declaration: ChapterDeltaDeclaration | undefined): { severity: "warning"; type: "continuity_break"; message: string } | undefined {
-  const continuity = declaration?.continuityWithPrevious;
-  if (!continuity || continuity.connects !== false) return undefined;
-  // note 是声明模型写的自由文本（模型可控字段），拼进用户可见文案前过同款消毒。
-  const note = continuity.note?.trim();
-  const safeNote = note ? scrubLocalAbsolutePaths(scrubBareEntityIdsFromText(note, new Map())) : undefined;
+function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
+  const why = item.reasons.map((reason) => reason.text).join("；");
   return {
-    severity: "warning",
-    type: "continuity_break",
-    message: `本章开头与上一章结尾疑似衔接断裂${safeNote ? `：${safeNote}` : ""}。请确认这是有意的时间跳转，还是需要改稿补足承接。`,
+    id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : String(item.index),
+    kind: item.kind,
+    label: review && why ? `${item.label}（${why}）` : item.label,
+    ...(item.quote ? { detail: item.quote } : {}),
+    removable: true,
+    ...(review ? { needsConfirm: true } : {}),
+    ...(item.optIn ? { defaultUnchecked: true } : {}),
   };
 }
 
-/** 冷窗口记账的人话标注（R4.4）：记账员还没读完全书、这次按最近 K 章原文 + 已读笔记记的账。不是 fallback，账照记。 */
-function describeDeclarationCold(outcome: ChapterDeltaDeclarationOutcome, chapter: number): string | undefined {
-  const cold = outcome.status === "model" ? outcome.cold : undefined;
-  if (!cold) return undefined;
-  const parts = [
-    ...(cold.notedThrough > 0 ? [`已读笔记（到第 ${cold.notedThrough} 章）` ] : []),
-    ...(cold.rawTo > 0 ? [`第 ${cold.rawFrom}～${cold.rawTo} 章原文`] : []),
+function dayLabel(preview: CommitPreview): string {
+  const { time } = preview;
+  const span = time.dayEnd > time.day ? `故事第 ${time.day} 天到第 ${time.dayEnd} 天` : `故事第 ${time.day} 天`;
+  const extra = [time.timeOfDay, time.weekday !== undefined ? `星期${"日一二三四五六"[time.weekday % 7]}` : undefined].filter(Boolean).join("，");
+  const basis = time.basis === "text"
+    ? "（正文明写）"
+    : time.basis === "author"
+      ? "（你定的）"
+      : time.basis === "judged"
+        ? "（按前后文判断）"
+        : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
+  return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
+}
+
+function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
+  const timeItems = (items: readonly CommitItem[]) => items.filter((item) => item.kind === "time");
+  const others = (items: readonly CommitItem[]) => items.filter((item) => item.kind !== "time");
+  const timeQuote = [...timeItems(preview.review), ...timeItems(preview.auto)].find((item) => item.quote)?.quote;
+  const ledgerChecklist: ChecklistItem[] = [
+    {
+      id: "day",
+      kind: "time",
+      label: dayLabel(preview),
+      ...(timeQuote ? { detail: timeQuote } : {}),
+      removable: false,
+      editableDay: preview.time.day,
+      ...(preview.time.needsConfirm ? { needsConfirm: true } : {}),
+    },
+    ...others(preview.review).map((item) => toChecklistItem(item, true)),
+    ...others(preview.auto).map((item) => toChecklistItem(item, false)),
   ];
-  const basis = parts.length > 0 ? parts.join(" + ") : "最近几章原文";
-  return `记账员还没读完全书（第 ${cold.notedThrough} / ${Math.max(chapter - 1, cold.rawTo)} 章），这次按${basis}记账，更早的细节可能没记全；它读完全书后，之后的定稿按全书记`;
-}
-
-/** 等读那一句（R5.2 必做 2）：记账前先等记账员当场补了笔记，如实说补了哪几章、花了多久。 */
-function describeDeclarationWait(outcome: ChapterDeltaDeclarationOutcome): string | undefined {
-  const waited = outcome.status === "model" ? outcome.waited : undefined;
-  return waited ? describeReaderWait("ledger", waited, "记账") : undefined;
-}
-
-interface PlanStaleWarningLike {
-  readonly title: string;
-  readonly lastTouchedChapter: number;
-  readonly chaptersSinceTouched: number;
-  readonly message?: string;
-  readonly scope?: string;
-}
-
-/**
- * 从 commit plan 收集「伏笔/线索/目标待收口」提醒，合并成一份带中文文案的结构化视图。
- * 伏笔=staleHookWarnings、线索=staleThreadWarnings、目标=staleGoalWarnings（r7 新接入——此前目标停滞从没提醒过用户，
- * 主线「查明师父真相」停 14 章无人知晓）。引擎已按里程碑制选好该提醒的条目并给了中文 message（含主线升级文案），
- * 这里只做归类 + 去重排序，绝不重算、绝不改写引擎判词。
- */
-function collectStaleThreadWarnings(commitPlan: {
-  readonly staleHookWarnings?: readonly PlanStaleWarningLike[];
-  readonly staleThreadWarnings?: readonly PlanStaleWarningLike[];
-  readonly staleGoalWarnings?: readonly PlanStaleWarningLike[];
-}): StaleThreadWarningView[] {
-  const toView = (kind: string) => (warning: PlanStaleWarningLike): StaleThreadWarningView => ({
-    kind,
-    title: warning.title,
-    lastTouchedChapter: warning.lastTouchedChapter,
-    chaptersSinceTouched: warning.chaptersSinceTouched,
-    message: warning.message?.trim()
-      ? warning.message
-      : `${kind}「${warning.title}」已经 ${warning.chaptersSinceTouched} 章没有推进（上次出现在第 ${warning.lastTouchedChapter} 章）。考虑在本章推进或收口，别让它埋了不收。`,
-  });
-  const merged = [
-    ...(commitPlan.staleHookWarnings ?? []).map(toView("伏笔")),
-    ...(commitPlan.staleThreadWarnings ?? []).map(toView("线索")),
-    ...(commitPlan.staleGoalWarnings ?? []).map((warning) =>
-      toView(warning.scope === "main_arc" ? "主线目标" : "阶段目标")(warning),
-    ),
-  ];
-  // 同名去重（伏笔/线索池偶有重叠标题），保留 chaptersSinceTouched 更大的那条（更该提醒），再按停滞最久排前。
-  const byKey = new Map<string, StaleThreadWarningView>();
-  for (const view of merged) {
-    const key = `${view.kind}|${view.title}`;
-    const existing = byKey.get(key);
-    if (!existing || view.chaptersSinceTouched > existing.chaptersSinceTouched) byKey.set(key, view);
+  const reviewCount = others(preview.review).length + (preview.time.needsConfirm ? 1 : 0);
+  const autoCount = others(preview.auto).length;
+  const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
+  const notes: string[] = [];
+  if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条原句对不上或指向前文没有的，没记上`);
+  if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
+  if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
+    notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);
   }
-  return [...byKey.values()].sort((a, b) => b.chaptersSinceTouched - a.chaptersSinceTouched);
-}
-
-interface StaleBacklogView {
-  readonly count: number;
-  readonly oldestChaptersSinceTouched?: number;
-}
-
-/** 全书停滞线索底数（引擎 hygiene report 提供，不做里程碑过滤）——digest 用它报真话，降噪≠静默。 */
-function readStaleBacklog(commitPlan: {
-  readonly threadHygieneReport?: {
-    readonly staleWarningCount?: number;
-    readonly oldestStaleChaptersSinceTouched?: number;
-  };
-}): StaleBacklogView {
-  const report = commitPlan.threadHygieneReport;
-  const count = typeof report?.staleWarningCount === "number" ? report.staleWarningCount : 0;
+  if (preview.cold) {
+    const raw = preview.cold.rawFrom > 0 ? `加第 ${preview.cold.rawFrom}～${preview.cold.rawTo} 章原文` : "";
+    notes.push(`记账员还在读前文（笔记到第 ${preview.cold.notedThrough} 章），这次按已有笔记${raw}记的`);
+  }
+  if (preview.waited) notes.push(describeReaderWait("ledger", preview.waited, "记账"));
+  const head = reviewCount > 0
+    ? `第 ${preview.chapter} 章可以定稿：要你看 ${reviewCount} 条，其余 ${autoCount} 条自动记下（不对的都能去掉）。`
+    : `第 ${preview.chapter} 章可以定稿：${autoCount} 条自动记下（不对的都能去掉）。`;
   return {
-    count,
-    ...(typeof report?.oldestStaleChaptersSinceTouched === "number"
-      ? { oldestChaptersSinceTouched: report.oldestStaleChaptersSinceTouched }
-      : {}),
+    chapter: preview.chapter,
+    ok: true,
+    canCommit: true,
+    previewToken: preview.ticket,
+    draftQualityIssues: [],
+    semanticQualityIssues: [],
+    notRecorded,
+    blockingReasons: [],
+    summary: notes.length > 0 ? `${head}${notes.map((note) => `【${note}】`).join("")}` : head,
+    modelHint:
+      "预览通过：请作者看清单、点预览卡上的「确认定稿」按钮写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
+      "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。",
+    ledgerChecklist,
   };
-}
-
-/**
- * 预览摘要（工具确定性产出），拆两份（2026-08-11 真机走查：summary 曾把「需定稿时调用 commit_apply」
- * 和「请如实转达」这类模型指令原样端到 UI 实时字幕上，泄漏内部工具名，违反铁律④）：
- *  - summary：给用户看的事实文案（UI 实时字幕/步骤卡直接展示）——不出现内部工具名、不出现「请转达」类
- *    模型指令。警示内容本身保留：即便模型偷懒不展开 nameConsistencyWarnings，这句固定摘要也会把
- *    「名字疑似写歪」摆到台面上。
- *  - modelHint：给模型看的行动指引（下一步调用 commit_apply、警示须如实转达勿淡化）。模型读的是完整
- *    工具输出 JSON，指引不丢；UI 不渲染该字段。agent instructions 里另有同款流程铁律兜底。
- */
-function buildPreviewSummary(input: {
-  readonly chapter: number;
-  readonly canCommit: boolean;
-  readonly blockingReasons: readonly string[];
-  readonly nameConsistencyWarnings: readonly { readonly establishedName: string; readonly driftedVariant: string }[];
-  readonly staleThreadWarnings: readonly StaleThreadWarningView[];
-  readonly staleBacklog?: StaleBacklogView;
-  readonly deltaRejectedWarnings?: readonly { readonly message: string }[];
-  readonly continuityBreakWarning?: { readonly message: string };
-  /** too_short 的人话文案（长跑 #5b）：进 modelHint 指路「扩写」而不是反复重试定稿。 */
-  readonly lengthShortfall?: string;
-  /** 已消毒的「声明未生效」整句（describeDeclarationFallback 产出）；model 状态不传。 */
-  readonly declarationFallbackNotice?: string;
-  /** 冷窗口记账的整句（describeDeclarationCold 产出，status=model 时才有）；账照记，但范围要如实说。 */
-  readonly declarationColdNotice?: string;
-  /** 等读那一句（R5.2，status=model 时才有）：记账前先等记账员当场补了笔记。 */
-  readonly declarationWaitNotice?: string;
-}): { readonly summary: string; readonly modelHint?: string } {
-  const base = input.canCommit
-    ? `第 ${input.chapter} 章可以定稿：定稿影响预览已生成、质量检查通过。点预览卡上的「确认定稿」即可写入。`
-    : `第 ${input.chapter} 章暂不可定稿：${input.blockingReasons.join("；")}。`;
-  let summary = base;
-  if (input.nameConsistencyWarnings.length > 0) {
-    const detail = input.nameConsistencyWarnings
-      .map((warning) => `「${warning.driftedVariant}」疑似应为已确立角色「${warning.establishedName}」`)
-      .join("；");
-    summary += `【人物名一致性提醒】${detail}。请确认是否写错名字。`;
-  }
-  // r7：逐条只列本章该提醒的（引擎里程碑制已选好，最多再截 5 条防刷屏）；全量底数一行报真话（降噪≠静默）。
-  const backlogCount = input.staleBacklog?.count ?? 0;
-  if (input.staleThreadWarnings.length > 0 || backlogCount > 0) {
-    const visibleWarnings = input.staleThreadWarnings.slice(0, 5);
-    const detail = visibleWarnings
-      .map((warning) => `${warning.kind}「${warning.title}」已 ${warning.chaptersSinceTouched} 章没推进`)
-      .join("；");
-    const backlogNote = backlogCount > 0
-      ? `全书共 ${backlogCount} 条线索超 3 章未推进${
-        input.staleBacklog?.oldestChaptersSinceTouched !== undefined
-          ? `（最旧已停 ${input.staleBacklog.oldestChaptersSinceTouched} 章）`
-          : ""
-      }，需要批量处理可对我说『清理旧线索』或『归并相关线索』。`
-      : "";
-    summary += `【伏笔/线索待收口】${detail ? `本章提醒：${detail}。` : ""}${backlogNote}`;
-  }
-  if ((input.deltaRejectedWarnings?.length ?? 0) > 0) {
-    const count = input.deltaRejectedWarnings?.length ?? 0;
-    const sample = humanizeDeltaRejection(input.deltaRejectedWarnings?.[0]?.message ?? "");
-    summary += `【已自动核对】AI 对本章的标注有 ${count} 处和正文对不上${sample ? `（如${sample}）` : ""}，已按正文为准处理，不影响定稿。`;
-  }
-  if (input.continuityBreakWarning) {
-    summary += `【跨章衔接提醒】${input.continuityBreakWarning.message}`;
-  }
-  // 声明未生效：本章 mainEvent/伏笔/线索等按引擎确定性规则兜底（不是坏事、但不能瞒）——用户据此决定是否重跑预览。
-  if (input.declarationFallbackNotice) {
-    summary += input.declarationFallbackNotice;
-  }
-  // 冷窗口记账：账照记，但记账员还没读完全书——范围如实说，别让作者以为这章是按全书核着记的（R4.4）。
-  if (input.declarationColdNotice) {
-    summary += `【${input.declarationColdNotice}】`;
-  }
-  // 等读（R5.2）：记账前先等记账员补了笔记——如实说补了哪几章、花了多久。
-  if (input.declarationWaitNotice) {
-    summary += `【${input.declarationWaitNotice}】`;
-  }
-  const hints: string[] = [];
-  if (input.canCommit) {
-    // 定稿由用户点预览卡上的「确认定稿」按钮完成（结构化动作，2026-10-07），模型这侧不产生定稿。
-    hints.push(
-      "预览通过：请用户点预览卡上的「确认定稿」按钮写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
-        "用户口头说确认定稿时可调 commit_apply，它只会再给用户出一个确认按钮。",
-    );
-  }
-  if (summary !== base) {
-    hints.push("summary 里【】内的提醒须如实转达给用户，勿淡化、勿隐去。");
-  }
-  // 长跑 #5b：长度不足是硬阻断——指路「扩写正文后重新预览」，别让模型在不达标稿上反复尝试定稿。
-  if (!input.canCommit && input.lengthShortfall) {
-    hints.push(
-      "字数不足是硬阻断：先扩写正文（与用户商量补写方向后重写/续写工作稿），字数达标后重新生成定稿预览；不要在字数不足时反复尝试定稿。",
-    );
-  }
-  return { summary, ...(hints.length > 0 ? { modelHint: hints.join(" ") } : {}) };
 }
 
 export const commitPreviewTool = createTool({
   id: "commit_preview",
   description:
-    "预览把某章工作稿正式定稿会产生的变更，并做定稿前的质量门槛检查（不修改任何文件）。" +
-    "当用户想把某章定稿、或想知道定稿会带来哪些状态变更时，先调用本工具。" +
-    "预览通过会返回 previewToken；正式定稿必须随后调用 commit_apply。commit_apply 可省略 token，由系统使用最近一次有效预览票据。",
+    "预览把某章工作稿定稿会记下哪些账（事实、线索、出场人物、故事第几天），不改任何文件。" +
+    "作者想定稿、或想知道定稿会记什么时调用。预览通过后由作者点「确认定稿」按钮写入。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
     const projectDir = readProjectDirFromContext(context);
     if (!projectDir) {
-      throw new Error(
-        "commit_preview 缺少 projectDir：请确认调用 agent 时通过 RequestContext 注入了 projectDir。",
-      );
+      throw new Error("commit_preview 缺少 projectDir：请确认调用 agent 时通过 RequestContext 注入了 projectDir。");
     }
-    const resolvedChapter = resolveChapterFromInputOrContext(input.chapter, context);
-    if (resolvedChapter === undefined) {
-      throw new Error("commit_preview 缺少章号：LLM 未给出章号，且前端未注入 currentChapter。请明确指定章号。");
+    const chapter = resolveChapterFromInputOrContext(input.chapter, context);
+    if (chapter === undefined) {
+      throw new Error("commit_preview 缺少章号：没给章号，前端也没带当前章。请明确指定章号。");
     }
-    return buildCommitPreviewToolOutput({ projectDir, chapter: resolvedChapter, declareDelta: defaultDeclareDelta, proposeFacts: defaultProposeFacts });
+    return buildCommitPreviewToolOutput({ projectDir, chapter });
   },
 });
-
-/** 标注字段 → 作者看得懂的叫法。 */
-const DELTA_FIELD_WORDS: readonly (readonly [RegExp, string])[] = [
-  [/^charactersPresent/u, "出场人物"],
-  [/^viewpoint/u, "视角人物"],
-  [/^mainEvent/u, "本章主事件"],
-  [/^(threads|newThreads|threadUpdates|leads)/u, "线索"],
-  [/^(hooks|newHooks|hookUpdates)/u, "伏笔"],
-  [/^(locations|location)/u, "地点"],
-  [/^(assets|items|gains|losses)/u, "物品得失"],
-  [/^(facts|hardFacts)/u, "硬事实"],
-];
-
-/**
- * 「章节语义声明被拒（charactersPresent[3]·name_not_in_evidence）：原句」→「出场人物里的一处：「原句」」。
- * 字段路径和原因代码是程序内部的，不给作者看。认不出格式就只留引用的原句。
- */
-export function humanizeDeltaRejection(message: string): string {
-  const match = /^章节语义声明(?:被拒|数量未采信[^（]*)（([^·）]+)·[^）]*）：(.*)$/u.exec(message.trim());
-  const field = match?.[1] ?? "";
-  const quote = (match?.[2] ?? message).trim().replace(/[。.\s]+$/u, "");
-  const what = DELTA_FIELD_WORDS.find(([pattern]) => pattern.test(field))?.[1];
-  const shortQuote = quote.length > 30 ? `${quote.slice(0, 30)}…` : quote;
-  if (!shortQuote) return what ?? "";
-  return what ? `${what}里的「${shortQuote}」` : `「${shortQuote}」`;
-}

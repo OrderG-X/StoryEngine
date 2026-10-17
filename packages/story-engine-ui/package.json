@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@actalk/story-core": "workspace:*",
     "@actalk/story-engine": "workspace:*",
     "@ai-sdk/openai-compatible": "^2.0.50",
     "@mastra/core": "^1.42.0",

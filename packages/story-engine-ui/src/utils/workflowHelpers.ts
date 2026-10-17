@@ -142,7 +142,6 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "生成定稿预览，不写已定稿版。",
       permission: "safe_read",
       requiresConfirmation: false,
-      endpoint: "/api/commit/preview",
     },
     "commit-apply": {
       id: "commit-apply",
@@ -150,13 +149,19 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       description: "写入定稿章节，写入前自动存档，可在操作历史撤销。",
       permission: "formal_state_write",
       requiresConfirmation: false,
-      endpoint: "/api/commit/apply",
     },
     "prune-confirm": {
       id: "prune-confirm",
       label: "确认裁剪",
       description: "把操作历史裁到预览里说的条数；裁前完整历史自动备份到项目目录外。",
       permission: "destructive_write",
+      requiresConfirmation: false,
+    },
+    "ledger-confirm": {
+      id: "ledger-confirm",
+      label: "确认改账",
+      description: "按 AI 提的改账方案记下（改前自动存档，可在操作历史撤销）。",
+      permission: "formal_state_write",
       requiresConfirmation: false,
     },
     "continue-next": {
@@ -181,6 +186,11 @@ export function commitConfirmAction(target?: CommitConfirmTarget): SuggestedActi
 /** 「确认裁剪」按钮：点了发结构化动作、由服务端直接真裁（裁剪快照预览之后出现）。 */
 export function pruneConfirmAction(target?: { readonly keep?: number }): SuggestedAction {
   return { ...suggestedAction("prune-confirm"), pruneTarget: { ...(target?.keep ? { keep: target.keep } : {}) } };
+}
+
+/** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
+export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }): SuggestedAction {
+  return { ...suggestedAction("ledger-confirm"), ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}) } };
 }
 
 function withDisabledReason(action: SuggestedAction, disabledReason: string | undefined): SuggestedAction {

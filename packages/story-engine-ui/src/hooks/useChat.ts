@@ -1612,6 +1612,14 @@ export function useChat(params: UseChatParams): UseChatResult {
           consumeSuggestedAction(action);
           void handleConfirmPrune(action.pruneTarget);
           return;
+        case "ledger-confirm":
+          if (!action.ledgerTarget) {
+            showToast("这个改账按钮已经失效了，请让 AI 重新提一次。", 4200);
+            return;
+          }
+          consumeSuggestedAction(action);
+          void handleSendUserAction({ toolName: "ledger_decision", ...action.ledgerTarget });
+          return;
         case "continue-next": {
           void handleSendMessage("继续写下一章。");
           return;
@@ -1640,6 +1648,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       handleSendMessage,
       handleConfirmCommit,
       handleConfirmPrune,
+      handleSendUserAction,
       handleApplyRevisionPreview,
       appendMessage,
       consumeSuggestedAction,

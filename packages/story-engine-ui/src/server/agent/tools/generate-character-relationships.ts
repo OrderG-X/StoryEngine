@@ -25,6 +25,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   readCharacterMatrixLedger,
+  readFactLedgerStrict,
   type CharacterMatrixEntry,
   type CharacterMatrixLedger,
   type CharacterMatrixUpdate,
@@ -34,7 +35,6 @@ import { z } from "zod";
 import { writeTool } from "../withSnapshot.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
-import { readFactLedger } from "../fact-ledger/fact-ledger.js";
 import { appendDedup } from "../enrichment-dedup.js";
 import { resolveChapterFromInputOrContext } from "../request-context.js";
 import {
@@ -209,7 +209,7 @@ export const generateCharacterRelationshipsTool = writeTool({
   inputSchema,
   outputSchema,
   run: async ({ projectDir, context }) => {
-    const facts = (await readFactLedger(projectDir)).facts
+    const facts = (await readFactLedgerStrict(projectDir)).facts
       .map((f) => f.text?.trim() ?? "")
       .filter((t) => t.length > 0);
     if (facts.length === 0) {
@@ -236,7 +236,7 @@ export const generateCharacterRelationshipsTool = writeTool({
     }
 
     // 章号仅用于 firstSeen/lastSeen 标注：取当前章号，拿不到则用最大事实章号兜底。
-    const factMaxChapter = (await readFactLedger(projectDir)).facts.reduce(
+    const factMaxChapter = (await readFactLedgerStrict(projectDir)).facts.reduce(
       (max, f) => (typeof f.chapter === "number" && f.chapter > max ? f.chapter : max),
       0,
     );

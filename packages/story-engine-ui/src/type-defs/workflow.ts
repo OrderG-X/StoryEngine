@@ -33,6 +33,8 @@ export interface SuggestedAction {
   readonly commitTarget?: CommitConfirmTarget;
   /** 「确认裁剪」按钮的参数（prune-confirm 专用）：保留最近多少条，缺省=引擎默认。 */
   readonly pruneTarget?: { readonly keep?: number };
+  /** 「确认改账」按钮带的裁定草案（ledger-confirm 专用，manage_ledger 提的）。 */
+  readonly ledgerTarget?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
 }
 
 /** 「确认定稿」结构化动作的目标章与预览令牌（令牌让服务重启后仍能凭「这版草稿已预览」放行）。 */
