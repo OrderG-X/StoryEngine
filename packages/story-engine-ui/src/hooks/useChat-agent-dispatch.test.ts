@@ -77,7 +77,7 @@ function writeDisk(chapter: number, input: { readonly draft?: string | null; rea
 /** 盘上写好、稿纸也打开这一章（作者正在看它）。 */
 function seedPaper(chapter: number, input: Parameters<typeof writeDisk>[1]): void {
   writeDisk(chapter, input);
-  useDraftStore.getState().loadPaper(PROJECT, disk.get(chapter)!, `第${chapter}章`);
+  useDraftStore.getState().loadPaper(PROJECT, disk.get(chapter)!);
 }
 
 function deferred<T>() {

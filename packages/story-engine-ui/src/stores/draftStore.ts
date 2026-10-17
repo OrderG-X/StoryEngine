@@ -44,7 +44,8 @@ export interface DraftStoreState {
   readonly streaming: string | null;
 
   /** 打开一章：整份换上，不管有没有没存的字（调用方先存掉旧章）。 */
-  readonly loadPaper: (projectPath: string, paper: ChapterPaper, fallbackTitle?: string) => void;
+  /** 换上盘上这一章。章名只认盘上的：导航上的占位名（「下一章」「第 N 章」）只用来显示，不当章名写进稿子。 */
+  readonly loadPaper: (projectPath: string, paper: ChapterPaper) => void;
   /** 盘上来了新版本：force（作者自己点的撤销）直接换；否则按有没有没存的字决定换还是提示。 */
   readonly receivePaper: (projectPath: string, paper: ChapterPaper, options?: { readonly force?: boolean }) => void;
   /** 作者在稿纸上改字。 */
@@ -89,9 +90,9 @@ function diskText(paper: ChapterPaper): { readonly body: string; readonly title?
 export const useDraftStore = create<DraftStoreState>((set, get) => ({
   ...EMPTY,
 
-  loadPaper: (projectPath, paper, fallbackTitle) => {
+  loadPaper: (projectPath, paper) => {
     const disk = diskText(paper);
-    const title = disk.title ?? fallbackTitle ?? "";
+    const title = disk.title ?? "";
     set({
       ...EMPTY,
       projectPath,

@@ -101,6 +101,17 @@ describe("存稿调度", () => {
     expect(useDraftStore.getState()).toMatchObject({ baseVersion: "v1", savedBody: "一。二。三。", saveStatus: "saved" });
   });
 
+  it("新的一章没有章名：存稿不带章名（导航上的「下一章」之类占位名不写进稿子）", async () => {
+    const server = fakeServer({});
+    vi.stubGlobal("fetch", server.fetchMock);
+    await openPaper(PROJECT, 11);
+    expect(useDraftStore.getState().title).toBe("");
+    editDraft("清晨的雾还没散。");
+    await flushDraftSave();
+    expect(server.puts).toHaveLength(1);
+    expect(server.puts[0]).not.toHaveProperty("title");
+  });
+
   it("撞版本：不覆盖盘上的，挂提示；选保留我这版后再存一次就过", async () => {
     const server = fakeServer({ 3: { version: "v0", body: "原稿。" } });
     vi.stubGlobal("fetch", server.fetchMock);

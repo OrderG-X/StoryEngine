@@ -536,7 +536,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         chapters,
       });
       setMessages(entryMessages);
-      useDraftStore.getState().loadPaper(nextProjectPath, paper, activeChapter.title);
+      useDraftStore.getState().loadPaper(nextProjectPath, paper);
       setSidebar(sidebarFromStateOverview(overview));
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
@@ -711,7 +711,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           flowStatus,
         });
       }
-      if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper, chapter.title);
+      if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper);
       setSteeringDirection("");
       setLastChapterDirection("");
       setSteeringDraft(null);
@@ -822,7 +822,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         draft: null,
         committed: null,
         editedSinceCommit: null,
-      }, nextWorkspace.currentChapter.title);
+      });
       setWorkspace(nextWorkspace);
       // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
       // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。

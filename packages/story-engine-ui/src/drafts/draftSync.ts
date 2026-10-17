@@ -130,11 +130,11 @@ export function saveDraftKeepalive(): void {
 }
 
 /** 打开一章：先存掉手上那章，再从盘上读这一章整份换上。 */
-export async function openPaper(projectPath: string, chapter: number, fallbackTitle?: string): Promise<void> {
+export async function openPaper(projectPath: string, chapter: number): Promise<void> {
   const state = useDraftStore.getState();
   if (state.loaded && (state.projectPath !== projectPath || state.chapter !== chapter)) await flushDraftSave();
   const paper = await fetchChapterPaper(projectPath, chapter);
-  useDraftStore.getState().loadPaper(projectPath, paper, fallbackTitle);
+  useDraftStore.getState().loadPaper(projectPath, paper);
 }
 
 /**

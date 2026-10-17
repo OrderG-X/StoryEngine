@@ -372,9 +372,9 @@ export function useChat(params: UseChatParams): UseChatResult {
                 if (useDraftStore.getState().chapter !== chapter && projectPath) {
                   // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。
                   const switchProject = projectPath;
-                  paperSwitch = openPaper(switchProject, chapter, `第${chapter}章`)
+                  paperSwitch = openPaper(switchProject, chapter)
                     .catch(() => {
-                      useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, committed: null, editedSinceCommit: null }, `第${chapter}章`);
+                      useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, committed: null, editedSinceCommit: null });
                     })
                     .then(() => { if (ownsCurrentWorkspace()) showStreaming(); });
                   track(paperSwitch);
