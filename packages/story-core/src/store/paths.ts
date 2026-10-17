@@ -24,6 +24,11 @@ export function chapterLedgerPath(chapter: number): string {
 
 export const CHAPTER_LEDGER_DIR = "ledger/chapters";
 
+/** 工作稿（还没定稿的正文），沿用老书路径。 */
+export function draftPath(chapter: number): string {
+  return `drafts/fast/chapter-${pad(chapter)}.md`;
+}
+
 export function receiptPath(keyHash: string): string {
   return `ledger/receipts/${keyHash}.json`;
 }
