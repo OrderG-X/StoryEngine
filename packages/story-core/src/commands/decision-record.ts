@@ -19,6 +19,7 @@ const LABELS: Record<DecisionInput["type"], string> = {
   "thread.weight": "裁定：线索分量",
   "issue.dismiss": "裁定：不是问题",
   "fact.retract": "裁定：事实记错了",
+  "fact.expire": "裁定：事实不再成立",
 };
 
 export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResult> = {
@@ -40,7 +41,7 @@ export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResul
     if ((args.type === "thread.close" || args.type === "thread.weight") && !threads.has(args.thread)) {
       return fail("unknown_thread", "这条线索已经不在了。");
     }
-    if (args.type === "fact.retract" && !current.facts.some((fact) => fact.id === args.fact)) {
+    if ((args.type === "fact.retract" || args.type === "fact.expire") && !current.facts.some((fact) => fact.id === args.fact)) {
       return fail("unknown_fact", "这条事实已经不在了。");
     }
     let max = 0;

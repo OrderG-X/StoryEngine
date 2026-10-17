@@ -20,6 +20,8 @@ const threadWeight = { type: z.literal("thread.weight"), thread: text, weight: z
 const issueDismiss = { type: z.literal("issue.dismiss"), issue: text, note: text.optional() };
 /** 作者说这条事实记错了：投影里作废，原账单不动。 */
 const factRetract = { type: z.literal("fact.retract"), fact: text, note: text.optional() };
+/** 作者说这条事实从第 chapter 章起不再成立（没有新说法顶替）。老书里手动作废的事实导入成这个。 */
+const factExpire = { type: z.literal("fact.expire"), fact: text, chapter: z.number().int().min(1), note: text.optional() };
 
 export const DecisionInput = z.discriminatedUnion("type", [
   z.object(threadMerge),
@@ -27,6 +29,7 @@ export const DecisionInput = z.discriminatedUnion("type", [
   z.object(threadWeight),
   z.object(issueDismiss),
   z.object(factRetract),
+  z.object(factExpire),
 ]);
 export type DecisionInput = z.infer<typeof DecisionInput>;
 
@@ -37,6 +40,7 @@ export const AuthorDecision = z.discriminatedUnion("type", [
   z.object({ ...threadWeight, ...meta }),
   z.object({ ...issueDismiss, ...meta }),
   z.object({ ...factRetract, ...meta }),
+  z.object({ ...factExpire, ...meta }),
 ]);
 export type AuthorDecision = z.infer<typeof AuthorDecision>;
 

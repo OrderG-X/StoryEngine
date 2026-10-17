@@ -107,6 +107,7 @@ function buildFacts(
   dismissed: ReadonlySet<string>,
 ): { facts: FactView[]; subjects: SubjectView[]; conflicts: ConflictView[]; dangling: DanglingView[] } {
   const retracted = new Set(decisions.flatMap((decision) => (decision.type === "fact.retract" ? [decision.fact] : [])));
+  const expiries = decisions.filter((decision) => decision.type === "fact.expire");
   const byId = new Map<string, MutableFact>();
   const ordered: MutableFact[] = [];
   const currentState = new Map<string, string>();
@@ -135,20 +136,20 @@ function buildFacts(
       ordered.push(fact);
       if (fact.status === "retracted") continue;
 
-      if (entry.replaces) {
-        const target = byId.get(entry.replaces);
+      for (const ref of entry.replaces ?? []) {
+        const target = byId.get(ref);
         if (!target || target.chapter >= ledger.chapter) {
-          dangling.push({ kind: "fact", ref: entry.replaces, chapter: ledger.chapter, source: entry.id });
+          dangling.push({ kind: "fact", ref, chapter: ledger.chapter, source: entry.id });
         } else if (target.status === "current") {
           supersede(target, ledger.chapter, fact.id);
         }
       }
-      if (fact.nature === "event" || fact.attributeKey === undefined) continue;
+      if (fact.nature === "event" || fact.attributeKey === undefined || fact.subjectKey === undefined) continue;
 
       const key = `${fact.subjectKey}|${fact.attributeKey}`;
       let subject = subjects.get(fact.subjectKey);
       if (!subject) {
-        subject = { name: fact.subject, attrs: new Map() };
+        subject = { name: fact.subject ?? fact.subjectKey, attrs: new Map() };
         subjects.set(fact.subjectKey, subject);
       }
       let attr = subject.attrs.get(fact.attributeKey);
@@ -171,11 +172,33 @@ function buildFacts(
         if (nameKey(other.value ?? "") === valueKey) continue;
         const issue = `hard-fact:${otherId}:${fact.id}`;
         if (dismissed.has(issue)) continue;
-        conflicts.push({ key: issue, kind: "hard-fact", subject: fact.subject, attribute: fact.attribute ?? "", facts: [otherId, fact.id] });
+        conflicts.push({ key: issue, kind: "hard-fact", subject: fact.subject ?? "", attribute: fact.attribute ?? "", facts: [otherId, fact.id] });
       }
       currentHard.set(key, [...list, fact.id]);
     }
   }
+
+  // 作者说「从第几章起不再成立」的：在那章作废（没有顶替的新说法）。指向不存在的摆进 dangling。
+  for (const expiry of expiries) {
+    const target = byId.get(expiry.fact);
+    if (!target) {
+      dangling.push({ kind: "decision", ref: expiry.fact, source: expiry.id });
+      continue;
+    }
+    if (target.status !== "current" || expiry.chapter <= target.chapter) continue;
+    target.status = "superseded";
+    target.supersededAt = expiry.chapter;
+    delete target.supersededBy;
+  }
+  // 早一条在晚一条那章之前就不成立了，两条不算矛盾。
+  const validAt = (id: string, chapter: number): boolean => {
+    const fact = byId.get(id);
+    return fact !== undefined && (fact.supersededAt === undefined || fact.supersededAt > chapter);
+  };
+  const liveConflicts = conflicts.filter((conflict) => {
+    const later = byId.get(conflict.facts[1])?.chapter ?? 0;
+    return validAt(conflict.facts[0], later) && validAt(conflict.facts[1], later);
+  });
 
   const subjectViews: SubjectView[] = [...subjects.entries()].map(([key, subject]) => ({
     key,
@@ -188,17 +211,16 @@ function buildFacts(
       history: attr.history,
     })),
   }));
-  return { facts: ordered, subjects: subjectViews, conflicts, dangling };
+  return { facts: ordered, subjects: subjectViews, conflicts: liveConflicts, dangling };
 }
 
 function toFactView(entry: FactEntry, chapter: number, names: Names, retracted: boolean): MutableFact {
-  const subject = names.resolve(entry.subject);
+  const subject = entry.subject ? names.resolve(entry.subject) : undefined;
   return {
     id: entry.id,
     chapter,
     nature: entry.nature,
-    subject: subject.name,
-    subjectKey: subject.key,
+    ...(subject ? { subject: subject.name, subjectKey: subject.key } : {}),
     ...(entry.attribute ? { attribute: entry.attribute, attributeKey: nameKey(entry.attribute) } : {}),
     ...(entry.value ? { value: entry.value } : {}),
     text: entry.text,

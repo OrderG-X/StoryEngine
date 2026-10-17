@@ -38,14 +38,15 @@ const factShape = {
   kind: z.literal("fact"),
   review: ReviewMark,
   nature: FactNature,
-  subject: text,
+  /** 谁 / 什么。hard 和 state 必填；event 可以没有（老书导入的旧事件常常没有）。 */
+  subject: text.optional(),
   attribute: text.optional(),
   value: text.optional(),
   /** 给人看的一句话。 */
   text,
   quote: text,
-  /** 本章明写推翻了前文哪条事实（那条的 id）。不会变的事实只能这样作废。 */
-  replaces: id.optional(),
+  /** 本章明写推翻了前文哪些事实（那几条的 id）。不会变的事实只能这样作废。 */
+  replaces: z.array(id).min(1).optional(),
 };
 
 /** 线索类型：question = 悬念 / 待解的问题；intent = 人物的打算、待办；goal = 主角的目标。 */
@@ -149,7 +150,7 @@ export function entryNeedsQuote(entry: LedgerEntry | EntryInput): boolean {
 export function entryShapeProblem(entry: LedgerEntry | EntryInput): string | undefined {
   switch (entry.kind) {
     case "fact":
-      if (entry.nature !== "event" && (!entry.attribute || !entry.value)) return "不会变的事实和状态必须写清哪方面、是什么";
+      if (entry.nature !== "event" && (!entry.subject || !entry.attribute || !entry.value)) return "不会变的事实和状态必须写清谁、哪方面、是什么";
       return undefined;
     case "thread":
       if (entry.op === "open" && (!entry.type || !entry.title)) return "新开的线索必须有类型和标题";

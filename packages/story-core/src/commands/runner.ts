@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BOOK_HEAD_SCHEMA, COMMAND_RECEIPT_SCHEMA, CommandReceipt } from "../schema/book.js";
-import { readHead } from "../store/book.js";
+import { BookFileError, readHead } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
 import { HEAD_PATH, receiptPath } from "../store/paths.js";
 import { commitFiles, recoverTransactions, type TxWrite } from "../store/transaction.js";
@@ -70,7 +70,13 @@ export async function runCommand<A, R>(
     }
 
     const now = options.now?.() ?? new Date();
-    const planned = await spec.plan({ bookDir, caller: options.caller, now }, parsed.data);
+    let planned: Awaited<ReturnType<typeof spec.plan>>;
+    try {
+      planned = await spec.plan({ bookDir, caller: options.caller, now }, parsed.data);
+    } catch (error) {
+      if (error instanceof BookFileError) return fail("book_file_invalid", error.message);
+      return fail("plan_failed", "这一步出了意外，书保持原样。", error instanceof Error ? error.message : String(error));
+    }
     if (isFailure(planned)) return planned;
     const head = await readHead(bookDir);
     if (planned.writes.length === 0) {

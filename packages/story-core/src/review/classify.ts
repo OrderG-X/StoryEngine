@@ -64,7 +64,7 @@ export function classifyForReview(
     const reasons: ReviewReason[] = [];
     if (entry.kind === "fact") {
       if (entry.replaces) reasons.push("replaces-fact");
-      if (entry.nature === "hard" && entry.attribute && entry.value) {
+      if (entry.nature === "hard" && entry.subject && entry.attribute && entry.value) {
         const values = hardValues.get(`${resolve(entry.subject)}|${nameKey(entry.attribute)}`);
         if (values && !values.has(nameKey(entry.value)) && !entry.replaces) reasons.push("hard-conflict");
       }

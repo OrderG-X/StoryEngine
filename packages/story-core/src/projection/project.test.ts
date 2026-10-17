@@ -20,7 +20,7 @@ const presence = (name: string, nameUsed = name, viewpoint?: boolean): Draft => 
 const state = (subject: string, attribute: string, value: string, id?: string): Draft => ({
   kind: "fact", nature: "state", subject, attribute, value, text: `${subject}${attribute}${value}`, quote: "原句原句", ...(id ? { id } : {}),
 });
-const hard = (subject: string, attribute: string, value: string, extra: { id?: string; replaces?: string } = {}): Draft => ({
+const hard = (subject: string, attribute: string, value: string, extra: { id?: string; replaces?: string[] } = {}): Draft => ({
   kind: "fact", nature: "hard", subject, attribute, value, text: `${subject}${attribute}${value}`, quote: "原句原句", ...extra,
 });
 const open = (thread: string, title: string): Draft => ({ kind: "thread", op: "open", thread, type: "question", title, note: title, quote: "原句原句" });
@@ -51,7 +51,7 @@ describe("投影", () => {
     expect(conflict.facts.every((fact) => fact.status === "current")).toBe(true);
 
     const replaced = project({
-      ledgers: [ledger(1, [hard("老周", "年纪", "六十")]), ledger(4, [hard("老周", "年纪", "七十", { replaces: "c1-1" })])],
+      ledgers: [ledger(1, [hard("老周", "年纪", "六十")]), ledger(4, [hard("老周", "年纪", "七十", { replaces: ["c1-1"] })])],
       decisions: [],
     });
     expect(replaced.conflicts).toEqual([]);
@@ -64,6 +64,17 @@ describe("投影", () => {
     const retracted = project({ ledgers, decisions: [decision({ type: "fact.retract", fact: "c1-1" })] });
     expect(retracted.conflicts).toEqual([]);
     expect(retracted.facts[0]?.status).toBe("retracted");
+  });
+
+  it("作者说「从第几章起不再成立」：那章起作废；之后同一方面的新值不算矛盾", () => {
+    const result = project({
+      ledgers: [ledger(1, [hard("铜盒", "锁", "黄铜锁")]), ledger(6, [hard("铜盒", "锁", "密码锁")])],
+      decisions: [decision({ type: "fact.expire", fact: "c1-1", chapter: 4 }), decision({ type: "fact.expire", fact: "c9-9", chapter: 2 }, 2)],
+    });
+    expect(result.facts[0]).toMatchObject({ status: "superseded", supersededAt: 4 });
+    expect(result.facts[0]?.supersededBy).toBeUndefined();
+    expect(result.conflicts).toEqual([]);
+    expect(result.dangling).toEqual([{ kind: "decision", ref: "c9-9", source: "d-2" }]);
   });
 
   it("别名：正文里的新称呼归到已确立的人；主体名也按别名归并", () => {

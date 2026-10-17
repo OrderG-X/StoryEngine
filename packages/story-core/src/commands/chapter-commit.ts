@@ -50,7 +50,7 @@ function entryKey(entry: EntryInput | LedgerEntry): string {
       return [
         "fact",
         entry.nature,
-        nameKey(entry.subject),
+        nameKey(entry.subject ?? ""),
         nameKey(entry.attribute ?? ""),
         nameKey(entry.value ?? ""),
         entry.nature === "event" ? nameKey(entry.text) : "",

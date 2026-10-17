@@ -56,7 +56,7 @@ export function checkEntries(entries: readonly EntryInput[], text: string, befor
     if (entry.kind === "thread" && entry.op !== "open" && !knownThreads.has(entry.thread ?? "")) {
       return reject("unknown_thread", "指向的线索前文没有");
     }
-    if (entry.kind === "fact" && entry.replaces && !knownFacts.has(entry.replaces)) return reject("unknown_fact", "要推翻的那条前文没有");
+    if (entry.kind === "fact" && entry.replaces?.some((ref) => !knownFacts.has(ref))) return reject("unknown_fact", "要推翻的那条前文没有");
     if (entry.kind === "summary" && (summaries += 1) > 1) return reject("duplicate", "一章只记一条梗概");
     if (entry.kind === "time" && (times += 1) > 1) return reject("duplicate", "一章只记一条时间");
     accepted.push({ index, entry });

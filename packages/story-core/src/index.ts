@@ -53,6 +53,9 @@ export { runCommand } from "./commands/runner.js";
 export { chapterCommit, ChapterCommitArgs, type ChapterCommitResult } from "./commands/chapter-commit.js";
 export { decisionRecord, type DecisionRecordResult } from "./commands/decision-record.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
+export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
+export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
+export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";
 export { BookEventHub, type BookEventListener } from "./commands/events.js";
 export type {
   AnyWriteCommandSpec,

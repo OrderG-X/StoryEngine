@@ -34,9 +34,9 @@ export interface FactView {
   readonly id: string;
   readonly chapter: number;
   readonly nature: FactNature;
-  /** 主体的已确立名字（别名已归并）。 */
-  readonly subject: string;
-  readonly subjectKey: string;
+  /** 主体的已确立名字（别名已归并）。没有主体的旧事件没有这两项。 */
+  readonly subject?: string;
+  readonly subjectKey?: string;
   readonly attribute?: string;
   readonly attributeKey?: string;
   readonly value?: string;

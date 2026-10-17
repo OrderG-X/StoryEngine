@@ -50,7 +50,7 @@ describe("定稿清单：哪几条要作者看", () => {
   it("设定卡上有的名字不算新面孔；明写推翻的不算矛盾、但要看；没有时间条目要标出来", () => {
     const plan = classifyForReview(
       [
-        { index: 0, entry: { ...(entries[0] as EntryInput), replaces: "c1-2" } as EntryInput },
+        { index: 0, entry: { ...(entries[0] as EntryInput), replaces: ["c1-2"] } as EntryInput },
         { index: 1, entry: entries[1] as EntryInput },
       ],
       before,
