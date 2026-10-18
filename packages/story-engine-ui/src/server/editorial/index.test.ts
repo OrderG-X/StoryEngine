@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
+  CHECKER_ROLE,
+  LEDGER_ROLE,
+  PLANNER_ROLE,
   catchUpReaders,
   isReaderCatchUpQueued,
   maybeStartReadersCatchUp,
@@ -11,7 +14,7 @@ import {
   readReadersCatchUpStatus,
   warmUpReaders,
 } from "./index.js";
-import type { BrainCallModel } from "./reader-window.js";
+import { READER_WINDOW_MAX_CHARS, ensureReaderWindow, type BrainCallModel } from "./reader-window.js";
 
 async function makeBook(chapters: number): Promise<string> {
   const dir = await makeHomeTempDir("brain-index-");
@@ -199,4 +202,20 @@ describe("开书时看一眼要不要补（maybeStartReadersCatchUp）", () => {
       await expect(readReaderProgress(dir, "planner")).resolves.toMatchObject({ reading: false, done: 3, total: 3 });
     }, { timeout: 5_000 });
   });
+});
+
+describe("长书窗口封顶（P7 两百章验收）", () => {
+  it("三个跟读角色读到两百章，窗口都不超过预算（靠卷笔记；笔记按真书实测的一千三百字）", async () => {
+    const dir = await makeBook(200);
+    const callModel: BrainCallModel = async (messages) => {
+      const volume = (messages[messages.length - 1]?.content ?? "").includes("缩写成卷笔记");
+      return (volume ? "卷" : "记").repeat(volume ? 1400 : 1300);
+    };
+    for (const role of [CHECKER_ROLE, PLANNER_ROLE, LEDGER_ROLE]) {
+      const out = await ensureReaderWindow({ projectDir: dir, role, upTo: 200, callModel });
+      const size = out.messages.reduce((sum, message) => sum + message.content.length, 0);
+      expect(size, role.id).toBeLessThanOrEqual(READER_WINDOW_MAX_CHARS);
+      expect(out.volumesBuilt, role.id).toBeGreaterThan(0);
+    }
+  }, 60_000);
 });
