@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "../context-gateway.js";
 import { runFastDraft, resolveDraftMaxOutputTokens, persistFastDraftBody, type WriterClient } from "../fast-draft-writer.js";
 import { buildPromptFingerprint, findFirstPromptDifference, renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
-import { createStoryProject, readStoryCalendar } from "../project-store.js";
+import { createStoryProject } from "../project-store.js";
 
 describe("StoryEngine-NG FastDraftWriter", () => {
   it("dry-run builds context stats without calling writer or writing a draft", async () => {
@@ -1007,30 +1007,4 @@ async function createFixtureProject(): Promise<string> {
     ]);
   });
   return projectDir;
-}
-
-async function seedSemanticTimeline(projectDir: string): Promise<void> {
-  await writeFile(
-    join(projectDir, "timeline", "events.json"),
-    `${JSON.stringify([
-      {
-        id: "ch0001-001",
-        chapter: 1,
-        summary: "Guo Xu 在账房发现异常。",
-        participants: ["guo-xu"],
-        effects: {
-          semanticSummary: {
-            chapter: 1,
-            mainEvent: "Guo Xu 在账房发现账本暗页。",
-            conflict: "管事威胁 Guo Xu 交出破损信物。",
-            discovery: "Guo Xu 发现账本暗页记录外院账目。",
-            nextLead: "后墙传来异常响动，黑影暗号仍未解开。",
-            mentionedCharacterNames: ["Guo Xu / 主角"],
-            locations: ["账房", "外院"],
-          },
-        },
-      },
-    ], null, 2)}\n`,
-    "utf-8",
-  );
 }

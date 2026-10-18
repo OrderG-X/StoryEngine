@@ -135,19 +135,3 @@ export function resolveTrust(
   if (!level) return undefined;
   return { level, percent: TRUST_PERCENT[level] };
 }
-
-/**
- * C 类·关系类型+态度去重。relationType 为主；attitude 仅当确实多出信息
- * （存在且 !== relationType）才带。infer 依赖注入（接线时传引擎现有 inferRelationType/inferAttitude）。
- */
-export function resolveRelationDescriptor(
-  relationshipText: string,
-  infer: {
-    readonly relationType: (text: string) => string;
-    readonly attitude: (text: string) => string | undefined;
-  },
-): { readonly relationType: string; readonly attitude?: string } {
-  const relationType = infer.relationType(relationshipText);
-  const attitude = infer.attitude(relationshipText);
-  return attitude && attitude !== relationType ? { relationType, attitude } : { relationType };
-}

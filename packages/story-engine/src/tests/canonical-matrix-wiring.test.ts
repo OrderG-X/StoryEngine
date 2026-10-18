@@ -33,6 +33,7 @@ describe("canonical 接线 · toCharacterMatrix", () => {
       role: "配角",
       extraFields: { 叙事岗位: "主要盟友" },
       relationshipToProtagonist: "信任",
+      trustLevel: "high",
     });
     await writeFile(biblePath, `${JSON.stringify(bible, null, 2)}\n`, "utf-8");
 
@@ -44,12 +45,12 @@ describe("canonical 接线 · toCharacterMatrix", () => {
     expect(suqing, "苏晴应在矩阵里").toBeDefined();
     expect(suqing?.role).toBe("主要盟友");
 
-    // B+C·关系：主角→苏晴 的边，trustLevel=high→trustPercent=85；attitude 去重(="信任"=relationType)。
+    // B+C·关系：主角→苏晴 的边，关系类型就是作者写的原文；信任度只认卡上的 trustLevel=high→trustPercent=85。
     const edge = matrix.relationships.find((r) => r.targetName === "苏晴");
     expect(edge, "应有 主角→苏晴 的关系边").toBeDefined();
     expect(edge?.relationType).toBe("信任");
     expect(edge?.trustLevel).toBe("high");
     expect(edge?.trustPercent).toBe(85);
-    expect(edge?.attitude, "attitude===relationType 应被去重").toBeUndefined();
+    expect(edge?.attitude).toBeUndefined();
   });
 });

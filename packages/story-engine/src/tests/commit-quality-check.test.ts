@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkDraftBeforeCommit } from "../commit-quality-check.js";
 import { createStoryProject } from "../project-store.js";
-import type { WritingContextPack } from "../writing-context-pack.js";
 
 describe("commit quality check", () => {
 
@@ -349,83 +348,4 @@ function draftOfExactlyChineseChars(target: number): string {
   const filler = "檐角的铜铃被风吹得轻响，他把袖口的灰拍净，沿着廊下慢慢往前走，心里把下一步又推了一遍。";
   while (count < target) append(filler);
   return `# 第一章 长度边界\n\n${body}\n`;
-}
-
-/**
- * 构造一个最小但结构完整的 WritingContextPack，专给 checkWritingContextPackDraft 的题材中立检测做单测。
- * 只填测试关心的字段（资产 / 地点），其余按类型给空值，避免触发无关检测的副作用。
- */
-function makePack(overrides: {
-  readonly setupKeyItems?: readonly string[];
-  readonly unavailableAssets?: readonly string[];
-  readonly plotCriticalAssets?: readonly string[];
-  readonly nearbyLocations?: readonly string[];
-  readonly protagonistName?: string;
-  readonly protagonistAge?: string;
-} = {}): WritingContextPack {
-  return {
-    chapterTask: { chapterNumber: 5, userDirection: "", currentChapterGoal: "" },
-    protagonistContext: {
-      name: overrides.protagonistName ?? "主角",
-      ...(overrides.protagonistAge ? { age: overrides.protagonistAge } : {}),
-      behaviorBoundaries: [],
-      knownFacts: [],
-      unknownTruths: [],
-      forbiddenReveals: [],
-      resourcesLimit: [],
-      speechSamples: [],
-      cannotDo: [],
-      extraFields: [],
-    },
-    supportingCast: [],
-    locationContext: {
-      travelRules: [],
-      fixedFacts: [],
-      locationRisks: [],
-      locationResources: [],
-      nearbyLocations: overrides.nearbyLocations ?? [],
-      extraFields: [],
-      locationDoNotInventRule: "",
-    },
-    worldRulesContext: {
-      coreRules: [],
-      resourceRules: [],
-      socialOrder: [],
-      factions: [],
-      conflictSources: [],
-      hiddenTruths: [],
-      protectedSecrets: [],
-    },
-    assetContext: {
-      initialAssets: [],
-      keyItems: overrides.setupKeyItems ?? [],
-      resourceLimits: [],
-      importantCarriedItems: [],
-      carriedAssets: [],
-      ownedAssets: [],
-      usableAssets: [],
-      unavailableAssets: overrides.unavailableAssets ?? [],
-      plotCriticalAssets: overrides.plotCriticalAssets ?? [],
-      assetHardRules: [],
-      extraFields: [],
-      assetDoNotInventRule: "",
-    },
-    continuityFocus: {
-      recentTimelineEvents: [],
-      mustCarryHooks: [],
-      mustCarryThreads: [],
-      arcGoalFocus: [],
-      establishedFacts: [],
-    },
-    writingRulesContext: {
-      proseStyle: [],
-      forbiddenContent: [],
-      doNotDo: [],
-      readerExperienceRules: [],
-      styleExemplars: [],
-    },
-    hardConstraints: [],
-    sourceTrace: [],
-    readFailures: [],
-  };
 }

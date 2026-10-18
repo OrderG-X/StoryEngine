@@ -1,6 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { analyzeIntentLifecycle } from "./intent-lifecycle-diagnostics.js";
 import { describeErrorBriefly } from "./project-store.js";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
@@ -14,7 +13,7 @@ import {
   resolveMentalState,
   resolveCurrentLocation,
   resolveTrust,
-  resolveRelationDescriptor,
+  type TrustLevel,
   dedupeAppearanceAnchors,
 } from "./canonical-resolvers.js";
 import type {
@@ -121,7 +120,6 @@ export interface StateOverview {
   readonly maintenance: {
     readonly diagnosticsAvailable: boolean;
     readonly cleanupVisibleCount: number;
-    readonly markDoneCandidateCount: number;
     readonly mergeDisabled: true;
     readonly dropDisabled: true;
     readonly confirmPolicy: {
@@ -528,14 +526,13 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   ]);
 
   const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
-  const intentDiagnostics = analyzeIntentLifecycle(threadPool, { currentChapter: currentChapter ?? undefined, sampleLimit: MAX_ITEMS });
-  const cleanupVisibleCount = intentDiagnostics.totalIntents - intentDiagnostics.cleanupCandidateCounts.none;
-  // R5.4·新发现 4：「其中 X 条」与 open+touched 同一集合——只数仍未收口（open/touched）的 cleanup 候选，
-  // 已收口（done/stale）的不算（它们由 maintenance 面板和 cleanupVisibleCount 另行可见）。
-  const cleanupVisibleUnresolvedCount = intentDiagnostics.diagnostics.filter(
-    (item) => (item.status === "open" || item.status === "touched") && item.cleanupCandidateClass !== "none",
-  ).length;
-  const diagnosticsByThread = new Map(intentDiagnostics.diagnostics.map((item) => [item.threadId, item]));
+  // 可清理的线索 = 还开着、已经 THREAD_CLEANUP_AFTER 章没碰过的。只按章数算，
+  // 不再按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
+  const cleanupCandidateIds = new Set(threadPool.threads
+    .filter((thread) => isCleanupCandidate(thread, currentChapter))
+    .map((thread) => thread.id));
+  const cleanupVisibleCount = cleanupCandidateIds.size;
+  const cleanupVisibleUnresolvedCount = cleanupVisibleCount;
   const recentEvents = timelineEvents
     .slice()
     .sort((a, b) => a.chapter - b.chapter)
@@ -549,7 +546,6 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   const characterBibleSummary = toCharacterBibleSummary(characterBible);
   const worldBibleSummary = toWorldBibleSummary(worldBible, worldState);
   const locationBibleSummary = toLocationBibleSummary(locationBible);
-  const spatialVocabulary = buildSpatialVocabulary(locationBible);
   const assetSummary = toAssetSummary(assetLedger);
   const locationDetailSummary = toLocationDetailSummary(locationBible);
   const characterDetailSummary = toCharacterDetailSummary(characterBible, characters);
@@ -589,11 +585,10 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
         worldState.currentPhase,
       ]),
       currentLocation: firstText([
-        lastSemanticLocation(timelineEvents, locationBibleSummary.activeLocationNames, spatialVocabulary),
+        lastSemanticLocation(timelineEvents, [...locationBibleSummary.activeLocationNames, ...registeredLocationTerms(locationBible)]),
         firstText(locationBibleSummary.activeLocationNames),
       ]),
       currentObjective: firstText([
-        lastSemanticObjective(timelineEvents),
         firstActiveGoal(arcGoalPool.goals)?.title,
         firstOpenThread(threadPool.threads)?.title,
         storyCore.readerPromise,
@@ -629,7 +624,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
           closedStatuses: ["done", "stale"],
         }).selected;
         return clusterNearDuplicates(selected).slice(0, MAX_ITEMS).map(({ rep: thread, relatedCount }) =>
-          toThreadOverview(thread, diagnosticsByThread.get(thread.id)?.cleanupCandidateClass, relatedCount),
+          toThreadOverview(thread, cleanupCandidateIds.has(thread.id) ? "stale_candidate" : undefined, relatedCount),
         );
       })(),
     },
@@ -699,7 +694,6 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     maintenance: {
       diagnosticsAvailable: true,
       cleanupVisibleCount,
-      markDoneCandidateCount: intentDiagnostics.manualReviewMarkDoneCandidates.length + intentDiagnostics.markDoneCandidates.length,
       mergeDisabled: true,
       dropDisabled: true,
       confirmPolicy: {
@@ -799,6 +793,14 @@ function toHookOverview(hook: HookItem): StateOverviewHookItem {
     ...(hook.firstSeenChapter !== undefined ? { firstSeenChapter: hook.firstSeenChapter } : {}),
     ...(hook.resolvedAtChapter !== undefined ? { resolvedAtChapter: hook.resolvedAtChapter } : {}),
   };
+}
+
+const THREAD_CLEANUP_AFTER = 5;
+
+function isCleanupCandidate(thread: NarrativeThread, currentChapter: number | null | undefined): boolean {
+  if (thread.status !== "open" && thread.status !== "touched") return false;
+  if (typeof currentChapter !== "number" || typeof thread.lastTouchedChapter !== "number") return false;
+  return currentChapter - thread.lastTouchedChapter >= THREAD_CLEANUP_AFTER;
 }
 
 function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: string, relatedCount?: number): StateOverviewThreadItem {
@@ -1408,34 +1410,29 @@ function toCharacterMatrix(input: {
 }
 
 /**
- * 从关系文本构建 canonical 关系（受控破例④·确定性、题材中立）：
- * relationType + 去重 attitude（resolveRelationDescriptor，attitude===relationType 时丢弃）
- * + 三档信任及派生 trustPercent（resolveTrust）+ conflict/secret。所有关系边的唯一构建入口。
+ * 构建 canonical 关系边（所有关系边的唯一构建入口）。
+ * 关系类型就是作者写的那句关系原文（截短）；信任度只认设定卡上结构化的 trustLevel 三档。
+ * 不再从关系文字里猜「亲人 / 敌人 / 怀疑 / 有秘密」（重构 P7「不猜」）。
  */
 function buildCanonicalRelationship(input: {
   readonly targetCharacterId: string;
   readonly targetName: string;
   readonly relationshipText: string;
+  readonly trustLevel?: string;
   readonly lastChangedChapter?: number;
 }): StateOverviewCharacterRelationship {
-  const text = input.relationshipText;
-  const descriptor = resolveRelationDescriptor(text, {
-    relationType: inferRelationType,
-    attitude: inferAttitude,
-  });
-  const trust = resolveTrust(inferTrustLevel(text));
-  const conflict = /敌|压制|怀疑|冲突|对手|反派|忌惮/u.test(text) ? truncate(text) : undefined;
-  const secret = /隐藏|秘密|未知|伪装/u.test(text) ? truncate(text) : undefined;
+  const trust = resolveTrust(asTrustLevel(input.trustLevel));
   return {
     targetCharacterId: input.targetCharacterId,
     targetName: input.targetName,
-    relationType: descriptor.relationType,
-    ...(descriptor.attitude ? { attitude: descriptor.attitude } : {}),
+    relationType: truncate(input.relationshipText, 40),
     ...(trust ? { trustLevel: trust.level, trustPercent: trust.percent } : {}),
-    ...(conflict ? { conflict } : {}),
-    ...(secret ? { secret } : {}),
     ...(input.lastChangedChapter ? { lastChangedChapter: input.lastChangedChapter } : {}),
   };
+}
+
+function asTrustLevel(value: string | undefined): TrustLevel | undefined {
+  return value === "low" || value === "medium" || value === "high" ? value : undefined;
 }
 
 function mergeCharacterBibleEntries(
@@ -1490,43 +1487,15 @@ function isProtagonistCharacter(character: CharacterBible["characters"][number])
 
 function toCharacterRelationship(
   protagonist: CharacterBible["characters"][number],
-  _character: CharacterBible["characters"][number],
+  character: CharacterBible["characters"][number],
   relationshipText: string,
 ): StateOverviewCharacterRelationship {
   return buildCanonicalRelationship({
     targetCharacterId: protagonist.id,
     targetName: protagonist.name,
     relationshipText,
+    ...(character.trustLevel ? { trustLevel: character.trustLevel } : {}),
   });
-}
-
-function inferRelationType(text: string): string {
-  if (/亲|父|母|兄|弟|姐|妹|家人/u.test(text)) return "亲人";
-  if (/友|伙伴|盟友/u.test(text)) return "朋友";
-  if (/敌|反派|对手/u.test(text)) return "敌人";
-  if (/上级|下属|主管|老板/u.test(text)) return "上下级";
-  if (/暧昧|恋/u.test(text)) return "暧昧";
-  if (/合作|同盟/u.test(text)) return "合作";
-  if (/怀疑|试探/u.test(text)) return "怀疑";
-  if (/隐藏|秘密/u.test(text)) return "隐藏关系";
-  return truncate(text, 40);
-}
-
-function inferAttitude(text: string): string | undefined {
-  if (/信任|相信/u.test(text)) return "信任";
-  if (/怀疑/u.test(text)) return "怀疑";
-  if (/敌意|敌对|压制/u.test(text)) return "敌意";
-  if (/依赖/u.test(text)) return "依赖";
-  if (/试探/u.test(text)) return "试探";
-  if (/忌惮/u.test(text)) return "忌惮";
-  return undefined;
-}
-
-function inferTrustLevel(text: string): "low" | "medium" | "high" | undefined {
-  if (/不信|怀疑|敌|压制|忌惮/u.test(text)) return "low";
-  if (/信任|亲密|盟友/u.test(text)) return "high";
-  if (text.trim()) return "medium";
-  return undefined;
 }
 
 function assetsForCharacter(ledger: AssetLedger, character: CharacterBible["characters"][number]): {
@@ -1548,9 +1517,7 @@ function assetsForCharacter(ledger: AssetLedger, character: CharacterBible["char
 
 function lastLocationForCharacter(timelineEvents: readonly TimelineEvent[], name: string, id: string): string | undefined {
   const event = [...timelineEvents].reverse().find((item) => item.participants.includes(id) || item.participants.includes(name));
-  const semantic = event ? readSemanticSummary(event) : undefined;
-  const locations = semantic?.locations;
-  const location = bestSemanticLocation(Array.isArray(locations) ? locations : []);
+  const location = event ? declaredLocations(event)[0] : undefined;
   return location ? truncate(location, 80) : undefined;
 }
 
@@ -1755,134 +1722,33 @@ function buildWarnings(input: {
   return warnings;
 }
 
-function lastSemanticObjective(events: readonly TimelineEvent[]): string | undefined {
+// 当前地点：取最近一章记账声明的地点（模型声明的 semanticSummary.locations），
+// 优先登记在地点卡上的（地名或楼层 / 房间 / 出入口原样对得上）；对不上就取声明的第一个。
+// 不再按「厅/口/楼」后缀或泛指词表猜哪个更具体（重构 P7「不猜」）。
+function lastSemanticLocation(events: readonly TimelineEvent[], registered: readonly string[]): string | undefined {
   for (const event of events.slice().reverse()) {
-    const semantic = readSemanticSummary(event);
-    for (const key of ["decision", "nextLead", "discovery"] as const) {
-      const value = semantic?.[key];
-      if (typeof value !== "string") continue;
-      const objective = cleanObjectiveText(value);
-      if (objective) return objective;
-    }
+    const locations = declaredLocations(event);
+    if (locations.length === 0) continue;
+    const hit = locations.find((item) => registered.some((known) => item === known || item.includes(known) || known.includes(item)));
+    return truncate(hit ?? locations[0], 80);
   }
   return undefined;
 }
 
-function cleanObjectiveText(value: string): string | undefined {
-  const text = truncate(value.trim(), 80);
-  if (!text || isOrdinaryActionObjective(text)) return undefined;
-  if (/(?:查清|追查|确认|找到|前往|询问|验证|调查|弄清|搞清|继续|线索|异常|申请|检测|记录)/u.test(text)) return text;
-  return undefined;
-}
-
-function isOrdinaryActionObjective(value: string): boolean {
-  const text = value.trim();
-  if (/(?:查清|追查|确认|找到|前往|询问|验证|调查|弄清|搞清|继续|线索|异常|申请|检测|记录)/u.test(text)) return false;
-  return /(?:把|将).{0,24}(?:抽回|抽回来|折好|塞回|收起|放回|拿起|放下|拉上|关掉|打开|站起来|坐下|转身|看了看|扫了一眼|准备走)|(?:抽回|抽回来|折好|塞回|收起|放回|站起来|坐下|转身离开|看了一眼|准备走)|(?:没打算|不打算|不想|没有说话|没说话|觉得不对劲|感觉不对劲|不想再等|不愿再等)/u.test(text);
-}
-
-// 题材中立的「具体地点」结构后缀：纯空间构词成分（厅/口/室/楼/层/站/区…），
-// 不含任何题材专名（旧版写死的若干题材特定地名表已删，改读 bible）。
-// 用于在没有 bible 命中时判断一个语义地点是否足够具体（影响选当前位置的打分排序）。
-const STRUCTURAL_LOCATION_SUFFIX = /(?:楼梯间|窗口|大厅|站台|街口|正门|门口|入口|出口|通道|大殿|公寓|建筑|广场|庭院|店面|柜台|前厅|后院|仓库|厅|室|楼|层|站|台|区|间|殿|阁|院|峰|巷|坊|府|苑|库|仓|场|园|塔|桥|门|口)$/u;
-
-// 题材中立的「楼层/序数」归一化：把「一楼/二楼/三楼…十楼」与「1楼/2楼/3楼…」互通，
-// 让 semanticSummary 里的口语楼层能匹配 bible 里登记的数字楼层（反之亦然），不写死具体楼层名。
-const FLOOR_DIGIT_BY_CHINESE: Readonly<Record<string, string>> = {
-  零: "0", 〇: "0", 一: "1", 二: "2", 两: "2", 三: "3", 四: "4", 五: "5",
-  六: "6", 七: "7", 八: "8", 九: "9", 十: "10",
-};
-
-function normalizeFloorTokens(value: string): string {
-  // 「一楼」→「1楼」「2楼」→既保留也补出「二楼」形式，统一成数字，便于子串互查。
-  return value.replace(/[零〇一二两三四五六七八九十]+(?=楼|层)/gu, (run) => {
-    if (run === "十") return "10";
-    const mapped = Array.from(run).map((ch) => FLOOR_DIGIT_BY_CHINESE[ch] ?? ch).join("");
-    return mapped;
-  });
-}
-
-// 从 location-bible 抽出的题材中立空间词表：登记的地名 + 各地点的楼层/房间/出入口/相连地点。
-// 用它替代写死的专名映射，做「语义地点 ↔ 已登记地点」的具体度判定与别名匹配。
-interface SpatialVocabulary {
-  // 已登记地点名（顶层 name）。
-  readonly names: readonly string[];
-  // 所有已登记的空间子部件 token（floors/rooms/entrances/exits/connectedLocations）。
-  readonly parts: readonly string[];
-}
-
-const EMPTY_SPATIAL_VOCABULARY: SpatialVocabulary = { names: [], parts: [] };
-
-function buildSpatialVocabulary(bible: LocationBible | null): SpatialVocabulary {
-  const locations = safeArray<LocationBible["locations"][number]>(bible?.locations);
-  const names = unique(locations.map((location) => location.name).filter(isNonEmptyString));
-  const parts = unique(locations.flatMap((location) => [
+function registeredLocationTerms(bible: LocationBible | null): readonly string[] {
+  return unique(safeArray<LocationBible["locations"][number]>(bible?.locations).flatMap((location) => [
+    location.name,
     ...safeStringArray(location.spatialStructure?.floors),
     ...safeStringArray(location.spatialStructure?.rooms),
     ...safeStringArray(location.spatialStructure?.entrances),
     ...safeStringArray(location.spatialStructure?.exits),
     ...safeStringArray(location.connectedLocations),
-  ]));
-  return { names, parts };
+  ]).filter(isNonEmptyString));
 }
 
-function isRegisteredSpatialPart(location: string, vocabulary: SpatialVocabulary): boolean {
-  const normalized = normalizeFloorTokens(location);
-  return vocabulary.parts.some((part) => {
-    if (part === location || part.includes(location) || location.includes(part)) return true;
-    const normalizedPart = normalizeFloorTokens(part);
-    return normalizedPart === normalized || normalizedPart.includes(normalized) || normalized.includes(normalizedPart);
-  });
-}
-
-function lastSemanticLocation(events: readonly TimelineEvent[], knownLocations: readonly string[], vocabulary: SpatialVocabulary): string | undefined {
-  for (const event of events.slice().reverse()) {
-    const semantic = readSemanticSummary(event);
-    if (Array.isArray(semantic?.locations)) {
-      const location = bestSemanticLocation(semantic.locations.filter((item): item is string => typeof item === "string"
-        && item.trim().length > 0
-        && (knownLocations.length === 0
-          || knownLocations.some((known) => semanticLocationMatchesKnown(item, known))
-          || isSpecificSemanticLocation(item, vocabulary))), vocabulary);
-      if (location) return truncate(location, 80);
-    }
-  }
-  return undefined;
-}
-
-function bestSemanticLocation(locations: readonly unknown[], vocabulary: SpatialVocabulary = EMPTY_SPATIAL_VOCABULARY): string | undefined {
-  return locations
-    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-    .filter((location) => isSpecificSemanticLocation(location, vocabulary) || !isPseudoLocation(location))
-    .sort((left, right) => locationSpecificity(right, vocabulary) - locationSpecificity(left, vocabulary) || right.length - left.length)[0];
-}
-
-// 具体语义地点 = 命中 bible 登记的空间部件，或带题材中立的结构后缀（厅/口/楼梯间…），且不是泛指语。
-function isSpecificSemanticLocation(location: string, vocabulary: SpatialVocabulary): boolean {
-  if (isPseudoLocation(location)) return false;
-  return isRegisteredSpatialPart(location, vocabulary) || STRUCTURAL_LOCATION_SUFFIX.test(location);
-}
-
-function isPseudoLocation(location: string): boolean {
-  return /^(?:路上|外面|全市|前台|那台|他站在台)$/u.test(location);
-}
-
-// 打分排序（不报错、不进正文）：bible 登记的空间部件最具体(3) > 带结构后缀(2) > 其它(1)。
-function locationSpecificity(location: string, vocabulary: SpatialVocabulary = EMPTY_SPATIAL_VOCABULARY): number {
-  if (isRegisteredSpatialPart(location, vocabulary)) return 3;
-  if (STRUCTURAL_LOCATION_SUFFIX.test(location)) return 2;
-  return 1;
-}
-
-// 语义地点 ↔ 已登记地点：先做通用子串互查，再用题材中立的楼层/序数归一化兜底，
-// 让口语楼层（中文序数）匹配 bible 里登记的数字楼层等差异，不再写死具体地名映射。
-function semanticLocationMatchesKnown(location: string, known: string): boolean {
-  if (location === known || location.includes(known) || known.includes(location)) return true;
-  const normalizedLocation = normalizeFloorTokens(location);
-  const normalizedKnown = normalizeFloorTokens(known);
-  return normalizedLocation === normalizedKnown
-    || normalizedLocation.includes(normalizedKnown)
-    || normalizedKnown.includes(normalizedLocation);
+function declaredLocations(event: TimelineEvent): readonly string[] {
+  const locations = readSemanticSummary(event)?.locations;
+  return Array.isArray(locations) ? locations.filter(isNonEmptyString) : [];
 }
 
 function readSemanticSummary(event: TimelineEvent): Record<string, unknown> | undefined {

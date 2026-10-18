@@ -1,15 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import {
-  recordContextStats,
-  recordRuntimeLatency,
-  recordTokenUsage,
-  startRuntimeLatency,
-  writeDiagnostics,
-} from "../diagnostics.js";
+import { recordContextStats, recordRuntimeLatency, recordTokenUsage, startRuntimeLatency, writeDiagnostics } from "../diagnostics.js";
 import { runFastDraft, type WriterClient } from "../fast-draft-writer.js";
 import { createStoryProject } from "../project-store.js";
 

@@ -9,7 +9,6 @@ import {
   dedupeStringList,
   resolveCharacterRole,
   resolveTrust,
-  resolveRelationDescriptor,
 } from "../canonical-resolvers.js";
 
 describe("resolveCurrentGoal", () => {
@@ -182,23 +181,5 @@ describe("resolveTrust（B 类·三档权威+派生%）", () => {
   });
   it("undefined → undefined（无信任信息）", () => {
     expect(resolveTrust(undefined)).toBeUndefined();
-  });
-});
-
-describe("resolveRelationDescriptor（C 类·类型+态度去重）", () => {
-  const infer = {
-    relationType: (t: string) => (t.includes("朋友") ? "朋友" : t.includes("信任") ? "信任" : "其他"),
-    attitude: (t: string) => (t.includes("信任") ? "信任" : t.includes("敌") ? "敌意" : undefined),
-  };
-  it("attitude 与 relationType 相同 → 丢弃 attitude", () => {
-    // 文本只含"信任"：relationType="信任"，attitude="信任" → 去重
-    expect(resolveRelationDescriptor("彼此信任", infer)).toEqual({ relationType: "信任" });
-  });
-  it("attitude 与 relationType 不同 → 保留", () => {
-    // "朋友但暗藏敌意"：relationType="朋友"，attitude="敌意"
-    expect(resolveRelationDescriptor("朋友但暗藏敌", infer)).toEqual({ relationType: "朋友", attitude: "敌意" });
-  });
-  it("无 attitude → 只 relationType", () => {
-    expect(resolveRelationDescriptor("普通朋友", infer)).toEqual({ relationType: "朋友" });
   });
 });

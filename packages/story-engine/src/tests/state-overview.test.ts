@@ -29,7 +29,8 @@ describe("State Overview Pack V0", () => {
       done: 1,
       openIntents: 1,
     });
-    expect(overview.threads.cleanupVisibleCount).toBeGreaterThan(0);
+    // 最久没碰的 intent-low 停了 4 章（第 1→5 章），不到 5 章不算可清理。
+    expect(overview.threads.cleanupVisibleCount).toBe(0);
     expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("intent-low");
     expect(overview.arcGoals.activeCount).toBe(1);
     expect(overview.timeline.recentEvents).toHaveLength(2);
@@ -95,9 +96,8 @@ describe("State Overview Pack V0", () => {
     expect(overview.characterMatrix.relationships).toEqual(expect.arrayContaining([
       expect.objectContaining({
         targetName: "苏雨",
-        relationType: "朋友",
-        attitude: "怀疑",
-        trustLevel: "low",
+        // 关系类型就是作者写的原文，不再从字里猜「朋友 / 怀疑 / 信任低」。
+        relationType: "盟友，但怀疑林澈隐瞒无线电细节",
       }),
     ]));
     expect(overview.foundationCompleteness.readinessLevel).toBe("ready");
@@ -123,10 +123,9 @@ describe("State Overview Pack V0", () => {
     await expect(snapshotStateFiles(projectDir)).resolves.toEqual(before);
   });
 
-  // 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进候选，
-  // 入库回执拿它当「其中 X 条」曾写出「积到 55 条，其中 78 条」。threads.cleanupVisibleUnresolvedCount
-  // 只数仍未收口（open/touched）的候选——与 open+touched 同一集合，恒 ≤ open+touched。
-  it("cleanupVisibleUnresolvedCount 与 open+touched 同一集合：done/stale 的候选不计入（R5.4）", async () => {
+  // 可清理的线索只按章数算（重构 P7「不猜」）：还开着、已经 5 章没碰过的才算；收了的不算。
+  // 编辑部 R5.4 的口径照旧：可清理数和 open+touched 同一集合，恒 ≤ open+touched。
+  it("可清理线索 = 还开着且 5 章没碰过的；收了的、最近碰过的都不算", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-r54-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -137,24 +136,18 @@ describe("State Overview Pack V0", () => {
     });
     await writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
       threads: [
-        // 低价值 generic 意图、未收口（open）→ cleanup 候选，且算进未收口。
-        { id: "t-open-low", type: "intent", title: "想了想", status: "open", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
-        // 同样低价值、但已收口（done）→ 仍是 cleanup 候选（manual_review_mark_done），不算未收口。
-        { id: "t-done-low", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
-        // 高价值线索（信号/来源类）、未收口（touched）→ 不算 cleanup 候选。
-        { id: "t-open-high", type: "intent", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: ["确认记录里的线索来源"] },
-        // 已过期（stale）、低价值 → cleanup 候选，不算未收口。
-        { id: "t-stale-low", type: "intent", title: "先不管", status: "stale", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
+        { id: "t-open-stale", type: "intent", title: "想了想", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
+        { id: "t-done-old", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
+        { id: "t-touched-recent", type: "lead", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
+        { id: "t-open-recent", type: "intent", title: "先不管", status: "open", firstSeenChapter: 2, lastTouchedChapter: 4, evidence: [] },
       ],
     }, null, 2)}\n`, "utf-8");
 
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
+    const overview = await buildStateOverview({ projectDir, chapter: 6 });
 
-    expect(overview.threads.open).toBe(1);
+    expect(overview.threads.open).toBe(2);
     expect(overview.threads.touched).toBe(1);
-    // 老口径：4 条意图里 3 条是候选（open 低价值、done、stale；高价值不算）——done/stale 也数进去。
-    expect(overview.threads.cleanupVisibleCount).toBe(3);
-    // 同集合口径：未收口（open/touched）的候选只有 open 那条低价值。
+    expect(overview.threads.cleanupVisibleCount).toBe(1);
     expect(overview.threads.cleanupVisibleUnresolvedCount).toBe(1);
     expect(overview.threads.cleanupVisibleUnresolvedCount)
       .toBeLessThanOrEqual(overview.threads.open + overview.threads.touched);
@@ -509,7 +502,7 @@ describe("State Overview currentLocation — genre-neutral (R5b)", () => {
     expect(codeOnly).not.toContain("三楼办公区");
   });
 
-  it("修仙题材：选当前位置读 bible 登记的具体空间部件，泛指语（路上）被忽略", async () => {
+  it("修仙题材：最近一章声明了好几个地点时，优先地点卡上登记过的那个", async () => {
     const projectDir = await createGenreNeutralFixture({
       genre: "xianxia",
       locations: [
@@ -529,7 +522,7 @@ describe("State Overview currentLocation — genre-neutral (R5b)", () => {
       ],
     });
     const overview = await buildStateOverview({ projectDir, chapter: 2 });
-    // 「档案室」是 bible 登记的房间（具体），「路上」是泛指语 → 选具体的、登记的位置。
+    // 「档案室」是地点卡登记的房间，「路上」没登记 → 选登记过的。
     expect(overview.storyStatus.currentLocation).toBe("档案室");
   });
 
@@ -557,41 +550,6 @@ describe("State Overview currentLocation — genre-neutral (R5b)", () => {
     expect(overview.storyStatus.currentLocation).toBe("一楼大厅");
   });
 
-  it("未登记的位置：带题材中立结构后缀仍算具体并被选中（不依赖任何题材词表）", async () => {
-    const projectDir = await createGenreNeutralFixture({
-      genre: "mystery",
-      locations: [
-        {
-          id: "old-town",
-          name: "雾港老城",
-          type: "district",
-          spatialStructure: { floors: [], rooms: ["警局值班室"], entrances: [], exits: [] },
-          knownFeatures: [],
-          risks: [],
-          resources: [],
-        },
-      ],
-      events: [
-        // 两者都未登记；「码头仓库」带结构后缀（库）更具体，「那台」是泛指语应被排除。
-        { id: "ch0001-001", chapter: 1, locations: ["那台", "码头仓库"] },
-      ],
-    });
-    const overview = await buildStateOverview({ projectDir, chapter: 1 });
-    expect(overview.storyStatus.currentLocation).toBe("码头仓库");
-  });
-
-  it("无 location-bible 时不崩、退回语义地点具体度打分（题材中立兜底）", async () => {
-    const projectDir = await createGenreNeutralFixture({
-      genre: "scifi",
-      locations: [],
-      events: [
-        { id: "ch0001-001", chapter: 1, locations: ["全市", "空间站舱门"] },
-      ],
-    });
-    const overview = await buildStateOverview({ projectDir, chapter: 1 });
-    // 「空间站舱门」带结构后缀（门）→ 具体；「全市」是泛指语 → 被排除。
-    expect(overview.storyStatus.currentLocation).toBe("空间站舱门");
-  });
 });
 
 // Task 6b：timeline 分层摘要接入 state-overview
