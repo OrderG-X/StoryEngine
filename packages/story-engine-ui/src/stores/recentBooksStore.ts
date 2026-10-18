@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { BookSummary } from "../types.js";
 import { isBookSummary } from "../utils/bookUtils.js";
+import { formatRelativeTimeMs } from "../utils/textUtils.js";
 
 const STORAGE_KEY = "story-engine-ng.recent-books";
 // 书架=真实书库，容量给足（不是只放"最近"几本，超过会把真书丢掉）。
@@ -84,7 +85,8 @@ export const useRecentBooksStore = create<RecentBooksStore>((set, get) => {
           byPath.set(
             book.projectPath,
             localIsNewer
-              ? { ...book, title: local.title, updatedAt: local.updatedAt, lastActiveMs: local.lastActiveMs }
+              // 时间标签按本地活跃时刻现算：存下来的是打开那一刻的「刚刚」，原样留着会让十几天前开过的书一直显示「刚刚」（P7 桌面包走查）。
+              ? { ...book, title: local.title, updatedAt: formatRelativeTimeMs(local.lastActiveMs ?? 0), lastActiveMs: local.lastActiveMs }
               : book,
           );
         }

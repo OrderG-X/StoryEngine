@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { __CATS_FOR_TEST, buildChapterRows, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
+import { __CATS_FOR_TEST, buildChapterRows, chapterFootStatus, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
 describe("B5-3 CATS 数组含「伏笔线索」与「故事地图」类目（重构 P6 改名）", () => {
   it("CATS 共 9 项，打头是「这章改了什么」（重构 P6 第 6 步）", () => {
@@ -107,5 +107,13 @@ describe("改版 buildChapterRows：章节列表新章在上、每 10 章分组"
   it("只有一章的组标题不写成区间", () => {
     const rows = buildChapterRows([ch(21)], false);
     expect(rows[0]).toEqual({ kind: "group", key: "g2", label: "第 21 章" });
+  });
+});
+
+describe("章节栏底部状态（P7 桌面包走查）", () => {
+  it("新书一章都没定稿时不说「全部已定稿」", () => {
+    expect(chapterFootStatus(0, 0)).toEqual({ dot: "", text: "还没有定稿的章" });
+    expect(chapterFootStatus(0, 3)).toEqual({ dot: "ok", text: "全部已定稿" });
+    expect(chapterFootStatus(2, 3)).toEqual({ dot: "warn", text: "2 章工作稿还没定稿" });
   });
 });

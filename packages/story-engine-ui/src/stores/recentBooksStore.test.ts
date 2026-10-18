@@ -94,18 +94,29 @@ describe("recentBooksStore.syncScannedBooks", () => {
   it("竞态防护：本地条目比扫描新（刚打开/刚改名）→ 保留本地书名/时间/活跃度，扫描只补其余字段（评审加固）", async () => {
     const { useRecentBooksStore } = await import("./recentBooksStore.js");
     // 扫描在飞时用户改了名并打开了书：本地 lastActiveMs 更新、title 是新名
-    const local = bookSummary({ id: "b-r", title: "新书名", projectPath: "/books/race", lastActiveMs: 9_000, updatedAt: "刚刚", currentChapterNumber: 3 });
+    const now = Date.now();
+    const local = bookSummary({ id: "b-r", title: "新书名", projectPath: "/books/race", lastActiveMs: now, updatedAt: "刚刚", currentChapterNumber: 3 });
     useRecentBooksStore.getState().upsertBook(local);
 
     // 扫描结果带的是改名前的旧数据（lastActiveMs 旧），但章数是盘上真值
-    const scanned = bookSummary({ id: "b-r", title: "旧书名", projectPath: "/books/race", lastActiveMs: 5_000, updatedAt: "2 小时前", currentChapterNumber: 7 });
+    const scanned = bookSummary({ id: "b-r", title: "旧书名", projectPath: "/books/race", lastActiveMs: now - 2 * 3_600_000, updatedAt: "2 小时前", currentChapterNumber: 7 });
     useRecentBooksStore.getState().syncScannedBooks([scanned]);
 
     const merged = useRecentBooksStore.getState().books.find((b) => b.projectPath === "/books/race");
     expect(merged?.title).toBe("新书名");
     expect(merged?.updatedAt).toBe("刚刚");
-    expect(merged?.lastActiveMs).toBe(9_000);
+    expect(merged?.lastActiveMs).toBe(now);
     expect(merged?.currentChapterNumber).toBe(7); // 盘上字段仍取扫描真值
+  });
+
+  it("本地条目比扫描新、但是十几天前开的：时间标签按本地活跃时刻现算，不留打开那一刻存下的「刚刚」（P7 桌面包走查）", async () => {
+    const { useRecentBooksStore } = await import("./recentBooksStore.js");
+    const now = Date.now();
+    const local = bookSummary({ id: "b-o", projectPath: "/books/opened", lastActiveMs: now - 11 * 86_400_000, updatedAt: "刚刚" });
+    useRecentBooksStore.getState().upsertBook(local);
+    const scanned = bookSummary({ id: "b-o", projectPath: "/books/opened", lastActiveMs: now - 12 * 86_400_000, updatedAt: "12 天前" });
+    useRecentBooksStore.getState().syncScannedBooks([scanned]);
+    expect(useRecentBooksStore.getState().books[0]?.updatedAt).toBe("11 天前");
   });
 
   it("归并结果持久化到 localStorage", async () => {
