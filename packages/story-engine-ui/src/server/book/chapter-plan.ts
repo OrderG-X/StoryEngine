@@ -20,6 +20,16 @@ export interface ChapterPlanThreadStep {
   readonly how: string;
 }
 
+/** 章纲员没照作者方向原话安排的地方（方向和前文既成事实对不上时改成了说得通的安排）：回执要告诉作者。 */
+export interface ChapterPlanDirectionChange {
+  /** 作者方向里的原话（章纲员路已核对真在方向里）。 */
+  readonly said: string;
+  /** 章纲里改成了什么。 */
+  readonly changedTo: string;
+  /** 为什么改：和前文哪里对不上。 */
+  readonly why: string;
+}
+
 export interface ChapterPlan {
   readonly version: 1;
   readonly chapter: number;
@@ -48,6 +58,8 @@ export interface ChapterPlan {
   readonly threadsAdvanced: readonly ChapterPlanThreadStep[];
   /** 这章不要重复的东西（上一章已经发现/做完的）。 */
   readonly avoid: readonly string[];
+  /** 没照作者方向原话安排的地方（P7：章纲员把「铜盒」悄悄改成「怀表」、作者不知道）。缺省 = 照原话安排的 / 老章纲。 */
+  readonly directionChanges?: readonly ChapterPlanDirectionChange[];
   readonly createdAt: string;
 }
 
@@ -163,8 +175,24 @@ export function normalizeChapterPlan(
     entities: cleanNames(record.entities ?? record.objects ?? record.items),
     threadsAdvanced: cleanThreadSteps(record.threadsAdvanced ?? record.threads),
     avoid: cleanList(record.avoid ?? record.doNotRepeat, 8),
+    ...directionChangesOf(record.directionChanges, direction),
     createdAt: (meta.now ?? new Date()).toISOString(),
   };
+}
+
+/** 改了作者方向的声明：三栏都有才收；这章没给方向就不可能「改了方向」，一条不收。 */
+function directionChangesOf(value: unknown, direction: string | undefined): { directionChanges?: readonly ChapterPlanDirectionChange[] } {
+  if (!direction || !Array.isArray(value)) return {};
+  const out: ChapterPlanDirectionChange[] = [];
+  for (const item of value) {
+    const record = asRecord(item);
+    const said = cleanText(record?.said, 200);
+    const changedTo = cleanText(record?.changedTo, 200);
+    const why = cleanText(record?.why, 200);
+    if (said && changedTo && why) out.push({ said, changedTo, why });
+    if (out.length >= MAX_LIST) break;
+  }
+  return out.length > 0 ? { directionChanges: out } : {};
 }
 
 /** 故事第几天：正整数（「第12天」「12」都收），其它一律当没给。 */

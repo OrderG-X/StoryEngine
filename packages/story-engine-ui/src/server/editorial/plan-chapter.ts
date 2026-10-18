@@ -12,7 +12,9 @@ import {
   planChapterByPlanner,
   revisePlanByPlanner,
   type BrainCallModel,
+  type PlanProblem,
 } from "./index.js";
+import { containsQuote, normalize } from "./continuity/check-chapter.js";
 import { withStep } from "../lib/token-meter.js";
 
 export interface ResolvedChapterPlan {
@@ -96,14 +98,20 @@ async function planByEditorialRoom(input: {
   // 只有章纲员自己拟错的（非 authorWilled）才交回改一轮；全是作者方向时连改纲那一步都省了。
   // 作者这章没给方向（比如点「写下一章」）时，要点不可能「来自作者方向」：模型标的 authorWilled 不作数，全交章纲员改。
   const hasDirection = direction.trim().length > 0;
-  const asked = hasDirection ? checked.problems.filter((problem) => problem.authorWilled) : [];
+  // 章纲员已声明改掉的方向原话（directionChanges），审纲再拿方向原话报「和前文对不上」就是重复：回执已说「章纲改成了…」，
+  // 再问「这次先照你的方向出稿」自相矛盾（P7 GLM 复跑三次里两次这样）。核账员抄的方向原话落在已声明的那句里就不再问。
+  const declared = (planned.plan.directionChanges ?? []).map((change) => normalize(change.said));
+  const alreadyChanged = (problem: PlanProblem) => problem.directionQuote !== undefined
+    && declared.some((said) => containsQuote(said, problem.directionQuote!) || containsQuote(normalize(problem.directionQuote!), said));
+  const asked = hasDirection ? checked.problems.filter((problem) => problem.authorWilled && !alreadyChanged(problem)) : [];
   const autoFix = hasDirection ? checked.problems.filter((problem) => !problem.authorWilled) : checked.problems;
   const short = (text: string) => (text.length > 30 ? `${text.slice(0, 30)}…` : text);
   const askSentence = asked.length > 0
-    ? `第 ${asked[0]!.point} 条要点「${short(asked[0]!.beat ?? planned.plan.beats[asked[0]!.point - 1] ?? "")}」和第 ${asked[0]!.earlierChapter} 章「${short(asked[0]!.earlierQuote)}」对不上——以哪个为准？这次先照你的方向出稿；要按前文的话说一声，我改这条要点。`
+    ? `你给的方向里「${short(asked[0]!.directionQuote ?? asked[0]!.beat ?? planned.plan.beats[asked[0]!.point - 1] ?? "")}」和第 ${asked[0]!.earlierChapter} 章「${short(asked[0]!.earlierQuote)}」对不上——以哪个为准？这次先照你的方向出稿；要按前文的话说一声，我改这条要点。`
     : "";
   if (autoFix.length === 0) {
-    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（核账员审出 ${checked.problems.length} 处和前文对不上，都来自你给的方向：${askSentence}）${coldNote}${waitNote}`, reused: false };
+    if (asked.length === 0) return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}${coldNote}${waitNote}`, reused: false };
+    return { plan: planned.plan, note: `本章章纲：${planned.plan.summary}（核账员审出 ${asked.length} 处和前文对不上，都来自你给的方向：${askSentence}）${coldNote}${waitNote}`, reused: false };
   }
   // 有问题：把问题列表交回章纲员窗口，只改有问题的要点，改一轮、不循环。改不成就用原章纲（如实说明）。
   const revised = await withStep("改", () => revisePlanByPlanner({
@@ -147,7 +155,18 @@ export async function resolveChapterPlanForDraft(input: {
   const direction = input.direction?.trim() ?? "";
   const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
   if (existing && (existing.direction ?? "") === direction) {
-    return { plan: existing, note: `沿用本章已有章纲：${existing.summary}`, reused: true };
+    return { plan: existing, note: `沿用本章已有章纲：${existing.summary}${directionChangeNote(existing)}`, reused: true };
   }
-  return planByEditorialRoom(input, direction);
+  const planned = await planByEditorialRoom(input, direction);
+  return planned.plan ? { ...planned, note: `${planned.note}${directionChangeNote(planned.plan)}` } : planned;
+}
+
+/** 章纲员没照方向原话安排的地方，回执如实告诉作者（P7：方向里的「铜盒」被悄悄改成「怀表」，作者不知道）。 */
+function directionChangeNote(plan: ChapterPlan): string {
+  const changes = plan.directionChanges ?? [];
+  if (changes.length === 0) return "";
+  const first = changes[0]!;
+  const more = changes.length > 1 ? `（另有 ${changes.length - 1} 处）` : "";
+  const why = first.why.replace(/[。．.；;，,\s]+$/u, ""); // 不猜白名单：切句
+  return `（你给的方向里「${first.said}」和前文对不上：${why}。章纲改成了「${first.changedTo}」${more}；要照你原话写就说一声。）`;
 }

@@ -210,7 +210,7 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     const projectDir = await makeBook();
     const planner = fakePlannerCallModel([READER_PLAN]);
     const checker = fakePlanCheckCallModel(JSON.stringify({
-      problems: [{ point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要当天去，但账册第 1 章已锁进抽屉" }],
+      problems: [{ point: 1, conflict: true, authorWilled: true, directionQuote: "当天就去档案室", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要当天去，但账册第 1 章已锁进抽屉" }],
     }));
     const result = await resolveChapterPlanForDraft({
       projectDir, chapter: 2, direction: "当天就去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
@@ -221,7 +221,24 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     expect(result.note).toContain("都来自你给的方向");
     expect(result.note).toContain("以哪个为准");
     expect(result.note).toContain("这次先照你的方向出稿");
-    expect(result.note).toContain("第 1 条要点");
+    expect(result.note).toContain("你给的方向里「当天就去档案室」");
+  });
+
+  it("P7 审纲把章纲员自己展开的细节标成作者方向、却抄不出方向原话 → 当章纲员拟错交回去改，不反问作者", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const fixed = JSON.stringify({ revised: [{ point: 3, beat: "对出缺页是一笔境外汇款，和第 1 章的记录对上" }] });
+    const planner = fakePlannerCallModel([READER_PLAN, fixed]);
+    const checker = fakePlanCheckCallModel(JSON.stringify({
+      problems: [{ point: 3, conflict: true, authorWilled: true, directionQuote: "当晚把账册烧了", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" }],
+    }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "一早去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
+    expect(result.plan?.beats[2]).toBe("对出缺页是一笔境外汇款，和第 1 章的记录对上");
+    expect(result.note).toContain("改掉 1 处");
+    expect(result.note).not.toContain("你给的方向");
   });
 
   it("R7.5 混合：章纲员自己的错照改，作者方向的另报一条问作者", async () => {
@@ -232,7 +249,7 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     const checker = fakePlanCheckCallModel(JSON.stringify({
       problems: [
         { point: 3, conflict: true, authorWilled: false, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "缺页那笔在第 1 章已对出" },
-        { point: 1, conflict: true, authorWilled: true, earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要一早去，第 1 章写的是明天" },
+        { point: 1, conflict: true, authorWilled: true, directionQuote: "一早去档案室", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "作者方向要一早去，第 1 章写的是明天" },
       ],
     }));
     const result = await resolveChapterPlanForDraft({
@@ -247,6 +264,62 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     expect(result.note).toContain("改掉 1 处");
     expect(result.note).toContain("另有 1 处来自你给的方向");
     expect(result.note).toContain("以哪个为准");
+  });
+
+  it("P7 章纲员改了作者方向要声明：原话核得上的进回执告诉作者、落盘带着；编的原话丢掉；同一方向沿用时照样说", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const changed = JSON.stringify({
+      ...JSON.parse(READER_PLAN),
+      beats: ["一早去档案室，带上复印件", "管理员拦人", "对出缺页是一笔境外汇款"],
+      directionChanges: [
+        { said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "第 1 章账册已经锁进抽屉、钥匙不在他身上" },
+        { said: "作者根本没说过这句", changedTo: "随便改的", why: "编的" },
+      ],
+    });
+    const planner = fakePlannerCallModel([changed]);
+    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.plan?.directionChanges).toEqual([{ said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "第 1 章账册已经锁进抽屉、钥匙不在他身上" }]);
+    expect(result.note).toContain("你给的方向里「带上蓝色账册」和前文对不上：第 1 章账册已经锁进抽屉、钥匙不在他身上。章纲改成了「带上账册的复印件」；要照你原话写就说一声。");
+    expect(result.note).not.toContain("编的");
+    expect((await readChapterPlan(projectDir, 2))?.directionChanges).toHaveLength(1);
+    const again = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(again.reused).toBe(true);
+    expect(again.note).toContain("章纲改成了「带上账册的复印件」");
+  });
+
+  it("P7 章纲员已声明改掉的方向原话，审纲再报成「作者方向和前文对不上」→ 不再反问（回执只说改成了什么）", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const changed = JSON.stringify({
+      ...JSON.parse(READER_PLAN),
+      directionChanges: [{ said: "带上蓝色账册", changedTo: "带上账册的复印件", why: "账册第 1 章已锁进抽屉。" }],
+    });
+    const checker = fakePlanCheckCallModel(JSON.stringify({
+      problems: [{ point: 1, conflict: true, authorWilled: true, directionQuote: "一早带上蓝色账册", earlierQuote: "林澈把蓝色账册锁进抽屉，决定明天去档案室。", earlierChapter: 1, reason: "账册已锁进抽屉" }],
+    }));
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "一早带上蓝色账册去档案室", plannerCallModel: fakePlannerCallModel([changed]).callModel, planCheckReaderCallModel: checker,
+    });
+    expect(result.note).not.toContain("以哪个为准");
+    expect(result.note).not.toContain("核账员审出");
+    expect(result.note).toContain("和前文对不上：账册第 1 章已锁进抽屉。章纲改成了「带上账册的复印件」");
+  });
+
+  it("没给方向时章纲员声明的「改了方向」一条不收", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const changed = JSON.stringify({ ...JSON.parse(READER_PLAN), directionChanges: [{ said: "一早去档案室", changedTo: "下午去", why: "上午闭馆" }] });
+    const result = await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, plannerCallModel: fakePlannerCallModel([changed]).callModel, planCheckReaderCallModel: fakePlanCheckCallModel(JSON.stringify({ problems: [] })),
+    });
+    expect(result.plan?.directionChanges).toBeUndefined();
+    expect(result.note).not.toContain("你给的方向");
   });
 
   it("作者没给方向（写下一章）→ 模型标的 authorWilled 不作数，照章纲员的错改，回执不说「来自你给的方向」", async () => {

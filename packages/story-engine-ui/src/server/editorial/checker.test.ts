@@ -706,13 +706,28 @@ describe("核账员审章纲：解析", () => {
     ]);
   });
 
-  it("R7.5 authorWilled:true 收下来（要报，调用方问作者）；false / 没写不带", () => {
+  it("R7.5 authorWilled:true 且抄的方向原话核得上才收（要报，调用方问作者）；false / 没写不带", () => {
+    const directed = { ...PLAN, direction: "林舟从抽屉里取出怀表，交给周婶" };
     const parsed = parsePlanProblems(problems(
-      { point: 1, conflict: true, authorWilled: true, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "作者方向要取表，但表第 2 章已锁进抽屉" },
+      { point: 1, conflict: true, authorWilled: true, directionQuote: "林舟从抽屉里取出怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "作者方向要取表，但表第 2 章已锁进抽屉" },
       { point: 2, conflict: true, authorWilled: false, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡" },
       { point: 3, conflict: true, earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "日子对不上" },
-    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
-    expect(parsed.map((problem) => [problem.point, problem.authorWilled])).toEqual([[1, true], [2, undefined], [3, undefined]]);
+    ), directed, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
+    expect(parsed.map((problem) => [problem.point, problem.authorWilled, problem.directionQuote])).toEqual([
+      [1, true, "林舟从抽屉里取出怀表"], [2, undefined, undefined], [3, undefined, undefined],
+    ]);
+  });
+
+  it("P7 authorWilled 抄不出方向原话（章纲员自己展开的细节被标成作者方向）、或这章没给方向 → 不算作者方向", () => {
+    const directed = { ...PLAN, direction: "林舟从抽屉里取出怀表，交给周婶" };
+    const items = problems(
+      { point: 2, conflict: true, authorWilled: true, directionQuote: "周婶端着茶进了铺子", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡" },
+      { point: 3, conflict: true, authorWilled: true, earlierQuote: "林溪说她后天走", earlierChapter: 2, reason: "日子对不上" },
+    );
+    const earlier = { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] };
+    expect(parsePlanProblems(items, directed, earlier).map((problem) => [problem.point, problem.authorWilled])).toEqual([[2, undefined], [3, undefined]]);
+    const undirected = problems({ point: 1, conflict: true, authorWilled: true, directionQuote: "林舟从抽屉里取出怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "取表" });
+    expect(parsePlanProblems(undirected, PLAN, earlier)[0]?.authorWilled).toBeUndefined();
   });
 
   it("不是 JSON 抛错（调用方记失败，不当成没问题）", () => {
@@ -724,6 +739,7 @@ describe("核账员审章纲：解析", () => {
     expect(withDirection).toContain("【作者这章给的方向】\n外公把铜盒拿出来看");
     expect(withDirection).toContain("conflict");
     expect(withDirection).toContain("authorWilled");
+    expect(withDirection).toContain("directionQuote");
     expect(withDirection).toContain("不要因为方向是作者给的就不报");
     expect(planCheckTask(3, PLAN)).not.toContain("【作者这章给的方向】");
   });

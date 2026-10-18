@@ -731,6 +731,8 @@ export interface PlanProblem {
   readonly reason: string;
   /** R7.5：这条要点来自作者给的方向、且方向本身和前文既成事实对不上——不自动改，回执问作者以哪个为准。 */
   readonly authorWilled?: true;
+  /** authorWilled 时作者方向里冲突的那句原话（代码核对过真在方向里；核不上就不算作者方向，交章纲员改）。 */
+  readonly directionQuote?: string;
 }
 
 export interface ReaderPlanCheckResult {
@@ -754,7 +756,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
     ...(plan.direction ? [`【作者这章给的方向】\n${plan.direction}`] : []),
     "核对到的要点逐条列进 problems，每条判 conflict：true＝按前文不可能成立；false＝核对过、对得上或不构成矛盾（章纲明确安排了变化过程的、作者明确要求的变化过程，都不算）。作者方向本身和前文既成事实对不上的（东西已在别人手里、人已不在、事已发生过），conflict 照样写 true，authorWilled 也写 true——不要因为方向是作者给的就不报。",
-    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true，否则写 false。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
+    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
     `【第 ${chapter} 章章纲】`,
     `一句话：${plan.summary}`,
     `要点：\n${plan.beats.map((beat, index) => `${index + 1}. ${beat}`).join("\n")}`,
@@ -762,7 +764,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     `开场：${plan.scene.location ?? "（没写）"}，${plan.scene.time ?? "（没写）"}`,
     ...(plan.characters.length > 0 ? [`人物：${plan.characters.join("、")}`] : []),
     ...(plan.entities.length > 0 ? [`物件/地点：${plan.entities.join("、")}`] : []),
-    '只输出一个 JSON：{"problems":[{"point":1,"conflict":true,"authorWilled":false,"earlierQuote":"","earlierChapter":1,"reason":""}]}；没有问题就给空数组。',
+    '只输出一个 JSON：{"problems":[{"point":1,"conflict":true,"authorWilled":false,"directionQuote":"","earlierQuote":"","earlierChapter":1,"reason":""}]}；没有问题就给空数组。',
   ].join("\n");
 }
 
@@ -793,10 +795,12 @@ export function readPoint(raw: unknown, beats: readonly string[]): number | unde
 /**
  * 解析审章纲输出：每条带结构化判定 conflict（R7.5）——false 的一律不收；没给字段的照收（列进 problems 就是要报），不看理由里的字眼。
  * authorWilled＝这条要点来自作者给的方向且方向和前文事实对不上：照收（要报），调用方不自动改、回执问作者。
+ *   P7 GLM 复跑：模型会把章纲员自己展开的细节也标成作者方向（作者从没说过，却被反问「以哪个为准」、错的要点也不改），
+ *   所以要它逐字抄方向里冲突的那句（directionQuote），代码核对真在方向原话里才算，核不上当章纲员拟错、照常交回去改。
  * earlierQuote 由代码核对真在前文里（先信它报的章号，对不上按章序搜），抄不出原文的丢掉；
  * point 越界的丢掉（模型没指到具体要点的问题没法只改那条要点）。
  */
-export function parsePlanProblems(text: string, plan: Pick<ChapterPlan, "beats">, earlier: EarlierText): readonly PlanProblem[] {
+export function parsePlanProblems(text: string, plan: Pick<ChapterPlan, "beats"> & { readonly direction?: string }, earlier: EarlierText): readonly PlanProblem[] {
   let parsed: { problems?: unknown };
   try {
     parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { problems?: unknown };
@@ -826,10 +830,17 @@ export function parsePlanProblems(text: string, plan: Pick<ChapterPlan, "beats">
       earlierQuote,
       earlierChapter: chapter,
       reason,
-      ...(readBoolFlag(record.authorWilled) === true ? { authorWilled: true } : {}),
+      ...authorWilledOf(record, plan.direction),
     });
   }
   return out;
+}
+
+/** 作者方向那条要核原话：模型说来自方向、且抄的那句真在方向原文里，才算作者方向。 */
+function authorWilledOf(record: Record<string, unknown>, direction: string | undefined): { authorWilled?: true; directionQuote?: string } {
+  if (readBoolFlag(record.authorWilled) !== true || !direction?.trim()) return {};
+  const directionQuote = String(record.directionQuote ?? "").trim();
+  return directionQuote && containsQuote(normalize(direction), directionQuote) ? { authorWilled: true, directionQuote } : {};
 }
 
 /**

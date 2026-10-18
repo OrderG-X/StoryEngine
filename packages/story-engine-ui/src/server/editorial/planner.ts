@@ -9,7 +9,7 @@
 import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
-import { normalize, readEarlierChapters } from "./continuity/check-chapter.js";
+import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
 import {
   collectPlanMaterials,
   isSkeletonPlan,
@@ -177,12 +177,12 @@ export async function planChapterByPlanner(input: {
         [...window, { role: "user", content: plannerTask(input.chapter, materials, input.direction) }],
         { json: true },
       )));
-      const plan = normalizeChapterPlan(raw, {
+      const plan = withVerifiedDirectionChanges(normalizeChapterPlan(raw, {
         chapter: input.chapter,
         source: "model",
         ...(input.direction?.trim() ? { direction: input.direction } : {}),
         ...(input.now ? { now: input.now } : {}),
-      });
+      }));
       if (!plan) {
         lastError = "章纲缺要点";
         continue;
@@ -200,6 +200,15 @@ export async function planChapterByPlanner(input: {
   }
   if (skeleton) return { ok: true, plan: await finalizePlan(input.projectDir, skeleton.plan, skeleton.dayOffset, materials), ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   return { ok: false, reason: `章纲没拟成（已自动重试一次）：${lastError || "模型没有返回可用内容"}` };
+}
+
+/** 「改了作者方向」的声明要核原话：said 真在作者方向里才留（模型声明 + 原句核实），抄不出原话的丢掉。 */
+function withVerifiedDirectionChanges(plan: ChapterPlan | undefined): ChapterPlan | undefined {
+  if (!plan?.directionChanges) return plan;
+  const direction = normalize(plan.direction ?? "");
+  const kept = plan.directionChanges.filter((change) => containsQuote(direction, change.said));
+  const { directionChanges: _dropped, ...rest } = plan;
+  return kept.length > 0 ? { ...rest, directionChanges: kept } : rest;
 }
 
 /** 章纲 JSON（给改纲提示用，字段和旧审校 buildPlanCheckMessages 的一致）。 */
