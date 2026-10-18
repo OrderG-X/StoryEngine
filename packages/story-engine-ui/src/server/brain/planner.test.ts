@@ -15,7 +15,7 @@ import {
 } from "./planner.js";
 import { planCheckTask, parsePlanProblems, type PlanProblem } from "./checker.js";
 import { collectPlanMaterials } from "../agent/chapter-plan/plan-chapter.js";
-import type { BrainCallModel, BrainMessage } from "./reader-window.js";
+import type { BrainCallModel, BrainMessage } from "../editorial/reader-window.js";
 
 const llmMocks = vi.hoisted(() => ({
   resolveConfiguredChatModel: vi.fn(),

@@ -1,6 +1,5 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CommitDraftInput } from "./commit-engine.js";
 import { describeErrorBriefly, listCharacterDirectoryEntries, PLACEHOLDER_CHARACTER_NAME, readCharacterProfile } from "./project-store.js";
 import { countDraftChineseCharacters, readWritingRulesLengthIntent } from "./draft-length-control.js";
 import {
@@ -334,48 +333,6 @@ export function checkWritingContextPackDraft(
   return issues;
 }
 
-export function checkCommitPlanSemanticQuality(
-  commitPlan: CommitDraftInput["commitPlan"],
-): CommitQualityReport {
-  const issues: CommitQualityIssue[] = [];
-  const timelineEvents = commitPlan.timelineEvents ?? [];
-
-  for (const [index, event] of timelineEvents.entries()) {
-    if (isSystemTimelineSummary(event.summary)) {
-      issues.push({
-        severity: "warning",
-        type: "semantic_timeline_summary_generic",
-        message: `Timeline event ${index + 1} summary looks like a system commit description instead of story content.`,
-      });
-    }
-    const semanticSummary = event.effects?.semanticSummary;
-    if (!hasNonEmptyStringProperty(semanticSummary, "chapterSummary")) {
-      issues.push({
-        severity: "warning",
-        type: "semantic_chapter_summary_missing",
-        message: `Timeline event ${index + 1} semantic summary is missing chapterSummary.`,
-      });
-    }
-    if (!hasNonEmptyArrayProperty(semanticSummary, "keyEvents")) {
-      issues.push({
-        severity: "warning",
-        type: "semantic_key_events_missing",
-        message: `Timeline event ${index + 1} semantic summary has no keyEvents.`,
-      });
-    }
-  }
-
-  if (timelineEvents.length === 0) {
-    issues.push({
-      severity: "warning",
-      type: "semantic_timeline_missing",
-      message: "Commit plan has no timeline events to carry story history forward.",
-    });
-  }
-
-  return buildQualityReport("commit_semantic", issues);
-}
-
 export function buildQualityReport(
   source: RuleQualityCandidate["source"],
   issues: readonly CommitQualityIssue[],
@@ -484,22 +441,6 @@ function containsModelExplanation(content: string): boolean {
     /作为(?:一个)?\s*AI/u,
     /我(?:无法|不能)(?:协助|提供|完成|继续|生成|写作|创作)/u,
   ].some((pattern) => pattern.test(normalized));
-}
-
-function isSystemTimelineSummary(value: string): boolean {
-  return /草稿被提交|正式章节|章节完成|提交草稿|commit|draft/iu.test(value);
-}
-
-function hasNonEmptyStringProperty(value: unknown, key: string): boolean {
-  if (typeof value !== "object" || value === null || !(key in value)) return false;
-  const property = (value as Record<string, unknown>)[key];
-  return typeof property === "string" && property.trim().length > 0;
-}
-
-function hasNonEmptyArrayProperty(value: unknown, key: string): boolean {
-  if (typeof value !== "object" || value === null || !(key in value)) return false;
-  const property = (value as Record<string, unknown>)[key];
-  return Array.isArray(property) && property.length > 0;
 }
 
 function hasDialogue(content: string): boolean {

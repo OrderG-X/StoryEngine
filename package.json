@@ -22,9 +22,7 @@
     "test": "node --test test-tools/run-vitest.test.mjs && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "story-engine:test": "pnpm --filter @actalk/story-engine test",
-    "story-engine:typecheck": "pnpm --filter @actalk/story-engine typecheck",
-    "story-engine-cli:test": "pnpm --filter @actalk/story-engine-cli test",
-    "story-engine-cli:typecheck": "pnpm --filter @actalk/story-engine-cli typecheck"
+    "story-engine:typecheck": "pnpm --filter @actalk/story-engine typecheck"
   },
   "engines": {
     "node": "^20.20.0 || ^22.22.0 || >=24.0.0",

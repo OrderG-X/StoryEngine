@@ -28,8 +28,8 @@ import {
 } from "../agent/continuity-v2/check-chapter.js";
 import type { ChapterPlan } from "@actalk/story-engine";
 import { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
-import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
-import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
+import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "../editorial/reader-window.js";
+import { readerWaitingHandlers, type ReaderWaited } from "../editorial/reader-progress.js";
 
 export const CHECKER_ROLE: ReaderRole = {
   id: "checker",

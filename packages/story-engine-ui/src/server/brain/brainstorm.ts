@@ -12,8 +12,8 @@ import { createSnapshot } from "../lib/snapshot.js";
 import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "../agent/continuity-v2/check-chapter.js";
 import { collectPlanMaterials, planMaterialBlocks } from "../agent/chapter-plan/plan-chapter.js";
-import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
-import { readerWaitingHandlers } from "./reader-progress.js";
+import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "../editorial/reader-window.js";
+import { readerWaitingHandlers } from "../editorial/reader-progress.js";
 import { PLANNER_ROLE } from "./planner.js";
 import { CHECKER_ROLE, parsePlanProblems } from "./checker.js";
 

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { commitFastDraft } from "../commit-engine.js";
 import {
   recordContextStats,
   recordRuntimeLatency,
@@ -102,35 +101,6 @@ describe("StoryEngine-NG Diagnostics", () => {
     await expect(readFile(diagnostics!.diagnosticsPath!, "utf-8")).resolves.toContain("\"stage\": \"fast-draft\"");
   });
 
-  it("adds diagnostics to Commit reports and persists them", async () => {
-    const projectDir = await createFixtureProject("story-engine-diagnostics-commit-");
-    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
-    await writeFile(
-      join(projectDir, "drafts", "fast", "chapter-0002.md"),
-      "# 入局\n\nGuo Xu 把账册放回袖中。\n",
-      "utf-8",
-    );
-
-    const report = await commitFastDraft({
-      projectDir,
-      chapter: 2,
-      commitPlan: {},
-    });
-
-    const diagnostics = report.diagnostics;
-    expect(diagnostics).toBeDefined();
-    expect(diagnostics).toMatchObject({
-      stage: "commit",
-      chapter: 2,
-      contextStats: {
-        contextSections: ["draft", "commit_summary"],
-      },
-    });
-    expect(diagnostics!.contextStats?.totalTokenEstimate).toBeGreaterThan(0);
-    expect(diagnostics!.runtimeLatency.elapsedMs).toBeGreaterThanOrEqual(0);
-    expect(diagnostics!.diagnosticsPath).toBe(join(projectDir, "diagnostics", "commit-chapter-0002.json"));
-    await expect(readFile(diagnostics!.diagnosticsPath!, "utf-8")).resolves.toContain("\"stage\": \"commit\"");
-  });
 });
 
 async function createFixtureProject(prefix: string): Promise<string> {

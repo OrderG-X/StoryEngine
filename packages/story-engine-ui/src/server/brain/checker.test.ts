@@ -21,7 +21,7 @@ import {
   planCheckTask,
   selfReviewTask,
 } from "./checker.js";
-import type { BrainCallModel, BrainMessage } from "./reader-window.js";
+import type { BrainCallModel, BrainMessage } from "../editorial/reader-window.js";
 
 const llmMocks = vi.hoisted(() => ({
   resolveConfiguredChatModel: vi.fn(),

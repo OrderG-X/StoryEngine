@@ -56,14 +56,11 @@ pnpm dev       # 启动写作工作台
 （支持任意 OpenAI 兼容接口：DeepSeek、GLM、Kimi、OpenAI 等），测试连接通过即可开始写作。
 key 只保存在你本机（`~/.story-engine/`），绝不要把密钥提交进任何仓库。
 
-> 命令行工具（`packages/story-engine-cli`）另可用环境变量 `STORY_ENGINE_LLM_API_KEY` 传 key。
-
 ## 项目结构
 
 | 包 | 说明 |
 |---|---|
 | `packages/story-engine` | 核心写作状态引擎（草稿/提交/审稿/线索/钩子/目标追踪） |
-| `packages/story-engine-cli` | 命令行：写稿、提交、审稿、维护、诊断 |
 | `packages/story-engine-ui` | React 写作工作台 + 本地 HTTP/SSE 服务（聊天 agent 在这里） |
 | `packages/story-engine-desktop` | Electron 桌面壳与打包流程 |
 
@@ -100,8 +97,6 @@ pnpm build         # 构建
 ```bash
 pnpm --filter @actalk/story-engine test
 pnpm --filter @actalk/story-engine typecheck
-pnpm --filter @actalk/story-engine-cli test
-pnpm --filter @actalk/story-engine-cli typecheck
 ```
 
 GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条工作区命令。

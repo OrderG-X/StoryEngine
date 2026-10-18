@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { readReaderProgress, readReadersCatchUpStatus, startReaderCatchUp, writeReaderReadingProgress, type ReaderProgress } from "./catch-up.js";
-import type { BrainCallModel, BrainMessage, ReaderRole } from "./reader-window.js";
+import type { BrainCallModel, BrainMessage, ReaderRole } from "../editorial/reader-window.js";
 
 const ROLE: ReaderRole = { id: "tester", system: "你是测试专员。", noteTask: "写笔记。", volumeTask: "缩写成一份卷笔记。" };
 

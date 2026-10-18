@@ -1,10 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatStaleGoalMessage } from "./arc-goal-tracking.js";
 import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "./chapter-plan.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
-import { formatStaleHookMessage } from "./hook-tracking.js";
-import { formatStaleThreadMessage } from "./lead-intent-tracking.js";
+import { formatStaleGoalMessage, formatStaleHookMessage, formatStaleThreadMessage } from "./stale-messages.js";
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import {
   describeErrorBriefly,

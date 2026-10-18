@@ -173,8 +173,6 @@ const CHECKS: { readonly name: string; readonly args: readonly string[]; readonl
   { name: "UI tsc", args: ["-C", "packages/story-engine-ui", "exec", "tsc", "--noEmit"], timeoutMs: 300_000 },
   { name: "UI vite build", args: ["-C", "packages/story-engine-ui", "exec", "vite", "build"], timeoutMs: 600_000 },
   { name: "UI vitest", args: ["-C", "packages/story-engine-ui", "exec", "vitest", "run"], timeoutMs: 600_000 },
-  { name: "CLI tsc", args: ["-C", "packages/story-engine-cli", "exec", "tsc", "--noEmit"], timeoutMs: 300_000 },
-  { name: "CLI vitest", args: ["-C", "packages/story-engine-cli", "exec", "vitest", "run"], timeoutMs: 600_000 },
   { name: "desktop 安全门", args: ["-C", "packages/story-engine-desktop", "test"], timeoutMs: 300_000 },
 ];
 const baselinePromise = (async (): Promise<BaselineCheck[]> => {

@@ -562,3 +562,19 @@ export interface ModelSettingsLoadResult {
   readonly summary: ModelSettingsSummary;
   readonly issues: readonly ModelSettingsValidationIssue[];
 }
+
+/** 人物矩阵的一条更新（做厚人物关系时用；原住在老定稿链里）。 */
+export interface CharacterMatrixUpdate {
+  readonly id: string;
+  readonly name: string;
+  readonly status?: CharacterMatrixEntry["status"];
+  readonly roleHint?: string;
+  readonly relationToProtagonist?: string;
+  readonly riskHint?: string;
+  readonly firstSeenChapter?: number;
+  readonly lastSeenChapter?: number;
+  readonly promotedCharacterId?: string;
+  readonly evidence?: readonly string[];
+  readonly appearances?: CharacterMatrixEntry["appearances"];
+  readonly relationshipEvents?: CharacterMatrixEntry["relationshipEvents"];
+}

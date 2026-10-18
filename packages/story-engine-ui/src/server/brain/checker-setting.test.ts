@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
 import { foundationMessage, readFoundationDigest, settingQuoteLabel } from "./foundation-digest.js";
-import type { BrainCallModel, BrainMessage } from "./reader-window.js";
+import type { BrainCallModel, BrainMessage } from "../editorial/reader-window.js";
 import type { ContinuityIssueV2, EarlierText } from "../agent/continuity-v2/check-chapter.js";
 
 const llmMocks = vi.hoisted(() => ({

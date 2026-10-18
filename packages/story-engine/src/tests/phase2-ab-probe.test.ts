@@ -24,7 +24,6 @@ import { describe, expect, it } from "vitest";
 import { createStoryProject } from "../project-store.js";
 import { buildStateOverview } from "../state-overview.js";
 import { buildTimelineLayers } from "../timeline-layers.js";
-import { mergeHookTrackingUpdates } from "../hook-tracking.js";
 import type { TimelineEvent, HookItem, HookPool } from "../types.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -307,30 +306,6 @@ describe("Phase 2 A/B probe — 属性 2：收线后退出上下文（Task 7 hoo
     expect(overview.hooks.resolvedCount).toBe(1);
 
     console.log(`[属性2 NEW] activeItems: ${activeIds.join(",")}, resolvedCount: ${overview.hooks.resolvedCount}`);
-  });
-
-  it("NEW：单调性保护——已 resolved hook 再次提及不重激活（mergeExistingHook 防回退）", () => {
-    // 模拟：密信谜团已 resolved
-    const resolvedPool = makeHookPool("resolved");
-
-    // 模拟 mergeHookTrackingUpdates：传入 updates 强制 active，但旧 hook 已 resolved
-    // mergeExistingHook 中 existing.status==="resolved" → 保持 resolved
-    const updates = [
-      {
-        id: RESOLVED_HOOK_ID,
-        title: "密信谜团",
-        status: "active" as const,  // 新一轮试图重激活
-        firstSeenChapter: 2,
-        lastTouchedChapter: 28,
-        evidence: ["第28章再次提及密信"],
-      },
-    ];
-
-    const mergedPool = mergeHookTrackingUpdates(resolvedPool, updates);
-    const resolvedHook = mergedPool.hooks.find((h) => h.id === RESOLVED_HOOK_ID);
-
-    expect(resolvedHook?.status).toBe("resolved"); // 单调：不回退到 active
-    console.log(`[属性2 NEW 单调性] 再次提及后 hook status: ${resolvedHook?.status}`);
   });
 
   it("量化对比：OLD 已收口 hook 占槽 = YES vs NEW 占槽 = NO（退出上下文）", () => {

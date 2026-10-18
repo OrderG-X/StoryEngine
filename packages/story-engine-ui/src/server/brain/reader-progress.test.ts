@@ -13,9 +13,9 @@ import {
   readReaderProgress,
   readerWaitingHandlers,
   writeReaderProgress,
-} from "./reader-progress.js";
+} from "../editorial/reader-progress.js";
 import { readReadersCatchUpStatus } from "./catch-up.js";
-import { readerWaitingActions, registerReaderWaiting, unregisterReaderWaiting } from "./waiting-registry.js";
+import { readerWaitingActions, registerReaderWaiting, unregisterReaderWaiting } from "../editorial/waiting-registry.js";
 
 const readProgressJson = async (dir: string, roleId: string): Promise<Record<string, unknown>> =>
   JSON.parse(await readFile(join(dir, "agents", roleId, "progress.json"), "utf-8"));

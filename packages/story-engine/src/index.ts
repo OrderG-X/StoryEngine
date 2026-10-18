@@ -1,4 +1,4 @@
-// P1-E：显式导出——只导出 UI、CLI、桌面包真正 import 的名字（@actalk/story-engine 的包表面）。
+// P1-E：显式导出——只导出 UI、桌面包真正 import 的名字（@actalk/story-engine 的包表面）。
 // 挂空导出的模块见 docs/rebuild/reports/P1-E-2026-10-17.md「只剩测试引用」一节，本期不删。
 export {
   type AiFlavorFrequencyGateRule,
@@ -11,40 +11,13 @@ export {
   detectAiFlavorViolations,
 } from "./ai-flavor-detection.js";
 export {
-  type ArcGoalUpdate,
-  type StaleGoalWarning,
-} from "./arc-goal-tracking.js";
-export {
   dedupeStringList,
 } from "./canonical-resolvers.js";
 export {
-  type ChapterDeltaDeclaration,
-  verifyChapterDelta,
-} from "./chapter-delta.js";
-export {
-  buildChapterSteeringDraft,
-  type ChapterSteeringDraft,
-  type ChapterSteeringPacing,
-  type ChapterSteeringRevealLevel,
-} from "./chapter-steering.js";
-export {
-  type NameDriftFinding,
-} from "./character-name-consistency.js";
-export {
-  type CharacterMatrixUpdate,
-  type CommitDraftInput,
-  commitFastDraft,
-  type CommitReport,
   recoverProjectCommitTransactions,
   withProjectCommitLock,
-} from "./commit-engine.js";
+} from "./legacy-commit-recovery.js";
 export {
-  buildCommitPlanFromProject,
-  type BuildCommitPlanResult,
-  type ChapterSemanticSummary,
-} from "./commit-plan-builder.js";
-export {
-  checkCommitPlanSemanticQuality,
   checkDraftBeforeCommit,
   checkDraftHardGates,
   type CommitQualityIssue,
@@ -125,17 +98,6 @@ export {
   type FoundationWriteSuggestionLike,
 } from "./foundation-write-gateway.js";
 export {
-  type HookStaleWarning,
-  type HookTrackingUpdate,
-} from "./hook-tracking.js";
-export {
-  buildThreadTrackingPlan,
-  isQualityLead,
-  type StaleThreadWarning,
-  type ThreadHygieneReport,
-  type ThreadTrackingUpdate,
-} from "./lead-intent-tracking.js";
-export {
   loadModelSettingsV0,
   validateModelSettingsV0,
 } from "./model-settings.js";
@@ -212,6 +174,7 @@ export {
   type CharacterBible,
   type CharacterBibleEntry,
   type CharacterMatrixEntry,
+  type CharacterMatrixUpdate,
   type CharacterMatrixLedger,
   type FactEntry,
   type FactLedger,

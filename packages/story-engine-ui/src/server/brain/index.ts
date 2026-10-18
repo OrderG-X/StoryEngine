@@ -21,7 +21,7 @@ import {
 import { DEFAULT_READER_VARIANT, callConfiguredBrainModel, checkerRoleFor } from "./checker.js";
 import { LEDGER_ROLE } from "../editorial/ledger-keeper.js";
 import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
-import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
+import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "../editorial/reader-window.js";
 
 export {
   CHECKER_ROLE,
@@ -62,7 +62,7 @@ export {
   readerWaitingHandlers,
   READER_ROLE_LABELS,
   type ReaderWaited,
-} from "./reader-progress.js";
+} from "../editorial/reader-progress.js";
 export { LEDGER_ROLE };
 export {
   brainstormChapter,
@@ -96,7 +96,7 @@ export {
   type ColdReaderWindow,
   type ReaderRole,
   type VolumeNoteEntry,
-} from "./reader-window.js";
+} from "../editorial/reader-window.js";
 
 /**
  * 需要跟读新章节的专员（三个都在，R3 起没有开关）。

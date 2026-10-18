@@ -22,8 +22,8 @@ import {
   reconcileStoryDay,
   type PlanChapterMaterials,
 } from "../agent/chapter-plan/plan-chapter.js";
-import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
-import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
+import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "../editorial/reader-window.js";
+import { readerWaitingHandlers, type ReaderWaited } from "../editorial/reader-progress.js";
 import { readPoint, type PlanProblem } from "./checker.js";
 
 export const PLANNER_ROLE: ReaderRole = {

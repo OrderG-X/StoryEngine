@@ -11,7 +11,7 @@ import {
   splitBrainstormProblems,
   type BrainstormThread,
 } from "./brainstorm.js";
-import type { BrainCallModel, BrainMessage } from "./reader-window.js";
+import type { BrainCallModel, BrainMessage } from "../editorial/reader-window.js";
 
 const CH1 = "许棠把那封信锁进抽屉，说明天一早去邮局。";
 const CH2 = "第二天许棠去了邮局，把信寄给了林溪。林溪下午回电说收到了。";

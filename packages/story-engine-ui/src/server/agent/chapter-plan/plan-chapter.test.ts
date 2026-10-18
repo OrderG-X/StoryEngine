@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStoryProject, normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "@actalk/story-engine";
 import { describe, expect, it } from "vitest";
-import type { BrainCallModel } from "../../brain/reader-window.js";
+import type { BrainCallModel } from "../../editorial/reader-window.js";
 import { collectPlanMaterials, planMaterialBlocks } from "./plan-chapter.js";
 
 async function makeBook(): Promise<string> {

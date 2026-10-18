@@ -9,9 +9,9 @@
  *     不同时并发打模型服务商；不同轮次也按先来后到排在这条队上。
  */
 import { callConfiguredBrainModel } from "./checker.js";
-import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
-import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "./reader-progress.js";
-import { readerWaitingActions } from "./waiting-registry.js";
+import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "../editorial/reader-window.js";
+import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "../editorial/reader-progress.js";
+import { readerWaitingActions } from "../editorial/waiting-registry.js";
 
 export type { ReaderProgress };
 export { readReaderProgress };

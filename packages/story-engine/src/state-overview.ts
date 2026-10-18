@@ -11,7 +11,7 @@ import {
   listCommitRecoveryNotices,
   recoverProjectCommitTransactions,
   withProjectCommitLock,
-} from "./commit-engine.js";
+} from "./legacy-commit-recovery.js";
 import {
   resolveCharacterRole,
   resolveIdentity,

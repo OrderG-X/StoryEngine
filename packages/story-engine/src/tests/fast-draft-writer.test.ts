@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { commitFastDraft } from "../commit-engine.js";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "../context-gateway.js";
 import { runFastDraft, resolveDraftMaxOutputTokens, persistFastDraftBody, type WriterClient } from "../fast-draft-writer.js";
 import { buildPromptFingerprint, findFirstPromptDifference, renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
@@ -886,9 +885,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(failures?.failures.join(" ")).toContain("写作规则");
     expect(failures?.failures.join(" ")).toContain("writing-rules.json");
     expect(failures?.failures.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
-    // commitFastDraft 同项目不 reject、可入库
-    const commit = await commitFastDraft({ projectDir, chapter: 2, commitPlan: {} });
-    expect(commit.passed).toBe(true);
   });
 
   it("C 级收尾：损坏 writing-rules.json + 校验失败早退 → issues 同时含降级留痕与校验问题", async () => {
@@ -917,7 +913,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0002.md"))).rejects.toThrow();
   });
 
-  it("A4 老书缺 story/hooks.json → runFastDraft 正常出稿、commitFastDraft 正常入库", async () => {
+  it("A4 老书缺 story/hooks.json → runFastDraft 正常出稿", async () => {
     const projectDir = await createFixtureProject();
     await rm(join(projectDir, "story", "hooks.json"), { force: true });
     const writerClient: WriterClient = {
@@ -926,27 +922,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "老书续写。", writerClient });
     expect(report.passed).toBe(true); // ENOENT 兜底为空池，不再 reject/失败
-
-    const commit = await commitFastDraft({ projectDir, chapter: 2, commitPlan: {} });
-    expect(commit.passed).toBe(true);
-  });
-
-  it("A4 老书缺 time/calendar.json → commitFastDraft 带 calendar 更新也能入库", async () => {
-    const projectDir = await createFixtureProject();
-    await rm(join(projectDir, "time", "calendar.json"), { force: true });
-    await writeFile(
-      join(projectDir, "drafts", "fast", "chapter-0002.md"),
-      "# 第二章\n\n老书缺日历也能入库。\n",
-      "utf-8",
-    );
-
-    const report = await commitFastDraft({
-      projectDir,
-      chapter: 2,
-      commitPlan: { calendar: { storyDay: 2, timeOfDay: "unknown" } },
-    });
-    expect(report.passed).toBe(true);
-    expect(await readStoryCalendar(projectDir)).toMatchObject({ currentStoryDay: 2 });
   });
 
   it("A4/A5 损坏 story/hooks.json → passed:false + writer_context_unavailable，不 reject、不泄路径", async () => {

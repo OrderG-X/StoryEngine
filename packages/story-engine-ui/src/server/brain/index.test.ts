@@ -11,7 +11,7 @@ import {
   readReadersCatchUpStatus,
   warmUpReaders,
 } from "./index.js";
-import type { BrainCallModel } from "./reader-window.js";
+import type { BrainCallModel } from "../editorial/reader-window.js";
 
 async function makeBook(chapters: number): Promise<string> {
   const dir = await makeHomeTempDir("brain-index-");

@@ -2,54 +2,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkCommitPlanSemanticQuality, checkDraftBeforeCommit, checkWritingContextPackDraft } from "../commit-quality-check.js";
+import { checkDraftBeforeCommit, checkWritingContextPackDraft } from "../commit-quality-check.js";
 import { createStoryProject } from "../project-store.js";
 import type { WritingContextPack } from "../writing-context-pack.js";
 
 describe("commit quality check", () => {
-  it("warns when commit plan semantic timeline is too generic", () => {
-    const report = checkCommitPlanSemanticQuality({
-      timelineEvents: [
-        {
-          summary: "第 3 章草稿被提交为正式章节。",
-          participants: ["character"],
-          effects: {
-            semanticSummary: {
-              chapterSummary: "",
-              keyEvents: [],
-            },
-          },
-        },
-      ],
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: "warning", type: "semantic_timeline_summary_generic" }),
-      expect.objectContaining({ severity: "warning", type: "semantic_chapter_summary_missing" }),
-      expect.objectContaining({ severity: "warning", type: "semantic_key_events_missing" }),
-    ]));
-  });
-
-  it("accepts commit plan semantic timeline with real story events", () => {
-    const report = checkCommitPlanSemanticQuality({
-      timelineEvents: [
-        {
-          summary: "林远发现账房账目，并决定追查库房账册暗号。",
-          participants: ["character"],
-          effects: {
-            semanticSummary: {
-              chapterSummary: "林远发现账房账目，并决定追查库房账册暗号。",
-              keyEvents: ["林远发现账房账目。"],
-            },
-          },
-        },
-      ],
-    });
-
-    expect(report.passed).toBe(true);
-    expect(report.issues).toEqual([]);
-  });
 
   it("rejects empty draft content", async () => {
     const projectDir = await createFixtureProject();
