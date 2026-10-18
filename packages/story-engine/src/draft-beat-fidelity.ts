@@ -62,10 +62,6 @@ function foldWidth(value: string): string {
   return value.replace(/[！-～]/gu, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
 }
 
-function normalizeAlnum(value: string): string {
-  return foldWidth(value).toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
 /** 文本里的【标识符 token】集合：同时含字母与数字的 token（A-17 / B2 …），各自折半+归一成纯小写字母数字。 */
 function identifierTokens(text: string): Set<string> {
   const set = new Set<string>();

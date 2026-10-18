@@ -2,7 +2,6 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkWritingContextPackDraft } from "../commit-quality-check.js";
 import { buildWriterContext } from "../context-gateway.js";
 import { createStoryProject, toSafeCharacterId } from "../project-store.js";
 import { renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
@@ -323,89 +322,6 @@ describe("Writing Context Pack V0", () => {
       currentGoal: "确认魂钢申请为什么失败",
       mentalState: "紧张",
     });
-  });
-
-  // 2026-10-08 十章验收：第 3/6/9 章发生在别处，质检却逐章要求出现第 1 章开场地点，AI 照单往正文硬塞。
-  it("does not require the opening location after chapter 1 unless the chapter direction names a location", async () => {
-    const projectDir = await createSoulSteelFixture();
-    const free = await buildWritingContextPack({ projectDir, chapter: 3, userDirection: "继续第 3 章。" });
-    expect(free.locationContext.requiredCurrentLocation).toBeUndefined();
-    expect(free.locationContext.openingLocation).toBeUndefined();
-    expect(free.locationContext.spatialStructure?.floors).toEqual(expect.arrayContaining(["1楼大厅"]));
-    expect(free.hardConstraints.join("\n")).toContain("本章从上一章结尾所在的地方接着写");
-    expect(free.hardConstraints.join("\n")).not.toContain("第一章开场强参考");
-    expect(free.hardConstraints.join("\n")).not.toContain("开场优先使用");
-    expect(checkWritingContextPackDraft("林序坐在公交车上，窗外的雨越下越大。", free, 3).map((issue) => issue.type))
-      .not.toContain("writing_context_required_location_missing");
-
-    const directed = await buildWritingContextPack({ projectDir, chapter: 3, userDirection: "林序回到海天市旧城区创业孵化楼找人" });
-    expect(directed.locationContext.requiredCurrentLocation).toBe("海天市旧城区创业孵化楼");
-    expect(directed.hardConstraints.join("\n")).toContain("本章地点按作者方向：海天市旧城区创业孵化楼");
-  });
-
-  it("warns when drafts drift from required location or reveal protected truths", async () => {
-    const projectDir = await createSoulSteelFixture();
-    const pack = await buildWritingContextPack({
-      projectDir,
-      chapter: 1,
-      userDirection: "第一章写魂钢异常反应",
-    });
-
-    const issues = checkWritingContextPackDraft([
-      "季城市第七中学行政楼里，林序突然知道了魂钢真实来源。",
-      "他还确认财团幕后操盘者是谁，并拿到一辆豪车离开。",
-      "欠费手机突然正常联网，他打车五分钟就到了市中心，还说自己十八岁。",
-    ].join("\n"), pack, 1);
-
-    expect(issues.map((issue) => issue.type)).toEqual(expect.arrayContaining([
-      "writing_context_required_location_missing",
-      "writing_context_location_drift",
-      "writing_context_forbidden_reveal",
-      "writing_context_knowledge_boundary",
-      // R5b 块3：invented_asset 检测（硬编码豪车/别墅/黑卡/魂钢专名）已移除——题材特定、preview-only 不进正文、不影响成稿。
-      "writing_context_travel_rule_violation",
-      "writing_context_unavailable_asset_used",
-      "writing_context_age_drift",
-      "writing_context_identity_detail_drift",
-      "writing_context_first_chapter_setup_missing",
-    ]));
-    expect(issues.find((issue) => issue.type === "writing_context_location_drift")?.message).toContain("季城市");
-    expect(issues.find((issue) => issue.type === "writing_context_forbidden_reveal")?.message).toContain("魂钢真实来源");
-    expect(issues.find((issue) => issue.type === "writing_context_knowledge_boundary")?.message).toContain("财团幕后操盘者");
-  });
-
-  it("warns when building floor descriptions exceed registered location detail", async () => {
-    const projectDir = await createSoulSteelFixture();
-    const pack = await buildWritingContextPack({
-      projectDir,
-      chapter: 1,
-      userDirection: "第一章写魂钢异常反应",
-    });
-
-    const issues = checkWritingContextPackDraft([
-      "创业孵化楼是一栋六层建筑，林序站在二楼申请窗口前。",
-      "半张魂钢申请表在柜台边缘发热。",
-    ].join("\n"), pack, 1);
-
-    expect(issues.map((issue) => issue.type)).toContain("writing_context_floor_structure_conflict");
-    expect(issues.find((issue) => issue.type === "writing_context_floor_structure_conflict")?.message).toContain("六层建筑");
-  });
-
-  it("does not warn for total floor descriptions already recorded as fixed facts", async () => {
-    const projectDir = await createSoulSteelFixture();
-    const locationBiblePath = join(projectDir, "story", "location-bible.json");
-    const locationBible = JSON.parse(await readFile(locationBiblePath, "utf-8"));
-    locationBible.locations[0].fixedFacts = ["该楼共六层"];
-    await writeFile(locationBiblePath, `${JSON.stringify(locationBible, null, 2)}\n`, "utf-8");
-    const pack = await buildWritingContextPack({
-      projectDir,
-      chapter: 1,
-      userDirection: "第一章写魂钢异常反应",
-    });
-
-    const issues = checkWritingContextPackDraft("创业孵化楼是一栋六层建筑，林序站在二楼申请窗口前。", pack, 1);
-
-    expect(issues.map((issue) => issue.type)).not.toContain("writing_context_floor_structure_conflict");
   });
 
   it("把主角资料卡的 extraFields（做厚）渲染进 protagonistContext，供正文 prompt 取用", async () => {

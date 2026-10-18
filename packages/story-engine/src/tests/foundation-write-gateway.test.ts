@@ -593,7 +593,7 @@ describe("foundation write gateway", () => {
     expect(bible.characters.find((character) => character.id === id)?.age).toBe("二十六七岁"); // 未被静默改
   });
 
-  it("allows the scalar overwrite when the user explicitly intends replace（改成…）", async () => {
+  it("allows the scalar overwrite when writeMode=replace（显式覆盖，不从原话猜）", async () => {
     const { projectDir } = await createProject("标量显式覆盖", "林远");
     await applyFoundationWriteSuggestion({
       projectDir,
@@ -608,7 +608,7 @@ describe("foundation write gateway", () => {
       suggestion: {
         actionType: "update_character_detail", category: "characters",
         targetFile: "story/character-bible.json", targetPath: "characters", targetId: id,
-        after: { age: "三十出头" }, sourceUserMessage: "把陈雨薇年龄改成三十出头",
+        after: { age: "三十出头" }, writeMode: "replace",
       },
     });
     expect(result.applied).toBe(true);
@@ -971,59 +971,6 @@ describe("foundation write gateway", () => {
     expect(state).toMatchObject({ extraFields: { 身高: "180cm", hobby: "下棋" } });
   });
 
-  it("normalizes chapter target words out of freeform writing-rule text", async () => {
-    const { projectDir } = await createProject("字数规则");
-    await writeJson(projectDir, "story/writing-rules.json", {
-      version: "v0",
-      proseStyle: [],
-      genreRequirements: [],
-      suspenseRules: [],
-      payoffRules: [],
-      reversalRules: [],
-      readerExperienceRules: ["把写作规则的单章目标字数改成800，"],
-      forbiddenContent: [],
-      doNotDo: [],
-    });
-
-    await applyFoundationWriteSuggestion({
-      projectDir,
-      suggestion: {
-        actionType: "update_writing_rule",
-        category: "writingRules",
-        targetFile: "story/writing-rules.json",
-        targetPath: "readerExperienceRules",
-        sourceUserMessage: "把写作规则的单章目标字数改成200，写入规则",
-        after: {
-          readerExperienceRules: ["把写作规则的单章目标字数改成200，"],
-        },
-      },
-    });
-
-    const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
-    expect(rules.chapterLength?.targetWords).toBe(200);
-    expect(rules.readerExperienceRules.join("\n")).not.toContain("目标字数");
-
-    await writeJson(projectDir, "story/writing-rules.json", {
-      ...rules,
-      readerExperienceRules: [...(rules.readerExperienceRules ?? []), "把写作规则的单章目标字数改成600，"],
-    });
-    await applyFoundationWriteSuggestion({
-      projectDir,
-      suggestion: {
-        actionType: "update_writing_rule",
-        category: "writingRules",
-        targetFile: "story/writing-rules.json",
-        targetPath: "readerExperienceRules",
-        sourceUserMessage: "把写作规则的单章目标字数改成300，写入规则",
-        after: "把写作规则的单章目标字数改成300，",
-      },
-    });
-
-    const scalarRules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");
-    expect(scalarRules.chapterLength?.targetWords).toBe(300);
-    expect(scalarRules.readerExperienceRules.join("\n")).not.toContain("目标字数");
-  });
-
   it("does not overwrite existing long-term world premise unless the user explicitly replaces it", async () => {
     const { projectDir } = await createProject("世界观覆盖保护");
     await writeJson(projectDir, "story/world-bible.json", {
@@ -1062,7 +1009,7 @@ describe("foundation write gateway", () => {
         category: "world",
         targetFile: "story/world-bible.json",
         targetPath: "worldPremise",
-        sourceUserMessage: "把世界前提改成魂钢是外星遗物",
+        writeMode: "replace",
         after: {
           worldPremise: "魂钢是外星遗物。",
         },
@@ -1466,48 +1413,6 @@ describe("foundation write gateway", () => {
     expect(notFound.blockedWrites?.[0]?.reason).toBe("delete_target_not_found");
   });
 
-  // R5b block 1: isTravelSentence must stay genre-neutral. Generic travel prose
-  // (movement verb + time/distance, or N楼到M楼 spatial step) is kept out of
-  // floors/rooms/fixedFacts, while registered structural rows survive — using only
-  // generic signals, never hardcoded place names like 公交站/市中心.
-  it("keeps generic travel prose out of spatial fields without any hardcoded place table", async () => {
-    const { projectDir } = await createProject("移动语句过滤");
-    await applyFoundationWriteSuggestion({
-      projectDir,
-      suggestion: {
-        actionType: "create_location",
-        category: "locations",
-        targetFile: "story/location-bible.json",
-        targetPath: "locations",
-        after: {
-          id: "loc-travel",
-          name: "测试枢纽楼",
-          floors: ["一楼大厅", "二楼办公区", "三楼到一楼走楼梯一分钟"],
-          rooms: ["前台", "会议室", "到星辉港步行六分钟", "开车去码头二十分钟"],
-          fixedFacts: ["前台位于一楼，不能改到其他楼层", "二楼到一楼走楼梯一分钟"],
-        },
-      },
-    });
-
-    const locations = await readJson<LocationBible>(projectDir, "story/location-bible.json");
-    const location = locations.locations.find((item) => item.name === "测试枢纽楼");
-    expect(location).toBeDefined();
-    const floors = location?.spatialStructure?.floors ?? [];
-    const rooms = location?.spatialStructure?.rooms ?? [];
-    const fixedFacts = location?.fixedFacts ?? [];
-
-    // Registered structural rows survive.
-    expect(floors).toEqual(expect.arrayContaining(["一楼大厅", "二楼办公区"]));
-    expect(rooms).toEqual(expect.arrayContaining(["前台", "会议室"]));
-    expect(fixedFacts).toEqual(expect.arrayContaining(["前台位于一楼，不能改到其他楼层"]));
-
-    // Generic travel prose is filtered (movement verb + time/distance, and N楼到M楼).
-    // 星辉港 is a made-up place name that no longer needs to be in any hardcoded table.
-    expect(floors.join("\n")).not.toMatch(/三楼到一楼走楼梯一分钟/u);
-    expect(rooms.join("\n")).not.toMatch(/星辉港步行六分钟|开车去码头二十分钟/u);
-    expect(fixedFacts.join("\n")).not.toMatch(/二楼到一楼走楼梯一分钟/u);
-  });
-
   it("does not hardcode genre-specific place names in the travel-sentence filter", async () => {
     const source = await readFile(join(import.meta.dirname, "..", "foundation-write-gateway.ts"), "utf-8");
     const travelFn = source.slice(source.indexOf("function isTravelSentence"));
@@ -1654,7 +1559,7 @@ describe("applyRenameCharacter 静默空返消灭（审计 Med：三条路径全
 // 「至少/不少于 N 字」旧逻辑一律摘成 targetWords（下限被 0.85 稀释），现在同写显式 minWords；
 // 出稿（draft-length-control）与定稿执法（commit-quality-check）都读它。
 describe("writingRules 章节字数下限（长跑 #4）", () => {
-  it("用户原话「每章至少3000字」→ targetWords=3000 且 minWords=3000（不再稀释成下限 2550）", async () => {
+  it("只给下限 minChapterChineseCharacters=3000 → targetWords=3000 且 minWords=3000（不再稀释成下限 2550）", async () => {
     const { projectDir } = await createProject("至少三千字");
     const result = await applyFoundationWriteSuggestion({
       projectDir,
@@ -1663,8 +1568,7 @@ describe("writingRules 章节字数下限（长跑 #4）", () => {
         category: "writingRules",
         targetFile: "story/writing-rules.json",
         targetPath: "$",
-        after: {},
-        sourceUserMessage: "每章至少3000字，别写短了",
+        after: { minChapterChineseCharacters: 3000 },
       },
     });
     expect(result.applied).toBe(true);
@@ -1698,8 +1602,7 @@ describe("writingRules 章节字数下限（长跑 #4）", () => {
         category: "writingRules",
         targetFile: "story/writing-rules.json",
         targetPath: "$",
-        after: { targetChapterWords: 2000 },
-        sourceUserMessage: "目标两千字左右，但每章不少于3000字",
+        after: { targetChapterWords: 2000, minChapterChineseCharacters: 3000 },
       },
     });
     const rules = await readJson<WritingRules>(projectDir, "story/writing-rules.json");

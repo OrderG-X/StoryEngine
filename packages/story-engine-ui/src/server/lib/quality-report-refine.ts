@@ -16,7 +16,7 @@ type Severity = CommitQualityIssue["severity"];
 
 /**
  * 内置：引擎 issue.type → 中文标签（规则透明，像 inkos 的命名维度）。未收录的 type 原样显示。
- * ⚠️ type 名以引擎 commit-quality-check.ts / continuity-quality-check.ts 实际发出的为准（实测核对过，别猜）。
+ * ⚠️ type 名以引擎 commit-quality-check.ts 实际发出的为准（重构 P7 删了靠词表猜的连续性规则，这里只剩硬检查）。
  */
 export const QUALITY_TYPE_LABELS: Readonly<Record<string, string>> = {
   // 硬伤（error）
@@ -25,61 +25,18 @@ export const QUALITY_TYPE_LABELS: Readonly<Record<string, string>> = {
   tool_or_json_artifact: "像工具/JSON 产物、不是正文",
   title_only: "只有标题没正文",
   too_short: "正文过短",
-  model_explanation: "夹带模型解释/拒答话术",
   missing_character_name: "没出现任何已知角色名",
   // 格式/装饰
   missing_chapter_title: "缺章节标题",
   no_dialogue: "通篇无对话",
-  // 入库元数据
-  semantic_chapter_summary_missing: "定稿缺本章摘要",
-  semantic_key_events_missing: "定稿缺关键事件",
-  semantic_timeline_missing: "定稿缺时间线事件",
-  semantic_timeline_summary_generic: "时间线摘要太笼统",
-  // 一致性/设定漂移（writing_context_*）
-  writing_context_age_drift: "角色年龄与设定不符",
-  writing_context_first_chapter_setup_missing: "没铺第一章设定",
-  writing_context_floor_structure_conflict: "楼层/空间结构冲突",
-  writing_context_forbidden_reveal: "提前泄露了禁止揭示的秘密",
-  writing_context_identity_detail_drift: "身份细节与设定漂移",
-  writing_context_knowledge_boundary: "角色越界知道了不该知道的",
-  writing_context_location_drift: "地点与本章设定漂移",
-  writing_context_required_location_missing: "没用到本章要求的地点",
-  writing_context_setup_asset_missing: "没用到本章应出现的道具",
-  writing_context_speech_style_risk: "说话风格与人设有出入",
-  writing_context_travel_rule_violation: "违反移动/路程规则",
-  writing_context_unavailable_asset_used: "用了当前不可用的道具",
-  cross_chapter_pronoun_drift: "跨章代词指代漂移",
-  // 连贯性「没接到/没提到 X」家族（continuity-quality-check）
-  arc_goals_not_referenced: "没呼应当前卷目标",
-  open_intents_not_referenced: "没接任何角色未了意图",
-  open_leads_not_referenced: "没接任何未收口线索",
-  open_threads_not_referenced: "没接任何未收口故事线",
-  recent_characters_not_referenced: "没提到近期出场角色",
-  recent_events_not_referenced: "没轻带近期剧情",
-  recent_locations_not_referenced: "没提到近期地点",
-  possible_homogeneous_loop_repetition: "动作原地打转",
-  possible_repeated_paragraph: "句子/相邻段高度重复",
-  possible_restart: "疑似另起炉灶没接上文",
 };
 
 /**
- * 内置：软误报降级表——把"装饰性/非正文质量"+"子串匹配高误报、低风险"的 warning → 降成参考(info)，附透明留痕。
- * **不降**可能是真问题的：`*_drift`（年龄/身份/地点/代词漂移可能是真矛盾）、`forbidden_reveal`/`knowledge_boundary`/
- * `unavailable_asset_used`/`travel_rule_violation` 等硬设定违规、`possible_*`（原地打转/重复/重启正是要抓的）——
- * 它们仍当软提示（可见、框成"参考不拦"，但不压成参考）。error 硬伤一律不碰。
+ * 内置：软误报降级表——把"装饰性/非正文质量"的 warning → 降成参考(info)，附透明留痕。error 硬伤一律不碰。
  */
 export const QUALITY_DOWNGRADE_RULES: Readonly<Record<string, { readonly to: Severity; readonly note: string }>> = {
   missing_chapter_title: { to: "info", note: "标题可在定稿时自动补，非正文质量问题" },
   no_dialogue: { to: "info", note: "无对话不一定是问题（过场/独白章正常）" },
-  semantic_timeline_summary_generic: { to: "info", note: "时间线摘要措辞，非正文质量" },
-  // 「没提到/没接到 X」家族：靠子串匹配，角色用代称、线索隐性推进时极易误报，且低风险 → 降参考。
-  recent_characters_not_referenced: { to: "info", note: "近期角色靠子串匹配，代称/换名常误报" },
-  recent_locations_not_referenced: { to: "info", note: "近期地点靠子串匹配，常误报" },
-  recent_events_not_referenced: { to: "info", note: "近期剧情靠子串匹配，常误报" },
-  open_leads_not_referenced: { to: "info", note: "线索常隐性推进，子串匹配易误报" },
-  open_threads_not_referenced: { to: "info", note: "故事线常隐性推进，子串匹配易误报" },
-  open_intents_not_referenced: { to: "info", note: "角色意图常隐性推进，子串匹配易误报" },
-  arc_goals_not_referenced: { to: "info", note: "卷目标常隐性呼应，子串匹配易误报" },
 };
 
 export interface RefinedQualityIssue {
@@ -95,7 +52,7 @@ export interface RefinedQualityReport {
   /** 与引擎一致：无未消解的 error 即通过（降级只动 warning↔info，不影响此判定）。severe 不影响 passed（不硬拦·守可撤销）。 */
   readonly passed: boolean;
   readonly blocking: readonly RefinedQualityIssue[];   // error·拦入库
-  /** AI 判定 confirmed+high 的非 error 问题：严重但不硬拦（强烈建议先改）。治「可入库」与严重问题并列读着矛盾。 */
+  /** 原来是 AI 判定 confirmed+high 的问题；判定层已删（重构 P7），恒为空。 */
   readonly severe: readonly RefinedQualityIssue[];
   readonly soft: readonly RefinedQualityIssue[];        // warning·软提示（参考不拦），不含 severe
   readonly reference: readonly RefinedQualityIssue[];   // info·参考
@@ -105,20 +62,6 @@ export interface RefinedQualityReport {
 }
 
 const labelOf = (type: string): string => QUALITY_TYPE_LABELS[type] ?? type;
-
-/**
- * 严重度信号取自 AI 判定层（题材中立）：verdict=confirmed 且「该改」——severity=high，**或** AI 明确建议
- * 修改/需确认（recommendedAction=revise / require_confirmation）。
- * retest 教训：只认 high 太窄——Codex 真机里「能力使用违规·建议修改后再入库」是 confirmed+medium+revise，
- * 漏出 severe 档 → 又出现「✅ 可入库」与「建议修改后再入库」并存。把「AI 已确认且建议先改」一并升 severe。
- * 不靠 type/题材词（forbidden_reveal 等靠子串匹配、误报率高，引擎刻意定为 warning）；uncertain/dismissed/
- * ignore/watch 一律不升（避免把中危噪音抬成严重）。
- */
-const isAiConfirmedSevere = (issue: CommitQualityIssue): boolean => {
-  const j = issue.judgement;
-  if (j?.verdict !== "confirmed") return false;
-  return j.severity === "high" || j.recommendedAction === "revise" || j.recommendedAction === "require_confirmation";
-};
 
 /** 把引擎质检报告分层 + 软误报降级。纯确定性。 */
 export function refineQualityReport(report: CommitQualityReport): RefinedQualityReport {
@@ -145,29 +88,22 @@ export function refineQualityReport(report: CommitQualityReport): RefinedQuality
     return { type: issue.type, label: labelOf(issue.type), severity: issue.severity, message: issue.message };
   });
 
-  // 3) 分层（refined[i] 与 deduped[i] 同序，severe 用原始 issue 的 AI 判定分）。
+  // 3) 分层。severe 原来由 AI 判定层给（重构 P7 已删），留着字段给老卡片兼容，恒为空。
   const blocking: RefinedQualityIssue[] = [];
-  const severe: RefinedQualityIssue[] = [];
+  const severe: readonly RefinedQualityIssue[] = [];
   const soft: RefinedQualityIssue[] = [];
   const reference: RefinedQualityIssue[] = [];
-  refined.forEach((item, i) => {
-    if (item.severity === "error") { blocking.push(item); return; }
-    if (item.severity === "info") { reference.push(item); return; }
-    // warning：AI 判定 confirmed+high → severe（严重但不拦），否则普通软提示。
-    if (isAiConfirmedSevere(deduped[i]!)) severe.push(item);
+  for (const item of refined) {
+    if (item.severity === "error") blocking.push(item);
+    else if (item.severity === "info") reference.push(item);
     else soft.push(item);
-  });
+  }
   const passed = blocking.length === 0; // severe 不拦入库（守「直接做+可撤销」），只治误导措辞
 
-  // 4) 分层人话摘要。severe 存在时绝不把头部读成「✅ 没硬伤、可入库」（治自相矛盾）。
+  // 4) 分层人话摘要。
   const parts: string[] = [];
   if (!passed) {
     parts.push(`${blocking.length} 处硬伤拦着定稿：${blocking.map((i) => i.label).join("、")}。先改这些再定稿`);
-    if (severe.length > 0) {
-      parts.push(`另有 ${severe.length} 处严重问题：${severe.map((i) => i.label).join("、")}`);
-    }
-  } else if (severe.length > 0) {
-    parts.push(`没有拦截定稿的硬伤，但有 ${severe.length} 处严重问题（AI 已确认/判为高风险），强烈建议先改再定稿：${severe.map((i) => i.label).join("、")}（可以继续定稿，但请知悉）`);
   } else {
     parts.push("没硬伤、可以定稿");
   }

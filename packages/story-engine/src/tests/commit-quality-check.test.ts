@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkDraftBeforeCommit, checkWritingContextPackDraft } from "../commit-quality-check.js";
+import { checkDraftBeforeCommit } from "../commit-quality-check.js";
 import { createStoryProject } from "../project-store.js";
 import type { WritingContextPack } from "../writing-context-pack.js";
 
@@ -210,35 +210,6 @@ describe("commit quality check", () => {
     ]));
   });
 
-  it("rejects model explanation wording", async () => {
-    const projectDir = await createFixtureProject();
-
-    const report = await checkDraftBeforeCommit({
-      projectDir,
-      chapter: 1,
-      draftContent: `${longDraft({ characterName: "林远", withTitle: true, withDialogue: true })}\n以下是本章正文。`,
-    });
-
-    expect(report.passed).toBe(false);
-    expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: "error", type: "model_explanation" }),
-    ]));
-  });
-
-  it("does not reject ordinary dialogue that says of course", async () => {
-    const projectDir = await createFixtureProject();
-
-    const report = await checkDraftBeforeCommit({
-      projectDir,
-      chapter: 1,
-      draftContent: `${longDraft({ characterName: "林远", withTitle: true, withDialogue: true })}\n李明远说：“你当然可以带回去慢慢看。”`,
-    });
-
-    expect(report.issues).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "model_explanation" }),
-    ]));
-  });
-
   it("warns when a draft has no obvious chapter title", async () => {
     const projectDir = await createFixtureProject();
 
@@ -267,65 +238,6 @@ describe("commit quality check", () => {
     expect(report.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ severity: "info", type: "no_dialogue" }),
     ]));
-  });
-
-  it("warns when a recurring character pronoun drifts across chapters", async () => {
-    const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "chapters", "0001.md"),
-      [
-        "# 第一章",
-        "",
-        "林远在账房外第一次见到沈砚。沈砚说话很轻，却把账册缺页递给他。",
-        "沈砚又把半页编号纸递到林远手里。",
-        "她提醒林远：“别在这里翻脸，先把证据带出去。”",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const report = await checkDraftBeforeCommit({
-      projectDir,
-      chapter: 2,
-      draftContent: [
-        "# 第二章 账册回声",
-        "",
-        "林远重新回到账房外，确认管事换班后才靠近窗下。沈砚从檐影里走出来，他拍了拍林远的肩膀，示意他先看门缝里的纸灰。",
-        longDraft({ characterName: "林远", withTitle: false, withDialogue: true }),
-      ].join("\n"),
-    });
-
-    expect(report.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        severity: "warning",
-        type: "cross_chapter_pronoun_drift",
-        message: expect.stringContaining("沈砚"),
-      }),
-    ]));
-    expect(report.issues.map((issue) => issue.message).join("\n")).toContain("前文证据");
-    expect(report.issues.map((issue) => issue.message).join("\n")).toContain("本章证据");
-    expect(report.issues.map((issue) => issue.message).join("\n")).toContain("她提醒林远");
-    expect(report.issues.map((issue) => issue.message).join("\n")).toContain("他拍了拍林远");
-    expect(report.issues.map((issue) => issue.message).join("\n")).not.toContain("林远 之前按女性/她");
-  });
-
-  it("「许微看着他。他鬓角的白发」里的他指别人，不算许微的称谓（2026-10-10 真机试写每章误报）", async () => {
-    const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "chapters", "0001.md"),
-      ["# 第一章", "", "许微看着他。他鬓角的白发在灯下很扎眼。", "许微把信收好。她转身走了。"].join("\n"),
-      "utf-8",
-    );
-    const report = await checkDraftBeforeCommit({
-      projectDir,
-      chapter: 2,
-      draftContent: [
-        "# 第二章",
-        "",
-        "许微站在台边。她把麻绳绕回手上，开始分信。",
-        longDraft({ characterName: "林远", withTitle: false, withDialogue: true }),
-      ].join("\n"),
-    });
-    expect(report.issues.filter((issue) => issue.type === "cross_chapter_pronoun_drift")).toEqual([]);
   });
 
   it("does not reference legacy InkOS packages", async () => {
@@ -363,134 +275,6 @@ describe("commit quality check", () => {
     for (const term of bannedTerms) {
       expect(source, `must not hardcode genre term: ${term}`).not.toContain(term);
     }
-  });
-});
-
-describe("commit quality writing-context-pack checks (genre-neutral)", () => {
-  it("no longer flags a generic genre-specific 'invented asset' table", () => {
-    // 旧实现会对正文里出现的「豪车/别墅/魂钢」等专名报 invented_asset；题材中立化后该写死表已删，
-    // 任何题材的具体物名都不应仅凭出现就被当作「凭空捏造关键资产」。
-    const pack = makePack();
-    const body = "他开着一辆豪车驶进别墅区，腰间挂着一枚储物戒，里面还压着百万现金。";
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).not.toContain("writing_context_invented_asset");
-  });
-
-  it("counts a setup asset as used even when only the core noun (no status prefix) appears", () => {
-    // ②：containsAssetReference 改成读资产名派生 token，正文写「申请表」即算引用了登记的「半张申请表」。
-    const pack = makePack({
-      setupKeyItems: ["半张申请表"],
-    });
-    const usedBody = "他从怀里掏出那张申请表，在窗口前递了上去，等待盖章。这一章他始终守在政务窗口。".repeat(2);
-    const issues = checkWritingContextPackDraft(usedBody, pack, 5);
-    expect(issues.map((issue) => issue.type)).not.toContain("writing_context_setup_asset_missing");
-  });
-
-  it("still warns when no setup asset is referenced at all", () => {
-    const pack = makePack({ setupKeyItems: ["半张申请表"] });
-    const body = "他在街上漫无目的地走着，什么也没带，只是看着行人来来往往，心里盘算下一步。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).toContain("writing_context_setup_asset_missing");
-  });
-
-  it("warns when a registered unavailable asset is written as suddenly working again (any genre)", () => {
-    // ④：欠费手机/失灵设备凭空恢复——用「不可用资产名命中 + 恢复正常描述」的通用判定。
-    const pack = makePack({
-      unavailableAssets: ["旧手机 · damaged · 长期欠费停机"],
-    });
-    const body = "他掏出那部旧手机，屏幕忽然恢复正常，信号满格，顺利打通了对方的电话。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).toContain("writing_context_unavailable_asset_used");
-  });
-
-  it("does not warn when an unavailable asset is merely mentioned without being restored", () => {
-    const pack = makePack({
-      unavailableAssets: ["旧手机 · damaged · 长期欠费停机"],
-    });
-    const body = "他看着那部欠费停机的旧手机，黑着屏，没有半点反应，只能无奈地把它塞回口袋。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).not.toContain("writing_context_unavailable_asset_used");
-  });
-
-  it("warns when a broken plot-critical asset is magically made complete again", () => {
-    const pack = makePack({
-      plotCriticalAssets: ["半张地图 · damaged · 缺了另一半"],
-    });
-    const body = "他低头一看，手里那张地图竟变得完整无缺，整张铺展开来，纹路清晰可辨。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).toContain("writing_context_unavailable_asset_used");
-  });
-
-  it("does not warn for a plot-critical asset that carries no broken/partial signal", () => {
-    const pack = makePack({
-      plotCriticalAssets: ["传家玉佩 · 祖辈相传"],
-    });
-    const body = "他握着那枚完整的传家玉佩，温润光滑，想起祖辈的嘱托，决定带着它继续上路。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((issue) => issue.type)).not.toContain("writing_context_unavailable_asset_used");
-  });
-
-  it("flags only generic building-suffix locations outside the bible, not baked-in proper nouns", () => {
-    // ③：地点漂移检测保留通用建筑后缀（学校/大楼/大厅/广场/中心），删了「孵化楼/政务大厅」等专名表。
-    const pack = makePack({ nearbyLocations: ["明德中学"] });
-    const body = "他先回到明德中学门口确认，又顺路绕去了陌生的星汉大楼，那是资料里从没出现过的地方。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    const driftIssue = issues.find((issue) => issue.type === "writing_context_location_drift");
-    expect(driftIssue?.message ?? "").toContain("星汉大楼");
-    expect(driftIssue?.message ?? "").not.toContain("明德中学");
-  });
-
-  it("地点漂移不再把『城市/上市/市场』当地名（治糙正则误报）", () => {
-    const pack = makePack({});
-    const body = "他在这个城市里待了三年，家里的公司刚在纳斯达克上市，今天还要去做一次市场调研。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((i) => i.type)).not.toContain("writing_context_location_drift");
-  });
-
-  it("通用『市中心/购物中心』不当被捏造的场所", () => {
-    const pack = makePack({});
-    const body = "他约在市中心碰头，又拐进旁边的购物中心买了杯咖啡。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((i) => i.type)).not.toContain("writing_context_location_drift");
-  });
-
-  it("身份漂移不把『那家公司/现在连公司/家里公司』句子碎片当编造身份", () => {
-    const pack = makePack({});
-    const body = "他知道家里公司的底细，可现在连公司都快保不住了，那家公司早就被掏空。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((i) => i.type)).not.toContain("writing_context_identity_detail_drift");
-  });
-
-  it("身份漂移仍抓主角名旁的真机构专名（主角被捏造身份）", () => {
-    const pack = makePack({ protagonistName: "林远" });
-    const body = "林远递上名片，说自己是星海科技公司的人，对方愣了一下。";
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    const drift = issues.find((i) => i.type === "writing_context_identity_detail_drift");
-    expect(drift?.message ?? "").toContain("星海科技公司");
-  });
-
-  it("身份漂移不算配角的公司（离主角名远）", () => {
-    const pack = makePack({ protagonistName: "林远" });
-    // 配角郑元泰的航运集团、环境里泛提的上市公司，都离主角名 >12 字 → 不是主角身份漂移。
-    const body = "林远在沙发上慢慢坐下来，旁边有人闲聊起来，说郑元泰的航运集团最近又吃下两家上市公司，财大气粗。";
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((i) => i.type)).not.toContain("writing_context_identity_detail_drift");
-  });
-
-  it("年龄漂移：别的角色的年龄不算主角漂移", () => {
-    const pack = makePack({ protagonistName: "林远", protagonistAge: "24" });
-    // 林远只在开头出现一次；别人的年龄都离主角名 >12 字，不该判主角年龄漂移。
-    const body = "林远刚进门，屋里已经坐了不少人，气氛压抑。对面那个男人慢慢抬眼，看着像五十岁上下，墙角还窝着一个六十岁的老者，眯着眼一言不发。";
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    expect(issues.map((i) => i.type)).not.toContain("writing_context_age_drift");
-  });
-
-  it("年龄漂移：主角名旁边写错年龄仍抓", () => {
-    const pack = makePack({ protagonistName: "林远", protagonistAge: "24" });
-    const body = "今年三十岁的林远叹了口气，觉得自己老了。".repeat(2);
-    const issues = checkWritingContextPackDraft(body, pack, 5);
-    const drift = issues.find((i) => i.type === "writing_context_age_drift");
-    expect(drift?.message ?? "").toContain("三十岁");
   });
 });
 

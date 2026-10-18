@@ -1568,7 +1568,7 @@ function mergeLocationDetail(existing: LocationBibleEntry, patch: LocationBibleE
 /** create_asset 的真实资产名（extractedEntityName / after.name / 从消息抽取），都没给则 undefined（不落空资产）。 */
 function resolveCreateAssetName(suggestion: FoundationWriteSuggestionLike): string | undefined {
   const source = isRecord(suggestion.after) ? suggestion.after : {};
-  const name = (suggestion.extractedEntityName ?? readString(source.name) ?? extractAssetNameFromMessage(suggestion.sourceUserMessage))?.trim();
+  const name = (suggestion.extractedEntityName ?? readString(source.name))?.trim();
   return name ? name : undefined;
 }
 
@@ -1765,8 +1765,9 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
     forbiddenContent: [],
     doNotDo: [],
   });
-  const scalarTargetWords = !isRecord(suggestion.after)
-    ? extractTargetChapterWordsFromTexts([readString(suggestion.after), suggestion.sourceUserMessage])
+  // 字数只认结构化传参（重构 P7）：不再从规则句子或用户原话里摘「每章 N 字 / 至少 N 字」。
+  const scalarTargetWords = !isRecord(suggestion.after) && /(?:targetWords|targetChapterWords)$/u.test(suggestion.targetPath)
+    ? readNumber(suggestion.after)
     : undefined;
   if (!isRecord(suggestion.after) && scalarTargetWords === undefined) {
     const record = { ...rules } as Record<string, unknown>;
@@ -1787,45 +1788,19 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
     // customNotes（自由 Markdown 标量）：是字符串就采纳（含空串=用户主动清空）；缺省=保留现有。受控破例⑧。
     const customNotesRaw = typeof source.customNotes === "string" ? source.customNotes : undefined;
     const targetWords = readNumber(source.targetChapterWords)
-      ?? readNumber(isRecord(source.chapterLength) ? source.chapterLength.targetWords : undefined)
-      ?? extractTargetChapterWordsFromTexts([
-        ...rawProseStyle,
-        ...rawGenreRequirements,
-        ...rawSuspenseRules,
-        ...rawPayoffRules,
-        ...rawReversalRules,
-        ...rawReaderExperienceRules,
-        ...rawForbiddenContent,
-        ...rawDoNotDo,
-        ...rawAntiAiPatterns,
-        suggestion.sourceUserMessage,
-      ]);
-    // 显式硬下限（长跑 #4）：①模型结构化传参（minChapterChineseCharacters / chapterLength.minWords，
-    // 传 0=清空下限）；②从规则文本/用户原话里摘「至少/不少于/最少/不低于 N 字」——旧逻辑把这类话
-    // 一律摘成 targetWords，「至少 3000」被稀释成「目标 3000/下限 2550」。引擎执法点
-    // （draft-length-control / commit-quality-check）现在都会读 chapterLength.minWords。
+      ?? readNumber(isRecord(source.chapterLength) ? source.chapterLength.targetWords : undefined);
+    // 显式硬下限：minChapterChineseCharacters / chapterLength.minWords，传 0 = 清空下限。
     const explicitMinWords = readNumber(source.minChapterChineseCharacters)
-      ?? readNumber(isRecord(source.chapterLength) ? source.chapterLength.minWords : undefined)
-      ?? extractMinimumChapterWordsFromTexts([
-        ...rawProseStyle,
-        ...rawGenreRequirements,
-        ...rawSuspenseRules,
-        ...rawPayoffRules,
-        ...rawReversalRules,
-        ...rawReaderExperienceRules,
-        ...rawForbiddenContent,
-        ...rawDoNotDo,
-        ...rawAntiAiPatterns,
-        !isRecord(suggestion.after) ? readString(suggestion.after) : undefined,
-        suggestion.sourceUserMessage,
-      ]);
-    // 目标合并：显式下限不倒挂目标（取 max）；只清下限（0）时不动目标；只给下限没给目标时目标抬到下限。
-    // 注意 0 是「清空下限」哨兵，绝不能经 ?? 链漏进 targetWords。
+      ?? readNumber(isRecord(source.chapterLength) ? source.chapterLength.minWords : undefined);
+    // 目标合并：下限不倒挂目标（取 max）。只改下限时目标不动，除非原目标比新下限还低（P6 真写：作者只说了下限，目标也被改成了下限）。
+    // 注意 0 是「清空下限」哨兵，绝不能漏进 targetWords。
+    const existingTargetWords = rules.chapterLength?.targetWords;
     const effectiveTargetWords = targetWords !== undefined && explicitMinWords !== undefined
       ? Math.max(targetWords, explicitMinWords)
       : targetWords !== undefined
         ? targetWords
         : explicitMinWords !== undefined && explicitMinWords > 0
+            && (existingTargetWords === undefined || existingTargetWords < explicitMinWords)
           ? explicitMinWords
           : undefined;
     const removals = readRemovalMap(source.removeFromArrays);
@@ -1848,7 +1823,7 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
     const next: WritingRules = {
       ...rules,
       ...(readString(source.narrativePerspective) ? { narrativePerspective: readString(source.narrativePerspective) } : {}),
-      proseStyle: mergeStringArrayField(filterTargetChapterWordsRules(rules.proseStyle ?? []), filterTargetChapterWordsRules(rawProseStyle), removals.proseStyle, replacements.proseStyle),
+      proseStyle: mergeStringArrayField(rules.proseStyle ?? [], rawProseStyle, removals.proseStyle, replacements.proseStyle),
       ...(readString(source.pacing) ? { pacing: readString(source.pacing) } : {}),
       ...(readString(source.revealPolicy) ? { revealPolicy: readString(source.revealPolicy) } : {}),
       // 字数下限/目标一起合并进 chapterLength：minWords 显式传 0 = 用户清空下限（读侧视 0 为缺省）。
@@ -1861,14 +1836,14 @@ async function applyWritingRuleSuggestion(projectDir: string, suggestion: Founda
           },
         }
         : {}),
-      genreRequirements: mergeStringArrayField(filterTargetChapterWordsRules(rules.genreRequirements ?? []), filterTargetChapterWordsRules(rawGenreRequirements), removals.genreRequirements, replacements.genreRequirements),
-      suspenseRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.suspenseRules ?? []), filterTargetChapterWordsRules(rawSuspenseRules), removals.suspenseRules, replacements.suspenseRules),
-      payoffRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.payoffRules ?? []), filterTargetChapterWordsRules(rawPayoffRules), removals.payoffRules, replacements.payoffRules),
-      reversalRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.reversalRules ?? []), filterTargetChapterWordsRules(rawReversalRules), removals.reversalRules, replacements.reversalRules),
-      readerExperienceRules: mergeStringArrayField(filterTargetChapterWordsRules(rules.readerExperienceRules ?? []), filterTargetChapterWordsRules(rawReaderExperienceRules), removals.readerExperienceRules, replacements.readerExperienceRules),
-      forbiddenContent: mergeStringArrayField(filterTargetChapterWordsRules(rules.forbiddenContent ?? []), filterTargetChapterWordsRules(rawForbiddenContent), removals.forbiddenContent, replacements.forbiddenContent),
-      doNotDo: mergeStringArrayField(filterTargetChapterWordsRules(rules.doNotDo ?? []), filterTargetChapterWordsRules(rawDoNotDo), removals.doNotDo, replacements.doNotDo),
-      antiAiPatterns: mergeStringArrayField(filterTargetChapterWordsRules(rules.antiAiPatterns ?? []), filterTargetChapterWordsRules(rawAntiAiPatterns), removals.antiAiPatterns, replacements.antiAiPatterns),
+      genreRequirements: mergeStringArrayField(rules.genreRequirements ?? [], rawGenreRequirements, removals.genreRequirements, replacements.genreRequirements),
+      suspenseRules: mergeStringArrayField(rules.suspenseRules ?? [], rawSuspenseRules, removals.suspenseRules, replacements.suspenseRules),
+      payoffRules: mergeStringArrayField(rules.payoffRules ?? [], rawPayoffRules, removals.payoffRules, replacements.payoffRules),
+      reversalRules: mergeStringArrayField(rules.reversalRules ?? [], rawReversalRules, removals.reversalRules, replacements.reversalRules),
+      readerExperienceRules: mergeStringArrayField(rules.readerExperienceRules ?? [], rawReaderExperienceRules, removals.readerExperienceRules, replacements.readerExperienceRules),
+      forbiddenContent: mergeStringArrayField(rules.forbiddenContent ?? [], rawForbiddenContent, removals.forbiddenContent, replacements.forbiddenContent),
+      doNotDo: mergeStringArrayField(rules.doNotDo ?? [], rawDoNotDo, removals.doNotDo, replacements.doNotDo),
+      antiAiPatterns: mergeStringArrayField(rules.antiAiPatterns ?? [], rawAntiAiPatterns, removals.antiAiPatterns, replacements.antiAiPatterns),
       ...(customNotesRaw !== undefined ? { customNotes: customNotesRaw } : {}),
     };
     const arrayChanged = WRITING_RULES_CORRECTABLE_FIELDS.some(
@@ -1918,8 +1893,7 @@ function normalizeAssetPatch(after: unknown, suggestion: FoundationWriteSuggesti
   // after 可能为 null / 非 record（模型偶发）：兜成空对象，绝不裸解构/裸展开抛错。
   const source: Record<string, unknown> = isRecord(after) ? after : {};
   const sourceName = suggestion.extractedEntityName
-    ?? readString(source.name)
-    ?? extractAssetNameFromMessage(suggestion.sourceUserMessage);
+    ?? readString(source.name);
   const assetName = sourceName ?? "待确认资产";
   return {
     ...(source as unknown as AssetItem),
@@ -2024,17 +1998,6 @@ function mergeWorldFactions(existing: readonly WorldBibleFaction[], patch: reado
     };
   }
   return result;
-}
-
-function extractAssetNameFromMessage(message: string | undefined): string | undefined {
-  if (!message) return undefined;
-  const amount = message.match(/(\d+(?:\.\d+)?)\s*(?:元|块)(?:\s*现金)?/u)?.[0];
-  if (amount) return `${amount.replace(/\s+/gu, "")}现金`;
-  const backpack = message.match(/([\u4e00-\u9fffA-Za-z0-9]{0,8}双肩包)/u)?.[1];
-  if (backpack) return backpack;
-  const gun = message.match(/(?:那把|一把|这把)?([\u4e00-\u9fffA-Za-z0-9]{0,6}枪)/u)?.[1];
-  if (gun) return message.includes("抢来") ? `抢来的${gun}` : gun;
-  return undefined;
 }
 
 function readCharacterVoiceProfile(...values: readonly unknown[]): CharacterVoiceProfile | undefined {
@@ -2145,21 +2108,11 @@ function sameTravelRule(left: LocationTravelRule, right: LocationTravelRule): bo
 }
 
 function cleanSpatialItems(items: readonly string[]): readonly string[] {
-  return unique(items.map((item) => item.trim()).filter((item) => item.length > 0 && !isTravelSentence(item)));
+  return unique(items.map((item) => item.trim()).filter((item) => item.length > 0));
 }
 
 function cleanFixedFacts(items: readonly string[]): readonly string[] {
-  return unique(items.map((item) => item.trim()).filter((item) => item.length > 0 && !isTravelSentence(item)));
-}
-
-function isTravelSentence(value: string): boolean {
-  // Genre-neutral travel-sentence filter: detects a movement verb (walk/drive/transit)
-  // paired with a time/distance unit, or an inter-floor "N楼到M楼" spatial step.
-  // Registered routes live in location.travelRules; loose travel prose is kept out of
-  // floors/rooms/fixedFacts. Intentionally carries NO hardcoded place names — the old
-  // "到/去 + <fixed place> + unit" branch leaked genre-specific locations (R5b block 1).
-  return /(?:走路|步行|打车|开车|坐车|公交).{0,12}(?:分钟|小时|公里)?/u.test(value)
-    || /[一二三四五六七八九十\d]+楼.{0,8}到[一二三四五六七八九十\d]+楼.{0,12}(?:楼梯|分钟)/u.test(value);
+  return unique(items.map((item) => item.trim()).filter((item) => item.length > 0));
 }
 
 function targetPathForSuggestion(suggestion: FoundationWriteSuggestionLike): string {
@@ -2418,8 +2371,8 @@ function isProtectedFoundationPath(path: string): boolean {
 function isExplicitReplaceIntent(suggestion: FoundationWriteSuggestionLike): boolean {
   // confirmedByUser：用户确认后的重试放行（agent 工具层只在本轮用户原话含明确同意时才置 true）。
   if (suggestion.confirmedByUser === true) return true;
-  if (suggestion.writeMode === "replace") return true;
-  return /(?:覆盖|替换|改成|改为|删除|删掉|清空|移除)/u.test(suggestion.sourceUserMessage ?? "");
+  // 不再从用户原话里猜「改成 / 删掉」（重构 P7）：覆盖只认显式 writeMode=replace 或作者点过确认。
+  return suggestion.writeMode === "replace";
 }
 
 function isClearingValue(value: unknown): boolean {
@@ -2452,15 +2405,6 @@ function result(
   };
 }
 
-function labelForDomain(domain: FoundationWriteDomain): string {
-  if (domain === "character") return "角色";
-  if (domain === "location") return "地点";
-  if (domain === "world") return "世界观";
-  if (domain === "writingRules") return "写作规则";
-  if (domain === "asset") return "资产";
-  return "资料";
-}
-
 function hasConcreteValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "string") return value.trim().length > 0;
@@ -2473,11 +2417,22 @@ function hasStrongConcreteValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return trimmed.length > 0 && !/^(?:待确认|尚未配置|未知|unknown|重要角色|第\d+章已出现角色|与主角关系待后续确认|按已出现剧情继续承担当前职责|承接已出现剧情继续行动)$/iu.test(trimmed);
+    return trimmed.length > 0 && !isPlaceholderValue(trimmed);
   }
   if (typeof value === "number" || typeof value === "boolean") return true;
   if (isRecord(value)) return Object.keys(value).length > 0;
   return false;
+}
+
+/** 建书模板和老版本自动补写留下的占位值（固定几句，整句比对）：不算「已经有值」。 */
+const PLACEHOLDER_VALUES = new Set([
+  "待确认", "尚未配置", "未知", "unknown", "重要角色", "与主角关系待后续确认", "按已出现剧情继续承担当前职责", "承接已出现剧情继续行动",
+]);
+
+function isPlaceholderValue(value: string): boolean {
+  if (PLACEHOLDER_VALUES.has(value.toLowerCase())) return true;
+  // 「第 N 章已出现角色」：老版本自动建卡写的占位职责。
+  return value.startsWith("第") && value.endsWith("章已出现角色") && /^\d+$/u.test(value.slice(1, -"章已出现角色".length));
 }
 
 function preferStrongString(existing: string | undefined, patch: string | undefined): string | undefined {
@@ -2578,47 +2533,6 @@ function readNumber(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
-}
-
-function filterTargetChapterWordsRules(values: readonly string[]): string[] {
-  return values.filter((value) => !isTargetChapterWordsRule(value));
-}
-
-function isTargetChapterWordsRule(value: string | undefined): boolean {
-  if (!value) return false;
-  return /(?:单章|每章|章节|每一章|一章|目标字数|字数目标|chapterLength|targetWords)[^\d]{0,24}[1-9]\d{1,5}\s*字?/iu.test(value);
-}
-
-function extractTargetChapterWordsFromTexts(values: readonly (string | undefined)[]): number | undefined {
-  for (const value of values) {
-    const matched = extractTargetChapterWordsFromText(value);
-    if (matched !== undefined) return matched;
-  }
-  return undefined;
-}
-
-/**
- * 「至少/不少于/最少/不低于 N 字」→ 显式章节字数下限（长跑 2026-10-04 #4）。
- * 只认带「字」尾的数量（「至少三次」「至少两个人」不误伤）；数值域与目标字数同款 50..50000。
- */
-function extractMinimumChapterWordsFromTexts(values: readonly (string | undefined)[]): number | undefined {
-  for (const value of values) {
-    if (!value) continue;
-    const match = /(?:至少|不少于|最少|不低于)\s*([1-9]\d{1,5})\s*个?字/u.exec(value);
-    if (!match) continue;
-    const words = Number(match[1]);
-    if (Number.isInteger(words) && words >= 50 && words <= 50000) return words;
-  }
-  return undefined;
-}
-
-function extractTargetChapterWordsFromText(value: string | undefined): number | undefined {
-  if (!value || !/(?:单章|每章|章节|每一章|一章|目标字数|字数目标|chapterLength|targetWords)/iu.test(value)) return undefined;
-  const match = /(?:单章|每章|章节|每一章|一章|目标字数|字数目标|chapterLength|targetWords)[^\d]{0,24}([1-9]\d{1,5})\s*字?/iu.exec(value)
-    ?? /([1-9]\d{1,5})\s*字/u.exec(value);
-  if (!match) return undefined;
-  const words = Number(match[1]);
-  return Number.isInteger(words) && words >= 50 && words <= 50000 ? words : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   applyFoundationWriteSuggestion,
@@ -23,20 +23,14 @@ import {
   describeErrorBriefly,
   toSafeCharacterId,
   writeFileAtomic,
-  writeJsonAtomic,
 } from "./project-store.js";
 import { buildStateOverview, type StateOverview } from "./state-overview.js";
 import type {
   ArcGoalPool,
   AssetItem,
   AssetLedger,
-  CharacterArcProfile,
   CharacterBible,
   CharacterBibleEntry,
-  CharacterCore,
-  CharacterProfile,
-  CharacterState,
-  CharacterVoiceProfile,
   HookPool,
   LocationBible,
   LocationBibleEntry,
@@ -46,7 +40,6 @@ import type {
   ThreadPool,
   TimelineEvent,
   WorldBible,
-  WorldBibleFaction,
   WorldCore,
   WorldState,
   WritingRules,
@@ -426,8 +419,6 @@ async function restoreFiles(projectDir: string, snapshot: ReadonlyMap<string, st
   }));
 }
 
-
-
 /** 取建议的展示名：优先抽取出的实体名，其次 before.name。供 apply_failed 跳过文案用。 */
 function suggestionDisplayName(suggestion: FoundationGapSuggestion): string | undefined {
   if (suggestion.extractedEntityName) return suggestion.extractedEntityName;
@@ -435,7 +426,6 @@ function suggestionDisplayName(suggestion: FoundationGapSuggestion): string | un
   if (isRecord(before) && typeof before.name === "string" && before.name.trim()) return before.name.trim();
   return undefined;
 }
-
 
 /** ENOENT-only 兜底：缺文件回落 fallback（老书合法缺台账），其余错误（损坏 JSON 等）原样上抛。 */
 function enoentOnly<T>(fallback: () => T): (error: unknown) => T {
@@ -734,173 +724,6 @@ async function applySuggestion(projectDir: string, suggestion: FoundationGapSugg
   return applyFoundationWriteSuggestion({ projectDir, suggestion });
 }
 
-async function applyFieldSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const relativePath = suggestion.targetFile;
-  const absolutePath = join(projectDir, relativePath);
-  const record = await readJson(absolutePath, defaultDocument(relativePath));
-  const targetPath = targetPathForSuggestion(suggestion);
-  writePath(record, targetPath, suggestion.after, suggestion.targetId);
-  await writeJsonAtomic(absolutePath, record);
-}
-
-async function applyCreateCharacter(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const patch = normalizeCharacterPatch(suggestion);
-  const biblePath = join(projectDir, "story", "character-bible.json");
-  const bible = await readJson<CharacterBible>(biblePath, { version: "v0", characters: [] });
-  const index = bible.characters.findIndex((item) => item.id === patch.bibleEntry.id || item.name === patch.bibleEntry.name);
-  const characters = [...bible.characters];
-  if (index < 0) {
-    characters.push(patch.bibleEntry);
-  } else {
-    characters[index] = mergeCharacterBibleEntry(characters[index] as CharacterBibleEntry, patch.bibleEntry);
-  }
-  await writeJsonAtomic(biblePath, { ...bible, characters });
-  const characterDir = join(projectDir, "characters", patch.bibleEntry.id);
-  await mkdir(characterDir, { recursive: true });
-  await writeMergedCharacterFile(join(characterDir, "profile.json"), patch.profile);
-  await writeMergedCharacterFile(join(characterDir, "core.json"), patch.core);
-  await writeMergedCharacterFile(join(characterDir, "state.json"), patch.state);
-}
-
-function normalizeCharacterPatch(suggestion: FoundationGapSuggestion): {
-  readonly bibleEntry: CharacterBibleEntry;
-  readonly profile: CharacterProfile;
-  readonly core: CharacterCore;
-  readonly state: CharacterState;
-} {
-  const source = isRecord(suggestion.after) ? suggestion.after : {};
-  const bibleSource = isRecord(source.bibleEntry) ? source.bibleEntry : source;
-  const name = readString(bibleSource.name) ?? readString(source.name) ?? readString(suggestion.extractedEntityName) ?? "待确认角色";
-  const id = readString(bibleSource.id) ?? readString(source.id) ?? suggestion.targetId ?? toSafeCharacterId(name);
-  const role = readString(bibleSource.role) ?? readString(source.role) ?? readString(source.identity) ?? "重要角色";
-  const speechStyle = readString(bibleSource.speechStyle) ?? readString(source.speechStyle);
-  const voice = readCharacterVoiceProfile(bibleSource.voice, source.voice);
-  const arc = readCharacterArcProfile(bibleSource.arc, source.arc);
-  const bibleEntry: CharacterBibleEntry = {
-    id,
-    name,
-    role,
-    ...(readString(bibleSource.age) ?? readString(source.age) ? { age: readString(bibleSource.age) ?? readString(source.age) } : {}),
-    ...(readString(bibleSource.gender) ?? readString(source.gender) ? { gender: readString(bibleSource.gender) ?? readString(source.gender) } : {}),
-    ...(readString(bibleSource.identity) ?? readString(source.identity) ? { identity: readString(bibleSource.identity) ?? readString(source.identity) } : {}),
-    ...(readStringList(bibleSource.appearanceAnchors).length || readStringList(source.appearanceAnchors).length ? { appearanceAnchors: mergeStringArrays(readStringList(bibleSource.appearanceAnchors), readStringList(source.appearanceAnchors)) } : {}),
-    ...(readString(bibleSource.desire) ?? readString(source.desire) ? { desire: readString(bibleSource.desire) ?? readString(source.desire) } : {}),
-    ...(readString(bibleSource.fear) ?? readString(source.fear) ? { fear: readString(bibleSource.fear) ?? readString(source.fear) } : {}),
-    ...(readString(bibleSource.weakness) ?? readString(source.weakness) ? { weakness: readString(bibleSource.weakness) ?? readString(source.weakness) } : {}),
-    ...(readString(bibleSource.contradiction) ?? readString(source.contradiction) ? { contradiction: readString(bibleSource.contradiction) ?? readString(source.contradiction) } : {}),
-    ...(readString(bibleSource.moralBoundary) ?? readString(source.moralBoundary) ? { moralBoundary: readString(bibleSource.moralBoundary) ?? readString(source.moralBoundary) } : {}),
-    ...(readString(bibleSource.privateMotive) ?? readString(source.privateMotive) ? { privateMotive: readString(bibleSource.privateMotive) ?? readString(source.privateMotive) } : {}),
-    ...(readString(bibleSource.relationshipToProtagonist) ?? readString(source.relationshipToProtagonist) ? { relationshipToProtagonist: readString(bibleSource.relationshipToProtagonist) ?? readString(source.relationshipToProtagonist) } : {}),
-    ...(readStringList(bibleSource.relationshipDynamics).length || readStringList(source.relationshipDynamics).length ? { relationshipDynamics: mergeStringArrays(readStringList(bibleSource.relationshipDynamics), readStringList(source.relationshipDynamics)) } : {}),
-    ...(readString(bibleSource.trustLevel) ?? readString(source.trustLevel) ? { trustLevel: readString(bibleSource.trustLevel) ?? readString(source.trustLevel) } : {}),
-    ...(readString(bibleSource.hiddenStance) ?? readString(source.hiddenStance) ? { hiddenStance: readString(bibleSource.hiddenStance) ?? readString(source.hiddenStance) } : {}),
-    ...(voice ? { voice } : {}),
-    ...(speechStyle ? { speechStyle } : {}),
-    speechSamples: readStringList(bibleSource.speechSamples).length ? readStringList(bibleSource.speechSamples) : readStringList(source.speechSamples),
-    personalityBaseline: readStringList(bibleSource.personalityBaseline).length ? readStringList(bibleSource.personalityBaseline) : readStringList(source.personalityBaseline),
-    behaviorBoundaries: readStringList(bibleSource.behaviorBoundaries).length ? readStringList(bibleSource.behaviorBoundaries) : readStringList(source.behaviorBoundaries),
-    knowledgeKnown: readStringList(bibleSource.knowledgeKnown).length ? readStringList(bibleSource.knowledgeKnown) : readStringList(source.knowledgeKnown),
-    knowledgeUnknown: readStringList(bibleSource.knowledgeUnknown).length ? readStringList(bibleSource.knowledgeUnknown) : readStringList(source.knowledgeUnknown),
-    cannotReveal: readStringList(bibleSource.cannotReveal).length ? readStringList(bibleSource.cannotReveal) : readStringList(source.cannotReveal),
-    cannotDo: readStringList(bibleSource.cannotDo).length ? readStringList(bibleSource.cannotDo) : readStringList(source.cannotDo),
-    ...(readString(bibleSource.arcPromise) ?? readString(source.arcPromise) ? { arcPromise: readString(bibleSource.arcPromise) ?? readString(source.arcPromise) } : {}),
-    ...(arc ? { arc } : {}),
-    ...(readString(bibleSource.currentStateHint) ?? readString(source.currentStateHint) ? { currentStateHint: readString(bibleSource.currentStateHint) ?? readString(source.currentStateHint) } : {}),
-  };
-  const profileSource = isRecord(source.profile) ? source.profile : source;
-  const coreSource = isRecord(source.core) ? source.core : source;
-  const stateSource = isRecord(source.state) ? source.state : source;
-  const profile: CharacterProfile = {
-    id,
-    name,
-    identity: readString(profileSource.identity) ?? bibleEntry.identity ?? role,
-    ...(readString(profileSource.age) ?? bibleEntry.age ? { age: readString(profileSource.age) ?? bibleEntry.age } : {}),
-    ...(readString(profileSource.gender) ?? bibleEntry.gender ? { gender: readString(profileSource.gender) ?? bibleEntry.gender } : {}),
-    ...(isRecord(profileSource.appearance) ? { appearance: profileSource.appearance } : {}),
-    appearanceAnchors: mergeStringArrays(readStringList(profileSource.appearanceAnchors), bibleEntry.appearanceAnchors ?? []),
-    tags: readStringList(profileSource.tags),
-  };
-  const core: CharacterCore = {
-    characterId: readString(coreSource.characterId) ?? id,
-    personality: readStringList(coreSource.personality).length ? readStringList(coreSource.personality) : readStringList(bibleSource.personalityBaseline),
-    ...(readString(coreSource.speechStyle) ?? speechStyle ? { speechStyle: readString(coreSource.speechStyle) ?? speechStyle } : {}),
-    taboos: readStringList(coreSource.taboos),
-    ...(readString(coreSource.worldview) ? { worldview: readString(coreSource.worldview) } : {}),
-    ...(readString(coreSource.desire) ?? bibleEntry.desire ? { desire: readString(coreSource.desire) ?? bibleEntry.desire } : {}),
-    ...(readString(coreSource.fear) ?? bibleEntry.fear ? { fear: readString(coreSource.fear) ?? bibleEntry.fear } : {}),
-    ...(readString(coreSource.contradiction) ?? bibleEntry.contradiction ? { contradiction: readString(coreSource.contradiction) ?? bibleEntry.contradiction } : {}),
-    ...(readString(coreSource.moralBoundary) ?? bibleEntry.moralBoundary ? { moralBoundary: readString(coreSource.moralBoundary) ?? bibleEntry.moralBoundary } : {}),
-    ...(readCharacterVoiceProfile(coreSource.voice, bibleEntry.voice) ? { voice: readCharacterVoiceProfile(coreSource.voice, bibleEntry.voice) } : {}),
-    behaviorHabits: readStringList(coreSource.behaviorHabits),
-    ...(readCharacterArcProfile(coreSource.arc, bibleEntry.arc) ? { arc: readCharacterArcProfile(coreSource.arc, bibleEntry.arc) } : {}),
-  };
-  const state: CharacterState = {
-    characterId: readString(stateSource.characterId) ?? id,
-    emotion: readString(stateSource.emotion) ?? "待确认",
-    goal: readString(stateSource.goal) ?? readString(source.currentGoal) ?? bibleEntry.desire ?? "待确认",
-    ...(readString(stateSource.relationshipToUser) ?? bibleEntry.relationshipToProtagonist ? { relationshipToUser: readString(stateSource.relationshipToUser) ?? bibleEntry.relationshipToProtagonist } : {}),
-    ...(readString(stateSource.currentArc) ? { currentArc: readString(stateSource.currentArc) } : {}),
-    ...(readString(stateSource.currentPhysicalState) ? { currentPhysicalState: readString(stateSource.currentPhysicalState) } : {}),
-    ...(readString(stateSource.currentMentalState) ? { currentMentalState: readString(stateSource.currentMentalState) } : {}),
-    ...(readString(stateSource.currentResourceState) ? { currentResourceState: readString(stateSource.currentResourceState) } : {}),
-    ...(readString(stateSource.currentLocationId) ?? readString(source.currentLocationId) ? { currentLocationId: readString(stateSource.currentLocationId) ?? readString(source.currentLocationId) } : {}),
-    ...(readString(stateSource.currentLocationName) ?? readString(source.currentLocationName) ?? readString(source.currentLocation) ? { currentLocationName: readString(stateSource.currentLocationName) ?? readString(source.currentLocationName) ?? readString(source.currentLocation) } : {}),
-    knowledgeKnown: readStringList(stateSource.knowledgeKnown).length ? readStringList(stateSource.knowledgeKnown) : bibleEntry.knowledgeKnown ?? [],
-    knowledgeUnknown: readStringList(stateSource.knowledgeUnknown).length ? readStringList(stateSource.knowledgeUnknown) : bibleEntry.knowledgeUnknown ?? [],
-    cannotReveal: readStringList(stateSource.cannotReveal).length ? readStringList(stateSource.cannotReveal) : bibleEntry.cannotReveal ?? [],
-    lastSeenChapter: typeof stateSource.lastSeenChapter === "number" ? stateSource.lastSeenChapter : null,
-    lastUpdatedChapter: typeof stateSource.lastUpdatedChapter === "number" ? stateSource.lastUpdatedChapter : null,
-  };
-  return { bibleEntry, profile, core, state };
-}
-
-function mergeCharacterBibleEntry(existing: CharacterBibleEntry, patch: CharacterBibleEntry): CharacterBibleEntry {
-  const voice = mergeCharacterVoiceProfile(existing.voice, patch.voice);
-  const arc = mergeCharacterArcProfile(existing.arc, patch.arc);
-  return {
-    ...existing,
-    id: existing.id || patch.id,
-    name: preferStrongString(existing.name, patch.name) ?? patch.name,
-    role: preferStrongString(existing.role, patch.role) ?? patch.role,
-    ...(preferStrongString(existing.age, patch.age) ? { age: preferStrongString(existing.age, patch.age) } : {}),
-    ...(preferStrongString(existing.gender, patch.gender) ? { gender: preferStrongString(existing.gender, patch.gender) } : {}),
-    ...(preferStrongString(existing.identity, patch.identity) ? { identity: preferStrongString(existing.identity, patch.identity) } : {}),
-    appearanceAnchors: mergeStringArrays(existing.appearanceAnchors ?? [], patch.appearanceAnchors ?? []),
-    ...(preferStrongString(existing.longTermDesire, patch.longTermDesire) ? { longTermDesire: preferStrongString(existing.longTermDesire, patch.longTermDesire) } : {}),
-    ...(preferStrongString(existing.desire, patch.desire) ? { desire: preferStrongString(existing.desire, patch.desire) } : {}),
-    ...(preferStrongString(existing.fear, patch.fear) ? { fear: preferStrongString(existing.fear, patch.fear) } : {}),
-    ...(preferStrongString(existing.weakness, patch.weakness) ? { weakness: preferStrongString(existing.weakness, patch.weakness) } : {}),
-    ...(preferStrongString(existing.contradiction, patch.contradiction) ? { contradiction: preferStrongString(existing.contradiction, patch.contradiction) } : {}),
-    ...(preferStrongString(existing.moralBoundary, patch.moralBoundary) ? { moralBoundary: preferStrongString(existing.moralBoundary, patch.moralBoundary) } : {}),
-    ...(preferStrongString(existing.privateMotive, patch.privateMotive) ? { privateMotive: preferStrongString(existing.privateMotive, patch.privateMotive) } : {}),
-    ...(preferStrongString(existing.relationshipToProtagonist, patch.relationshipToProtagonist) ? { relationshipToProtagonist: preferStrongString(existing.relationshipToProtagonist, patch.relationshipToProtagonist) } : {}),
-    relationshipDynamics: mergeStringArrays(existing.relationshipDynamics ?? [], patch.relationshipDynamics ?? []),
-    ...(preferStrongString(existing.trustLevel, patch.trustLevel) ? { trustLevel: preferStrongString(existing.trustLevel, patch.trustLevel) } : {}),
-    ...(preferStrongString(existing.hiddenStance, patch.hiddenStance) ? { hiddenStance: preferStrongString(existing.hiddenStance, patch.hiddenStance) } : {}),
-    ...(voice ? { voice } : {}),
-    speechRules: mergeStringArrays(existing.speechRules ?? [], patch.speechRules ?? []),
-    ...(preferStrongString(existing.speechStyle, patch.speechStyle) ? { speechStyle: preferStrongString(existing.speechStyle, patch.speechStyle) } : {}),
-    speechSamples: mergeStringArrays(existing.speechSamples ?? [], patch.speechSamples ?? []),
-    personalityBaseline: mergeStringArrays(existing.personalityBaseline ?? [], patch.personalityBaseline ?? []),
-    ...(preferStrongString(existing.socialEnergy, patch.socialEnergy) ? { socialEnergy: preferStrongString(existing.socialEnergy, patch.socialEnergy) } : {}),
-    behaviorBoundaries: mergeStringArrays(existing.behaviorBoundaries ?? [], patch.behaviorBoundaries ?? []),
-    knowledgeKnown: mergeStringArrays(existing.knowledgeKnown ?? [], patch.knowledgeKnown ?? []),
-    knowledgeUnknown: mergeStringArrays(existing.knowledgeUnknown ?? [], patch.knowledgeUnknown ?? []),
-    cannotReveal: mergeStringArrays(existing.cannotReveal ?? [], patch.cannotReveal ?? []),
-    cannotDo: mergeStringArrays(existing.cannotDo ?? [], patch.cannotDo ?? []),
-    canAiModify: existing.canAiModify ?? patch.canAiModify,
-    ...(preferStrongString(existing.arcPromise, patch.arcPromise) ? { arcPromise: preferStrongString(existing.arcPromise, patch.arcPromise) } : {}),
-    ...(arc ? { arc } : {}),
-    ...(preferStrongString(existing.currentStateHint, patch.currentStateHint) ? { currentStateHint: preferStrongString(existing.currentStateHint, patch.currentStateHint) } : {}),
-  };
-}
-
-async function writeMergedCharacterFile(path: string, patch: unknown): Promise<void> {
-  if (!isRecord(patch)) return;
-  const existing = await readJson<Record<string, unknown>>(path, {});
-  await writeJsonAtomic(path, mergeRecordsPreferExisting(existing, patch));
-}
-
 function mergeRecordsPreferExisting(existing: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const next: Record<string, unknown> = { ...existing };
   for (const [key, value] of Object.entries(patch)) {
@@ -931,10 +754,6 @@ function hasStrongConcreteValue(value: unknown): boolean {
   return false;
 }
 
-function preferStrongString(existing: string | undefined, patch: string | undefined): string | undefined {
-  return hasStrongConcreteValue(existing) ? existing : text(patch) ?? text(existing);
-}
-
 function mergeStringArrays(...lists: readonly (readonly string[] | undefined)[]): string[] {
   return unique(lists.flatMap((list) => list ?? []).map((item) => item.trim()).filter(Boolean));
 }
@@ -953,164 +772,6 @@ function mergeUnknownArrays(existing: unknown, patch: unknown): unknown[] {
     result.push(value);
   }
   return result;
-}
-
-function readCharacterVoiceProfile(...values: readonly unknown[]): CharacterVoiceProfile | undefined {
-  const records = values.filter(isRecord);
-  if (records.length === 0) return undefined;
-  const profile: CharacterVoiceProfile = {
-    style: firstRecordString(records, "style"),
-    rhythm: firstRecordString(records, "rhythm"),
-    avoidanceTopics: mergeStringArrays(...records.map((record) => readStringList(record.avoidanceTopics))),
-    sampleLines: mergeStringArrays(...records.map((record) => readStringList(record.sampleLines))),
-  };
-  return Object.values(profile).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value)) ? profile : undefined;
-}
-
-function mergeCharacterVoiceProfile(existing: CharacterVoiceProfile | undefined, patch: CharacterVoiceProfile | undefined): CharacterVoiceProfile | undefined {
-  const profile: CharacterVoiceProfile = {
-    style: preferStrongString(existing?.style, patch?.style),
-    rhythm: preferStrongString(existing?.rhythm, patch?.rhythm),
-    avoidanceTopics: mergeStringArrays(existing?.avoidanceTopics ?? [], patch?.avoidanceTopics ?? []),
-    sampleLines: mergeStringArrays(existing?.sampleLines ?? [], patch?.sampleLines ?? []),
-  };
-  return Object.values(profile).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value)) ? profile : undefined;
-}
-
-function readCharacterArcProfile(...values: readonly unknown[]): CharacterArcProfile | undefined {
-  const records = values.filter(isRecord);
-  if (records.length === 0) return undefined;
-  const profile: CharacterArcProfile = {
-    startState: firstRecordString(records, "startState"),
-    currentState: firstRecordString(records, "currentState"),
-    projectedDirection: firstRecordString(records, "projectedDirection"),
-  };
-  return Object.values(profile).some(Boolean) ? profile : undefined;
-}
-
-function mergeCharacterArcProfile(existing: CharacterArcProfile | undefined, patch: CharacterArcProfile | undefined): CharacterArcProfile | undefined {
-  const profile: CharacterArcProfile = {
-    startState: preferStrongString(existing?.startState, patch?.startState),
-    currentState: preferStrongString(existing?.currentState, patch?.currentState),
-    projectedDirection: preferStrongString(existing?.projectedDirection, patch?.projectedDirection),
-  };
-  return Object.values(profile).some(Boolean) ? profile : undefined;
-}
-
-function firstRecordString(records: readonly Record<string, unknown>[], key: string): string | undefined {
-  for (const record of records) {
-    const value = readString(record[key]);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-async function applyLocationSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const location = normalizeLocationPatch(suggestion);
-  const locationPath = join(projectDir, "story", "location-bible.json");
-  const bible = await readJson<LocationBible>(locationPath, { version: "v0", locations: [] });
-  const index = bible.locations.findIndex((item) => item.id === location.id || item.name === location.name);
-  if (index < 0) {
-    await writeJsonAtomic(locationPath, { ...bible, locations: [...bible.locations, location] });
-    return;
-  }
-  const nextLocations = [...bible.locations];
-  nextLocations[index] = mergeLocationDetail(nextLocations[index] as LocationBibleEntry, location);
-  await writeJsonAtomic(locationPath, { ...bible, locations: nextLocations });
-}
-
-async function applyCreateAsset(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const asset = normalizeAssetPatch(suggestion.after as AssetItem, suggestion);
-  const assetPath = join(projectDir, "story", "assets.json");
-  const ledger = await readJson<AssetLedger>(assetPath, { version: "v0", assets: [], containers: [] });
-  if (ledger.assets.some((item) => item.id === asset.id || item.name === asset.name)) return;
-  await writeJsonAtomic(assetPath, { ...ledger, assets: [...ledger.assets, asset] });
-}
-
-async function applyAssetSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const assetPath = join(projectDir, "story", "assets.json");
-  const ledger = await readJson<AssetLedger>(assetPath, { version: "v0", assets: [], containers: [] });
-  const patch = normalizeAssetUpdatePatch(suggestion, ledger.assets);
-  const index = ledger.assets.findIndex((item) => item.id === patch.id || item.name === patch.name);
-  const assets = [...ledger.assets];
-  if (index < 0) {
-    assets.push(patch);
-  } else {
-    assets[index] = mergeAssetItem(assets[index] as AssetItem, patch);
-  }
-  await writeJsonAtomic(assetPath, { ...ledger, assets });
-}
-
-async function applyWorldRuleSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const worldPath = join(projectDir, "story", "world-bible.json");
-  const bible = await readJson<WorldBible>(worldPath, { version: "v0", rules: [], factions: [], powerOrSurvivalSystems: [], historyFacts: [], socialOrder: [] });
-  if (!isRecord(suggestion.after)) {
-    const record = { ...bible } as Record<string, unknown>;
-    writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJsonAtomic(worldPath, record);
-    return;
-  }
-  const source = suggestion.after;
-  const coreRules = mergeStringArrays(readStringList(source.coreRules), readStringList(source.rules));
-  const resourceRules = mergeStringArrays(readStringList(source.resourceRules), readStringList(source.powerOrSurvivalSystems));
-  const next: WorldBible = {
-    ...bible,
-    ...(readString(source.worldPremise) ? { worldPremise: readString(source.worldPremise) } : {}),
-    rules: mergeStringArrays(bible.rules ?? [], coreRules),
-    factions: mergeWorldFactions(bible.factions ?? [], readWorldFactions(source.factions)),
-    powerOrSurvivalSystems: mergeStringArrays(bible.powerOrSurvivalSystems ?? [], resourceRules),
-    historyFacts: mergeStringArrays(bible.historyFacts ?? [], readStringList(source.historyFacts)),
-    socialOrder: mergeStringArrays(bible.socialOrder ?? [], readStringList(source.socialOrder)),
-    resourceRules: mergeStringArrays(bible.resourceRules ?? [], resourceRules),
-    authorityRules: mergeStringArrays(bible.authorityRules ?? [], readStringList(source.authorityRules)),
-    conflictSources: mergeStringArrays(bible.conflictSources ?? [], readStringList(source.conflictSources)),
-    fixedFacts: mergeStringArrays(bible.fixedFacts ?? [], readStringList(source.fixedFacts)),
-    protectedSecrets: mergeStringArrays(bible.protectedSecrets ?? [], readStringList(source.protectedSecrets)),
-    publicFacts: mergeStringArrays(bible.publicFacts ?? [], readStringList(source.publicFacts)),
-    hiddenFacts: mergeStringArrays(bible.hiddenFacts ?? [], readStringList(source.hiddenFacts)),
-    forbiddenRuleBreaks: mergeStringArrays(bible.forbiddenRuleBreaks ?? [], readStringList(source.forbiddenRuleBreaks)),
-  };
-  await writeJsonAtomic(worldPath, next);
-}
-
-async function applyWritingRuleSuggestion(projectDir: string, suggestion: FoundationGapSuggestion): Promise<void> {
-  const rulesPath = join(projectDir, "story", "writing-rules.json");
-  const rules = await readJson<WritingRules>(rulesPath, {
-    version: "v0",
-    proseStyle: [],
-    genreRequirements: [],
-    suspenseRules: [],
-    payoffRules: [],
-    reversalRules: [],
-    readerExperienceRules: [],
-    forbiddenContent: [],
-    doNotDo: [],
-  });
-  if (!isRecord(suggestion.after)) {
-    const record = { ...rules } as Record<string, unknown>;
-    writePath(record, targetPathForSuggestion(suggestion), suggestion.after, suggestion.targetId);
-    await writeJsonAtomic(rulesPath, record);
-    return;
-  }
-  const source = suggestion.after;
-  const targetWords = readNumber(source.targetChapterWords);
-  const next: WritingRules = {
-    ...rules,
-    ...(readString(source.narrativePerspective) ? { narrativePerspective: readString(source.narrativePerspective) } : {}),
-    proseStyle: mergeStringArrays(rules.proseStyle ?? [], readStringList(source.proseStyle)),
-    ...(readString(source.pacing) ? { pacing: readString(source.pacing) } : {}),
-    ...(readString(source.revealPolicy) ? { revealPolicy: readString(source.revealPolicy) } : {}),
-    ...(targetWords !== undefined ? { chapterLength: { ...(rules.chapterLength ?? {}), targetWords } } : {}),
-    genreRequirements: mergeStringArrays(rules.genreRequirements ?? [], readStringList(source.genreRequirements)),
-    suspenseRules: mergeStringArrays(rules.suspenseRules ?? [], readStringList(source.suspenseRules)),
-    payoffRules: mergeStringArrays(rules.payoffRules ?? [], readStringList(source.payoffRules)),
-    reversalRules: mergeStringArrays(rules.reversalRules ?? [], readStringList(source.reversalRules)),
-    readerExperienceRules: mergeStringArrays(rules.readerExperienceRules ?? [], readStringList(source.readerExperienceRules)),
-    forbiddenContent: mergeStringArrays(rules.forbiddenContent ?? [], readStringList(source.forbiddenContent)),
-    doNotDo: mergeStringArrays(rules.doNotDo ?? [], readStringList(source.doNotDo)),
-    antiAiPatterns: mergeStringArrays(rules.antiAiPatterns ?? [], readStringList(source.antiAiPatterns)),
-  };
-  await writeJsonAtomic(rulesPath, next);
 }
 
 async function findSuggestionConflict(projectDir: string, suggestion: FoundationGapSuggestion): Promise<FoundationConflictItem | undefined> {
@@ -1210,36 +871,6 @@ function isTravelSentence(value: string): boolean {
     || /[一二三四五六七八九十\d]+楼.{0,8}到[一二三四五六七八九十\d]+楼.{0,12}(?:楼梯|分钟)/u.test(value);
 }
 
-function mergeLocationDetail(existing: LocationBibleEntry, patch: LocationBibleEntry): LocationBibleEntry {
-  return {
-    ...existing,
-    type: text(existing.type) ? existing.type : patch.type,
-    parentLocation: text(existing.parentLocation) ? existing.parentLocation : patch.parentLocation,
-    locationType: text(existing.locationType) ? existing.locationType : patch.locationType,
-    currentKnownPosition: text(existing.currentKnownPosition) ? existing.currentKnownPosition : patch.currentKnownPosition,
-    spatialStructure: {
-      floors: unique([...(existing.spatialStructure?.floors ?? []), ...(patch.spatialStructure?.floors ?? [])]),
-      rooms: unique([...(existing.spatialStructure?.rooms ?? []), ...(patch.spatialStructure?.rooms ?? [])]),
-      entrances: unique([...(existing.spatialStructure?.entrances ?? []), ...(patch.spatialStructure?.entrances ?? [])]),
-      exits: unique([...(existing.spatialStructure?.exits ?? []), ...(patch.spatialStructure?.exits ?? [])]),
-    },
-    sensoryDetails: mergeLocationSensoryDetails(existing.sensoryDetails, patch.sensoryDetails),
-    connectedLocations: unique([...(existing.connectedLocations ?? []), ...(patch.connectedLocations ?? [])]),
-    knownFeatures: unique([...(existing.knownFeatures ?? []), ...(patch.knownFeatures ?? [])]),
-    risks: unique([...(existing.risks ?? []), ...(patch.risks ?? [])]),
-    resources: unique([...(existing.resources ?? []), ...(patch.resources ?? [])]),
-    narrativeFunction: text(existing.narrativeFunction) ? existing.narrativeFunction : patch.narrativeFunction,
-    possibleConflicts: unique([...(existing.possibleConflicts ?? []), ...(patch.possibleConflicts ?? [])]),
-    currentStatus: text(existing.currentStatus) ? existing.currentStatus : patch.currentStatus,
-    hiddenFacts: unique([...(existing.hiddenFacts ?? []), ...(patch.hiddenFacts ?? [])]),
-    travelRules: mergeTravelRules(existing.travelRules ?? [], patch.travelRules ?? []),
-    secrets: unique([...(existing.secrets ?? []), ...(patch.secrets ?? [])]),
-    fixedFacts: unique([...(existing.fixedFacts ?? []), ...(patch.fixedFacts ?? [])]),
-    lastSeenChapter: existing.lastSeenChapter ?? patch.lastSeenChapter,
-    lastKnownState: text(existing.lastKnownState) ? existing.lastKnownState : patch.lastKnownState,
-  };
-}
-
 function readLocationSensoryDetails(...values: readonly unknown[]): LocationSensoryDetails | undefined {
   const records = values.filter(isRecord);
   if (records.length === 0) return undefined;
@@ -1250,35 +881,6 @@ function readLocationSensoryDetails(...values: readonly unknown[]): LocationSens
     touch: mergeStringArrays(...records.map((record) => readStringList(record.touch))),
   };
   return Object.values(details).some((value) => value.length > 0) ? details : undefined;
-}
-
-function mergeLocationSensoryDetails(
-  existing: LocationSensoryDetails | undefined,
-  patch: LocationSensoryDetails | undefined,
-): LocationSensoryDetails | undefined {
-  const details: LocationSensoryDetails = {
-    visual: mergeStringArrays(existing?.visual ?? [], patch?.visual ?? []),
-    sound: mergeStringArrays(existing?.sound ?? [], patch?.sound ?? []),
-    smell: mergeStringArrays(existing?.smell ?? [], patch?.smell ?? []),
-    touch: mergeStringArrays(existing?.touch ?? [], patch?.touch ?? []),
-  };
-  return Object.values(details).some((value) => value.length > 0) ? details : undefined;
-}
-
-function mergeTravelRules(existing: readonly LocationTravelRule[], patch: readonly LocationTravelRule[]): readonly LocationTravelRule[] {
-  const result = [...existing];
-  for (const rule of patch) {
-    if (result.some((item) => sameTravelRule(item, rule))) continue;
-    result.push(rule);
-  }
-  return result;
-}
-
-function sameTravelRule(left: LocationTravelRule, right: LocationTravelRule): boolean {
-  return sameTravelRoute(left, right)
-    && left.method === right.method
-    && (left.durationMinutes ?? 0) === (right.durationMinutes ?? 0)
-    && normalizedText(left.constraint) === normalizedText(right.constraint);
 }
 
 function readTravelRules(value: unknown): LocationTravelRule[] {
@@ -1294,99 +896,6 @@ function readTravelRules(value: unknown): LocationTravelRule[] {
       ...(readString(item.constraint) ? { constraint: readString(item.constraint) } : {}),
     };
   }).filter((item): item is LocationTravelRule => item !== undefined);
-}
-
-function normalizeAssetPatch(asset: AssetItem, suggestion: FoundationGapSuggestion): AssetItem {
-  const sourceName = suggestion.extractedEntityName ?? extractAssetNameFromMessage(suggestion.sourceUserMessage);
-  if (!sourceName) return asset;
-  return { ...asset, name: sourceName };
-}
-
-function normalizeAssetUpdatePatch(suggestion: FoundationGapSuggestion, existingAssets: readonly AssetItem[]): AssetItem {
-  const source = isRecord(suggestion.after) ? suggestion.after : {};
-  const sourceName = readString(source.name) ?? suggestion.extractedEntityName;
-  const existing = existingAssets.find((item) => item.id === suggestion.targetId || (sourceName && item.name === sourceName));
-  const name = sourceName ?? existing?.name ?? suggestion.targetId ?? "待确认资产";
-  const id = readString(source.id) ?? existing?.id ?? suggestion.targetId ?? stableId(name, "asset");
-  const carriedBy = readString(source.carriedByCharacterId) ?? readString(source.carriedBy);
-  return {
-    id,
-    name,
-    type: readString(source.type) ?? existing?.type ?? "item",
-    ...(readString(source.ownerCharacterId) ?? existing?.ownerCharacterId ? { ownerCharacterId: readString(source.ownerCharacterId) ?? existing?.ownerCharacterId } : {}),
-    ...(readString(source.ownerName) ?? existing?.ownerName ?? carriedBy ? { ownerName: readString(source.ownerName) ?? existing?.ownerName ?? carriedBy } : {}),
-    ...(readString(source.currentLocationId) ?? existing?.currentLocationId ? { currentLocationId: readString(source.currentLocationId) ?? existing?.currentLocationId } : {}),
-    ...(readString(source.currentLocationName) ?? readString(source.currentLocation) ?? existing?.currentLocationName ? { currentLocationName: readString(source.currentLocationName) ?? readString(source.currentLocation) ?? existing?.currentLocationName } : {}),
-    ...(carriedBy ?? existing?.carriedByCharacterId ? { carriedByCharacterId: carriedBy ?? existing?.carriedByCharacterId } : {}),
-    ...(readString(source.containerId) ?? existing?.containerId ? { containerId: readString(source.containerId) ?? existing?.containerId } : {}),
-    ...(readNumber(source.quantity) ?? existing?.quantity ? { quantity: readNumber(source.quantity) ?? existing?.quantity } : {}),
-    status: readString(source.status) ?? existing?.status ?? "unknown",
-    ...(readString(source.conditionNote) ?? existing?.conditionNote ? { conditionNote: readString(source.conditionNote) ?? existing?.conditionNote } : {}),
-    ...(typeof source.isConsumable === "boolean" ? { isConsumable: source.isConsumable } : existing?.isConsumable !== undefined ? { isConsumable: existing.isConsumable } : {}),
-    ...(typeof source.isPlotCritical === "boolean" ? { isPlotCritical: source.isPlotCritical } : existing?.isPlotCritical !== undefined ? { isPlotCritical: existing.isPlotCritical } : {}),
-    ...(typeof source.canAiModify === "boolean" ? { canAiModify: source.canAiModify } : existing?.canAiModify !== undefined ? { canAiModify: existing.canAiModify } : {}),
-    ...(typeof source.firstSeenChapter === "number" ? { firstSeenChapter: source.firstSeenChapter } : existing?.firstSeenChapter !== undefined ? { firstSeenChapter: existing.firstSeenChapter } : {}),
-    ...(typeof source.lastSeenChapter === "number" ? { lastSeenChapter: source.lastSeenChapter } : existing?.lastSeenChapter !== undefined ? { lastSeenChapter: existing.lastSeenChapter } : {}),
-    rules: mergeStringArrays(existing?.rules ?? [], readStringList(source.rules)),
-    usageRules: mergeStringArrays(existing?.usageRules ?? [], readStringList(source.usageRules)),
-    lossRules: mergeStringArrays(existing?.lossRules ?? [], readStringList(source.lossRules)),
-    ...(readString(source.blockedReason) ?? existing?.blockedReason ? { blockedReason: readString(source.blockedReason) ?? existing?.blockedReason } : {}),
-    notes: mergeStringArrays(existing?.notes ?? [], readStringList(source.notes)),
-  };
-}
-
-function mergeAssetItem(existing: AssetItem, patch: AssetItem): AssetItem {
-  return {
-    ...existing,
-    ...patch,
-    rules: mergeStringArrays(existing.rules ?? [], patch.rules ?? []),
-    usageRules: mergeStringArrays(existing.usageRules ?? [], patch.usageRules ?? []),
-    lossRules: mergeStringArrays(existing.lossRules ?? [], patch.lossRules ?? []),
-    notes: mergeStringArrays(existing.notes ?? [], patch.notes ?? []),
-  };
-}
-
-function readWorldFactions(value: unknown): WorldBibleFaction[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item): WorldBibleFaction | undefined => {
-    const name = readString(item.name);
-    if (!name) return undefined;
-    return {
-      id: readString(item.id) ?? stableId(name, "faction"),
-      name,
-      goal: readString(item.goal) ?? "待确认目标",
-      resources: readStringList(item.resources),
-    };
-  }).filter((item): item is WorldBibleFaction => item !== undefined);
-}
-
-function mergeWorldFactions(existing: readonly WorldBibleFaction[], patch: readonly WorldBibleFaction[]): WorldBibleFaction[] {
-  const result = [...existing];
-  for (const faction of patch) {
-    const index = result.findIndex((item) => item.id === faction.id || item.name === faction.name);
-    if (index < 0) {
-      result.push(faction);
-      continue;
-    }
-    const current = result[index] as WorldBibleFaction;
-    result[index] = {
-      ...current,
-      goal: preferStrongString(current.goal, faction.goal) ?? faction.goal,
-      resources: mergeStringArrays(current.resources ?? [], faction.resources ?? []),
-    };
-  }
-  return result;
-}
-
-function extractAssetNameFromMessage(message: string | undefined): string | undefined {
-  if (!message) return undefined;
-  const amount = message.match(/(\d+(?:\.\d+)?)\s*(?:元|块)(?:\s*现金)?/u)?.[0];
-  if (amount) return `${amount.replace(/\s+/gu, "")}现金`;
-  const backpack = message.match(/([\u4e00-\u9fffA-Za-z0-9]{0,8}双肩包)/u)?.[1];
-  if (backpack) return backpack;
-  const gun = message.match(/(?:那把|一把|这把)?([\u4e00-\u9fffA-Za-z0-9]{0,6}枪)/u)?.[1];
-  if (gun) return message.includes("抢来") ? `抢来的${gun}` : gun;
-  return undefined;
 }
 
 function targetPathForSuggestion(suggestion: FoundationGapSuggestion): string {
@@ -1486,20 +995,6 @@ function defaultAsset(id: string, name: string, character: CharacterBibleEntry |
   };
 }
 
-function defaultDocument(relativePath: string): Record<string, unknown> {
-  if (relativePath === "story/bible.json") {
-    return { version: "v0", projectLogline: "", premise: "", genre: "", subgenres: [], readerPromise: "", longFormGoals: [], centralConflicts: [], coreMysteries: [], forbiddenChanges: [], canonFacts: [], openQuestions: [] };
-  }
-  if (relativePath === "story/writing-rules.json") {
-    return { version: "v0", proseStyle: [], genreRequirements: [], suspenseRules: [], payoffRules: [], reversalRules: [], readerExperienceRules: [], forbiddenContent: [], doNotDo: [] };
-  }
-  if (relativePath === "story/character-bible.json") return { version: "v0", characters: [] };
-  if (relativePath === "story/world-bible.json") return { version: "v0", rules: [], factions: [], powerOrSurvivalSystems: [], historyFacts: [], socialOrder: [] };
-  if (relativePath === "story/location-bible.json") return { version: "v0", locations: [] };
-  if (relativePath === "story/assets.json") return { version: "v0", assets: [], containers: [] };
-  return {};
-}
-
 function readPath(source: unknown, path: string): unknown {
   if (path === "$") return source;
   const parts = path.split(".");
@@ -1517,57 +1012,6 @@ function readPath(source: unknown, path: string): unknown {
   return current;
 }
 
-function writePath(target: Record<string, unknown>, path: string, value: unknown, targetId?: string): void {
-  if (path === "$") return;
-  const parts = path.split(".");
-  if ((parts[0] === "characters" || parts[0] === "locations" || parts[0] === "assets") && targetId) {
-    const listKey = parts[0];
-    const list = Array.isArray(target[listKey]) ? target[listKey] as Record<string, unknown>[] : [];
-    if (!Array.isArray(target[listKey])) target[listKey] = list;
-    let entry = list.find((item) => item.id === targetId);
-    if (!entry) {
-      entry = { id: targetId, name: "待确认" };
-      list.push(entry);
-    }
-    writePath(entry, parts.slice(2).join("."), value);
-    return;
-  }
-  let current: Record<string, unknown> = target;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const part = parts[index] ?? "";
-    const currentValue = current[part];
-    if (typeof currentValue !== "object" || currentValue === null || Array.isArray(currentValue)) {
-      current[part] = {};
-    }
-    current = current[part] as Record<string, unknown>;
-  }
-  const finalPart = parts.at(-1);
-  if (!finalPart) return;
-  const existing = current[finalPart];
-  if (Array.isArray(existing) && Array.isArray(value)) {
-    current[finalPart] = unique([...existing.filter((item): item is string => typeof item === "string"), ...value.filter((item): item is string => typeof item === "string")]);
-  } else if (!hasConcreteValue(existing)) {
-    current[finalPart] = value;
-  }
-}
-
-function hasConcreteValue(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "string") return value.trim().length > 0;
-  if (typeof value === "number" || typeof value === "boolean") return true;
-  if (typeof value === "object" && value !== null) return Object.keys(value).length > 0;
-  return false;
-}
-
-async function writeIfMissing(path: string, value: unknown): Promise<void> {
-  const existing = await readFile(path, "utf-8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (existing !== undefined) return;
-  await writeJsonAtomic(path, value);
-}
-
 async function readJson<T>(path: string, fallback: T): Promise<T> {
   const text = await readFile(path, "utf-8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
@@ -1575,8 +1019,6 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   });
   return text === undefined ? fallback : JSON.parse(text) as T;
 }
-
-
 
 function lastPathSegment(path: string): string {
   return path.split(".").at(-1) ?? path;
