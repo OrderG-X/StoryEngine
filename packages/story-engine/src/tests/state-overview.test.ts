@@ -8,42 +8,6 @@ import { createStoryProject, toSafeCharacterId } from "../project-store.js";
 import { buildStateOverview } from "../state-overview.js";
 
 describe("State Overview Pack V0", () => {
-  it("recovers project-wide commit residue before ordinary overview reads", async () => {
-    const projectDir = await createOverviewFixture();
-    const timelineRelativePath = join("timeline", "events.json");
-    const timelinePath = join(projectDir, timelineRelativePath);
-    const originalTimeline = await readFile(timelinePath, "utf-8");
-    const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0001");
-    const backupPath = join("backups", timelineRelativePath);
-    await mkdir(join(txDir, "backups", "timeline"), { recursive: true });
-    await writeFile(join(txDir, backupPath), originalTimeline, "utf-8");
-    await writeFile(join(txDir, "manifest.json"), `${JSON.stringify({
-      version: 2,
-      chapter: 1,
-      createdAt: "2026-07-13T00:00:00.000Z",
-      files: [timelineRelativePath],
-      backups: [{
-        relativePath: timelineRelativePath,
-        existed: true,
-        backupPath,
-        sha256: createHash("sha256").update(originalTimeline, "utf-8").digest("hex"),
-      }],
-      status: "staged",
-    }, null, 2)}\n`, "utf-8");
-    await writeFile(timelinePath, `${JSON.stringify([{
-      id: "partial-overview-contamination",
-      chapter: 999,
-      summary: "partial residue must not be observed",
-      participants: [],
-    }], null, 2)}\n`, "utf-8");
-
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
-
-    expect(overview.timeline.recentEvents.some((event) => event.summary.includes("partial residue"))).toBe(false);
-    await expect(readFile(timelinePath, "utf-8")).resolves.toBe(originalTimeline);
-    await expect(readFile(join(txDir, "manifest.json"), "utf-8"))
-      .resolves.toContain('"status": "recovered"');
-  });
 
   it("builds a read-only UI ViewModel from a fixture project", async () => {
     const projectDir = await createOverviewFixture();

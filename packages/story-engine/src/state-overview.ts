@@ -6,12 +6,7 @@ import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
 import { selectRelevant } from "./relevance-selection.js";
 import { bigramSimilarity } from "./text-similarity.js";
-import {
-  formatCommitRecoveryNotice,
-  listCommitRecoveryNotices,
-  recoverProjectCommitTransactions,
-  withProjectCommitLock,
-} from "./legacy-commit-recovery.js";
+import { formatCommitRecoveryNotice, listCommitRecoveryNotices } from "./legacy-commit-recovery.js";
 import {
   resolveCharacterRole,
   resolveIdentity,
@@ -475,14 +470,10 @@ function recentItems(values: readonly string[]): readonly string[] {
   return values.slice(-MAX_RECENT_WORLD_ITEMS);
 }
 
+/**
+ * 总览是读路径：不拿锁、不写盘（重构 P7）。老定稿链的事务残留在开书时收（界面服务端 ensureBookOnCore）。
+ */
 export async function buildStateOverview(input: BuildStateOverviewInput): Promise<StateOverview> {
-  return withProjectCommitLock(input.projectDir, async () => {
-    await recoverProjectCommitTransactions(input.projectDir);
-    return buildStateOverviewUnlocked(input);
-  });
-}
-
-async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promise<StateOverview> {
   // 审计 Low：损坏台账（SyntaxError）回落空值时的留痕收集器——进 uiHints.warnings，面板显示「坏」而非「空」。
   const corruptLedgerFiles: string[] = [];
   const noteCorruptLedger = (relativePath: string): void => {
@@ -530,7 +521,7 @@ async function buildStateOverviewUnlocked(input: BuildStateOverviewInput): Promi
     readJsonSafe<readonly TimelineEvent[]>(input.projectDir, join("timeline", "events.json"), [], noteCorruptLedger),
     readJsonSafe<StoryCalendar>(input.projectDir, join("time", "calendar.json"), { currentStoryDay: 1, currentTimeOfDay: "unknown" }, noteCorruptLedger),
     readCharacters(input.projectDir, noteDegradedRead),
-    // A3（P1-6 上浮）：recover 已在上方锁内跑完；仍挂着「recovered + recoveryIssues」的残留
+    // A3（P1-6 上浮）：开书时 recover 已跑完；仍挂着「recovered + recoveryIssues」的残留
     // =盘上「章文件在、资料已回滚」的分歧态。上浮进 uiHints.warnings 既有通道，绝不只写 manifest 静默。
     // 扫描失败不堵概览——概述是读侧，残留信号由下一次 recover/commit 继续兜。
     listCommitRecoveryNotices(input.projectDir).catch(() => [] as const),

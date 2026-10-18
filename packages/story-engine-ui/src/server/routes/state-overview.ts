@@ -1,12 +1,7 @@
 /**
  * GET /api/state-overview — builds a full state overview for a project.
  */
-import {
-  buildStateOverview,
-  recoverProjectCommitTransactions,
-  withProjectCommitLock,
-} from "@actalk/story-engine";
-import type { StateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "@actalk/story-engine";
 import {
   guardProjectPath,
   parseOptionalPositiveInteger,
@@ -50,15 +45,13 @@ export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void 
       const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
       if (!onCore.ok) console.warn(`[state-overview] 书没接上新核心：${onCore.reason}`);
       await maybeStartReadersCatchUp(projectDir);
-      const overview = await withProjectCommitLock(projectDir, async () => {
-        await recoverProjectCommitTransactions(projectDir);
-        const coreOverview = await buildStateOverview({
-          projectDir,
-          ...(chapter !== undefined ? { chapter } : {}),
-          ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
-        });
-        return withUiOverviewDetails(projectDir, coreOverview);
+      // 读路径不拿锁、不写盘（重构 P7）：老定稿链的事务残留在上面开书那步收。
+      const coreOverview = await buildStateOverview({
+        projectDir,
+        ...(chapter !== undefined ? { chapter } : {}),
+        ...(maxTimelineEvents !== undefined ? { maxTimelineEvents } : {}),
       });
+      const overview = await withUiOverviewDetails(projectDir, coreOverview);
 
       writeJson(res, 200, { ok: true, overview });
     } catch (error) {

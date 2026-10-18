@@ -70,20 +70,6 @@ describe("老定稿链事务残留的恢复", () => {
     await expect(recoverProjectCommitTransactions(projectDir)).resolves.toBeUndefined();
   });
 
-  it("读共享资料前先把别的章的残留收掉", async () => {
-    const projectDir = await createFixtureProject();
-    const timelineRelativePath = join("timeline", "events.json");
-    const timelinePath = join(projectDir, timelineRelativePath);
-    const originalTimeline = await readFile(timelinePath, "utf-8");
-    await writeStagedResidue(projectDir, 1, [{ relativePath: timelineRelativePath, previous: originalTimeline }]);
-    await writeFile(timelinePath, "[{\"id\":\"contaminated\",\"chapter\":999,\"summary\":\"崩溃留下的污染事件\",\"participants\":[]}]\n", "utf-8");
-
-    await buildStateOverview({ projectDir, chapter: 2 });
-
-    await expect(readFile(timelinePath, "utf-8")).resolves.toBe(originalTimeline);
-    await expect(readTransactionStatus(projectDir, 1)).resolves.toBe("recovered");
-  });
-
   it("快照撤销留下的空目录壳直接清掉，不把书锁死", async () => {
     const projectDir = await createFixtureProject();
     const txDir = join(projectDir, ".story-engine-tx", "commit-chapter-0003");
@@ -161,7 +147,7 @@ describe("老定稿链事务残留的恢复", () => {
     await writeSettledTransaction(projectDir, 5, "applied");
 
     await recoverProjectCommitTransactions(projectDir);
-    await buildStateOverview({ projectDir, chapter: 5 });
+    await recoverProjectCommitTransactions(projectDir);
 
     await expect(readTransactionStatus(projectDir, 5)).resolves.toBe("applied");
     await expect(listCommitRecoveryNotices(projectDir)).resolves.toEqual([]);

@@ -8,7 +8,7 @@
  * 版本号是草稿文件全文的哈希（核心包 draft.save）。外面先拿老引擎的项目锁，和 AI 改稿 / 出稿互斥
  * （它们还在老锁里写同一个文件），里面跑核心命令。
  */
-import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
+import { withProjectCommitLock } from "@actalk/story-engine";
 import { draftSave, readChapterPaper, runCommand, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
@@ -35,11 +35,9 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
         const projectDir = requireBodyString(url.searchParams.get("project"), "项目路径不能为空。");
         if (!guardProjectPath(res, projectDir)) return;
         const chapter = requirePositiveBodyInteger(Number(url.searchParams.get("chapter")), "章节不能为空。");
-        const paper = await withProjectCommitLock(projectDir, async () => {
-          await recoverProjectCommitTransactions(projectDir);
-          await assertStoryEngineProject(projectDir);
-          return readChapterPaper(projectDir, chapter);
-        });
+        // 读路径不拿锁、不写盘（重构 P7）。
+        await assertStoryEngineProject(projectDir);
+        const paper = await readChapterPaper(projectDir, chapter);
         writeJson(res, 200, { ok: true, paper });
         return;
       }

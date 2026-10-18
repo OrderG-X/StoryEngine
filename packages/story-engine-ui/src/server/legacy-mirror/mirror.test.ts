@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";
 import { MIRROR_BACKUP_DIR, MIRROR_MARKER, mirrorIsStale, readMirrorVersion, syncLegacyMirror } from "./sync.js";
+import { ensureBookOnCore } from "./ensure.js";
 
 type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string; review?: "auto" | "author" } : never) : never;
 const q = "原句原句";
@@ -257,5 +259,43 @@ describe("老格式镜像·写盘", () => {
     expect(await readMirrorVersion(book)).toBe(2);
     const events = JSON.parse(await readFile(join(book, MIRROR_FILES.events), "utf-8"));
     expect(events).toHaveLength(2);
+  });
+});
+
+describe("开书时收老定稿链的事务残留（重构 P7：读路径不再收）", () => {
+  let book: string;
+  beforeEach(async () => {
+    book = await makeHomeTempDir("legacy-tx-open-");
+  });
+  afterEach(async () => {
+    await rm(book, { recursive: true, force: true });
+  });
+
+  it("老版本崩溃留下的 staged 事务：开书那步还原备份、标 recovered", async () => {
+    const target = join(book, "story", "hooks.json");
+    await mkdir(join(book, "story"), { recursive: true });
+    await writeFile(target, "崩溃写了一半", "utf-8");
+    const txDir = join(book, ".story-engine-tx", "commit-chapter-0001");
+    await mkdir(join(txDir, "backups", "story"), { recursive: true });
+    const original = "{\"hooks\":[]}\n";
+    await writeFile(join(txDir, "backups", "story", "hooks.json"), original, "utf-8");
+    await writeFile(join(txDir, "manifest.json"), JSON.stringify({
+      version: 2,
+      chapter: 1,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      files: ["story/hooks.json"],
+      backups: [{
+        relativePath: "story/hooks.json",
+        existed: true,
+        backupPath: "backups/story/hooks.json",
+        sha256: createHash("sha256").update(original, "utf-8").digest("hex"),
+      }],
+      status: "staged",
+    }), "utf-8");
+
+    expect(await ensureBookOnCore(book)).toMatchObject({ ok: true });
+
+    expect(await readFile(target, "utf-8")).toBe(original);
+    expect(JSON.parse(await readFile(join(txDir, "manifest.json"), "utf-8")).status).toBe("recovered");
   });
 });

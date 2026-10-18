@@ -5,7 +5,11 @@
  *   - 账单有了、老格式镜像过期（或从没生成过）→ 重生成镜像（第一次生成前老文件原样留一份，见 sync.ts）。
  *
  * 新书（还没有定稿章）什么都不做：第一次定稿就会建出账单。这一步每次开书都会调，已经接好的书只读两个小文件。
+ *
+ * 最前面先收老版本中途崩溃留下的老定稿链事务残留（`.story-engine-tx/`，没有就是一次 lstat）：
+ * 读路径都不再收它（重构 P7），开书是唯一入口。
  */
+import { recoverProjectCommitTransactions } from "@actalk/story-engine";
 import { bookImport, listChapterTexts, readHead, runCommand, type BookImportResult } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror, type MirrorSyncResult } from "./sync.js";
 
@@ -36,6 +40,11 @@ export async function ensureBookOnCore(bookDir: string, options: EnsureOnCoreOpt
 }
 
 async function ensureNow(bookDir: string, options: EnsureOnCoreOptions): Promise<EnsureOnCoreResult> {
+  try {
+    await recoverProjectCommitTransactions(bookDir);
+  } catch (error) {
+    return { ok: false, code: "legacy_tx_residue", reason: error instanceof Error ? error.message : String(error) };
+  }
   let imported: BookImportResult | undefined;
   if ((await readHead(bookDir)).version === 0) {
     if ((await listChapterTexts(bookDir)).length === 0) return { ok: true };
