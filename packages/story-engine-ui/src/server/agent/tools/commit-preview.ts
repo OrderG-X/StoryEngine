@@ -67,11 +67,13 @@ const outputSchema = z.object({
   notRecorded: z.array(z.string()).describe("记账员交了、但原句对不上或指向前文没有的东西，这次没记上的（带原因）。"),
   blockingReasons: z.array(z.string()),
   summary: z.string().describe("给作者看的一句话结论。"),
+  notes: z.array(z.string()).optional().describe("要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……），summary 里【】内的就是这些。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引，界面不展示。"),
   ledgerChecklist: z.array(z.object({
     id: z.string(),
     kind: z.string(),
     label: z.string(),
+    reason: z.string().optional(),
     detail: z.string().optional(),
     removable: z.boolean(),
     editableDay: z.number().int().optional(),
@@ -101,7 +103,8 @@ export async function buildCommitPreviewToolOutput(input: {
     const reasons = gates.map(describeGate);
     return {
       ...blocked(chapter, reasons, `第 ${chapter} 章现在还定不了：${reasons.join("；")}。`),
-      draftQualityIssues: gates,
+      // 引擎原话是英文，给人看的（卡片里点开的明细）换成同一句中文说法。
+      draftQualityIssues: gates.map((issue, index) => ({ ...issue, message: reasons[index]! })),
       ...(gates.some((issue) => issue.type === "too_short")
         ? { modelHint: "字数不足是硬阻断：先和作者商量扩写方向、把工作稿写够，再重新预览；不要在字数不足时反复预览。" }
         : {}),
@@ -173,7 +176,9 @@ function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   return {
     id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : String(item.index),
     kind: item.kind,
-    label: review && why ? `${item.label}（${why}）` : item.label,
+    label: item.label,
+    // 为什么要作者看：单独一栏，清单里同一原因的条目归在一起只说一遍（重构 P6）。
+    ...(review && why ? { reason: why } : {}),
     ...(item.quote ? { detail: item.quote } : {}),
     removable: true,
     ...(review ? { needsConfirm: true } : {}),
@@ -239,6 +244,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
     notRecorded,
     blockingReasons: [],
     summary: notes.length > 0 ? `${head}${notes.map((note) => `【${note}】`).join("")}` : head,
+    ...(notes.length > 0 ? { notes } : {}),
     modelHint:
       "预览通过：请作者看清单、点预览卡上的「确认定稿」按钮写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
       "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。",

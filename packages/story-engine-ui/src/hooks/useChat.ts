@@ -14,6 +14,7 @@ import { nextFlowAfterToolResult } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
+import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
 import type { StateOverview } from "../api/types.js";
@@ -404,7 +405,12 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (info.toolName === "generate_draft") endStreaming();
               // 核账结果记下核的是稿纸哪一版（回合开头存过稿，这时的版本就是服务端读到的那版）；之后稿子变了就显示「核过后改过稿」。
               if (info.toolName === "check_continuity" && !chapterMismatch) {
-                useChatStore.getState().stampContinuityVersion(assistantMsgId, useDraftStore.getState().baseVersion);
+                useChatStore.getState().stampCardVersion(assistantMsgId, "continuity", useDraftStore.getState().baseVersion);
+              }
+              // 定稿预览一到就弹出定稿清单（重构 P6）；记下预览的是哪一版，稿子没再变时再点「定稿」直接打开这份。
+              if (info.toolName === "commit_preview" && !chapterMismatch) {
+                useChatStore.getState().stampCardVersion(assistantMsgId, "commit-preview", useDraftStore.getState().baseVersion);
+                openCommitSheet(assistantMsgId);
               }
               if (chapterMismatch) {
                 // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
@@ -823,6 +829,14 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
+      // 「定稿」：上次预览后稿子没变，直接打开那份定稿清单，不再重跑记账员。
+      if (button === "commit_preview") {
+        const reusable = reusableCommitPreviewId(useChatStore.getState().messages, useDraftStore.getState());
+        if (reusable) {
+          openCommitSheet(reusable);
+          return;
+        }
+      }
       const liveBook = useBookStore.getState();
       const liveUi = useUiStore.getState();
       const action = chapterButtonAction(button, {

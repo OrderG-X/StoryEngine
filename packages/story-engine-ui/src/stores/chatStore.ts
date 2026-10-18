@@ -29,8 +29,8 @@ export interface ChatStore {
   markAiFlavorViolationFixed: (messageId: string, violationId: string) => void;
   /** 核账卡上记下 / 撤回一条「不是问题」（对话卡和稿纸划线共用）。 */
   setContinuityDismissed: (messageId: string, key: string, dismissed: boolean) => void;
-  /** 核账结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」）。 */
-  stampContinuityVersion: (messageId: string, version: string | null) => void;
+  /** 核账 / 定稿预览结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」「要重新预览」）。 */
+  stampCardVersion: (messageId: string, type: "continuity" | "commit-preview", version: string | null) => void;
   setSessions: (sessions: readonly ChatSessionIndexEntry[], activeSessionId?: string) => void;
   setActiveSessionId: (activeSessionId: string) => void;
   setActiveArchivedCount: (activeArchivedCount: number) => void;
@@ -82,10 +82,14 @@ export const useChatStore = create<ChatStore>((set) => ({
           : message
       )),
     })),
-  stampContinuityVersion: (messageId, version) =>
+  stampCardVersion: (messageId, type, version) =>
     set((state) => ({
       messages: state.messages.map((message) => (
-        message.id === messageId ? updateCard(message, "continuity", (card) => ({ ...card, checkedVersion: version })) : message
+        message.id !== messageId
+          ? message
+          : type === "continuity"
+            ? updateCard(message, "continuity", (card) => ({ ...card, checkedVersion: version }))
+            : updateCard(message, "commit-preview", (card) => ({ ...card, checkedVersion: version }))
       )),
     })),
   setSessions: (sessions, activeSessionId) => set({ sessions, ...(activeSessionId !== undefined ? { activeSessionId } : {}) }),

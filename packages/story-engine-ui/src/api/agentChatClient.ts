@@ -49,6 +49,8 @@ export interface LedgerChecklistItemView {
   readonly id: string;
   readonly kind: string;
   readonly label: string;
+  /** 为什么要作者看（同一原因的条目清单里归在一起）。 */
+  readonly reason?: string;
   readonly detail?: string;
   readonly removable: boolean;
   /** 作者能改的「第几天」（故事时间线）。 */
@@ -454,6 +456,7 @@ export async function streamAgentChat(
                     ...(toIssueMessages(output.semanticQualityIssues).length > 0 ? { semanticIssues: toIssueMessages(output.semanticQualityIssues) } : {}),
                     ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
                     ...(toIssueMessages(output.notRecorded).length > 0 ? { notRecorded: toIssueMessages(output.notRecorded) } : {}),
+                    ...(toIssueMessages(output.notes).length > 0 ? { notes: toIssueMessages(output.notes) } : {}),
                     ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
                   },
                 }
@@ -595,6 +598,7 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       id: item.id,
       kind: typeof item.kind === "string" ? item.kind : "",
       label: item.label,
+      ...(typeof item.reason === "string" && item.reason.trim() ? { reason: item.reason } : {}),
       ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
       removable: item.removable === true,
       ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),

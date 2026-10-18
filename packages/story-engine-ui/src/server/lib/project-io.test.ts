@@ -327,6 +327,16 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
     expect(junk.cards).toEqual([{ type: "continuity", check }]);
   });
 
+  it("定稿预览卡带预览时的稿纸版本和记账员提醒（重构 P6）：读回；坏值丢掉", () => {
+    const [kept, junk] = readWorkspaceMessages([
+      { id: "p1", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文", "", 5] }, checkedVersion: "v9" }] },
+      { id: "p2", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: "还在读前文" }, checkedVersion: 9 }] },
+    ]);
+    expect(kept.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] }, checkedVersion: "v9" }]);
+    // 单个字符串照别的清单字段的读法收成一条；版本号不是字符串就丢。
+    expect(junk.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] } }]);
+  });
+
   it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {
     const [message] = readWorkspaceMessages([{
       id: "assistant-legacy-cards",

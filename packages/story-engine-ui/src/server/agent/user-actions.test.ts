@@ -311,7 +311,7 @@ describe("runUserAction 执行结构化动作", () => {
 });
 
 describe("「定稿」按钮结构化动作（commit_preview）", () => {
-  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 工具自己的摘要（工具名换人话），不调模型", async () => {
+  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 一句结论（清单在弹窗里，重构 P6），不调模型", async () => {
     expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
     const requestContext = new RequestContext();
     let marked = true;
@@ -331,7 +331,7 @@ describe("「定稿」按钮结构化动作（commit_preview）", () => {
     expect(marked).toBe(false);
     expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
     expect(events[1]!.data.output).toMatchObject({ canCommit: true });
-    expect(events[2]!.data.text).toBe("第 4 章可以定稿，点 定稿 前先看清单。");
+    expect(events[2]!.data.text).toBe("第 4 章可以定稿，清单打开了。");
   });
 });
 

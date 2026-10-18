@@ -92,6 +92,16 @@ describe("WritingPaper", () => {
     expect(text).toContain("再见。"); // 修复前会冻结在「他说道：」，这里取不到
   });
 
+  it("流式出稿锁稿纸、结束解锁：都不算作者改字（不回写 onEdit）", () => {
+    const onEdit = vi.fn();
+    const { container, rerender } = render(<WritingPaper draft={baseDraft} onEdit={onEdit} />);
+    rerender(<WritingPaper draft={{ ...baseDraft, content: "# 第一章 · 测试\n\n流式前半。流式后半。", streaming: true }} onEdit={onEdit} />);
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
+    rerender(<WritingPaper draft={{ ...baseDraft, content: "# 第一章 · 测试\n\n流式前半。流式后半。" }} onEdit={onEdit} />);
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("true");
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
   it("聚焦模式下渲染不崩、host 与编辑器存在", () => {
     // 句级聚焦（Task 3）冒烟：带两句中文正文挂载可编辑纸面，断言不抛错、编辑器与 host 在 DOM。
     // 真实"当前句变亮/其余淡"交真机；jsdom 下 ProseMirror 渲染不稳，这里只验不崩。

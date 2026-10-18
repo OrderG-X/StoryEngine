@@ -28,6 +28,7 @@ import { chapterBareTitle, chapterDisplayTitle, chapterHeading } from "../v2Util
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
+import { CommitSheetHost } from "./CommitSheet.js";
 import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
@@ -601,6 +602,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           onPickSetting={(target) => { setView("library"); setCat(target); }}
         />
       ) : null}
+      {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
+      <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
       {settingsTab ? (
         <>
           <div className="se-scrim" aria-hidden="true" onClick={() => setSettingsTab(null)} />

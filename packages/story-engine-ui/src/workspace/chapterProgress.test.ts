@@ -120,7 +120,7 @@ describe("chatStore：不是问题记在卡上、核完记版本", () => {
     const store = useChatStore.getState();
     store.setContinuityDismissed("m1", "k1", true);
     store.setContinuityDismissed("m1", "k1", true);
-    store.stampContinuityVersion("m1", "v7");
+    store.stampCardVersion("m1", "continuity", "v7");
     const card = () => useChatStore.getState().messages[0]!.cards![0]!;
     expect(card()).toMatchObject({ dismissed: ["k1"], checkedVersion: "v7" });
     expect(useChatStore.getState().messages[1]!.cards![0]).not.toHaveProperty("checkedVersion");

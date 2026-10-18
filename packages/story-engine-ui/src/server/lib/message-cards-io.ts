@@ -71,8 +71,12 @@ function readMessageCard(value: unknown): MessageCard | undefined {
     }
     case "quality":
       return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport } : undefined;
-    case "commit-preview":
-      return cardFromCommitPreview(value.preview);
+    case "commit-preview": {
+      const card = cardFromCommitPreview(value.preview);
+      if (!card || card.type !== "commit-preview") return undefined;
+      const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+      return { ...card, ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
+    }
     case "name-drift":
       return cardFromNameDrift(value.warnings);
     case "stale-threads":
@@ -242,11 +246,13 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
       const label = readString(item.label);
       if (!id || !label) return [];
       const detail = readString(item.detail);
+      const reason = readString(item.reason);
       const editableDay = readPositiveInteger(item.editableDay);
       return [{
         id,
         kind: readString(item.kind) ?? "",
         label,
+        ...(reason ? { reason } : {}),
         ...(detail ? { detail } : {}),
         removable: item.removable === true,
         ...(editableDay !== undefined ? { editableDay } : {}),
@@ -256,6 +262,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     })
     : [];
   const notRecorded = readStringList(value.notRecorded).slice(0, 50);
+  const notes = readStringList(value.notes).slice(0, 20);
   return {
     chapter,
     canCommit: value.canCommit,
@@ -268,5 +275,6 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     ...(previewToken ? { previewToken } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
     ...(notRecorded.length > 0 ? { notRecorded } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }

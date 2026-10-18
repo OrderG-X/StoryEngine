@@ -556,9 +556,12 @@ async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction
   }
   args.sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output });
   const result = output as CommitPreviewLikeOutput | undefined;
-  const summary = typeof result?.summary === "string" && result.summary.trim()
-    ? result.summary.trim()
-    : result?.canCommit === true ? `第 ${action.chapter} 章可以定稿。` : `第 ${action.chapter} 章暂时不能定稿。`;
+  // 清单（含定不了的原因）在弹窗和对话小卡里都有，回话只说一句结论（重构 P6）。
+  const summary = result?.canCommit === true
+    ? `第 ${action.chapter} 章可以定稿，清单打开了。`
+    : result?.canCommit === false
+      ? `第 ${action.chapter} 章现在还定不了，原因在清单里。`
+      : typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : `第 ${action.chapter} 章暂时不能定稿。`;
   emitText(humanizeToolNames(summary));
   flush();
 }

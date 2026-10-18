@@ -68,6 +68,7 @@ import { QualityCheckCard } from "./QualityCheckCard.js";
 import { NameConsistencyCard } from "./NameConsistencyCard.js";
 import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
+import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
@@ -775,14 +776,6 @@ function MessageBubbles({
   const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
   const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
   const commitPreview = cardOf(message, "commit-preview")?.preview;
-  const confirmCommit = commitPreview && commitConfirmable && onSuggestedAction
-    ? (excluded: readonly string[] = [], dayOverride?: number) => onSuggestedAction(commitConfirmAction({
-      chapter: commitPreview.chapter,
-      ...(commitPreview.previewToken ? { previewToken: commitPreview.previewToken } : {}),
-      ...(excluded.length > 0 ? { excluded } : {}),
-      ...(dayOverride !== undefined ? { dayOverride } : {}),
-    }))
-    : undefined;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
   const hasAnything = message.content.trim().length > 0
     || toolSteps.length > 0
@@ -864,9 +857,8 @@ function MessageBubbles({
           <CommitPreviewCard
             key={card.type}
             preview={card.preview}
-            onConfirm={confirmCommit}
-            confirmDisabled={chatLoading}
-            onDecline={confirmCommit && onPrefillComposer ? () => onPrefillComposer("先不定稿，") : undefined}
+            confirmable={commitConfirmable}
+            onOpen={() => openCommitSheet(message.id)}
           />
         );
       case "name-drift":

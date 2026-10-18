@@ -24,7 +24,7 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     const { container, getByText } = render(<CommitPreviewCard preview={preview} />);
     expect(container.querySelector(".step-card.sc-done")).toBeTruthy();
     expect(getByText("可以定稿")).toBeTruthy();
-    expect(container.textContent ?? "").toContain("已满足定稿条件");
+    expect(container.textContent ?? "").toContain("第 7 章可以定稿。");
   });
 
   it("残缺不一致输出：canCommit:true 却带阻断项 → 按阻断项显示「暂不可定稿」（绝不显示可以定稿）", () => {
@@ -92,136 +92,35 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
   });
 
   // 本文件不做自动 cleanup，多次 render 会叠在 document 上——按钮一律在各自 container 内查。
-  it("可定稿 + 传了 onConfirm → 渲染「确认定稿」按钮，点击回调", () => {
-    const onConfirm = vi.fn();
-    const { container } = render(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={onConfirm} />);
-    const button = container.querySelector<HTMLButtonElement>("button.cpc-confirm");
-    expect(button?.textContent).toBe("确认定稿");
-    fireEvent.click(button!);
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-  });
-
-  it("不可定稿 / 没传 onConfirm（旧卡）→ 不渲染按钮", () => {
-    const { container, rerender } = render(
-      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} onConfirm={() => undefined} />,
-    );
-    expect(container.querySelector("button.cpc-confirm")).toBeNull();
-    rerender(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} />);
-    expect(container.querySelector("button.cpc-confirm")).toBeNull();
-  });
-
-  it("回合进行中 confirmDisabled → 按钮禁用", () => {
-    const { container } = render(
-      <CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={() => undefined} confirmDisabled />,
-    );
-    expect(container.querySelector<HTMLButtonElement>("button.cpc-confirm")?.disabled).toBe(true);
-  });
-
-  it("「先不定」只在挂了确认按钮时出现，点了调 onDecline、不触发定稿", () => {
-    const onConfirm = vi.fn();
-    const onDecline = vi.fn();
-    const { container } = render(
-      <CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onConfirm={onConfirm} onDecline={onDecline} />,
-    );
-    fireEvent.click(container.querySelector<HTMLButtonElement>("button.cpc-decline")!);
-    expect(onDecline).toHaveBeenCalledTimes(1);
-    expect(onConfirm).not.toHaveBeenCalled();
-    const { container: blocked } = render(
-      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} onConfirm={onConfirm} onDecline={onDecline} />,
-    );
-    expect(blocked.querySelector("button.cpc-decline")).toBeNull();
-  });
-
-  it("账本清单：列出会记的条目，勾掉的随「确认定稿」带上；只提示的条目没有勾选框", () => {
+  it("可定稿：卡上只说要看几条、自动记几条，加【打开定稿清单】（清单在弹窗里，重构 P6）", () => {
+    const onOpen = vi.fn();
     const preview: CommitPreviewCardData = {
       chapter: 7,
       canCommit: true,
       ledgerChecklist: [
-        { id: "day", kind: "day", label: "这一章记为故事第 3 天", removable: false },
-        { id: "fact:0", kind: "fact", label: "记下：铜钥匙在林溪手里", detail: "她摸出一把铜钥匙。", removable: true },
-        { id: "thread:lead-1", kind: "thread", label: "新线索：去码头", removable: true },
+        { id: "day", kind: "time", label: "这一章记为故事第 3 天", removable: false, editableDay: 3 },
+        { id: "0", kind: "fact", label: "钥匙在林溪手里（核账员标了）", removable: true, needsConfirm: true },
+        { id: "1", kind: "thread", label: "新线索：去码头", removable: true },
+        { id: "2", kind: "fact", label: "铜盒回到桌上", removable: true },
       ],
     };
-    const onConfirm = vi.fn();
-    const { container, getByRole, getAllByRole } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
-    expect(container.textContent ?? "").toContain("这次入账会记下 2 条");
-    expect(getAllByRole("checkbox")).toHaveLength(2);
-    fireEvent.click(getAllByRole("checkbox")[0]);
-    expect(container.textContent ?? "").toContain("这次入账会记下 1 条");
-    fireEvent.click(getByRole("button", { name: "确认定稿（去掉 1 条）" }));
-    expect(onConfirm).toHaveBeenCalledWith(["fact:0"], undefined);
+    const { container } = render(<CommitPreviewCard preview={preview} confirmable onOpen={onOpen} />);
+    expect(container.textContent ?? "").toContain("第 7 章可以定稿：要你看 1 条，自动记下 2 条。");
+    expect(container.querySelector("input[type=checkbox]")).toBeNull();
+    const open = container.querySelector<HTMLButtonElement>("button.cpc-confirm");
+    expect(open?.textContent).toBe("打开定稿清单");
+    fireEvent.click(open!);
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("卡片重新挂载（回合收尾重建消息）后勾选还在", () => {
-    const preview: CommitPreviewCardData = {
-      chapter: 9,
-      canCommit: true,
-      previewToken: "tok-remount",
-      ledgerChecklist: [{ id: "fact:0", kind: "fact", label: "记下：x", removable: true }],
-    };
-    const first = render(<CommitPreviewCard preview={preview} onConfirm={vi.fn()} />);
-    fireEvent.click(first.container.querySelector("input[type=checkbox]")!);
-    first.unmount();
-    const onConfirm = vi.fn();
-    const second = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
-    const confirm = [...second.container.querySelectorAll("button")].find((button) => button.textContent === "确认定稿（去掉 1 条）");
-    expect(confirm).toBeTruthy();
-    fireEvent.click(confirm!);
-    expect(onConfirm).toHaveBeenCalledWith(["fact:0"], undefined);
-  });
-
-  it("要确认的改记（R7.4）：默认不勾＝这条改记不作数；勾上才随「确认定稿」带上（change_confirm 前缀）", () => {
-    const preview: CommitPreviewCardData = {
-      chapter: 9,
-      canCommit: true,
-      previewToken: "tok-confirm",
-      ledgerChecklist: [
-        { id: "change_confirm:fact-1-4", kind: "change_confirm", label: "要你确认：改记「茶馆在斜对面」→「竹桌收进墙根」", detail: "门口两张竹桌已经收进墙根。", removable: true, needsConfirm: true, defaultUnchecked: true },
-        { id: "fact:0", kind: "fact", label: "记下：x", removable: true },
-      ],
-    };
-    const onConfirm = vi.fn();
-    // 本文件不做自动 cleanup，前面的卡还叠在 document 上——勾选框一律在自己 container 内查（getAllByRole 认整个 body）。
-    const { container } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
-    const boxes = () => Array.from(container.querySelectorAll<HTMLInputElement>("input[type=checkbox]"));
-    // 默认：待确认的没勾（不作数）、常规的勾着；计数只算会写的，另提示有几条要确认。
-    expect(boxes()[0].checked).toBe(false);
-    expect(boxes()[1].checked).toBe(true);
-    expect(container.textContent ?? "").toContain("这次入账会记下 1 条");
-    expect(container.textContent ?? "").toContain("有 1 条要你确认，默认不改");
-    // 什么都不动 → 不带 change_confirm（服务端据此不作废旧条），按钮也不说「去掉」。
-    fireEvent.click(container.querySelector(".cpc-confirm")!);
-    expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
-    // 勾上要确认的那条 → change_confirm 前缀随确认带上。
-    fireEvent.click(boxes()[0]);
-    fireEvent.click(container.querySelector(".cpc-confirm")!);
-    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:fact-1-4"], undefined);
-    // 常规条目勾掉照旧走「去掉」。
-    fireEvent.click(boxes()[1]);
-    const confirm = [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith("确认定稿（"));
-    expect(confirm?.textContent).toBe("确认定稿（去掉 1 条）");
-    fireEvent.click(confirm!);
-    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:fact-1-4", "fact:0"], undefined);
-  });
-
-  it("天数条：没把握的标出来；作者改了天数随「确认定稿」带上，改回原值就不带", () => {
-    const preview: CommitPreviewCardData = {
-      chapter: 5,
-      canCommit: true,
-      previewToken: "tok-day",
-      ledgerChecklist: [
-        { id: "day", kind: "day", label: "这一章记为故事第 5 天（正文里没找到时间说法，按上一章的第二天估的，不对就改）", removable: false, editableDay: 5, needsConfirm: true },
-      ],
-    };
-    const onConfirm = vi.fn();
-    const { container } = render(<CommitPreviewCard preview={preview} onConfirm={onConfirm} />);
-    expect(container.querySelector(".cpc-ledger-item.is-confirm")).toBeTruthy();
-    const input = container.querySelector<HTMLInputElement>(".cpc-ledger-day-edit input")!;
-    fireEvent.change(input, { target: { value: "7" } });
-    fireEvent.click(container.querySelector(".cpc-confirm")!);
-    expect(onConfirm).toHaveBeenLastCalledWith([], 7);
-    fireEvent.change(input, { target: { value: "5" } });
-    fireEvent.click(container.querySelector(".cpc-confirm")!);
-    expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
+  it("旧预览（已用掉）→ 只能「看这份清单」；定不了 → 没有打开按钮、照实列原因", () => {
+    const { container } = render(<CommitPreviewCard preview={{ chapter: 4, canCommit: true }} onOpen={() => undefined} />);
+    expect(container.querySelector("button.cpc-confirm")).toBeNull();
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "看这份清单")).toBe(true);
+    const { container: blocked } = render(
+      <CommitPreviewCard preview={{ chapter: 4, canCommit: false, blockingReasons: ["字数不足。"] }} confirmable onOpen={() => undefined} />,
+    );
+    expect([...blocked.querySelectorAll("button")].some((b) => b.textContent?.includes("清单"))).toBe(false);
+    expect(blocked.textContent ?? "").toContain("字数不足。");
   });
 });
