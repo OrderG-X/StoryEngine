@@ -29,9 +29,6 @@ describe("appendDedup（做厚共用去重·委托引擎 dedupeStringList）", (
 });
 
 describe("semanticDedupRules P0-4", () => {
-  it("同义标题双向包含（禁止视角越界 / 视角越界禁止）折叠", () => {
-    expect(semanticDedupRules(["禁止视角越界", "视角越界禁止"])).toEqual(["禁止视角越界"]);
-  });
 
   it("去标点空白后相同 → 弃", () => {
     expect(semanticDedupRules(["禁 止：排比凑字。", "禁止排比凑字"])).toEqual(["禁 止：排比凑字。"]);

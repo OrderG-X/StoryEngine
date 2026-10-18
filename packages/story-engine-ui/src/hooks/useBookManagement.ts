@@ -3,6 +3,7 @@ import { openBookProjectFolder, removeBookProject, renameBookProject } from "../
 import { mockSidebarData, mockWorkspaceData } from "../mockData.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
+import { isPlaceholderChapterTitle } from "../components/v2/v2Utils.js";
 import type { BookSummary, ChapterNavItem, ChapterWorkflowState, ChapterWorkspaceData, SidebarData } from "../types.js";
 
 function isRealProjectBook(book: BookSummary): boolean {
@@ -51,7 +52,7 @@ export function titleFromEvent(
 ): string {
   // 优先用真章名（时间线事件带 title，剥掉「第N章 ·」前缀）；没有章名才退回事件摘要（截 18 字）。
   const realTitle = (event?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
-  if (realTitle && !/^(下一章|未命名|待补|待定)$/u.test(realTitle)) return realTitle;
+  if (realTitle && !isPlaceholderChapterTitle(realTitle)) return realTitle;
   const source = event?.mainEvent ?? event?.summary;
   if (!source?.trim()) return `第${chapter}章`;
   const cleaned = source.replace(/\s+/gu, " ").trim();

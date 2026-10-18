@@ -7,6 +7,8 @@ import type { BookSummary, HomePageProps } from "../../types.js";
 import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
 import "./home.css";
 
+const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", "无"]);
+
 const COVER_TONES = 7;
 
 /** 书名 → 稳定的封面色号（同一本书永远同色）。 */
@@ -105,7 +107,7 @@ export default function HomeLanding({
                   <span>{lastBook.writtenChapters} 章</span>
                   <span>{formatWords(lastBook.totalWords)}</span>
                   {/* 主角还没起名时数据里是占位词「主角」，不显示「主角 主角」。 */}
-                  {lastBook.protagonistName && !/^(主角|未命名|待定|无)$/u.test(lastBook.protagonistName.trim()) ? <span>主角 {lastBook.protagonistName}</span> : null}
+                  {lastBook.protagonistName && !PLACEHOLDER_PROTAGONIST_NAMES.has(lastBook.protagonistName.trim()) ? <span>主角 {lastBook.protagonistName}</span> : null}
                 </p>
                 <div className="se-hero-last">
                   <span className="se-faint">上次写到</span>

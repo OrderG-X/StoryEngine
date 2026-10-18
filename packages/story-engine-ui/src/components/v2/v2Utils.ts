@@ -1,53 +1,36 @@
 import type { ChapterFlowStatus, DevApiPermission, SuggestedAction } from "../../types.js";
 
+/**
+ * 枚举值整串映射成中文。只认整串，不在别人写的字里做词替换（重构 P7「不猜」：
+ * 原来整段 replace「story→章节 / world→世界 / 提交预览→定稿预览」，作者的英文人名、设定原文也会被改掉）。
+ */
+const ENUM_LABELS: Readonly<Record<string, string>> = {
+  touched: "本章提到",
+  open: "未闭合",
+  locked: "受限",
+  damaged: "受损",
+  lost: "丢失",
+  consumed: "已用完",
+  available: "可用",
+  stairs: "楼梯",
+  walk: "步行",
+  taxi: "打车",
+  bus: "公交",
+  elevator: "电梯",
+};
+
 export function uiText(value: string | null | undefined, fallback = "尚未设定"): string {
   const raw = value?.trim() ?? "";
   if (!raw || raw === "unknown" || raw === "后端未提供") return fallback;
+  const label = ENUM_LABELS[raw.toLowerCase()];
+  if (label) return label;
+  // 只剩不让界面露出程序内部名：裸 id、内部目录、错误码（铁律 4）。
   return raw
     .replace(/undefined\/drafts(?:\/fast)?/giu, "工作稿目录")
     .replace(/ENOENT/giu, "本地文件未找到")
     .replace(/chapter_\d+_committed/giu, "已定稿章节")
     .replace(/char-[a-z0-9-]+/giu, "角色")
-    .replace(/loc-[a-z0-9-]+/giu, "地点")
-    .replace(/\btouched\b/giu, "本章提到")
-    .replace(/\bstairs\b/giu, "楼梯")
-    .replace(/\bwalk\b/giu, "步行")
-    .replace(/\btaxi\b/giu, "打车")
-    .replace(/\bbus\b/giu, "公交")
-    .replace(/\belevator\b/giu, "电梯")
-    .replace(/\blocked\b/giu, "受限")
-    .replace(/\bdamaged\b/giu, "受损")
-    .replace(/\bavailable\b/giu, "可用")
-    .replace(/\bunknown\b/giu, "尚未设定")
-    .replace(/HookPool/gu, "伏笔池")
-    .replace(/ThreadPool/gu, "线索池")
-    .replace(/ArcGoal/gu, "主线目标")
-    .replace(/arcGoal/gu, "主线目标")
-    .replace(/Commit Preview/giu, "定稿预览")
-    .replace(/cleanup-visible intent/giu, "需要清理的低价值意图")
-    .replace(/stale intent/giu, "过期意图")
-    .replace(/\s*[·•]\s*open\b/giu, " · 未闭合")
-    .replace(/Location Bible/giu, "地点设定")
-    .replace(/Story Bible/giu, "故事设定")
-    .replace(/Character Bible/giu, "角色设定")
-    .replace(/World Bible/giu, "世界设定")
-    .replace(/\barc\b/giu, "主线")
-    .replace(/\bHook\b/gu, "伏笔")
-    .replace(/\bThread\b/gu, "线索")
-    .replace(/\bhook\b/gu, "伏笔")
-    .replace(/\bthread\b/gu, "线索")
-    .replace(/\bstory\b(?![/-])/giu, "章节")
-    .replace(/\btimeline\b/giu, "时间线")
-    .replace(/\bworld\b/giu, "世界")
-    .replace(/\bcharacter\b/giu, "角色")
-    .replace(/Character State/giu, "角色状态")
-    .replace(/World State/giu, "世界状态")
-    .replace(/Asset ChangePlan/giu, "道具变更建议")
-    .replace(/Location ChangePlan/giu, "地点变更建议")
-    .replace(/提交预览/gu, "定稿预览")
-    .replace(/入库预览/gu, "定稿预览")
-    .replace(/正式提交/gu, "确认定稿")
-    .replace(/正式状态/gu, "已定稿版");
+    .replace(/loc-[a-z0-9-]+/giu, "地点");
 }
 
 export function uiList(values: readonly string[] | undefined): readonly string[] {
@@ -70,16 +53,20 @@ export function chapterHeading(chapterNumber: number, title: string): string {
   if (!cleaned || chapterOnly.test(cleaned)) return `第${chapterNumber}章`;
   const withoutPrefix = cleaned.replace(prefix, "").trim();
   // 占位章名（「待补」之类）不摆进标题，只显示章号。
-  return withoutPrefix && !PLACEHOLDER_CHAPTER_TITLE.test(withoutPrefix) ? `第${chapterNumber}章 · ${withoutPrefix}` : `第${chapterNumber}章`;
+  return withoutPrefix && !isPlaceholderChapterTitle(withoutPrefix) ? `第${chapterNumber}章 · ${withoutPrefix}` : `第${chapterNumber}章`;
 }
 
-/** 占位章名（「待补」「未命名」，还有章节列表给没写的章垫的「下一章」）：按没名字显示，不把占位词当章名摆出来。 */
-export const PLACEHOLDER_CHAPTER_TITLE = /^(待补|待定|未命名|无题|标题待定|下一章|tbd)$/iu;
+/** 占位章名（「待补」「未命名」，还有章节列表给没写的章垫的「下一章」）：按没名字显示，不把占位词当章名摆出来。闭集查表。 */
+const PLACEHOLDER_CHAPTER_TITLES = new Set(["待补", "待定", "未命名", "无题", "标题待定", "下一章", "tbd"]);
+
+export function isPlaceholderChapterTitle(title: string): boolean {
+  return PLACEHOLDER_CHAPTER_TITLES.has(title.trim().toLowerCase());
+}
 
 /** 列表/面板里显示用的章名：去章号前缀，占位词当没名字（返回空串，调用方显示「未命名」）。 */
 export function chapterDisplayTitle(title: string): string {
   const bare = chapterBareTitle(title);
-  return PLACEHOLDER_CHAPTER_TITLE.test(bare.trim()) ? "" : bare;
+  return isPlaceholderChapterTitle(bare) ? "" : bare;
 }
 
 /** 只要章名本身：剥掉开头的「第N章 ·」标记（阿拉伯/中文数字、可叠多个）；只有章号时返回空串。 */

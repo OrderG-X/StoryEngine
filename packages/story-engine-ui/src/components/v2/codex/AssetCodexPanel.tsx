@@ -118,7 +118,8 @@ export default function AssetCodexPanel({
 
   const cards = buildAssetCards(assets, effVisibility);
   const owners = buildAssetOwners(cards, effOwnerDescriptions, protagonistName);
-  const limits = uniqueUiList([...assets.assetRules, ...assets.resources]).filter(isLimitText);
+  // 资产规则原样列出；不再从「资源」里按「无 / 不能 / 欠费」字眼挑哪条算限制（重构 P7「不猜」）。
+  const limits = uniqueUiList(assets.assetRules);
   const criticalCount = cards.filter((card) => card.critical).length;
 
   const risks = (effContinuityRisks ?? []).filter((risk) => Boolean(risk.detail && risk.detail.trim()));
@@ -290,7 +291,7 @@ export function buildAssetOwners(
   const displayOwner = (owner: string | undefined): string => {
     const text = uiText(owner, "").trim();
     if (!text || isPlaceholderUiValue(text)) return UNOWNED_ASSET_GROUP;
-    return /^(主角|protagonist)$/iu.test(text) ? lead : text;
+    return PROTAGONIST_OWNER_WORDS.has(text.toLowerCase()) ? lead : text;
   };
   const grouped = new Map<string, AssetCardData[]>();
   cards.forEach((card) => {
@@ -366,7 +367,7 @@ function buildAssetCards(assets: AssetSummary, visibility?: AssetVisibilityMap):
     const current = byName.get(key);
     byName.set(key, {
       name: parsed.name,
-      type: parsed.type ?? current?.type ?? inferType(parsed.name),
+      type: parsed.type ?? current?.type ?? "物品",
       owner: parsed.owner ?? current?.owner ?? "主角",
       location: parsed.location ?? current?.location ?? (patch.carried ? "随身" : ""),
       carried: patch.carried ?? current?.carried ?? false,
@@ -383,7 +384,7 @@ function buildAssetCards(assets: AssetSummary, visibility?: AssetVisibilityMap):
   uiList(assets.availableAssets).forEach((item) => {
     if (!unavailableNames.has(assetKey(item))) add(item, { status: "可用" });
   });
-  uiList(assets.unavailableAssets).forEach((item) => add(item, { status: inferUnavailableStatus(item) }));
+  uiList(assets.unavailableAssets).forEach((item) => add(item, { status: "不可用" }));
   uiList(assets.plotCriticalItems).forEach((item) => add(item, { critical: true }));
   uiList(assets.properties).forEach((item) => add(item, { type: "住所 / 不动产", carried: false }));
 
@@ -442,29 +443,15 @@ function parseAssetText(value: string): Partial<AssetCardData> & { readonly name
   };
 }
 
-function inferType(name: string): string {
-  if (/手机|电脑|收音机/u.test(name)) return "设备";
-  if (/卡|表|证|文件|申请/u.test(name)) return "文件 / 凭证";
-  if (/水|食物|饼干/u.test(name)) return "消耗品";
-  if (/车|房|住所/u.test(name)) return "交通 / 住所";
-  return "物品";
-}
-
-function inferUnavailableStatus(value: string): string {
-  if (/锁|欠费|受限/u.test(value)) return "受限";
-  if (/损坏|半张|破/u.test(value)) return "损坏";
-  if (/丢失/u.test(value)) return "丢失";
-  if (/消耗|用完/u.test(value)) return "已消耗";
-  return "受限";
-}
+// 资产状态：引擎的枚举（damaged / lost / locked / consumed）经 uiText 成了中文标签，加上这里自己给的「不可用」。
+// 只认这几个整串，不按「锁 / 破 / 用完」字眼猜（重构 P7「不猜」）。
+const UNAVAILABLE_STATUSES = new Set(["damaged", "lost", "locked", "consumed", "受损", "丢失", "受限", "已用完", "不可用"]);
 
 function isAvailable(status: string): boolean {
-  return !/受限|损坏|丢失|消耗|锁定/u.test(status);
+  return !UNAVAILABLE_STATUSES.has(status.trim().toLowerCase());
 }
 
-function isLimitText(value: string): boolean {
-  return /无|不能|不可|禁止|受限|欠费|没有/u.test(value);
-}
+const PROTAGONIST_OWNER_WORDS = new Set(["主角", "protagonist"]);
 
 function uniqueUiList(values: readonly string[] | undefined): readonly string[] {
   const seen = new Set<string>();

@@ -19,13 +19,17 @@ function normalizeSentence(value: string): string {
 
 const META_NORMALIZED = new Set(SYSTEM_STORY_META_SENTENCES.map(normalizeSentence));
 
+/** 本程序给条目加过的展示前缀（闭集，按前缀查，不猜）。 */
+const DISPLAY_LABEL_PREFIXES = ["禁止提前揭开", "禁用表达", "风险提醒", "系统约束", "产品约束"];
+
 /** 剥常见展示前缀后再比对，盖住「禁止提前揭开：…」这类包装。 */
 function metaCore(value: string): string {
-  return normalizeSentence(
-    value
-      .replace(/^(?:禁止提前揭开|禁用表达|风险提醒|系统约束|产品约束)[：:]\s*/u, "")
-      .trim(),
-  );
+  const text = value.trim();
+  for (const label of DISPLAY_LABEL_PREFIXES) {
+    const sep = text.charAt(label.length);
+    if (text.startsWith(label) && (sep === "：" || sep === ":")) return normalizeSentence(text.slice(label.length + 1).trim());
+  }
+  return normalizeSentence(text);
 }
 
 /** 是否为系统元话术（含带常见前缀的包装句）。 */
@@ -41,13 +45,16 @@ export function filterSystemStoryMeta(values: readonly string[] | null | undefin
   return (values ?? []).filter((v) => typeof v === "string" && v.trim() && !isSystemStoryMetaSentence(v));
 }
 
+/** 本程序自己垫的占位文字（闭集）。 */
+const PLACEHOLDER_PREFIXES = ["尚未配置", "待配置", "暂无数据", "待确认", "暂无"];
+const PLACEHOLDER_WORDS = new Set(["未知", "unknown"]);
+
 /** 「尚未配置… / 待配置 / 暂无数据」占位槽，不算真实资料。 */
 export function isPlaceholderUiValue(value: string | null | undefined): boolean {
   if (!value?.trim()) return true;
   const t = value.trim();
   // 审计截图里的占位一律以「尚未配置」起头（随身物品 / 当前地点 / 法则…）；整词待配置等同。
-  return /^(?:尚未配置|待配置|暂无数据|待确认|暂无)/u.test(t)
-    || /^(?:未知|unknown)$/iu.test(t);
+  return PLACEHOLDER_PREFIXES.some((prefix) => t.startsWith(prefix)) || PLACEHOLDER_WORDS.has(t.toLowerCase());
 }
 
 /** 只保留真实条目；占位整槽丢弃。 */
@@ -55,17 +62,29 @@ export function filterPlaceholderUiValues(values: readonly string[] | null | und
   return (values ?? []).filter((v) => typeof v === "string" && !isPlaceholderUiValue(v));
 }
 
-const ANTI_AI_PREFIX = /^(?:反AI|反 Ai|反ai)[·•.\-—–]?\s*/u;
+/** 老书做厚时本程序自己加的「反AI·」前缀（闭集）。 */
+const ANTI_AI_PREFIXES = ["反AI", "反 Ai", "反ai"];
+const ANTI_AI_SEPARATORS = "·•.-—–";
+
+/** 剥掉「反AI·」前缀，返回剩下的；没有前缀返回 undefined。 */
+function afterAntiAiPrefix(value: string): string | undefined {
+  const text = value.trim();
+  const prefix = ANTI_AI_PREFIXES.find((item) => text.startsWith(item));
+  if (!prefix) return undefined;
+  let rest = text.slice(prefix.length);
+  if (rest && ANTI_AI_SEPARATORS.includes(rest.charAt(0))) rest = rest.slice(1);
+  return rest.trim();
+}
 const MAX_BOOK_STYLE_CHARS = 40;
 
 /** 是否以「反AI·」类前缀开头（老书做厚垃圾，展示应归反 AI 区）。 */
 export function isAntiAiPrefixedRule(value: string | null | undefined): boolean {
-  return Boolean(value?.trim() && ANTI_AI_PREFIX.test(value.trim()));
+  return Boolean(value?.trim() && afterAntiAiPrefix(value) !== undefined);
 }
 
 /** 剥「反AI·」前缀；无前缀则原样。 */
 export function stripAntiAiPrefix(value: string): string {
-  return value.trim().replace(ANTI_AI_PREFIX, "").trim();
+  return afterAntiAiPrefix(value) ?? value.trim();
 }
 
 /**

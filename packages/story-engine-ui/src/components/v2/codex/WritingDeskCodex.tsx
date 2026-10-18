@@ -55,13 +55,10 @@ function renameChapter(chapterNumber: number, title: string): void {
  * 编辑器内核（句级聚焦、打字机居中、查找替换、选区改写、IME、外部稿同步）全在 WritingPaper 里复用，
  * 本组件一行都不碰；codex 沉浸视觉（居中稿纸 / 暗角 / 金 caret / 当前句呼吸辉光）全走 codex.css 的 .codex-desk 作用域。
  */
-/** 从写作规则里读「每章目标字数」（sidebar 已格式化成「目标字数：约 3200 字 / 章」）；没配就返回 null，不画目标条。 */
-export function parseTargetChapterWords(writingRules: readonly string[] | undefined): number | null {
-  for (const rule of writingRules ?? []) {
-    const match = /目标字数[：:]\s*约?\s*(\d{3,6})/u.exec(rule);
-    if (match) return Number(match[1]);
-  }
-  return null;
+/** 每章目标字数：读总览里写作规则的结构化字段（不再从侧栏拼好的「目标字数：约 N 字」那行文字里抠）；没配就返回 null，不画目标条。 */
+export function targetChapterWordsOf(overview: { readonly writingRules?: { readonly targetChapterWords?: number } } | null | undefined): number | null {
+  const value = overview?.writingRules?.targetChapterWords;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
@@ -94,7 +91,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const showStarter = isStarterEmptyWorkspace({ draft, chapters: props.workspace.chapters }) && !authorStarted;
   const paperDraft = draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
-  const targetWords = parseTargetChapterWords(props.sidebar?.writingRules);
+  const targetWords = targetChapterWordsOf(props.overview);
   // 这一章还差什么（工具条和右栏顶卡同源）+ 这一章最新的核账结果（稿纸划线）。
   const progress = useChapterProgress(targetWords);
   const continuityResult = useContinuityResult(draft.chapterNumber);
