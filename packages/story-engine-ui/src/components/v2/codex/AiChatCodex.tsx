@@ -50,6 +50,7 @@ import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
+import { chapterTurns } from "./chapterTurns.js";
 import {
   foldProcessSegments,
   isCompletedTurnForProcessFold,
@@ -75,6 +76,8 @@ import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
+  /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
+  readonly onOpenChapter?: (chapter: number) => void;
   readonly rightOpen: boolean;
   readonly onToggleRight: () => void;
   /** 拖动右栏左缘改宽（pointerdown 起拖，宽度状态由外层 codex 壳持有）。 */
@@ -212,6 +215,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const activeArchivedCount = useChatStore((s) => s.activeArchivedCount);
   // 对话直接订阅 chatStore（重构 P5），不再经 App 往下传。
   const messages = useChatStore((s) => s.messages);
+  // 这一章的对话（P6 第 6 步）：别的章的轮收成顶上一行，点开看全部；换章自动收回。
+  const viewingChapter = props.workspace.currentChapter.chapterNumber;
+  const [otherChaptersOpen, setOtherChaptersOpen] = useState(false);
+  useEffect(() => setOtherChaptersOpen(false), [viewingChapter]);
+  const chapterView = chapterTurns(messages.slice(activeArchivedCount), viewingChapter);
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
   const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
   // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
@@ -364,6 +372,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         busy={busy}
         busyCaption={busyCaption}
         onChapterButton={props.onChapterButton}
+        {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
       >
         <ReadersCatchUpNote status={readerCatchUp} />
         {inboxTodos.length > 0 ? (
@@ -432,7 +441,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
             「清理早先消息」后消息仍在、展开后同 N 条渲染两遍（2026-09-15 审计 P1-2） */}
+        {chapterView.hiddenTurns > 0 ? (
+          <button type="button" className="codex-archived-fold se-other-chapters" aria-expanded={otherChaptersOpen} onClick={() => setOtherChaptersOpen((v) => !v)}>
+            {otherChaptersOpen ? "收起别的章的对话" : `别的章的对话 ${chapterView.hiddenTurns} 轮 · 点开`}
+          </button>
+        ) : null}
         {messages.slice(activeArchivedCount).map((message, index, all) => {
+          if (!otherChaptersOpen && chapterView.hidden.has(message.id)) return null;
           const isLatestAssistant = message.role === "assistant"
             && !all.slice(index + 1).some((m) => m.role === "assistant");
           const isLiveAssistant = Boolean(props.chatLoading) && isLatestAssistant;
@@ -481,7 +496,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
 
         {props.steeringError ? <NoticeCard title={workflowErrorTitle(flowStatus)} text={props.steeringError} danger /> : null}
         {props.chatError ? <NoticeCard title="章节对话失败" text={props.chatError} danger /> : null}
-        {props.steeringLoading ? <NoticeCard title="正在整理本章方案" text="正在读取故事状态，并整理本章写作方案。" /> : null}
+        {props.steeringLoading ? <NoticeCard title="正在拟章纲" text="正在读前文，拟这一章的章纲。" /> : null}
       </div>
 
       {/* ── 下一步：AI 带路选项 ── 点选项=给 agent 发一句意图（对话里留「你：…」、再由 agent 接着做）；
@@ -880,7 +895,7 @@ function MessageBubbles({
         );
       case "directions":
         // 头脑风暴走法卡：对话里只列名字，挑在稿纸上方（BrainstormPanel）。
-        return <DirectionsCard key={card.type} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
+        return <DirectionsCard key={card.type} messageId={message.id} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
       case "next-steps":
         // 「下一步」选项在 composer 上方渲染（lastAssistantNextStepPrompt），气泡内不重复。
         return null;
@@ -1173,7 +1188,7 @@ function SteeringDraftCard({ draft }: { readonly draft: NonNullable<WritingWorks
   return (
     <div style={surfaceCardStyle}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>本章方案</span>
+        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>章纲</span>
         <strong style={{ color: "var(--muted)", fontSize: 11.5 }}>{draft.suggestions.length} 条建议 · 只读预览</strong>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

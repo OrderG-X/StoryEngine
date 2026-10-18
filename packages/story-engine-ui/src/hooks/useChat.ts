@@ -82,6 +82,12 @@ export interface UseChatResult {
   stopAgent: () => void;
 }
 
+/** 作者发这句时在看哪一章（右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
+function chapterStamp(): { readonly chapter?: number } {
+  const chapter = useBookStore.getState().workspace.currentChapter?.chapterNumber;
+  return typeof chapter === "number" && chapter > 0 ? { chapter } : {};
+}
+
 export function useChat(params: UseChatParams): UseChatResult {
   const {
     projectPath,
@@ -424,6 +430,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               if (info.toolName === "commit_apply") commitAttempt = null;
+              // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
+              if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
               const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
               if (undone) agentUndone = true;
               const flowBefore = useBookStore.getState().workspace.flowStatus;
@@ -680,6 +688,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         id: `user-${Date.now()}`,
         role: "user",
         content: text,
+        ...chapterStamp(),
       };
 
       const conversation = buildOutboundConversation(
@@ -762,7 +771,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
         chapter,
@@ -791,7 +800,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
@@ -819,7 +828,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       const goal = action.toolName === "generate_draft" ? action.chapterGoal : undefined;
       const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
       if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
       await runAgentDispatch(text, conversation, action);

@@ -64,6 +64,8 @@ export interface ChapterMessage {
   readonly cards?: readonly MessageCard[];
   /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
+  /** 作者发这句时在看哪一章（只记在作者的话上；右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
+  readonly chapter?: number;
 }
 
 /**

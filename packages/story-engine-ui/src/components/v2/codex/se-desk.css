@@ -66,13 +66,6 @@
   .codex-desk-bar-bottom{border-top:1px solid var(--line);}
   .codex-desk-bar .cd-title{align-items:center;}
   .codex-desk-bar .cd-chapter{font-size:14px;font-weight:600;}
-  .codex-desk-bar .cd-flow{
-    font-size:12px;letter-spacing:0;line-height:20px;padding:0 8px;border:0;border-radius:var(--r-pill);
-    color:var(--muted);background:var(--hover);
-  }
-  .codex-desk-bar .cd-flow.ok{color:var(--success);background:var(--success-soft);}
-  .codex-desk-bar .cd-flow.warn{color:var(--warn);background:var(--warn-soft);}
-  .codex-desk-bar .cd-flow.run{color:var(--accent);background:var(--accent-soft);}
   .codex-desk-bar .cd-edit-hint{font-size:12px;color:var(--faint);}
   .codex-desk-bar .cd-words{font-size:12px;letter-spacing:0;}
   .codex-desk-bar .cd-tabs{padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--bg);}

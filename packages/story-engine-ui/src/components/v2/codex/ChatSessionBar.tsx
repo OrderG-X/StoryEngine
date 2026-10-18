@@ -152,7 +152,7 @@ export function ChatSessionBar({ onClear }: {
     try { await api.saveChatHistoryBudget(projectPath, budget); } catch (err) {
       // 审计 Low：store 已乐观更新为新值，保存失败若只进 console，刷新后预算悄悄回旧值——如实提示。
       console.error("[ChatSessionBar] 保存上下文预算失败", err);
-      notify(`上下文预算保存失败（${err instanceof Error ? err.message : String(err)}），刷新后会回到旧值；请重试或检查设置文件。`);
+      notify(`对话记忆上限保存失败（${err instanceof Error ? err.message : String(err)}），刷新后会回到旧值；请重试或检查设置文件。`);
     }
   }
 
@@ -319,7 +319,7 @@ export function ChatSessionBar({ onClear }: {
       {budgetOpen && (
         <div className="codex-budget-pop">
           <div className="codex-budget-label">对话记忆上限</div>
-          <div className="codex-budget-hint">AI 一次能回看多少聊天。调大记得更久，但更慢更贵；一般用默认 96000，超长上下文的模型可调到 300000。故事资料不受影响。</div>
+          <div className="codex-budget-hint">AI 一次能回看多少聊天。调大记得更久，但更慢更贵；一般用默认 96000，超长上下文的模型可调到 300000。设定本不受影响。</div>
           <input
             className="codex-session-budget"
             type="number"

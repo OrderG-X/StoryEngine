@@ -425,11 +425,26 @@ interface CheckContinuityLikeOutput {
   readonly maybe?: readonly unknown[];
   /** 只在「还在读、这次没核」时有：核账员读到第 done / total 章（区分「还在读」和「出错」用这个字段，别解析 failures 文字）。 */
   readonly pending?: { readonly done: number; readonly total: number };
+  /** 冷窗口：核账员还没读完全书，这次只对照了一部分。 */
+  readonly coverage?: unknown;
+}
+
+/** 写完那遍核账的一句话（重构 P6 第 6 步）：问题清单在核账卡和稿纸划线上，这里只说几处。 */
+export function afterDraftCheckLine(result: CheckContinuityLikeOutput): string | undefined {
+  if (result.ok !== true) return undefined;
+  const sure = Array.isArray(result.sure) ? result.sure.length : 0;
+  const maybe = Array.isArray(result.maybe) ? result.maybe.length : 0;
+  const cold = result.coverage ? "（核账员还没读完全书，更早的细节可能漏）" : "";
+  return sure + maybe === 0
+    ? `写完核了一遍，没发现和前文对不上${cold}。`
+    : `写完核了一遍：${sure > 0 ? `确定对不上 ${sure} 处` : ""}${sure > 0 && maybe > 0 ? "、" : ""}${maybe > 0 ? `可能 ${maybe} 处` : ""}，画在稿纸上了${cold}。`;
 }
 
 /** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
 async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
   readonly action: Extract<UserAction, { readonly toolName: "check_continuity" }>;
+  /** 「写这一章」写完接着出核账卡（结果来自写完那遍核账的记忆，不再调模型）：回话换成「写完核了一遍…」。 */
+  readonly afterDraft?: boolean;
 }): Promise<void> {
   const { action } = args;
   const stamp = Date.now();
@@ -462,7 +477,8 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
       : `第 ${action.chapter} 章这次没核成。`
     : `第 ${action.chapter} 章核账做完了。`;
   // 问题清单在核账卡和稿纸划线上（重构 P6），回话只说结论那句。
-  const said = [result?.headline, result?.summary].find((text): text is string => typeof text === "string" && text.trim().length > 0);
+  const said = [args.afterDraft && result ? afterDraftCheckLine(result) : undefined, result?.headline, result?.summary]
+    .find((text): text is string => typeof text === "string" && text.trim().length > 0);
   emitText(said ? said.trim() : fallbackSummary);
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
@@ -481,7 +497,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
         question: "这次没核成，接下来？",
         choices: [
           {
-            label: "再核一次",
+            label: "再核一遍",
             intent: `重新核第 ${action.chapter} 章的账`,
             recommended: true,
             action: { toolName: "check_continuity", chapter: action.chapter },
@@ -498,10 +514,10 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   }
   const sureCount = Array.isArray(result?.sure) ? result.sure.length : 0;
   // 正文没改、直接给的上次结果 → 多给一个「再细核一遍」（重新核，上次的问题照样带上）。
-  const fresh: NextStepChoice[] = result?.reused === true
+  const fresh: NextStepChoice[] = result?.reused === true && !args.afterDraft
     ? [{
-        label: "再细核一遍",
-        intent: "再细核一遍：这一章重新对一遍前文",
+        label: "再核一遍",
+        intent: "再核一遍：这一章重新对一遍前文",
         action: { toolName: "check_continuity", chapter: action.chapter, fresh: true },
       }]
     : [];
@@ -868,6 +884,27 @@ async function runUndoAction(args: Omit<Parameters<typeof runUserAction>[0], "ac
 interface GenerateDraftLikeOutput {
   readonly ok?: unknown;
   readonly summary?: unknown;
+  readonly draftTitle?: unknown;
+  readonly draftBody?: unknown;
+  readonly draftLength?: { readonly actualLength?: unknown; readonly lowerBound?: unknown; readonly lengthStatus?: unknown };
+  readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } };
+}
+
+/**
+ * 「写这一章」写成后给作者的一句（重构 P6 第 6 步）：章纲、角色、定稿提示、核对细节都在「生成正文」步骤里点开看，
+ * 回话只说写好了、多少字、差多少（十章会话里这句约 400 字）。没载入稿纸这种要作者知道的照说。
+ */
+export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): string {
+  const title = typeof result.draftTitle === "string" && result.draftTitle.trim() ? `《${result.draftTitle.trim()}》` : "";
+  const actual = typeof result.draftLength?.actualLength === "number" ? result.draftLength.actualLength : undefined;
+  const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;
+  const short = result.draftLength?.lengthStatus === "below_lower_bound" && actual !== undefined && lower !== undefined
+    ? `，比下限少 ${lower - actual} 字` : "";
+  const lines = [`第 ${chapter} 章写好了${title}${actual !== undefined ? `，${actual} 字` : ""}${short}。`];
+  if (typeof result.draftBody === "string" && !result.draftBody.trim()) {
+    lines.push("正文已写盘，但这次没载入稿纸：切到别的章再切回来就能看到，不用重写。");
+  }
+  return lines.join("\n");
 }
 
 /** 「写这一章」按钮：服务端直接出稿（正文照常经 draft-delta 流进稿纸），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
@@ -903,11 +940,21 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   args.sendEvent("tool-result", { toolCallId, toolName: "generate_draft", output });
   const result = output as GenerateDraftLikeOutput | undefined;
   const written = result?.ok === true;
-  emitText(typeof result?.summary === "string" && result.summary.trim()
-    ? humanizeToolNames(result.summary.trim())
-    : written ? `第 ${action.chapter} 章写好了，在工作稿里。` : `第 ${action.chapter} 章没写成，原来的稿子没动。`);
+  const checked = result?.qualityPipeline?.continuity?.checked;
+  // 写成了：一句结论（细节在步骤里）；没写成：照原因说（summary 里是拒稿原因）。
+  emitText(written && result
+    ? [draftBrief(action.chapter, result), checked === false ? "写完那遍核账没跑成，可以点「核账」再核。" : ""].filter(Boolean).join("\n")
+    : typeof result?.summary === "string" && result.summary.trim()
+      ? humanizeToolNames(result.summary.trim())
+      : `第 ${action.chapter} 章没写成，原来的稿子没动。`);
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
+  // 写完已经核过一遍账（结果在核账记忆里）：直接出核账卡、问题画到稿纸上，不用作者再点「核账」。
+  if (written && checked === true) {
+    args.sendEvent("text-delta", { text: "\n" });
+    await runCheckContinuityAction({ ...args, action: { toolName: "check_continuity", chapter: action.chapter }, afterDraft: true });
+    return;
+  }
   const choices: NextStepChoice[] = written
     ? [
       {

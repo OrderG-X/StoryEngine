@@ -95,6 +95,14 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     const edited = chapterProgress({ paper: paper({ committed: { body: "旧稿。" } }), result: null, targetWords: null });
     expect(edited.commit).toEqual({ done: false, text: "定稿后又改过" });
   });
+
+  it("已定稿、知道后面第一个没定稿的章：主按钮「去第 N 章」（只换章不出稿）；没定稿时不带", () => {
+    const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13 });
+    expect(done.primary).toEqual({ kind: "open_next", label: "去第 13 章" });
+    expect(done.next).toBe(13);
+    const drafting = chapterProgress({ paper: paper(), result: null, targetWords: null, nextChapter: 13 });
+    expect(drafting.next).toBeUndefined();
+  });
 });
 
 describe("核账结果取当前会话里这一章最新那张卡", () => {

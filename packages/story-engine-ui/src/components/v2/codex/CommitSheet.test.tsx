@@ -43,12 +43,12 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
   it("不记 / 改记 / 改天数随【定稿】带上；什么都不动就是空的", () => {
     const onConfirm = vi.fn();
     render(<CommitSheet preview={preview()} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "定稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
     expect(onConfirm).toHaveBeenLastCalledWith([], undefined);
 
     const fact = screen.getByRole("group", { name: "钟箱门：锁死 → 没锁（和第 6 章对不上）" });
     fireEvent.click(within(fact).getByRole("button", { name: "不记" }));
-    fireEvent.click(screen.getByRole("button", { name: "定稿（不记 1 条）" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿（不记 1 条）" }));
     expect(onConfirm).toHaveBeenLastCalledWith(["0"], undefined);
 
     fireEvent.click(within(fact).getByRole("button", { name: "记下" }));
@@ -56,7 +56,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     fireEvent.click(within(change).getByRole("button", { name: "改记" }));
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
-    fireEvent.click(screen.getByRole("button", { name: "定稿（改记 1 条）" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿（改记 1 条）" }));
     expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], 5);
   });
 
@@ -67,7 +67,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     first.unmount();
     const onConfirm = vi.fn();
     render(<CommitSheet preview={same} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "定稿（不记 1 条）" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿（不记 1 条）" }));
     expect(onConfirm).toHaveBeenCalledWith(["0"], undefined);
   });
 
@@ -78,12 +78,12 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     );
     expect(screen.getByText("现在还定不了")).toBeTruthy();
     expect(screen.getByText("正文 800 字，低于下限 2000 字")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "定稿" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "知道了" }));
     expect(onClose).toHaveBeenCalled();
     unmount();
     render(<CommitSheet preview={preview()} busy onConfirm={vi.fn()} onClose={vi.fn()} />);
-    expect((screen.getByRole("button", { name: "定稿" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "确认定稿" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("Esc 和点遮罩都关；【先不定】也只是关", () => {
@@ -117,7 +117,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("记账员还在读前文（笔记到第 3 章）")).toBeTruthy();
     expect(screen.getByText("没记上 1 条（原句对不上）")).toBeTruthy();
     // 没给 onConfirm（旧预览）＝只看：没有【定稿】、没有选择按钮。
-    expect(screen.queryByRole("button", { name: "定稿" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
     expect(screen.queryByRole("button", { name: "不记" })).toBeNull();
   });
 });
@@ -147,9 +147,9 @@ describe("定稿清单开在哪、什么时候能直接再开", () => {
     render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
     expect(screen.queryByRole("dialog")).toBeNull();
     act(() => openCommitSheet("old"));
-    expect(screen.queryByRole("button", { name: "定稿" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
     act(() => openCommitSheet("new"));
-    fireEvent.click(screen.getByRole("button", { name: "定稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
     expect(onSuggestedAction).toHaveBeenCalledWith(expect.objectContaining({ commitTarget: expect.objectContaining({ chapter: 7 }) }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });

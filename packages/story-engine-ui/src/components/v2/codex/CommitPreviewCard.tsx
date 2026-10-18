@@ -95,7 +95,7 @@ export function CommitPreviewCard({
         <IssueCountSection label="文稿问题" count={draftIssueCount} items={preview.draftIssues ?? []} />
       ) : null}
       {typeof semanticIssueCount === "number" && semanticIssueCount > 0 ? (
-        <IssueCountSection label="语义/连续性问题" count={semanticIssueCount} items={preview.semanticIssues ?? []} />
+        <IssueCountSection label="和前文对不上的问题" count={semanticIssueCount} items={preview.semanticIssues ?? []} />
       ) : null}
     </StepCard>
   );

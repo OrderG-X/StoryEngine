@@ -521,7 +521,7 @@ async function handleAgentChat(
     if (droppedHistoryCount > 0 && shouldSendHistoryTrimNoticeOnce(projectDir)) {
       sendEvent("status", {
         message:
-          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；故事资料不受影响。` +
+          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；设定本不受影响。` +
           "前面说过的安排要用到的话，请再说一遍。",
       });
     }

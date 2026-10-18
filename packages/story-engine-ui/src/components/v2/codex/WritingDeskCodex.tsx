@@ -9,7 +9,7 @@ import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
-import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
+import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import {
@@ -32,21 +32,14 @@ import { scheduleDraftSave } from "../../../drafts/draftSync.js";
  *
  * 逻辑/handler/状态与 WritingDesk 一致（activeTab 草稿/正文、draftCandidates、reroll、
  * WritingPaper 调用、DraftCandidatesPanel）；只把外层 chrome 的 markup 换成 codex 沉浸版：
- *  - 顶部纤细悬浮条（codex 暗金、半透/淡）：《书名》· chapterHeading + flowLabel + 字数 + 草稿/正文 toggle。
+ *  - 顶部纤细悬浮条（codex 暗金、半透/淡）：chapterHeading + 字数 + 工作稿/定稿 toggle。
+ *    章节状态只在稿纸底下的工具条和右栏顶卡显示（同源 chapterProgress，P6 第 6 步拿掉了这里另算的状态药丸）。
  *  - 中间：稿纸 + WritingPaper（草稿）/ 正式正文，外套 .codex-desk 让 CSS 做居中悬浮 + 四周压暗。
  *  - 底部纤细悬浮条：再来一版（正文字号已上提到 displaySettingsStore，由「设置 · 显示」面板统一调）。
  *
  * 编辑器内核（句级聚焦、打字机居中、查找替换、选区改写、IME、外部稿同步）全在 WritingPaper 里复用，
  * 本组件一行都不碰；codex 沉浸视觉（居中稿纸 / 暗角 / 金 caret / 当前句呼吸辉光）全走 codex.css 的 .codex-desk 作用域。
  */
-/** 状态药丸配色：定稿=绿、生成/检查中=强调色、其余（工作稿/待开始）=橙，提醒「还没定稿」。 */
-function flowTone(state: WritingWorkspaceLayoutProps["workspace"]["flowStatus"]): string {
-  if (state === "committed" || state === "ready_for_next") return "ok";
-  if (state === "draft_generating") return "run";
-  if (state === "idle" || state === "steering_ready") return "";
-  return "warn";
-}
-
 /** 从写作规则里读「每章目标字数」（sidebar 已格式化成「目标字数：约 3200 字 / 章」）；没配就返回 null，不画目标条。 */
 export function parseTargetChapterWords(writingRules: readonly string[] | undefined): number | null {
   for (const rule of writingRules ?? []) {
@@ -61,6 +54,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   readonly onOpenCharacter?: (name: string) => void;
   /** 选区浮动条「问 AI」：把选中段引用进右侧输入框。 */
   readonly onAskAboutSelection?: (selectionText: string) => void;
+  /** 按章号打开一章（已定稿时工具条的「去第 N 章」）。 */
+  readonly onOpenChapter?: (chapter: number) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
@@ -133,11 +128,10 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
 
   return (
     <div className="codex-desk" aria-label="写作台">
-      {/* 顶部细条：章号标题 + 状态 + 字数 + 工作稿/定稿 切换（书名在全局顶栏；专注写作开关也在顶栏）。 */}
+      {/* 顶部细条：章号标题 + 字数 + 工作稿/定稿 切换（书名在全局顶栏；专注写作开关也在顶栏）。 */}
       <header className="codex-desk-bar codex-desk-bar-top">
         <div className="cd-title">
           <strong className="cd-chapter">{chapterHeading(draft.chapterNumber, draft.title)}</strong>
-          <em className={`cd-flow ${flowTone(props.workspace.flowStatus)}`}>{flowLabel(props.workspace.flowStatus)}</em>
           {showEditHint ? (
             <span className="cd-edit-hint">可直接编辑 · 自动保存</span>
           ) : null}
@@ -289,6 +283,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             progress={progress}
             busy={workspaceBusy || draft.streaming === true}
             onChapterButton={props.onChapterButton}
+            {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
             {...(canReroll && draft.content.trim() ? {
               reroll: {
                 label: "再来一版",

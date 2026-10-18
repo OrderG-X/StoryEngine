@@ -221,8 +221,14 @@ export function BrainstormPanel({ chapter, draftEmpty, hidden, busy, onAction }:
   );
 }
 
-/** 对话里那张小卡：几种走法的名字；挑过的标出来。细节在稿纸上方。 */
-export function DirectionsCard({ data, picked }: { readonly data: BrainstormCardData; readonly picked?: number }) {
+/** 对话里那张小卡：几种走法的名字；挑过的标出来。细节在稿纸上方。被新一批换掉的那张标「换过一批了」。 */
+export function DirectionsCard({ messageId, data, picked }: {
+  readonly messageId?: string;
+  readonly data: BrainstormCardData;
+  readonly picked?: number;
+}) {
+  const latest = useChapterDirections(data.chapter);
+  const superseded = messageId !== undefined && latest !== undefined && latest.messageId !== messageId;
   return (
     <div className="se-dir-card" role="group" aria-label={`第 ${data.chapter} 章的走法`}>
       <div className="se-dir-h">第 {data.chapter} 章 · {data.options.length} 种走法</div>
@@ -235,7 +241,7 @@ export function DirectionsCard({ data, picked }: { readonly data: BrainstormCard
           </li>
         ))}
       </ul>
-      <div className="se-dir-f">{picked === undefined ? "在稿纸上方挑。" : "没挑中的不会记进账里。"}</div>
+      <div className="se-dir-f">{superseded ? "后来换过一批了。" : picked === undefined ? "在稿纸上方挑。" : "没挑中的不会记进账里。"}</div>
     </div>
   );
 }

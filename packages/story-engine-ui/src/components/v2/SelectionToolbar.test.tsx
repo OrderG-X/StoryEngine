@@ -7,7 +7,7 @@ afterEach(() => cleanup());
 describe("SelectionToolbar", () => {
   it("renders the six fixed-template buttons", () => {
     render(<SelectionToolbar top={10} left={20} busyKey={null} onPick={vi.fn()} />);
-    for (const label of ["润色", "改写", "去AI味", "扩写", "缩写", "续写"]) {
+    for (const label of ["润色", "改写", "去机器腔", "扩写", "缩写", "续写"]) {
       expect(screen.getByRole("button", { name: label })).toBeDefined();
     }
   });
@@ -15,7 +15,7 @@ describe("SelectionToolbar", () => {
   it("picks a template on mousedown (not click, so the editor selection survives)", () => {
     const onPick = vi.fn();
     render(<SelectionToolbar top={10} left={20} busyKey={null} onPick={onPick} />);
-    fireEvent.mouseDown(screen.getByRole("button", { name: "去AI味" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "去机器腔" }));
     expect(onPick).toHaveBeenCalledWith("deai");
   });
 

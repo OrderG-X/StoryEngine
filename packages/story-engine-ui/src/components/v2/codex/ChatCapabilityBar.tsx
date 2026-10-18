@@ -63,7 +63,7 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
     actions: [
       { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
       { key: "clean", label: "清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
-      { key: "merge", label: "合并重复伏笔", intent: "把讲同一件事的重复伏笔合并成一条" },
+      { key: "merge", label: "归并线索", intent: "把讲同一件事的重复线索归并成一条" },
     ],
   },
 ];

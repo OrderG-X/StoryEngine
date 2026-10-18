@@ -115,7 +115,7 @@ describe("runPruneSnapshots（壳函数）", () => {
     expect(result.summary).toContain("已把操作历史裁到最近 25 条");
     expect(result.summary).not.toMatch(/[0-9a-f]{40}/u); // 不把 baseCommitId 这类裸 id 念给用户
     // 如实声明：裁剪不在「撤销上一改动」链上，兜底是 bundle 备份（undo 撤不到纯历史折叠）
-    expect(result.summary).toContain("不在「撤销上一改动」链上");
+    expect(result.summary).toContain("不在「撤销上一步」链上");
   }, 60_000);
 
   it("不足 keep 时 no-op 如实回报（预览与真裁都不落盘）", async () => {

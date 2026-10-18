@@ -773,8 +773,8 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
       bySeverity: { high: 1, medium: 1, low: 0 },
       truncated: false,
     });
-    expect(out.summary).toContain("⚠ 检出 2 处疑似 AI 腔（high 1 / medium 1）");
-    expect(out.summary).toContain("去AI味");
+    expect(out.summary).toContain("⚠ 检出 2 处疑似机器腔（high 1 / medium 1）");
+    expect(out.summary).toContain("检查机器腔");
   });
 
   it("干净稿 → aiFlavor.total=0，summary 不加 AI 腔噪音", async () => {
@@ -786,7 +786,7 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
     });
     expect(out.ok).toBe(true);
     expect(out.aiFlavor).toEqual({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false });
-    expect(out.summary).not.toContain("疑似 AI 腔");
+    expect(out.summary).not.toContain("疑似机器腔");
   });
 
   it("writing-rules.json 的 antiAiPatterns 命中 → 按 low 档检出（正则元字符转义、字面量匹配），summary 不加 ⚠ 噪音", async () => {
@@ -805,7 +805,7 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
     expect(out.ok).toBe(true); // 不崩（元字符已转义）
     expect(out.aiFlavor?.total).toBe(2); // 两个用户词各命中一处整句
     expect(out.aiFlavor?.bySeverity).toEqual({ high: 0, medium: 0, low: 2 }); // 用户自定义词一律 low 档
-    expect(out.summary).not.toContain("疑似 AI 腔"); // 只有 low 不打 ⚠（治噪音）
+    expect(out.summary).not.toContain("疑似机器腔"); // 只有 low 不打 ⚠（治噪音）
   });
 
   it("writing-rules.json 读不到（已删除）→ 不崩，内置规则照常回检", async () => {
@@ -818,14 +818,14 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
     });
     expect(out.ok).toBe(true);
     expect(out.aiFlavor?.bySeverity.high).toBe(1); // 内置「殊不知」仍命中
-    expect(out.summary).toContain("⚠ 检出 1 处疑似 AI 腔（high 1）");
+    expect(out.summary).toContain("⚠ 检出 1 处疑似机器腔（high 1）");
   });
 
   it("buildAiFlavorWarning：只有 low / 干净 → 空串；有 high/medium → ⚠ 如实标注", () => {
     expect(buildAiFlavorWarning({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false })).toBe("");
     expect(buildAiFlavorWarning({ total: 2, bySeverity: { high: 0, medium: 0, low: 2 }, truncated: false })).toBe("");
     expect(buildAiFlavorWarning({ total: 3, bySeverity: { high: 1, medium: 1, low: 1 }, truncated: false }))
-      .toBe("⚠ 检出 3 处疑似 AI 腔（high 1 / medium 1），可对我说「去AI味」逐条修订。");
+      .toBe("⚠ 检出 3 处疑似机器腔（high 1 / medium 1），可以点「检查机器腔」逐条修。");
   });
 
   it("buildAiFlavorInfo：清单 capped 8 被截断 → truncated=true（total 仍是全量）", () => {
@@ -869,8 +869,8 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
       remainingHighMedium: 0,
       skipped: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
     });
-    expect(out.summary).toContain("已自动去 AI 味修掉 2 处，复检干净。");
-    expect(out.summary).not.toContain("可对我说「去AI味」逐条修订"); // 已修完，不再引导手动
+    expect(out.summary).toContain("已自动去机器腔修掉 2 处，复检干净。");
+    expect(out.summary).not.toContain("逐条修"); // 已修完，不再引导手动
     // 落盘文本与 draftBody 都是改后稿
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("林远攥紧拳，把火压下去。门后的真相正在等他。");
@@ -894,9 +894,9 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
     expect(out.autoDeAi?.fixedCount).toBe(1);
     expect(out.autoDeAi?.remainingHighMedium).toBe(1); // 深吸一口气(medium) 还在
     expect(out.autoDeAi?.skipped.noRewrite).toBe(1);   // 模型没给这条的改写
-    expect(out.summary).toContain("已自动去 AI 味修掉 1 处");
+    expect(out.summary).toContain("已自动去机器腔修掉 1 处");
     expect(out.summary).toContain("复检还剩 1 处");
-    expect(out.summary).toContain("去AI味");
+    expect(out.summary).toContain("检查机器腔");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("深吸一口气"); // 没改的那句原样保留
     expect(onDisk).not.toContain("殊不知");
@@ -916,9 +916,9 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
     expect(out.autoDeAi?.remainingHighMedium).toBe(2); // 原稿未动 → 剩初始检出
     expect(out.autoDeAi?.error).toContain("400");
     expect(out.autoDeAi?.skipped.noRewrite).toBe(2);
-    expect(out.summary).toContain("自动去味没跑成");
+    expect(out.summary).toContain("自动去机器腔没跑成");
     expect(out.summary).toContain("400");
-    expect(out.summary).toContain("原稿未动");
+    expect(out.summary).toContain("原稿没动");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("深吸一口气"); // 原稿一个字没动
     expect(onDisk).toContain("殊不知");
@@ -938,7 +938,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
     expect(out.autoDeAi?.remainingHighMedium).toBe(2);
     expect(out.autoDeAi?.skipped.noRewrite).toBe(2);
     expect(out.summary).toContain("没能安全替换");
-    expect(out.summary).toContain("原稿未动");
+    expect(out.summary).toContain("原稿没动");
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain(FLAVORED_BODY);
   });
@@ -961,7 +961,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
       remainingHighMedium: 2,
       skipped: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
     });
-    expect(out.summary).toContain("⚠ 检出 2 处疑似 AI 腔（high 1 / medium 1）"); // 只标注
+    expect(out.summary).toContain("⚠ 检出 2 处疑似机器腔（high 1 / medium 1）"); // 只标注
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain(FLAVORED_BODY);
   });
@@ -1000,13 +1000,13 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
     const initial = { total: 2, bySeverity: { high: 1, medium: 1, low: 0 }, truncated: false };
     const skipped = { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 };
     expect(buildAutoDeAiNote({ attempted: false, fixedCount: 0, remainingHighMedium: 2, skipped }, initial))
-      .toBe("⚠ 检出 2 处疑似 AI 腔（high 1 / medium 1），可对我说「去AI味」逐条修订。");
+      .toBe("⚠ 检出 2 处疑似机器腔（high 1 / medium 1），可以点「检查机器腔」逐条修。");
     expect(buildAutoDeAiNote({ attempted: true, fixedCount: 0, remainingHighMedium: 2, skipped, error: "400" }, initial))
       .toContain("没跑成（400）");
     expect(buildAutoDeAiNote({ attempted: true, fixedCount: 0, remainingHighMedium: 2, skipped: { ...skipped, noRewrite: 2 } }, initial))
       .toContain("没能安全替换");
     expect(buildAutoDeAiNote({ attempted: true, fixedCount: 2, remainingHighMedium: 0, skipped }, initial))
-      .toBe("已自动去 AI 味修掉 2 处，复检干净。");
+      .toBe("已自动去机器腔修掉 2 处，复检干净。");
     expect(buildAutoDeAiNote({ attempted: true, fixedCount: 1, remainingHighMedium: 1, skipped: { ...skipped, noRewrite: 1 } }, initial))
       .toContain("还剩 1 处");
   });
@@ -1064,7 +1064,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
       expect(spyResolve).not.toHaveBeenCalled();
       expect(spyStream).not.toHaveBeenCalled();
       expect(out.autoDeAi?.attempted).toBe(false);
-      expect(out.summary).toContain("⚠ 检出 2 处疑似 AI 腔");
+      expect(out.summary).toContain("⚠ 检出 2 处疑似机器腔");
       const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
       expect(onDisk).toContain(FLAVORED_BODY);
     } finally {
@@ -1412,7 +1412,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.summary).toContain("已生成 3 个候选并选出第 2 个（要点全中、字数达标、无 AI 腔命中），其余落选原因见 candidatesReport。");
     // 优胜稿干净 → 不带 AI 腔 ⚠ 噪音
     expect(out.aiFlavor).toEqual({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, truncated: false });
-    expect(out.summary).not.toContain("疑似 AI 腔");
+    expect(out.summary).not.toContain("疑似机器腔");
   });
 
   it("要点保真优先于文风：干净但漏要点的候选输给带 AI 腔但要点全中的候选，summary 不夸「AI 腔最少」", async () => {
@@ -1566,7 +1566,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     });
     // 与 candidates=1 完全一致的后续链：autoDeAi 改了优胜稿并复检干净
     expect(out.autoDeAi).toMatchObject({ attempted: true, fixedCount: 2, remainingHighMedium: 0 });
-    expect(out.summary).toContain("已自动去 AI 味修掉 2 处，复检干净。");
+    expect(out.summary).toContain("已自动去机器腔修掉 2 处，复检干净。");
     expect(typeof out.snapshotId).toBe("string"); // 去味覆盖落盘前建了快照
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("攥紧拳");

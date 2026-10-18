@@ -1,5 +1,7 @@
 /* 2026-10-07 改版 · 外壳：全宽顶栏 + 两栏 + 设置弹窗。全部 scope 在 .codex-app 下（原生嵌套）。
    配色 token 定义在 codex.css 顶部（.codex-app 块）；这里只用 token，不写死颜色。 */
+/* 书架上开设置弹窗时套的壳（P6 第 6 步）：只为进 .codex-app 作用域拿弹窗样式，自己不占地方。 */
+.codex-app.se-settings-host{height:0;min-height:0;overflow:visible;background:none;}
 .codex-app{
   .app{height:auto;}
   /* 旧版中栏的金色光晕 + 点阵底纹撤掉：稿纸和资料靠层级说话，不靠背景装饰。 */
@@ -41,6 +43,8 @@
   }
   .se-seg button:hover{color:var(--text);}
   .se-seg button.on{background:var(--surface-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.18),0 0 0 1px var(--line);}
+  .se-seg button.has-dot{position:relative;}
+  .se-seg-dot{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--accent);}
 
   /* 资料中心旧工具条：面包屑已上移到顶栏，只剩右侧搜索 + 只读提示。 */
   .topbar.se-lib-bar{justify-content:flex-end;}
@@ -66,6 +70,9 @@
   .se-modal-close{position:absolute;top:10px;right:10px;z-index:2;}
   /* 嵌进弹窗的旧设置页：去掉它自带的整页外框与返回键（弹窗已有关闭键）。 */
   .se-modal-body .ms-close,.se-modal-body .ai-settings-back{display:none;}
+  /* 「高级」：设置文件原文。 */
+  .se-raw-settings .ms-raw-json{width:100%;min-height:420px;}
+  .se-raw-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;}
 
   /* ═══ 搜索按钮 + ⌘K 面板 ═══ */
   .se-search-btn{
@@ -184,6 +191,13 @@
     .se-crumb-book,.se-crumb-sep{display:none;}
   }
   @media (max-width:560px){
+    /* 手机宽顶栏（重构 P6 第 6 步：390 宽时标签压住章节按钮、搜索挤成一条缝）：
+       只留章节按钮、三个标签、搜索 / 专注 / 设置 / AI 四个图标；主题在设置里切。 */
+    .se-top{gap:6px;padding:0 6px;}
+    .se-crumb,.se-theme-btn,.se-search-btn kbd{display:none;}
+    .se-search-btn{width:34px;justify-content:center;margin-right:0;padding:0;border-color:transparent;}
+    .se-seg button{padding:0 9px;}
+    .se-top-r{gap:0;}
     /* 手机宽：清单贴底、占满宽，按钮够得着。 */
     .se-cs{top:auto;bottom:0;left:0;right:0;transform:none;width:auto;max-height:calc(100vh - 24px);border-radius:14px 14px 0 0;}
     .se-cs-head,.se-cs-body{padding-left:16px;padding-right:16px;}

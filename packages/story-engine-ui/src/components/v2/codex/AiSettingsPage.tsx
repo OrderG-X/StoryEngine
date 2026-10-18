@@ -514,11 +514,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
                 {saveWarnings.map((warning, index) => (
                   <div key={`warn-${index}`}>{warning}</div>
                 ))}
-                {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无 raw JSON 编辑器，
-                    被丢的 customHeaders 在本页补不回——指路到首页设置弹窗的原始 JSON。 */}
+                {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无原文编辑器，
+                    被丢的 customHeaders 在本页补不回——指路到同一弹窗的「高级」。 */}
                 <div>
-                  补回路径：回首页点「设置」→ 高级设置 →「原始 JSON 编辑」，在对应服务商下写回
-                  customHeaders 明文值后保存。
+                  补回路径：设置左边点「高级」，在对应服务商下写回 customHeaders 明文值后保存。
                 </div>
               </div>
             )}

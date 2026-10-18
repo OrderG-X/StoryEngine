@@ -256,8 +256,8 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await waitFor(() => {
       expect(screen.getByText(warnings[0] as string)).toBeTruthy();
     });
-    // 本页表单无 raw JSON 编辑器，警告必须指路到首页弹窗的补救路径（可行动性不断链）
-    expect(screen.getByText(/原始 JSON 编辑/)).toBeTruthy();
+    // 本页表单无原文编辑器，警告必须指路到同一弹窗的「高级」（可行动性不断链）
+    expect(screen.getByText(/设置左边点「高级」/)).toBeTruthy();
   });
 
   it("保存响应不带 warnings 时不出现警告条（无丢弃不刷警告）", async () => {

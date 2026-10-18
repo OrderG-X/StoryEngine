@@ -116,7 +116,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       ? result.sure.length + result.maybe.length === 0
         ? `前后核对：没发现和前文对不上的地方。${coldNote}`
         : `前后核对：确定对不上 ${result.sure.length} 处${result.maybe.length > 0 ? `、可能 ${result.maybe.length} 处` : ""}，没自动改，点「核账」看是哪几句。${coldNote}`
-      : `前后核对这次没跑成（${result.failures[0] ?? "原因不明"}），稿子没动；可以点「核账」再核一次。${coldNote}`);
+      : `写完那遍核账没跑成（${result.failures[0] ?? "原因不明"}），工作稿没动；可以点「核账」再核。${coldNote}`);
     timings.continuityMs = Date.now() - startedAt;
   }
   info = { ...info, timings };

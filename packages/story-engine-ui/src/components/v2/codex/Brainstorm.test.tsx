@@ -110,6 +110,19 @@ describe("对话里的走法小卡", () => {
     expect(screen.getByText("甲 · 老周开口").closest("li")!.className).toBe("is-dim");
   });
 
+  it("被新一批换掉的旧卡：标「后来换过一批了」，不再叫人去稿纸上方挑", () => {
+    act(() => {
+      useChatStore.getState().setMessages([
+        { id: "m1", role: "assistant", content: "", cards: [{ type: "directions", brainstorm: DATA }] },
+        { id: "m2", role: "assistant", content: "", cards: [{ type: "directions", brainstorm: DATA }] },
+      ]);
+    });
+    const { rerender } = render(<DirectionsCard messageId="m1" data={DATA} />);
+    expect(screen.getByText("后来换过一批了。")).toBeTruthy();
+    rerender(<DirectionsCard messageId="m2" data={DATA} />);
+    expect(screen.getByText("在稿纸上方挑。")).toBeTruthy();
+  });
+
   it("推进那行：停太久的标停了几章", () => {
     expect(advancesText(DATA.options[0]!)).toBe("老周回避（停了 6 章）、外乡人是谁");
   });

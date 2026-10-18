@@ -145,12 +145,12 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   },
   read_chapters_overview: { stepLabel: "读取章节概览", card: null },
   read_timeline: { stepLabel: "读取时间线", card: null },
-  read_foundation: { stepLabel: "查看故事资料", card: null },
+  read_foundation: { stepLabel: "查设定本", card: null },
   read_draft: { stepLabel: "读取工作稿原文", card: null },
   // 写资料
   foundation_write: {
-    stepLabel: "更新故事资料",
-    card: { kind: "foundation", agentName: "foundationAgent", title: "更新故事资料" },
+    stepLabel: "改设定本",
+    card: { kind: "foundation", agentName: "foundationAgent", title: "改设定本" },
   },
   // 做厚资料簇
   generate_worldbuilding: { stepLabel: "补全世界观", card: null },
@@ -162,13 +162,13 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   generate_writing_rules_enrichment: { stepLabel: "重新整理写作规则", card: null },
   generate_alias_table: { stepLabel: "补全别名表", card: null },
   // 2026-10-10 对话 AI 瘦身：上面 8 个合成 enrich_foundation、下面 4 个线索工具合成 manage_threads（原名保留给老会话回放）
-  enrich_foundation: { stepLabel: "补全资料", card: null },
+  enrich_foundation: { stepLabel: "补全设定本", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
   // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
   manage_ledger: { stepLabel: "改账", card: null },
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
-  generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
+  generate_chapter_steering: { stepLabel: "拟章纲", card: null },
   brainstorm_chapter: { stepLabel: "想走法", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },
   revise_draft: { stepLabel: "修改工作稿", card: null },
@@ -183,14 +183,14 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 线索与杂项簇
   edit_fact_ledger: { stepLabel: "记录故事事实", card: null },
   suggest_next_steps: { stepLabel: "建议下一步", card: null },
-  set_foreshadowing_importance: { stepLabel: "调整伏笔权重", card: null },
+  set_foreshadowing_importance: { stepLabel: "调整线索轻重", card: null },
   resolve_thread: { stepLabel: "收口单条线索", card: null },
   clean_legacy_threads: { stepLabel: "清理历史线索", card: null },
-  group_related_leads: { stepLabel: "归并相关线索", card: null },
+  group_related_leads: { stepLabel: "归并线索", card: null },
   manage_style_exemplars: { stepLabel: "管理文风样本", card: null },
   // 快照与外部簇
-  undo_last_change: { stepLabel: "撤销上一改动", card: null },
-  prune_snapshots: { stepLabel: "裁剪快照历史", card: null },
+  undo_last_change: { stepLabel: "撤销上一步", card: null },
+  prune_snapshots: { stepLabel: "裁剪操作历史", card: null },
   web_search: { stepLabel: "联网检索资料", card: null },
 };
 

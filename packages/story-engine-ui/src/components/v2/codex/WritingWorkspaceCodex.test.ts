@@ -14,15 +14,16 @@ import { describe, it, expect } from "vitest";
 import { __CATS_FOR_TEST, buildChapterRows, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
 describe("B5-3 CATS 数组含「伏笔线索」与「故事地图」类目（重构 P6 改名）", () => {
-  it("CATS 共 8 项", () => {
-    expect(__CATS_FOR_TEST).toHaveLength(8);
+  it("CATS 共 9 项，打头是「这章改了什么」（重构 P6 第 6 步）", () => {
+    expect(__CATS_FOR_TEST).toHaveLength(9);
+    expect(__CATS_FOR_TEST[0]).toMatchObject({ id: "changes", title: "这章改了什么" });
   });
 
   it("含 hooks 类目，glyph / title / sub 与规格一致", () => {
     const hooksCat = __CATS_FOR_TEST.find((c) => c.id === "hooks");
     expect(hooksCat).toBeDefined();
     expect(hooksCat?.glyph).toBe("❖");
-    expect(hooksCat?.title).toBe("伏笔线索");
+    expect(hooksCat?.title).toBe("伏笔与线索");
     expect(hooksCat?.sub).toBe("刚埋下 · 在推进 · 停太久 · 已收口");
   });
 

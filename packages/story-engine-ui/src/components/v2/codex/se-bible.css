@@ -275,6 +275,26 @@
     .se-bible .read,.op-history-body{padding:24px 24px 48px;}
     .op-history-confirm,.op-history-changes{margin-left:12px;}
   }
+  /* ═══ 这章改了什么（重构 P6 第 6 步）：定稿记下的人、线索、事，点原句回稿纸 ═══ */
+  .se-cc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .se-cc-nav{display:flex;gap:4px;flex:none;}
+  .se-cc-nav .se-sm-link:disabled{color:var(--faint);cursor:default;}
+  .se-cc-block h3{margin:4px 0 8px;font-size:13px;font-weight:600;color:var(--muted);}
+  .se-cc-block h3 small{font-weight:400;color:var(--faint);}
+  .se-cc-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
+  .se-cc-list li{display:flex;flex-direction:column;gap:2px;padding-left:10px;border-left:2px solid var(--line);}
+  .se-cc-list li.is-later{opacity:.6;}
+  .se-cc-who{font-size:14px;font-weight:600;color:var(--text);}
+  .se-cc-text{font-size:14px;line-height:1.6;color:var(--text);overflow-wrap:anywhere;}
+  .se-cc-text b{font-weight:600;}
+  .se-cc-op{align-self:flex-start;font-size:12px;line-height:18px;padding:0 6px;border-radius:5px;background:var(--surface-2);color:var(--muted);}
+  .se-cc-op.is-open{color:var(--accent);background:var(--accent-soft);}
+  .se-cc-op.is-close{color:var(--success);}
+  .se-cc-was{font-size:12px;color:var(--faint);}
+  .se-cc-tag{margin-left:6px;font-style:normal;font-size:11px;color:var(--faint);}
+  .se-cc-tag.is-warn{color:var(--warn);}
+  .se-cc-more{margin-top:6px;padding-left:10px;}
+
   @media (max-width:720px){
     .se-tb-cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow-x:visible;}
   }

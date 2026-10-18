@@ -364,7 +364,7 @@ function RelationsSub({ w }: { readonly w: WorldbuildingData }) {
           <div className="entries">
             {w.storyEntries.map((e, i) => (
               <article key={i} className="entry">
-                <div className="et"><span className="hook-no">HOOK {String(i + 1).padStart(2, "0")}</span><b>{e.title}</b></div>
+                <div className="et"><span className="hook-no">{String(i + 1).padStart(2, "0")}</span><b>{e.title}</b></div>
                 <p>{e.hook}</p>
               </article>
             ))}

@@ -43,12 +43,12 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
       <CommitPreviewCard preview={{ chapter: 1, canCommit: false, blockingReasons: ["缺稿。"], draftIssueCount: 3, semanticIssueCount: 2 }} />,
     );
     expect(container.textContent ?? "").toContain("文稿问题 3 项");
-    expect(container.textContent ?? "").toContain("语义/连续性问题 2 项");
+    expect(container.textContent ?? "").toContain("和前文对不上的问题 2 项");
     expect(container.textContent ?? "").not.toContain("质检卡");
 
     rerender(<CommitPreviewCard preview={{ chapter: 1, canCommit: true }} />);
     expect(container.textContent ?? "").not.toContain("文稿问题");
-    expect(container.textContent ?? "").not.toContain("语义/连续性问题");
+    expect(container.textContent ?? "").not.toContain("和前文对不上的问题");
   });
 
   // R7.7·报告 4.3：明细文案直接列在卡里——默认折叠（一屏读得完），点开才列出。

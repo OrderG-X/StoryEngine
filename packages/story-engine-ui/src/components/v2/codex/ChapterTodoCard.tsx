@@ -1,7 +1,7 @@
 /**
  * 右栏顶卡「第 N 章还差什么」（重构 P6，草图 ①）：写 / 核账 / 定稿三行打勾 + 一个主按钮。
  * 说法和稿纸底下的工具条同源（workspace/chapterProgress）。主按钮按顺序取第一个没做完的：
- * 写这一章 → 核账 → 去看那 N 处 → 定稿 → 写下一章。
+ * 写这一章 → 核账 → 去看那 N 处 → 定稿 → 去第 N 章（后面第一个没定稿的章）。
  */
 import type { ReactNode } from "react";
 import type { ChapterProgress } from "../../../workspace/chapterProgress.js";
@@ -15,6 +15,7 @@ export function ChapterTodoCard({
   busy,
   busyCaption,
   onChapterButton,
+  onOpenChapter,
   children,
 }: {
   readonly progress: ChapterProgress;
@@ -22,6 +23,8 @@ export function ChapterTodoCard({
   /** 有动作在跑时主按钮上说的那句（如「AI 在写…」）。 */
   readonly busyCaption?: string | null;
   readonly onChapterButton?: (button: ChapterButton) => void;
+  /** 「去第 N 章」：换到那一章。 */
+  readonly onOpenChapter?: (chapter: number) => void;
   /** 卡下面的小字行（编辑部读前文、不急的事）。 */
   readonly children?: ReactNode;
 }) {
@@ -36,8 +39,11 @@ export function ChapterTodoCard({
   const { primary } = progress;
   const onPrimary = () => {
     if (primary.kind === "show_issues") requestContinuityFocus();
-    else onChapterButton?.(primary.kind);
+    else if (primary.kind === "open_next") {
+      if (progress.next) onOpenChapter?.(progress.next);
+    } else onChapterButton?.(primary.kind);
   };
+  const actionable = primary.kind === "show_issues" || (primary.kind === "open_next" ? Boolean(onOpenChapter) : Boolean(onChapterButton));
   const attention = progress.check.state === "issues";
   return (
     <div className="se-todo-wrap">
@@ -55,7 +61,7 @@ export function ChapterTodoCard({
         <button
           type="button"
           className="se-todo-primary"
-          disabled={busy || (primary.kind !== "show_issues" && !onChapterButton)}
+          disabled={busy || !actionable}
           onClick={onPrimary}
         >
           {busy && busyCaption ? busyCaption : primary.label}

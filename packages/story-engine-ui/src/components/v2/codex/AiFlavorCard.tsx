@@ -43,7 +43,7 @@ export function AiFlavorCard({ report, fixedIds = [], pendingViolationId = null,
         {report.usedFallback ? <span className="afc-fallback"> · 模型没接上，用了通用判据</span> : null}
       </p>
       {/* afterfix3：点明这是文风体检、不拦入库——否则与质检「可入库」并排时读着自相矛盾（Codex 反馈）。仅有违规时显，避免噪音。 */}
-      {total === 0 ? null : <p className="afc-note">文风检查 · 不影响定稿，按需修改</p>}
+      {total === 0 ? null : <p className="afc-note">机器腔检查 · 不影响定稿，按需修改</p>}
       {/* 一键全修：还有没改的违规且提供了 onFixAll 时显。一次批量改写、倒序落盘、整批可撤销（修 Codex「逐句改太费劲」）。 */}
       {!allFixed && onFixAll ? (
         <button

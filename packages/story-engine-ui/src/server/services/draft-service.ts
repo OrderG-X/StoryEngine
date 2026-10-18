@@ -225,7 +225,7 @@ export function buildAiFlavorWarning(info: GenerateDraftAiFlavorInfo): string {
   const { high, medium } = info.bySeverity;
   if (high + medium === 0) return "";
   const breakdown = [high > 0 ? `high ${high}` : "", medium > 0 ? `medium ${medium}` : ""].filter(Boolean).join(" / ");
-  return `⚠ 检出 ${info.total} 处疑似 AI 腔（${breakdown}），可对我说「去AI味」逐条修订。`;
+  return `⚠ 检出 ${info.total} 处疑似机器腔（${breakdown}），可以点「检查机器腔」逐条修。`;
 }
 
 /** 自动去味一轮的如实回报：跑没跑 / 修了几处 / 复检还剩几处 high/medium / 跳过计数 / 失败原因。 */
@@ -256,22 +256,22 @@ export function buildAutoDeAiNote(info: GenerateDraftAutoDeAiInfo, initial: Gene
   const detectedHighMedium = initial.bySeverity.high + initial.bySeverity.medium;
   if (info.error) {
     return (
-      `⚠ 检出 ${detectedHighMedium} 处疑似 AI 腔，自动去味没跑成（${info.error}）——原稿未动、保留初始检出；` +
-      `可让我重试，或对我说「去AI味」手动逐条修。`
+      `⚠ 检出 ${detectedHighMedium} 处疑似机器腔，自动去机器腔没跑成（${info.error}）——原稿没动；` +
+      `可以让我重试，或点「检查机器腔」逐条修。`
     );
   }
   if (info.fixedCount === 0) {
     return (
-      `⚠ 检出 ${detectedHighMedium} 处疑似 AI 腔，自动去味没能安全替换（模型没给有效改写或定位不到）——原稿未动；` +
-      `可对我说「去AI味」逐条手动修。`
+      `⚠ 检出 ${detectedHighMedium} 处疑似机器腔，自动去机器腔没能安全替换（模型没给有效改写或定位不到）——原稿没动；` +
+      `可以点「检查机器腔」逐条修。`
     );
   }
   if (info.remainingHighMedium === 0) {
-    return `已自动去 AI 味修掉 ${info.fixedCount} 处，复检干净。`;
+    return `已自动去机器腔修掉 ${info.fixedCount} 处，复检干净。`;
   }
   return (
-    `⚠ 已自动去 AI 味修掉 ${info.fixedCount} 处疑似 AI 腔，复检还剩 ${info.remainingHighMedium} 处——` +
-    `可对我说「去AI味」继续逐条修。`
+    `⚠ 已自动去机器腔修掉 ${info.fixedCount} 处，复检还剩 ${info.remainingHighMedium} 处——` +
+    `可以点「检查机器腔」接着逐条修。`
   );
 }
 

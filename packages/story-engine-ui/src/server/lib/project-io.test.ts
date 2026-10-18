@@ -290,6 +290,19 @@ describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
   });
 });
 
+describe("readWorkspaceMessages 作者的话记着在看哪一章（重构 P6 第 6 步）", () => {
+  it("正整数章号读回；坏值丢掉", () => {
+    const [kept, zero, junk] = readWorkspaceMessages([
+      { id: "u1", role: "user", content: "改一下", chapter: 12 },
+      { id: "u2", role: "user", content: "改一下", chapter: 0 },
+      { id: "u3", role: "user", content: "改一下", chapter: "12" },
+    ]);
+    expect(kept.chapter).toBe(12);
+    expect(zero.chapter).toBeUndefined();
+    expect(junk.chapter).toBeUndefined();
+  });
+});
+
 describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
   it("新格式的卡原样读回；认不出的 type、形状不对的卡丢掉；同一种只留最后一张", () => {
     const [message] = readWorkspaceMessages([{

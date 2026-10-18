@@ -151,7 +151,7 @@ export function CommitSheet({
   const reviewShown = showAllReview ? reviewGroups : takeRows(reviewGroups, REVIEW_VISIBLE);
   const reviewCount = review.length + (day?.needsConfirm ? 1 : 0);
   const title = `定稿第 ${preview.chapter} 章`;
-  const confirmLabel = removed > 0 ? `定稿（不记 ${removed} 条）` : confirmed > 0 ? `定稿（改记 ${confirmed} 条）` : "定稿";
+  const confirmLabel = removed > 0 ? `确认定稿（不记 ${removed} 条）` : confirmed > 0 ? `确认定稿（改记 ${confirmed} 条）` : "确认定稿";
 
   return (
     <>

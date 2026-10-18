@@ -1,5 +1,5 @@
 /**
- * 稿纸底下的工具条（重构 P6，草图 ①）：一句核账状态 + 核账 / 定稿（已定稿时是写下一章）。专注模式也在。
+ * 稿纸底下的工具条（重构 P6，草图 ①）：一句核账状态 + 核账 / 定稿（已定稿时是「去第 N 章」）。专注模式也在。
  * 说法和右栏顶卡同源（workspace/chapterProgress），按钮都是现有的结构化动作，不新增绕过对话的路。
  */
 import type { ChapterProgress } from "../../../workspace/chapterProgress.js";
@@ -10,17 +10,21 @@ export function PaperToolbar({
   progress,
   busy,
   onChapterButton,
+  onOpenChapter,
   reroll,
 }: {
   readonly progress: ChapterProgress;
   readonly busy: boolean;
   readonly onChapterButton?: (button: ChapterButton) => void;
+  /** 已定稿时「去第 N 章」：换到那一章。 */
+  readonly onOpenChapter?: (chapter: number) => void;
   /** 「再来一版」（抽候选稿）：只在还没定稿、有入口时给。 */
   readonly reroll?: { readonly label: string; readonly running: boolean; readonly onClick: () => void; readonly title: string };
 }) {
   const { primary, check } = progress;
+  const next = progress.commit.done && primary.kind === "open_next" ? progress.next : undefined;
   const buttons: { readonly button: ChapterButton; readonly label: string }[] = progress.commit.done
-    ? [{ button: "write_next", label: "写下一章" }]
+    ? next !== undefined ? [] : [{ button: "write_next", label: "写下一章" }]
     : !progress.write.done
       ? [{ button: "write", label: "写这一章" }]
       : [
@@ -42,6 +46,11 @@ export function PaperToolbar({
       {reroll ? (
         <button type="button" className="cd-tools-btn is-quiet" disabled={busy || reroll.running} title={reroll.title} onClick={reroll.onClick}>
           {reroll.running ? "生成候选中…" : reroll.label}
+        </button>
+      ) : null}
+      {next !== undefined && onOpenChapter ? (
+        <button type="button" className="cd-tools-btn is-primary" disabled={busy} onClick={() => onOpenChapter(next)}>
+          {primary.label}
         </button>
       ) : null}
       {onChapterButton ? buttons.map(({ button, label }) => (

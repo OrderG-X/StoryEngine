@@ -11,7 +11,8 @@ import { isDraftDirty, paperStage, useDraftStore, type DraftStoreState } from ".
 import { useChatStore } from "../stores/chatStore.js";
 import { cardOf } from "../utils/messageCards.js";
 import { latestDirections, type ChapterDirections } from "../utils/brainstormCard.js";
-import type { ChapterButton } from "../utils/chapterButtons.js";
+import { nextUncommittedChapter, type ChapterButton } from "../utils/chapterButtons.js";
+import { useBookStore } from "../stores/bookStore.js";
 import { countTextWords } from "../utils/textUtils.js";
 
 export type ContinuityItem = ContinuityCheckItemData;
@@ -62,7 +63,8 @@ export function openContinuityItems(
 }
 
 export type CheckState = "none" | "clean" | "issues" | "stale";
-export type PrimaryKind = ChapterButton | "show_issues";
+/** show_issues＝滚到稿纸上第一条划线；open_next＝已定稿的章去后面第一个没定稿的章（只换章，不出稿）。 */
+export type PrimaryKind = ChapterButton | "show_issues" | "open_next";
 
 export interface ChapterProgress {
   readonly chapter: number;
@@ -74,6 +76,8 @@ export interface ChapterProgress {
   readonly primary: { readonly kind: PrimaryKind; readonly label: string };
   /** 工具条左边那一句。 */
   readonly statusLine: string;
+  /** 已定稿时：后面第一个没定稿的章（「去第 N 章」去这里）。 */
+  readonly next?: number;
 }
 
 type PaperInput = Pick<DraftStoreState, "chapter" | "body" | "committed" | "baseVersion" | "savedBody" | "title" | "savedTitle" | "streaming">;
@@ -82,6 +86,8 @@ export function chapterProgress(input: {
   readonly paper: PaperInput;
   readonly result: ContinuityResult | null;
   readonly targetWords: number | null;
+  /** 后面第一个没定稿的章（章表算的）；已定稿时主按钮去这一章。 */
+  readonly nextChapter?: number;
 }): ChapterProgress {
   const { paper, result, targetWords } = input;
   const stage = paperStage(paper);
@@ -124,7 +130,8 @@ export function chapterProgress(input: {
   const primary: ChapterProgress["primary"] = stage === "empty"
     ? { kind: "write", label: "写这一章" }
     : committed
-      ? { kind: "write_next", label: "写下一章" }
+      // 已定稿：去后面第一个没定稿的章（那章有稿就接着弄，没稿就在那儿挑走法或写），不在这儿直接出稿。
+      ? input.nextChapter ? { kind: "open_next", label: `去第 ${input.nextChapter} 章` } : { kind: "write_next", label: "写下一章" }
       : checkState === "none" || checkState === "stale"
         ? { kind: "check_continuity", label: checkState === "stale" ? "再核一遍" : "核账" }
         : checkState === "issues"
@@ -143,7 +150,7 @@ export function chapterProgress(input: {
             ? `核过了：${open.sure.length} 处对不上${open.maybe.length > 0 ? `，${open.maybe.length} 处可能` : ""}`
             : open.maybe.length > 0 ? `核过了：没有确定对不上的，${open.maybe.length} 处可能` : "核过了，没发现对不上的地方";
 
-  return { chapter: paper.chapter, words, write, check, commit, primary, statusLine };
+  return { chapter: paper.chapter, words, write, check, commit, primary, statusLine, ...(committed && input.nextChapter ? { next: input.nextChapter } : {}) };
 }
 
 /** 组件用：当前会话里这一章最新的核账结果。 */
@@ -165,5 +172,7 @@ export function useChapterProgress(targetWords: number | null): ChapterProgress 
     savedBody: s.savedBody, title: s.title, savedTitle: s.savedTitle, streaming: s.streaming,
   })));
   const result = useContinuityResult(paper.chapter);
-  return useMemo(() => chapterProgress({ paper, result, targetWords }), [paper, result, targetWords]);
+  const chapters = useBookStore((s) => s.workspace.chapters);
+  const nextChapter = useMemo(() => (paper.chapter > 0 ? nextUncommittedChapter(paper.chapter, chapters) : undefined), [paper.chapter, chapters]);
+  return useMemo(() => chapterProgress({ paper, result, targetWords, ...(nextChapter ? { nextChapter } : {}) }), [paper, result, targetWords, nextChapter]);
 }

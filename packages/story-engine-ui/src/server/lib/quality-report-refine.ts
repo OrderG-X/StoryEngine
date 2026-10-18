@@ -21,7 +21,7 @@ type Severity = CommitQualityIssue["severity"];
 export const QUALITY_TYPE_LABELS: Readonly<Record<string, string>> = {
   // 硬伤（error）
   empty_draft: "正文为空",
-  draft_not_found_for_check: "还没有正文可质检",
+  draft_not_found_for_check: "还没有正文可做硬伤检查",
   tool_or_json_artifact: "像工具/JSON 产物、不是正文",
   title_only: "只有标题没正文",
   too_short: "正文过短",

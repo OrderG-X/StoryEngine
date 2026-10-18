@@ -50,7 +50,7 @@ function readViolations(raw: unknown): AiFlavorViolation[] {
     out.push({
       id: readString(item.id) ?? `v-${i}`,
       text,
-      reason: readString(item.reason) ?? "AI 腔",
+      reason: readString(item.reason) ?? "机器腔",
       severity: sev === "high" || sev === "medium" || sev === "low" ? sev : "medium",
       ...(suggestedFix ? { suggestedFix } : {}),
     });
@@ -69,7 +69,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     if (!guardProjectPath(res, projectDir)) return;
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     if (body.confirm !== true) {
-      writeJson(res, 400, { ok: false, error: "一键去 AI 味需要 confirm=true。" });
+      writeJson(res, 400, { ok: false, error: "一键全修需要 confirm=true。" });
       return;
     }
     await assertStoryEngineProject(projectDir);

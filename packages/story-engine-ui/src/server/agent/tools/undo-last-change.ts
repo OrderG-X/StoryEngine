@@ -58,7 +58,7 @@ export const undoLastChangeTool = createTool({
       return {
         ok: true,
         undone: false,
-        summary: "没有可撤销的改动了（已经是最初状态）。如果想回到更早的某个时间点，可以在界面的快照列表里挑一个。",
+        summary: "没有可撤销的改动了（已经是最初状态）。如果想回到更早的某个时间点，可以在顶栏「历史」里挑一个存档恢复。",
         overview,
         refreshScope: "full" as const,
       };

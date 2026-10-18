@@ -488,7 +488,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
           agentName: "revisionAgent",
           title: "修订已应用到工作稿",
           summary: "已替换工作稿中对应片段。",
-          detail: ["未写正式状态", "建议重新质检或内容审阅"],
+          detail: ["没有定稿", "可以再做一次硬伤检查或内容审阅"],
         }),
         suggestedActions: [suggestedAction("quality-check"), suggestedAction("ai-review"), suggestedAction("commit-preview")],
       });
@@ -693,7 +693,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       nav.showToast("本章已定稿，正文只读；如需修改请通过 AI 助手发起修订。");
       return;
     }
-    if (violations.length === 0) { nav.showToast("没有待改的 AI 腔。"); return; }
+    if (violations.length === 0) { nav.showToast("没有要改的机器腔。"); return; }
     const operation = beginOwnedOperation("deai-fix-all");
     if (!operation) return;
     const chapter = operation.chapter;
@@ -736,7 +736,7 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         notifyStaleOperation();
         return;
       }
-      nav.showToast(`一键去 AI 味失败：${error instanceof Error ? error.message : String(error)}`, 5000);
+      nav.showToast(`一键全修没成：${error instanceof Error ? error.message : String(error)}`, 5000);
     } finally {
       if (isWorkspaceOperationCurrent(operation)) {
         if (ownsCurrentWorkspace(operation)) {

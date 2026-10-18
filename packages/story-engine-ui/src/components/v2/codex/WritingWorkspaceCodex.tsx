@@ -13,14 +13,14 @@ import { ThreadBoard } from "./ThreadBoard.js";
 import { requestQuoteJump } from "./QuoteJump.js";
 import LocationCodexPanel from "./LocationCodexPanel.js";
 import { StoryMap } from "./StoryMap.js";
+import { ChapterChanges } from "./ChapterChanges.js";
 import WorldbuildingCodexPanel from "./WorldbuildingCodexPanel.js";
 import WritingRulesCodexPanel from "./WritingRulesCodexPanel.js";
 import { flattenCharacterSearchItem, searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
-import { ModelSettingsEmbedded } from "./ModelSettingsEmbedded.js";
-import { DisplaySettingsEmbedded } from "./DisplaySettingsEmbedded.js";
+import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
-import { useDraftStore } from "../../../stores/draftStore.js";
+import { paperStage, useDraftStore } from "../../../stores/draftStore.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
 import { defaultCenterViewForWorkspace } from "./starterGuidance.js";
 import { contextActionsForView } from "./ChatCapabilityBar.js";
@@ -30,7 +30,7 @@ import { ThemeToggleButton } from "./ThemeToggleButton.js";
 import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
 import { CommitSheetHost } from "./CommitSheet.js";
-import { IconChevronLeft, IconClose, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
+import { IconChevronLeft, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
 import "./codex.css";
@@ -52,19 +52,20 @@ import "./se-bible.css";
  */
 // 章节不在「资料中心」类目里——它属于写作上下文，走「写作台」视图的章节竖轨。
 const CATS = [
+  { id: "changes", glyph: "✎", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事" },
   { id: "world", glyph: "◈", title: "故事设定 · 世界观", sub: "概要 / 规则 / 资源 / 关系" },
   { id: "rules", glyph: "§", title: "写作规则", sub: "本书文风 · 避免机器腔" },
   { id: "matrix", glyph: "⬡", title: "角色关系", sub: "关系网 · 单角色近况" },
   { id: "chars", glyph: "♟", title: "角色", sub: "角色档案" },
   { id: "assets", glyph: "⚖", title: "道具与资源", sub: "物品归属" },
   { id: "places", glyph: "⌖", title: "地点", sub: "场景规则" },
-  { id: "hooks", glyph: "❖", title: "伏笔线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
+  { id: "hooks", glyph: "❖", title: "伏笔与线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
   { id: "timeline", glyph: "▤", title: "故事地图", sub: "章 × 人物 · 故事日" },
 ] as const;
 
 // 设定本左侧导航用的短名（CATS.title 保留给旧测试与搜索结果标签）。
 const CAT_LABELS: Record<(typeof CATS)[number]["id"], string> = {
-  world: "世界观", rules: "写作规则", matrix: "角色关系", chars: "角色",
+  changes: "这章改了什么", world: "世界观", rules: "写作规则", matrix: "角色关系", chars: "角色",
   assets: "道具与资源", places: "地点", hooks: "伏笔与线索", timeline: "故事地图",
 };
 
@@ -93,8 +94,6 @@ function readStoredAiWidth(): number {
 // 写作台章节栏基准宽度（px，随 uiZoom 放大）。窄视口让位计算要扣掉它。
 const CHAPTER_RAIL_BASE_WIDTH = 248;
 const CHAPTER_DRAWER_BREAKPOINT = 1280;
-
-type SettingsTab = "model" | "display";
 
 const CHAPTER_STATUS_LABEL: Record<ChapterNavItem["status"], string> = {
   committed: "已定稿", draft: "工作稿", current: "当前章", planned: "还没写",
@@ -188,6 +187,13 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 出稿/续写一开始（useChat 在 generate_draft tool-call 时 requestCenterView("desk")）→ 自动切到写作台，
   // 让用户看着正文出现，不必手动点。一次性消费后清空，避免之后切走又被拽回。
   const pendingCenterView = useNavigationStore((s) => s.pendingCenterView);
+  // 刚定稿还没看过「这章改了什么」：顶栏「设定本」亮小点，点进去先到那一页（看过就清）。
+  const unseenChangesChapter = useNavigationStore((s) => s.unseenChangesChapter);
+  useEffect(() => {
+    if (view === "library" && cat === "changes" && unseenChangesChapter !== null) {
+      useNavigationStore.getState().setUnseenChangesChapter(null);
+    }
+  }, [view, cat, unseenChangesChapter]);
   useEffect(() => {
     if (!pendingCenterView) return;
     setView(pendingCenterView);
@@ -215,7 +221,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     requestQuoteJump(chapter, quote);
     if (target.id !== currentId) props.onSelectChapter?.(target.id);
   };
-  // 故事地图点章号：切到写作台打开那一章。
+  // 故事地图点章号、已定稿章的「去第 N 章」：切到写作台打开那一章。
   const openChapterNumber = (chapter: number) => {
     const target = chapters.find((ch) => ch.chapterNumber === chapter);
     if (!target) {
@@ -229,6 +235,15 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     setView("desk");
     if (target.id !== currentId) props.onSelectChapter?.(target.id);
   };
+  // 「这章改了什么」先看哪章：刚定稿没看过的那章 > 当前章（已定稿时）> 最近定稿的章。进页时定下，翻页不被拽回。
+  const [changesChapter, setChangesChapter] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (view !== "library" || cat !== "changes") return;
+    const current = currentChapter.status === "committed" || currentChapter.hasCommittedChapter ? currentChapter.chapterNumber : undefined;
+    setChangesChapter(unseenChangesChapter ?? current);
+    // 只在进这一页时定：unseen 清掉、当前章变了都不再拽。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, cat]);
   const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, ch.title ?? ""] as const).filter(([, title]) => title.trim().length > 0)), [chapters]);
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
@@ -319,12 +334,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    if (!settingsTab) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setSettingsTab(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [settingsTab]);
 
   // 宽度变化落盘（下次进来记住）。
   useEffect(() => {
@@ -334,7 +343,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 字号偏好落盘由 displaySettingsStore 负责（每次 set 自动写回 localStorage）。
 
   // 章节搜索过滤：标题 / 章号 / 序号匹配；空查询=全部。
-  const paperBody = useDraftStore((state) => state.body);
   const chapterFilter = chapterQuery.trim().toLowerCase();
   const visibleChapters = chapterFilter
     ? chapters.filter((ch, i) =>
@@ -344,9 +352,14 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     : chapters;
   // 「还没写」的占位章不进列表：开新章走顶上的「写第 N 章」，翻到它走稿纸底部的「下一章」。
   const chapterRows = buildChapterRows(visibleChapters.filter((ch) => ch.status !== "planned" || ch.id === currentId), Boolean(chapterFilter));
-  // 当前章的状态以工作区的流程态为准（章节列表里它只标「current」，看不出是不是还没定稿）。
-  const currentIsDraft = !["committed", "ready_for_next", "idle", "steering_ready"].includes(props.workspace.flowStatus)
-    && Boolean(paperBody.trim());
+  // 当前章的状态看稿纸（和稿纸工具条、右栏顶卡同源 paperStage；章节列表里它只标「current」，看不出是不是还没定稿）。
+  const currentStage = useDraftStore((state) => (state.chapter === props.workspace.currentChapter.chapterNumber ? paperStage(state) : null));
+  const currentIsDraft = currentStage === "draft" || currentStage === "edited";
+  const currentLabel = currentStage === "edited" ? "定稿后又改过" : currentIsDraft ? "工作稿还没定稿" : currentStage === "committed" ? "已定稿" : null;
+  // ⌘K 里的章也按这个说（不再自己另算）。
+  const paletteChapters = chapters.map((ch) => (ch.id === currentId && currentStage && currentStage !== "empty"
+    ? { ...ch, status: currentIsDraft ? "draft" as const : "committed" as const }
+    : ch));
   const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && ch.status === "draft").length + (currentIsDraft ? 1 : 0);
   // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
   const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
@@ -380,7 +393,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     >
       {!gitAvailable && (
         <div className="env-warning-bar" role="alert">
-          未检测到 git：快照与撤销功能不可用（写作不受影响）。安装 git 后重启应用即可恢复。
+          未检测到 git：存档与撤销功能不可用（写作不受影响）。安装 git 后重启应用即可恢复。
         </div>
       )}
       <header className="se-top">
@@ -408,7 +421,18 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         </div>
         <nav className="se-seg" aria-label="视图">
           <button className={view === "desk" ? "on" : ""} type="button" aria-pressed={view === "desk"} onClick={() => setView("desk")}>写作</button>
-          <button className={view === "library" ? "on" : ""} type="button" aria-pressed={view === "library"} onClick={() => setView("library")}>设定本</button>
+          <button
+            className={`${view === "library" ? "on" : ""}${unseenChangesChapter !== null ? " has-dot" : ""}`}
+            type="button"
+            aria-pressed={view === "library"}
+            title={unseenChangesChapter !== null ? `第 ${unseenChangesChapter} 章定稿了：点进来看这章改了什么` : undefined}
+            onClick={() => {
+              if (unseenChangesChapter !== null) setCat("changes");
+              setView("library");
+            }}
+          >
+            设定本{unseenChangesChapter !== null ? <span className="se-seg-dot" aria-label="有新定稿的改动" /> : null}
+          </button>
           <button className={view === "history" ? "on" : ""} type="button" aria-pressed={view === "history"} onClick={() => setView("history")}>历史</button>
         </nav>
         <div className="se-top-r">
@@ -430,7 +454,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           >
             <IconFocus />
           </button>
-          <ThemeToggleButton />
+          <ThemeToggleButton className="se-icon-btn se-theme-btn" />
           <button className="se-icon-btn" type="button" aria-label="设置" title="设置" onClick={() => setSettingsTab("model")}>
             <IconSettings />
           </button>
@@ -506,6 +530,15 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                 </nav>
                 <div className="read">
                   <div className={`read-inner read-enter${cat === "hooks" || cat === "timeline" ? " is-wide" : ""}`} key={cat}>
+                    {cat === "changes" && props.projectPath ? (
+                      <ChapterChanges
+                        projectPath={props.projectPath}
+                        busy={workspaceBusy}
+                        chapterTitles={chapterTitles}
+                        onJump={jumpToQuote}
+                        {...(changesChapter !== undefined ? { chapter: changesChapter } : {})}
+                      />
+                    ) : null}
                     {cat === "world" ? <WorldbuildingCodexPanel projectPath={props.projectPath} fallbackData={props.workspace.worldbuildingFallback} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "rules" ? <WritingRulesCodexPanel items={props.sidebar.writingRules} customNotes={props.sidebar.writingRulesCustomNotes} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "matrix" ? <CharacterMatrixCodexPanel matrix={props.workspace.characterMatrix} protagonistName={props.workspace.protagonist?.name} projectPath={props.projectPath} currentChapter={currentChapter.chapterNumber} /> : null}
@@ -573,7 +606,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         className={`se-ch${row.ch.id === currentId ? " on" : ""}`}
                         disabled={workspaceBusy}
                         aria-current={row.ch.id === currentId ? "page" : undefined}
-                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentIsDraft ? "工作稿还没定稿" : CHAPTER_STATUS_LABEL[row.ch.status]) : CHAPTER_STATUS_LABEL[row.ch.status]}`}
+                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentLabel ?? CHAPTER_STATUS_LABEL[row.ch.status]) : CHAPTER_STATUS_LABEL[row.ch.status]}`}
                         onClick={() => {
                           if (workspaceBusy) {
                             useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
@@ -601,6 +634,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               ) : null}
               <WritingDeskCodex
                 {...props}
+                onOpenChapter={openChapterNumber}
                 onOpenCharacter={() => { setView("library"); setCat("chars"); }}
                 onAskAboutSelection={(text) => fillComposer(`关于这段「${quoteForComposer(text)}」，`)}
               />
@@ -614,6 +648,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         {/* ══ 右：AI 对话（codex 视觉，AiChatCodex；唯一控制面） ══ */}
         <AiChatCodex
           {...props}
+          onOpenChapter={openChapterNumber}
           rightOpen={effectiveRightOpen}
           // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
           // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
@@ -631,7 +666,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       {paletteOpen ? (
         <CommandPalette
           onClose={() => setPaletteOpen(false)}
-          chapters={chapters}
+          chapters={paletteChapters}
           characters={paletteCharacters}
           librarySources={librarySearchSources}
           commands={paletteCommands}
@@ -650,26 +685,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
       <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
-      {settingsTab ? (
-        <>
-          <div className="se-scrim" aria-hidden="true" onClick={() => setSettingsTab(null)} />
-          <div className="se-modal" role="dialog" aria-modal="true" aria-label="设置">
-            <nav className="se-modal-nav" aria-label="设置分类">
-              <span className="se-modal-title">设置</span>
-              <button className={settingsTab === "model" ? "on" : ""} type="button" onClick={() => setSettingsTab("model")}>模型</button>
-              <button className={settingsTab === "display" ? "on" : ""} type="button" onClick={() => setSettingsTab("display")}>显示</button>
-            </nav>
-            <div className="se-modal-body">
-              <button className="se-icon-btn se-modal-close" type="button" aria-label="关闭设置" onClick={() => setSettingsTab(null)}>
-                <IconClose />
-              </button>
-              {settingsTab === "model"
-                ? <ModelSettingsEmbedded onBack={() => setSettingsTab(null)} />
-                : <DisplaySettingsEmbedded onBack={() => setSettingsTab(null)} />}
-            </div>
-          </div>
-        </>
-      ) : null}
+      {settingsTab ? <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} /> : null}
     </div>
   );
 }

@@ -143,7 +143,7 @@ export function workflowErrorTitle(flowStatus: WritingWorkspaceLayoutProps["work
   if (flowStatus === "waiting_commit_confirmation" || flowStatus === "commit_preview_ready") return "定稿失败";
   if (flowStatus === "quality_checked") return "硬伤检查失败";
   if (flowStatus === "draft_generating" || flowStatus === "draft_ready") return "工作稿处理失败";
-  if (flowStatus === "steering_ready" || flowStatus === "idle") return "本章方案整理失败";
+  if (flowStatus === "steering_ready" || flowStatus === "idle") return "章纲没拟成";
   return "流程执行失败";
 }
 
