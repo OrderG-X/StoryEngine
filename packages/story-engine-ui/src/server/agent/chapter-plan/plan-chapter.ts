@@ -178,7 +178,7 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     characters: (characterBible?.characters ?? [])
       .filter((character) => Boolean(character.name))
       .map((character) => {
-        const notes = [character.role?.trim().slice(0, 30), character.age?.trim() ? `${character.age.trim()}岁`.replace(/岁岁$/u, "岁") : undefined].filter(Boolean);
+        const notes = [character.role?.trim().slice(0, 30), character.age?.trim() ? (character.age.trim().endsWith("岁") ? character.age.trim() : `${character.age.trim()}岁`) : undefined].filter(Boolean);
         return notes.length > 0 ? `${character.name}（${notes.join("，")}）` : character.name;
       }),
     entities: entityNames,

@@ -31,7 +31,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 describe("alias generator rules", () => {
-  it("extracts conservative Chinese name aliases and role titles without guessing", () => {
+  it("extracts conservative Chinese name aliases (no role-title guessing)", () => {
     const result = buildAliasTableFromCharacters([
       character("c-guo", "林远", "集团总裁"),
       character("c-lin", "苏楚瑶", "调查员"),
@@ -39,28 +39,10 @@ describe("alias generator rules", () => {
       character("c-en", "Alex", "教授"),
     ]);
 
-    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "林总"]);
+    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "林"]);
     expect(result.table.byEntity["c-lin"]?.aliases).toEqual(["楚瑶", "苏"]);
-    expect(result.table.byEntity["c-long"]?.aliases).toEqual(["欧", "欧医生"]);
+    expect(result.table.byEntity["c-long"]?.aliases).toEqual(["欧"]);
     expect(result.table.byEntity["c-en"]?.aliases).toEqual([]);
-  });
-
-  it("adds title aliases only when role contains a mapped keyword", () => {
-    const result = buildAliasTableFromCharacters([
-      character("c-boss", "赵明", "董事长"),
-      character("c-plain", "钱森", "朋友"),
-    ]);
-
-    expect(result.table.byEntity["c-boss"]?.aliases).toContain("赵总");
-    expect(result.table.byEntity["c-plain"]?.aliases).not.toContain("钱总");
-  });
-
-  it("also reads identity when deriving role-title aliases", () => {
-    const result = buildAliasTableFromCharacters([
-      character("c-guo", "林远", "主角", { identity: "董事长" }),
-    ]);
-
-    expect(result.table.byEntity["c-guo"]?.aliases).toContain("林总");
   });
 
   it("marks surname conflicts and does not add the conflicted surname to either character", () => {
@@ -74,8 +56,6 @@ describe("alias generator rules", () => {
     ]);
     expect(result.table.byEntity["c-guo-xu"]?.aliases).not.toContain("林");
     expect(result.table.byEntity["c-guo-ming"]?.aliases).not.toContain("林");
-    expect(result.table.byEntity["c-guo-xu"]?.aliases).toContain("林总");
-    expect(result.table.byEntity["c-guo-ming"]?.aliases).toContain("林医生");
   });
 
   it("does not extract aliases from speech samples or prose-like fields", () => {
@@ -100,8 +80,8 @@ describe("alias table merge and IO", () => {
         "c-guo": {
           canonicalName: "林远",
           primary: "林远",
-          aliases: ["远", "林", "远哥"],
-          generated: ["远", "林", "林总"],
+          aliases: ["远", "远哥"],
+          generated: ["远", "林"],
           type: "character" as const,
         },
       },
@@ -110,8 +90,9 @@ describe("alias table merge and IO", () => {
 
     const result = buildAliasTableFromCharacters([character("c-guo", "林远", "董事长")], previous);
 
-    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "远哥"]);
-    expect(result.table.byEntity["c-guo"]?.generated).toEqual(["远", "林", "林总"]);
+    // 作者删掉了「林」、加了「远哥」：重新生成时两样都保住
+    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "远哥"]);
+    expect(result.table.byEntity["c-guo"]?.generated).toEqual(["远", "林"]);
     expect(result.mergeReport.preservedUserAdditions).toBe(1);
     expect(result.mergeReport.preservedUserRemovals).toBe(1);
     expect(result.mergeReport.generatedAdded).toBe(0);
@@ -167,7 +148,7 @@ describe("alias table merge and IO", () => {
       },
     });
 
-    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "林总"]);
+    expect(result.table.byEntity["c-guo"]?.aliases).toEqual(["远", "林"]);
     expect(result.warnings).toEqual(["LLM 不可用，仅规则生成：timeout"]);
     expect(result.llmReport.proposedByEntity).toEqual({});
   });
@@ -196,7 +177,7 @@ describe("alias table merge and IO", () => {
 
     expect(result.ok).toBe(true);
     expect(result.warnings.some((warning) => warning.includes("alias-tables.json"))).toBe(true);
-    expect(disk.byEntity["c-guo"].aliases).toEqual(["远", "林", "林总"]);
+    expect(disk.byEntity["c-guo"].aliases).toEqual(["远", "林"]);
   });
 
   it("writes LLM proposals when a proposal dependency is injected", async () => {
@@ -212,6 +193,6 @@ describe("alias table merge and IO", () => {
     const disk = JSON.parse(await readFile(join(projectDir, ALIAS_TABLE_RELATIVE_PATH), "utf-8"));
 
     expect(result.summary).toContain("给林远提议：林少、远哥");
-    expect(disk.byEntity["c-guo"].aliases).toEqual(["远", "林", "林总", "林少", "远哥"]);
+    expect(disk.byEntity["c-guo"].aliases).toEqual(["远", "林", "林少", "远哥"]);
   });
 });

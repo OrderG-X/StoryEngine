@@ -27,11 +27,14 @@ export const READ_FOUNDATION_KINDS = ["character", "asset", "location", "gap_rep
 const PROTAGONIST_APPELLATIONS = new Set([
   "主角", "主人公", "主人翁", "男主", "女主", "男主角", "女主角", "主角色", "protagonist", "the protagonist", "main character",
 ]);
+const PROTAGONIST_ID_PREFIXES = ["protagonist", "the protagonist", "main character", "主角", "主人公", "男主", "女主"];
 function isProtagonistAppellation(ref: string): boolean {
   const normalized = ref.trim().toLowerCase();
   if (PROTAGONIST_APPELLATIONS.has(normalized)) return true;
   // 模型常瞎造「protagonist-<拼音>」/「主角-X」这类前缀 id 指代主角（真实 id 是 char-<hash>，绝不以此开头）。
-  return /^(?:protagonist|the protagonist|main character|主角|主人公|男主|女主)[-_: ]/u.test(normalized);
+  return PROTAGONIST_ID_PREFIXES.some((prefix) => normalized.length > prefix.length
+    && normalized.startsWith(prefix)
+    && "-_: ".includes(normalized.charAt(prefix.length)));
 }
 export type ReadFoundationKind = (typeof READ_FOUNDATION_KINDS)[number];
 

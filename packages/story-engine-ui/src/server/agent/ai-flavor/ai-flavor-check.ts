@@ -133,7 +133,7 @@ export function mergeAiFlavorReports(
   if (llm.ok) {
     // LLM 跑成了：但它 summary 里自报的「N 处」是它合并前的自评，与最终 violations（确定性闸 + LLM 去重合并后）
     // 数对不上（Codex 1-5 章真机：嘴说 6 处、卡片 7 条）。处数一律由真值 sorted 派生，只保留 LLM 的定性评语。
-    summary = composeAiFlavorSummary(sorted, llm.summary);
+    summary = composeAiFlavorSummary(sorted);
   } else if (sorted.length > 0) {
     // LLM 没跑成，但确定性闸有硬命中 → 兜底如实报（谎报-proof）。
     summary = `确定性闸挑出 ${sorted.length} 处机器腔硬命中（AI 复检这次没跑成，先看这些）。`;
@@ -143,18 +143,20 @@ export function mergeAiFlavorReports(
   return { ok, summary, violations: sorted, usedFallback: false };
 }
 
-/** summary 处数永远由真值 violations 派生（剥掉 LLM 自报的「N处问题(…)」数字子句、保留其定性评语）。 */
-function composeAiFlavorSummary(violations: readonly AiFlavorViolation[], llmSummary: string): string {
-  const qualitative = llmSummary.replace(/^\s*(?:有|共|检出|发现|挑出)?\s*\d+\s*处[^，。！？]*[，。！？]\s*/u, "").trim();
+/**
+ * summary 永远由真值 violations 派生。LLM 自己写的总评常带它合并前自报的「N 处」，和最终条数对不上；
+ * 原来用正则剥掉那半句，重构 P7「不猜」后不再拆模型的话，总评整句不用。
+ */
+function composeAiFlavorSummary(violations: readonly AiFlavorViolation[]): string {
   if (violations.length === 0) {
-    return qualitative || "这章读着挺像人写的，没挑出明显的机器腔。";
+    return "这章读着挺像人写的，没挑出明显的机器腔。";
   }
   const high = violations.filter((v) => v.severity === "high").length;
   const medium = violations.filter((v) => v.severity === "medium").length;
   const low = violations.filter((v) => v.severity === "low").length;
   const breakdown = [high && `${high}重`, medium && `${medium}中`, low && `${low}轻`].filter(Boolean).join("、");
   const countClause = `挑出 ${violations.length} 处机器腔${breakdown ? `（${breakdown}）` : ""}，逐条见下方卡片。`;
-  return qualitative ? `${countClause}${qualitative}` : countClause;
+  return countClause;
 }
 
 export async function runAiFlavorCheck(input: {

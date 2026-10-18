@@ -60,13 +60,13 @@ describe("通读解析 parseFullReadIssues", () => {
     expect(repeated).toHaveLength(1);
   });
 
-  it("理由里自己说「一致 / 不矛盾」的不收", () => {
+  it("理由里自己说「一致 / 不矛盾」的也照收：是不是问题交给 A 自复核的结构化判定（重构 P7 删了词表）", () => {
     const issues = parseFullReadIssues(JSON.stringify({
       contradictions: [
         { quote: "他从工作台上拿起那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "前后一致，不矛盾" },
       ],
     }), 3, BODY, EARLIER);
-    expect(issues).toEqual([]);
+    expect(issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表"]);
   });
 });
 

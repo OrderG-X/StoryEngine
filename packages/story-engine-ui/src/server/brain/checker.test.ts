@@ -78,7 +78,7 @@ describe("核账员：三遍合并", () => {
         { ...AUNT, confidence: "maybe" },
         { ...WATCH, quote: "拿起那块怀表", reason: "同一件事又报一遍", confidence: "sure" },
       ],
-      time: [{ ...AUNT, quote: "周婶在门口喊他", confidence: "确定" }],
+      time: [{ ...AUNT, quote: "周婶在门口喊他", confidence: "sure" }],
     });
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
     expect(result.cold).toBeUndefined();
@@ -90,7 +90,7 @@ describe("核账员：三遍合并", () => {
     expect(result.issues[0]).toMatchObject({ earlierChapter: 2, earlierQuote: "林舟把怀表锁进了柜台下的抽屉" });
   });
 
-  it("把握：sure / 确定 → sure，其余（maybe、没写、不确定）→ maybe", async () => {
+  it("把握：只认 schema 的 sure，其余（maybe、没写、中文「不确定」「确定」）→ maybe", async () => {
     const dir = await makeBook();
     const { callModel } = fakeModel({
       objects: [{ ...WATCH, confidence: "sure" }, { ...AUNT, confidence: "不确定" }],
@@ -685,14 +685,6 @@ describe("核账员审章纲：解析", () => {
     ]);
   });
 
-  it("理由自己否决了的（「此点成立，不报」）不当问题收", () => {
-    const parsed = parsePlanProblems(problems(
-      { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "位置对得上，此点成立，不报" },
-      { point: 2, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "前后一致" },
-    ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
-    expect(parsed).toEqual([]);
-  });
-
   it("R7.5 结构化判定：conflict:false 不收（理由写「不构成矛盾」这种词表没盖到的说法也收得住）；conflict:true 照收", () => {
     const parsed = parsePlanProblems(problems(
       { point: 1, conflict: false, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "核对过，不构成矛盾" },
@@ -703,12 +695,11 @@ describe("核账员审章纲：解析", () => {
     ]);
   });
 
-  it("R7.5 没给 conflict 字段的老形状：词表兜底照旧（不加词）", () => {
+  it("没给 conflict 字段：列进 problems 就照收，不看理由里的字眼（重构 P7 删了词表兜底）", () => {
     const parsed = parsePlanProblems(problems(
       { point: 1, earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "不构成矛盾" },
       { point: 2, earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },
     ), PLAN, { chapters: [{ chapter: 1, sentences: [CH1] }, { chapter: 2, sentences: [CH2] }] });
-    // 「不构成矛盾」不在词表里（R7.5 明确不加词）：老形状兜不住它，这正是要靠 conflict 字段根治的白报。
     expect(parsed).toEqual([
       { point: 1, beat: "林舟从抽屉里取出怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "不构成矛盾" },
       { point: 2, beat: "他把怀表交给周婶", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶第 2 章已经动身回乡，端不了茶" },

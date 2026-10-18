@@ -78,12 +78,10 @@ export function buildContinuationMessages(input: {
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
-/** 剥掉模型可能加的标题行/前言和末尾的「（全文完）」这类标记，留正文。 */
+/** 剥掉模型可能加的 Markdown 标题行和末尾的「（全文完）」这类标记，留正文。
+ *  「好的 / 以下是」这类开场白不再按词表剥（重构 P7「不猜」：正文第一句也可能是「好的。」）——提示词已要求只出正文。 */
 function cleanContinuation(text: string): string {
-  return stripTrailingSegmentMarkers(text
-    .replace(/^\s*#[^\n]*\n/u, "")
-    .replace(/^\s*(?:好的|以下是|续写如下)[^\n]*\n/u, ""))
-    .trim();
+  return stripTrailingSegmentMarkers(text.replace(/^\s*#[^\n]*\n/u, "")).trim();
 }
 
 export async function continueDraftToLength(input: ContinueDraftInput): Promise<ContinueDraftResult> {

@@ -564,9 +564,14 @@ function resolveKnownEntityIdByName(
   return undefined;
 }
 
+const GENERIC_ENTITY_TARGET_IDS = new Set([
+  "角色", "主角", "主人公", "男主", "女主", "配角", "该角色", "这个角色", "当前角色", "现有角色",
+  "character", "protagonist", "main character", "main-character", "main_character", "maincharacter",
+]);
+
 function isGenericFoundationEntityTargetId(value: string | undefined): boolean {
   if (!value) return false;
-  return /^(?:角色|主角|主人公|男主|女主|配角|该角色|这个角色|当前角色|现有角色|character|protagonist|main[-_\s]?character)$/iu.test(value.trim());
+  return GENERIC_ENTITY_TARGET_IDS.has(value.trim().toLowerCase());
 }
 
 /**

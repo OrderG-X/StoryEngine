@@ -265,12 +265,14 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
   }
 }
 
+const PLACEHOLDER_CHAPTER_TITLES = new Set(["下一章", "未命名", "待补", "待定"]);
+
 /** 这一章稿子（工作稿优先，没有就用定稿）第一行的章名（剥掉「第N章 ·」前缀；占位或读不到返回空串）。 */
 async function readChapterPaperTitle(projectDir: string, chapter: number): Promise<string> {
   const paper = await readChapterPaper(projectDir, chapter).catch(() => null);
   const raw = paper?.draft?.title ?? paper?.committed?.title ?? "";
   const bare = raw.replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
-  return bare && !/^(下一章|未命名|待补|待定)$/u.test(bare) ? bare : "";
+  return bare && !PLACEHOLDER_CHAPTER_TITLES.has(bare) ? bare : "";
 }
 
 /** 定稿章节总字数：chapters/NNNN.md 去掉标题行后按引擎同口径（纯汉字）计数。目录不存在返回 0。 */
@@ -312,7 +314,7 @@ function bookSummaryFromOverviewServer(
   let chapterTitle = `第${currentChapterNumber}章`;
   // 优先真章名（时间线事件 title，剥掉「第N章 ·」前缀）；没有才退回事件摘要。
   const realTitle = String(currentEvent?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
-  const hasRealChapterTitle = Boolean(realTitle && !/^(下一章|未命名|待补|待定)$/u.test(realTitle));
+  const hasRealChapterTitle = Boolean(realTitle && !PLACEHOLDER_CHAPTER_TITLES.has(realTitle));
   if (hasRealChapterTitle) {
     chapterTitle = realTitle;
   } else if (currentEvent) {

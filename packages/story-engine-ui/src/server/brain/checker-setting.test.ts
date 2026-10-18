@@ -151,12 +151,11 @@ describe("parseSettingIssues：设定原文照样经代码核对", () => {
     });
   });
 
-  it("报错了章号就按章序搜；设定原文对不上设定本、quote 哪都不在、理由自我否决、填了 earlierQuote 的 → 都不收", () => {
+  it("报错了章号就按章序搜；设定原文对不上设定本、quote 哪都不在、填了 earlierQuote 的 → 都不收", () => {
     const issues = parseSettingIssues(raw(
       { quote: "陆川想了想，说沈师傅走了也有五年了", quoteChapter: 1, settingQuote: CARD_LINE, reason: "第 3 章和人物卡不一致" },
       { quote: "稿里这句", settingQuote: "设定本里根本没有的一句话", reason: "对不上" },
       { quote: "哪一章都没有的一句话", quoteChapter: 3, settingQuote: CARD_LINE, reason: "对不上" },
-      { quote: "陆川想了想，说沈师傅走了也有五年了", settingQuote: CARD_LINE, reason: "此点成立，说法一致不算矛盾" },
       { quote: "陆川说她爷爷走了五年", earlierQuote: "爷爷三年前过世", earlierChapter: 1, settingQuote: CARD_LINE, reason: "走了年数对不上" },
     ), 6, BODY, earlier(), digest!);
     expect(issues).toHaveLength(1);
@@ -186,12 +185,11 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
     expect(issues[1]!.fixChapter).toBeUndefined();
   });
 
-  it("agrees 缺省 / 设定原文对不上 / quote 哪都不在 / 理由自我否决 → 都不收", () => {
+  it("agrees 缺省 / 设定原文对不上 / quote 哪都不在 → 都不收（对不上只认 agrees，不看理由字眼）", () => {
     const issues = parseSettingChecks(raw([
       { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, reason: "没写 agrees" },
       { quote: CH3, quoteChapter: 3, settingQuote: "设定本里根本没有的一句话", agrees: false, reason: "对不上" },
       { quote: "哪一章都没有的一句话", quoteChapter: 3, settingQuote: CARD_LINE, agrees: "false", reason: "对不上" },
-      { quote: CH3, quoteChapter: 3, settingQuote: CARD_LINE, agrees: false, reason: "此点成立，说法一致不算矛盾" },
     ]), 6, BODY, earlier(), digest!);
     expect(issues).toEqual([]);
   });

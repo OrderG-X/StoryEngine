@@ -52,9 +52,6 @@ function parseJson(text: string): Record<string, unknown> {
 
 export const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
-/** 理由自己就否决了的（「此点成立，不报」「与前文一致」）：模型把自我否决的候选也输出了，不当问题收。R7.3 起核账对设定本的解析共用。 */
-export const SELF_DISMISSED = /不矛盾|并不矛盾|没有矛盾|无矛盾|一致[，。；,;]?(?:没有|无|不)|说法一致|前后一致|不冲突|并不冲突|不算矛盾|可以解释|说得通/u;
-
 /** 句子切分：保留引号内的完整句。 */
 export function splitSentences(text: string): readonly string[] {
   const out: string[] = [];
@@ -125,7 +122,8 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
     const quote = String(record.quote ?? "").trim();
     const earlierQuote = String(record.earlierQuote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
-    if (!containsQuote(body, quote) || SELF_DISMISSED.test(reason)) continue;
+    // 理由里自己说「不矛盾」的不再按词表丢（重构 P7「不猜」）：是不是问题由 A 自复核的结构化判定（sure / maybe / no）定。
+    if (!containsQuote(body, quote)) continue;
     const claimedChapter = Number(record.earlierChapter);
     let earlierChapter: number | undefined;
     // 本章自己和自己比：两句互相包含就是同一处（浏览器实测：「兜里只剩这一张纸了」对上含它的那一整句，报成「重复」）。

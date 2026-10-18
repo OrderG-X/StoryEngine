@@ -21,7 +21,6 @@ import {
   normalize,
   parseFullReadIssues,
   readEarlierChapters,
-  SELF_DISMISSED,
   splitSentences,
   type ContinuityIssueV2,
   type EarlierText,
@@ -204,7 +203,7 @@ export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
   return hedged(once, 120_000);
 };
 
-/** 从模型原始 JSON 里按 quote 取把握：sure / 确定 → sure，其余 maybe；同一句出现几次，有一次 sure 就是 sure。 */
+/** 从模型原始 JSON 里按 quote 取把握：只认 schema 的 sure，其余（含中文说法）都当 maybe；同一句出现几次，有一次 sure 就是 sure。 */
 function readConfidences(text: string): Map<string, "sure" | "maybe"> {
   const out = new Map<string, "sure" | "maybe">();
   try {
@@ -213,8 +212,7 @@ function readConfidences(text: string): Map<string, "sure" | "maybe"> {
       if (!item || typeof item !== "object") continue;
       const record = item as Record<string, unknown>;
       const quote = String(record.quote ?? "").trim();
-      const said = String(record.confidence ?? "").toLowerCase();
-      const sure = /sure|确定/u.test(said) && !/unsure|not sure|不确定|不太确定/u.test(said);
+      const sure = String(record.confidence ?? "").trim().toLowerCase() === "sure";
       if (sure || !out.has(quote)) out.set(quote, sure ? "sure" : "maybe");
     }
   } catch {
@@ -382,7 +380,7 @@ export function parseSettingIssues(
     const settingQuote = String(record.settingQuote ?? "").trim();
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
-    if (!settingQuote || !quote || !reason || SELF_DISMISSED.test(reason)) continue;
+    if (!settingQuote || !quote || !reason) continue;
     const label = settingQuoteLabel(digest, settingQuote);
     if (!label) continue; // 设定原文和设定本对不上：不收
     if (containsQuote(body, quote)) {
@@ -432,7 +430,7 @@ export function parseSettingChecks(
     const settingQuote = String(record.settingQuote ?? "").trim();
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
-    if (!settingQuote || !quote || !reason || SELF_DISMISSED.test(reason)) continue;
+    if (!settingQuote || !quote || !reason) continue; // 对不上与否只认结构化的 agrees，不再看理由里的字眼
     const label = settingQuoteLabel(digest, settingQuote);
     if (!label) continue; // 设定原文和设定本对不上：不收
     const confidence = /sure/u.test(String(record.confidence ?? "")) && !/unsure/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
@@ -771,11 +769,7 @@ function earlierByText(earlier: EarlierText): ReadonlyMap<number, string> {
   return new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
 }
 
-/** 理由自己就否决了的（「此点成立，不报」「与前文一致」）：模型把自我否决的候选也输出了，不当问题收。
- *  R7.5 起这只是兜底：模型按结构化字段 conflict 判（false 的不收），词表没盖到的说法（「不构成矛盾」）靠字段根治；不再往里加词。 */
-const SELF_DISMISSED_PLAN = /不报|不矛盾|没有矛盾|无矛盾|前后一致|说法一致|不冲突|不算|说得通|此点成立/u;
-
-/** 结构化布尔宽进：true/"true"/false/"false"（大小写不限）；别的写法当没给（走词表兜底，不猜中文说法）。 */
+/** 结构化布尔宽进：true/"true"/false/"false"（大小写不限）；别的写法当没给（不猜中文说法）。 */
 function readBoolFlag(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
   if (typeof value !== "string") return undefined;
@@ -795,7 +789,7 @@ export function readPoint(raw: unknown, beats: readonly string[]): number | unde
 }
 
 /**
- * 解析审章纲输出：每条带结构化判定 conflict（R7.5）——false 的一律不收；没给字段的走 SELF_DISMISSED_PLAN 词表兜底（老口径）。
+ * 解析审章纲输出：每条带结构化判定 conflict（R7.5）——false 的一律不收；没给字段的照收（列进 problems 就是要报），不看理由里的字眼。
  * authorWilled＝这条要点来自作者给的方向且方向和前文事实对不上：照收（要报），调用方不自动改、回执问作者。
  * earlierQuote 由代码核对真在前文里（先信它报的章号，对不上按章序搜），抄不出原文的丢掉；
  * point 越界的丢掉（模型没指到具体要点的问题没法只改那条要点）。
@@ -817,7 +811,6 @@ export function parsePlanProblems(text: string, plan: Pick<ChapterPlan, "beats">
     const point = readPoint(record.point ?? record.beat, plan.beats);
     const conflict = readBoolFlag(record.conflict);
     if (conflict === false) continue; // 模型判了不构成矛盾：结构化字段说了算
-    if (conflict === undefined && SELF_DISMISSED_PLAN.test(reason)) continue; // 没给字段的老形状：词表兜底
     if (!point || !earlierQuote || !reason) continue;
     const claimed = Number(record.earlierChapter);
     const inClaimed = Number.isInteger(claimed) && claimed >= 1 && byChapter.has(claimed) && containsQuote(byChapter.get(claimed)!, earlierQuote);

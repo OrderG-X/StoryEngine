@@ -66,14 +66,6 @@ export type AliasProposalFn = (character: CharacterAliasInput) => Promise<readon
 
 const EMPTY_TABLE: AliasTable = { version: "v0", byEntity: {}, conflicts: [] };
 
-const ROLE_TITLE_RULES: readonly { readonly pattern: RegExp; readonly suffix: string }[] = [
-  { pattern: /总裁|董事长|董事|老板/u, suffix: "总" },
-  { pattern: /教授/u, suffix: "教授" },
-  { pattern: /医生|大夫/u, suffix: "医生" },
-  { pattern: /老师/u, suffix: "老师" },
-  { pattern: /队长/u, suffix: "队" },
-];
-
 function normalizeAlias(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -110,15 +102,6 @@ function surnameAlias(name: string): string | undefined {
   return chars?.[0];
 }
 
-function titleAlias(surname: string | undefined, character: CharacterAliasInput): string | undefined {
-  const roleText = [character.identity, character.role].filter(Boolean).join(" ");
-  if (!surname || !roleText.trim()) return undefined;
-  for (const rule of ROLE_TITLE_RULES) {
-    if (rule.pattern.test(roleText)) return `${surname}${rule.suffix}`;
-  }
-  return undefined;
-}
-
 function buildSurnameConflicts(characters: readonly CharacterAliasInput[]): {
   readonly conflictedSurnames: ReadonlySet<string>;
   readonly conflicts: readonly AliasConflict[];
@@ -153,7 +136,7 @@ function generatedAliasesFor(
   return unique([
     givenNameAlias(character.name),
     surname && !conflictedSurnames.has(surname) ? surname : undefined,
-    titleAlias(surname, character),
+    // 「王总 / 李教授」这类称呼不再从身份字面猜（重构 P7「不猜」），交给模型提议（AliasProposalFn）。
     ...extraGenerated,
   ]).filter((alias) => alias !== character.name);
 }

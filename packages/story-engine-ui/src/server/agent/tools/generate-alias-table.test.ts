@@ -88,8 +88,8 @@ describe("generate_alias_table tool logic", () => {
     expect(out.summary).toContain("生成/合并 2 个角色别名");
     expect(out.summary).toContain("给林远提议：林少、远哥");
     expect(out.refreshScope).toBe("foundation");
-    expect(aliasTable.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "林总", "林少", "远哥"]);
-    expect(disk.byEntity["c-lin"].aliases).toEqual(["楚瑶", "苏", "苏老师"]);
+    expect(aliasTable.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "林少", "远哥"]);
+    expect(disk.byEntity["c-lin"].aliases).toEqual(["楚瑶", "苏"]);
     expect(out.mergeReport).toMatchObject({
       preservedUserAdditions: 0,
       preservedUserRemovals: 0,
@@ -120,7 +120,7 @@ describe("generate_alias_table tool logic", () => {
     expect(out.ok).toBe(true);
     expect(out.summary).toContain("LLM 不可用，仅规则生成");
     expect(out.warnings).toEqual(["LLM 不可用，仅规则生成：model unavailable"]);
-    expect(aliasTable.byEntity["c-guo"]?.aliases).toEqual(["远", "林", "林总"]);
+    expect(aliasTable.byEntity["c-guo"]?.aliases).toEqual(["远", "林"]);
   });
 
   it("falls back to rules when creating the configured alias proposer fails", async () => {

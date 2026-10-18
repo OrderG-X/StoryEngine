@@ -125,8 +125,8 @@ describe("mergeAiFlavorReports summary 处数与 violations 强一致（Codex 1-
     expect(merged.violations.length).toBe(7);
     expect(merged.summary).not.toMatch(/6\s*处/u);
     expect(merged.summary).toContain("7");
-    // 保留 LLM 的定性评语
-    expect(merged.summary).toContain("文风干练");
+    // LLM 的总评整句不用（重构 P7：不再用正则拆模型的话）
+    expect(merged.summary).not.toContain("文风干练");
   });
 
   it("无违规时 summary 不谎报处数（沿用 LLM 的「读着像人写的」评语）", () => {
