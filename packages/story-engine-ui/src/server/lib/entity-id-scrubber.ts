@@ -11,10 +11,12 @@ const ENTITY_ID_PREFIXES = [
 ] as const;
 
 const ENTITY_ID_PATTERN = new RegExp(`\\b(?:${ENTITY_ID_PREFIXES.join("|")})-[0-9a-z]{4,12}\\b`, "giu");
+// 不猜白名单：去裸id
 const ENTITY_ID_DECORATED_GROUP_PATTERN = new RegExp(
   `[（(]\\s*(?:id|ID)\\s*[:=：]\\s*(?:${ENTITY_ID_PREFIXES.join("|")})-[0-9a-z]{4,12}\\s*[）)]`,
   "giu",
 );
+// 不猜白名单：去裸id
 const ENTITY_ID_ASSIGNMENT_PATTERN = new RegExp(
   `\\b(?:id|ID)\\s*[:=：]\\s*(?:${ENTITY_ID_PREFIXES.join("|")})-[0-9a-z]{4,12}\\b`,
   "giu",

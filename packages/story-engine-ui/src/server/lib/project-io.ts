@@ -811,6 +811,7 @@ export function toSafeLocalId(value: string, fallback: string): string {
 
 export function splitChineseList(value: string): string[] {
   return value
+    // 不猜白名单：切句
     .split(/[、,，]/u)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -861,8 +862,10 @@ function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false;
   const title = line.replace(/^#{1,6}\s+/u, "").trim();
   if (!title) return false;
+  // 不猜白名单开始：章节标题
   if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
   return title.length <= 40 && !/[。！？!?；;]/u.test(title);
+  // 不猜白名单结束
 }
 
 export function defaultDraftPath(projectDir: string, chapter: number): string {
@@ -886,6 +889,7 @@ export function extractDraftTitle(content: string | undefined): string | null {
   if (!content) return null;
   const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
   if (!firstLine?.startsWith("#")) return null;
+  // 不猜白名单：章节标题
   const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
   return title || null;
 }

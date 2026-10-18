@@ -225,6 +225,7 @@ export function presentationFor(toolName: string): ToolPresentation {
  */
 export function resolveToolStepLabel(toolName: string | undefined, label: string | undefined): string {
   if (toolName) return presentationFor(toolName).stepLabel;
+  // 不猜白名单：自家格式
   const legacy = /^执行\s+([a-z][a-z_]+)$/.exec((label ?? "").trim());
   if (legacy) return presentationFor(legacy[1]!).stepLabel;
   return label ?? "";

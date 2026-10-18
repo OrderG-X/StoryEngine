@@ -77,6 +77,7 @@ const positiveInt = (value: unknown): number | undefined =>
 export function parseWeekday(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6) return value;
   if (typeof value !== "string") return undefined;
+  // 不猜白名单：日期归一
   const match = /(?:周|星期|礼拜)([一二三四五六日天])/u.exec(value);
   if (!match) return undefined;
   const index = "一二三四五六日".indexOf(match[1] === "天" ? "日" : match[1]);
@@ -338,6 +339,7 @@ export function formatStoryDay(timeline: StoryTimeline, day: number): string {
 function formatChapterDays(timeline: StoryTimeline, entry: TimelineEntry): string {
   const end = chapterEndDay(entry);
   if (end === entry.day) return formatStoryDay(timeline, entry.day);
+  // 不猜白名单：日期归一
   return `${formatStoryDay(timeline, entry.day)}～${formatStoryDay(timeline, end).replace(/^故事/u, "")}`;
 }
 
@@ -395,6 +397,7 @@ export function absoluteDayForRelative(word: string, today: number): number | un
 }
 
 const RELATIVE_DAY_PATTERNS: readonly (readonly [RegExp, number, string])[] = [
+  // 不猜白名单开始：日期归一
   [/大前天/gu, -3, ""],
   // 「目前天气」「眼前天色」「然后天亮」里的前天 / 后天不是日子。
   [/(?<![目眼面跟门提当之以空从向往日])前天/gu, -2, ""],
@@ -407,6 +410,7 @@ const RELATIVE_DAY_PATTERNS: readonly (readonly [RegExp, number, string])[] = [
   [/明天|明日/gu, 1, ""],
   [/大后天/gu, 3, ""],
   [/(?<![然最之以随此其落背身先午稍过])后天/gu, 2, ""],
+  // 不猜白名单结束
 ];
 
 /**
@@ -415,8 +419,10 @@ const RELATIVE_DAY_PATTERNS: readonly (readonly [RegExp, number, string])[] = [
  */
 export function absolutizeRelativeDaysInText(text: string, today: number, timeline: StoryTimeline): string {
   let out = text
+    // 不猜白名单开始：日期归一
     .replace(/故事第\s*\d+\s*天\s*[（(]\s*((?:周|星期|礼拜)[一二三四五六日天])\s*[）)]/gu, "$1")
     .replace(/本章(?:里)?说的/gu, "");
+    // 不猜白名单结束
   for (const [pattern, delta, suffix] of RELATIVE_DAY_PATTERNS) {
     const day = today + delta;
     if (day < 1) continue;

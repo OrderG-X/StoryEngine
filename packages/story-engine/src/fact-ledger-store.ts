@@ -102,6 +102,7 @@ const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
 /** 状态事实的「主体 + 属性」键：去空白和书名号引号，大小写不敏感。 */
 const factStateKey = (subject: string, attribute: string): string =>
+  // 不猜白名单：找原句
   `${subject.replace(/[\s《》「」“”"']/gu, "").toLowerCase()}|${attribute.replace(/[\s《》「」“”"']/gu, "").toLowerCase()}`;
 
 /**

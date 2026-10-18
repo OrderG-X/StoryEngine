@@ -8,12 +8,14 @@ export function normalizeRuleKey(text: string): string {
   return `${text}`
     .normalize("NFKC")
     .replace(/[\s\u3000]+/gu, "")
+    // 不猜白名单：切句
     .replace(/[：:·•.,，。；;！!？?、""''「」『』（）()【】\[\]<>《》…—\-_/\\|]+/gu, "")
     .toLowerCase();
 }
 
 function titleHead(text: string): string {
   const raw = `${text}`.trim();
+  // 不猜白名单：切句
   const cut = raw.split(/[：:]/u, 1)[0] ?? raw;
   return normalizeRuleKey(cut);
 }

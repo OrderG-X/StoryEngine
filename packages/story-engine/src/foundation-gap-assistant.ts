@@ -1029,6 +1029,7 @@ function readStringList(value: unknown): string[] {
   const items = Array.isArray(value)
     ? value
     : typeof value === "string"
+      // 不猜白名单：切句
       ? value.split(/\r?\n|[；;]/u)
       : [];
   return items.map(readString).filter((item): item is string => Boolean(item));

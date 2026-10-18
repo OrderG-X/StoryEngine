@@ -84,6 +84,7 @@ function toStringArrayLike(value: unknown): unknown {
     }
   }
   return trimmed
+    // 不猜白名单：切句
     .split(/[,，]/u)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);

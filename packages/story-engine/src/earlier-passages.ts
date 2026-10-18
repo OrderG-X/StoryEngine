@@ -63,9 +63,11 @@ function excerptAround(paragraph: string, index: number, termLength: number, win
   const half = Math.floor((window - termLength) / 2);
   let start = Math.max(0, index - half);
   let end = Math.min(paragraph.length, index + termLength + half);
+  // 不猜白名单开始：切句
   const sentenceStart = paragraph.slice(0, start).search(/[。！？…][^。！？…]*$/u);
   if (sentenceStart >= 0 && start - sentenceStart < 60) start = sentenceStart + 1;
   const tail = paragraph.slice(end).search(/[。！？…]/u);
+  // 不猜白名单结束
   if (tail >= 0 && tail < 60) end += tail + 1;
   return `${start > 0 ? "…" : ""}${paragraph.slice(start, end).trim()}${end < paragraph.length ? "…" : ""}`;
 }

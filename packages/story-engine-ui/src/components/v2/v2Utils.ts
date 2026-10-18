@@ -49,6 +49,7 @@ export function chapterHeading(chapterNumber: number, title: string): string {
   // 一律剥掉开头连续的「第<阿拉伯/中文数字>章 ·」标记，统一换成 canonical「第{chapterNumber}章」。
   const chapterToken = "第[0-9一二三四五六七八九十百零两]+章";
   const chapterOnly = new RegExp(`^${chapterToken}$`, "u");
+  // 不猜白名单：章节标题
   const prefix = new RegExp(`^(?:${chapterToken}\\s*[·.．、:-]?\\s*)+`, "u");
   if (!cleaned || chapterOnly.test(cleaned)) return `第${chapterNumber}章`;
   const withoutPrefix = cleaned.replace(prefix, "").trim();
@@ -73,6 +74,7 @@ export function chapterDisplayTitle(title: string): string {
 export function chapterBareTitle(title: string): string {
   const cleaned = uiText(title, "");
   const chapterToken = "第[0-9一二三四五六七八九十百零两]+章";
+  // 不猜白名单：章节标题
   const prefix = new RegExp(`^(?:${chapterToken}\\s*[·.．、:-]?\\s*)+`, "u");
   return cleaned.replace(prefix, "").trim();
 }
@@ -84,6 +86,7 @@ export function chapterBareTitle(title: string): string {
 export function cleanProseForDisplay(content: string): string {
   const lines = content.replace(/\r\n?/gu, "\n").split("\n");
   const first = lines.findIndex((line) => line.trim().length > 0);
+  // 不猜白名单：章节标题
   if (first >= 0 && /^#{1,6}\s*第[0-9一二三四五六七八九十百零两]+章/u.test(lines[first].trim())) lines.splice(first, 1);
   return lines.join("\n")
     .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")

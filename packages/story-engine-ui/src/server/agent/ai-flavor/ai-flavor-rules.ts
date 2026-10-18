@@ -40,6 +40,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     // 不是X而是Y / 并非X而是Y / 不在于X而在于Y / 与其说X不如说Y。
     // 排除「是不是」「不不是」（反问/口语），靠 (?<![是不]) 负向后顾；要求后面真有「而是/而在于/不如说」才算。
     pattern:
+      // 不猜白名单：规则词表
       /(?<![是不])不是[^，。！？\n、；：]{1,18}，?(?:而是|而在于)|并非[^，。！？\n、；：]{1,18}，?(?:而是|而在于)|不在于[^，。！？\n、；：]{1,18}，?而在于|与其说[^，。！？\n、；：]{1,18}，?不如说/gu,
     reason: "AI 最爱的『不是…而是』壳句式（跨中英社区第一高频 tell）",
     suggestedFix: "拆成直述句，直接把结论说出来",
@@ -49,6 +50,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     id: "explainer-spoiler",
     label: "解释腔/剧透腔",
     severity: "high",
+    // 不猜白名单：规则词表
     pattern: /殊不知|(?:他|她|它|她们|他们)不知道的是|多年以后|许多年后|命运早已/gu,
     reason: "上帝视角解释/提前剧透，破坏信息差与代入",
     suggestedFix: "让信息在场景里被人物得知，别由叙述者直接交代",
@@ -58,6 +60,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     id: "summary-uplift",
     label: "金句升华/替读者下结论",
     severity: "medium",
+    // 不猜白名单：规则词表
     pattern: /这一刻[^。！？\n]{0,14}(?:终于)?明白|终于(?:明白|懂得)了什么(?:是|叫)|彰显(?:着|了)?|象征着/gu,
     reason: "替读者下结论、强行拔高升华",
     suggestedFix: "删掉总结句，让读者自己从前文动作里感受",
@@ -69,6 +72,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     severity: "medium",
     // 表情/心理类最像 AI 的套路词。
     pattern:
+      // 不猜白名单：规则词表
       /眼(?:中|里|底)闪过|嘴角(?:微微)?(?:勾起|上扬|一?扬)|眉头(?:微)?皱|瞳孔(?:微)?缩|心(?:中|头|底)(?:一动|一震|一紧|微动)|心中暗(?:道|想|忖)|心底泛起/gu,
     reason: "被用烂的 AI 表情/心理套路词",
     suggestedFix: "换成具体动作或可见细节，别换成另一个形容词",
@@ -79,6 +83,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     label: "AI 套话·情态中介词",
     severity: "low",
     // novel-deslop 一级禁用词·情态/判断类（高精度固定词，低误报）：仿佛/犹如… + 一丝/一抹/些许/隐约 + 不易察觉/不可否认…
+    // 不猜白名单：规则词表
     pattern: /仿佛|犹如|宛若|宛如|不由自主|情不自禁|五味杂陈|不容置疑|显而易见|毫无疑问|一丝|一抹|些许|几分|隐约|不由得|不易察觉|不可否认|不言而喻/gu,
     reason: "被用烂的 AI 情态/判断中介词",
     suggestedFix: "删掉中介词直写画面，或换成具体动作",
@@ -89,6 +94,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     label: "AI 套话·动作套路",
     severity: "medium",
     // novel-deslop 一级禁用词·动作类最高频套路：深吸一口气 / 倒吸一口凉气。
+    // 不猜白名单：规则词表
     pattern: /深(?:深)?(?:地|的)?吸了?一口气|深吸口气|倒吸(?:了)?一口(?:凉|冷)?气/gu,
     reason: "被用烂的 AI 动作套路（深吸一口气类）",
     suggestedFix: "换成具体身体反应（胸口起伏了一下）或直接删掉",
@@ -99,6 +105,7 @@ export const BUILTIN_AI_FLAVOR_RULES: readonly AiFlavorPatternRule[] = [
     label: "万能状语·带着…的",
     severity: "medium",
     // novel-deslop gate B 万能状语：「，带着X的Y」。要求前置逗号（trailing 状语从句）以降误报。
+    // 不猜白名单：规则词表
     pattern: /，带着[^，。！？\n、；：]{2,12}的/gu,
     reason: "AI 惯用的『带着…的』万能状语，把情绪/状态打包成装饰",
     suggestedFix: "拆成独立短句或换成具体动作描写",

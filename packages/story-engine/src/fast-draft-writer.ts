@@ -689,6 +689,7 @@ function selectedCharacterMentionCandidates(context: WriterContextEnvelope): str
 function nameCandidates(name: string): string[] {
   const trimmed = name.trim();
   if (!trimmed) return [];
+  // 不猜白名单：切句
   return [trimmed, ...trimmed.split(/[\/／|｜,，、]/u).map((part) => part.trim())].filter(Boolean);
 }
 
@@ -779,6 +780,7 @@ function chooseDraftTitle(chapter: number, title: string, content: string): stri
 function normalizeModelChapterTitle(chapter: number, modelTitle: string): string {
   const bare = modelTitle
     .trim()
+    // 不猜白名单：章节标题
     .replace(/^第[一二三四五六七八九十百千万〇零\d]+\s*章[\s·：:、\-—]*/u, "")
     .trim();
   return bare ? `第${chapter}章 · ${bare}` : `第${chapter}章`;
@@ -795,6 +797,7 @@ function extractLeadingChapterTitle(content: string): string | undefined {
 
 function isGenericChapterTitle(title: string, chapter: number): boolean {
   const trimmed = title.trim();
+  // 不猜白名单：章节标题
   return trimmed === `第${chapter}章` || /^第[一二三四五六七八九十百千万\d]+章$/u.test(trimmed);
 }
 
@@ -802,11 +805,14 @@ function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false;
   const title = line.replace(/^#{1,6}\s+/u, "").trim();
   if (!title) return false;
+  // 不猜白名单开始：章节标题
   if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
   return title.length <= 40 && !/[。！？!?；;]/u.test(title);
+  // 不猜白名单结束
 }
 
 function isPlainChapterHeading(line: string): boolean {
+  // 不猜白名单：章节标题
   return /^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*[^。！？!?；;]{1,32})?$/u.test(line.trim());
 }
 

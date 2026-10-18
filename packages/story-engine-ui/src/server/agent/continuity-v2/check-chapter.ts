@@ -56,6 +56,7 @@ export const normalize = (text: string): string => text.replace(/\s+/gu, "");
 export function splitSentences(text: string): readonly string[] {
   const out: string[] = [];
   for (const paragraph of text.split(/\n+/u)) {
+    // 不猜白名单：切句
     const parts = paragraph.match(/[^。！？!?…]+[。！？!?…]*[”」』"]?/gu) ?? [];
     for (const part of parts) {
       const sentence = part.trim();

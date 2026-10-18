@@ -29,6 +29,7 @@ const UNITS: Readonly<Record<string, number>> = { 十: 10, 百: 100, 千: 1000 }
 
 /** 中文或阿拉伯数字 → 数值；「一九八七」这种逐位写法按位拼。认不出返回 undefined。 */
 export function parseNumberToken(token: string): number | undefined {
+  // 不猜白名单：数字归一
   const text = token.replace(/[０-９]/gu, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
   if (/^\d+$/u.test(text)) return Number(text);
   const chars = Array.from(text);
@@ -54,12 +55,14 @@ export function parseNumberToken(token: string): number | undefined {
   return total + section + (digit ?? 0);
 }
 
+// 不猜白名单开始：数字归一
 const NUMBER_RUN = /[0-9０-９]+|[零〇一二两三四五六七八九十百千万]+/gu;
 /** 量词：数字后面紧跟这些字才当设定里的数（「一片叶子」「一直」不算）。 */
 const UNIT_AFTER = /^(?:号|年|岁|层|楼|室|栋|幢|元|块|米|公里|斤|页|届|级|班|路|封|本|张|把|间|户|座)/u;
 /** 约数、相对时间、时长：会随故事推移变，不是死设定。 */
 const NOT_FIXED_AFTER = /^(?:[几多来余]|年[前后间来多底初]|岁[前后多]|号[前后])/u;
 const HAN_RUN_BEFORE = /([\p{Script=Han}]+)[，,、：:\s“”"'「」]{0,2}$/u;
+// 不猜白名单结束
 /** 数字前面这些两字太泛，不能单独当模板（「今年二十八岁」谁都能说）：要求事实的主体紧挨在前面。 */
 const GENERIC_LEFT = new Set([
   "今年", "已经", "大约", "一共", "只有", "还有", "足足", "整整", "不到", "超过", "将近", "至少", "最多",
@@ -81,10 +84,12 @@ function numberSlots(sentence: string): readonly (NumberSlot & { readonly index:
     const after = sentence.slice(index + match[0].length);
     if (!UNIT_AFTER.test(after) || NOT_FIXED_AFTER.test(after)) continue;
     const before = sentence.slice(0, index);
+    // 不猜白名单：数字归一
     if (/第$/u.test(before)) continue;
     const run = HAN_RUN_BEFORE.exec(before)?.[1] ?? "";
     // 前缀去掉尾部的数字字（「十一月九号」的「月」前面是数，模板不可靠）
     // 前缀里带数字的不当模板：「十一月九号」的「月」前面是数；「一栋三层」的「一栋」谁家的楼都能说。
+    // 不猜白名单：数字归一
     if (run.length < 2 || /[零〇一二两三四五六七八九十百千万]/u.test(run.slice(-2)) || /[零〇一二两三四五六七八九十百千万]$/u.test(run)) continue;
     const value = parseNumberToken(match[0]);
     if (value === undefined) continue;
@@ -96,6 +101,7 @@ function numberSlots(sentence: string): readonly (NumberSlot & { readonly index:
 export function splitCheckSentences(text: string): readonly string[] {
   const out: string[] = [];
   for (const paragraph of text.split(/\n+/u)) {
+    // 不猜白名单：切句
     for (const part of paragraph.match(/[^。！？!?…]+[。！？!?…]*[”」』"]?/gu) ?? []) {
       const sentence = part.trim();
       if (sentence.length >= 4) out.push(sentence);
@@ -105,6 +111,7 @@ export function splitCheckSentences(text: string): readonly string[] {
 }
 
 function bareSubject(subject: string | undefined): string | undefined {
+  // 不猜白名单：找原句
   const bare = subject?.replace(/[《》「」“”"'\s]/gu, "").trim();
   return bare && bare.length >= 2 ? bare : undefined;
 }

@@ -24,12 +24,9 @@ describe("改版 groupSnapshotsByDay：操作历史按自然日分组", () => {
 });
 
 describe("改版 snapshotKind：操作历史筛选分类", () => {
-  it("按存档标签分四类", () => {
-    expect(snapshotKind("定稿")).toBe("commit");
-    expect(snapshotKind("恢复到：第55章再次出稿前快照")).toBe("restore");
-    expect(snapshotKind("恢复前自动快照")).toBe("restore");
-    expect(snapshotKind("更新故事资料：建角色 阿琴")).toBe("bible");
-    expect(snapshotKind("第57章自动去AI味前快照")).toBe("draft");
-    expect(snapshotKind("第55章修订前快照")).toBe("draft");
+  it("用服务端给的分类，老服务端没给时算正文改动", () => {
+    expect(snapshotKind({ kind: "commit" })).toBe("commit");
+    expect(snapshotKind({ kind: "restore" })).toBe("restore");
+    expect(snapshotKind({})).toBe("draft");
   });
 });

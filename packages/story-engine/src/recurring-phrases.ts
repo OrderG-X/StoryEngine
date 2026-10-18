@@ -35,9 +35,11 @@ const MIN_REPORT_LEN = 5;
 const MAX_LEN = 10;
 const ENDING_CHARS = 240;
 /** 这些字开头/结尾的片段多半是被切在词中间的残片，不要。 */
+// 不猜白名单：切句
 const EDGE_NOISE = /^[的了着过和与在是也都就而又把被让给对从向往]|[的了着过和与在是也都就而又把被让给对从向往]$/u;
 
 function cjkRuns(text: string): readonly string[] {
+  // 不猜白名单：切句
   return text.match(/[㐀-鿿]+/gu) ?? [];
 }
 

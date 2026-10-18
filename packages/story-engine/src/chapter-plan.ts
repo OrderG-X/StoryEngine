@@ -71,6 +71,7 @@ function cleanList(value: unknown, max = MAX_LIST, maxText = MAX_TEXT): readonly
   const raw: unknown[] = Array.isArray(value)
     ? value
     : typeof value === "string"
+      // 不猜白名单：切句
       ? value.split(/[\n；;]+/u)
       : [];
   const out: string[] = [];
@@ -78,6 +79,7 @@ function cleanList(value: unknown, max = MAX_LIST, maxText = MAX_TEXT): readonly
   for (const item of raw) {
     const record = asRecord(item);
     const text = cleanText(record ? record.text ?? record.name ?? record.title ?? record.summary : item, maxText)
+      // 不猜白名单：切句
       ?.replace(/^\s*(?:\d+[.、)）]|[-*•·])\s*/u, "");
     if (!text || seen.has(text)) continue;
     seen.add(text);
@@ -90,6 +92,7 @@ function cleanList(value: unknown, max = MAX_LIST, maxText = MAX_TEXT): readonly
 /** 名字类数组：先去掉括号注释（「送表的客人（中年男客，未具名）」），再按顿号/逗号拆、限长（名字不会超过 20 字）。 */
 function cleanNames(value: unknown): readonly string[] {
   const expanded = (Array.isArray(value) ? value : [value]).flatMap((item) =>
+    // 不猜白名单：切句
     typeof item === "string" ? item.replace(/[（(][^）)]*[）)]/gu, "").split(/[、，,]+/u) : [item]);
   return cleanList(expanded, MAX_LIST, 20).filter((name) => name.length >= 2);
 }
@@ -117,10 +120,13 @@ function cleanThreadSteps(value: unknown): readonly ChapterPlanThreadStep[] {
  * 正文照抄出「受理回执日期栏印着第十一天」「今天是第几天你自己算」）。天数只留在 storyDay 字段。
  */
 // 阿拉伯数字的「第2天」也是编号（第十九轮章纲写「第3天上午」）；汉字的「第二天」是正常说法，不动。
+// 不猜白名单开始：日期归一
 const STORY_DAY_NUMBERING = /[（(]?\s*(?:故事第\s*[\d一二三四五六七八九十百]+|第\s*\d+)\s*天\s*[）)]?[，,、]?\s*/gu;
 const STORY_DAY_IN_TEXT = /(?:故事)?第\s*(\d+)\s*天/u;
+// 不猜白名单结束
 
 function stripStoryDayNumbering(text: string): string {
+  // 不猜白名单：日期归一
   return text.replace(STORY_DAY_NUMBERING, "").replace(/[（(]\s*[）)]/gu, "").trim();
 }
 
@@ -266,6 +272,7 @@ export function collectPlanRetrievalTerms(plan: ChapterPlan): readonly string[] 
 }
 
 const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+// 不猜白名单：日期归一
 const WEEKDAY_MENTION = /(?:周|星期|礼拜)([一二三四五六日天])/u;
 
 function weekdayIndex(text: string | undefined): number | undefined {

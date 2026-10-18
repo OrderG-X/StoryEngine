@@ -143,6 +143,7 @@ export default function WritingRulesCodexPanel({
       return key === line;
     });
     return from ?? {
+      // 不猜白名单：切句
       name: line.split(/[：:]/u, 1)[0] ?? line,
       desc: "",
       type: "risk" as const,
@@ -360,6 +361,7 @@ function pick(values: ReadonlyMap<string, string>, label: string): string | unde
 
 function splitRuleList(value: string | undefined): readonly string[] {
   if (!isConfigured(value)) return [];
+  // 不猜白名单：切句
   return [...new Set(uiText(value).split(/[；;\n]/u).map((item) => item.trim()).filter(Boolean))];
 }
 

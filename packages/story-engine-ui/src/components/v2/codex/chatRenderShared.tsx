@@ -40,10 +40,12 @@ function isHorizontalRuleLine(line: string): boolean {
 function normalizeMessageText(value: string): string {
   return value
     .replace(/`([^`]+)`/gu, "$1")
+    // 不猜白名单：去裸id
     .replace(/\s*[（(][a-zA-Z][A-Za-z0-9_.-]{2,}[）)]/gu, "")
     // 列表编号只在「行首 / 上一行末（\n）/ 句末标点后」才另起一行（R7.7·报告 4.3）：
     // 旧版把任何「空白后跟 1、/1.」都拆行，「第 1、2 章」「用时 1.5 分钟」这类正文枚举/小数全被撕开。
     // 新口径纯结构判定：编号前必须是串首、换行或 。！？!?；;；编号后紧跟数字（1、2 / 1.5）不算列表。
+    // 不猜白名单：切句
     .replace(/(^|(?<=[。！？!?；;\n]))(?=\d+[.、](?!\d))/gu, "\n")
     .replace(/[ \t]{2,}/gu, " ")
     .replace(/\n{3,}/gu, "\n\n")
@@ -93,6 +95,7 @@ export function formatMessageBlocks(content: string): readonly MessageBlock[] {
       continue;
     }
     // 列表编号判定与 normalizeMessageText 同口径：编号后紧跟数字（「1、2 章」「1.5 分钟」）不是列表项。
+    // 不猜白名单：切句
     const numberedListItem = /^\d+[.、](?!\d)\s*/u;
     const listItem = line.replace(/^[-•]\s*/u, "").replace(numberedListItem, "").trim();
     if (listItem !== line || numberedListItem.test(line)) {

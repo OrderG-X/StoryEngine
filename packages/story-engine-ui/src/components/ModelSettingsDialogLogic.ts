@@ -14,9 +14,11 @@ export function formatHumanTestError(error: unknown): string {
   if (/401|authentication|api key|invalid|unauthorized/i.test(message)) {
     return "密钥无效或已过期。请检查后重试，或到服务商控制台重新创建密钥。";
   }
+  // 不猜白名单：报错分类
   if (/timeout|超时|aborted/i.test(message)) {
     return "连接超时。请检查网络，或确认接口地址是否正确后再重试。";
   }
+  // 不猜白名单：报错分类
   if (/ENOTFOUND|ECONNREFUSED|无法连接|Failed to fetch|NetworkError/i.test(message)) {
     return "连不上该 AI 服务。请检查接口地址与网络后重试。";
   }

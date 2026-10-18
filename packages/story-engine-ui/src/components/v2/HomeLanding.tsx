@@ -9,6 +9,12 @@ import "./home.css";
 
 const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", "无"]);
 
+/** 章名就是「第 N 章」本身时不再重复显示。 */
+function isBareChapterLabel(title: string): boolean {
+  // 不猜白名单：章节标题
+  return /^第\s*[0-9一二三四五六七八九十百零两]+\s*章$/u.test(title.trim());
+}
+
 const COVER_TONES = 7;
 
 /** 书名 → 稳定的封面色号（同一本书永远同色）。 */
@@ -111,7 +117,7 @@ export default function HomeLanding({
                 </p>
                 <div className="se-hero-last">
                   <span className="se-faint">上次写到</span>
-                  <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle && !/^第\s*[0-9一二三四五六七八九十百零两]+\s*章$/u.test(lastBook.currentChapterTitle.trim()) ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
+                  <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle && !isBareChapterLabel(lastBook.currentChapterTitle) ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
                   {/* 章节状态只在写作台显示（P6 第 6 步）：书架上这里原来的「已定稿」药丸按「有没有定稿过的章」算，最新一章还是工作稿时也说已定稿。 */}
                   <span className="se-faint">· {lastBook.updatedAt}</span>
                 </div>

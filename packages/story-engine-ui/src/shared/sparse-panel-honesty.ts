@@ -13,6 +13,7 @@ export const SYSTEM_STORY_META_SENTENCES: readonly string[] = [
 function normalizeSentence(value: string): string {
   return value
     .trim()
+    // 不猜白名单：切句
     .replace(/[。．.！!？?\s]+$/u, "")
     .replace(/\s+/gu, "");
 }
@@ -99,10 +100,12 @@ export function sanitizeBookStyleRuleLines(raw: readonly string[]): string[] {
     const stripped = stripAntiAiPrefix(line);
     if (!stripped || isSystemStoryMetaSentence(stripped)) continue;
     const parts = stripped
+      // 不猜白名单：切句
       .split(/[；;。！？!\n]+/u)
       .map((p) => p.trim())
       .filter(Boolean);
     for (const part of parts.length > 0 ? parts : [stripped]) {
+      // 不猜白名单：切句
       let piece = part.replace(/^[\d]+[.、)\]]\s*/u, "").trim();
       // 「名：描述」过长时优先保留描述侧短句；名本身也过长则截断。
       const colon = piece.indexOf("：") >= 0 ? piece.indexOf("：") : piece.indexOf(":");
@@ -147,6 +150,7 @@ export function splitLongRuleValueForDisplay(value: string | null | undefined): 
   const text = value.trim();
   if (text.includes("；") || text.includes(";") || text.length > 60) {
     return [...new Set(
+      // 不猜白名单：切句
       text.split(/[；;\n]/u).map((s) => s.trim()).filter((s) => s && !isPlaceholderUiValue(s)),
     )];
   }

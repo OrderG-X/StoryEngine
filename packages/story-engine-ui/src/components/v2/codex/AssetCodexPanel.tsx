@@ -425,6 +425,7 @@ function assetCardFromDetail(asset: AssetDetailStatus): AssetCardData {
 
 function parseAssetText(value: string): Partial<AssetCardData> & { readonly name: string } {
   const text = uiText(value);
+  // 不猜白名单：切句
   const [head, ...parts] = text.split(/[｜|]/u).map((item) => item.trim()).filter(Boolean);
   const fields = Object.fromEntries(
     parts.map((part) => {
@@ -432,6 +433,7 @@ function parseAssetText(value: string): Partial<AssetCardData> & { readonly name
       return index > -1 ? [part.slice(0, index), part.slice(index + 1)] : [part, ""];
     }),
   );
+  // 不猜白名单：切句
   const name = (head ?? text).split(/[：:，,·]/u)[0]?.trim() || text;
   return {
     name,
@@ -465,6 +467,7 @@ function uniqueUiList(values: readonly string[] | undefined): readonly string[] 
 }
 
 function assetKey(value: string): string {
+  // 不猜白名单：切句
   return uiText(value).split(/[：:·，,、|｜]/u)[0]?.trim() ?? uiText(value);
 }
 

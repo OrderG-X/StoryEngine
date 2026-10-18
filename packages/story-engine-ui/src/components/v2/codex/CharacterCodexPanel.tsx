@@ -504,6 +504,7 @@ function avatarText(name: string): string {
  */
 function shortRoleLabel(role: string, isLead: boolean): string {
   if (isLead) return "主角";
+  // 不猜白名单：切句
   const head = (role ?? "").split(/[：:。，,\n]/u)[0]?.trim() ?? "";
   if (!head) return "角色";
   // 标签只放短职能（「商业劲敌」「女主」）；一整句身份描述放不进标签，退成「配角」——描述本身在下一行身份里。

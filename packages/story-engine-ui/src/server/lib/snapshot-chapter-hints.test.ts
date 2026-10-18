@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { attachCommitChapterDetails, humanizeUndoLabel, readCommitChapterHints } from "./snapshot.js";
+import { attachCommitChapterDetails, humanizeUndoLabel, readCommitChapterHints, snapshotKindOf } from "./snapshot.js";
 
 const run = promisify(execFile);
 
@@ -34,5 +34,17 @@ describe("操作历史：老的「定稿」条目补章号", () => {
     await git("commit", "-q", "-m", "落盘收尾：agent:commit_apply");
     const hints = await readCommitChapterHints(dir);
     expect([...hints.values()]).toEqual([58]);
+  });
+});
+
+describe("snapshotKindOf：操作历史分类按写入方工具名定（重构 P7 不猜）", () => {
+  it("工具名查表，细节里的字眼不影响", () => {
+    expect(snapshotKindOf("agent:commit_apply:第58章")).toBe("commit");
+    expect(snapshotKindOf("agent:foundation_write:建角色 定稿人")).toBe("bible");
+    expect(snapshotKindOf("agent:manage_ledger")).toBe("bible");
+    expect(snapshotKindOf("agent:revise_draft:改角色那段")).toBe("draft");
+    expect(snapshotKindOf("恢复到：agent:commit_apply")).toBe("restore");
+    expect(snapshotKindOf("恢复前自动快照")).toBe("restore");
+    expect(snapshotKindOf("第55章修订前快照")).toBe("draft");
   });
 });

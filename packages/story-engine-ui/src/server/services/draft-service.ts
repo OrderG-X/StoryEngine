@@ -127,6 +127,7 @@ export function countCjkChars(value: string): number {
 export function validateStreamedDraftBody(value: string): string | null {
   const body = value
     .replace(/```[\s\S]*?```/gu, "")
+    // 不猜白名单：章节标题
     .replace(/^#+\s*第[一二三四五六七八九十百\d]+章[^\n]*$/gmu, "")
     .trim();
   const cjkCount = countCjkChars(body);
@@ -1272,6 +1273,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
  * 仍应带句号，所以不去改它，在这里归一：末尾句号收干净、补回恰好一个。
  */
 function presenceSummarySentence(summary: string): string {
+  // 不猜白名单：切句
   const trimmed = summary.trim().replace(/。+$/u, "");
   return trimmed.length === 0 ? "" : `${trimmed}。`;
 }

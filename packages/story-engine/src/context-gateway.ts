@@ -943,6 +943,7 @@ function truncateText(value: string, maxLength: number): string {
 }
 
 function stripTerminalPunctuation(value: string): string {
+  // 不猜白名单：切句
   return value.replace(/[。！？!?；;，,、\s]+$/u, "");
 }
 

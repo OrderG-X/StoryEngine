@@ -26,11 +26,13 @@ export function displayDeltaLines(lines: readonly string[]): string[] {
       continue;
     }
     if (line.startsWith("过期提醒：")) {
+      // 不猜白名单：自家格式
       const parts = line.slice("过期提醒：".length).split("，").filter((part) => !/\s0\s*条$/u.test(part.trim()));
       if (parts.length) out.push(`过期提醒：${parts.join("，")}`);
       continue;
     }
     const value = line.slice(line.indexOf("：") + 1).trim();
+    // 不猜白名单：自家格式
     if (/^0\s*(项|条)(，完成 0 项)?$/u.test(value) || value === "无变更") continue;
     out.push(line);
   }

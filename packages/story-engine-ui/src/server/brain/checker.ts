@@ -507,6 +507,7 @@ async function lookupEarlierPassages(input: {
     const keywords = parseKeywords(reply);
     if (keywords.length === 0) return { prefix: input.window };
     // 关键词可能带修饰（「周屿父 城东」）或写成短语：拆成单词再检索，防整串落空。
+    // 不猜白名单：切句
     const terms = [...new Set(keywords.flatMap((keyword) => keyword.split(/[\s,，、/／|]+/u)).filter((term) => term.length >= 2))].slice(0, TERM_LIMIT);
     if (terms.length === 0) return { prefix: input.window };
     const passages = await findEarlierPassages({

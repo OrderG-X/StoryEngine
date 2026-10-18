@@ -360,8 +360,10 @@ function isProtagonistRole(role: string | undefined): boolean {
 function toRoleLabel(role: string): string {
   const trimmed = role.trim();
   // 只在明显是整句/整段时收窄：含句末标点(。！？.!?) 或过长(>24)。短 role 原样保留。
+  // 不猜白名单开始：切句
   if (!/[。！？.!?]/u.test(trimmed) && trimmed.length <= 24) return trimmed;
   const firstPhrase = trimmed.split(/[。！？.!?，、；;,]/u)[0]?.trim() ?? "";
+  // 不猜白名单结束
   return firstPhrase || trimmed.slice(0, 24);
 }
 
@@ -2521,6 +2523,7 @@ function readStringList(value: unknown): string[] {
   const items = Array.isArray(value)
     ? value
     : typeof value === "string"
+      // 不猜白名单：切句
       ? value.split(/\r?\n|[；;]/u)
       : [];
   return items.map(readString).filter((item): item is string => Boolean(item));

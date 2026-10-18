@@ -31,6 +31,7 @@ const ALNUM_TOKEN = /[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]|[A-Za-z0-9]/g;
 
 /** 全角字母/数字/标点（U+FF01–FF5E）折成半角，使 Ａ－１７ 与 A-17 等价。 */
 function foldWidth(value: string): string {
+  // 不猜白名单：数字归一
   return value.replace(/[！-～]/gu, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
 }
 
@@ -49,6 +50,7 @@ function identifierTokens(text: string): Set<string> {
 
 /** 要点里引号括起来的台词（「…」/“…”/『…』/"…"，2～60 字）。 */
 function quotedLines(beat: string): readonly string[] {
+  // 不猜白名单：找原句
   return [...beat.matchAll(/[“"「『]([^”"」』]{2,60})[”"」』]/gu)].map((match) => (match[1] ?? "").trim()).filter(Boolean);
 }
 

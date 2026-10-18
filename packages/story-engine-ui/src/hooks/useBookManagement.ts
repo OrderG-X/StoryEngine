@@ -51,6 +51,7 @@ export function titleFromEvent(
   chapter: number,
 ): string {
   // 优先用真章名（时间线事件带 title，剥掉「第N章 ·」前缀）；没有章名才退回事件摘要（截 18 字）。
+  // 不猜白名单：章节标题
   const realTitle = (event?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
   if (realTitle && !isPlaceholderChapterTitle(realTitle)) return realTitle;
   const source = event?.mainEvent ?? event?.summary;

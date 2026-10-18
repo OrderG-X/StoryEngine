@@ -528,12 +528,47 @@ const UNDO_TOOL_LABELS: Record<string, string> = {
   manage_ledger: "改账",
 };
 
+export type SnapshotKind = "commit" | "draft" | "bible" | "restore";
+
+/** 写类工具 → 操作历史筛选分类。没列的（出稿、修订、章节方向和各路正文存档点）算「正文改动」。 */
+const TOOL_KINDS: Record<string, SnapshotKind> = {
+  commit_apply: "commit",
+  foundation_write: "bible",
+  generate_worldbuilding: "bible",
+  generate_character_enrichment: "bible",
+  generate_asset_enrichment: "bible",
+  generate_location_enrichment: "bible",
+  generate_matrix_enrichment: "bible",
+  generate_character_relationships: "bible",
+  generate_writing_rules_enrichment: "bible",
+  generate_alias_table: "bible",
+  edit_fact_ledger: "bible",
+  set_foreshadowing_importance: "bible",
+  resolve_thread: "bible",
+  clean_legacy_threads: "bible",
+  group_related_leads: "bible",
+  manage_ledger: "bible",
+};
+
+/**
+ * 存档点属于哪一类：按原始标签里写入方的工具名查表（agent:<toolId>[:细节]），恢复产物看自家前缀。
+ * 不看人话标签里的字眼（细节里可能就有「定稿」「角色」这些字，重构 P7「不猜」）。
+ */
+export function snapshotKindOf(label: string): SnapshotKind {
+  if (label.startsWith("恢复到：") || label === "恢复前自动快照") return "restore";
+  if (!label.startsWith("agent:")) return "draft";
+  const rest = label.slice("agent:".length);
+  const sep = rest.indexOf(":");
+  return TOOL_KINDS[sep >= 0 ? rest.slice(0, sep) : rest] ?? "draft";
+}
+
 /**
  * 把快照 label（agent:<toolId> / 恢复产物 / 自定义）转成给用户看的中文动作名。
  * 操作历史面板经路由层用它把原始 git subject 人话化（snapshots.ts），undo 也用它回报。
  * 恢复产物形如「恢复到：agent:commit_apply」——前缀剥开后对内层再 humanize，杜绝中间露出 agent: 工程标签。
  */
 export function humanizeUndoLabel(label: string): string {
+  // 不猜白名单：自家格式
   const restoreMatch = /^恢复到：(.+)$/u.exec(label);
   if (restoreMatch) return `恢复到：${humanizeUndoLabel(restoreMatch[1]!)}`;
   if (label === "恢复前自动快照") return "恢复前的自动存档";
@@ -603,6 +638,7 @@ export async function undoLastChange(
         if (snap.label === skipTo.label && trees.get(snap.id) === skipTo.tree) skipTo = null;
         continue;
       }
+      // 不猜白名单：自家格式
       const restored = /^恢复到：(.+)$/u.exec(snap.label);
       if (followRestores && restored) {
         const tree = trees.get(snap.id);
@@ -633,6 +669,7 @@ export const SNAPSHOT_PRUNE_DEFAULT_KEEP = 200;
 export const SNAPSHOT_PRUNE_MIN_KEEP = 20;
 
 const PRUNE_BASE_LABEL_PREFIX = "base: 已裁剪";
+// 不猜白名单：自家格式
 const PRUNE_BASE_LABEL_PATTERN = new RegExp(`^${PRUNE_BASE_LABEL_PREFIX} (\\d+) 条更早快照$`, "u");
 
 export interface SnapshotPruneOptions {

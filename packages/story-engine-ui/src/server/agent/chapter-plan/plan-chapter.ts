@@ -254,10 +254,13 @@ export function parsePlanJson(text: string): unknown {
   return JSON.parse(match[0]);
 }
 
+// 不猜白名单开始：日期归一
 const NEXT_DAY = /第二天|第二日|次日|翌日|隔天|隔日|转天/u;
 const DAYS_LATER = /([一两二三四五六七八九十\d]+)\s*天(?:以)?后/u;
+// 不猜白名单结束
 const CJK_DIGITS: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 
+// 不猜白名单：日期归一
 const SAME_DAY = /当天|当日|当晚|同一天|同日|紧接上一?章(?:结尾)?/u;
 
 /** 模型给的「离上一章过了几天」：数字、「第二天」「同一天」都收；给不出就 undefined。 */
@@ -298,6 +301,7 @@ export function isSkeletonPlan(plan: ChapterPlan, dayOffset: number | undefined)
 }
 
 /** 要点开头就写了换天（「第二天上午，……」「三天后，……」）：本章到这里跨了几天。转述里的「约好第二天去」不算。 */
+// 不猜白名单：日期归一
 const BEAT_OPENS_WITH_DAY_CHANGE = /^[^，。,]{0,2}?(第二天|第二日|次日|翌日|隔天|隔日|转天|([一两二三四五六七八九十\d]+)\s*天(?:以)?后)/u;
 
 /**

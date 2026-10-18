@@ -53,6 +53,7 @@ export async function readDismissals(projectDir: string): Promise<readonly Conti
   }
 }
 
+// 不猜白名单：找原句
 const normalize = (text: string): string => text.replace(/[\s「」『』“”"'…—，。！？；：、,.!?;:（）()]/gu, "");
 
 function bigrams(text: string): Set<string> {

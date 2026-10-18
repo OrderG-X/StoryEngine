@@ -204,6 +204,7 @@ function trimByParagraphs(draftBody: string, lengthTarget: DraftLengthTarget): D
 
 function trimBySentences(draftBody: string, lengthTarget: DraftLengthTarget): DraftLengthTrimResult {
   const chunks = draftBody
+    // 不猜白名单：切句
     .split(/(?<=[。！？!?；;])/u)
     .map((chunk) => chunk.trim())
     .filter(Boolean);

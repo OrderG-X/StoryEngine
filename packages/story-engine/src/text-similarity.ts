@@ -9,6 +9,7 @@
  */
 export function cjkBigrams(text: string): Set<string> {
   const grams = new Set<string>();
+  // 不猜白名单：切句
   for (const run of text.match(/[一-鿿㐀-䶿]+/gu) ?? []) {
     const chars = Array.from(run);
     for (let i = 0; i + 1 < chars.length; i += 1) {

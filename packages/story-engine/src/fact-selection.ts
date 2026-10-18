@@ -63,6 +63,7 @@ const CONTINUITY_QUOTA = 12;
 // 章目标里的结构性 2-gram（非内容词），不参与方向相关性匹配，避免"本章/继续"误命中一切。
 const STRUCTURAL_GOAL_GRAMS = new Set(["本章", "这章", "这一", "一章", "下一", "继续", "章节", "推进"]);
 // 硬 token：阿拉伯/全角数字 + 大额量词。强信号"金额/数字/编号"类硬事实，且极少出现在普通叙述词里。
+// 不猜白名单：数字归一
 const HARD_TOKEN_RE = /[0-9０-９]|[亿萬万]/u;
 
 function effectiveFromChapter(fact: FactEntry): number {
@@ -72,6 +73,7 @@ function effectiveFromChapter(fact: FactEntry): number {
 /** 取连续 CJK 段内的 2-gram 集合（跨标点/数字不连），剔除结构性词。用于章目标的内容词相关性。 */
 function cjkBigrams(text: string): Set<string> {
   const grams = new Set<string>();
+  // 不猜白名单：切句
   const runs = text.match(/[一-鿿㐀-䶿]+/gu) ?? [];
   for (const run of runs) {
     const chars = Array.from(run);
