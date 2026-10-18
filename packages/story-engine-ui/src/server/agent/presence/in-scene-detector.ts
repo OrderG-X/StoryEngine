@@ -5,7 +5,7 @@ import {
   readCharacterBible,
   readThreadPool,
   toSafeCharacterId,
-  PLACEHOLDER_CHARACTER_NAME,
+  isPlaceholderCharacterName,
   type ArcGoal,
   type CharacterBibleEntry,
   type NarrativeThread,
@@ -45,7 +45,7 @@ export interface CharacterPresenceResult {
   readonly trace: CharacterPresenceTrace;
   readonly summary: string;
   /**
-   * 名册全是开书占位卡（建书模板固定名，PLACEHOLDER_CHARACTER_NAME 标记）时，从最近几章已定稿
+   * 名册全是开书占位卡（建书模板固定名，isPlaceholderCharacterName 标记）时，从最近几章已定稿
    * ChapterDelta 的 charactersPresent（时间线 presentCharacterNames）取的本章角色名，最新章在前。
    * 出稿编排把它点进写作方向，占位卡本身不进引擎选角关卡（编辑部 R4.6）。有名册真名或没有已定稿
    * 声明时缺省。
@@ -237,7 +237,7 @@ export async function resolveSelectedCharacterIds(input: ResolveSelectedCharacte
   // （引擎侧 fast-draft-writer 用同一份标记豁免），出场名交给出稿编排点进写作方向。summary 如实说明来源。
   const roster = characterBible?.characters ?? [];
   const rosterAllPlaceholder = roster.length > 0
-    && roster.every((character) => PLACEHOLDER_CHARACTER_NAME.test(character.name?.trim() ?? ""));
+    && roster.every((character) => isPlaceholderCharacterName(character.name?.trim() ?? ""));
   if (rosterAllPlaceholder) {
     const deltaNames = await readRecentPresentCharacterNames(input.projectDir, input.chapter);
     if (deltaNames.length > 0) {

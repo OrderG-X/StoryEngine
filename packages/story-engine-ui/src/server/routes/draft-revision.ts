@@ -77,7 +77,7 @@ async function handleDraftRevisionPreview(req: import("node:http").IncomingMessa
       ...(replacementText !== undefined ? { replacementText } : {}),
       callModel: channel.call,
       // 前端 A.5 契约（模型失败回 200 + 安全兜底预览）与代词修复确定性预览：HTTP 路刻意保留的策略参数。
-      policies: { modelErrorFallback: true, deterministicPreview: true },
+      policies: { modelErrorFallback: true },
     });
     if (!outcome.ok) {
       writeJson(res, 400, { ok: false, error: previewRefusalMessage(outcome) });

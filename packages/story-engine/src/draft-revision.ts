@@ -83,7 +83,8 @@ export function createRevisionTaskFromSuggestion(input: {
     id: `revision-${Date.now().toString(36)}-${input.suggestion.id}`,
     sourceSuggestionId: input.suggestion.id,
     chapter: input.chapter,
-    targetType: inferTargetType(input.suggestion.target),
+    // 改哪种段落不从意见字面猜（重构 P7「不猜」）；原句定位靠 targetRangeHint。
+    targetType: "paragraph",
     targetText,
     targetRangeHint: input.suggestion.target,
     problemSummary: input.suggestion.reason,
@@ -228,40 +229,6 @@ export function fallbackDraftRevisionPreview(task: DraftRevisionTask, reason: st
   };
 }
 
-export function buildDeterministicRevisionPreview(task: DraftRevisionTask): DraftRevisionPreview | null {
-  const direction = inferPronounRepairDirection(task);
-  if (!direction) return null;
-  const afterText = direction === "female"
-    ? replacePronounSubject(task.targetText, "他", "她")
-    : replacePronounSubject(task.targetText, "她", "他");
-  if (afterText === task.targetText) return null;
-  const label = direction === "female" ? "女性/她" : "男性/他";
-  return {
-    taskId: task.id,
-    beforeText: task.targetText,
-    afterText,
-    changeSummary: `按修订目标统一角色称谓为${label}。`,
-    rationale: "审稿问题已明确指出跨章代词漂移，局部修订只替换目标片段中的主语代词。",
-    riskNotes: ["只处理当前选中片段；全章其他同名角色称谓仍需复查。"],
-    preservedFacts: ["保留原动作、场景和人物关系。"],
-    warnings: [],
-  };
-}
-
-function inferPronounRepairDirection(task: DraftRevisionTask): "female" | "male" | null {
-  const text = `${task.problemSummary}\n${task.revisionGoal}\n${task.constraints.join("\n")}`;
-  if (/她→他|改为['"“”]?她|统一为['"“”]?她|女性|按女性/u.test(text)) return "female";
-  if (/他→她|改为['"“”]?他|统一为['"“”]?他|男性|按男性/u.test(text)) return "male";
-  return null;
-}
-
-function replacePronounSubject(text: string, from: "他" | "她", to: "他" | "她"): string {
-  const actionPattern = "(?:把|将|说|问|提醒|低声|看|点|摇|皱|拍|示意|开口|走|站|递|拿|转|没有|不|也|已经|正在)";
-  return text
-    .replace(new RegExp(`${from}(?=${actionPattern})`, "gu"), to)
-    .replace(new RegExp(`${from}的(?=(?:手|肩|目光|声音|脸|背影|工牌|胸牌))`, "gu"), `${to}的`);
-}
-
 export function applyDraftRevisionToContent(input: {
   readonly draftContent: string;
   readonly beforeText: string;
@@ -309,13 +276,6 @@ function targetTypeFromIssueCategory(category: DraftAIReviewIssue["category"]): 
   if (category === "reader_hook") return "ending";
   if (category === "pacing") return "section";
   if (category === "character" || category === "style" || category === "continuity") return "paragraph";
-  return "paragraph";
-}
-
-function inferTargetType(target: string): DraftRevisionTargetType {
-  if (/开头|开场/u.test(target)) return "opening";
-  if (/结尾|追读/u.test(target)) return "ending";
-  if (/对话/u.test(target)) return "dialogue";
   return "paragraph";
 }
 

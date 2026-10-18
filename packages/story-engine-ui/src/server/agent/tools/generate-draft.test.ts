@@ -140,7 +140,7 @@ describe("generate_draft 写工作稿工具", () => {
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖", "债权池A-17"],
+      mustHitBeats: ["「第三块砖」", "债权池A-17"],
       writerClient: mockWriterClient(body),
     });
     expect(out.ok).toBe(true);
@@ -155,7 +155,7 @@ describe("generate_draft 写工作稿工具", () => {
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖", "债权池A-17"],
+      mustHitBeats: ["「第三块砖」", "债权池A-17"],
       writerClient: mockWriterClient(body),
     });
     expect(out.ok).toBe(true);
@@ -1093,7 +1093,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
       deAiCallModel: async () => EAT_ANCHOR,
     });
@@ -1104,7 +1104,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
       missingBeats: [],
       adjudicatedCovered: [],
       adjudication: "not_run",
-      postDeAiNewMisses: ["第三块砖"],
+      postDeAiNewMisses: ["「第三块砖」"],
     });
     expect(out.summary).toContain("去味后新漏 1 条");
     expect(out.summary).toContain("第三块砖");
@@ -1118,7 +1118,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
       deAiCallModel: async () => KEEP_ANCHOR,
     });
@@ -1136,7 +1136,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖", "债权池A-17"], // A-17 原稿就漏（确定性判漏）；第三块砖原稿命中、被去味吃掉
+      mustHitBeats: ["「第三块砖」", "债权池A-17"], // A-17 原稿就漏（确定性判漏）；第三块砖原稿命中、被去味吃掉
       writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
       deAiCallModel: async () => EAT_ANCHOR,
     });
@@ -1145,7 +1145,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
       missingBeats: ["债权池A-17"],           // 去味前后都漏 → 留在原位，不重复进新漏
       adjudicatedCovered: [],
       adjudication: "not_run",
-      postDeAiNewMisses: ["第三块砖"],        // 只有新吃掉的进这里
+      postDeAiNewMisses: ["「第三块砖」"],        // 只有新吃掉的进这里
     });
     expect(out.summary).toContain("⚠ 首稿核对");
     expect(out.summary).toContain("债权池A-17");
@@ -1423,7 +1423,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(cleanMissingBeat),
       candidates: 2,
       candidateWriterClients: [mockWriterClient(cleanMissingBeat), mockWriterClient(flavoredHitsBeat)],
@@ -1552,7 +1552,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(cleanMissingBeat),
       candidates: 2,
       candidateWriterClients: [mockWriterClient(cleanMissingBeat), mockWriterClient(flavoredHitsBeat)],

@@ -62,7 +62,6 @@ export {
   trimDraftBodyToLengthTarget,
 } from "./draft-length-control.js";
 export {
-  buildDeterministicRevisionPreview,
   buildDraftRevisionPrompt,
   countDraftWords,
   type DraftRevisionPreview,
@@ -103,7 +102,7 @@ export {
 } from "./model-settings.js";
 export {
   createStoryProject,
-  PLACEHOLDER_CHARACTER_NAME,
+  isPlaceholderCharacterName,
   readArcGoalPool,
   readAssetLedger,
   readCharacterBible,

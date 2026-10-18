@@ -38,7 +38,13 @@ export interface CreateStoryProjectInput {
  * 这同一份固定标记——按模板标记识别，不按名字猜。2026-10-13 从 commit-quality-check 上移到模板
  * 所在处并导出（编辑部 R4.6：占位主角卡不得挡出稿）。
  */
-export const PLACEHOLDER_CHARACTER_NAME = /^(?:主角|男主|女主|主人公|男主角|女主角|未命名(?:角色)?|待定)\d*$/u;
+const PLACEHOLDER_CHARACTER_NAMES = new Set(["主角", "男主", "女主", "主人公", "男主角", "女主角", "未命名", "未命名角色", "待定"]);
+
+export function isPlaceholderCharacterName(name: string): boolean {
+  let end = name.length;
+  while (end > 0 && name.charCodeAt(end - 1) >= 48 && name.charCodeAt(end - 1) <= 57) end -= 1;
+  return PLACEHOLDER_CHARACTER_NAMES.has(name.slice(0, end));
+}
 
 export interface CreateStoryProjectResult {
   readonly projectDir: string;

@@ -8,11 +8,11 @@
  *
  * 用途（都是只读，不写盘）：
  * 1. 出稿选角兜底：新书名册只有开书占位卡（模板固定名「主角」）时，用最近几章的出场名当本章角色，
- *    占位卡不进关卡（关卡豁免在引擎侧 fast-draft-writer，同一份 PLACEHOLDER_CHARACTER_NAME 标记）。
+ *    占位卡不进关卡（关卡豁免在引擎侧 fast-draft-writer，同一份 isPlaceholderCharacterName 标记）。
  * 2. 定稿后的改名建议（R5.1 起改判据）：主角卡还是占位时，建议作者把它改成「已定稿章节里
  *    声明视角最多」的那个名字——不再数出场次数（视角人物是林小满、别的名字出现再多也不抢）。
  */
-import { readTimelineEvents, PLACEHOLDER_CHARACTER_NAME } from "@actalk/story-engine";
+import { readTimelineEvents, isPlaceholderCharacterName } from "@actalk/story-engine";
 
 interface SemanticSummaryLike {
   readonly presentCharacterNames?: readonly unknown[];
@@ -75,7 +75,7 @@ export async function readRecentPresentCharacterNames(
   }
   for (const chapter of finalizedChapters) {
     for (const name of grouped.get(chapter) ?? []) {
-      if (seen.has(name) || PLACEHOLDER_CHARACTER_NAME.test(name)) continue;
+      if (seen.has(name) || isPlaceholderCharacterName(name)) continue;
       seen.add(name);
       names.push(name);
     }
@@ -100,7 +100,7 @@ export async function readViewpointChapterCounts(
     if (!Number.isFinite(chapter) || chapter >= beforeChapter) continue;
     if (seenChapters.has(chapter)) continue; // 同章后续事件的视角不重复计
     const viewpoint = viewpointOfEvent(event);
-    if (!viewpoint || PLACEHOLDER_CHARACTER_NAME.test(viewpoint)) continue; // 这条事件没视角：看同章下一条
+    if (!viewpoint || isPlaceholderCharacterName(viewpoint)) continue; // 这条事件没视角：看同章下一条
     seenChapters.set(chapter, viewpoint);
     const entry = stats.get(viewpoint) ?? { chapters: new Set<number>(), latest: chapter };
     entry.chapters.add(chapter);

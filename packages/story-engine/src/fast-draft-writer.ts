@@ -31,7 +31,7 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { describeErrorBriefly, PLACEHOLDER_CHARACTER_NAME, readWritingRules, writeFileAtomic } from "./project-store.js";
+import { describeErrorBriefly, isPlaceholderCharacterName, readWritingRules, writeFileAtomic } from "./project-store.js";
 import type { CharacterProfile } from "./types.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
@@ -201,9 +201,6 @@ function withExtraSection(context: WriterContextEnvelope, name: string, content:
   };
 }
 
-/** 要点里明写了换天（第二天 / 次日 / 几天后……）才允许一章跨天。 */
-const DAY_CHANGE = /第二天|第二日|次日|翌日|隔天|隔日|转天|两天后|三天后|几天后|数日后|过了[一两三几\d]+天/u;
-
 /**
  * 分半写时每一半只写自己的要点（第十四轮验收：章纲段原样给前半章，「每个要点都要真正写到」压过了
  * 「只写前一半」——第 8、10 章前半就写完全部要点，后半无事可写只好重演或凭空多出一天）。
@@ -289,9 +286,8 @@ async function generateBySegments(input: {
   const numbered = (from: number, to: number) => beats.slice(from, to).map((beat, index) => `${from + index + 1}. ${beat}`).join("  ");
   const planSection = input.context.sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown> | undefined;
   // 一章默认在同一天里（章纲只记一个故事日）：第十四轮后半章凭空写「第二天」，正文比日历多走两天、截止日无声越过。
-  const sameDay = beats.some((beat) => DAY_CHANGE.test(beat))
-    ? ""
-    : `本章都在同一天里${input.plan.storyDay ? `（故事第 ${input.plan.storyDay} 天）` : ""}，不要写「第二天」「次日」「几天后」这类跳天。`;
+  // 要点里有没有写换天交给模型自己读，不用词表猜（重构 P7「不猜」）。
+  const sameDay = `本章从${input.plan.storyDay ? `故事第 ${input.plan.storyDay} 天` : "上一章结束的那天"}开始；章纲要点里没写换天，就都在同一天里，不要自己加「第二天」「次日」「几天后」这类跳天。`;
 
   // 作者没给方向时本章目标就是章纲的整章一句话——前半章看到它也会往全章结局写，前半章不给。
   const firstGoal = [
@@ -684,10 +680,10 @@ function selectedCharacterMentionCandidates(context: WriterContextEnvelope): str
     : [];
   // 开书占位名（模板固定标记，如 UI 新建书未填主角名落的「主角」）不进选角关卡：占位名不是真名，
   // 正文当然不会写到它——拿它当门，作者没先改名就永远出不了稿（编辑部 R4.6，2026-10-13 真机验收 3.7）。
-  // 与 commit-quality-check 的角色名门共用同一份 PLACEHOLDER_CHARACTER_NAME。真名（含「真名 / 主角」
+  // 与 commit-quality-check 的角色名门共用同一份 isPlaceholderCharacterName。真名（含「真名 / 主角」
   // 这类竖线复名拆出的真名段）照旧把关。
   return unique(profiles.flatMap((profile) => nameCandidates(profile.name)))
-    .filter((name) => !PLACEHOLDER_CHARACTER_NAME.test(name));
+    .filter((name) => !isPlaceholderCharacterName(name));
 }
 
 function nameCandidates(name: string): string[] {

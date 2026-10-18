@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describeErrorBriefly, listCharacterDirectoryEntries, PLACEHOLDER_CHARACTER_NAME, readCharacterProfile } from "./project-store.js";
+import { describeErrorBriefly, listCharacterDirectoryEntries, isPlaceholderCharacterName, readCharacterProfile } from "./project-store.js";
 import { countDraftChineseCharacters, readWritingRulesLengthIntent } from "./draft-length-control.js";
 import {
   defaultQualityJudgement,
@@ -100,7 +100,7 @@ export async function checkDraftBeforeCommit(input: {
   }
   // 只认真名：新书的占位主角（「主角」）和角色 id 不会出现在正文里——拿它们当门，作者没先改名就永远定不了稿
   // （2026-10-10 作者自写验收）。作者自己写的章也可能整章写一个还没登记的人，所以只提醒、不挡定稿。
-  const realNames = characterNames.filter((name) => !PLACEHOLDER_CHARACTER_NAME.test(name) && !/^char-/u.test(name));
+  const realNames = characterNames.filter((name) => !isPlaceholderCharacterName(name) && !/^char-/u.test(name));
   if (content && realNames.length > 0 && !realNames.some((name) => content.includes(name))) {
     issues.push({ type: "missing_character_name", severity: "warning", message: "Draft does not mention any known character name." });
   }

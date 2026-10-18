@@ -99,7 +99,7 @@ describe("按章纲分前后两半写", () => {
     expect(secondPlan.beats).toEqual(["对出缺页是境外汇款", "回家路上被跟踪"]);
   });
 
-  it("要点里没写换天 → 两半都要求同一天；要点写了「第二天」就不加这条", async () => {
+  it("两半都告诉模型：要点里没写换天就都在同一天（换没换天交给模型读，不用词表猜）", async () => {
     const projectDir = await makeBook();
     const contexts: WriterContextEnvelope[] = [];
     const writer: WriterClient = {
@@ -109,11 +109,8 @@ describe("按章纲分前后两半写", () => {
       }),
     };
     await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
-    expect(renderFastDraftPromptText(contexts[0])).toContain("本章都在同一天里");
-    expect(renderFastDraftPromptText(contexts[1])).toContain("本章都在同一天里");
-    const crossDay = normalizeChapterPlan({ summary: "s", beats: ["一早出门", "管理员拦人", "翻到底册", "第二天再去档案室"] }, { chapter: 2 })!;
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: crossDay, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
-    expect(renderFastDraftPromptText(contexts[3])).not.toContain("本章都在同一天里");
+    expect(renderFastDraftPromptText(contexts[0])).toContain("章纲要点里没写换天，就都在同一天里");
+    expect(renderFastDraftPromptText(contexts[1])).toContain("章纲要点里没写换天，就都在同一天里");
   });
 
   it("两半拼起来超了上限 → 不从结尾裁（第十七轮第 4 章被裁掉最后两个要点），如实记一条", async () => {

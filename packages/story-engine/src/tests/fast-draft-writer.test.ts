@@ -372,7 +372,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
   });
 
-  it("keeps the explicit user target higher priority than writing-rules target words", async () => {
+  it("keeps the explicit user target (structured requestedDraftLength) higher priority than writing-rules target words", async () => {
     const projectDir = await createFixtureProject();
     await writeFile(
       join(projectDir, "story", "writing-rules.json"),
@@ -397,7 +397,8 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     const report = await runFastDraft({
       projectDir,
       chapter: 1,
-      chapterGoal: "这一章约600字，写林远核对门禁。",
+      chapterGoal: "写林远核对门禁。",
+      requestedDraftLength: 600,
       writerClient,
     });
 

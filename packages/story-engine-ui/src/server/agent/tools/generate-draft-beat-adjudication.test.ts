@@ -63,10 +63,10 @@ function inRangeBody(mainCharacterName: string): string {
 // 「殊不知」high +「深吸一口气」medium 的确定性硬命中句（与既有回检测试同稿）。
 const FLAVOR_TAIL = "林远深吸一口气，压下怒火。殊不知，门后的真相正在等他。";
 
-// 真机误报场景的复刻：beat 有锚点但正文换了措辞——「第三块砖」→「第三层杂志架」、「债权池A-17」→「债权池17号」。
+// 真机误报场景的复刻：beat 有锚点但正文换了措辞——「「第三块砖」」→「第三层杂志架」、「债权池A-17」→「债权池17号」。
 // 确定性核对两条都判漏（既有 generate-draft.test.ts 已锁定此行为）。
 const REWORDED_BODY = [longBody("林远"), "林远撬开第三层杂志架后面的暗格，取出薄铁盒，收据背面写着债权池17号。"].join("\n\n");
-const REWORDED_BEATS = ["第三块砖", "债权池A-17"];
+const REWORDED_BEATS = ["「第三块砖」", "债权池A-17"];
 
 describe("generate_draft × beats 判漏 AI 复核（单候选）", () => {
   it("判漏 2 条、模型引证正文原句摘 1 条 → 输出只剩 1 条漏报 + adjudicatedCovered 含被摘条目，summary 用裁决后结果", async () => {
@@ -86,12 +86,12 @@ describe("generate_draft × beats 判漏 AI 复核（单候选）", () => {
     expect(callModel).toHaveBeenCalledTimes(1);
     expect(out.beatFidelity).toEqual({
       missingBeats: ["债权池A-17"],
-      adjudicatedCovered: [{ beat: "第三块砖", quote: "林远撬开第三层杂志架后面的暗格" }],
+      adjudicatedCovered: [{ beat: "「第三块砖」", quote: "林远撬开第三层杂志架后面的暗格" }],
       adjudication: "applied",
     });
     // 警告只列裁决后仍漏的；被摘的进复核交代（可追溯），不静默消失
     expect(out.summary).toContain("可能漏写或被改写了——债权池A-17。要不要我改稿补回？");
-    expect(out.summary).toContain("首稿复核：初判漏写的 1 条要点（第三块砖）经 AI 复核确认已写入正文");
+    expect(out.summary).toContain("首稿复核：初判漏写的 1 条要点（「第三块砖」）经 AI 复核确认已写入正文");
     expect(out.summary).toContain("beatFidelity.adjudicatedCovered");
   });
 
@@ -199,7 +199,7 @@ describe("generate_draft × beats 判漏 AI 复核（多候选：评分吃裁决
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(cleanReworded),
       candidates: 2,
       candidateWriterClients: [mockWriterClient(cleanReworded), mockWriterClient(flavoredHitsBeat)],
@@ -223,7 +223,7 @@ describe("generate_draft × beats 判漏 AI 复核（多候选：评分吃裁决
     // 输出 beatFidelity 也是裁决后结果：无残留漏报 + 被摘条目可追溯
     expect(out.beatFidelity).toEqual({
       missingBeats: [],
-      adjudicatedCovered: [{ beat: "第三块砖", quote: "林远在走廊尽头停下脚步，反复掂量手里这份账册的分量" }],
+      adjudicatedCovered: [{ beat: "「第三块砖」", quote: "林远在走廊尽头停下脚步，反复掂量手里这份账册的分量" }],
       adjudication: "applied",
     });
   });
@@ -236,7 +236,7 @@ describe("generate_draft × beats 判漏 AI 复核（多候选：评分吃裁决
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
-      mustHitBeats: ["第三块砖"],
+      mustHitBeats: ["「第三块砖」"],
       writerClient: mockWriterClient(cleanReworded),
       candidates: 2,
       candidateWriterClients: [mockWriterClient(cleanReworded), mockWriterClient(flavoredHitsBeat)],

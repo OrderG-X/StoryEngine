@@ -743,11 +743,13 @@ function mergeValuePreferExisting(existing: unknown, patch: unknown): unknown {
   return patch;
 }
 
+const UNFILLED_VALUES = new Set(["待确认", "尚未配置", "未知", "unknown"]);
+
 function hasStrongConcreteValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return trimmed.length > 0 && !/^(?:待确认|尚未配置|未知|unknown)$/iu.test(trimmed);
+    return trimmed.length > 0 && !UNFILLED_VALUES.has(trimmed.toLowerCase());
   }
   if (typeof value === "number" || typeof value === "boolean") return true;
   if (isRecord(value)) return Object.keys(value).length > 0;
@@ -852,23 +854,13 @@ function normalizeLocationPatch(suggestion: FoundationGapSuggestion): LocationBi
 function cleanSpatialItems(items: readonly string[]): readonly string[] {
   return unique(items
     .map((item) => item.trim())
-    .filter((item) => item.length > 0 && !isTravelSentence(item)));
+    .filter((item) => item.length > 0));
 }
 
 function cleanFixedFacts(items: readonly string[]): readonly string[] {
   return unique(items
     .map((item) => item.trim())
-    .filter((item) => item.length > 0 && !isTravelSentence(item)));
-}
-
-function isTravelSentence(value: string): boolean {
-  // Genre-neutral travel-sentence filter: detects a movement verb (walk/drive/transit)
-  // paired with a time/distance unit, or an inter-floor "N楼到M楼" spatial step.
-  // Registered routes live in location.travelRules; loose travel prose is kept out of
-  // floors/rooms/fixedFacts. Intentionally carries NO hardcoded place names — the old
-  // "到/去 + <fixed place> + unit" branch leaked genre-specific locations (R5b block 1).
-  return /(?:走路|步行|打车|开车|坐车|公交).{0,12}(?:分钟|小时|公里)?/u.test(value)
-    || /[一二三四五六七八九十\d]+楼.{0,8}到[一二三四五六七八九十\d]+楼.{0,12}(?:楼梯|分钟)/u.test(value);
+    .filter((item) => item.length > 0));
 }
 
 function readLocationSensoryDetails(...values: readonly unknown[]): LocationSensoryDetails | undefined {

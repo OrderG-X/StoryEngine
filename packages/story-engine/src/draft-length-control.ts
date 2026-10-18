@@ -38,12 +38,6 @@ const MAX_DRAFT_TARGET_WORDS = 30_000;
 const MIN_DRAFT_MAX_OUTPUT_TOKENS = 360;
 const MAX_DRAFT_MAX_OUTPUT_TOKENS = 4_096;
 
-export function readRequestedDraftWordCount(text: string): number | undefined {
-  const match = text.match(/(?:约|大约|左右|控制在|写到|写成|先写|写)?\s*(\d{3,5})\s*(?:字|个字|中文字符)/u);
-  if (!match?.[1]) return undefined;
-  return normalizeDraftLengthNumber(Number(match[1]));
-}
-
 export function resolveDraftLengthTarget(input: {
   readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
@@ -52,8 +46,8 @@ export function resolveDraftLengthTarget(input: {
   // 长跑 2026-10-04 #4：显式下限（chapterLength.minWords）是「至少 N 字」的硬约束本体，
   // 在任何来源分支（用户点单/写作规则/默认）都生效——下限是地板不是目标，不跟目标比优先级。
   const explicitMinimum = readWritingRulesMinimumWords(input.writingRules);
-  const explicitTarget = normalizeDraftLengthNumber(input.requestedDraftLength)
-    ?? (typeof input.chapterGoal === "string" ? readRequestedDraftWordCount(input.chapterGoal) : undefined);
+  // 字数只认结构化的 requestedDraftLength（对话 AI 按作者的话传），不从本章目标那句话里抠数字（重构 P7「不猜」）。
+  const explicitTarget = normalizeDraftLengthNumber(input.requestedDraftLength);
   if (explicitTarget) return withExplicitMinimum(buildDraftLengthTarget(explicitTarget, "user"), explicitMinimum);
   const writingRulesTarget = readWritingRulesTargetWords(input.writingRules);
   if (writingRulesTarget) return withExplicitMinimum(buildDraftLengthTarget(writingRulesTarget, "writing_rules"), explicitMinimum);

@@ -33,12 +33,9 @@
  * 显式策略参数（两侧刻意保留的分歧，不再是暗漂移）：
  *   policies.modelErrorFallback   — HTTP preview：模型调用失败回 200 + 安全兜底预览（前端 A.5 契约，
  *                                   前端据 afterText===beforeText 诚实报失败）；工具路：模型失败诚实拒。
- *   policies.deterministicPreview — HTTP preview：模型回 echo no-op 且任务是代词修复时改用引擎确定性
- *                                   预览；工具路无此 Overlay（echo no-op 直接诚实拒）。
  */
 import { readFile } from "node:fs/promises";
 import {
-  buildDeterministicRevisionPreview,
   buildDraftRevisionPrompt,
   buildStateOverview,
   buildWritingContextPack,
@@ -343,7 +340,6 @@ export async function previewRevision(input: {
   readonly callModel: RevisionModelCaller;
   readonly policies?: {
     readonly modelErrorFallback?: boolean;
-    readonly deterministicPreview?: boolean;
   };
 }): Promise<RevisionPreviewSuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
@@ -378,13 +374,6 @@ export async function previewRevision(input: {
       };
     }
   }
-  if (input.policies?.deterministicPreview) {
-    const deterministicPreview = buildDeterministicRevisionPreview(task);
-    if (deterministicPreview && preview.afterText.trim() === task.targetText.trim()) {
-      preview = deterministicPreview;
-    }
-  }
-
   // D22 漂移守卫（preview 步拦下：模型说改哪之前先核验落点）。兜底/确定性预览的 beforeText 即
   // 任务原文，必然通过；只有模型真回吐了别处才拒。
   const placement = checkModelPreviewPlacement(draftContent, located.span, preview.beforeText);

@@ -23,7 +23,6 @@
 //
 //   显式策略参数（收编后两侧刻意保留的分歧，service policies 参数化，不再是暗漂移；下方「显式策略分歧」组锁定）：
 //   - modelErrorFallback：HTTP preview 模型调用失败回 200 + 安全兜底预览（前端 A.5 契约）；工具路诚实拒。
-//   - deterministicPreview：HTTP preview 对代词修复任务用引擎确定性预览覆盖模型 echo；工具路无此 overlay。
 //
 // 2026-09-11 尾巴清零：本文件磁盘 IO 重（真引擎建双胞胎项目 + 真 git 快照子进程）——
 // 全部用例给显式 timeout（CLAUDE.md 纪律；此前整文件无 timeout 属登记未补项，本次补齐）。
@@ -453,7 +452,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
   });
 });
 
-describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback / deterministicPreview，刻意保留、本组锁定）", () => {
+describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback，刻意保留、本组锁定）", () => {
   it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", { timeout: 30_000 }, async () => {
     llmMocks.streamChatModelToText.mockRejectedValue(new Error("网络连接被重置"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");
@@ -494,7 +493,7 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(parityReviseDraft(1));
   });
 
-  it("deterministicPreview：代词修复任务模型回 echo no-op → HTTP preview 改用引擎确定性预览（真改动）、工具 no-op 诚实拒，两侧草稿都不动", { timeout: 30_000 }, async () => {
+  it("模型回 echo no-op → HTTP preview 原样给回（afterText===beforeText，前端据此报没改成）、工具 no-op 诚实拒，两侧草稿都不动（重构 P7 删了代词确定性改写）", { timeout: 30_000 }, async () => {
     const pronounTarget = "他站起身，把账册递给林远。";
     const draft = `# 第1章\n\n${REVISE_SENTENCE_A}\n\n${pronounTarget}\n\n${REVISE_SENTENCE_C}\n`;
     // 模型把目标句原样 echo 回（afterText===beforeText 的 echo no-op）
@@ -503,7 +502,7 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     await writeParityDraft(routeDir, 1, draft);
     await writeParityDraft(toolDir, 1, draft);
 
-    // HTTP 路：代词修复任务（统一为她）+ echo no-op → 引擎确定性预览覆盖（beforeText=目标句、afterText=代词真改）
+    // HTTP 路：echo no-op 不再被「从意见里猜他/她」的确定性改写顶替，原样给回
     const preview = await callRoute(registerDraftRevisionRoutes, "POST", "/api/draft/revision/preview", {
       projectPath: routeDir,
       chapter: 1,
@@ -511,10 +510,9 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     });
     expect(preview.statusCode).toBe(200);
     expect(preview.payload.ok).toBe(true);
-    const deterministic = preview.payload.preview as { beforeText: string; afterText: string; changeSummary: string };
-    expect(deterministic.beforeText).toBe(pronounTarget);
-    expect(deterministic.afterText).toBe("她站起身，把账册递给林远。");
-    expect(deterministic.changeSummary).toContain("统一角色称谓");
+    const echoed = preview.payload.preview as { beforeText: string; afterText: string };
+    expect(echoed.beforeText).toBe(pronounTarget);
+    expect(echoed.afterText).toBe(pronounTarget);
     expect(preview.payload.usedFallback).toBe(false);
 
     // 工具路：无此 overlay——echo no-op 直接诚实拒（改了等于没改不许报成功）

@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyDraftRevisionToContent,
-  buildDraftRevisionPrompt,
-  buildDeterministicRevisionPreview,
-  createRevisionTaskFromIssue,
-  createRevisionTaskFromSuggestion,
-  fallbackDraftRevisionPreview,
-  normalizeDraftRevisionPreview,
-  parseDraftRevisionPreview,
-} from "../draft-revision.js";
+import { applyDraftRevisionToContent, buildDraftRevisionPrompt, createRevisionTaskFromIssue, createRevisionTaskFromSuggestion, fallbackDraftRevisionPreview, normalizeDraftRevisionPreview, parseDraftRevisionPreview } from "../draft-revision.js";
 import type { DraftAIReviewIssue, DraftAIRevisionSuggestion } from "../draft-ai-review.js";
 
 const draft = [
@@ -153,7 +144,7 @@ describe("draft revision", () => {
       constraints: ["只修开头"],
     });
     expect(task.sourceSuggestionId).toBe(suggestion.id);
-    expect(task.targetType).toBe("opening");
+    expect(task.targetType).toBe("paragraph"); // 不从意见字面猜「开头 / 结尾」（重构 P7）
     expect(task.revisionGoal).toContain("减少设定解释");
     expect(task.status).toBe("pending");
     expect(draft).toContain("林序站在2楼申请窗口前");
@@ -186,22 +177,6 @@ describe("draft revision", () => {
     const fallback = fallbackDraftRevisionPreview(task, "bad json");
     expect(fallback.beforeText).toBe(fallback.afterText);
     expect(fallback.warnings).toContain("未应用任何修改。");
-  });
-
-  it("can deterministically repair explicit pronoun drift tasks", () => {
-    const preview = buildDeterministicRevisionPreview({
-      id: "revision-pronoun",
-      chapter: 2,
-      targetType: "paragraph",
-      targetText: "沈砚从檐影里走出来，他拍了拍林远的肩膀",
-      problemSummary: "沈砚人称代词漂移：她→他",
-      revisionGoal: "确认沈砚性别设定后统一全章代词；若为女性则改为'她拍了拍林远的肩膀'",
-      constraints: ["只修改选中的原文片段"],
-      status: "pending",
-    });
-
-    expect(preview?.afterText).toBe("沈砚从檐影里走出来，她拍了拍林远的肩膀");
-    expect(preview?.changeSummary).toContain("女性/她");
   });
 
   it("rejects invalid model JSON without producing an applied preview", () => {
