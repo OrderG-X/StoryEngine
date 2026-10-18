@@ -4,6 +4,9 @@ import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
+import { ContinuityMarks } from "./ContinuityMarks.js";
+import { PaperToolbar } from "./PaperToolbar.js";
+import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -80,6 +83,9 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const paperDraft = draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
   const targetWords = parseTargetChapterWords(props.sidebar?.writingRules);
+  // 这一章还差什么（工具条和右栏顶卡同源）+ 这一章最新的核账结果（稿纸划线）。
+  const progress = useChapterProgress(targetWords);
+  const continuityResult = useContinuityResult(draft.chapterNumber);
   const goalPct = targetWords ? Math.min(100, Math.round((draftWordCount / targetWords) * 100)) : 0;
   // 低于目标 78%（≈「最少」口径）提醒橙，达标绿，其余强调色。
   const goalTone = !targetWords ? "" : draftWordCount >= targetWords ? "met" : draftWordCount < targetWords * 0.78 ? "low" : "";
@@ -236,26 +242,41 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             onOpenCharacter={props.onOpenCharacter}
           />
         ) : null}
+        {/* 核账问题画在原句下面，点开对照前文原句（不碰编辑器内核，见 ContinuityMarks）。 */}
+        {!showStarter && activeTab === "draft" ? (
+          <ContinuityMarks
+            stageRef={stageRef}
+            result={continuityResult}
+            contentKey={`${draft.chapterNumber}`}
+            busy={workspaceBusy}
+            {...(props.onSendMessage ? { onRevise: props.onSendMessage } : {})}
+            {...(props.onSendUserAction ? { onFixAction: props.onSendUserAction } : {})}
+          />
+        ) : null}
       </div>
 
-      {/* 底部细条：上一章 / 再来一版 / 下一章；都没有时整条不渲染。 */}
-      {prevChapter || nextChapter || (canReroll && !showStarter) ? (
+      {/* 底部：上一章 / 本章动作（核账状态 + 核账 / 定稿，专注模式也在）/ 下一章。 */}
+      {!showStarter ? (
       <footer className="codex-desk-bar codex-desk-bar-bottom">
         {prevChapter ? (
           <button className="cd-nav prev" type="button" disabled={workspaceBusy} onClick={() => goToChapter(prevChapter.id)} title="上一章">
             <span>上一章</span>{chapterHeading(prevChapter.chapterNumber, prevChapter.title ?? "")}
           </button>
         ) : <span />}
-        {canReroll && !showStarter ? (
-          <button
-            className="cd-reroll"
-            disabled={rerolling}
-            onClick={() => props.onReroll?.()}
-            title={draftWordCount > 0 || draft.content.trim() ? "会保留当前版本，再生成 2–3 个候选版本供你挑选" : "生成第一版工作稿"}
-            type="button"
-          >
-            {rerolling ? "生成候选中…" : draftWordCount > 0 || draft.content.trim() ? "再来一版" : "写第一版"}
-          </button>
+        {activeTab === "draft" ? (
+          <PaperToolbar
+            progress={progress}
+            busy={workspaceBusy || draft.streaming === true}
+            onChapterButton={props.onChapterButton}
+            {...(canReroll && draft.content.trim() ? {
+              reroll: {
+                label: "再来一版",
+                running: rerolling,
+                onClick: () => props.onReroll?.(),
+                title: "会保留当前版本，再生成 2–3 个候选版本供你挑选",
+              },
+            } : {})}
+          />
         ) : <span />}
         {nextChapter ? (
           <button className="cd-nav next" type="button" disabled={workspaceBusy} onClick={() => goToChapter(nextChapter.id)} title="下一章">

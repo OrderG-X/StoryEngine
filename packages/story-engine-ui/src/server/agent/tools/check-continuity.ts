@@ -43,6 +43,7 @@ const outputSchema = z.object({
   dismissed: z.number().int().describe("作者以前标过「不是问题」、这次没再报的条数。"),
   reused: z.boolean().describe("这一章和前文都没改过，直接用的上次核账结果（没调模型）。"),
   summary: z.string().describe("给作者看的一句话结论。"),
+  headline: z.string().optional().describe("summary 去掉逐条问题、只剩结论那句。"),
 });
 
 export type CheckContinuityToolOutput = z.infer<typeof outputSchema>;
@@ -78,7 +79,7 @@ const inputSchema = z.object({
 export const checkContinuityTool = createTool({
   id: "check_continuity",
   description:
-    "核账：拿这一章对账本和全书前文，找前后对不上的地方，分「确定」「可能」两档、两边附原句。只读。转述先说确定的几处，可能的让作者看卡片。",
+    "核账：拿这一章对账本和全书前文，找前后对不上的地方，分「确定」「可能」两档、两边附原句。只读。问题清单作者在核账卡和稿纸划线上都看得到：转述只说一句结论（几处对不上），别逐条念。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

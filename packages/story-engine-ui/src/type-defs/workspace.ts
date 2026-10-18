@@ -75,8 +75,11 @@ export type MessageCard =
   | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData }
   /** 定稿回执（commit_apply 的入库报告）：这章改了哪些账。原样存，渲染侧防御解析。 */
   | { readonly type: "commit-report"; readonly report: unknown }
-  /** 核账（check_continuity）。 */
-  | { readonly type: "continuity"; readonly check: ContinuityCheckData }
+  /**
+   * 核账（check_continuity）。dismissed＝作者点过「不是问题」的条目（continuityItemKey），对话卡和稿纸划线共用；
+   * checkedVersion＝结果到时稿纸的版本号（核的是这一版），稿纸版本变了就是「核过后改过稿」。
+   */
+  | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null }
   /** 审稿（ai_review）问题清单。 */
   | { readonly type: "draft-review"; readonly review: DraftReviewView }
   /** 硬伤检查（quality_check）。 */

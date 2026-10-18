@@ -175,6 +175,44 @@
     .codex-desk-stage > .se-v2-paper{padding:36px 40px 48px;}
   }
 
+  /* ═══ 稿纸底下的本章动作条（P6）：核账状态一句 + 核账 / 定稿 ═══ */
+  .cd-tools{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-width:0;}
+  .cd-tools-status{font-size:13px;color:var(--muted);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;}
+  button.cd-tools-status{border:0;background:none;cursor:pointer;color:var(--danger);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px;}
+  button.cd-tools-status:hover{color:var(--text);}
+  .cd-tools-btn{
+    height:32px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);
+    color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap;
+  }
+  .cd-tools-btn:hover:not(:disabled){background:var(--hover);}
+  .cd-tools-btn.is-primary{border-color:transparent;background:var(--accent);color:var(--accent-ink);font-weight:500;}
+  .cd-tools-btn.is-primary:hover:not(:disabled){background:var(--accent-hi);}
+  .cd-tools-btn.is-quiet{border-color:transparent;background:transparent;color:var(--muted);}
+  .cd-tools-btn:disabled{opacity:.5;cursor:default;}
+
+  /* ═══ 核账划线（CSS Highlight API）+ 点开的小框 ═══ */
+  ::highlight(se-cc-sure){text-decoration:underline wavy;text-decoration-color:var(--danger);text-decoration-thickness:1.5px;text-underline-offset:5px;}
+  ::highlight(se-cc-maybe){text-decoration:underline dotted;text-decoration-color:var(--warn);text-decoration-thickness:2px;text-underline-offset:5px;}
+  .se-cc-pop{
+    position:absolute;z-index:31;width:360px;max-width:calc(100% - 24px);padding:12px 14px;
+    background:var(--surface-2);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);
+    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;font-size:13px;line-height:1.65;animation:se-fade .12s ease-out;
+  }
+  .se-cc-pop.is-sure{border-color:var(--danger);}
+  .se-cc-pop-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
+  .se-cc-pop-h b{color:var(--danger);font-weight:600;}
+  .se-cc-pop.is-maybe .se-cc-pop-h b{color:var(--warn);}
+  .se-cc-pop-quote{margin:0 0 4px;color:var(--text);}
+  .se-cc-pop-reason{margin:0 0 4px;color:var(--muted);}
+  .se-cc-pop-acts{display:flex;gap:8px;margin-top:8px;}
+  .se-cc-pop-acts button{
+    height:32px;padding:0 12px;border:1px solid var(--line-strong);border-radius:7px;background:var(--surface);
+    color:var(--text);font-size:13px;cursor:pointer;
+  }
+  .se-cc-pop-acts button:hover:not(:disabled){background:var(--hover);}
+  .se-cc-pop-acts button.is-primary{border-color:transparent;background:var(--text);color:var(--bg);}
+  .se-cc-pop-acts button:disabled{opacity:.5;cursor:default;}
+
   /* 修改预览里的「留意」是提醒不是报错：正文色 + 左侧提醒橙细线，不再整段红字 */
   .revision-preview-modal .rpm-risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
 }

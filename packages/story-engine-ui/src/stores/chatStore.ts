@@ -27,6 +27,10 @@ export interface ChatStore {
   undoClearChat: () => void;
   /** 把某条消息里的某条机器腔违规标为「已改」（追加进该消息机器腔卡的 fixedIds，去重）。 */
   markAiFlavorViolationFixed: (messageId: string, violationId: string) => void;
+  /** 核账卡上记下 / 撤回一条「不是问题」（对话卡和稿纸划线共用）。 */
+  setContinuityDismissed: (messageId: string, key: string, dismissed: boolean) => void;
+  /** 核账结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」）。 */
+  stampContinuityVersion: (messageId: string, version: string | null) => void;
   setSessions: (sessions: readonly ChatSessionIndexEntry[], activeSessionId?: string) => void;
   setActiveSessionId: (activeSessionId: string) => void;
   setActiveArchivedCount: (activeArchivedCount: number) => void;
@@ -62,6 +66,26 @@ export const useChatStore = create<ChatStore>((set) => ({
             (card.fixedIds ?? []).includes(violationId) ? card : { ...card, fixedIds: [...(card.fixedIds ?? []), violationId] }
           ))
           : message
+      )),
+    })),
+  setContinuityDismissed: (messageId, key, dismissed) =>
+    set((state) => ({
+      messages: state.messages.map((message) => (
+        message.id === messageId
+          ? updateCard(message, "continuity", (card) => {
+            const current = card.dismissed ?? [];
+            if (dismissed === current.includes(key)) return card;
+            const next = dismissed ? [...current, key] : current.filter((item) => item !== key);
+            const { dismissed: _old, ...rest } = card;
+            return next.length > 0 ? { ...rest, dismissed: next } : rest;
+          })
+          : message
+      )),
+    })),
+  stampContinuityVersion: (messageId, version) =>
+    set((state) => ({
+      messages: state.messages.map((message) => (
+        message.id === messageId ? updateCard(message, "continuity", (card) => ({ ...card, checkedVersion: version })) : message
       )),
     })),
   setSessions: (sessions, activeSessionId) => set({ sessions, ...(activeSessionId !== undefined ? { activeSessionId } : {}) }),

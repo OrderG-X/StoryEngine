@@ -24,6 +24,7 @@ export const USER_ACTION_TOOL_NAMES = [
   "ai_review",
   "quality_check",
   "manage_snapshots",
+  "revise_draft",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 /** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」）。 */
@@ -56,6 +57,11 @@ export type UserAction =
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
   /**
+   * 核账条目上的「改这处」「改掉这 N 处」（重构 P6）：服务端按原句逐处直接调 revise_draft（只改那一段），
+   * 不经模型判断——模型曾读完稿就说「改好了」而没调改稿工具。改不成（原句没找到 / 出现多次）照实说，给「让 AI 改」。
+   */
+  | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly ReviseFix[] }
+  /**
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
@@ -66,8 +72,17 @@ export type UserAction =
    */
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 
+/** 核账「改这处」的一处：本章原句（逐字锚点）+ 要改成什么样。 */
+export interface ReviseFix {
+  readonly targetText: string;
+  readonly revisionGoal: string;
+}
+
 /** 账本清单一次最多去掉多少条（防异常请求体）。 */
 const MAX_EXCLUDED = 500;
+/** 「改掉这 N 处」一次最多改几处、每处原句 / 目标多长（防异常请求体）。 */
+const MAX_REVISE_FIXES = 12;
+const MAX_REVISE_TEXT = 800;
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -125,6 +140,22 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   }
   if (toolName === "check_continuity") {
     return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
+  }
+  if (toolName === "revise_draft") {
+    if (!Array.isArray(record.fixes) || record.fixes.length === 0 || record.fixes.length > MAX_REVISE_FIXES) {
+      return { kind: "invalid", reason: "要改的地方不对。" };
+    }
+    const fixes: ReviseFix[] = [];
+    for (const raw of record.fixes) {
+      const fix = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+      const targetText = typeof fix.targetText === "string" ? fix.targetText.trim() : "";
+      const revisionGoal = typeof fix.revisionGoal === "string" ? fix.revisionGoal.trim() : "";
+      if (!targetText || !revisionGoal || targetText.length > MAX_REVISE_TEXT || revisionGoal.length > MAX_REVISE_TEXT) {
+        return { kind: "invalid", reason: "要改的地方不对。" };
+      }
+      fixes.push({ targetText, revisionGoal });
+    }
+    return { kind: "action", action: { toolName: "revise_draft", chapter, fixes } };
   }
   const previewToken = typeof record.previewToken === "string" && record.previewToken.trim()
     ? record.previewToken.trim()
@@ -298,6 +329,10 @@ export async function runUserAction(args: {
     await runUndoAction(args);
     return;
   }
+  if (action.toolName === "revise_draft") {
+    await runReviseFixesAction({ ...args, action });
+    return;
+  }
   const stamp = Date.now();
   const toolCallId = `user-action-${action.toolName}-${stamp}`;
   const emitText = (text: string): void => {
@@ -364,6 +399,8 @@ interface CheckContinuityLikeOutput {
   readonly ok?: unknown;
   readonly reused?: unknown;
   readonly summary?: unknown;
+  /** summary 去掉逐条问题的结论那句（重构 P6）。 */
+  readonly headline?: unknown;
   readonly sure?: readonly unknown[];
   readonly maybe?: readonly unknown[];
   /** 只在「还在读、这次没核」时有：核账员读到第 done / total 章（区分「还在读」和「出错」用这个字段，别解析 failures 文字）。 */
@@ -404,7 +441,9 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
       ? `第 ${action.chapter} 章这次没核成：核账员还在读前文（第 ${result.pending.done} / ${result.pending.total} 章）。`
       : `第 ${action.chapter} 章这次没核成。`
     : `第 ${action.chapter} 章核账做完了。`;
-  emitText(typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : fallbackSummary);
+  // 问题清单在核账卡和稿纸划线上（重构 P6），回话只说结论那句。
+  const said = [result?.headline, result?.summary].find((text): text is string => typeof text === "string" && text.trim().length > 0);
+  emitText(said ? said.trim() : fallbackSummary);
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
   // 没核成：下一步只给「再核一次」「先写下一章」——不给「预览定稿」（没核过不该推荐定稿）、
@@ -677,6 +716,70 @@ async function runReadOnlyChapterAction(args: Omit<Parameters<typeof runUserActi
   emitText(typeof result?.summary === "string" && result.summary.trim()
     ? humanizeToolNames(result.summary.trim())
     : result?.ok === false ? `第 ${action.chapter} 章的${label}这次没做成。` : `第 ${action.chapter} 章的${label}做完了，结果在上面。`);
+}
+
+/** 「改这处」按钮：逐处直接调 revise_draft（只改那一段），回执照实说改了几处、哪几处没改成。 */
+async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "revise_draft" }>;
+}): Promise<void> {
+  const { action } = args;
+  const stamp = Date.now();
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  const failed: { readonly fix: ReviseFix; readonly why: string }[] = [];
+  let applied = 0;
+  for (const [index, fix] of action.fixes.entries()) {
+    const toolCallId = `user-action-revise_draft-${stamp}-${index}`;
+    const input = { chapter: action.chapter, targetText: fix.targetText, revisionGoal: fix.revisionGoal, constraints: ["只改这一段，别的不动"] };
+    args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: input });
+    let output: unknown;
+    try {
+      output = await args.executeTool("revise_draft", input, args.requestContext);
+    } catch (error) {
+      const message = humanizeToolNames(args.scrubError(error));
+      args.sendEvent("tool-error", { toolCallId, toolName: "revise_draft", error: message, retryable: true });
+      failed.push({ fix, why: message });
+      continue;
+    }
+    args.sendEvent("tool-result", { toolCallId, toolName: "revise_draft", output });
+    const result = output as { readonly ok?: unknown; readonly applied?: unknown; readonly summary?: unknown } | undefined;
+    if (result?.ok === true && result.applied === true) {
+      applied += 1;
+    } else {
+      failed.push({ fix, why: typeof result?.summary === "string" && result.summary.trim() ? humanizeToolNames(result.summary.trim()) : "没写进工作稿" });
+    }
+  }
+  const total = action.fixes.length;
+  const done = applied === 0 ? "" : total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`;
+  const notDone = failed.length === 0
+    ? ""
+    : total === 1 ? `这一处没改成：${failed[0]!.why}` : `${failed.length} 处没改成：${failed[0]!.why}`;
+  emitText(`${done}${notDone}`);
+  const choices: NextStepChoice[] = [
+    ...(failed.length > 0 ? [{
+      label: "让 AI 改",
+      intent: `${failed.map(({ fix }) => `把第 ${action.chapter} 章里「${fix.targetText}」这处改掉：${fix.revisionGoal}。`).join("")}只改这几处，别的不动。`,
+      recommended: true,
+    }] : []),
+    ...(applied > 0 ? [{
+      label: "再核一遍",
+      intent: `重新核第 ${action.chapter} 章的账`,
+      ...(failed.length === 0 ? { recommended: true } : {}),
+      action: { toolName: "check_continuity" as const, chapter: action.chapter },
+    }] : []),
+    { label: "我自己改", intent: "我自己改，先放着" },
+  ];
+  const nextCallId = `user-action-next-${stamp}`;
+  args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
+  args.sendEvent("tool-result", {
+    toolCallId: nextCallId,
+    toolName: "suggest_next_steps",
+    output: { ok: true, question: applied > 0 ? "改好了，接下来？" : "没改成，接下来？", choices },
+  });
 }
 
 /** 「撤销上一步」按钮：同对话里的撤销（manage_snapshots op=undo，优先整回合回退），回执照实说。 */

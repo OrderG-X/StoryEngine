@@ -41,5 +41,9 @@ export function userActionChoiceText(action: import("../api/agentChatClient.js")
       return `对第 ${action.chapter} 章做硬伤检查`;
     case "undo":
       return "撤销上一步";
+    case "revise_draft":
+      return action.fixes.length === 1
+        ? `改第 ${action.chapter} 章这一处：「${action.fixes[0]!.targetText}」`
+        : `改掉第 ${action.chapter} 章这 ${action.fixes.length} 处`;
   }
 }

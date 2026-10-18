@@ -315,6 +315,18 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
     ]);
   });
 
+  it("核账卡带「不是问题」和核的稿纸版本（重构 P6）：读回；坏值丢掉", () => {
+    const check = { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] };
+    const [kept, nulled, junk] = readWorkspaceMessages([
+      { id: "c1", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: ["a#b", "", 3], checkedVersion: "abc123" }] },
+      { id: "c2", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: [], checkedVersion: null }] },
+      { id: "c3", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: "a#b", checkedVersion: 7 }] },
+    ]);
+    expect(kept.cards).toEqual([{ type: "continuity", check, dismissed: ["a#b"], checkedVersion: "abc123" }]);
+    expect(nulled.cards).toEqual([{ type: "continuity", check, checkedVersion: null }]);
+    expect(junk.cards).toEqual([{ type: "continuity", check }]);
+  });
+
   it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {
     const [message] = readWorkspaceMessages([{
       id: "assistant-legacy-cards",

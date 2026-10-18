@@ -33,6 +33,7 @@ import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
+import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -624,6 +625,16 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
       ) => Promise<unknown>;
       return execute(input, { requestContext });
     }
+    case "revise_draft": {
+      const execute = reviseDraftTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    default:
+      // 白名单里加了动作却没在这接上：如实报错，绝不静默返回空（重构 P6 踩过：改这处 0 毫秒「没改成」）。
+      throw new Error(`这个操作还没接上（${toolName satisfies never}）。`);
   }
 };
 

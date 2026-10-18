@@ -49,6 +49,15 @@ describe("locateTargetSpan B4 改写定位（空白归一兜底）", () => {
   it("真的不在草稿里 → not_found（诚实拒绝、不乱猜）", () => {
     expect(locateTargetSpan(draft, "这段根本不存在于草稿。")).toBe("not_found");
   });
+
+  it("重构 P6：模型用「……」连起两截（可跨段）→ 取第一截开头到最后一截结尾", () => {
+    const r = locateTargetSpan(draft, "在这里。……抬起头，看向");
+    const span = r as { start: number; end: number };
+    expect(draft.slice(span.start, span.end)).toBe("在这里。\n\n他缓缓抬起头，看向");
+    // 截的顺序反了 / 某截不在稿里 → not_found；第一截出现多次 → ambiguous。
+    expect(locateTargetSpan(draft, "看向窗外……第一段")).toBe("not_found");
+    expect(locateTargetSpan("重复句。中间。重复句。尾巴。", "重复句。……尾巴")).toBe("ambiguous");
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────

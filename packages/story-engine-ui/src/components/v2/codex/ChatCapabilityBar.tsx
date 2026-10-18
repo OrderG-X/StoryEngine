@@ -100,7 +100,7 @@ export function contextActionsForView(view: "desk" | "library" | "history", cat:
   return keys.map(capabilityByKey).filter((action): action is CapabilityAction => Boolean(action));
 }
 
-export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, leading = [], leadingOnly = false }: {
+export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, leading = [], leadingOnly = false, variant = "bar" }: {
   readonly onSendMessage?: (content: string) => void;
   /** 固定动作按钮（带 button 的）点了走这里：直接发结构化动作。 */
   readonly onChapterButton?: (button: ChapterButton) => void;
@@ -109,6 +109,8 @@ export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, le
   readonly leadingOnly?: boolean;
   /** 按本章进度派生的工具（ChapterToolRail.railActionsForFlow）：排在最前、第一个高亮；常驻快捷里同 key 的去重。 */
   readonly leading?: readonly CapabilityAction[];
+  /** menu（重构 P6 写作台）：只出一个「更多」小按钮放在输入框左边，点开在上方弹出全部能力；不占一整条。 */
+  readonly variant?: "bar" | "menu";
 }) {
   const [open, setOpen] = useState(false);
   if (!onSendMessage) return null;
@@ -119,6 +121,48 @@ export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, le
     else onSendMessage(action.intent);
     setOpen(false);
   };
+
+  const panel = (
+    <div className={`cap-panel${variant === "menu" ? " is-pop" : ""}`}>
+      {CAPABILITY_GROUPS.map((group) => (
+        <div key={group.title} className="cap-group">
+          <span className="cap-group-title">{group.title}</span>
+          <div className="cap-group-actions">
+            {group.actions.map((action) => (
+              <button
+                key={action.key}
+                type="button"
+                className="cap-btn"
+                disabled={disabled}
+                title={action.intent}
+                onClick={() => send(action)}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  if (variant === "menu") {
+    return (
+      <div className="cap-menu">
+        <button
+          type="button"
+          className="cap-menu-btn"
+          aria-expanded={open}
+          aria-label="更多能力"
+          title="内容审阅、检查机器腔、补资料、整理线索……"
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? "收起" : "更多"}
+        </button>
+        {open ? panel : null}
+      </div>
+    );
+  }
 
   return (
     <div className="cap-bar" role="group" aria-label="可用能力">
@@ -157,29 +201,7 @@ export function ChatCapabilityBar({ onSendMessage, onChapterButton, disabled, le
           {open ? "收起" : "更多"}
         </button>
       </div>
-      {open ? (
-        <div className="cap-panel">
-          {CAPABILITY_GROUPS.map((group) => (
-            <div key={group.title} className="cap-group">
-              <span className="cap-group-title">{group.title}</span>
-              <div className="cap-group-actions">
-                {group.actions.map((action) => (
-                  <button
-                    key={action.key}
-                    type="button"
-                    className="cap-btn"
-                    disabled={disabled}
-                    title={action.intent}
-                    onClick={() => send(action)}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {open ? panel : null}
     </div>
   );
 }

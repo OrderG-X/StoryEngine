@@ -58,8 +58,17 @@ function readMessageCard(value: unknown): MessageCard | undefined {
         : undefined;
     case "draft-review":
       return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView } : undefined;
-    case "continuity":
-      return cardFromContinuity(value.check);
+    case "continuity": {
+      const card = cardFromContinuity(value.check);
+      if (!card || card.type !== "continuity") return undefined;
+      const dismissed = readStringList(Array.isArray(value.dismissed) ? value.dismissed : []).slice(0, 200);
+      const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+      return {
+        ...card,
+        ...(dismissed.length > 0 ? { dismissed } : {}),
+        ...(checkedVersion !== undefined ? { checkedVersion } : {}),
+      };
+    }
     case "quality":
       return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport } : undefined;
     case "commit-preview":

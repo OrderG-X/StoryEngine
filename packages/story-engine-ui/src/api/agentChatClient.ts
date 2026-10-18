@@ -40,6 +40,7 @@ export type AgentUserAction =
   | { readonly toolName: "ai_review"; readonly chapter: number }
   | { readonly toolName: "quality_check"; readonly chapter: number }
   | { readonly toolName: "undo" }
+  | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 

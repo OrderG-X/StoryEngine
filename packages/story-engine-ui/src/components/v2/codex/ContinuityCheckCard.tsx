@@ -12,6 +12,8 @@
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
+import { continuityItemKey } from "../../../workspace/chapterProgress.js";
+import type { AgentUserAction } from "../../../api/agentChatClient.js";
 
 type ContinuityCheck = ContinuityCheckData;
 type Item = ContinuityCheck["sure"][number];
@@ -52,6 +54,28 @@ export function buildContinuityFixAllIntent(
     : `${entries}只改这几处，别的不动。`;
 }
 
+/**
+ * 能由按钮直接改的条目（重构 P6，服务端逐处调 revise_draft，不经模型）：错在这一章的。
+ * 错在前文那章的（多半已定稿、没有工作稿）照旧交给 AI。原句是「A……B」拼的也能直接改（改稿定位认省略号）。
+ */
+export function canFixDirectly(chapter: number, item: Item): boolean {
+  return fixChapterOf(chapter, item) === chapter;
+}
+
+/** 「改这处」的结构化动作：每处 = 本章原句 + 要和哪句对上。 */
+export function continuityFixAction(chapter: number, items: readonly Item[]): AgentUserAction {
+  return {
+    toolName: "revise_draft",
+    chapter,
+    fixes: items.map((item) => {
+      const where = item.againstSetting
+        ? `设定本${item.againstSetting.label}`
+        : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
+      return { targetText: item.quote, revisionGoal: `和${where}「${item.earlierQuote}」对上${item.reason ? `（${item.reason}）` : ""}` };
+    }),
+  };
+}
+
 function ItemView({ chapter, item, onRevise, onDismiss }: {
   readonly chapter: number;
   readonly item: Item;
@@ -74,30 +98,45 @@ function ItemView({ chapter, item, onRevise, onDismiss }: {
   );
 }
 
-export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
+export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], onRevise, onFixAction, onDismiss }: {
   readonly check: ContinuityCheck;
+  /** 作者点过「不是问题」的条目键（存在卡上，稿纸划线共用一份）。 */
+  readonly dismissed?: readonly string[];
+  /** 交给 AI 改（发一句只改这几处的话）：错在前文那章、原句不逐字的走这条。 */
   readonly onRevise?: (intent: string) => void;
-  /** 记下 / 撤回「不是问题」；返回是否存成。缺省只在本卡上划掉。 */
+  /** 按钮直接改（结构化动作，不经模型）：能直接改的条目走这条。 */
+  readonly onFixAction?: (action: AgentUserAction) => void;
+  /** 记下 / 撤回「不是问题」；返回是否存成。 */
   readonly onDismiss?: (item: Item, undo: boolean) => Promise<boolean>;
 }) {
-  const [dismissed, setDismissed] = useState<readonly Item[]>([]);
   const [unsaved, setUnsaved] = useState(false);
   const [showMaybe, setShowMaybe] = useState(false);
-  const keyOf = (item: Item) => `${item.quote}#${item.earlierQuote}`;
-  const dismissedKeys = new Set(dismissed.map(keyOf));
+  const keyOf = continuityItemKey;
+  const dismissedKeys = new Set(dismissedKeysList);
+  const allItems = [...check.sure, ...check.maybe];
+  const dismissed = dismissedKeysList
+    .map((key) => allItems.find((item) => keyOf(item) === key))
+    .filter((item): item is Item => item !== undefined);
   const sure = check.sure.filter((item) => !dismissedKeys.has(keyOf(item)));
   const maybe = check.maybe.filter((item) => !dismissedKeys.has(keyOf(item)));
   const dismiss = (item: Item) => {
-    setDismissed((current) => [...current, item]);
     if (onDismiss) void onDismiss(item, false).then((saved) => { if (!saved) setUnsaved(true); });
   };
   const undoLast = () => {
     const last = dismissed.at(-1);
     if (!last) return;
-    setDismissed((current) => current.slice(0, -1));
     if (onDismiss) void onDismiss(last, true);
   };
-  const revise = onRevise ? (item: Item) => onRevise(buildContinuityFixIntent(check.chapter, item)) : undefined;
+  const reviseOne = (item: Item): void => {
+    if (onFixAction && canFixDirectly(check.chapter, item)) onFixAction(continuityFixAction(check.chapter, [item]));
+    else onRevise?.(buildContinuityFixIntent(check.chapter, item));
+  };
+  const canRevise = (item: Item): boolean => Boolean(onRevise) || (Boolean(onFixAction) && canFixDirectly(check.chapter, item));
+  const reviseAll = (): void => {
+    if (onFixAction && sure.every((item) => canFixDirectly(check.chapter, item))) onFixAction(continuityFixAction(check.chapter, sure));
+    else onRevise?.(buildContinuityFixAllIntent(check.chapter, sure, dismissed.length));
+  };
+  const canReviseAll = Boolean(onRevise) || (Boolean(onFixAction) && sure.every((item) => canFixDirectly(check.chapter, item)));
   const total = sure.length + maybe.length;
   return (
     <StepCard
@@ -108,11 +147,11 @@ export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
     >
       {total === 0 ? <p className="drc-summary">拿这一章对了前文，没发现前后对不上的地方。</p> : null}
       {/* 主按钮（R4.5）：改掉还没划掉的「确定」N 处，文字随「不是问题」实时变；intent 现拼、圈死范围。 */}
-      {sure.length > 0 && onRevise ? (
+      {sure.length > 0 && canReviseAll ? (
         <button
           type="button"
           className="chip drc-fix-all"
-          onClick={() => onRevise(buildContinuityFixAllIntent(check.chapter, sure, dismissed.length))}
+          onClick={reviseAll}
         >
           改掉这 {sure.length} 处
         </button>
@@ -120,7 +159,7 @@ export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
       {sure.length > 0 ? (
         <ul className="drc-list">
           {sure.map((item) => (
-            <ItemView key={keyOf(item)} chapter={check.chapter} item={item} onRevise={revise} onDismiss={() => dismiss(item)} />
+            <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
           ))}
         </ul>
       ) : null}
@@ -132,7 +171,7 @@ export function ContinuityCheckCard({ check, onRevise, onDismiss }: {
           {showMaybe ? (
             <ul className="drc-list">
               {maybe.map((item) => (
-                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} onRevise={revise} onDismiss={() => dismiss(item)} />
+                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
               ))}
             </ul>
           ) : null}

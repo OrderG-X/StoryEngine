@@ -402,6 +402,10 @@ export function useChat(params: UseChatParams): UseChatResult {
                 output: info,
               });
               if (info.toolName === "generate_draft") endStreaming();
+              // 核账结果记下核的是稿纸哪一版（回合开头存过稿，这时的版本就是服务端读到的那版）；之后稿子变了就显示「核过后改过稿」。
+              if (info.toolName === "check_continuity" && !chapterMismatch) {
+                useChatStore.getState().stampContinuityVersion(assistantMsgId, useDraftStore.getState().baseVersion);
+              }
               if (chapterMismatch) {
                 // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                 if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
