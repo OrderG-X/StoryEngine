@@ -6,7 +6,7 @@
  * 输出宽进归一（normalizeChapterPlan）+ reconcileStoryDay 天数归一，落盘 drafts/plans/。
  * 强在：窗口里是读过的全书原文和它自己的笔记（主线 / 想要什么 / 钩子 / 节奏），不靠拼一包检索材料。
  */
-import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "@actalk/story-engine";
+import { normalizeChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 import { resolveConfiguredChatModel, streamChatModelToText, ThinkingTooLongError } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import { normalize, readEarlierChapters } from "../agent/continuity-v2/check-chapter.js";

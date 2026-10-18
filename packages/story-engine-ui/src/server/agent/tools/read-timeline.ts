@@ -11,7 +11,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";
 
-import { readTimelineEvents } from "@actalk/story-engine";
+import { readTimelineEvents } from "../../book/project-store.js";
 import { readCharacterNameById, resolveEntityLabels, resolveSemanticSummaryLabels } from "../presence/entity-labels.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 

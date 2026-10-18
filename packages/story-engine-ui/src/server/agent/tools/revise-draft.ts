@@ -12,12 +12,9 @@
  *   output 不带 snapshotId。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
-import {
-  buildStateOverview,
-  stripMarkdownEmphasis,
-  type DraftRevisionPreview,
-  type StateOverview,
-} from "@actalk/story-engine";
+import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
+import { stripMarkdownEmphasis } from "../../writing/fast-draft-writer.js";
+import { type DraftRevisionPreview } from "../../writing/draft-revision.js";
 import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";

@@ -11,11 +11,13 @@ import {
   readCharacterBible,
   readLocationBible,
   readWorldBible,
+} from "../book/project-store.js";
+import {
   type AssetItem,
   type CharacterBibleEntry,
   type LocationBibleEntry,
   type WorldBible,
-} from "@actalk/story-engine";
+} from "../book/types.js";
 import { containsQuote, normalize } from "../agent/continuity-v2/check-chapter.js";
 
 /** 一类设定（人物卡 / 地点 / 资产 / 世界规则）：label 进回执，text 是拼好的原文摘要（核对引文按它来）。 */

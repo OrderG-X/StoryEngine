@@ -7,7 +7,8 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildStateOverview, createStoryProject, toSafeCharacterId } from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
+import { createStoryProject, toSafeCharacterId } from "../book/project-store.js";
 
 import { readFactionGoals, summarizeStateOverview } from "./overview-summary.js";
 

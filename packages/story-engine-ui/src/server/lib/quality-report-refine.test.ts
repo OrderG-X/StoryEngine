@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CommitQualityIssue, CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityIssue, CommitQualityReport } from "../writing/commit-quality-check.js";
 import { refineQualityReport } from "./quality-report-refine.js";
 
 const report = (issues: readonly CommitQualityIssue[]): CommitQualityReport => ({

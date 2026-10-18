@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { createStoryProject, recoverProjectCommitTransactions } from "@actalk/story-engine";
+import { createStoryProject } from "../book/project-store.js";
+import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
 import { withBookLock } from "@actalk/story-core";
 import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {

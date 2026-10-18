@@ -9,7 +9,7 @@
  * 最前面先收老版本中途崩溃留下的老定稿链事务残留（`.story-engine-tx/`，没有就是一次 lstat）：
  * 读路径都不再收它（重构 P7），开书是唯一入口。
  */
-import { recoverProjectCommitTransactions } from "@actalk/story-engine";
+import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
 import { bookImport, listChapterTexts, readHead, runCommand, type BookImportResult } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror, type MirrorSyncResult } from "./sync.js";
 

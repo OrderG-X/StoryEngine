@@ -1,7 +1,7 @@
 /**
  * parity-kit — routes↔tools 双轨对拍测试的公共基建（非测试文件，无断言）。
  *
- * 用途：同一真引擎（@actalk/story-engine 不打 mock）+ 同一 fixture，分别驱动
+ * 用途：同一套真实读写（server/book、server/writing 不打 mock）+ 同一 fixture，分别驱动
  *   - HTTP 侧：callRoute(registerXxxRoutes, ...)（伪 req/res，见 routes/test-helpers.ts）
  *   - 工具侧：driveToolExecute(xxxTool, input, ...)（Mastra execute + buildProjectRequestContext）
  * 然后断言语义等价（ok 契约 / 落盘状态 / 关键输出字段），不做写盘字节对比以外的实现绑定。
@@ -27,7 +27,8 @@
  */
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createStoryProject, countDraftChineseCharacters } from "@actalk/story-engine";
+import { createStoryProject } from "../book/project-store.js";
+import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";

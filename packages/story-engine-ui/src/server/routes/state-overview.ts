@@ -1,7 +1,7 @@
 /**
  * GET /api/state-overview — builds a full state overview for a project.
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
 import {
   guardProjectPath,
   parseOptionalPositiveInteger,

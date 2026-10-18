@@ -30,14 +30,13 @@
  */
 import {
   buildDraftAIReviewPrompt,
-  buildStateOverview,
-  buildWritingContextPack,
-  checkDraftBeforeCommit,
   fallbackDraftAIReviewReport,
   parseDraftAIReviewReport,
-  type CommitQualityReport,
   type DraftAIReviewReport,
-} from "@actalk/story-engine";
+} from "../writing/draft-ai-review.js";
+import { buildStateOverview } from "../book/state-overview.js";
+import { buildWritingContextPack } from "../writing/writing-context-pack.js";
+import { checkDraftBeforeCommit, type CommitQualityReport } from "../writing/commit-quality-check.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText, type ResolvedChatModel } from "../lib/llm-client.js";
 import { countTextWords } from "../../utils/textUtils.js";

@@ -7,7 +7,7 @@
  *
  * P0-4 语义去重委托 shared/rule-semantic-dedup（面板与写入共用）。
  */
-import { dedupeStringList } from "@actalk/story-engine";
+import { dedupeStringList } from "../book/canonical-resolvers.js";
 
 export {
   normalizeRuleKey,

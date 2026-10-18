@@ -27,7 +27,6 @@ const require = createRequire(join(repoRoot, "packages", "story-engine-ui", "pac
 const ts = require("typescript");
 
 const SCAN_ROOTS = [
-  "packages/story-engine/src",
   "packages/story-engine-ui/src",
   "packages/story-core/src",
 ];

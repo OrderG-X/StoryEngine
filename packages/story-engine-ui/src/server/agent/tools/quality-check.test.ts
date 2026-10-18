@@ -6,11 +6,11 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityReport } from "../../writing/commit-quality-check.js";
 
 // mock judgeDraftQualityWithModel so execute() path never touches the network.
 vi.mock("../../lib/quality-judge.js", () => ({

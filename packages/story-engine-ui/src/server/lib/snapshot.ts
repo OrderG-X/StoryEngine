@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { recoverProjectCommitTransactions } from "@actalk/story-engine";
+import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
 import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror } from "../legacy-mirror/sync.js";
 

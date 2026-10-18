@@ -3,9 +3,9 @@
  *
  * 定位（用户拍板 2026-06-25·与 builtin-anti-ai-rules 同源）：这套确定性闸是**我们的内置规则**，
  * 代码常量、用户看不见删不掉、只我们改常量升级（开源后谁要改自己 fork）。
- * 检测机器（抽整句/同句去重/频率闸/排序/id 形状）已整体下沉引擎 detectAiFlavorViolations
- * （@actalk/story-engine ai-flavor-detection），本模块只剩规则数据 + 薄封装——
- * 语义与旧本地实现逐点一致（引擎头注释列了逐点对齐清单，改规则数据时别动机器语义）。
+ * 检测机器（抽整句/同句去重/频率闸/排序/id 形状）在核心 detectAiFlavorViolations
+ * （@actalk/story-core text/ai-flavor-detection），本模块只剩规则数据 + 薄封装——
+ * 语义与旧本地实现逐点一致（核心那份头注释列了逐点对齐清单，改规则数据时别动机器语义）。
  *
  * 设计（治「软误报噪音」铁律）：确定性层**只收跨源公认、低误报**的硬毛病——先正则高精度命中，
  * 再叫 LLM 补主观判断（见 ai-flavor-check.ts 的 runAiFlavorCheck 合并）。
@@ -21,11 +21,11 @@ import {
   type AiFlavorFrequencyGateRule,
   type AiFlavorPatternRule,
   type AiFlavorRule,
-} from "@actalk/story-engine";
+} from "@actalk/story-core";
 import type { AiFlavorViolation } from "./ai-flavor-check.js";
 
 /** 兼容旧导出名：规则类型就是引擎的 AiFlavorRule（判别联合：pattern / frequency_gate）。 */
-export type { AiFlavorRule } from "@actalk/story-engine";
+export type { AiFlavorRule } from "@actalk/story-core";
 
 /**
  * 内置确定性规则集（pattern 类）。每条都是跨源公认、低误报的硬毛病；severity 体现"该不该硬改"。

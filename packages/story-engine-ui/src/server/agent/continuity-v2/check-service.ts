@@ -5,7 +5,9 @@
  * 核账员三遍（跟读窗口，带 A 自复核 + F 时间线只进自复核）、同一份核账记忆和「不是问题」批注。
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
-import { readFactLedgerStrict, readStoryTimeline, type FactEntry } from "@actalk/story-engine";
+import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
+import { readStoryTimeline } from "../../book/story-timeline.js";
+import { type FactEntry } from "../../book/types.js";
 import {
   callConfiguredBrainModel,
   catchUpReaders,

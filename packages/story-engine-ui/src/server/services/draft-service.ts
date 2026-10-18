@@ -59,30 +59,33 @@ import { readFile } from "node:fs/promises";
 import { withBookLock } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
-  buildDraftLengthReport,
-  buildStateOverview,
-  checkDraftBeatFidelity,
-  countDraftChineseCharacters,
   detectAiFlavorViolations,
-  readWritingRules,
-  resolveDraftLengthTarget,
-  resolveDraftMaxOutputTokens,
-  runFastDraft,
-  trimDraftBodyToLengthTarget,
   type AiFlavorReport,
   type AiFlavorRule,
   type AiFlavorSeverity,
   type AiFlavorViolation,
-  type ChapterPlan,
+} from "@actalk/story-core";
+import {
+  buildDraftLengthReport,
+  countDraftChineseCharacters,
+  resolveDraftLengthTarget,
+  resolveDraftMaxOutputTokens,
+  trimDraftBodyToLengthTarget,
   type DraftLengthReport,
   type DraftLengthStatus,
   type DraftLengthTarget,
   type DraftLengthTargetSource,
+} from "../writing/draft-length-control.js";
+import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
+import { checkDraftBeatFidelity } from "@actalk/story-core";
+import { readWritingRules } from "../book/project-store.js";
+import {
+  runFastDraft,
   type FastDraftInput,
   type FastDraftReport,
-  type StateOverview,
   type WriterClient,
-} from "@actalk/story-engine";
+} from "../writing/fast-draft-writer.js";
+import { type ChapterPlan } from "../book/chapter-plan.js";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
 import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";

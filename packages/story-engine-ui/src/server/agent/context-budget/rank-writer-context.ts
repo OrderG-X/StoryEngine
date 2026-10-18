@@ -1,4 +1,4 @@
-import { type WriterContextEnvelope, estimateTokens } from "@actalk/story-engine";
+import { type WriterContextEnvelope, estimateTokens } from "../../writing/context-gateway.js";
 
 // 超预算时整段让出的顺序。远期摘要（timeline_earlier_summary）原来不在表里、永远不让，
 // 超了先丢的却是近几章事件——远的留着、近的丢掉，顺序反了（2026-10-10 引擎升级第 4 期）。

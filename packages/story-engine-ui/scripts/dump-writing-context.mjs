@@ -8,7 +8,7 @@
  * writingRules/continuityFocus.establishedFacts）+ trace token（裁剪前/后）+ renderFastDraftPromptText 长度
  * + readFactLedger 头尾。--ranked 套 makeWriterRankContext({tokenBudget:resolveWriterTokenBudget()}) 重算裁剪后 token。
  *
- * 引擎函数（buildWriterContext/renderFastDraftPromptText/readFactLedger）走 @actalk/story-engine dist；
+ * 老引擎函数（buildWriterContext/renderFastDraftPromptText/readFactLedger）已搬进 src/server/writing、src/server/book，经 r3-ts-hooks 动态 import；
  * 裁剪用 makeWriterRankContext/resolveWriterTokenBudget 是 UI 侧 `.ts` → 经 r3-ts-hooks 动态 import。
  */
 import { register } from "node:module";
@@ -16,7 +16,9 @@ import { pathToFileURL } from "node:url";
 
 register("./r3-ts-hooks.mjs", import.meta.url);
 
-const { buildWriterContext, renderFastDraftPromptText, readFactLedger } = await import("@actalk/story-engine");
+const { buildWriterContext } = await import("../src/server/writing/context-gateway.ts");
+const { renderFastDraftPromptText } = await import("../src/server/writing/prompt-cache-diagnostics.ts");
+const { readFactLedger } = await import("../src/server/book/project-store.ts");
 const { makeWriterRankContext, resolveWriterTokenBudget } = await import(
   "../src/server/agent/context-budget/rank-writer-context.ts"
 );

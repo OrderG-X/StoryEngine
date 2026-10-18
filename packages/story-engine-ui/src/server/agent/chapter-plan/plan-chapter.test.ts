@@ -5,7 +5,8 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStoryProject, normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
+import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../../book/chapter-plan.js";
 import { describe, expect, it } from "vitest";
 import type { BrainCallModel } from "../../editorial/reader-window.js";
 import { collectPlanMaterials, planMaterialBlocks } from "./plan-chapter.js";

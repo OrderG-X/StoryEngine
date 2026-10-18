@@ -6,10 +6,8 @@ import {
   readThreadPool,
   toSafeCharacterId,
   isPlaceholderCharacterName,
-  type ArcGoal,
-  type CharacterBibleEntry,
-  type NarrativeThread,
-} from "@actalk/story-engine";
+} from "../../book/project-store.js";
+import { type ArcGoal, type CharacterBibleEntry, type NarrativeThread } from "../../book/types.js";
 
 import { readAliasTable, type AliasTable } from "../alias-generator/alias-generator.js";
 import { readRecentPresentCharacterNames } from "./delta-present-names.js";

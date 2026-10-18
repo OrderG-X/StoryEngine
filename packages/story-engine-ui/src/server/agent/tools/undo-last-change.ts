@@ -16,7 +16,7 @@
  * 首个快照」（turnSnapshots[0]）时优先整回合回退；带不了/锚点失效时按原逻辑撤最后一个工具步，
  * 回执明说「上一回合改了 N 处，这次只退回了最后 1 处」，绝不留给模型编「都撤干净了」的空间。
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";

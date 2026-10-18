@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { access, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../book/project-store.js";
 import { projectBook } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

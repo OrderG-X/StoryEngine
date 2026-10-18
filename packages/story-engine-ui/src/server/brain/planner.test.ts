@@ -2,7 +2,7 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeChapterPlan, readChapterPlan } from "@actalk/story-engine";
+import { normalizeChapterPlan, readChapterPlan } from "../book/chapter-plan.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { readReadersCatchUpStatus, startReaderCatchUp } from "./catch-up.js";
 import {

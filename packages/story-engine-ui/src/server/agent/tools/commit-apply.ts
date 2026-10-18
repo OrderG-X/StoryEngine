@@ -7,7 +7,7 @@
  * 授权：只有作者点了「确认定稿」按钮（结构化动作）才真写盘；模型自己调只会给作者出一个确认按钮。
  * 定稿前由 writeTool 存撤销点。确认时不再调模型——要记的账在预览时就交齐了。
  */
-import { buildStateOverview, type StateOverview } from "@actalk/story-engine";
+import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
 import { nameKey, project, readBookSnapshot, readChapterLedger } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";

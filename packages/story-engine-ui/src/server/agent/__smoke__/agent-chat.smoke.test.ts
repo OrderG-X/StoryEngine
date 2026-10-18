@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import type { ModelMessage } from "ai";
 import { describe, it, expect, afterAll } from "vitest";
 

@@ -28,8 +28,8 @@
  * - 字数透明：低于目标字数下限不拦也不藏——draftLength 进输出、summary 打 ⚠ 标注，不假装字数达标。
  */
 import { readFile } from "node:fs/promises";
-import { buildStateOverview, type StateOverview } from "@actalk/story-engine";
-import type { WriterClient } from "@actalk/story-engine";
+import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
+import type { WriterClient } from "../../writing/fast-draft-writer.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";

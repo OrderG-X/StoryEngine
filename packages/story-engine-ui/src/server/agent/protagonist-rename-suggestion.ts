@@ -12,7 +12,8 @@
  * 不再数出场次数（第 1 章视角是林小满、宋伯名字出现再多，也是建议林小满）。
  * 一章都没有视角声明就不给建议，绝不退回数出场次数（老书老数据没有这字段就没有建议）。
  */
-import { readCharacterBible, isPlaceholderCharacterName, type CharacterBibleEntry } from "@actalk/story-engine";
+import { readCharacterBible, isPlaceholderCharacterName } from "../book/project-store.js";
+import { type CharacterBibleEntry } from "../book/types.js";
 
 import { readViewpointChapterCounts } from "./presence/delta-present-names.js";
 

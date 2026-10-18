@@ -11,10 +11,8 @@
  * 落盘前 400 诚实拒；解析不到（草稿在预览后已大变）同样 400 诚实拒。resolvedTarget 由服务端解析，
  * 不回传、不信客户端字符串（裸 resolvedTarget 回传可伪造：传「的」→ 恒拒一切修订）。
  */
-import {
-  buildStateOverview,
-  countDraftWords,
-} from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
+import { countDraftWords } from "../writing/draft-revision.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,

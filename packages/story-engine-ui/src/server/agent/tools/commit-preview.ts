@@ -7,7 +7,7 @@
  * 不写真相；预览票只是缓存（`ledger/.preview/`，丢了重新预览）。清单投影成「定稿预览」卡认的 ledgerChecklist：
  * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
-import { checkDraftHardGates } from "@actalk/story-engine";
+import { checkDraftHardGates } from "../../writing/commit-quality-check.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";

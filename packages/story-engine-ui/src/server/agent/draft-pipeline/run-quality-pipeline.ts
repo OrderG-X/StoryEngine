@@ -7,11 +7,8 @@
  * 补字 40 次、单回合思考 11 万字）。任何一步没成都原稿不动 + 如实说明，绝不影响出稿本身的 ok。
  * 真改了正文：先建快照（可撤销回首稿）再走 draft.write 写盘，两步在同一把书锁里（防与定稿、撤销交错）。
  */
-import {
-  countDraftChineseCharacters,
-  type ChapterPlan,
-  type DraftLengthTarget,
-} from "@actalk/story-engine";
+import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
+import { type ChapterPlan } from "../../book/chapter-plan.js";
 import { withBookLock } from "@actalk/story-core";
 import { writeAiDraft } from "../../lib/ai-draft-write.js";
 import { snapshotBeforeDraftOverwrite } from "../tools/snapshot-on-draft-overwrite.js";

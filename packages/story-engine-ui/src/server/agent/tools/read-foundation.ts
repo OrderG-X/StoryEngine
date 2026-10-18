@@ -6,13 +6,13 @@
  *
  * 读类工具不建快照、不带 snapshotId；不动磁盘故 refreshScope 省略（前端无需刷新面板）。
  */
+import { buildFoundationGapReport } from "../../book/foundation-gap-assistant.js";
 import {
-  buildFoundationGapReport,
   readAssetLedger,
   readCharacterBible,
   readCharacterState,
   readLocationBible,
-} from "@actalk/story-engine";
+} from "../../book/project-store.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";

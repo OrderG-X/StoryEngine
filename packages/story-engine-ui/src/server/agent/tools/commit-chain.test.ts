@@ -4,7 +4,7 @@
 // 模型用假的：要笔记交笔记、要账单交给定的那份；定稿后的编辑部预热 mock 掉，不连网。
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import { projectBook, readChapterLedger, readHead } from "@actalk/story-core";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

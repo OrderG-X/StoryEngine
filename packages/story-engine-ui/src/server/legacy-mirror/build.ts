@@ -15,12 +15,10 @@ import type {
   HookPool,
   NarrativeThread,
   StoryCalendar,
-  StoryTimeline,
-  TimelineEntry,
   TimelineEvent,
-  TimelineSource,
   ThreadPool,
-} from "@actalk/story-engine";
+} from "../book/types.js";
+import type { StoryTimeline, TimelineEntry, TimelineSource } from "../book/story-timeline.js";
 
 /** 镜像生成的文件（相对书目录）。顺序就是写盘顺序。 */
 export const MIRROR_FILES = {

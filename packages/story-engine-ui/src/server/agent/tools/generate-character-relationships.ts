@@ -23,13 +23,9 @@
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import {
-  readCharacterMatrixLedger,
-  readFactLedgerStrict,
-  type CharacterMatrixEntry,
-  type CharacterMatrixLedger,
-  type CharacterMatrixUpdate,
-} from "@actalk/story-engine";
+import { readCharacterMatrixLedger } from "../../book/project-store.js";
+import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
+import { type CharacterMatrixEntry, type CharacterMatrixLedger, type CharacterMatrixUpdate } from "../../book/types.js";
 import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";

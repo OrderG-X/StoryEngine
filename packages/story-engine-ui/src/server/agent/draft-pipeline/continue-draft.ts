@@ -8,7 +8,9 @@
  *
  * 模型无关：续写结果只取正文（剥标题/解释）；比原来还短、空、像 JSON → 视为没续成，原稿不动。
  */
-import { countDraftChineseCharacters, stripTrailingSegmentMarkers, type ChapterPlan, type DraftLengthTarget } from "@actalk/story-engine";
+import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
+import { stripTrailingSegmentMarkers } from "../../writing/fast-draft-writer.js";
+import { type ChapterPlan } from "../../book/chapter-plan.js";
 
 export type ContinueCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],

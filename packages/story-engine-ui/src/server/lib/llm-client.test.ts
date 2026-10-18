@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelSettingsLoadResult } from "@actalk/story-engine";
+import type { ModelSettingsLoadResult } from "../book/types.js";
 
 const storyEngineMocks = vi.hoisted(() => ({
   loadModelSettingsV0: vi.fn(),
 }));
 
-vi.mock("@actalk/story-engine", async () => {
-  const actual = await vi.importActual<typeof import("@actalk/story-engine")>("@actalk/story-engine");
-  return {
-    ...actual,
-    ...storyEngineMocks,
-  };
-});
+vi.mock("./model-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadModelSettingsV0: storyEngineMocks.loadModelSettingsV0,
+}));
 
 // resolveConfiguredChatModel 现在会读 task-assignments 旁路合成 thinking/profileId。
 // 直接 mock 本地模块的 readTaskAssignments（比 mock node:os 内部 homedir() 稳），其余纯函数走 actual。

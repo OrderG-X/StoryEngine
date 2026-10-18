@@ -5,8 +5,8 @@
  */
 import { homedir } from "node:os";
 import { mkdir, readFile } from "node:fs/promises";
-import { validateModelSettingsV0 } from "@actalk/story-engine";
-import type { ModelSettingsLoadResult } from "@actalk/story-engine";
+import { validateModelSettingsV0 } from "../lib/model-settings.js";
+import type { ModelSettingsLoadResult } from "../book/types.js";
 import {
   commitFilesAtomically,
   readJsonBody,

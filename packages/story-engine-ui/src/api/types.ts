@@ -1,7 +1,4 @@
-import type {
-  TimelineLayerEvent,
-  TimelineMacroBlock,
-} from "@actalk/story-engine";
+import type { TimelineLayerEvent, TimelineMacroBlock } from "../server/book/timeline-layers.js";
 
 export interface StateOverview {
   readonly project: {

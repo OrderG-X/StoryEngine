@@ -1,10 +1,10 @@
-import { countDraftChineseCharacters } from "@actalk/story-engine";
+import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
 import { describe, expect, it } from "vitest";
 
 import { countTextWords } from "../../utils/textUtils.js";
 
-// 放在 server/ 下：本契约要同时 import 引擎包，UI 前端文件不许直接 import @actalk/story-engine
-// （scripts/check-import-boundary.mjs，原放在 utils/textUtils.test.ts 会让 pnpm build 红）。
+// 放在 server/ 下：本契约要同时 import 服务端的字数口径（server/writing），前端文件不许 value-import 服务端模块
+// （scripts/check-import-boundary.mjs）。
 // 长跑 2026-10-04 #5 复核钉测：三口径（AI 读稿 read_draft.charCount / UI 写作区 countTextWords /
 // 引擎定稿执法 countDraftChineseCharacters）必须同字符集。两侧分属 UI/引擎两个包，靠字符串/正则各自维护——
 // 本测试用边缘字符文本把两边钉在一起：任何一侧单独改字符集（比如加回 〇/扩展B、或换 \p{Script=Han}）

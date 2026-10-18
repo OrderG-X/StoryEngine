@@ -19,8 +19,7 @@ const storyEngineMocks = vi.hoisted(() => ({
   runFastDraft: vi.fn(),
 }));
 
-vi.mock("@actalk/story-engine", async () => {
-  const actual = await vi.importActual<typeof import("@actalk/story-engine")>("@actalk/story-engine");
+const lengthFakes = vi.hoisted(() => {
   const requestedDraftLengthBounds = (requested: number) => ({
     lowerBound: Math.max(300, Math.floor(requested * 0.85)),
     upperBound: Math.ceil((requested * 115) / 100),
@@ -74,7 +73,6 @@ vi.mock("@actalk/story-engine", async () => {
     };
   };
   return {
-    ...actual,
     applyDraftLengthConstraint: (chapterGoal: string, target: { readonly requested: number; readonly lowerBound: number; readonly upperBound: number; readonly source: string }) => `${chapterGoal}\n\n【本轮硬性字数要求】${target.source === "user" ? "用户明确要求" : target.source === "writing_rules" ? "项目写作规则要求" : "系统默认章节目标"}约 ${target.requested} 字，正文不含标题必须控制在 ${target.lowerBound}-${target.upperBound} 个中文字符内。`,
     buildDraftLengthReport,
     buildFastDraftRetryPrompt: (prompt: string, target?: { readonly requested: number; readonly lowerBound: number; readonly upperBound: number }) => `${prompt}\n目标长度：${target?.lowerBound}-${target?.upperBound} 个中文字符`,
@@ -83,9 +81,46 @@ vi.mock("@actalk/story-engine", async () => {
     resolveDraftLengthTarget,
     requestedDraftLengthBounds,
     resolveDraftMaxOutputTokens: (target: { readonly upperBound: number }) => Math.max(360, Math.min(4096, Math.ceil(target.upperBound / 1.35) + 220)),
-    ...storyEngineMocks,
   };
 });
+vi.mock("../writing/draft-length-control.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ...lengthFakes,
+}));
+vi.mock("../book/state-overview.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildStateOverview: storyEngineMocks.buildStateOverview,
+}));
+vi.mock("../book/project-store.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readWritingRules: storyEngineMocks.readWritingRules,
+}));
+vi.mock("../writing/draft-ai-review.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildDraftAIReviewPrompt: storyEngineMocks.buildDraftAIReviewPrompt,
+  fallbackDraftAIReviewReport: storyEngineMocks.fallbackDraftAIReviewReport,
+  parseDraftAIReviewReport: storyEngineMocks.parseDraftAIReviewReport,
+}));
+vi.mock("../writing/writing-context-pack.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildWritingContextPack: storyEngineMocks.buildWritingContextPack,
+}));
+vi.mock("../writing/context-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildWriterContext: storyEngineMocks.buildWriterContext,
+}));
+vi.mock("../writing/commit-quality-check.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  checkDraftBeforeCommit: storyEngineMocks.checkDraftBeforeCommit,
+}));
+vi.mock("../writing/prompt-cache-diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  renderFastDraftPromptText: storyEngineMocks.renderFastDraftPromptText,
+}));
+vi.mock("../writing/fast-draft-writer.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runFastDraft: storyEngineMocks.runFastDraft,
+}));
 
 const llmClientMocks = vi.hoisted(() => ({
   buildProviderRequestHeaders: vi.fn(async () => ({})),

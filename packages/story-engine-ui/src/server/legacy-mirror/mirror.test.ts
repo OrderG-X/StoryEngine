@@ -13,7 +13,7 @@ import {
   type EntryInput,
   type LedgerEntry,
 } from "@actalk/story-core";
-import { readStoryTimeline, validateStoryTimeline, weekdayOfDay } from "@actalk/story-engine";
+import { readStoryTimeline, validateStoryTimeline, weekdayOfDay } from "../book/story-timeline.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";

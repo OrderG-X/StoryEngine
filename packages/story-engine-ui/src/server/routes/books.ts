@@ -12,11 +12,9 @@ import { promisify } from "node:util";
 
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import {
-  buildStateOverview,
-  countDraftChineseCharacters,
-  createStoryProject,
-} from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
+import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
+import { createStoryProject } from "../book/project-store.js";
 import { readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
   assertStoryEngineProject,

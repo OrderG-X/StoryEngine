@@ -6,7 +6,7 @@
  *
  * 读类工具不建快照、不带 snapshotId，只回 `refreshScope:"full"` 让前端整屏刷新。
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";

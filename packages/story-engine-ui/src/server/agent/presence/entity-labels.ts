@@ -5,7 +5,7 @@
  * 解析不到再按"像不像内部 hash id"决定中性占位还是原样保留——绝不直接吐 char-ffe5af 这类 hash。
  * 纯确定性、题材中立、不调 LLM。
  */
-import { readCharacterBible } from "@actalk/story-engine";
+import { readCharacterBible } from "../../book/project-store.js";
 
 /**
  * 内部实体 hash id 的形状（如 char-ffe5af / asset-3c2d / thread-9a1b）。匹配上且解析不到名字

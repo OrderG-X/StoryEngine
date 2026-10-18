@@ -8,7 +8,9 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStoryProject, countDraftChineseCharacters, type WriterClient } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
+import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
+import { type WriterClient } from "../../writing/fast-draft-writer.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 

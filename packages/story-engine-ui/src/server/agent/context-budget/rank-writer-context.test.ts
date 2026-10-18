@@ -1,4 +1,4 @@
-import { type ContextSection, type WriterContextEnvelope, estimateTokens } from "@actalk/story-engine";
+import { type ContextSection, type WriterContextEnvelope, estimateTokens } from "../../writing/context-gateway.js";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_TOKEN_BUDGET, makeWriterRankContext, rankWriterContext, resolveWriterTokenBudget } from "./rank-writer-context.js";

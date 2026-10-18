@@ -13,21 +13,19 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { findRecurringPhrases } from "@actalk/story-core";
 import {
-  findRecurringPhrases,
   readArcGoalPool,
   readAssetLedger,
   readCharacterBible,
-  readChapterPlan,
   readFactLedger,
   readLocationBible,
   readStoryBible,
-  readStoryClock,
   readThreadPool,
   readTimelineEvents,
-  selectEffectiveFacts,
-  type ChapterPlan,
-} from "@actalk/story-engine";
+} from "../../book/project-store.js";
+import { readChapterPlan, readStoryClock, type ChapterPlan } from "../../book/chapter-plan.js";
+import { selectEffectiveFacts } from "../../writing/fact-selection.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,

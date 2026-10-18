@@ -2,7 +2,7 @@
 // R7.3 相对日子换算（确定性、不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时，
 // 按时间线里两章各自的故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。
 import { describe, expect, it } from "vitest";
-import type { StoryTimeline } from "@actalk/story-engine";
+import type { StoryTimeline } from "../../book/story-timeline.js";
 import { applyRelativeDayAlignment, relativeDayMentions, type ContinuityIssueV2 } from "./check-chapter.js";
 
 const entry = (chapter: number, day: number, source: StoryTimeline["entries"][number]["source"]) => ({ chapter, day, source });

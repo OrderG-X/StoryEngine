@@ -5,7 +5,8 @@
  * 重构 P4 删掉了这里的落盘出稿、流式出稿、审稿、硬伤检查、直接改稿五条路：
  * 出稿/审稿/硬伤检查都走对话通道（按钮发结构化动作，或 AI 调工具），只有一条路。
  */
-import { buildStateOverview, resolveDraftLengthTarget } from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
+import { resolveDraftLengthTarget } from "../writing/draft-length-control.js";
 import {
   assertStoryEngineProject,
   extractDraftTitle,

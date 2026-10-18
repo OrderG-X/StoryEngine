@@ -12,7 +12,7 @@
  * 2. 定稿后的改名建议（R5.1 起改判据）：主角卡还是占位时，建议作者把它改成「已定稿章节里
  *    声明视角最多」的那个名字——不再数出场次数（视角人物是林小满、别的名字出现再多也不抢）。
  */
-import { readTimelineEvents, isPlaceholderCharacterName } from "@actalk/story-engine";
+import { readTimelineEvents, isPlaceholderCharacterName } from "../../book/project-store.js";
 
 interface SemanticSummaryLike {
   readonly presentCharacterNames?: readonly unknown[];

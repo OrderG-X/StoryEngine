@@ -20,7 +20,7 @@
  *     出 empty_draft 报告）；工具 "honest_short_circuit"（短路出 draft_not_found_for_check 诚实报告）。
  */
 import { readFile } from "node:fs/promises";
-import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "@actalk/story-engine";
+import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "../writing/commit-quality-check.js";
 
 import {
   defaultDraftPath,

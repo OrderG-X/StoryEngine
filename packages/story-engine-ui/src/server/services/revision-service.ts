@@ -37,13 +37,13 @@
 import { readFile } from "node:fs/promises";
 import {
   buildDraftRevisionPrompt,
-  buildStateOverview,
-  buildWritingContextPack,
   fallbackDraftRevisionPreview,
   parseDraftRevisionPreview,
   type DraftRevisionPreview,
   type DraftRevisionTask,
-} from "@actalk/story-engine";
+} from "../writing/draft-revision.js";
+import { buildStateOverview } from "../book/state-overview.js";
+import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withBookLock } from "@actalk/story-core";

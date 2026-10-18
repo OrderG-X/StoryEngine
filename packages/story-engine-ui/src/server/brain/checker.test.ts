@@ -3,7 +3,7 @@ import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { normalizeChapterPlan } from "@actalk/story-engine";
+import { normalizeChapterPlan } from "../book/chapter-plan.js";
 import {
   applySureGate,
   callConfiguredBrainModel,

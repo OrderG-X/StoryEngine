@@ -10,7 +10,7 @@
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope（不动磁盘，前端无需刷新面板）。
  * 题材中立 / 诚实回报：直接摊出引擎的质检报告，不夸大也不掩盖问题。
  */
-import type { CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityReport } from "../../writing/commit-quality-check.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";

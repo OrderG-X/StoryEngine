@@ -6,7 +6,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { WriterClient } from "@actalk/story-engine";
+import type { WriterClient } from "../writing/fast-draft-writer.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const storyEngineMocks = vi.hoisted(() => ({
@@ -31,8 +31,31 @@ const storyEngineMocks = vi.hoisted(() => ({
   trimDraftBodyToLengthTarget: vi.fn(),
 }));
 
-vi.mock("@actalk/story-engine", () => ({
-  ...storyEngineMocks,
+vi.mock("../writing/draft-length-control.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildDraftLengthReport: storyEngineMocks.buildDraftLengthReport,
+  countDraftChineseCharacters: storyEngineMocks.countDraftChineseCharacters,
+  resolveDraftLengthTarget: storyEngineMocks.resolveDraftLengthTarget,
+  resolveDraftMaxOutputTokens: storyEngineMocks.resolveDraftMaxOutputTokens,
+  trimDraftBodyToLengthTarget: storyEngineMocks.trimDraftBodyToLengthTarget,
+}));
+vi.mock("../book/state-overview.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildStateOverview: storyEngineMocks.buildStateOverview,
+}));
+vi.mock("../book/project-store.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readWritingRules: storyEngineMocks.readWritingRules,
+}));
+vi.mock("../writing/fast-draft-writer.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runFastDraft: storyEngineMocks.runFastDraft,
+}));
+vi.mock("@actalk/story-core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildAiFlavorReport: storyEngineMocks.buildAiFlavorReport,
+  checkDraftBeatFidelity: storyEngineMocks.checkDraftBeatFidelity,
+  detectAiFlavorViolations: storyEngineMocks.detectAiFlavorViolations,
 }));
 
 vi.mock("../lib/beat-miss-adjudication.js", () => ({

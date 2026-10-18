@@ -9,7 +9,8 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildStateOverview, createStoryProject } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
+import { createStoryProject } from "../../book/project-store.js";
 import { describe, expect, it } from "vitest";
 
 import { getStoryAgent } from "../story-agent.js";

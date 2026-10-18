@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it } from "vitest";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 
 import { buildProjectRequestContext } from "../request-context.js";
 import { readStateOverviewTool } from "./read-state-overview.js";

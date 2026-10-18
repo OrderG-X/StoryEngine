@@ -9,7 +9,7 @@
  * 绝不静默失败：模型/网络挂了如实回报 ok:false，不编造违规。
  */
 import { readFile } from "node:fs/promises";
-import { buildWritingContextPack } from "@actalk/story-engine";
+import { buildWritingContextPack } from "../../writing/writing-context-pack.js";
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber } from "./lenient-args.js";

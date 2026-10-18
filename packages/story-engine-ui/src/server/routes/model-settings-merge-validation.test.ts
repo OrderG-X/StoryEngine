@@ -4,12 +4,12 @@
  * 同 id 磁盘 profile 五件套类型非法）此前各自把 PUT 打成 400，codex 页无 raw 编辑器自救即死锁。
  *
  * 本文件为何住在 src/server/：scripts/check-import-boundary.mjs 禁止 src/server/ 以外的文件
- * value-import @actalk/story-engine（防引擎服务端代码进前端 bundle）；要把合并产物喂真引擎校验，
- * 只能放在允许引引擎的 server 侧。生产清洗逻辑在 src/components/ModelSettingsDialogLogic.ts，
- * 是引擎校验规则的同口径镜像——本文件就是「镜像没漂」的锁定器。
+ * value-import 服务端模块（防服务端代码进前端 bundle）；要把合并产物喂真校验（server/lib/model-settings），
+ * 只能放在 server 侧。生产清洗逻辑在 src/components/ModelSettingsDialogLogic.ts，
+ * 是服务端校验规则的同口径镜像——本文件就是「镜像没漂」的锁定器。
  */
 import { describe, expect, it } from "vitest";
-import { validateModelSettingsV0 } from "@actalk/story-engine";
+import { validateModelSettingsV0 } from "../lib/model-settings.js";
 import { buildModelSettingsConfig, taskProfileId } from "../../components/ModelSettingsDialogLogic.js";
 
 const provider = {

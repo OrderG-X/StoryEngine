@@ -9,7 +9,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { writeFileAtomic } from "../../lib/project-io.js";
 import { dirname, join } from "node:path";
-import { readCharacterBible, type CharacterBibleEntry } from "@actalk/story-engine";
+import { readCharacterBible } from "../../book/project-store.js";
+import { type CharacterBibleEntry } from "../../book/types.js";
 
 export const ALIAS_TABLE_RELATIVE_PATH = ".story-engine-ui/alias-tables.json";
 

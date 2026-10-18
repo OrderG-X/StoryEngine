@@ -4,20 +4,16 @@
     {
       "dir": "packages/story-core/src",
       "forbid": [
-        "@actalk/story-engine",
-        "packages/story-engine/",
         "packages/story-engine-ui/",
         "@mastra/",
         "ai",
         "@ai-sdk/"
       ],
-      "why": "核心包只放真相、命令、投影，纯 TypeScript、不碰模型、不引用旧引擎和界面包"
+      "why": "核心包只放真相、命令、投影和纯文本小件，纯 TypeScript、不碰模型、不引用界面包和服务端"
     },
     {
       "dir": "packages/story-engine-ui/src/server/editorial",
       "forbid": [
-        "@actalk/story-engine",
-        "packages/story-engine/",
         "packages/story-engine-ui/src/server/agent/",
         "packages/story-engine-ui/src/server/services/",
         "packages/story-engine-ui/src/server/routes/",
@@ -26,7 +22,7 @@
         "ai",
         "@ai-sdk/"
       ],
-      "why": "新编辑部只用新核心 @actalk/story-core；模型调用由调用方注入，不引用旧引擎、旧服务端模块和模型 SDK"
+      "why": "新编辑部只用新核心 @actalk/story-core；模型调用由调用方注入，不引用旧服务端模块和模型 SDK"
     },
     {
       "dir": "packages/story-engine-ui/src/server/legacy-mirror",
@@ -40,7 +36,34 @@
         "ai",
         "@ai-sdk/"
       ],
-      "why": "老格式镜像是新核心到老文件的桥：只用 @actalk/story-core 和旧引擎的类型；不引用旧服务端模块、编辑部和模型 SDK，不碰模型"
+      "why": "老格式镜像是新核心到老文件的桥：只用 @actalk/story-core 和 server/book 的老类型；不引用旧服务端模块、编辑部和模型 SDK，不碰模型"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/book",
+      "forbid": [
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/routes/",
+        "packages/story-engine-ui/src/server/brain/",
+        "packages/story-engine-ui/src/server/editorial/",
+        "packages/story-engine-ui/src/server/writing/",
+        "@mastra/",
+        "ai",
+        "@ai-sdk/"
+      ],
+      "why": "老格式书读写层（原旧引擎搬来）：只读写书目录的老文件、算总览，不引用对话 AI、HTTP 出口、编辑部、写稿和模型 SDK"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/writing",
+      "forbid": [
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/routes/",
+        "packages/story-engine-ui/src/server/brain/",
+        "packages/story-engine-ui/src/server/editorial/",
+        "@mastra/"
+      ],
+      "why": "写稿层（原旧引擎搬来：出稿写手、上下文、审稿、改稿）：模型由调用方注入 WriterClient，不引用对话 AI、HTTP 出口和编辑部"
     }
   ]
 }

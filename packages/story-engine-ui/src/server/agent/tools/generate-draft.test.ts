@@ -6,7 +6,10 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createStoryProject, countDraftChineseCharacters, runFastDraft, type StateOverview, type WriterClient } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
+import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
+import { runFastDraft, type WriterClient } from "../../writing/fast-draft-writer.js";
+import { type StateOverview } from "../../book/state-overview.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 

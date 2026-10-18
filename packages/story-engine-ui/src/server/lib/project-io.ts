@@ -7,12 +7,9 @@ import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/p
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
 import { resolveBooksRootDir } from "./data-dirs.js";
-import type {
-  DraftRevisionPreview,
-  DraftRevisionTask,
-  StateOverview,
-} from "@actalk/story-engine";
-import { normalizeDraftRevisionPreview } from "@actalk/story-engine";
+import type { DraftRevisionPreview, DraftRevisionTask } from "../writing/draft-revision.js";
+import type { StateOverview } from "../book/state-overview.js";
+import { normalizeDraftRevisionPreview } from "../writing/draft-revision.js";
 import type { MessageCard } from "../../type-defs/workspace.js";
 import { legacyMessageCards, readMessageCards } from "./message-cards-io.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";

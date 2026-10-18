@@ -10,7 +10,7 @@
  * 内置常量（与 builtin-anti-ai-rules 同观）：标签表 / 降级表是我们的内置规则，只我们改、用户不可调。
  * 纯函数、确定性、不调 LLM、不改 passed（只动 warning↔info，硬伤一律不碰）。
  */
-import type { CommitQualityIssue, CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityIssue, CommitQualityReport } from "../writing/commit-quality-check.js";
 
 type Severity = CommitQualityIssue["severity"];
 

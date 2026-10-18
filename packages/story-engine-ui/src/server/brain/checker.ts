@@ -12,7 +12,8 @@
  * 2026-10-12 T5 长书：窗口里早期章节被折掉（只剩笔记或卷笔记）时，先问一轮「要核对的地方里有没有要翻前文原文的」，
  * 代码用引擎的 findEarlierPassages 把命中的原句（带章号）贴回窗口再核——笔记会漏会走样，翻回原文才算数。
  */
-import { describeTimelineForChapter, findEarlierPassages, readStoryTimeline } from "@actalk/story-engine";
+import { describeTimelineForChapter, readStoryTimeline } from "../book/story-timeline.js";
+import { findEarlierPassages } from "../writing/earlier-passages.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { withStep } from "../lib/token-meter.js";
 import {
@@ -25,7 +26,7 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "../agent/continuity-v2/check-chapter.js";
-import type { ChapterPlan } from "@actalk/story-engine";
+import type { ChapterPlan } from "../book/chapter-plan.js";
 import { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
 import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "../editorial/reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "../editorial/reader-progress.js";

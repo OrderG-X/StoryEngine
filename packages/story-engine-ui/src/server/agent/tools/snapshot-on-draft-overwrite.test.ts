@@ -5,7 +5,7 @@
 import { lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import { describe, expect, it } from "vitest";
 
 import { defaultDraftPath } from "../../lib/project-io.js";

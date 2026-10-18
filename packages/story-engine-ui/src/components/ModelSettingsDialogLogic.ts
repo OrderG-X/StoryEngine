@@ -194,8 +194,8 @@ const PROFILE_KNOB_CHECKS = [
  *    清洗后的任务表随 cleanedTasks 返回，旁路 taskAssignments 载荷用它构建即与 config 同口径；
  *  ③ 同 id 磁盘 profile 五件套类型非法（引擎 invalid_temperature 等=error）——回 PROFILE_KNOB_DEFAULTS，
  *    与「表单重建默认打底」同口径，不再盲保留。
- * 本文件不能 value-import 引擎（scripts/check-import-boundary.mjs 禁止 src/server/ 以外引
- * @actalk/story-engine 进前端 bundle），清洗规则按引擎校验同口径镜像实现；「合并产物过真引擎
+ * 本文件不能 value-import 服务端的模型设置校验（scripts/check-import-boundary.mjs 禁止前端引
+ * src/server/ 进 bundle），清洗规则按服务端校验同口径镜像实现；「合并产物过真校验
  * validateModelSettingsV0 零 error/high」由 server 侧验收测试钉死
  * （src/server/routes/model-settings-merge-validation.test.ts）。
  */

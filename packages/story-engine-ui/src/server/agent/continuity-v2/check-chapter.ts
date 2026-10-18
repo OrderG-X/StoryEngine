@@ -12,7 +12,10 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { findLedgerNumberConflicts, readFactLedgerStrict, timelineEntryFor, type FactEntry, type StoryTimeline } from "@actalk/story-engine";
+import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
+import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
+import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
+import { type FactEntry } from "../../book/types.js";
 
 export type ClaimKind = "object" | "place" | "time" | "identity" | "knowledge" | "number" | "event";
 
