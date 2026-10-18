@@ -16,7 +16,7 @@ import { generateLocationEnrichmentTool } from "./generate-location-enrichment.j
 import { generateMatrixEnrichmentTool } from "./generate-matrix-enrichment.js";
 import { generateWorldbuildingTool } from "./generate-worldbuilding.js";
 import { generateWritingRulesEnrichmentTool } from "./generate-writing-rules-enrichment.js";
-import { blankToUndefined, coerceEnum, coerceStringArray } from "./lenient-args.js";
+import { blankToUndefined, coerceEnum, coerceStringArray } from "../../lib/lenient-args.js";
 
 export const ENRICH_KINDS = ["world", "characters", "assets", "locations", "matrix", "relationships", "writing_rules", "aliases"] as const;
 export type EnrichKind = (typeof ENRICH_KINDS)[number];

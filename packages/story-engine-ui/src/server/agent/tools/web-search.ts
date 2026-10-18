@@ -10,7 +10,7 @@
  */
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 export interface WebSearchResult {
   readonly title: string;

@@ -9,10 +9,10 @@
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { readTimelineEvents } from "../../book/project-store.js";
-import { readCharacterNameById, resolveEntityLabels, resolveSemanticSummaryLabels } from "../presence/entity-labels.js";
+import { readCharacterNameById, resolveEntityLabels, resolveSemanticSummaryLabels } from "../../writing/presence/entity-labels.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 
 const inputSchema = z.object({

@@ -15,8 +15,8 @@ import { type WriterClient } from "../../writing/fast-draft-writer.js";
 import { type WriterContextEnvelope } from "../../writing/context-gateway.js";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_TOKEN_BUDGET } from "../context-budget/rank-writer-context.js";
-import { DEFAULT_MAX_IN_SCENE_CHARACTERS } from "../presence/in-scene-detector.js";
+import { DEFAULT_TOKEN_BUDGET } from "../../writing/rank-writer-context.js";
+import { DEFAULT_MAX_IN_SCENE_CHARACTERS } from "../../writing/presence/in-scene-detector.js";
 import { runGenerateDraftToolLogic } from "./generate-draft.js";
 
 const FIRST = "甲乙丙丁戊己庚辛壬癸";

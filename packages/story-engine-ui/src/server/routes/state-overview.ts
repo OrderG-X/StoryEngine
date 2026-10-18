@@ -5,13 +5,13 @@ import { buildStateOverview } from "../book/state-overview.js";
 import {
   guardProjectPath,
   parseOptionalPositiveInteger,
-  withUiOverviewDetails,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { maybeStartReadersCatchUp } from "../brain/index.js";
-import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
+import { maybeStartReadersCatchUp } from "../editorial/index.js";
+import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 
 export function registerStateOverviewRoutes(middlewares: MiddlewareStack): void {

@@ -1,9 +1,6 @@
-// UI 侧 token 估算——与服务端 `src/server/writing/context-gateway.ts` 的 `estimateTokens`
-// 同算法（CJK 0.67/token、ASCII 0.25/token、其它 Unicode 0.35/token）。
-//
-// 为何复制而非 import 服务端那份：`scripts/check-import-boundary.mjs` 禁止 `src/server/` 以外的前端
-// 文件 value-import 服务端模块（防服务端代码进前端 bundle）。token 估算是稳定不变的
-// 纯函数，前端（滑动窗口截断、上下文百分比）需要它，故在前端复制这一小段逻辑。改服务端那份时同步此处。
+// token 估算（CJK 0.67/token、ASCII 0.25/token、其它 Unicode 0.35/token），前后端共用这一份：
+// 前端用于滑动窗口截断、上下文百分比；服务端写作上下文（server/writing/context-gateway）和会话存盘也用它。
+// 纯函数、不碰盘，放在前端 src/lib 是因为前端不许引服务端模块，反过来服务端引这里没问题。
 export function estimateTokens(value: unknown): number {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (!text) return 1;

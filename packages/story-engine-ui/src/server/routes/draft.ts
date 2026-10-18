@@ -17,16 +17,16 @@ import {
   readStringList,
   requireBodyString,
   requirePositiveBodyInteger,
-  withUiOverviewDetails,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { createConfiguredWriterClient } from "../lib/llm-client.js";
+import { withUiOverviewDetails } from "../services/ui-overview.js";
+import { createConfiguredWriterClient } from "../writing/writer-client.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
-import { contextBudgetPayload } from "../agent/context-budget/rank-writer-context.js";
-import { callConfiguredPlannerModel } from "../brain/index.js";
+import { contextBudgetPayload } from "../writing/rank-writer-context.js";
+import { callConfiguredPlannerModel } from "../editorial/index.js";
 import { countCjkChars, generateDraftCandidate } from "../services/draft-service.js";
 
 export function registerDraftRoutes(middlewares: MiddlewareStack): void {

@@ -22,8 +22,12 @@ import {
   listCharacterDirectoryEntries,
 } from "../book/project-store.js";
 import { selectRelevant } from "@actalk/story-core";
+import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
+
+// token 估算前后端共用一份（src/lib/estimate-tokens.ts，纯函数）。
+export { estimateTokens };
 import type {
   CharacterCore,
   CharacterProfile,
@@ -464,29 +468,6 @@ function extractMarkdownTitle(content: string | undefined): string | undefined {
 
 function stripMarkdownHeading(content: string): string {
   return content.replace(/^#{1,6}\s+.*(?:\r?\n){1,2}/u, "").trim();
-}
-
-export function estimateTokens(value: unknown): number {
-  const text = typeof value === "string" ? value : JSON.stringify(value);
-  if (!text) return 1;
-  let count = 0;
-  // Use Array.from to iterate by code points (handles surrogate pairs)
-  const codePoints = Array.from(text);
-  for (const char of codePoints) {
-    const cp = char.codePointAt(0)!;
-    if (
-      (cp >= 0x4E00 && cp <= 0x9FFF) ||
-      (cp >= 0x3400 && cp <= 0x4DBF) ||
-      (cp >= 0x20000 && cp <= 0x323AF)
-    ) {
-      count += 0.67; // ~1.5 chars per token for CJK
-    } else if (cp <= 0x7F) {
-      count += 0.25; // ~4 chars per token for ASCII
-    } else {
-      count += 0.35; // ~3 chars per token for other Unicode
-    }
-  }
-  return Math.max(1, Math.ceil(count));
 }
 
 function section(name: string, content: unknown, cachePolicy: "stable" | "dynamic"): ContextSection {

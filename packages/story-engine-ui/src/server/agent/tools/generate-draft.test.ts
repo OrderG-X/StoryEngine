@@ -15,9 +15,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { writeFile } from "node:fs/promises";
 
-import { ALIAS_TABLE_RELATIVE_PATH } from "../alias-generator/alias-generator.js";
+import { ALIAS_TABLE_RELATIVE_PATH } from "../../writing/presence/alias-generator.js";
 import { defaultCommittedChapterPath, defaultDraftPath } from "../../lib/project-io.js";
-import { makeWriterRankContext } from "../context-budget/rank-writer-context.js";
+import { makeWriterRankContext } from "../../writing/rank-writer-context.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
 import {
   advancePastCommittedFrontier,
@@ -48,12 +48,12 @@ import {
 } from "./generate-draft.js";
 
 // 阶段 3 出稿后的质量环节（续写/前后核对）走真模型槽——本文件只测出稿本身，桩成「什么都没改、不说话」（旧行为）。
-vi.mock("../draft-pipeline/run-quality-pipeline.js", () => ({
+vi.mock("../../services/draft-pipeline/run-quality-pipeline.js", () => ({
   runDraftQualityPipeline: vi.fn(async (input: { draftBody: string }) => ({ draftBody: input.draftBody, changed: false, info: {}, notes: [] })),
 }));
 
 // 阶段 2 出稿前拟章纲走真模型槽——本文件只测出稿本身，拟章纲桩成「没有章纲、不说话」（旧行为）。
-vi.mock("../chapter-plan/plan-chapter.js", () => ({
+vi.mock("../../editorial/plan-chapter.js", () => ({
   resolveChapterPlanForDraft: vi.fn(async () => ({ note: "", reused: false })),
 }));
 
@@ -567,7 +567,8 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
   it("空章：不再看作者原话有没有「写」——只说了「确认定稿」也照写（先存档，可撤销）", async () => {
     const projectDir = await makeProject("空章照写", "林远");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
 
     try {
       const context = {
@@ -590,7 +591,8 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     await mkdir(dirname(draftPath), { recursive: true });
     await writeFile(draftPath, "# 第一章\n\n作者自己写的原稿。", "utf-8");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
 
     try {
       const context = {
@@ -615,7 +617,8 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     await mkdir(dirname(draftPath), { recursive: true });
     await writeFile(draftPath, "# 第一章\n\n旧稿。", "utf-8");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
 
     try {
       const requestContext = buildProjectRequestContext(projectDir, 1);
@@ -633,7 +636,8 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
   it("chapterGoal 不是作者原话 → 退回（不调模型）；逐句出自作者的话（含台词）→ 照写", async () => {
     const projectDir = await makeProject("方向找原句", "林远");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
     const authorWords = ["写第1章：第二天爷爷用铁丝缠死了摆锤，说：『钟停在这儿，谁也别想再动它。』"];
 
     try {
@@ -670,7 +674,8 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
 
     const mockClient: WriterClient = mockWriterClient(longBody("林远"));
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
 
     try {
       const context = {
@@ -696,7 +701,8 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
 
     const mockClient: WriterClient = mockWriterClient(longBody("林远"));
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
 
     try {
       const context = {
@@ -720,7 +726,8 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
 
     const mockClient: WriterClient = mockWriterClient(longBody("林远"));
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spy = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
 
     try {
       const context = {
@@ -1001,7 +1008,8 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
   it("execute 端到端接线：默认自动去味走 repair 任务槽（resolveConfiguredChatModel(\"repair\") + streamChatModelToText）", async () => {
     const projectDir = await makeProject("自动去味接线", "林远");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(FLAVORED_BODY));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spyWriter = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(FLAVORED_BODY));
     const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel").mockResolvedValue({
       provider: { id: "p", baseUrl: "http://127.0.0.1:1", apiKeyEnv: "TEST_KEY" },
       profile: { id: "prof", provider: "p", model: "test-model" },
@@ -1035,7 +1043,8 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
   it("execute 端到端接线：autoDeAi:false → repair 槽完全不解析、不改写只标注", async () => {
     const projectDir = await makeProject("自动去味接线关闭", "林远");
     const llmClientModule = await import("../../lib/llm-client.js");
-    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(FLAVORED_BODY));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spyWriter = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(FLAVORED_BODY));
     const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel");
     const spyStream = vi.spyOn(llmClientModule, "streamChatModelToText");
 
@@ -1602,6 +1611,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const projectDir = await makeProject("多候选接线", "林远");
     const clean = inRangeBody("林远");
     const llmClientModule = await import("../../lib/llm-client.js");
+    const writerClientModule = await import("../../writing/writer-client.js");
     const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel").mockResolvedValue({
       provider: { id: "p", baseUrl: "http://127.0.0.1:1", apiKeyEnv: "TEST_KEY" },
       profile: { id: "prof", provider: "p", model: "test-model", temperature: 0.8 },
@@ -1612,16 +1622,16 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const seenTemperatures: (number | undefined)[] = [];
     const bodies = [`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`, clean, "林远走进了房间。"];
     let callIndex = 0;
-    const spyCreate = vi.spyOn(llmClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
+    const spyCreate = vi.spyOn(writerClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
       ((configured: { profile: { temperature?: number } }, onDelta?: unknown) => {
         seenTemperatures.push(configured.profile.temperature);
         expect(onDelta).toBeUndefined(); // 多候选采样绝不逐字流进编辑器（N 版会串稿）
         const body = bodies[callIndex];
         callIndex += 1;
         return { async generateDraft() { return { title: "第1章", content: body }; } };
-      }) as unknown as typeof llmClientModule.createOpenAICompatibleWriterClient,
+      }) as unknown as typeof writerClientModule.createOpenAICompatibleWriterClient,
     );
-    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient");
+    const spyWriter = vi.spyOn(writerClientModule, "createConfiguredWriterClient");
     const spyStream = vi.spyOn(llmClientModule, "streamChatModelToText");
 
     try {
@@ -1658,6 +1668,7 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const projectDir = await makeProject("多候选封顶错温", "林远");
     const clean = inRangeBody("林远");
     const llmClientModule = await import("../../lib/llm-client.js");
+    const writerClientModule = await import("../../writing/writer-client.js");
     const spyResolve = vi.spyOn(llmClientModule, "resolveConfiguredChatModel").mockResolvedValue({
       provider: { id: "p", baseUrl: "http://127.0.0.1:1", apiKeyEnv: "TEST_KEY" },
       profile: { id: "prof", provider: "p", model: "test-model", temperature: 1.0 }, // base 已封顶
@@ -1668,15 +1679,15 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     const seenTemperatures: (number | undefined)[] = [];
     const bodies = [`${inRangeBody("林远")}\n\n${FLAVOR_TAIL}`, clean, "林远走进了房间。"];
     let callIndex = 0;
-    const spyCreate = vi.spyOn(llmClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
+    const spyCreate = vi.spyOn(writerClientModule, "createOpenAICompatibleWriterClient").mockImplementation(
       ((configured: { profile: { temperature?: number } }) => {
         seenTemperatures.push(configured.profile.temperature);
         const body = bodies[callIndex];
         callIndex += 1;
         return { async generateDraft() { return { title: "第1章", content: body }; } };
-      }) as unknown as typeof llmClientModule.createOpenAICompatibleWriterClient,
+      }) as unknown as typeof writerClientModule.createOpenAICompatibleWriterClient,
     );
-    const spyWriter = vi.spyOn(llmClientModule, "createConfiguredWriterClient");
+    const spyWriter = vi.spyOn(writerClientModule, "createConfiguredWriterClient");
     const spyStream = vi.spyOn(llmClientModule, "streamChatModelToText");
 
     try {

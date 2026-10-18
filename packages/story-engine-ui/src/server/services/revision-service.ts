@@ -2,7 +2,7 @@
  * revision-service — /api/draft/revision/*（两步）与 agent/tools/revise-draft.ts（一步）的共享编排。
  *
  * 双轨合一前，两条轨道在进程内复刻同一套「定位 → 预览 → 守卫 → 落盘」，漂移清单（D21–D25）
- * 见 parity/revise-draft.parity.test.ts。收编后本服务落定统一语义：
+ * 见 routes/revise-draft.parity.test.ts。收编后本服务落定统一语义：
  *
  *   D21 定位宽容度【已收敛】：先精确子串匹配，未命中再「空白+引号归一」兜底（locateRevisionSpan）。
  *       原是工具路独有；HTTP 路纯 indexOf 直接 400——收编后 HTTP 路获得兜底（刻意修复）。

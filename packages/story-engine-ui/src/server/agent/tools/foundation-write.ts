@@ -18,10 +18,10 @@ import { applyFoundationWriteSuggestion, type FoundationWriteResult, type Founda
 import { buildStateOverview } from "../../book/state-overview.js";
 import { STYLE_EXEMPLAR_MAX_COUNT, STYLE_EXEMPLAR_MAX_TEXT_CHARS } from "../../book/style-exemplars.js";
 import { z } from "zod";
-import { blankToUndefined, coerceEnum, coerceEnumValues, coerceJsonObject } from "./lenient-args.js";
+import { blankToUndefined, coerceEnum, coerceEnumValues, coerceJsonObject } from "../../lib/lenient-args.js";
 
 import { writeTool } from "../withSnapshot.js";
-import { readCharacterNameById, resolveEntityLabel } from "../presence/entity-labels.js";
+import { readCharacterNameById, resolveEntityLabel } from "../../writing/presence/entity-labels.js";
 import { resolveFoundationUpdateTargetId } from "../../lib/project-io.js";
 import { buildFoundationKnownEntities } from "./foundation-known-entities.js";
 import { manageStyleExemplarsLogic, type ManageStyleExemplarsOutput, type StyleExemplarAction } from "./manage-style-exemplars.js";

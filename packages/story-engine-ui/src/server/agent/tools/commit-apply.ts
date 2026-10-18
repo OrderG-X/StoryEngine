@@ -12,15 +12,15 @@ import { nameKey, project, readBookSnapshot, readChapterLedger } from "@actalk/s
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
-import { warmUpReaders } from "../../brain/index.js";
+import { warmUpReaders } from "../../editorial/index.js";
 import { confirmChapterCommit, draftFingerprint } from "../../editorial/commit-flow.js";
-import { readCharacterIds, markdownTitle, syncLegacyMirror } from "../../legacy-mirror/sync.js";
+import { readCharacterIds, markdownTitle, syncLegacyMirror } from "../../book/mirror/sync.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
 import { latestTicketFor, OPT_IN_PREFIX, ticketStoreFor } from "./commit-preview.js";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from "./uncarded-character-memo.js";
 
 /** 开着的线索堆到这个数，定稿后的下一步选项里摆「归并线索」（只给选项，真归并要作者点「确认改账」）。 */

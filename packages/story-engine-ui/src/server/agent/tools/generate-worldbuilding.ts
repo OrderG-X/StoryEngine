@@ -14,8 +14,8 @@ import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
-import { blankToUndefined } from "./lenient-args.js";
-import { generateWorldbuilding, type ChatMessage } from "../worldbuilding/worldbuilding.js";
+import { blankToUndefined } from "../../lib/lenient-args.js";
+import { generateWorldbuilding, type ChatMessage } from "../../services/enrichment/worldbuilding.js";
 
 // 模型无关：模型常把可选种子传成空串 `""`，旧 `?? overview…` 接不住（`"" ?? x = ""`）→ 旁路"从项目
 // 现有设定推断"→ 在本有世界设定的书上谎报"没种子"硬失败。blankToUndefined 把空串归一成 undefined。

@@ -15,7 +15,7 @@ import {
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { addDismissal, removeDismissal } from "../agent/continuity-v2/dismissals.js";
+import { addDismissal, removeDismissal } from "../editorial/continuity/dismissals.js";
 
 export function registerContinuityDismissalsRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {

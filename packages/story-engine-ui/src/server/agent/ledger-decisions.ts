@@ -20,8 +20,8 @@ import {
   type ThreadView,
 } from "@actalk/story-core";
 
-import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
-import { syncLegacyMirror } from "../legacy-mirror/sync.js";
+import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { runWithSnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */

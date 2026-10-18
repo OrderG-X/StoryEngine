@@ -13,7 +13,7 @@ import type { DraftAIReviewReport } from "../../writing/draft-ai-review.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { runDraftAIReview } from "../../services/review-service.js";

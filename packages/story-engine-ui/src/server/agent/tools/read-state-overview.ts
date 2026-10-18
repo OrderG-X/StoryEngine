@@ -10,7 +10,7 @@ import { buildStateOverview } from "../../book/state-overview.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { readFactionGoals, summarizeStateOverview } from "../overview-summary.js";

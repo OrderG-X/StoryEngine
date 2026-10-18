@@ -5,29 +5,29 @@
  * 双轨合一：编排（定位/预览/守卫/落盘/模型调用）已收编进 services/revision-service.ts，
  * 与 agent/tools/revise-draft.ts 共享同一实现；本文件只做 HTTP 适配——参数解析、confirm 契约、
  * 状态码与响应整形。守卫收编给本路带来的行为变化（D21 归一兜底 / D22 漂移守卫 / D23 精确快路 /
- * D25 no-op 诚实 / 模型调用走 llm-client 统一路）见 service 头注释与 parity/revise-draft.parity.test.ts。
+ * D25 no-op 诚实 / 模型调用走 llm-client 统一路）见 service 头注释与 routes/revise-draft.parity.test.ts。
  * 目标级诚实守卫（target_unchanged）：apply 接受可选 targetText（用户原始点名片段，客户端 task 里
  * 存着），service 在 apply 时的当前草稿上重新解析目标区间后同口径检查——「改后点名句仍原样在稿」
  * 落盘前 400 诚实拒；解析不到（草稿在预览后已大变）同样 400 诚实拒。resolvedTarget 由服务端解析，
  * 不回传、不信客户端字符串（裸 resolvedTarget 回传可伪造：传「的」→ 恒拒一切修订）。
  */
 import { buildStateOverview } from "../book/state-overview.js";
-import { countDraftWords } from "../writing/draft-revision.js";
+import { countDraftWords, normalizeDraftRevisionPreview, type DraftRevisionPreview, type DraftRevisionTask } from "../writing/draft-revision.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
   isRecord,
-  readDraftRevisionPreviewObj,
-  readDraftRevisionTask,
   readJsonBody,
+  readPositiveInteger,
   readString,
+  readStringList,
   requireBodyString,
   requirePositiveBodyInteger,
   stripTitleLineForEditor,
-  withUiOverviewDetails,
   writeJson,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 // apply 的「修订应用前快照」不再经本路由：快照+落盘已收进 revision-service 的 runWithSnapshot 同一临界区。
 import {
@@ -187,4 +187,58 @@ function applyRefusalMessage(failure: RevisionFailure): string {
     default:
       return failure.detail ?? "修订应用失败。";
   }
+}
+
+// ---------------------------------------------------------------------------
+// 请求体解析（只有本路由用）
+// ---------------------------------------------------------------------------
+
+export function readDraftRevisionTask(value: unknown, chapter: number): DraftRevisionTask {
+  if (!isRecord(value)) throw new Error("修订任务不完整。");
+  const id = readString(value.id) ?? `revision-${Date.now().toString(36)}`;
+  const targetType = readDraftRevisionTargetType(value.targetType);
+  const targetText = readString(value.targetText) ?? "";
+  const problemSummary = readString(value.problemSummary) ?? "局部修订";
+  const revisionGoal = readString(value.revisionGoal) ?? "根据内容审阅建议优化当前片段。";
+  return {
+    id,
+    ...(readString(value.sourceIssueId) ? { sourceIssueId: readString(value.sourceIssueId) } : {}),
+    ...(readString(value.sourceSuggestionId) ? { sourceSuggestionId: readString(value.sourceSuggestionId) } : {}),
+    chapter: readPositiveInteger(value.chapter) ?? chapter,
+    targetType,
+    targetText,
+    ...(readString(value.targetRangeHint) ? { targetRangeHint: readString(value.targetRangeHint) } : {}),
+    problemSummary,
+    revisionGoal,
+    constraints: readStringList(value.constraints),
+    status: "pending",
+  };
+}
+
+function readDraftRevisionTargetType(value: unknown): DraftRevisionTask["targetType"] {
+  return value === "paragraph" || value === "section" || value === "dialogue" || value === "opening" || value === "ending" || value === "whole_draft_note"
+    ? value
+    : "paragraph";
+}
+
+export function readDraftRevisionPreviewObj(value: unknown): DraftRevisionPreview {
+  if (!isRecord(value)) throw new Error("修订预览不完整。");
+  const taskId = requireBodyString(value.taskId, "修订预览缺少任务 ID。");
+  const beforeText = requireBodyString(value.beforeText, "修订预览缺少原文。");
+  const afterText = requireBodyString(value.afterText, "修订预览缺少修订后文本。");
+  return normalizeDraftRevisionPreview({
+    ...value,
+    taskId,
+    beforeText,
+    afterText,
+  }, {
+    id: taskId,
+    chapter: 0,
+    targetType: "paragraph",
+    targetText: beforeText,
+    problemSummary: "",
+    revisionGoal: "",
+    constraints: [],
+    status: "preview_generated",
+  });
 }

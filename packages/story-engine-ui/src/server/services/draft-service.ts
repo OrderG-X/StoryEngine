@@ -3,7 +3,7 @@
  *
  * POST /api/draft/generate（非流式，routes/draft.ts handleGenerateDraft）与 generate_draft 工具
  * （agent/tools/generate-draft.ts execute）此前各自进程内复刻同一出稿编排，是全部双轨对里漂移
- * 最大的一对（漂移清单 D1–D5 的处置结论见 parity/draft-generate.parity.test.ts 头注释）。收编后
+ * 最大的一对（漂移清单 D1–D5 当时已处置，对拍测试已随旧路删除）。收编后
  * 本 service 落定 canonical 编排：上下文预算裁剪 + 在场角色解析 → runFastDraft（引擎只出正文、不写盘；
  * 多候选再加确定性评分选优）→ 字数执法（显式策略参数，写盘前在内存里做）→ 写一次工作稿（draft.write）
  * → AI 腔回检/自动去味/beats 裁决（显式开关）→ 总览重建 + 诚实 summary。
@@ -48,9 +48,8 @@
  *   仅复用本 service 导出的长度解析/校验纯函数（resolveProjectDraftLengthTarget / countCjkChars /
  *   validateStreamedDraftBody）。
  *
- * 依赖说明：本 service 自包含（无共享 index），但出稿编排真实复用 agent 侧的纯函数/helper
- *   （context-budget/presence/ai-flavor/lenient-args/snapshot-on-draft-overwrite/check-ai-flavor 的
- *   读规则函数）——它们不 import services，无循环依赖。
+ * 依赖说明：流程层（services）只往下引——写稿底层（上下文预算、在场检测、AI 味规则）、编辑部（章纲）、
+ *   基础设施（宽进参数、覆盖前存档）；不引对话 AI 和 HTTP 出口（tools/guards/boundaries.json 强制）。
  *
  * 铁律：AI 写工作稿唯一通道是 draft.write（lib/ai-draft-write.ts，重构 P7）；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
@@ -87,23 +86,23 @@ import {
 } from "../writing/fast-draft-writer.js";
 import { type ChapterPlan } from "../book/chapter-plan.js";
 
-import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
+import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../writing/beat-miss-adjudication.js";
 import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { positiveOrUndefined } from "../agent/tools/lenient-args.js";
-import { readAntiAiPatterns, readAntiRules } from "../agent/tools/check-ai-flavor.js";
-import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
-import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, type WriterRankContextPlan } from "../agent/context-budget/rank-writer-context.js";
-import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../agent/presence/in-scene-detector.js";
-import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../agent/ai-flavor/ai-flavor-rules.js";
-import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "../agent/ai-flavor/de-ai-flavor-batch.js";
-import { resolveChapterPlanForDraft } from "../agent/chapter-plan/plan-chapter.js";
+import { positiveOrUndefined } from "../lib/lenient-args.js";
+import { readAntiAiPatterns, readAntiRules } from "../writing/ai-flavor/anti-rules.js";
+import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
+import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, type WriterRankContextPlan } from "../writing/rank-writer-context.js";
+import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../writing/presence/in-scene-detector.js";
+import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
+import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
+import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import { withStep } from "../lib/token-meter.js";
-import type { ContinueCallModel } from "../agent/draft-pipeline/continue-draft.js";
-import type { BrainCallModel } from "../brain/index.js";
-import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "../agent/draft-pipeline/run-quality-pipeline.js";
+import type { ContinueCallModel } from "./draft-pipeline/continue-draft.js";
+import type { BrainCallModel } from "../editorial/index.js";
+import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "./draft-pipeline/run-quality-pipeline.js";
 
 /* ---------------------------------------------------------------------------
  * 长度目标解析与执法（D1：原 routes/draft.ts 的 enforce 栈整体迁入，逻辑一字未动）

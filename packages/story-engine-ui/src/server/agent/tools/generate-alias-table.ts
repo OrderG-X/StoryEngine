@@ -14,7 +14,7 @@ import {
   generateAndWriteAliasTable,
   type AliasProposalFn,
   type CharacterAliasInput,
-} from "../alias-generator/alias-generator.js";
+} from "../../writing/presence/alias-generator.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { writeTool } from "../withSnapshot.js";
 

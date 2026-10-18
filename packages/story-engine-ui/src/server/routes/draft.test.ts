@@ -130,6 +130,10 @@ const llmClientMocks = vi.hoisted(() => ({
   streamOpenAICompatibleResponse: vi.fn(),
 }));
 
+vi.mock("../writing/writer-client.js", () => ({
+  createConfiguredWriterClient: llmClientMocks.createConfiguredWriterClient,
+}));
+
 vi.mock("../lib/llm-client.js", async () => {
   // 其余导出（createIdleAbort / STREAM_IDLE_TIMEOUT_MS 等）走真实实现——出稿流的空闲超时
   // 铁律要靠真计时器验证；只有上面 hoisted 的几个函数被 mock。
@@ -149,7 +153,7 @@ const presenceMocks = vi.hoisted(() => ({
   resolveSelectedCharacterIds: vi.fn(),
 }));
 
-vi.mock("../agent/presence/in-scene-detector.js", () => ({
+vi.mock("../writing/presence/in-scene-detector.js", () => ({
   ...presenceMocks,
 }));
 

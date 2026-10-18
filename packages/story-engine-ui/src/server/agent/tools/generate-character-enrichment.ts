@@ -20,7 +20,7 @@ import {
   generateCharacterEnrichment,
   type CharacterEntityInput,
   type ChatMessage,
-} from "../character-enrichment/character-enrichment.js";
+} from "../../services/enrichment/character-enrichment.js";
 
 const inputSchema = z.object({
   // enrichment 从项目现有角色矩阵读取，通常不需要任何参数；保留一个可空开关以备将来扩展，不强制。

@@ -26,13 +26,13 @@ import {
   readStringList,
   requireBodyString,
   splitChineseList,
-  withUiOverviewDetails,
   readUsageSummary,
   writeJson,
   isRecord,
   stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { formatRelativeTimeMs } from "../../utils/textUtils.js";
 
 const execFileAsync = promisify(execFile);

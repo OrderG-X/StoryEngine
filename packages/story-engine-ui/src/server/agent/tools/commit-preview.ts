@@ -14,17 +14,17 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../brain/index.js";
+import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
-import { ensureBookOnCore } from "../../legacy-mirror/ensure.js";
-import { readCharacterIds } from "../../legacy-mirror/sync.js";
-import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
+import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { readCharacterIds } from "../../book/mirror/sync.js";
+import { QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 记账员当场最多补多少章笔记；超过就按「已有笔记 + 最近几章原文」记（冷窗口），笔记在后台补。 */
 const LEDGER_MAX_CATCH_UP = 10;

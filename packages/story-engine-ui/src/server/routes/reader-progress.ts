@@ -8,7 +8,7 @@
  */
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { readReadersCatchUpStatus } from "../brain/index.js";
+import { readReadersCatchUpStatus } from "../editorial/index.js";
 
 export function registerReaderProgressRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {

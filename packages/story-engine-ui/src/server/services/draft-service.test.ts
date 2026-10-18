@@ -58,21 +58,21 @@ vi.mock("@actalk/story-core", async (importOriginal) => ({
   detectAiFlavorViolations: storyEngineMocks.detectAiFlavorViolations,
 }));
 
-vi.mock("../lib/beat-miss-adjudication.js", () => ({
+vi.mock("../writing/beat-miss-adjudication.js", () => ({
   adjudicateMissingBeats: vi.fn(),
   isAdjudicationQuoteVerbatim: vi.fn(() => true),
 }));
 
-vi.mock("../agent/tools/check-ai-flavor.js", () => ({
+vi.mock("../writing/ai-flavor/anti-rules.js", () => ({
   readAntiAiPatterns: vi.fn(async () => []),
   readAntiRules: vi.fn(async () => []),
 }));
 
-vi.mock("../agent/tools/snapshot-on-draft-overwrite.js", () => ({
+vi.mock("../lib/snapshot-on-draft-overwrite.js", () => ({
   snapshotBeforeDraftOverwrite: vi.fn(async () => undefined),
 }));
 
-vi.mock("../agent/context-budget/rank-writer-context.js", () => ({
+vi.mock("../writing/rank-writer-context.js", () => ({
   contextBudgetPayload: vi.fn(() => ({ budget: true })),
   makeWriterRankContext: vi.fn(() => ({
     rankContext: (envelope: unknown) => envelope,
@@ -84,33 +84,33 @@ vi.mock("../agent/context-budget/rank-writer-context.js", () => ({
   resolveWriterTokenBudget: vi.fn(() => 8000),
 }));
 
-vi.mock("../agent/presence/in-scene-detector.js", () => ({
+vi.mock("../writing/presence/in-scene-detector.js", () => ({
   resolveSelectedCharacterIds: vi.fn(async () => ({ selectedCharacterIds: [], trace: {}, summary: "在场角色 0 人" })),
 }));
 
-vi.mock("../agent/ai-flavor/ai-flavor-rules.js", () => ({
+vi.mock("../writing/ai-flavor/ai-flavor-rules.js", () => ({
   ALL_BUILTIN_AI_FLAVOR_RULES: [],
   buildUserAntiAiPatternRules: vi.fn(() => []),
 }));
 
-vi.mock("../agent/ai-flavor/de-ai-flavor-batch.js", () => ({
+vi.mock("./de-ai-flavor-batch.js", () => ({
   runDeAiFlavorBatch: vi.fn(),
 }));
 
 const planMocks = vi.hoisted(() => ({
   resolveChapterPlanForDraft: vi.fn(),
 }));
-vi.mock("../agent/chapter-plan/plan-chapter.js", () => ({ ...planMocks }));
+vi.mock("../editorial/plan-chapter.js", () => ({ ...planMocks }));
 
 const pipelineMocks = vi.hoisted(() => ({
   runDraftQualityPipeline: vi.fn(),
 }));
-vi.mock("../agent/draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks }));
+vi.mock("./draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks }));
 
 import { defaultDraftPath } from "../lib/project-io.js";
-import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
-import { snapshotBeforeDraftOverwrite } from "../agent/tools/snapshot-on-draft-overwrite.js";
-import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../agent/presence/in-scene-detector.js";
+import { runDeAiFlavorBatch } from "./de-ai-flavor-batch.js";
+import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
+import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../writing/presence/in-scene-detector.js";
 import { runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";

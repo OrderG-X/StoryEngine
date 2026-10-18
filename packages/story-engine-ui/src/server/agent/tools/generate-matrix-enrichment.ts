@@ -24,7 +24,7 @@ import {
   type ChatMessage,
   type MatrixCharacterInput,
   type MatrixRelationshipInput,
-} from "../matrix-enrichment/matrix-enrichment.js";
+} from "../../services/enrichment/matrix-enrichment.js";
 
 const inputSchema = z.object({
   // enrichment 从项目现有角色矩阵读取，通常不需要任何参数；保留一个可空备注以备将来扩展，不强制。

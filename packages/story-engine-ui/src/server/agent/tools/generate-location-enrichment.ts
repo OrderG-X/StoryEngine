@@ -21,7 +21,7 @@ import {
   generateLocationEnrichment,
   type LocationEntityInput,
   type ChatMessage,
-} from "../location-enrichment/location-enrichment.js";
+} from "../../services/enrichment/location-enrichment.js";
 
 const inputSchema = z.object({
   // enrichment 从项目现有地点读取，通常不需要任何参数；保留一个可空备注以备将来扩展，不强制。

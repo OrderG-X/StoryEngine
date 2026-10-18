@@ -7,9 +7,9 @@
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber, coerceStringArray } from "./lenient-args.js";
+import { coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { brainstormChapter, catchUpReaders, callConfiguredBrainModel, callConfiguredPlannerModel, type BrainCallModel, type BrainstormOption } from "../../brain/index.js";
+import { brainstormChapter, catchUpReaders, callConfiguredBrainModel, callConfiguredPlannerModel, type BrainCallModel, type BrainstormOption } from "../../editorial/index.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("想第几章；省略=作者当前所在章。")),

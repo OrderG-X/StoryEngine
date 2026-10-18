@@ -19,11 +19,11 @@ import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceEnum, coerceNumber, coerceStringArray } from "./lenient-args.js";
+import { coerceEnum, coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 
 import { stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import {
   createRevisionModelChannel,
   reviseDraftOneShot,

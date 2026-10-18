@@ -26,7 +26,7 @@ import {
   defaultDraftPath,
   hasRealDraftContent,
 } from "../lib/project-io.js";
-import { refineQualityReport, type RefinedQualityReport } from "../lib/quality-report-refine.js";
+import { refineQualityReport, type RefinedQualityReport } from "../writing/quality-report-refine.js";
 
 /** D16 无稿策略：engine_empty_report=照常喂引擎出空稿报告；honest_short_circuit=短路出诚实「无稿」报告。 */
 export type DraftQualityNoDraftPolicy = "engine_empty_report" | "honest_short_circuit";

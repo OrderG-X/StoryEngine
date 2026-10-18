@@ -12,7 +12,7 @@
  * 编排：取真草稿（与质检同源）→ 确定性质检 + 状态概览 + 写作上下文 → 组 prompt →
  * callModel(draftReview 槽，流式+空闲超时) → parseDraftAIReviewReport（失败回退）。只读：不写盘、不建快照。
  *
- * 两条原豁免分歧已收敛为共享语义（刻意修复，见 parity/ai-review.parity.test.ts 头注释）：
+ * 两条原豁免分歧已收敛为共享语义（刻意修复；当时的对拍测试已随旧路删除）：
  *   - D17 无草稿：两侧同走「三处取稿皆空 → 诚实 no_draft 结果、绝不审空稿谎报」；
  *     差异只剩适配层渲染（路由保持 500 状态码兼容 + ok:false，工具 ok:false + summary）。
  *   - D18 模型失败/烂输出的 ok 契约：canonical result 一律 ok:!usedFallback（走回退=没真审成）；

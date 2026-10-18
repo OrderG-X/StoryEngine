@@ -10,7 +10,7 @@ import { z } from "zod";
 
 import { planLedgerChange, type LedgerChangeRequest } from "../ledger-decisions.js";
 import { readProjectDirFromContext } from "../request-context.js";
-import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "./lenient-args.js";
+import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
 
 export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "clean", "group", "importance"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];

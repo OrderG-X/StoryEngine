@@ -10,7 +10,7 @@
  */
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceBoolean, coerceJsonArray } from "./lenient-args.js";
+import { coerceBoolean, coerceJsonArray } from "../../lib/lenient-args.js";
 
 const choiceSchema = z.object({
   label: z.string().trim().min(1).describe("按钮短文案。"),

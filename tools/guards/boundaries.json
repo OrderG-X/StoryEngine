@@ -1,5 +1,5 @@
 {
-  "note": "新代码目录不许 import 的旧模块。目录不存在的规则自动跳过。规则由 Claude 在每期任务单里增补。",
+  "note": "服务端分层（下层不许引上层，P7 第 6 步定）：核心 < 老格式书 book < 基础设施 lib < 写稿 writing < 编辑部 editorial < 流程 services < 对话 AI agent < HTTP 出口 routes。",
   "rules": [
     {
       "dir": "packages/story-core/src",
@@ -12,58 +12,71 @@
       "why": "核心包只放真相、命令、投影和纯文本小件，纯 TypeScript、不碰模型、不引用界面包和服务端"
     },
     {
-      "dir": "packages/story-engine-ui/src/server/editorial",
-      "forbid": [
-        "packages/story-engine-ui/src/server/agent/",
-        "packages/story-engine-ui/src/server/services/",
-        "packages/story-engine-ui/src/server/routes/",
-        "packages/story-engine-ui/src/server/brain/",
-        "@mastra/",
-        "ai",
-        "@ai-sdk/"
-      ],
-      "why": "新编辑部只用新核心 @actalk/story-core；模型调用由调用方注入，不引用旧服务端模块和模型 SDK"
-    },
-    {
-      "dir": "packages/story-engine-ui/src/server/legacy-mirror",
-      "forbid": [
-        "packages/story-engine-ui/src/server/agent/",
-        "packages/story-engine-ui/src/server/services/",
-        "packages/story-engine-ui/src/server/routes/",
-        "packages/story-engine-ui/src/server/brain/",
-        "packages/story-engine-ui/src/server/editorial/",
-        "@mastra/",
-        "ai",
-        "@ai-sdk/"
-      ],
-      "why": "老格式镜像是新核心到老文件的桥：只用 @actalk/story-core 和 server/book 的老类型；不引用旧服务端模块、编辑部和模型 SDK，不碰模型"
-    },
-    {
       "dir": "packages/story-engine-ui/src/server/book",
       "forbid": [
-        "packages/story-engine-ui/src/server/agent/",
-        "packages/story-engine-ui/src/server/services/",
-        "packages/story-engine-ui/src/server/routes/",
-        "packages/story-engine-ui/src/server/brain/",
-        "packages/story-engine-ui/src/server/editorial/",
+        "packages/story-engine-ui/src/server/lib/",
         "packages/story-engine-ui/src/server/writing/",
+        "packages/story-engine-ui/src/server/editorial/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/routes/",
         "@mastra/",
         "ai",
         "@ai-sdk/"
       ],
-      "why": "老格式书读写层（原旧引擎搬来）：只读写书目录的老文件、算总览，不引用对话 AI、HTTP 出口、编辑部、写稿和模型 SDK"
+      "why": "服务端第 1 层 老格式书（读写书目录的老文件、总览、核心到老文件的镜像）：只用核心，不引服务端其它层和模型 SDK",
+      "allow": [
+        "packages/story-engine-ui/src/server/lib/home-test-tmp"
+      ]
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/lib",
+      "forbid": [
+        "packages/story-engine-ui/src/server/writing/",
+        "packages/story-engine-ui/src/server/editorial/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/routes/"
+      ],
+      "why": "服务端第 2 层 基础设施（读写盘、存档、模型调用主干、设置）：只用核心和老格式书，不引写稿、编辑部、流程、对话 AI、HTTP 出口"
     },
     {
       "dir": "packages/story-engine-ui/src/server/writing",
       "forbid": [
-        "packages/story-engine-ui/src/server/agent/",
-        "packages/story-engine-ui/src/server/services/",
-        "packages/story-engine-ui/src/server/routes/",
-        "packages/story-engine-ui/src/server/brain/",
         "packages/story-engine-ui/src/server/editorial/",
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/routes/",
         "@mastra/"
       ],
-      "why": "写稿层（原旧引擎搬来：出稿写手、上下文、审稿、改稿）：模型由调用方注入 WriterClient，不引用对话 AI、HTTP 出口和编辑部"
+      "why": "服务端第 3 层 写稿底层（出稿写手、上下文、长度、审稿改稿提示词、在场检测、AI 味规则）：不引编辑部、流程、对话 AI、HTTP 出口"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/editorial",
+      "forbid": [
+        "packages/story-engine-ui/src/server/services/",
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/routes/",
+        "@mastra/",
+        "ai",
+        "@ai-sdk/"
+      ],
+      "why": "服务端第 4 层 编辑部（核账、记账、章纲、头脑风暴、跟读）：模型经基础设施调用，不引流程、对话 AI、HTTP 出口和模型 SDK"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/services",
+      "forbid": [
+        "packages/story-engine-ui/src/server/agent/",
+        "packages/story-engine-ui/src/server/routes/"
+      ],
+      "why": "服务端第 5 层 流程（出稿流水线、改稿、审稿、质检、做厚、开书概况），对话 AI 和 HTTP 共用：不引对话 AI 和 HTTP 出口"
+    },
+    {
+      "dir": "packages/story-engine-ui/src/server/agent",
+      "forbid": [
+        "packages/story-engine-ui/src/server/routes/"
+      ],
+      "why": "服务端第 6 层 对话 AI（工具、指令、模型接线）：不引 HTTP 出口"
     }
   ]
 }

@@ -21,7 +21,7 @@ import {
   snapshotKindOf,
 } from "../lib/snapshot.js";
 import { attachSnapshotChanges, buildRestoreReceipt, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
-import { readCharacterNameById } from "../agent/presence/entity-labels.js";
+import { readCharacterNameById } from "../writing/presence/entity-labels.js";
 
 // ---------------------------------------------------------------------------
 // Route registrar

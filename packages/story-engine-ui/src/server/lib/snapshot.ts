@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
 import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@actalk/story-core";
-import { mirrorIsStale, syncLegacyMirror } from "../legacy-mirror/sync.js";
+import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
 

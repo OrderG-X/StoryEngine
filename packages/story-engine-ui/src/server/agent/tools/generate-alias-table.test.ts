@@ -14,7 +14,7 @@ vi.mock("../../lib/llm-client.js", async (importOriginal) => {
   return { ...actual, ...llmMocks };
 });
 
-import { ALIAS_TABLE_RELATIVE_PATH, readAliasTable, type AliasTable } from "../alias-generator/alias-generator.js";
+import { ALIAS_TABLE_RELATIVE_PATH, readAliasTable, type AliasTable } from "../../writing/presence/alias-generator.js";
 import { createConfiguredAliasProposer, generateAliasTableLogic } from "./generate-alias-table.js";
 
 describe("createConfiguredAliasProposer（P2：走流式空闲超时，不再是非流式 60s 固定死表）", () => {

@@ -14,9 +14,9 @@ import type { CommitQualityReport } from "../../writing/commit-quality-check.js"
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
-import type { RefinedQualityReport } from "../../lib/quality-report-refine.js";
+import type { RefinedQualityReport } from "../../writing/quality-report-refine.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { runDraftQualityCheck } from "../../services/quality-service.js";
 

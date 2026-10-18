@@ -23,9 +23,9 @@ import {
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
-import { readAntiRules } from "../agent/tools/check-ai-flavor.js";
-import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
-import type { AiFlavorViolation } from "../agent/ai-flavor/ai-flavor-check.js";
+import { readAntiRules } from "../writing/ai-flavor/anti-rules.js";
+import { runDeAiFlavorBatch } from "../services/de-ai-flavor-batch.js";
+import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 
 export function registerDeAiFlavorRoutes(middlewares: MiddlewareStack): void {
   middlewares.use(async (req, res, next) => {

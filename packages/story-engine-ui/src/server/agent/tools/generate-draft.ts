@@ -33,10 +33,10 @@ import type { WriterClient } from "../../writing/fast-draft-writer.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceBoolean, coerceNumber, coerceStringArray } from "./lenient-args.js";
+import { coerceBoolean, coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 
 // 兼容既有测试导入：positiveOrUndefined 现归位 lenient-args（模型无关 helper 正位），此处再导出。
-export { positiveOrUndefined } from "./lenient-args.js";
+export { positiveOrUndefined } from "../../lib/lenient-args.js";
 
 // 兼容既有测试/集成导入（generate-draft.test.ts / longform-consolidation.integration.test.ts 等）：
 // 出稿编排与纯逻辑 helper 已归位 services/draft-service.ts（双轨合一），此处原样再导出。
@@ -73,19 +73,20 @@ export type {
   GenerateDraftLengthInfo,
 } from "../../services/draft-service.js";
 
-import { createConfiguredWriterClient, createOpenAICompatibleWriterClient, resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
 import { defaultCommittedChapterPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
-import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import {
   resolveCandidateTemperatures,
   runGenerateDraft,
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
-import { callConfiguredBrainModel, callConfiguredPlannerModel } from "../../brain/index.js";
-import { callConfiguredContinueModel } from "../draft-pipeline/production-call-models.js";
+import { callConfiguredBrainModel, callConfiguredPlannerModel } from "../../editorial/index.js";
+import { callConfiguredContinueModel } from "../../services/draft-pipeline/production-call-models.js";
 
 /**
  * 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。

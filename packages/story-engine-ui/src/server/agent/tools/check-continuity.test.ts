@@ -6,7 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BrainCallModel } from "../../brain/index.js";
+import type { BrainCallModel } from "../../editorial/index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { runCheckContinuity } from "./check-continuity.js";
 

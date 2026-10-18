@@ -72,7 +72,7 @@ const { callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredC
 vi.mock("../../lib/llm-client.js", () => ({ callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel }));
 
 const { snapshotBeforeDraftOverwrite } = vi.hoisted(() => ({ snapshotBeforeDraftOverwrite: vi.fn() }));
-vi.mock("./snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
+vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
 
 import { reviseDraftTool } from "./revise-draft.js";
 

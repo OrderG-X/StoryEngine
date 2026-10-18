@@ -15,7 +15,7 @@
 import { readCharacterBible, isPlaceholderCharacterName } from "../book/project-store.js";
 import { type CharacterBibleEntry } from "../book/types.js";
 
-import { readViewpointChapterCounts } from "./presence/delta-present-names.js";
+import { readViewpointChapterCounts } from "../writing/presence/delta-present-names.js";
 
 /** 主角判定：与在场检测（in-scene-detector）同语义——isMainCharacter/role=protagonist/role 含「主角」。 */
 function isProtagonistEntry(character: CharacterBibleEntry): boolean {

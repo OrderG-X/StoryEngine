@@ -10,8 +10,8 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BrainCallModel } from "../../editorial/reader-window.js";
-import { MIRROR_FILES } from "../../legacy-mirror/build.js";
-import { MIRROR_BACKUP_DIR } from "../../legacy-mirror/sync.js";
+import { MIRROR_FILES } from "../../book/mirror/build.js";
+import { MIRROR_BACKUP_DIR } from "../../book/mirror/sync.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { listSnapshots, restoreSnapshot } from "../../lib/snapshot.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
@@ -19,8 +19,8 @@ import { commitApplyTool } from "./commit-apply.js";
 import { buildCommitPreviewToolOutput, commitPreviewTool, OPT_IN_PREFIX } from "./commit-preview.js";
 
 const warmUpReadersMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../brain/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../brain/index.js")>()),
+vi.mock("../../editorial/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../editorial/index.js")>()),
   warmUpReaders: warmUpReadersMock,
 }));
 

@@ -17,7 +17,7 @@ import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { coerceEnum } from "./lenient-args.js";
+import { coerceEnum } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext } from "../request-context.js";
 import { localizeFoundationForReading, readinessLevelLabel } from "../foundation-readable.js";
 

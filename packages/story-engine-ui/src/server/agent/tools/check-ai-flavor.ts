@@ -12,12 +12,13 @@ import { readFile } from "node:fs/promises";
 import { buildWritingContextPack } from "../../writing/writing-context-pack.js";
 import { createTool, type ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { runAiFlavorCheck, type AiFlavorReport } from "../ai-flavor/ai-flavor-check.js";
+import { runAiFlavorCheck, type AiFlavorReport } from "../../writing/ai-flavor/ai-flavor-check.js";
+import { readAntiRules } from "../../writing/ai-flavor/anti-rules.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要体检 AI 味的章号。")),
@@ -32,34 +33,6 @@ const outputSchema = z.object({
   })),
   usedFallback: z.boolean(),
 });
-
-/** 读 story/writing-rules.json 原文；读不到（缺文件/坏 JSON）→ undefined（调用方各自兜底，绝不报错）。 */
-async function readWritingRulesRaw(projectDir: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    return JSON.parse(await readFile(`${projectDir}/story/writing-rules.json`, "utf-8")) as Record<string, unknown>;
-  } catch { return undefined; }
-}
-
-function pickStringArray(raw: Record<string, unknown>, key: string): string[] {
-  return (Array.isArray(raw[key]) ? (raw[key] as unknown[]) : []).filter((x): x is string => typeof x === "string");
-}
-
-/** 从 story/writing-rules.json 抽出反 AI 判据（合并去重）。读不到→空数组（纯逻辑用通用判据兜底）。 */
-export async function readAntiRules(projectDir: string): Promise<string[]> {
-  const raw = await readWritingRulesRaw(projectDir);
-  if (!raw) return [];
-  return Array.from(new Set([...pickStringArray(raw, "forbiddenContent"), ...pickStringArray(raw, "doNotDo"), ...pickStringArray(raw, "readerExperienceRules"), ...pickStringArray(raw, "antiAiPatterns")].map((s) => s.trim()).filter(Boolean)));
-}
-
-/**
- * 只抽 antiAiPatterns 一个字段（用户自定义反 AI 词表），供 generate_draft 出稿后确定性回检
- * 转成字面量 pattern 规则（见 ai-flavor-rules.ts buildUserAntiAiPatternRules）。读不到→空数组，不崩。
- */
-export async function readAntiAiPatterns(projectDir: string): Promise<string[]> {
-  const raw = await readWritingRulesRaw(projectDir);
-  if (!raw) return [];
-  return Array.from(new Set(pickStringArray(raw, "antiAiPatterns").map((s) => s.trim()).filter(Boolean)));
-}
 
 /**
  * 跨章「前文已建立要素」：往章登记的关键道具/资产 + 已确立硬事实（来自 writing-context-pack 的

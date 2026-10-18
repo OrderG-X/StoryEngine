@@ -21,10 +21,10 @@ import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { withUiOverviewDetails } from "../../lib/project-io.js";
+import { withUiOverviewDetails } from "../../services/ui-overview.js";
 import { buildRestoreReceipt } from "../../lib/snapshot-changes.js";
 import { undoLastChange } from "../../lib/snapshot.js";
-import { readCharacterNameById } from "../presence/entity-labels.js";
+import { readCharacterNameById } from "../../writing/presence/entity-labels.js";
 import { readLastTurnUndoHintFromContext, readProjectDirFromContext } from "../request-context.js";
 
 const inputSchema = z.object({});

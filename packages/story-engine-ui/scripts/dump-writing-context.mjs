@@ -20,7 +20,7 @@ const { buildWriterContext } = await import("../src/server/writing/context-gatew
 const { renderFastDraftPromptText } = await import("../src/server/writing/prompt-cache-diagnostics.ts");
 const { readFactLedger } = await import("../src/server/book/project-store.ts");
 const { makeWriterRankContext, resolveWriterTokenBudget } = await import(
-  "../src/server/agent/context-budget/rank-writer-context.ts"
+  "../src/server/writing/rank-writer-context.ts"
 );
 
 function parseArgs(argv) {
