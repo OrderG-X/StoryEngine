@@ -148,14 +148,23 @@ export function carryChapterFileFlags(
   const before = new Map(previous.map((chapter) => [chapter.chapterNumber, chapter]));
   return next.map((chapter) => {
     const old = before.get(chapter.chapterNumber);
-    return {
+    const carried: ChapterNavItem = {
       ...chapter,
-      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名就沿用旧表的。
-      ...(!hasRealTitle(chapter) && old && hasRealTitle(old) ? { title: old.title } : {}),
+      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名
+      // （或只是「下一章」占位）就沿用旧表的。
+      ...((!hasRealTitle(chapter) || chapter.status === "planned") && old && hasRealTitle(old) ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
       ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),
     };
+    // 新表把它当「下一章」占位（还没写），带过来的标记却说它有稿（2026-10-19 试写：第 3 章有工作稿时重定稿第 2 章，
+    // 第 3 章在章节栏变成「写第 3 章」、底栏说「全部已定稿」）：状态按标记改回已定稿 / 工作稿。
+    if (carried.status !== "planned") return carried;
+    if (carried.hasCommittedChapter === true) return { ...carried, status: "committed" };
+    if (carried.hasDraftFile === true) return { ...carried, status: "draft" };
+    // 旧表里它是写过的章（AI 刚出完稿那章常只有状态、没带文件标记）：照旧表算，当前章退回工作稿。
+    if (old && old.status !== "planned") return { ...carried, status: old.status === "current" ? "draft" : old.status };
+    return carried;
   });
 }
 

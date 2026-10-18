@@ -28,6 +28,23 @@ describe("carryChapterFileFlags", () => {
     expect(merged.map((chapter) => chapter.title)).toEqual(["第12章 · 存根", "第13章 · 回信", "门房·改"]);
   });
 
+  it("新表把有工作稿的后一章当「下一章」占位 → 状态改回工作稿、章名沿用旧表（重定稿前面一章时）", () => {
+    const merged = carryChapterFileFlags(
+      [item(2, { status: "current" }), item(3, { status: "planned", title: "下一章" })],
+      [item(2, { status: "current", hasDraftFile: true, hasCommittedChapter: true }), item(3, { status: "draft", title: "第3章 · 看水", hasDraftFile: true, hasCommittedChapter: false })],
+      2,
+    );
+    expect(merged[1]).toMatchObject({ status: "draft", title: "第3章 · 看水", hasDraftFile: true });
+    const statusOnly = carryChapterFileFlags(
+      [item(3, { status: "current" }), item(4, { status: "planned", title: "下一章" })],
+      [item(3, { status: "committed" }), item(4, { status: "draft", title: "第4章 · 一只胶鞋" })],
+      3,
+    );
+    expect(statusOnly[1]).toMatchObject({ status: "draft", title: "第4章 · 一只胶鞋" });
+    const empty = carryChapterFileFlags([item(4, { status: "planned", title: "下一章" })], []);
+    expect(empty[0]!.status).toBe("planned");
+  });
+
   it("刚定稿的那章直接标已定稿（旧表里它还是工作稿）", () => {
     const merged = carryChapterFileFlags([item(7, { status: "current" })], [item(7, { status: "current", hasDraftFile: true, hasCommittedChapter: false })], 7);
     expect(merged[0]).toMatchObject({ hasDraftFile: true, hasCommittedChapter: true });
