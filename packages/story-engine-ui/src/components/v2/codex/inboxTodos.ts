@@ -25,12 +25,14 @@ export function buildInboxTodos(input: {
   readonly chapters: readonly ChapterNavItem[];
   readonly overview: Pick<StateOverview, "threads" | "arcGoals"> | null | undefined;
   readonly currentChapterNumber: number;
+  /** 导入的书还在通读记账（P8）：后面的章还没记账，前面开的线索、主线看着「很久没推进」是假的，这两条先不提。 */
+  readonly rereading?: boolean;
 }): InboxTodo[] {
   const todos: InboxTodo[] = [];
   const written = input.chapters.filter((ch) => ch.status !== "planned");
   const latest = Math.max(input.currentChapterNumber, ...written.map((ch) => ch.chapterNumber), 0);
 
-  const cleanup = input.overview?.threads.cleanupVisibleCount ?? 0;
+  const cleanup = input.rereading ? 0 : input.overview?.threads.cleanupVisibleCount ?? 0;
   if (cleanup > 0) {
     todos.push({
       key: "threads-cleanup",
@@ -41,7 +43,7 @@ export function buildInboxTodos(input: {
     });
   }
 
-  for (const goal of input.overview?.arcGoals.activeItems ?? []) {
+  for (const goal of input.rereading ? [] : input.overview?.arcGoals.activeItems ?? []) {
     const last = goal.lastTouchedChapter;
     if (typeof last !== "number" || latest - last < ARC_STALE_CHAPTERS) continue;
     todos.push({

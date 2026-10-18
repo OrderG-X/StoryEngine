@@ -124,7 +124,7 @@ export type EntryInput = z.infer<typeof EntryInput>;
 
 // —— 账单里存的条目 ——
 // 原句在存盘格式里是可选的：只有从老书导入的账单（origin = import）允许没有原句（老数据当年没存）；
-// 走「定稿」命令写的账单，ChapterLedger 的校验要求每条都有（时间由作者定或代码估的除外）。
+// 走「定稿」「通读记账」命令写的账单，ChapterLedger 的校验要求每条都有（时间由作者定或代码估的除外）。
 
 const stored = { id, quote: text.optional() };
 export const SummaryEntry = z.object({ ...summaryShape, ...stored });
@@ -171,8 +171,8 @@ export const ChapterLedger = z
     /** 定稿时正文的 sha256：之后正文被改过，投影据此标「定稿后改过」。 */
     textSha256: z.string().regex(/^[0-9a-f]{64}$/u),
     committedAt: z.string().min(1),
-    /** commit = 走「定稿」命令写的；import = 从老书数据导入的。 */
-    origin: z.enum(["commit", "import"]),
+    /** commit = 走「定稿」命令写的；import = 从老书数据导入的（导入已写的书时是空账单）；reread = 记账员通读前文记的。 */
+    origin: z.enum(["commit", "import", "reread"]),
     entries: z.array(LedgerEntry),
   })
   .superRefine((ledger, ctx) => {
@@ -186,8 +186,8 @@ export const ChapterLedger = z
       if (entry.kind === "time") times += 1;
       const problem = entryShapeProblem(entry);
       if (problem) ctx.addIssue({ code: "custom", path: ["entries", index], message: problem });
-      if (ledger.origin === "commit" && entryNeedsQuote(entry) && !entry.quote) {
-        ctx.addIssue({ code: "custom", path: ["entries", index, "quote"], message: "定稿写的条目必须附原句" });
+      if (ledger.origin !== "import" && entryNeedsQuote(entry) && !entry.quote) {
+        ctx.addIssue({ code: "custom", path: ["entries", index, "quote"], message: "定稿、通读记的条目必须附原句" });
       }
     });
     if (summaries > 1) ctx.addIssue({ code: "custom", path: ["entries"], message: "一章只能有一条梗概" });

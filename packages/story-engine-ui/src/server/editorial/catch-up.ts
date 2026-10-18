@@ -12,6 +12,7 @@ import { callConfiguredBrainModel } from "./checker.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { readReaderProgress, writeReaderProgress, type ReaderProgress } from "./reader-progress.js";
 import { readerWaitingActions } from "./waiting-registry.js";
+import { readRereadState, rereadEtaMinutes } from "./reread-state.js";
 
 export type { ReaderProgress };
 export { readReaderProgress };
@@ -47,10 +48,21 @@ export interface ReaderCatchUpRoleState {
   readonly waiting?: string;
 }
 
+/** 导入已写的书后记账员通读记账的进度（P8）：还没记完才带。stopped＝某章连着记不上，等作者点「接着记」。 */
+export interface RereadStatus {
+  readonly status: "running" | "stopped";
+  readonly done: number;
+  readonly total: number;
+  readonly etaMinutes?: number;
+  readonly stoppedReason?: string;
+}
+
 /** 三个角色的补读进度一览：reading＝还有任一角色在读（全读完为 false，界面这行进度就消失）。 */
 export interface ReadersCatchUpStatus {
   readonly reading: boolean;
   readonly roles: readonly ReaderCatchUpRoleState[];
+  /** 通读记账没记完（P8）：记账员那一行按它显示，停下时界面给「接着记」。 */
+  readonly reread?: RereadStatus;
 }
 
 /** 三个角色的补读进度一览（开书概况和 /api/reader-progress 轮询共用这一份形状）。 */
@@ -69,8 +81,26 @@ export async function readReadersCatchUpStatus(notesRoot: string, roleIds: reado
     const waiting = progress.reading && waitingActions.length > 0 ? waitingActions.join("、") : undefined;
     return { role: roleId, reading: progress.reading, done: progress.done, total: Math.max(progress.total, committed), ...(waiting ? { waiting } : {}) };
   }));
-  return { reading: roles.some((role) => role.reading), roles };
+  // P8：通读记账没记完时，记账员那一行按通读状态显示——记账员每章当场补笔记的进度回调会把 reading 写成 false，
+  // 照它显示的话进度行一闪就没、前端轮询也跟着停。
+  const reread = await readRereadState(notesRoot);
+  if (!reread || reread.status === "done") return { reading: roles.some((role) => role.reading), roles };
+  const withReread = roles.map((role) => (role.role === LEDGER_ROLE_ID ? { role: role.role, reading: reread.status === "running", done: reread.done, total: reread.total } : role));
+  const eta = rereadEtaMinutes(reread);
+  return {
+    reading: withReread.some((role) => role.reading),
+    roles: withReread,
+    reread: {
+      status: reread.status,
+      done: reread.done,
+      total: reread.total,
+      ...(eta !== undefined ? { etaMinutes: eta } : {}),
+      ...(reread.stoppedReason ? { stoppedReason: reread.stoppedReason } : {}),
+    },
+  };
 }
+
+const LEDGER_ROLE_ID = "ledger";
 
 /** 正在补的角色（进程内）：同一本书同一角色只排一个，后来的直接回。 */
 const activeCatchUps = new Set<string>();

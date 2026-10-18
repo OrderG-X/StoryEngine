@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ReadersCatchUpNote } from "./AiChatCodex.js";
@@ -148,6 +148,36 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
     );
     expect(screen.getByRole("status").textContent)
       .toBe("编辑部在读前文：核账员 58/58 · 记账员 12/58 · 章纲员 排队");
+  });
+});
+
+describe("导入的书通读记账（P8）", () => {
+  afterEach(() => cleanup());
+  const roles = (done: number, reading: boolean) => [
+    { role: "checker" as const, reading: false, done: 0, total: 8 },
+    { role: "ledger" as const, reading, done, total: 8 },
+    { role: "planner" as const, reading: false, done: 0, total: 8 },
+  ];
+
+  it("在记：记账员那一段带上还要多久", () => {
+    render(<ReadersCatchUpNote status={{ reading: true, roles: roles(3, true), reread: { status: "running", done: 3, total: 8, etaMinutes: 12 } }} />);
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：核账员 排队 · 记账员 3/8（约 12 分钟） · 章纲员 排队");
+  });
+
+  it("停下了：说停在哪、为什么，点「接着记」；接着记没成功如实写原因", async () => {
+    const onResumeReread = vi.fn().mockRejectedValueOnce(new Error("网络断了")).mockResolvedValue(undefined);
+    render(
+      <ReadersCatchUpNote
+        onResumeReread={onResumeReread}
+        status={{ reading: false, roles: roles(3, false), reread: { status: "stopped", done: 3, total: 8, stoppedReason: "服务商 502" } }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("记账员记到第 3/8 章停下了：服务商 502");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "接着记" }));
+    });
+    expect(onResumeReread).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).toContain("（网络断了）");
   });
 });
 

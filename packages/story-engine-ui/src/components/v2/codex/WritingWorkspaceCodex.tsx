@@ -250,7 +250,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     // 只在进这一页时定：unseen 清掉、当前章变了都不再拽。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, cat]);
-  const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, ch.title ?? ""] as const).filter(([, title]) => title.trim().length > 0)), [chapters]);
+  // 故事地图、改动面板只要章名本身（当前章的名字从稿纸标题行来，带着「第N章 · 」）。
+  const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, chapterBareTitle(ch.title ?? "")] as const).filter(([, title]) => title.length > 0)), [chapters]);
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
     ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")

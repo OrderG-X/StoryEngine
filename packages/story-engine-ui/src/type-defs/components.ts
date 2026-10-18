@@ -1,4 +1,4 @@
-import type { ChapterSteeringDraft, CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, StateOverview } from "../api/types.js";
+import type { ChapterSteeringDraft, CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
 import type { SuggestedAction, ThemeMode } from "./workflow.js";
 import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
@@ -93,6 +93,8 @@ export interface HomePageProps {
   readonly recentBooks: readonly BookSummary[];
   readonly onChooseFolder: () => void;
   readonly onCreateBook: (draft: CreateBookDraft) => void;
+  /** 导入已写的书（P8）：建书、开书；失败抛错（弹窗留着显示原因）。 */
+  readonly onImportBook: (input: ImportBookRequest) => Promise<void>;
   readonly onOpenSettings: () => void;
   readonly openProjectError?: string | null;
   readonly openProjectLoading?: boolean;

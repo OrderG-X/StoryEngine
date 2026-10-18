@@ -29,6 +29,7 @@ import { activeMentionQuery, buildMentionCandidates, insertMention } from "./com
 import { parsePaletteCharacters } from "./CommandPalette.js";
 import { buildInboxTodos } from "./inboxTodos.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { resumeBookReread } from "../../../api/client.js";
 import AgentErrorCard from "./AgentErrorCard.js";
 import { ChatCapabilityBar, type CapabilityAction } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
@@ -73,7 +74,7 @@ import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
-import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
+import { useReaderCatchUp, useRefreshWhenRereadDone } from "../../../hooks/useReaderCatchUp.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
@@ -109,9 +110,36 @@ const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
  * R5.2：核账 / 拟纲 / 记账在等哪个角色当场补笔记，那个角色后面标「（核账在等它读完）」——走的还是这条轮询链路。
  * R6.2：概况刷新的新初值盖过旧轮询快照（同一次打开里后来的补读也显示）；动作等回包期间也轮询，这行不等回包落地就能现出来。
  */
-export function ReadersCatchUpNote({ status }: {
+export function ReadersCatchUpNote({ status, onResumeReread }: {
   readonly status?: ReaderCatchUpStatus | null;
+  /** 导入的书通读记账停下了（P8）：点「接着记」。 */
+  readonly onResumeReread?: () => Promise<void>;
 }) {
+  const [resuming, setResuming] = useState<"idle" | "sending" | string>("idle");
+  const reread = status?.reread;
+  if (reread?.status === "stopped") {
+    return (
+      <div className="se-checker-reading is-stopped" role="status">
+        <span className="se-checker-reading-text">
+          记账员记到第 {reread.done}/{reread.total} 章停下了：{reread.stoppedReason ?? "没记上"}
+          {resuming !== "idle" && resuming !== "sending" ? `（${resuming}）` : ""}
+        </span>
+        {onResumeReread ? (
+          <button
+            className="se-checker-reading-resume"
+            disabled={resuming === "sending"}
+            onClick={() => {
+              setResuming("sending");
+              onResumeReread().then(() => setResuming("idle"), (error: unknown) => setResuming(error instanceof Error ? error.message : String(error)));
+            }}
+            type="button"
+          >
+            接着记
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   if (!status?.reading) return null;
   return (
     <div className="se-checker-reading" role="status">
@@ -122,7 +150,9 @@ export function ReadersCatchUpNote({ status }: {
           const label = READER_ROLE_LABELS[role.role] ?? role.role;
           const finished = !role.reading && role.total > 0 && role.done >= role.total;
           const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
-          const text = role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}` : `${label} 排队`;
+          // 导入的书通读记账（P8）：记账员这一行带上还要多久。
+          const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
+          const text = role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
           return (
             <span key={role.role}>
               {index > 0 ? " · " : ""}
@@ -133,6 +163,11 @@ export function ReadersCatchUpNote({ status }: {
       </span>
     </div>
   );
+}
+
+/** 「约 25 分钟」/「约 2 小时」。 */
+function formatEta(minutes: number): string {
+  return minutes < 60 ? `约 ${minutes} 分钟` : `约 ${Math.round(minutes / 60)} 小时`;
 }
 
 /**
@@ -234,6 +269,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // R6.2：概况刷新带来的新初值盖过旧轮询结果（同一次打开里后来的补读也显示）；动作进行中（busy）也轮询，回包到了再按 reading 停。
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
   const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp, workspaceBusy);
+  useRefreshWhenRereadDone(props.projectPath, readerCatchUp);
   // 这一章还差什么（顶卡；和稿纸底下的工具条同源）。
   const chapterProgressNow = useChapterProgress(targetChapterWordsOf(props.overview));
 
@@ -267,6 +303,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     chapters: props.workspace.chapters,
     overview: props.overview,
     currentChapterNumber: props.workspace.currentChapter.chapterNumber,
+    rereading: readerCatchUp?.reread !== undefined,
   });
   useEffect(() => {
     if (!inboxOpen) return;
@@ -374,7 +411,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         onChapterButton={props.onChapterButton}
         {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
       >
-        <ReadersCatchUpNote status={readerCatchUp} />
+        <ReadersCatchUpNote status={readerCatchUp} {...(props.projectPath ? { onResumeReread: () => resumeBookReread(props.projectPath as string) } : {})} />
         {inboxTodos.length > 0 ? (
           <div className="se-todo-more">
             <button

@@ -236,8 +236,8 @@ function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (na
   });
 }
 
-/** 会改掉前文「不会变」的事实：和它对不上，或者明写要推翻它。 */
-function touchesHardFact(item: ClassifiedEntry, before: BookProjection): boolean {
+/** 会改掉前文「不会变」的事实：和它对不上，或者明写要推翻它（定稿时默认不写、要作者勾；通读记账不写）。 */
+export function touchesHardFact(item: ClassifiedEntry, before: BookProjection): boolean {
   if (item.reasons.includes("hard-conflict")) return true;
   if (!item.reasons.includes("replaces-fact") || item.entry.kind !== "fact") return false;
   return (item.entry.replaces ?? []).some((id) => before.facts.find((fact) => fact.id === id)?.nature === "hard");

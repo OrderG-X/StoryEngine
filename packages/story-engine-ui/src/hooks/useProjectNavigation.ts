@@ -1,10 +1,11 @@
 import {
   createStoryProjectFromDraft,
   fetchStateOverview,
+  importBookProject,
 } from "../api/client.js";
 import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.js";
 import { listChatSessions, readChatSession } from "../api/chatSessionsClient.js";
-import type { StateOverview } from "../api/types.js";
+import type { ImportBookRequest, StateOverview } from "../api/types.js";
 import { sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
@@ -13,7 +14,7 @@ import { useChatStore } from "../stores/chatStore.js";
 import { emptyCommitSelections, useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
-import { bookCreationPromptText } from "../utils/bookCreationPrompt.js";
+import { bookCreationPromptText, bookImportPromptText } from "../utils/bookCreationPrompt.js";
 import { isFreshBook } from "../utils/isFreshBook.js";
 import { flushAllSaves } from "../sync/saveAll.js";
 import { markChatLoaded } from "../sync/chatSync.js";
@@ -66,6 +67,7 @@ export interface UseProjectNavigationReturn {
   readonly handleSelectChapter: (chapterId: string) => void;
   readonly handleContinueNextChapter: () => Promise<void>;
   readonly handleCreateBook: (draft: Parameters<typeof createStoryProjectFromDraft>[0]["draft"]) => Promise<void>;
+  readonly handleImportBook: (request: ImportBookRequest) => Promise<void>;
   readonly refreshWorkspaceFromOverview: (overview: StateOverview) => void;
 }
 
@@ -279,6 +281,16 @@ function bookCreationGreetingMessage(): ChapterMessage {
     id: `${BOOK_CREATION_GREETING_ID_PREFIX}${Date.now()}`,
     role: "assistant",
     content: bookCreationPromptText(),
+  };
+}
+
+/** 导入已写的书后的开场白（P8）：说清记账员在后台从头记账、记完才能核账定稿。重开书时当脚手架滤掉（进度行还在）。 */
+function bookImportGreetingMessage(chapters: number): ChapterMessage {
+  return {
+    id: `assistant-book-import-${Date.now()}`,
+    role: "assistant",
+    kind: "scaffolding",
+    content: bookImportPromptText(chapters),
   };
 }
 
@@ -758,22 +770,38 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   };
 
   /* ================================================================ */
-  /*  handleCreateBook                                                */
+  /*  handleCreateBook / handleImportBook                             */
   /* ================================================================ */
-  const handleCreateBook = async (draft: Parameters<typeof createStoryProjectFromDraft>[0]["draft"]): Promise<void> => {
-    const transition = beginNavigationTransition("创建新书");
-    if (!transition) return;
+  /**
+   * 建一本新书并开进写作台（「新建一本书」「导入已写的书」共用）：手上的书先存好 → create() 建书 → 会话接线 → 同步换上新书。
+   * 失败：新建的弹 toast；导入的抛出去（导入弹窗留着、显示原因）。
+   */
+  const openNewBook = async (input: {
+    readonly operation: string;
+    readonly title: string;
+    readonly create: () => Promise<{ readonly projectDir: string; readonly overview: StateOverview }>;
+    readonly greeting: () => ChapterMessage;
+    readonly verb: string;
+    readonly rethrow: boolean;
+  }): Promise<void> => {
+    const transition = beginNavigationTransition(input.operation);
+    if (!transition) {
+      if (input.rethrow) throw new Error("正在打开别的书，稍等一下再试。");
+      return;
+    }
+    const switched = `你切换了书，那次${input.operation}的结果没有生效。`;
     try {
       // 手上这本书（如果开着）先存好再换。失败就不建，不能假装已经保存。
       const flushed = await flushAllSaves();
       if (!flushed.ok) {
+        if (input.rethrow) throw new Error(`手上这本书没存上，没有${input.verb}：${flushed.error}`);
         showToast(`保存失败，没有新建书籍：${flushed.error}`, 5200);
         return;
       }
       if (!ownsNavigationOrigin(transition)) return;
-      const created = await createStoryProjectFromDraft({ draft });
+      const created = await input.create();
       if (!ownsNavigationOrigin(transition)) {
-        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
+        showToast(switched, 5000);
         return;
       }
       // 新建书与 openProject 同款接线：引导会话索引 + 接上全局对话记忆上限。
@@ -782,7 +810,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       // 配置的上限被静默顶掉。读失败不阻塞开书：回退旧行为（空会话），重开本书时 openProject 会补正。
       const sessionBootstrap = await listChatSessions(created.projectDir).catch(() => null);
       if (!ownsNavigationOrigin(transition)) {
-        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
+        showToast(switched, 5000);
         return;
       }
       // 还必须把活跃会话真正读一遍：sessionEpochs 只在 readChatSession/create/setActive/delete 登记，
@@ -795,14 +823,14 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
           .then((result) => Boolean(result?.session))
           .catch(() => false);
         if (!ownsNavigationOrigin(transition)) {
-          showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
+          showToast(switched, 5000);
           return;
         }
       }
       const nextWorkspace = workspaceFromStateOverview(created.overview);
       const firstPaper = await fetchChapterPaper(created.projectDir, nextWorkspace.currentChapter.chapterNumber).catch(() => null);
       if (!ownsNavigationOrigin(transition)) {
-        showToast("你切换了书，那次新建书籍的结果没有生效。", 5000);
+        showToast(switched, 5000);
         return;
       }
       const book = bookSummaryFromOverview(created.overview, created.projectDir);
@@ -826,7 +854,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setWorkspace(nextWorkspace);
       // 新建空书直接给开书开场白（与 openProject 打开空书一致，见 messagesWhenBackendSessionMissing）：
       // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
-      setMessages([bookCreationGreetingMessage()]);
+      // 导入的书给导入版开场白（说清记账员在后台记账、记完才能核账定稿）。
+      setMessages([input.greeting()]);
       setSidebar(sidebarFromStateOverview(created.overview));
       bookManagement.upsertRecentBook(book);
       setWorkspaceReady(true);
@@ -839,17 +868,43 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       if (!activeSessionLoaded) {
         // 会话没读成功 → epoch 未登记 → 本次运行聊天自动保存会被短路（另有客户端一次性 toast 兜底）。
         // 开书照旧放行（重开本书 openProject 会补正），但成功 toast 必须让位给如实告警。
-        showToast(`《${draft.title || "未命名"}》已创建，但聊天会话初始化失败：本次对话可能不会被保存，重新打开本书即可恢复。`, 6400);
+        showToast(`《${input.title}》已${input.verb}，但聊天会话初始化失败：本次对话可能不会被保存，重新打开本书即可恢复。`, 6400);
       } else {
-        showToast(`《${draft.title || "未命名"}》已创建并打开。`);
+        showToast(`《${input.title}》已${input.verb}并打开。`);
       }
     } catch (error) {
+      if (input.rethrow) throw error;
       if (ownsNavigationOrigin(transition)) {
         showToast(`创建失败：${error instanceof Error ? error.message : String(error)}`);
       }
     } finally {
       finishWorkspaceOperation(transition);
     }
+  };
+
+  const handleCreateBook = (draft: Parameters<typeof createStoryProjectFromDraft>[0]["draft"]): Promise<void> => openNewBook({
+    operation: "新建书籍",
+    title: draft.title || "未命名",
+    create: () => createStoryProjectFromDraft({ draft }),
+    greeting: bookCreationGreetingMessage,
+    verb: "创建",
+    rethrow: false,
+  });
+
+  const handleImportBook = (request: ImportBookRequest): Promise<void> => {
+    let chapters = 0;
+    return openNewBook({
+      operation: "导入书",
+      title: request.title || "未命名",
+      create: async () => {
+        const imported = await importBookProject(request);
+        chapters = imported.chapters;
+        return imported;
+      },
+      greeting: () => bookImportGreetingMessage(chapters),
+      verb: "导入",
+      rethrow: true,
+    });
   };
 
   /* ================================================================ */
@@ -875,6 +930,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     handleSelectChapter,
     handleContinueNextChapter,
     handleCreateBook,
+    handleImportBook,
     refreshWorkspaceFromOverview,
   };
 }

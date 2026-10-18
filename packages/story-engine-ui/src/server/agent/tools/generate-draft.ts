@@ -85,7 +85,7 @@ import {
   runGenerateDraft,
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
-import { callConfiguredBrainModel, callConfiguredPlannerModel } from "../../editorial/index.js";
+import { callConfiguredBrainModel, callConfiguredPlannerModel, rereadBlocker } from "../../editorial/index.js";
 import { callConfiguredContinueModel } from "../../services/draft-pipeline/production-call-models.js";
 
 /**
@@ -204,8 +204,10 @@ const outputSchema = z.object({
     z.literal("previous_chapter_not_committed"),
     z.literal("chapter_has_text"),
     z.literal("chapter_goal_not_author_words"),
+    z.literal("rereading"),
   ]).optional().describe(
     "被护栏拦下时为此值（ok=false）：" +
+      "rereading=导入的书记账员还在通读前文记账，记完才能出稿（summary 里有进度），如实转告、别重试；" +
       "previous_chapter_not_committed=前一章没定稿、现在写本章会穿帮；" +
       "chapter_has_text=这一章已经有稿子，整章重写要作者点「重写这一章」按钮（界面已出），告诉作者点按钮或说要改哪里，别重试；" +
       "chapter_goal_not_author_words=chapterGoal 不是作者原话，原样抄作者的话（或不填）重调。",
@@ -304,7 +306,7 @@ const outputSchema = z.object({
 
 /** 工具输出契约：共享编排 outcome 剥掉 HTTP 适配料（http 袋）与执法标记 + 护栏拦截字段（execute 护栏产出）。 */
 export type GenerateDraftToolOutput = Omit<GenerateDraftOutcome, "http" | "rejection"> & {
-  readonly blockedReason?: "previous_chapter_not_committed" | "chapter_has_text" | "chapter_goal_not_author_words";
+  readonly blockedReason?: "previous_chapter_not_committed" | "chapter_has_text" | "chapter_goal_not_author_words" | "rereading";
   readonly pendingChapterToCommit?: number;
   readonly needsConfirmation?: boolean;
   readonly rewriteConfirm?: { readonly chapter: number; readonly chapterGoal?: string };
@@ -425,6 +427,12 @@ export const generateDraftTool = createTool({
         const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
         return buildRewriteAwaitingAuthorOutput(resolvedChapter, committedNow, overview, chapterGoal);
       }
+    }
+    // 导入的书还在通读记账（P8）：账没记全，章纲员、核账员对照的前文是缺的，记完再出稿。
+    const rereading = await rereadBlocker(projectDir, "出稿");
+    if (rereading) {
+      const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+      return { ok: false, chapter: resolvedChapter, blockedReason: "rereading", issues: [rereading], overview, summary: rereading, refreshScope: "full" } as GenerateDraftToolOutput;
     }
     // B（章序护栏，防穿帮）：入库会把这章的跨章状态写进故事，下一章靠读它才不穿帮。
     // 前一章没入库就写本章 → 默认拦下（强护栏），知情后带 allowWriteAhead 再调才放行。

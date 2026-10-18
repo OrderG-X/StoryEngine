@@ -3,7 +3,7 @@
  *
  * 只读 agents/<角色>/progress.json 三个小文件，不建概况、不碰引擎状态，给前端 5 秒一次的轻量轮询用
  * （开书概况里的 readerCatchUp 是初值，在读期间界面靠这里自己走）。响应：
- * { ok: true, reading: <任一角色还在读>, roles: [{ role, reading, done, total }, …checker→ledger→planner] }
+ * { ok: true, reading: <任一角色还在读>, roles: [{ role, reading, done, total }, …checker→ledger→planner], reread?: <导入的书通读记账没记完> }
  * 没在读时 reading:false（前端收到就停轮询），roles 照给（全 0 也给，形状稳定好消费）。
  */
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
@@ -32,7 +32,7 @@ export function registerReaderProgressRoutes(middlewares: MiddlewareStack): void
       if (!guardProjectPath(res, projectDir)) return;
 
       const status = await readReadersCatchUpStatus(projectDir);
-      writeJson(res, 200, { ok: true, reading: status.reading, roles: status.roles });
+      writeJson(res, 200, { ok: true, reading: status.reading, roles: status.roles, ...(status.reread ? { reread: status.reread } : {}) });
     } catch (error) {
       writeJson(res, 500, {
         ok: false,

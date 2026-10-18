@@ -38,3 +38,14 @@
 @keyframes se-fade{from{opacity:0}to{opacity:1}}
 @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes se-drawer-in{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}
+
+/* 「导入已写的书」弹窗（P8，portal 到 body）：认出的章一行一章，勾掉的变淡。 */
+:root .dialog-content.se-import-book{width:min(600px,calc(100vw - 32px));}
+:root .se-import-book-file{display:none;}
+:root .se-import-book-summary{margin:0;font-size:13px;color:var(--text);}
+:root .se-import-book-list{list-style:none;display:flex;flex-direction:column;gap:1px;max-height:280px;overflow-y:auto;margin:0 -6px;padding:0;}
+:root .se-import-book-list label{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text);}
+:root .se-import-book-list label:hover{background:var(--hover);}
+:root .se-import-book-list li.off label{color:var(--faint);}
+:root .se-import-book-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+:root .se-import-book-list small{flex:none;font-size:12px;color:var(--faint);}

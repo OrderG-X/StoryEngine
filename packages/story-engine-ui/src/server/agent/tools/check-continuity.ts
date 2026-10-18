@@ -14,6 +14,7 @@ import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { draftVersionOf } from "@actalk/story-core";
 import { checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
+import { rereadBlocker } from "../../editorial/reread-state.js";
 
 const issueSchema = z.object({
   quote: z.string().describe("有问题的那一句（原文）。"),
@@ -70,6 +71,11 @@ export async function runCheckContinuity(
       reused: false,
       summary: `第 ${chapter} 章还没有正文，没法核账。`,
     };
+  }
+  // 导入的书还在通读记账（P8）：前文的账没记全，核出来的「对不上」靠不住。
+  const rereading = await rereadBlocker(projectDir, "核账");
+  if (rereading) {
+    return { ok: false, chapter, source: draft.source, sure: [], maybe: [], earlierOpen: [], failures: [rereading], dismissed: 0, reused: false, summary: rereading };
   }
   const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), options);
   // 版本号按读到的那份文件算（和核心 draft 的版本同一口径）：界面拿它判断「核过后改过稿」，不拿结果到达那一刻稿纸上的版本

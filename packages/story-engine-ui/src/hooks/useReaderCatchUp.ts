@@ -14,7 +14,9 @@
  *   回包到了（actionInFlight 翻 false）再按 reading 决定停不停。
  */
 import { useEffect, useState } from "react";
-import { fetchReaderCatchUp } from "../api/client.js";
+import { fetchReaderCatchUp, fetchStateOverview } from "../api/client.js";
+import { useNavigationStore } from "../stores/navigationStore.js";
+import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
 import type { ReaderCatchUpStatus } from "../api/types.js";
 
 export const READER_CATCH_UP_POLL_MS = 5_000;
@@ -40,7 +42,8 @@ export function useReaderCatchUp(
     setInitialSeq((seq) => seq + 1);
   }
   const live = polled && polled.path === projectPath && polled.seq >= initialSeq ? polled.status : null;
-  const reading = live ? live.reading : (initial?.reading ?? false);
+  // 导入的书通读记账停下了（P8）也接着轮询：作者点「接着记」后几秒内就能看到它又走起来。
+  const reading = live ? live.reading || Boolean(live.reread) : (initial?.reading ?? false) || Boolean(initial?.reread);
   const busy = Boolean(actionInFlight);
   useEffect(() => {
     // 没在读且没动作在跑：不轮询；全读完（reading 翻 false）且没有动作、或离开这本书（projectPath 变空 / 换书）即停。
@@ -61,4 +64,23 @@ export function useReaderCatchUp(
   }, [projectPath, reading, busy, initialSeq]);
   // 没开书（projectPath 空）一律不显示，初值也不带——上一本的进度不该闪在书架/别的书上。
   return projectPath ? (live ?? initial ?? null) : null;
+}
+
+/**
+ * 导入的书通读记账刚记完（P8）：原地重读一次概况，故事地图、伏笔看板、设定本跟着换上记好的账，不用作者刷新页面。
+ * 只认「同一本书上一刻还在通读、这一刻没了」。
+ */
+export function useRefreshWhenRereadDone(projectPath: string | null | undefined, status: ReaderCatchUpStatus | null): void {
+  const rereading = Boolean(status?.reread);
+  const [seen, setSeen] = useState<{ readonly path: string | null | undefined; readonly rereading: boolean }>({ path: projectPath, rereading });
+  useEffect(() => {
+    const finished = seen.path === projectPath && seen.rereading && !rereading;
+    if (seen.path !== projectPath || seen.rereading !== rereading) setSeen({ path: projectPath, rereading });
+    if (!finished || !projectPath) return;
+    void fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
+      .then((overview) => {
+        if (useNavigationStore.getState().projectPath === projectPath) applyOverviewToWorkspace(overview);
+      })
+      .catch(() => undefined); // 没刷上：下次开书 / 刷新照样能看到
+  }, [projectPath, rereading, seen]);
 }

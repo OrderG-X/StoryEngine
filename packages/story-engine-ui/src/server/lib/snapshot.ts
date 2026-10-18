@@ -556,6 +556,7 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "chapter.commit": "commit",
   "decision.record": "bible",
   "book.import": "bible",
+  "book.importText": "commit",
   "draft.write": "draft",
 };
 

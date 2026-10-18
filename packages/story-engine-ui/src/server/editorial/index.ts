@@ -22,6 +22,8 @@ import { DEFAULT_READER_VARIANT, callConfiguredBrainModel, checkerRoleFor } from
 import { LEDGER_ROLE } from "./ledger-keeper.js";
 import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
+import { beginReread, runReread } from "./reread.js";
+import { readRereadState } from "./reread-state.js";
 
 export {
   CHECKER_ROLE,
@@ -55,7 +57,10 @@ export {
   type ReaderCatchUpRoleState,
   type ReaderProgress,
   type ReadersCatchUpStatus,
+  type RereadStatus,
 } from "./catch-up.js";
+export { isRereadActive, REREAD_ATTEMPTS } from "./reread.js";
+export { formatRereadEta, readRereadState, rereadBlocker, rereadEtaMinutes, type RereadState } from "./reread-state.js";
 export {
   describeReaderWait,
   formatReaderWaitDuration,
@@ -161,6 +166,12 @@ export async function maybeStartReadersCatchUp(
   options: { readonly callModel?: BrainCallModel } = {},
 ): Promise<void> {
   try {
+    // P8：导入的书还在通读记账（进程重启前在记）→ 接着记；记完它自己排后台补读。停下的等作者点「接着记」。
+    const reread = await readRereadState(projectDir);
+    if (reread && reread.status !== "done") {
+      if (reread.status === "running") void runBookReread(projectDir, options);
+      return;
+    }
     const wanted = readerRoles();
     const total = await countCommittedChapters(projectDir);
     if (total <= 0) return;
@@ -177,4 +188,21 @@ export async function maybeStartReadersCatchUp(
   } catch (error) {
     console.warn("[brain] 看要不要后台补读时出错（不影响开书）", error);
   }
+}
+
+/**
+ * 跑（或接着跑）导入的书的通读记账（P8）。记完排三个专员的后台补读（记账员只差最后一章的笔记，核账员、章纲员从头读）。
+ * 永不抛错，调用方放心 `void`。
+ */
+export function runBookReread(projectDir: string, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
+  return runReread(projectDir, {
+    ...options,
+    onDone: (total) => void catchUpReaders(projectDir, total, options),
+  });
+}
+
+/** 导入后开一轮新的通读：先落状态（开书那次概况就带得上进度），再在后台跑。 */
+export async function startBookReread(projectDir: string, total: number, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
+  await beginReread(projectDir, total);
+  void runBookReread(projectDir, options);
 }

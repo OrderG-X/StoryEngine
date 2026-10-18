@@ -1,12 +1,14 @@
 /**
  * 命令表：核心认的全部写命令。按钮按名字调；对话 AI 的工具 = 这张表里它有权调的（ai-direct）+ 只读查询。
  *
- * 现在有五条（定稿、记裁定、导入老书、作者存稿、AI 写稿），其余按 docs/rebuild/P2-core-design.md 第四节逐条加：
+ * 现在有七条（定稿、记裁定、导入老书、导入已写的书、通读记账、作者存稿、AI 写稿），其余按 docs/rebuild/P2-core-design.md 第四节逐条加：
  * 起草 / 改稿（ai-direct）、改账（author）、改设定卡（author）、补资料（ai-direct）、裁剪历史（author）。
  */
 import { chapterCommit } from "./chapter-commit.js";
 import { decisionRecord } from "./decision-record.js";
 import { bookImport } from "../import/command.js";
+import { bookImportText } from "../import/text-import.js";
+import { ledgerReread } from "./ledger-reread.js";
 import { draftSave, draftWrite } from "../draft/commands.js";
 import type { AnyWriteCommandSpec, Caller } from "./types.js";
 
@@ -14,6 +16,8 @@ export const WRITE_COMMANDS: Readonly<Record<string, AnyWriteCommandSpec>> = {
   [chapterCommit.name]: chapterCommit,
   [decisionRecord.name]: decisionRecord,
   [bookImport.name]: bookImport,
+  [bookImportText.name]: bookImportText,
+  [ledgerReread.name]: ledgerReread,
   [draftSave.name]: draftSave,
   [draftWrite.name]: draftWrite,
 };

@@ -103,10 +103,22 @@ export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason }
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
 
 export { runCommand } from "./commands/runner.js";
-export { chapterCommit, ChapterCommitArgs, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { decisionRecord, type DecisionRecordResult } from "./commands/decision-record.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
+export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";
+export {
+  readSerialHeading,
+  serialChapterFile,
+  serialFileStem,
+  splitSerialText,
+  SERIAL_HEADING_MAX_CHARS,
+  type SerialFile,
+  type SerialPart,
+  type SerialSplit,
+} from "./text/serial-split.js";
 export { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
 export { DraftSaveArgs, DraftWriteArgs, draftSave, draftWrite, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";

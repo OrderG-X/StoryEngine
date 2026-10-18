@@ -9,7 +9,7 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import { coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { brainstormChapter, catchUpReaders, callConfiguredBrainModel, callConfiguredPlannerModel, type BrainCallModel, type BrainstormOption } from "../../editorial/index.js";
+import { brainstormChapter, catchUpReaders, callConfiguredBrainModel, callConfiguredPlannerModel, rereadBlocker, type BrainCallModel, type BrainstormOption } from "../../editorial/index.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("想第几章；省略=作者当前所在章。")),
@@ -47,6 +47,9 @@ export async function runBrainstormTool(input: {
   readonly callPlanner?: BrainCallModel;
   readonly callChecker?: BrainCallModel;
 }): Promise<BrainstormToolOutput> {
+  // 导入的书还在通读记账（P8）：开着的线索、前文的账都没记全，想出来的走法对不上前文。
+  const rereading = await rereadBlocker(input.projectDir, "想走法");
+  if (rereading) return { ok: false, chapter: input.chapter, summary: rereading };
   const callPlanner = input.callPlanner ?? callConfiguredPlannerModel;
   const callChecker = input.callChecker ?? callConfiguredBrainModel;
   const avoid = input.avoid?.map((item) => item.trim()).filter(Boolean);

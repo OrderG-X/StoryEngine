@@ -5,7 +5,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { StateOverview } from "../book/state-overview.js";
-import { readReadersCatchUpStatus } from "../editorial/catch-up.js";
+import { readReadersCatchUpStatus, type ReadersCatchUpStatus } from "../editorial/catch-up.js";
 import { compactRecord, isRecord, mergeStringLists, readPositiveInteger, readString, readUiChapterFileStates, type UiChapterFileState } from "../lib/project-io.js";
 
 
@@ -150,8 +150,9 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
   };
 }
 
-/** 三个跟读角色的补读进度（agents/<角色>/progress.json，形状同 catch-up 的 ReadersCatchUpStatus）：全读完就不带（进度行消失）。 */
-async function readReadersCatchUpProgress(projectDir: string): Promise<{ readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] } | undefined> {
+/** 三个跟读角色的补读进度（agents/<角色>/progress.json，形状同 catch-up 的 ReadersCatchUpStatus）：全读完就不带（进度行消失）。
+ *  导入的书通读记账停下了也带（P8）：进度行要显示原因和「接着记」。 */
+async function readReadersCatchUpProgress(projectDir: string): Promise<ReadersCatchUpStatus | undefined> {
   const status = await readReadersCatchUpStatus(projectDir).catch(() => undefined);
-  return status?.reading ? status : undefined;
+  return status?.reading || status?.reread ? status : undefined;
 }

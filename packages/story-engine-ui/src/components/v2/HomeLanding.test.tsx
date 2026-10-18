@@ -104,6 +104,7 @@ function homeProps(overrides: Partial<HomePageProps> = {}): HomePageProps {
     recentBooks: [],
     onChooseFolder: vi.fn(),
     onCreateBook: vi.fn(),
+    onImportBook: vi.fn(async () => undefined),
     onOpenSettings: vi.fn(),
     onOpenProject: vi.fn(),
     onOpenRecentBook: vi.fn(),

@@ -11,6 +11,11 @@ import type {
   DraftRevisionTask,
   GenerateDraftRequest,
   DeleteBookRequest,
+  ImportBookApiResponse,
+  ImportBookFile,
+  ImportBookRequest,
+  ImportPreview,
+  ImportPreviewApiResponse,
   RenameBookRequest,
   ReaderProgressApiResponse,
   ReaderCatchUpStatus,
@@ -60,7 +65,7 @@ export async function fetchReaderCatchUp(projectPath: string, signal?: AbortSign
   if (!payload.ok) {
     throw new Error(payload.error);
   }
-  return { reading: payload.reading, roles: payload.roles };
+  return { reading: payload.reading, roles: payload.roles, ...(payload.reread ? { reread: payload.reread } : {}) };
 }
 
 export async function fetchUsageSummary(projectPath: string, signal?: AbortSignal): Promise<UsageSummary> {
@@ -139,6 +144,39 @@ export async function createStoryProjectFromDraft(input: CreateProjectRequest, s
     throw new Error(payload.error);
   }
   return { projectDir: payload.projectDir, overview: payload.overview };
+}
+
+/** 导入已写的书（P8）第一步：切章预览，不写盘。 */
+export async function previewImportBook(files: readonly ImportBookFile[], signal?: AbortSignal): Promise<ImportPreview> {
+  const payload = await fetchJson<ImportPreviewApiResponse>(
+    "/api/books/import-preview",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ files }) },
+    signal,
+  );
+  if (!payload.ok) throw new Error(payload.error);
+  const { ok: _ok, ...preview } = payload;
+  return preview;
+}
+
+/** 导入已写的书（P8）第二步：建书、导章节，记账员在后台开始通读记账。 */
+export async function importBookProject(input: ImportBookRequest, signal?: AbortSignal): Promise<{ readonly projectDir: string; readonly overview: StateOverview; readonly chapters: number }> {
+  const payload = await fetchJson<ImportBookApiResponse>(
+    "/api/books/import",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) },
+    signal,
+  );
+  if (!payload.ok) throw new Error(payload.error);
+  return { projectDir: payload.projectDir, overview: payload.overview, chapters: payload.imported.chapters };
+}
+
+/** 通读记账停下后「接着记」（P8）。 */
+export async function resumeBookReread(projectPath: string, signal?: AbortSignal): Promise<void> {
+  const payload = await fetchJson<{ readonly ok: boolean; readonly error?: string }>(
+    "/api/books/reread",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectPath }) },
+    signal,
+  );
+  if (!payload.ok) throw new Error(payload.error ?? "没能接着记");
 }
 
 export async function renameBookProject(input: RenameBookRequest, signal?: AbortSignal): Promise<{ readonly title: string; readonly overview: StateOverview }> {

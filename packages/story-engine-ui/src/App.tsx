@@ -217,6 +217,7 @@ export function App() {
                 if (nextProjectPath?.trim()) void navigation.openProject(nextProjectPath.trim());
               },
               onCreateBook: (draft) => navigation.handleCreateBook(draft),
+              onImportBook: (input) => navigation.handleImportBook(input),
               onOpenSettings: openSettings,
               openProjectError,
               openProjectLoading,

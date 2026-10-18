@@ -6,7 +6,7 @@ import type { FactNature, ReviewMark, ThreadType, TimeBasis } from "../schema/le
 
 export interface ChapterView {
   readonly chapter: number;
-  readonly origin: "commit" | "import";
+  readonly origin: "commit" | "import" | "reread";
   readonly committedAt: string;
   readonly summary?: string;
   /** 故事第几天（从 1 起）。 */

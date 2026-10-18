@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "../ui/dialog";
 import NewBookStarter from "../NewBookStarter.js";
+import ImportBookDialog from "../ImportBookDialog.js";
 import OpenBookDialog from "../OpenBookDialog.js";
 import { useMotionStore } from "../../stores/motionStore.js";
 import type { BookSummary, HomePageProps } from "../../types.js";
@@ -47,6 +48,7 @@ export default function HomeLanding({
   recentBooks,
   onChooseFolder,
   onCreateBook,
+  onImportBook,
   onOpenSettings,
   openProjectError,
   openProjectLoading,
@@ -57,7 +59,7 @@ export default function HomeLanding({
   onDeleteRecentBook,
   onOpenRecentBookFolder,
 }: HomePageProps) {
-  const [dialog, setDialog] = useState<"create" | "open" | null>(null);
+  const [dialog, setDialog] = useState<"create" | "open" | "import" | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BookSummary | null>(null);
   const [renameTarget, setRenameTarget] = useState<BookSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -96,6 +98,7 @@ export default function HomeLanding({
             </div>
             <div className="se-home-actions">
               <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
+              <button className="se-btn ghost" onClick={() => setDialog("import")} type="button">导入已写的书</button>
               <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
             </div>
           </div>
@@ -133,6 +136,7 @@ export default function HomeLanding({
                 <p className="se-hero-meta"><span>起个名字、用一句话说说想写什么，AI 会帮你把开头的设定搭起来。也可以打开已有的 StoryEngine 项目。</span></p>
                 <div className="se-hero-actions">
                   <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
+                  <button className="se-btn ghost" onClick={() => setDialog("import")} type="button">导入已写的书</button>
                   <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
                 </div>
               </div>
@@ -189,6 +193,14 @@ export default function HomeLanding({
         onCancel={() => setDialog(null)}
         onCreate={(draft) => {
           onCreateBook(draft);
+          setDialog(null);
+        }}
+      />
+      <ImportBookDialog
+        open={dialog === "import"}
+        onCancel={() => setDialog(null)}
+        onImport={async (input) => {
+          await onImportBook(input);
           setDialog(null);
         }}
       />

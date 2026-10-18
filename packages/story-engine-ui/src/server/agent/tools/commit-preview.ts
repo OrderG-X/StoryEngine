@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../editorial/index.js";
+import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
@@ -97,6 +97,10 @@ export async function buildCommitPreviewToolOutput(input: {
   if (text === undefined || text.trim().length === 0) {
     return blocked(chapter, [`第 ${chapter} 章还没有工作稿，先写正文再定稿。`], `第 ${chapter} 章还没有工作稿，没法定稿。`);
   }
+
+  // 导入的书还在通读记账（P8）：前文的账没记全，这一章的账对不上前文。
+  const rereading = await rereadBlocker(projectDir, "定稿");
+  if (rereading) return blocked(chapter, [rereading], rereading);
 
   const gates = (await checkDraftHardGates({ projectDir, draftContent: text })).map((issue) => ({ severity: issue.severity, type: issue.type, message: issue.message }));
   if (gates.length > 0) {

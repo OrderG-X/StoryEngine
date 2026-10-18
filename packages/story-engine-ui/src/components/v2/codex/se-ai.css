@@ -93,6 +93,14 @@
   }
   .se-checker-reading-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
   .se-checker-reading-done{color:var(--faint);}
+  /* 导入的书通读记账停下了（P8）：原因 +「接着记」 */
+  .se-checker-reading.is-stopped{color:var(--text);}
+  .se-checker-reading-resume{
+    flex:none;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--text);
+    font-size:12px;padding:2px 9px;cursor:pointer;
+  }
+  .se-checker-reading-resume:hover{background:var(--hover);}
+  .se-checker-reading-resume:disabled{opacity:.5;cursor:default;}
 
   /* ── P6：头部一行放会话名（会话条并进头部）；顶卡「这一章还差什么」；输入框左边「更多」 ── */
   .se-ai-head .codex-chat-session-bar{flex:1;min-width:0;padding:0;}

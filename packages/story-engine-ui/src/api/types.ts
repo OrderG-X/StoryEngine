@@ -112,10 +112,21 @@ export interface ReaderCatchUpRoleState {
   readonly waiting?: string;
 }
 
+/** 导入的书记账员通读记账的进度（P8）：没记完才带。stopped＝某章连着记不上，等作者点「接着记」。 */
+export interface RereadStatus {
+  readonly status: "running" | "stopped";
+  readonly done: number;
+  readonly total: number;
+  readonly etaMinutes?: number;
+  readonly stoppedReason?: string;
+}
+
 /** 三个跟读角色的补读进度一览（开书概况和 /api/reader-progress 共用）：reading＝任一角色还在读。 */
 export interface ReaderCatchUpStatus {
   readonly reading: boolean;
   readonly roles: readonly ReaderCatchUpRoleState[];
+  /** 导入的书还在通读记账（P8）。 */
+  readonly reread?: RereadStatus;
 }
 
 export interface StateOverviewHookItem {
@@ -515,7 +526,7 @@ export type StateOverviewApiResponse =
 
 /** GET /api/reader-progress 的响应（R4.3 在读期间 5 秒一次的轻量轮询）。 */
 export type ReaderProgressApiResponse =
-  | { readonly ok: true; readonly reading: boolean; readonly roles: readonly ReaderCatchUpRoleState[] }
+  | { readonly ok: true; readonly reading: boolean; readonly roles: readonly ReaderCatchUpRoleState[]; readonly reread?: RereadStatus }
   | { readonly ok: false; readonly error: string };
 
 export interface BookFileActionRequest {
@@ -1060,6 +1071,46 @@ export interface CreateProjectRequest {
 
 export type CreateProjectApiResponse =
   | { readonly ok: true; readonly projectDir: string; readonly overview: StateOverview }
+  | { readonly ok: false; readonly error: string };
+
+/** 导入已写的书（P8）：要导的文件（全文已在浏览器里解好码）。 */
+export interface ImportBookFile {
+  readonly name: string;
+  readonly text: string;
+}
+
+/** 切章预览里的一段：preamble＝第一章前面的字（简介、作者的话），默认不导；chapter＝一章。 */
+export interface ImportPreviewPart {
+  readonly kind: "preamble" | "chapter";
+  readonly title: string;
+  readonly chars: number;
+  readonly file: string;
+}
+
+export interface ImportPreview {
+  readonly parts: readonly ImportPreviewPart[];
+  /** 章节正文总字数（不算前言）。 */
+  readonly totalChars: number;
+  /** 丢掉的空章（只有标题没有正文）。 */
+  readonly emptyDropped: number;
+  readonly volumeLines: number;
+  /** 一个文件时取文件名当书名；几个文件时为空。 */
+  readonly suggestedTitle: string;
+}
+
+export type ImportPreviewApiResponse =
+  | ({ readonly ok: true } & ImportPreview)
+  | { readonly ok: false; readonly error: string };
+
+export interface ImportBookRequest {
+  readonly title: string;
+  readonly files: readonly ImportBookFile[];
+  /** 和预览的 parts 一一对应：这一段导不导。 */
+  readonly include: readonly boolean[];
+}
+
+export type ImportBookApiResponse =
+  | { readonly ok: true; readonly projectDir: string; readonly overview: StateOverview; readonly imported: { readonly chapters: number } }
   | { readonly ok: false; readonly error: string };
 
 export interface GenerateDraftRequest {

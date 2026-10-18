@@ -27,4 +27,14 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
     expect(buildInboxTodos({ chapters: [ch(1, "开端"), ch(2, "开端")], overview: overview(), currentChapterNumber: 2 })).toEqual([]);
     expect(buildInboxTodos({ chapters: [], overview: null, currentChapterNumber: 1 })).toEqual([]);
   });
+
+  it("导入的书还在通读记账：线索清理、主线没推进先不提（后面的章还没记账，看着没推进是假的）", () => {
+    const todos = buildInboxTodos({
+      chapters: [ch(1, "死信"), ch(8, "待补")],
+      overview: overview({ cleanup: 7, arcs: [{ id: "g1", title: "找父亲", lastTouchedChapter: 0 }] }),
+      currentChapterNumber: 8,
+      rereading: true,
+    });
+    expect(todos.map((t) => t.title)).toEqual(["第 8 章还没起标题"]);
+  });
 });
