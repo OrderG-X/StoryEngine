@@ -87,8 +87,8 @@ export type CommandOutcome<R> = CommandSuccess<R> | CommandFailure;
 export interface RunOptions {
   readonly caller: Caller;
   readonly idempotencyKey?: string;
-  /** 写前打快照（git 快照在服务端，核心只管在对的时机调它）。 */
-  readonly snapshot?: (label: string) => Promise<void>;
+  /** 写前打快照（git 快照在服务端，核心只管在对的时机调它）。第二个参数是命令名，服务端据此给操作历史分类。 */
+  readonly snapshot?: (label: string, command: string) => Promise<void>;
   /** 写成功后推事件。 */
   readonly emit?: (event: BookEvent) => void;
   readonly now?: () => Date;

@@ -5,12 +5,9 @@
  * 重构 P4 删掉了这里的落盘出稿、流式出稿、审稿、硬伤检查、直接改稿五条路：
  * 出稿/审稿/硬伤检查都走对话通道（按钮发结构化动作，或 AI 调工具），只有一条路。
  */
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
 import { buildStateOverview, resolveDraftLengthTarget } from "@actalk/story-engine";
 import {
   assertStoryEngineProject,
-  defaultDraftPath,
   extractDraftTitle,
   guardProjectPath,
   readJsonBody,
@@ -21,12 +18,12 @@ import {
   requirePositiveBodyInteger,
   withUiOverviewDetails,
   writeJson,
-  writeFileAtomic,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { createConfiguredWriterClient } from "../lib/llm-client.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
+import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { contextBudgetPayload } from "../agent/context-budget/rank-writer-context.js";
 import { callConfiguredPlannerModel } from "../brain/index.js";
 import { countCjkChars, generateDraftCandidate } from "../services/draft-service.js";
@@ -118,18 +115,15 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
     const draftContent = requireBodyString(body.draftContent, "候选正文不能为空。");
     await assertStoryEngineProject(projectDir);
-    const draftPath = defaultDraftPath(projectDir, chapter);
-    // 审计 High-2：快照与落盘收进同一临界区（commit_apply 在锁内读同一工作稿并定稿，锁外裸写可被
-    // 插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
-    await runWithSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`, async () => {
-      await mkdir(dirname(draftPath), { recursive: true });
-      await writeFileAtomic(draftPath, `${draftContent.trimEnd()}\n`);
-    });
+    // 快照与写稿同一把书锁（commit_apply 切不进「读稿与落章之间」）；写稿走 draft.write（重构 P7）。
+    const { result: written } = await runWithSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`, () =>
+      writeAiDraft(projectDir, { chapter, body: draftContent }));
+    const draftPath = written.path;
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
     writeJson(res, 200, {
       ok: true,
       result: { applied: true, chapter, draftPath },
-      draftContent: `${draftContent.trimEnd()}\n`,
+      draftContent: written.content,
       draftTitle: extractDraftTitle(draftContent) ?? `第${chapter}章`,
       overview,
     });

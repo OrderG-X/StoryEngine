@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { attachCommitChapterDetails, humanizeUndoLabel, readCommitChapterHints, snapshotKindOf } from "./snapshot.js";
+import { attachCommitChapterDetails, coreSnapshotLabel, humanizeUndoLabel, readCommitChapterHints, snapshotKindOf } from "./snapshot.js";
 
 const run = promisify(execFile);
 
@@ -46,5 +46,14 @@ describe("snapshotKindOf：操作历史分类按写入方工具名定（重构 P
     expect(snapshotKindOf("恢复到：agent:commit_apply")).toBe("restore");
     expect(snapshotKindOf("恢复前自动快照")).toBe("restore");
     expect(snapshotKindOf("第55章修订前快照")).toBe("draft");
+  });
+
+  it("核心命令打的存档点按命令名分类，显示核心给的人话", () => {
+    const imported = coreSnapshotLabel("book.import", "导入老书的账");
+    expect(snapshotKindOf(imported)).toBe("bible");
+    expect(humanizeUndoLabel(imported)).toBe("导入老书的账");
+    expect(snapshotKindOf(coreSnapshotLabel("chapter.commit", "定稿：第 9 章"))).toBe("commit");
+    expect(snapshotKindOf(coreSnapshotLabel("draft.write", "AI 写稿：第 9 章"))).toBe("draft");
+    expect(snapshotKindOf("导入老书的账")).toBe("bible");
   });
 });

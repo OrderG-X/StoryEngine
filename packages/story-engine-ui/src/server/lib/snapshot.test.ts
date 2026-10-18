@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { createStoryProject, recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
+import { createStoryProject, recoverProjectCommitTransactions } from "@actalk/story-engine";
+import { withBookLock } from "@actalk/story-core";
 import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
@@ -195,7 +196,7 @@ describe("snapshot library", () => {
     });
     await entered.promise;
     let aliasEntered = false;
-    const aliasRun = withProjectCommitLock(alias, async () => {
+    const aliasRun = withBookLock(alias, async () => {
       aliasEntered = true;
     });
     await new Promise((resolve) => setTimeout(resolve, 10));

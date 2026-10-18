@@ -59,7 +59,6 @@ export {
   EMPTY_AUTO_DE_AI_SKIPPED,
   pickAutoDeAiTargets,
   rankDraftCandidates,
-  readDraftBodyWithRetry,
   resolveCandidateTemperatures,
   runAutoDeAiRound,
   scoreDraftCandidate,

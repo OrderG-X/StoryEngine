@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import type { ChapterPlan } from "./chapter-plan.js";
 import { cjkBigrams } from "./text-similarity.js";
 import {
@@ -31,7 +30,7 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { describeErrorBriefly, isPlaceholderCharacterName, readWritingRules, writeFileAtomic } from "./project-store.js";
+import { describeErrorBriefly, isPlaceholderCharacterName, readWritingRules } from "./project-store.js";
 import type { CharacterProfile } from "./types.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
@@ -90,11 +89,6 @@ export interface FastDraftInput {
   readonly requestedDraftLength?: number;
   readonly dryRun?: boolean;
   /**
-   * persist=false（抽卡候选用）：照常调模型生成正文，但**不写工作稿文件**，把正文放进 report.draftBody 返回。
-   * 让「再来一版」能临时生成 2–3 个候选并排给用户挑，不冲掉当前草稿、不污染操作历史。默认 true（写盘，原行为）。
-   */
-  readonly persist?: boolean;
-  /**
    * AI 腔确定性回检规则（机制进引擎、策略留 UI：规则数据由上层传入，引擎不内置禁词表）。
    * 不传/空数组 → 完全不跑、报告里无 aiFlavor 字段（旧调用方零行为变化）；传了 → 出稿后跑
    * detectAiFlavorViolations，结果以 warning-only 放进 report.aiFlavor（绝不影响 passed、不拦稿、不触发重试）。
@@ -105,8 +99,7 @@ export interface FastDraftInput {
 export interface FastDraftReport {
   readonly chapter: number;
   readonly passed: boolean;
-  readonly draftPath?: string;
-  /** persist=false（抽卡候选）时正文放这里返回，不写文件。 */
+  /** 通过时的正文（不含标题行）。引擎不写盘：落工作稿统一走核心的 draft.write（重构 P7）。 */
   readonly draftBody?: string;
   readonly title?: string;
   readonly contextStats: {
@@ -124,24 +117,6 @@ export interface FastDraftReport {
   readonly aiFlavor?: AiFlavorReport;
   readonly diagnostics?: DiagnosticsRecord;
   readonly issues: readonly string[];
-}
-
-/**
- * 工作稿写盘的唯一通道：runFastDraft persist:true 与「先 persist:false 出候选、选出优胜再落盘」共用，
- * 保证 drafts/fast/chapter-XXXX.md 的路径与标题行格式（`# {title}\n\n{body}\n`）只有这一处定义，
- * 上层（路由抽卡落盘、agent 多候选选优落盘）绝不在引擎外另拼这个文件。
- */
-export async function persistFastDraftBody(input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly title: string;
-  readonly draftBody: string;
-}): Promise<string> {
-  const draftPath = join(input.projectDir, "drafts", "fast", `chapter-${padChapter(input.chapter)}.md`);
-  // 审计 Med：工作稿正文（用户核心内容）原子写——JSON 全收口了，唯独 .md 还是裸 writeFile，
-  // 进程被杀（OOM/断电）会留下截断的半章稿，且截断文件无解析校验、下次被当正常稿读走。
-  await writeFileAtomic(draftPath, `# ${input.title}\n\n${input.draftBody.trim()}\n`);
-  return draftPath;
 }
 
 /** 后半章里某段的两字片段有这么大比例出现在前半章同一段里，就算重演。 */
@@ -532,34 +507,11 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       }, latencyTimer);
     }
 
-    if (input.persist === false) {
-      // 抽卡候选：不写工作稿、不动磁盘，把正文交回路由临时展示。
-      return withFastDraftDiagnostics(input.projectDir, {
-        chapter: input.chapter,
-        passed: true,
-        draftBody: normalizedGenerated.content.trim(),
-        title: generatedTitle,
-        contextStats,
-        promptFingerprint,
-        draftLength,
-        tokenUsage: generated.tokenUsage,
-        cacheMetrics: generated.cacheMetrics,
-        ...(beatFidelity ? { beatFidelity } : {}),
-        ...(aiFlavor ? { aiFlavor } : {}),
-        issues: writingRulesFailure,
-      }, latencyTimer);
-    }
-
-    const draftPath = await persistFastDraftBody({
-      projectDir: input.projectDir,
-      chapter: input.chapter,
-      title: generatedTitle,
-      draftBody: normalizedGenerated.content,
-    });
+    // 引擎只出正文、不写盘：落工作稿由调用方走核心的 draft.write（重构 P7 第 3 步）。
     return withFastDraftDiagnostics(input.projectDir, {
       chapter: input.chapter,
       passed: true,
-      draftPath,
+      draftBody: normalizedGenerated.content.trim(),
       title: generatedTitle,
       contextStats,
       promptFingerprint,
@@ -620,7 +572,6 @@ async function withFastDraftDiagnostics(
     contextStats: recordContextStats(report.contextStats),
     details: {
       passed: report.passed,
-      draftPath: report.draftPath,
       title: report.title,
       issueCount: report.issues.length,
       promptFingerprint: report.promptFingerprint,
@@ -814,10 +765,6 @@ function isMarkdownChapterHeading(line: string): boolean {
 function isPlainChapterHeading(line: string): boolean {
   // 不猜白名单：章节标题
   return /^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*[^。！？!?；;]{1,32})?$/u.test(line.trim());
-}
-
-function padChapter(chapter: number): string {
-  return String(Math.max(0, Math.trunc(chapter))).padStart(4, "0");
 }
 
 function unique(values: readonly string[]): string[] {

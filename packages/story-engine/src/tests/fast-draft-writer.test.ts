@@ -4,9 +4,14 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "../context-gateway.js";
-import { runFastDraft, resolveDraftMaxOutputTokens, persistFastDraftBody, type WriterClient } from "../fast-draft-writer.js";
+import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "../fast-draft-writer.js";
 import { buildPromptFingerprint, findFirstPromptDifference, renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
 import { createStoryProject } from "../project-store.js";
+
+/** 引擎不写盘了（重构 P7）：拼出调用方会落进工作稿的文件文本，沿用原来按文件比对的断言。 */
+function draftFileOf(report: { readonly title?: string; readonly draftBody?: string }): string {
+  return `# ${report.title}\n\n${report.draftBody ?? ""}\n`;
+}
 
 describe("StoryEngine-NG FastDraftWriter", () => {
   it("dry-run builds context stats without calling writer or writing a draft", async () => {
@@ -24,7 +29,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.passed).toBe(true);
-    expect(report.draftPath).toBeUndefined();
+    expect(report.draftBody).toBeUndefined();
     expect(report.contextStats.contextSections).toEqual([
       "story_core",
       "world_core",
@@ -225,8 +230,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       tokenUsage: { promptTokens: 100, completionTokens: 60, totalTokens: 160 },
       issues: [],
     });
-    expect(report.draftPath).toBe(join(projectDir, "drafts", "fast", "chapter-0001.md"));
-    await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+    // 引擎不写盘：工作稿文件由调用方走 draft.write 落。
+    await expect(access(join(projectDir, "drafts", "fast", "chapter-0001.md"))).rejects.toThrow();
+    await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 开局\n\nGuo Xu 站在大门前，第一次意识到自己的副本已经开始。\n",
     );
     await expect(readFile(join(projectDir, "characters", "guo-xu", "state.json"), "utf-8")).resolves.toContain(
@@ -246,7 +252,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(writerClient.generateDraft).toHaveBeenCalledOnce();
   });
 
-  it("persist:false generates a candidate body without writing the draft file (抽卡候选)", async () => {
+  it("generates the body without writing the draft file (落盘交给 draft.write)", async () => {
     const projectDir = await createFixtureProject();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
@@ -261,14 +267,12 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       chapter: 1,
       chapterGoal: "再来一版。",
       writerClient,
-      persist: false,
     });
 
     expect(report.passed).toBe(true);
     expect(report.title).toBe("候选一版");
     // 候选正文走 report.draftBody 返回，路由据此并排展示
     expect(report.draftBody).toBe("Guo Xu 推开门，雪光照进来。");
-    expect(report.draftPath).toBeUndefined();
     // 关键：不写工作稿文件——候选临时、不冲掉当前草稿、不污染操作历史
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0001.md"))).rejects.toThrow();
   });
@@ -499,7 +503,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
         finalLengthAfterTrim: report.draftLength?.actualLength,
       },
     });
-    const written = await readFile(report.draftPath!, "utf-8");
+    const written = draftFileOf(report);
     const writtenBody = written.replace(/^#.*\n+/u, "").trim();
     expect(writtenBody).not.toBe("");
     expect(writtenBody).not.toBe("超长草稿");
@@ -526,8 +530,8 @@ describe("StoryEngine-NG FastDraftWriter", () => {
         writerClient,
       });
 
-      expect(report.draftPath).toBe(join(projectDir, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`));
-      await expect(readFile(report.draftPath!, "utf-8")).resolves.toContain(`第${chapter}章`);
+      expect(report.passed).toBe(true);
+      await expect(Promise.resolve(draftFileOf(report))).resolves.toContain(`第${chapter}章`);
     }
   });
 
@@ -575,7 +579,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       });
 
       expect(report.passed).toBe(true);
-      await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(item.expected);
+      await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(item.expected);
     }
   });
 
@@ -596,7 +600,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.title).toBe("第1章 · 半张申请表");
-    await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+    await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 第1章 · 半张申请表\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
     );
   });
@@ -618,7 +622,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.title).toBe("第1章");
-    await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+    await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 第1章\n\nGuo Xu 捏着半张申请表，纸面在掌心里一点点发热。\n",
     );
   });
@@ -648,7 +652,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
         writerClient,
       });
       expect(report.passed).toBe(true);
-      await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+      await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
         `${item.expected}\n\nGuo Xu 站在大门前，确认自己不能回头。\n`,
       );
     }
@@ -669,7 +673,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       writerClient,
     });
     expect(report.title).toBe("第10章");
-    await expect(readFile(report.draftPath!, "utf-8")).resolves.toBe(
+    await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 第10章\n\nGuo Xu 站在大门前，确认自己不能回头。\n",
     );
   });
@@ -692,7 +696,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.passed).toBe(false);
-    expect(report.draftPath).toBeUndefined();
+    expect(report.draftBody).toBeUndefined();
     expect(report.tokenUsage).toEqual({ promptTokens: 5, completionTokens: 0, totalTokens: 5 });
     expect(report.issues).toEqual(expect.arrayContaining(["Draft content is required."]));
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0002.md"))).rejects.toThrow();
@@ -716,7 +720,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
 
     expect(report.passed).toBe(false);
-    expect(report.draftPath).toBeUndefined();
+    expect(report.draftBody).toBeUndefined();
     expect(report.issues).toEqual(expect.arrayContaining([
       "Draft content looks like JSON or a tool-call artifact.",
       expect.stringContaining("Draft content must mention at least one selected character"),
@@ -814,48 +818,6 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(gateIssue?.split(", ")).not.toContain("主角");
   });
 
-  // 「先 persist:false 出候选、选出优胜再落盘」的写盘通道：与 runFastDraft persist:true 同路径同标题行格式。
-  it("persistFastDraftBody writes the canonical draft file (same path + heading format as persist:true)", async () => {
-    const projectDir = await createFixtureProject();
-
-    const draftPath = await persistFastDraftBody({
-      projectDir,
-      chapter: 2,
-      title: "雪夜推门",
-      draftBody: "Guo Xu 推开门，雪光照进来。\n",
-    });
-
-    expect(draftPath).toBe(join(projectDir, "drafts", "fast", "chapter-0002.md"));
-    await expect(readFile(draftPath, "utf-8")).resolves.toBe(
-      "# 雪夜推门\n\nGuo Xu 推开门，雪光照进来。\n",
-    );
-  });
-
-  it("runFastDraft persist:false → persistFastDraftBody round-trip matches the persist:true file bytes", async () => {
-    const projectDir = await createFixtureProject();
-    const body = "Guo Xu 推开门，雪光照进来。";
-    const writerClient: WriterClient = {
-      generateDraft: vi.fn(async () => ({ title: "候选一版", content: body })),
-    };
-
-    const candidate = await runFastDraft({
-      projectDir,
-      chapter: 1,
-      chapterGoal: "再来一版。",
-      writerClient,
-      persist: false,
-    });
-    expect(candidate.draftBody).toBe(body);
-
-    const draftPath = await persistFastDraftBody({
-      projectDir,
-      chapter: 1,
-      title: candidate.title ?? "第1章",
-      draftBody: candidate.draftBody!,
-    });
-    await expect(readFile(draftPath, "utf-8")).resolves.toBe(`# 候选一版\n\n${body}\n`);
-  });
-
   // ── 2026-09-15 复审 P1-4/P1-5 真修 + A5 路径泄漏纪律 ──
   // 上下文构造失败/台账资料损坏时 runFastDraft 绝不 reject：落 passed:false + 结构化 code，
   // 或降级成功并留痕。用户可见文案只给 errno code + 相对文件名，绝不带本地绝对路径。
@@ -904,7 +866,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     // validateDraft 失败早退路径此前漏并 writingRulesFailure——降级留痕被吞（复审探针实证）。
     // 现在与成功/catch 路径同口径：issues 同时含「写作规则读取失败」留痕与校验问题本体。
     expect(report.passed).toBe(false);
-    expect(report.draftPath).toBeUndefined();
+    expect(report.draftBody).toBeUndefined();
     expect(report.issues).toEqual(expect.arrayContaining([
       expect.stringContaining("写作规则读取失败"),
       "Draft content is required.",

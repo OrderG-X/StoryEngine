@@ -81,7 +81,6 @@ export {
   type CacheMetrics,
   type FastDraftInput,
   type FastDraftReport,
-  persistFastDraftBody,
   runFastDraft,
   stripMarkdownEmphasis,
   stripTrailingSegmentMarkers,

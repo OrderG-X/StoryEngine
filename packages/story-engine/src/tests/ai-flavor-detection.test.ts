@@ -235,7 +235,7 @@ describe("runFastDraft · aiFlavorRules 回检挂接（warning-only）", () => {
 
     expect(report.passed).toBe(true); // high severity 命中也不拦稿、不进 issues、不触发重试
     expect(report.issues).toEqual([]);
-    expect(report.draftPath).toBeDefined();
+    expect(report.draftBody).toBeDefined();
     expect(report.aiFlavor).toBeDefined();
     expect(report.aiFlavor?.total).toBe(1);
     expect(report.aiFlavor?.bySeverity).toEqual({ high: 1, medium: 0, low: 0 });

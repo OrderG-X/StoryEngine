@@ -15,10 +15,10 @@
 import {
   buildStateOverview,
   stripMarkdownEmphasis,
-  withProjectCommitLock,
   type DraftRevisionPreview,
   type StateOverview,
 } from "@actalk/story-engine";
+import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
@@ -202,7 +202,7 @@ export const reviseDraftTool = createTool({
     const channel = await createRevisionModelChannel();
     // 快照 + 改稿写回放进同一把项目锁，和其他写类工具（writeTool）一样：撤销、定稿不会切进快照和写盘中间。
     // （同一份稿子的读改写本身已由 revision-service 的 runExclusive 串行。）
-    return withProjectCommitLock(projectDir, async () => {
+    return withBookLock(projectDir, async () => {
     // M6：修订会覆盖现有草稿，覆盖前建快照让修订可撤销（修订必有非空草稿）。
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章修订前快照`);
     const outcome = await reviseDraftOneShot({

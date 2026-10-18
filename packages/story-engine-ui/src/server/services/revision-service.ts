@@ -46,7 +46,9 @@ import {
 } from "@actalk/story-engine";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { defaultDraftPath, runExclusive, writeFileAtomic } from "../lib/project-io.js";
+import { withBookLock } from "@actalk/story-core";
+import { writeAiDraft } from "../lib/ai-draft-write.js";
+import { defaultDraftPath } from "../lib/project-io.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
 
 /* ---------------------------------------------------------------------------
@@ -319,9 +321,9 @@ export function nextDraftVersion(): number {
   return lastDraftVersion;
 }
 
-async function persistRevisionUpdate(draftPath: string, updatedContent: string): Promise<number> {
-  // 审计：覆盖写原子化（tmp+rename）——进程被杀不留半截稿。
-  await writeFileAtomic(draftPath, `${updatedContent.trimEnd()}\n`);
+/** 改稿写回走 draft.write（重构 P7：AI 写工作稿只有这一条路）。 */
+async function persistRevisionUpdate(projectDir: string, chapter: number, updatedContent: string): Promise<number> {
+  await writeAiDraft(projectDir, { chapter, body: updatedContent });
   return nextDraftVersion();
 }
 
@@ -393,9 +395,9 @@ export async function applyRevision(input: {
 }): Promise<RevisionApplySuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
   const draftPath = defaultDraftPath(projectDir, chapter);
-  // #9：读稿→算稿→写盘整段按草稿文件互斥（与 reviseDraftOneShot 同一把锁）——apply 的读此前在
-  // runWithSnapshot 临界区之外，两笔并发 apply 仍能交错出「各自基于旧稿、最后写者赢」。
-  return runExclusive(draftPath, () => applyRevisionLocked(input, draftPath));
+  // #9：读稿→算稿→写盘整段在书锁里（与 reviseDraftOneShot、存档、定稿同一把，可重入）——两笔并发 apply
+  // 不会交错出「各自基于旧稿、最后写者赢」。原来按草稿文件另加一把互斥，和书锁嵌套顺序相反时会互相等死。
+  return withBookLock(projectDir, () => applyRevisionLocked(input, draftPath));
 }
 
 async function applyRevisionLocked(
@@ -430,7 +432,7 @@ async function applyRevisionLocked(
   // 锁外，commit_apply 在锁内读同一工作稿并定稿——交错可丢修订或把半截稿定稿）。修订应用前快照的
   // 时序语义不变：守卫全过之后才进 runWithSnapshot（拒绝路径不建快照）。
   await runWithSnapshot(projectDir, "修订应用前快照", async () => {
-    await persistRevisionUpdate(draftPath, updatedContent);
+    await persistRevisionUpdate(projectDir, chapter, updatedContent);
   });
   return { ok: true, applied: true, preview, draftPath, updatedContent };
 }
@@ -457,10 +459,9 @@ export async function reviseDraftOneShot(input: {
   // 这段读-改-写此前无任何互斥：同轮 N 笔 revise_draft 并发跑时各自读到同一份「本轮开头的
   // 工作稿」、各自写回「开头稿+自己的修订」，最后写者赢——前面的修订被静默覆盖（真机第 2 章
   // 两笔丢一笔、第 14 章四笔并发只活最后一笔，AI 会话原话「并发改写只保留了最后一处」）。
-  // 修法：整段按草稿文件加进程内互斥（runExclusive，同 workspace 写盘串行的既有原语）——
-  // 第二笔排队等第一笔写完才读盘，每笔修订天然基于磁盘最新工作稿（含上一笔的结果）。
-  // 刻意不用 project 级 commit 锁：修订模型一跑几十秒，别让概览/提交读写陪跑。
-  return runExclusive(draftPath, () => reviseDraftOneShotLocked(input, draftPath));
+  // 修法：整段进书锁——第二笔排队等第一笔写完才读盘，每笔修订天然基于磁盘最新工作稿（含上一笔的结果）。
+  // 重构 P7 起用书锁（可重入，revise_draft 工具外层本就拿着它）：读概览不拿锁，修订模型跑几十秒只让写操作排队。
+  return withBookLock(input.projectDir, () => reviseDraftOneShotLocked(input, draftPath));
 }
 
 async function reviseDraftOneShotLocked(
@@ -499,7 +500,7 @@ async function reviseDraftOneShotLocked(
     }
     const preview = exactReplacementPreview(resolvedTask, resolvedTarget, exactReplacement);
     const updatedContent = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
-    const draftVersion = await persistRevisionUpdate(draftPath, updatedContent);
+    const draftVersion = await persistRevisionUpdate(projectDir, chapter, updatedContent);
     return { ok: true, applied: true, mode: "exact", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
   }
 
@@ -532,6 +533,6 @@ async function reviseDraftOneShotLocked(
     return { ok: false, code: "target_unchanged", task: resolvedTask, preview };
   }
 
-  const draftVersion = await persistRevisionUpdate(draftPath, updatedContent);
+  const draftVersion = await persistRevisionUpdate(projectDir, chapter, updatedContent);
   return { ok: true, applied: true, mode: "model", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
 }

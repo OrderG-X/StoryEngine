@@ -24,8 +24,8 @@ export type EnsureOnCoreResult =
   | { readonly ok: false; readonly code: string; readonly reason: string };
 
 export interface EnsureOnCoreOptions {
-  /** 导入前存撤销点（失败就不导入）。 */
-  readonly snapshot?: (label: string) => Promise<void>;
+  /** 导入前存撤销点（失败就不导入）。第二个参数是命令名。 */
+  readonly snapshot?: (label: string, command: string) => Promise<void>;
 }
 
 const pending = new Map<string, Promise<EnsureOnCoreResult>>();

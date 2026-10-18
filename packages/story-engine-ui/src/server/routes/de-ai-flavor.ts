@@ -18,11 +18,11 @@ import {
   requireBodyString,
   requirePositiveBodyInteger,
   writeJson,
-  writeFileAtomic,
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
+import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { readAntiRules } from "../agent/tools/check-ai-flavor.js";
 import { runDeAiFlavorBatch } from "../agent/ai-flavor/de-ai-flavor-batch.js";
 import type { AiFlavorViolation } from "../agent/ai-flavor/ai-flavor-check.js";
@@ -98,11 +98,10 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     let snapshotId: string | undefined;
     let writtenContent = rawDraft;
     if (result.rewritten > 0 && result.updatedContent !== rawDraft) {
-      // 审计 High-2：快照与落盘同一临界区（此前锁外裸写可被 commit_apply 交错读到半截稿）+ 原子写。
-      writtenContent = `${result.updatedContent.trimEnd()}\n`;
-      const { snapshot } = await runWithSnapshot(projectDir, "一键去 AI 味前快照", async () => {
-        await writeFileAtomic(draftPath, writtenContent);
-      });
+      // 快照与写稿同一把书锁（撤销、定稿切不进中间）；写稿走 draft.write（重构 P7）。
+      const { snapshot, result: written } = await runWithSnapshot(projectDir, "一键去 AI 味前快照", () =>
+        writeAiDraft(projectDir, { chapter, body: result.updatedContent }));
+      writtenContent = written.content;
       snapshotId = snapshot.id;
     }
 

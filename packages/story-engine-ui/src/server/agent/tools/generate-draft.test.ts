@@ -38,7 +38,6 @@ import {
   pickAutoDeAiTargets,
   positiveOrUndefined,
   rankDraftCandidates,
-  readDraftBodyWithRetry,
   resolveCandidateTemperatures,
   runGenerateDraftToolLogic,
   scoreDraftCandidate,
@@ -478,21 +477,6 @@ describe("draftLength 字数透明（一次成稿不重试：低于下限不拒�
     expect(out.draftLength).toBeDefined();
     expect(out.draftLength?.actualLength).toBe(0); // JSON 伪正文无中文字符
     expect(out.draftLength?.lengthStatus).toBe("below_lower_bound");
-  });
-});
-
-describe("readDraftBodyWithRetry（L1 回读兜底）", () => {
-  it("文件有正文 → 去标题返回正文", async () => {
-    const projectDir = await makeProject("回读", "林远");
-    const path = defaultDraftPath(projectDir, 2);
-    await writeFile(path, "# 第二章\n\n林远走进了房间，停在窗前。", "utf-8");
-    const body = await readDraftBodyWithRetry(path, { delayMs: 0 });
-    expect(body).toBe("林远走进了房间，停在窗前。");
-  });
-
-  it("文件读不到（极少数 FS 抖动模拟）→ 重试后仍空返回空字符串（调用方据此沿用旧稿、不谎报失败）", async () => {
-    const body = await readDraftBodyWithRetry("/nonexistent/path/chapter-0001.md", { retries: 3, delayMs: 0 });
-    expect(body).toBe("");
   });
 });
 

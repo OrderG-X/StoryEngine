@@ -8,6 +8,11 @@ import { findReplayedParagraphs, runFastDraft, stripTrailingSegmentMarkers, type
 import { renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
 import { createStoryProject } from "../project-store.js";
 
+/** 引擎不写盘了（重构 P7）：拼出调用方会落进工作稿的文件文本，沿用原来按文件比对的断言。 */
+function draftFileOf(report: { readonly title?: string; readonly draftBody?: string }): string {
+  return `# ${report.title}\n\n${report.draftBody ?? ""}\n`;
+}
+
 // 2026-10-08 十章验收第五轮：「先写短、再接着续」的续写越过章纲最后一步自己编新的一天（58 处矛盾里 27 处）。
 const PLAN = normalizeChapterPlan({
   summary: "林澈去档案室对出缺页",
@@ -36,7 +41,7 @@ describe("按章纲分前后两半写", () => {
           : { title: "", content: `${han(900, "后")}。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(2);
     const firstPrompt = renderFastDraftPromptText(contexts[0]);
     expect(firstPrompt).toContain("这次是前半章】只写章纲要点 1–3");
@@ -44,7 +49,7 @@ describe("按章纲分前后两半写", () => {
     expect(secondPrompt).toContain("只写章纲要点 4–5");
     expect(secondPrompt).toContain("## already_written");
     expect(secondPrompt).toContain(han(50, "前"));
-    const written = await readFile(report.draftPath!, "utf-8");
+    const written = draftFileOf(report);
     expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
     expect(report.passed).toBe(true);
   });
@@ -60,9 +65,9 @@ describe("按章纲分前后两半写", () => {
           : { title: "", content: `${han(900, "后")}。\n\n（全文完）` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(renderFastDraftPromptText(contexts[1])).not.toContain("本章未完");
-    const written = await readFile(report.draftPath!, "utf-8");
+    const written = draftFileOf(report);
     expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
     expect(written).not.toContain("未完");
     expect(written).not.toContain("全文完");
@@ -86,7 +91,7 @@ describe("按章纲分前后两半写", () => {
         return { title: "档案室", content: `${han(900, contexts.length === 1 ? "前" : "后")}。` };
       }),
     };
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: PLAN.summary, writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: PLAN.summary, writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     const firstPrompt = renderFastDraftPromptText(contexts[0]);
     expect(firstPrompt).not.toContain("每个要点都要真正写到");
     const firstPlan = contexts[0].sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown>;
@@ -108,7 +113,7 @@ describe("按章纲分前后两半写", () => {
         return { title: "t", content: `${han(900, "文")}。` };
       }),
     };
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(renderFastDraftPromptText(contexts[0])).toContain("章纲要点里没写换天，就都在同一天里");
     expect(renderFastDraftPromptText(contexts[1])).toContain("章纲要点里没写换天，就都在同一天里");
   });
@@ -122,8 +127,8 @@ describe("按章纲分前后两半写", () => {
         return { title: "档案室", content: calls === 1 ? `林澈${han(2000, "前")}。` : `${han(1990, "后")}。结尾一句。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
-    expect(await readFile(report.draftPath!, "utf-8")).toContain("结尾一句。");
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    expect(draftFileOf(report)).toContain("结尾一句。");
     expect(report.issues.join("\n")).toContain("不从结尾裁");
   });
 
@@ -141,10 +146,10 @@ describe("按章纲分前后两半写", () => {
         return { title: "", content: `${han(900, "后")}。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
     expect(renderFastDraftPromptText(contexts[1])).toContain("把上一章的原文又写了一遍");
-    const written = await readFile(report.draftPath!, "utf-8");
+    const written = draftFileOf(report);
     expect(written).not.toContain(p2);
     expect(written).toContain("林澈一早出门");
     expect(report.issues.join("\n")).toContain("前半章首稿照抄了上一章 2 段，已重写前半章");
@@ -159,7 +164,7 @@ describe("按章纲分前后两半写", () => {
         return { title: "档案室", content: `林澈${han(900, prompts.length === 1 ? "前" : "后")}。` };
       }),
     };
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     const [first, second] = prompts;
     let shared = 0;
     while (shared < first.length && first[shared] === second[shared]) shared += 1;
@@ -176,9 +181,9 @@ describe("按章纲分前后两半写", () => {
         .mockResolvedValueOnce({ title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(900, "前")}。` })
         .mockRejectedValueOnce(new Error("socket hang up")),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(report.issues.join("\n")).toContain("后半章没写成");
-    expect(await readFile(report.draftPath!, "utf-8")).not.toContain("后");
+    expect(draftFileOf(report)).not.toContain("后");
   });
 
   it("没开分段 / 要点太少 → 一次写完（旧行为）", async () => {
@@ -186,7 +191,7 @@ describe("按章纲分前后两半写", () => {
     const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "t", content: `# 第2章 · t\n\n林澈${han(900, "全")}。` })) };
     await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, requestedDraftLength: 3000 });
     const short = normalizeChapterPlan({ summary: "s", beats: ["a", "b", "c"] }, { chapter: 2 })!;
-    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: short, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: short, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(2);
   });
 
@@ -209,10 +214,10 @@ describe("按章纲分前后两半写", () => {
         return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(600, "新")}。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
     expect(renderFastDraftPromptText(contexts[2])).toContain("把前半章（或上一章）已经写过的场面又写了一遍");
-    const written = await readFile(report.draftPath!, "utf-8");
+    const written = draftFileOf(report);
     expect(written.split(scene).length - 1).toBe(1);
     expect(written).toContain("管理员终于松了口");
     expect(report.issues.join("\n")).toContain("后半章首稿重演了前半章 1 段，已重写后半章");

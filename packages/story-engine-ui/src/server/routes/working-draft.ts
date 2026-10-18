@@ -8,7 +8,6 @@
  * 版本号是草稿文件全文的哈希（核心包 draft.save）。外面先拿老引擎的项目锁，和 AI 改稿 / 出稿互斥
  * （它们还在老锁里写同一个文件），里面跑核心命令。
  */
-import { withProjectCommitLock } from "@actalk/story-engine";
 import { draftSave, readChapterPaper, runCommand, type DraftConflictDetails } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
@@ -52,12 +51,12 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           : (() => { throw new Error("baseVersion 要么是上次读到的版本号，要么是 null（这一章原来没有工作稿）。"); })();
         const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
         await assertStoryEngineProject(projectDir);
-        const outcome = await withProjectCommitLock(projectDir, () => runCommand(projectDir, draftSave, {
+        const outcome = await runCommand(projectDir, draftSave, {
           chapter,
           body: body.body as string,
           ...(title ? { title } : {}),
           baseVersion,
-        }, { caller: "author" }));
+        }, { caller: "author" });
         if (outcome.ok) {
           writeJson(res, 200, { ok: true, version: outcome.result.version, unchanged: outcome.result.unchanged });
           return;

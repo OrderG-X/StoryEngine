@@ -118,7 +118,7 @@ describe("定稿命令", () => {
   it("先存撤销点；撤销点存不了就不写", async () => {
     const snapshot = vi.fn(async () => undefined);
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { ...author("k1"), snapshot }));
-    expect(snapshot).toHaveBeenCalledWith("定稿：第 1 章");
+    expect(snapshot).toHaveBeenCalledWith("定稿：第 1 章", "chapter.commit");
 
     const broken = await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [] }, {
       ...author("k2"),

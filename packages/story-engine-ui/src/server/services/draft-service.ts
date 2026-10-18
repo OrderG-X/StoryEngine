@@ -4,9 +4,9 @@
  * POST /api/draft/generate（非流式，routes/draft.ts handleGenerateDraft）与 generate_draft 工具
  * （agent/tools/generate-draft.ts execute）此前各自进程内复刻同一出稿编排，是全部双轨对里漂移
  * 最大的一对（漂移清单 D1–D5 的处置结论见 parity/draft-generate.parity.test.ts 头注释）。收编后
- * 本 service 落定 canonical 编排：上下文预算裁剪 + 在场角色解析 → runFastDraft（单候选 persist:true
- * 落盘；或多候选 persist:false 采样 + 确定性评分选优 + persistFastDraftBody 优胜落盘）→ 字数执法
- * （显式策略参数）→ AI 腔回检/自动去味/beats 裁决（显式开关）→ 总览重建 + 诚实 summary。
+ * 本 service 落定 canonical 编排：上下文预算裁剪 + 在场角色解析 → runFastDraft（引擎只出正文、不写盘；
+ * 多候选再加确定性评分选优）→ 字数执法（显式策略参数，写盘前在内存里做）→ 写一次工作稿（draft.write）
+ * → AI 腔回检/自动去味/beats 裁决（显式开关）→ 总览重建 + 诚实 summary。
  *
  * 重构 P4：HTTP 落盘出稿路（/api/draft/generate 非 persist:false 分支）和流式出稿路（/api/draft/stream）已删，
  * 落盘出稿只剩工具一条路；HTTP 只留抽卡候选（generateDraftCandidate）。下面「路由」一侧的说明只作历史由来。
@@ -52,10 +52,11 @@
  *   （context-budget/presence/ai-flavor/lenient-args/snapshot-on-draft-overwrite/check-ai-flavor 的
  *   读规则函数）——它们不 import services，无循环依赖。
  *
- * 铁律继承（一字未动）：优胜稿落盘唯一通道 persistFastDraftBody；passed=false 的候选永远不得中选；
+ * 铁律：AI 写工作稿唯一通道是 draft.write（lib/ai-draft-write.ts，重构 P7）；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
-import { readFile, rm, stat as statFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { withBookLock } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   buildDraftLengthReport,
@@ -63,13 +64,11 @@ import {
   checkDraftBeatFidelity,
   countDraftChineseCharacters,
   detectAiFlavorViolations,
-  persistFastDraftBody,
   readWritingRules,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
   runFastDraft,
   trimDraftBodyToLengthTarget,
-  withProjectCommitLock,
   type AiFlavorReport,
   type AiFlavorRule,
   type AiFlavorSeverity,
@@ -86,7 +85,8 @@ import {
 } from "@actalk/story-engine";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../lib/beat-miss-adjudication.js";
-import { defaultDraftPath, extractDraftTitle, stripLeadingMarkdownChapterHeading, writeFileAtomic } from "../lib/project-io.js";
+import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { countTextWords } from "../../utils/textUtils.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { positiveOrUndefined } from "../agent/tools/lenient-args.js";
@@ -159,33 +159,6 @@ function enforceDraftLengthTarget(input: {
     return { ok: false, error: DRAFT_TOO_LONG_ERROR };
   }
   return { ok: true, draftBody: trimmed.draftBody.trim() };
-}
-
-/**
- * 执法拒稿回滚：有旧稿原文则写回，无旧稿删掉引擎刚写的文件（绝不把拒收的短稿留在盘上）。
- * CAS 防护（Fable 5.1 复审漏报 R1 / 2026-09-15 审计 P1-6 附带）：读旧稿（写盘前）与回滚
- * 之间有一个写盘窗口，期间文件若被别的进程改过（mtime/size 变了），回滚会静默覆盖第三方
- * 改动。此时如实抛错，绝不覆盖——调用方把它报成失败，比静默吞掉安全。
- */
-export async function restoreDraftFile(
-  draftPath: string,
-  previousContent: string | undefined,
-  cas?: { readonly mtimeMs?: number; readonly size?: number },
-): Promise<void> {
-  if (previousContent !== undefined) {
-    if (cas?.mtimeMs !== undefined && cas?.size !== undefined) {
-      const current = await statFile(draftPath).catch(() => null);
-      if (current && (current.mtimeMs !== cas.mtimeMs || current.size !== cas.size)) {
-        throw new Error(
-          `回滚前发现工作稿已被改动（mtime ${cas.mtimeMs} → ${current.mtimeMs}，size ${cas.size} → ${current.size}），为避免覆盖第三方改动，本次拒稿未回滚旧稿。`,
-        );
-      }
-    }
-    // 审计：拒稿回滚旧稿原子化——回滚写撕裂会让「旧稿」变半截（CAS 只防覆盖不防撕裂）。
-    await writeFileAtomic(draftPath, previousContent);
-    return;
-  }
-  await rm(draftPath, { force: true });
 }
 
 /* ---------------------------------------------------------------------------
@@ -368,85 +341,6 @@ export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): stri
 }
 
 /**
- * 回读工作稿正文，去 Markdown 章节标题。刚写盘的文件偶发读空（FS 抖动）→ 重试几次兜底（L1）。
- * 全部取不到才返回空（调用方据此沿用旧 draft，不谎报失败）。retries/delayMs 仅为单测可注入。
- */
-export async function readDraftBodyWithRetry(
-  draftPath: string,
-  opts: { readonly retries?: number; readonly delayMs?: number } = {},
-): Promise<string> {
-  const retries = opts.retries ?? 3;
-  const delayMs = opts.delayMs ?? 60;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const fileContent = await readFile(draftPath, "utf-8").catch(() => "");
-    const body = stripLeadingMarkdownChapterHeading(fileContent).trim();
-    if (body.length > 0) return body;
-    if (attempt < retries - 1 && delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-  return "";
-}
-
-/**
- * 回读刚写盘文件的原始全文（含标题行），FS 抖动重试（与 L1 同口径：3×60ms）。
- * D1 enforce 路的执法基准必须是磁盘真稿（执法/标题提取都要原文），故不能用上面的去标题版。
- * 全部失败返回 ""——调用方据此如实降级（执法跳过留痕），绝不静默。retries/delayMs 仅为单测可注入。
- */
-export async function readFileContentWithRetry(
-  path: string,
-  opts: { readonly retries?: number; readonly delayMs?: number } = {},
-): Promise<string> {
-  const retries = opts.retries ?? 3;
-  const delayMs = opts.delayMs ?? 60;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const content = await readFile(path, "utf-8").catch(() => "");
-    if (content.trim().length > 0) return content;
-    if (attempt < retries - 1 && delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-  return "";
-}
-
-/** D1 enforce 写前读旧稿的三态结果：缺席（首稿）/读到原文/存在但读不出（调用方须 fail-closed 拒稿）。 */
-export type PreviousDraftReadResult =
-  | { readonly kind: "absent" }
-  | { readonly kind: "present"; readonly content: string; readonly mtimeMs?: number; readonly size?: number }
-  | { readonly kind: "unreadable"; readonly error: string };
-
-/**
- * enforce 路的写前旧稿读取（P2-5 fail-closed）：旧稿原文是执法拒稿回滚的唯一凭据——旧稿存在但读失败
- * 时若当「无旧稿」继续，拒稿回滚会走 rm 把盘上真稿删掉。故三态必须分清：ENOENT=真无旧稿（确定答案，
- * 不重试；回滚删引擎新写的文件是对的）；读到=回滚写回原文；其余错误重试（L1 同口径 3×60ms）仍失败
- * =unreadable——调用方在写盘前诚实拒稿（此刻引擎尚未落盘，真稿分毫不动），绝不删真稿。
- * retries/delayMs 仅为单测可注入。
- */
-export async function readPreviousDraftForRollback(
-  draftPath: string,
-  opts: { readonly retries?: number; readonly delayMs?: number } = {},
-): Promise<PreviousDraftReadResult> {
-  const retries = opts.retries ?? 3;
-  const delayMs = opts.delayMs ?? 60;
-  let lastError: unknown;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const [content, stat] = await Promise.all([readFile(draftPath, "utf-8"), statFile(draftPath)]);
-      // CAS 凭据（Fable 5.1 复审漏报 R1）：回滚前要比对 mtime+size，若写盘窗口内文件被
-      // 别的进程改过，restoreDraftFile 不得静默覆盖第三方改动。
-      return { kind: "present", content, mtimeMs: stat.mtimeMs, size: stat.size };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
-      lastError = error;
-      if (attempt < retries - 1 && delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-  return { kind: "unreadable", error: lastError instanceof Error ? lastError.message : String(lastError) };
-}
-
-/**
  * 自动去味一轮（最多一轮、不循环）：读工作稿全文 → runDeAiFlavorBatch 批量改写 → 有真改动才
  * 先快照（对齐 revise_draft 的覆盖前快照）+ 写盘 → 对改后正文复检同一套确定性规则，如实报剩余。
  * 改写模型失败/解析失败/一处都没能安全替换 → 原稿不动 + 如实报（error 或 fixedCount:0）。
@@ -508,15 +402,15 @@ export async function runAutoDeAiRound(input: {
   // 不再另建（R4.2：一次出稿=一步，撤销退回整步之前）。快照读稿 fail-closed 抛错时（P2-5）：本出稿的
   // 草稿确已落盘——绝不因去味中止而谎报整稿失败；放弃本轮改写、原稿不动，error 如实报（与「改写失败=
   // 原稿不动+如实报」同款降级）。审计 High-2：读旧稿→快照→覆盖写整段进同一临界区（commit_apply 在锁内
-  // 读同一工作稿并定稿，锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 writeFileAtomic 防崩溃留半截。
+  // 读同一工作稿并定稿，锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 draft.write（重构 P7）。
   let snapshotId: string | undefined;
   const written = `${result.updatedContent.trimEnd()}\n`;
   try {
-    await withProjectCommitLock(input.projectDir, async () => {
+    await withBookLock(input.projectDir, async () => {
       if (!input.skipOverwriteSnapshot) {
         snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
       }
-      await writeFileAtomic(input.draftPath, written);
+      await writeAiDraft(input.projectDir, { chapter: input.chapter, body: written });
     });
   } catch (error) {
     // 错误原文可能内嵌绝对路径（快照读稿 errno / git 报错带 -C 仓库路径）——info.error 直达用户，先消毒（铁律④）。
@@ -535,12 +429,11 @@ export async function runAutoDeAiRound(input: {
 /* ---------------------------------------------------------------------------
  * 第四层：多候选采样防坍缩（candidates>1）
  *
- * 采样：N 个候选全部 persist:false（只生成不落盘，绝不互相覆盖工作稿），temperature 依次错开；
+ * 采样：N 个候选都只生成不落盘（引擎不写盘，绝不互相覆盖工作稿），temperature 依次错开；
  *   单个候选失败（模型异常/校验不过）如实记 failed，不拖死全局；passed=false 永远不得中选。
  * 选优：确定性评分器（纯函数、可单测、题材中立），绝不用模型打分——「评分选优」的 typicality bias
  *   靠「规则全透明 + 逐候选得分/落选理由/开头预览如实输出」来对冲，而不是引入另一个黑盒偏好。
- * 落盘：优胜稿走引擎同一写盘通道 persistFastDraftBody（与 persist:true 同路径同标题行格式），
- *   之后与 candidates=1 完全同一条后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。
+ * 落盘：优胜稿和 candidates=1 走同一处 draft.write，之后同一条后续链（aiFlavor 回检 / autoDeAi / 快照 / draftLength 标注）。
  * ------------------------------------------------------------------------- */
 
 /** 多候选采样的 temperature 错开档位幅度（第 1 个=基准，之后错开 0.15/0.3，方向由 resolveCandidateTemperatures 定）。 */
@@ -813,12 +706,12 @@ function scoreInputFromCandidateReport(
   return { ...base, eligible: true };
 }
 
-/** 采样编排结果：逐候选报告 + 汇入单候选下游链的报告（优胜=带 draftPath 的原报告；全失败=首个失败报告；全部异常=undefined）。 */
+/** 采样编排结果：逐候选报告 + 汇入单候选下游链的报告（优胜=优胜候选的报告，由调用方落盘；全失败=首个失败报告；全部异常=undefined）。 */
 interface DraftCandidateSampling {
   readonly entries: readonly DraftCandidateReportEntry[];
   readonly scoreInputs: readonly DraftCandidateScoreInput[];
   readonly chosenIndex?: number;
-  /** 全部候选无一通过（含全部异常）时为 true；false 而 effectiveReport.passed=false = 优胜稿落盘失败。 */
+  /** 全部候选无一通过（含全部异常）时为 true。 */
   readonly allFailed: boolean;
   readonly effectiveReport?: FastDraftReport;
   /** 优胜候选的判漏 AI 复核结果（该候选无判漏/未注入裁决模型=undefined）；调用方据此构建裁决后的 beatFidelity 输出。 */
@@ -826,9 +719,9 @@ interface DraftCandidateSampling {
 }
 
 /**
- * 多候选采样：顺序生成 N 个 persist:false 候选（不并发——同一项目上下文并发只会给 provider 徒增限流压力、
- * 诊断乱序），确定性选优后优胜稿走引擎同一写盘通道落盘。单个候选失败如实记录、不拖死全局；
- * 至少 1 个通过就能继续；全部失败或优胜稿落盘失败 → effectiveReport.passed=false，由调用方 ok:false 诚实回报。
+ * 多候选采样：顺序生成 N 个候选（引擎不写盘；不并发——同一项目上下文并发只会给 provider 徒增限流压力、
+ * 诊断乱序），确定性选优，优胜稿交回调用方统一走 draft.write 落盘。单个候选失败如实记录、不拖死全局；
+ * 至少 1 个通过就能继续；全部失败 → allFailed，由调用方 ok:false 诚实回报。
  * 判漏误报降噪：选优前对每个「通过 + 有判漏」的候选先跑 AI 复核（顺序调、不并发），评分吃裁决后漏报数——
  * 治「换了措辞被判漏 → 冤枉扣分」（真机实锤：优胜者被扣到 0 分）。未注入裁决模型=跳过、按确定性计数。
  */
@@ -847,7 +740,6 @@ async function sampleDraftCandidates(input: {
         ...input.sharedDraftInput,
         writerClient: input.resolveWriterClient(index),
         dryRun: false,
-        persist: false,
       }));
       exceptions.push(undefined);
     } catch (error) {
@@ -889,35 +781,14 @@ async function sampleDraftCandidates(input: {
     // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
     return { entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
   }
-  try {
-    const draftPath = await persistFastDraftBody({
-      projectDir: input.sharedDraftInput.projectDir,
-      chapter: input.sharedDraftInput.chapter,
-      title: winnerReport.title ?? `第${input.sharedDraftInput.chapter}章`,
-      draftBody: winnerReport.draftBody,
-    });
-    return {
-      entries,
-      scoreInputs,
-      chosenIndex: ranked.chosenIndex,
-      allFailed: false,
-      effectiveReport: { ...winnerReport, draftPath },
-      ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
-    };
-  } catch (error) {
-    const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
-    return {
-      entries,
-      scoreInputs,
-      chosenIndex: ranked.chosenIndex,
-      allFailed: false,
-      effectiveReport: {
-        ...winnerReport,
-        passed: false,
-        issues: [`优胜候选（第 ${ranked.chosenIndex + 1} 个）写入工作稿失败：${message}`],
-      },
-    };
-  }
+  return {
+    entries,
+    scoreInputs,
+    chosenIndex: ranked.chosenIndex,
+    allFailed: false,
+    effectiveReport: winnerReport,
+    ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
+  };
 }
 
 /* ---------------------------------------------------------------------------
@@ -1178,7 +1049,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
 }
 
 /**
- * D5 抽卡候选（HTTP 独有入参 persist:false 的 service 能力）：runFastDraft persist:false 只生成不落盘、
+ * D5 抽卡候选（HTTP 独有入参 persist:false 的 service 能力）：runFastDraft 只生成不落盘、
  * 不快照，候选正文交路由临时并排展示，挑中才落盘（/api/draft/apply-candidate）。不带 AI 腔回检（与
  * 按钮路一致）。失败如实：candidate.passed=false + issues，路由投影 422。
  */
@@ -1207,22 +1078,21 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
     ...sharedFastDraftInput(run, input),
     writerClient: input.writerClient,
     dryRun: false,
-    persist: false,
   });
   return { candidate, characterSelection: run.characterSelection, contextRanking: run.contextRanking, ...(planning?.note ? { planNote: planning.note } : {}) };
 }
 
 /**
  * 出稿主编排（canonical）：两侧适配层同调。写盘前快照由适配层负责（D4 收敛后两侧同调
- * snapshotBeforeDraftOverwrite）；本编排内的写盘点：引擎 persist:true / persistFastDraftBody /
- * enforce 裁剪重写 / autoDeAi 覆盖（自带快照）。
+ * snapshotBeforeDraftOverwrite）；本编排内的写盘点（全走 draft.write）：出稿一次（执法在它之前）/
+ * 质量环节补写 / autoDeAi 覆盖（自带快照）。
  *
  * 行为继承（原工具逻辑层逐字语义）：
  * - writerClient 注入（真实 execute 注入 createConfiguredWriterClient("fastDraft")，测试注入 mock）。
  * - 自动去味（autoDeAi 默认 true）：report.aiFlavor 检出 high/medium 且注入了 deAiCallModel 时
  *   自动跑一轮 runAutoDeAiRound；否则只标注不改写（attempted:false）。去味真落改动后对最终正文重跑
  *   确定性 beats 核对（零 token），新漏进 beatFidelity.postDeAiNewMisses、summary 如实标注。
- * - 多候选（candidates=2/3）：persist:false 采样 → 逐候选判漏 AI 复核 → 确定性选优 → 优胜稿落盘，
+ * - 多候选（candidates=2/3）：只生成不落盘的采样 → 逐候选判漏 AI 复核 → 确定性选优 → 优胜稿落盘，
  *   汇入同一条后续链。
  * - 判漏误报降噪（beatAdjudicationCallModel）：确定性判漏先经 AI 复核（带正文逐字引证才摘除误报；
  *   模型挂→维持原结论+unavailable）。零判漏零调用。
@@ -1294,34 +1164,6 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   });
   const { chapterGoal, maxTimelineEvents, lengthTarget, contextRanking, characterSelection } = run;
 
-  // D1 enforce 策略：执法拒稿要回滚旧稿——写盘前先留旧稿原文（annotate 无回滚，不读）。
-  // P2-5 fail-closed：旧稿存在但读不出时诚实拒稿——继续写会让拒稿回滚丢旧稿原文、走 rm 误删真稿；
-  // 此刻引擎尚未落盘，拒稿即真稿分毫不动。
-  const draftPath = defaultDraftPath(projectDir, chapter);
-  const previousDraft = lengthPolicy === "enforce_or_rollback"
-    ? await readPreviousDraftForRollback(draftPath)
-    : undefined;
-  if (previousDraft?.kind === "unreadable") {
-    const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
-    const contextBudget = optionalContextBudget(contextRanking);
-    // previousDraft.error 是 errno 原文、内嵌绝对路径——summary/issues 直达用户，先消毒（铁律④）。
-    const message =
-      `第 ${chapter} 章已有工作稿但读取失败（${scrubLocalAbsolutePaths(previousDraft.error)}）。` +
-      "为保护旧稿，本次未生成、未覆盖任何内容；请检查该文件后重试。";
-    return {
-      ok: false,
-      chapter,
-      issues: [message],
-      overview,
-      summary: message,
-      refreshScope: "full",
-      characterSelection,
-      ...contextBudget,
-      http: { draftContent: "", contextRanking },
-    };
-  }
-  const previousDraftContent = previousDraft?.kind === "present" ? previousDraft.content : undefined;
-
   const sharedDraftInput = sharedFastDraftInput(run, input);
   // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。
   const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
@@ -1329,8 +1171,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   let sampling: DraftCandidateSampling | undefined;
   let beatAdjudication: BeatMissAdjudication | undefined;
   if (candidateCount > 1) {
-    // 多候选：N 个 persist:false 候选（只生成不落盘）→ 逐候选判漏 AI 复核 → 确定性选优（吃裁决后漏报数）
-    // → 优胜稿统一落盘，汇入下方同一条后续链。
+    // 多候选：N 个候选（引擎不写盘）→ 逐候选判漏 AI 复核 → 确定性选优（吃裁决后漏报数）
+    // → 优胜稿汇入下方同一条落盘链。
     sampling = await sampleDraftCandidates({
       candidateCount,
       resolveWriterClient: (index) => input.candidateWriterClients?.[index] ?? writerClient,
@@ -1349,14 +1191,68 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       ...sharedDraftInput,
       writerClient,
       dryRun: false,
-      persist: true,
     });
   }
 
-  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
   const contextBudget = optionalContextBudget(contextRanking);
 
-  if (!report || !report.passed || !report.draftPath) {
+  // D1 长度执法（enforce_or_rollback，HTTP 非流式路）：写盘前在内存里执法——低于下限拒写（盘上旧稿一字不动，
+  // 不再「先写后回滚」）；超上限确定性裁剪后再写并重建 report.draftLength。annotate（工具路）跳过整段。
+  let finalReport = report;
+  let draftBody = report?.passed ? (report.draftBody ?? "").trim() : "";
+  if (report?.passed && draftBody && lengthPolicy === "enforce_or_rollback") {
+    const enforced = enforceDraftLengthTarget({ draftBody, lengthTarget, allowDeterministicTrim: true });
+    if (!enforced.ok) {
+      const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
+      return {
+        ok: false,
+        chapter,
+        issues: [enforced.error],
+        overview,
+        summary: enforced.error,
+        refreshScope: "full",
+        characterSelection,
+        ...contextBudget,
+        rejection: { kind: "length_rejected", error: enforced.error },
+        http: { report, draftContent: "", contextRanking },
+      };
+    }
+    const routeTrimmed = enforced.draftBody !== draftBody;
+    if (routeTrimmed || !report.draftLength) {
+      finalReport = {
+        ...report,
+        draftLength: buildDraftLengthReport({
+          draftBody: enforced.draftBody,
+          lengthTarget,
+          finalLengthAfterTrim: countCjkChars(enforced.draftBody),
+          whetherTrimmed: routeTrimmed || report.draftLength?.whetherTrimmed === true,
+        }),
+      };
+    }
+    draftBody = enforced.draftBody.trim();
+  }
+
+  // 落盘：出稿只在这里写一次工作稿，走核心的 draft.write（重构 P7 第 3 步；引擎不再自己写盘）。
+  let draftPath: string | undefined;
+  let finalDraftContent = "";
+  if (report?.passed && draftBody) {
+    try {
+      const written = await writeAiDraft(projectDir, { chapter, title: finalReport?.title ?? `第${chapter}章`, body: draftBody });
+      draftPath = written.path;
+      if (lengthPolicy === "enforce_or_rollback") finalDraftContent = written.content;
+    } catch (error) {
+      const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
+      report = {
+        ...report,
+        passed: false,
+        issues: [sampling?.chosenIndex !== undefined ? `优胜候选（第 ${sampling.chosenIndex + 1} 个）写入工作稿失败：${message}` : `写入工作稿失败：${message}`],
+      };
+    }
+  }
+
+  const overview = await buildStateOverview({ projectDir, chapter, maxTimelineEvents });
+
+  if (!report || !report.passed || !draftPath || !finalReport) {
     // 候选全部异常（连报告都没有）时，issues 用逐候选原因拼出，绝不空着。
     const failureIssues = report?.issues ?? sampling?.entries.map((entry) => `候选 ${entry.index}：${entry.reason}`) ?? [];
     const draftLengthInfo = report?.draftLength ? buildDraftLengthInfo(report.draftLength) : undefined;
@@ -1382,75 +1278,6 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     };
   }
 
-  // D1 长度执法（enforce_or_rollback，HTTP 非流式路）：落盘后回读执法——低于下限拒写+回滚旧稿；
-  // 超上限确定性裁剪重写落盘并重建 report.draftLength。annotate（工具路）跳过整段（引擎已如实记 draftLength）。
-  // 回读对齐 L1 口径（3×60ms 重试）；彻底读不到 → 执法如实降级跳过（summary 留痕 lengthEnforcementSkipped），
-  // 绝不静默漏执法（草稿确已落盘，ok 仍 true，绝不谎报失败）。
-  let finalReport = report;
-  let draftBody: string;
-  let finalDraftContent = "";
-  let lengthEnforcementSkipped = false;
-  if (lengthPolicy === "enforce_or_rollback") {
-    // CAS 锚点必须在【引擎写盘之后】：previousDraftCas 是写盘前的 mtime/size，引擎自己的
-    // runFastDraft 落盘必然改变它——若拿写盘前的凭据去比对，正常回滚会被误拦。这里重取
-    // 一次 stat 作为「引擎写完后的已知状态」，回滚前再比对：只有引擎写完之后、回滚之前
-    // 这段窗口内文件被第三方改动，才拒绝覆盖（Fable 5.1 复审漏报 R1）。
-    const postWriteCas = await statFile(report.draftPath).then(
-      (stat) => ({ mtimeMs: stat.mtimeMs, size: stat.size }),
-    ).catch(() => undefined);
-    const writtenContent = await readFileContentWithRetry(report.draftPath);
-    if (writtenContent.trim()) {
-      const writtenBody = stripLeadingMarkdownChapterHeading(writtenContent);
-      const enforced = enforceDraftLengthTarget({
-        draftBody: writtenBody,
-        lengthTarget,
-        allowDeterministicTrim: true,
-      });
-      if (!enforced.ok) {
-        await restoreDraftFile(report.draftPath, previousDraftContent, postWriteCas);
-        return {
-          ok: false,
-          chapter,
-          issues: [enforced.error],
-          overview,
-          summary: enforced.error,
-          refreshScope: "full",
-          characterSelection,
-          ...contextBudget,
-          rejection: { kind: "length_rejected", error: enforced.error },
-          http: { report, draftContent: "", contextRanking },
-        };
-      }
-      const routeTrimmed = enforced.draftBody !== writtenBody;
-      if (routeTrimmed) {
-        const title = extractDraftTitle(writtenContent) ?? report.title ?? `第${chapter}章`;
-        // 审计：长度执法裁剪后重写整份工作稿——同样原子化。
-        await writeFileAtomic(report.draftPath, `# ${title}\n\n${enforced.draftBody.trim()}\n`);
-      }
-      if (routeTrimmed || !report.draftLength) {
-        finalReport = {
-          ...report,
-          draftLength: buildDraftLengthReport({
-            draftBody: enforced.draftBody,
-            lengthTarget,
-            finalLengthAfterTrim: countCjkChars(enforced.draftBody),
-            whetherTrimmed: routeTrimmed || report.draftLength?.whetherTrimmed === true,
-          }),
-        };
-      }
-    } else {
-      // 执法基准回读彻底失败：执法跳过必须留痕（summary 如实标注），绝不静默放行未执法的稿子。
-      lengthEnforcementSkipped = true;
-    }
-    finalDraftContent = await readFileContentWithRetry(report.draftPath);
-    draftBody = stripLeadingMarkdownChapterHeading(finalDraftContent).trim();
-  } else {
-    // L1：草稿已写盘，但回读那一刻偶发 FS 读失败会得空稿，前端这次就不刷新（草稿其实在磁盘，切走再回来就有）。
-    // 重试回读兜底（刚写盘的文件、读空多是极少数 FS 抖动，重试即得）；仍取不到才退回空——
-    // ⚠ 绝不因此判 ok:false：稿子是真写成功的，谎报失败会诱导用户重写覆盖好稿。
-    draftBody = await readDraftBodyWithRetry(report.draftPath);
-  }
-
   // 阶段 3：出稿后的固定质量环节——字数不够就接着写够 → 前后核对 → 有冲突自动修一轮（注入了模型调用才跑；
   // HTTP enforce 路不注入，保持现状）。真改了正文就以新正文重算字数 / AI 腔 / 要点核对，后续环节都基于新正文。
   let effectiveAiFlavor = report.aiFlavor;
@@ -1464,7 +1291,6 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     qualityPipeline = await runDraftQualityPipeline({
       projectDir,
       chapter,
-      draftPath: report.draftPath,
       title: finalReport.title ?? `第${chapter}章`,
       draftBody,
       lengthTarget,
@@ -1529,7 +1355,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
         const round = await runAutoDeAiRound({
           projectDir,
           chapter,
-          draftPath: report.draftPath,
+          draftPath,
           initialHighMedium,
           targets,
           rules: run.aiFlavorRules ?? ALL_BUILTIN_AI_FLAVOR_RULES,
@@ -1593,19 +1419,10 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ? buildCandidateSummaryLine(candidateCount, sampling.scoreInputs[sampling.chosenIndex], sampling.scoreInputs)
     : "";
 
-  // 降级留痕双通道（复审 P2②）：这两条降级此前只进 summary，而路由 200 投影不带 summary——
-  // HTTP 调用方拿到 ok:true+空稿却零信号（形同假成功）。warnings 纯文本版随 http 投影带出；
-  // summary 的 ⚠/（注：…）装饰原样保留（既有契约锁定原文案），两处文案同源不漂移。
-  const enforcementSkippedWarning = "工作稿落盘后回读失败，本章长度执法未执行（正文以引擎写盘为准）；请切换章节刷新后核对字数。";
-  const draftNotLoadedWarning = "正文已写盘，但本次未能载入到写作区显示——切到别的章再切回本章即可看到，不用重写。";
-  const httpWarnings: string[] = [];
-  if (lengthEnforcementSkipped) httpWarnings.push(enforcementSkippedWarning);
-  if (draftBody.trim().length === 0) httpWarnings.push(draftNotLoadedWarning);
-
   return {
     ok: true,
     chapter,
-    draftPath: report.draftPath,
+    draftPath,
     draftBody,
     ...(finalReport.title ? { draftTitle: finalReport.title } : {}),
     ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
@@ -1628,11 +1445,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       (qualityPipeline && qualityPipeline.notes.length > 0 ? `\n${qualityPipeline.notes.join("\n")}` : "") +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +
-      // D1 执法降级留痕：落盘回读彻底失败时长度执法未执行，必须如实标注（不静默）。
-      (lengthEnforcementSkipped ? `\n⚠ ${enforcementSkippedWarning}` : "") +
-      (aiFlavorNote ? `\n${aiFlavorNote}` : "") +
-      // A11：回读为空是偶发 FS 抖动、正文确已写盘——加一句可见性提示，别让用户以为没生成而重写覆盖好稿。
-      (draftBody.trim().length === 0 ? `（注：${draftNotLoadedWarning}）` : ""),
+      (aiFlavorNote ? `\n${aiFlavorNote}` : ""),
     refreshScope: "full",
     characterSelection,
     ...contextBudget,
@@ -1640,7 +1453,6 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       report: finalReport,
       draftContent: finalDraftContent,
       contextRanking,
-      ...(httpWarnings.length > 0 ? { warnings: httpWarnings } : {}),
     },
   };
 }

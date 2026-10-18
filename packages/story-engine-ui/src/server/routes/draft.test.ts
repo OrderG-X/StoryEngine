@@ -196,14 +196,12 @@ describe("draft length guard routes", () => {
     }
   });
 
-  it("passes context ranking to persist:false candidate generation", async () => {
+  it("passes context ranking to candidate generation", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-context-");
     await writeProjectJson(projectDir);
     runFastDraft.mockImplementationOnce(async (input: {
       readonly rankContext?: (envelope: MockWriterContextEnvelope) => MockWriterContextEnvelope;
-      readonly persist?: boolean;
     }) => {
-      expect(input.persist).toBe(false);
       expect(input.rankContext?.(makeMockWriterContext()).sections.map((section) => section.name)).not.toContain("timeline_events");
       return {
         chapter: 1,

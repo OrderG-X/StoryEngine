@@ -22,7 +22,7 @@ import {
 
 import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
 import { syncLegacyMirror } from "../legacy-mirror/sync.js";
-import { createSnapshot, runWithSnapshot } from "../lib/snapshot.js";
+import { runWithSnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
@@ -101,7 +101,7 @@ export async function planLedgerChange(projectDir: string, request: LedgerChange
       "新账本只记带原句的线索，不再有要清的碎片；讲同一件事的几条线索可以归并（说出要并的几条，第一条留下）。",
     );
   }
-  const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
   if (!onCore.ok) return fail("not_on_core", `这本书的账还没接到新格式上：${onCore.reason}`);
   const view = await projectBook(projectDir);
   if (view.chapters.length === 0) return fail("no_chapters", "还没有定稿的章，账本是空的；先定稿一章再改账。");

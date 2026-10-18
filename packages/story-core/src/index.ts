@@ -41,6 +41,7 @@ export {
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
+export { bookKey, withBookLock } from "./store/lock.js";
 export { chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,

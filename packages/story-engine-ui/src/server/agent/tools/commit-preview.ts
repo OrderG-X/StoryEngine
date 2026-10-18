@@ -20,7 +20,7 @@ import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../legacy-mirror/ensure.js";
 import { readCharacterIds } from "../../legacy-mirror/sync.js";
 import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
-import { createSnapshot } from "../../lib/snapshot.js";
+import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
@@ -111,7 +111,7 @@ export async function buildCommitPreviewToolOutput(input: {
     };
   }
 
-  const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
   if (!onCore.ok) {
     return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
   }

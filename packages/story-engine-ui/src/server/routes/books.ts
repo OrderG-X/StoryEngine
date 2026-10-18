@@ -16,9 +16,8 @@ import {
   buildStateOverview,
   countDraftChineseCharacters,
   createStoryProject,
-  withProjectCommitLock,
 } from "@actalk/story-engine";
-import { readChapterPaper } from "@actalk/story-core";
+import { readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -372,7 +371,7 @@ async function handleRenameBook(req: import("node:http").IncomingMessage, res: i
     const projectPath = join(projectDir, "project.json");
     // 审计（复核 Med）：rename 与 story-settings 写同一个 project.json——那条已进锁+原子写，
     // 这条漏了同款收口（锁外读-改-写 + 裸 writeFile，交错丢更新/崩溃留半截 project.json 会打不开书）。
-    await withProjectCommitLock(projectDir, async () => {
+    await withBookLock(projectDir, async () => {
       const project = JSON.parse(await readFile(projectPath, "utf-8")) as Record<string, unknown>;
       await writeFileAtomic(projectPath, `${JSON.stringify({
         ...project,

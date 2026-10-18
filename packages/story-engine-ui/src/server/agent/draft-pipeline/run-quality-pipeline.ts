@@ -5,15 +5,15 @@
  *
  * 编排在工具内一次跑完（确定性顺序），不再靠 agent 跨回合「预览→补字→再预览」接力（十章验收：每章来回 3–4 轮、
  * 补字 40 次、单回合思考 11 万字）。任何一步没成都原稿不动 + 如实说明，绝不影响出稿本身的 ok。
- * 真改了正文：先建快照（可撤销回首稿）再原子写盘，与自动去 AI 味同一把项目锁（防与定稿交错）。
+ * 真改了正文：先建快照（可撤销回首稿）再走 draft.write 写盘，两步在同一把书锁里（防与定稿、撤销交错）。
  */
 import {
   countDraftChineseCharacters,
-  withProjectCommitLock,
   type ChapterPlan,
   type DraftLengthTarget,
 } from "@actalk/story-engine";
-import { writeFileAtomic } from "../../lib/project-io.js";
+import { withBookLock } from "@actalk/story-core";
+import { writeAiDraft } from "../../lib/ai-draft-write.js";
 import { snapshotBeforeDraftOverwrite } from "../tools/snapshot-on-draft-overwrite.js";
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../continuity-v2/check-service.js";
 import type { BrainCallModel } from "../../brain/index.js";
@@ -22,7 +22,6 @@ import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.
 export interface QualityPipelineInput {
   readonly projectDir: string;
   readonly chapter: number;
-  readonly draftPath: string;
   readonly title: string;
   readonly draftBody: string;
   readonly lengthTarget: DraftLengthTarget;
@@ -127,12 +126,12 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   const changed = body !== input.draftBody;
   if (!changed) return { draftBody: input.draftBody, changed: false, info, notes };
   let snapshotId: string | undefined;
-  await withProjectCommitLock(input.projectDir, async () => {
+  await withBookLock(input.projectDir, async () => {
     // 独立跑（如修订后的核对）照旧建覆盖前快照；出稿流程内（有「写盘前」存档点）不另建（R4.2）。
     if (!input.skipOverwriteSnapshot) {
       snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章补写与前后核对前快照`);
     }
-    await writeFileAtomic(input.draftPath, `# ${input.title}\n\n${body.trim()}\n`);
+    await writeAiDraft(input.projectDir, { chapter: input.chapter, title: input.title, body });
   });
   return { draftBody: body.trim(), changed: true, ...(snapshotId ? { snapshotId } : {}), info, notes };
 }

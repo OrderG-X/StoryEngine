@@ -8,7 +8,7 @@
  */
 import { projectBook, type ThreadView } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { coreSnapshotFor } from "../lib/snapshot.js";
 import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "../agent/continuity-v2/check-chapter.js";
 import { collectPlanMaterials, planMaterialBlocks } from "../agent/chapter-plan/plan-chapter.js";
@@ -76,7 +76,7 @@ export type BrainstormResult =
 /** 开着的线索（新核心投影）：分量重的先、停得久的先。书还没接到新格式上就没有（不挡头脑风暴）。 */
 export async function readOpenThreads(projectDir: string): Promise<readonly BrainstormThread[]> {
   try {
-    const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+    const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
     if (!onCore.ok) return [];
     const projection = await projectBook(projectDir);
     return projection.threads
