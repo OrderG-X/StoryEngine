@@ -106,7 +106,7 @@ function caretAt(x: number, y: number): { node: Node; offset: number } | null {
 type HighlightRegistry = Map<string, unknown>;
 type HighlightCtor = new (...ranges: Range[]) => { priority?: number };
 
-function highlightApi(): { registry: HighlightRegistry; Ctor: HighlightCtor } | null {
+export function highlightApi(): { registry: HighlightRegistry; Ctor: HighlightCtor } | null {
   const registry = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights;
   const Ctor = (globalThis as unknown as { Highlight?: HighlightCtor }).Highlight;
   return registry && Ctor ? { registry, Ctor } : null;

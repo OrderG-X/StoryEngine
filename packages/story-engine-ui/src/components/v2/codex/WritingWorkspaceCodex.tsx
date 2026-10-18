@@ -9,7 +9,8 @@ import WritingDeskCodex from "./WritingDeskCodex.js";
 import AssetCodexPanel from "./AssetCodexPanel.js";
 import CharacterCodexPanel from "./CharacterCodexPanel.js";
 import CharacterMatrixCodexPanel from "./CharacterMatrixCodexPanel.js";
-import HookCodexPanel from "./HookCodexPanel.js";
+import { ThreadBoard } from "./ThreadBoard.js";
+import { requestQuoteJump } from "./QuoteJump.js";
 import LocationCodexPanel from "./LocationCodexPanel.js";
 import TimelineCodexPanel from "./TimelineCodexPanel.js";
 import WorldbuildingCodexPanel from "./WorldbuildingCodexPanel.js";
@@ -199,6 +200,21 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 共 N 章不计尾随的占位「下一章」（修 R2#4「2/3」）。
   const realChapterCount = countRealChapters(chapters, currentChapter.chapterNumber);
   const currentId = currentChapter.id;
+  // 伏笔看板点原句：切到写作台、打开那一章、滚到这句（QuoteJump）。
+  const jumpToQuote = (chapter: number, quote: string) => {
+    const target = chapters.find((ch) => ch.chapterNumber === chapter);
+    if (!target) {
+      useNavigationStore.getState().showToast(`第 ${chapter} 章不在章节列表里，没法跳过去。`, 4200);
+      return;
+    }
+    if (target.id !== currentId && workspaceBusy) {
+      useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
+      return;
+    }
+    setView("desk");
+    requestQuoteJump(chapter, quote);
+    if (target.id !== currentId) props.onSelectChapter?.(target.id);
+  };
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
     ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")
@@ -474,14 +490,21 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                   <p className="se-bnav-note">设定由 AI 维护，这里只读。想改哪一处，直接在右边说。</p>
                 </nav>
                 <div className="read">
-                  <div className="read-inner read-enter" key={cat}>
+                  <div className={`read-inner read-enter${cat === "hooks" ? " is-wide" : ""}`} key={cat}>
                     {cat === "world" ? <WorldbuildingCodexPanel projectPath={props.projectPath} fallbackData={props.workspace.worldbuildingFallback} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "rules" ? <WritingRulesCodexPanel items={props.sidebar.writingRules} customNotes={props.sidebar.writingRulesCustomNotes} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "matrix" ? <CharacterMatrixCodexPanel matrix={props.workspace.characterMatrix} protagonistName={props.workspace.protagonist?.name} projectPath={props.projectPath} currentChapter={currentChapter.chapterNumber} /> : null}
                     {cat === "chars" ? <CharacterCodexPanel assets={props.workspace.assets} characterMatrix={props.workspace.characterMatrix} location={props.workspace.location} projectPath={props.projectPath} protagonist={props.workspace.protagonist} sidebar={props.sidebar} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "assets" ? <AssetCodexPanel assets={props.workspace.assets} projectPath={props.projectPath} onSendMessage={props.onSendMessage} protagonistName={props.overview?.characters.protagonist ?? undefined} /> : null}
                     {cat === "places" ? <LocationCodexPanel location={props.workspace.location} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
-                    {cat === "hooks" ? <HookCodexPanel hookItems={props.overview?.hooks.activeItems ?? []} threadItems={props.overview?.threads.keyOpenItems ?? []} resolvedHookCount={props.overview?.hooks.resolvedCount ?? 0} doneThreadCount={props.overview?.threads.done ?? 0} projectPath={props.projectPath} onSendMessage={props.onSendMessage} onAskAi={fillComposer} /> : null}
+                    {cat === "hooks" && props.projectPath ? (
+                      <ThreadBoard
+                        projectPath={props.projectPath}
+                        busy={workspaceBusy}
+                        onJump={jumpToQuote}
+                        {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
+                      />
+                    ) : null}
                     {cat === "timeline" ? <TimelineCodexPanel timeline={props.overview?.timeline} /> : null}
                   </div>
                 </div>

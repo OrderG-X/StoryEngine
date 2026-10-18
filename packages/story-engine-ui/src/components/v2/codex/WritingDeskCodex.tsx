@@ -5,6 +5,7 @@ import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
 import { ContinuityMarks } from "./ContinuityMarks.js";
+import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay, flowLabel } from "../v2Utils.js";
@@ -251,6 +252,17 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             busy={workspaceBusy}
             {...(props.onSendMessage ? { onRevise: props.onSendMessage } : {})}
             {...(props.onSendUserAction ? { onFixAction: props.onSendUserAction } : {})}
+          />
+        ) : null}
+        {/* 从伏笔看板点原句回来：滚到这句、短暂标亮（见 QuoteJump）。 */}
+        {!showStarter ? (
+          <QuoteJumpMarker
+            stageRef={stageRef}
+            chapter={draft.chapterNumber}
+            contentKey={`${draft.chapterNumber}:${activeTab}:${draft.content.length}`}
+            showingCommitted={activeTab === "committed"}
+            canShowCommitted={committedBody.trim().length > 0}
+            onShowCommitted={() => setActiveTab("committed")}
           />
         ) : null}
       </div>
