@@ -134,6 +134,12 @@ export function sidebarFromBook(book: BookSummary): SidebarData {
  * 按它重建的章节表全丢了「有稿 / 已定稿」——下一章空稿纸冒出新书引导、刚定稿的章被当成没定稿。
  * 新表自己带了标记就用新的；刚定稿的那章直接标已定稿。
  */
+/** 章名不是空、也不是概览补的占位「第N章」。 */
+function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
+  const title = chapter.title?.trim() ?? "";
+  return title !== "" && title !== `第${chapter.chapterNumber}章`;
+}
+
 export function carryChapterFileFlags(
   next: readonly ChapterNavItem[],
   previous: readonly ChapterNavItem[],
@@ -144,6 +150,8 @@ export function carryChapterFileFlags(
     const old = before.get(chapter.chapterNumber);
     return {
       ...chapter,
+      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名就沿用旧表的。
+      ...(!hasRealTitle(chapter) && old && hasRealTitle(old) ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
       ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),

@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { fetchChapterChanges, type ChapterChangeThread, type ChapterChanges as Changes } from "../../../api/chapterChangesClient.js";
+import { chapterBareTitle } from "../v2Utils.js";
 
 const THREAD_OP: Record<ChapterChangeThread["op"], string> = { open: "新埋下", advance: "推进", close: "收口" };
 /** 每组先露这么多条，多的点「再看 N 条」。 */
@@ -78,7 +79,8 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   const index = changes.chapters.indexOf(changes.chapter);
   const prev = index > 0 ? changes.chapters[index - 1] : undefined;
   const next = index >= 0 && index < changes.chapters.length - 1 ? changes.chapters[index + 1] : undefined;
-  const title = chapterTitles.get(changes.chapter);
+  // 章名表里有的带「第N章 ·」前缀（工作稿刚定稿那章），只取章名。
+  const title = chapterBareTitle(chapterTitles.get(changes.chapter) ?? "");
   const day = changes.dayEnd > changes.day ? `第 ${changes.day}～${changes.dayEnd} 天` : `第 ${changes.day} 天`;
   const nothing = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
   return (

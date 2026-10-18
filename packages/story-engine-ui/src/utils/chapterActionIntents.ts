@@ -28,7 +28,7 @@ export function userActionChoiceText(
     case "commit_preview":
       return `预览第 ${action.chapter} 章的定稿改动`;
     case "check_continuity":
-      return `再核一遍第 ${action.chapter} 章的账`;
+      return action.fresh ? `再核一遍第 ${action.chapter} 章的账` : `核第 ${action.chapter} 章的账`;
     case "generate_draft":
       return directionTitle ? `照「${directionTitle}」写第 ${action.chapter} 章的正文` : `写第 ${action.chapter} 章的正文`;
     case "commit_apply":

@@ -33,7 +33,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("设定本「这章改了什么」（重构 P6 第 6 步）", () => {
   it("第一次出场 / 线索 / 记下的事分组；顶掉的旧说法、自动记的、后来撤了都标出；线索多了先收起", async () => {
     const fetchMock = mockFetch({ ok: true, changes: CHANGES });
-    render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map([[12, "存根"]])} />);
+    render(<ChapterChanges projectPath="/book" chapter={12} busy={false} chapterTitles={new Map([[12, "第12章 · 存根"]])} />);
     expect(await screen.findByRole("heading", { name: "第 12 章 · 存根 改了什么" })).toBeTruthy();
     expect(fetchMock.mock.calls[0]![0]).toContain("chapter=12");
     expect(screen.getByText("故事第 13 天 · 翻出汇款存根")).toBeTruthy();

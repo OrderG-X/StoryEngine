@@ -163,11 +163,14 @@ function describeGate(issue: { readonly type: string; readonly message: string }
 function describeLengthShortfall(message: string): string {
   const min = /shorter than (\d+)/u.exec(message)?.[1];
   const current = /current: (\d+)/u.exec(message)?.[1];
-  if (min === undefined) return "正文字数低于写作规则要求的下限，需扩写后再定稿";
+  if (min === undefined) return `正文字数低于写作规则要求的下限，需扩写后再定稿${LENGTH_RULE_HINT}`;
   return current === undefined
-    ? `正文字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿`
-    : `正文 ${current} 字，低于写作规则要求的下限 ${min} 字（只数汉字，不含标点和标题），需扩写后再定稿`;
+    ? `正文字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿${LENGTH_RULE_HINT}`
+    : `正文 ${current} 字，低于写作规则要求的下限 ${min} 字（只数汉字，不含标点和标题），需扩写后再定稿${LENGTH_RULE_HINT}`;
 }
+
+/** 下限是作者自己的写作规则：手写短章的作者得知道去哪改（重构 P6 第 7 步）。 */
+const LENGTH_RULE_HINT = "。这一章就该这么短的话，可以跟右边的 AI 说把每章字数下限改低";
 
 type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[number];
 

@@ -38,7 +38,8 @@ export function applyOverviewToWorkspace(overview: StateOverview, options: Apply
     ...nextWorkspace,
     currentChapter: {
       ...nextWorkspace.currentChapter,
-      ...(title ? { title } : {}),
+      // 概览没给当前章章名（占位「第N章」）而章节表里沿用了旧章名：顶栏面包屑也用它。
+      ...(title ? { title } : activeFlags?.title && activeFlags.title !== nextWorkspace.currentChapter.title ? { title: activeFlags.title } : {}),
       ...(activeFlags?.hasDraftFile !== undefined ? { hasDraftFile: activeFlags.hasDraftFile } : {}),
       ...(activeFlags?.hasCommittedChapter !== undefined ? { hasCommittedChapter: activeFlags.hasCommittedChapter } : {}),
     },

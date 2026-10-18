@@ -96,6 +96,12 @@ describe("这一章还差什么（写 / 核账 / 定稿 + 主按钮）", () => {
     expect(edited.commit).toEqual({ done: false, text: "定稿后又改过" });
   });
 
+  it("定稿前核出过问题、作者改完定了：定稿后不再标红催「有 N 处要你看」", () => {
+    const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: result(), targetWords: null });
+    expect(done.check).toMatchObject({ state: "none", done: true, sure: 0, text: "定稿前核过" });
+    expect(done.statusLine).toBe("已定稿");
+  });
+
   it("已定稿、知道后面第一个没定稿的章：主按钮「去第 N 章」（只换章不出稿）；没定稿时不带", () => {
     const done = chapterProgress({ paper: paper({ committed: { body: BODY } }), result: null, targetWords: null, nextChapter: 13 });
     expect(done.primary).toEqual({ kind: "open_next", label: "去第 13 章" });

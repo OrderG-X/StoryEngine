@@ -60,6 +60,20 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], 5);
   });
 
+  it("记账员记成跨两天：作者填回同一天也算改了（按这一天记）", () => {
+    const onConfirm = vi.fn();
+    render(<CommitSheet preview={preview({ previewToken: "tok-span" })} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    // 删空再重打：删空时框里先空着（不弹回 3），再打 3。
+    const input = screen.getByRole("spinbutton", { name: "这一章是故事第几天" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+    expect(input.value).toBe("");
+    fireEvent.change(input, { target: { value: "3" } });
+    expect(screen.getByText("这一章改记为故事第 3 天")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], 3);
+  });
+
   it("关了再开（同一份预览）动过的还在", () => {
     const same = preview({ previewToken: "tok-same" });
     const first = render(<CommitSheet preview={same} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);

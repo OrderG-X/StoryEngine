@@ -129,6 +129,8 @@ export function CommitSheet({
   });
   const [dayOverride, setDayOverride] = useState<number | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
   const [editingDay, setEditingDay] = useState(false);
+  /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
+  const [dayText, setDayText] = useState<string | null>(null);
   const changeDay = (value: number | undefined) => {
     setDayOverride(value);
     rememberLedgerDayOverride(preview.chapter, preview.previewToken, value);
@@ -176,13 +178,15 @@ export function CommitSheet({
                       min={1}
                       autoFocus
                       aria-label="这一章是故事第几天"
-                      value={dayOverride ?? day.editableDay}
+                      value={dayText ?? dayOverride ?? day.editableDay}
                       disabled={busy}
                       onChange={(event) => {
+                        setDayText(event.target.value);
                         const next = Number(event.target.value);
-                        changeDay(Number.isInteger(next) && next >= 1 && next !== day.editableDay ? next : undefined);
+                        // 填回原来那一天也算作者定的：记账员记成跨两天（第 N～N+1 天）时，作者填「第 N 天」就是要按这一天记（P6 第 7 步）。
+                        changeDay(Number.isInteger(next) && next >= 1 ? next : undefined);
                       }}
-                      onBlur={() => setEditingDay(false)}
+                      onBlur={() => { setEditingDay(false); setDayText(null); }}
                     />
                     天
                   </label>

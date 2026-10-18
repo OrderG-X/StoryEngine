@@ -20,6 +20,14 @@ describe("carryChapterFileFlags", () => {
     expect(merged[2]!.hasCommittedChapter).toBeUndefined();
   });
 
+  it("新表没章名（工具回传的概览不带工作稿章名）→ 沿用旧表的；新表带了就用新的", () => {
+    const merged = carryChapterFileFlags(
+      [item(12), item(13, { title: "" }), item(11, { title: "门房·改" })],
+      [item(12, { title: "第12章 · 存根" }), item(13, { title: "第13章 · 回信" }), item(11, { title: "门房" })],
+    );
+    expect(merged.map((chapter) => chapter.title)).toEqual(["第12章 · 存根", "第13章 · 回信", "门房·改"]);
+  });
+
   it("刚定稿的那章直接标已定稿（旧表里它还是工作稿）", () => {
     const merged = carryChapterFileFlags([item(7, { status: "current" })], [item(7, { status: "current", hasDraftFile: true, hasCommittedChapter: false })], 7);
     expect(merged[0]).toMatchObject({ hasDraftFile: true, hasCommittedChapter: true });

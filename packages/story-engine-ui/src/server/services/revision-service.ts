@@ -283,7 +283,12 @@ async function generateModelPreview(input: {
     ...(writingContextPack ? { writingContextPack } : {}),
   });
   const raw = await input.callModel(prompt);
-  return parseDraftRevisionPreview(raw, input.task);
+  try {
+    return parseDraftRevisionPreview(raw, input.task);
+  } catch {
+    // 引擎解析报的是英文（缺 afterText / 不是 JSON），作者看不懂：换成一句人话（P6 真机：「Draft revision preview requires afterText.」漏到对话里）。
+    throw new Error("模型这次没给出能用的改写（回的格式不对，或没写改后的句子），可以再试一次");
+  }
 }
 
 /**

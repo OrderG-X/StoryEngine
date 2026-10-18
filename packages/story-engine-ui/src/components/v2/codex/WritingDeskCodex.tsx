@@ -8,6 +8,7 @@ import { ContinuityMarks } from "./ContinuityMarks.js";
 import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
+import { ChapterTitle } from "./ChapterTitle.js";
 import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
@@ -26,6 +27,20 @@ import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
 import { useDraftPreview } from "../../../drafts/useDraftPreview.js";
 import { scheduleDraftSave } from "../../../drafts/draftSync.js";
+import { useBookStore } from "../../../stores/bookStore.js";
+import { updateChapterListTitle } from "../../../utils/bookUtils.js";
+
+/** 作者改章名：工作稿的章名跟正文一起存；章节列表和顶栏面包屑当场跟着换（不等下一次刷新概览）。 */
+function renameChapter(chapterNumber: number, title: string): void {
+  useDraftStore.getState().setTitle(title);
+  scheduleDraftSave(0);
+  const book = useBookStore.getState();
+  const { workspace } = book;
+  book.updateWorkspace({
+    chapters: updateChapterListTitle(workspace.chapters, chapterNumber, title),
+    ...(workspace.currentChapter.chapterNumber === chapterNumber ? { currentChapter: { ...workspace.currentChapter, title } } : {}),
+  });
+}
 
 /**
  * WritingDeskCodex — 沉浸聚光式 codex 写作台外壳。
@@ -131,7 +146,12 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
       {/* 顶部细条：章号标题 + 字数 + 工作稿/定稿 切换（书名在全局顶栏；专注写作开关也在顶栏）。 */}
       <header className="codex-desk-bar codex-desk-bar-top">
         <div className="cd-title">
-          <strong className="cd-chapter">{chapterHeading(draft.chapterNumber, draft.title)}</strong>
+          <ChapterTitle
+            chapterNumber={draft.chapterNumber}
+            title={draft.title}
+            editable={showEditHint && !workspaceBusy}
+            onRename={(title) => renameChapter(draft.chapterNumber, title)}
+          />
           {showEditHint ? (
             <span className="cd-edit-hint">可直接编辑 · 自动保存</span>
           ) : null}

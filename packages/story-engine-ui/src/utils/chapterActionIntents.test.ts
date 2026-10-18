@@ -32,7 +32,7 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText({ toolName: "ai_review", chapter: 5 })).toBe("审阅第 5 章的内容");
     expect(userActionChoiceText({ toolName: "quality_check", chapter: 5 })).toBe("对第 5 章做硬伤检查");
     expect(userActionChoiceText({ toolName: "undo" })).toBe("撤销上一步");
-    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5 })).toBe("再核一遍第 5 章的账");
+    expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5 })).toBe("核第 5 章的账");
     expect(userActionChoiceText({ toolName: "check_continuity", chapter: 5, fresh: true })).toBe("再核一遍第 5 章的账");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 6 })).toBe("写第 6 章的正文");
     expect(userActionChoiceText({ toolName: "commit_apply", chapter: 5 })).toBe("确认定稿第 5 章");

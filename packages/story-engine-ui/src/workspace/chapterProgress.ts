@@ -104,9 +104,9 @@ export function chapterProgress(input: {
   const stale = Boolean(result) && !committed
     && (result!.checkedVersion !== undefined && (result!.checkedVersion !== paper.baseVersion || isDraftDirty(paper)));
   const checkState: CheckState = stage === "empty" || !result ? "none" : stale ? "stale" : open.sure.length > 0 ? "issues" : "clean";
-  const check = committed && checkState === "none" ? {
-    // 已定稿的章不再要求核账（核过的照实显示核的结果）。
-    state: checkState, done: true, sure: 0, maybe: 0, text: "—",
+  const check = committed ? {
+    // 已定稿的章不再要求核账；定稿前核出来的那几处作者已经看过（改了或认了），不再标红催。
+    state: "none" as const, done: true, sure: 0, maybe: 0, text: result ? "定稿前核过" : "—",
   } : {
     state: checkState,
     done: checkState === "clean" || checkState === "issues",
