@@ -51,6 +51,9 @@ export interface CreateStoryProjectResult {
   readonly project: StoryProject;
 }
 
+/** 建书时作者没给一句话梗概用的占位前提：不是作者定的，别当故事前提给模型看（白沙渡试写：章纲员拿它当前提）。 */
+export const PLACEHOLDER_PREMISE = "主角进入一个等待展开的故事世界。";
+
 export async function createStoryProject(input: CreateStoryProjectInput): Promise<CreateStoryProjectResult> {
   const now = new Date().toISOString();
   const projectIdBase = toProjectIdBase(input.title);

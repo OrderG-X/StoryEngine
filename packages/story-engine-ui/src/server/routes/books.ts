@@ -14,7 +14,7 @@ import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { buildStateOverview } from "../book/state-overview.js";
 import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
-import { createStoryProject } from "../book/project-store.js";
+import { createStoryProject, PLACEHOLDER_PREMISE } from "../book/project-store.js";
 import { readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
@@ -95,7 +95,7 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
     const draft = isRecord(body.draft) ? body.draft : {};
     const title = readString(draft.title) ?? "未命名故事";
     const genre = readString(draft.genre) ?? "长篇故事";
-    const premise = readString(draft.logline) ?? readString(draft.worldPremise) ?? "主角进入一个等待展开的故事世界。";
+    const premise = readString(draft.logline) ?? readString(draft.worldPremise) ?? PLACEHOLDER_PREMISE;
     const mainCharacterName = readString(draft.protagonistName) ?? "主角";
     const rootDir = readString(body.rootDir) ?? resolveBooksRootDir();
     // 建书同样过路径闸（与其余路由一致）：rootDir 直接来自客户端。

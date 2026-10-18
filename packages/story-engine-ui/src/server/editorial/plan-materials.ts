@@ -27,6 +27,8 @@ import {
 } from "../book/project-store.js";
 import { readChapterPlan, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { selectEffectiveFacts } from "../writing/fact-selection.js";
+import { PLACEHOLDER_PREMISE } from "../book/project-store.js";
+import { foundationMessage, readFoundationDigest } from "./foundation-digest.js";
 
 const PREVIOUS_TAIL_CHARS = 3000;
 const MAX_OPEN_THREADS = 15;
@@ -37,6 +39,8 @@ const RECURRING_WINDOW = 5;
 
 export interface PlanChapterMaterials {
   readonly premise?: string;
+  /** 设定本摘要（人物卡 / 地点 / 资产 / 世界规则，和核账员同一份）：人物关系、过去的事只写在这里（白沙渡试写）。 */
+  readonly foundation?: string;
   readonly longFormGoals: readonly string[];
   readonly previousChapter?: { readonly chapter: number; readonly text: string };
   readonly recentChapters: readonly string[];
@@ -118,6 +122,8 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     readRecentChapterBodies(projectDir, chapter),
     readRecentPlanTimes(projectDir, chapter),
   ]);
+  // 设定本读不了当没有（拟纲照常，只是少一份对照）；哪类资料都没有的新书也是 undefined。
+  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const recentBeats = await readRecentPlanBeats(projectDir, chapter);
   const characterNames = (characterBible?.characters ?? []).map((character) => character.name).filter(Boolean);
   const entityNames = [
@@ -155,7 +161,8 @@ export async function collectPlanMaterials(projectDir: string, chapter: number, 
     .slice(-RECENT_CHAPTER_SUMMARIES)
     .map((event) => `第 ${event.chapter} 章：${event.summary.slice(0, 120)}`);
   return {
-    ...(storyBible?.premise ? { premise: storyBible.premise } : {}),
+    ...(storyBible?.premise && storyBible.premise !== PLACEHOLDER_PREMISE ? { premise: storyBible.premise } : {}),
+    ...(foundation ? { foundation: foundationMessage(foundation) } : {}),
     longFormGoals: storyBible?.longFormGoals ?? [],
     ...(previousChapter ? { previousChapter } : {}),
     recentChapters,
@@ -187,7 +194,7 @@ export const PLAN_REQUIREMENT_LINES: readonly string[] = [
   "4. 作者给了方向就照方向展开，不要改方向。方向里有和前文既成事实对不上的（东西已经不在那人手里、人已不在、事已发生过）时，可以改成说得通的安排，但每一处都要写进 directionChanges：said 逐字抄方向原话，changedTo 写改成了什么，why 写和前文哪里对不上——不许悄悄改。照原话安排的不用写。",
   "5. 优先用已有的人物、地点、物件；确需新人物或新物件可以引入，但要写进 characters / entities。",
   "6. 不要揭开「受保护的秘密」，除非作者方向明确要求。",
-  "7. 不能和【已确立事实】矛盾；那里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍。",
+  "7. 不能和【已确立事实】【设定本】矛盾：已确立事实里写着已经做过的事（递过的材料、拿到的回执、认出过的记号），本章不要再做一遍；人物关系、年龄、过去发生过的事照设定本安排。",
   "8. 时间要算得通：scene.time 写清和上一章的关系（第二天上午 / 当天傍晚）或具体日期，和【前几章的时间】顺下来；dayOffset 写本章开场离上一章结尾过了几天（同一天 0、第二天 1、三天后 3；天数由程序往后加，你不用数第几天）；本章中途要换天的，那个要点开头就写「第二天上午，……」；beats 和 time 里不写「第 N 天」；涉及年份时，人物当年多大要对得上他现在的年龄。",
   "9. 要有戏：每章至少一个让局面变化的转折或冲突升级（有人阻拦、出现对立的证据、关系起变化、期限逼近）；不要连续两章做同一类事（又去递材料、又等回复、又把同一个记号认一遍）；【主谜/核心冲突】每两三章要有实质进展。",
   "10. 【近几章反复出现的描写】本章一律换个写法，把它们写进 avoid。",
@@ -221,6 +228,7 @@ export function planMaterialBlocks(
     materials.openThreads.length > 0 ? `【开着的线索】\n${materials.openThreads.join("\n")}` : "",
     ...(options.withoutRecentSummaries ? [] : [materials.recentChapters.length > 0 ? `【前面几章发生了什么】\n${materials.recentChapters.join("\n")}` : ""]),
     materials.characters.length > 0 ? `【已有人物（括号里是身份和年龄，别用错人、别算错年代）】${materials.characters.join("、")}` : "",
+    materials.foundation ?? "",
     materials.coreMysteries.length > 0 ? `【主谜/核心冲突】${materials.coreMysteries.join("；")}` : "",
     materials.facts.length > 0 ? `【已确立事实（不能矛盾，做过的别再做）】\n${materials.facts.join("\n")}` : "",
     materials.recentTimes.length > 0 ? `【前几章的时间】\n${materials.recentTimes.join("\n")}` : "",

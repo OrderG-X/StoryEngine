@@ -300,6 +300,35 @@ describe("提示词文本", () => {
     expect(task).toContain(PLAN_JSON_FIELDS);
   });
 
+  it("白沙渡试写：章纲材料带设定本（人物关系、过去的事）；建书的占位前提不当故事前提", async () => {
+    const dir = await makeBook();
+    const { PLACEHOLDER_PREMISE } = await import("../book/project-store.js");
+    await writeFile(join(dir, "story", "bible.json"), JSON.stringify({ version: "v0", premise: PLACEHOLDER_PREMISE, longFormGoals: [] }), "utf-8");
+    await writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [
+        { id: "char-a", name: "韩小满", role: "主角", age: "24" },
+        { id: "char-b", name: "韩德顺", role: "摆渡人", age: "58", relationshipToProtagonist: "韩小满的父亲" },
+      ],
+    }), "utf-8");
+    await writeFile(join(dir, "story", "world-bible.json"), JSON.stringify({ version: "v0", historyFacts: ["农历八月十五，韩德顺摆最后一趟去柳湾村后下落不明"] }), "utf-8");
+    const materials = await collectPlanMaterials(dir, 1);
+    expect(materials.premise).toBeUndefined();
+    const task = plannerTask(1, materials);
+    expect(task).toContain("【设定本");
+    expect(task).toContain("和主角的关系：韩小满的父亲");
+    expect(task).toContain("八月十五，韩德顺摆最后一趟去柳湾村后下落不明");
+    expect(task).not.toContain("【故事前提】");
+    expect(task).not.toContain("char-b");
+  });
+
+  it("作者自己写的前提照带", async () => {
+    const dir = await makeBook();
+    await writeFile(join(dir, "story", "bible.json"), JSON.stringify({ version: "v0", premise: "江边小镇，女儿回乡找失踪的摆渡人父亲。", longFormGoals: [] }), "utf-8");
+    const task = plannerTask(3, await collectPlanMaterials(dir, 3));
+    expect(task).toContain("【故事前提】江边小镇，女儿回乡找失踪的摆渡人父亲。");
+  });
+
   it("reviseTask 带原章纲和每条问题；planCheckTask 带编号要点", () => {
     const revise = reviseTask(3, BASE_PLAN, PROBLEMS);
     expect(revise).toContain("可以整条重写");
