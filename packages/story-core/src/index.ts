@@ -28,6 +28,38 @@ export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionI
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./text/quote.js";
+export {
+  cjkBigrams,
+  bigramSimilarity,
+  bigramOverlapCoefficient,
+} from "./text/text-similarity.js";
+export {
+  type RecurringPhrase,
+  type FindRecurringPhrasesInput,
+  findRecurringPhrases,
+} from "./text/recurring-phrases.js";
+export {
+  type RelevanceScorable,
+  type RelevanceInput,
+  type RelevanceResult,
+  selectRelevant,
+} from "./text/relevance-selection.js";
+export {
+  type BeatFidelityIssue,
+  type BeatFidelityReport,
+  checkDraftBeatFidelity,
+} from "./text/draft-beat-fidelity.js";
+export {
+  type AiFlavorSeverity,
+  type AiFlavorPatternRule,
+  type AiFlavorFrequencyGateRule,
+  type AiFlavorRule,
+  type AiFlavorViolation,
+  AI_FLAVOR_MAX_VIOLATIONS,
+  type AiFlavorReport,
+  detectAiFlavorViolations,
+  buildAiFlavorReport,
+} from "./text/ai-flavor-detection.js";
 
 export {
   BookFileError,
@@ -41,6 +73,7 @@ export {
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
+export { bookKey, withBookLock } from "./store/lock.js";
 export { chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,

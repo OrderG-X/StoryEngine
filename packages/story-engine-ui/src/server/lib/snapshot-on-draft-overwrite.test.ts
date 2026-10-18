@@ -1,0 +1,99 @@
+// @vitest-environment node
+//
+// snapshotBeforeDraftOverwrite（M6 + R4.2）：覆盖现有非空草稿前建快照；带 firstDraftLabel（出稿适配层）时
+// 首次出稿也建「出稿：第N章」；不带（revise/质量环节）首稿不建。用临时项目 + 真实 git 快照验。
+import { lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { createStoryProject } from "../book/project-store.js";
+import { describe, expect, it } from "vitest";
+
+import { defaultDraftPath } from "./project-io.js";
+import { listSnapshots } from "./snapshot.js";
+import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+
+async function makeProject(): Promise<string> {
+  const rootDir = await mkdtemp(join(tmpdir(), "snapshot-draft-test-"));
+  const { projectDir } = await createStoryProject({
+    rootDir,
+    title: "快照测试书",
+    genre: "都市",
+    premise: "主角进入权力中心。",
+    mainCharacterName: "林远",
+  });
+  return projectDir;
+}
+
+async function writeDraft(projectDir: string, chapter: number, body: string): Promise<void> {
+  const draftPath = defaultDraftPath(projectDir, chapter);
+  await mkdir(dirname(draftPath), { recursive: true });
+  await writeFile(draftPath, body, "utf-8");
+}
+
+describe("snapshotBeforeDraftOverwrite（M6 覆盖现有非空草稿前建快照）", () => {
+  it("当前章无草稿 → 不建快照，返回 undefined（首次出稿无旧稿可丢）", async () => {
+    const projectDir = await makeProject();
+    const before = await listSnapshots(projectDir);
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 1, "第1章再次出稿前快照");
+    expect(id).toBeUndefined();
+    const after = await listSnapshots(projectDir);
+    expect(after.length).toBe(before.length);
+  });
+
+  // R4.2（验收 3.2）：出稿适配层带 firstDraftLabel 时，首稿也建存档点「出稿：第N章」——
+  // 首稿也是作者眼里的一步，没有它撤销会跳到更早一步、连带删掉首稿。
+  it("无草稿但带 firstDraftLabel（出稿适配层）→ 建「出稿：第N章」存档点，进操作历史", async () => {
+    const projectDir = await makeProject();
+    const before = await listSnapshots(projectDir);
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 5, "第5章再次出稿前快照", "出稿：第5章");
+    expect(id).toMatch(/^[0-9a-f]{40}$/u);
+    const after = await listSnapshots(projectDir);
+    expect(after.length).toBe(before.length + 1);
+    expect(after[0].label).toBe("出稿：第5章");
+  });
+
+  it("有旧稿时 firstDraftLabel 不参与：照旧建「再次出稿前」存档点", async () => {
+    const projectDir = await makeProject();
+    await writeDraft(projectDir, 2, "# 第二章\n\n这是已经写好的一版草稿正文。");
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 2, "第2章再次出稿前快照", "出稿：第2章");
+    expect(id).toMatch(/^[0-9a-f]{40}$/u);
+    expect((await listSnapshots(projectDir))[0].label).toBe("第2章再次出稿前快照");
+  });
+
+  it("当前章有非空草稿 → 建快照，返回 40-hex snapshotId 且历史多一条", async () => {
+    const projectDir = await makeProject();
+    await writeDraft(projectDir, 2, "# 第二章\n\n这是已经写好的一版草稿正文。");
+    const before = await listSnapshots(projectDir);
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 2, "第2章再次出稿前快照");
+    expect(id).toMatch(/^[0-9a-f]{40}$/u);
+    const after = await listSnapshots(projectDir);
+    expect(after.length).toBe(before.length + 1);
+    expect(after[0].label).toBe("第2章再次出稿前快照");
+  });
+
+  it("草稿只有 Markdown 章节标题、无正文 → 视为空，不建快照", async () => {
+    const projectDir = await makeProject();
+    await writeDraft(projectDir, 3, "# 第三章\n\n");
+    const id = await snapshotBeforeDraftOverwrite(projectDir, 3, "第3章再次出稿前快照");
+    expect(id).toBeUndefined();
+  });
+
+  // P2-5 fail-closed：旧稿存在但读不出绝不能当「无旧稿」跳过快照——否则紧接的覆盖写让旧稿从此无撤销点。
+  it.skipIf(process.platform === "win32")("草稿存在但读失败（ELOOP 自指 symlink）→ 抛错中止，不建快照、不动旧稿", async () => {
+    const projectDir = await makeProject();
+    const draftPath = defaultDraftPath(projectDir, 4);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await symlink(draftPath, draftPath); // 自指环：readFile 必 ELOOP，root 下也确定触发
+    const before = await listSnapshots(projectDir);
+    const error = await snapshotBeforeDraftOverwrite(projectDir, 4, "第4章再次出稿前快照")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("读取失败");
+    // 铁律④：errno 原文内嵌的绝对路径直达用户（工具错误/路由 500）前必须洗掉。
+    expect(message).toContain("(本地路径)");
+    expect(message).not.toContain(projectDir);
+    expect((await listSnapshots(projectDir)).length).toBe(before.length); // 没建快照
+    expect((await lstat(draftPath)).isSymbolicLink()).toBe(true); // 旧稿（ symlink 本体）分毫未动
+  });
+});

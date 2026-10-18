@@ -630,8 +630,8 @@ function buildWritingRules(overview: StateOverview): string[] {
 
   return withFallback(compact([
     rules.narrativePerspective ? `叙事视角：${displayRuleValue(rules.narrativePerspective)}` : undefined,
-    rules.narrativePerspective ? `人称：${inferNarrativePerson(rules.narrativePerspective)}` : undefined,
-    rules.narrativePerspective ? `视角限制：${inferPerspectiveLimit(rules.narrativePerspective)}` : undefined,
+    // 视角原样显示（枚举值翻成中文）；不再从字里猜「第几人称 / 有限还是全知」（重构 P7「不猜」）。
+    rules.narrativePerspective ? `视角：${displayRuleValue(rules.narrativePerspective)}` : undefined,
     // 用 `；` 分隔每条文风规则（面板 splitRuleList 按 `；;\n` 切分还原成独立 chip）。
     // 旧版用 `、` 拼接，而单条规则内部本就常含 `、`（如「注重视觉、触觉、嗅觉」），
     // 面板无法区分「规则间分隔」与「规则内顿号」，致全部 proseStyle 塌成一个巨型 chip、新增规则被埋没看不见。
@@ -648,22 +648,6 @@ function buildWritingRules(overview: StateOverview): string[] {
     rules.targetChapterWords ? `目标字数：约 ${rules.targetChapterWords} 字 / 章` : undefined,
     `禁止事项：${formatList(forbiddenRules, "尚未配置")}`,
   ]), "写作规则：尚未配置");
-}
-
-function inferNarrativePerson(value: string): string {
-  if (/first/i.test(value)) return "第一人称";
-  if (/third/i.test(value)) return "第三人称";
-  if (/第一人称/u.test(value)) return "第一人称";
-  if (/第三人称/u.test(value)) return "第三人称";
-  return displayRuleValue(value);
-}
-
-function inferPerspectiveLimit(value: string): string {
-  if (/limited/i.test(value)) return "有限视角，只写视角角色能看到和知道的内容";
-  if (/omniscient/i.test(value)) return "全知视角";
-  if (/贴近主角|有限视角|主角视角/u.test(value)) return "只写主角能看到、知道和推断的内容";
-  if (/全知/u.test(value)) return "全知视角";
-  return "尚未配置";
 }
 
 function displayRuleValue(value: string): string {

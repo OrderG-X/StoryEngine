@@ -13,7 +13,7 @@ import { readFile } from "node:fs/promises";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceEnum, coerceNumber } from "./lenient-args.js";
+import { coerceEnum, coerceNumber } from "../../lib/lenient-args.js";
 
 import { defaultCommittedChapterPath, defaultDraftPath, extractDraftTitle } from "../../lib/project-io.js";
 import { countTextWords } from "../../../utils/textUtils.js";

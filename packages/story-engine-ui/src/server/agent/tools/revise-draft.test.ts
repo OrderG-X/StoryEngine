@@ -8,7 +8,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 
@@ -72,7 +72,7 @@ const { callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredC
 vi.mock("../../lib/llm-client.js", () => ({ callOpenAICompatibleChatModel, streamChatModelToText, resolveConfiguredChatModel }));
 
 const { snapshotBeforeDraftOverwrite } = vi.hoisted(() => ({ snapshotBeforeDraftOverwrite: vi.fn() }));
-vi.mock("./snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
+vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({ snapshotBeforeDraftOverwrite }));
 
 import { reviseDraftTool } from "./revise-draft.js";
 

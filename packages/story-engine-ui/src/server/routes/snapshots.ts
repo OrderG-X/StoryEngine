@@ -18,9 +18,10 @@ import {
   listSnapshots,
   readCommitFileChanges,
   restoreSnapshot,
+  snapshotKindOf,
 } from "../lib/snapshot.js";
 import { attachSnapshotChanges, buildRestoreReceipt, humanizeHistoryLabel } from "../lib/snapshot-changes.js";
-import { readCharacterNameById } from "../agent/presence/entity-labels.js";
+import { readCharacterNameById } from "../writing/presence/entity-labels.js";
 
 // ---------------------------------------------------------------------------
 // Route registrar
@@ -56,7 +57,7 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
           : listed;
         const raw = attachSnapshotChanges(withChapters, filesById, nameById)
           .filter((s) => !isPostWriteSettlementSnapshot(s.label));
-        const snapshots = raw.map((s) => ({ ...s, label: humanizeHistoryLabel(s.label) }));
+        const snapshots = raw.map((s) => ({ ...s, kind: snapshotKindOf(s.label), label: humanizeHistoryLabel(s.label) }));
         writeJson(res, 200, { ok: true, snapshots });
         return;
       }
@@ -70,6 +71,7 @@ export function registerSnapshotsRoutes(middlewares: MiddlewareStack): void {
         const { restored, reverted, revertedLater } = await restoreSnapshot(projectDir, id);
         // R4.2：恢复到更早的存档点会把那之后的所有写入一并退回，回执如实列清单 + 指明找回办法。
         const nameById = await readCharacterNameById(projectDir).catch(() => new Map<string, string>());
+        // 不猜白名单：自家格式
         const targetLabel = /^恢复到：(.+)$/u.exec(restored.label)?.[1] ?? restored.label;
         const receipt = buildRestoreReceipt({
           title: `已恢复到「${humanizeHistoryLabel(targetLabel)}」之前。`,

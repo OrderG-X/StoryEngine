@@ -7,7 +7,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

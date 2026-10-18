@@ -10,7 +10,7 @@
  *
  * 铁律：直接做 + 可撤销（writeTool 前置快照）；绝不静默失败（没有角色 ok:false、模型/解析出错抛错）。
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
 import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
@@ -20,7 +20,7 @@ import {
   generateCharacterEnrichment,
   type CharacterEntityInput,
   type ChatMessage,
-} from "../character-enrichment/character-enrichment.js";
+} from "../../services/enrichment/character-enrichment.js";
 
 const inputSchema = z.object({
   // enrichment 从项目现有角色矩阵读取，通常不需要任何参数；保留一个可空开关以备将来扩展，不强制。

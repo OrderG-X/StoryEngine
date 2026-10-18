@@ -9,7 +9,7 @@
  *
  * 铁律：直接做 + 可撤销（writeTool 前置快照）；绝不静默失败（没有资产 ok:false、模型/解析出错抛错）。
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
 import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
@@ -19,7 +19,7 @@ import {
   generateAssetEnrichment,
   type AssetEntityInput,
   type ChatMessage,
-} from "../asset-enrichment/asset-enrichment.js";
+} from "../../services/enrichment/asset-enrichment.js";
 
 const inputSchema = z.object({
   // enrichment 从项目现有资产读取，通常不需要任何参数；保留一个可空开关以备将来扩展，不强制。

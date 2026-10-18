@@ -12,7 +12,7 @@
  *   import { register } from "node:module";
  *   register("./r3-ts-hooks.mjs", import.meta.url);
  * 然后 **动态** import UI 侧 `.ts`（静态 import 会在 register 生效前被求值）。
- * 引擎包 `@actalk/story-engine` 走已构建 dist，不经本 hooks（bare specifier 直接放行）。
+ * 包名 import（`@actalk/story-core` 等）走已构建 dist，不经本 hooks（bare specifier 直接放行）。
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";

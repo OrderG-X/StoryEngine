@@ -12,12 +12,14 @@ export interface MentionCandidate {
 
 /** 光标在末尾时，末尾的「@xxx」就是正在打的引用；返回 @ 后面的查询词，没在打就返回 null。 */
 export function activeMentionQuery(text: string): string | null {
+  // 不猜白名单：切句
   const match = /(?:^|[\s，。、；：！？,.;:!?（(「“"'])@([^\s@，。、；：！？,.;:!?]{0,12})$/u.exec(text);
   return match ? match[1] ?? "" : null;
 }
 
 /** 把末尾正在打的「@xxx」替换成「@label 」。 */
 export function insertMention(text: string, label: string): string {
+  // 不猜白名单：切句
   return text.replace(/@([^\s@，。、；：！？,.;:!?]{0,12})$/u, `@${label} `);
 }
 

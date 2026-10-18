@@ -128,7 +128,6 @@ interface ToolPresentation {
 
 /**
  * 工具 id → 时间线展示。stepLabel 是动作块「块体详情」里这一步的人话标签，
- * 对照 packages/story-engine/src/agent-capabilities.ts 的 label（只读不改它），
  * **覆盖 story-agent.ts 注册的全部工具（2026-10-12 R3b 后 19 个）及其合并前的原工具名**（老会话回放仍显示原名）——
  * 时间线里「调用工具 · XX」一律说中文，不让任何工具回退到生硬的「执行 generate_worldbuilding」之类英文（与整套中文 UI 对不齐）。
  * 新增工具务必在这里补一行中文标签；漏了才会落到 presentationFor 的英文兜底。
@@ -225,6 +224,7 @@ export function presentationFor(toolName: string): ToolPresentation {
  */
 export function resolveToolStepLabel(toolName: string | undefined, label: string | undefined): string {
   if (toolName) return presentationFor(toolName).stepLabel;
+  // 不猜白名单：自家格式
   const legacy = /^执行\s+([a-z][a-z_]+)$/.exec((label ?? "").trim());
   if (legacy) return presentationFor(legacy[1]!).stepLabel;
   return label ?? "";

@@ -12,13 +12,10 @@ import { promisify } from "node:util";
 
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import {
-  buildStateOverview,
-  countDraftChineseCharacters,
-  createStoryProject,
-  withProjectCommitLock,
-} from "@actalk/story-engine";
-import { readChapterPaper } from "@actalk/story-core";
+import { buildStateOverview } from "../book/state-overview.js";
+import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
+import { createStoryProject } from "../book/project-store.js";
+import { readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -29,13 +26,13 @@ import {
   readStringList,
   requireBodyString,
   splitChineseList,
-  withUiOverviewDetails,
   readUsageSummary,
   writeJson,
   isRecord,
   stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
+import { withUiOverviewDetails } from "../services/ui-overview.js";
 import { formatRelativeTimeMs } from "../../utils/textUtils.js";
 
 const execFileAsync = promisify(execFile);
@@ -265,12 +262,15 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
   }
 }
 
+const PLACEHOLDER_CHAPTER_TITLES = new Set(["下一章", "未命名", "待补", "待定"]);
+
 /** 这一章稿子（工作稿优先，没有就用定稿）第一行的章名（剥掉「第N章 ·」前缀；占位或读不到返回空串）。 */
 async function readChapterPaperTitle(projectDir: string, chapter: number): Promise<string> {
   const paper = await readChapterPaper(projectDir, chapter).catch(() => null);
   const raw = paper?.draft?.title ?? paper?.committed?.title ?? "";
+  // 不猜白名单：章节标题
   const bare = raw.replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
-  return bare && !/^(下一章|未命名|待补|待定)$/u.test(bare) ? bare : "";
+  return bare && !PLACEHOLDER_CHAPTER_TITLES.has(bare) ? bare : "";
 }
 
 /** 定稿章节总字数：chapters/NNNN.md 去掉标题行后按引擎同口径（纯汉字）计数。目录不存在返回 0。 */
@@ -311,8 +311,9 @@ function bookSummaryFromOverviewServer(
 
   let chapterTitle = `第${currentChapterNumber}章`;
   // 优先真章名（时间线事件 title，剥掉「第N章 ·」前缀）；没有才退回事件摘要。
+  // 不猜白名单：章节标题
   const realTitle = String(currentEvent?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
-  const hasRealChapterTitle = Boolean(realTitle && !/^(下一章|未命名|待补|待定)$/u.test(realTitle));
+  const hasRealChapterTitle = Boolean(realTitle && !PLACEHOLDER_CHAPTER_TITLES.has(realTitle));
   if (hasRealChapterTitle) {
     chapterTitle = realTitle;
   } else if (currentEvent) {
@@ -368,7 +369,7 @@ async function handleRenameBook(req: import("node:http").IncomingMessage, res: i
     const projectPath = join(projectDir, "project.json");
     // 审计（复核 Med）：rename 与 story-settings 写同一个 project.json——那条已进锁+原子写，
     // 这条漏了同款收口（锁外读-改-写 + 裸 writeFile，交错丢更新/崩溃留半截 project.json 会打不开书）。
-    await withProjectCommitLock(projectDir, async () => {
+    await withBookLock(projectDir, async () => {
       const project = JSON.parse(await readFile(projectPath, "utf-8")) as Record<string, unknown>;
       await writeFileAtomic(projectPath, `${JSON.stringify({
         ...project,

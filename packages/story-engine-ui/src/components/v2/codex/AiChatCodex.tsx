@@ -41,7 +41,7 @@ import { ChatContextMeter } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import { ChapterTodoCard } from "./ChapterTodoCard.js";
 import { useChapterProgress } from "../../../workspace/chapterProgress.js";
-import { parseTargetChapterWords } from "./WritingDeskCodex.js";
+import { targetChapterWordsOf } from "./WritingDeskCodex.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
@@ -235,7 +235,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
   const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp, workspaceBusy);
   // 这一章还差什么（顶卡；和稿纸底下的工具条同源）。
-  const chapterProgressNow = useChapterProgress(parseTargetChapterWords(props.sidebar?.writingRules));
+  const chapterProgressNow = useChapterProgress(targetChapterWordsOf(props.overview));
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -680,6 +680,7 @@ const composerInputStyle: React.CSSProperties = {
 
 /** 点「审校问题·改这处」→ 拼一句给 agent 的改写意图（agent 据纪律 5.5 先 read_draft 定位逐字原文再 revise）。 */
 function buildReviseIntent(issue: DraftReviewIssueView): string {
+  // 不猜白名单：切句
   const trimDot = (s: string) => s.replace(/[。.]+\s*$/u, ""); // 去段尾句号，免与拼接的「。」叠成双句号
   const parts = [`针对内容审阅发现的问题改一下——【${issue.title}】${trimDot(issue.description)}`];
   if (issue.evidence) parts.push(`原句：「${issue.evidence}」`);
@@ -755,7 +756,7 @@ function MessageBubbles({
       </div>
     ) : (
       <div className="msg msg-ai se-op-row">
-        <span>{running.title.replace(/\s*Agent\s*运行中$/u, "")}没做完（中途关掉或刷新了），可以再来一次。</span>
+        <span>{stripRunningSuffix(running.title)}没做完（中途关掉或刷新了），可以再来一次。</span>
       </div>
     );
   }
@@ -1077,8 +1078,18 @@ function MessageBlocksView({ blocks, lead }: { readonly blocks: ReturnType<typeo
   );
 }
 
+/** 卡片标题是本程序自己拼的「X Agent 运行中」：去掉这个固定后缀。 */
+function stripRunningSuffix(title: string): string {
+  const suffix = "运行中";
+  const text = title.trim();
+  if (!text.endsWith(suffix)) return text;
+  const head = text.slice(0, -suffix.length).trimEnd();
+  return head.endsWith("Agent") ? head.slice(0, -"Agent".length).trimEnd() : head;
+}
+
 /** 起首短句（到第一个句末标点为止）作为金色 lead，其余正常。无明显短句则不切。 */
 function splitLead(text: string): { head: string; rest: string } {
+  // 不猜白名单：切句
   const match = text.match(/^[^。！？!?\n]{1,12}[。！？!?]/u);
   if (match) {
     return { head: match[0], rest: text.slice(match[0].length) };

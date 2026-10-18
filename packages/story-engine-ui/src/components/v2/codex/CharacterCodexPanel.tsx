@@ -217,7 +217,8 @@ function CharacterCard({
   // 职能 tag 取短标签：主角直接「主角」；其余取冒号/句号前那截（做厚后 role 常是「商业劲敌：作为主角的…」
   // 一整段，整段塞进小 tag 会爆版）。完整 role 仍喂正文（引擎侧），这里只管展示。
   const roleLabel = shortRoleLabel(character.role, isLead);
-  const roleTag = roleTagClass(roleLabel);
+  // 标签颜色只分主角 / 其他：不再按「反派 / 盟友 / 线索」字眼猜阵营（重构 P7「不猜」）。
+  const roleTag = isLead ? "warn" : "info";
   const currentLocation = character.currentLocation ?? (isLead ? fallbackLocation : undefined);
   const safeLocation = currentLocation && !isPlaceholderUiValue(currentLocation) ? currentLocation : undefined;
   const forbiddenReveals = filterSystemStoryMeta(character.forbiddenReveals);
@@ -493,16 +494,8 @@ function fromMatrixItem(c: StateOverviewCharacterMatrixItem, ext?: CharacterCode
 }
 
 function avatarText(name: string): string {
-  const cleaned = uiText(name, "角").replace(/[《》]/gu, "");
+  const cleaned = uiText(name, "角").replaceAll("《", "").replaceAll("》", "");
   return cleaned.slice(0, 1) || "角";
-}
-
-function roleTagClass(role: string): string {
-  if (/主角/u.test(role)) return "warn";
-  if (/反派|敌|压力源|对手/u.test(role)) return "danger";
-  if (/盟友|友|伙伴|镜像/u.test(role)) return "ok";
-  if (/入口|世界观|线索|伏笔/u.test(role)) return "gold";
-  return "info";
 }
 
 /**
@@ -511,6 +504,7 @@ function roleTagClass(role: string): string {
  */
 function shortRoleLabel(role: string, isLead: boolean): string {
   if (isLead) return "主角";
+  // 不猜白名单：切句
   const head = (role ?? "").split(/[：:。，,\n]/u)[0]?.trim() ?? "";
   if (!head) return "角色";
   // 标签只放短职能（「商业劲敌」「女主」）；一整句身份描述放不进标签，退成「配角」——描述本身在下一行身份里。

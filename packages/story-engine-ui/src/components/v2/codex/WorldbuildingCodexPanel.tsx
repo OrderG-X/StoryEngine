@@ -19,6 +19,7 @@ function has(s?: string): s is string {
   return typeof s === "string" && s.trim().length > 0;
 }
 function splitHead(text: string): readonly [string, string] {
+  // 不猜白名单：切句
   const m = text.split(/[:：]/);
   return [m[0]?.trim() ?? text, m.slice(1).join("：").trim()];
 }

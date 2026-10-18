@@ -12,7 +12,11 @@ const { readTimelineEvents, readCharacterBible } = vi.hoisted(() => ({
     characters: [{ id: "char-a", name: "林明", role: "配角" }, { id: "char-b", name: "周冬", role: "配角" }],
   })),
 }));
-vi.mock("@actalk/story-engine", () => ({ readTimelineEvents, readCharacterBible }));
+vi.mock("../../book/project-store.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readTimelineEvents,
+  readCharacterBible,
+}));
 
 import { buildProjectRequestContext } from "../request-context.js";
 import { readTimelineTool } from "./read-timeline.js";

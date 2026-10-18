@@ -357,7 +357,7 @@ export interface ChapterWorkspaceData {
 }
 
 /**
- * 去 AI 味体检报告（前端镜像）——与后端 server/agent/ai-flavor/ai-flavor-check.ts 的
+ * 去 AI 味体检报告（前端镜像）——与后端 server/writing/ai-flavor/ai-flavor-check.ts 的
  * AiFlavorReport/AiFlavorViolation 同形。**故意在 type-defs 里另定义一份**，不从 server/ 目录
  * import：前端不得 import server 代码（check-import-boundary 会红）。工具输出经 SSE 透传到前端时
  * 是普通 JSON，形状一致即可对接。

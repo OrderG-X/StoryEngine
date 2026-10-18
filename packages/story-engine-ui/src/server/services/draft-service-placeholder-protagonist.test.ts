@@ -7,7 +7,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStoryProject, type WriterClient, type WriterContextEnvelope } from "@actalk/story-engine";
+import { createStoryProject } from "../book/project-store.js";
+import { type WriterClient } from "../writing/fast-draft-writer.js";
+import { type WriterContextEnvelope } from "../writing/context-gateway.js";
 
 import { generateDraftCandidate, runGenerateDraft } from "./draft-service.js";
 

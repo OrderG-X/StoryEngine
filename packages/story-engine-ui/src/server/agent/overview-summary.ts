@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { StateOverview } from "@actalk/story-engine";
+import type { StateOverview } from "../book/state-overview.js";
 
 export interface StateOverviewSummaryExtras {
   /**

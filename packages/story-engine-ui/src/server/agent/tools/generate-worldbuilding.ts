@@ -9,13 +9,13 @@
  * 铁律：直接做 + 可撤销（writeTool 前置快照）；绝不静默失败（缺种子 ok:false、模型/解析出错抛错）。
  * 模型走用户配置（慢就慢，世界观是一次性铺垫；建议在设置里用更快的模型）。
  */
-import { buildStateOverview } from "@actalk/story-engine";
+import { buildStateOverview } from "../../book/state-overview.js";
 import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
-import { blankToUndefined } from "./lenient-args.js";
-import { generateWorldbuilding, type ChatMessage } from "../worldbuilding/worldbuilding.js";
+import { blankToUndefined } from "../../lib/lenient-args.js";
+import { generateWorldbuilding, type ChatMessage } from "../../services/enrichment/worldbuilding.js";
 
 // 模型无关：模型常把可选种子传成空串 `""`，旧 `?? overview…` 接不住（`"" ?? x = ""`）→ 旁路"从项目
 // 现有设定推断"→ 在本有世界设定的书上谎报"没种子"硬失败。blankToUndefined 把空串归一成 undefined。

@@ -4,7 +4,7 @@
  */
 import type { StateOverview } from "../../../api/types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
-import { chapterBareTitle, PLACEHOLDER_CHAPTER_TITLE } from "../v2Utils.js";
+import { chapterBareTitle, isPlaceholderChapterTitle } from "../v2Utils.js";
 
 export interface InboxTodo {
   readonly key: string;
@@ -14,7 +14,6 @@ export interface InboxTodo {
   readonly prefill: string;
 }
 
-const PLACEHOLDER_TITLE = PLACEHOLDER_CHAPTER_TITLE;
 const ARC_STALE_CHAPTERS = 8;
 
 function chapterList(numbers: readonly number[]): string {
@@ -56,7 +55,7 @@ export function buildInboxTodos(input: {
   }
 
   const placeholders = written
-    .filter((ch) => PLACEHOLDER_TITLE.test(chapterBareTitle(ch.title ?? "").trim()))
+    .filter((ch) => isPlaceholderChapterTitle(chapterBareTitle(ch.title ?? "").trim()))
     .map((ch) => ch.chapterNumber)
     .sort((a, b) => a - b);
   if (placeholders.length > 0) {
@@ -74,7 +73,7 @@ export function buildInboxTodos(input: {
   const byTitle = new Map<string, number[]>();
   for (const ch of written) {
     const title = chapterBareTitle(ch.title ?? "").trim();
-    if (!title || PLACEHOLDER_TITLE.test(title)) continue;
+    if (!title || isPlaceholderChapterTitle(title)) continue;
     byTitle.set(title, [...(byTitle.get(title) ?? []), ch.chapterNumber]);
   }
   const duplicates = [...byTitle.entries()]

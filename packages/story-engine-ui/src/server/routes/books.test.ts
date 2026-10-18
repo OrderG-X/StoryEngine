@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildStateOverview, createStoryProject } from "@actalk/story-engine";
+import { buildStateOverview } from "../book/state-overview.js";
+import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir, testRunRoot } from "../lib/home-test-tmp.js";
 import { assertStoryEngineProject } from "../lib/project-io.js";
 import { registerBooksRoutes, resolveBookLastActiveMs, selectRecentDefaultBooks } from "./books.js";

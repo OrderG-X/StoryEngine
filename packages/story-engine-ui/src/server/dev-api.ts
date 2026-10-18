@@ -22,7 +22,6 @@ import { registerAssetEnrichmentRoutes } from "./routes/asset-enrichment.js";
 import { registerLocationEnrichmentRoutes } from "./routes/location-enrichment.js";
 import { registerCharacterEnrichmentRoutes } from "./routes/character-enrichment.js";
 import { registerWritingRulesEnrichmentRoutes } from "./routes/writing-rules-enrichment.js";
-import { registerForeshadowingOverridesRoutes } from "./routes/foreshadowing-overrides.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerContinuityDismissalsRoutes } from "./routes/continuity-dismissals.js";
 import { registerStoryThreadsRoutes } from "./routes/story-threads.js";
@@ -53,7 +52,6 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerLocationEnrichmentRoutes(router);
   registerCharacterEnrichmentRoutes(router);
   registerWritingRulesEnrichmentRoutes(router);
-  registerForeshadowingOverridesRoutes(router);
   registerContinuityDismissalsRoutes(router);
   registerStoryThreadsRoutes(router);
   registerStoryMapRoutes(router);

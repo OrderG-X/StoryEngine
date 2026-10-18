@@ -1,7 +1,5 @@
 packages:
   - "packages/story-core"
-  - "packages/story-engine"
-  - "packages/story-engine-cli"
   - "packages/story-engine-ui"
   - "packages/story-engine-desktop"
 allowBuilds:

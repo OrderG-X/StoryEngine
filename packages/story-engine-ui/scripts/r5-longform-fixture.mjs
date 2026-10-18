@@ -11,7 +11,7 @@
  * 题材中立：用都市/通用题材，绝不抄 longform-smoke 的末日/林序财团硬编码词。
  * 角色/地点名自起中性的（避免触发引擎残留的题材 warning 干扰）。
  *
- * 引擎函数（createStoryProject/buildWriterContext/toSafeCharacterId）走 @actalk/story-engine dist。
+ * 老引擎函数（createStoryProject/buildWriterContext/toSafeCharacterId）已搬进 src/server/book、src/server/writing，经 r3-ts-hooks 动态 import。
  */
 import { register } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -21,7 +21,8 @@ import { join } from "node:path";
 
 register("./r3-ts-hooks.mjs", import.meta.url);
 
-const { createStoryProject, buildWriterContext, toSafeCharacterId } = await import("@actalk/story-engine");
+const { createStoryProject, toSafeCharacterId } = await import("../src/server/book/project-store.ts");
+const { buildWriterContext } = await import("../src/server/writing/context-gateway.ts");
 
 // ---------------------------------------------------------------------------
 // 中性题材资料（都市生活 / 创业团队，无系统无金手指、无末日、非林序财团）

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * 新旧代码隔离检查（重构 P0，2026-10-17；规矩见 docs/rebuild/PLAN.md 第二节第 6 条、第三节第 6 条）。
+ * 新旧代码隔离 + 服务端分层检查（重构 P0 起，P7 第 6 步加分层；规矩见 docs/rebuild/PLAN.md 第二节第 6 条、第三节第 6 条）。
  *
- * boundaries.json 里每条规则：dir（新代码目录）+ forbid（不许 import 的模块前缀，或相对路径落到的目录）。
+ * boundaries.json 里每条规则：dir（目录）+ forbid（不许 import 的模块前缀，或相对路径落到的目录）+ allow（例外前缀，只给测试基建用）。
  * 新代码要用旧模块里的好东西，就把它「搬」过来，不许直接 import 旧的——否则旧模块永远删不掉。
  * 目录还不存在的规则直接跳过（P2 起陆续生效）。
  *
@@ -53,8 +53,8 @@ for (const rule of rules) {
 }
 
 if (violations.length) {
-  console.error("新旧隔离检查没过：新代码 import 了旧模块。把要用的东西搬进新目录，别直接引用旧的。");
+  console.error("分层检查没过：下层 import 了上层（或核心引了服务端）。把要共用的东西挪到下层，别反着引。");
   for (const v of violations) console.error(`  ${v}`);
   process.exit(1);
 }
-console.log(`新旧隔离检查通过（生效规则 ${checkedRules}/${rules.length} 条）`);
+console.log(`分层检查通过（生效规则 ${checkedRules}/${rules.length} 条）`);

@@ -19,12 +19,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import {
-  normalizeStyleExemplars,
-  STYLE_EXEMPLAR_MAX_COUNT,
-  STYLE_EXEMPLAR_MAX_TEXT_CHARS,
-} from "@actalk/story-engine";
-import type { StyleExemplar } from "@actalk/story-engine";
+import { normalizeStyleExemplars, STYLE_EXEMPLAR_MAX_COUNT, STYLE_EXEMPLAR_MAX_TEXT_CHARS } from "../../book/style-exemplars.js";
+import type { StyleExemplar } from "../../book/types.js";
 
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { writeFileAtomic } from "../../lib/project-io.js";

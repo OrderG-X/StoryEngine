@@ -6,14 +6,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { loadModelSettingsV0, renderFastDraftPromptText } from "@actalk/story-engine";
-import type { ModelSettingsLoadResult, WriterClient } from "@actalk/story-engine";
+import { loadModelSettingsV0 } from "./model-settings.js";
+import type { ModelSettingsLoadResult } from "../book/types.js";
 import { writeFileAtomic } from "./project-io.js";
 import { recordPipelineUsage, sampleFromOpenAIUsage } from "./token-meter.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
-import { buildFastDraftMessages } from "./builtin-anti-ai-rules.js";
 
 // 旁路文件损坏只警告一次（resolveConfiguredChatModel 每次请求都读，避免刷屏）；恢复正常后重置，再坏再警告。
 let taskAssignmentsCorruptWarned = false;
@@ -468,8 +467,10 @@ export function isThinkingCannotBeDisabledError(status: number, errorText: strin
   if (status !== 400) return false;
   const t = errorText.toLowerCase();
   if (/cannot be disabled|can not be disabled|can't be disabled|could not be disabled/u.test(t)) return true;
+  // 不猜白名单开始：报错分类
   if (/\b1210\b/u.test(t) && /disabled|thinking|reasoning|思考/u.test(t)) return true;
   if (/thinking|reasoning|enable_thinking|思考/u.test(t) && /不可(?:以)?关闭|不能关闭|无法关闭|不支持关闭/u.test(t)) return true;
+  // 不猜白名单结束
   // glm-5.3 真机文案：「GLM-5.3 is a thinking-only model; disabling thinking…is not supported」（不带 cannot/disabled 连写）
   if (/thinking-only/u.test(t) || (/disabling (?:the )?(?:thinking|reasoning)/u.test(t) && /not supported/u.test(t))) return true;
   return false;
@@ -553,41 +554,6 @@ export async function callOpenAICompatibleChatModel(input: {
     throw new Error("模型把输出全用在思考链上、正文(content)为空。本网关不设 max_tokens 上限（用模型自身上限），别调 max_tokens；多为提示词过长或模型异常，可重试或换更快/更稳的模型。");
   }
   throw new Error("模型返回了空内容。");
-}
-
-// ---------------------------------------------------------------------------
-// Writer client
-// ---------------------------------------------------------------------------
-
-export async function createConfiguredWriterClient(task: ModelTaskProfileKey, onDelta?: (delta: string) => void): Promise<WriterClient> {
-  const configured = await resolveConfiguredChatModel(task);
-  return createOpenAICompatibleWriterClient(configured, onDelta);
-}
-
-/**
- * 出稿 writer 客户端。**流式**调模型（afterfix 真机根因：非流式整章生成 100~140s，卡 hub 代理超时边界 → 间歇
- * 500「Internal server error」；流式首字节秒级、连接全程有字节、代理不判超时）。复用 streamChatModelToText：
- * 有字节就续命、不设总时长上限（超时铁律），一律不传 max_tokens，思考方言按 configured 翻译（模型无关）。
- * 这也收束了「非流式 writer」这条旧路——出稿与聊天/审稿/质检统一走同一条流式主干。导出以便单测。
- */
-export function createOpenAICompatibleWriterClient(configured: ResolvedChatModel, onDelta?: (delta: string) => void): WriterClient {
-  return {
-    async generateDraft({ context }) {
-      const { content } = await streamChatModelToText({
-        configured,
-        // 内置去AI味铁律（system·固定常量前缀）+ 引擎产出的正文 prompt（user）。
-        // 准则是产品内核：内置代码常量、用户看不见/删不掉、只我们升级；引擎包零改（见 builtin-anti-ai-rules.ts）。
-        messages: buildFastDraftMessages(renderFastDraftPromptText(context)),
-        temperature: configured.profile.temperature ?? 0.8,
-        // 出稿流式：传了 onDelta 就把正文逐字外发（agent 路流式进编辑器）；runFastDraft 仍拿完整 content，引擎零改。
-        ...(onDelta ? { onDelta } : {}),
-      });
-      return {
-        title: `第${context.chapter}章`,
-        content: content.trim(),
-      };
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------

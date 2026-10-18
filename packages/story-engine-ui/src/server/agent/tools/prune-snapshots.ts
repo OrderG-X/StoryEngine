@@ -21,7 +21,7 @@ import { z } from "zod";
 import { pruneSnapshots, type SnapshotPruneResult } from "../../lib/snapshot.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { isUserConfirmedTool, readProjectDirFromContext } from "../request-context.js";
-import { coerceBoolean, coerceNumber, positiveOrUndefined } from "./lenient-args.js";
+import { coerceBoolean, coerceNumber, positiveOrUndefined } from "../../lib/lenient-args.js";
 
 export interface PruneSnapshotsRunResult {
   readonly ok: boolean;

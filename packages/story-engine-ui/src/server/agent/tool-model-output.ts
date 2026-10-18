@@ -17,6 +17,7 @@ const UI_ONLY_FIELDS = new Set(["overview", "refreshScope"]);
 const BODY_FIELDS = new Set(["draftBody"]);
 
 function countHan(text: string): number {
+  // 不猜白名单：切句
   return (text.match(/[㐀-鿿]/gu) ?? []).length;
 }
 

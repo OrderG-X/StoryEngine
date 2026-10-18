@@ -2,7 +2,7 @@ import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { readWorkspaceMessages } from "./project-io.js";
-import { estimateTokens } from "@actalk/story-engine";
+import { estimateTokens } from "../../lib/estimate-tokens.js";
 
 export type StoredMessage = ReturnType<typeof readWorkspaceMessages>[number];
 

@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { recoverProjectCommitTransactions, withProjectCommitLock } from "@actalk/story-engine";
-import { recoverTransactions as recoverCoreTransactions } from "@actalk/story-core";
-import { mirrorIsStale, syncLegacyMirror } from "../legacy-mirror/sync.js";
+import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
+import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@actalk/story-core";
+import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
 
@@ -40,8 +40,9 @@ async function git(projectDir: string, args: readonly string[], env?: Record<str
   return stdout.trim();
 }
 
+/** 存档、恢复和所有写命令共用核心的书锁（可重入，重构 P7 统一成一把）。 */
 async function withProjectLock<T>(projectDir: string, fn: () => Promise<T>): Promise<T> {
-  return withProjectCommitLock(projectDir, fn);
+  return withBookLock(projectDir, fn);
 }
 
 function parseLogLine(line: string): SnapshotEntry {
@@ -528,15 +529,80 @@ const UNDO_TOOL_LABELS: Record<string, string> = {
   manage_ledger: "改账",
 };
 
+export type SnapshotKind = "commit" | "draft" | "bible" | "restore";
+
+/** 写类工具 → 操作历史筛选分类。没列的（出稿、修订、章节方向和各路正文存档点）算「正文改动」。 */
+const TOOL_KINDS: Record<string, SnapshotKind> = {
+  commit_apply: "commit",
+  foundation_write: "bible",
+  generate_worldbuilding: "bible",
+  generate_character_enrichment: "bible",
+  generate_asset_enrichment: "bible",
+  generate_location_enrichment: "bible",
+  generate_matrix_enrichment: "bible",
+  generate_character_relationships: "bible",
+  generate_writing_rules_enrichment: "bible",
+  generate_alias_table: "bible",
+  edit_fact_ledger: "bible",
+  set_foreshadowing_importance: "bible",
+  resolve_thread: "bible",
+  clean_legacy_threads: "bible",
+  group_related_leads: "bible",
+  manage_ledger: "bible",
+};
+
+/** 核心写命令 → 操作历史分类。 */
+const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
+  "chapter.commit": "commit",
+  "decision.record": "bible",
+  "book.import": "bible",
+  "draft.write": "draft",
+};
+
+/** 早于命令名进标签时（P3～P7 之间）核心打的存档点，整串认。 */
+const LEGACY_CORE_LABEL_KINDS: Record<string, SnapshotKind> = {
+  "导入老书的账": "bible",
+};
+
+const CORE_LABEL_PREFIX = "core:";
+
+/** 核心命令打存档点的标签：core:<命令名>:<核心给的人话>。 */
+export function coreSnapshotLabel(command: string, label: string): string {
+  return `${CORE_LABEL_PREFIX}${command}:${label}`;
+}
+
+/** 交给核心 runCommand / ensureBookOnCore 的存档回调（标签带上命令名）。 */
+export function coreSnapshotFor(projectDir: string): (label: string, command: string) => Promise<void> {
+  return (label, command) => createSnapshot(projectDir, coreSnapshotLabel(command, label)).then(() => undefined);
+}
+
+function splitHead(rest: string): readonly [string, string] {
+  const sep = rest.indexOf(":");
+  return sep >= 0 ? [rest.slice(0, sep), rest.slice(sep + 1)] : [rest, ""];
+}
+
+/**
+ * 存档点属于哪一类：按原始标签里写入方的工具名 / 核心命令名查表（agent:<toolId>[:细节]、core:<命令>:<人话>），
+ * 恢复产物看自家前缀。不看人话标签里的字眼（细节里可能就有「定稿」「角色」这些字，重构 P7「不猜」）。
+ */
+export function snapshotKindOf(label: string): SnapshotKind {
+  if (label.startsWith("恢复到：") || label === "恢复前自动快照") return "restore";
+  if (label.startsWith(CORE_LABEL_PREFIX)) return CORE_COMMAND_KINDS[splitHead(label.slice(CORE_LABEL_PREFIX.length))[0]] ?? "draft";
+  if (!label.startsWith("agent:")) return LEGACY_CORE_LABEL_KINDS[label] ?? "draft";
+  return TOOL_KINDS[splitHead(label.slice("agent:".length))[0]] ?? "draft";
+}
+
 /**
  * 把快照 label（agent:<toolId> / 恢复产物 / 自定义）转成给用户看的中文动作名。
  * 操作历史面板经路由层用它把原始 git subject 人话化（snapshots.ts），undo 也用它回报。
  * 恢复产物形如「恢复到：agent:commit_apply」——前缀剥开后对内层再 humanize，杜绝中间露出 agent: 工程标签。
  */
 export function humanizeUndoLabel(label: string): string {
+  // 不猜白名单：自家格式
   const restoreMatch = /^恢复到：(.+)$/u.exec(label);
   if (restoreMatch) return `恢复到：${humanizeUndoLabel(restoreMatch[1]!)}`;
   if (label === "恢复前自动快照") return "恢复前的自动存档";
+  if (label.startsWith(CORE_LABEL_PREFIX)) return splitHead(label.slice(CORE_LABEL_PREFIX.length))[1] || label;
   const match = /^agent:(.+)$/u.exec(label);
   if (match) {
     // 标签可带细节后缀：agent:<tool>:<detail>（如 agent:foundation_write:建角色 顾长风）。
@@ -603,6 +669,7 @@ export async function undoLastChange(
         if (snap.label === skipTo.label && trees.get(snap.id) === skipTo.tree) skipTo = null;
         continue;
       }
+      // 不猜白名单：自家格式
       const restored = /^恢复到：(.+)$/u.exec(snap.label);
       if (followRestores && restored) {
         const tree = trees.get(snap.id);
@@ -633,6 +700,7 @@ export const SNAPSHOT_PRUNE_DEFAULT_KEEP = 200;
 export const SNAPSHOT_PRUNE_MIN_KEEP = 20;
 
 const PRUNE_BASE_LABEL_PREFIX = "base: 已裁剪";
+// 不猜白名单：自家格式
 const PRUNE_BASE_LABEL_PATTERN = new RegExp(`^${PRUNE_BASE_LABEL_PREFIX} (\\d+) 条更早快照$`, "u");
 
 export interface SnapshotPruneOptions {

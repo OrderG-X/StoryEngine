@@ -23,26 +23,22 @@
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import {
-  readCharacterMatrixLedger,
-  readFactLedgerStrict,
-  type CharacterMatrixEntry,
-  type CharacterMatrixLedger,
-  type CharacterMatrixUpdate,
-} from "@actalk/story-engine";
+import { readCharacterMatrixLedger } from "../../book/project-store.js";
+import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
+import { type CharacterMatrixEntry, type CharacterMatrixLedger, type CharacterMatrixUpdate } from "../../book/types.js";
 import { z } from "zod";
 
 import { writeTool } from "../withSnapshot.js";
 import { callOpenAICompatibleChatModel, resolveConfiguredChatModel } from "../../lib/llm-client.js";
 import { writeFileAtomic } from "../../lib/project-io.js";
-import { appendDedup } from "../enrichment-dedup.js";
+import { appendDedup } from "../../services/enrichment/enrichment-dedup.js";
 import { resolveChapterFromInputOrContext } from "../request-context.js";
 import {
   buildCharacterRelationshipsMessages,
   parseCharacterRelationships,
   type CharacterRelationships,
   type ChatMessage,
-} from "../character-relationships/character-relationships.js";
+} from "../../services/enrichment/character-relationships.js";
 
 const inputSchema = z.object({
   // roster/关系全部从项目硬事实账本读取，通常不需要任何参数；保留可空备注以备将来扩展，不强制。

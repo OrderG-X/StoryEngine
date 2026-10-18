@@ -57,13 +57,9 @@ export function groupSnapshotsByDay<T extends { readonly timestamp: number }>(
 
 export type SnapshotKind = "commit" | "draft" | "bible" | "restore";
 
-/** 按存档标签粗分四类（标签是写入方写的中文说明，如「定稿」「第55章修订前快照」「更新故事资料：建角色 阿琴」「恢复到：…」）。 */
-export function snapshotKind(label: string): SnapshotKind {
-  const text = label.trim();
-  if (/^恢复/u.test(text)) return "restore";
-  if (/定稿|入库/u.test(text)) return "commit";
-  if (/故事资料|设定|线索|伏笔|角色|地点|世界观|写作规则|时间线/u.test(text)) return "bible";
-  return "draft";
+/** 筛选分类由服务端按写入方工具名给出（重构 P7：不再按人话标签里的字眼猜）。 */
+export function snapshotKind(snapshot: Pick<SnapshotEntryDto, "kind">): SnapshotKind {
+  return snapshot.kind ?? "draft";
 }
 
 const KIND_FILTERS: readonly { readonly id: "all" | SnapshotKind; readonly label: string }[] = [
@@ -113,7 +109,7 @@ export default function OperationHistoryView({ projectPath }: { readonly project
   };
 
   const [kindFilter, setKindFilter] = useState<"all" | SnapshotKind>("all");
-  const filtered = snapshots ? snapshots.filter((snapshot) => kindFilter === "all" || snapshotKind(snapshot.label) === kindFilter) : null;
+  const filtered = snapshots ? snapshots.filter((snapshot) => kindFilter === "all" || snapshotKind(snapshot) === kindFilter) : null;
   const groups = filtered ? groupSnapshotsByDay(filtered) : [];
 
   return (

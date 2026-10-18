@@ -1,4 +1,4 @@
-import type { StateOverview } from "@actalk/story-engine";
+import type { StateOverview } from "../../book/state-overview.js";
 import type { FoundationKnownEntities } from "../../lib/project-io.js";
 
 /**

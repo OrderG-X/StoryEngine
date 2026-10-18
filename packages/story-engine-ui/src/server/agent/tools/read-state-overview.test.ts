@@ -6,7 +6,10 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildStateOverview } = vi.hoisted(() => ({ buildStateOverview: vi.fn() }));
-vi.mock("@actalk/story-engine", () => ({ buildStateOverview }));
+vi.mock("../../book/state-overview.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  buildStateOverview,
+}));
 vi.mock("../overview-summary.js", () => ({ summarizeStateOverview: () => "（摘要占位）", readFactionGoals: async () => [] }));
 
 import { buildProjectRequestContext } from "../request-context.js";

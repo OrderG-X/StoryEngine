@@ -7,24 +7,24 @@
  * 不写真相；预览票只是缓存（`ledger/.preview/`，丢了重新预览）。清单投影成「定稿预览」卡认的 ledgerChecklist：
  * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
-import { checkDraftHardGates } from "@actalk/story-engine";
+import { checkDraftHardGates } from "../../writing/commit-quality-check.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
-import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../brain/index.js";
+import { callConfiguredBrainModel, catchUpReaders, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
-import { ensureBookOnCore } from "../../legacy-mirror/ensure.js";
-import { readCharacterIds } from "../../legacy-mirror/sync.js";
-import { QUALITY_TYPE_LABELS } from "../../lib/quality-report-refine.js";
-import { createSnapshot } from "../../lib/snapshot.js";
+import { ensureBookOnCore } from "../../book/mirror/ensure.js";
+import { readCharacterIds } from "../../book/mirror/sync.js";
+import { QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
+import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 记账员当场最多补多少章笔记；超过就按「已有笔记 + 最近几章原文」记（冷窗口），笔记在后台补。 */
 const LEDGER_MAX_CATCH_UP = 10;
@@ -111,7 +111,7 @@ export async function buildCommitPreviewToolOutput(input: {
     };
   }
 
-  const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+  const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
   if (!onCore.ok) {
     return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
   }

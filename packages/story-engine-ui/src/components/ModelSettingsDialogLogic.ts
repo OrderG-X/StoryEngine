@@ -14,9 +14,11 @@ export function formatHumanTestError(error: unknown): string {
   if (/401|authentication|api key|invalid|unauthorized/i.test(message)) {
     return "密钥无效或已过期。请检查后重试，或到服务商控制台重新创建密钥。";
   }
+  // 不猜白名单：报错分类
   if (/timeout|超时|aborted/i.test(message)) {
     return "连接超时。请检查网络，或确认接口地址是否正确后再重试。";
   }
+  // 不猜白名单：报错分类
   if (/ENOTFOUND|ECONNREFUSED|无法连接|Failed to fetch|NetworkError/i.test(message)) {
     return "连不上该 AI 服务。请检查接口地址与网络后重试。";
   }
@@ -192,8 +194,8 @@ const PROFILE_KNOB_CHECKS = [
  *    清洗后的任务表随 cleanedTasks 返回，旁路 taskAssignments 载荷用它构建即与 config 同口径；
  *  ③ 同 id 磁盘 profile 五件套类型非法（引擎 invalid_temperature 等=error）——回 PROFILE_KNOB_DEFAULTS，
  *    与「表单重建默认打底」同口径，不再盲保留。
- * 本文件不能 value-import 引擎（scripts/check-import-boundary.mjs 禁止 src/server/ 以外引
- * @actalk/story-engine 进前端 bundle），清洗规则按引擎校验同口径镜像实现；「合并产物过真引擎
+ * 本文件不能 value-import 服务端的模型设置校验（scripts/check-import-boundary.mjs 禁止前端引
+ * src/server/ 进 bundle），清洗规则按服务端校验同口径镜像实现；「合并产物过真校验
  * validateModelSettingsV0 零 error/high」由 server 侧验收测试钉死
  * （src/server/routes/model-settings-merge-validation.test.ts）。
  */

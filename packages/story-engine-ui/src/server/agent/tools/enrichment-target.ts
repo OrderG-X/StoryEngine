@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { resolveEntityLabel } from "../presence/entity-labels.js";
-import { coerceStringArray } from "./lenient-args.js";
+import { resolveEntityLabel } from "../../writing/presence/entity-labels.js";
+import { coerceStringArray } from "../../lib/lenient-args.js";
 
 /**
  * 做厚工具的「单体定向」共享件 —— 让角色/资产/地点做厚支持「只补指名的这几个」，而非永远整批重做。

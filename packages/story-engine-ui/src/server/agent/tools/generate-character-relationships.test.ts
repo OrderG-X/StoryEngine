@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CharacterMatrixLedger } from "@actalk/story-engine";
+import type { CharacterMatrixLedger } from "../../book/types.js";
 import { describe, expect, it } from "vitest";
 
 import { NO_FACTS_RELATIONSHIP_SUMMARY, convertRelationshipsToMatrixUpdates, persistCharacterRoster } from "./generate-character-relationships.js";

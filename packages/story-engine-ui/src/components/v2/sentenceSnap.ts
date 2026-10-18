@@ -3,8 +3,10 @@
  * 应用时只替换了选中的半句，后半句就重复了一遍（2026-10-07 浏览器走查实锤）。
  * 纯函数：在一段文字里把 [start, end) 往外扩到句子边界（句号/问号/叹号/省略号，连同紧跟的引号括号）。
  */
+// 不猜白名单开始：切句
 const TERMINATOR = /[。！？!?…]/u;
 const CLOSER = /[”」』）)"'’]/u;
+// 不猜白名单结束
 
 /** 位置 i 之前（不含 i）是不是一句话的结尾。 */
 function endsSentenceBefore(text: string, i: number): boolean {

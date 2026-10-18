@@ -91,7 +91,7 @@ export async function runCommand<A, R>(
 
     if (spec.snapshot && options.snapshot) {
       try {
-        await options.snapshot(planned.label);
+        await options.snapshot(planned.label, spec.name);
       } catch (error) {
         return fail("snapshot_failed", "没能先存撤销点，这次没有写。", error instanceof Error ? error.message : String(error));
       }

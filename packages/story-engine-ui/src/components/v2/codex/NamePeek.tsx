@@ -9,6 +9,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { StateOverviewCharacterMatrix } from "../../../api/types.js";
 
+const LEAD_ROLES = new Set(["主角", "protagonist"]);
+
 type MatrixCharacter = StateOverviewCharacterMatrix["characters"][number];
 
 export interface NameOccurrence {
@@ -200,7 +202,7 @@ export function NamePeek({
   const now = firstLine([c.currentGoal, c.mood, c.currentLocation ? `在${c.currentLocation}` : undefined, c.recentEvents?.[0]]);
   const unknown = firstLine([c.unknownTruths?.[0]]);
   // 主角本人不显示「和主角」。
-  const relation = /主角/u.test(c.role ?? "") ? "" : firstLine([c.relationshipToProtagonist]);
+  const relation = LEAD_ROLES.has((c.role ?? "").trim().toLowerCase()) ? "" : firstLine([c.relationshipToProtagonist]);
   return (
     <div
       className="se-name-peek"

@@ -9,7 +9,8 @@
  *
  * 重构 P4：对应的 HTTP 路已删（按钮改发结构化动作走对话通道），下面「路由」一侧的说明只作历史由来。
  *
- * 编排：取真草稿 → checkDraftBeforeCommit（确定性规则）→ judge（AI 判定层）→ refined。
+ * 编排：取真草稿 → checkDraftBeforeCommit（只剩确定性的硬检查）→ refined。
+ * 重构 P7：靠词表猜的连续性规则（楼层、交通、人称性别…）和给它们打分的 AI 判定层一起删了；前后文对不对得上交给核账员。
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
  *
  * 显式策略参数（原豁免清单里的分歧，收敛成参数而非暗差）：
@@ -17,26 +18,15 @@
  *     路由传 true（前端送的是编辑器实时正文，可能比盘新）；工具默认 false（不信模型臆想的正文）。
  *   - onNoDraft（D16）：三处皆无真稿时怎么办。路由 "engine_empty_report"（把空串照常喂引擎，
  *     出 empty_draft 报告）；工具 "honest_short_circuit"（短路出 draft_not_found_for_check 诚实报告）。
- *   - judge（D6）：AI 判定层显式可注入——默认 judgeDraftQualityWithModel；单测/commit 预览等
- *     不调判定模型的调用方可注入透传桩（判定层调不调由调用方显式决定，不再是暗差）。
  */
 import { readFile } from "node:fs/promises";
-import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "@actalk/story-engine";
+import { checkDraftBeforeCommit, type CommitQualityIssue, type CommitQualityReport } from "../writing/commit-quality-check.js";
 
 import {
   defaultDraftPath,
   hasRealDraftContent,
 } from "../lib/project-io.js";
-import { judgeDraftQualityWithModel } from "../lib/quality-judge.js";
-import { refineQualityReport, type RefinedQualityReport } from "../lib/quality-report-refine.js";
-
-/** AI 判定层：默认 judgeDraftQualityWithModel；调用方可注入确定性桩（不触网/不调判定模型）。 */
-export type QualityJudge = (input: {
-  readonly projectDir: string;
-  readonly chapter: number;
-  readonly draftContent: string;
-  readonly deterministicQuality: CommitQualityReport;
-}) => Promise<CommitQualityReport>;
+import { refineQualityReport, type RefinedQualityReport } from "../writing/quality-report-refine.js";
 
 /** D16 无稿策略：engine_empty_report=照常喂引擎出空稿报告；honest_short_circuit=短路出诚实「无稿」报告。 */
 export type DraftQualityNoDraftPolicy = "engine_empty_report" | "honest_short_circuit";
@@ -49,8 +39,6 @@ export interface DraftQualityCheckInput {
   readonly trustExplicit?: boolean;
   /** D16 显式策略：每条适配路必须声明无稿时的行为，不再各写各的。 */
   readonly onNoDraft: DraftQualityNoDraftPolicy;
-  /** D6 显式策略：AI 判定层注入点（默认真判定；传透传桩=显式跳过判定模型）。 */
-  readonly judge?: QualityJudge;
   readonly retries?: number;
   readonly delayMs?: number;
 }
@@ -88,9 +76,7 @@ export async function runDraftQualityCheck(input: DraftQualityCheckInput): Promi
   }
 
   const draftContent = resolved.content;
-  const deterministicQuality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
-  const judge = input.judge ?? judgeDraftQualityWithModel;
-  const quality = await judge({ projectDir, chapter, draftContent, deterministicQuality });
+  const quality = await checkDraftBeforeCommit({ projectDir, chapter, draftContent });
   return { chapter, hasRealDraft: resolved.hasRealDraft, draftContent, quality, refined: refineQualityReport(quality) };
 }
 

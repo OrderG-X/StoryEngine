@@ -1,7 +1,7 @@
 /**
  * quality_check — 只读工具：对某章草稿做入库前质量检查（确定性规则 + AI 判定），不改稿。
  *
- * 双轨合一：共享编排（取真草稿 → checkDraftBeforeCommit → judge → refined）已收进
+ * 双轨合一：共享编排（取真草稿 → checkDraftBeforeCommit → refined）已收进
  * services/quality-service.ts。本工具只剩适配层：
  * RequestContext 取 projectDir/章号回退 + ok/partialMiss/refined/summary 的工具输出投影（D15）。
  * 策略参数由本适配层显式声明：trustExplicit 默认 false（不信模型给的正文，D14）、
@@ -10,18 +10,17 @@
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope（不动磁盘，前端无需刷新面板）。
  * 题材中立 / 诚实回报：直接摊出引擎的质检报告，不夸大也不掩盖问题。
  */
-import type { CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityReport } from "../../writing/commit-quality-check.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
-import type { RefinedQualityReport } from "../../lib/quality-report-refine.js";
+import type { RefinedQualityReport } from "../../writing/quality-report-refine.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { runDraftQualityCheck, type QualityJudge } from "../../services/quality-service.js";
+import { runDraftQualityCheck } from "../../services/quality-service.js";
 
 export { resolveDraftContentForQualityCheck } from "../../services/quality-service.js";
-export type { QualityJudge } from "../../services/quality-service.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要质检的章号。")),
@@ -72,13 +71,11 @@ function buildNoDraftQualityOutput(result: {
 
 /**
  * 工具适配层：调共享 service（显式策略：不信模型正文 + 无稿诚实短路），再投影工具输出面。
- * judge 作为参数透传给 service：真实 execute 用默认 judgeDraftQualityWithModel；单测注入桩避免触网。
  */
 export async function buildQualityCheckToolOutput(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly draftContent?: string;
-  readonly judge?: QualityJudge;
   readonly retries?: number;
   readonly delayMs?: number;
 }): Promise<QualityCheckToolOutput> {
@@ -88,7 +85,6 @@ export async function buildQualityCheckToolOutput(input: {
     chapter,
     onNoDraft: "honest_short_circuit",
     ...(input.draftContent !== undefined ? { explicitDraftContent: input.draftContent } : {}),
-    ...(input.judge !== undefined ? { judge: input.judge } : {}),
     ...(input.retries !== undefined ? { retries: input.retries } : {}),
     ...(input.delayMs !== undefined ? { delayMs: input.delayMs } : {}),
   });
@@ -98,12 +94,6 @@ export async function buildQualityCheckToolOutput(input: {
 
   const { quality, refined } = result;
   const errorIssueCount = refined.blocking.length;
-
-  // 铁律④·绝不静默失败：AI 语义判定层走 fallback（超时/网络失败/输出不合规）时，确定性规则照常出结论，
-  // 但必须诚实披露「AI 语义判定本轮未完成」——否则 agent 会把它当『通过、可入库』转告，掩盖判定层没跑。
-  const aiJudgeFallbackNote = quality.modelJudge?.fallbackUsed === true
-    ? "（注意：AI 语义判定本轮未完成，仅按确定性规则分级；可重试或换硬伤检查用的模型再判一次）"
-    : "";
 
   return {
     chapter,
@@ -115,14 +105,14 @@ export async function buildQualityCheckToolOutput(input: {
     quality,
     refined,
     errorIssueCount,
-    summary: `第 ${chapter} 章硬伤检查：${refined.summary}${aiJudgeFallbackNote}`,
+    summary: `第 ${chapter} 章硬伤检查：${refined.summary}`,
   };
 }
 
 export const qualityCheckTool = createTool({
   id: "quality_check",
   description:
-    "对某章工作稿做定稿前质量检查（确定性规则 + AI 判定），不修改任何文件。" +
+    "对某章工作稿做定稿前的硬伤检查（空稿、太短、缺标题这类确定性检查），不修改任何文件；前后文对不对得上用 check_continuity。" +
     "当用户问『这章工作稿有没有问题 / 能定稿吗 / 帮我检查一下质量』时调用（用户旧说法「草稿/入库」也指同一件事）。" +
     "返回质检报告（含 error 级阻止项），但不改稿、不定稿。",
   inputSchema,

@@ -11,7 +11,7 @@ import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { coerceEnum, coerceNumber } from "./lenient-args.js";
+import { coerceEnum, coerceNumber } from "../../lib/lenient-args.js";
 import { pruneSnapshotsTool } from "./prune-snapshots.js";
 import { undoLastChangeTool } from "./undo-last-change.js";
 

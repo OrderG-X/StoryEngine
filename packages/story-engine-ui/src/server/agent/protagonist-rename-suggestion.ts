@@ -7,14 +7,15 @@
  * （引擎对「给占位主角起真名」是确定性认领改名场景，foundation-write-gateway 占位改名），绝不在
  * 本建议里直接写盘。
  *
- * 判据全部确定性、题材中立：主角卡是否占位按建书模板固定标记（PLACEHOLDER_CHARACTER_NAME，不按名字猜）；
+ * 判据全部确定性、题材中立：主角卡是否占位按建书模板固定标记（isPlaceholderCharacterName，不按名字猜）；
  * 人名只看已定稿章节声明的**视角人物**（时间线 semanticSummary.viewpointCharacter，R5.1 起）取最多——
  * 不再数出场次数（第 1 章视角是林小满、宋伯名字出现再多，也是建议林小满）。
  * 一章都没有视角声明就不给建议，绝不退回数出场次数（老书老数据没有这字段就没有建议）。
  */
-import { readCharacterBible, PLACEHOLDER_CHARACTER_NAME, type CharacterBibleEntry } from "@actalk/story-engine";
+import { readCharacterBible, isPlaceholderCharacterName } from "../book/project-store.js";
+import { type CharacterBibleEntry } from "../book/types.js";
 
-import { readViewpointChapterCounts } from "./presence/delta-present-names.js";
+import { readViewpointChapterCounts } from "../writing/presence/delta-present-names.js";
 
 /** 主角判定：与在场检测（in-scene-detector）同语义——isMainCharacter/role=protagonist/role 含「主角」。 */
 function isProtagonistEntry(character: CharacterBibleEntry): boolean {
@@ -40,7 +41,7 @@ export async function buildProtagonistRenameSuggestion(
   const bible = await readCharacterBible(projectDir).catch(() => null);
   const protagonist = (bible?.characters ?? []).find(isProtagonistEntry) ?? (bible?.characters ?? [])[0];
   const placeholderName = protagonist?.name?.trim() ?? "";
-  if (!placeholderName || !PLACEHOLDER_CHARACTER_NAME.test(placeholderName)) return undefined;
+  if (!placeholderName || !isPlaceholderCharacterName(placeholderName)) return undefined;
 
   const ranked = await readViewpointChapterCounts(projectDir, committedChapter + 1);
   const top = ranked[0];

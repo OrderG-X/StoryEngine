@@ -887,6 +887,7 @@ export function describeOpenProjectFailure(
 ): string {
   const title = books.find((book) => book.projectPath === projectPath)?.title;
   const name = title ? `《${title}》` : "这本书";
+  // 不猜白名单：报错分类
   if (/项目目录不存在|ENOENT|no such file/iu.test(raw)) {
     return `找不到${name}的文件夹，可能被移走或删掉了。可以在书的「···」里把它从书架移除，或用「打开已有书籍」重新选位置。`;
   }

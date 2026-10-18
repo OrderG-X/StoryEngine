@@ -2,17 +2,17 @@
  * check_continuity —— 只读工具「核账」（2026-10-10 重新设计「作者写、AI 管账」第 2 期）。
  *
  * 拿这一章（工作稿优先，没有就读已定稿）去对前文原文，找前后对不上的地方：东西在哪 / 在谁手里、人物行踪身份、
- * 时间天数、谁该知道什么。正文对正文（见 continuity-v2/check-chapter.ts），不拿账本当裁判。
+ * 时间天数、谁该知道什么。正文对正文（见 editorial/continuity/check-chapter.ts），不拿账本当裁判。
  * 结果分「确定」「可能」两档，每条带本章原句和前文原句（含章号）。不改正文、不写账本。
  * 作者点「核账」按钮走结构化动作直达（user-actions），对话里说「核一下」也由 agent 调用。
  */
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceBoolean, coerceNumber } from "./lenient-args.js";
+import { coerceBoolean, coerceNumber } from "../../lib/lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { checkChapterBody, type ChapterCheckOptions } from "../continuity-v2/check-service.js";
+import { checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
 
 const issueSchema = z.object({
   quote: z.string().describe("有问题的那一句（原文）。"),

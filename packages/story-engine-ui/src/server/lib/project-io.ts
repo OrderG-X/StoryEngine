@@ -7,12 +7,7 @@ import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/p
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
 import { resolveBooksRootDir } from "./data-dirs.js";
-import type {
-  DraftRevisionPreview,
-  DraftRevisionTask,
-  StateOverview,
-} from "@actalk/story-engine";
-import { normalizeDraftRevisionPreview } from "@actalk/story-engine";
+import type { StateOverview } from "../book/state-overview.js";
 import type { MessageCard } from "../../type-defs/workspace.js";
 import { legacyMessageCards, readMessageCards } from "./message-cards-io.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
@@ -457,7 +452,7 @@ export function isDevApiPermission(value: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Draft quality / revision parsers
+// Draft quality parsers
 // ---------------------------------------------------------------------------
 
 export function readDraftQualityReport(value: Record<string, unknown>): { readonly passed: boolean; readonly issues: readonly { readonly severity: "info" | "warning" | "error"; readonly type: string; readonly message: string }[] } {
@@ -472,56 +467,6 @@ export function readDraftQualityReport(value: Record<string, unknown>): { readon
     passed: typeof value.passed === "boolean" ? value.passed : !issues.some((issue) => issue.severity === "error"),
     issues,
   };
-}
-
-export function readDraftRevisionTask(value: unknown, chapter: number): DraftRevisionTask {
-  if (!isRecord(value)) throw new Error("修订任务不完整。");
-  const id = readString(value.id) ?? `revision-${Date.now().toString(36)}`;
-  const targetType = readDraftRevisionTargetType(value.targetType);
-  const targetText = readString(value.targetText) ?? "";
-  const problemSummary = readString(value.problemSummary) ?? "局部修订";
-  const revisionGoal = readString(value.revisionGoal) ?? "根据内容审阅建议优化当前片段。";
-  return {
-    id,
-    ...(readString(value.sourceIssueId) ? { sourceIssueId: readString(value.sourceIssueId) } : {}),
-    ...(readString(value.sourceSuggestionId) ? { sourceSuggestionId: readString(value.sourceSuggestionId) } : {}),
-    chapter: readPositiveInteger(value.chapter) ?? chapter,
-    targetType,
-    targetText,
-    ...(readString(value.targetRangeHint) ? { targetRangeHint: readString(value.targetRangeHint) } : {}),
-    problemSummary,
-    revisionGoal,
-    constraints: readStringList(value.constraints),
-    status: "pending",
-  };
-}
-
-function readDraftRevisionTargetType(value: unknown): DraftRevisionTask["targetType"] {
-  return value === "paragraph" || value === "section" || value === "dialogue" || value === "opening" || value === "ending" || value === "whole_draft_note"
-    ? value
-    : "paragraph";
-}
-
-export function readDraftRevisionPreviewObj(value: unknown): DraftRevisionPreview {
-  if (!isRecord(value)) throw new Error("修订预览不完整。");
-  const taskId = requireBodyString(value.taskId, "修订预览缺少任务 ID。");
-  const beforeText = requireBodyString(value.beforeText, "修订预览缺少原文。");
-  const afterText = requireBodyString(value.afterText, "修订预览缺少修订后文本。");
-  return normalizeDraftRevisionPreview({
-    ...value,
-    taskId,
-    beforeText,
-    afterText,
-  }, {
-    id: taskId,
-    chapter: 0,
-    targetType: "paragraph",
-    targetText: beforeText,
-    problemSummary: "",
-    revisionGoal: "",
-    constraints: [],
-    status: "preview_generated",
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -564,9 +509,14 @@ function resolveKnownEntityIdByName(
   return undefined;
 }
 
+const GENERIC_ENTITY_TARGET_IDS = new Set([
+  "角色", "主角", "主人公", "男主", "女主", "配角", "该角色", "这个角色", "当前角色", "现有角色",
+  "character", "protagonist", "main character", "main-character", "main_character", "maincharacter",
+]);
+
 function isGenericFoundationEntityTargetId(value: string | undefined): boolean {
   if (!value) return false;
-  return /^(?:角色|主角|主人公|男主|女主|配角|该角色|这个角色|当前角色|现有角色|character|protagonist|main[-_\s]?character)$/iu.test(value.trim());
+  return GENERIC_ENTITY_TARGET_IDS.has(value.trim().toLowerCase());
 }
 
 /**
@@ -806,6 +756,7 @@ export function toSafeLocalId(value: string, fallback: string): string {
 
 export function splitChineseList(value: string): string[] {
   return value
+    // 不猜白名单：切句
     .split(/[、,，]/u)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -856,8 +807,10 @@ function isMarkdownChapterHeading(line: string): boolean {
   if (!/^#{1,6}\s+\S/u.test(line)) return false;
   const title = line.replace(/^#{1,6}\s+/u, "").trim();
   if (!title) return false;
+  // 不猜白名单开始：章节标题
   if (/^第[一二三四五六七八九十百千万\d]+章(?:\s*[·：:、-]\s*.*)?$/u.test(title)) return true;
   return title.length <= 40 && !/[。！？!?；;]/u.test(title);
+  // 不猜白名单结束
 }
 
 export function defaultDraftPath(projectDir: string, chapter: number): string {
@@ -881,6 +834,7 @@ export function extractDraftTitle(content: string | undefined): string | null {
   if (!content) return null;
   const firstLine = content.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
   if (!firstLine?.startsWith("#")) return null;
+  // 不猜白名单：章节标题
   const title = firstLine.replace(/^#+\s*/u, "").replace(/^第[一二三四五六七八九十百\d]+章\s*[·：:、-]?\s*/u, "").trim();
   return title || null;
 }
@@ -971,158 +925,6 @@ export function hasRealDraftContent(content: string | undefined): boolean {
   return normalizedContent(content).length > 0
     && !isStateBackedDraftPlaceholder(content)
     && !isSentinelDraftContent(content);
-}
-
-// ---------------------------------------------------------------------------
-// UI overview helpers
-// ---------------------------------------------------------------------------
-
-type StoryCalendarView = {
-  readonly currentStoryDay: number;
-  readonly currentTimeOfDay: "morning" | "noon" | "afternoon" | "evening" | "night" | "late_night" | "unknown";
-};
-
-type CharacterDetailView = Record<string, unknown> & {
-  readonly id: string;
-  readonly name: string;
-};
-
-async function readStoryCalendarView(projectDir: string): Promise<StoryCalendarView | undefined> {
-  const parsed = await readFile(join(projectDir, "time", "calendar.json"), "utf-8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => undefined);
-  if (!isRecord(parsed)) return undefined;
-  const currentStoryDay = readPositiveInteger(parsed.currentStoryDay) ?? 1;
-  const currentTimeOfDay = readCalendarTimeOfDay(parsed.currentTimeOfDay);
-  return { currentStoryDay, currentTimeOfDay };
-}
-
-function readCalendarTimeOfDay(value: unknown): StoryCalendarView["currentTimeOfDay"] {
-  return value === "morning"
-    || value === "noon"
-    || value === "afternoon"
-    || value === "evening"
-    || value === "night"
-    || value === "late_night"
-    || value === "unknown"
-    ? value
-    : "unknown";
-}
-
-async function readJsonRecord(path: string): Promise<Record<string, unknown> | undefined> {
-  const parsed = await readFile(path, "utf-8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => undefined);
-  return isRecord(parsed) ? parsed : undefined;
-}
-
-function readStringListLocal(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
-  return [];
-}
-
-async function readCharacterDetailViews(projectDir: string): Promise<readonly CharacterDetailView[]> {
-  const entries = await readdir(join(projectDir, "characters"), { withFileTypes: true }).catch(() => []);
-  const bible = await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")
-    .then((text) => JSON.parse(text) as unknown)
-    .catch(() => undefined);
-  const bibleCharacters = isRecord(bible) && Array.isArray(bible.characters) ? bible.characters.filter(isRecord) : [];
-  const details = await Promise.all(entries
-    .filter((entry) => entry.isDirectory())
-    .map(async (entry) => {
-      const characterDir = join(projectDir, "characters", entry.name);
-      const [profile, state, core] = await Promise.all([
-        readJsonRecord(join(characterDir, "profile.json")),
-        readJsonRecord(join(characterDir, "state.json")),
-        readJsonRecord(join(characterDir, "core.json")),
-      ]);
-      if (!profile) return undefined;
-      const id = readString(profile.id) ?? entry.name;
-      const bibleEntry = bibleCharacters.find((item) => readString(item.id) === id || readString(item.name) === readString(profile.name));
-      return compactRecord({
-        id,
-        name: readString(profile.name) ?? id,
-        role: readString(bibleEntry?.role) ?? readString(profile.identity),
-        identity: readString(profile.identity),
-        age: readString(profile.age),
-        gender: readString(profile.gender),
-        height: readString(profile.height),
-        weight: readString(profile.weight),
-        distinctiveTraits: readStringListLocal(profile.distinctiveTraits),
-        bodyTraits: readStringListLocal(profile.bodyTraits),
-        privateBodyTraits: readStringListLocal(profile.privateBodyTraits),
-        intimacyBoundaries: readStringListLocal(profile.intimacyBoundaries),
-        tags: readStringListLocal(profile.tags),
-        appearance: isRecord(profile.appearance) ? profile.appearance : undefined,
-        appearanceAnchors: mergeStringLists(profile.appearanceAnchors, bibleEntry?.appearanceAnchors),
-        emotion: readString(state?.emotion) ?? readString(state?.mood),
-        goal: readString(state?.goal) ?? readString(state?.currentGoal),
-        mood: readString(state?.mood) ?? readString(state?.emotion),
-        currentGoal: readString(state?.currentGoal) ?? readString(state?.goal),
-        recentEvents: readStringListLocal(state?.recentEvents),
-        relationshipToUser: readString(state?.relationshipToUser),
-        currentArc: readString(state?.currentArc),
-        currentLocationId: readString(state?.currentLocationId),
-        currentLocationName: readString(state?.currentLocationName),
-        lastUpdatedChapter: typeof state?.lastUpdatedChapter === "number" ? state.lastUpdatedChapter : null,
-        personality: readStringListLocal(core?.personality),
-        speechStyle: readString(core?.speechStyle),
-        taboos: readStringListLocal(core?.taboos),
-        worldview: readString(core?.worldview),
-        desire: readString(bibleEntry?.desire) ?? readString(core?.desire),
-        fear: readString(bibleEntry?.fear) ?? readString(core?.fear),
-        weakness: readString(bibleEntry?.weakness),
-        contradiction: readString(bibleEntry?.contradiction) ?? readString(core?.contradiction),
-        moralBoundary: readString(bibleEntry?.moralBoundary) ?? readString(core?.moralBoundary),
-        privateMotive: readString(bibleEntry?.privateMotive),
-        relationshipToProtagonist: readString(bibleEntry?.relationshipToProtagonist),
-        relationshipDynamics: readStringListLocal(bibleEntry?.relationshipDynamics),
-        trustLevel: readString(bibleEntry?.trustLevel),
-        hiddenStance: readString(bibleEntry?.hiddenStance),
-        speechRules: readStringListLocal(bibleEntry?.speechRules),
-        speechSamples: mergeStringLists(bibleEntry?.speechSamples, isRecord(core?.voice) ? core.voice.sampleLines : undefined),
-        behaviorBoundaries: readStringListLocal(bibleEntry?.behaviorBoundaries),
-        knowledgeKnown: mergeStringLists(bibleEntry?.knowledgeKnown, state?.knowledgeKnown),
-        knowledgeUnknown: mergeStringLists(bibleEntry?.knowledgeUnknown, state?.knowledgeUnknown),
-        cannotReveal: mergeStringLists(bibleEntry?.cannotReveal, state?.cannotReveal),
-        cannotDo: readStringListLocal(bibleEntry?.cannotDo),
-        arcPromise: readString(bibleEntry?.arcPromise),
-        currentStateHint: readString(bibleEntry?.currentStateHint),
-        currentPhysicalState: readString(state?.currentPhysicalState),
-        currentMentalState: readString(state?.currentMentalState),
-        currentResourceState: readString(state?.currentResourceState),
-      }) as CharacterDetailView;
-    }));
-  return details.filter((item): item is CharacterDetailView => item !== undefined);
-}
-
-export async function withUiOverviewDetails(projectDir: string, overview: StateOverview): Promise<StateOverview & {
-  readonly calendar?: StoryCalendarView;
-  readonly characterDetails?: readonly CharacterDetailView[];
-  /** 编辑部三个跟读角色的后台补读进度（R4.3）：核账员/记账员/章纲员各读到第几章，任一在读才带。 */
-  readonly readerCatchUp?: { readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] };
-  readonly uiChapterFiles?: readonly UiChapterFileState[];
-}> {
-  const calendar = await readStoryCalendarView(projectDir);
-  const [characterDetails, uiChapterFiles, readerCatchUp] = await Promise.all([
-    readCharacterDetailViews(projectDir),
-    readUiChapterFileStates(projectDir),
-    readReadersCatchUpProgress(projectDir),
-  ]);
-  return {
-    ...overview,
-    ...(calendar ? { calendar } : {}),
-    ...(characterDetails.length ? { characterDetails } : {}),
-    ...(readerCatchUp ? { readerCatchUp } : {}),
-    ...(uiChapterFiles.length ? { uiChapterFiles } : {}),
-  };
-}
-
-/** 三个跟读角色的补读进度（agents/<角色>/progress.json，形状同 catch-up 的 ReadersCatchUpStatus）：全读完就不带（进度行消失）。 */
-async function readReadersCatchUpProgress(projectDir: string): Promise<{ readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] } | undefined> {
-  const { readReadersCatchUpStatus } = await import("../brain/catch-up.js");
-  const status = await readReadersCatchUpStatus(projectDir).catch(() => undefined);
-  return status?.reading ? status : undefined;
 }
 
 // ---------------------------------------------------------------------------

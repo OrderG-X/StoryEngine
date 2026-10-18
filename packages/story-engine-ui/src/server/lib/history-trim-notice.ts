@@ -5,7 +5,7 @@
  * 作者看不懂也烦（记忆条才用了 2～8%）。R7.7 口径：同一会话只提示一次。
  * 「会话」在服务端能拿到的最稳标识是书目录（projectDir，一本书的对话会话都在它名下）：
  * 进程内 Set 登记，发过一次就不再发。纯内存、无依赖；服务重启后最多再提示一次，可接受。
- * 模式对齐 brain/waiting-registry（进程内登记表），不走盘、不进会话文件。
+ * 模式对齐 editorial/waiting-registry（进程内登记表），不走盘、不进会话文件。
  */
 
 const noticedProjects = new Set<string>();

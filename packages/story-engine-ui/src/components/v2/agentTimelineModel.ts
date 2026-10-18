@@ -154,7 +154,7 @@ function completedCommitApplyStatusText(cards: readonly ChapterAgentCard[]): str
 /** route:/action:/confidence: 等审计行在时间线中不渲染（数据仍保留在消息上）。 */
 export function isRouteAuditDetailLine(line: string): boolean {
   const trimmed = line.trim();
-  return /^(route|action|target|confidence|reason):\s*/u.test(trimmed) || /^判断：/u.test(trimmed);
+  return /^(route|action|target|confidence|reason):\s*/u.test(trimmed) || trimmed.startsWith("判断：");
 }
 
 export function agentDisplayLabel(card: ChapterAgentCard): string {

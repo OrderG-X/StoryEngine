@@ -5,9 +5,10 @@ import { join } from "node:path";
 
 register("./r3-ts-hooks.mjs", import.meta.url);
 
-const { buildWriterContext, renderFastDraftPromptText } = await import("@actalk/story-engine");
+const { buildWriterContext } = await import("../src/server/writing/context-gateway.ts");
+const { renderFastDraftPromptText } = await import("../src/server/writing/prompt-cache-diagnostics.ts");
 const { makeWriterRankContext, resolveWriterTokenBudget } = await import(
-  "../src/server/agent/context-budget/rank-writer-context.ts"
+  "../src/server/writing/rank-writer-context.ts"
 );
 
 const projectDir = join(homedir(), "StoryEngine-NG-r5", "story-engine", "r5fix");

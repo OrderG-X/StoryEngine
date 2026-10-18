@@ -9,11 +9,11 @@
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
  * 题材中立 / 诚实回报：直接摊出审稿报告与 usedFallback 标志，不掩盖「审稿未完成」。
  */
-import type { DraftAIReviewReport } from "@actalk/story-engine";
+import type { DraftAIReviewReport } from "../../writing/draft-ai-review.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceNumber } from "./lenient-args.js";
+import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { runDraftAIReview } from "../../services/review-service.js";

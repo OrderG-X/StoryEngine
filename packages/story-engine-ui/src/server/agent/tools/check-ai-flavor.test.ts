@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionContext } from "@mastra/core/tools";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { buildProjectRequestContext } from "../request-context.js";
 import { runCheckAiFlavorToolLogic, checkAiFlavorTool } from "./check-ai-flavor.js";
@@ -65,7 +65,7 @@ describe("check_ai_flavor 章号缺省回退", () => {
     const out = await execute({}, ctx(projectDir, 5)) as { ok: boolean; summary: string };
     // Should succeed (used chapter 5 draft, not chapter 1)
     expect(out.ok).toBe(true);
-    expect(out.summary).toContain("第5章");
+    expect(JSON.stringify(mockStream.mock.calls.at(-1))).toContain("心中涌起一股莫名的感慨");
   });
 
   it("不传 chapter 且 context 无 currentChapter → throw 含『缺少章号』", async () => {

@@ -143,6 +143,7 @@ export default function WritingRulesCodexPanel({
       return key === line;
     });
     return from ?? {
+      // 不猜白名单：切句
       name: line.split(/[：:]/u, 1)[0] ?? line,
       desc: "",
       type: "risk" as const,
@@ -328,8 +329,9 @@ function antiRuleFromPrefixedLine(line: string, index: number): AntiAiRule {
   return {
     name,
     desc,
-    type: /禁|禁止|不要|勿/u.test(name + desc) ? "forbidden" : /鼓励|多用|应写/u.test(name + desc) ? "encourage" : "risk",
-    severity: /禁|禁止/u.test(name + desc) ? "high" : "medium",
+    // 老书这行只有文字、没有类型：不按「禁止 / 鼓励」字眼猜，一律按「风险提醒」中档显示（重构 P7「不猜」）。
+    type: "risk",
+    severity: "medium",
   };
 }
 
@@ -359,12 +361,13 @@ function pick(values: ReadonlyMap<string, string>, label: string): string | unde
 
 function splitRuleList(value: string | undefined): readonly string[] {
   if (!isConfigured(value)) return [];
+  // 不猜白名单：切句
   return [...new Set(uiText(value).split(/[；;\n]/u).map((item) => item.trim()).filter(Boolean))];
 }
 
 function isConfigured(value: string | undefined): boolean {
   const cleaned = value?.trim();
-  return Boolean(cleaned && !/^尚未配置/.test(cleaned) && cleaned !== "待配置" && cleaned !== "暂无数据");
+  return Boolean(cleaned && !cleaned.startsWith("尚未配置") && cleaned !== "待配置" && cleaned !== "暂无数据");
 }
 
 /**

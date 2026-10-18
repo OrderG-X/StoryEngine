@@ -6,19 +6,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "prebuild": "corepack pnpm --filter @actalk/story-engine build",
+    "prebuild": "corepack pnpm --filter @actalk/story-core build",
     "build": "node ../../tools/guards/check-no-guess.mjs && node ../../tools/guards/check-boundaries.mjs && node scripts/check-import-boundary.mjs && tsc --noEmit && vite build",
     "check:imports": "node scripts/check-import-boundary.mjs",
     "build:server": "esbuild src/server/standalone-entry.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.mjs",
     "build:desktop": "pnpm run build && pnpm run build:server",
     "serve": "node dist-server/server.mjs",
-    "pretypecheck": "corepack pnpm --filter @actalk/story-engine build",
+    "pretypecheck": "corepack pnpm --filter @actalk/story-core build",
     "test": "node ../../tools/guards/check-no-guess.mjs && node ../../tools/guards/check-boundaries.mjs && node ../../test-tools/run-vitest.mjs run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@actalk/story-core": "workspace:*",
-    "@actalk/story-engine": "workspace:*",
     "@ai-sdk/openai-compatible": "^2.0.50",
     "@mastra/core": "^1.42.0",
     "@radix-ui/react-collapsible": "^1.1.12",

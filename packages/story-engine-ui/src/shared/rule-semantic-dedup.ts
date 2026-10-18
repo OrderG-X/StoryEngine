@@ -8,21 +8,16 @@ export function normalizeRuleKey(text: string): string {
   return `${text}`
     .normalize("NFKC")
     .replace(/[\s\u3000]+/gu, "")
+    // 不猜白名单：切句
     .replace(/[：:·•.,，。；;！!？?、""''「」『』（）()【】\[\]<>《》…—\-_/\\|]+/gu, "")
     .toLowerCase();
 }
 
 function titleHead(text: string): string {
   const raw = `${text}`.trim();
+  // 不猜白名单：切句
   const cut = raw.split(/[：:]/u, 1)[0] ?? raw;
   return normalizeRuleKey(cut);
-}
-
-/** 去掉「禁止/勿…」外壳后的核心词，捕捉「禁止视角越界」↔「视角越界禁止」。 */
-function semanticCore(text: string): string {
-  return titleHead(text)
-    .replace(/^(禁止|严禁|勿|不要|别)/u, "")
-    .replace(/(禁止|严禁|勿)$/u, "");
 }
 
 function prefix20(text: string): string {
@@ -37,9 +32,6 @@ function isSemanticDuplicate(a: string, b: string): boolean {
   const ta = titleHead(a);
   const tb = titleHead(b);
   if (ta && tb && (ta.includes(tb) || tb.includes(ta))) return true;
-  const ca = semanticCore(a);
-  const cb = semanticCore(b);
-  if (ca && cb && ca === cb) return true;
   const pa = prefix20(a);
   const pb = prefix20(b);
   return Boolean(pa && pb && pa === pb);
@@ -47,7 +39,7 @@ function isSemanticDuplicate(a: string, b: string): boolean {
 
 /**
  * 语义去重：保序，后出现的相似项丢弃。
- * 「禁止视角越界」与「视角越界禁止」这类同义成组会被折叠。
+ * 只按字面比（归一后相同、标题互相包含、前 20 字相同）；不再剥「禁止 / 勿」外壳猜同义（重构 P7「不猜」）。
  */
 export function semanticDedupRules(lines: readonly string[]): string[] {
   const out: string[] = [];

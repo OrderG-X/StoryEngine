@@ -372,7 +372,7 @@ export interface ConfirmInput {
   readonly day?: unknown;
   readonly tickets: TicketStore;
   /** 写盘前存撤销点（失败就不写）。 */
-  readonly snapshot?: (label: string) => Promise<void>;
+  readonly snapshot?: (label: string, command: string) => Promise<void>;
   readonly emit?: (event: BookEvent) => void;
   readonly now?: () => Date;
 }

@@ -8,8 +8,8 @@
 import { projectBook, type BookProjection } from "@actalk/story-core";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { ensureBookOnCore } from "../legacy-mirror/ensure.js";
-import { createSnapshot } from "../lib/snapshot.js";
+import { ensureBookOnCore } from "../book/mirror/ensure.js";
+import { coreSnapshotFor } from "../lib/snapshot.js";
 
 export interface ThreadBoardTouch {
   readonly chapter: number;
@@ -89,7 +89,7 @@ export function registerStoryThreadsRoutes(middlewares: MiddlewareStack): void {
         return;
       }
       if (!guardProjectPath(res, projectDir)) return;
-      const onCore = await ensureBookOnCore(projectDir, { snapshot: (label) => createSnapshot(projectDir, label).then(() => undefined) });
+      const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
       if (!onCore.ok) {
         writeJson(res, 200, { ok: false, error: `这本书的账还没接到新格式上：${onCore.reason}` });
         return;

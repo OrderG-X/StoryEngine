@@ -6,11 +6,11 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createStoryProject } from "@actalk/story-engine";
+import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CommitQualityReport } from "@actalk/story-engine";
+import type { CommitQualityReport } from "../../writing/commit-quality-check.js";
 
 // mock judgeDraftQualityWithModel so execute() path never touches the network.
 vi.mock("../../lib/quality-judge.js", () => ({
@@ -22,13 +22,7 @@ vi.mock("../../lib/quality-judge.js", () => ({
 
 import { chapterWorkspacePath, defaultDraftPath } from "../../lib/project-io.js";
 import { buildProjectRequestContext } from "../request-context.js";
-import { buildQualityCheckToolOutput, qualityCheckTool, resolveDraftContentForQualityCheck, type QualityJudge } from "./quality-check.js";
-
-// 确定性 AI 判定桩：不触网，原样返回确定性报告并标 modelJudge.used=false（等价于「无候选短路」）。
-const passthroughJudge: QualityJudge = async ({ deterministicQuality }): Promise<CommitQualityReport> => ({
-  ...deterministicQuality,
-  modelJudge: { used: false, fallbackUsed: false, summary: "测试桩：跳过 AI 判定。" },
-});
+import { buildQualityCheckToolOutput, qualityCheckTool, resolveDraftContentForQualityCheck } from "./quality-check.js";
 
 async function makeProject(title: string): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "quality-check-test-"));
@@ -90,7 +84,7 @@ describe("quality_check 只读质检工具", () => {
   it("正文过短 → 确定性质检报 error 级问题（不调模型也能拦），只读不带 snapshotId", async () => {
     const projectDir = await makeProject("过短");
     await writeDraft(projectDir, 1, "# 第1章\n\n林远来了。\n");
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1 });
     expect(out.quality.issues.some((issue) => issue.severity === "error")).toBe(true);
     // A5：质检本身跑成（ok=true），但有阻止级问题 → partialMiss=true（前端显琥珀「部分完成」而非绿「已完成」）。
     expect(out.ok).toBe(true);
@@ -100,28 +94,14 @@ describe("quality_check 只读质检工具", () => {
     expect(out.summary).toBeTruthy();
   });
 
-  it("合格草稿 → passed=true，并经过 AI 判定层（此处用桩，不触网）", async () => {
+  it("合格草稿 → passed=true", async () => {
     const projectDir = await makeProject("合格");
     await writeDraft(projectDir, 1, longDraft(1));
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1 });
     expect(out.quality.passed).toBe(true);
-    expect(out.quality.modelJudge?.used).toBe(false);
     // A5：合格草稿 → 无阻止级问题 → ok=true 且 partialMiss=false（显绿「已完成」名副其实）。
     expect(out.ok).toBe(true);
     expect(out.partialMiss).toBe(false);
-  });
-
-  // 铁律④·绝不静默失败：AI 语义判定层走 fallback（超时/网络失败）时，summary 必须诚实披露「未跑完」，
-  // 不能只摊确定性结论让 agent 当成「通过、可入库」转告用户。
-  it("AI 语义判定走 fallback（fallbackUsed=true）→ summary 诚实披露未完成，不掩盖", async () => {
-    const projectDir = await makeProject("AI判定fallback");
-    await writeDraft(projectDir, 1, longDraft(1));
-    const fallbackJudge: QualityJudge = async ({ deterministicQuality }): Promise<CommitQualityReport> => ({
-      ...deterministicQuality,
-      modelJudge: { used: true, fallbackUsed: true, summary: "AI 判定未完成，已保留规则候选与默认风险分类。" },
-    });
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: fallbackJudge });
-    expect(out.summary).toContain("AI 语义判定本轮未完成");
   });
 
   it("显式传入 draftContent（盘上无稿）→ 末位兜底仍能质检（FS 抖动安全网）", async () => {
@@ -131,7 +111,6 @@ describe("quality_check 只读质检工具", () => {
       projectDir,
       chapter: 1,
       draftContent: longDraft(1),
-      judge: passthroughJudge,
     });
     expect(out.quality.passed).toBe(true);
   });
@@ -175,7 +154,7 @@ describe("quality_check 防误报「正文为空/过短」（草稿落盘时序�
     const projectDir = await makeProject("旧缓存不回落");
     await writeDraft(projectDir, 1, "");
     await writeWorkspaceDraft(projectDir, 1, longDraft(1));
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge, delayMs: 0 });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, delayMs: 0 });
     expect(out.passed).toBe(false);
     expect(out.summary).toContain("还没有可做硬伤检查的正文");
   });
@@ -183,7 +162,7 @@ describe("quality_check 防误报「正文为空/过短」（草稿落盘时序�
   it("显式传入空 draftContent、但盘上有真稿 → 忽略空显式、读盘真稿质检（空串不被当成空稿）", async () => {
     const projectDir = await makeProject("空显式回落读盘");
     await writeDraft(projectDir, 1, longDraft(1));
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, draftContent: "", judge: passthroughJudge, delayMs: 0 });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, draftContent: "", delayMs: 0 });
     expect(out.passed).toBe(true);
   });
 
@@ -192,7 +171,7 @@ describe("quality_check 防误报「正文为空/过短」（草稿落盘时序�
   it("显式传入哨兵串 'None'、但盘上有真稿 → 忽略哨兵显式、读盘真稿（不造假硬伤）", async () => {
     const projectDir = await makeProject("哨兵显式回落读盘");
     await writeDraft(projectDir, 1, longDraft(1));
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, draftContent: "None", judge: passthroughJudge, delayMs: 0 });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, draftContent: "None", delayMs: 0 });
     expect(out.passed).toBe(true);
     expect(out.refined.blocking.some((b) => b.type === "too_short" || b.type === "empty_draft")).toBe(false);
   });
@@ -200,7 +179,7 @@ describe("quality_check 防误报「正文为空/过短」（草稿落盘时序�
   it("三处都没真草稿 → 诚实回报「还没正文可质检」，不谎报「正文为空」误导用户以为正文被吃了", async () => {
     const projectDir = await makeProject("真没草稿");
     await writeDraft(projectDir, 1, ""); // 空文件、workspace 也没真稿
-    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge, delayMs: 0 });
+    const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, delayMs: 0 });
     expect(out.passed).toBe(false);
     expect(out.partialMiss).toBe(true);
     expect(out.refined.blocking.some((b) => b.type === "draft_not_found_for_check")).toBe(true);

@@ -12,21 +12,18 @@
  *   output 不带 snapshotId。涉及草稿 → refreshScope:"full"。
  * - 题材中立：description / summary 用中性词。
  */
-import {
-  buildStateOverview,
-  stripMarkdownEmphasis,
-  withProjectCommitLock,
-  type DraftRevisionPreview,
-  type StateOverview,
-} from "@actalk/story-engine";
+import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
+import { stripMarkdownEmphasis } from "../../writing/fast-draft-writer.js";
+import { type DraftRevisionPreview } from "../../writing/draft-revision.js";
+import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
-import { coerceEnum, coerceNumber, coerceStringArray } from "./lenient-args.js";
+import { coerceEnum, coerceNumber, coerceStringArray } from "../../lib/lenient-args.js";
 
 import { stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { snapshotBeforeDraftOverwrite } from "./snapshot-on-draft-overwrite.js";
+import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import {
   createRevisionModelChannel,
   reviseDraftOneShot,
@@ -151,6 +148,7 @@ async function toToolOutput(
     summary: outcome.mode === "exact"
       ? `已在第 ${chapter} 章工作稿上按你给的精确文本替换了该句。工作稿未定稿，可继续修改或撤销。`
       // changeSummary 是模型写的，常自带句号——去掉再接，免得出现「…。。工作稿未定稿」。
+      // 不猜白名单：切句
       : `已在第 ${chapter} 章工作稿上完成局部修订：${`${outcome.preview.changeSummary ?? ""}`.trim().replace(/[。.\s]+$/u, "")}。工作稿未定稿，可继续修改或撤销。`,
     refreshScope: "full",
     chapter,
@@ -201,7 +199,7 @@ export const reviseDraftTool = createTool({
     const channel = await createRevisionModelChannel();
     // 快照 + 改稿写回放进同一把项目锁，和其他写类工具（writeTool）一样：撤销、定稿不会切进快照和写盘中间。
     // （同一份稿子的读改写本身已由 revision-service 的 runExclusive 串行。）
-    return withProjectCommitLock(projectDir, async () => {
+    return withBookLock(projectDir, async () => {
     // M6：修订会覆盖现有草稿，覆盖前建快照让修订可撤销（修订必有非空草稿）。
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, resolvedChapter, `第${resolvedChapter}章修订前快照`);
     const outcome = await reviseDraftOneShot({

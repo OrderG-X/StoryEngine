@@ -108,6 +108,12 @@ type ChapterRow =
   | { readonly kind: "chapter"; readonly ch: ChapterNavItem };
 
 /** 章节列表行：新章在上；不搜索时每 10 章插一个分组标题（第 51–58 章），搜索时平铺。 */
+/** 章节栏底部那一行：还有工作稿没定稿 / 全部已定稿 / 一章都没定稿（新书别说「全部已定稿」，P7 桌面包走查）。 */
+export function chapterFootStatus(draftCount: number, committedCount: number): { readonly dot: "warn" | "ok" | ""; readonly text: string } {
+  if (draftCount > 0) return { dot: "warn", text: `${draftCount} 章工作稿还没定稿` };
+  return committedCount > 0 ? { dot: "ok", text: "全部已定稿" } : { dot: "", text: "还没有定稿的章" };
+}
+
 export function buildChapterRows(chapters: readonly ChapterNavItem[], searching: boolean): readonly ChapterRow[] {
   const rows: ChapterRow[] = [];
   let lastGroup: number | null = null;
@@ -361,6 +367,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     ? { ...ch, status: currentIsDraft ? "draft" as const : "committed" as const }
     : ch));
   const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && ch.status === "draft").length + (currentIsDraft ? 1 : 0);
+  const chapterFoot = chapterFootStatus(draftChapterCount, chapters.filter((ch) => ch.status === "committed" || ch.hasCommittedChapter).length);
   // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
   const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
   const nextToWrite = latestReal && (latestReal.status === "committed" || latestReal.hasCommittedChapter) && draftChapterCount === 0
@@ -627,8 +634,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                     ) : null}
                   </div>
                   <div className="se-ch-foot">
-                    <span className={`se-dot ${draftChapterCount ? "warn" : "ok"}`} aria-hidden="true" />
-                    {draftChapterCount ? `${draftChapterCount} 章工作稿还没定稿` : "全部已定稿"}
+                    <span className={`se-dot ${chapterFoot.dot}`} aria-hidden="true" />
+                    {chapterFoot.text}
                   </div>
                 </nav>
               ) : null}

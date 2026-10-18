@@ -6,8 +6,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyFoundationWriteSuggestion, createStoryProject, toSafeCharacterId } from "@actalk/story-engine";
-import type { CharacterBible } from "@actalk/story-engine";
+import { applyFoundationWriteSuggestion } from "../../book/foundation-write-gateway.js";
+import { createStoryProject, toSafeCharacterId } from "../../book/project-store.js";
+import type { CharacterBible } from "../../book/types.js";
 import { describe, expect, it } from "vitest";
 
 import {
