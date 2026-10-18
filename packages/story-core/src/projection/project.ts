@@ -72,19 +72,20 @@ class Names {
 }
 
 function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[] {
-  const members = new Map<string, { name: string; aliases: Set<string>; chapters: Set<number>; viewpoint: Set<number> }>();
+  const members = new Map<string, { name: string; aliases: Set<string>; chapters: Set<number>; viewpoint: Set<number>; quotes: Map<number, string> }>();
   for (const ledger of ledgers) {
     for (const entry of ledger.entries) {
       if (entry.kind !== "presence") continue;
       const { key, name } = names.resolve(entry.name);
       let member = members.get(key);
       if (!member) {
-        member = { name, aliases: new Set(), chapters: new Set(), viewpoint: new Set() };
+        member = { name, aliases: new Set(), chapters: new Set(), viewpoint: new Set(), quotes: new Map() };
         members.set(key, member);
       }
       if (nameKey(entry.nameUsed) !== key) member.aliases.add(entry.nameUsed);
       member.chapters.add(ledger.chapter);
       if (entry.viewpoint) member.viewpoint.add(ledger.chapter);
+      if (entry.quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, entry.quote);
     }
   }
   return [...members.entries()]
@@ -94,6 +95,7 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
       aliases: [...member.aliases],
       chapters: [...member.chapters].sort((a, b) => a - b),
       viewpointChapters: [...member.viewpoint].sort((a, b) => a - b),
+      appearances: [...member.quotes.entries()].sort(([a], [b]) => a - b).map(([chapter, quote]) => ({ chapter, quote })),
     }))
     .sort((a, b) => (a.chapters[0] ?? 0) - (b.chapters[0] ?? 0) || a.key.localeCompare(b.key));
 }

@@ -323,26 +323,6 @@
   .bind-meter .mfill{height:100%;border-radius:4px;background:var(--accent);}
   .bind-meter .mv{color:var(--accent-hi);font-weight:700;text-align:right;font-variant-numeric:tabular-nums;}
 
-  /* ═══ 章节 · 时间线 ═══ */
-  .timeline{position:relative;padding-left:30px;}
-  .timeline::before{content:"";position:absolute;left:11px;top:8px;bottom:8px;width:2px;
-    background:var(--accent);border-radius:2px;}
-  .tl-item{position:relative;padding:0 0 22px 26px;}
-  .tl-item:last-child{padding-bottom:0;}
-  .tl-item::before{content:"";position:absolute;left:-25px;top:4px;width:14px;height:14px;border-radius:50%;
-    background:var(--bg);border:2px solid var(--line);transition:.2s;}
-  .tl-item.done::before{border-color:var(--accent);background:var(--accent);}
-  .tl-item.cur::before{border-color:var(--accent-hi);background:var(--accent-hi);
-    box-shadow:none;}
-  .tl-item.plan::before{border-style:dashed;background:var(--bg);}
-  .tl-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
-  .tl-head .tl-no{font-size:11px;color:var(--accent-hi);font-weight:800;letter-spacing:.08em;}
-  .tl-head h3{margin:0;font-size:16px;font-weight:650;}
-  .tl-item.cur h3{color:var(--accent-hi);}
-  .tl-head .tl-st{margin-left:auto;}
-  .tl-syn{font-size:13px;color:var(--muted);line-height:1.7;max-width:600px;}
-  .tl-meta{display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--faint);flex-wrap:wrap;}
-  .tl-meta span b{color:var(--muted);font-weight:600;}
   /* 章节角色任务包 */
   .ch-bundle{margin-top:10px;border:1px solid var(--accent-line-soft);border-radius:11px;background:var(--sunken);padding:11px 14px;}
   .ch-bundle .cbh{font-size:10.5px;letter-spacing:.12em;color:var(--accent);font-weight:800;text-transform:uppercase;margin-bottom:7px;}

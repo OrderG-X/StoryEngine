@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
@@ -12,7 +12,7 @@ import CharacterMatrixCodexPanel from "./CharacterMatrixCodexPanel.js";
 import { ThreadBoard } from "./ThreadBoard.js";
 import { requestQuoteJump } from "./QuoteJump.js";
 import LocationCodexPanel from "./LocationCodexPanel.js";
-import TimelineCodexPanel from "./TimelineCodexPanel.js";
+import { StoryMap } from "./StoryMap.js";
 import WorldbuildingCodexPanel from "./WorldbuildingCodexPanel.js";
 import WritingRulesCodexPanel from "./WritingRulesCodexPanel.js";
 import { flattenCharacterSearchItem, searchLibraryIndex } from "./librarySearch.js";
@@ -58,14 +58,14 @@ const CATS = [
   { id: "chars", glyph: "♟", title: "角色", sub: "角色档案" },
   { id: "assets", glyph: "⚖", title: "道具与资源", sub: "物品归属" },
   { id: "places", glyph: "⌖", title: "地点", sub: "场景规则" },
-  { id: "hooks", glyph: "❖", title: "伏笔线索", sub: "未回收 / 已回收" },
-  { id: "timeline", glyph: "▤", title: "时间线", sub: "近期 · 中段 · 远期" },
+  { id: "hooks", glyph: "❖", title: "伏笔线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
+  { id: "timeline", glyph: "▤", title: "故事地图", sub: "章 × 人物 · 故事日" },
 ] as const;
 
 // 设定本左侧导航用的短名（CATS.title 保留给旧测试与搜索结果标签）。
 const CAT_LABELS: Record<(typeof CATS)[number]["id"], string> = {
   world: "世界观", rules: "写作规则", matrix: "角色关系", chars: "角色",
-  assets: "道具与资源", places: "地点", hooks: "伏笔与线索", timeline: "时间线",
+  assets: "道具与资源", places: "地点", hooks: "伏笔与线索", timeline: "故事地图",
 };
 
 /** 仅供测试用：导出 CATS 数组供轻量测试断言（不影响生产代码）。 */
@@ -215,6 +215,21 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     requestQuoteJump(chapter, quote);
     if (target.id !== currentId) props.onSelectChapter?.(target.id);
   };
+  // 故事地图点章号：切到写作台打开那一章。
+  const openChapterNumber = (chapter: number) => {
+    const target = chapters.find((ch) => ch.chapterNumber === chapter);
+    if (!target) {
+      useNavigationStore.getState().showToast(`第 ${chapter} 章不在章节列表里，没法打开。`, 4200);
+      return;
+    }
+    if (target.id !== currentId && workspaceBusy) {
+      useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
+      return;
+    }
+    setView("desk");
+    if (target.id !== currentId) props.onSelectChapter?.(target.id);
+  };
+  const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, ch.title ?? ""] as const).filter(([, title]) => title.trim().length > 0)), [chapters]);
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
     ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")
@@ -490,7 +505,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                   <p className="se-bnav-note">设定由 AI 维护，这里只读。想改哪一处，直接在右边说。</p>
                 </nav>
                 <div className="read">
-                  <div className={`read-inner read-enter${cat === "hooks" ? " is-wide" : ""}`} key={cat}>
+                  <div className={`read-inner read-enter${cat === "hooks" || cat === "timeline" ? " is-wide" : ""}`} key={cat}>
                     {cat === "world" ? <WorldbuildingCodexPanel projectPath={props.projectPath} fallbackData={props.workspace.worldbuildingFallback} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "rules" ? <WritingRulesCodexPanel items={props.sidebar.writingRules} customNotes={props.sidebar.writingRulesCustomNotes} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
                     {cat === "matrix" ? <CharacterMatrixCodexPanel matrix={props.workspace.characterMatrix} protagonistName={props.workspace.protagonist?.name} projectPath={props.projectPath} currentChapter={currentChapter.chapterNumber} /> : null}
@@ -505,7 +520,15 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
                       />
                     ) : null}
-                    {cat === "timeline" ? <TimelineCodexPanel timeline={props.overview?.timeline} /> : null}
+                    {cat === "timeline" && props.projectPath ? (
+                      <StoryMap
+                        projectPath={props.projectPath}
+                        busy={workspaceBusy}
+                        chapterTitles={chapterTitles}
+                        onJump={jumpToQuote}
+                        onOpenChapter={openChapterNumber}
+                      />
+                    ) : null}
                   </div>
                 </div>
               </div>
