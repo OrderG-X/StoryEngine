@@ -497,13 +497,13 @@ describe("streamAgentChat", () => {
         frame("tool-result", {
           toolCallId: "cc5",
           toolName: "check_continuity",
-          output: { ok: true, chapter: 8, source: "draft", sure: [], maybe: [], earlierOpen: [old], failures: [], summary: "核了第 8 章，没发现和前文对不上的地方。第 3 章还有 1 处之前报过、还没改。" },
+          output: { ok: true, chapter: 8, source: "draft", sure: [], maybe: [], earlierOpen: [old], failures: [], checkedVersion: "abc123", summary: "核了第 8 章，没发现和前文对不上的地方。第 3 章还有 1 处之前报过、还没改。" },
         }),
         frame("done", {}),
       ]),
     ));
 
-    let received: { continuityCheck?: unknown } | undefined;
+    let received: { continuityCheck?: unknown; checkedVersion?: string } | undefined;
     await streamAgentChat(
       { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
       {
@@ -517,6 +517,7 @@ describe("streamAgentChat", () => {
     );
 
     expect(received?.continuityCheck).toEqual({ chapter: 8, sure: [], maybe: [], earlierOpen: [old] });
+    expect(received?.checkedVersion).toBe("abc123");
   });
 
   it("suggest_next_steps 的 choice.action（R4.7）→ 白名单内透传、白名单外/形状不对丢掉（选项保留，退回发文本）", async () => {

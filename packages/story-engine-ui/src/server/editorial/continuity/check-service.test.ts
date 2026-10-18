@@ -99,6 +99,26 @@ describe("核账服务（核账员一路）", () => {
     expect(third.sure).toEqual([]);
   });
 
+  it("对设定本的条目改稿后照带（以前拿设定原文去正文里找、永远带不过来）；设定本改了就不带", async () => {
+    const dir = await makeBook();
+    await mkdir(join(dir, "story"), { recursive: true });
+    const writeCard = (anchor: string) => writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [{ id: "char-z1", name: "周婶", appearanceAnchors: [anchor] }],
+    }), "utf-8");
+    await writeCard("左腿有旧伤");
+    const earlier = await readEarlierChapters(dir, 3);
+    const setting: ContinuityIssueV2 = { quote: "周婶在门口喊他。", earlierQuote: "周婶……外貌：左腿有旧伤", earlierChapter: 3, reason: "设定写左腿", kind: "event", confidence: "sure", againstSetting: { label: "人物卡" } };
+    await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), earlierHash: hashEarlier(earlier, []), issues: [setting] });
+    const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
+    const edited = `${BODY}林舟低头擦着柜台。`;
+    const carried = await checkChapterBody(dir, 3, edited, { readerCallModel: quiet });
+    expect(carried.sure.map((item) => item.quote)).toEqual([setting.quote]);
+    await writeCard("右腿有旧伤");
+    const changed = await checkChapterBody(dir, 3, `${edited}门外起风了。`, { readerCallModel: quiet });
+    expect(changed.sure).toEqual([]);
+  });
+
   it("核账员三遍全没跑成：如实说没跑成，不记进核账记忆", async () => {
     const dir = await makeBook();
     const broken: BrainCallModel = async (_messages, options) => {

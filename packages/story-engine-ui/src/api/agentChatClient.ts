@@ -160,6 +160,8 @@ export interface AgentToolResult {
   readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果。 */
   readonly continuityCheck?: ContinuityCheckView;
+  /** check_continuity 专属：核的是工作稿哪一版（服务端按读到的文件算）；核的是定稿正文时没有。 */
+  readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
   /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
@@ -430,6 +432,9 @@ export async function streamAgentChat(
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
+              : {}),
+            ...(parsed.toolName === "check_continuity" && typeof output.checkedVersion === "string" && output.checkedVersion
+              ? { checkedVersion: output.checkedVersion }
               : {}),
             // check_continuity 专属：还在读的结构化进度（pending 只在「还在读、没核」时出现）→ 透传。
             // 前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。

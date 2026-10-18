@@ -18,6 +18,7 @@ import {
   type LocationBibleEntry,
   type WorldBible,
 } from "../book/types.js";
+import { quoteInText } from "@actalk/story-core";
 import { containsQuote, normalize } from "./continuity/check-chapter.js";
 
 /** 一类设定（人物卡 / 地点 / 资产 / 世界规则）：label 进回执，text 是拼好的原文摘要（核对引文按它来）。 */
@@ -187,11 +188,14 @@ export function foundationMessage(digest: FoundationDigest): string {
   ].join("\n");
 }
 
-/** 一句「设定原文」真在设定本里吗：在 → 返回它所在那节的 label（人物卡 / 地点 / 资产 / 世界规则）；不在 → undefined。 */
+/**
+ * 一句「设定原文」真在设定本里吗：在 → 返回它所在那节的 label（人物卡 / 地点 / 资产 / 世界规则）；不在 → undefined。
+ * 模型抄设定常拿省略号接上人名和字段（「韩德顺……外貌：左腿有旧伤」）：按核心的 quoteInText 每段依次在同一节里找到也算。
+ */
 export function settingQuoteLabel(digest: FoundationDigest, quote: string): string | undefined {
   if (normalize(quote).length < 4) return undefined;
   for (const section of digest.sections) {
-    if (containsQuote(normalize(section.text), quote)) return section.label;
+    if (containsQuote(normalize(section.text), quote) || quoteInText(quote, section.text)) return section.label;
   }
   return undefined;
 }
