@@ -29,6 +29,7 @@ const outputSchema = z.object({
   source: z.enum(["draft", "committed"]).nullable().describe("核的是工作稿还是已定稿正文。"),
   sure: z.array(issueSchema).describe("确定对不上的地方（排在前面给作者看）。"),
   maybe: z.array(issueSchema).describe("可能对不上的地方（作者自己判断）。"),
+  earlierOpen: z.array(issueSchema).optional().describe("错在前面某章、之前核账已经报过、作者还没改的：不算这一章的问题，summary 里只提一句，别逐条再念。"),
   failures: z.array(z.string()).describe("没跑成的步骤（如实说明）。"),
   pending: z.object({
     done: z.number().int().describe("已读到第几章。"),
@@ -61,6 +62,7 @@ export async function runCheckContinuity(
       source: null,
       sure: [],
       maybe: [],
+      earlierOpen: [],
       failures: [],
       dismissed: 0,
       reused: false,
@@ -68,7 +70,7 @@ export async function runCheckContinuity(
     };
   }
   const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), options);
-  return { ...result, sure: [...result.sure], maybe: [...result.maybe], failures: [...result.failures], source: draft.source };
+  return { ...result, sure: [...result.sure], maybe: [...result.maybe], earlierOpen: [...result.earlierOpen], failures: [...result.failures], source: draft.source };
 }
 
 const inputSchema = z.object({

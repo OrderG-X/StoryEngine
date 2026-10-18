@@ -4,7 +4,7 @@
  * 每条 = 本章原句 ↔ 前文原句（标第几章）+ 哪里对不上 +「改这处」「不是问题」。
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
  * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
- * 下次核这一章不再报；存失败如实提示「没记住」。可撤回。
+ * 以后核账不再报；存失败如实提示「没记住」。可撤回。
  * 主按钮「改掉这 N 处」在卡上（R4.5）：N 随「不是问题」实时变，intent 由卡片现拼——逐条列要改的原句，
  * 末尾写明作者标过不是问题的几处别动（服务端下一步不再给笼统的「改掉确定的 N 处」）。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
@@ -111,14 +111,17 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
 }) {
   const [unsaved, setUnsaved] = useState(false);
   const [showMaybe, setShowMaybe] = useState(false);
+  const [showEarlier, setShowEarlier] = useState(false);
   const keyOf = continuityItemKey;
   const dismissedKeys = new Set(dismissedKeysList);
-  const allItems = [...check.sure, ...check.maybe];
+  const allItems = [...check.sure, ...check.maybe, ...(check.earlierOpen ?? [])];
   const dismissed = dismissedKeysList
     .map((key) => allItems.find((item) => keyOf(item) === key))
     .filter((item): item is Item => item !== undefined);
   const sure = check.sure.filter((item) => !dismissedKeys.has(keyOf(item)));
   const maybe = check.maybe.filter((item) => !dismissedKeys.has(keyOf(item)));
+  const earlier = (check.earlierOpen ?? []).filter((item) => !dismissedKeys.has(keyOf(item)));
+  const earlierChapters = [...new Set(earlier.map((item) => fixChapterOf(check.chapter, item)))].sort((a, b) => a - b);
   const dismiss = (item: Item) => {
     if (onDismiss) void onDismiss(item, false).then((saved) => { if (!saved) setUnsaved(true); });
   };
@@ -177,11 +180,26 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
           ) : null}
         </>
       ) : null}
+      {/* 错在前面某章、之前报过还没改的：不算这一章的问题，收起成一行（作者没改就每章重报一遍，吵）。 */}
+      {earlier.length > 0 ? (
+        <>
+          <button type="button" className="chip" onClick={() => setShowEarlier((open) => !open)}>
+            {showEarlier ? "收起" : `第 ${earlierChapters.join("、")} 章还有 ${earlier.length} 处之前报过、还没改`}
+          </button>
+          {showEarlier ? (
+            <ul className="drc-list">
+              {earlier.map((item) => (
+                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
       {dismissed.length > 0 ? (
         <p className="drc-summary">
           {unsaved
             ? `标了 ${dismissed.length} 处不是问题，但没记住（存盘出错），下次核账可能还会报。`
-            : `标了 ${dismissed.length} 处不是问题${onDismiss ? "，下次核这一章不再报" : ""}。`}
+            : `标了 ${dismissed.length} 处不是问题${onDismiss ? "，以后核账不再报" : ""}。`}
           {" "}
           <button type="button" className="chip" onClick={undoLast}>撤回上一处</button>
         </p>

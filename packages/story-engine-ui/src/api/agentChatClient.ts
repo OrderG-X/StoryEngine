@@ -81,6 +81,8 @@ export interface ContinuityCheckView {
   readonly chapter: number;
   readonly sure: readonly ContinuityCheckItem[];
   readonly maybe: readonly ContinuityCheckItem[];
+  /** 错在前面某章、之前报过还没改的。 */
+  readonly earlierOpen?: readonly ContinuityCheckItem[];
 }
 
 function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
@@ -423,7 +425,7 @@ export async function streamAgentChat(
             // ok:false（还在读 / 出错 / 没正文）一律不建卡——sure/maybe 空数组只说明「没有条目」，不代表「没问题」，
             // 否则会显成「没发现对不上」的假成功卡（R4.1/验收 3.1）。没核成就只留工具文字如实说。
             ...(parsed.toolName === "check_continuity" && output.ok !== false && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
-              ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe) } }
+              ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe), ...(toContinuityItems(output.earlierOpen).length > 0 ? { earlierOpen: toContinuityItems(output.earlierOpen) } : {}) } }
               : {}),
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)

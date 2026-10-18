@@ -8,6 +8,9 @@ import type { BrainCallModel } from "../index.js";
 import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { checkChapterBody } from "./check-service.js";
+import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
+import { hashBody, hashEarlier, writeCheckMemory } from "./check-memory.js";
+import { addDismissal } from "./dismissals.js";
 
 const CH1 = "客人把怀表放在绒布上就走了。周婶说这表是前天送来的。";
 const CH2 = "周婶端着茶进来。林舟把怀表锁进了柜台下的抽屉。林溪说她后天走。";
@@ -270,5 +273,79 @@ describe("核账服务：排在后台补读后面等（R6.1，新发现 1）", (
     // 结束后 waiting 消失。
     expect((await readReadersCatchUpStatus(dir)).roles.find((role) => role.role === "checker")).not.toHaveProperty("waiting");
     await bgRound;
+  });
+});
+
+describe("核账服务：前面章节没改的错不再每章重报（P7 后）", () => {
+  // 第 2 章那句和设定本对不上（作者一直没改），核第 4 章时第四遍又把它抓出来（fixChapter=2）。
+  // 设定原文每次抄的片段不一样，只认「同一句正文、都是对设定」。
+  const OLD: ContinuityIssueV2 = {
+    quote: "林舟把怀表锁进了柜台下的抽屉",
+    earlierQuote: "怀表：一直摆在店里的玻璃柜里",
+    earlierChapter: 2,
+    fixChapter: 2,
+    reason: "设定说怀表摆在玻璃柜里",
+    kind: "event",
+    confidence: "sure",
+    againstSetting: { label: "资产" },
+  };
+  const TOLD: ContinuityIssueV2 = { ...OLD, quote: "林舟把怀表锁进了柜台下的抽屉。", earlierQuote: "玻璃柜里摆着那块怀表，从不收起", fixChapter: undefined };
+  const CURRENT: ContinuityIssueV2 = { ...AUNT, quote: "周婶在门口喊他", kind: "event", confidence: "sure" };
+
+  /** 第 4 章的核账记忆和这次的正文、前文对得上 → 走复用，结果就是这两条。 */
+  async function bookWithChapter4Memory(): Promise<string> {
+    const dir = await makeBook(3);
+    const earlier = await readEarlierChapters(dir, 4);
+    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), earlierHash: hashEarlier(earlier, []), issues: [CURRENT, OLD] });
+    return dir;
+  }
+
+  it("之前核第 2 章报过 → 不算第 4 章的问题，结论只提一句、条目进 earlierOpen", async () => {
+    const dir = await bookWithChapter4Memory();
+    await writeCheckMemory(dir, { chapter: 2, bodyHash: "x", earlierHash: "y", issues: [TOLD] });
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.reused).toBe(true);
+    expect(result.sure.map((item) => item.quote)).toEqual(["周婶在门口喊他"]);
+    expect(result.earlierOpen.map((item) => item.fixChapter)).toEqual([2]);
+    expect(result.headline).toContain("确定对不上 1 处");
+    expect(result.headline).toContain("第 2 章还有 1 处之前报过、还没改");
+  });
+
+  it("核第 3 章时报过（第 2 章没核过）也算报过", async () => {
+    const dir = await bookWithChapter4Memory();
+    await writeCheckMemory(dir, { chapter: 3, bodyHash: "x", earlierHash: "y", issues: [OLD] });
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.earlierOpen).toHaveLength(1);
+    expect(result.sure).toHaveLength(1);
+  });
+
+  it("没报过（前面那章没核过、也没别的章报过）→ 照常当确定报一次", async () => {
+    const dir = await bookWithChapter4Memory();
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.sure.map((item) => item.fixChapter)).toEqual([undefined, 2]);
+    expect(result.earlierOpen).toEqual([]);
+    expect(result.headline).not.toContain("之前报过");
+  });
+
+  it("第 1 章（错所在章之前）的核账记忆里有同一句不算报过", async () => {
+    const dir = await bookWithChapter4Memory();
+    await writeCheckMemory(dir, { chapter: 1, bodyHash: "x", earlierHash: "y", issues: [TOLD] });
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.earlierOpen).toEqual([]);
+  });
+
+  it("「不是问题」记在错所在那章 → 以后核哪章都不再报；设定原文抄法不同也认", async () => {
+    const dir = await bookWithChapter4Memory();
+    await addDismissal(dir, { chapter: 2, quote: TOLD.quote, earlierQuote: TOLD.earlierQuote, againstSetting: true });
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.dismissed).toBe(1);
+    expect([...result.sure, ...result.maybe, ...result.earlierOpen].map((item) => item.quote)).toEqual(["周婶在门口喊他"]);
+  });
+
+  it("老记录（标在核的那章、没带设定标记）照旧认：同一章、两边原句都对得上", async () => {
+    const dir = await bookWithChapter4Memory();
+    await addDismissal(dir, { chapter: 4, quote: OLD.quote, earlierQuote: OLD.earlierQuote });
+    const result = await checkChapterBody(dir, 4, BODY);
+    expect(result.dismissed).toBe(1);
   });
 });

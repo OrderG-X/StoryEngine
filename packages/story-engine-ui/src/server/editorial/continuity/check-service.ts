@@ -29,7 +29,7 @@ import {
   type EarlierText,
 } from "./check-chapter.js";
 import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory } from "./check-memory.js";
-import { isDismissed, readDismissals } from "./dismissals.js";
+import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { withStep } from "../../lib/token-meter.js";
 
 export interface ChapterCheckItem {
@@ -49,6 +49,8 @@ export interface ChapterCheckResult {
   readonly chapter: number;
   readonly sure: readonly ChapterCheckItem[];
   readonly maybe: readonly ChapterCheckItem[];
+  /** 错在前面某章、之前核账已经报过、作者还没改的（P7 后：不再每章当新问题重报，只在结论里提一句、卡上收起）。 */
+  readonly earlierOpen: readonly ChapterCheckItem[];
   readonly failures: readonly string[];
   /** 只在「还在读、这次没核」（notReady）时有：核账员已读到第 done 章、共 total 章。
    *  消费方要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。
@@ -77,6 +79,34 @@ const toItem = (issue: ContinuityIssueV2): ChapterCheckItem => ({
   ...(issue.againstSetting ? { againstSetting: { ...issue.againstSetting } } : {}),
   ...(issue.fixChapter !== undefined ? { fixChapter: issue.fixChapter } : {}),
 });
+
+/** 这条错在哪一章：对设定本的条目原句在前文某章时是那章（fixChapter），其余是核的这一章。 */
+const homeChapterOf = (issue: Pick<ContinuityIssueV2, "fixChapter">, chapter: number): number =>
+  issue.fixChapter !== undefined && issue.fixChapter > 0 ? issue.fixChapter : chapter;
+
+/**
+ * 错在前面某章的条目，之前核账报过没有：从它所在那章到上一章，哪章的核账记忆里有同一条（sameIssue）就算报过。
+ * 报过的不再当这一章的新问题（作者没改就每章重报一遍，吵）；没报过的（那章没核过、设定后来改了）照常报一次。
+ */
+async function reportedBefore(projectDir: string, chapter: number, issues: readonly ContinuityIssueV2[]): Promise<ReadonlySet<ContinuityIssueV2>> {
+  const earlier = issues.filter((issue) => homeChapterOf(issue, chapter) < chapter);
+  if (earlier.length === 0) return new Set();
+  const from = Math.min(...earlier.map((issue) => homeChapterOf(issue, chapter)));
+  const memories = await Promise.all(
+    Array.from({ length: chapter - from }, (_, index) => readCheckMemory(projectDir, from + index).catch(() => undefined)),
+  );
+  return new Set(earlier.filter((issue) => memories.some((memory) =>
+    memory !== undefined
+    && memory.chapter >= homeChapterOf(issue, chapter)
+    && memory.issues.some((told) => sameIssue(told, issue)))));
+}
+
+/** 「第 3、5 章还有 2 处之前报过、还没改。」 */
+function earlierOpenNote(chapter: number, items: readonly ChapterCheckItem[]): string {
+  if (items.length === 0) return "";
+  const chapters = [...new Set(items.map((item) => homeChapterOf(item, chapter)))].sort((a, b) => a - b);
+  return `第 ${chapters.join("、")} 章还有 ${items.length} 处之前报过、还没改。`;
+}
 
 /** 核账员那一路最多当场补多少章笔记；超过就如实说「还在读前文」，笔记在后台补（T5），这次不硬核。 */
 const READER_MAX_CATCH_UP = 10;
@@ -169,12 +199,18 @@ export async function checkChapterBody(
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
     });
   }
-  // 作者点过「不是问题」的不再报（只认同一章、两边原句都对得上的）。
+  // 作者点过「不是问题」的不再报（两边原句都对得上的）。按错所在那章认：前文那章的错在哪章标过都算；
+  // 也认核的这一章（以前「不是问题」都记在核的那章上）。
   const dismissals = await readDismissals(projectDir);
-  const shown = result.issues.filter((issue) => !isDismissed(chapter, issue, dismissals));
+  const shown = result.issues.filter((issue) =>
+    !isDismissed(chapter, issue, dismissals) && !isDismissed(homeChapterOf(issue, chapter), issue, dismissals));
   const dismissed = result.issues.length - shown.length;
-  const sure = shown.filter((issue) => issue.confidence === "sure").map(toItem);
-  const maybe = shown.filter((issue) => issue.confidence !== "sure").map(toItem);
+  const told = await reportedBefore(projectDir, chapter, shown);
+  const current = shown.filter((issue) => !told.has(issue));
+  const sure = current.filter((issue) => issue.confidence === "sure").map(toItem);
+  const maybe = current.filter((issue) => issue.confidence !== "sure").map(toItem);
+  const earlierOpen = shown.filter((issue) => told.has(issue)).map(toItem);
+  const earlierNote = earlierOpenNote(chapter, earlierOpen);
   const ok = result.failures.length === 0 || result.issues.length > 0;
   // 回执里一句问题的措辞：对设定本的写清「第 N 章那句和设定（人物卡）对不上」（错在那章就指那章），其余照旧「和第 N 章」。
   const issueLine = (issue: Readonly<Pick<ChapterCheckItem, "quote" | "earlierQuote" | "earlierChapter" | "reason" | "againstSetting" | "fixChapter">>): string => issue.againstSetting
@@ -199,8 +235,8 @@ export async function checkChapterBody(
   const headline = !ok
     ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
     : sure.length + maybe.length === 0
-      ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
-      : `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`;
+      ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${earlierNote}${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
+      : `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${earlierNote}${dismissedNote}${coldNote}`;
   const baseSummary = ok && sure.length > 0
     ? [headline, ...sure.slice(0, 3).map((issue) => `· ${issueLine(issue)}`)].join("\n")
     : headline;
@@ -209,6 +245,7 @@ export async function checkChapterBody(
     chapter,
     sure,
     maybe,
+    earlierOpen,
     failures: [...result.failures],
     ...(result.coverage ? { coverage: { mode: "cold" as const, ...result.coverage } } : {}),
     ...(!reused && result.waited ? { waited: result.waited } : {}),
