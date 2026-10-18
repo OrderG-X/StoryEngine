@@ -4,6 +4,7 @@
  * 存 .story-engine-ui/continuity-dismissals.json（界面旁路，和伏笔大小覆盖表同处）——它是作者对查错结果的批注，
  * 不是故事资料，不进账本、不进快照。认条目：同一章 + 本章那句对得上 + 前文那句对得上（模型抄句常差一两个字，
  * 用两字片段重合判）。前文那句换了一句，就当是另一处对不上，照报。
+ * 对设定本的条目（againstSetting）另一边是设定原文，模型每次从设定卡里抄的片段不一样，只认「同一句正文、都是对设定」。
  */
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -13,6 +14,8 @@ export interface ContinuityDismissal {
   readonly chapter: number;
   readonly quote: string;
   readonly earlierQuote: string;
+  /** 对的是设定本（earlierQuote 是设定原文）。 */
+  readonly againstSetting?: true;
   readonly reason?: string;
   readonly at: string;
 }
@@ -43,6 +46,7 @@ export async function readDismissals(projectDir: string): Promise<readonly Conti
         chapter,
         quote,
         earlierQuote,
+        ...(record.againstSetting === true ? { againstSetting: true as const } : {}),
         ...(typeof record.reason === "string" && record.reason.trim() ? { reason: record.reason } : {}),
         at: typeof record.at === "string" ? record.at : "",
       }];
@@ -76,12 +80,24 @@ export function sameSentence(a: string, b: string): boolean {
   return shared / Math.min(ga.size, gb.size) >= 0.8;
 }
 
+/** 一条核账问题的认法（「不是问题」和「之前报过」共用）：正文那句对得上；另一边都是设定本就算同一条，否则前文那句也要对得上。 */
+export interface IssueIdentity {
+  readonly quote: string;
+  readonly earlierQuote: string;
+  readonly againstSetting?: unknown;
+}
+
+export function sameIssue(a: IssueIdentity, b: IssueIdentity): boolean {
+  if (!sameSentence(a.quote, b.quote)) return false;
+  return a.againstSetting && b.againstSetting ? true : sameSentence(a.earlierQuote, b.earlierQuote);
+}
+
 export function isDismissed(
   chapter: number,
-  issue: { readonly quote: string; readonly earlierQuote: string },
+  issue: IssueIdentity,
   dismissals: readonly ContinuityDismissal[],
 ): boolean {
-  return dismissals.some((item) => item.chapter === chapter && sameSentence(item.quote, issue.quote) && sameSentence(item.earlierQuote, issue.earlierQuote));
+  return dismissals.some((item) => item.chapter === chapter && sameIssue(item, issue));
 }
 
 async function writeDismissals(projectDir: string, items: readonly ContinuityDismissal[]): Promise<void> {
@@ -103,7 +119,7 @@ export function addDismissal(projectDir: string, item: Omit<ContinuityDismissal,
 }
 
 /** 撤回「不是问题」：删掉和这条对得上的记录。返回删了几条。 */
-export function removeDismissal(projectDir: string, item: Pick<ContinuityDismissal, "chapter" | "quote" | "earlierQuote">): Promise<number> {
+export function removeDismissal(projectDir: string, item: Pick<ContinuityDismissal, "chapter" | "quote" | "earlierQuote" | "againstSetting">): Promise<number> {
   return runExclusive(dismissalsPath(projectDir), async () => {
     const current = await readDismissals(projectDir);
     const next = current.filter((existing) => !isDismissed(item.chapter, existing, [{ ...item, at: "" }]));

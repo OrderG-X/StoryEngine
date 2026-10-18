@@ -12,6 +12,3 @@ export function committedEmptySubtitle(draftWordCount: number): string {
   }
   return "你的工作稿还在，定稿后这里会显示定稿版本。";
 }
-
-/** 预览入库：走聊天意图，唯一控制面。 */
-export const PREVIEW_COMMIT_INTENT = "生成定稿预览";

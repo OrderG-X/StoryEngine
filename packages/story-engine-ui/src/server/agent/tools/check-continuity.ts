@@ -12,6 +12,7 @@ import { z } from "zod";
 import { coerceBoolean, coerceNumber } from "../../lib/lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { draftVersionOf } from "@actalk/story-core";
 import { checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
 
 const issueSchema = z.object({
@@ -29,6 +30,7 @@ const outputSchema = z.object({
   source: z.enum(["draft", "committed"]).nullable().describe("核的是工作稿还是已定稿正文。"),
   sure: z.array(issueSchema).describe("确定对不上的地方（排在前面给作者看）。"),
   maybe: z.array(issueSchema).describe("可能对不上的地方（作者自己判断）。"),
+  earlierOpen: z.array(issueSchema).optional().describe("错在前面某章、之前核账已经报过、作者还没改的：不算这一章的问题，summary 里只提一句，别逐条再念。"),
   failures: z.array(z.string()).describe("没跑成的步骤（如实说明）。"),
   pending: z.object({
     done: z.number().int().describe("已读到第几章。"),
@@ -42,6 +44,7 @@ const outputSchema = z.object({
   }).optional().describe("冷窗口核账＝核账员还没读完全书也先核（R4.4）：notedThrough / rawFrom～rawTo 说清这次实际对照的范围；summary 已如实说明，转述时别把范围说成全书。"),
   dismissed: z.number().int().describe("作者以前标过「不是问题」、这次没再报的条数。"),
   reused: z.boolean().describe("这一章和前文都没改过，直接用的上次核账结果（没调模型）。"),
+  checkedVersion: z.string().optional().describe("核的是工作稿哪一版（版本号，界面据此判断核过后稿子改没改）；核的是已定稿正文时没有。"),
   summary: z.string().describe("给作者看的一句话结论。"),
   headline: z.string().optional().describe("summary 去掉逐条问题、只剩结论那句。"),
 });
@@ -61,6 +64,7 @@ export async function runCheckContinuity(
       source: null,
       sure: [],
       maybe: [],
+      earlierOpen: [],
       failures: [],
       dismissed: 0,
       reused: false,
@@ -68,7 +72,17 @@ export async function runCheckContinuity(
     };
   }
   const result = await checkChapterBody(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim(), options);
-  return { ...result, sure: [...result.sure], maybe: [...result.maybe], failures: [...result.failures], source: draft.source };
+  // 版本号按读到的那份文件算（和核心 draft 的版本同一口径）：界面拿它判断「核过后改过稿」，不拿结果到达那一刻稿纸上的版本
+  // （白沙渡试写：AI 出完稿紧接着核账，稿纸还没换上新稿，记成了旧版本，刷新后一直显示「核过后改过稿」）。
+  return {
+    ...result,
+    sure: [...result.sure],
+    maybe: [...result.maybe],
+    earlierOpen: [...result.earlierOpen],
+    failures: [...result.failures],
+    source: draft.source,
+    ...(draft.source === "draft" ? { checkedVersion: draftVersionOf(draft.content) } : {}),
+  };
 }
 
 const inputSchema = z.object({

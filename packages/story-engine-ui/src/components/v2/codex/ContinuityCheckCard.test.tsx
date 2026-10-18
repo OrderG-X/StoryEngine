@@ -38,7 +38,7 @@ describe("核账卡「不是问题」", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "不是问题" })); });
     expect(onDismiss).toHaveBeenCalledWith(item, false);
     expect(screen.queryByText(/便签位置对不上/)).toBeNull();
-    expect(screen.getByText(/下次核这一章不再报/)).toBeTruthy();
+    expect(screen.getByText(/以后核账不再报/)).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "撤回上一处" })); });
     expect(onDismiss).toHaveBeenLastCalledWith(item, true);
     expect(screen.getByText(/便签位置对不上/)).toBeTruthy();
@@ -219,5 +219,24 @@ describe("核账卡「改这处」按钮直接改（重构 P6：结构化动作�
     fireEvent.click(screen.getByRole("button", { name: "改掉这 2 处" }));
     expect(onRevise).toHaveBeenCalledTimes(2);
     expect(onFixAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("核账卡：前面章节之前报过、还没改的（P7 后）", () => {
+  afterEach(() => cleanup());
+
+  const old = { quote: "沈师傅走了也有五年了。", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年前", againstSetting: { label: "人物卡" } };
+
+  it("不算这一章的问题：状态照这一章算，收成一行，点开能改那章、能标不是问题", async () => {
+    const onDismiss = vi.fn(async () => true);
+    render(<Controlled check={{ chapter: 8, sure: [], maybe: [], earlierOpen: [old] }} onRevise={vi.fn()} onDismiss={onDismiss} />);
+    expect(screen.getByText("没发现对不上")).toBeTruthy();
+    expect(screen.queryByText(/设定说三年前/)).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "第 3 章还有 1 处之前报过、还没改" })); });
+    expect(screen.getByText(/设定说三年前/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "改第 3 章" })).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "不是问题" })); });
+    expect(onDismiss).toHaveBeenCalledWith(old, false);
+    expect(screen.queryByText(/之前报过/)).toBeNull();
   });
 });

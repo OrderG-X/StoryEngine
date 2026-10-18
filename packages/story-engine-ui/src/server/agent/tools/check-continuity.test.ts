@@ -127,3 +127,16 @@ describe("核账记忆", () => {
     expect(after.maybe.map((item) => item.reason)).toEqual(["取伞的日子对不上"]);
   });
 });
+
+describe("核的是哪一版（白沙渡试写：界面别拿结果到达时稿纸上的版本）", () => {
+  it("核工作稿 → 回执带 checkedVersion，和核心按文件算的版本一致；核定稿正文不带", async () => {
+    const dir = await makeBook();
+    const { draftVersionOf } = await import("@actalk/story-core");
+    const { readFile } = await import("node:fs/promises");
+    const draft = await runCheckContinuity(dir, 2, { readerCallModel: fakeModel({}) });
+    expect(draft.checkedVersion).toBe(draftVersionOf(await readFile(join(dir, "drafts", "fast", "chapter-0002.md"), "utf-8")));
+    const committed = await runCheckContinuity(dir, 1, { readerCallModel: fakeModel({}) });
+    expect(committed.source).toBe("committed");
+    expect(committed.checkedVersion).toBeUndefined();
+  });
+});

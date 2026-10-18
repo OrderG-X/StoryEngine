@@ -150,11 +150,27 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
  * 必须逐字还在：作者改错往往只改一两个字（「一九八五」→「一九八七」），模糊比对会把改好的当成还在
  * （2026-10-10 真机验收：改完三处再核，三处原样又报了一遍）。逐字对不上就不带，交给这次重新核。
  */
-export function issueStillPresent(issue: ContinuityIssueV2, chapter: number, draftBody: string, earlier: EarlierText): boolean {
+export function issueStillPresent(
+  issue: ContinuityIssueV2,
+  chapter: number,
+  draftBody: string,
+  earlier: EarlierText,
+  settingStillSays: (settingQuote: string) => boolean = () => false,
+): boolean {
   const body = normalize(draftBody);
   const quote = normalize(issue.quote);
   const earlierQuote = normalize(issue.earlierQuote);
-  if (quote.length < 4 || !body.includes(quote)) return false;
+  if (quote.length < 4) return false;
+  // 对设定本的条目：earlierQuote 是设定原文、不在任何一章里——错的那句还在（本章，或 fixChapter 指的那章）、
+  // 设定本也还这么写，才算没改掉（以前拿设定原文去正文里找，改稿后这类条目永远带不过来）。
+  if (issue.againstSetting) {
+    const home = issue.fixChapter !== undefined && issue.fixChapter !== chapter
+      ? earlier.chapters.find((item) => item.chapter === issue.fixChapter)
+      : undefined;
+    const where = home ? normalize(home.sentences.join("")) : issue.fixChapter !== undefined && issue.fixChapter !== chapter ? "" : body;
+    return where.includes(quote) && settingStillSays(issue.earlierQuote);
+  }
+  if (!body.includes(quote)) return false;
   if (issue.earlierChapter === chapter) return body.includes(earlierQuote);
   const earlierChapter = earlier.chapters.find((item) => item.chapter === issue.earlierChapter);
   return Boolean(earlierChapter) && normalize(earlierChapter!.sentences.join("")).includes(earlierQuote);

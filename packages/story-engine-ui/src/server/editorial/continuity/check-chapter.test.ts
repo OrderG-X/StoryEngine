@@ -114,6 +114,19 @@ describe("核账记忆：上次的问题还在不在", () => {
     expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER)).toBe(false);
     expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER)).toBe(false);
   });
+
+  it("对设定本的条目：错的那句还在（本章或 fixChapter 那章）、设定本还这么写 → 在；句子改了或设定改了 → 不在", () => {
+    const SETTING = "外貌：左腿有旧伤";
+    const settingSays = (quote: string) => quote === SETTING;
+    const here = { quote: "周婶在门口喊他。", earlierQuote: SETTING, earlierChapter: 3, reason: "x", kind: "event" as const, againstSetting: { label: "人物卡" } };
+    expect(issueStillPresent(here, 3, BODY, EARLIER, settingSays)).toBe(true);
+    expect(issueStillPresent(here, 3, BODY.replace("周婶在门口喊他。", "门口没人。"), EARLIER, settingSays)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, () => false)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER)).toBe(false);
+    const there = { ...here, quote: "林溪说她后天走。", earlierChapter: 2, fixChapter: 2 };
+    expect(issueStillPresent(there, 3, BODY, EARLIER, settingSays)).toBe(true);
+    expect(issueStillPresent({ ...there, fixChapter: 1 }, 3, BODY, EARLIER, settingSays)).toBe(false);
+  });
 });
 
 describe("合并去重 mergeContinuityIssues：同一句只报一次", () => {

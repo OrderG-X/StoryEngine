@@ -1,11 +1,13 @@
 /**
  * 核账卡「不是问题」/「撤回」：记下或删掉一条（POST /api/continuity-dismissals）。
- * 只是作者对查错结果的批注，下次核同一章不再报；不改正文、不改账本。失败返回 false（卡上如实提示没记住）。
+ * 只是作者对查错结果的批注，以后核账不再报；不改正文、不改账本。失败返回 false（卡上如实提示没记住）。
  */
 export interface ContinuityDismissalInput {
+  /** 错所在那章（对设定本的条目可能是前文那章）。 */
   readonly chapter: number;
   readonly quote: string;
   readonly earlierQuote: string;
+  readonly againstSetting?: true;
   readonly reason?: string;
 }
 

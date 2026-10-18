@@ -128,6 +128,8 @@ export interface ContinuityCheckData {
   readonly chapter: number;
   readonly sure: readonly ContinuityCheckItemData[];
   readonly maybe: readonly ContinuityCheckItemData[];
+  /** 错在前面某章、之前报过还没改的（不算这一章的问题，卡上收起）。 */
+  readonly earlierOpen?: readonly ContinuityCheckItemData[];
 }
 
 export interface NextStepPrompt {

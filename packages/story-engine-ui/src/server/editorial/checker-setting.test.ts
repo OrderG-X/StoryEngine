@@ -106,6 +106,13 @@ describe("readFoundationDigest：按项目真实资料拼设定（题材中立�
     expect(settingQuoteLabel(digest!, "设定本里根本没有的一句话")).toBeUndefined();
   });
 
+  it("settingQuoteLabel：省略号接起来的设定原文（人名……字段）每段都在同一节里也算；有一段不在不算", async () => {
+    const digest = await readFoundationDigest(dir);
+    expect(settingQuoteLabel(digest!, "沈青禾……爷爷沈敬山：三年前过世")).toBe("人物卡");
+    expect(settingQuoteLabel(digest!, "沈青禾...塔钟停在三点十五分")).toBeUndefined();
+    expect(settingQuoteLabel(digest!, "沈青禾……根本没有的一句话")).toBeUndefined();
+  });
+
   it("foundationMessage：整段话带小标题，核账窗口里能认出来", async () => {
     const digest = await readFoundationDigest(dir);
     const text = foundationMessage(digest!);

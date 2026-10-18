@@ -410,9 +410,10 @@ export function useChat(params: UseChatParams): UseChatResult {
                 output: info,
               });
               if (info.toolName === "generate_draft") endStreaming();
-              // 核账结果记下核的是稿纸哪一版（回合开头存过稿，这时的版本就是服务端读到的那版）；之后稿子变了就显示「核过后改过稿」。
+              // 核账结果记下核的是哪一版：服务端报了就用它（它读的那份文件）；没报（老服务端）才用这时稿纸上的版本。
+              // 之后稿子变了就显示「核过后改过稿」。AI 出完稿紧接着核账时稿纸可能还没换上新稿，不能拿稿纸的版本。
               if (info.toolName === "check_continuity" && !chapterMismatch) {
-                useChatStore.getState().stampCardVersion(assistantMsgId, "continuity", useDraftStore.getState().baseVersion);
+                useChatStore.getState().stampCardVersion(assistantMsgId, "continuity", info.checkedVersion ?? useDraftStore.getState().baseVersion);
               }
               // 定稿预览一到就弹出定稿清单（重构 P6）；记下预览的是哪一版，稿子没再变时再点「定稿」直接打开这份。
               if (info.toolName === "commit_preview" && !chapterMismatch) {

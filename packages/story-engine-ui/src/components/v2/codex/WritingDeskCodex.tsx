@@ -16,7 +16,6 @@ import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js
 import {
   committedEmptySubtitle,
   committedEmptyTitle,
-  PREVIEW_COMMIT_INTENT,
 } from "./committedEmptyCopy.js";
 import {
   STARTER_INTENTS,
@@ -238,12 +237,14 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                     >
                       返回工作稿继续写
                     </button>
-                    {props.onSendMessage ? (
+                    {props.onChapterButton ? (
                       <button
                         type="button"
                         className="cd-committed-secondary"
                         disabled={workspaceBusy || draftWordCount <= 0}
-                        onClick={() => props.onSendMessage?.(PREVIEW_COMMIT_INTENT)}
+                        // 结构化动作（和稿纸底下的「定稿」同一个）：以前发一句「生成定稿预览」给模型，
+                        // 模型照抄前文回「预览好了，清单打开着」却没调工具（2026-10-19 试写）。
+                        onClick={() => props.onChapterButton?.("commit_preview")}
                       >
                         预览定稿改动
                       </button>
