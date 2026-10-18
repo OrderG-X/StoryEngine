@@ -46,7 +46,7 @@
 依赖 Node.js `^20.20.0` / `^22.22.0` / `>=24.0.0` + pnpm 11。三步跑起来：
 
 ```bash
-pnpm install   # 安装依赖（会自动构建核心引擎）
+pnpm install   # 安装依赖（会自动构建核心包）
 pnpm dev       # 启动写作工作台
 ```
 
@@ -60,29 +60,18 @@ key 只保存在你本机（`~/.story-engine/`），绝不要把密钥提交进�
 
 | 包 | 说明 |
 |---|---|
-| `packages/story-engine` | 核心写作状态引擎（草稿/提交/审稿/线索/钩子/目标追踪） |
-| `packages/story-engine-ui` | React 写作工作台 + 本地 HTTP/SSE 服务（聊天 agent 在这里） |
+| `packages/story-core` | 核心：真相（每章账单、作者裁定、正文）、写命令（定稿、记裁定、导入老书、存稿、AI 写稿）、投影；纯 TypeScript、不碰模型 |
+| `packages/story-engine-ui` | React 写作工作台 + 本地 HTTP/SSE 服务（对话 AI、编辑部、写稿流程都在这里） |
 | `packages/story-engine-desktop` | Electron 桌面壳与打包流程 |
 
 ## 核心能力
 
-- **快稿**：从结构化上下文生成章节草稿，不污染正式状态
-- **提交预览 / 提交入库**：预览与落盘严格分离，改动可控
-- **钩子池**：跟踪伏笔、异常、未解决信号
-- **线索池**：短期线索与意图跟踪、去重、质量闸
-- **目标池**：迷你弧 / 主线弧目标跟踪
-- **连续性质检**：对近期事件、线索、目标做确定性一致性检查
-- **审稿人**：AI 审稿建议 + 审稿计划生成 + 干跑报告
-- **维护动作**：`mark_thread_done` 等小批量人工确认路径
-
-## 当前禁用（暂不开放自动）
-
-以下路径刻意禁用或视为不安全，不提供自动化：
-
-- `merge_threads` 确认
-- `drop_thread` 确认
-- 自动清理 / 自动意图过期
-- 自动 `mark_thread_done` / 自动 `apply-review-plan --confirm`
+- **对话驱动**：作者对 AI 说话，AI 调工具读资料、写工作稿、记账；每次写盘前自动打存档点，可撤销
+- **作者档只走按钮**：定稿、裁剪操作历史只由作者点「确认」按钮执行，AI 只出预览
+- **编辑部**：核账员跟读全书核前后矛盾，记账员写每章账单，章纲员拟章纲、核账员审
+- **长篇不崩**：写作上下文按相关度挑旧章原文与旧事实，每章提示词有上限、不随章数涨
+- **记账带证据**：AI 记下的每条都要带原句、代码核实，核不过就如实说没记上
+- **去 AI 味**：出稿后确定性回检 + AI 体检 + 一键改写
 
 ## 开发
 
@@ -95,8 +84,8 @@ pnpm build         # 构建
 单独包：
 
 ```bash
-pnpm --filter @actalk/story-engine test
-pnpm --filter @actalk/story-engine typecheck
+pnpm --filter @actalk/story-core test
+pnpm --filter @actalk/story-engine-ui test
 ```
 
 GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条工作区命令。
@@ -115,8 +104,7 @@ GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条工作区命令。
 
 - 绝不提交 `.env`、API key、输出 fixture 或生成的 zip 产物
 - 绝不把带模型预设的桌面产物当干净/公开构建分发——内置密钥可被提取，内部测试后必须作废
-- AI 提供商不得直接修改正式故事状态
-- 维护动作必须保持预览优先 + 人工确认
+- AI 不得直接定稿或改作者档的东西：只出预览，作者点按钮才执行
 
 ## 许可证
 

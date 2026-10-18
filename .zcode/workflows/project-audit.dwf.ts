@@ -1,7 +1,7 @@
 /* zcode-workflow
-description: 对 story-engine-ng 做全项目体检：并行跑基线三件套（4 包 tsc/build/vitest + desktop
+description: 对 story-engine-ng 做全项目体检：并行跑基线三件套（核心与 UI 的 tsc/build/vitest + desktop
   安全门），可选按 focusItems
-  清单逐项核对修复落地情况（核对员+复核员双验），再由引擎/服务端/前端三个审计员并行扫静默失败、并发窗口、裸写盘、路径泄漏等问题，每条发现经独立复核员确认后汇总成
+  清单逐项核对修复落地情况（核对员+复核员双验），再由核心/服务端/前端三个审计员并行扫静默失败、并发窗口、裸写盘、路径泄漏等问题，每条发现经独立复核员确认后汇总成
   markdown 报告。
 whenToUse: 修完一批问题后想验证落地+全量扫尾时；或定期给项目做体检时。传 focusItems 可核对指定修复清单，不传则只跑基线+分域审计。
 args:
@@ -59,7 +59,7 @@ interface ReworkVerifyNote {
 }
 
 interface AuditFinding {
-  /** 工作区相对路径，尽量带行号："packages/story-engine/src/foo.ts:42"。 */
+  /** 工作区相对路径，尽量带行号："packages/story-core/src/foo.ts:42"。 */
   where: string;
   /** 一句话说清问题是什么（不是说怎么修）。 */
   what: string;
@@ -168,8 +168,8 @@ artifact.board("rework-board", {
 
 phase("跑基线三件套：类型检查、构建、全量测试");
 const CHECKS: { readonly name: string; readonly args: readonly string[]; readonly timeoutMs: number }[] = [
-  { name: "引擎 tsc", args: ["-C", "packages/story-engine", "exec", "tsc", "--noEmit"], timeoutMs: 300_000 },
-  { name: "引擎 vitest", args: ["-C", "packages/story-engine", "exec", "vitest", "run"], timeoutMs: 600_000 },
+  { name: "核心 tsc", args: ["-C", "packages/story-core", "exec", "tsc", "--noEmit"], timeoutMs: 300_000 },
+  { name: "核心 vitest", args: ["-C", "packages/story-core", "exec", "vitest", "run"], timeoutMs: 600_000 },
   { name: "UI tsc", args: ["-C", "packages/story-engine-ui", "exec", "tsc", "--noEmit"], timeoutMs: 300_000 },
   { name: "UI vite build", args: ["-C", "packages/story-engine-ui", "exec", "vite", "build"], timeoutMs: 600_000 },
   { name: "UI vitest", args: ["-C", "packages/story-engine-ui", "exec", "vitest", "run"], timeoutMs: 600_000 },
@@ -201,7 +201,7 @@ if (hasFocus) {
       "你是专项清单核对员：判断只认当前工作区的代码实况，清单或报告说什么不算数（之后可能有新提交）；" +
       "每条结论都要有 path:line 与你亲自读到的关键行作证据；拿不准就标「无法判定」，绝不猜。只读代码，不跑测试、不编辑文件。",
   }).ask<ReworkItemCheck[]>(
-    "背景：story-engine-ng 是 pnpm monorepo（packages/story-engine 纯引擎、story-engine-ui 含 React 前端与 src/server Node 服务端、story-engine-cli、story-engine-desktop）。\n" +
+    "背景：story-engine-ng 是 pnpm monorepo（packages/story-core 核心：真相、命令、投影；story-engine-ui 含 React 前端与 src/server Node 服务端，服务端七层 book < lib < writing < editorial < services < agent < routes；story-engine-desktop 桌面壳）。\n" +
     "逐项核对下面这份专项清单，以当前代码为准，返回与清单同序、同编号的数组：\n" +
     `${itemLines}\n` +
     "status 口径：已修妥=要求全部满足；半修=部分满足；未修=基本没动；无法判定=找不到对应代码。" +
@@ -229,19 +229,19 @@ const AUDITOR_PERSONA = {
 };
 const FACETS: { readonly name: string; readonly scope: string; readonly focus: string }[] = [
   {
-    name: "引擎审计员",
-    scope: "packages/story-engine/src",
+    name: "核心审计员",
+    scope: "packages/story-core/src 与 packages/story-engine-ui/src/server/book",
     focus:
       "静默失败（catch 后吞错返回空/默认值、不留任何痕迹）；老书缺文件（可选 JSON 缺失/ENOENT 直接 reject 主流程）；" +
       "非原子写盘（裸 writeFile 无 tmp+rename）；error.message/绝对路径/内部 id 直拼进用户可见文案；" +
-      "退化输入（NaN/空数组/缺字段）静默失效；死代码或不可达通道。可从 foundation-write-gateway、commit-engine、fast-draft-writer、" +
-      "writing-context-pack、context-gateway、commit-quality-check、project-store 入手，但不限于这些。",
+      "退化输入（NaN/空数组/缺字段）静默失效；死代码或不可达通道。可从核心的 commands/runner、store/transaction、projection，和老格式书的 foundation-write-gateway、project-store、state-overview 入手，" +
+      "但不限于这些。",
   },
   {
     name: "服务端审计员",
     scope: "packages/story-engine-ui/src/server",
     focus:
-      "写路径并发安全（withProjectCommitLock 覆盖之外，还有哪些路能并发写同一份 story/*.json）；" +
+      "写路径并发安全（核心书锁 withBookLock 覆盖之外，还有哪些路能并发写同一份 story/*.json 或工作稿）；" +
       "scrubLocalAbsolutePaths 的覆盖面（哪些用户可见输出还没消毒：blockingReasons、warnings、SSE error 事件、summary）；" +
       "SSE 路由护栏（headersSent/writableEnded/destroyed、心跳启停、错误收尾）；assertStoryEngineProject 是否还有漏接的写路由；" +
       "snake_case 机器码或裸实体 id 直达用户文案；tmp 文件失败清理。",

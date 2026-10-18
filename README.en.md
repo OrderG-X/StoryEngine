@@ -37,9 +37,8 @@ Not "an AI that writes novels for you", but an **AI writing team that takes your
 
 ## Packages
 
-- `packages/story-engine`: core state engine (draft / commit / review / threads / hooks / arc goals)
-- `packages/story-engine-cli`: CLI for draft, commit, review, maintenance, and diagnostics flows
-- `packages/story-engine-ui`: React author workbench plus the standalone local HTTP/SSE server (chat agent)
+- `packages/story-core`: the core — truth (per-chapter ledgers, author decisions, chapter text), write commands (commit, record decision, import legacy book, save draft, AI draft write), and projections; pure TypeScript, no model calls
+- `packages/story-engine-ui`: React author workbench plus the standalone local HTTP/SSE server (chat agent, editorial room, drafting flows)
 - `packages/story-engine-desktop`: Electron shell and guarded desktop packaging workflow
 
 ## Quick start
@@ -47,7 +46,7 @@ Not "an AI that writes novels for you", but an **AI writing team that takes your
 Requires Node.js `^20.20.0` / `^22.22.0` / `>=24.0.0` and pnpm 11:
 
 ```bash
-pnpm install   # installs deps (auto-builds the core engine)
+pnpm install   # installs deps (auto-builds the core package)
 pnpm dev       # starts the writing workbench
 ```
 
@@ -57,14 +56,9 @@ Then open the address shown in the terminal (default `http://127.0.0.1:5173`).
 (any OpenAI-compatible endpoint works: DeepSeek, GLM, Kimi, OpenAI, …). Keys stay on your machine
 (`~/.story-engine/`); never commit keys to any repository.
 
-## Currently disabled (no automation)
+## Author-only actions
 
-These paths are deliberately disabled or treated as unsafe — no automation is provided:
-
-- `merge_threads` confirmation
-- `drop_thread` confirmation
-- Automatic cleanup / automatic intent expiry
-- Automatic `mark_thread_done` / automatic `apply-review-plan --confirm`
+Committing a chapter and pruning the operation history only run when the author clicks the confirm button; the AI can only show a preview. Every other AI write takes a snapshot first and can be undone.
 
 ## Development
 
