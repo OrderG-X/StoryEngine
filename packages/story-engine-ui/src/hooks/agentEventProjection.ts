@@ -21,7 +21,7 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
@@ -77,6 +77,7 @@ export interface AgentToolResultOutput {
   readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ContinuityCheckData;
+  readonly brainstorm?: BrainstormCardData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
    *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -168,6 +169,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
   generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
+  brainstorm_chapter: { stepLabel: "想走法", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },
   revise_draft: { stepLabel: "修改工作稿", card: null },
   // 审校簇
@@ -204,6 +206,7 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "read_state_overview",
   "read_foundation",
   "generate_chapter_steering",
+  "brainstorm_chapter",
   "quality_check",
   "check_continuity",
   "ai_review",
@@ -342,6 +345,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 只留工具文字如实说。与上面 check_ai_flavor 的 ok!==false 守卫同款（双保险：客户端层已先拦一道）。
       if (event.toolName === "check_continuity" && event.output?.continuityCheck && event.output?.ok !== false) {
         return withCard(withEffects, { type: "continuity", check: event.output.continuityCheck });
+      }
+      // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
+      if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
+        return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
       }
       // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
       //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。

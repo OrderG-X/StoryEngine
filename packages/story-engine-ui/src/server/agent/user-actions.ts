@@ -25,6 +25,7 @@ export const USER_ACTION_TOOL_NAMES = [
   "quality_check",
   "manage_snapshots",
   "revise_draft",
+  "brainstorm_chapter",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
 /** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」）。 */
@@ -62,6 +63,11 @@ export type UserAction =
    */
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly ReviseFix[] }
   /**
+   * 「给我几种走法」「再来几种」（重构 P6 头脑风暴）：只读，章纲员出几种走法、核账员核前文，结果进对话、作者在稿纸上挑。
+   * idea = 作者在稿纸上方填的想法原话；avoid = 已经给过的走法名字（再来几种时别出一样的）。
+   */
+  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
+  /**
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
@@ -83,6 +89,9 @@ const MAX_EXCLUDED = 500;
 /** 「改掉这 N 处」一次最多改几处、每处原句 / 目标多长（防异常请求体）。 */
 const MAX_REVISE_FIXES = 12;
 const MAX_REVISE_TEXT = 800;
+/** 头脑风暴：作者想法多长、「再来几种」最多带几个已给过的走法名。 */
+const MAX_BRAINSTORM_IDEA = 500;
+const MAX_BRAINSTORM_AVOID = 12;
 
 /** body.action 解析：缺省 → none（普通对话）；形状不对 → invalid（路由回 400，绝不静默当普通对话）。 */
 export type ParsedUserAction =
@@ -140,6 +149,13 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   }
   if (toolName === "check_continuity") {
     return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
+  }
+  if (toolName === "brainstorm_chapter") {
+    const idea = typeof record.idea === "string" ? record.idea.trim().slice(0, MAX_BRAINSTORM_IDEA) : "";
+    const avoid = Array.isArray(record.avoid)
+      ? [...new Set(record.avoid.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 60)).filter(Boolean))].slice(0, MAX_BRAINSTORM_AVOID)
+      : [];
+    return { kind: "action", action: { toolName: "brainstorm_chapter", chapter, ...(idea ? { idea } : {}), ...(avoid.length > 0 ? { avoid } : {}) } };
   }
   if (toolName === "revise_draft") {
     if (!Array.isArray(record.fixes) || record.fixes.length === 0 || record.fixes.length > MAX_REVISE_FIXES) {
@@ -331,6 +347,10 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "revise_draft") {
     await runReviseFixesAction({ ...args, action });
+    return;
+  }
+  if (action.toolName === "brainstorm_chapter") {
+    await runBrainstormAction({ ...args, action });
     return;
   }
   const stamp = Date.now();
@@ -719,6 +739,40 @@ async function runReadOnlyChapterAction(args: Omit<Parameters<typeof runUserActi
   emitText(typeof result?.summary === "string" && result.summary.trim()
     ? humanizeToolNames(result.summary.trim())
     : result?.ok === false ? `第 ${action.chapter} 章的${label}这次没做成。` : `第 ${action.chapter} 章的${label}做完了，结果在上面。`);
+}
+
+/** 「给我几种走法」按钮：服务端直接跑只读的 brainstorm_chapter，走法卡进对话、稿纸上方给作者挑；回执一句话。 */
+async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
+  readonly action: Extract<UserAction, { readonly toolName: "brainstorm_chapter" }>;
+}): Promise<void> {
+  const { action } = args;
+  const toolCallId = `user-action-brainstorm_chapter-${Date.now()}`;
+  const emitText = (text: string): void => {
+    const scrubbed = args.scrubber.push(text);
+    if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
+    const rest = args.scrubber.flush();
+    if (rest) args.sendEvent("text-delta", { text: rest });
+  };
+  const input = {
+    chapter: action.chapter,
+    ...(action.idea ? { idea: action.idea } : {}),
+    ...(action.avoid ? { avoid: action.avoid } : {}),
+  };
+  args.sendEvent("tool-call", { toolCallId, toolName: "brainstorm_chapter", args: input });
+  let output: unknown;
+  try {
+    output = await args.executeTool("brainstorm_chapter", input, args.requestContext);
+  } catch (error) {
+    const message = args.scrubError(error);
+    args.sendEvent("tool-error", { toolCallId, toolName: "brainstorm_chapter", error: message, retryable: true });
+    emitText(`第 ${action.chapter} 章的走法没想出来：${humanizeToolNames(message)}。可以再点一次。`);
+    return;
+  }
+  args.sendEvent("tool-result", { toolCallId, toolName: "brainstorm_chapter", output });
+  const result = output as { readonly ok?: unknown; readonly summary?: unknown } | undefined;
+  emitText(typeof result?.summary === "string" && result.summary.trim()
+    ? humanizeToolNames(result.summary.trim())
+    : `第 ${action.chapter} 章的走法没想出来。`);
 }
 
 /** 「改这处」按钮：逐处直接调 revise_draft（只改那一段），回执照实说改了几处、哪几处没改成。 */

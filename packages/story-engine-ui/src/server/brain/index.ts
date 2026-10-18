@@ -65,6 +65,13 @@ export {
 } from "./reader-progress.js";
 export { LEDGER_ROLE };
 export {
+  brainstormChapter,
+  BRAINSTORM_OPTIONS,
+  type BrainstormOption,
+  type BrainstormProblem,
+  type BrainstormResult,
+} from "./brainstorm.js";
+export {
   PLANNER_ROLE,
   callConfiguredPlannerModel,
   planChapterByPlanner,

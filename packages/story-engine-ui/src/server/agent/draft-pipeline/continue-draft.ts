@@ -8,7 +8,7 @@
  *
  * 模型无关：续写结果只取正文（剥标题/解释）；比原来还短、空、像 JSON → 视为没续成，原稿不动。
  */
-import { countDraftChineseCharacters, type ChapterPlan, type DraftLengthTarget } from "@actalk/story-engine";
+import { countDraftChineseCharacters, stripTrailingSegmentMarkers, type ChapterPlan, type DraftLengthTarget } from "@actalk/story-engine";
 
 export type ContinueCallModel = (
   messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
@@ -78,11 +78,11 @@ export function buildContinuationMessages(input: {
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
-/** 剥掉模型可能加的标题行/前言，留正文。 */
+/** 剥掉模型可能加的标题行/前言和末尾的「（全文完）」这类标记，留正文。 */
 function cleanContinuation(text: string): string {
-  return text
+  return stripTrailingSegmentMarkers(text
     .replace(/^\s*#[^\n]*\n/u, "")
-    .replace(/^\s*(?:好的|以下是|续写如下)[^\n]*\n/u, "")
+    .replace(/^\s*(?:好的|以下是|续写如下)[^\n]*\n/u, ""))
     .trim();
 }
 

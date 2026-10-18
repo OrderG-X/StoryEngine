@@ -15,6 +15,8 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
+import type { BrainstormCardData } from "../type-defs/workspace.js";
+import { readBrainstormData } from "../utils/brainstormCard.js";
 
 export interface StreamAgentChatRequest {
   readonly projectPath: string;
@@ -42,7 +44,8 @@ export type AgentUserAction =
   | { readonly toolName: "undo" }
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
+  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] };
 
 /** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
@@ -155,6 +158,8 @@ export interface AgentToolResult {
   readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果。 */
   readonly continuityCheck?: ContinuityCheckView;
+  /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
+  readonly brainstorm?: BrainstormCardData;
   /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
    *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -419,6 +424,10 @@ export async function streamAgentChat(
             // 否则会显成「没发现对不上」的假成功卡（R4.1/验收 3.1）。没核成就只留工具文字如实说。
             ...(parsed.toolName === "check_continuity" && output.ok !== false && typeof output.chapter === "number" && (Array.isArray(output.sure) || Array.isArray(output.maybe))
               ? { continuityCheck: { chapter: output.chapter, sure: toContinuityItems(output.sure), maybe: toContinuityItems(output.maybe) } }
+              : {}),
+            // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
+            ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
+              ? { brainstorm: readBrainstormData(output)! }
               : {}),
             // check_continuity 专属：还在读的结构化进度（pending 只在「还在读、没核」时出现）→ 透传。
             // 前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。

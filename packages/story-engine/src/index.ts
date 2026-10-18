@@ -112,6 +112,7 @@ export {
   persistFastDraftBody,
   runFastDraft,
   stripMarkdownEmphasis,
+  stripTrailingSegmentMarkers,
   type TokenUsage,
   type WriterClient,
 } from "./fast-draft-writer.js";

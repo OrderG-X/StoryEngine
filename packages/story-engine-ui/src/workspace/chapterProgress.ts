@@ -10,6 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 import { isDraftDirty, paperStage, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { cardOf } from "../utils/messageCards.js";
+import { latestDirections, type ChapterDirections } from "../utils/brainstormCard.js";
 import type { ChapterButton } from "../utils/chapterButtons.js";
 import { countTextWords } from "../utils/textUtils.js";
 
@@ -149,6 +150,12 @@ export function chapterProgress(input: {
 export function useContinuityResult(chapter: number): ContinuityResult | null {
   const messages = useChatStore((s) => s.messages);
   return useMemo(() => latestContinuityResult(messages, chapter), [messages, chapter]);
+}
+
+/** 组件用：当前会话里这一章最新的走法卡（头脑风暴）。 */
+export function useChapterDirections(chapter: number): ChapterDirections | undefined {
+  const messages = useChatStore((s) => s.messages);
+  return useMemo(() => latestDirections(messages, chapter), [messages, chapter]);
 }
 
 /** 组件用：稿纸 + 当前会话的核账结果 → 这一章还差什么。 */

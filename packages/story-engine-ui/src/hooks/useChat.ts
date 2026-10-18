@@ -17,6 +17,7 @@ import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
+import { directionGoal, pickedDirection } from "../utils/brainstormCard.js";
 import type { StateOverview } from "../api/types.js";
 import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -813,7 +814,10 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }
-      const text = userActionChoiceText(action);
+      // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
+      const picked = action.toolName === "generate_draft" ? pickedDirection(liveChat.messages, action.chapter) : undefined;
+      const goal = action.toolName === "generate_draft" ? action.chapterGoal : undefined;
+      const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
       appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
@@ -839,10 +843,14 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveBook = useBookStore.getState();
       const liveUi = useUiStore.getState();
+      const chapter = liveBook.workspace.currentChapter?.chapterNumber;
+      // 「写这一章」：作者在稿纸上方挑中过走法，就照它写（输入框里另写了话一并带上）。
+      const picked = typeof chapter === "number" ? pickedDirection(useChatStore.getState().messages, chapter) : undefined;
+      const direction = [picked ? directionGoal(picked) : "", liveUi.steeringDirection.trim()].filter(Boolean).join("\n");
       const action = chapterButtonAction(button, {
-        chapter: liveBook.workspace.currentChapter?.chapterNumber,
+        chapter,
         chapters: liveBook.workspace.chapters,
-        direction: liveUi.steeringDirection,
+        direction,
       });
       if (!action) {
         appendMessage({ id: `assistant-button-nochapter-${Date.now()}`, role: "assistant", content: NO_CHAPTER_HINT });

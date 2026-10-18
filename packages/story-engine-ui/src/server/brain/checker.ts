@@ -800,7 +800,7 @@ export function readPoint(raw: unknown, beats: readonly string[]): number | unde
  * earlierQuote 由代码核对真在前文里（先信它报的章号，对不上按章序搜），抄不出原文的丢掉；
  * point 越界的丢掉（模型没指到具体要点的问题没法只改那条要点）。
  */
-export function parsePlanProblems(text: string, plan: ChapterPlan, earlier: EarlierText): readonly PlanProblem[] {
+export function parsePlanProblems(text: string, plan: Pick<ChapterPlan, "beats">, earlier: EarlierText): readonly PlanProblem[] {
   let parsed: { problems?: unknown };
   try {
     parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { problems?: unknown };

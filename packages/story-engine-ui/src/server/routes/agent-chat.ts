@@ -34,6 +34,7 @@ import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMete
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
+import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -627,6 +628,13 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
     }
     case "revise_draft": {
       const execute = reviseDraftTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    case "brainstorm_chapter": {
+      const execute = brainstormChapterTool.execute as unknown as (
         input: Record<string, unknown>,
         context: { readonly requestContext: typeof requestContext },
       ) => Promise<unknown>;

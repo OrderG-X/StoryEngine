@@ -151,6 +151,25 @@ export function carryChapterFileFlags(
   });
 }
 
+/**
+ * 整表刷新时别丢章（重构 P6 真机：第 12 章出完稿，章节栏从 12 章缩成 9 章）：工具回传的故事概览不带章节文件清单，
+ * 只带最近几条时间线事件，按它重建的章节表只剩最近几章。概览带了清单（开书、撤销）就以它为准；
+ * 没带时，新表里没有的章照旧留着（还没写的占位章不留；旧表里的「当前章」按它有没有定稿改回已定稿 / 工作稿）。
+ */
+export function keepUnlistedChapters(
+  next: readonly ChapterNavItem[],
+  previous: readonly ChapterNavItem[],
+): readonly ChapterNavItem[] {
+  const listed = new Set(next.map((chapter) => chapter.chapterNumber));
+  const kept = previous
+    .filter((chapter) => !listed.has(chapter.chapterNumber) && chapter.status !== "planned")
+    .map((chapter): ChapterNavItem => chapter.status === "current"
+      ? { ...chapter, status: chapter.hasCommittedChapter ? "committed" : "draft" }
+      : chapter);
+  if (kept.length === 0) return next;
+  return [...next, ...kept].sort((a, b) => a.chapterNumber - b.chapterNumber);
+}
+
 export function updateChapterListTitle(chapters: readonly ChapterNavItem[], chapterNumber: number, title: string): readonly ChapterNavItem[] {
   return chapters.map((chapter) => (
     chapter.chapterNumber === chapterNumber ? { ...chapter, title } : chapter

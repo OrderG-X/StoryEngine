@@ -135,11 +135,11 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
     expect(instructions).toMatch(/故事资料基本为空|像一本新书/);
   });
 
-  it("开书引导复用现成可撤销写盘工具（foundation_write/generate_chapter_steering）", () => {
+  it("开书引导复用现成工具（foundation_write/brainstorm_chapter）", () => {
     const guidanceStart = instructions.indexOf("开书引导");
     const guidance = instructions.slice(guidanceStart);
     expect(guidance).toContain("foundation_write");
-    expect(guidance).toContain("generate_chapter_steering");
+    expect(guidance).toContain("brainstorm_chapter");
   });
 
   // #1 真机瑕疵：用户说真主角名时，agent 用 create_character 新增了第二个角色，

@@ -300,6 +300,17 @@
   .codex-budget-hint{font-size:12px;line-height:1.6;}
   .codex-budget-preview strong{color:var(--text);font-weight:600;}
 
+  /* 头脑风暴走法卡（重构 P6）：对话里只列名字，挑在稿纸上方 */
+  .se-dir-card{margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px;}
+  .se-dir-h{font-size:12px;font-weight:600;color:var(--muted);}
+  .se-dir-card ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;}
+  .se-dir-card li{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--text);}
+  .se-dir-card li em{font-style:normal;font-size:12px;color:var(--accent);}
+  .se-dir-card li small{font-size:12px;color:var(--danger);}
+  .se-dir-card li.is-dim{color:var(--faint);}
+  .se-dir-card li.is-dim small{color:var(--faint);}
+  .se-dir-f{margin-top:6px;font-size:12px;color:var(--faint);}
+
   /* 「正在思考」胶囊的锚点：零高度、贴在记忆条上方，胶囊往上浮进消息流底部的空当 */
   .se-ai-dock-anchor{position:relative;height:0;}
 }

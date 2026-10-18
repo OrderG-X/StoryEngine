@@ -17,6 +17,7 @@ import type {
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, type AgentUserAction } from "../../api/agentChatClient.js";
+import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
 /** 存盘形态的卡数组 → 校验过的卡。 */
@@ -90,6 +91,12 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       return errorCard(value.detail);
     case "status-notes":
       return cardFromStatusNotes(value.notes);
+    case "directions": {
+      const brainstorm = readBrainstormData(value.brainstorm);
+      if (!brainstorm) return undefined;
+      const picked = readPicked(value.picked, brainstorm);
+      return { type, brainstorm, ...(picked !== undefined ? { picked } : {}) };
+    }
     default:
       return undefined;
   }

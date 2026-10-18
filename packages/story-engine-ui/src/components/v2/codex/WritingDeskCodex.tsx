@@ -5,6 +5,7 @@ import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
 import { ContinuityMarks } from "./ContinuityMarks.js";
+import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
@@ -196,6 +197,14 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
           ) : (
             <>
             <PaperIncomingBanner />
+            {/* 头脑风暴：空章问「往哪走」、给几种走法挑；挑中后收成一条「这章打算」（见 Brainstorm）。 */}
+            <BrainstormPanel
+              chapter={draft.chapterNumber}
+              draftEmpty={!draft.content.trim()}
+              hidden={draft.status === "committed" || draft.streaming === true}
+              busy={workspaceBusy}
+              {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
+            />
             <WritingPaper draft={paperDraft} fontSize={paperFontSize} onEdit={props.onDraftContentChange} onSelectionRewrite={props.onSelectionRewrite} onSelectionRewriteCustom={props.onSelectionRewriteCustom} onAskAboutSelection={props.onAskAboutSelection} />
             </>
           )

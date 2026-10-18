@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterNavItem } from "../types.js";
-import { carryChapterFileFlags } from "./bookUtils.js";
+import { carryChapterFileFlags, keepUnlistedChapters } from "./bookUtils.js";
 
 const item = (chapterNumber: number, extra: Partial<ChapterNavItem> = {}): ChapterNavItem => ({
   id: `ch-${chapterNumber}`,
@@ -23,5 +23,25 @@ describe("carryChapterFileFlags", () => {
   it("刚定稿的那章直接标已定稿（旧表里它还是工作稿）", () => {
     const merged = carryChapterFileFlags([item(7, { status: "current" })], [item(7, { status: "current", hasDraftFile: true, hasCommittedChapter: false })], 7);
     expect(merged[0]).toMatchObject({ hasDraftFile: true, hasCommittedChapter: true });
+  });
+});
+
+describe("keepUnlistedChapters", () => {
+  it("新表只认得最近几章：旧表里别的章照旧留着、按章号排；还没写的占位章不留", () => {
+    const previous = [item(1), item(2), item(3), item(4), item(5, { status: "current", hasCommittedChapter: true }), item(6, { status: "planned" })];
+    const next = [item(4), item(5), item(6, { status: "current" }), item(7, { status: "planned" })];
+    const merged = keepUnlistedChapters(next, previous);
+    expect(merged.map((chapter) => chapter.chapterNumber)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(merged.find((chapter) => chapter.chapterNumber === 6)!.status).toBe("current");
+  });
+
+  it("旧表里的当前章不在新表里：按有没有定稿改回已定稿 / 工作稿", () => {
+    const merged = keepUnlistedChapters([item(9, { status: "current" })], [item(7, { status: "current", hasCommittedChapter: false }), item(8, { status: "current", hasCommittedChapter: true })]);
+    expect(merged.map((chapter) => [chapter.chapterNumber, chapter.status])).toEqual([[7, "draft"], [8, "committed"], [9, "current"]]);
+  });
+
+  it("新表全覆盖了：原样返回", () => {
+    const next = [item(1), item(2, { status: "current" })];
+    expect(keepUnlistedChapters(next, [item(1), item(2)])).toBe(next);
   });
 });

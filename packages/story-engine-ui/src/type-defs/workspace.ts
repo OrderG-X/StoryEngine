@@ -96,9 +96,31 @@ export type MessageCard =
   /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错。 */
   | { readonly type: "error"; readonly detail?: string }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
-  | { readonly type: "status-notes"; readonly notes: readonly string[] };
+  | { readonly type: "status-notes"; readonly notes: readonly string[] }
+  /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
+  | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number };
 
 export type MessageCardType = MessageCard["type"];
+
+/** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */
+export interface BrainstormCardData {
+  readonly chapter: number;
+  readonly idea?: string;
+  readonly options: readonly BrainstormOptionData[];
+  /** 核账员核过前文没有；没核成时 checkNote 说原因。 */
+  readonly checked: boolean;
+  readonly checkNote?: string;
+  readonly coldNote?: string;
+}
+
+export interface BrainstormOptionData {
+  readonly title: string;
+  readonly steps: readonly string[];
+  readonly recommended?: boolean;
+  readonly threads: readonly { readonly title: string; readonly idle: number; readonly stale: boolean }[];
+  /** 和前文对不上的地方：第几步、前文哪章哪句、为什么。 */
+  readonly problems: readonly { readonly step: number; readonly earlierChapter: number; readonly earlierQuote: string; readonly reason: string }[];
+}
 
 export interface ContinuityCheckData {
   readonly chapter: number;

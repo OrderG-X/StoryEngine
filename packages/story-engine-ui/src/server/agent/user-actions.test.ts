@@ -2,7 +2,7 @@ import { RequestContext } from "@mastra/core/di";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { isUserConfirmedTool } from "./request-context.js";
 import {
@@ -762,5 +762,46 @@ describe("核账「改这处」结构化动作（revise_draft，重构 P6：按�
     });
     expect(events.some((e) => e.event === "tool-error")).toBe(true);
     expect(textOf(events)).toBe("改好了 1 处（可撤销）。1 处没改成：Error: 模型没回");
+  });
+});
+
+describe("「给我几种走法」结构化动作（brainstorm_chapter，重构 P6 头脑风暴）", () => {
+  it("解析：想法去空白、截长；已给过的走法名去空、去重；缺章号不收", () => {
+    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "  让老周开口 ", avoid: [" 老周开口 ", "老周开口", "", 3, "夜里上楼"] })).toEqual({
+      kind: "action",
+      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼"] },
+    });
+    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "   " })).toEqual({
+      kind: "action",
+      action: { toolName: "brainstorm_chapter", chapter: 12 },
+    });
+    expect(parseUserAction({ toolName: "brainstorm_chapter" })).toEqual({ kind: "invalid", reason: "缺少有效章号。" });
+  });
+
+  const run = async (executeTool: UserActionToolExecutor) => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口" },
+      requestContext: new RequestContext(),
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+    return events;
+  };
+
+  it("直接跑只读工具（带想法），回话一句工具 summary；不追加下一步选项", async () => {
+    const executeTool = vi.fn(async () => ({ ok: true, chapter: 12, options: [], summary: "第 12 章想了 3 种走法，在稿纸上挑。" }));
+    const events = await run(executeTool);
+    expect(executeTool).toHaveBeenCalledWith("brainstorm_chapter", { chapter: 12, idea: "让老周开口" }, expect.anything());
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+    expect(events.at(-1)!.data.text).toBe("第 12 章想了 3 种走法，在稿纸上挑。");
+  });
+
+  it("工具抛错 → tool-error + 如实说没想出来", async () => {
+    const events = await run(async () => { throw new Error("服务商超时"); });
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
+    expect(String(events.at(-1)!.data.text)).toContain("第 12 章的走法没想出来：服务商超时");
   });
 });

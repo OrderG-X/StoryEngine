@@ -34,6 +34,7 @@ import { ChatCapabilityBar, type CapabilityAction } from "./ChatCapabilityBar.js
 import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
+import { DirectionsCard } from "./Brainstorm.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
@@ -877,6 +878,9 @@ function MessageBubbles({
             undoDisabled={chatLoading}
           />
         );
+      case "directions":
+        // 头脑风暴走法卡：对话里只列名字，挑在稿纸上方（BrainstormPanel）。
+        return <DirectionsCard key={card.type} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
       case "next-steps":
         // 「下一步」选项在 composer 上方渲染（lastAssistantNextStepPrompt），气泡内不重复。
         return null;
@@ -997,6 +1001,7 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "ai-flavor",
   "draft-review",
   "continuity",
+  "directions",
   "quality",
   "commit-preview",
   "name-drift",

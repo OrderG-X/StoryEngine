@@ -27,6 +27,8 @@ export interface ChatStore {
   undoClearChat: () => void;
   /** 把某条消息里的某条机器腔违规标为「已改」（追加进该消息机器腔卡的 fixedIds，去重）。 */
   markAiFlavorViolationFixed: (messageId: string, violationId: string) => void;
+  /** 走法卡上挑中某一种（null＝换一种、撤回挑选）。只改对话里的卡，不进账。 */
+  setDirectionPicked: (messageId: string, picked: number | null) => void;
   /** 核账卡上记下 / 撤回一条「不是问题」（对话卡和稿纸划线共用）。 */
   setContinuityDismissed: (messageId: string, key: string, dismissed: boolean) => void;
   /** 核账 / 定稿预览结果到时记下稿纸版本（之后稿子变了就是「核过后改过稿」「要重新预览」）。 */
@@ -78,6 +80,17 @@ export const useChatStore = create<ChatStore>((set) => ({
             const next = dismissed ? [...current, key] : current.filter((item) => item !== key);
             const { dismissed: _old, ...rest } = card;
             return next.length > 0 ? { ...rest, dismissed: next } : rest;
+          })
+          : message
+      )),
+    })),
+  setDirectionPicked: (messageId, picked) =>
+    set((state) => ({
+      messages: state.messages.map((message) => (
+        message.id === messageId
+          ? updateCard(message, "directions", (card) => {
+            const { picked: _old, ...rest } = card;
+            return picked !== null && picked >= 0 && picked < card.brainstorm.options.length ? { ...rest, picked } : rest;
           })
           : message
       )),

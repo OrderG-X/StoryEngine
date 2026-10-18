@@ -214,6 +214,67 @@
   .se-cc-pop-acts button.is-primary{border-color:transparent;background:var(--text);color:var(--bg);}
   .se-cc-pop-acts button:disabled{opacity:.5;cursor:default;}
 
+  /* ═══ 头脑风暴（重构 P6，草图 ⑤）：稿纸上方「第 N 章往哪走？」，几种走法并排挑；挑中收成「这章打算」 ═══ */
+  .codex-desk-stage > .se-bs{
+    position:relative;z-index:1;flex:none;width:100%;max-width:980px;box-sizing:border-box;margin:0 0 12px;
+    max-height:62%;overflow:auto;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-md);
+    background:var(--surface);color:var(--text);font-size:13px;line-height:1.6;
+  }
+  .codex-desk-stage > .se-bs.is-ask,.codex-desk-stage > .se-bs.is-picked,.codex-desk-stage > .se-bs.is-folded{max-width:780px;}
+  .codex-desk-stage > .se-bs.is-folded{padding:6px 10px;}
+  .se-bs-top{position:relative;display:flex;flex-direction:column;gap:2px;padding-right:56px;}
+  .se-bs-top h2{margin:0;font-size:16px;font-weight:600;color:var(--text);}
+  .se-bs-top p{margin:0;color:var(--muted);}
+  .se-bs-top .se-bs-warn{color:var(--warn);}
+  .se-bs-faint{color:var(--faint) !important;font-size:12px;}
+  .se-bs-fold{position:absolute;top:-2px;right:0;}
+  .se-bs-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+  .se-bs-form{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  .se-bs-form input{
+    flex:1 1 260px;min-width:0;height:34px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;
+    background:var(--bg);color:var(--text);font:inherit;
+  }
+  .se-bs-form input:focus{outline:none;border-color:var(--accent);}
+  .se-bs-form button{
+    height:34px;padding:0 14px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);
+    color:var(--accent-ink);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer;
+  }
+  .se-bs-form button:disabled{opacity:.5;cursor:default;}
+  .se-bs:not(.is-ask) .se-bs-form button{background:transparent;color:var(--text);border-color:var(--line-strong);font-weight:400;}
+  .se-bs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;}
+  .se-bs-opt{display:flex;flex-direction:column;gap:8px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);}
+  .se-bs-opt.is-rec{border-color:var(--accent-line);}
+  .se-bs-opt-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+  .se-bs-opt-h h3{margin:0;font-size:14px;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
+  .se-bs-rec{flex:none;font-size:12px;color:var(--accent);}
+  .se-bs-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;color:var(--text);}
+  .se-bs-adv{margin:0;font-size:12px;color:var(--muted);}
+  .se-bs-ok{margin:0;font-size:12px;color:var(--success);}
+  .se-bs-problems{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;}
+  .se-bs-problems li{display:flex;flex-direction:column;gap:2px;padding-left:8px;border-left:2px solid var(--danger);font-size:12px;color:var(--danger);}
+  .se-bs-problems q{color:var(--muted);quotes:"「" "」";}
+  .se-bs-pick{
+    margin-top:auto;height:32px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;background:transparent;
+    color:var(--text);font:inherit;white-space:nowrap;cursor:pointer;
+  }
+  .se-bs-pick:hover:not(:disabled){background:var(--hover);}
+  .se-bs-pick.is-primary{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);font-weight:600;}
+  .se-bs-pick:disabled{opacity:.5;cursor:default;}
+  .se-bs-link{height:26px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:var(--accent);font:inherit;font-size:12px;cursor:pointer;}
+  .se-bs-link:hover:not(:disabled){background:var(--accent-soft);}
+  .se-bs-link:disabled{opacity:.5;cursor:default;}
+  .se-bs-plan{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;}
+  .se-bs-plan-h{
+    display:flex;align-items:baseline;gap:10px;min-width:0;padding:0;border:0;background:transparent;color:var(--text);
+    font:inherit;text-align:left;cursor:pointer;
+  }
+  .se-bs-plan-h b{flex:none;font-size:12px;font-weight:600;color:var(--accent);}
+  .se-bs-plan-h span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-bs-plan-actions{display:flex;align-items:center;gap:6px;}
+  .se-bs-plan-actions .se-bs-pick{margin-top:0;}
+  .se-bs.is-picked .se-bs-steps{margin-top:8px;}
+  .se-bs-note{margin:6px 0 0;font-size:12px;color:var(--faint);}
+
   /* 修改预览里的「留意」是提醒不是报错：正文色 + 左侧提醒橙细线，不再整段红字 */
   .revision-preview-modal .rpm-risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
 }
