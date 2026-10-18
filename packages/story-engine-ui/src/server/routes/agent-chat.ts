@@ -33,6 +33,8 @@ import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
+import { reviseDraftTool } from "../agent/tools/revise-draft.js";
+import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -519,7 +521,7 @@ async function handleAgentChat(
     if (droppedHistoryCount > 0 && shouldSendHistoryTrimNoticeOnce(projectDir)) {
       sendEvent("status", {
         message:
-          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；故事资料不受影响。` +
+          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；设定本不受影响。` +
           "前面说过的安排要用到的话，请再说一遍。",
       });
     }
@@ -624,6 +626,23 @@ const executeUserActionTool: UserActionToolExecutor = async (toolName, input, re
       ) => Promise<unknown>;
       return execute(input, { requestContext });
     }
+    case "revise_draft": {
+      const execute = reviseDraftTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    case "brainstorm_chapter": {
+      const execute = brainstormChapterTool.execute as unknown as (
+        input: Record<string, unknown>,
+        context: { readonly requestContext: typeof requestContext },
+      ) => Promise<unknown>;
+      return execute(input, { requestContext });
+    }
+    default:
+      // 白名单里加了动作却没在这接上：如实报错，绝不静默返回空（重构 P6 踩过：改这处 0 毫秒「没改成」）。
+      throw new Error(`这个操作还没接上（${toolName satisfies never}）。`);
   }
 };
 

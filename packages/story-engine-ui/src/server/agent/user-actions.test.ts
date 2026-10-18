@@ -2,7 +2,7 @@ import { RequestContext } from "@mastra/core/di";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { isUserConfirmedTool } from "./request-context.js";
 import {
@@ -311,7 +311,7 @@ describe("runUserAction 执行结构化动作", () => {
 });
 
 describe("「定稿」按钮结构化动作（commit_preview）", () => {
-  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 工具自己的摘要（工具名换人话），不调模型", async () => {
+  it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 一句结论（清单在弹窗里，重构 P6），不调模型", async () => {
     expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
     const requestContext = new RequestContext();
     let marked = true;
@@ -331,7 +331,7 @@ describe("「定稿」按钮结构化动作（commit_preview）", () => {
     expect(marked).toBe(false);
     expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
     expect(events[1]!.data.output).toMatchObject({ canCommit: true });
-    expect(events[2]!.data.text).toBe("第 4 章可以定稿，点 定稿 前先看清单。");
+    expect(events[2]!.data.text).toBe("第 4 章可以定稿，清单打开了。");
   });
 });
 
@@ -370,10 +370,23 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     const next = nextStepsOutput(events);
     expect(next.question).toBe("这次没核成，接下来？");
     expect(next.question).not.toContain("做完了");
-    expect(next.choices.map((c) => c.label)).toEqual(["再核一次", "先写下一章"]);
+    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍", "先写下一章"]);
     const labels = JSON.stringify(next.choices);
     expect(labels).not.toContain("预览定稿");
     expect(labels).not.toContain("改掉确定");
+  });
+
+  it("核出问题 → 回话只说结论那句（headline），清单留给核账卡和稿纸划线（重构 P6）", async () => {
+    const events = await runCheck(async () => ({
+      ok: true,
+      chapter: 5,
+      sure: [{ quote: "甲", earlierQuote: "乙", earlierChapter: 2, reason: "对不上" }],
+      maybe: [],
+      failures: [],
+      summary: "核了第 5 章：确定对不上 1 处。\n· 「甲」和第 2 章「乙」：对不上",
+      headline: "核了第 5 章：确定对不上 1 处。",
+    }));
+    expect(textOf(events)).toBe("核了第 5 章：确定对不上 1 处。");
   });
 
   it("没核成（出错，ok:false 无 pending）且 summary 缺失 → 兜底文案也不写「核账做完了」", async () => {
@@ -382,7 +395,7 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     expect(textOf(events)).not.toContain("做完了");
     const next = nextStepsOutput(events);
     expect(next.question).toBe("这次没核成，接下来？");
-    expect(next.choices.map((c) => c.label)).toEqual(["再核一次", "先写下一章"]);
+    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍", "先写下一章"]);
   });
 
   it("没核成（还在读）且 summary 缺失 → 兜底文案用结构化 pending 说「还在读」，不解析 failures 文字", async () => {
@@ -433,7 +446,7 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
       summary: "核了第 5 章：确定对不上 1 处。",
     }));
     const next = nextStepsOutput(events);
-    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿", "再细核一遍"]);
+    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿", "再核一遍"]);
   });
 });
 
@@ -453,7 +466,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
 
   it("没核成 → 「再核一次」直达 check_continuity 本章、「先写下一章」直达 generate_draft 下一章", async () => {
     const next = await runCheck(async () => ({ ok: false, chapter: 5, sure: [], maybe: [], pending: { done: 4, total: 57 } }));
-    expect(next.choices[0]).toMatchObject({ label: "再核一次", action: { toolName: "check_continuity", chapter: 5 } });
+    expect(next.choices[0]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5 } });
     expect(next.choices[0]!.action).not.toHaveProperty("fresh");
     expect(next.choices[1]).toMatchObject({ label: "先写下一章", action: { toolName: "generate_draft", chapter: 6 } });
   });
@@ -473,7 +486,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
 
   it("结果复用 → 「再细核一遍」直达 check_continuity 且 fresh=true（重新核，不是给上次结果）", async () => {
     const next = await runCheck(async () => ({ ok: true, chapter: 5, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }], maybe: [], failures: [], summary: "核了第 5 章：确定对不上 1 处。" }));
-    expect(next.choices[2]).toMatchObject({ label: "再细核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
+    expect(next.choices[2]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
   });
 
   it("出稿写好 → 「预览定稿」直达 commit_preview、「看核账结果」直达 check_continuity（复用核账记忆）；「我自己改」不带 action", async () => {
@@ -491,6 +504,55 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(next.choices[1]).toMatchObject({ label: "看核账结果", action: { toolName: "check_continuity", chapter: 2 } });
     expect(next.choices[2]).toMatchObject({ label: "我自己改" });
     expect(next.choices[2]).not.toHaveProperty("action");
+  });
+
+  it("出稿写好且写完核过账 → 回话只一句（字数），接着出核账卡（不再调模型），下一步按核账结果给", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const calls: string[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext: new RequestContext(),
+      executeTool: async (name) => {
+        calls.push(name);
+        return name === "generate_draft"
+          ? {
+            ok: true,
+            draftTitle: "存根",
+            draftBody: "正文",
+            draftLength: { actualLength: 2300, lowerBound: 2400, lengthStatus: "below_lower_bound" },
+            qualityPipeline: { continuity: { checked: true } },
+            summary: "本章章纲：一大段。第 2 章已生成正文并写入工作稿……",
+          }
+          : { ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [{}], failures: [], headline: "这一章和前文都没改过，结果同上次。" };
+      },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(calls).toEqual(["generate_draft", "check_continuity"]);
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处、可能 1 处，画在稿纸上了。");
+    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
+    expect(next.choices.map((choice) => choice.label)).toEqual(["我自己改", "预览定稿"]);
+  });
+
+  it("出稿写好但写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const calls: string[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext: new RequestContext(),
+      executeTool: async (name) => {
+        calls.push(name);
+        return { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lowerBound: 2400, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: false } }, summary: "长摘要" };
+      },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(calls).toEqual(["generate_draft"]);
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 2 章写好了，3000 字。\n写完那遍核账没跑成，可以点「核账」再核。");
   });
 
   it("出稿没写成 → 「再写一次」直达 generate_draft 本章", async () => {
@@ -684,5 +746,111 @@ describe("「内容审阅」「硬伤检查」「撤销上一步」按钮结构�
   it("没东西可撤 → 如实说没有", async () => {
     const events = await run({ toolName: "undo" }, async () => ({ ok: true, undone: false }));
     expect(events.at(-1)!.data.text).toBe("没有可以撤销的改动。");
+  });
+});
+
+describe("核账「改这处」结构化动作（revise_draft，重构 P6：按钮直接改，不经模型）", () => {
+  const fix = (targetText: string) => ({ targetText, revisionGoal: "和第 10 章「八几年就没了」对上" });
+  const run = async (fixes: readonly { targetText: string; revisionGoal: string }[], executeTool: UserActionToolExecutor) => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "revise_draft", chapter: 11, fixes },
+      requestContext: new RequestContext(),
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    return events;
+  };
+  const textOf = (events: readonly { event: string; data: Record<string, unknown> }[]) =>
+    events.filter((e) => e.event === "text-delta").map((e) => String(e.data.text)).join("");
+
+  it("解析：要章号和每处原句 + 目标；空的 / 超量 / 缺字段都按非法处理", () => {
+    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [{ targetText: " 甲 ", revisionGoal: " 乙 " }] })).toEqual({
+      kind: "action",
+      action: { toolName: "revise_draft", chapter: 11, fixes: [{ targetText: "甲", revisionGoal: "乙" }] },
+    });
+    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: [{ targetText: "甲" }] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "revise_draft", fixes: [fix("甲")] }).kind).toBe("invalid");
+    expect(parseUserAction({ toolName: "revise_draft", chapter: 11, fixes: Array.from({ length: 13 }, () => fix("甲")) }).kind).toBe("invalid");
+  });
+
+  it("逐处直接调 revise_draft（只改那一段）；都改成 → 一句「改好了」，推荐再核一遍", async () => {
+    const calls: unknown[] = [];
+    const events = await run([fix("甲"), fix("乙")], async (name, input) => {
+      calls.push({ name, input });
+      return { ok: true, applied: true, summary: "改好了" };
+    });
+    expect(calls).toEqual([
+      { name: "revise_draft", input: { chapter: 11, targetText: "甲", revisionGoal: fix("甲").revisionGoal, constraints: ["只改这一段，别的不动"] } },
+      { name: "revise_draft", input: { chapter: 11, targetText: "乙", revisionGoal: fix("乙").revisionGoal, constraints: ["只改这一段，别的不动"] } },
+    ]);
+    expect(textOf(events)).toBe("改好了 2 处（可撤销）。");
+    const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean; action?: unknown }[] };
+    expect(next.choices[0]).toMatchObject({ label: "再核一遍", recommended: true, action: { toolName: "check_continuity", chapter: 11 } });
+  });
+
+  it("没改成（原句没找到 / 报错）照实说原因，给「让 AI 改」，不说改好了", async () => {
+    const events = await run([fix("甲")], async () => ({ ok: false, applied: false, summary: "原文在稿里没找到" }));
+    expect(textOf(events)).toBe("这一处没改成：原文在稿里没找到");
+    const next = events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string }[] };
+    expect(next.question).toBe("没改成，接下来？");
+    expect(next.choices[0]!.label).toBe("让 AI 改");
+    expect(next.choices[0]!.intent).toContain("「甲」");
+    expect(next.choices.map((c) => c.label)).not.toContain("再核一遍");
+  });
+
+  it("一处成一处抛错：两样都如实说", async () => {
+    let n = 0;
+    const events = await run([fix("甲"), fix("乙")], async () => {
+      n += 1;
+      if (n === 2) throw new Error("模型没回");
+      return { ok: true, applied: true };
+    });
+    expect(events.some((e) => e.event === "tool-error")).toBe(true);
+    expect(textOf(events)).toBe("改好了 1 处（可撤销）。1 处没改成：Error: 模型没回");
+  });
+});
+
+describe("「给我几种走法」结构化动作（brainstorm_chapter，重构 P6 头脑风暴）", () => {
+  it("解析：想法去空白、截长；已给过的走法名去空、去重；缺章号不收", () => {
+    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "  让老周开口 ", avoid: [" 老周开口 ", "老周开口", "", 3, "夜里上楼"] })).toEqual({
+      kind: "action",
+      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口", avoid: ["老周开口", "夜里上楼"] },
+    });
+    expect(parseUserAction({ toolName: "brainstorm_chapter", chapter: 12, idea: "   " })).toEqual({
+      kind: "action",
+      action: { toolName: "brainstorm_chapter", chapter: 12 },
+    });
+    expect(parseUserAction({ toolName: "brainstorm_chapter" })).toEqual({ kind: "invalid", reason: "缺少有效章号。" });
+  });
+
+  const run = async (executeTool: UserActionToolExecutor) => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口" },
+      requestContext: new RequestContext(),
+      executeTool,
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+    return events;
+  };
+
+  it("直接跑只读工具（带想法），回话一句工具 summary；不追加下一步选项", async () => {
+    const executeTool = vi.fn(async () => ({ ok: true, chapter: 12, options: [], summary: "第 12 章想了 3 种走法，在稿纸上挑。" }));
+    const events = await run(executeTool);
+    expect(executeTool).toHaveBeenCalledWith("brainstorm_chapter", { chapter: 12, idea: "让老周开口" }, expect.anything());
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+    expect(events.at(-1)!.data.text).toBe("第 12 章想了 3 种走法，在稿纸上挑。");
+  });
+
+  it("工具抛错 → tool-error + 如实说没想出来", async () => {
+    const events = await run(async () => { throw new Error("服务商超时"); });
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-error", "text-delta"]);
+    expect(String(events.at(-1)!.data.text)).toContain("第 12 章的走法没想出来：服务商超时");
   });
 });

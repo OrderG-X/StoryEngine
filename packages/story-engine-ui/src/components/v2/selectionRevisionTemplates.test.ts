@@ -19,7 +19,7 @@ describe("selection revision templates", () => {
 
   it("labels match the spec's floating-toolbar buttons", () => {
     const labels = VISIBLE_SELECTION_REVISION_TEMPLATES.map((item) => item.label);
-    expect(labels).toEqual(["润色", "改写", "去AI味", "扩写", "缩写", "续写"]);
+    expect(labels).toEqual(["润色", "改写", "去机器腔", "扩写", "缩写", "续写"]);
   });
 
   it("custom「自己说」存在、标 hidden、不进可见预设；extraGoal 拼进改写目标", () => {

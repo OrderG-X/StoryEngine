@@ -134,6 +134,12 @@ export function sidebarFromBook(book: BookSummary): SidebarData {
  * 按它重建的章节表全丢了「有稿 / 已定稿」——下一章空稿纸冒出新书引导、刚定稿的章被当成没定稿。
  * 新表自己带了标记就用新的；刚定稿的那章直接标已定稿。
  */
+/** 章名不是空、也不是概览补的占位「第N章」。 */
+function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
+  const title = chapter.title?.trim() ?? "";
+  return title !== "" && title !== `第${chapter.chapterNumber}章`;
+}
+
 export function carryChapterFileFlags(
   next: readonly ChapterNavItem[],
   previous: readonly ChapterNavItem[],
@@ -144,11 +150,32 @@ export function carryChapterFileFlags(
     const old = before.get(chapter.chapterNumber);
     return {
       ...chapter,
+      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名就沿用旧表的。
+      ...(!hasRealTitle(chapter) && old && hasRealTitle(old) ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
       ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),
     };
   });
+}
+
+/**
+ * 整表刷新时别丢章（重构 P6 真机：第 12 章出完稿，章节栏从 12 章缩成 9 章）：工具回传的故事概览不带章节文件清单，
+ * 只带最近几条时间线事件，按它重建的章节表只剩最近几章。概览带了清单（开书、撤销）就以它为准；
+ * 没带时，新表里没有的章照旧留着（还没写的占位章不留；旧表里的「当前章」按它有没有定稿改回已定稿 / 工作稿）。
+ */
+export function keepUnlistedChapters(
+  next: readonly ChapterNavItem[],
+  previous: readonly ChapterNavItem[],
+): readonly ChapterNavItem[] {
+  const listed = new Set(next.map((chapter) => chapter.chapterNumber));
+  const kept = previous
+    .filter((chapter) => !listed.has(chapter.chapterNumber) && chapter.status !== "planned")
+    .map((chapter): ChapterNavItem => chapter.status === "current"
+      ? { ...chapter, status: chapter.hasCommittedChapter ? "committed" : "draft" }
+      : chapter);
+  if (kept.length === 0) return next;
+  return [...next, ...kept].sort((a, b) => a.chapterNumber - b.chapterNumber);
 }
 
 export function updateChapterListTitle(chapters: readonly ChapterNavItem[], chapterNumber: number, title: string): readonly ChapterNavItem[] {

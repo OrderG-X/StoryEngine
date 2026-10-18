@@ -19,14 +19,18 @@ export function resolveDirectWriteChapterGoal(explicit: string, fallback: string
  * 结构化动作（按钮、「下一步」选项）点击后落在对话里的「你：…」一句话——动作本身经 body.action 直达服务端，
  * 这句只是对话里给作者看的回显。
  */
-export function userActionChoiceText(action: import("../api/agentChatClient.js").AgentUserAction): string {
+export function userActionChoiceText(
+  action: import("../api/agentChatClient.js").AgentUserAction,
+  /** 「写这一章」照作者挑中的走法写时，那种走法的名字（回显里写明照哪种写）。 */
+  directionTitle?: string,
+): string {
   switch (action.toolName) {
     case "commit_preview":
       return `预览第 ${action.chapter} 章的定稿改动`;
     case "check_continuity":
-      return action.fresh ? `再细核一遍：重新核第 ${action.chapter} 章的账` : `重新核第 ${action.chapter} 章的账`;
+      return action.fresh ? `再核一遍第 ${action.chapter} 章的账` : `核第 ${action.chapter} 章的账`;
     case "generate_draft":
-      return `写第 ${action.chapter} 章的正文`;
+      return directionTitle ? `照「${directionTitle}」写第 ${action.chapter} 章的正文` : `写第 ${action.chapter} 章的正文`;
     case "commit_apply":
       return `确认定稿第 ${action.chapter} 章`;
     case "prune_snapshots":
@@ -41,5 +45,13 @@ export function userActionChoiceText(action: import("../api/agentChatClient.js")
       return `对第 ${action.chapter} 章做硬伤检查`;
     case "undo":
       return "撤销上一步";
+    case "revise_draft":
+      return action.fixes.length === 1
+        ? `改第 ${action.chapter} 章这一处：「${action.fixes[0]!.targetText}」`
+        : `改掉第 ${action.chapter} 章这 ${action.fixes.length} 处`;
+    case "brainstorm_chapter":
+      return action.avoid?.length
+        ? `第 ${action.chapter} 章再来几种走法${action.idea ? `：${action.idea}` : ""}`
+        : `想想第 ${action.chapter} 章往哪走${action.idea ? `：${action.idea}` : ""}`;
   }
 }

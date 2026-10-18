@@ -26,12 +26,6 @@ function formatWords(totalWords: number): string {
   return `${totalWords.toLocaleString()} 字`;
 }
 
-const STATUS_PILL: Record<BookSummary["status"], { readonly label: string; readonly tone: string }> = {
-  草稿中: { label: "工作稿", tone: "warn" },
-  待确认: { label: "待定稿", tone: "warn" },
-  可继续下一章: { label: "已定稿", tone: "ok" },
-};
-
 function BookCover({ title, large = false }: { readonly title: string; readonly large?: boolean }) {
   return (
     <span className={`se-cover tone-${coverTone(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
@@ -116,7 +110,7 @@ export default function HomeLanding({
                 <div className="se-hero-last">
                   <span className="se-faint">上次写到</span>
                   <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle && !/^第\s*[0-9一二三四五六七八九十百零两]+\s*章$/u.test(lastBook.currentChapterTitle.trim()) ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
-                  <span className={`se-pill ${STATUS_PILL[lastBook.status]?.tone ?? ""}`}>{STATUS_PILL[lastBook.status]?.label ?? lastBook.status}</span>
+                  {/* 章节状态只在写作台显示（P6 第 6 步）：书架上这里原来的「已定稿」药丸按「有没有定稿过的章」算，最新一章还是工作稿时也说已定稿。 */}
                   <span className="se-faint">· {lastBook.updatedAt}</span>
                 </div>
                 <div className="se-hero-actions">

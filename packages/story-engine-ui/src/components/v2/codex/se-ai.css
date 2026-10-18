@@ -94,6 +94,46 @@
   .se-checker-reading-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
   .se-checker-reading-done{color:var(--faint);}
 
+  /* ── P6：头部一行放会话名（会话条并进头部）；顶卡「这一章还差什么」；输入框左边「更多」 ── */
+  .se-ai-head .codex-chat-session-bar{flex:1;min-width:0;padding:0;}
+  .se-ai-head .codex-session-name{color:var(--text);font-size:13px;font-weight:500;margin-left:-6px;}
+  .cssp-foot{display:flex;flex-wrap:wrap;gap:4px 12px;justify-content:space-between;margin-top:4px;padding:8px 6px 2px;border-top:1px solid var(--line);}
+  .se-todo-wrap{position:relative;margin:2px 12px 10px;display:flex;flex-direction:column;gap:6px;}
+  .se-todo-card{
+    display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;
+    background:var(--surface);border:1px solid var(--line);
+  }
+  .se-todo-card-h{font-size:14px;font-weight:600;color:var(--text);}
+  .se-todo-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:13px;}
+  .se-todo-steps li{display:grid;grid-template-columns:16px 34px minmax(0,1fr);align-items:baseline;gap:4px;color:var(--text);}
+  .se-todo-steps li.is-done{color:var(--muted);}
+  .se-todo-mark{color:var(--faint);}
+  .se-todo-steps li.is-done .se-todo-mark{color:var(--success);}
+  .se-todo-step-label{color:var(--faint);}
+  .se-todo-step-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-todo-step-text.is-attention{color:var(--danger);}
+  .se-todo-primary{
+    height:38px;border:0;border-radius:9px;background:var(--accent);color:var(--accent-ink);
+    font-size:14px;font-weight:500;cursor:pointer;
+  }
+  .se-todo-primary:hover:not(:disabled){background:var(--accent-hi);}
+  .se-todo-primary:disabled{opacity:.6;cursor:default;}
+  .se-todo-wrap .se-checker-reading{margin:0;padding:0 4px;}
+  .se-todo-more{position:relative;padding:0 4px;}
+  .se-todo-more-btn{border:0;background:none;padding:0;color:var(--faint);font-size:12px;cursor:pointer;}
+  .se-todo-more-btn:hover{color:var(--text);text-decoration:underline;}
+  .se-todo-more .se-inbox-pop{left:0;right:0;top:calc(100% + 4px);}
+  .cap-menu{position:relative;flex:none;align-self:flex-end;}
+  .cap-menu-btn{
+    height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;
+    color:var(--muted);font-size:12px;cursor:pointer;white-space:nowrap;
+  }
+  .cap-menu-btn:hover,.cap-menu-btn[aria-expanded="true"]{color:var(--text);border-color:var(--line-strong);background:var(--hover);}
+  .cap-panel.is-pop{
+    position:absolute;left:0;bottom:calc(100% + 8px);z-index:40;width:300px;margin:0;padding:10px;
+    background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
+  }
+
   /* ── 消息 ── */
   .ai-body{padding:16px 14px 8px;gap:14px;animation:none;}
   .msg{font-size:14px;line-height:1.7;}
@@ -259,6 +299,17 @@
   .cssp-btn:hover{color:var(--text);border-color:var(--line-strong);background:var(--hover);}
   .codex-budget-hint{font-size:12px;line-height:1.6;}
   .codex-budget-preview strong{color:var(--text);font-weight:600;}
+
+  /* 头脑风暴走法卡（重构 P6）：对话里只列名字，挑在稿纸上方 */
+  .se-dir-card{margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px;}
+  .se-dir-h{font-size:12px;font-weight:600;color:var(--muted);}
+  .se-dir-card ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;}
+  .se-dir-card li{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--text);}
+  .se-dir-card li em{font-style:normal;font-size:12px;color:var(--accent);}
+  .se-dir-card li small{font-size:12px;color:var(--danger);}
+  .se-dir-card li.is-dim{color:var(--faint);}
+  .se-dir-card li.is-dim small{color:var(--faint);}
+  .se-dir-f{margin-top:6px;font-size:12px;color:var(--faint);}
 
   /* 「正在思考」胶囊的锚点：零高度、贴在记忆条上方，胶囊往上浮进消息流底部的空当 */
   .se-ai-dock-anchor{position:relative;height:0;}

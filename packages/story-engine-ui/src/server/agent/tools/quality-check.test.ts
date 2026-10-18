@@ -177,7 +177,7 @@ describe("quality_check 防误报「正文为空/过短」（草稿落盘时序�
     await writeWorkspaceDraft(projectDir, 1, longDraft(1));
     const out = await buildQualityCheckToolOutput({ projectDir, chapter: 1, judge: passthroughJudge, delayMs: 0 });
     expect(out.passed).toBe(false);
-    expect(out.summary).toContain("还没有可质检的正文");
+    expect(out.summary).toContain("还没有可做硬伤检查的正文");
   });
 
   it("显式传入空 draftContent、但盘上有真稿 → 忽略空显式、读盘真稿质检（空串不被当成空稿）", async () => {

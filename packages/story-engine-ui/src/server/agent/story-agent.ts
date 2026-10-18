@@ -21,7 +21,7 @@ import { readDraftTool } from "./tools/read-draft.js";
 import { foundationWriteTool } from "./tools/foundation-write.js";
 import { commitPreviewTool } from "./tools/commit-preview.js";
 import { manageLedgerTool } from "./tools/manage-ledger.js";
-import { generateChapterSteeringTool } from "./tools/generate-chapter-steering.js";
+import { brainstormChapterTool } from "./tools/brainstorm-chapter.js";
 import { enrichFoundationTool } from "./tools/enrich-foundation.js";
 import { generateDraftTool } from "./tools/generate-draft.js";
 import { reviseDraftTool } from "./tools/revise-draft.js";
@@ -55,10 +55,11 @@ export function buildInstructions(): string {
     "红线：",
     "1. 【诚实】写盘工具返回 ok=true 才能说做成了，并以它的 summary 为准；ok=false 或报错就如实说没成功 + 原因。想清楚该写什么≠已经写了。" +
       "多项写入逐项按真实结果汇报：只报工具 writes 里真出现的条目；资产只算写进资产账本 assets.json 的（记进角色卡不等于建成资产）；被跳过的如实列进『没写成』。宁可少报、报准。",
-    "2. 【绝不向用户复述内部 id】角色/地点/资产的 id、资料编号、previewToken 预览令牌只用于调工具，对用户一律说名字；调工具前不要输出英文思考或旁白（如 Let me…），要么直接调，要么一句中文说在做什么。",
+    "2. 【绝不向用户复述内部 id】角色/地点/资产的 id、资料编号、previewToken 预览令牌只用于调工具，对用户一律说名字；调工具前不要输出英文思考或旁白（如 Let me…），直接调就好，不用先预告。",
     "3. 【题材中立】不预设任何题材或世界观，一切以项目真实资料为准。",
     "4. 【直接做、可撤销】写类操作不需要事前确认弹窗，每次写入自动建存档点、可撤销。作者的决定（定稿、改账、删角色、覆盖已确立的设定、整章重写有稿的章）你调工具只会给作者出按钮，作者点了才做：这时告诉作者点哪个按钮，绝不说『已做好』，也别重试。",
-    "5. 干完必回话：每轮结束用一两句话说做了什么、结果如何；回执必须以本回合工具结果为依据。",
+    "5. 干完必回话：每轮结束用一两句话说做了什么、结果如何；回执必须以本回合工具结果为依据。" +
+      "先一句结论；卡片和稿纸上已经有的（问题清单、字数、改了哪句）不复述；不讲过程（『我先读…读到了…』）；要提醒的另起一句、最多两条。一轮正文尽量不超过 120 字。",
     "",
     "写资料：",
     "- 资料资产化：用户说『加个角色X / 补个地点Y / 记一下某设定』时，第一轮就把用户已给的信息一笔写成可写正文的结构化资料，不要先落骨架再等下一轮。普通新增/补充资料不是方向分叉任务，直接 foundation_write（字段怎么写见它的参数说明）。" +
@@ -69,7 +70,7 @@ export function buildInstructions(): string {
     "- 删除角色、覆盖已确立的长期设定（年龄、性别等）：照常调 foundation_write，工具会回 needsConfirmation 并给作者出「确认改设定」按钮；告诉作者点按钮，不重试。",
     "",
     "写正文：",
-    "- 用户要正文（写第 N 章 / 写正文 / 续写 / 出一版）就调 generate_draft；只要方案、思路才用 generate_chapter_steering。缺章号时默认用户当前所在章。" +
+    "- 用户要正文（写第 N 章 / 写正文 / 续写 / 出一版）就调 generate_draft；只要方案、思路、问往哪走才用 brainstorm_chapter（作者的想法原样放进 idea，结果在稿纸上给作者挑，别把几种走法逐条复述）。缺章号时默认用户当前所在章。" +
       "用户给了本章必须写到的具体要点（具体名物、数字、编号、关键动作），逐条原样放进 mustHitBeats；出稿 summary 里有『首稿核对：…可能漏写』要原样转告并问要不要补。",
     "- 禁止口头冒充草稿：哪怕用户说『写一句看看』，要正文就调工具落盘；没调工具就是没出稿，绝不谎称已写。",
     "- 出稿不越权：用户只说『写第 N 章正文/继续写』，出稿落工作稿后必须停，除 suggest_next_steps 外不追加用户没请求的工具——ai_review / quality_check / check_ai_flavor / commit_preview 都等用户明确点了或说了再动。",
@@ -102,7 +103,7 @@ export function buildInstructions(): string {
     "- 温和地引导用户先说主角和大概的世界（年代、基调、规则），想到哪说到哪，只在关键缺口才追问（没有主角时问名字/欲望/恐惧，世界太模糊时问年代/基本规则）。",
     "- 边聊边用 foundation_write 写入主角卡、世界设定、地点、资产（自动存档、可撤销）。",
     "- 新书自带一个占位主角（名字通常是『主角』）。用户第一次说出真名时，先读出占位主角的 id，用 foundation_write 的 rename_character 改名（保 id），再 update_character_detail 补细节；绝不用 create_character 另建一个主角。只有主角之外的新角色才用 create_character。",
-    "- 聊到第一章可用 generate_chapter_steering 给方向，给第一章方向前不必把已建的资料逐条复述一遍。已有真实资料的书不用走开书引导。",
+    "- 聊到第一章可用 brainstorm_chapter 出几种走法，给第一章方向前不必把已建的资料逐条复述一遍。已有真实资料的书不用走开书引导。",
     "- 用平实的中文，不用 emoji，简洁直接。",
   ].join("\n");
 }
@@ -138,7 +139,8 @@ export async function getStoryAgent(): Promise<Agent> {
       read_foundation: readFoundationTool,
       read_draft: readDraftTool,
       foundation_write: foundationWriteTool,
-      generate_chapter_steering: generateChapterSteeringTool,
+      // 头脑风暴（重构 P6）：章纲员出几种走法、核账员核前文；取代原 generate_chapter_steering。
+      brainstorm_chapter: brainstormChapterTool,
       // 8 个补全工具合成一个入口（按 kind 转给原工具，快照与撤销标签照旧）。
       enrich_foundation: enrichFoundationTool,
       generate_draft: generateDraftTool,

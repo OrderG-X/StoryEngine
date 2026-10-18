@@ -406,8 +406,9 @@ export async function confirmChapterCommit(input: ConfirmInput): Promise<Confirm
   ticket.entries.forEach((entry, index) => {
     if (excluded.has(index)) return;
     if (entry.kind === "time" && day !== undefined && day >= 1) {
-      // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。
-      const { daysSincePrevious: _drop, ...rest } = entry;
+      // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。稿纸上只让作者填一个「第几天」、
+      // 写着「这一章改记为故事第 N 天」，所以记账员猜的「章内过了几天」一并去掉——不然作者改完还是「第 N～N+1 天」，改不掉（P6 第 7 步）。
+      const { daysSincePrevious: _drop, daysInChapter: _span, ...rest } = entry;
       entries.push({ ...rest, basis: "author", day, review: "author" } satisfies TimeInput);
       timeSet = true;
       return;

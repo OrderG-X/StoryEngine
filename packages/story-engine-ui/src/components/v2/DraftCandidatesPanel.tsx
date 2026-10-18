@@ -41,7 +41,7 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
             );
           })}
         </div>
-        <p className="se-v2-candidates-foot">候选还没落盘，关闭即丢弃；选用后写前自动快照，可在「操作历史」撤销。</p>
+        <p className="se-v2-candidates-foot">候选还没存，关掉就没了；选用前自动存档，可在「历史」里撤销。</p>
       </div>
     </div>
   );

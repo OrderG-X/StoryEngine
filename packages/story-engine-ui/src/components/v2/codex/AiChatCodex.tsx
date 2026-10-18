@@ -15,13 +15,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ToolStep, DraftReviewIssueView, ReaderCatchUpStatus } from "../../../api/types.js";
-import type { ChapterFlowStatus, ChapterMessage, MessageCard, WritingWorkspaceLayoutProps, AiFlavorViolation } from "../../../types.js";
+import type { ChapterMessage, MessageCard, WritingWorkspaceLayoutProps, AiFlavorViolation } from "../../../types.js";
 import { cardOf } from "../../../utils/messageCards.js";
 import { shouldSendOnEnterKey } from "../../../utils/imeEnterGuard.js";
 import { resolveToolStepLabel } from "../../../hooks/agentEventProjection.js";
 import { isBookCreationGreeting } from "../../../hooks/useProjectNavigation.js";
-import { buildTimelineModel, liveFlowFromMessage, type LiveFlow, type FlowPhaseKey } from "../agentTimelineModel.js";
-import { flowHint, primaryPermission, uiText } from "../v2Utils.js";
+import { buildTimelineModel } from "../agentTimelineModel.js";
+import { primaryPermission, uiText } from "../v2Utils.js";
 import { IconArrowUp, IconChevronRight, IconClose, IconCopy, IconSparkle, IconStop, IconUndo } from "./icons.js";
 import { useActiveModel } from "./useActiveModel.js";
 import { StepCardCollapsedByDefault } from "./StepCard.js";
@@ -30,15 +30,18 @@ import { parsePaletteCharacters } from "./CommandPalette.js";
 import { buildInboxTodos } from "./inboxTodos.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AgentErrorCard from "./AgentErrorCard.js";
-import { railActionsForFlow } from "./ChapterToolRail.js";
 import { ChatCapabilityBar, type CapabilityAction } from "./ChatCapabilityBar.js";
 import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
-import { saveContinuityDismissal } from "../../../api/continuityDismissalsClient.js";
+import { DirectionsCard } from "./Brainstorm.js";
+import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
+import { ChapterTodoCard } from "./ChapterTodoCard.js";
+import { useChapterProgress } from "../../../workspace/chapterProgress.js";
+import { parseTargetChapterWords } from "./WritingDeskCodex.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
@@ -47,6 +50,7 @@ import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
+import { chapterTurns } from "./chapterTurns.js";
 import {
   foldProcessSegments,
   isCompletedTurnForProcessFold,
@@ -66,11 +70,14 @@ import { QualityCheckCard } from "./QualityCheckCard.js";
 import { NameConsistencyCard } from "./NameConsistencyCard.js";
 import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
+import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp } from "../../../hooks/useReaderCatchUp.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
+  /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
+  readonly onOpenChapter?: (chapter: number) => void;
   readonly rightOpen: boolean;
   readonly onToggleRight: () => void;
   /** 拖动右栏左缘改宽（pointerdown 起拖，宽度状态由外层 codex 壳持有）。 */
@@ -208,6 +215,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const activeArchivedCount = useChatStore((s) => s.activeArchivedCount);
   // 对话直接订阅 chatStore（重构 P5），不再经 App 往下传。
   const messages = useChatStore((s) => s.messages);
+  // 这一章的对话（P6 第 6 步）：别的章的轮收成顶上一行，点开看全部；换章自动收回。
+  const viewingChapter = props.workspace.currentChapter.chapterNumber;
+  const [otherChaptersOpen, setOtherChaptersOpen] = useState(false);
+  useEffect(() => setOtherChaptersOpen(false), [viewingChapter]);
+  const chapterView = chapterTurns(messages.slice(activeArchivedCount), viewingChapter);
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
   const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
   // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
@@ -222,6 +234,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // R6.2：概况刷新带来的新初值盖过旧轮询结果（同一次打开里后来的补读也显示）；动作进行中（busy）也轮询，回包到了再按 reading 停。
   // 钩子必须在折叠早退之前调（规则不许条件钩子）；没在读时它只是安静地返回 null。
   const readerCatchUp = useReaderCatchUp(props.projectPath, props.overview?.readerCatchUp, workspaceBusy);
+  // 这一章还差什么（顶卡；和稿纸底下的工具条同源）。
+  const chapterProgressNow = useChapterProgress(parseTargetChapterWords(props.sidebar?.writingRules));
 
   // 智能跟随滚动：贴底才跟新内容滚，翻历史时不打扰。
   const historyRef = useRef<HTMLDivElement>(null);
@@ -285,11 +299,12 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     props.onSteeringDirectionChange("");
   };
 
+  // rightOpen：收起（含专注模式）再展开时对话区是新挂上的、停在最顶，贴底的照样滚回底。
   useEffect(() => {
     if (!atBottomRef.current) return;
     const el = historyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError]);
+  }, [messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError, props.rightOpen]);
 
   // 折叠态：整列只渲染一个极简竖条（点击展开）。codex.css 没有专用 class，用最小内联（codex 变量调色）。
   if (!props.rightOpen) {
@@ -310,6 +325,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
+  // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const busyCaption = busy
+    ? operationCaption(props.draftActionLoading)
+      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running")?.label)
+      ?? "AI 在忙…"
+    : null;
 
   return (
     <aside className="ai" aria-label="AI 写作助手">
@@ -325,9 +347,9 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           title="拖动调整宽度，双击还原"
         />
       ) : null}
-      {/* ── 头部：标题 + 清空 / 收起 ── */}
+      {/* ── 头部一行（P6）：会话名（点开历史，清空、记忆上限也在那里）+ 新建 + 模型 + 收起 ── */}
       <div className="ai-head se-ai-head">
-        <span className="se-ai-title"><IconSparkle size={17} />AI 助手</span>
+        <ChatSessionBar {...(canClear && props.onClearChat ? { onClear: props.onClearChat } : {})} />
         {activeModel ? (
           <button
             type="button"
@@ -339,69 +361,55 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             <span className="se-model-name">{activeModel.label}</span>
           </button>
         ) : null}
-        <span className="se-ai-head-actions">
-          {/* 聊天字号步进器已撤——统一并入「设置 · 显示」面板；缩放仍由 .codex-app 的 --codex-chat-zoom 生效。 */}
-          {canClear ? (
+        <button type="button" className="se-icon-btn sm" onClick={props.onToggleRight} title="收起" aria-label="收起 AI 助手">
+          <IconClose size={16} />
+        </button>
+      </div>
+
+      {/* ── 顶卡（P6）：这一章还差什么 + 一个主按钮；下面一行小字是编辑部读前文、不急的事 ── */}
+      <ChapterTodoCard
+        progress={chapterProgressNow}
+        busy={busy}
+        busyCaption={busyCaption}
+        onChapterButton={props.onChapterButton}
+        {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
+      >
+        <ReadersCatchUpNote status={readerCatchUp} />
+        {inboxTodos.length > 0 ? (
+          <div className="se-todo-more">
             <button
               type="button"
-              className="se-text-btn"
-              onClick={() => props.onClearChat?.()}
-              title="清空当前对话（不影响正文和资料，可撤销）"
+              className="se-todo-more-btn"
+              aria-expanded={inboxOpen}
+              onClick={() => setInboxOpen((open) => !open)}
             >
-              清空
+              另有 {inboxTodos.length} 件不急的事
             </button>
-          ) : null}
-          <button type="button" className="se-icon-btn sm" onClick={props.onToggleRight} title="收起" aria-label="收起 AI 助手">
-            <IconClose size={16} />
-          </button>
-        </span>
-      </div>
-
-      {/* ── 会话入口：当前会话名（可就地改名）+ 新建 + 历史列表 ── */}
-      <ChatSessionBar />
-
-      {/* ── 状态行：平时说本章到哪一步了；本回合有工具在跑时换成实时字幕（写到多少字 / 审到哪）。
-          2026-10-07 改版：撤掉四步大圆进度，省出一百多像素给对话。 ── */}
-      <div className="se-ai-ctx-row">
-        <AiStatusLine
-          flowStatus={flowStatus}
-          live={liveFlowFromMessage([...messages].reverse().find((m) => m.role === "assistant"))}
-          operation={operationCaption(props.draftActionLoading)}
-          busy={Boolean(props.chatLoading)}
-          runningStep={[...messages].reverse().find((m) => m.role === "assistant")?.toolSteps?.find((step) => step.status === "running")?.label ?? null}
-        />
-        <button
-          type="button"
-          className={`se-inbox-btn${inboxTodos.length ? "" : " is-clear"}`}
-          aria-expanded={inboxOpen}
-          aria-label={inboxTodos.length ? `待处理 ${inboxTodos.length} 项` : "没有待处理"}
-          onClick={() => setInboxOpen((open) => !open)}
-        >
-          {inboxTodos.length ? `待处理 ${inboxTodos.length}` : "没有待处理"}
-        </button>
-        {inboxOpen ? (
-          <div className="se-inbox-pop" role="dialog" aria-label="待处理">
-            <div className="se-inbox-h">
-              <span>{inboxTodos.length ? "这些不急，但别忘了" : "眼下没有要你留意的事"}</span>
-              <button type="button" className="se-icon-btn sm" aria-label="关闭" onClick={() => setInboxOpen(false)}><IconClose size={14} /></button>
-            </div>
-            {inboxTodos.map((todo) => (
-              <div key={todo.key} className="se-todo">
-                <div className="se-todo-tx">{todo.title}<span title={todo.sub}>{todo.sub}</span></div>
-                <button
-                  type="button"
-                  className="se-todo-act"
-                  disabled={!chatEnabled}
-                  title={`把「${todo.prefill}」放进输入框（不会自动发送）`}
-                  onClick={() => prefillComposer(todo.prefill)}
-                >
-                  {todo.action}
-                </button>
+            {inboxOpen ? (
+              <div className="se-inbox-pop" role="dialog" aria-label="不急的事">
+                <div className="se-inbox-h">
+                  <span>这些不急，但别忘了</span>
+                  <button type="button" className="se-icon-btn sm" aria-label="关闭" onClick={() => setInboxOpen(false)}><IconClose size={14} /></button>
+                </div>
+                {inboxTodos.map((todo) => (
+                  <div key={todo.key} className="se-todo">
+                    <div className="se-todo-tx">{todo.title}<span title={todo.sub}>{todo.sub}</span></div>
+                    <button
+                      type="button"
+                      className="se-todo-act"
+                      disabled={!chatEnabled}
+                      title={`把「${todo.prefill}」放进输入框（不会自动发送）`}
+                      onClick={() => prefillComposer(todo.prefill)}
+                    >
+                      {todo.action}
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : null}
           </div>
         ) : null}
-      </div>
+      </ChapterTodoCard>
 
       {/* ── 消息流（智能跟随滚动） ── */}
       {/* is-thinking：生成期间底部留白，避免「正在思考」浮层盖住正在流式输出的文字。 */}
@@ -433,7 +441,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
             「清理早先消息」后消息仍在、展开后同 N 条渲染两遍（2026-09-15 审计 P1-2） */}
+        {chapterView.hiddenTurns > 0 ? (
+          <button type="button" className="codex-archived-fold se-other-chapters" aria-expanded={otherChaptersOpen} onClick={() => setOtherChaptersOpen((v) => !v)}>
+            {otherChaptersOpen ? "收起别的章的对话" : `别的章的对话 ${chapterView.hiddenTurns} 轮 · 点开`}
+          </button>
+        ) : null}
         {messages.slice(activeArchivedCount).map((message, index, all) => {
+          if (!otherChaptersOpen && chapterView.hidden.has(message.id)) return null;
           const isLatestAssistant = message.role === "assistant"
             && !all.slice(index + 1).some((m) => m.role === "assistant");
           const isLiveAssistant = Boolean(props.chatLoading) && isLatestAssistant;
@@ -454,6 +468,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             aiFlavorAwaitingApply={props.aiFlavorPending?.messageId === message.id && Boolean(props.activeRevisionPreview)}
             batchPendingForThisCard={props.aiFlavorBatchPending === message.id}
             onSendMessage={props.onSendMessage}
+            onSendUserAction={props.onSendUserAction}
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={message.id === confirmablePreviewId}
             projectPath={props.projectPath ?? null}
@@ -481,7 +496,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
 
         {props.steeringError ? <NoticeCard title={workflowErrorTitle(flowStatus)} text={props.steeringError} danger /> : null}
         {props.chatError ? <NoticeCard title="章节对话失败" text={props.chatError} danger /> : null}
-        {props.steeringLoading ? <NoticeCard title="正在整理本章方案" text="正在读取故事状态，并整理本章写作方案。" /> : null}
+        {props.steeringLoading ? <NoticeCard title="正在拟章纲" text="正在读前文，拟这一章的章纲。" /> : null}
       </div>
 
       {/* ── 下一步：AI 带路选项 ── 点选项=给 agent 发一句意图（对话里留「你：…」、再由 agent 接着做）；
@@ -506,16 +521,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       </div>
       <ChatContextMeter />
 
-      {/* ── 编辑部在读前文进度（R4.3）：开书概况带初值 + 在读期间 5 秒轻量轮询，全读完这行消失 ── */}
-      <ReadersCatchUpNote status={readerCatchUp} />
+      {/* ── 不在写作台（设定本 / 历史）时，跟当前页有关的能力照旧给一排 ── */}
+      {props.contextActions ? (
+        <ChatCapabilityBar onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} leading={props.contextActions} leadingOnly />
+      ) : null}
 
-      {/* ── 能力快捷条：补全资料 + 整理的散能力入口（写作流程那几个在上方 ChapterToolRail） ── */}
-      <ChatCapabilityBar onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} leading={props.contextActions ?? railActionsForFlow(flowStatus)} leadingOnly={Boolean(props.contextActions) || flowStatus === "idle" || flowStatus === "steering_ready"} />
-
-      {/* ── 建议动作条（A-6）：回合级动作的统一入口——此前这些 suggestedActions 在 codex 壳里零渲染，
-          作者只能照文字重打指令。点击走既有 handleSuggestedAction（发消息给 agent / 调既有工具路），
-          不是绕过对话的直连引擎按钮。 ── */}
-      {railActions.length > 0 && props.onSuggestedAction ? (
+      {/* ── 建议动作条（A-6）：和「下一步」合成一条——有下一步选项就只出它，没有才出建议动作。 ── */}
+      {railActions.length > 0 && props.onSuggestedAction && !(nextStep && props.onSendMessage) ? (
         <div className="suggest" aria-label="建议动作">
           {railActions.map((action) => (
             <button
@@ -554,6 +566,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           </div>
         ) : null}
         <div className="composer" style={{ alignItems: "flex-end" }}>
+          {/* 其余能力（内容审阅、检查机器腔、补资料、整理……）收进输入框左边的「更多」（P6：不再单占一条）。 */}
+          {!props.contextActions ? (
+            <ChatCapabilityBar variant="menu" onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} />
+          ) : null}
           <textarea
             ref={composerRef}
             className="ai-composer-input"
@@ -662,17 +678,6 @@ const composerInputStyle: React.CSSProperties = {
   fontFamily: "inherit",
 };
 
-// ─────────────────────────── 四步进度 ───────────────────────────
-
-type FlowStep = { readonly key: FlowPhaseKey; readonly icon: string; readonly label: string; readonly desc: string };
-
-const FLOW_STEPS: readonly FlowStep[] = [
-  { key: "understand", icon: "✓", label: "构思", desc: "想这一章往哪走：写什么、怎么转折。直接跟 AI 聊方向就行。" },
-  { key: "draft", icon: "✎", label: "写稿", desc: "把方向写成工作稿——还没定稿，随便改。" },
-  { key: "polish", icon: "◈", label: "检查", desc: "检查逻辑和前后穿帮，也可以做内容审阅，有问题再修改。" },
-  { key: "commit", icon: "↻", label: "定稿", desc: "确认这章为定稿，更新人物、伏笔等故事资料，让下一章接得上。"},
-];
-
 /** 点「审校问题·改这处」→ 拼一句给 agent 的改写意图（agent 据纪律 5.5 先 read_draft 定位逐字原文再 revise）。 */
 function buildReviseIntent(issue: DraftReviewIssueView): string {
   const trimDot = (s: string) => s.replace(/[。.]+\s*$/u, ""); // 去段尾句号，免与拼接的「。」叠成双句号
@@ -682,54 +687,13 @@ function buildReviseIntent(issue: DraftReviewIssueView): string {
   return `${parts.join("。")}。`;
 }
 
-/** 把一行落地物压成单行短摘要（去多余空白、超长截断）。 */
-function oneLine(text: string, max: number): string {
-  const t = text.replace(/\s+/gu, " ").trim();
-  return t.length > max ? `${t.slice(0, max)}…` : t;
-}
-
-/** 实时态字幕：有步骤在跑 → 「正在审校…」；否则显示最靠后已动步骤的落地物（写稿字数 / 入库变更清单等）。 */
-function liveCaption(live: LiveFlow | null): { readonly text: string; readonly running: boolean } | null {
-  if (!live) return null;
-  const running = FLOW_STEPS.find((s) => live[s.key].status === "running");
-  if (running) return { text: `正在${running.label}…`, running: true };
-  // 「停止」收尾后（残留 running 已结算成 stopped）：常驻如实字幕，直到下一回合覆盖。
-  if (FLOW_STEPS.some((s) => live[s.key].status === "stopped")) {
-    return { text: "已停止 · 已写出的内容保留", running: false };
-  }
-  const acted = FLOW_STEPS.filter((s) => live[s.key].status === "done" || live[s.key].status === "failed");
-  const last = acted[acted.length - 1];
-  if (!last) return null;
-  const lp = live[last.key];
-  if (lp.status === "failed") return { text: `${last.label}没成功，可重试`, running: false };
-  return { text: lp.detail ? oneLine(lp.detail, 52) : `${last.label}完成`, running: false };
-}
-
 /** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——预览定稿时说「正在定稿」会吓人）。 */
 const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
   "定稿影响预览": "生成定稿预览",
 };
 
-function AiStatusLine({ flowStatus, live, operation, busy = false, runningStep = null }: {
-  readonly flowStatus: ChapterFlowStatus;
-  readonly live: LiveFlow | null;
-  /** 不走对话的操作（审稿/质检/修改方案…）进行中时的一句话。 */
-  readonly operation?: string | null;
-  /** AI 这一轮还在跑（在想、还没调工具）：别还挂着「本章已就绪」这类静态提示。 */
-  readonly busy?: boolean;
-  /** 本回合正在跑的工具步骤名（如「生成正文」「定稿影响预览」）。 */
-  readonly runningStep?: string | null;
-}) {
-  const caption = liveCaption(live);
-  const running = Boolean(caption?.running) || Boolean(operation) || busy;
-  const stepText = runningStep ? `正在${RUNNING_STEP_WORDS[runningStep] ?? runningStep}…` : null;
-  const text = operation ?? (busy ? stepText ?? (caption?.running ? caption.text : "AI 正在处理…") : (caption?.running ? caption.text : flowHint(flowStatus)));
-  return (
-    <div className={`se-ai-ctx${running ? " is-running" : ""}`} role="status" aria-live="polite">
-      <span className="se-ai-ctx-dot" aria-hidden="true" />
-      <span className="se-ai-ctx-text" title={text}>{text}</span>
-    </div>
-  );
+function runningStepCaption(step: string | undefined): string | null {
+  return step ? `正在${RUNNING_STEP_WORDS[step] ?? step}…` : null;
 }
 
 // ─────────────────────────── 消息气泡 ───────────────────────────
@@ -745,6 +709,7 @@ function MessageBubbles({
   aiFlavorAwaitingApply = false,
   batchPendingForThisCard = false,
   onSendMessage,
+  onSendUserAction,
   onSuggestedAction,
   commitConfirmable = false,
   onPrefillComposer,
@@ -765,6 +730,8 @@ function MessageBubbles({
   readonly batchPendingForThisCard?: boolean;
   /** 点「审校问题」卡的「改这处」=给 agent 发一句改写意图（chat 驱动）。 */
   readonly onSendMessage?: (content: string) => void;
+  /** 结构化动作直达（核账「改这处」按钮直接改，不经模型）。 */
+  readonly onSendUserAction?: (action: AgentUserAction) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
   readonly commitConfirmable?: boolean;
@@ -825,14 +792,6 @@ function MessageBubbles({
   const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
   const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
   const commitPreview = cardOf(message, "commit-preview")?.preview;
-  const confirmCommit = commitPreview && commitConfirmable && onSuggestedAction
-    ? (excluded: readonly string[] = [], dayOverride?: number) => onSuggestedAction(commitConfirmAction({
-      chapter: commitPreview.chapter,
-      ...(commitPreview.previewToken ? { previewToken: commitPreview.previewToken } : {}),
-      ...(excluded.length > 0 ? { excluded } : {}),
-      ...(dayOverride !== undefined ? { dayOverride } : {}),
-    }))
-    : undefined;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
   const hasAnything = message.content.trim().length > 0
     || toolSteps.length > 0
@@ -899,8 +858,10 @@ function MessageBubbles({
           <ContinuityCheckCard
             key={card.type}
             check={card.check}
+            dismissed={card.dismissed ?? []}
             onRevise={onSendMessage}
-            onDismiss={projectPath ? (item, undo) => saveContinuityDismissal(projectPath, { chapter: card.check.chapter, ...item }, undo) : undefined}
+            onFixAction={onSendUserAction}
+            onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}
           />
         );
       case "quality":
@@ -912,9 +873,8 @@ function MessageBubbles({
           <CommitPreviewCard
             key={card.type}
             preview={card.preview}
-            onConfirm={confirmCommit}
-            confirmDisabled={chatLoading}
-            onDecline={confirmCommit && onPrefillComposer ? () => onPrefillComposer("先不定稿，") : undefined}
+            confirmable={commitConfirmable}
+            onOpen={() => openCommitSheet(message.id)}
           />
         );
       case "name-drift":
@@ -933,6 +893,9 @@ function MessageBubbles({
             undoDisabled={chatLoading}
           />
         );
+      case "directions":
+        // 头脑风暴走法卡：对话里只列名字，挑在稿纸上方（BrainstormPanel）。
+        return <DirectionsCard key={card.type} messageId={message.id} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
       case "next-steps":
         // 「下一步」选项在 composer 上方渲染（lastAssistantNextStepPrompt），气泡内不重复。
         return null;
@@ -942,7 +905,7 @@ function MessageBubbles({
   };
 
   return (
-    <div className="msg msg-ai">
+    <div className="msg msg-ai" data-message-id={message.id}>
       {/* R4：服务端状态说明（如历史窗口被裁剪）照实展示，不静默吞掉；不进助手正文。 */}
       {statusNotes?.length ? (
         <div className="msg-status-notes">
@@ -1053,6 +1016,7 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "ai-flavor",
   "draft-review",
   "continuity",
+  "directions",
   "quality",
   "commit-preview",
   "name-drift",
@@ -1224,7 +1188,7 @@ function SteeringDraftCard({ draft }: { readonly draft: NonNullable<WritingWorks
   return (
     <div style={surfaceCardStyle}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>本章方案</span>
+        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>章纲</span>
         <strong style={{ color: "var(--muted)", fontSize: 11.5 }}>{draft.suggestions.length} 条建议 · 只读预览</strong>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

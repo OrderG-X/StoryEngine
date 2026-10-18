@@ -140,7 +140,7 @@ describe("chatRenderShared", () => {
     });
 
     it("idle 状态返回正确标题", () => {
-      expect(workflowErrorTitle("idle")).toBe("本章方案整理失败");
+      expect(workflowErrorTitle("idle")).toBe("章纲没拟成");
     });
 
     it("commit_preview_ready 状态返回正确标题", () => {

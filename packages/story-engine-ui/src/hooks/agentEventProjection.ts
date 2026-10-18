@@ -21,7 +21,7 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
@@ -77,6 +77,7 @@ export interface AgentToolResultOutput {
   readonly qualityReport?: QualityCardReport;
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ContinuityCheckData;
+  readonly brainstorm?: BrainstormCardData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
    *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -144,12 +145,12 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   },
   read_chapters_overview: { stepLabel: "读取章节概览", card: null },
   read_timeline: { stepLabel: "读取时间线", card: null },
-  read_foundation: { stepLabel: "查看故事资料", card: null },
+  read_foundation: { stepLabel: "查设定本", card: null },
   read_draft: { stepLabel: "读取工作稿原文", card: null },
   // 写资料
   foundation_write: {
-    stepLabel: "更新故事资料",
-    card: { kind: "foundation", agentName: "foundationAgent", title: "更新故事资料" },
+    stepLabel: "改设定本",
+    card: { kind: "foundation", agentName: "foundationAgent", title: "改设定本" },
   },
   // 做厚资料簇
   generate_worldbuilding: { stepLabel: "补全世界观", card: null },
@@ -161,13 +162,14 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   generate_writing_rules_enrichment: { stepLabel: "重新整理写作规则", card: null },
   generate_alias_table: { stepLabel: "补全别名表", card: null },
   // 2026-10-10 对话 AI 瘦身：上面 8 个合成 enrich_foundation、下面 4 个线索工具合成 manage_threads（原名保留给老会话回放）
-  enrich_foundation: { stepLabel: "补全资料", card: null },
+  enrich_foundation: { stepLabel: "补全设定本", card: null },
   manage_threads: { stepLabel: "管理线索", card: null },
   // 2026-10-12 编辑部 R3b 瘦身：manage_ledger（硬事实+线索）、manage_snapshots（撤销+裁剪）二合一入口
   manage_ledger: { stepLabel: "改账", card: null },
   manage_snapshots: { stepLabel: "管理存档", card: null },
   // 正文簇
-  generate_chapter_steering: { stepLabel: "生成章节方向", card: null },
+  generate_chapter_steering: { stepLabel: "拟章纲", card: null },
+  brainstorm_chapter: { stepLabel: "想走法", card: null },
   generate_draft: { stepLabel: "生成正文", card: null },
   revise_draft: { stepLabel: "修改工作稿", card: null },
   // 审校簇
@@ -181,14 +183,14 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 线索与杂项簇
   edit_fact_ledger: { stepLabel: "记录故事事实", card: null },
   suggest_next_steps: { stepLabel: "建议下一步", card: null },
-  set_foreshadowing_importance: { stepLabel: "调整伏笔权重", card: null },
+  set_foreshadowing_importance: { stepLabel: "调整线索轻重", card: null },
   resolve_thread: { stepLabel: "收口单条线索", card: null },
   clean_legacy_threads: { stepLabel: "清理历史线索", card: null },
-  group_related_leads: { stepLabel: "归并相关线索", card: null },
+  group_related_leads: { stepLabel: "归并线索", card: null },
   manage_style_exemplars: { stepLabel: "管理文风样本", card: null },
   // 快照与外部簇
-  undo_last_change: { stepLabel: "撤销上一改动", card: null },
-  prune_snapshots: { stepLabel: "裁剪快照历史", card: null },
+  undo_last_change: { stepLabel: "撤销上一步", card: null },
+  prune_snapshots: { stepLabel: "裁剪操作历史", card: null },
   web_search: { stepLabel: "联网检索资料", card: null },
 };
 
@@ -204,6 +206,7 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "read_state_overview",
   "read_foundation",
   "generate_chapter_steering",
+  "brainstorm_chapter",
   "quality_check",
   "check_continuity",
   "ai_review",
@@ -342,6 +345,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 只留工具文字如实说。与上面 check_ai_flavor 的 ok!==false 守卫同款（双保险：客户端层已先拦一道）。
       if (event.toolName === "check_continuity" && event.output?.continuityCheck && event.output?.ok !== false) {
         return withCard(withEffects, { type: "continuity", check: event.output.continuityCheck });
+      }
+      // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
+      if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
+        return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
       }
       // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
       //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。

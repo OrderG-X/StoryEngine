@@ -104,15 +104,6 @@
   .se-bible .wb-hero{border-color:var(--line);background:var(--surface);}
   .se-bible .wb-hero::after{display:none;}
   .se-bible .wb-hero .one::before{color:var(--faint);opacity:.6;}
-  /* 线索条目右侧「问能否收口」：悬停才出，触屏常显 */
-  .se-bible .asset-item:has(.hook-ask){align-items:center;}
-  .se-bible .hook-ask{
-    flex:none;margin-left:auto;height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
-    color:var(--faint);font-size:12px;cursor:pointer;opacity:0;transition:opacity .12s;
-  }
-  .se-bible .asset-item:hover .hook-ask,.se-bible .hook-ask:focus-visible{opacity:1;}
-  .se-bible .hook-ask:hover{background:var(--hover);color:var(--text);}
-  @media (hover:none){.se-bible .hook-ask{opacity:1;}}
   /* 两列格子里单数个时，最后一个占满整行（不留半行空白） */
   .se-bible .voice .vc:last-child:nth-child(odd),
   .se-bible .spec .cell:last-child:nth-child(odd){grid-column:1/-1;}
@@ -169,6 +160,110 @@
   .op-history-empty,.op-history-error{margin-top:20px;padding:20px;border:1px dashed var(--line-strong);border-radius:12px;font-size:13px;color:var(--faint);text-align:center;}
   .op-history-error{color:var(--danger);border-color:rgba(224,137,124,.35);}
 
+
+  /* ═══ 伏笔看板（重构 P6，草图 ④）：四列，点卡看经过，点原句回稿纸 ═══ */
+  .read-inner.is-wide{max-width:none;}
+  .se-tb{display:flex;flex-direction:column;gap:14px;}
+  .se-tb-top{display:flex;flex-direction:column;gap:4px;}
+  .se-tb-h{margin:0;font-size:18px;font-weight:600;color:var(--text);}
+  .se-tb-sum{margin:0;font-size:13px;line-height:1.6;color:var(--muted);}
+  .se-tb-error{margin:0;font-size:13px;color:var(--danger);}
+  .se-tb-empty{margin:0;font-size:13px;color:var(--faint);}
+  .se-tb-retry,.se-tb-more{height:26px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:var(--accent);font-size:13px;cursor:pointer;}
+  .se-tb-retry:hover,.se-tb-more:hover{background:var(--accent-soft);}
+  /* 四列放不下时整块横向滚（看板惯例），每列至少 220px，卡里的按钮不挤成两行。 */
+  .se-tb-cols{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(220px,1fr);gap:12px;align-items:start;overflow-x:auto;padding-bottom:4px;}
+  .se-tb-col{min-width:0;padding:10px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);}
+  .se-tb-col-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 2px;font-size:13px;font-weight:600;color:var(--text);}
+  .se-tb-col-h b{font-weight:600;font-size:12px;color:var(--faint);}
+  .se-tb-col.is-stale .se-tb-col-h span{color:var(--warn);}
+  .se-tb-col.is-closed .se-tb-col-h span{color:var(--muted);}
+  .se-tb-col-hint{margin:2px 2px 0;font-size:12px;color:var(--faint);}
+  .se-tb-none{margin:10px 2px 2px;font-size:12px;color:var(--faint);}
+  .se-tb-list{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .se-tb-card{border:1px solid var(--line);border-radius:10px;background:var(--surface-2);overflow:hidden;}
+  .se-tb-card.is-major{box-shadow:inset 3px 0 0 var(--accent);}
+  .se-tb-card.is-open{border-color:var(--line-strong);}
+  .se-tb-col.is-closed .se-tb-card{background:transparent;}
+  .se-tb-head{
+    width:100%;display:flex;flex-direction:column;align-items:stretch;gap:4px;padding:9px 10px;
+    border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  }
+  .se-tb-head:hover{background:var(--hover);}
+  .se-tb-tags{display:flex;gap:6px;flex-wrap:wrap;}
+  .se-tb-type,.se-tb-weight{font-size:11px;line-height:18px;padding:0 6px;border-radius:5px;color:var(--faint);background:var(--sunken);}
+  .se-tb-weight.is-major{color:var(--accent);background:var(--accent-soft);}
+  .se-tb-title{font-size:14px;line-height:1.5;color:var(--text);overflow-wrap:anywhere;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .se-tb-card.is-open .se-tb-title{display:block;-webkit-line-clamp:unset;}
+  .se-tb-col.is-closed .se-tb-title{color:var(--muted);}
+  .se-tb-meta{font-size:12px;color:var(--faint);}
+  .se-tb-col.is-stale .se-tb-meta{color:var(--warn);}
+  .se-tb-body{padding:2px 10px 10px;border-top:1px solid var(--line-weak);}
+  .se-tb-touches{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .se-tb-touches li{display:flex;flex-direction:column;gap:2px;padding-left:10px;border-left:2px solid var(--line);}
+  .se-tb-when{font-size:12px;color:var(--faint);}
+  .se-tb-note{font-size:13px;line-height:1.55;color:var(--text);}
+  .se-tb-quote{
+    display:block;margin:0;padding:0;border:0;background:transparent;text-align:left;
+    font-size:13px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;
+  }
+  button.se-tb-quote{cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--line-strong);text-underline-offset:4px;}
+  button.se-tb-quote:hover{color:var(--accent);text-decoration-color:var(--accent);}
+  .se-tb-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;}
+  .se-tb-close{
+    height:28px;padding:0 10px;white-space:nowrap;border:1px solid var(--line-strong);border-radius:7px;background:transparent;
+    color:var(--text);font-size:12px;cursor:pointer;
+  }
+  .se-tb-close:hover{background:var(--hover);}
+  .se-tb-seg{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg);}
+  .se-tb-seg button{height:24px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12px;white-space:nowrap;cursor:pointer;}
+  .se-tb-seg button.on{background:var(--surface-2);color:var(--text);box-shadow:0 0 0 1px var(--line);cursor:default;}
+  .se-tb-close:disabled,.se-tb-seg button:disabled:not(.on){opacity:.45;cursor:default;}
+  .se-tb-more{margin-top:8px;}
+
+  /* ═══ 故事地图（重构 P6，草图 ③）：一行一章 × 一列一人，带故事日；点圆点回原句 ═══ */
+  .se-sm{display:flex;flex-direction:column;gap:12px;}
+  .se-sm-top{display:flex;flex-direction:column;gap:4px;}
+  .se-sm-h{margin:0;font-size:18px;font-weight:600;color:var(--text);}
+  .se-sm-sum{margin:0;font-size:13px;line-height:1.6;color:var(--muted);}
+  .se-sm-error{margin:0;font-size:13px;color:var(--danger);}
+  .se-sm-empty{margin:0;font-size:13px;color:var(--faint);}
+  .se-sm-link{height:26px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:var(--accent);font-size:13px;cursor:pointer;}
+  .se-sm-link:hover{background:var(--accent-soft);}
+  .se-sm-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;font-size:12px;color:var(--faint);}
+  .se-sm-legend span{display:inline-flex;align-items:center;gap:4px;}
+  .se-sm-legend .se-sm-dot{width:14px;height:14px;}
+  .se-sm-legend .se-sm-link{margin-left:auto;font-size:12px;}
+  /* 表头和章号列钉住：人多横着滚、章多竖着滚都看得见是谁、第几章。 */
+  .se-sm-scroll{overflow:auto;max-height:calc(100vh - 230px);border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);}
+  .se-sm-table{border-collapse:separate;border-spacing:0;min-width:100%;font-size:13px;color:var(--text);}
+  .se-sm-table th,.se-sm-table td{padding:7px 10px;border-bottom:1px solid var(--line-weak);text-align:left;vertical-align:top;background:var(--surface);}
+  .se-sm-table thead th{position:sticky;top:0;z-index:2;font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap;border-bottom-color:var(--line);}
+  .se-sm-table .se-sm-ch{position:sticky;left:0;z-index:1;min-width:104px;max-width:150px;border-right:1px solid var(--line-weak);}
+  .se-sm-table thead .se-sm-ch{z-index:3;}
+  .se-sm-table tbody th.se-sm-ch{display:table-cell;font-weight:400;}
+  .se-sm-chbtn{display:block;padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer;}
+  .se-sm-chbtn:hover{color:var(--accent);}
+  .se-sm-title{display:block;margin-top:2px;font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-sm-day{min-width:92px;white-space:nowrap;}
+  .se-sm-day small{display:block;margin-top:2px;font-size:12px;color:var(--faint);}
+  .se-sm-unsure{margin-left:4px;padding:0 4px;border-radius:4px;font-style:normal;font-size:11px;color:var(--warn);background:var(--warn-soft);cursor:help;}
+  .se-sm-what{min-width:200px;max-width:320px;}
+  .se-sm-what span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5;color:var(--muted);}
+  .se-sm-faint{color:var(--faint);}
+  .se-sm-table .se-sm-who{min-width:52px;max-width:84px;overflow:hidden;text-overflow:ellipsis;text-align:center;}
+  .se-sm-table .se-sm-cell{text-align:center;vertical-align:middle;padding:4px 6px;}
+  .se-sm-table tbody tr:hover > *{background:var(--surface-2);}
+  .se-sm-dot{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:transparent;vertical-align:middle;}
+  .se-sm-dot::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--accent);}
+  .se-sm-dot.is-pov::before{width:11px;height:11px;background:transparent;box-shadow:inset 0 0 0 2px var(--accent);}
+  button.se-sm-dot{cursor:pointer;}
+  button.se-sm-dot:hover{background:var(--accent-soft);}
+  button.se-sm-dot:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+  .se-sm-table .se-sm-gap td{padding:3px 10px;font-size:12px;color:var(--faint);background:var(--sunken);border-bottom-style:dashed;}
+  .se-sm-gap span{position:sticky;left:10px;}
+
   @media (max-width:1279px){
     /* 窄窗：分类导航改成内容上方的一排横向标签，把整宽让给资料内容（1024 下左 220 + 右 AI 只剩 400 来宽） */
     .codex.se-bible{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);}
@@ -179,5 +274,28 @@
     .se-bnav-note{display:none;}
     .se-bible .read,.op-history-body{padding:24px 24px 48px;}
     .op-history-confirm,.op-history-changes{margin-left:12px;}
+  }
+  /* ═══ 这章改了什么（重构 P6 第 6 步）：定稿记下的人、线索、事，点原句回稿纸 ═══ */
+  .se-cc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .se-cc-nav{display:flex;gap:4px;flex:none;}
+  .se-cc-nav .se-sm-link:disabled{color:var(--faint);cursor:default;}
+  .se-cc-block h3{margin:4px 0 8px;font-size:13px;font-weight:600;color:var(--muted);}
+  .se-cc-block h3 small{font-weight:400;color:var(--faint);}
+  .se-cc-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
+  .se-cc-list li{display:flex;flex-direction:column;gap:2px;padding-left:10px;border-left:2px solid var(--line);}
+  .se-cc-list li.is-later{opacity:.6;}
+  .se-cc-who{font-size:14px;font-weight:600;color:var(--text);}
+  .se-cc-text{font-size:14px;line-height:1.6;color:var(--text);overflow-wrap:anywhere;}
+  .se-cc-text b{font-weight:600;}
+  .se-cc-op{align-self:flex-start;font-size:12px;line-height:18px;padding:0 6px;border-radius:5px;background:var(--surface-2);color:var(--muted);}
+  .se-cc-op.is-open{color:var(--accent);background:var(--accent-soft);}
+  .se-cc-op.is-close{color:var(--success);}
+  .se-cc-was{font-size:12px;color:var(--faint);}
+  .se-cc-tag{margin-left:6px;font-style:normal;font-size:11px;color:var(--faint);}
+  .se-cc-tag.is-warn{color:var(--warn);}
+  .se-cc-more{margin-top:6px;padding-left:10px;}
+
+  @media (max-width:720px){
+    .se-tb-cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow-x:visible;}
   }
 }

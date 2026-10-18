@@ -70,7 +70,7 @@ export function buildTimelineModel(message: ChapterMessage): TimelineModel | nul
 function affectedLabelFromScopes(scopes?: readonly ("full" | "foundation")[]): string | undefined {
   if (!scopes?.length) return undefined;
   const parts: string[] = [];
-  if (scopes.includes("foundation")) parts.push("资料库");
+  if (scopes.includes("foundation")) parts.push("设定本");
   if (scopes.includes("full")) parts.push("正文·工作稿");
   return parts.join("·") || undefined;
 }
@@ -160,7 +160,7 @@ export function isRouteAuditDetailLine(line: string): boolean {
 export function agentDisplayLabel(card: ChapterAgentCard): string {
   const byAgentName: Record<string, string> = {
     chapterOrchestrator: "写作助手",
-    chapterSteeringAgent: "剧情方案",
+    chapterSteeringAgent: "章纲",
     draftWriterAgent: "正文生成",
     draftEditAgent: "工作稿修改",
     qualityAgent: "硬伤检查",
@@ -176,7 +176,7 @@ export function agentDisplayLabel(card: ChapterAgentCard): string {
   };
   const byKind: Record<ChapterAgentCard["kind"], string> = {
     orchestrator: "写作助手",
-    steering: "剧情方案",
+    steering: "章纲",
     draft: "工作稿处理",
     revision: "修订预览",
     review: "内容审阅",

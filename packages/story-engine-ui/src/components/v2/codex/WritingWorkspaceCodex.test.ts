@@ -13,25 +13,26 @@
 import { describe, it, expect } from "vitest";
 import { __CATS_FOR_TEST, buildChapterRows, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
-describe("B5-3 CATS 数组含「伏笔线索」与「时间线」类目", () => {
-  it("CATS 共 8 项", () => {
-    expect(__CATS_FOR_TEST).toHaveLength(8);
+describe("B5-3 CATS 数组含「伏笔线索」与「故事地图」类目（重构 P6 改名）", () => {
+  it("CATS 共 9 项，打头是「这章改了什么」（重构 P6 第 6 步）", () => {
+    expect(__CATS_FOR_TEST).toHaveLength(9);
+    expect(__CATS_FOR_TEST[0]).toMatchObject({ id: "changes", title: "这章改了什么" });
   });
 
   it("含 hooks 类目，glyph / title / sub 与规格一致", () => {
     const hooksCat = __CATS_FOR_TEST.find((c) => c.id === "hooks");
     expect(hooksCat).toBeDefined();
     expect(hooksCat?.glyph).toBe("❖");
-    expect(hooksCat?.title).toBe("伏笔线索");
-    expect(hooksCat?.sub).toBe("未回收 / 已回收");
+    expect(hooksCat?.title).toBe("伏笔与线索");
+    expect(hooksCat?.sub).toBe("刚埋下 · 在推进 · 停太久 · 已收口");
   });
 
   it("含 timeline 类目，glyph / title / sub 与规格一致", () => {
     const timelineCat = __CATS_FOR_TEST.find((c) => c.id === "timeline");
     expect(timelineCat).toBeDefined();
     expect(timelineCat?.glyph).toBe("▤");
-    expect(timelineCat?.title).toBe("时间线");
-    expect(timelineCat?.sub).toBe("近期 · 中段 · 远期");
+    expect(timelineCat?.title).toBe("故事地图");
+    expect(timelineCat?.sub).toBe("章 × 人物 · 故事日");
   });
 
   it("timeline 是 CATS 的最后一项（append 不插队）", () => {

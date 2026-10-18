@@ -64,6 +64,10 @@ describe("核账服务（核账员一路）", () => {
     expect(result.ok).toBe(true);
     expect(result.sure.map((item) => item.quote)).toEqual([AUNT.quote]);
     expect(result.summary).toContain("确定对不上 1 处");
+    expect(result.summary).toContain(AUNT.quote);
+    // 结论那句不带逐条清单（重构 P6：清单在核账卡和稿纸划线上）。
+    expect(result.headline).toContain("确定对不上 1 处");
+    expect(result.headline).not.toContain(AUNT.quote);
     expect(reader.calls).toEqual({ notes: 2, checks: 3, reviews: 1 });
     expect(await notesCount(dir)).toBe(2);
   });

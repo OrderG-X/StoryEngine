@@ -13,12 +13,12 @@ const CAPTIONS: Readonly<Record<string, string>> = {
   "generate-draft": "正在写稿",
   "reroll-candidates": "正在再写一版",
   "apply-candidate": "正在换用这一版",
-  "deai-fix-all": "正在去 AI 味",
+  "deai-fix-all": "正在去机器腔",
 };
 
 /** 选区改写按钮（selection-rewrite-<key>）对应的动作名。 */
 const SELECTION_ACTIONS: Readonly<Record<string, string>> = {
-  polish: "润色", rewrite: "改写", deai: "去 AI 味", expand: "扩写", condense: "缩写", continue: "续写", custom: "改写",
+  polish: "润色", rewrite: "改写", deai: "去机器腔", expand: "扩写", condense: "缩写", continue: "续写", custom: "改写",
 };
 
 export function operationCaption(loading: string | null | undefined): string | null {

@@ -8,7 +8,7 @@ import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverv
 import { paperStage, type DraftStoreState } from "../stores/draftStore.js";
 import { useBookStore } from "../stores/bookStore.js";
 import type { ChapterNavItem, ChapterWorkflowState } from "../types.js";
-import { carryChapterFileFlags, updateChapterListTitle } from "../utils/bookUtils.js";
+import { carryChapterFileFlags, keepUnlistedChapters, updateChapterListTitle } from "../utils/bookUtils.js";
 
 export interface ApplyOverviewOptions {
   /** 不传 = 保持当前流程态。 */
@@ -30,13 +30,16 @@ export function applyOverviewToWorkspace(overview: StateOverview, options: Apply
   const activeChapter = nextWorkspace.currentChapter.chapterNumber;
   const title = options.title?.trim() || undefined;
   const titled = title ? updateChapterListTitle(nextWorkspace.chapters, activeChapter, title) : nextWorkspace.chapters;
-  const chapters = carryChapterFileFlags(titled, store.workspace.chapters, flowStatus === "committed" ? activeChapter : undefined);
+  const carried = carryChapterFileFlags(titled, store.workspace.chapters, flowStatus === "committed" ? activeChapter : undefined);
+  // 概览没带章节文件清单（工具回传的多半不带）：只认得最近几章，别的章照旧留着。
+  const chapters = overview.uiChapterFiles ? carried : keepUnlistedChapters(carried, store.workspace.chapters);
   const activeFlags: ChapterNavItem | undefined = chapters.find((chapter) => chapter.chapterNumber === activeChapter);
   store.setWorkspace({
     ...nextWorkspace,
     currentChapter: {
       ...nextWorkspace.currentChapter,
-      ...(title ? { title } : {}),
+      // 概览没给当前章章名（占位「第N章」）而章节表里沿用了旧章名：顶栏面包屑也用它。
+      ...(title ? { title } : activeFlags?.title && activeFlags.title !== nextWorkspace.currentChapter.title ? { title: activeFlags.title } : {}),
       ...(activeFlags?.hasDraftFile !== undefined ? { hasDraftFile: activeFlags.hasDraftFile } : {}),
       ...(activeFlags?.hasCommittedChapter !== undefined ? { hasCommittedChapter: activeFlags.hasCommittedChapter } : {}),
     },

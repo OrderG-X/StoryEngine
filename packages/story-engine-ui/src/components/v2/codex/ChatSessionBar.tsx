@@ -38,7 +38,10 @@ function fmtBudget(n: number): string {
   return String(n);
 }
 
-export function ChatSessionBar() {
+export function ChatSessionBar({ onClear }: {
+  /** 清空当前对话（放在历史弹层里；不传就不出）。 */
+  readonly onClear?: () => void;
+} = {}) {
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const chatHistoryBudget = useChatStore((s) => s.chatHistoryBudget);
@@ -149,7 +152,7 @@ export function ChatSessionBar() {
     try { await api.saveChatHistoryBudget(projectPath, budget); } catch (err) {
       // 审计 Low：store 已乐观更新为新值，保存失败若只进 console，刷新后预算悄悄回旧值——如实提示。
       console.error("[ChatSessionBar] 保存上下文预算失败", err);
-      notify(`上下文预算保存失败（${err instanceof Error ? err.message : String(err)}），刷新后会回到旧值；请重试或检查设置文件。`);
+      notify(`对话记忆上限保存失败（${err instanceof Error ? err.message : String(err)}），刷新后会回到旧值；请重试或检查设置文件。`);
     }
   }
 
@@ -313,24 +316,10 @@ export function ChatSessionBar() {
         <IconHistory size={15} />
       </button>
 
-      {/* ⚙ 上下文设置（按钮上常驻显示当前预算，如 300k） */}
-      <button
-        className={`codex-session-action${budgetOpen ? " is-open" : ""}`}
-        onClick={() => {
-          const next = !budgetOpen;
-          setBudgetOpen(next);
-          setHistoryOpen(false);
-          if (next) setBudgetDraft(chatHistoryBudget);
-        }}
-        title="设置 AI 最多保留多少对话记忆"
-        aria-expanded={budgetOpen}
-      >
-        记忆<span className="csa-budget-tag">{fmtBudget(chatHistoryBudget)}</span>
-      </button>
       {budgetOpen && (
         <div className="codex-budget-pop">
           <div className="codex-budget-label">对话记忆上限</div>
-          <div className="codex-budget-hint">AI 一次能回看多少聊天。调大记得更久，但更慢更贵；一般用默认 96000，超长上下文的模型可调到 300000。故事资料不受影响。</div>
+          <div className="codex-budget-hint">AI 一次能回看多少聊天。调大记得更久，但更慢更贵；一般用默认 96000，超长上下文的模型可调到 300000。设定本不受影响。</div>
           <input
             className="codex-session-budget"
             type="number"
@@ -425,6 +414,26 @@ export function ChatSessionBar() {
               </li>
             ))}
           </ul>
+          <div className="cssp-foot">
+            {onClear ? (
+              <button
+                type="button"
+                className="cssp-btn cssp-btn-text"
+                onClick={() => { setHistoryOpen(false); onClear(); }}
+                title="清空当前对话（不影响正文和资料，可撤销）"
+              >
+                清空当前对话
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="cssp-btn cssp-btn-text"
+              onClick={() => { setHistoryOpen(false); setBudgetDraft(chatHistoryBudget); setBudgetOpen(true); }}
+              title="设置 AI 最多保留多少对话记忆"
+            >
+              对话记忆上限 {fmtBudget(chatHistoryBudget)}
+            </button>
+          </div>
         </div>
       )}
     </div>

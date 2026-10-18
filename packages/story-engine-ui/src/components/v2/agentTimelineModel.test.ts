@@ -164,7 +164,7 @@ describe("buildTimelineModel", () => {
     });
     expect(m?.canUndo).toBe(true);
     expect(m?.undoSnapshotId).toBe("a".repeat(40));
-    expect(m?.affectedLabel).toBe("资料库·正文·工作稿");
+    expect(m?.affectedLabel).toBe("设定本·正文·工作稿");
     expect(m?.totalElapsedMs).toBe(3200);
   });
 

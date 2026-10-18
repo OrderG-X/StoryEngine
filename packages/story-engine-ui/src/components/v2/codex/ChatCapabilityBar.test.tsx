@@ -38,7 +38,7 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     expect(text).toContain("检查机器腔");   // 写作组
     expect(text).toContain("定稿");         // 写作组
     expect(text).toContain("补全世界观");
-    expect(text).toContain("合并重复伏笔");
+    expect(text).toContain("归并线索");
     // 分组标题
     expect([...panel!.querySelectorAll(".cap-group-title")].map((e) => e.textContent)).toEqual(["写作", "补全", "整理"]);
   });
@@ -101,7 +101,7 @@ describe("contextActionsForView 快捷条随页面", () => {
     const { contextActionsForView } = await import("./ChatCapabilityBar.js");
     expect(contextActionsForView("desk", "world")).toBeNull();
     expect(contextActionsForView("library", "chars")?.map((a) => a.label)).toEqual(["补全角色", "整理角色关系"]);
-    expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["清理废弃线索", "合并重复伏笔"]);
+    expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["清理废弃线索", "归并线索"]);
     expect(contextActionsForView("library", "timeline")).toBeNull();
     expect(contextActionsForView("history", "world")?.map((a) => a.label)).toEqual(["撤销上一步"]);
   });

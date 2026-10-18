@@ -24,7 +24,7 @@ const execFileAsync = promisify(execFile);
 describe("humanizeUndoLabel（R2#3·操作历史 label 人话化）", () => {
   it("把 agent:<toolId> 映射成中文动作名", () => {
     expect(humanizeUndoLabel("agent:commit_apply")).toBe("定稿");
-    expect(humanizeUndoLabel("agent:foundation_write")).toBe("更新故事资料");
+    expect(humanizeUndoLabel("agent:foundation_write")).toBe("改设定本");
   });
 
   it("恢复产物里嵌入的 agent:<toolId> 也一并人话化（不再露『恢复到：agent:commit_apply』）", () => {
@@ -38,11 +38,11 @@ describe("humanizeUndoLabel（R2#3·操作历史 label 人话化）", () => {
   });
 
   it("带细节后缀 agent:<tool>:<detail> → 「动作：细节」，让同类多次写入可辨（rerun2 P2）；不泄漏 tool id", () => {
-    expect(humanizeUndoLabel("agent:foundation_write:建角色 顾长风")).toBe("更新故事资料：建角色 顾长风");
-    expect(humanizeUndoLabel("agent:foundation_write:改资产 事故原始图纸")).toBe("更新故事资料：改资产 事故原始图纸");
+    expect(humanizeUndoLabel("agent:foundation_write:建角色 顾长风")).toBe("改设定本：建角色 顾长风");
+    expect(humanizeUndoLabel("agent:foundation_write:改资产 事故原始图纸")).toBe("改设定本：改资产 事故原始图纸");
     expect(humanizeUndoLabel("agent:foundation_write:建角色 顾长风")).not.toContain("foundation_write");
     // 恢复产物里带细节也一并人话化
-    expect(humanizeUndoLabel("恢复到：agent:foundation_write:建角色 顾长风")).toBe("恢复到：更新故事资料：建角色 顾长风");
+    expect(humanizeUndoLabel("恢复到：agent:foundation_write:建角色 顾长风")).toBe("恢复到：改设定本：建角色 顾长风");
   });
 });
 
@@ -229,7 +229,7 @@ describe("undoLastChange 对话撤销", () => {
     await writeFile(join(dir, "world.json"), "新资料"); // 工具写入（未提交、untracked）
     const r = await undoLastChange(dir);
     expect(r).not.toBeNull();
-    expect(r?.undoneLabel).toBe("更新故事资料");
+    expect(r?.undoneLabel).toBe("改设定本");
     await expect(access(join(dir, "world.json"))).rejects.toThrow(); // 写入被撤销
   }, 30_000);
 
@@ -346,7 +346,7 @@ describe("R4.2 首稿可撤销 + 撤销回执写清退回内容", () => {
 
     // ④ 再撤一次 —— 这回才是改名。
     const second = await undoLastChange(dir);
-    expect(second?.undoneLabel).toBe("更新故事资料：改名 主角→陆沉");
+    expect(second?.undoneLabel).toBe("改设定本：改名 主角→陆沉");
     expect(JSON.parse(await readFile(join(dir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("主角");
   }, 30_000);
 
@@ -367,7 +367,7 @@ describe("R4.2 首稿可撤销 + 撤销回执写清退回内容", () => {
     expect(outcome.revertedLater).toEqual([{ status: "A", path: "drafts/fast/chapter-0005.md" }]);
     await expect(access(join(dir, "drafts", "fast", "chapter-0005.md"))).rejects.toThrow(); // 连带退回实锤
     const receipt = buildRestoreReceipt({
-      title: "已恢复到「更新故事资料：改名 主角→陆沉」之前。",
+      title: "已恢复到「改设定本：改名 主角→陆沉」之前。",
       reverted: outcome.reverted,
       revertedLater: outcome.revertedLater,
       nameById: names,
@@ -611,7 +611,7 @@ describe("pruneSnapshots 磁盘治理（历史裁剪）", () => {
       await writeFile(join(dir, "world.json"), "新资料", "utf-8");
     });
     const r = await undoLastChange(dir);
-    expect(r?.undoneLabel).toBe("更新故事资料");
+    expect(r?.undoneLabel).toBe("改设定本");
     await expect(access(join(dir, "world.json"))).rejects.toThrow();
   }, 120_000);
 

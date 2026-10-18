@@ -17,6 +17,7 @@ import type {
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, type AgentUserAction } from "../../api/agentChatClient.js";
+import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
 /** 存盘形态的卡数组 → 校验过的卡。 */
@@ -58,12 +59,25 @@ function readMessageCard(value: unknown): MessageCard | undefined {
         : undefined;
     case "draft-review":
       return isRecord(value.review) ? { type, review: value.review as unknown as DraftReviewView } : undefined;
-    case "continuity":
-      return cardFromContinuity(value.check);
+    case "continuity": {
+      const card = cardFromContinuity(value.check);
+      if (!card || card.type !== "continuity") return undefined;
+      const dismissed = readStringList(Array.isArray(value.dismissed) ? value.dismissed : []).slice(0, 200);
+      const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+      return {
+        ...card,
+        ...(dismissed.length > 0 ? { dismissed } : {}),
+        ...(checkedVersion !== undefined ? { checkedVersion } : {}),
+      };
+    }
     case "quality":
       return isRecord(value.report) ? { type, report: value.report as unknown as QualityCardReport } : undefined;
-    case "commit-preview":
-      return cardFromCommitPreview(value.preview);
+    case "commit-preview": {
+      const card = cardFromCommitPreview(value.preview);
+      if (!card || card.type !== "commit-preview") return undefined;
+      const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
+      return { ...card, ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
+    }
     case "name-drift":
       return cardFromNameDrift(value.warnings);
     case "stale-threads":
@@ -77,6 +91,12 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       return errorCard(value.detail);
     case "status-notes":
       return cardFromStatusNotes(value.notes);
+    case "directions": {
+      const brainstorm = readBrainstormData(value.brainstorm);
+      if (!brainstorm) return undefined;
+      const picked = readPicked(value.picked, brainstorm);
+      return { type, brainstorm, ...(picked !== undefined ? { picked } : {}) };
+    }
     default:
       return undefined;
   }
@@ -233,11 +253,13 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
       const label = readString(item.label);
       if (!id || !label) return [];
       const detail = readString(item.detail);
+      const reason = readString(item.reason);
       const editableDay = readPositiveInteger(item.editableDay);
       return [{
         id,
         kind: readString(item.kind) ?? "",
         label,
+        ...(reason ? { reason } : {}),
         ...(detail ? { detail } : {}),
         removable: item.removable === true,
         ...(editableDay !== undefined ? { editableDay } : {}),
@@ -247,6 +269,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     })
     : [];
   const notRecorded = readStringList(value.notRecorded).slice(0, 50);
+  const notes = readStringList(value.notes).slice(0, 20);
   return {
     chapter,
     canCommit: value.canCommit,
@@ -259,5 +282,6 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     ...(previewToken ? { previewToken } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
     ...(notRecorded.length > 0 ? { notRecorded } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }

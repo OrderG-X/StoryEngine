@@ -103,9 +103,24 @@ export function locateRevisionSpan(
   const strippedTarget = normalizeForMatch(target);
   if (strippedTarget.length === 0) return "not_found";
   const sIdx = strippedDraft.indexOf(strippedTarget);
-  if (sIdx < 0) return "not_found";
-  if (strippedDraft.indexOf(strippedTarget, sIdx + strippedTarget.length) >= 0) return "ambiguous";
-  return { start: origIndex[sIdx]!, end: origIndex[sIdx + strippedTarget.length - 1]! + 1 };
+  if (sIdx >= 0) {
+    if (strippedDraft.indexOf(strippedTarget, sIdx + strippedTarget.length) >= 0) return "ambiguous";
+    return { start: origIndex[sIdx]!, end: origIndex[sIdx + strippedTarget.length - 1]! + 1 };
+  }
+  // 3) 省略号连起的几截（模型引原句常写「A……B」，核账也会这样引）：依次找到每一截，取第一截开头到最后一截结尾。
+  //    第一截在稿里出现多次 → ambiguous（不猜是哪一处）。
+  const fragments = target.split("…").map(normalizeForMatch).filter((part) => part.length > 0);
+  if (fragments.length < 2) return "not_found";
+  const head = strippedDraft.indexOf(fragments[0]!);
+  if (head < 0) return "not_found";
+  if (strippedDraft.indexOf(fragments[0]!, head + fragments[0]!.length) >= 0) return "ambiguous";
+  let end = head + fragments[0]!.length;
+  for (const fragment of fragments.slice(1)) {
+    const at = strippedDraft.indexOf(fragment, end);
+    if (at < 0) return "not_found";
+    end = at + fragment.length;
+  }
+  return { start: origIndex[head]!, end: origIndex[end - 1]! + 1 };
 }
 
 /* ---------------------------------------------------------------------------
@@ -268,7 +283,12 @@ async function generateModelPreview(input: {
     ...(writingContextPack ? { writingContextPack } : {}),
   });
   const raw = await input.callModel(prompt);
-  return parseDraftRevisionPreview(raw, input.task);
+  try {
+    return parseDraftRevisionPreview(raw, input.task);
+  } catch {
+    // 引擎解析报的是英文（缺 afterText / 不是 JSON），作者看不懂：换成一句人话（P6 真机：「Draft revision preview requires afterText.」漏到对话里）。
+    throw new Error("模型这次没给出能用的改写（回的格式不对，或没写改后的句子），可以再试一次");
+  }
 }
 
 /**

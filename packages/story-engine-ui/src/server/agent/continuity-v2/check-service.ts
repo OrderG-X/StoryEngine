@@ -63,6 +63,8 @@ export interface ChapterCheckResult {
   readonly reused: boolean;
   /** 给作者看的一句话结论。 */
   readonly summary: string;
+  /** summary 去掉逐条问题、只剩结论（重构 P6：问题清单在核账卡和稿纸划线上，「核账」按钮的回话只说这句）。 */
+  readonly headline?: string;
 }
 
 const toItem = (issue: ContinuityIssueV2): ChapterCheckItem => ({
@@ -192,14 +194,14 @@ export async function checkChapterBody(
       ].join(" + ")
     }，更早的细节可能漏。`
     : "";
-  const baseSummary = !ok
+  const headline = !ok
     ? `${waitedNote}第 ${chapter} 章核账没跑成：${result.failures[0] ?? "原因不明"}。可以再点一次「核账」。${coldNote}`
     : sure.length + maybe.length === 0
       ? `${reusedNote}${waitedNote}核了第 ${chapter} 章，没发现和前文对不上的地方。${dismissedNote}${coldNote}${result.failures.length > 0 ? `（有一步没跑成：${result.failures[0]}）` : ""}`
-      : [
-        `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`,
-        ...sure.slice(0, 3).map((issue) => `· ${issueLine(issue)}`),
-      ].join("\n");
+      : `${reusedNote}${waitedNote}核了第 ${chapter} 章：确定对不上 ${sure.length} 处${maybe.length > 0 ? `，可能有问题 ${maybe.length} 处` : ""}。${dismissedNote}${coldNote}`;
+  const baseSummary = ok && sure.length > 0
+    ? [headline, ...sure.slice(0, 3).map((issue) => `· ${issueLine(issue)}`)].join("\n")
+    : headline;
   return {
     ok,
     chapter,
@@ -211,5 +213,6 @@ export async function checkChapterBody(
     dismissed,
     reused,
     summary: baseSummary,
+    headline,
   };
 }

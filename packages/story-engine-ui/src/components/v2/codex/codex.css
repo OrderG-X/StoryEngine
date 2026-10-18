@@ -323,26 +323,6 @@
   .bind-meter .mfill{height:100%;border-radius:4px;background:var(--accent);}
   .bind-meter .mv{color:var(--accent-hi);font-weight:700;text-align:right;font-variant-numeric:tabular-nums;}
 
-  /* ═══ 章节 · 时间线 ═══ */
-  .timeline{position:relative;padding-left:30px;}
-  .timeline::before{content:"";position:absolute;left:11px;top:8px;bottom:8px;width:2px;
-    background:var(--accent);border-radius:2px;}
-  .tl-item{position:relative;padding:0 0 22px 26px;}
-  .tl-item:last-child{padding-bottom:0;}
-  .tl-item::before{content:"";position:absolute;left:-25px;top:4px;width:14px;height:14px;border-radius:50%;
-    background:var(--bg);border:2px solid var(--line);transition:.2s;}
-  .tl-item.done::before{border-color:var(--accent);background:var(--accent);}
-  .tl-item.cur::before{border-color:var(--accent-hi);background:var(--accent-hi);
-    box-shadow:none;}
-  .tl-item.plan::before{border-style:dashed;background:var(--bg);}
-  .tl-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
-  .tl-head .tl-no{font-size:11px;color:var(--accent-hi);font-weight:800;letter-spacing:.08em;}
-  .tl-head h3{margin:0;font-size:16px;font-weight:650;}
-  .tl-item.cur h3{color:var(--accent-hi);}
-  .tl-head .tl-st{margin-left:auto;}
-  .tl-syn{font-size:13px;color:var(--muted);line-height:1.7;max-width:600px;}
-  .tl-meta{display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--faint);flex-wrap:wrap;}
-  .tl-meta span b{color:var(--muted);font-weight:600;}
   /* 章节角色任务包 */
   .ch-bundle{margin-top:10px;border:1px solid var(--accent-line-soft);border-radius:11px;background:var(--sunken);padding:11px 14px;}
   .ch-bundle .cbh{font-size:10.5px;letter-spacing:.12em;color:var(--accent);font-weight:800;text-transform:uppercase;margin-bottom:7px;}
@@ -767,8 +747,6 @@
   /* 章节名：当前上下文主标识，不主动缩（最多缩到 3.2em，保证「第 N 章」级别可读），更长才省略。 */
   .codex-desk-bar .cd-chapter{color:var(--text);font-weight:650;font-size:13px;letter-spacing:.01em;
     flex:0 1 auto;min-width:3.2em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .codex-desk-bar .cd-flow{font-style:normal;font-size:10.5px;color:var(--accent);letter-spacing:.06em;flex:0 0 auto;
-    border:1px solid var(--accent-line-soft);border-radius:var(--r-pill);padding:1px 9px;background:var(--accent-soft);white-space:nowrap;}
   /* P1-7：工作稿旁常驻可编辑提示（低调，不抢戏）。 */
   .codex-desk-bar .cd-edit-hint{font-style:normal;font-size:11.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap;flex:0 0 auto;}
   /* 视口 <1600 时中栏顶栏空间紧张：藏掉这条提示，把宽度让给书名/章节名（T2）。 */
@@ -1302,6 +1280,8 @@
     cursor:pointer;transition:.13s;user-select:none;
   }
   .codex-archived-fold:hover{color:var(--muted);border-color:var(--line);}
+  /* 别的章的对话收起行（P6 第 6 步）：同款虚线行，是个按钮。 */
+  .se-other-chapters{display:block;width:100%;background:transparent;font-family:inherit;}
   .codex-archived-messages{
     opacity:.55;pointer-events:none;padding:4px 0;
     border-bottom:1px dashed var(--line-faint);margin-bottom:8px;

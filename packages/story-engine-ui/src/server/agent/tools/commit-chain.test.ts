@@ -120,6 +120,8 @@ describe("commit_preview", () => {
     expect(short.canCommit).toBe(false);
     expect(short.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
     expect(short.blockingReasons.join("")).toContain("下限");
+    // 下限是作者自己的写作规则：告诉作者能改（P6 第 7 步：手写短章只看到「需扩写」不知道去哪改）。
+    expect(short.blockingReasons.join("")).toContain("跟右边的 AI 说把每章字数下限改低");
     expect(short.previewToken).toBeUndefined();
   });
 

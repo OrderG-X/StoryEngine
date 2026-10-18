@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import ImmersiveAppShell from "./components/v2/ImmersiveAppShell.js";
-import ModelSettingsDialog from "./components/ModelSettingsDialog.js";
+import { SettingsModal, type SettingsTab } from "./components/v2/codex/SettingsModal.js";
 import UsageDialog from "./components/UsageDialog.js";
 import { useNavigationStore } from "./stores/navigationStore.js";
 import { useBookStore } from "./stores/bookStore.js";
@@ -53,6 +53,7 @@ export function App() {
   const closeSettings = useNavigationStore((s) => s.closeSettings);
   const closeUsage = useNavigationStore((s) => s.closeUsage);
   const openSettings = useNavigationStore((s) => s.openSettings);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("model");
 
   const workspace = useBookStore((s) => s.workspace);
   const messages = useChatStore((s) => s.messages);
@@ -181,9 +182,12 @@ export function App() {
   const sidebar = useBookStore((s) => s.sidebar);
 
   /* ---- Dialogs ---- */
-  const settingsDialog = (
-    <ModelSettingsDialog open={settingsOpen} onCancel={closeSettings} />
-  );
+  // 设置只留一套（P6 第 6 步）：书架也开写作台那个设置弹窗。弹窗样式在 .codex-app 作用域里，外面套一层零高度的壳。
+  const settingsDialog = settingsOpen ? (
+    <div className="codex-app se-settings-host">
+      <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => { closeSettings(); setSettingsTab("model"); }} />
+    </div>
+  ) : null;
 
   const usageDialog = usageOpen ? (
     <UsageDialog error={usageError} loading={usageLoading} summary={usageSummary} onClose={closeUsage} />

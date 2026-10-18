@@ -1,7 +1,7 @@
 /**
  * ChatContextMeter — 上下文占用提示条（codex AI 列，消息列表与输入框之间）。
  *
- * pct < 80%：低调灰显「上下文 NN%」。
+ * pct < 80%：不显示（P6 右栏瘦身）。
  * pct >= 80%：暗金高亮 + 常驻「清理早先消息」按钮，直到 pct 降下来。
  * 点「清理」：archiveChatSession → setActiveArchivedCount + 显示「撤销清理」。
  * 点「撤销清理」：unarchiveChatSession → archivedCount 清零。
@@ -57,9 +57,8 @@ export function ChatContextMeter() {
     }
   }
 
-  if (pct < 80 && !canUndo) {
-    return <div className="codex-context-meter low">对话记忆 {pct}%</div>;
-  }
+  // P6：平时不占一条，快满了（≥80%）或能撤销清理时才出来。
+  if (pct < 80 && !canUndo) return null;
 
   return (
     <div className={`codex-context-meter${pct >= 80 ? " warn" : ""}`}>

@@ -290,6 +290,19 @@ describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {
   });
 });
 
+describe("readWorkspaceMessages 作者的话记着在看哪一章（重构 P6 第 6 步）", () => {
+  it("正整数章号读回；坏值丢掉", () => {
+    const [kept, zero, junk] = readWorkspaceMessages([
+      { id: "u1", role: "user", content: "改一下", chapter: 12 },
+      { id: "u2", role: "user", content: "改一下", chapter: 0 },
+      { id: "u3", role: "user", content: "改一下", chapter: "12" },
+    ]);
+    expect(kept.chapter).toBe(12);
+    expect(zero.chapter).toBeUndefined();
+    expect(junk.chapter).toBeUndefined();
+  });
+});
+
 describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
   it("新格式的卡原样读回；认不出的 type、形状不对的卡丢掉；同一种只留最后一张", () => {
     const [message] = readWorkspaceMessages([{
@@ -313,6 +326,28 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
       { type: "status-notes", notes: ["历史窗口被裁剪"] },
       { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
     ]);
+  });
+
+  it("核账卡带「不是问题」和核的稿纸版本（重构 P6）：读回；坏值丢掉", () => {
+    const check = { chapter: 3, sure: [{ quote: "a", earlierQuote: "b", earlierChapter: 1, reason: "c" }], maybe: [] };
+    const [kept, nulled, junk] = readWorkspaceMessages([
+      { id: "c1", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: ["a#b", "", 3], checkedVersion: "abc123" }] },
+      { id: "c2", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: [], checkedVersion: null }] },
+      { id: "c3", role: "assistant", content: "", cards: [{ type: "continuity", check, dismissed: "a#b", checkedVersion: 7 }] },
+    ]);
+    expect(kept.cards).toEqual([{ type: "continuity", check, dismissed: ["a#b"], checkedVersion: "abc123" }]);
+    expect(nulled.cards).toEqual([{ type: "continuity", check, checkedVersion: null }]);
+    expect(junk.cards).toEqual([{ type: "continuity", check }]);
+  });
+
+  it("定稿预览卡带预览时的稿纸版本和记账员提醒（重构 P6）：读回；坏值丢掉", () => {
+    const [kept, junk] = readWorkspaceMessages([
+      { id: "p1", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文", "", 5] }, checkedVersion: "v9" }] },
+      { id: "p2", role: "assistant", content: "", cards: [{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: "还在读前文" }, checkedVersion: 9 }] },
+    ]);
+    expect(kept.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] }, checkedVersion: "v9" }]);
+    // 单个字符串照别的清单字段的读法收成一条；版本号不是字符串就丢。
+    expect(junk.cards).toEqual([{ type: "commit-preview", preview: { chapter: 3, canCommit: true, notes: ["还在读前文"] } }]);
   });
 
   it("老会话的分散字段读成卡；adviceCards 认出来丢掉", () => {

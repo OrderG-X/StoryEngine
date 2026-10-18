@@ -112,6 +112,8 @@ describe("投影", () => {
     });
     const zhou = result.cast.find((member) => member.name === "周守义");
     expect(zhou).toMatchObject({ aliases: ["老周"], chapters: [1, 2] });
+    // 每章出场的原句（别名那章也算在本人名下），故事地图点格子回原文用。
+    expect(zhou?.appearances).toEqual([{ chapter: 1, quote: "周守义来了" }, { chapter: 2, quote: "老周来了" }]);
     expect(result.subjects).toHaveLength(1);
     expect(result.subjects[0]?.attributes[0]?.current).toEqual(["c3-1"]);
     expect(result.chapters[0]?.viewpoint).toBe("沈青禾");

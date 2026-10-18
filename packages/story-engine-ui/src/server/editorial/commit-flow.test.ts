@@ -80,7 +80,8 @@ describe("定稿编排", () => {
         tickets,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
-          time: { basis: "text", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" },
+          // 记账员把同一天的章多填了「章内过了 1 天」：作者改天数后按作者说的那一天记（P6 第 7 步）。
+          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, timeOfDay: "上午", quote: "第二天上午" },
           presence: [{ name: "周守义", nameUsed: "老周", quote: "老周站在门口" }, { name: "外乡人", nameUsed: "外乡人", quote: "外乡人又来了" }],
           facts: [
             { nature: "state", subject: "铜钥匙", attribute: "在哪", value: "铜盒里", text: "铜钥匙锁在铜盒里", quote: "沈青禾把钥匙锁进铜盒" },
@@ -94,7 +95,7 @@ describe("定稿编排", () => {
     expect(closing?.label).toBe("收口「钟为什么停」：钟是被人故意拨停的");
     expect(preview.review.find((item) => item.kind === "presence")?.label).toBe("出场：外乡人");
     expect(preview.notRecorded).toEqual([{ code: "quote_not_in_text", label: "事实（发生过的事）：外乡人闯进了钟楼", reason: "「外乡人闯进了钟楼」没记上：附的原句在正文里找不到" }]);
-    expect(preview.time).toMatchObject({ day: 2, basis: "text" });
+    expect(preview.time).toMatchObject({ day: 2, dayEnd: 3, basis: "text" });
 
     const stranger = preview.review.find((item) => item.label === "出场：外乡人");
     const first = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, excluded: [String(stranger?.index), -1, "x"], day: "5" });
@@ -103,7 +104,7 @@ describe("定稿编排", () => {
     expect(again).toMatchObject({ ok: true, version: 2, replayed: true });
 
     const view = await projectBook(book);
-    expect(view.chapters[1]).toMatchObject({ day: 5, dayBasis: "author", timeOfDay: "上午" });
+    expect(view.chapters[1]).toMatchObject({ day: 5, dayEnd: 5, dayBasis: "author", timeOfDay: "上午" });
     expect(view.chapters[1]?.present).toEqual(["周守义"]);
     expect(view.threads[0]).toMatchObject({ status: "closed", closedAt: 2 });
     const ledger = JSON.parse(await readFile(join(book, "ledger/chapters/0002.json"), "utf-8"));

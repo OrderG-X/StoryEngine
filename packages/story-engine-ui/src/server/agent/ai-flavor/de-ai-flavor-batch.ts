@@ -164,11 +164,11 @@ export async function runDeAiFlavorBatch(input: {
 }): Promise<DeAiBatchResult> {
   const draftText = input.draftText;
   if (!draftText.trim()) {
-    return { ok: false, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "本章还没正文，先出稿再一键去 AI 味。" };
+    return { ok: false, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "本章还没正文，先写出来再一键全修。" };
   }
   const detected = input.violations.length;
   if (detected === 0) {
-    return { ok: true, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "没挑出 AI 腔，无需一键全修。" };
+    return { ok: true, detected: 0, rewritten: 0, skipped: 0, skippedByReason: EMPTY_SKIPPED_BY_REASON, changes: [], updatedContent: draftText, summary: "没挑出机器腔，不用一键全修。" };
   }
   let modelText: string;
   try {
@@ -189,7 +189,7 @@ export async function runDeAiFlavorBatch(input: {
   const skipped = detected - rewritten;
   const skippedByReason = { ...countApplySkipped(applySkipped), noRewrite: Math.max(0, detected - rewrites.length) };
   const summary = rewritten > 0
-    ? `一键全修：${detected} 处 AI 腔，改了 ${rewritten} 处${skipped > 0 ? `，${skipped} 处没动（没定位到 / 与原句无异 / 重复 / 模型没给有效改写）` : ""}。`
+    ? `一键全修：${detected} 处机器腔，改了 ${rewritten} 处${skipped > 0 ? `，${skipped} 处没动（没定位到 / 与原句无异 / 重复 / 模型没给有效改写）` : ""}。`
     : `一键全修没改动：${detected} 处都没能安全替换（模型没给有效改写或定位不到），原稿没动，可逐句手动改。`;
   return { ok: true, detected, rewritten, skipped, skippedByReason, changes: applied, updatedContent, summary };
 }

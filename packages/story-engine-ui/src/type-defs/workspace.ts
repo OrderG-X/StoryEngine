@@ -64,6 +64,8 @@ export interface ChapterMessage {
   readonly cards?: readonly MessageCard[];
   /** 这一轮的真实 token 用量（对话 AI + 工具内部调用），作者看得见每轮花了多少。 */
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
+  /** 作者发这句时在看哪一章（只记在作者的话上；右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
+  readonly chapter?: number;
 }
 
 /**
@@ -72,11 +74,15 @@ export interface ChapterMessage {
  */
 export type MessageCard =
   /** 定稿预览（commit_preview）：裁决照实显示，不靠模型转述。 */
-  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData }
+  /** 定稿预览。checkedVersion＝预览时稿纸的版本号：稿子没再变就直接打开这份清单，不再重跑记账员（重构 P6）。 */
+  | { readonly type: "commit-preview"; readonly preview: CommitPreviewCardData; readonly checkedVersion?: string | null }
   /** 定稿回执（commit_apply 的入库报告）：这章改了哪些账。原样存，渲染侧防御解析。 */
   | { readonly type: "commit-report"; readonly report: unknown }
-  /** 核账（check_continuity）。 */
-  | { readonly type: "continuity"; readonly check: ContinuityCheckData }
+  /**
+   * 核账（check_continuity）。dismissed＝作者点过「不是问题」的条目（continuityItemKey），对话卡和稿纸划线共用；
+   * checkedVersion＝结果到时稿纸的版本号（核的是这一版），稿纸版本变了就是「核过后改过稿」。
+   */
+  | { readonly type: "continuity"; readonly check: ContinuityCheckData; readonly dismissed?: readonly string[]; readonly checkedVersion?: string | null }
   /** 审稿（ai_review）问题清单。 */
   | { readonly type: "draft-review"; readonly review: DraftReviewView }
   /** 硬伤检查（quality_check）。 */
@@ -92,9 +98,31 @@ export type MessageCard =
   /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错。 */
   | { readonly type: "error"; readonly detail?: string }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
-  | { readonly type: "status-notes"; readonly notes: readonly string[] };
+  | { readonly type: "status-notes"; readonly notes: readonly string[] }
+  /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
+  | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number };
 
 export type MessageCardType = MessageCard["type"];
+
+/** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */
+export interface BrainstormCardData {
+  readonly chapter: number;
+  readonly idea?: string;
+  readonly options: readonly BrainstormOptionData[];
+  /** 核账员核过前文没有；没核成时 checkNote 说原因。 */
+  readonly checked: boolean;
+  readonly checkNote?: string;
+  readonly coldNote?: string;
+}
+
+export interface BrainstormOptionData {
+  readonly title: string;
+  readonly steps: readonly string[];
+  readonly recommended?: boolean;
+  readonly threads: readonly { readonly title: string; readonly idle: number; readonly stale: boolean }[];
+  /** 和前文对不上的地方：第几步、前文哪章哪句、为什么。 */
+  readonly problems: readonly { readonly step: number; readonly earlierChapter: number; readonly earlierQuote: string; readonly reason: string }[];
+}
 
 export interface ContinuityCheckData {
   readonly chapter: number;
@@ -148,6 +176,8 @@ export interface CommitPreviewCardData {
   readonly semanticIssues?: readonly string[];
   /** 记账员交了、但原句在正文里找不到或指向前文没有的东西，这次没记上的（带原因，人话）。 */
   readonly notRecorded?: readonly string[];
+  /** 要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……）。 */
+  readonly notes?: readonly string[];
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */
@@ -155,6 +185,7 @@ export interface CommitPreviewCardData {
     readonly id: string;
     readonly kind: string;
     readonly label: string;
+    readonly reason?: string;
     readonly detail?: string;
     readonly removable: boolean;
     readonly editableDay?: number;

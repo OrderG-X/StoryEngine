@@ -51,7 +51,7 @@ function buildSummary(result: SnapshotPruneResult): string {
   }
   // warnings 内嵌的 git 报错可能带绝对路径，进 summary 前同款消毒
   const warningsText = result.warnings?.length ? ` 注意：${result.warnings.map(scrubLocalAbsolutePaths).join("；")}` : "";
-  return `已把操作历史裁到最近 ${keep} 条：更早 ${prunedCount} 条折成一条「base」存档点（仍可整体恢复到那里），净释放 ${freedCommits} 条提交，裁后共 ${totalAfter} 条。裁前完整历史已备份到项目目录外的 snapshot-backups 目录。注意：这一步不在「撤销上一改动」链上（裁剪没动工作树、没有可撤的内容变更），要回退只能用备份 bundle / base 存档点整体恢复。${warningsText}`;
+  return `已把操作历史裁到最近 ${keep} 条：更早 ${prunedCount} 条折成一条「base」存档点（仍可整体恢复到那里），净释放 ${freedCommits} 条提交，裁后共 ${totalAfter} 条。裁前完整历史已备份到项目目录外的 snapshot-backups 目录。注意：这一步不在「撤销上一步」链上（裁剪没动工作树、没有可撤的内容变更），要回退只能用备份 bundle / base 存档点整体恢复。${warningsText}`;
 }
 
 /** 纯壳函数（便于单测）：预览/真裁都由它走，confirm!==true 一律 dry-run。失败如实 ok:false，绝不静默。 */

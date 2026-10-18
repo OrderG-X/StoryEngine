@@ -304,7 +304,7 @@ async function generateBySegments(input: {
   let firstContext = withSectionContent(withSectionsLast(input.context, PER_HALF_SECTIONS), "chapter_goal", { chapter: input.plan.chapter, goal: firstGoal });
   if (planSection) firstContext = withSectionContent(firstContext, "chapter_plan", planSectionForHalf(planSection, "first", beats, split));
   let first = await input.writerClient.generateDraft({ context: firstContext, maxOutputTokens: input.maxOutputTokens });
-  let firstBody = stripLeadingMarkdownChapterHeading(first.content).trim();
+  let firstBody = stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(first.content)).trim();
   // 前半章照抄上一章（第二十一轮第 3 章前半把第 2 章 3500 字一字不差重写了一遍，本章要点一个没写）：
   // 与上一章原文有两段以上高度重合 → 带提示重写前半章一次，取照抄更少的那版。
   const previousText = previousChapterText(input.context);
@@ -319,7 +319,7 @@ async function generateBySegments(input: {
       context: withSectionContent(firstContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
       maxOutputTokens: input.maxOutputTokens,
     }).catch(() => undefined);
-    const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
+    const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
     const retryCopied = retryBody && previousText ? findReplayedParagraphs(previousText, retryBody).length : copied.length;
     if (retry && retryBody && retryCopied < copied.length) {
       first = retry;
@@ -345,7 +345,7 @@ async function generateBySegments(input: {
   });
   try {
     const second = await input.writerClient.generateDraft({ context: secondContext, maxOutputTokens: input.maxOutputTokens });
-    let secondBody = stripLeadingMarkdownChapterHeading(second.content).trim();
+    let secondBody = stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(second.content)).trim();
     if (!secondBody) throw new Error("后半章是空的");
     // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
     // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
@@ -363,7 +363,7 @@ async function generateBySegments(input: {
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
-      const retryBody = retry ? stripLeadingMarkdownChapterHeading(retry.content).trim() : "";
+      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
@@ -479,7 +479,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         : `后半章首稿重演了前半章 ${segmented.info.replayedFound} 段，${segmented.info.retried ? "重写后" : ""}仍有 ${segmented.info.replayedRemaining} 段与前半章相近。`);
     }
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
-    const rawDraftBody = stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content));
+    const rawDraftBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
     const rawDraftLength = buildDraftLengthReport({
       draftBody: rawDraftBody,
       lengthTarget: draftLengthTarget,
@@ -717,6 +717,37 @@ export function stripMarkdownEmphasis(content: string): string {
   return content
     .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")
     .replace(/__(?=\S)([^_\n]*?\S)__/gu, "$1");
+}
+
+/** 分段标记最长几个字（括号里头）：「本章未完」「未完待续」「前半章完」都在这以内。 */
+const SEGMENT_MARKER_MAX_INNER = 8;
+const SEGMENT_MARKER_BRACKETS: readonly (readonly [string, string])[] = [["（", "）"], ["(", ")"]];
+/** 括号里只要带这两个字之一就是分段标记（「本章未完」「待续」「全文完」）；带句读的（「（完了。）」）是人物心声，不动。 */
+const SEGMENT_MARKER_WORDS = ["完", "续"] as const;
+const SENTENCE_MARKS = ["。", "！", "？", "…", "，", "!", "?", ","] as const;
+
+function isSegmentMarker(paragraph: string): boolean {
+  const text = paragraph.trim();
+  return SEGMENT_MARKER_BRACKETS.some(([open, close]) => {
+    if (!text.startsWith(open) || !text.endsWith(close)) return false;
+    const inner = text.slice(open.length, -close.length).trim();
+    return inner.length > 0
+      && inner.length <= SEGMENT_MARKER_MAX_INNER
+      && !inner.includes(open) && !inner.includes(close)
+      && SEGMENT_MARKER_WORDS.some((word) => inner.includes(word))
+      && !SENTENCE_MARKS.some((mark) => inner.includes(mark));
+  });
+}
+
+/**
+ * 去掉正文末尾写手自己加的分段标记段：「（本章未完）」「（未完待续）」「（全文完）」。
+ * 分两半写时提示里明写了别加，模型照样加（重构 P6 真机：GLM 前半章收在「（本章未完）」，接上后半章就夹在正文中间）。
+ * 只看末尾、只认整段就是一对括号的短标记；正文中间的括号段是作者的事，不动。
+ */
+export function stripTrailingSegmentMarkers(content: string): string {
+  const lines = content.trimEnd().split("\n");
+  while (lines.length > 0 && (lines.at(-1)!.trim() === "" || isSegmentMarker(lines.at(-1)!))) lines.pop();
+  return lines.join("\n").trimEnd();
 }
 
 function stripLeadingMarkdownChapterHeading(content: string): string {

@@ -204,6 +204,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly affectedScopes?: readonly ("full" | "foundation")[];
   readonly tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
   readonly cards?: readonly MessageCard[];
+  readonly chapter?: number;
 }[] {
   if (!Array.isArray(value)) return [];
   const messages: {
@@ -225,6 +226,7 @@ export function readWorkspaceMessages(value: unknown): {
     affectedScopes?: readonly ("full" | "foundation")[];
     tokenUsage?: { readonly input: number; readonly cachedInput: number; readonly output: number };
     cards?: readonly MessageCard[];
+    chapter?: number;
   }[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
@@ -280,6 +282,8 @@ export function readWorkspaceMessages(value: unknown): {
       ...(affectedScopes.length > 0 ? { affectedScopes } : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(cards.length > 0 ? { cards } : {}),
+      // 作者发这句时在看哪一章（右栏「这一章的对话」按它分）：只收正整数。
+      ...(typeof item.chapter === "number" && Number.isInteger(item.chapter) && item.chapter > 0 ? { chapter: item.chapter } : {}),
     });
   }
   // Sanity 上限（防病态膨胀），不是功能性截断。⚠️ 触顶会静默丢最旧消息且【绕过冷归档】

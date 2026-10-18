@@ -14,8 +14,10 @@ import { nextFlowAfterToolResult } from "./agentFlowStatus.js";
 import { truncateMessagesFrom, undoCutId } from "./truncateMessages.js";
 import { buildOutboundConversation } from "./buildOutboundConversation.js";
 import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
+import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
+import { directionGoal, pickedDirection } from "../utils/brainstormCard.js";
 import type { StateOverview } from "../api/types.js";
 import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -78,6 +80,12 @@ export interface UseChatResult {
   undoToTurn: (message: ChapterMessage) => Promise<void>;
   /** M3：停止当前在跑的 agent 流（中止 SSE）；已写出内容保留、不报错。无在跑流时调用是 no-op。 */
   stopAgent: () => void;
+}
+
+/** 作者发这句时在看哪一章（右栏「这一章的对话」按它分，重构 P6 第 6 步）。 */
+function chapterStamp(): { readonly chapter?: number } {
+  const chapter = useBookStore.getState().workspace.currentChapter?.chapterNumber;
+  return typeof chapter === "number" && chapter > 0 ? { chapter } : {};
 }
 
 export function useChat(params: UseChatParams): UseChatResult {
@@ -402,6 +410,15 @@ export function useChat(params: UseChatParams): UseChatResult {
                 output: info,
               });
               if (info.toolName === "generate_draft") endStreaming();
+              // 核账结果记下核的是稿纸哪一版（回合开头存过稿，这时的版本就是服务端读到的那版）；之后稿子变了就显示「核过后改过稿」。
+              if (info.toolName === "check_continuity" && !chapterMismatch) {
+                useChatStore.getState().stampCardVersion(assistantMsgId, "continuity", useDraftStore.getState().baseVersion);
+              }
+              // 定稿预览一到就弹出定稿清单（重构 P6）；记下预览的是哪一版，稿子没再变时再点「定稿」直接打开这份。
+              if (info.toolName === "commit_preview" && !chapterMismatch) {
+                useChatStore.getState().stampCardVersion(assistantMsgId, "commit-preview", useDraftStore.getState().baseVersion);
+                openCommitSheet(assistantMsgId);
+              }
               if (chapterMismatch) {
                 // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                 if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
@@ -413,6 +430,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               if (info.toolName === "commit_apply") commitAttempt = null;
+              // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
+              if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
               const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
               if (undone) agentUndone = true;
               const flowBefore = useBookStore.getState().workspace.flowStatus;
@@ -669,6 +688,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         id: `user-${Date.now()}`,
         role: "user",
         content: text,
+        ...chapterStamp(),
       };
 
       const conversation = buildOutboundConversation(
@@ -751,7 +771,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       await runAgentDispatch(text, conversation, {
         toolName: "commit_apply",
         chapter,
@@ -780,7 +800,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const text = target?.keep ? `确认裁剪操作历史（保留最近 ${target.keep} 条）` : "确认裁剪操作历史";
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       await runAgentDispatch(text, conversation, { toolName: "prune_snapshots", ...(target?.keep ? { keep: target.keep } : {}) });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
@@ -803,9 +823,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }
-      const text = userActionChoiceText(action);
+      // 「写这一章」带的方向就是作者挑中的那种走法：回显里写明照哪种写。
+      const picked = action.toolName === "generate_draft" ? pickedDirection(liveChat.messages, action.chapter) : undefined;
+      const goal = action.toolName === "generate_draft" ? action.chapterGoal : undefined;
+      const text = userActionChoiceText(action, picked && goal?.startsWith(directionGoal(picked)) ? picked.title : undefined);
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
-      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text });
+      appendMessage({ id: `user-${Date.now()}`, role: "user", content: text, ...chapterStamp() });
       // 出稿类动作把作者带回写作台（正文流式进稿纸；按章自动切换当前章，见 runAgentDispatch 的 onDraftDelta）。
       if (action.toolName === "generate_draft") useNavigationStore.getState().requestCenterView("desk");
       await runAgentDispatch(text, conversation, action);
@@ -819,12 +842,24 @@ export function useChat(params: UseChatParams): UseChatResult {
   // 不经模型判断、也不靠「文字等于按钮文案」认回。章号取当前章；没选章就如实提示。
   const handleChapterButton = useCallback(
     (button: ChapterButton): void => {
+      // 「定稿」：上次预览后稿子没变，直接打开那份定稿清单，不再重跑记账员。
+      if (button === "commit_preview") {
+        const reusable = reusableCommitPreviewId(useChatStore.getState().messages, useDraftStore.getState());
+        if (reusable) {
+          openCommitSheet(reusable);
+          return;
+        }
+      }
       const liveBook = useBookStore.getState();
       const liveUi = useUiStore.getState();
+      const chapter = liveBook.workspace.currentChapter?.chapterNumber;
+      // 「写这一章」：作者在稿纸上方挑中过走法，就照它写（输入框里另写了话一并带上）。
+      const picked = typeof chapter === "number" ? pickedDirection(useChatStore.getState().messages, chapter) : undefined;
+      const direction = [picked ? directionGoal(picked) : "", liveUi.steeringDirection.trim()].filter(Boolean).join("\n");
       const action = chapterButtonAction(button, {
-        chapter: liveBook.workspace.currentChapter?.chapterNumber,
+        chapter,
         chapters: liveBook.workspace.chapters,
-        direction: liveUi.steeringDirection,
+        direction,
       });
       if (!action) {
         appendMessage({ id: `assistant-button-nochapter-${Date.now()}`, role: "assistant", content: NO_CHAPTER_HINT });

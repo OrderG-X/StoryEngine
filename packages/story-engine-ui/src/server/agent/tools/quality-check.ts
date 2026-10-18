@@ -66,7 +66,7 @@ function buildNoDraftQualityOutput(result: {
     quality: result.quality,
     refined: result.refined,
     errorIssueCount: result.refined.blocking.length,
-    summary: `第 ${result.chapter} 章还没有可质检的正文（工作稿为空或还没生成）。请先生成本章正文，再来质检。`,
+    summary: `第 ${result.chapter} 章还没有可做硬伤检查的正文（工作稿为空或还没写）。先写这一章，再来检查。`,
   };
 }
 
@@ -102,7 +102,7 @@ export async function buildQualityCheckToolOutput(input: {
   // 铁律④·绝不静默失败：AI 语义判定层走 fallback（超时/网络失败/输出不合规）时，确定性规则照常出结论，
   // 但必须诚实披露「AI 语义判定本轮未完成」——否则 agent 会把它当『通过、可入库』转告，掩盖判定层没跑。
   const aiJudgeFallbackNote = quality.modelJudge?.fallbackUsed === true
-    ? "（注意：AI 语义判定本轮未完成，仅按确定性规则分级；可重试或切换质检模型再判一次）"
+    ? "（注意：AI 语义判定本轮未完成，仅按确定性规则分级；可重试或换硬伤检查用的模型再判一次）"
     : "";
 
   return {
@@ -115,7 +115,7 @@ export async function buildQualityCheckToolOutput(input: {
     quality,
     refined,
     errorIssueCount,
-    summary: `第 ${chapter} 章质检：${refined.summary}${aiJudgeFallbackNote}`,
+    summary: `第 ${chapter} 章硬伤检查：${refined.summary}${aiJudgeFallbackNote}`,
   };
 }
 

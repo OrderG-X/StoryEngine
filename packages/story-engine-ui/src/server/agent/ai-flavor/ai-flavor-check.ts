@@ -105,7 +105,7 @@ export function parseAiFlavorReport(modelText: string, draftText: string, usedFa
         ...(v.suggestedFix ? { suggestedFix: v.suggestedFix } : {}),
       });
     });
-    return { ok: true, summary: parsed.summary || (violations.length ? "挑出几处 AI 腔，见下。" : "这章读着挺像人写的，没挑出明显 AI 腔。"), violations: violations.slice(0, MAX_VIOLATIONS), usedFallback };
+    return { ok: true, summary: parsed.summary || (violations.length ? "挑出几处机器腔，见下。" : "这章读着挺像人写的，没挑出明显的机器腔。"), violations: violations.slice(0, MAX_VIOLATIONS), usedFallback };
   } catch {
     return { ok: false, summary: "体检没成：模型结果解析失败，可重试。", violations: [], usedFallback };
   }
@@ -136,7 +136,7 @@ export function mergeAiFlavorReports(
     summary = composeAiFlavorSummary(sorted, llm.summary);
   } else if (sorted.length > 0) {
     // LLM 没跑成，但确定性闸有硬命中 → 兜底如实报（谎报-proof）。
-    summary = `确定性闸挑出 ${sorted.length} 处 AI 腔硬命中（AI 复检这次没跑成，先看这些）。`;
+    summary = `确定性闸挑出 ${sorted.length} 处机器腔硬命中（AI 复检这次没跑成，先看这些）。`;
   } else {
     summary = "体检没跑成：AI 复检失败、确定性闸也没挑出硬毛病，可重试。";
   }
@@ -147,13 +147,13 @@ export function mergeAiFlavorReports(
 function composeAiFlavorSummary(violations: readonly AiFlavorViolation[], llmSummary: string): string {
   const qualitative = llmSummary.replace(/^\s*(?:有|共|检出|发现|挑出)?\s*\d+\s*处[^，。！？]*[，。！？]\s*/u, "").trim();
   if (violations.length === 0) {
-    return qualitative || "这章读着挺像人写的，没挑出明显 AI 腔。";
+    return qualitative || "这章读着挺像人写的，没挑出明显的机器腔。";
   }
   const high = violations.filter((v) => v.severity === "high").length;
   const medium = violations.filter((v) => v.severity === "medium").length;
   const low = violations.filter((v) => v.severity === "low").length;
   const breakdown = [high && `${high}重`, medium && `${medium}中`, low && `${low}轻`].filter(Boolean).join("、");
-  const countClause = `挑出 ${violations.length} 处 AI 腔${breakdown ? `（${breakdown}）` : ""}，逐条见下方卡片。`;
+  const countClause = `挑出 ${violations.length} 处机器腔${breakdown ? `（${breakdown}）` : ""}，逐条见下方卡片。`;
   return qualitative ? `${countClause}${qualitative}` : countClause;
 }
 

@@ -36,7 +36,7 @@ export const SELECTION_REVISION_TEMPLATES: readonly SelectionRevisionTemplate[] 
   },
   {
     key: "deai",
-    label: "去AI味",
+    label: "去机器腔",
     problemSummary: "用户选中一段正文，要求去掉 AI 腔。",
     revisionGoal:
       "改写这段文字，去掉常见的 AI 腔：删掉空泛的形容词堆砌、套路化的排比与升华总结句、"

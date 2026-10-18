@@ -231,8 +231,10 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
     onBlur: () => setSelection(null),
   });
 
+  // 锁 / 解锁不算作者改字：TipTap 的 setEditable 默认会发一次 update，onUpdate 会把编辑器里的字当作者打的回写——
+  // 流式出稿结束解锁时，回写的是流式显示那版（分半出稿两段接缝少个空行），稿纸就误报「你手上还有没存的字」（重构 P6 真机）。
   useEffect(() => {
-    editor?.setEditable(!locked);
+    editor?.setEditable(!locked, false);
   }, [editor, locked]);
 
   // 鼠标松开 = 选区定型 → 此刻才弹浮动条（拖选过程中先不弹）。挂 document 级以兼容「拖出编辑器外松手」。

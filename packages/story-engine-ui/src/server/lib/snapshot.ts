@@ -508,7 +508,7 @@ async function snapshotDiffersFromWorkingTree(projectDir: string, id: string, un
 
 const UNDO_TOOL_LABELS: Record<string, string> = {
   commit_apply: "定稿",
-  foundation_write: "更新故事资料",
+  foundation_write: "改设定本",
   generate_draft: "出稿",
   revise_draft: "修改工作稿",
   generate_chapter_steering: "章节方向",

@@ -95,7 +95,7 @@ describe("操作历史「查看改动」：文件 → 人话", () => {
 describe("操作历史条目名", () => {
   it("「X前快照」改成操作名、章号放后；恢复条目说清回到哪一步之前", async () => {
     const { humanizeHistoryLabel } = await import("./snapshot-changes.js");
-    expect(humanizeHistoryLabel("第57章自动去AI味前快照")).toBe("自动去 AI 味：第57章");
+    expect(humanizeHistoryLabel("第57章自动去AI味前快照")).toBe("自动去机器腔：第57章");
     expect(humanizeHistoryLabel("第55章修订前快照")).toBe("修订：第55章");
     expect(humanizeHistoryLabel("定稿前快照：第12章")).toBe("定稿：第12章");
     expect(humanizeHistoryLabel("抽卡选用候选前快照：第3章")).toBe("选用候选稿：第3章");
@@ -226,7 +226,7 @@ describe("撤销/恢复回执全文：buildRestoreReceipt", () => {
 
   it("连带退回「这步之后写的」单独一句说清；主清单只列这一步本身的", () => {
     const text = buildRestoreReceipt({
-      title: "已恢复到「更新故事资料：改名 主角→陆沉」之前。",
+      title: "已恢复到「改设定本：改名 主角→陆沉」之前。",
       reverted: [
         m("characters/char-ffe5af/core.json"),
         a("drafts/fast/chapter-0005.md"),
@@ -235,7 +235,7 @@ describe("撤销/恢复回执全文：buildRestoreReceipt", () => {
       nameById: names,
     });
     expect(text).toBe(
-      "已恢复到「更新故事资料：改名 主角→陆沉」之前。这次退回：角色卡：周屿。" +
+      "已恢复到「改设定本：改名 主角→陆沉」之前。这次退回：角色卡：周屿。" +
       "这步之后写的第 5 章工作稿也一并退回了。要找回，去「历史」页点「恢复前的自动存档」。",
     );
   });

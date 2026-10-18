@@ -99,6 +99,8 @@ export interface CastMember {
   readonly aliases: readonly string[];
   readonly chapters: readonly number[];
   readonly viewpointChapters: readonly number[];
+  /** 每章出场的原句（这章记的第一条），故事地图点格子回原文用。 */
+  readonly appearances: readonly { readonly chapter: number; readonly quote: string }[];
 }
 
 /** 投影自己就能确定的矛盾：同一主体同一方面、不会变的事实前后值不同，又没有明写推翻。 */

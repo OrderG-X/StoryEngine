@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan } from "../chapter-plan.js";
 import type { WriterContextEnvelope } from "../context-gateway.js";
-import { findReplayedParagraphs, runFastDraft, type WriterClient } from "../fast-draft-writer.js";
+import { findReplayedParagraphs, runFastDraft, stripTrailingSegmentMarkers, type WriterClient } from "../fast-draft-writer.js";
 import { renderFastDraftPromptText } from "../prompt-cache-diagnostics.js";
 import { createStoryProject } from "../project-store.js";
 
@@ -47,6 +47,34 @@ describe("按章纲分前后两半写", () => {
     const written = await readFile(report.draftPath!, "utf-8");
     expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
     expect(report.passed).toBe(true);
+  });
+
+  it("前半章末尾写手自加「（本章未完）」→ 接缝处去掉，后半章也看不到（重构 P6 真机：夹在正文中间）", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return contexts.length === 1
+          ? { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(900, "前")}。\n\n（本章未完）\n` }
+          : { title: "", content: `${han(900, "后")}。\n\n（全文完）` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000, persist: true });
+    expect(renderFastDraftPromptText(contexts[1])).not.toContain("本章未完");
+    const written = await readFile(report.draftPath!, "utf-8");
+    expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
+    expect(written).not.toContain("未完");
+    expect(written).not.toContain("全文完");
+  });
+
+  it("stripTrailingSegmentMarkers：只去末尾整段的短标记；人物心声、正文中间的括号段不动", () => {
+    expect(stripTrailingSegmentMarkers("他走了。\n\n（未完待续）\n\n")).toBe("他走了。");
+    expect(stripTrailingSegmentMarkers("他走了。\n(待续)")).toBe("他走了。");
+    expect(stripTrailingSegmentMarkers("他走了。\n\n（完了。）")).toBe("他走了。\n\n（完了。）");
+    expect(stripTrailingSegmentMarkers("（本章未完）\n\n他走了。")).toBe("（本章未完）\n\n他走了。");
+    expect(stripTrailingSegmentMarkers("他走了。\n\n（三年后）")).toBe("他走了。\n\n（三年后）");
+    expect(stripTrailingSegmentMarkers("他走了。\n\n（这件事他到死也没想完全明白）")).toBe("他走了。\n\n（这件事他到死也没想完全明白）");
   });
 
   it("每一半只写自己的要点：前半章的后半要点标成「这次不写」；后半章拿到已写要点清单（第十四轮越界、第十五轮前半章不知后事自己收场）", async () => {

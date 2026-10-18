@@ -123,15 +123,15 @@ export function flowLabel(state: ChapterFlowStatus | undefined | null): string {
 
 export function flowHint(state: ChapterFlowStatus): string {
   const hints: Record<ChapterFlowStatus, string> = {
-    idle: "当前章节已就绪。可以让 AI 生成本章方案，也可以直接说这一章想怎么写。",
-    steering_ready: "本章方案已准备好。确认方向后，可以生成工作稿正文。",
+    idle: "当前章节已就绪。可以让 AI 拟章纲，也可以直接说这一章想怎么写。",
+    steering_ready: "章纲拟好了。看过没问题，就可以写这一章。",
     draft_generating: "正在写工作稿，不会更新已定稿版。",
     draft_ready: "工作稿已生成。请先阅读，再做硬伤检查或生成定稿预览。",
     quality_checked: "硬伤检查完成。若没有阻断问题，可以生成定稿预览。",
     commit_preview_ready: "定稿预览已生成。点「确认定稿」将写入已定稿版，可在操作历史撤销。",
     waiting_commit_confirmation: "定稿预览已生成。点「确认定稿」即可写入，可在操作历史撤销。",
     committed: "本章已定稿。可以继续下一章。",
-    ready_for_next: "已进入新章节。你可以先说本章方向，也可以让系统整理本章方案。",
+    ready_for_next: "已进入新章节。你可以先说这一章想怎么写，也可以让 AI 拟章纲。",
   };
   return hints[state];
 }

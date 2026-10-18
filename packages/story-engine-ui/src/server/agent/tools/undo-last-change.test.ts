@@ -65,7 +65,7 @@ describe("undo_last_change 回执写清退回了什么（R4.2）", () => {
 
     const second = await undo(projectDir); // 撤改名
     expect(second.undone).toBe(true);
-    expect(second.summary).toContain("更新故事资料：改名 主角→陆沉");
+    expect(second.summary).toContain("改设定本：改名 主角→陆沉");
     expect(second.summary).toContain("角色卡资料"); // 该临时项目没有角色名册可解析 → 中性说法
     expect(second.summary).not.toMatch(/char-protag/u); // 铁律④：绝不吐裸 id
     expect(JSON.parse(await readFile(join(projectDir, "characters", "char-protag", "core.json"), "utf-8")).name).toBe("主角");
@@ -135,7 +135,7 @@ describe("undo_last_change 整回合撤销（R7.2）", () => {
 
     const out = await undo(projectDir);
     expect(out.undone).toBe(true);
-    expect(out.summary).toContain("更新故事资料：给主角加疤");
+    expect(out.summary).toContain("改设定本：给主角加疤");
     expect(out.summary).not.toContain("只退回了最后 1 处");
   }, 30_000);
 
