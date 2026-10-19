@@ -70,7 +70,14 @@ const KIND_FILTERS: readonly { readonly id: "all" | SnapshotKind; readonly label
   { id: "restore", label: "恢复" },
 ];
 
-export default function OperationHistoryView({ projectPath }: { readonly projectPath: string | null | undefined }) {
+/**
+ * refreshKey 变了就重读列表（传开书概况：开着历史页时在聊天里撤销、AI 写入、定稿，概况一刷新这里跟着出新条目，
+ * 不用切走再切回来）。
+ */
+export default function OperationHistoryView({ projectPath, refreshKey }: {
+  readonly projectPath: string | null | undefined;
+  readonly refreshKey?: unknown;
+}) {
   const [snapshots, setSnapshots] = useState<SnapshotEntryDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -86,7 +93,7 @@ export default function OperationHistoryView({ projectPath }: { readonly project
       .then((list) => { if (alive) setSnapshots(list); })
       .catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
-  }, [projectPath]);
+  }, [projectPath, refreshKey]);
 
   // 恢复后原地重读（重构 P5）：不整页刷新，列表里多出「恢复前」那条存档。
   const handleRestore = async (id: string): Promise<void> => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "../ui/dialog";
 import NewBookStarter from "../NewBookStarter.js";
 import ImportBookDialog from "../ImportBookDialog.js";
@@ -479,6 +479,17 @@ function RecentBook({
     };
   }, [menuOpen]);
 
+  // 底下放不下、上面放得下就往上开：窗口矮、书在最后一排时，后几项（归档、删除）不伸到窗口外面去。
+  const [menuUp, setMenuUp] = useState(false);
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    const button = menuBtnRef.current;
+    if (!menuOpen || !menu || !button) return;
+    const need = menu.offsetHeight + 8;
+    const rect = button.getBoundingClientRect();
+    setMenuUp(window.innerHeight - rect.bottom < need && rect.top >= need);
+  }, [menuOpen]);
+
   const act = (action: BookAction) => {
     setMenuOpen(false);
     onAction(action);
@@ -492,11 +503,11 @@ function RecentBook({
       <div className="se-book-info">
         <div className="se-book-row">
           <h3 title={book.title}>{book.title}</h3>
-          <button aria-label="书籍管理" className="se-book-more" onClick={() => setMenuOpen((current) => !current)} ref={menuBtnRef} type="button">···</button>
+          <button aria-expanded={menuOpen} aria-label="书籍管理" className="se-book-more" onClick={() => setMenuOpen((current) => !current)} ref={menuBtnRef} type="button">···</button>
         </div>
         <p>{book.writtenChapters} 章 · {book.updatedAt}</p>
         {menuOpen ? (
-          <menu className="se-book-menu" ref={menuRef}>
+          <menu className={`se-book-menu${menuUp ? " is-up" : ""}`} ref={menuRef}>
             <button onClick={() => act("open")} type="button">继续写作</button>
             <button onClick={() => act("info")} type="button">书的资料</button>
             <button onClick={() => act("rename")} type="button">重命名</button>

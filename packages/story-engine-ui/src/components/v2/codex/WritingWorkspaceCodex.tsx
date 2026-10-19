@@ -485,7 +485,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         <main className="desk">
           <div key={view} className="view-anim">
           {view === "history" ? (
-            <OperationHistoryView projectPath={props.projectPath} />
+            <OperationHistoryView projectPath={props.projectPath} refreshKey={props.overview} />
           ) : view === "library" ? (
             <>
               <div className="codex se-bible">

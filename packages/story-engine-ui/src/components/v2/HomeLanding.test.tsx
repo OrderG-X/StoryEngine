@@ -75,6 +75,22 @@ describe("HomeLanding", () => {
     expect(await screen.findByRole("button", { name: "回收站（1）" })).toBeInTheDocument();
   });
 
+  it("书的菜单：底下放不下、上面放得下就往上开；底下放得下照常往下", () => {
+    const rect = vi.spyOn(HTMLButtonElement.prototype, "getBoundingClientRect");
+    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(296);
+    rect.mockReturnValue({ top: window.innerHeight - 40, bottom: window.innerHeight - 18 } as DOMRect);
+    render(<HomeLanding {...homeProps({ recentBooks: [recentBook()] })} />);
+    fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
+    expect(screen.getByRole("button", { name: "删除书籍" }).closest("menu")).toHaveClass("is-up");
+
+    fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
+    rect.mockReturnValue({ top: 100, bottom: 122 } as DOMRect);
+    fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
+    expect(screen.getByRole("button", { name: "删除书籍" }).closest("menu")).not.toHaveClass("is-up");
+    rect.mockRestore();
+    height.mockRestore();
+  });
+
   it("回收站里恢复：书架上方的提示换成「回到书架了」，不留着「移到回收站」的旧话", async () => {
     vi.mocked(shelfClient.restoreTrashItem).mockResolvedValueOnce({ projectPath: "/x", title: "删掉的书" });
     render(<HomeLanding {...homeProps()} />);
