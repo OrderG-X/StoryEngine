@@ -278,8 +278,7 @@ function messagesWhenBackendSessionMissing(params: {
  * 与流程态 flowStatus（正文在 draftStore、对话在 chatStore，都不经这里）。
  *
  * H4：历史上这里直接铺开 base（含 overview 最新章的 currentChapter/chapters），用户在第2章顺手记资料
- * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。必须与 useFoundationGaps.ts 的 refreshWorkspaceFromOverview
- * 保持同款字段保留——改一处记得同步另一处。
+ * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。
  */
 export function mergeFoundationRefreshWorkspace(
   nextBase: ChapterWorkspaceData,
@@ -335,7 +334,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setActiveRevisionTask,
     setActiveRevisionPreview,
     setCommitSelections,
-    resetFoundationGaps,
     resetTransientUiState,
   } = useUiStore.getState();
 
@@ -484,7 +482,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       setWorkspaceReady(true);
       if (options.updateUrl !== false) {
         pushWorkspaceUrlForProject(nextProjectPath);
@@ -541,7 +538,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       resetTransientUiState();
       setSessions([], "");
       setActiveArchivedCount(0);
@@ -587,7 +583,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       setSessions([], "");
       setActiveArchivedCount(0);
       if (options.updateUrl !== false) pushHomeUrl();
@@ -775,7 +770,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       if (!activeSessionLoaded) {
         // 会话没读成功 → epoch 未登记 → 本次运行聊天自动保存会被短路（另有客户端一次性 toast 兜底）。
         // 开书照旧放行（重开本书 openProject 会补正），但成功 toast 必须让位给如实告警。

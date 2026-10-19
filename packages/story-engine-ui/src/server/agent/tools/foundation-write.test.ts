@@ -78,6 +78,22 @@ describe("normalizeRawOp：边界归一模型常传的退化写法（只动句�
     // field.set 的空串是「删这一栏」，不当没传
     expect(normalizeRawOp({ op: "field.set", card: "苏晴", label: "外貌", value: "" })).toEqual({ op: "field.set", card: "苏晴", label: "外貌", value: "" });
   });
+
+  it("漏写 op（GLM 实测）：键只对得上一种就补上；对上几种、只对得上「认下」、键对不上都不补", () => {
+    expect(normalizeRawOp({ kind: "character", name: "韩德胜", fields: [{ label: "身份", value: "退休仓管" }] }).op).toBe("card.create");
+    expect(normalizeRawOp({ op: "", card: "许建平", label: "性格", value: "认死理" }).op).toBe("field.set");
+    expect(normalizeRawOp({ a: "林远", b: "苏晴", label: "同学" }).op).toBe("relation.set");
+    expect(normalizeRawOp({ label: "题材", value: "悬疑" }).op).toBe("story.set");
+    expect(normalizeRawOp({ card: "苏晴", add: ["阿晴"] }).op).toBe("card.aliases");
+    // 只有 card：别名 / 删卡 / 设主角都对得上 → 不补
+    expect(normalizeRawOp({ card: "苏晴" }).op).toBeUndefined();
+    // 加一条还是删一条分不出 → 不补
+    expect(normalizeRawOp({ list: "bans", text: "x" }).op).toBeUndefined();
+    // 只对得上「认下」→ 不补（认下是作者的事）
+    expect(normalizeRawOp({ card: "苏晴", label: "外貌" }).op).toBeUndefined();
+    // 多塞了别的键 → 不补
+    expect(normalizeRawOp({ card: "苏晴", label: "外貌", value: "高", why: "x" }).op).toBeUndefined();
+  });
 });
 
 describe("foundation_write：AI 能直接做的写进去，标 AI 补的", () => {
@@ -153,7 +169,7 @@ describe("foundation_write：碰了作者写的不改，只出「确认改设定
     });
 
     expect(out).toMatchObject({ ok: true, needsConfirmation: true, applied: ["建了物品卡「蓝色账册」"], pending: ["「林远」的「身份」改了"] });
-    expect(out.foundationConfirm).toMatchObject({ label: "改设定：「林远」的「身份」改了" });
+    expect(out.foundationConfirm).toMatchObject({ label: "「林远」的「身份」改了" });
     expect(out.foundationConfirm!.key).toMatch(/^card-[0-9a-f]{24}$/u);
     expect(out.foundationConfirm!.input).toEqual({ ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }] });
     expect(out.summary).toContain("要你点「确认改设定」才改");

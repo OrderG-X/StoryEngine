@@ -184,7 +184,7 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
 }
 
 /** 原子写 JSON：2 空格缩进 + 尾换行，与旧 writeJson 落盘格式一致。 */
-export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await writeFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 

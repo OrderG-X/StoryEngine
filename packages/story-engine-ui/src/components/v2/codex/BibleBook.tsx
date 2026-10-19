@@ -189,6 +189,9 @@ function ScalarText({ value, by, multiline, placeholder, label, disabled, onSave
   );
 }
 
+/** 和核心 rules.set 的上限一致：超了核心会拒，在这儿先拦下、退回原值。 */
+const WORDS_MAX = 100_000;
+
 function WordsInput({ label, value, disabled, onSave }: {
   readonly label: string;
   readonly value?: number;
@@ -200,7 +203,7 @@ function WordsInput({ label, value, disabled, onSave }: {
   const commit = () => {
     const trimmed = draft.trim();
     const next = trimmed === "" ? null : Number(trimmed);
-    if (next !== null && (!Number.isInteger(next) || next <= 0)) {
+    if (next !== null && (!Number.isInteger(next) || next <= 0 || next > WORDS_MAX)) {
       setDraft(value ? String(value) : "");
       return;
     }
@@ -209,7 +212,7 @@ function WordsInput({ label, value, disabled, onSave }: {
   return (
     <label className="se-bk-word">
       <span>{label}</span>
-      <input inputMode="numeric" value={draft} disabled={disabled} placeholder="不限" aria-label={`每章${label}字数`}
+      <input inputMode="numeric" maxLength={6} value={draft} disabled={disabled} placeholder="不限" aria-label={`每章${label}字数`}
         onChange={(event) => setDraft(event.target.value.replace(/\D/gu, ""))}
         onBlur={commit}
         onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }} />

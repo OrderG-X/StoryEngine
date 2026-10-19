@@ -184,6 +184,12 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     fireEvent.click(screen.getByRole("button", { name: "全部认下" }));
     await waitFor(() => expect(lastOps()).toEqual([{ op: "rules.accept" }]));
     const target = screen.getByLabelText("每章目标字数");
+    // 超过上限：不发、退回原值
+    const calls = saveCards.mock.calls.length;
+    fireEvent.change(target, { target: { value: "280000" } });
+    fireEvent.blur(target);
+    expect(saveCards.mock.calls.length).toBe(calls);
+    expect((target as HTMLInputElement).value).toBe("3000");
     fireEvent.change(target, { target: { value: "2500" } });
     fireEvent.blur(target);
     await waitFor(() => expect(lastOps()).toEqual([{ op: "rules.set", field: "targetWords", value: 2500 }]));

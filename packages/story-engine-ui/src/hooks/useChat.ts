@@ -439,6 +439,13 @@ export function useChat(params: UseChatParams): UseChatResult {
               const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
               const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
               if (!info.overview) {
+                const changedBible = info.refreshScope === "foundation" || (info.toolName === "manage_ledger" && info.refreshScope === "full");
+                if (changedBible && projectPath) {
+                  // 改设定、确认改账的结果不带概况（重构 P9）：重读一份，设定本、主角、待处理跟着变。
+                  track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })
+                    .then((overview) => { if (ownsCurrentWorkspace()) refreshWorkspaceFromOverview?.(overview); })
+                    .catch(() => undefined));
+                }
                 if (info.toolName === "commit_apply" && info.committed === true) {
                   const storeBook = useBookStore.getState();
                   const current = storeBook.workspace;

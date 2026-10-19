@@ -14,7 +14,6 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 import {
   applyCardOps,
-  cardChangeLabel,
   CardOp,
   KIND_LABELS,
   MAX_OPS_PER_CHANGE,
@@ -75,12 +74,39 @@ function isEmptyValue(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
 }
 
+/** 认下是作者的事：漏写 op 时不替模型补成这几种。 */
+const NEVER_INFERRED = new Set(["field.accept", "story.accept", "rules.accept"]);
+/** 每种改动的键：必填的、允许的（从核心的 CardOp 现取，不另抄一份）。 */
+const OP_KEYS = CardOp.options
+  .map((option) => {
+    const shape = option.shape as Record<string, z.ZodType>;
+    const keys = Object.keys(shape).filter((key) => key !== "op");
+    return {
+      op: (shape.op as z.ZodLiteral<string>).value,
+      required: keys.filter((key) => !shape[key]!.safeParse(undefined).success),
+      allowed: new Set(keys),
+    };
+  })
+  .filter((item) => !NEVER_INFERRED.has(item.op));
+
+/** 模型漏写 op（GLM 实测头一次常漏）：键刚好只对得上一种改动就补上；对不上、对上好几种都不补，照旧报格式不对。 */
+function inferOp(raw: Record<string, unknown>): string | undefined {
+  const keys = Object.keys(raw);
+  const hits = OP_KEYS.filter((item) => item.required.every((key) => keys.includes(key)) && keys.every((key) => item.allowed.has(key)));
+  return hits.length === 1 ? hits[0]!.op : undefined;
+}
+
 /** 句法层归一：只动明确的退化写法，语义不猜。 */
 export function normalizeRawOp(raw: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (OPTIONAL_KEYS.has(key) && isEmptyValue(value)) continue;
+    if (key === "op" && isEmptyValue(value)) continue;
     out[key] = value;
+  }
+  if (out.op === undefined) {
+    const inferred = inferOp(out);
+    if (inferred) out.op = inferred;
   }
   if (typeof out.op === "string") out.op = out.op.trim();
   if (typeof out.kind === "string") out.kind = KIND_ALIASES[out.kind.trim()] ?? out.kind.trim().toLowerCase();
@@ -144,7 +170,8 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     const dry = applyCardOps(after, ops, { by: "author", at });
     if (dry.ok && dry.lines.length > 0) {
       pending = dry.lines;
-      confirm = { key: confirmKey(ops), input: { ops }, label: cardChangeLabel(dry.lines) };
+      // 按钮回显是「确认改设定：<这里>」，不再带「改设定：」前缀。
+      confirm = { key: confirmKey(ops), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}` };
     } else if (!dry.ok) {
       notDone.push(`要你点头的那几处也做不了：${dry.message}`);
     }

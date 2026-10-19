@@ -13,10 +13,6 @@ import type {
   ChapterSteeringDraft,
   DraftAIReviewReport,
   DraftRevisionTask,
-  FoundationGapApplyPlan,
-  FoundationGapDecision,
-  FoundationGapReport,
-  FoundationGapSuggestion,
 } from "../api/types.js";
 
 export function emptyCommitSelections(): CommitSelectiveConfirmationState {
@@ -53,12 +49,6 @@ export interface UiStore {
   activeRevisionPreview: WorkspaceRevisionPreview | null;
   /** 正文「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）；非空时 WritingPaper 在正文里高亮并滚到首处。用户编辑/切章/新改写时清。 */
   revisionHighlightTexts: readonly string[];
-  foundationGapReport: FoundationGapReport | null;
-  foundationGapSuggestions: readonly FoundationGapSuggestion[];
-  foundationGapDecisions: Readonly<Record<string, FoundationGapDecision["decision"]>>;
-  foundationGapApplyPlan: FoundationGapApplyPlan | null;
-  foundationGapLoading: string | null;
-  foundationGapError: string | null;
 
   setSteeringDirection: (value: string) => void;
   setLastChapterDirection: (value: string) => void;
@@ -83,7 +73,6 @@ export interface UiStore {
   resetSteeringState: () => void;
   resetCommitState: () => void;
   resetRevisionState: () => void;
-  resetFoundationGaps: () => void;
   /** 切项目、开书、撤销恢复后清掉所有「当前操作在飞」的临时态，防跨书串写（M7：A书候选稿挂到B书）。 */
   resetTransientUiState: () => void;
 }
@@ -106,12 +95,6 @@ export const useUiStore = create<UiStore>((set) => ({
   activeRevisionTask: null,
   activeRevisionPreview: null,
   revisionHighlightTexts: [],
-  foundationGapReport: null,
-  foundationGapSuggestions: [],
-  foundationGapDecisions: {},
-  foundationGapApplyPlan: null,
-  foundationGapLoading: null,
-  foundationGapError: null,
 
   setSteeringDirection: (value) => set({ steeringDirection: value }),
   setLastChapterDirection: (value) => set({ lastChapterDirection: value }),
@@ -140,14 +123,6 @@ export const useUiStore = create<UiStore>((set) => ({
     revisionHighlightTexts: [],
     aiFlavorPending: null,
     aiFlavorBatchPending: null,
-  }),
-  resetFoundationGaps: () => set({
-    foundationGapReport: null,
-    foundationGapSuggestions: [],
-    foundationGapDecisions: {},
-    foundationGapApplyPlan: null,
-    foundationGapLoading: null,
-    foundationGapError: null,
   }),
   // M7：尤其 draftCandidates（A书候选稿若残留，切到B书点「用这版」会把A的内容写进B草稿）。
   resetTransientUiState: () => set({
