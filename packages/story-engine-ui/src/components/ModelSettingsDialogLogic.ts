@@ -152,6 +152,8 @@ export interface ModelSettingsBuildResult {
   readonly config: Record<string, unknown>;
   /** 清洗后的任务表（指向已删服务商的条目已剔除）：旁路 taskAssignments 载荷必须用它构建，与 config 同口径。 */
   readonly cleanedTasks: Record<string, string>;
+  /** 备用模型（P10）的档案 id；没选或它的服务商已删 → null（旁路载荷照它写，与 config 同口径）。 */
+  readonly fallbackProfileId: string | null;
   /** 本次合并的就地清洗动作（人话文案，直贴 UI 警告区）；空数组 = 零清洗。 */
   readonly cleaningWarnings: readonly string[];
 }
@@ -205,6 +207,8 @@ export function buildModelSettingsConfig(
   options?: {
     readonly chatHistoryBudgetTokens?: number | null;
     readonly previousRawText?: string | null;
+    /** 备用模型（P10）"provider|model"：给它建档案，但不分给任何任务。 */
+    readonly fallback?: string;
   },
 ): ModelSettingsBuildResult {
   const cleaningWarnings: string[] = [];
@@ -228,6 +232,13 @@ export function buildModelSettingsConfig(
     }
     cleanedTasks[key] = val;
   }
+  const [fallbackProv, fallbackModel] = (options?.fallback ?? "").split("|");
+  let cleanedFallback: string | undefined;
+  if (fallbackProv && fallbackModel) {
+    if (knownProviderIds.has(fallbackProv)) cleanedFallback = `${fallbackProv}|${fallbackModel}`;
+    else cleaningWarnings.push(`备用模型指向的服务商「${fallbackProv}」已不存在，本次保存已改成不用备用，请重新选。`);
+  }
+  const usedModels = [...Object.values(cleanedTasks), ...(cleanedFallback ? [cleanedFallback] : [])];
 
   const previous = parsePreviousConfig(options?.previousRawText);
   const providerMap: Record<string, unknown> = {};
@@ -246,7 +257,7 @@ export function buildModelSettingsConfig(
     seenProviders.add(prov.id);
   }
 
-  for (const val of Object.values(cleanedTasks)) {
+  for (const val of usedModels) {
     const [provId] = val.split("|");
     if (!provId || seenProviders.has(provId)) continue;
     seenProviders.add(provId);
@@ -265,7 +276,11 @@ export function buildModelSettingsConfig(
 
   const profileMap: Record<string, unknown> = {};
   const finalTasks: Record<string, string> = {};
-  for (const [key, val] of Object.entries(cleanedTasks)) {
+  const modelEntries: [string | null, string][] = [
+    ...Object.entries(cleanedTasks),
+    ...(cleanedFallback ? [[null, cleanedFallback] as [null, string]] : []),
+  ];
+  for (const [key, val] of modelEntries) {
     const [provId, model] = val.split("|");
     if (!provId || !model) continue;
     const profId = taskProfileId(provId, model);
@@ -281,7 +296,7 @@ export function buildModelSettingsConfig(
         model,
       };
     }
-    finalTasks[key] = profId;
+    if (key !== null) finalTasks[key] = profId;
   }
 
   const defaultProvider = seenProviders.size > 0 ? [...seenProviders][0] : undefined;
@@ -310,7 +325,8 @@ export function buildModelSettingsConfig(
   // 清洗①③：合并产物返回前的兜底清扫（明文密钥整树剔除 + 五件套非法值回默认，详见函数 docstring）。
   stripPlaintextApiKeyFields(config, "$", cleaningWarnings);
   resetInvalidProfileKnobs(config, cleaningWarnings);
-  return { config, cleanedTasks, cleaningWarnings };
+  const fallbackProfileId = cleanedFallback ? taskProfileId(...(cleanedFallback.split("|") as [string, string])) : null;
+  return { config, cleanedTasks, fallbackProfileId, cleaningWarnings };
 }
 
 /**
@@ -422,6 +438,12 @@ export function buildTaskAssignmentsPayload(
     out[task] = entry;
   }
   return out;
+}
+
+/** 备用模型档案 id → 面板状态 "provider|model"；没设或档案找不到 → ""。 */
+export function parseFallbackState(fallbackProfileId: string | null | undefined, profiles: readonly ModelProfileSummary[]): string {
+  const profile = fallbackProfileId ? profiles.find((p) => p?.id === fallbackProfileId) : undefined;
+  return profile?.provider && profile.model ? `${profile.provider}|${profile.model}` : "";
 }
 
 /**

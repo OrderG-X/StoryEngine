@@ -12,6 +12,7 @@ import {
   buildTaskAssignmentsPayload,
   formatHumanTestError,
   parseChatHistoryBudgetTokens,
+  parseFallbackState,
   parseModelSettings,
   parseTaskViewState,
 } from "../../ModelSettingsDialogLogic.js";
@@ -23,6 +24,7 @@ import {
 } from "../../ModelSettingsDialogTypes.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { AiServiceManager } from "./AiServiceManager.js";
+import { ModelsInUseCard } from "./ModelsInUseCard.js";
 // 本页直接用 .ms-notice/.ms-warn-notice/.ms-error 等 ms-* 样式，显式引入其所在 css，不再隐式依赖单 bundle 里别人捎带。
 import "../../ModelSettingsDialog.css";
 import "./aiSettings.css";
@@ -55,11 +57,16 @@ interface PickerState {
 
 const CLOSED_PICKER: PickerState = { editingTask: null, applyAll: false, search: "" };
 
+/** 选备用模型时选择器里的「功能」键（不是真任务）。 */
+const FALLBACK_PICK = "fallback";
+
 /** 持久化快照：每次写盘带全量状态，序列化排队防交错覆盖。 */
 interface PersistSnapshot {
   readonly providers: readonly SavedProvider[];
   readonly tasks: Record<string, string>;
   readonly thinking: Record<string, boolean>;
+  /** 备用模型 "provider|model"；"" = 不用备用。 */
+  readonly fallback: string;
   readonly budget: number;
   readonly apiKeys?: Record<string, string>;
 }
@@ -71,7 +78,7 @@ function slugifyProviderId(name: string): string {
 
 /**
  * AI 设置整页（服务商卡片 + 详情配置 + 任务分配）：
- *  - list：服务商卡片网格（预设 + 已存自定义），下方是「各功能使用的 AI」任务分配与对话记忆上限；
+ *  - list：顶上「在用的模型」+ 体检；服务商（已接好的在上、其余收进「添加服务商」）；下方「各功能使用的 AI」与对话记忆；
  *  - detail：点卡片进入该服务商配置（已配置的回填已保存值），测通后可一键「保存并分配给所有任务」。
  * 数据层走与 ModelSettingsDialog 相同的逻辑：读 result.summary（带密钥状态的规范化视图），
  * 写 buildModelSettingsConfig（providers 保持「以 id 为键的对象」规范形态）+ 任务分配旁路。
@@ -86,6 +93,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const [providerModels, setProviderModels] = useState<Record<string, readonly ModelInfoItem[]>>({});
   const [tasks, setTasks] = useState<Record<string, string>>({});
   const [thinking, setThinking] = useState<Record<string, boolean>>({});
+  const [fallback, setFallback] = useState("");
   const [chatMemoryBudget, setChatMemoryBudget] = useState(DEFAULT_CHAT_MEMORY);
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -102,10 +110,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const [picker, setPicker] = useState<PickerState>(CLOSED_PICKER);
 
   // 最新状态镜像：持久化调用取「此刻真值 + 本次改动」，不受 setState 异步影响。
-  const stateRef = useRef({ providers: savedProviders, tasks, thinking, budget: chatMemoryBudget });
+  const stateRef = useRef({ providers: savedProviders, tasks, thinking, fallback, budget: chatMemoryBudget });
   useEffect(() => {
-    stateRef.current = { providers: savedProviders, tasks, thinking, budget: chatMemoryBudget };
-  }, [savedProviders, tasks, thinking, chatMemoryBudget]);
+    stateRef.current = { providers: savedProviders, tasks, thinking, fallback, budget: chatMemoryBudget };
+  }, [savedProviders, tasks, thinking, fallback, chatMemoryBudget]);
 
   const persistQueue = useRef(Promise.resolve());
   const budgetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,6 +151,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     const viewState = parseTaskViewState(res.taskAssignments, res.result?.summary?.profiles ?? []);
     setTasks(Object.keys(viewState.tasks).length > 0 ? viewState.tasks : parsed.tasks);
     if (Object.keys(viewState.thinking).length > 0) setThinking(viewState.thinking);
+    setFallback(parseFallbackState(res.fallbackProfileId, res.result?.summary?.profiles ?? []));
     const budget = parseChatHistoryBudgetTokens(res.rawText);
     if (budget !== null) setChatMemoryBudget(budget);
     // 警告归属「服务商保存」类动作：只有它们（refreshWarnings=true）的成功响应才刷新/清空警告；
@@ -172,9 +181,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       const built = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
         chatHistoryBudgetTokens: snapshot.budget,
         previousRawText: rawTextRef.current,
+        fallback: snapshot.fallback,
       });
       const payload = buildTaskAssignmentsPayload(built.cleanedTasks, snapshot.thinking);
-      const res = await saveModelSettings(JSON.stringify(built.config, null, 2), snapshot.apiKeys, payload);
+      const res = await saveModelSettings(JSON.stringify(built.config, null, 2), snapshot.apiKeys, payload, undefined, built.fallbackProfileId);
       applySaved(res, options?.refreshWarnings ?? false);
       // 合并清洗动作（剔除手写明文密钥/清掉指向已删服务商的任务/非法旋钮回默认）如实进警告区，
       // 与服务端 warnings 同栏、不自动消失——用户据此补密钥或重选模型。
@@ -227,6 +237,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
         const viewState = parseTaskViewState(r.taskAssignments, r.result?.summary?.profiles ?? []);
         setTasks(Object.keys(viewState.tasks).length > 0 ? viewState.tasks : parsed.tasks);
         setThinking(viewState.thinking);
+        setFallback(parseFallbackState(r.fallbackProfileId, r.result?.summary?.profiles ?? []));
         setChatMemoryBudget(parseChatHistoryBudgetTokens(r.rawText) ?? DEFAULT_CHAT_MEMORY);
         setLoading(false);
         void syncProviderModels(parsed.providers, () => cancelled);
@@ -386,10 +397,11 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       const [pid] = v.split("|");
       if (pid !== detailId) nextTasks[k] = v;
     }
+    const nextFallback = fallback.split("|")[0] === detailId ? "" : fallback;
     setSaving(true);
     setTestError(null);
     try {
-      await persist({ providers: nextProviders, tasks: nextTasks }, { refreshWarnings: true });
+      await persist({ providers: nextProviders, tasks: nextTasks, fallback: nextFallback }, { refreshWarnings: true });
       setProviderModels((prev) => {
         const next = { ...prev };
         delete next[detailId];
@@ -403,7 +415,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     } finally {
       setSaving(false);
     }
-  }, [detailId, editingExisting, deleteArmed, savedProviders, tasks, persist, backToList]);
+  }, [detailId, editingExisting, deleteArmed, savedProviders, tasks, fallback, persist, backToList]);
 
   const commitTasks = useCallback((nextTasks: Record<string, string>, nextThinking: Record<string, boolean>) => {
     setTasks(nextTasks);
@@ -413,10 +425,18 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       .catch((e) => setOpError(`任务分配保存失败：${e instanceof Error ? e.message : String(e)}`));
   }, [persist]);
 
+  const commitFallback = useCallback((next: string) => {
+    setFallback(next);
+    persist({ fallback: next })
+      .then(() => setOpError(null))
+      .catch((e) => setOpError(`备用模型保存失败：${e instanceof Error ? e.message : String(e)}`));
+  }, [persist]);
+
   const assignTask = useCallback((taskKey: string, providerId: string, modelId: string) => {
-    commitTasks({ ...stateRef.current.tasks, [taskKey]: `${providerId}|${modelId}` }, stateRef.current.thinking);
+    if (taskKey === FALLBACK_PICK) commitFallback(`${providerId}|${modelId}`);
+    else commitTasks({ ...stateRef.current.tasks, [taskKey]: `${providerId}|${modelId}` }, stateRef.current.thinking);
     setPicker(CLOSED_PICKER);
-  }, [commitTasks]);
+  }, [commitTasks, commitFallback]);
 
   const assignAll = useCallback((providerId: string, modelId: string) => {
     const next: Record<string, string> = {};
@@ -485,7 +505,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       ? "自定义服务"
       : form.name || detailPreset?.label || "AI 服务";
   const headerSubtitle = view.kind === "list"
-    ? "选择服务商填 Key，即可开始写作；下方可给每个功能分配模型。"
+    ? "接一家服务商、填上密钥就能写；每个功能可以用不同的模型。"
     : editingExisting
       ? "改动保存后立即生效。密钥留空表示不修改。"
       : "填入 API Key，测试通过后保存。";
@@ -514,7 +534,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
                 {saveWarnings.map((warning, index) => (
                   <div key={`warn-${index}`}>{warning}</div>
                 ))}
-                {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无原文编辑器，
+                {/* 本页表单只有名称/地址/环境变量/密钥 4 个字段、无原文编辑器，
                     被丢的 customHeaders 在本页补不回——指路到同一弹窗的「高级」。 */}
                 <div>
                   补回路径：设置左边点「高级」，在对应服务商下写回 customHeaders 明文值后保存。
@@ -525,6 +545,16 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
             {view.kind === "list" && (
               <>
+                {savedProviders.length > 0 && (
+                  <ModelsInUseCard
+                    tasks={tasks}
+                    savedProviders={savedProviders}
+                    fallback={fallback}
+                    onPickFallback={() => setPicker({ editingTask: FALLBACK_PICK, applyAll: false, search: "" })}
+                    onClearFallback={() => commitFallback("")}
+                  />
+                )}
+
                 <AiServiceManager
                   savedProviders={savedProviders}
                   onSelect={(id) => openDetail(id)}
@@ -612,7 +642,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
           pickerSearch={picker.search}
           allModelsFlat={allModelsFlat}
           groupedFilteredModels={groupedFilteredModels}
-          tasks={tasks}
+          tasks={picker.editingTask === FALLBACK_PICK ? { [FALLBACK_PICK]: fallback } : tasks}
+          {...(picker.editingTask === FALLBACK_PICK ? { taskLabel: "备用模型", hideApplyAll: true } : {})}
           setPickerApplyAll={(applyAll) => setPicker((prev) => ({ ...prev, applyAll }))}
           setPickerSearch={(search) => setPicker((prev) => ({ ...prev, search }))}
           onClose={() => setPicker(CLOSED_PICKER)}

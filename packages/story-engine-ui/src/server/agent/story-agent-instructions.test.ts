@@ -11,6 +11,7 @@ vi.mock("./model.js", () => ({
   resolveGlmModel: vi.fn(async () => ({
     model: { specificationVersion: "v2", provider: "fake", modelId: "fake", doGenerate: async () => ({}), doStream: async () => ({}) },
     profile: { model: "fake" },
+    provider: { id: "fake" },
   })),
 }));
 

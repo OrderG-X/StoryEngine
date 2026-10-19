@@ -44,26 +44,20 @@ export function useBookManagement() {
       removeRecentBookById(bookId);
       return `已从书架删除《${book.title}》。`;
     }
-    // 删盘失败也要把它移出书架——用户就是想让它从书架消失。常见失败=目录已不存在（早期残留条目，
-    // 服务端现已幂等返回成功）；其它失败（权限等）则移出书架并如实提示磁盘没删掉，不让一条删不掉的书卡住书架。
-    let diskNote = "";
-    try {
-      await removeBookProject({
-        projectPath: book.projectPath,
-        confirmDelete: true,
-        confirmTitle: book.title,
-        confirmProjectPath: book.projectPath,
-      });
-    } catch (error) {
-      diskNote = `（本地目录未能删除：${error instanceof Error ? error.message : String(error)}）`;
-    }
+    // 删书是挪进回收站（P10）：没挪成就如实报错、书留在书架上；目录早就不在了服务端照样回成功，这条移出书架。
+    await removeBookProject({
+      projectPath: book.projectPath,
+      confirmDelete: true,
+      confirmTitle: book.title,
+      confirmProjectPath: book.projectPath,
+    });
     removeRecentBookById(bookId);
     if (projectPath === book.projectPath) {
       useNavigationStore.getState().setWorkspaceReady(false);
       useNavigationStore.getState().setActiveBookId(null);
       useNavigationStore.getState().setProjectPath(null);
     }
-    return diskNote ? `已从书架移除《${book.title}》${diskNote}。` : `已删除《${book.title}》的本地项目目录。`;
+    return `已把《${book.title}》移到回收站，30 天内能恢复。`;
   };
 
   const openRecentBookFolder = async (bookId: string): Promise<string> => {

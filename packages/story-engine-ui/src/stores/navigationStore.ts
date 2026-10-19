@@ -10,10 +10,6 @@ export interface NavigationStore {
   readonly openProjectError: string | null;
   readonly openProjectLoading: boolean;
   readonly settingsOpen: boolean;
-  readonly usageOpen: boolean;
-  readonly usageLoading: boolean;
-  readonly usageError: string | null;
-  readonly usageSummary: import("../api/types.js").UsageSummary | null;
   readonly toast: string | null;
   /** 一次性「请切到中间区某视图」信号：出稿/续写时置 "desk"，WritingWorkspaceCodex 消费后清空。 */
   readonly pendingCenterView: CenterView | null;
@@ -27,11 +23,6 @@ export interface NavigationStore {
   readonly setOpenProjectLoading: (loading: boolean) => void;
   readonly openSettings: () => void;
   readonly closeSettings: () => void;
-  readonly openUsage: () => void;
-  readonly closeUsage: () => void;
-  readonly setUsageLoading: (loading: boolean) => void;
-  readonly setUsageError: (error: string | null) => void;
-  readonly setUsageSummary: (summary: import("../api/types.js").UsageSummary | null) => void;
   readonly showToast: (message: string, duration?: number) => void;
   readonly clearToast: () => void;
   /** 请求中间区切到某视图（出稿/续写时调，置 "desk"）。 */
@@ -50,10 +41,6 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
   openProjectError: null,
   openProjectLoading: false,
   settingsOpen: false,
-  usageOpen: false,
-  usageLoading: false,
-  usageError: null,
-  usageSummary: null,
   toast: null,
   pendingCenterView: null,
   unseenChangesChapter: null,
@@ -68,11 +55,6 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
   setOpenProjectLoading: (loading) => set({ openProjectLoading: loading }),
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
-  openUsage: () => set({ usageOpen: true }),
-  closeUsage: () => set({ usageOpen: false }),
-  setUsageLoading: (loading) => set({ usageLoading: loading }),
-  setUsageError: (error) => set({ usageError: error }),
-  setUsageSummary: (summary) => set({ usageSummary: summary }),
 
   showToast: (message, duration = 3200) => {
     if (toastTimer !== null) {

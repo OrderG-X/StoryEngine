@@ -16,7 +16,7 @@ export const TASK_HINTS: Record<string, string> = {
   triage: "右侧对话总控，驱动所有工具",
   repair: "按建议局部修订正文",
   chapterSteering: "读前文、拟章纲",
-  draftReview: "深度分析整章并给出改进建议",
+  draftReview: "通读整章、给出改进建议",
   qualityCheck: "定稿前查硬伤",
 };
 
@@ -119,4 +119,8 @@ export interface ModelPickerOverlayProps {
   readonly onClose: () => void;
   readonly onAssignAll: (providerId: string, modelId: string) => void;
   readonly onAssignTask: (taskKey: string, providerId: string, modelId: string) => void;
+  /** 标题里的功能名（不是 TASK_LABELS 里的任务时给，如「备用模型」）。 */
+  readonly taskLabel?: string;
+  /** 不显示「同时应用到全部任务」（选备用模型时）。 */
+  readonly hideApplyAll?: boolean;
 }

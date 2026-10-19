@@ -20,7 +20,8 @@
 import type { ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
-import { getStoryAgent } from "../agent/story-agent.js";
+import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
+import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
@@ -30,7 +31,7 @@ import { qualityCheckTool } from "../agent/tools/quality-check.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
-import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
@@ -291,6 +292,8 @@ export async function runAgentTurn(args: {
   readonly scrubber: { push(text: string): string; flush(): string };
   /** 客户端已断开（abortOnClientDisconnect）：立即停转发。 */
   readonly shouldStop?: () => boolean;
+  /** 对话 AI 用的模型：给了就把这轮用量记进全局用量账（P10）。 */
+  readonly model?: AgentModelInfo;
 }): Promise<{ readonly finishReason: string | undefined }> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
@@ -381,7 +384,11 @@ export async function runAgentTurn(args: {
       }
       case "finish": {
         finishReason = chunk.payload?.stepResult?.reason;
-        recordAgentUsage(sampleFromSdkUsage(chunk.payload?.output?.usage), chunk.payload?.output?.steps?.length || 1);
+        const sample = sampleFromSdkUsage(chunk.payload?.output?.usage);
+        recordAgentUsage(sample, chunk.payload?.output?.steps?.length || 1);
+        // 这轮换成了备用模型就记到备用名下（主模型没连上的请求不出 token）。
+        const usedModel = currentAgentFallback() ?? args.model;
+        if (usedModel) void recordUsage({ task: "triage", ...usedModel, sample });
         break;
       }
       default:
@@ -492,7 +499,7 @@ async function handleAgentChat(
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
-      const { usage: actionUsage } = await withTokenMeter(() => runUserAction({
+      const { usage: actionUsage, notices: actionNotices } = await withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
         executeTool: executeUserActionTool,
@@ -504,6 +511,7 @@ async function handleAgentChat(
       }));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
+      for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
       await appendTurnMetrics(projectDir, "chapter" in action ? action.chapter : currentChapter, {
@@ -539,7 +547,8 @@ async function handleAgentChat(
     const visibleTextScrubber = createStreamingScrubber();
 
     const turnStarted = Date.now();
-    const { result: { finishReason }, usage } = await withTokenMeter(async () => runAgentTurn({
+    const agentModel = getStoryAgentModel();
+    const { result: { finishReason }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
@@ -551,10 +560,12 @@ async function handleAgentChat(
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
+      ...(agentModel ? { model: agentModel } : {}),
     }));
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);
+    for (const notice of notices) sendEvent("status", { message: notice });
     sendEvent("usage", usage);
     await appendTurnMetrics(projectDir, currentChapter, { kind: "chat", ms: Date.now() - turnStarted, usage });
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });

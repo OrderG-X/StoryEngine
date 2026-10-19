@@ -23,6 +23,8 @@ export interface TaskAssignment {
 export interface TaskAssignmentsFile {
   readonly version: 1;
   readonly tasks: Readonly<Record<string, TaskAssignment>>;
+  /** 备用模型档案（P10）：主模型这次没连上时换它再试一次；省略 = 不用备用。 */
+  readonly fallbackProfileId?: string;
 }
 
 /** 面板可分配的 6 个任务类型（已删 futureReview 死槽；做厚工具删了，enrichment 槽也删了，重构 P9）。 */
@@ -69,7 +71,11 @@ export async function readTaskAssignments(
         }
       }
     }
-    return { file: { version: 1, tasks }, corrupt: false };
+    const fallback = (parsed as { fallbackProfileId?: unknown }).fallbackProfileId;
+    return {
+      file: { version: 1, tasks, ...(typeof fallback === "string" && fallback.trim() ? { fallbackProfileId: fallback } : {}) },
+      corrupt: false,
+    };
   } catch {
     return { file: null, corrupt: true }; // 坏 JSON：用默认、绝不覆盖
   }
@@ -146,4 +152,14 @@ export function pickTaskAssignmentsFromBody(body: unknown): TaskAssignmentsFile 
     }
   }
   return { version: 1, tasks };
+}
+
+/**
+ * 从面板 PUT body 抽出备用模型（P10）：`fallbackProfileId` 是字符串 = 设成它，`null` 或空串 = 不用备用；
+ * body 里没这个键 = 不动现状（老面板、高级原文编辑不带它）。
+ */
+export function pickFallbackFromBody(body: unknown): { readonly present: false } | { readonly present: true; readonly profileId?: string } {
+  if (typeof body !== "object" || body === null || !("fallbackProfileId" in body)) return { present: false };
+  const raw = (body as { fallbackProfileId?: unknown }).fallbackProfileId;
+  return typeof raw === "string" && raw.trim() ? { present: true, profileId: raw.trim() } : { present: true };
 }

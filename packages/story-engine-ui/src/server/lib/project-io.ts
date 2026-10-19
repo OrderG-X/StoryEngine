@@ -7,6 +7,7 @@ import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/p
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
 import { resolveBooksRootDir } from "./data-dirs.js";
+import { noteUsageBook } from "./usage-scope.js";
 import type { StateOverview } from "../book/state-overview.js";
 import type { MessageCard } from "../../type-defs/workspace.js";
 import { legacyMessageCards, readMessageCards } from "./message-cards-io.js";
@@ -150,10 +151,6 @@ export function parseOptionalPositiveInteger(value: string | null): number | und
   if (!value?.trim()) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-export function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export function readChatMessages(value: unknown): readonly { readonly role: "user" | "assistant"; readonly content: string }[] {
@@ -477,8 +474,6 @@ export function readDraftQualityReport(value: Record<string, unknown>): { readon
 // 真机耐力跑实测撞墙（保存失败→聊天卡死）。本地单用户服务，放宽到 32MB 足够 200+ 章；
 // 会话历史的无界增长另行治理（裁剪/归档），这里先保证长书不断粮。
 export const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
-export const MAX_USAGE_SUMMARY_FILES = 200;
-export const MAX_USAGE_SUMMARY_FILE_BYTES = 256 * 1024;
 
 export async function readJsonFile(path: string): Promise<Record<string, unknown>> {
   const parsed = JSON.parse(await readFile(path, "utf-8")) as unknown;
@@ -609,6 +604,8 @@ export function guardProjectPath(res: ServerResponse, projectPath: string): bool
     writeJson(res, 400, { ok: false, error: "不安全的项目路径" });
     return false;
   }
+  // 这次请求里调模型的用量记到这本书名下（P10，见 usage-scope）。
+  noteUsageBook(projectPath);
   return true;
 }
 
@@ -805,107 +802,3 @@ export function hasRealDraftContent(content: string | undefined): boolean {
     && !isSentinelDraftContent(content);
 }
 
-// ---------------------------------------------------------------------------
-// Usage summary
-// ---------------------------------------------------------------------------
-
-export async function readUsageSummary(projectDir: string): Promise<{
-  readonly diagnosticsAvailable: boolean;
-  readonly diagnosticsCount: number;
-  readonly diagnosticsWarnings: readonly string[];
-  readonly totalTokens: number;
-  readonly promptTokens: number;
-  readonly completionTokens: number;
-  readonly cacheHitTokens: number | null;
-  readonly cacheMissTokens: number | null;
-  readonly cacheHitRatio: number | null;
-  readonly recent: readonly {
-    readonly stage: string;
-    readonly chapter: number | null;
-    readonly generatedAt: string | null;
-    readonly totalTokens: number | null;
-    readonly promptTokens: number | null;
-    readonly completionTokens: number | null;
-    readonly cacheHitRatio: number | null;
-    readonly elapsedMs: number | null;
-  }[];
-}> {
-  const diagnosticsDir = join(projectDir, "diagnostics");
-  const files = await readdir(diagnosticsDir).catch(() => []);
-  const diagnosticsWarnings = new Set<string>();
-  const jsonFiles = files.filter((file) => file.endsWith(".json")).sort();
-  if (jsonFiles.length > MAX_USAGE_SUMMARY_FILES) {
-    diagnosticsWarnings.add("diagnostics_file_count_limit");
-  }
-  const records: (Record<string, unknown> | null)[] = [];
-  for (const file of jsonFiles.slice(0, MAX_USAGE_SUMMARY_FILES)) {
-    const filePath = join(diagnosticsDir, file);
-    let fileStats: Awaited<ReturnType<typeof stat>>;
-    try {
-      fileStats = await stat(filePath);
-    } catch {
-      diagnosticsWarnings.add("diagnostics_file_read_error");
-      continue;
-    }
-    if (fileStats.size > MAX_USAGE_SUMMARY_FILE_BYTES) {
-      diagnosticsWarnings.add("diagnostics_file_size_limit");
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(await readFile(filePath, "utf-8")) as unknown;
-      records.push(isRecord(parsed) ? parsed : null);
-    } catch {
-      diagnosticsWarnings.add("diagnostics_file_parse_error");
-    }
-  }
-  const valid = records.filter((record): record is Record<string, unknown> => Boolean(record));
-  let totalTokens = 0;
-  let promptTokens = 0;
-  let completionTokens = 0;
-  let cacheHitTokens = 0;
-  let cacheMissTokens = 0;
-  let cacheAvailable = false;
-
-  const recent = valid.map((record) => {
-    const tokenUsage = isRecord(record.tokenUsage) ? record.tokenUsage : {};
-    const cacheMetrics = isRecord(record.cacheMetrics) ? record.cacheMetrics : isRecord(record.details) && isRecord(record.details.cacheMetrics) ? record.details.cacheMetrics : {};
-    const prompt = readNumber(tokenUsage.promptTokens);
-    const completion = readNumber(tokenUsage.completionTokens);
-    const total = readNumber(tokenUsage.totalTokens);
-    const hit = readNumber(cacheMetrics.promptCacheHitTokens);
-    const miss = readNumber(cacheMetrics.promptCacheMissTokens);
-    const ratio = readNumber(cacheMetrics.cacheHitRatio);
-    totalTokens += total ?? 0;
-    promptTokens += prompt ?? 0;
-    completionTokens += completion ?? 0;
-    if (hit !== undefined || miss !== undefined) {
-      cacheAvailable = true;
-      cacheHitTokens += hit ?? 0;
-      cacheMissTokens += miss ?? 0;
-    }
-    const runtimeLatency = isRecord(record.runtimeLatency) ? record.runtimeLatency : {};
-    return {
-      stage: readString(record.stage) ?? "unknown",
-      chapter: readNumber(record.chapter) ?? null,
-      generatedAt: readString(record.generatedAt) ?? null,
-      totalTokens: total ?? null,
-      promptTokens: prompt ?? null,
-      completionTokens: completion ?? null,
-      cacheHitRatio: ratio ?? null,
-      elapsedMs: readNumber(runtimeLatency.elapsedMs) ?? null,
-    };
-  }).sort((left, right) => String(right.generatedAt ?? "").localeCompare(String(left.generatedAt ?? ""))).slice(0, 8);
-
-  return {
-    diagnosticsAvailable: valid.length > 0,
-    diagnosticsCount: valid.length,
-    diagnosticsWarnings: Array.from(diagnosticsWarnings),
-    totalTokens,
-    promptTokens,
-    completionTokens,
-    cacheHitTokens: cacheAvailable ? cacheHitTokens : null,
-    cacheMissTokens: cacheAvailable ? cacheMissTokens : null,
-    cacheHitRatio: cacheAvailable && cacheHitTokens + cacheMissTokens > 0 ? cacheHitTokens / (cacheHitTokens + cacheMissTokens) : null,
-    recent,
-  };
-}

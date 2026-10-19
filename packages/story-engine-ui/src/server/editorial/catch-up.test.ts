@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -92,6 +93,25 @@ describe("后台补读：进度落盘", () => {
     await mkdir(join(dir, "agents", ROLE.id), { recursive: true });
     await writeFile(join(dir, "agents", ROLE.id, "progress.json"), "{坏的", "utf-8");
     expect(await progressOf(dir)).toBeUndefined();
+  });
+
+  it("读到一半书被删（挪进回收站）：不在原处建出幽灵目录；排在后面的角色不再调模型", async () => {
+    const dir = await makeBook(4);
+    const moved = `${dir}-trashed`;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let calls = 0;
+    const deleting: BrainCallModel = async () => {
+      calls += 1;
+      if (calls === 2) await rename(dir, moved);
+      return "笔记";
+    };
+    await startReaderCatchUp(dir, ROLE, 4, { callModel: deleting });
+    expect(existsSync(dir)).toBe(false);
+    await startReaderCatchUp(dir, { ...ROLE, id: "next" }, 4, { callModel: deleting });
+    expect(existsSync(dir)).toBe(false);
+    expect(calls).toBe(2);
+    warn.mockRestore();
+    await rm(moved, { recursive: true, force: true });
   });
 });
 

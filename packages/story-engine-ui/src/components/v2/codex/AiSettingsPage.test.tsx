@@ -108,6 +108,13 @@ beforeEach(() => {
   testModelConnection.mockResolvedValue({ providerId: "x", models: [], elapsedMs: 1 });
 });
 
+/** 没接的服务商收在「添加服务商」里（P10）：先展开再点卡片。 */
+function openCatalogCard(name: RegExp) {
+  const toggle = screen.queryByRole("button", { name: "＋ 添加服务商" });
+  if (toggle) fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("button", { name }));
+}
+
 async function renderAndWaitLoaded() {
   render(<AiSettingsPage onBack={() => undefined} />);
   await waitFor(() => {
@@ -128,8 +135,8 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
 
     // 任务分配区随之出现（工作台内不再丢失该功能）
     expect(screen.getByText("各功能使用的 AI")).toBeTruthy();
-    // 对话记忆上限回填真实值
-    expect(screen.getByDisplayValue("300000")).toBeTruthy();
+    // 对话记忆回填真实值（300000 = 「长篇」档，数字收在「更多」里）
+    expect(screen.getByRole("button", { name: "长篇" }).className).toContain("is-active");
   });
 
   it("打开已配置服务商回填已保存值（而非预设默认）", async () => {
@@ -150,7 +157,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
   it("保存新服务商：写回对象 map 形态、保留全部已有服务商、密钥随载荷提交", async () => {
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -184,7 +191,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     );
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
@@ -215,7 +222,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     fireEvent.click(screen.getByRole("button", { name: "短" }));
 
     // 本地表单值变了
-    expect(screen.getByDisplayValue("48000")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "短" }).className).toContain("is-active");
     // 关键断言：工作区在用值同步更新（useChat 裁剪与 ChatSessionBar 徽标都读它），
     // 否则改完要重开书才生效——静默退化。
     expect(useChatStore.getState().chatHistoryBudget).toBe(48000);
@@ -248,7 +255,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     saveModelSettings.mockResolvedValue({ ...makeFetchFixture(), warnings });
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -263,7 +270,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
   it("保存响应不带 warnings 时不出现警告条（无丢弃不刷警告）", async () => {
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -280,7 +287,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     saveModelSettings.mockResolvedValueOnce({ ...makeFetchFixture(), warnings });
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -314,7 +321,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     saveModelSettings.mockResolvedValueOnce({ ...makeFetchFixture(), warnings });
     await renderAndWaitLoaded();
 
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -403,7 +410,7 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     await renderAndWaitLoaded();
 
     // 任意一次表单路径持久化（这里走「添加服务商」）：既有 provider 的自定义头必须随合并写回，不静默丢
-    fireEvent.click(screen.getByRole("button", { name: /^OpenAI未配置/ }));
+    openCatalogCard(/^OpenAI没接/);
     const keyInput = await screen.findByPlaceholderText("sk-…");
     fireEvent.change(keyInput, { target: { value: "sk-new-key" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -416,5 +423,35 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     };
     expect(config.providers["my-relay"]?.customHeaders).toEqual({ "x-relay-key": MASKED });
     expect(config.providers.deepseek && "customHeaders" in config.providers.deepseek).toBe(false);
+  });
+});
+
+describe("备用模型（P10）", () => {
+  it("选一个 → 存进去（带档案、不分给任务）；不用 → 清掉", async () => {
+    testModelConnection.mockResolvedValue({ providerId: "deepseek", models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }], elapsedMs: 1 });
+    // 服务端照存回显：档案表里有备用档案、带回 fallbackProfileId。
+    saveModelSettings.mockImplementation(async (...args: unknown[]) => {
+      const fixture = makeFetchFixture();
+      const profiles = [...fixture.result.summary.profiles, { id: "deepseek_deepseek-reasoner", provider: "deepseek", model: "deepseek-reasoner" }];
+      return { ...fixture, result: { ...fixture.result, summary: { ...fixture.result.summary, profiles } }, fallbackProfileId: args[4] ?? null };
+    });
+    await renderAndWaitLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "选一个" }));
+    expect(screen.getByText("为「备用模型」分配模型")).toBeTruthy();
+    expect(screen.queryByText("同时应用到全部任务")).toBeNull();
+    fireEvent.click((await screen.findAllByRole("button", { name: /deepseek-reasoner/ }))[0]!); // 头一组是 DeepSeek
+
+    await waitFor(() => expect(saveModelSettings).toHaveBeenCalledTimes(1));
+    const [rawText, , taskAssignments, , fallbackProfileId] = saveModelSettings.mock.calls[0];
+    const config = JSON.parse(rawText as string);
+    expect(fallbackProfileId).toBe("deepseek_deepseek-reasoner");
+    expect(config.profiles["deepseek_deepseek-reasoner"]).toBeTruthy();
+    expect(Object.values(config.taskProfiles)).not.toContain("deepseek_deepseek-reasoner");
+    expect(taskAssignments.fastDraft.profileId).toBe("deepseek_deepseek-chat");
+    expect(screen.getByRole("group", { name: "备用模型" }).textContent).toContain("deepseek-reasoner");
+
+    fireEvent.click(screen.getByRole("button", { name: "不用" }));
+    await waitFor(() => expect(saveModelSettings).toHaveBeenCalledTimes(2));
+    expect(saveModelSettings.mock.calls[1][4]).toBeNull();
   });
 });

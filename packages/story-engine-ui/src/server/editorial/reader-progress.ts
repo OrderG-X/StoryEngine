@@ -9,7 +9,7 @@
  * readReadersCatchUpStatus 读进度时合进去；文件里只落 reading/done/total，两边各写各的、谁也抹不掉谁。
  * 等读标注走的还是 R4.3 那条轮询链路（progress.json → /api/reader-progress → 进度行），不新开通道。
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writeAtomically } from "./reader-window.js";
 
@@ -39,6 +39,7 @@ export interface ReaderProgress {
 export const progressFile = (root: string, roleId: string): string => join(root, "agents", roleId, "progress.json");
 
 export async function writeReaderProgress(root: string, progress: ReaderProgress): Promise<void> {
+  await stat(root); // 书已删（挪进回收站）就别再写：补读收尾记进度会在原处建出只有 agents/ 的幽灵目录
   await writeAtomically(progressFile(root, progress.role), `${JSON.stringify(progress, null, 2)}\n`);
 }
 

@@ -85,13 +85,26 @@
   .se-hero-actions{display:flex;gap:8px;margin-top:18px;}
 
   /* ── 全部书 ── */
-  .se-shelf-section > header{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;}
+  .se-shelf-section > header{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;margin-bottom:16px;}
   .se-shelf-section h2{margin:0;font-size:18px;}
   .se-shelf-section small{font-size:12px;color:var(--muted);}
+  /* 找书（P10）：搜索 + 排序靠右；窄屏换行。 */
+  .se-shelf-tools{margin-left:auto;display:flex;align-items:center;gap:8px;}
+  .se-shelf-search{width:180px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:13px;}
+  .se-shelf-search:focus,.se-shelf-sort:focus{outline:none;border-color:var(--accent);}
+  .se-shelf-sort{height:30px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;}
+  .se-shelf-section.is-archived{margin-top:28px;}
+  .se-shelf-section.is-archived > .se-shelf-grid{margin-top:16px;opacity:.85;}
+  .se-hero-today{margin:12px 0 0;font-size:13px;color:var(--accent);}
   .se-shelf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:28px 22px;}
   .se-shelf-empty{padding:24px;border:1px dashed var(--line-strong);border-radius:12px;text-align:center;color:var(--faint);font-size:13px;}
   .se-shelf-empty strong{display:block;color:var(--text);font-weight:500;margin-bottom:4px;}
   .se-shelf-empty p{margin:0;}
+  .se-shelf-foot{display:flex;justify-content:center;gap:16px;margin-top:40px;}
+  .se-shelf-link{height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--faint);font-size:12px;cursor:pointer;}
+  .se-shelf-link:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .se-shelf-link:disabled{cursor:default;opacity:.6;}
+  .se-shelf-file{display:none;}
   .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
   .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
   .se-book-open:hover .se-cover{transform:translateY(-2px);}

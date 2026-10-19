@@ -3,8 +3,8 @@ import type { ProviderFormProps } from "./ModelSettingsDialogTypes.js";
 
 /**
  * AI 服务配置表单。
- * - 正常模式（弹窗/自定义）：预设选择 + 名称/认证变量/接口地址 + API Key + 测试连接。
- * - minimal 模式（官方预设卡片进来）：只显示 API Key + 测试连接；名称/认证变量/接口地址收进「高级选项」折叠。
+ * - 正常模式（弹窗/自定义）：预设选择 + 名称/接口地址 + API Key + 测试连接；「从环境变量读密钥」收进「更多」。
+ * - minimal 模式（官方预设卡片进来）：只显示 API Key + 测试连接；名称/环境变量/接口地址收进「高级选项」折叠。
  */
 export function ProviderForm(props: ProviderFormProps) {
   const minimal = props.minimal === true;
@@ -50,15 +50,9 @@ export function ProviderForm(props: ProviderFormProps) {
       {/* 极简模式（官方预设）：默认只显示 API Key；名称/地址等收进高级选项。 */}
       {!minimal ? (
         <>
-          <div className="ms-form-row">
-            <div className="ms-form-field">
-              <label className="ms-form-label">名称 <span className="ms-required">*</span></label>
-              <input className="ms-input" type="text" placeholder="DeepSeek" value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
-            </div>
-            <div className="ms-form-field">
-              <label className="ms-form-label">认证变量</label>
-              <input className="ms-input" type="text" placeholder="DEEPSEEK_API_KEY" value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
-            </div>
+          <div className="ms-form-field">
+            <label className="ms-form-label">名称 <span className="ms-required">*</span></label>
+            <input className="ms-input" type="text" placeholder="DeepSeek" value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
           </div>
 
           <div className="ms-form-field">
@@ -68,6 +62,17 @@ export function ProviderForm(props: ProviderFormProps) {
               <span className="ms-field-hint">预设已填入默认地址，可按需修改</span>
             )}
           </div>
+
+          <details className="ms-advanced-details">
+            <summary className="ms-advanced-summary">更多</summary>
+            <div className="ms-advanced-body">
+              <div className="ms-form-field">
+                <label className="ms-form-label">从环境变量读密钥</label>
+                <input className="ms-input" type="text" placeholder="DEEPSEEK_API_KEY" value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
+                <span className="ms-field-hint">一般不用填：下面直接填密钥就行</span>
+              </div>
+            </div>
+          </details>
         </>
       ) : (
         <details className="ms-advanced-details">
@@ -78,7 +83,7 @@ export function ProviderForm(props: ProviderFormProps) {
               <input className="ms-input" type="text" placeholder="DeepSeek" value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
             </div>
             <div className="ms-form-field">
-              <label className="ms-form-label">认证变量</label>
+              <label className="ms-form-label">从环境变量读密钥</label>
               <input className="ms-input" type="text" placeholder="DEEPSEEK_API_KEY" value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
             </div>
             <div className="ms-form-field">

@@ -253,6 +253,19 @@ describe("resolveConfiguredChatModel 合成思考开关（旁路）", () => {
     expect(quality.thinking).toBe(true); // 未配置该任务 → 默认开
   });
 
+  it("备用模型（P10）：选了就带上；和主模型同一个不带；档案没了不挡主模型", async () => {
+    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: {}, fallbackProfileId: "balanced" }, corrupt: false });
+    expect((await resolveConfiguredChatModel("qualityCheck")).fallback?.profile.model).toBe("balanced-model");
+    expect((await resolveConfiguredChatModel("chapterSteering")).fallback).toBeUndefined();
+
+    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: { version: 1, tasks: {}, fallbackProfileId: "ghost" }, corrupt: false });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const resolved = await resolveConfiguredChatModel("qualityCheck");
+    expect(resolved.profile.id).toBe("fast");
+    expect(resolved.fallback).toBeUndefined();
+    warn.mockRestore();
+  });
 });
 
 describe("callOpenAICompatibleChatModel（重构 P4：内部走流式 + 空闲超时，不设总时长上限）", () => {
@@ -960,5 +973,61 @@ describe("always-on 思考自适应（流式 streamChatModelToText）", () => {
       .rejects.toThrow(/模型请求失败：500/);
     expect(spy).toHaveBeenCalledTimes(2);
     expect(await isAlwaysOnThinkingModel("https://x.invalid/v1", "glm-5.3-flash")).toBe(false);
+  });
+});
+
+describe("streamChatModelToText 备用模型（P10）", () => {
+  function sse(chunks: readonly string[]): globalThis.Response {
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+        controller.close();
+      },
+    }), { status: 200 });
+  }
+  const text = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+  function model(id: string, extra: Record<string, unknown> = {}) {
+    return {
+      provider: { id, label: id.toUpperCase(), baseUrl: `https://${id}.invalid/v1`, apiKeyStatus: "not_required" },
+      profile: { id, provider: id, model: `${id}-model` },
+      apiKey: `key-${id}`,
+      thinking: false,
+      thinkingDialect: "glm",
+      ...extra,
+    } as unknown as Parameters<typeof streamChatModelToText>[0]["configured"];
+  }
+
+  it("主模型报错、还没出字 → 换备用再试一次，思考开关跟着这次调用", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      String(url).startsWith("https://a.invalid") ? new Response("bad key", { status: 401 }) : sse([text("备用写的"), "data: [DONE]\n\n"]));
+    const out = await streamChatModelToText({ configured: model("a", { fallback: model("b", { thinking: true }) }), messages: [] });
+    expect(out.content).toBe("备用写的");
+    const second = spy.mock.calls[1]!;
+    expect(String(second[0])).toBe("https://b.invalid/v1/chat/completions");
+    const body = JSON.parse((second[1] as RequestInit).body as string);
+    expect(body.model).toBe("b-model");
+    expect(body.thinking).toEqual({ type: "disabled" });
+    spy.mockRestore();
+  });
+
+  it("备用也没成 → 两边原因一起报；没设备用照旧只报主模型", async () => {
+    let spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      new Response(String(url).includes("a.invalid") ? "主挂了" : "备也挂了", { status: 401 }));
+    await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] }))
+      .rejects.toThrow(/401 主挂了.*备用模型 B · b-model 也没成.*备也挂了/u);
+    spy.mockRestore();
+    spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("主挂了", { status: 401 }));
+    await expect(streamChatModelToText({ configured: model("a"), messages: [] })).rejects.toThrow("401 主挂了");
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("已经出了正文才断 / 原地打转 → 不换备用（出的字收不回）", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => sse([text("写了一半"), `data: ${JSON.stringify({ error: { message: "上游断了" } })}\n\n`]));
+    await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [] })).rejects.toThrow();
+    await expect(streamChatModelToText({ configured: model("a", { fallback: model("b") }), messages: [], maxContentChars: 2 })).rejects.toThrow("原地打转");
+    expect(spy.mock.calls.every(([url]) => String(url).startsWith("https://a.invalid"))).toBe(true);
+    spy.mockRestore();
   });
 });

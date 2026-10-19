@@ -24,6 +24,7 @@ import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { beginReread, runReread } from "./reread.js";
 import { readRereadState } from "./reread-state.js";
+import { withUsageBook } from "../lib/usage-scope.js";
 
 export {
   CHECKER_ROLE,
@@ -136,11 +137,12 @@ export async function catchUpReaders(
   if (isReaderCatchUpQueued(root, roleIds, upTo)) return;
   markReaderCatchUpQueued(root, roleIds, upTo);
   try {
-    await runInReaderCatchUpQueue(root, async () => {
+    // 后台补读的用量记到这本书名下（P10）：开书、定稿时排的活可能比那次请求活得久。
+    await withUsageBook(projectDir, () => runInReaderCatchUpQueue(root, async () => {
       // R5.3 追新的基线：这轮真正开跑那一刻的已定稿章数，三个角色共用——读的途中新定稿的章，没轮到的角色也要追。
       const chaseFrom = await countCommittedChapters(projectDir).catch(() => 0);
       for (const role of wanted) await startReaderCatchUp(projectDir, role, upTo, { ...options, chaseFrom });
-    });
+    }));
   } finally {
     unmarkReaderCatchUpQueued(root, roleIds, upTo);
   }
@@ -195,10 +197,10 @@ export async function maybeStartReadersCatchUp(
  * 永不抛错，调用方放心 `void`。
  */
 export function runBookReread(projectDir: string, options: { readonly callModel?: BrainCallModel } = {}): Promise<void> {
-  return runReread(projectDir, {
+  return withUsageBook(projectDir, () => runReread(projectDir, {
     ...options,
     onDone: (total) => void catchUpReaders(projectDir, total, options),
-  });
+  }));
 }
 
 /** 导入后开一轮新的通读：先落状态（开书那次概况就带得上进度），再在后台跑。 */

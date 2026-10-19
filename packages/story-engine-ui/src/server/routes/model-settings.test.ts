@@ -506,3 +506,51 @@ describe("provider 连通性测试带头（/models 出口：opencode 会话头 +
     expect(JSON.stringify(init)).not.toContain("shhh-secret");
   });
 });
+
+describe("备用模型存取（P10）", () => {
+  let dir: string;
+  const originalDataDir = process.env.SE_DATA_DIR;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "se-mst-fallback-"));
+    process.env.SE_DATA_DIR = dir;
+    await writeFile(join(dir, "model-settings.json"), sampleSettingsText(), "utf-8");
+  });
+  afterEach(async () => {
+    if (originalDataDir === undefined) delete process.env.SE_DATA_DIR;
+    else process.env.SE_DATA_DIR = originalDataDir;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const readSidecar = async () => JSON.parse(await readFile(join(dir, "task-assignments.json"), "utf-8")) as TaskAssignmentsFile;
+  const put = (body: Record<string, unknown>) => callRoute(registerModelSettingsRoutes, "PUT", "/api/model-settings", { rawText: sampleSettingsText(), ...body });
+  const tasks = { fastDraft: { profileId: "balanced", thinking: false } };
+
+  it("设上、GET 读回；不带这个键的保存不动它；null 清掉", async () => {
+    let res = await put({ taskAssignments: tasks, fallbackProfileId: "balanced" });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.fallbackProfileId).toBe("balanced");
+    expect((await readSidecar()).fallbackProfileId).toBe("balanced");
+
+    res = await put({ taskAssignments: tasks });
+    expect((await readSidecar()).fallbackProfileId).toBe("balanced");
+    expect((await callRoute(registerModelSettingsRoutes, "GET", "/api/model-settings")).payload.fallbackProfileId).toBe("balanced");
+
+    res = await put({ taskAssignments: tasks, fallbackProfileId: null });
+    expect(res.payload.fallbackProfileId).toBeNull();
+    expect(await readSidecar()).not.toHaveProperty("fallbackProfileId");
+    expect((await readSidecar()).tasks.fastDraft).toEqual({ profileId: "balanced", thinking: false });
+  });
+
+  it("明说要设一个不存在的档案 → 400；没明说、只是档案没了 → 清掉并如实告知", async () => {
+    let res = await put({ taskAssignments: tasks, fallbackProfileId: "ghost" });
+    expect(res.statusCode).toBe(400);
+    expect(String(res.payload.error)).toContain("备用模型");
+
+    await writeFile(join(dir, "task-assignments.json"), JSON.stringify({ version: 1, tasks, fallbackProfileId: "ghost" }), "utf-8");
+    res = await put({ taskAssignments: tasks });
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.warnings).toEqual([expect.stringContaining("已改成不用备用")]);
+    expect(await readSidecar()).not.toHaveProperty("fallbackProfileId");
+  });
+});

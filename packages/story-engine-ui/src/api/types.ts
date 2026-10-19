@@ -219,34 +219,6 @@ export type ChapterWorkspacePermission =
   | "destructive_write"
   | "local_side_effect";
 
-export interface UsageSummary {
-  readonly diagnosticsAvailable: boolean;
-  readonly diagnosticsCount: number;
-  readonly diagnosticsWarnings: readonly string[];
-  readonly totalTokens: number;
-  readonly promptTokens: number;
-  readonly completionTokens: number;
-  readonly cacheHitTokens: number | null;
-  readonly cacheMissTokens: number | null;
-  readonly cacheHitRatio: number | null;
-  readonly recent: readonly UsageRecord[];
-}
-
-export interface UsageRecord {
-  readonly stage: string;
-  readonly chapter: number | null;
-  readonly generatedAt: string | null;
-  readonly totalTokens: number | null;
-  readonly promptTokens: number | null;
-  readonly completionTokens: number | null;
-  readonly cacheHitRatio: number | null;
-  readonly elapsedMs: number | null;
-}
-
-export type UsageSummaryApiResponse =
-  | { readonly ok: true; readonly summary: UsageSummary }
-  | { readonly ok: false; readonly error: string };
-
 export interface SnapshotEntryDto {
   readonly id: string;
   readonly label: string;
@@ -285,6 +257,8 @@ export interface SaveModelSettingsRequest {
   readonly rawText: string;
   readonly providerApiKeys?: Readonly<Record<string, string>>;
   readonly taskAssignments?: TaskAssignmentView;
+  /** 备用模型档案（P10）：字符串 = 设成它，null = 不用备用；不带 = 不动。 */
+  readonly fallbackProfileId?: string | null;
 }
 
 export interface ModelSettingsLoadResult {
@@ -353,6 +327,8 @@ export type ModelSettingsApiResponse =
       readonly result: ModelSettingsLoadResult;
       readonly rawText: string;
       readonly taskAssignments?: TaskAssignmentView;
+      /** 备用模型档案（P10）；null = 没设。 */
+      readonly fallbackProfileId?: string | null;
       /** 保存成功但有条目被丢弃（如打码哨兵无法还原的自定义请求头）时如实告知；无丢弃则不带该字段。 */
       readonly warnings?: readonly string[];
     }

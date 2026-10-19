@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import ImmersiveAppShell from "./components/v2/ImmersiveAppShell.js";
 import { SettingsModal, type SettingsTab } from "./components/v2/codex/SettingsModal.js";
-import UsageDialog from "./components/UsageDialog.js";
 import { useNavigationStore } from "./stores/navigationStore.js";
 import { useBookStore } from "./stores/bookStore.js";
 import { useChatStore } from "./stores/chatStore.js";
@@ -13,7 +12,7 @@ import { useBookManagement } from "./hooks/useBookManagement.js";
 import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
-import { fetchDefaultBookLibrary } from "./api/client.js";
+import { refreshBookLibrary } from "./utils/refreshBookLibrary.js";
 import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
@@ -46,12 +45,7 @@ export function App() {
   const workspaceReady = useNavigationStore((s) => s.workspaceReady);
   const toast = useNavigationStore((s) => s.toast);
   const settingsOpen = useNavigationStore((s) => s.settingsOpen);
-  const usageOpen = useNavigationStore((s) => s.usageOpen);
-  const usageLoading = useNavigationStore((s) => s.usageLoading);
-  const usageError = useNavigationStore((s) => s.usageError);
-  const usageSummary = useNavigationStore((s) => s.usageSummary);
   const closeSettings = useNavigationStore((s) => s.closeSettings);
-  const closeUsage = useNavigationStore((s) => s.closeUsage);
   const openSettings = useNavigationStore((s) => s.openSettings);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("model");
 
@@ -159,14 +153,8 @@ export function App() {
 
     // 首页启动时扫描默认目录，归并进书架（服务端真值刷新已有条目 + 按活跃时间排序；
     // 别再逐本 upsertBook 头插——那会把服务端的「最近活跃降序」反转，最旧的书霸占 books[0]）
-    void (async () => {
-      try {
-        const library = await fetchDefaultBookLibrary();
-        useRecentBooksStore.getState().syncScannedBooks(library.books, library);
-      } catch {
-        // 扫描失败不影响首页加载
-      }
-    })();
+    // 扫描失败不影响首页加载
+    void refreshBookLibrary().catch(() => undefined);
 
     return () => window.removeEventListener("popstate", onPopState);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,10 +174,6 @@ export function App() {
     <div className="codex-app se-settings-host">
       <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => { closeSettings(); setSettingsTab("model"); }} />
     </div>
-  ) : null;
-
-  const usageDialog = usageOpen ? (
-    <UsageDialog error={usageError} loading={usageLoading} summary={usageSummary} onClose={closeUsage} />
   ) : null;
 
   /* ---- Render ---- */
@@ -232,9 +216,6 @@ export function App() {
         {toast && <div className="app-toast">{toast}</div>}
         <ErrorBoundary fallbackTitle="设置对话框出错">
           {settingsDialog}
-        </ErrorBoundary>
-        <ErrorBoundary fallbackTitle="用量对话框出错">
-          {usageDialog}
         </ErrorBoundary>
       </>
     );
@@ -279,24 +260,6 @@ export function App() {
             onDismissRevisionTask: workflow.handleDismissRevisionTask,
             onGoHome: () => navigation.openHome(),
             onOpenSettings: openSettings,
-            onOpenUsage: () => void (async () => {
-              if (!projectPath) {
-                useNavigationStore.getState().setUsageError("请先打开真实本地项目。");
-                useNavigationStore.getState().openUsage();
-                return;
-              }
-              useNavigationStore.getState().openUsage();
-              useNavigationStore.getState().setUsageLoading(true);
-              useNavigationStore.getState().setUsageError(null);
-              try {
-                const { fetchUsageSummary } = await import("./api/client.js");
-                useNavigationStore.getState().setUsageSummary(await fetchUsageSummary(projectPath));
-              } catch (error) {
-                useNavigationStore.getState().setUsageError(error instanceof Error ? error.message : String(error));
-              } finally {
-                useNavigationStore.getState().setUsageLoading(false);
-              }
-            })(),
             onSelectChapter: navigation.handleSelectChapter,
             onSuggestedAction: handleSuggestedAction,
             onSendMessage: handleSendMessage,
@@ -351,9 +314,6 @@ export function App() {
       {toast && <div className="app-toast">{toast}</div>}
       <ErrorBoundary fallbackTitle="设置对话框出错">
         {settingsDialog}
-      </ErrorBoundary>
-      <ErrorBoundary fallbackTitle="用量对话框出错">
-        {usageDialog}
       </ErrorBoundary>
     </>
   );

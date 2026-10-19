@@ -14,7 +14,7 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
     expect(keys).toHaveLength(6);
   });
 
-  it("内容审阅任务说明使用深度分析口径", () => {
+  it("内容审阅任务说明", () => {
     render(
       <TaskAssignmentSection
         tasks={{}}
@@ -25,7 +25,7 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
       />,
     );
     expect(screen.getByText("内容审阅")).toBeTruthy();
-    expect(screen.getByText(/深度分析整章/u)).toBeTruthy();
+    expect(screen.getByText(/通读整章/u)).toBeTruthy();
   });
 
   it("每个任务渲染一个思考开关（checkbox），共 6 个", () => {
@@ -57,7 +57,7 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
-  it("未单独分配的任务明确提示不会自动跟随正文生成模型", () => {
+  it("没单独选模型的任务如实说用默认模型", () => {
     render(
       <TaskAssignmentSection
         tasks={{ fastDraft: "deepseek|deepseek-v4-flash" }}
@@ -69,7 +69,6 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
     );
 
     expect(screen.getByText("deepseek-v4-flash")).toBeTruthy();
-    expect(screen.getAllByText(/未单独分配/u).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/不会自动跟随正文生成/u).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("没单独选，用默认模型").length).toBe(5);
   });
 });

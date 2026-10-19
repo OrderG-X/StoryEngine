@@ -17,6 +17,7 @@ const storyAgentMocks = vi.hoisted(() => ({
 
 vi.mock("../agent/story-agent.js", () => ({
   getStoryAgent: storyAgentMocks.getStoryAgent,
+  getStoryAgentModel: () => undefined,
 }));
 
 import { registerAgentChatRoutes } from "./agent-chat.js";

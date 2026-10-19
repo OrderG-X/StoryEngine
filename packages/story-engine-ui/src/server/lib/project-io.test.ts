@@ -11,15 +11,12 @@ import {
   isSafeProjectPath,
   readJsonBody,
   readWorkspaceMessages,
-  readUsageSummary,
   writeFileAtomic,
   commitFilesAtomically,
 } from "./project-io.js";
 import { cardOf, hasCard } from "../../utils/messageCards.js";
 
 const EXPECTED_MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
-const EXPECTED_MAX_USAGE_SUMMARY_FILES = 200;
-const EXPECTED_MAX_USAGE_SUMMARY_FILE_BYTES = 256 * 1024;
 
 describe("project io asset helpers", () => {
   it("allows normal StoryEngine project locations under user work areas", () => {
@@ -78,93 +75,6 @@ describe("project io asset helpers", () => {
 
     await expect(readJsonBody(req)).rejects.toThrow("请求 JSON body 超过大小限制");
     expect(yielded).toBe(2);
-  });
-
-  it("summarizes a normal small diagnostics folder", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-usage-summary-normal-"));
-    await mkdir(join(projectDir, "diagnostics"), { recursive: true });
-    await writeDiagnostic(projectDir, "first.json", {
-      stage: "draft",
-      chapter: 1,
-      generatedAt: "2026-05-28T10:00:00.000Z",
-      tokenUsage: { totalTokens: 30, promptTokens: 10, completionTokens: 20 },
-    });
-    await writeDiagnostic(projectDir, "second.json", {
-      stage: "review",
-      chapter: 2,
-      generatedAt: "2026-05-28T11:00:00.000Z",
-      tokenUsage: { totalTokens: 40, promptTokens: 15, completionTokens: 25 },
-      cacheMetrics: { promptCacheHitTokens: 12, promptCacheMissTokens: 8 },
-    });
-
-    const summary = await readUsageSummary(projectDir);
-
-    expect(summary).toMatchObject({
-      diagnosticsAvailable: true,
-      diagnosticsCount: 2,
-      totalTokens: 70,
-      promptTokens: 25,
-      completionTokens: 45,
-      cacheHitTokens: 12,
-      cacheMissTokens: 8,
-    });
-    expect(summary.diagnosticsWarnings).toEqual([]);
-  });
-
-  it("returns an empty summary for an empty diagnostics folder", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-usage-summary-empty-"));
-    await mkdir(join(projectDir, "diagnostics"), { recursive: true });
-
-    const summary = await readUsageSummary(projectDir);
-
-    expect(summary).toMatchObject({
-      diagnosticsAvailable: false,
-      diagnosticsCount: 0,
-      totalTokens: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      diagnosticsWarnings: [],
-    });
-  });
-
-  it("caps diagnostics file count and reports a controlled warning", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-usage-summary-count-cap-"));
-    await mkdir(join(projectDir, "diagnostics"), { recursive: true });
-    await Promise.all(Array.from({ length: EXPECTED_MAX_USAGE_SUMMARY_FILES + 3 }, (_, index) => writeDiagnostic(projectDir, `${String(index).padStart(3, "0")}.json`, {
-      stage: "draft",
-      chapter: index + 1,
-      generatedAt: `2026-05-28T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
-      tokenUsage: { totalTokens: 1, promptTokens: 1, completionTokens: 0 },
-    })));
-
-    const summary = await readUsageSummary(projectDir);
-
-    expect(summary.diagnosticsCount).toBe(EXPECTED_MAX_USAGE_SUMMARY_FILES);
-    expect(summary.totalTokens).toBe(EXPECTED_MAX_USAGE_SUMMARY_FILES);
-    expect(summary.diagnosticsWarnings).toContain("diagnostics_file_count_limit");
-    expect(JSON.stringify(summary.diagnosticsWarnings)).not.toContain(projectDir);
-  });
-
-  it("skips oversized diagnostics files and reports a controlled warning", async () => {
-    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-usage-summary-size-cap-"));
-    await mkdir(join(projectDir, "diagnostics"), { recursive: true });
-    await writeDiagnostic(projectDir, "small.json", {
-      stage: "draft",
-      chapter: 1,
-      generatedAt: "2026-05-28T10:00:00.000Z",
-      tokenUsage: { totalTokens: 7, promptTokens: 3, completionTokens: 4 },
-    });
-    await writeFile(join(projectDir, "diagnostics", "oversized.json"), JSON.stringify({
-      stage: "oversized",
-      payload: "x".repeat(EXPECTED_MAX_USAGE_SUMMARY_FILE_BYTES + 1),
-    }), "utf-8");
-
-    const summary = await readUsageSummary(projectDir);
-
-    expect(summary.diagnosticsCount).toBe(1);
-    expect(summary.totalTokens).toBe(7);
-    expect(summary.diagnosticsWarnings).toContain("diagnostics_file_size_limit");
-    expect(JSON.stringify(summary.diagnosticsWarnings)).not.toContain(projectDir);
   });
 
   // 重构 P5：章节状态只看工作稿 / 定稿文件。旧版写作台缓存（chapter-workspaces/*.json）不再更新，
@@ -744,10 +654,6 @@ function requestFromChunks(chunks: readonly Buffer[]): IncomingMessage {
       }
     },
   } as unknown as IncomingMessage;
-}
-
-async function writeDiagnostic(projectDir: string, fileName: string, value: unknown): Promise<void> {
-  await writeFile(join(projectDir, "diagnostics", fileName), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
 describe("writeFileAtomic 原子写（失败不留 tmp 残留）", () => {
