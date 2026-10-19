@@ -100,7 +100,8 @@ async function handleImport(body: Record<string, unknown>, res: Res): Promise<vo
     writeJson(res, 400, { ok: false, error: "一章都没选，没有可导入的。" });
     return;
   }
-  const title = (readString(body.title) ?? "").trim() || serialFileStem(files[0]!.name) || "未命名故事";
+  // 书名缺省：只有一个文件就用文件名（和预览给的建议一样），几个文件拼的不替作者起名。
+  const title = (readString(body.title) ?? "").trim() || (files.length === 1 ? serialFileStem(files[0]!.name) : "") || "未命名故事";
   if (title.length > 80) {
     writeJson(res, 400, { ok: false, error: "书名不能超过 80 个字符。" });
     return;

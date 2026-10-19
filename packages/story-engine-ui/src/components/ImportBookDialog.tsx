@@ -68,8 +68,9 @@ export default function ImportBookDialog({ open, onCancel, onImport, preview = p
   };
 
   const chosen = include.filter(Boolean).length;
+  const named = title.trim().length > 0;
   const submit = async () => {
-    if (!split || chosen === 0 || busy) return;
+    if (!split || chosen === 0 || !named || busy) return;
     setBusy("importing");
     setError(null);
     try {
@@ -151,7 +152,7 @@ export default function ImportBookDialog({ open, onCancel, onImport, preview = p
             {busy === "reading" ? "正在读文件…" : split ? "换文件…" : "选文件…"}
           </button>
           {split ? (
-            <button className="se-v2-dialog-confirm-btn" disabled={busy !== null || chosen === 0} onClick={() => void submit()} type="button">
+            <button className="se-v2-dialog-confirm-btn" disabled={busy !== null || chosen === 0 || !named} onClick={() => void submit()} type="button">
               {busy === "importing" ? "正在导入…" : `导入 ${chosen} 章`}
             </button>
           ) : null}

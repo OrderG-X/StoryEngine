@@ -63,6 +63,12 @@ describe("导入已写的书弹窗", () => {
     });
   });
 
+  it("书名清空（几个文件拼的书不替你起名）：导入按钮灰掉", async () => {
+    await choose();
+    fireEvent.change(screen.getByLabelText("书名"), { target: { value: "  " } });
+    expect(screen.getByRole("button", { name: "导入 2 章" })).toBeDisabled();
+  });
+
   it("一章都不勾：导入按钮灰掉", async () => {
     await choose();
     for (const box of screen.getAllByRole("checkbox").slice(1)) fireEvent.click(box);
