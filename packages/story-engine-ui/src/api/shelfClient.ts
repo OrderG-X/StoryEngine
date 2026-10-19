@@ -146,3 +146,59 @@ export async function saveBackupSettings(patch: { readonly auto?: boolean; reado
 export async function openBackupFolder(): Promise<void> {
   await call("/api/backup-settings/open-folder", postJson({}));
 }
+
+// ---------------------------------------------------------------------------
+// 书的资料、归档、写作统计
+// ---------------------------------------------------------------------------
+
+export interface BookInfo {
+  readonly author?: string;
+  readonly synopsis?: string;
+  readonly tags?: readonly string[];
+  readonly targetWords?: number;
+  readonly dailyGoal?: number;
+  readonly coverTone?: number;
+}
+
+export interface WordStats {
+  readonly totalWords: number;
+  readonly today: { readonly net: number; readonly author: number; readonly ai: number };
+  readonly streak: number;
+  readonly recent: readonly { readonly date: string; readonly net: number }[];
+}
+
+export interface BookInfoView {
+  readonly title: string;
+  readonly info: BookInfo;
+  readonly archived: boolean;
+  readonly stats: WordStats;
+}
+
+export async function fetchBookInfo(projectPath: string): Promise<BookInfoView> {
+  return call<BookInfoView>(`/api/books/info?project=${encodeURIComponent(projectPath)}`);
+}
+
+export async function saveBookInfo(projectPath: string, info: BookInfo): Promise<{ readonly title: string; readonly info: BookInfo; readonly archived: boolean }> {
+  return call("/api/books/info", postJson({ projectPath, info }));
+}
+
+export async function setBookArchived(projectPath: string, archived: boolean): Promise<void> {
+  await call("/api/books/archive", postJson({ projectPath, archived }));
+}
+
+export interface ShelfBookMeta {
+  readonly archived: boolean;
+  readonly coverTone?: number;
+  readonly tags?: readonly string[];
+  readonly author?: string;
+}
+
+export async function fetchShelfMeta(paths: readonly string[]): Promise<Readonly<Record<string, ShelfBookMeta>>> {
+  if (paths.length === 0) return {};
+  const body = await call<{ books?: Record<string, ShelfBookMeta> }>("/api/books/meta", postJson({ paths }));
+  return body.books ?? {};
+}
+
+export async function fetchBookStats(projectPath: string): Promise<{ readonly stats: WordStats; readonly dailyGoal?: number; readonly targetWords?: number }> {
+  return call(`/api/books/stats?project=${encodeURIComponent(projectPath)}`);
+}

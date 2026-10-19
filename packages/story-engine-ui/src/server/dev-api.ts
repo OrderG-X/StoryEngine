@@ -14,6 +14,7 @@ import { registerDeAiFlavorRoutes } from "./routes/de-ai-flavor.js";
 import { registerBooksRoutes } from "./routes/books.js";
 import { registerBookImportRoutes } from "./routes/book-import.js";
 import { registerBookFilesRoutes } from "./routes/book-files.js";
+import { registerBookMetaRoutes } from "./routes/book-meta.js";
 import { registerModelSettingsRoutes } from "./routes/model-settings.js";
 import { registerWorkingDraftRoutes } from "./routes/working-draft.js";
 import { registerChatSessionsRoutes } from "./routes/chat-sessions.js";
@@ -42,6 +43,7 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerBooksRoutes(router);
   registerBookImportRoutes(router);
   registerBookFilesRoutes(router);
+  registerBookMetaRoutes(router);
   registerModelSettingsRoutes(router);
   registerWorkingDraftRoutes(router);
   registerChatSessionsRoutes(router);

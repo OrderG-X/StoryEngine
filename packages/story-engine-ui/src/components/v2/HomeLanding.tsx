@@ -8,7 +8,8 @@ import type { BookSummary, HomePageProps } from "../../types.js";
 import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
 import { TrashDialog } from "./shelf/TrashDialog.js";
 import { ExportDialog } from "./shelf/ExportDialog.js";
-import { downloadBookBackup, fetchTrash, restoreBookBackup, saveBlob } from "../../api/shelfClient.js";
+import { downloadBookBackup, fetchBookStats, fetchShelfMeta, fetchTrash, restoreBookBackup, saveBlob, setBookArchived, type ShelfBookMeta, type WordStats } from "../../api/shelfClient.js";
+import { BookInfoDialog } from "./shelf/BookInfoDialog.js";
 import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
 import "./home.css";
 
@@ -39,13 +40,39 @@ function formatWords(totalWords: number): string {
   return `${totalWords.toLocaleString()} 字`;
 }
 
-function BookCover({ title, large = false }: { readonly title: string; readonly large?: boolean }) {
+function BookCover({ title, large = false, tone }: { readonly title: string; readonly large?: boolean; readonly tone?: number }) {
   return (
-    <span className={`se-cover tone-${coverTone(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
+    <span className={`se-cover tone-${tone ?? coverTone(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
       <span className="se-cover-t">{title}</span>
       {large ? <span className="se-cover-seal" /> : null}
     </span>
   );
+}
+
+type ShelfSort = "recent" | "title" | "words";
+type BookAction = "open" | "info" | "rename" | "export" | "backup" | "archive" | "remove" | "folder" | "delete";
+
+/** 找书：书名或标签包含关键词（不分大小写）。 */
+export function matchesShelfQuery(book: BookSummary, meta: ShelfBookMeta | undefined, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return book.title.toLowerCase().includes(q) || (meta?.tags ?? []).some((tag) => tag.toLowerCase().includes(q));
+}
+
+export function sortShelf(books: readonly BookSummary[], sort: ShelfSort): BookSummary[] {
+  const list = [...books];
+  if (sort === "title") return list.sort((a, b) => a.title.localeCompare(b.title, "zh-Hans-CN"));
+  if (sort === "words") return list.sort((a, b) => b.totalWords - a.totalWords);
+  return list;
+}
+
+/** 「今天 +1,200 字 · 连续 3 天 · 日更 1,200 / 4,000」。 */
+export function todayLine(stats: WordStats, dailyGoal?: number): string {
+  const net = stats.today.net;
+  const parts = [net > 0 ? `今天 +${net.toLocaleString()} 字` : net < 0 ? `今天 −${(-net).toLocaleString()} 字` : "今天还没写"];
+  if (stats.streak > 1) parts.push(`连续 ${stats.streak} 天`);
+  if (dailyGoal) parts.push(`日更 ${Math.max(0, net).toLocaleString()} / ${dailyGoal.toLocaleString()}`);
+  return parts.join(" · ");
 }
 
 export default function HomeLanding({
@@ -72,9 +99,36 @@ export default function HomeLanding({
   const [trashCount, setTrashCount] = useState(0);
   const [exportTarget, setExportTarget] = useState<BookSummary | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [infoTarget, setInfoTarget] = useState<BookSummary | null>(null);
+  const [meta, setMeta] = useState<Readonly<Record<string, ShelfBookMeta>>>({});
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<ShelfSort>("recent");
+  const [showArchived, setShowArchived] = useState(false);
+  const [heroStats, setHeroStats] = useState<{ readonly stats: WordStats; readonly dailyGoal?: number } | null>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
-  const lastBook = recentBooks[0];
+  const activeBooks = recentBooks.filter((book) => !meta[book.projectPath]?.archived);
+  const archivedBooks = recentBooks.filter((book) => meta[book.projectPath]?.archived);
+  const lastBook = activeBooks[0];
+  const visibleBooks = sortShelf(activeBooks.filter((book) => matchesShelfQuery(book, meta[book.projectPath], query)), sort);
+
+  // 书架上每本书的归档、标签、封面色（存在书自己的 project.json 里）。
+  const pathsKey = recentBooks.map((book) => book.projectPath).join("\n");
+  const refreshMeta = () => {
+    fetchShelfMeta(recentBooks.map((book) => book.projectPath)).then(setMeta, () => undefined);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(refreshMeta, [pathsKey]);
+
+  // 「继续写」卡片上的今天写了多少。
+  const heroPath = lastBook?.projectPath;
+  useEffect(() => {
+    setHeroStats(null);
+    if (!heroPath) return undefined;
+    let alive = true;
+    fetchBookStats(heroPath).then((result) => { if (alive) setHeroStats(result); }, () => undefined);
+    return () => { alive = false; };
+  }, [heroPath]);
 
   const refreshTrashCount = () => {
     fetchTrash().then((trash) => setTrashCount(trash.items.length), () => undefined);
@@ -95,6 +149,36 @@ export default function HomeLanding({
     }
   };
 
+  const toggleArchived = async (book: BookSummary) => {
+    const archived = meta[book.projectPath]?.archived === true;
+    try {
+      await setBookArchived(book.projectPath, !archived);
+      setMeta((current) => ({ ...current, [book.projectPath]: { ...current[book.projectPath], archived: !archived } }));
+      showFeedback(archived ? `《${book.title}》回到书架了。` : `《${book.title}》收进了底部的「已归档」。`);
+    } catch (error) {
+      showFeedback(`没改成：${errorText(error)}`);
+    }
+  };
+
+  const onBookAction = (action: BookAction, book: BookSummary) => {
+    switch (action) {
+      case "open": onOpenRecentBook(book.id); return;
+      case "info": setInfoTarget(book); return;
+      case "rename": setRenameTarget(book); setRenameValue(book.title); return;
+      case "export": setExportTarget(book); return;
+      case "backup": void backupBook(book); return;
+      case "archive": void toggleArchived(book); return;
+      case "folder":
+        void onOpenRecentBookFolder(book.id).then(showFeedback).catch((error: unknown) => showFeedback(errorText(error)));
+        return;
+      case "remove":
+        if (!window.confirm(`从最近写作中移除《${book.title}》？不会删除本地项目文件。`)) return;
+        void onRemoveRecentBook(book.id).then(showFeedback).catch((error: unknown) => showFeedback(errorText(error)));
+        return;
+      case "delete": setDeleteTarget(book); return;
+    }
+  };
+
   const restoreFrom = async (file: File | undefined) => {
     if (!file) return;
     setRestoring(true);
@@ -110,7 +194,6 @@ export default function HomeLanding({
       if (restoreInputRef.current) restoreInputRef.current.value = "";
     }
   };
-  const findBook = (bookId: string) => recentBooks.find((book) => book.id === bookId);
   const closeDeleteDialog = () => {
     setDeleteTarget(null);
   };
@@ -148,7 +231,7 @@ export default function HomeLanding({
           {lastBook ? (
             <section className="se-hero" aria-label="继续上次写作">
               <button className="se-hero-cover" onClick={() => onOpenRecentBook(lastBook.id)} type="button" aria-label={`打开《${lastBook.title}》`}>
-                <BookCover title={lastBook.title} large />
+                <BookCover title={lastBook.title} large tone={meta[lastBook.projectPath]?.coverTone} />
               </button>
               <div className="se-hero-info">
                 <p className="se-eyebrow">继续写</p>
@@ -166,6 +249,7 @@ export default function HomeLanding({
                   {/* 章节状态只在写作台显示（P6 第 6 步）：书架上这里原来的「已定稿」药丸按「有没有定稿过的章」算，最新一章还是工作稿时也说已定稿。 */}
                   <span className="se-faint">· {lastBook.updatedAt}</span>
                 </div>
+                {heroStats ? <p className="se-hero-today">{todayLine(heroStats.stats, heroStats.dailyGoal)}</p> : null}
                 <div className="se-hero-actions">
                   <button className="se-btn primary" onClick={() => onOpenRecentBook(lastBook.id)} type="button">继续写</button>
                 </div>
@@ -189,49 +273,49 @@ export default function HomeLanding({
             <header>
               <h2>全部书</h2>
               {feedbackMessage ? <small role="status">{feedbackMessage}</small> : null}
+              {activeBooks.length > 1 || query ? (
+                <div className="se-shelf-tools">
+                  <input aria-label="找书" className="se-shelf-search" onChange={(event) => setQuery(event.target.value)} placeholder="找书：书名、标签" type="search" value={query} />
+                  <select aria-label="排序" className="se-shelf-sort" onChange={(event) => setSort(event.target.value as ShelfSort)} value={sort}>
+                    <option value="recent">最近写的</option>
+                    <option value="title">书名</option>
+                    <option value="words">字数</option>
+                  </select>
+                </div>
+              ) : null}
             </header>
             {recentBooks.length === 0 ? (
               <div className="se-shelf-empty">
                 <strong>还没有最近写作</strong>
                 <p>可以新建一本书，或打开已有项目。</p>
               </div>
+            ) : visibleBooks.length === 0 ? (
+              <div className="se-shelf-empty">
+                <p>{query ? `没找到「${query.trim()}」。` : "书都归档了。"}</p>
+              </div>
             ) : (
               <div className="se-shelf-grid">
-                {recentBooks.map((book) => (
-                  <RecentBook
-                    book={book}
-                    key={book.id}
-                    onDelete={(bookId) => {
-                      const bookToDelete = findBook(bookId);
-                      if (!bookToDelete) return;
-                      setDeleteTarget(bookToDelete);
-                    }}
-                    onBackup={(bookId) => {
-                      const book = findBook(bookId);
-                      if (book) void backupBook(book);
-                    }}
-                    onExport={(bookId) => setExportTarget(findBook(bookId) ?? null)}
-                    onOpen={onOpenRecentBook}
-                    onOpenFolder={(bookId) => {
-                      void onOpenRecentBookFolder(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
-                    }}
-                    onRemove={(bookId) => {
-                      const bookToRemove = findBook(bookId);
-                      if (!bookToRemove) return;
-                      if (!window.confirm(`从最近写作中移除《${bookToRemove.title}》？不会删除本地项目文件。`)) return;
-                      void onRemoveRecentBook(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
-                    }}
-                    onRename={(bookId) => {
-                      const bookToRename = findBook(bookId);
-                      if (!bookToRename) return;
-                      setRenameTarget(bookToRename);
-                      setRenameValue(bookToRename.title);
-                    }}
-                  />
+                {visibleBooks.map((book) => (
+                  <RecentBook book={book} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} />
                 ))}
               </div>
             )}
           </section>
+
+          {archivedBooks.length > 0 ? (
+            <section aria-label="已归档" className="se-shelf-section is-archived">
+              <button aria-expanded={showArchived} className="se-shelf-link" onClick={() => setShowArchived((current) => !current)} type="button">
+                已归档（{archivedBooks.length}）{showArchived ? "▴" : "▾"}
+              </button>
+              {showArchived ? (
+                <div className="se-shelf-grid">
+                  {archivedBooks.map((book) => (
+                    <RecentBook book={book} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} />
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           <footer className="se-shelf-foot">
             <input
@@ -253,6 +337,7 @@ export default function HomeLanding({
       </div>
 
       <ExportDialog book={exportTarget} onClose={() => setExportTarget(null)} />
+      <BookInfoDialog book={infoTarget} onClose={() => setInfoTarget(null)} onSaved={refreshMeta} />
 
       <TrashDialog
         open={trashOpen}
@@ -361,22 +446,12 @@ export default function HomeLanding({
 
 function RecentBook({
   book,
-  onBackup,
-  onDelete,
-  onExport,
-  onOpen,
-  onOpenFolder,
-  onRemove,
-  onRename,
+  meta,
+  onAction,
 }: {
   readonly book: BookSummary;
-  readonly onBackup: (bookId: string) => void;
-  readonly onDelete: (bookId: string) => void;
-  readonly onExport: (bookId: string) => void;
-  readonly onOpen: (bookId: string) => void;
-  readonly onOpenFolder: (bookId: string) => void;
-  readonly onRemove: (bookId: string) => void;
-  readonly onRename: (bookId: string) => void;
+  readonly meta?: ShelfBookMeta;
+  readonly onAction: (action: BookAction) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLMenuElement>(null);
@@ -399,10 +474,15 @@ function RecentBook({
     };
   }, [menuOpen]);
 
+  const act = (action: BookAction) => {
+    setMenuOpen(false);
+    onAction(action);
+  };
+
   return (
     <article className="se-book">
-      <button aria-label={`打开《${book.title}》`} className="se-book-open" onClick={() => onOpen(book.id)} title={book.title} type="button">
-        <BookCover title={book.title} />
+      <button aria-label={`打开《${book.title}》`} className="se-book-open" onClick={() => onAction("open")} title={book.title} type="button">
+        <BookCover title={book.title} tone={meta?.coverTone} />
       </button>
       <div className="se-book-info">
         <div className="se-book-row">
@@ -412,13 +492,15 @@ function RecentBook({
         <p>{book.writtenChapters} 章 · {book.updatedAt}</p>
         {menuOpen ? (
           <menu className="se-book-menu" ref={menuRef}>
-            <button onClick={() => { setMenuOpen(false); onOpen(book.id); }} type="button">继续写作</button>
-            <button onClick={() => { setMenuOpen(false); onRename(book.id); }} type="button">重命名</button>
-            <button onClick={() => { setMenuOpen(false); onExport(book.id); }} type="button">导出</button>
-            <button onClick={() => { setMenuOpen(false); onBackup(book.id); }} type="button">备份</button>
-            <button onClick={() => { setMenuOpen(false); onRemove(book.id); }} type="button">从最近写作移除</button>
-            <button onClick={() => { setMenuOpen(false); onOpenFolder(book.id); }} type="button">打开所在文件夹</button>
-            <button className="is-danger" onClick={() => { setMenuOpen(false); onDelete(book.id); }} type="button">删除书籍</button>
+            <button onClick={() => act("open")} type="button">继续写作</button>
+            <button onClick={() => act("info")} type="button">书的资料</button>
+            <button onClick={() => act("rename")} type="button">重命名</button>
+            <button onClick={() => act("export")} type="button">导出</button>
+            <button onClick={() => act("backup")} type="button">备份</button>
+            <button onClick={() => act("archive")} type="button">{meta?.archived ? "取消归档" : "归档"}</button>
+            <button onClick={() => act("remove")} type="button">从最近写作移除</button>
+            <button onClick={() => act("folder")} type="button">打开所在文件夹</button>
+            <button className="is-danger" onClick={() => act("delete")} type="button">删除书籍</button>
           </menu>
         ) : null}
       </div>

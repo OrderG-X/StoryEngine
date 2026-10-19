@@ -74,3 +74,30 @@
 :root .se-export-range label{display:flex;align-items:center;gap:6px;cursor:pointer;}
 :root .se-export-num{width:52px;height:28px;padding:0 6px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--text);font-size:13px;text-align:center;}
 :root .se-export-num:focus{outline:none;border-color:var(--accent);}
+
+/* 书的资料弹窗（P10，portal 到 body）：上面统计 + 30 天柱图，下面表单。 */
+:root .dialog-content.se-book-info{width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow-y:auto;}
+:root .se-info-stats{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;}
+:root .se-info-nums{display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--faint);}
+:root .se-info-nums span{display:flex;flex-direction:column;gap:2px;}
+:root .se-info-nums b{font-size:16px;font-weight:600;color:var(--text);}
+:root .se-info-bars{display:flex;align-items:flex-end;gap:2px;height:40px;}
+:root .se-info-bars i{flex:1;min-width:2px;border-radius:2px;background:var(--line);}
+:root .se-info-bars i.is-on{background:var(--accent);}
+:root .se-info-form{display:flex;flex-direction:column;gap:12px;}
+:root .se-info-field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0;font-size:12px;color:var(--muted);}
+:root .se-info-row{display:flex;gap:12px;}
+:root .se-info-synopsis{height:auto;min-height:64px;padding:8px 10px;resize:vertical;line-height:1.6;}
+:root .se-info-tags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+:root .se-info-tag{height:26px;padding:0 10px;border:0;border-radius:13px;background:var(--accent-soft);color:var(--text);font-size:12px;cursor:pointer;}
+:root .se-info-tag:hover{color:var(--danger);}
+:root .se-info-tag-input{flex:1;min-width:100px;height:28px;padding:0 8px;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:12px;}
+:root .se-info-tag-input:focus{outline:none;border-color:var(--accent);border-style:solid;}
+:root .se-info-tones{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+:root .se-info-tone{width:26px;height:34px;padding:0;border:2px solid transparent;border-radius:3px 6px 6px 3px;cursor:pointer;}
+:root .se-info-tone.is-auto{width:auto;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:12px;}
+:root .se-info-tone.is-on{border-color:var(--accent);}
+:root .se-info-tone.tone-0{background:var(--cover-0);} :root .se-info-tone.tone-1{background:var(--cover-1);} :root .se-info-tone.tone-2{background:var(--cover-2);}
+:root .se-info-tone.tone-3{background:var(--cover-3);} :root .se-info-tone.tone-4{background:var(--cover-4);} :root .se-info-tone.tone-5{background:var(--cover-5);}
+:root .se-info-tone.tone-6{background:var(--cover-6);}
+@media (max-width:520px){:root .se-info-row{flex-direction:column;}}

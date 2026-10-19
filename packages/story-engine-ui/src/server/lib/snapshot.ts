@@ -8,6 +8,7 @@ import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@a
 import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
+import { resyncWordStats } from "./word-stats.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,6 +92,9 @@ const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（�
 /** 新核心留证的东西（坏事务、镜像前的老文件原样）：撤销不能把它们抹掉。 */
 const CORE_KEPT_DIR = ".story-core-kept";
 const CORE_KEPT_MARKER = "# story-engine-ui: 新核心留证目录不入快照（撤销不抹证据）";
+/** 写作统计（P10）：撤销不回退统计，恢复后重数。 */
+const WORD_STATS_DIR = ".story-engine-ui/stats";
+const WORD_STATS_MARKER = "# story-engine-ui: 写作统计不入快照（撤销不回退统计）";
 
 /** 快照排除的目录（info/exclude 一行 + diff/checkout 路径魔法）。 */
 const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: string; readonly marker: string }[] = [
@@ -101,6 +105,7 @@ const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: strin
   { dir: CORE_PREVIEW_DIR, line: `/${CORE_PREVIEW_DIR}/`, marker: CORE_PREVIEW_MARKER },
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
+  { dir: WORD_STATS_DIR, line: `/${WORD_STATS_DIR}/`, marker: WORD_STATS_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);
@@ -303,6 +308,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
       if (!mirror.ok) console.warn(`[snapshot] 恢复后重生成老格式镜像没成：${mirror.reason}`);
     }
     const receipt = await buildRestoreReceiptFacts(projectDir, id, preRestoreId);
+    // 写作统计不进存档点：恢复后全书重数一遍。
+    await resyncWordStats(projectDir);
     return { restored: parseLogLine(await git(projectDir, ["log", "-1", `--pretty=format:${LOG_FORMAT}`])), ...receipt };
   });
 }

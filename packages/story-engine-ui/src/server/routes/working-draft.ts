@@ -19,6 +19,7 @@ import {
   type MiddlewareStack,
 } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
+import { chapterWordsNow, recordChapterWords } from "../lib/word-stats.js";
 
 const PATH = "/api/working-draft";
 
@@ -51,6 +52,8 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           : (() => { throw new Error("baseVersion 要么是上次读到的版本号，要么是 null（这一章原来没有工作稿）。"); })();
         const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
         await assertStoryEngineProject(projectDir);
+        // 写作统计：写之前量一下这章多少字，存完按差值记成作者写的。
+        const wordsBefore = await chapterWordsNow(projectDir, chapter).catch(() => undefined);
         const outcome = await runCommand(projectDir, draftSave, {
           chapter,
           body: body.body as string,
@@ -58,6 +61,7 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           baseVersion,
         }, { caller: "author" });
         if (outcome.ok) {
+          if (!outcome.result.unchanged) await recordChapterWords(projectDir, chapter, "author", wordsBefore);
           writeJson(res, 200, { ok: true, version: outcome.result.version, unchanged: outcome.result.unchanged });
           return;
         }

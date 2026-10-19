@@ -8,6 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { draftPath, draftWrite, runCommand, withBookLock } from "@actalk/story-core";
+import { chapterWordsNow, recordChapterWords } from "./word-stats.js";
 
 export class AiDraftWriteError extends Error {
   constructor(readonly code: string, message: string) {
@@ -39,12 +40,15 @@ export async function writeAiDraft(projectDir: string, input: AiDraftWriteInput)
   const path = join(projectDir, draftPath(input.chapter));
   // 写和回读在同一把锁里：回给界面的就是这次写下的那份。
   return withBookLock(projectDir, async () => {
+    // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
+    const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
     const outcome = await runCommand(projectDir, draftWrite, {
       chapter: input.chapter,
       body: input.body,
       ...(title ? { title } : {}),
     }, { caller: "ai" });
     if (!outcome.ok) throw new AiDraftWriteError(outcome.code, outcome.message);
+    if (!outcome.result.unchanged) await recordChapterWords(projectDir, input.chapter, "ai", wordsBefore);
     const content = await readFile(path, "utf-8");
     return { path, content, version: outcome.result.version, unchanged: outcome.result.unchanged };
   });
