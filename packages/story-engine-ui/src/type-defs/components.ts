@@ -15,7 +15,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   readonly onGoHome?: () => void;
   readonly onOpenSettings?: () => void;
-  readonly onOpenUsage?: () => void;
   readonly onToggleTheme?: () => void;
   readonly onSendMessage?: (message: string) => void;
   /** 「下一步」选项带结构化动作时（R4.7，服务端生成的确定性选项）：点击直接发 body.action，不经模型。 */

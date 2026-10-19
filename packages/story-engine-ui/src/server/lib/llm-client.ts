@@ -10,6 +10,7 @@ import { loadModelSettingsV0 } from "./model-settings.js";
 import type { ModelSettingsLoadResult } from "../book/types.js";
 import { writeFileAtomic } from "./project-io.js";
 import { recordPipelineUsage, recordTurnNotice, sampleFromOpenAIUsage } from "./token-meter.js";
+import { recordUsage } from "./usage-ledger.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
@@ -194,6 +195,8 @@ export type ResolvedChatModel = {
    * 设置里没选、和主模型是同一个、或解析不出来（档案没了、缺密钥）时不带。
    */
   readonly fallback?: ResolvedChatModel;
+  /** 为哪个功能解析的（记用量分列用，P10）；体检等不属于功能的调用没有。 */
+  readonly task?: ModelTaskProfileKey;
 };
 
 /** 档案 → 可调用的模型（服务商、密钥、自定义头）。缺服务商 / 缺密钥抛人话错误。 */
@@ -282,7 +285,7 @@ export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Pro
     }
   }
   const sameModel = fallback && fallback.provider.id === primary.provider.id && fallback.profile.model === primary.profile.model;
-  return fallback && !sameModel ? { ...primary, fallback } : primary;
+  return fallback && !sameModel ? { ...primary, task, fallback: { ...fallback, task } } : { ...primary, task };
 }
 
 // ---------------------------------------------------------------------------
@@ -957,7 +960,15 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
     );
     // 末帧 finish_reason 说「没收尾」（length / content_filter …）→ 半截正文不能当完整结果：诚实抛错，
     // 调用方按 ok=false 如实回报，绝不把截断稿当成功。认不出的非 stop 值只原样带回，不赌陌生网关的枚举。
-    recordPipelineUsage(sampleFromOpenAIUsage(usage));
+    const sample = sampleFromOpenAIUsage(usage);
+    recordPipelineUsage(sample);
+    void recordUsage({
+      ...(input.configured.task ? { task: input.configured.task } : {}),
+      provider: input.configured.provider.id,
+      ...(input.configured.provider.label ? { providerLabel: input.configured.provider.label } : {}),
+      model: input.configured.profile.model,
+      sample,
+    });
     if (isTruncatedFinishReason(finishReason)) {
       throw new Error(describeTruncatedFinish(finishReason as string, content.length));
     }

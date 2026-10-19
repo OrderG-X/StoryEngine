@@ -15,7 +15,7 @@ import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { listSnapshots, restoreSnapshot } from "../lib/snapshot.js";
 
 const storyAgentMocks = vi.hoisted(() => ({ getStoryAgent: vi.fn() }));
-vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent }));
+vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent, getStoryAgentModel: () => undefined }));
 // 本文件测「确认定稿」按钮的结构化动作，不定稿后的编辑部后台预热：mock 掉 warmUpReaders，
 // 别让单测真去补读笔记（R3 后三个专员常开、没有开关可关）。
 const brainMocks = vi.hoisted(() => ({ warmUpReaders: vi.fn(async () => undefined) }));

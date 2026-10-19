@@ -4,7 +4,6 @@
  * POST /api/books/delete（挪进回收站，P10）
  * GET  /api/books/trash · POST /api/books/trash/restore · POST /api/books/trash/purge
  * POST /api/books/open-folder
- * GET  /api/usage-summary
  */
 import { execFile } from "node:child_process";
 import { access, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -28,7 +27,6 @@ import {
   readStringList,
   requireBodyString,
   splitChineseList,
-  readUsageSummary,
   writeJson,
   isRecord,
   stripLeadingMarkdownChapterHeading,
@@ -83,10 +81,6 @@ export function registerBooksRoutes(middlewares: MiddlewareStack): void {
     }
     if (req.url?.startsWith("/api/books/open-folder")) {
       await handleOpenBookFolder(req, res);
-      return;
-    }
-    if (req.url?.startsWith("/api/usage-summary")) {
-      await handleUsageSummary(req, res);
       return;
     }
     next();
@@ -541,26 +535,3 @@ async function handleOpenBookFolder(req: import("node:http").IncomingMessage, re
   }
 }
 
-// ---------------------------------------------------------------------------
-// Usage summary
-// ---------------------------------------------------------------------------
-
-async function handleUsageSummary(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
-  try {
-    if (req.method !== "GET") {
-      writeJson(res, 405, { ok: false, error: "Only GET is supported." });
-      return;
-    }
-    const url = new URL(req.url ?? "", "http://localhost");
-    const projectDir = requireBodyString(url.searchParams.get("project"), "项目路径不能为空。");
-    if (!guardProjectPath(res, projectDir)) return;
-    await assertStoryEngineProject(projectDir);
-    const summary = await readUsageSummary(projectDir);
-    writeJson(res, 200, { ok: true, summary });
-  } catch (error) {
-    writeJson(res, 500, {
-      ok: false,
-      error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
-    });
-  }
-}

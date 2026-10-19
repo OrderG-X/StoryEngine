@@ -24,6 +24,7 @@ import {
   type AgentTurnChunk,
 } from "./agent-chat.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
+import { recordUsage } from "../lib/usage-ledger.js";
 
 // E2E 实锤：MIMO 等模型干完工具常沉默收场（用户只看到卡/章节冒出来、AI 一句话不说），偶尔整轮空转。
 // 路由兜底保证「绝不静默」：本轮一个 text 都没发就补一条收尾。
@@ -93,6 +94,17 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
       { type: "finish", payload: { stepResult: { reason: "stop" } } },
     ]);
     expect(collectText(done.events)).not.toContain("步数用完了");
+  });
+
+  it("一轮结束把对话 AI 的用量记进全局用量账（P10，记在主对话名下、带模型）", async () => {
+    vi.mocked(recordUsage).mockClear();
+    await runAgentTurn({
+      fullStream: streamOf([textChunk("好。"), { type: "finish", payload: { stepResult: { reason: "stop" }, output: { usage: { inputTokens: 300, outputTokens: 20 } } } }]),
+      sendEvent: () => undefined,
+      scrubber: passthroughScrubber(),
+      model: { provider: "glm", providerLabel: "智谱", model: "glm-5" },
+    });
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ task: "triage", provider: "glm", model: "glm-5", sample: expect.objectContaining({ input: 300, output: 20 }) }));
   });
 
   it("模型/网络中途出错：只发 error 帧，不再叠「抱歉没能回应」", async () => {

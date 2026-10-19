@@ -341,34 +341,6 @@ describe("books route destructive confirmation", () => {
   });
 });
 
-describe("usage-summary route path guard（用量汇总补齐路径闸）", () => {
-  it("拒绝家目录外的 project 查询参数（与其余路由同一错误形态）", async () => {
-    const evilProject = join(tmpdir(), `story-engine-usage-evil-${Date.now()}`);
-    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(evilProject)}`);
-    expect(response.statusCode).toBe(400);
-    expect(response.payload).toMatchObject({ ok: false });
-    expect(String(response.payload.error)).toContain("不安全的项目路径");
-  });
-
-  it("拒绝家目录敏感段（~/.ssh 下）的 project 查询参数", async () => {
-    const evilProject = join(homedir(), ".ssh", `story-engine-usage-probe-${Date.now()}`);
-    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(evilProject)}`);
-    expect(response.statusCode).toBe(400);
-    expect(response.payload).toMatchObject({ ok: false });
-    expect(String(response.payload.error)).toContain("不安全的项目路径");
-  });
-
-  it("合法项目路径照常返回用量汇总（闸不误伤）", async () => {
-    const projectDir = await createDeleteRouteProject("用量汇总书");
-    const response = await callBooksGetRoute(`/api/usage-summary?project=${encodeURIComponent(projectDir)}`);
-    expect(response.statusCode).toBe(200);
-    expect(response.payload).toMatchObject({
-      ok: true,
-      summary: { diagnosticsCount: 0, totalTokens: 0 },
-    });
-  });
-});
-
 async function createEmptyEngineBook(title: string): Promise<{ readonly projectDir: string; readonly title: string }> {
   // rootDir 必须落在用户目录内，否则 guardProjectPath 会以"不安全路径"拒绝删除；
   // makeHomeTempDir 落在 $HOME 下隐藏测试基目录的本次运行 run 目录内，满足这一约束。

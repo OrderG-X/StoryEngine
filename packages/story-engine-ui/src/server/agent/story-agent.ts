@@ -107,6 +107,19 @@ export function buildInstructions(): string {
 }
 
 let cachedAgent: Agent | undefined;
+/** 对话 AI 用的模型（记用量用，P10）：和 cachedAgent 一起建、一起失效。 */
+let cachedAgentModel: AgentModelInfo | undefined;
+
+export interface AgentModelInfo {
+  readonly provider: string;
+  readonly providerLabel?: string;
+  readonly model: string;
+}
+
+/** 对话 AI 当前用的模型；还没建过是 undefined。 */
+export function getStoryAgentModel(): AgentModelInfo | undefined {
+  return cachedAgentModel;
+}
 
 /**
  * 让进程内缓存的 agent 失效（M1：改模型设置后热生效，不必重启服务）。
@@ -115,6 +128,7 @@ let cachedAgent: Agent | undefined;
  */
 export function invalidateStoryAgent(): void {
   cachedAgent = undefined;
+  cachedAgentModel = undefined;
 }
 
 /**
@@ -123,7 +137,8 @@ export function invalidateStoryAgent(): void {
  */
 export async function getStoryAgent(): Promise<Agent> {
   if (cachedAgent) return cachedAgent;
-  const { model } = await resolveGlmModel("triage");
+  const { model, profile, provider } = await resolveGlmModel("triage");
+  cachedAgentModel = { provider: provider.id, ...(provider.label ? { providerLabel: provider.label } : {}), model: profile.model };
   cachedAgent = new Agent({
     id: STORY_AGENT_ID,
     name: "写作总控助手",

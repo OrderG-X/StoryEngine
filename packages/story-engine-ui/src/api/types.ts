@@ -219,34 +219,6 @@ export type ChapterWorkspacePermission =
   | "destructive_write"
   | "local_side_effect";
 
-export interface UsageSummary {
-  readonly diagnosticsAvailable: boolean;
-  readonly diagnosticsCount: number;
-  readonly diagnosticsWarnings: readonly string[];
-  readonly totalTokens: number;
-  readonly promptTokens: number;
-  readonly completionTokens: number;
-  readonly cacheHitTokens: number | null;
-  readonly cacheMissTokens: number | null;
-  readonly cacheHitRatio: number | null;
-  readonly recent: readonly UsageRecord[];
-}
-
-export interface UsageRecord {
-  readonly stage: string;
-  readonly chapter: number | null;
-  readonly generatedAt: string | null;
-  readonly totalTokens: number | null;
-  readonly promptTokens: number | null;
-  readonly completionTokens: number | null;
-  readonly cacheHitRatio: number | null;
-  readonly elapsedMs: number | null;
-}
-
-export type UsageSummaryApiResponse =
-  | { readonly ok: true; readonly summary: UsageSummary }
-  | { readonly ok: false; readonly error: string };
-
 export interface SnapshotEntryDto {
   readonly id: string;
   readonly label: string;

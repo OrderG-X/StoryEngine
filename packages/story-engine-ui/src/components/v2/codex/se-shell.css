@@ -81,6 +81,28 @@
   .se-backup-edit-actions{display:flex;justify-content:flex-end;gap:8px;}
   .se-backup-last{margin:12px 0 0;font-size:13px;color:var(--muted);}
   .se-backup-last.is-bad{color:var(--danger);}
+  /* 「用量」（P10）：今天 / 本月两个数，近 30 天小柱，按书 / 功能 / 模型一行一个。 */
+  .se-usage-top{display:flex;gap:28px;margin-bottom:6px;}
+  .se-usage-stat{display:flex;flex-direction:column;gap:2px;}
+  .se-usage-stat b{font-size:22px;font-weight:600;color:var(--text);}
+  .se-usage-stat span{font-size:12px;color:var(--faint);}
+  .se-usage-stat em{font-style:normal;font-size:12px;color:var(--muted);}
+  .se-usage-hint{margin:6px 0;font-size:12px;color:var(--faint);}
+  .se-usage-bars{display:flex;align-items:flex-end;gap:2px;height:48px;margin:14px 0 16px;}
+  .se-usage-bars i{flex:1;min-width:2px;border-radius:2px;background:var(--line);}
+  .se-usage-bars i.is-on{background:var(--accent);}
+  .se-usage-tabs{margin-bottom:8px;}
+  .se-usage-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;}
+  .se-usage-list > li,.se-usage-row{display:flex;align-items:center;gap:12px;min-height:36px;}
+  .se-usage-list > li{border-bottom:1px solid var(--line-weak);}
+  .se-usage-list > li.se-usage-model{display:block;}
+  .se-usage-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--text);}
+  .se-usage-num{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .se-usage-cost{min-width:72px;text-align:right;font-size:12px;color:var(--faint);}
+  .se-usage-price{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:4px 0 12px;}
+  .se-usage-price label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .se-usage-price .se-backup-input{width:84px;}
+  .se-usage-price .se-backup-edit-actions{flex-basis:100%;}
 
   /* ═══ 搜索按钮 + ⌘K 面板 ═══ */
   .se-search-btn{

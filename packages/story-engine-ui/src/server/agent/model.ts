@@ -331,6 +331,7 @@ export function makeAgentRequestFetch(
 export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
   readonly model: ReturnType<ReturnType<typeof createOpenAICompatible>>;
   readonly profile: ResolvedChatModel["profile"];
+  readonly provider: ResolvedChatModel["provider"];
 }> {
   const configured = await resolveConfiguredChatModel(task);
   const { provider, profile, apiKey, thinking, fallback } = configured;
@@ -353,7 +354,7 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
       })
       : primaryFetch,
   });
-  return { model: openaiCompatible(profile.model), profile };
+  return { model: openaiCompatible(profile.model), profile, provider };
 }
 
 /** 一个模型的整条请求链：思考方言 / 工具 schema 改造 → 限流闸 → 上游静默防线。 */

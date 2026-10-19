@@ -20,6 +20,7 @@ function fakeModel() {
       doStream: async () => ({}),
     },
     profile: { model: "fake-glm" },
+    provider: { id: "fake" },
   };
 }
 

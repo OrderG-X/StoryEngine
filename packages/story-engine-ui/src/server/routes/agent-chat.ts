@@ -20,7 +20,8 @@
 import type { ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
-import { getStoryAgent } from "../agent/story-agent.js";
+import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
+import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
 import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
@@ -291,6 +292,8 @@ export async function runAgentTurn(args: {
   readonly scrubber: { push(text: string): string; flush(): string };
   /** 客户端已断开（abortOnClientDisconnect）：立即停转发。 */
   readonly shouldStop?: () => boolean;
+  /** 对话 AI 用的模型：给了就把这轮用量记进全局用量账（P10）。 */
+  readonly model?: AgentModelInfo;
 }): Promise<{ readonly finishReason: string | undefined }> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
@@ -381,7 +384,9 @@ export async function runAgentTurn(args: {
       }
       case "finish": {
         finishReason = chunk.payload?.stepResult?.reason;
-        recordAgentUsage(sampleFromSdkUsage(chunk.payload?.output?.usage), chunk.payload?.output?.steps?.length || 1);
+        const sample = sampleFromSdkUsage(chunk.payload?.output?.usage);
+        recordAgentUsage(sample, chunk.payload?.output?.steps?.length || 1);
+        if (args.model) void recordUsage({ task: "triage", ...args.model, sample });
         break;
       }
       default:
@@ -540,6 +545,7 @@ async function handleAgentChat(
     const visibleTextScrubber = createStreamingScrubber();
 
     const turnStarted = Date.now();
+    const agentModel = getStoryAgentModel();
     const { result: { finishReason }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
@@ -552,6 +558,7 @@ async function handleAgentChat(
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
+      ...(agentModel ? { model: agentModel } : {}),
     }));
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。

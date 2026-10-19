@@ -25,8 +25,6 @@ import type {
   StateOverview,
   StateOverviewApiResponse,
   StateOverviewRequest,
-  UsageSummary,
-  UsageSummaryApiResponse,
 } from "./types.js";
 import { fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
@@ -66,19 +64,6 @@ export async function fetchReaderCatchUp(projectPath: string, signal?: AbortSign
     throw new Error(payload.error);
   }
   return { reading: payload.reading, roles: payload.roles, ...(payload.reread ? { reread: payload.reread } : {}) };
-}
-
-export async function fetchUsageSummary(projectPath: string, signal?: AbortSignal): Promise<UsageSummary> {
-  const params = new URLSearchParams({ project: projectPath });
-  const payload = await fetchJson<UsageSummaryApiResponse>(
-    `/api/usage-summary?${params.toString()}`,
-    {},
-    signal,
-  );
-  if (!payload.ok) {
-    throw new Error(payload.error);
-  }
-  return payload.summary;
 }
 
 export async function fetchSnapshots(projectPath: string, signal?: AbortSignal): Promise<SnapshotEntryDto[]> {

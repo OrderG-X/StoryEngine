@@ -14,3 +14,10 @@ vi.mock("./server/lib/book-backup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server/lib/book-backup.js")>()),
   autoBackupAfterCommit: vi.fn(async () => null),
 }));
+
+// 每次调模型记一行用量会往 ~/.story-engine/usage 追加：测试里换成空操作，免得用例写进作者的真用量账。
+// 要测它本身的（usage-ledger.test.ts）用 vi.importActual 拿真的。
+vi.mock("./server/lib/usage-ledger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server/lib/usage-ledger.js")>()),
+  recordUsage: vi.fn(async () => undefined),
+}));
