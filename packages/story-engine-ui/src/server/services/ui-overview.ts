@@ -6,6 +6,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { StateOverview } from "../book/state-overview.js";
 import { readReadersCatchUpStatus, type ReadersCatchUpStatus } from "../editorial/catch-up.js";
+import { readPlaceholderProtagonist, type PlaceholderProtagonist } from "../writing/presence/protagonist-placeholder.js";
 import { compactRecord, isRecord, mergeStringLists, readPositiveInteger, readString, readUiChapterFileStates, type UiChapterFileState } from "../lib/project-io.js";
 
 
@@ -134,12 +135,15 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
   /** 编辑部三个跟读角色的后台补读进度（R4.3）：核账员/记账员/章纲员各读到第几章，任一在读才带。 */
   readonly readerCatchUp?: { readonly reading: boolean; readonly roles: readonly { readonly role: string; readonly reading: boolean; readonly done: number; readonly total: number }[] };
   readonly uiChapterFiles?: readonly UiChapterFileState[];
+  /** 主角卡还是开书占位、已定稿章节有视角人物（「待处理」里建议改名；导入的书记完账后也有）。 */
+  readonly placeholderProtagonist?: PlaceholderProtagonist;
 }> {
   const calendar = await readStoryCalendarView(projectDir);
-  const [characterDetails, uiChapterFiles, readerCatchUp] = await Promise.all([
+  const [characterDetails, uiChapterFiles, readerCatchUp, placeholderProtagonist] = await Promise.all([
     readCharacterDetailViews(projectDir),
     readUiChapterFileStates(projectDir),
     readReadersCatchUpProgress(projectDir),
+    readPlaceholderProtagonist(projectDir, Number.MAX_SAFE_INTEGER).catch(() => undefined),
   ]);
   return {
     ...overview,
@@ -147,6 +151,7 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
     ...(characterDetails.length ? { characterDetails } : {}),
     ...(readerCatchUp ? { readerCatchUp } : {}),
     ...(uiChapterFiles.length ? { uiChapterFiles } : {}),
+    ...(placeholderProtagonist ? { placeholderProtagonist } : {}),
   };
 }
 

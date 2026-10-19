@@ -8,6 +8,8 @@
  *  1. 主体的已确立名字或别称在本章正文里逐字出现的，全列；
  *  2. 再加最近 RECENT_FACT_CHAPTERS 章新记的；
  *  3. 超过 MAX_PROMPT_FACTS 条，先留第 1 类，再按记下的章从新到旧截断，如实写「另有 x 条没列」。
+ *  没列的分两种报：按规则本来就不列的（主体没出现、也不是最近记的）只告诉模型；超了上限截掉的才算
+ *  「没看全」（omittedFacts），定稿预览如实提醒作者。
  */
 import {
   normalizeForQuote,
@@ -31,6 +33,7 @@ export interface KeeperContext {
   /** 「F7」→ 事实真编号。 */
   readonly factHandles: ReadonlyMap<string, string>;
   readonly omittedThreads: number;
+  /** 和本章有关、但超了上限没列给记账员的事实条数（按规则本来就不列的不算）。 */
   readonly omittedFacts: number;
 }
 
@@ -89,7 +92,9 @@ function factSection(projection: BookProjection, draft: string, handles: Map<str
     (a, b) => Number(mentioned.has(b.subjectKey)) - Number(mentioned.has(a.subjectKey)) || b.chapter - a.chapter || (a.id < b.id ? -1 : 1),
   );
   const kept = ranked.slice(0, MAX_PROMPT_FACTS);
-  const omitted = live.length - kept.length;
+  // 两种没列：主体没在本章出现、也不是最近记的（按规则本来就不列）；和本章有关但超了上限（真没看全）。
+  const unrelated = live.length - picked.length;
+  const omitted = picked.length - kept.length;
   // 展示按主体归组、组内按章序，模型好对照。
   const order = new Map<string, number>();
   for (const fact of kept) if (!order.has(fact.subjectKey)) order.set(fact.subjectKey, order.size);
@@ -101,7 +106,10 @@ function factSection(projection: BookProjection, draft: string, handles: Map<str
     const head = fact.attribute && fact.value !== undefined ? `${fact.subject} · ${fact.attribute}：${fact.value}` : fact.text;
     return `${handle} ${head}（第 ${fact.chapter} 章，${nature}）`;
   });
-  const more = omitted > 0 ? `\n（另有 ${omitted} 条有效的事实和本章关系不大，没列出）` : "";
+  const more = [
+    omitted > 0 ? `\n（另有 ${omitted} 条和本章有关的事实，太多没列出）` : "",
+    unrelated > 0 ? `\n（另有 ${unrelated} 条有效的事实，主体没在本章出现，没列出）` : "",
+  ].join("");
   return {
     text: `【现在有效的事实（本章明写推翻其中某条时，replaces 填它的编号）】\n${lines.join("\n")}${more}`,
     omitted,

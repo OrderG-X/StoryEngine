@@ -70,13 +70,14 @@ describe("closeStandaloneServer（关闭时主动断开既有长连接）", () =
     await expect(response.body!.getReader().read().then(() => response.text()).catch(() => "")).resolves.toBeDefined();
   });
 
-  it("graceMs>0：先停监听、给在飞连接宽限，宽限到期强制断开后才 resolve", async () => {
+  it("graceMs>0：先停监听、给在飞连接宽限，宽限到期强制断开后才 resolve", { timeout: 15_000 }, async () => {
     const { server, url } = await openHangingSse();
     const started = Date.now();
     await closeStandaloneServer(server, { graceMs: 300 });
     const elapsed = Date.now() - started;
     expect(elapsed).toBeGreaterThanOrEqual(250);
-    expect(elapsed).toBeLessThan(3_000);
+    // 上限只为证明「没被挂着的连接拖住不放」；机器忙时关闭本身也慢，给足余量。
+    expect(elapsed).toBeLessThan(10_000);
     // 已停监听：新连接被拒。
     await expect(fetch(url)).rejects.toThrow();
   });

@@ -58,7 +58,17 @@ describe("记账员上下文", () => {
     const view = project({ ledgers: [ledger(1, many)], decisions: [] });
     const context = buildKeeperContext(view, "正文");
     expect(context.factHandles.size).toBe(MAX_PROMPT_FACTS);
-    expect(context.text).toContain("另有 30 条");
+    expect(context.text).toContain("另有 30 条和本章有关的事实");
+    expect(context.omittedFacts).toBe(30);
+  });
+
+  it("主体没在本章出现、也不是最近记的事实：本来就不列，只告诉模型，不算「没看全」", () => {
+    const old = Array.from({ length: 5 }, (_, index) => state(`旧物${index}`, "在哪", "库房"));
+    const view = project({ ledgers: [ledger(1, old), ledger(2, []), ledger(3, []), ledger(4, []), ledger(5, [])], decisions: [] });
+    const context = buildKeeperContext(view, "正文没提到它们");
+    expect(context.factHandles.size).toBe(0);
+    expect(context.omittedFacts).toBe(0);
+    expect(context.text).toContain("另有 5 条有效的事实，主体没在本章出现");
   });
 });
 

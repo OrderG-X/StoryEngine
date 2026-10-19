@@ -75,6 +75,8 @@ export interface StateOverview {
   readonly uiChapterFiles?: readonly StateOverviewChapterFileState[];
   /** 编辑部三个跟读角色的后台补读进度（R4.3）：任一角色在读时才带（开书概况的初值；在读期间前端轮询 /api/reader-progress 自走）。 */
   readonly readerCatchUp?: ReaderCatchUpStatus;
+  /** 主角卡还是开书占位，已定稿章节的视角人物里取最多的当候选（「待处理」建议改名）。 */
+  readonly placeholderProtagonist?: { readonly placeholderName: string; readonly suggestedName: string; readonly viewpointChapters: number };
   readonly maintenance: {
     readonly diagnosticsAvailable: boolean;
     readonly cleanupVisibleCount: number;

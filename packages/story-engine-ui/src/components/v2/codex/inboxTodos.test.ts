@@ -37,4 +37,12 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
     });
     expect(todos.map((t) => t.title)).toEqual(["第 8 章还没起标题"]);
   });
+
+  it("主角卡还是开书占位：给视角最多的人当候选，排第一条；通读没记完不提", () => {
+    const withProtagonist = { ...(overview() as object), placeholderProtagonist: { placeholderName: "主角", suggestedName: "许微", viewpointChapters: 8 } } as never;
+    const todos = buildInboxTodos({ chapters: [ch(1, "死信")], overview: withProtagonist, currentChapterNumber: 8 });
+    expect(todos[0]).toMatchObject({ title: "主角卡还叫「主角」", sub: "8 章跟着许微的视角走", prefill: "把主角卡改成「许微」，只改名字，别的不动" });
+    expect(buildInboxTodos({ chapters: [ch(1, "死信")], overview: withProtagonist, currentChapterNumber: 8, rereading: true })).toEqual([]);
+  });
 });
+

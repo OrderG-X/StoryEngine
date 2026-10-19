@@ -1,6 +1,6 @@
 /**
  * AI 栏「待处理」（2026-10-07 改版）：不急但别忘的事，按需点「让 AI …」把一句话放进输入框（不自动发、不直连引擎）。
- * 全部从现有只读数据确定性推出：可清理线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
+ * 全部从现有只读数据确定性推出：主角卡还是占位 / 可清理线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
  */
 import type { StateOverview } from "../../../api/types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
@@ -23,7 +23,7 @@ function chapterList(numbers: readonly number[]): string {
 
 export function buildInboxTodos(input: {
   readonly chapters: readonly ChapterNavItem[];
-  readonly overview: Pick<StateOverview, "threads" | "arcGoals"> | null | undefined;
+  readonly overview: (Pick<StateOverview, "threads" | "arcGoals"> & Partial<Pick<StateOverview, "placeholderProtagonist">>) | null | undefined;
   readonly currentChapterNumber: number;
   /** 导入的书还在通读记账（P8）：后面的章还没记账，前面开的线索、主线看着「很久没推进」是假的，这两条先不提。 */
   readonly rereading?: boolean;
@@ -31,6 +31,17 @@ export function buildInboxTodos(input: {
   const todos: InboxTodo[] = [];
   const written = input.chapters.filter((ch) => ch.status !== "planned");
   const latest = Math.max(input.currentChapterNumber, ...written.map((ch) => ch.chapterNumber), 0);
+
+  const protagonist = input.rereading ? undefined : input.overview?.placeholderProtagonist;
+  if (protagonist) {
+    todos.push({
+      key: "placeholder-protagonist",
+      title: `主角卡还叫「${protagonist.placeholderName}」`,
+      sub: `${protagonist.viewpointChapters} 章跟着${protagonist.suggestedName}的视角走`,
+      action: "让 AI 改名",
+      prefill: `把主角卡改成「${protagonist.suggestedName}」，只改名字，别的不动`,
+    });
+  }
 
   const cleanup = input.rereading ? 0 : input.overview?.threads.cleanupVisibleCount ?? 0;
   if (cleanup > 0) {

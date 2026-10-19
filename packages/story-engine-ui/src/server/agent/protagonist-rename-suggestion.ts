@@ -12,17 +12,7 @@
  * 不再数出场次数（第 1 章视角是林小满、宋伯名字出现再多，也是建议林小满）。
  * 一章都没有视角声明就不给建议，绝不退回数出场次数（老书老数据没有这字段就没有建议）。
  */
-import { readCharacterBible, isPlaceholderCharacterName } from "../book/project-store.js";
-import { type CharacterBibleEntry } from "../book/types.js";
-
-import { readViewpointChapterCounts } from "../writing/presence/delta-present-names.js";
-
-/** 主角判定：与在场检测（in-scene-detector）同语义——isMainCharacter/role=protagonist/role 含「主角」。 */
-function isProtagonistEntry(character: CharacterBibleEntry): boolean {
-  if ((character as { readonly isMainCharacter?: unknown }).isMainCharacter === true) return true;
-  const role = typeof character.role === "string" ? character.role : undefined;
-  return role === "protagonist" || (role?.includes("主角") ?? false);
-}
+import { readPlaceholderProtagonist } from "../writing/presence/protagonist-placeholder.js";
 
 export interface ProtagonistRenameSuggestion {
   readonly label: string;
@@ -38,17 +28,10 @@ export async function buildProtagonistRenameSuggestion(
   projectDir: string,
   committedChapter: number,
 ): Promise<ProtagonistRenameSuggestion | undefined> {
-  const bible = await readCharacterBible(projectDir).catch(() => null);
-  const protagonist = (bible?.characters ?? []).find(isProtagonistEntry) ?? (bible?.characters ?? [])[0];
-  const placeholderName = protagonist?.name?.trim() ?? "";
-  if (!placeholderName || !isPlaceholderCharacterName(placeholderName)) return undefined;
-
-  const ranked = await readViewpointChapterCounts(projectDir, committedChapter + 1);
-  const top = ranked[0];
-  if (!top || top.chapters < 1) return undefined;
-
+  const found = await readPlaceholderProtagonist(projectDir, committedChapter + 1);
+  if (!found) return undefined;
   return {
-    label: `把主角卡改成『${top.name}』`,
-    intent: `把开书占位的主角卡（现在的名字是「${placeholderName}」）改名为「${top.name}」——这是已定稿章节的视角人物（${top.chapters} 章都是跟着${top.name}的眼睛走）。只改名字，别的不动。`,
+    label: `把主角卡改成『${found.suggestedName}』`,
+    intent: `把开书占位的主角卡（现在的名字是「${found.placeholderName}」）改名为「${found.suggestedName}」——这是已定稿章节的视角人物（${found.viewpointChapters} 章都是跟着${found.suggestedName}的眼睛走）。只改名字，别的不动。`,
   };
 }
