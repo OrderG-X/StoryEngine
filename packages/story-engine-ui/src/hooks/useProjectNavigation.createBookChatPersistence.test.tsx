@@ -21,7 +21,7 @@ import { useBookStore } from "../stores/bookStore.js";
 import { useChatStore } from "../stores/chatStore.js";
 import { useUiStore } from "../stores/uiStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
+import { mockWorkspaceData } from "../mockData.js";
 import { resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
 
 const saveAll = vi.hoisted(() => ({ flushAllSaves: vi.fn(async () => ({ ok: true as const })) }));
@@ -52,7 +52,6 @@ vi.mock("../api/client.js", () => ({
 }));
 
 vi.mock("../api/stateOverviewAdapter.js", () => ({
-  sidebarFromStateOverview: vi.fn(() => mockSidebarData),
   workspaceFromStateOverview: vi.fn(() => mockWorkspaceData),
 }));
 

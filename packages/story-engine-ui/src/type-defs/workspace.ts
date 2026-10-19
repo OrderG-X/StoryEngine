@@ -1,5 +1,4 @@
-import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, StateOverviewCharacterMatrix, ToolStep } from "../api/types.js";
-import type { WorldbuildingData } from "../api/worldbuildingClient.js";
+import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, ToolStep } from "../api/types.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
 
 /** Async work is owned by the exact book, chapter, chat session and operation. */
@@ -206,130 +205,6 @@ export interface DraftPreview {
   readonly streaming?: boolean;
 }
 
-export interface ProtagonistStatus {
-  readonly name: string;
-  readonly age?: string;
-  readonly identity: string;
-  readonly currentGoal: string;
-  readonly physicalState: readonly string[];
-  readonly mentalState: readonly string[];
-  readonly resourceState: readonly string[];
-  readonly currentSituation: string;
-  readonly boundaries: readonly string[];
-  readonly cannotDo: readonly string[];
-  readonly speechStyle?: string;
-  readonly speechSamples: readonly string[];
-}
-
-export interface LocationStatus {
-  readonly currentLocation: string;
-  readonly currentPosition?: string;
-  readonly previousLocation?: string;
-  readonly transitionStatus: "same_location" | "moving" | "changed" | "unknown";
-  readonly locations?: readonly LocationDetailStatus[];
-  readonly floors: readonly string[];
-  readonly rooms: readonly string[];
-  readonly entrances: readonly string[];
-  readonly exits: readonly string[];
-  readonly resources: readonly string[];
-  readonly fixedFacts: readonly string[];
-  readonly risks: readonly string[];
-  readonly nearbyLocations: readonly string[];
-  readonly travelRules: readonly string[];
-}
-
-export interface LocationDetailStatus {
-  readonly id: string;
-  readonly name: string;
-  readonly type: string;
-  readonly parentLocation?: string;
-  readonly currentKnownPosition?: string;
-  readonly sensory: readonly string[];
-  readonly narrativeFunction?: string;
-  readonly possibleConflicts: readonly string[];
-  readonly currentStatus?: string;
-  readonly floors: readonly string[];
-  readonly rooms: readonly string[];
-  readonly entrances: readonly string[];
-  readonly exits: readonly string[];
-  readonly nearbyLocations: readonly string[];
-  readonly travelRules: readonly string[];
-  readonly risks: readonly string[];
-  readonly resources: readonly string[];
-  readonly fixedFacts: readonly string[];
-  readonly hiddenFacts: readonly string[];
-  /** 自定义额外字段（破例⑦展示落点）；面板「自定义字段」section 渲染。 */
-  readonly extraFields?: Readonly<Record<string, string | readonly string[]>>;
-}
-
-export interface TimeStatus {
-  readonly currentStoryDay: string;
-  readonly currentTimeOfDay: string;
-  readonly latestChapter: string;
-  readonly latestEvent: string;
-}
-
-export interface KnowledgeBoundary {
-  readonly knownFacts: readonly string[];
-  readonly unknownTruths: readonly string[];
-  readonly forbiddenReveals: readonly string[];
-}
-
-export interface AssetSummary {
-  readonly items?: readonly AssetDetailStatus[];
-  readonly carriedItems: readonly string[];
-  readonly availableAssets: readonly string[];
-  readonly unavailableAssets: readonly string[];
-  readonly resources: readonly string[];
-  readonly properties: readonly string[];
-  readonly containers: readonly { readonly name: string; readonly contents: readonly string[] }[];
-  readonly plotCriticalItems: readonly string[];
-  readonly assetRules: readonly string[];
-}
-
-export interface AssetDetailStatus {
-  readonly id: string;
-  readonly name: string;
-  readonly type: string;
-  readonly owner?: string;
-  readonly currentLocation?: string;
-  readonly carriedBy?: string;
-  readonly status: string;
-  readonly isConsumable?: boolean;
-  readonly isPlotCritical?: boolean;
-  readonly rules: readonly string[];
-  readonly usageRules: readonly string[];
-  readonly lossRules: readonly string[];
-  readonly notes: readonly string[];
-  /** 自定义额外字段（破例⑦展示落点）；面板「自定义字段」section 渲染。 */
-  readonly extraFields?: Readonly<Record<string, string | readonly string[]>>;
-}
-
-export interface StoryMemory {
-  readonly activeForeshadowing: readonly string[];
-  readonly openThreads: readonly string[];
-  readonly arcGoals: readonly string[];
-  readonly recentTimeline: readonly string[];
-}
-
-export interface RiskWarning {
-  readonly id: string;
-  readonly level: "low" | "medium" | "high";
-  readonly text: string;
-}
-
-export interface SidebarData {
-  readonly storySettings: readonly string[];
-  readonly writingRules: readonly string[];
-  /** 写作规则的「自定义补充」自由 Markdown（破例⑧）；与 writingRules 字符串数组分开传，避免污染 splitRuleList 解析。 */
-  readonly writingRulesCustomNotes?: string;
-  readonly characters: readonly string[];
-  readonly locations: readonly string[];
-  readonly assets: readonly string[];
-  readonly hooks: readonly string[];
-  readonly arcGoals: readonly string[];
-}
-
 export interface ChapterWorkspaceData {
   readonly projectName: string;
   readonly currentChapter: ChapterNavItem;
@@ -339,23 +214,6 @@ export interface ChapterWorkspaceData {
   readonly workingDraftChain?: boolean;
   readonly previousUncommittedDraftContext?: boolean;
   readonly latestUncommittedDraftChapter?: number;
-  readonly protagonist: ProtagonistStatus;
-  readonly characterMatrix?: StateOverviewCharacterMatrix;
-  readonly location: LocationStatus;
-  readonly time: TimeStatus;
-  readonly knowledge: KnowledgeBoundary;
-  readonly assets: AssetSummary;
-  readonly memory: StoryMemory;
-  readonly risks: readonly RiskWarning[];
-  readonly hardConstraints: readonly string[];
-  readonly foundationCompleteness?: {
-    readonly readinessLevel: "ready" | "warning" | "high_risk";
-    readonly passed: boolean;
-    readonly missingItems: readonly string[];
-    readonly suggestions: readonly string[];
-  };
-  /** 加厚层（generate_worldbuilding）缺失时，用引擎正典 world-bible 映射出的兜底世界观，供面板回退显示。 */
-  readonly worldbuildingFallback?: WorldbuildingData | null;
 }
 
 /**

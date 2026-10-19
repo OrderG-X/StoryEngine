@@ -18,16 +18,12 @@ import { registerWorkingDraftRoutes } from "./routes/working-draft.js";
 import { registerChatSessionsRoutes } from "./routes/chat-sessions.js";
 import { registerSnapshotsRoutes } from "./routes/snapshots.js";
 import { registerAgentChatRoutes } from "./routes/agent-chat.js";
-import { registerWorldbuildingRoutes } from "./routes/worldbuilding.js";
-import { registerAssetEnrichmentRoutes } from "./routes/asset-enrichment.js";
-import { registerLocationEnrichmentRoutes } from "./routes/location-enrichment.js";
-import { registerCharacterEnrichmentRoutes } from "./routes/character-enrichment.js";
-import { registerWritingRulesEnrichmentRoutes } from "./routes/writing-rules-enrichment.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerContinuityDismissalsRoutes } from "./routes/continuity-dismissals.js";
 import { registerStoryThreadsRoutes } from "./routes/story-threads.js";
 import { registerStoryMapRoutes } from "./routes/story-map.js";
 import { registerChapterChangesRoutes } from "./routes/chapter-changes.js";
+import { registerBibleRoutes } from "./routes/bible.js";
 
 // ---------------------------------------------------------------------------
 // Public entry point — Vite 插件(server.middlewares)与独立 server(connect 实例)都满足
@@ -49,14 +45,10 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerChatSessionsRoutes(router);
   registerSnapshotsRoutes(router);
   registerAgentChatRoutes(router);
-  registerWorldbuildingRoutes(router);
-  registerAssetEnrichmentRoutes(router);
-  registerLocationEnrichmentRoutes(router);
-  registerCharacterEnrichmentRoutes(router);
-  registerWritingRulesEnrichmentRoutes(router);
   registerContinuityDismissalsRoutes(router);
   registerStoryThreadsRoutes(router);
   registerStoryMapRoutes(router);
   registerChapterChangesRoutes(router);
+  registerBibleRoutes(router);
   registerHealthRoutes(router);
 }

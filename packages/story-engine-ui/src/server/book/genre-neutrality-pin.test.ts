@@ -18,8 +18,9 @@ describe("genre neutrality pins", () => {
       "../writing/commit-quality-check.ts",
       "state-overview.ts",
       "../writing/writing-context-pack.ts",
-      "foundation-gap-assistant.ts",
-      "foundation-write-gateway.ts",
+      // 重构 P9：写手的设定段、主角建议接替了已删的 foundation-gap-assistant / foundation-write-gateway。
+      "../writing/setting-pack.ts",
+      "../writing/presence/protagonist-suggestion.ts",
     ];
     for (const file of files) {
       const source = await readFile(join(import.meta.dirname, file), "utf-8");

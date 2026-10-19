@@ -4,6 +4,7 @@ import WritingPaper from "../WritingPaper.js";
 import DraftCandidatesPanel from "../DraftCandidatesPanel.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 import { NamePeek } from "./NamePeek.js";
+import type { NamePeekCard } from "./bibleIndex.js";
 import { ContinuityMarks } from "./ContinuityMarks.js";
 import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
@@ -54,13 +55,15 @@ function renameChapter(chapterNumber: number, title: string): void {
  * 编辑器内核（句级聚焦、打字机居中、查找替换、选区改写、IME、外部稿同步）全在 WritingPaper 里复用，
  * 本组件一行都不碰；codex 沉浸视觉（居中稿纸 / 暗角 / 金 caret / 当前句呼吸辉光）全走 codex.css 的 .codex-desk 作用域。
  */
-/** 每章目标字数：读总览里写作规则的结构化字段（不再从侧栏拼好的「目标字数：约 N 字」那行文字里抠）；没配就返回 null，不画目标条。 */
-export function targetChapterWordsOf(overview: { readonly writingRules?: { readonly targetChapterWords?: number } } | null | undefined): number | null {
-  const value = overview?.writingRules?.targetChapterWords;
+/** 每章目标字数：读开书概况里设定本写作规则的结构化字段；没定就返回 null，不画目标条。 */
+export function targetChapterWordsOf(overview: { readonly setting?: { readonly targetChapterWords?: number } } | null | undefined): number | null {
+  const value = overview?.setting?.targetChapterWords;
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
+  /** 正文名字速览要的人物卡（设定视图，WritingWorkspaceCodex 读一份传下来）。 */
+  readonly peekCards?: readonly NamePeekCard[];
   /** 角色速览卡里点「在设定本中打开」。 */
   readonly onOpenCharacter?: (name: string) => void;
   /** 选区浮动条「问 AI」：把选中段引用进右侧输入框。 */
@@ -255,11 +258,11 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             </div>
           </div>
         )}
-        {/* 角色名速览：正文里的角色名画虚下划线，鼠标停上去弹出角色卡（不碰编辑器内核，见 NamePeek）。 */}
+        {/* 名字速览：正文里的人物名画虚下划线，鼠标停上去弹出人物卡（不碰编辑器内核，见 NamePeek）。 */}
         {!showStarter ? (
           <NamePeek
             stageRef={stageRef}
-            matrix={props.workspace.characterMatrix}
+            cards={props.peekCards ?? []}
             contentKey={`${draft.chapterNumber}:${activeTab}`}
             onOpenCharacter={props.onOpenCharacter}
           />

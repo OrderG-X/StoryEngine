@@ -174,7 +174,7 @@ export async function hasProviderApiKey(provider: {
 // Model config resolution
 // ---------------------------------------------------------------------------
 
-export type ModelTaskProfileKey = "fastDraft" | "chapterSteering" | "qualityCheck" | "repair" | "enrichment" | "draftReview" | "triage";
+export type ModelTaskProfileKey = "fastDraft" | "chapterSteering" | "qualityCheck" | "repair" | "draftReview" | "triage";
 
 export type ResolvedChatModel = {
   readonly provider: ModelSettingsLoadResult["summary"]["providers"][number];

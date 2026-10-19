@@ -23,7 +23,7 @@ import {
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
-import { readAntiRules } from "../writing/ai-flavor/anti-rules.js";
+import { readAntiRules, withAntiRulesNote } from "../writing/ai-flavor/anti-rules.js";
 import { runDeAiFlavorBatch } from "../services/de-ai-flavor-batch.js";
 import type { AiFlavorViolation } from "../writing/ai-flavor/ai-flavor-check.js";
 
@@ -93,7 +93,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
       return content;
     };
 
-    const result = await runDeAiFlavorBatch({ draftText: rawDraft, violations, callModel, antiRules });
+    const result = await runDeAiFlavorBatch({ draftText: rawDraft, violations, callModel, antiRules: antiRules.items });
 
     let snapshotId: string | undefined;
     let writtenContent = rawDraft;
@@ -115,7 +115,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
         skipped: result.skipped,
         changes: result.changes,
       },
-      summary: result.summary,
+      summary: withAntiRulesNote(result.summary, antiRules.failure),
       draftContent: writtenContent,
       ...(snapshotId ? { snapshotId } : {}),
     });

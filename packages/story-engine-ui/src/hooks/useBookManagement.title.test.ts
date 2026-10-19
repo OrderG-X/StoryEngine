@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { titleFromEvent } from "./useBookManagement.js";
+import { titleFromEvent } from "../utils/bookUtils.js";
 
 describe("titleFromEvent：书架「上次写到」显示章名", () => {
   it("有真章名用章名（剥掉第N章前缀）", () => {

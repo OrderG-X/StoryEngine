@@ -193,6 +193,17 @@ describe("撤销/恢复回执：路径 → 人话（R4.2·验收 3.2）", () => 
     ], names)).toEqual([]);
   });
 
+  it("重构 P9：设定卡、每章账单、改账记录有短语；核心的版本号和防重复回执是内部记录", () => {
+    expect(describeRevertedPaths([
+      m("ledger/cards.json"),
+      a("ledger/chapters/0003.json"),
+      m("ledger/decisions.json"),
+      m("ledger/head.json"),
+      a("ledger/receipts/ab12.json"),
+    ], names)).toEqual(["设定本", "每章的账", "改账记录"]);
+    expect(describeSnapshotChanges([m("ledger/cards.json"), m("ledger/head.json"), a("ledger/receipts/ab12.json")], names)).toEqual(["设定本有更新"]);
+  });
+
   it("R5.4·新发现 4：撤销回执全文只报「第 2 章工作稿、第 2 章的章纲」，不再出现「其他文件」", () => {
     const text = buildRestoreReceipt({
       title: "已撤销上一步（出稿：第2章）。",

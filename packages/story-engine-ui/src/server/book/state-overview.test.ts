@@ -1,27 +1,31 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { createStoryProject, toSafeCharacterId } from "./project-store.js";
+import { cardWrite, chapterCommit, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
+import { createStoryProject } from "./project-store.js";
 import { buildStateOverview } from "./state-overview.js";
 
-describe("State Overview Pack V0", () => {
+describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
 
-  it("builds a read-only UI ViewModel from a fixture project", async () => {
+  it("从测试书拼出只读概况：账照旧、设定只带计数和主角，读完盘上一个字节不变", async () => {
     const projectDir = await createOverviewFixture();
-    const before = await snapshotStateFiles(projectDir);
+    const before = await snapshotBookFiles(projectDir);
 
     const overview = await buildStateOverview({ projectDir, chapter: 5, maxTimelineEvents: 2 });
 
-    expect(overview.project).toMatchObject({
+    // 题材、一句话照故事设定栏原样取。
+    expect(overview.project).toEqual({
       title: "状态总览测试",
-      genre: "apocalypse",
+      genre: "末世",
+      logline: "林澈在旧城区灾变中求生，逐步确认无线电异常信号。",
       currentChapter: 5,
     });
-    expect(overview.storyStatus.currentLocation).toBe("地下车库");
+    expect(overview.storyStatus.currentObjective).toBe("在旧城区灾变中生存下来");
+    expect(overview.storyStatus.lastTimelineEvent?.length).toBeLessThanOrEqual(160);
     expect(overview.hooks.activeCount).toBe(1);
     expect(overview.threads).toMatchObject({
       total: 3,
@@ -35,75 +39,26 @@ describe("State Overview Pack V0", () => {
     expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("intent-low");
     expect(overview.arcGoals.activeCount).toBe(1);
     expect(overview.timeline.recentEvents).toHaveLength(2);
+
     expect(overview.characters.protagonist).toBe("林澈");
-    expect(overview.storyFoundation).toMatchObject({
-      available: true,
-      missingFiles: [],
+    expect(overview.characters.knownCharacters).toEqual([
+      { name: "林澈", carded: true, protagonist: true },
+      { name: "苏雨", carded: true },
+    ]);
+    expect(overview.setting).toEqual({
+      targetChapterWords: 2400,
+      minChapterWords: 2000,
+      cards: { characters: 2, places: 1, items: 1, lore: 1 },
+      uncarded: 0,
+      storyFields: 3,
     });
-    expect(overview.storyFoundation.summary).toContain("Foundation available");
-    expect(overview.storyBible).toMatchObject({
-      available: true,
-      genre: "apocalypse",
-      projectLogline: "旧城区公寓楼求生与无线电异常信号调查",
-    });
-    expect(overview.storyBible.longFormGoals).toEqual(expect.arrayContaining(["找到可信避难所"]));
-    expect(overview.writingRules).toMatchObject({
-      available: true,
-      narrativePerspective: "third_limited",
-      pacing: "medium",
-      targetChapterWords: 1800,
-    });
-    expect(overview.characterBible.keyCharacters.map((item) => item.name)).toContain("林澈");
-    expect(overview.characterBible.keyCharacters[0]).toMatchObject({
-      weakness: "暂时缺少可靠武器",
-      knowledgeKnown: expect.arrayContaining(["无线电信号异常"]),
-      knowledgeUnknown: expect.arrayContaining(["避难所广播背后的真实来源"]),
-    });
-    expect(overview.worldBible.keyRules).toContain("城市断电断网，物资稀缺。");
-    expect(overview.locationBible.activeLocationNames).toEqual(expect.arrayContaining(["公寓楼", "地下车库"]));
-    expect(overview.locationBible.keyRisks).toEqual(expect.arrayContaining(["地下车库：深处有异响"]));
-    expect(overview.locationBible.keyResources).toEqual(expect.arrayContaining(["地下车库：备用电池"]));
-    expect(overview.assetSummary).toMatchObject({
-      available: true,
-      carriedAssets: expect.arrayContaining(["旧收音机"]),
-      unavailableAssets: expect.arrayContaining(["欠费手机 · locked · 欠费，无法正常联网"]),
-      plotCriticalAssets: expect.arrayContaining(["避难所地图"]),
-    });
-    expect(overview.locationDetailSummary).toMatchObject({
-      floors: expect.arrayContaining(["1楼大厅", "地下1层车库"]),
-      rooms: expect.arrayContaining(["301室", "地下车库入口"]),
-      travelRules: expect.arrayContaining(["公寓楼 -> 地下车库 · stairs · 2分钟"]),
-    });
-    expect(overview.characterDetailSummary.characters[0]).toMatchObject({
-      age: "27岁",
-      speechStyle: "短句、谨慎、先确认风险。",
-      speechSamples: expect.arrayContaining(["先别急，听完这段广播。"]),
-      cannotDo: expect.arrayContaining(["暂时没有强大战斗力"]),
-    });
-    expect(overview.characterMatrix.available).toBe(true);
-    expect(overview.characterMatrix.characters.find((character) => character.name === "林澈")).toMatchObject({
-      age: "27岁",
-      speechStyle: "短句、谨慎、先确认风险。",
-      speechSamples: expect.arrayContaining(["先别急，听完这段广播。"]),
-      knownFacts: expect.arrayContaining(["无线电信号异常"]),
-      unknownTruths: expect.arrayContaining(["避难所广播背后的真实来源"]),
-      carriedAssets: expect.arrayContaining(["旧收音机"]),
-      plotCriticalAssets: expect.arrayContaining(["避难所地图"]),
-      lastSeenChapter: 5,
-    });
-    expect(overview.characterMatrix.characters.find((character) => character.name === "苏雨")).toMatchObject({
-      relationshipToProtagonist: "盟友，但怀疑林澈隐瞒无线电细节",
-    });
-    expect(overview.characterMatrix.relationships).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        targetName: "苏雨",
-        // 关系类型就是作者写的原文，不再从字里猜「朋友 / 怀疑 / 信任低」。
-        relationType: "盟友，但怀疑林澈隐瞒无线电细节",
-      }),
-    ]));
-    expect(overview.foundationCompleteness.readinessLevel).toBe("ready");
-    expect(overview.world.importantFacts).not.toContain("无线电异常信号来源");
-    expect(overview.world.protectedSecrets).toEqual(expect.arrayContaining(["无线电异常信号来源"]));
+
+    // 瘦身后不再带老设定的大块（设定本内容走设定视图 / read_foundation）。
+    expect(Object.keys(overview).sort()).toEqual([
+      "arcGoals", "characters", "hooks", "maintenance", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
+    ]);
+    expect(Object.keys(overview.storyStatus).sort()).toEqual(["currentObjective", "lastTimelineEvent"]);
+
     expect(overview.maintenance).toMatchObject({
       diagnosticsAvailable: true,
       mergeDisabled: true,
@@ -119,9 +74,50 @@ describe("State Overview Pack V0", () => {
       "drop_thread_confirm",
       "auto_apply_review_plan_confirm",
     ]));
+    expect(overview.uiHints.warnings.join(" ")).not.toContain("设定卡读不出来");
     expect(overview.timeline.recentEvents.at(-1)?.summary.length).toBeLessThanOrEqual(160);
     expect(JSON.stringify(overview)).not.toContain("长文本尾巴不应该出现在 overview 里");
-    await expect(snapshotStateFiles(projectDir)).resolves.toEqual(before);
+    // 读路径不写盘：文件一个不多、内容一个字节不变。
+    await expect(snapshotBookFiles(projectDir)).resolves.toEqual(before);
+  });
+
+  it("人物名单 = 人物卡 + 账里出场过还没建卡的人：主角在前，带出场章数和最近一章", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-cast-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "人物名单", protagonistName: "沈青禾" });
+    await writeCards(projectDir, [{ op: "card.create", kind: "character", name: "许澄" }]);
+    await commit(projectDir, 1, "# 第1章\n\n沈青禾推开钟楼的门，老周没有拦她。", [
+      { kind: "presence", review: "auto", name: "沈青禾", nameUsed: "沈青禾", viewpoint: true, quote: "沈青禾推开钟楼的门" },
+      { kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: "老周没有拦她" },
+    ]);
+    await commit(projectDir, 2, "# 第2章\n\n老周站在门口，没让外人进。", [
+      { kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: "老周站在门口" },
+    ]);
+
+    const overview = await buildStateOverview({ projectDir, chapter: 2 });
+
+    expect(overview.characters.protagonist).toBe("沈青禾");
+    expect(overview.characters.knownCharacters).toEqual([
+      { name: "沈青禾", carded: true, protagonist: true, chapterCount: 1, lastSeenChapter: 1 },
+      // 有卡、账里还没出场：没有出场数。
+      { name: "许澄", carded: true },
+      // 账里出场两章、还没建卡：如实列出，标没卡。
+      { name: "周守义", carded: false, chapterCount: 2, lastSeenChapter: 2 },
+    ]);
+    expect(overview.setting.cards.characters).toBe(2);
+    expect(overview.setting.uncarded).toBe(1);
+  });
+
+  it("作者没填题材、一句话、主角：概况就空着，不编占位", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-bare-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "只有书名" });
+    await writeCards(projectDir, [{ op: "card.create", kind: "character", name: "林远" }]);
+
+    const overview = await buildStateOverview({ projectDir });
+
+    expect(overview.project).toEqual({ title: "只有书名", genre: "", logline: "", currentChapter: null });
+    expect(overview.characters).toEqual({ knownCharacters: [{ name: "林远", carded: true }] });
+    expect(overview.characters).not.toHaveProperty("protagonist");
+    expect(overview.setting).toEqual({ cards: { characters: 1, places: 0, items: 0, lore: 0 }, uncarded: 0, storyFields: 0 });
   });
 
   // 可清理的线索只按章数算（重构 P7「不猜」）：还开着、已经 5 章没碰过的才算；收了的不算。
@@ -132,17 +128,17 @@ describe("State Overview Pack V0", () => {
       rootDir,
       title: "线索口径测试",
       genre: "都市",
-      premise: "测试线索计数口径。",
-      mainCharacterName: "林澈",
+      logline: "测试线索计数口径。",
+      protagonistName: "林澈",
     });
-    await writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
+    await writeLegacyJson(projectDir, "story/threads.json", {
       threads: [
         { id: "t-open-stale", type: "intent", title: "想了想", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
         { id: "t-done-old", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
         { id: "t-touched-recent", type: "lead", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
         { id: "t-open-recent", type: "intent", title: "先不管", status: "open", firstSeenChapter: 2, lastTouchedChapter: 4, evidence: [] },
       ],
-    }, null, 2)}\n`, "utf-8");
+    });
 
     const overview = await buildStateOverview({ projectDir, chapter: 6 });
 
@@ -153,53 +149,6 @@ describe("State Overview Pack V0", () => {
     expect(overview.threads.cleanupVisibleUnresolvedCount)
       .toBeLessThanOrEqual(overview.threads.open + overview.threads.touched);
     await rm(rootDir, { recursive: true, force: true });
-  });
-
-  it("透出角色/地点/资产/世界观的 extraFields（受控破例⑦：展示路与喂模型路同源）", async () => {
-    const projectDir = await createOverviewFixture();
-
-    // 给现有实体注入 extraFields（读→改→写，不动共享 fixture）。
-    const cbPath = join(projectDir, "story", "character-bible.json");
-    const cb = JSON.parse(await readFile(cbPath, "utf-8")) as { characters: Record<string, unknown>[] };
-    cb.characters[0].extraFields = { 外号: "阿澈", 习惯: ["熬夜守夜", "省电"] };
-    await writeFile(cbPath, `${JSON.stringify(cb, null, 2)}\n`, "utf-8");
-
-    const lbPath = join(projectDir, "story", "location-bible.json");
-    const lb = JSON.parse(await readFile(lbPath, "utf-8")) as { locations: Record<string, unknown>[] };
-    lb.locations[0].extraFields = { 气味: "霉味与铁锈" };
-    await writeFile(lbPath, `${JSON.stringify(lb, null, 2)}\n`, "utf-8");
-
-    const asPath = join(projectDir, "story", "assets.json");
-    const as = JSON.parse(await readFile(asPath, "utf-8")) as { assets: Record<string, unknown>[] };
-    as.assets[0].extraFields = { 来历: "父亲遗物" };
-    await writeFile(asPath, `${JSON.stringify(as, null, 2)}\n`, "utf-8");
-
-    await mkdir(join(projectDir, "world"), { recursive: true });
-    await writeFile(
-      join(projectDir, "world", "state.json"),
-      `${JSON.stringify({ currentPhase: "unknown", activeConflicts: [], activeHooks: [], knownSecrets: [], extraFields: { 历法: "灾年纪元" } }, null, 2)}\n`,
-      "utf-8",
-    );
-
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
-    expect(overview.characterMatrix.characters.find((c) => c.name === "林澈")?.extraFields)
-      .toMatchObject({ 外号: "阿澈", 习惯: ["熬夜守夜", "省电"] });
-    expect(overview.locationDetailSummary.locations.find((l) => l.name === "公寓楼")?.extraFields)
-      .toMatchObject({ 气味: "霉味与铁锈" });
-    expect(overview.assetSummary.assetItems.find((a) => a.name === "旧收音机")?.extraFields)
-      .toMatchObject({ 来历: "父亲遗物" });
-    expect(overview.worldBible.extraFields).toMatchObject({ 历法: "灾年纪元" });
-  });
-
-  it("透出写作规则 customNotes（受控破例⑧·展示）", async () => {
-    const projectDir = await createOverviewFixture();
-    const wrPath = join(projectDir, "story", "writing-rules.json");
-    const wr = JSON.parse(await readFile(wrPath, "utf-8")) as Record<string, unknown>;
-    wr.customNotes = "## 我的补充\n- 每章开头标时间卡";
-    await writeFile(wrPath, `${JSON.stringify(wr, null, 2)}\n`, "utf-8");
-
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
-    expect(overview.writingRules.customNotes).toBe("## 我的补充\n- 每章开头标时间卡");
   });
 
   it("degrades gracefully when optional pools are missing", async () => {
@@ -218,156 +167,6 @@ describe("State Overview Pack V0", () => {
     expect(overview.maintenance.confirmPolicy.markDone).toBe("manual_only");
   });
 
-  it("derives currentStage from worldState.currentPhase, not timeline genreProgression", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-pollution-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "从零开始的海天市",
-      genre: "都市爽文/暧昧流",
-      premise: "林远继承远山集团后进入都市上层圈。",
-      mainCharacterName: "林远",
-    });
-    await writeFile(join(projectDir, "timeline", "events.json"), `${JSON.stringify([
-      {
-        id: "ch0005-001",
-        chapter: 5,
-        summary: "林远拒绝集团安排的专车和司机，坐公交回老房子。",
-        participants: ["character"],
-        effects: {
-          semanticSummary: {
-            mainEvent: "林远拒绝集团安排的专车和司机。",
-            genreProgression: {
-              genre: "apocalypse",
-              currentStage: "supply_route",
-              activeStageGoals: ["获取急救药品"],
-              nextStageLeads: ["药店"],
-              mustCarryForward: ["药店药品"],
-            },
-          },
-        },
-      },
-    ], null, 2)}\n`, "utf-8");
-
-    const overview = await buildStateOverview({ projectDir, chapter: 6 });
-
-    // currentStage is sourced solely from worldState.currentPhase ("开篇" for a fresh project),
-    // never from a timeline event's genreProgression.currentStage ("supply_route").
-    expect(overview.storyStatus.currentStage).toBe("开篇");
-    expect(overview.storyStatus.currentStage).not.toBe("supply_route");
-  });
-
-  it("merges runtime character files into character views even when character bible exists", async () => {
-    const projectDir = await createOverviewFixture();
-    const characterDir = join(projectDir, "characters", "runtime-only");
-    await mkdir(characterDir, { recursive: true });
-    await Promise.all([
-      writeFile(join(characterDir, "profile.json"), `${JSON.stringify({
-        id: "runtime-only",
-        name: "运行时角色",
-        identity: "线索提供者",
-        age: "31岁",
-        gender: "女",
-      }, null, 2)}\n`, "utf-8"),
-      writeFile(join(characterDir, "state.json"), `${JSON.stringify({
-        characterId: "runtime-only",
-        emotion: "警惕",
-        goal: "确认主角是否可信",
-        lastUpdatedChapter: 5,
-      }, null, 2)}\n`, "utf-8"),
-    ]);
-
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
-
-    expect(overview.characters.knownCharacters.find((character) => character.name === "运行时角色")).toMatchObject({
-      status: "警惕",
-      mood: "警惕",
-      currentGoal: "确认主角是否可信",
-    });
-    expect(overview.characterMatrix.characters.find((character) => character.name === "运行时角色")).toMatchObject({
-      age: "31岁",
-      gender: "女",
-      identity: "线索提供者",
-      mood: "警惕",
-      mentalState: "警惕",
-      currentGoal: "确认主角是否可信",
-    });
-    expect(overview.characterDetailSummary.characters.find((character) => character.name === "运行时角色")).toMatchObject({
-      age: "31岁",
-      currentState: "警惕",
-    });
-  });
-
-  it("projects committed character mood, currentGoal, and recentEvents with legacy fallbacks intact", async () => {
-    const projectDir = await createOverviewFixture();
-    const characterDir = join(projectDir, "characters", "lin-xiao");
-    await mkdir(characterDir, { recursive: true });
-    await Promise.all([
-      writeFile(join(characterDir, "profile.json"), `${JSON.stringify({
-        id: "lin-xiao",
-        name: "林晓",
-        identity: "守护者",
-      }, null, 2)}\n`, "utf-8"),
-      writeFile(join(characterDir, "state.json"), `${JSON.stringify({
-        characterId: "lin-xiao",
-        mood: "冷静",
-        currentGoal: "保护主角",
-        recentEvents: ["完成角色状态确认写入封测"],
-        relationshipToUser: "信任",
-        lastUpdatedChapter: 5,
-      }, null, 2)}\n`, "utf-8"),
-    ]);
-
-    const overview = await buildStateOverview({ projectDir, chapter: 5 });
-
-    expect(overview.characters.knownCharacters.find((character) => character.name === "林晓")).toMatchObject({
-      status: "冷静",
-      mood: "冷静",
-      currentGoal: "保护主角",
-      recentEvents: ["完成角色状态确认写入封测"],
-    });
-    expect(overview.characterMatrix.characters.find((character) => character.name === "林晓")).toMatchObject({
-      mood: "冷静",
-      mentalState: "冷静",
-      currentGoal: "保护主角",
-      recentEvents: ["完成角色状态确认写入封测"],
-    });
-    expect(overview.characterDetailSummary.characters.find((character) => character.name === "林晓")).toMatchObject({
-      mood: "冷静",
-      currentGoal: "保护主角",
-      recentEvents: ["完成角色状态确认写入封测"],
-      currentState: "冷静",
-    });
-  });
-
-  it("returns empty foundation summaries for legacy projects without bible files", async () => {
-    const projectDir = await createOverviewFixture();
-    await Promise.all([
-      rm(join(projectDir, "story", "bible.json")),
-      rm(join(projectDir, "story", "writing-rules.json")),
-      rm(join(projectDir, "story", "character-bible.json")),
-      rm(join(projectDir, "story", "world-bible.json")),
-      rm(join(projectDir, "story", "location-bible.json")),
-    ]);
-
-    const overview = await buildStateOverview({ projectDir });
-
-    expect(overview.storyFoundation.available).toBe(false);
-    expect(overview.storyFoundation.missingFiles).toEqual([
-      "story/bible.json",
-      "story/writing-rules.json",
-      "story/character-bible.json",
-      "story/world-bible.json",
-      "story/location-bible.json",
-    ]);
-    expect(overview.storyBible.available).toBe(false);
-    expect(overview.storyBible.longFormGoals).toEqual([]);
-    expect(overview.writingRules.available).toBe(false);
-    expect(overview.writingRules.proseStyle).toEqual([]);
-    expect(overview.characterBible.characterCount).toBe(0);
-    expect(overview.worldBible.ruleCount).toBe(0);
-    expect(overview.locationBible.locationCount).toBe(0);
-  });
-
   // Task 4: 用例 A — 早期未收口伏笔仍出现在 activeItems（不被近章挤掉）
   it("(Task 4-A) 早期未收口条目在≥12条近章时仍出现在 hooks.activeItems 和 threads.keyOpenItems", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-task4-a-"));
@@ -375,8 +174,7 @@ describe("State Overview Pack V0", () => {
       rootDir,
       title: "早期伏笔召回测试",
       genre: "urban",
-      premise: "测试早期伏笔不被近章挤掉。",
-      mainCharacterName: "主角",
+      logline: "测试早期伏笔不被近章挤掉。",
     });
 
     // 1条早期未收口 hook（chapter:2）+ 13条近章 hook（chapters 40-52）
@@ -419,14 +217,8 @@ describe("State Overview Pack V0", () => {
       evidence: [`近章证据${i}`],
     }));
 
-    await Promise.all([
-      writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({
-        hooks: [earlyHook, ...recentHooks],
-      }, null, 2)}\n`, "utf-8"),
-      writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
-        threads: [earlyThread, ...recentThreads],
-      }, null, 2)}\n`, "utf-8"),
-    ]);
+    await writeLegacyJson(projectDir, "story/hooks.json", { hooks: [earlyHook, ...recentHooks] });
+    await writeLegacyJson(projectDir, "story/threads.json", { threads: [earlyThread, ...recentThreads] });
 
     const overview = await buildStateOverview({ projectDir, chapter: 50 });
 
@@ -442,51 +234,48 @@ describe("State Overview Pack V0", () => {
       rootDir,
       title: "Null章号兜底测试",
       genre: "scifi",
-      premise: "新书空timeline章号null测试。",
-      mainCharacterName: "主角",
+      logline: "新书空timeline章号null测试。",
     });
 
-    await Promise.all([
-      writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({
-        hooks: [
-          {
-            id: "hook-new",
-            title: "新书第一个伏笔",
-            description: "新书里埋下的伏笔。",
-            status: "active",
-            relatedCharacters: [],
-            firstSeenChapter: 1,
-            lastTouchedChapter: 1,
-          },
-        ],
-      }, null, 2)}\n`, "utf-8"),
-      writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
-        threads: [
-          {
-            id: "thread-new",
-            type: "lead",
-            title: "新书第一条线索",
-            status: "open",
-            firstSeenChapter: 1,
-            lastTouchedChapter: 1,
-            evidence: ["新书线索证据"],
-          },
-        ],
-      }, null, 2)}\n`, "utf-8"),
-      // timeline 为空（不写 events.json，使用默认空数组）
-    ]);
+    await writeLegacyJson(projectDir, "story/hooks.json", {
+      hooks: [
+        {
+          id: "hook-new",
+          title: "新书第一个伏笔",
+          description: "新书里埋下的伏笔。",
+          status: "active",
+          relatedCharacters: [],
+          firstSeenChapter: 1,
+          lastTouchedChapter: 1,
+        },
+      ],
+    });
+    await writeLegacyJson(projectDir, "story/threads.json", {
+      threads: [
+        {
+          id: "thread-new",
+          type: "lead",
+          title: "新书第一条线索",
+          status: "open",
+          firstSeenChapter: 1,
+          lastTouchedChapter: 1,
+          evidence: ["新书线索证据"],
+        },
+      ],
+    });
+    // timeline 为空（不写 events.json，使用默认空数组）
 
     // 不传 chapter → currentChapter=null，兜底章号应保证条目不被排除
     const overview = await buildStateOverview({ projectDir });
 
+    expect(overview.project.currentChapter).toBeNull();
     expect(overview.hooks.activeItems.map((item) => item.id)).toContain("hook-new");
     expect(overview.threads.keyOpenItems.map((item) => item.id)).toContain("thread-new");
   });
 });
 
-// R5b 题材中立化：currentLocation 选取不得再依赖写死的末日/职场专名，
-// 必须读项目自己的 location-bible（空间结构 + 楼层归一化）来判断具体度/匹配。
-describe("State Overview currentLocation — genre-neutral (R5b)", () => {
+// R5b 题材中立化：概况源码里不许写死任何题材专名地点。
+describe("State Overview — genre-neutral (R5b)", () => {
   it("源码不再写死任何题材专名地点（公交站/孵化楼/申请窗口/办公区/终端区/旧城区/楼层映射）", async () => {
     const source = await readFile(join(__filenameDir(), "state-overview.ts"), "utf-8");
     // 仅检查执行逻辑里的字符串字面量与正则，注释里被动提及「已删除的旧专名」不算违规：
@@ -502,55 +291,6 @@ describe("State Overview currentLocation — genre-neutral (R5b)", () => {
     expect(codeOnly).not.toContain("二楼申请窗口");
     expect(codeOnly).not.toContain("三楼办公区");
   });
-
-  it("修仙题材：最近一章声明了好几个地点时，优先地点卡上登记过的那个", async () => {
-    const projectDir = await createGenreNeutralFixture({
-      genre: "xianxia",
-      locations: [
-        {
-          id: "ju-ling-feng",
-          name: "聚灵峰",
-          type: "sect",
-          spatialStructure: { floors: ["三层档案室"], rooms: ["丹房", "档案室"], entrances: ["大门"], exits: ["后院小径"] },
-          knownFeatures: ["灵气浓郁"],
-          risks: ["走火入魔"],
-          resources: ["灵石矿脉"],
-        },
-      ],
-      events: [
-        { id: "ch0001-001", chapter: 1, locations: ["路上"] },
-        { id: "ch0002-001", chapter: 2, locations: ["路上", "档案室"] },
-      ],
-    });
-    const overview = await buildStateOverview({ projectDir, chapter: 2 });
-    // 「档案室」是地点卡登记的房间，「路上」没登记 → 选登记过的。
-    expect(overview.storyStatus.currentLocation).toBe("档案室");
-  });
-
-  it("都市题材：口语中文楼层（一楼大厅）经楼层归一化匹配 bible 登记的数字楼层（1楼大厅），不靠写死映射", async () => {
-    const projectDir = await createGenreNeutralFixture({
-      genre: "urban",
-      locations: [
-        {
-          id: "tian-heng",
-          name: "天衡大厦",
-          type: "building",
-          spatialStructure: { floors: ["1楼大厅", "3楼会议室"], rooms: ["前台"], entrances: ["旋转门"], exits: ["消防楼梯"] },
-          knownFeatures: ["玻璃幕墙"],
-          risks: [],
-          resources: [],
-        },
-      ],
-      events: [
-        { id: "ch0001-001", chapter: 1, locations: ["外面"] },
-        { id: "ch0002-001", chapter: 2, locations: ["一楼大厅"] },
-      ],
-    });
-    const overview = await buildStateOverview({ projectDir, chapter: 2 });
-    // 「一楼大厅」必须经题材中立的楼层归一化匹配到登记的「1楼大厅」并被选为当前位置。
-    expect(overview.storyStatus.currentLocation).toBe("一楼大厅");
-  });
-
 });
 
 // Task 6b：timeline 分层摘要接入 state-overview
@@ -561,8 +301,8 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
       rootDir,
       title: "分层摘要测试书",
       genre: "wuxia",
-      premise: "江湖风云",
-      mainCharacterName: "侠客",
+      logline: "江湖风云",
+      protagonistName: "侠客",
     });
 
     // 构造 50 章 timeline，每章一个事件，mainEvent 包含章号方便断言
@@ -572,7 +312,7 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
         id: `ch${String(ch).padStart(4, "0")}-001`,
         chapter: ch,
         summary: `第${ch}章：主角经历了事件${ch}。`,
-        participants: ["protagonist"],
+        participants: ["侠客"],
         effects: {
           semanticSummary: {
             mainEvent: `第${ch}章核心事件mainEvent${ch}`,
@@ -582,11 +322,7 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
       };
     });
 
-    await writeFile(
-      join(projectDir, "timeline", "events.json"),
-      `${JSON.stringify(events, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeLegacyJson(projectDir, "timeline/events.json", events);
 
     // currentChapter=50：L1=48-50，L2=35-47（15窗口），L3=1-35（远期宏块）
     const overview = await buildStateOverview({ projectDir, chapter: 50, maxTimelineEvents: 3 });
@@ -611,315 +347,13 @@ describe("State Overview timeline 分层摘要（Task 6b）", () => {
     expect(overview.timeline.macroSummary[0].fromChapter).toBe(1);
 
     // 空 timeline 不崩
-    await writeFile(
-      join(projectDir, "timeline", "events.json"),
-      `${JSON.stringify([], null, 2)}\n`,
-      "utf-8",
-    );
+    await writeLegacyJson(projectDir, "timeline/events.json", []);
     const emptyOverview = await buildStateOverview({ projectDir, chapter: 1 });
     expect(emptyOverview.timeline.recentEvents).toHaveLength(0);
     expect(emptyOverview.timeline.earlierSummary).toHaveLength(0);
     expect(emptyOverview.timeline.macroSummary).toHaveLength(0);
   });
 });
-
-function __filenameDir(): string {
-  // 测试文件位于 src/tests/，引擎源码在 src/。fileURLToPath 才能正确解码路径里的空格等。
-  return dirname(fileURLToPath(import.meta.url));
-}
-
-interface GenreNeutralFixtureInput {
-  readonly genre: string;
-  readonly locations: readonly Record<string, unknown>[];
-  readonly events: readonly { readonly id: string; readonly chapter: number; readonly locations: readonly string[] }[];
-}
-
-async function createGenreNeutralFixture(input: GenreNeutralFixtureInput): Promise<string> {
-  const rootDir = await mkdtemp(join(tmpdir(), "story-engine-overview-neutral-"));
-  const { projectDir } = await createStoryProject({
-    rootDir,
-    title: "题材中立总览测试",
-    genre: input.genre,
-    premise: "题材中立的当前位置选取测试。",
-    mainCharacterName: "主角",
-  });
-  await Promise.all([
-    writeFile(join(projectDir, "story", "location-bible.json"), `${JSON.stringify({
-      version: "v0",
-      locations: input.locations,
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "timeline", "events.json"), `${JSON.stringify(input.events.map((event) => ({
-      id: event.id,
-      chapter: event.chapter,
-      summary: `第${event.chapter}章事件`,
-      participants: [],
-      effects: {
-        semanticSummary: {
-          mainEvent: `第${event.chapter}章主事件`,
-          locations: event.locations,
-        },
-      },
-    })), null, 2)}\n`, "utf-8"),
-  ]);
-  return projectDir;
-}
-
-async function createOverviewFixture(): Promise<string> {
-  const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-"));
-  const { projectDir } = await createStoryProject({
-    rootDir,
-    title: "状态总览测试",
-    genre: "apocalypse",
-    premise: "林澈在旧城区灾变中求生，逐步确认无线电异常信号。",
-    mainCharacterName: "林澈",
-  });
-  await Promise.all([
-    writeFile(join(projectDir, "story", "bible.json"), `${JSON.stringify({
-      version: "v0",
-      projectLogline: "旧城区公寓楼求生与无线电异常信号调查",
-      premise: "林澈在旧城区灾变中求生，逐步确认无线电异常信号。",
-      genre: "apocalypse",
-      subgenres: ["survival", "mystery"],
-      readerPromise: "看普通人在断电旧城区靠判断和胆量活下去。",
-      longFormGoals: ["活过前三天", "找到可信避难所"],
-      centralConflicts: ["公寓楼内幸存者互不信任"],
-      coreMysteries: ["无线电异常信号来源"],
-      protectedSecrets: ["避难所真实目的"],
-      forbiddenChanges: ["林澈不能突然拥有强大战斗力"],
-      canonFacts: ["城市断电断网"],
-      openQuestions: ["避难所广播是真是假"],
-      setupAssets: {
-        initialAssets: ["旧收音机"],
-        keyItems: ["避难所地图"],
-        resourceLimits: ["水和药都不足"],
-      },
-      firstChapterSetup: {
-        goal: "第一次确认广播异常",
-        openingScene: "断电公寓",
-        hook: "收音机自动响起",
-        conflict: "楼内幸存者互不信任",
-      },
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "writing-rules.json"), `${JSON.stringify({
-      version: "v0",
-      narrativePerspective: "third_limited",
-      proseStyle: ["紧张", "克制", "行动驱动"],
-      chapterLength: { targetWords: 1800 },
-      pacing: "medium",
-      revealPolicy: "balanced",
-      genreRequirements: ["普通物资不能当作悬念"],
-      suspenseRules: ["每章至少保留一个未完全解释的异常"],
-      payoffRules: ["线索回收必须有正文证据"],
-      reversalRules: ["反转不能推翻已提交事实"],
-      readerExperienceRules: ["避免任务清单式推进"],
-      forbiddenContent: ["无证据洗白避难所"],
-      doNotDo: ["不要自动改正式状态"],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "character-bible.json"), `${JSON.stringify({
-      version: "v0",
-      characters: [
-        {
-          id: "lin-che",
-          name: "林澈",
-          role: "protagonist",
-          age: "27岁",
-          identity: "旧城区幸存者",
-          desire: "保护自己并确认无线电信号来源",
-          weakness: "暂时缺少可靠武器",
-          behaviorBoundaries: ["暂时没有强大战斗力"],
-          knowledgeKnown: ["无线电信号异常"],
-          knowledgeUnknown: ["避难所广播背后的真实来源"],
-          speechStyle: "短句、谨慎、先确认风险。",
-          speechSamples: ["先别急，听完这段广播。"],
-          cannotDo: ["暂时没有强大战斗力"],
-        },
-        {
-          id: "su-yu",
-          name: "苏雨",
-          role: "重要角色",
-          age: "26岁",
-          identity: "楼内临时医疗志愿者",
-          desire: "确认避难所是否可信",
-          fear: "楼内幸存者内斗",
-          weakness: "不擅长近身冲突",
-          relationshipToProtagonist: "盟友，但怀疑林澈隐瞒无线电细节",
-          behaviorBoundaries: ["不会无证据相信避难所广播"],
-          knowledgeKnown: ["林澈手里有旧收音机"],
-          knowledgeUnknown: ["避难所广播背后的真实来源"],
-          speechStyle: "直接追问，先要证据。",
-          speechSamples: ["你听到的不是全部，对吗？"],
-          cannotDo: ["无法独自清理地下车库"],
-        },
-      ],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "world-bible.json"), `${JSON.stringify({
-      version: "v0",
-      rules: ["城市断电断网，物资稀缺。"],
-      factions: [
-        { id: "apt-survivors", name: "公寓楼幸存者", goal: "守住楼内资源" },
-      ],
-      powerOrSurvivalSystems: ["水源", "药品", "无线电"],
-      historyFacts: ["灾变发生在旧城区"],
-      socialOrder: ["幸存者互不信任"],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "location-bible.json"), `${JSON.stringify({
-      version: "v0",
-      locations: [
-        {
-          id: "apt",
-          name: "公寓楼",
-          type: "safehouse",
-          spatialStructure: {
-            floors: ["1楼大厅", "3楼住户区"],
-            rooms: ["301室", "楼道"],
-            entrances: ["单元门"],
-            exits: ["楼梯间"],
-          },
-          travelRules: [
-            { targetLocation: "地下车库", method: "stairs", durationMinutes: 2 },
-          ],
-          knownFeatures: ["楼道狭窄"],
-          risks: ["感染者可能上楼"],
-          resources: ["水箱"],
-        },
-        {
-          id: "garage",
-          name: "地下车库",
-          type: "route",
-          spatialStructure: {
-            floors: ["地下1层车库"],
-            rooms: ["地下车库入口", "配电室"],
-            entrances: ["楼梯间"],
-            exits: ["消防通道"],
-          },
-          travelRules: [
-            { targetLocation: "公寓楼", method: "stairs", durationMinutes: 2 },
-          ],
-          knownFeatures: ["信号较强"],
-          risks: ["深处有异响"],
-          resources: ["备用电池"],
-        },
-      ],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "assets.json"), `${JSON.stringify({
-      version: "v0",
-      assets: [
-        { id: "radio", name: "旧收音机", type: "keyItem", ownerCharacterId: "lin-che", ownerName: "林澈", carriedByCharacterId: "lin-che", status: "available", isPlotCritical: true, canAiModify: false },
-        { id: "phone", name: "欠费手机", type: "keyItem", ownerCharacterId: "lin-che", ownerName: "林澈", carriedByCharacterId: "lin-che", status: "locked", conditionNote: "欠费，无法正常联网", isPlotCritical: true, canAiModify: false },
-        { id: "map", name: "避难所地图", type: "document", ownerCharacterId: "lin-che", ownerName: "林澈", carriedByCharacterId: "lin-che", status: "available", isPlotCritical: true, canAiModify: false },
-      ],
-      containers: [],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({
-      hooks: [
-        {
-          id: "hook-radio",
-          title: "无线电异常信号",
-          description: "收音机里出现断续广播。",
-          status: "active",
-          relatedCharacters: ["lin-che"],
-          firstSeenChapter: 2,
-          lastTouchedChapter: 5,
-          evidence: ["第5章：广播频率异常。"],
-          nextActionHint: "确认信号源。",
-        },
-        {
-          id: "hook-done",
-          title: "已解决血痕",
-          description: "血痕来源已经确认。",
-          status: "resolved",
-          relatedCharacters: [],
-          lastTouchedChapter: 3,
-        },
-      ],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "threads.json"), `${JSON.stringify({
-      threads: [
-        {
-          id: "intent-low",
-          type: "intent",
-          title: "林澈想了想，决定先不管这个",
-          status: "open",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 1,
-          evidence: ["他想了想，决定先不管这个。"],
-        },
-        {
-          id: "lead-signal",
-          type: "lead",
-          title: "确认无线电信号来源",
-          status: "touched",
-          firstSeenChapter: 3,
-          lastTouchedChapter: 5,
-          evidence: ["收音机里出现避难所坐标。"],
-          relatedLocations: ["地下车库"],
-        },
-        {
-          id: "intent-done",
-          type: "intent",
-          title: "去药店找药",
-          status: "done",
-          firstSeenChapter: 2,
-          lastTouchedChapter: 4,
-          evidence: ["他已经带回绷带。"],
-        },
-      ],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "story", "arc-goals.json"), `${JSON.stringify({
-      goals: [
-        {
-          id: "goal-survive",
-          title: "在旧城区灾变中生存下来",
-          status: "active",
-          scope: "main_arc",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 5,
-          evidence: ["林澈继续寻找安全路线。"],
-          relatedLocations: ["旧城区"],
-        },
-        {
-          id: "goal-done",
-          title: "获取基础食物",
-          status: "completed",
-          scope: "mini_arc",
-          firstSeenChapter: 1,
-          lastTouchedChapter: 3,
-          evidence: ["便利店罐头已经带回。"],
-        },
-      ],
-    }, null, 2)}\n`, "utf-8"),
-    writeFile(join(projectDir, "timeline", "events.json"), `${JSON.stringify([
-      {
-        id: "ch0004-001",
-        chapter: 4,
-        summary: "林澈在楼道避开感染者。",
-        participants: ["lin-che"],
-        effects: {
-          semanticSummary: {
-            mainEvent: "林澈避开感染者。",
-            locations: ["楼道"],
-          },
-        },
-      },
-      {
-        id: "ch0005-001",
-        chapter: 5,
-        summary: "这是一段非常长的章节正文摘要不应该进入状态总览全文，只能保留短摘要。林澈在地下车库听见收音机断续广播。".repeat(4) + "长文本尾巴不应该出现在 overview 里",
-        participants: ["lin-che"],
-        effects: {
-          semanticSummary: {
-            mainEvent: "林澈在地下车库听见断续广播。",
-            locations: ["地下车库"],
-            genreProgression: {
-              currentStage: "signal_mystery",
-            },
-          },
-        },
-      },
-    ], null, 2)}\n`, "utf-8"),
-  ]);
-  return projectDir;
-}
 
 // B5-2: 引擎 overview 投影补章号字段
 describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolvedAtChapter", () => {
@@ -929,42 +363,33 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
       rootDir,
       title: "B5-2 伏笔章号测试",
       genre: "urban",
-      premise: "伏笔初见章号 + 回收章号透传测试。",
-      mainCharacterName: "主角",
+      logline: "伏笔初见章号 + 回收章号透传测试。",
     });
 
-    await writeFile(
-      join(projectDir, "story", "hooks.json"),
-      `${JSON.stringify({
-        hooks: [
-          {
-            id: "hook-active",
-            title: "活跃伏笔",
-            description: "还未回收的伏笔。",
-            status: "active",
-            relatedCharacters: [],
-            firstSeenChapter: 3,
-            lastTouchedChapter: 5,
-          },
-          {
-            id: "hook-resolved",
-            title: "已回收伏笔",
-            description: "已回收的伏笔，有 resolvedAtChapter。",
-            status: "resolved",
-            relatedCharacters: [],
-            firstSeenChapter: 2,
-            lastTouchedChapter: 12,
-            resolvedAtChapter: 12,
-          },
-        ],
-      }, null, 2)}\n`,
-      "utf-8",
-    );
-    await writeFile(
-      join(projectDir, "story", "threads.json"),
-      `${JSON.stringify({ threads: [] }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeLegacyJson(projectDir, "story/hooks.json", {
+      hooks: [
+        {
+          id: "hook-active",
+          title: "活跃伏笔",
+          description: "还未回收的伏笔。",
+          status: "active",
+          relatedCharacters: [],
+          firstSeenChapter: 3,
+          lastTouchedChapter: 5,
+        },
+        {
+          id: "hook-resolved",
+          title: "已回收伏笔",
+          description: "已回收的伏笔，有 resolvedAtChapter。",
+          status: "resolved",
+          relatedCharacters: [],
+          firstSeenChapter: 2,
+          lastTouchedChapter: 12,
+          resolvedAtChapter: 12,
+        },
+      ],
+    });
+    await writeLegacyJson(projectDir, "story/threads.json", { threads: [] });
 
     const overview = await buildStateOverview({ projectDir, chapter: 13 });
 
@@ -984,32 +409,23 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
       rootDir,
       title: "B5-2 已回收章号投影测试",
       genre: "xianxia",
-      premise: "resolvedAtChapter 投影确认。",
-      mainCharacterName: "主角",
+      logline: "resolvedAtChapter 投影确认。",
     });
 
-    await writeFile(
-      join(projectDir, "story", "hooks.json"),
-      `${JSON.stringify({
-        hooks: [
-          {
-            id: "hook-only-active",
-            title: "唯一活跃伏笔",
-            description: "本章的活跃伏笔。",
-            status: "active",
-            relatedCharacters: [],
-            firstSeenChapter: 7,
-            lastTouchedChapter: 10,
-          },
-        ],
-      }, null, 2)}\n`,
-      "utf-8",
-    );
-    await writeFile(
-      join(projectDir, "story", "threads.json"),
-      `${JSON.stringify({ threads: [] }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeLegacyJson(projectDir, "story/hooks.json", {
+      hooks: [
+        {
+          id: "hook-only-active",
+          title: "唯一活跃伏笔",
+          description: "本章的活跃伏笔。",
+          status: "active",
+          relatedCharacters: [],
+          firstSeenChapter: 7,
+          lastTouchedChapter: 10,
+        },
+      ],
+    });
+    await writeLegacyJson(projectDir, "story/threads.json", { threads: [] });
 
     const overview = await buildStateOverview({ projectDir, chapter: 10 });
     const item = overview.hooks.activeItems.find((i) => i.id === "hook-only-active");
@@ -1024,32 +440,23 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
       rootDir,
       title: "B5-2 线索章号测试",
       genre: "mystery",
-      premise: "线索首现章号透传测试。",
-      mainCharacterName: "主角",
+      logline: "线索首现章号透传测试。",
     });
 
-    await writeFile(
-      join(projectDir, "story", "hooks.json"),
-      `${JSON.stringify({ hooks: [] }, null, 2)}\n`,
-      "utf-8",
-    );
-    await writeFile(
-      join(projectDir, "story", "threads.json"),
-      `${JSON.stringify({
-        threads: [
-          {
-            id: "thread-lead",
-            type: "lead",
-            title: "谜案主线索",
-            status: "open",
-            firstSeenChapter: 4,
-            lastTouchedChapter: 8,
-            evidence: ["第4章发现尸体。"],
-          },
-        ],
-      }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeLegacyJson(projectDir, "story/hooks.json", { hooks: [] });
+    await writeLegacyJson(projectDir, "story/threads.json", {
+      threads: [
+        {
+          id: "thread-lead",
+          type: "lead",
+          title: "谜案主线索",
+          status: "open",
+          firstSeenChapter: 4,
+          lastTouchedChapter: 8,
+          evidence: ["第4章发现尸体。"],
+        },
+      ],
+    });
 
     const overview = await buildStateOverview({ projectDir, chapter: 9 });
 
@@ -1060,25 +467,163 @@ describe("State Overview B5-2: hooks/threads 投影带 firstSeenChapter / resolv
   });
 });
 
-async function snapshotStateFiles(projectDir: string): Promise<Record<string, string>> {
-  const files = [
-    "project.json",
-    "story/bible.json",
-    "story/writing-rules.json",
-    "story/character-bible.json",
-    "story/world-bible.json",
-    "story/location-bible.json",
-    "story/hooks.json",
-    "story/threads.json",
-    "story/arc-goals.json",
-    "timeline/events.json",
-    "world/state.json",
-    "time/calendar.json",
-    `characters/${toSafeCharacterId("林澈")}/state.json`,
-  ];
-  const entries = await Promise.all(files.map(async (file) => [
-    file,
-    createHash("sha256").update(await readFile(join(projectDir, file), "utf-8")).digest("hex"),
-  ] as const));
-  return Object.fromEntries(entries);
+function __filenameDir(): string {
+  // fileURLToPath 才能正确解码路径里的空格等。
+  return dirname(fileURLToPath(import.meta.url));
+}
+
+/** 老格式的账文件（hooks / threads / timeline 等镜像文件）：建书不再建 story/、timeline/ 目录，要写自己建。 */
+async function writeLegacyJson(projectDir: string, relativePath: string, value: unknown): Promise<void> {
+  const target = join(projectDir, relativePath);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+async function writeCards(projectDir: string, ops: CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+  expect(outcome.ok, outcome.ok ? "" : outcome.message).toBe(true);
+}
+
+async function commit(projectDir: string, chapter: number, text: string, entries: EntryInput[]): Promise<void> {
+  const outcome = await runCommand(projectDir, chapterCommit, { chapter, text, entries }, { caller: "author", idempotencyKey: `c-${chapter}-${Math.random()}` });
+  expect(outcome.ok, outcome.ok ? "" : outcome.message).toBe(true);
+  if (outcome.ok) expect(outcome.result.rejected).toEqual([]);
+}
+
+async function createOverviewFixture(): Promise<string> {
+  const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-"));
+  const { projectDir } = await createStoryProject({
+    rootDir,
+    title: "状态总览测试",
+    genre: "末世",
+    logline: "林澈在旧城区灾变中求生，逐步确认无线电异常信号。",
+    protagonistName: "林澈",
+  });
+  await writeCards(projectDir, [
+    { op: "card.create", kind: "character", name: "苏雨", fields: [{ label: "身份", value: "楼内临时医疗志愿者" }] },
+    { op: "relation.set", a: "苏雨", b: "林澈", label: "盟友，但怀疑林澈隐瞒无线电细节" },
+    { op: "card.create", kind: "place", name: "公寓楼", fields: [{ label: "格局", value: "1楼大厅\n3楼住户区" }] },
+    { op: "card.create", kind: "item", name: "旧收音机" },
+    { op: "card.create", kind: "lore", name: "断电", fields: [{ label: "规矩", value: "城市断电断网，物资稀缺。" }] },
+    { op: "story.set", label: "基调", value: "紧张、克制" },
+    { op: "rules.set", field: "targetWords", value: 2400 },
+    { op: "rules.set", field: "minWords", value: 2000 },
+  ]);
+  await writeLegacyJson(projectDir, "story/hooks.json", {
+    hooks: [
+      {
+        id: "hook-radio",
+        title: "无线电异常信号",
+        description: "收音机里出现断续广播。",
+        status: "active",
+        relatedCharacters: ["林澈"],
+        firstSeenChapter: 2,
+        lastTouchedChapter: 5,
+        evidence: ["第5章：广播频率异常。"],
+        nextActionHint: "确认信号源。",
+      },
+      {
+        id: "hook-done",
+        title: "已解决血痕",
+        description: "血痕来源已经确认。",
+        status: "resolved",
+        relatedCharacters: [],
+        lastTouchedChapter: 3,
+      },
+    ],
+  });
+  await writeLegacyJson(projectDir, "story/threads.json", {
+    threads: [
+      {
+        id: "intent-low",
+        type: "intent",
+        title: "林澈想了想，决定先不管这个",
+        status: "open",
+        firstSeenChapter: 1,
+        lastTouchedChapter: 1,
+        evidence: ["他想了想，决定先不管这个。"],
+      },
+      {
+        id: "lead-signal",
+        type: "lead",
+        title: "确认无线电信号来源",
+        status: "touched",
+        firstSeenChapter: 3,
+        lastTouchedChapter: 5,
+        evidence: ["收音机里出现避难所坐标。"],
+      },
+      {
+        id: "intent-done",
+        type: "intent",
+        title: "去药店找药",
+        status: "done",
+        firstSeenChapter: 2,
+        lastTouchedChapter: 4,
+        evidence: ["他已经带回绷带。"],
+      },
+    ],
+  });
+  await writeLegacyJson(projectDir, "story/arc-goals.json", {
+    goals: [
+      {
+        id: "goal-survive",
+        title: "在旧城区灾变中生存下来",
+        status: "active",
+        scope: "main_arc",
+        firstSeenChapter: 1,
+        lastTouchedChapter: 5,
+        evidence: ["林澈继续寻找安全路线。"],
+      },
+      {
+        id: "goal-done",
+        title: "获取基础食物",
+        status: "completed",
+        scope: "mini_arc",
+        firstSeenChapter: 1,
+        lastTouchedChapter: 3,
+        evidence: ["便利店罐头已经带回。"],
+      },
+    ],
+  });
+  await writeLegacyJson(projectDir, "timeline/events.json", [
+    {
+      id: "ch0004-001",
+      chapter: 4,
+      summary: "林澈在楼道避开感染者。",
+      participants: ["林澈"],
+      effects: {
+        semanticSummary: {
+          mainEvent: "林澈避开感染者。",
+          locations: ["楼道"],
+        },
+      },
+    },
+    {
+      id: "ch0005-001",
+      chapter: 5,
+      summary: "这是一段非常长的章节正文摘要不应该进入状态总览全文，只能保留短摘要。林澈在地下车库听见收音机断续广播。".repeat(4) + "长文本尾巴不应该出现在 overview 里",
+      participants: ["林澈"],
+      effects: {
+        semanticSummary: {
+          mainEvent: "林澈在地下车库听见断续广播。",
+          locations: ["地下车库"],
+        },
+      },
+    },
+  ]);
+  return projectDir;
+}
+
+/** 书目录下全部文件（相对路径 → 内容哈希）：读路径前后比一比，多一个文件、改一个字节都看得出来。 */
+async function snapshotBookFiles(projectDir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(join(dir, entry.name), relative);
+      else out[relative] = createHash("sha256").update(await readFile(join(dir, entry.name))).digest("hex");
+    }
+  };
+  await walk(projectDir, "");
+  return out;
 }

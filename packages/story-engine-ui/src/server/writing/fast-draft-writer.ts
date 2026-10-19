@@ -10,11 +10,13 @@ import {
   estimateTokens,
   buildWriterContext,
   type WriterContextEnvelope,
+  type WritingContextPack,
 } from "./context-gateway.js";
 import { checkDraftBeatFidelity, type BeatFidelityReport } from "@actalk/story-core";
 import {
   applyDraftLengthConstraint,
   buildDraftLengthReport,
+  lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
   trimDraftBodyToLengthTarget,
@@ -30,8 +32,8 @@ import {
   type DiagnosticsRecord,
 } from "./diagnostics.js";
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
-import { describeErrorBriefly, isPlaceholderCharacterName, readWritingRules } from "../book/project-store.js";
-import type { CharacterProfile } from "../book/types.js";
+import { describeErrorBriefly } from "../book/project-store.js";
+import { readBibleTolerant } from "./setting-pack.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -67,7 +69,8 @@ export interface FastDraftInput {
   readonly chapter: number;
   readonly chapterGoal: string;
   readonly writerClient: WriterClient;
-  readonly selectedCharacterIds?: readonly string[];
+  /** 本章要带的人物（名字，在场检测的结果）；不给就由上下文入口自己挑。 */
+  readonly selectedCharacters?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   /**
    * 时间线相关段的条数请求：可裁的 `timeline_events` 段按它取最近 N 条（默认 5）；
@@ -359,20 +362,14 @@ async function generateBySegments(input: {
 
 export async function runFastDraft(input: FastDraftInput): Promise<FastDraftReport> {
   const latencyTimer = startRuntimeLatency();
-  // P2 铁律④：损坏的 writing-rules.json 此前静默降级为 null——模型拿不到任何风格/篇幅规则，
-  // 出稿质量悄悄掉档而用户一无所知。降级仍要（不能让一次坏读盘炸掉出稿），但原因要进 issues。
+  // P2 铁律④：设定卡坏了不静默降级——降级仍要（不能让一次坏读盘炸掉出稿），但原因要进 issues。
   const writingRulesFailure: string[] = [];
-  const writingRules = await readWritingRules(input.projectDir).catch((error) => {
-    // errno code/错误类型 + 相对文件名，绝不拼 error.message 原文（带本地绝对路径=泄漏）。
-    writingRulesFailure.push(
-      `写作规则读取失败（story/writing-rules.json，${describeErrorBriefly(error)}），已降级为无规则。`,
-    );
-    return null;
-  });
+  const settingRead = await readBibleTolerant(input.projectDir);
+  if (settingRead.failure) writingRulesFailure.push(settingRead.failure);
   const draftLengthTarget = resolveDraftLengthTarget({
     chapterGoal: input.chapterGoal,
     requestedDraftLength: input.requestedDraftLength,
-    writingRules,
+    lengthRules: lengthRulesOf(settingRead.bible.rules),
   });
   const chapterGoal = applyDraftLengthConstraint(input.chapterGoal, draftLengthTarget);
   const emptyDraftLength = buildDraftLengthReport({
@@ -387,7 +384,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       projectDir: input.projectDir,
       chapter: input.chapter,
       chapterGoal,
-      selectedCharacterIds: input.selectedCharacterIds,
+      ...(input.selectedCharacters ? { selectedCharacters: input.selectedCharacters } : {}),
       selectedHookIds: input.selectedHookIds,
       maxTimelineEvents: input.maxTimelineEvents,
       ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
@@ -624,24 +621,12 @@ function validateDraft(
   return issues;
 }
 
+/** 出稿关卡认的人名：本章上下文里带上的主角和在场人物（设定包里的名字和别名）。 */
 function selectedCharacterMentionCandidates(context: WriterContextEnvelope): string[] {
-  const profilesSection = context.sections.find((section) => section.name === "character_profile");
-  const profiles = Array.isArray(profilesSection?.content)
-    ? profilesSection.content as CharacterProfile[]
-    : [];
-  // 开书占位名（模板固定标记，如 UI 新建书未填主角名落的「主角」）不进选角关卡：占位名不是真名，
-  // 正文当然不会写到它——拿它当门，作者没先改名就永远出不了稿（编辑部 R4.6，2026-10-13 真机验收 3.7）。
-  // 与 commit-quality-check 的角色名门共用同一份 isPlaceholderCharacterName。真名（含「真名 / 主角」
-  // 这类竖线复名拆出的真名段）照旧把关。
-  return unique(profiles.flatMap((profile) => nameCandidates(profile.name)))
-    .filter((name) => !isPlaceholderCharacterName(name));
-}
-
-function nameCandidates(name: string): string[] {
-  const trimmed = name.trim();
-  if (!trimmed) return [];
-  // 不猜白名单：切句
-  return [trimmed, ...trimmed.split(/[\/／|｜,，、]/u).map((part) => part.trim())].filter(Boolean);
+  const packSection = context.sections.find((section) => section.name === "writing_context_pack");
+  const pack = packSection?.content as WritingContextPack | undefined;
+  const briefs = [...(pack?.setting.protagonist ? [pack.setting.protagonist] : []), ...(pack?.setting.cast ?? [])];
+  return unique(briefs.flatMap((brief) => [brief.name, ...(brief.aliases ?? [])]));
 }
 
 function looksLikeToolOrJsonArtifact(content: string): boolean {

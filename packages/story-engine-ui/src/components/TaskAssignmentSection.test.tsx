@@ -4,14 +4,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TaskAssignmentSection } from "./TaskAssignmentSection.js";
 import { TASK_LABELS } from "./ModelSettingsDialogTypes.js";
 
-describe("TaskAssignmentSection 7 行两旋钮", () => {
+describe("TaskAssignmentSection 6 行两旋钮", () => {
   afterEach(cleanup); // 每个用例后卸载，避免多次 render 在 document.body 里堆叠出陈旧节点
-  it("TASK_LABELS 含 triage/enrichment、不含 futureReview，共 7 个", () => {
+  it("TASK_LABELS 含 triage、不含 futureReview 和已删的 enrichment，共 6 个", () => {
     const keys = Object.keys(TASK_LABELS);
     expect(keys).toContain("triage");
-    expect(keys).toContain("enrichment");
+    expect(keys).not.toContain("enrichment");
     expect(keys).not.toContain("futureReview");
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(6);
   });
 
   it("内容审阅任务说明使用深度分析口径", () => {
@@ -28,7 +28,7 @@ describe("TaskAssignmentSection 7 行两旋钮", () => {
     expect(screen.getByText(/深度分析整章/u)).toBeTruthy();
   });
 
-  it("每个任务渲染一个思考开关（checkbox），共 7 个", () => {
+  it("每个任务渲染一个思考开关（checkbox），共 6 个", () => {
     render(
       <TaskAssignmentSection
         tasks={{}}
@@ -38,7 +38,7 @@ describe("TaskAssignmentSection 7 行两旋钮", () => {
         onToggleThinking={() => {}}
       />,
     );
-    expect(screen.getAllByRole("checkbox")).toHaveLength(7);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
   });
 
   it("点击思考开关回调 onToggleThinking", () => {

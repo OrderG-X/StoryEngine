@@ -1,6 +1,7 @@
 import type { DraftAIReviewIssue, DraftAIRevisionSuggestion } from "./draft-ai-review.js";
 import type { StateOverview } from "../book/state-overview.js";
 import type { WritingContextPack } from "./writing-context-pack.js";
+import { renderSettingPack } from "./setting-pack.js";
 
 export type DraftRevisionTargetType =
   | "paragraph"
@@ -97,59 +98,16 @@ export function createRevisionTaskFromSuggestion(input: {
 export function buildDraftRevisionPrompt(input: BuildDraftRevisionPromptInput): string {
   const pack = input.writingContextPack;
   const overview = input.stateOverview;
-  const protectedTerms = unique([
-    ...(pack?.worldRulesContext.protectedSecrets ?? []),
-    ...(pack?.worldRulesContext.hiddenTruths ?? []),
-    ...(pack?.protagonistContext.forbiddenReveals ?? []),
-    ...(pack?.protagonistContext.unknownTruths ?? []),
-  ]).slice(0, 20);
   const contextSummary = {
     chapter: input.task.chapter,
     targetType: input.task.targetType,
     problemSummary: input.task.problemSummary,
     revisionGoal: input.task.revisionGoal,
     constraints: input.task.constraints,
-    protagonist: pack ? {
-      name: pack.protagonistContext.name,
-      identity: pack.protagonistContext.identity,
-      speechStyle: pack.protagonistContext.speechStyle,
-      speechSamples: pack.protagonistContext.speechSamples,
-      knownFacts: pack.protagonistContext.knownFacts,
-      unknownTruths: pack.protagonistContext.unknownTruths,
-      cannotDo: pack.protagonistContext.cannotDo,
-    } : overview?.characterMatrix ? {
-      characters: overview.characterMatrix.characters.slice(0, 6).map((character) => ({
-        name: character.name,
-        role: character.role,
-        identity: character.identity,
-        speechStyle: character.speechStyle,
-        currentGoal: character.currentGoal,
-      })),
-    } : undefined,
-    location: pack ? {
-      current: pack.locationContext.requiredCurrentLocation,
-      openingLocation: pack.locationContext.openingLocation,
-      spatialStructure: pack.locationContext.spatialStructure,
-      travelRules: pack.locationContext.travelRules,
-      risks: pack.locationContext.locationRisks,
-    } : overview?.locationDetailSummary,
-    assets: pack ? {
-      carriedAssets: pack.assetContext.carriedAssets,
-      unavailableAssets: pack.assetContext.unavailableAssets,
-      plotCriticalAssets: pack.assetContext.plotCriticalAssets,
-      assetHardRules: pack.assetContext.assetHardRules,
-    } : overview?.assetSummary,
-    writingRules: pack ? {
-      narrativePerspective: pack.writingRulesContext.narrativePerspective,
-      proseStyle: pack.writingRulesContext.proseStyle,
-      pacing: pack.writingRulesContext.pacing,
-      revealPolicy: pack.writingRulesContext.revealPolicy,
-      forbiddenContent: pack.writingRulesContext.forbiddenContent,
-      doNotDo: pack.writingRulesContext.doNotDo,
-      ...(pack.writingRulesContext.customNotes ? { customNotes: pack.writingRulesContext.customNotes } : {}),
-    } : overview?.writingRules,
-    protectedTerms,
+    ...(overview ? { story: { title: overview.project.title, genre: overview.project.genre } } : {}),
+    hardConstraints: pack?.hardConstraints,
   };
+  const settingText = pack ? renderSettingPack(pack.setting).join("\n").trim() : "";
 
   return [
     "你是 StoryEngine-NG 的“修订助手”，不是新写手。",
@@ -159,10 +117,10 @@ export function buildDraftRevisionPrompt(input: BuildDraftRevisionPromptInput): 
     "硬性规则：",
     "1. 只修指定片段，不重写全文。",
     "2. 不改变本章核心事件。",
-    "3. 不新增未登记关键资产，不改变地点空间结构。",
-    "4. 不让角色知道 unknownTruths。",
-    "5. 不提前揭开 forbiddenReveals / protectedSecrets / hiddenTruths。",
-    "6. 不改变角色年龄、身份、长期性格或说话风格。",
+    "3. 不新增设定本里没有的要紧物件，不改变地点的格局。",
+    "4. 不让人物知道他此刻不该知道的事。",
+    "5. 不提前揭开设定里写着还没揭开、不能说破的内容。",
+    "6. 不改变人物的年龄、身份、长期性格或说话方式。",
     "7. 保留原文中有效信息。",
     "8. 如果修订目标或约束明确要求修正代词、称谓、年龄、身份等局部事实，不要以信息不足为理由保持原样；按目标修订片段，并把不确定性写入 riskNotes。",
     "9. 输出必须是 JSON 对象，不能有 Markdown 包裹。",
@@ -179,6 +137,7 @@ export function buildDraftRevisionPrompt(input: BuildDraftRevisionPromptInput): 
       warnings: ["需要用户注意的内容"],
     }, null, 2),
     "",
+    ...(settingText ? ["设定（设定卡 + 账里记的现状）：", settingText, ""] : []),
     "上下文摘要：",
     JSON.stringify(contextSummary, null, 2),
     "",
@@ -290,9 +249,6 @@ function extractJsonObject(raw: string): string | null {
   return null;
 }
 
-function unique(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

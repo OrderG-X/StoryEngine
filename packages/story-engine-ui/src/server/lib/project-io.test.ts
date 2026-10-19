@@ -12,7 +12,6 @@ import {
   readJsonBody,
   readWorkspaceMessages,
   readUsageSummary,
-  resolveFoundationUpdateTargetId,
   writeFileAtomic,
   commitFilesAtomically,
 } from "./project-io.js";
@@ -187,39 +186,6 @@ describe("project io asset helpers", () => {
     expect(states.some((c) => c.chapter === 4), "只在旧缓存里出现的章不算").toBe(false);
   });
 
-});
-
-describe("resolveFoundationUpdateTargetId", () => {
-  it("treats generic character labels as missing ids and falls back to the only real character", () => {
-    const resolved = resolveFoundationUpdateTargetId({
-      actionType: "update_character_detail",
-      targetId: "角色",
-      knownEntities: {
-        characters: [{ id: "char-ffe5af", name: "陆沉" }],
-        locations: [],
-        assets: [],
-      },
-    });
-
-    expect(resolved).toBe("char-ffe5af");
-  });
-
-  it("does not pass generic character labels through when multiple characters exist", () => {
-    const resolved = resolveFoundationUpdateTargetId({
-      actionType: "update_character_detail",
-      targetId: "主角",
-      knownEntities: {
-        characters: [
-          { id: "char-a", name: "陆沉" },
-          { id: "char-b", name: "陆溪" },
-        ],
-        locations: [],
-        assets: [],
-      },
-    });
-
-    expect(resolved).toBeUndefined();
-  });
 });
 
 describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {

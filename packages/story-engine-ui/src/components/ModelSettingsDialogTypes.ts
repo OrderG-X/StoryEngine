@@ -1,13 +1,12 @@
 import type { ModelInfoItem } from "../api/types.js";
 import type { ProviderPreset } from "../constants/providerPresets.js";
 
-// 7 个任务类型（按难度成组：写作类建议关思考、动脑类建议开）。删死槽 futureReview、补主对话 triage、做厚拆 enrichment。
+// 6 个任务类型（按难度成组：写作类建议关思考、动脑类建议开）。删死槽 futureReview、补主对话 triage；做厚删了，enrichment 也删了（重构 P9）。
 export const TASK_LABELS: Record<string, string> = {
   fastDraft: "正文生成",
   triage: "主对话",
   repair: "局部改稿",
   chapterSteering: "章纲",
-  enrichment: "资料补全",
   draftReview: "内容审阅",
   qualityCheck: "硬伤检查",
 };
@@ -17,14 +16,13 @@ export const TASK_HINTS: Record<string, string> = {
   triage: "右侧对话总控，驱动所有工具",
   repair: "按建议局部修订正文",
   chapterSteering: "读前文、拟章纲",
-  enrichment: "世界观/角色/地点/道具与资源等资料补全",
   draftReview: "深度分析整章并给出改进建议",
   qualityCheck: "定稿前查硬伤",
 };
 
 /**
  * 每个任务的「思考」软建议（2026-06-23 调研修正）：创作类(正文/改稿)建议关——思考把创作"理性化"反而更AI腔、更慢；
- * 动脑类(章节方案/做厚/审稿/质检)建议开——规划/一致性/评判靠推理加分；
+ * 动脑类(章节方案/审稿/质检)建议开——规划/一致性/评判靠推理加分；
  * **主对话(triage)建议开**——它是 agent 编排器(意图→选对工具→规划多步)，不是闲聊，思考帮它少调错工具少幻觉
  * （证据：agentic 研究里强 agent 一律走 Deliberative Mode 先想再动手）。仅提示，用户随意调。
  */
@@ -33,7 +31,6 @@ export const TASK_SUGGEST_THINKING: Record<string, boolean> = {
   triage: true,
   repair: false,
   chapterSteering: true,
-  enrichment: true,
   draftReview: true,
   qualityCheck: true,
 };

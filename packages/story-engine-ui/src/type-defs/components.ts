@@ -1,6 +1,6 @@
 import type { ChapterSteeringDraft, CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
 import type { SuggestedAction, ThemeMode } from "./workflow.js";
-import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, SidebarData, AiFlavorViolation } from "./workspace.js";
+import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
 import type { SelectionRevisionKey } from "../components/v2/selectionRevisionTemplates.js";
 
@@ -9,7 +9,6 @@ export interface WritingWorkspaceLayoutProps {
   readonly workspace: ChapterWorkspaceData;
   /** B5-2: 当前故事 overview（含伏笔/线索/章号），透传给 codex 资料面板。可能为 null（书未打开时）。 */
   readonly overview?: StateOverview | null;
-  readonly sidebar: SidebarData;
   readonly themeMode: ThemeMode;
   readonly onSelectChapter?: (chapterId: string) => void;
   readonly onSelectSection?: (section: string) => void;
@@ -114,15 +113,6 @@ export interface OpenBookDialogProps {
   readonly onChooseFolder: () => void;
   readonly onCancel: () => void;
   readonly onOpenProject: (projectPath: string) => void | Promise<boolean | void>;
-}
-
-export interface ChapterSidebarProps {
-  readonly chapters: readonly ChapterNavItem[];
-  readonly sidebar: SidebarData;
-  readonly activeChapterId: string;
-  readonly onSelectChapter?: (chapterId: string) => void;
-  readonly onSelectSection?: (section: string) => void;
-  readonly onGoHome?: () => void;
 }
 
 export interface ModelSettingsDialogProps {

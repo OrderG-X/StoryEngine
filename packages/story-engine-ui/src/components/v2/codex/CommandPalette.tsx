@@ -1,7 +1,7 @@
 /**
  * CommandPalette —— ⌘K / Ctrl+K 搜索与命令面板（2026-10-07 改版）。
  *
- * 一个输入框搜三类：章节（章名 / 章号）、设定（角色名 + 设定本各类条目）、命令（切视图、主题、专注、写下一章…）。
+ * 一个输入框搜三类：章节（章名 / 章号）、设定（人物名 + 设定本各类条目）、命令（切视图、主题、专注、写下一章…）。
  * ↑↓ 选、回车执行、Esc 关。纯导航与「给 AI 发一句话」，不直连引擎（守铁律②：写类动作仍经对话）。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -37,20 +37,6 @@ interface PaletteGroup {
   readonly items: readonly PaletteItem[];
 }
 
-/** 从角色卡 JSON 串里取名字与身份；坏串跳过（不把 JSON 原文露给用户）。 */
-export function parsePaletteCharacters(items: readonly string[]): PaletteCharacter[] {
-  const out: PaletteCharacter[] = [];
-  for (const item of items) {
-    try {
-      const obj = JSON.parse(item) as { name?: unknown; role?: unknown };
-      const name = typeof obj.name === "string" ? obj.name.trim() : "";
-      if (!name || out.some((c) => c.name === name)) continue;
-      out.push({ name, role: typeof obj.role === "string" ? obj.role.trim() : "" });
-    } catch { /* 非 JSON 条目不是角色卡 */ }
-  }
-  return out;
-}
-
 /** 组装分组结果：空查询给「最近章节 + 角色 + 命令」，有查询按三类各自过滤。 */
 export function buildPaletteGroups(input: {
   readonly query: string;
@@ -60,7 +46,7 @@ export function buildPaletteGroups(input: {
   readonly commands: readonly PaletteCommand[];
   readonly onPickChapter: (id: string) => void;
   readonly onPickCharacter: (name: string) => void;
-  readonly onPickSetting: (cat: string) => void;
+  readonly onPickSetting: (cat: string, focus?: string) => void;
 }): PaletteGroup[] {
   const q = input.query.trim().toLowerCase();
   const digits = q.replace(/[^0-9]/gu, "");
@@ -89,21 +75,22 @@ export function buildPaletteGroups(input: {
       key: `char:${c.name}`,
       kind: "character",
       label: c.name,
-      hint: c.role || "角色",
+      hint: c.role || "人物",
       run: () => input.onPickCharacter(c.name),
     }));
-  if (characters.length) groups.push({ title: "角色", items: characters });
+  if (characters.length) groups.push({ title: "人物", items: characters });
 
   if (q) {
     const settings = searchLibraryIndex(input.librarySources, input.query)
-      .filter((hit) => hit.cat !== "chars")
+      // 人物名字已经在「人物」组里了；卡上别的字（身份、来历……）命中照样列进来，点了展开那张卡。
+      .filter((hit) => hit.cat !== "chars" || !characters.some((item) => item.label === hit.focus))
       .slice(0, 5)
       .map<PaletteItem>((hit, i) => ({
         key: `set:${hit.cat}:${i}`,
         kind: "setting",
         label: hit.snippet,
         hint: hit.catLabel,
-        run: () => input.onPickSetting(hit.cat),
+        run: () => input.onPickSetting(hit.cat, hit.focus),
       }));
     if (settings.length) groups.push({ title: "设定", items: settings });
   }
@@ -131,7 +118,7 @@ export function CommandPalette(props: {
   readonly commands: readonly PaletteCommand[];
   readonly onPickChapter: (id: string) => void;
   readonly onPickCharacter: (name: string) => void;
-  readonly onPickSetting: (cat: string) => void;
+  readonly onPickSetting: (cat: string, focus?: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);

@@ -397,11 +397,10 @@ export async function runUserAction(args: {
   if (rest) args.sendEvent("text-delta", { text: rest });
 
   const nextSteps = commitApplyNextSteps(action.chapter, result, await resolveNextDraftChapter(args.projectDir, action.chapter));
-  // 编辑部 R4.6 建议项（只追加选项，不动上面 commitApplyNextSteps 的生成逻辑）：定稿成功后，主角卡
-  // 还是开书占位、已定稿声明里有出场最多的真名 → 多给一个「把主角卡改成『X』」。只是建议：作者点了
-  // 才把 intent 发给模型，由模型走 foundation_write 改名（可撤销）；建议判不了/判挂了按无建议处理。
+  // 定稿成功后，设定本里还没标主角、账里有视角人物 → 多给一个「把『X』设为主角」。只是建议：作者点了
+  // 才把 intent 发给模型，由模型走 foundation_write 设（可撤销）；建议判不了/判挂了按无建议处理。
   const renameSuggestion = result?.committed === true && args.projectDir
-    ? await buildProtagonistRenameSuggestion(args.projectDir, action.chapter).catch(() => undefined)
+    ? await buildProtagonistRenameSuggestion(args.projectDir).catch(() => undefined)
     : undefined;
   const choices = renameSuggestion
     ? [...nextSteps.choices, { label: renameSuggestion.label, intent: renameSuggestion.intent }]
@@ -715,7 +714,6 @@ async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserA
     toolName: "foundation_write",
     // 带上改前的撤销点：界面把这一步登记成一个可撤销的回合，「撤销上一步」只撤这次改设定。
     output: {
-      ...(outcome.output ?? {}),
       ok: outcome.ok,
       summary: outcome.summary,
       refreshScope: "foundation",

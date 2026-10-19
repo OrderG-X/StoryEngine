@@ -19,8 +19,8 @@ async function makeProject(title: string): Promise<string> {
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: "林远",
+    logline: "主角进入权力中心。",
+    protagonistName: "林远",
   });
   return projectDir;
 }

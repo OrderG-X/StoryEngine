@@ -5,129 +5,16 @@ export interface StoryProject {
   readonly updatedAt: string;
 }
 
-export interface CharacterProfile {
-  /** 用户/AI 自定义的额外字段；内置字段之外的"便签"，写作时注入 prompt，不参与引擎逻辑。 */
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly id: string;
-  readonly name: string;
-  readonly identity?: string;
-  readonly age?: string;
-  readonly gender?: string;
-  readonly appearance?: {
-    readonly body?: string;
-    readonly face?: string;
-    readonly hair?: string;
-    readonly clothing?: string;
-    readonly distinguishingFeatures?: readonly string[];
-  };
-  readonly appearanceAnchors?: readonly string[];
-  readonly tags?: readonly string[];
-}
 
-export interface CharacterVoiceProfile {
-  readonly style?: string;
-  readonly rhythm?: string;
-  readonly avoidanceTopics?: readonly string[];
-  readonly sampleLines?: readonly string[];
-}
 
-export interface CharacterArcProfile {
-  readonly startState?: string;
-  readonly currentState?: string;
-  readonly projectedDirection?: string;
-}
 
-export interface CharacterCore {
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly characterId: string;
-  readonly personality: readonly string[];
-  readonly speechStyle?: string;
-  readonly taboos?: readonly string[];
-  readonly worldview?: string;
-  readonly desire?: string;
-  readonly fear?: string;
-  readonly contradiction?: string;
-  readonly moralBoundary?: string;
-  readonly voice?: CharacterVoiceProfile;
-  readonly behaviorHabits?: readonly string[];
-  readonly arc?: CharacterArcProfile;
-}
 
-export interface CharacterState {
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly characterId: string;
-  readonly emotion: string;
-  readonly goal: string;
-  readonly mood?: string;
-  readonly currentGoal?: string;
-  readonly recentEvents?: readonly string[];
-  readonly relationshipToUser?: string;
-  readonly currentArc?: string;
-  readonly currentPhysicalState?: string;
-  readonly currentMentalState?: string;
-  readonly currentResourceState?: string;
-  readonly currentLocationId?: string;
-  readonly currentLocationName?: string;
-  readonly knowledgeKnown?: readonly string[];
-  readonly knowledgeUnknown?: readonly string[];
-  readonly cannotReveal?: readonly string[];
-  readonly lastSeenChapter?: number | null;
-  readonly lastUpdatedChapter?: number | null;
-}
 
-export interface WorldCore {
-  readonly genre: string;
-  readonly premise: string;
-  readonly rules: readonly string[];
-  readonly mainConflict: string;
-}
 
-export interface WorldState {
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly currentPhase: string;
-  readonly activeConflicts: readonly string[];
-  readonly activeHooks: readonly string[];
-  readonly knownSecrets: readonly string[];
-  readonly lastUpdatedChapter?: number | null;
-}
 
-export interface StoryCore {
-  readonly readerPromise: string;
-  readonly tone: string;
-  readonly targetEmotion: string;
-  readonly pacingStyle?: string;
-}
 
-export interface StoryBible {
-  readonly version: "v0";
-  readonly projectLogline: string;
-  readonly premise: string;
-  readonly genre: string;
-  readonly subgenres: readonly string[];
-  readonly readerPromise: string;
-  readonly longFormGoals: readonly string[];
-  readonly centralConflicts: readonly string[];
-  readonly coreMysteries: readonly string[];
-  readonly forbiddenChanges: readonly string[];
-  readonly canonFacts: readonly string[];
-  readonly openQuestions: readonly string[];
-  readonly setupAssets?: FoundationSetupAssets;
-  readonly firstChapterSetup?: FirstChapterSetup;
-  readonly protectedSecrets?: readonly string[];
-}
 
-export interface FoundationSetupAssets {
-  readonly initialAssets: readonly string[];
-  readonly keyItems: readonly string[];
-  readonly resourceLimits: readonly string[];
-}
 
-export interface FirstChapterSetup {
-  readonly goal?: string;
-  readonly openingScene?: string;
-  readonly hook?: string;
-  readonly conflict?: string;
-}
 
 /** 作者文风样本（正向锚）：喂模型模仿句法节奏/用词偏好/叙事温度，不得照抄内容、情节或具体名物。 */
 export interface StyleExemplar {
@@ -163,53 +50,8 @@ export interface WritingRules {
   readonly styleExemplars?: readonly StyleExemplar[];
 }
 
-export interface CharacterBibleEntry {
-  /** 用户/AI 自定义的额外字段（做厚便签）；写作时渲染进 protagonistContext / supportingCast，不参与引擎逻辑。 */
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly id: string;
-  readonly name: string;
-  readonly role: string;
-  readonly age?: string;
-  readonly gender?: string;
-  readonly identity?: string;
-  readonly appearanceAnchors?: readonly string[];
-  readonly longTermDesire?: string;
-  readonly desire?: string;
-  readonly fear?: string;
-  readonly weakness?: string;
-  readonly contradiction?: string;
-  readonly moralBoundary?: string;
-  readonly privateMotive?: string;
-  readonly relationshipToProtagonist?: string;
-  readonly relationshipDynamics?: readonly string[];
-  readonly trustLevel?: "low" | "medium" | "high" | string;
-  readonly hiddenStance?: string;
-  readonly voice?: CharacterVoiceProfile;
-  readonly speechRules?: readonly string[];
-  readonly speechStyle?: string;
-  readonly speechSamples?: readonly string[];
-  readonly personalityBaseline?: readonly string[];
-  readonly socialEnergy?: "low" | "medium" | "high" | string;
-  readonly behaviorBoundaries?: readonly string[];
-  readonly knowledgeKnown?: readonly string[];
-  readonly knowledgeUnknown?: readonly string[];
-  readonly cannotReveal?: readonly string[];
-  readonly cannotDo?: readonly string[];
-  readonly canAiModify?: boolean;
-  readonly arcPromise?: string;
-  readonly arc?: CharacterArcProfile;
-  readonly currentStateHint?: string;
-}
 
-export interface CharacterBible {
-  readonly version: "v0";
-  readonly characters: readonly CharacterBibleEntry[];
-}
 
-export interface CharacterMatrixLedger {
-  readonly version: "v0";
-  readonly entries: readonly CharacterMatrixEntry[];
-}
 
 export interface FactEntry {
   readonly id: string;
@@ -237,150 +79,18 @@ export interface FactLedger {
   readonly facts: readonly FactEntry[];
 }
 
-export interface CharacterMatrixAppearance {
-  readonly chapter: number;
-  readonly evidence: string;
-  readonly location?: string;
-}
 
-export interface CharacterMatrixRelationshipEvent {
-  readonly chapter: number;
-  readonly relationToProtagonist?: string;
-  readonly evidence: string;
-}
 
-export interface CharacterMatrixEntry {
-  readonly id: string;
-  readonly name: string;
-  readonly status: "candidate" | "accepted" | "ignored" | "promoted";
-  readonly roleHint?: string;
-  readonly relationToProtagonist?: string;
-  readonly riskHint?: string;
-  readonly firstSeenChapter?: number;
-  readonly lastSeenChapter?: number;
-  readonly promotedCharacterId?: string;
-  readonly evidence: readonly string[];
-  readonly appearances: readonly CharacterMatrixAppearance[];
-  readonly relationshipEvents: readonly CharacterMatrixRelationshipEvent[];
-}
 
-export interface WorldBibleFaction {
-  readonly id: string;
-  readonly name: string;
-  readonly goal: string;
-  readonly resources?: readonly string[];
-}
 
-export interface WorldBible {
-  readonly version: "v0";
-  readonly rules: readonly string[];
-  readonly factions: readonly WorldBibleFaction[];
-  readonly powerOrSurvivalSystems: readonly string[];
-  readonly historyFacts: readonly string[];
-  readonly socialOrder: readonly string[];
-  readonly worldPremise?: string;
-  readonly resourceRules?: readonly string[];
-  readonly authorityRules?: readonly string[];
-  readonly conflictSources?: readonly string[];
-  readonly fixedFacts?: readonly string[];
-  readonly protectedSecrets?: readonly string[];
-  readonly publicFacts?: readonly string[];
-  readonly hiddenFacts?: readonly string[];
-  readonly forbiddenRuleBreaks?: readonly string[];
-}
 
-export interface LocationSensoryDetails {
-  readonly visual?: readonly string[];
-  readonly sound?: readonly string[];
-  readonly smell?: readonly string[];
-  readonly touch?: readonly string[];
-}
 
-export interface LocationBibleEntry {
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly id: string;
-  readonly name: string;
-  readonly type: string;
-  readonly parentId?: string;
-  readonly parentLocation?: string;
-  readonly locationType?: string;
-  readonly spatialStructure?: LocationSpatialStructure;
-  readonly sensoryDetails?: LocationSensoryDetails;
-  readonly currentKnownPosition?: string;
-  readonly knownFeatures: readonly string[];
-  readonly risks: readonly string[];
-  readonly resources: readonly string[];
-  readonly narrativeFunction?: string;
-  readonly possibleConflicts?: readonly string[];
-  readonly currentStatus?: string;
-  readonly hiddenFacts?: readonly string[];
-  readonly connectedLocations?: readonly string[];
-  readonly travelRules?: readonly LocationTravelRule[];
-  readonly secrets?: readonly string[];
-  readonly fixedFacts?: readonly string[];
-  readonly lastSeenChapter?: number;
-  readonly lastKnownState?: string;
-}
 
-export interface LocationBible {
-  readonly version: "v0";
-  readonly locations: readonly LocationBibleEntry[];
-}
 
-export interface LocationSpatialStructure {
-  readonly floors?: readonly string[];
-  readonly rooms?: readonly string[];
-  readonly entrances?: readonly string[];
-  readonly exits?: readonly string[];
-}
 
-export interface LocationTravelRule {
-  readonly from?: string;
-  readonly targetLocation: string;
-  readonly method: "walk" | "taxi" | "bus" | "elevator" | "stairs" | string;
-  readonly durationMinutes?: number;
-  readonly constraint?: string;
-}
 
-export interface AssetLedger {
-  readonly version: "v0";
-  readonly assets: readonly AssetItem[];
-  readonly containers: readonly AssetContainer[];
-}
 
-export interface AssetItem {
-  readonly extraFields?: Record<string, string | readonly string[]>;
-  readonly id: string;
-  readonly name: string;
-  readonly type: "item" | "vehicle" | "property" | "money" | "document" | "container" | "keyItem" | "consumable" | string;
-  readonly ownerCharacterId?: string;
-  readonly ownerName?: string;
-  readonly currentLocationId?: string;
-  readonly currentLocationName?: string;
-  readonly carriedByCharacterId?: string;
-  readonly containerId?: string;
-  readonly quantity?: number;
-  readonly status: "available" | "damaged" | "lost" | "locked" | "consumed" | "unknown" | string;
-  readonly conditionNote?: string;
-  readonly isConsumable?: boolean;
-  readonly isPlotCritical?: boolean;
-  readonly canAiModify?: boolean;
-  readonly firstSeenChapter?: number;
-  readonly lastSeenChapter?: number;
-  readonly rules?: readonly string[];
-  readonly usageRules?: readonly string[];
-  readonly lossRules?: readonly string[];
-  readonly blockedReason?: string;
-  readonly notes?: readonly string[];
-}
 
-export interface AssetContainer {
-  readonly id: string;
-  readonly name: string;
-  readonly ownerCharacterId?: string;
-  readonly locationId?: string;
-  readonly containsAssetIds: readonly string[];
-}
 
 export interface HookItem {
   readonly id: string;
@@ -563,18 +273,3 @@ export interface ModelSettingsLoadResult {
   readonly issues: readonly ModelSettingsValidationIssue[];
 }
 
-/** 人物矩阵的一条更新（做厚人物关系时用；原住在老定稿链里）。 */
-export interface CharacterMatrixUpdate {
-  readonly id: string;
-  readonly name: string;
-  readonly status?: CharacterMatrixEntry["status"];
-  readonly roleHint?: string;
-  readonly relationToProtagonist?: string;
-  readonly riskHint?: string;
-  readonly firstSeenChapter?: number;
-  readonly lastSeenChapter?: number;
-  readonly promotedCharacterId?: string;
-  readonly evidence?: readonly string[];
-  readonly appearances?: CharacterMatrixEntry["appearances"];
-  readonly relationshipEvents?: CharacterMatrixEntry["relationshipEvents"];
-}

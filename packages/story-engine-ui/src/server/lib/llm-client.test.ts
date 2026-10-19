@@ -253,13 +253,6 @@ describe("resolveConfiguredChatModel 合成思考开关（旁路）", () => {
     expect(quality.thinking).toBe(true); // 未配置该任务 → 默认开
   });
 
-  it("enrichment 无旁路 → 回退引擎 chapterSteering 的 profile，thinking 默认 true", async () => {
-    loadModelSettingsV0.mockResolvedValue(settingsWithoutTriage());
-    taskAssignMocks.readTaskAssignments.mockResolvedValue({ file: null, corrupt: false });
-    const enr = await resolveConfiguredChatModel("enrichment");
-    expect(enr.profile.id).toBe("balanced");
-    expect(enr.thinking).toBe(true);
-  });
 });
 
 describe("callOpenAICompatibleChatModel（重构 P4：内部走流式 + 空闲超时，不设总时长上限）", () => {

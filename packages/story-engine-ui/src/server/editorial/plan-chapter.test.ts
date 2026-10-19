@@ -5,6 +5,7 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cardWrite, chapterCommit, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../book/project-store.js";
 import { normalizeChapterPlan, readChapterPlan, writeChapterPlan } from "../book/chapter-plan.js";
 import { describe, expect, it } from "vitest";
@@ -14,10 +15,12 @@ import { collectPlanMaterials, planMaterialBlocks } from "./plan-materials.js";
 async function makeBook(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "se-plan-chapter-"));
   const { projectDir } = await createStoryProject({
-    rootDir, title: "海州账册", genre: "urban", premise: "审计员林澈追查账册篡改。", mainCharacterName: "林澈",
+    rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈",
   });
   await mkdir(join(projectDir, "chapters"), { recursive: true });
   await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈把蓝色账册锁进抽屉，决定明天去档案室。\n", "utf-8");
+  // 老格式镜像文件（线索、硬事实）：建书不再建 story/，要写自己建（P9）。
+  await mkdir(join(projectDir, "story"), { recursive: true });
   await writeFile(join(projectDir, "story", "threads.json"), JSON.stringify({
     threads: [
       { id: "lead-1", type: "lead", title: "账册第三页被谁撕掉了…", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: ["账册第三页被谁撕掉了，撕口很新"] },
@@ -37,6 +40,45 @@ describe("拟章纲材料与提示词块", () => {
     expect(blocks).toContain("【作者这章的方向】让他去档案室");
     expect(blocks).toContain("决定明天去档案室");
     expect(blocks).not.toContain("已经收口的旧事");
+  });
+});
+
+describe("拟章纲材料：人物、物件来自设定本（重构 P9）", () => {
+  it("人物 = 设定卡里的 + 账里出场过还没建卡的；物件 = 地点 / 物品 / 其他设定卡的名字；前提在设定本摘要里", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "se-plan-cards-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "海州账册", genre: "都市", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈" });
+    const cards = await runCommand(projectDir, cardWrite, { ops: [
+      { op: "card.create", kind: "character", name: "许棠", fields: [{ label: "身份", value: "拆迁办干部" }, { label: "年龄", value: "三十五" }] },
+      { op: "card.create", kind: "place", name: "市档案馆" },
+      { op: "card.create", kind: "item", name: "蓝色账册" },
+      { op: "card.create", kind: "lore", name: "审计规矩" },
+    ] }, { caller: "author", idempotencyKey: "plan-cards" });
+    expect(cards.ok).toBe(true);
+    const text = "# 第1章\n\n林澈把蓝色账册锁进抽屉。门卫老周探头看了一眼。";
+    const committed = await runCommand(projectDir, chapterCommit, { chapter: 1, text, entries: [
+      { kind: "presence", review: "auto", name: "林澈", nameUsed: "林澈", viewpoint: true, quote: "林澈把蓝色账册锁进抽屉" },
+      { kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: "门卫老周探头看了一眼" },
+    ] }, { caller: "author", idempotencyKey: "plan-c1" });
+    expect(committed.ok).toBe(true);
+
+    const materials = await collectPlanMaterials(projectDir, 2);
+    expect(materials.characters).toEqual(["林澈", "许棠", "周守义"]);
+    expect(materials.entities).toEqual(["市档案馆", "蓝色账册", "审计规矩"]);
+    for (const gone of ["premise", "longFormGoals", "protectedSecrets", "coreMysteries"]) expect(materials).not.toHaveProperty(gone);
+    expect(materials.foundation).toContain("一句话：审计员林澈追查账册篡改。");
+    expect(materials.foundation).toContain("许棠——身份：拆迁办干部；年龄：三十五");
+
+    const blocks = planMaterialBlocks(2, materials).join("\n\n");
+    expect(blocks).toContain("【已有人物（身份、年龄见设定本，别用错人、别算错年代）】林澈、许棠、周守义");
+    expect(blocks).toContain("【已登记的物件/地点/设定】市档案馆、蓝色账册、审计规矩");
+    for (const gone of ["【故事前提】", "【长线目标】", "【主谜/核心冲突】", "【受保护的秘密"]) expect(blocks).not.toContain(gone);
+    expect(blocks).not.toMatch(/k-\d/u);
+  });
+
+  it("新书只有建书时那几栏：人物就是主角，没有物件", async () => {
+    const materials = await collectPlanMaterials(await makeBook(), 2);
+    expect(materials.characters).toEqual(["林澈"]);
+    expect(materials.entities).toEqual([]);
   });
 });
 

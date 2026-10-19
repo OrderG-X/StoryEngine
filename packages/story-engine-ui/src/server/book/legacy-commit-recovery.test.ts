@@ -50,9 +50,12 @@ describe("老定稿链事务残留的恢复", () => {
 
   it("staged 残留：能核对的备份还原，核不了的新建文件原地保留，标 recovered 放行", async () => {
     const projectDir = await createFixtureProject();
+    // 老定稿链写过的人物现状文件（新建书不再有，这里按老书的样子手工放一份）。
     const stateRelativePath = join("characters", "guo-xu", "state.json");
     const statePath = join(projectDir, stateRelativePath);
-    const originalState = await readFile(statePath, "utf-8");
+    const originalState = "{\"characterId\":\"guo-xu\",\"emotion\":\"平静\"}\n";
+    await mkdir(join(projectDir, "characters", "guo-xu"), { recursive: true });
+    await writeFile(statePath, originalState, "utf-8");
     await writeStagedResidue(projectDir, 9, [
       { relativePath: stateRelativePath, previous: originalState },
       { relativePath: join("chapters", "0009.md") },
@@ -289,8 +292,8 @@ async function createFixtureProject(): Promise<string> {
     rootDir,
     title: "恢复测试",
     genre: "xianxia",
-    premise: "老版本中途崩溃留下的事务残留。",
-    mainCharacterName: "Guo Xu / 主角",
+    logline: "老版本中途崩溃留下的事务残留。",
+    protagonistName: "Guo Xu",
   });
   return projectDir;
 }

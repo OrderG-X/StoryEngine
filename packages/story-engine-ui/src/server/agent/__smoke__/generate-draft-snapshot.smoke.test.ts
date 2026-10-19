@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 
 import { generateDraftTool } from "../tools/generate-draft.js";
-import { buildProjectRequestContext } from "../request-context.js";
+import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { listSnapshots, restoreSnapshot } from "../../lib/snapshot.js";
 
@@ -22,8 +22,13 @@ const ENABLED = process.env.RUN_M6_SMOKE === "1";
 type ToolExec = (input: Record<string, unknown>, context: ToolExecutionContext) => Promise<Record<string, unknown>>;
 const generate = generateDraftTool.execute as unknown as ToolExec;
 
-function ctx(projectDir: string, chapter: number): ToolExecutionContext {
-  return { requestContext: buildProjectRequestContext(projectDir, chapter) } as unknown as ToolExecutionContext;
+const GOAL = "主角林远读到失踪同事的短信，决定独自前往约定地点；不揭开真相。";
+
+/** 本章方向得是作者原话（重构 P4 找原句）；覆盖已有工作稿要作者点「重写这一章」（确认标记）。 */
+function ctx(projectDir: string, chapter: number, options: { readonly rewrite?: boolean } = {}): ToolExecutionContext {
+  const requestContext = buildProjectRequestContext(projectDir, chapter, undefined, [GOAL]);
+  if (options.rewrite) markUserConfirmedTool(requestContext, "generate_draft");
+  return { requestContext } as unknown as ToolExecutionContext;
 }
 
 async function makeProject(): Promise<string> {
@@ -32,8 +37,8 @@ async function makeProject(): Promise<string> {
     rootDir,
     title: "M6 冒烟书",
     genre: "都市悬疑",
-    premise: "深夜的旧公寓里，主角林远收到一条来自三年前失踪同事的短信。",
-    mainCharacterName: "林远",
+    logline: "深夜的旧公寓里，主角林远收到一条来自三年前失踪同事的短信。",
+    protagonistName: "林远",
   });
   return projectDir;
 }
@@ -47,10 +52,7 @@ describe.skipIf(!ENABLED)("M6 覆盖现有非空草稿前建快照（真机 GLM�
     const draftA = "# 第一章 · 旧稿A\n\nDRAFT_A_SENTINEL 这是覆盖前就存在的一版草稿，撤销后应当原样回来。";
     await writeFile(draftPath, draftA, "utf-8");
 
-    const out = await generate(
-      { chapter: 1, chapterGoal: "主角林远读到失踪同事的短信，决定独自前往约定地点；不揭开真相。" },
-      ctx(projectDir, 1),
-    );
+    const out = await generate({ chapter: 1, chapterGoal: GOAL }, ctx(projectDir, 1, { rewrite: true }));
     // eslint-disable-next-line no-console
     console.log("[m6] overwrite ok=", out.ok, "snapshotId=", out.snapshotId, "summary=", out.summary);
 
@@ -73,10 +75,7 @@ describe.skipIf(!ENABLED)("M6 覆盖现有非空草稿前建快照（真机 GLM�
 
   it("空章首次出稿（R4.2：首稿也建「出稿：第N章」存档点、可撤销）→ snapshotId 透出、历史里有该条", async () => {
     const projectDir = await makeProject();
-    const out = await generate(
-      { chapter: 1, chapterGoal: "主角林远读到失踪同事的短信，决定独自前往约定地点；不揭开真相。" },
-      ctx(projectDir, 1),
-    );
+    const out = await generate({ chapter: 1, chapterGoal: GOAL }, ctx(projectDir, 1));
     // eslint-disable-next-line no-console
     console.log("[m6] first-draft ok=", out.ok, "snapshotId=", out.snapshotId);
 

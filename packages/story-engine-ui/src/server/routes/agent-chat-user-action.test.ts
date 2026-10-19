@@ -2,16 +2,17 @@
 //
 // agent-chat 路由级结构化动作（2026-10-07 拆补丁塔）：用户点「确认定稿」按钮 → body.action →
 // 服务端直接执行 commit_apply，不经模型（agent.stream 一次都不调）。真项目 + 真预览票据 + 真落盘。
+// 「确认改设定」（P9 起走核心 card.write）、定稿回执里的「还没建卡的人」也在这里走真链。
 import { EventEmitter } from "node:events";
-import { access, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createStoryProject } from "../book/project-store.js";
-import { projectBook } from "@actalk/story-core";
+import { cardWrite, chapterCommit, projectBook, readCards, runCommand, type CardOp, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
-import { restoreSnapshot } from "../lib/snapshot.js";
+import { listSnapshots, restoreSnapshot } from "../lib/snapshot.js";
 
 const storyAgentMocks = vi.hoisted(() => ({ getStoryAgent: vi.fn() }));
 vi.mock("../agent/story-agent.js", () => ({ getStoryAgent: storyAgentMocks.getStoryAgent }));
@@ -25,7 +26,7 @@ vi.mock("../editorial/index.js", async (importOriginal) => ({
 
 import { buildCommitPreviewToolOutput } from "../agent/tools/commit-preview.js";
 import { runManageLedger } from "../agent/tools/manage-ledger.js";
-import { applyFoundationWriteToolLogic } from "../agent/tools/foundation-write.js";
+import { foundationWriteLogic } from "../agent/tools/foundation-write.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
 import { registerAgentChatRoutes } from "./agent-chat.js";
 
@@ -155,26 +156,27 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     expect(undone.facts.find((fact) => fact.text === "林远在会议室外停下脚步")?.status).toBe("current");
   });
 
-  it("「确认改设定」：AI 删角色只出按钮不删 → 作者点了才删；点两次只删一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
+  it("「确认改设定」：AI 改作者写的 / 删作者建的卡只出按钮 → 作者点了按作者身份 card.write、带存档点；点两次只做一次；撤销点只退这一步", { timeout: 30_000 }, async () => {
     const projectDir = await makeProjectWithDraft(1);
-    const created = await applyFoundationWriteToolLogic({
+    await authorWrite(projectDir, [
+      { op: "field.set", card: "林远", label: "身份", value: "审计员" },
+      { op: "card.create", kind: "character", name: "顾明", fields: [{ label: "身份", value: "配角" }] },
+    ]);
+    const card = async (name: string) => (await readCards(projectDir))?.cards.find((item) => item.name === name);
+
+    const proposal = await foundationWriteLogic({
       projectDir,
-      toolInput: { actionType: "create_character", category: "characters", after: { name: "顾明", identity: "配角" } },
+      ops: [
+        { op: "field.set", card: "林远", label: "身份", value: "记者" },
+        { op: "card.delete", card: "顾明" },
+      ],
     });
-    expect(created.ok).toBe(true);
-    const readNames = async (): Promise<string[]> => {
-      const bible = JSON.parse(await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")) as { characters: { name: string }[] };
-      return bible.characters.map((character) => character.name);
-    };
-    const bible = JSON.parse(await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")) as { characters: { id: string; name: string }[] };
-    const targetId = bible.characters.find((character) => character.name === "顾明")?.id;
-    const proposal = await applyFoundationWriteToolLogic({
-      projectDir,
-      toolInput: { actionType: "delete_foundation_entry", category: "characters", targetId, targetName: "顾明", before: { name: "顾明" }, after: {} },
+    expect(proposal).toMatchObject({ ok: true, needsConfirmation: true, applied: [] });
+    expect(proposal.foundationConfirm?.input).toEqual({
+      ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }, { op: "card.delete", card: "顾明" }],
     });
-    expect(proposal).toMatchObject({ ok: false, needsConfirmation: true });
-    expect(proposal.foundationConfirm?.key).toBeTruthy();
-    expect(await readNames()).toContain("顾明");
+    expect(await card("顾明")).toBeDefined();
+    expect((await card("林远"))?.fields.find((field) => field.label === "身份")?.value).toBe("审计员");
 
     const action = { toolName: "foundation_decision", ...proposal.foundationConfirm };
     const snapshotIds: unknown[] = [];
@@ -186,16 +188,39 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
       expect(result?.data.output).toMatchObject({ ok: true, refreshScope: "foundation" });
       snapshotIds.push((result?.data.output as { snapshotId?: unknown } | undefined)?.snapshotId);
       const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
-      if (click === 1) expect(text).toContain("已经做过了");
+      expect(text).toContain(click === 0 ? "改好了：「林远」的「身份」改了；删了人物卡「顾明」。" : "已经做过了");
+      expect(text).not.toMatch(/k-\d/u);
     }
     expect(typeof snapshotIds[0]).toBe("string");
     expect(snapshotIds[1]).toBeUndefined();
-    expect(await readNames()).not.toContain("顾明");
+    expect(await card("顾明")).toBeUndefined();
+    expect((await card("林远"))?.fields.find((field) => field.label === "身份")).toMatchObject({ value: "记者", by: "author" });
+    // 作者身份走的 card.write：存档点标签带命令名（操作历史归「设定」类）。
+    const snapshot = (await listSnapshots(projectDir)).find((entry) => entry.id === snapshotIds[0]);
+    expect(snapshot?.label.startsWith("core:card.write:")).toBe(true);
     const agent = await storyAgentMocks.getStoryAgent.mock.results[0]?.value;
     expect(agent?.stream).not.toHaveBeenCalled();
 
     await restoreSnapshot(projectDir, snapshotIds[0] as string);
-    expect(await readNames()).toContain("顾明");
+    expect(await card("顾明")).toBeDefined();
+    expect((await card("林远"))?.fields.find((field) => field.label === "身份")?.value).toBe("审计员");
+  });
+
+  it("「确认改设定」按钮带的内容不对 → 如实说没改、不写盘", { timeout: 30_000 }, async () => {
+    const projectDir = await makeProjectWithDraft(1);
+    const before = await readFile(join(projectDir, "ledger", "cards.json"), "utf-8");
+    const { handlerPromise, res } = callAgentChatRoute({
+      projectPath: projectDir,
+      messages: [{ role: "user", content: "确认改设定" }],
+      action: { toolName: "foundation_decision", key: "card-x", input: { ops: [{ op: "card.explode", card: "林远" }] } },
+    });
+    await handlerPromise;
+    const events = parseSse(res.written.join(""));
+    const result = events.find((e) => e.event === "tool-result" && e.data.toolName === "foundation_write");
+    expect(result?.data.output).toMatchObject({ ok: false });
+    const text = events.filter((e) => e.event === "text-delta").map((e) => e.data.text).join("");
+    expect(text).toContain("没改设定");
+    expect(await readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).toBe(before);
   });
 
   it("非法动作（白名单外工具）→ 400，不当普通对话处理", async () => {
@@ -219,9 +244,11 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
       rootDir,
       title: "按钮定稿测试书",
       genre: "都市",
-      premise: "主角进入权力中心。",
-      mainCharacterName: "林远",
+      logline: "主角进入权力中心。",
+      protagonistName: "林远",
     });
+    // 建书不再建 drafts/（P9 起只写 project.json、chapters/、ledger/cards.json）。
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     await writeFile(
       join(projectDir, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`),
       `# 第${chapter}章\n\n${Array.from({ length: 12 }, () => SENTENCE).join("")}\n`,
@@ -229,6 +256,96 @@ describe("agent-chat route：结构化动作「确认定稿」", () => {
     );
     return projectDir;
   }
+
+  async function authorWrite(projectDir: string, ops: CardOp[]): Promise<void> {
+    const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `seed-${ops.length}-${Math.random()}` });
+    if (!outcome.ok) throw new Error(outcome.message);
+  }
+});
+
+// 定稿回执（P9）：出场了还没建卡的人列出来、引去设定本「还没建卡」；没建卡的人出场满 3 章单独点一次名。
+// 前两章直接走核心定稿命令打底，第 3 章走真预览 + 真按钮。
+describe("agent-chat route：定稿回执里的「还没建卡的人」", () => {
+  const rootDirs = new Set<string>();
+
+  beforeEach(() => {
+    brainMocks.warmUpReaders.mockClear();
+    storyAgentMocks.getStoryAgent.mockResolvedValue({ stream: vi.fn(async () => { throw new Error("结构化动作不应调用模型"); }) });
+  });
+
+  afterEach(async () => {
+    storyAgentMocks.getStoryAgent.mockReset();
+    await Promise.all([...rootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
+    rootDirs.clear();
+  });
+
+  const LINES = { lin: "林远在会议室外停下脚步。", zhou: "老周在门口抽烟。", he: "阿禾端来一碗热面。" };
+
+  /** 第 1、2 章：林远（有卡）和老周（周守义，没卡）都出场。 */
+  async function makeBook(cards: CardOp[] = []): Promise<string> {
+    const rootDir = await makeHomeTempDir("story-engine-agent-receipt-");
+    rootDirs.add(rootDir);
+    const { projectDir } = await createStoryProject({ rootDir, title: "回执测试书", genre: "都市", protagonistName: "林远" });
+    if (cards.length > 0) {
+      const outcome = await runCommand(projectDir, cardWrite, { ops: cards }, { caller: "author", idempotencyKey: "receipt-cards" });
+      if (!outcome.ok) throw new Error(outcome.message);
+    }
+    for (const chapter of [1, 2]) {
+      const entries: EntryInput[] = [
+        { kind: "presence", review: "auto", name: "林远", nameUsed: "林远", viewpoint: true, quote: LINES.lin },
+        { kind: "presence", review: "auto", name: "周守义", nameUsed: "老周", quote: LINES.zhou },
+      ];
+      const outcome = await runCommand(projectDir, chapterCommit, { chapter, text: `# 第${chapter}章\n\n${LINES.lin}${LINES.zhou}`, entries }, { caller: "author", idempotencyKey: `receipt-c${chapter}` });
+      if (!outcome.ok) throw new Error(outcome.message);
+    }
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(join(projectDir, "drafts", "fast", "chapter-0003.md"), `# 第3章\n\n${LINES.lin}${LINES.zhou}${LINES.he}${SENTENCE.repeat(12)}\n`, "utf-8");
+    return projectDir;
+  }
+
+  /** 第 3 章的假记账员：林远、老周、阿禾（头一回出场）。 */
+  const keeper3: BrainCallModel = async (messages) =>
+    (messages.at(-1)?.content ?? "").includes("交这一章的账单")
+      ? JSON.stringify({
+          summary: { text: "林远在会议室外犹豫", quote: "林远在会议室外停下脚步" },
+          presence: [
+            { name: "林远", nameUsed: "林远", viewpoint: true, quote: "林远在会议室外停下脚步" },
+            { name: "周守义", nameUsed: "老周", quote: "老周在门口抽烟" },
+            { name: "阿禾", nameUsed: "阿禾", quote: "阿禾端来一碗热面" },
+          ],
+          facts: [],
+          threads: [],
+        })
+      : "笔记。";
+
+  async function commitChapter3(projectDir: string): Promise<string> {
+    const preview = await buildCommitPreviewToolOutput({ projectDir, chapter: 3, callModel: keeper3 });
+    expect(preview.canCommit).toBe(true);
+    const { handlerPromise, res } = callAgentChatRoute({
+      projectPath: projectDir,
+      messages: [{ role: "user", content: "确认定稿第 3 章" }],
+      action: { toolName: "commit_apply", chapter: 3, previewToken: preview.previewToken },
+    });
+    await handlerPromise;
+    const result = parseSse(res.written.join("")).find((e) => e.event === "tool-result" && e.data.toolName === "commit_apply");
+    expect(result?.data.output).toMatchObject({ ok: true, committed: true, chapter: 3 });
+    return (result?.data.output as { summary: string }).summary;
+  }
+
+  it("头一回出场的没卡的人列出来；没卡的人这章正好出场满 3 章 → 单独提醒一次；有卡的不提", { timeout: 60_000 }, async () => {
+    const summary = await commitChapter3(await makeBook());
+    expect(summary).toContain("这章还出现了新人物：阿禾——要给谁建卡，在设定本「还没建卡」里点一下就行。");
+    expect(summary).toContain("「周守义」已经出场 3 章了，还没有人物卡。");
+    expect(summary).not.toContain("林远」已经出场");
+    expect(summary).not.toMatch(/新人物：[^—]*周守义/u);
+  });
+
+  it("老周已经建了卡（按别名对上）→ 不再提醒他；阿禾照样列出来", { timeout: 60_000 }, async () => {
+    const summary = await commitChapter3(await makeBook([{ op: "card.create", kind: "character", name: "老周" }]));
+    expect(summary).toContain("这章还出现了新人物：阿禾");
+    expect(summary).not.toContain("还没有人物卡");
+    expect(summary).not.toContain("周守义");
+  });
 });
 
 function parseSse(raw: string): SseEvent[] {

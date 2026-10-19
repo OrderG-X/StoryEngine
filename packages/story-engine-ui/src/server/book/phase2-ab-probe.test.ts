@@ -17,9 +17,9 @@
  * 均为确定性、无网络、纯内存函数级别验证（不调 LLM，不读真实磁盘临时文件除外）。
  */
 
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createStoryProject } from "./project-store.js";
@@ -30,6 +30,8 @@ import type { TimelineEvent, HookItem, HookPool } from "./types.js";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function writeJson(path: string, value: unknown): Promise<void> {
+  // 建书不再建 story/、timeline/ 目录（重构 P9）：老格式账文件要写自己建目录。
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
@@ -155,8 +157,8 @@ describe("Phase 2 A/B probe — 属性 1：早期大事件可查（Task 6 timeli
       rootDir,
       title: "Phase2 属性1 早期可查测试",
       genre: "都市",
-      premise: "主角进入权力中心，早期伏笔埋下。",
-      mainCharacterName: "林远",
+      logline: "主角进入权力中心，早期伏笔埋下。",
+      protagonistName: "林远",
     });
     const events = make30ChapterEvents();
     await writeJson(join(projectDir, "timeline", "events.json"), events);
@@ -287,8 +289,8 @@ describe("Phase 2 A/B probe — 属性 2：收线后退出上下文（Task 7 hoo
       rootDir,
       title: "Phase2 属性2 收口测试",
       genre: "都市",
-      premise: "主角调查密信谜团。",
-      mainCharacterName: "林远",
+      logline: "主角调查密信谜团。",
+      protagonistName: "林远",
     });
 
     // hooks.json: 密信谜团已 resolved（模拟收口后状态）

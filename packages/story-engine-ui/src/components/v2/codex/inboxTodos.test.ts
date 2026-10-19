@@ -38,11 +38,18 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
     expect(todos.map((t) => t.title)).toEqual(["第 8 章还没起标题"]);
   });
 
-  it("主角卡还是开书占位：给视角最多的人当候选，排第一条；通读没记完不提", () => {
-    const withProtagonist = { ...(overview() as object), placeholderProtagonist: { placeholderName: "主角", suggestedName: "许微", viewpointChapters: 8 } } as never;
-    const todos = buildInboxTodos({ chapters: [ch(1, "死信")], overview: withProtagonist, currentChapterNumber: 8 });
-    expect(todos[0]).toMatchObject({ title: "主角卡还叫「主角」", sub: "8 章跟着许微的视角走", prefill: "把主角卡改成「许微」，只改名字，别的不动" });
-    expect(buildInboxTodos({ chapters: [ch(1, "死信")], overview: withProtagonist, currentChapterNumber: 8, rereading: true })).toEqual([]);
+  it("还没标主角：视角最多的人排第一条，点了直接改设定本（有卡就标主角，没卡就建一张）；通读没记完不提", () => {
+    const suggest = (carded: boolean) => ({ ...(overview() as object), protagonistSuggestion: { name: "许微", viewpointChapters: 8, carded } }) as never;
+    const carded = buildInboxTodos({ chapters: [ch(1, "死信")], overview: suggest(true), currentChapterNumber: 8 });
+    expect(carded[0]).toMatchObject({ title: "还没标主角", sub: "8 章跟着许微的视角走", action: "设许微为主角" });
+    expect(carded[0]?.ops).toEqual([{ op: "card.protagonist", card: "许微" }]);
+    const uncarded = buildInboxTodos({ chapters: [ch(1, "死信")], overview: suggest(false), currentChapterNumber: 8 });
+    expect(uncarded[0]?.ops).toEqual([{ op: "card.create", kind: "character", name: "许微", protagonist: true }]);
+    expect(buildInboxTodos({ chapters: [ch(1, "死信")], overview: suggest(true), currentChapterNumber: 8, rereading: true })).toEqual([]);
+  });
+
+  it("别的待办不带 ops：照旧只把一句话放进输入框", () => {
+    const todos = buildInboxTodos({ chapters: [ch(49, "待补")], overview: overview({ cleanup: 3 }), currentChapterNumber: 49 });
+    expect(todos.every((todo) => todo.ops === undefined)).toBe(true);
   });
 });
-

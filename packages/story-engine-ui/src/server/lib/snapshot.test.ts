@@ -11,6 +11,7 @@ import { buildRestoreReceipt } from "./snapshot-changes.js";
 import {
   CHAT_SESSIONS_EXCLUDE_LINE,
   SNAPSHOT_EXCLUDED_CHAT_SESSIONS_DIR,
+  coreSnapshotLabel,
   createSnapshot,
   humanizeUndoLabel,
   isPostWriteSettlementSnapshot,
@@ -18,6 +19,7 @@ import {
   pruneSnapshots,
   restoreSnapshot,
   runWithSnapshot,
+  snapshotKindOf,
   undoLastChange,
 } from "./snapshot.js";
 
@@ -45,6 +47,22 @@ describe("humanizeUndoLabel（R2#3·操作历史 label 人话化）", () => {
     expect(humanizeUndoLabel("agent:foundation_write:建角色 顾长风")).not.toContain("foundation_write");
     // 恢复产物里带细节也一并人话化
     expect(humanizeUndoLabel("恢复到：agent:foundation_write:建角色 顾长风")).toBe("恢复到：改设定本：建角色 顾长风");
+  });
+});
+
+// 重构 P9：改设定走核心三条命令，存档点标签是 core:<命令>:<人话>，操作历史归「设定」一类、展示只用人话。
+describe("改设定的核心命令存档点（card.write / card.fill / cards.import）", () => {
+  it("三条命令都归设定类（bible）", () => {
+    expect(snapshotKindOf(coreSnapshotLabel("card.write", "改设定：「林远」的「身份」改了"))).toBe("bible");
+    expect(snapshotKindOf(coreSnapshotLabel("card.fill", "改设定：建了人物卡「苏晴」"))).toBe("bible");
+    expect(snapshotKindOf(coreSnapshotLabel("cards.import", "搬老设定"))).toBe("bible");
+  });
+
+  it("人话标签原样给作者看，不露命令名", () => {
+    const label = coreSnapshotLabel("card.fill", "改设定：建了人物卡「苏晴」 等 3 处");
+    expect(humanizeUndoLabel(label)).toBe("改设定：建了人物卡「苏晴」 等 3 处");
+    expect(humanizeUndoLabel(`恢复到：${label}`)).toBe("恢复到：改设定：建了人物卡「苏晴」 等 3 处");
+    expect(humanizeUndoLabel(label)).not.toContain("card.fill");
   });
 });
 
@@ -755,8 +773,8 @@ describe("P1-6 残留事务不砖住 restoreSnapshot（撤销线兜底）", () =
       rootDir,
       title: "P1-6 撤销回归书",
       genre: "xianxia",
-      premise: "崩溃残留后撤销仍可用。",
-      mainCharacterName: "测试主角",
+      logline: "崩溃残留后撤销仍可用。",
+      protagonistName: "测试主角",
     });
     return projectDir;
   }

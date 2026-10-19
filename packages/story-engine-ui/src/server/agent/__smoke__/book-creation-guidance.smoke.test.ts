@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
-// 对话式开书（第二期②）真机冒烟：空建占位主角的新书里，用户首次说出真主角名时，开书引导应让 agent
-// 【改名占位主角】(rename_character) 而非新增第二个角色（里程碑2A #1 核心瑕疵）。对真实 GLM 跑。
+// 对话式开书（第二期②）真机冒烟：没填主角的新书（重构 P9 起不再落占位主角卡）里，用户首次说出真主角名时，
+// agent 应建一张标了主角的人物卡（foundation_write），且只建一张、不出现两个主角。对真实 GLM 跑。
 // Codex 沙箱连不上 writer.example.com，本机直连补这条最终签收。
 //
 // 需真实网络 + 真实 GLM key，默认 skip；手动跑：
@@ -19,21 +19,16 @@ import { buildProjectRequestContext } from "../request-context.js";
 const ENABLED = process.env.RUN_BOOKCREATION_SMOKE === "1";
 
 describe.skipIf(!ENABLED)("对话式开书 开书引导（真机 GLM）", () => {
-  it("空书里说出真主角名 → 改名占位主角(不新增第二个)，并落欲望/恐惧", async () => {
-    // 空建：mainCharacterName=占位「主角」，模拟极简新建后的中性骨架空书。
+  it("空书里说出真主角名 → 建一张标了主角的人物卡（只一张）", async () => {
+    // 空建：只给书名，没有主角卡、没有任何模板占位。
     const rootDir = await mkdtemp(join(tmpdir(), "bookcreation-smoke-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "开书冒烟书",
-      genre: "",
-      premise: "",
-      mainCharacterName: "主角",
-    });
+    const { projectDir } = await createStoryProject({ rootDir, title: "开书冒烟书" });
 
     const before = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
     // eslint-disable-next-line no-console
     console.log("[book] 初始角色:", before.characters.knownCharacters.map((c) => c.name));
-    expect(before.characters.knownCharacters.some((c) => c.name === "主角")).toBe(true);
+    expect(before.characters.knownCharacters).toEqual([]);
+    expect(before.characters.protagonist).toBeUndefined();
 
     const agent = await getStoryAgent();
     const requestContext = buildProjectRequestContext(projectDir);
@@ -59,10 +54,9 @@ describe.skipIf(!ENABLED)("对话式开书 开书引导（真机 GLM）", () => 
     // eslint-disable-next-line no-console
     console.log("[book] 改后角色:", names, "| protagonist:", after.characters.protagonist);
 
-    // 核心：占位「主角」被改名成林远——不再有名为「主角」的残留，且林远在册（不是「主角、林远」两个）。
-    expect(names).toContain("林远");
-    expect(names).not.toContain("主角");
-    // 主角字段确实是林远。
+    // 核心：林远建了卡、标成主角，且只有这一张（没有「主角」之类的类别词卡）。
+    expect(names).toEqual(["林远"]);
+    expect(after.characters.knownCharacters[0]).toMatchObject({ name: "林远", carded: true, protagonist: true });
     expect(after.characters.protagonist).toBe("林远");
   }, 180_000);
 });

@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { mockSidebarData, mockWorkspaceData } from "../../../mockData.js";
+import { mockWorkspaceData } from "../../../mockData.js";
 import type { ChapterMessage, WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import AiChatCodex from "./AiChatCodex.js";
@@ -45,7 +45,6 @@ function renderChat(messages: readonly ChapterMessage[], overrides: Record<strin
   useChatStore.getState().setMessages(messages);
   const props = {
     workspace: mockWorkspaceData,
-    sidebar: mockSidebarData,
     themeMode: "dark",
     steeringDirection: "",
     onSteeringDirectionChange: () => undefined,

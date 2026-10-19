@@ -2,14 +2,15 @@
 //
 // 阶段1 server smoke：直接驱动写作 agent（不经 HTTP），验证两件事真的发生：
 //   1) 问「现在什么状态」→ agent 调 read_state_overview。
-//   2) 「把『主角左手有疤』记进角色卡」→ agent 调 foundation_write + 真写入 character-bible + 建快照。
+//   2) 「把『主角左手有疤』记进人物卡」→ agent 调 foundation_write + 真写进设定卡（ledger/cards.json）+ 建快照。
 // 同时打印 agent.stream() 的流式事件结构，作为 SSE 路由设计依据（API 实测）。
 //
 // 需真实网络 + 真实 GLM key，默认 skip；手动跑：
 //   RUN_GLM_SMOKE=1 pnpm --filter @actalk/story-engine-ui exec vitest run agent-chat.smoke
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readCards } from "@actalk/story-core";
 
 import { createStoryProject } from "../../book/project-store.js";
 import type { ModelMessage } from "ai";
@@ -62,8 +63,8 @@ describe.skipIf(!ENABLED)("写作 agent server smoke（真实 GLM）", () => {
       rootDir,
       title: "Smoke Demo",
       genre: "通用",
-      premise: "一个用于冒烟测试的最小项目。",
-      mainCharacterName: "Lin Wan",
+      logline: "一个用于冒烟测试的最小项目。",
+      protagonistName: "Lin Wan",
     });
 
     const agent = await getStoryAgent();
@@ -88,18 +89,12 @@ describe.skipIf(!ENABLED)("写作 agent server smoke（真实 GLM）", () => {
     expect(r1.errors).toEqual([]);
     expect(r1.toolCalls).toContain("read_state_overview");
 
-    // ---- 找到主角的 targetId（agent 写入时会用到，先读出来便于断言）----
-    const bibleBefore = JSON.parse(
-      await readFile(join(projectDir, "story", "character-bible.json"), "utf-8"),
-    ) as { characters: { id: string; name: string }[] };
-    const protagonistId = bibleBefore.characters[0]?.id;
-    expect(protagonistId).toBeTruthy();
-
-    // ---- 第 2 轮：把「主角左手有疤」记进角色卡 → 期望调 foundation_write + 真写入 ----
+    // ---- 第 2 轮：把「主角左手有疤」记进人物卡 → 期望调 foundation_write + 真写入 ----
+    // 重构 P9：设定卡按名字认，对话里只说名字（不再有角色 id）。
     const messages2: ModelMessage[] = [
       {
         role: "user",
-        content: `把这条事实记进主角（角色 id 是 ${protagonistId}）的角色卡：他左手有一道明显的疤痕。`,
+        content: "把这条记进主角 Lin Wan 的人物卡：他左手有一道明显的疤痕。",
       },
     ];
     const stream2 = await agent.stream(messages2, { requestContext });
@@ -115,34 +110,23 @@ describe.skipIf(!ENABLED)("写作 agent server smoke（真实 GLM）", () => {
     expect(r2.errors).toEqual([]);
     expect(r2.toolCalls).toContain("foundation_write");
 
-    // foundation_write 的 output 含 snapshotId + refreshScope:"foundation"
+    // foundation_write 真改了：output 含 snapshotId + refreshScope:"foundation"
     const archiveOut = r2.toolResults.find((t) => t.toolName === "foundation_write")?.output as
-      | { snapshotId?: string; refreshScope?: string; applied?: boolean }
+      | { snapshotId?: string; refreshScope?: string; applied?: string[] }
       | undefined;
     expect(archiveOut?.refreshScope).toBe("foundation");
     expect(typeof archiveOut?.snapshotId).toBe("string");
 
-    // 引擎真写入：疤痕信息能在角色记录里读回（bible/profile/state 任一命中即算落盘，疤/左手 任一字命中）。
-    const bibleAfter = await readFile(join(projectDir, "story", "character-bible.json"), "utf-8");
-    const profileAfter = await readFile(
-      join(projectDir, "characters", protagonistId, "profile.json"),
-      "utf-8",
-    ).catch(() => "");
-    const stateAfter = await readFile(
-      join(projectDir, "characters", protagonistId, "state.json"),
-      "utf-8",
-    ).catch(() => "");
-    const merged = bibleAfter + profileAfter + stateAfter;
-    expect(merged).toMatch(/疤|左手/u);
-    // 落盘确实发生在角色册（appearanceAnchors）层面——而非只在 state 杂项字段——的更强断言：
-    // 至少 bible 或 profile 命中（证明走的是规范字段，而不是被丢进 extraFields 兜底）。
-    expect(bibleAfter + profileAfter).toMatch(/疤|左手/u);
+    // 真写进设定卡：主角卡上某一栏读得回疤痕（疤/左手 任一命中即算）。
+    const cards = await readCards(projectDir);
+    const protagonist = cards?.cards.find((card) => card.protagonist);
+    expect(protagonist?.name).toBe("Lin Wan");
+    expect(protagonist?.fields.map((field) => `${field.label}：${field.value}`).join("\n")).toMatch(/疤|左手/u);
 
-    // 快照已建：列表里能看到 agent:foundation_write。
+    // 快照已建：改设定前的存档点在操作历史里。
     const snapshots = await listSnapshots(projectDir);
     // eslint-disable-next-line no-console
     console.log("[smoke] snapshots =", snapshots.map((s) => s.label));
-    expect(snapshots.some((s) => s.label === "agent:foundation_write")).toBe(true);
     expect(snapshots.some((s) => s.id === archiveOut?.snapshotId)).toBe(true);
   }, 180_000);
 });

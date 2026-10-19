@@ -4,9 +4,49 @@
 // 绝不能把含 confirm_before_foundation_write 的能力清单原样注入——否则会被渲染成
 // 「资料写入前必须给用户确认」，和铁律①「写类操作不需要事前确认弹窗」自相矛盾，
 // 让模型有概率在 foundation_write 落盘前反向要求用户确认，破坏用户最在意的控制面。
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildInstructions } from "./story-agent.js";
+// 只看工具表，不连模型：Mastra Agent 构造期只存 model，给一个最小假 model 即可。
+vi.mock("./model.js", () => ({
+  resolveGlmModel: vi.fn(async () => ({
+    model: { specificationVersion: "v2", provider: "fake", modelId: "fake", doGenerate: async () => ({}), doStream: async () => ({}) },
+    profile: { model: "fake" },
+  })),
+}));
+
+import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
+
+describe("story agent 工具表（重构 P9：18 个，补资料并进 foundation_write）", () => {
+  it("18 个工具；没有 enrich_foundation 和老的补全/文风样本工具；指令里也不再提它们", async () => {
+    invalidateStoryAgent();
+    const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
+    invalidateStoryAgent();
+    expect(tools).toEqual([
+      "ai_review",
+      "brainstorm_chapter",
+      "check_ai_flavor",
+      "check_continuity",
+      "commit_preview",
+      "foundation_write",
+      "generate_draft",
+      "manage_ledger",
+      "manage_snapshots",
+      "quality_check",
+      "read_chapters_overview",
+      "read_draft",
+      "read_foundation",
+      "read_state_overview",
+      "read_timeline",
+      "revise_draft",
+      "suggest_next_steps",
+      "web_search",
+    ]);
+    const instructions = buildInstructions();
+    for (const gone of ["enrich_foundation", "generate_alias_table", "kind=aliases", "style_exemplar_add", "manage_style_exemplars"]) {
+      expect(instructions).not.toContain(gone);
+    }
+  });
+});
 
 describe("story agent instructions（确认口径唯一）", () => {
   const instructions = buildInstructions();
@@ -41,12 +81,6 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("不在撤销链");
   });
 
-  it("公开 generate_alias_table 工具作为后续在场检测的别名表入口", () => {
-    // 2026-10-10 瘦身：8 个补全工具合成 enrich_foundation，别名表是 kind=aliases
-    expect(instructions).toContain("kind=aliases");
-    expect(instructions).toContain("别名");
-  });
-
   it("入库转告纪律含『新出现人物只告知不替建卡』且不编造", () => {
     expect(instructions).toContain("不替用户建卡");
     expect(instructions).toContain("绝不编造『新出现了谁』");
@@ -56,7 +90,7 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("执行类请求必须工具先行");
     expect(instructions).toContain("写正文=generate_draft");
     expect(instructions).toContain("改稿=revise_draft");
-    expect(instructions).toContain("写资料=foundation_write");
+    expect(instructions).toContain("写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write");
     expect(instructions).toContain("定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮");
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
@@ -92,25 +126,25 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toMatch(/承诺|口头说.{0,6}补|只读不写/u);
   });
 
-  // R2#2：开书给具名角色登记关系应走 update_character_detail 的 relationshipToProtagonist，
-  // 别去调 generate_character_relationships（它只整理已入库章节、开书撞空且失败提示误导）。
-  it("关系登记纪律：开书登记关系走 update_character_detail，generate_character_relationships 仅整理已定稿章节", () => {
-    expect(instructions).toContain("enrich_foundation 的 relationships 只");
-    expect(instructions).toContain("已定稿章节");
+  // 重构 P9：关系记在两张人物卡之间（relation.set），不再走角色卡的关系字段、也没有关系矩阵视图了。
+  it("关系登记：relation.set 记在两张人物卡之间；账里有、没建卡的人，用户要建才建", () => {
+    expect(instructions).toContain("关系用 relation.set 记在两张人物卡之间");
+    expect(instructions).toContain("账里有、还没建卡的人，用户要建就 card.create");
+    expect(instructions).not.toContain("relationshipToProtagonist");
+    expect(instructions).not.toContain("关系矩阵");
   });
 
-  // #1-B：开书阶段关系矩阵/关系网视图（character-matrix.json）建不出来，绝不谎报「关系矩阵已写入」。
-  it("开书阶段关系矩阵别谎报：关系写进角色卡 + 如实说矩阵视图要等正文入库后", () => {
-    expect(instructions).toMatch(/关系矩阵.{0,40}(空|建不出|建不了|未|要等)|绝不声称.{0,12}关系矩阵/u);
-    expect(instructions).toContain("relationshipToProtagonist");
-    expect(instructions).toMatch(/谎报|铁律④|绝不声称/u);
+  // rerun2：多项写入要逐项按真实回执汇报，不许编汇总。
+  it("多项写入逐项按真实结果汇报：只报回执里改好了的，没改成的如实转告", () => {
+    expect(instructions).toContain("多项写入逐项按真实结果汇报");
+    expect(instructions).toContain("只报工具回执里「改好了」列出的；「没改成」的如实转告");
+    expect(instructions).toContain("宁可少报");
+    expect(instructions).not.toContain("assets.json");
   });
 
-  // rerun2：多项写入（尤其多资产）要逐项按真实 writes 汇报，资产只算写进 assets.json 的，不许编汇总。
-  it("多项写入逐项按真实结果汇报：资产只算写进账本、没写成如实列、不塞没出现的项", () => {
-    expect(instructions).toMatch(/逐项|多项写入/u);
-    expect(instructions).toContain("assets.json");
-    expect(instructions).toMatch(/没写成|没单独建成资产|宁可少报/u);
+  it("AI 补的可以直接改；作者写的、改名、删卡、换主角只出「确认改设定」按钮", () => {
+    expect(instructions).toContain("卡上标着「AI 补的」你可以直接改");
+    expect(instructions).toContain("作者写的、改名、删卡、换主角，工具会给作者出「确认改设定」按钮");
   });
 
   it("删角色 / 覆盖已确立设定 / 整章重写：作者档，只告诉作者点哪个按钮、不重试（重构 P4）", () => {
@@ -142,17 +176,14 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
     expect(guidance).toContain("brainstorm_chapter");
   });
 
-  // #1 真机瑕疵：用户说真主角名时，agent 用 create_character 新增了第二个角色，
-  // 于是左栏出现「主角、林晚」两个。修法是引导改名占位主角（rename_character、保 id），
-  // 而非 create_character 新增。
-  it("开书引导指明用户首次说真主角名时改名占位主角（rename_character、保 id），而非 create_character 新增", () => {
+  // 重构 P9：新书不再自带占位主角，主角是作者说了才建的一张标了主角的人物卡。
+  it("开书引导：主角用 card.create 带 protagonist:true 建；不再提占位主角 / 改名占位", () => {
     const guidanceStart = instructions.indexOf("开书引导");
     const guidance = instructions.slice(guidanceStart);
-    expect(guidance).toContain("rename_character");
-    expect(guidance).toMatch(/改名|重命名/);
-    expect(guidance).toMatch(/占位主角|默认主角/);
-    // 明确警示不要用 create_character 新增主角（否则出现两个角色）。
-    expect(guidance).toContain("create_character");
+    expect(guidance).toContain("主角 card.create 带 protagonist:true");
+    expect(guidance).toContain("故事设定 story.set");
+    expect(instructions).not.toContain("rename_character");
+    expect(instructions).not.toContain("占位主角");
   });
 
   // #3 真机瑕疵：给第一章方向前 agent 又把已建资料逐条复述/整理一遍，啰嗦。
@@ -164,26 +195,30 @@ describe("buildInstructions 开书引导（仅空书时主动轻引导）", () =
   });
 });
 
-describe("buildInstructions 资料写入资产化（补资料第一轮不能只落骨架）", () => {
+describe("buildInstructions 写设定（第一轮就把已给的写进卡，不编）", () => {
   const instructions = buildInstructions();
 
-  it("要求把用户已给基础信息一笔整理成可写正文的结构化资料，而不是先存薄骨架", () => {
-    expect(instructions).toContain("资料资产化");
-    expect(instructions).toContain("一笔写成可写正文的结构化资料");
-    expect(instructions).toContain("不要先落骨架再等下一轮");
-    expect(instructions).not.toContain("先 foundation_write 落骨架");
+  it("设定本只记稳定的、作者定的；会变的记在账里，不往卡上写", () => {
+    expect(instructions).toContain("设定本只记稳定的、作者定的东西");
+    expect(instructions).toContain("会变的（此刻在哪、东西在谁手里、伤好没好）记在账里");
+    expect(instructions).toContain("不往卡上写");
   });
 
-  it("禁止为了做厚凭空补具体事实，没给的信息要留空或放进未知/不可透露边界", () => {
-    expect(instructions).toContain("不得凭空补具体事实");
-    expect(instructions).toContain("不知道就留空");
-    expect(instructions).toMatch(/knowledgeUnknown|cannotReveal/);
+  it("用户已给的信息第一轮一笔写进卡（card.create 带 fields），不先建空卡", () => {
+    expect(instructions).toContain("第一轮就把用户已给的信息一笔写进卡（card.create 带 fields）");
+    expect(instructions).toContain("不要先建空卡再等下一轮");
+    expect(instructions).toContain("一次点名多个就全部写、一个都不能漏");
   });
 
-  it("普通新增资料不再先弹方向卡；只有开放式大范围做厚才需要先给方向选项", () => {
+  it("不得凭空补具体事实；补全某张卡先读、只补空着的栏，要和正文、账对得上", () => {
+    expect(instructions).toContain("不得凭空补具体事实，不知道就不写");
+    expect(instructions).toContain("先 read_foundation 读它和账里记的，只补空着的栏");
+    expect(instructions).not.toMatch(/knowledgeUnknown|cannotReveal/u);
+  });
+
+  it("单一动作直接做，不套选项卡；只有开放式大活先给方向选项", () => {
+    expect(instructions).toContain("一个意思没得选的单一动作直接做，不套选项卡");
     expect(instructions).not.toContain("紧接着【不要停在骨架】调 suggest_next_steps");
-    expect(instructions).not.toContain("补资料（纪律 2.6）");
-    expect(instructions).toContain("普通新增/补充资料不是方向分叉任务");
   });
 });
 

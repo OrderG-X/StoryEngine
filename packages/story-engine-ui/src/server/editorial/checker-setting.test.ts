@@ -1,9 +1,10 @@
 // @vitest-environment node
-// R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则的硬设定拼一份「设定」进核账窗口；
+// R7.3 设定本进核账（P9 起读设定卡）：故事设定 / 人物 / 地点 / 物品 / 其他设定拼一份「设定」进核账窗口；
 // 模型引的设定原文照样经代码核对（settingQuoteLabel / parseSettingIssues），抄不出的不收；
 // 当前章和设定一致、前文某章和设定不一致时，问题指向前文那章（fixChapter），别让作者把对的改成错的。
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
@@ -25,36 +26,32 @@ const CH3 = "陆川想了想，说沈师傅走了也有五年了。";
 const BODY = "沈青禾上了钟楼。陆川说她爷爷走了五年。";
 const CARD_LINE = "爷爷沈敬山：三年前过世，生前是青石镇守钟楼的人";
 
+async function writeCards(dir: string, ops: CardOp[], key = "setting"): Promise<void> {
+  const outcome = await runCommand(dir, cardWrite, { ops }, { caller: "author", idempotencyKey: key });
+  if (!outcome.ok) throw new Error(outcome.message);
+}
+
+/** 设定卡（P9 起设定只在 ledger/cards.json）：栏名作者自己起，代码不认字段意思。 */
 async function makeSettingBook(): Promise<string> {
   const dir = await makeHomeTempDir("checker-setting-");
   await mkdir(join(dir, "chapters"), { recursive: true });
   await writeFile(join(dir, "chapters", "0001.md"), `# 第1章\n\n${CH1}\n`, "utf-8");
   await writeFile(join(dir, "chapters", "0003.md"), `# 第3章\n\n${CH3}\n`, "utf-8");
-  await mkdir(join(dir, "story"), { recursive: true });
-  await writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
-    version: "v0",
-    characters: [{
-      id: "char-a1", name: "沈青禾", role: "主角", age: "28",
-      relationshipDynamics: [CARD_LINE, "老周：爷爷的老友"],
-      knowledgeKnown: ["爷爷三年前过世"],
-      knowledgeUnknown: ["二十年前钟为什么停"],
-    }],
-  }), "utf-8");
-  await writeFile(join(dir, "story", "world-bible.json"), JSON.stringify({
-    version: "v0",
-    rules: ["写实题材，没有超自然元素"], factions: [],
-  }), "utf-8");
-  await writeFile(join(dir, "story", "location-bible.json"), JSON.stringify({
-    version: "v0",
-    locations: [{
-      id: "loc-1", name: "青石镇钟楼", type: "钟楼", knownFeatures: ["塔钟停在三点十五分"],
-      extraFields: { 钥匙: "钟楼钥匙装在铜盒里，由老周保管" },
-    }],
-  }), "utf-8");
-  await writeFile(join(dir, "story", "assets.json"), JSON.stringify({
-    version: "v0",
-    assets: [{ id: "asset-1", name: "钟楼钥匙（装在铜盒里）", status: "由老周保管", ownerName: "老周", currentLocationName: "钟楼", usageRules: ["只能开钟箱"] }], containers: [],
-  }), "utf-8");
+  await writeCards(dir, [
+    { op: "story.set", label: "世界规矩", value: "写实题材，没有超自然元素" },
+    {
+      op: "card.create", kind: "character", name: "沈青禾", protagonist: true,
+      fields: [{ label: "年龄", value: "28" }, { label: "爷爷沈敬山", value: "三年前过世，生前是青石镇守钟楼的人" }, { label: "已经知道", value: "爷爷三年前过世" }],
+    },
+    { op: "card.create", kind: "character", name: "周守义", aliases: ["老周"] },
+    { op: "relation.set", a: "沈青禾", b: "周守义", label: "爷爷的老友" },
+    {
+      op: "card.create", kind: "place", name: "青石镇钟楼",
+      fields: [{ label: "样子", value: "塔钟停在三点十五分" }, { label: "钥匙", value: "钟楼钥匙装在铜盒里，由老周保管" }],
+    },
+    { op: "card.create", kind: "item", name: "钟楼钥匙（装在铜盒里）", fields: [{ label: "规矩", value: "只能开钟箱" }] },
+    { op: "card.create", kind: "lore", name: "守钟人", fields: [{ label: "规矩", value: "守钟人每天正午上一次弦" }] },
+  ]);
   return dir;
 }
 
@@ -65,30 +62,38 @@ const earlier = (): EarlierText => ({
   ],
 });
 
-describe("readFoundationDigest：按项目真实资料拼设定（题材中立，不预设字段名）", () => {
+describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名照作者起的）", () => {
   let dir = "";
   beforeEach(async () => {
     dir = await makeSettingBook();
   });
 
-  it("人物卡 / 地点 / 资产 / 世界规则四节都在，字段按真实键拼、自定义字段照样进、id 不进", async () => {
+  it("故事设定 / 人物卡 / 地点 / 物品 / 其他设定五节，「栏名：内容」原样拼、主角和别名标上、关系接在后面、编号不进", async () => {
     const digest = await readFoundationDigest(dir);
     expect(digest).toBeDefined();
-    expect(digest!.sections.map((section) => section.label)).toEqual(["人物卡", "地点", "资产", "世界规则"]);
-    const card = digest!.sections[0]!.text;
-    expect(card).toContain("沈青禾");
-    expect(card).toContain(CARD_LINE);
-    expect(card).toContain("已经知道：爷爷三年前过世");
-    expect(digest!.sections[1]!.text).toContain("钥匙：钟楼钥匙装在铜盒里，由老周保管");
-    expect(digest!.sections[2]!.text).toContain("钟楼钥匙（装在铜盒里）");
-    // 会变的现状（现状、在谁手里、现在在哪）不进摘要：卡片上的早就过时了，核账员拿去比会误报；不变的规矩照进。
-    expect(digest!.sections[2]!.text).toContain("使用规矩：只能开钟箱");
-    expect(digest!.sections[2]!.text).not.toContain("由老周保管");
-    expect(digest!.sections[2]!.text).not.toContain("在谁手里");
-    expect(digest!.sections[2]!.text).not.toContain("现在在哪");
-    expect(digest!.sections[3]!.text).toContain("写实题材");
-    expect(digest!.text).not.toContain("char-a1");
-    expect(digest!.text).not.toContain("loc-1");
+    expect(digest!.sections.map((section) => section.label)).toEqual(["故事设定", "人物卡", "地点", "物品", "其他设定"]);
+    expect(digest!.sections[0]!.text).toContain("世界规矩：写实题材，没有超自然元素");
+    const people = digest!.sections[1]!.text;
+    expect(people).toContain("沈青禾（主角）——年龄：28；");
+    expect(people).toContain(CARD_LINE);
+    expect(people).toContain("已经知道：爷爷三年前过世");
+    expect(people).toContain("和周守义：爷爷的老友");
+    expect(people).toContain("周守义（也叫：老周）——和沈青禾：爷爷的老友");
+    expect(digest!.sections[2]!.text).toContain("钥匙：钟楼钥匙装在铜盒里，由老周保管");
+    expect(digest!.sections[3]!.text).toContain("钟楼钥匙（装在铜盒里）——规矩：只能开钟箱");
+    expect(digest!.sections[4]!.text).toContain("守钟人——规矩：守钟人每天正午上一次弦");
+    expect(digest!.truncated).toBe(false);
+    expect(digest!.text).not.toMatch(/[kr]-\d/u);
+  });
+
+  it("AI 补的那栏标「AI 补的」：和正文对不上时以正文为准", async () => {
+    const outcome = await runCommand(dir, cardFill, {
+      ops: [{ op: "field.set", card: "周守义", label: "年纪", value: "六十出头" }],
+    }, { caller: "ai" });
+    expect(outcome.ok).toBe(true);
+    const digest = await readFoundationDigest(dir);
+    expect(digest!.sections[1]!.text).toContain("年纪：六十出头（AI 补的）");
+    expect(foundationMessage(digest!)).toContain("标着「AI 补的」是 AI 补、作者还没认下的：和正文对不上时以正文为准");
   });
 
   it("哪类资料都没有 → undefined（不带设定节，提示里也不提）", async () => {
@@ -102,7 +107,9 @@ describe("readFoundationDigest：按项目真实资料拼设定（题材中立�
     const digest = await readFoundationDigest(dir);
     expect(settingQuoteLabel(digest!, CARD_LINE)).toBe("人物卡");
     expect(settingQuoteLabel(digest!, "塔钟停在三点十五分")).toBe("地点");
-    expect(settingQuoteLabel(digest!, "写实题材，没有超自然元素")).toBe("世界规则");
+    expect(settingQuoteLabel(digest!, "写实题材，没有超自然元素")).toBe("故事设定");
+    expect(settingQuoteLabel(digest!, "只能开钟箱")).toBe("物品");
+    expect(settingQuoteLabel(digest!, "守钟人每天正午上一次弦")).toBe("其他设定");
     expect(settingQuoteLabel(digest!, "设定本里根本没有的一句话")).toBeUndefined();
   });
 
@@ -116,7 +123,8 @@ describe("readFoundationDigest：按项目真实资料拼设定（题材中立�
   it("foundationMessage：整段话带小标题，核账窗口里能认出来", async () => {
     const digest = await readFoundationDigest(dir);
     const text = foundationMessage(digest!);
-    expect(text).toContain("【设定本（作者定的硬设定：人物卡、地点、资产、世界规则）】");
+    expect(text).toContain("【设定本（作者定的硬设定：故事设定、人物、地点、物品、其他设定）】");
+    expect(text).toContain("东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准");
     expect(text).toContain("【人物卡】");
   });
 });

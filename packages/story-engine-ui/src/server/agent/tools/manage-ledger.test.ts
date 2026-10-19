@@ -2,7 +2,7 @@
 //
 // manage_ledger（重构 P3 起）：只提裁定草案、不改账；指向哪条按编号或原话查准，查不准如实说。
 import { rm } from "node:fs/promises";
-import { chapterCommit, projectBook, runCommand, type EntryInput } from "@actalk/story-core";
+import { cardsImport, chapterCommit, projectBook, runCommand, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyLedgerDecisions } from "../ledger-decisions.js";
@@ -40,6 +40,9 @@ async function commitTwo(): Promise<void> {
     entries: [{ kind: "fact", review: "auto", nature: "state", subject: "铜钥匙", attribute: "在哪", value: "铜盒里", text: "铜钥匙锁在铜盒里", quote: "她把钥匙锁进铜盒" }],
   }, author("c2"));
   if (!second.ok) throw new Error(second.message);
+  // 开过的书都有设定卡（开书时搬过）：不然第一次提草案时顺手搬设定，书的版本号会往上走（P9）。
+  const cards = await runCommand(book, cardsImport, {}, author("cards"));
+  if (!cards.ok) throw new Error(cards.message);
 }
 
 describe("manage_ledger：只提草案", () => {

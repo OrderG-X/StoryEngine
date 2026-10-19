@@ -1,10 +1,11 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildStateOverview } from "../book/state-overview.js";
+import type { StateOverview } from "../book/state-overview.js";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir, testRunRoot } from "../lib/home-test-tmp.js";
 import { assertStoryEngineProject } from "../lib/project-io.js";
@@ -51,28 +52,93 @@ describe("selectRecentDefaultBooks / resolveBookLastActiveMs", () => {
     expect(resolveBookLastActiveMs(undefined, Number.NaN, 0, 7_000)).toBe(7_000);
   });
 });
-describe("books route empty-create seeds no arc-goal (V4 护栏)", () => {
-  it("空建(仅 title)走 createStoryProject 后 overview.arcGoals.activeCount 为 0——不再种 arc-goal 种子", async () => {
-    // handleCreateProject 简化后只剩 createStoryProject 空建，不再 persistCreatedBookDraft。
-    // 复刻简化后逻辑：解析默认 premise → createStoryProject。
+describe("books route 建书（重构 P9：作者填了什么写什么，不落占位）", () => {
+  const ORIGINAL_BOOKS_DIR = process.env.SE_BOOKS_DIR;
+
+  afterEach(async () => {
+    if (ORIGINAL_BOOKS_DIR === undefined) delete process.env.SE_BOOKS_DIR;
+    else process.env.SE_BOOKS_DIR = ORIGINAL_BOOKS_DIR;
+    await Promise.all([...generatedCreateRouteRootDirs].map((dir) => rm(dir, { recursive: true, force: true })));
+    generatedCreateRouteRootDirs.clear();
+  });
+
+  it("只给书名：不落「长篇故事」「主角」占位、不种主线目标，设定卡是空的，也不建老格式目录", async () => {
     const rootDir = await makeHomeTempDir("story-engine-empty-create-");
-    generatedDeleteRouteProjectDirs.add(rootDir);
+    generatedCreateRouteRootDirs.add(rootDir);
 
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "空建护栏书",
-      genre: "长篇故事",
-      premise: "主角进入一个等待展开的故事世界。",
-      mainCharacterName: "主角",
-    });
+    const response = await callBooksRoute("/api/projects/create", { rootDir, draft: { title: "空建护栏书" } });
 
-    // 引擎建出的项目结构合法。
+    expect(response.statusCode).toBe(200);
+    const projectDir = String(response.payload.projectDir);
     await expect(assertStoryEngineProject(projectDir)).resolves.toMatchObject({ title: "空建护栏书" });
-
-    // overview 能正常构建，且没有任何 active arc-goal 种子（这正是 V4 踩的坑：persistCreatedBookDraft 会种 1 个 active 的主线目标）。
-    const overview = await buildStateOverview({ projectDir, maxTimelineEvents: 8 });
+    const overview = response.payload.overview as StateOverview;
+    expect(overview.project).toMatchObject({ title: "空建护栏书", genre: "", logline: "" });
+    expect(overview.characters).toEqual({ knownCharacters: [] });
+    // V4 护栏：建书不种 active 的主线目标。
     expect(overview.arcGoals.activeCount).toBe(0);
     expect(overview.arcGoals.activeItems).toEqual([]);
+
+    const cards = JSON.parse(await readFile(join(projectDir, "ledger", "cards.json"), "utf-8")) as Record<string, unknown>;
+    expect(cards).toMatchObject({ story: { fields: [] }, cards: [], relations: [] });
+    expect(JSON.stringify(cards)).not.toMatch(/长篇故事|主角|等待展开/u);
+    for (const legacy of ["story", "world", "characters", "timeline"]) {
+      await expect(stat(join(projectDir, legacy))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("填了题材、一句话、主角名：写进设定卡，开书概况立刻能读到", async () => {
+    const rootDir = await makeHomeTempDir("story-engine-full-create-");
+    generatedCreateRouteRootDirs.add(rootDir);
+
+    const response = await callBooksRoute("/api/projects/create", {
+      rootDir,
+      draft: { title: "填全的书", genre: "悬疑", worldPremise: "雾港的信一封封寄回来。", protagonistName: "沈青禾" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const overview = response.payload.overview as StateOverview;
+    // logline 没填时用 worldPremise（老界面的字段）。
+    expect(overview.project).toMatchObject({ genre: "悬疑", logline: "雾港的信一封封寄回来。" });
+    expect(overview.characters.protagonist).toBe("沈青禾");
+    expect(overview.characters.knownCharacters).toEqual([{ name: "沈青禾", carded: true, protagonist: true }]);
+  });
+
+  it("主角名字太长：400 如实说多长能放，不建书", async () => {
+    const rootDir = await makeHomeTempDir("story-engine-long-name-");
+    generatedCreateRouteRootDirs.add(rootDir);
+
+    const response = await callBooksRoute("/api/projects/create", {
+      rootDir,
+      draft: { title: "名字太长", protagonistName: "长".repeat(41) },
+    });
+
+    expect(response).toMatchObject({ statusCode: 400, payload: { ok: false, error: "没建书：主角名字最多 40 个字。" } });
+    expect(await readdir(rootDir)).toEqual([]);
+  });
+
+  it("书架：没标主角就是空串（不编「主角」），题材、简介没填也是空串；填了的照设定卡显示", async () => {
+    const booksRoot = await makeHomeTempDir("story-engine-shelf-");
+    generatedCreateRouteRootDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+    const bare = await createStoryProject({ rootDir: booksRoot, title: "书架空书" });
+    const full = await createStoryProject({ rootDir: booksRoot, title: "书架全书", genre: "都市", logline: "林远接手老房子。", protagonistName: "林远" });
+
+    const response = await callBooksGetRoute("/api/books/list-default");
+
+    expect(response.statusCode).toBe(200);
+    const books = response.payload.books as Array<Record<string, unknown>>;
+    expect(books.find((book) => book.projectPath === bare.projectDir)).toMatchObject({
+      title: "书架空书",
+      protagonistName: "",
+      genre: "",
+      logline: "",
+    });
+    expect(books.find((book) => book.projectPath === full.projectDir)).toMatchObject({
+      title: "书架全书",
+      protagonistName: "林远",
+      genre: "都市",
+      logline: "林远接手老房子。",
+    });
   });
 });
 
@@ -226,7 +292,7 @@ describe("books route destructive confirmation", () => {
 
     // 删除前确认这就是一本仅有标题、尚无正文/章节内容的空书。
     await expect(readFile(join(projectDir, "project.json"), "utf-8")).resolves.toContain("空建的新书");
-    await expect(readFile(join(projectDir, "story", "core.json"), "utf-8")).resolves.toBeTruthy();
+    await expect(readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).resolves.toBeTruthy();
 
     const response = await callBooksRoute("/api/books/delete", {
       projectPath: projectDir,
@@ -275,13 +341,7 @@ async function createEmptyEngineBook(title: string): Promise<{ readonly projectD
   const rootDir = await makeHomeTempDir("story-engine-empty-book-");
   generatedDeleteRouteProjectDirs.add(rootDir);
   // 用引擎真实建书：仅给标题，其余字段留空——模拟"只问书名进台、还没搭任何内容"的空建书。
-  const { projectDir } = await createStoryProject({
-    rootDir,
-    title,
-    genre: "",
-    premise: "",
-    mainCharacterName: "",
-  });
+  const { projectDir } = await createStoryProject({ rootDir, title });
   return { projectDir, title };
 }
 

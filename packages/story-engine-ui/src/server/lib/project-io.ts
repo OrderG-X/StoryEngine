@@ -2,7 +2,7 @@
  * Shared I/O, parsing, path safety, and utility functions used across route modules.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
@@ -470,92 +470,6 @@ export function readDraftQualityReport(value: Record<string, unknown>): { readon
 }
 
 // ---------------------------------------------------------------------------
-// Foundation gap parsers
-// ---------------------------------------------------------------------------
-
-/**
- * 已知实体名→id 映射表，供解析器把模型未带 targetId 的更新类建议回填到真实卡片。
- * 来源是 StateOverview（characterMatrix / assetSummary / locationDetailSummary），
- * 它是「本书全部已落盘实体」的权威清单——比 report.byCategory（只含有缺口的实体）完整。
- */
-export interface FoundationKnownEntities {
-  readonly characters: readonly { readonly id: string; readonly name: string }[];
-  readonly locations: readonly { readonly id: string; readonly name: string }[];
-  readonly assets: readonly { readonly id: string; readonly name: string }[];
-}
-
-/**
- * 按名字在已知实体清单里查 id：先精确匹配（去空白），再尝试单侧包含，查不到返回 undefined。
- * 修4（关系诚实性）：精确匹配或包含兜底若命中多于一个候选（同名歧义），返回 undefined——
- * 让其诚实 skip + 引导用户点名，而非赌第一个静默写到错卡。单一命中才回填。
- */
-function resolveKnownEntityIdByName(
-  entities: readonly { readonly id: string; readonly name: string }[] | undefined,
-  rawName: string | undefined,
-): string | undefined {
-  const name = rawName?.replace(/\s+/gu, "").trim();
-  if (!name || !entities || entities.length === 0) return undefined;
-  const exact = entities.filter((entity) => entity.name.replace(/\s+/gu, "").trim() === name);
-  if (exact.length === 1) return exact[0].id;
-  if (exact.length > 1) return undefined;
-  // 单侧包含兜底（如模型把「林晚」写成「林晚（雷宗）」），要求被包含名足够长以避免误匹配。
-  if (name.length >= 2) {
-    const contained = entities.filter((entity) => {
-      const entityName = entity.name.replace(/\s+/gu, "").trim();
-      return entityName.length >= 2 && (entityName.includes(name) || name.includes(entityName));
-    });
-    if (contained.length === 1) return contained[0].id;
-  }
-  return undefined;
-}
-
-const GENERIC_ENTITY_TARGET_IDS = new Set([
-  "角色", "主角", "主人公", "男主", "女主", "配角", "该角色", "这个角色", "当前角色", "现有角色",
-  "character", "protagonist", "main character", "main-character", "main_character", "maincharacter",
-]);
-
-function isGenericFoundationEntityTargetId(value: string | undefined): boolean {
-  if (!value) return false;
-  return GENERIC_ENTITY_TARGET_IDS.has(value.trim().toLowerCase());
-}
-
-/**
- * 解析「更新类」foundation 写入的目标实体 id（foundation_write 工具用）。
- * 顺序：① 模型显式 targetId；② 按 targetName 在已知实体里查（精确 / 单侧包含）；
- * ③ 兜底——该类实体全书只有一个时，落到这唯一实体。
- *
- * 为什么要 ③：早期补主角人设时，模型常给 update_character_detail 但漏带 targetId/名字，引擎只能诚实跳过、
- * 显示「没能在角色资料里找到对应角色」——同一轮里好几条这样的失败很吓人（真机实测踩过）。书里只有
- * 一个角色时落到它零歧义、且写入自带快照可一键撤销，比一堆红色失败友好得多。多于一个实体时不兜底（返回
- * undefined → 引擎诚实跳过），绝不赌着写到错卡。仅对三类更新生效；create/delete/关系类不兜底（避免把新建/
- * 删除误投到唯一实体）。
- */
-export function resolveFoundationUpdateTargetId(input: {
-  readonly actionType: string;
-  readonly targetId?: string;
-  readonly targetName?: string;
-  readonly knownEntities: FoundationKnownEntities | undefined;
-}): string | undefined {
-  let pool: readonly { readonly id: string; readonly name: string }[] | undefined;
-  if (input.actionType === "update_character_detail") pool = input.knownEntities?.characters;
-  else if (input.actionType === "update_location_detail") pool = input.knownEntities?.locations;
-  else if (input.actionType === "update_asset_status") pool = input.knownEntities?.assets;
-  else return undefined;
-
-  const explicit = input.targetId?.trim();
-  if (explicit && !isGenericFoundationEntityTargetId(explicit)) return explicit;
-
-  const byName = resolveKnownEntityIdByName(pool, input.targetName);
-  if (byName) return byName;
-  // 兜底仅在「完全没给名字」时生效：模型给了名字却不匹配，多半是指另一个/新实体，
-  // 诚实跳过、绝不投到唯一实体（否则会把别人的设定写到主角身上）。
-  const hasName = Boolean(input.targetName?.trim());
-  if (!hasName && pool && pool.length === 1) return pool[0].id;
-  return undefined;
-}
-
-
-// ---------------------------------------------------------------------------
 // File I/O
 // ---------------------------------------------------------------------------
 
@@ -713,12 +627,6 @@ export async function assertStoryEngineProject(projectDir: string): Promise<{ re
     throw new Error("不是有效的 StoryEngine 项目：缺少 project.json。");
   }
 
-  for (const dir of ["story", "timeline", "world", "characters"]) {
-    const dirInfo = await stat(join(resolved, dir)).catch(() => null);
-    if (!dirInfo?.isDirectory()) {
-      throw new Error(`不是有效的 StoryEngine 项目：缺少 ${dir} 目录。`);
-    }
-  }
 
   return { title: project.title.trim() };
 }
@@ -727,32 +635,7 @@ export async function assertStoryEngineProject(projectDir: string): Promise<{ re
 // String utilities
 // ---------------------------------------------------------------------------
 
-export function mergeStringLists(...values: readonly unknown[]): string[] {
-  const next: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const items = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
-    for (const item of items) {
-      if (typeof item !== "string") continue;
-      const normalized = item.trim();
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      next.push(normalized);
-    }
-  }
-  return next;
-}
 
-export function toSafeLocalId(value: string, fallback: string): string {
-  const safe = value
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/['']/gu, "")
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .replace(/-{2,}/gu, "-");
-  return safe || `${fallback}-${createHash("sha256").update(value).digest("hex").slice(0, 6)}`;
-}
 
 export function splitChineseList(value: string): string[] {
   return value
@@ -771,11 +654,6 @@ export function extractJsonObject(raw: string): string | null {
   return raw.slice(start, end + 1).trim();
 }
 
-export function compactRecord<T extends Record<string, unknown>>(record: T): Partial<T> {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => (
-    value !== undefined && (!Array.isArray(value) || value.length > 0)
-  ))) as Partial<T>;
-}
 
 // ---------------------------------------------------------------------------
 // Draft / chapter path helpers

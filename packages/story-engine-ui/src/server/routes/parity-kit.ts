@@ -25,8 +25,8 @@
  * 注（2026-09-11 第四轮复审 P2-4）：根因已除后，脚手架撞 ENOENT/EPERM 更可能是真 bug
  * （半建半删目录、权限问题），换目录重试侥幸过=洗绿——瞬时重试层已删，脚手架失败立即抛红。
  */
-import { access, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { createStoryProject } from "../book/project-store.js";
 import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
@@ -51,8 +51,8 @@ export async function makeParityProject(prefix: string, title = "对拍书"): Pr
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: PARITY_MAIN_CHARACTER,
+    logline: "主角进入权力中心。",
+    protagonistName: PARITY_MAIN_CHARACTER,
   });
   // 建好自证：projectDir 落在本次全新目录内、project.json 真可读——「脚手架建成」
   // 凭落盘事实，不凭 createStoryProject 没抛错。
@@ -137,6 +137,8 @@ export function countParityCjk(text: string): number {
 
 export async function writeParityDraft(projectDir: string, chapter: number, content: string): Promise<string> {
   const path = defaultDraftPath(projectDir, chapter);
+  // 新书不再预建 drafts/（createStoryProject 只建 chapters/ 和设定卡），写稿前自己建目录。
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf-8");
   return path;
 }

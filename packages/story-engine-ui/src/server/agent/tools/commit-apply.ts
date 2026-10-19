@@ -8,25 +8,26 @@
  * 定稿前由 writeTool 存撤销点。确认时不再调模型——要记的账在预览时就交齐了。
  */
 import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
-import { nameKey, project, readBookSnapshot, readChapterLedger } from "@actalk/story-core";
+import { nameKey, project, readBookSnapshot, readCardsOrLegacy, readChapterLedger } from "@actalk/story-core";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
 import { warmUpReaders } from "../../editorial/index.js";
 import { confirmChapterCommit, draftFingerprint } from "../../editorial/commit-flow.js";
-import { readCharacterIds, markdownTitle, syncLegacyMirror } from "../../book/mirror/sync.js";
+import { markdownTitle, syncLegacyMirror } from "../../book/mirror/sync.js";
 import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
 import { latestTicketFor, OPT_IN_PREFIX, ticketStoreFor } from "./commit-preview.js";
 import { coerceNumber } from "../../lib/lenient-args.js";
-import { appendRecurringUncardedToSummary, updateUncardedCharacterMemo } from "./uncarded-character-memo.js";
 
 /** 开着的线索堆到这个数，定稿后的下一步选项里摆「归并线索」（只给选项，真归并要作者点「确认改账」）。 */
 export const THREAD_STALE_ESCALATION_THRESHOLD = 30;
 /** 开着的线索到这个数，回执里提一句。 */
 export const OPEN_THREADS_HINT_THRESHOLD = 20;
+/** 没建卡的人出场满这么多章（这章正好满），回执里点一次名。 */
+export const RECURRING_UNCARDED_THRESHOLD = 3;
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要定稿的章号。")),
@@ -146,9 +147,13 @@ export async function applyCommitToolLogic(input: {
   const count = (predicate: (entry: (typeof entries)[number]) => boolean): number => entries.filter(predicate).length;
   const after = project(await readBookSnapshot(projectDir));
   const view = after.chapters.find((item) => item.chapter === chapter);
-  const known = new Set((await readCharacterIds(projectDir)).ids.keys());
-  const newCharacters = after.cast
-    .filter((member) => member.chapters[0] === chapter && !known.has(member.key) && !member.aliases.some((alias) => known.has(nameKey(alias))))
+  const cards = await readCardsOrLegacy(projectDir);
+  const known = new Set(cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]).map(nameKey));
+  const uncarded = after.cast.filter((member) => member.chapters.includes(chapter) && !known.has(member.key) && !member.aliases.some((alias) => known.has(nameKey(alias))));
+  const newCharacters = uncarded.filter((member) => member.chapters[0] === chapter).map((member) => member.name);
+  // 没建卡、这章正好第 N 次出场的：点一次名（账里算，不另记备忘；建了卡自然不再提）。
+  const recurring = uncarded
+    .filter((member) => member.chapters.filter((item) => item <= chapter).length === RECURRING_UNCARDED_THRESHOLD)
     .map((member) => member.name);
   const report: CommitLedgerReport = {
     chapter,
@@ -176,13 +181,10 @@ export async function applyCommitToolLogic(input: {
       ? [`换账后有 ${outcome.result.orphanedThreads.length} 条线索后文还在推进、这章却不再开它：${outcome.result.orphanedThreads.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`]
       : []),
     ...(mirror.ok ? [] : ["（老格式资料没同步上，下次打开书会补；账本身已经记好。）"]),
-    ...(newCharacters.length > 0 ? [`这章还出现了新人物：${newCharacters.join("、")}——要给谁正式建卡就说一声。`] : []),
+    ...(newCharacters.length > 0 ? [`这章还出现了新人物：${newCharacters.join("、")}——要给谁建卡，在设定本「还没建卡」里点一下就行。`] : []),
+    ...(recurring.length > 0 ? [`${recurring.map((name) => `「${name}」`).join("、")}已经出场 ${RECURRING_UNCARDED_THRESHOLD} 章了，还没有人物卡。`] : []),
     ...(openThreads >= OPEN_THREADS_HINT_THRESHOLD ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),
   ];
-  const recurring = await updateUncardedCharacterMemo(projectDir, chapter, newCharacters).catch((error) => {
-    console.warn("[commit_apply] 未建卡角色备忘更新失败（不影响定稿）", error);
-    return [] as readonly string[];
-  });
   const overview: StateOverview | undefined = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }).catch(() => undefined);
   const title = markdownTitle(text);
   return {
@@ -193,7 +195,7 @@ export async function applyCommitToolLogic(input: {
     draftBody: stripLeadingMarkdownChapterHeading(text).trim(),
     ...(title ? { draftTitle: title } : {}),
     overview,
-    summary: appendRecurringUncardedToSummary(parts.join(" "), recurring),
+    summary: parts.join(" "),
     refreshScope: "full",
     chapter,
     ...(openThreads >= THREAD_STALE_ESCALATION_THRESHOLD ? { threadMaintenanceHint: "escalated" as const } : {}),

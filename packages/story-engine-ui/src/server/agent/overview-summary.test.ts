@@ -1,16 +1,21 @@
 // @vitest-environment node
 //
-// 里程碑4（聊天摘要露出）：让 agent 回答「现在啥状态」时也能说出**角色关系**和**势力目标**，
-// 而不是只列名字。关系来自 StateOverview.characterMatrix（现成）；势力目标 StateOverview 只带名字、
-// 丢了 goal，需调用处读 story/world-bible.json 补（readFactionGoals）后作为 extras 传入。
-import { mkdtemp, writeFile } from "node:fs/promises";
+// summarizeStateOverview（重构 P9）：概况摘要只说进度、人物名单、设定本几张卡、账的计数和最近时间线；
+// 设定本的具体内容（卡上写的、关系、势力）不在这里展开，摘要里指去 read_foundation。
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { cardWrite, chapterCommit, runCommand, type CardOp } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
-import { createStoryProject, toSafeCharacterId } from "../book/project-store.js";
+import { createStoryProject } from "../book/project-store.js";
 
-import { readFactionGoals, summarizeStateOverview } from "./overview-summary.js";
+import { summarizeStateOverview } from "./overview-summary.js";
+
+async function writeCards(projectDir: string, ops: CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+  expect(outcome.ok).toBe(true);
+}
 
 async function fixture(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "overview-summary-"));
@@ -18,64 +23,74 @@ async function fixture(): Promise<string> {
     rootDir,
     title: "海天魂钢",
     genre: "都市英灵",
-    premise: "普通毕业生林序第一次接触魂钢异常反应。",
-    mainCharacterName: "林序",
+    logline: "普通毕业生林序第一次接触魂钢异常反应。",
+    protagonistName: "林序",
   });
-  await writeFile(
-    join(projectDir, "story", "character-bible.json"),
-    JSON.stringify({
-      version: "v0",
-      characters: [
-        { id: toSafeCharacterId("林序"), name: "林序", role: "主角" },
-        {
-          id: toSafeCharacterId("沈知夏"),
-          name: "沈知夏",
-          role: "配角",
-          relationshipToProtagonist: "大学同学，暗中受财团指派接近林序",
-          trustLevel: "low",
-        },
-      ],
-    }, null, 2),
-    "utf-8",
-  );
-  await writeFile(
-    join(projectDir, "story", "world-bible.json"),
-    JSON.stringify({
-      version: "v0",
-      rules: ["创业魂钢决定城市阶层"],
-      factions: [{ id: "f-corp", name: "财团", goal: "垄断觉醒机会", resources: ["申请渠道"] }],
-    }, null, 2),
-    "utf-8",
-  );
+  await writeCards(projectDir, [
+    { op: "card.create", kind: "character", name: "沈知夏", fields: [{ label: "身份", value: "大学同学" }] },
+    { op: "relation.set", a: "沈知夏", b: "林序", label: "暗中受财团指派接近林序" },
+    { op: "card.create", kind: "place", name: "城东码头" },
+    { op: "card.create", kind: "lore", name: "财团", fields: [{ label: "目标", value: "垄断觉醒机会" }] },
+  ]);
+  // 账里出场过、还没建卡的人。
+  const outcome = await runCommand(projectDir, chapterCommit, {
+    chapter: 1,
+    text: "# 第1章\n\n林序走进码头，老周递给他一张船票。",
+    entries: [
+      { kind: "presence", review: "auto", name: "林序", nameUsed: "林序", viewpoint: true, quote: "林序走进码头" },
+      { kind: "presence", review: "auto", name: "周伯", nameUsed: "老周", quote: "老周递给他一张船票" },
+    ],
+  }, { caller: "author", idempotencyKey: "c1" });
+  expect(outcome.ok).toBe(true);
+  await mkdir(join(projectDir, "timeline"), { recursive: true });
+  await writeFile(join(projectDir, "timeline", "events.json"), JSON.stringify([
+    { id: "ch0001-001", chapter: 1, summary: "林序在码头拿到船票。", participants: ["林序"], effects: {} },
+  ]), "utf-8");
   return projectDir;
 }
 
-describe("summarizeStateOverview 露出关系与势力目标（里程碑4）", () => {
-  it("摘要带出配角与主角的关系（之前只列名字）", async () => {
+describe("summarizeStateOverview（重构 P9）", () => {
+  it("说进度、主角和其他人物（有卡的和账里出场还没卡的），设定本给计数并指去 read_foundation", async () => {
     const overview = await buildStateOverview({ projectDir: await fixture(), maxTimelineEvents: 8 });
     const summary = summarizeStateOverview(overview);
-    expect(summary).toContain("沈知夏");
-    expect(summary).toContain("暗中受财团指派接近林序");
+
+    expect(summary).toContain("《海天魂钢》（都市英灵）当前进度：第 1 章。");
+    expect(summary).toContain("人物：主角 林序；其他人物 沈知夏、周伯。");
+    expect(summary).toContain("设定本：人物卡 2 张、地点 1、物品 0、其他设定 1；故事设定写了 2 栏；账里还有 1 个没建卡（细看用 read_foundation）。");
+    expect(summary).toContain("最近时间线：林序在码头拿到船票。");
   });
 
-  it("给了势力目标(extras)时摘要带目标，没给时只列名字", async () => {
+  it("设定本的内容不在摘要里展开（关系、卡上写的字走 read_foundation）", async () => {
     const overview = await buildStateOverview({ projectDir: await fixture(), maxTimelineEvents: 8 });
-    const withGoals = summarizeStateOverview(overview, { factions: [{ name: "财团", goal: "垄断觉醒机会" }] });
-    expect(withGoals).toContain("垄断觉醒机会");
-    const namesOnly = summarizeStateOverview(overview);
-    expect(namesOnly).toContain("财团");
-    expect(namesOnly).not.toContain("垄断觉醒机会");
-  });
-});
+    const summary = summarizeStateOverview(overview);
 
-describe("readFactionGoals 读 world-bible 势力目标", () => {
-  it("读出 {name, goal}", async () => {
-    const goals = await readFactionGoals(await fixture());
-    expect(goals).toEqual(expect.arrayContaining([{ name: "财团", goal: "垄断觉醒机会" }]));
+    expect(summary).not.toContain("暗中受财团指派接近林序");
+    expect(summary).not.toContain("垄断觉醒机会");
+    expect(summary).not.toContain("大学同学");
   });
 
-  it("缺 world-bible 文件不抛、回空数组", async () => {
-    const empty = await readFactionGoals(await mkdtemp(join(tmpdir(), "no-wb-")));
-    expect(empty).toEqual([]);
+  it("新书只有书名：不编题材、不编主角，如实说还没人物、还没开始", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "overview-summary-bare-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "空白书" });
+    const summary = summarizeStateOverview(await buildStateOverview({ projectDir }));
+
+    expect(summary.split("\n")[0]).toBe("《空白书》当前进度：尚未开始正式章节。");
+    expect(summary).toContain("人物：设定本里还没有人物，账里也没记过。");
+    expect(summary).not.toContain("主角");
+    expect(summary).not.toContain("没建卡");
+    expect(summary).not.toContain("最近时间线");
+  });
+
+  it("没标主角时不冒充主角：人物全列在「其他人物」里", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "overview-summary-noprot-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "没标主角" });
+    await writeCards(projectDir, [
+      { op: "card.create", kind: "character", name: "林远" },
+      { op: "card.create", kind: "character", name: "苏晴" },
+    ]);
+    const summary = summarizeStateOverview(await buildStateOverview({ projectDir }));
+
+    expect(summary).toContain("人物：其他人物 林远、苏晴。");
+    expect(summary).not.toContain("主角 ");
   });
 });

@@ -179,7 +179,6 @@ export function App() {
   const steeringLoading = useUiStore((s) => s.steeringLoading);
   const chatLoading = useChatStore((s) => s.chatLoading);
   const chatError = useChatStore((s) => s.chatError);
-  const sidebar = useBookStore((s) => s.sidebar);
 
   /* ---- Dialogs ---- */
   // 设置只留一套（P6 第 6 步）：书架也开写作台那个设置弹窗。弹窗样式在 .codex-app 作用域里，外面套一层零高度的壳。
@@ -252,7 +251,6 @@ export function App() {
           mode="workspace"
           workspace={{
             projectPath,
-            sidebar,
             steeringDirection,
             steeringDraft,
             steeringError,

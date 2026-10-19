@@ -11,7 +11,6 @@ import { beginWorkspaceOperation, finishWorkspaceOperation, resetWorkspaceOperat
 
 const apiMocks = vi.hoisted(() => ({
   applyDeAiFlavorBatch: vi.fn(),
-  applyFoundationGapDecisions: vi.fn(),
   applyDraftRevision: vi.fn(),
   applyDraftCandidate: vi.fn(),
   generateDraftCandidate: vi.fn(),

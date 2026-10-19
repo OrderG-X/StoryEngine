@@ -13,10 +13,10 @@ import { z } from "zod";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { readFactionGoals, summarizeStateOverview } from "../overview-summary.js";
+import { summarizeStateOverview } from "../overview-summary.js";
 
 const inputSchema = z.object({
-  focus: z.string().optional().describe("可选：想重点了解的方面，如『角色』『伏笔』『世界观』。"),
+  focus: z.string().optional().describe("可选：想重点了解的方面，如『人物』『伏笔』『时间线』。"),
   chapter: coerceNumber(z.number().int().positive().optional().describe("可选：想看某一章的上下文时填章号；不填则用用户当前所在章（不是最新章）。")),
 });
 
@@ -29,8 +29,8 @@ const outputSchema = z.object({
 export const readStateOverviewTool = createTool({
   id: "read_state_overview",
   description:
-    "读取当前项目的状态总览（写到第几章、有哪些角色、世界设定、活跃伏笔与线索、写作规则等）。" +
-    "当用户询问当前进度/现状/有哪些角色/某个设定时，必须先调用本工具获取真实数据再回答，绝不凭空编造。",
+    "读取当前项目的状态总览（写到第几章、有哪些人物、设定本有几张卡、活跃伏笔与线索、时间线）。" +
+    "当用户询问当前进度/现状时，必须先调用本工具获取真实数据再回答，绝不凭空编造。设定本的具体内容用 read_foundation。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -48,10 +48,8 @@ export const readStateOverviewTool = createTool({
       ...(chapter !== undefined ? { chapter } : {}),
       maxTimelineEvents: 8,
     });
-    // StateOverview 的 worldBible 只带势力名字、丢了 goal → 读 world-bible 补目标，让摘要能说出势力想干嘛。
-    const factions = await readFactionGoals(projectDir);
     return {
-      summary: summarizeStateOverview(overview, { factions }),
+      summary: summarizeStateOverview(overview),
       overview,
       refreshScope: "full" as const,
     };

@@ -1,4 +1,3 @@
-import type { WritingRules } from "../book/types.js";
 
 export type DraftLengthTargetSource = "user" | "writing_rules" | "default";
 
@@ -38,18 +37,31 @@ const MAX_DRAFT_TARGET_WORDS = 30_000;
 const MIN_DRAFT_MAX_OUTPUT_TOKENS = 360;
 const MAX_DRAFT_MAX_OUTPUT_TOKENS = 4_096;
 
+/** 写作规则里的字数（设定卡 rules.targetWords / minWords，重构 P9）。 */
+export interface LengthRules {
+  readonly targetWords?: number;
+  readonly minWords?: number;
+}
+
+export function lengthRulesOf(rules: { readonly targetWords?: { readonly value: number }; readonly minWords?: { readonly value: number } } | undefined): LengthRules {
+  return {
+    ...(rules?.targetWords ? { targetWords: rules.targetWords.value } : {}),
+    ...(rules?.minWords ? { minWords: rules.minWords.value } : {}),
+  };
+}
+
 export function resolveDraftLengthTarget(input: {
   readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
-  readonly writingRules?: unknown;
+  readonly lengthRules?: LengthRules;
 }): DraftLengthTarget {
-  // 长跑 2026-10-04 #4：显式下限（chapterLength.minWords）是「至少 N 字」的硬约束本体，
+  // 长跑 2026-10-04 #4：显式下限（minWords）是「至少 N 字」的硬约束本体，
   // 在任何来源分支（用户点单/写作规则/默认）都生效——下限是地板不是目标，不跟目标比优先级。
-  const explicitMinimum = readWritingRulesMinimumWords(input.writingRules);
+  const explicitMinimum = normalizeDraftLengthNumber(input.lengthRules?.minWords);
   // 字数只认结构化的 requestedDraftLength（对话 AI 按作者的话传），不从本章目标那句话里抠数字（重构 P7「不猜」）。
   const explicitTarget = normalizeDraftLengthNumber(input.requestedDraftLength);
   if (explicitTarget) return withExplicitMinimum(buildDraftLengthTarget(explicitTarget, "user"), explicitMinimum);
-  const writingRulesTarget = readWritingRulesTargetWords(input.writingRules);
+  const writingRulesTarget = normalizeDraftLengthNumber(input.lengthRules?.targetWords);
   if (writingRulesTarget) return withExplicitMinimum(buildDraftLengthTarget(writingRulesTarget, "writing_rules"), explicitMinimum);
   // 只有显式下限、没有目标：min 也来自写作规则 → 来源仍是 writing_rules（不是 default），目标抬到下限。
   if (explicitMinimum) return withExplicitMinimum(buildDraftLengthTarget(explicitMinimum, "writing_rules"), explicitMinimum);
@@ -243,64 +255,28 @@ function trimByCjkBoundary(draftBody: string, lengthTarget: DraftLengthTarget): 
   };
 }
 
-function readWritingRulesTargetWords(writingRules: unknown): number | undefined {
-  if (!isRecord(writingRules)) return undefined;
-  const chapterLength = isRecord(writingRules.chapterLength) ? writingRules.chapterLength : undefined;
-  const rawValue = chapterLength?.targetWords
-    ?? chapterLength?.maxWords
-    ?? (writingRules as Partial<WritingRules> & { readonly targetChapterWords?: unknown; readonly targetWords?: unknown }).targetChapterWords
-    ?? (writingRules as Partial<WritingRules> & { readonly targetChapterWords?: unknown; readonly targetWords?: unknown }).targetWords;
-  const value = typeof rawValue === "number"
-    ? rawValue
-    : typeof rawValue === "string"
-      ? Number.parseInt(rawValue.replace(/[^\d]/gu, ""), 10)
-      : undefined;
-  return normalizeDraftLengthNumber(value);
-}
-
 /** 写作规则字数意图（目标 + 显式下限），出稿与定稿执法共用同一份解析，防两侧口径漂移。 */
 export interface WritingRulesLengthIntent {
-  /** 归一化目标（300..30000；出稿执法 resolveDraftLengthTarget 用，与旧口径一致）。 */
+  /** 归一化目标（300..30000；出稿执法 resolveDraftLengthTarget 用）。 */
   readonly targetWords?: number;
   /**
-   * 原始正数目标（只验证是 >0 的有限数，不做 300 地板/30000 天花板归一）。
-   * 供定稿执法的软推导用——旧口径允许「targetWords:200 → 下限 150」这种把门槛往下调的写法
-   * （见 commit-quality-check 既有契约），归一化会把 <300 的目标直接丢掉、破坏该行为。
+   * 原始正数目标（不做 300 地板/30000 天花板归一）。供定稿执法的软推导用——
+   * 允许「targetWords:200 → 下限 150」这种把门槛往下调的写法（见 commit-quality-check）。
    */
   readonly rawTargetWords?: number;
-  /** 显式硬下限（chapterLength.minWords，纯汉字口径）。0/非法值视为缺省。 */
+  /** 显式硬下限（纯汉字口径）。<300 视为缺省。 */
   readonly minWords?: number;
 }
 
-/** 供定稿执法侧（commit-quality-check）复用的入口：从已解析的 writing-rules 对象读字数意图。 */
-export function readWritingRulesLengthIntent(writingRules: unknown): WritingRulesLengthIntent {
-  const targetWords = readWritingRulesTargetWords(writingRules);
-  const minWords = readWritingRulesMinimumWords(writingRules);
-  const rawValue = isRecord(writingRules) && isRecord(writingRules.chapterLength)
-    && typeof writingRules.chapterLength.targetWords === "number"
-    && Number.isFinite(writingRules.chapterLength.targetWords)
-    && writingRules.chapterLength.targetWords > 0
-    ? Math.floor(writingRules.chapterLength.targetWords)
-    : undefined;
+/** 供定稿执法侧（commit-quality-check）复用的入口。 */
+export function readWritingRulesLengthIntent(rules: LengthRules): WritingRulesLengthIntent {
+  const targetWords = normalizeDraftLengthNumber(rules.targetWords);
+  const minWords = normalizeDraftLengthNumber(rules.minWords);
   return {
     ...(targetWords !== undefined ? { targetWords } : {}),
-    ...(rawValue !== undefined ? { rawTargetWords: rawValue } : {}),
+    ...(rules.targetWords !== undefined && rules.targetWords > 0 ? { rawTargetWords: Math.floor(rules.targetWords) } : {}),
     ...(minWords !== undefined ? { minWords } : {}),
   };
-}
-
-/** 显式下限（chapterLength.minWords，长跑 2026-10-04 #4）：字段早就在 WritingRules 类型里，只是从没被执法读走。 */
-export function readWritingRulesMinimumWords(writingRules: unknown): number | undefined {
-  if (!isRecord(writingRules)) return undefined;
-  const chapterLength = isRecord(writingRules.chapterLength) ? writingRules.chapterLength : undefined;
-  const rawValue = chapterLength?.minWords;
-  const value = typeof rawValue === "number"
-    ? rawValue
-    : typeof rawValue === "string"
-      ? Number.parseInt(rawValue.replace(/[^\d]/gu, ""), 10)
-      : undefined;
-  // 0=用户主动清空下限（回落推导算法）；<300 与目标下限地板重合无意义，一并视为缺省。
-  return normalizeDraftLengthNumber(value);
 }
 
 function normalizeDraftLengthNumber(value: number | undefined): number | undefined {
@@ -310,6 +286,3 @@ function normalizeDraftLengthNumber(value: number | undefined): number | undefin
   return normalized;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

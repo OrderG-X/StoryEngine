@@ -623,6 +623,47 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(mockedApplyOverview).not.toHaveBeenCalled();
   });
 
+  it("改设定的结果不带概况（重构 P9）：回合里重读一份概况再刷资料，设定本跟着重读", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    const overview = makeOverview("Reread");
+    mockedFetchStateOverview.mockResolvedValueOnce(overview);
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "foundation_write", refreshScope: "foundation", snapshotId: "snap-2" });
+      handlers.onDone();
+    });
+    const refreshWorkspaceFromOverview = vi.fn();
+    const { result } = renderHook(() => useChat(buildParams({ refreshWorkspaceFromOverview })));
+
+    await act(async () => {
+      await result.current.handleSendMessage("给许棠补两栏");
+    });
+
+    expect(mockedFetchStateOverview).toHaveBeenCalledWith({ projectPath: PROJECT, maxTimelineEvents: 8 });
+    expect(refreshWorkspaceFromOverview).toHaveBeenCalledTimes(1);
+    expect(refreshWorkspaceFromOverview.mock.calls[0][0]).toBe(overview);
+    expect(mockedApplyOverview).not.toHaveBeenCalled();
+  });
+
+  it("确认改账的结果也不带概况：同样重读一份刷资料；只读工具不重读", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    const overview = makeOverview("Ledger");
+    mockedFetchStateOverview.mockResolvedValueOnce(overview);
+    scriptAgentStream((handlers) => {
+      handlers.onToolResult({ toolName: "read_foundation" });
+      handlers.onToolResult({ toolName: "manage_ledger", refreshScope: "full", snapshotId: "snap-3" });
+      handlers.onDone();
+    });
+    const refreshWorkspaceFromOverview = vi.fn();
+    const { result } = renderHook(() => useChat(buildParams({ refreshWorkspaceFromOverview })));
+
+    await act(async () => {
+      await result.current.handleSendMessage("确认改账");
+    });
+
+    expect(mockedFetchStateOverview).toHaveBeenCalledTimes(1);
+    expect(refreshWorkspaceFromOverview).toHaveBeenCalledWith(overview);
+  });
+
   it("onToolResult for check_ai_flavor 把报告挂到这条 assistant 消息上（随消息走，不再落全局 store）", async () => {
     window.localStorage.setItem("chatBrain", "agent");
     const report = {

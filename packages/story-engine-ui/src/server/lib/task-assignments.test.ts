@@ -25,11 +25,12 @@ async function home(): Promise<string> {
 const FILE: TaskAssignmentsFile = { version: 1, tasks: { fastDraft: { profileId: "p1", thinking: false } } };
 
 describe("task-assignments 旁路存储", () => {
-  it("7 个任务 key、不含 futureReview", () => {
+  it("6 个任务 key、不含 futureReview 和已删的 enrichment", () => {
     expect(TASK_ASSIGNMENT_KEYS).toEqual([
-      "fastDraft", "triage", "repair", "chapterSteering", "enrichment", "draftReview", "qualityCheck",
+      "fastDraft", "triage", "repair", "chapterSteering", "draftReview", "qualityCheck",
     ]);
     expect(TASK_ASSIGNMENT_KEYS).not.toContain("futureReview");
+    expect(TASK_ASSIGNMENT_KEYS).not.toContain("enrichment");
   });
 
   it("文件不存在 → {file:null, corrupt:false}（走默认、不报损坏）", async () => {
@@ -71,11 +72,11 @@ describe("buildTaskAssignmentsView 合成 7 任务视图（旁路 + engineProfil
     const view = buildTaskAssignmentsView(engineTp, "p-default", file);
     expect(view.fastDraft).toEqual({ profileId: "p-mini", thinking: false }); // 旁路覆盖
     expect(view.qualityCheck).toEqual({ profileId: "p-q", thinking: true });
-    expect(view.enrichment).toEqual({ profileId: "p-steer", thinking: true }); // 回退 chapterSteering
+    expect(view.chapterSteering).toEqual({ profileId: "p-steer", thinking: true });
     expect(view.triage.profileId).toBe("p-q"); // triage→qualityCheck（与运行时同口径，治「展示≠真用」）
     expect(view.draftReview.profileId).toBe("p-q"); // draftReview→qualityCheck
     expect(view.draftReview.thinking).toBe(true);
-    expect(Object.keys(view).sort()).toEqual([...TASK_ASSIGNMENT_KEYS].sort()); // 7 个 key 都在
+    expect(Object.keys(view).sort()).toEqual([...TASK_ASSIGNMENT_KEYS].sort()); // 6 个 key 都在
 
     // 引擎全缺相关键 → defaultProfile
     const sparse = buildTaskAssignmentsView({ fastDraft: "p-draft" }, "p-default", null);
@@ -109,7 +110,6 @@ describe("engineProfileFallback 任务回退链（运行时与面板同口径）
     const full = { fastDraft: "fd", chapterSteering: "cs", qualityCheck: "qc", repair: "rp", draftReview: "dr", triage: "tr" };
     expect(engineProfileFallback(full, "fastDraft")).toBe("fd"); // 普通任务=自己
     expect(engineProfileFallback(full, "draftReview")).toBe("dr"); // 自己有就用自己
-    expect(engineProfileFallback(full, "enrichment")).toBe("cs"); // enrichment 无自己→chapterSteering
     // 缺自己时跨任务回退
     expect(engineProfileFallback({ qualityCheck: "qc", chapterSteering: "cs" }, "draftReview")).toBe("qc");
     expect(engineProfileFallback({ qualityCheck: "qc" }, "triage")).toBe("qc");

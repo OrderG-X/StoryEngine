@@ -10,6 +10,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { AuthorDecisionsFile, AUTHOR_DECISIONS_SCHEMA, type AuthorDecision } from "../schema/decisions.js";
+import { SettingCardsFile, type SettingCardsFile as SettingCardsFileType } from "../schema/cards.js";
 import { BookHead, BOOK_HEAD_SCHEMA, type BookHead as BookHeadType } from "../schema/book.js";
 import { ChapterLedger } from "../schema/ledger.js";
 import {
@@ -17,6 +18,7 @@ import {
   chapterFromFileName,
   chapterLedgerPath,
   chapterTextPath,
+  CARDS_PATH,
   DECISIONS_PATH,
   HEAD_PATH,
 } from "./paths.js";
@@ -78,8 +80,8 @@ export async function readChapterLedger(bookDir: string, chapter: number): Promi
   return ledger;
 }
 
-/** 全部章节账单，按章号排好。 */
-export async function readAllLedgers(bookDir: string): Promise<readonly ChapterLedger[]> {
+/** 有账单的章号，按章号排好（只列目录，不读内容）。 */
+export async function listChapterLedgers(bookDir: string): Promise<readonly number[]> {
   let names: string[];
   try {
     names = await readdir(join(bookDir, CHAPTER_LEDGER_DIR));
@@ -87,11 +89,16 @@ export async function readAllLedgers(bookDir: string): Promise<readonly ChapterL
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  const chapters = names
+  return names
     .filter((name) => name.endsWith(".json"))
     .map(chapterFromFileName)
     .filter((chapter): chapter is number => chapter !== undefined)
     .sort((a, b) => a - b);
+}
+
+/** 全部章节账单，按章号排好。 */
+export async function readAllLedgers(bookDir: string): Promise<readonly ChapterLedger[]> {
+  const chapters = await listChapterLedgers(bookDir);
   const ledgers: ChapterLedger[] = [];
   for (const chapter of chapters) {
     const ledger = await readChapterLedger(bookDir, chapter);
@@ -108,6 +115,17 @@ export async function readDecisions(bookDir: string): Promise<readonly AuthorDec
 
 export function decisionsFileText(decisions: readonly AuthorDecision[]): string {
   return `${JSON.stringify({ schema: AUTHOR_DECISIONS_SCHEMA, decisions }, null, 2)}\n`;
+}
+
+/** 设定卡；文件不在 = undefined（新书还没建、老书还没迁）。 */
+export async function readCards(bookDir: string): Promise<SettingCardsFileType | undefined> {
+  const raw = await readOptional(bookDir, CARDS_PATH);
+  if (raw === undefined) return undefined;
+  return parseJson(CARDS_PATH, raw, SettingCardsFile);
+}
+
+export function cardsFileText(file: SettingCardsFileType): string {
+  return `${JSON.stringify(file, null, 2)}\n`;
 }
 
 /** 已定稿的章号（有正文文件的）。 */
@@ -130,6 +148,8 @@ export interface BookSnapshot {
   readonly version: number;
   readonly ledgers: readonly ChapterLedger[];
   readonly decisions: readonly AuthorDecision[];
+  /** 设定卡（不在 = undefined）。 */
+  readonly cards: SettingCardsFileType | undefined;
   /** 每章正文现在的 sha256（和账单里的比，就知道定稿后改没改过）。 */
   readonly textHashes: ReadonlyMap<number, string>;
   /** 读的时候正好在写、重试几次都没读稳：数据可能是新旧混着的，调用方要如实说。 */
@@ -138,13 +158,13 @@ export interface BookSnapshot {
 
 async function readOnce(bookDir: string): Promise<Omit<BookSnapshot, "unsettled">> {
   const head = await readHead(bookDir);
-  const [ledgers, decisions, chapters] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir), listChapterTexts(bookDir)]);
+  const [ledgers, decisions, cards, chapters] = await Promise.all([readAllLedgers(bookDir), readDecisions(bookDir), readCards(bookDir), listChapterTexts(bookDir)]);
   const textHashes = new Map<number, string>();
   for (const chapter of chapters) {
     const text = await readChapterText(bookDir, chapter);
     if (text !== undefined) textHashes.set(chapter, sha256(text));
   }
-  return { version: head.version, ledgers, decisions, textHashes };
+  return { version: head.version, ledgers, decisions, cards, textHashes };
 }
 
 /** 读一份前后一致的真相快照（不写盘、不拿锁）。 */

@@ -16,7 +16,7 @@ import { resolve } from "node:path";
 import { bookImportText, runCommand, serialFileStem, splitSerialText, type SerialFile, type SerialSplit } from "@actalk/story-core";
 import { buildStateOverview } from "../book/state-overview.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
-import { createStoryProject, PLACEHOLDER_PREMISE } from "../book/project-store.js";
+import { createStoryProject } from "../book/project-store.js";
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { assertStoryEngineProject, guardProjectPath, isRecord, isSafeProjectPath, readJsonBody, readString, requireBodyString, writeJson, type MiddlewareStack } from "../lib/project-io.js";
@@ -112,7 +112,7 @@ async function handleImport(body: Record<string, unknown>, res: Res): Promise<vo
     return;
   }
 
-  const created = await createStoryProject({ rootDir, title, genre: "长篇故事", premise: PLACEHOLDER_PREMISE, mainCharacterName: "主角" });
+  const created = await createStoryProject({ rootDir, title });
   const projectDir = created.projectDir;
   try {
     const outcome = await runCommand(projectDir, bookImportText, {

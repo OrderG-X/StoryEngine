@@ -26,6 +26,61 @@ export {
 } from "./schema/ledger.js";
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
+export {
+  CARD_NAME_MAX,
+  Card,
+  CardAuthor,
+  CardField,
+  CardKind,
+  emptySettingCards,
+  emptyWritingRules,
+  Exemplar,
+  EXEMPLAR_TEXT_MAX,
+  EXEMPLARS_MAX,
+  FIELD_LABEL_MAX,
+  FIELD_VALUE_MAX,
+  FIELDS_PER_CARD_MAX,
+  Relation,
+  RULE_ITEM_MAX,
+  RULE_LIST_MAX,
+  RULE_LISTS,
+  RULE_SCALARS,
+  RuleItem,
+  RuleNumber,
+  RuleText,
+  SETTING_CARDS_SCHEMA,
+  SettingCardsFile,
+  WritingRules,
+  type RuleList,
+  type RuleScalar,
+} from "./schema/cards.js";
+export {
+  applyCardOp,
+  applyCardOps,
+  CardOp,
+  CardOps,
+  findCard,
+  KIND_LABELS,
+  MAX_OPS_PER_CHANGE,
+  RULE_LIST_LABELS,
+  RULE_SCALAR_LABELS,
+  splitForAi,
+  type AiSplit,
+  type ApplyResult,
+  type OpContext,
+} from "./bible/ops.js";
+export { cardChangeLabel, cardFill, cardsImport, CardsImportArgs, cardWrite, CardWriteArgs, readCardsOrLegacy, type CardsImportResult, type CardWriteResult } from "./bible/commands.js";
+export {
+  bibleView,
+  type BibleAppearances,
+  type BibleEntry,
+  type BibleFact,
+  type BibleRelation,
+  type BibleRelationView,
+  type BibleView,
+  type UncardedEntry,
+} from "./bible/view.js";
+export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./text/quote.js";
 export {
@@ -64,9 +119,11 @@ export {
 export {
   BookFileError,
   listChapterTexts,
+  listChapterLedgers,
   readAllLedgers,
   readBookSnapshot,
   readChapterLedger,
+  readCards,
   readChapterText,
   readDecisions,
   readHead,
@@ -74,7 +131,7 @@ export {
   type BookSnapshot,
 } from "./store/book.js";
 export { bookKey, withBookLock } from "./store/lock.js";
-export { chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
+export { CARDS_PATH, chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
@@ -141,9 +198,19 @@ export type {
 import { readBookSnapshot } from "./store/book.js";
 import { project, type ProjectionOptions } from "./projection/project.js";
 import type { BookProjection } from "./projection/types.js";
+import { bibleView as buildBibleView, type BibleView } from "./bible/view.js";
+import { readLegacyCards as readLegacy } from "./import/legacy-cards.js";
 
 /** 读真相、算投影（不写盘、不拿锁）。 */
 export async function projectBook(bookDir: string, options: ProjectionOptions = {}): Promise<BookProjection> {
   const snapshot = await readBookSnapshot(bookDir);
   return project(snapshot, options);
+}
+
+/** 读真相、算投影和设定视图（不写盘、不拿锁）。还没有 cards.json 的老书现从老格式文件拼一份。 */
+export async function readBible(bookDir: string, options: ProjectionOptions = {}): Promise<{ readonly projection: BookProjection; readonly bible: BibleView }> {
+  const snapshot = await readBookSnapshot(bookDir);
+  const projection = project(snapshot, options);
+  const cards = snapshot.cards ?? (await readLegacy(bookDir, new Date().toISOString())).file;
+  return { projection, bible: buildBibleView(projection, cards) };
 }

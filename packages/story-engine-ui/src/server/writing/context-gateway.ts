@@ -6,32 +6,23 @@ import { formatStaleGoalMessage, formatStaleHookMessage, formatStaleThreadMessag
 import { chaptersSinceTouched, shouldRemindStaleAt } from "./stale-reminder-policy.js";
 import {
   describeErrorBriefly,
-  readCharacterCore,
-  readCharacterProfile,
-  readCharacterState,
   readArcGoalPool,
   readHookPool,
   readProject,
   readStoryCalendar,
-  readStoryCore,
   readThreadPool,
   readTimelineEvents,
-  readWorldCore,
-  readWorldState,
-  toSafeCharacterId,
-  listCharacterDirectoryEntries,
 } from "../book/project-store.js";
 import { selectRelevant } from "@actalk/story-core";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
+import { readBibleTolerant } from "./setting-pack.js";
+import { resolveInSceneCharacters } from "./presence/in-scene-detector.js";
 
 // token 估算前后端共用一份（src/lib/estimate-tokens.ts，纯函数）。
 export { estimateTokens };
 import type {
-  CharacterCore,
-  CharacterProfile,
-  CharacterState,
   ArcGoal,
   HookItem,
   NarrativeThread,
@@ -182,7 +173,8 @@ export interface BuildWriterContextInput {
   readonly projectDir: string;
   readonly chapter: number;
   readonly chapterGoal: string;
-  readonly selectedCharacterIds?: readonly string[];
+  /** 本章要带的人物（名字）；不给就按在场检测挑。 */
+  readonly selectedCharacters?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   /**
    * `timeline_events` 段（可裁段）取最近 N 条（默认 5）。
@@ -208,25 +200,30 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     // 只给 errno code/错误类型 + 项目内相对文件名——error.message 原文带本地绝对路径，不进上下文（路径泄漏纪律）。
     readFailures.push(`${label} 读取失败（${describeErrorBriefly(error, input.projectDir)}），已降级为空。`);
   };
-  // 审计 Med：characters 目录枚举失败（EACCES 等）不再无痕清空全部角色——降级+留痕。
-  const characterIds = await resolveSelectedCharacterIds(input)
-    .catch((error: unknown) => {
-      trackReadFailure("角色目录")(error);
-      return [] as string[];
-    });
-  const [storyCore, worldCore, characterBundles, calendar, hookPool, threadPool, arcGoalPool, worldState, allTimelineEvents, previousUncommittedDraft, previousChapter, existingChapterTitles] = await Promise.all([
-    readStoryCore(input.projectDir),
-    readWorldCore(input.projectDir),
-    // 角色（profile+core+state）三件套按角色兜底：单个角色资料残缺不再炸掉整次出稿，
-    // 跳过的角色进 readFailures（模型知道、如实转达），其余角色照常参与。
-    readCharacterBundles(input.projectDir, characterIds, (id, failedFile, error) => {
-      trackReadFailure(`角色「${id}」的 ${failedFile}`)(error);
-    }),
+  // 设定卡坏了按空设定降级 + 留痕（不炸掉整次出稿）。读一次、下游共用：坏了只记这一条，
+  // 不让在场检测、上下文包各自再读一遍、把同一个原因记成三条。
+  const read = await readBibleTolerant(input.projectDir);
+  if (read.failure) readFailures.push(read.failure);
+  const bible = read.projection ? { projection: read.projection, bible: read.bible } : undefined;
+  const selectedCharacters = input.selectedCharacters && input.selectedCharacters.length > 0
+    ? [...input.selectedCharacters]
+    // 设定本没读出来：没有可挑的人（原因已在上面那条），不再去读第二遍。
+    : bible
+      ? [...(await resolveInSceneCharacters({
+        projectDir: input.projectDir,
+        chapter: input.chapter,
+        chapterGoal: input.chapterGoal,
+        bible,
+      }).catch((error: unknown) => {
+        trackReadFailure("本章在场人物")(error);
+        return { selected: [] as readonly string[] };
+      })).selected]
+      : [];
+  const [calendar, hookPool, threadPool, arcGoalPool, allTimelineEvents, previousUncommittedDraft, previousChapter, existingChapterTitles] = await Promise.all([
     readStoryCalendar(input.projectDir),
     readHookPool(input.projectDir),
     readThreadPool(input.projectDir),
     readArcGoalPool(input.projectDir),
-    readWorldState(input.projectDir),
     // 全量 timeline 只读一次：近 N 段（selectRecentTimelineEvents）与早期分层（buildTimelineLayers）共用，避免重复读盘
     readTimelineEvents(input.projectDir)
       // 审计 Low：删掉「旧格式回退」第二跳——它与首读同一文件同一 JSON.parse，首读失败它必失败，
@@ -250,20 +247,20 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       excludeChapters: [input.chapter - 1],
     }).catch((error) => { trackReadFailure("旧章原文")(error); return [] as readonly EarlierPassage[]; })
     : [];
-  const { profiles, cores, states } = characterBundles;
   const timelineEvents = selectRecentTimelineEvents(allTimelineEvents, input.maxTimelineEvents);
   const storyContinuity = buildStoryContinuityContext(timelineEvents);
   const selectedHooks = selectHooks(hookPool.hooks, input.selectedHookIds);
-  const hookTracking = buildHookTrackingContext(hookPool.hooks, input.chapter, input.chapterGoal, characterIds);
-  const arcGoals = buildArcGoalsContext(arcGoalPool.goals, input.chapter, input.chapterGoal, characterIds);
-  const storyThreads = buildStoryThreadsContext(threadPool.threads, input.chapter, storyContinuity, arcGoals, input.chapterGoal, characterIds);
+  const hookTracking = buildHookTrackingContext(hookPool.hooks, input.chapter, input.chapterGoal, selectedCharacters);
+  const arcGoals = buildArcGoalsContext(arcGoalPool.goals, input.chapter, input.chapterGoal, selectedCharacters);
+  const storyThreads = buildStoryThreadsContext(threadPool.threads, input.chapter, storyContinuity, arcGoals, input.chapterGoal, selectedCharacters);
   const writingContextPack = await buildWritingContextPack({
     projectDir: input.projectDir,
     chapter: input.chapter,
     userDirection: input.chapterGoal,
     currentChapterGoal: input.chapterGoal,
-    selectedCharacterIds: characterIds,
+    selectedCharacters,
     selectedHookIds: input.selectedHookIds,
+    bible: bible ?? { bible: read.bible },
     maxTimelineEvents: input.maxTimelineEvents,
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
     ...(previousChapter?.text ?? previousUncommittedDraft?.excerpt
@@ -278,10 +275,6 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
   const timelineLayers = buildTimelineLayers(allTimelineEvents, input.chapter);
   const hasEarlierContent = timelineLayers.l2.length > 0 || timelineLayers.l3.length > 0;
   const sections = [
-    section("story_core", storyCore, "stable"),
-    section("world_core", worldCore, "stable"),
-    section("character_profile", profiles, "stable"),
-    section("character_core", cores, "stable"),
     section("chapter_goal", { chapter: input.chapter, goal: input.chapterGoal }, "dynamic"),
     ...(existingChapterTitles.length > 0 ? [section("chapter_titles", {
       instruction: "这些是本书已有各章的标题（含尚未定稿的工作稿）。给本章起标题时不要与它们重名。",
@@ -302,8 +295,6 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
     section("hook_tracking", hookTracking, "dynamic"),
     section("story_threads", storyThreads, "dynamic"),
     section("arc_goals", arcGoals, "dynamic"),
-    section("character_state", states, "dynamic"),
-    section("world_state", capWorldStateForContext(worldState), "dynamic"),
     section("story_continuity", storyContinuity, "dynamic"),
     section("timeline_events", timelineEvents.map(compactTimelineEventForWriter), "dynamic"),
     ...(hasEarlierContent ? [section("timeline_earlier_summary", { earlierSummary: timelineLayers.l2, macroSummary: timelineLayers.l3 }, "dynamic")] : []),
@@ -325,7 +316,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       totalTokenEstimate,
       stableTokenEstimate,
       dynamicTokenEstimate,
-      selectedCharacters: characterIds,
+      selectedCharacters,
       selectedHooks: selectedHooks.map((hook) => hook.id),
       selectedTimelineEvents: timelineEvents.map((event) => event.id),
     },
@@ -479,62 +470,6 @@ function section(name: string, content: unknown, cachePolicy: "stable" | "dynami
   };
 }
 
-async function resolveSelectedCharacterIds(input: BuildWriterContextInput): Promise<string[]> {
-  if (input.selectedCharacterIds && input.selectedCharacterIds.length > 0) {
-    return unique(input.selectedCharacterIds.map(toSafeCharacterId));
-  }
-  // 审计 Med：ENOENT-only——权限类失败上抛，由 buildWriterContext 的 read_failures 留痕（不再无痕清空全部角色）。
-  const entries = await listCharacterDirectoryEntries(input.projectDir);
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => toSafeCharacterId(entry.name))
-    .sort((left, right) => left.localeCompare(right));
-}
-
-/**
- * 审计 Med：角色三件套按【单个角色】兜底，不再一个坏文件炸掉整次出稿。
- * 建角色本身无事务（foundation-write-gateway 顺序写四件），中断会留「目录在、文件不全」的残态；
- * 此前 Promise.all 让缺一文件的角色的 ENOENT/损坏 JSON 把 buildWriterContext 整体 reject（整章无法出稿）。
- * 现在：逐角色 settle，三件任一读失败 → 丢弃该角色（不出假状态）+ 留痕回调（进 readFailures，
- * 模型与用户都知道该角色被跳过、为什么）；其余角色照常出稿。
- */
-async function readCharacterBundles(
-  projectDir: string,
-  characterIds: readonly string[],
-  onSkip: (id: string, failedFile: string, error: unknown) => void,
-): Promise<{
-  readonly profiles: readonly CharacterProfile[];
-  readonly cores: readonly CharacterCore[];
-  readonly states: readonly CharacterState[];
-}> {
-  const settled = await Promise.all(
-    characterIds.map(async (id) => {
-      try {
-        const profile = await readCharacterProfile(projectDir, id);
-        const core = await readCharacterCore(projectDir, id);
-        const state = await readCharacterState(projectDir, id);
-        return { id, profile, core, state };
-      } catch (error) {
-        onSkip(id, characterFileLabelForError(error), error);
-        return undefined;
-      }
-    }),
-  );
-  const kept = settled.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  return {
-    profiles: kept.map((entry) => entry.profile),
-    cores: kept.map((entry) => entry.core),
-    states: kept.map((entry) => entry.state),
-  };
-}
-
-/** 从 errno 里反解是三件中的哪件读挂了（ENOENT message 含文件名；解析不出就给中性说法）。 */
-function characterFileLabelForError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const match = /\b(profile|core|state)\.json\b/u.exec(message);
-  return match?.[1] ? `${match[1]}.json` : "资料文件";
-}
-
 function selectHooks(hooks: readonly HookItem[], selectedHookIds?: readonly string[]): readonly HookItem[] {
   if (selectedHookIds && selectedHookIds.length > 0) {
     const selected = new Set(selectedHookIds);
@@ -616,22 +551,6 @@ function buildHookCarryForwardInstruction(activeHooks: readonly HookTrackingCont
   if (activeHooks.length === 0) return "";
   const titles = activeHooks.slice(0, 5).map((hook) => hook.title).join("、");
   return truncateText(`下一章可优先自然推进这些伏笔，但不要一次性全部解开：${titles}。`, 120);
-}
-
-/** 世界状态每项给写手看的上限：只增不减的老书里冲突能攒到几十条（《梧桐街九号》58 章 55 条）。最新的在后面。 */
-const WORLD_STATE_ITEMS_IN_CONTEXT = 12;
-
-function capWorldStateForContext<T extends { readonly activeConflicts: readonly string[]; readonly activeHooks: readonly string[]; readonly knownSecrets: readonly string[] }>(state: T): T & { readonly omittedOlderItems?: number } {
-  const keep = (items: readonly string[]) => items.slice(-WORLD_STATE_ITEMS_IN_CONTEXT);
-  const omitted = [state.activeConflicts, state.activeHooks, state.knownSecrets]
-    .reduce((sum, items) => sum + Math.max(0, items.length - WORLD_STATE_ITEMS_IN_CONTEXT), 0);
-  return {
-    ...state,
-    activeConflicts: keep(state.activeConflicts),
-    activeHooks: keep(state.activeHooks),
-    knownSecrets: keep(state.knownSecrets),
-    ...(omitted > 0 ? { omittedOlderItems: omitted } : {}),
-  };
 }
 
 function buildStoryThreadsContext(

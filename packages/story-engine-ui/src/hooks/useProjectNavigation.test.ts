@@ -202,7 +202,7 @@ describe("useProjectNavigation chapter status helpers", () => {
   // refreshWorkspaceFromOverview。历史上它铺开 workspaceFromStateOverview(overview)（含 overview 最新章的
   // currentChapter/chapters）却没保留用户当前停留章 → 在第2章顺手记资料会被顶部跳到最新章、草稿仍停第2章。
   // 抽出的 mergeFoundationRefreshWorkspace 必须保留 currentChapter/chapters/messages/draft/flowStatus，
-  // 与 useFoundationGaps 版同款，资料刷新只动资料/侧栏派生字段。
+  // 资料刷新只动资料派生字段。
   it("资料刷新合并：保留用户当前章/章节列表/对话/流程态，不被 overview 最新章覆盖（H4：记资料不跳章）", () => {
     const nextBase = {
       projectName: "记资料测试书",

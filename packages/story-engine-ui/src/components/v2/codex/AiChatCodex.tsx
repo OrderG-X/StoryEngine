@@ -26,8 +26,9 @@ import { IconArrowUp, IconChevronRight, IconClose, IconCopy, IconSparkle, IconSt
 import { useActiveModel } from "./useActiveModel.js";
 import { StepCardCollapsedByDefault } from "./StepCard.js";
 import { activeMentionQuery, buildMentionCandidates, insertMention } from "./composerMention.js";
-import { parsePaletteCharacters } from "./CommandPalette.js";
-import { buildInboxTodos } from "./inboxTodos.js";
+import { buildInboxTodos, type InboxTodo } from "./inboxTodos.js";
+import { saveCards } from "../../../api/bibleClient.js";
+import { refreshOverviewNow } from "../../../workspace/refreshOverview.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { resumeBookReread } from "../../../api/client.js";
 import AgentErrorCard from "./AgentErrorCard.js";
@@ -79,6 +80,8 @@ import { useReaderCatchUp, useRefreshWhenRereadDone } from "../../../hooks/useRe
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
   readonly onOpenChapter?: (chapter: number) => void;
+  /** @ 提及候选：设定本里的人物和地点（WritingWorkspaceCodex 从设定视图拼好传下来）。 */
+  readonly mentionNames?: { readonly characters: readonly string[]; readonly locations: readonly string[] };
   readonly rightOpen: boolean;
   readonly onToggleRight: () => void;
   /** 拖动右栏左缘改宽（pointerdown 起拖，宽度状态由外层 codex 壳持有）。 */
@@ -291,8 +294,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const mentionQuery = activeMentionQuery(props.steeringDirection);
   const mentionCandidates = mentionQuery === null ? [] : buildMentionCandidates({
     query: mentionQuery,
-    characters: parsePaletteCharacters(props.sidebar.characters).map((c) => c.name),
-    locations: props.overview?.locationBible?.activeLocationNames ?? props.overview?.world.activeLocations ?? [],
+    characters: props.mentionNames?.characters ?? [],
+    locations: props.mentionNames?.locations ?? [],
     chapters: props.workspace.chapters,
   });
   const mentionOpen = mentionCandidates.length > 0 && mentionDismissedAt !== props.steeringDirection;
@@ -317,6 +320,27 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     requestAnimationFrame(() => {
       const el = composerRef.current;
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  };
+  // 带 ops 的待办（还没标主角）点了直接改设定本：作者档、可撤销，不经模型；没改成就在这儿如实说。
+  const [inboxError, setInboxError] = useState<string | null>(null);
+  const [inboxSaving, setInboxSaving] = useState(false);
+  const runInboxTodo = (todo: InboxTodo) => {
+    const projectPath = props.projectPath;
+    if (!todo.ops || !projectPath) {
+      prefillComposer(todo.prefill);
+      return;
+    }
+    setInboxSaving(true);
+    setInboxError(null);
+    void saveCards(projectPath, todo.ops).then(async (result) => {
+      if (result.ok) {
+        await refreshOverviewNow(projectPath);
+        setInboxOpen(false);
+      } else {
+        setInboxError(result.error);
+      }
+      setInboxSaving(false);
     });
   };
   const pickMention = (label: string) => {
@@ -434,14 +458,15 @@ export default function AiChatCodex(props: AiChatCodexProps) {
                     <button
                       type="button"
                       className="se-todo-act"
-                      disabled={!chatEnabled}
-                      title={`把「${todo.prefill}」放进输入框（不会自动发送）`}
-                      onClick={() => prefillComposer(todo.prefill)}
+                      disabled={todo.ops && props.projectPath ? busy || inboxSaving : !chatEnabled}
+                      title={todo.ops && props.projectPath ? "直接改设定本，可在操作历史里撤销" : `把「${todo.prefill}」放进输入框（不会自动发送）`}
+                      onClick={() => runInboxTodo(todo)}
                     >
                       {todo.action}
                     </button>
                   </div>
                 ))}
+                {inboxError ? <p className="se-todo-err" role="alert">{inboxError}</p> : null}
               </div>
             ) : null}
           </div>

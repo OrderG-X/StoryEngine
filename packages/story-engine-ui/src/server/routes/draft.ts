@@ -68,7 +68,7 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
       chapter,
       chapterGoal: rawChapterGoal,
       requestedDraftLength: readPositiveInteger(body.requestedDraftLength),
-      selectedCharacterIds: optionalStringList(body.selectedCharacterIds),
+      selectedCharacters: optionalStringList(body.selectedCharacters),
       selectedHookIds: optionalStringList(body.selectedHookIds),
       maxTimelineEvents: readPositiveInteger(body.maxTimelineEvents),
       contextTokenBudget: readPositiveInteger(body.contextTokenBudget),

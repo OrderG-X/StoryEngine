@@ -6,7 +6,8 @@ import {
 import { fetchChapterPaper, type ChapterPaper } from "../api/workingDraftClient.js";
 import { listChatSessions, readChatSession } from "../api/chatSessionsClient.js";
 import type { ImportBookRequest, StateOverview } from "../api/types.js";
-import { sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
+import { workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
+import { bookSummaryFromOverview, isRealProjectBook } from "../utils/bookUtils.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -31,7 +32,6 @@ import type {
   ChapterNavItem,
   ChapterWorkspaceData,
   ChapterWorkflowState,
-  SidebarData,
 } from "../types.js";
 
 /* ------------------------------------------------------------------ */
@@ -155,56 +155,6 @@ function workingDraftChainState(chapters: readonly ChapterNavItem[], activeChapt
   };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Book summary helpers                                               */
-/* ------------------------------------------------------------------ */
-
-function stableBookId(value: string): string {
-  let hash = 0;
-  for (const char of value) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return `project-${hash.toString(16)}`;
-}
-
-function titleFromEvent(event: StateOverview["timeline"]["recentEvents"][number] | undefined, chapter: number): string {
-  const source = event?.mainEvent ?? event?.summary;
-  if (!source?.trim()) return `第${chapter}章`;
-  const cleaned = source.replace(/\s+/gu, " ").trim();
-  return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
-}
-
-function estimateWordsFromOverview(overview: StateOverview): number {
-  const timelineWords = overview.timeline.recentEvents.reduce((total, event) => total + event.summary.length + (event.mainEvent?.length ?? 0), 0);
-  return Math.max(timelineWords * 20, (overview.project.currentChapter ?? 0) * 3000);
-}
-
-function bookSummaryFromOverview(overview: StateOverview, projectPath: string): BookSummary {
-  const currentChapterNumber = overview.project.currentChapter ?? overview.timeline.recentEvents.at(-1)?.chapter ?? 1;
-  const currentEvent = overview.timeline.recentEvents.find((event) => event.chapter === currentChapterNumber) ?? overview.timeline.recentEvents.at(-1);
-  const writtenChapters = Math.max(overview.project.currentChapter ?? overview.timeline.recentEvents.length, overview.timeline.recentEvents.length, 0);
-  const projectTitle = overview.project.title || "未命名故事";
-  return {
-    id: stableBookId(projectPath),
-    title: projectTitle,
-    genre: overview.project.genre || "长篇故事",
-    currentChapterTitle: titleFromEvent(currentEvent, currentChapterNumber),
-    currentChapterNumber,
-    protagonistName: overview.characters.protagonist ?? overview.characters.knownCharacters[0]?.name ?? "主角",
-    status: overview.project.currentChapter ? "可继续下一章" : "草稿中",
-    updatedAt: "刚刚",
-    lastActiveMs: Date.now(),
-    logline: overview.world.summary ?? overview.storyStatus.currentObjective ?? "继续当前故事。",
-    writtenChapters,
-    totalWords: estimateWordsFromOverview(overview),
-    projectPath,
-  };
-}
-
-function isRealProjectBook(book: BookSummary): boolean {
-  return Boolean(book.projectPath.trim()) && !book.projectPath.startsWith("/mock/");
-}
-
 function workspaceFromBook(book: BookSummary) {
   const chapterWindow = Array.from({ length: 5 }, (_, index) => {
     const chapterNumber = Math.max(1, book.currentChapterNumber - 2) + index;
@@ -244,31 +194,6 @@ function workspaceFromBook(book: BookSummary) {
         content: `已进入《${book.title}》的章节工作台。当前章节：第${book.currentChapterNumber}章 · ${book.currentChapterTitle}。`,
       },
     ],
-    protagonist: {
-      name: book.protagonistName,
-      age: undefined,
-      identity: "暂无身份状态",
-      currentGoal: book.logline,
-      physicalState: ["尚未配置身体状态"],
-      mentalState: ["尚未配置精神状态"],
-      resourceState: ["尚未配置当前资源状态"],
-      currentSituation: "尚未配置当前阶段",
-      boundaries: ["尚未配置角色边界"],
-      cannotDo: ["尚未配置不能做什么"],
-      speechSamples: ["尚未配置说话样本"],
-    },
-  };
-}
-
-function sidebarFromBook(book: BookSummary): SidebarData {
-  return {
-    storySettings: [book.title, book.genre, book.logline],
-    writingRules: ["写作规则：尚未配置"],
-    characters: [book.protagonistName],
-    locations: ["尚未配置重要地点"],
-    assets: ["尚未配置道具与资源预留"],
-    hooks: ["暂无伏笔线索"],
-    arcGoals: ["暂无主线目标"],
   };
 }
 
@@ -353,8 +278,7 @@ function messagesWhenBackendSessionMissing(params: {
  * 与流程态 flowStatus（正文在 draftStore、对话在 chatStore，都不经这里）。
  *
  * H4：历史上这里直接铺开 base（含 overview 最新章的 currentChapter/chapters），用户在第2章顺手记资料
- * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。必须与 useFoundationGaps.ts 的 refreshWorkspaceFromOverview
- * 保持同款字段保留——改一处记得同步另一处。
+ * 会被顶部跳到最新章、草稿仍停第2章，界面对不上。
  */
 export function mergeFoundationRefreshWorkspace(
   nextBase: ChapterWorkspaceData,
@@ -398,7 +322,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
 
   /* ---- 书 / 对话 / 界面临时态（重构 P5：拆成三块；setter 是稳定函数，直接取） ---- */
   const workspace = useBookStore((s) => s.workspace);
-  const { setWorkspace, setSidebar, setCurrentOverview } = useBookStore.getState();
+  const { setWorkspace, setCurrentOverview } = useBookStore.getState();
   const { setMessages, setChatError, setSessions, setActiveArchivedCount, setChatHistoryBudget } = useChatStore.getState();
   const {
     setSteeringDirection,
@@ -410,7 +334,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
     setActiveRevisionTask,
     setActiveRevisionPreview,
     setCommitSelections,
-    resetFoundationGaps,
     resetTransientUiState,
   } = useUiStore.getState();
 
@@ -549,7 +472,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       });
       setMessages(entryMessages);
       useDraftStore.getState().loadPaper(nextProjectPath, paper);
-      setSidebar(sidebarFromStateOverview(overview));
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
       setLastChapterDirection("");
@@ -560,7 +482,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       setWorkspaceReady(true);
       if (options.updateUrl !== false) {
         pushWorkspaceUrlForProject(nextProjectPath);
@@ -608,7 +529,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       useDraftStore.getState().reset();
       setCurrentOverview(null);
       setOpenProjectError(null);
-      setSidebar(sidebarFromBook(book));
       setSteeringDirection("");
       setLastChapterDirection("");
       setSteeringDraft(null);
@@ -618,24 +538,12 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       resetTransientUiState();
       setSessions([], "");
       setActiveArchivedCount(0);
       {
         const bookWorkspace = workspaceFromBook(book);
-        setWorkspace({
-          ...workspace,
-          ...bookWorkspace,
-          location: workspace.location,
-          time: workspace.time,
-          knowledge: workspace.knowledge,
-          assets: workspace.assets,
-          memory: workspace.memory,
-          risks: workspace.risks,
-          hardConstraints: workspace.hardConstraints,
-          characterMatrix: workspace.characterMatrix,
-        });
+        setWorkspace({ ...workspace, ...bookWorkspace });
         setMessages([]);
       }
       setWorkspaceReady(true);
@@ -675,7 +583,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       setSessions([], "");
       setActiveArchivedCount(0);
       if (options.updateUrl !== false) pushHomeUrl();
@@ -856,7 +763,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       // 否则落到章节 idle 语气「当前章节已就绪，可以生成本章方案」，对一本还没开写的新书是误导（修 R2#4）。
       // 导入的书给导入版开场白（说清记账员在后台记账、记完才能核账定稿）。
       setMessages([input.greeting()]);
-      setSidebar(sidebarFromStateOverview(created.overview));
       bookManagement.upsertRecentBook(book);
       setWorkspaceReady(true);
       pushWorkspaceUrlForProject(created.projectDir);
@@ -864,7 +770,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setDraftAIReview(null);
       setActiveRevisionTask(null);
       setActiveRevisionPreview(null);
-      resetFoundationGaps();
       if (!activeSessionLoaded) {
         // 会话没读成功 → epoch 未登记 → 本次运行聊天自动保存会被短路（另有客户端一次性 toast 兜底）。
         // 开书照旧放行（重开本书 openProject 会补正），但成功 toast 必须让位给如实告警。
@@ -917,7 +822,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       // H4：保留用户当前停留章/章节列表/对话/草稿，只让 overview 刷资料/侧栏派生字段。
       setWorkspace(mergeFoundationRefreshWorkspace(workspaceFromStateOverview(overview), current));
     }
-    setSidebar(sidebarFromStateOverview(overview));
     const currentProjectPath = useNavigationStore.getState().projectPath;
     if (currentProjectPath) bookManagement.upsertRecentBook(bookSummaryFromOverview(overview, currentProjectPath));
   };

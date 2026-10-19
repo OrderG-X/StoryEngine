@@ -128,7 +128,7 @@ describe("buildWriterContext 带章纲", () => {
   it("章纲进 chapter_plan 段、按点名的物件翻出旧章原文、章纲地点算本章地点", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-plan-context-"));
     const { projectDir } = await createStoryProject({
-      rootDir, title: "海州账册", genre: "urban", premise: "审计员林澈追查账册篡改。", mainCharacterName: "林澈",
+      rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "chapters"), { recursive: true });
     await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n蓝色账册第三页被人撕掉了一角。\n", "utf-8");
@@ -154,7 +154,7 @@ describe("buildWriterContext 带章纲", () => {
   it("不给章纲 → 没有这两段（旧行为）", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-plan-context-none-"));
     const { projectDir } = await createStoryProject({
-      rootDir, title: "海州账册", genre: "urban", premise: "审计员林澈追查账册篡改。", mainCharacterName: "林澈",
+      rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈",
     });
     const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。" });
     const names = envelope.sections.map((section) => section.name);
