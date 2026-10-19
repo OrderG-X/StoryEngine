@@ -94,7 +94,9 @@
   .se-shelf-empty p{margin:0;}
   .se-shelf-foot{display:flex;justify-content:center;gap:16px;margin-top:40px;}
   .se-shelf-link{height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--faint);font-size:12px;cursor:pointer;}
-  .se-shelf-link:hover{background:var(--hover);color:var(--text);}
+  .se-shelf-link:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .se-shelf-link:disabled{cursor:default;opacity:.6;}
+  .se-shelf-file{display:none;}
   .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
   .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
   .se-book-open:hover .se-cover{transform:translateY(-2px);}

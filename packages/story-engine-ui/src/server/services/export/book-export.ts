@@ -5,7 +5,7 @@
  * 同一章两份都有时用工作稿（作者最新改的那版）。段落按行切：每个非空行一段，去掉行首的全角 / 半角空格（排版时统一加）。
  */
 import { readChapterPaper } from "@actalk/story-core";
-import { readBookMeta } from "../../lib/book-info.js";
+import { readBookMeta, safeFileName } from "../../lib/book-info.js";
 import { extractDraftTitle, readUiChapterFileStates } from "../../lib/project-io.js";
 import { EXPORT_MIME, toDocx, toEpub, toTxt, type ExportBook, type ExportChapter, type ExportFormat } from "./formats.js";
 
@@ -58,12 +58,6 @@ export async function collectExportBook(projectDir: string, options: Omit<Export
     ...(meta.info.synopsis ? { synopsis: meta.info.synopsis } : {}),
     chapters,
   };
-}
-
-/** 文件名里不许的字符换掉。 */
-export function safeFileName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/gu, "_").trim() || "未命名";
 }
 
 export async function exportBook(projectDir: string, options: ExportOptions): Promise<ExportResult> {

@@ -87,6 +87,15 @@ describe("evaluateRequestSecurity", () => {
     expect(evaluateRequestSecurity(req({ host: "192.168.1.5:5180", allowRemote: true })).ok).toBe(true);
   });
 
+  it("lets only the restore route take application/zip; same-origin check still applies", () => {
+    expect(evaluateRequestSecurity(req({ method: "POST", url: "/api/books/restore", contentType: "application/zip" })).ok).toBe(true);
+    const other = evaluateRequestSecurity(req({ method: "POST", url: "/api/books/delete", contentType: "application/zip" }));
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.status).toBe(415);
+    const cross = evaluateRequestSecurity(req({ method: "POST", url: "/api/books/restore", contentType: "application/zip", origin: "https://evil.example" }));
+    expect(cross.ok).toBe(false);
+  });
+
   it("requires application/json for write methods", () => {
     const d = evaluateRequestSecurity(req({ method: "POST", contentType: "text/plain" }));
     expect(d.ok).toBe(false);

@@ -4,7 +4,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { collectExportBook, exportBook, safeFileName, splitParagraphs } from "./book-export.js";
+import { safeFileName } from "../../lib/book-info.js";
+import { collectExportBook, exportBook, splitParagraphs } from "./book-export.js";
 
 const dirs: string[] = [];
 afterEach(async () => {

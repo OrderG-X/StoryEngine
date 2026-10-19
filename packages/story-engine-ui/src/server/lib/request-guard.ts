@@ -94,6 +94,17 @@ function isJsonContentType(contentType: string | undefined): boolean {
   return contentType.trim().toLowerCase().startsWith("application/json");
 }
 
+/**
+ * 只收压缩包的写路由（P10 从备份恢复）。application/zip 不是浏览器「简单类型」：跨源发要先预检，
+ * 本服务不回 CORS 头，预检过不去，所以和 JSON 一样挡得住表单 / 跨站请求；同源校验照做。
+ */
+export const ZIP_UPLOAD_PATHS: readonly string[] = ["/api/books/restore"];
+
+function isZipUpload(url: string, contentType: string | undefined): boolean {
+  if (!ZIP_UPLOAD_PATHS.includes(url.split("?")[0] ?? "")) return false;
+  return Boolean(contentType?.trim().toLowerCase().startsWith("application/zip"));
+}
+
 function hostAllowedWhenRemote(
   hostname: string | undefined,
   allowedHosts: readonly string[],
@@ -133,7 +144,7 @@ export function evaluateRequestSecurity(input: RequestSecurityInput): RequestSec
 
   const method = input.method.toUpperCase();
   if (WRITE_METHODS.has(method)) {
-    if (!isJsonContentType(input.contentType)) {
+    if (!isJsonContentType(input.contentType) && !isZipUpload(input.url, input.contentType)) {
       return { ok: false, status: 415, error: "写操作要求 Content-Type 为 application/json。" };
     }
     const originHost = hostnameFromUrlHeader(input.origin) ?? hostnameFromUrlHeader(input.referer);

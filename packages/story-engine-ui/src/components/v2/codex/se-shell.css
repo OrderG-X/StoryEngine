@@ -73,6 +73,14 @@
   /* 「高级」：设置文件原文。 */
   .se-raw-settings .ms-raw-json{width:100%;min-height:420px;}
   .se-raw-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;}
+  /* 「备份」（P10）：文件夹路径一行省略；换文件夹时整行输入框。 */
+  .se-backup-path{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;}
+  .se-backup-edit{display:flex;flex-direction:column;gap:8px;padding:0 0 12px;}
+  .se-backup-input{width:100%;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:13px;}
+  .se-backup-input:focus{outline:none;border-color:var(--accent);}
+  .se-backup-edit-actions{display:flex;justify-content:flex-end;gap:8px;}
+  .se-backup-last{margin:12px 0 0;font-size:13px;color:var(--muted);}
+  .se-backup-last.is-bad{color:var(--danger);}
 
   /* ═══ 搜索按钮 + ⌘K 面板 ═══ */
   .se-search-btn{

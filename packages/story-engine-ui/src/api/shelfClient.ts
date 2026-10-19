@@ -107,3 +107,42 @@ export async function exportBookFile(request: ExportRequest): Promise<{ readonly
   const { blob, filename, headers } = await fetchAttachment(`/api/books/export?${params.toString()}`, `导出.${request.format}`);
   return { blob, filename, chapters: Number(headers.get("x-export-chapters") ?? 0) };
 }
+
+// ---------------------------------------------------------------------------
+// 备份
+// ---------------------------------------------------------------------------
+
+export async function downloadBookBackup(projectPath: string): Promise<{ readonly blob: Blob; readonly filename: string }> {
+  const { blob, filename } = await fetchAttachment(`/api/books/backup?project=${encodeURIComponent(projectPath)}`, "备份.zip");
+  return { blob, filename };
+}
+
+export async function restoreBookBackup(file: Blob): Promise<{ readonly projectPath: string; readonly title: string }> {
+  const body = await call<{ projectPath: string; title: string }>("/api/books/restore", {
+    method: "POST",
+    headers: { "content-type": "application/zip" },
+    body: file,
+  });
+  return { projectPath: body.projectPath, title: body.title };
+}
+
+export interface BackupSettingsView {
+  readonly auto: boolean;
+  readonly dir: string;
+  readonly isDefaultDir: boolean;
+  readonly defaultDir: string;
+  readonly keep: number;
+  readonly last?: { readonly at: string; readonly ok: boolean; readonly title: string; readonly error?: string };
+}
+
+export async function fetchBackupSettings(): Promise<BackupSettingsView> {
+  return call<BackupSettingsView>("/api/backup-settings");
+}
+
+export async function saveBackupSettings(patch: { readonly auto?: boolean; readonly dir?: string }): Promise<BackupSettingsView> {
+  return call<BackupSettingsView>("/api/backup-settings", postJson(patch));
+}
+
+export async function openBackupFolder(): Promise<void> {
+  await call("/api/backup-settings/open-folder", postJson({}));
+}

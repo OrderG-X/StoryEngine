@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useMotionStore } from "../../stores/motionStore.js";
 import type { HomePageProps } from "../../types.js";
 import HomeLanding from "./HomeLanding.js";
+import * as shelfClient from "../../api/shelfClient.js";
+
+vi.mock("../../utils/refreshBookLibrary.js", () => ({ addReturnedBook: vi.fn(async () => undefined), refreshBookLibrary: vi.fn(async () => undefined) }));
 
 vi.mock("../../api/shelfClient.js", () => ({
   fetchTrash: vi.fn(async () => ({ items: [{ id: "t1", title: "删掉的书", originalPath: "/x", deletedAt: new Date().toISOString(), daysLeft: 30 }], keepDays: 30 })),
@@ -11,6 +14,8 @@ vi.mock("../../api/shelfClient.js", () => ({
   purgeTrashItem: vi.fn(),
   exportBookFile: vi.fn(),
   saveBlob: vi.fn(),
+  downloadBookBackup: vi.fn(async () => ({ blob: new Blob(["z"]), filename: "海州账册-备份.zip" })),
+  restoreBookBackup: vi.fn(async () => ({ projectPath: "/books/restored", title: "回来的书" })),
 }));
 
 afterEach(() => {
@@ -63,6 +68,20 @@ describe("HomeLanding", () => {
     fireEvent.click(screen.getByRole("button", { name: "移到回收站" }));
     expect(onDeleteRecentBook).toHaveBeenCalledWith("book-1");
     expect(await screen.findByRole("button", { name: "回收站（1）" })).toBeInTheDocument();
+  });
+
+  it("书的菜单「备份」下载整本书；书架底部「从备份恢复」选 zip 解成新书", async () => {
+    render(<HomeLanding {...homeProps({ recentBooks: [recentBook()] })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "备份" }));
+    expect(await screen.findByText("《海州账册》备份好了：海州账册-备份.zip")).toBeInTheDocument();
+    expect(shelfClient.saveBlob).toHaveBeenCalledWith(expect.any(Blob), "海州账册-备份.zip");
+
+    const file = new File(["zip"], "海州账册-备份.zip", { type: "application/zip" });
+    fireEvent.change(screen.getByLabelText("选备份文件"), { target: { files: [file] } });
+    expect(await screen.findByText("《回来的书》恢复好了，在书架上。")).toBeInTheDocument();
+    expect(shelfClient.restoreBookBackup).toHaveBeenCalledWith(file);
   });
 
   it("点菜单内动作后菜单关闭（不再常驻盖住「···」按钮，V6 回归根因）", () => {

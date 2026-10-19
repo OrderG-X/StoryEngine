@@ -8,7 +8,7 @@ import type { BookSummary, HomePageProps } from "../../types.js";
 import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
 import { TrashDialog } from "./shelf/TrashDialog.js";
 import { ExportDialog } from "./shelf/ExportDialog.js";
-import { fetchTrash } from "../../api/shelfClient.js";
+import { downloadBookBackup, fetchTrash, restoreBookBackup, saveBlob } from "../../api/shelfClient.js";
 import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
 import "./home.css";
 
@@ -71,6 +71,8 @@ export default function HomeLanding({
   const [trashOpen, setTrashOpen] = useState(false);
   const [trashCount, setTrashCount] = useState(0);
   const [exportTarget, setExportTarget] = useState<BookSummary | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
   const lastBook = recentBooks[0];
 
@@ -80,6 +82,34 @@ export default function HomeLanding({
   useEffect(refreshTrashCount, []);
 
   const showFeedback = (message: string) => setFeedbackMessage(message);
+  const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+  const backupBook = async (book: BookSummary) => {
+    showFeedback(`正在备份《${book.title}》…`);
+    try {
+      const backup = await downloadBookBackup(book.projectPath);
+      saveBlob(backup.blob, backup.filename);
+      showFeedback(`《${book.title}》备份好了：${backup.filename}`);
+    } catch (error) {
+      showFeedback(`没备份成：${errorText(error)}`);
+    }
+  };
+
+  const restoreFrom = async (file: File | undefined) => {
+    if (!file) return;
+    setRestoring(true);
+    showFeedback(`正在从「${file.name}」恢复…`);
+    try {
+      const restored = await restoreBookBackup(file);
+      await addReturnedBook(restored.projectPath, restored.title);
+      showFeedback(`《${restored.title}》恢复好了，在书架上。`);
+    } catch (error) {
+      showFeedback(errorText(error));
+    } finally {
+      setRestoring(false);
+      if (restoreInputRef.current) restoreInputRef.current.value = "";
+    }
+  };
   const findBook = (bookId: string) => recentBooks.find((book) => book.id === bookId);
   const closeDeleteDialog = () => {
     setDeleteTarget(null);
@@ -176,6 +206,10 @@ export default function HomeLanding({
                       if (!bookToDelete) return;
                       setDeleteTarget(bookToDelete);
                     }}
+                    onBackup={(bookId) => {
+                      const book = findBook(bookId);
+                      if (book) void backupBook(book);
+                    }}
                     onExport={(bookId) => setExportTarget(findBook(bookId) ?? null)}
                     onOpen={onOpenRecentBook}
                     onOpenFolder={(bookId) => {
@@ -200,6 +234,17 @@ export default function HomeLanding({
           </section>
 
           <footer className="se-shelf-foot">
+            <input
+              accept=".zip,application/zip"
+              aria-label="选备份文件"
+              className="se-shelf-file"
+              onChange={(event) => void restoreFrom(event.target.files?.[0])}
+              ref={restoreInputRef}
+              type="file"
+            />
+            <button className="se-shelf-link" disabled={restoring} onClick={() => restoreInputRef.current?.click()} type="button">
+              {restoring ? "正在恢复…" : "从备份恢复"}
+            </button>
             <button className="se-shelf-link" onClick={() => setTrashOpen(true)} type="button">
               回收站{trashCount > 0 ? `（${trashCount}）` : ""}
             </button>
@@ -316,6 +361,7 @@ export default function HomeLanding({
 
 function RecentBook({
   book,
+  onBackup,
   onDelete,
   onExport,
   onOpen,
@@ -324,6 +370,7 @@ function RecentBook({
   onRename,
 }: {
   readonly book: BookSummary;
+  readonly onBackup: (bookId: string) => void;
   readonly onDelete: (bookId: string) => void;
   readonly onExport: (bookId: string) => void;
   readonly onOpen: (bookId: string) => void;
@@ -368,6 +415,7 @@ function RecentBook({
             <button onClick={() => { setMenuOpen(false); onOpen(book.id); }} type="button">继续写作</button>
             <button onClick={() => { setMenuOpen(false); onRename(book.id); }} type="button">重命名</button>
             <button onClick={() => { setMenuOpen(false); onExport(book.id); }} type="button">导出</button>
+            <button onClick={() => { setMenuOpen(false); onBackup(book.id); }} type="button">备份</button>
             <button onClick={() => { setMenuOpen(false); onRemove(book.id); }} type="button">从最近写作移除</button>
             <button onClick={() => { setMenuOpen(false); onOpenFolder(book.id); }} type="button">打开所在文件夹</button>
             <button className="is-danger" onClick={() => { setMenuOpen(false); onDelete(book.id); }} type="button">删除书籍</button>

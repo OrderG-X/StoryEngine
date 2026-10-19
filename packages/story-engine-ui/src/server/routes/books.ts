@@ -40,7 +40,7 @@ import { formatRelativeTimeMs } from "../../utils/textUtils.js";
 const execFileAsync = promisify(execFile);
 
 /** 在系统文件管理器里打开目录（跨平台：macOS=open / Windows=explorer / 其余=xdg-open）。 */
-async function openDirectoryInFileManager(dir: string): Promise<void> {
+export async function openDirectoryInFileManager(dir: string): Promise<void> {
   if (process.platform === "darwin") {
     await execFileAsync("open", [dir]);
   } else if (process.platform === "win32") {

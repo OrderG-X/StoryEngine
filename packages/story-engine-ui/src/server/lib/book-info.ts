@@ -86,3 +86,9 @@ export async function writeBookMeta(projectDir: string, patch: { readonly info?:
   });
   return readBookMeta(projectDir);
 }
+
+/** 书名做文件名：文件系统不许的字符换成下划线。 */
+export function safeFileName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/gu, "_").trim() || "未命名";
+}

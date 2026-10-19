@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
+import { readZip } from "../lib/zip.js";
 import { attachmentHeader, registerBookFilesRoutes } from "./book-files.js";
 
 const dirs: string[] = [];
@@ -24,6 +25,36 @@ async function makeBook(): Promise<string> {
   await writeFile(join(dir, "drafts", "fast", "chapter-0003.md"), "# 第3章 · 还没定\n\n工作稿。\n", "utf-8");
   return dir;
 }
+
+describe("备份接口（P10）", () => {
+  it("下载备份是 zip、带说明文件；传回去解成新书；不是备份包如实拒", async () => {
+    const original = process.env.SE_BOOKS_DIR;
+    const library = await makeHomeTempDir("story-engine-restore-");
+    dirs.push(library);
+    process.env.SE_BOOKS_DIR = library;
+    try {
+      const dir = await makeBook();
+      const backup = await callExport(`/api/books/backup?project=${encodeURIComponent(dir)}`);
+      expect(backup.statusCode).toBe(200);
+      expect(backup.headers["Content-Type"]).toBe("application/zip");
+      const paths = readZip(backup.body).map((entry) => entry.path);
+      expect(paths).toContain("story-engine-backup.json");
+      expect(paths).toContain("book/chapters/0001.md");
+
+      const restored = await callExport("/api/books/restore", "POST", backup.body);
+      expect(restored.statusCode).toBe(200);
+      expect(restored.json).toMatchObject({ ok: true, title: "雾港/来信" });
+      expect(String(restored.json.projectPath).startsWith(join(library, "story-engine"))).toBe(true);
+
+      const bad = await callExport("/api/books/restore", "POST", Buffer.from("hello"));
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json.error).toContain("没恢复");
+    } finally {
+      if (original === undefined) delete process.env.SE_BOOKS_DIR;
+      else process.env.SE_BOOKS_DIR = original;
+    }
+  });
+});
 
 describe("导出接口（P10）", () => {
   it("接口：回附件；格式、范围不对回 400 的人话", async () => {
@@ -49,7 +80,7 @@ describe("导出接口（P10）", () => {
   });
 });
 
-async function callExport(url: string): Promise<{ statusCode: number; headers: Record<string, string>; body: Buffer; json: Record<string, unknown> }> {
+async function callExport(url: string, method = "GET", upload?: Buffer): Promise<{ statusCode: number; headers: Record<string, string>; body: Buffer; json: Record<string, unknown> }> {
   let handler: ((req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void) => unknown) | undefined;
   registerBookFilesRoutes({ use(next) { handler = next; } });
   const headers: Record<string, string> = {};
@@ -61,7 +92,13 @@ async function callExport(url: string): Promise<{ statusCode: number; headers: R
       if (value !== undefined) chunks.push(Buffer.isBuffer(value) ? value : Buffer.from(value, "utf-8"));
     },
   } as unknown as ServerResponse & { statusCode: number };
-  const req = { method: "GET", url } as unknown as IncomingMessage;
+  const req = {
+    method,
+    url,
+    async *[Symbol.asyncIterator]() {
+      if (upload) yield upload;
+    },
+  } as unknown as IncomingMessage;
   await handler!(req, res, () => undefined);
   const body = Buffer.concat(chunks);
   let json: Record<string, unknown> = {};
