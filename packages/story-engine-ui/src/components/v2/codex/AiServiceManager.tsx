@@ -12,8 +12,6 @@ const GROUP_LABELS_SHORT: Record<ProviderPresetGroup, string> = {
   local: "本地",
 };
 
-const PRESET_IDS = new Set(PROVIDER_PRESETS.map((p) => p.id));
-
 interface AiServiceManagerProps {
   readonly savedProviders: readonly SavedProvider[];
   /** 点卡片：id = 预设或已存服务商 id；null = 新建自定义服务。 */
@@ -30,12 +28,13 @@ function statusOf(saved: SavedProvider | undefined): { text: string; dot: "ok" |
 }
 
 /**
- * 服务商卡片网格：分组的预设卡片 + 已存自定义服务卡片 + 新建自定义入口。
- * 已配置的显示保存的名称与密钥状态；点卡片进入配置详情。
+ * 服务商（P10 重排）：已接好的排在上面；没接的收进「添加服务商」（搜索 + 分类 + 自定义服务），
+ * 一个都没接时直接展开。点卡片进入配置详情。
  */
 export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerProps) {
   const [query, setQuery] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<ProviderPresetGroup | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(savedProviders.length === 0);
 
   const savedById = useMemo(() => {
     const map = new Map<string, SavedProvider>();
@@ -43,16 +42,11 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
     return map;
   }, [savedProviders]);
 
-  /** 已存但不属于任何预设 → 自定义服务，必须在列表可见（否则存了就找不到、改不了）。 */
-  const customSaved = useMemo(
-    () => savedProviders.filter((p) => !PRESET_IDS.has(p.id)),
-    [savedProviders],
-  );
-
   const q = query.trim().toLowerCase();
 
   const filteredPresets = useMemo(() => {
     return PROVIDER_PRESETS.filter((preset) => {
+      if (savedById.has(preset.id)) return false;
       if (selectedGroup && preset.group !== selectedGroup) return false;
       if (!q) return true;
       const savedLabel = savedById.get(preset.id)?.label ?? "";
@@ -64,16 +58,6 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
     });
   }, [q, selectedGroup, savedById]);
 
-  const filteredCustom = useMemo(() => {
-    if (selectedGroup) return [];
-    if (!q) return customSaved;
-    return customSaved.filter(
-      (p) =>
-        p.label.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        p.baseUrl.toLowerCase().includes(q),
-    );
-  }, [customSaved, q, selectedGroup]);
 
   const byGroup = useMemo(() => {
     const map = {} as Record<ProviderPresetGroup, ProviderPreset[]>;
@@ -85,16 +69,46 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
   const groupCounts = useMemo(() => {
     const counts = {} as Record<ProviderPresetGroup, number>;
     for (const group of GROUP_ORDER) {
-      counts[group] = PROVIDER_PRESETS.filter((p) => p.group === group).length;
+      counts[group] = PROVIDER_PRESETS.filter((p) => p.group === group && !savedById.has(p.id)).length;
     }
     return counts;
-  }, []);
+  }, [savedById]);
 
-  const showCustomSection = !selectedGroup && (filteredCustom.length > 0 || !q);
-  const nothingMatched = filteredPresets.length === 0 && filteredCustom.length === 0;
+  const nothingMatched = filteredPresets.length === 0 && Boolean(q);
+  const presetLabel = (id: string) => PROVIDER_PRESETS.find((preset) => preset.id === id)?.label;
 
   return (
     <div className="asm-page">
+      {savedProviders.length > 0 ? (
+        <section className="asm-group" aria-label="已接好的服务商">
+          <h3 className="asm-group-title">已接好的</h3>
+          <div className="asm-grid">
+            {savedProviders.map((p) => {
+              const status = statusOf(p);
+              const preset = presetLabel(p.id);
+              return (
+                <button key={p.id} type="button" className="asm-card is-configured" onClick={() => onSelect(p.id)}>
+                  <span className="asm-card-top">
+                    <span className="asm-card-name">{p.label}</span>
+                    <span className={`asm-dot ${status.dot}`} />
+                  </span>
+                  <span className="asm-card-status">{status.text}</span>
+                  <span className="asm-card-hint asm-card-url">{preset && preset !== p.label ? `${preset} · ${p.baseUrl}` : p.baseUrl}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {savedProviders.length > 0 ? (
+        <button type="button" className="asm-add-toggle" aria-expanded={catalogOpen} onClick={() => setCatalogOpen((open) => !open)}>
+          {catalogOpen ? "收起" : "＋ 添加服务商"}
+        </button>
+      ) : null}
+
+      {catalogOpen ? (
+      <>
       {/* 搜索 */}
       <div className="asm-search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -117,7 +131,7 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
           className={`asm-chip ${selectedGroup === null ? "is-active" : ""}`}
           onClick={() => setSelectedGroup(null)}
         >
-          全部 {PROVIDER_PRESETS.length}
+          全部 {PROVIDER_PRESETS.filter((p) => !savedById.has(p.id)).length}
         </button>
         {GROUP_ORDER.map((group) => (
           <button
@@ -139,69 +153,40 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
           <section key={group} className="asm-group">
             <h3 className="asm-group-title">{GROUP_LABELS[group]}</h3>
             <div className="asm-grid">
-              {list.map((preset) => {
-                const saved = savedById.get(preset.id);
-                const status = statusOf(saved);
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={`asm-card ${saved ? "is-configured" : ""}`}
-                    onClick={() => onSelect(preset.id)}
-                  >
-                    <span className="asm-card-top">
-                      <span className="asm-card-name">{saved?.label ?? preset.label}</span>
-                      <span className={`asm-dot ${status.dot}`} />
-                    </span>
-                    <span className="asm-card-status">{status.text}</span>
-                    {saved && saved.label !== preset.label
-                      ? <span className="asm-card-hint">{preset.label} · {saved.baseUrl}</span>
-                      : preset.modelsHint && <span className="asm-card-hint">{preset.modelsHint}</span>}
-                  </button>
-                );
-              })}
+              {list.map((preset) => (
+                <button key={preset.id} type="button" className="asm-card" onClick={() => onSelect(preset.id)}>
+                  <span className="asm-card-top">
+                    <span className="asm-card-name">{preset.label}</span>
+                    <span className="asm-dot" />
+                  </span>
+                  <span className="asm-card-status">没接</span>
+                  {preset.note ? <span className="asm-card-hint">{preset.note}</span> : null}
+                </button>
+              ))}
             </div>
           </section>
         );
       })}
 
-      {/* 自定义服务：已存的 + 新建入口 */}
-      {showCustomSection && (
+      {/* 自定义服务：接任意 OpenAI 兼容接口（已存的自定义服务在上面「已接好的」里）。 */}
+      {!selectedGroup && !q ? (
         <section className="asm-group">
           <h3 className="asm-group-title">自定义服务</h3>
           <div className="asm-grid">
-            {filteredCustom.map((p) => {
-              const status = statusOf(p);
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  className="asm-card is-configured"
-                  onClick={() => onSelect(p.id)}
-                >
-                  <span className="asm-card-top">
-                    <span className="asm-card-name">{p.label}</span>
-                    <span className={`asm-dot ${status.dot}`} />
-                  </span>
-                  <span className="asm-card-status">{status.text}</span>
-                  <span className="asm-card-hint asm-card-url">{p.baseUrl}</span>
-                </button>
-              );
-            })}
-            {!q && (
-              <button type="button" className="asm-card asm-card-custom" onClick={() => onSelect(null)}>
-                <span className="asm-card-plus">＋</span>
-                <span className="asm-card-status">自定义服务</span>
-                <span className="asm-card-hint">接入任意 OpenAI 兼容接口</span>
-              </button>
-            )}
+            <button type="button" className="asm-card asm-card-custom" onClick={() => onSelect(null)}>
+              <span className="asm-card-plus">＋</span>
+              <span className="asm-card-status">自定义服务</span>
+              <span className="asm-card-hint">接入任意 OpenAI 兼容接口</span>
+            </button>
           </div>
         </section>
-      )}
+      ) : null}
 
       {nothingMatched && (
         <div className="asm-empty">没有匹配的服务商</div>
       )}
+      </>
+      ) : null}
     </div>
   );
 }

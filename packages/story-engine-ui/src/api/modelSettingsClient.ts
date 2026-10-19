@@ -79,3 +79,29 @@ export async function testModelConnection(input: ModelTestConnectionRequest, sig
   }
   return payload.result;
 }
+
+export interface CheckupModelView {
+  readonly key: string;
+  readonly providerLabel: string;
+  readonly model: string;
+  readonly tasks: readonly string[];
+  readonly ok: boolean;
+  readonly ms?: number;
+  readonly error?: string;
+}
+
+export interface CheckupView {
+  readonly models: readonly CheckupModelView[];
+  readonly unresolved: readonly { readonly task: string; readonly error: string }[];
+}
+
+/** 体检（P10）：在用的模型各真发一句极短对话。 */
+export async function runModelCheckup(signal?: AbortSignal): Promise<CheckupView> {
+  const payload = await fetchJson<({ ok: true } & CheckupView) | { ok: false; error: string }>(
+    "/api/model-settings/checkup",
+    { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+    signal,
+  );
+  if (!payload.ok) throw new Error(payload.error);
+  return { models: payload.models, unresolved: payload.unresolved };
+}

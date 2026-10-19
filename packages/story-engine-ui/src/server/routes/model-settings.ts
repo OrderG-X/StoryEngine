@@ -2,6 +2,7 @@
  * GET  /api/model-settings — load model settings.
  * PUT  /api/model-settings — save model settings.
  * POST /api/model-settings/test — test a provider connection.
+ * POST /api/model-settings/checkup — 体检：在用的模型各真发一句极短对话（P10）。
  */
 import { homedir } from "node:os";
 import { mkdir, readFile } from "node:fs/promises";
@@ -32,6 +33,7 @@ import {
   serializeModelSecrets,
 } from "../lib/llm-client.js";
 import { invalidateStoryAgent } from "../agent/story-agent.js";
+import { runModelCheckup } from "../lib/model-checkup.js";
 import {
   buildTaskAssignmentsView,
   pickTaskAssignmentsFromBody,
@@ -52,6 +54,15 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
     }
 
     try {
+      if (req.method === "POST" && req.url?.split("?")[0] === "/api/model-settings/checkup") {
+        const result = await runModelCheckup();
+        writeJson(res, 200, {
+          ok: true,
+          models: result.models.map((model) => ({ ...model, ...(model.error ? { error: scrubLocalAbsolutePaths(model.error) } : {}) })),
+          unresolved: result.unresolved.map((item) => ({ ...item, error: scrubLocalAbsolutePaths(item.error) })),
+        });
+        return;
+      }
       if (req.method === "POST" && (req.url ?? "").includes("/test")) {
         await handleModelTest(req, res);
         return;

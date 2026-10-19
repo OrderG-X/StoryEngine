@@ -23,6 +23,7 @@ import {
 } from "../../ModelSettingsDialogTypes.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { AiServiceManager } from "./AiServiceManager.js";
+import { ModelsInUseCard } from "./ModelsInUseCard.js";
 // 本页直接用 .ms-notice/.ms-warn-notice/.ms-error 等 ms-* 样式，显式引入其所在 css，不再隐式依赖单 bundle 里别人捎带。
 import "../../ModelSettingsDialog.css";
 import "./aiSettings.css";
@@ -71,7 +72,7 @@ function slugifyProviderId(name: string): string {
 
 /**
  * AI 设置整页（服务商卡片 + 详情配置 + 任务分配）：
- *  - list：服务商卡片网格（预设 + 已存自定义），下方是「各功能使用的 AI」任务分配与对话记忆上限；
+ *  - list：顶上「在用的模型」+ 体检；服务商（已接好的在上、其余收进「添加服务商」）；下方「各功能使用的 AI」与对话记忆；
  *  - detail：点卡片进入该服务商配置（已配置的回填已保存值），测通后可一键「保存并分配给所有任务」。
  * 数据层走与 ModelSettingsDialog 相同的逻辑：读 result.summary（带密钥状态的规范化视图），
  * 写 buildModelSettingsConfig（providers 保持「以 id 为键的对象」规范形态）+ 任务分配旁路。
@@ -485,7 +486,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       ? "自定义服务"
       : form.name || detailPreset?.label || "AI 服务";
   const headerSubtitle = view.kind === "list"
-    ? "选择服务商填 Key，即可开始写作；下方可给每个功能分配模型。"
+    ? "接一家服务商、填上密钥就能写；每个功能可以用不同的模型。"
     : editingExisting
       ? "改动保存后立即生效。密钥留空表示不修改。"
       : "填入 API Key，测试通过后保存。";
@@ -514,7 +515,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
                 {saveWarnings.map((warning, index) => (
                   <div key={`warn-${index}`}>{warning}</div>
                 ))}
-                {/* 本页表单只有名称/地址/认证变量/密钥 4 个字段、无原文编辑器，
+                {/* 本页表单只有名称/地址/环境变量/密钥 4 个字段、无原文编辑器，
                     被丢的 customHeaders 在本页补不回——指路到同一弹窗的「高级」。 */}
                 <div>
                   补回路径：设置左边点「高级」，在对应服务商下写回 customHeaders 明文值后保存。
@@ -525,6 +526,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
             {view.kind === "list" && (
               <>
+                {savedProviders.length > 0 && <ModelsInUseCard tasks={tasks} savedProviders={savedProviders} />}
+
                 <AiServiceManager
                   savedProviders={savedProviders}
                   onSelect={(id) => openDetail(id)}

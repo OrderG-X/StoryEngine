@@ -8,7 +8,7 @@ export function TaskAssignmentSection({ tasks, thinking, savedProviders, onEditT
         <div className="ms-section-title-row">
           <h3 className="ms-section-title">各功能使用的 AI</h3>
         </div>
-        <span className="ms-section-hint">每个功能可单独选择模型，并设置是否启用深度分析；正文和对话建议关闭，复杂分析建议开启</span>
+        <span className="ms-section-hint">每个功能可以用不同的模型；写正文建议关「深度思考」，审稿、查硬伤建议开</span>
       </div>
 
       <div className="ms-task-list">
@@ -39,17 +39,12 @@ export function TaskAssignmentSection({ tasks, thinking, savedProviders, onEditT
                 ) : (
                   <>
                     <button type="button" className="ms-btn ms-btn-xs ms-btn-dashed" onClick={() => onEditTask(key)}>分配模型</button>
-                    <span
-                      className="ms-task-fallback-note"
-                      title="未单独分配时使用全局默认/引擎回退；不会自动跟随正文生成模型"
-                    >
-                      未单独分配 · 全局默认/引擎回退 · 不会自动跟随正文生成
-                    </span>
+                    <span className="ms-task-fallback-note">没单独选，用默认模型</span>
                   </>
                 )}
-                <label className="ms-task-think" title={suggestOn ? "这个功能建议开启深度分析" : "这个功能建议关闭深度分析（写正文更自然）"}>
+                <label className="ms-task-think" title={suggestOn ? "这个功能建议开深度思考" : "这个功能建议关深度思考（写正文更自然）"}>
                   <input type="checkbox" checked={think} onChange={() => onToggleThinking(key)} />
-                  <span className="ms-task-think-label">深度分析</span>
+                  <span className="ms-task-think-label">深度思考</span>
                   <span className="ms-task-think-hint">{suggestOn ? "建议开" : "建议关"}</span>
                 </label>
               </div>
