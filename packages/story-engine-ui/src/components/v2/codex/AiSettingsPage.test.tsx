@@ -425,3 +425,33 @@ describe("AiSettingsPage 数据层（map 形态 providers）", () => {
     expect(config.providers.deepseek && "customHeaders" in config.providers.deepseek).toBe(false);
   });
 });
+
+describe("备用模型（P10）", () => {
+  it("选一个 → 存进去（带档案、不分给任务）；不用 → 清掉", async () => {
+    testModelConnection.mockResolvedValue({ providerId: "deepseek", models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }], elapsedMs: 1 });
+    // 服务端照存回显：档案表里有备用档案、带回 fallbackProfileId。
+    saveModelSettings.mockImplementation(async (...args: unknown[]) => {
+      const fixture = makeFetchFixture();
+      const profiles = [...fixture.result.summary.profiles, { id: "deepseek_deepseek-reasoner", provider: "deepseek", model: "deepseek-reasoner" }];
+      return { ...fixture, result: { ...fixture.result, summary: { ...fixture.result.summary, profiles } }, fallbackProfileId: args[4] ?? null };
+    });
+    await renderAndWaitLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "选一个" }));
+    expect(screen.getByText("为「备用模型」分配模型")).toBeTruthy();
+    expect(screen.queryByText("同时应用到全部任务")).toBeNull();
+    fireEvent.click((await screen.findAllByRole("button", { name: /deepseek-reasoner/ }))[0]!); // 头一组是 DeepSeek
+
+    await waitFor(() => expect(saveModelSettings).toHaveBeenCalledTimes(1));
+    const [rawText, , taskAssignments, , fallbackProfileId] = saveModelSettings.mock.calls[0];
+    const config = JSON.parse(rawText as string);
+    expect(fallbackProfileId).toBe("deepseek_deepseek-reasoner");
+    expect(config.profiles["deepseek_deepseek-reasoner"]).toBeTruthy();
+    expect(Object.values(config.taskProfiles)).not.toContain("deepseek_deepseek-reasoner");
+    expect(taskAssignments.fastDraft.profileId).toBe("deepseek_deepseek-chat");
+    expect(screen.getByRole("group", { name: "备用模型" }).textContent).toContain("deepseek-reasoner");
+
+    fireEvent.click(screen.getByRole("button", { name: "不用" }));
+    await waitFor(() => expect(saveModelSettings).toHaveBeenCalledTimes(2));
+    expect(saveModelSettings.mock.calls[1][4]).toBeNull();
+  });
+});

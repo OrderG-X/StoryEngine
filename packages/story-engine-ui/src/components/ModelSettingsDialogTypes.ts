@@ -119,4 +119,8 @@ export interface ModelPickerOverlayProps {
   readonly onClose: () => void;
   readonly onAssignAll: (providerId: string, modelId: string) => void;
   readonly onAssignTask: (taskKey: string, providerId: string, modelId: string) => void;
+  /** 标题里的功能名（不是 TASK_LABELS 里的任务时给，如「备用模型」）。 */
+  readonly taskLabel?: string;
+  /** 不显示「同时应用到全部任务」（选备用模型时）。 */
+  readonly hideApplyAll?: boolean;
 }

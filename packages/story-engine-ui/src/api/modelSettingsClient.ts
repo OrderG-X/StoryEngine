@@ -13,6 +13,8 @@ export interface ModelSettingsClientResult {
   readonly result: ModelSettingsLoadResult;
   readonly rawText: string;
   readonly taskAssignments?: TaskAssignmentView;
+  /** 备用模型档案（P10）；没设是 null / 不带。 */
+  readonly fallbackProfileId?: string | null;
   readonly warnings?: readonly string[];
 }
 
@@ -30,6 +32,7 @@ export async function fetchModelSettings(signal?: AbortSignal): Promise<ModelSet
     result: payload.result,
     rawText: payload.rawText,
     taskAssignments: payload.taskAssignments,
+    fallbackProfileId: payload.fallbackProfileId ?? null,
   };
 }
 
@@ -38,11 +41,14 @@ export async function saveModelSettings(
   providerApiKeys?: Readonly<Record<string, string>>,
   taskAssignments?: TaskAssignmentView,
   signal?: AbortSignal,
+  /** 备用模型（P10）：字符串 = 设成它，null = 不用备用，不传 = 不动。 */
+  fallbackProfileId?: string | null,
 ): Promise<ModelSettingsClientResult> {
   const body: SaveModelSettingsRequest = {
     rawText,
     ...(providerApiKeys && Object.keys(providerApiKeys).length > 0 ? { providerApiKeys } : {}),
     ...(taskAssignments && Object.keys(taskAssignments).length > 0 ? { taskAssignments } : {}),
+    ...(fallbackProfileId !== undefined ? { fallbackProfileId } : {}),
   };
   const payload = await fetchJson<ModelSettingsApiResponse>(
     "/api/model-settings",
@@ -60,6 +66,7 @@ export async function saveModelSettings(
     result: payload.result,
     rawText: payload.rawText,
     taskAssignments: payload.taskAssignments,
+    fallbackProfileId: payload.fallbackProfileId ?? null,
     warnings: payload.warnings,
   };
 }

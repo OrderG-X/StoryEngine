@@ -492,7 +492,7 @@ async function handleAgentChat(
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
-      const { usage: actionUsage } = await withTokenMeter(() => runUserAction({
+      const { usage: actionUsage, notices: actionNotices } = await withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
         executeTool: executeUserActionTool,
@@ -504,6 +504,7 @@ async function handleAgentChat(
       }));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
+      for (const notice of actionNotices) sendEvent("status", { message: notice });
       sendEvent("usage", actionUsage);
       const action = parsedAction.action;
       await appendTurnMetrics(projectDir, "chapter" in action ? action.chapter : currentChapter, {
@@ -539,7 +540,7 @@ async function handleAgentChat(
     const visibleTextScrubber = createStreamingScrubber();
 
     const turnStarted = Date.now();
-    const { result: { finishReason }, usage } = await withTokenMeter(async () => runAgentTurn({
+    const { result: { finishReason }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
@@ -555,6 +556,7 @@ async function handleAgentChat(
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);
+    for (const notice of notices) sendEvent("status", { message: notice });
     sendEvent("usage", usage);
     await appendTurnMetrics(projectDir, currentChapter, { kind: "chat", ms: Date.now() - turnStarted, usage });
     sendEvent("done", { ...(finishReason ? { finishReason } : {}) });

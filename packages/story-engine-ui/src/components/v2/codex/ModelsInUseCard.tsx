@@ -14,7 +14,11 @@ interface InUseRow {
 }
 
 function taskNames(keys: readonly string[]): string {
-  return keys.map((key) => TASK_LABELS[key] ?? key).join("、");
+  return keys.map((key) => (key === "fallback" ? "备用" : TASK_LABELS[key] ?? key)).join("、");
+}
+
+function providerLabelOf(providerId: string, savedProviders: readonly SavedProvider[]): string {
+  return savedProviders.find((p) => p.id === providerId)?.label ?? PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
 }
 
 function formatMs(ms: number | undefined): string {
@@ -30,7 +34,7 @@ export function rowsFromAssignments(tasks: Readonly<Record<string, string>>, sav
     if (!value) continue;
     const [providerId = "", model = ""] = value.split("|");
     if (!model) continue;
-    const providerLabel = savedProviders.find((p) => p.id === providerId)?.label ?? PROVIDER_PRESETS.find((p) => p.id === providerId)?.label ?? providerId;
+    const providerLabel = providerLabelOf(providerId, savedProviders);
     const row = rows.get(value) ?? { providerLabel, model, tasks: [] };
     row.tasks.push(key);
     rows.set(value, row);
@@ -40,10 +44,15 @@ export function rowsFromAssignments(tasks: Readonly<Record<string, string>>, sav
 
 /**
  * 设置顶上的「在用」卡（P10）：6 个功能实际在用的模型（去重），每个一盏灯；「体检」真发一句极短对话，回耗时或原因。
+ * 底下一行备用模型：主模型连不上时自动换它再试一次（体检也测它）。
  */
-export function ModelsInUseCard({ tasks, savedProviders, api = { runModelCheckup } }: {
+export function ModelsInUseCard({ tasks, savedProviders, fallback = "", onPickFallback, onClearFallback, api = { runModelCheckup } }: {
   readonly tasks: Readonly<Record<string, string>>;
   readonly savedProviders: readonly SavedProvider[];
+  /** 备用模型 "provider|model"；"" = 没设。 */
+  readonly fallback?: string;
+  readonly onPickFallback?: () => void;
+  readonly onClearFallback?: () => void;
   readonly api?: { readonly runModelCheckup: typeof runModelCheckup };
 }) {
   const [checking, setChecking] = useState(false);
@@ -64,6 +73,8 @@ export function ModelsInUseCard({ tasks, savedProviders, api = { runModelCheckup
       setChecking(false);
     }
   };
+
+  const [fallbackProvider = "", fallbackModel = ""] = fallback.split("|");
 
   const allOk = result !== null && result.models.length > 0 && result.models.every((model) => model.ok) && result.unresolved.length === 0;
 
@@ -108,6 +119,17 @@ export function ModelsInUseCard({ tasks, savedProviders, api = { runModelCheckup
         </ul>
       ) : null}
       {!result && unassigned.length > 0 && rows.length > 0 ? <p className="asm-inuse-empty">{taskNames(unassigned)}没单独选，用默认模型。</p> : null}
+      {onPickFallback ? (
+        <div className="asm-fallback" role="group" aria-label="备用模型">
+          <span className="asm-fallback-label">备用</span>
+          <span className="asm-fallback-name">
+            {fallbackModel ? `${providerLabelOf(fallbackProvider, savedProviders)} · ${fallbackModel}` : "没设"}
+          </span>
+          <button type="button" className="ms-btn ms-btn-xs" onClick={onPickFallback}>{fallbackModel ? "换一个" : "选一个"}</button>
+          {fallbackModel && onClearFallback ? <button type="button" className="ms-btn ms-btn-xs ms-btn-ghost" onClick={onClearFallback}>不用</button> : null}
+          <span className="asm-fallback-hint">主模型连不上时，自动换它再试一次。</span>
+        </div>
+      ) : null}
       {error ? <div className="ms-error" role="alert">{error}</div> : null}
     </section>
   );

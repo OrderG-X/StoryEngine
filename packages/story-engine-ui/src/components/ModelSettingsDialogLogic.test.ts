@@ -3,6 +3,7 @@ import type { ModelProfileSummary } from "../api/types.js";
 import {
   buildModelSettingsConfig,
   buildTaskAssignmentsPayload,
+  parseFallbackState,
   parseTaskViewState,
   taskProfileId,
 } from "./ModelSettingsDialogLogic.js";
@@ -359,5 +360,29 @@ describe("buildModelSettingsConfig 合并产物兜底清洗（复审第四轮 P2
     expect(result.cleaningWarnings).toEqual([]);
     expect(result.cleanedTasks).toEqual(tasks);
     expect((result.config.profiles as Record<string, Record<string, unknown>>)[profId]?.temperature).toBe(0.3);
+  });
+});
+
+describe("备用模型（P10）", () => {
+  const provider = { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", apiKeyEnv: "", apiKeyStatus: "present" as const };
+  const tasks = { fastDraft: "deepseek|chat" };
+
+  it("给备用模型建档案、不分给任何任务；服务商没了就清掉并说一声", () => {
+    const built = buildModelSettingsConfig([provider], tasks, { fallback: "deepseek|reasoner" });
+    expect(built.fallbackProfileId).toBe(taskProfileId("deepseek", "reasoner"));
+    expect(Object.keys(built.config.profiles as object)).toContain(taskProfileId("deepseek", "reasoner"));
+    expect(Object.values(built.config.taskProfiles as object)).not.toContain(taskProfileId("deepseek", "reasoner"));
+
+    const gone = buildModelSettingsConfig([provider], tasks, { fallback: "ghost|m" });
+    expect(gone.fallbackProfileId).toBeNull();
+    expect(gone.cleaningWarnings).toEqual([expect.stringContaining("备用模型")]);
+    expect(buildModelSettingsConfig([provider], tasks, {}).fallbackProfileId).toBeNull();
+  });
+
+  it("档案 id 反推回 provider|model；找不到是空", () => {
+    const profiles = [{ id: "p1", provider: "deepseek", model: "reasoner" }] as unknown as ModelProfileSummary[];
+    expect(parseFallbackState("p1", profiles)).toBe("deepseek|reasoner");
+    expect(parseFallbackState("ghost", profiles)).toBe("");
+    expect(parseFallbackState(null, profiles)).toBe("");
   });
 });

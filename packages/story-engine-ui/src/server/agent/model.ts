@@ -4,6 +4,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   bodyRequestsThinkingOff,
   buildProviderRequestHeaders,
+  fallbackNotice,
   isAlwaysOnThinkingModel,
   isThinkingCannotBeDisabledError,
   learnAlwaysOnThinkingModel,
@@ -14,6 +15,7 @@ import {
   type ResolvedChatModel,
 } from "../lib/llm-client.js";
 import { thinkingRequestParams, type ThinkingDialect } from "../lib/model-capabilities.js";
+import { recordTurnNotice } from "../lib/token-meter.js";
 import { modelNeedsMfjs, sanitizeRequestToolSchemas } from "../lib/strict-tool-schema.js";
 
 /** 从 fetch 入参抠请求 URL 的 host（能力键的一半；string/URL/Request 三种形态都接，抠不出 → ""）。 */
@@ -330,16 +332,110 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
   readonly model: ReturnType<ReturnType<typeof createOpenAICompatible>>;
   readonly profile: ResolvedChatModel["profile"];
 }> {
-  const { provider, profile, apiKey, thinking, thinkingDialect, customHeaders } = await resolveConfiguredChatModel(task);
+  const configured = await resolveConfiguredChatModel(task);
+  const { provider, profile, apiKey, thinking, fallback } = configured;
   const baseURL = provider.baseUrl.replace(/\/+$/u, "");
-  const outboundHeaders = await buildProviderRequestHeaders({ baseUrl: provider.baseUrl, customHeaders });
+  const primaryFetch = await buildAgentModelFetch(configured, thinking);
   const openaiCompatible = createOpenAICompatible({
     name: provider.id,
     baseURL,
     apiKey,
     // 流式末帧带真实用量（对话 AI 每轮记 token，见 lib/token-meter）。
     includeUsage: true,
-    fetch: makeAgentRequestFetch(thinking, thinkingDialect, profile.model, providerGate.wrap(withUpstreamSilenceGuard(fetch)), outboundHeaders),
+    fetch: fallback
+      ? withModelFallback(primaryFetch, {
+        fetch: await buildAgentModelFetch(fallback, thinking),
+        fromBaseURL: baseURL,
+        toBaseURL: fallback.provider.baseUrl.replace(/\/+$/u, ""),
+        apiKey: fallback.apiKey,
+        modelId: fallback.profile.model,
+        notice: fallbackNotice(configured, fallback),
+      })
+      : primaryFetch,
   });
   return { model: openaiCompatible(profile.model), profile };
+}
+
+/** 一个模型的整条请求链：思考方言 / 工具 schema 改造 → 限流闸 → 上游静默防线。 */
+async function buildAgentModelFetch(configured: ResolvedChatModel, thinking: boolean): Promise<typeof fetch> {
+  const outboundHeaders = await buildProviderRequestHeaders({ baseUrl: configured.provider.baseUrl, customHeaders: configured.customHeaders });
+  return makeAgentRequestFetch(thinking, configured.thinkingDialect, configured.profile.model, providerGate.wrap(withUpstreamSilenceGuard(fetch)), outboundHeaders);
+}
+
+export interface AgentModelFallback {
+  /** 备用模型自己的整条请求链（方言、限流、静默防线都按它来）。 */
+  readonly fetch: typeof fetch;
+  /** 主模型的接口地址（去尾斜杠）：请求 URL 以它开头才换得了。 */
+  readonly fromBaseURL: string;
+  readonly toBaseURL: string;
+  readonly apiKey: string;
+  readonly modelId: string;
+  /** 换成了要告诉作者的一句话。 */
+  readonly notice: string;
+}
+
+/**
+ * 备用模型（P10）：对话 AI 这一步的请求主模型没连上（连不上、一直没响应头、上游回了错误状态），换备用模型重发一次——
+ * 换地址、换密钥、换 body 里的模型名，思考方言由备用自己的请求链重新注入。
+ * 只在拿到成功的响应头之前换：流到一半出错不换（已经出的字收不回，交给作者点重试）；作者自己停了不换。
+ * 备用也没成就把主模型的原错误原样交给 SDK（如实报错，不吞）。
+ */
+export function withModelFallback(primaryFetch: typeof fetch, fallback: AgentModelFallback): typeof fetch {
+  return async (input, init) => {
+    const callerSignal = init?.signal ?? undefined;
+    let primaryResponse: Response | undefined;
+    let primaryError: unknown;
+    try {
+      primaryResponse = await primaryFetch(input, init);
+      if (primaryResponse.ok) return primaryResponse;
+    } catch (error) {
+      if (callerSignal?.aborted) throw error;
+      primaryError = error;
+    }
+    const rewritten = rewriteForFallback(input, init, fallback);
+    if (rewritten) {
+      const reason = primaryResponse ? `上游回了 ${primaryResponse.status}` : String((primaryError as Error)?.message ?? primaryError).slice(0, 160);
+      console.warn(`[agent-fallback] 主模型没连上（${reason}），换备用 ${fallback.modelId} 重发一次`);
+      try {
+        const response = await fallback.fetch(rewritten.input, rewritten.init);
+        if (response.ok) {
+          await primaryResponse?.body?.cancel().catch(() => undefined);
+          recordTurnNotice(fallback.notice);
+          return response;
+        }
+        console.warn(`[agent-fallback] 备用模型也没成：上游回了 ${response.status}`);
+        await response.body?.cancel().catch(() => undefined);
+      } catch (error) {
+        if (callerSignal?.aborted) throw error;
+        console.warn(`[agent-fallback] 备用模型也没成：${String((error as Error)?.message ?? error).slice(0, 160)}`);
+      }
+    }
+    if (primaryResponse) return primaryResponse;
+    throw primaryError;
+  };
+}
+
+/** 把发给主模型的请求改写成发给备用模型的：地址前缀、Authorization、body.model。改写不了回 null（不换）。 */
+function rewriteForFallback(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  fallback: AgentModelFallback,
+): { readonly input: string; readonly init: RequestInit } | null {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (!url.startsWith(fallback.fromBaseURL) || typeof init?.body !== "string") return null;
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(init.body);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const headers = new Headers(init.headers);
+  if (fallback.apiKey) headers.set("authorization", `Bearer ${fallback.apiKey}`);
+  else headers.delete("authorization");
+  return {
+    input: `${fallback.toBaseURL}${url.slice(fallback.fromBaseURL.length)}`,
+    init: { ...init, headers, body: JSON.stringify({ ...body, model: fallback.modelId }) },
+  };
 }

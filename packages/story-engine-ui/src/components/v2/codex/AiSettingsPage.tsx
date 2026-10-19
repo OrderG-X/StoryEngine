@@ -12,6 +12,7 @@ import {
   buildTaskAssignmentsPayload,
   formatHumanTestError,
   parseChatHistoryBudgetTokens,
+  parseFallbackState,
   parseModelSettings,
   parseTaskViewState,
 } from "../../ModelSettingsDialogLogic.js";
@@ -56,11 +57,16 @@ interface PickerState {
 
 const CLOSED_PICKER: PickerState = { editingTask: null, applyAll: false, search: "" };
 
+/** 选备用模型时选择器里的「功能」键（不是真任务）。 */
+const FALLBACK_PICK = "fallback";
+
 /** 持久化快照：每次写盘带全量状态，序列化排队防交错覆盖。 */
 interface PersistSnapshot {
   readonly providers: readonly SavedProvider[];
   readonly tasks: Record<string, string>;
   readonly thinking: Record<string, boolean>;
+  /** 备用模型 "provider|model"；"" = 不用备用。 */
+  readonly fallback: string;
   readonly budget: number;
   readonly apiKeys?: Record<string, string>;
 }
@@ -87,6 +93,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const [providerModels, setProviderModels] = useState<Record<string, readonly ModelInfoItem[]>>({});
   const [tasks, setTasks] = useState<Record<string, string>>({});
   const [thinking, setThinking] = useState<Record<string, boolean>>({});
+  const [fallback, setFallback] = useState("");
   const [chatMemoryBudget, setChatMemoryBudget] = useState(DEFAULT_CHAT_MEMORY);
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -103,10 +110,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
   const [picker, setPicker] = useState<PickerState>(CLOSED_PICKER);
 
   // 最新状态镜像：持久化调用取「此刻真值 + 本次改动」，不受 setState 异步影响。
-  const stateRef = useRef({ providers: savedProviders, tasks, thinking, budget: chatMemoryBudget });
+  const stateRef = useRef({ providers: savedProviders, tasks, thinking, fallback, budget: chatMemoryBudget });
   useEffect(() => {
-    stateRef.current = { providers: savedProviders, tasks, thinking, budget: chatMemoryBudget };
-  }, [savedProviders, tasks, thinking, chatMemoryBudget]);
+    stateRef.current = { providers: savedProviders, tasks, thinking, fallback, budget: chatMemoryBudget };
+  }, [savedProviders, tasks, thinking, fallback, chatMemoryBudget]);
 
   const persistQueue = useRef(Promise.resolve());
   const budgetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -144,6 +151,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     const viewState = parseTaskViewState(res.taskAssignments, res.result?.summary?.profiles ?? []);
     setTasks(Object.keys(viewState.tasks).length > 0 ? viewState.tasks : parsed.tasks);
     if (Object.keys(viewState.thinking).length > 0) setThinking(viewState.thinking);
+    setFallback(parseFallbackState(res.fallbackProfileId, res.result?.summary?.profiles ?? []));
     const budget = parseChatHistoryBudgetTokens(res.rawText);
     if (budget !== null) setChatMemoryBudget(budget);
     // 警告归属「服务商保存」类动作：只有它们（refreshWarnings=true）的成功响应才刷新/清空警告；
@@ -173,9 +181,10 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       const built = buildModelSettingsConfig(snapshot.providers, snapshot.tasks, {
         chatHistoryBudgetTokens: snapshot.budget,
         previousRawText: rawTextRef.current,
+        fallback: snapshot.fallback,
       });
       const payload = buildTaskAssignmentsPayload(built.cleanedTasks, snapshot.thinking);
-      const res = await saveModelSettings(JSON.stringify(built.config, null, 2), snapshot.apiKeys, payload);
+      const res = await saveModelSettings(JSON.stringify(built.config, null, 2), snapshot.apiKeys, payload, undefined, built.fallbackProfileId);
       applySaved(res, options?.refreshWarnings ?? false);
       // 合并清洗动作（剔除手写明文密钥/清掉指向已删服务商的任务/非法旋钮回默认）如实进警告区，
       // 与服务端 warnings 同栏、不自动消失——用户据此补密钥或重选模型。
@@ -228,6 +237,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
         const viewState = parseTaskViewState(r.taskAssignments, r.result?.summary?.profiles ?? []);
         setTasks(Object.keys(viewState.tasks).length > 0 ? viewState.tasks : parsed.tasks);
         setThinking(viewState.thinking);
+        setFallback(parseFallbackState(r.fallbackProfileId, r.result?.summary?.profiles ?? []));
         setChatMemoryBudget(parseChatHistoryBudgetTokens(r.rawText) ?? DEFAULT_CHAT_MEMORY);
         setLoading(false);
         void syncProviderModels(parsed.providers, () => cancelled);
@@ -387,10 +397,11 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       const [pid] = v.split("|");
       if (pid !== detailId) nextTasks[k] = v;
     }
+    const nextFallback = fallback.split("|")[0] === detailId ? "" : fallback;
     setSaving(true);
     setTestError(null);
     try {
-      await persist({ providers: nextProviders, tasks: nextTasks }, { refreshWarnings: true });
+      await persist({ providers: nextProviders, tasks: nextTasks, fallback: nextFallback }, { refreshWarnings: true });
       setProviderModels((prev) => {
         const next = { ...prev };
         delete next[detailId];
@@ -404,7 +415,7 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     } finally {
       setSaving(false);
     }
-  }, [detailId, editingExisting, deleteArmed, savedProviders, tasks, persist, backToList]);
+  }, [detailId, editingExisting, deleteArmed, savedProviders, tasks, fallback, persist, backToList]);
 
   const commitTasks = useCallback((nextTasks: Record<string, string>, nextThinking: Record<string, boolean>) => {
     setTasks(nextTasks);
@@ -414,10 +425,18 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       .catch((e) => setOpError(`任务分配保存失败：${e instanceof Error ? e.message : String(e)}`));
   }, [persist]);
 
+  const commitFallback = useCallback((next: string) => {
+    setFallback(next);
+    persist({ fallback: next })
+      .then(() => setOpError(null))
+      .catch((e) => setOpError(`备用模型保存失败：${e instanceof Error ? e.message : String(e)}`));
+  }, [persist]);
+
   const assignTask = useCallback((taskKey: string, providerId: string, modelId: string) => {
-    commitTasks({ ...stateRef.current.tasks, [taskKey]: `${providerId}|${modelId}` }, stateRef.current.thinking);
+    if (taskKey === FALLBACK_PICK) commitFallback(`${providerId}|${modelId}`);
+    else commitTasks({ ...stateRef.current.tasks, [taskKey]: `${providerId}|${modelId}` }, stateRef.current.thinking);
     setPicker(CLOSED_PICKER);
-  }, [commitTasks]);
+  }, [commitTasks, commitFallback]);
 
   const assignAll = useCallback((providerId: string, modelId: string) => {
     const next: Record<string, string> = {};
@@ -526,7 +545,15 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
 
             {view.kind === "list" && (
               <>
-                {savedProviders.length > 0 && <ModelsInUseCard tasks={tasks} savedProviders={savedProviders} />}
+                {savedProviders.length > 0 && (
+                  <ModelsInUseCard
+                    tasks={tasks}
+                    savedProviders={savedProviders}
+                    fallback={fallback}
+                    onPickFallback={() => setPicker({ editingTask: FALLBACK_PICK, applyAll: false, search: "" })}
+                    onClearFallback={() => commitFallback("")}
+                  />
+                )}
 
                 <AiServiceManager
                   savedProviders={savedProviders}
@@ -615,7 +642,8 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
           pickerSearch={picker.search}
           allModelsFlat={allModelsFlat}
           groupedFilteredModels={groupedFilteredModels}
-          tasks={tasks}
+          tasks={picker.editingTask === FALLBACK_PICK ? { [FALLBACK_PICK]: fallback } : tasks}
+          {...(picker.editingTask === FALLBACK_PICK ? { taskLabel: "备用模型", hideApplyAll: true } : {})}
           setPickerApplyAll={(applyAll) => setPicker((prev) => ({ ...prev, applyAll }))}
           setPickerSearch={(search) => setPicker((prev) => ({ ...prev, search }))}
           onClose={() => setPicker(CLOSED_PICKER)}

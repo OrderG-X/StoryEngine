@@ -7,7 +7,7 @@ export function ModelPickerOverlay(props: ModelPickerOverlayProps) {
         <header className="ms-picker-header">
           <div>
             <h4>选择模型</h4>
-            <p>为「{TASK_LABELS[props.editingTask]}」分配模型{props.pickerApplyAll ? "，并应用到全部任务" : ""}</p>
+            <p>为「{props.taskLabel ?? TASK_LABELS[props.editingTask]}」分配模型{props.pickerApplyAll ? "，并应用到全部任务" : ""}</p>
           </div>
           <button type="button" className="ms-form-close" onClick={props.onClose}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -72,14 +72,16 @@ export function ModelPickerOverlay(props: ModelPickerOverlayProps) {
         </div>
 
         <footer className="ms-picker-footer">
-          <label className="ms-picker-apply-all">
-            <input
-              type="checkbox"
-              checked={props.pickerApplyAll}
-              onChange={(e) => props.setPickerApplyAll(e.target.checked)}
-            />
-            同时应用到全部任务
-          </label>
+          {props.hideApplyAll ? <span /> : (
+            <label className="ms-picker-apply-all">
+              <input
+                type="checkbox"
+                checked={props.pickerApplyAll}
+                onChange={(e) => props.setPickerApplyAll(e.target.checked)}
+              />
+              同时应用到全部任务
+            </label>
+          )}
           <button type="button" className="ms-btn ms-btn-ghost" onClick={props.onClose}>取消</button>
         </footer>
       </div>

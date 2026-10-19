@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { loadModelSettingsV0 } from "./model-settings.js";
 import type { ModelSettingsLoadResult } from "../book/types.js";
 import { writeFileAtomic } from "./project-io.js";
-import { recordPipelineUsage, sampleFromOpenAIUsage } from "./token-meter.js";
+import { recordPipelineUsage, recordTurnNotice, sampleFromOpenAIUsage } from "./token-meter.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
@@ -189,7 +189,56 @@ export type ResolvedChatModel = {
    * 从 model-settings.json 直读——summary 里只有脱敏键名（customHeaderNames）。
    */
   readonly customHeaders?: Record<string, string>;
+  /**
+   * 备用模型（P10）：主模型这次没连上、还没出一个正文字时，换它再试一次（见 streamChatModelToText）。
+   * 设置里没选、和主模型是同一个、或解析不出来（档案没了、缺密钥）时不带。
+   */
+  readonly fallback?: ResolvedChatModel;
 };
+
+/** 档案 → 可调用的模型（服务商、密钥、自定义头）。缺服务商 / 缺密钥抛人话错误。 */
+async function resolveProfileModel(
+  settings: ModelSettingsLoadResult,
+  profile: ModelSettingsLoadResult["summary"]["profiles"][number],
+  thinking: boolean,
+): Promise<ResolvedChatModel> {
+  const provider = settings.summary.providers.find((item) => item.id === profile.provider);
+  if (!provider) {
+    throw new Error(`Profile ${profile.id} 引用了不存在的 Provider：${profile.provider}`);
+  }
+  const apiKey = await resolveProviderApiKey(provider);
+  if (provider.apiKeyStatus === "missing" && !apiKey) {
+    throw new Error(`API Key 未设置。请设置环境变量 ${provider.apiKeyEnv}。`);
+  }
+  return {
+    provider,
+    profile,
+    apiKey,
+    thinking,
+    thinkingDialect: resolveThinkingDialect(profile.model),
+    customHeaders: await readProviderCustomHeaders(provider.id),
+  };
+}
+
+const warnedFallbackErrors = new Set<string>();
+
+/**
+ * 备用模型（P10）：设置里选了就解析出来；没选回 undefined。解析不出来抛人话错误（体检用它露原因）。
+ * 思考开关跟着主任务走（调用时由 streamChatModelToText 覆盖），这里先给默认开。
+ */
+export async function resolveFallbackChatModel(): Promise<ResolvedChatModel | undefined> {
+  const settings = await loadGlobalModelSettings();
+  if (!settings.available) return undefined;
+  const { file } = await readTaskAssignments(homedir());
+  return resolveFallbackFrom(settings, file?.fallbackProfileId);
+}
+
+async function resolveFallbackFrom(settings: ModelSettingsLoadResult, profileId: string | undefined): Promise<ResolvedChatModel | undefined> {
+  if (!profileId) return undefined;
+  const profile = settings.summary.profiles.find((item) => item.id === profileId);
+  if (!profile) throw new Error(`备用模型的档案「${profileId}」不存在（可能已删除或改名），请在设置里重新选备用模型。`);
+  return resolveProfileModel(settings, profile, true);
+}
 
 export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
   const settings = await loadGlobalModelSettings();
@@ -220,22 +269,20 @@ export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Pro
       `任务「${task}」未解析到有效的模型 profile（解析结果：「${profileId ?? "空"}」）。请在设置中检查该任务的模型分配。`,
     );
   }
-  const provider = settings.summary.providers.find((item) => item.id === profile.provider);
-  if (!provider) {
-    throw new Error(`Profile ${profile.id} 引用了不存在的 Provider：${profile.provider}`);
+  const primary = await resolveProfileModel(settings, profile, resolveTaskThinking(assignments, task));
+  // 备用模型解析不出来不挡主模型：只 warn 一次（同一原因不刷屏），体检会把原因露给作者。
+  let fallback: ResolvedChatModel | undefined;
+  try {
+    fallback = await resolveFallbackFrom(settings, assignments?.fallbackProfileId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!warnedFallbackErrors.has(message)) {
+      warnedFallbackErrors.add(message);
+      console.warn(`[model] 备用模型用不了：${message}`);
+    }
   }
-  const apiKey = await resolveProviderApiKey(provider);
-  if (provider.apiKeyStatus === "missing" && !apiKey) {
-    throw new Error(`API Key 未设置。请设置环境变量 ${provider.apiKeyEnv}。`);
-  }
-  return {
-    provider,
-    profile,
-    apiKey,
-    thinking: resolveTaskThinking(assignments, task),
-    thinkingDialect: resolveThinkingDialect(profile.model),
-    customHeaders: await readProviderCustomHeaders(provider.id),
-  };
+  const sameModel = fallback && fallback.provider.id === primary.provider.id && fallback.profile.model === primary.profile.model;
+  return fallback && !sameModel ? { ...primary, fallback } : primary;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,13 +800,7 @@ export function createIdleAbort(idleMs: number): {
   return { controller, kick, dispose };
 }
 
-/**
- * 流式调 OpenAI 兼容模型并把全文聚合成字符串。**不设总时长上限**：只要还有字节（正文或思考 token）
- * 在流，空闲计时器就被续命；只有彻底静默超过 `idleTimeoutMs` 才判定连接已死并抛错。
- * 用于审稿/质检这类「内容多、生成久」的只读重活——它们曾因 60s/25s 的 AbortController 死表被误杀。
- * 一律不传 max_tokens（见 callOpenAICompatibleChatModel 注释）；`thinking:enabled` 思考链全程保留。
- */
-export async function streamChatModelToText(input: {
+export type StreamChatInput = {
   readonly configured: ResolvedChatModel;
   readonly messages: readonly { readonly role: string; readonly content: string }[];
   readonly temperature?: number;
@@ -778,7 +819,55 @@ export async function streamChatModelToText(input: {
    * 治的是模型原地打转一直吐：评测里偶发单次调用 14 分钟不收尾，空闲超时管不住（一直有字节在续命）。
    */
   readonly maxContentChars?: number;
-}): Promise<{ readonly content: string; readonly thinking: string; readonly finishReason?: string }> {
+};
+
+export type StreamChatResult = { readonly content: string; readonly thinking: string; readonly finishReason?: string };
+
+/** 这次失败还没出一个正文字、也不是「光想不写 / 原地打转」：可以换备用模型再试。 */
+const fallbackableErrors = new WeakSet<object>();
+
+function modelLabel(configured: ResolvedChatModel): string {
+  return `${configured.provider.label || configured.provider.id} · ${configured.profile.model}`;
+}
+
+/** 换了备用模型后告诉作者的一句话（出稿等内部调用和对话 AI 同一句，一轮里只留一条）。 */
+export function fallbackNotice(primary: ResolvedChatModel, fallback: ResolvedChatModel): string {
+  return `主模型 ${modelLabel(primary)} 这次没连上，用了备用的 ${modelLabel(fallback)}。`;
+}
+
+/**
+ * 流式调模型、聚合成文本（审稿 / 质检 / 出稿 / 核账 … 所有内部调用的唯一出口）。
+ *
+ * 备用模型（P10）：主模型这次没连上（请求失败、报错、一直没响应），且还没出一个正文字，就换设置里的备用模型
+ * 再试一次，思考开关跟着这次调用走；成了在本轮对话里留一句「这次用了备用」。已经出了正文（编辑器里已经在走字）、
+ * 「光想不写」、原地打转都不换——那不是连不上。备用也没成就把两边原因一起如实报。
+ */
+export async function streamChatModelToText(input: StreamChatInput): Promise<StreamChatResult> {
+  try {
+    return await streamChatModelOnce(input);
+  } catch (error) {
+    const fallback = input.configured.fallback;
+    if (!fallback || !(error instanceof Error) || !fallbackableErrors.has(error)) throw error;
+    const primaryReason = error.message;
+    console.warn(`[model] 主模型 ${modelLabel(input.configured)} 没连上，换备用 ${modelLabel(fallback)} 再试：${primaryReason.slice(0, 200)}`);
+    try {
+      const result = await streamChatModelOnce({ ...input, configured: { ...fallback, thinking: input.configured.thinking } });
+      recordTurnNotice(fallbackNotice(input.configured, fallback));
+      return result;
+    } catch (fallbackError) {
+      const fallbackReason = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`${primaryReason}（备用模型 ${modelLabel(fallback)} 也没成：${fallbackReason}）`);
+    }
+  }
+}
+
+/**
+ * 流式调 OpenAI 兼容模型并把全文聚合成字符串。**不设总时长上限**：只要还有字节（正文或思考 token）
+ * 在流，空闲计时器就被续命；只有彻底静默超过 `idleTimeoutMs` 才判定连接已死并抛错。
+ * 用于审稿/质检这类「内容多、生成久」的只读重活——它们曾因 60s/25s 的 AbortController 死表被误杀。
+ * 一律不传 max_tokens（见 callOpenAICompatibleChatModel 注释）；`thinking:enabled` 思考链全程保留。
+ */
+async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatResult> {
   const idleTimeoutMs = input.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   const idle = createIdleAbort(idleTimeoutMs);
   let thinkingTooLong = false;
@@ -880,15 +969,16 @@ export async function streamChatModelToText(input: {
     if (runaway) {
       throw new Error(`模型输出超过 ${input.maxContentChars} 字还没收尾（多半在原地打转），已停下，请重试。`);
     }
-    if (idle.controller.signal.aborted) {
-      const secs = Math.round(idleTimeoutMs / 1000);
-      throw new Error(
+    const failure = idle.controller.signal.aborted
+      ? new Error(
         gotBytes
-          ? `模型生成中途静默超过 ${secs}s（已收到部分输出后上游断流，长内容生成时常见），请重试。`
-          : `模型连接静默超过 ${secs}s（一直没有任何响应），判定连接已死，请重试。`,
-      );
-    }
-    throw error;
+          ? `模型生成中途静默超过 ${Math.round(idleTimeoutMs / 1000)}s（已收到部分输出后上游断流，长内容生成时常见），请重试。`
+          : `模型连接静默超过 ${Math.round(idleTimeoutMs / 1000)}s（一直没有任何响应），判定连接已死，请重试。`,
+      )
+      : error instanceof Error ? error : new Error(String(error));
+    // 还没出一个正文字：换备用模型再试是安全的（编辑器里什么都没走，见 streamChatModelToText）。
+    if (contentChars === 0) fallbackableErrors.add(failure);
+    throw failure;
   } finally {
     stopThinkingTimer();
     idle.dispose();

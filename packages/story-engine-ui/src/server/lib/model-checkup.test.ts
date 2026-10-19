@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const resolveConfiguredChatModel = vi.fn();
 const streamChatModelToText = vi.fn();
-vi.mock("./llm-client.js", () => ({ resolveConfiguredChatModel, streamChatModelToText }));
+const resolveFallbackChatModel = vi.fn(async () => undefined as unknown);
+vi.mock("./llm-client.js", () => ({ resolveConfiguredChatModel, resolveFallbackChatModel, streamChatModelToText }));
 
 const { runModelCheckup } = await import("./model-checkup.js");
 
@@ -36,5 +37,24 @@ describe("模型体检（P10）", () => {
     streamChatModelToText.mockResolvedValue({ content: "", thinking: "" });
     const result = await runModelCheckup();
     expect(result.models[0]).toMatchObject({ ok: false, error: "连上了，但模型什么也没回。" });
+  });
+
+  it("备用模型也体检：和主模型同一个就并进去；体检不让备用顶上；备用解析不出单列", async () => {
+    streamChatModelToText.mockReset();
+    resolveConfiguredChatModel.mockResolvedValue({ ...configured("a", "m1"), fallback: configured("c", "m3") });
+    resolveFallbackChatModel.mockResolvedValueOnce(configured("c", "m3"));
+    streamChatModelToText.mockImplementation(async ({ configured: c }: { configured: { fallback?: unknown } }) => {
+      expect(c.fallback).toBeUndefined();
+      return { content: "好", thinking: "" };
+    });
+    let result = await runModelCheckup();
+    expect(result.models.map((m) => [m.key, m.tasks])).toEqual([
+      ["a|m1", ["triage", "fastDraft", "repair", "chapterSteering", "draftReview", "qualityCheck"]],
+      ["c|m3", ["fallback"]],
+    ]);
+
+    resolveFallbackChatModel.mockRejectedValueOnce(new Error("备用模型的档案「x」不存在"));
+    result = await runModelCheckup();
+    expect(result.unresolved).toEqual([{ task: "fallback", error: "备用模型的档案「x」不存在" }]);
   });
 });

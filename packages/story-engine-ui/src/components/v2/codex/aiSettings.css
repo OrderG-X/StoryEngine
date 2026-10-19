@@ -324,6 +324,10 @@
 .codex-app .asm-inuse-error { font-size: 12px; color: var(--danger); word-break: break-word; }
 .codex-app .asm-inuse-ms { flex: none; font-size: 12px; color: var(--muted); }
 .codex-app .asm-inuse-empty { margin: 8px 0 0; font-size: 12px; color: var(--faint); }
+.codex-app .asm-fallback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 10px 0; border-top: 1px solid var(--line); }
+.codex-app .asm-fallback-label { font-size: 12px; color: var(--muted); }
+.codex-app .asm-fallback-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-app .asm-fallback-hint { flex-basis: 100%; font-size: 12px; color: var(--faint); }
 .codex-app .asm-add-toggle {
   align-self: flex-start;
   height: 32px;

@@ -37,6 +37,33 @@ describe("在用的模型 + 体检（P10）", () => {
   });
 });
 
+describe("备用模型（P10）", () => {
+  it("没设：说没设、可选；设了：显示名字、能换能不用", () => {
+    const onPick = vi.fn();
+    const onClear = vi.fn();
+    const { rerender } = render(<ModelsInUseCard onClearFallback={onClear} onPickFallback={onPick} savedProviders={PROVIDERS} tasks={{ triage: "deepseek|chat-a" }} />);
+    const group = () => screen.getByRole("group", { name: "备用模型" });
+    expect(group().textContent).toContain("没设");
+    fireEvent.click(screen.getByRole("button", { name: "选一个" }));
+    expect(onPick).toHaveBeenCalledTimes(1);
+
+    rerender(<ModelsInUseCard fallback="deepseek|reason-b" onClearFallback={onClear} onPickFallback={onPick} savedProviders={PROVIDERS} tasks={{ triage: "deepseek|chat-a" }} />);
+    expect(group().textContent).toContain("DeepSeek · reason-b");
+    fireEvent.click(screen.getByRole("button", { name: "不用" }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("体检结果里备用模型标成「备用」", async () => {
+    const runModelCheckup = vi.fn(async () => ({
+      models: [{ key: "deepseek|reason-b", providerLabel: "DeepSeek", model: "reason-b", tasks: ["fallback"], ok: true, ms: 500 }],
+      unresolved: [],
+    }));
+    render(<ModelsInUseCard api={{ runModelCheckup }} savedProviders={PROVIDERS} tasks={{ triage: "deepseek|chat-a" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "体检" }));
+    expect(await screen.findByText("备用")).toBeInTheDocument();
+  });
+});
+
 describe("服务商重排（P10）", () => {
   it("已接好的在上；没接的收进「添加服务商」，展开后不再重复列已接的", () => {
     const onSelect = vi.fn();

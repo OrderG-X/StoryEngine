@@ -36,6 +36,7 @@ import { invalidateStoryAgent } from "../agent/story-agent.js";
 import { runModelCheckup } from "../lib/model-checkup.js";
 import {
   buildTaskAssignmentsView,
+  pickFallbackFromBody,
   pickTaskAssignmentsFromBody,
   readTaskAssignments,
   taskAssignmentsPath,
@@ -77,7 +78,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           result.summary.defaultProfile,
           taFile,
         );
-        writeJson(res, 200, { ok: true, result, rawText, taskAssignments });
+        writeJson(res, 200, { ok: true, result, rawText, taskAssignments, fallbackProfileId: taFile?.fallbackProfileId ?? null });
         return;
       }
 
@@ -119,7 +120,33 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
         }
 
         // 任务分配（任务→{档案,思考}）存 UI 旁路 task-assignments.json（引擎零改）。无该字段则不写盘、保留现状。
-        const taskAssignments = pickTaskAssignmentsFromBody(body);
+        const pickedTasks = pickTaskAssignmentsFromBody(body);
+        // 备用模型（P10）同在旁路文件里：body 带了就按它改，没带就保留原来的。
+        const pickedFallback = pickFallbackFromBody(body);
+        const existingAssignments = pickedTasks || pickedFallback.present ? await readTaskAssignments(homedir()) : null;
+        if (!pickedTasks && pickedFallback.present && existingAssignments?.corrupt) {
+          writeJson(res, 400, { ok: false, error: "模型设置未保存：任务分配文件坏了，请先在下面重新给各功能选一次模型。" });
+          return;
+        }
+        const configProfileIds = readProfileIdsFromConfig(parsed);
+        const fallbackDropped: string[] = [];
+        let fallbackProfileId = pickedFallback.present ? pickedFallback.profileId : existingAssignments?.file?.fallbackProfileId;
+        if (fallbackProfileId && !configProfileIds.has(fallbackProfileId)) {
+          if (pickedFallback.present) {
+            writeJson(res, 400, { ok: false, error: `模型设置未保存：备用模型的档案「${fallbackProfileId}」不在配置的 profiles 中。请重新选备用模型。` });
+            return;
+          }
+          // 没明说要改备用、只是它指的档案这次没了（换了服务商）→ 清掉并如实告知，不挡这次保存。
+          fallbackDropped.push(`备用模型「${fallbackProfileId}」已不在配置里，已改成不用备用。`);
+          fallbackProfileId = undefined;
+        }
+        const taskAssignments: TaskAssignmentsFile | null = pickedTasks || pickedFallback.present || fallbackDropped.length > 0
+          ? {
+            version: 1,
+            tasks: pickedTasks?.tasks ?? existingAssignments?.file?.tasks ?? {},
+            ...(fallbackProfileId ? { fallbackProfileId } : {}),
+          }
+          : null;
         // 审查 #9：保存前交叉校验任务指定的 profileId 必须存在于本次配置的 profiles，否则明确报错、拒绝保存
         //（不再放行到运行时静默回退第一个 profile）。
         const invalidTask = taskAssignments ? findInvalidTaskProfile(taskAssignments, parsed) : null;
@@ -176,7 +203,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           taFile,
         );
         // 打码哨兵还原失败被丢弃的头如实进 warnings（保存本身成功，不阻断；只列 provider id + 键名，绝不含值）。
-        const warnings: string[] = [];
+        const warnings: string[] = [...fallbackDropped];
         if (droppedMaskedHeaders.length > 0) {
           const names = droppedMaskedHeaders.map((dropped) => `${dropped.providerId} 的 ${dropped.name}`).join("、");
           warnings.push(
@@ -189,6 +216,7 @@ export function registerModelSettingsRoutes(middlewares: MiddlewareStack): void 
           result,
           rawText: savedText,
           taskAssignments: savedAssignments,
+          fallbackProfileId: taFile?.fallbackProfileId ?? null,
           ...(warnings.length > 0 ? { warnings } : {}),
         });
         return;
