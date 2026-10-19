@@ -125,6 +125,7 @@
     position:absolute;top:26px;right:0;z-index:60;min-width:168px;margin:0;padding:4px;list-style:none;
     display:flex;flex-direction:column;background:var(--surface-2);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);
   }
+  .se-book-menu.is-up{top:auto;bottom:calc(100% + 4px);}
   .se-book-menu button{height:32px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;font-size:13px;color:var(--text);cursor:pointer;}
   .se-book-menu button:hover{background:var(--hover);}
   .se-book-menu button.is-danger{color:var(--danger);}
