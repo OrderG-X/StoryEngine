@@ -13,12 +13,12 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { readCardsOrLegacy } from "@actalk/story-core";
 
 import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
-import { readCharacterIds } from "../../book/mirror/sync.js";
 import { QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
@@ -120,7 +120,8 @@ export async function buildCommitPreviewToolOutput(input: {
     return blocked(chapter, [`这本书的账没能接到新格式上：${onCore.reason}`], `第 ${chapter} 章现在还定不了：这本书的账没能接到新格式上（${onCore.reason}）。`);
   }
 
-  const knownNames = [...(await readCharacterIds(projectDir)).ids.keys()];
+  const cards = await readCardsOrLegacy(projectDir);
+  const knownNames = cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]);
   const callModel = input.callModel ?? callConfiguredBrainModel;
   const preview = await withStep("记账员", () => prepareChapterCommit({
     bookDir: projectDir,

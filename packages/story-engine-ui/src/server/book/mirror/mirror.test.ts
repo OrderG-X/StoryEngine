@@ -1,12 +1,16 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CHAPTER_LEDGER_SCHEMA,
+  cardsImport,
   chapterCommit,
   decisionRecord,
+  listChapterLedgers,
   project,
+  readBible,
+  readCards,
   runCommand,
   type AuthorDecision,
   type ChapterLedger,
@@ -19,6 +23,7 @@ import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";
 import { MIRROR_BACKUP_DIR, MIRROR_MARKER, mirrorIsStale, readMirrorVersion, syncLegacyMirror } from "./sync.js";
 import { ensureBookOnCore } from "./ensure.js";
+import { createStoryProject } from "../project-store.js";
 
 type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string; review?: "auto" | "author" } : never) : never;
 const q = "原句原句";
@@ -70,7 +75,6 @@ describe("老格式镜像·生成", () => {
     const mirror = buildLegacyMirror({
       projection,
       ledgers,
-      characterIds: new Map([["沈青禾", "char-aaaaaa"], ["老周", "zhou"]]),
       chapterTitles: new Map([[1, "第1章 · 钟停"]]),
     });
 
@@ -100,7 +104,9 @@ describe("老格式镜像·生成", () => {
     expect(mirror.hooks).toEqual({ hooks: [] });
 
     const [first, second] = mirror.events;
-    expect(first).toMatchObject({ id: "ch0001-001", chapter: 1, summary: "沈青禾进钟楼拿走钥匙", participants: ["char-aaaaaa", "zhou"] });
+    // 出场人物直接写已确立的名字（重构 P9：人物卡没有老格式编号了），别称不当成另一个人。
+    expect(first).toMatchObject({ id: "ch0001-001", chapter: 1, summary: "沈青禾进钟楼拿走钥匙", participants: ["沈青禾", "周守义"] });
+    expect(second).toMatchObject({ participants: ["周守义"] });
     expect(first?.effects?.semanticSummary).toMatchObject({
       chapterTitle: "第1章 · 钟停",
       mainEvent: "沈青禾进钟楼拿走钥匙",
@@ -122,7 +128,7 @@ describe("老格式镜像·生成", () => {
   it("同样的真相生成一模一样的文件，格式和老代码写盘的一样", () => {
     const a = sample();
     const b = sample();
-    const input = { characterIds: new Map<string, string>(), chapterTitles: new Map<number, string>() };
+    const input = { chapterTitles: new Map<number, string>() };
     const first = serializeLegacyMirror(buildLegacyMirror({ ...input, ...a }));
     const second = serializeLegacyMirror(buildLegacyMirror({ ...input, ...b }));
     expect(first).toEqual(second);
@@ -137,7 +143,7 @@ describe("老格式镜像·生成", () => {
     ];
     const projection = project({ ledgers, decisions: [] });
     expect(projection.threads[0]?.status).toBe("stale");
-    const mirror = buildLegacyMirror({ projection, ledgers, characterIds: new Map(), chapterTitles: new Map() });
+    const mirror = buildLegacyMirror({ projection, ledgers, chapterTitles: new Map() });
     expect(mirror.threads.threads[0]).toMatchObject({ id: "t-old", status: "open" });
   });
 
@@ -151,13 +157,13 @@ describe("老格式镜像·生成", () => {
     ];
     const decisions: AuthorDecision[] = [{ id: "d-1", at: "2026-10-18T00:00:00.000Z", type: "thread.merge", from: ["t-door2"], into: "t-door" }];
     const projection = project({ ledgers, decisions });
-    const mirror = buildLegacyMirror({ projection, ledgers, characterIds: new Map(), chapterTitles: new Map() });
+    const mirror = buildLegacyMirror({ projection, ledgers, chapterTitles: new Map() });
     expect(mirror.events[1]?.effects?.semanticSummary).toMatchObject({ discovery: "门外是老周" });
     expect(mirror.threads.threads.map((thread) => thread.id)).toEqual(["t-door"]);
   });
 
   it("空书：每个文件都是老代码认的空样子", () => {
-    const mirror = buildLegacyMirror({ projection: project({ ledgers: [], decisions: [] }), ledgers: [], characterIds: new Map(), chapterTitles: new Map() });
+    const mirror = buildLegacyMirror({ projection: project({ ledgers: [], decisions: [] }), ledgers: [], chapterTitles: new Map() });
     expect(mirror).toEqual({
       timeline: { schemaVersion: 1, entries: [] },
       calendar: { currentStoryDay: 1, currentTimeOfDay: "unknown" },
@@ -203,24 +209,19 @@ describe("老格式镜像·写盘", () => {
     // 书里原有的老文件：第一次生成前原样留一份。
     await mkdir(join(book, "story"), { recursive: true });
     await writeFile(join(book, "story/threads.json"), "{\"threads\":[]}");
-    await mkdir(join(book, "characters/zhou"), { recursive: true });
-    await writeFile(join(book, "characters/zhou/profile.json"), JSON.stringify({ id: "zhou", name: "周守义" }));
-    await writeFile(join(book, "characters/broken.json"), "x");
-    await mkdir(join(book, "characters/bad"), { recursive: true });
-    await writeFile(join(book, "characters/bad/profile.json"), "{坏的");
 
     const commit = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1"));
     expect(commit.ok).toBe(true);
     expect(await mirrorIsStale(book)).toBe(true);
 
     const first = await syncLegacyMirror(book);
-    expect(first).toMatchObject({ ok: true, version: 1, backedUp: ["story/threads.json"], unreadable: ["characters/bad/profile.json"] });
+    expect(first).toMatchObject({ ok: true, version: 1, backedUp: ["story/threads.json"] });
     if (first.ok) expect([...first.written].sort()).toEqual(Object.values(MIRROR_FILES).sort());
     expect(await readFile(join(book, MIRROR_BACKUP_DIR, "story/threads.json"), "utf-8")).toBe("{\"threads\":[]}");
     expect(await readMirrorVersion(book)).toBe(1);
     expect(await mirrorIsStale(book)).toBe(false);
     const events = JSON.parse(await readFile(join(book, MIRROR_FILES.events), "utf-8"));
-    expect(events[0]).toMatchObject({ participants: ["zhou"], effects: { semanticSummary: { chapterTitle: "第1章 · 钟停" } } });
+    expect(events[0]).toMatchObject({ participants: ["沈青禾", "周守义"], effects: { semanticSummary: { chapterTitle: "第1章 · 钟停" } } });
 
     const { timeline, derived } = await readStoryTimeline(book);
     expect(derived).toBe(false);
@@ -244,7 +245,7 @@ describe("老格式镜像·写盘", () => {
     const facts = JSON.parse(await readFile(join(book, MIRROR_FILES.facts), "utf-8"));
     expect(facts.facts.map((fact: { supersededByChapter?: number }) => fact.supersededByChapter)).toEqual([2, undefined]);
     expect(JSON.parse(await readFile(join(book, "time/calendar.json"), "utf-8"))).toEqual({ currentStoryDay: 2, currentTimeOfDay: "unknown" });
-    expect(JSON.parse(await readFile(join(book, MIRROR_MARKER), "utf-8"))).toEqual({ schema: "legacy-mirror/1", version: 3 });
+    expect(JSON.parse(await readFile(join(book, MIRROR_MARKER), "utf-8"))).toEqual({ schema: "legacy-mirror/2", version: 3 });
   });
 
   it("同一本书同时同步几次：排队跑，写完之后那次留下最新版本", async () => {
@@ -297,5 +298,111 @@ describe("开书时收老定稿链的事务残留（重构 P7：读路径不再�
 
     expect(await readFile(target, "utf-8")).toBe(original);
     expect(JSON.parse(await readFile(join(txDir, "manifest.json"), "utf-8")).status).toBe("recovered");
+  });
+});
+
+describe("开书接到新核心（ensureBookOnCore，重构 P9：先导账单、再搬设定卡）", () => {
+  let book: string;
+  beforeEach(async () => {
+    book = await makeHomeTempDir("ensure-on-core-");
+  });
+  afterEach(async () => {
+    await rm(book, { recursive: true, force: true });
+  });
+
+  const OLD_THREADS = {
+    threads: [{ id: "lead-clock", type: "lead", title: "钟为什么停", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: ["钟停在三点十五分"] }],
+  };
+
+  /** 老书：有定稿正文、有老账（线索）、有老设定（人物册），没有账单也没有设定卡。 */
+  async function writeOldBook(dir: string): Promise<void> {
+    await mkdir(join(dir, "chapters"), { recursive: true });
+    await mkdir(join(dir, "story"), { recursive: true });
+    await writeFile(join(dir, "project.json"), JSON.stringify({ id: "old", title: "老书", createdAt: "", updatedAt: "" }));
+    await writeFile(join(dir, "chapters", "0001.md"), CH1);
+    await writeFile(join(dir, "story", "threads.json"), `${JSON.stringify(OLD_THREADS, null, 2)}\n`);
+    await writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [{ id: "shen", name: "沈青禾", role: "主角", identity: "钟表匠的孙女" }],
+    }));
+  }
+
+  it("有定稿正文没账单的老书：先存撤销点导账单，再搬设定卡，镜像从导入的账生成、不拿空账盖掉老账", async () => {
+    await writeOldBook(book);
+    const snapshots: string[] = [];
+
+    const result = await ensureBookOnCore(book, { snapshot: async (_label, command) => { snapshots.push(command); } });
+
+    expect(result).toMatchObject({ ok: true, imported: { counts: { chapters: 1 } }, cards: { imported: true }, mirror: { ok: true } });
+    // 顺序：先导账单、再搬设定（看有没有账单，不看版本号——搬设定也会涨版本号）。
+    expect(snapshots).toEqual(["book.import", "cards.import"]);
+    expect(await listChapterLedgers(book)).toEqual([1]);
+    const cards = await readCards(book);
+    expect(cards?.cards.map((card) => ({ name: card.name, protagonist: card.protagonist }))).toEqual([{ name: "沈青禾", protagonist: true }]);
+
+    // 镜像里的线索就是导入的老线索：没被空账覆盖掉。
+    const threads = JSON.parse(await readFile(join(book, MIRROR_FILES.threads), "utf-8"));
+    expect(threads.threads.map((thread: { title: string }) => thread.title)).toEqual(["钟为什么停"]);
+    // 第一次生成前老文件原样留了一份。
+    expect(JSON.parse(await readFile(join(book, MIRROR_BACKUP_DIR, "story/threads.json"), "utf-8"))).toEqual(OLD_THREADS);
+    // 老设定文件一个字节都不碰。
+    expect(JSON.parse(await readFile(join(book, "story", "character-bible.json"), "utf-8")).characters[0].name).toBe("沈青禾");
+
+    // 再开一次：什么都不用做。
+    snapshots.length = 0;
+    expect(await ensureBookOnCore(book, { snapshot: async (_label, command) => { snapshots.push(command); } })).toEqual({ ok: true });
+    expect(snapshots).toEqual([]);
+  });
+
+  it("有定稿正文、设定卡已经搬了、账单还没导（版本号已经不是 0）：镜像照样不生成，老账原样留着", async () => {
+    await writeOldBook(book);
+    expect((await runCommand(book, cardsImport, {}, author("cards"))).ok).toBe(true);
+
+    expect(await syncLegacyMirror(book)).toMatchObject({ ok: false, code: "not_imported" });
+    expect(JSON.parse(await readFile(join(book, "story", "threads.json"), "utf-8"))).toEqual(OLD_THREADS);
+
+    // 开书时补导账单，然后才生成镜像。
+    expect(await ensureBookOnCore(book)).toMatchObject({ ok: true, imported: { counts: { chapters: 1 } }, mirror: { ok: true } });
+    const threads = JSON.parse(await readFile(join(book, MIRROR_FILES.threads), "utf-8"));
+    expect(threads.threads.map((thread: { title: string }) => thread.title)).toEqual(["钟为什么停"]);
+  });
+
+  it("新书（只有设定卡、没定稿过）：什么都不导、不生成镜像，也不建老格式文件", async () => {
+    const { projectDir } = await createStoryProject({ rootDir: book, title: "新书", protagonistName: "林远" });
+    const before = await readFile(join(projectDir, "ledger", "cards.json"), "utf-8");
+
+    expect(await ensureBookOnCore(projectDir)).toEqual({ ok: true });
+
+    await expect(access(join(projectDir, MIRROR_MARKER))).rejects.toMatchObject({ code: "ENOENT" });
+    for (const file of Object.values(MIRROR_FILES)) {
+      await expect(access(join(projectDir, file))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(await readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).toBe(before);
+  });
+
+  it("没设定卡、也没任何老设定的书：建一份空的设定卡（如实说没搬到东西），不生成镜像", async () => {
+    await writeFile(join(book, "project.json"), JSON.stringify({ id: "bare", title: "空书", createdAt: "", updatedAt: "" }));
+
+    expect(await ensureBookOnCore(book)).toEqual({ ok: true, cards: expect.objectContaining({ imported: false }) });
+
+    expect(await readCards(book)).toMatchObject({ story: { fields: [] }, cards: [], relations: [] });
+    await expect(access(join(book, MIRROR_MARKER))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("设定卡已经在了：不再从老文件搬（老文件后来多出来的人不会顶掉作者在设定本里改的）", async () => {
+    const { projectDir } = await createStoryProject({ rootDir: book, title: "已经搬过", protagonistName: "林远" });
+    await mkdir(join(projectDir, "story"), { recursive: true });
+    await writeFile(join(projectDir, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [{ id: "su", name: "苏雨", role: "配角", identity: "医生" }],
+    }));
+    const before = await readFile(join(projectDir, "ledger", "cards.json"), "utf-8");
+
+    const result = await ensureBookOnCore(projectDir);
+
+    expect(result).toEqual({ ok: true });
+    expect(await readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).toBe(before);
+    const { bible } = await readBible(projectDir);
+    expect(bible.characters.map((entry) => entry.card.name)).toEqual(["林远"]);
   });
 });

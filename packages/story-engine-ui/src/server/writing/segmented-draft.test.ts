@@ -22,7 +22,7 @@ const PLAN = normalizeChapterPlan({
 
 async function makeBook(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "story-engine-segmented-"));
-  const { projectDir } = await createStoryProject({ rootDir, title: "海州账册", genre: "urban", premise: "审计员林澈追查账册篡改。", mainCharacterName: "林澈" });
+  const { projectDir } = await createStoryProject({ rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈" });
   await mkdir(join(projectDir, "chapters"), { recursive: true });
   await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈把账册锁进抽屉。\n", "utf-8");
   return projectDir;

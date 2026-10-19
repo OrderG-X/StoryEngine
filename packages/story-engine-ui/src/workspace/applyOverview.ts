@@ -4,7 +4,7 @@
  * 只刷资料、章节列表、流程态；正文不在这里——稿纸只有 draftStore 一个主人，要换正文走 drafts/draftSync。
  */
 import type { StateOverview } from "../api/types.js";
-import { pickPreferredChapter, sidebarFromStateOverview, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
+import { pickPreferredChapter, workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { paperStage, type DraftStoreState } from "../stores/draftStore.js";
 import { useBookStore } from "../stores/bookStore.js";
 import type { ChapterNavItem, ChapterWorkflowState } from "../types.js";
@@ -47,7 +47,6 @@ export function applyOverviewToWorkspace(overview: StateOverview, options: Apply
     flowStatus,
   });
   store.setCurrentOverview(overview);
-  store.setSidebar(sidebarFromStateOverview(overview));
 }
 
 /** 稿纸在哪一步 → 章节流程态（开书、换章、撤销恢复后从盘上算，不另存）。 */

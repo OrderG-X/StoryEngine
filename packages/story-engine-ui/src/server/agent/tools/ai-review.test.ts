@@ -4,9 +4,9 @@
 // checkDraftBeforeCommit → buildDraftAIReviewPrompt → callModel → parseDraftAIReviewReport，
 // 模型不可用时走 fallbackDraftAIReviewReport（不抛、诚实标 blocked）。
 // 只读：不建快照、不带 snapshotId / refreshScope。callModel 注入 mock，引擎读取走 fixture。
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,8 +29,8 @@ async function makeProject(title: string): Promise<string> {
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: "林远",
+    logline: "主角进入权力中心。",
+    protagonistName: "林远",
   });
   return projectDir;
 }
@@ -41,6 +41,7 @@ function longDraft(chapter: number): string {
 }
 
 async function writeDraft(projectDir: string, chapter: number, content: string): Promise<void> {
+  await mkdir(dirname(defaultDraftPath(projectDir, chapter)), { recursive: true });
   await writeFile(defaultDraftPath(projectDir, chapter), content, "utf-8");
 }
 

@@ -31,7 +31,8 @@ export interface CardWriteResult {
   readonly lines: readonly string[];
 }
 
-function labelOf(lines: readonly string[]): string {
+/** 改设定的人话标签（存档点、操作历史用）：第一处 + 共几处，只有名字。 */
+export function cardChangeLabel(lines: readonly string[]): string {
   if (lines.length === 0) return "改设定";
   return `改设定：${lines[0]}${lines.length > 1 ? ` 等 ${lines.length} 处` : ""}`;
 }
@@ -43,9 +44,9 @@ async function planOps(context: PlanContext, ops: readonly CardOp[], by: "author
     const step = ops.length > 1 ? `第 ${outcome.index + 1} 步：` : "";
     return fail(outcome.code, `没改设定：${step}${outcome.message}。`);
   }
-  if (outcome.lines.length === 0) return { label: labelOf([]), writes: [], changed: {}, result: { lines: [] } };
+  if (outcome.lines.length === 0) return { label: cardChangeLabel([]), writes: [], changed: {}, result: { lines: [] } };
   return {
-    label: labelOf(outcome.lines),
+    label: cardChangeLabel(outcome.lines),
     writes: [{ path: CARDS_PATH, content: cardsFileText(outcome.file) }],
     changed: { cards: true },
     result: { lines: outcome.lines },

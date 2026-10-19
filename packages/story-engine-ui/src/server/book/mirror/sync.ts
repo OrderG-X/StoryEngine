@@ -6,13 +6,14 @@
  * - 内容没变的文件不重写（不白白改动修改时间、不给撤销快照添噪音）。
  * - 第一次生成之前，把书里原来的老文件原样留一份到 `.story-core-kept/legacy-before-mirror/`。
  */
-import { copyFile, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { KEPT_TX_DIR, nameKey, project, readBookSnapshot, readChapterText, readHead, type BookSnapshot } from "@actalk/story-core";
+import { KEPT_TX_DIR, project, readBookSnapshot, readChapterText, readHead, type BookSnapshot } from "@actalk/story-core";
 import { buildLegacyMirror, MIRROR_FILES, serializeLegacyMirror } from "./build.js";
 
 export const MIRROR_MARKER = ".story-core-mirror.json";
-export const MIRROR_MARKER_SCHEMA = "legacy-mirror/1" as const;
+// 2：出场人物改成名字（重构 P9）；标记换代，老书打开时镜像按过期重生成一遍。
+export const MIRROR_MARKER_SCHEMA = "legacy-mirror/2" as const;
 export const MIRROR_BACKUP_DIR = `${KEPT_TX_DIR}/legacy-before-mirror`;
 const MAX_ROUNDS = 5;
 
@@ -22,8 +23,6 @@ export type MirrorSyncResult =
       readonly version: number;
       readonly written: readonly string[];
       readonly backedUp: readonly string[];
-      /** 读坏了、只好跳过的人物资料文件（出场人物的编号会缺）。 */
-      readonly unreadable: readonly string[];
     }
   | { readonly ok: false; readonly code: "not_imported" | "unsettled" | "failed"; readonly reason: string };
 
@@ -61,18 +60,18 @@ async function syncNow(bookDir: string): Promise<MirrorSyncResult> {
   try {
     const written = new Set<string>();
     let backedUp: readonly string[] = [];
-    let unreadable: readonly string[] = [];
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       const snapshot = await readBookSnapshot(bookDir);
-      if (snapshot.version === 0) return { ok: false, code: "not_imported", reason: "这本书的账还没搬到新核心，先导入再生成镜像" };
+      // 有定稿章却没有账单 = 老书还没导入：这时生成镜像会拿空账盖掉老账。看账单本身，不看版本号（改设定也会涨版本号）。
+      if (snapshot.version === 0 || (snapshot.ledgers.length === 0 && snapshot.textHashes.size > 0)) {
+        return { ok: false, code: "not_imported", reason: "这本书的账还没搬到新核心，先导入再生成镜像" };
+      }
       if (snapshot.unsettled) return { ok: false, code: "unsettled", reason: "书正在写入，没读稳；写完会再同步" };
       if ((await readMirrorVersion(bookDir)) === undefined && round === 0) backedUp = await backupOriginals(bookDir);
-      const result = await writeMirror(bookDir, snapshot);
-      for (const file of result.written) written.add(file);
-      unreadable = result.unreadable;
+      for (const file of await writeMirror(bookDir, snapshot)) written.add(file);
       await writeIfChanged(bookDir, MIRROR_MARKER, `${JSON.stringify({ schema: MIRROR_MARKER_SCHEMA, version: snapshot.version }, null, 2)}\n`);
       if ((await readHead(bookDir)).version === snapshot.version) {
-        return { ok: true, version: snapshot.version, written: [...written], backedUp, unreadable };
+        return { ok: true, version: snapshot.version, written: [...written], backedUp };
       }
     }
     return { ok: false, code: "unsettled", reason: `书一直在写入，连续 ${MAX_ROUNDS} 遍都没追上；写完会再同步` };
@@ -81,15 +80,15 @@ async function syncNow(bookDir: string): Promise<MirrorSyncResult> {
   }
 }
 
-async function writeMirror(bookDir: string, snapshot: BookSnapshot): Promise<{ written: string[]; unreadable: string[] }> {
+async function writeMirror(bookDir: string, snapshot: BookSnapshot): Promise<string[]> {
   const projection = project(snapshot);
-  const [characters, chapterTitles] = await Promise.all([readCharacterIds(bookDir), readChapterTitles(bookDir, projection.chapters.map((chapter) => chapter.chapter))]);
-  const mirror = buildLegacyMirror({ projection, ledgers: snapshot.ledgers, characterIds: characters.ids, chapterTitles });
+  const chapterTitles = await readChapterTitles(bookDir, projection.chapters.map((chapter) => chapter.chapter));
+  const mirror = buildLegacyMirror({ projection, ledgers: snapshot.ledgers, chapterTitles });
   const written: string[] = [];
   for (const [file, content] of serializeLegacyMirror(mirror)) {
     if (await writeIfChanged(bookDir, file, content)) written.push(file);
   }
-  return { written, unreadable: characters.unreadable };
+  return written;
 }
 
 async function writeIfChanged(bookDir: string, file: string, content: string): Promise<boolean> {
@@ -122,42 +121,6 @@ async function backupOriginals(bookDir: string): Promise<string[]> {
   return backedUp;
 }
 
-/** 人物名字 → 老格式人物编号：设定本名册打底，人物目录里的 profile 优先（作者改名改的是它）。 */
-export async function readCharacterIds(bookDir: string): Promise<{ ids: Map<string, string>; unreadable: string[] }> {
-  const ids = new Map<string, string>();
-  const unreadable: string[] = [];
-  const readJson = async (file: string): Promise<unknown> => {
-    const raw = await readFile(join(bookDir, file), "utf-8").catch(() => undefined);
-    if (raw === undefined) return undefined;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      unreadable.push(file);
-      return undefined;
-    }
-  };
-  const add = (id: unknown, ...names: unknown[]): void => {
-    if (typeof id !== "string" || !id.trim()) return;
-    for (const name of names) if (typeof name === "string" && name.trim()) ids.set(nameKey(name), id.trim());
-  };
-  const bible = await readJson("story/character-bible.json");
-  const characters = (bible as { characters?: unknown } | undefined)?.characters;
-  for (const item of Array.isArray(characters) ? characters : []) {
-    const record = item as { id?: unknown; name?: unknown; aliases?: unknown };
-    add(record.id, record.name, ...(Array.isArray(record.aliases) ? record.aliases : []));
-  }
-  let dirs: string[] = [];
-  try {
-    dirs = await readdir(join(bookDir, "characters"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  for (const dir of dirs.sort()) {
-    const profile = (await readJson(`characters/${dir}/profile.json`)) as { name?: unknown } | undefined;
-    add(dir, profile?.name);
-  }
-  return { ids, unreadable };
-}
 
 async function readChapterTitles(bookDir: string, chapters: readonly number[]): Promise<Map<number, string>> {
   const titles = new Map<number, string>();

@@ -5,7 +5,8 @@
  * 解析不到再按"像不像内部 hash id"决定中性占位还是原样保留——绝不直接吐 char-ffe5af 这类 hash。
  * 纯确定性、题材中立、不调 LLM。
  */
-import { readCharacterBible } from "../../book/project-store.js";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 /**
  * 内部实体 hash id 的形状（如 char-ffe5af / asset-3c2d / thread-9a1b）。匹配上且解析不到名字
@@ -14,12 +15,19 @@ import { readCharacterBible } from "../../book/project-store.js";
  */
 const INTERNAL_ENTITY_ID = /^(?:char|asset|location|thread|hook|fact|lead|goal|chapter)-[0-9a-z]+$/iu;
 
-/** 读角色册 → id→角色名 映射（解析裸 char-id 用）。读失败/无册 → 空 Map（调用方据此回落，不崩）。 */
+/**
+ * 老格式角色册 → id→角色名 映射：只给老历史（重构 P9 之前的存档点标签、老镜像里的参与者）解析裸 char-id 用。
+ * 新设定卡不往外给编号。读失败/无册 → 空 Map（调用方据此回落，不崩）。
+ */
 export async function readCharacterNameById(projectDir: string): Promise<Map<string, string>> {
-  const bible = await readCharacterBible(projectDir).catch(() => null);
   const map = new Map<string, string>();
-  for (const character of bible?.characters ?? []) {
-    if (character.id && character.name) map.set(character.id, character.name);
+  const parsed = await readFile(join(projectDir, "story", "character-bible.json"), "utf-8")
+    .then((text) => JSON.parse(text) as unknown)
+    .catch(() => undefined);
+  const characters = typeof parsed === "object" && parsed !== null ? (parsed as { characters?: unknown }).characters : undefined;
+  for (const character of Array.isArray(characters) ? characters : []) {
+    const { id, name } = (character ?? {}) as { id?: unknown; name?: unknown };
+    if (typeof id === "string" && id && typeof name === "string" && name) map.set(id, name);
   }
   return map;
 }

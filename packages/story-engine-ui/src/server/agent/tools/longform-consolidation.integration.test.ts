@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // 收口阶段·端到端确定性集成测试（审计点名"完全缺失"的验证闭环）。
-// 程序造一本"大书"——50 角色 / 502 条硬事实(含早期相关 + 已取代) / 400 章时间线——
+// 程序造一本"大书"——50 张人物卡 / 502 条硬事实(含早期相关 + 已取代) / 400 章时间线——
 // 走真实出稿路径 runGenerateDraftToolLogic（同时串起①默认预算 ②在场角色软 cap ③事实相关性），
 // 用 mock writerClient 截获喂给模型的最终上下文 envelope，断言"长篇不崩"的硬指标真成立：
 //   ① 不炸：动态上下文被默认预算压在 12000 以内（timeline 被裁）。
@@ -10,6 +10,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cardWrite, runCommand } from "@actalk/story-core";
 import { createStoryProject } from "../../book/project-store.js";
 import { type WriterClient } from "../../writing/fast-draft-writer.js";
 import { type WriterContextEnvelope } from "../../writing/context-gateway.js";
@@ -32,31 +33,17 @@ async function buildBigBook(): Promise<string> {
     rootDir,
     title: "长篇收口验证书",
     genre: "都市",
-    premise: "主角卷入一桩跨越多年的遗产纷争。",
-    mainCharacterName: "林晚舟",
+    logline: "主角卷入一桩跨越多年的遗产纷争。",
+    protagonistName: "林晚舟",
   });
 
-  // —— 50 角色：c00 主角 + c01..c49 配角 ——
-  const characters = [
-    { id: "c00", name: "林晚舟", role: "主角" },
-    ...Array.from({ length: 49 }, (_, i) => ({ id: `c${String(i + 1).padStart(2, "0")}`, name: supportingName(i + 1), role: "配角" })),
-  ];
-  await writeFile(
-    join(projectDir, "story", "character-bible.json"),
-    `${JSON.stringify({ version: "v0", characters }, null, 2)}\n`,
-    "utf-8",
-  );
-  await Promise.all(
-    characters.map(async (character) => {
-      const dir = join(projectDir, "characters", character.id);
-      await mkdir(dir, { recursive: true });
-      await Promise.all([
-        writeFile(join(dir, "profile.json"), `${JSON.stringify({ id: character.id, name: character.name, identity: character.role === "主角" ? "protagonist" : "配角", appearance: {}, tags: [] }, null, 2)}\n`, "utf-8"),
-        writeFile(join(dir, "core.json"), `${JSON.stringify({ characterId: character.id, personality: ["沉稳"], speechStyle: "平实" }, null, 2)}\n`, "utf-8"),
-        writeFile(join(dir, "state.json"), `${JSON.stringify({ characterId: character.id, emotion: "calm", goal: "推进剧情", lastUpdatedChapter: null }, null, 2)}\n`, "utf-8"),
-      ]);
-    }),
-  );
+  // —— 50 角色：主角（开书时建的卡）+ 49 个配角卡 ——
+  const outcome = await runCommand(projectDir, cardWrite, {
+    ops: Array.from({ length: 49 }, (_, i) => ({
+      op: "card.create" as const, kind: "character" as const, name: supportingName(i + 1), fields: [{ label: "性格", value: "沉稳，说话平实" }],
+    })),
+  }, { caller: "author", idempotencyKey: "longform-cast" });
+  if (!outcome.ok) throw new Error(outcome.message);
 
   // —— 502 条硬事实：早期相关锚点 + 已取代 + 500 条无关填充 ——
   const facts = [
@@ -69,6 +56,7 @@ async function buildBigBook(): Promise<string> {
       source: "auto" as const,
     })),
   ];
+  await mkdir(join(projectDir, "story"), { recursive: true });
   await writeFile(join(projectDir, "story", "fact-ledger.json"), `${JSON.stringify({ version: "v0", facts }, null, 2)}\n`, "utf-8");
 
   // —— 400 章时间线（每条都长）：逼动态上下文超默认预算，验证①真的裁 ——
@@ -77,7 +65,7 @@ async function buildBigBook(): Promise<string> {
   await mkdir(join(projectDir, "timeline"), { recursive: true });
   await writeFile(
     join(projectDir, "timeline", "events.json"),
-    `${JSON.stringify(Array.from({ length: 400 }, (_, i) => ({ id: `ev-${i + 1}`, chapter: i + 1, summary: `第${i + 1}章：${longSummary}`, participants: ["c00"] })), null, 2)}\n`,
+    `${JSON.stringify(Array.from({ length: 400 }, (_, i) => ({ id: `ev-${i + 1}`, chapter: i + 1, summary: `第${i + 1}章：${longSummary}`, participants: ["林晚舟"] })), null, 2)}\n`,
     "utf-8",
   );
 
@@ -135,8 +123,15 @@ describe("长篇收口 端到端：①预算 + ②角色软cap + ③事实相关
     expect(out.contextBudget?.droppedSections ?? []).toContain("timeline_events");
 
     // ② 堵 stable：50 角色 + 上章点名 20 人 → 选中被软 cap，收窄露在诊断
-    expect(out.characterSelection?.selectedCharacterIds.length ?? 99).toBeLessThanOrEqual(DEFAULT_MAX_IN_SCENE_CHARACTERS);
-    expect(out.characterSelection?.trace.cappedOutNames?.length ?? 0).toBeGreaterThan(0);
+    expect(out.characterSelection?.selected.length ?? 99).toBeLessThanOrEqual(DEFAULT_MAX_IN_SCENE_CHARACTERS);
+    expect(out.characterSelection?.selected[0]).toBe("林晚舟"); // 主角恒带、占名额
+    expect(out.characterSelection?.cappedOutNames.length ?? 0).toBe(21 - DEFAULT_MAX_IN_SCENE_CHARACTERS);
+    expect(out.summary).toContain("按在场相关性收窄到");
+    // 喂给写手的人物整张卡也被收窄：主角 + 至多 cap-1 个配角
+    const setting = (envelope.sections.find((section) => section.name === "writing_context_pack")?.content as
+      | { readonly setting?: { readonly cast?: readonly unknown[] } }
+      | undefined)?.setting;
+    expect(setting?.cast?.length ?? 99).toBeLessThanOrEqual(DEFAULT_MAX_IN_SCENE_CHARACTERS - 1);
 
     // ③ 不忘：早期但与本章方向(遗产)相关的硬设定在 180 章仍喂；已取代的旧设定不喂
     const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as

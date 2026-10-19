@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan, readChapterPlan } from "../book/chapter-plan.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
@@ -300,33 +301,35 @@ describe("提示词文本", () => {
     expect(task).toContain(PLAN_JSON_FIELDS);
   });
 
-  it("白沙渡试写：章纲材料带设定本（人物关系、过去的事）；建书的占位前提不当故事前提", async () => {
+  async function writeCards(dir: string, ops: CardOp[]): Promise<void> {
+    const outcome = await runCommand(dir, cardWrite, { ops }, { caller: "author", idempotencyKey: `planner-${ops.length}-${Math.random()}` });
+    if (!outcome.ok) throw new Error(outcome.message);
+  }
+
+  it("白沙渡试写：章纲材料带设定本（人物关系、过去的事、身份年龄），只有名字不带编号", async () => {
     const dir = await makeBook();
-    const { PLACEHOLDER_PREMISE } = await import("../book/project-store.js");
-    await writeFile(join(dir, "story", "bible.json"), JSON.stringify({ version: "v0", premise: PLACEHOLDER_PREMISE, longFormGoals: [] }), "utf-8");
-    await writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
-      version: "v0",
-      characters: [
-        { id: "char-a", name: "韩小满", role: "主角", age: "24" },
-        { id: "char-b", name: "韩德顺", role: "摆渡人", age: "58", relationshipToProtagonist: "韩小满的父亲" },
-      ],
-    }), "utf-8");
-    await writeFile(join(dir, "story", "world-bible.json"), JSON.stringify({ version: "v0", historyFacts: ["农历八月十五，韩德顺摆最后一趟去柳湾村后下落不明"] }), "utf-8");
+    await writeCards(dir, [
+      { op: "card.create", kind: "character", name: "韩小满", protagonist: true, fields: [{ label: "年龄", value: "24" }] },
+      { op: "card.create", kind: "character", name: "韩德顺", fields: [{ label: "身份", value: "摆渡人" }, { label: "年龄", value: "58" }] },
+      { op: "relation.set", a: "韩德顺", b: "韩小满", label: "韩小满的父亲" },
+      { op: "story.set", label: "过去的事", value: "农历八月十五，韩德顺摆最后一趟去柳湾村后下落不明" },
+    ]);
     const materials = await collectPlanMaterials(dir, 1);
-    expect(materials.premise).toBeUndefined();
+    expect(materials.characters).toEqual(["韩小满", "韩德顺"]);
     const task = plannerTask(1, materials);
     expect(task).toContain("【设定本");
-    expect(task).toContain("和主角的关系：韩小满的父亲");
+    expect(task).toContain("韩德顺——身份：摆渡人；年龄：58；和韩小满：韩小满的父亲");
     expect(task).toContain("八月十五，韩德顺摆最后一趟去柳湾村后下落不明");
-    expect(task).not.toContain("【故事前提】");
-    expect(task).not.toContain("char-b");
+    expect(task).toContain("【已有人物（身份、年龄见设定本，别用错人、别算错年代）】韩小满、韩德顺");
+    expect(task).not.toMatch(/[kr]-\d/u);
   });
 
-  it("作者自己写的前提照带", async () => {
+  it("作者写的一句话 / 主线在设定本的故事设定里照带；不再有单独的【故事前提】块", async () => {
     const dir = await makeBook();
-    await writeFile(join(dir, "story", "bible.json"), JSON.stringify({ version: "v0", premise: "江边小镇，女儿回乡找失踪的摆渡人父亲。", longFormGoals: [] }), "utf-8");
+    await writeCards(dir, [{ op: "story.set", label: "一句话", value: "江边小镇，女儿回乡找失踪的摆渡人父亲。" }]);
     const task = plannerTask(3, await collectPlanMaterials(dir, 3));
-    expect(task).toContain("【故事前提】江边小镇，女儿回乡找失踪的摆渡人父亲。");
+    expect(task).toContain("【故事设定】\n一句话：江边小镇，女儿回乡找失踪的摆渡人父亲。");
+    expect(task).not.toContain("【故事前提】");
   });
 
   it("reviseTask 带原章纲和每条问题；planCheckTask 带编号要点", () => {

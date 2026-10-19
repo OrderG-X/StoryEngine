@@ -11,7 +11,7 @@ import type { FactEntry } from "../book/types.js";
 export interface EffectiveFactsInput {
   readonly facts: readonly FactEntry[];
   readonly chapter: number;
-  /** 本章在场角色名（来自 selectedCharacterIds 对应角色）；提到的事实优先、不被 cap 挤出。 */
+  /** 本章在场人物的名字；提到的事实优先、不被 cap 挤出。 */
   readonly relevantNames?: readonly string[];
   /** 本章方向/目标文本；与之有 CJK 词重叠的事实（哪怕不含人名）优先，治"不含人名的硬设定蒸发"。 */
   readonly chapterGoal?: string;

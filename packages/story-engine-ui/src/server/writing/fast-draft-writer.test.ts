@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { access, chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
+import { CHAPTER_LEDGER_SCHEMA, cardWrite, runCommand, type CardOp, type ChapterLedger } from "@actalk/story-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildWriterContext, type ContextSection, type WriterContextEnvelope } from "./context-gateway.js";
 import { runFastDraft, resolveDraftMaxOutputTokens, type WriterClient } from "./fast-draft-writer.js";
@@ -31,11 +32,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     expect(report.passed).toBe(true);
     expect(report.draftBody).toBeUndefined();
+    // 重构 P9：设定（主角、人物、写作规则……）全在 writing_context_pack 的设定包里，老的
+    // story_core / world_core / character_* / world_state 段都没了；上下文段全是 dynamic。
     expect(report.contextStats.contextSections).toEqual([
-      "story_core",
-      "world_core",
-      "character_profile",
-      "character_core",
       "chapter_goal",
       "writing_context_pack",
       "story_calendar",
@@ -43,17 +42,15 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       "hook_tracking",
       "story_threads",
       "arc_goals",
-      "character_state",
-      "world_state",
       "story_continuity",
       "timeline_events",
     ]);
     expect(report.contextStats.totalTokenEstimate).toBeGreaterThan(0);
-    expect(report.contextStats.stableTokenEstimate).toBeGreaterThan(0);
-    expect(report.contextStats.dynamicTokenEstimate).toBeGreaterThan(0);
+    expect(report.contextStats.stableTokenEstimate).toBe(0);
+    expect(report.contextStats.dynamicTokenEstimate).toBe(report.contextStats.totalTokenEstimate);
     expect(report.promptFingerprint).toMatchObject({
       firstDynamicSectionName: "Chapter",
-      firstDynamicSectionIndex: 5,
+      firstDynamicSectionIndex: 1,
     });
     expect(report.promptFingerprint.firstDynamicCharOffset).toBeGreaterThan(0);
     expect(report.promptFingerprint.stablePrefixHash).toMatch(/^[a-f0-9]{64}$/u);
@@ -156,13 +153,11 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(diff.firstDiffCharOffset).toBeGreaterThan(500);
     expect(diff.leftSnippet).toContain("Chapter: 19");
     expect(diff.rightSnippet).toContain("Chapter: 20");
-    expect(fingerprint.promptSectionOrder.slice(0, 6)).toEqual([
+    // 稳定前缀只剩写手协议（设定包随本章在场人物变，归 dynamic）。
+    expect(fingerprint.promptSectionOrder.slice(0, 3)).toEqual([
       "fast_draft_protocol",
-      "story_core",
-      "world_core",
-      "character_profile",
-      "character_core",
       "Chapter",
+      "chapter_goal",
     ]);
     expect(fingerprint.firstDynamicSectionName).toBe("Chapter");
     expect(fingerprint.firstDynamicCharOffset).toBe(prompt19.indexOf("Chapter:"));
@@ -185,8 +180,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     expect(prompt).toContain("正文开头必须是 markdown 章节标题，格式：# 第N章 · 标题。");
     expect(prompt).toContain("标题由你根据本章正文自然拟定，必须存在");
-    expect(prompt).toContain("不要剧透 protectedSecrets / forbiddenReveals");
-    expect(prompt).toContain("不要提前揭开 unknownTruths");
+    expect(prompt).toContain("不要剧透设定里写着还没揭开、不能说破的内容");
   });
 
   it("tells FastDraft not to reuse the previous chapter opening pattern", async () => {
@@ -204,6 +198,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it("generates and saves a fast draft without committing state", async () => {
     const projectDir = await createFixtureProject();
+    const cardsBefore = await readFile(join(projectDir, "ledger", "cards.json"), "utf-8");
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context, maxOutputTokens }) => {
         expect(context.chapter).toBe(1);
@@ -236,20 +231,12 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 开局\n\nGuo Xu 站在大门前，第一次意识到自己的副本已经开始。\n",
     );
-    await expect(readFile(join(projectDir, "characters", "guo-xu", "state.json"), "utf-8")).resolves.toContain(
-      "\"lastUpdatedChapter\": null",
-    );
-    await expect(readFile(join(projectDir, "timeline", "events.json"), "utf-8")).resolves.toBe("[]\n");
-    await expect(readFile(join(projectDir, "world", "state.json"), "utf-8")).resolves.toContain(
-      "\"lastUpdatedChapter\": null",
-    );
-    await expect(readFile(join(projectDir, "story", "threads.json"), "utf-8")).resolves.toContain("\"threads\": []");
-    await expect(readFile(join(projectDir, "story", "arc-goals.json"), "utf-8")).resolves.toContain("\"goals\": []");
-    await expect(access(join(projectDir, "state-diff", "chapter-0001.json"))).rejects.toThrow();
-    await expect(access(join(projectDir, "timeline", "chapter-0001.json"))).rejects.toThrow();
-    await expect(access(join(projectDir, "world", "diff", "chapter-0001.json"))).rejects.toThrow();
-    await expect(access(join(projectDir, "story", "hook-diff", "chapter-0001.json"))).rejects.toThrow();
-    await expect(readFile(join(projectDir, "story", "arc-goals.json"), "utf-8")).resolves.toContain("\"goals\": []");
+    // 不记账、不动设定：没有章节账单，设定卡一字不变，也不建任何老格式状态目录。
+    await expect(access(join(projectDir, "ledger", "chapters", "0001.json"))).rejects.toThrow();
+    await expect(readFile(join(projectDir, "ledger", "cards.json"), "utf-8")).resolves.toBe(cardsBefore);
+    for (const dir of ["story", "timeline", "world", "characters", "state-diff"]) {
+      await expect(access(join(projectDir, dir))).rejects.toThrow();
+    }
     expect(writerClient.generateDraft).toHaveBeenCalledOnce();
   });
 
@@ -280,14 +267,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it("injects an explicit user draft length target into FastDraft context and report diagnostics", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "story", "writing-rules.json"),
-      `${JSON.stringify({
-        version: "v0",
-        chapterLength: { targetWords: 1800 },
-      }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeCards(projectDir, [{ op: "rules.set", field: "targetWords", value: 1800 }]);
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context, maxOutputTokens }) => {
         expect(maxOutputTokens).toBe(resolveDraftMaxOutputTokens({
@@ -334,16 +314,9 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     });
   });
 
-  it("uses writing-rules target words when no user draft length is specified", async () => {
+  it("uses the setting cards' writing-rules target words when no user draft length is specified", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "story", "writing-rules.json"),
-      `${JSON.stringify({
-        version: "v0",
-        chapterLength: { targetWords: 700 },
-      }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeCards(projectDir, [{ op: "rules.set", field: "targetWords", value: 700 }]);
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context, maxOutputTokens }) => {
         expect(maxOutputTokens).toBe(resolveDraftMaxOutputTokens({
@@ -379,14 +352,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it("keeps the explicit user target (structured requestedDraftLength) higher priority than writing-rules target words", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "story", "writing-rules.json"),
-      `${JSON.stringify({
-        version: "v0",
-        chapterLength: { targetWords: 1800 },
-      }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeCards(projectDir, [{ op: "rules.set", field: "targetWords", value: 1800 }]);
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context }) => {
         const chapterGoal = context.sections.find((section: ContextSection) => section.name === "chapter_goal")?.content;
@@ -729,37 +695,86 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0002.md"))).rejects.toThrow();
   });
 
-  it("uses selectedCharacterIds for the character mention check", async () => {
+  // 出稿关卡认的名字 = 本章上下文（writing_context_pack 设定包）里带上的主角和在场人物的名字 + 别名。
+  it("selectedCharacters（名字）进设定包；正文只用了别名也算写到了人", async () => {
     const projectDir = await createFixtureProject();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
         title: "秘书登场",
-        content: "林婉清把日程表放在桌上，提醒他今晚还有一场谈判。",
+        content: "林秘书把日程表放在桌上，提醒他今晚还有一场谈判。",
       })),
     };
 
     const report = await runFastDraft({
       projectDir,
       chapter: 3,
-      chapterGoal: "林婉清出场。",
+      chapterGoal: "秘书出场。",
       writerClient,
-      selectedCharacterIds: ["Lin Wan-Qing!!"],
+      selectedCharacters: ["林婉清"],
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.issues).toEqual([]);
+  });
+
+  it("关卡只认本章带上的人：设定本里有、但这章没带的人不算；挡下时只列名字", async () => {
+    const projectDir = await createFixtureProject();
+
+    // 本章方向点到林婉清 → 在场检测带上她 → 只写她也过。
+    const passing = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "林婉清出场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "秘书登场", content: "林婉清把日程表放在桌上。" })),
+      },
+    });
+    expect(passing.passed).toBe(true);
+
+    // 本章只带了主角；正文一个人都没写到 → 挡下，提示只列本章带上的名字（不列没带的林婉清，也不列别的书的人）。
+    const blocked = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "陌生人登场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "陌生人", content: "来客放下信，转身走进雨里。" })),
+      },
+    });
+    expect(blocked.passed).toBe(false);
+    const gateIssue = blocked.issues.find((issue) => issue.includes("must mention at least one selected character"));
+    expect(gateIssue).toBe("Draft content must mention at least one selected character: Guo Xu.");
+  });
+
+  it("账里上一章出场、还没建卡的人也进设定包，正文写到他就算写到了人", async () => {
+    const projectDir = await createFixtureProject();
+    const ledger: ChapterLedger = {
+      schema: CHAPTER_LEDGER_SCHEMA,
+      chapter: 1,
+      textSha256: "0".repeat(64),
+      committedAt: "2026-10-19T00:00:00.000Z",
+      origin: "commit",
+      entries: [{ kind: "presence", id: "c1-1", review: "auto", name: "陆沉", nameUsed: "陆沉", quote: "陆沉来了" }],
+    };
+    await mkdir(join(projectDir, "ledger", "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "ledger", "chapters", "0001.json"), JSON.stringify(ledger), "utf-8");
+
+    const report = await runFastDraft({
+      projectDir,
+      chapter: 2,
+      chapterGoal: "接着前文写。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "第二天", content: "陆沉把工具箱收好，天色一点点暗下来。" })),
+      },
     });
 
     expect(report.passed).toBe(true);
   });
 
-  // 编辑部 R4.6（验收 3.7）：开书占位主角卡不得挡出稿——UI 新建书未填主角名时模板落「主角」，
-  // 作者手写几章后再让 AI 出稿，正文写的是真名（如 陆沉），不该因为没写到「主角」被关卡拒掉。
-  it("placeholder-only roster (UI new-book template) does not block drafts that omit the placeholder name", async () => {
+  // 编辑部 R4.6（验收 3.7）的新口径：开书没填主角就没有人物卡（不再落占位卡「主角」），
+  // 关卡没有可认的名字就不挡——作者手写几章后让 AI 出稿，正文写真名不会被拒。
+  it("新书一张人物卡都没有 → 关卡不挡（没有可认的名字）", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-fast-draft-"));
-    const { projectDir } = await createStoryProject({
-      rootDir,
-      title: "灯塔修表人",
-      genre: "长篇故事",
-      premise: "主角进入一个等待展开的故事世界。",
-      mainCharacterName: "主角", // books.ts 建书模板未填主角名时的固定占位名
-    });
+    const { projectDir } = await createStoryProject({ rootDir, title: "灯塔修表人", genre: "长篇故事" });
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
         title: "第二天",
@@ -778,55 +793,14 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report.issues).toEqual([]);
   });
 
-  it("keeps gating on real names when the roster mixes a placeholder card with a real one", async () => {
-    const projectDir = await createFixtureProject();
-    const placeholderDir = join(projectDir, "characters", "placeholder-zhu-jue");
-    await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
-      await mkdir(placeholderDir, { recursive: true });
-      await Promise.all([
-        writeFile(join(placeholderDir, "profile.json"), JSON.stringify({ id: "placeholder-zhu-jue", name: "主角" }, null, 2), "utf-8"),
-        writeFile(join(placeholderDir, "core.json"), JSON.stringify({ characterId: "placeholder-zhu-jue", personality: ["自主行动"] }, null, 2), "utf-8"),
-        writeFile(join(placeholderDir, "state.json"), JSON.stringify({ characterId: "placeholder-zhu-jue", emotion: "平静", goal: "推进", lastUpdatedChapter: null }, null, 2), "utf-8"),
-      ]);
-    });
-
-    // 只写真名（没写占位名「主角」）→ 过。
-    const passing = await runFastDraft({
-      projectDir,
-      chapter: 2,
-      chapterGoal: "林婉清出场。",
-      writerClient: {
-        generateDraft: vi.fn(async () => ({ title: "秘书登场", content: "林婉清把日程表放在桌上。" })),
-      },
-    });
-    expect(passing.passed).toBe(true);
-
-    // 真名和占位名都没写 → 仍被挡，且提示只点名真名候选（占位名不进提示）。
-    const blocked = await runFastDraft({
-      projectDir,
-      chapter: 2,
-      chapterGoal: "陌生人登场。",
-      writerClient: {
-        generateDraft: vi.fn(async () => ({ title: "陌生人", content: "来客放下信，转身走进雨里。" })),
-      },
-    });
-    expect(blocked.passed).toBe(false);
-    const gateIssue = blocked.issues.find((issue) => issue.includes("must mention at least one selected character"));
-    expect(gateIssue).toBeDefined();
-    expect(gateIssue).toContain("Guo Xu");
-    expect(gateIssue).toContain("林婉清");
-    // 占位名「主角」不进候选清单（「Guo Xu / 主角」这种复名里的段不算占位卡）。
-    expect(gateIssue?.split(", ")).not.toContain("主角");
-  });
-
   // ── 2026-09-15 复审 P1-4/P1-5 真修 + A5 路径泄漏纪律 ──
   // 上下文构造失败/台账资料损坏时 runFastDraft 绝不 reject：落 passed:false + 结构化 code，
   // 或降级成功并留痕。用户可见文案只给 errno code + 相对文件名，绝不带本地绝对路径。
   const NO_ABSOLUTE_PATH = /\/Users|\/var|\/private|\/tmp|\/home/u;
 
-  it("A4/A5 损坏 writing-rules.json → 降级出稿成功且留痕（issues + read_failures 段，无绝对路径）", async () => {
+  it("A4/A5 损坏设定卡（ledger/cards.json）→ 降级出稿成功且留痕（issues + read_failures 段，无绝对路径）", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(join(projectDir, "story", "writing-rules.json"), "{not-json", "utf-8");
+    await writeFile(join(projectDir, "ledger", "cards.json"), "{not-json", "utf-8");
     let capturedContext: WriterContextEnvelope | undefined;
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async ({ context }) => {
@@ -837,23 +811,21 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "降级出稿。", writerClient });
 
-    // 降级成功：不崩、不调闸。写作规则降级留痕进 issues（writingRulesFailure 通道现在真可达）；
-    // 包内降级留痕进上下文的 read_failures 段——模型知道自己在盲写，绝不静默。
+    // 降级成功：不崩、按空设定出稿（没有可认的名字，关卡不挡）。设定本读不了的留痕进 issues；
+    // 上下文的 read_failures 段也如实记着——模型知道自己在盲写，绝不静默。
     expect(report.passed).toBe(true);
-    expect(report.issues.join(" ")).toContain("写作规则读取失败");
-    expect(report.issues.join(" ")).toContain("story/writing-rules.json");
+    expect(report.issues.join(" ")).toContain("设定本读取失败");
     expect(report.issues.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
     const failures = capturedContext?.sections.find((section) => section.name === "read_failures")?.content as
       | { failures: readonly string[] }
       | undefined;
-    expect(failures?.failures.join(" ")).toContain("写作规则");
-    expect(failures?.failures.join(" ")).toContain("writing-rules.json");
+    expect(failures?.failures.join(" ")).toContain("设定本读取失败");
     expect(failures?.failures.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
   });
 
-  it("C 级收尾：损坏 writing-rules.json + 校验失败早退 → issues 同时含降级留痕与校验问题", async () => {
+  it("C 级收尾：损坏设定卡 + 校验失败早退 → issues 同时含降级留痕与校验问题", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(join(projectDir, "story", "writing-rules.json"), "{not-json", "utf-8");
+    await writeFile(join(projectDir, "ledger", "cards.json"), "{not-json", "utf-8");
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({
         title: "空草稿",
@@ -864,22 +836,21 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "测试空正文。", writerClient });
 
-    // validateDraft 失败早退路径此前漏并 writingRulesFailure——降级留痕被吞（复审探针实证）。
-    // 现在与成功/catch 路径同口径：issues 同时含「写作规则读取失败」留痕与校验问题本体。
+    // validateDraft 失败早退路径此前漏并降级留痕（复审探针实证）。
+    // 现在与成功/catch 路径同口径：issues 同时含「设定本读取失败」留痕与校验问题本体。
     expect(report.passed).toBe(false);
     expect(report.draftBody).toBeUndefined();
     expect(report.issues).toEqual(expect.arrayContaining([
-      expect.stringContaining("写作规则读取失败"),
+      expect.stringContaining("设定本读取失败"),
       "Draft content is required.",
     ]));
-    expect(report.issues.join(" ")).toContain("story/writing-rules.json");
     expect(report.issues.join(" ")).not.toMatch(NO_ABSOLUTE_PATH);
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0002.md"))).rejects.toThrow();
   });
 
-  it("A4 老书缺 story/hooks.json → runFastDraft 正常出稿", async () => {
+  it("A4 缺 story/hooks.json（新书本来就没有）→ runFastDraft 正常出稿", async () => {
     const projectDir = await createFixtureProject();
-    await rm(join(projectDir, "story", "hooks.json"), { force: true });
+    await expect(access(join(projectDir, "story", "hooks.json"))).rejects.toThrow();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({ title: "老书", content: "Guo Xu 推进情节。" })),
     };
@@ -890,6 +861,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it("A4/A5 损坏 story/hooks.json → passed:false + writer_context_unavailable，不 reject、不泄路径", async () => {
     const projectDir = await createFixtureProject();
+    await mkdir(join(projectDir, "story"), { recursive: true });
     await writeFile(join(projectDir, "story", "hooks.json"), "{not-json", "utf-8");
     const writerClient: WriterClient = { generateDraft: vi.fn() };
 
@@ -905,6 +877,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
 
   it.skipIf(process.platform === "win32")("A5 EACCES 读 hooks.json → 只露 errno code + 相对文件名，不露绝对路径", async () => {
     const projectDir = await createFixtureProject();
+    await mkdir(join(projectDir, "story"), { recursive: true });
     await writeFile(join(projectDir, "story", "hooks.json"), `${JSON.stringify({ hooks: [] }, null, 2)}\n`, "utf-8");
     await chmod(join(projectDir, "story", "hooks.json"), 0o000);
     const writerClient: WriterClient = { generateDraft: vi.fn() };
@@ -951,24 +924,24 @@ async function createFixtureProject(): Promise<string> {
     rootDir,
     title: "我的修仙副本",
     genre: "xianxia",
-    premise: "用户自己当主角，从杂役弟子开始逆袭。",
-    mainCharacterName: "Guo Xu / 主角",
+    logline: "用户自己当主角，从杂役弟子开始逆袭。",
+    protagonistName: "Guo Xu",
   });
   await createStoryProject({
     rootDir,
     title: "ignored sibling",
     genre: "xianxia",
-    premise: "unused",
-    mainCharacterName: "Someone Else",
+    logline: "unused",
+    protagonistName: "Someone Else",
   });
-  const linDir = join(projectDir, "characters", "lin-wan-qing");
-  await import("node:fs/promises").then(async ({ mkdir, writeFile }) => {
-    await mkdir(linDir, { recursive: true });
-    await Promise.all([
-      writeFile(join(linDir, "profile.json"), JSON.stringify({ id: "lin-wan-qing", name: "林婉清" }, null, 2), "utf-8"),
-      writeFile(join(linDir, "core.json"), JSON.stringify({ characterId: "lin-wan-qing", personality: ["precise"] }, null, 2), "utf-8"),
-      writeFile(join(linDir, "state.json"), JSON.stringify({ characterId: "lin-wan-qing", emotion: "calm", goal: "assist", lastUpdatedChapter: null }, null, 2), "utf-8"),
-    ]);
-  });
+  await writeCards(projectDir, [
+    { op: "card.create", kind: "character", name: "林婉清", aliases: ["林秘书"], fields: [{ label: "性格", value: "做事精确" }] },
+  ]);
   return projectDir;
+}
+
+/** 用作者档 card.write 写设定卡（每次换一个幂等键）。 */
+async function writeCards(projectDir: string, ops: CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+  if (!outcome.ok) throw new Error(outcome.message);
 }

@@ -2,6 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { applyDraftRevisionToContent, buildDraftRevisionPrompt, createRevisionTaskFromIssue, createRevisionTaskFromSuggestion, fallbackDraftRevisionPreview, normalizeDraftRevisionPreview, parseDraftRevisionPreview } from "./draft-revision.js";
 import type { DraftAIReviewIssue, DraftAIRevisionSuggestion } from "./draft-ai-review.js";
+import { applyCardOps, bibleView, emptySettingCards, project } from "@actalk/story-core";
+import { buildSettingPack } from "./setting-pack.js";
+import type { WritingContextPack } from "./writing-context-pack.js";
 
 const draft = [
   "# 第1章 · 半张申请表",
@@ -33,97 +36,33 @@ const suggestion: DraftAIRevisionSuggestion = {
 };
 
 describe("draft revision", () => {
-  it("builds a scoped revision prompt with safety boundaries", () => {
+  it("builds a scoped revision prompt with safety boundaries and the setting pack rendered as text", () => {
     const task = createRevisionTaskFromIssue({
       chapter: 1,
       issue,
       draftContent: draft,
       constraints: ["不要提前揭开魂钢真实来源"],
     });
-    const prompt = buildDraftRevisionPrompt({
-      task,
-      draftContent: draft,
-      writingContextPack: {
-        chapterTask: { chapterNumber: 1, userDirection: "申请窗口异常", currentChapterGoal: "制造悬念" },
-        protagonistContext: {
-          name: "林序",
-          identity: "普通毕业生",
-          currentGoal: "查清申请表异常",
-          weakness: "资源不足",
-          behaviorBoundaries: ["普通人起步"],
-          knownFacts: ["申请表发热"],
-          unknownTruths: ["魂钢真实来源"],
-          forbiddenReveals: ["财团幕后操盘者"],
-          physicalState: "疲惫",
-          mentalState: "警惕",
-          resourcesLimit: ["无大额现金"],
-          age: "22",
-          speechStyle: "克制",
-          speechSamples: ["先观察，再反问。"],
-          cannotDo: ["不能突然开挂"],
-          extraFields: [],
-        },
-        supportingCast: [],
-        locationContext: {
-          requiredCurrentLocation: "海天市旧城区创业孵化楼2楼申请窗口",
-          openingLocation: "2楼申请窗口",
-          locationRisks: ["检测终端会记录异常"],
-          locationResources: ["申请窗口"],
-          nearbyLocations: ["1楼大厅"],
-          extraFields: [],
-          locationDoNotInventRule: "不要新增地点",
-          spatialStructure: { floors: ["1楼", "2楼"], rooms: ["申请窗口"], entrances: ["大厅入口"], exits: ["楼梯"] },
-          travelRules: [{ targetLocation: "1楼大厅", method: "stairs", durationMinutes: 1 }],
-          fixedFacts: ["只有三层"],
-        },
-        worldRulesContext: {
-          coreRules: ["魂钢决定阶层"],
-          resourceRules: ["申请表是关键凭证"],
-          socialOrder: ["财团垄断机会"],
-          factions: [],
-          conflictSources: ["资源垄断"],
-          hiddenTruths: ["魂钢真实来源"],
-          protectedSecrets: ["主角潜力真实等级"],
-        },
-        assetContext: {
-          initialAssets: ["半张魂钢申请表"],
-          keyItems: ["半张魂钢申请表"],
-          resourceLimits: ["欠费手机不能联网"],
-          importantCarriedItems: ["半张魂钢申请表"],
-          extraFields: [],
-          assetDoNotInventRule: "不要新增关键资产",
-          carriedAssets: ["半张魂钢申请表"],
-          ownedAssets: [],
-          usableAssets: ["公交卡"],
-          unavailableAssets: ["欠费手机"],
-          plotCriticalAssets: ["半张魂钢申请表"],
-          assetHardRules: ["半张申请表不能变完整"],
-        },
-        continuityFocus: { recentTimelineEvents: [], mustCarryHooks: [], mustCarryThreads: [], arcGoalFocus: [], establishedFacts: [] },
-        writingRulesContext: {
-          narrativePerspective: "第三人称限知",
-          proseStyle: ["克制", "紧张"],
-          pacing: "中等",
-          revealPolicy: "慢揭示",
-          targetChapterWords: 1200,
-          forbiddenContent: ["不要设定说明书"],
-          doNotDo: ["不要突然开挂"],
-          readerExperienceRules: ["保留追读点"],
-          styleExemplars: [],
-        },
-        hardConstraints: ["不要提前揭开隐藏真相"],
-        sourceTrace: [],
-        readFailures: [],
-      },
-    });
+    const prompt = buildDraftRevisionPrompt({ task, draftContent: draft, writingContextPack: packFixture() });
 
     expect(prompt).toContain("只修指定片段，不重写全文");
-    expect(prompt).toContain("不提前揭开 forbiddenReveals / protectedSecrets");
-    expect(prompt).toContain("writingRules");
-    expect(prompt).toContain("海天市旧城区创业孵化楼2楼申请窗口");
-    expect(prompt).toContain("半张申请表不能变完整");
-    expect(prompt).toContain("魂钢真实来源");
+    expect(prompt).toContain("不提前揭开设定里写着还没揭开、不能说破的内容");
     expect(prompt).toContain("不要以信息不足为理由保持原样");
+    expect(prompt).toContain("设定（设定卡 + 账里记的现状）：");
+    expect(prompt).toContain("【海天市旧城区创业孵化楼】");
+    expect(prompt).toContain("- 规矩：不能凭空变成完整申请表");
+    expect(prompt).toContain("- 还没揭开：魂钢真实来源");
+    expect(prompt).toContain("- 一定不要写：不要设定说明书");
+    expect(prompt).toContain("不要提前揭开隐藏真相"); // 硬约束进上下文摘要
+    expect(prompt).toContain("不要提前揭开魂钢真实来源"); // 任务约束
+    expect(prompt).toContain(issue.evidence);
+  });
+
+  it("没有上下文包：不出设定段，其余照常", () => {
+    const task = createRevisionTaskFromIssue({ chapter: 1, issue, draftContent: draft });
+    const prompt = buildDraftRevisionPrompt({ task, draftContent: draft });
+    expect(prompt).not.toContain("设定（设定卡 + 账里记的现状）：");
+    expect(prompt).toContain("只修指定片段，不重写全文");
     expect(prompt).toContain(issue.evidence);
   });
 
@@ -186,3 +125,22 @@ describe("draft revision", () => {
     expect(() => parseDraftRevisionPreview(JSON.stringify({ taskId: task.id }), task)).toThrow(/afterText/u);
   });
 });
+
+function packFixture(): WritingContextPack {
+  const applied = applyCardOps(emptySettingCards(), [
+    { op: "story.set", label: "还没揭开", value: "魂钢真实来源" },
+    { op: "card.create", kind: "character", name: "林序", protagonist: true, fields: [{ label: "身份", value: "普通毕业生" }] },
+    { op: "card.create", kind: "place", name: "海天市旧城区创业孵化楼", fields: [{ label: "格局", value: "只有三层" }] },
+    { op: "card.create", kind: "item", name: "半张魂钢申请表", fields: [{ label: "规矩", value: "不能凭空变成完整申请表" }] },
+    { op: "rules.add", list: "style", text: "克制" },
+    { op: "rules.add", list: "bans", text: "不要设定说明书" },
+  ], { by: "author", at: "2026-10-19T00:00:00.000Z" });
+  if (!applied.ok) throw new Error(applied.message);
+  return {
+    chapterTask: { chapterNumber: 1, userDirection: "申请窗口异常", currentChapterGoal: "制造悬念" },
+    setting: buildSettingPack(bibleView(project({ ledgers: [], decisions: [] }), applied.file)),
+    continuityFocus: { recentTimelineEvents: [], mustCarryHooks: [], mustCarryThreads: [], arcGoalFocus: [], establishedFacts: [] },
+    hardConstraints: ["不要提前揭开隐藏真相"],
+    readFailures: [],
+  };
+}

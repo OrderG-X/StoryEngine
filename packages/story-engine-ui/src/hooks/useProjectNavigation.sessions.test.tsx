@@ -12,7 +12,7 @@ import { useChatStore } from "../stores/chatStore.js";
 import { useUiStore } from "../stores/uiStore.js";
 import { useDraftStore } from "../stores/draftStore.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
-import { mockWorkspaceData, mockSidebarData } from "../mockData.js";
+import { mockWorkspaceData } from "../mockData.js";
 import type { ChapterNavItem } from "../types.js";
 import { beginWorkspaceOperation, finishWorkspaceOperation, isWorkspaceBusy, resetWorkspaceOperationForTests } from "../utils/workspaceOperation.js";
 
@@ -69,7 +69,6 @@ vi.mock("../api/chatSessionsClient.js", () => ({
 }));
 
 vi.mock("../api/stateOverviewAdapter.js", () => ({
-  sidebarFromStateOverview: vi.fn(() => mockSidebarData),
   workspaceFromStateOverview: vi.fn(() => mockWorkspaceData),
 }));
 

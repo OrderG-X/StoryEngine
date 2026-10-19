@@ -5,7 +5,7 @@
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createStoryProject } from "../../book/project-store.js";
-import { projectBook, readChapterLedger, readHead } from "@actalk/story-core";
+import { projectBook, readCards, readChapterLedger, readHead } from "@actalk/story-core";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,7 +47,7 @@ let book: string;
 beforeEach(async () => {
   warmUpReadersMock.mockClear();
   root = await makeHomeTempDir("commit-chain-");
-  ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼", genre: "悬疑", premise: "钟停了。", mainCharacterName: "林远" }));
+  ({ projectDir: book } = await createStoryProject({ rootDir: root, title: "钟楼", genre: "悬疑", logline: "钟停了。", protagonistName: "林远" }));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -89,6 +89,7 @@ function fakeModel(ledger: unknown): BrainCallModel {
 }
 
 async function writeDraft(chapter: number, text: string): Promise<void> {
+  await mkdir(join(book, "drafts", "fast"), { recursive: true });
   await writeFile(join(book, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), text, "utf-8");
 }
 
@@ -169,6 +170,8 @@ describe("commit_apply", () => {
   });
 
   it("作者点确认：去掉的不记；写正文 + 账单 + 老格式镜像；后台预热；再点一次不重复写", async () => {
+    // 建书时写了设定卡（主角卡）：书的版本号从 1 起。
+    const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
     const preview = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
     const stranger = preview.ledgerChecklist?.find((item) => item.needsConfirm && item.label.includes("周守义"));
@@ -192,17 +195,20 @@ describe("commit_apply", () => {
     const again = (await applyExecute({ chapter: 1, previewToken: preview.previewToken, excluded: [stranger?.id] }, buttonContext(1))) as ApplyOut;
     expect(again).toMatchObject({ ok: true, committed: true });
     expect(again.summary).toContain("已经定稿过了");
-    expect(await readHead(book)).toMatchObject({ version: 1 });
+    expect(await readHead(book)).toMatchObject({ version: base + 1 });
   });
 
   it("票号没了 / 乱填：如实拒、不定稿", async () => {
+    const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
     const out = (await applyExecute({ chapter: 1, previewToken: "0123456789abcdef" }, buttonContext(1))) as ApplyOut;
     expect(out).toMatchObject({ ok: false, committed: false, refused: true, blockedReason: "no_preview" });
-    expect(await readHead(book)).toMatchObject({ version: 0 });
+    expect(await readHead(book)).toMatchObject({ version: base });
+    expect(await readChapterLedger(book, 1)).toBeUndefined();
   });
 
   it("和前文不会变的事实对不上：默认不记、作者勾上才记；撤销后重新预览能再定稿", async () => {
+    const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
     const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
     await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
@@ -222,7 +228,7 @@ describe("commit_apply", () => {
 
     const restored = await restoreSnapshot(book, skipped.snapshotId ?? "");
     expect(restored).toBeTruthy();
-    expect(await readHead(book)).toMatchObject({ version: 1 });
+    expect(await readHead(book)).toMatchObject({ version: base + 1 });
     expect(await exists(join(book, "chapters", "0002.md"))).toBe(false);
 
     const again = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
@@ -233,9 +239,21 @@ describe("commit_apply", () => {
     expect((await projectBook(book)).conflicts).toHaveLength(1);
   });
 
-  it("老书（有定稿章、没账单）第一次预览：先存档、自动导入，老文件不动", async () => {
+  it("老书（有定稿章、没账单、没设定卡）第一次预览：先存档、导入账单、搬老设定，老文件不动", async () => {
+    // 重构 P9 以前的书：只有老格式文件（老设定、老账本），没有 ledger/。
+    book = join(root, "old-book");
     await mkdir(join(book, "chapters"), { recursive: true });
+    await mkdir(join(book, "story"), { recursive: true });
+    await mkdir(join(book, "timeline"), { recursive: true });
+    const at = "2026-10-01T00:00:00.000Z";
+    await writeFile(join(book, "project.json"), JSON.stringify({ id: "old-book", title: "钟楼", createdAt: at, updatedAt: at }), "utf-8");
     await writeFile(join(book, "chapters", "0001.md"), CH1, "utf-8");
+    await writeFile(join(book, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [{ id: "char-a", name: "林远", role: "主角", identity: "钟表匠" }],
+    }), "utf-8");
+    await writeFile(join(book, "story", "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8");
+    await writeFile(join(book, "timeline", "events.json"), "[]\n", "utf-8");
     const bibleBefore = await readFile(join(book, "story", "character-bible.json"), "utf-8");
     const mirrored = new Map<string, string>();
     for (const file of Object.values(MIRROR_FILES)) {
@@ -246,11 +264,12 @@ describe("commit_apply", () => {
     await writeDraft(2, CH2);
     const out = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel({ ...LEDGER2, threads: [] }) });
     expect(out.canCommit).toBe(true);
-    expect((await readHead(book)).version).toBe(1);
     expect((await projectBook(book)).chapters[0]?.origin).toBe("import");
     expect((await listSnapshots(book)).length).toBeGreaterThan(0);
-    // 设定本不归镜像管，一字不动；镜像要重生成的老文件，第一次生成前原样留了一份。
+    // 老设定搬进了设定卡（主角认出来了）；老设定文件一字不动。
+    expect((await readCards(book))?.cards).toEqual([expect.objectContaining({ name: "林远", protagonist: true })]);
     expect(await readFile(join(book, "story", "character-bible.json"), "utf-8")).toBe(bibleBefore);
+    // 镜像要重生成的老文件，第一次生成前原样留了一份。
     for (const [file, content] of mirrored) {
       expect(await readFile(join(book, MIRROR_BACKUP_DIR, file), "utf-8")).toBe(content);
     }

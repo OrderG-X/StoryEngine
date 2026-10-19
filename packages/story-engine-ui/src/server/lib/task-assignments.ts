@@ -25,9 +25,9 @@ export interface TaskAssignmentsFile {
   readonly tasks: Readonly<Record<string, TaskAssignment>>;
 }
 
-/** 面板可分配的 7 个任务类型（已删 futureReview 死槽、做厚拆出 enrichment 槽）。 */
+/** 面板可分配的 6 个任务类型（已删 futureReview 死槽；做厚工具删了，enrichment 槽也删了，重构 P9）。 */
 export const TASK_ASSIGNMENT_KEYS = [
-  "fastDraft", "triage", "repair", "chapterSteering", "enrichment", "draftReview", "qualityCheck",
+  "fastDraft", "triage", "repair", "chapterSteering", "draftReview", "qualityCheck",
 ] as const;
 
 export type TaskAssignmentKey = (typeof TASK_ASSIGNMENT_KEYS)[number];
@@ -100,7 +100,6 @@ export function engineProfileFallback(
 ): string | undefined {
   // 先用任务自己的引擎配置，没有再跨任务回退（与旧 resolveConfiguredChatModel 的 `tp[task] ?? fallback` 等价）。
   switch (task) {
-    case "enrichment": return tp.enrichment ?? tp.chapterSteering;
     case "draftReview": return tp.draftReview ?? tp.qualityCheck ?? tp.chapterSteering;
     case "repair": return tp.repair ?? tp.draftReview ?? tp.qualityCheck;
     case "triage": return tp.triage ?? tp.qualityCheck ?? tp.chapterSteering;
@@ -109,7 +108,7 @@ export function engineProfileFallback(
 }
 
 /**
- * 合成「7 任务 → {profileId, thinking}」视图，供设置面板 GET 展示。
+ * 合成「6 任务 → {profileId, thinking}」视图，供设置面板 GET 展示。
  * profileId 解析顺序：旁路 → engineProfileFallback（与运行时同口径）→ defaultProfile → ""。
  * thinking：旁路有则用，否则默认开。
  */

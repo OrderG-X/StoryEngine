@@ -5,7 +5,9 @@ import {
   fallbackDraftAIReviewReport,
   parseDraftAIReviewReport,
 } from "./draft-ai-review.js";
+import { applyCardOps, bibleView, emptySettingCards, project } from "@actalk/story-core";
 import type { StateOverview } from "../book/state-overview.js";
+import { buildSettingPack } from "./setting-pack.js";
 import type { WritingContextPack } from "./writing-context-pack.js";
 
 describe("Draft AI Review V0", () => {
@@ -15,37 +17,47 @@ describe("Draft AI Review V0", () => {
       draftContent: "# 第1章 · 半张申请表\n\n林序站在海天市旧城区创业孵化楼二楼申请窗口前。",
       chapterGoal: "毕业失败当天，林序第一次接触魂钢异常反应。",
       writingContextPack: contextPackFixture(),
+      stateOverview: { project: { title: "海天魂钢", genre: "都市英灵", logline: "", currentChapter: 1 }, storyStatus: {} } as unknown as StateOverview,
       deterministicQuality: {
         passed: true,
-        issues: [{ severity: "warning", type: "writing_context_setup_asset_missing", message: "Draft does not mention setup asset." }],
+        issues: [{ severity: "warning", type: "missing_chapter_title", message: "Draft does not contain an obvious chapter title." }],
       },
     });
 
     expect(prompt).toContain("你是 StoryEngine-NG 的“审稿老师”");
     expect(prompt).toContain("不改正文，不输出重写全文");
-    expect(prompt).toContain("不泄露 protectedSecrets / forbiddenReveals / hiddenTruths");
-    expect(prompt).toContain("不建议主角知道 unknownTruths");
-    expect(prompt).toContain("克制、紧张、少解释");
-    expect(prompt).toContain("海天市旧城区创业孵化楼");
-    expect(prompt).toContain("欠费手机");
-    expect(prompt).toContain("魂钢真实来源");
+    expect(prompt).toContain("不泄露设定里写着还没揭开、不能说破的内容");
+    expect(prompt).toContain("不建议让人物知道他此刻不该知道的事");
+    expect(prompt).toContain("设定（设定卡 + 账里记的现状）：");
+    expect(prompt).toContain("- 文风：克制、紧张、少解释");
+    expect(prompt).toContain("【海天市旧城区创业孵化楼】");
+    expect(prompt).toContain("【欠费手机】\n- 现状：欠费三天，不能正常联网");
+    expect(prompt).toContain("- 还没揭开：魂钢真实来源");
+    expect(prompt).toContain("不要提前揭开隐藏真相"); // 硬约束进上下文摘要
+    expect(prompt).toContain("申请记录异常"); // 接着写要扛住的线进上下文摘要
+    expect(prompt).toContain("\"title\": \"海天魂钢\"");
+    expect(prompt).toContain("missing_chapter_title"); // 自动检查结果交给审稿老师（给作者看的字由第 8 条规矩管）
     expect(prompt).toContain("林序站在海天市旧城区创业孵化楼二楼申请窗口前");
   });
 
-  // E3（B）：把全角色（含非主角）的 appearanceAnchors 透进审稿上下文 + 加「同属性互斥」审查指令，
-  // 让 LLM 审稿层能 catch 角色卡内部语义矛盾（如陈雨薇「二十六七岁」vs「三十出头」——fuzzy/确定性都够不着）。
-  it("feeds all characters' appearance anchors (incl. non-protagonist) so the reviewer can flag same-attribute contradictions", () => {
+  // E3（B）：审稿要能看出人物卡内部同属性互斥（如「二十六七岁」vs「三十出头」）——本章相关人物的卡整张进审稿上下文，
+  // 再配一条「同一属性互斥」审查指令。重构 P9 起人物来自设定包（主角 + 本章相关人物），不再读状态总览里的人物矩阵。
+  it("feeds the cast's setting cards (incl. non-protagonist) so the reviewer can flag same-attribute contradictions", () => {
     const prompt = buildDraftAIReviewPrompt({
       chapter: 2,
-      draftContent: "# 第2章\n\n顾长风在雾港码头见到了那个女人。",
-      writingContextPack: contextPackFixture(), // pack 在场（草稿审稿常态）——主角分支用 pack
-      stateOverview: overviewWithCharacterConflict(),
+      draftContent: "# 第2章\n\n林序在雾港码头见到了陈雨薇。",
+      writingContextPack: contextPackFixture(["陈雨薇"]),
     });
-    // 非主角陈雨薇的两条互斥年龄锚点都进了喂模型的上下文（pack 在场也不丢）
-    expect(prompt).toContain("二十六七岁");
-    expect(prompt).toContain("三十出头");
-    // 通用「同属性互斥」审查指令
+    expect(prompt).toContain("【陈雨薇】");
+    expect(prompt).toContain("- 年龄：二十六七岁");
+    expect(prompt).toContain("- 外貌：三十出头，穿着米色风衣");
     expect(prompt).toContain("同一属性");
+  });
+
+  it("没有上下文包：不出设定段", () => {
+    const prompt = buildDraftAIReviewPrompt({ chapter: 1, draftContent: "# 第1章\n\n正文。" });
+    expect(prompt).not.toContain("设定（设定卡 + 账里记的现状）：");
+    expect(prompt).toContain("当前草稿正文：");
   });
 
   it("parses valid JSON reports", () => {
@@ -97,93 +109,29 @@ describe("Draft AI Review V0", () => {
   });
 });
 
-// 最小 StateOverview：只填本测试要读的 characterMatrix.characters（name + appearanceAnchors）。
-// 含一个非主角（陈雨薇）带互斥年龄锚点，验证非主角也被透传。
-function overviewWithCharacterConflict(): StateOverview {
-  return {
-    project: { title: "测试悬疑书", genre: "悬疑", currentChapter: 2 },
-    characterMatrix: {
-      available: true,
-      characters: [
-        { id: "char-gcf", name: "顾长风", role: "主角", appearanceAnchors: ["身形挺拔"] },
-        { id: "char-cyw", name: "陈雨薇", role: "配角", appearanceAnchors: ["二十六七岁", "三十出头", "穿着米色风衣"] },
-      ],
-      relationships: [],
-      riskReminders: [],
+function contextPackFixture(cast: readonly string[] = []): WritingContextPack {
+  const applied = applyCardOps(emptySettingCards(), [
+    { op: "story.set", label: "还没揭开", value: "魂钢真实来源" },
+    { op: "card.create", kind: "character", name: "林序", protagonist: true, fields: [{ label: "身份", value: "普通毕业生" }] },
+    {
+      op: "card.create",
+      kind: "character",
+      name: "陈雨薇",
+      fields: [{ label: "年龄", value: "二十六七岁" }, { label: "外貌", value: "三十出头，穿着米色风衣" }],
     },
-  } as unknown as StateOverview;
-}
-
-function contextPackFixture(): WritingContextPack {
+    { op: "card.create", kind: "place", name: "海天市旧城区创业孵化楼", fields: [{ label: "格局", value: "只有三层楼" }] },
+    { op: "card.create", kind: "item", name: "欠费手机", fields: [{ label: "现状", value: "欠费三天，不能正常联网" }] },
+    { op: "rules.add", list: "style", text: "克制、紧张、少解释" },
+    { op: "rules.add", list: "bans", text: "不要提前解释魂钢来源" },
+  ], { by: "author", at: "2026-10-19T00:00:00.000Z" });
+  if (!applied.ok) throw new Error(applied.message);
   return {
     chapterTask: {
       chapterNumber: 1,
       userDirection: "毕业失败当天，林序第一次接触魂钢异常反应。",
       currentChapterGoal: "让林序接触异常申请表，但不揭开魂钢来源。",
-      firstChapterGoal: "第一次接触魂钢异常反应。",
-      openingScene: "海天市旧城区创业孵化楼二楼申请窗口",
-      firstHook: "半张魂钢申请表发热",
-      firstConflict: "普通毕业生难以获得魂钢资格",
     },
-    protagonistContext: {
-      name: "林序",
-      identity: "普通毕业生",
-      currentGoal: "确认申请记录",
-      weakness: "资源不足",
-      behaviorBoundaries: ["普通人起步，不开挂"],
-      knownFacts: ["魂钢申请表异常发热"],
-      unknownTruths: ["魂钢真实来源"],
-      forbiddenReveals: ["财团幕后操盘者"],
-      physicalState: "疲惫",
-      mentalState: "警惕",
-      resourcesLimit: ["无大额现金"],
-      age: "22岁",
-      speechStyle: "克制，先观察再反问",
-      speechSamples: ["所以，我的申请记录到底在哪里？"],
-      cannotDo: ["不能突然知道财团幕后操盘者"],
-      extraFields: [],
-    },
-    supportingCast: [],
-    locationContext: {
-      requiredCurrentLocation: "海天市旧城区创业孵化楼",
-      openingLocation: "二楼申请窗口",
-      spatialStructure: {
-        floors: ["1楼大厅", "2楼申请窗口", "3楼办公区"],
-        rooms: ["申请窗口"],
-        entrances: ["正门"],
-        exits: ["楼梯"],
-      },
-      travelRules: [{ targetLocation: "1楼大厅", method: "stairs", durationMinutes: 1 }],
-      fixedFacts: ["只有三层楼"],
-      locationRisks: ["不能出现四楼"],
-      locationResources: ["查询终端"],
-      nearbyLocations: ["旧城区公交站"],
-      extraFields: [],
-      locationDoNotInventRule: "不要编造新城市名。",
-    },
-    worldRulesContext: {
-      coreRules: ["创业魂钢决定城市阶层和英灵能力"],
-      resourceRules: ["普通毕业生很难获得魂钢"],
-      socialOrder: ["财团垄断觉醒机会"],
-      factions: [{ name: "财团", goal: "垄断魂钢", resources: ["检测系统"] }],
-      conflictSources: ["阶层门槛"],
-      hiddenTruths: ["魂钢真实来源"],
-      protectedSecrets: ["主角潜力真实等级"],
-    },
-    assetContext: {
-      initialAssets: ["欠费手机", "公交卡"],
-      keyItems: ["半张魂钢申请表"],
-      resourceLimits: ["无车辆", "无大额现金"],
-      importantCarriedItems: ["半张魂钢申请表"],
-      carriedAssets: ["欠费手机", "公交卡", "半张魂钢申请表"],
-      ownedAssets: [],
-      usableAssets: ["公交卡"],
-      unavailableAssets: ["欠费手机"],
-      plotCriticalAssets: ["半张魂钢申请表"],
-      assetHardRules: ["欠费手机不能正常联网"],
-      extraFields: [],
-      assetDoNotInventRule: "不要凭空创建车辆或大额现金。",
-    },
+    setting: buildSettingPack(bibleView(project({ ledgers: [], decisions: [] }), applied.file), { characters: cast }),
     continuityFocus: {
       recentTimelineEvents: ["林序毕业失败"],
       mustCarryHooks: ["申请表发热"],
@@ -191,19 +139,7 @@ function contextPackFixture(): WritingContextPack {
       arcGoalFocus: ["突破魂钢阶层门槛"],
       establishedFacts: [],
     },
-    writingRulesContext: {
-      narrativePerspective: "第三人称限知",
-      proseStyle: ["克制、紧张、少解释"],
-      pacing: "中等",
-      revealPolicy: "慢揭示",
-      targetChapterWords: 1800,
-      forbiddenContent: ["不要提前解释魂钢来源"],
-      doNotDo: ["不要写成设定说明书"],
-      readerExperienceRules: ["保持压迫感"],
-      styleExemplars: [],
-    },
     hardConstraints: ["不要提前揭开隐藏真相"],
-    sourceTrace: [],
     readFailures: [],
   };
 }

@@ -136,7 +136,7 @@ const inputSchema = z.object({
     "本章方向：只能原样抄作者说过的话（可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
   ),
   requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。")),
-  selectedCharacterIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
+  selectedCharacters: coerceStringArray(z.array(z.string()).optional().describe("一般不填。作者点名这章要写谁时，填人物名字。")),
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
     "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。",
@@ -494,7 +494,7 @@ export const generateDraftTool = createTool({
       chapter: resolvedChapter,
       ...(chapterGoal ? { chapterGoal } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
-      ...(input.selectedCharacterIds !== undefined ? { selectedCharacterIds: input.selectedCharacterIds } : {}),
+      ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
       ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
       ...(input.mustHitBeats !== undefined ? { mustHitBeats: input.mustHitBeats } : {}),
       ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),

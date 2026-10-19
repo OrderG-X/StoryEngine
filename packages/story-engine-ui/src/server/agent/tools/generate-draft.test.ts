@@ -6,6 +6,7 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { createStoryProject } from "../../book/project-store.js";
 import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { runFastDraft, type WriterClient } from "../../writing/fast-draft-writer.js";
@@ -15,7 +16,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { writeFile } from "node:fs/promises";
 
-import { ALIAS_TABLE_RELATIVE_PATH } from "../../writing/presence/alias-generator.js";
 import { defaultCommittedChapterPath, defaultDraftPath } from "../../lib/project-io.js";
 import { makeWriterRankContext } from "../../writing/rank-writer-context.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
@@ -75,10 +75,22 @@ async function makeProject(title: string, mainCharacterName = "林远"): Promise
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName,
+    logline: "主角进入权力中心。",
+    protagonistName: mainCharacterName,
   });
   return projectDir;
+}
+
+/** 用作者档 card.write 写设定卡（每次换一个幂等键）。 */
+async function writeCards(projectDir: string, ops: CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+  if (!outcome.ok) throw new Error(outcome.message);
+}
+
+/** 老格式时间线镜像（timeline/events.json）：新书不再建 timeline/ 目录，要写自己建。 */
+async function writeTimelineEvents(projectDir: string, events: unknown[]): Promise<void> {
+  await mkdir(join(projectDir, "timeline"), { recursive: true });
+  await writeFile(join(projectDir, "timeline", "events.json"), `${JSON.stringify(events, null, 2)}\n`, "utf-8");
 }
 
 /** 构造一个返回固定长正文的 mock writerClient（不调真实模型）。 */
@@ -94,22 +106,6 @@ function mockWriterClient(body: string): WriterClient {
 function longBody(mainCharacterName: string): string {
   const para = `${mainCharacterName}在走廊尽头停下脚步，反复掂量手里这份账册的分量，心里盘算着接下来每一步该怎么走才不至于落人话柄。`;
   return [para, para, para, para].join("\n\n");
-}
-
-async function seedSecondaryCharacter(projectDir: string): Promise<void> {
-  const characterDir = join(projectDir, "characters", "lin-wan-qing");
-  await mkdir(characterDir, { recursive: true });
-  await writeFile(join(characterDir, "profile.json"), `${JSON.stringify({ id: "lin-wan-qing", name: "林婉清" }, null, 2)}\n`, "utf-8");
-  await writeFile(join(characterDir, "core.json"), `${JSON.stringify({ characterId: "lin-wan-qing", personality: ["冷静"] }, null, 2)}\n`, "utf-8");
-  await writeFile(join(characterDir, "state.json"), `${JSON.stringify({ characterId: "lin-wan-qing", emotion: "calm", goal: "assist", lastUpdatedChapter: null }, null, 2)}\n`, "utf-8");
-}
-
-async function seedMainCharacter(projectDir: string): Promise<void> {
-  const characterDir = join(projectDir, "characters", "guo-xu");
-  await mkdir(characterDir, { recursive: true });
-  await writeFile(join(characterDir, "profile.json"), `${JSON.stringify({ id: "guo-xu", name: "林远", identity: "protagonist", appearance: {}, tags: [] }, null, 2)}\n`, "utf-8");
-  await writeFile(join(characterDir, "core.json"), `${JSON.stringify({ characterId: "guo-xu", personality: ["谨慎"], speechStyle: "克制" }, null, 2)}\n`, "utf-8");
-  await writeFile(join(characterDir, "state.json"), `${JSON.stringify({ characterId: "guo-xu", emotion: "alert", goal: "进入核心场景", lastUpdatedChapter: null }, null, 2)}\n`, "utf-8");
 }
 
 describe("generate_draft 写工作稿工具", () => {
@@ -179,15 +175,18 @@ describe("generate_draft 写工作稿工具", () => {
     expect(out.summary).toMatch(/未通过|未写入|拒绝/u);
   });
 
-  it("透传 selectedCharacterIds / selectedHookIds / maxTimelineEvents 给 FastDraft context", async () => {
+  it("透传 selectedCharacters（名字）/ selectedHookIds / maxTimelineEvents 给 FastDraft context", async () => {
     const projectDir = await makeProject("选中上下文", "林远");
-    await seedSecondaryCharacter(projectDir);
+    await writeCards(projectDir, [{ op: "card.create", kind: "character", name: "林婉清", aliases: ["林老师"], fields: [{ label: "性格", value: "冷静" }] }]);
     const writerClient: WriterClient = {
       async generateDraft({ context }) {
-        expect(context.trace.selectedCharacters).toEqual(["lin-wan-qing"]);
-        expect(context.sections.find((section) => section.name === "character_profile")?.content).toEqual([
-          expect.objectContaining({ id: "lin-wan-qing", name: "林婉清" }),
-        ]);
+        // 主角恒带；点名用别名 → 换成卡上的名字
+        expect(context.trace.selectedCharacters).toEqual(["林远", "林婉清"]);
+        const pack = context.sections.find((section) => section.name === "writing_context_pack")?.content as {
+          setting: { protagonist?: { name: string }; cast: { name: string; card: string[] }[] };
+        };
+        expect(pack.setting.protagonist?.name).toBe("林远");
+        expect(pack.setting.cast).toEqual([expect.objectContaining({ name: "林婉清", card: ["性格：冷静"] })]);
         return { title: `第${context.chapter}章`, content: longBody("林婉清") };
       },
     };
@@ -196,28 +195,24 @@ describe("generate_draft 写工作稿工具", () => {
       projectDir,
       chapter: 1,
       chapterGoal: "林婉清出场。",
-      selectedCharacterIds: ["lin-wan-qing"],
+      selectedCharacters: ["林老师"],
       selectedHookIds: ["h-ledger"],
       maxTimelineEvents: 2,
       writerClient,
     });
 
     expect(out.ok).toBe(true);
+    expect(out.characterSelection).toMatchObject({ selected: ["林远", "林婉清"], explicit: true });
   });
 
-  // P1 集成断言（复审实锤）：显式 selectedCharacterIds 是「bible 有、但缺 characters/<id>/ 三件套文件」的幽灵 id 时，
-  // 过滤层必须把它判为不可读、丢弃、回落自动检测——整条 generate_draft → buildWriterContext 不再 ENOENT 崩。
-  it("显式 selectedCharacterIds 是 bible 有、三件套文件缺的幽灵 id → 过滤回落、整条不 ENOENT 崩、幽灵 id 不进 context", async () => {
-    const projectDir = await makeProject("册有文件缺", "林远");
-    const biblePath = join(projectDir, "story", "character-bible.json");
-    const bible = JSON.parse(await readFile(biblePath, "utf-8")) as { readonly characters: { id: string; name: string; role: string }[] };
-    bible.characters.push({ id: "ghost-no-files", name: "幽灵", role: "配角" }); // 只进册、不建文件（真书角色都有 role）
-    await writeFile(biblePath, `${JSON.stringify(bible, null, 2)}\n`, "utf-8");
+  // 模型无关：点名传了设定本里没有的名字（类别词、编号、捏造）→ 丢掉、回落自动检测，整条不崩、不进上下文。
+  it("点名的名字对不上任何人物卡 → 丢掉、回落自动检测，整条不崩、捏造名不进 context", async () => {
+    const projectDir = await makeProject("点名对不上", "林远");
 
-    let contextIds: readonly string[] = [];
+    let contextNames: readonly string[] = [];
     const writerClient: WriterClient = {
       async generateDraft({ context }) {
-        contextIds = context.trace.selectedCharacters ?? [];
+        contextNames = context.trace.selectedCharacters ?? [];
         return { title: `第${context.chapter}章`, content: longBody("林远") };
       },
     };
@@ -226,47 +221,26 @@ describe("generate_draft 写工作稿工具", () => {
       projectDir,
       chapter: 1,
       chapterGoal: "推进剧情。",
-      selectedCharacterIds: ["ghost-no-files"],
+      selectedCharacters: ["幽灵", "char-bogus", "主角"],
       writerClient,
     });
 
-    expect(out.ok).toBe(true); // 没有 ENOENT 崩
-    expect(contextIds).not.toContain("ghost-no-files"); // 幽灵 id 没被直透下游 context
+    expect(out.ok).toBe(true);
+    expect(contextNames).toEqual(["林远"]);
+    expect(out.characterSelection).toMatchObject({ explicit: false, selected: ["林远"] });
   });
 
-  it("omitted selectedCharacterIds are resolved from chapter goal and previous chapter aliases before FastDraft", async () => {
+  it("不点名 → 按本章方向和上一章正文里的名字/别名自动挑人，回执只有名字", async () => {
     const projectDir = await makeProject("自动挑角色", "林远");
-    await seedMainCharacter(projectDir);
-    await seedSecondaryCharacter(projectDir);
-    await writeFile(
-      join(projectDir, "story", "character-bible.json"),
-      `${JSON.stringify({
-        version: "v0",
-        characters: [
-          { id: "guo-xu", name: "林远", role: "主角" },
-          { id: "lin-wan-qing", name: "林婉清", role: "老师" },
-        ],
-      }, null, 2)}\n`,
-      "utf-8",
-    );
-    await mkdir(join(projectDir, ".story-engine-ui"), { recursive: true });
-    await writeFile(
-      join(projectDir, ALIAS_TABLE_RELATIVE_PATH),
-      `${JSON.stringify({
-        version: "v0",
-        byEntity: {
-          "guo-xu": { canonicalName: "林远", primary: "林远", aliases: ["林总"], generated: ["林总"], type: "character" },
-          "lin-wan-qing": { canonicalName: "林婉清", primary: "林婉清", aliases: ["林老师"], generated: ["林老师"], type: "character" },
-        },
-        conflicts: [],
-      }, null, 2)}\n`,
-      "utf-8",
-    );
-    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeCards(projectDir, [
+      { op: "card.aliases", card: "林远", add: ["林总"] },
+      { op: "card.create", kind: "character", name: "林婉清", aliases: ["林老师"] },
+      { op: "card.create", kind: "character", name: "顾远" },
+    ]);
     await writeFile(join(projectDir, "chapters", "0001.md"), "# 第一章\n\n林老师在门外递来一份资料。", "utf-8");
     const writerClient: WriterClient = {
       async generateDraft({ context }) {
-        expect(context.trace.selectedCharacters).toEqual(expect.arrayContaining(["guo-xu", "lin-wan-qing"]));
+        expect(context.trace.selectedCharacters).toEqual(["林远", "林婉清"]);
         return { title: `第${context.chapter}章`, content: longBody("林远") };
       },
     };
@@ -279,22 +253,19 @@ describe("generate_draft 写工作稿工具", () => {
     });
 
     expect(out.ok).toBe(true);
-    expect(out.characterSelection?.selectedCharacterIds).toEqual(expect.arrayContaining(["guo-xu", "lin-wan-qing"]));
-    expect(out.summary).toContain("本章相关角色：林远、林婉清");
+    expect(out.characterSelection).toMatchObject({ selected: ["林远", "林婉清"], prevChapterFound: true });
+    expect(out.summary).toContain("本章相关人物：林远、林婉清");
+    expect(out.summary).not.toMatch(/k-\d|char-/u);
   });
 
   it("returns context budget dropped sections when the tool ranker trims dynamic context", async () => {
     const projectDir = await makeProject("预算诊断", "林远");
-    await writeFile(
-      join(projectDir, "timeline", "events.json"),
-      `${JSON.stringify(Array.from({ length: 8 }, (_, index) => ({
-        id: `event-${index + 1}`,
-        chapter: index + 1,
-        summary: `林远在第${index + 1}章持续追查一条很长的线索，线索包含地点、对手、证据和下一步压力。`,
-        participants: ["guo-xu"],
-      })), null, 2)}\n`,
-      "utf-8",
-    );
+    await writeTimelineEvents(projectDir, Array.from({ length: 8 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      chapter: index + 1,
+      summary: `林远在第${index + 1}章持续追查一条很长的线索，线索包含地点、对手、证据和下一步压力。`,
+      participants: ["林远"],
+    })));
 
     const out = await runGenerateDraftToolLogic({
       projectDir,
@@ -316,16 +287,12 @@ describe("generate_draft 写工作稿工具", () => {
     const bigSummary =
       "林远在这一章里辗转于城北的旧仓库、城南的码头和市中心的写字楼之间，反复核对一份牵涉金额、时间、地点与多方对手的复杂账目，" +
       "每一步都要权衡眼前的证据与背后的压力，生怕走错一步就满盘皆输，于是把每一个细节都记在心里反复掂量。";
-    await writeFile(
-      join(projectDir, "timeline", "events.json"),
-      `${JSON.stringify(Array.from({ length: 400 }, (_, index) => ({
-        id: `event-${index + 1}`,
-        chapter: index + 1,
-        summary: `第${index + 1}章：${bigSummary}`,
-        participants: ["guo-xu"],
-      })), null, 2)}\n`,
-      "utf-8",
-    );
+    await writeTimelineEvents(projectDir, Array.from({ length: 400 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      chapter: index + 1,
+      summary: `第${index + 1}章：${bigSummary}`,
+      participants: ["林远"],
+    })));
 
     const out = await runGenerateDraftToolLogic({
       projectDir,
@@ -342,16 +309,12 @@ describe("generate_draft 写工作稿工具", () => {
 
   it("keeps stable prompt prefix cache-safe when the production ranker trims dynamic context", async () => {
     const projectDir = await makeProject("缓存安全", "林远");
-    await writeFile(
-      join(projectDir, "timeline", "events.json"),
-      `${JSON.stringify(Array.from({ length: 8 }, (_, index) => ({
-        id: `event-${index + 1}`,
-        chapter: index + 1,
-        summary: `林远在第${index + 1}章持续追查一条很长的线索，线索包含地点、对手、证据和下一步压力。`,
-        participants: ["guo-xu"],
-      })), null, 2)}\n`,
-      "utf-8",
-    );
+    await writeTimelineEvents(projectDir, Array.from({ length: 8 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      chapter: index + 1,
+      summary: `林远在第${index + 1}章持续追查一条很长的线索，线索包含地点、对手、证据和下一步压力。`,
+      participants: ["林远"],
+    })));
     const writerClient = mockWriterClient(longBody("林远"));
     const baseline = await runFastDraft({
       projectDir,
@@ -411,7 +374,8 @@ describe("draftLength 字数透明（一次成稿不重试：低于下限不拒�
 
   it("正文低于目标字数下限 → 仍 ok:true 照写盘（不拒绝、不自动补写），draftLength 透出 + summary 打 ⚠ 标注", async () => {
     const projectDir = await makeProject("字数透明", "林远");
-    const shortBody = "林远走进了房间。"; // 远低于新项目写作规则目标 1800 的下限 1530
+    await writeCards(projectDir, [{ op: "rules.set", field: "targetWords", value: 2400 }]);
+    const shortBody = "林远走进了房间。"; // 远低于写作规则目标 2400 的下限 2040
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
@@ -422,25 +386,25 @@ describe("draftLength 字数透明（一次成稿不重试：低于下限不拒�
     expect(out.ok).toBe(true);
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("林远走进了房间");
-    // draftLength 关键信息进输出（新项目目标来自写作规则 1800 → 下限 1530/上限 2070）
+    // draftLength 关键信息进输出（目标来自设定卡写作规则 2400 → 下限 2040/上限 2760）
     expect(out.draftLength).toEqual({
-      requestedDraftLength: 1800,
-      lowerBound: 1530,
-      upperBound: 2070,
+      requestedDraftLength: 2400,
+      lowerBound: 2040,
+      upperBound: 2760,
       actualLength: countDraftChineseCharacters(shortBody),
       lengthStatus: "below_lower_bound",
       source: "writing_rules",
     });
     // summary 如实标注，agent 可转达用户决定重写或接受
     expect(out.summary).toContain(
-      `⚠ 低于目标字数下限（实际${countDraftChineseCharacters(shortBody)}字/下限1530字）`,
+      `⚠ 低于目标字数下限（实际${countDraftChineseCharacters(shortBody)}字/下限2040字）`,
     );
   });
 
   it("字数落在目标区间内 → lengthStatus=within_range，summary 不带 ⚠ 字数标注", async () => {
     const projectDir = await makeProject("字数达标", "林远");
     const para = "林远在走廊尽头停下脚步，反复掂量手里这份账册的分量，心里盘算着接下来每一步该怎么走才不至于落人话柄。";
-    const repeats = Math.ceil(1700 / countDraftChineseCharacters(para)); // 落进 1530–2070 区间
+    const repeats = Math.ceil(1700 / countDraftChineseCharacters(para)); // 新书没写作规则 → 默认 1800，落进 1530–2070 区间
     const body = Array.from({ length: repeats }, () => para).join("\n\n");
     const out = await runGenerateDraftToolLogic({
       projectDir,
@@ -450,6 +414,7 @@ describe("draftLength 字数透明（一次成稿不重试：低于下限不拒�
     });
     expect(out.ok).toBe(true);
     expect(out.draftLength?.lengthStatus).toBe("within_range");
+    expect(out.draftLength?.source).toBe("default");
     expect(out.draftLength?.actualLength).toBeGreaterThanOrEqual(out.draftLength?.lowerBound ?? 0);
     expect(out.draftLength?.actualLength).toBeLessThanOrEqual(out.draftLength?.upperBound ?? Number.MAX_SAFE_INTEGER);
     expect(out.summary).not.toContain("低于目标字数下限");
@@ -783,12 +748,10 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
     expect(out.summary).not.toContain("疑似机器腔");
   });
 
-  it("writing-rules.json 的 antiAiPatterns 命中 → 按 low 档检出（正则元字符转义、字面量匹配），summary 不加 ⚠ 噪音", async () => {
+  it("写作规则「别用的说法」命中 → 按 low 档检出（正则元字符转义、字面量匹配），summary 不加 ⚠ 噪音", async () => {
     const projectDir = await makeProject("回检用户词", "林远");
-    const rulesPath = join(projectDir, "story", "writing-rules.json");
-    const rules = JSON.parse(await readFile(rulesPath, "utf-8")) as Record<string, unknown>;
-    rules.antiAiPatterns = ["量子涨落", "C++"]; // 「C++」带正则元字符：不转义会直接 new RegExp 抛错
-    await writeFile(rulesPath, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
+    // 「C++」带正则元字符：不转义会直接 new RegExp 抛错
+    await writeCards(projectDir, [{ op: "rules.add", list: "avoid", text: "量子涨落" }, { op: "rules.add", list: "avoid", text: "C++" }]);
 
     const body = "林远盯着仪器，量子涨落曲线剧烈抖动。他骂了一句，这破设备又吞了 C++ 补丁。";
     const out = await runGenerateDraftToolLogic({
@@ -802,9 +765,8 @@ describe("generate_draft 出稿即 AI 腔回检（warning-only，内置规则 + 
     expect(out.summary).not.toContain("疑似机器腔"); // 只有 low 不打 ⚠（治噪音）
   });
 
-  it("writing-rules.json 读不到（已删除）→ 不崩，内置规则照常回检", async () => {
+  it("没写过写作规则（新书）→ 不崩，内置规则照常回检", async () => {
     const projectDir = await makeProject("回检无规则文件", "林远");
-    await rm(join(projectDir, "story", "writing-rules.json"));
     const out = await runGenerateDraftToolLogic({
       projectDir,
       chapter: 1,
@@ -962,10 +924,7 @@ describe("generate_draft 出稿后自动去味闭环（high/medium → 一轮改
 
   it("只有 low 命中（用户自定义词）→ 不触发自动去味，autoDeAi 字段不出现", async () => {
     const projectDir = await makeProject("自动去味low不动", "林远");
-    const rulesPath = join(projectDir, "story", "writing-rules.json");
-    const rules = JSON.parse(await readFile(rulesPath, "utf-8")) as Record<string, unknown>;
-    rules.antiAiPatterns = ["量子涨落"];
-    await writeFile(rulesPath, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
+    await writeCards(projectDir, [{ op: "rules.add", list: "avoid", text: "量子涨落" }]);
 
     const deAiCallModel = vi.fn(async () => REWRITE_BOTH);
     const out = await runGenerateDraftToolLogic({

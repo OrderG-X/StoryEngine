@@ -3,7 +3,7 @@
  * draft-service 出稿主编排的回归锁：执法在写盘前（拒稿不碰盘上旧稿）、自动去味、章纲、质量环节。
  * 重构 P7 起引擎不写盘、出稿只写一次（走 draft.write），原来「先写后回读、不合格再回滚」那套连测试一起删了。
  */
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { WriterClient } from "../writing/fast-draft-writer.js";
@@ -24,7 +24,6 @@ const storyEngineMocks = vi.hoisted(() => ({
   checkDraftBeatFidelity: vi.fn(() => ({ missingBeats: [] })),
   countDraftChineseCharacters: vi.fn(() => 500),
   detectAiFlavorViolations: vi.fn(() => ({ total: 0, bySeverity: { high: 0, medium: 0, low: 0 }, violations: [] })),
-  readWritingRules: vi.fn(async () => null),
   resolveDraftLengthTarget: vi.fn(() => ({ requested: 1800, lowerBound: 200, upperBound: 2000, source: "default" })),
   resolveDraftMaxOutputTokens: vi.fn(() => 2048),
   runFastDraft: vi.fn(),
@@ -42,10 +41,6 @@ vi.mock("../writing/draft-length-control.js", async (importOriginal) => ({
 vi.mock("../book/state-overview.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildStateOverview: storyEngineMocks.buildStateOverview,
-}));
-vi.mock("../book/project-store.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  readWritingRules: storyEngineMocks.readWritingRules,
 }));
 vi.mock("../writing/fast-draft-writer.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -85,7 +80,9 @@ vi.mock("../writing/rank-writer-context.js", () => ({
 }));
 
 vi.mock("../writing/presence/in-scene-detector.js", () => ({
-  resolveSelectedCharacterIds: vi.fn(async () => ({ selectedCharacterIds: [], trace: {}, summary: "在场角色 0 人" })),
+  resolveInSceneCharacters: vi.fn(async () => ({
+    selected: [], reasons: {}, prevChapterFound: false, explicit: false, cappedOutNames: [], summary: "本章相关人物：本章方向和上一章里都没点到谁。",
+  })),
 }));
 
 vi.mock("../writing/ai-flavor/ai-flavor-rules.js", () => ({
@@ -110,8 +107,9 @@ vi.mock("./draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks })
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "./de-ai-flavor-batch.js";
 import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
-import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../writing/presence/in-scene-detector.js";
-import { runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
+import { resolveProjectDraftLengthTarget, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
 
@@ -121,15 +119,18 @@ function stubWriterClient(): WriterClient {
   };
 }
 
-// 编辑部 R5.4·新发现 4：占位名册的两句选角回执（in-scene-detector.ts:247/252）自带句号，
-// 出稿回执在拼接处再补「。」曾拼出「把关。。」。修复在拼接处去重：末尾句号归一成恰好一个。
+// 编辑部 R5.4·新发现 4：选角回执有的自带句号（in-scene-detector 的「还没有人物卡……」那句），
+// 出稿回执在拼接处再补「。」曾拼出「。。」。修复在拼接处去重：末尾句号归一成恰好一个。
 describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () => {
   let projectDir: string | undefined;
-  // 原句照抄 in-scene-detector.ts:252（占位名册、无出场记账那支）——带句号收尾。
-  const presenceWithPeriod = (): CharacterPresenceResult => ({
-    selectedCharacterIds: [],
-    trace: { selectedCharacterIds: [], selectedNames: [], byId: {}, prevChapterFound: false },
-    summary: "本章相关角色：名册只有开书占位「主角」，最近定稿章也没有出场记账，本次没拿占位名把关。",
+  // 原句照抄 in-scene-detector（没卡、账里也没人那支）——带句号收尾。
+  const presenceWithPeriod = (): InSceneResult => ({
+    selected: [],
+    reasons: {},
+    prevChapterFound: false,
+    explicit: false,
+    cappedOutNames: [],
+    summary: "本章相关人物：还没有人物卡，账里也没记过出场的人。",
   });
 
   beforeEach(async () => {
@@ -145,7 +146,7 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
   });
 
   it("引擎拒稿（单候选）→ 失败回执不出现「。。」，选角句完整保留", async () => {
-    vi.mocked(resolveSelectedCharacterIds).mockResolvedValueOnce(presenceWithPeriod());
+    vi.mocked(resolveInSceneCharacters).mockResolvedValueOnce(presenceWithPeriod());
     storyEngineMocks.runFastDraft.mockResolvedValueOnce({
       chapter: 2,
       passed: false,
@@ -157,13 +158,13 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     const result = await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient() });
 
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain("没拿占位名把关。请重试或调整本章方向");
+    expect(result.summary).toContain("账里也没记过出场的人。请重试或调整本章方向");
     expect(result.summary).not.toContain("。。");
   }, 10_000);
 
   it("出稿成功 → 回执不出现「。。」，选角句照常收尾接下一句", async () => {
     const draftPath = defaultDraftPath(projectDir!, 2);
-    vi.mocked(resolveSelectedCharacterIds).mockResolvedValueOnce(presenceWithPeriod());
+    vi.mocked(resolveInSceneCharacters).mockResolvedValueOnce(presenceWithPeriod());
     storyEngineMocks.runFastDraft.mockImplementationOnce(async () => {
       await mkdir(dirname(draftPath), { recursive: true });
       await writeFile(draftPath, DRAFT_TEXT, "utf-8");
@@ -186,7 +187,7 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     });
 
     expect(result.ok).toBe(true);
-    expect(result.summary).toContain("没拿占位名把关。工作稿尚未定稿");
+    expect(result.summary).toContain("账里也没记过出场的人。工作稿尚未定稿");
     expect(result.summary).not.toContain("。。");
   }, 10_000);
 });
@@ -483,3 +484,83 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
   });
 });
 
+
+describe("runGenerateDraft 在场检测与目标字数接线（重构 P9：读设定卡）", () => {
+  let projectDir: string | undefined;
+  const okReport = (chapter: number) => ({
+    chapter, passed: true, draftBody: "主角拿到账册，连夜翻看。", title: "账册",
+    contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+    promptFingerprint: {}, issues: [],
+  });
+  const inScene = (selected: string[]): InSceneResult => ({
+    selected, reasons: {}, prevChapterFound: true, explicit: false, cappedOutNames: [], summary: `本章相关人物：${selected.join("、")}`,
+  });
+  async function cards(ops: CardOp[]): Promise<void> {
+    const outcome = await runCommand(projectDir!, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+    if (!outcome.ok) throw new Error(outcome.message);
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-wiring-"));
+    storyEngineMocks.runFastDraft.mockResolvedValue(okReport(2));
+  });
+
+  afterEach(async () => {
+    if (projectDir) {
+      await rm(projectDir, { recursive: true, force: true });
+      projectDir = undefined;
+    }
+  });
+
+  it("作者点名的人（名字）交给在场检测当 explicit；检测选中的名字原样交给写手", async () => {
+    vi.mocked(resolveInSceneCharacters).mockResolvedValueOnce(inScene(["林晚", "林远"]));
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, chapterGoal: "林远摊牌。", selectedCharacters: ["林总"], writerClient: stubWriterClient(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(resolveInSceneCharacters).toHaveBeenCalledWith(expect.objectContaining({ projectDir, chapter: 2, chapterGoal: "林远摊牌。", explicit: ["林总"] }));
+    expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ selectedCharacters: ["林晚", "林远"] }));
+  });
+
+  it("没点名 → 不传 explicit；检测一个都没选中 → 写手入参不带 selectedCharacters", async () => {
+    await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
+    expect(vi.mocked(resolveInSceneCharacters).mock.calls[0]![0]).not.toHaveProperty("explicit");
+    expect(storyEngineMocks.runFastDraft.mock.calls[0][0]).not.toHaveProperty("selectedCharacters");
+  });
+
+  it("有章纲 → 章纲点名的人物和要点也拿去做在场检测", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({
+      plan: {
+        version: 1, chapter: 2, source: "model", summary: "去档案室", beats: ["顾远递来钥匙"], newInformation: [], scene: {},
+        characters: ["周宁"], entities: [], threadsAdvanced: [], avoid: [], createdAt: "2026-10-08T00:00:00.000Z",
+      },
+      note: "本章章纲：去档案室",
+      reused: false,
+    });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), plannerCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(resolveInSceneCharacters).toHaveBeenCalledWith(expect.objectContaining({ chapterGoal: "去档案室\n周宁\n顾远递来钥匙" }));
+  });
+
+  it("目标字数读设定卡的写作规则（目标 + 下限）", async () => {
+    await cards([{ op: "rules.set", field: "targetWords", value: 2400 }, { op: "rules.set", field: "minWords", value: 2000 }]);
+    await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
+    expect(storyEngineMocks.resolveDraftLengthTarget).toHaveBeenCalledWith(expect.objectContaining({ lengthRules: { targetWords: 2400, minWords: 2000 } }));
+  });
+
+  it("resolveProjectDraftLengthTarget：作者点的字数 > 写作规则 > 默认（真算法）", async () => {
+    const actual = await vi.importActual<typeof import("../writing/draft-length-control.js")>("../writing/draft-length-control.js");
+    storyEngineMocks.resolveDraftLengthTarget.mockImplementation(actual.resolveDraftLengthTarget as never);
+    try {
+      expect(await resolveProjectDraftLengthTarget(projectDir!, "继续。")).toMatchObject({ source: "default" });
+      await cards([{ op: "rules.set", field: "targetWords", value: 2400 }]);
+      expect(await resolveProjectDraftLengthTarget(projectDir!, "继续。")).toMatchObject({ requested: 2400, source: "writing_rules" });
+      expect(await resolveProjectDraftLengthTarget(projectDir!, "继续。", 3000)).toMatchObject({ requested: 3000, source: "user" });
+    } finally {
+      storyEngineMocks.resolveDraftLengthTarget.mockImplementation(() => ({ requested: 1800, lowerBound: 200, upperBound: 2000, source: "default" }));
+    }
+  });
+});

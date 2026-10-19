@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ContextSection, WriterContextEnvelope } from "./context-gateway.js";
+import type { ContextSection, WriterContextEnvelope, WritingContextPack } from "./context-gateway.js";
+import { renderSettingPack } from "./setting-pack.js";
 
 export interface PromptFingerprint {
   readonly fullPromptHash: string;
@@ -42,7 +43,7 @@ export function renderFastDraftPromptText(envelope: WriterContextEnvelope): stri
     "If the already_written section exists, it is the first half of THIS chapter, already written: continue right after its last sentence; never rewrite, summarize or repeat it, and do not write a title.",
     "If the previous_chapter section exists, it is the verbatim text of the immediately previous chapter. Continue from where it ends; every object's state and location, every character's whereabouts, and who-knows-what must match it; never re-discover or redo what already happened there — move the story forward.",
     "正文开头必须是 markdown 章节标题，格式：# 第N章 · 标题。N 用阿拉伯数字，等于本章章号。",
-    "标题由你根据本章正文自然拟定，必须存在，但不要剧透 protectedSecrets / forbiddenReveals，也不要提前揭开 unknownTruths。如给出 chapter_titles 段（本书已有各章标题），不要起与之重复的标题。",
+    "标题由你根据本章正文自然拟定，必须存在，但不要剧透设定里写着还没揭开、不能说破的内容。如给出 chapter_titles 段（本书已有各章标题），不要起与之重复的标题。",
     "连续章节必须避免重复上一章开头场面、首句结构和人物进场方式；除非用户明确要求原地续接，否则用新的动作、时间点或压力源切入。",
     "",
     stableText,
@@ -140,63 +141,24 @@ function firstDynamicSection(sections: readonly ContextSection[]): {
 }
 
 function renderSections(sections: readonly ContextSection[]): string {
-  return sections.map((section) => [
-    ...(section.name === "writing_context_pack" ? renderWritingContextHardConstraints(section.content) : []),
-    `## ${section.name}`,
-    JSON.stringify(section.content, null, 2),
-  ].join("\n")).join("\n\n");
+  return sections.map((section) => (section.name === "writing_context_pack"
+    ? renderWritingContextPack(section.content as WritingContextPack)
+    : [`## ${section.name}`, JSON.stringify(section.content, null, 2)]).join("\n")).join("\n\n");
 }
 
-function renderWritingContextHardConstraints(content: unknown): readonly string[] {
-  const record = typeof content === "object" && content !== null ? (content as Record<string, unknown>) : undefined;
-  const out: string[] = [];
-
-  const constraints = record?.["hardConstraints"];
-  if (Array.isArray(constraints)) {
-    const lines = constraints.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
-    if (lines.length > 0) {
-      out.push("## 本章硬约束", ...lines.map((line) => `- ${line}`), "");
-    }
-  }
-
-  // 作者自定写作规矩（customNotes·自由 Markdown）：从 writingRulesContext 提到 prompt 顶层人类可读处，
-  // 而非只埋在下方 JSON 里被转义——它是用户的全局写作规矩，模型每次都要照着写。受控破例⑧。
-  const writingRulesContext = record?.["writingRulesContext"];
-  const customNotes = typeof writingRulesContext === "object" && writingRulesContext !== null
-    ? (writingRulesContext as { readonly customNotes?: unknown }).customNotes
-    : undefined;
-  if (typeof customNotes === "string" && customNotes.trim().length > 0) {
-    out.push("## 作者自定写作规矩（务必遵守）", customNotes.trim(), "");
-  }
-
-  // 作者文风样本（styleExemplars·正向锚）：与 customNotes 同样提到 prompt 顶层人类可读处——
-  // 风格样本赢过风格描述；文案必须同时钉住「模仿风格」与「不得照抄内容/情节/名物」两头，
-  // 防模型把样本里的具体情节名物搬进正文。
-  const styleExemplarsRaw = typeof writingRulesContext === "object" && writingRulesContext !== null
-    ? (writingRulesContext as { readonly styleExemplars?: unknown }).styleExemplars
-    : undefined;
-  const styleExemplars = Array.isArray(styleExemplarsRaw)
-    ? styleExemplarsRaw.filter((item): item is { readonly title: string; readonly text: string; readonly note?: string } =>
-      typeof item === "object" && item !== null
-      && typeof (item as { readonly title?: unknown }).title === "string"
-      && (item as { readonly title: string }).title.trim().length > 0
-      && typeof (item as { readonly text?: unknown }).text === "string"
-      && (item as { readonly text: string }).text.trim().length > 0)
-    : [];
-  if (styleExemplars.length > 0) {
-    out.push(
-      "## 作者文风样本（模仿风格·不得照抄内容）",
-      "以下是作者文风样本：模仿其句法节奏、用词偏好与叙事温度；不得照抄样本内容、情节或具体名物。",
-      ...styleExemplars.flatMap((item, index) => [
-        `### 样本${index + 1} · ${item.title.trim()}`,
-        ...(typeof item.note === "string" && item.note.trim() ? [`（注：${item.note.trim()}）`] : []),
-        item.text.trim(),
-        "",
-      ]),
-    );
-  }
-
-  return out;
+/**
+ * 写作上下文包：硬约束放最前（模型先守它再管文风），设定（规矩、文风样本、设定卡）渲染成文字，
+ * 其余（本章任务、接着写要扛住的线）照旧给 JSON。
+ */
+function renderWritingContextPack(pack: WritingContextPack): string[] {
+  const { setting, hardConstraints, ...rest } = pack;
+  const constraints = hardConstraints.filter((line) => line.trim().length > 0);
+  return [
+    ...(constraints.length > 0 ? ["## 本章硬约束", ...constraints.map((line) => `- ${line}`), ""] : []),
+    ...renderSettingPack(setting),
+    "## writing_context_pack",
+    JSON.stringify(rest, null, 2),
+  ];
 }
 
 function sha256(value: string): string {

@@ -67,6 +67,7 @@ import {
 import {
   buildDraftLengthReport,
   countDraftChineseCharacters,
+  lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
   trimDraftBodyToLengthTarget,
@@ -77,7 +78,6 @@ import {
 } from "../writing/draft-length-control.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { checkDraftBeatFidelity } from "@actalk/story-core";
-import { readWritingRules } from "../book/project-store.js";
 import {
   runFastDraft,
   type FastDraftInput,
@@ -95,7 +95,8 @@ import { positiveOrUndefined } from "../lib/lenient-args.js";
 import { readAntiAiPatterns, readAntiRules } from "../writing/ai-flavor/anti-rules.js";
 import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
 import { contextBudgetPayload, makeWriterRankContext, resolveWriterTokenBudget, type WriterRankContextPlan } from "../writing/rank-writer-context.js";
-import { resolveSelectedCharacterIds, type CharacterPresenceResult } from "../writing/presence/in-scene-detector.js";
+import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
+import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
@@ -117,8 +118,8 @@ export async function resolveProjectDraftLengthTarget(
   chapterGoal: string,
   requestedDraftLength?: number,
 ): Promise<DraftLengthTarget> {
-  const writingRules = await readWritingRules(projectDir).catch(() => null);
-  return resolveDraftLengthTarget({ chapterGoal, requestedDraftLength, writingRules });
+  const { bible } = await readBibleTolerant(projectDir);
+  return resolveDraftLengthTarget({ chapterGoal, requestedDraftLength, lengthRules: lengthRulesOf(bible.rules) });
 }
 
 export function countCjkChars(value: string): number {
@@ -820,7 +821,8 @@ export interface GenerateDraftInput {
   readonly chapter: number;
   readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
-  readonly selectedCharacterIds?: readonly string[];
+  /** 作者点名本章要写的人（名字）。 */
+  readonly selectedCharacters?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   readonly mustHitBeats?: readonly string[];
   readonly maxTimelineEvents?: number;
@@ -913,7 +915,7 @@ export interface GenerateDraftOutcome {
   /** 自动去味落改动时=它的快照（最近的撤销点）；覆盖前快照由适配层建、由工具 execute 挂（ok 时）。 */
   readonly snapshotId?: string;
   readonly contextBudget?: ReturnType<typeof contextBudgetPayload>;
-  readonly characterSelection?: CharacterPresenceResult;
+  readonly characterSelection?: InSceneResult;
   /** D1 执法拒稿（仅 lengthPolicy:"enforce_or_rollback"）：旧稿已回滚，路由投影 422 + error。 */
   readonly rejection?: { readonly kind: "length_rejected"; readonly error: string };
   readonly http: GenerateDraftHttpProjection;
@@ -925,7 +927,8 @@ export interface GenerateDraftCandidateInput {
   readonly chapter: number;
   readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
-  readonly selectedCharacterIds?: readonly string[];
+  /** 作者点名本章要写的人（名字）。 */
+  readonly selectedCharacters?: readonly string[];
   readonly selectedHookIds?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
@@ -943,7 +946,7 @@ export interface GenerateDraftCandidateOutcome {
   /** 章纲一句话（或拟不成的原因），给作者看。 */
   readonly planNote?: string;
   readonly candidate: FastDraftReport;
-  readonly characterSelection: CharacterPresenceResult;
+  readonly characterSelection: InSceneResult;
   readonly contextRanking: WriterRankContextPlan;
 }
 
@@ -954,8 +957,9 @@ interface DraftRunContext {
   readonly maxTimelineEvents: number;
   readonly lengthTarget: DraftLengthTarget;
   readonly contextRanking: WriterRankContextPlan;
-  readonly characterSelection: CharacterPresenceResult;
-  readonly selectedCharacterIds?: readonly string[];
+  readonly characterSelection: InSceneResult;
+  /** 作者点名本章要写的人（名字）。 */
+  readonly selectedCharacters?: readonly string[];
   readonly aiFlavorRules?: readonly AiFlavorRule[];
   readonly chapterPlan?: ChapterPlan;
 }
@@ -965,7 +969,8 @@ async function resolveDraftRunContext(input: {
   readonly chapter: number;
   readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
-  readonly selectedCharacterIds?: readonly string[];
+  /** 作者点名本章要写的人（名字）。 */
+  readonly selectedCharacters?: readonly string[];
   readonly maxTimelineEvents?: number;
   readonly contextTokenBudget?: number;
   readonly aiFlavorRecheck: boolean;
@@ -983,25 +988,22 @@ async function resolveDraftRunContext(input: {
   // 洞①修复：生产路径即便没显式给预算，也套用默认预算（resolveWriterTokenBudget），
   // 让 dynamic 裁剪真正生效；正常短篇 dynamic 远低于默认值=自然 no-op，仅长篇超额时才裁。
   const contextRanking = makeWriterRankContext({ tokenBudget: resolveWriterTokenBudget(positiveOrUndefined(input.contextTokenBudget)) });
-  const characterSelection = await resolveSelectedCharacterIds({
-    projectDir: input.projectDir,
-    chapter: input.chapter,
-    // 章纲点名的出场人物/要点也参与在场检测（检测按名字词面命中）。
-    chapterGoal: input.chapterPlan
-      ? [chapterGoal, input.chapterPlan.characters.join("、"), ...input.chapterPlan.beats].join("\n")
-      : chapterGoal,
-    explicit: input.selectedCharacterIds,
-  });
-  const selectedCharacterIds = characterSelection.selectedCharacterIds.length > 0 ? characterSelection.selectedCharacterIds : undefined;
-  // 编辑部 R4.6：名册只有开书占位卡的新书，在场检测改用最近定稿章的出场名（chapterCharactersFromDeltas）。
-  // 把出场名点进写作方向（作者方向里还没点到它们时才加，避免重复），出稿模型才知道本章写谁；
-  // 占位卡本身不进引擎选角关卡（引擎侧按同一份占位标记豁免）。长度目标仍按作者原方向解析，
-  // 不让出场名里的数字/汉字数字干扰字数解析。
-  const deltaChapterCharacters = characterSelection.chapterCharactersFromDeltas ?? [];
-  const goalWithDeltaCharacters = deltaChapterCharacters.length > 0 && !deltaChapterCharacters.some((name) => chapterGoal.includes(name))
-    ? `${chapterGoal}\n本章出场角色（按最近定稿章）：${deltaChapterCharacters.join("、")}`
-    : chapterGoal;
-  const lengthTarget = await resolveProjectDraftLengthTarget(input.projectDir, chapterGoal, requestedDraftLength);
+  // 设定本只读一次，在场检测和字数共用。读坏了照样出稿（同写手、上下文网关的口径：降级 + 如实说），不按人物卡选人。
+  const bibleRead = await readBibleTolerant(input.projectDir);
+  const characterSelection: InSceneResult = bibleRead.projection
+    ? await resolveInSceneCharacters({
+      projectDir: input.projectDir,
+      chapter: input.chapter,
+      // 章纲点名的出场人物/要点也参与在场检测（检测按名字词面命中）。
+      chapterGoal: input.chapterPlan
+        ? [chapterGoal, input.chapterPlan.characters.join("、"), ...input.chapterPlan.beats].join("\n")
+        : chapterGoal,
+      ...(input.selectedCharacters ? { explicit: input.selectedCharacters } : {}),
+      bible: { bible: bibleRead.bible, projection: bibleRead.projection },
+    })
+    : { selected: [], reasons: {}, prevChapterFound: false, explicit: false, cappedOutNames: [], summary: bibleRead.failure ?? "设定本读不出来，这次没按人物卡挑在场人物。" };
+  const selectedCharacters = characterSelection.selected.length > 0 ? characterSelection.selected : undefined;
+  const lengthTarget = resolveDraftLengthTarget({ chapterGoal, requestedDraftLength, lengthRules: lengthRulesOf(bibleRead.bible.rules) });
 
   // D2 出稿即自动回检（warning-only）的开关：内置确定性规则（7 条模式 + 虚弱副词频率闸）+ 项目写作规则的
   // antiAiPatterns（用户自定义词，字面量匹配、一律 low 档）。writing-rules.json 读不到 → 只剩内置规则，不崩。
@@ -1011,13 +1013,13 @@ async function resolveDraftRunContext(input: {
     : undefined;
 
   return {
-    chapterGoal: goalWithDeltaCharacters,
+    chapterGoal,
     ...(requestedDraftLength !== undefined ? { requestedDraftLength } : {}),
     maxTimelineEvents,
     lengthTarget,
     contextRanking,
     characterSelection,
-    ...(selectedCharacterIds !== undefined ? { selectedCharacterIds } : {}),
+    ...(selectedCharacters !== undefined ? { selectedCharacters } : {}),
     ...(aiFlavorRules !== undefined ? { aiFlavorRules } : {}),
     ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
   };
@@ -1039,7 +1041,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
     // 键位恒在（值可 undefined）：HTTP 路由测试按 objectContaining 锁定 requestedDraftLength 键存在性，
     // 引擎侧 `undefined` 与缺键同义（?? 兜底），工具路零行为变化。
     requestedDraftLength: run.requestedDraftLength,
-    ...(run.selectedCharacterIds !== undefined ? { selectedCharacterIds: run.selectedCharacterIds } : {}),
+    ...(run.selectedCharacters !== undefined ? { selectedCharacters: run.selectedCharacters } : {}),
     ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
     ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
     maxTimelineEvents: run.maxTimelineEvents,
@@ -1071,7 +1073,7 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
     chapter: input.chapter,
     ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
     ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
-    ...(input.selectedCharacterIds !== undefined ? { selectedCharacterIds: input.selectedCharacterIds } : {}),
+    ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
     ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
     ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
     aiFlavorRecheck: false,
@@ -1159,7 +1161,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     chapter,
     ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
     ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
-    ...(input.selectedCharacterIds !== undefined ? { selectedCharacterIds: input.selectedCharacterIds } : {}),
+    ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
     ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
     ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
     aiFlavorRecheck: input.policies?.aiFlavorRecheck !== false,
@@ -1361,7 +1363,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
           initialHighMedium,
           targets,
           rules: run.aiFlavorRules ?? ALL_BUILTIN_AI_FLAVOR_RULES,
-          antiRules: await readAntiRules(projectDir),
+          antiRules: (await readAntiRules(projectDir)).items,
           callModel: input.deAiCallModel,
           // R4.2：本流程已有「写盘前」存档点，去味覆盖不再另建——一次出稿=操作历史里的一步。
           ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),

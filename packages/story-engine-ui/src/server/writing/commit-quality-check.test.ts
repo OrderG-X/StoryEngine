@@ -1,8 +1,10 @@
 // @vitest-environment node
+import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { checkDraftBeforeCommit } from "./commit-quality-check.js";
 import { createStoryProject } from "../book/project-store.js";
 
@@ -58,8 +60,8 @@ describe("commit quality check", () => {
     expect(report.issues.filter((issue) => issue.type === "missing_character_name" && issue.severity === "error")).toEqual([]);
   });
 
-  it("ignores the placeholder protagonist name of a fresh book (「主角」 never appears in real prose)", async () => {
-    const projectDir = await createFixtureProject("主角");
+  it("还没有人物卡（新书没填主角）：名字门不挡也不提醒", async () => {
+    const projectDir = await createFixtureProject(null);
 
     const report = await checkDraftBeforeCommit({
       projectDir,
@@ -68,6 +70,49 @@ describe("commit quality check", () => {
     });
 
     expect(report.issues.some((issue) => issue.type === "missing_character_name")).toBe(false);
+    expect(report.passed).toBe(true);
+  });
+
+  it("名字门认人物卡的名字和别名", async () => {
+    const projectDir = await createFixtureProject();
+    await writeCards(projectDir, [{ op: "card.aliases", card: "林远", add: ["远哥"] }]);
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: longDraft({ characterName: "远哥", withTitle: true, withDialogue: true }),
+    });
+
+    expect(report.issues.some((issue) => issue.type === "missing_character_name")).toBe(false);
+  });
+
+  it("名字门只认人物卡：正文只写到地点 / 物品卡的名字照样提醒", async () => {
+    const projectDir = await createFixtureProject();
+    await writeCards(projectDir, [
+      { op: "card.create", kind: "place", name: "外院园圃" },
+      { op: "card.create", kind: "item", name: "青石令牌" },
+    ]);
+
+    const report = await checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: longDraft({ characterName: "少年", withTitle: true, withDialogue: true }).replace("青石路", "青石令牌旁的路"),
+    });
+
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: "warning", type: "missing_character_name" }),
+    ]));
+  });
+
+  it("设定卡读坏了：定稿检查如实失败，不当成「没有规则」放行", async () => {
+    const projectDir = await createFixtureProject();
+    await writeFile(join(projectDir, "ledger", "cards.json"), "{not-json", "utf-8");
+
+    await expect(checkDraftBeforeCommit({
+      projectDir,
+      chapter: 1,
+      draftContent: longDraft({ characterName: "林远", withTitle: true, withDialogue: true }),
+    })).rejects.toThrow(/cards\.json/u);
   });
 
   it("rejects drafts shorter than 300 Chinese characters", async () => {
@@ -87,11 +132,7 @@ describe("commit quality check", () => {
 
   it("uses writing-rule target words to lower the hard short-draft gate", async () => {
     const projectDir = await createFixtureProject();
-    await writeFile(
-      join(projectDir, "story", "writing-rules.json"),
-      `${JSON.stringify({ version: "v0", chapterLength: { targetWords: 200 }, proseStyle: [], genreRequirements: [], suspenseRules: [], payoffRules: [], reversalRules: [], readerExperienceRules: [], forbiddenContent: [], doNotDo: [] }, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeWritingRules(projectDir, { targetWords: 200 });
 
     const report = await checkDraftBeforeCommit({
       projectDir,
@@ -108,9 +149,8 @@ describe("commit quality check", () => {
     ]));
   });
 
-  // 长跑 2026-10-04 #5b/#4 语义定案：目标字数是「约」（软推导保 300 封顶，默认建书模板自带 targetWords:1800，
-  // 全额 0.75 执法会把所有默认书下限抬到 1350，误伤自愿短章）；硬约束本体 = 显式 chapterLength.minWords
-  //（写入侧会把「至少/不少于 N 字」自动落进该字段），定稿侧不封顶全额执法。
+  // 长跑 2026-10-04 #5b/#4 语义定案：目标字数是「约」（软推导保 300 封顶，全额 0.75 执法会把下限抬到 2700，
+  // 误伤自愿短章）；硬约束本体 = 写作规则里的「每章至少字数」（minWords），定稿侧不封顶全额执法。
   it("只有 targetWords（无显式 min）：软推导保 300 封顶，target 3600 不拦 2600 字短稿（软带执法留给出稿侧 ⚠）", async () => {
     const projectDir = await createFixtureProject();
     await writeWritingRules(projectDir, { targetWords: 3600 });
@@ -142,9 +182,9 @@ describe("commit quality check", () => {
     ]));
   });
 
-  // 长跑 2026-10-04 #4：「至少 3000 字」的硬下限本体（chapterLength.minWords）——
+  // 长跑 2026-10-04 #4：「至少 3000 字」的硬下限本体（写作规则 minWords）——
   // 第 2 章 2989 纯汉字「过线」定稿的场景（目标 3000/推导下限 2550）必须被显式 min 拦下。
-  it("explicit chapterLength.minWords is the hard floor: 3000-word floor rejects a 2989-char draft", async () => {
+  it("explicit minWords is the hard floor: 3000-word floor rejects a 2989-char draft", async () => {
     const projectDir = await createFixtureProject();
     await writeWritingRules(projectDir, { targetWords: 3000, minWords: 3000 });
 
@@ -164,7 +204,7 @@ describe("commit quality check", () => {
     ]));
   });
 
-  it("explicit chapterLength.minWords: 3010 字（≥3000）放行", async () => {
+  it("explicit minWords: 3010 字（≥3000）放行", async () => {
     const projectDir = await createFixtureProject();
     await writeWritingRules(projectDir, { targetWords: 3000, minWords: 3000 });
 
@@ -278,21 +318,21 @@ describe("commit quality check", () => {
   });
 });
 
-async function createFixtureProject(mainCharacterName = "林远"): Promise<string> {
+async function createFixtureProject(protagonistName: string | null = "林远"): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "story-engine-quality-"));
   const { projectDir } = await createStoryProject({
     rootDir,
     title: "质量检查测试",
     genre: "修仙爽文",
-    premise: "用户自己当主角，从外院废柴逆袭到掌控组织。",
-    mainCharacterName,
+    logline: "用户自己当主角，从外院废柴逆袭到掌控组织。",
+    ...(protagonistName ? { protagonistName } : {}),
   });
-  await writeFile(
-    join(projectDir, "drafts", "fast", "chapter-0001.md"),
-    longDraft({ characterName: "林远", withTitle: true, withDialogue: true }),
-    "utf-8",
-  );
   return projectDir;
+}
+
+async function writeCards(projectDir: string, ops: readonly CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${randomUUID()}` });
+  if (!outcome.ok) throw new Error(outcome.message);
 }
 
 function longDraft(input: {
@@ -310,24 +350,12 @@ function longDraft(input: {
   return `${title}${dialogue}${Array.from({ length: 5 }, () => paragraph).join("\n\n")}\n`;
 }
 
-/** 写 writing-rules.json（只填 chapterLength，数组字段给空，保持类型完整）。 */
+/** 在设定卡的写作规则里定每章目标字数 / 至少字数。 */
 async function writeWritingRules(projectDir: string, chapterLength: { readonly targetWords?: number; readonly minWords?: number }): Promise<void> {
-  await writeFile(
-    join(projectDir, "story", "writing-rules.json"),
-    `${JSON.stringify({
-      version: "v0",
-      ...(chapterLength.targetWords !== undefined || chapterLength.minWords !== undefined ? { chapterLength } : {}),
-      proseStyle: [],
-      genreRequirements: [],
-      suspenseRules: [],
-      payoffRules: [],
-      reversalRules: [],
-      readerExperienceRules: [],
-      forbiddenContent: [],
-      doNotDo: [],
-    }, null, 2)}\n`,
-    "utf-8",
-  );
+  await writeCards(projectDir, [
+    ...(chapterLength.targetWords !== undefined ? [{ op: "rules.set" as const, field: "targetWords" as const, value: chapterLength.targetWords }] : []),
+    ...(chapterLength.minWords !== undefined ? [{ op: "rules.set" as const, field: "minWords" as const, value: chapterLength.minWords }] : []),
+  ]);
 }
 
 /**

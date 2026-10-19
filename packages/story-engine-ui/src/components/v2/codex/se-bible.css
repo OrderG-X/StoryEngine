@@ -20,94 +20,6 @@
   .se-bnav-note{margin:auto 6px 0;padding-top:16px;font-size:12px;line-height:1.6;color:var(--faint);}
   .se-bible .read{padding:28px 36px 64px;}
 
-  /* 面板顶上的英文/重复小标题（World Foundation、Hooks…）：标题本身已经说清，撤掉。 */
-  .se-bible .page-head .kicker{display:none;}
-  /* 线索大小标记：用小圆点代替表情符号 */
-  .se-bible .tag .tag-dot{display:inline-block;width:6px;height:6px;margin-right:5px;border-radius:50%;background:var(--faint);vertical-align:middle;}
-  .se-bible .tag.warn .tag-dot{background:var(--warn);}
-
-  /* 线索条目：标题一行 + 章号小字一行，行距收紧 */
-  .se-bible .asset-item{padding:10px 0;border-bottom:1px solid var(--line);font-size:13px;}
-  .se-bible .asset-item b{font-weight:500;color:var(--text);}
-  .se-bible .asset-item .h3{display:block;margin:2px 0 0;padding:0;font-size:12px;font-weight:400;line-height:1.5;color:var(--faint);letter-spacing:0;}
-  .se-bible .asset-item .h3::before,.se-bible .asset-item .h3::after{display:none;}
-
-  /* ── 面板内部降噪：统计数字改成标题下一行小字；小标题去金条与编号；标签一律淡色常规字 ── */
-  .se-bible .page-head{align-items:flex-start;}
-  .se-bible .page-head h1{font-size:22px;font-weight:600;}
-  .se-bible .page-head .lead-sub{font-size:13px;}
-  .se-bible .page-head .stats{gap:16px;align-self:flex-end;}
-  .se-bible .stat{display:flex;align-items:baseline;gap:4px;min-width:0;padding:0;border:0;border-radius:0;background:none;text-align:left;}
-  .se-bible .stat b{display:inline;font-size:15px;font-weight:600;color:var(--text);line-height:1.4;}
-  .se-bible .stat small{font-size:12px;letter-spacing:0;color:var(--faint);}
-  .se-bible .h2{gap:10px;margin:28px 0 12px;}
-  .se-bible .h2 .bar,.se-bible .h2 .no{display:none;}
-  .se-bible .h2 h2{font-size:15px;font-weight:600;}
-  .se-bible .h2 .cnt{font-size:12px;}
-  .se-bible .law .ix{width:22px;height:auto;border:0;border-radius:0;background:none;box-shadow:none;place-content:start;
-    font-size:13px;font-weight:500;color:var(--faint);}
-  .se-bible .law .ix small{display:none;}
-  .se-bible .read :is(h5,h6,.ck,.mcc-k,.fseg .k,.cbh,.wb-meta b,.tier .rank){
-    color:var(--faint);letter-spacing:0;text-transform:none;font-weight:500;font-size:12px;
-  }
-  /* 写作提醒（知识边界）：是给 AI 的提醒不是报错，用正文色 + 左侧提醒橙细线，不再整段红字 */
-  .se-bible .char-row .cv.risk{color:var(--text);padding-left:10px;border-left:2px solid var(--warn);}
-  /* 时间线：地点用淡色小字跟在章号后，不用表情；「展开更早」做成文字按钮 */
-  .se-bible .tl-loc{font-size:12px;color:var(--faint);}
-  .se-bible .tl-loc::before{content:"·";margin-right:6px;}
-  .se-bible .tl-more{
-    margin-top:8px;height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;
-    color:var(--muted);font-size:12px;cursor:pointer;
-  }
-  .se-bible .tl-more:hover{background:var(--hover);color:var(--text);}
-  /* 地点九宫格：格子数不满三的倍数时，同一行的格子自动撑满，不留深色空格 */
-  .se-bible .loc-grid{display:flex;flex-wrap:wrap;}
-  .se-bible .loc-cell{flex:1 1 240px;min-width:0;}
-  .se-bible .loc-cell h6{margin:0 0 6px;}
-  /* 道具：去掉每条前的符号，条目左对齐；风险提示不再整段红字 */
-  .se-bible .asset-item .ai-vis{margin-left:6px;border:0;background:var(--hover);color:var(--muted);}
-  .se-bible :is(.asset-rule,.continuity){border:1px solid var(--line);background:var(--surface-2);}
-  .se-bible .continuity{border-left:2px solid var(--warn);}
-  /* 空状态：一张淡虚线卡，标题一行 + 说明一行，左对齐；不再是中间一块深色大框 */
-  .se-bible .catrail-foot{
-    margin-top:24px !important;padding:18px 20px;border:1px dashed var(--line-strong);border-radius:12px;background:transparent;
-    font-size:13px;line-height:1.7;color:var(--muted);
-  }
-  .se-bible .catrail-foot b{display:block;margin-bottom:2px;font-size:14px;font-weight:600;color:var(--text);}
-  .se-bible .panel-empty-center{min-height:0;max-width:none;margin-left:0;margin-right:0;align-items:stretch;text-align:left;}
-
-  /* 世界观：标题里的强调字、子页签编号、圈层金边、罗马数字都撤掉，留序号淡字 */
-  .se-bible .page-head h1 em{color:inherit;}
-  .se-bible .subtabs{gap:4px;padding:4px;border-color:var(--line);background:transparent;}
-  .se-bible .subtab{padding:6px 12px;font-size:13px;}
-  .se-bible .subtab .sub-no{display:none;}
-  .se-bible .subtab.on{color:var(--text);background:var(--surface-2);border-color:var(--line-strong);font-weight:500;}
-  .se-bible .h3{font-size:14px;font-weight:600;}
-  .se-bible .h3 .dot{display:none;}
-  .se-bible .pyramid{gap:0;}
-  .se-bible .tier{padding:12px 0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;box-shadow:none;}
-  .se-bible .tier:hover{transform:none;border-color:var(--line);}
-  .se-bible .tier .roman{flex:0 0 22px;font-size:13px;font-weight:500;color:var(--faint);}
-  .se-bible .tier .body b{font-weight:500;}
-  /* 角色卡：名字 + 职能标签同一行，身份一行；格子按内容自适应列数（两项不再挤在三分之二宽里） */
-  .se-bible .char-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-  .se-bible .char-id .sub{display:block;margin-top:4px;line-height:1.6;}
-  .se-bible :is(.layer3,.drive3){grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
-  .se-bible :is(.layer3 .ly,.drive3 .dv,.know .kbox,.voice .vc){border-color:var(--line);background:var(--surface-2);}
-  .se-bible :is(.layer3 .ly p,.drive3 .dv p){font-size:12.5px;line-height:1.65;}
-  .se-bible .know .kbox li{font-size:12.5px;}
-  .se-bible .know .kbox.dont li{color:var(--text);list-style:disc;margin-left:0;padding-left:0;}
-  .se-bible .know .kbox.dont li::before{content:none;}
-  .se-bible .voice .vc p{font-size:12.5px;line-height:1.65;}
-  .se-bible .voice .vc.ban p{color:var(--text);}
-  .se-bible .voice .vc.ban{box-shadow:inset 2px 0 0 var(--warn);}
-  .se-bible .wb-hero{border-color:var(--line);background:var(--surface);}
-  .se-bible .wb-hero::after{display:none;}
-  .se-bible .wb-hero .one::before{color:var(--faint);opacity:.6;}
-  /* 两列格子里单数个时，最后一个占满整行（不留半行空白） */
-  .se-bible .voice .vc:last-child:nth-child(odd),
-  .se-bible .spec .cell:last-child:nth-child(odd){grid-column:1/-1;}
-
   /* ═══ 操作历史 ═══ */
   .op-history{height:100%;overflow-y:auto;}
   .op-history-body{width:100%;max-width:860px;margin:0 auto;padding:28px 36px 56px;box-sizing:border-box;}
@@ -294,6 +206,140 @@
   .se-cc-tag{margin-left:6px;font-style:normal;font-size:11px;color:var(--faint);}
   .se-cc-tag.is-warn{color:var(--warn);}
   .se-cc-more{margin-top:6px;padding-left:10px;}
+
+  /* ═══ 设定本（重构 P9）：卡上写的就地改，账里记的跟在下面 ═══ */
+  .se-bk{display:flex;flex-direction:column;gap:14px;}
+  .se-bk-note{margin:0;font-size:13px;color:var(--muted);}
+  .se-bk-notice{margin:0;padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.6;color:var(--text);background:var(--success-soft);}
+  .se-bk-notice.is-error{color:var(--danger);background:var(--danger-soft);}
+  .se-bk-hint{margin:0 0 8px;font-size:12px;color:var(--faint);}
+  .se-bk-empty{margin:0;font-size:13px;color:var(--faint);}
+  .se-bk-block{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-bottom:1px solid var(--line-weak);}
+  .se-bk-block h3,.se-bk-subhead{margin:0;font-size:13px;font-weight:600;color:var(--muted);}
+  .se-bk-block h3 small,.se-bk-subhead small{font-weight:400;color:var(--faint);}
+  .se-bk-subhead{margin-top:18px;}
+  .se-bk-btn{
+    height:28px;padding:0 10px;border:1px solid var(--line-strong);border-radius:7px;background:transparent;
+    color:var(--text);font-size:12px;white-space:nowrap;cursor:pointer;
+  }
+  .se-bk-btn:hover:not(:disabled){background:var(--hover);}
+  .se-bk-btn.is-primary{border-color:transparent;background:var(--accent);color:var(--accent-ink);}
+  .se-bk-btn.is-primary:hover:not(:disabled){background:var(--accent);opacity:.9;}
+  .se-bk-btn.is-danger{border-color:transparent;background:var(--danger);color:var(--accent-ink);}
+  .se-bk-btn:disabled{opacity:.45;cursor:default;}
+  .se-bk-link{height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--accent);font-size:12px;cursor:pointer;}
+  .se-bk-link:hover:not(:disabled){background:var(--accent-soft);}
+  .se-bk-link.is-danger{color:var(--danger);}
+  .se-bk-link.is-danger:hover:not(:disabled){background:var(--danger-soft);}
+  .se-bk-link:disabled{opacity:.45;cursor:default;}
+  .se-bk-add{align-self:flex-start;height:28px;padding:0 10px;border:1px dashed var(--line-strong);border-radius:7px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;}
+  .se-bk-add:hover:not(:disabled){color:var(--text);border-color:var(--accent-line);}
+  .se-bk-add:disabled{opacity:.45;cursor:default;}
+  .se-bk-x{width:22px;height:22px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--faint);font-size:14px;line-height:1;cursor:pointer;opacity:0;}
+  .se-bk-x:focus-visible{opacity:1;}
+  .se-bk-x:hover:not(:disabled){color:var(--danger);background:var(--danger-soft);}
+  :is(.se-bk-field,.se-bk-rules li,.se-bk-alias,.se-bk-relations li):hover .se-bk-x{opacity:1;}
+  .se-bk-ai{display:inline-flex;align-items:center;gap:2px;margin-left:6px;padding:0 0 0 6px;border-radius:5px;font-size:11px;line-height:20px;color:var(--warn);background:var(--warn-soft);white-space:nowrap;}
+  .se-bk-ai:not(:has(button)){padding-right:6px;}
+  .se-bk-ai .se-bk-link{height:20px;font-size:11px;}
+  .se-bk-k{font-size:12px;color:var(--faint);}
+
+  /* 就地编辑 */
+  .se-bk-edit{display:flex;flex-direction:column;gap:6px;width:100%;}
+  .se-bk-edit:not(.is-multi){flex-direction:row;align-items:center;}
+  .se-bk-edit :is(input,textarea),.se-bk-filter,.se-bk-chip-input,.se-bk-reladd :is(input,select),.se-bk-word input{
+    min-width:0;padding:6px 9px;border:1px solid var(--line-strong);border-radius:7px;background:var(--surface-2);
+    color:var(--text);font:inherit;font-size:13px;line-height:1.6;
+  }
+  .se-bk-edit input{flex:1;}
+  .se-bk-edit textarea{width:100%;resize:vertical;box-sizing:border-box;}
+  .se-bk-edit :is(input,textarea):focus,.se-bk-filter:focus,.se-bk-chip-input:focus,.se-bk-reladd :is(input,select):focus,.se-bk-word input:focus{outline:none;border-color:var(--accent-line);}
+  .se-bk-edit-acts{display:flex;gap:6px;}
+  .se-bk-value{
+    padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-size:14px;line-height:1.7;text-align:left;
+    white-space:pre-wrap;overflow-wrap:anywhere;cursor:text;border-radius:4px;
+  }
+  .se-bk-value:hover:not(:disabled){background:var(--hover);box-shadow:0 0 0 3px var(--hover);}
+  .se-bk-value:disabled{cursor:default;}
+  .se-bk-value.is-empty{color:var(--faint);}
+
+  /* 标签：内容 */
+  .se-bk-fields{display:flex;flex-direction:column;gap:8px;}
+  .se-bk-fields dl{margin:0;display:flex;flex-direction:column;gap:2px;}
+  .se-bk-field{display:grid;grid-template-columns:88px minmax(0,1fr);gap:12px;padding:5px 0;}
+  .se-bk-field dt{font-size:13px;line-height:1.7;color:var(--faint);overflow-wrap:anywhere;}
+  .se-bk-field dd{margin:0;display:flex;align-items:flex-start;gap:4px;min-width:0;}
+  .se-bk-adding{display:flex;flex-direction:column;gap:6px;}
+  .se-bk-adding-label{font-size:13px;color:var(--muted);}
+  .se-bk-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+  .se-bk-chip{height:26px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;}
+  .se-bk-chip:hover{color:var(--text);border-color:var(--accent-line);}
+  .se-bk-chip-input{width:120px;height:26px;padding:0 10px;border-radius:999px;font-size:12px;}
+
+  /* 卡片列表 */
+  .se-bk-cards{display:flex;flex-direction:column;gap:10px;}
+  .se-bk-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+  .se-bk-filter{width:180px;height:30px;padding:0 10px;}
+  .se-bk-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .se-bk-card{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);overflow:hidden;}
+  .se-bk-card.is-open{border-color:var(--line-strong);background:var(--surface-2);}
+  .se-bk-card-head{
+    display:flex;align-items:baseline;gap:8px;width:100%;min-width:0;padding:10px 14px;border:0;background:transparent;
+    color:inherit;font:inherit;text-align:left;cursor:pointer;
+  }
+  .se-bk-card-head:hover{background:var(--hover);}
+  .se-bk-name{flex:none;font-size:15px;font-weight:600;color:var(--text);}
+  .se-bk-tag{flex:none;font-size:11px;line-height:18px;padding:0 6px;border-radius:5px;color:var(--warn);background:var(--warn-soft);}
+  .se-bk-tag.is-hero{color:var(--accent);background:var(--accent-soft);}
+  .se-bk-peek{flex:1;min-width:0;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-bk-count{flex:none;margin-left:auto;font-size:12px;color:var(--faint);}
+  .se-bk-card-body{display:flex;flex-direction:column;gap:12px;padding:4px 14px 14px;}
+  .se-bk-card-acts{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-left:-6px;}
+  .se-bk-confirm{display:inline-flex;gap:6px;}
+  .se-bk-aliases{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+  .se-bk-alias{display:inline-flex;align-items:center;gap:2px;height:24px;padding:0 4px 0 8px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--text);background:transparent;}
+  .se-bk-alias.is-ledger{padding-right:8px;border-style:dashed;color:var(--muted);cursor:pointer;}
+  .se-bk-alias.is-ledger:hover:not(:disabled){color:var(--text);border-color:var(--accent-line);}
+  .se-bk-rel h4,.se-bk-ledger h4{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--faint);}
+  .se-bk-rel ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:1.6;color:var(--text);}
+  .se-bk-rel b{margin:0 2px;font-weight:600;}
+  .se-bk-ledger{padding-top:10px;border-top:1px solid var(--line-weak);}
+  .se-bk-appear{margin:0 0 6px;font-size:12px;color:var(--muted);}
+  .se-bk-facts h5{margin:8px 0 4px;font-size:12px;font-weight:500;color:var(--faint);}
+  .se-bk-facts ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;}
+  .se-bk-facts li{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:13px;line-height:1.6;}
+  .se-bk-fact{min-width:0;color:var(--text);overflow-wrap:anywhere;}
+  .se-bk-fact b{font-weight:500;color:var(--muted);}
+  .se-bk-ch{flex:none;padding:0;border:0;background:transparent;font-size:12px;color:var(--accent);cursor:pointer;}
+  .se-bk-ch:hover{text-decoration:underline;}
+  .se-bk-ch.is-plain{color:var(--faint);cursor:default;}
+  .se-bk-uncarded{display:flex;align-items:center;gap:8px;padding-right:12px;}
+  .se-bk-uncarded .se-bk-card-head{flex:1;}
+  .se-bk-make{display:flex;align-items:center;gap:6px;flex:none;}
+
+  /* 写作规则 */
+  .se-bk-scalar{margin:0;display:flex;align-items:flex-start;gap:4px;}
+  .se-bk-words{display:flex;flex-wrap:wrap;gap:16px;}
+  .se-bk-word{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);}
+  .se-bk-word input{width:84px;text-align:right;font-variant-numeric:tabular-nums;}
+  .se-bk-rules{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px;}
+  .se-bk-rules li{display:flex;align-items:flex-start;gap:4px;padding:3px 0;font-size:14px;line-height:1.7;color:var(--text);}
+  .se-bk-rules li > span:first-child{flex:1;min-width:0;overflow-wrap:anywhere;}
+  .se-bk-samples{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
+  .se-bk-samples li{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);}
+  .se-bk-samples p{margin:0;font-size:14px;line-height:1.8;color:var(--text);white-space:pre-wrap;
+    display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
+  .se-bk-samples footer{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--faint);}
+  .se-bk-samples footer .se-bk-link{margin-left:auto;}
+
+  /* 关系 */
+  .se-bk-relations{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px;}
+  .se-bk-relations li{display:flex;align-items:flex-start;gap:4px;padding:6px 0;border-bottom:1px solid var(--line-weak);}
+  .se-bk-relations li > .se-bk-value{flex:1;min-width:0;}
+  .se-bk-pair{flex:0 0 170px;font-size:14px;line-height:1.7;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
+  .se-bk-reladd{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px;font-size:13px;color:var(--faint);}
+  .se-bk-reladd select{height:32px;padding:0 8px;}
+  .se-bk-reladd input{flex:1;min-width:180px;height:32px;padding:0 10px;}
 
   @media (max-width:720px){
     .se-tb-cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow-x:visible;}

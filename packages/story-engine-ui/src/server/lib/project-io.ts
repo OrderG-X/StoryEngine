@@ -713,12 +713,6 @@ export async function assertStoryEngineProject(projectDir: string): Promise<{ re
     throw new Error("不是有效的 StoryEngine 项目：缺少 project.json。");
   }
 
-  for (const dir of ["story", "timeline", "world", "characters"]) {
-    const dirInfo = await stat(join(resolved, dir)).catch(() => null);
-    if (!dirInfo?.isDirectory()) {
-      throw new Error(`不是有效的 StoryEngine 项目：缺少 ${dir} 目录。`);
-    }
-  }
 
   return { title: project.title.trim() };
 }

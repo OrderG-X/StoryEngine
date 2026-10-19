@@ -34,8 +34,6 @@ export const MIRROR_FILES = {
 export interface LegacyMirrorInput {
   readonly projection: BookProjection;
   readonly ledgers: readonly ChapterLedger[];
-  /** 人物名字（已确立名或别称，nameKey 归一）→ 老格式的人物编号（characters/<id>）。 */
-  readonly characterIds: ReadonlyMap<string, string>;
   /** 每章正文的标题（正文第一行的 markdown 标题）；没有就用「第N章」。 */
   readonly chapterTitles: ReadonlyMap<number, string>;
 }
@@ -156,7 +154,8 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
   const events = projection.chapters.map((chapter): TimelineEvent => {
     const ledger = input.ledgers.find((item) => item.chapter === chapter.chapter);
     const summary = chapter.summary ?? "";
-    const participants = unique(chapter.present.flatMap((name) => idOf(input, projection, name)));
+    // 出场人物直接用名字（重构 P9：人物卡没有老格式编号了）。
+    const participants = [...chapter.present];
     const aliases = aliasesOf(ledger, projection);
     const { decision, discovery } = turnsOf(ledger, threadTypes);
     const keyEvents = projection.facts
@@ -196,18 +195,6 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
 /** 镜像的文件内容（和老代码写盘的格式一致：两格缩进 + 结尾换行）。 */
 export function serializeLegacyMirror(mirror: LegacyMirror): ReadonlyArray<readonly [string, string]> {
   return (Object.keys(MIRROR_FILES) as (keyof typeof MIRROR_FILES)[]).map((key) => [MIRROR_FILES[key], `${JSON.stringify(mirror[key], null, 2)}\n`] as const);
-}
-
-/** 投影里的已确立名 → 人物编号：先按名字，再按这个人的别称找。 */
-function idOf(input: LegacyMirrorInput, projection: BookProjection, name: string): string[] {
-  const direct = input.characterIds.get(nameKey(name));
-  if (direct) return [direct];
-  const member = projection.cast.find((item) => item.name === name);
-  for (const alias of member?.aliases ?? []) {
-    const id = input.characterIds.get(nameKey(alias));
-    if (id) return [id];
-  }
-  return [];
 }
 
 /**

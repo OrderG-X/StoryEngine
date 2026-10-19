@@ -69,7 +69,7 @@ export {
   type ApplyResult,
   type OpContext,
 } from "./bible/ops.js";
-export { cardFill, cardsImport, CardsImportArgs, cardWrite, CardWriteArgs, readCardsOrLegacy, type CardsImportResult, type CardWriteResult } from "./bible/commands.js";
+export { cardChangeLabel, cardFill, cardsImport, CardsImportArgs, cardWrite, CardWriteArgs, readCardsOrLegacy, type CardsImportResult, type CardWriteResult } from "./bible/commands.js";
 export {
   bibleView,
   type BibleAppearances,
@@ -119,6 +119,7 @@ export {
 export {
   BookFileError,
   listChapterTexts,
+  listChapterLedgers,
   readAllLedgers,
   readBookSnapshot,
   readChapterLedger,

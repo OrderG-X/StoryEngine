@@ -1,28 +1,30 @@
 // @vitest-environment node
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import {
   buildWriterContext,
   estimateTokens,
   type PreviousChapterContext,
   type PreviousUncommittedDraftContext,
   type StoryContinuityContext,
+  type WritingContextPack,
 } from "./context-gateway.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
-import { createStoryProject, toSafeCharacterId } from "../book/project-store.js";
-import type { ArcGoalPool, CharacterCore, CharacterProfile, CharacterState, HookPool, ThreadPool, TimelineEvent } from "../book/types.js";
+import { createStoryProject } from "../book/project-store.js";
+import type { ArcGoalPool, HookPool, ThreadPool, TimelineEvent } from "../book/types.js";
 
 describe("StoryEngine-NG ContextGateway", () => {
-  it("builds a stable ordered writer context from structured project data", async () => {
+  it("builds an ordered writer context from structured project data（设定走 writing_context_pack，没有老的设定段）", async () => {
     const projectDir = await createFixtureProject();
 
     const envelope = await buildWriterContext({
       projectDir,
       chapter: 8,
-      chapterGoal: "主角追查矿藏失踪，并推进组织暗线。",
+      chapterGoal: "林远和林婉清追查矿藏失踪，并推进组织暗线。",
       maxTimelineEvents: 3,
     });
 
@@ -31,10 +33,6 @@ describe("StoryEngine-NG ContextGateway", () => {
     // L1Window=3, currentChapter=8: L2 covers chapters 1-5 (有内容), L3 为空（总章数≤15）
     // 所以 timeline_earlier_summary 会出现（L2 非空）
     expect(envelope.trace.sectionNames).toEqual([
-      "story_core",
-      "world_core",
-      "character_profile",
-      "character_core",
       "chapter_goal",
       "writing_context_pack",
       "story_calendar",
@@ -42,59 +40,60 @@ describe("StoryEngine-NG ContextGateway", () => {
       "hook_tracking",
       "story_threads",
       "arc_goals",
-      "character_state",
-      "world_state",
       "story_continuity",
       "timeline_events",
       "timeline_earlier_summary",
     ]);
-    expect(envelope.sections.map((section) => section.cachePolicy)).toEqual([
-      "stable",
-      "stable",
-      "stable",
-      "stable",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-      "dynamic",
-    ]);
-    expect(envelope.trace.selectedCharacters).toEqual(["guo-xu", "lin-wan-qing"]);
+    for (const legacy of ["story_core", "world_core", "character_profile", "character_core", "character_state", "world_state"]) {
+      expect(envelope.trace.sectionNames).not.toContain(legacy);
+    }
+    expect(envelope.sections.every((section) => section.cachePolicy === "dynamic")).toBe(true);
+    // 没点名：走在场检测（主角恒带 + 方向里点到名字的），trace 里是名字，不是编号
+    expect(envelope.trace.selectedCharacters).toEqual(["林远", "林婉清"]);
     expect(envelope.trace.selectedHooks).toEqual(["h-seeded", "h-active"]);
     expect(envelope.trace.selectedTimelineEvents).toEqual(["event-0005", "event-0006", "event-0007"]);
     expect(envelope.trace.totalTokenEstimate).toBeGreaterThan(0);
-    expect(envelope.trace.stableTokenEstimate).toBeGreaterThan(0);
-    expect(envelope.trace.dynamicTokenEstimate).toBeGreaterThan(0);
-    expect(envelope.trace.totalTokenEstimate).toBe(
-      envelope.trace.stableTokenEstimate + envelope.trace.dynamicTokenEstimate,
-    );
+    expect(envelope.trace.dynamicTokenEstimate).toBe(envelope.trace.totalTokenEstimate);
+    expect(envelope.trace.stableTokenEstimate).toBe(0);
+
+    const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
+    expect(pack.setting.protagonist?.name).toBe("林远");
+    expect(pack.setting.cast.map((brief) => brief.name)).toEqual(["林婉清"]);
+    expect(pack.setting.cast[0]?.card).toEqual(["身份：外院执事助手", "说话：简短"]);
   });
 
-  it("honors explicit character, hook, and timeline selections", async () => {
+  it("没点名时在场检测按上一章正文挑人，方向和上一章都没点到的人不带", async () => {
+    const projectDir = await createFixtureProject();
+    await writeCards(projectDir, [{ op: "card.create", kind: "character", name: "孙管事" }]);
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "chapters", "0007.md"), "# 第7章 · 后墙\n\n林婉清把账本残页塞进林远袖中。\n", "utf-8");
+
+    const envelope = await buildWriterContext({ projectDir, chapter: 8, chapterGoal: "继续追查后墙的响动。" });
+
+    expect(envelope.trace.selectedCharacters).toEqual(["林远", "林婉清"]);
+    const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
+    expect(pack.setting.otherNames.characters).toEqual(["孙管事"]);
+  });
+
+  it("honors explicit character（名字）, hook, and timeline selections", async () => {
     const projectDir = await createFixtureProject();
 
     const envelope = await buildWriterContext({
       projectDir,
       chapter: 8,
-      chapterGoal: "只处理林婉清与废弃伏笔的复盘。",
-      selectedCharacterIds: ["Lin Wan-Qing!!"],
+      chapterGoal: "只处理废弃伏笔的复盘。",
+      selectedCharacters: ["林婉清"],
       selectedHookIds: ["h-resolved"],
       maxTimelineEvents: 1,
     });
 
-    expect(envelope.trace.selectedCharacters).toEqual(["lin-wan-qing"]);
+    expect(envelope.trace.selectedCharacters).toEqual(["林婉清"]);
     expect(envelope.trace.selectedHooks).toEqual(["h-resolved"]);
     expect(envelope.trace.selectedTimelineEvents).toEqual(["event-0007"]);
-    expect(envelope.sections.find((section) => section.name === "character_profile")?.content).toEqual([
-      expect.objectContaining({ id: "lin-wan-qing", name: "林婉清" }),
-    ]);
+    const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
+    // 主角恒带；点名的人整张带上
+    expect(pack.setting.protagonist?.name).toBe("林远");
+    expect(pack.setting.cast.map((brief) => brief.name)).toEqual(["林婉清"]);
   });
 
   it("builds a continuity section from recent semantic timeline summaries", async () => {
@@ -207,7 +206,7 @@ describe("StoryEngine-NG ContextGateway", () => {
         id: "manual-fallback",
         chapter: 9,
         summary: "林远在大门外收到一封没有署名的警告信。",
-        participants: ["guo-xu"],
+        participants: ["林远"],
       },
     ];
     await writeJson(join(projectDir, "timeline", "events.json"), events);
@@ -232,8 +231,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "空前情",
       genre: "xianxia",
-      premise: "第一章还没有前情。",
-      mainCharacterName: "林远",
+      logline: "第一章还没有前情。",
+      protagonistName: "林远",
     });
 
     const envelope = await buildWriterContext({
@@ -263,8 +262,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "海州账册",
       genre: "urban",
-      premise: "审计员林澈追查账册篡改。",
-      mainCharacterName: "林澈",
+      logline: "审计员林澈追查账册篡改。",
+      protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     await writeFile(
@@ -300,8 +299,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "海州账册",
       genre: "urban",
-      premise: "审计员林澈追查账册篡改。",
-      mainCharacterName: "林澈",
+      logline: "审计员林澈追查账册篡改。",
+      protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     await mkdir(join(projectDir, "chapters"), { recursive: true });
@@ -324,8 +323,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "海州账册",
       genre: "urban",
-      premise: "审计员林澈追查账册篡改。",
-      mainCharacterName: "林澈",
+      logline: "审计员林澈追查账册篡改。",
+      protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "chapters"), { recursive: true });
     await writeFile(
@@ -354,8 +353,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "旧钟楼",
       genre: "urban",
-      premise: "修表匠追查停摆的钟。",
-      mainCharacterName: "陈拾",
+      logline: "修表匠追查停摆的钟。",
+      protagonistName: "陈拾",
     });
     await Promise.all([
       mkdir(join(projectDir, "chapters"), { recursive: true }),
@@ -400,8 +399,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "海州账册",
       genre: "urban",
-      premise: "审计员林澈追查账册篡改。",
-      mainCharacterName: "林澈",
+      logline: "审计员林澈追查账册篡改。",
+      protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "chapters"), { recursive: true });
     const filler = Array.from({ length: 250 }, (_, i) => `第${i}段：林澈翻着账册，一页一页核对附件上的数字，窗外雨声不断。`).join("\n\n");
@@ -423,8 +422,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "海州账册",
       genre: "urban",
-      premise: "审计员林澈追查账册篡改。",
-      mainCharacterName: "林澈",
+      logline: "审计员林澈追查账册篡改。",
+      protagonistName: "林澈",
     });
     await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     const filler = Array.from({ length: 250 }, (_, i) => `第${i}段：林澈翻着账册，一页一页核对附件上的数字，窗外雨声不断。`).join("\n\n");
@@ -445,15 +444,15 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "旧城区求生",
       genre: "apocalypse",
-      premise: "林澈被困旧城区。",
-      mainCharacterName: "林澈",
+      logline: "林澈被困旧城区。",
+      protagonistName: "林澈",
     });
     await writeJson(join(projectDir, "timeline", "events.json"), [
       {
         id: "event-0003",
         chapter: 3,
         summary: "林澈修好无线电后听见异常信号。",
-        participants: ["character"],
+        participants: ["林澈"],
         effects: {
           semanticSummary: {
             mainEvent: "林澈修好无线电后听见异常信号。",
@@ -487,8 +486,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "古老伏笔测试",
       genre: "xianxia",
-      premise: "测试早期伏笔不沉底。",
-      mainCharacterName: "林远",
+      logline: "测试早期伏笔不沉底。",
+      protagonistName: "林远",
     });
 
     // 1 early hook (ch2) + 6 recent hooks (ch44-49)
@@ -572,8 +571,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "古老线索测试",
       genre: "xianxia",
-      premise: "测试早期线索不沉底。",
-      mainCharacterName: "林远",
+      logline: "测试早期线索不沉底。",
+      protagonistName: "林远",
     });
 
     // 1 early lead (ch2) + 6 recent leads (ch44-49)
@@ -677,8 +676,8 @@ describe("StoryEngine-NG ContextGateway", () => {
       rootDir,
       title: "关键词排序测试",
       genre: "xianxia",
-      premise: "测试关键词相关性提升排名。",
-      mainCharacterName: "林远",
+      logline: "测试关键词相关性提升排名。",
+      protagonistName: "林远",
     });
 
     // early thread (ch2) whose text matches arcGoal keywords ("账房", "账目")
@@ -771,68 +770,34 @@ describe("StoryEngine-NG ContextGateway", () => {
     expect(envelope.sections.some((s) => s.name === "read_failures")).toBe(false);
   });
 
-  // 审计 Med：角色三件套按【单个角色】兜底——此前单个角色缺一个文件（建角色无事务的残态）
-  // 会让 buildWriterContext 整体 reject、整章无法出稿。现在跳过该角色 + read_failures 留痕。
-  it("character with partial files is skipped (not fatal) and surfaces in read_failures", async () => {
+  // 设定卡坏了：按空设定降级照常出上下文（不炸出稿），原因如实进 read_failures 段、只记一次、不带本地绝对路径。
+  it("corrupt ledger/cards.json degrades to an empty setting and surfaces once in read_failures", async () => {
     const projectDir = await createFixtureProject();
-    // 造一个「目录在、state.json 缺」的残态角色。
-    const partialDir = join(projectDir, "characters", "canzhao");
-    await mkdir(partialDir, { recursive: true });
-    await writeFile(
-      join(partialDir, "profile.json"),
-      JSON.stringify({ id: "canzhao", name: "残态角色", role: "witness" }),
-      "utf-8",
-    );
+    await writeFile(join(projectDir, "ledger", "cards.json"), "{not-json", "utf-8");
 
     const envelope = await buildWriterContext({
       projectDir,
       chapter: 8,
-      chapterGoal: "追查矿藏失踪。",
+      chapterGoal: "林远追查矿藏失踪。",
       maxTimelineEvents: 3,
     });
 
-    // 出稿上下文整体成功（主角照常在）
-    const characterState = envelope.sections.find((s) => s.name === "character_state")?.content as
-      | readonly { characterId?: string }[]
-      | undefined;
-    expect(Array.isArray(characterState)).toBe(true);
-    expect((characterState ?? []).some((item) => item.characterId === "canzhao")).toBe(false);
-    // 跳过留痕：模型与用户都知道这个角色被跳过
-    const failures = envelope.sections.find((s) => s.name === "read_failures")?.content as
-      | { failures: readonly string[] }
-      | undefined;
-    expect(failures?.failures.join(" ")).toContain("canzhao");
-  });
-
-  it("character with corrupt profile.json is skipped (not fatal) and surfaces in read_failures", async () => {
-    const projectDir = await createFixtureProject();
-    const corruptDir = join(projectDir, "characters", "sunhuai");
-    await mkdir(corruptDir, { recursive: true });
-    await writeFile(join(corruptDir, "profile.json"), "{not-json", "utf-8");
-    await writeFile(
-      join(corruptDir, "core.json"),
-      JSON.stringify({ id: "sunhuai", name: "损坏角色" }),
-      "utf-8",
-    );
-    await writeFile(
-      join(corruptDir, "state.json"),
-      JSON.stringify({ characterId: "sunhuai", emotion: "平静" }),
-      "utf-8",
-    );
-
-    const envelope = await buildWriterContext({
-      projectDir,
-      chapter: 8,
-      chapterGoal: "追查矿藏失踪。",
-      maxTimelineEvents: 3,
-    });
-    const failures = envelope.sections.find((s) => s.name === "read_failures")?.content as
-      | { failures: readonly string[] }
-      | undefined;
-    expect(failures?.failures.join(" ")).toContain("sunhuai");
-    expect(failures?.failures.join(" ")).toContain("profile.json");
+    const pack = envelope.sections.find((section) => section.name === "writing_context_pack")?.content as WritingContextPack;
+    expect(pack.setting.protagonist).toBeUndefined();
+    expect(envelope.trace.selectedCharacters).toEqual([]);
+    // 账（伏笔、线索）照常带
+    expect(envelope.trace.selectedHooks).toEqual(["h-seeded", "h-active"]);
+    const failures = (envelope.sections.find((s) => s.name === "read_failures")?.content as { failures: readonly string[] } | undefined)?.failures ?? [];
+    expect(failures.filter((line) => line.includes("设定本读取失败"))).toHaveLength(1);
+    expect(failures.join(" ")).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
+    expect(renderFastDraftPromptText(envelope)).toContain("设定本读取失败");
   });
 });
+
+async function writeCards(projectDir: string, ops: readonly CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${randomUUID()}` });
+  if (!outcome.ok) throw new Error(outcome.message);
+}
 
 async function createFixtureProject(): Promise<string> {
   const rootDir = await mkdtemp(join(tmpdir(), "story-engine-context-"));
@@ -840,31 +805,14 @@ async function createFixtureProject(): Promise<string> {
     rootDir,
     title: "我的修仙副本",
     genre: "xianxia",
-    premise: "用户自己当主角，从杂役弟子开始逆袭。",
-    mainCharacterName: "Guo Xu / 主角",
+    logline: "林远从杂役弟子开始逆袭。",
+    protagonistName: "林远",
   });
-  await writeCharacter(projectDir, {
-    profile: {
-      id: "lin-wan-qing",
-      name: "林婉清",
-      identity: "support aide",
-      appearance: { clothing: "dark suit" },
-      tags: ["support"],
-    },
-    core: {
-      characterId: "lin-wan-qing",
-      personality: ["precise", "soft off-duty"],
-      speechStyle: "concise",
-    },
-    state: {
-      characterId: "lin-wan-qing",
-      emotion: "watchful",
-      goal: "protect the protagonist's schedule",
-      relationshipToUser: "trusted aide",
-      currentArc: "opening support",
-      lastUpdatedChapter: null,
-    },
-  });
+  await writeCards(projectDir, [
+    { op: "card.create", kind: "character", name: "林婉清", fields: [{ label: "身份", value: "外院执事助手" }, { label: "说话", value: "简短" }] },
+  ]);
+  await mkdir(join(projectDir, "story"), { recursive: true });
+  await mkdir(join(projectDir, "timeline"), { recursive: true });
   const hooks: HookPool = {
     hooks: [
       {
@@ -872,21 +820,21 @@ async function createFixtureProject(): Promise<string> {
         title: "失踪矿藏",
         description: "组织账册里少了一批矿藏。",
         status: "seeded",
-        relatedCharacters: ["guo-xu"],
+        relatedCharacters: ["林远"],
       },
       {
         id: "h-active",
         title: "掌门密令",
         description: "掌门暗中试探主角。",
         status: "active",
-        relatedCharacters: ["guo-xu", "lin-wan-qing"],
+        relatedCharacters: ["林远", "林婉清"],
       },
       {
         id: "h-resolved",
         title: "旧账误会",
         description: "旧账疑点已被解释。",
         status: "resolved",
-        relatedCharacters: ["lin-wan-qing"],
+        relatedCharacters: ["林婉清"],
       },
       {
         id: "h-abandoned",
@@ -987,7 +935,7 @@ async function createFixtureProject(): Promise<string> {
       id: `event-${String(chapter).padStart(4, "0")}`,
       chapter,
       summary: `第${chapter}章事件`,
-      participants: chapter % 2 === 0 ? ["lin-wan-qing"] : ["guo-xu"],
+      participants: chapter % 2 === 0 ? ["林婉清"] : ["林远"],
     };
   });
   events[4] = {
@@ -1039,23 +987,7 @@ async function createFixtureProject(): Promise<string> {
   return projectDir;
 }
 
-async function writeCharacter(
-  projectDir: string,
-  input: {
-    readonly profile: CharacterProfile;
-    readonly core: CharacterCore;
-    readonly state: CharacterState;
-  },
-): Promise<void> {
-  const characterDir = join(projectDir, "characters", toSafeCharacterId(input.profile.id));
-  await mkdir(characterDir, { recursive: true });
-  await Promise.all([
-    writeJson(join(characterDir, "profile.json"), input.profile),
-    writeJson(join(characterDir, "core.json"), input.core),
-    writeJson(join(characterDir, "state.json"), input.state),
-  ]);
-}
-
 async function writeJson(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }

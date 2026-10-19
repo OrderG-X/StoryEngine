@@ -14,9 +14,9 @@
  *   Scenario 3: If NEW degrades, log WARNING about Task 3 risk (no hard fail)
  */
 
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildStateOverview } from "../book/state-overview.js";
 import { buildWriterContext } from "./context-gateway.js";
@@ -25,6 +25,8 @@ import { createStoryProject } from "../book/project-store.js";
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 async function writeJson(path: string, value: unknown): Promise<void> {
+  // 新书不再预建 story/、timeline/（重构 P9），写老格式账本镜像时自己建目录。
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
@@ -108,8 +110,8 @@ describe("Phase 1 A/B probe — Scenario 1: early sunk recall rate", () => {
       rootDir,
       title: "早期召回率测试",
       genre: "urban",
-      premise: "测试早期条目不被近章挤掉。",
-      mainCharacterName: "主角",
+      logline: "测试早期条目不被近章挤掉。",
+      protagonistName: "林远",
     });
 
     // Hooks
@@ -301,8 +303,8 @@ describe("Phase 1 A/B probe — Scenario 2: relevance preservation", () => {
       rootDir,
       title: "关键词相关性保留测试",
       genre: "urban",
-      premise: "测试早期关键词匹配线索保留。",
-      mainCharacterName: "主角",
+      logline: "测试早期关键词匹配线索保留。",
+      protagonistName: "林远",
     });
 
     // Early thread (ch6, matches arcGoal keyword "账房")
@@ -403,8 +405,8 @@ describe("Phase 1 A/B probe — Scenario 3: wide relevanceGoal regression check"
       rootDir,
       title: "宽关键词竞争回归测试",
       genre: "urban",
-      premise: "测试多关键词竞争下早期相关线索是否仍被召回。",
-      mainCharacterName: "主角",
+      logline: "测试多关键词竞争下早期相关线索是否仍被召回。",
+      protagonistName: "林远",
     });
 
     // Keywords that will match many threads

@@ -209,6 +209,32 @@ export async function runWithSnapshot<T>(
   });
 }
 
+/**
+ * 「真要写盘才打存档点」（重构 P9）：fn 拿到一个存档回调交给核心 runCommand——核心在书锁里、算出确实要写之后才调它，
+ * 指错了、没变化、按钮点第二次（回执重放）都不打，操作历史里不会多出什么都没改的一条。
+ * 一批里多条命令只打第一次（一批改动撤销一步）；有 fixedLabel 就用它，没有就用核心给的命令名 + 人话。
+ * 整段在同一把书锁里，写完照 runWithSnapshot 落盘收尾，撤销不会插进中间。
+ */
+export async function runWithLazySnapshot<T>(
+  projectDir: string,
+  fn: (snapshot: (label: string, command: string) => Promise<void>) => Promise<T>,
+  fixedLabel?: string,
+): Promise<{ readonly snapshotId?: string; readonly result: T }> {
+  return withProjectLock(projectDir, async () => {
+    let taken: SnapshotEntry | undefined;
+    const result = await fn(async (label, command) => {
+      if (taken) return;
+      await recoverProjectCommitTransactions(projectDir);
+      await ensureRepoUnlocked(projectDir);
+      taken = await createSnapshotUnlocked(projectDir, fixedLabel ?? coreSnapshotLabel(command, label));
+    });
+    if (taken && (await hasUncommittedChanges(projectDir))) {
+      await createSnapshotUnlocked(projectDir, `${POST_WRITE_LABEL_PREFIX}${taken.label}`);
+    }
+    return { ...(taken ? { snapshotId: taken.id } : {}), result };
+  });
+}
+
 export async function listSnapshots(projectDir: string, limit = 100): Promise<SnapshotEntry[]> {
   return withProjectLock(projectDir, async () => {
     await ensureRepoUnlocked(projectDir);
@@ -558,6 +584,9 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "book.import": "bible",
   "book.importText": "commit",
   "draft.write": "draft",
+  "card.write": "bible",
+  "card.fill": "bible",
+  "cards.import": "bible",
 };
 
 /** 早于命令名进标签时（P3～P7 之间）核心打的存档点，整串认。 */

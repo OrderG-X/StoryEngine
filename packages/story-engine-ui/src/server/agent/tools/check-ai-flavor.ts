@@ -2,7 +2,7 @@
  * check_ai_flavor — 只读工具：对某章草稿做『去 AI 味』体检，挑出有 AI 腔的句子 + 原因 + 改写方向，不改稿。
  *
  * 编排：读草稿（defaultDraftPath + stripLeadingMarkdownChapterHeading）+ 从 story/writing-rules.json
- * 抽反 AI 判据（readAntiRules，合并去重；读不到→空数组，纯逻辑用通用判据兜底）
+ * 抽反 AI 判据（readAntiRules，合并去重；读不到→空判据、用通用判据兜底，结论里如实说没按作者的规则查）
  *   → runAiFlavorCheck（注入 callModel = resolveConfiguredChatModel("draftReview") + callOpenAICompatibleChatModel）。
  *
  * 只读：不写盘、不建快照、不带 snapshotId / refreshScope。
@@ -18,7 +18,7 @@ import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { runAiFlavorCheck, type AiFlavorReport } from "../../writing/ai-flavor/ai-flavor-check.js";
-import { readAntiRules } from "../../writing/ai-flavor/anti-rules.js";
+import { readAntiRules, withAntiRulesNote } from "../../writing/ai-flavor/anti-rules.js";
 
 const inputSchema = z.object({
   chapter: coerceNumber(z.number().int().positive().optional().describe("要体检 AI 味的章号。")),
@@ -35,22 +35,16 @@ const outputSchema = z.object({
 });
 
 /**
- * 跨章「前文已建立要素」：往章登记的关键道具/资产 + 已确立硬事实（来自 writing-context-pack 的
- * assetContext + continuityFocus.establishedFacts，已按当前章相关性筛选、对长篇可扩展）。喂给体检 LLM，
+ * 跨章「前文已建立要素」：设定本里的物品名 + 已确立硬事实（来自 writing-context-pack 的
+ * 设定包 + continuityFocus.establishedFacts，已按当前章相关性筛选、对长篇可扩展）。喂给体检 LLM，
  * 避免它把前文铺垫过的道具误判成「道具天降/凭空出现」（Codex 组合复测 P2：第3章把第1、2章已建立的黑色胶带判天降）。
  * 读不到（缺状态/异常）→ 空数组，体检退回只看当前章的旧行为，绝不因此报错。
  */
 export async function gatherEstablishedElements(projectDir: string, chapter: number): Promise<string[]> {
   const pack = await buildWritingContextPack({ projectDir, chapter, userDirection: "", maxTimelineEvents: 3 }).catch(() => undefined);
   if (!pack) return [];
-  const assetNames = [
-    ...pack.assetContext.initialAssets,
-    ...pack.assetContext.keyItems,
-    ...pack.assetContext.carriedAssets,
-    ...pack.assetContext.ownedAssets,
-    ...pack.assetContext.plotCriticalAssets,
-  ];
-  // 资产名在前（短、信号强），已确立硬事实在后（句子含具体道具/编号）。去重 + 截断防 prompt 过长。
+  const assetNames = [...pack.setting.items.map((brief) => brief.name), ...pack.setting.otherNames.items];
+  // 物品名在前（短、信号强），已确立硬事实在后（句子含具体道具/编号）。去重 + 截断防 prompt 过长。
   return Array.from(new Set([...assetNames, ...pack.continuityFocus.establishedFacts].map((s) => s.trim()).filter(Boolean))).slice(0, 24);
 }
 
@@ -63,7 +57,8 @@ export async function runCheckAiFlavorToolLogic(input: {
   const draftText = stripLeadingMarkdownChapterHeading(raw).trim();
   const antiRules = await readAntiRules(input.projectDir);
   const establishedElements = await gatherEstablishedElements(input.projectDir, input.chapter);
-  return runAiFlavorCheck({ draftText, antiRules, establishedElements, callModel: input.callModel });
+  const report = await runAiFlavorCheck({ draftText, antiRules: antiRules.items, establishedElements, callModel: input.callModel });
+  return antiRules.failure ? { ...report, summary: withAntiRulesNote(report.summary, antiRules.failure) } : report;
 }
 
 export const checkAiFlavorTool = createTool({

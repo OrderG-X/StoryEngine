@@ -135,8 +135,8 @@ async function createFixtureProject(): Promise<string> {
     rootDir,
     title: "回检测试书",
     genre: "悬疑",
-    premise: "测试 AI 腔回检挂接。",
-    mainCharacterName: "顾言",
+    logline: "测试 AI 腔回检挂接。",
+    protagonistName: "顾言",
   });
   return projectDir;
 }

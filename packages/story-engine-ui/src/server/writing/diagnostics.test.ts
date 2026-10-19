@@ -104,8 +104,8 @@ async function createFixtureProject(prefix: string): Promise<string> {
     rootDir,
     title: "我的修仙副本",
     genre: "xianxia",
-    premise: "用户自己当主角，从杂役弟子开始逆袭。",
-    mainCharacterName: "Guo Xu / 主角",
+    logline: "用户自己当主角，从杂役弟子开始逆袭。",
+    protagonistName: "Guo Xu / 主角",
   });
   return projectDir;
 }

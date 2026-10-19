@@ -5,9 +5,9 @@
 // applyDraftRevisionToContent（确定性替换，原文须在草稿中唯一出现）→ 写回草稿。
 // callModel 注入 mock（返回固定 JSON），引擎应用走临时项目 fixture。草稿类不建 git 快照。
 // 同时测试 execute 路径上的章号缺省回退（RequestContext.currentChapter）。
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createStoryProject } from "../../book/project-store.js";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
@@ -96,13 +96,14 @@ async function makeProject(title: string): Promise<string> {
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: "林远",
+    logline: "主角进入权力中心。",
+    protagonistName: "林远",
   });
   return projectDir;
 }
 
 async function writeDraft(projectDir: string, chapter: number, content: string): Promise<void> {
+  await mkdir(dirname(defaultDraftPath(projectDir, chapter)), { recursive: true });
   await writeFile(defaultDraftPath(projectDir, chapter), content, "utf-8");
 }
 

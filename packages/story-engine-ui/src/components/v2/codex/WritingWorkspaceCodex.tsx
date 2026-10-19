@@ -6,17 +6,14 @@ import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import AiChatCodex from "./AiChatCodex.js";
 import WritingDeskCodex from "./WritingDeskCodex.js";
-import AssetCodexPanel from "./AssetCodexPanel.js";
-import CharacterCodexPanel from "./CharacterCodexPanel.js";
-import CharacterMatrixCodexPanel from "./CharacterMatrixCodexPanel.js";
 import { ThreadBoard } from "./ThreadBoard.js";
 import { requestQuoteJump } from "./QuoteJump.js";
-import LocationCodexPanel from "./LocationCodexPanel.js";
 import { StoryMap } from "./StoryMap.js";
 import { ChapterChanges } from "./ChapterChanges.js";
-import WorldbuildingCodexPanel from "./WorldbuildingCodexPanel.js";
-import WritingRulesCodexPanel from "./WritingRulesCodexPanel.js";
-import { flattenCharacterSearchItem, searchLibraryIndex } from "./librarySearch.js";
+import { BibleBook, type BibleCat } from "./BibleBook.js";
+import { useBible } from "./useBible.js";
+import { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
+import { searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
 import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
@@ -27,7 +24,8 @@ import { contextActionsForView } from "./ChatCapabilityBar.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { chapterBareTitle, chapterDisplayTitle, chapterHeading } from "../v2Utils.js";
 import { ThemeToggleButton } from "./ThemeToggleButton.js";
-import { CommandPalette, parsePaletteCharacters, type PaletteCommand } from "./CommandPalette.js";
+import { CommandPalette, type PaletteCommand } from "./CommandPalette.js";
+import { refreshOverviewNow } from "../../../workspace/refreshOverview.js";
 import { useThemeStore } from "../../../stores/themeStore.js";
 import { CommitSheetHost } from "./CommitSheet.js";
 import { IconChevronLeft, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
@@ -48,26 +46,23 @@ import "./se-bible.css";
  *  - 中栏「资料中心」用 codex 新视觉，7 类全接真实数据。
  *  - 右栏「AI」=唯一控制面（AiChatCodex：工具调用单独气泡 + 四步进度 + 金色气泡 + 思考折叠）。
  *  - 中栏「写作台」用 codex 沉浸聚光视觉（WritingDeskCodex：居中悬浮稿纸 + 暗角 + 金 caret + 当前句呼吸辉光），编辑器内核复用 WritingPaper。
- *  - 铁律不变：资料只读，改设定走右侧 AI 对话。
+ *  - 重构 P9：设定本作者直接改（作者档命令、可撤销），也可以在右边让 AI 改。
  */
 // 章节不在「资料中心」类目里——它属于写作上下文，走「写作台」视图的章节竖轨。
 const CATS = [
-  { id: "changes", glyph: "✎", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事" },
-  { id: "world", glyph: "◈", title: "故事设定 · 世界观", sub: "概要 / 规则 / 资源 / 关系" },
-  { id: "rules", glyph: "§", title: "写作规则", sub: "本书文风 · 避免机器腔" },
-  { id: "matrix", glyph: "⬡", title: "角色关系", sub: "关系网 · 单角色近况" },
-  { id: "chars", glyph: "♟", title: "角色", sub: "角色档案" },
-  { id: "assets", glyph: "⚖", title: "道具与资源", sub: "物品归属" },
-  { id: "places", glyph: "⌖", title: "地点", sub: "场景规则" },
-  { id: "hooks", glyph: "❖", title: "伏笔与线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
-  { id: "timeline", glyph: "▤", title: "故事地图", sub: "章 × 人物 · 故事日" },
+  { id: "changes", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事" },
+  { id: "story", title: "故事设定", sub: "一句话 · 题材 · 世界规矩 · 其他设定" },
+  { id: "rules", title: "写作规则", sub: "视角 · 字数 · 文风 · 禁写" },
+  { id: "chars", title: "人物", sub: "人物卡 · 账里记的" },
+  { id: "relations", title: "关系", sub: "谁和谁什么关系" },
+  { id: "items", title: "物品", sub: "物品卡" },
+  { id: "places", title: "地点", sub: "地点卡" },
+  { id: "uncarded", title: "还没建卡", sub: "账里有、卡里没有的" },
+  { id: "hooks", title: "伏笔与线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
+  { id: "timeline", title: "故事地图", sub: "章 × 人物 · 故事日" },
 ] as const;
 
-// 设定本左侧导航用的短名（CATS.title 保留给旧测试与搜索结果标签）。
-const CAT_LABELS: Record<(typeof CATS)[number]["id"], string> = {
-  changes: "这章改了什么", world: "世界观", rules: "写作规则", matrix: "角色关系", chars: "角色",
-  assets: "道具与资源", places: "地点", hooks: "伏笔与线索", timeline: "故事地图",
-};
+const BIBLE_CATS = new Set<string>(["story", "rules", "chars", "relations", "items", "places", "uncarded"]);
 
 /** 仅供测试用：导出 CATS 数组供轻量测试断言（不影响生产代码）。 */
 export const __CATS_FOR_TEST = CATS;
@@ -176,7 +171,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 设置改成弹窗（不再占中栏整页），null = 关着。
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [cat, setCat] = useState<string>("world");
+  const [cat, setCat] = useState<string>("story");
+  // 设定本先展开哪张卡（正文名字速览、搜索结果、⌘K 点进来的）。
+  const [bibleFocus, setBibleFocus] = useState<string | undefined>(undefined);
   // 窄窗开局收起章节抽屉（不挡稿纸）；宽窗按专注写作开关决定。
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
   const [chapterQuery, setChapterQuery] = useState("");
@@ -255,20 +252,22 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
     ? chapterHeading(currentChapter.chapterNumber, currentChapter.title ?? "")
-    : view === "library" ? `设定本 · ${CAT_LABELS[cat as keyof typeof CAT_LABELS] ?? catTitle}` : "操作历史";
+    : view === "library" ? `设定本 · ${catTitle}` : "操作历史";
 
-  // 资料全局搜索（打磨D）：跨类目搜 sidebar 已聚合的分类标签，命中可一键跳到对应类目。
-  // 世界观面板的数据是面板内单独拉取的（不在 props），故搜不到——只覆盖 sidebar 已有的 5 类。
-  const librarySearchSources: readonly { readonly cat: string; readonly catLabel: string; readonly items: readonly string[] }[] = [
-    { cat: "world", catLabel: "故事设定", items: props.sidebar.storySettings },
-    { cat: "rules", catLabel: "写作规则", items: props.sidebar.writingRules },
-    // 角色卡是 JSON 串：摊平成可读值串再喂搜索，结果不再是一坨 JSON（修 R2#5）。
-    { cat: "chars", catLabel: "角色", items: props.sidebar.characters.map(flattenCharacterSearchItem) },
-    { cat: "places", catLabel: "地点", items: props.sidebar.locations },
-    { cat: "assets", catLabel: "道具与资源", items: props.sidebar.assets },
-  ];
+  // 设定视图（重构 P9）：设定本各页、搜索、⌘K、正文名字速览、@ 提及都用这一份；开书概况每刷新一次跟着重读。
+  const bibleState = useBible(props.projectPath ?? undefined, props.overview);
+  const librarySearchSources = useMemo(() => bibleSearchSources(bibleState.bible), [bibleState.bible]);
+  const paletteCharacters = useMemo(() => paletteCharactersOf(bibleState.bible), [bibleState.bible]);
+  const peekCards = useMemo(() => namePeekCardsOf(bibleState.bible), [bibleState.bible]);
+  const mentionNames = useMemo(() => mentionNamesOf(bibleState.bible), [bibleState.bible]);
+  const openInBible = (target: string, name?: string) => {
+    setView("library");
+    setCat(target);
+    setBibleFocus(name);
+  };
+  // 作者在设定本里改成了：开书概况跟着刷新（主角、待处理、书架简介）。
+  const refreshOverview = () => { if (props.projectPath) void refreshOverviewNow(props.projectPath); };
   const libQ = libQuery.trim().toLowerCase();
-  const paletteCharacters = parsePaletteCharacters(props.sidebar.characters);
   const paletteCommands: PaletteCommand[] = [
     {
       id: "next", label: "写下一章", hint: "交给 AI", disabled: workspaceBusy || !props.onSendMessage,
@@ -510,7 +509,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                               className="lib-search-hit"
                               type="button"
                               role="option"
-                              onClick={() => { setCat(r.cat); setLibQuery(""); }}
+                              onClick={() => { openInBible(r.cat, r.focus); setLibQuery(""); }}
                             >
                               <span className="lib-hit-cat">{r.catLabel}</span>
                               <span className="lib-hit-label">{r.snippet}</span>
@@ -528,13 +527,13 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       className={`se-bnav-item${cat === c.id ? " on" : ""}`}
                       aria-current={cat === c.id ? "page" : undefined}
                       title={c.sub}
-                      onClick={() => setCat(c.id)}
+                      onClick={() => { setCat(c.id); setBibleFocus(undefined); }}
                       type="button"
                     >
-                      {CAT_LABELS[c.id]}
+                      {c.title}
                     </button>
                   ))}
-                  <p className="se-bnav-note">设定由 AI 维护，这里只读。想改哪一处，直接在右边说。</p>
+                  <p className="se-bnav-note">点字就能改，也可以在右边让 AI 改。</p>
                 </nav>
                 <div className="read">
                   <div className={`read-inner read-enter${cat === "hooks" || cat === "timeline" ? " is-wide" : ""}`} key={cat}>
@@ -547,12 +546,20 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         {...(changesChapter !== undefined ? { chapter: changesChapter } : {})}
                       />
                     ) : null}
-                    {cat === "world" ? <WorldbuildingCodexPanel projectPath={props.projectPath} fallbackData={props.workspace.worldbuildingFallback} onSendMessage={props.onSendMessage} /> : null}
-                    {cat === "rules" ? <WritingRulesCodexPanel items={props.sidebar.writingRules} customNotes={props.sidebar.writingRulesCustomNotes} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
-                    {cat === "matrix" ? <CharacterMatrixCodexPanel matrix={props.workspace.characterMatrix} protagonistName={props.workspace.protagonist?.name} projectPath={props.projectPath} currentChapter={currentChapter.chapterNumber} /> : null}
-                    {cat === "chars" ? <CharacterCodexPanel assets={props.workspace.assets} characterMatrix={props.workspace.characterMatrix} location={props.workspace.location} projectPath={props.projectPath} protagonist={props.workspace.protagonist} sidebar={props.sidebar} onSendMessage={props.onSendMessage} /> : null}
-                    {cat === "assets" ? <AssetCodexPanel assets={props.workspace.assets} projectPath={props.projectPath} onSendMessage={props.onSendMessage} protagonistName={props.overview?.characters.protagonist ?? undefined} /> : null}
-                    {cat === "places" ? <LocationCodexPanel location={props.workspace.location} projectPath={props.projectPath} onSendMessage={props.onSendMessage} /> : null}
+                    {BIBLE_CATS.has(cat) && props.projectPath ? (
+                      <BibleBook
+                        cat={cat as BibleCat}
+                        projectPath={props.projectPath}
+                        bible={bibleState.bible}
+                        error={bibleState.error}
+                        reload={bibleState.reload}
+                        busy={workspaceBusy}
+                        onJump={jumpToQuote}
+                        onChanged={refreshOverview}
+                        onOpenCat={openInBible}
+                        {...(bibleFocus ? { focusName: bibleFocus } : {})}
+                      />
+                    ) : null}
                     {cat === "hooks" && props.projectPath ? (
                       <ThreadBoard
                         projectPath={props.projectPath}
@@ -643,7 +650,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               <WritingDeskCodex
                 {...props}
                 onOpenChapter={openChapterNumber}
-                onOpenCharacter={() => { setView("library"); setCat("chars"); }}
+                peekCards={peekCards}
+                onOpenCharacter={(name) => openInBible("chars", name)}
                 onAskAboutSelection={(text) => fillComposer(`关于这段「${quoteForComposer(text)}」，`)}
               />
             </div>
@@ -657,6 +665,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         <AiChatCodex
           {...props}
           onOpenChapter={openChapterNumber}
+          mentionNames={mentionNames}
           rightOpen={effectiveRightOpen}
           // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），
           // 盲目取反会把它翻成 false（点了等于没点，复审 T3 死点击的根因）。
@@ -687,8 +696,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             }
             props.onSelectChapter?.(id);
           }}
-          onPickCharacter={() => { setView("library"); setCat("chars"); }}
-          onPickSetting={(target) => { setView("library"); setCat(target); }}
+          onPickCharacter={(name) => openInBible("chars", name)}
+          onPickSetting={(target, focus) => openInBible(target, focus)}
         />
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}

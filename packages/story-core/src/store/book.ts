@@ -80,8 +80,8 @@ export async function readChapterLedger(bookDir: string, chapter: number): Promi
   return ledger;
 }
 
-/** 全部章节账单，按章号排好。 */
-export async function readAllLedgers(bookDir: string): Promise<readonly ChapterLedger[]> {
+/** 有账单的章号，按章号排好（只列目录，不读内容）。 */
+export async function listChapterLedgers(bookDir: string): Promise<readonly number[]> {
   let names: string[];
   try {
     names = await readdir(join(bookDir, CHAPTER_LEDGER_DIR));
@@ -89,11 +89,16 @@ export async function readAllLedgers(bookDir: string): Promise<readonly ChapterL
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  const chapters = names
+  return names
     .filter((name) => name.endsWith(".json"))
     .map(chapterFromFileName)
     .filter((chapter): chapter is number => chapter !== undefined)
     .sort((a, b) => a - b);
+}
+
+/** 全部章节账单，按章号排好。 */
+export async function readAllLedgers(bookDir: string): Promise<readonly ChapterLedger[]> {
+  const chapters = await listChapterLedgers(bookDir);
   const ledgers: ChapterLedger[] = [];
   for (const chapter of chapters) {
     const ledger = await readChapterLedger(bookDir, chapter);

@@ -1,7 +1,9 @@
 /**
  * AI 栏「待处理」（2026-10-07 改版）：不急但别忘的事，按需点「让 AI …」把一句话放进输入框（不自动发、不直连引擎）。
- * 全部从现有只读数据确定性推出：主角卡还是占位 / 可清理线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
+ * 带 ops 的（重构 P9：还没标主角）点了直接改设定本（作者档、可撤销），不经模型。
+ * 全部从现有只读数据确定性推出：还没标主角 / 可清理线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
  */
+import type { CardOp } from "../../../api/bibleClient.js";
 import type { StateOverview } from "../../../api/types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
 import { chapterBareTitle, isPlaceholderChapterTitle } from "../v2Utils.js";
@@ -12,6 +14,8 @@ export interface InboxTodo {
   readonly sub: string;
   readonly action: string;
   readonly prefill: string;
+  /** 有就直接改设定本（作者点了就算数），不放进输入框。 */
+  readonly ops?: readonly CardOp[];
 }
 
 const ARC_STALE_CHAPTERS = 8;
@@ -23,7 +27,7 @@ function chapterList(numbers: readonly number[]): string {
 
 export function buildInboxTodos(input: {
   readonly chapters: readonly ChapterNavItem[];
-  readonly overview: (Pick<StateOverview, "threads" | "arcGoals"> & Partial<Pick<StateOverview, "placeholderProtagonist">>) | null | undefined;
+  readonly overview: (Pick<StateOverview, "threads" | "arcGoals"> & Partial<Pick<StateOverview, "protagonistSuggestion">>) | null | undefined;
   readonly currentChapterNumber: number;
   /** 导入的书还在通读记账（P8）：后面的章还没记账，前面开的线索、主线看着「很久没推进」是假的，这两条先不提。 */
   readonly rereading?: boolean;
@@ -32,14 +36,17 @@ export function buildInboxTodos(input: {
   const written = input.chapters.filter((ch) => ch.status !== "planned");
   const latest = Math.max(input.currentChapterNumber, ...written.map((ch) => ch.chapterNumber), 0);
 
-  const protagonist = input.rereading ? undefined : input.overview?.placeholderProtagonist;
+  const protagonist = input.rereading ? undefined : input.overview?.protagonistSuggestion;
   if (protagonist) {
     todos.push({
-      key: "placeholder-protagonist",
-      title: `主角卡还叫「${protagonist.placeholderName}」`,
-      sub: `${protagonist.viewpointChapters} 章跟着${protagonist.suggestedName}的视角走`,
-      action: "让 AI 改名",
-      prefill: `把主角卡改成「${protagonist.suggestedName}」，只改名字，别的不动`,
+      key: "protagonist",
+      title: "还没标主角",
+      sub: `${protagonist.viewpointChapters} 章跟着${protagonist.name}的视角走`,
+      action: `设${protagonist.name}为主角`,
+      prefill: `把「${protagonist.name}」设为主角`,
+      ops: protagonist.carded
+        ? [{ op: "card.protagonist", card: protagonist.name }]
+        : [{ op: "card.create", kind: "character", name: protagonist.name, protagonist: true }],
     });
   }
 

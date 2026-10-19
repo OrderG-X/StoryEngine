@@ -1,7 +1,6 @@
-import type { BookSummary, ChapterNavItem, ChapterWorkspaceData, SidebarData } from "../types.js";
+import type { BookSummary, ChapterNavItem } from "../types.js";
 import type { StateOverview } from "../api/types.js";
-import { mockRecentBooks, mockWorkspaceData, mockSidebarData } from "../mockData.js";
-import { compactStrings } from "./textUtils.js";
+import { isPlaceholderChapterTitle } from "../components/v2/v2Utils.js";
 
 const RECENT_BOOKS_STORAGE_KEY = "story-engine-ng.recent-books";
 
@@ -52,14 +51,15 @@ export function bookSummaryFromOverview(overview: StateOverview, projectPath: st
   return {
     id: stableBookId(projectPath),
     title: projectTitle,
-    genre: overview.project.genre || "长篇故事",
+    // 题材、主角、简介都是作者在设定本里写的；没写就空着，不拿占位顶（重构 P9）。
+    genre: overview.project.genre,
     currentChapterTitle: titleFromEvent(currentEvent, currentChapterNumber),
     currentChapterNumber,
-    protagonistName: overview.characters.protagonist ?? overview.characters.knownCharacters[0]?.name ?? "主角",
+    protagonistName: overview.characters.protagonist ?? "",
     status: overview.project.currentChapter ? "可继续下一章" : "草稿中",
     updatedAt: "刚刚",
     lastActiveMs: Date.now(),
-    logline: overview.world.summary ?? overview.storyStatus.currentObjective ?? "继续当前故事。",
+    logline: overview.project.logline || overview.storyStatus.currentObjective || "",
     writtenChapters,
     totalWords: estimateWordsFromOverview(overview),
     projectPath,
@@ -74,7 +74,14 @@ function stableBookId(value: string): string {
   return `project-${hash.toString(16)}`;
 }
 
-function titleFromEvent(event: StateOverview["timeline"]["recentEvents"][number] | undefined, chapter: number): string {
+export function titleFromEvent(
+  event: StateOverview["timeline"]["recentEvents"][number] | undefined,
+  chapter: number,
+): string {
+  // 优先用真章名（时间线事件带 title，剥掉「第N章 ·」前缀）；没有章名才退回事件摘要（截 18 字）。
+  // 不猜白名单：章节标题
+  const realTitle = (event?.title ?? "").replace(/^(?:第[0-9一二三四五六七八九十百零两]+章\s*[·.．、:：-]?\s*)+/u, "").trim();
+  if (realTitle && !isPlaceholderChapterTitle(realTitle)) return realTitle;
   const source = event?.mainEvent ?? event?.summary;
   if (!source?.trim()) return `第${chapter}章`;
   const cleaned = source.replace(/\s+/gu, " ").trim();
@@ -86,55 +93,6 @@ function estimateWordsFromOverview(overview: StateOverview): number {
   return Math.max(timelineWords * 20, (overview.project.currentChapter ?? 0) * 3000);
 }
 
-export function workspaceFromBook(book: BookSummary): ChapterWorkspaceData {
-  const chapterWindow = Array.from({ length: 5 }, (_, index) => {
-    const chapterNumber = Math.max(1, book.currentChapterNumber - 2) + index;
-    return {
-      id: `${book.id}-ch-${chapterNumber}`,
-      chapterNumber,
-      title: chapterNumber === book.currentChapterNumber ? book.currentChapterTitle : mockWorkspaceData.chapters[index]?.title ?? `第${chapterNumber}章`,
-      status: chapterNumber < book.currentChapterNumber
-        ? "committed" as const
-        : chapterNumber === book.currentChapterNumber
-          ? "current" as const
-          : "planned" as const,
-    };
-  });
-  const currentChapter = chapterWindow.find((chapter) => chapter.chapterNumber === book.currentChapterNumber) ?? chapterWindow[0] ?? mockWorkspaceData.currentChapter;
-  const flowStatus = book.status === "待确认"
-    ? "waiting_commit_confirmation" as const
-    : book.status === "可继续下一章"
-      ? "ready_for_next" as const
-      : "idle" as const;
-
-  return {
-    ...mockWorkspaceData,
-    projectName: book.title,
-    currentChapter,
-    chapters: chapterWindow,
-    flowStatus,
-    protagonist: {
-      ...mockWorkspaceData.protagonist,
-      name: book.protagonistName,
-      currentGoal: book.logline,
-    },
-  };
-}
-
-export function sidebarFromBook(book: BookSummary): SidebarData {
-  return {
-    ...mockSidebarData,
-    storySettings: [book.title, book.genre, book.logline],
-    characters: [book.protagonistName, ...mockSidebarData.characters.filter((item) => item !== book.protagonistName)],
-  };
-}
-
-/**
- * 整表刷新时沿用旧的章节文件标记（2026-10-11 真机验收）：工具回传的故事概览不带章节文件状态，
- * 按它重建的章节表全丢了「有稿 / 已定稿」——下一章空稿纸冒出新书引导、刚定稿的章被当成没定稿。
- * 新表自己带了标记就用新的；刚定稿的那章直接标已定稿。
- */
-/** 章名不是空、也不是概览补的占位「第N章」。 */
 function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
   const title = chapter.title?.trim() ?? "";
   return title !== "" && title !== `第${chapter.chapterNumber}章`;
@@ -218,15 +176,4 @@ export function updateChapterListForActive(chapters: readonly ChapterNavItem[], 
           : "planned" as const,
     }))
     .sort((a, b) => a.chapterNumber - b.chapterNumber);
-}
-
-export function firstChapterSetupDirection(overview: StateOverview | null): string {
-  const setup = overview?.storyBible?.firstChapterSetup;
-  if (!setup) return "";
-  return compactStrings([
-    setup.goal,
-    setup.openingScene,
-    setup.hook,
-    setup.conflict,
-  ]).join("；");
 }

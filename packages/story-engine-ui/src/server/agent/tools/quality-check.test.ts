@@ -30,8 +30,8 @@ async function makeProject(title: string): Promise<string> {
     rootDir,
     title,
     genre: "都市",
-    premise: "主角进入权力中心。",
-    mainCharacterName: "林远",
+    logline: "主角进入权力中心。",
+    protagonistName: "林远",
   });
   return projectDir;
 }
@@ -42,6 +42,7 @@ function longDraft(chapter: number): string {
 }
 
 async function writeDraft(projectDir: string, chapter: number, content: string): Promise<void> {
+  await mkdir(dirname(defaultDraftPath(projectDir, chapter)), { recursive: true });
   await writeFile(defaultDraftPath(projectDir, chapter), content, "utf-8");
 }
 

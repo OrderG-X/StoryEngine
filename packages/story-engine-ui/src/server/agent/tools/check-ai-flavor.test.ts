@@ -7,7 +7,8 @@ import type { ToolExecutionContext } from "@mastra/core/tools";
 import { createStoryProject } from "../../book/project-store.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { buildProjectRequestContext } from "../request-context.js";
-import { runCheckAiFlavorToolLogic, checkAiFlavorTool } from "./check-ai-flavor.js";
+import { cardWrite, runCommand } from "@actalk/story-core";
+import { gatherEstablishedElements, runCheckAiFlavorToolLogic, checkAiFlavorTool } from "./check-ai-flavor.js";
 
 // Mock LLM client so execute() tests don't require a real model.
 // 体检走流式（空闲超时、不设总上限）——故 mock streamChatModelToText，而非旧的阻塞式 callOpenAICompatibleChatModel。
@@ -23,7 +24,7 @@ vi.mock("../../lib/llm-client.js", () => ({
 
 async function setup(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "caf-"));
-  const { projectDir } = await createStoryProject({ rootDir: root, title: "测试", genre: "都市", premise: "x", mainCharacterName: "林远" });
+  const { projectDir } = await createStoryProject({ rootDir: root, title: "测试", genre: "都市", logline: "x", protagonistName: "林远" });
   await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
   await writeFile(defaultDraftPath(projectDir, 1), "# 第1章\n\n仿佛那一刻，他的心中五味杂陈。窗外下着雨。", "utf-8");
   return projectDir;
@@ -51,6 +52,22 @@ describe("runCheckAiFlavorToolLogic", () => {
     expect(out.violations[0].text).toContain("五味杂陈");
     expect("snapshotId" in out).toBe(false);
     expect("refreshScope" in out).toBe(false);
+  });
+});
+
+// 前文铺垫过的道具别被判「凭空出现」（Codex 组合复测 P2）：P9 起「前文已建立要素」里的物品名来自设定本的物品卡。
+describe("gatherEstablishedElements：设定本里的物品进「前文已建立要素」", () => {
+  it("物品卡的名字带上；人物、地点不算物品", async () => {
+    const projectDir = await setup();
+    const outcome = await runCommand(projectDir, cardWrite, { ops: [
+      { op: "card.create", kind: "item", name: "黑色胶带", fields: [{ label: "样子", value: "缠了半卷" }] },
+      { op: "card.create", kind: "place", name: "旧仓库" },
+    ] }, { caller: "author", idempotencyKey: "caf-cards" });
+    expect(outcome.ok).toBe(true);
+    const elements = await gatherEstablishedElements(projectDir, 1);
+    expect(elements).toContain("黑色胶带");
+    expect(elements).not.toContain("旧仓库");
+    expect(elements).not.toContain("林远");
   });
 });
 

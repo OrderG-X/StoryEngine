@@ -12,10 +12,10 @@ import { promisify } from "node:util";
 
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
-import { buildStateOverview } from "../book/state-overview.js";
+import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
-import { createStoryProject, PLACEHOLDER_PREMISE } from "../book/project-store.js";
-import { readChapterPaper, withBookLock } from "@actalk/story-core";
+import { createStoryProject } from "../book/project-store.js";
+import { CARD_NAME_MAX, FIELD_VALUE_MAX, readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   guardProjectPath,
@@ -94,9 +94,17 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
     const body = await readJsonBody(req);
     const draft = isRecord(body.draft) ? body.draft : {};
     const title = readString(draft.title) ?? "未命名故事";
-    const genre = readString(draft.genre) ?? "长篇故事";
-    const premise = readString(draft.logline) ?? readString(draft.worldPremise) ?? PLACEHOLDER_PREMISE;
-    const mainCharacterName = readString(draft.protagonistName) ?? "主角";
+    // 作者没填的就不写（不再落「长篇故事」「主角」这类占位，重构 P9）。
+    const genre = readString(draft.genre);
+    const logline = readString(draft.logline) ?? readString(draft.worldPremise);
+    const protagonistName = readString(draft.protagonistName);
+    const tooLong = protagonistName && Array.from(protagonistName).length > CARD_NAME_MAX
+      ? `主角名字最多 ${CARD_NAME_MAX} 个字`
+      : [genre, logline].some((text) => text && Array.from(text).length > FIELD_VALUE_MAX) ? `题材和一句话简介最多 ${FIELD_VALUE_MAX} 个字` : undefined;
+    if (tooLong) {
+      writeJson(res, 400, { ok: false, error: `没建书：${tooLong}。` });
+      return;
+    }
     const rootDir = readString(body.rootDir) ?? resolveBooksRootDir();
     // 建书同样过路径闸（与其余路由一致）：rootDir 直接来自客户端。
     // 唯一例外是配置的书库根本身——SE_BOOKS_DIR 覆盖到家目录外时，isSafeProjectPath 的覆盖分支
@@ -108,9 +116,9 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
     const created = await createStoryProject({
       rootDir,
       title,
-      genre,
-      premise,
-      mainCharacterName,
+      ...(genre ? { genre } : {}),
+      ...(logline ? { logline } : {}),
+      ...(protagonistName ? { protagonistName } : {}),
     });
     createdProjectDir = created.projectDir;
     const overview = await withUiOverviewDetails(created.projectDir, await buildStateOverview({ projectDir: created.projectDir, maxTimelineEvents: 8 }));
@@ -236,10 +244,10 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
           return {
             id: `project-${stableHash(projectDir)}`,
             title,
-            genre: "长篇故事",
+            genre: "",
             currentChapterTitle: "第 1 章",
             currentChapterNumber: 1,
-            protagonistName: "主角",
+            protagonistName: "",
             status: "草稿中" as const,
             updatedAt: formatRelativeTimeMs(lastActiveMs),
             lastActiveMs,
@@ -293,16 +301,15 @@ function stableHash(value: string): string {
 }
 
 function bookSummaryFromOverviewServer(
-  overview: { project: any; timeline: any; characters: any; world: any; storyStatus: any },
+  overview: Pick<StateOverview, "project" | "timeline" | "characters" | "storyStatus">,
   projectPath: string,
   lastActiveMs: number,
 ) {
   const proj = overview.project ?? {};
   const timeline = overview.timeline ?? {};
   const events = timeline.recentEvents ?? [];
-  const characters = overview.characters ?? {};
-  const world = overview.world ?? {};
-  const storyStatus = overview.storyStatus ?? {};
+  const characters = overview.characters;
+  const storyStatus = overview.storyStatus;
 
   const currentChapterNumber = proj.currentChapter ?? events.at(-1)?.chapter ?? 1;
   const currentEvent = events.find((e: any) => e.chapter === currentChapterNumber) ?? events.at(-1);
@@ -330,16 +337,17 @@ function bookSummaryFromOverviewServer(
   return {
     id: `project-${stableHash(projectPath)}`,
     title: projectTitle,
-    genre: proj.genre || "长篇故事",
+    genre: proj.genre,
     currentChapterTitle: chapterTitle,
     hasRealChapterTitle,
     currentChapterNumber,
-    protagonistName: characters.protagonist ?? characters.knownCharacters?.[0]?.name ?? "主角",
+    // 作者没标主角就空着（界面显示中性占位），不再编一个「主角」。
+    protagonistName: characters.protagonist ?? "",
     status: proj.currentChapter ? "可继续下一章" as const : "草稿中" as const,
     // 真实活跃时间（此前硬编码「刚刚」→ 书架上所有书永远显示刚刚）
     updatedAt: formatRelativeTimeMs(lastActiveMs),
     lastActiveMs,
-    logline: world.summary ?? storyStatus.currentObjective ?? "",
+    logline: proj.logline || storyStatus.currentObjective || "",
     writtenChapters,
     totalWords,
     projectPath,

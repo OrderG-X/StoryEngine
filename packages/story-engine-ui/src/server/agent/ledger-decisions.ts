@@ -22,7 +22,7 @@ import {
 
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
-import { runWithSnapshot, coreSnapshotFor } from "../lib/snapshot.js";
+import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;
@@ -226,15 +226,15 @@ export async function applyLedgerDecisions(projectDir: string, input: { readonly
   }
   if (decisions.length === 0) return { ok: false, applied: 0, summary: "没改账：按钮里没有要改的内容。" };
   const label = `agent:manage_ledger${input.label ? `:${input.label.slice(0, 40)}` : ""}`;
-  let run: { readonly snapshot: { readonly id: string }; readonly result: { applied: number; replayed: number; failures: string[]; mirrorOk: boolean } };
+  let run: { readonly snapshotId?: string; readonly result: { applied: number; replayed: number; failures: string[]; mirrorOk: boolean } };
   try {
-    // 存撤销点和记裁定在同一把项目锁里：撤销不会插进改账中间。
-    run = await runWithSnapshot(projectDir, label, async () => {
+    // 存撤销点和记裁定在同一把书锁里：撤销不会插进改账中间。真要写才存（全是重放、全没记上就不存）。
+    run = await runWithLazySnapshot(projectDir, async (snapshot) => {
       let applied = 0;
       let replayed = 0;
       const failures: string[] = [];
       for (const [index, decision] of decisions.entries()) {
-        const outcome = await runCommand(projectDir, decisionRecord, decision, { caller: "author", idempotencyKey: `${input.key}:${index}` });
+        const outcome = await runCommand(projectDir, decisionRecord, decision, { caller: "author", idempotencyKey: `${input.key}:${index}`, snapshot });
         if (outcome.ok) {
           if (outcome.replayed) replayed += 1;
           else applied += 1;
@@ -245,7 +245,7 @@ export async function applyLedgerDecisions(projectDir: string, input: { readonly
       const mirror = await syncLegacyMirror(projectDir);
       if (!mirror.ok) console.warn(`[manage_ledger] 改账后重生成老格式镜像没成：${mirror.reason}`);
       return { applied, replayed, failures, mirrorOk: mirror.ok };
-    });
+    }, label);
   } catch (error) {
     return { ok: false, applied: 0, summary: `没改账：没能先存撤销点（${error instanceof Error ? error.message : String(error)}），这次一条都没记。` };
   }
@@ -259,6 +259,6 @@ export async function applyLedgerDecisions(projectDir: string, input: { readonly
     ok: failures.length === 0 && applied + replayed > 0,
     applied,
     summary: parts.join(" "),
-    ...(applied > 0 ? { snapshotId: run.snapshot.id } : {}),
+    ...(applied > 0 && run.snapshotId ? { snapshotId: run.snapshotId } : {}),
   };
 }

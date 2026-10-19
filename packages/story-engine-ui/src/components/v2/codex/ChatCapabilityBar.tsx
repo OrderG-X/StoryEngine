@@ -2,7 +2,7 @@
  * ChatCapabilityBar —— 聊天区（右栏·唯一控制面）输入框上方的「能力快捷条」。
  *
  * 治「这么多能力用户不知道能用」：写作流程那几个工具已由 ChapterToolRail 按阶段列出；这里补上
- * **散的、非阶段性的资料/整理能力**（补全角色/世界观/地点/资产/写作规则、整理关系/清理线索/合并伏笔）——
+ * **散的、非阶段性的资料/整理能力**（补全人物/故事设定/地点/物品/写作规则、整理关系/清理线索/合并伏笔）——
  * 它们此前只散落在各资料面板按钮里、用户在聊天时看不见。高频几个常驻露脸，点「⋯ 更多」展开全部。
  *
  * 点一下：带 `button` 的是固定动作，直接发结构化动作（onChapterButton，重构 P4）；其余给 AI 发一句用户面中文（onSendMessage）。
@@ -26,8 +26,8 @@ const CONTINUITY: CapabilityAction = { key: "continuity", label: "核账", inten
 /** 收起时常驻露脸的高频能力（写作/补全/整理 各露一个代表，一眼看见最常用的）。 */
 export const QUICK_ACTIONS: readonly CapabilityAction[] = [
   CONTINUITY,
-  { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
-  { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+  { key: "char", label: "补全人物", intent: "帮我把人物卡补全一点：只补空着的，按正文里写过的来" },
+  { key: "rel", label: "整理人物关系", intent: "按正文里写过的，把人物之间的关系记进设定本" },
 ];
 
 /**
@@ -50,10 +50,11 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   {
     title: "补全",
     actions: [
-      { key: "char", label: "补全角色", intent: "帮我把现有角色补全一点" },
-      { key: "world", label: "补全世界观", intent: "帮我把世界观补全" },
-      { key: "loc", label: "补全地点", intent: "帮我把地点补全" },
-      { key: "asset", label: "补全道具与资源", intent: "帮我把道具与资源补全" },
+      { key: "char", label: "补全人物", intent: "帮我把人物卡补全一点：只补空着的，按正文里写过的来" },
+      { key: "uncard", label: "给没建卡的建卡", intent: "把账里出场过、还没建卡的人物建成卡，按正文里写过的填" },
+      { key: "world", label: "补全故事设定", intent: "帮我把故事设定补全一点：只补空着的" },
+      { key: "loc", label: "补全地点", intent: "帮我把地点卡补全一点：只补空着的，按正文里写过的来" },
+      { key: "asset", label: "补全物品", intent: "帮我把物品卡补全一点：只补空着的，按正文里写过的来" },
       { key: "rules", label: "补全写作规则", intent: "帮我把写作规则补全、整理本书文风特点" },
     ],
   },
@@ -61,7 +62,7 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
   {
     title: "整理",
     actions: [
-      { key: "rel", label: "整理角色关系", intent: "从本书已有的硬事实，整理一遍真实出现的人物名单和他们之间的关系" },
+      { key: "rel", label: "整理人物关系", intent: "按正文里写过的，把人物之间的关系记进设定本" },
       { key: "clean", label: "清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
       { key: "merge", label: "归并线索", intent: "把讲同一件事的重复线索归并成一条" },
     ],
@@ -87,12 +88,13 @@ export function contextActionsForView(view: "desk" | "library" | "history", cat:
   if (view === "history") return [UNDO_LAST];
   if (view !== "library") return null;
   const keysByCat: Record<string, readonly string[]> = {
-    world: ["world"],
+    story: ["world"],
     rules: ["rules"],
-    matrix: ["rel"],
     chars: ["char", "rel"],
-    assets: ["asset"],
+    relations: ["rel"],
+    items: ["asset"],
     places: ["loc"],
+    uncarded: ["uncard"],
     hooks: ["clean", "merge"],
   };
   const keys = keysByCat[cat];

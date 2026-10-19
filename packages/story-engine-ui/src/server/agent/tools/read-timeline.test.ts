@@ -4,18 +4,18 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 
-const { readTimelineEvents, readCharacterBible } = vi.hoisted(() => ({
+const { readTimelineEvents, readCharacterNameById } = vi.hoisted(() => ({
   readTimelineEvents: vi.fn(),
-  // participants 解析用：char-a→林明 / char-b→周冬（验「裸 char-id → 角色名」）。
-  readCharacterBible: vi.fn(async () => ({
-    version: "v0",
-    characters: [{ id: "char-a", name: "林明", role: "配角" }, { id: "char-b", name: "周冬", role: "配角" }],
-  })),
+  // participants 解析用：老镜像里的参与者可能还是老格式人物编号（char-a→林明 / char-b→周冬，验「裸 char-id → 角色名」）。
+  readCharacterNameById: vi.fn(async () => new Map([["char-a", "林明"], ["char-b", "周冬"]])),
 }));
 vi.mock("../../book/project-store.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readTimelineEvents,
-  readCharacterBible,
+}));
+vi.mock("../../writing/presence/entity-labels.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readCharacterNameById,
 }));
 
 import { buildProjectRequestContext } from "../request-context.js";
@@ -125,6 +125,19 @@ describe("read_timeline 按章/区间查询 timeline 事件", () => {
     // char-a/char-b → 名字；未登记的 char-hash → 中性占位（不泄露裸 id）。
     expect(out.events[0].participants).toEqual(["林明", "周冬", "「未知角色」"]);
     expect(out.events[0].participants.join("")).not.toContain("char-");
+  });
+
+  it("新镜像（legacy-mirror/2）里参与者已经是名字：原样给，不当成编号去解析", async () => {
+    readTimelineEvents.mockResolvedValue([{
+      id: "ch0004-001",
+      chapter: 4,
+      summary: "第4章",
+      participants: ["沈青禾", "周守义"],
+      effects: { semanticSummary: { mainEvent: "钥匙锁进铜盒", participants: ["沈青禾"] } },
+    }] as never);
+    const out = await run({ chapter: 4 }, ctx);
+    expect(out.events[0].participants).toEqual(["沈青禾", "周守义"]);
+    expect(out.events[0].semanticSummary.participants).toEqual(["沈青禾"]);
   });
 
   it("缺 projectDir → 抛错（绝不静默失败）", async () => {

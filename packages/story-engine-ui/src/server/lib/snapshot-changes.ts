@@ -9,6 +9,10 @@ import { humanizeUndoLabel, type CommitFileChange, type SnapshotEntry } from "./
 
 /** 资料文件 → 设定本里的叫法（顺序即展示顺序）。 */
 const AREA_FILES: readonly (readonly [RegExp, string])[] = [
+  // 真相文件（重构 P9）：设定卡、每章账单、作者改账的裁定。
+  [/^ledger\/cards\.json$/u, "设定本"],
+  [/^ledger\/chapters\/\d+\.json$/u, "每章的账"],
+  [/^ledger\/decisions\.json$/u, "改账记录"],
   [/^story\/character-bible\.json$/u, "角色设定"],
   [/^story\/character-matrix\.json$/u, "角色关系"],
   [/^story\/(?:threads|hooks)\.json$/u, "伏笔与线索"],
@@ -139,6 +143,9 @@ const OP_NAMES: Readonly<Record<string, string>> = {
 
 /** 撤销回执用的短语（与 AREA_FILES 同一批路径，但更短：回执里是名词不是整句）。顺序即展示顺序。 */
 const REVERT_AREA_FILES: readonly (readonly [RegExp, string])[] = [
+  [/^ledger\/cards\.json$/u, "设定本"],
+  [/^ledger\/chapters\/\d+\.json$/u, "每章的账"],
+  [/^ledger\/decisions\.json$/u, "改账记录"],
   [/^story\/character-bible\.json$/u, "角色名册"],
   [/^story\/character-matrix\.json$/u, "角色关系"],
   [/^story\/(?:threads|hooks)\.json$/u, "线索"],
@@ -162,9 +169,9 @@ const REVERT_MAX_ITEMS = 8;
  * ——都不是作者写的故事内容。复验实锤：撤销出稿那步连带回退 chapter-workspaces / continuity-checks /
  * diagnostics 各一份，回执却报「其他文件 4 个」，作者看不出是什么。agents/、.story-engine-tx/、
  * metrics（=.story-engine-ui/metrics/）与 snapshot.ts 的快照排除目录同源：本就不入快照，
- * 老书残留里可能仍出现，一并跳过。
+ * 老书残留里可能仍出现，一并跳过。核心的版本号 ledger/head.json 和防重复回执 ledger/receipts/ 也是内部记录。
  */
-const INTERNAL_REVERT_PATH = /^(?:\.story-engine-ui\/|\.story-engine-tx\/|diagnostics\/|metrics\/|agents\/)/u;
+const INTERNAL_REVERT_PATH = /^(?:\.story-engine-ui\/|\.story-engine-tx\/|diagnostics\/|metrics\/|agents\/|ledger\/head\.json$|ledger\/receipts\/)/u;
 
 /**
  * 作者看得懂的目录的兜底短语：目录里没被具体规则认出的文件按目录给人话，绝不折进「其他文件」

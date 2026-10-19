@@ -5,13 +5,10 @@
  *  - 标记：用浏览器的 CSS Custom Highlight API 给正文里出现的角色名画虚下划线（不改 DOM、不进文档模型、不影响编辑与保存）；
  *  - 触发：鼠标在名字上停 450ms 弹出速览卡，移开即收；按任意键 / 滚动也收起，不打扰打字。
  * 浏览器不支持 Highlight API 时只是没有下划线，悬停速览照常可用。只读展示，不写任何数据。
+ * 重构 P9：名单和卡片内容来自设定视图（人物卡 + 别名 + 账里用过的称呼；卡上前几栏、关系、账里记的现状）。
  */
 import { useEffect, useRef, useState } from "react";
-import type { StateOverviewCharacterMatrix } from "../../../api/types.js";
-
-const LEAD_ROLES = new Set(["主角", "protagonist"]);
-
-type MatrixCharacter = StateOverviewCharacterMatrix["characters"][number];
+import type { NamePeekCard } from "./bibleIndex.js";
 
 export interface NameOccurrence {
   readonly start: number;
@@ -46,7 +43,7 @@ const HIGHLIGHT_NAME = "se-char-names";
 const HOVER_DELAY_MS = 450;
 
 interface PeekState {
-  readonly character: MatrixCharacter;
+  readonly card: NamePeekCard;
   readonly top: number;
   readonly left: number;
 }
@@ -69,25 +66,19 @@ function caretAt(x: number, y: number): { node: Node; offset: number } | null {
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
 }
 
-function firstLine(values: readonly (string | undefined)[]): string {
-  for (const value of values) if (value && value.trim()) return value.trim();
-  return "";
-}
-
 export function NamePeek({
   stageRef,
-  matrix,
+  cards,
   contentKey,
   onOpenCharacter,
 }: {
   readonly stageRef: React.RefObject<HTMLDivElement | null>;
-  readonly matrix: StateOverviewCharacterMatrix | undefined;
+  readonly cards: readonly NamePeekCard[];
   /** 正文变了（换章 / 流式写入 / 编辑）就重算下划线。 */
   readonly contentKey: string;
   readonly onOpenCharacter?: (name: string) => void;
 }) {
-  const characters = matrix?.characters ?? [];
-  const names = characters.map((c) => c.name).filter(Boolean);
+  const names = cards.flatMap((card) => card.terms);
   const namesKey = names.join("|");
   const [peek, setPeek] = useState<PeekState | null>(null);
   const hoverTimer = useRef<number | null>(null);
@@ -169,11 +160,11 @@ export function NamePeek({
       clearHover();
       const target = hit;
       hoverTimer.current = window.setTimeout(() => {
-        const character = characters.find((c) => c.name === target.name);
+        const card = cards.find((item) => item.terms.includes(target.name));
         const stageRect = stage.getBoundingClientRect();
-        if (!character) return;
+        if (!card) return;
         const left = Math.max(12, Math.min(target.rect.left - stageRect.left - 12, stageRect.width - 332));
-        setPeek({ character, top: target.rect.bottom - stageRect.top + 8, left });
+        setPeek({ card, top: target.rect.bottom - stageRect.top + 8, left });
       }, HOVER_DELAY_MS);
     };
     const onLeave = () => { clearHover(); hoveredName.current = null; scheduleClose(); };
@@ -197,32 +188,27 @@ export function NamePeek({
   useEffect(() => { setPeek(null); }, [contentKey]);
 
   if (!peek) return null;
-  const c = peek.character;
-  const identity = firstLine([c.identity, c.role]);
-  const now = firstLine([c.currentGoal, c.mood, c.currentLocation ? `在${c.currentLocation}` : undefined, c.recentEvents?.[0]]);
-  const unknown = firstLine([c.unknownTruths?.[0]]);
-  // 主角本人不显示「和主角」。
-  const relation = LEAD_ROLES.has((c.role ?? "").trim().toLowerCase()) ? "" : firstLine([c.relationshipToProtagonist]);
+  const c = peek.card;
+  const empty = c.lines.length === 0 && c.relations.length === 0 && c.now.length === 0;
   return (
     <div
       className="se-name-peek"
       role="dialog"
-      aria-label={`${c.name}的角色速览`}
+      aria-label={`${c.name}的速览`}
       style={{ top: peek.top, left: peek.left }}
       onMouseEnter={() => { if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; } }}
       onMouseLeave={() => { closeTimer.current = window.setTimeout(() => { setPeek(null); hoveredName.current = null; }, 200); }}
     >
       <div className="se-peek-h">
         <span className="se-peek-av" aria-hidden="true">{c.name.slice(0, 1)}</span>
-        <div className="se-peek-who"><b>{c.name}</b><span>{c.role || "角色"}</span></div>
+        <div className="se-peek-who"><b>{c.name}</b><span>{c.protagonist ? "主角" : "人物"}</span></div>
       </div>
-      <dl className="se-peek-kv">
-        {identity && identity !== c.role ? (<><dt>身份</dt><dd>{identity}</dd></>) : null}
-        {relation ? (<><dt>和主角</dt><dd>{relation}</dd></>) : null}
-        {now ? (<><dt>此刻</dt><dd>{now}</dd></>) : null}
-        {unknown ? (<><dt>还不知道</dt><dd>{unknown}</dd></>) : null}
-        {!identity && !relation && !now && !unknown ? (<><dt>资料</dt><dd>这个角色还没有详细资料，可以让 AI 补全。</dd></>) : null}
-      </dl>
+      <ul className="se-peek-lines">
+        {c.lines.map((line) => <li key={line}>{line}</li>)}
+        {c.relations.slice(0, 2).map((line) => <li key={line}>{line}</li>)}
+        {c.now.map((line) => <li key={line} className="is-now">{line}</li>)}
+        {empty ? <li className="is-empty">卡上还没写东西。</li> : null}
+      </ul>
       {onOpenCharacter ? (
         <div className="se-peek-f">
           <button type="button" onClick={() => { setPeek(null); onOpenCharacter(c.name); }}>在设定本中打开</button>

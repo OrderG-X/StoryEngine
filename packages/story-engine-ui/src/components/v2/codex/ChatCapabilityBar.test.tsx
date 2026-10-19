@@ -21,11 +21,11 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     expect(container.querySelector(".cap-panel")).toBeNull();
   });
 
-  it("点高频按钮 → 发对应用户面意图（补全角色）", () => {
+  it("点高频按钮 → 发对应用户面意图（补全人物）", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} />);
-    fireEvent.click(btnByText(container, "补全角色")!);
-    expect(onSend).toHaveBeenCalledWith("帮我把现有角色补全一点");
+    fireEvent.click(btnByText(container, "补全人物")!);
+    expect(onSend).toHaveBeenCalledWith("帮我把人物卡补全一点：只补空着的，按正文里写过的来");
   });
 
   it("点「更多」展开，显示 写作/补全/整理 分组与全部能力", () => {
@@ -37,7 +37,8 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
     expect(text).toContain("内容审阅");     // 写作组
     expect(text).toContain("检查机器腔");   // 写作组
     expect(text).toContain("定稿");         // 写作组
-    expect(text).toContain("补全世界观");
+    expect(text).toContain("补全故事设定");
+    expect(text).toContain("给没建卡的建卡");
     expect(text).toContain("归并线索");
     // 分组标题
     expect([...panel!.querySelectorAll(".cap-group-title")].map((e) => e.textContent)).toEqual(["写作", "补全", "整理"]);
@@ -72,7 +73,7 @@ describe("ChatCapabilityBar · 聊天区能力快捷条", () => {
   it("disabled 时点了不发", () => {
     const onSend = vi.fn();
     const { container } = render(<ChatCapabilityBar onSendMessage={onSend} disabled />);
-    fireEvent.click(btnByText(container, "补全角色")!);
+    fireEvent.click(btnByText(container, "补全人物")!);
     expect(onSend).not.toHaveBeenCalled();
   });
 });
@@ -99,10 +100,11 @@ describe("ChatCapabilityBar · 本章进度工具并入同一排", () => {
 describe("contextActionsForView 快捷条随页面", () => {
   it("写作台不给（照旧按进度）；设定本按分类；历史给撤销上一步；时间线不给", async () => {
     const { contextActionsForView } = await import("./ChatCapabilityBar.js");
-    expect(contextActionsForView("desk", "world")).toBeNull();
-    expect(contextActionsForView("library", "chars")?.map((a) => a.label)).toEqual(["补全角色", "整理角色关系"]);
+    expect(contextActionsForView("desk", "story")).toBeNull();
+    expect(contextActionsForView("library", "chars")?.map((a) => a.label)).toEqual(["补全人物", "整理人物关系"]);
+    expect(contextActionsForView("library", "uncarded")?.map((a) => a.label)).toEqual(["给没建卡的建卡"]);
     expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["清理废弃线索", "归并线索"]);
     expect(contextActionsForView("library", "timeline")).toBeNull();
-    expect(contextActionsForView("history", "world")?.map((a) => a.label)).toEqual(["撤销上一步"]);
+    expect(contextActionsForView("history", "story")?.map((a) => a.label)).toEqual(["撤销上一步"]);
   });
 });

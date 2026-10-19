@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DraftRevisionTask } from "../../../api/types.js";
-import { mockSidebarData, mockWorkspaceData } from "../../../mockData.js";
+import { mockWorkspaceData } from "../../../mockData.js";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import RevisionPreviewModal from "./RevisionPreviewModal.js";
 
@@ -23,7 +23,6 @@ function makeTask(): DraftRevisionTask {
 function baseProps(overrides: Partial<WritingWorkspaceLayoutProps> = {}): WritingWorkspaceLayoutProps {
   return {
     workspace: mockWorkspaceData,
-    sidebar: mockSidebarData,
     themeMode: "dark",
     steeringDirection: "",
     onSteeringDirectionChange: () => undefined,

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -14,7 +15,6 @@ const storyEngineMocks = vi.hoisted(() => ({
   checkDraftBeforeCommit: vi.fn(),
   fallbackDraftAIReviewReport: vi.fn(),
   parseDraftAIReviewReport: vi.fn(),
-  readWritingRules: vi.fn(),
   renderFastDraftPromptText: vi.fn(),
   runFastDraft: vi.fn(),
 }));
@@ -24,19 +24,6 @@ const lengthFakes = vi.hoisted(() => {
     lowerBound: Math.max(300, Math.floor(requested * 0.85)),
     upperBound: Math.ceil((requested * 115) / 100),
   });
-  const resolveDraftLengthTarget = (input: { readonly chapterGoal?: string; readonly requestedDraftLength?: number; readonly writingRules?: unknown }) => {
-    const explicitMatch = input.chapterGoal?.match(/(?:约|大约|左右|控制在|写到|写成|先写|写)?\s*(\d{3,5})\s*(?:字|个字|中文字符)/u);
-    const chapterLength = typeof input.writingRules === "object" && input.writingRules !== null && "chapterLength" in input.writingRules
-      ? (input.writingRules as { readonly chapterLength?: { readonly targetWords?: number } }).chapterLength
-      : undefined;
-    const requested = input.requestedDraftLength ?? (explicitMatch?.[1] ? Number(explicitMatch[1]) : undefined) ?? chapterLength?.targetWords ?? 1800;
-    const source = input.requestedDraftLength ?? explicitMatch?.[1]
-      ? "user"
-      : chapterLength?.targetWords
-        ? "writing_rules"
-        : "default";
-    return { requested, source, ...requestedDraftLengthBounds(requested) };
-  };
   const countDraftChineseCharacters = (value: string) => (value.match(/[\u3400-\u9fff]/gu) ?? []).length;
   const buildDraftLengthReport = (input: { readonly draftBody: string; readonly lengthTarget: { readonly requested: number; readonly lowerBound: number; readonly upperBound: number; readonly source: string }; readonly finalLengthAfterTrim?: number; readonly whetherTrimmed?: boolean }) => {
     const actualLength = countDraftChineseCharacters(input.draftBody);
@@ -78,7 +65,6 @@ const lengthFakes = vi.hoisted(() => {
     buildFastDraftRetryPrompt: (prompt: string, target?: { readonly requested: number; readonly lowerBound: number; readonly upperBound: number }) => `${prompt}\n目标长度：${target?.lowerBound}-${target?.upperBound} 个中文字符`,
     countDraftChineseCharacters,
     trimDraftBodyToLengthTarget,
-    resolveDraftLengthTarget,
     requestedDraftLengthBounds,
     resolveDraftMaxOutputTokens: (target: { readonly upperBound: number }) => Math.max(360, Math.min(4096, Math.ceil(target.upperBound / 1.35) + 220)),
   };
@@ -90,10 +76,6 @@ vi.mock("../writing/draft-length-control.js", async (importOriginal) => ({
 vi.mock("../book/state-overview.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildStateOverview: storyEngineMocks.buildStateOverview,
-}));
-vi.mock("../book/project-store.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  readWritingRules: storyEngineMocks.readWritingRules,
 }));
 vi.mock("../writing/draft-ai-review.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -150,7 +132,7 @@ vi.mock("../lib/quality-judge.js", () => ({
 }));
 
 const presenceMocks = vi.hoisted(() => ({
-  resolveSelectedCharacterIds: vi.fn(),
+  resolveInSceneCharacters: vi.fn(),
 }));
 
 vi.mock("../writing/presence/in-scene-detector.js", () => ({
@@ -159,15 +141,17 @@ vi.mock("../writing/presence/in-scene-detector.js", () => ({
 
 import { __draftRouteTest, registerDraftRoutes } from "./draft.js";
 
-const { buildStateOverview, buildWriterContext, readWritingRules, renderFastDraftPromptText, runFastDraft } = storyEngineMocks;
+const { buildStateOverview, buildWriterContext, renderFastDraftPromptText, runFastDraft } = storyEngineMocks;
 const { callOpenAICompatibleChatModel, createConfiguredWriterClient, resolveConfiguredChatModel, streamOpenAICompatibleResponse } = llmClientMocks;
-const { resolveSelectedCharacterIds } = presenceMocks;
+const { resolveInSceneCharacters } = presenceMocks;
 
+// 字数只认结构化的 requestedDraftLength，不从本章方向那句话里抠数字（重构 P7「不猜」）；写作规则来自设定卡（重构 P9）。
 describe("draft length target helpers", () => {
   it("prefers explicit user target over project writing rules", () => {
     const target = __draftRouteTest.resolveDraftLengthTarget({
       chapterGoal: "这一章约700字，写紧凑一点。",
-      writingRules: { chapterLength: { targetWords: 1800 } },
+      requestedDraftLength: 700,
+      lengthRules: { targetWords: 1800 },
     });
 
     expect(target).toMatchObject({
@@ -178,10 +162,10 @@ describe("draft length target helpers", () => {
     });
   });
 
-  it("uses writing rules target when the user does not specify length", () => {
+  it("uses writing rules target when the user does not specify length（方向里写的数字不算）", () => {
     const target = __draftRouteTest.resolveDraftLengthTarget({
-      chapterGoal: "继续推进主角进入审计楼。",
-      writingRules: { chapterLength: { targetWords: 700 } },
+      chapterGoal: "继续推进主角进入审计楼，写 3000 字。",
+      lengthRules: { targetWords: 700 },
     });
 
     expect(target).toMatchObject({
@@ -201,7 +185,6 @@ describe("draft length guard routes", () => {
     buildStateOverview.mockResolvedValue({ project: { title: "测试项目" } });
     buildWriterContext.mockResolvedValue({ sections: [] });
     renderFastDraftPromptText.mockReturnValue("写作提示");
-    readWritingRules.mockResolvedValue({ version: "v0", chapterLength: { targetWords: 700 } });
     createConfiguredWriterClient.mockResolvedValue({ generateDraft: vi.fn() });
     resolveConfiguredChatModel.mockResolvedValue({
       provider: { baseUrl: "https://example.invalid" },
@@ -214,16 +197,13 @@ describe("draft length guard routes", () => {
       raw: "{}",
       response: { ok: true, status: 200 },
     });
-    resolveSelectedCharacterIds.mockImplementation(async (input: { readonly explicit?: readonly string[] }) => ({
-      selectedCharacterIds: input.explicit ?? ["auto-guo"],
-      trace: {
-        selectedCharacterIds: input.explicit ?? ["auto-guo"],
-        selectedNames: input.explicit ? ["显式角色"] : ["林远"],
-        byId: {},
-        prevChapterFound: false,
-        explicit: input.explicit !== undefined,
-      },
-      summary: input.explicit ? "本章相关角色：显式角色" : "本章相关角色：林远",
+    resolveInSceneCharacters.mockImplementation(async (input: { readonly explicit?: readonly string[] }) => ({
+      selected: input.explicit ?? ["林远"],
+      reasons: {},
+      prevChapterFound: false,
+      explicit: input.explicit !== undefined,
+      cappedOutNames: [],
+      summary: `本章相关人物：${(input.explicit ?? ["林远"]).join("、")}`,
     }));
   });
 
@@ -263,6 +243,33 @@ describe("draft length guard routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.payload.contextBudget).toMatchObject({ droppedSections: ["timeline_events"] });
+  });
+
+  it("作者点名的人物（selectedCharacters，名字）交给在场检测当显式名单，选中的名字交给写手", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-cast-");
+    await writeProjectJson(projectDir);
+    runFastDraft.mockResolvedValueOnce({
+      chapter: 1,
+      passed: true,
+      draftBody: "苏晴推门进来。",
+      title: "候选正文",
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: { hash: "test", sections: [] },
+      issues: [],
+    });
+
+    const response = await callDraftRoute("/api/draft/generate", {
+      projectPath: projectDir,
+      chapter: 1,
+      chapterGoal: "再来一版。",
+      persist: false,
+      selectedCharacters: ["苏晴", " "],
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveInSceneCharacters).toHaveBeenCalledWith(expect.objectContaining({ explicit: ["苏晴"] }));
+    expect(runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ selectedCharacters: ["苏晴"] }));
+    expect(response.payload.characterSelection).toMatchObject({ selected: ["苏晴"], explicit: true });
   });
 
   it("重构 P4：落盘出稿的 HTTP 路已撤（persist 不是 false 一律 410，不调模型、不写盘）", async () => {

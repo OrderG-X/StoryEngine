@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPaletteGroups, parsePaletteCharacters } from "./CommandPalette.js";
+import { buildPaletteGroups } from "./CommandPalette.js";
 
 const ch = (n: number, title: string, status: "committed" | "draft" | "planned" = "committed") => ({ id: `c${n}`, chapterNumber: n, title, status });
 
@@ -12,9 +12,9 @@ describe("改版 ⌘K 面板：分组与过滤", () => {
     onPickChapter: vi.fn(), onPickCharacter: vi.fn(), onPickSetting: vi.fn(),
   };
 
-  it("空查询：最近章节（新章在上、剥掉重复章号前缀、不含未写的占位章）+ 角色 + 命令", () => {
+  it("空查询：最近章节（新章在上、剥掉重复章号前缀、不含未写的占位章）+ 人物 + 命令", () => {
     const groups = buildPaletteGroups({ ...base, query: "" });
-    expect(groups.map((g) => g.title)).toEqual(["章节", "角色", "命令"]);
+    expect(groups.map((g) => g.title)).toEqual(["章节", "人物", "命令"]);
     expect(groups[0]?.items[0]?.label).toBe("第 58 章 · 西侧二层");
   });
 
@@ -34,15 +34,18 @@ describe("改版 ⌘K 面板：分组与过滤", () => {
     const setting = groups.find((g) => g.title === "设定");
     expect(setting?.items[0]?.hint).toBe("地点");
     setting?.items[0]?.run();
-    expect(base.onPickSetting).toHaveBeenCalledWith("places");
+    expect(base.onPickSetting).toHaveBeenCalledWith("places", undefined);
   });
 
-  it("parsePaletteCharacters：只认角色卡 JSON，去重，坏串跳过不露原文", () => {
-    expect(parsePaletteCharacters([
-      JSON.stringify({ name: "周屿", role: "主角" }),
-      JSON.stringify({ name: "周屿", role: "主角" }),
-      "不是 JSON",
-      JSON.stringify({ role: "无名" }),
-    ])).toEqual([{ name: "周屿", role: "主角" }]);
+  it("命中某张卡上的字：点了跳过去并展开那张卡", () => {
+    const onPickSetting = vi.fn();
+    const groups = buildPaletteGroups({
+      ...base,
+      onPickSetting,
+      librarySources: [{ cat: "chars", catLabel: "人物", focus: "沈栀", items: ["沈栀", "身份：咖啡馆老板"] }],
+      query: "老板",
+    });
+    groups.find((g) => g.title === "设定")?.items[0]?.run();
+    expect(onPickSetting).toHaveBeenCalledWith("chars", "沈栀");
   });
 });

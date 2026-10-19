@@ -1,6 +1,7 @@
 import type { CommitQualityReport } from "./commit-quality-check.js";
 import type { StateOverview } from "../book/state-overview.js";
 import type { WritingContextPack } from "./writing-context-pack.js";
+import { renderSettingPack } from "./setting-pack.js";
 
 export type DraftAIReviewVerdict = "ready_to_commit" | "needs_minor_revision" | "needs_major_revision" | "blocked";
 
@@ -63,12 +64,6 @@ export interface BuildDraftAIReviewPromptInput {
 export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): string {
   const pack = input.writingContextPack;
   const overview = input.stateOverview;
-  const protectedTerms = unique([
-    ...(pack?.worldRulesContext.protectedSecrets ?? []),
-    ...(pack?.worldRulesContext.hiddenTruths ?? []),
-    ...(pack?.protagonistContext.forbiddenReveals ?? []),
-    ...(pack?.protagonistContext.unknownTruths ?? []),
-  ]).slice(0, 20);
   const contextSummary = {
     chapter: input.chapter,
     chapterGoal: input.chapterGoal ?? pack?.chapterTask.currentChapterGoal ?? "",
@@ -79,71 +74,14 @@ export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): 
       currentChapter: overview.project.currentChapter,
       storyStatus: overview.storyStatus,
     } : undefined,
-    protagonist: pack ? {
-      name: pack.protagonistContext.name,
-      age: pack.protagonistContext.age,
-      identity: pack.protagonistContext.identity,
-      currentGoal: pack.protagonistContext.currentGoal,
-      weakness: pack.protagonistContext.weakness,
-      behaviorBoundaries: pack.protagonistContext.behaviorBoundaries,
-      speechStyle: pack.protagonistContext.speechStyle,
-      speechSamples: pack.protagonistContext.speechSamples,
-      knownFacts: pack.protagonistContext.knownFacts,
-      unknownTruths: pack.protagonistContext.unknownTruths,
-      cannotDo: pack.protagonistContext.cannotDo,
-    } : overview?.characterMatrix ? {
-      characters: overview.characterMatrix.characters.slice(0, 6).map((character) => ({
-        name: character.name,
-        role: character.role,
-        age: character.age,
-        identity: character.identity,
-        currentGoal: character.currentGoal,
-        speechStyle: character.speechStyle,
-      })),
-    } : undefined,
-    location: pack ? {
-      requiredCurrentLocation: pack.locationContext.requiredCurrentLocation,
-      openingLocation: pack.locationContext.openingLocation,
-      spatialStructure: pack.locationContext.spatialStructure,
-      travelRules: pack.locationContext.travelRules,
-      risks: pack.locationContext.locationRisks,
-      resources: pack.locationContext.locationResources,
-      fixedFacts: pack.locationContext.fixedFacts,
-    } : overview?.locationDetailSummary,
-    assets: pack ? {
-      carriedAssets: pack.assetContext.carriedAssets,
-      ownedAssets: pack.assetContext.ownedAssets,
-      unavailableAssets: pack.assetContext.unavailableAssets,
-      plotCriticalAssets: pack.assetContext.plotCriticalAssets,
-      assetHardRules: pack.assetContext.assetHardRules,
-    } : overview?.assetSummary,
-    writingRules: pack ? {
-      narrativePerspective: pack.writingRulesContext.narrativePerspective,
-      proseStyle: pack.writingRulesContext.proseStyle,
-      pacing: pack.writingRulesContext.pacing,
-      revealPolicy: pack.writingRulesContext.revealPolicy,
-      targetChapterWords: pack.writingRulesContext.targetChapterWords,
-      forbiddenContent: pack.writingRulesContext.forbiddenContent,
-      doNotDo: pack.writingRulesContext.doNotDo,
-      readerExperienceRules: pack.writingRulesContext.readerExperienceRules,
-      ...(pack.writingRulesContext.customNotes ? { customNotes: pack.writingRulesContext.customNotes } : {}),
-    } : undefined,
+    hardConstraints: pack?.hardConstraints,
     continuityFocus: pack?.continuityFocus,
-    // E3（B）：把全角色（含非主角）的 appearanceAnchors 透进上下文——上面的 protagonist 分支只覆盖主角且不含
-    // 锚点，故单独透传，让 LLM 审稿层能看见并 flag 角色卡内部「同属性互斥」矛盾（fuzzy/确定性都够不着的语义冲突）。
-    // 锚点已在 state-overview 经 dedupeAppearanceAnchors 去重（E1）。只读、不改盘。
-    characterCardAnchors: overview?.characterMatrix?.characters
-      ? overview.characterMatrix.characters
-        .filter((character) => (character.appearanceAnchors?.length ?? 0) > 0)
-        .slice(0, 12)
-        .map((character) => ({ name: character.name, appearanceAnchors: character.appearanceAnchors.slice(0, 12) }))
-      : undefined,
-    protectedTerms,
     deterministicQuality: input.deterministicQuality ? {
       passed: input.deterministicQuality.passed,
       issues: input.deterministicQuality.issues.slice(0, 20),
     } : undefined,
   };
+  const settingText = pack ? renderSettingPack(pack.setting).join("\n").trim() : "";
 
   return [
     "你是 StoryEngine-NG 的“审稿老师”，不是写手。",
@@ -152,9 +90,9 @@ export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): 
     "",
     "硬性规则：",
     "1. 不改正文，不输出重写全文，不输出整章改写。",
-    "2. 不泄露 protectedSecrets / forbiddenReveals / hiddenTruths。",
-    "3. 不建议主角知道 unknownTruths。",
-    "4. 不建议违反资产、地点、移动规则、角色边界或说话风格。",
+    "2. 不泄露设定里写着还没揭开、不能说破的内容。",
+    "3. 不建议让人物知道他此刻不该知道的事。",
+    "4. 不建议违反设定卡（人物、地点、物品、规矩）和写作规则。",
     "5. 只给明确、可执行的修改建议。",
     "6. 如果草稿有明显高风险问题，verdict 必须是 needs_major_revision 或 blocked。",
     "7. 输出必须是 JSON 对象，不能有 Markdown 包裹。",
@@ -163,12 +101,12 @@ export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): 
     "必须审查：",
     "- 剧情质量：本章事件、冲突、推进、悬念、水文、是否偏离目标。",
     "- 节奏：开头抓人、中段拖沓、信息揭示速度、结尾追读点、场景转换。",
-    "- 人物：人设、speechStyle / speechSamples、对话自然度、降智、开挂、情绪跳跃。",
-    "- 文风：Writing Rules、proseStyle、pacing、是否设定说明书、解释过多、细节不足。",
-    "- 连续性：上一章承接、State Overview、Writing Context Pack、角色/地点/资产/知识边界。",
-    "- 角色连续性必须单独检查：同名人物的他/她、身份、年龄、关系、立场不能前后漂移；正文出现未登记新人物时，必须指出需要进入人物矩阵或角色档案。",
-    "- 角色卡内部一致性必须单独检查：看 contextSummary.characterCardAnchors，若同一角色的同一属性（年龄/身高/外貌等）出现互斥取值（如同时写“二十六七岁”和“三十出头”），在 issues 里如实指出（category=character）、不臆断替用户改写；注意区分“看起来X、实际Y”这类合法的观感vs实情描写，不算矛盾。",
-    "- 地点/资产连续性必须单独检查：不能把一句动作描述当成地点名，不能把现金流/公司资金误判成主角持有现金。",
+    "- 人物：人设、说话方式、对话自然度、降智、开挂、情绪跳跃。",
+    "- 文风：写作规则、是否写成设定说明书、解释过多、细节不足。",
+    "- 连续性：上一章承接、设定卡、账里记的现状、已确立事实、谁知道什么。",
+    "- 角色连续性必须单独检查：同名人物的他/她、身份、年龄、关系、立场不能前后漂移；正文出现设定本里没有的新人物时指出来（作者可以给他建卡）。",
+    "- 设定卡内部一致性必须单独检查：同一张卡里同一属性（年龄/身高/外貌等）写了互斥的取值（如同时写“二十六七岁”和“三十出头”），在 issues 里如实指出（category=character）、不臆断替作者改写；注意区分“看起来X、实际Y”这类合法的观感vs实情描写，不算矛盾。",
+    "- 地点/物品连续性必须单独检查：不能把一句动作描述当成地点名；物品此刻在谁手里、在哪，以账里记的现状和前文为准。",
     "- 入库建议：是否建议入库、是否先修改、高风险问题、最需要改的段落。",
     "",
     "JSON 格式：",
@@ -204,6 +142,7 @@ export function buildDraftAIReviewPrompt(input: BuildDraftAIReviewPromptInput): 
       blockingReasons: ["阻断原因"],
     }, null, 2),
     "",
+    ...(settingText ? ["设定（设定卡 + 账里记的现状）：", settingText, ""] : []),
     "上下文摘要：",
     JSON.stringify(contextSummary, null, 2),
     "",
@@ -351,6 +290,3 @@ function extractJsonObject(raw: string): string | null {
   return raw.slice(start, end + 1).trim();
 }
 
-function unique(values: readonly string[]): readonly string[] {
-  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
-}
