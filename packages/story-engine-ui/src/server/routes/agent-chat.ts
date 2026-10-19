@@ -31,7 +31,7 @@ import { qualityCheckTool } from "../agent/tools/quality-check.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
-import { describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
@@ -386,7 +386,9 @@ export async function runAgentTurn(args: {
         finishReason = chunk.payload?.stepResult?.reason;
         const sample = sampleFromSdkUsage(chunk.payload?.output?.usage);
         recordAgentUsage(sample, chunk.payload?.output?.steps?.length || 1);
-        if (args.model) void recordUsage({ task: "triage", ...args.model, sample });
+        // 这轮换成了备用模型就记到备用名下（主模型没连上的请求不出 token）。
+        const usedModel = currentAgentFallback() ?? args.model;
+        if (usedModel) void recordUsage({ task: "triage", ...usedModel, sample });
         break;
       }
       default:

@@ -15,7 +15,7 @@ import {
   type ResolvedChatModel,
 } from "../lib/llm-client.js";
 import { thinkingRequestParams, type ThinkingDialect } from "../lib/model-capabilities.js";
-import { recordTurnNotice } from "../lib/token-meter.js";
+import { recordAgentFallback, recordTurnNotice } from "../lib/token-meter.js";
 import { modelNeedsMfjs, sanitizeRequestToolSchemas } from "../lib/strict-tool-schema.js";
 
 /** 从 fetch 入参抠请求 URL 的 host（能力键的一半；string/URL/Request 三种形态都接，抠不出 → ""）。 */
@@ -350,6 +350,8 @@ export async function resolveGlmModel(task: ModelTaskProfileKey): Promise<{
         toBaseURL: fallback.provider.baseUrl.replace(/\/+$/u, ""),
         apiKey: fallback.apiKey,
         modelId: fallback.profile.model,
+        provider: fallback.provider.id,
+        ...(fallback.provider.label ? { providerLabel: fallback.provider.label } : {}),
         notice: fallbackNotice(configured, fallback),
       })
       : primaryFetch,
@@ -371,6 +373,9 @@ export interface AgentModelFallback {
   readonly toBaseURL: string;
   readonly apiKey: string;
   readonly modelId: string;
+  /** 备用模型的服务商（换成了记用量用）。 */
+  readonly provider: string;
+  readonly providerLabel?: string;
   /** 换成了要告诉作者的一句话。 */
   readonly notice: string;
 }
@@ -402,6 +407,7 @@ export function withModelFallback(primaryFetch: typeof fetch, fallback: AgentMod
         if (response.ok) {
           await primaryResponse?.body?.cancel().catch(() => undefined);
           recordTurnNotice(fallback.notice);
+          recordAgentFallback({ provider: fallback.provider, ...(fallback.providerLabel ? { providerLabel: fallback.providerLabel } : {}), model: fallback.modelId });
           return response;
         }
         console.warn(`[agent-fallback] 备用模型也没成：上游回了 ${response.status}`);

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchUsage, saveUsagePrice, type UsagePriceView, type UsageSummaryView, type UsageTotalsView } from "../../../api/usageClient.js";
 import { TASK_LABELS } from "../../ModelSettingsDialogTypes.js";
+// 用到 ms-* 样式（分段按钮、按钮、报错），显式引入所在 css，不靠别的页面捎带。
+import "../../ModelSettingsDialog.css";
 
 type GroupTab = "book" | "task" | "model";
 
@@ -125,7 +127,7 @@ export function UsageSection({ api = { fetchUsage, saveUsagePrice } }: {
               ))}
             </div>
 
-            <div className="ms-theme-seg se-usage-tabs" role="group" aria-label="近 30 天分列">
+            <div className="ms-display-control ms-theme-seg se-usage-tabs" role="group" aria-label="近 30 天分列">
               {GROUP_TABS.map((item) => (
                 <button aria-pressed={tab === item.id} className={`ms-display-btn${tab === item.id ? " is-on" : ""}`} key={item.id} onClick={() => setTab(item.id)} type="button">
                   {item.label}

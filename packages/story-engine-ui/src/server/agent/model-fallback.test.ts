@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
-import { withTokenMeter } from "../lib/token-meter.js";
+import { currentAgentFallback, withTokenMeter } from "../lib/token-meter.js";
 import { withModelFallback, type AgentModelFallback } from "./model.js";
 
 function fallbackOf(fetchImpl: typeof fetch): AgentModelFallback {
@@ -11,6 +11,7 @@ function fallbackOf(fetchImpl: typeof fetch): AgentModelFallback {
     toBaseURL: "https://b.invalid/api",
     apiKey: "key-b",
     modelId: "b-model",
+    provider: "b",
     notice: "这次用了备用",
   };
 }
@@ -27,13 +28,14 @@ describe("对话 AI 备用模型（P10）", () => {
     const primary = vi.fn(async () => new Response("rate limited", { status: 429 }));
     const backup = vi.fn(async () => new Response("ok", { status: 200 }));
     const guarded = withModelFallback(primary as unknown as typeof fetch, fallbackOf(backup as unknown as typeof fetch));
-    const { result, notices } = await withTokenMeter(() => guarded("https://a.invalid/v1/chat/completions", request()));
+    const { result: [result, used], notices } = await withTokenMeter(async () => [await guarded("https://a.invalid/v1/chat/completions", request()), currentAgentFallback()] as const);
     expect(await result.text()).toBe("ok");
     const [url, init] = backup.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://b.invalid/api/chat/completions");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer key-b");
     expect(JSON.parse(init.body as string).model).toBe("b-model");
     expect(notices).toEqual(["这次用了备用"]);
+    expect(used).toEqual({ provider: "b", model: "b-model" });
   });
 
   it("主模型连不上、备用也没成 → 原样抛主模型的错；主模型成了不碰备用", async () => {

@@ -47,6 +47,8 @@ class TokenMeter {
   private readonly steps = new Map<string, StepTotals>();
   /** 这一轮要告诉作者的事（如「这次用了备用模型」），同一句只留一条。 */
   readonly notices = new Set<string>();
+  /** 这一轮对话 AI 换成了备用模型（P10）：轮末记用量时记到它名下。 */
+  agentFallback: AgentModelUsed | undefined;
 
   record(kind: "agent" | "pipeline", sample: TokenUsageSample, calls = 1, step?: string): void {
     const add = <T extends TokenUsageTotals>(base: T): T => ({
@@ -111,6 +113,23 @@ export async function withTokenMeter<T>(fn: () => Promise<T>): Promise<{
   const meter = new TokenMeter();
   const result = await storage.run(meter, fn);
   return { result, usage: meter.snapshot(), notices: [...meter.notices] };
+}
+
+export interface AgentModelUsed {
+  readonly provider: string;
+  readonly providerLabel?: string;
+  readonly model: string;
+}
+
+/** 对话 AI 这一轮换成了备用模型（P10）。 */
+export function recordAgentFallback(model: AgentModelUsed): void {
+  const meter = storage.getStore();
+  if (meter) meter.agentFallback = model;
+}
+
+/** 这一轮对话 AI 换成的备用模型；没换是 undefined。 */
+export function currentAgentFallback(): AgentModelUsed | undefined {
+  return storage.getStore()?.agentFallback;
 }
 
 /** 记一句本轮要告诉作者的事（轮末作为状态说明发给界面）；不在一轮对话里时只打日志。 */
