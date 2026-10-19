@@ -13,7 +13,7 @@ import { useBookManagement } from "./hooks/useBookManagement.js";
 import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
-import { fetchDefaultBookLibrary } from "./api/client.js";
+import { refreshBookLibrary } from "./utils/refreshBookLibrary.js";
 import { setChatSessionSaveSkippedNotifier } from "./api/chatSessionsClient.js";
 import { countTextWords, extractDraftTitle } from "./utils/textUtils.js";
 import { readWorkspaceRoute } from "./utils/routing.js";
@@ -159,14 +159,8 @@ export function App() {
 
     // 首页启动时扫描默认目录，归并进书架（服务端真值刷新已有条目 + 按活跃时间排序；
     // 别再逐本 upsertBook 头插——那会把服务端的「最近活跃降序」反转，最旧的书霸占 books[0]）
-    void (async () => {
-      try {
-        const library = await fetchDefaultBookLibrary();
-        useRecentBooksStore.getState().syncScannedBooks(library.books, library);
-      } catch {
-        // 扫描失败不影响首页加载
-      }
-    })();
+    // 扫描失败不影响首页加载
+    void refreshBookLibrary().catch(() => undefined);
 
     return () => window.removeEventListener("popstate", onPopState);
     // eslint-disable-next-line react-hooks/exhaustive-deps

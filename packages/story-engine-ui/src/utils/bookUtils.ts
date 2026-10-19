@@ -66,7 +66,7 @@ export function bookSummaryFromOverview(overview: StateOverview, projectPath: st
   };
 }
 
-function stableBookId(value: string): string {
+export function stableBookId(value: string): string {
   let hash = 0;
   for (const char of value) {
     hash = (hash * 31 + char.charCodeAt(0)) >>> 0;

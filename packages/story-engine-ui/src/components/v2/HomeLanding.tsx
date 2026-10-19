@@ -6,6 +6,10 @@ import OpenBookDialog from "../OpenBookDialog.js";
 import { useMotionStore } from "../../stores/motionStore.js";
 import type { BookSummary, HomePageProps } from "../../types.js";
 import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
+import { TrashDialog } from "./shelf/TrashDialog.js";
+import { ExportDialog } from "./shelf/ExportDialog.js";
+import { fetchTrash } from "../../api/shelfClient.js";
+import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
 import "./home.css";
 
 const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", "无"]);
@@ -64,8 +68,16 @@ export default function HomeLanding({
   const [renameTarget, setRenameTarget] = useState<BookSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trashCount, setTrashCount] = useState(0);
+  const [exportTarget, setExportTarget] = useState<BookSummary | null>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
   const lastBook = recentBooks[0];
+
+  const refreshTrashCount = () => {
+    fetchTrash().then((trash) => setTrashCount(trash.items.length), () => undefined);
+  };
+  useEffect(refreshTrashCount, []);
 
   const showFeedback = (message: string) => setFeedbackMessage(message);
   const findBook = (bookId: string) => recentBooks.find((book) => book.id === bookId);
@@ -164,6 +176,7 @@ export default function HomeLanding({
                       if (!bookToDelete) return;
                       setDeleteTarget(bookToDelete);
                     }}
+                    onExport={(bookId) => setExportTarget(findBook(bookId) ?? null)}
                     onOpen={onOpenRecentBook}
                     onOpenFolder={(bookId) => {
                       void onOpenRecentBookFolder(bookId).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
@@ -185,8 +198,23 @@ export default function HomeLanding({
               </div>
             )}
           </section>
+
+          <footer className="se-shelf-foot">
+            <button className="se-shelf-link" onClick={() => setTrashOpen(true)} type="button">
+              回收站{trashCount > 0 ? `（${trashCount}）` : ""}
+            </button>
+          </footer>
         </div>
       </div>
+
+      <ExportDialog book={exportTarget} onClose={() => setExportTarget(null)} />
+
+      <TrashDialog
+        open={trashOpen}
+        onChanged={setTrashCount}
+        onClose={() => setTrashOpen(false)}
+        onRestored={(projectPath, title) => addReturnedBook(projectPath, title)}
+      />
 
       <NewBookStarter
         open={dialog === "create"}
@@ -259,27 +287,24 @@ export default function HomeLanding({
         <Dialog open onOpenChange={(open) => { if (!open) closeDeleteDialog(); }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>确认删除书籍？</DialogTitle>
+              <DialogTitle>把《{deleteTarget.title}》移到回收站？</DialogTitle>
               <DialogDescription>
-                你正在删除《{deleteTarget.title}》。这会删除本地项目目录，操作不可恢复。
+                30 天内可以在书架底部的「回收站」里恢复，过了 30 天才会真删。
               </DialogDescription>
             </DialogHeader>
-            <dl className="se-v2-delete-path">
-              <dt>项目路径</dt>
-              <dd>{deleteTarget.projectPath}</dd>
-            </dl>
-            <p className="se-v2-delete-hint">删除后会移出书架并删掉本地项目目录，无法恢复。</p>
             <DialogFooter>
               <button className="se-v2-dialog-cancel-btn" onClick={closeDeleteDialog} type="button">取消</button>
               <button
                 className="se-v2-dialog-danger-btn"
                 onClick={() => {
-                  void onDeleteRecentBook(deleteTarget.id).then(showFeedback).catch((error: unknown) => showFeedback(error instanceof Error ? error.message : String(error)));
+                  void onDeleteRecentBook(deleteTarget.id)
+                    .then((message) => { showFeedback(message); refreshTrashCount(); })
+                    .catch((error: unknown) => showFeedback(`没删成：${error instanceof Error ? error.message : String(error)}`));
                   closeDeleteDialog();
                 }}
                 type="button"
               >
-                永久删除
+                移到回收站
               </button>
             </DialogFooter>
           </DialogContent>
@@ -292,6 +317,7 @@ export default function HomeLanding({
 function RecentBook({
   book,
   onDelete,
+  onExport,
   onOpen,
   onOpenFolder,
   onRemove,
@@ -299,6 +325,7 @@ function RecentBook({
 }: {
   readonly book: BookSummary;
   readonly onDelete: (bookId: string) => void;
+  readonly onExport: (bookId: string) => void;
   readonly onOpen: (bookId: string) => void;
   readonly onOpenFolder: (bookId: string) => void;
   readonly onRemove: (bookId: string) => void;
@@ -340,6 +367,7 @@ function RecentBook({
           <menu className="se-book-menu" ref={menuRef}>
             <button onClick={() => { setMenuOpen(false); onOpen(book.id); }} type="button">继续写作</button>
             <button onClick={() => { setMenuOpen(false); onRename(book.id); }} type="button">重命名</button>
+            <button onClick={() => { setMenuOpen(false); onExport(book.id); }} type="button">导出</button>
             <button onClick={() => { setMenuOpen(false); onRemove(book.id); }} type="button">从最近写作移除</button>
             <button onClick={() => { setMenuOpen(false); onOpenFolder(book.id); }} type="button">打开所在文件夹</button>
             <button className="is-danger" onClick={() => { setMenuOpen(false); onDelete(book.id); }} type="button">删除书籍</button>

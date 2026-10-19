@@ -1,7 +1,8 @@
 /**
  * POST /api/projects/create
  * POST /api/books/rename
- * POST /api/books/delete
+ * POST /api/books/delete（挪进回收站，P10）
+ * GET  /api/books/trash · POST /api/books/trash/restore · POST /api/books/trash/purge
  * POST /api/books/open-folder
  * GET  /api/usage-summary
  */
@@ -11,6 +12,7 @@ import { resolve, join } from "node:path";
 import { promisify } from "node:util";
 
 import { resolveBooksRootDir } from "../lib/data-dirs.js";
+import { TRASH_KEEP_DAYS, listTrash, moveBookToTrash, purgeFromTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
@@ -65,6 +67,18 @@ export function registerBooksRoutes(middlewares: MiddlewareStack): void {
     }
     if (req.url?.startsWith("/api/books/delete")) {
       await handleDeleteBook(req, res);
+      return;
+    }
+    if (req.url?.startsWith("/api/books/trash/restore")) {
+      await handleTrashRestore(req, res);
+      return;
+    }
+    if (req.url?.startsWith("/api/books/trash/purge")) {
+      await handleTrashPurge(req, res);
+      return;
+    }
+    if (req.url?.split("?")[0] === "/api/books/trash") {
+      await handleTrashList(req, res);
       return;
     }
     if (req.url?.startsWith("/api/books/open-folder")) {
@@ -444,14 +458,62 @@ async function handleDeleteBook(req: import("node:http").IncomingMessage, res: i
       return;
     }
 
-    // force:true——若目录在校验后恰好消失（并发/外部删除），不再抛错（删除是幂等的）。
-    await rm(resolve(projectDir), { recursive: true, force: true });
-    writeJson(res, 200, { ok: true });
+    // 不再直接删：整本书挪进回收站，30 天内能恢复（P10）。
+    const trashId = await moveBookToTrash(projectDir, projectTitle);
+    writeJson(res, 200, { ok: true, trashId, keepDays: TRASH_KEEP_DAYS });
   } catch (error) {
     writeJson(res, 500, {
       ok: false,
       error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trash（P10）
+// ---------------------------------------------------------------------------
+
+async function handleTrashList(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+  try {
+    if (req.method !== "GET") {
+      writeJson(res, 405, { ok: false, error: "Only GET is supported." });
+      return;
+    }
+    writeJson(res, 200, { ok: true, items: await listTrash(), keepDays: TRASH_KEEP_DAYS });
+  } catch (error) {
+    writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
+  }
+}
+
+async function handleTrashRestore(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+  try {
+    if (req.method !== "POST") {
+      writeJson(res, 405, { ok: false, error: "Only POST is supported." });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const restored = await restoreFromTrash(requireBodyString(body.id, "要恢复哪本书？"));
+    writeJson(res, 200, { ok: true, ...restored });
+  } catch (error) {
+    writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
+  }
+}
+
+async function handleTrashPurge(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+  try {
+    if (req.method !== "POST") {
+      writeJson(res, 405, { ok: false, error: "Only POST is supported." });
+      return;
+    }
+    const body = await readJsonBody(req);
+    if (body.confirmPurge !== true) {
+      writeJson(res, 400, { ok: false, error: "需要 confirmPurge=true 才能彻底删除。" });
+      return;
+    }
+    const purged = await purgeFromTrash(requireBodyString(body.id, "要删哪本书？"));
+    writeJson(res, 200, { ok: true, ...purged });
+  } catch (error) {
+    writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
   }
 }
 

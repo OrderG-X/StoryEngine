@@ -92,6 +92,9 @@
   .se-shelf-empty{padding:24px;border:1px dashed var(--line-strong);border-radius:12px;text-align:center;color:var(--faint);font-size:13px;}
   .se-shelf-empty strong{display:block;color:var(--text);font-weight:500;margin-bottom:4px;}
   .se-shelf-empty p{margin:0;}
+  .se-shelf-foot{display:flex;justify-content:center;gap:16px;margin-top:40px;}
+  .se-shelf-link{height:28px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--faint);font-size:12px;cursor:pointer;}
+  .se-shelf-link:hover{background:var(--hover);color:var(--text);}
   .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
   .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
   .se-book-open:hover .se-cover{transform:translateY(-2px);}

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
@@ -218,6 +218,19 @@ describe("books route create path guard（建书路径闸）", () => {
 });
 
 describe("books route destructive confirmation", () => {
+  // 删书挪进书库根下的回收站（P10）：书库根指到这次测试自己的临时目录，绝不碰真书库。
+  const ORIGINAL_BOOKS_DIR = process.env.SE_BOOKS_DIR;
+  let booksRoot = "";
+  beforeEach(async () => {
+    booksRoot = await makeHomeTempDir("story-engine-trash-root-");
+    generatedDeleteRouteProjectDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+  });
+  afterEach(() => {
+    if (ORIGINAL_BOOKS_DIR === undefined) delete process.env.SE_BOOKS_DIR;
+    else process.env.SE_BOOKS_DIR = ORIGINAL_BOOKS_DIR;
+  });
+
   it("rejects project deletion without strong confirmation fields", async () => {
     const projectDir = await createDeleteRouteProject("未确认删除");
 
@@ -271,8 +284,9 @@ describe("books route destructive confirmation", () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it("deletes a project only when title and project identity confirmations match", async () => {
+  it("书名和路径都对上才删：整本挪进回收站，能列出来、能恢复回原处", async () => {
     const projectDir = await createDeleteRouteProject("可删除书籍");
+    await writeFile(join(projectDir, "story", "note.md"), "留着的东西", "utf-8");
 
     const response = await callBooksRoute("/api/books/delete", {
       projectPath: projectDir,
@@ -282,8 +296,28 @@ describe("books route destructive confirmation", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload).toEqual({ ok: true });
+    expect(response.payload).toMatchObject({ ok: true, keepDays: 30 });
     await expect(readFile(join(projectDir, "project.json"), "utf-8")).rejects.toThrow();
+
+    const listed = await callBooksGetRoute("/api/books/trash");
+    expect(listed.payload).toMatchObject({ ok: true, keepDays: 30, items: [{ id: response.payload.trashId, title: "可删除书籍", originalPath: projectDir, daysLeft: 30 }] });
+
+    const restored = await callBooksRoute("/api/books/trash/restore", { id: response.payload.trashId });
+    expect(restored.payload).toEqual({ ok: true, projectPath: projectDir, title: "可删除书籍" });
+    await expect(readFile(join(projectDir, "story", "note.md"), "utf-8")).resolves.toBe("留着的东西");
+    expect((await callBooksGetRoute("/api/books/trash")).payload).toMatchObject({ items: [] });
+  });
+
+  it("彻底删除要 confirmPurge；删了就没了", async () => {
+    const projectDir = await createDeleteRouteProject("要彻底删的书");
+    const deleted = await callBooksRoute("/api/books/delete", { projectPath: projectDir, confirmDelete: true, confirmTitle: "要彻底删的书", confirmProjectPath: projectDir });
+    const id = String(deleted.payload.trashId);
+
+    expect((await callBooksRoute("/api/books/trash/purge", { id })).statusCode).toBe(400);
+    expect((await callBooksRoute("/api/books/trash/purge", { id, confirmPurge: true })).payload).toEqual({ ok: true, title: "要彻底删的书" });
+    expect((await callBooksGetRoute("/api/books/trash")).payload).toMatchObject({ items: [] });
+    await expect(stat(join(booksRoot, "回收站", id))).rejects.toThrow();
+    expect((await callBooksRoute("/api/books/trash/restore", { id })).payload).toMatchObject({ ok: false, error: "回收站里没有这本书。" });
   });
 
   it("deletes a freshly created book that only has a title and no further content", async () => {
@@ -302,7 +336,7 @@ describe("books route destructive confirmation", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload).toEqual({ ok: true });
+    expect(response.payload).toMatchObject({ ok: true });
     await expect(stat(projectDir)).rejects.toThrow();
   });
 });

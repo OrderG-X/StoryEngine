@@ -16,6 +16,7 @@ import { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersO
 import { searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
 import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
+import { ExportDialog } from "../shelf/ExportDialog.js";
 import { SaveStatusPill } from "./SaveStatusPill.js";
 import { paperStage, useDraftStore } from "../../../stores/draftStore.js";
 import { countRealChapters } from "../../../api/stateOverviewAdapter.js";
@@ -171,6 +172,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 设置改成弹窗（不再占中栏整页），null = 关着。
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [cat, setCat] = useState<string>("story");
   // 设定本先展开哪张卡（正文名字速览、搜索结果、⌘K 点进来的）。
   const [bibleFocus, setBibleFocus] = useState<string | undefined>(undefined);
@@ -283,6 +285,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     { id: "theme", label: "切换深色 / 纸面主题", hint: "外观", run: () => useThemeStore.getState().toggle() },
     { id: "settings", label: "模型设置", hint: "设置", run: () => setSettingsTab("model") },
     { id: "display", label: "显示设置（主题、字号）", hint: "设置", run: () => setSettingsTab("display") },
+    { id: "export", label: "导出这本书", hint: "txt · Word · epub", disabled: !props.projectPath, run: () => setExportOpen(true) },
     { id: "home", label: "回到书架", hint: "视图", run: () => props.onGoHome?.() },
   ];
   const librarySearchResults = searchLibraryIndex(librarySearchSources, libQuery);
@@ -702,6 +705,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
       <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
+      <ExportDialog book={exportOpen && props.projectPath ? { title: projectName, projectPath: props.projectPath } : null} onClose={() => setExportOpen(false)} />
       {settingsTab ? <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} /> : null}
     </div>
   );

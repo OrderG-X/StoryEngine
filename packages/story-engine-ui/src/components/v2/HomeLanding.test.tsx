@@ -5,6 +5,14 @@ import { useMotionStore } from "../../stores/motionStore.js";
 import type { HomePageProps } from "../../types.js";
 import HomeLanding from "./HomeLanding.js";
 
+vi.mock("../../api/shelfClient.js", () => ({
+  fetchTrash: vi.fn(async () => ({ items: [{ id: "t1", title: "删掉的书", originalPath: "/x", deletedAt: new Date().toISOString(), daysLeft: 30 }], keepDays: 30 })),
+  restoreTrashItem: vi.fn(),
+  purgeTrashItem: vi.fn(),
+  exportBookFile: vi.fn(),
+  saveBlob: vi.fn(),
+}));
+
 afterEach(() => {
   cleanup();
   // 还原降低动效，避免污染其它用例
@@ -35,25 +43,26 @@ describe("HomeLanding", () => {
     fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
     fireEvent.click(screen.getByRole("button", { name: "删除书籍" }));
 
-    const dialog = screen.getByRole("dialog", { name: "确认删除书籍？" });
+    const dialog = screen.getByRole("dialog", { name: "把《海州账册》移到回收站？" });
     expect(dialog).toBeInTheDocument();
 
     fireEvent.keyDown(dialog, { key: "Escape" });
 
-    expect(screen.queryByRole("dialog", { name: "确认删除书籍？" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "把《海州账册》移到回收站？" })).toBeNull();
   });
 
-  it("一步确认删除：弹窗里点「永久删除」直接删（去掉多余的「解锁→永久删除」两步卡）", () => {
+  it("删书是移到回收站（P10）：弹窗说 30 天能恢复，点「移到回收站」就删；书架底部有回收站入口带数", async () => {
     const onDeleteRecentBook = vi.fn(async () => "deleted");
     render(<HomeLanding {...homeProps({ recentBooks: [recentBook()], onDeleteRecentBook })} />);
 
     fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
     fireEvent.click(screen.getByRole("button", { name: "删除书籍" }));
 
-    // 不再有「解锁删除」中间步；弹窗本身即确认，「永久删除」一键删。
-    expect(screen.queryByRole("button", { name: "解锁删除" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    expect(screen.getByText(/30 天内可以在书架底部的「回收站」里恢复/u)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "永久删除" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "移到回收站" }));
     expect(onDeleteRecentBook).toHaveBeenCalledWith("book-1");
+    expect(await screen.findByRole("button", { name: "回收站（1）" })).toBeInTheDocument();
   });
 
   it("点菜单内动作后菜单关闭（不再常驻盖住「···」按钮，V6 回归根因）", () => {
