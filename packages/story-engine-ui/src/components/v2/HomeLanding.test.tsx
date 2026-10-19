@@ -75,6 +75,14 @@ describe("HomeLanding", () => {
     expect(await screen.findByRole("button", { name: "回收站（1）" })).toBeInTheDocument();
   });
 
+  it("回收站里恢复：书架上方的提示换成「回到书架了」，不留着「移到回收站」的旧话", async () => {
+    vi.mocked(shelfClient.restoreTrashItem).mockResolvedValueOnce({ projectPath: "/x", title: "删掉的书" });
+    render(<HomeLanding {...homeProps()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "回收站（1）" }));
+    fireEvent.click(await screen.findByRole("button", { name: "恢复" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("《删掉的书》回到书架了。");
+  });
+
   it("书的菜单「备份」下载整本书；书架底部「从备份恢复」选 zip 解成新书", async () => {
     render(<HomeLanding {...homeProps({ recentBooks: [recentBook()] })} />);
 
@@ -110,6 +118,8 @@ describe("HomeLanding", () => {
     expect(grid.queryByRole("button", { name: "打开《白沙渡》" })).toBeNull();
     fireEvent.change(screen.getByLabelText("找书"), { target: { value: "没有这本" } });
     expect(screen.getByText("没找到「没有这本」。")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("找书"), { target: { value: "海州" } });
+    expect(screen.getByText("没找到「海州」。已归档里有 1 本。")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /已归档（1）/u }));
     expect(screen.getByRole("button", { name: "打开《海州账册》" })).toBeInTheDocument();

@@ -4,7 +4,7 @@
  * 导入已写的书后，记账员从第 1 章起一章一章记账；状态记着要记到第几章、记完第几章、在跑 / 停下 / 记完、停下的原因。
  * 进度行、核账 / 定稿 / 拟纲前的那道闸都读它。它不是真相：真相是每章的账单，这份只是「通读到哪了」。
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writeAtomically } from "./reader-window.js";
 
@@ -47,6 +47,7 @@ export async function readRereadState(root: string): Promise<RereadState | undef
 }
 
 export async function writeRereadState(root: string, state: RereadState): Promise<RereadState> {
+  await stat(root); // 书已删就别再写（免得建出幽灵目录）
   await writeAtomically(rereadStateFile(root), `${JSON.stringify(state, null, 2)}\n`);
   return state;
 }

@@ -3,7 +3,7 @@
  *
  * 每条：`回收站/<条目>/book/` 是整本书原样（含存档历史、对话），`trash.json` 记书名、原路径、删除时间。
  * 挪动在书锁里做（等手头的写入做完再挪）；跨盘挪不动就复制再删。
- * 恢复挪回原路径；原路径被占了（同名新书、或后台补读在原处又建了目录）就加后缀，绝不覆盖。
+ * 恢复挪回原路径；原路径被占了（比如又建了同目录名的书）就加后缀，绝不覆盖。
  */
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";

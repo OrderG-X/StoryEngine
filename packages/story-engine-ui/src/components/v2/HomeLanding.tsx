@@ -111,6 +111,8 @@ export default function HomeLanding({
   const archivedBooks = recentBooks.filter((book) => meta[book.projectPath]?.archived);
   const lastBook = activeBooks[0];
   const visibleBooks = sortShelf(activeBooks.filter((book) => matchesShelfQuery(book, meta[book.projectPath], query)), sort);
+  // 搜的书在「已归档」里：空架子上提一句，别让人以为书没了。
+  const archivedHits = query.trim() ? archivedBooks.filter((book) => matchesShelfQuery(book, meta[book.projectPath], query)).length : 0;
 
   // 书架上每本书的归档、标签、封面色（存在书自己的 project.json 里）。
   const pathsKey = recentBooks.map((book) => book.projectPath).join("\n");
@@ -291,7 +293,7 @@ export default function HomeLanding({
               </div>
             ) : visibleBooks.length === 0 ? (
               <div className="se-shelf-empty">
-                <p>{query ? `没找到「${query.trim()}」。` : "书都归档了。"}</p>
+                <p>{query ? `没找到「${query.trim()}」。${archivedHits > 0 ? `已归档里有 ${archivedHits} 本。` : ""}` : "书都归档了。"}</p>
               </div>
             ) : (
               <div className="se-shelf-grid">
@@ -343,7 +345,10 @@ export default function HomeLanding({
         open={trashOpen}
         onChanged={setTrashCount}
         onClose={() => setTrashOpen(false)}
-        onRestored={(projectPath, title) => addReturnedBook(projectPath, title)}
+        onRestored={async (projectPath, title) => {
+          await addReturnedBook(projectPath, title);
+          showFeedback(`《${title}》回到书架了。`);
+        }}
       />
 
       <NewBookStarter
