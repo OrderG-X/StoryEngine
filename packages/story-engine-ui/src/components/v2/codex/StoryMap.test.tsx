@@ -38,7 +38,8 @@ describe("故事地图（重构 P6，草图 ③）", () => {
   it("一行一章带故事日（星期·时段、推出来的标「推」、估的标「估」）；隔了好几天标出来；章名从章节列表来", async () => {
     mockFetch({ ok: true, map: MAP });
     render(<StoryMap projectPath="/book" busy={false} chapterTitles={new Map([[1, "九号院"]])} />);
-    expect(await screen.findByText("3 章，故事走到第 7 天，出场 3 人。点圆点回到他出场那句。")).toBeTruthy();
+    expect(await screen.findByText("一行一章，一列一人。点圆点回到他出场那句。")).toBeTruthy();
+    expect(screen.getByText("人出场").closest("dl")?.textContent).toBe("章3故事日7人出场3");
     expect(screen.getByText("九号院")).toBeTruthy();
     expect(screen.getByText("周一 · 傍晚")).toBeTruthy();
     expect(screen.getByText("周二（推）")).toBeTruthy();
@@ -61,7 +62,7 @@ describe("故事地图（重构 P6，草图 ③）", () => {
     expect(onJump).toHaveBeenCalledWith(3, "沈同志在第3章");
     fireEvent.click(screen.getByRole("button", { name: "第 2 章" }));
     expect(onOpenChapter).toHaveBeenCalledWith(2);
-    expect(screen.getByText("周守义").getAttribute("title")).toBe("也叫：老周");
+    expect(screen.getByText("周守义").closest("th")?.getAttribute("title")).toBe("也叫：老周");
   });
 
   it("出场了但没记原句（老书导入的章）：照样画点，点了只打开那一章", async () => {

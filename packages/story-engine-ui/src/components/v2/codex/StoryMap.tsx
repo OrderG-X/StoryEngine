@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchStoryMap, type StoryMap as MapData, type StoryMapChapter } from "../../../api/storyMapClient.js";
+import { Avatar, PageHead, Skeleton } from "./bibleVisual.js";
 
 /** 先露出场最多的几个人。 */
 const CAST_VISIBLE = 8;
@@ -76,10 +77,10 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
   if (!map) {
     return (
       <section className="se-sm" aria-label="故事地图">
-        <h2 className="se-sm-h">故事地图</h2>
+        <PageHead title="故事地图" />
         {error ? (
           <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p>
-        ) : <p className="se-sm-empty">正在读…</p>}
+        ) : <Skeleton />}
       </section>
     );
   }
@@ -87,15 +88,12 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
   const last = map.chapters.at(-1);
   return (
     <section className="se-sm" aria-label="故事地图">
-      <header className="se-sm-top">
-        <h2 className="se-sm-h">故事地图</h2>
-        <p className="se-sm-sum">
-          {map.chapters.length === 0
-            ? "还没有定稿的章：定稿时记账员会把每章第几天、谁出场记在这里。"
-            : `${map.chapters.length} 章，故事走到第 ${last?.dayEnd ?? 1} 天，出场 ${map.cast.length} 人。点圆点回到他出场那句。`}
-        </p>
-        {error ? <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p> : null}
-      </header>
+      <PageHead
+        title="故事地图"
+        sub={map.chapters.length === 0 ? "还没有定稿的章：定稿时记账员会把每章第几天、谁出场记在这里。" : "一行一章，一列一人。点圆点回到他出场那句。"}
+        stats={[{ value: map.chapters.length, label: "章" }, { value: map.chapters.length > 0 ? last?.dayEnd ?? 1 : 0, label: "故事日" }, { value: map.cast.length, label: "人出场" }]}
+      />
+      {error ? <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p> : null}
       {map.chapters.length > 0 ? (
         <>
           <div className="se-sm-legend">
@@ -116,7 +114,8 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
                   <th scope="col" className="se-sm-what">这章</th>
                   {cast.map((member) => (
                     <th key={member.name} scope="col" className="se-sm-who" title={member.aliases.length > 0 ? `也叫：${member.aliases.join("、")}` : member.name}>
-                      {member.name}
+                      <Avatar name={member.name} kind="character" />
+                      <span>{member.name}</span>
                     </th>
                   ))}
                 </tr>

@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { BibleAppearances, BibleFact, CardAuthor } from "../../../api/bibleClient.js";
-import { PresenceStrip } from "./bibleVisual.js";
+import { PresenceStrip, Sec } from "./bibleVisual.js";
 
 /** 一处就地编辑：单行回车存，多行 ⌘/Ctrl+回车存，Esc 取消。 */
 export function InlineEdit({ value, multiline, placeholder, label, disabled, onSave, onCancel }: {
@@ -47,6 +47,7 @@ export function InlineEdit({ value, multiline, placeholder, label, disabled, onS
           onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} />
       )}
       <span className="se-bk-edit-acts">
+        {multiline ? <span className="se-bk-edit-keys" aria-hidden="true">⌘↩ 存 · Esc 算了</span> : null}
         <button type="button" className="se-bk-btn is-primary" disabled={disabled} onClick={save}>存</button>
         <button type="button" className="se-bk-btn" onClick={onCancel}>算了</button>
       </span>
@@ -69,17 +70,6 @@ export interface FieldItem {
   readonly label: string;
   readonly value: string;
   readonly by: CardAuthor;
-}
-
-/** 页里的一节：强调色短竖条 + 标题 + 数 + 一道细线。 */
-export function Sec({ title, count }: { readonly title: string; readonly count?: number }) {
-  return (
-    <h3 className="se-bk-sec">
-      <span>{title}</span>
-      {count ? <small>{count}</small> : null}
-      <i aria-hidden="true" />
-    </h3>
-  );
 }
 
 /** 一项的内容：点字就改，× 删掉，AI 补的可以认下。改不改由上层管（一页里同时只改一处）。 */

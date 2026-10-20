@@ -2,9 +2,59 @@
  * 设定本的图形小件（2026-10-20 设定本美化）：头像、出场条、关系图。
  * 只画已有的数据：头像是名字第一个字 + 按名字定的色，出场条是账里记的出场章，关系图是记下的关系。
  */
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { BibleRelationView, CardKind } from "../../../api/bibleClient.js";
 import { toneOf } from "../../../lib/tone.js";
+
+export interface Stat { readonly value: number; readonly label: string }
+
+/** 设定本各页的页头：小字（默认「设定本」）、宋体标题、一句说明，右边几个数（0 不摆）或别的小件（翻章）。 */
+export function PageHead({ title, sub, stats, kicker = "设定本", aside }: {
+  readonly title: string;
+  readonly sub?: string;
+  readonly stats?: readonly Stat[];
+  readonly kicker?: string;
+  readonly aside?: ReactNode;
+}) {
+  const shown = (stats ?? []).filter((stat) => stat.value > 0);
+  return (
+    <header className="se-bk-head">
+      <div className="se-bk-head-main">
+        <p className="se-bk-kicker">{kicker}</p>
+        <h2 className="se-bk-title">{title}</h2>
+        {sub ? <p className="se-bk-lead">{sub}</p> : null}
+      </div>
+      {shown.length > 0 ? (
+        <dl className="se-bk-stats">
+          {shown.map((stat) => (
+            <div key={stat.label} className="se-bk-stat"><dt>{stat.label}</dt><dd>{stat.value}</dd></div>
+          ))}
+        </dl>
+      ) : null}
+      {aside}
+    </header>
+  );
+}
+
+/** 页里的一节：强调色短竖条 + 标题 + 数 + 一道细线。 */
+export function Sec({ title, count }: { readonly title: string; readonly count?: number }) {
+  return (
+    <h3 className="se-bk-sec">
+      <span>{title}</span>
+      {count ? <small>{count}</small> : null}
+      <i aria-hidden="true" />
+    </h3>
+  );
+}
+
+/** 还没读到时的占位：几道淡淡的条，不闪一行「正在读…」。 */
+export function Skeleton({ label = "正在读…" }: { readonly label?: string }) {
+  return (
+    <div className="se-bk-skel" role="status" aria-label={label}>
+      <i className="is-head" /><i /><i /><i /><i />
+    </div>
+  );
+}
 
 export function firstGlyph(name: string): string {
   return Array.from(name.trim())[0] ?? "?";

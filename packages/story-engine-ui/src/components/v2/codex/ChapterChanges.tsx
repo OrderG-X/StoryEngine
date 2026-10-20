@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchChapterChanges, type ChapterChangeThread, type ChapterChanges as Changes } from "../../../api/chapterChangesClient.js";
 import { chapterBareTitle } from "../v2Utils.js";
+import { Avatar, PageHead, Sec, Skeleton } from "./bibleVisual.js";
 
 const THREAD_OP: Record<ChapterChangeThread["op"], string> = { open: "新埋下", advance: "推进", close: "收口" };
 /** 每组先露这么多条，多的点「再看 N 条」。 */
@@ -68,10 +69,10 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   if (!changes) {
     return (
       <section className="se-sm se-cc" aria-label="这章改了什么">
-        <h2 className="se-sm-h">这章改了什么</h2>
+        <PageHead title="这章改了什么" />
         {error ? (
           <p className="se-sm-error">{error} <button type="button" className="se-sm-link" onClick={reload}>再读一次</button></p>
-        ) : <p className="se-sm-empty">正在读…</p>}
+        ) : <Skeleton />}
       </section>
     );
   }
@@ -85,24 +86,25 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
   const nothing = changes.newCast.length === 0 && changes.threads.length === 0 && changes.facts.length === 0;
   return (
     <section className="se-sm se-cc" aria-label="这章改了什么">
-      <header className="se-cc-top">
-        <div className="se-sm-top">
-          <h2 className="se-sm-h">第 {changes.chapter} 章{title ? ` · ${title}` : ""} 改了什么</h2>
-          <p className="se-sm-sum">故事{day}{changes.summary ? ` · ${changes.summary}` : ""}</p>
-        </div>
-        <nav className="se-cc-nav" aria-label="翻章">
-          {prev !== undefined ? <button type="button" className="se-sm-link" onClick={() => setChapter(prev)}>‹ 第 {prev} 章</button> : null}
-          {next !== undefined ? <button type="button" className="se-sm-link" onClick={() => setChapter(next)}>第 {next} 章 ›</button> : null}
-        </nav>
-      </header>
-      {nothing ? <p className="se-sm-empty">这章定稿时没记下新的人、线索和事。</p> : null}
+      <PageHead
+        kicker="设定本 · 这章改了什么"
+        title={`第 ${changes.chapter} 章${title ? ` · ${title}` : ""} 改了什么`}
+        sub={`故事${day}${changes.summary ? ` · ${changes.summary}` : ""}`}
+        aside={prev !== undefined || next !== undefined ? (
+          <nav className="se-cc-nav" aria-label="翻章">
+            {prev !== undefined ? <button type="button" className="se-cc-turn" onClick={() => setChapter(prev)}>‹ 第 {prev} 章</button> : null}
+            {next !== undefined ? <button type="button" className="se-cc-turn" onClick={() => setChapter(next)}>第 {next} 章 ›</button> : null}
+          </nav>
+        ) : undefined}
+      />
+      {nothing ? <p className="se-bk-blank">这章定稿时没记下新的人、线索和事。</p> : null}
       {changes.newCast.length > 0 ? (
-        <div className="se-cc-block">
-          <h3>第一次出场</h3>
+        <div className="se-cc-block is-cast">
+          <Sec title="第一次出场" count={changes.newCast.length} />
           <ul className="se-cc-list">
             {changes.newCast.map((member) => (
               <li key={member.name}>
-                <span className="se-cc-who">{member.name}</span>
+                <span className="se-cc-who"><Avatar name={member.name} kind="character" />{member.name}</span>
                 {member.quote ? <Quote chapter={changes.chapter} quote={member.quote} {...(onJump ? { onJump } : {})} /> : null}
               </li>
             ))}
@@ -111,7 +113,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
       ) : null}
       {changes.threads.length > 0 ? (
         <div className="se-cc-block">
-          <h3>线索 <small>{changes.threads.length} 条</small></h3>
+          <Sec title="线索" count={changes.threads.length} />
           <ul className="se-cc-list">
             {threadFold.shown.map((thread, i) => (
               <li key={`${thread.op}-${thread.title}-${i}`}>
@@ -126,7 +128,7 @@ export function ChapterChanges({ projectPath, chapter: initialChapter, busy, cha
       ) : null}
       {changes.facts.length > 0 ? (
         <div className="se-cc-block">
-          <h3>记下的事 <small>{changes.facts.length} 条</small></h3>
+          <Sec title="记下的事" count={changes.facts.length} />
           <ul className="se-cc-list">
             {factFold.shown.map((fact, i) => (
               <li key={`${fact.text}-${i}`} className={fact.later ? "is-later" : ""}>
