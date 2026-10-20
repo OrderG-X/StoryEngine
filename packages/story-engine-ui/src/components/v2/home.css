@@ -32,7 +32,7 @@
   .se-home-scroll{flex:1;min-height:0;overflow-y:auto;}
   .se-home-inner{max-width:1080px;margin:0 auto;padding:36px 40px 64px;}
   .se-home-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap;}
-  .se-home-head h1{margin:0;font-size:24px;line-height:1.3;}
+  .se-home-head h1{margin:0;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:30px;font-weight:700;line-height:1.25;letter-spacing:.04em;}
   .se-home-head p{margin:4px 0 0;font-size:13px;color:var(--muted);}
   .se-home-actions{display:flex;gap:8px;}
 
@@ -43,7 +43,7 @@
   .se-btn.ghost:hover{background:var(--hover);}
 
   .se-faint{color:var(--faint);}
-  .se-eyebrow{margin:0 0 8px;font-size:12px;color:var(--faint);}
+  .se-eyebrow{margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:.22em;color:var(--accent);}
   .se-pill{display:inline-flex;align-items:center;font-size:12px;line-height:20px;padding:0 8px;border-radius:999px;color:var(--muted);background:var(--hover);}
   .se-pill.ok{color:var(--success);background:var(--success-soft);}
   .se-pill.warn{color:var(--warn);background:var(--warn-soft);}
@@ -86,18 +86,20 @@
 
   /* ── 全部书 ── */
   .se-shelf-section > header{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;margin-bottom:16px;}
-  .se-shelf-section h2{margin:0;font-size:18px;}
+  /* 小节标题：强调色短竖条 + 字（和设定本一节一个样） */
+  .se-shelf-section h2{display:flex;align-items:center;gap:8px;margin:0;font-size:15px;font-weight:650;letter-spacing:.04em;}
+  .se-shelf-section h2::before{content:"";flex:none;width:3px;height:15px;border-radius:2px;background:var(--accent);}
   .se-shelf-section small{font-size:12px;color:var(--muted);}
   /* 找书（P10）：搜索 + 排序靠右；窄屏换行。 */
   .se-shelf-tools{margin-left:auto;display:flex;align-items:center;gap:8px;}
   .se-shelf-search{width:180px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:13px;}
-  .se-shelf-search:focus,.se-shelf-sort:focus{outline:none;border-color:var(--accent);}
+  .se-shelf-search:focus,.se-shelf-sort:focus{outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
   .se-shelf-sort{height:30px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;}
   .se-shelf-section.is-archived{margin-top:28px;}
   .se-shelf-section.is-archived > .se-shelf-grid{margin-top:16px;opacity:.85;}
   .se-hero-today{margin:12px 0 0;font-size:13px;color:var(--accent);}
   .se-shelf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:28px 22px;}
-  .se-shelf-empty{padding:24px;border:1px dashed var(--line-strong);border-radius:12px;text-align:center;color:var(--faint);font-size:13px;}
+  .se-shelf-empty{padding:28px 20px;border:1px dashed var(--line-strong);border-radius:12px;text-align:center;color:var(--faint);font-size:13px;line-height:1.7;background:var(--sunken);}
   .se-shelf-empty strong{display:block;color:var(--text);font-weight:500;margin-bottom:4px;}
   .se-shelf-empty p{margin:0;}
   .se-shelf-foot{display:flex;justify-content:center;gap:16px;margin-top:40px;}

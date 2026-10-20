@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
 import { chapterBareTitle, chapterDisplayTitle } from "../v2Utils.js";
 import { searchLibraryIndex, type LibrarySearchSource } from "./librarySearch.js";
+import { Avatar } from "./bibleVisual.js";
 import { IconArrowRight, IconBook, IconFile, IconSearch, IconUser } from "./icons.js";
 
 export interface PaletteCommand {
@@ -194,7 +195,8 @@ export function CommandPalette(props: {
                     onMouseMove={() => { if (index !== activeIndex) setActive(index); }}
                     onClick={() => runItem(item)}
                   >
-                    <Icon size={16} />
+                    {/* 人物带设定本同款头像（名字第一个字、按名字定色），一眼对上 */}
+                    {item.kind === "character" ? <Avatar name={item.label} kind="character" /> : <Icon size={16} />}
                     <span className="se-pal-label">{item.label}</span>
                     <span className="se-pal-hint">{item.hint}</span>
                   </button>

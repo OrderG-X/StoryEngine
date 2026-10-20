@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
@@ -51,15 +51,15 @@ import "./se-bible.css";
  */
 // 章节不在「资料中心」类目里——它属于写作上下文，走「写作台」视图的章节竖轨。
 const CATS = [
-  { id: "changes", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事" },
-  { id: "story", title: "故事设定", sub: "一句话 · 题材 · 世界规矩 · 其他设定" },
+  { id: "changes", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事", group: "刚定稿" },
+  { id: "story", title: "故事设定", sub: "一句话 · 题材 · 世界规矩 · 其他设定", group: "设定卡" },
   { id: "rules", title: "写作规则", sub: "视角 · 字数 · 文风 · 禁写" },
   { id: "chars", title: "人物", sub: "人物卡 · 账里记的" },
   { id: "relations", title: "关系", sub: "谁和谁什么关系" },
   { id: "items", title: "物品", sub: "物品卡" },
   { id: "places", title: "地点", sub: "地点卡" },
   { id: "uncarded", title: "还没建卡", sub: "账里有、卡里没有的" },
-  { id: "hooks", title: "伏笔与线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口" },
+  { id: "hooks", title: "伏笔与线索", sub: "刚埋下 · 在推进 · 停太久 · 已收口", group: "全书的账" },
   { id: "timeline", title: "故事地图", sub: "章 × 人物 · 故事日" },
 ] as const;
 
@@ -176,6 +176,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const [cat, setCat] = useState<string>("story");
   // 设定本先展开哪张卡（正文名字速览、搜索结果、⌘K 点进来的）。
   const [bibleFocus, setBibleFocus] = useState<string | undefined>(undefined);
+  // 设定本换页从顶上看起（不留上一页翻到的位置）；要点开某张卡的，卡自己再滚过去（它的 effect 在这之后跑）。
+  const bibleReadRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (bibleReadRef.current) bibleReadRef.current.scrollTop = 0; }, [cat]);
   // 窄窗开局收起章节抽屉（不挡稿纸）；宽窗按专注写作开关决定。
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
   const [chapterQuery, setChapterQuery] = useState("");
@@ -526,7 +529,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       </div>
                     ) : null}
                   </div>
-                  {CATS.map((c) => (
+                  {CATS.map((c) => [
+                    "group" in c ? <p key={`g-${c.id}`} className="se-bnav-group">{c.group}</p> : null,
                     <button
                       key={c.id}
                       className={`se-bnav-item${cat === c.id ? " on" : ""}`}
@@ -537,11 +541,11 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                     >
                       {c.title}
                       {bibleCounts[c.id as BibleCat] ? <span className="se-bnav-count" aria-hidden="true">{bibleCounts[c.id as BibleCat]}</span> : null}
-                    </button>
-                  ))}
+                    </button>,
+                  ])}
                   <p className="se-bnav-note">点字就能改，也可以在右边让 AI 改。</p>
                 </nav>
-                <div className="read">
+                <div className="read" ref={bibleReadRef}>
                   <div className={`read-inner read-enter${cat === "hooks" || cat === "timeline" ? " is-wide" : ""}`} key={cat}>
                     {cat === "changes" && props.projectPath ? (
                       <ChapterChanges

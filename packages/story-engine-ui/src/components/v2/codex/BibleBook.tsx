@@ -7,8 +7,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
-import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, Sec, type FieldItem } from "./bibleEdit.js";
-import { Avatar, PresenceStrip, RelationGraph, firstGlyph } from "./bibleVisual.js";
+import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
+import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
 
 export type BibleCat = "story" | "rules" | "chars" | "relations" | "items" | "places" | "uncarded";
 
@@ -78,7 +78,7 @@ export function BibleBook(props: BibleBookProps) {
       <section className="se-bk" aria-label="设定本">
         {props.error ? (
           <p className="se-sm-error">{props.error} <button type="button" className="se-sm-link" onClick={props.reload}>再读一次</button></p>
-        ) : <p className="se-sm-empty">正在读…</p>}
+        ) : <Skeleton />}
       </section>
     );
   }
@@ -86,7 +86,12 @@ export function BibleBook(props: BibleBookProps) {
   return (
     <section className="se-bk" aria-label="设定本">
       {props.busy ? <p className="se-bk-note">AI 正在忙，等它做完再改。</p> : null}
-      {notice ? <p className={`se-bk-notice${notice.ok ? "" : " is-error"}`} role="status">{notice.text}</p> : null}
+      {notice ? (
+        <div className={`se-bk-notice${notice.ok ? "" : " is-error"}`}>
+          <p role="status">{notice.text}</p>
+          <button type="button" className="se-bk-notice-x" aria-label="关掉提示" onClick={() => setNotice(null)} />
+        </div>
+      ) : null}
       {props.cat === "story" ? <StoryPage ctx={ctx} /> : null}
       {props.cat === "rules" ? <RulesPage ctx={ctx} /> : null}
       {props.cat === "chars" ? <CardsPage ctx={ctx} kind="character" entries={ctx.bible.characters} /> : null}
@@ -123,29 +128,6 @@ function pageContext(props: BibleBookProps, bible: BibleView, disabled: boolean,
     kindOf,
     openName: (name) => { if (kinds.has(name)) props.onOpenCat?.(KIND_CAT[kindOf(name)], name); },
   };
-}
-
-interface Stat { readonly value: number; readonly label: string }
-
-/** 页头：小字「设定本」、标题、一句说明，右边几个数。数是 0 的不摆。 */
-function PageHead({ title, sub, stats }: { readonly title: string; readonly sub?: string; readonly stats?: readonly Stat[] }) {
-  const shown = (stats ?? []).filter((stat) => stat.value > 0);
-  return (
-    <header className="se-bk-head">
-      <div className="se-bk-head-main">
-        <p className="se-bk-kicker">设定本</p>
-        <h2 className="se-bk-title">{title}</h2>
-        {sub ? <p className="se-bk-lead">{sub}</p> : null}
-      </div>
-      {shown.length > 0 ? (
-        <dl className="se-bk-stats">
-          {shown.map((stat) => (
-            <div key={stat.label} className="se-bk-stat"><dt>{stat.label}</dt><dd>{stat.value}</dd></div>
-          ))}
-        </dl>
-      ) : null}
-    </header>
-  );
 }
 
 /* ── 故事设定：扉页（一句话、题材、基调）+ 其余几栏 + 「设定」类卡 ── */
@@ -667,7 +649,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
     void ctx.save([{ op: "card.create", kind, name: entry.name, ...(entry.aliases.length > 0 ? { aliases: [...entry.aliases] } : {}) }]);
   return (
     <>
-      <PageHead title="还没建卡" sub={entries.length > 0 ? "定稿时账里记下的。建了卡，写稿和核账就按卡上写的来。" : "账里记下的都有卡了。"} stats={[
+      <PageHead title="还没建卡" sub="定稿时账里记下、还没有卡的。建了卡，写稿和核账就按卡上写的来。" stats={[
         { value: entries.filter((entry) => entry.character).length, label: "个人" },
         { value: entries.filter((entry) => !entry.character).length, label: "个别的" },
       ]} />
@@ -676,6 +658,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
           <input className="se-bk-filter" type="search" value={query} placeholder="找…" aria-label="找还没建卡的" onChange={(event) => setQuery(event.target.value)} />
         </div>
       ) : null}
+      {entries.length === 0 ? <p className="se-bk-blank is-done">账里记下的都有卡了，没有落下的。</p> : null}
       {shown.length > 0 ? (
         <ul className="se-bk-grid">
           {shown.map((entry) => (

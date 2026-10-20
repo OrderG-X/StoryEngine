@@ -40,7 +40,8 @@ describe("伏笔看板（重构 P6，草图 ④）", () => {
     mockFetch({ ok: true, board: BOARD });
     render(<ThreadBoard projectPath="/book" busy={false} />);
     await screen.findByText("钥匙开什么");
-    expect(screen.getByText("开着 3 条（停太久 1 条） · 已收 1 条 · 算到第 10 章。点一条看经过，点原句回稿纸。")).toBeTruthy();
+    expect(screen.getByText("算到第 10 章。点一条看经过，点原句回稿纸。")).toBeTruthy();
+    expect(screen.getByText("开着").closest("dl")?.textContent).toBe("开着3停太久1已收1");
     expect(within(screen.getByRole("region", { name: "停太久 1 条" })).getByText("停了 7 章没动")).toBeTruthy();
     expect(within(screen.getByRole("region", { name: "在推进 1 条" })).getByText("沈同志是谁")).toBeTruthy();
     expect(within(screen.getByRole("region", { name: "刚埋下 1 条" })).getByText("外乡人")).toBeTruthy();

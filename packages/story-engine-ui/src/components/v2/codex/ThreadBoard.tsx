@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { fetchThreadBoard, type ThreadBoard as Board, type ThreadBoardItem } from "../../../api/storyThreadsClient.js";
+import { PageHead, Skeleton } from "./bibleVisual.js";
 
 type Status = ThreadBoardItem["status"];
 type Weight = ThreadBoardItem["weight"];
@@ -161,10 +162,10 @@ export function ThreadBoard({ projectPath, busy, onJump, onAction }: {
   if (!board) {
     return (
       <section className="se-tb" aria-label="伏笔与线索">
-        <h2 className="se-tb-h">伏笔与线索</h2>
+        <PageHead title="伏笔与线索" />
         {error ? (
           <p className="se-tb-error">{error} <button type="button" className="se-tb-retry" onClick={reload}>再读一次</button></p>
-        ) : <p className="se-tb-empty">正在读线索…</p>}
+        ) : <Skeleton label="正在读线索…" />}
       </section>
     );
   }
@@ -175,15 +176,12 @@ export function ThreadBoard({ projectPath, busy, onJump, onAction }: {
 
   return (
     <section className="se-tb" aria-label="伏笔与线索">
-      <header className="se-tb-top">
-        <h2 className="se-tb-h">伏笔与线索</h2>
-        <p className="se-tb-sum">
-          {board.threads.length === 0
-            ? "还没有线索：定稿时记账员会把埋下的伏笔记在这里。"
-            : `开着 ${openCount} 条${staleCount > 0 ? `（停太久 ${staleCount} 条）` : ""} · 已收 ${closedCount} 条 · 算到第 ${board.upTo} 章。点一条看经过，点原句回稿纸。`}
-        </p>
-        {error ? <p className="se-tb-error">{error} <button type="button" className="se-tb-retry" onClick={reload}>再读一次</button></p> : null}
-      </header>
+      <PageHead
+        title="伏笔与线索"
+        sub={board.threads.length === 0 ? "还没有线索：定稿时记账员会把埋下的伏笔记在这里。" : `算到第 ${board.upTo} 章。点一条看经过，点原句回稿纸。`}
+        stats={[{ value: openCount, label: "开着" }, { value: staleCount, label: "停太久" }, { value: closedCount, label: "已收" }]}
+      />
+      {error ? <p className="se-tb-error">{error} <button type="button" className="se-tb-retry" onClick={reload}>再读一次</button></p> : null}
       {board.threads.length > 0 ? (
         <div className="se-tb-cols">
           {columns.map((column) => {
