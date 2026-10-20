@@ -148,7 +148,8 @@ export default function ImportBookDialog({ open, onCancel, onImport, preview = p
 
         <DialogFooter>
           <button className="se-v2-dialog-cancel-btn" disabled={busy === "importing"} onClick={close} type="button">取消</button>
-          <button className="se-v2-dialog-cancel-btn" disabled={busy !== null} onClick={() => inputRef.current?.click()} type="button">
+          {/* 还没选文件时「选文件…」就是这一步的主按钮；切好章后主按钮让给「导入 N 章」。 */}
+          <button className={split ? "se-v2-dialog-cancel-btn" : "se-v2-dialog-confirm-btn"} disabled={busy !== null} onClick={() => inputRef.current?.click()} type="button">
             {busy === "reading" ? "正在读文件…" : split ? "换文件…" : "选文件…"}
           </button>
           {split ? (

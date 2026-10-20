@@ -50,30 +50,69 @@
   .topbar.se-lib-bar{justify-content:flex-end;}
 
   /* ═══ 设置弹窗 ═══ */
-  .se-scrim{position:fixed;inset:0;z-index:60;background:var(--scrim);animation:se-fade .14s ease-out;}
+  .se-scrim{position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(3px);animation:se-fade .14s ease-out;}
   .se-modal{
     position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);
     width:min(960px,calc(100vw - 32px));height:min(720px,calc(100vh - 48px));
-    display:grid;grid-template-columns:168px minmax(0,1fr);
-    background:var(--panel);border:1px solid var(--line-strong);border-radius:14px;
-    box-shadow:var(--shadow-pop);overflow:hidden;animation:se-fade .14s ease-out;
+    display:grid;grid-template-columns:176px minmax(0,1fr);
+    background:radial-gradient(560px 240px at 100% -8%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%),var(--panel);
+    border:1px solid var(--line-strong);border-radius:16px;
+    box-shadow:var(--shadow-pop),0 40px 90px -40px rgba(0,0,0,.6);overflow:hidden;animation:se-fade .14s ease-out;
   }
-  .se-modal-nav{display:flex;flex-direction:column;gap:2px;padding:16px 10px;border-right:1px solid var(--line);}
-  .se-modal-title{padding:4px 10px 10px;font-size:12px;color:var(--faint);}
+  html:not(.reduce-motion) & .se-modal{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
+  .se-modal-nav{display:flex;flex-direction:column;gap:2px;padding:20px 12px;border-right:1px solid var(--line);background:var(--sunken);}
+  .se-modal-title{padding:2px 10px 14px;font-size:11px;font-weight:600;letter-spacing:.2em;color:var(--accent);}
   .se-modal-nav button{
-    height:34px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;
-    color:var(--muted);font-size:13px;cursor:pointer;
+    position:relative;height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;text-align:left;
+    color:var(--muted);font-size:13px;cursor:pointer;transition:background .12s ease,color .12s ease;
   }
   .se-modal-nav button:hover{background:var(--hover);color:var(--text);}
-  .se-modal-nav button.on{background:var(--accent-soft);color:var(--text);}
+  .se-modal-nav button.on{background:var(--accent-soft);color:var(--text);font-weight:600;}
+  .se-modal-nav button.on::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--accent);}
+  .se-modal-nav button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-soft);}
   .se-modal-body{position:relative;min-width:0;overflow:auto;}
-  .se-modal-close{position:absolute;top:10px;right:10px;z-index:2;}
+  .se-modal-close{position:absolute;top:14px;right:14px;z-index:2;}
+  /* 嵌进弹窗的设置页：头部和底子透出弹窗的光，标题宋体，小节轻一点。 */
+  .se-modal-body .msk-embedded.ms-dialog{background:transparent;}
+  .se-modal-body .ms-header{padding:26px 30px 16px;background:transparent;border-bottom-color:var(--line);}
+  .se-modal-body .ms-title{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:20px;font-weight:700;letter-spacing:.02em;color:var(--text);}
+  .se-modal-body .ms-subtitle{margin-top:6px;font-size:12.5px;color:var(--muted);}
+  .se-modal-body .ms-body{padding:20px 30px 32px;background:transparent;}
+  .se-modal-body .ms-section{border-color:var(--line);background:var(--surface);border-radius:12px;}
+  /* 外壳的 button{font:inherit;color:inherit} 比设置页的单类规则重，按钮字被撑成正文的 16px、颜色也丢了：弹窗里按设置页本来的补回。 */
+  .se-modal-body .ms-btn{font-size:13px;}
+  .se-modal-body .ms-btn-xs{min-height:28px;padding:0 12px;font-size:12px;border-radius:7px;}
+  .se-modal-body .ms-btn:not(.ms-btn-primary):not(.ms-btn-accent){border-color:var(--line-strong);background:transparent;color:var(--muted);}
+  .se-modal-body .ms-btn:not(.ms-btn-primary):not(.ms-btn-accent):hover:not(:disabled){border-color:var(--accent-line);background:var(--accent-soft);color:var(--text);}
+  .se-modal-body .ms-btn-ghost:not(.ms-btn-primary){border-color:transparent;}
+  .se-modal-body .ms-btn-danger{color:var(--danger);}
+  .se-modal-body .ms-btn-primary{color:var(--accent-ink);}
+  .se-modal-body .ms-btn-accent,.se-modal-body .ms-add-btn,.se-modal-body .ms-test-btn{color:var(--accent);}
+  .se-modal-body .ms-add-btn,.se-modal-body .ms-test-btn{font-size:12px;}
+  .se-modal-body .ms-preset-chip{font-size:11.5px;color:var(--muted);}
+  .se-modal-body .ms-display-btn{font-size:13px;color:var(--muted);}
+  .se-modal-body .ms-input-icon-btn{color:var(--faint);}
+  .se-modal-body .ms-display-reset{font-size:12px;color:var(--faint);}
+  .se-modal-body .ms-display-reset:hover{color:var(--text);}
+  .se-modal-body .ms-memory-preset{font-size:12.5px;color:var(--muted);background:transparent;}
+  .se-modal-body .ms-memory-preset.is-active,.se-modal-body .ms-memory-preset:hover{color:var(--accent);background:var(--accent-soft);}
+  /* 小节标题前一道强调色短竖条（和设定本一样）；功能分配里的模型签换回正文字体、做成胶囊。 */
+  .se-modal-body .ms-section-title{display:inline-flex;align-items:center;gap:8px;}
+  .se-modal-body .ms-section-title::before{content:"";width:3px;height:13px;border-radius:2px;background:var(--accent);}
+  .se-modal-body .ms-task-model-badge{font-family:inherit;font-size:11.5px;border-radius:999px;padding:3px 11px;}
+  .se-modal-body .ms-task-row + .ms-task-row{margin-top:2px;}
   /* 嵌进弹窗的旧设置页：去掉它自带的整页外框与返回键（弹窗已有关闭键）。 */
   .se-modal-body .ms-close,.se-modal-body .ai-settings-back{display:none;}
   /* 「高级」：设置文件原文。 */
-  .se-raw-settings .ms-raw-json{width:100%;min-height:420px;}
+  .se-raw-settings .ms-raw-json{width:100%;min-height:420px;border:1px solid var(--line);border-radius:12px;background:var(--sunken);}
+  .se-raw-settings .ms-raw-json:focus{outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
   .se-raw-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;}
   /* 「备份」（P10）：文件夹路径一行省略；换文件夹时整行输入框。 */
+  /* 备份页没有小节框：一整块卡片底，行间细线。 */
+  .se-backup-settings .ms-display-list{gap:0;padding:4px 6px;border:1px solid var(--line);border-radius:12px;background:var(--surface);}
+  .se-backup-settings .ms-display-row{padding:14px 12px;}
+  .se-backup-settings .ms-display-row + .ms-display-row{border-top:1px solid var(--line-weak);border-radius:0;}
+  .se-backup-settings .se-backup-edit{padding:0 12px 14px;}
   .se-backup-path{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;}
   .se-backup-edit{display:flex;flex-direction:column;gap:8px;padding:0 0 12px;}
   .se-backup-input{width:100%;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:13px;}
@@ -82,16 +121,21 @@
   .se-backup-last{margin:12px 0 0;font-size:13px;color:var(--muted);}
   .se-backup-last.is-bad{color:var(--danger);}
   /* 「用量」（P10）：今天 / 本月两个数，近 30 天小柱，按书 / 功能 / 模型一行一个。 */
-  .se-usage-top{display:flex;gap:28px;margin-bottom:6px;}
-  .se-usage-stat{display:flex;flex-direction:column;gap:2px;}
-  .se-usage-stat b{font-size:22px;font-weight:600;color:var(--text);}
-  .se-usage-stat span{font-size:12px;color:var(--faint);}
+  .se-usage-top{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;margin-bottom:6px;}
+  .se-usage-stat{display:flex;flex-direction:column;gap:3px;padding:14px 16px 13px;border:1px solid var(--line-weak);border-radius:12px;background:var(--sunken);}
+  .se-usage-stat b{font-size:26px;line-height:1.1;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;}
+  .se-usage-stat span{font-size:11.5px;letter-spacing:.06em;color:var(--faint);}
   .se-usage-stat em{font-style:normal;font-size:12px;color:var(--muted);}
   .se-usage-hint{margin:6px 0;font-size:12px;color:var(--faint);}
-  .se-usage-bars{display:flex;align-items:flex-end;gap:2px;height:48px;margin:14px 0 16px;}
-  .se-usage-bars i{flex:1;min-width:2px;border-radius:2px;background:var(--line);}
-  .se-usage-bars i.is-on{background:var(--accent);}
+  .se-usage-bars{display:flex;align-items:flex-end;gap:3px;height:84px;margin:14px 0 18px;padding:12px 12px 0;border:1px solid var(--line-weak);border-radius:12px;background:var(--sunken);box-sizing:border-box;}
+  .se-usage-bars i{flex:1;min-width:2px;min-height:3px;border-radius:3px 3px 0 0;background:var(--line);}
+  .se-usage-bars i.is-on{background:linear-gradient(to top,var(--accent),color-mix(in srgb,var(--accent) 55%,transparent));}
   .se-usage-tabs{margin-bottom:8px;}
+  /* 分段切换（用量分列、显示里的主题）：一条下沉的槽，当前那格填强调色。 */
+  .se-modal-body .ms-theme-seg{display:inline-flex;width:fit-content;gap:2px;padding:3px;border:1px solid var(--line-weak);border-radius:10px;background:var(--sunken);}
+  .se-modal-body .ms-theme-seg .ms-display-btn{height:28px;padding:0 12px;border-color:transparent;border-radius:7px;background:transparent;font-weight:500;}
+  .se-modal-body .ms-theme-seg .ms-display-btn:hover:not(:disabled){border-color:transparent;background:var(--hover);color:var(--text);}
+  .se-modal-body .ms-theme-seg .ms-display-btn.is-on{background:var(--accent);color:var(--accent-ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.2);}
   .se-usage-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;}
   .se-usage-list > li,.se-usage-row{display:flex;align-items:center;gap:12px;min-height:36px;}
   .se-usage-list > li{border-bottom:1px solid var(--line-weak);}
@@ -238,5 +282,6 @@
   }
   @media (prefers-reduced-motion:reduce){
     .se-scrim,.se-modal,.se-cs{animation:none;}
+    html:not(.reduce-motion) & .se-modal{animation:none;}
   }
 }

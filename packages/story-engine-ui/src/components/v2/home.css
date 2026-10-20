@@ -52,31 +52,48 @@
   .se-cover{
     position:relative;display:flex;justify-content:center;width:100%;aspect-ratio:3/4;padding:14px 0;overflow:hidden;
     border-radius:4px 8px 8px 4px;background:var(--cover-0);
-    box-shadow:inset 6px 0 0 rgba(0,0,0,.14),0 10px 24px -14px rgba(0,0,0,.6);
-    transition:transform .15s;
+    box-shadow:0 1px 1px rgba(0,0,0,.18),0 12px 26px -14px rgba(0,0,0,.65);
+    transition:transform .18s ease,box-shadow .18s ease;
   }
+  /* 书的质感：左边书脊一道暗、紧挨着一道亮（装订压痕），整面斜着一层很淡的光；里面一圈细框像布面精装 */
+  .se-cover::before{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:
+      linear-gradient(90deg,rgba(0,0,0,.24) 0,rgba(0,0,0,.08) 5px,rgba(255,255,255,.12) 7px,rgba(255,255,255,0) 15px),
+      linear-gradient(155deg,rgba(255,255,255,.08),rgba(255,255,255,0) 42%,rgba(0,0,0,.10));
+  }
+  .se-cover::after{
+    content:"";position:absolute;inset:7px 7px 7px 13px;pointer-events:none;
+    border:1px solid color-mix(in srgb,var(--cover-ink) 14%,transparent);border-radius:2px 5px 5px 2px;
+  }
+  .se-cover > *{position:relative;z-index:1;}
   .se-cover.tone-1{background:var(--cover-1);} .se-cover.tone-2{background:var(--cover-2);} .se-cover.tone-3{background:var(--cover-3);}
   .se-cover.tone-4{background:var(--cover-4);} .se-cover.tone-5{background:var(--cover-5);} .se-cover.tone-6{background:var(--cover-6);}
   .se-cover-t{
     writing-mode:vertical-rl;max-height:100%;overflow:hidden;color:var(--cover-ink);
     font-family:"Noto Serif SC","Songti SC",serif;font-weight:600;font-size:17px;letter-spacing:.12em;line-height:1.3;
   }
-  .se-cover.is-h{justify-content:flex-start;align-items:flex-start;padding:16px 14px 14px 18px;}
+  /* 竖排书名放在一条「题签」里：浅底细框，像线装书封面上贴的那一条 */
+  .se-cover:not(.is-h) .se-cover-t{margin-top:6px;max-height:calc(100% - 12px);padding:10px 5px;border-radius:2px;
+    background:color-mix(in srgb,var(--cover-ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--cover-ink) 26%,transparent);}
+  .se-cover.is-h{justify-content:flex-start;align-items:flex-start;padding:18px 16px 16px 22px;}
   .se-cover.is-h .se-cover-t{
     writing-mode:horizontal-tb;letter-spacing:0;font-size:14px;line-height:1.45;word-break:break-all;
     display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;
   }
   .se-cover.is-lg .se-cover-t{font-size:20px;}
-  .se-cover-seal{position:absolute;left:10px;bottom:10px;width:18px;height:18px;border-radius:3px;background:rgba(190,70,50,.75);}
+  .se-cover-seal{position:absolute;left:auto;right:14px;bottom:14px;width:16px;height:16px;border-radius:3px;background:rgba(190,70,50,.75);
+    box-shadow:inset 0 0 0 2px rgba(255,255,255,.18);}
 
   /* ── 继续写 ── */
   .se-hero{
     display:grid;grid-template-columns:132px minmax(0,1fr);gap:28px;align-items:center;margin-bottom:36px;padding:24px;
-    border-radius:16px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:16px;border:1px solid var(--line);
+    background:radial-gradient(520px 220px at 88% -10%,color-mix(in srgb,var(--accent) 9%,transparent),transparent 70%),var(--surface-2);
   }
   .se-hero.is-empty{grid-template-columns:minmax(0,1fr);}
   .se-hero-cover{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
-  .se-hero-cover:hover .se-cover{transform:translateY(-2px);}
+  .se-hero-cover:hover .se-cover,.se-book-open:hover .se-cover{transform:translateY(-3px);box-shadow:0 1px 1px rgba(0,0,0,.18),0 18px 30px -14px rgba(0,0,0,.7);}
   .se-hero-info{min-width:0;}
   .se-hero h2{margin:0;font-family:"Noto Serif SC","Songti SC",serif;font-size:26px;line-height:1.3;overflow-wrap:anywhere;}
   .se-hero-meta{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--muted);}
@@ -109,7 +126,6 @@
   .se-shelf-file{display:none;}
   .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
   .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
-  .se-book-open:hover .se-cover{transform:translateY(-2px);}
   .se-book-info{position:relative;min-width:0;}
   .se-book-row{display:flex;align-items:flex-start;gap:4px;}
   .se-book-row h3{
@@ -131,6 +147,11 @@
   .se-book-menu button{height:32px;padding:0 10px;border:0;border-radius:7px;background:transparent;text-align:left;font-size:13px;color:var(--text);cursor:pointer;}
   .se-book-menu button:hover{background:var(--hover);}
   .se-book-menu button.is-danger{color:var(--danger);}
+  .se-book-menu button.is-danger:hover{background:var(--danger-soft);}
+  .se-book-menu > .is-danger{position:relative;margin-top:9px;overflow:visible;}
+  .se-book-menu > .is-danger::before{content:"";position:absolute;left:6px;right:6px;top:-5px;height:1px;background:var(--line);}
+  .se-book-menu > button:first-child{font-weight:600;}
+  .se-book-menu{animation:se-fade .12s ease-out;}
 
   @media (max-width:860px){
     .se-home-inner{padding:24px 16px 48px;}
