@@ -649,7 +649,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
     void ctx.save([{ op: "card.create", kind, name: entry.name, ...(entry.aliases.length > 0 ? { aliases: [...entry.aliases] } : {}) }]);
   return (
     <>
-      <PageHead title="还没建卡" sub={entries.length > 0 ? "定稿时账里记下的。建了卡，写稿和核账就按卡上写的来。" : "账里记下的都有卡了。"} stats={[
+      <PageHead title="还没建卡" sub="定稿时账里记下、还没有卡的。建了卡，写稿和核账就按卡上写的来。" stats={[
         { value: entries.filter((entry) => entry.character).length, label: "个人" },
         { value: entries.filter((entry) => !entry.character).length, label: "个别的" },
       ]} />
@@ -658,6 +658,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
           <input className="se-bk-filter" type="search" value={query} placeholder="找…" aria-label="找还没建卡的" onChange={(event) => setQuery(event.target.value)} />
         </div>
       ) : null}
+      {entries.length === 0 ? <p className="se-bk-blank is-done">账里记下的都有卡了，没有落下的。</p> : null}
       {shown.length > 0 ? (
         <ul className="se-bk-grid">
           {shown.map((entry) => (

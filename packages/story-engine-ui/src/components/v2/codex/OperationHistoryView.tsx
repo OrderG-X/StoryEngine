@@ -11,6 +11,7 @@ import type { SnapshotEntryDto } from "../../../api/types.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { syncWorkspaceAfterRestore } from "../../../workspace/syncAfterRestore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { PageHead, Skeleton } from "./bibleVisual.js";
 
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
@@ -118,25 +119,31 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
   const [kindFilter, setKindFilter] = useState<"all" | SnapshotKind>("all");
   const filtered = snapshots ? snapshots.filter((snapshot) => kindFilter === "all" || snapshotKind(snapshot) === kindFilter) : null;
   const groups = filtered ? groupSnapshotsByDay(filtered) : [];
+  const countOf = (id: "all" | SnapshotKind): number =>
+    snapshots ? (id === "all" ? snapshots.length : snapshots.filter((snapshot) => snapshotKind(snapshot) === id).length) : 0;
+  const today = snapshots ? groupSnapshotsByDay(snapshots).find((group) => group.day === "今天")?.items.length ?? 0 : 0;
 
   return (
     <div className="op-history">
       <div className="op-history-body">
-        <header className="op-history-head">
-          <h2>操作历史</h2>
-          <p className="op-history-hint">AI 每次写入前都会自动存档。恢复前也会先存一份，恢复本身也能再撤销。</p>
-        </header>
+        <PageHead
+          kicker="这本书"
+          title="操作历史"
+          sub="AI 每次写入前都会自动存档。恢复前也会先存一份，恢复本身也能再撤销。"
+          stats={[{ value: countOf("all"), label: "个存档" }, { value: today, label: "今天" }, { value: countOf("commit"), label: "次定稿" }]}
+        />
         {snapshots && snapshots.length > 0 ? (
           <div className="op-history-filters" role="group" aria-label="按类型筛选">
             {KIND_FILTERS.map((f) => (
               <button
                 key={f.id}
                 type="button"
-                className={kindFilter === f.id ? "on" : ""}
+                className={`is-${f.id}${kindFilter === f.id ? " on" : ""}`}
                 aria-pressed={kindFilter === f.id}
                 onClick={() => { setKindFilter(f.id); setConfirmId(null); }}
               >
                 {f.label}
+                {countOf(f.id) > 0 ? <small aria-hidden="true">{countOf(f.id)}</small> : null}
               </button>
             ))}
           </div>
@@ -146,13 +153,13 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
         ) : null}
         {!projectPath ? <div className="op-history-empty">请先打开一本真实的本地项目，才能查看操作历史。</div> : null}
         {projectPath && error ? <div className="op-history-error">读取存档失败：{error}</div> : null}
-        {projectPath && !error && snapshots === null ? <div className="op-history-empty">正在读取存档列表…</div> : null}
+        {projectPath && !error && snapshots === null ? <Skeleton label="正在读取存档列表…" /> : null}
         {projectPath && snapshots !== null && snapshots.length === 0 ? (
           <div className="op-history-empty">还没有任何存档。AI 第一次写入前会自动创建。</div>
         ) : null}
         {groups.map((group) => (
           <section key={group.day} className="op-history-group" aria-label={group.day}>
-            <h3 className="op-history-day">{group.day}</h3>
+            <h3 className="op-history-day"><span>{group.day}</span><small>{group.items.length}</small></h3>
             <div className="op-history-list">
               {group.items.map((snapshot) => {
                 const confirming = confirmId === snapshot.id;
@@ -161,7 +168,7 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
                 // 「恢复到…」这条本身就是恢复的结果，内容和它恢复的那条一样；要撤销恢复，点它下面那条「恢复前的自动存档」。
                 const restorable = !snapshot.label.startsWith("恢复到");
                 return (
-                  <div key={snapshot.id} className="op-history-entry">
+                  <div key={snapshot.id} className={`op-history-entry is-${snapshotKind(snapshot)}`}>
                     <article className={`op-history-item${confirming ? " is-confirming" : ""}${showing ? " is-showing" : ""}`}>
                       <span className="op-history-clock" title={formatTime(snapshot.timestamp)}>{formatClock(snapshot.timestamp)}</span>
                       <strong>{snapshot.label}</strong>
