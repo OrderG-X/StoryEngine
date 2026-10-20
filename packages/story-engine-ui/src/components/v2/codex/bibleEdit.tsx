@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { BibleAppearances, BibleFact, CardAuthor } from "../../../api/bibleClient.js";
+import { PresenceStrip } from "./bibleVisual.js";
 
 /** 一处就地编辑：单行回车存，多行 ⌘/Ctrl+回车存，Esc 取消。 */
 export function InlineEdit({ value, multiline, placeholder, label, disabled, onSave, onCancel }: {
@@ -70,10 +71,42 @@ export interface FieldItem {
   readonly by: CardAuthor;
 }
 
-/** 「标签：内容」一组：点内容就改，× 删，AI 补的可以认下；底下「+ 加一项」给常用标签当快捷。 */
-export function FieldList({ fields, suggestions, disabled, onSet, onAccept, emptyText }: {
+/** 一项的内容：点字就改，× 删掉，AI 补的可以认下。改不改由上层管（一页里同时只改一处）。 */
+export function FieldValue({ field, editing, disabled, onEdit, onDone, onSet, onAccept }: {
+  readonly field: FieldItem;
+  readonly editing: boolean;
+  readonly disabled?: boolean;
+  readonly onEdit: () => void;
+  readonly onDone: () => void;
+  readonly onSet: (value: string) => void;
+  readonly onAccept: () => void;
+}) {
+  if (editing) {
+    return <InlineEdit value={field.value} multiline label={field.label} placeholder="写上内容" disabled={disabled}
+      onSave={(next) => { onDone(); onSet(next); }} onCancel={onDone} />;
+  }
+  return (
+    <>
+      <button type="button" className="se-bk-value" disabled={disabled} title="点一下改" onClick={onEdit}>{field.value}</button>
+      <AiMark by={field.by} disabled={disabled} onAccept={onAccept} />
+      <button type="button" className="se-bk-x" disabled={disabled} aria-label={`删掉「${field.label}」`} onClick={() => onSet("")}>×</button>
+    </>
+  );
+}
+
+/** 内容长（或分了段）的一项占满一行，短的两三项并排。只看长短，不看写的是什么。 */
+const LONG_FIELD = 48;
+
+function isLongField(value: string): boolean {
+  return value.includes("\n") || Array.from(value).length > LONG_FIELD;
+}
+
+/** 「标签 / 内容」一组小格子：点内容就改，× 删，AI 补的虚线框、可以认下；底下「+ 加一项」给常用标签当快捷。 */
+export function FieldList({ fields, suggestions, taken, disabled, onSet, onAccept, emptyText }: {
   readonly fields: readonly FieldItem[];
   readonly suggestions: readonly string[];
+  /** 页面别处已经摆出来的标签（不再当快捷）。 */
+  readonly taken?: readonly string[];
   readonly disabled?: boolean;
   readonly onSet: (label: string, value: string) => void;
   readonly onAccept: (label: string) => void;
@@ -86,25 +119,18 @@ export function FieldList({ fields, suggestions, disabled, onSet, onAccept, empt
       {fields.length > 0 ? (
         <dl>
           {fields.map((field) => (
-            <div key={field.label} className="se-bk-field">
+            <div key={field.label} className={`se-bk-field${editing === field.label || isLongField(field.value) ? " is-wide" : ""}${field.by === "ai" ? " is-ai" : ""}`}>
               <dt>{field.label}</dt>
               <dd>
-                {editing === field.label ? (
-                  <InlineEdit value={field.value} multiline label={field.label} disabled={disabled}
-                    onSave={(next) => { setEditing(null); onSet(field.label, next); }} onCancel={() => setEditing(null)} />
-                ) : (
-                  <>
-                    <button type="button" className="se-bk-value" disabled={disabled} title="点一下改" onClick={() => setEditing(field.label)}>{field.value}</button>
-                    <AiMark by={field.by} disabled={disabled} onAccept={() => onAccept(field.label)} />
-                    <button type="button" className="se-bk-x" disabled={disabled} aria-label={`删掉「${field.label}」`} onClick={() => onSet(field.label, "")}>×</button>
-                  </>
-                )}
+                <FieldValue field={field} editing={editing === field.label} disabled={disabled}
+                  onEdit={() => setEditing(field.label)} onDone={() => setEditing(null)}
+                  onSet={(value) => onSet(field.label, value)} onAccept={() => onAccept(field.label)} />
               </dd>
             </div>
           ))}
         </dl>
       ) : null}
-      <AddField taken={fields.map((field) => field.label)} suggestions={suggestions} disabled={disabled} onAdd={onSet} />
+      <AddField taken={[...fields.map((field) => field.label), ...(taken ?? [])]} suggestions={suggestions} disabled={disabled} onAdd={onSet} />
     </div>
   );
 }
@@ -148,20 +174,27 @@ function AddField({ taken, suggestions, disabled, onAdd }: {
   );
 }
 
-/** 账里记的：出场章、定下的、现状。每条带第几章，有原句的点一下回正文那一句。 */
-export function LedgerNotes({ appearances, fixed, now, onJump }: {
+/** 账里记的：出场条、现在的样子（小格子）、定下的（按章排成时间线）。每条带第几章，有原句的点一下回正文那一句。 */
+export function LedgerNotes({ appearances, fixed, now, total, onJump }: {
   readonly appearances?: BibleAppearances;
   readonly fixed: readonly BibleFact[];
   readonly now: readonly BibleFact[];
+  /** 全书到第几章（出场条的长度）。 */
+  readonly total: number;
   readonly onJump?: (chapter: number, quote: string) => void;
 }) {
   if (!appearances && fixed.length === 0 && now.length === 0) return null;
   return (
     <div className="se-bk-ledger">
       <h4>账里记的</h4>
-      {appearances ? <p className="se-bk-appear">{appearanceText(appearances)}</p> : null}
-      <FactGroup title="定下的" facts={fixed} {...(onJump ? { onJump } : {})} />
-      <FactGroup title="现在" facts={now} {...(onJump ? { onJump } : {})} />
+      {appearances ? (
+        <div className="se-bk-appear">
+          <PresenceStrip chapters={appearances.chapters} total={total} large />
+          <p>{appearanceText(appearances)}</p>
+        </div>
+      ) : null}
+      <FactGroup title="现在" facts={now} variant="now" {...(onJump ? { onJump } : {})} />
+      <FactGroup title="定下的" facts={fixed} variant="timeline" {...(onJump ? { onJump } : {})} />
     </div>
   );
 }
@@ -174,20 +207,26 @@ export function appearanceText(appearances: BibleAppearances): string {
 
 const FACTS_VISIBLE = 6;
 
-function FactGroup({ title, facts, onJump }: { readonly title: string; readonly facts: readonly BibleFact[]; readonly onJump?: (chapter: number, quote: string) => void }) {
+function FactGroup({ title, facts, variant, onJump }: {
+  readonly title: string;
+  readonly facts: readonly BibleFact[];
+  readonly variant: "now" | "timeline";
+  readonly onJump?: (chapter: number, quote: string) => void;
+}) {
   const [all, setAll] = useState(false);
   if (facts.length === 0) return null;
-  const shown = all ? facts : facts.slice(0, FACTS_VISIBLE);
+  const ordered = variant === "timeline" ? [...facts].sort((a, b) => a.chapter - b.chapter) : facts;
+  const shown = all ? ordered : ordered.slice(0, FACTS_VISIBLE);
   return (
-    <div className="se-bk-facts">
+    <div className={`se-bk-facts is-${variant}`}>
       <h5>{title}</h5>
       <ul>
         {shown.map((fact, index) => (
           <li key={`${fact.attribute}-${fact.chapter}-${index}`}>
-            <span className="se-bk-fact"><b>{fact.attribute}</b>：{fact.value}</span>
             {fact.quote && onJump ? (
               <button type="button" className="se-bk-ch" title={`「${fact.quote}」`} onClick={() => onJump(fact.chapter, fact.quote!)}>第 {fact.chapter} 章</button>
             ) : <span className="se-bk-ch is-plain">第 {fact.chapter} 章</span>}
+            <span className="se-bk-fact"><b>{fact.attribute}<i>：</i></b>{fact.value}</span>
           </li>
         ))}
       </ul>

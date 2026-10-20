@@ -250,6 +250,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, cat]);
   // 故事地图、改动面板只要章名本身（当前章的名字从稿纸标题行来，带着「第N章 · 」）。
+  const lastCommittedChapter = useMemo(() => Math.max(0, ...chapters.filter((ch) => ch.status === "committed" || ch.hasCommittedChapter).map((ch) => ch.chapterNumber)), [chapters]);
   const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, chapterBareTitle(ch.title ?? "")] as const).filter(([, title]) => title.length > 0)), [chapters]);
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
@@ -560,6 +561,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         onJump={jumpToQuote}
                         onChanged={refreshOverview}
                         onOpenCat={openInBible}
+                        chapterCount={lastCommittedChapter}
                         {...(bibleFocus ? { focusName: bibleFocus } : {})}
                       />
                     ) : null}
