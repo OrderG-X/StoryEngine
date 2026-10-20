@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { NamePeekCard } from "./bibleIndex.js";
+import { Avatar } from "./bibleVisual.js";
 
 export interface NameOccurrence {
   readonly start: number;
@@ -200,8 +201,8 @@ export function NamePeek({
       onMouseLeave={() => { closeTimer.current = window.setTimeout(() => { setPeek(null); hoveredName.current = null; }, 200); }}
     >
       <div className="se-peek-h">
-        <span className="se-peek-av" aria-hidden="true">{c.name.slice(0, 1)}</span>
-        <div className="se-peek-who"><b>{c.name}</b><span>{c.protagonist ? "主角" : "人物"}</span></div>
+        <Avatar name={c.name} kind="character" />
+        <div className="se-peek-who"><b>{c.name}</b><span className={c.protagonist ? "is-hero" : undefined}>{c.protagonist ? "主角" : "人物"}</span></div>
       </div>
       <ul className="se-peek-lines">
         {c.lines.map((line) => <li key={line}>{line}</li>)}
