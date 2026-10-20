@@ -71,6 +71,17 @@ export interface FieldItem {
   readonly by: CardAuthor;
 }
 
+/** 页里的一节：强调色短竖条 + 标题 + 数 + 一道细线。 */
+export function Sec({ title, count }: { readonly title: string; readonly count?: number }) {
+  return (
+    <h3 className="se-bk-sec">
+      <span>{title}</span>
+      {count ? <small>{count}</small> : null}
+      <i aria-hidden="true" />
+    </h3>
+  );
+}
+
 /** 一项的内容：点字就改，× 删掉，AI 补的可以认下。改不改由上层管（一页里同时只改一处）。 */
 export function FieldValue({ field, editing, disabled, onEdit, onDone, onSet, onAccept }: {
   readonly field: FieldItem;
@@ -186,7 +197,7 @@ export function LedgerNotes({ appearances, fixed, now, total, onJump }: {
   if (!appearances && fixed.length === 0 && now.length === 0) return null;
   return (
     <div className="se-bk-ledger">
-      <h4>账里记的</h4>
+      <Sec title="账里记的" />
       {appearances ? (
         <div className="se-bk-appear">
           <PresenceStrip chapters={appearances.chapters} total={total} large />

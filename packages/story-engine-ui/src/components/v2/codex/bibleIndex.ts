@@ -86,3 +86,15 @@ export function namePeekCardsOf(bible: BibleView | null): NamePeekCard[] {
     now: entry.now.slice(0, PEEK_LINES).map((fact) => `${fact.attribute}：${fact.value}`),
   }));
 }
+
+/** 设定本左边分类后面的数（0 不显示）。 */
+export function bibleNavCounts(bible: BibleView | null): Partial<Record<BibleCat, number>> {
+  if (!bible) return {};
+  return {
+    chars: bible.characters.length,
+    relations: bible.relations.length,
+    items: bible.items.length,
+    places: bible.places.length,
+    uncarded: bible.uncarded.length,
+  };
+}

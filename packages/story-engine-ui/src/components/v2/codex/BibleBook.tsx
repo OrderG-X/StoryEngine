@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
-import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
+import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, Sec, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PresenceStrip, RelationGraph, firstGlyph } from "./bibleVisual.js";
 
 export type BibleCat = "story" | "rules" | "chars" | "relations" | "items" | "places" | "uncarded";
@@ -48,6 +48,8 @@ export interface BibleBookProps {
   readonly onOpenCat?: (cat: BibleCat, name?: string) => void;
   /** 全书到第几章（出场条的长度）；不给就按账里记到的最后一章。 */
   readonly chapterCount?: number;
+  /** 书名（故事设定扉页上）。 */
+  readonly bookTitle?: string;
 }
 
 export function BibleBook(props: BibleBookProps) {
@@ -123,11 +125,25 @@ function pageContext(props: BibleBookProps, bible: BibleView, disabled: boolean,
   };
 }
 
-function PageHead({ title, sub }: { readonly title: string; readonly sub?: string }) {
+interface Stat { readonly value: number; readonly label: string }
+
+/** 页头：小字「设定本」、标题、一句说明，右边几个数。数是 0 的不摆。 */
+function PageHead({ title, sub, stats }: { readonly title: string; readonly sub?: string; readonly stats?: readonly Stat[] }) {
+  const shown = (stats ?? []).filter((stat) => stat.value > 0);
   return (
-    <header className="se-sm-top">
-      <h2 className="se-sm-h">{title}</h2>
-      {sub ? <p className="se-sm-sum">{sub}</p> : null}
+    <header className="se-bk-head">
+      <div className="se-bk-head-main">
+        <p className="se-bk-kicker">设定本</p>
+        <h2 className="se-bk-title">{title}</h2>
+        {sub ? <p className="se-bk-lead">{sub}</p> : null}
+      </div>
+      {shown.length > 0 ? (
+        <dl className="se-bk-stats">
+          {shown.map((stat) => (
+            <div key={stat.label} className="se-bk-stat"><dt>{stat.label}</dt><dd>{stat.value}</dd></div>
+          ))}
+        </dl>
+      ) : null}
     </header>
   );
 }
@@ -151,8 +167,9 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
   );
   return (
     <>
-      <PageHead title="故事设定" />
-      <div className={`se-bk-hero${hero?.by === "ai" ? " is-ai" : ""}`}>
+      <PageHead title="故事设定" sub="这本书是什么、世界怎么转。写稿和核账都先看这里。" />
+      <div className={`se-bk-hero${hero?.by === "ai" ? " is-ai" : ""}`} data-mark={ctx.bookTitle ? firstGlyph(ctx.bookTitle) : ""}>
+        {ctx.bookTitle ? <p className="se-bk-hero-kicker">{ctx.bookTitle}</p> : null}
         <div className="se-bk-hero-line">
           {hero || editing === STORY_HERO ? value(STORY_HERO, hero) : (
             <button type="button" className="se-bk-value is-empty" disabled={ctx.disabled} onClick={() => setEditing(STORY_HERO)}>一句话写下这本书讲什么</button>
@@ -166,13 +183,14 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
             }
             return (
               <span key={label} className={`se-bk-hero-chip${editing === label ? " is-editing" : ""}${field?.by === "ai" ? " is-ai" : ""}`}>
-                <span className="se-bk-k">{label}</span>
-                {value(label, field)}
+                <b>{label}</b>
+                <span className="se-bk-hero-chip-v">{value(label, field)}</span>
               </span>
             );
           })}
         </div>
       </div>
+      <Sec title="其余几栏" count={rest.length} />
       <FieldList
         fields={rest}
         taken={[STORY_HERO, ...STORY_CHIPS]}
@@ -200,7 +218,10 @@ function RulesPage({ ctx }: { readonly ctx: PageContext }) {
   );
   return (
     <>
-      <PageHead title="写作规则" sub="写稿、核账、去 AI 味都照这里。" />
+      <PageHead title="写作规则" sub="写稿、核账、去 AI 味都照这里。" stats={[
+        { value: rules.style.length + rules.musts.length + rules.bans.length + rules.avoid.length, label: "条规则" },
+        { value: rules.exemplars.length, label: "段样本" },
+      ]} />
       {hasAi ? (
         <p className="se-bk-note">有几条是 AI 补的。<button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "rules.accept" }])}>全部认下</button></p>
       ) : null}
@@ -360,6 +381,14 @@ function Exemplars({ ctx }: { readonly ctx: PageContext }) {
 
 const FILTER_FROM = 8;
 
+/** 页头一句说明。 */
+const KIND_LEAD: Record<CardKind, string> = {
+  character: "卡上是你定的；账里记的跟着定稿走。",
+  place: "故事发生在哪。",
+  item: "要紧的东西。",
+  lore: "",
+};
+
 function hasAi(entry: BibleEntry): boolean {
   return entry.card.by === "ai" || entry.card.fields.some((field) => field.by === "ai");
 }
@@ -393,10 +422,12 @@ function CardsPage({ ctx, kind, entries, nested }: {
     else ctx.openName(name);
   };
 
-  const head = nested ? (
-    <h3 className="se-bk-subhead">其他设定{entries.length > 0 ? <small> {entries.length}</small> : null}</h3>
-  ) : (
-    <PageHead title={kindName} sub={entries.length > 0 ? `${entries.length} 张卡${pending > 0 ? `，${pending} 张有 AI 补的待认下` : ""}` : `还没有${kindName}卡。`} />
+  const head = nested ? <Sec title="其他设定" count={entries.length} /> : (
+    <PageHead title={kindName} sub={KIND_LEAD[kind]} stats={[
+      { value: entries.length, label: "张卡" },
+      { value: pending, label: "待认下" },
+      ...(kind === "character" ? [{ value: entries.filter((entry) => entry.appearances).length, label: "出过场" }] : []),
+    ]} />
   );
   return (
     <div className="se-bk-cards">
@@ -419,6 +450,7 @@ function CardsPage({ ctx, kind, entries, nested }: {
         ) : null}
       </div>
       {shown.length === 0 && query ? <p className="se-bk-empty">没找到「{query.trim()}」。</p> : null}
+      {entries.length === 0 && !nested ? <p className="se-bk-blank">还没有{kindName}卡。点「+ 新{kindName}」建一张，或者在右边让 AI 补。</p> : null}
       {shown.length > 0 ? (
         <ul className="se-bk-grid">
           {shown.map((entry) => (
@@ -453,31 +485,45 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
   // 点开的卡占满一行、可能挪了位置：滚到眼前。
   useEffect(() => { if (open) self.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); }, [open]);
   const firstField = card.fields[0];
+  const tags = (
+    <>
+      {card.protagonist ? <span className="se-bk-tag is-hero">主角</span> : null}
+      {card.by === "ai" ? <span className="se-bk-tag">AI 补</span> : null}
+    </>
+  );
   return (
     <article ref={self} className={`se-bk-card${open ? " is-open" : ""}${card.by === "ai" ? " is-ai" : ""}${card.protagonist ? " is-hero" : ""}`}>
-      <button type="button" className="se-bk-card-head" aria-expanded={open} onClick={onToggle}>
-        <Avatar name={card.name} kind={card.kind} large={open} />
-        <span className="se-bk-card-id">
-          <span className="se-bk-card-title">
-            <span className="se-bk-name">{card.name}</span>
-            {card.protagonist ? <span className="se-bk-tag is-hero">主角</span> : null}
-            {card.by === "ai" ? <span className="se-bk-tag">AI 补</span> : null}
-          </span>
-          {open ? null : firstField ? (
-            <span className="se-bk-peek" title={`${firstField.label}：${firstField.value}`}>{firstField.value}</span>
-          ) : <span className="se-bk-peek is-empty">还没写</span>}
-        </span>
-        {entry.appearances ? <span className="se-bk-count">{entry.appearances.chapters.length} 章</span> : null}
-        {!open && entry.appearances ? <PresenceStrip chapters={entry.appearances.chapters} total={ctx.total} /> : null}
-      </button>
       {open ? (
-        <div className="se-bk-card-body">
-          <div className="se-bk-card-acts">
+        <header className="se-bk-profile">
+          <Avatar name={card.name} kind={card.kind} large />
+          <div className="se-bk-profile-id">
             {renaming ? (
               <InlineEdit value={card.name} label="改名" disabled={ctx.disabled}
                 onSave={(name) => { setRenaming(false); if (name) void ctx.save([{ op: "card.rename", card: card.id, name }]); }}
                 onCancel={() => setRenaming(false)} />
-            ) : <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => setRenaming(true)}>改名</button>}
+            ) : <div className="se-bk-card-title"><span className="se-bk-name">{card.name}</span>{tags}</div>}
+            <div className="se-bk-aliases">
+              <span className="se-bk-k">也叫</span>
+              {card.aliases.map((alias) => (
+                <span key={alias} className="se-bk-alias">
+                  {alias}
+                  <button type="button" className="se-bk-x" disabled={ctx.disabled} aria-label={`去掉别名「${alias}」`}
+                    onClick={() => void ctx.save([{ op: "card.aliases", card: card.id, remove: [alias] }])}>×</button>
+                </span>
+              ))}
+              {entry.ledgerAliases.map((alias) => (
+                <button key={alias} type="button" className="se-bk-alias is-ledger" disabled={ctx.disabled} title="账里这么叫过，点一下记成别名"
+                  onClick={() => void ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }])}>{alias} +</button>
+              ))}
+              {addingAlias ? (
+                <InlineEdit value="" label="加别名" placeholder="别名" disabled={ctx.disabled}
+                  onSave={(alias) => { setAddingAlias(false); if (alias) void ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }]); }}
+                  onCancel={() => setAddingAlias(false)} />
+              ) : <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => setAddingAlias(true)}>+ 别名</button>}
+            </div>
+          </div>
+          <div className="se-bk-card-acts">
+            {renaming ? null : <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => setRenaming(true)}>改名</button>}
             {card.kind === "character" && !card.protagonist ? (
               <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "card.protagonist", card: card.id }])}>设为主角</button>
             ) : null}
@@ -486,26 +532,25 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
             ) : null}
             <ConfirmButton label="删卡" confirmLabel={`确定删「${card.name}」`} disabled={ctx.disabled}
               onConfirm={() => void ctx.save([{ op: "card.delete", card: card.id }])} />
+            <button type="button" className="se-bk-collapse" aria-expanded={true} aria-label={`收起「${card.name}」`} title="收起" onClick={onToggle} />
           </div>
-          <div className="se-bk-aliases">
-            <span className="se-bk-k">也叫</span>
-            {card.aliases.map((alias) => (
-              <span key={alias} className="se-bk-alias">
-                {alias}
-                <button type="button" className="se-bk-x" disabled={ctx.disabled} aria-label={`去掉别名「${alias}」`}
-                  onClick={() => void ctx.save([{ op: "card.aliases", card: card.id, remove: [alias] }])}>×</button>
-              </span>
-            ))}
-            {entry.ledgerAliases.map((alias) => (
-              <button key={alias} type="button" className="se-bk-alias is-ledger" disabled={ctx.disabled} title="账里这么叫过，点一下记成别名"
-                onClick={() => void ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }])}>{alias} +</button>
-            ))}
-            {addingAlias ? (
-              <InlineEdit value="" label="加别名" placeholder="别名" disabled={ctx.disabled}
-                onSave={(alias) => { setAddingAlias(false); if (alias) void ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }]); }}
-                onCancel={() => setAddingAlias(false)} />
-            ) : <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => setAddingAlias(true)}>+ 别名</button>}
-          </div>
+        </header>
+      ) : (
+        <button type="button" className="se-bk-card-head" aria-expanded={false} onClick={onToggle}>
+          <Avatar name={card.name} kind={card.kind} />
+          <span className="se-bk-card-id">
+            <span className="se-bk-card-title"><span className="se-bk-name">{card.name}</span>{tags}</span>
+            {firstField ? (
+              <span className="se-bk-peek" title={`${firstField.label}：${firstField.value}`}>{firstField.value}</span>
+            ) : <span className="se-bk-peek is-empty">还没写</span>}
+          </span>
+          {entry.appearances ? <span className="se-bk-count">{entry.appearances.chapters.length} 章</span> : null}
+          {entry.appearances ? <PresenceStrip chapters={entry.appearances.chapters} total={ctx.total} /> : null}
+        </button>
+      )}
+      {open ? (
+        <div className="se-bk-card-body">
+          <Sec title="卡上写的" count={card.fields.length} />
           <FieldList
             fields={card.fields}
             suggestions={FIELD_SUGGESTIONS[card.kind]}
@@ -515,7 +560,7 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
           />
           {entry.relations.length > 0 ? (
             <div className="se-bk-rel">
-              <h4>关系</h4>
+              <Sec title="关系" count={entry.relations.length} />
               <ul>
                 {entry.relations.map((relation) => (
                   <li key={relation.id}>
@@ -549,10 +594,15 @@ function RelationsPage({ ctx }: { readonly ctx: PageContext }) {
   const canAdd = a && b && a !== b && label.trim() && !ctx.disabled;
   return (
     <>
-      <PageHead title="关系" sub={relations.length > 0 ? `${relations.length} 条` : "还没记关系。"} />
+      <PageHead title="关系" sub={relations.length > 0 ? "点图里的人打开那张卡。" : undefined} stats={[
+        { value: relations.length, label: "条关系" },
+        { value: relations.filter((relation) => relation.by === "ai").length, label: "待认下" },
+      ]} />
+      {relations.length === 0 ? <p className="se-bk-blank">还没记关系。在下面选两张卡记一句，或者在右边让 AI 整理。</p> : null}
       {relations.length > 0 ? (
         <RelationGraph relations={relations} kindOf={ctx.kindOf} onOpen={ctx.openName} {...(ctx.bible.protagonist ? { center: ctx.bible.protagonist } : {})} />
       ) : null}
+      {relations.length > 0 ? <Sec title="逐条" count={relations.length} /> : null}
       {relations.length > 0 ? (
         <ul className="se-bk-relations">
           {relations.map((relation) => (
@@ -617,7 +667,10 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
     void ctx.save([{ op: "card.create", kind, name: entry.name, ...(entry.aliases.length > 0 ? { aliases: [...entry.aliases] } : {}) }]);
   return (
     <>
-      <PageHead title="还没建卡" sub={entries.length > 0 ? `定稿时账里记下的，${entries.length} 个还没有卡。建了卡，写稿和核账就按卡上写的来。` : "账里记下的都有卡了。"} />
+      <PageHead title="还没建卡" sub={entries.length > 0 ? "定稿时账里记下的。建了卡，写稿和核账就按卡上写的来。" : "账里记下的都有卡了。"} stats={[
+        { value: entries.filter((entry) => entry.character).length, label: "个人" },
+        { value: entries.filter((entry) => !entry.character).length, label: "个别的" },
+      ]} />
       {entries.length >= FILTER_FROM ? (
         <div className="se-bk-toolbar">
           <input className="se-bk-filter" type="search" value={query} placeholder="找…" aria-label="找还没建卡的" onChange={(event) => setQuery(event.target.value)} />

@@ -7,7 +7,7 @@ const saveCards = vi.fn<(projectPath: string, ops: readonly CardOp[]) => Promise
 vi.mock("../../../api/bibleClient.js", () => ({ saveCards: (projectPath: string, ops: readonly CardOp[]) => saveCards(projectPath, ops) }));
 
 const { BibleBook } = await import("./BibleBook.js");
-const { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } = await import("./bibleIndex.js");
+const { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } = await import("./bibleIndex.js");
 const { PresenceStrip, graphLayout } = await import("./bibleVisual.js");
 
 
@@ -258,6 +258,30 @@ describe("设定本的样子（卡片墙、扉页、关系图）", () => {
     expect(big.nodes.map((node) => node.name)).toContain("人14");
     expect(big.edges.every((edge) => big.nodes.some((node) => node.name === edge.a) && big.nodes.some((node) => node.name === edge.b))).toBe(true);
     expect(graphLayout([rel("1", "甲", "乙")], "没人", 640).nodes[0]?.center).toBe(true);
+  });
+
+  it("页头：右边摆几个数（0 不摆）；一类卡一张没有时给一句怎么建", () => {
+    renderBook("chars");
+    expect(screen.getByText("张卡").closest("dl")?.textContent).toBe("张卡2待认下1出过场1");
+    cleanup();
+    renderBook("relations", { bible: bibleView({ relations: [{ id: "r-1", a: "林澈", b: "许微", label: "旧同学", by: "author" }] }) });
+    expect(screen.getByText("条关系").closest("dl")?.textContent).toBe("条关系1");
+    cleanup();
+    renderBook("items");
+    expect(screen.getByText("还没有物品卡。点「+ 新物品」建一张，或者在右边让 AI 补。")).toBeTruthy();
+    expect(screen.queryByText("张卡")).toBeNull();
+  });
+
+  it("点开的卡：头上一张名片（名字、也叫、操作），收起按钮收回去", () => {
+    renderBook("chars", { focusName: "林澈" });
+    fireEvent.click(screen.getByRole("button", { name: "收起「林澈」" }));
+    expect(screen.getByRole("button", { name: /林澈/u, expanded: false })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "删卡" })).toBeNull();
+  });
+
+  it("左边分类后面的数", () => {
+    expect(bibleNavCounts(bibleView())).toEqual({ chars: 2, relations: 1, items: 0, places: 1, uncarded: 2 });
+    expect(bibleNavCounts(null)).toEqual({});
   });
 
   it("出场条：全书多长画多长，只亮出场的章；没出场不画", () => {

@@ -12,7 +12,7 @@ import { StoryMap } from "./StoryMap.js";
 import { ChapterChanges } from "./ChapterChanges.js";
 import { BibleBook, type BibleCat } from "./BibleBook.js";
 import { useBible } from "./useBible.js";
-import { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
+import { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
 import { searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
 import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
@@ -261,6 +261,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const bibleState = useBible(props.projectPath ?? undefined, props.overview);
   const librarySearchSources = useMemo(() => bibleSearchSources(bibleState.bible), [bibleState.bible]);
   const paletteCharacters = useMemo(() => paletteCharactersOf(bibleState.bible), [bibleState.bible]);
+  const bibleCounts = useMemo(() => bibleNavCounts(bibleState.bible), [bibleState.bible]);
   const peekCards = useMemo(() => namePeekCardsOf(bibleState.bible), [bibleState.bible]);
   const mentionNames = useMemo(() => mentionNamesOf(bibleState.bible), [bibleState.bible]);
   const openInBible = (target: string, name?: string) => {
@@ -535,6 +536,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       type="button"
                     >
                       {c.title}
+                      {bibleCounts[c.id as BibleCat] ? <span className="se-bnav-count" aria-hidden="true">{bibleCounts[c.id as BibleCat]}</span> : null}
                     </button>
                   ))}
                   <p className="se-bnav-note">点字就能改，也可以在右边让 AI 改。</p>
@@ -562,6 +564,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         onChanged={refreshOverview}
                         onOpenCat={openInBible}
                         chapterCount={lastCommittedChapter}
+                        bookTitle={projectName}
                         {...(bibleFocus ? { focusName: bibleFocus } : {})}
                       />
                     ) : null}

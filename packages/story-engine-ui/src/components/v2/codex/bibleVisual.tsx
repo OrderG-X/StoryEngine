@@ -68,14 +68,17 @@ export function RelationGraph({ relations, center, kindOf, onOpen }: {
         {layout.edges.map((relation) => {
           const a = at.get(relation.a)!;
           const b = at.get(relation.b)!;
-          const label = Array.from(relation.label);
+          const chars = Array.from(relation.label);
+          const label = chars.length > LABEL_MAX ? `${chars.slice(0, LABEL_MAX - 1).join("")}…` : relation.label;
+          const w = textWidth(label, 12) + 16;
+          const mx = (a.x + b.x) / 2;
+          const my = (a.y + b.y) / 2;
           return (
             <g key={relation.id} className={`se-bk-edge${a.center || b.center ? " is-center" : ""}${relation.by === "ai" ? " is-ai" : ""}`}>
               <title>{`${relation.a} — ${relation.b}：${relation.label}`}</title>
               <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
-              <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2} dy="0.35em">
-                {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1).join("")}…` : relation.label}
-              </text>
+              <rect x={mx - w / 2} y={my - 10} width={w} height={20} rx={10} />
+              <text x={mx} y={my} dy="0.35em">{label}</text>
             </g>
           );
         })}
@@ -92,6 +95,7 @@ export function RelationGraph({ relations, center, kindOf, onOpen }: {
                 onClick: () => onOpen(node.name),
                 onKeyDown: (event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(node.name); } },
               } : {})}>
+              {node.center ? <circle className="se-bk-node-halo" r={r + 7} /> : null}
               {square ? <rect x={-r} y={-r} width={r * 2} height={r * 2} rx={8} /> : <circle r={r} />}
               <text className="se-bk-node-glyph" dy="0.35em">{firstGlyph(node.name)}</text>
               <text className="se-bk-node-name" y={r + 15}>{node.name}</text>
@@ -99,9 +103,19 @@ export function RelationGraph({ relations, center, kindOf, onOpen }: {
           );
         })}
       </svg>
-      {layout.hidden > 0 ? <p className="se-bk-hint">图里只画了关系最多的 {GRAPH_MAX} 个，还有 {layout.hidden} 个在下面的列表里。</p> : null}
+      {layout.hidden > 0 || layout.edges.some((relation) => relation.by === "ai") ? (
+        <p className="se-bk-graph-note">
+          {layout.edges.some((relation) => relation.by === "ai") ? <span><i className="se-bk-legend-ai" aria-hidden="true" />虚线是 AI 补的，还没认下</span> : null}
+          {layout.hidden > 0 ? <span>图里只画了关系最多的 {GRAPH_MAX} 个，还有 {layout.hidden} 个在下面的列表里</span> : null}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+/** 估字宽摆标签底：中日韩字按一个字号算，别的按半个多一点。只管排版，不看意思。 */
+function textWidth(text: string, size: number): number {
+  return Array.from(text).reduce((sum, ch) => sum + ((ch.codePointAt(0) ?? 0) >= 0x2e80 ? size : size * 0.6), 0);
 }
 
 export function graphLayout(relations: readonly BibleRelationView[], protagonist: string | undefined, width: number): {
