@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { fetchBookInfo, saveBookInfo, type BookInfo, type BookInfoView } from "../../../api/shelfClient.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog.js";
+import { TONES } from "../../../lib/tone.js";
 
-const COVER_TONES = 7;
 const MAX_TAGS = 12;
 
 function formatWords(n: number): string {
@@ -180,7 +180,7 @@ export function BookInfoDialog({ book, onClose, onSaved, api = { fetchBookInfo, 
                 <span>封面色</span>
                 <div className="se-info-tones" role="radiogroup" aria-label="封面色">
                   <button aria-checked={tone === undefined} aria-label="自动" className={`se-info-tone is-auto${tone === undefined ? " is-on" : ""}`} disabled={busy} onClick={() => setTone(undefined)} role="radio" type="button">自动</button>
-                  {Array.from({ length: COVER_TONES }, (_, index) => (
+                  {Array.from({ length: TONES }, (_, index) => (
                     <button aria-checked={tone === index} aria-label={`封面色 ${index + 1}`} className={`se-info-tone tone-${index}${tone === index ? " is-on" : ""}`} disabled={busy} key={index} onClick={() => setTone(index)} role="radio" type="button" />
                   ))}
                 </div>

@@ -11,6 +11,7 @@ import { ExportDialog } from "./shelf/ExportDialog.js";
 import { downloadBookBackup, fetchBookStats, fetchShelfMeta, fetchTrash, restoreBookBackup, saveBlob, setBookArchived, type ShelfBookMeta, type WordStats } from "../../api/shelfClient.js";
 import { BookInfoDialog } from "./shelf/BookInfoDialog.js";
 import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
+import { toneOf } from "../../lib/tone.js";
 import "./home.css";
 
 const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", "无"]);
@@ -19,15 +20,6 @@ const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", 
 function isBareChapterLabel(title: string): boolean {
   // 不猜白名单：章节标题
   return /^第\s*[0-9一二三四五六七八九十百零两]+\s*章$/u.test(title.trim());
-}
-
-const COVER_TONES = 7;
-
-/** 书名 → 稳定的封面色号（同一本书永远同色）。 */
-export function coverTone(title: string): number {
-  let h = 0;
-  for (let i = 0; i < title.length; i += 1) h = (h * 31 + title.charCodeAt(i)) >>> 0;
-  return h % COVER_TONES;
 }
 
 /** 纯中文短书名竖排（像书脊），夹英文/数字或太长的横排，避免竖排里字母横躺。 */
@@ -42,7 +34,7 @@ function formatWords(totalWords: number): string {
 
 function BookCover({ title, large = false, tone }: { readonly title: string; readonly large?: boolean; readonly tone?: number }) {
   return (
-    <span className={`se-cover tone-${tone ?? coverTone(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
+    <span className={`se-cover tone-${tone ?? toneOf(title)}${coverIsVertical(title) ? "" : " is-h"}${large ? " is-lg" : ""}`} aria-hidden="true">
       <span className="se-cover-t">{title}</span>
       {large ? <span className="se-cover-seal" /> : null}
     </span>

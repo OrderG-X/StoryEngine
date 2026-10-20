@@ -7,7 +7,8 @@ const saveCards = vi.fn<(projectPath: string, ops: readonly CardOp[]) => Promise
 vi.mock("../../../api/bibleClient.js", () => ({ saveCards: (projectPath: string, ops: readonly CardOp[]) => saveCards(projectPath, ops) }));
 
 const { BibleBook } = await import("./BibleBook.js");
-const { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } = await import("./bibleIndex.js");
+const { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } = await import("./bibleIndex.js");
+const { PresenceStrip, graphLayout } = await import("./bibleVisual.js");
 
 
 
@@ -59,14 +60,15 @@ function bibleView(over: Partial<BibleView> = {}): BibleView {
 
 type Cat = Parameters<typeof BibleBook>[0]["cat"];
 
-function renderBook(cat: Cat, over: { bible?: BibleView; busy?: boolean; focusName?: string } = {}) {
+function renderBook(cat: Cat, over: { bible?: BibleView; busy?: boolean; focusName?: string; chapterCount?: number } = {}) {
   const reload = vi.fn();
   const onChanged = vi.fn();
   const onJump = vi.fn();
   const onOpenCat = vi.fn();
   const view = render(
     <BibleBook cat={cat} projectPath="/books/fog" bible={over.bible ?? bibleView()} error={null} reload={reload} busy={over.busy ?? false}
-      onChanged={onChanged} onJump={onJump} onOpenCat={onOpenCat} {...(over.focusName ? { focusName: over.focusName } : {})} />,
+      onChanged={onChanged} onJump={onJump} onOpenCat={onOpenCat} {...(over.focusName ? { focusName: over.focusName } : {})}
+      {...(over.chapterCount !== undefined ? { chapterCount: over.chapterCount } : {})} />,
   );
   return { ...view, reload, onChanged, onJump, onOpenCat };
 }
@@ -199,6 +201,95 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     fireEvent.change(box, { target: { value: "不写梦境开头" } });
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(lastOps()).toEqual([{ op: "rules.add", list: "bans", text: "不写梦境开头" }]));
+  });
+});
+
+describe("设定本的样子（卡片墙、扉页、关系图）", () => {
+  it("故事设定扉页：没写「一句话」点占位就写；「题材」「基调」是小签，没写的点「+」补", async () => {
+    renderBook("story", { bible: bibleView({ story: [field("世界规矩", "没有超自然")] }) });
+    fireEvent.click(screen.getByRole("button", { name: "一句话写下这本书讲什么" }));
+    const box = screen.getByLabelText("一句话");
+    fireEvent.change(box, { target: { value: "雾港的邮差收到一封十年前的信。" } });
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "story.set", label: "一句话", value: "雾港的邮差收到一封十年前的信。" }]));
+    fireEvent.click(screen.getByRole("button", { name: "+ 基调" }));
+    const tone = screen.getByLabelText("基调");
+    fireEvent.change(tone, { target: { value: "冷、慢" } });
+    fireEvent.keyDown(tone, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "story.set", label: "基调", value: "冷、慢" }]));
+    // 扉页摆了的栏不再出现在「+ 加一项」的快捷里
+    fireEvent.click(screen.getByRole("button", { name: "+ 加一项" }));
+    expect(screen.queryByRole("button", { name: "题材" })).toBeNull();
+    expect(screen.getByRole("button", { name: "主线冲突" })).toBeTruthy();
+  });
+
+  it("人物卡：没点开时露出第一栏和出场条；点开后关系签点了打开那个人", () => {
+    const { container } = renderBook("chars", { chapterCount: 8 });
+    expect(screen.getByRole("button", { name: /林澈.*邮差/u, expanded: false })).toBeTruthy();
+    const strip = container.querySelector(".se-bk-strip");
+    expect(strip?.getAttribute("viewBox")).toBe("0 0 8 1");
+    expect(strip?.querySelectorAll("rect")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: /林澈/u, expanded: false }));
+    fireEvent.click(screen.getByRole("button", { name: /许微.*旧同学/u }));
+    expect(screen.getByRole("button", { name: /许微/u, expanded: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /林澈/u, expanded: false })).toBeTruthy();
+  });
+
+  it("关系图：主角在中间，点图里的人打开那张卡（地点去地点页）", () => {
+    const { onOpenCat } = renderBook("relations", { bible: bibleView({ relations: [
+      { id: "r-1", a: "林澈", b: "许微", label: "旧同学", by: "ai" },
+      { id: "r-2", a: "许微", b: "雾港灯塔", label: "在这儿值夜班", by: "author" },
+    ] }) });
+    expect(screen.getByRole("img", { name: "关系图" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "打开「许微」" }));
+    expect(onOpenCat).toHaveBeenLastCalledWith("chars", "许微");
+    fireEvent.keyDown(screen.getByRole("button", { name: "打开「雾港灯塔」" }), { key: "Enter" });
+    expect(onOpenCat).toHaveBeenLastCalledWith("places", "雾港灯塔");
+  });
+
+  it("关系图排法：主角居中，和主角有关系的先上圈；人多只画关系最多的 12 个，如实报剩几个", () => {
+    const rel = (id: string, a: string, b: string) => ({ id, a, b, label: "认识", by: "author" as const });
+    const small = graphLayout([rel("1", "甲", "乙"), rel("2", "乙", "丙"), rel("3", "主", "丙")], "主", 640);
+    expect(small.nodes.map((node) => [node.name, node.center])).toEqual([["主", true], ["丙", false], ["甲", false], ["乙", false]]);
+    const many = Array.from({ length: 15 }, (_, i) => rel(`m${i}`, "主", `人${i}`));
+    const big = graphLayout([...many, rel("x", "人14", "人13")], "主", 640);
+    expect(big.nodes).toHaveLength(12);
+    expect(big.hidden).toBe(4);
+    expect(big.nodes.map((node) => node.name)).toContain("人14");
+    expect(big.edges.every((edge) => big.nodes.some((node) => node.name === edge.a) && big.nodes.some((node) => node.name === edge.b))).toBe(true);
+    expect(graphLayout([rel("1", "甲", "乙")], "没人", 640).nodes[0]?.center).toBe(true);
+  });
+
+  it("页头：右边摆几个数（0 不摆）；一类卡一张没有时给一句怎么建", () => {
+    renderBook("chars");
+    expect(screen.getByText("张卡").closest("dl")?.textContent).toBe("张卡2待认下1出过场1");
+    cleanup();
+    renderBook("relations", { bible: bibleView({ relations: [{ id: "r-1", a: "林澈", b: "许微", label: "旧同学", by: "author" }] }) });
+    expect(screen.getByText("条关系").closest("dl")?.textContent).toBe("条关系1");
+    cleanup();
+    renderBook("items");
+    expect(screen.getByText("还没有物品卡。点「+ 新物品」建一张，或者在右边让 AI 补。")).toBeTruthy();
+    expect(screen.queryByText("张卡")).toBeNull();
+  });
+
+  it("点开的卡：头上一张名片（名字、也叫、操作），收起按钮收回去", () => {
+    renderBook("chars", { focusName: "林澈" });
+    fireEvent.click(screen.getByRole("button", { name: "收起「林澈」" }));
+    expect(screen.getByRole("button", { name: /林澈/u, expanded: false })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "删卡" })).toBeNull();
+  });
+
+  it("左边分类后面的数", () => {
+    expect(bibleNavCounts(bibleView())).toEqual({ chars: 2, relations: 1, items: 0, places: 1, uncarded: 2 });
+    expect(bibleNavCounts(null)).toEqual({});
+  });
+
+  it("出场条：全书多长画多长，只亮出场的章；没出场不画", () => {
+    const { container, rerender } = render(<PresenceStrip chapters={[2, 5]} total={4} />);
+    expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 5 1");
+    expect(container.querySelectorAll("rect")).toHaveLength(2);
+    rerender(<PresenceStrip chapters={[]} total={4} />);
+    expect(container.querySelector("svg")).toBeNull();
   });
 });
 

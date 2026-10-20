@@ -12,7 +12,7 @@ import { StoryMap } from "./StoryMap.js";
 import { ChapterChanges } from "./ChapterChanges.js";
 import { BibleBook, type BibleCat } from "./BibleBook.js";
 import { useBible } from "./useBible.js";
-import { bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
+import { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
 import { searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
 import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
@@ -250,6 +250,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, cat]);
   // 故事地图、改动面板只要章名本身（当前章的名字从稿纸标题行来，带着「第N章 · 」）。
+  const lastCommittedChapter = useMemo(() => Math.max(0, ...chapters.filter((ch) => ch.status === "committed" || ch.hasCommittedChapter).map((ch) => ch.chapterNumber)), [chapters]);
   const chapterTitles = useMemo(() => new Map(chapters.map((ch) => [ch.chapterNumber, chapterBareTitle(ch.title ?? "")] as const).filter(([, title]) => title.length > 0)), [chapters]);
   const catTitle = CATS.find((c) => c.id === cat)?.title ?? "";
   const crumbHere = view === "desk"
@@ -260,6 +261,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const bibleState = useBible(props.projectPath ?? undefined, props.overview);
   const librarySearchSources = useMemo(() => bibleSearchSources(bibleState.bible), [bibleState.bible]);
   const paletteCharacters = useMemo(() => paletteCharactersOf(bibleState.bible), [bibleState.bible]);
+  const bibleCounts = useMemo(() => bibleNavCounts(bibleState.bible), [bibleState.bible]);
   const peekCards = useMemo(() => namePeekCardsOf(bibleState.bible), [bibleState.bible]);
   const mentionNames = useMemo(() => mentionNamesOf(bibleState.bible), [bibleState.bible]);
   const openInBible = (target: string, name?: string) => {
@@ -534,6 +536,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       type="button"
                     >
                       {c.title}
+                      {bibleCounts[c.id as BibleCat] ? <span className="se-bnav-count" aria-hidden="true">{bibleCounts[c.id as BibleCat]}</span> : null}
                     </button>
                   ))}
                   <p className="se-bnav-note">点字就能改，也可以在右边让 AI 改。</p>
@@ -560,6 +563,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         onJump={jumpToQuote}
                         onChanged={refreshOverview}
                         onOpenCat={openInBible}
+                        chapterCount={lastCommittedChapter}
+                        bookTitle={projectName}
                         {...(bibleFocus ? { focusName: bibleFocus } : {})}
                       />
                     ) : null}
