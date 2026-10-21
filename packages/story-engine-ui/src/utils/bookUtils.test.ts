@@ -108,4 +108,9 @@ describe("bookSummaryFromOverview：书架「上次写到」", () => {
   it("这一章有事件 → 用它的章名", () => {
     expect(bookSummaryFromOverview(overview(8), "/books/fog").currentChapterTitle).toBe("代笔");
   });
+
+  it("字数只认概况里的实数，不按章数估（真机试写：10 章 1.3 万字，开过书后书架显示 3.0 万）", () => {
+    expect(bookSummaryFromOverview({ ...overview(10), totalWords: 13210 } as StateOverview, "/books/fog").totalWords).toBe(13210);
+    expect(bookSummaryFromOverview(overview(10), "/books/fog").totalWords).toBe(0);
+  });
 });

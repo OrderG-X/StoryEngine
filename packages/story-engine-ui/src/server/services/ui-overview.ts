@@ -1,5 +1,5 @@
 /**
- * 开书概况的界面附加信息（重构 P7 第 6 步从 lib/project-io 挪来）：故事日历、章节文件状态、编辑部补读进度、主角建议。
+ * 开书概况的界面附加信息（重构 P7 第 6 步从 lib/project-io 挪来）：故事日历、章节文件状态、编辑部补读进度、主角建议、全书字数。
  * 要读编辑部的补读进度，所以放在流程层（services），基础设施层（lib）不引编辑部。
  */
 import { readFile } from "node:fs/promises";
@@ -9,6 +9,7 @@ import { readReadersCatchUpStatus, type ReadersCatchUpStatus } from "../editoria
 import { readBible } from "@actalk/story-core";
 import { suggestProtagonist, type ProtagonistSuggestion } from "../writing/presence/protagonist-suggestion.js";
 import { isRecord, readPositiveInteger, readUiChapterFileStates, type UiChapterFileState } from "../lib/project-io.js";
+import { readWordStats } from "../lib/word-stats.js";
 
 
 type StoryCalendarView = {
@@ -38,7 +39,7 @@ function readCalendarTimeOfDay(value: unknown): StoryCalendarView["currentTimeOf
     : "unknown";
 }
 
-/** 开书概况（界面拿到的那一份）：书概况 + 故事日历、章节文件状态、补读进度、主角建议。 */
+/** 开书概况（界面拿到的那一份）：书概况 + 故事日历、章节文件状态、补读进度、主角建议、全书字数。 */
 export type UiStateOverview = StateOverview & {
   readonly calendar?: StoryCalendarView;
   /** 编辑部三个跟读角色的后台补读进度（R4.3）：任一在读才带；导入的书通读记账没记完也带（P8）。 */
@@ -46,14 +47,17 @@ export type UiStateOverview = StateOverview & {
   readonly uiChapterFiles?: readonly UiChapterFileState[];
   /** 设定本里还没标主角、账里有视角人物（「待处理」里建议设为主角；导入的书记完账后也有）。 */
   readonly protagonistSuggestion?: ProtagonistSuggestion;
+  /** 全书字数（写作统计那一份：每章工作稿优先、没有数定稿）。书架、书的资料都看它，读不到就不带。 */
+  readonly totalWords?: number;
 };
 
 export async function withUiOverviewDetails(projectDir: string, overview: StateOverview): Promise<UiStateOverview> {
   const calendar = await readStoryCalendarView(projectDir);
-  const [uiChapterFiles, readerCatchUp, protagonistSuggestion] = await Promise.all([
+  const [uiChapterFiles, readerCatchUp, protagonistSuggestion, totalWords] = await Promise.all([
     readUiChapterFileStates(projectDir),
     readReadersCatchUpProgress(projectDir),
     readBible(projectDir).then((read) => suggestProtagonist(read.bible)).catch(() => undefined),
+    readWordStats(projectDir).then((stats) => stats.totalWords).catch(() => undefined),
   ]);
   return {
     ...overview,
@@ -61,6 +65,7 @@ export async function withUiOverviewDetails(projectDir: string, overview: StateO
     ...(readerCatchUp ? { readerCatchUp } : {}),
     ...(uiChapterFiles.length ? { uiChapterFiles } : {}),
     ...(protagonistSuggestion ? { protagonistSuggestion } : {}),
+    ...(totalWords !== undefined ? { totalWords } : {}),
   };
 }
 

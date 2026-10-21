@@ -62,7 +62,8 @@ export function bookSummaryFromOverview(overview: StateOverview, projectPath: st
     lastActiveMs: Date.now(),
     logline: overview.project.logline || overview.storyStatus.currentObjective || "",
     writtenChapters,
-    totalWords: estimateWordsFromOverview(overview),
+    // 全书字数只认写作统计的实数；读不到记 0，书架重扫时按实数补上（真机试写：原先按时间线估，开过书后书架显示 3.0 万，实际 1.3 万）。
+    totalWords: overview.totalWords ?? 0,
     projectPath,
   };
 }
@@ -87,11 +88,6 @@ export function titleFromEvent(
   if (!source?.trim()) return `第${chapter}章`;
   const cleaned = source.replace(/\s+/gu, " ").trim();
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
-}
-
-function estimateWordsFromOverview(overview: StateOverview): number {
-  const timelineWords = overview.timeline.recentEvents.reduce((total, event) => total + event.summary.length + (event.mainEvent?.length ?? 0), 0);
-  return Math.max(timelineWords * 20, (overview.project.currentChapter ?? 0) * 3000);
 }
 
 function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
