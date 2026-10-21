@@ -1,8 +1,8 @@
 /**
  * 写作台顶上的章名（重构 P6 第 7 步：作者手写的章也能起名）。
  *
- * 工作稿能编辑时，点一下章名就地改：回车 / 点别处存，Esc 不改。改的是工作稿的章名，跟正文一起自动保存。
- * 以前只能在正文第一行打「# 章名」，作者不会知道。
+ * 点一下章名就地改：回车 / 点别处存，Esc 不改。没定稿的改工作稿的章名，跟正文一起自动保存；
+ * 已定稿的由外面交给服务端改定稿的章名（可撤销）。以前只能在正文第一行打「# 章名」，作者不会知道。
  */
 import { useEffect, useRef, useState } from "react";
 import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
@@ -10,7 +10,7 @@ import { chapterBareTitle, chapterHeading } from "../v2Utils.js";
 export function ChapterTitle({ chapterNumber, title, editable, onRename }: {
   readonly chapterNumber: number;
   readonly title: string;
-  /** 工作稿能改（不在出稿、不是只看定稿）。 */
+  /** 章名能改（工作稿能编辑，或这一章已定稿、没在出稿）。 */
   readonly editable: boolean;
   readonly onRename: (title: string) => void;
 }) {

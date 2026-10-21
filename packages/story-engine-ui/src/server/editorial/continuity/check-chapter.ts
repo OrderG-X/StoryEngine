@@ -114,6 +114,47 @@ export function containsQuote(haystack: string, quote: string): boolean {
   return false;
 }
 
+/**
+ * 模型抄的原句对回正文里的真句（2026-10-22 真机试写）：containsQuote 宽进，抄错一两个字（他→她）也收，
+ * 但作者看到的、「改这处」拿去定位的、合并去重比的都该是真原句——同一句抄成两个样子，作者看到两条一样的「确定」。
+ * 逐字就在正文里的照原样；否则找连着的一到三句、两字片段九成落在里面的最短那段。都对不上的照原样（宁可不动）。
+ */
+export function snapToOriginal(sentences: readonly string[], quote: string): string {
+  const target = normalize(quote);
+  if (target.length < 4 || normalize(sentences.join("")).includes(target)) return quote;
+  const grams = bigrams(target);
+  if (grams.size === 0) return quote;
+  let best: string | undefined;
+  for (let start = 0; start < sentences.length; start += 1) {
+    for (let count = 1; count <= 3 && start + count <= sentences.length; count += 1) {
+      const window = sentences.slice(start, start + count).join("");
+      const windowGrams = bigrams(window);
+      let shared = 0;
+      for (const gram of grams) if (windowGrams.has(gram)) shared += 1;
+      if (shared / grams.size < 0.9) continue;
+      if (best === undefined || normalize(window).length < normalize(best).length) best = window;
+      break;
+    }
+  }
+  return best ?? quote;
+}
+
+/** 一批核账条目的两边原句都对回真句：本章那句对本章（错在前文某章的对那章），前文那句对它标的那章；设定原文不动。 */
+export function snapIssueQuotes(
+  issues: readonly ContinuityIssueV2[],
+  chapter: number,
+  draftBody: string,
+  earlier: EarlierText,
+): ContinuityIssueV2[] {
+  const draft = splitSentences(draftBody);
+  const sentencesOf = (n: number): readonly string[] => (n === chapter ? draft : earlier.chapters.find((item) => item.chapter === n)?.sentences ?? []);
+  return issues.map((issue) => {
+    const quote = snapToOriginal(sentencesOf(issue.fixChapter ?? chapter), issue.quote);
+    const earlierQuote = issue.againstSetting ? issue.earlierQuote : snapToOriginal(sentencesOf(issue.earlierChapter), issue.earlierQuote);
+    return quote === issue.quote && earlierQuote === issue.earlierQuote ? issue : { ...issue, quote, earlierQuote };
+  });
+}
+
 export function parseFullReadIssues(text: string, chapter: number, draftBody: string, earlier: EarlierText): readonly ContinuityIssueV2[] {
   const parsed = parseJson(text);
   const raw = Array.isArray(parsed.contradictions) ? parsed.contradictions : [];

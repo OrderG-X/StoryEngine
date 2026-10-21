@@ -78,6 +78,12 @@ describe("稿纸状态", () => {
     expect(useDraftStore.getState()).toMatchObject({ body: "旧。", baseVersion: "a", incoming: null });
   });
 
+  it("撤销后盘上那版没章名 → 稿纸上的章名也清掉，不留着改过的（真机试写：撤销「改章名」后稿纸还显示新章名）", () => {
+    useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "正文。", version: "b", title: "回巷" }));
+    useDraftStore.getState().receivePaper(PROJECT, paper(1, { body: "正文。", version: "a" }), { force: true });
+    expect(useDraftStore.getState()).toMatchObject({ title: "", savedTitle: "", baseVersion: "a" });
+  });
+
   it("别的章、别的书的新版本不收", () => {
     useDraftStore.getState().loadPaper(PROJECT, paper(1, { body: "一。", version: "a" }));
     useDraftStore.getState().receivePaper(PROJECT, paper(2, { body: "二。", version: "x" }));

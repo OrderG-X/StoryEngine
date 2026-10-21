@@ -62,7 +62,8 @@ export function bookSummaryFromOverview(overview: StateOverview, projectPath: st
     lastActiveMs: Date.now(),
     logline: overview.project.logline || overview.storyStatus.currentObjective || "",
     writtenChapters,
-    totalWords: estimateWordsFromOverview(overview),
+    // 全书字数只认写作统计的实数；读不到记 0，书架重扫时按实数补上（真机试写：原先按时间线估，开过书后书架显示 3.0 万，实际 1.3 万）。
+    totalWords: overview.totalWords ?? 0,
     projectPath,
   };
 }
@@ -89,11 +90,6 @@ export function titleFromEvent(
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
 }
 
-function estimateWordsFromOverview(overview: StateOverview): number {
-  const timelineWords = overview.timeline.recentEvents.reduce((total, event) => total + event.summary.length + (event.mainEvent?.length ?? 0), 0);
-  return Math.max(timelineWords * 20, (overview.project.currentChapter ?? 0) * 3000);
-}
-
 function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
   const title = chapter.title?.trim() ?? "";
   return title !== "" && title !== `第${chapter.chapterNumber}章`;
@@ -103,15 +99,19 @@ export function carryChapterFileFlags(
   next: readonly ChapterNavItem[],
   previous: readonly ChapterNavItem[],
   committedChapter?: number,
+  titledFromDisk: ReadonlySet<number> = new Set(),
 ): readonly ChapterNavItem[] {
   const before = new Map(previous.map((chapter) => [chapter.chapterNumber, chapter]));
   return next.map((chapter) => {
     const old = before.get(chapter.chapterNumber);
+    // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名
+    // （或只是「下一章」占位）就沿用旧表的。章名是按盘上文件读的（titledFromDisk）就以盘上为准——
+    // 真机试写：撤销「改章名」后盘上没章名了，沿用旧表会一直显示改过的章名。
+    const carryTitle = !titledFromDisk.has(chapter.chapterNumber)
+      && (!hasRealTitle(chapter) || chapter.status === "planned") && old !== undefined && hasRealTitle(old);
     const carried: ChapterNavItem = {
       ...chapter,
-      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名
-      // （或只是「下一章」占位）就沿用旧表的。
-      ...((!hasRealTitle(chapter) || chapter.status === "planned") && old && hasRealTitle(old) ? { title: old.title } : {}),
+      ...(carryTitle ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
       ...(chapter.editedSinceCommit === undefined && old?.editedSinceCommit !== undefined ? { editedSinceCommit: old.editedSinceCommit } : {}),

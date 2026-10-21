@@ -20,6 +20,7 @@ import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPrev
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
 import { QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
+import { WEEKDAY_NAMES } from "../../book/story-timeline.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
@@ -197,7 +198,7 @@ function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
 function dayLabel(preview: CommitPreview): string {
   const { time } = preview;
   const span = time.dayEnd > time.day ? `故事第 ${time.day} 天到第 ${time.dayEnd} 天` : `故事第 ${time.day} 天`;
-  const extra = [time.timeOfDay, time.weekday !== undefined ? `星期${"日一二三四五六"[time.weekday % 7]}` : undefined].filter(Boolean).join("，");
+  const extra = [time.timeOfDay, time.weekday !== undefined ? WEEKDAY_NAMES[time.weekday] : undefined].filter(Boolean).join("，");
   const basis = time.basis === "text"
     ? "（正文明写）"
     : time.basis === "author"

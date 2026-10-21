@@ -14,7 +14,6 @@ import { resolveBooksRootDir } from "../lib/data-dirs.js";
 import { TRASH_KEEP_DAYS, listTrash, moveBookToTrash, purgeFromTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
-import { countDraftChineseCharacters } from "../writing/draft-length-control.js";
 import { createStoryProject } from "../book/project-store.js";
 import { CARD_NAME_MAX, FIELD_VALUE_MAX, readChapterPaper, withBookLock } from "@actalk/story-core";
 import {
@@ -29,10 +28,9 @@ import {
   splitChineseList,
   writeJson,
   isRecord,
-  stripLeadingMarkdownChapterHeading,
   type MiddlewareStack,
 } from "../lib/project-io.js";
-import { withUiOverviewDetails } from "../services/ui-overview.js";
+import { withUiOverviewDetails, type UiStateOverview } from "../services/ui-overview.js";
 import { formatRelativeTimeMs } from "../../utils/textUtils.js";
 
 const execFileAsync = promisify(execFile);
@@ -238,14 +236,11 @@ async function handleListDefaultBooks(req: import("node:http").IncomingMessage, 
         try {
           const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, maxTimelineEvents: 8 }));
           const book = bookSummaryFromOverviewServer(overview, projectDir, lastActiveMs);
-          // 书架字数：按定稿章节文件实数（与写作台、定稿执法同一计字口径），读不到才保留估算。
-          const counted = await countCommittedChapterCharacters(projectDir);
           // 章名：时间线里没有真章名（老数据只存了「第N章」）时，用这一章稿子第一行的章名。
           const paperTitle = await readChapterPaperTitle(projectDir, book.currentChapterNumber);
           const { hasRealChapterTitle, ...summary } = book;
           return {
             ...summary,
-            ...(counted > 0 ? { totalWords: counted } : {}),
             ...(paperTitle && !hasRealChapterTitle ? { currentChapterTitle: paperTitle } : {}),
           };
         } catch {
@@ -290,17 +285,6 @@ async function readChapterPaperTitle(projectDir: string, chapter: number): Promi
   return bare && !PLACEHOLDER_CHAPTER_TITLES.has(bare) ? bare : "";
 }
 
-/** 定稿章节总字数：chapters/NNNN.md 去掉标题行后按引擎同口径（纯汉字）计数。目录不存在返回 0。 */
-export async function countCommittedChapterCharacters(projectDir: string): Promise<number> {
-  const dir = join(projectDir, "chapters");
-  const files = (await readdir(dir).catch(() => [] as string[])).filter((name) => /^\d+\.md$/u.test(name));
-  const counts = await Promise.all(files.map(async (name) => {
-    const text = await readFile(join(dir, name), "utf-8").catch(() => "");
-    return countDraftChineseCharacters(stripLeadingMarkdownChapterHeading(text));
-  }));
-  return counts.reduce((total, n) => total + n, 0);
-}
-
 function stableHash(value: string): string {
   let hash = 0;
   for (const char of value) {
@@ -310,7 +294,7 @@ function stableHash(value: string): string {
 }
 
 function bookSummaryFromOverviewServer(
-  overview: Pick<StateOverview, "project" | "timeline" | "characters" | "storyStatus">,
+  overview: Pick<UiStateOverview, "project" | "timeline" | "characters" | "storyStatus" | "totalWords">,
   projectPath: string,
   lastActiveMs: number,
 ) {
@@ -341,8 +325,8 @@ function bookSummaryFromOverviewServer(
     }
   }
 
-  const timelineWords = events.reduce((total: number, event: any) => total + (event.summary?.length ?? 0) + (event.mainEvent?.length ?? 0), 0);
-  const totalWords = Math.max(timelineWords * 20, (proj.currentChapter ?? 0) * 3000);
+  // 全书字数只认写作统计的实数（和书的资料、开书后同一份），不再按时间线估。
+  const totalWords = overview.totalWords ?? 0;
 
   return {
     id: `project-${stableHash(projectPath)}`,

@@ -140,6 +140,22 @@ describe("books route 建书（重构 P9：作者填了什么写什么，不落�
       logline: "林远接手老房子。",
     });
   });
+
+  it("书架字数：和写作统计同一份实数（定稿 + 没定稿的工作稿，纯汉字），不按时间线估", async () => {
+    const booksRoot = await makeHomeTempDir("story-engine-shelf-words-");
+    generatedCreateRouteRootDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+    const book = await createStoryProject({ rootDir: booksRoot, title: "数字的书" });
+    await mkdir(join(book.projectDir, "chapters"), { recursive: true });
+    await writeFile(join(book.projectDir, "chapters", "0001.md"), "# 第1章 · 开端标题不计\n\n他推门。“好。”\n");
+    await mkdir(join(book.projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(join(book.projectDir, "drafts", "fast", "chapter-0002.md"), "# 第2章\n\n门开着。\n");
+
+    const response = await callBooksGetRoute("/api/books/list-default");
+
+    const books = response.payload.books as Array<Record<string, unknown>>;
+    expect(books.find((item) => item.projectPath === book.projectDir)?.totalWords).toBe(4 + 3);
+  });
 });
 
 describe("books route create path guard（建书路径闸）", () => {
@@ -415,19 +431,3 @@ async function invokeBooksRoute(method: string, url: string, body?: Record<strin
     payload: JSON.parse(raw) as Record<string, unknown>,
   };
 }
-
-describe("书架字数按定稿章节实数统计", () => {
-  it("countCommittedChapterCharacters：去标题行、纯汉字口径、只认 chapters/NNNN.md", async () => {
-    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { countCommittedChapterCharacters } = await import("./books.js");
-    const dir = await mkdtemp(join(tmpdir(), "books-count-"));
-    await mkdir(join(dir, "chapters"));
-    await writeFile(join(dir, "chapters", "0001.md"), "# 第1章 · 开端标题不计\n\n他推门。“好。”\n");
-    await writeFile(join(dir, "chapters", "0002.md"), "门开着。\n");
-    await writeFile(join(dir, "chapters", "notes.md"), "这不是章节文件");
-    expect(await countCommittedChapterCharacters(dir)).toBe(4 + 3);
-    expect(await countCommittedChapterCharacters(join(dir, "missing"))).toBe(0);
-  });
-});

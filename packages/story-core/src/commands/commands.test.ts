@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectBook } from "../index.js";
 import type { EntryInput } from "../schema/ledger.js";
 import { readChapterLedger, readHead } from "../store/book.js";
-import { TX_DIR } from "../store/paths.js";
+import { draftPath, TX_DIR } from "../store/paths.js";
 import { setAsideBrokenTransactions } from "../store/transaction.js";
 import { chapterCommit, type ChapterCommitResult } from "./chapter-commit.js";
+import { chapterRetitle } from "./chapter-retitle.js";
+import { readDraft } from "../draft/draft.js";
 import { decisionRecord } from "./decision-record.js";
 import { BookEventHub } from "./events.js";
 import { runCommand } from "./runner.js";
@@ -155,6 +157,38 @@ describe("定稿命令", () => {
     const outcome = await runCommand(book, chapterCommit, { chapter: 0, text: "", entries: "[]" }, author("k1"));
     expect(outcome).toMatchObject({ ok: false, code: "invalid_args" });
     expect((await readHead(book)).version).toBe(0);
+  });
+});
+
+describe("改已定稿的章名", () => {
+  it("只换第一行章名：正文、账单条目不动，正文指纹跟着换（不算定稿后改过）；工作稿的章名一起换；能撤销、AI 调不了", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("c1")));
+    const before = await readChapterLedger(book, 1);
+    await mkdir(join(book, "drafts/fast"), { recursive: true });
+    await writeFile(join(book, draftPath(1)), CH1);
+
+    expect(await runCommand(book, chapterRetitle, { chapter: 1, title: "回乡" }, { caller: "ai", idempotencyKey: "x" })).toMatchObject({ ok: false, code: "author_only" });
+    const snapshot = vi.fn(async () => "snap-1");
+    const done = expectOk(await runCommand(book, chapterRetitle, { chapter: 1, title: "  回乡 " }, { ...author("r1"), snapshot }));
+    expect(done.result).toEqual({ chapter: 1, title: "回乡", unchanged: false });
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    const text = await readFile(join(book, "chapters/0001.md"), "utf-8");
+    expect(text.split("\n")[0]).toBe("# 回乡");
+    expect(text).toContain("她在钟箱里摸到一把铜钥匙，揣进了包里。");
+    const after = await readChapterLedger(book, 1);
+    expect(after?.entries).toEqual(before?.entries);
+    expect(after?.textSha256).not.toBe(before?.textSha256);
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ editedSinceCommit: false });
+    expect((await readDraft(book, 1))?.title).toBe("回乡");
+
+    const again = expectOk(await runCommand(book, chapterRetitle, { chapter: 1, title: "回乡" }, author("r2")));
+    expect(again.result.unchanged).toBe(true);
+  });
+
+  it("没定稿的章、空章名：如实不改", async () => {
+    expect(await runCommand(book, chapterRetitle, { chapter: 3, title: "回乡" }, author("r3"))).toMatchObject({ ok: false, code: "not_committed" });
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("c1")));
+    expect(await runCommand(book, chapterRetitle, { chapter: 1, title: "  " }, author("r4"))).toMatchObject({ ok: false, code: "empty_title" });
   });
 });
 

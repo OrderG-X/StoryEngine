@@ -29,6 +29,11 @@ describe("carryChapterFileFlags", () => {
     expect(merged.map((chapter) => chapter.title)).toEqual(["第12章 · 存根", "第13章 · 回信", "门房·改"]);
   });
 
+  it("章名是按盘上文件读的（开书、撤销恢复）→ 以盘上为准，盘上没章名就是没有，不沿用旧表（真机试写：撤销改章名后章节栏还是新章名）", () => {
+    const merged = carryChapterFileFlags([item(1), item(2)], [item(1, { title: "回巷" }), item(2, { title: "上弦" })], undefined, new Set([1]));
+    expect(merged.map((chapter) => chapter.title)).toEqual(["第1章", "上弦"]);
+  });
+
   it("新表把有工作稿的后一章当「下一章」占位 → 状态改回工作稿、章名沿用旧表（重定稿前面一章时）", () => {
     const merged = carryChapterFileFlags(
       [item(2, { status: "current" }), item(3, { status: "planned", title: "下一章" })],
@@ -107,5 +112,10 @@ describe("bookSummaryFromOverview：书架「上次写到」", () => {
 
   it("这一章有事件 → 用它的章名", () => {
     expect(bookSummaryFromOverview(overview(8), "/books/fog").currentChapterTitle).toBe("代笔");
+  });
+
+  it("字数只认概况里的实数，不按章数估（真机试写：10 章 1.3 万字，开过书后书架显示 3.0 万）", () => {
+    expect(bookSummaryFromOverview({ ...overview(10), totalWords: 13210 } as StateOverview, "/books/fog").totalWords).toBe(13210);
+    expect(bookSummaryFromOverview(overview(10), "/books/fog").totalWords).toBe(0);
   });
 });

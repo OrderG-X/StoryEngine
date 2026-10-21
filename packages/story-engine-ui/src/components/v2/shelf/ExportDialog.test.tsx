@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { filenameFromDisposition } from "../../../api/shelfClient.js";
+import { filenameFromDisposition, type SaveOutcome } from "../../../api/shelfClient.js";
 import { ExportDialog } from "./ExportDialog.js";
 
 afterEach(cleanup);
@@ -10,7 +10,7 @@ const BOOK = { title: "雾港来信", projectPath: "/b/fog" };
 function api(overrides: Partial<NonNullable<Parameters<typeof ExportDialog>[0]["api"]>> = {}) {
   return {
     exportBookFile: vi.fn(async () => ({ blob: new Blob(["x"]), filename: "雾港来信.docx", chapters: 8 })),
-    saveBlob: vi.fn(),
+    saveBlob: vi.fn(async () => "saved" as const),
     ...overrides,
   };
 }
@@ -28,6 +28,17 @@ describe("导出弹窗", () => {
     expect(await screen.findByText("导出了 8 章：雾港来信.docx")).toBeInTheDocument();
     expect(calls.exportBookFile).toHaveBeenCalledWith({ projectPath: "/b/fog", format: "docx", from: 2, to: 5, includeDrafts: true });
     expect(calls.saveBlob).toHaveBeenCalledWith(expect.any(Blob), "雾港来信.docx");
+  });
+
+  it("存文件框点了取消 → 如实说没存，不说「导出了」（真机试写）；退回浏览器下载 → 只说交给浏览器了", async () => {
+    const saveBlob = vi.fn(async (): Promise<SaveOutcome> => "canceled");
+    const calls = api({ saveBlob });
+    render(<ExportDialog api={calls} book={BOOK} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "导出" }));
+    expect(await screen.findByText("取消了，没存。")).toBeInTheDocument();
+    saveBlob.mockResolvedValueOnce("downloaded");
+    fireEvent.click(screen.getByRole("button", { name: "导出" }));
+    expect(await screen.findByText("导出了 8 章，交给浏览器下载了：雾港来信.docx")).toBeInTheDocument();
   });
 
   it("范围倒着填不让点；导出失败如实显示原因、不存文件", async () => {

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { chapterCommit, readChapterLedger, runCommand } from "@actalk/story-core";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 import { registerWorkingDraftRoutes } from "./working-draft.js";
@@ -19,7 +20,7 @@ async function realProject(): Promise<string> {
   return dir;
 }
 
-async function call(method: "GET" | "PUT", url: string, body?: Record<string, unknown>): Promise<{ status: number; payload: Record<string, unknown>; nextCalled: boolean }> {
+async function call(method: "GET" | "PUT" | "POST", url: string, body?: Record<string, unknown>): Promise<{ status: number; payload: Record<string, unknown>; nextCalled: boolean }> {
   const handlers: Middleware[] = [];
   registerWorkingDraftRoutes({ use: (handler) => handlers.push(handler) });
   const chunks: Buffer[] = [];
@@ -72,6 +73,31 @@ describe("/api/working-draft", () => {
     expect(bad.status).toBe(500);
     expect(String(bad.payload.error)).toContain("baseVersion");
   });
+
+  it("改已定稿的章名（真机试写：定稿前忘起章名，定稿后改不了）：换定稿第一行、工作稿一起换，存档可撤销；没定稿的、点第二次如实说", async () => {
+    const project = await realProject();
+    const notYet = await call("POST", "/api/chapter-title", { projectPath: project, chapter: 1, title: "回乡", requestId: "r0" });
+    expect(notYet.status).toBe(409);
+    expect(notYet.payload).toMatchObject({ ok: false, code: "not_committed" });
+
+    const text = "青石巷的路灯是十一点灭的。\n\n她拖着箱子走到巷子中间。\n";
+    await call("PUT", "/api/working-draft", { projectPath: project, chapter: 1, body: text, baseVersion: null });
+    const committed = await runCommand(project, chapterCommit, { chapter: 1, text, entries: [] }, { caller: "author", idempotencyKey: "c1" });
+    expect(committed.ok).toBe(true);
+    expect(await call("POST", "/api/chapter-title", { projectPath: project, chapter: 1, title: "回乡" })).toMatchObject({ status: 400 });
+
+    const renamed = await call("POST", "/api/chapter-title", { projectPath: project, chapter: 1, title: "回乡", requestId: "r1" });
+    expect(renamed.status).toBe(200);
+    expect(renamed.payload).toMatchObject({ ok: true, title: "回乡", unchanged: false, snapshotId: expect.any(String) });
+    const committedText = await readFile(join(project, "chapters", "0001.md"), "utf-8");
+    expect(committedText).toBe(`# 回乡\n\n${text}`);
+    expect((await readChapterLedger(project, 1))?.entries).toEqual([]);
+    expect(await readFile(draftPath(project, 1), "utf-8")).toBe(`# 回乡\n\n${text}`);
+
+    const again = await call("POST", "/api/chapter-title", { projectPath: project, chapter: 1, title: "回乡", requestId: "r1" });
+    expect(again.payload).toMatchObject({ ok: true, title: "回乡" });
+    expect(again.payload.snapshotId).toBeUndefined();
+  }, 30_000);
 
   it("别的路径交给下一个中间件（不吞 /api/draft/…）", async () => {
     const other = await call("GET", "/api/draft/generate");

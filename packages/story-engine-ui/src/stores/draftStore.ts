@@ -126,7 +126,9 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       return;
     }
     if (options.force || !dirty) {
-      const title = disk.title ?? state.title;
+      // 盘上就是准的：盘上没章名就是没有（写稿命令都会保留原章名）。真机试写：撤销「改章名」后盘上没章名了，
+      // 沿用眼前的会一直显示改过的那个。
+      const title = disk.title ?? "";
       set({
         title,
         savedTitle: title,

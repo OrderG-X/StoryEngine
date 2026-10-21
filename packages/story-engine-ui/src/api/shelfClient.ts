@@ -72,8 +72,35 @@ async function fetchAttachment(url: string, fallbackName: string): Promise<{ rea
   return { blob: await res.blob(), filename: filenameFromDisposition(res.headers.get("content-disposition"), fallbackName), headers: res.headers };
 }
 
-/** 让浏览器 / 桌面包把内容存成文件（桌面包会弹「存到哪」）。 */
-export function saveBlob(blob: Blob, filename: string): void {
+/** 存文件的结果：存好了 / 作者取消了 / 交给浏览器下载了（存没存、存哪了这边不知道）。 */
+export type SaveOutcome = "saved" | "canceled" | "downloaded";
+
+type SaveFilePicker = (options: { readonly suggestedName: string }) => Promise<{
+  createWritable(): Promise<{ write(data: Blob): Promise<void>; close(): Promise<void> }>;
+}>;
+
+/**
+ * 把内容存成文件。能弹「存到哪」（桌面包、Chrome）就弹，存好、取消都如实回——
+ * 真机试写：原先一律走下载链接，存文件框点了取消，界面照样说「导出了 10 章」。
+ * 弹不出来（浏览器不支持、点了太久才弹）才退回下载链接，这时只能说交给浏览器了。
+ */
+export async function saveBlob(blob: Blob, filename: string): Promise<SaveOutcome> {
+  const picker = (window as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+  if (typeof picker === "function") {
+    try {
+      const handle = await picker.call(window, { suggestedName: filename });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return "saved";
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "AbortError") return "canceled";
+      if (name !== "SecurityError" && name !== "NotAllowedError") {
+        throw new Error(`文件没存成：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -83,6 +110,7 @@ export function saveBlob(blob: Blob, filename: string): void {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return "downloaded";
 }
 
 // ---------------------------------------------------------------------------

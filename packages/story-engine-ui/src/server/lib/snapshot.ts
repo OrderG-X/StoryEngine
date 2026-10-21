@@ -587,6 +587,7 @@ const TOOL_KINDS: Record<string, SnapshotKind> = {
 /** 核心写命令 → 操作历史分类。 */
 const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "chapter.commit": "commit",
+  "chapter.retitle": "commit",
   "decision.record": "bible",
   "book.import": "bible",
   "book.importText": "commit",

@@ -134,6 +134,8 @@ describe("commit_preview", () => {
     const list = out.ledgerChecklist ?? [];
     expect(list[0]).toMatchObject({ id: "day", kind: "time", editableDay: 1, removable: false, detail: "周二傍晚" });
     expect(list[0]?.label).toContain("故事第 1 天");
+    // 星期按 0=周一 存（记账员、时间线同口径）；预览曾按 0=周日显示，「周二」变「星期一」（真机试写）。
+    expect(list[0]?.label).toContain("周二");
     const reviewed = list.filter((item) => item.needsConfirm);
     expect(reviewed.map((item) => item.label)).toEqual([expect.stringContaining("周守义")]);
     expect(list.filter((item) => item.kind === "fact")).toHaveLength(2);

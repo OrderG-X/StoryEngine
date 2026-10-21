@@ -5,6 +5,7 @@ import { useMotionStore } from "../../stores/motionStore.js";
 import type { HomePageProps } from "../../types.js";
 import HomeLanding, { sortShelf, todayLine } from "./HomeLanding.js";
 import * as shelfClient from "../../api/shelfClient.js";
+import { refreshBookLibrary } from "../../utils/refreshBookLibrary.js";
 
 const activeModel = vi.hoisted(() => ({ setupStep: null as "connect" | "pick-model" | null }));
 vi.mock("./codex/useActiveModel.js", () => ({ useActiveModel: () => ({ info: null, setupStep: activeModel.setupStep }) }));
@@ -16,7 +17,7 @@ vi.mock("../../api/shelfClient.js", () => ({
   restoreTrashItem: vi.fn(),
   purgeTrashItem: vi.fn(),
   exportBookFile: vi.fn(),
-  saveBlob: vi.fn(),
+  saveBlob: vi.fn(async () => "saved"),
   downloadBookBackup: vi.fn(async () => ({ blob: new Blob(["z"]), filename: "海州账册-备份.zip" })),
   restoreBookBackup: vi.fn(async () => ({ projectPath: "/books/restored", title: "回来的书" })),
   fetchBookInfo: vi.fn(),
@@ -50,6 +51,12 @@ describe("HomeLanding", () => {
     activeModel.setupStep = null;
     rerender(<HomeLanding {...props} />);
     expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("每回到书架都重扫书库：写了几章回来，章数和「上次写到」是新的（原来只在开机扫）", () => {
+    vi.mocked(refreshBookLibrary).mockClear();
+    render(<HomeLanding {...homeProps()} />);
+    expect(refreshBookLibrary).toHaveBeenCalledTimes(1);
   });
 
   it("reduceMotion 开 → .se-v2-home 挂 is-reduced-motion 类；关 → 不挂", () => {
@@ -128,6 +135,11 @@ describe("HomeLanding", () => {
     fireEvent.click(screen.getByRole("button", { name: "备份" }));
     expect(await screen.findByText("《海州账册》备份好了：海州账册-备份.zip")).toBeInTheDocument();
     expect(shelfClient.saveBlob).toHaveBeenCalledWith(expect.any(Blob), "海州账册-备份.zip");
+    // 存文件框点了取消：如实说没备份（真机试写）。
+    vi.mocked(shelfClient.saveBlob).mockResolvedValueOnce("canceled");
+    fireEvent.click(screen.getByRole("button", { name: "书籍管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "备份" }));
+    expect(await screen.findByText("取消了，没备份。")).toBeInTheDocument();
 
     const file = new File(["zip"], "海州账册-备份.zip", { type: "application/zip" });
     fireEvent.change(screen.getByLabelText("选备份文件"), { target: { files: [file] } });

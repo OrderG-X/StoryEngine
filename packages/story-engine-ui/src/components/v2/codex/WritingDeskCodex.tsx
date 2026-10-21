@@ -27,20 +27,44 @@ import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
 import { useDraftPreview } from "../../../drafts/useDraftPreview.js";
-import { scheduleDraftSave } from "../../../drafts/draftSync.js";
+import { refreshPaper, scheduleDraftSave } from "../../../drafts/draftSync.js";
+import { retitleCommittedChapter } from "../../../api/workingDraftClient.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { updateChapterListTitle } from "../../../utils/bookUtils.js";
 
-/** 作者改章名：工作稿的章名跟正文一起存；章节列表和顶栏面包屑当场跟着换（不等下一次刷新概览）。 */
-function renameChapter(chapterNumber: number, title: string): void {
-  useDraftStore.getState().setTitle(title);
-  scheduleDraftSave(0);
+/** 章节列表和顶栏面包屑当场换上新章名（不等下一次刷新概览）。 */
+function showChapterTitle(chapterNumber: number, title: string): void {
   const book = useBookStore.getState();
   const { workspace } = book;
   book.updateWorkspace({
     chapters: updateChapterListTitle(workspace.chapters, chapterNumber, title),
     ...(workspace.currentChapter.chapterNumber === chapterNumber ? { currentChapter: { ...workspace.currentChapter, title } } : {}),
   });
+}
+
+/** 作者改章名：工作稿的章名跟正文一起存。 */
+function renameChapter(chapterNumber: number, title: string): void {
+  useDraftStore.getState().setTitle(title);
+  scheduleDraftSave(0);
+  showChapterTitle(chapterNumber, title);
+}
+
+/**
+ * 改已定稿那一章的章名（作者档、改前存档可撤销；正文和账不动）。真机试写：定稿前忘起章名，定稿后稿纸锁了、
+ * 章名点不动，AI 也改不了，章节栏永远「未命名」。没改成如实说原因。
+ */
+async function renameCommittedChapter(chapterNumber: number, title: string): Promise<void> {
+  const projectPath = useDraftStore.getState().projectPath;
+  if (!projectPath) return;
+  const outcome = await retitleCommittedChapter(projectPath, chapterNumber, title);
+  const toast = useNavigationStore.getState().showToast;
+  if (!outcome.ok) {
+    toast(`章名没改成：${outcome.error}`, 4600);
+    return;
+  }
+  showChapterTitle(chapterNumber, outcome.title);
+  await refreshPaper({ force: true, chapter: chapterNumber }).catch(() => undefined);
+  if (!outcome.unchanged) toast("章名改好了，操作历史里能撤销。");
 }
 
 /**
@@ -149,8 +173,10 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
           <ChapterTitle
             chapterNumber={draft.chapterNumber}
             title={draft.title}
-            editable={showEditHint && !workspaceBusy}
-            onRename={(title) => renameChapter(draft.chapterNumber, title)}
+            editable={(showEditHint || (draft.status === "committed" && draft.streaming !== true)) && !workspaceBusy}
+            onRename={(title) => (draft.status === "committed"
+              ? void renameCommittedChapter(draft.chapterNumber, title)
+              : renameChapter(draft.chapterNumber, title))}
           />
           {showEditHint ? (
             <span className="cd-edit-hint">可直接编辑 · 自动保存</span>
