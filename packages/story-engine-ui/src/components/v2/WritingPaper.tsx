@@ -102,8 +102,13 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   readonly onAskAboutSelection?: (selectionText: string) => void;
 }) {
   const isCommitted = draft.status === "committed";
+  // 定稿的章默认锁着防手滑；作者点「自己改这章」才解开这一章（2026-10-22 对标走查：导入的书整本是定稿，
+  // 没接 AI 时连错字都改不了）。打了字就成了「定稿后又改过」，不再算定稿，自然一直能改。
+  const [unlockedChapter, setUnlockedChapter] = useState<number | null>(null);
+  const authorUnlocked = isCommitted && unlockedChapter === draft.chapterNumber;
+  const focusAfterUnlockRef = useRef(false);
   // AI 正在流式出稿：稿纸只读显示流出来的字，作者这时打的字不会混进去（重构 P5）。
-  const locked = isCommitted || draft.streaming === true;
+  const locked = (isCommitted && !authorUnlocked) || draft.streaming === true;
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。
   const revisionHighlightTexts = useUiStore((s) => s.revisionHighlightTexts);
   // AI 出稿中：稿纸空着时说清 AI 在干什么（拟章纲要一两分钟），别显示「你可以在这里手动输入」。
@@ -235,7 +240,15 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   // 流式出稿结束解锁时，回写的是流式显示那版（分半出稿两段接缝少个空行），稿纸就误报「你手上还有没存的字」（重构 P6 真机）。
   useEffect(() => {
     editor?.setEditable(!locked, false);
+    if (!locked && focusAfterUnlockRef.current) {
+      focusAfterUnlockRef.current = false;
+      editor?.commands.focus("end");
+    }
   }, [editor, locked]);
+  const handleUnlock = useCallback(() => {
+    focusAfterUnlockRef.current = true;
+    setUnlockedChapter(draft.chapterNumber);
+  }, [draft.chapterNumber]);
 
   // 鼠标松开 = 选区定型 → 此刻才弹浮动条（拖选过程中先不弹）。挂 document 级以兼容「拖出编辑器外松手」。
   useEffect(() => {
@@ -437,7 +450,14 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       <div className="se-v2-editor-wrap se-v2-paper se-v2-paper-editable" style={paperStyle} onKeyDown={handleKeyDown}>
         {isCommitted ? (
           <article className="se-v2-notice">
-            <p>这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。</p>
+            {authorUnlocked ? (
+              <p>改吧。改完记得再定稿一次，账才跟得上。</p>
+            ) : (
+              <>
+                <p>这章定稿了，稿纸锁着防手滑。自己改或跟右边的 AI 说都行，改完再定稿一次。</p>
+                <button type="button" className="se-v2-notice-action" onClick={handleUnlock}>自己改这章</button>
+              </>
+            )}
           </article>
         ) : null}
         <div className="se-v2-draft-editor-host" ref={hostRef}>

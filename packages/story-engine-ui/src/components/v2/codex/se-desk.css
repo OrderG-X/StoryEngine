@@ -150,6 +150,11 @@
   }
   .codex-desk-stage .se-v2-notice::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 18%,transparent);}
   .codex-desk-stage .se-v2-notice p{margin:0;font-size:12px;line-height:1.6;color:var(--muted);}
+  .codex-desk-stage .se-v2-notice-action{
+    flex:none;height:22px;padding:0 10px;border-radius:999px;border:1px solid color-mix(in srgb,var(--success) 40%,transparent);
+    background:transparent;color:var(--text);font-size:12px;cursor:pointer;
+    &:hover{background:var(--hover);}
+  }
 
   /* 选区工具条：深色实底浮条（两套主题都用深色，压在正文上一眼可辨） */
   .se-v2-selection-toolbar{padding:4px;border-radius:11px;background:var(--toolbar-bg);border:1px solid rgba(255,255,255,.08);box-shadow:var(--shadow-pop),0 0 0 1px rgba(0,0,0,.18);font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;}
