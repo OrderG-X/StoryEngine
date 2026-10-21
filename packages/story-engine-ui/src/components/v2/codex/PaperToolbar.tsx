@@ -2,7 +2,7 @@
  * 稿纸底下的工具条（重构 P6，草图 ①）：一句核账状态 + 核账 / 定稿（已定稿时是「去第 N 章」）。专注模式也在。
  * 说法和右栏顶卡同源（workspace/chapterProgress），按钮都是现有的结构化动作，不新增绕过对话的路。
  */
-import type { ChapterProgress } from "../../../workspace/chapterProgress.js";
+import { STEP_HINTS, type ChapterProgress } from "../../../workspace/chapterProgress.js";
 import type { ChapterButton } from "../../../utils/chapterButtons.js";
 import { requestContinuityFocus } from "./ContinuityMarks.js";
 
@@ -24,9 +24,9 @@ export function PaperToolbar({
   const { primary, check } = progress;
   const next = progress.commit.done && primary.kind === "open_next" ? progress.next : undefined;
   const buttons: { readonly button: ChapterButton; readonly label: string }[] = progress.commit.done
-    ? next !== undefined ? [] : [{ button: "write_next", label: "写下一章" }]
+    ? next !== undefined ? [] : [{ button: "write_next", label: "AI 写下一章" }]
     : !progress.write.done
-      ? [{ button: "write", label: "写这一章" }]
+      ? [{ button: "write", label: "AI 写这一章" }]
       : [
         { button: "check_continuity", label: check.state === "none" ? "核账" : "再核一遍" },
         { button: "commit_preview", label: "定稿" },
@@ -59,6 +59,7 @@ export function PaperToolbar({
           type="button"
           className={`cd-tools-btn${isPrimary(button) ? " is-primary" : ""}`}
           disabled={busy}
+          title={button in STEP_HINTS ? STEP_HINTS[button as keyof typeof STEP_HINTS] : undefined}
           onClick={() => onChapterButton(button)}
         >
           {label}

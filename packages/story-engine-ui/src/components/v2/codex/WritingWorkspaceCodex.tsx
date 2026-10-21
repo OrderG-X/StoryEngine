@@ -671,6 +671,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                 peekCards={peekCards}
                 onOpenCharacter={(name) => openInBible("chars", name)}
                 onAskAboutSelection={(text) => fillComposer(`关于这段「${quoteForComposer(text)}」，`)}
+                onFillComposer={fillComposer}
               />
             </div>
           )}

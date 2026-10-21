@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import WritingPaper from "./WritingPaper.js";
@@ -49,8 +49,15 @@ describe("WritingPaper", () => {
   it("shows the empty-editor hint when an editable draft has no content", () => {
     render(<WritingPaper draft={{ ...baseDraft, content: "" }} onEdit={vi.fn()} />);
     expect(
-      screen.getByText("当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。"),
+      screen.getByText("在这里直接写。想让 AI 先起个草稿，就在右边跟它说。"),
     ).toBeDefined();
+  });
+
+  it("点稿纸空白处光标落进正文（编辑区只有字那么高，下面空白点了打不了字）", async () => {
+    const { container } = render(<WritingPaper draft={{ ...baseDraft, content: "" }} onEdit={vi.fn()} />);
+    const canvas = container.querySelector(".se-v2-writing-canvas") as HTMLElement;
+    fireEvent.mouseDown(canvas, { button: 0 });
+    await waitFor(() => expect(document.activeElement).toBe(proseMirrorEl(container)));
   });
 
   it("renders no editable host when onEdit is absent", () => {
@@ -62,13 +69,13 @@ describe("WritingPaper", () => {
   it("locks the editor (non-editable) and shows a notice when the chapter is committed", () => {
     const { container } = render(<WritingPaper draft={{ ...baseDraft, status: "committed" }} onEdit={vi.fn()} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
-    expect(screen.getByText("本章已定稿，内容以定稿版为准。如需修改请通过 AI 助手发起修改。")).toBeDefined();
+    expect(screen.getByText("这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。")).toBeDefined();
   });
 
   it("keeps the editor editable and hides the committed notice for plain drafts", () => {
     const { container } = render(<WritingPaper draft={baseDraft} onEdit={vi.fn()} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("true");
-    expect(screen.queryByText("本章已定稿，内容以定稿版为准。如需修改请通过 AI 助手发起修改。")).toBeNull();
+    expect(screen.queryByText("这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。")).toBeNull();
   });
 
   it("reflects external draft content into the editor when the user has not edited", () => {

@@ -100,7 +100,8 @@
   .codex-desk-bar .cd-synopsis span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .codex-desk-bar .cd-synopsis.is-open span{white-space:normal;}
   /* 底条：上一章 | 再来一版 | 下一章 */
-  .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px;padding:8px 24px;}
+  /* 两边「上一章 / 下一章」按自身宽度占位，中间工具条在剩下的地方放；放不下时状态那句先省略，按钮不让（2026-10-22：窄屏「定稿」被「下一章」压住）。 */
+  .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,auto) minmax(max-content,1fr);gap:12px;padding:8px 24px;}
   .codex-desk-bar-bottom .cd-reroll{margin:0;}
   .codex-desk-bar .cd-nav{
     min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 10px;border:0;border-radius:8px;background:transparent;
@@ -199,13 +200,13 @@
   }
 
   /* ═══ 稿纸底下的本章动作条（P6）：核账状态一句 + 核账 / 定稿 ═══ */
-  .cd-tools{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-width:0;}
-  .cd-tools-status{font-size:13px;color:var(--muted);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;}
+  .cd-tools{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;}
+  .cd-tools-status{font-size:13px;color:var(--muted);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;min-width:0;flex:0 1 auto;}
   button.cd-tools-status{border:0;background:none;cursor:pointer;color:var(--danger);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px;}
   button.cd-tools-status:hover{color:var(--text);}
   .cd-tools-btn{
     height:32px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);
-    color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap;
+    color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap;flex-shrink:0;
   }
   .cd-tools-btn:hover:not(:disabled){background:var(--hover);}
   .cd-tools-btn.is-primary{border-color:transparent;background:var(--accent);color:var(--accent-ink);font-weight:500;}

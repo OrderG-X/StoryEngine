@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -406,8 +406,18 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
 
   const isEmpty = !draft.content.trim();
 
+  // 点稿纸空白处（正文下面那一大片、页边）把光标放到正文末尾：编辑区只有字那么高，
+  // 新作者点空白稿纸打不了字（2026-10-22 好上手走查）。只认点在稿纸本身，点到查找条、提示等子元素不管。
+  const handleCanvasMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (locked || !editor || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target !== event.currentTarget && !target.classList.contains("se-v2-editor-wrap") && !target.classList.contains("se-v2-draft-editor-host")) return;
+    event.preventDefault();
+    editor.commands.focus("end");
+  }, [editor, locked]);
+
   return (
-    <section className="se-v2-writing-canvas">
+    <section className="se-v2-writing-canvas" onMouseDown={handleCanvasMouseDown}>
       {findOpen ? (
         <FindReplacePanel
           query={findQuery}
@@ -427,7 +437,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       <div className="se-v2-editor-wrap se-v2-paper se-v2-paper-editable" style={paperStyle} onKeyDown={handleKeyDown}>
         {isCommitted ? (
           <article className="se-v2-notice">
-            <p>本章已定稿，内容以定稿版为准。如需修改请通过 AI 助手发起修改。</p>
+            <p>这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。</p>
           </article>
         ) : null}
         <div className="se-v2-draft-editor-host" ref={hostRef}>
@@ -438,7 +448,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
                 ? "AI 先拟这一章的章纲（一般要一两分钟），拟好就开始写正文……"
                 : generating || draftPhase === "write"
                   ? "AI 正在写正文……"
-                  : "当前章节还没有工作稿。你可以在这里手动输入，也可以在右侧让 AI 生成工作稿。"}
+                  : "在这里直接写。想让 AI 先起个草稿，就在右边跟它说。"}
             </p>
           ) : null}
           {(canRewrite || canAsk) && selection ? (

@@ -6,15 +6,15 @@ import {
 } from "./starterGuidance.js";
 
 describe("starterGuidance", () => {
-  it("三意图文案与唯一控制面 intent 齐全", () => {
+  it("三个起步按钮都是填半句话、留给作者接着写", () => {
     expect(STARTER_INTENTS).toHaveLength(3);
     expect(STARTER_INTENTS.map((i) => i.label)).toEqual([
       "我有一个点子",
       "帮我理主角",
       "直接写开头",
     ]);
-    for (const intent of STARTER_INTENTS) {
-      expect(intent.intent.trim().length).toBeGreaterThan(4);
+    for (const item of STARTER_INTENTS) {
+      expect(item.prefill.endsWith("：")).toBe(true);
     }
   });
 

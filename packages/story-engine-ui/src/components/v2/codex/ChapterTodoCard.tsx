@@ -4,7 +4,7 @@
  * 写这一章 → 核账 → 去看那 N 处 → 定稿 → 去第 N 章（后面第一个没定稿的章）。
  */
 import type { ReactNode } from "react";
-import type { ChapterProgress } from "../../../workspace/chapterProgress.js";
+import { STEP_HINTS, type ChapterProgress } from "../../../workspace/chapterProgress.js";
 import type { ChapterButton } from "../../../utils/chapterButtons.js";
 import { requestContinuityFocus } from "./ContinuityMarks.js";
 
@@ -30,9 +30,9 @@ export function ChapterTodoCard({
 }) {
   if (progress.chapter <= 0) return null;
   const steps = [
-    { key: "write", label: "写", ...progress.write },
-    { key: "check", label: "核账", done: progress.check.done, text: progress.check.text },
-    { key: "commit", label: "定稿", ...progress.commit },
+    { key: "write", label: "写", hint: undefined, ...progress.write },
+    { key: "check", label: "核账", hint: STEP_HINTS.check_continuity, done: progress.check.done, text: progress.check.text },
+    { key: "commit", label: "定稿", hint: STEP_HINTS.commit_preview, ...progress.commit },
   ];
   const left = steps.filter((step) => !step.done).length;
   const title = progress.commit.done ? `第 ${progress.chapter} 章已定稿` : `第 ${progress.chapter} 章还差${COUNT[left] ?? left}步`;
@@ -53,7 +53,7 @@ export function ChapterTodoCard({
           {steps.map((step) => (
             <li key={step.key} className={step.done ? "is-done" : ""}>
               <span className="se-todo-mark" aria-hidden="true">{step.done ? "✓" : "○"}</span>
-              <span className="se-todo-step-label">{step.label}</span>
+              <span className="se-todo-step-label" title={step.hint}>{step.label}</span>
               <span className={`se-todo-step-text${step.key === "check" && attention ? " is-attention" : ""}`} title={step.text}>{step.text}</span>
             </li>
           ))}
@@ -62,6 +62,7 @@ export function ChapterTodoCard({
           type="button"
           className="se-todo-primary"
           disabled={busy || !actionable}
+          title={primary.kind in STEP_HINTS ? STEP_HINTS[primary.kind as keyof typeof STEP_HINTS] : undefined}
           onClick={onPrimary}
         >
           {busy && busyCaption ? busyCaption : primary.label}
