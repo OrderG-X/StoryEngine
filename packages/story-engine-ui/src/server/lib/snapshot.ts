@@ -141,6 +141,18 @@ async function ensureChatSessionsExcludedUnlocked(projectDir: string): Promise<v
   }
 }
 
+/**
+ * 书目录本来就是 git 仓库（作者自己 init 过、或别处拷来的）时，我们没给它配过身份；电脑上也没有全局 git 身份的话，
+ * 提交报「Author identity unknown」，存档点就打不上（2026-10-22 CI 跑手上撞到）。解析不出身份才补一份本仓库的，
+ * 作者自己配过的不动。
+ */
+async function ensureIdentityUnlocked(projectDir: string): Promise<void> {
+  const email = await git(projectDir, ["config", "user.email"]).catch(() => "");
+  if (email) return;
+  await git(projectDir, ["config", "user.name", "StoryEngine"]);
+  await git(projectDir, ["config", "user.email", "snapshot@story-engine.local"]);
+}
+
 /** 不加锁的内部版本，供已持锁的导出函数复用，避免同模块重入死锁。 */
 async function ensureRepoUnlocked(projectDir: string): Promise<void> {
   let isRepo = true;
@@ -150,6 +162,7 @@ async function ensureRepoUnlocked(projectDir: string): Promise<void> {
     isRepo = false; // 还不是仓库，初始化
   }
   if (isRepo) {
+    await ensureIdentityUnlocked(projectDir);
     await ensureChatSessionsExcludedUnlocked(projectDir); // 旧书：补 exclude + 摘索引（幂等、一次性）
     return;
   }

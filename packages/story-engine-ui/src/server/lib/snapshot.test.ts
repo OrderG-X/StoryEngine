@@ -495,6 +495,32 @@ describe("快照排除对话历史目录（.story-engine-ui/chat-sessions）", (
     expect(await readFile(join(dir, sessionsRel, "s1.json"), "utf-8")).toBe("新聊天");
   });
 
+  it("书目录本来就是 git 仓库、电脑上也没 git 身份：补一份本仓库身份，存档照样打得上（CI 跑手撞到）", async () => {
+    const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+    process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    try {
+      const dir = await makeProject();
+      await execFileAsync("git", ["-C", dir, "init"]);
+      await createSnapshot(dir, "a");
+      const { stdout } = await execFileAsync("git", ["-C", dir, "config", "--local", "user.email"]);
+      expect(stdout.trim()).toBe("snapshot@story-engine.local");
+    } finally {
+      if (saved.global === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved.global;
+      if (saved.nosystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; else process.env.GIT_CONFIG_NOSYSTEM = saved.nosystem;
+    }
+  });
+
+  it("作者自己给书仓库配过身份的不动", async () => {
+    const dir = await makeProject();
+    await execFileAsync("git", ["-C", dir, "init"]);
+    await execFileAsync("git", ["-C", dir, "config", "user.email", "me@example.com"]);
+    await execFileAsync("git", ["-C", dir, "config", "user.name", "Me"]);
+    await createSnapshot(dir, "a");
+    const { stdout } = await execFileAsync("git", ["-C", dir, "config", "--local", "user.email"]);
+    expect(stdout.trim()).toBe("me@example.com");
+  });
+
   it("exclude 已有用户自定义内容时追加不覆盖、重复调用只写一次", async () => {
     const dir = await makeProject();
     await execFileAsync("git", ["-C", dir, "init"]);

@@ -168,7 +168,7 @@ describe("改已定稿的章名", () => {
     await writeFile(join(book, draftPath(1)), CH1);
 
     expect(await runCommand(book, chapterRetitle, { chapter: 1, title: "回乡" }, { caller: "ai", idempotencyKey: "x" })).toMatchObject({ ok: false, code: "author_only" });
-    const snapshot = vi.fn(async () => "snap-1");
+    const snapshot = vi.fn(async () => undefined);
     const done = expectOk(await runCommand(book, chapterRetitle, { chapter: 1, title: "  回乡 " }, { ...author("r1"), snapshot }));
     expect(done.result).toEqual({ chapter: 1, title: "回乡", unchanged: false });
     expect(snapshot).toHaveBeenCalledTimes(1);
