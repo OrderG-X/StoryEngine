@@ -33,8 +33,11 @@ mac:
       arch: [arm64]
   category: public.app-category.productivity
   icon: assets/icon.icns
-  # 内测版不签名（熟人右键打开）；上签名时删掉这行并配 hardenedRuntime + notarize。
-  identity: null
+  # 没有开发者账号：用 ad-hoc 签名把整个应用包封好。只靠链接器给主程序签的那一下，应用包是「签了一半」，
+  # 从网上下载后 macOS 直接说「已损坏」、只能敲命令；封好后走 系统设置 → 隐私与安全性 →「仍要打开」。
+  # 上正式签名时换成开发者证书、打开 hardenedRuntime 并配 notarize。
+  identity: "-"
+  hardenedRuntime: false
 
 win:
   icon: assets/icon.png

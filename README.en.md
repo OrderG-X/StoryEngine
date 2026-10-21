@@ -1,12 +1,11 @@
 <div align="center">
 
-<img src=".github/assets/hero.svg" alt="StoryEngine — chat-driven long-form novel writing" width="760" />
+<img src=".github/assets/hero.svg" alt="StoryEngine — you write the novel, the AI keeps the books" width="760" />
 
 <p>
   <a href="https://github.com/OrderG-X/StoryEngine/actions/workflows/ci.yml"><img src="https://github.com/OrderG-X/StoryEngine/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/OrderG-X/StoryEngine/releases/latest"><img src="https://img.shields.io/github/v/release/OrderG-X/StoryEngine?label=download" alt="Download" /></a>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6" alt="License: AGPL-3.0" />
-  <img src="https://img.shields.io/badge/node-%E2%89%A5%2020-43853d?logo=node.js&logoColor=white" alt="Node >= 20" />
-  <img src="https://img.shields.io/badge/pnpm-11-f69220?logo=pnpm&logoColor=white" alt="pnpm 11" />
   <img src="https://img.shields.io/badge/data-100%25%20local-f59e0b" alt="100% local data" />
 </p>
 
@@ -19,29 +18,55 @@
 
 ---
 
-# StoryEngine
+> 🚧 **Under active development.** Found a problem or want a feature? Open an [issue](https://github.com/OrderG-X/StoryEngine/issues).
 
-> 🚧 **Under active development**: the project is iterating quickly. Found a problem or want a feature? Open an [issue](https://github.com/OrderG-X/StoryEngine/issues) and we will take it seriously.
+**A desktop app for writing long-form fiction: you write the prose, and the AI beside you keeps the books — what happened in each chapter, whether it still agrees with earlier chapters, and your story bible. It can draft for you too, if you want.**
 
-**Chat-driven long-form fiction writing. You talk to the AI; the AI calls tools to read/write story state, generate drafts, and review before committing — every state change goes through deterministic engine checks, previewable and reversible at each step.**
+The interface is currently in Chinese.
 
-## What this is
+## What it does
 
-Not "an AI that writes novels for you", but an **AI writing team that takes your direction**: you direct, the AI writes, self-checks, and keeps the books.
+- **Per-chapter ledger**: when you commit a chapter, the AI records who appeared, what happened, open threads, and the in-story date — every entry quotes the text, and anything it can't back with a quote is reported as not recorded
+- **Continuity check**: it reads the whole book and points out where this chapter contradicts earlier ones, quoting both sides
+- **Story bible**: characters, places, items, and rules as cards you edit in place; the AI may only fill blanks or add new cards — changing anything you wrote needs your click
+- **AI drafting if you want it**: brainstorm the next chapter, draft, revise on request, strip the "AI voice"
+- **Everything is undoable**: the AI snapshots before every change; only you can commit a chapter, by clicking a button
+- **Import an existing book**: a .txt is split into chapters and the AI fills in the ledger in the background
+- **Web research** (optional): ask it to look things up; results come with sources and are used as reference only
 
-- **Dialogue-driven**: you talk, it writes. You always see what is being written and how it changes
-- **Long-form without collapse**: it does not lose memory or mix up settings by chapter 200 — a hook planted in chapter 3 is still remembered in chapter 30
-- **Anti-AI-flavor**: specifically strips the "this was written by AI" feel
-- **Web research**: say "look up X" and the AI searches the web with cited sources — treated as reference material, never fabricated
-- **Local-first**: your books, drafts, and settings live on your own machine
+## Install (macOS)
 
-## Packages
+1. Download `StoryEngine-<version>-arm64.dmg` from [Releases](https://github.com/OrderG-X/StoryEngine/releases/latest) (Apple silicon Macs)
+2. Open the dmg and drag StoryEngine into Applications
+3. **macOS will block the first launch** (the app is not signed with an Apple Developer ID yet):
+   - Double-click StoryEngine and click "Done" in the dialog
+   - Open System Settings → Privacy & Security, scroll to the line saying StoryEngine was blocked, click "Open Anyway", and confirm with your password
+   - It opens normally from then on
 
-- `packages/story-core`: the core — truth (per-chapter ledgers, author decisions, chapter text), write commands (commit, record decision, import legacy book, save draft, AI draft write), and projections; pure TypeScript, no model calls
-- `packages/story-engine-ui`: React author workbench plus the standalone local HTTP/SSE server (chat agent, editorial room, drafting flows)
-- `packages/story-engine-desktop`: Electron shell and guarded desktop packaging workflow
+   Or, from a terminal:
 
-## Quick start
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/StoryEngine.app
+   ```
+
+There is no installer for Intel Macs or Windows yet — [run from source](#run-from-source) instead.
+
+## Getting started
+
+1. **Connect an AI**: the shelf shows "AI 还没接上" (AI not connected) — click "去接上", pick a provider (DeepSeek, Qwen, GLM, Kimi, OpenAI, … any OpenAI-compatible endpoint), paste your own API key, test the connection, and pick a model
+2. **Open a book**: create a new one, or import one you've already written
+3. **Web search** (optional): Settings → 搜索 (Search), add a [Bocha](https://open.bochaai.com) or [Tavily](https://app.tavily.com) key
+
+Without an AI connected you can still write, save, and export.
+
+## Your data
+
+- Books, story bibles, and chat history stay on your machine (library at `~/StoryEngine-NG`)
+- API keys are stored only in `~/.story-engine/`, readable only by your user account
+- When you use the AI, chapter text and settings are sent to **the model provider you chose**; web searches send the query to **the search provider you chose**
+- Nothing else goes over the network: no account, no analytics, no data collection
+
+## Run from source
 
 Requires Node.js `^20.20.0` / `^22.22.0` / `>=24.0.0` and pnpm 11:
 
@@ -52,15 +77,13 @@ pnpm dev       # starts the writing workbench
 
 Then open the address shown in the terminal (default `http://127.0.0.1:5173`).
 
-**Model setup (BYO-key)**: open "AI 设置" (AI Settings) in the app sidebar, add a provider and paste your API key
-(any OpenAI-compatible endpoint works: DeepSeek, GLM, Kimi, OpenAI, …). Keys stay on your machine
-(`~/.story-engine/`); never commit keys to any repository.
-
-## Author-only actions
-
-Committing a chapter and pruning the operation history only run when the author clicks the confirm button; the AI can only show a preview. Every other AI write takes a snapshot first and can be undone.
-
 ## Development
+
+| Package | What it is |
+|---|---|
+| `packages/story-core` | The core: truth (per-chapter ledgers, author decisions, bible cards, chapter text), write commands (commit, record decision, save draft, import), and projections; pure TypeScript, no model calls |
+| `packages/story-engine-ui` | React workbench plus the local HTTP/SSE server (chat agent, editorial room, drafting flows) |
+| `packages/story-engine-desktop` | Electron shell and packaging (ships a slim git on macOS, so undo doesn't need the system git) |
 
 ```bash
 pnpm test
@@ -68,18 +91,10 @@ pnpm typecheck
 pnpm build
 ```
 
-GitHub CI runs these workspace commands on Node.js 22 and pnpm 11.
+GitHub CI runs these on Node.js 22 and pnpm 11.
 
-## Desktop
-
-Desktop builds ship **without** any bundled model config (`preset-model-config`), and a post-pack probe verifies the artifacts contain no keys. A build with model presets is an explicitly dangerous internal-testing mode: it requires all three preset files plus the explicit confirmation env var `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`, produces artifacts with a `-with-model-preset` suffix, and keeps outputs isolated as `dist-electron/clean/` vs `dist-electron/with-model-preset/`.
-
-Desktop builds are currently **unsigned, internal-testing artifacts**. Code signing, notarization, and public distribution are not in place yet.
-
-## Security notes
-
-- Never distribute a desktop artifact built with model presets as a clean/public build — the bundled keys are extractable; discard it after internal testing
+Desktop build: `packages/story-engine-desktop/build-desktop.sh --mac`. The default build ships **without** any model config, and a post-pack probe verifies no keys ended up in the artifact. A build with bundled model presets is an internal-testing mode that requires `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`, gets a `-with-model-preset` suffix, and **must never be distributed**.
 
 ## License
 
-AGPL-3.0.
+[AGPL-3.0](LICENSE). If you modify it and offer it as a network service, you must publish your modified source. Third-party licenses are listed in the app under Settings → 关于 (About) → 第三方软件许可.

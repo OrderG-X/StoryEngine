@@ -1,12 +1,11 @@
 <div align="center">
 
-<img src=".github/assets/hero.svg" alt="StoryEngine — chat-driven AI long-form novel writing engine / 聊天驱动写长篇小说" width="760" />
+<img src=".github/assets/hero.svg" alt="StoryEngine — 你来写，AI 管账的长篇小说写作软件" width="760" />
 
 <p>
   <a href="https://github.com/OrderG-X/StoryEngine/actions/workflows/ci.yml"><img src="https://github.com/OrderG-X/StoryEngine/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/OrderG-X/StoryEngine/releases/latest"><img src="https://img.shields.io/github/v/release/OrderG-X/StoryEngine?label=%E4%B8%8B%E8%BD%BD" alt="下载" /></a>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-8b5cf6" alt="License: AGPL-3.0" />
-  <img src="https://img.shields.io/badge/node-%E2%89%A5%2020-43853d?logo=node.js&logoColor=white" alt="Node >= 20" />
-  <img src="https://img.shields.io/badge/pnpm-11-f69220?logo=pnpm&logoColor=white" alt="pnpm 11" />
   <img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-100%25%20%E6%9C%AC%E5%9C%B0-f59e0b" alt="数据 100% 本地" />
 </p>
 
@@ -19,61 +18,70 @@
 
 ---
 
-> 🚧 **持续更新中**：项目仍在快速迭代，功能会不断完善。使用中遇到任何问题、或想要新功能，欢迎到 [Issues](https://github.com/OrderG-X/StoryEngine/issues) 提过来，我们会认真看。
+> 🚧 **持续更新中**：遇到问题、想要新功能，欢迎到 [Issues](https://github.com/OrderG-X/StoryEngine/issues) 提，我们会认真看。
 
-**聊天驱动写长篇小说。你对 AI 说话，AI 调工具读/写故事状态、生成草稿、审稿入库——所有状态变更都经过引擎的确定性校验，每步可预览、可撤销。**
+**写长篇小说的桌面软件：正文你来写，右边的 AI 帮你管账——记下每章发生了什么、核前后对不对得上、管好设定。想让它代笔也行。**
 
-*Chat-driven long-form novel writing: you direct, AI writes — deterministic state validation, preview & undo, 100% local.*
+## 能做什么
 
-## 这是什么
+- **逐章记账**：每章定稿时，AI 把出场人物、发生的事、线索、故事里的日子记成账，每条都带正文原句，核不上就如实说没记上
+- **核前后矛盾**：写完一章让它核账，它跟读全书，指出这一章和前文对不上的地方，两边原句都摆出来
+- **设定本**：人物、地点、物件、规则做成卡片，点字就改；AI 只能补空栏、建新卡，要动你写的得你点头
+- **想让 AI 代笔也行**：想走法、出稿、按你的意思改、去 AI 味
+- **每步都能撤销**：AI 每次改东西前自动存档；定稿只能你自己点按钮
+- **导入已写的书**：txt 自动切章，AI 在后台逐章补账
+- **联网查资料**（可选）：要真实世界的细节时让它搜，附来源，只当参考
 
-不是「帮你写小说的 AI」，而是**听你指挥的 AI 编剧团队**：你当导演，AI 执笔、自查、记账。
+## 下载安装（Mac）
 
-- **对话驱动**：你动嘴，它写书。写哪、改成什么样，你全程看得见
-- **长篇不崩**：写到第 200 章不失忆、不串设定——第 3 章埋的伏笔，第 30 章它还记得
-- **反 AI 腔**：专门去 AI 味，治"一看就是 AI 写的"
-- **联网查资料**：写作需要真实世界细节时直接说「搜一下 XX」，AI 联网检索并附来源——只当参考资料、绝不编造
-- **纯本地**：你的书、草稿、设定全落在自己电脑上，数据你自己做主
+1. 到 [Releases](https://github.com/OrderG-X/StoryEngine/releases/latest) 下载 `StoryEngine-版本号-arm64.dmg`（Apple 芯片的 Mac）
+2. 打开 dmg，把 StoryEngine 拖进「应用程序」
+3. **第一次打开会被系统拦下**（我们还没有苹果开发者签名）：
+   - 双击 StoryEngine，弹窗里点「完成」
+   - 打开「系统设置 → 隐私与安全性」，往下翻到说 StoryEngine 被阻止的那一行，点「仍要打开」，再输入开机密码确认
+   - 之后就能正常打开了
 
-核心安全边界：
+   会用终端的话，也可以一条命令放行：
 
-- 草稿只写稿，不碰正式状态
-- 提交前先预览改动，确认后才入库
-- AI 审稿只是建议，改状态必须过引擎校验 + 人工确认
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/StoryEngine.app
+   ```
 
-## 快速开始
+Intel 芯片的 Mac 和 Windows 暂时没有安装包，可以[从源码运行](#从源码运行)。
 
-依赖 Node.js `^20.20.0` / `^22.22.0` / `>=24.0.0` + pnpm 11。三步跑起来：
+## 开始用
+
+1. **接上 AI**：书架顶上会提示「AI 还没接上」，点「去接上」→ 选一家服务商（DeepSeek、通义千问、智谱 GLM、Kimi、豆包等，任何 OpenAI 兼容接口都行）→ 填你自己的 API Key → 测试连接 → 点一个模型
+2. **开一本书**：新建一本，或者「导入已写的书」
+3. **联网搜索**（可选）：设置 → 搜索，填[博查](https://open.bochaai.com)或 [Tavily](https://app.tavily.com) 的密钥
+
+不接 AI 也能用：自己写、存稿、导出都不受影响。
+
+## 你的数据
+
+- 书、设定、聊天记录都存在你自己电脑上（书库在 `~/StoryEngine-NG`）
+- 密钥只存在 `~/.story-engine/`，只有你的账户能读
+- 用 AI 时，正文和设定会发给**你选的**模型服务商；联网搜索时，搜索词会发给**你选的**搜索服务商
+- 除此之外不联网：没有账号、没有统计、不收集任何数据
+
+## 从源码运行
+
+需要 Node.js `^20.20.0` / `^22.22.0` / `>=24.0.0` 和 pnpm 11：
 
 ```bash
 pnpm install   # 安装依赖（会自动构建核心包）
-pnpm dev       # 启动写作工作台
+pnpm dev       # 启动写作台
 ```
 
-然后浏览器打开终端里显示的地址（默认 `http://127.0.0.1:5173`）。
+然后用浏览器打开终端里显示的地址（默认 `http://127.0.0.1:5173`）。
 
-**配置模型（BYO-key，用你自己的 key）**：进入应用左侧「AI 设置」，添加服务商并填入 API Key
-（支持任意 OpenAI 兼容接口：DeepSeek、GLM、Kimi、OpenAI 等），测试连接通过即可开始写作。
-key 只保存在你本机（`~/.story-engine/`），绝不要把密钥提交进任何仓库。
-
-## 项目结构
+## 开发
 
 | 包 | 说明 |
 |---|---|
-| `packages/story-core` | 核心：真相（每章账单、作者裁定、正文）、写命令（定稿、记裁定、导入老书、存稿、AI 写稿）、投影；纯 TypeScript、不碰模型 |
-| `packages/story-engine-ui` | React 写作工作台 + 本地 HTTP/SSE 服务（对话 AI、编辑部、写稿流程都在这里） |
-| `packages/story-engine-desktop` | Electron 桌面壳与打包流程 |
-
-## 核心能力
-
-- **对话驱动**：作者对 AI 说话，AI 调工具读资料、写工作稿、记账；每次写盘前自动打存档点，可撤销
-- **作者档只走按钮**：定稿、裁剪操作历史只由作者点「确认」按钮执行，AI 只出预览
-- **编辑部**：核账员跟读全书核前后矛盾，记账员写每章账单，章纲员拟章纲、核账员审
-- **长篇不崩**：写作上下文按相关度挑旧章原文与旧事实，每章提示词有上限、不随章数涨
-- **记账带证据**：AI 记下的每条都要带原句、代码核实，核不过就如实说没记上
-- **去 AI 味**：出稿后确定性回检 + AI 体检 + 一键改写
-
-## 开发
+| `packages/story-core` | 核心：真相（每章账单、作者裁定、设定卡、正文）、写命令（定稿、记裁定、存稿、导入）、投影；纯 TypeScript，不调模型 |
+| `packages/story-engine-ui` | React 写作台 + 本地 HTTP/SSE 服务（对话 AI、编辑部、写稿流程） |
+| `packages/story-engine-desktop` | Electron 桌面壳和打包（Mac 随包带精简 git，撤销不靠系统 git） |
 
 ```bash
 pnpm test          # 全仓测试
@@ -81,31 +89,16 @@ pnpm typecheck     # 类型检查
 pnpm build         # 构建
 ```
 
-单独包：
+GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条。测试会给每次运行单独分配临时目录、结束后只回收自己那份；要保留失败现场，设 `STORY_ENGINE_KEEP_TEST_TMP=1`。
 
-```bash
-pnpm --filter @actalk/story-core test
-pnpm --filter @actalk/story-engine-ui test
-```
+打桌面包：`packages/story-engine-desktop/build-desktop.sh --mac`。默认包**不含**任何模型配置，打包后会用探针确认产物里没有密钥；带模型预设的内部测试包要显式确认 `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`，产物名带 `-with-model-preset`，**绝不能公开分发**。
 
-GitHub CI 在 Node.js 22 + pnpm 11 上跑这三条工作区命令。
+几条硬规矩：
 
-工作区与单包的 `pnpm test` 会为本次测试单独分配系统临时目录，结束或正常中断后只回收本次目录，
-不扫描或删除其他任务的临时数据。需要保留失败夹具排障时，可显式设置 `STORY_ENGINE_KEEP_TEST_TMP=1`；
-终端会打印保留路径。直接运行 `vitest` 会绕过此运行级回收，建议使用上述测试入口。
-
-## 桌面端
-
-默认桌面构建**不含**任何模型配置（`preset-model-config`），并会在打包后用探针验证产物里没有密钥。带模型预设的构建是明确危险的内部测试模式：需要全部三个预设文件 + 显式确认环境变量 `SE_ALLOW_SECRET_BUNDLE=I_UNDERSTAND_KEYS_ARE_EXTRACTABLE`，产物名带 `-with-model-preset` 后缀，输出按安全模式隔离在 `dist-electron/clean/` 与 `dist-electron/with-model-preset/`。
-
-桌面构建目前是**未签名 / 内部测试产物**。代码签名、公证、公开分发尚未完成。
-
-## 安全说明
-
-- 绝不提交 `.env`、API key、输出 fixture 或生成的 zip 产物
-- 绝不把带模型预设的桌面产物当干净/公开构建分发——内置密钥可被提取，内部测试后必须作废
-- AI 不得直接定稿或改作者档的东西：只出预览，作者点按钮才执行
+- 绝不提交 `.env`、API Key 或生成的安装包
+- AI 不能直接定稿或改作者写的东西：只出预览，作者点按钮才执行
+- AI 说「记下了」的每一条都要带原句、由代码核实
 
 ## 许可证
 
-AGPL-3.0。网络服务交互也触发开源义务——谁拿去做 SaaS 转卖，必须开放其全部修改源码。
+[AGPL-3.0](LICENSE)。拿去改了提供网络服务，也要公开全部修改后的源码。用到的第三方软件许可在应用里「设置 → 关于 → 第三方软件许可」。
