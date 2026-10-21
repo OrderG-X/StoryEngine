@@ -10,6 +10,7 @@ import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { ChapterTitle } from "./ChapterTitle.js";
+import { IconPencil } from "./icons.js";
 import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
@@ -188,6 +189,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
         {activeTab === "draft" ? (
           showStarter ? (
             <div className="cd-starter" aria-label="新书起步引导">
+              <span className="cd-starter-mark" aria-hidden="true"><IconPencil size={22} /></span>
               <h2 className="cd-starter-title">从一句话开始</h2>
               <p className="cd-starter-sub">直接在稿纸上写，AI 帮你记人物、东西、伏笔，查前后对不对得上。也可以先跟 AI 聊聊。</p>
               <div className="cd-starter-actions" role="group" aria-label="起步意图">

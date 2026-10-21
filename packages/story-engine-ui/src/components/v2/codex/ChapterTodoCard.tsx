@@ -54,7 +54,7 @@ export function ChapterTodoCard({
             <li key={step.key} className={step.done ? "is-done" : ""}>
               <span className="se-todo-mark" aria-hidden="true">{step.done ? "✓" : "○"}</span>
               <span className="se-todo-step-label">{step.label}</span>
-              <span className={`se-todo-step-text${step.key === "check" && attention ? " is-attention" : ""}`}>{step.text}</span>
+              <span className={`se-todo-step-text${step.key === "check" && attention ? " is-attention" : ""}`} title={step.text}>{step.text}</span>
             </li>
           ))}
         </ul>
