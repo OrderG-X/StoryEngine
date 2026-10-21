@@ -51,8 +51,12 @@ export function ExportDialog({ book, onClose, api = { exportBookFile, saveBlob }
         ...(ranged ? { from: fromN, to: toN } : {}),
         includeDrafts,
       });
-      api.saveBlob(result.blob, result.filename);
-      setMessage(`导出了 ${result.chapters} 章：${result.filename}`);
+      const saved = await api.saveBlob(result.blob, result.filename);
+      setMessage(saved === "canceled"
+        ? "取消了，没存。"
+        : saved === "saved"
+          ? `导出了 ${result.chapters} 章：${result.filename}`
+          : `导出了 ${result.chapters} 章，交给浏览器下载了：${result.filename}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

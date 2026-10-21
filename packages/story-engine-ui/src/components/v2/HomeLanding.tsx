@@ -10,7 +10,7 @@ import { TrashDialog } from "./shelf/TrashDialog.js";
 import { ExportDialog } from "./shelf/ExportDialog.js";
 import { downloadBookBackup, fetchBookStats, fetchShelfMeta, fetchTrash, restoreBookBackup, saveBlob, setBookArchived, type ShelfBookMeta, type WordStats } from "../../api/shelfClient.js";
 import { BookInfoDialog } from "./shelf/BookInfoDialog.js";
-import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
+import { addReturnedBook, refreshBookLibrary } from "../../utils/refreshBookLibrary.js";
 import { toneOf } from "../../lib/tone.js";
 import { useNavigationStore } from "../../stores/navigationStore.js";
 import { useActiveModel } from "./codex/useActiveModel.js";
@@ -129,6 +129,13 @@ export default function HomeLanding({
     return () => { alive = false; };
   }, [heroPath]);
 
+  // 每回到书架都重扫一次书库，归并进书架（服务端真值刷新已有条目 + 按活跃时间排序；别再逐本 upsertBook 头插——
+  // 那会把服务端的「最近活跃降序」反转）。原来只在开机扫：写了几章回书架，章数、「上次写到」还停在开机那会儿（真机试写）。
+  // 扫描失败不影响书架。
+  useEffect(() => {
+    void refreshBookLibrary().catch(() => undefined);
+  }, []);
+
   const refreshTrashCount = () => {
     fetchTrash().then((trash) => setTrashCount(trash.items.length), () => undefined);
   };
@@ -141,8 +148,12 @@ export default function HomeLanding({
     showFeedback(`正在备份《${book.title}》…`);
     try {
       const backup = await downloadBookBackup(book.projectPath);
-      saveBlob(backup.blob, backup.filename);
-      showFeedback(`《${book.title}》备份好了：${backup.filename}`);
+      const saved = await saveBlob(backup.blob, backup.filename);
+      showFeedback(saved === "canceled"
+        ? "取消了，没备份。"
+        : saved === "saved"
+          ? `《${book.title}》备份好了：${backup.filename}`
+          : `《${book.title}》的备份交给浏览器下载了：${backup.filename}`);
     } catch (error) {
       showFeedback(`没备份成：${errorText(error)}`);
     }
