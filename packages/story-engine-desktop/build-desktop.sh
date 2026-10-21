@@ -443,6 +443,13 @@ if [ "$TARGET" = "--mac" ]; then
       exit 1
     fi
   done
+  # 整个应用包得封好签名（ad-hoc 也行），否则下载后 macOS 报「已损坏」。
+  MAC_APP="$(find "$STAGING/dist-electron" -maxdepth 2 -name '*.app' -print -quit)"
+  if ! codesign --verify --deep --strict "$MAC_APP" 2>/dev/null; then
+    echo "构建产物断言失败：Mac 应用包签名不完整（$MAC_APP）。" >&2
+    codesign --verify --deep --strict "$MAC_APP" >&2 || true
+    exit 1
+  fi
 fi
 
 prepare_mode_output_dir

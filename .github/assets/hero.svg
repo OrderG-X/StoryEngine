@@ -11,12 +11,12 @@
       <stop offset="50%" stop-color="#f43f5e" stop-opacity="0.9"/>
       <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
     </linearGradient>
-    <clipPath id="type1"><rect x="180" y="150" width="0" height="40"><animate attributeName="width" values="0;520;520;520" keyTimes="0;0.12;0.32;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
-    <clipPath id="type2"><rect x="180" y="150" width="0" height="40"><animate attributeName="width" values="0;0;0;520;520;520" keyTimes="0;0.333;0.345;0.45;0.65;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
-    <clipPath id="type3"><rect x="180" y="150" width="0" height="40"><animate attributeName="width" values="0;0;0;520;520;520" keyTimes="0;0.666;0.678;0.78;0.98;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
+    <clipPath id="type1"><rect x="364" y="150" width="0" height="40"><animate attributeName="width" values="0;156;156;156" keyTimes="0;0.12;0.32;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
+    <clipPath id="type2"><rect x="264" y="150" width="0" height="40"><animate attributeName="width" values="0;0;0;356;356;356" keyTimes="0;0.333;0.345;0.45;0.65;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
+    <clipPath id="type3"><rect x="236" y="150" width="0" height="40"><animate attributeName="width" values="0;0;0;412;412;412" keyTimes="0;0.666;0.678;0.78;0.98;1" dur="13.5s" repeatCount="indefinite"/></rect></clipPath>
   </defs>
 
-  <text x="440" y="52" text-anchor="middle" font-family="'SF Mono','JetBrains Mono',Menlo,Consolas,monospace" font-size="13" letter-spacing="6" fill="#8b949e">CHAT-DRIVEN NOVEL ENGINE</text>
+  <text x="440" y="52" text-anchor="middle" font-family="'SF Mono','JetBrains Mono',Menlo,Consolas,monospace" font-size="13" letter-spacing="6" fill="#8b949e">YOU WRITE · AI KEEPS THE BOOKS</text>
 
   <text x="440" y="118" text-anchor="middle" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif" font-size="66" font-weight="800" fill="url(#wordmark)">StoryEngine</text>
 
@@ -24,28 +24,28 @@
 
   <g font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif" font-size="21" fill="#8b949e">
     <g clip-path="url(#type1)">
-      <text x="440" y="178" text-anchor="middle">对 AI 说话，写出一本长篇小说</text>
+      <text x="440" y="178" text-anchor="middle">你来写，AI 管账</text>
       <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.32;0.34;1" dur="13.5s" repeatCount="indefinite"/>
     </g>
     <g clip-path="url(#type2)" opacity="0">
-      <text x="440" y="178" text-anchor="middle">第 3 章埋的伏笔，第 300 章还记得</text>
+      <text x="440" y="178" text-anchor="middle">第 3 章埋的线索，第 300 章还对得上</text>
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.34;0.35;0.65;0.67;1" dur="13.5s" repeatCount="indefinite"/>
     </g>
     <g clip-path="url(#type3)" opacity="0">
-      <text x="440" y="178" text-anchor="middle">Local-first · 每步可预览 · 随时可撤销</text>
+      <text x="440" y="178" text-anchor="middle">数据全在本机 · 每步可撤销 · 定稿你说了算</text>
       <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.67;0.68;0.985;0.995;1" dur="13.5s" repeatCount="indefinite"/>
     </g>
     <rect x="702" y="160" width="3" height="24" rx="1.5" fill="#f59e0b">
       <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.5;0.51;1" dur="1.1s" repeatCount="indefinite"/>
-      <animate attributeName="x" values="440;705;705;440;700;700;440;720;720" keyTimes="0;0.12;0.333;0.345;0.45;0.666;0.678;0.78;1" dur="13.5s" repeatCount="indefinite"/>
+      <animate attributeName="x" values="364;518;518;264;618;618;236;646;646" keyTimes="0;0.12;0.333;0.345;0.45;0.666;0.678;0.78;1" dur="13.5s" repeatCount="indefinite"/>
     </rect>
   </g>
 
   <g font-family="'SF Mono','JetBrains Mono',Menlo,Consolas,monospace" font-size="12.5" fill="#6e7681" text-anchor="middle">
-    <text x="200" y="222">状态引擎</text>
-    <text x="320" y="222">伏笔追踪</text>
-    <text x="440" y="222">审稿入库</text>
-    <text x="560" y="222">反 AI 腔</text>
+    <text x="200" y="222">逐章记账</text>
+    <text x="320" y="222">核前后矛盾</text>
+    <text x="440" y="222">设定本</text>
+    <text x="560" y="222">去 AI 味</text>
     <text x="680" y="222">联网查证</text>
   </g>
 </svg>
