@@ -49,7 +49,14 @@ The interface is currently in Chinese.
    xattr -dr com.apple.quarantine /Applications/StoryEngine.app
    ```
 
-There is no installer for Intel Macs or Windows yet — [run from source](#run-from-source) instead.
+## Install (Windows)
+
+> ⚠️ **The Windows build has not been tested on a real Windows machine yet** (the Mac build has). If it won't install, won't open, or misbehaves, please open an [issue](https://github.com/OrderG-X/StoryEngine/issues) and attach `main.log` from Help → 打开日志文件夹 (Open logs folder).
+
+1. Download `StoryEngine-<version>-x64-Setup.exe` from [Releases](https://github.com/OrderG-X/StoryEngine/releases/latest) and run it
+2. If you see "Windows protected your PC" (the installer is not code-signed yet): click "More info" → "Run anyway"
+
+There is no installer for Intel Macs yet — [run from source](#run-from-source) instead.
 
 ## Getting started
 
