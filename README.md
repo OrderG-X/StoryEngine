@@ -47,7 +47,14 @@
    xattr -dr com.apple.quarantine /Applications/StoryEngine.app
    ```
 
-Intel 芯片的 Mac 和 Windows 暂时没有安装包，可以[从源码运行](#从源码运行)。
+## 下载安装（Windows）
+
+> ⚠️ **Windows 包还没在 Windows 真机上走查过**（Mac 版走查过）。装不上、打不开、哪里不对，请到 [Issues](https://github.com/OrderG-X/StoryEngine/issues) 说一声，附上「帮助 → 打开日志文件夹」里的 `main.log`，我们会尽快修。
+
+1. 到 [Releases](https://github.com/OrderG-X/StoryEngine/releases/latest) 下载 `StoryEngine-版本号-x64-Setup.exe`，双击安装
+2. 如果弹出「Windows 已保护你的电脑」（安装包还没有代码签名）：点「更多信息」→「仍要运行」
+
+Intel 芯片的 Mac 暂时没有安装包，可以[从源码运行](#从源码运行)。
 
 ## 开始用
 
