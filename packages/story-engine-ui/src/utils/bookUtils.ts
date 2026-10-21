@@ -45,7 +45,8 @@ export function isRealProjectBook(book: BookSummary): boolean {
 
 export function bookSummaryFromOverview(overview: StateOverview, projectPath: string): BookSummary {
   const currentChapterNumber = overview.project.currentChapter ?? overview.timeline.recentEvents.at(-1)?.chapter ?? 1;
-  const currentEvent = overview.timeline.recentEvents.find((event) => event.chapter === currentChapterNumber) ?? overview.timeline.recentEvents.at(-1);
+  // 只认这一章自己的事件：最新章还是工作稿时没有事件，别拿上一章的章名配这一章的章号（P11 桌面包走查）。
+  const currentEvent = overview.timeline.recentEvents.find((event) => event.chapter === currentChapterNumber);
   const writtenChapters = Math.max(overview.project.currentChapter ?? overview.timeline.recentEvents.length, overview.timeline.recentEvents.length, 0);
   const projectTitle = overview.project.title || "未命名故事";
   return {

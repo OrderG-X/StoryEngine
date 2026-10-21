@@ -40,7 +40,8 @@ const execFileAsync = promisify(execFile);
 /** 在系统文件管理器里打开目录（跨平台：macOS=open / Windows=explorer / 其余=xdg-open）。 */
 export async function openDirectoryInFileManager(dir: string): Promise<void> {
   if (process.platform === "darwin") {
-    await execFileAsync("open", [dir]);
+    // 写绝对路径：桌面包从别处拉起时 PATH 可能不含 /usr/bin（实测会报 spawn open ENOENT）。
+    await execFileAsync("/usr/bin/open", [dir]);
   } else if (process.platform === "win32") {
     // explorer.exe 打开成功也可能返回非 0 退出码（历史怪癖），吞掉 exec 错误、以不抛为准。
     await execFileAsync("explorer", [dir]).catch(() => {});
@@ -320,7 +321,8 @@ function bookSummaryFromOverviewServer(
   const storyStatus = overview.storyStatus;
 
   const currentChapterNumber = proj.currentChapter ?? events.at(-1)?.chapter ?? 1;
-  const currentEvent = events.find((e: any) => e.chapter === currentChapterNumber) ?? events.at(-1);
+  // 只认这一章自己的事件：最新章还是工作稿时没有事件，别拿上一章的章名配这一章的章号（P11 桌面包走查）。
+  const currentEvent = events.find((e: any) => e.chapter === currentChapterNumber);
   const writtenChapters = Math.max(proj.currentChapter ?? events.length, events.length, 0);
   const projectTitle = (proj.title || "未命名故事").trim();
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { StateOverview } from "../api/types.js";
 import type { ChapterNavItem } from "../types.js";
-import { carryChapterFileFlags, keepUnlistedChapters, patchChapterFlagsFromPaper } from "./bookUtils.js";
+import { bookSummaryFromOverview, carryChapterFileFlags, keepUnlistedChapters, patchChapterFlagsFromPaper } from "./bookUtils.js";
 
 const item = (chapterNumber: number, extra: Partial<ChapterNavItem> = {}): ChapterNavItem => ({
   id: `ch-${chapterNumber}`,
@@ -87,5 +88,24 @@ describe("patchChapterFlagsFromPaper（P11：AI 改了别的章，按盘上改�
     const after = patchChapterFlagsFromPaper([ch(3, "planned"), ch(4, "current")], 3, { draft: {}, committed: null, editedSinceCommit: null });
     expect(after[0]).toMatchObject({ status: "draft", hasDraftFile: true, hasCommittedChapter: false, editedSinceCommit: false });
     expect(patchChapterFlagsFromPaper([ch(4, "current")], 4, { draft: {}, committed: {}, editedSinceCommit: false })[0]?.status).toBe("current");
+  });
+});
+
+describe("bookSummaryFromOverview：书架「上次写到」", () => {
+  const overview = (currentChapter: number) => ({
+    project: { title: "雾港来信", currentChapter },
+    timeline: { recentEvents: [{ chapter: 8, title: "第8章 · 代笔", summary: "她把便签压进抽屉" }] },
+    characters: { protagonist: "许微" },
+    storyStatus: {},
+  }) as unknown as StateOverview;
+
+  it("最新章还是工作稿（没有事件）→ 只说章号，不借上一章的章名", () => {
+    const book = bookSummaryFromOverview(overview(9), "/books/fog");
+    expect(book.currentChapterNumber).toBe(9);
+    expect(book.currentChapterTitle).toBe("第9章");
+  });
+
+  it("这一章有事件 → 用它的章名", () => {
+    expect(bookSummaryFromOverview(overview(8), "/books/fog").currentChapterTitle).toBe("代笔");
   });
 });

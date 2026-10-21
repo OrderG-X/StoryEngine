@@ -80,7 +80,7 @@ const lines = [
   "StoryEngine 用到的第三方软件及其许可",
   "",
   `共 ${sorted.length} 个开源包。每节是包名@版本、许可类型、包里自带的许可原文。`,
-  "Electron 与 Chromium 的许可随应用一起分发（应用包里的 LICENSE 与 LICENSES.chromium.html）。",
+  "Electron 与 Chromium 的许可随应用一起分发（Mac：应用包 Contents/Resources 里的 LICENSE.electron.txt 与 LICENSES.chromium.html；Windows：安装目录里的同名文件）。",
   "随包的 git（Mac 版）按 GPLv2 分发，说明和源代码地址见应用包里的 vendor/git/NOTICE.txt。",
   "",
 ];

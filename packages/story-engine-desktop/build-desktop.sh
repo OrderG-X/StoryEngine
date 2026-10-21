@@ -435,6 +435,16 @@ if [ "$WITH_PRESET" = "0" ]; then
   scan_clean_packaged_output "$STAGING/dist-electron" "$CLEAN_SECRET_PROBE"
 fi
 
+# Electron / Chromium 许可原文必须在 Mac 应用包里（afterExtract 钩子抄的），第三方许可清单里这么写着。
+if [ "$TARGET" = "--mac" ]; then
+  for lic in LICENSE.electron.txt LICENSES.chromium.html; do
+    if [ -z "$(find "$STAGING/dist-electron" -path "*.app/Contents/Resources/$lic" -print -quit)" ]; then
+      echo "构建产物断言失败：Mac 应用包里缺 $lic（afterExtract 钩子没生效）。" >&2
+      exit 1
+    fi
+  done
+fi
+
 prepare_mode_output_dir
 echo "⑥ 拷贝产物到当前模式输出目录 → $OUT_DIR"
 # 只搬安装包，避免把 builder 中间文件长期留在仓库旁；逐个计数，
