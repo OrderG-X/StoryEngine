@@ -17,6 +17,14 @@
   gap: 14px;
 }
 
+/* 怎么挑服务商的一句话 */
+.codex-app .asm-pick-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--se-v2-faint);
+}
+
 /* 搜索 */
 .codex-app .asm-search {
   display: flex;
