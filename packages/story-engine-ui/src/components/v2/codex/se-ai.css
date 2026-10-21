@@ -119,14 +119,24 @@
     background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,transparent),transparent 72px),var(--surface);border:1px solid var(--line);
   }
   .se-todo-card-h{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--text);}
-  .se-todo-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:13px;}
-  .se-todo-steps li{display:grid;grid-template-columns:16px 34px minmax(0,1fr);align-items:baseline;gap:4px;color:var(--text);}
-  .se-todo-steps li.is-done{color:var(--muted);}
-  .se-todo-mark{color:var(--faint);}
+  /* 写 / 核账 / 定稿横排三格（原来竖排三行，顶卡太高、矮窗口里对话只剩一条）：做完的绿勾，下一步那格强调色描边。 */
+  .se-todo-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;font-size:13px;}
+  .se-todo-steps li{
+    display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"mark label" "text text";align-items:center;gap:1px 6px;
+    min-width:0;padding:7px 9px 8px;border:1px solid var(--line-weak);border-radius:9px;background:var(--sunken);color:var(--text);
+  }
+  .se-todo-steps li.is-done{background:color-mix(in srgb,var(--success) 7%,transparent);border-color:color-mix(in srgb,var(--success) 18%,transparent);}
+  .se-todo-steps li:first-child:not(.is-done),.se-todo-steps li.is-done + li:not(.is-done){border-color:var(--accent-line);background:var(--accent-soft);}
+  .se-todo-mark{grid-area:mark;font-size:11px;line-height:1;color:var(--faint);}
   .se-todo-steps li.is-done .se-todo-mark{color:var(--success);}
-  .se-todo-step-label{color:var(--faint);}
-  .se-todo-step-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .se-todo-step-label{grid-area:label;font-size:12px;font-weight:600;color:var(--text);}
+  .se-todo-step-text{grid-area:text;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--muted);}
   .se-todo-step-text.is-attention{color:var(--danger);}
+  /* 矮窗口：顶卡再收一点，把地方让给对话。 */
+  @media (max-height:860px){
+    .se-todo-card{gap:8px;padding:11px 12px;}
+    .se-todo-card .se-todo-primary{height:34px;}
+  }
   .se-todo-primary{
     height:38px;border:0;border-radius:9px;background:var(--accent);color:var(--accent-ink);
     font-size:14px;font-weight:500;cursor:pointer;
@@ -209,6 +219,16 @@
     > .drc-desc{margin:9px 0 0;padding-left:0;font-size:12px;line-height:1.6;color:var(--muted);}
     .drc-fix{margin:10px 0 0;}
   }
+  /* 审稿条目：原句也做成引文块，和核账同一个样子；严重度左边一道同色细线。 */
+  .step-card .drc-item:has(> .drc-line){
+    > .drc-evi{margin:7px 0 0 26px;padding:1px 0 1px 10px;border-left:2px solid var(--line-strong);font-size:12px;line-height:1.7;color:var(--muted);}
+    &:has(.drc-sev-high){border-left:2px solid color-mix(in srgb,var(--danger) 55%,transparent);}
+    &:has(.drc-sev-warning){border-left:2px solid var(--accent-line);}
+  }
+  /* 卡头状态做成小胶囊；质检通过那句给一条淡绿底、打个勾。 */
+  .step-card .sc-badge{padding:1px 8px;border-radius:999px;background:var(--sunken);font-weight:500;}
+  .step-card .qcc-pass{padding:9px 12px;border-radius:9px;background:var(--success-soft);color:var(--text);font-size:13px;}
+  .step-card .qcc-pass::before{content:"✓";margin-right:8px;font-weight:700;color:var(--success);}
   /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
   .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
   .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
@@ -290,10 +310,10 @@
   .codex-context-meter{color:var(--faint);}
 
   /* 过期线索卡：类型小标中性、「已 N 章没推进」用提醒橙（不是错误红）。 */
-  .step-card .stc-item{background:transparent;border-color:var(--line);}
-  .step-card .stc-kind{font-weight:500;color:var(--muted);border:0;background:var(--hover);}
+  .step-card .stc-item{background:var(--sunken);border-color:var(--line-weak);border-left:2px solid color-mix(in srgb,var(--warn) 55%,transparent);border-radius:4px 8px 8px 4px;}
+  .step-card .stc-kind{font-weight:500;color:var(--muted);border:0;background:var(--hover);border-radius:999px;padding:1px 8px;}
   .step-card .stc-title{font-weight:500;}
-  .step-card .stc-gap{color:var(--warn);font-weight:500;}
+  .step-card .stc-gap{padding:0 7px;border-radius:999px;font-size:11.5px;color:var(--warn);background:var(--warn-soft);font-weight:500;}
   .step-card .stc-since{color:var(--faint);}
 
   /* 拖宽手柄：平时不可见，悬停才出一条强调色细线（撤掉常驻的点阵握把）。 */

@@ -256,6 +256,31 @@
   .se-cs-btn.is-primary:hover{filter:brightness(1.06);}
   .se-cs-btn:disabled{opacity:.45;cursor:default;filter:none;}
 
+  /* 定稿清单跟别的弹窗一个样：顶上淡光、宋体标题、小节标题前短竖条、底栏下沉。 */
+  .se-cs{
+    border-radius:16px;
+    background:radial-gradient(480px 200px at 100% -10%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%),var(--panel);
+    box-shadow:var(--shadow-pop),0 40px 90px -40px rgba(0,0,0,.6);
+  }
+  @media (min-width:561px){
+    html:not(.reduce-motion) & .se-cs{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
+  }
+  .se-cs-head{padding:20px 14px 12px 24px;}
+  .se-cs-head h2{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:19px;font-weight:700;letter-spacing:.02em;}
+  .se-cs-body{padding:2px 24px 18px;}
+  .se-cs-sec-h{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12.5px;font-weight:600;color:var(--muted);}
+  .se-cs-sec-h::before{content:"";flex:none;width:3px;height:12px;border-radius:2px;background:var(--accent);}
+  .se-cs-blocked .se-cs-sec-h::before{background:var(--danger);}
+  .se-cs-blocked{border:1px solid color-mix(in srgb,var(--danger) 22%,transparent);}
+  .se-cs-day{border-radius:10px;background:var(--surface);}
+  .se-cs-quote{padding-left:8px;border-left:2px solid var(--line-strong);}
+  .se-cs-none{padding:12px 14px;border-radius:10px;background:var(--success-soft);color:var(--text);font-size:13.5px;}
+  .se-cs-none::before{content:"✓";margin-right:8px;font-weight:700;color:var(--success);}
+  .se-cs-choice{border-radius:9px;background:var(--sunken);}
+  .se-cs-choice button.on{background:var(--surface-2);box-shadow:0 0 0 1px var(--line-strong),0 1px 2px rgba(0,0,0,.2);}
+  .se-cs-foot{padding:14px 20px 14px 24px;background:var(--sunken);}
+  .se-cs-btn{border-radius:9px;font-weight:600;font-size:13.5px;}
+
   @keyframes se-fade{from{opacity:0}to{opacity:1}}
 
   @media (max-width:1279px){
@@ -282,6 +307,6 @@
   }
   @media (prefers-reduced-motion:reduce){
     .se-scrim,.se-modal,.se-cs{animation:none;}
-    html:not(.reduce-motion) & .se-modal{animation:none;}
+    html:not(.reduce-motion) & :is(.se-modal,.se-cs){animation:none;}
   }
 }

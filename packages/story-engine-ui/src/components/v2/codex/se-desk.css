@@ -151,9 +151,23 @@
   .codex-desk-stage .se-v2-notice p{margin:0;font-size:12px;line-height:1.6;color:var(--muted);}
 
   /* 选区工具条：深色实底浮条（两套主题都用深色，压在正文上一眼可辨） */
-  .se-v2-selection-toolbar{background:var(--toolbar-bg);box-shadow:var(--shadow-pop);}
-  .se-v2-selection-toolbar-btn{color:var(--toolbar-ink);}
+  .se-v2-selection-toolbar{padding:4px;border-radius:11px;background:var(--toolbar-bg);border:1px solid rgba(255,255,255,.08);box-shadow:var(--shadow-pop),0 0 0 1px rgba(0,0,0,.18);font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;}
+  .se-v2-selection-toolbar-btn{height:30px;padding:0 12px;border-radius:8px;color:var(--toolbar-ink);font-size:13px;font-weight:500;}
+  .se-v2-selection-toolbar-btn + .se-v2-selection-toolbar-btn{box-shadow:-3px 0 0 -2px rgba(255,255,255,.12);}
   .se-v2-selection-toolbar-btn:hover:not(:disabled){background:rgba(255,255,255,.1);transform:none;}
+
+  /* 查找替换：实底小卡 + 细描边，输入框聚焦光圈，条数做成小胶囊；高亮换成主题色。 */
+  .se-v2-find-panel{gap:8px;padding:10px;border:1px solid var(--line-strong);border-radius:12px;background:var(--surface-2);box-shadow:var(--shadow-pop);font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;}
+  .se-v2-find-input{width:200px;height:30px;padding:0 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;}
+  .se-v2-find-input:focus{outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
+  .se-v2-find-count{min-width:52px;padding:2px 8px;border-radius:999px;background:var(--sunken);color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;}
+  .se-v2-find-btn{min-width:28px;height:28px;padding:0 8px;border-radius:7px;color:var(--muted);font-size:13px;}
+  .se-v2-find-btn:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .se-v2-find-btn.is-active{background:var(--accent-soft);color:var(--accent);}
+  .se-v2-find-text-btn{padding:0 12px;border:1px solid var(--line-strong);background:transparent;color:var(--text);font-size:12.5px;}
+  .se-v2-find-text-btn:hover:not(:disabled){border-color:var(--accent-line);background:var(--accent-soft);color:var(--text);}
+  .se-v2-find-match{background:color-mix(in srgb,var(--warn) 26%,transparent);}
+  .se-v2-find-match-current{background:color-mix(in srgb,var(--accent) 55%,transparent);box-shadow:0 0 0 1px var(--accent);}
   /* 编辑器本身不画焦点框：稿纸框已有获得焦点时的描边反馈（.se-v2-writing-canvas:focus-within） */
   .ProseMirror:focus-visible{outline:none;box-shadow:none;}
 
@@ -222,6 +236,28 @@
   .se-cc-pop-acts button:hover:not(:disabled){background:var(--hover);}
   .se-cc-pop-acts button.is-primary{border-color:transparent;background:var(--text);color:var(--bg);}
   .se-cc-pop-acts button:disabled{opacity:.5;cursor:default;}
+
+  /* 新书首屏：一张淡格稿纸，顶上一点光，笔尖小图标 + 宋体大字。 */
+  .codex-desk-stage > .cd-starter{
+    gap:14px;border-color:var(--line);border-radius:12px;
+    background:
+      radial-gradient(440px 240px at 50% 0%,color-mix(in srgb,var(--accent) 9%,transparent),transparent 72%),
+      repeating-linear-gradient(to bottom,transparent 0 35px,var(--line-faint) 35px 36px),
+      var(--sheet);
+    box-shadow:0 28px 56px -44px rgba(0,0,0,.6);
+  }
+  .cd-starter-mark{
+    display:grid;place-items:center;width:52px;height:52px;margin-bottom:4px;border-radius:16px;
+    color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent-line-soft),0 10px 24px -14px rgba(0,0,0,.6);
+  }
+  .codex-desk-stage .cd-starter-title{font-size:26px;font-weight:700;}
+  .codex-desk-stage .cd-starter-sub{font-size:13.5px;line-height:1.75;}
+  .codex-desk-stage .cd-starter-actions{margin-top:14px;}
+  .codex-desk-stage .cd-starter-btn{min-height:38px;padding:0 18px;border-radius:999px;font-weight:600;}
+  .codex-desk-stage .cd-starter-btn.is-ghost{font-weight:500;background:var(--panel);}
+  .codex-desk-stage .cd-starter-btn.is-ghost:hover:not(:disabled){border-color:var(--accent-line);color:var(--text);background:var(--accent-soft);}
+  html:not(.reduce-motion) & .cd-starter-btn:hover:not(:disabled){transform:translateY(-1px);}
+  .codex-desk-stage .cd-starter-btn{transition:filter .15s ease,transform .15s ease,background-color .15s ease,border-color .15s ease;}
 
   /* ═══ 头脑风暴（重构 P6，草图 ⑤）：稿纸上方「第 N 章往哪走？」，几种走法并排挑；挑中收成「这章打算」 ═══ */
   .codex-desk-stage > .se-bs{
