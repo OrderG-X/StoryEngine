@@ -16,7 +16,7 @@ import type {
   StaleThreadWarningData,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
-import { parseNextStepUserAction, type AgentUserAction } from "../../api/agentChatClient.js";
+import { parseNextStepUserAction, readAiErrorReason, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
@@ -43,7 +43,7 @@ export function legacyMessageCards(item: Record<string, unknown>): MessageCard[]
     cardFromStaleThreads(item.staleThreadWarnings),
     item.commitReport !== undefined && item.commitReport !== null ? { type: "commit-report", report: item.commitReport } : undefined,
     cardFromNextSteps(item.nextStepPrompt),
-    item.isErrorNotice === true ? errorCard(item.errorDetail) : undefined,
+    item.isErrorNotice === true ? errorCard(item.errorDetail, undefined) : undefined,
     cardFromStatusNotes(item.statusNotes),
   ];
   return cards.filter((card): card is MessageCard => card !== undefined);
@@ -88,7 +88,7 @@ function readMessageCard(value: unknown): MessageCard | undefined {
     case "next-steps":
       return cardFromNextSteps(value.prompt);
     case "error":
-      return errorCard(value.detail);
+      return errorCard(value.detail, value.reason);
     case "status-notes":
       return cardFromStatusNotes(value.notes);
     case "directions": {
@@ -116,9 +116,11 @@ function withFixedIds(card: { readonly type: "ai-flavor"; readonly report: AiFla
   return fixedIds.length > 0 ? { ...card, fixedIds } : card;
 }
 
-function errorCard(detail: unknown): MessageCard {
+/** 出错卡：原始报错 + 服务端分的类（P11，重开后照样说清原因）。 */
+function errorCard(detail: unknown, reason: unknown): MessageCard {
   const text = readString(detail);
-  return text ? { type: "error", detail: text } : { type: "error" };
+  const kind = readAiErrorReason(reason);
+  return { type: "error", ...(text ? { detail: text } : {}), ...(kind ? { reason: kind } : {}) };
 }
 
 function cardFromStatusNotes(value: unknown): MessageCard | undefined {

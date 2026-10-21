@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChapterMessage } from "../../../types.js";
-import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId, undoableCommitReportMessageId } from "./commitConfirm.js";
 
 function assistant(id: string, extra: Partial<ChapterMessage> = {}): ChapterMessage {
   return { id, role: "assistant", content: "", ...extra };
@@ -43,5 +43,28 @@ describe("confirmableCommitPreviewMessageId：「确认定稿」按钮只挂最�
 
   it("没有预览 → null", () => {
     expect(confirmableCommitPreviewMessageId([assistant("a")])).toBeNull();
+  });
+});
+
+describe("undoableCommitReportMessageId：「撤销这次定稿」只挂最近一次改动就是定稿的那张（P11）", () => {
+  const snap = (id: string) => [{ toolName: "commit_apply", snapshotId: id }];
+  const report = [{ type: "commit-report", report: { chapter: 1 } as never }] as ChapterMessage["cards"];
+
+  it("最近的改动就是定稿 → 挂它；前面那张旧回执不挂", () => {
+    const messages = [
+      assistant("c1", { cards: report, turnSnapshots: snap("s1") }),
+      assistant("c2", { cards: report, turnSnapshots: snap("s2") }),
+      assistant("chat", { content: "只是聊了两句" }),
+    ];
+    expect(undoableCommitReportMessageId(messages)).toBe("c2");
+  });
+
+  it("定稿之后又改过东西（出稿、AI 撤销……）→ 谁都不挂", () => {
+    const messages = [
+      assistant("c1", { cards: report, turnSnapshots: snap("s1") }),
+      assistant("w1", { turnSnapshots: [{ toolName: "generate_draft", snapshotId: "s2" }] }),
+    ];
+    expect(undoableCommitReportMessageId(messages)).toBeNull();
+    expect(undoableCommitReportMessageId([])).toBeNull();
   });
 });

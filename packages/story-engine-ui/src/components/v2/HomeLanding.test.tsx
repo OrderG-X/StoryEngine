@@ -6,6 +6,9 @@ import type { HomePageProps } from "../../types.js";
 import HomeLanding, { sortShelf, todayLine } from "./HomeLanding.js";
 import * as shelfClient from "../../api/shelfClient.js";
 
+const activeModel = vi.hoisted(() => ({ setupStep: null as "connect" | "pick-model" | null }));
+vi.mock("./codex/useActiveModel.js", () => ({ useActiveModel: () => ({ info: null, setupStep: activeModel.setupStep }) }));
+
 vi.mock("../../utils/refreshBookLibrary.js", () => ({ addReturnedBook: vi.fn(async () => undefined), refreshBookLibrary: vi.fn(async () => undefined) }));
 
 vi.mock("../../api/shelfClient.js", () => ({
@@ -25,11 +28,30 @@ vi.mock("../../api/shelfClient.js", () => ({
 
 afterEach(() => {
   cleanup();
+  activeModel.setupStep = null;
   // 还原降低动效，避免污染其它用例
   useMotionStore.getState().set(false);
 });
 
 describe("HomeLanding", () => {
+  it("P11：一个模型都没接 → 书架顶上提示还差哪步，点按钮开设置；接上了就不显示", () => {
+    activeModel.setupStep = "connect";
+    const props = homeProps();
+    const { rerender } = render(<HomeLanding {...props} />);
+    expect(screen.getByRole("note").textContent).toContain("AI 还没接上");
+    fireEvent.click(screen.getByRole("button", { name: "去接上" }));
+    expect(props.onOpenSettings).toHaveBeenCalled();
+
+    activeModel.setupStep = "pick-model";
+    rerender(<HomeLanding {...props} />);
+    expect(screen.getByRole("note").textContent).toContain("选个模型");
+    expect(screen.getByRole("button", { name: "去选" })).toBeTruthy();
+
+    activeModel.setupStep = null;
+    rerender(<HomeLanding {...props} />);
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("reduceMotion 开 → .se-v2-home 挂 is-reduced-motion 类；关 → 不挂", () => {
     useMotionStore.getState().set(true);
     const { container, rerender } = render(<HomeLanding {...homeProps()} />);

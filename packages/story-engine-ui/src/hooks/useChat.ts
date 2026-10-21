@@ -41,6 +41,10 @@ import { saveChatNow } from "../sync/chatSync.js";
 import { flushAllSaves } from "../sync/saveAll.js";
 import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
 import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
+import { fetchChapterPaper } from "../api/workingDraftClient.js";
+import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
+import { aiErrorBody } from "../lib/ai-error-text.js";
+import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 /** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
 const RESYNC_WAIT_MS = 5_000;
@@ -204,12 +208,12 @@ export function useChat(params: UseChatParams): UseChatResult {
         pendingPaperSyncs.push(promise.catch(() => undefined));
       };
       // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
-      const appendErrorMessage = (message: string, retryable: boolean) => {
+      const appendErrorMessage = (message: string, retryable: boolean, reason?: AiErrorReason) => {
         appendMessage({
           id: `assistant-agent-error-${Date.now()}`,
           role: "assistant",
-          content: "AI 服务暂时没响应，本次没有改动。",
-          cards: [{ type: "error", detail: message }],
+          content: aiErrorBody(reason),
+          cards: [{ type: "error", detail: message, ...(reason ? { reason } : {}) }],
           ...(retryable
             ? {
               suggestedActions: [
@@ -423,6 +427,15 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (chapterMismatch) {
                 // 跨章工具结果只跳过「当前章稿纸 / 流程态应用」，携带最新章列表 / 入库状态的 overview 照刷资料面板。
                 if (info.overview) refreshWorkspaceFromOverview?.(info.overview);
+                // 那一章的稿子可能变了（AI 改了已定稿章的工作稿）：按盘上重读它的标记，底栏「N 章还没定稿」不用切过去才对（P11）。
+                const otherChapter = info.chapter as number;
+                if (projectPath) {
+                  track(fetchChapterPaper(projectPath, otherChapter).then((paper) => {
+                    if (!ownsCurrentWorkspace()) return;
+                    const { workspace, updateWorkspace } = useBookStore.getState();
+                    updateWorkspace({ chapters: patchChapterFlagsFromPaper(workspace.chapters, otherChapter, paper) });
+                  }).catch(() => undefined));
+                }
                 showToast(
                   `这次操作写的是第 ${info.chapter} 章，不在当前章（第 ${operation.chapter} 章）；当前章的稿子没有变动，章节列表已按最新状态刷新。`,
                   4200,
@@ -434,7 +447,11 @@ export function useChat(params: UseChatParams): UseChatResult {
               // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
               if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
               const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
-              if (undone) agentUndone = true;
+              if (undone) {
+                agentUndone = true;
+                // AI 撤销了：顶栏「设定本」上「刚定稿」的小点跟着消。
+                useNavigationStore.getState().setUnseenChangesChapter(null);
+              }
               const flowBefore = useBookStore.getState().workspace.flowStatus;
               const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
               const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
@@ -499,10 +516,10 @@ export function useChat(params: UseChatParams): UseChatResult {
               unstickGeneratingFlow();
               requestResync(); // 断流可能其实已写盘，重读盘上真值更正
             },
-            onError: (message, retryable) => {
+            onError: (message, retryable, reason) => {
               if (!ownsCurrentWorkspace()) return;
               sawError = true;
-              appendErrorMessage(message, retryable);
+              appendErrorMessage(message, retryable, reason);
               endStreaming();
               unstickGeneratingFlow();
               requestResync();
@@ -522,7 +539,7 @@ export function useChat(params: UseChatParams): UseChatResult {
           appendMessage({
             id: `assistant-agent-error-${Date.now()}`,
             role: "assistant",
-            content: "AI 服务暂时没响应，本次没有改动。",
+            content: aiErrorBody(undefined),
             cards: [{ type: "error", detail: message }],
             suggestedActions: [
               {

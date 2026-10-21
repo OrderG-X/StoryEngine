@@ -45,7 +45,8 @@ export function isRealProjectBook(book: BookSummary): boolean {
 
 export function bookSummaryFromOverview(overview: StateOverview, projectPath: string): BookSummary {
   const currentChapterNumber = overview.project.currentChapter ?? overview.timeline.recentEvents.at(-1)?.chapter ?? 1;
-  const currentEvent = overview.timeline.recentEvents.find((event) => event.chapter === currentChapterNumber) ?? overview.timeline.recentEvents.at(-1);
+  // 只认这一章自己的事件：最新章还是工作稿时没有事件，别拿上一章的章名配这一章的章号（P11 桌面包走查）。
+  const currentEvent = overview.timeline.recentEvents.find((event) => event.chapter === currentChapterNumber);
   const writtenChapters = Math.max(overview.project.currentChapter ?? overview.timeline.recentEvents.length, overview.timeline.recentEvents.length, 0);
   const projectTitle = overview.project.title || "未命名故事";
   return {
@@ -113,7 +114,8 @@ export function carryChapterFileFlags(
       ...((!hasRealTitle(chapter) || chapter.status === "planned") && old && hasRealTitle(old) ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
-      ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true } : {}),
+      ...(chapter.editedSinceCommit === undefined && old?.editedSinceCommit !== undefined ? { editedSinceCommit: old.editedSinceCommit } : {}),
+      ...(committedChapter === chapter.chapterNumber ? { hasCommittedChapter: true, hasDraftFile: true, editedSinceCommit: false } : {}),
     };
     // 新表把它当「下一章」占位（还没写），带过来的标记却说它有稿（2026-10-19 试写：第 3 章有工作稿时重定稿第 2 章，
     // 第 3 章在章节栏变成「写第 3 章」、底栏说「全部已定稿」）：状态按标记改回已定稿 / 工作稿。
@@ -176,4 +178,24 @@ export function updateChapterListForActive(chapters: readonly ChapterNavItem[], 
           : "planned" as const,
     }))
     .sort((a, b) => a.chapterNumber - b.chapterNumber);
+}
+
+/**
+ * AI 改了别的章（不是作者开着的这章）之后，按盘上那章的稿纸改章节栏里它的标记（P11）：
+ * 有没有工作稿 / 定稿、定稿后又改过没有，状态跟着改（还没写的占位 → 工作稿；有定稿 → 已定稿）。
+ */
+export function patchChapterFlagsFromPaper(
+  chapters: readonly ChapterNavItem[],
+  chapterNumber: number,
+  paper: { readonly draft: unknown; readonly committed: unknown; readonly editedSinceCommit: boolean | null },
+): readonly ChapterNavItem[] {
+  return chapters.map((chapter) => {
+    if (chapter.chapterNumber !== chapterNumber) return chapter;
+    const hasCommittedChapter = paper.committed !== null;
+    const hasDraftFile = paper.draft !== null;
+    const status: ChapterNavItem["status"] = chapter.status === "current"
+      ? "current"
+      : hasCommittedChapter ? "committed" : hasDraftFile ? "draft" : chapter.status;
+    return { ...chapter, hasDraftFile, hasCommittedChapter, editedSinceCommit: paper.editedSinceCommit === true, status };
+  });
 }

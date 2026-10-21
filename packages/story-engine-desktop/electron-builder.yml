@@ -15,6 +15,12 @@ files:
   - "**/*"
   # 单测文件不进包（node --test 只在工作区跑）。
   - "!*.test.mjs"
+  # 构建期工具（打包脚本、生成第三方许可清单、抄 Electron 许可的钩子），不进包。
+  - "!build-desktop*.sh"
+  - "!gen-notices.mjs"
+  - "!electron-licenses.cjs"
+  # 应用图标源文件（下面 mac / win 的 icon 用），不进 app 目录。
+  - "!assets/**"
   # 默认配置是无密钥包；预置模式由 build-desktop.sh 生成一次性配置显式移除此排除项。
   - "!preset-model-config/**"
 
@@ -26,10 +32,12 @@ mac:
     - target: dmg
       arch: [arm64]
   category: public.app-category.productivity
+  icon: assets/icon.icns
   # 内测版不签名（熟人右键打开）；上签名时删掉这行并配 hardenedRuntime + notarize。
   identity: null
 
 win:
+  icon: assets/icon.png
   target:
     - target: nsis
       arch: [x64]
@@ -39,5 +47,8 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 # staging 已是纯 JS 生产依赖（实测 0 个 .node），不需要任何重建。
+# Mac 版 electron-builder 会删 Electron 自带的许可文件，解包后先抄进应用包（P11）。
+afterExtract: ./electron-licenses.cjs
+
 npmRebuild: false
 nodeGypRebuild: false

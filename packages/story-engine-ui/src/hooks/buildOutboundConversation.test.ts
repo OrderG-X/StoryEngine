@@ -4,6 +4,15 @@ import { buildOutboundConversation } from "./buildOutboundConversation.js";
 const mk = (i: number, content: string) => ({ id: `m-${i}`, role: i % 2 === 0 ? "user" : "assistant", content } as const);
 
 describe("buildOutboundConversation", () => {
+  it("P11：界面塞的脚手架消息不发给 AI（不占历史条数）", () => {
+    const out = buildOutboundConversation([
+      { id: "s", role: "assistant", kind: "scaffolding", content: "已进入工作台" },
+      { id: "u", role: "user", content: "主角叫林小满" },
+      { id: "a", role: "assistant", content: "好的" },
+    ], 0, 100000);
+    expect(out).toEqual([{ role: "user", content: "主角叫林小满" }, { role: "assistant", content: "好的" }]);
+  });
+
   it("排除已归档段(前 archivedCount 条不发给 AI)", () => {
     const msgs = [mk(0, "归档1"), mk(1, "归档2"), mk(2, "活跃1"), mk(3, "活跃2")];
     const out = buildOutboundConversation(msgs as any, 2, 96000);

@@ -6,7 +6,7 @@
  *   - tool-call    { toolCallId, toolName, args }           → onToolCall({ toolName })
  *   - tool-result  { toolCallId, toolName, output }         → onToolResult({ toolName, overview, refreshScope, snapshotId })
  *   - tool-error   { toolCallId, toolName, error, retryable } → onToolError({ toolCallId, toolName, message, retryable })
- *   - error        { error, retryable }                     → onError(message, retryable)
+ *   - error        { error, retryable, reason }             → onError(message, retryable, reason)
  *   - done         { finishReason? }                        → onDone()
  *
  * SSE 行读法参考现有 fetchChapterChatStream：跨 chunk 缓冲，空行 flush 一个事件。
@@ -17,6 +17,14 @@ import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.
 import type { AiFlavorReport } from "../types.js";
 import type { BrainstormCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import type { AiErrorReason } from "../server/lib/ai-errors.js";
+
+const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
+
+/** 服务端给的出错原因（P11）：只认约定的几个值，别的当没给。 */
+export function readAiErrorReason(value: unknown): AiErrorReason | undefined {
+  return AI_ERROR_REASONS.find((reason) => reason === value);
+}
 
 export interface StreamAgentChatRequest {
   readonly projectPath: string;
@@ -245,7 +253,7 @@ export interface AgentChatHandlers {
   readonly onToolResult: (info: AgentToolResult) => void;
   /** 工具内部抛错：携带 toolCallId/toolName，让上层把对应步骤/卡片收尾为 failed，再 append 错误。 */
   readonly onToolError: (info: AgentToolError) => void;
-  readonly onError: (message: string, retryable: boolean) => void;
+  readonly onError: (message: string, retryable: boolean, reason?: AiErrorReason) => void;
   readonly onDone: () => void;
   /** 本轮真实 token 用量（服务端轮末发；服务商没回用量时为 0）。 */
   readonly onUsage?: (usage: AgentTurnUsage) => void;
@@ -311,8 +319,8 @@ export async function streamAgentChat(
     if (!response.ok || !response.body) {
       // 非 2xx：尽量读出服务端给的真实原因（如「项目目录不存在」「API Key 未设置」），别只甩一个
       // 「请求失败：500」让用户摸不着头脑。读不到 body 才退回状态码。
-      const serverMessage = await readServerErrorMessage(response);
-      handlers.onError(serverMessage ?? `写作助手请求失败：${response.status}`, true);
+      const server = await readServerError(response);
+      handlers.onError(server.message ?? `写作助手请求失败：${response.status}`, true, server.reason);
       emitDone();
       return;
     }
@@ -546,6 +554,7 @@ export async function streamAgentChat(
           handlers.onError(
             typeof parsed.error === "string" ? parsed.error : "写作助手执行出错。",
             parsed.retryable !== false,
+            readAiErrorReason(parsed.reason),
           );
           return;
         case "usage": {
@@ -585,7 +594,7 @@ export async function streamAgentChat(
   } catch (error) {
     if (idleFired) {
       // 空闲超时：上游/网络半挂，给一条可重试的超时提示（而非裸 AbortError 文案）。
-      handlers.onError("写作助手响应超时（约 90 秒无响应），可以点重试。", true);
+      handlers.onError("写作助手响应超时（约 90 秒无响应），可以点重试。", true, "timeout");
     } else if (mergedSignal.aborted) {
       // 用户主动「停止」：不报错、不留错误气泡，保留已流式出的内容，干净收尾。
       // （什么都不 onError，下面统一 emitDone。）
@@ -746,16 +755,17 @@ function isStaleThreadWarnings(
 }
 
 /** 从非 2xx 响应体里取服务端 `{ error }`；取不到返回 undefined（让调用方退回状态码文案）。 */
-async function readServerErrorMessage(response: Response): Promise<string | undefined> {
+async function readServerError(response: Response): Promise<{ readonly message?: string; readonly reason?: AiErrorReason }> {
   try {
     const raw = await response.text();
-    if (!raw.trim()) return undefined;
+    if (!raw.trim()) return {};
     const parsed: unknown = JSON.parse(raw);
     if (isRecord(parsed) && typeof parsed.error === "string" && parsed.error.trim()) {
-      return parsed.error.trim();
+      const reason = readAiErrorReason(parsed.reason);
+      return { message: parsed.error.trim(), ...(reason ? { reason } : {}) };
     }
   } catch {
     // body 非 JSON / 读失败：退回状态码文案。
   }
-  return undefined;
+  return {};
 }

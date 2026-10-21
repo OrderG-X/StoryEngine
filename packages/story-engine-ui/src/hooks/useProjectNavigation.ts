@@ -81,7 +81,7 @@ function updateChapterListTitle(chapters: readonly ChapterNavItem[], chapterNumb
   ));
 }
 
-type ChapterFileState = Pick<ChapterNavItem, "hasDraftFile" | "hasCommittedChapter">;
+type ChapterFileState = Pick<ChapterNavItem, "hasDraftFile" | "hasCommittedChapter" | "editedSinceCommit">;
 
 function updateChapterListForActive(
   chapters: readonly ChapterNavItem[],
@@ -128,6 +128,7 @@ function fileStateFromPaper(paper: ChapterPaper): ChapterFileState {
   return {
     hasDraftFile: paper.draft !== null,
     hasCommittedChapter: paper.committed !== null,
+    editedSinceCommit: paper.editedSinceCommit === true,
   };
 }
 
@@ -474,6 +475,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       useDraftStore.getState().loadPaper(nextProjectPath, paper);
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
+      useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
       setSteeringDraft(null);
       setSteeringError(null);
@@ -530,6 +532,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSteeringDirection("");
+      useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
       setSteeringDraft(null);
       setSteeringError(null);
@@ -575,6 +578,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setCurrentOverview(null);
       setOpenProjectError(null);
       setSteeringDirection("");
+      useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
       setSteeringDraft(null);
       setSteeringError(null);
@@ -608,6 +612,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const currentProjectPath = transition.projectPath || null;
       const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
       if (!ownsNavigationOrigin(transition)) return;
+      const outgoingChapter = useBookStore.getState().workspace.currentChapter?.chapterNumber ?? null;
       const draftTitle = paper?.draft?.title ?? paper?.committed?.title ?? chapter.title;
       const flowStatus: ChapterWorkflowState = paper
         ? flowStatusForPaper({ body: paper.draft?.body ?? paper.committed?.body ?? "", committed: paper.committed })
@@ -631,7 +636,8 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
         });
       }
       if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper);
-      setSteeringDirection("");
+      // 输入框里没发的字按章存着：切走不丢，切回来还在；不会把这章的话带到别的章（P11）。
+      useUiStore.getState().switchComposerChapter(outgoingChapter, chapter.chapterNumber);
       setLastChapterDirection("");
       setSteeringDraft(null);
       setSteeringError(null);

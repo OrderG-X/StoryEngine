@@ -14,18 +14,63 @@
  * 默认推断在 asar 里会断——研究已标）。
  */
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { format } from "node:util";
 
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell } from "electron";
 
 import { readStoredPort, writeStoredPortAtomically } from "./server-port.mjs";
 
 const require = createRequire(import.meta.url);
 
 export { readStoredPort };
+
+/**
+ * 应用名（P11）：菜单、关于、日志目录都显示「StoryEngine」，不再露出包名 story-engine-desktop。
+ * 改名会把默认的 userData 挪到 appData/StoryEngine——先记下原来的再钉回去，
+ * 老用户的书架、主题（localStorage）和端口文件都在原处，一样不丢。--user-data-dir 显式给的照用。
+ */
+const USER_DATA_DIR = app.getPath("userData");
+app.setName("StoryEngine");
+app.setPath("userData", USER_DATA_DIR);
+// 测试时用 --user-data-dir 隔开的那份，日志也跟着隔开，别写进真日志目录。
+if (app.commandLine.hasSwitch("user-data-dir")) app.setAppLogsPath(join(USER_DATA_DIR, "logs"));
+else app.setAppLogsPath();
+
+/** 只开一个：再双击图标就把已开的窗叫到前面，别起第二个服务抢同一批书。 */
+const GOT_SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
+if (!GOT_SINGLE_INSTANCE_LOCK) app.quit();
+
+/** 日志文件（P11）：主进程和同进程的服务端都往这写；超过 2MB 轮一次，只留上一份。 */
+const LOG_ROTATE_BYTES = 2 * 1024 * 1024;
+
+function setUpLogFile() {
+  const dir = app.getPath("logs");
+  const file = join(dir, "main.log");
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (existsSync(file) && statSync(file).size > LOG_ROTATE_BYTES) renameSync(file, join(dir, "main.old.log"));
+  } catch {
+    return;
+  }
+  const stream = createWriteStream(file, { flags: "a" });
+  stream.on("error", () => {});
+  for (const level of ["log", "info", "warn", "error"]) {
+    const original = console[level].bind(console);
+    console[level] = (...args) => {
+      original(...args);
+      stream.write(`${new Date().toISOString()} [${level}] ${format(...args)}\n`);
+    };
+  }
+  process.on("uncaughtException", (error) => console.error("[desktop] 未接住的异常：", error));
+  process.on("unhandledRejection", (reason) => console.error("[desktop] 未接住的 Promise 拒绝：", reason));
+  console.log(`[desktop] StoryEngine ${app.getVersion()} 启动（${process.platform}-${process.arch}，Electron ${process.versions.electron}）`);
+}
+
+if (GOT_SINGLE_INSTANCE_LOCK) setUpLogFile();
 
 function serverPortPath() {
   return join(app.getPath("userData"), "server-port.json");
@@ -69,16 +114,112 @@ function resolveDataDir() {
 }
 
 /**
- * 随包 MinGit（仅 Windows）：装了包就有快照/撤销，不再要求测试者自装 git。
+ * 随包 git：装了包就有快照/撤销，不要求作者自装 git。
+ * Windows 用 MinGit；Mac（P11）用 dugite-native 的精简版——它自己推断不出安装位置，
+ * 得显式给 GIT_EXEC_PATH / GIT_TEMPLATE_DIR，否则子命令会回落到系统那个只会弹「安装命令行工具」的壳。
  * 找到就设 SE_GIT_PATH（用户显式设过则不覆盖），server 的快照与健康探针据此解析。
  */
 function wireBundledGit() {
-  if (process.platform !== "win32" || process.env.SE_GIT_PATH?.trim()) return;
-  const bundled = join(app.getAppPath(), "vendor", "mingit", "cmd", "git.exe");
-  if (existsSync(bundled)) {
+  if (process.env.SE_GIT_PATH?.trim()) return;
+  if (process.platform === "win32") {
+    const bundled = join(app.getAppPath(), "vendor", "mingit", "cmd", "git.exe");
+    if (existsSync(bundled)) {
+      process.env.SE_GIT_PATH = bundled;
+      console.log(`[desktop] 使用随包 git：${bundled}`);
+    }
+    return;
+  }
+  if (process.platform === "darwin") {
+    const root = join(app.getAppPath(), "vendor", "git");
+    const bundled = join(root, "bin", "git");
+    if (!existsSync(bundled)) return;
     process.env.SE_GIT_PATH = bundled;
+    process.env.GIT_EXEC_PATH = join(root, "libexec", "git-core");
+    process.env.GIT_TEMPLATE_DIR = join(root, "share", "git-core", "templates");
     console.log(`[desktop] 使用随包 git：${bundled}`);
   }
+}
+
+/** 给服务端的「关于」用：版本、第三方许可文件、日志目录（P11）。 */
+function exposeAppInfo() {
+  process.env.SE_APP_VERSION = app.getVersion();
+  process.env.SE_LOGS_DIR = app.getPath("logs");
+  const notices = join(app.getAppPath(), "THIRD_PARTY_NOTICES.txt");
+  if (existsSync(notices)) process.env.SE_NOTICES_PATH = notices;
+  // 不往外报遥测。
+  process.env.MASTRA_TELEMETRY_DISABLED = "1";
+}
+
+/** 中文菜单（P11）：Mac 顶栏 + Windows 窗口菜单。打包后不给刷新 / 开发者工具。 */
+function buildMenu() {
+  const isMac = process.platform === "darwin";
+  const devItems = app.isPackaged ? [] : [{ type: "separator" }, { role: "reload", label: "重新载入" }, { role: "toggleDevTools", label: "开发者工具" }];
+  const openNotices = () => {
+    const notices = process.env.SE_NOTICES_PATH;
+    if (notices) void shell.openPath(notices);
+  };
+  /** @type {Electron.MenuItemConstructorOptions[]} */
+  const template = [
+    ...(isMac
+      ? [{
+        label: "StoryEngine",
+        submenu: [
+          { role: "about", label: "关于 StoryEngine" },
+          { type: "separator" },
+          { role: "hide", label: "隐藏 StoryEngine" },
+          { role: "hideOthers", label: "隐藏其他" },
+          { role: "unhide", label: "全部显示" },
+          { type: "separator" },
+          { role: "quit", label: "退出 StoryEngine" },
+        ],
+      }]
+      : [{ label: "文件", submenu: [{ role: "quit", label: "退出" }] }]),
+    {
+      label: "编辑",
+      submenu: [
+        { role: "undo", label: "撤销" },
+        { role: "redo", label: "重做" },
+        { type: "separator" },
+        { role: "cut", label: "剪切" },
+        { role: "copy", label: "复制" },
+        { role: "paste", label: "粘贴" },
+        { role: "pasteAndMatchStyle", label: "粘贴为纯文本" },
+        { role: "selectAll", label: "全选" },
+      ],
+    },
+    {
+      label: "显示",
+      submenu: [
+        { role: "resetZoom", label: "实际大小" },
+        { role: "zoomIn", label: "放大" },
+        { role: "zoomOut", label: "缩小" },
+        { type: "separator" },
+        { role: "togglefullscreen", label: "全屏" },
+        ...devItems,
+      ],
+    },
+    {
+      label: "窗口",
+      submenu: isMac
+        ? [{ role: "minimize", label: "最小化" }, { role: "zoom", label: "缩放" }, { type: "separator" }, { role: "front", label: "前置全部窗口" }]
+        : [{ role: "minimize", label: "最小化" }, { role: "close", label: "关闭" }],
+    },
+    {
+      role: "help",
+      label: "帮助",
+      submenu: [
+        { label: "打开日志文件夹", click: () => void shell.openPath(app.getPath("logs")) },
+        { label: "第三方软件许可", enabled: Boolean(process.env.SE_NOTICES_PATH), click: openNotices },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  app.setAboutPanelOptions({
+    applicationName: "StoryEngine",
+    applicationVersion: app.getVersion(),
+    version: "",
+    credits: "第三方软件许可见「帮助 → 第三方软件许可」。",
+  });
 }
 
 /**
@@ -187,20 +328,42 @@ function createWindow(url) {
     },
   });
   // 外链（http/https 且非本机 server）交给系统浏览器，别在壳里开新窗。
+  const isExternal = (target) => /^https?:/iu.test(target) && !target.startsWith(serverHandle?.url ?? url);
   win.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:/iu.test(target) && !target.startsWith(serverHandle?.url ?? "")) {
-      void shell.openExternal(target);
-      return { action: "deny" };
-    }
+    if (isExternal(target)) void shell.openExternal(target);
     return { action: "deny" };
+  });
+  // 窗口本身只许待在本机服务上：点到外链（或被页面带走）一律拦下，外链交给系统浏览器。
+  win.webContents.on("will-navigate", (event, target) => {
+    if (target.startsWith(serverHandle?.url ?? url)) return;
+    event.preventDefault();
+    if (isExternal(target)) void shell.openExternal(target);
+  });
+  // 页面进程崩了：记下来，自动重载一次（草稿每次改动都已存盘）。
+  let reloadedAfterCrash = false;
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`[desktop] 页面进程退出：${details.reason}（exitCode ${details.exitCode}）`);
+    if (details.reason === "clean-exit" || reloadedAfterCrash || win.isDestroyed()) return;
+    reloadedAfterCrash = true;
+    win.webContents.reload();
   });
   void win.loadURL(url);
   return win;
 }
 
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+
 app.whenReady().then(async () => {
+  if (!GOT_SINGLE_INSTANCE_LOCK) return;
   try {
     wireBundledGit();
+    exposeAppInfo();
+    buildMenu();
     await seedPresetModelConfig();
     const handle = await startServer();
     createWindow(handle.url);
@@ -210,6 +373,7 @@ app.whenReady().then(async () => {
     });
   } catch (error) {
     // 起服失败绝不静默：弹框说明后退出（没有 server 的窗口毫无意义）。
+    console.error("[desktop] 本地服务启动失败：", error);
     dialog.showErrorBox(
       "StoryEngine 启动失败",
       `本地服务启动失败：${error instanceof Error ? error.message : String(error)}`,

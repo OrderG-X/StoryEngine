@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BrainCallModel } from "../../editorial/index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { runCheckContinuity } from "./check-continuity.js";
+import { cachedCheckContinuity, runCheckContinuity } from "./check-continuity.js";
 
 const CH1 = "林舟把怀表锁进了柜台下的抽屉。周婶说她明天一早来取伞。";
 const DRAFT = "林舟一早开门。他从工作台上拿起那块怀表，表盖还开着。周婶说伞她昨天就拿走了。";
@@ -125,6 +125,19 @@ describe("核账记忆", () => {
     // 相对日子换算不了 → 最多「可能」，不进「确定」——原句没改掉还是真带下来了，只是不装「确定」。
     expect(after.sure).toEqual([]);
     expect(after.maybe.map((item) => item.reason)).toEqual(["取伞的日子对不上"]);
+  });
+});
+
+describe("只拿核账记忆（P11：AI 出稿后补核账卡）", () => {
+  it("核过、稿子没改 → 照记忆给结果；没核过或稿子改了 → null，不调模型", async () => {
+    const dir = await makeBook();
+    expect(await cachedCheckContinuity(dir, 2)).toBeNull();
+    await runCheckContinuity(dir, 2, { readerCallModel: fakeModel({ K1: "sure", K2: "maybe" }) });
+    const cached = await cachedCheckContinuity(dir, 2);
+    expect(cached?.reused).toBe(true);
+    expect(cached?.sure.map((item) => item.reason)).toEqual(["怀表位置对不上"]);
+    await writeFile(join(dir, "drafts", "fast", "chapter-0002.md"), `# 第2章\n\n${DRAFT}又补了一句。\n`, "utf-8");
+    expect(await cachedCheckContinuity(dir, 2)).toBeNull();
   });
 });
 

@@ -1,5 +1,6 @@
 import type { ChapterAgentCard, DraftReviewView, DraftRevisionPreview, QualityCardReport, ToolStep } from "../api/types.js";
 import type { SuggestedAction, ChapterWorkflowState } from "./workflow.js";
+import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 /** Async work is owned by the exact book, chapter, chat session and operation. */
 export interface WorkspaceOperationTarget {
@@ -26,6 +27,8 @@ export interface ChapterNavItem {
   readonly status: "committed" | "draft" | "current" | "planned";
   readonly hasDraftFile?: boolean;
   readonly hasCommittedChapter?: boolean;
+  /** 已定稿、但工作稿定稿后又改过（P11）：底栏「N 章工作稿还没定稿」要算上它。 */
+  readonly editedSinceCommit?: boolean;
 }
 
 /**
@@ -94,8 +97,8 @@ export type MessageCard =
   | { readonly type: "name-drift"; readonly warnings: readonly NameDriftWarning[] }
   /** 线索久未推进提醒（commit_preview）。 */
   | { readonly type: "stale-threads"; readonly warnings: readonly StaleThreadWarningData[] }
-  /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错。 */
-  | { readonly type: "error"; readonly detail?: string }
+  /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错，reason＝服务端分的类（P11，老消息没有）。 */
+  | { readonly type: "error"; readonly detail?: string; readonly reason?: AiErrorReason }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
   /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */

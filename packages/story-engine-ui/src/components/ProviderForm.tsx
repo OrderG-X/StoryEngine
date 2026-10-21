@@ -120,7 +120,7 @@ export function ProviderForm(props: ProviderFormProps) {
             )}
           </button>
         </div>
-        <span className="ms-field-hint">保存后会写入本机 ~/.story-engine/model-secrets.json，不写入模型设置 JSON</span>
+        <span className="ms-field-hint">密钥只存在这台电脑上。</span>
       </div>
 
       <div className="ms-form-test">
@@ -143,7 +143,7 @@ export function ProviderForm(props: ProviderFormProps) {
 
       {props.testModels.length > 0 && (
         <div className="ms-test-success">
-          <span className="ms-test-count">{props.testModels.length} 个模型可用</span>
+          <span className="ms-test-count">连上了，{props.testModels.length} 个模型可用。点一个，所有功能就都用它：</span>
           <div className="ms-model-grid">
             {props.testModels.map((m) => (
               <button

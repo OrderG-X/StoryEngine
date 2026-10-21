@@ -156,6 +156,15 @@ async function checkByReader(input: {
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
 }
 
+/** 这章这份正文能不能直接用上次的核账结果（正文、前文、账本都没改）：只读盘、不调模型（P11：AI 出稿后补核账卡用）。 */
+export async function canReuseCheck(projectDir: string, chapter: number, body: string): Promise<boolean> {
+  const memory = await readCheckMemory(projectDir, chapter);
+  if (!memory || memory.version !== CHECK_MEMORY_VERSION || memory.bodyHash !== hashBody(body)) return false;
+  const earlier = await readEarlierChapters(projectDir, chapter);
+  const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
+  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? []);
+}
+
 export async function checkChapterBody(
   projectDir: string,
   chapter: number,

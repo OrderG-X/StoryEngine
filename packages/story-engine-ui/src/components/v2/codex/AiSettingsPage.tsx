@@ -346,14 +346,15 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       if (testModels.length > 0) {
         setProviderModels((prev) => ({ ...prev, [built.id]: [...testModels] }));
       }
-      setNotice("已保存");
+      // 新用户只接了服务商、还没给任何功能选模型：说清还差一步（P11）。
+      setNotice(Object.values(tasks).some(Boolean) ? "已保存" : "接上了。还差一步：在下面「各功能使用的 AI」里选个模型。");
       backToList();
     } catch (e) {
       setTestError(`保存失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
     }
-  }, [buildNextProviders, form.apiKey, testModels, persist, backToList]);
+  }, [buildNextProviders, form.apiKey, testModels, persist, backToList, tasks]);
 
   /** 测通后点模型：保存服务商 + 该模型分配给全部任务，一步到位（原「死按钮」补活）。 */
   const handleQuickAssign = useCallback(async (modelId: string) => {

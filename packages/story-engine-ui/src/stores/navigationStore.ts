@@ -49,7 +49,8 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
   setWorkspaceReady: (value) => set({ workspaceReady: value }),
   requestCenterView: (view) => set({ pendingCenterView: view }),
   clearPendingCenterView: () => set({ pendingCenterView: null }),
-  setProjectPath: (path) => set({ projectPath: path }),
+  // 换了书：上一本「刚定稿没看过」的小点不能跟过来。
+  setProjectPath: (path) => set((state) => (state.projectPath === path ? { projectPath: path } : { projectPath: path, unseenChangesChapter: null })),
   setActiveBookId: (id) => set({ activeBookId: id }),
   setOpenProjectError: (error) => set({ openProjectError: error }),
   setOpenProjectLoading: (loading) => set({ openProjectLoading: loading }),

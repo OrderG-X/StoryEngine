@@ -17,9 +17,11 @@ export function annotateOutboundContent(m: ChapterMessage & { role: "user" | "as
 export function buildOutboundConversation(
   messages: readonly ChapterMessage[], archivedCount: number, budgetTokens: number,
 ): { role: "user" | "assistant"; content: string }[] {
+  // 界面自己塞的脚手架（「已进入工作台」、流程提示）不是对话，不发给 AI：既不占历史条数，
+  // 也不让「只带上最近 N 条」的提示过早出现（P11）。
   const active = messages.slice(Math.max(0, archivedCount))
     .filter((m): m is ChapterMessage & { role: "user" | "assistant" } =>
-      m.role === "user" || m.role === "assistant")
+      (m.role === "user" || m.role === "assistant") && m.kind !== "scaffolding")
     .map((m) => ({
       role: m.role,
       content: annotateOutboundContent(m),

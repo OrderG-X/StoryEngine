@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, readFile, rename, rm, stat, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve, join, isAbsolute, sep, win32 as win32Path } from "node:path";
+import { parseDraftFile, sameDraftBody } from "@actalk/story-core";
 import { resolveBooksRootDir } from "./data-dirs.js";
 import { noteUsageBook } from "./usage-scope.js";
 import type { StateOverview } from "../book/state-overview.js";
@@ -718,6 +719,8 @@ export interface UiChapterFileState {
   readonly chapter: number;
   readonly hasDraftFile: boolean;
   readonly hasCommittedChapter: boolean;
+  /** 定稿后工作稿又改过（两份都在、正文不一样）：章节栏要把它算进「还没定稿」（P11）。只在是的时候带。 */
+  readonly editedSinceCommit?: true;
   readonly draftTitle?: string;
   readonly committedTitle?: string;
 }
@@ -742,10 +745,13 @@ export async function readUiChapterFileStates(projectDir: string): Promise<reado
       readFile(defaultCommittedChapterPath(projectDir, chapter), "utf-8").catch(() => undefined),
       readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined),
     ]);
+    const edited = committedContent !== undefined && draftContent !== undefined && hasRealDraftContent(draftContent)
+      && !sameDraftBody(parseDraftFile(draftContent).body, parseDraftFile(committedContent).body);
     return {
       chapter,
       hasDraftFile: hasRealDraftContent(draftContent),
       hasCommittedChapter: committedContent !== undefined,
+      ...(edited ? { editedSinceCommit: true as const } : {}),
       ...(extractDraftTitle(draftContent) ? { draftTitle: extractDraftTitle(draftContent)! } : {}),
       ...(extractDraftTitle(committedContent) ? { committedTitle: extractDraftTitle(committedContent)! } : {}),
     };

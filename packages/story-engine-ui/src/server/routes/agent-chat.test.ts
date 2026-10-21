@@ -15,6 +15,7 @@ import {
   buildWholeBookTruthLine,
   capChatHistoryWindow,
   closingFallbackText,
+  emitDraftCheckCards,
   formatChapterStatusLine,
   isMastraToolValidationError,
   normalizeForwardedToolResult,
@@ -94,6 +95,33 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
       { type: "finish", payload: { stepResult: { reason: "stop" } } },
     ]);
     expect(collectText(done.events)).not.toContain("步数用完了");
+  });
+
+  it("P11：出稿时核过账、这轮 AI 没自己核 → 回合结束报出要补核账卡的章；AI 自己核过 / 出稿没核成的不报", async () => {
+    const drafted = await run([
+      ...toolChunks("generate_draft", { ok: true, chapter: 3, summary: "写好了。", qualityPipeline: { continuity: { checked: true } } }),
+      textChunk("写好了，见核账卡。"),
+    ]);
+    expect(drafted.result.draftCheckedChapters).toEqual([3]);
+    const selfChecked = await run([
+      ...toolChunks("generate_draft", { ok: true, chapter: 3, qualityPipeline: { continuity: { checked: true } } }),
+      ...toolChunks("check_continuity", { ok: true, chapter: 3, summary: "核过了。" }),
+    ]);
+    expect(selfChecked.result.draftCheckedChapters).toEqual([]);
+    const notChecked = await run([
+      ...toolChunks("generate_draft", { ok: true, chapter: 4, qualityPipeline: { continuity: { checked: false } } }),
+      ...toolChunks("generate_draft", { ok: false, chapter: 5, qualityPipeline: { continuity: { checked: true } } }),
+    ]);
+    expect(notChecked.result.draftCheckedChapters).toEqual([]);
+  });
+
+  it("P11：补核账卡只用核账记忆——有就按核账工具同款事件发，没有就不发", async () => {
+    const events: { event: string; data: unknown }[] = [];
+    const cached = { ok: true, chapter: 3, sure: [], maybe: [], reused: true, summary: "没发现对不上的地方。" };
+    await emitDraftCheckCards("/books/x", [3, 4], (event, data) => events.push({ event, data }), async (_dir, chapter) => (chapter === 3 ? cached : null));
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result"]);
+    expect(events[1]?.data).toMatchObject({ toolName: "check_continuity", output: cached });
+    expect((events[0]?.data as { toolCallId: string }).toolCallId).toBe((events[1]?.data as { toolCallId: string }).toolCallId);
   });
 
   it("一轮结束把对话 AI 的用量记进全局用量账（P10，记在主对话名下、带模型）", async () => {

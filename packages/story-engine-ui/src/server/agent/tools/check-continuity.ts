@@ -13,7 +13,7 @@ import { coerceBoolean, coerceNumber } from "../../lib/lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { draftVersionOf } from "@actalk/story-core";
-import { checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
+import { canReuseCheck, checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
 import { rereadBlocker } from "../../editorial/reread-state.js";
 
 const issueSchema = z.object({
@@ -51,6 +51,17 @@ const outputSchema = z.object({
 });
 
 export type CheckContinuityToolOutput = z.infer<typeof outputSchema>;
+
+/**
+ * 只拿上次的核账结果（P11）：AI 出稿时已经核过一遍、结果在核账记忆里，就照那份出核账卡；
+ * 记忆对不上（出稿后又去味改过、前文改过）就返回 null——不在作者看不见的地方再调一次模型。
+ */
+export async function cachedCheckContinuity(projectDir: string, chapter: number): Promise<CheckContinuityToolOutput | null> {
+  const draft = await readDraftContent({ projectDir, chapter });
+  if (!draft.found || !draft.content.trim()) return null;
+  if (!(await canReuseCheck(projectDir, chapter, draft.content.replace(/^#[^\n]*\n/u, "").trim()))) return null;
+  return runCheckContinuity(projectDir, chapter);
+}
 
 export async function runCheckContinuity(
   projectDir: string,
