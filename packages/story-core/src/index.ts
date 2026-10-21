@@ -161,6 +161,7 @@ export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type Rev
 
 export { runCommand } from "./commands/runner.js";
 export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapterLedger, type ChapterCommitResult } from "./commands/chapter-commit.js";
+export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { decisionRecord, type DecisionRecordResult } from "./commands/decision-record.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
