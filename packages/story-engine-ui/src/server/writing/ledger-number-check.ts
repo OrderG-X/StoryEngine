@@ -86,11 +86,17 @@ function numberSlots(sentence: string): readonly (NumberSlot & { readonly index:
     const before = sentence.slice(0, index);
     // 不猜白名单：数字归一
     if (/第$/u.test(before)) continue;
-    const run = HAN_RUN_BEFORE.exec(before)?.[1] ?? "";
+    const runMatch = HAN_RUN_BEFORE.exec(before);
+    const run = runMatch?.[1] ?? "";
     // 前缀去掉尾部的数字字（「十一月九号」的「月」前面是数，模板不可靠）
     // 前缀里带数字的不当模板：「十一月九号」的「月」前面是数；「一栋三层」的「一栋」谁家的楼都能说。
     // 不猜白名单：数字归一
     if (run.length < 2 || /[零〇一二两三四五六七八九十百千万]/u.test(run.slice(-2)) || /[零〇一二两三四五六七八九十百千万]$/u.test(run)) continue;
+    // 前缀是上一个数的量词起头（「1991年至2019年」「一九九二年至二〇〇三年」的「年至」）：这是一段起止，
+    // 不是哪个人或物的名字——拿它当模板，任何两段年份都会互相比（真机试写：寄信年份对上了登记簿的年份，报成「确定」）。
+    const runEnd = before.length - ((runMatch?.[0].length ?? 0) - run.length);
+    // 不猜白名单：数字归一
+    if (UNIT_AFTER.test(run.slice(-2)) && /[0-9０-９零〇一二两三四五六七八九十百千万]/u.test(before.charAt(runEnd - 3))) continue;
     const value = parseNumberToken(match[0]);
     if (value === undefined) continue;
     out.push({ left: run.slice(-2), unit: UNIT_AFTER.exec(after)![0], value, text: match[0], index });

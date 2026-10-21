@@ -53,6 +53,11 @@ describe("账本数字对账（确定性层）", () => {
     expect(findLedgerNumberConflicts({ chapter: 5, draftBody: "他说你们以前住槐树巷九号，就隔他家一个门。", facts: ledger })).toEqual([]);
   });
 
+  it("两段起止年份（某年至某年）说的是两件事 → 不拿「年至」当模板互相比（真机试写误报）", () => {
+    const facts = [fact("c1-9", 1, "她又往后翻，一共找到五个圈。", { subject: "登记簿", value: "五条画圈的记录，1991年至2019年" })];
+    expect(findLedgerNumberConflicts({ chapter: 5, draftBody: "外公一九九二年至二〇〇三年寄信七封，均退回。", facts })).toEqual([]);
+  });
+
   it("这个数正好是另一条事实的（老陈家七号）→ 不报", () => {
     expect(findLedgerNumberConflicts({ chapter: 5, draftBody: "林秋那天去了槐树巷七号。", facts: ledger })).toEqual([]);
   });
