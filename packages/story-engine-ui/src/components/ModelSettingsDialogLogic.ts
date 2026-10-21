@@ -8,11 +8,16 @@ export function taskProfileId(provId: string, model: string): string {
   return `${provId}_${model}`.replace(/[^\w-]/g, "_");
 }
 
-/** 连通测试失败信息人话化：把 HTTP/网络底层报错翻成用户能行动的提示。 */
-export function formatHumanTestError(error: unknown): string {
+/**
+ * 连通测试失败信息人话化：把 HTTP/网络底层报错翻成用户能行动的提示。
+ * keyEmpty：密钥框是空的（也不是改已存的服务）——被拒多半是还没填，别说「密钥无效或已过期」（2026-10-22 好上手走查）。
+ */
+export function formatHumanTestError(error: unknown, options: { readonly keyEmpty?: boolean } = {}): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/401|authentication|api key|invalid|unauthorized/i.test(message)) {
-    return "密钥无效或已过期。请检查后重试，或到服务商控制台重新创建密钥。";
+    return options.keyEmpty
+      ? "还没填密钥：把服务商给你的 API 密钥贴进上面的框，再点测试。"
+      : "密钥无效或已过期。请检查后重试，或到服务商控制台重新创建密钥。";
   }
   // 不猜白名单：报错分类
   if (/timeout|超时|aborted/i.test(message)) {

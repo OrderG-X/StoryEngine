@@ -90,7 +90,7 @@ export default function ImportBookDialog({ open, onCancel, onImport, preview = p
       <DialogContent className="se-import-book">
         <DialogHeader>
           <DialogTitle>导入已写的书</DialogTitle>
-          <DialogDescription>选写好的 txt 或 md 文件，按「第 N 章」这样的标题切章。导进来的章都算定稿，记账员会从第 1 章读起、逐章记账。</DialogDescription>
+          <DialogDescription>选写好的 txt 或 md 文件，按「第 N 章」这样的标题切章。导进来的章都算定稿；AI 会从第 1 章读起，把人物、事情、线索一章章记下来（在后台，不耽误你接着写）。</DialogDescription>
         </DialogHeader>
 
         <input

@@ -3,7 +3,7 @@ import type { OpenBookDialogProps } from "../types.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 
 /**
- * 「打开已有书籍」：选一本最近打开过的书，或指定书所在的文件夹。
+ * 「打开书文件夹」：选一本最近打开过的书，或指定书所在的文件夹。
  * 2026-10-07 改用与「新建书籍」同一套弹窗（portal 居中、token 配色）——旧版是手写 fixed 层，
  * 在书架里会偏到右上角，按钮还是早期的青色。
  */
@@ -36,7 +36,7 @@ export default function OpenBookDialog({
     <Dialog open onOpenChange={(next) => { if (!next) onCancel(); }}>
       <DialogContent className="se-open-book">
         <DialogHeader>
-          <DialogTitle>打开已有书籍</DialogTitle>
+          <DialogTitle>打开书文件夹</DialogTitle>
           <DialogDescription>选一本最近打开过的书，或者指定书所在的文件夹。只读取，不改动任何文件。</DialogDescription>
         </DialogHeader>
 

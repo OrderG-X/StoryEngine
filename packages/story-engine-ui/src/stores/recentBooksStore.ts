@@ -74,7 +74,7 @@ export const useRecentBooksStore = create<RecentBooksStore>((set, get) => {
     syncScannedBooks: (scanned, library) =>
       set((state) => {
         // 默认书库里已经删掉/挪走的书：书架上不再留着（点了只会报找不到）。只清书库根目录下的条目——
-        // 用户从别处「打开已有书籍」加进来的书不在扫描范围内，不能凭扫描结果判它没了。
+        // 用户从别处「打开书文件夹」加进来的书不在扫描范围内，不能凭扫描结果判它没了。
         const missingInLibrary = missingDefaultLibraryPaths(state.books, library);
         const byPath = new Map(
           state.books.filter((book) => !missingInLibrary.has(book.projectPath)).map((book) => [book.projectPath, book]),

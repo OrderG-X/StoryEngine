@@ -3,6 +3,7 @@ import type { ModelProfileSummary } from "../api/types.js";
 import {
   buildModelSettingsConfig,
   buildTaskAssignmentsPayload,
+  formatHumanTestError,
   parseFallbackState,
   parseTaskViewState,
   taskProfileId,
@@ -384,5 +385,17 @@ describe("备用模型（P10）", () => {
     expect(parseFallbackState("p1", profiles)).toBe("deepseek|reasoner");
     expect(parseFallbackState("ghost", profiles)).toBe("");
     expect(parseFallbackState(null, profiles)).toBe("");
+  });
+});
+
+describe("formatHumanTestError：密钥框空着被拒，说「还没填」不说「无效」（2026-10-22 好上手走查）", () => {
+  it("没填密钥 → 还没填；填了 → 无效或过期", () => {
+    const error = new Error("401 Unauthorized");
+    expect(formatHumanTestError(error, { keyEmpty: true })).toMatch(/^还没填密钥/u);
+    expect(formatHumanTestError(error)).toMatch(/^密钥无效或已过期/u);
+  });
+
+  it("不是密钥的问题照旧（地址、网络）", () => {
+    expect(formatHumanTestError(new Error("404 Not Found"), { keyEmpty: true })).toMatch(/接口地址可能不对/u);
   });
 });

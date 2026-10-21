@@ -217,12 +217,14 @@ describe("HomeLanding", () => {
     expect(screen.queryByRole("button", { name: "重命名" })).toBeNull();
   });
 
-  it("shows a clear empty state when there are no recent books", () => {
+  it("空书架：「新建 / 导入 / 打开」只出一组，不再有空的「全部书」（2026-10-22 好上手走查）", () => {
     render(<HomeLanding {...homeProps()} />);
 
-    const recentSection = screen.getByRole("region", { name: "最近写作" });
-    expect(recentSection).toHaveTextContent("还没有最近写作");
-    expect(recentSection).toHaveTextContent("可以新建一本书，或打开已有项目");
+    expect(screen.getAllByRole("button", { name: "新建一本书" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "导入已写的书" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "打开书文件夹" })).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "开始" })).toHaveTextContent("导入已写的书");
+    expect(screen.queryByRole("region", { name: "最近写作" })).toBeNull();
   });
 
   it("改版：书卡与继续写卡显示真实章数和字数（撤掉恒近满格、没信息量的进度条）", () => {

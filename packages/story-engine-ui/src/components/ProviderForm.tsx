@@ -4,10 +4,17 @@ import type { ProviderFormProps } from "./ModelSettingsDialogTypes.js";
 /**
  * AI 服务配置表单。
  * - 正常模式（弹窗/自定义）：预设选择 + 名称/接口地址 + API Key + 测试连接；「从环境变量读密钥」收进「更多」。
- * - minimal 模式（官方预设卡片进来）：只显示 API Key + 测试连接；名称/环境变量/接口地址收进「高级选项」折叠。
+ * - minimal 模式（官方预设卡片进来）：只显示 API Key + 测试连接；名称/环境变量/接口地址收进密钥下面的「高级选项」折叠。
  */
 export function ProviderForm(props: ProviderFormProps) {
   const minimal = props.minimal === true;
+  // 占位字跟着选中的服务商走（原来一律是 DeepSeek 的，选了别家也显示 DeepSeek）。
+  const preset = props.selectedPreset;
+  const namePlaceholder = preset?.label ?? "给这个服务起个名字";
+  const urlPlaceholder = preset?.baseUrl ?? "https://…/v1";
+  const envPlaceholder = preset?.apiKeyEnvSuggestion || "比如 MY_API_KEY";
+  // 本机 / 自部署（Ollama、LM Studio…）一般不用密钥，不标必填。
+  const keyOptional = preset?.group === "local";
   return (
     <div className="ms-add-form">
       {!props.hideHeader && (
@@ -52,12 +59,12 @@ export function ProviderForm(props: ProviderFormProps) {
         <>
           <div className="ms-form-field">
             <label className="ms-form-label">名称 <span className="ms-required">*</span></label>
-            <input className="ms-input" type="text" placeholder="DeepSeek" value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
+            <input className="ms-input" type="text" placeholder={namePlaceholder} value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
           </div>
 
           <div className="ms-form-field">
             <label className="ms-form-label">接口地址 <span className="ms-required">*</span></label>
-            <input className="ms-input" type="text" placeholder="https://api.deepseek.com/v1" value={props.formBaseUrl} onChange={(e) => props.setFormBaseUrl(e.target.value)} />
+            <input className="ms-input" type="text" placeholder={urlPlaceholder} value={props.formBaseUrl} onChange={(e) => props.setFormBaseUrl(e.target.value)} />
             {props.selectedPreset && (
               <span className="ms-field-hint">预设已填入默认地址，可按需修改</span>
             )}
@@ -68,37 +75,16 @@ export function ProviderForm(props: ProviderFormProps) {
             <div className="ms-advanced-body">
               <div className="ms-form-field">
                 <label className="ms-form-label">从环境变量读密钥</label>
-                <input className="ms-input" type="text" placeholder="DEEPSEEK_API_KEY" value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
+                <input className="ms-input" type="text" placeholder={envPlaceholder} value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
                 <span className="ms-field-hint">一般不用填：下面直接填密钥就行</span>
               </div>
             </div>
           </details>
         </>
-      ) : (
-        <details className="ms-advanced-details">
-          <summary className="ms-advanced-summary">高级选项</summary>
-          <div className="ms-advanced-body">
-            <div className="ms-form-field">
-              <label className="ms-form-label">名称 <span className="ms-required">*</span></label>
-              <input className="ms-input" type="text" placeholder="DeepSeek" value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
-            </div>
-            <div className="ms-form-field">
-              <label className="ms-form-label">从环境变量读密钥</label>
-              <input className="ms-input" type="text" placeholder="DEEPSEEK_API_KEY" value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
-            </div>
-            <div className="ms-form-field">
-              <label className="ms-form-label">接口地址 <span className="ms-required">*</span></label>
-              <input className="ms-input" type="text" placeholder="https://api.deepseek.com/v1" value={props.formBaseUrl} onChange={(e) => props.setFormBaseUrl(e.target.value)} />
-              {props.selectedPreset && (
-                <span className="ms-field-hint">预设已填入默认地址，可按需修改</span>
-              )}
-            </div>
-          </div>
-        </details>
-      )}
+      ) : null}
 
       <div className="ms-form-field">
-        <label className="ms-form-label">API 密钥 {props.editingProviderId ? "（留空表示不修改）" : <span className="ms-required">*</span>}</label>
+        <label className="ms-form-label">API 密钥 {props.editingProviderId ? "（留空表示不修改）" : keyOptional ? "（本机服务一般不用填）" : <span className="ms-required">*</span>}</label>
         <div className="ms-input-group">
           <input
             className="ms-input ms-input-key"
@@ -122,6 +108,30 @@ export function ProviderForm(props: ProviderFormProps) {
         </div>
         <span className="ms-field-hint">密钥只存在这台电脑上。</span>
       </div>
+
+      {/* 官方预设：名称 / 地址都有默认值，收进「高级选项」，放在密钥后面——新作者第一眼只看到要填的那一格。 */}
+      {minimal ? (
+        <details className="ms-advanced-details">
+          <summary className="ms-advanced-summary">高级选项</summary>
+          <div className="ms-advanced-body">
+            <div className="ms-form-field">
+              <label className="ms-form-label">名称 <span className="ms-required">*</span></label>
+              <input className="ms-input" type="text" placeholder={namePlaceholder} value={props.formName} onChange={(e) => props.setFormName(e.target.value)} />
+            </div>
+            <div className="ms-form-field">
+              <label className="ms-form-label">从环境变量读密钥</label>
+              <input className="ms-input" type="text" placeholder={envPlaceholder} value={props.formAuthEnv} onChange={(e) => props.setFormAuthEnv(e.target.value)} />
+            </div>
+            <div className="ms-form-field">
+              <label className="ms-form-label">接口地址 <span className="ms-required">*</span></label>
+              <input className="ms-input" type="text" placeholder={urlPlaceholder} value={props.formBaseUrl} onChange={(e) => props.setFormBaseUrl(e.target.value)} />
+              {props.selectedPreset && (
+                <span className="ms-field-hint">预设已填入默认地址，可按需修改</span>
+              )}
+            </div>
+          </div>
+        </details>
+      ) : null}
 
       <div className="ms-form-test">
         <button

@@ -303,11 +303,11 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
       if (detailId) setProviderModels((prev) => ({ ...prev, [detailId]: r.models }));
     } catch (e) {
       setTestElapsed(Date.now() - started);
-      setTestError(formatHumanTestError(e));
+      setTestError(formatHumanTestError(e, { keyEmpty: !form.apiKey.trim() && !editingExisting }));
     } finally {
       setTesting(false);
     }
-  }, [form.baseUrl, form.apiKey, form.authEnv, form.presetId, detailId]);
+  }, [form.baseUrl, form.apiKey, form.authEnv, form.presetId, detailId, editingExisting]);
 
   /** 由表单构造下一份 providers（新建/更新），返回目标 id 与列表。 */
   const buildNextProviders = useCallback((): { id: string; providers: readonly SavedProvider[] } | null => {
@@ -509,7 +509,9 @@ export function AiSettingsPage({ onBack }: AiSettingsPageProps) {
     ? "接一家服务商、填上密钥就能写；每个功能可以用不同的模型。"
     : editingExisting
       ? "改动保存后立即生效。密钥留空表示不修改。"
-      : "填入 API Key，测试通过后保存。";
+      : detailPreset?.group === "local"
+        ? "本机服务一般不用密钥：先把它开起来，再点测试连接。"
+        : "填入 API Key，测试通过后保存。";
 
   return (
     <section className="msk-embedded ms-dialog asm-shell" role="region" aria-label="AI 设置">

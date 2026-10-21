@@ -13,7 +13,7 @@
   max-width:min(560px,calc(100vw - 32px));
 }
 
-/* 「打开已有书籍」弹窗（portal 到 body，不在书架作用域里）：最近的书一行一本，选中有底色。 */
+/* 「打开书文件夹」弹窗（portal 到 body，不在书架作用域里）：最近的书一行一本，选中有底色。 */
 :root .dialog-content.se-open-book{width:min(600px,calc(100vw - 32px));}
 :root .se-open-book-list{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow-y:auto;margin:0 -6px;}
 :root .se-open-book-list button{
