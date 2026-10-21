@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { __CATS_FOR_TEST, buildChapterRows, chapterFootStatus, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
+import { __CATS_FOR_TEST, buildChapterRows, chapterFootStatus, needsCommit, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
 describe("设定本类目（重构 P9：设定本按设定卡分，伏笔线索和故事地图照旧）", () => {
   it("打头是「这章改了什么」，接着是设定本七类，最后是伏笔线索、故事地图", () => {
@@ -104,5 +104,18 @@ describe("章节栏底部状态（P7 桌面包走查）", () => {
     expect(chapterFootStatus(0, 0)).toEqual({ dot: "", text: "还没有定稿的章" });
     expect(chapterFootStatus(0, 3)).toEqual({ dot: "ok", text: "全部已定稿" });
     expect(chapterFootStatus(2, 3)).toEqual({ dot: "warn", text: "2 章工作稿还没定稿" });
+  });
+});
+
+describe("needsCommit（P11：底栏「N 章还没定稿」也算定稿后又改过的章）", () => {
+  const ch = (status: "committed" | "draft" | "current" | "planned", editedSinceCommit?: boolean) => ({
+    id: "ch-1", chapterNumber: 1, title: "x", status, ...(editedSinceCommit !== undefined ? { editedSinceCommit } : {}),
+  });
+  it("工作稿章、定稿后又改过的章要定稿；已定稿没改、还没写的不算", () => {
+    expect(needsCommit(ch("draft"))).toBe(true);
+    expect(needsCommit(ch("committed", true))).toBe(true);
+    expect(needsCommit(ch("committed", false))).toBe(false);
+    expect(needsCommit(ch("committed"))).toBe(false);
+    expect(needsCommit(ch("planned", true))).toBe(false);
   });
 });

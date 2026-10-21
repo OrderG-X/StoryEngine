@@ -34,6 +34,10 @@
   .se-home-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap;}
   .se-home-head h1{margin:0;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:30px;font-weight:700;line-height:1.25;letter-spacing:.04em;}
   .se-home-head p{margin:4px 0 0;font-size:13px;color:var(--muted);}
+  /* 还没接上 AI（P11）：书架顶上一条强调色淡底提示。 */
+  .se-home-setup{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:-8px 0 20px;padding:12px 14px 12px 18px;border:1px solid var(--accent-line);border-radius:12px;background:var(--accent-soft);font-size:13px;line-height:1.6;color:var(--muted);}
+  .se-home-setup b{color:var(--text);font-weight:600;margin-right:4px;}
+  .se-home-setup .se-btn{flex:none;}
   .se-home-actions{display:flex;gap:8px;}
 
   .se-btn{height:34px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;}

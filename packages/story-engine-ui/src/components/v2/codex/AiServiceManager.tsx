@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import { GROUP_LABELS, PROVIDER_PRESETS, type ProviderPreset, type ProviderPresetGroup } from "../../../constants/providerPresets.js";
 import type { SavedProvider } from "../../ModelSettingsDialogTypes.js";
 
-const GROUP_ORDER: readonly ProviderPresetGroup[] = ["overseas", "china", "aggregator", "local"];
+// 国产在前（P11）：用的人多半在国内，海外的要另外的网络条件。
+const GROUP_ORDER: readonly ProviderPresetGroup[] = ["china", "aggregator", "overseas", "local"];
 
 const GROUP_LABELS_SHORT: Record<ProviderPresetGroup, string> = {
   overseas: "海外",

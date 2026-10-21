@@ -9,7 +9,7 @@
  *   - tool-call    { toolCallId, toolName, args }        agent 决定调某工具
  *   - tool-result  { toolCallId, toolName, output }      工具返回（含 overview/refreshScope/snapshotId）
  *   - tool-error   { toolCallId, toolName, error, retryable }  工具内部抛错（前端据此收尾对应步骤为 failed）
- *   - error        { error, retryable }                  模型/链路错误（前端可重试）
+ *   - error        { error, retryable, reason }          模型/链路错误（前端可重试；reason 见 lib/ai-errors 的分类）
  *   - done         { finishReason }                      本轮结束
  *
  * 铁律：projectDir 经 RequestContext 注入工具；绝不静默失败（任何错误→error 事件）；
@@ -33,7 +33,7 @@ import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { checkContinuityTool } from "../agent/tools/check-continuity.js";
+import { cachedCheckContinuity, checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
@@ -48,6 +48,7 @@ import {
   type UiChapterFileState,
 } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
+import { classifyAiError } from "../lib/ai-errors.js";
 import { shouldSendHistoryTrimNoticeOnce } from "../lib/history-trim-notice.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 
@@ -294,9 +295,12 @@ export async function runAgentTurn(args: {
   readonly shouldStop?: () => boolean;
   /** 对话 AI 用的模型：给了就把这轮用量记进全局用量账（P10）。 */
   readonly model?: AgentModelInfo;
-}): Promise<{ readonly finishReason: string | undefined }> {
+}): Promise<{ readonly finishReason: string | undefined; readonly draftCheckedChapters: readonly number[] }> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
+  // AI 出稿时顺手核过账、这轮又没自己调核账的章（P11）：回合结束后照核账记忆补一张核账卡。
+  const draftChecked = new Set<number>();
+  const toolChecked = new Set<number>();
   let lastToolSummary: string | undefined;
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
@@ -362,6 +366,7 @@ export async function runAgentTurn(args: {
         const summary = (output as { readonly summary?: unknown } | undefined)?.summary;
         if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
         args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
+        noteCheckedChapter(chunk.payload?.toolName, output, draftChecked, toolChecked);
         break;
       }
       case "tool-error": {
@@ -379,7 +384,7 @@ export async function runAgentTurn(args: {
       }
       case "error": {
         sawStreamError = true;
-        args.sendEvent("error", { error: stringifyError(chunk.payload?.error), retryable: true });
+        args.sendEvent("error", { error: stringifyError(chunk.payload?.error), retryable: true, reason: classifyAiError(chunk.payload?.error) });
         break;
       }
       case "finish": {
@@ -409,7 +414,35 @@ export async function runAgentTurn(args: {
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return { finishReason };
+  return { finishReason, draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)) };
+}
+
+/** 记下这轮哪章是「出稿时核过账」、哪章 AI 自己调过核账（只看工具名和结构化字段）。 */
+function noteCheckedChapter(toolName: unknown, output: unknown, draftChecked: Set<number>, toolChecked: Set<number>): void {
+  if (typeof output !== "object" || output === null) return;
+  const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } } };
+  if (typeof record.chapter !== "number") return;
+  if (toolName === "check_continuity") toolChecked.add(record.chapter);
+  if (toolName === "generate_draft" && record.ok === true && record.qualityPipeline?.continuity?.checked === true) draftChecked.add(record.chapter);
+}
+
+/**
+ * 出稿时核过的账补成核账卡（P11）：和点「核账」看到的一样，状态跟着变「核过了」。
+ * 只用核账记忆（cachedCheckContinuity）：出稿后稿子又被改过、记忆对不上就不补，不偷偷再调模型。
+ */
+export async function emitDraftCheckCards(
+  projectDir: string,
+  chapters: readonly number[],
+  sendEvent: (event: string, data: unknown) => void,
+  readCached: (projectDir: string, chapter: number) => Promise<unknown> = cachedCheckContinuity,
+): Promise<void> {
+  for (const chapter of chapters) {
+    const output = await readCached(projectDir, chapter).catch(() => null);
+    if (!output) continue;
+    const toolCallId = `auto-check_continuity-${chapter}-${Date.now()}`;
+    sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter } });
+    sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
+  }
 }
 
 export function registerAgentChatRoutes(middlewares: MiddlewareStack): void {
@@ -548,7 +581,7 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const { result: { finishReason }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
+    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
@@ -563,6 +596,8 @@ async function handleAgentChat(
       ...(agentModel ? { model: agentModel } : {}),
     }));
 
+    if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
+
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);
     for (const notice of notices) sendEvent("status", { message: notice });
@@ -576,13 +611,13 @@ async function handleAgentChat(
     if (res.headersSent) {
       // 已切到 SSE：错误也走 error 事件（前端可重试），再收尾。
       try {
-        sendEvent("error", { error: message, retryable: true });
+        sendEvent("error", { error: message, retryable: true, reason: classifyAiError(error) });
       } catch {
         // ignore write failures on a broken pipe
       }
       res.end();
     } else {
-      writeJson(res, 500, { ok: false, error: message, retryable: true });
+      writeJson(res, 500, { ok: false, error: message, retryable: true, reason: classifyAiError(error) });
     }
   } finally {
     stopHeartbeat?.();

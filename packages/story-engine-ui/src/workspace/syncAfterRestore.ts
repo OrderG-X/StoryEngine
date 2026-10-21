@@ -20,5 +20,7 @@ export async function syncWorkspaceAfterRestore(projectPath: string): Promise<vo
   if (useNavigationStore.getState().projectPath !== projectPath) return;
   // 撤销前挂着的审稿、改写预览、候选稿都对不上新稿了，清掉。
   useUiStore.getState().resetTransientUiState();
+  // 撤回去了：「刚定稿、还没看过改了什么」的小点不再成立。
+  useNavigationStore.getState().setUnseenChangesChapter(null);
   applyOverviewToWorkspace(overview, { flowStatus: flowStatusForPaper(useDraftStore.getState()) });
 }

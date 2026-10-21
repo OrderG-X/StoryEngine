@@ -120,6 +120,15 @@
   .se-backup-edit-actions{display:flex;justify-content:flex-end;gap:8px;}
   .se-backup-last{margin:12px 0 0;font-size:13px;color:var(--muted);}
   .se-backup-last.is-bad{color:var(--danger);}
+  /* 「搜索」「关于」（P11）：和备份页一样一整块卡片底；外链用强调色。 */
+  :is(.se-search-settings, .se-about) .ms-display-list{gap:0;padding:4px 6px;border:1px solid var(--line);border-radius:12px;background:var(--surface);}
+  :is(.se-search-settings, .se-about) .ms-display-row{padding:14px 12px;}
+  :is(.se-search-settings, .se-about) .ms-display-row + .ms-display-row{border-top:1px solid var(--line-weak);border-radius:0;}
+  .se-search-settings .se-backup-edit{padding:0 12px 14px;}
+  .se-search-settings .se-backup-last{margin:0 12px 14px;}
+  :is(.se-search-settings, .se-about) a{color:var(--accent);text-decoration:none;}
+  :is(.se-search-settings, .se-about) a:hover{text-decoration:underline;}
+  .se-about a.ms-display-btn{display:inline-flex;align-items:center;}
   /* 「用量」（P10）：今天 / 本月两个数，近 30 天小柱，按书 / 功能 / 模型一行一个。 */
   .se-usage-top{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:12px;margin-bottom:6px;}
   .se-usage-stat{display:flex;flex-direction:column;gap:3px;padding:14px 16px 13px;border:1px solid var(--line-weak);border-radius:12px;background:var(--sunken);}

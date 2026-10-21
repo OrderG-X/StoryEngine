@@ -35,6 +35,15 @@ MINGIT_VERSION="2.49.1"
 MINGIT_SHA256="3934292e3467ef4402770a966190112950203b4f3be6d58c37e80bd85bce8ee9"
 MINGIT_URL="https://registry.npmmirror.com/-/binary/git-for-windows/v${MINGIT_VERSION}.windows.1/MinGit-${MINGIT_VERSION}-64-bit.zip"
 MINGIT_CACHE="/tmp/mingit-${MINGIT_VERSION}-64.zip"
+# Mac 随包 git（P11）：没装苹果开发者工具的 Mac 上系统 git 只是个壳，一调就弹「安装命令行工具」，
+# 存档 / 撤销整条链用不了。取 GitHub Desktop 用的 dugite-native（自包含、只依赖系统库），
+# 进包时只留 git 本体 + 模板（git 内建命令就够快照用，约 7MB；凭据管理器、git-lfs 等 140MB 不要）。
+# 官方 SHA-256 来自同一 release 的 .sha256 文件；npmmirror 没有这个镜像，国内拉不动可设 SE_MACGIT_URL。
+MACGIT_TAG="v2.53.0-4"
+MACGIT_ASSET="dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz"
+MACGIT_SHA256="f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe"
+MACGIT_URL="${SE_MACGIT_URL:-https://github.com/desktop/dugite-native/releases/download/${MACGIT_TAG}/${MACGIT_ASSET}}"
+MACGIT_CACHE="/tmp/${MACGIT_ASSET}"
 SECRET_BUNDLE_ACK="I_UNDERSTAND_KEYS_ARE_EXTRACTABLE"
 CLEAN_SECRET_PROBE=""
 BUILDER_CONFIG=""
@@ -183,21 +192,22 @@ file_sha256() {
   elif command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$f" | awk '{print $1}'
   else
-    echo "找不到 shasum 或 sha256sum，无法校验 MinGit 完整性" >&2
+    echo "找不到 shasum 或 sha256sum，无法校验随包 git 的完整性" >&2
     exit 1
   fi
 }
 
-verify_mingit_cache() {
-  local actual
-  if [ ! -s "$MINGIT_CACHE" ]; then
-    echo "MinGit 缓存不存在或为空：$MINGIT_CACHE" >&2
+# 用法：verify_vendor_cache <缓存文件> <期望 SHA-256> <名字>。下载后与复用缓存前都验——镜像 / 缓存污染都不能进包。
+verify_vendor_cache() {
+  local cache="$1" expected="$2" label="$3" actual
+  if [ ! -s "$cache" ]; then
+    echo "${label} 缓存不存在或为空：$cache" >&2
     exit 1
   fi
-  actual="$(file_sha256 "$MINGIT_CACHE")"
-  if [ "$actual" != "$MINGIT_SHA256" ]; then
-    rm -f "$MINGIT_CACHE"
-    echo "MinGit 哈希不匹配（期望 ${MINGIT_SHA256}，实际 ${actual}）。缓存可能被污染，已删除，请重跑构建重新下载。" >&2
+  actual="$(file_sha256 "$cache")"
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$cache"
+    echo "${label} 哈希不匹配（期望 ${expected}，实际 ${actual}）。缓存可能被污染，已删除，请重跑构建重新下载。" >&2
     exit 1
   fi
 }
@@ -363,12 +373,40 @@ if [ "$TARGET" = "--win" ]; then
   if [ ! -s "$MINGIT_CACHE" ]; then
     curl -fL --retry 3 -o "$MINGIT_CACHE" "$MINGIT_URL"
   fi
-  # 下载后与复用缓存前都验——镜像/缓存污染都不能进包
-  verify_mingit_cache
+  verify_vendor_cache "$MINGIT_CACHE" "$MINGIT_SHA256" "MinGit"
   mkdir -p "$STAGING/vendor/mingit"
   unzip -qo "$MINGIT_CACHE" -d "$STAGING/vendor/mingit"
   test -f "$STAGING/vendor/mingit/cmd/git.exe" || { echo "MinGit 解包异常：缺 cmd/git.exe" >&2; exit 1; }
+else
+  echo "③ 捆绑精简 git ${MACGIT_TAG}（Mac 快照/撤销不靠系统 git；官方 SHA-256 校验）…"
+  if [ ! -s "$MACGIT_CACHE" ]; then
+    curl -fL --retry 3 -o "$MACGIT_CACHE" "$MACGIT_URL"
+  fi
+  verify_vendor_cache "$MACGIT_CACHE" "$MACGIT_SHA256" "dugite-native git"
+  MACGIT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/se-macgit.XXXXXX")"
+  tar -xzf "$MACGIT_CACHE" -C "$MACGIT_TMP"
+  VENDOR_GIT="$STAGING/vendor/git"
+  mkdir -p "$VENDOR_GIT/bin" "$VENDOR_GIT/libexec/git-core" "$VENDOR_GIT/share/git-core"
+  cp "$MACGIT_TMP/bin/git" "$VENDOR_GIT/bin/git"
+  # git 跑子命令（gc 等）时先找 GIT_EXEC_PATH 下的 git；缺了会顺 PATH 摸到系统那个壳，所以这里也放一份。
+  cp "$MACGIT_TMP/bin/git" "$VENDOR_GIT/libexec/git-core/git"
+  cp -R "$MACGIT_TMP/share/git-core/templates" "$VENDOR_GIT/share/git-core/"
+  # git 是 GPLv2：原样随包、不改，附上源码去处。
+  cat > "$VENDOR_GIT/NOTICE.txt" <<NOTICE
+本目录是未经修改的 Git ${MACGIT_TAG}（dugite-native 构建，只取了 git 本体和模板），按 GNU GPL v2 授权。
+StoryEngine 只把它当独立程序调用来做存档和撤销。
+Git 源码：https://github.com/git/git
+构建脚本与对应源码：https://github.com/desktop/dugite-native/releases/tag/${MACGIT_TAG}
+GPL v2 全文：https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+NOTICE
+  rm -rf "$MACGIT_TMP"
+  "$VENDOR_GIT/bin/git" --version >/dev/null || { echo "精简 git 跑不起来：$VENDOR_GIT/bin/git" >&2; exit 1; }
 fi
+
+# 第三方许可清单（P11）：生产依赖 + 打进前端包的几个开发依赖；关于页和「帮助 → 第三方软件许可」打开它。
+UI_MODULES="$ROOT/packages/story-engine-ui/node_modules"
+node "$DESKTOP_DIR/gen-notices.mjs" "$STAGING/THIRD_PARTY_NOTICES.txt" "$STAGING/node_modules" \
+  "$UI_MODULES/class-variance-authority" "$UI_MODULES/clsx" "$UI_MODULES/lucide-react" "$UI_MODULES/tailwind-merge" "$UI_MODULES/tailwindcss"
 
 if [ "$WITH_PRESET" = "1" ]; then
   echo "⚠️  预置 key 将明文进包：请确认是专用低限额 key，内测结束后作废"

@@ -96,6 +96,21 @@ describe("project io asset helpers", () => {
     expect(states.some((c) => c.chapter === 4), "只在旧缓存里出现的章不算").toBe(false);
   });
 
+  it("P11：定稿后工作稿又改过才标 editedSinceCommit；一样的不标", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "story-engine-chapter-edited-"));
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(defaultCommittedChapterPath(projectDir, 1), "# 一\n\n定稿正文。", "utf-8");
+    await writeFile(defaultDraftPath(projectDir, 1), "# 一\n\n定稿正文。", "utf-8");
+    await writeFile(defaultCommittedChapterPath(projectDir, 2), "# 二\n\n定稿正文。", "utf-8");
+    await writeFile(defaultDraftPath(projectDir, 2), "# 二\n\n定稿后又改了一句。", "utf-8");
+
+    const states = await readUiChapterFileStates(projectDir);
+
+    expect(states.find((c) => c.chapter === 1)?.editedSinceCommit).toBeUndefined();
+    expect(states.find((c) => c.chapter === 2)).toMatchObject({ hasCommittedChapter: true, editedSinceCommit: true });
+  });
+
 });
 
 describe("readWorkspaceMessages 存盘不丢卡（2026-10-10）", () => {

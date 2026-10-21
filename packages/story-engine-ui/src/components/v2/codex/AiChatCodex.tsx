@@ -48,7 +48,7 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
-import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
@@ -259,7 +259,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   useEffect(() => setOtherChaptersOpen(false), [viewingChapter]);
   const chapterView = chapterTurns(messages.slice(activeArchivedCount), viewingChapter);
   // 头部模型小标签（读当前默认模型；设置弹窗开关时重读）。
-  const activeModel = useActiveModel(props.modelRefreshKey ?? 0);
+  const { info: activeModel, setupStep } = useActiveModel(props.modelRefreshKey ?? 0);
   // 有动作在跑（聊天回包 / 出稿 / 预览 / 工作台写操作）＝「动作进行中」：先于下面的钩子算好，
   // 传给 useReaderCatchUp——动作等回包期间即使补读没在读也按 5 秒轮询（R6.2），「（核账在等它读完）」一出来就能看到。
   const workspaceBusy = Boolean(
@@ -385,6 +385,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
+  // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
+  const undoableCommitId = undoableCommitReportMessageId(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -411,7 +413,12 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 头部一行（P6）：会话名（点开历史，清空、记忆上限也在那里）+ 新建 + 模型 + 收起 ── */}
       <div className="ai-head se-ai-head">
         <ChatSessionBar {...(canClear && props.onClearChat ? { onClear: props.onClearChat } : {})} />
-        {activeModel ? (
+        {setupStep ? (
+          <button type="button" className="se-model-chip" title="还没接上 AI（点开模型设置）" onClick={() => props.onOpenModelSettings?.()}>
+            <span className="se-dot warn" aria-hidden="true" />
+            <span className="se-model-name">没接 AI</span>
+          </button>
+        ) : activeModel ? (
           <button
             type="button"
             className="se-model-chip"
@@ -426,6 +433,21 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           <IconClose size={16} />
         </button>
       </div>
+
+      {/* ── 还没接上 AI（P11）：新用户第一次打开就在这儿说清楚，别等点了按钮才报错 ── */}
+      {setupStep ? (
+        <section className="se-setup-card" aria-label="还没接上 AI">
+          <div className="se-setup-main">
+            <h3 className="se-setup-title">{setupStep === "connect" ? "先接上 AI" : "还差一步：选个模型"}</h3>
+            <p className="se-setup-text">
+              {setupStep === "connect"
+                ? "选一家服务商、填上密钥，大约两分钟。不接也能自己写、建设定卡、导出。"
+                : "服务商接好了。在模型设置里测一下连接、点一个模型，所有功能就都用它。"}
+            </p>
+          </div>
+          <button type="button" className="se-setup-btn" onClick={() => props.onOpenModelSettings?.()}>{setupStep === "connect" ? "去接上" : "去选"}</button>
+        </section>
+      ) : null}
 
       {/* ── 顶卡（P6）：这一章还差什么 + 一个主按钮；下面一行小字是编辑部读前文、不急的事 ── */}
       <ChapterTodoCard
@@ -520,6 +542,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             message={message}
             chatLoading={workspaceBusy}
             isLiveAssistant={isLiveAssistant}
+            {...(props.onOpenModelSettings ? { onOpenSettings: props.onOpenModelSettings } : {})}
             onUndoToHere={props.onUndoToTurn ? () => props.onUndoToTurn?.(message) : undefined}
             onPrefillComposer={prefillComposer}
             liveOperation={index === all.length - 1 ? operationCaption(props.draftActionLoading) : null}
@@ -533,6 +556,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSendUserAction={props.onSendUserAction}
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={message.id === confirmablePreviewId}
+            commitUndoable={message.id === undoableCommitId}
             projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
@@ -775,10 +799,12 @@ function MessageBubbles({
   onSendUserAction,
   onSuggestedAction,
   commitConfirmable = false,
+  commitUndoable = false,
   onPrefillComposer,
   liveOperation = null,
   isLatestMessage = true,
   projectPath = null,
+  onOpenSettings,
 }: {
   readonly message: ChapterMessage;
   readonly chatLoading: boolean;
@@ -798,6 +824,8 @@ function MessageBubbles({
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
   readonly commitConfirmable?: boolean;
+  /** 本条的定稿回执是否挂「撤销这次定稿」（最近一次改动就是这次定稿才挂）。 */
+  readonly commitUndoable?: boolean;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
   /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
@@ -806,6 +834,8 @@ function MessageBubbles({
   readonly isLatestMessage?: boolean;
   /** 当前书目录（核账卡「不是问题」存盘用）。 */
   readonly projectPath?: string | null;
+  /** 出错卡的「去设置」（没接上 AI、密钥不对时）。 */
+  readonly onOpenSettings?: () => void;
 }) {
   if (message.role === "system") {
     // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
@@ -842,6 +872,8 @@ function MessageBubbles({
       <div className="msg msg-ai">
         <AgentErrorCard
           detail={errorCard.detail || message.content}
+          {...(errorCard.reason ? { reason: errorCard.reason } : {})}
+          {...(onOpenSettings ? { onOpenSettings } : {})}
           retryAction={isLatestMessage ? retry : null}
           chatLoading={chatLoading}
           onRetry={onSuggestedAction}
@@ -952,7 +984,7 @@ function MessageBubbles({
           <CommitDeltaCard
             key={card.type}
             report={card.report}
-            onUndo={canUndo ? onUndoToHere : undefined}
+            onUndo={canUndo && commitUndoable ? onUndoToHere : undefined}
             undoDisabled={chatLoading}
           />
         );

@@ -12,6 +12,8 @@ import { downloadBookBackup, fetchBookStats, fetchShelfMeta, fetchTrash, restore
 import { BookInfoDialog } from "./shelf/BookInfoDialog.js";
 import { addReturnedBook } from "../../utils/refreshBookLibrary.js";
 import { toneOf } from "../../lib/tone.js";
+import { useNavigationStore } from "../../stores/navigationStore.js";
+import { useActiveModel } from "./codex/useActiveModel.js";
 import "./home.css";
 
 const PLACEHOLDER_PROTAGONIST_NAMES = new Set(["主角", "未命名", "待定", "无"]);
@@ -99,6 +101,9 @@ export default function HomeLanding({
   const [heroStats, setHeroStats] = useState<{ readonly stats: WordStats; readonly dailyGoal?: number } | null>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
+  // 还没接上 AI（P11）：书架顶上说一句；设置弹窗关上后重读。
+  const settingsOpen = useNavigationStore((s) => s.settingsOpen);
+  const { setupStep } = useActiveModel(settingsOpen);
   const activeBooks = recentBooks.filter((book) => !meta[book.projectPath]?.archived);
   const archivedBooks = recentBooks.filter((book) => meta[book.projectPath]?.archived);
   const lastBook = activeBooks[0];
@@ -221,6 +226,15 @@ export default function HomeLanding({
               <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
             </div>
           </div>
+
+          {setupStep ? (
+            <div className="se-home-setup" role="note">
+              {setupStep === "connect"
+                ? <span><b>AI 还没接上。</b>自己写、导入、导出都能用；要 AI 帮你记账、核账，先接一家服务商。</span>
+                : <span><b>还差一步：选个模型。</b>服务商接好了，在模型设置里点一个模型就能用。</span>}
+              <button className="se-btn primary" onClick={onOpenSettings} type="button">{setupStep === "connect" ? "去接上" : "去选"}</button>
+            </div>
+          ) : null}
 
           {lastBook ? (
             <section className="se-hero" aria-label="继续上次写作">

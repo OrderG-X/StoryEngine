@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterNavItem } from "../types.js";
-import { carryChapterFileFlags, keepUnlistedChapters } from "./bookUtils.js";
+import { carryChapterFileFlags, keepUnlistedChapters, patchChapterFlagsFromPaper } from "./bookUtils.js";
 
 const item = (chapterNumber: number, extra: Partial<ChapterNavItem> = {}): ChapterNavItem => ({
   id: `ch-${chapterNumber}`,
@@ -68,5 +68,24 @@ describe("keepUnlistedChapters", () => {
   it("新表全覆盖了：原样返回", () => {
     const next = [item(1), item(2, { status: "current" })];
     expect(keepUnlistedChapters(next, [item(1), item(2)])).toBe(next);
+  });
+});
+
+describe("patchChapterFlagsFromPaper（P11：AI 改了别的章，按盘上改它的标记）", () => {
+  const ch = (chapterNumber: number, status: ChapterNavItem["status"], extra: Partial<ChapterNavItem> = {}): ChapterNavItem => ({
+    id: `ch-${chapterNumber}`, chapterNumber, title: `第${chapterNumber}章`, status, ...extra,
+  });
+
+  it("已定稿章的工作稿被改过 → 标上「定稿后又改过」；别的章不动", () => {
+    const before = [ch(1, "committed", { hasCommittedChapter: true }), ch(2, "current")];
+    const after = patchChapterFlagsFromPaper(before, 1, { draft: {}, committed: {}, editedSinceCommit: true });
+    expect(after[0]).toMatchObject({ status: "committed", hasDraftFile: true, hasCommittedChapter: true, editedSinceCommit: true });
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("还没写的占位章被写了 → 变工作稿；当前章保持 current", () => {
+    const after = patchChapterFlagsFromPaper([ch(3, "planned"), ch(4, "current")], 3, { draft: {}, committed: null, editedSinceCommit: null });
+    expect(after[0]).toMatchObject({ status: "draft", hasDraftFile: true, hasCommittedChapter: false, editedSinceCommit: false });
+    expect(patchChapterFlagsFromPaper([ch(4, "current")], 4, { draft: {}, committed: {}, editedSinceCommit: false })[0]?.status).toBe("current");
   });
 });

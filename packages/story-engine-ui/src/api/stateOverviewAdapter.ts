@@ -87,6 +87,7 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
+        editedSinceCommit: fileState.editedSinceCommit === true,
       } : {}),
     });
   }
@@ -100,6 +101,7 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
       status: chapterStatusFromFileState(fileState.chapter, currentChapterNumber, fileState, existing?.status ?? "planned"),
       hasDraftFile: fileState.hasDraftFile,
       hasCommittedChapter: fileState.hasCommittedChapter,
+      editedSinceCommit: fileState.editedSinceCommit === true,
     });
   }
 
@@ -114,6 +116,7 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
+        editedSinceCommit: fileState.editedSinceCommit === true,
       } : {}),
     });
   }
@@ -128,6 +131,7 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
+        editedSinceCommit: fileState.editedSinceCommit === true,
       } : {}),
     });
   }

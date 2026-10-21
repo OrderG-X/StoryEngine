@@ -15,6 +15,8 @@ files:
   - "**/*"
   # 单测文件不进包（node --test 只在工作区跑）。
   - "!*.test.mjs"
+  # 构建期工具（生成第三方许可清单），不进包。
+  - "!gen-notices.mjs"
   # 默认配置是无密钥包；预置模式由 build-desktop.sh 生成一次性配置显式移除此排除项。
   - "!preset-model-config/**"
 

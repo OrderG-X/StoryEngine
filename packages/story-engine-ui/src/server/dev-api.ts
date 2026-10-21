@@ -8,6 +8,8 @@ import type { MiddlewareStack } from "./lib/project-io.js";
 import { createSecurityGate } from "./lib/request-guard.js";
 import { runInUsageScope } from "./lib/usage-scope.js";
 import { registerUsageRoutes } from "./routes/usage.js";
+import { registerSearchSettingsRoutes } from "./routes/search-settings.js";
+import { registerAboutRoutes } from "./routes/about.js";
 import { registerStateOverviewRoutes } from "./routes/state-overview.js";
 import { registerReaderProgressRoutes } from "./routes/reader-progress.js";
 import { registerDraftRoutes } from "./routes/draft.js";
@@ -50,6 +52,8 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerBookMetaRoutes(router);
   registerModelSettingsRoutes(router);
   registerUsageRoutes(router);
+  registerSearchSettingsRoutes(router);
+  registerAboutRoutes(router);
   registerWorkingDraftRoutes(router);
   registerChatSessionsRoutes(router);
   registerSnapshotsRoutes(router);

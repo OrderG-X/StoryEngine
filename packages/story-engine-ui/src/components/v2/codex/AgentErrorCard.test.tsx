@@ -54,4 +54,20 @@ describe("AgentErrorCard P0-1", () => {
     rerender(<AgentErrorCard retryAction={retryAction} onRetry={onRetry} chatLoading />);
     expect(screen.getByRole("button", { name: "重试这一步" })).toBeDisabled();
   });
+
+  it("P11：按原因说人话；没接上 / 密钥不对给「去设置」，重试降为次要", () => {
+    const onOpenSettings = vi.fn();
+    render(<AgentErrorCard reason="auth" retryAction={retryAction} onRetry={vi.fn()} onOpenSettings={onOpenSettings} />);
+    expect(screen.getByText(agentErrorFriendlyBody("auth"))).toBeTruthy();
+    expect(agentErrorFriendlyBody("auth")).toContain("密钥");
+    fireEvent.click(screen.getByRole("button", { name: "去设置" }));
+    expect(onOpenSettings).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重试这一步" }).className).toBe("aec-detail-toggle");
+  });
+
+  it("P11：网络 / 欠费这类不给「去设置」", () => {
+    render(<AgentErrorCard reason="network" retryAction={retryAction} onRetry={vi.fn()} onOpenSettings={vi.fn()} />);
+    expect(screen.getByText(agentErrorFriendlyBody("network"))).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "去设置" })).toBeNull();
+  });
 });

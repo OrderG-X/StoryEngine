@@ -16,3 +16,17 @@ export function confirmableCommitPreviewMessageId(messages: readonly ChapterMess
   }
   return null;
 }
+
+/**
+ * 「撤销这次定稿」按钮挂在哪张定稿回执卡上（P11，纯函数）：只挂最近一次改动就是定稿的那张——
+ * 从后往前扫，先遇到的「这轮改过东西」（有存档点）的消息若带定稿回执就是它；之后又改过别的（含 AI 撤销），
+ * 旧回执就不再给按钮（要退更早的，用「撤销到此」或操作历史）。
+ */
+export function undoableCommitReportMessageId(messages: readonly ChapterMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant" || (message.turnSnapshots?.length ?? 0) === 0) continue;
+    return hasCard(message, "commit-report") ? message.id : null;
+  }
+  return null;
+}

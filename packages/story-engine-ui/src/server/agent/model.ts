@@ -17,6 +17,7 @@ import {
 import { thinkingRequestParams, type ThinkingDialect } from "../lib/model-capabilities.js";
 import { recordAgentFallback, recordTurnNotice } from "../lib/token-meter.js";
 import { modelNeedsMfjs, sanitizeRequestToolSchemas } from "../lib/strict-tool-schema.js";
+import { UpstreamSilentError } from "../lib/ai-errors.js";
 
 /** 从 fetch 入参抠请求 URL 的 host（能力键的一半；string/URL/Request 三种形态都接，抠不出 → ""）。 */
 function requestHost(input: RequestInfo | URL): string {
@@ -100,7 +101,7 @@ export function withUpstreamSilenceGuard(
       const onCallerAbort = () => controller.abort(callerSignal?.reason);
       callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
       let silent = false;
-      let timer = setTimeout(() => { silent = true; controller.abort(new Error(`上游 ${Math.round(idleMs / 1000)} 秒没有任何响应`)); }, idleMs);
+      let timer = setTimeout(() => { silent = true; controller.abort(new UpstreamSilentError(`上游 ${Math.round(idleMs / 1000)} 秒没有任何响应`)); }, idleMs);
       const unref = (t: ReturnType<typeof setTimeout>) => (t as unknown as { unref?: () => void }).unref?.();
       unref(timer);
       try {
@@ -116,7 +117,7 @@ export function withUpstreamSilenceGuard(
         const kick = () => {
           clearTimeout(timer);
           timer = setTimeout(() => {
-            const stalled = new Error(`上游流式输出中断：${Math.round(idleMs / 1000)} 秒没有新内容`);
+            const stalled = new UpstreamSilentError(`上游流式输出中断：${Math.round(idleMs / 1000)} 秒没有新内容`);
             controller.abort(stalled);
             reader.cancel(stalled).catch(() => undefined);
             try { output?.error(stalled); } catch { /* 已关闭 */ }

@@ -14,6 +14,8 @@ import { recordUsage } from "./usage-ledger.js";
 import { resolveGlobalDataDir } from "./data-dirs.js";
 import { engineProfileFallback, readTaskAssignments, resolveTaskProfileId, resolveTaskThinking } from "./task-assignments.js";
 import { resolveThinkingDialect, thinkingRequestParams, type ThinkingDialect } from "./model-capabilities.js";
+import { ModelHttpError, ModelSetupError } from "./ai-errors.js";
+import { TASK_LABELS } from "../../components/ModelSettingsDialogTypes.js";
 
 // 旁路文件损坏只警告一次（resolveConfiguredChatModel 每次请求都读，避免刷屏）；恢复正常后重置，再坏再警告。
 let taskAssignmentsCorruptWarned = false;
@@ -207,11 +209,11 @@ async function resolveProfileModel(
 ): Promise<ResolvedChatModel> {
   const provider = settings.summary.providers.find((item) => item.id === profile.provider);
   if (!provider) {
-    throw new Error(`Profile ${profile.id} 引用了不存在的 Provider：${profile.provider}`);
+    throw new ModelSetupError(`模型「${profile.label || profile.model || profile.id}」用的服务商不见了（可能删掉了），去 设置 → 模型 重新选一个。`);
   }
   const apiKey = await resolveProviderApiKey(provider);
   if (provider.apiKeyStatus === "missing" && !apiKey) {
-    throw new Error(`API Key 未设置。请设置环境变量 ${provider.apiKeyEnv}。`);
+    throw new ModelSetupError(`「${provider.label || provider.id}」还没填密钥，去 设置 → 模型 填上就能用。`);
   }
   return {
     provider,
@@ -239,14 +241,14 @@ export async function resolveFallbackChatModel(): Promise<ResolvedChatModel | un
 async function resolveFallbackFrom(settings: ModelSettingsLoadResult, profileId: string | undefined): Promise<ResolvedChatModel | undefined> {
   if (!profileId) return undefined;
   const profile = settings.summary.profiles.find((item) => item.id === profileId);
-  if (!profile) throw new Error(`备用模型的档案「${profileId}」不存在（可能已删除或改名），请在设置里重新选备用模型。`);
+  if (!profile) throw new ModelSetupError(`备用模型的档案「${profileId}」不存在（可能已删除或改名），请在设置里重新选备用模型。`);
   return resolveProfileModel(settings, profile, true);
 }
 
 export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Promise<ResolvedChatModel> {
   const settings = await loadGlobalModelSettings();
   if (!settings.available) {
-    throw new Error("模型设置未配置。请先在设置中配置 Provider 和任务模型。");
+    throw new ModelSetupError("还没接上 AI：去 设置 → 模型 接一家服务商、填上密钥就能用。");
   }
   // 任务→{档案,思考} 存 UI 旁路 task-assignments.json（引擎零改）。profileId 解析顺序：
   // 旁路 → engineProfileFallback（与面板展示同口径）→ defaultProfile → 第一个。thinking 默认开。
@@ -263,13 +265,13 @@ export async function resolveConfiguredChatModel(task: ModelTaskProfileKey): Pro
   const profile = settings.summary.profiles.find((item) => item.id === profileId);
   if (!profile) {
     if (explicitProfileId && profileId === explicitProfileId) {
-      throw new Error(
-        `任务「${task}」指定的模型档案「${explicitProfileId}」不存在（可能已删除或改名）。` +
-          `请在设置中重新为该任务选择模型。`,
+      throw new ModelSetupError(
+        `「${TASK_LABELS[task] ?? task}」指定的模型档案「${explicitProfileId}」不存在（可能已删除或改名）。` +
+          `请在设置中重新为它选择模型。`,
       );
     }
-    throw new Error(
-      `任务「${task}」未解析到有效的模型 profile（解析结果：「${profileId ?? "空"}」）。请在设置中检查该任务的模型分配。`,
+    throw new ModelSetupError(
+      `「${TASK_LABELS[task] ?? task}」没找到能用的模型（解析结果：「${profileId ?? "空"}」）。请在设置中检查它用哪个模型。`,
     );
   }
   const primary = await resolveProfileModel(settings, profile, resolveTaskThinking(assignments, task));
@@ -937,10 +939,10 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
           await learnAlwaysOnThinkingModel(input.configured.provider.baseUrl, input.configured.profile.model);
         } else {
           const retryErrorText = await response.text().catch(() => "");
-          throw new Error(`模型请求失败：${response.status} ${retryErrorText.slice(0, 300)}`);
+          throw new ModelHttpError(`模型请求失败：${response.status} ${retryErrorText.slice(0, 300)}`, response.status);
         }
       } else {
-        throw new Error(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`);
+        throw new ModelHttpError(`模型请求失败：${response.status} ${errorText.slice(0, 300)}`, response.status);
       }
     }
     const { content, thinking, finishReason, usage } = await streamOpenAICompatibleResponse(

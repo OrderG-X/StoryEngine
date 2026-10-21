@@ -104,6 +104,11 @@ type ChapterRow =
   | { readonly kind: "chapter"; readonly ch: ChapterNavItem };
 
 /** 章节列表行：新章在上；不搜索时每 10 章插一个分组标题（第 51–58 章），搜索时平铺。 */
+/** 这章还要定稿：工作稿章，或已定稿、但工作稿定稿后又改过。 */
+export function needsCommit(chapter: ChapterNavItem): boolean {
+  return chapter.status === "draft" || (chapter.status === "committed" && chapter.editedSinceCommit === true);
+}
+
 /** 章节栏底部那一行：还有工作稿没定稿 / 全部已定稿 / 一章都没定稿（新书别说「全部已定稿」，P7 桌面包走查）。 */
 export function chapterFootStatus(draftCount: number, committedCount: number): { readonly dot: "warn" | "ok" | ""; readonly text: string } {
   if (draftCount > 0) return { dot: "warn", text: `${draftCount} 章工作稿还没定稿` };
@@ -374,7 +379,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const paletteChapters = chapters.map((ch) => (ch.id === currentId && currentStage && currentStage !== "empty"
     ? { ...ch, status: currentIsDraft ? "draft" as const : "committed" as const }
     : ch));
-  const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && ch.status === "draft").length + (currentIsDraft ? 1 : 0);
+  // 别的章：工作稿章，和定稿后工作稿又改过的章（P11：AI 改了别的已定稿章，不用切过去才算上）。
+  const draftChapterCount = chapters.filter((ch) => ch.id !== currentId && needsCommit(ch)).length + (currentIsDraft ? 1 : 0);
   const chapterFoot = chapterFootStatus(draftChapterCount, chapters.filter((ch) => ch.status === "committed" || ch.hasCommittedChapter).length);
   // 「写第 N 章」：最新一章已定稿时才出（还有工作稿没定稿就先别开新章）。
   const latestReal = [...chapters].filter((ch) => ch.status !== "planned").sort((a, b) => b.chapterNumber - a.chapterNumber)[0];
@@ -633,7 +639,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         className={`se-ch${row.ch.id === currentId ? " on" : ""}`}
                         disabled={workspaceBusy}
                         aria-current={row.ch.id === currentId ? "page" : undefined}
-                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentLabel ?? CHAPTER_STATUS_LABEL[row.ch.status]) : CHAPTER_STATUS_LABEL[row.ch.status]}`}
+                        title={workspaceBusy ? "写作操作进行中，暂不能切换章节" : `${chapterHeading(row.ch.chapterNumber, row.ch.title ?? "")} · ${row.ch.id === currentId ? (currentLabel ?? CHAPTER_STATUS_LABEL[row.ch.status]) : row.ch.status === "committed" && row.ch.editedSinceCommit ? "定稿后又改过" : CHAPTER_STATUS_LABEL[row.ch.status]}`}
                         onClick={() => {
                           if (workspaceBusy) {
                             useNavigationStore.getState().showToast("写作操作正在进行，请等本次操作结束后再切换章节。", 4600);
@@ -646,7 +652,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                       >
                         <span className="se-ch-n">{row.ch.chapterNumber}</span>
                         <span className={`se-ch-t${chapterDisplayTitle(row.ch.title ?? "") && row.ch.status !== "planned" ? "" : " untitled"}`}>{chapterDisplayTitle(row.ch.title ?? "") || "未命名"}</span>
-                        <span className={`se-dot ${row.ch.id === currentId ? (currentIsDraft ? "warn" : "") : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
+                        <span className={`se-dot ${row.ch.id === currentId ? (currentIsDraft ? "warn" : "") : needsCommit(row.ch) ? "warn" : CHAPTER_STATUS_DOT[row.ch.status]}`} aria-hidden="true" />
                       </button>
                     ))}
                     {visibleChapters.length === 0 ? (
