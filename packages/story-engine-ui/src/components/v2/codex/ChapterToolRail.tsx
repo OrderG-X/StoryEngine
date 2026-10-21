@@ -19,7 +19,7 @@ export interface ChapterToolAction {
 }
 
 export const BEFORE_DRAFT: readonly ChapterToolAction[] = [
-  { key: "draft", label: "写这一章", intent: "写这一章的正文（方向框里写了方向就照方向写）", button: "write" },
+  { key: "draft", label: "AI 写这一章", intent: "写这一章的正文（方向框里写了方向就照方向写）", button: "write" },
   { key: "steer", label: "先给方案", intent: "先给这一章一个写作方案，先别直接出正文" },
 ];
 
@@ -33,7 +33,7 @@ export const HAS_DRAFT: readonly ChapterToolAction[] = [
 ];
 
 export const COMMITTED: readonly ChapterToolAction[] = [
-  { key: "next", label: "写下一章", intent: "写下一章的正文", button: "write_next" },
+  { key: "next", label: "AI 写下一章", intent: "写下一章的正文", button: "write_next" },
 ];
 
 /**

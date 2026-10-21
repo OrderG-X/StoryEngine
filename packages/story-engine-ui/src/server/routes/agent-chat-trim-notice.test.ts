@@ -1,6 +1,6 @@
 // @vitest-environment node
 //
-// R7.7·报告 4.6：「这次只带上最近 12 条对话…」提示——同一本书（会话）只发一次，不再每回合都弹。
+// R7.7·报告 4.6：「AI 这次只看最近 12 条对话…」提示——同一本书（会话）只发一次，不再每回合都弹。
 // 路由级：真 handler + 假 agent 流；第一回合带 status 事件，第二回合（同一本书）不再带；换一本书各自有一次。
 import { EventEmitter } from "node:events";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -68,7 +68,7 @@ describe("agent-chat route：历史裁剪提示只发一次（R7.7）", () => {
     const first = await runChatTurn(projectDir, longHistory);
     const statusFirst = first.filter((e) => e.event === "status");
     expect(statusFirst).toHaveLength(1);
-    expect(String(statusFirst[0]!.data.message)).toContain("只带上最近 12 条对话");
+    expect(String(statusFirst[0]!.data.message)).toContain("AI 这次只看最近 12 条对话");
 
     const second = await runChatTurn(projectDir, [...longHistory, { role: "assistant", content: "好的。" }]);
     expect(second.filter((e) => e.event === "status")).toHaveLength(0);

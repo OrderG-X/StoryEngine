@@ -110,6 +110,8 @@ export function AiServiceManager({ savedProviders, onSelect }: AiServiceManagerP
 
       {catalogOpen ? (
       <>
+      {/* 二十几家摆出来，新作者不知道挑哪家（2026-10-22 好上手走查）：一句怎么挑，不点名推荐。 */}
+      <p className="asm-pick-hint">有哪家的账号就选哪家。都还没有：任选一家注册，在它的控制台建一个 API 密钥，回来点它贴上。模型跑在自己电脑上的，选「本地 / 自部署」。</p>
       {/* 搜索 */}
       <div className="asm-search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>

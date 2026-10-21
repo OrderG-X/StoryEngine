@@ -231,11 +231,14 @@ export default function HomeLanding({
               <h1>书架</h1>
               <p>{recentBooks.length > 0 ? `${recentBooks.length} 本书` : "还没有书"}</p>
             </div>
-            <div className="se-home-actions">
-              <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
-              <button className="se-btn ghost" onClick={() => setDialog("import")} type="button">导入已写的书</button>
-              <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
-            </div>
+            {/* 空书架：三个按钮只在下面「从一本新书开始」里出一次（2026-10-22 好上手走查：首屏同一组按钮出了两遍、外加一段空态说明）。 */}
+            {recentBooks.length > 0 ? (
+              <div className="se-home-actions">
+                <button className="se-btn ghost" onClick={() => setDialog("open")} title="打开别处的 StoryEngine 书（比如从别的电脑拷来的书文件夹）" type="button">打开书文件夹</button>
+                <button className="se-btn ghost" onClick={() => setDialog("import")} title="把写好的 txt / md 拉进来，按章切开" type="button">导入已写的书</button>
+                <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
+              </div>
+            ) : null}
           </div>
 
           {setupStep ? (
@@ -278,16 +281,18 @@ export default function HomeLanding({
             <section className="se-hero is-empty" aria-label="开始">
               <div className="se-hero-info">
                 <h2>从一本新书开始</h2>
-                <p className="se-hero-meta"><span>起个名字、用一句话说说想写什么，AI 会帮你把开头的设定搭起来。也可以打开已有的 StoryEngine 项目。</span></p>
+                <p className="se-hero-meta"><span>起个名字就能开写，AI 在旁边帮你记人物、记事、查前后对不对得上。已经写了一部分？点「导入已写的书」，把 txt 拉进来接着写。</span></p>
                 <div className="se-hero-actions">
                   <button className="se-btn primary" onClick={() => setDialog("create")} type="button">新建一本书</button>
-                  <button className="se-btn ghost" onClick={() => setDialog("import")} type="button">导入已写的书</button>
-                  <button className="se-btn ghost" onClick={() => setDialog("open")} type="button">打开已有书籍</button>
+                  <button className="se-btn ghost" onClick={() => setDialog("import")} title="把写好的 txt / md 拉进来，按章切开" type="button">导入已写的书</button>
+                  <button className="se-btn ghost" onClick={() => setDialog("open")} title="打开别处的 StoryEngine 书（比如从别的电脑拷来的书文件夹）" type="button">打开书文件夹</button>
                 </div>
               </div>
             </section>
           )}
 
+          {/* 一本书都没有：上面「从一本新书开始」已经说了怎么办，这里不再放一块空的「全部书」；只在有提示（如刚删了最后一本）时出。 */}
+          {recentBooks.length > 0 || feedbackMessage ? (
           <section aria-label="最近写作" className="se-shelf-section">
             <header>
               <h2>全部书</h2>
@@ -303,12 +308,7 @@ export default function HomeLanding({
                 </div>
               ) : null}
             </header>
-            {recentBooks.length === 0 ? (
-              <div className="se-shelf-empty">
-                <strong>还没有最近写作</strong>
-                <p>可以新建一本书，或打开已有项目。</p>
-              </div>
-            ) : visibleBooks.length === 0 ? (
+            {recentBooks.length === 0 ? null : visibleBooks.length === 0 ? (
               <div className="se-shelf-empty">
                 <p>{query ? `没找到「${query.trim()}」。${archivedHits > 0 ? `已归档里有 ${archivedHits} 本。` : ""}` : "书都归档了。"}</p>
               </div>
@@ -320,6 +320,7 @@ export default function HomeLanding({
               </div>
             )}
           </section>
+          ) : null}
 
           {archivedBooks.length > 0 ? (
             <section aria-label="已归档" className="se-shelf-section is-archived">

@@ -562,8 +562,9 @@ async function handleAgentChat(
     if (droppedHistoryCount > 0 && shouldSendHistoryTrimNoticeOnce(projectDir)) {
       sendEvent("status", {
         message:
-          `这次只带上最近 ${messages.length} 条对话给 AI，更早的 ${droppedHistoryCount} 条它看不到；设定本不受影响。` +
-          "前面说过的安排要用到的话，请再说一遍。",
+          // 2026-10-22 好上手走查：原话「前面说过的安排…请再说一遍」让新作者以为前面聊的都丢了；设定本、写好的章 AI 照样读得到。
+          `聊得多了，AI 这次只看最近 ${messages.length} 条对话；设定本和写好的章它照样读得到。` +
+          "更早聊过、没记进设定本的安排，用到时再提一句。",
       });
     }
 

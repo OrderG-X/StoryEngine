@@ -37,7 +37,7 @@ describe("头脑风暴面板（稿纸上方，重构 P6 草图 ⑤）", () => {
     fireEvent.click(screen.getByRole("button", { name: "给我几种走法" }));
     expect(onAction).toHaveBeenCalledWith({ toolName: "brainstorm_chapter", chapter: 12, idea: "让老周开口" });
     rerender(<BrainstormPanel chapter={12} draftEmpty hidden={false} busy onAction={onAction} />);
-    expect(screen.getByText(/章纲员在读前文想走法/u)).toBeTruthy();
+    expect(screen.getByText(/AI 在想几种走法/u)).toBeTruthy();
     rerender(<BrainstormPanel chapter={12} draftEmpty={false} hidden={false} busy={false} onAction={onAction} />);
     expect(screen.queryByRole("region", { name: "往哪走" })).toBeNull();
   });

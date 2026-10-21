@@ -263,7 +263,7 @@ export function commitApplyNextSteps(
       question: `第 ${chapter} 章定稿了，接下来？`,
       choices: [
         {
-          label: `写第 ${nextDraftChapter} 章`,
+          label: `AI 写第 ${nextDraftChapter} 章`,
           intent: `继续写第 ${nextDraftChapter} 章的正文`,
           recommended: true,
           action: { toolName: "generate_draft", chapter: nextDraftChapter },
@@ -502,7 +502,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
             action: { toolName: "check_continuity", chapter: action.chapter },
           },
           {
-            label: "先写下一章",
+            label: "先让 AI 写下一章",
             intent: "继续写下一章的正文",
             action: { toolName: "generate_draft", chapter: nextDraftChapter },
           },
@@ -540,7 +540,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
         action: { toolName: "commit_preview", chapter: action.chapter },
       },
       {
-        label: "写下一章",
+        label: "AI 写下一章",
         intent: "继续写下一章的正文",
         // 写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
         action: { toolName: "generate_draft", chapter: await resolveNextDraftChapter(args.projectDir, action.chapter) },
@@ -928,7 +928,7 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "generate_draft", error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章没写成：${message}。原来的稿子没动，可以再点一次「写这一章」。`);
+    emitText(`第 ${action.chapter} 章没写成：${message}。原来的稿子没动，可以再点一次「AI 写这一章」。`);
     const rest = args.scrubber.flush();
     if (rest) args.sendEvent("text-delta", { text: rest });
     return;

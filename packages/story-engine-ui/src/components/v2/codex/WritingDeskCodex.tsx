@@ -93,6 +93,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   readonly onOpenCharacter?: (name: string) => void;
   /** 选区浮动条「问 AI」：把选中段引用进右侧输入框。 */
   readonly onAskAboutSelection?: (selectionText: string) => void;
+  /** 新书起步按钮：把半句话填进右侧输入框（不发送）。 */
+  readonly onFillComposer?: (text: string) => void;
   /** 按章号打开一章（已定稿时工具条的「去第 N 章」）。 */
   readonly onOpenChapter?: (chapter: number) => void;
 }) {
@@ -116,6 +118,11 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
   const [authorStarted, setAuthorStarted] = useState(false);
   const showStarter = isStarterEmptyWorkspace({ draft, chapters: props.workspace.chapters }) && !authorStarted;
+  // 「自己动笔写」：收起引导、光标直接落进稿纸（不然还得再找地方点一下）。
+  function startWriting() {
+    setAuthorStarted(true);
+    window.setTimeout(() => document.querySelector<HTMLElement>(".codex-app .se-v2-draft-editor")?.focus(), 60);
+  }
   const paperDraft = draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
   const targetWords = targetChapterWordsOf(props.overview);
@@ -219,7 +226,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
               <h2 className="cd-starter-title">从一句话开始</h2>
               <p className="cd-starter-sub">直接在稿纸上写，AI 帮你记人物、东西、伏笔，查前后对不对得上。也可以先跟 AI 聊聊。</p>
               <div className="cd-starter-actions" role="group" aria-label="起步意图">
-                <button type="button" className="cd-starter-btn" onClick={() => setAuthorStarted(true)}>
+                <button type="button" className="cd-starter-btn" onClick={startWriting}>
                   自己动笔写
                 </button>
                 {STARTER_INTENTS.map((item) => (
@@ -227,8 +234,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
                     key={item.key}
                     type="button"
                     className="cd-starter-btn is-ghost"
-                    disabled={workspaceBusy || !props.onSendMessage}
-                    onClick={() => props.onSendMessage?.(item.intent)}
+                    disabled={!props.onFillComposer}
+                    onClick={() => props.onFillComposer?.(item.prefill)}
                   >
                     {item.label}
                   </button>
@@ -335,7 +342,7 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
             {...(canReroll && draft.content.trim() ? {
               reroll: {
-                label: "再来一版",
+                label: "AI 另写几版",
                 running: rerolling,
                 onClick: () => props.onReroll?.(),
                 title: "会保留当前版本，再生成 2–3 个候选版本供你挑选",

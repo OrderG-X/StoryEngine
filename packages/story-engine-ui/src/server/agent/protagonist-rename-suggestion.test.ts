@@ -127,7 +127,7 @@ describe("runUserAction 定稿收尾追加「设为主角」建议（只加不�
     });
 
     const next = events.at(-1)!.data.output as { choices: { label: string; intent: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["写第 2 章", "把『陆沉』设为主角"]);
+    expect(next.choices.map((choice) => choice.label)).toEqual(["AI 写第 2 章", "把『陆沉』设为主角"]);
     expect(next.choices[1]!.intent).toContain("陆沉");
   });
 
@@ -144,7 +144,7 @@ describe("runUserAction 定稿收尾追加「设为主角」建议（只加不�
     });
 
     const next = events.at(-1)!.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["写第 2 章"]);
+    expect(next.choices.map((choice) => choice.label)).toEqual(["AI 写第 2 章"]);
   });
 
   it("定稿没成（committed:false）→ 不给建议（没定稿就没有新依据）", async () => {
