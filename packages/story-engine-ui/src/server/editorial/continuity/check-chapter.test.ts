@@ -9,6 +9,8 @@ import {
   ledgerNumberIssues,
   mergeContinuityIssues,
   parseFullReadIssues,
+  snapIssueQuotes,
+  snapToOriginal,
   splitSentences,
   type ContinuityIssueV2,
   type EarlierText,
@@ -135,6 +137,35 @@ describe("合并去重 mergeContinuityIssues：同一句只报一次", () => {
   it("一条的原句包含另一条的 → 只留先来的", () => {
     const merged = mergeContinuityIssues([issue("他从工作台上拿起那块怀表，表盖还开着。", "位置对不上"), issue("拿起那块怀表", "同一件事又报一遍")]);
     expect(merged.map((item) => item.reason)).toEqual(["位置对不上"]);
+  });
+});
+
+describe("引文对回原句 snapToOriginal / snapIssueQuotes", () => {
+  const draft = "“我有一个条件。整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”\n\n他看了她一眼，没再说话。";
+  const sentences = splitSentences(draft);
+
+  it("逐字就在 → 原样；抄错一两个字 → 换成正文真句；跨两句抄的 → 换成那两句；编的 → 原样", () => {
+    expect(snapToOriginal(sentences, "十一月底清空")).toBe("十一月底清空");
+    expect(snapToOriginal(sentences, "她看了她一眼，没再说话。")).toBe("他看了她一眼，没再说话。");
+    expect(snapToOriginal(sentences, "整条巷子十一月底清空，铺子得开着门等人。")).toBe("整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”");
+    expect(snapToOriginal(sentences, "他们明天一早就搬走了。")).toBe("他们明天一早就搬走了。");
+  });
+
+  it("同一句抄成两个样子（真机试写第 6 章）：对回原句后合并成一条", () => {
+    const setting = { againstSetting: { label: "地点" }, earlierChapter: 6, earlierQuote: "青石巷——现状：明年要拆迁", reason: "对不上", kind: "event" as const };
+    const snapped = snapIssueQuotes([
+      { ...setting, quote: "整条巷子十一月底清空，铺子得开着门等人。" },
+      { ...setting, quote: "整条巷子十一月底要清空，我要留到最后一天交房" },
+    ], 6, draft, { chapters: [] });
+    expect(snapped.map((issue) => issue.earlierQuote)).toEqual(["青石巷——现状：明年要拆迁", "青石巷——现状：明年要拆迁"]);
+    expect(snapped[1]!.quote).toBe("整条巷子十一月底清空，我要留到最后一天交房。");
+    expect(mergeContinuityIssues(snapped)).toHaveLength(1);
+  });
+
+  it("前文那句对它标的那一章", () => {
+    const earlier: EarlierText = { chapters: [{ chapter: 1, sentences: splitSentences("周婶端着茶进来，说这块表是她男人年轻时在城南百货买的，戴了三十年。") }] };
+    const [issue] = snapIssueQuotes([{ quote: "他看了她一眼", earlierQuote: "周婶说这块表是她男人年轻时在城南百货买的，戴了三十年", earlierChapter: 1, reason: "r", kind: "event" }], 3, draft, earlier);
+    expect(issue!.earlierQuote).toBe("周婶端着茶进来，说这块表是她男人年轻时在城南百货买的，戴了三十年。");
   });
 });
 
