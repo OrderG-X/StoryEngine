@@ -107,6 +107,12 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   const [unlockedChapter, setUnlockedChapter] = useState<number | null>(null);
   const authorUnlocked = isCommitted && unlockedChapter === draft.chapterNumber;
   const focusAfterUnlockRef = useRef(false);
+  // 改完又定稿了（不是定稿→定稿）：重新锁上，提示换回「定稿了」（真模型走查：再定稿后还写着「改吧」）。
+  const wasCommittedRef = useRef(isCommitted);
+  useEffect(() => {
+    if (isCommitted && !wasCommittedRef.current) setUnlockedChapter(null);
+    wasCommittedRef.current = isCommitted;
+  }, [isCommitted]);
   // AI 正在流式出稿：稿纸只读显示流出来的字，作者这时打的字不会混进去（重构 P5）。
   const locked = (isCommitted && !authorUnlocked) || draft.streaming === true;
   // 「刚改片段」黄高亮的定位锚（=改写后的新文本，可多处）。从 store 读，classic 壳从不设它＝恒空＝无副作用。

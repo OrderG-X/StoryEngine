@@ -83,6 +83,12 @@ describe("WritingPaper", () => {
     expect(screen.getByText(/改完记得再定稿一次/)).toBeDefined();
     expect(screen.queryByRole("button", { name: "自己改这章" })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(proseMirrorEl(container)));
+    // 改了（成了工作稿）又定稿：重新锁上
+    rerender(<WritingPaper draft={{ ...baseDraft, status: "draft", content: `${baseDraft.content}又一句。` }} onEdit={vi.fn()} />);
+    rerender(<WritingPaper draft={{ ...baseDraft, status: "committed", content: `${baseDraft.content}又一句。` }} onEdit={vi.fn()} />);
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
+    expect(screen.getByRole("button", { name: "自己改这章" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "自己改这章" }));
     // 换到别的定稿章：照旧锁着
     rerender(<WritingPaper draft={{ ...baseDraft, chapterNumber: 2, status: "committed" }} onEdit={vi.fn()} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
