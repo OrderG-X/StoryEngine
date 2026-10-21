@@ -2,12 +2,15 @@
 :root .app-toast{
   background:var(--toolbar-bg);
   color:var(--toolbar-ink);
-  border:0;
-  border-radius:10px;
-  padding:10px 16px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  padding:10px 18px;
   font-size:13px;
-  box-shadow:var(--shadow-pop);
-  max-width:calc(100vw - 32px);
+  font-weight:500;
+  line-height:1.6;
+  letter-spacing:.01em;
+  box-shadow:var(--shadow-pop),0 0 0 1px rgba(0,0,0,.18);
+  max-width:min(560px,calc(100vw - 32px));
 }
 
 /* 「打开已有书籍」弹窗（portal 到 body，不在书架作用域里）：最近的书一行一本，选中有底色。 */
@@ -53,6 +56,7 @@
 /* 回收站弹窗（P10，portal 到 body）：一行一本，右边恢复 / 彻底删除；彻底删除点了要再确认一次。 */
 :root .dialog-content.se-trash{width:min(560px,calc(100vw - 32px));}
 :root .se-trash-empty,:root .se-trash-note{margin:0;font-size:13px;color:var(--muted);}
+:root .se-trash-empty{padding:24px 16px;border:1px dashed var(--line-strong);border-radius:12px;background:var(--sunken);color:var(--faint);text-align:center;}
 :root .se-trash-list{list-style:none;display:flex;flex-direction:column;gap:2px;max-height:320px;overflow-y:auto;margin:0 -6px;padding:0;}
 :root .se-trash-list li{display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:9px;}
 :root .se-trash-list li:hover{background:var(--hover);}
@@ -77,12 +81,12 @@
 
 /* 书的资料弹窗（P10，portal 到 body）：上面统计 + 30 天柱图，下面表单。 */
 :root .dialog-content.se-book-info{width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow-y:auto;}
-:root .se-info-stats{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;}
-:root .se-info-nums{display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--faint);}
-:root .se-info-nums span{display:flex;flex-direction:column;gap:2px;}
-:root .se-info-nums b{font-size:16px;font-weight:600;color:var(--text);}
+:root .se-info-stats{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--sunken);}
+:root .se-info-nums{display:flex;flex-wrap:wrap;gap:26px;font-size:11px;letter-spacing:.06em;color:var(--faint);}
+:root .se-info-nums span{display:flex;flex-direction:column-reverse;gap:3px;}
+:root .se-info-nums b{font-size:20px;font-weight:700;line-height:1.1;letter-spacing:0;color:var(--accent);font-variant-numeric:tabular-nums;}
 :root .se-info-bars{display:flex;align-items:flex-end;gap:2px;height:40px;}
-:root .se-info-bars i{flex:1;min-width:2px;border-radius:2px;background:var(--line);}
+:root .se-info-bars i{flex:1;min-width:2px;min-height:3px;border-radius:2px;background:var(--line);}
 :root .se-info-bars i.is-on{background:var(--accent);}
 :root .se-info-form{display:flex;flex-direction:column;gap:12px;}
 :root .se-info-field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0;font-size:12px;color:var(--muted);}
@@ -94,10 +98,41 @@
 :root .se-info-tag-input{flex:1;min-width:100px;height:28px;padding:0 8px;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:12px;}
 :root .se-info-tag-input:focus{outline:none;border-color:var(--accent);border-style:solid;}
 :root .se-info-tones{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
-:root .se-info-tone{width:26px;height:34px;padding:0;border:2px solid transparent;border-radius:3px 6px 6px 3px;cursor:pointer;}
+:root .se-info-tone{width:26px;height:34px;padding:0;border:0;border-radius:2px 5px 5px 2px;cursor:pointer;
+  box-shadow:inset 3px 0 0 rgba(0,0,0,.2),0 4px 10px -6px rgba(0,0,0,.6);transition:transform .15s ease,box-shadow .15s ease;}
+:root .se-info-tone:not(.is-auto):hover{transform:translateY(-2px);}
 :root .se-info-tone.is-auto{width:auto;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:12px;}
-:root .se-info-tone.is-on{border-color:var(--accent);}
+:root .se-info-tone.is-on:not(.is-auto){box-shadow:inset 3px 0 0 rgba(0,0,0,.2),0 0 0 2px var(--surface-2),0 0 0 3.5px var(--accent);}
+:root .se-info-tone.is-auto.is-on{border-color:var(--accent-line);color:var(--accent);background:var(--accent-soft);}
 :root .se-info-tone.tone-0{background:var(--cover-0);} :root .se-info-tone.tone-1{background:var(--cover-1);} :root .se-info-tone.tone-2{background:var(--cover-2);}
 :root .se-info-tone.tone-3{background:var(--cover-3);} :root .se-info-tone.tone-4{background:var(--cover-4);} :root .se-info-tone.tone-5{background:var(--cover-5);}
 :root .se-info-tone.tone-6{background:var(--cover-6);}
 @media (max-width:520px){:root .se-info-row{flex-direction:column;}}
+
+/* ═══ 弹窗统一（2026-10-21 打磨六）：Radix 弹窗都 portal 到 body，这里一处管样子。
+   宋体标题、无框关闭钮、遮罩轻微虚化、出现时轻轻浮起（开了「减少动效」就不动）。 ═══ */
+:root .dialog-overlay{background:var(--scrim);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
+:root .dialog-content{
+  border:1px solid var(--line-strong);border-radius:16px;padding:24px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 5%,transparent),transparent 120px),var(--surface-2);
+  color:var(--text);box-shadow:0 28px 80px -24px rgba(0,0,0,.6),0 0 0 1px rgba(0,0,0,.08);
+}
+:root .dialog-title{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:19px;font-weight:700;letter-spacing:.03em;line-height:1.35;color:var(--text);}
+:root .dialog-desc{color:var(--muted);font-size:13px;line-height:1.7;}
+:root .dialog-close{top:16px;right:16px;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--faint);}
+:root .dialog-close:hover{background:var(--hover);color:var(--text);}
+:root .dialog-close:focus-visible{outline:2px solid var(--accent-line);outline-offset:1px;box-shadow:none;}
+:root .dialog-footer{margin-top:4px;}
+:root :is(.se-v2-dialog-cancel-btn,.se-v2-dialog-confirm-btn,.se-v2-dialog-danger-btn){min-height:34px;padding:0 16px;border-radius:9px;font-weight:600;letter-spacing:.02em;}
+:root .se-v2-dialog-cancel-btn{border-color:var(--line-strong);color:var(--text);}
+:root .se-v2-dialog-confirm-btn{background:var(--accent);color:var(--accent-ink);}
+:root .se-v2-dialog-confirm-btn:hover:not(:disabled){background:var(--accent);filter:brightness(1.06);}
+:root .se-v2-rename-input{border-color:var(--line-strong);background:var(--bg);transition:border-color .15s ease,box-shadow .15s ease;}
+:root .se-v2-rename-input:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
+:root .se-v2-rename-input::placeholder{color:var(--faint);}
+@keyframes se-dialog-in{from{opacity:0;transform:translate(-50%,-48%) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+html:not(.reduce-motion) .dialog-overlay[data-state="open"]{animation:se-fade .16s ease-out;}
+html:not(.reduce-motion) .dialog-content[data-state="open"]{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
+@media (prefers-reduced-motion:reduce){
+  .dialog-overlay[data-state="open"],.dialog-content[data-state="open"]{animation:none !important;}
+}

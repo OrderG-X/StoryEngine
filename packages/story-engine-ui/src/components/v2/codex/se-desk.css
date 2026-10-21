@@ -106,7 +106,10 @@
     min-width:0;display:flex;flex-direction:column;gap:1px;padding:4px 10px;border:0;border-radius:8px;background:transparent;
     color:var(--text);font-size:13px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   }
-  .codex-desk-bar .cd-nav span{font-size:12px;color:var(--faint);}
+  .codex-desk-bar .cd-nav span{font-size:11.5px;letter-spacing:.06em;color:var(--faint);}
+  .codex-desk-bar .cd-nav.prev span::before{content:"← ";}
+  .codex-desk-bar .cd-nav.next span::after{content:" →";}
+  .codex-desk-bar .cd-nav:hover:not(:disabled) span{color:var(--accent);}
   .codex-desk-bar .cd-nav.next{justify-self:end;text-align:right;}
   .codex-desk-bar .cd-nav:hover:not(:disabled){background:var(--hover);}
   .codex-desk-bar .cd-nav:disabled{opacity:.5;cursor:default;}
@@ -117,9 +120,9 @@
   .codex-desk-stage > .se-v2-writing-canvas,
   .codex-desk-stage > .se-v2-paper{
     max-width:780px;padding:48px 72px 56px;border-radius:8px 8px 0 0;
-    background:var(--sheet);border:1px solid var(--line);border-bottom:0;box-shadow:none;
+    background:var(--sheet);border:1px solid var(--line);border-bottom:0;box-shadow:0 28px 56px -44px rgba(0,0,0,.6);
   }
-  .codex-desk-stage > .se-v2-writing-canvas:focus-within{border-color:var(--line-strong);box-shadow:none;}
+  .codex-desk-stage > .se-v2-writing-canvas:focus-within{border-color:var(--line-strong);box-shadow:0 28px 56px -44px rgba(0,0,0,.6);}
   .codex-desk-stage .se-v2-paper-title{font-family:"Noto Serif SC","Songti SC",serif;}
 
   /* 稿子在别处变了、作者手上还有没存的字（重构 P5）：稿纸上方一条提示，两边都不悄悄覆盖。 */
@@ -140,11 +143,12 @@
 
   /* 「本章已定稿」提示：一行淡字，不再是压在稿纸上的大框 */
   .codex-desk-stage .se-v2-notice{
-    margin:0 0 22px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;
+    width:fit-content;max-width:100%;box-sizing:border-box;margin:0 0 24px;padding:4px 12px 4px 10px;
+    border:1px solid color-mix(in srgb,var(--success) 22%,transparent);border-radius:999px;background:var(--success-soft);box-shadow:none;
     display:flex;align-items:center;gap:8px;font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;
   }
-  .codex-desk-stage .se-v2-notice::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--success);}
-  .codex-desk-stage .se-v2-notice p{margin:0;font-size:12px;line-height:1.6;color:var(--faint);}
+  .codex-desk-stage .se-v2-notice::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 18%,transparent);}
+  .codex-desk-stage .se-v2-notice p{margin:0;font-size:12px;line-height:1.6;color:var(--muted);}
 
   /* 选区工具条：深色实底浮条（两套主题都用深色，压在正文上一眼可辨） */
   .se-v2-selection-toolbar{background:var(--toolbar-bg);box-shadow:var(--shadow-pop);}
@@ -222,13 +226,14 @@
   /* ═══ 头脑风暴（重构 P6，草图 ⑤）：稿纸上方「第 N 章往哪走？」，几种走法并排挑；挑中收成「这章打算」 ═══ */
   .codex-desk-stage > .se-bs{
     position:relative;z-index:1;flex:none;width:100%;max-width:980px;box-sizing:border-box;margin:0 0 12px;
-    max-height:62%;overflow:auto;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-md);
-    background:var(--surface);color:var(--text);font-size:13px;line-height:1.6;
+    max-height:62%;overflow:auto;padding:16px 18px;border:1px solid var(--line);border-radius:var(--r-md);
+    background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,transparent),transparent 84px),var(--surface);
+    color:var(--text);font-size:13px;line-height:1.6;
   }
   .codex-desk-stage > .se-bs.is-ask,.codex-desk-stage > .se-bs.is-picked,.codex-desk-stage > .se-bs.is-folded{max-width:780px;}
   .codex-desk-stage > .se-bs.is-folded{padding:6px 10px;}
   .se-bs-top{position:relative;display:flex;flex-direction:column;gap:2px;padding-right:56px;}
-  .se-bs-top h2{margin:0;font-size:16px;font-weight:600;color:var(--text);}
+  .se-bs-top h2{margin:0 0 2px;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:17px;font-weight:700;letter-spacing:.02em;color:var(--text);}
   .se-bs-top p{margin:0;color:var(--muted);}
   .se-bs-top .se-bs-warn{color:var(--warn);}
   .se-bs-faint{color:var(--faint) !important;font-size:12px;}
@@ -239,7 +244,7 @@
     flex:1 1 260px;min-width:0;height:34px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;
     background:var(--bg);color:var(--text);font:inherit;
   }
-  .se-bs-form input:focus{outline:none;border-color:var(--accent);}
+  .se-bs-form input:focus{outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
   .se-bs-form button{
     height:34px;padding:0 14px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);
     color:var(--accent-ink);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer;
@@ -247,12 +252,15 @@
   .se-bs-form button:disabled{opacity:.5;cursor:default;}
   .se-bs:not(.is-ask) .se-bs-form button{background:transparent;color:var(--text);border-color:var(--line-strong);font-weight:400;}
   .se-bs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px;}
-  .se-bs-opt{display:flex;flex-direction:column;gap:8px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);}
-  .se-bs-opt.is-rec{border-color:var(--accent-line);}
+  .se-bs-opt{display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);transition:border-color .15s ease,transform .15s ease;}
+  .se-bs-opt:hover{border-color:var(--line-strong);}
+  html:not(.reduce-motion) & .se-bs-opt:hover{transform:translateY(-1px);}
+  .se-bs-opt.is-rec{border-color:var(--accent-line);background:linear-gradient(180deg,var(--accent-soft),transparent 64px),var(--surface-2);}
   .se-bs-opt-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
-  .se-bs-opt-h h3{margin:0;font-size:14px;font-weight:600;color:var(--text);overflow-wrap:anywhere;}
-  .se-bs-rec{flex:none;font-size:12px;color:var(--accent);}
+  .se-bs-opt-h h3{margin:0;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:15px;font-weight:700;color:var(--text);overflow-wrap:anywhere;}
+  .se-bs-rec{flex:none;padding:0 7px;border-radius:999px;font-size:11.5px;line-height:19px;color:var(--accent);background:var(--accent-soft);}
   .se-bs-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;color:var(--text);}
+  .se-bs-steps li::marker{color:var(--accent);font-weight:600;}
   .se-bs-adv{margin:0;font-size:12px;color:var(--muted);}
   .se-bs-ok{margin:0;font-size:12px;color:var(--success);}
   .se-bs-problems{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;}

@@ -105,9 +105,15 @@
 
   /* ── P6：头部一行放会话名（会话条并进头部）；顶卡「这一章还差什么」；输入框左边「更多」 ── */
   .se-ai-head .codex-chat-session-bar{flex:1;min-width:0;padding:0;}
+  /* 历史会话浮层按整条头部摆（会话名那格太窄，名字和按钮会挤成三行）。 */
+  .se-ai-head{position:relative;}
+  .se-ai-head .codex-chat-session-bar{position:static;}
+  .se-ai-head .codex-session-history-pop{left:10px;right:10px;top:calc(100% - 2px);border-color:var(--line-strong);background:var(--surface-2);box-shadow:var(--shadow-pop);}
   .se-ai-head .codex-session-name{color:var(--text);font-size:13px;font-weight:500;margin-left:-6px;}
   .cssp-foot{display:flex;flex-wrap:wrap;gap:4px 12px;justify-content:space-between;margin-top:4px;padding:8px 6px 2px;border-top:1px solid var(--line);}
-  .se-todo-wrap{position:relative;margin:2px 12px 10px;display:flex;flex-direction:column;gap:6px;}
+  .se-todo-wrap{position:relative;margin:2px 12px 0;padding-bottom:12px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--line);}
+  /* 顶卡下面的对话往上滚时淡出，不在顶卡底下硬切一刀。 */
+  .se-todo-wrap + .ai-body{mask-image:linear-gradient(to bottom,transparent 0,#000 16px);}
   .se-todo-card{
     display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;
     background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,transparent),transparent 72px),var(--surface);border:1px solid var(--line);
@@ -130,6 +136,7 @@
   .se-todo-wrap .se-checker-reading{margin:0;padding:0 4px;}
   .se-todo-more{position:relative;padding:0 4px;}
   .se-todo-more-btn{border:0;background:none;padding:0;color:var(--faint);font-size:12px;cursor:pointer;}
+  .se-todo-more-btn::after{content:" ›";}
   .se-todo-more-btn:hover{color:var(--text);text-decoration:underline;}
   .se-todo-more .se-inbox-pop{left:0;right:0;top:calc(100% + 4px);}
   .cap-menu{position:relative;flex:none;align-self:flex-end;}
@@ -142,6 +149,12 @@
     position:absolute;left:0;bottom:calc(100% + 8px);z-index:40;width:300px;margin:0;padding:10px;
     background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
   }
+  /* 「更多」菜单：每组一条细线隔开，组名强调色小字。 */
+  .cap-panel.is-pop{gap:0;padding:4px 12px;animation:se-fade .12s ease-out;}
+  .cap-panel.is-pop .cap-group{padding:9px 0;}
+  .cap-panel.is-pop .cap-group + .cap-group{border-top:1px solid var(--line-weak);}
+  .cap-panel.is-pop .cap-group-title{flex:0 0 36px;padding-top:5px;font-size:11px;font-weight:600;letter-spacing:.14em;color:var(--accent);}
+  .cap-panel.is-pop .cap-btn{border-radius:999px;}
 
   /* ── 消息 ── */
   .ai-body{padding:16px 14px 8px;gap:14px;animation:none;}
@@ -189,6 +202,13 @@
   .step-card .sc-badge{color:var(--muted);}
   .step-card .sc-head:hover:not(:disabled) .sc-caret{color:var(--text);}
 
+  /* 核账条目（ContinuityCheckCard）：没有审稿那列严重度小方块，两句原句做成引文块（本章那句强调色竖线），不再空出 26px。 */
+  .step-card .drc-item:not(:has(> .drc-line)){
+    > .drc-evi{margin:0 0 6px;padding:1px 0 1px 10px;border-left:2px solid var(--line-strong);font-size:12px;line-height:1.7;color:var(--muted);}
+    > .drc-evi:first-child{border-left-color:var(--accent-line);color:var(--text);}
+    > .drc-desc{margin:9px 0 0;padding-left:0;font-size:12px;line-height:1.6;color:var(--muted);}
+    .drc-fix{margin:10px 0 0;}
+  }
   /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
   .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
   .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
@@ -253,8 +273,16 @@
   .se-mention-kind{flex:none;font-size:12px;color:var(--faint);}
 
   /* ── 输入框 ── */
-  .composer{margin:8px 12px 12px;padding:8px 8px 8px 12px;border-radius:12px;border:1px solid var(--line-strong);background:var(--bg);}
-  .composer:focus-within{border-color:var(--accent);box-shadow:none;}
+  /* 输入框：字占满一整行，「更多」和发送钮排在底下一行（左右各一），占位字不再被「更多」挤到中间。 */
+  .composer{
+    display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"input input input" "more . send";
+    align-items:center;gap:4px 8px;margin:8px 12px 12px;padding:10px 8px 8px 12px;border-radius:14px;
+    border:1px solid var(--line-strong);background:var(--bg);transition:border-color .15s ease,box-shadow .15s ease;
+  }
+  .composer:focus-within{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
+  .composer > .ai-composer-input{grid-area:input;width:100%;min-height:46px !important;max-height:168px;field-sizing:content;}
+  .composer > .cap-menu{grid-area:more;align-self:center;}
+  .composer > .send{grid-area:send;}
   .composer .send{width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);box-shadow:none;font-weight:600;}
   /* 停止：不用刺眼的红底，换成正文色实心钮 + 方块图标 */
   .composer .send[data-stop]{background:var(--text);color:var(--bg);}
