@@ -99,15 +99,19 @@ export function carryChapterFileFlags(
   next: readonly ChapterNavItem[],
   previous: readonly ChapterNavItem[],
   committedChapter?: number,
+  titledFromDisk: ReadonlySet<number> = new Set(),
 ): readonly ChapterNavItem[] {
   const before = new Map(previous.map((chapter) => [chapter.chapterNumber, chapter]));
   return next.map((chapter) => {
     const old = before.get(chapter.chapterNumber);
+    // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名
+    // （或只是「下一章」占位）就沿用旧表的。章名是按盘上文件读的（titledFromDisk）就以盘上为准——
+    // 真机试写：撤销「改章名」后盘上没章名了，沿用旧表会一直显示改过的章名。
+    const carryTitle = !titledFromDisk.has(chapter.chapterNumber)
+      && (!hasRealTitle(chapter) || chapter.status === "planned") && old !== undefined && hasRealTitle(old);
     const carried: ChapterNavItem = {
       ...chapter,
-      // 工具回传的概览不带工作稿章的章名（P6 真机：改完稿章节栏第 12 章「存根」变「未命名」）：新表没章名
-      // （或只是「下一章」占位）就沿用旧表的。
-      ...((!hasRealTitle(chapter) || chapter.status === "planned") && old && hasRealTitle(old) ? { title: old.title } : {}),
+      ...(carryTitle ? { title: old.title } : {}),
       ...(chapter.hasDraftFile === undefined && old?.hasDraftFile !== undefined ? { hasDraftFile: old.hasDraftFile } : {}),
       ...(chapter.hasCommittedChapter === undefined && old?.hasCommittedChapter !== undefined ? { hasCommittedChapter: old.hasCommittedChapter } : {}),
       ...(chapter.editedSinceCommit === undefined && old?.editedSinceCommit !== undefined ? { editedSinceCommit: old.editedSinceCommit } : {}),

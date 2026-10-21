@@ -30,7 +30,9 @@ export function applyOverviewToWorkspace(overview: StateOverview, options: Apply
   const activeChapter = nextWorkspace.currentChapter.chapterNumber;
   const title = options.title?.trim() || undefined;
   const titled = title ? updateChapterListTitle(nextWorkspace.chapters, activeChapter, title) : nextWorkspace.chapters;
-  const carried = carryChapterFileFlags(titled, store.workspace.chapters, flowStatus === "committed" ? activeChapter : undefined);
+  // 概览带了章节文件清单（开书、撤销恢复）：清单里的章，章名就是盘上文件里的，不沿用旧表。
+  const titledFromDisk = new Set((overview.uiChapterFiles ?? []).map((file) => file.chapter));
+  const carried = carryChapterFileFlags(titled, store.workspace.chapters, flowStatus === "committed" ? activeChapter : undefined, titledFromDisk);
   // 概览没带章节文件清单（工具回传的多半不带）：只认得最近几章，别的章照旧留着。
   const chapters = overview.uiChapterFiles ? carried : keepUnlistedChapters(carried, store.workspace.chapters);
   const activeFlags: ChapterNavItem | undefined = chapters.find((chapter) => chapter.chapterNumber === activeChapter);
