@@ -48,6 +48,7 @@ describe("draft revision", () => {
     expect(prompt).toContain("只修指定片段，不重写全文");
     expect(prompt).toContain("不提前揭开设定里写着还没揭开、不能说破的内容");
     expect(prompt).toContain("不要以信息不足为理由保持原样");
+    expect(prompt).toContain("afterText 是小说正文，不许写章号");
     expect(prompt).toContain("设定（设定卡 + 账里记的现状）：");
     expect(prompt).toContain("【海天市旧城区创业孵化楼】");
     expect(prompt).toContain("- 规矩：不能凭空变成完整申请表");

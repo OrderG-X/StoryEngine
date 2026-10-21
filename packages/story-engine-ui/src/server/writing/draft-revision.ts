@@ -123,7 +123,8 @@ export function buildDraftRevisionPrompt(input: BuildDraftRevisionPromptInput): 
     "6. 不改变人物的年龄、身份、长期性格或说话方式。",
     "7. 保留原文中有效信息。",
     "8. 如果修订目标或约束明确要求修正代词、称谓、年龄、身份等局部事实，不要以信息不足为理由保持原样；按目标修订片段，并把不确定性写入 riskNotes。",
-    "9. 输出必须是 JSON 对象，不能有 Markdown 包裹。",
+    "9. 修订目标、问题说明里的「第 N 章」「前文」「设定」是告诉你出处的，不是故事里的话：afterText 是小说正文，不许写章号，也不许出现「前文」「设定」这类写作用语（真机试写：改出了「第4章那天，是周叔帮着……」）。",
+    "10. 输出必须是 JSON 对象，不能有 Markdown 包裹。",
     "",
     "JSON 格式：",
     JSON.stringify({
