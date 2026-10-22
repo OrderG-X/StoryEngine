@@ -179,6 +179,15 @@ describe("导入的书通读记账（P8）", () => {
     expect(onResumeReread).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("status").textContent).toContain("（网络断了）");
   });
+
+  it("还没接上 AI 时停下了：不报错、不给点了也记不上的「接着记」，说接上以后怎么做（对标走查）", () => {
+    const stopped = { reading: false, roles: roles(0, false), reread: { status: "stopped" as const, done: 0, total: 120, stoppedReason: "记账员没交上账单：还没接上 AI" } };
+    const { rerender } = render(<ReadersCatchUpNote aiMissing onResumeReread={vi.fn()} status={stopped} />);
+    expect(screen.getByRole("status").textContent).toBe("导入的 120 章还没记账。接上 AI 后点「接着记」，它会一章章记下人物和发生的事。");
+    expect(screen.queryByRole("button", { name: "接着记" })).toBeNull();
+    rerender(<ReadersCatchUpNote aiMissing onResumeReread={vi.fn()} status={{ ...stopped, reread: { ...stopped.reread, done: 40 } }} />);
+    expect(screen.getByRole("status").textContent).toContain("导入的书记账记到第 40/120 章。");
+  });
 });
 
 describe("进度行走真轮询链路（R6.2）：动作进行中等待补读，这行不等回包落地就现出来", () => {

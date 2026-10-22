@@ -113,13 +113,25 @@ const READER_ROLE_LABELS: Readonly<Record<string, string>> = {
  * R5.2：核账 / 拟纲 / 记账在等哪个角色当场补笔记，那个角色后面标「（核账在等它读完）」——走的还是这条轮询链路。
  * R6.2：概况刷新的新初值盖过旧轮询快照（同一次打开里后来的补读也显示）；动作等回包期间也轮询，这行不等回包落地就能现出来。
  */
-export function ReadersCatchUpNote({ status, onResumeReread }: {
+export function ReadersCatchUpNote({ status, onResumeReread, aiMissing = false }: {
   readonly status?: ReaderCatchUpStatus | null;
   /** 导入的书通读记账停下了（P8）：点「接着记」。 */
   readonly onResumeReread?: () => Promise<void>;
+  /** 还没接上 AI：上面「先接上 AI」卡已经说了，这里不再报错、不给点了也记不上的「接着记」（对标走查）。 */
+  readonly aiMissing?: boolean;
 }) {
   const [resuming, setResuming] = useState<"idle" | "sending" | string>("idle");
   const reread = status?.reread;
+  if (reread?.status === "stopped" && aiMissing) {
+    return (
+      <div className="se-checker-reading is-stopped" role="status">
+        <span className="se-checker-reading-text">
+          {reread.done > 0 ? `导入的书记账记到第 ${reread.done}/${reread.total} 章。` : `导入的 ${reread.total} 章还没记账。`}
+          接上 AI 后点「接着记」，它会一章章记下人物和发生的事。
+        </span>
+      </div>
+    );
+  }
   if (reread?.status === "stopped") {
     return (
       <div className="se-checker-reading is-stopped" role="status">
@@ -457,7 +469,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         onChapterButton={props.onChapterButton}
         {...(props.onOpenChapter ? { onOpenChapter: props.onOpenChapter } : {})}
       >
-        <ReadersCatchUpNote status={readerCatchUp} {...(props.projectPath ? { onResumeReread: () => resumeBookReread(props.projectPath as string) } : {})} />
+        <ReadersCatchUpNote
+          status={readerCatchUp}
+          aiMissing={Boolean(setupStep)}
+          {...(props.projectPath ? { onResumeReread: () => resumeBookReread(props.projectPath as string) } : {})}
+        />
         {inboxTodos.length > 0 ? (
           <div className="se-todo-more">
             <button
@@ -563,10 +579,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           );
         })}
 
-        {shouldShowEmptyState(props, messages) ? (
+        {/* 没接 AI 时上面「先接上 AI」卡已经说了，这里不再说「我会帮你…」（对标走查） */}
+        {shouldShowEmptyState(props, messages) && (!setupStep || (props.canUndoClearChat && props.onUndoClearChat)) ? (
           <div style={surfaceCardStyle}>
-            <strong style={{ color: "var(--text)", fontSize: 13 }}>可以直接描述下一章方向</strong>
-            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>我会先帮你生成承接建议或工作稿。</p>
+            <strong style={{ color: "var(--text)", fontSize: 13 }}>有什么想法，直接跟 AI 说</strong>
+            <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 12.5 }}>比如「这章让她发现那封信」。它能帮你理走法、起草稿、查前后对不对得上。</p>
             {props.canUndoClearChat && props.onUndoClearChat ? (
               <button type="button" className="chip" style={{ marginTop: 10 }} onClick={() => props.onUndoClearChat?.()}>
                 撤销清空，恢复刚才的对话

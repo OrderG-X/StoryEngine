@@ -8,6 +8,7 @@ import AiChatCodex from "./AiChatCodex.js";
 import WritingDeskCodex from "./WritingDeskCodex.js";
 import { ThreadBoard } from "./ThreadBoard.js";
 import { requestQuoteJump } from "./QuoteJump.js";
+import { fetchBookSearch } from "../../../api/bookSearchClient.js";
 import { StoryMap } from "./StoryMap.js";
 import { ChapterChanges } from "./ChapterChanges.js";
 import { BibleBook, type BibleCat } from "./BibleBook.js";
@@ -32,6 +33,9 @@ import { CommitSheetHost } from "./CommitSheet.js";
 import { IconChevronLeft, IconFocus, IconPanelLeft, IconPanelRight, IconPlus, IconSearch, IconSettings } from "./icons.js";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/u.test(navigator.platform || navigator.userAgent);
+/** 快捷键提示里的修饰键（Mac ⌘，别的 Ctrl+）。 */
+const MOD = IS_MAC ? "⌘" : "Ctrl+";
+const SHIFT = IS_MAC ? "⇧" : "Shift+";
 import "./codex.css";
 import "./se-shell.css";
 import "./se-desk.css";
@@ -176,6 +180,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   );
   // 设置改成弹窗（不再占中栏整页），null = 关着。
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  // 设置再打开回到上次那页（苹果规范：记住上次打开的面板）。
+  const lastSettingsTabRef = useRef<SettingsTab>("model");
+  useEffect(() => { if (settingsTab) lastSettingsTabRef.current = settingsTab; }, [settingsTab]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [cat, setCat] = useState<string>("story");
@@ -187,6 +194,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 窄窗开局收起章节抽屉（不挡稿纸）；宽窗按专注写作开关决定。
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
   const [chapterQuery, setChapterQuery] = useState("");
+  const chapterListRef = useRef<HTMLDivElement | null>(null);
   const [libQuery, setLibQuery] = useState("");
   // 三处字号已上提到 displaySettingsStore（设置面板也读写同一份）。这里只读聊天/界面缩放。
   const chatZoom = useDisplaySettingsStore((s) => s.chatZoom);
@@ -234,6 +242,12 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     requestQuoteJump(chapter, quote);
     if (target.id !== currentId) props.onSelectChapter?.(target.id);
   };
+  // ⌘K 搜正文（要稳定的引用：面板按它决定要不要重搜）。
+  const projectPath = props.projectPath;
+  const searchBookText = useMemo(
+    () => (projectPath ? (query: string, signal: AbortSignal) => fetchBookSearch(projectPath, query, signal) : undefined),
+    [projectPath],
+  );
   // 故事地图点章号、已定稿章的「去第 N 章」：切到写作台打开那一章。
   const openChapterNumber = (chapter: number) => {
     const target = chapters.find((ch) => ch.chapterNumber === chapter);
@@ -282,18 +296,20 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const libQ = libQuery.trim().toLowerCase();
   const paletteCommands: PaletteCommand[] = [
     {
-      id: "next", label: "写下一章", hint: "交给 AI", disabled: workspaceBusy || !props.onSendMessage,
+      id: "next", label: "AI 写下一章", hint: "在右边进行，要几分钟", disabled: workspaceBusy || !props.onSendMessage,
       run: () => { setView("desk"); props.onSendMessage?.("继续写下一章的正文，现在就动笔直接出稿"); },
     },
-    { id: "desk", label: "打开写作台", hint: "视图", run: () => setView("desk") },
-    { id: "library", label: "打开设定本", hint: "视图", run: () => setView("library") },
-    { id: "history", label: "打开操作历史", hint: "视图", run: () => setView("history") },
+    { id: "desk", label: "打开写作台", hint: `${MOD}1`, run: () => setView("desk") },
+    { id: "library", label: "打开设定本", hint: `${MOD}2`, run: () => setView("library") },
+    { id: "history", label: "打开操作历史", hint: `${MOD}3`, run: () => setView("history") },
+    { id: "rail", label: "收起 / 展开章节列表", hint: `${MOD}\\`, run: () => shortcutsRef.current.rail?.() },
+    { id: "ai", label: "收起 / 展开 AI 助手", hint: `${MOD}${SHIFT}\\`, run: () => shortcutsRef.current.ai?.() },
     {
       id: "focus", label: focusWriting ? "退出专注写作" : "专注写作", hint: "收起两侧",
       run: () => { setView("desk"); useDisplaySettingsStore.getState().toggleFocusWriting(); },
     },
     { id: "theme", label: "切换深色 / 纸面主题", hint: "外观", run: () => useThemeStore.getState().toggle() },
-    { id: "settings", label: "模型设置", hint: "设置", run: () => setSettingsTab("model") },
+    { id: "settings", label: "模型设置", hint: `设置 ${MOD},`, run: () => setSettingsTab("model") },
     { id: "display", label: "显示设置（主题、字号）", hint: "设置", run: () => setSettingsTab("display") },
     { id: "export", label: "导出这本书", hint: "txt · Word · epub", disabled: !props.projectPath, run: () => setExportOpen(true) },
     { id: "home", label: "回到书架", hint: "视图", run: () => props.onGoHome?.() },
@@ -341,13 +357,21 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     window.addEventListener("pointerup", onUp);
   }
 
-  // ⌘K / Ctrl+K：任何地方都能呼出搜索与命令面板（再按一次关）。
+  // 快捷键（任何地方都能按，再按一次关）：⌘K 搜索与命令面板；对标走查补上 ⌘, 设置（苹果规范）、
+  // ⌘1 / 2 / 3 换写作台 / 设定本 / 历史、⌘\ 收放章节栏、⌘⇧\ 收放 AI 栏（Ulysses 式）。
+  // 要用到当次渲染的状态的动作放 ref 里（每次渲染换新），监听只挂一次。
+  const shortcutsRef = useRef<Partial<Record<"settings" | "rail" | "ai", () => void>>>({});
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setPaletteOpen((open) => !open);
-      }
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.isComposing) return;
+      const key = event.key.toLowerCase();
+      const views: Record<string, "desk" | "library" | "history"> = { "1": "desk", "2": "library", "3": "history" };
+      if (key === "k") setPaletteOpen((open) => !open);
+      else if (key === ",") shortcutsRef.current.settings?.();
+      else if (event.code === "Backslash") shortcutsRef.current[event.shiftKey ? "ai" : "rail"]?.();
+      else if (!event.shiftKey && views[key]) setView(views[key]);
+      else return;
+      event.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -398,6 +422,17 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   // 窄窗（<1280）章节栏改成浮在稿纸上的抽屉，不再挤占稿纸宽度。
   const chapterDrawer = viewportWidth < CHAPTER_DRAWER_BREAKPOINT;
   const chapterRailWidth = view === "desk" && deskRailOpen && !chapterDrawer ? Math.round(CHAPTER_RAIL_BASE_WIDTH * uiZoom) : 0;
+  // 窗口跨过抽屉线：变窄收起抽屉（不挡稿纸），变宽且没开专注写作就把章节栏摆回来
+  // （对标走查：窄过一次再放大，章节栏一直收着，120 章的书看不到目录）。
+  const wasDrawerRef = useRef(chapterDrawer);
+  useEffect(() => {
+    if (wasDrawerRef.current !== chapterDrawer) setDeskRailOpen(!chapterDrawer && !focusWriting);
+    wasDrawerRef.current = chapterDrawer;
+  }, [chapterDrawer, focusWriting]);
+  // 换了章（⌘K、回原句、上一章 / 下一章）章节栏滚到当前章：长书的当前章常在列表外头。
+  useEffect(() => {
+    chapterListRef.current?.querySelector<HTMLElement>(".se-ch.on")?.scrollIntoView?.({ block: "nearest" });
+  }, [currentId, deskRailOpen, view]);
 
   // T3：跟视口宽度走——右栏实际宽度 = min(用户拖的宽度, 视口装得下的宽度)；
   // 连右栏硬下限都装不下时默认自动收成 44px 竖条；用户没碰过展开/收起时窗口变宽自动恢复，
@@ -406,6 +441,14 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const aiAutoCollapsed = aiWidthThatFits < AI_FIT_MIN_WIDTH;
   const effectiveRightOpen = resolveRightPanelOpen(rightOpen, aiAutoCollapsed, aiManualToggled);
   const effectiveRightWidth = Math.max(AI_FIT_MIN_WIDTH, Math.min(rightWidth, aiWidthThatFits));
+  shortcutsRef.current = {
+    settings: () => setSettingsTab((tab) => (tab ? null : lastSettingsTabRef.current)),
+    rail: () => {
+      if (view !== "desk") { setView("desk"); setDeskRailOpen(true); return; }
+      setDeskRailOpen((open) => !open);
+    },
+    ai: () => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); },
+  };
 
   return (
     <div
@@ -425,7 +468,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               type="button"
               aria-label={deskRailOpen ? "收起章节列表" : "展开章节列表"}
               aria-pressed={deskRailOpen}
-              title="章节列表"
+              title={`章节列表（${MOD}\\）`}
               onClick={() => setDeskRailOpen(!deskRailOpen)}
             >
               <IconPanelLeft />
@@ -457,9 +500,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           <button className={view === "history" ? "on" : ""} type="button" aria-pressed={view === "history"} onClick={() => setView("history")}>历史</button>
         </nav>
         <div className="se-top-r">
-          <button className="se-search-btn" type="button" aria-label="搜索章节、设定、命令" onClick={() => setPaletteOpen(true)}>
+          <button className="se-search-btn" type="button" aria-label="搜索章节、正文、设定、命令" onClick={() => setPaletteOpen(true)}>
             <IconSearch size={16} />
-            <span className="se-search-lbl">搜索章节、设定、命令</span>
+            <span className="se-search-lbl">搜章节、正文、设定</span>
             <kbd>{IS_MAC ? "⌘K" : "Ctrl K"}</kbd>
           </button>
           <button
@@ -476,7 +519,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             <IconFocus />
           </button>
           <ThemeToggleButton className="se-icon-btn se-theme-btn" />
-          <button className="se-icon-btn" type="button" aria-label="设置" title="设置" onClick={() => setSettingsTab("model")}>
+          <button className="se-icon-btn" type="button" aria-label="设置" title={`设置（${MOD},）`} onClick={() => setSettingsTab(lastSettingsTabRef.current)}>
             <IconSettings />
           </button>
           <button
@@ -484,7 +527,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             type="button"
             aria-label={effectiveRightOpen ? "收起 AI 助手" : "展开 AI 助手"}
             aria-pressed={effectiveRightOpen}
-            title="AI 助手"
+            title={`AI 助手（${MOD}${SHIFT}\\）`}
             onClick={() => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); }}
           >
             <IconPanelRight />
@@ -620,17 +663,19 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                     />
                   </label>
                   {nextToWrite && !chapterFilter ? (
+                    // 章节栏的「+」就是新开一章给作者自己写（对标走查：原来点了是 AI 出整章，没接 AI 也能点）；
+                    // 要 AI 写，在那章稿纸下面点「AI 写这一章」或跟右边说。
                     <button
                       className="se-new-ch"
                       type="button"
-                      disabled={workspaceBusy || !props.onSendMessage}
-                      title={`让 AI 写第 ${nextToWrite} 章（在右边对话里进行，可随时停止）`}
-                      onClick={() => props.onSendMessage?.(`写第${nextToWrite}章，现在就动笔直接出稿`)}
+                      disabled={workspaceBusy}
+                      title={`打开第 ${nextToWrite} 章的空白稿纸自己写；要 AI 写，在稿纸下面点「AI 写这一章」`}
+                      onClick={() => openChapterNumber(nextToWrite)}
                     >
                       <IconPlus size={16} />写第 {nextToWrite} 章
                     </button>
                   ) : null}
-                  <div className="se-ch-list">
+                  <div className="se-ch-list" ref={chapterListRef}>
                     {chapterRows.map((row) => row.kind === "group" ? (
                       <div key={row.key} className="se-ch-group">{row.label}</div>
                     ) : (
@@ -717,6 +762,8 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           }}
           onPickCharacter={(name) => openInBible("chars", name)}
           onPickSetting={(target, focus) => openInBible(target, focus)}
+          {...(searchBookText ? { searchText: searchBookText } : {})}
+          onPickText={jumpToQuote}
         />
       ) : null}
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}

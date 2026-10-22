@@ -5,7 +5,16 @@
 appId: com.storyengine.desktop
 productName: StoryEngine
 # staging 里没有 electron devDep，版本在这里钉死（与工作区 devDep 保持一致）。
-electronVersion: 43.0.0
+electronVersion: 43.8.3
+
+# Electron 安全开关（2026-10-22）：关掉用不上、又能被拿来借壳跑代码的口子。
+# 本应用只在主进程里起服务、窗口连 http://127.0.0.1，不 fork 子进程、不读 file:// 页面。
+# asar:false 用不了 asar 完整性校验那两项；cookie 加密会弹钥匙串授权（ad-hoc 签名每次都弹），不开。
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  grantFileProtocolExtraPrivileges: false
 
 # MVP 选 asar:false：ESM(main.mjs) + 全外置 node_modules 场景下最稳（研究标的最高风险点就是
 # asar 内 Mastra 的 ESM 解析）。代价是文件数多、首次安装略慢——内测可接受，瘦身押后。

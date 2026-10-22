@@ -69,13 +69,36 @@ describe("WritingPaper", () => {
   it("locks the editor (non-editable) and shows a notice when the chapter is committed", () => {
     const { container } = render(<WritingPaper draft={{ ...baseDraft, status: "committed" }} onEdit={vi.fn()} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
-    expect(screen.getByText("这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。")).toBeDefined();
+    expect(screen.getByText(/这章定稿了，稿纸锁着防手滑/)).toBeDefined();
+  });
+
+  it("「自己改这章」解开定稿的稿纸、光标进稿纸（对标走查：导入的书没接 AI 时改不了错字）", async () => {
+    // jsdom 的 Range 没有量位置的方法，光标落到有字的末尾时 ProseMirror 要滚到光标处
+    const rangeProto = Range.prototype as unknown as Record<string, unknown>;
+    rangeProto.getClientRects ??= () => [];
+    rangeProto.getBoundingClientRect ??= () => new DOMRect();
+    const { container, rerender } = render(<WritingPaper draft={{ ...baseDraft, status: "committed" }} onEdit={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "自己改这章" }));
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("true");
+    expect(screen.getByText(/改完记得再定稿一次/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "自己改这章" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(proseMirrorEl(container)));
+    // 改了（成了工作稿）又定稿：重新锁上
+    rerender(<WritingPaper draft={{ ...baseDraft, status: "draft", content: `${baseDraft.content}又一句。` }} onEdit={vi.fn()} />);
+    rerender(<WritingPaper draft={{ ...baseDraft, status: "committed", content: `${baseDraft.content}又一句。` }} onEdit={vi.fn()} />);
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
+    expect(screen.getByRole("button", { name: "自己改这章" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "自己改这章" }));
+    // 换到别的定稿章：照旧锁着
+    rerender(<WritingPaper draft={{ ...baseDraft, chapterNumber: 2, status: "committed" }} onEdit={vi.fn()} />);
+    expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("false");
+    expect(screen.getByRole("button", { name: "自己改这章" })).toBeDefined();
   });
 
   it("keeps the editor editable and hides the committed notice for plain drafts", () => {
     const { container } = render(<WritingPaper draft={baseDraft} onEdit={vi.fn()} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("true");
-    expect(screen.queryByText("这章定稿了，稿纸锁着。要改哪里跟右边的 AI 说，改完再定稿一次。")).toBeNull();
+    expect(screen.queryByText(/这章定稿了/)).toBeNull();
   });
 
   it("reflects external draft content into the editor when the user has not edited", () => {
