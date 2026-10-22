@@ -102,7 +102,7 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
-/** 从备份解出一本新书（默认书库里）；重名加「-恢复」「-恢复2」…。 */
+/** 从备份解出一本新书（默认书库里）；重名加「-恢复」「-恢复2」…，书名跟着加「（恢复）」，书架上和原书分得清。 */
 export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date()): Promise<{ readonly projectPath: string; readonly title: string }> {
   const entries = readZip(zip, { totalLimit: RESTORE_TOTAL_LIMIT });
   const manifest = readManifest(entries.find((entry) => entry.path === BACKUP_MANIFEST && !entry.isDirectory)?.data);
@@ -112,7 +112,12 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
   const library = join(resolveBooksRootDir(), "story-engine");
   const base = join(library, manifest.folder && manifest.folder !== "." && manifest.folder !== ".." ? manifest.folder : `story-restored-${stamp(now)}`);
   let target = base;
-  for (let n = 1; await exists(target); n += 1) target = `${base}-恢复${n > 1 ? n : ""}`;
+  let suffix = "";
+  for (let n = 1; await exists(target); n += 1) {
+    suffix = `恢复${n > 1 ? n : ""}`;
+    target = `${base}-${suffix}`;
+  }
+  const title = suffix ? `${manifest.title}（${suffix}）` : manifest.title;
   if (!isSafeProjectPath(target)) throw new Error("书库路径不安全，没恢复。");
 
   // 先解到同目录下的临时目录，全写完再改名：中途失败不留半本书。
@@ -130,12 +135,19 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
       await mkdir(dirname(dest), { recursive: true });
       await writeFile(dest, entry.data);
     }
+    if (suffix) await retitle(join(staging, "project.json"), title);
     await rename(staging, target);
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
-  return { projectPath: target, title: manifest.title };
+  return { projectPath: target, title };
+}
+
+/** 改解出来那本的书名（只动 title，别的照原样）。 */
+async function retitle(path: string, title: string): Promise<void> {
+  const raw = JSON.parse(await readFile(path, "utf-8")) as unknown;
+  await writeFile(path, `${JSON.stringify({ ...(isRecord(raw) ? raw : {}), title }, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------

@@ -40,20 +40,21 @@ async function makeBook(name = "story-aaa111"): Promise<string> {
 }
 
 describe("备份（P10）", () => {
-  it("打包整本书（含存档历史、空目录），恢复成一本新书：内容一样、git 锁文件不带、重名加后缀", async () => {
+  it("打包整本书（含存档历史、空目录），恢复成一本新书：内容一样、git 锁文件不带、重名加后缀、书名跟着标「恢复」", async () => {
     const dir = await makeBook();
     const made = await backup.createBookBackup(dir, new Date(2026, 9, 20, 9, 5, 7));
     expect(made.filename).toBe("雾港来信-备份-20261020-090507.zip");
 
     const first = await backup.restoreBookFromBackup(made.data);
-    expect(first).toEqual({ projectPath: `${dir}-恢复`, title: "雾港来信" });
+    expect(first).toEqual({ projectPath: `${dir}-恢复`, title: "雾港来信（恢复）" });
+    expect(JSON.parse(await readFile(join(first.projectPath, "project.json"), "utf-8"))).toMatchObject({ title: "雾港来信（恢复）" });
     expect(await readFile(join(first.projectPath, "chapters", "0001.md"), "utf-8")).toContain("死信");
     expect([...(await readFile(join(first.projectPath, ".git", "objects", "ab", "cdef")))]).toEqual([0x78, 0x9c, 1, 2, 3]);
     expect((await stat(join(first.projectPath, "drafts", "fast"))).isDirectory()).toBe(true);
     await expect(stat(join(first.projectPath, ".git", "index.lock"))).rejects.toThrow();
 
     const second = await backup.restoreBookFromBackup(made.data);
-    expect(second.projectPath).toBe(`${dir}-恢复2`);
+    expect(second).toEqual({ projectPath: `${dir}-恢复2`, title: "雾港来信（恢复2）" });
     // 解压的临时目录不留。
     expect((await readdir(join(root, "lib", "story-engine"))).filter((name) => name.includes(".restoring-"))).toEqual([]);
   });
