@@ -98,11 +98,13 @@ export function summarizeProcess(
       ? names.join("、")
       : `${names.slice(0, 2).join("、")} 等 ${tools.length} 步`;
   const last = steps.at(-1);
-  const current = !live || !last
+  const current = !live
     ? null
-    : last.kind === "tool"
-      ? (last.step.status === "running" ? labelOf(last.step) : "在想")
-      : "在想";
+    : !last
+      ? "在想"
+      : last.kind === "tool"
+        ? (last.step.status === "running" ? labelOf(last.step) : "在想")
+        : "在想";
   return {
     label,
     failed: tools.filter((step) => step.status === "failed").length,

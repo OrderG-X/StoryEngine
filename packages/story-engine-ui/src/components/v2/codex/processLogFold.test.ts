@@ -93,6 +93,7 @@ describe("summarizeProcess：收起那一行", () => {
     expect(live.current).toBe("核账");
     expect(summarizeProcess([...steps, { kind: "reasoning", text: "想" }], labelOf, true).current).toBe("在想");
     expect(summarizeProcess(steps, labelOf, false).current).toBeNull();
+    expect(summarizeProcess([], labelOf, true).current).toBe("在想");
   });
 });
 

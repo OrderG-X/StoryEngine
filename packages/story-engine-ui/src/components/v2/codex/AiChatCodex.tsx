@@ -1006,7 +1006,8 @@ function MessageBubbles({
           ))}
         </div>
       ) : null}
-      {processWorthShowing(fold.process, new Set((message.cards ?? []).map((card) => card.type)), chatLoading && isLiveAssistant)
+      {/* 进行中还没第一步（比如只先来了一条状态说明）也挂这一行「在想…」，别让作者对着不动的消息干等。 */}
+      {(processLive && fold.process.length === 0) || processWorthShowing(fold.process, new Set((message.cards ?? []).map((card) => card.type)), chatLoading && isLiveAssistant)
         ? <TurnProcess steps={fold.process} live={processLive} />
         : null}
       {answerBlocks.length ? (
@@ -1165,9 +1166,9 @@ function TurnProcess({ steps, live }: { readonly steps: readonly ProcessFoldStep
         </span>
         {summary.failed ? <span className="step-fail">{summary.failed} 步没成功</span> : null}
         {summary.stopped ? <span className="step-stop">已停止</span> : null}
-        <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
+        {steps.length ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
       </button>
-      {open ? (
+      {open && steps.length ? (
         <div className="process-log-children">
           {steps.map((step, index) => {
             if (step.kind === "reasoning") return <ThinkingDisclosure key={`p-r-${index}`} thinking={step.text.trim()} />;

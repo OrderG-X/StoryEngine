@@ -138,7 +138,7 @@
   .se-todo-steps li.is-done{color:var(--muted);}
   .se-todo-steps li.is-done .se-todo-mark{color:var(--success);display:inline-block;animation:se-check var(--dur-5) var(--ease-out);}
   /* 下一步那一格：强调色，轻轻呼吸。 */
-  .se-todo-steps li:first-child:not(.is-done),.se-todo-steps li.is-done + li:not(.is-done){
+  .se-todo-steps li:first-child:not(.is-done,.is-attention),.se-todo-steps li.is-done + li:not(.is-done,.is-attention){
     color:var(--text);background:var(--accent-soft);animation:se-ring 2.4s var(--ease-in-out) infinite;
   }
   .se-todo-mark{font-size:10px;line-height:1;}
