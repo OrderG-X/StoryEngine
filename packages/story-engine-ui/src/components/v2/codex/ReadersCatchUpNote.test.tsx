@@ -12,7 +12,7 @@ vi.mock("../../../api/client.js", () => ({ fetchReaderCatchUp: vi.fn() }));
 describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）", () => {
   afterEach(() => cleanup());
 
-  it("一行写全三个角色：在读的带 done/total，还没轮到的「排队」", () => {
+  it("只写正在读的角色；三个角色的全貌放在悬停提示里", () => {
     render(
       <ReadersCatchUpNote
         status={{
@@ -25,11 +25,11 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 34/58 · 记账员 排队 · 章纲员 排队");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：核账员 34/58");
+    expect(screen.getByRole("status").getAttribute("title")).toBe("编辑部在读前文：核账员 34/58 · 记账员 排队 · 章纲员 排队");
   });
 
-  it("读完一个划掉一个：读完的角色划线，还在读的照常走数字", () => {
+  it("读完的不再占字，还在读的照常走数字", () => {
     render(
       <ReadersCatchUpNote
         status={{
@@ -42,12 +42,8 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 58/58 · 记账员 12/58 · 章纲员 排队");
-    // 划掉的是「核账员 58/58」那一段（<s>），不是整行。
-    const struck = document.querySelector(".se-checker-reading-done");
-    expect(struck?.tagName).toBe("S");
-    expect(struck?.textContent).toBe("核账员 58/58");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：记账员 12/58");
+    expect(screen.getByRole("status").getAttribute("title")).toBe("编辑部在读前文：核账员 58/58 · 记账员 12/58 · 章纲员 排队");
   });
 
   it("全读完这行消失（reading:false）", () => {
@@ -99,8 +95,7 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 50/58（核账在等它读完） · 记账员 排队 · 章纲员 排队");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：核账员 50/58（核账在等它读完）");
     cleanup();
     render(
       <ReadersCatchUpNote
@@ -114,8 +109,7 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 58/58 · 记账员 排队 · 章纲员 55/58（拟纲在等它读完）");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：章纲员 55/58（拟纲在等它读完）");
     cleanup();
     render(
       <ReadersCatchUpNote
@@ -129,8 +123,7 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 58/58 · 记账员 57/58（记账在等它读完） · 章纲员 58/58");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：记账员 57/58（记账在等它读完）");
   });
 
   it("waiting 是残留脏值（reading 已翻 false）：不标——等读完了就不说还在等", () => {
@@ -146,8 +139,7 @@ describe("ReadersCatchUpNote 编辑部在读前文进度行（R4.3 验收 3.3）
         }}
       />,
     );
-    expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 58/58 · 记账员 12/58 · 章纲员 排队");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：记账员 12/58");
   });
 });
 
@@ -161,7 +153,7 @@ describe("导入的书通读记账（P8）", () => {
 
   it("在记：记账员那一段带上还要多久", () => {
     render(<ReadersCatchUpNote status={{ reading: true, roles: roles(3, true), reread: { status: "running", done: 3, total: 8, etaMinutes: 12 } }} />);
-    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：核账员 排队 · 记账员 3/8（约 12 分钟） · 章纲员 排队");
+    expect(screen.getByRole("status").textContent).toBe("编辑部在读前文：记账员 3/8（约 12 分钟）");
   });
 
   it("停下了：说停在哪、为什么，点「接着记」；接着记没成功如实写原因", async () => {
@@ -233,7 +225,7 @@ describe("进度行走真轮询链路（R6.2）：动作进行中等待补读，
     });
     expect(fetchMock).toHaveBeenCalledTimes(1); // reading:false 但动作在等回包：照轮
     expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 3/10（核账在等它读完） · 记账员 排队 · 章纲员 排队");
+      .toBe("编辑部在读前文：核账员 3/10（核账在等它读完）");
     // 回包到了，但补读还在读（reading:true）：这行留着、轮询照走。
     actionInFlight = false;
     rerender(<Harness />);
@@ -242,6 +234,6 @@ describe("进度行走真轮询链路（R6.2）：动作进行中等待补读，
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("status").textContent)
-      .toBe("编辑部在读前文：核账员 3/10（核账在等它读完） · 记账员 排队 · 章纲员 排队");
+      .toBe("编辑部在读前文：核账员 3/10（核账在等它读完）");
   });
 });

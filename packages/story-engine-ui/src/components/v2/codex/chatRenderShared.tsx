@@ -182,15 +182,10 @@ export function ThinkingIndicator() {
   );
 }
 
-/** 工具耗时格式化：<1s 显示 ms，<60s 显示 Xs（整数不带小数），否则 XmYs。供 ToolStepFold / StepCard 共用。 */
+/** 工具用时：不到 1 秒不报（作者不关心毫秒）；1 分钟内「N 秒」，再长「M 分 S 秒」。供过程里的工具行 / StepCard 共用。 */
 export function formatStepElapsed(ms: number): string {
-  if (ms <= 0) return "";
-  if (ms < 1000) return `${ms}ms`;
-  const totalSec = ms / 1000;
-  if (totalSec < 60) {
-    const rounded = Math.round(totalSec * 10) / 10;
-    return Number.isInteger(rounded) ? `${rounded}s` : `${rounded.toFixed(1)}s`;
-  }
-  const sec = Math.round(totalSec);
-  return `${Math.floor(sec / 60)}m${sec % 60}s`;
+  if (ms < 1000) return "";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  return sec % 60 === 0 ? `${sec / 60} 分` : `${Math.floor(sec / 60)} 分 ${sec % 60} 秒`;
 }

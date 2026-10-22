@@ -1,5 +1,5 @@
 /**
- * 右栏顶卡「第 N 章还差什么」（重构 P6，草图 ①）：写 / 核账 / 定稿三行打勾 + 一个主按钮。
+ * 右栏顶上一条「第 N 章」进度（重构 P6，2026-10-22 压成一行）：写 / 核账 / 定稿打勾 + 一个主按钮。
  * 说法和稿纸底下的工具条同源（workspace/chapterProgress）。主按钮按顺序取第一个没做完的：
  * 写这一章 → 核账 → 去看那 N 处 → 定稿 → 去第 N 章（后面第一个没定稿的章）。
  */
@@ -7,8 +7,6 @@ import type { ReactNode } from "react";
 import { STEP_HINTS, type ChapterProgress } from "../../../workspace/chapterProgress.js";
 import type { ChapterButton } from "../../../utils/chapterButtons.js";
 import { requestContinuityFocus } from "./ContinuityMarks.js";
-
-const COUNT = ["", "一", "两", "三"];
 
 export function ChapterTodoCard({
   progress,
@@ -34,8 +32,7 @@ export function ChapterTodoCard({
     { key: "check", label: "核账", hint: STEP_HINTS.check_continuity, done: progress.check.done, text: progress.check.text },
     { key: "commit", label: "定稿", hint: STEP_HINTS.commit_preview, ...progress.commit },
   ];
-  const left = steps.filter((step) => !step.done).length;
-  const title = progress.commit.done ? `第 ${progress.chapter} 章已定稿` : `第 ${progress.chapter} 章还差${COUNT[left] ?? left}步`;
+  const title = progress.commit.done ? `第 ${progress.chapter} 章已定稿` : `第 ${progress.chapter} 章`;
   const { primary } = progress;
   const onPrimary = () => {
     if (primary.kind === "show_issues") requestContinuityFocus();
@@ -49,15 +46,17 @@ export function ChapterTodoCard({
     <div className="se-todo-wrap">
       <section className="se-todo-card" aria-label={title}>
         <div className="se-todo-card-h">{title}</div>
-        <ul className="se-todo-steps">
+        {/* 三步一行：做完打勾；每步的细话（写了多少字、核出几处）悬停看。核出要看的几处直接标在「核账」上。 */}
+        <ol className="se-todo-steps">
           {steps.map((step) => (
-            <li key={step.key} className={step.done ? "is-done" : ""}>
+            <li key={step.key} className={step.done ? "is-done" : ""} title={step.hint ? `${step.text}。${step.hint}` : step.text}>
               <span className="se-todo-mark" aria-hidden="true">{step.done ? "✓" : "○"}</span>
-              <span className="se-todo-step-label" title={step.hint}>{step.label}</span>
-              <span className={`se-todo-step-text${step.key === "check" && attention ? " is-attention" : ""}`} title={step.text}>{step.text}</span>
+              <span className="se-todo-step-label">{step.label}</span>
+              {step.key === "check" && attention ? <span className="se-todo-step-text is-attention">{progress.check.sure} 处</span> : null}
+              <span className="sr-only">：{step.text}</span>
             </li>
           ))}
-        </ul>
+        </ol>
         <button
           type="button"
           className={`se-todo-primary${busy ? " is-busy" : ""}`}
@@ -68,7 +67,7 @@ export function ChapterTodoCard({
           {busy && busyCaption ? busyCaption : primary.label}
         </button>
       </section>
-      {children}
+      {children ? <div className="se-todo-notes">{children}</div> : null}
     </div>
   );
 }

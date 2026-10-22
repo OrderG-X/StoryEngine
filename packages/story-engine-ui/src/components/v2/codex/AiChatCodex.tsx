@@ -53,12 +53,7 @@ import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import { chapterTurns } from "./chapterTurns.js";
-import {
-  foldProcessSegments,
-  isCompletedTurnForProcessFold,
-  shouldAggregateProcessBucket,
-  type ProcessFoldStep,
-} from "./processLogFold.js";
+import { foldTurn, processWorthShowing, summarizeProcess, type ProcessFoldStep } from "./processLogFold.js";
 import {
   formatMessageBlocks,
   formatStepElapsed,
@@ -157,25 +152,21 @@ export function ReadersCatchUpNote({ status, onResumeReread, aiMissing = false }
     );
   }
   if (!status?.reading) return null;
+  // 只列正在读的角色（排队的、读完的不占字）；三个角色的全貌悬停看。
+  const describe = (role: (typeof status.roles)[number]) => {
+    const label = READER_ROLE_LABELS[role.role] ?? role.role;
+    const finished = !role.reading && role.total > 0 && role.done >= role.total;
+    const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
+    // 导入的书通读记账（P8）：记账员这一行带上还要多久。
+    const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
+    return role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
+  };
+  const active = status.roles.filter((role) => role.reading);
   return (
-    <div className="se-checker-reading" role="status">
+    <div className="se-checker-reading" role="status" title={`编辑部在读前文：${status.roles.map(describe).join(" · ")}`}>
       <span className="se-checker-reading-dot" aria-hidden="true" />
       <span className="se-checker-reading-text">
-        编辑部在读前文：
-        {status.roles.map((role, index) => {
-          const label = READER_ROLE_LABELS[role.role] ?? role.role;
-          const finished = !role.reading && role.total > 0 && role.done >= role.total;
-          const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
-          // 导入的书通读记账（P8）：记账员这一行带上还要多久。
-          const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
-          const text = role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
-          return (
-            <span key={role.role}>
-              {index > 0 ? " · " : ""}
-              {finished ? <s className="se-checker-reading-done">{text}</s> : text}
-            </span>
-          );
-        })}
+        编辑部在读前文：{active.length ? active.map(describe).join(" · ") : "排队中"}
       </span>
     </div>
   );
@@ -911,7 +902,6 @@ function MessageBubbles({
   // assistant
   const model = buildTimelineModel(message);
   const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
-  const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
   const commitPreview = cardOf(message, "commit-preview")?.preview;
   // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
   const hasAnything = message.content.trim().length > 0
@@ -924,24 +914,13 @@ function MessageBubbles({
 
   const canUndo = Boolean(onUndoToHere) && (model?.canUndo ?? false);
   const canCopy = !isLiveAssistant && message.content.trim().length > 0;
-  // 思考「进行中」=本轮还在流、答案与工具都还没出现（此时思考字上跑光影；一旦出工具/答案即静止）。
-  const thinkingActive = chatLoading && !message.content.trim() && toolSteps.length === 0;
-  // 有序分段：把「想→调工具→再想→答」按真实时间顺序逐段渲染（治「工具堆顶部、后续思考看不见」）。
-  // 旧消息无 segments → renderSegments 为 null → 回退原「思考折叠→工具→正文」三桶渲染。
-  const renderSegments = buildMessageRenderSegments(message);
-  // P1-9：已完成轮次把多条过程步聚成「AI 操作记录 · N 步」；进行中保持逐步金光。
-  const aggregateProcess = isCompletedTurnForProcessFold(chatLoading, isLiveAssistant);
-  const folded = renderSegments
-    ? foldProcessSegments(renderSegments, { aggregate: aggregateProcess })
-    : null;
-  const firstTextIndex = folded ? folded.findIndex((seg) => seg.kind === "text") : -1;
+  // 一轮拆成两块：思考、工具、工具之间的旁白收成一行「过程」；最后一个工具之后的正文是答复（见 processLogFold.ts）。
+  const fold = foldTurn(buildMessageRenderSegments(message));
+  const answerBlocks = fold.answer.length ? formatMessageBlocks(fold.answer.join("\n\n")) : [];
+  // 进行中且答复还没开始写：过程那行跑光、报正在做哪步。
+  const processLive = chatLoading && isLiveAssistant && fold.answer.length === 0;
   // 模型做完事没再说话就结束时，补一句最后那步工具的原话结果（见 turnTail.ts）。
-  const tailSummary = turnTailSummary(folded, !isLiveAssistant);
-  const bucketAggregate = shouldAggregateProcessBucket(
-    message.thinking,
-    toolSteps.length,
-    aggregateProcess,
-  );
+  const tailSummary = turnTailSummary(fold, !isLiveAssistant);
 
   const statusNotes = cardOf(message, "status-notes")?.notes;
   // 卡片按 type 分发渲染，按固定次序排（布局稳定，不随工具先后跳）；状态说明在最上面单独渲染。
@@ -1035,54 +1014,14 @@ function MessageBubbles({
           ))}
         </div>
       ) : null}
-      {folded ? (
-        folded.map((seg, index) => {
-          if (seg.kind === "process") {
-            return <ProcessLogAggregate key={`seg-p-${index}`} steps={seg.steps} />;
-          }
-          if (seg.kind === "reasoning") {
-            // 尾段思考 + 仍在流 = 当前正在想的那段，跑金光；其余历史思考静止。
-            const active = chatLoading && isLiveAssistant && index === folded.length - 1;
-            return <ThinkingDisclosure key={`seg-r-${index}`} thinking={seg.text.trim()} active={active} />;
-          }
-          if (seg.kind === "tool") {
-            return <ToolStepFold key={`seg-t-${seg.step.id}`} step={seg.step} />;
-          }
-          const blocks = formatMessageBlocks(seg.text);
-          if (!blocks.length) return null;
-          return (
-            <div className="msg-body" key={`seg-x-${index}`}>
-              <MessageBlocksView blocks={blocks} lead={index === firstTextIndex} />
-            </div>
-          );
-        })
-      ) : (
-        <>
-          {bucketAggregate ? (
-            <ProcessLogAggregate
-              steps={[
-                ...(message.thinking?.trim()
-                  ? [{ kind: "reasoning" as const, text: message.thinking.trim() }]
-                  : []),
-                ...toolSteps.map((step) => ({ kind: "tool" as const, step })),
-              ]}
-            />
-          ) : (
-            <>
-              {/* 回退：思考过程默认收起一行；进行中字上跑光影 */}
-              {message.thinking?.trim() ? <ThinkingDisclosure thinking={message.thinking.trim()} active={thinkingActive} /> : null}
-              {/* 回退：调用工具一行（调用工具 · 工具名），运行中跑光影，点开看执行详情 */}
-              {toolSteps.map((step) => <ToolStepFold key={step.id} step={step} />)}
-            </>
-          )}
-          {/* 回退：正文裸文字平铺，无气泡框 */}
-          {contentBlocks.length ? (
-            <div className="msg-body">
-              <MessageBlocksView blocks={contentBlocks} lead />
-            </div>
-          ) : null}
-        </>
-      )}
+      {processWorthShowing(fold.process, new Set((message.cards ?? []).map((card) => card.type)), chatLoading && isLiveAssistant)
+        ? <TurnProcess steps={fold.process} live={processLive} />
+        : null}
+      {answerBlocks.length ? (
+        <div className="msg-body">
+          <MessageBlocksView blocks={answerBlocks} lead />
+        </div>
+      ) : null}
 
       {tailSummary ? <p className="se-turn-tail">{tailSummary}</p> : null}
 
@@ -1091,7 +1030,7 @@ function MessageBubbles({
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
       {/* 回复下方的小动作（悬停才显）：复制回复文字 / 撤销到此。 */}
-      {(canCopy || canUndo || message.tokenUsage) ? (
+      {(canCopy || canUndo) ? (
         <div className="se-msg-acts">
           {canCopy ? (
             <button
@@ -1116,20 +1055,10 @@ function MessageBubbles({
               <IconUndo size={13} />撤销到此
             </button>
           ) : null}
-          {message.tokenUsage && message.tokenUsage.input > 0 ? (
-            <span className="se-msg-usage" title="这一轮用了多少 token（对话 AI 加上写章纲、出稿、核对等内部调用）；命中缓存的部分服务商通常只收一成左右">
-              {formatWan(message.tokenUsage.input + message.tokenUsage.output)} · 缓存 {formatWan(message.tokenUsage.cachedInput)}
-            </span>
-          ) : null}
         </div>
       ) : null}
     </div>
   );
-}
-
-/** 「15.5 万」：作者看得懂的量级。 */
-function formatWan(value: number): string {
-  return value >= 10000 ? `${(value / 10000).toFixed(1)} 万` : String(value);
 }
 
 /** 卡片在气泡里的固定次序。 */
@@ -1217,66 +1146,34 @@ function splitLead(text: string): { head: string; rest: string } {
   return { head: "", rest: text };
 }
 
-/** 调用工具：默认收起一行「调用工具 · 工具名」。运行中工具名跑光影；有执行详情时可点开看。 */
-function ToolStepFold({ step }: { readonly step: ToolStep }) {
-  const [open, setOpen] = useState(false);
-  const failed = step.status === "failed";
-  const running = step.status === "running";
-  // 已停止（人喊停腰斩）：中性徽标如实说「已停止」，不走红（不是失败）、不跑光影（不在跑）。
-  const stopped = step.status === "stopped";
-  // 裁决未过（commit_preview 核实「暂不可定稿」这类否定裁决）：落定徽标，不红（不是失败）不绿。
-  const verdict = step.status === "verdict";
-  const detail = step.detail?.trim();
-  const canOpen = Boolean(detail);
-  const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : null;
-  // 工具名一律现取中文（覆盖旧历史里烤进消息的英文 label），见 resolveToolStepLabel。
-  const toolLabel = resolveToolStepLabel(step.toolName, step.label);
-  return (
-    <div className="step-fold">
-      <button
-        type="button"
-        className="step-head"
-        onClick={() => { if (canOpen) setOpen((v) => !v); }}
-        aria-expanded={canOpen ? open : undefined}
-        disabled={!canOpen}
-      >
-        <span className="step-kind">AI 操作记录</span>
-        <span className="step-sep">·</span>
-        <span className={`step-label is-tool ${running ? "is-active" : ""}`.trim()}>{uiText(toolLabel, "执行步骤")}</span>
-        {failed ? <span className="step-fail">失败</span> : null}
-        {stopped ? <span className="step-stop">已停止</span> : null}
-        {verdict ? <span className="step-verdict">裁决未过</span> : null}
-        {elapsed ? <span className="tm">{elapsed}</span> : null}
-        {canOpen ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
-      </button>
-      {open && detail ? <p className="step-detail">{detail}</p> : null}
-    </div>
-  );
+/** 工具名一律现取中文（覆盖旧历史里烤进消息的英文 label），见 resolveToolStepLabel。 */
+function toolStepLabel(step: ToolStep): string {
+  return uiText(resolveToolStepLabel(step.toolName, step.label), "执行步骤");
 }
 
-/** P1-9：已完成轮次的过程步聚合行——默认收起「AI 操作记录 · N 步」，展开后按序渲染各步。 */
-function ProcessLogAggregate({ steps }: { readonly steps: readonly ProcessFoldStep[] }) {
+/**
+ * 一轮的过程：收起时一行（做了哪几样事；没成功的照实标）；进行中报正在做的那步并跑光。
+ * 点开按先后列出思考、旁白、每一步工具。
+ */
+function TurnProcess({ steps, live }: { readonly steps: readonly ProcessFoldStep[]; readonly live: boolean }) {
   const [open, setOpen] = useState(false);
+  const summary = summarizeProcess(steps, toolStepLabel, live);
   return (
-    <div className="step-fold process-log-agg">
-      <button
-        type="button"
-        className="step-head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className="step-kind">AI 操作记录</span>
-        <span className="step-sep">·</span>
-        <span className="step-label is-tool">{steps.length} 步</span>
+    <div className="step-fold turn-proc">
+      <button type="button" className="step-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className={`step-label${summary.current ? " is-active" : ""}`}>
+          {summary.current ? `${summary.current}…` : summary.label}
+        </span>
+        {summary.failed ? <span className="step-fail">{summary.failed} 步没成功</span> : null}
+        {summary.stopped ? <span className="step-stop">已停止</span> : null}
         <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
       </button>
       {open ? (
         <div className="process-log-children">
           {steps.map((step, index) => {
-            if (step.kind === "reasoning") {
-              return <ThinkingDisclosure key={`agg-r-${index}`} thinking={step.text.trim()} />;
-            }
-            return <ToolStepFold key={`agg-t-${step.step.id}`} step={step.step} />;
+            if (step.kind === "reasoning") return <ThinkingDisclosure key={`p-r-${index}`} thinking={step.text.trim()} />;
+            if (step.kind === "narration") return <p key={`p-n-${index}`} className="proc-say">{step.text.trim()}</p>;
+            return <ToolStepRow key={`p-t-${step.step.id}`} step={step.step} />;
           })}
         </div>
       ) : null}
@@ -1284,13 +1181,42 @@ function ProcessLogAggregate({ steps }: { readonly steps: readonly ProcessFoldSt
   );
 }
 
-/** 思考过程：默认收起一行「思考过程 ▸」。进行中标签跑光影；点开看真实推理链。无 emoji。 */
-function ThinkingDisclosure({ thinking, active }: { readonly thinking: string; readonly active?: boolean }) {
+/** 过程里的一步工具：名字 + 结果徽标 + 用时（不到 1 秒不报）；有执行详情时可点开看。 */
+function ToolStepRow({ step }: { readonly step: ToolStep }) {
+  const [open, setOpen] = useState(false);
+  const running = step.status === "running";
+  const detail = step.detail?.trim();
+  const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : "";
+  return (
+    <div className="step-fold">
+      <button
+        type="button"
+        className="step-head"
+        onClick={() => { if (detail) setOpen((v) => !v); }}
+        aria-expanded={detail ? open : undefined}
+        disabled={!detail}
+      >
+        <span className={`step-label is-tool${running ? " is-active" : ""}`}>{toolStepLabel(step)}</span>
+        {step.status === "failed" ? <span className="step-fail">没成功</span> : null}
+        {/* 人喊停：中性徽标如实说「已停止」，不走红（不是失败）。 */}
+        {step.status === "stopped" ? <span className="step-stop">已停止</span> : null}
+        {/* 否定裁决（如「暂不可定稿」）：落定徽标，不红不绿。 */}
+        {step.status === "verdict" ? <span className="step-verdict">裁决未过</span> : null}
+        {elapsed ? <span className="tm">{elapsed}</span> : null}
+        {detail ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
+      </button>
+      {open && detail ? <p className="step-detail">{detail}</p> : null}
+    </div>
+  );
+}
+
+/** 思考过程：默认收起一行「思考」；点开看真实推理链。 */
+function ThinkingDisclosure({ thinking }: { readonly thinking: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="step-fold">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="step-head">
-        <span className={`step-label ${active ? "is-active" : ""}`.trim()}>AI 分析</span>
+        <span className="step-label">思考</span>
         <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
       </button>
       {open ? <p className="step-detail">{thinking}</p> : null}
