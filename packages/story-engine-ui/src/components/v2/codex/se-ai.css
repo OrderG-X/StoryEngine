@@ -372,6 +372,7 @@
   .step-card .cdc-undo-confirm{
     display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;padding:10px 12px;
     border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);font-size:12.5px;
+    animation:se-in var(--dur-2) var(--ease-out) backwards;
   }
   .step-card .cdc-undo-confirm span{flex:1 1 200px;color:var(--muted);line-height:1.6;}
   .step-card .cdc-undo-confirm button{height:28px;padding:0 12px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;}
