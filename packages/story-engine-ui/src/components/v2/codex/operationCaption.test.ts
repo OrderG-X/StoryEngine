@@ -3,7 +3,7 @@ import { operationCaption, runningAgentCard } from "./operationCaption.js";
 
 describe("operationCaption 不走对话的操作也要看得见", () => {
   it("认识的操作给人话，不认识的给通用说法，没有操作给 null", () => {
-    expect(operationCaption("ai-review")).toBe("正在做内容审阅，推理模型可能要几分钟");
+    expect(operationCaption("reroll-candidates")).toBe("正在再写一版");
     expect(operationCaption("something-new")).toBe("正在处理");
     expect(operationCaption(null)).toBeNull();
     expect(operationCaption("selection-rewrite-polish")).toBe("正在润色选中的段落");

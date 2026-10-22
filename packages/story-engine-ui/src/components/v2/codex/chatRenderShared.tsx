@@ -123,19 +123,18 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
     case "idle":
       return "说说这章想写什么…";
     case "steering_ready":
-      return "补充想法，或说「写吧」开始生成…";
+      return "还想补什么，直接说…";
     case "draft_generating":
       return "正在生成工作稿…";
     case "draft_ready":
-      return "说说修改意见，或说「核账」查前后对不上…";
     case "quality_checked":
-      return "说「定稿预览」生成定稿预览，或让 AI 做内容审阅…";
+      return "哪里想改，直接说…";
     case "commit_preview_ready":
     case "waiting_commit_confirmation":
       return "在定稿清单里看一遍，点「确认定稿」…";
     case "committed":
     case "ready_for_next":
-      return "说「下一章」继续…";
+      return "下一章想写什么…";
     default:
       return "输入你的想法…";
   }

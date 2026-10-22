@@ -7,11 +7,13 @@
   .ai-head.se-ai-head{height:48px;padding:0 8px 0 14px;gap:8px;border-bottom:0;}
   .se-ai-title{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--text);}
   .se-ai-title svg{color:var(--accent);}
+  /* 模型名：淡字、不描边（悬停才显边），别和会话名抢眼；长名字截断，全名在悬停说明里。 */
   .se-model-chip{
-    min-width:0;max-width:180px;height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;
-    border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;
+    min-width:0;max-width:140px;height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;
+    border:1px solid transparent;border-radius:999px;background:transparent;color:var(--faint);font-size:12px;cursor:pointer;
+    transition:color var(--dur-3) var(--ease-out),border-color var(--dur-3) var(--ease-out);
   }
-  .se-model-chip:hover{color:var(--text);border-color:var(--line-strong);}
+  .se-model-chip:hover{color:var(--text);border-color:var(--line);}
   .se-model-chip .se-dot{width:6px;height:6px;flex:none;}
   .se-model-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .se-ai-head-actions{margin-left:auto;display:inline-flex;align-items:center;gap:2px;}
@@ -327,7 +329,6 @@
   .nextstep-choice.is-primary{flex:0 0 auto;border-radius:999px;color:var(--accent-ink);background:var(--sheen),var(--accent);box-shadow:none;}
   .nextstep-choice.is-primary::before{background:radial-gradient(90px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.24),transparent 65%);}
   .nextstep-choice.is-primary:hover:not(:disabled){filter:brightness(1.05);transform:translateY(-1px);border-color:transparent;background:var(--sheen),var(--accent);box-shadow:var(--glow-accent);}
-  .nextstep-rec{background:rgba(0,0,0,.16);color:inherit;}
 
   /* ── @ 引用候选 ── */
   .se-mention{

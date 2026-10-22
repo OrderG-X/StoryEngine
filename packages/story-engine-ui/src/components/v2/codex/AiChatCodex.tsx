@@ -39,7 +39,7 @@ import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
-import { ChatContextMeter } from "./ChatContextMeter.js";
+import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import { ChapterTodoCard } from "./ChapterTodoCard.js";
 import { useChapterProgress } from "../../../workspace/chapterProgress.js";
@@ -195,6 +195,8 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
             key={choice.label}
             type="button"
             className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
+            // 推荐项本来就是实心按钮，不再另贴「推荐」角标，悬停说一声。
+            title={choice.primary ? "推荐" : undefined}
             style={{ animationDelay: `${index * 40}ms` }}
             disabled={busy}
             onMouseMove={trackChoiceLight}
@@ -206,7 +208,7 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
               onSendMessage?.(choice.intent);
             }}
           >
-            <span>{choice.label}{choice.primary ? <em className="nextstep-rec">推荐</em> : null}</span>
+            <span>{choice.label}</span>
           </button>
         ))}
       </div>
@@ -402,6 +404,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  // 「正在思考」胶囊只顶发出去到第一个字回来之前那一下；之后那条回复自己的过程行在跑光、报正在做哪步，不再两处都说。
+  const waitingFirstEvent = Boolean(props.chatLoading) && (!lastAssistant || !assistantHasAnything(lastAssistant));
   // 「建议下一步」是收尾的内部一步，不上字幕。
   const busyCaption = busy
     ? operationCaption(props.draftActionLoading)
@@ -513,8 +517,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       </ChapterTodoCard>
 
       {/* ── 消息流（智能跟随滚动） ── */}
-      {/* is-thinking：生成期间底部留白，避免「正在思考」浮层盖住正在流式输出的文字。 */}
-      <div className={`ai-body${props.chatLoading ? " is-thinking" : ""}`} ref={historyRef} onScroll={handleHistoryScroll}>
+      {/* is-thinking：胶囊在的时候底部留白，免得浮层盖住最后几行。 */}
+      <div className={`ai-body${waitingFirstEvent ? " is-thinking" : ""}`} ref={historyRef} onScroll={handleHistoryScroll}>
         {/* ── 归档折叠行：顶部显示「已清理 N 条早先消息」（可点展开只读回看） ── */}
         {activeArchivedCount > 0 ? (
           <div
@@ -529,15 +533,19 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         ) : null}
         {/* 展开归档段：只读显示 slice(0, activeArchivedCount) */}
         {archivedExpanded && activeArchivedCount > 0 ? (
-          <div className="codex-archived-messages">
-            {messages.slice(0, activeArchivedCount).map((message) => (
-              <MessageBubbles
-                key={`archived-${message.id}`}
-                message={message}
-                chatLoading={workspaceBusy}
-              />
-            ))}
-          </div>
+          <>
+            <div className="codex-archived-messages">
+              {messages.slice(0, activeArchivedCount).map((message) => (
+                <MessageBubbles
+                  key={`archived-${message.id}`}
+                  message={message}
+                  chatLoading={workspaceBusy}
+                />
+              ))}
+            </div>
+            {/* 撤销清理放这儿（不再常驻在输入框上方占一条）。 */}
+            <div className="codex-unarchive-row"><UnarchiveButton disabled={workspaceBusy} /></div>
+          </>
         ) : null}
         {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
@@ -614,7 +622,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 上下文提示条（消息列表与输入框之间） ──
           「正在思考」胶囊挂在这一段的顶上（浮在消息流底部留出的空当里），不再压住下面的快捷按钮。 */}
       <div className="se-ai-dock-anchor">
-        <ThinkingDock on={Boolean(props.chatLoading)} />
+        <ThinkingDock on={waitingFirstEvent} />
       </div>
       <ChatContextMeter />
 
@@ -897,16 +905,8 @@ function MessageBubbles({
 
   // assistant
   const model = buildTimelineModel(message);
-  const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
-  const commitPreview = cardOf(message, "commit-preview")?.preview;
-  // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
-  const hasAnything = message.content.trim().length > 0
-    || toolSteps.length > 0
-    || (message.agentCards?.length ?? 0) > 0
-    || (message.cards?.length ?? 0) > 0
-    || Boolean(message.thinking?.trim());
-  // 流式开始前的空占位助手气泡不渲染。
-  if (!hasAnything) return null;
+  // 流式开始前的空占位助手气泡不渲染（这时底部「正在思考」胶囊在顶着）。
+  if (!assistantHasAnything(message)) return null;
 
   const canUndo = Boolean(onUndoToHere) && (model?.canUndo ?? false);
   // 定稿回执卡自带「撤销这次定稿」（同一个回退），悬停的「撤销到此」就不再给。
@@ -1051,6 +1051,15 @@ function MessageBubbles({
       ) : null}
     </div>
   );
+}
+
+/** 助手这条有没有东西可显示（suggestedActions 不算——它们在输入框上方的建议条）。 */
+function assistantHasAnything(message: ChapterMessage): boolean {
+  return message.content.trim().length > 0
+    || (message.toolSteps?.length ?? 0) > 0
+    || (message.agentCards?.length ?? 0) > 0
+    || (message.cards?.length ?? 0) > 0
+    || Boolean(message.thinking?.trim());
 }
 
 /** 卡片在气泡里的固定次序。 */

@@ -326,7 +326,6 @@
   .nextstep-q::before{content:"";flex:none;width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:none;}
   .nextstep-row{display:flex;flex-wrap:wrap;gap:7px;}
   /* 「推荐」小标：在金色实心推荐项上=深色小药丸，点明「全色的」=推荐这一步。 */
-  .nextstep-rec{margin-left:7px;font-style:normal;font-size:9.5px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:6px;background:rgba(26,20,10,.20);color:var(--accent-ink);}
   .nextstep-choice{position:relative;overflow:hidden;font-family:inherit;font-size:12px;padding:8px 14px;border-radius:11px;
     border:1px solid var(--accent-line-soft);background:color-mix(in srgb,var(--accent) 6%,transparent);color:var(--muted);cursor:pointer;
     transition:transform .15s ease,border-color .2s,color .2s,background .2s,box-shadow .2s;}
@@ -937,6 +936,7 @@
     opacity:.55;pointer-events:none;padding:4px 0;
     border-bottom:1px dashed var(--line-faint);margin-bottom:8px;
   }
+  .codex-unarchive-row{display:flex;justify-content:center;margin:0 0 10px;}
 }
 
 @keyframes codexfade{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
