@@ -264,19 +264,29 @@ export interface WritingRulesLengthIntent {
    * 允许「targetWords:200 → 下限 150」这种把门槛往下调的写法（见 commit-quality-check）。
    */
   readonly rawTargetWords?: number;
-  /** 显式硬下限（纯汉字口径）。<300 视为缺省。 */
+  /**
+   * 显式硬下限（纯汉字口径）：作者写的正整数原值，不做 300 地板归一——作者把下限改成 30 字，定稿就按 30 字拦
+   * （以前低于 300 当缺省，定稿悄悄回落到 300，作者改了等于没改）。0 / 负数 = 缺省。
+   */
   readonly minWords?: number;
 }
 
 /** 供定稿执法侧（commit-quality-check）复用的入口。 */
 export function readWritingRulesLengthIntent(rules: LengthRules): WritingRulesLengthIntent {
   const targetWords = normalizeDraftLengthNumber(rules.targetWords);
-  const minWords = normalizeDraftLengthNumber(rules.minWords);
+  const rawTargetWords = positiveInteger(rules.targetWords);
+  const minWords = positiveInteger(rules.minWords);
   return {
     ...(targetWords !== undefined ? { targetWords } : {}),
-    ...(rules.targetWords !== undefined && rules.targetWords > 0 ? { rawTargetWords: Math.floor(rules.targetWords) } : {}),
+    ...(rawTargetWords !== undefined ? { rawTargetWords } : {}),
     ...(minWords !== undefined ? { minWords } : {}),
   };
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.floor(value);
+  return n > 0 ? n : undefined;
 }
 
 function normalizeDraftLengthNumber(value: number | undefined): number | undefined {

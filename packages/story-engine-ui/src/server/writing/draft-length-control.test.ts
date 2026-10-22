@@ -82,6 +82,10 @@ describe("readWritingRulesLengthIntent（出稿/定稿共用的意图解析）",
   it("低于 300 的目标：出稿侧不认（targetWords 缺省），定稿软推导仍拿得到原值（rawTargetWords）", () => {
     expect(readWritingRulesLengthIntent({ targetWords: 200 })).toEqual({ rawTargetWords: 200 });
   });
+
+  it("低于 300 的下限照原值给定稿执法（作者改成 30 就是 30，不回落到 300）", () => {
+    expect(readWritingRulesLengthIntent({ targetWords: 2500, minWords: 30 })).toEqual({ targetWords: 2500, rawTargetWords: 2500, minWords: 30 });
+  });
 });
 
 describe("lengthRulesOf（设定卡写作规则 → 字数）", () => {
