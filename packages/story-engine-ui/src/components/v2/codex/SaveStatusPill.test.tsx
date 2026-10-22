@@ -47,10 +47,22 @@ describe("SaveStatusPill", () => {
   it("存成功：短暂显示已保存后消失", async () => {
     render(<SaveStatusPill />);
     act(() => { useDraftStore.getState().markSaving(); });
+    // 存得慢才亮「保存中…」。
+    expect(screen.queryByText("保存中…")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
     expect(screen.getByText("保存中…")).toBeTruthy();
     act(() => { useDraftStore.getState().markSaved("v1", "一。", ""); });
     expect(screen.getByText("已保存")).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
     expect(screen.queryByText("已保存")).toBeNull();
+  });
+
+  it("存得快：不闪「保存中…」，直接给已保存", async () => {
+    render(<SaveStatusPill />);
+    act(() => { useDraftStore.getState().markSaving(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(screen.queryByText("保存中…")).toBeNull();
+    act(() => { useDraftStore.getState().markSaved("v1", "一。", ""); });
+    expect(screen.getByText("已保存")).toBeTruthy();
   });
 });

@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NamePeekCard } from "./bibleIndex.js";
 import { Avatar } from "./bibleVisual.js";
+import { usePresence } from "../../../hooks/usePresence.js";
 
 export interface NameOccurrence {
   readonly start: number;
@@ -188,15 +189,22 @@ export function NamePeek({
   // 换章时收起。
   useEffect(() => { setPeek(null); }, [contentKey]);
 
-  if (!peek) return null;
-  const c = peek.card;
+  // 收起时淡出：留着最后那张卡播完退场。
+  const presence = usePresence<HTMLDivElement>(peek !== null);
+  const lastPeek = useRef(peek);
+  if (peek) lastPeek.current = peek;
+  const shown = peek ?? (presence.mounted ? lastPeek.current : null);
+  if (!shown) return null;
+  const c = shown.card;
   const empty = c.lines.length === 0 && c.relations.length === 0 && c.now.length === 0;
   return (
     <div
+      ref={presence.ref}
       className="se-name-peek"
       role="dialog"
       aria-label={`${c.name}的速览`}
-      style={{ top: peek.top, left: peek.left }}
+      style={{ top: shown.top, left: shown.left }}
+      data-closing={presence.closing || undefined}
       onMouseEnter={() => { if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; } }}
       onMouseLeave={() => { closeTimer.current = window.setTimeout(() => { setPeek(null); hoveredName.current = null; }, 200); }}
     >

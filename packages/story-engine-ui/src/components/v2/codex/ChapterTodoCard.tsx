@@ -60,7 +60,7 @@ export function ChapterTodoCard({
         </ul>
         <button
           type="button"
-          className="se-todo-primary"
+          className={`se-todo-primary${busy ? " is-busy" : ""}`}
           disabled={busy || !actionable}
           title={primary.kind in STEP_HINTS ? STEP_HINTS[primary.kind as keyof typeof STEP_HINTS] : undefined}
           onClick={onPrimary}

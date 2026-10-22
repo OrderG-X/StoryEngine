@@ -23,6 +23,7 @@ import { SentenceFocus } from "./sentenceFocusPlugin.js";
 import { typewriterScrollTop } from "./sentenceFocus.js";
 import { useBookStore } from "../../stores/bookStore.js";
 import { useUiStore } from "../../stores/uiStore.js";
+import { scrollBehavior } from "../../stores/motionStore.js";
 
 const BLOCK_SEPARATOR = "\n\n";
 const TOOLBAR_GAP = 44;
@@ -320,7 +321,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       const domAt = editor.view.domAtPos(first.from);
       const node = domAt?.node;
       const el = node instanceof HTMLElement ? node : node?.parentElement ?? null;
-      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      el?.scrollIntoView({ block: "center", behavior: scrollBehavior() });
     } catch { /* 定位/滚动失败不影响高亮本身 */ }
   }, [editor, revisionHighlightTexts, draft.content]);
 
@@ -511,8 +512,7 @@ function centerCaret(instance: Editor, host: HTMLElement | null): void {
     const caret = instance.view.coordsAtPos(instance.state.selection.head);
     const caretTop = caret.top - canvas.getBoundingClientRect().top + canvas.scrollTop;
     const top = typewriterScrollTop({ caretTop, viewportHeight: canvas.clientHeight });
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    canvas.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+    canvas.scrollTo({ top, behavior: scrollBehavior() });
   } catch {
     /* jsdom / 无布局信息：跳过居中滚动 */
   }

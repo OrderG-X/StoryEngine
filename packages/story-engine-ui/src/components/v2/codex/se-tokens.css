@@ -22,6 +22,19 @@
   --cover-ink:rgba(255,255,255,.92);
   --read-max:680px;
   --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
+
+  /* 动效（2026-10-22）：时长三档够用，常用交互不超过 250ms；退场比进场快。
+     --dur-1 按下 / 变色；--dur-2 小浮层、菜单、退场；--dur-3 弹窗、展开；--dur-4 侧栏、提示条；--dur-5 少见的大变化。 */
+  --dur-1:100ms; --dur-2:150ms; --dur-3:200ms; --dur-4:250ms; --dur-5:420ms;
+  --ease-out:cubic-bezier(.23,1,.32,1);
+  --ease-in-out:cubic-bezier(.2,0,0,1);
+  --ease-exit:cubic-bezier(.3,0,1,1);
+  --ease-drawer:cubic-bezier(.32,.72,0,1);
+  /* 层次：悬停浮起的影子、强调色的光（深色是暖光，纸面压淡成一圈晕）。 */
+  --shadow-lift:0 12px 28px -16px rgba(0,0,0,.75);
+  --glow-accent:0 6px 20px -8px color-mix(in srgb,var(--accent) 55%,transparent);
+  --glow-accent-soft:0 0 0 1px color-mix(in srgb,var(--accent) 14%,transparent),0 10px 30px -14px color-mix(in srgb,var(--accent) 40%,transparent);
+  --sheen:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,0) 60%);
 }
 
 :root.theme-light{
@@ -42,6 +55,10 @@
   --toolbar-bg:#2c2925; --toolbar-ink:#ece7df;
   --cover-0:#cfdbd2; --cover-1:#e6d6c3; --cover-2:#d3d9e4; --cover-3:#e7d0cc; --cover-4:#dadfca; --cover-5:#ccd7df; --cover-6:#e2d3cf;
   --cover-ink:rgba(38,34,30,.9);
+  --shadow-lift:0 12px 26px -16px rgba(60,40,20,.38);
+  --glow-accent:0 6px 18px -8px color-mix(in srgb,var(--accent) 38%,transparent);
+  --glow-accent-soft:0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent),0 10px 26px -16px color-mix(in srgb,var(--accent) 30%,transparent);
+  --sheen:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,0) 60%);
 }
 
 /* 旧 --se-v2-* → 新 token（v2.css 在 :root / .se-v2-shell / .se-v2-home 上各定义过一遍，这里同级覆盖、后加载者胜）。 */

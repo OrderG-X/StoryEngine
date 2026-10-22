@@ -9,6 +9,7 @@ import { useUiStore } from "./stores/uiStore.js";
 import { useRecentBooksStore } from "./stores/recentBooksStore.js";
 import { useThemeStore } from "./stores/themeStore.js";
 import { useBookManagement } from "./hooks/useBookManagement.js";
+import { usePresence } from "./hooks/usePresence.js";
 import { useProjectNavigation } from "./hooks/useProjectNavigation.js";
 import { useWorkflowActions } from "./hooks/useWorkflowActions.js";
 import { useChat } from "./hooks/useChat.js";
@@ -20,6 +21,7 @@ import { editDraft } from "./drafts/draftSync.js";
 import { saveChatNow, scheduleChatSave } from "./sync/chatSync.js";
 import { flushAllSaves, saveAllKeepalive } from "./sync/saveAll.js";
 import type { ChapterNavItem, LastFormalCommitApply } from "./types.js";
+import { AppToast } from "./components/v2/AppToast.js";
 
 function isCurrentChapterAlreadyFormallyCommitted(
   lastFormalCommitApply: LastFormalCommitApply | null,
@@ -47,6 +49,9 @@ export function App() {
   const closeSettings = useNavigationStore((s) => s.closeSettings);
   const openSettings = useNavigationStore((s) => s.openSettings);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("model");
+  // 关设置先播完退场；播完再把页签拨回「模型」（不然关的那一下会闪到模型页）。
+  const settingsPresence = usePresence(settingsOpen);
+  useEffect(() => { if (!settingsPresence.mounted) setSettingsTab("model"); }, [settingsPresence.mounted]);
 
   const workspace = useBookStore((s) => s.workspace);
   const messages = useChatStore((s) => s.messages);
@@ -164,9 +169,9 @@ export function App() {
 
   /* ---- Dialogs ---- */
   // 设置只留一套（P6 第 6 步）：书架也开写作台那个设置弹窗。弹窗样式在 .codex-app 作用域里，外面套一层零高度的壳。
-  const settingsDialog = settingsOpen ? (
+  const settingsDialog = settingsPresence.mounted ? (
     <div className="codex-app se-settings-host">
-      <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => { closeSettings(); setSettingsTab("model"); }} />
+      <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={closeSettings} presence={settingsPresence} />
     </div>
   ) : null;
 
@@ -207,7 +212,7 @@ export function App() {
             }}
           />
         </ErrorBoundary>
-        {toast && <div className="app-toast">{toast}</div>}
+        <AppToast message={toast} />
         <ErrorBoundary fallbackTitle="设置对话框出错">
           {settingsDialog}
         </ErrorBoundary>
@@ -305,7 +310,7 @@ export function App() {
           }}
         />
       </ErrorBoundary>
-      {toast && <div className="app-toast">{toast}</div>}
+      <AppToast message={toast} />
       <ErrorBoundary fallbackTitle="设置对话框出错">
         {settingsDialog}
       </ErrorBoundary>

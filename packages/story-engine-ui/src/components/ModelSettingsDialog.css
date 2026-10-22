@@ -99,7 +99,7 @@
   background: transparent;
   color: var(--se-v2-faint);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 
 .ms-close:hover {
@@ -195,7 +195,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
   white-space: nowrap;
 }
 
@@ -216,7 +216,7 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
   white-space: nowrap;
 }
 
@@ -508,7 +508,7 @@
   font-size: 11px;
   font-family: "SFMono-Regular", Consolas, monospace;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-model-tag:hover {
@@ -572,7 +572,7 @@
   background: transparent;
   color: var(--se-v2-faint);
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-form-close:hover {
@@ -632,7 +632,7 @@
   color: var(--se-v2-muted);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 
 .ms-preset-chip:hover {
@@ -698,7 +698,7 @@
   background: var(--se-v2-card);
   color: var(--se-v2-faint);
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-input-icon-btn:hover {
@@ -731,7 +731,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-test-btn:hover:not(:disabled) {
@@ -856,7 +856,7 @@
   padding: 10px 12px;
   border: 1px solid transparent;
   border-radius: 8px;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-task-row:hover {
@@ -1190,7 +1190,7 @@
   background: var(--se-v2-card);
   color: var(--se-v2-text);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
   text-align: left;
 }
 
@@ -1343,7 +1343,7 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-display-btn-plus {
@@ -1382,7 +1382,7 @@
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .ms-display-reset:hover {

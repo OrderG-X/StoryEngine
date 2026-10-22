@@ -18,6 +18,7 @@ import { RawSettingsSection } from "./RawSettingsSection.js";
 import { SearchSettingsSection } from "./SearchSettingsSection.js";
 import { UsageSection } from "./UsageSection.js";
 import { IconClose } from "./icons.js";
+import type { PresenceHandle } from "../../../hooks/usePresence.js";
 
 export type SettingsTab = "model" | "search" | "usage" | "backup" | "display" | "raw" | "about";
 
@@ -31,10 +32,12 @@ const TABS: readonly { readonly id: SettingsTab; readonly label: string }[] = [
   { id: "about", label: "关于" },
 ];
 
-export function SettingsModal({ tab, onTab, onClose }: {
+export function SettingsModal({ tab, onTab, onClose, presence }: {
   readonly tab: SettingsTab;
   readonly onTab: (tab: SettingsTab) => void;
   readonly onClose: () => void;
+  /** 关的时候播退场（usePresence）；不传就是直接卸。 */
+  readonly presence?: PresenceHandle;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -44,8 +47,8 @@ export function SettingsModal({ tab, onTab, onClose }: {
 
   return (
     <>
-      <div className="se-scrim" aria-hidden="true" onClick={onClose} />
-      <div className="se-modal" role="dialog" aria-modal="true" aria-label="设置">
+      <div className="se-scrim" aria-hidden="true" onClick={onClose} data-closing={presence?.closing || undefined} />
+      <div ref={presence?.ref} className="se-modal" role="dialog" aria-modal="true" aria-label="设置" data-closing={presence?.closing || undefined}>
         <nav className="se-modal-nav" aria-label="设置分类">
           <span className="se-modal-title">设置</span>
           {TABS.map((item) => (

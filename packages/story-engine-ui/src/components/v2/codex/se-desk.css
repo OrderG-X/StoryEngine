@@ -49,16 +49,23 @@
   .se-desk-wrap{position:relative;}
   .se-chapters.is-drawer{
     position:absolute;left:0;top:0;bottom:0;z-index:20;width:calc(260px * var(--codex-ui-zoom,1));box-shadow:var(--shadow-pop);
-    animation:se-drawer-in .16s ease-out;
   }
-  .se-drawer-scrim{position:absolute;inset:0;z-index:19;border:0;padding:0;background:var(--scrim);cursor:default;animation:se-fade .14s ease-out;}
-  @keyframes se-drawer-in{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}
+  .se-drawer-scrim{position:absolute;inset:0;z-index:19;border:0;padding:0;background:var(--scrim);cursor:default;animation:se-fade var(--dur-3) var(--ease-out);}
+  .se-chapters.is-drawer{animation:se-drawer-in var(--dur-4) var(--ease-drawer);}
+  .se-chapters.is-drawer[data-closing]{animation:se-drawer-out var(--dur-2) var(--ease-exit) forwards;}
+  .se-drawer-scrim[data-closing]{animation:se-fade-out var(--dur-2) var(--ease-exit) forwards;}
+  /* 宽窗常驻栏：宽度固定，开合靠负左边距滑进滑出（格子列是 auto，稿纸跟着平移、内容不挤）。 */
+  .se-chapters.is-rail{width:var(--rail-w);}
+  .se-chapters.is-rail.is-slide{animation:se-rail-in var(--dur-4) var(--ease-drawer);}
+  .se-chapters.is-rail[data-closing]{animation:se-rail-out var(--dur-3) var(--ease-in-out) forwards;}
 
   /* 保存状态小标签：中性浮签，跟主题走 */
   .desk > .save-pill{box-shadow:var(--shadow-pop);font-size:12px;}
   .save-pill-saving{background:var(--surface-2);border:1px solid var(--line-strong);color:var(--muted);}
   .save-pill-saved{background:var(--surface-2);border:1px solid var(--line-strong);color:var(--success);}
-  .save-pill-dot{background:var(--accent);}
+  .save-pill-dot{background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
+  .desk > .save-pill{animation:se-in var(--dur-3) var(--ease-out);}
+  .desk > .save-pill[data-closing]{animation:se-fade-out var(--dur-3) var(--ease-exit) forwards;}
 
   /* ═══ 写作台 ═══ */
   .codex-desk{background:var(--bg);}
@@ -123,7 +130,10 @@
     max-width:780px;padding:48px 72px 56px;border-radius:8px 8px 0 0;
     background:var(--sheet);border:1px solid var(--line);border-bottom:0;box-shadow:0 28px 56px -44px rgba(0,0,0,.6);
   }
+  .codex-desk-stage > .se-v2-writing-canvas{transition:border-color var(--dur-4) var(--ease-out);}
   .codex-desk-stage > .se-v2-writing-canvas:focus-within{border-color:var(--line-strong);box-shadow:0 28px 56px -44px rgba(0,0,0,.6);}
+  /* 稿纸上方的提示条、「本章已定稿」：浮进来，不是一下冒出。 */
+  .codex-desk-stage > .cd-incoming,.codex-desk-stage .se-v2-notice{animation:se-in var(--dur-3) var(--ease-out);}
   .codex-desk-stage .se-v2-paper-title{font-family:"Noto Serif SC","Songti SC",serif;}
 
   /* 稿子在别处变了、作者手上还有没存的字（重构 P5）：稿纸上方一条提示，两边都不悄悄覆盖。 */
@@ -182,8 +192,9 @@
   .se-name-peek{
     position:absolute;z-index:30;width:316px;padding:14px 16px 12px;
     background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
-    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;animation:se-fade .12s ease-out;
+    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;animation:se-pop var(--dur-2) var(--ease-out);
   }
+  .se-name-peek[data-closing]{animation:se-fade-out var(--dur-2) var(--ease-exit) forwards;}
   .se-peek-h{display:flex;align-items:center;gap:11px;margin:-2px 0 10px;padding-bottom:10px;border-bottom:1px solid var(--line-weak);}
   .se-peek-h .se-bk-av{width:34px;height:34px;font-size:15px;}
   .se-peek-who{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;}
@@ -226,7 +237,7 @@
   .se-cc-pop{
     position:absolute;z-index:31;width:360px;max-width:calc(100% - 24px);padding:12px 14px;
     background:var(--surface-2);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-pop);
-    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;font-size:13px;line-height:1.65;animation:se-fade .12s ease-out;
+    font-family:"PingFang SC","Noto Sans SC",system-ui,sans-serif;font-size:13px;line-height:1.65;animation:se-pop var(--dur-2) var(--ease-out);
   }
   .se-cc-pop.is-sure{border-color:var(--danger);}
   .se-cc-pop-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
