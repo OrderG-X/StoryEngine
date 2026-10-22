@@ -80,8 +80,8 @@ describe("定稿编排", () => {
         tickets,
         callModel: fakeModel({
           summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
-          // 记账员把同一天的章多填了「章内过了 1 天」：作者改天数后按作者说的那一天记（P6 第 7 步）。
-          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, timeOfDay: "上午", quote: "第二天上午" },
+          // 记账员把同一天的章多填了「章内过了 1 天」（摘的换天原句正文里确有，代码核得上）：作者改天数后按作者说的那一天记（P6 第 7 步）。
+          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, dayChangeQuote: "沈青禾把钥匙锁进铜盒", timeOfDay: "上午", quote: "第二天上午" },
           presence: [{ name: "周守义", nameUsed: "老周", quote: "老周站在门口" }, { name: "外乡人", nameUsed: "外乡人", quote: "外乡人又来了" }],
           facts: [
             { nature: "state", subject: "铜钥匙", attribute: "在哪", value: "铜盒里", text: "铜钥匙锁在铜盒里", quote: "沈青禾把钥匙锁进铜盒" },

@@ -5,8 +5,8 @@ import { CHAPTER_LEDGER_SCHEMA, project, type ChapterLedger, type LedgerEntry } 
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
-import { parseKeeperOutput } from "./keeper-parse.js";
-import { buildKeeperTask, KEEPER_SPEC, LEDGER_ROLE, runLedgerKeeper } from "./ledger-keeper.js";
+import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
+import { buildKeeperTask, KEEPER_SPEC, LEDGER_ROLE, runLedgerKeeper, settleDayChange } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
 type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string } : never) : never;
@@ -105,6 +105,23 @@ describe("记账员交回的账单", () => {
     ]);
   });
 
+  it("章里换了天：daysInChapter 带上摘的换天原句；写 0 就不记、也不带原句", () => {
+    const changed = parseKeeperOutput(JSON.stringify({ time: { basis: "judged", daysSincePrevious: 0, daysInChapter: 1, dayChangeQuote: "第二天早上", quote: "当晚" } }), handles);
+    expect(changed?.entries[0]).toMatchObject({ kind: "time", daysInChapter: 1 });
+    expect(changed?.dayChangeQuote).toBe("第二天早上");
+    const same = parseKeeperOutput(JSON.stringify({ time: { basis: "judged", daysSincePrevious: 0, daysInChapter: 0, dayChangeQuote: "傍晚", quote: "当晚" } }), handles);
+    expect(same?.entries[0]).not.toHaveProperty("daysInChapter");
+    expect(same?.dayChangeQuote).toBeUndefined();
+  });
+
+  it("说明里混进的短号换成名字（只换认得的、不粘着英文的），不让「T1」进定稿清单", () => {
+    const names = new Map([["T1", "钟为什么停"], ["F1", "老周六十岁"]]);
+    expect(nameHandles("并入T1，同 F1 说的一样", names)).toBe("并入「钟为什么停」，同 「老周六十岁」 说的一样");
+    expect(nameHandles("T9 没列；ST1 不是短号；T1x 也不是", names)).toBe("T9 没列；ST1 不是短号；T1x 也不是");
+    const parsed = parseKeeperOutput(JSON.stringify({ threads: [{ op: "advance", thread: "T1", note: "归入T1：钟停的原因有了眉目", quote: "钥匙递过来" }] }), { ...handles, handleNames: names });
+    expect(parsed?.entries[0]).toMatchObject({ note: "归入「钟为什么停」：钟停的原因有了眉目" });
+  });
+
   it("原句里多转义了一层的换行（字面的反斜杠 n）换回空白", () => {
     const parsed = parseKeeperOutput(JSON.stringify({ summary: { text: "找到书", quote: "林秋\\n一九八七年春" } }), handles);
     expect(parsed?.entries[0]).toMatchObject({ kind: "summary", quote: "林秋 一九八七年春" });
@@ -183,6 +200,7 @@ describe("记账员跑一章", () => {
       const task = calls[1]?.at(-1)?.content ?? "";
       expect(task).toContain("【第 2 章 正文（待定稿");
       expect(task).toContain("【开着的线索");
+      expect(task).toContain("【上一章结尾】\n# 第1章\n\n钟停在三点十五分。老周没有拦她。");
       expect(task).toContain(KEEPER_SPEC[0]);
       if (outcome.ok) expect(outcome.parsed.entries).toHaveLength(2);
 
@@ -257,6 +275,57 @@ describe("记账员跑一章", () => {
     } finally {
       await rm(book, { recursive: true, force: true });
     }
+  });
+
+  it("说章里换了天却没摘换天那句：补摘时一并问；补出核得上的就认，给空串按同一天记", async () => {
+    const book = await makeHomeTempDir("keeper-daychange-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。");
+      const draft = "# 第2章\n\n她在旅馆住下。第二天早上，她七点就上了山。";
+      const first = JSON.stringify({ time: { basis: "judged", daysSincePrevious: 0, daysInChapter: 1, quote: "她在旅馆住下" } });
+      const run = (repair: string) => {
+        const asks: string[] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("逐字找不到")) { asks.push(last); return repair; }
+            return first;
+          },
+        });
+        return { asks, outcome };
+      };
+      const proven = run(JSON.stringify({ quotes: [{ n: 1, quote: "第二天早上，她七点就上了山" }] }));
+      const ok = await proven.outcome;
+      expect(proven.asks[0]).toContain("1. 本章中间换天的那句（你说本章从开头到结尾过了 1 天）");
+      expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 1, fixed: 1 } });
+      if (ok.ok) {
+        expect(ok.parsed.entries[0]).toMatchObject({ kind: "time", daysInChapter: 1 });
+        expect(ok.parsed.adjusted).toEqual([]);
+      }
+      const none = await run(JSON.stringify({ quotes: [{ n: 1, quote: "" }] })).outcome;
+      if (!none.ok) throw new Error(none.reason);
+      expect(none.parsed.entries[0]).not.toHaveProperty("daysInChapter");
+      expect(none.parsed.adjusted[0]?.reason).toContain("按整章同一天记");
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("章里换天要有原句：摘的那句在正文里才认，没摘、核不上按同一天记并说明", () => {
+    const draft = "她在旅馆住下。第二天早上，她七点就上了山。";
+    const base = { drops: [], adjusted: [] };
+    const time = { kind: "time" as const, review: "auto" as const, basis: "judged" as const, daysSincePrevious: 0, daysInChapter: 1, quote: "她在旅馆住下" };
+    const kept = settleDayChange({ ...base, entries: [time], dayChangeQuote: "第二天早上，她七点就上了山" }, draft);
+    expect(kept.entries[0]).toMatchObject({ daysInChapter: 1 });
+    expect(kept.adjusted).toEqual([]);
+    const made = settleDayChange({ ...base, entries: [time], dayChangeQuote: "天亮了" }, draft);
+    expect(made.entries[0]).not.toHaveProperty("daysInChapter");
+    expect(made.entries[0]).toMatchObject({ daysSincePrevious: 0, quote: "她在旅馆住下" });
+    expect(made.adjusted).toEqual([{ where: "time", reason: expect.stringContaining("找不到") }]);
+    expect(settleDayChange({ ...base, entries: [time] }, draft).adjusted[0]?.reason).toContain("没摘");
   });
 
   it("提示词里不写任何具体书名、人名", () => {
