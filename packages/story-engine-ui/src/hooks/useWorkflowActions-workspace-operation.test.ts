@@ -15,7 +15,6 @@ const apiMocks = vi.hoisted(() => ({
   applyDraftCandidate: vi.fn(),
   generateDraftCandidate: vi.fn(),
   checkDraftQuality: vi.fn(),
-  fetchChapterSteering: vi.fn(),
   generateDraftStream: vi.fn(),
   previewDraftRevision: vi.fn(),
   reviewDraftWithAI: vi.fn(),
@@ -65,7 +64,6 @@ function setChapter(chapter: number, content: string, sessionId = "session-a") {
   useUiStore.setState({
     draftActionLoading: null,
     draftCandidates: null,
-    steeringError: null,
     activeRevisionTask: null,
     activeRevisionPreview: null,
   });
@@ -220,14 +218,12 @@ describe("workspace-bound writing operations", () => {
     setChapter(2, B_DRAFT, "session-b");
     useUiStore.setState({
       [loadingField]: "replacement-loading",
-      steeringError: "replacement-safe",
       aiFlavorBatchPending: "replacement-batch",
     });
     gate.reject(new Error("late failure"));
     await pending;
 
     const state = { ...useUiStore.getState(), ...useChatStore.getState() };
-    expect(state.steeringError).toBe("replacement-safe");
     expect(state.aiFlavorBatchPending).toBe("replacement-batch");
     expect(state.draftActionLoading).toBe("replacement-loading");
   });

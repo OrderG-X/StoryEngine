@@ -645,7 +645,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有写作操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -704,7 +704,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再发送新请求。", 4200);
         return;
       }
@@ -773,7 +773,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       const liveBook = useBookStore.getState();
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再定稿。", 4200);
         return;
       }
@@ -819,7 +819,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束后再裁剪。", 4200);
         return;
       }
@@ -844,7 +844,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       }
       const liveChat = useChatStore.getState();
       const liveUi = useUiStore.getState();
-      if (isWorkspaceBusy() || liveChat.chatLoading || liveUi.steeringLoading || Boolean(liveUi.draftActionLoading)) {
+      if (isWorkspaceBusy() || liveChat.chatLoading || Boolean(liveUi.draftActionLoading)) {
         showToast("已有操作正在进行，请等它结束再点。", 4200);
         return;
       }

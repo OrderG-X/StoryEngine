@@ -153,7 +153,6 @@ export function resolveRightPanelOpen(rightOpen: boolean, autoCollapsed: boolean
 export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps) {
   const workspaceBusy = Boolean(
     props.chatLoading
-    || props.steeringLoading
     || props.draftActionLoading
     || isWorkspaceBusy(),
   );

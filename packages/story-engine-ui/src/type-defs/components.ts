@@ -1,4 +1,4 @@
-import type { ChapterSteeringDraft, CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
+import type { CreateBookResult, DraftAIReviewReport, DraftRevisionPreview, DraftRevisionTask, ImportBookRequest, StateOverview } from "../api/types.js";
 import type { SuggestedAction, ThemeMode } from "./workflow.js";
 import type { ChapterNavItem, ChapterMessage, ChapterWorkspaceData, LastFormalCommitApply, AiFlavorViolation } from "./workspace.js";
 import type { CommitPreviewUiReport } from "./commit.js";
@@ -32,9 +32,6 @@ export interface WritingWorkspaceLayoutProps {
   /** 块级「撤销到此」：把某个 AI 回合的 git 改动整块回退 + 截断对话 + 刷工作台（chatLoading 时禁用）。 */
   readonly onUndoToTurn?: (message: ChapterMessage) => void;
   readonly steeringDirection: string;
-  readonly steeringDraft?: ChapterSteeringDraft | null;
-  readonly steeringError?: string | null;
-  readonly steeringLoading?: boolean;
   readonly chatLoading?: boolean;
   readonly chatError?: string | null;
   readonly draftActionLoading?: string | null;

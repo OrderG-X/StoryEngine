@@ -50,64 +50,6 @@ export type BookFileActionApiResponse =
   | { readonly ok: true; readonly overview?: StateOverview; readonly title?: string }
   | { readonly ok: false; readonly error: string };
 
-export type ChapterSteeringPacing = "slow" | "medium" | "fast";
-export type ChapterSteeringRevealLevel = "none" | "small" | "large";
-export type ChapterSteeringSuggestionType = "hook" | "thread" | "arcGoal" | "character" | "location" | "risk";
-export type ChapterSteeringAction = "include" | "skip" | "weaken" | "alternative";
-export type ChapterSteeringIntensity = "light" | "medium" | "strong";
-export type ChapterSteeringRisk = "low" | "medium" | "high";
-
-export interface ChapterSteeringDraft {
-  readonly userDirection: string;
-  readonly chapter: number | null;
-  readonly mustInclude: readonly string[];
-  readonly mustAvoid: readonly string[];
-  readonly pacing: ChapterSteeringPacing;
-  readonly revealLevel: ChapterSteeringRevealLevel;
-  readonly foundationContext?: ChapterSteeringFoundationContext;
-  readonly suggestions: readonly ChapterSteeringSuggestion[];
-  readonly selectedInclusions: readonly string[];
-  readonly generatedChapterGoalPreview: string;
-  readonly safety: {
-    readonly writesState: false;
-    readonly requiresPreviewBeforeCommit: true;
-    readonly disabledActions: readonly string[];
-  };
-}
-
-export interface ChapterSteeringFoundationContext {
-  readonly available: boolean;
-  readonly summary: string;
-  readonly storyBibleAvailable: boolean;
-  readonly writingRulesAvailable: boolean;
-  readonly characterBibleAvailable: boolean;
-  readonly worldBibleAvailable: boolean;
-  readonly locationBibleAvailable: boolean;
-  readonly writingRuleReminders: readonly string[];
-  readonly genreRuleReminders: readonly string[];
-  readonly characterBoundaryReminders: readonly string[];
-  readonly protagonistKnowledgeReminders?: readonly string[];
-  readonly forbiddenRevealReminders?: readonly string[];
-  readonly worldRuleReminders: readonly string[];
-  readonly locationContinuityReminders: readonly string[];
-  readonly locationRiskReminders?: readonly string[];
-  readonly setupAssetReminders?: readonly string[];
-}
-
-export interface ChapterSteeringSuggestion {
-  readonly id: string;
-  readonly type: ChapterSteeringSuggestionType;
-  readonly title: string;
-  readonly reason: string;
-  readonly suggestedMethod: string;
-  readonly defaultAction: ChapterSteeringAction;
-  readonly availableActions: readonly ["include", "skip", "weaken", "alternative"];
-  readonly intensity: ChapterSteeringIntensity;
-  readonly risk: ChapterSteeringRisk;
-  readonly sourceId?: string;
-  readonly sourceStatus?: string;
-}
-
 export interface ChapterChatRequest {
   readonly projectPath: string;
   readonly chapter: number;

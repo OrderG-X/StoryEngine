@@ -9,7 +9,7 @@
  * 「一行步骤」（无 emoji，展开钮贴标签，进行中那一步标签跑金色光影，点开才看详情）。
  *
  * 复用的纯函数来自 chatRenderShared（聊天渲染共享模块）：
- *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator / workflowErrorTitle。
+ *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator。
  * 工具步聚合复用 agentTimelineModel 的 buildTimelineModel；权限点复用 v2Utils.primaryPermission。
  */
 import { useEffect, useRef, useState } from "react";
@@ -60,7 +60,6 @@ import {
   getPlaceholder,
   renderRichText,
   ThinkingIndicator,
-  workflowErrorTitle,
 } from "./chatRenderShared.js";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
@@ -278,7 +277,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 传给 useReaderCatchUp——动作等回包期间即使补读没在读也按 5 秒轮询（R6.2），「（核账在等它读完）」一出来就能看到。
   const workspaceBusy = Boolean(
     props.chatLoading
-    || props.steeringLoading
     || props.draftActionLoading
     || isWorkspaceBusy(),
   );
@@ -379,7 +377,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     if (!atBottomRef.current) return;
     const el = historyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError, props.rightOpen]);
+  }, [messages, props.chatLoading, props.draftAIReview, props.activeRevisionTask, props.chatError, props.rightOpen]);
 
   // 折叠态：整列只渲染一个极简竖条（点击展开）。codex.css 没有专用 class，用最小内联（codex 变量调色）。
   if (!props.rightOpen) {
@@ -595,14 +593,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           </div>
         ) : null}
 
-        {props.steeringDraft ? <SteeringDraftCard draft={props.steeringDraft} /> : null}
         {/* 审稿卡不再在这里常驻渲染（旧实现一直钉底部吃视口）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
         {/* 体检卡不再在这里常驻渲染（旧实现一直钉底部）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
         {/* 选区改写预览不再在聊天里渲染——已移到写作区下方独立弹窗（见 RevisionPreviewModal）。 */}
 
-        {props.steeringError ? <NoticeCard title={workflowErrorTitle(flowStatus)} text={props.steeringError} danger /> : null}
         {props.chatError ? <NoticeCard title="章节对话失败" text={props.chatError} danger /> : null}
-        {props.steeringLoading ? <NoticeCard title="正在拟章纲" text="正在读前文，拟这一章的章纲。" /> : null}
       </div>
 
       {/* ── 下一步：AI 带路选项 ── 点选项=给 agent 发一句意图（对话里留「你：…」、再由 agent 接着做）；
@@ -1236,51 +1231,14 @@ function NoticeCard({ title, text, danger }: { readonly title: string; readonly 
   );
 }
 
-function SteeringDraftCard({ draft }: { readonly draft: NonNullable<WritingWorkspaceLayoutProps["steeringDraft"]> }) {
-  return (
-    <div style={surfaceCardStyle}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>章纲</span>
-        <strong style={{ color: "var(--muted)", fontSize: 11.5 }}>{draft.suggestions.length} 条建议 · 只读预览</strong>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {draft.suggestions.map((suggestion) => (
-          <div key={suggestion.id} style={{ borderTop: "1px dashed var(--line-faint)", paddingTop: 8 }}>
-            <span style={{ color: "var(--faint)", fontSize: 11 }}>
-              {suggestion.type === "hook" ? "伏笔" : suggestion.type === "thread" ? "线索" : suggestion.type === "arcGoal" ? "主线目标" : suggestion.type === "risk" ? "风险" : suggestion.type === "location" ? "地点" : "角色"}
-            </span>
-            <strong style={{ display: "block", color: "var(--text)", fontSize: 12.5 }}>{uiText(suggestion.title)}</strong>
-            <p style={{ margin: "2px 0 0", color: "var(--muted)", fontSize: 11.5 }}>{uiText(suggestion.reason)}</p>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <h3 style={extraHeadingStyle}>本章目标预览</h3>
-        <p style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}>{uiText(draft.generatedChapterGoalPreview)}</p>
-      </div>
-    </div>
-  );
-}
-
-const extraHeadingStyle: React.CSSProperties = {
-  margin: "0 0 3px",
-  fontSize: 11,
-  fontWeight: 600,
-  color: "var(--faint)",
-  letterSpacing: ".04em",
-};
-
 // ─────────────────────────── 空状态判定 ───────────────────────────
 
 function shouldShowEmptyState(props: WritingWorkspaceLayoutProps, messages: readonly ChapterMessage[]): boolean {
   const onlyInjected = messages.every((message) => isInjectedWorkflowMessage(message));
   return onlyInjected
-    && !props.steeringDraft
     && !props.draftAIReview
     && !props.activeRevisionTask
-    && !props.steeringError
     && !props.chatError
-    && !props.steeringLoading
     && !props.chatLoading;
 }
 

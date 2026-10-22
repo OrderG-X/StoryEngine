@@ -141,14 +141,6 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
   }
 }
 
-export function workflowErrorTitle(flowStatus: WritingWorkspaceLayoutProps["workspace"]["flowStatus"]): string {
-  if (flowStatus === "waiting_commit_confirmation" || flowStatus === "commit_preview_ready") return "定稿失败";
-  if (flowStatus === "quality_checked") return "硬伤检查失败";
-  if (flowStatus === "draft_generating" || flowStatus === "draft_ready") return "工作稿处理失败";
-  if (flowStatus === "steering_ready" || flowStatus === "idle") return "章纲没拟成";
-  return "流程执行失败";
-}
-
 /**
  * 把含 **加粗** 标记的文本渲染成 ReactNode：`**X**` → `<b>X</b>`，其余原样。
  * codex 的 .bub.bot b 是金色（codex.css），故 AI 气泡里的加粗短语会呈金色强调，对齐设计稿。

@@ -13,7 +13,6 @@ const apiMocks = vi.hoisted(() => ({
   applyDraftCandidate: vi.fn(),
   generateDraftCandidate: vi.fn(),
   checkDraftQuality: vi.fn(),
-  fetchChapterSteering: vi.fn(),
   generateDraftStream: vi.fn(),
   previewDraftRevision: vi.fn(),
   reviewDraftWithAI: vi.fn(),
@@ -98,7 +97,6 @@ describe("handleCreateRevisionTask 自动生成修订草案", () => {
     });
     useUiStore.setState({
       draftActionLoading: null,
-      steeringError: null,
       activeRevisionTask: null,
       activeRevisionPreview: null,
     });

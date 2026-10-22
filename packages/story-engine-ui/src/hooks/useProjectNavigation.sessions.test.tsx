@@ -103,7 +103,7 @@ describe("Task 6: 切章不换 messages（聊天跟着会话走、不跟章走�
       { id: "msg-resp", role: "assistant", content: "好的。" },
     ]);
     useChatStore.setState({ chatLoading: false });
-    useUiStore.setState({ steeringLoading: false, draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     setAutosaveFlusher(async () => ({ ok: true }));
     // spy 必须在切章调用之前设置
     setWorkspaceSpy = vi.spyOn(useBookStore.getState(), "setWorkspace");

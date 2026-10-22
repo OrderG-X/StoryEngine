@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMessageBlocks, getPlaceholder, workflowErrorTitle } from "./chatRenderShared.js";
+import { formatMessageBlocks, getPlaceholder } from "./chatRenderShared.js";
 
 describe("chatRenderShared", () => {
   describe("formatMessageBlocks", () => {
@@ -134,25 +134,4 @@ describe("chatRenderShared", () => {
     });
   });
 
-  describe("workflowErrorTitle", () => {
-    it("返回非空标题", () => {
-      expect(workflowErrorTitle("idle").length).toBeGreaterThan(0);
-    });
-
-    it("idle 状态返回正确标题", () => {
-      expect(workflowErrorTitle("idle")).toBe("章纲没拟成");
-    });
-
-    it("commit_preview_ready 状态返回正确标题", () => {
-      expect(workflowErrorTitle("commit_preview_ready")).toBe("定稿失败");
-    });
-
-    it("draft_generating 状态返回正确标题", () => {
-      expect(workflowErrorTitle("draft_generating")).toBe("工作稿处理失败");
-    });
-
-    it("quality_checked 状态返回正确标题", () => {
-      expect(workflowErrorTitle("quality_checked")).toBe("硬伤检查失败");
-    });
-  });
 });

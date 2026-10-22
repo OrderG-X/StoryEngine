@@ -10,7 +10,6 @@ import type {
 } from "../types.js";
 import type { WorkspaceDraftCandidate, WorkspaceRevisionPreview } from "../type-defs/workspace.js";
 import type {
-  ChapterSteeringDraft,
   DraftAIReviewReport,
   DraftRevisionTask,
 } from "../api/types.js";
@@ -30,9 +29,6 @@ export interface UiStore {
   /** 每章没发出去的输入框草稿（P11）：切章时存下离开那章的、换上要去那章的；换书清空。 */
   composerDrafts: Readonly<Record<number, string>>;
   lastChapterDirection: string;
-  steeringDraft: ChapterSteeringDraft | null;
-  steeringError: string | null;
-  steeringLoading: boolean;
   draftActionLoading: string | null;
   /** AI 出稿进行到哪一步（服务端 draft-delta 带 phase 推过来）：plan=拟章纲，write=写正文；不在出稿为 null。稿纸空着时显示给作者看。 */
   draftPhase: DraftPhase | null;
@@ -57,9 +53,6 @@ export interface UiStore {
   switchComposerChapter: (from: number | null, to: number) => void;
   clearComposerDrafts: () => void;
   setLastChapterDirection: (value: string) => void;
-  setSteeringDraft: (draft: ChapterSteeringDraft | null) => void;
-  setSteeringError: (error: string | null) => void;
-  setSteeringLoading: (loading: boolean) => void;
   setDraftActionLoading: (loading: string | null) => void;
   setDraftPhase: (phase: DraftPhase | null) => void;
   setDraftCandidates: (candidates: readonly DraftCandidate[] | null) => void;
@@ -86,9 +79,6 @@ export const useUiStore = create<UiStore>((set) => ({
   steeringDirection: "",
   composerDrafts: {},
   lastChapterDirection: "",
-  steeringDraft: null,
-  steeringError: null,
-  steeringLoading: false,
   draftActionLoading: null,
   draftPhase: null,
   draftCandidates: null,
@@ -115,9 +105,6 @@ export const useUiStore = create<UiStore>((set) => ({
   }),
   clearComposerDrafts: () => set({ composerDrafts: {} }),
   setLastChapterDirection: (value) => set({ lastChapterDirection: value }),
-  setSteeringDraft: (draft) => set({ steeringDraft: draft }),
-  setSteeringError: (error) => set({ steeringError: error }),
-  setSteeringLoading: (loading) => set({ steeringLoading: loading }),
   setDraftActionLoading: (loading) => set({ draftActionLoading: loading }),
   setDraftPhase: (phase) => set({ draftPhase: phase }),
   setDraftCandidates: (candidates) => set({ draftCandidates: candidates }),
@@ -132,7 +119,7 @@ export const useUiStore = create<UiStore>((set) => ({
   setRevisionHighlight: (text) => set({ revisionHighlightTexts: text ? [text] : [] }),
   setRevisionHighlights: (texts) => set({ revisionHighlightTexts: texts }),
 
-  resetSteeringState: () => set({ steeringDirection: "", steeringDraft: null, steeringError: null, steeringLoading: false }),
+  resetSteeringState: () => set({ steeringDirection: "" }),
   resetCommitState: () => set({ commitPreviewReport: null, commitSelections: emptyCommitSelections() }),
   resetRevisionState: () => set({
     activeRevisionTask: null,
@@ -151,7 +138,5 @@ export const useUiStore = create<UiStore>((set) => ({
     activeRevisionTask: null,
     activeRevisionPreview: null,
     revisionHighlightTexts: [],
-    steeringDraft: null,
-    steeringError: null,
   }),
 }));
