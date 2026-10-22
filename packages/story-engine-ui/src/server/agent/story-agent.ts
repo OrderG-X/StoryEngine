@@ -79,6 +79,7 @@ export function buildInstructions(): string {
       "返回 'chapter_goal_not_author_words'：chapterGoal 只能原样抄作者的话，改成原话（或不填）马上重调。",
     "- 改稿：revise_draft 的原文必须逐字取自工作稿且只出现一次；按审稿意见改时先 read_draft 拿到正文定位逐字原文，一次只改用户点的那一条，不批量、不形成『审→改→再审』循环。" +
       "要把机器腔改掉才用 revise_draft 带 style:\"deai\"；『查 AI 味』只读，调 check_ai_flavor，结果在卡片里，别逐条复述。",
+    "- 按核账改：只动核账「确定」的那几处；「可能」的那几处，或要改的正好是作者在对话、想法里明说过的，先问作者改不改，别自己改。",
     "- 前后对不对以 check_continuity 为准；口吻、节奏以 ai_review 为准；quality_check 里『地点漂移 / 称谓漂移』这类只是机械线索，别当裁决。ai_review 没审完就如实说，别改调 quality_check 顶替。",
     "",
     "定稿与账本：",
