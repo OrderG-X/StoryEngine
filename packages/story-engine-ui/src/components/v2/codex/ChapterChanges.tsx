@@ -15,10 +15,11 @@ const THREAD_OP: Record<ChapterChangeThread["op"], string> = { open: "新埋下"
 /** 每组先露这么多条，多的点「再看 N 条」。 */
 const GROUP_VISIBLE = 6;
 
+/** 展开记在「哪一章展开了」上：翻到别的章自然收起。不用 effect 重置——effect 晚一拍会把刚点的展开冲掉。 */
 function useFold<T>(items: readonly T[], resetKey: number): { readonly shown: readonly T[]; readonly more: number; readonly open: () => void } {
-  const [all, setAll] = useState(false);
-  useEffect(() => setAll(false), [resetKey]);
-  return { shown: all ? items : items.slice(0, GROUP_VISIBLE), more: all ? 0 : Math.max(0, items.length - GROUP_VISIBLE), open: () => setAll(true) };
+  const [openKey, setOpenKey] = useState<number | null>(null);
+  const all = openKey === resetKey;
+  return { shown: all ? items : items.slice(0, GROUP_VISIBLE), more: all ? 0 : Math.max(0, items.length - GROUP_VISIBLE), open: () => setOpenKey(resetKey) };
 }
 
 function More({ count, onClick }: { readonly count: number; readonly onClick: () => void }) {
