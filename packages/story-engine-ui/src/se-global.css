@@ -11,7 +11,10 @@
   letter-spacing:.01em;
   box-shadow:var(--shadow-pop),0 0 0 1px rgba(0,0,0,.18);
   max-width:min(560px,calc(100vw - 32px));
+  animation:toast-in var(--dur-4) var(--ease-out);
 }
+:root .app-toast[data-closing]{animation:se-toast-out var(--dur-2) var(--ease-exit) forwards;}
+@keyframes se-toast-out{to{opacity:0;transform:translateX(-50%) translateY(6px)}}
 
 /* 「打开书文件夹」弹窗（portal 到 body，不在书架作用域里）：最近的书一行一本，选中有底色。 */
 :root .dialog-content.se-open-book{width:min(600px,calc(100vw - 32px));}
@@ -37,10 +40,88 @@
 }
 :root .se-boot-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
 
-/* 改版用到的动画关键帧放顶层（嵌套在 .codex-app{} 里的 @keyframes 不保证生效）。 */
+/* ═══ 动效底子（2026-10-22）：关键帧全放顶层（嵌套在 .codex-app{} 里的 @keyframes 浏览器不认），
+   别的样式文件只引用名字、不再各写一份。时长 / 曲线取 se-tokens.css 的 --dur-* / --ease-*。 ═══ */
 @keyframes se-fade{from{opacity:0}to{opacity:1}}
+@keyframes se-fade-out{from{opacity:1}to{opacity:0}}
+/* 小浮层（菜单、速览卡、⌘K）：淡入 + 往上浮 4px + 从 .98 放大；退场只淡出、略缩。 */
+@keyframes se-pop{from{opacity:0;transform:translateY(4px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes se-pop-out{from{opacity:1;transform:none}to{opacity:0;transform:scale(.98)}}
+/* 往下弹出的小浮层（贴在按钮下方的菜单）：从上方落下来。 */
+@keyframes se-drop{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+/* 内容进场（消息、卡片、提示条）：淡入 + 上浮 6px。 */
+@keyframes se-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* 书架、设定本这类少见的页面：错峰浮入，幅度大一点。 */
+@keyframes se-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes se-spin{to{transform:rotate(360deg)}}
 @keyframes se-drawer-in{from{transform:translateX(-12px);opacity:0}to{transform:none;opacity:1}}
+@keyframes se-drawer-out{from{transform:none;opacity:1}to{transform:translateX(-12px);opacity:0}}
+/* 章节栏开合（宽度靠 --rail-w，元素自己给）。 */
+@keyframes se-rail-in{from{margin-left:calc(var(--rail-w) * -1);opacity:.3}}
+@keyframes se-rail-out{to{margin-left:calc(var(--rail-w) * -1);opacity:.3}}
+/* 「正在思考」胶囊（自己带 translateX(-50%) 居中）：浮起 / 淡下；呼吸一圈强调色的光。 */
+@keyframes se-dock-in{from{opacity:0;transform:translateX(-50%) translateY(6px) scale(.96)}to{opacity:1;transform:translateX(-50%)}}
+@keyframes se-dock-out{from{opacity:1;transform:translateX(-50%)}to{opacity:0;transform:translateX(-50%) translateY(4px) scale(.98)}}
+@keyframes se-think-glow{
+  0%,100%{box-shadow:var(--shadow-lift),0 0 0 0 transparent;border-color:var(--accent-line-soft)}
+  50%{box-shadow:var(--shadow-lift),0 0 18px -4px color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent-line)}}
+/* 折叠块展开：从 0 长到内容高（要配 interpolate-size:allow-keywords）；长的过程中裁掉溢出，到头再放开。 */
+@keyframes se-expand{from{height:0;opacity:0;overflow:clip}99%{overflow:clip}}
+/* 文字上扫过的一道亮（背景裁成字形）。 */
+@keyframes se-shimmer{from{background-position:100% 0}to{background-position:-50% 0}}
+/* 慢呼吸：一圈强调色的光明灭（书架「继续写」）。 */
+@keyframes se-breathe{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:var(--glow-accent-soft)}}
+/* 手机宽的底部面板：从底下推上来。 */
+@keyframes se-sheet-in{from{transform:translateY(100%)}to{transform:none}}
+@keyframes se-sheet-out{from{transform:none}to{transform:translateY(100%)}}
+/* 进行中的按钮 / 胶囊上一道扫光（只在「在忙」时跑）。 */
+@keyframes se-sweep{from{transform:translateX(-120%)}to{transform:translateX(220%)}}
+/* 当前那一步的光环呼吸。 */
+@keyframes se-ring{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 30%,transparent)}50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 0%,transparent)}}
+/* 刚做完的一步：勾号轻轻弹出。 */
+@keyframes se-check{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.15);opacity:1}100%{transform:scale(1)}}
+
+/* 退场：组件关的时候先挂 data-closing（usePresence），播完再卸载。 */
+:root [data-closing]{pointer-events:none;}
+
+/* 按钮统一过渡：悬停变色、按下一缩都跟同一个节奏（原来一半按钮悬停是「啪」一下变的）。
+   :where 不加权重：组件自己写了 transition 的照旧，没写的吃这一条。 */
+:root :where(
+  .se-icon-btn,.se-text-btn,.se-search-btn,.se-model-chip,.se-crumb-book,
+  .cd-tools-btn,.cd-reroll,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
+  .se-todo-primary,.se-todo-act,.se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
+  .se-cs-btn,.se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,.cpc-decline,
+  .se-btn,.se-hero-go,.se-v2-dialog-confirm-btn,.se-v2-dialog-cancel-btn,.se-v2-dialog-danger-btn,
+  .ms-btn,.se-v2-selection-toolbar-btn
+){
+  transition-property:background-color,color,border-color,box-shadow,transform,filter,opacity;
+  transition-duration:var(--dur-2);transition-timing-function:var(--ease-out);
+}
+/* 列表行、分段钮：只变色不缩（以前悬停是硬切）。 */
+:root :where(
+  .se-ch,.se-new-ch,.cd-nav,.cd-nav span,.cd-synopsis,.se-bnav-item,.se-seg button,.se-modal-nav button,.se-pal-it,.ms-display-btn,.ms-display-reset,
+  .se-open-book-list button,.se-trash-list li,.se-export-formats button,.se-import-book-list label
+){
+  transition-property:background-color,color,border-color,box-shadow;
+  transition-duration:var(--dur-2);transition-timing-function:var(--ease-out);
+}
+/* 按下：按钮轻轻一缩（列表行不缩，只变色）。 */
+:root :is(
+  .se-icon-btn,.se-text-btn,.se-search-btn,.se-model-chip,.se-crumb-book,
+  .cd-tools-btn,.cd-reroll,.cd-starter-btn,.cd-incoming-actions button,.se-v2-notice-action,
+  .se-todo-primary,.se-todo-act,.se-setup-btn,.composer .send,.cap-menu-btn,.cap-btn,.chip,.nextstep-choice,
+  .se-cs-btn,.se-bs-pick,.se-bs-form button,.se-cc-pop-acts button,.cpc-confirm,.cpc-decline,
+  .se-btn,.se-hero-go,.se-v2-dialog-confirm-btn,.se-v2-dialog-cancel-btn,.se-v2-dialog-danger-btn,
+  .ms-btn,.se-v2-selection-toolbar-btn
+):not(:disabled):active{transform:scale(.97);transition-duration:var(--dur-1);}
+
+/* 减少动效：一个总闸（设置 → 显示，或系统「减弱动态效果」）。连伪元素、弹到 body 上的层一起停；
+   退场动画缩成 1ms，照样触发 animationend，组件能正常卸载。 */
+html.reduce-motion *,html.reduce-motion *::before,html.reduce-motion *::after{
+  animation-duration:1ms !important;animation-delay:0s !important;animation-iteration-count:1 !important;
+  transition-duration:1ms !important;transition-delay:0s !important;scroll-behavior:auto !important;
+}
 
 /* 「导入已写的书」弹窗（P8，portal 到 body）：认出的章一行一章，勾掉的变淡。 */
 :root .dialog-content.se-import-book{width:min(600px,calc(100vw - 32px));}
@@ -130,9 +211,10 @@
 :root .se-v2-rename-input{border-color:var(--line-strong);background:var(--bg);transition:border-color .15s ease,box-shadow .15s ease;}
 :root .se-v2-rename-input:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft);}
 :root .se-v2-rename-input::placeholder{color:var(--faint);}
+/* 弹窗进退场：Radix 关的时候挂 data-state="closed" 并等 animationend 才卸载，所以退场动画能播完。 */
 @keyframes se-dialog-in{from{opacity:0;transform:translate(-50%,-48%) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
-html:not(.reduce-motion) .dialog-overlay[data-state="open"]{animation:se-fade .16s ease-out;}
-html:not(.reduce-motion) .dialog-content[data-state="open"]{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
-@media (prefers-reduced-motion:reduce){
-  .dialog-overlay[data-state="open"],.dialog-content[data-state="open"]{animation:none !important;}
-}
+@keyframes se-dialog-out{from{opacity:1;transform:translate(-50%,-50%) scale(1)}to{opacity:0;transform:translate(-50%,-49%) scale(.985)}}
+:root .dialog-overlay[data-state="open"]{animation:se-fade var(--dur-3) var(--ease-out);}
+:root .dialog-overlay[data-state="closed"]{animation:se-fade-out var(--dur-2) var(--ease-exit) forwards;}
+:root .dialog-content[data-state="open"]{animation:se-dialog-in var(--dur-3) var(--ease-out);}
+:root .dialog-content[data-state="closed"]{animation:se-dialog-out var(--dur-2) var(--ease-exit) forwards;}

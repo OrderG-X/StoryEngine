@@ -12,6 +12,7 @@ import { searchLibraryIndex, type LibrarySearchSource } from "./librarySearch.js
 import { Avatar } from "./bibleVisual.js";
 import { IconArrowRight, IconBook, IconFile, IconSearch, IconUser } from "./icons.js";
 import type { BookSearchResult, BookTextSearch } from "../../../api/bookSearchClient.js";
+import type { PresenceHandle } from "../../../hooks/usePresence.js";
 
 export interface PaletteCommand {
   readonly id: string;
@@ -167,6 +168,8 @@ export function CommandPalette(props: {
   /** 全书搜正文（没开书就不给）。 */
   readonly searchText?: (query: string, signal: AbortSignal) => Promise<BookSearchResult>;
   readonly onPickText?: (chapter: number, quote: string) => void;
+  /** 关的时候播退场（usePresence）。 */
+  readonly presence?: PresenceHandle;
 }) {
   const [query, setQuery] = useState("");
   const [textSearch, setTextSearch] = useState<{ readonly query: string; readonly result: BookSearchResult | null } | null>(null);
@@ -212,8 +215,8 @@ export function CommandPalette(props: {
   let counter = -1;
   return (
     <>
-      <div className="se-scrim" aria-hidden="true" onClick={props.onClose} />
-      <div className="se-palette" role="dialog" aria-modal="true" aria-label="搜索与命令">
+      <div className="se-scrim" aria-hidden="true" onClick={props.onClose} data-closing={props.presence?.closing || undefined} />
+      <div ref={props.presence?.ref} data-closing={props.presence?.closing || undefined} className="se-palette" role="dialog" aria-modal="true" aria-label="搜索与命令">
         <label className="se-pal-in">
           <IconSearch size={18} />
           <input

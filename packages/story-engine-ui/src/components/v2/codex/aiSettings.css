@@ -76,7 +76,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 
 .codex-app .asm-chip:hover {
@@ -125,7 +125,7 @@
   color: var(--se-v2-text);
   text-align: left;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 
 .codex-app .asm-card:hover {
@@ -222,7 +222,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .codex-app .asm-back:hover {
@@ -265,7 +265,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
 
 .codex-app .asm-delete-btn:hover {

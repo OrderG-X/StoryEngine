@@ -50,16 +50,18 @@
   .topbar.se-lib-bar{justify-content:flex-end;}
 
   /* ═══ 设置弹窗 ═══ */
-  .se-scrim{position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(3px);animation:se-fade .14s ease-out;}
+  .se-scrim{position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(3px);animation:se-fade var(--dur-3) var(--ease-out);}
   .se-modal{
     position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);
     width:min(960px,calc(100vw - 32px));height:min(720px,calc(100vh - 48px));
     display:grid;grid-template-columns:176px minmax(0,1fr);
     background:radial-gradient(560px 240px at 100% -8%,color-mix(in srgb,var(--accent) 8%,transparent),transparent 70%),var(--panel);
     border:1px solid var(--line-strong);border-radius:16px;
-    box-shadow:var(--shadow-pop),0 40px 90px -40px rgba(0,0,0,.6);overflow:hidden;animation:se-fade .14s ease-out;
+    box-shadow:var(--shadow-pop),0 40px 90px -40px rgba(0,0,0,.6);overflow:hidden;
   }
-  html:not(.reduce-motion) & .se-modal{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
+  .se-modal{animation:se-dialog-in var(--dur-3) var(--ease-out);}
+  .se-scrim[data-closing]{animation:se-fade-out var(--dur-2) var(--ease-exit) forwards;}
+  .se-modal[data-closing]{animation:se-dialog-out var(--dur-2) var(--ease-exit) forwards;}
   .se-modal-nav{display:flex;flex-direction:column;gap:2px;padding:20px 12px;border-right:1px solid var(--line);background:var(--sunken);}
   .se-modal-title{padding:2px 10px 14px;font-size:11px;font-weight:600;letter-spacing:.2em;color:var(--accent);}
   .se-modal-nav button{
@@ -166,10 +168,12 @@
   .se-search-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   kbd{font-family:inherit;font-size:12px;line-height:18px;padding:0 5px;border:1px solid var(--line);border-radius:5px;color:var(--faint);background:transparent;}
   .se-palette{
-    position:fixed;z-index:61;top:72px;left:50%;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));
+    /* 居中用独立的 translate，transform 留给进退场动画。 */
+    position:fixed;z-index:61;top:72px;left:50%;translate:-50% 0;width:min(620px,calc(100vw - 32px));
     background:var(--panel);border:1px solid var(--line-strong);border-radius:14px;box-shadow:var(--shadow-pop);overflow:hidden;
-    animation:se-fade .12s ease-out;
+    animation:se-drop var(--dur-3) var(--ease-out);transform-origin:50% 0;
   }
+  .se-palette[data-closing]{animation:se-pop-out var(--dur-2) var(--ease-exit) forwards;}
   .se-pal-in{display:flex;align-items:center;gap:10px;height:52px;padding:0 12px 0 14px;border-bottom:1px solid var(--line);color:var(--faint);}
   .se-pal-in input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--text);font:inherit;font-size:15px;}
   .se-pal-in input::placeholder{color:var(--faint);}
@@ -273,7 +277,8 @@
     box-shadow:var(--shadow-pop),0 40px 90px -40px rgba(0,0,0,.6);
   }
   @media (min-width:561px){
-    html:not(.reduce-motion) & .se-cs{animation:se-dialog-in .2s cubic-bezier(.2,.8,.3,1);}
+    .se-cs{animation:se-dialog-in var(--dur-3) var(--ease-out);}
+    .se-cs[data-closing]{animation:se-dialog-out var(--dur-2) var(--ease-exit) forwards;}
   }
   .se-cs-head{padding:20px 14px 12px 24px;}
   .se-cs-head h2{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:19px;font-weight:700;letter-spacing:.02em;}
@@ -290,8 +295,6 @@
   .se-cs-choice button.on{background:var(--surface-2);box-shadow:0 0 0 1px var(--line-strong),0 1px 2px rgba(0,0,0,.2);}
   .se-cs-foot{padding:14px 20px 14px 24px;background:var(--sunken);}
   .se-cs-btn{border-radius:9px;font-weight:600;font-size:13.5px;}
-
-  @keyframes se-fade{from{opacity:0}to{opacity:1}}
 
   @media (max-width:1279px){
     .se-search-lbl{display:none;}
@@ -310,13 +313,11 @@
     .se-top-r{gap:0;}
     /* 手机宽：清单贴底、占满宽，按钮够得着。 */
     .se-cs{top:auto;bottom:0;left:0;right:0;transform:none;width:auto;max-height:calc(100vh - 24px);border-radius:14px 14px 0 0;}
+    .se-cs{animation:se-sheet-in var(--dur-4) var(--ease-drawer);}
+    .se-cs[data-closing]{animation:se-sheet-out var(--dur-3) var(--ease-exit) forwards;}
     .se-cs-head,.se-cs-body{padding-left:16px;padding-right:16px;}
     .se-cs-foot{padding:10px 16px;}
     .se-cs-row{flex-direction:column;gap:6px;}
     .se-cs-hint{display:none;}
-  }
-  @media (prefers-reduced-motion:reduce){
-    .se-scrim,.se-modal,.se-cs{animation:none;}
-    html:not(.reduce-motion) & :is(.se-modal,.se-cs){animation:none;}
   }
 }

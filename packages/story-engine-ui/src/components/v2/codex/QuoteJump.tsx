@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { findQuoteRange, highlightApi } from "./ContinuityMarks.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { scrollBehavior } from "../../../stores/motionStore.js";
 
 const JUMP = "se-jump";
 /** 标亮停多久。 */
@@ -49,7 +50,7 @@ function glow(range: Range): void {
   }
   const node = range.startContainer;
   const el = node instanceof Element ? node : node.parentElement;
-  el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  el?.scrollIntoView?.({ block: "center", behavior: scrollBehavior() });
 }
 
 /** 挂在写作台稿纸旁：有要回的原句、且就是这一章时，找到它、滚过去、标亮。 */

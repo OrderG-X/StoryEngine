@@ -76,6 +76,7 @@ import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useReaderCatchUp, useRefreshWhenRereadDone } from "../../../hooks/useReaderCatchUp.js";
+import { usePresence } from "../../../hooks/usePresence.js";
 
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
@@ -201,11 +202,12 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
     <div className="nextstep">
       <span className="nextstep-q">{nextStep.question}</span>
       <div className="nextstep-row">
-        {nextStep.choices.map((choice) => (
+        {nextStep.choices.map((choice, index) => (
           <button
             key={choice.label}
             type="button"
             className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
+            style={{ animationDelay: `${index * 40}ms` }}
             disabled={busy}
             onMouseMove={trackChoiceLight}
             onClick={() => {
@@ -220,6 +222,17 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** 「正在思考」胶囊：浮上来、做完淡下去（以前是一下冒出、一下没了）。 */
+function ThinkingDock({ on }: { readonly on: boolean }) {
+  const presence = usePresence<HTMLDivElement>(on);
+  if (!presence.mounted) return null;
+  return (
+    <div ref={presence.ref} className="se-v2-thinking-dock" data-closing={presence.closing || undefined}>
+      <ThinkingIndicator />
     </div>
   );
 }
@@ -616,11 +629,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 上下文提示条（消息列表与输入框之间） ──
           「正在思考」胶囊挂在这一段的顶上（浮在消息流底部留出的空当里），不再压住下面的快捷按钮。 */}
       <div className="se-ai-dock-anchor">
-        {props.chatLoading ? (
-          <div className="se-v2-thinking-dock">
-            <ThinkingIndicator />
-          </div>
-        ) : null}
+        <ThinkingDock on={Boolean(props.chatLoading)} />
       </div>
       <ChatContextMeter />
 

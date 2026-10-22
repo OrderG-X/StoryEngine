@@ -33,6 +33,14 @@ export interface MotionStore {
 export const useMotionStore = create<MotionStore>((set) => {
   const initial = loadInitial();
   applyClass(initial);
+  // 作者没在设置里选过，就跟着系统「减弱动态效果」走（中途改系统设置也跟）。
+  if (typeof window !== "undefined") {
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener?.("change", (e) => {
+      if (localStorage.getItem(STORAGE_KEY) !== null) return;
+      applyClass(e.matches);
+      set({ reduceMotion: e.matches });
+    });
+  }
   return {
     reduceMotion: initial,
     toggle: () =>
@@ -51,3 +59,8 @@ export const useMotionStore = create<MotionStore>((set) => {
     },
   };
 });
+
+/** JS 里的平滑滚动也听「减少动效」（CSS 的 scroll-behavior 管不到 scrollIntoView 传进去的 behavior）。 */
+export function scrollBehavior(): ScrollBehavior {
+  return useMotionStore.getState().reduceMotion ? "auto" : "smooth";
+}

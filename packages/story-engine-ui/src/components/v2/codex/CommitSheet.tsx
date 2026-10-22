@@ -9,7 +9,7 @@
  *
  * 作者动过的条目记在 utils/ledgerExclusions（按章 + 预览令牌），关了再开、从别处点「确认定稿」都带得上。
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import {
   ledgerDayOverrideForCard,
@@ -24,6 +24,7 @@ import { useChatStore } from "../../../stores/chatStore.js";
 import { cardOf } from "../../../utils/messageCards.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import type { SuggestedAction } from "../../../types.js";
+import { usePresence, type PresenceHandle } from "../../../hooks/usePresence.js";
 
 type ChecklistItem = NonNullable<CommitPreviewCardData["ledgerChecklist"]>[number];
 
@@ -103,6 +104,7 @@ export function CommitSheet({
   busy,
   onConfirm,
   onClose,
+  presence,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 有动作在跑：按钮先不让点。 */
@@ -110,6 +112,8 @@ export function CommitSheet({
   /** 传了且能定稿 → 底部有【定稿】；参数是作者去掉 / 确认的条目 id、改过的天数。没传＝只看（旧预览）。 */
   readonly onConfirm?: (excluded: readonly string[], dayOverride?: number) => void;
   readonly onClose: () => void;
+  /** 关的时候播退场（usePresence）。 */
+  readonly presence?: PresenceHandle;
 }) {
   const ledger = preview.ledgerChecklist ?? [];
   const { day, review, auto } = splitChecklist(ledger);
@@ -138,7 +142,12 @@ export function CommitSheet({
   const [showAllReview, setShowAllReview] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
 
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const presenceRef = presence?.ref;
+  const setDialogRef = useCallback((el: HTMLDivElement | null) => {
+    dialogRef.current = el;
+    presenceRef?.(el);
+  }, [presenceRef]);
   useEffect(() => {
     dialogRef.current?.focus();
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -157,8 +166,8 @@ export function CommitSheet({
 
   return (
     <>
-      <div className="se-scrim" aria-hidden="true" onClick={onClose} />
-      <div ref={dialogRef} className="se-cs" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
+      <div className="se-scrim" aria-hidden="true" onClick={onClose} data-closing={presence?.closing || undefined} />
+      <div ref={setDialogRef} data-closing={presence?.closing || undefined} className="se-cs" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
         <header className="se-cs-head">
           <h2>{title}</h2>
           <button type="button" className="se-icon-btn" aria-label="关闭定稿清单" onClick={onClose}><IconClose /></button>
@@ -303,8 +312,13 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
   readonly busy: boolean;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
 }) {
-  const messageId = useCommitSheet((state) => state.messageId);
+  const openId = useCommitSheet((state) => state.messageId);
   const messages = useChatStore((state) => state.messages);
+  // 关上时还要把那张清单留着播完退场：记住最后打开的是哪条。
+  const presence = usePresence(Boolean(openId));
+  const lastId = useRef(openId);
+  if (openId) lastId.current = openId;
+  const messageId = openId ?? (presence.mounted ? lastId.current : null);
   if (!messageId) return null;
   const message = messages.find((item) => item.id === messageId);
   const preview = message ? cardOf(message, "commit-preview")?.preview : undefined;
@@ -321,5 +335,5 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
       }));
     }
     : undefined;
-  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} />;
+  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} presence={presence} />;
 }

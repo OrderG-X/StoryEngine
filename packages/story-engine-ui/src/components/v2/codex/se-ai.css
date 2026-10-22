@@ -33,7 +33,7 @@
   .se-inbox-pop{
     position:absolute;top:calc(100% - 4px);left:10px;right:10px;z-index:40;padding:6px;
     background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
-    animation:se-fade .12s ease-out;
+    animation:se-drop var(--dur-2) var(--ease-out);transform-origin:50% 0;
   }
   .se-inbox-h{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 4px 10px;font-size:12px;color:var(--faint);}
   .se-todo{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:10px;border-radius:8px;}
@@ -51,8 +51,6 @@
   .se-ai-ctx.is-running{color:var(--text);}
   .se-ai-ctx.is-running .se-ai-ctx-dot{background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;}
   .se-ai-ctx-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  @keyframes se-fade{from{opacity:0}to{opacity:1}}
-  @keyframes se-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
   /* ── 会话条：头部下面一行——会话名（点击改名）+ 新会话 / 历史 / 记忆上限，都是安静的小按钮 ── */
   .codex-chat-session-bar{display:flex;align-items:center;gap:2px;margin:0;padding:0 8px 6px 14px;border:0;background:transparent;}
@@ -151,8 +149,20 @@
     height:38px;border:0;border-radius:9px;background:var(--accent);color:var(--accent-ink);
     font-size:14px;font-weight:500;cursor:pointer;
   }
-  .se-todo-primary:hover:not(:disabled){background:var(--accent-hi);}
+  .se-todo-primary{position:relative;overflow:hidden;background:var(--sheen),var(--accent);}
+  .se-todo-primary:hover:not(:disabled){background:var(--sheen),var(--accent-hi);box-shadow:var(--glow-accent);}
   .se-todo-primary:disabled{opacity:.6;cursor:default;}
+  /* 在忙：按钮不灰掉那么多，上面一道扫光说明「在跑」。 */
+  .se-todo-primary.is-busy{opacity:.85;}
+  .se-todo-primary.is-busy::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.28) 50%,transparent 70%);
+    animation:se-sweep 1.8s var(--ease-in-out) infinite;
+  }
+  /* 三格进度：下一步那格的描边轻轻呼吸；刚做完的勾弹一下；格子换状态有过渡。 */
+  .se-todo-steps li{transition:background-color var(--dur-4) var(--ease-out),border-color var(--dur-4) var(--ease-out);}
+  .se-todo-steps li:first-child:not(.is-done),.se-todo-steps li.is-done + li:not(.is-done){animation:se-ring 2.4s var(--ease-in-out) infinite;}
+  .se-todo-steps li.is-done .se-todo-mark{display:inline-block;animation:se-check var(--dur-5) var(--ease-out);}
   .se-todo-wrap .se-checker-reading{margin:0;padding:0 4px;}
   .se-todo-more{position:relative;padding:0 4px;}
   .se-todo-more-btn{border:0;background:none;padding:0;color:var(--faint);font-size:12px;cursor:pointer;}
@@ -170,14 +180,19 @@
     background:var(--surface-2);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--shadow-pop);
   }
   /* 「更多」菜单：每组一条细线隔开，组名强调色小字。 */
-  .cap-panel.is-pop{gap:0;padding:4px 12px;animation:se-fade .12s ease-out;}
+  .cap-panel.is-pop{gap:0;padding:4px 12px;animation:se-pop var(--dur-2) var(--ease-out);}
   .cap-panel.is-pop .cap-group{padding:9px 0;}
   .cap-panel.is-pop .cap-group + .cap-group{border-top:1px solid var(--line-weak);}
   .cap-panel.is-pop .cap-group-title{flex:0 0 36px;padding-top:5px;font-size:11px;font-weight:600;letter-spacing:.14em;color:var(--accent);}
   .cap-panel.is-pop .cap-btn{border-radius:999px;}
 
   /* ── 消息 ── */
-  .ai-body{padding:16px 14px 8px;gap:14px;animation:none;}
+  .ai-body{padding:16px 14px 8px;gap:14px;animation:none;transition:padding-bottom var(--dur-3) var(--ease-out);}
+  /* 一轮对话的起落：自己发的那句浮上来，工具步、卡片一条条进来；「正在思考」胶囊浮起、做完淡下去。 */
+  .msg-user,.msg.se-op-row,.step-card{animation:se-in var(--dur-3) var(--ease-out);}
+  .se-v2-thinking-dock{animation:se-dock-in var(--dur-3) var(--ease-out);}
+  .se-v2-thinking-dock[data-closing]{animation:se-dock-out var(--dur-2) var(--ease-exit) forwards;}
+  .se-v2-thinking-dock .se-v2-thinking{animation:se-think-glow 2.6s ease-in-out infinite;}
   .msg{font-size:14px;line-height:1.7;}
   .msg-user{display:flex;justify-content:flex-end;}
   .msg-user .msg-body{
@@ -209,8 +224,15 @@
   :is(.step-caret,.sc-caret,.qcc-caret).is-open{transform:rotate(90deg);}
   .step-card .qcc-soft-toggle{display:inline-flex;align-items:center;gap:4px;}
   .step-detail{border-left-color:var(--line);color:var(--faint);}
+  /* 点开思考 / 操作记录 / 卡片：往下长出来，不是一下撑开。 */
+  :is(.step-detail,.process-log-children,.sc-body){interpolate-size:allow-keywords;animation:se-expand var(--dur-3) var(--ease-out);}
   .step-label.is-active{color:var(--text);}
   .step-label.is-active::after{display:none;}
+  /* 正在跑的那一步：字上一道慢扫的亮光（像在「读」），不再整行金光乱闪。 */
+  .step-label.is-active{
+    background:linear-gradient(90deg,var(--muted) 0 35%,var(--text) 50%,var(--muted) 65% 100%) 0 0/250% 100%;
+    -webkit-background-clip:text;background-clip:text;color:transparent;animation:se-shimmer 2.2s linear infinite;
+  }
   .step-label.is-active::before{
     content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:middle;
     background:var(--accent);animation:se-pulse 1.2s ease-in-out infinite;
@@ -281,10 +303,15 @@
   .nextstep-q{font-size:12px;color:var(--faint);font-weight:400;letter-spacing:0;}
   .nextstep-q::before{display:none;}
   .nextstep-choice{font-size:13px;padding:0 12px;height:32px;border-radius:999px;border-color:var(--line-strong);background:transparent;color:var(--text);}
-  .nextstep-choice::before{display:none;}
-  .nextstep-choice:hover{transform:none;color:var(--text);border-color:var(--line-strong);background:var(--hover);box-shadow:none;}
-  .nextstep-choice.is-primary{flex:0 0 auto;border-radius:999px;color:var(--accent-ink);background:var(--accent);box-shadow:none;}
-  .nextstep-choice.is-primary:hover{filter:brightness(1.06);transform:none;box-shadow:none;}
+  /* 下一步选项：一个个错峰浮上来；悬停微微抬起，跟手一团淡光（--mx/--my 由 trackChoiceLight 写）。
+     backwards 而不是 both：播完不占着 transform，悬停的抬起才生效。 */
+  .nextstep{animation:se-in var(--dur-3) var(--ease-out);}
+  .nextstep-choice{animation:se-in var(--dur-3) var(--ease-out) backwards;}
+  .nextstep-choice::before{background:radial-gradient(90px circle at var(--mx,50%) var(--my,50%),color-mix(in srgb,var(--accent) 16%,transparent),transparent 65%);}
+  .nextstep-choice:hover:not(:disabled){transform:translateY(-1px);color:var(--text);border-color:var(--accent-line);background:color-mix(in srgb,var(--accent) 5%,transparent);box-shadow:var(--shadow-lift);}
+  .nextstep-choice.is-primary{flex:0 0 auto;border-radius:999px;color:var(--accent-ink);background:var(--sheen),var(--accent);box-shadow:none;}
+  .nextstep-choice.is-primary::before{background:radial-gradient(90px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.24),transparent 65%);}
+  .nextstep-choice.is-primary:hover:not(:disabled){filter:brightness(1.05);transform:translateY(-1px);border-color:transparent;background:var(--sheen),var(--accent);box-shadow:var(--glow-accent);}
   .nextstep-rec{background:rgba(0,0,0,.16);color:inherit;}
 
   /* ── @ 引用候选 ── */
@@ -313,7 +340,9 @@
   .composer > .ai-composer-input{grid-area:input;width:100%;min-height:46px !important;max-height:168px;field-sizing:content;}
   .composer > .cap-menu{grid-area:more;align-self:center;}
   .composer > .send{grid-area:send;}
-  .composer .send{width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);box-shadow:none;font-weight:600;}
+  .composer .send{width:32px;height:32px;border-radius:8px;background:var(--sheen),var(--accent);color:var(--accent-ink);box-shadow:none;font-weight:600;}
+  .composer .send:hover:not(:disabled):not([data-stop]){filter:brightness(1.06);box-shadow:var(--glow-accent);}
+  .composer .send:disabled{opacity:.45;cursor:default;}
   /* 停止：不用刺眼的红底，换成正文色实心钮 + 方块图标 */
   .composer .send[data-stop]{background:var(--text);color:var(--bg);}
   .composer .send svg{display:block;}
@@ -327,13 +356,12 @@
   .step-card .stc-since{color:var(--faint);}
 
   /* 拖宽手柄：平时不可见，悬停才出一条强调色细线（撤掉常驻的点阵握把）。 */
-  .ai-resize::before{display:none;}
-  .ai-resize::after{background:transparent;}
+  .ai-resize::before{left:-1px;width:4px;height:20px;opacity:0;border-radius:2px;background:var(--accent);
+    transition:opacity var(--dur-2) var(--ease-out),height var(--dur-3) var(--ease-out);}
+  .ai-resize:hover::before,.ai-resize:active::before{opacity:1;height:44px;background:var(--accent);}
+  .ai-resize::after{background:transparent;transition:background-color var(--dur-2) var(--ease-out),width var(--dur-2) var(--ease-out);}
   .ai-resize:hover::after,.ai-resize:active::after{width:2px;background:var(--accent);}
 
-  @media (prefers-reduced-motion:reduce){
-    .se-ai-ctx.is-running .se-ai-ctx-dot,.step-label.is-active::before{animation:none;}
-  }
 
   /* 定稿卡底部「撤销这次定稿」：安静的文字钮，点了在卡内确认 */
   .step-card .cdc-undo{

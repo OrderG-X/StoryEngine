@@ -9,6 +9,7 @@ import {
   type DisplaySettingKey,
 } from "../stores/displaySettingsStore.js";
 import { useThemeStore } from "../stores/themeStore.js";
+import { useMotionStore } from "../stores/motionStore.js";
 
 /**
  * DisplaySettingsSection — 设置面板顶部「显示 · 字号」区。
@@ -70,6 +71,8 @@ export function DisplaySettingsSection() {
   const values: Record<DisplaySettingKey, number> = { chatZoom, uiZoom, deskFontSize, rewriteZoom };
   const themeMode = useThemeStore((s) => s.mode);
   const setThemeMode = useThemeStore((s) => s.setMode);
+  const reduceMotion = useMotionStore((s) => s.reduceMotion);
+  const setReduceMotion = useMotionStore((s) => s.set);
 
   return (
     <section className="ms-section ms-display-section">
@@ -89,6 +92,16 @@ export function DisplaySettingsSection() {
           <div className="ms-display-control ms-theme-seg" role="group" aria-label="主题">
             <button type="button" className={`ms-display-btn${themeMode === "dark" ? " is-on" : ""}`} aria-pressed={themeMode === "dark"} onClick={() => setThemeMode("dark")}>深色</button>
             <button type="button" className={`ms-display-btn${themeMode === "light" ? " is-on" : ""}`} aria-pressed={themeMode === "light"} onClick={() => setThemeMode("light")}>纸面</button>
+          </div>
+        </div>
+        <div className="ms-display-row">
+          <div className="ms-display-label-col">
+            <span className="ms-display-name">动效</span>
+            <span className="ms-display-hint">弹窗、列表的过渡动画；晕动或嫌晃就选「少」</span>
+          </div>
+          <div className="ms-display-control ms-theme-seg" role="group" aria-label="动效">
+            <button type="button" className={`ms-display-btn${!reduceMotion ? " is-on" : ""}`} aria-pressed={!reduceMotion} onClick={() => setReduceMotion(false)}>正常</button>
+            <button type="button" className={`ms-display-btn${reduceMotion ? " is-on" : ""}`} aria-pressed={reduceMotion} onClick={() => setReduceMotion(true)}>少</button>
           </div>
         </div>
         {ROWS.map((row) => {

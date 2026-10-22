@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
 import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
+import { scrollBehavior } from "../../../stores/motionStore.js";
 
 export type BibleCat = "story" | "rules" | "chars" | "relations" | "items" | "places" | "uncarded";
 
@@ -465,7 +466,7 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
   const [addingAlias, setAddingAlias] = useState(false);
   const self = useRef<HTMLElement>(null);
   // 点开的卡占满一行、可能挪了位置：滚到眼前。
-  useEffect(() => { if (open) self.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); }, [open]);
+  useEffect(() => { if (open) self.current?.scrollIntoView?.({ block: "nearest", behavior: scrollBehavior() }); }, [open]);
   const firstField = card.fields[0];
   const tags = (
     <>

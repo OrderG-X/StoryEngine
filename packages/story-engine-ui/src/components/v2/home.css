@@ -1,5 +1,5 @@
 /* 2026-10-07 改版 · 书架首页。scope 在 .se-v2-home 下（原生嵌套），只用 se-tokens.css 的 token。
-   旧版图片封面 / 鼠标光斑 / 封面倾斜全部撤掉：封面改纯文字排版，按书名稳定取色。 */
+   封面纯文字排版，按书名稳定取色。2026-10-22 补回动效：进书架错峰浮入、封面跟手微倾、背景跟手一团淡光（都比旧版收着）。 */
 /* :root 前缀抬高优先级：v2.css 里旧的 .se-v2-home 规则（深色底、跟手光斑）加载顺序不定，不能靠先后。 */
 :root .se-v2-home{
   position:fixed;inset:0;display:flex;flex-direction:column;
@@ -7,7 +7,12 @@
   font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
   font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;
 
-  &::after{display:none;}
+  /* 跟手淡光：坐标由 useCursorSpotlight 写进 --mx/--my；纸面主题更淡。 */
+  &::after{
+    display:block;transition:none;
+    background:radial-gradient(520px circle at var(--mx,-999px) var(--my,-999px),color-mix(in srgb,var(--accent) 7%,transparent),transparent 70%);
+  }
+  &.is-reduced-motion::after{display:none;}
   *{box-sizing:border-box;}
   ::selection{background:var(--selection);}
   button{font:inherit;color:inherit;}
@@ -57,7 +62,7 @@
     position:relative;display:flex;justify-content:center;width:100%;aspect-ratio:3/4;padding:14px 0;overflow:hidden;
     border-radius:4px 8px 8px 4px;background:var(--cover-0);
     box-shadow:0 1px 1px rgba(0,0,0,.18),0 12px 26px -14px rgba(0,0,0,.65);
-    transition:transform .18s ease,box-shadow .18s ease;
+    transition:transform var(--dur-3) var(--ease-out),box-shadow var(--dur-3) var(--ease-out);will-change:transform;
   }
   /* 书的质感：左边书脊一道暗、紧挨着一道亮（装订压痕），整面斜着一层很淡的光；里面一圈细框像布面精装 */
   .se-cover::before{
@@ -94,7 +99,12 @@
     display:grid;grid-template-columns:132px minmax(0,1fr);gap:28px;align-items:center;margin-bottom:36px;padding:24px;
     border-radius:16px;border:1px solid var(--line);
     background:radial-gradient(520px 220px at 88% -10%,color-mix(in srgb,var(--accent) 9%,transparent),transparent 70%),var(--surface-2);
+    /* 进来先浮上来，之后边上一圈强调色的光很慢地明灭（「从这儿接着写」）。 */
+    animation:se-rise var(--dur-5) var(--ease-out) backwards,se-breathe 5s ease-in-out var(--dur-5) infinite;
   }
+  .se-hero.is-empty{animation:se-rise var(--dur-5) var(--ease-out) backwards;}
+  .se-hero .se-btn.primary{background:var(--sheen),var(--accent);}
+  .se-hero .se-btn.primary:hover{box-shadow:var(--glow-accent);}
   .se-hero.is-empty{grid-template-columns:minmax(0,1fr);}
   .se-hero-cover{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
   .se-hero-cover:hover .se-cover,.se-book-open:hover .se-cover{transform:translateY(-3px);box-shadow:0 1px 1px rgba(0,0,0,.18),0 18px 30px -14px rgba(0,0,0,.7);}
@@ -128,7 +138,8 @@
   .se-shelf-link:hover:not(:disabled){background:var(--hover);color:var(--text);}
   .se-shelf-link:disabled{cursor:default;opacity:.6;}
   .se-shelf-file{display:none;}
-  .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;}
+  .se-book{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;
+    animation:se-rise var(--dur-5) var(--ease-out) backwards;animation-delay:calc(80ms + var(--i,0) * 35ms);}
   .se-book-open{padding:0;border:0;background:none;cursor:pointer;border-radius:8px;}
   .se-book-info{position:relative;min-width:0;}
   .se-book-row{display:flex;align-items:flex-start;gap:4px;}
@@ -155,14 +166,11 @@
   .se-book-menu > .is-danger{position:relative;margin-top:9px;overflow:visible;}
   .se-book-menu > .is-danger::before{content:"";position:absolute;left:6px;right:6px;top:-5px;height:1px;background:var(--line);}
   .se-book-menu > button:first-child{font-weight:600;}
-  .se-book-menu{animation:se-fade .12s ease-out;}
+  .se-book-menu{animation:se-drop var(--dur-2) var(--ease-out);transform-origin:50% 0;}
+  .se-book-menu.is-up{animation-name:se-pop;transform-origin:50% 100%;}
 
   @media (max-width:860px){
     .se-home-inner{padding:24px 16px 48px;}
     .se-hero{grid-template-columns:96px minmax(0,1fr);gap:18px;padding:18px;}
-  }
-  &.is-reduced-motion .se-cover{transition:none;}
-  @media (prefers-reduced-motion:reduce){
-    .se-cover{transition:none;}
   }
 }

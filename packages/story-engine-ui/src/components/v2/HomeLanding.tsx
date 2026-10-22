@@ -1,9 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "../ui/dialog";
 import NewBookStarter from "../NewBookStarter.js";
 import ImportBookDialog from "../ImportBookDialog.js";
 import OpenBookDialog from "../OpenBookDialog.js";
 import { useMotionStore } from "../../stores/motionStore.js";
+import { coverTiltTransform } from "../../hooks/coverTilt.js";
+import { useCursorSpotlight } from "../../hooks/useCursorSpotlight.js";
 import type { BookSummary, HomePageProps } from "../../types.js";
 import { ThemeToggleButton } from "./codex/ThemeToggleButton.js";
 import { TrashDialog } from "./shelf/TrashDialog.js";
@@ -101,6 +103,10 @@ export default function HomeLanding({
   const [heroStats, setHeroStats] = useState<{ readonly stats: WordStats; readonly dailyGoal?: number } | null>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useMotionStore((s) => s.reduceMotion);
+  // 书架背景跟手一团很淡的暖光；减少动效时熄掉。
+  const homeRef = useRef<HTMLElement | null>(null);
+  useCursorSpotlight(homeRef, !reduceMotion);
+  const tilt = reduceMotion ? undefined : coverTiltHandlers;
   // 还没接上 AI（P11）：书架顶上说一句；设置弹窗关上后重读。
   const settingsOpen = useNavigationStore((s) => s.settingsOpen);
   const { setupStep } = useActiveModel(settingsOpen);
@@ -210,6 +216,7 @@ export default function HomeLanding({
 
   return (
     <main
+      ref={homeRef}
       className={`se-v2-home${reduceMotion ? " is-reduced-motion" : ""}`}
       aria-label="StoryEngine 首页"
     >
@@ -252,7 +259,7 @@ export default function HomeLanding({
 
           {lastBook ? (
             <section className="se-hero" aria-label="继续上次写作">
-              <button className="se-hero-cover" onClick={() => onOpenRecentBook(lastBook.id)} type="button" aria-label={`打开《${lastBook.title}》`}>
+              <button className="se-hero-cover" onClick={() => onOpenRecentBook(lastBook.id)} type="button" aria-label={`打开《${lastBook.title}》`} {...tilt}>
                 <BookCover title={lastBook.title} large tone={meta[lastBook.projectPath]?.coverTone} />
               </button>
               <div className="se-hero-info">
@@ -314,8 +321,8 @@ export default function HomeLanding({
               </div>
             ) : (
               <div className="se-shelf-grid">
-                {visibleBooks.map((book) => (
-                  <RecentBook book={book} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} />
+                {visibleBooks.map((book, index) => (
+                  <RecentBook book={book} index={index} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} {...(tilt ? { tilt } : {})} />
                 ))}
               </div>
             )}
@@ -329,8 +336,8 @@ export default function HomeLanding({
               </button>
               {showArchived ? (
                 <div className="se-shelf-grid">
-                  {archivedBooks.map((book) => (
-                    <RecentBook book={book} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} />
+                  {archivedBooks.map((book, index) => (
+                    <RecentBook book={book} index={index} key={book.id} meta={meta[book.projectPath]} onAction={(action) => onBookAction(action, book)} {...(tilt ? { tilt } : {})} />
                   ))}
                 </div>
               ) : null}
@@ -467,14 +474,38 @@ export default function HomeLanding({
   );
 }
 
+/** 封面跟手微倾（只认鼠标；触屏、减少动效不倾）。直接写封面的 style，不走 React 状态。 */
+const coverTiltHandlers = {
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType !== "mouse") return;
+    const cover = event.currentTarget.querySelector<HTMLElement>(".se-cover");
+    if (!cover) return;
+    const rect = cover.getBoundingClientRect();
+    cover.style.transform = coverTiltTransform(
+      (event.clientX - rect.left) / rect.width,
+      (event.clientY - rect.top) / rect.height,
+      { maxDeg: 5, lift: 3, scale: 1.02 },
+    );
+  },
+  onPointerLeave: (event: ReactPointerEvent<HTMLElement>) => {
+    const cover = event.currentTarget.querySelector<HTMLElement>(".se-cover");
+    if (cover) cover.style.transform = "";
+  },
+};
+
 function RecentBook({
   book,
+  index,
   meta,
   onAction,
+  tilt,
 }: {
   readonly book: BookSummary;
+  /** 第几本：进书架时错峰浮入（前 12 本错开，后面的一起进）。 */
+  readonly index: number;
   readonly meta?: ShelfBookMeta;
   readonly onAction: (action: BookAction) => void;
+  readonly tilt?: typeof coverTiltHandlers;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLMenuElement>(null);
@@ -514,8 +545,8 @@ function RecentBook({
   };
 
   return (
-    <article className="se-book">
-      <button aria-label={`打开《${book.title}》`} className="se-book-open" onClick={() => onAction("open")} title={book.title} type="button">
+    <article className="se-book" style={{ "--i": Math.min(index, 12) } as CSSProperties}>
+      <button aria-label={`打开《${book.title}》`} className="se-book-open" onClick={() => onAction("open")} title={book.title} type="button" {...tilt}>
         <BookCover title={book.title} tone={meta?.coverTone} />
       </button>
       <div className="se-book-info">

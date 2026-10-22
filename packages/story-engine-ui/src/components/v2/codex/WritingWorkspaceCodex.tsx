@@ -4,6 +4,7 @@ import type { WritingWorkspaceLayoutProps } from "../../../types.js";
 import type { ChapterNavItem } from "../../../type-defs/workspace.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { usePresence } from "../../../hooks/usePresence.js";
 import AiChatCodex from "./AiChatCodex.js";
 import WritingDeskCodex from "./WritingDeskCodex.js";
 import { ThreadBoard } from "./ThreadBoard.js";
@@ -184,6 +185,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const lastSettingsTabRef = useRef<SettingsTab>("model");
   useEffect(() => { if (settingsTab) lastSettingsTabRef.current = settingsTab; }, [settingsTab]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // 设置 / ⌘K 关的时候先播完退场再卸。
+  const settingsPresence = usePresence(settingsTab !== null);
+  const palettePresence = usePresence(paletteOpen);
   const [exportOpen, setExportOpen] = useState(false);
   const [cat, setCat] = useState<string>("story");
   // 设定本先展开哪张卡（正文名字速览、搜索结果、⌘K 点进来的）。
@@ -193,6 +197,12 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   useLayoutEffect(() => { if (bibleReadRef.current) bibleReadRef.current.scrollTop = 0; }, [cat]);
   // 窄窗开局收起章节抽屉（不挡稿纸）；宽窗按专注写作开关决定。
   const [deskRailOpen, setDeskRailOpen] = useState(() => !focusWriting && window.innerWidth >= CHAPTER_DRAWER_BREAKPOINT);
+  // 章节栏开合要滑：顶栏按钮、快捷键、专注写作切换时滑出 / 收回，稿纸跟着平移；
+  // 切页面（设定本 → 写作台）重建时不滑，不然每回写作台稿纸都晃一下。
+  const railPresence = usePresence(deskRailOpen);
+  const [railSlide, setRailSlide] = useState(false);
+  useLayoutEffect(() => { setRailSlide(false); }, [view]);
+  const toggleRail = (open: boolean) => { setRailSlide(true); setDeskRailOpen(open); };
   const [chapterQuery, setChapterQuery] = useState("");
   const chapterListRef = useRef<HTMLDivElement | null>(null);
   const [libQuery, setLibQuery] = useState("");
@@ -306,7 +316,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     { id: "ai", label: "收起 / 展开 AI 助手", hint: `${MOD}${SHIFT}\\`, run: () => shortcutsRef.current.ai?.() },
     {
       id: "focus", label: focusWriting ? "退出专注写作" : "专注写作", hint: "收起两侧",
-      run: () => { setView("desk"); useDisplaySettingsStore.getState().toggleFocusWriting(); },
+      run: () => { setRailSlide(true); setView("desk"); useDisplaySettingsStore.getState().toggleFocusWriting(); },
     },
     { id: "theme", label: "切换深色 / 纸面主题", hint: "外观", run: () => useThemeStore.getState().toggle() },
     { id: "settings", label: "模型设置", hint: `设置 ${MOD},`, run: () => setSettingsTab("model") },
@@ -339,6 +349,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   function handleResizeStart(event: ReactPointerEvent) {
     event.preventDefault();
     resizingRef.current = true;
+    document.body.classList.add("se-resizing");
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
     const onMove = (moveEvent: PointerEvent) => {
@@ -348,6 +359,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     };
     const onUp = () => {
       resizingRef.current = false;
+      document.body.classList.remove("se-resizing");
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
       window.removeEventListener("pointermove", onMove);
@@ -445,6 +457,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
     settings: () => setSettingsTab((tab) => (tab ? null : lastSettingsTabRef.current)),
     rail: () => {
       if (view !== "desk") { setView("desk"); setDeskRailOpen(true); return; }
+      setRailSlide(true);
       setDeskRailOpen((open) => !open);
     },
     ai: () => { setAiManualToggled(true); setRightOpen(!effectiveRightOpen); },
@@ -469,7 +482,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               aria-label={deskRailOpen ? "收起章节列表" : "展开章节列表"}
               aria-pressed={deskRailOpen}
               title={`章节列表（${MOD}\\）`}
-              onClick={() => setDeskRailOpen(!deskRailOpen)}
+              onClick={() => toggleRail(!deskRailOpen)}
             >
               <IconPanelLeft />
             </button>
@@ -513,6 +526,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             title="专注写作（收起两侧）"
             onClick={() => {
               if (!focusWriting) setView("desk");
+              setRailSlide(true);
               useDisplaySettingsStore.getState().toggleFocusWriting();
             }}
           >
@@ -534,7 +548,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           </button>
         </div>
       </header>
-      <div className="app" style={{ gridTemplateColumns: `minmax(0, 1fr) ${effectiveRightOpen ? effectiveRightWidth : 44}px` }}>
+      <div className="app" style={{ gridTemplateColumns: `minmax(0, 1fr) ${effectiveRightOpen ? effectiveRightWidth : 44}px`, "--ai-w": `${effectiveRightWidth}px` } as CSSProperties}>
         {/* ══ 中：资料中心 / 写作台 ══ */}
         <main className="desk">
           <div key={view} className="view-anim">
@@ -644,12 +658,18 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
             </>
           ) : (
             // 写作台视图：左侧章节列表（顶栏按钮开合 + 搜索，每 10 章一组）+ 右侧 WritingDeskCodex 稿纸。
-            <div className="codex se-desk-wrap" style={{ gridTemplateColumns: deskRailOpen && !chapterDrawer ? `calc(${CHAPTER_RAIL_BASE_WIDTH}px * var(--codex-ui-zoom)) minmax(0, 1fr)` : "minmax(0, 1fr)" }}>
-              {deskRailOpen && chapterDrawer ? (
-                <button className="se-drawer-scrim" type="button" aria-label="收起章节列表" onClick={() => setDeskRailOpen(false)} />
+            <div className="codex se-desk-wrap" style={{ gridTemplateColumns: railPresence.mounted && !chapterDrawer ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)" }}>
+              {railPresence.mounted && chapterDrawer ? (
+                <button className="se-drawer-scrim" type="button" aria-label="收起章节列表" onClick={() => setDeskRailOpen(false)} data-closing={railPresence.closing || undefined} />
               ) : null}
-              {deskRailOpen ? (
-                <nav className={`se-chapters${chapterDrawer ? " is-drawer" : ""}`} aria-label="章节">
+              {railPresence.mounted ? (
+                <nav
+                  ref={railPresence.ref}
+                  className={`se-chapters${chapterDrawer ? " is-drawer" : " is-rail"}${railSlide ? " is-slide" : ""}`}
+                  style={chapterDrawer ? undefined : ({ "--rail-w": `${CHAPTER_RAIL_BASE_WIDTH}px` } as CSSProperties)}
+                  data-closing={railPresence.closing || undefined}
+                  aria-label="章节"
+                >
                   <div className="se-ch-head"><b>章节</b><span>{realChapterCount} 章</span></div>
                   <label className="se-field-search">
                     <IconSearch size={14} strokeWidth={1.8} />
@@ -744,8 +764,9 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
           modelRefreshKey={settingsTab === null ? 1 : 0}
         />
       </div>
-      {paletteOpen ? (
+      {palettePresence.mounted ? (
         <CommandPalette
+          presence={palettePresence}
           onClose={() => setPaletteOpen(false)}
           chapters={paletteChapters}
           characters={paletteCharacters}
@@ -769,7 +790,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
       {/* 定稿清单（重构 P6）：定稿预览一到就弹；挂在最外层，专注模式、AI 栏收起时也弹得出来。 */}
       <CommitSheetHost busy={workspaceBusy} {...(props.onSuggestedAction ? { onSuggestedAction: props.onSuggestedAction } : {})} />
       <ExportDialog book={exportOpen && props.projectPath ? { title: projectName, projectPath: props.projectPath } : null} onClose={() => setExportOpen(false)} />
-      {settingsTab ? <SettingsModal tab={settingsTab} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} /> : null}
+      {settingsPresence.mounted ? <SettingsModal tab={settingsTab ?? lastSettingsTabRef.current} onTab={setSettingsTab} onClose={() => setSettingsTab(null)} presence={settingsPresence} /> : null}
     </div>
   );
 }
