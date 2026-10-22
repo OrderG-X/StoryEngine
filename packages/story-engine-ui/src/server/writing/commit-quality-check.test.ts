@@ -235,6 +235,20 @@ describe("commit quality check", () => {
     ]));
   });
 
+  // 2026-10-22 动效走查：作者让 AI 把下限改成 30 字，定稿仍按 300 拦——低于 300 的下限被当成缺省悄悄回落。
+  it("作者写的下限低于 300 也照办：下限 30 字放行 57 字的短章，不够 30 才拦", async () => {
+    const projectDir = await createFixtureProject();
+    await writeWritingRules(projectDir, { targetWords: 2500, minWords: 30 });
+
+    const ok = await checkDraftBeforeCommit({ projectDir, chapter: 1, draftContent: `# 第一章\n\n${"许微站在码头上看雾。".repeat(6)}\n` });
+    expect(ok.issues).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "too_short" })]));
+
+    const short = await checkDraftBeforeCommit({ projectDir, chapter: 1, draftContent: `# 第一章\n\n${"许微看雾。".repeat(4)}\n` });
+    expect(short.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "too_short", message: expect.stringMatching(/shorter than 30 Chinese characters \(current: 16\)/u) }),
+    ]));
+  });
+
   it("rejects title-only drafts", async () => {
     const projectDir = await createFixtureProject();
 
