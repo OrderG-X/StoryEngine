@@ -123,30 +123,21 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
     case "idle":
       return "说说这章想写什么…";
     case "steering_ready":
-      return "补充想法，或说「写吧」开始生成…";
+      return "还想补什么，直接说…";
     case "draft_generating":
       return "正在生成工作稿…";
     case "draft_ready":
-      return "说说修改意见，或说「核账」查前后对不上…";
     case "quality_checked":
-      return "说「定稿预览」生成定稿预览，或让 AI 做内容审阅…";
+      return "哪里想改，直接说…";
     case "commit_preview_ready":
     case "waiting_commit_confirmation":
-      return "检查定稿预览，点「确认定稿」执行…";
+      return "在定稿清单里看一遍，点「确认定稿」…";
     case "committed":
     case "ready_for_next":
-      return "说「下一章」继续…";
+      return "下一章想写什么…";
     default:
       return "输入你的想法…";
   }
-}
-
-export function workflowErrorTitle(flowStatus: WritingWorkspaceLayoutProps["workspace"]["flowStatus"]): string {
-  if (flowStatus === "waiting_commit_confirmation" || flowStatus === "commit_preview_ready") return "定稿失败";
-  if (flowStatus === "quality_checked") return "硬伤检查失败";
-  if (flowStatus === "draft_generating" || flowStatus === "draft_ready") return "工作稿处理失败";
-  if (flowStatus === "steering_ready" || flowStatus === "idle") return "章纲没拟成";
-  return "流程执行失败";
 }
 
 /**
@@ -182,15 +173,10 @@ export function ThinkingIndicator() {
   );
 }
 
-/** 工具耗时格式化：<1s 显示 ms，<60s 显示 Xs（整数不带小数），否则 XmYs。供 ToolStepFold / StepCard 共用。 */
+/** 工具用时：不到 1 秒不报（作者不关心毫秒）；1 分钟内「N 秒」，再长「M 分 S 秒」。供过程里的工具行 / StepCard 共用。 */
 export function formatStepElapsed(ms: number): string {
-  if (ms <= 0) return "";
-  if (ms < 1000) return `${ms}ms`;
-  const totalSec = ms / 1000;
-  if (totalSec < 60) {
-    const rounded = Math.round(totalSec * 10) / 10;
-    return Number.isInteger(rounded) ? `${rounded}s` : `${rounded.toFixed(1)}s`;
-  }
-  const sec = Math.round(totalSec);
-  return `${Math.floor(sec / 60)}m${sec % 60}s`;
+  if (ms < 1000) return "";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  return sec % 60 === 0 ? `${sec / 60} 分` : `${Math.floor(sec / 60)} 分 ${sec % 60} 秒`;
 }

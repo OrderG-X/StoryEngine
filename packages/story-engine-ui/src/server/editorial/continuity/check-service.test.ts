@@ -215,7 +215,7 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
 });
 
 describe("核账服务：等读标注与回执（R5.2 必做）", () => {
-  it("当场补了笔记（缺 ≤2）→ 回执加「这次先等核账员读完第 a～b 章（用时 …）再核」，结果带 waited；进度盘上等读已收尾", async () => {
+  it("当场补了笔记（缺 ≤2）→ 回执加「这次先等核账员读完第 a～b 章再核」（不报用时），结果带 waited；进度盘上等读已收尾", async () => {
     const dir = await makeBook(4);
     // 预置第 1 章笔记（产品同一个角色，哈希对得上）；核第 4 章时缺第 2～3 章 → 当场补（缺 2 ≤ 2）。
     await ensureReaderWindow({ projectDir: dir, role: CHECKER_ROLE, upTo: 1, callModel: async () => "笔记" });
@@ -231,7 +231,7 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     const result = await checkChapterBody(dir, 4, BODY, { readerCallModel: wrapped });
     expect(result.ok).toBe(true);
     expect(result.waited).toMatchObject({ from: 2, to: 3 });
-    expect(result.summary).toContain("这次先等核账员读完第 2～3 章（用时");
+    expect(result.summary).toContain("这次先等核账员读完第 2～3 章再核");
     expect(result.summary).toContain("再核");
     expect(result.coverage).toBeUndefined();
     // 等读期间：reading:true、waiting:「核账」；分母按 R5.3 现算成已定稿章数（这本书定稿到第 4 章，盘上记的是 3）。
@@ -250,7 +250,7 @@ describe("核账服务：等读标注与回执（R5.2 必做）", () => {
     expect(result.ok).toBe(true);
     expect(result.coverage).toBeUndefined();
     expect(result.waited).toMatchObject({ from: 3, to: 12 });
-    expect(result.summary).toContain("这次先等核账员读完第 3～12 章（用时");
+    expect(result.summary).toContain("这次先等核账员读完第 3～12 章再核");
   });
 
   it("笔记本来就齐 → 没等就不说（R6.1）：不带 waited、回执不提等、进度不标在等", async () => {
@@ -287,7 +287,7 @@ describe("核账服务：排在后台补读后面等（R6.1，新发现 1）", (
     expect(result.ok).toBe(true);
     // 等的是谁补的不重要：开口时缺的第 1～10 章等完都补上了，就算等过。
     expect(result.waited).toMatchObject({ from: 1, to: 10 });
-    expect(result.summary).toContain("这次先等核账员读完第 1～10 章（用时");
+    expect(result.summary).toContain("这次先等核账员读完第 1～10 章再核");
     expect(result.summary).toContain("再核");
     expect(result.coverage).toBeUndefined();
     // 结束后 waiting 消失。

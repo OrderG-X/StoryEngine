@@ -9,7 +9,7 @@
  * 「一行步骤」（无 emoji，展开钮贴标签，进行中那一步标签跑金色光影，点开才看详情）。
  *
  * 复用的纯函数来自 chatRenderShared（聊天渲染共享模块）：
- *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator / workflowErrorTitle。
+ *   getPlaceholder / formatMessageBlocks / renderRichText / ThinkingIndicator。
  * 工具步聚合复用 agentTimelineModel 的 buildTimelineModel；权限点复用 v2Utils.primaryPermission。
  */
 import { useEffect, useRef, useState } from "react";
@@ -39,7 +39,7 @@ import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
-import { ChatContextMeter } from "./ChatContextMeter.js";
+import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import { ChapterTodoCard } from "./ChapterTodoCard.js";
 import { useChapterProgress } from "../../../workspace/chapterProgress.js";
@@ -53,24 +53,16 @@ import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
 import { chapterTurns } from "./chapterTurns.js";
-import {
-  foldProcessSegments,
-  isCompletedTurnForProcessFold,
-  shouldAggregateProcessBucket,
-  type ProcessFoldStep,
-} from "./processLogFold.js";
+import { foldTurn, processWorthShowing, summarizeProcess, type ProcessFoldStep } from "./processLogFold.js";
 import {
   formatMessageBlocks,
   formatStepElapsed,
   getPlaceholder,
   renderRichText,
   ThinkingIndicator,
-  workflowErrorTitle,
 } from "./chatRenderShared.js";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
-import { NameConsistencyCard } from "./NameConsistencyCard.js";
-import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
@@ -157,25 +149,21 @@ export function ReadersCatchUpNote({ status, onResumeReread, aiMissing = false }
     );
   }
   if (!status?.reading) return null;
+  // 只列正在读的角色（排队的、读完的不占字）；三个角色的全貌悬停看。
+  const describe = (role: (typeof status.roles)[number]) => {
+    const label = READER_ROLE_LABELS[role.role] ?? role.role;
+    const finished = !role.reading && role.total > 0 && role.done >= role.total;
+    const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
+    // 导入的书通读记账（P8）：记账员这一行带上还要多久。
+    const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
+    return role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
+  };
+  const active = status.roles.filter((role) => role.reading);
   return (
-    <div className="se-checker-reading" role="status">
+    <div className="se-checker-reading" role="status" title={`编辑部在读前文：${status.roles.map(describe).join(" · ")}`}>
       <span className="se-checker-reading-dot" aria-hidden="true" />
       <span className="se-checker-reading-text">
-        编辑部在读前文：
-        {status.roles.map((role, index) => {
-          const label = READER_ROLE_LABELS[role.role] ?? role.role;
-          const finished = !role.reading && role.total > 0 && role.done >= role.total;
-          const waitingSuffix = role.reading && role.waiting ? `（${role.waiting}在等它读完）` : "";
-          // 导入的书通读记账（P8）：记账员这一行带上还要多久。
-          const etaSuffix = role.role === "ledger" && reread?.etaMinutes !== undefined ? `（${formatEta(reread.etaMinutes)}）` : "";
-          const text = role.reading || finished ? `${label} ${role.done}/${role.total}${waitingSuffix}${etaSuffix}` : `${label} 排队`;
-          return (
-            <span key={role.role}>
-              {index > 0 ? " · " : ""}
-              {finished ? <s className="se-checker-reading-done">{text}</s> : text}
-            </span>
-          );
-        })}
+        编辑部在读前文：{active.length ? active.map(describe).join(" · ") : "排队中"}
       </span>
     </div>
   );
@@ -207,6 +195,8 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
             key={choice.label}
             type="button"
             className={`nextstep-choice${choice.primary ? " is-primary" : ""}`}
+            // 推荐项本来就是实心按钮，不再另贴「推荐」角标，悬停说一声。
+            title={choice.primary ? "推荐" : undefined}
             style={{ animationDelay: `${index * 40}ms` }}
             disabled={busy}
             onMouseMove={trackChoiceLight}
@@ -218,7 +208,7 @@ export function NextStepChoicesRow({ nextStep, busy, onSendMessage, onSendUserAc
               onSendMessage?.(choice.intent);
             }}
           >
-            <span>{choice.label}{choice.primary ? <em className="nextstep-rec">推荐</em> : null}</span>
+            <span>{choice.label}</span>
           </button>
         ))}
       </div>
@@ -289,7 +279,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 传给 useReaderCatchUp——动作等回包期间即使补读没在读也按 5 秒轮询（R6.2），「（核账在等它读完）」一出来就能看到。
   const workspaceBusy = Boolean(
     props.chatLoading
-    || props.steeringLoading
     || props.draftActionLoading
     || isWorkspaceBusy(),
   );
@@ -390,7 +379,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
     if (!atBottomRef.current) return;
     const el = historyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, props.chatLoading, props.steeringLoading, props.steeringDraft, props.draftAIReview, props.activeRevisionTask, props.chatError, props.steeringError, props.rightOpen]);
+  }, [messages, props.chatLoading, props.draftAIReview, props.activeRevisionTask, props.chatError, props.rightOpen]);
 
   // 折叠态：整列只渲染一个极简竖条（点击展开）。codex.css 没有专用 class，用最小内联（codex 变量调色）。
   if (!props.rightOpen) {
@@ -415,9 +404,12 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  // 「正在思考」胶囊只顶发出去到第一个字回来之前那一下；之后那条回复自己的过程行在跑光、报正在做哪步，不再两处都说。
+  const waitingFirstEvent = Boolean(props.chatLoading) && (!lastAssistant || !assistantHasAnything(lastAssistant));
+  // 「建议下一步」是收尾的内部一步，不上字幕。
   const busyCaption = busy
     ? operationCaption(props.draftActionLoading)
-      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running")?.label)
+      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running" && step.toolName !== "suggest_next_steps"))
       ?? "AI 在忙…"
     : null;
 
@@ -525,8 +517,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       </ChapterTodoCard>
 
       {/* ── 消息流（智能跟随滚动） ── */}
-      {/* is-thinking：生成期间底部留白，避免「正在思考」浮层盖住正在流式输出的文字。 */}
-      <div className={`ai-body${props.chatLoading ? " is-thinking" : ""}`} ref={historyRef} onScroll={handleHistoryScroll}>
+      {/* is-thinking：胶囊在的时候底部留白，免得浮层盖住最后几行。 */}
+      <div className={`ai-body${waitingFirstEvent ? " is-thinking" : ""}`} ref={historyRef} onScroll={handleHistoryScroll}>
         {/* ── 归档折叠行：顶部显示「已清理 N 条早先消息」（可点展开只读回看） ── */}
         {activeArchivedCount > 0 ? (
           <div
@@ -541,15 +533,19 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         ) : null}
         {/* 展开归档段：只读显示 slice(0, activeArchivedCount) */}
         {archivedExpanded && activeArchivedCount > 0 ? (
-          <div className="codex-archived-messages">
-            {messages.slice(0, activeArchivedCount).map((message) => (
-              <MessageBubbles
-                key={`archived-${message.id}`}
-                message={message}
-                chatLoading={workspaceBusy}
-              />
-            ))}
-          </div>
+          <>
+            <div className="codex-archived-messages">
+              {messages.slice(0, activeArchivedCount).map((message) => (
+                <MessageBubbles
+                  key={`archived-${message.id}`}
+                  message={message}
+                  chatLoading={workspaceBusy}
+                />
+              ))}
+            </div>
+            {/* 撤销清理放这儿（不再常驻在输入框上方占一条）。 */}
+            <div className="codex-unarchive-row"><UnarchiveButton disabled={workspaceBusy} /></div>
+          </>
         ) : null}
         {/* 主消息流：裁掉已归档前缀（activeArchivedCount 是归档偏移量，与
             ChatContextMeter/buildOutboundConversation 同一口径）。修前未裁 →
@@ -605,14 +601,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
           </div>
         ) : null}
 
-        {props.steeringDraft ? <SteeringDraftCard draft={props.steeringDraft} /> : null}
         {/* 审稿卡不再在这里常驻渲染（旧实现一直钉底部吃视口）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
         {/* 体检卡不再在这里常驻渲染（旧实现一直钉底部）——已改为随对应 assistant 消息走，见 MessageBubbles。 */}
         {/* 选区改写预览不再在聊天里渲染——已移到写作区下方独立弹窗（见 RevisionPreviewModal）。 */}
 
-        {props.steeringError ? <NoticeCard title={workflowErrorTitle(flowStatus)} text={props.steeringError} danger /> : null}
         {props.chatError ? <NoticeCard title="章节对话失败" text={props.chatError} danger /> : null}
-        {props.steeringLoading ? <NoticeCard title="正在拟章纲" text="正在读前文，拟这一章的章纲。" /> : null}
       </div>
 
       {/* ── 下一步：AI 带路选项 ── 点选项=给 agent 发一句意图（对话里留「你：…」、再由 agent 接着做）；
@@ -629,7 +622,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
       {/* ── 上下文提示条（消息列表与输入框之间） ──
           「正在思考」胶囊挂在这一段的顶上（浮在消息流底部留出的空当里），不再压住下面的快捷按钮。 */}
       <div className="se-ai-dock-anchor">
-        <ThinkingDock on={Boolean(props.chatLoading)} />
+        <ThinkingDock on={waitingFirstEvent} />
       </div>
       <ChatContextMeter />
 
@@ -802,11 +795,13 @@ function buildReviseIntent(issue: DraftReviewIssueView): string {
 
 /** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——预览定稿时说「正在定稿」会吓人）。 */
 const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
-  "定稿影响预览": "生成定稿预览",
+  "定稿预览": "生成定稿预览",
 };
 
-function runningStepCaption(step: string | undefined): string | null {
-  return step ? `正在${RUNNING_STEP_WORDS[step] ?? step}…` : null;
+function runningStepCaption(step: ToolStep | undefined): string | null {
+  if (!step) return null;
+  const label = toolStepLabel(step);
+  return `正在${RUNNING_STEP_WORDS[label] ?? label}…`;
 }
 
 // ─────────────────────────── 消息气泡 ───────────────────────────
@@ -910,38 +905,20 @@ function MessageBubbles({
 
   // assistant
   const model = buildTimelineModel(message);
-  const toolSteps = (message.toolSteps ?? []) as readonly ToolStep[];
-  const contentBlocks = message.content.trim() ? formatMessageBlocks(message.content) : [];
-  const commitPreview = cardOf(message, "commit-preview")?.preview;
-  // 注：suggestedActions 不再计入「这条气泡有没有东西」——它们已统一移到 composer 上方的建议条。
-  const hasAnything = message.content.trim().length > 0
-    || toolSteps.length > 0
-    || (message.agentCards?.length ?? 0) > 0
-    || (message.cards?.length ?? 0) > 0
-    || Boolean(message.thinking?.trim());
-  // 流式开始前的空占位助手气泡不渲染。
-  if (!hasAnything) return null;
+  // 流式开始前的空占位助手气泡不渲染（这时底部「正在思考」胶囊在顶着）。
+  if (!assistantHasAnything(message)) return null;
 
   const canUndo = Boolean(onUndoToHere) && (model?.canUndo ?? false);
+  // 定稿回执卡自带「撤销这次定稿」（同一个回退），悬停的「撤销到此」就不再给。
+  const undoOnCard = canUndo && commitUndoable && Boolean(cardOf(message, "commit-report"));
   const canCopy = !isLiveAssistant && message.content.trim().length > 0;
-  // 思考「进行中」=本轮还在流、答案与工具都还没出现（此时思考字上跑光影；一旦出工具/答案即静止）。
-  const thinkingActive = chatLoading && !message.content.trim() && toolSteps.length === 0;
-  // 有序分段：把「想→调工具→再想→答」按真实时间顺序逐段渲染（治「工具堆顶部、后续思考看不见」）。
-  // 旧消息无 segments → renderSegments 为 null → 回退原「思考折叠→工具→正文」三桶渲染。
-  const renderSegments = buildMessageRenderSegments(message);
-  // P1-9：已完成轮次把多条过程步聚成「AI 操作记录 · N 步」；进行中保持逐步金光。
-  const aggregateProcess = isCompletedTurnForProcessFold(chatLoading, isLiveAssistant);
-  const folded = renderSegments
-    ? foldProcessSegments(renderSegments, { aggregate: aggregateProcess })
-    : null;
-  const firstTextIndex = folded ? folded.findIndex((seg) => seg.kind === "text") : -1;
+  // 一轮拆成两块：思考、工具、工具之间的旁白收成一行「过程」；最后一个工具之后的正文是答复（见 processLogFold.ts）。
+  const fold = foldTurn(buildMessageRenderSegments(message));
+  const answerBlocks = fold.answer.length ? formatMessageBlocks(fold.answer.join("\n\n")) : [];
+  // 进行中且答复还没开始写：过程那行跑光、报正在做哪步。
+  const processLive = chatLoading && isLiveAssistant && fold.answer.length === 0;
   // 模型做完事没再说话就结束时，补一句最后那步工具的原话结果（见 turnTail.ts）。
-  const tailSummary = turnTailSummary(folded, !isLiveAssistant);
-  const bucketAggregate = shouldAggregateProcessBucket(
-    message.thinking,
-    toolSteps.length,
-    aggregateProcess,
-  );
+  const tailSummary = turnTailSummary(fold, !isLiveAssistant);
 
   const statusNotes = cardOf(message, "status-notes")?.notes;
   // 卡片按 type 分发渲染，按固定次序排（布局稳定，不随工具先后跳）；状态说明在最上面单独渲染。
@@ -998,12 +975,6 @@ function MessageBubbles({
             onOpen={() => openCommitSheet(message.id)}
           />
         );
-      case "name-drift":
-        // 人物名一致性提醒卡：入库预览报出近形错名时固定醒目展示，不靠模型转述、不被说软。
-        return card.warnings.length ? <NameConsistencyCard key={card.type} warnings={card.warnings} /> : null;
-      case "stale-threads":
-        // 伏笔/线索待收口提醒卡：入库预览报出久未推进的伏笔/线索时固定醒目展示，治「埋了不收」的遗漏。
-        return card.warnings.length ? <StaleThreadCard key={card.type} warnings={card.warnings} /> : null;
       case "commit-report":
         // 入库 delta 卡：这章正式入库改了哪些角色/伏笔/线索/时间线/主线目标，随消息走。
         return (
@@ -1035,54 +1006,15 @@ function MessageBubbles({
           ))}
         </div>
       ) : null}
-      {folded ? (
-        folded.map((seg, index) => {
-          if (seg.kind === "process") {
-            return <ProcessLogAggregate key={`seg-p-${index}`} steps={seg.steps} />;
-          }
-          if (seg.kind === "reasoning") {
-            // 尾段思考 + 仍在流 = 当前正在想的那段，跑金光；其余历史思考静止。
-            const active = chatLoading && isLiveAssistant && index === folded.length - 1;
-            return <ThinkingDisclosure key={`seg-r-${index}`} thinking={seg.text.trim()} active={active} />;
-          }
-          if (seg.kind === "tool") {
-            return <ToolStepFold key={`seg-t-${seg.step.id}`} step={seg.step} />;
-          }
-          const blocks = formatMessageBlocks(seg.text);
-          if (!blocks.length) return null;
-          return (
-            <div className="msg-body" key={`seg-x-${index}`}>
-              <MessageBlocksView blocks={blocks} lead={index === firstTextIndex} />
-            </div>
-          );
-        })
-      ) : (
-        <>
-          {bucketAggregate ? (
-            <ProcessLogAggregate
-              steps={[
-                ...(message.thinking?.trim()
-                  ? [{ kind: "reasoning" as const, text: message.thinking.trim() }]
-                  : []),
-                ...toolSteps.map((step) => ({ kind: "tool" as const, step })),
-              ]}
-            />
-          ) : (
-            <>
-              {/* 回退：思考过程默认收起一行；进行中字上跑光影 */}
-              {message.thinking?.trim() ? <ThinkingDisclosure thinking={message.thinking.trim()} active={thinkingActive} /> : null}
-              {/* 回退：调用工具一行（调用工具 · 工具名），运行中跑光影，点开看执行详情 */}
-              {toolSteps.map((step) => <ToolStepFold key={step.id} step={step} />)}
-            </>
-          )}
-          {/* 回退：正文裸文字平铺，无气泡框 */}
-          {contentBlocks.length ? (
-            <div className="msg-body">
-              <MessageBlocksView blocks={contentBlocks} lead />
-            </div>
-          ) : null}
-        </>
-      )}
+      {/* 进行中还没第一步（比如只先来了一条状态说明）也挂这一行「在想…」，别让作者对着不动的消息干等。 */}
+      {(processLive && fold.process.length === 0) || processWorthShowing(fold.process, new Set((message.cards ?? []).map((card) => card.type)), chatLoading && isLiveAssistant)
+        ? <TurnProcess steps={fold.process} live={processLive} />
+        : null}
+      {answerBlocks.length ? (
+        <div className="msg-body">
+          <MessageBlocksView blocks={answerBlocks} lead />
+        </div>
+      ) : null}
 
       {tailSummary ? <p className="se-turn-tail">{tailSummary}</p> : null}
 
@@ -1091,7 +1023,7 @@ function MessageBubbles({
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
       {/* 回复下方的小动作（悬停才显）：复制回复文字 / 撤销到此。 */}
-      {(canCopy || canUndo || message.tokenUsage) ? (
+      {(canCopy || (canUndo && !undoOnCard)) ? (
         <div className="se-msg-acts">
           {canCopy ? (
             <button
@@ -1106,7 +1038,7 @@ function MessageBubbles({
               <IconCopy size={13} />复制
             </button>
           ) : null}
-          {canUndo ? (
+          {canUndo && !undoOnCard ? (
             <button
               type="button"
               disabled={chatLoading}
@@ -1116,20 +1048,19 @@ function MessageBubbles({
               <IconUndo size={13} />撤销到此
             </button>
           ) : null}
-          {message.tokenUsage && message.tokenUsage.input > 0 ? (
-            <span className="se-msg-usage" title="这一轮用了多少 token（对话 AI 加上写章纲、出稿、核对等内部调用）；命中缓存的部分服务商通常只收一成左右">
-              {formatWan(message.tokenUsage.input + message.tokenUsage.output)} · 缓存 {formatWan(message.tokenUsage.cachedInput)}
-            </span>
-          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** 「15.5 万」：作者看得懂的量级。 */
-function formatWan(value: number): string {
-  return value >= 10000 ? `${(value / 10000).toFixed(1)} 万` : String(value);
+/** 助手这条有没有东西可显示（suggestedActions 不算——它们在输入框上方的建议条）。 */
+function assistantHasAnything(message: ChapterMessage): boolean {
+  return message.content.trim().length > 0
+    || (message.toolSteps?.length ?? 0) > 0
+    || (message.agentCards?.length ?? 0) > 0
+    || (message.cards?.length ?? 0) > 0
+    || Boolean(message.thinking?.trim());
 }
 
 /** 卡片在气泡里的固定次序。 */
@@ -1140,8 +1071,6 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "directions",
   "quality",
   "commit-preview",
-  "name-drift",
-  "stale-threads",
   "commit-report",
   "next-steps",
 ];
@@ -1217,66 +1146,34 @@ function splitLead(text: string): { head: string; rest: string } {
   return { head: "", rest: text };
 }
 
-/** 调用工具：默认收起一行「调用工具 · 工具名」。运行中工具名跑光影；有执行详情时可点开看。 */
-function ToolStepFold({ step }: { readonly step: ToolStep }) {
-  const [open, setOpen] = useState(false);
-  const failed = step.status === "failed";
-  const running = step.status === "running";
-  // 已停止（人喊停腰斩）：中性徽标如实说「已停止」，不走红（不是失败）、不跑光影（不在跑）。
-  const stopped = step.status === "stopped";
-  // 裁决未过（commit_preview 核实「暂不可定稿」这类否定裁决）：落定徽标，不红（不是失败）不绿。
-  const verdict = step.status === "verdict";
-  const detail = step.detail?.trim();
-  const canOpen = Boolean(detail);
-  const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : null;
-  // 工具名一律现取中文（覆盖旧历史里烤进消息的英文 label），见 resolveToolStepLabel。
-  const toolLabel = resolveToolStepLabel(step.toolName, step.label);
-  return (
-    <div className="step-fold">
-      <button
-        type="button"
-        className="step-head"
-        onClick={() => { if (canOpen) setOpen((v) => !v); }}
-        aria-expanded={canOpen ? open : undefined}
-        disabled={!canOpen}
-      >
-        <span className="step-kind">AI 操作记录</span>
-        <span className="step-sep">·</span>
-        <span className={`step-label is-tool ${running ? "is-active" : ""}`.trim()}>{uiText(toolLabel, "执行步骤")}</span>
-        {failed ? <span className="step-fail">失败</span> : null}
-        {stopped ? <span className="step-stop">已停止</span> : null}
-        {verdict ? <span className="step-verdict">裁决未过</span> : null}
-        {elapsed ? <span className="tm">{elapsed}</span> : null}
-        {canOpen ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
-      </button>
-      {open && detail ? <p className="step-detail">{detail}</p> : null}
-    </div>
-  );
+/** 工具名一律现取中文（覆盖旧历史里烤进消息的英文 label），见 resolveToolStepLabel。 */
+function toolStepLabel(step: ToolStep): string {
+  return uiText(resolveToolStepLabel(step.toolName, step.label), "执行步骤");
 }
 
-/** P1-9：已完成轮次的过程步聚合行——默认收起「AI 操作记录 · N 步」，展开后按序渲染各步。 */
-function ProcessLogAggregate({ steps }: { readonly steps: readonly ProcessFoldStep[] }) {
+/**
+ * 一轮的过程：收起时一行（做了哪几样事；没成功的照实标）；进行中报正在做的那步并跑光。
+ * 点开按先后列出思考、旁白、每一步工具。
+ */
+function TurnProcess({ steps, live }: { readonly steps: readonly ProcessFoldStep[]; readonly live: boolean }) {
   const [open, setOpen] = useState(false);
+  const summary = summarizeProcess(steps, toolStepLabel, live);
   return (
-    <div className="step-fold process-log-agg">
-      <button
-        type="button"
-        className="step-head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className="step-kind">AI 操作记录</span>
-        <span className="step-sep">·</span>
-        <span className="step-label is-tool">{steps.length} 步</span>
-        <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
+    <div className="step-fold turn-proc">
+      <button type="button" className="step-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className={`step-label${summary.current ? " is-active" : ""}`}>
+          {summary.current ? `${summary.current}…` : summary.label}
+        </span>
+        {summary.failed ? <span className="step-fail">{summary.failed} 步没成功</span> : null}
+        {summary.stopped ? <span className="step-stop">已停止</span> : null}
+        {steps.length ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
       </button>
-      {open ? (
+      {open && steps.length ? (
         <div className="process-log-children">
           {steps.map((step, index) => {
-            if (step.kind === "reasoning") {
-              return <ThinkingDisclosure key={`agg-r-${index}`} thinking={step.text.trim()} />;
-            }
-            return <ToolStepFold key={`agg-t-${step.step.id}`} step={step.step} />;
+            if (step.kind === "reasoning") return <ThinkingDisclosure key={`p-r-${index}`} thinking={step.text.trim()} />;
+            if (step.kind === "narration") return <p key={`p-n-${index}`} className="proc-say">{step.text.trim()}</p>;
+            return <ToolStepRow key={`p-t-${step.step.id}`} step={step.step} />;
           })}
         </div>
       ) : null}
@@ -1284,13 +1181,42 @@ function ProcessLogAggregate({ steps }: { readonly steps: readonly ProcessFoldSt
   );
 }
 
-/** 思考过程：默认收起一行「思考过程 ▸」。进行中标签跑光影；点开看真实推理链。无 emoji。 */
-function ThinkingDisclosure({ thinking, active }: { readonly thinking: string; readonly active?: boolean }) {
+/** 过程里的一步工具：名字 + 结果徽标 + 用时（不到 1 秒不报）；有执行详情时可点开看。 */
+function ToolStepRow({ step }: { readonly step: ToolStep }) {
+  const [open, setOpen] = useState(false);
+  const running = step.status === "running";
+  const detail = step.detail?.trim();
+  const elapsed = step.endedAt && step.startedAt ? formatStepElapsed(step.endedAt - step.startedAt) : "";
+  return (
+    <div className="step-fold">
+      <button
+        type="button"
+        className="step-head"
+        onClick={() => { if (detail) setOpen((v) => !v); }}
+        aria-expanded={detail ? open : undefined}
+        disabled={!detail}
+      >
+        <span className={`step-label is-tool${running ? " is-active" : ""}`}>{toolStepLabel(step)}</span>
+        {step.status === "failed" ? <span className="step-fail">没成功</span> : null}
+        {/* 人喊停：中性徽标如实说「已停止」，不走红（不是失败）。 */}
+        {step.status === "stopped" ? <span className="step-stop">已停止</span> : null}
+        {/* 否定裁决（如「暂不可定稿」）：落定徽标，不红不绿。 */}
+        {step.status === "verdict" ? <span className="step-verdict">裁决未过</span> : null}
+        {elapsed ? <span className="tm">{elapsed}</span> : null}
+        {detail ? <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span> : null}
+      </button>
+      {open && detail ? <p className="step-detail">{detail}</p> : null}
+    </div>
+  );
+}
+
+/** 思考过程：默认收起一行「思考」；点开看真实推理链。 */
+function ThinkingDisclosure({ thinking }: { readonly thinking: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="step-fold">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="step-head">
-        <span className={`step-label ${active ? "is-active" : ""}`.trim()}>AI 分析</span>
+        <span className="step-label">思考</span>
         <span className={`step-caret${open ? " is-open" : ""}`} aria-hidden="true"><IconChevronRight size={12} strokeWidth={2} /></span>
       </button>
       {open ? <p className="step-detail">{thinking}</p> : null}
@@ -1315,51 +1241,14 @@ function NoticeCard({ title, text, danger }: { readonly title: string; readonly 
   );
 }
 
-function SteeringDraftCard({ draft }: { readonly draft: NonNullable<WritingWorkspaceLayoutProps["steeringDraft"]> }) {
-  return (
-    <div style={surfaceCardStyle}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span style={{ color: "var(--accent-hi)", fontSize: 12, fontWeight: 600 }}>章纲</span>
-        <strong style={{ color: "var(--muted)", fontSize: 11.5 }}>{draft.suggestions.length} 条建议 · 只读预览</strong>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {draft.suggestions.map((suggestion) => (
-          <div key={suggestion.id} style={{ borderTop: "1px dashed var(--line-faint)", paddingTop: 8 }}>
-            <span style={{ color: "var(--faint)", fontSize: 11 }}>
-              {suggestion.type === "hook" ? "伏笔" : suggestion.type === "thread" ? "线索" : suggestion.type === "arcGoal" ? "主线目标" : suggestion.type === "risk" ? "风险" : suggestion.type === "location" ? "地点" : "角色"}
-            </span>
-            <strong style={{ display: "block", color: "var(--text)", fontSize: 12.5 }}>{uiText(suggestion.title)}</strong>
-            <p style={{ margin: "2px 0 0", color: "var(--muted)", fontSize: 11.5 }}>{uiText(suggestion.reason)}</p>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <h3 style={extraHeadingStyle}>本章目标预览</h3>
-        <p style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}>{uiText(draft.generatedChapterGoalPreview)}</p>
-      </div>
-    </div>
-  );
-}
-
-const extraHeadingStyle: React.CSSProperties = {
-  margin: "0 0 3px",
-  fontSize: 11,
-  fontWeight: 600,
-  color: "var(--faint)",
-  letterSpacing: ".04em",
-};
-
 // ─────────────────────────── 空状态判定 ───────────────────────────
 
 function shouldShowEmptyState(props: WritingWorkspaceLayoutProps, messages: readonly ChapterMessage[]): boolean {
   const onlyInjected = messages.every((message) => isInjectedWorkflowMessage(message));
   return onlyInjected
-    && !props.steeringDraft
     && !props.draftAIReview
     && !props.activeRevisionTask
-    && !props.steeringError
     && !props.chatError
-    && !props.steeringLoading
     && !props.chatLoading;
 }
 

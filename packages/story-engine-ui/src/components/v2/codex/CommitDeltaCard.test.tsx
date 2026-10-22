@@ -14,11 +14,14 @@ const report = {
 };
 
 describe("CommitDeltaCard 入库 delta 卡", () => {
-  it("用 StepCard 外壳、标题「入库」、徽章「已入库」", () => {
+  it("用 StepCard 外壳、标题「第 N 章记下的账」（老回执没章号就「记下的账」）、徽章「已定稿」", () => {
     const { container, getByText } = render(<CommitDeltaCard report={report} />);
     expect(container.querySelector(".step-card.sc-done")).toBeTruthy();
-    expect(getByText("定稿")).toBeTruthy();
+    expect(getByText("记下的账")).toBeTruthy();
     expect(getByText("已定稿")).toBeTruthy();
+    cleanup();
+    render(<CommitDeltaCard report={{ chapter: 4, ledger: { facts: 2 } }} />);
+    expect(getByText("第 4 章记下的账")).toBeTruthy();
   });
 
   it("渲染状态行 + 分项（角色/时间线/主线目标）", () => {
@@ -38,10 +41,9 @@ describe("CommitDeltaCard 入库 delta 卡", () => {
 });
 
 describe("displayDeltaLines：定稿明细说人话", () => {
-  it("文件路径换章号、去掉没变化的行与 0 条的提醒分项", async () => {
+  it("去掉没变化的行与 0 条的提醒分项", async () => {
     const { displayDeltaLines } = await import("./CommitDeltaCard.js");
     expect(displayDeltaLines([
-      "正式章节：已写入 chapters/0058.md",
       "角色状态：1 项",
       "时间线事件：1 条",
       "伏笔更新：0 项",
@@ -51,14 +53,12 @@ describe("displayDeltaLines：定稿明细说人话", () => {
       "故事日历：无变更",
       "过期提醒：伏笔 0 条，线索 7 条，主线目标 1 条",
     ])).toEqual([
-      "正文：已写入第 58 章",
       "角色状态：1 项",
       "时间线事件：1 条",
       "线索线程：15 项",
       "世界状态：已更新",
       "过期提醒：线索 7 条，主线目标 1 条",
     ]);
-    expect(displayDeltaLines(["正式章节：已写入 chapters"])).toEqual(["正文：已写入"]);
   });
 });
 

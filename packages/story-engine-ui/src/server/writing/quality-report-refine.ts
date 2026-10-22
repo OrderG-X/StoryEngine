@@ -111,7 +111,7 @@ export function refineQualityReport(report: CommitQualityReport): RefinedQuality
     parts.push(`另有 ${soft.length} 处软提示（参考、不拦）：${soft.map((i) => i.label).join("、")}`);
   }
   if (reference.length > 0) {
-    parts.push(`${reference.length} 处仅参考${downgraded.length > 0 ? `（含 ${downgraded.length} 处已自动降噪）` : ""}`);
+    parts.push(`${reference.length} 处仅参考`);
   }
   const summary = `${parts.join("；")}。`;
 

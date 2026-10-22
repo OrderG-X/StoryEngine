@@ -50,8 +50,7 @@ export function ChatSessionBar({ onClear }: {
   // 审查 #6：生成进行中禁用会话操作，避免把 A 会话的流式内容存进刚切过去的 B。
   const chatLoading = useChatStore((s) => s.chatLoading);
   const draftActionLoading = useUiStore((s) => s.draftActionLoading);
-  const steeringLoading = useUiStore((s) => s.steeringLoading);
-  const workspaceBusy = chatLoading || Boolean(draftActionLoading) || steeringLoading || isWorkspaceBusy();
+  const workspaceBusy = chatLoading || Boolean(draftActionLoading) || isWorkspaceBusy();
 
   function notify(message: string) {
     useNavigationStore.getState().showToast(message, 3200);

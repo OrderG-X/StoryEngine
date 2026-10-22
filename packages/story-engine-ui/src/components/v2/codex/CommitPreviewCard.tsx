@@ -1,9 +1,8 @@
 /**
  * CommitPreviewCard — 对话里的定稿预览小卡（R3 起；重构 P6 起清单挪进弹窗「定稿清单」，见 CommitSheet）。
  *
- * 卡上只说结论：能不能定、要你看几条、自动记几条，加一个【打开定稿清单】。定不了时照实列阻断原因和问题明细
+ * 卡头说能不能定；能定时卡里一行「要你看几条 · 自动记几条」+【打开清单】。定不了时照实列阻断原因和问题明细
  * （引擎确定性判定，不靠模型转述——模型可能把「暂不可定稿」说成小问题或略过）。
- * 与 NameConsistencyCard/StaleThreadCard 同出 commit_preview，三者可同时出现、互不顶掉。
  */
 import { useState, type ReactNode } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
@@ -61,27 +60,23 @@ export function CommitPreviewCard({
   const reviewCount = review.length + (day?.needsConfirm ? 1 : 0);
   const autoCount = auto.filter((item) => item.removable).length;
 
+  // 能定：卡头「可以定稿」已说了结论，卡里只剩一行数 + 打开清单（弹窗一般已自动打开，这里是关了再开的入口）。
+  const counts = [reviewCount > 0 ? `要你看 ${reviewCount} 条` : "", autoCount > 0 ? `自动记 ${autoCount} 条` : ""].filter(Boolean).join(" · ");
   return (
     <StepCard
-      title="定稿预览"
+      title={`定稿预览 · ${chapterLabel}`}
       status={blocked ? "attention" : "done"}
       statusLabel={blocked ? "暂不可定稿" : "可以定稿"}
       defaultOpen
     >
-      <p className="cpc-note">
-        {blocked
-          ? `${chapterLabel}目前不满足定稿条件：`
-          : reviewCount > 0
-            ? `${chapterLabel}可以定稿：要你看 ${reviewCount} 条，自动记下 ${autoCount} 条。`
-            : autoCount > 0
-              ? `${chapterLabel}可以定稿：自动记下 ${autoCount} 条。`
-              : `${chapterLabel}可以定稿。`}
-      </p>
-      {!blocked && onOpen ? (
+      {!blocked && (counts || onOpen) ? (
         <div className="cpc-actions">
-          <button type="button" className={`chip${confirmable ? " cpc-confirm" : ""}`} onClick={onOpen}>
-            {confirmable ? "打开定稿清单" : "看这份清单"}
-          </button>
+          {counts ? <span className="cpc-counts">{counts}</span> : null}
+          {onOpen ? (
+            <button type="button" className={`chip${confirmable ? " cpc-confirm" : ""}`} onClick={onOpen}>
+              {confirmable ? "打开清单" : "看这份清单"}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {blocking.length > 0 ? (

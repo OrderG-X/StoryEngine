@@ -44,6 +44,6 @@ describe("StepCard 共享外壳", () => {
 
   it("elapsedMs>0 渲染计时", () => {
     const { getByText } = render(<StepCard title="t" status="done" elapsedMs={6000}><p>x</p></StepCard>);
-    expect(getByText("6s")).toBeTruthy();
+    expect(getByText("6 秒")).toBeTruthy();
   });
 });

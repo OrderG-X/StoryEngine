@@ -1,7 +1,7 @@
 /**
  * CommitDeltaCard — 入库 delta 卡：这章正式入库后改了哪些角色/伏笔/线索/时间线/主线目标。
- * 数据来自 commit_apply 的 CommitReport（消息上的定稿回执卡），复用 summarizeCommitReport 防御解析成
- * 状态行 + 分项清单。用 StepCard 暗金外壳。把每条 detailLine 按首个「：」切成 标签·值 两列展示。
+ * 数据来自 commit_apply 的 CommitReport（消息上的定稿回执卡），复用 summarizeCommitReport 防御解析成分项。
+ * 每项按首个「：」切成 标签·值，排成一行小格子（2026-10-22 减字：不再先一句总数、再逐行重说一遍）。
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
@@ -14,17 +14,11 @@ function splitLabel(line: string): { label: string; value: string } {
 
 /**
  * 给作者看的定稿明细（只改显示，不改 summarizeCommitReport）：
- * - 「正式章节：已写入 chapters/0058.md」→「正文：已写入第 58 章」（文件路径是程序视角）；
- * - 没变化的行（0 项 / 0 条 / 无变更）不显示；过期提醒里为 0 的分项去掉。
+ * 没变化的行（0 项 / 0 条 / 无变更）不显示；过期提醒里为 0 的分项去掉。
  */
 export function displayDeltaLines(lines: readonly string[]): string[] {
   const out: string[] = [];
   for (const line of lines) {
-    if (line.startsWith("正式章节：")) {
-      const match = /(?:^|\/)(?:chapter-)?0*(\d+)\.md$/u.exec(line.trim());
-      out.push(match ? `正文：已写入第 ${match[1]} 章` : "正文：已写入");
-      continue;
-    }
     if (line.startsWith("过期提醒：")) {
       // 不猜白名单：自家格式
       const parts = line.slice("过期提醒：".length).split("，").filter((part) => !/\s0\s*条$/u.test(part.trim()));
@@ -51,23 +45,25 @@ export function CommitDeltaCard({
   readonly onUndo?: () => void;
   readonly undoDisabled?: boolean;
 }) {
-  const { statusLine, detailLines } = summarizeCommitReport(report);
+  const { chapter, detailLines } = summarizeCommitReport(report);
+  const lines = displayDeltaLines(detailLines);
   // 撤销会连带撤掉这之后的对话和改动，先在卡片里确认一次。
   const [confirming, setConfirming] = useState(false);
   return (
-    <StepCard title="定稿" status="done" statusLabel="已定稿" elapsedMs={elapsedMs} defaultOpen>
-      <p className="cdc-status">{statusLine}</p>
-      <ul className="cdc-list">
-        {displayDeltaLines(detailLines).map((line) => {
-          const { label, value } = splitLabel(line);
-          return (
-            <li className="cdc-row" key={line}>
-              {label ? <span className="cdc-k">{label}</span> : null}
-              <span className="cdc-v">{value}</span>
-            </li>
-          );
-        })}
-      </ul>
+    <StepCard title={chapter ? `第 ${chapter} 章记下的账` : "记下的账"} status="done" statusLabel="已定稿" elapsedMs={elapsedMs} defaultOpen>
+      {lines.length ? (
+        <ul className="cdc-list">
+          {lines.map((line) => {
+            const { label, value } = splitLabel(line);
+            return (
+              <li className="cdc-row" key={line}>
+                {label ? <span className="cdc-k">{label}</span> : null}
+                <span className="cdc-v">{value}</span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {onUndo ? (
         confirming ? (
           <div className="cdc-undo-confirm" role="alertdialog" aria-label="确认撤销定稿">

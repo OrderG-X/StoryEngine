@@ -520,18 +520,10 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
         action: { toolName: "check_continuity", chapter: action.chapter, fresh: true },
       }]
     : [];
-  // R4.5（验收 3.4）：确定 N 处的主修复动作挪进核账卡——按钮随「不是问题」实时变 N、intent 逐条现拼。
-  // 下一步只给次要选项，不再出笼统的「改掉确定的 N 处」（那句话没圈范围，模型会把划掉的也改了）。
+  // 确定 N 处时，改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」，R4.5），稿纸工具条照样有「定稿」：
+  // 不再挂下一步（以前的「我自己改」会白发一句话给 AI）。只有结果是上次的，才问要不要重新核。
   const choices: NextStepChoice[] = sureCount > 0
-    ? [
-      { label: "我自己改", intent: "我自己改，先放着", recommended: true },
-      {
-        label: "预览定稿",
-        intent: `预览第 ${action.chapter} 章的定稿改动`,
-        action: { toolName: "commit_preview", chapter: action.chapter },
-      },
-      ...fresh,
-    ]
+    ? fresh
     : [
       {
         label: "预览定稿",
@@ -547,12 +539,13 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
       },
       ...fresh,
     ];
+  if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {
     toolCallId: nextCallId,
     toolName: "suggest_next_steps",
-    output: { ok: true, question: sureCount > 0 ? "核账做完了，这几处怎么处理？" : "核账做完了，接下来？", choices },
+    output: { ok: true, question: sureCount > 0 ? "结果同上次，要不要重新核？" : "接下来？", choices },
   });
 }
 
@@ -842,7 +835,6 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       ...(failed.length === 0 ? { recommended: true } : {}),
       action: { toolName: "check_continuity" as const, chapter: action.chapter },
     }] : []),
-    { label: "我自己改", intent: "我自己改，先放着" },
   ];
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
@@ -963,7 +955,6 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
       },
       // 写完已经核过一遍账（结果记在核账记忆里），点这个直接出核账卡，不再调模型。
       { label: "看核账结果", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
-      { label: "我自己改", intent: "我自己改，先放着" },
     ]
     : [{
         label: "再写一次",

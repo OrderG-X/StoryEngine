@@ -107,7 +107,6 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const draftActionLoading = useUiStore((state) => state.draftActionLoading);
   const workspaceBusy = Boolean(
     props.chatLoading
-    || props.steeringLoading
     || draftActionLoading
     || isWorkspaceBusy(),
   );

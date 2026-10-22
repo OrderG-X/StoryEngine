@@ -114,7 +114,6 @@ function resetStore(): void {
   useUiStore.setState({
     aiFlavorPending: null,
     draftActionLoading: null,
-    steeringLoading: false,
   });
   disk.clear();
   diskVersion = 0;

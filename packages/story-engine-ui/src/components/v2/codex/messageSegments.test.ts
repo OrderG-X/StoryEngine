@@ -12,12 +12,13 @@ function msg(partial: Partial<ChapterMessage>): ChapterMessage {
 }
 
 describe("buildMessageRenderSegments", () => {
-  it("无 segments 字段 → null（渲染端回退三桶）", () => {
-    expect(buildMessageRenderSegments(msg({ content: "你好" }))).toBeNull();
-  });
-
-  it("空 segments 数组 → null", () => {
-    expect(buildMessageRenderSegments(msg({ segments: [] }))).toBeNull();
+  it("无 segments 字段 / 空数组 → 按思考、工具、正文三桶拼", () => {
+    expect(buildMessageRenderSegments(msg({ content: "你好" }))).toEqual([{ kind: "text", text: "你好" }]);
+    expect(buildMessageRenderSegments(msg({ segments: [], thinking: "想", toolSteps: [step("c1")], content: "好" }))).toEqual([
+      { kind: "reasoning", text: "想" },
+      { kind: "tool", step: step("c1") },
+      { kind: "text", text: "好" },
+    ]);
   });
 
   it("reasoning→tool→text 按序解析，tool 段解析出对应 ToolStep", () => {
@@ -66,13 +67,14 @@ describe("buildMessageRenderSegments", () => {
     expect(buildMessageRenderSegments(message)).toEqual([{ kind: "text", text: "正文。" }]);
   });
 
-  it("segments 非空但全部解析为空（全空白+无匹配工具）→ null 回退", () => {
+  it("segments 非空但全部解析为空（全空白+无匹配工具）→ 退回三桶，不丢正文", () => {
     const message = msg({
+      content: "正文。",
       segments: [
         { kind: "reasoning", text: "  " },
         { kind: "tool", toolCallId: "nope" },
       ],
     });
-    expect(buildMessageRenderSegments(message)).toBeNull();
+    expect(buildMessageRenderSegments(message)).toEqual([{ kind: "text", text: "正文。" }]);
   });
 });

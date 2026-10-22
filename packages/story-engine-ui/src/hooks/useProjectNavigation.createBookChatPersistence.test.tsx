@@ -107,7 +107,7 @@ describe("UI审计 T1：新建书首开期间聊天落盘", () => {
     useNavigationStore.setState({ projectPath: "/tmp/test-book", toast: null });
     useBookStore.getState().setWorkspace(mockWorkspaceData);
     useChatStore.setState({ chatLoading: false, sessions: [], activeSessionId: "" });
-    useUiStore.setState({ steeringLoading: false, draftActionLoading: null });
+    useUiStore.setState({ draftActionLoading: null });
     saveAll.flushAllSaves.mockImplementation(async () => ({ ok: true as const }));
     vi.mocked(createStoryProjectFromDraft).mockReset();
   });

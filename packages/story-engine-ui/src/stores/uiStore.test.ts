@@ -14,7 +14,6 @@ describe("resetTransientUiState（切项目清残留临时态，防跨书串写�
     store.setDraftAIReview({} as never);
     store.setActiveRevisionTask({} as never);
     store.setActiveRevisionPreview({} as never);
-    store.setSteeringDraft({} as never);
     expect(useUiStore.getState().draftCandidates).not.toBeNull();
 
     useUiStore.getState().resetTransientUiState();
@@ -25,7 +24,6 @@ describe("resetTransientUiState（切项目清残留临时态，防跨书串写�
     expect(s.draftAIReview).toBeNull();
     expect(s.activeRevisionTask).toBeNull();
     expect(s.activeRevisionPreview).toBeNull();
-    expect(s.steeringDraft).toBeNull();
   });
 });
 

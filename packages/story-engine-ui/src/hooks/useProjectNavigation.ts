@@ -328,8 +328,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const {
     setSteeringDirection,
     setLastChapterDirection,
-    setSteeringDraft,
-    setSteeringError,
     setCommitPreviewReport,
     setDraftAIReview,
     setActiveRevisionTask,
@@ -477,8 +475,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
-      setSteeringDraft(null);
-      setSteeringError(null);
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -534,8 +530,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
-      setSteeringDraft(null);
-      setSteeringError(null);
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -580,8 +574,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
       setLastChapterDirection("");
-      setSteeringDraft(null);
-      setSteeringError(null);
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -639,8 +631,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       // 输入框里没发的字按章存着：切走不丢，切回来还在；不会把这章的话带到别的章（P11）。
       useUiStore.getState().switchComposerChapter(outgoingChapter, chapter.chapterNumber);
       setLastChapterDirection("");
-      setSteeringDraft(null);
-      setSteeringError(null);
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);

@@ -1,5 +1,7 @@
 export interface CommitReportSummary {
-  readonly statusLine: string;
+  /** 定稿的是第几章（新回执带；老回执没有）。 */
+  readonly chapter?: number;
+  /** 记了什么，一项一行（「事实：4 条」）；正文写进哪一章不另说——卡头「已定稿」就是。 */
   readonly detailLines: readonly string[];
 }
 
@@ -21,7 +23,7 @@ function count(value: unknown): number {
 
 /** 重构 P3 起的定稿回执：只带这一章记了多少条账（commit_apply 的 report.ledger）。 */
 function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<string, unknown>): CommitReportSummary {
-  const chapterPath = typeof root.chapterPath === "string" && root.chapterPath.trim().length > 0 ? root.chapterPath.trim() : "chapters";
+  const chapter = count(root.chapter);
   const facts = count(ledger.facts);
   const opened = count(ledger.threadsOpened);
   const advanced = count(ledger.threadsAdvanced);
@@ -31,9 +33,8 @@ function summarizeLedgerReport(root: Record<string, unknown>, ledger: Record<str
   const dayEnd = count(ledger.dayEnd);
   const notRecorded = count(ledger.notRecorded);
   return {
-    statusLine: `账已记上：事实 ${facts} 条，线索新开 ${opened}、推进 ${advanced}、收口 ${closed} 条，出场 ${present} 人。`,
+    ...(chapter > 0 ? { chapter } : {}),
     detailLines: [
-      `正式章节：已写入 ${chapterPath}`,
       ...(day > 0 ? [`故事时间：${dayEnd > day ? `第 ${day}～${dayEnd} 天` : `第 ${day} 天`}`] : []),
       `事实：${facts} 条`,
       `线索：新开 ${opened}，推进 ${advanced}，收口 ${closed}`,
@@ -65,14 +66,8 @@ export function summarizeCommitReport(report: unknown): CommitReportSummary {
   const staleGoalWarningCount = Array.isArray(arcGoalTracking.staleGoalWarnings) ? arcGoalTracking.staleGoalWarnings.length : 0;
   const warningCount = staleHookWarningCount + staleThreadWarningCount + staleGoalWarningCount;
 
-  const chapterPath = typeof root.chapterPath === "string" && root.chapterPath.trim().length > 0
-    ? root.chapterPath.trim()
-    : "chapters";
-
   return {
-    statusLine: `状态同步：角色 ${updatedCharacterCount} 项，时间线 ${timelineEventCount} 条，伏笔/线索 ${updatedHookCount + touchedThreadCount} 项，主线目标 ${touchedGoalCount} 项。`,
     detailLines: [
-      `正式章节：已写入 ${chapterPath}`,
       `角色状态：${updatedCharacterCount} 项`,
       `时间线事件：${timelineEventCount} 条`,
       `伏笔更新：${updatedHookCount} 项`,

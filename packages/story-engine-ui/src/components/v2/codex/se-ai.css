@@ -7,11 +7,13 @@
   .ai-head.se-ai-head{height:48px;padding:0 8px 0 14px;gap:8px;border-bottom:0;}
   .se-ai-title{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--text);}
   .se-ai-title svg{color:var(--accent);}
+  /* 模型名：淡字、不描边（悬停才显边），别和会话名抢眼；长名字截断，全名在悬停说明里。 */
   .se-model-chip{
-    min-width:0;max-width:180px;height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;
-    border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;
+    min-width:0;max-width:140px;height:24px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;
+    border:1px solid transparent;border-radius:999px;background:transparent;color:var(--faint);font-size:12px;cursor:pointer;
+    transition:color var(--dur-3) var(--ease-out),border-color var(--dur-3) var(--ease-out);
   }
-  .se-model-chip:hover{color:var(--text);border-color:var(--line-strong);}
+  .se-model-chip:hover{color:var(--text);border-color:var(--line);}
   .se-model-chip .se-dot{width:6px;height:6px;flex:none;}
   .se-model-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .se-ai-head-actions{margin-left:auto;display:inline-flex;align-items:center;gap:2px;}
@@ -119,37 +121,37 @@
   .se-setup-text{margin:0;font-size:12px;line-height:1.6;color:var(--muted);}
   .se-setup-btn{flex:none;height:32px;padding:0 14px;border:0;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;cursor:pointer;}
   .se-setup-btn:hover{filter:brightness(1.06);}
-  .se-todo-wrap{position:relative;margin:2px 12px 0;padding-bottom:12px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--line);}
+  .se-todo-wrap{position:relative;margin:2px 12px 0;padding-bottom:8px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid var(--line);}
   /* 顶卡下面的对话往上滚时淡出，不在顶卡底下硬切一刀。 */
   .se-todo-wrap + .ai-body{mask-image:linear-gradient(to bottom,transparent 0,#000 16px);}
+  /* 一行：章名 · 三步 · 主按钮。原来是三格大卡 + 整宽按钮，矮窗口里对话只剩一条。 */
   .se-todo-card{
-    display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;
-    background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,transparent),transparent 72px),var(--surface);border:1px solid var(--line);
+    display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 6px 6px 12px;border-radius:12px;
+    background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 6%,transparent),transparent 120px),var(--surface);border:1px solid var(--line);
   }
-  .se-todo-card-h{font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:15px;font-weight:700;letter-spacing:.02em;color:var(--text);}
-  /* 写 / 核账 / 定稿横排三格（原来竖排三行，顶卡太高、矮窗口里对话只剩一条）：做完的绿勾，下一步那格强调色描边。 */
-  .se-todo-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;font-size:13px;}
+  .se-todo-card-h{flex:none;font-family:"Noto Serif SC","Songti SC","Source Han Serif SC",STSong,serif;font-size:14px;font-weight:700;letter-spacing:.02em;color:var(--text);white-space:nowrap;}
+  .se-todo-steps{list-style:none;margin:0;padding:0;flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:2px;font-size:12px;overflow:hidden;}
   .se-todo-steps li{
-    display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"mark label" "text text";align-items:center;gap:1px 6px;
-    min-width:0;padding:7px 9px 8px;border:1px solid var(--line-weak);border-radius:9px;background:var(--sunken);color:var(--text);
+    display:inline-flex;align-items:center;gap:3px;flex:none;padding:2px 7px;border-radius:999px;color:var(--faint);white-space:nowrap;cursor:default;
+    transition:color var(--dur-4) var(--ease-out),background-color var(--dur-4) var(--ease-out);
   }
-  .se-todo-steps li.is-done{background:color-mix(in srgb,var(--success) 7%,transparent);border-color:color-mix(in srgb,var(--success) 18%,transparent);}
-  .se-todo-steps li:first-child:not(.is-done),.se-todo-steps li.is-done + li:not(.is-done){border-color:var(--accent-line);background:var(--accent-soft);}
-  .se-todo-mark{grid-area:mark;font-size:11px;line-height:1;color:var(--faint);}
-  .se-todo-steps li.is-done .se-todo-mark{color:var(--success);}
-  .se-todo-step-label{grid-area:label;font-size:12px;font-weight:600;color:var(--text);}
-  .se-todo-step-text{grid-area:text;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--muted);}
-  .se-todo-step-text.is-attention{color:var(--danger);}
-  /* 矮窗口：顶卡再收一点，把地方让给对话。 */
-  @media (max-height:860px){
-    .se-todo-card{gap:8px;padding:11px 12px;}
-    .se-todo-card .se-todo-primary{height:34px;}
+  .se-todo-steps li.is-done{color:var(--muted);}
+  .se-todo-steps li.is-done .se-todo-mark{color:var(--success);display:inline-block;animation:se-check var(--dur-5) var(--ease-out);}
+  /* 下一步那一格：强调色，轻轻呼吸。 */
+  .se-todo-steps li:first-child:not(.is-done,.is-attention),.se-todo-steps li.is-done + li:not(.is-done,.is-attention){
+    color:var(--text);background:var(--accent-soft);animation:se-ring 2.4s var(--ease-in-out) infinite;
   }
+  .se-todo-mark{font-size:10px;line-height:1;}
+  .se-todo-step-label{font-weight:600;}
+  /* 核出确定要改的：「核账」那格标红、打个叹号，不呼吸（数写在主按钮上）。 */
+  .se-todo-steps li.is-attention{color:var(--danger);background:var(--danger-soft);animation:none;}
+  .se-todo-steps li.is-attention .se-todo-mark{font-weight:800;}
+  .se-todo-steps .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
   .se-todo-primary{
-    height:38px;border:0;border-radius:9px;background:var(--accent);color:var(--accent-ink);
-    font-size:14px;font-weight:500;cursor:pointer;
+    flex:none;height:32px;max-width:45%;padding:0 14px;border:0;border-radius:9px;color:var(--accent-ink);
+    font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    position:relative;background:var(--sheen),var(--accent);
   }
-  .se-todo-primary{position:relative;overflow:hidden;background:var(--sheen),var(--accent);}
   .se-todo-primary:hover:not(:disabled){background:var(--sheen),var(--accent-hi);box-shadow:var(--glow-accent);}
   .se-todo-primary:disabled{opacity:.6;cursor:default;}
   /* 在忙：按钮不灰掉那么多，上面一道扫光说明「在跑」。 */
@@ -159,12 +161,12 @@
     background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.28) 50%,transparent 70%);
     animation:se-sweep 1.8s var(--ease-in-out) infinite;
   }
-  /* 三格进度：下一步那格的描边轻轻呼吸；刚做完的勾弹一下；格子换状态有过渡。 */
-  .se-todo-steps li{transition:background-color var(--dur-4) var(--ease-out),border-color var(--dur-4) var(--ease-out);}
-  .se-todo-steps li:first-child:not(.is-done),.se-todo-steps li.is-done + li:not(.is-done){animation:se-ring 2.4s var(--ease-in-out) infinite;}
-  .se-todo-steps li.is-done .se-todo-mark{display:inline-block;animation:se-check var(--dur-5) var(--ease-out);}
-  .se-todo-wrap .se-checker-reading{margin:0;padding:0 4px;}
-  .se-todo-more{position:relative;padding:0 4px;}
+  /* 卡下面一行小字：编辑部在读前文（左）、不急的事（右）。 */
+  .se-todo-notes{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;padding:0 4px;font-size:12px;}
+  .se-todo-notes:empty{display:none;}
+  .se-todo-notes .se-checker-reading{flex:1 1 auto;min-width:0;margin:0;padding:0;}
+  .se-todo-notes .se-todo-more{margin-left:auto;}
+  .se-todo-more{position:relative;}
   .se-todo-more-btn{border:0;background:none;padding:0;color:var(--faint);font-size:12px;cursor:pointer;}
   .se-todo-more-btn::after{content:" ›";}
   .se-todo-more-btn:hover{color:var(--text);text-decoration:underline;}
@@ -212,9 +214,13 @@
   }
   .se-msg-acts button:hover:not(:disabled){background:var(--hover);color:var(--text);}
   .se-msg-acts button:disabled{opacity:.5;cursor:default;}
-  .se-msg-acts .se-msg-usage{margin-left:6px;font-size:11.5px;color:var(--faint);white-space:nowrap;}
   @media (hover:none){.se-msg-acts{opacity:1;}}
 
+  /* 一轮的过程（思考、工具、旁白）收成一行淡字，答复紧跟在下面。 */
+  .turn-proc > .step-head .step-label:not(.is-active){color:var(--faint);font-weight:500;}
+  .turn-proc > .step-head:hover .step-label:not(.is-active){color:var(--muted);}
+  .turn-proc .proc-say{margin:2px 0;font-size:12.5px;line-height:1.6;color:var(--muted);white-space:pre-wrap;}
+  .turn-proc + .msg-body,.turn-proc + .se-turn-tail{margin-top:6px;}
   /* 思考 / 工具步：一行安静的小字，展开才看细节。 */
   .step-kind,.step-label{color:var(--muted);font-weight:500;}
   .step-label.is-tool{color:var(--muted);}
@@ -251,6 +257,15 @@
     > .drc-desc{margin:9px 0 0;padding-left:0;font-size:12px;line-height:1.6;color:var(--muted);}
     .drc-fix{margin:10px 0 0;}
   }
+  /* 核账条目底下一行：左边「对照第 N 章」淡字链接，右边两个小按钮。 */
+  .step-card .cck-item{
+    > .drc-desc{margin:4px 0 0;}
+    > .cck-source{margin:8px 0 0;}
+    .cck-foot{display:flex;align-items:center;gap:6px;margin-top:8px;}
+    .cck-foot .drc-fix{margin:0;padding:3px 10px;}
+    .cck-src{margin-right:auto;padding:2px 0;border:0;background:none;font:inherit;font-size:11.5px;color:var(--faint);cursor:pointer;}
+    .cck-src:hover{color:var(--accent-hi);}
+  }
   /* 审稿条目：原句也做成引文块，和核账同一个样子；严重度左边一道同色细线。 */
   .step-card .drc-item:has(> .drc-line){
     > .drc-evi{margin:7px 0 0 26px;padding:1px 0 1px 10px;border-left:2px solid var(--line-strong);font-size:12px;line-height:1.7;color:var(--muted);}
@@ -264,8 +279,10 @@
   /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
   .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
   .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
-  .step-card .cpc-actions{display:flex;align-items:center;gap:8px;margin:0 0 10px;}
-  .step-card .cpc-actions .cpc-confirm{margin:0;}
+  .step-card .cpc-actions{display:flex;align-items:center;gap:8px;margin:0;}
+  .step-card .cpc-actions > button{margin:0 0 0 auto;}
+  .step-card .cpc-counts{font-size:12.5px;color:var(--muted);}
+  .step-card .cpc-actions .cpc-confirm{height:30px;padding:0 14px;}
   .step-card .cpc-decline{
     height:34px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:transparent;
     color:var(--text);font-size:13px;cursor:pointer;
@@ -312,7 +329,6 @@
   .nextstep-choice.is-primary{flex:0 0 auto;border-radius:999px;color:var(--accent-ink);background:var(--sheen),var(--accent);box-shadow:none;}
   .nextstep-choice.is-primary::before{background:radial-gradient(90px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.24),transparent 65%);}
   .nextstep-choice.is-primary:hover:not(:disabled){filter:brightness(1.05);transform:translateY(-1px);border-color:transparent;background:var(--sheen),var(--accent);box-shadow:var(--glow-accent);}
-  .nextstep-rec{background:rgba(0,0,0,.16);color:inherit;}
 
   /* ── @ 引用候选 ── */
   .se-mention{
@@ -347,13 +363,6 @@
   .composer .send[data-stop]{background:var(--text);color:var(--bg);}
   .composer .send svg{display:block;}
   .codex-context-meter{color:var(--faint);}
-
-  /* 过期线索卡：类型小标中性、「已 N 章没推进」用提醒橙（不是错误红）。 */
-  .step-card .stc-item{background:var(--sunken);border-color:var(--line-weak);border-left:2px solid color-mix(in srgb,var(--warn) 55%,transparent);border-radius:4px 8px 8px 4px;}
-  .step-card .stc-kind{font-weight:500;color:var(--muted);border:0;background:var(--hover);border-radius:999px;padding:1px 8px;}
-  .step-card .stc-title{font-weight:500;}
-  .step-card .stc-gap{padding:0 7px;border-radius:999px;font-size:11.5px;color:var(--warn);background:var(--warn-soft);font-weight:500;}
-  .step-card .stc-since{color:var(--faint);}
 
   /* 拖宽手柄：平时不可见，悬停才出一条强调色细线（撤掉常驻的点阵握把）。 */
   .ai-resize::before{left:-1px;width:4px;height:20px;opacity:0;border-radius:2px;background:var(--accent);

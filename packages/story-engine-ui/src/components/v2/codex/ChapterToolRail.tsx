@@ -28,7 +28,7 @@ export const HAS_DRAFT: readonly ChapterToolAction[] = [
   { key: "continuity", label: "核账", intent: "拿这一章对一遍前文，看有没有前后对不上的地方", button: "check_continuity" },
   { key: "review", label: "内容审阅", intent: "审阅这一章的内容，给评分和改进建议", button: "ai_review" },
   { key: "deai", label: "检查机器腔", intent: "检查这一章的机器腔，把有机器腔的句子列出来" },
-  // 定稿按钮 = 定稿流程入口：先出预览；预览卡上的「确认定稿」才真定稿。
+  // 定稿按钮 = 定稿流程入口：先出预览；定稿清单里的「确认定稿」才真定稿。
   { key: "commit", label: "定稿", intent: "预览这一章的定稿改动", button: "commit_preview" },
 ];
 

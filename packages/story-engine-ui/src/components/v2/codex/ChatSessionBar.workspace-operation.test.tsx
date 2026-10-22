@@ -50,7 +50,6 @@ describe("ChatSessionBar workspace busy barrier", () => {
     });
     useUiStore.setState({
       draftActionLoading: "generate-draft",
-      steeringLoading: false,
     });
     beginWorkspaceOperation("generate-draft", {
       projectPath: "/tmp/story-project",

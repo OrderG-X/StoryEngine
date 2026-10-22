@@ -424,7 +424,7 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     });
     expect(result.plan?.summary).toBe("林澈去档案室对出缺页");
     // 章纲员只缺 2 份（当场补齐、正常拟），note 如实说等过它（R5.2 必做 2）；
-    expect(result.note).toContain("这次先等章纲员读完第 11～12 章（用时");
+    expect(result.note).toContain("这次先等章纲员读完第 11～12 章再拟纲");
     expect(result.note).toContain("再拟纲");
     // 核账员缺 12 份 → 冷窗口审（已有笔记 0 章 + 第 5～12 章原文），缺口没被原文补全、老措辞照说。
     expect(result.note).toContain("核账员还没读完全书（第 0 / 12 章）");

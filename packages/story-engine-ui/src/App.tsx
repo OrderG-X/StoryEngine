@@ -161,9 +161,6 @@ export function App() {
 
   /* ---- Derived values for workspace props ---- */
   const steeringDirection = useUiStore((s) => s.steeringDirection);
-  const steeringDraft = useUiStore((s) => s.steeringDraft);
-  const steeringError = useUiStore((s) => s.steeringError);
-  const steeringLoading = useUiStore((s) => s.steeringLoading);
   const chatLoading = useChatStore((s) => s.chatLoading);
   const chatError = useChatStore((s) => s.chatError);
 
@@ -232,9 +229,6 @@ export function App() {
           workspace={{
             projectPath,
             steeringDirection,
-            steeringDraft,
-            steeringError,
-            steeringLoading,
             chatLoading,
             chatError,
             draftActionLoading,
@@ -288,7 +282,6 @@ export function App() {
             onUndoToTurn: (message) => void undoToTurn(message),
             onSteeringDirectionChange: (value) => {
               useUiStore.getState().setSteeringDirection(value);
-              if (useUiStore.getState().steeringError) useUiStore.getState().setSteeringError(null);
               if (useChatStore.getState().chatError) useChatStore.getState().setChatError(null);
             },
             onDraftContentChange: (content: string) => {

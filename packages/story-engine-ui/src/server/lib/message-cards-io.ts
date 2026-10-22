@@ -11,9 +11,7 @@ import type {
   ContinuityCheckItemData,
   MessageCard,
   MessageCardType,
-  NameDriftWarning,
   NextStepPrompt,
-  StaleThreadWarningData,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, type AgentUserAction } from "../../api/agentChatClient.js";
@@ -39,8 +37,6 @@ export function legacyMessageCards(item: Record<string, unknown>): MessageCard[]
     cardFromContinuity(item.continuityCheck),
     isRecord(item.qualityReport) ? { type: "quality", report: item.qualityReport as unknown as QualityCardReport } : undefined,
     cardFromCommitPreview(item.commitPreview),
-    cardFromNameDrift(item.nameConsistencyWarnings),
-    cardFromStaleThreads(item.staleThreadWarnings),
     item.commitReport !== undefined && item.commitReport !== null ? { type: "commit-report", report: item.commitReport } : undefined,
     cardFromNextSteps(item.nextStepPrompt),
     item.isErrorNotice === true ? errorCard(item.errorDetail, undefined) : undefined,
@@ -78,10 +74,6 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       const checkedVersion = value.checkedVersion === null ? null : readString(value.checkedVersion);
       return { ...card, ...(checkedVersion !== undefined ? { checkedVersion } : {}) };
     }
-    case "name-drift":
-      return cardFromNameDrift(value.warnings);
-    case "stale-threads":
-      return cardFromStaleThreads(value.warnings);
     case "commit-report":
       // 定稿回执原样存（体量大、结构跟着引擎走），渲染侧 summarizeCommitReport 防御解析。
       return value.report !== undefined && value.report !== null ? { type, report: value.report } : undefined;
@@ -138,16 +130,6 @@ function cardFromCommitPreview(value: unknown): MessageCard | undefined {
   return preview ? { type: "commit-preview", preview } : undefined;
 }
 
-function cardFromNameDrift(value: unknown): MessageCard | undefined {
-  const warnings = readNameDriftWarnings(value);
-  return warnings.length > 0 ? { type: "name-drift", warnings } : undefined;
-}
-
-function cardFromStaleThreads(value: unknown): MessageCard | undefined {
-  const warnings = readStaleThreadWarnings(value);
-  return warnings.length > 0 ? { type: "stale-threads", warnings } : undefined;
-}
-
 function cardFromNextSteps(value: unknown): MessageCard | undefined {
   const prompt = readNextStepPrompt(value);
   return prompt ? { type: "next-steps", prompt } : undefined;
@@ -181,20 +163,6 @@ function readContinuityItems(value: unknown): ContinuityCheckItemData[] {
   });
 }
 
-function readNameDriftWarnings(value: unknown): NameDriftWarning[] {
-  if (!Array.isArray(value)) return [];
-  const warnings: NameDriftWarning[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const establishedName = readString(item.establishedName);
-    const driftedVariant = readString(item.driftedVariant);
-    const message = readString(item.message);
-    if (!establishedName || !driftedVariant || !message) continue;
-    warnings.push({ establishedName, driftedVariant, message });
-  }
-  return warnings.slice(0, 20);
-}
-
 /** 「下一步」选项卡：question 非空 + choices 逐项 label/intent 非空、recommended 若在须 boolean；清洗后为空 → 不要；上限 8。 */
 function readNextStepPrompt(value: unknown): NextStepPrompt | undefined {
   if (!isRecord(value)) return undefined;
@@ -219,22 +187,6 @@ function readNextStepPrompt(value: unknown): NextStepPrompt | undefined {
   }
   if (choices.length === 0) return undefined;
   return { question, choices: choices.slice(0, 8) };
-}
-
-function readStaleThreadWarnings(value: unknown): StaleThreadWarningData[] {
-  if (!Array.isArray(value)) return [];
-  const warnings: StaleThreadWarningData[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const kind = readString(item.kind);
-    const title = readString(item.title);
-    const message = readString(item.message);
-    const lastTouchedChapter = readPositiveInteger(item.lastTouchedChapter);
-    const chaptersSinceTouched = readPositiveInteger(item.chaptersSinceTouched);
-    if (!kind || !title || !message || lastTouchedChapter === undefined || chaptersSinceTouched === undefined) continue;
-    warnings.push({ kind, title, lastTouchedChapter, chaptersSinceTouched, message });
-  }
-  return warnings.slice(0, 20);
 }
 
 /** 定稿预览卡：章号 + 能不能定是必须的，其余逐项校验。 */

@@ -64,7 +64,6 @@ export { isRereadActive, REREAD_ATTEMPTS } from "./reread.js";
 export { formatRereadEta, readRereadState, rereadBlocker, rereadEtaMinutes, type RereadState } from "./reread-state.js";
 export {
   describeReaderWait,
-  formatReaderWaitDuration,
   readerWaitingHandlers,
   READER_ROLE_LABELS,
   type ReaderWaited,
