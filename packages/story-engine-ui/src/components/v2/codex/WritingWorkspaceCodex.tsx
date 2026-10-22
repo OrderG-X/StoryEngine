@@ -748,6 +748,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         <AiChatCodex
           {...props}
           onOpenChapter={openChapterNumber}
+          onOpenSetting={openInBible}
           mentionNames={mentionNames}
           rightOpen={effectiveRightOpen}
           // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），

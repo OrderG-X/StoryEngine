@@ -32,6 +32,8 @@ export interface KeeperContext {
   readonly threadHandles: ReadonlyMap<string, string>;
   /** 「F7」→ 事实真编号。 */
   readonly factHandles: ReadonlyMap<string, string>;
+  /** 「T3」→ 线索标题、「F7」→ 事实内容（模型在说明里提了短号时换成名字给作者看）。 */
+  readonly handleNames: ReadonlyMap<string, string>;
   readonly omittedThreads: number;
   /** 和本章有关、但超了上限没列给记账员的事实条数（按规则本来就不列的不算）。 */
   readonly omittedFacts: number;
@@ -45,12 +47,13 @@ function castSection(projection: BookProjection): string {
   return `【本书已出场的人物（name 务必逐字沿用这里的写法；正文用了别的称呼就写进 nameUsed）】\n${lines.join("\n")}`;
 }
 
-function threadSection(projection: BookProjection, handles: Map<string, string>): { text: string; omitted: number } {
+function threadSection(projection: BookProjection, handles: Map<string, string>, names: Map<string, string>): { text: string; omitted: number } {
   const { threads, omitted } = threadsForPrompt(projection, { limit: MAX_PROMPT_THREADS });
   if (threads.length === 0) return { text: "", omitted: 0 };
   const lines = threads.map((thread, index) => {
     const handle = `T${index + 1}`;
     handles.set(handle, thread.id);
+    names.set(handle, thread.title);
     const idle = thread.idleChapters > 0 ? `，停了 ${thread.idleChapters} 章` : "";
     const last = thread.lastNote === thread.title ? "" : `；最近（第 ${thread.lastTouchedAt} 章）：${thread.lastNote}`;
     return `${handle} [${THREAD_TYPE_LABELS[thread.type]}] ${thread.title}（第 ${thread.openedAt} 章开${idle}${last}）`;
@@ -79,7 +82,7 @@ function mentionedSubjects(projection: BookProjection, draft: string): Set<strin
   return mentioned;
 }
 
-function factSection(projection: BookProjection, draft: string, handles: Map<string, string>): { text: string; omitted: number } {
+function factSection(projection: BookProjection, draft: string, handles: Map<string, string>, names: Map<string, string>): { text: string; omitted: number } {
   const live = projection.facts.filter(
     (fact): fact is FactView & { subjectKey: string } =>
       fact.status === "current" && (fact.nature === "hard" || fact.nature === "state") && fact.subjectKey !== undefined,
@@ -102,6 +105,7 @@ function factSection(projection: BookProjection, draft: string, handles: Map<str
   const lines = grouped.map((fact, index) => {
     const handle = `F${index + 1}`;
     handles.set(handle, fact.id);
+    names.set(handle, fact.text);
     const nature = fact.nature === "hard" ? "不会变" : "会变";
     const head = fact.attribute && fact.value !== undefined ? `${fact.subject} · ${fact.attribute}：${fact.value}` : fact.text;
     return `${handle} ${head}（第 ${fact.chapter} 章，${nature}）`;
@@ -126,13 +130,15 @@ function timelineSection(projection: BookProjection): string {
 export function buildKeeperContext(projection: BookProjection, draft: string): KeeperContext {
   const threadHandles = new Map<string, string>();
   const factHandles = new Map<string, string>();
-  const threads = threadSection(projection, threadHandles);
-  const facts = factSection(projection, draft, factHandles);
+  const handleNames = new Map<string, string>();
+  const threads = threadSection(projection, threadHandles, handleNames);
+  const facts = factSection(projection, draft, factHandles, handleNames);
   const sections = [castSection(projection), threads.text, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
     threadHandles,
     factHandles,
+    handleNames,
     omittedThreads: threads.omitted,
     omittedFacts: facts.omitted,
   };

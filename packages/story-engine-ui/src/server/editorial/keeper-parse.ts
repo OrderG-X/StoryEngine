@@ -22,11 +22,44 @@ export interface KeeperParseResult {
   readonly drops: readonly KeeperDrop[];
   /** 改动过的条目（比如缺字段的事实降为「发生过的事」），带原因。 */
   readonly adjusted: readonly KeeperDrop[];
+  /** 本章中间换了天时，记账员摘的那句换天的原句（还没核对：由 runLedgerKeeper 拿正文核）。 */
+  readonly dayChangeQuote?: string;
 }
 
 export interface KeeperHandles {
   readonly threadHandles: ReadonlyMap<string, string>;
   readonly factHandles: ReadonlyMap<string, string>;
+  /** 短号 → 给作者看的名字（线索标题、事实内容）：模型在说明里写了「归入T1」，换成名字再进清单。 */
+  readonly handleNames?: ReadonlyMap<string, string>;
+}
+
+const isDigit = (char: string | undefined): boolean => char !== undefined && char >= "0" && char <= "9";
+const isAsciiWord = (char: string | undefined): boolean =>
+  char !== undefined && ((char >= "a" && char <= "z") || (char >= "A" && char <= "Z") || isDigit(char));
+
+/**
+ * 说明文字里混进的短号（「并入T1」「同F3」）换成它指的名字：短号是这次调用里我们自己发的编号，
+ * 只换认得的、前后不粘着英文字母数字的；认不得的原样留着。
+ */
+export function nameHandles(text: string, names: ReadonlyMap<string, string> | undefined): string {
+  if (!names || names.size === 0) return text;
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i]!;
+    const letter = char.toUpperCase();
+    if ((letter === "T" || letter === "F") && isDigit(text[i + 1]) && !isAsciiWord(text[i - 1])) {
+      let end = i + 1;
+      while (isDigit(text[end])) end += 1;
+      const name = isAsciiWord(text[end]) ? undefined : names.get(`${letter}${text.slice(i + 1, end)}`);
+      out += name ? `「${name}」` : text.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += char;
+    i += 1;
+  }
+  return out;
 }
 
 type Raw = Record<string, unknown>;
@@ -142,11 +175,13 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
   const drop = (where: string, reason: string): void => {
     drops.push({ where, reason });
   };
+  const named = (value: string | undefined): string | undefined => (value === undefined ? undefined : nameHandles(value, handles.handleNames));
+  let dayChangeQuote: string | undefined;
 
   // —— 梗概 ——
   if (root.summary !== undefined && root.summary !== null) {
     const raw = isRecord(root.summary) ? root.summary : {};
-    const summary = str(raw.text) ?? str(raw.summary);
+    const summary = named(str(raw.text) ?? str(raw.summary));
     const quote = quoteText(raw.quote);
     if (summary && quote) entries.push({ kind: "summary", review: "auto", text: summary, quote } satisfies SummaryInput);
     else drop("summary", summary ? "梗概没附原句" : "梗概是空的");
@@ -164,7 +199,10 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     if (days !== undefined) time.daysSincePrevious = days;
     else if (raw.daysSincePrevious !== undefined && raw.daysSincePrevious !== null && raw.daysSincePrevious !== "") drop("time.daysSincePrevious", "隔几天不是非负整数");
     const inChapter = count(raw.daysInChapter);
-    if (inChapter !== undefined && inChapter > 0) time.daysInChapter = inChapter;
+    if (inChapter !== undefined && inChapter > 0) {
+      time.daysInChapter = inChapter;
+      dayChangeQuote = quoteText(raw.dayChangeQuote);
+    }
     const weekdayText = str(raw.weekday);
     if (weekdayText !== undefined) {
       if (weekdayText in WEEKDAYS) time.weekday = WEEKDAYS[weekdayText];
@@ -205,7 +243,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       drop(where, "不是对象");
       continue;
     }
-    const factText = str(item.text);
+    const factText = named(str(item.text));
     const quote = quoteText(item.quote);
     if (!factText || !quote) {
       drop(where, !factText ? "事实没写内容" : "事实没附原句");
@@ -240,7 +278,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       const id = handles.factHandles.get(handle);
       if (id) {
         if (!replaces.includes(id)) replaces.push(id);
-      } else drop(`${where}.replaces`, `推翻的「${handle}」不在列出的事实里，这一项没记（事实本身照记）`);
+      } else drop(`${where}.replaces`, "要推翻的那条不在列出的事实里，这一项没记（事实本身照记）");
     }
     if (replaces.length > 0) fact.replaces = replaces;
     entries.push(fact);
@@ -255,7 +293,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
     const opText = str(item.op)?.toLowerCase();
     const op = opText ? THREAD_OPS[opText] : undefined;
-    const note = str(item.note) ?? str(item.title);
+    const note = named(str(item.note) ?? str(item.title));
     const quote = quoteText(item.quote);
     if (!op) {
       drop(where, opText ? `op 写成了「${opText}」，认不出` : "没写 op（开 / 推进 / 收）");
@@ -266,7 +304,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       continue;
     }
     if (op === "open") {
-      const title = str(item.title);
+      const title = named(str(item.title));
       const typeText = str(item.type);
       const type = typeText ? (THREAD_TYPES[typeText.toLowerCase()] ?? THREAD_TYPES[typeText]) : undefined;
       if (!title) {
@@ -292,5 +330,5 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
   }
 
-  return { entries, drops, adjusted };
+  return { entries, drops, adjusted, ...(dayChangeQuote ? { dayChangeQuote } : {}) };
 }

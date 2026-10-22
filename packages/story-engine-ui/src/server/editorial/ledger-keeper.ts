@@ -9,7 +9,9 @@
  * 跟读窗口和笔记沿用旧记账员的角色（LEDGER_ROLE 一个字都不能改：笔记按角色说明的哈希作废，改了全书笔记重写）。
  * 规则里不写任何书名、人名、题材。模型调用由调用方注入，这里不碰模型 SDK。
  */
-import { checkEntries, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { chapterTextPath, checkEntries, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
@@ -53,12 +55,13 @@ export const KEEPER_SPEC: readonly string[] = [
   "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样，不超过 60 个字（不要照抄原句）；quote 引最能代表本章的那句。",
   "",
   "time：每章都给（第 1 章没有上一章，只写星期、时段，没有就省略整个 time）。",
-  "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照你读过的上一章结尾和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事就是 0，隔了一夜才是 1）。只有确实判断不了才不填这个数。",
-  "- daysInChapter = 本章从开头到结尾又过了几天（章中间换了天才填；整章同一天就不填）。",
+  "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照上一章结尾（下面【上一章结尾】是原文）和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事就是 0，隔了一夜才是 1）。只有确实判断不了才不填这个数。",
+  "- daysInChapter = 本章从开头到结尾又过了几天，每章都填：整章在同一天写 0。从早到晚、从白天到深夜都还是同一天。只有正文写到换了天（「第二天早上」「天亮了」「隔了一夜」这类），才写 1 或更多，并在 dayChangeQuote 里逐字摘那句换天的原句；找不出这样一句，就是同一天、写 0。代码会核对这句，核不上就按同一天记。",
   "- weekday 只填正文明写的星期，写成「周二」这样；没写就不填，不要自己推算。timeOfDay 填正文写的时段（「傍晚」）。",
   "- quote 引最能说明时间的那句原句。不要写「故事第几天」，那由代码按上表算。",
   "",
-  "presence：本章出场的每个有名字的人物各一条。",
+  "presence：本章真在场的每个有名字的人物各一条。",
+  "- 在场 = 在本章的场景里露面：自己说话、做事、被人看见或听见（隔着电话、视频直接说话的也算）。只在别人嘴里、回忆、念头、信上、照片上出现的不算在场，不报——提得再多也不报。拿不准就问：这个人本章自己开口或动手了吗？没有就不报。",
   "- name 写这个人的已确立名字：上面【本书已出场的人物】里有的，逐字沿用那里的写法；第一次出场的写正文里的名字。",
   "- nameUsed 写本章正文里怎么称呼他（和 name 不同就是别称，代码会记成同一个人）；quote 必须逐字含 nameUsed。",
   "- 正文里冒出的新称呼如果指的是已有的人，name 写那个人的已确立名字、nameUsed 写新称呼，不要当成新人物。同一个人本章只报一条，用最主要的称呼。",
@@ -81,7 +84,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "- 报 advance 之前先想一遍：它是不是其实已经做完、已经揭晓了？是就报 close，别让它一直挂着。判断待办做没做完，只看那个动作本身：正文写到动作做成了（问过了、找到了、交出去了、打开了），就算完成；做完之后冒出的新问题另开一条。",
   "",
   "没有的类就给空数组或省略。只输出一个 JSON 对象，键为 summary、time、presence、facts、threads，形如：",
-  '{"summary":{"text":"…","quote":"…"},"time":{"basis":"judged","daysSincePrevious":1,"timeOfDay":"清晨","quote":"…"},"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
+  '{"summary":{"text":"…","quote":"…"},"time":{"basis":"judged","daysSincePrevious":1,"daysInChapter":0,"timeOfDay":"清晨","quote":"…"},"presence":[{"name":"…","nameUsed":"…","viewpoint":true,"quote":"…"}],"facts":[{"nature":"state","subject":"…","attribute":"…","value":"…","text":"…","quote":"…"}],"threads":[{"op":"open","type":"question","title":"…","note":"…","quote":"…"},{"op":"advance","thread":"T2","note":"…","quote":"…"}]}',
   "不要 Markdown、不要解释、不要多余文字。",
 ];
 
@@ -131,11 +134,26 @@ function oneLine(error: unknown): string {
   return text.length > 160 ? `${text.slice(0, 160)}…` : text || "未知错误";
 }
 
+/** 上一章结尾摘多少字给记账员对时间（判断本章开头隔了几天）。 */
+export const PREVIOUS_ENDING_CHARS = 160;
+
+/** 上一章定稿正文的最后一小段（没有上一章、读不到就是空串）。 */
+async function previousEnding(projectDir: string, chapter: number): Promise<string> {
+  if (chapter <= 1) return "";
+  try {
+    const text = (await readFile(join(projectDir, chapterTextPath(chapter - 1)), "utf-8")).trim();
+    return text.length > PREVIOUS_ENDING_CHARS ? `…${text.slice(-PREVIOUS_ENDING_CHARS)}` : text;
+  } catch {
+    return "";
+  }
+}
+
 /** 拼给记账员的那条 user 消息（单测和考卷也用）。 */
-export function buildKeeperTask(chapter: number, draft: string, contextText: string): string {
+export function buildKeeperTask(chapter: number, draft: string, contextText: string, ending = ""): string {
   return [
     `【第 ${chapter} 章 正文（待定稿，上面还没给过你）】\n${draft}`,
     contextText,
+    ending ? `【上一章结尾】\n${ending}` : "",
     `这一章即将定稿入库。对照你读过的前文原文和记账笔记，交这一章的账单。\n\n${KEEPER_SPEC.join("\n")}`,
   ]
     .filter((part) => part.length > 0)
@@ -186,22 +204,20 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
   const context = buildKeeperContext(input.before, input.draft);
+  const task = buildKeeperTask(input.chapter, input.draft, context.text, await previousEnding(input.projectDir, input.chapter));
   let text: string;
   try {
-    text = await withStep("记账员", () =>
-      input.callModel([...window, { role: "user", content: buildKeeperTask(input.chapter, input.draft, context.text) }], { json: true }),
-    );
+    text = await withStep("记账员", () => input.callModel([...window, { role: "user", content: task }], { json: true }));
   } catch (error) {
     return { ok: false, reason: `记账员没交上账单：${oneLine(error)}`, ...extra };
   }
   input.onRawOutput?.(text);
   const parsed = parseKeeperOutput(text, context);
   if (!parsed) return { ok: false, reason: "记账员交回来的不是一份能读的账单（不是 JSON 对象）", ...extra };
-  const task = buildKeeperTask(input.chapter, input.draft, context.text);
   const repaired = await repairQuotes(parsed, input, [...window, { role: "user", content: task }, { role: "assistant", content: text }]);
   return {
     ok: true,
-    parsed: repaired.parsed,
+    parsed: settleDayChange(repaired.parsed, input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
@@ -209,11 +225,39 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   };
 }
 
+/**
+ * 章里换天要有原句（模型声明要带证据）：记账员说本章中间过了几天，就得摘出换天的那句，
+ * 代码拿正文逐字核对；没摘、核不上（补摘也没补出来），就按整章同一天记，并在清单「改过的」里如实说。
+ * 章里凭空多出一天，后面每章的故事日都跟着错，比少记一处更伤。
+ */
+export function settleDayChange(parsed: KeeperParseResult, draft: string): KeeperParseResult {
+  const index = parsed.entries.findIndex((entry) => entry.kind === "time");
+  const time = index >= 0 ? parsed.entries[index] : undefined;
+  if (!time || time.kind !== "time" || !time.daysInChapter) return parsed;
+  if (dayChangeProven(parsed, draft)) return parsed;
+  const { daysInChapter: _dropped, ...sameDay } = time;
+  const entries = [...parsed.entries];
+  entries[index] = sameDay;
+  const reason = parsed.dayChangeQuote ? "说本章中间换了天，摘的那句在正文里找不到，按整章同一天记" : "说本章中间换了天，没摘换天的那句，按整章同一天记";
+  return { ...parsed, entries, adjusted: [...parsed.adjusted, { where: "time", reason }] };
+}
+
+const dayChangeProven = (parsed: KeeperParseResult, draft: string): boolean =>
+  parsed.dayChangeQuote !== undefined && quoteInText(parsed.dayChangeQuote, draft);
+
+/** 说本章中间换了天、却没摘出核得上的换天原句：要补摘的那几天。 */
+function dayChangeToRepair(parsed: KeeperParseResult, draft: string): number | undefined {
+  const time = parsed.entries.find((entry) => entry.kind === "time");
+  if (!time || time.kind !== "time" || !time.daysInChapter || dayChangeProven(parsed, draft)) return undefined;
+  return time.daysInChapter;
+}
+
 /** 一次最多补摘几条（再多说明这份账单整体不靠谱，不值得再花一次长调用）。 */
 export const QUOTE_REPAIR_MAX = 12;
 
 /**
  * 原句补摘：用和定稿同一个核对（checkEntries）找出原句对不上的条目，在同一段对话里请记账员只为这几条从正文里重摘一句。
+ * 说本章中间换了天却没摘出换天原句的，也在这次一并补摘（多数是漏写了 dayChangeQuote，判断本身没错）。
  * 重摘的原句也得核得上才换上去；补摘调用失败、交回来读不了，都照第一遍的交（最后由定稿清单如实列出没记上的）。
  * 模型无关：任何模型都会偶尔把「他」写成名字、跨过「某某说」拼对话——这里不放宽核对，只给一次改正的机会。
  */
@@ -223,18 +267,19 @@ async function repairQuotes(
   conversation: readonly BrainMessage[],
 ): Promise<{ parsed: KeeperParseResult; repair?: QuoteRepair }> {
   const broken = checkEntries(parsed.entries, input.draft, input.before).rejected.filter((item) => item.reason === "quote_not_in_text").slice(0, QUOTE_REPAIR_MAX);
-  if (broken.length === 0) return { parsed };
+  const dayChange = dayChangeToRepair(parsed, input.draft);
+  const asked = broken.length + (dayChange ? 1 : 0);
+  if (asked === 0) return { parsed };
   let reply: string;
   try {
-    reply = await withStep("记账员补摘原句", () =>
-      input.callModel([...conversation, { role: "user", content: buildQuoteRepairTask(broken.map((item) => item.entry)) }], { json: true }),
-    );
+    const ask = buildQuoteRepairTask(broken.map((item) => item.entry), dayChange ? { days: dayChange, ...(parsed.dayChangeQuote ? { wrote: parsed.dayChangeQuote } : {}) } : undefined);
+    reply = await withStep("记账员补摘原句", () => input.callModel([...conversation, { role: "user", content: ask }], { json: true }));
   } catch (error) {
-    return { parsed, repair: { asked: broken.length, fixed: 0, failed: oneLine(error) } };
+    return { parsed, repair: { asked, fixed: 0, failed: oneLine(error) } };
   }
   input.onRawOutput?.(reply);
   const quotes = parseQuoteRepairs(reply);
-  if (!quotes) return { parsed, repair: { asked: broken.length, fixed: 0, failed: "补摘交回来的不是 JSON" } };
+  if (!quotes) return { parsed, repair: { asked, fixed: 0, failed: "补摘交回来的不是 JSON" } };
   const entries = [...parsed.entries];
   let fixed = 0;
   broken.forEach((item, position) => {
@@ -245,7 +290,13 @@ async function repairQuotes(
     entries[item.index] = candidate;
     fixed += 1;
   });
-  return { parsed: { ...parsed, entries }, repair: { asked: broken.length, fixed } };
+  const dayQuote = dayChange ? quotes.get(broken.length + 1) : undefined;
+  const dayFixed = dayQuote !== undefined && quoteInText(dayQuote, input.draft);
+  if (dayFixed) fixed += 1;
+  return {
+    parsed: { ...parsed, entries, ...(dayFixed ? { dayChangeQuote: dayQuote } : {}) },
+    repair: { asked, fixed },
+  };
 }
 
 /** 补摘要求里每条怎么称呼（只给记账员看，不进清单）。 */
@@ -264,12 +315,17 @@ function repairLabel(entry: EntryInput): string {
   }
 }
 
-export function buildQuoteRepairTask(entries: readonly EntryInput[]): string {
+/** dayChange：说本章中间过了几天、却没摘出核得上的换天原句（排在最后一条）。 */
+export function buildQuoteRepairTask(entries: readonly EntryInput[], dayChange?: { readonly days: number; readonly wrote?: string }): string {
+  const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry ? (entry.quote ?? "（没写）") : "（没写）"}`);
+  if (dayChange) {
+    lines.push(`${entries.length + 1}. 本章中间换天的那句（你说本章从开头到结尾过了 ${dayChange.days} 天）\n   你写的：${dayChange.wrote ?? "（没写）"}`);
+  }
   return [
-    "你刚交的账单里，下面几条附的 quote 在本章正文里逐字找不到：",
-    ...entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry ? (entry.quote ?? "（没写）") : "（没写）"}`),
+    "你刚交的账单里，下面几条附的 quote 在本章正文里逐字找不到（或没写）：",
+    ...lines,
     "请为每条从本章正文里重新摘一句原句：照抄连续的一段，至少 4 个字；「他」「她」照正文抄，不换成名字；不换人称；不跨过「某某说」拼接（要跨就在中间写……）。",
-    "正文里实在没有能说明它的句子，就给空串，那条不记。",
+    `正文里实在没有能说明它的句子，就给空串，那条不记${dayChange ? "（换天那条给空串，就按整章同一天记）" : ""}。`,
     '只交 JSON：{"quotes":[{"n":1,"quote":"…"}]}',
   ].join("\n");
 }

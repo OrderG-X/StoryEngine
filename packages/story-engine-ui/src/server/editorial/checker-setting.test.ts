@@ -1,6 +1,6 @@
 // @vitest-environment node
 // R7.3 设定本进核账（P9 起读设定卡）：故事设定 / 人物 / 地点 / 物品 / 其他设定拼一份「设定」进核账窗口；
-// 模型引的设定原文照样经代码核对（settingQuoteLabel / parseSettingIssues），抄不出的不收；
+// 模型引的设定原文照样经代码核对（settingQuoteSource / parseSettingIssues），抄不出的不收；
 // 当前章和设定一致、前文某章和设定不一致时，问题指向前文那章（fixChapter），别让作者把对的改成错的。
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
-import { foundationMessage, readFoundationDigest, settingQuoteLabel } from "./foundation-digest.js";
+import { foundationMessage, readFoundationDigest, settingQuoteSource } from "./foundation-digest.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 import type { ContinuityIssueV2, EarlierText } from "./continuity/check-chapter.js";
 
@@ -103,21 +103,26 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
     expect(await readFoundationDigest(bare)).toBeUndefined();
   });
 
-  it("settingQuoteLabel：设定原文在哪一节就回哪个 label；对不上回 undefined", async () => {
+  it("settingQuoteSource：设定原文在哪一节、哪张卡；故事设定不带卡名；对不上回 undefined", async () => {
     const digest = await readFoundationDigest(dir);
-    expect(settingQuoteLabel(digest!, CARD_LINE)).toBe("人物卡");
-    expect(settingQuoteLabel(digest!, "塔钟停在三点十五分")).toBe("地点");
-    expect(settingQuoteLabel(digest!, "写实题材，没有超自然元素")).toBe("故事设定");
-    expect(settingQuoteLabel(digest!, "只能开钟箱")).toBe("物品");
-    expect(settingQuoteLabel(digest!, "守钟人每天正午上一次弦")).toBe("其他设定");
-    expect(settingQuoteLabel(digest!, "设定本里根本没有的一句话")).toBeUndefined();
+    expect(settingQuoteSource(digest!, CARD_LINE)).toEqual({ label: "人物卡", kind: "character", card: "沈青禾" });
+    expect(settingQuoteSource(digest!, "塔钟停在三点十五分")).toEqual({ label: "地点", kind: "place", card: "青石镇钟楼" });
+    expect(settingQuoteSource(digest!, "写实题材，没有超自然元素")).toEqual({ label: "故事设定", kind: "story" });
+    expect(settingQuoteSource(digest!, "只能开钟箱")).toEqual({ label: "物品", kind: "item", card: "钟楼钥匙（装在铜盒里）" });
+    expect(settingQuoteSource(digest!, "守钟人每天正午上一次弦")).toEqual({ label: "其他设定", kind: "lore", card: "守钟人" });
+    expect(settingQuoteSource(digest!, "设定本里根本没有的一句话")).toBeUndefined();
   });
 
-  it("settingQuoteLabel：省略号接起来的设定原文（人名……字段）每段都在同一节里也算；有一段不在不算", async () => {
+  it("settingQuoteSource：省略号接起来的设定原文（人名……字段）每段都在同一节里也算；有一段不在不算", async () => {
     const digest = await readFoundationDigest(dir);
-    expect(settingQuoteLabel(digest!, "沈青禾……爷爷沈敬山：三年前过世")).toBe("人物卡");
-    expect(settingQuoteLabel(digest!, "沈青禾...塔钟停在三点十五分")).toBeUndefined();
-    expect(settingQuoteLabel(digest!, "沈青禾……根本没有的一句话")).toBeUndefined();
+    expect(settingQuoteSource(digest!, "沈青禾……爷爷沈敬山：三年前过世")).toEqual({ label: "人物卡", kind: "character", card: "沈青禾" });
+    expect(settingQuoteSource(digest!, "沈青禾...塔钟停在三点十五分")).toBeUndefined();
+    expect(settingQuoteSource(digest!, "沈青禾……根本没有的一句话")).toBeUndefined();
+  });
+
+  it("settingQuoteSource：引文跨了同一节里两张卡，只到类、不带卡名", async () => {
+    const digest = await readFoundationDigest(dir);
+    expect(settingQuoteSource(digest!, "年龄：28……周守义（也叫：老周）")).toEqual({ label: "人物卡", kind: "character" });
   });
 
   it("foundationMessage：整段话带小标题，核账窗口里能认出来", async () => {

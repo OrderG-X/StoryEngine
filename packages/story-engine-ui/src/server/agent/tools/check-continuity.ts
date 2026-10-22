@@ -21,7 +21,11 @@ const issueSchema = z.object({
   earlierQuote: z.string().describe("和它对不上的前文那一句（原文）；对设定本的条目这里是设定原文。"),
   earlierChapter: z.number().int().describe("前文那句在第几章（等于本章章号表示本章更早处）。"),
   reason: z.string().describe("哪里对不上（一句话）。"),
-  againstSetting: z.object({ label: z.string() }).optional().describe("这条对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章：earlierQuote 是设定原文。"),
+  againstSetting: z.object({
+    label: z.string(),
+    kind: z.enum(["story", "character", "place", "item", "lore"]).optional(),
+    card: z.string().optional().describe("设定原文落在哪张设定卡上（卡名）。"),
+  }).optional().describe("这条对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章：earlierQuote 是设定原文。"),
   fixChapter: z.number().int().positive().optional().describe("错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。"),
 });
 

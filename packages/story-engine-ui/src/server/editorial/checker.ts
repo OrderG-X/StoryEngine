@@ -27,7 +27,7 @@ import {
   type EarlierText,
 } from "./continuity/check-chapter.js";
 import type { ChapterPlan } from "../book/chapter-plan.js";
-import { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
+import { foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest } from "./foundation-digest.js";
 import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 
@@ -96,7 +96,7 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
-    "每条 contradictions：quote 逐字抄有问题的那一句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
+    "每条 contradictions：quote 逐字抄有问题的那一句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
@@ -114,7 +114,7 @@ export function settingCheckTask(chapter: number): string {
     `- quote 逐字抄那一句原句；quoteChapter 写它在第几章（新稿里的句子写 ${chapter}）；`,
     "- settingQuote 逐字抄设定本里写这件事的那句原文；",
     "- agrees：那句和设定本一致写 true，对不上写 false；",
-    "- reason 一句话说它和设定说什么、一致还是对不上；confidence 写 sure（那句和设定不可能同时成立）或 maybe。",
+    "- reason 用中文一句话说它和设定说什么、一致还是对不上；confidence 写 sure（那句和设定不可能同时成立）或 maybe。",
     "写了变化过程的、人物明确在撒谎或记错的，不算对不上。设定原文抄不出（和上面设定本逐字对不上）的不要列。只列和设定本写到的同一件事直接相关的句子，最多 12 句。",
     '只输出一个 JSON：{"checks":[{"quote":"","quoteChapter":0,"settingQuote":"","agrees":true,"reason":"","confidence":"maybe"}]}',
   ].join("\n");
@@ -382,10 +382,10 @@ export function parseSettingIssues(
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue;
-    const label = settingQuoteLabel(digest, settingQuote);
-    if (!label) continue; // 设定原文和设定本对不上：不收
+    const source = settingQuoteSource(digest, settingQuote);
+    if (!source) continue; // 设定原文和设定本对不上：不收
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: { label } });
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: source });
       continue;
     }
     // quote 在前文哪一章：先信它报的 quoteChapter，对不上按章序搜。
@@ -395,7 +395,7 @@ export function parseSettingIssues(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: { label } });
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: source });
   }
   return out;
 }
@@ -406,7 +406,7 @@ const AGREES_FALSE = /^(?:false|no|f)$/iu;
 /**
  * R7.3 解析第 4 遍（对设定本）的逐句判定：checks 里每条＝一句正文原句＋设定原句＋agrees。
  * 只收 agrees=false 的（和设定对不上的那句）；quote 定位到新稿（→ 指向本章）或前文某章（→ fixChapter 指向那章）。
- * 设定原文必须真在设定本里（settingQuoteLabel），quote 必须真在新稿或某章前文里；对不上的才收。
+ * 设定原文必须真在设定本里（settingQuoteSource），quote 必须真在新稿或某章前文里；对不上的才收。
  */
 export function parseSettingChecks(
   text: string,
@@ -432,11 +432,11 @@ export function parseSettingChecks(
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue; // 对不上与否只认结构化的 agrees，不再看理由里的字眼
-    const label = settingQuoteLabel(digest, settingQuote);
-    if (!label) continue; // 设定原文和设定本对不上：不收
+    const source = settingQuoteSource(digest, settingQuote);
+    if (!source) continue; // 设定原文和设定本对不上：不收
     const confidence = /sure/u.test(String(record.confidence ?? "")) && !/unsure/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: { label } });
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: source });
       continue;
     }
     const claimed = Number(record.quoteChapter);
@@ -445,7 +445,7 @@ export function parseSettingChecks(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: { label } });
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: source });
   }
   return out;
 }
@@ -680,10 +680,10 @@ export async function checkChapterByReader(input: {
           if (!ruling) return issue;
           const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
           if (foundation && !issue.againstSetting && ruling.settingQuote) {
-            const label = settingQuoteLabel(foundation, ruling.settingQuote);
+            const source = settingQuoteSource(foundation, ruling.settingQuote);
             const draftWrong = ruling.draftAgrees === false;
             const earlierWrong = ruling.earlierAgrees === false;
-            if (label && earlierWrong && !draftWrong) {
+            if (source && earlierWrong && !draftWrong) {
               return {
                 quote: issue.earlierQuote,
                 earlierQuote: ruling.settingQuote,
@@ -692,10 +692,10 @@ export async function checkChapterByReader(input: {
                 reason: issue.reason,
                 kind: "event",
                 confidence,
-                againstSetting: { label },
+                againstSetting: source,
               };
             }
-            if (label && draftWrong && !earlierWrong) {
+            if (source && draftWrong && !earlierWrong) {
               return {
                 quote: issue.quote,
                 earlierQuote: ruling.settingQuote,
@@ -703,7 +703,7 @@ export async function checkChapterByReader(input: {
                 reason: issue.reason,
                 kind: "event",
                 confidence,
-                againstSetting: { label },
+                againstSetting: source,
               };
             }
           }
@@ -756,7 +756,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
     ...(plan.direction ? [`【作者这章给的方向】\n${plan.direction}`] : []),
     "核对到的要点逐条列进 problems，每条判 conflict：true＝按前文不可能成立；false＝核对过、对得上或不构成矛盾（章纲明确安排了变化过程的、作者明确要求的变化过程，都不算）。作者方向本身和前文既成事实对不上的（东西已在别人手里、人已不在、事已发生过），conflict 照样写 true，authorWilled 也写 true——不要因为方向是作者给的就不报。",
-    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
+    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
     `【第 ${chapter} 章章纲】`,
     `一句话：${plan.summary}`,
     `要点：\n${plan.beats.map((beat, index) => `${index + 1}. ${beat}`).join("\n")}`,

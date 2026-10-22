@@ -14,7 +14,7 @@ import type {
   NextStepPrompt,
 } from "../../type-defs/workspace.js";
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
-import { parseNextStepUserAction, readAiErrorReason, type AgentUserAction } from "../../api/agentChatClient.js";
+import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
@@ -150,14 +150,14 @@ function readContinuityItems(value: unknown): ContinuityCheckItemData[] {
     const quote = readStringAllowEmpty(item.quote);
     const earlierQuote = readStringAllowEmpty(item.earlierQuote);
     if (quote === undefined || earlierQuote === undefined) return [];
-    const label = isRecord(item.againstSetting) ? readString(item.againstSetting.label) : undefined;
+    const againstSetting = readSettingRef(item.againstSetting);
     const fixChapter = readPositiveInteger(item.fixChapter);
     return [{
       quote,
       earlierQuote,
       earlierChapter: readNonNegativeInteger(item.earlierChapter) ?? 0,
       reason: readStringAllowEmpty(item.reason) ?? "",
-      ...(label ? { againstSetting: { label } } : {}),
+      ...(againstSetting ? { againstSetting } : {}),
       ...(fixChapter !== undefined ? { fixChapter } : {}),
     }];
   });
