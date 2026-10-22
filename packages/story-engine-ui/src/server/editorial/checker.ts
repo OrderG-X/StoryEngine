@@ -27,7 +27,7 @@ import {
   type EarlierText,
 } from "./continuity/check-chapter.js";
 import type { ChapterPlan } from "../book/chapter-plan.js";
-import { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
+import { foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest } from "./foundation-digest.js";
 import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 
@@ -382,10 +382,10 @@ export function parseSettingIssues(
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue;
-    const label = settingQuoteLabel(digest, settingQuote);
-    if (!label) continue; // 设定原文和设定本对不上：不收
+    const source = settingQuoteSource(digest, settingQuote);
+    if (!source) continue; // 设定原文和设定本对不上：不收
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: { label } });
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: source });
       continue;
     }
     // quote 在前文哪一章：先信它报的 quoteChapter，对不上按章序搜。
@@ -395,7 +395,7 @@ export function parseSettingIssues(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: { label } });
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: source });
   }
   return out;
 }
@@ -406,7 +406,7 @@ const AGREES_FALSE = /^(?:false|no|f)$/iu;
 /**
  * R7.3 解析第 4 遍（对设定本）的逐句判定：checks 里每条＝一句正文原句＋设定原句＋agrees。
  * 只收 agrees=false 的（和设定对不上的那句）；quote 定位到新稿（→ 指向本章）或前文某章（→ fixChapter 指向那章）。
- * 设定原文必须真在设定本里（settingQuoteLabel），quote 必须真在新稿或某章前文里；对不上的才收。
+ * 设定原文必须真在设定本里（settingQuoteSource），quote 必须真在新稿或某章前文里；对不上的才收。
  */
 export function parseSettingChecks(
   text: string,
@@ -432,11 +432,11 @@ export function parseSettingChecks(
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue; // 对不上与否只认结构化的 agrees，不再看理由里的字眼
-    const label = settingQuoteLabel(digest, settingQuote);
-    if (!label) continue; // 设定原文和设定本对不上：不收
+    const source = settingQuoteSource(digest, settingQuote);
+    if (!source) continue; // 设定原文和设定本对不上：不收
     const confidence = /sure/u.test(String(record.confidence ?? "")) && !/unsure/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: { label } });
+      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: source });
       continue;
     }
     const claimed = Number(record.quoteChapter);
@@ -445,7 +445,7 @@ export function parseSettingChecks(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: { label } });
+    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: source });
   }
   return out;
 }
@@ -680,10 +680,10 @@ export async function checkChapterByReader(input: {
           if (!ruling) return issue;
           const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
           if (foundation && !issue.againstSetting && ruling.settingQuote) {
-            const label = settingQuoteLabel(foundation, ruling.settingQuote);
+            const source = settingQuoteSource(foundation, ruling.settingQuote);
             const draftWrong = ruling.draftAgrees === false;
             const earlierWrong = ruling.earlierAgrees === false;
-            if (label && earlierWrong && !draftWrong) {
+            if (source && earlierWrong && !draftWrong) {
               return {
                 quote: issue.earlierQuote,
                 earlierQuote: ruling.settingQuote,
@@ -692,10 +692,10 @@ export async function checkChapterByReader(input: {
                 reason: issue.reason,
                 kind: "event",
                 confidence,
-                againstSetting: { label },
+                againstSetting: source,
               };
             }
-            if (label && draftWrong && !earlierWrong) {
+            if (source && draftWrong && !earlierWrong) {
               return {
                 quote: issue.quote,
                 earlierQuote: ruling.settingQuote,
@@ -703,7 +703,7 @@ export async function checkChapterByReader(input: {
                 reason: issue.reason,
                 kind: "event",
                 confidence,
-                againstSetting: { label },
+                againstSetting: source,
               };
             }
           }

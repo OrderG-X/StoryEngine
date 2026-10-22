@@ -31,7 +31,7 @@ import {
 } from "./check-chapter.js";
 import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory } from "./check-memory.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
-import { readFoundationDigest, settingQuoteLabel } from "../foundation-digest.js";
+import { readFoundationDigest, settingQuoteSource } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
 
 export interface ChapterCheckItem {
@@ -186,7 +186,7 @@ export async function checkChapterBody(
   const foundation = memory && !reused && memory.issues.some((issue) => issue.againstSetting)
     ? await readFoundationDigest(projectDir).catch(() => undefined)
     : undefined;
-  const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteLabel(foundation, settingQuote) !== undefined;
+  const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteSource(foundation, settingQuote) !== undefined;
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
     ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, settingStillSays))
     : [];

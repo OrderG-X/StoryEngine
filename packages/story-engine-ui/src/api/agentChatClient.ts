@@ -15,7 +15,7 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, SettingRefData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
@@ -79,9 +79,24 @@ export interface ContinuityCheckItem {
   readonly earlierChapter: number;
   readonly reason: string;
   /** R7.3 对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章。 */
-  readonly againstSetting?: { readonly label: string };
+  readonly againstSetting?: SettingRefData;
   /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
   readonly fixChapter?: number;
+}
+
+const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["story", "character", "place", "item", "lore"]);
+
+/** 核账条目的 againstSetting（防御解析）：没有 label 的不算；kind 只认那五类，卡名是非空字符串才带。 */
+export function readSettingRef(value: unknown): SettingRefData | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const label = typeof record.label === "string" ? record.label.trim() : "";
+  if (!label) return undefined;
+  const kind = typeof record.kind === "string" && SETTING_KINDS.has(record.kind as NonNullable<SettingRefData["kind"]>)
+    ? record.kind as NonNullable<SettingRefData["kind"]>
+    : undefined;
+  const card = typeof record.card === "string" && record.card.trim() ? record.card.trim() : undefined;
+  return { label, ...(kind ? { kind } : {}), ...(card ? { card } : {}) };
 }
 
 /** check_continuity 结果（投影到消息上渲染「核账」卡）。 */
@@ -99,10 +114,7 @@ function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
     if (!item || typeof item !== "object") return [];
     const record = item as Record<string, unknown>;
     if (typeof record.quote !== "string" || typeof record.earlierQuote !== "string") return [];
-    const againstSetting = record.againstSetting && typeof record.againstSetting === "object"
-      && typeof (record.againstSetting as { label?: unknown }).label === "string" && (record.againstSetting as { label: string }).label.trim()
-      ? { label: (record.againstSetting as { label: string }).label }
-      : undefined;
+    const againstSetting = readSettingRef(record.againstSetting);
     return [{
       quote: record.quote,
       earlierQuote: record.earlierQuote,

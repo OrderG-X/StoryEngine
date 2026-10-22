@@ -46,7 +46,7 @@ export {
   type PlanProblem,
   type ReaderCheckVariant,
 } from "./checker.js";
-export { foundationMessage, readFoundationDigest, settingQuoteLabel, type FoundationDigest } from "./foundation-digest.js";
+export { foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest, type SettingSource } from "./foundation-digest.js";
 export {
   isReaderCatchUpQueued,
   readReaderProgress,

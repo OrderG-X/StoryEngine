@@ -16,6 +16,11 @@ export type BibleCat = "story" | "rules" | "chars" | "relations" | "items" | "pl
 const KIND_NAME: Record<CardKind, string> = { character: "人物", place: "地点", item: "物品", lore: "设定" };
 const KIND_CAT: Record<CardKind, BibleCat> = { character: "chars", place: "places", item: "items", lore: "story" };
 
+/** 一类设定在设定本哪一页（核账卡「改设定卡」翻过去用）：故事设定和其他设定都在故事设定页。 */
+export function bibleCatOf(kind: CardKind | "story"): BibleCat {
+  return kind === "story" ? "story" : KIND_CAT[kind];
+}
+
 /** 常用标签当快捷（作者想起什么标签都行）。「一句话」「题材」和书架、开书概况认的栏名一致。 */
 const FIELD_SUGGESTIONS: Record<CardKind | "story", readonly string[]> = {
   story: ["一句话", "题材", "基调", "主线冲突", "核心谜团", "世界规矩", "时代背景", "结局方向"],

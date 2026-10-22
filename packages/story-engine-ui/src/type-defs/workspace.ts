@@ -135,6 +135,13 @@ export interface NextStepPrompt {
   readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: import("../api/agentChatClient.js").AgentUserAction }[];
 }
 
+/** 核账条目对的那句设定出自哪：哪一类（label：人物卡 / 地点…），落在一张卡里就带卡名。老卡片只有 label。 */
+export interface SettingRefData {
+  readonly label: string;
+  readonly kind?: "story" | "character" | "place" | "item" | "lore";
+  readonly card?: string;
+}
+
 /** 核账卡上的一条（check_continuity 投影）：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文。 */
 export interface ContinuityCheckItemData {
   readonly quote: string;
@@ -142,7 +149,7 @@ export interface ContinuityCheckItemData {
   readonly earlierChapter: number;
   readonly reason: string;
   /** R7.3 对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章。 */
-  readonly againstSetting?: { readonly label: string };
+  readonly againstSetting?: SettingRefData;
   /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
   readonly fixChapter?: number;
 }

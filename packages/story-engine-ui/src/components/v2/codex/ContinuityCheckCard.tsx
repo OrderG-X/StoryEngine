@@ -2,6 +2,7 @@
  * ContinuityCheckCard —— 「核账」结果卡（check_continuity，随对应 assistant 消息渲染）。
  *
  * 每条 = 本章原句 + 哪里对不上 + 一行小按钮（「对照第 N 章」点开看前文原句、「改这处」「不是问题」）。
+ * 对的是设定卡的条目多一个「改设定卡」：错的可能是卡（尤其 AI 补的），点了翻到设定本那张卡，作者自己改。
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
  * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
  * 以后核账不再报；存失败如实提示「没记住」。可撤回。
@@ -11,6 +12,7 @@
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
+import { bibleCatOf } from "./BibleBook.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey } from "../../../workspace/chapterProgress.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
@@ -76,13 +78,18 @@ export function continuityFixAction(chapter: number, items: readonly Item[]): Ag
   };
 }
 
+/** 翻到设定本某一页（带卡名就展开那张卡）。 */
+type OpenSetting = (cat: string, card?: string) => void;
+
 /** 每条默认只摆本章原句和理由（稿纸上也划了线）；要和哪句对上点「对照…」才展开，免得 N 条就是 4N 行。 */
-function ItemView({ chapter, item, onRevise, onDismiss }: {
+function ItemView({ chapter, item, onRevise, onOpenSetting, onDismiss }: {
   readonly chapter: number;
   readonly item: Item;
   readonly onRevise?: (item: Item) => void;
+  readonly onOpenSetting?: OpenSetting;
   readonly onDismiss: () => void;
 }) {
+  const setting = item.againstSetting;
   const [showSource, setShowSource] = useState(false);
   const fix = fixChapterOf(chapter, item);
   const source = item.againstSetting ? `设定（${item.againstSetting.label}）` : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
@@ -98,13 +105,18 @@ function ItemView({ chapter, item, onRevise, onDismiss }: {
         {onRevise ? (
           <button type="button" className="chip drc-fix" onClick={() => onRevise(item)}>{fix === chapter ? "改这处" : `改第 ${fix} 章`}</button>
         ) : null}
+        {onOpenSetting && setting?.kind ? (
+          <button type="button" className="chip drc-fix" onClick={() => onOpenSetting(bibleCatOf(setting.kind!), setting.card)}>
+            {setting.card ? "改设定卡" : "改设定"}
+          </button>
+        ) : null}
         <button type="button" className="chip drc-fix" onClick={onDismiss}>不是问题</button>
       </div>
     </li>
   );
 }
 
-export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], onRevise, onFixAction, onDismiss }: {
+export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], onRevise, onFixAction, onOpenSetting, onDismiss }: {
   readonly check: ContinuityCheck;
   /** 作者点过「不是问题」的条目键（存在卡上，稿纸划线共用一份）。 */
   readonly dismissed?: readonly string[];
@@ -112,6 +124,8 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   readonly onRevise?: (intent: string) => void;
   /** 按钮直接改（结构化动作，不经模型）：能直接改的条目走这条。 */
   readonly onFixAction?: (action: AgentUserAction) => void;
+  /** 「改设定卡」：翻到设定本那张卡。 */
+  readonly onOpenSetting?: OpenSetting;
   /** 记下 / 撤回「不是问题」；返回是否存成。 */
   readonly onDismiss?: (item: Item, undo: boolean) => Promise<boolean>;
 }) {
@@ -170,7 +184,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       {sure.length > 0 ? (
         <ul className="drc-list">
           {sure.map((item) => (
-            <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
+            <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} {...(onOpenSetting ? { onOpenSetting } : {})} onDismiss={() => dismiss(item)} />
           ))}
         </ul>
       ) : null}
@@ -182,7 +196,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
           {showMaybe ? (
             <ul className="drc-list">
               {maybe.map((item) => (
-                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
+                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} {...(onOpenSetting ? { onOpenSetting } : {})} onDismiss={() => dismiss(item)} />
               ))}
             </ul>
           ) : null}
@@ -197,7 +211,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
           {showEarlier ? (
             <ul className="drc-list">
               {earlier.map((item) => (
-                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} onDismiss={() => dismiss(item)} />
+                <ItemView key={keyOf(item)} chapter={check.chapter} item={item} {...(canRevise(item) ? { onRevise: reviseOne } : {})} {...(onOpenSetting ? { onOpenSetting } : {})} onDismiss={() => dismiss(item)} />
               ))}
             </ul>
           ) : null}

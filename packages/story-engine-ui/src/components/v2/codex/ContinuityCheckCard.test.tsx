@@ -147,6 +147,22 @@ describe("核账卡：对设定本的条目（R7.3）", () => {
     expect(onRevise.mock.calls[0]![0]).toContain("设定本人物卡里的「爷爷沈敬山：三年前过世」");
   });
 
+  it("知道出自哪张卡：多一个「改设定卡」，点了翻到设定本那张卡；只知道哪类时叫「改设定」；老卡片没有类就不出", () => {
+    const onOpenSetting = vi.fn();
+    const withCard = { chapter: 6, sure: [{ ...setting, againstSetting: { label: "人物卡", kind: "character" as const, card: "沈青禾" } }], maybe: [] };
+    render(<ContinuityCheckCard check={withCard} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
+    fireEvent.click(screen.getByRole("button", { name: "改设定卡" }));
+    expect(onOpenSetting).toHaveBeenCalledWith("chars", "沈青禾");
+    cleanup();
+    const storyOnly = { chapter: 6, sure: [{ ...setting, againstSetting: { label: "故事设定", kind: "story" as const } }], maybe: [] };
+    render(<ContinuityCheckCard check={storyOnly} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
+    fireEvent.click(screen.getByRole("button", { name: "改设定" }));
+    expect(onOpenSetting).toHaveBeenLastCalledWith("story", undefined);
+    cleanup();
+    render(<ContinuityCheckCard check={{ chapter: 6, sure: [setting], maybe: [] }} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
+    expect(screen.queryByRole("button", { name: /改设定/ })).toBeNull();
+  });
+
   it("新稿自己错的设定条目：原句不加章号前缀、按钮「改这处」", () => {
     const onRevise = vi.fn();
     const selfWrong = { chapter: 6, sure: [{ ...setting, earlierChapter: 6, fixChapter: undefined, quote: "他右手背上有疤。" }], maybe: [] };

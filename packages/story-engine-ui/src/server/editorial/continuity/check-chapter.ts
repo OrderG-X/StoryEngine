@@ -16,6 +16,7 @@ import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js"
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
 import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
 import { type FactEntry } from "../../book/types.js";
+import type { SettingKind } from "../foundation-digest.js";
 
 export type ClaimKind = "object" | "place" | "time" | "identity" | "knowledge" | "number" | "event";
 
@@ -33,7 +34,7 @@ export interface ContinuityIssueV2 {
    * R7.3 对的是设定本而不是某一章：earlierQuote＝设定原文（已由代码核对真在设定本里），
    * quote＝有问题的那句原句（在当前稿，或在 fixChapter 指的那一章）。
    */
-  readonly againstSetting?: { readonly label: string };
+  readonly againstSetting?: { readonly label: string; readonly kind?: SettingKind; readonly card?: string };
   /** R7.3 错在哪一章、按钮就改哪一章（quote 抄自前文某章时由代码定）；缺省＝当前核的章。 */
   readonly fixChapter?: number;
 }
