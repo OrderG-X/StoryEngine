@@ -182,10 +182,6 @@ export interface AgentToolResult {
     readonly question: string;
     readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: AgentUserAction }[];
   };
-  /** commit_preview 专属：人物名近形漂移提醒（引擎确定性判定）。透传给投影层挂到消息→渲染固定「人物名一致性」提醒卡，不靠模型转述。 */
-  readonly nameConsistencyWarnings?: readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[];
-  /** commit_preview 专属：伏笔/线索待收口提醒（引擎确定性判定：超 3 章未推进）。透传给投影层挂到消息→渲染固定「伏笔/线索待收口」提醒卡，不靠模型转述。 */
-  readonly staleThreadWarnings?: readonly { readonly kind: string; readonly title: string; readonly lastTouchedChapter: number; readonly chaptersSinceTouched: number; readonly message: string }[];
   /** commit_preview 专属：结构化定稿预览（R3）——裁决/阻断项/质量问题计数透传给投影层渲染固定「定稿预览」卡。
    *  裁决不靠模型转述：模型可能把「暂不可定稿」说成小问题或略过不提。 */
   readonly commitPreview?: {
@@ -454,14 +450,6 @@ export async function streamAgentChat(
             ...(parsed.toolName === "quality_check" && output.ok !== false && isRecord(output.refined)
               ? { qualityReport: output.refined as unknown as QualityCardReport }
               : {}),
-            // commit_preview 专属：人物名一致性提醒（不在轻量白名单里）→ 透传，前端渲染固定提醒卡（不靠模型转述、不被说软）。
-            ...(parsed.toolName === "commit_preview" && isNameConsistencyWarnings(output.nameConsistencyWarnings)
-              ? { nameConsistencyWarnings: output.nameConsistencyWarnings }
-              : {}),
-            // commit_preview 专属：伏笔/线索待收口提醒（不在轻量白名单里）→ 透传，前端渲染固定提醒卡（不靠模型转述、不被隐去）。
-            ...(parsed.toolName === "commit_preview" && isStaleThreadWarnings(output.staleThreadWarnings)
-              ? { staleThreadWarnings: output.staleThreadWarnings }
-              : {}),
             // commit_preview 专属：结构化定稿预览（R3）→ 透传，前端渲染固定「定稿预览」卡。裁决/阻断项不靠模型
             // 转述（模型可能把硬阻断说成「小问题」或干脆不提）。字段防御解析：缺 chapter/canCommit 的残缺输出不挂卡。
             ...(parsed.toolName === "commit_preview" && typeof output.chapter === "number" && typeof output.canCommit === "boolean"
@@ -726,32 +714,6 @@ function isPendingProgress(value: unknown): value is { readonly done: number; re
   return isRecord(value)
     && typeof value.done === "number" && Number.isInteger(value.done) && value.done >= 0
     && typeof value.total === "number" && Number.isInteger(value.total) && value.total > 0;
-}
-
-/** commit_preview 人物名一致性提醒形状守卫：非空数组，每条有 establishedName/driftedVariant/message 字符串。 */
-function isNameConsistencyWarnings(
-  value: unknown,
-): value is readonly { readonly establishedName: string; readonly driftedVariant: string; readonly message: string }[] {
-  return Array.isArray(value)
-    && value.length > 0
-    && value.every((entry) => isRecord(entry)
-      && typeof entry.establishedName === "string"
-      && typeof entry.driftedVariant === "string"
-      && typeof entry.message === "string");
-}
-
-/** commit_preview 伏笔/线索待收口提醒形状守卫：非空数组，每条有 kind/title/message 字符串 + 两个章号数字。 */
-function isStaleThreadWarnings(
-  value: unknown,
-): value is readonly { readonly kind: string; readonly title: string; readonly lastTouchedChapter: number; readonly chaptersSinceTouched: number; readonly message: string }[] {
-  return Array.isArray(value)
-    && value.length > 0
-    && value.every((entry) => isRecord(entry)
-      && typeof entry.kind === "string"
-      && typeof entry.title === "string"
-      && typeof entry.lastTouchedChapter === "number"
-      && typeof entry.chaptersSinceTouched === "number"
-      && typeof entry.message === "string");
 }
 
 /** 从非 2xx 响应体里取服务端 `{ error }`；取不到返回 undefined（让调用方退回状态码文案）。 */

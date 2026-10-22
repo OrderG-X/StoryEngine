@@ -46,13 +46,16 @@ export function ChapterTodoCard({
     <div className="se-todo-wrap">
       <section className="se-todo-card" aria-label={title}>
         <div className="se-todo-card-h">{title}</div>
-        {/* 三步一行：做完打勾；每步的细话（写了多少字、核出几处）悬停看。核出要看的几处直接标在「核账」上。 */}
+        {/* 三步一行：做完打勾；每步的细话（写了多少字、核出几处）悬停看。核出要看的几处：「核账」标成待看，数在主按钮上。 */}
         <ol className="se-todo-steps">
           {steps.map((step) => (
-            <li key={step.key} className={step.done ? "is-done" : ""} title={step.hint ? `${step.text}。${step.hint}` : step.text}>
-              <span className="se-todo-mark" aria-hidden="true">{step.done ? "✓" : "○"}</span>
+            <li
+              key={step.key}
+              className={step.key === "check" && attention ? "is-attention" : step.done ? "is-done" : ""}
+              title={step.hint ? `${step.text}。${step.hint}` : step.text}
+            >
+              <span className="se-todo-mark" aria-hidden="true">{step.key === "check" && attention ? "!" : step.done ? "✓" : "○"}</span>
               <span className="se-todo-step-label">{step.label}</span>
-              {step.key === "check" && attention ? <span className="se-todo-step-text is-attention">{progress.check.sure} 处</span> : null}
               <span className="sr-only">：{step.text}</span>
             </li>
           ))}

@@ -1,7 +1,7 @@
 /**
  * ContinuityCheckCard —— 「核账」结果卡（check_continuity，随对应 assistant 消息渲染）。
  *
- * 每条 = 本章原句 ↔ 前文原句（标第几章）+ 哪里对不上 +「改这处」「不是问题」。
+ * 每条 = 本章原句 + 哪里对不上 + 一行小按钮（「对照第 N 章」点开看前文原句、「改这处」「不是问题」）。
  * 「确定」的直接列出；「可能」的默认收起，作者想看再点开（复核把握低，免得一屏噪音）。
  * 「改这处」= 给 agent 发一句只改这一处的意图（对话仍是唯一控制面）；「不是问题」= 记下来（onDismiss 存盘），
  * 以后核账不再报；存失败如实提示「没记住」。可撤回。
@@ -76,19 +76,25 @@ export function continuityFixAction(chapter: number, items: readonly Item[]): Ag
   };
 }
 
+/** 每条默认只摆本章原句和理由（稿纸上也划了线）；要和哪句对上点「对照…」才展开，免得 N 条就是 4N 行。 */
 function ItemView({ chapter, item, onRevise, onDismiss }: {
   readonly chapter: number;
   readonly item: Item;
   readonly onRevise?: (item: Item) => void;
   readonly onDismiss: () => void;
 }) {
+  const [showSource, setShowSource] = useState(false);
   const fix = fixChapterOf(chapter, item);
+  const source = item.againstSetting ? `设定（${item.againstSetting.label}）` : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
   return (
-    <li className="drc-item">
-      <p className="drc-evi serif">{fix === chapter ? "本章" : `第 ${fix} 章`}：「{item.quote}」</p>
-      <p className="drc-evi serif">{item.againstSetting ? `设定（${item.againstSetting.label}）` : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`}：「{item.earlierQuote}」</p>
+    <li className="drc-item cck-item">
+      <p className="drc-evi serif">{fix === chapter ? null : `第 ${fix} 章：`}「{item.quote}」</p>
       {item.reason ? <p className="drc-desc">{item.reason}</p> : null}
-      <div style={{ display: "flex", gap: 6 }}>
+      {showSource ? <p className="drc-evi serif cck-source">{source}：「{item.earlierQuote}」</p> : null}
+      <div className="cck-foot">
+        <button type="button" className="cck-src" aria-expanded={showSource} onClick={() => setShowSource((open) => !open)}>
+          {showSource ? "收起对照" : `对照${source}`}
+        </button>
         {onRevise ? (
           <button type="button" className="chip drc-fix" onClick={() => onRevise(item)}>{fix === chapter ? "改这处" : `改第 ${fix} 章`}</button>
         ) : null}
@@ -141,6 +147,8 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   };
   const canReviseAll = Boolean(onRevise) || (Boolean(onFixAction) && sure.every((item) => canFixDirectly(check.chapter, item)));
   const total = sure.length + maybe.length;
+  // 什么都没报、也没划掉过的：卡头一行「没发现对不上」就说完了，不再摆一段同样意思的话、也不给展开箭头。
+  const empty = total === 0 && earlier.length === 0 && dismissed.length === 0;
   return (
     <StepCard
       title={`核账 · 第 ${check.chapter} 章`}
@@ -148,7 +156,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       statusLabel={sure.length > 0 ? `确定 ${sure.length} 处` : total > 0 ? `可能 ${maybe.length} 处` : "没发现对不上"}
       defaultOpen
     >
-      {total === 0 ? <p className="drc-summary">拿这一章对了前文，没发现前后对不上的地方。</p> : null}
+      {empty ? null : <>
       {/* 主按钮（R4.5）：改掉还没划掉的「确定」N 处，文字随「不是问题」实时变；intent 现拼、圈死范围。 */}
       {sure.length > 0 && canReviseAll ? (
         <button
@@ -204,6 +212,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
           <button type="button" className="chip" onClick={undoLast}>撤回上一处</button>
         </p>
       ) : null}
+      </>}
     </StepCard>
   );
 }

@@ -163,7 +163,8 @@ export async function runDraftAIReview(input: DraftAIReviewInput): Promise<Draft
     ...(configured !== undefined ? { model: configured.profile.model, profileId: configured.profile.id } : {}),
     summary: usedFallback
       ? `第 ${chapter} 章 AI 内容审阅未完成（模型不可用），未改任何内容；请稍后重试或人工检查。`
-      : `第 ${chapter} 章 AI 内容审阅：${VERDICT_LABEL[review.verdict]}（评分 ${review.score}；正文实际 ${actualWordCount} 字）。${review.summary}`,
+      // 评分、字数在结构化字段里（review.score / actualWordCount）；审阅意见的总结在审阅卡上，回话只说结论。
+      : `第 ${chapter} 章内容审阅：${VERDICT_LABEL[review.verdict]}。`,
   };
 }
 

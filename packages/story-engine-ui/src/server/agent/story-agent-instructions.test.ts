@@ -282,7 +282,7 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
   it("定稿真写入只由用户点「确认定稿」按钮完成，模型负责预览并请用户点按钮", () => {
     expect(instructions).toContain("【定稿 = 你预览、用户点按钮】");
     expect(instructions).toContain("先对该章 commit_preview");
-    expect(instructions).toContain("请用户点预览卡上的「确认定稿」按钮");
+    expect(instructions).toContain("请用户在定稿清单里点「确认定稿」");
   });
 
   // 2026-10-10 瘦身：commit_apply 不再给对话 AI（它调了也只是再出一个按钮），定稿只能点按钮。

@@ -227,7 +227,7 @@ describe("liveFlowFromMessage（四步实时态）", () => {
   // 四步环不亮红（不是 failed），字幕如实显示「暂不可定稿」的工具真实 summary。
   it("verdict（裁决未过）落定成 done 且透出 detail，环不亮红", () => {
     const live = liveFlowFromMessage(message({
-      toolSteps: [{ id: "a", label: "定稿影响预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2, detail: "第 99 章还没有工作稿，无法生成定稿预览。" }],
+      toolSteps: [{ id: "a", label: "定稿预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2, detail: "第 99 章还没有工作稿，无法生成定稿预览。" }],
     }))!;
     expect(live.commit.status).toBe("done");
     expect(live.commit.detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
@@ -280,7 +280,7 @@ describe("stopped 步骤的时间线归并（A-5）", () => {
   it("含 verdict 步 → state=completed（否定裁决不是失败、不需要引导注意）", () => {
     const model = buildTimelineModel(message({
       toolSteps: [
-        { id: "a", label: "定稿影响预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2 },
+        { id: "a", label: "定稿预览", toolName: "commit_preview", status: "verdict", startedAt: 1, endedAt: 2 },
         { id: "b", label: "建议下一步", toolName: "suggest_next_steps", status: "completed", startedAt: 3, endedAt: 4 },
       ],
     }))!;

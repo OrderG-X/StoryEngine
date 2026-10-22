@@ -403,7 +403,7 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     expect(textOf(events)).toContain("还在读前文（第 4 / 57 章）");
   });
 
-  it("核成且 0 处（ok:true）→ 问句「核账做完了，接下来？」、推荐「预览定稿」照旧（正常路不回归）", async () => {
+  it("核成且 0 处（ok:true）→ 问句「接下来？」、推荐「预览定稿」照旧（正常路不回归）", async () => {
     const events = await runCheck(async () => ({
       ok: true,
       chapter: 5,
@@ -414,12 +414,12 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     }));
     expect(textOf(events)).toContain("没发现和前文对不上的地方");
     const next = nextStepsOutput(events);
-    expect(next.question).toBe("核账做完了，接下来？");
+    expect(next.question).toBe("接下来？");
     expect(next.choices.map((c) => c.label)).toEqual(["预览定稿", "AI 写下一章"]);
     expect(next.choices[0]).toMatchObject({ label: "预览定稿", recommended: true });
   });
 
-  it("核成且确定 N 处 → 下一步只给次要选项（我自己改/预览定稿），不再出笼统的「改掉确定的 N 处」（R4.5：主按钮挪进核账卡）", async () => {
+  it("核成且确定 N 处 → 不挂下一步（改法都在核账卡上，稿纸工具条照样有「定稿」）", async () => {
     const events = await runCheck(async () => ({
       ok: true,
       chapter: 5,
@@ -428,14 +428,10 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
       failures: [],
       summary: "核了第 5 章：确定对不上 1 处。",
     }));
-    const next = nextStepsOutput(events);
-    expect(next.question).toBe("核账做完了，这几处怎么处理？");
-    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿"]);
-    expect(next.choices[0]).toMatchObject({ label: "我自己改", recommended: true });
-    expect(JSON.stringify(next.choices)).not.toContain("改掉确定");
+    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
   });
 
-  it("核成且确定 N 处、结果复用 → 次要选项后仍带「再细核一遍」", async () => {
+  it("核成且确定 N 处、结果复用 → 只问要不要「再核一遍」", async () => {
     const events = await runCheck(async () => ({
       ok: true,
       chapter: 5,
@@ -446,7 +442,8 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
       summary: "核了第 5 章：确定对不上 1 处。",
     }));
     const next = nextStepsOutput(events);
-    expect(next.choices.map((c) => c.label)).toEqual(["我自己改", "预览定稿", "再核一遍"]);
+    expect(next.question).toBe("结果同上次，要不要重新核？");
+    expect(next.choices.map((c) => c.label)).toEqual(["再核一遍"]);
   });
 });
 
@@ -477,19 +474,12 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(next.choices[1]).toMatchObject({ label: "AI 写下一章", action: { toolName: "generate_draft", chapter: 6 } });
   });
 
-  it("核成且确定 N 处 → 「我自己改」不带 action（开放式，照旧发文本），「预览定稿」直达", async () => {
-    const next = await runCheck(async () => ({ ok: true, chapter: 5, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }], maybe: [], failures: [], summary: "核了第 5 章：确定对不上 1 处。" }));
-    expect(next.choices[0]).toMatchObject({ label: "我自己改" });
-    expect(next.choices[0]).not.toHaveProperty("action");
-    expect(next.choices[1]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 5 } });
-  });
-
   it("结果复用 → 「再细核一遍」直达 check_continuity 且 fresh=true（重新核，不是给上次结果）", async () => {
     const next = await runCheck(async () => ({ ok: true, chapter: 5, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 4, reason: "r" }], maybe: [], failures: [], summary: "核了第 5 章：确定对不上 1 处。" }));
-    expect(next.choices[2]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
+    expect(next.choices[0]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
   });
 
-  it("出稿写好 → 「预览定稿」直达 commit_preview、「看核账结果」直达 check_continuity（复用核账记忆）；「我自己改」不带 action", async () => {
+  it("出稿写好 → 「预览定稿」直达 commit_preview、「看核账结果」直达 check_continuity（复用核账记忆），只这两个", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
@@ -502,8 +492,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
     expect(next.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 2 } });
     expect(next.choices[1]).toMatchObject({ label: "看核账结果", action: { toolName: "check_continuity", chapter: 2 } });
-    expect(next.choices[2]).toMatchObject({ label: "我自己改" });
-    expect(next.choices[2]).not.toHaveProperty("action");
+    expect(next.choices).toHaveLength(2);
   });
 
   it("出稿写好且写完核过账 → 回话只一句（字数），接着出核账卡（不再调模型），下一步按核账结果给", async () => {
@@ -532,8 +521,8 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(calls).toEqual(["generate_draft", "check_continuity"]);
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
     expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处、可能 1 处，画在稿纸上了。");
-    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["我自己改", "预览定稿"]);
+    // 核出确定的几处：改法在核账卡上，最后一个事件就是核账卡，不再挂下一步。
+    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity"]);
   });
 
   it("出稿写好但写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {

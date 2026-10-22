@@ -78,7 +78,7 @@ describe("ai_review 只读审稿工具", () => {
     expect("snapshotId" in out).toBe(false);
     expect("refreshScope" in out).toBe(false);
     expect(out.summary).toContain("可以定稿");
-    expect(out.summary).toMatch(/正文实际 \d+ 字/);
+    expect(out.actualWordCount).toBeGreaterThan(0);
   });
 
   it("审稿 prompt 注入服务端实测字数，禁止模型瞎估（dogfood 问题 10）", async () => {

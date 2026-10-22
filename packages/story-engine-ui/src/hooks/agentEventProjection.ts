@@ -21,7 +21,7 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NameDriftWarning, NextStepPrompt, StaleThreadWarningData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NextStepPrompt } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
@@ -81,10 +81,6 @@ export interface AgentToolResultOutput {
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
    *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
-  /** commit_preview 专属：人物名一致性提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「人物名一致性」提醒卡。 */
-  readonly nameConsistencyWarnings?: readonly NameDriftWarning[];
-  /** commit_preview 专属：伏笔/线索待收口提醒（agentChatClient 透传）。投影时挂到该消息→渲染固定「伏笔/线索待收口」提醒卡。 */
-  readonly staleThreadWarnings?: readonly StaleThreadWarningData[];
   /** commit_preview 专属：结构化定稿预览（R3，agentChatClient 透传）。投影时挂到该消息→渲染固定「定稿预览」卡。 */
   readonly commitPreview?: CommitPreviewCardData;
   /** commit_apply 专属：模型发起的定稿请求没写盘、等用户确认（agentChatClient 透传）。投影时挂「确认定稿」按钮。 */
@@ -142,10 +138,10 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
     stepLabel: "查看当前进度",
     card: { kind: "foundation", agentName: "stateOverviewReader", title: "查看当前进度" },
   },
-  read_chapters_overview: { stepLabel: "读取章节概览", card: null },
-  read_timeline: { stepLabel: "读取时间线", card: null },
+  read_chapters_overview: { stepLabel: "看章节", card: null },
+  read_timeline: { stepLabel: "看时间线", card: null },
   read_foundation: { stepLabel: "查设定本", card: null },
-  read_draft: { stepLabel: "读取工作稿原文", card: null },
+  read_draft: { stepLabel: "读稿", card: null },
   // 写资料
   foundation_write: {
     stepLabel: "改设定本",
@@ -177,7 +173,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   ai_review: { stepLabel: "内容审阅", card: null },
   check_ai_flavor: { stepLabel: "检查机器腔", card: null },
   // 入库簇
-  commit_preview: { stepLabel: "定稿影响预览", card: null },
+  commit_preview: { stepLabel: "定稿预览", card: null },
   commit_apply: { stepLabel: "定稿", card: null },
   // 线索与杂项簇
   edit_fact_ledger: { stepLabel: "记录故事事实", card: null },
@@ -190,7 +186,7 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   // 快照与外部簇
   undo_last_change: { stepLabel: "撤销上一步", card: null },
   prune_snapshots: { stepLabel: "裁剪操作历史", card: null },
-  web_search: { stepLabel: "联网检索资料", card: null },
+  web_search: { stepLabel: "联网查资料", card: null },
 };
 
 /**
@@ -212,9 +208,9 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "commit_preview",
 ]);
 
-/** 工具 id → 块体步骤展示；未知工具回退到带工具名的可读标签（不静默、不崩，但不强造卡）。 */
+/** 工具 id → 块体步骤展示；没登记的工具叫「其他步骤」（作者看的字里不出英文工具名；不静默、不崩，也不强造卡）。 */
 export function presentationFor(toolName: string): ToolPresentation {
-  return TOOL_PRESENTATION[toolName] ?? { stepLabel: `执行 ${toolName}`, card: null };
+  return TOOL_PRESENTATION[toolName] ?? { stepLabel: "其他步骤", card: null };
 }
 
 /**
@@ -350,16 +346,9 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
         return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
       }
-      // commit_preview 的固定卡（不管模型嘴上怎么说都照实显示）合并挂上、别互相顶掉：
-      //   · commitPreview（R3）：裁决（可否定稿）+ 阻断项 + 问题计数——模型可能把硬阻断说软或略过。
-      //   · nameConsistencyWarnings：本章名字疑似把已确立角色名写歪（近形错名）。
-      //   · staleThreadWarnings：伏笔/线索超 3 章没推进（埋了不收的遗漏）。
-      if (event.toolName === "commit_preview") {
-        return withCards(withEffects, [
-          ...(event.output?.commitPreview ? [{ type: "commit-preview" as const, preview: event.output.commitPreview }] : []),
-          ...(event.output?.nameConsistencyWarnings?.length ? [{ type: "name-drift" as const, warnings: event.output.nameConsistencyWarnings }] : []),
-          ...(event.output?.staleThreadWarnings?.length ? [{ type: "stale-threads" as const, warnings: event.output.staleThreadWarnings }] : []),
-        ]);
+      // commit_preview 的定稿预览卡（R3）：裁决（可否定稿）+ 阻断项 + 问题计数照实显示——模型可能把硬阻断说软或略过。
+      if (event.toolName === "commit_preview" && event.output?.commitPreview) {
+        return withCard(withEffects, { type: "commit-preview", preview: event.output.commitPreview });
       }
       return withEffects;
     }

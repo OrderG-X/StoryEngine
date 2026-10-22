@@ -181,7 +181,8 @@ export async function applyCommitToolLogic(input: {
     outcome.replayed
       ? `第 ${chapter} 章刚才已经定稿过了，这次没有重复写。`
       // 记了几条在定稿回执卡上，这里不复述（重构 P6：一回合一句结论）。
-      : `第 ${chapter} 章已定稿${outcome.result.recommitted ? "（换掉了原来的账）" : ""}，可一键撤销。`,
+      // 撤销在定稿回执卡上（「撤销这次定稿」），回话不再提。
+      : `第 ${chapter} 章已定稿${outcome.result.recommitted ? "（换掉了原来的账）" : ""}。`,
     ...(outcome.result.rejected.length > 0 ? [`有 ${outcome.result.rejected.length} 条没记上：${outcome.result.rejected.slice(0, 3).map((item) => item.message).join("；")}。`] : []),
     ...(outcome.result.orphanedThreads.length > 0
       ? [`换账后有 ${outcome.result.orphanedThreads.length} 条线索后文还在推进、这章却不再开它：${outcome.result.orphanedThreads.slice(0, 3).map((title) => `「${title}」`).join("")}，要看一下。`]

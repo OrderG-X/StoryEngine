@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import {
   describeReaderWait,
-  formatReaderWaitDuration,
   readReaderProgress,
   readerWaitingHandlers,
   writeReaderProgress,
@@ -94,22 +93,16 @@ describe("等读登记表（R6.1）：readReadersCatchUpStatus 合并 waiting，
 });
 
 describe("describeReaderWait（等读回执那一句，R5.2 必做 2）", () => {
-  it("多章：这次先等核账员读完第 51～58 章（用时 1 分 31 秒）再核", () => {
+  it("多章：这次先等核账员读完第 51～58 章再核（不报用时）", () => {
     expect(describeReaderWait("checker", { from: 51, to: 58, ms: 91_000 }, "核"))
-      .toBe("这次先等核账员读完第 51～58 章（用时 1 分 31 秒）再核");
+      .toBe("这次先等核账员读完第 51～58 章再核");
   });
 
-  it("单章不带波浪号；不足一分钟只报秒", () => {
+  it("单章不带波浪号", () => {
     expect(describeReaderWait("ledger", { from: 4, to: 4, ms: 8_400 }, "记账"))
-      .toBe("这次先等记账员读完第 4 章（用时 8 秒）再记账");
+      .toBe("这次先等记账员读完第 4 章再记账");
     expect(describeReaderWait("planner", { from: 1, to: 2, ms: 120_000 }, "拟纲"))
-      .toBe("这次先等章纲员读完第 1～2 章（用时 2 分钟）再拟纲");
+      .toBe("这次先等章纲员读完第 1～2 章再拟纲");
   });
 
-  it("用时的人话：秒取整、分钟整除不带秒", () => {
-    expect(formatReaderWaitDuration(0)).toBe("1 秒");
-    expect(formatReaderWaitDuration(59_400)).toBe("59 秒");
-    expect(formatReaderWaitDuration(60_000)).toBe("1 分钟");
-    expect(formatReaderWaitDuration(91_000)).toBe("1 分 31 秒");
-  });
 });

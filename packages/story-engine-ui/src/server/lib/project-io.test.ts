@@ -158,7 +158,7 @@ describe("readWorkspaceMessages 卡按 type 校验（重构 P5）", () => {
         { type: "error", detail: "boom" },
         { type: "status-notes", notes: ["历史窗口被裁剪", ""] },
         { type: "made-up", data: 1 },
-        { type: "name-drift", warnings: [{ establishedName: "", driftedVariant: "x", message: "坏" }] },
+        { type: "name-drift", warnings: [{ establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" }] },
         { type: "commit-preview", preview: { chapter: 3, canCommit: true } },
         "nope",
       ],
@@ -385,21 +385,9 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
         draftReview,
         qualityReport,
         commitReport,
-        nameConsistencyWarnings: [
-          { establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" },
-          { establishedName: "", driftedVariant: "x", message: "坏" },
-          "nope",
-        ],
-        staleThreadWarnings: [
-          {
-            kind: "foreshadowing",
-            title: "码头暗号",
-            lastTouchedChapter: 1,
-            chaptersSinceTouched: 4,
-            message: "超 3 章未触及",
-          },
-          { kind: "thread", title: "缺数字", message: "坏" },
-        ],
+        // 早已不出的「名字写歪」「线索久未推进」两种老提醒卡（2026-10-22 删）：认出来丢掉。
+        nameConsistencyWarnings: [{ establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" }],
+        staleThreadWarnings: [{ kind: "foreshadowing", title: "码头暗号", lastTouchedChapter: 1, chaptersSinceTouched: 4, message: "超 3 章未触及" }],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
       { id: "assistant-legacy", role: "assistant", content: "旧消息无报告字段" },
@@ -416,18 +404,8 @@ describe("readWorkspaceMessages self-heals legacy mock seed pollution", () => {
     expect(cardOf(msg, "draft-review")?.review).toEqual(draftReview);
     expect(cardOf(msg, "quality")?.report).toEqual(qualityReport);
     expect(cardOf(msg, "commit-report")?.report).toEqual(commitReport);
-    expect(cardOf(msg, "name-drift")?.warnings).toEqual([
-      { establishedName: "顾长风", driftedVariant: "顾长峰", message: "疑似写歪" },
-    ]);
-    expect(cardOf(msg, "stale-threads")?.warnings).toEqual([
-      {
-        kind: "foreshadowing",
-        title: "码头暗号",
-        lastTouchedChapter: 1,
-        chaptersSinceTouched: 4,
-        message: "超 3 章未触及",
-      },
-    ]);
+    expect(msg.cards?.map((card) => card.type)).not.toContain("name-drift");
+    expect(msg.cards?.map((card) => card.type)).not.toContain("stale-threads");
 
     const legacy = out[1];
     expect(legacy).toEqual({ id: "assistant-legacy", role: "assistant", content: "旧消息无报告字段" });

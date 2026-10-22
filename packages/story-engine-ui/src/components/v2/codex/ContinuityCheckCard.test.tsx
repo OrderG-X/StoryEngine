@@ -133,11 +133,13 @@ describe("核账卡：对设定本的条目（R7.3）", () => {
     fixChapter: 3,
   };
 
-  it("显示「第 3 章」那句 ↔「设定（人物卡）」，按钮写「改第 3 章」", async () => {
+  it("显示「第 3 章」那句，点「对照设定（人物卡）」才出设定原文；按钮写「改第 3 章」", async () => {
     const onRevise = vi.fn();
     const settingCheck = { chapter: 6, sure: [setting], maybe: [] };
     render(<ContinuityCheckCard check={settingCheck} onRevise={onRevise} />);
     expect(screen.getByText(/第 3 章：「沈师傅走了也有五年了。」/)).toBeTruthy();
+    expect(screen.queryByText(/设定（人物卡）：「爷爷沈敬山：三年前过世」/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "对照设定（人物卡）" }));
     expect(screen.getByText(/设定（人物卡）：「爷爷沈敬山：三年前过世」/)).toBeTruthy();
     const button = screen.getByRole("button", { name: "改第 3 章" });
     await act(async () => { fireEvent.click(button); });
@@ -145,11 +147,11 @@ describe("核账卡：对设定本的条目（R7.3）", () => {
     expect(onRevise.mock.calls[0]![0]).toContain("设定本人物卡里的「爷爷沈敬山：三年前过世」");
   });
 
-  it("新稿自己错的设定条目照旧显示「本章」、按钮「改这处」", () => {
+  it("新稿自己错的设定条目：原句不加章号前缀、按钮「改这处」", () => {
     const onRevise = vi.fn();
     const selfWrong = { chapter: 6, sure: [{ ...setting, earlierChapter: 6, fixChapter: undefined, quote: "他右手背上有疤。" }], maybe: [] };
     render(<ContinuityCheckCard check={selfWrong} onRevise={onRevise} />);
-    expect(screen.getByText(/本章：「他右手背上有疤。」/)).toBeTruthy();
+    expect(screen.getByText("「他右手背上有疤。」")).toBeTruthy();
     expect(screen.getByRole("button", { name: "改这处" })).toBeTruthy();
   });
 });

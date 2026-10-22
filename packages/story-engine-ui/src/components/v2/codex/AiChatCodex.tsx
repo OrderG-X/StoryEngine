@@ -64,8 +64,6 @@ import {
 } from "./chatRenderShared.js";
 import { CommitDeltaCard } from "./CommitDeltaCard.js";
 import { QualityCheckCard } from "./QualityCheckCard.js";
-import { NameConsistencyCard } from "./NameConsistencyCard.js";
-import { StaleThreadCard } from "./StaleThreadCard.js";
 import { CommitPreviewCard } from "./CommitPreviewCard.js";
 import { openCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
@@ -406,9 +404,10 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  // 「建议下一步」是收尾的内部一步，不上字幕。
   const busyCaption = busy
     ? operationCaption(props.draftActionLoading)
-      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running")?.label)
+      ?? runningStepCaption(lastAssistant?.toolSteps?.find((step) => step.status === "running" && step.toolName !== "suggest_next_steps"))
       ?? "AI 在忙…"
     : null;
 
@@ -793,11 +792,13 @@ function buildReviseIntent(issue: DraftReviewIssueView): string {
 
 /** 正在跑的那一步工具的叫法（按真实工具说，别按阶段笼统说——预览定稿时说「正在定稿」会吓人）。 */
 const RUNNING_STEP_WORDS: Readonly<Record<string, string>> = {
-  "定稿影响预览": "生成定稿预览",
+  "定稿预览": "生成定稿预览",
 };
 
-function runningStepCaption(step: string | undefined): string | null {
-  return step ? `正在${RUNNING_STEP_WORDS[step] ?? step}…` : null;
+function runningStepCaption(step: ToolStep | undefined): string | null {
+  if (!step) return null;
+  const label = toolStepLabel(step);
+  return `正在${RUNNING_STEP_WORDS[label] ?? label}…`;
 }
 
 // ─────────────────────────── 消息气泡 ───────────────────────────
@@ -913,6 +914,8 @@ function MessageBubbles({
   if (!hasAnything) return null;
 
   const canUndo = Boolean(onUndoToHere) && (model?.canUndo ?? false);
+  // 定稿回执卡自带「撤销这次定稿」（同一个回退），悬停的「撤销到此」就不再给。
+  const undoOnCard = canUndo && commitUndoable && Boolean(cardOf(message, "commit-report"));
   const canCopy = !isLiveAssistant && message.content.trim().length > 0;
   // 一轮拆成两块：思考、工具、工具之间的旁白收成一行「过程」；最后一个工具之后的正文是答复（见 processLogFold.ts）。
   const fold = foldTurn(buildMessageRenderSegments(message));
@@ -977,12 +980,6 @@ function MessageBubbles({
             onOpen={() => openCommitSheet(message.id)}
           />
         );
-      case "name-drift":
-        // 人物名一致性提醒卡：入库预览报出近形错名时固定醒目展示，不靠模型转述、不被说软。
-        return card.warnings.length ? <NameConsistencyCard key={card.type} warnings={card.warnings} /> : null;
-      case "stale-threads":
-        // 伏笔/线索待收口提醒卡：入库预览报出久未推进的伏笔/线索时固定醒目展示，治「埋了不收」的遗漏。
-        return card.warnings.length ? <StaleThreadCard key={card.type} warnings={card.warnings} /> : null;
       case "commit-report":
         // 入库 delta 卡：这章正式入库改了哪些角色/伏笔/线索/时间线/主线目标，随消息走。
         return (
@@ -1030,7 +1027,7 @@ function MessageBubbles({
       {/* 「建议动作」统一在 composer 正上方的建议条渲染（latestTurnSuggestedActions + .suggest），气泡内不再渲染。 */}
 
       {/* 回复下方的小动作（悬停才显）：复制回复文字 / 撤销到此。 */}
-      {(canCopy || canUndo) ? (
+      {(canCopy || (canUndo && !undoOnCard)) ? (
         <div className="se-msg-acts">
           {canCopy ? (
             <button
@@ -1045,7 +1042,7 @@ function MessageBubbles({
               <IconCopy size={13} />复制
             </button>
           ) : null}
-          {canUndo ? (
+          {canUndo && !undoOnCard ? (
             <button
               type="button"
               disabled={chatLoading}
@@ -1069,8 +1066,6 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "directions",
   "quality",
   "commit-preview",
-  "name-drift",
-  "stale-threads",
   "commit-report",
   "next-steps",
 ];

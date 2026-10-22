@@ -31,6 +31,7 @@ const outputSchema = z.object({
   ok: z.boolean().describe("审稿是否真正完成（走安全回退 usedFallback 时为 false，诚实不掩盖审稿未完成）。"),
   review: z.unknown().describe("审稿报告（评分/裁决/优点/问题清单/各维度笔记/是否建议入库）。"),
   usedFallback: z.boolean().describe("是否因模型不可用/输出不合规走了安全回退（诚实标注，不掩盖审稿未完成）。"),
+  actualWordCount: z.number().int().nonnegative().describe("服务端实测的正文字数；说到字数只用这个数，别自己估。"),
   summary: z.string().describe("审稿结论的自然语言摘要。"),
 });
 
@@ -39,6 +40,7 @@ export interface AIReviewToolOutput {
   readonly ok: boolean;
   readonly review: DraftAIReviewReport;
   readonly usedFallback: boolean;
+  readonly actualWordCount: number;
   readonly summary: string;
 }
 
@@ -71,6 +73,7 @@ export async function buildAIReviewToolOutput(input: {
     ok: result.ok,
     review: result.review,
     usedFallback: result.usedFallback,
+    actualWordCount: result.actualWordCount,
     summary: result.summary,
   };
 }

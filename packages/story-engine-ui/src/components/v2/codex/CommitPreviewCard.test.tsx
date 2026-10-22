@@ -16,7 +16,6 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(container.querySelector(".step-card.sc-attention")).toBeTruthy();
     expect(getByText("暂不可定稿")).toBeTruthy();
     expect(container.textContent ?? "").toContain("第 7 章还没有工作稿。");
-    expect(container.textContent ?? "").toContain("第 7 章目前不满足定稿条件");
   });
 
   it("canCommit:true 且无阻断 → done 徽章「可以定稿」、不说「暂不可定稿」", () => {
@@ -24,7 +23,7 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     const { container, getByText } = render(<CommitPreviewCard preview={preview} />);
     expect(container.querySelector(".step-card.sc-done")).toBeTruthy();
     expect(getByText("可以定稿")).toBeTruthy();
-    expect(container.textContent ?? "").toContain("第 7 章可以定稿。");
+    expect(container.textContent ?? "").toContain("定稿预览 · 第 7 章");
   });
 
   it("残缺不一致输出：canCommit:true 却带阻断项 → 按阻断项显示「暂不可定稿」（绝不显示可以定稿）", () => {
@@ -35,7 +34,7 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     };
     const { container } = render(<CommitPreviewCard preview={preview} />);
     expect(container.querySelector(".step-card.sc-attention")).toBeTruthy();
-    expect(container.textContent ?? "").toContain("不满足定稿条件");
+    expect(container.textContent ?? "").toContain("暂不可定稿");
   });
 
   it("质量问题计数行只在有计数时渲染（R7.7：明细直接进卡默认折叠，不再指向「质检卡」）", () => {
@@ -92,7 +91,7 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
   });
 
   // 本文件不做自动 cleanup，多次 render 会叠在 document 上——按钮一律在各自 container 内查。
-  it("可定稿：卡上只说要看几条、自动记几条，加【打开定稿清单】（清单在弹窗里，重构 P6）", () => {
+  it("可定稿：卡里一行「要你看几条 · 自动记几条」+【打开清单】（清单在弹窗里，重构 P6）", () => {
     const onOpen = vi.fn();
     const preview: CommitPreviewCardData = {
       chapter: 7,
@@ -105,10 +104,10 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
       ],
     };
     const { container } = render(<CommitPreviewCard preview={preview} confirmable onOpen={onOpen} />);
-    expect(container.textContent ?? "").toContain("第 7 章可以定稿：要你看 1 条，自动记下 2 条。");
+    expect(container.querySelector(".cpc-counts")?.textContent).toBe("要你看 1 条 · 自动记 2 条");
     expect(container.querySelector("input[type=checkbox]")).toBeNull();
     const open = container.querySelector<HTMLButtonElement>("button.cpc-confirm");
-    expect(open?.textContent).toBe("打开定稿清单");
+    expect(open?.textContent).toBe("打开清单");
     fireEvent.click(open!);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });

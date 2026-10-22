@@ -141,7 +141,9 @@
   }
   .se-todo-mark{font-size:10px;line-height:1;}
   .se-todo-step-label{font-weight:600;}
-  .se-todo-step-text.is-attention{color:var(--danger);font-weight:600;}
+  /* 核出确定要改的：「核账」那格标红、打个叹号，不呼吸（数写在主按钮上）。 */
+  .se-todo-steps li.is-attention{color:var(--danger);background:var(--danger-soft);animation:none;}
+  .se-todo-steps li.is-attention .se-todo-mark{font-weight:800;}
   .se-todo-steps .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
   .se-todo-primary{
     flex:none;height:32px;max-width:45%;padding:0 14px;border:0;border-radius:9px;color:var(--accent-ink);
@@ -253,6 +255,15 @@
     > .drc-desc{margin:9px 0 0;padding-left:0;font-size:12px;line-height:1.6;color:var(--muted);}
     .drc-fix{margin:10px 0 0;}
   }
+  /* 核账条目底下一行：左边「对照第 N 章」淡字链接，右边两个小按钮。 */
+  .step-card .cck-item{
+    > .drc-desc{margin:4px 0 0;}
+    > .cck-source{margin:8px 0 0;}
+    .cck-foot{display:flex;align-items:center;gap:6px;margin-top:8px;}
+    .cck-foot .drc-fix{margin:0;padding:3px 10px;}
+    .cck-src{margin-right:auto;padding:2px 0;border:0;background:none;font:inherit;font-size:11.5px;color:var(--faint);cursor:pointer;}
+    .cck-src:hover{color:var(--accent-hi);}
+  }
   /* 审稿条目：原句也做成引文块，和核账同一个样子；严重度左边一道同色细线。 */
   .step-card .drc-item:has(> .drc-line){
     > .drc-evi{margin:7px 0 0 26px;padding:1px 0 1px 10px;border-left:2px solid var(--line-strong);font-size:12px;line-height:1.7;color:var(--muted);}
@@ -266,8 +277,10 @@
   /* 「确认定稿」= 整个流程里唯一的落盘确认，做成实心强调色主按钮，一眼能找到。 */
   .step-card .cpc-confirm{height:34px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;}
   .step-card .cpc-confirm:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.06);}
-  .step-card .cpc-actions{display:flex;align-items:center;gap:8px;margin:0 0 10px;}
-  .step-card .cpc-actions .cpc-confirm{margin:0;}
+  .step-card .cpc-actions{display:flex;align-items:center;gap:8px;margin:0;}
+  .step-card .cpc-actions > button{margin:0 0 0 auto;}
+  .step-card .cpc-counts{font-size:12.5px;color:var(--muted);}
+  .step-card .cpc-actions .cpc-confirm{height:30px;padding:0 14px;}
   .step-card .cpc-decline{
     height:34px;padding:0 14px;border:1px solid var(--line-strong);border-radius:8px;background:transparent;
     color:var(--text);font-size:13px;cursor:pointer;
@@ -349,13 +362,6 @@
   .composer .send[data-stop]{background:var(--text);color:var(--bg);}
   .composer .send svg{display:block;}
   .codex-context-meter{color:var(--faint);}
-
-  /* 过期线索卡：类型小标中性、「已 N 章没推进」用提醒橙（不是错误红）。 */
-  .step-card .stc-item{background:var(--sunken);border-color:var(--line-weak);border-left:2px solid color-mix(in srgb,var(--warn) 55%,transparent);border-radius:4px 8px 8px 4px;}
-  .step-card .stc-kind{font-weight:500;color:var(--muted);border:0;background:var(--hover);border-radius:999px;padding:1px 8px;}
-  .step-card .stc-title{font-weight:500;}
-  .step-card .stc-gap{padding:0 7px;border-radius:999px;font-size:11.5px;color:var(--warn);background:var(--warn-soft);font-weight:500;}
-  .step-card .stc-since{color:var(--faint);}
 
   /* 拖宽手柄：平时不可见，悬停才出一条强调色细线（撤掉常驻的点阵握把）。 */
   .ai-resize::before{left:-1px;width:4px;height:20px;opacity:0;border-radius:2px;background:var(--accent);

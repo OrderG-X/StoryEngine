@@ -331,7 +331,7 @@ describe("projectAgentEvent", () => {
       },
     });
     expect(msg.toolSteps![0].status).toBe("verdict");
-    expect(msg.toolSteps![0].label).toBe("定稿影响预览");
+    expect(msg.toolSteps![0].label).toBe("定稿预览");
     // 落定：补 endedAt、带真实 summary 作详情——不再永远 running。
     expect(msg.toolSteps![0].endedAt).toBe(2);
     expect(msg.toolSteps![0].detail).toBe("第 99 章还没有工作稿，无法生成定稿预览。");
@@ -441,73 +441,6 @@ describe("projectAgentEvent", () => {
     expect(msg.toolSteps![0].detail).toContain("这次没有核");
   });
 
-  it("commit_preview 带 nameConsistencyWarnings → 挂到消息（固定展示提醒卡，不靠模型转述）", () => {
-    let msg = emptyAssistantMessage("preview-name-drift");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: true,
-        nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
-      },
-    });
-    expect(cardOf(msg, "name-drift")?.warnings).toEqual([
-      { establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" },
-    ]);
-  });
-
-  it("commit_preview 无 nameConsistencyWarnings → 不挂（无名字问题时不产生提醒卡）", () => {
-    let msg = emptyAssistantMessage("preview-no-drift");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: { ok: true },
-    });
-    expect(cardOf(msg, "name-drift")?.warnings).toBeUndefined();
-  });
-
-  it("commit_preview 带 staleThreadWarnings → 挂到消息（固定展示「伏笔/线索待收口」卡）", () => {
-    let msg = emptyAssistantMessage("preview-stale");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: true,
-        staleThreadWarnings: [{ kind: "线索", title: "师父失踪之谜", lastTouchedChapter: 1, chaptersSinceTouched: 5, message: "已 5 章没推进" }],
-      },
-    });
-    expect(cardOf(msg, "stale-threads")?.warnings).toEqual([
-      { kind: "线索", title: "师父失踪之谜", lastTouchedChapter: 1, chaptersSinceTouched: 5, message: "已 5 章没推进" },
-    ]);
-  });
-
-  it("commit_preview 同时带名字漂移 + 伏笔/线索待收口 → 两张卡都挂上（不互相顶掉）", () => {
-    let msg = emptyAssistantMessage("preview-both");
-    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
-    msg = projectAgentEvent(msg, {
-      type: "tool-result",
-      toolCallId: "p1",
-      toolName: "commit_preview",
-      endedAt: 2,
-      output: {
-        ok: true,
-        nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
-        staleThreadWarnings: [{ kind: "伏笔", title: "破损信物", lastTouchedChapter: 2, chaptersSinceTouched: 4, message: "已 4 章没推进" }],
-      },
-    });
-    expect(cardOf(msg, "name-drift")?.warnings).toHaveLength(1);
-    expect(cardOf(msg, "stale-threads")?.warnings).toHaveLength(1);
-  });
-
   it("commit_preview 带结构化裁决（R3）→ 挂 commitPreview：阻断项照实挂上，不靠模型转述", () => {
     let msg = emptyAssistantMessage("preview-verdict");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
@@ -536,7 +469,7 @@ describe("projectAgentEvent", () => {
     });
   });
 
-  it("commit_preview 可定稿（R3）→ 挂 commitPreview，与名字漂移提醒卡并存不顶掉", () => {
+  it("commit_preview 可定稿（R3）→ 挂 commitPreview", () => {
     let msg = emptyAssistantMessage("preview-ok");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 1 });
     msg = projectAgentEvent(msg, {
@@ -547,11 +480,9 @@ describe("projectAgentEvent", () => {
       output: {
         ok: true,
         commitPreview: { chapter: 7, canCommit: true, summary: "可以定稿。" },
-        nameConsistencyWarnings: [{ establishedName: "林澈", driftedVariant: "林棠", message: "疑似写歪" }],
       },
     });
     expect(cardOf(msg, "commit-preview")?.preview?.canCommit).toBe(true);
-    expect(cardOf(msg, "name-drift")?.warnings).toHaveLength(1);
   });
 
   it("status 事件（R4）→ 挂状态说明卡照实展示，且不污染助手正文", () => {
@@ -678,10 +609,10 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
   // 这份清单与 story-agent.ts 的 tools 注册一一对应（新增工具两边都要补）。
   const EXPECTED_STEP_LABELS: Record<string, string> = {
     read_state_overview: "查看当前进度",
-    read_chapters_overview: "读取章节概览",
-    read_timeline: "读取时间线",
+    read_chapters_overview: "看章节",
+    read_timeline: "看时间线",
     read_foundation: "查设定本",
-    read_draft: "读取工作稿原文",
+    read_draft: "读稿",
     foundation_write: "改设定本",
     generate_worldbuilding: "补全世界观",
     generate_asset_enrichment: "补全道具与资源",
@@ -697,7 +628,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     quality_check: "硬伤检查",
     ai_review: "内容审阅",
     check_ai_flavor: "检查机器腔",
-    commit_preview: "定稿影响预览",
+    commit_preview: "定稿预览",
     commit_apply: "定稿",
     edit_fact_ledger: "记录故事事实",
     suggest_next_steps: "建议下一步",
@@ -708,7 +639,7 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
     manage_style_exemplars: "管理文风样本",
     undo_last_change: "撤销上一步",
     prune_snapshots: "裁剪操作历史",
-    web_search: "联网检索资料",
+    web_search: "联网查资料",
   };
 
   it("commit_apply 的块体步骤标签是『正式入库』（人话，不是 执行 commit_apply）", () => {
@@ -753,15 +684,15 @@ describe("presentationFor — 全部 32 工具块体详情人话标签（时间�
   });
 
   it("未知工具仍回退到带工具名的可读标签（不静默、不崩）", () => {
-    expect(presentationFor("some_future_tool").stepLabel).toBe("执行 some_future_tool");
+    expect(presentationFor("some_future_tool").stepLabel).toBe("其他步骤");
     expect(presentationFor("some_future_tool").card).toBeNull();
   });
 
   it("resolveToolStepLabel：有 toolName 现取中文；无 toolName 从旧『执行 xxx』英文 label 反解中文；都不行回退", () => {
-    expect(resolveToolStepLabel("read_draft", "执行 read_draft")).toBe("读取工作稿原文"); // 有 toolName → 现取
+    expect(resolveToolStepLabel("read_draft", "执行 read_draft")).toBe("读稿"); // 有 toolName → 现取
     expect(resolveToolStepLabel(undefined, "执行 suggest_next_steps")).toBe("建议下一步"); // 旧历史无 toolName → 反解
-    expect(resolveToolStepLabel(undefined, "执行 read_draft")).toBe("读取工作稿原文");
-    expect(resolveToolStepLabel(undefined, "执行 some_future_tool")).toBe("执行 some_future_tool"); // 未知工具回退
+    expect(resolveToolStepLabel(undefined, "执行 read_draft")).toBe("读稿");
+    expect(resolveToolStepLabel(undefined, "执行 some_future_tool")).toBe("其他步骤"); // 未知工具：不露英文名
     expect(resolveToolStepLabel(undefined, "思考过程")).toBe("思考过程"); // 非『执行 xxx』形态原样
     expect(resolveToolStepLabel(undefined, undefined)).toBe(""); // 兜底不崩
   });

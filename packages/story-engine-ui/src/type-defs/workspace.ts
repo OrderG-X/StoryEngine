@@ -93,10 +93,6 @@ export type MessageCard =
   | { readonly type: "ai-flavor"; readonly report: AiFlavorReport; readonly fixedIds?: readonly string[] }
   /** AI 提的「下一步」选项（suggest_next_steps）。 */
   | { readonly type: "next-steps"; readonly prompt: NextStepPrompt }
-  /** 名字写歪提醒（commit_preview）。 */
-  | { readonly type: "name-drift"; readonly warnings: readonly NameDriftWarning[] }
-  /** 线索久未推进提醒（commit_preview）。 */
-  | { readonly type: "stale-threads"; readonly warnings: readonly StaleThreadWarningData[] }
   /** 这一轮出错了（整条消息按错误卡渲染）；detail＝技术详情里的原始报错，reason＝服务端分的类（P11，老消息没有）。 */
   | { readonly type: "error"; readonly detail?: string; readonly reason?: AiErrorReason }
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
@@ -137,20 +133,6 @@ export interface ContinuityCheckData {
 export interface NextStepPrompt {
   readonly question: string;
   readonly choices: readonly { readonly label: string; readonly intent: string; readonly recommended?: boolean; readonly action?: import("../api/agentChatClient.js").AgentUserAction }[];
-}
-
-export interface NameDriftWarning {
-  readonly establishedName: string;
-  readonly driftedVariant: string;
-  readonly message: string;
-}
-
-export interface StaleThreadWarningData {
-  readonly kind: string;
-  readonly title: string;
-  readonly lastTouchedChapter: number;
-  readonly chaptersSinceTouched: number;
-  readonly message: string;
 }
 
 /** 核账卡上的一条（check_continuity 投影）：本章原句 ↔ 前文原句；对设定本的条目 earlierQuote＝设定原文。 */

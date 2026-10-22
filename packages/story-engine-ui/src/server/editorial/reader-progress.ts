@@ -63,7 +63,7 @@ export async function readReaderProgress(notesRoot: string, roleId: string): Pro
 }
 
 // ---------------------------------------------------------------------------
-// 等读回执（R5.2 必做 2）：动作等过补读，回执加一句「这次先等 X 读完第 a～b 章（用时 …）再 Y」
+// 等读回执（R5.2 必做 2）：动作等过补读，回执加一句「这次先等 X 读完第 a～b 章再 Y」
 // ---------------------------------------------------------------------------
 
 /** 一次当场等读的事实：补了第 from～to 章笔记、花了 ms 毫秒。 */
@@ -73,20 +73,11 @@ export interface ReaderWaited {
   readonly ms: number;
 }
 
-/** 等读用时的人话（「1 分 31 秒」/「45 秒」）。 */
-export function formatReaderWaitDuration(ms: number): string {
-  const totalSeconds = Math.max(1, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes <= 0) return `${seconds} 秒`;
-  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
-}
-
-/** 等读那一句：如「这次先等核账员读完第 51～58 章（用时 1 分 31 秒）再核」。action 是句尾动词（再核 / 再拟纲 / 再记账）。 */
+/** 等读那一句：如「这次先等核账员读完第 51～58 章再核」（用时不报，2026-10-22 减字）。action 是句尾动词（再核 / 再拟纲 / 再记账）。 */
 export function describeReaderWait(roleId: string, waited: ReaderWaited, action: string): string {
   const label = READER_ROLE_LABELS[roleId] ?? roleId;
   const span = waited.from >= waited.to ? `第 ${waited.from} 章` : `第 ${waited.from}～${waited.to} 章`;
-  return `这次先等${label}读完${span}（用时 ${formatReaderWaitDuration(waited.ms)}）再${action}`;
+  return `这次先等${label}读完${span}再${action}`;
 }
 
 // ---------------------------------------------------------------------------

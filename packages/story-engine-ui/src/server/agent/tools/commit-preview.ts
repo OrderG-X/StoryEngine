@@ -255,7 +255,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
     summary: notes.length > 0 ? `${head}${notes.map((note) => `【${note}】`).join("")}` : head,
     ...(notes.length > 0 ? { notes } : {}),
     modelHint:
-      "预览通过：请作者看清单、点预览卡上的「确认定稿」按钮写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
+      "预览通过：请作者在定稿清单里点「确认定稿」写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
       "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。",
     ledgerChecklist,
   };

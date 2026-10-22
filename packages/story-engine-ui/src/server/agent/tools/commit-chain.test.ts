@@ -187,7 +187,6 @@ describe("commit_apply", () => {
     expect(out.report).toMatchObject({ chapter: 1, ledger: { facts: 2, threadsOpened: 1, threadsClosed: 0, present: 1, day: 3, notRecorded: 0 } });
     expect(out.draftBody?.startsWith("周二傍晚")).toBe(true);
     expect(out.summary).toContain("第 1 章已定稿");
-    expect(out.summary).toContain("可一键撤销");
     expect(await readFile(join(book, "chapters", "0001.md"), "utf-8")).toBe(CH1);
     const view = await projectBook(book);
     expect(view.chapters[0]).toMatchObject({ day: 3, dayBasis: "author", present: ["林远"] });

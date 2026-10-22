@@ -132,7 +132,7 @@ export function getPlaceholder(flowStatus: string, isOpenBook = false): string {
       return "说「定稿预览」生成定稿预览，或让 AI 做内容审阅…";
     case "commit_preview_ready":
     case "waiting_commit_confirmation":
-      return "检查定稿预览，点「确认定稿」执行…";
+      return "在定稿清单里看一遍，点「确认定稿」…";
     case "committed":
     case "ready_for_next":
       return "说「下一章」继续…";
