@@ -22,18 +22,23 @@ export const TASK_HINTS: Record<string, string> = {
 
 /**
  * 每个任务的「思考」软建议（2026-06-23 调研修正）：创作类(正文/改稿)建议关——思考把创作"理性化"反而更AI腔、更慢；
- * 动脑类(章节方案/审稿/质检)建议开——规划/一致性/评判靠推理加分；
+ * 动脑类(审稿/质检)建议开——一致性/评判靠推理加分；
  * **主对话(triage)建议开**——它是 agent 编排器(意图→选对工具→规划多步)，不是闲聊，思考帮它少调错工具少幻觉
  * （证据：agentic 研究里强 agent 一律走 Deliberative Mode 先想再动手）。仅提示，用户随意调。
+ * 章纲 2026-10-23 改建议关：章纲员的窗口是读过的全书，开思考在 GLM 上 6 遍全想过 150 秒上限被掐、再关思考重拟，
+ * 最后用的都是不思考的章纲，每章白等 150 秒；关了拟纲从 4～7 分钟降到 1.5 分钟（docs/rebuild/reports/出稿守前文-2026-10-23.md）。
  */
 export const TASK_SUGGEST_THINKING: Record<string, boolean> = {
   fastDraft: false,
   triage: true,
   repair: false,
-  chapterSteering: true,
+  chapterSteering: false,
   draftReview: true,
   qualityCheck: true,
 };
+
+/** 思考开关不起作用的任务：硬伤检查（核账员，editorial/checker 的 callConfiguredBrainModel）代码里固定关思考，界面不给开关、只写明。 */
+export const TASK_THINKING_FIXED_OFF: ReadonlySet<string> = new Set(["qualityCheck"]);
 
 export interface SavedProvider {
   readonly id: string;

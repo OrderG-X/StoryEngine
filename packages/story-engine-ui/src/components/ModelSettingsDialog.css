@@ -938,6 +938,10 @@
   border-left: 1px solid color-mix(in srgb,var(--accent) 18%,transparent);
 }
 
+.ms-task-think-fixed {
+  cursor: default;
+}
+
 .ms-task-think input {
   cursor: pointer;
   accent-color: var(--se-v2-accent);

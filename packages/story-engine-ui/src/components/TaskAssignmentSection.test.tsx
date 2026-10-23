@@ -28,7 +28,7 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
     expect(screen.getByText(/通读整章/u)).toBeTruthy();
   });
 
-  it("每个任务渲染一个思考开关（checkbox），共 6 个", () => {
+  it("思考开关只给真起作用的 5 个任务；查硬伤（核账员固定关思考）写明「不用思考」、不给开关", () => {
     render(
       <TaskAssignmentSection
         tasks={{}}
@@ -38,7 +38,22 @@ describe("TaskAssignmentSection 6 行两旋钮", () => {
         onToggleThinking={() => {}}
       />,
     );
-    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(5);
+    expect(screen.getAllByText("不用思考")).toHaveLength(1);
+  });
+
+  it("章纲建议关思考（拟纲开思考在全书窗口上常想过上限被掐、再关思考重拟）", () => {
+    render(
+      <TaskAssignmentSection
+        tasks={{}}
+        thinking={{}}
+        savedProviders={[]}
+        onEditTask={() => {}}
+        onToggleThinking={() => {}}
+      />,
+    );
+    const row = screen.getByText("章纲").closest(".ms-task-row");
+    expect(row?.textContent).toContain("建议关");
   });
 
   it("点击思考开关回调 onToggleThinking", () => {
