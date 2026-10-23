@@ -1,6 +1,5 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { stripMarkdownEmphasis } from "./fast-draft-writer.js";
+import { stripMarkdownEmphasis } from "./markdown-emphasis.js";
 
 describe("stripMarkdownEmphasis：正文里的 Markdown 粗体记号去掉、原文保留", () => {
   it("成对 ** / __ 去掉", () => {

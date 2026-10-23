@@ -34,6 +34,7 @@ import {
 import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-diagnostics.js";
 import { describeErrorBriefly } from "../book/project-store.js";
 import { readBibleTolerant } from "./setting-pack.js";
+import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -639,17 +640,6 @@ function looksLikeToolOrJsonArtifact(content: string): boolean {
     }
   }
   return /tool_call|function_call|"arguments"\s*:|"name"\s*:/iu.test(content);
-}
-
-/**
- * 去掉小说正文里的 Markdown 强调记号：**粗体** / __粗体__ → 原文。
- * 模型偶尔把句子包成粗体，正文是纯文本、编辑器不渲染 Markdown，记号会原样出现在稿纸上（「**九号，西侧，二层。**」）。
- * 只认成对、同一行内的记号；单个星号（如「*」作分隔或引用）不动。题材中立、纯确定性。
- */
-export function stripMarkdownEmphasis(content: string): string {
-  return content
-    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/gu, "$1")
-    .replace(/__(?=\S)([^_\n]*?\S)__/gu, "$1");
 }
 
 /** 分段标记最长几个字（括号里头）：「本章未完」「未完待续」「前半章完」都在这以内。 */

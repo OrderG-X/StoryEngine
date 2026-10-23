@@ -11,7 +11,7 @@ import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { ChapterTitle } from "./ChapterTitle.js";
 import { IconPencil } from "./icons.js";
-import { useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
+import { useChapterDirections, useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
 import { useUiStore } from "../../../stores/uiStore.js";
 import { useDisplaySettingsStore } from "../../../stores/displaySettingsStore.js";
@@ -22,6 +22,7 @@ import {
 import {
   STARTER_INTENTS,
   isStarterEmptyWorkspace,
+  starterSteps,
 } from "./starterGuidance.js";
 import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
@@ -95,6 +96,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   readonly onAskAboutSelection?: (selectionText: string) => void;
   /** 新书起步按钮：把半句话填进右侧输入框（不发送）。 */
   readonly onFillComposer?: (text: string) => void;
+  /** 新书首屏三步看的设定本：有哪些卡、故事设定填没填。 */
+  readonly starter?: { readonly cardNames: readonly string[]; readonly storyFilled: boolean };
   /** 按章号打开一章（已定稿时工具条的「去第 N 章」）。 */
   readonly onOpenChapter?: (chapter: number) => void;
 }) {
@@ -116,12 +119,24 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   const draftWordCount = draft.wordCount ?? 0;
   // 「作者写、AI 管账」：新书首屏第一个按钮是「自己动笔写」——点了直接出稿纸（2026-10-10 验收：新书原先只有三个让 AI 写的按钮，作者没地方下笔）。
   const [authorStarted, setAuthorStarted] = useState(false);
-  const showStarter = isStarterEmptyWorkspace({ draft, chapters: props.workspace.chapters }) && !authorStarted;
+  // AI 出了走法、或正在出稿，就收起引导：走法挂在稿纸上方、拟纲进度写在稿纸里，引导盖着作者就看不到
+  // （2026-10-23 从零走查：AI 说「在稿纸上方挑」，稿纸上还是「从一句话开始」）。
+  const chapterDirections = useChapterDirections(draft.chapterNumber);
+  const generatingDraft = useBookStore((s) => s.workspace.flowStatus === "draft_generating");
+  const showStarter = isStarterEmptyWorkspace({ draft, chapters: props.workspace.chapters })
+    && !authorStarted && !chapterDirections && !generatingDraft;
   // 「自己动笔写」：收起引导、光标直接落进稿纸（不然还得再找地方点一下）。
   function startWriting() {
     setAuthorStarted(true);
     window.setTimeout(() => document.querySelector<HTMLElement>(".codex-app .se-v2-draft-editor")?.focus(), 60);
   }
+  const steps = starterSteps({ chapter: draft.chapterNumber, cardNames: props.starter?.cardNames ?? [], storyFilled: props.starter?.storyFilled ?? false });
+  const storyDone = steps[0]!.done;
+  // 首屏点了「出几种走法」：想的这一两分钟按钮上说在想，走法一到引导就收起（见上面 showStarter）。
+  const [askedDirections, setAskedDirections] = useState(false);
+  useEffect(() => {
+    if (!workspaceBusy) setAskedDirections(false);
+  }, [workspaceBusy]);
   const paperDraft = draft;
   const showEditHint = activeTab === "draft" && draft.status !== "committed" && draft.streaming !== true;
   const targetWords = targetChapterWordsOf(props.overview);
@@ -223,12 +238,45 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             <div className="cd-starter" aria-label="新书起步引导">
               <span className="cd-starter-mark" aria-hidden="true"><IconPencil size={22} /></span>
               <h2 className="cd-starter-title">从一句话开始</h2>
-              <p className="cd-starter-sub">直接在稿纸上写，AI 帮你记人物、东西、伏笔，查前后对不对得上。也可以先跟 AI 聊聊。</p>
+              <ol className="cd-starter-steps" aria-label="开书三步">
+                {steps.map((step, index) => (
+                  <li key={step.key} className={step.done ? "is-done" : ""}>
+                    <span className="cd-starter-step-mark" aria-hidden="true">{step.done ? "✓" : index + 1}</span>
+                    <b>{step.label}</b>
+                    <span>{step.hint}</span>
+                  </li>
+                ))}
+              </ol>
               <div className="cd-starter-actions" role="group" aria-label="起步意图">
                 <button type="button" className="cd-starter-btn" onClick={startWriting}>
                   自己动笔写
                 </button>
-                {STARTER_INTENTS.map((item) => (
+                {storyDone ? (
+                  <>
+                    {/* 故事说过了：下一步是这一章往哪走（和稿纸上方「给我几种走法」同一个动作），或者直接让 AI 起草。 */}
+                    <button
+                      type="button"
+                      className="cd-starter-btn is-ghost"
+                      disabled={!props.onSendUserAction || workspaceBusy}
+                      onClick={() => {
+                        setAskedDirections(true);
+                        props.onSendUserAction?.({ toolName: "brainstorm_chapter", chapter: draft.chapterNumber });
+                      }}
+                    >
+                      {askedDirections && workspaceBusy ? "AI 在想几种走法，要一两分钟……" : "给我几种走法"}
+                    </button>
+                    {askedDirections && workspaceBusy ? null : (
+                      <button
+                        type="button"
+                        className="cd-starter-btn is-ghost"
+                        disabled={!props.onChapterButton || workspaceBusy}
+                        onClick={() => props.onChapterButton?.("write")}
+                      >
+                        AI 写这一章
+                      </button>
+                    )}
+                  </>
+                ) : STARTER_INTENTS.map((item) => (
                   <button
                     key={item.key}
                     type="button"

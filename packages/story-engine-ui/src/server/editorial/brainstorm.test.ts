@@ -134,6 +134,21 @@ describe("头脑风暴：整条（章纲员出 → 核账员核）", () => {
     expect(checker.calls.filter((call) => call.json)).toHaveLength(1);
   });
 
+  it("前面一章都没定稿（新书第一章）：核账员不核、不说核过，也不说没核成", async () => {
+    const dir = await makeBook();
+    const checker = fakeReader(JSON.stringify({ problems: [] }));
+    const result = await brainstormChapter({
+      projectDir: dir,
+      chapter: 1,
+      callPlanner: fakeReader(OPTIONS_JSON).callModel,
+      callChecker: checker.callModel,
+      readThreads: async () => THREADS,
+    });
+    expect(result).toMatchObject({ ok: true, checked: false, nothingEarlier: true });
+    if (result.ok) expect(result.checkNote).toBeUndefined();
+    expect(checker.calls).toHaveLength(0);
+  });
+
   it("章纲员两次都没给出能用的走法 → ok:false 如实说；核账员挂了 → 照给走法，checked:false 说没核成", async () => {
     const dir = await makeBook();
     const bad = await brainstormChapter({

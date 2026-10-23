@@ -137,8 +137,11 @@ describe("WritingPaper", () => {
   it("写完还在核对前文、按核账改（check 阶段）→ 稿纸上一行提示正文还会换；别的阶段不出", () => {
     useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
     useUiStore.getState().setDraftPhase("check");
-    const { rerender } = render(<WritingPaper draft={baseDraft} onEdit={vi.fn()} />);
-    expect(screen.getByRole("status").textContent).toContain("改好自动换上");
+    const { rerender } = render(<WritingPaper draft={{ ...baseDraft, chapterNumber: 2 }} onEdit={vi.fn()} />);
+    expect(screen.getByRole("status").textContent).toBe("AI 在对前文，有对不上的会改掉，改好自动换上");
+    // 第一章没有前文：说核对前后。
+    rerender(<WritingPaper draft={{ ...baseDraft, chapterNumber: 1 }} onEdit={vi.fn()} />);
+    expect(screen.getByRole("status").textContent).toBe("AI 在核对前后，有对不上的会改掉，改好自动换上");
     useUiStore.getState().setDraftPhase("write");
     rerender(<WritingPaper draft={{ ...baseDraft }} onEdit={vi.fn()} />);
     expect(screen.queryByText(/改好自动换上/u)).toBeNull();

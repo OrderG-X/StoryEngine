@@ -43,7 +43,7 @@ export interface QualityPipelineInfo {
   readonly continuation?: { readonly before: number; readonly after: number; readonly rounds: number; readonly failures: readonly string[] };
   readonly continuity?: {
     readonly checked: boolean;
-    /** 确定对不上的 / 可能对不上的——都留给作者定（不自动改）。 */
+    /** 改完再核还剩的确定 / 可能对不上——留给作者定。 */
     readonly sure: readonly ChapterCheckItem[];
     readonly maybe: readonly ChapterCheckItem[];
     readonly failures: readonly string[];

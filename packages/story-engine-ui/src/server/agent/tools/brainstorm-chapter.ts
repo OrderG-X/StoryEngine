@@ -65,9 +65,12 @@ export async function runBrainstormTool(input: {
   });
   if (!result.ok) return { ok: false, chapter: input.chapter, summary: `第 ${input.chapter} 章的走法没想出来：${result.reason}` };
   const conflicted = result.options.filter((option) => option.problems.length > 0).length;
-  const tail = !result.checked
-    ? "核账员这次没核成，挑之前留意前文。"
-    : conflicted > 0 ? `其中 ${conflicted} 种和前文有对不上的地方，卡上标了。` : "";
+  // 新书第一章没前文可核，不提核账。
+  const tail = result.nothingEarlier
+    ? ""
+    : !result.checked
+      ? "核账员这次没核成，挑之前留意前文。"
+      : conflicted > 0 ? `其中 ${conflicted} 种和前文有对不上的地方，卡上标了。` : "";
   return {
     ok: true,
     chapter: result.chapter,

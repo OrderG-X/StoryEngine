@@ -13,7 +13,7 @@
  * - 题材中立：description / summary 用中性词。
  */
 import { buildStateOverview, type StateOverview } from "../../book/state-overview.js";
-import { stripMarkdownEmphasis } from "../../writing/fast-draft-writer.js";
+import { stripMarkdownEmphasis } from "../../../lib/markdown-emphasis.js";
 import { type DraftRevisionPreview } from "../../writing/draft-revision.js";
 import { withBookLock } from "@actalk/story-core";
 import { createTool } from "@mastra/core/tools";

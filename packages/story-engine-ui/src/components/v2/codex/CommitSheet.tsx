@@ -21,6 +21,7 @@ import { IconClose } from "./icons.js";
 import { confirmableCommitPreviewMessageId } from "./commitConfirm.js";
 import { closeCommitSheet, useCommitSheet } from "../../../workspace/commitSheet.js";
 import { useChatStore } from "../../../stores/chatStore.js";
+import { useBookStore } from "../../../stores/bookStore.js";
 import { cardOf } from "../../../utils/messageCards.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import type { SuggestedAction } from "../../../types.js";
@@ -105,6 +106,7 @@ export function CommitSheet({
   onConfirm,
   onClose,
   presence,
+  firstCommit = false,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 有动作在跑：按钮先不让点。 */
@@ -114,6 +116,8 @@ export function CommitSheet({
   readonly onClose: () => void;
   /** 关的时候播退场（usePresence）。 */
   readonly presence?: PresenceHandle;
+  /** 这本书还没定稿过：头一回说一句定稿是干什么的（2026-10-23 从零走查：新作者不知道定稿和存稿有什么两样）。 */
+  readonly firstCommit?: boolean;
 }) {
   const ledger = preview.ledgerChecklist ?? [];
   const { day, review, auto } = splitChecklist(ledger);
@@ -174,6 +178,9 @@ export function CommitSheet({
         </header>
 
         <div className="se-cs-body">
+          {firstCommit && editable ? (
+            <p className="se-cs-intro">定稿就是把这章记进账：谁出场、出了什么事、埋了什么线。往后 AI 写、核账，都对着账查。</p>
+          ) : null}
           {day ? (
             <div className={`se-cs-day${day.needsConfirm ? " is-attention" : ""}`}>
               <span>{dayOverride !== undefined ? `这一章改记为故事第 ${dayOverride} 天` : day.label}</span>
@@ -314,6 +321,7 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
 }) {
   const openId = useCommitSheet((state) => state.messageId);
   const messages = useChatStore((state) => state.messages);
+  const firstCommit = useBookStore((state) => !state.workspace.chapters.some((chapter) => chapter.hasCommittedChapter === true || chapter.status === "committed"));
   // 关上时还要把那张清单留着播完退场：记住最后打开的是哪条。
   const presence = usePresence(Boolean(openId));
   const lastId = useRef(openId);
@@ -335,5 +343,5 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
       }));
     }
     : undefined;
-  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} presence={presence} />;
+  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} presence={presence} firstCommit={firstCommit} />;
 }

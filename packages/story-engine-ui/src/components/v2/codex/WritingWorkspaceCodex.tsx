@@ -14,7 +14,7 @@ import { StoryMap } from "./StoryMap.js";
 import { ChapterChanges } from "./ChapterChanges.js";
 import { BibleBook, type BibleCat } from "./BibleBook.js";
 import { useBible } from "./useBible.js";
-import { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf } from "./bibleIndex.js";
+import { bibleNavCounts, bibleSearchSources, mentionNamesOf, namePeekCardsOf, paletteCharactersOf, starterCardNamesOf } from "./bibleIndex.js";
 import { searchLibraryIndex } from "./librarySearch.js";
 import OperationHistoryView from "./OperationHistoryView.js";
 import { SettingsModal, type SettingsTab } from "./SettingsModal.js";
@@ -294,6 +294,10 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
   const paletteCharacters = useMemo(() => paletteCharactersOf(bibleState.bible), [bibleState.bible]);
   const bibleCounts = useMemo(() => bibleNavCounts(bibleState.bible), [bibleState.bible]);
   const peekCards = useMemo(() => namePeekCardsOf(bibleState.bible), [bibleState.bible]);
+  const starter = useMemo(() => ({
+    cardNames: starterCardNamesOf(bibleState.bible),
+    storyFilled: (bibleState.bible?.story ?? []).some((field) => field.value.trim()),
+  }), [bibleState.bible]);
   const mentionNames = useMemo(() => mentionNamesOf(bibleState.bible), [bibleState.bible]);
   const openInBible = (target: string, name?: string) => {
     setView("library");
@@ -733,6 +737,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                 {...props}
                 onOpenChapter={openChapterNumber}
                 peekCards={peekCards}
+                starter={starter}
                 onOpenCharacter={(name) => openInBible("chars", name)}
                 onAskAboutSelection={(text) => fillComposer(`关于这段「${quoteForComposer(text)}」，`)}
                 onFillComposer={fillComposer}
