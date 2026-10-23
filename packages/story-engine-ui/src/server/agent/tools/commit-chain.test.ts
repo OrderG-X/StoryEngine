@@ -143,6 +143,16 @@ describe("commit_preview", () => {
     expect(JSON.stringify(out.summary)).not.toMatch(/commit_apply|c1-|t1-/u);
   });
 
+  it("第 1 章正文没写时间：天数说「先这么记」，不提没有的上一章（2026-10-23 桌面包走查）", async () => {
+    await writeDraft(1, CH1);
+    const { time: _time, ...noTime } = LEDGER1;
+    const out = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(noTime) });
+    const day = (out.ledgerChecklist ?? [])[0];
+    expect(day?.label).toContain("故事第 1 天");
+    expect(day?.label).toContain("先这么记");
+    expect(day?.label).not.toContain("上一章");
+  });
+
   it("工具入口：不传章号用前端带的当前章；都没有就如实报缺章号", async () => {
     await expect(previewExecute({}, modelContext())).rejects.toThrow("缺少章号");
     const out = (await previewExecute({}, modelContext(1))) as { chapter: number; canCommit: boolean };

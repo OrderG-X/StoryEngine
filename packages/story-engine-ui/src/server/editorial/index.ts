@@ -23,6 +23,7 @@ import { LEDGER_ROLE } from "./ledger-keeper.js";
 import { PLANNER_ROLE, callConfiguredPlannerModel } from "./planner.js";
 import { countCommittedChapters, ensureReaderWindow, type BrainCallModel, type ReaderRole } from "./reader-window.js";
 import { beginReread, runReread } from "./reread.js";
+import { writeReaderProgress } from "./reader-progress.js";
 import { readRereadState } from "./reread-state.js";
 import { withUsageBook } from "../lib/usage-scope.js";
 
@@ -175,7 +176,15 @@ export async function maybeStartReadersCatchUp(
     }
     const wanted = readerRoles();
     const total = await countCommittedChapters(projectDir);
-    if (total <= 0) return;
+    if (total <= 0) {
+      // 一章定稿都没有就没有前文可读。补读途中进程被杀、定稿又全撤了的话，盘上留着 reading:true 没人收尾，
+      // 进度行会一直挂「核账员 0/1」（2026-10-23 桌面包走查）：标回不在读。真有补读还在跑，它收尾时自己会再写。
+      for (const role of wanted) {
+        const progress = await readReaderProgress(projectDir, role.id);
+        if (progress?.reading) await writeReaderProgress(projectDir, { role: role.id, reading: false, done: 0, total: 0, updatedAt: new Date().toISOString() });
+      }
+      return;
+    }
     for (const role of wanted) {
       const progress = await readReaderProgress(projectDir, role.id);
       if (!progress || progress.reading || progress.done < total) {

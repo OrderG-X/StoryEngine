@@ -529,7 +529,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
   it("只剩「可能」：稿纸默认不画，回话说在卡上点开看，不说画上了", () => {
     const item = { quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" };
     expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [item] })).toBe("写完核了一遍：没有确定对不上的；可能 1 处，在卡上点开看。");
-    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，按前文改了 2 处；再核还有确定对不上 1 处，画在稿纸上了。");
+    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，改了 2 处对不上的；再核还有确定对不上 1 处，画在稿纸上了。");
   });
 
   it("写完核出的已按前文改过（2026-10-23）→ 回话说改了几处、再核还剩几处（作者看着正文变了，得知道是改过的）", async () => {
@@ -545,7 +545,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
       scrubError: String,
     });
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toContain("写完核账，按前文改了 3 处；再核还有确定对不上 1 处，画在稿纸上了。");
+    expect(text).toContain("写完核账，改了 3 处对不上的；再核还有确定对不上 1 处，画在稿纸上了。");
   });
 
   it("出稿写好但写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {

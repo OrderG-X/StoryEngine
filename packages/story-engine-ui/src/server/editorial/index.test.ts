@@ -184,6 +184,15 @@ describe("开书时看一眼要不要补（maybeStartReadersCatchUp）", () => {
     expect(await readReaderProgress(empty, "checker")).toBeUndefined();
   });
 
+  it("定稿全撤了、盘上还留着上一轮没收尾的「在读」→ 开书标回不在读（2026-10-23 桌面包走查：一直挂「核账员 0/1」）", async () => {
+    const dir = await makeHomeTempDir("brain-index-undone-");
+    await mkdir(join(dir, "agents", "checker"), { recursive: true });
+    await writeFile(join(dir, "agents", "checker", "progress.json"), JSON.stringify({ role: "checker", reading: true, done: 0, total: 1, updatedAt: "" }));
+    await maybeStartReadersCatchUp(dir, { callModel: async () => "笔记" });
+    await expect(readReaderProgress(dir, "checker")).resolves.toMatchObject({ reading: false, done: 0, total: 0 });
+    expect(await readReaderProgress(dir, "ledger")).toBeUndefined();
+  });
+
   it("R4.3 开书那次概况就带进度：排进队后、返回之前，第一个要读的角色已经标成 reading", async () => {
     const dir = await makeBook(3);
     // 模型卡住不动（补读在队里慢慢排）：maybeStartReadersCatchUp 自己必须先落 progress 再返回，

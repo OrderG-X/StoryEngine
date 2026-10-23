@@ -1,6 +1,6 @@
 {
   "name": "story-engine-desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "StoryEngine 桌面壳：Electron 主进程 in-process 起独立 server（connect 全路由 + Mastra agent），窗口连 localhost。",
   "type": "module",

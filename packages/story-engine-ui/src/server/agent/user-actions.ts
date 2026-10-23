@@ -443,11 +443,11 @@ export function afterDraftCheckLine(result: CheckContinuityLikeOutput, fixed = 0
     : `没有确定对不上的；可能 ${maybe} 处，在卡上点开看`;
   if (fixed > 0) {
     return sure + maybe === 0
-      ? `写完核账，按前文改了 ${fixed} 处；再核没发现和前文对不上${cold}。`
-      : `写完核账，按前文改了 ${fixed} 处；再核还有${counts}${cold}。`;
+      ? `写完核账，改了 ${fixed} 处对不上的；再核没发现别的${cold}。`
+      : `写完核账，改了 ${fixed} 处对不上的；再核还有${counts}${cold}。`;
   }
   return sure + maybe === 0
-    ? `写完核了一遍，没发现和前文对不上${cold}。`
+    ? `写完核了一遍，没发现对不上的地方${cold}。`
     : `写完核了一遍：${counts}${cold}。`;
 }
 

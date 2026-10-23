@@ -205,7 +205,9 @@ function dayLabel(preview: CommitPreview): string {
       ? "（你定的）"
       : time.basis === "judged"
         ? "（按前后文判断）"
-        : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
+        : preview.chapter <= 1
+          ? "（正文里没找到时间说法，先这么记，不对就改）"
+          : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
   return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
 }
 
