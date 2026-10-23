@@ -306,9 +306,41 @@ function checkModelPreviewPlacement(
   return overlaps ? beforeSpan : "drift_rejected";
 }
 
-/** 确定性替换：按 beforeText 真实区间切片落地（afterText 收尾去空白）。 */
+/** 确定性替换：按 beforeText 真实区间切片落地（afterText 收尾去空白、去掉接缝处抄重的半句）。 */
 function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetSpan, afterText: string): string {
-  return draftContent.slice(0, beforeSpan.start) + afterText.trim() + draftContent.slice(beforeSpan.end);
+  const head = draftContent.slice(0, beforeSpan.start);
+  const tail = draftContent.slice(beforeSpan.end);
+  const replaced = draftContent.slice(beforeSpan.start, beforeSpan.end);
+  return head + trimSeamOverlap(head, replaced, afterText.trim(), tail) + tail;
+}
+
+/** 接缝重合至少这么多字才算抄重（一两个字撞上是常事）。 */
+const SEAM_MIN_CHARS = 3;
+/** 接缝最多往外看这么多字。 */
+const SEAM_MAX_CHARS = 60;
+
+/**
+ * 接缝去重（2026-10-23 按核账改的考卷）：模型改写常把被改那段紧挨着的下半句也抄进新文本——目标止于「扣子之间」，
+ * 新文本末尾带上了原文紧跟着的「，边角发潮」，落地成「边角发潮，边角发潮」。新文本的尾巴和原文紧跟其后的开头逐字重合、
+ * 而被替换的那段原本没有这条尾巴，就把重合的部分从新文本里去掉；开头同理。纯逐字比对，不看意思。
+ */
+function trimSeamOverlap(head: string, replaced: string, afterText: string, tail: string): string {
+  let text = afterText;
+  for (let size = Math.min(text.length - 1, tail.length, SEAM_MAX_CHARS); size >= SEAM_MIN_CHARS; size -= 1) {
+    const piece = tail.slice(0, size);
+    if (text.endsWith(piece) && !replaced.endsWith(piece)) {
+      text = text.slice(0, text.length - size);
+      break;
+    }
+  }
+  for (let size = Math.min(text.length - 1, head.length, SEAM_MAX_CHARS); size >= SEAM_MIN_CHARS; size -= 1) {
+    const piece = head.slice(head.length - size);
+    if (text.startsWith(piece) && !replaced.startsWith(piece)) {
+      text = text.slice(size);
+      break;
+    }
+  }
+  return text;
 }
 
 /**
@@ -468,8 +500,27 @@ async function reviseDraftOneShotLocked(
   input: Parameters<typeof reviseDraftOneShot>[0],
   draftPath: string,
 ): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
-  const { projectDir, chapter } = input;
   const draftContent = await readFile(draftPath, "utf-8");
+  const revised = await reviseDraftText({ ...input, draftContent });
+  if (!revised.ok) return revised;
+  const draftVersion = await persistRevisionUpdate(input.projectDir, input.chapter, revised.updatedContent);
+  return { ...revised, applied: true, draftPath, draftVersion };
+}
+
+export type RevisedText =
+  | { readonly ok: true; readonly mode: "exact" | "model"; readonly task: DraftRevisionTask; readonly preview: DraftRevisionPreview; readonly updatedContent: string }
+  | RevisionOneShotFailure;
+
+/**
+ * 改一段的核心（不读盘、不写盘）：定位 → 精确替换或模型改写 → 落点与诚实守卫 → 算出改后全文。
+ * 改稿工具（reviseDraftOneShot，读盘写盘）和出稿流程里的「按核账改」（正文还在内存里）共用这一条。
+ */
+export async function reviseDraftText(input: Omit<Parameters<typeof reviseDraftOneShot>[0], "projectDir" | "chapter"> & {
+  readonly projectDir: string;
+  readonly chapter: number;
+  readonly draftContent: string;
+}): Promise<RevisedText> {
+  const { projectDir, chapter, draftContent } = input;
 
   // style=deai 时把去 AI 味手法注入修订目标——让 agent 看完 check_ai_flavor 后能直接经本工具去 AI 味，
   // 不再退化成普通润色。
@@ -500,8 +551,7 @@ async function reviseDraftOneShotLocked(
     }
     const preview = exactReplacementPreview(resolvedTask, resolvedTarget, exactReplacement);
     const updatedContent = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
-    const draftVersion = await persistRevisionUpdate(projectDir, chapter, updatedContent);
-    return { ok: true, applied: true, mode: "exact", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
+    return { ok: true, mode: "exact", task: resolvedTask, preview, updatedContent };
   }
 
   let preview: DraftRevisionPreview;
@@ -533,6 +583,5 @@ async function reviseDraftOneShotLocked(
     return { ok: false, code: "target_unchanged", task: resolvedTask, preview };
   }
 
-  const draftVersion = await persistRevisionUpdate(projectDir, chapter, updatedContent);
-  return { ok: true, applied: true, mode: "model", task: resolvedTask, preview, draftPath, updatedContent, draftVersion };
+  return { ok: true, mode: "model", task: resolvedTask, preview, updatedContent };
 }

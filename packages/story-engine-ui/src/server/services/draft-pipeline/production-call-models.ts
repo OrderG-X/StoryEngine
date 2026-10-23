@@ -2,9 +2,11 @@
  * 出稿后质量环节的生产用模型调用（阶段 3）。走 streamChatModelToText：流式 + 空闲超时
  * （有字节就续命、无总时长上限），一律不传 max_tokens（铁律）。续写的思考开关随作者对写手的设置。
  * - 续写：fastDraft 槽（写手本身，文风一致）。
+ * - 按核账改：repair 槽，和核账卡「改这处」、改稿工具同一个模型通道（createRevisionModelChannel）。
  * 前后核对 2026-10-10 起和「核账」同一套（编辑部核账员，brain 的 callConfiguredBrainModel），不在这里。
  */
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
+import { createRevisionModelChannel, type RevisionModelCaller } from "../revision-service.js";
 import type { ContinueCallModel } from "./continue-draft.js";
 
 type Messages = Parameters<ContinueCallModel>[0];
@@ -46,3 +48,6 @@ async function callSlot(
 }
 
 export const callConfiguredContinueModel: ContinueCallModel = (messages) => callSlot("fastDraft", messages, false);
+
+/** 按核账改：用到时才解析 repair 槽（没核出要改的就不碰它，槽配置有问题也只让「这处没改成」，不拖垮出稿）。 */
+export const callConfiguredFixModel: RevisionModelCaller = async (prompt) => (await createRevisionModelChannel()).call(prompt);

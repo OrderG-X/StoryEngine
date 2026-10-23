@@ -103,6 +103,7 @@ import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
 import { withStep } from "../lib/token-meter.js";
 import type { ContinueCallModel } from "./draft-pipeline/continue-draft.js";
 import type { BrainCallModel } from "../editorial/index.js";
+import type { RevisionModelCaller } from "./revision-service.js";
 import { runDraftQualityPipeline, type QualityPipelineInfo, type QualityPipelineResult } from "./draft-pipeline/run-quality-pipeline.js";
 
 /* ---------------------------------------------------------------------------
@@ -856,10 +857,12 @@ export interface GenerateDraftInput {
   /**
    * 阶段 3 出稿后的固定质量环节（工具 execute 注入；测试注入 mock）：
    * continueCallModel（fastDraft 槽）——首稿低于下限就接着写够；continuityCheckCallModel（qualityCheck 槽）——
-   * 前后核对，和「核账」同一套，不自动改。缺失 = 不跑该环节（旧行为）。
+   * 前后核对，和「核账」同一套；continuityFixCallModel（repair 槽）——核出确定错在新稿里的按前文改一轮、再核一遍。
+   * 缺失 = 不跑该环节（旧行为）。
    */
   readonly continueCallModel?: ContinueCallModel;
   readonly continuityCheckCallModel?: BrainCallModel;
+  readonly continuityFixCallModel?: RevisionModelCaller;
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
   /**
@@ -1282,7 +1285,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     };
   }
 
-  // 阶段 3：出稿后的固定质量环节——字数不够就接着写够 → 前后核对 → 有冲突自动修一轮（注入了模型调用才跑；
+  // 阶段 3：出稿后的固定质量环节——字数不够就接着写够 → 前后核对 → 确定错在新稿里的按前文改一轮再核（注入了模型调用才跑；
   // HTTP enforce 路不注入，保持现状）。真改了正文就以新正文重算字数 / AI 腔 / 要点核对，后续环节都基于新正文。
   let effectiveAiFlavor = report.aiFlavor;
   let effectiveBeatFidelity = report.beatFidelity;
@@ -1301,6 +1304,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       ...(chapterPlan ? { chapterPlan } : {}),
       ...(input.continueCallModel ? { continueCallModel: input.continueCallModel } : {}),
       ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
+      ...(input.continuityFixCallModel ? { fixCallModel: input.continuityFixCallModel } : {}),
       // R4.2：本流程已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
       ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
     });
