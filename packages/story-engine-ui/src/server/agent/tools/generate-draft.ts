@@ -523,7 +523,7 @@ export const generateDraftTool = createTool({
       segmentByPlan: true,
       writerClient,
       // 出稿阶段推给稿纸（拟章纲要一两分钟、稿纸空着，作者得知道 AI 在干什么）。
-      ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
+      ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write" | "check") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;

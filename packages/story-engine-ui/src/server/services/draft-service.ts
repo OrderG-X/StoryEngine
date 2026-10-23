@@ -850,8 +850,8 @@ export interface GenerateDraftInput {
    * 缺失 = 不拟章纲（旧行为）。拟不成如实标注、照旧出稿，绝不阻断。
    */
   readonly plannerCallModel?: BrainCallModel;
-  /** 出稿阶段回报（拟章纲 / 写正文）：工具接到流式 sink 上，稿纸空着时给作者看进度。缺失=不回报。 */
-  readonly onPhase?: (phase: "plan" | "write") => void;
+  /** 出稿阶段回报（拟章纲 / 写正文 / 写完核对并按核账改）：工具接到流式 sink 上，稿纸上给作者看进度。缺失=不回报。 */
+  readonly onPhase?: (phase: "plan" | "write" | "check") => void;
   /** 核账员审章纲的模型调用（生产走 qualityCheck 槽）；缺省由编排自己取配置。 */
   readonly planCheckReaderCallModel?: BrainCallModel;
   /**
@@ -1295,6 +1295,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     && draftBody.trim()
     && (input.continueCallModel || input.continuityCheckCallModel)
   ) {
+    // 写完到换上终稿还要核账、按核账改、再核（几分钟）：稿纸上告诉作者正文还会换。
+    if (input.continuityCheckCallModel) input.onPhase?.("check");
     qualityPipeline = await runDraftQualityPipeline({
       projectDir,
       chapter,

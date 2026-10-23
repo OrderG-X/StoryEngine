@@ -467,6 +467,9 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
             )}
           </article>
         ) : null}
+        {generating && draftPhase === "check" && !isEmpty ? (
+          <div className="se-v2-notice se-v2-notice-busy" role="status"><p>AI 在对前文，有对不上的会改掉，改好自动换上</p></div>
+        ) : null}
         <div className="se-v2-draft-editor-host" ref={hostRef}>
           <EditorContent editor={editor} />
           {isEmpty && !isCommitted ? (

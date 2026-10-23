@@ -6,6 +6,8 @@ import WritingPaper from "./WritingPaper.js";
 import { SentenceFocus } from "./sentenceFocusPlugin.js";
 import { draftTextToHtml } from "./draftEditorSync.js";
 import type { DraftPreview } from "../../types.js";
+import { useUiStore } from "../../stores/uiStore.js";
+import { useBookStore } from "../../stores/bookStore.js";
 
 // 注：textarea→Tiptap 后，外部内容同步 / 保留本地脏编辑这两条核心逻辑改由 draftEditorSync.test.ts 纯测覆盖
 // （ProseMirror 在 jsdom 下整渲染与真实输入不稳）；这里只做渲染契约的冒烟。真实打字/选区交 Codex 真机验。
@@ -130,6 +132,18 @@ describe("WritingPaper", () => {
     rerender(<WritingPaper draft={{ ...baseDraft, content: "# 第一章 · 测试\n\n流式前半。流式后半。" }} onEdit={onEdit} />);
     expect(proseMirrorEl(container)?.getAttribute("contenteditable")).toBe("true");
     expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("写完还在核对前文、按核账改（check 阶段）→ 稿纸上一行提示正文还会换；别的阶段不出", () => {
+    useBookStore.getState().updateWorkspace({ flowStatus: "draft_generating" });
+    useUiStore.getState().setDraftPhase("check");
+    const { rerender } = render(<WritingPaper draft={baseDraft} onEdit={vi.fn()} />);
+    expect(screen.getByRole("status").textContent).toContain("改好自动换上");
+    useUiStore.getState().setDraftPhase("write");
+    rerender(<WritingPaper draft={{ ...baseDraft }} onEdit={vi.fn()} />);
+    expect(screen.queryByText(/改好自动换上/u)).toBeNull();
+    useUiStore.getState().setDraftPhase(null);
+    useBookStore.getState().updateWorkspace({ flowStatus: "idle" });
   });
 
   it("聚焦模式下渲染不崩、host 与编辑器存在", () => {

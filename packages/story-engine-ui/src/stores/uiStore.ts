@@ -22,7 +22,8 @@ export function emptyCommitSelections(): CommitSelectiveConfirmationState {
 export type DraftCandidate = WorkspaceDraftCandidate;
 
 /** AI 出稿的阶段：拟章纲 / 写正文。 */
-export type DraftPhase = "plan" | "write";
+/** 出稿阶段：拟章纲 / 写正文 / 写完核对前文并按核账改（稿纸上照阶段提示作者）。 */
+export type DraftPhase = "plan" | "write" | "check";
 
 export interface UiStore {
   steeringDirection: string;
