@@ -437,15 +437,18 @@ export function afterDraftCheckLine(result: CheckContinuityLikeOutput, fixed = 0
   const sure = Array.isArray(result.sure) ? result.sure.length : 0;
   const maybe = Array.isArray(result.maybe) ? result.maybe.length : 0;
   const cold = result.coverage ? "（核账员还没读完全书，更早的细节可能漏）" : "";
-  const counts = `${sure > 0 ? `确定对不上 ${sure} 处` : ""}${sure > 0 && maybe > 0 ? "、" : ""}${maybe > 0 ? `可能 ${maybe} 处` : ""}`;
+  // 稿纸上默认只画确定的；「可能」在核账卡上点开才画（2026-10-23 稿纸减噪），别说成画上了。
+  const counts = sure > 0
+    ? `确定对不上 ${sure} 处，画在稿纸上了${maybe > 0 ? `；另有可能 ${maybe} 处，在卡上点开看` : ""}`
+    : `没有确定对不上的；可能 ${maybe} 处，在卡上点开看`;
   if (fixed > 0) {
     return sure + maybe === 0
       ? `写完核账，按前文改了 ${fixed} 处；再核没发现和前文对不上${cold}。`
-      : `写完核账，按前文改了 ${fixed} 处；再核还有${counts}，画在稿纸上了${cold}。`;
+      : `写完核账，按前文改了 ${fixed} 处；再核还有${counts}${cold}。`;
   }
   return sure + maybe === 0
     ? `写完核了一遍，没发现和前文对不上${cold}。`
-    : `写完核了一遍：${counts}，画在稿纸上了${cold}。`;
+    : `写完核了一遍：${counts}${cold}。`;
 }
 
 /** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
