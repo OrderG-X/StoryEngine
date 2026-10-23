@@ -9,7 +9,7 @@ vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({
 }));
 
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
-import { runDraftQualityPipeline } from "./run-quality-pipeline.js";
+import { fixableInDraft, runDraftQualityPipeline } from "./run-quality-pipeline.js";
 
 // 假查错模型说的是核账员那套话术（写笔记 / 三遍核账 / 自复核），经 checkCallModel 注入；
 // 核账员本身的行为见 editorial/checker.test.ts 和 editorial/continuity/check-service.test.ts。
@@ -70,6 +70,55 @@ describe("runDraftQualityPipeline", () => {
     // 结果记进核账记忆：作者随后点「核账」、正文没改就直接出这次的结果。
     const memory = JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.json"), "utf-8")) as { issues: unknown[] };
     expect(memory.issues).toHaveLength(1);
+  });
+
+  // 2026-10-23：核出「确定」又错在新稿里的，按核账卡「改这处」同一句要求、同一条改稿路改一轮，改完再核。
+  it("按核账改：确定错在新稿里的按前文改、改完再核，留给作者的是改后还剩的；正文写盘", async () => {
+    const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    const checkCallModel = fakeChecker();
+    const fixCallModel = vi.fn(async (prompt: string) => {
+      expect(prompt).toContain("南门菜场十来年前就拆了"); // 改稿要求带着前文原句（和核账卡同一句）
+      return JSON.stringify({ beforeText: "菜场还在", afterText: "菜场早没了", changeSummary: "按第 7 章改" });
+    });
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      checkCallModel, fixCallModel, skipOverwriteSnapshot: true,
+    });
+    expect(fixCallModel).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.draftBody).toContain("菜场早没了，门口摆着几摊卖豆腐的。");
+    expect(await readFile(draftPath, "utf-8")).toContain("菜场早没了");
+    // 改完再核：「菜场还在」已不在正文里，核账员再报也核不过原句，核账卡上就没了。
+    expect(result.info.continuity).toMatchObject({ checked: true, sure: [], autoFixed: { applied: 1, failed: 0 } });
+    expect(result.notes.join("\n")).toContain("按前文改了 1 处");
+    expect(result.notes.join("\n")).toContain("改完又核了一遍：没发现和前文对不上的地方");
+    const memory = JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.json"), "utf-8")) as { issues: unknown[] };
+    expect(memory.issues).toHaveLength(0);
+  });
+
+  it("按核账改没改成（模型回的不能用）→ 正文不动、不再核，如实说那几处还在", async () => {
+    const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    const before = await readFile(draftPath, "utf-8");
+    const checkCallModel = fakeChecker();
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      checkCallModel, fixCallModel: vi.fn(async () => "不是 JSON"),
+    });
+    expect(result.changed).toBe(false);
+    expect(await readFile(draftPath, "utf-8")).toBe(before);
+    expect(result.info.continuity).toMatchObject({ sure: [expect.objectContaining({ quote: "菜场还在" })], autoFixed: { applied: 0, failed: 1 } });
+    expect(result.notes.join("\n")).toContain("1 处没改成");
+  });
+
+  it("自动改的只认错在新稿里、对的是前文原文的；对的是设定卡（错的可能是卡）、错在前面那章的不自动改", () => {
+    const base = { quote: "菜场还在", earlierQuote: "南门菜场十来年前就拆了", earlierChapter: 7, reason: "菜场早拆了" };
+    expect(fixableInDraft(8, base)).toBe(true);
+    expect(fixableInDraft(8, { ...base, earlierChapter: 8 })).toBe(true);
+    expect(fixableInDraft(8, { ...base, fixChapter: 8 })).toBe(true);
+    expect(fixableInDraft(8, { ...base, fixChapter: 5 })).toBe(false);
+    expect(fixableInDraft(8, { ...base, againstSetting: { label: "地点" } })).toBe(false);
   });
 
   it("只比下限少一点 → 不续写，如实说短了多少（2026-10-10 真机试写：续出的段凭空编对话）", async () => {

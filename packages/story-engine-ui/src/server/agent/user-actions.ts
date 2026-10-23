@@ -428,15 +428,24 @@ interface CheckContinuityLikeOutput {
   readonly coverage?: unknown;
 }
 
-/** 写完那遍核账的一句话（重构 P6 第 6 步）：问题清单在核账卡和稿纸划线上，这里只说几处。 */
-export function afterDraftCheckLine(result: CheckContinuityLikeOutput): string | undefined {
+/**
+ * 写完那遍核账的一句话（重构 P6 第 6 步）：问题清单在核账卡和稿纸划线上，这里只说几处。
+ * fixed＞0（2026-10-23）：写完核出的已按前文改了几处、改完又核过——作者看着正文变了，得知道是改过的，卡上是改后还剩的。
+ */
+export function afterDraftCheckLine(result: CheckContinuityLikeOutput, fixed = 0): string | undefined {
   if (result.ok !== true) return undefined;
   const sure = Array.isArray(result.sure) ? result.sure.length : 0;
   const maybe = Array.isArray(result.maybe) ? result.maybe.length : 0;
   const cold = result.coverage ? "（核账员还没读完全书，更早的细节可能漏）" : "";
+  const counts = `${sure > 0 ? `确定对不上 ${sure} 处` : ""}${sure > 0 && maybe > 0 ? "、" : ""}${maybe > 0 ? `可能 ${maybe} 处` : ""}`;
+  if (fixed > 0) {
+    return sure + maybe === 0
+      ? `写完核账，按前文改了 ${fixed} 处；再核没发现和前文对不上${cold}。`
+      : `写完核账，按前文改了 ${fixed} 处；再核还有${counts}，画在稿纸上了${cold}。`;
+  }
   return sure + maybe === 0
     ? `写完核了一遍，没发现和前文对不上${cold}。`
-    : `写完核了一遍：${sure > 0 ? `确定对不上 ${sure} 处` : ""}${sure > 0 && maybe > 0 ? "、" : ""}${maybe > 0 ? `可能 ${maybe} 处` : ""}，画在稿纸上了${cold}。`;
+    : `写完核了一遍：${counts}，画在稿纸上了${cold}。`;
 }
 
 /** 「核账」按钮：服务端直接跑核账（只读），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
@@ -444,6 +453,8 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   readonly action: Extract<UserAction, { readonly toolName: "check_continuity" }>;
   /** 「写这一章」写完接着出核账卡（结果来自写完那遍核账的记忆，不再调模型）：回话换成「写完核了一遍…」。 */
   readonly afterDraft?: boolean;
+  /** 写完核出的按前文改了几处（改完再核的结果才进了核账记忆）。 */
+  readonly fixedAfterDraft?: number;
 }): Promise<void> {
   const { action } = args;
   const stamp = Date.now();
@@ -476,7 +487,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
       : `第 ${action.chapter} 章这次没核成。`
     : `第 ${action.chapter} 章核账做完了。`;
   // 问题清单在核账卡和稿纸划线上（重构 P6），回话只说结论那句。
-  const said = [args.afterDraft && result ? afterDraftCheckLine(result) : undefined, result?.headline, result?.summary]
+  const said = [args.afterDraft && result ? afterDraftCheckLine(result, args.fixedAfterDraft) : undefined, result?.headline, result?.summary]
     .find((text): text is string => typeof text === "string" && text.trim().length > 0);
   emitText(said ? said.trim() : fallbackSummary);
   const rest = args.scrubber.flush();
@@ -877,7 +888,7 @@ interface GenerateDraftLikeOutput {
   readonly draftTitle?: unknown;
   readonly draftBody?: unknown;
   readonly draftLength?: { readonly actualLength?: unknown; readonly lowerBound?: unknown; readonly lengthStatus?: unknown };
-  readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } };
+  readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown; readonly autoFixed?: { readonly applied?: unknown } } };
 }
 
 /**
@@ -942,7 +953,13 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   // 写完已经核过一遍账（结果在核账记忆里）：直接出核账卡、问题画到稿纸上，不用作者再点「核账」。
   if (written && checked === true) {
     args.sendEvent("text-delta", { text: "\n" });
-    await runCheckContinuityAction({ ...args, action: { toolName: "check_continuity", chapter: action.chapter }, afterDraft: true });
+    const fixed = result?.qualityPipeline?.continuity?.autoFixed?.applied;
+    await runCheckContinuityAction({
+      ...args,
+      action: { toolName: "check_continuity", chapter: action.chapter },
+      afterDraft: true,
+      ...(typeof fixed === "number" && fixed > 0 ? { fixedAfterDraft: fixed } : {}),
+    });
     return;
   }
   const choices: NextStepChoice[] = written

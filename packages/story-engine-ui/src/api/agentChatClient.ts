@@ -256,7 +256,7 @@ export interface AgentChatHandlers {
   /** 出稿正文增量（generate_draft 流式）：逐字进编辑器。带本次章号，前端只往当前章追。 */
   readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string }) => void;
   /** AI 出稿进行到哪一步（plan 拟章纲 / write 写正文）。 */
-  readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" }) => void;
+  readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" | "check" }) => void;
   readonly onToolCall: (info: { readonly toolCallId?: string; readonly toolName: string }) => void;
   readonly onToolResult: (info: AgentToolResult) => void;
   /** 工具内部抛错：携带 toolCallId/toolName，让上层把对应步骤/卡片收尾为 failed，再 append 错误。 */
@@ -378,7 +378,7 @@ export async function streamAgentChat(
           if (typeof parsed.text === "string") handlers.onReasoningDelta?.(parsed.text);
           return;
         case "draft-delta":
-          if ((parsed.phase === "plan" || parsed.phase === "write") && typeof parsed.chapter === "number") {
+          if ((parsed.phase === "plan" || parsed.phase === "write" || parsed.phase === "check") && typeof parsed.chapter === "number") {
             handlers.onDraftPhase?.({ chapter: parsed.chapter, phase: parsed.phase });
             return;
           }

@@ -160,6 +160,10 @@
   }
   .codex-desk-stage .se-v2-notice::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 18%,transparent);}
   .codex-desk-stage .se-v2-notice p{margin:0;font-size:12px;line-height:1.6;color:var(--muted);}
+  /* 写完还在核对前文、按核账改：同一行淡字，点换成主色、慢慢闪（正文还会换） */
+  .codex-desk-stage .se-v2-notice-busy{border-color:color-mix(in srgb,var(--accent) 24%,transparent);background:var(--accent-soft);}
+  .codex-desk-stage .se-v2-notice-busy::before{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent);animation:scDotPulse 1.4s ease-in-out infinite;}
+  @media (prefers-reduced-motion:reduce){.codex-desk-stage .se-v2-notice-busy::before{animation:none;}}
   .codex-desk-stage .se-v2-notice-action{
     flex:none;height:22px;padding:0 10px;border-radius:999px;border:1px solid color-mix(in srgb,var(--success) 40%,transparent);
     background:transparent;color:var(--text);font-size:12px;cursor:pointer;

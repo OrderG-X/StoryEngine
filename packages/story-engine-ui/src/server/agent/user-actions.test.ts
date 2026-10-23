@@ -525,6 +525,22 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity"]);
   });
 
+  it("写完核出的已按前文改过（2026-10-23）→ 回话说改了几处、再核还剩几处（作者看着正文变了，得知道是改过的）", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 2 },
+      requestContext: new RequestContext(),
+      executeTool: async (name) => name === "generate_draft"
+        ? { ok: true, draftTitle: "存根", draftBody: "正文", draftLength: { actualLength: 2500 }, qualityPipeline: { continuity: { checked: true, autoFixed: { applied: 3, failed: 0 } } } }
+        : { ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [], failures: [] },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toContain("写完核账，按前文改了 3 处；再核还有确定对不上 1 处，画在稿纸上了。");
+  });
+
   it("出稿写好但写完那遍核账没跑成 → 如实说一句，不出核账卡", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     const calls: string[] = [];

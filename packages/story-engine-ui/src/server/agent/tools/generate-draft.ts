@@ -86,7 +86,7 @@ import {
   type GenerateDraftOutcome,
 } from "../../services/draft-service.js";
 import { callConfiguredBrainModel, callConfiguredPlannerModel, rereadBlocker } from "../../editorial/index.js";
-import { callConfiguredContinueModel } from "../../services/draft-pipeline/production-call-models.js";
+import { callConfiguredContinueModel, callConfiguredFixModel } from "../../services/draft-pipeline/production-call-models.js";
 
 /**
  * 某章是否已入库（chapters/N.md 存在且非空）。读盘只读，题材中立。
@@ -513,15 +513,17 @@ export const generateDraftTool = createTool({
       beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
       // 阶段 2「先想后写」：出稿前编辑部拟章纲（章纲员 chapterSteering 槽 → 核账员审）。拟不成如实进 summary、照旧出稿。
       plannerCallModel: callConfiguredPlannerModel,
-      // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（核账员，qualityCheck 槽）与冲突段改写（repair 槽）。
+      // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（核账员，qualityCheck 槽）+ 按核账改（repair 槽）。
       continueCallModel: callConfiguredContinueModel,
       continuityCheckCallModel: callConfiguredBrainModel,
-      // 不自动改冲突句（第八轮验收：自动改了 32 句，18 句改出新毛病、真正修好 3 句）：核对出的问题原样交作者定。
+      // 第八轮验收（旧核对，误报 35～57%）自动改了 32 句、18 句改出新毛病，那时停了自动改；2026-10-23 换成核账员的「确定」
+      // + 核账卡「改这处」同一条改稿路，考卷 9 份稿每千字确定错 2.10 → 0.69、人工抽 22 处 17 处干净，恢复改一轮再核。
+      continuityFixCallModel: callConfiguredFixModel,
       // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
       segmentByPlan: true,
       writerClient,
       // 出稿阶段推给稿纸（拟章纲要一两分钟、稿纸空着，作者得知道 AI 在干什么）。
-      ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
+      ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write" | "check") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;

@@ -17,6 +17,7 @@ import { bibleCatOf } from "./BibleBook.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey } from "../../../workspace/chapterProgress.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
+import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 
 type ContinuityCheck = ContinuityCheckData;
 type Item = ContinuityCheck["sure"][number];
@@ -70,12 +71,7 @@ export function continuityFixAction(chapter: number, items: readonly Item[]): Ag
   return {
     toolName: "revise_draft",
     chapter,
-    fixes: items.map((item) => {
-      const where = item.againstSetting
-        ? `设定本${item.againstSetting.label}`
-        : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
-      return { targetText: item.quote, revisionGoal: `和${where}「${item.earlierQuote}」对上${item.reason ? `（${item.reason}）` : ""}` };
-    }),
+    fixes: items.map((item) => ({ targetText: item.quote, revisionGoal: continuityFixGoal(chapter, item) })),
   };
 }
 

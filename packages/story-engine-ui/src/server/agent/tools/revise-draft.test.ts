@@ -137,6 +137,37 @@ describe("revise_draft 草稿局部修订工具", () => {
     expect(out.draftBody).not.toContain("# 第1章");
   });
 
+  it("模型把目标段紧跟着的半句也抄进新文本 → 接缝处去重，不落成「边角发潮，边角发潮」（2026-10-23 按核账改考卷）", async () => {
+    const projectDir = await makeProject("接缝去重");
+    await writeDraft(projectDir, 1, "# 第1章\n\n那封信还在，夹在工装第二颗和第三颗扣子之间，边角发潮。\n\n她把胶鞋压回去。\n");
+    const out = await runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "那封信还在，夹在工装第二颗和第三颗扣子之间",
+      revisionGoal: "和第 2 章「塞进旧工装底下」对上",
+      callModel: async () => JSON.stringify({
+        beforeText: "那封信还在，夹在工装第二颗和第三颗扣子之间",
+        afterText: "那封信还在，折着，压在工装底下，边角发潮",
+        changeSummary: "改藏法。",
+      }),
+    });
+    expect(out.ok).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    expect(onDisk).toContain("那封信还在，折着，压在工装底下，边角发潮。");
+    expect(onDisk).not.toContain("边角发潮，边角发潮");
+    // 开头抄重同理：新文本以原文紧挨在前面的半句开头 → 去掉。
+    await writeDraft(projectDir, 1, "# 第1章\n\n她回到更衣间，柜门推开，旧工装挂在里头。\n");
+    const head = await runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "旧工装挂在里头",
+      revisionGoal: "和第 2 章「最底下压着一件旧工装」对上",
+      callModel: async () => JSON.stringify({ beforeText: "旧工装挂在里头", afterText: "柜门推开，旧工装还叠在最底下", changeSummary: "改摆法。" }),
+    });
+    expect(head.ok).toBe(true);
+    expect(await readFile(defaultDraftPath(projectDir, 1), "utf-8")).toContain("她回到更衣间，柜门推开，旧工装还叠在最底下。");
+  });
+
   it("模型漂移到别的句子（改了别处、用户点名的目标句仍逐字留稿）→ 诚实 ok:false/applied:false，绝不谎称已改（afterfix·改稿谎报根治）", async () => {
     const projectDir = await makeProject("改稿漂移谎报");
     const draft = "# 第1章\n\n灯是我亲手关的。\n\n他点了点头，没有说话。\n";
