@@ -2,7 +2,8 @@
  * ContinuityMarks —— 核账问题画在稿纸原句下面（重构 P6，草图 ①）。
  *
  * 同 NamePeek：不碰编辑器内核，用 CSS Custom Highlight API 画线（不改 DOM、不进文档、不影响编辑和存稿）。
- *  - 确定对不上：红色波浪线；可能：琥珀色点线。只画错在这一章、原句还在稿里的（改掉了自然不画）。
+ *  - 确定对不上：红色波浪线；可能：琥珀色点线，只在作者点开核账卡「可能」那段时画（见 maybeMarks）。
+ *    只画错在这一章、原句还在稿里的（改掉了自然不画）。
  *  - 点划线那句：在句子下面弹小框——前文原句、理由、【改这处】【不是问题】。改这处照旧是给 AI 发「只改这一处」。
  *  - 右栏「去看那 N 处」：滚到第一处并打开小框（requestContinuityFocus）。
  * 浏览器不支持 Highlight API 时没有划线，右栏和对话卡照常可用。
@@ -20,6 +21,7 @@ import {
 } from "../../../workspace/chapterProgress.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
+import { useMaybeMarks } from "./maybeMarks.js";
 
 const SURE = "se-cc-sure";
 const MAYBE = "se-cc-maybe";
@@ -136,6 +138,7 @@ export function ContinuityMarks({
   const focusSeq = useContinuityFocus((s) => s.seq);
   const chapter = result?.check.chapter ?? 0;
   const resultKey = result ? `${result.messageId}|${result.dismissed.join("|")}` : "";
+  const maybeShown = useMaybeMarks((s) => s.chapter !== null && s.chapter === chapter);
 
   // 划线：正文或结果变了就重算（防抖跟着编辑走）。
   useEffect(() => {
@@ -159,7 +162,7 @@ export function ContinuityMarks({
         }
       };
       collect(open.sure, "sure");
-      collect(open.maybe, "maybe");
+      if (maybeShown) collect(open.maybe, "maybe");
       marksRef.current = marks;
       if (!api) return;
       const sure = new api.Ctor(...marks.filter((m) => m.level === "sure").map((m) => m.range));
@@ -181,7 +184,7 @@ export function ContinuityMarks({
       clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageRef, resultKey, contentKey]);
+  }, [stageRef, resultKey, contentKey, maybeShown]);
 
   const openAt = (mark: Mark) => {
     const stage = stageRef.current;

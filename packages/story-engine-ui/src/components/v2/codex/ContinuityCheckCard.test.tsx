@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ContinuityCheckCard, buildContinuityFixAllIntent, buildContinuityFixIntent } from "./ContinuityCheckCard.js";
 import { continuityItemKey } from "../../../workspace/chapterProgress.js";
+import { useMaybeMarks } from "./maybeMarks.js";
 
 type CardProps = ComponentProps<typeof ContinuityCheckCard>;
 
@@ -54,6 +55,23 @@ describe("核账卡「不是问题」", () => {
     render(<Controlled check={check} onDismiss={async () => false} />);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "不是问题" })); });
     expect(screen.getByText(/没记住/)).toBeTruthy();
+  });
+});
+
+describe("核账卡「可能」那段和稿纸划线", () => {
+  afterEach(() => { cleanup(); useMaybeMarks.getState().show(null); });
+
+  it("点开才让稿纸划这一章的「可能」，收起、卡片卸掉都撤", async () => {
+    const maybeItem = { ...item, quote: "她把便签折成两半。", reason: "折法可能不对" };
+    const view = render(<ContinuityCheckCard check={{ ...check, sure: [], maybe: [maybeItem] }} />);
+    expect(useMaybeMarks.getState().chapter).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /还有 1 处可能有问题/ })); });
+    expect(useMaybeMarks.getState().chapter).toBe(8);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "收起" })); });
+    expect(useMaybeMarks.getState().chapter).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /还有 1 处可能有问题/ })); });
+    view.unmount();
+    expect(useMaybeMarks.getState().chapter).toBeNull();
   });
 });
 

@@ -10,8 +10,9 @@
  * 末尾写明作者标过不是问题的几处别动（服务端下一步不再给笼统的「改掉确定的 N 处」）。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { StepCard } from "./StepCard.js";
+import { useMaybeMarks } from "./maybeMarks.js";
 import { bibleCatOf } from "./BibleBook.js";
 import type { ContinuityCheckData } from "../../../type-defs/workspace.js";
 import { continuityItemKey } from "../../../workspace/chapterProgress.js";
@@ -131,6 +132,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
 }) {
   const [unsaved, setUnsaved] = useState(false);
   const [showMaybe, setShowMaybe] = useState(false);
+  const shownMaybeRef = useRef(false);
   const [showEarlier, setShowEarlier] = useState(false);
   const keyOf = continuityItemKey;
   const dismissedKeys = new Set(dismissedKeysList);
@@ -160,6 +162,16 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
     else onRevise?.(buildContinuityFixAllIntent(check.chapter, sure, dismissed.length));
   };
   const canReviseAll = Boolean(onRevise) || (Boolean(onFixAction) && sure.every((item) => canFixDirectly(check.chapter, item)));
+  // 点开「可能」那段，稿纸上才把这一章的「可能」划出来；收起就撤（默认不划，见 maybeMarks）。
+  const toggleMaybe = (): void => {
+    const next = !showMaybe;
+    setShowMaybe(next);
+    useMaybeMarks.getState().show(next ? check.chapter : null);
+  };
+  useEffect(() => () => {
+    if (shownMaybeRef.current && useMaybeMarks.getState().chapter === check.chapter) useMaybeMarks.getState().show(null);
+  }, [check.chapter]);
+  shownMaybeRef.current = showMaybe;
   const total = sure.length + maybe.length;
   // 什么都没报、也没划掉过的：卡头一行「没发现对不上」就说完了，不再摆一段同样意思的话、也不给展开箭头。
   const empty = total === 0 && earlier.length === 0 && dismissed.length === 0;
@@ -190,7 +202,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       ) : null}
       {maybe.length > 0 ? (
         <>
-          <button type="button" className="chip" onClick={() => setShowMaybe((open) => !open)}>
+          <button type="button" className="chip" onClick={toggleMaybe}>
             {showMaybe ? "收起" : `还有 ${maybe.length} 处可能有问题（点开看）`}
           </button>
           {showMaybe ? (
