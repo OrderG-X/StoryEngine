@@ -1,5 +1,5 @@
 import { PROVIDER_PRESETS } from "../constants/providerPresets.js";
-import { TASK_HINTS, TASK_LABELS, TASK_SUGGEST_THINKING, type TaskAssignmentSectionProps } from "./ModelSettingsDialogTypes.js";
+import { TASK_HINTS, TASK_LABELS, TASK_SUGGEST_THINKING, TASK_THINKING_FIXED_OFF, type TaskAssignmentSectionProps } from "./ModelSettingsDialogTypes.js";
 
 export function TaskAssignmentSection({ tasks, thinking, savedProviders, onEditTask, onToggleThinking }: TaskAssignmentSectionProps) {
   return (
@@ -8,7 +8,7 @@ export function TaskAssignmentSection({ tasks, thinking, savedProviders, onEditT
         <div className="ms-section-title-row">
           <h3 className="ms-section-title">各功能使用的 AI</h3>
         </div>
-        <span className="ms-section-hint">每个功能可以用不同的模型；写正文建议关「深度思考」，审稿、查硬伤建议开</span>
+        <span className="ms-section-hint">每个功能可以用不同的模型；写正文、拟章纲建议关「深度思考」，审稿建议开</span>
       </div>
 
       <div className="ms-task-list">
@@ -42,11 +42,17 @@ export function TaskAssignmentSection({ tasks, thinking, savedProviders, onEditT
                     <span className="ms-task-fallback-note">没单独选，用默认模型</span>
                   </>
                 )}
-                <label className="ms-task-think" title={suggestOn ? "这个功能建议开深度思考" : "这个功能建议关深度思考（写正文更自然）"}>
-                  <input type="checkbox" checked={think} onChange={() => onToggleThinking(key)} />
-                  <span className="ms-task-think-label">深度思考</span>
-                  <span className="ms-task-think-hint">{suggestOn ? "建议开" : "建议关"}</span>
-                </label>
+                {TASK_THINKING_FIXED_OFF.has(key) ? (
+                  <span className="ms-task-think ms-task-think-fixed" title="查硬伤固定不用深度思考，求快求稳">
+                    <span className="ms-task-think-label">不用思考</span>
+                  </span>
+                ) : (
+                  <label className="ms-task-think" title={suggestOn ? "这个功能建议开深度思考" : "这个功能建议关深度思考"}>
+                    <input type="checkbox" checked={think} onChange={() => onToggleThinking(key)} />
+                    <span className="ms-task-think-label">深度思考</span>
+                    <span className="ms-task-think-hint">{suggestOn ? "建议开" : "建议关"}</span>
+                  </label>
+                )}
               </div>
             </div>
           );
