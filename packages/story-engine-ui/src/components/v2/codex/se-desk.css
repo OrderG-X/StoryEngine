@@ -279,6 +279,22 @@
   .codex-desk-stage .cd-starter-btn.is-ghost:hover:not(:disabled){border-color:var(--accent-line);color:var(--text);background:var(--accent-soft);}
   html:not(.reduce-motion) & .cd-starter-btn:hover:not(:disabled){transform:translateY(-1px);}
   .codex-desk-stage .cd-starter-btn{transition:filter .15s ease,transform .15s ease,background-color .15s ease,border-color .15s ease;}
+  /* 开书三步：编号 + 步名 + 一句话，做完的编号换成勾。 */
+  .codex-desk-stage .cd-starter-steps{
+    display:grid;gap:10px;width:100%;max-width:30em;margin:4px 0 0;padding:0;list-style:none;text-align:left;
+  }
+  .codex-desk-stage .cd-starter-steps li{
+    display:grid;grid-template-columns:22px 6.5em 1fr;align-items:center;gap:10px;
+    font-size:13.5px;line-height:1.6;color:var(--muted);
+  }
+  .codex-desk-stage .cd-starter-steps b{font-weight:600;color:var(--text);}
+  .codex-desk-stage .cd-starter-step-mark{
+    display:grid;place-items:center;width:22px;height:22px;border-radius:50%;box-sizing:border-box;
+    font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line-strong);
+  }
+  .codex-desk-stage .cd-starter-steps li.is-done .cd-starter-step-mark{color:var(--accent);background:var(--accent-soft);border-color:var(--accent-line);}
+  .codex-desk-stage .cd-starter-steps li.is-done b{color:var(--muted);}
+  .codex-desk-stage .cd-starter-steps li.is-done span:last-child{color:var(--text);}
 
   /* ═══ 头脑风暴（重构 P6，草图 ⑤）：稿纸上方「第 N 章往哪走？」，几种走法并排挑；挑中收成「这章打算」 ═══ */
   .codex-desk-stage > .se-bs{

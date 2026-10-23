@@ -22,6 +22,40 @@ export const STARTER_INTENTS: readonly StarterIntent[] = [
   { key: "opening", label: "直接写开头", prefill: "帮我写第一章的开头。故事大概是：" },
 ];
 
+/**
+ * 开书三步（2026-10-23 从零走查）：首屏把「说说故事 → 第一章往哪走 → 写」摆出来，跟着真数据打勾。
+ * 走查时作者跟 AI 聊完、人物卡都建好了，首屏还是那句「从一句话开始」，看不出下一步该干什么。
+ * 只看设定本有没有卡、故事设定填没填（作者自己写的、AI 补的都算），不看聊天说了什么。
+ * 第二步做完（出了走法）引导就收起、走法挂在稿纸上方，所以这里只有前一步会打勾。
+ */
+export interface StarterStep {
+  readonly key: "story" | "directions" | "write";
+  readonly label: string;
+  readonly hint: string;
+  readonly done: boolean;
+}
+
+/** 设定本里显示几个名字，多的说「等 N 个」。 */
+const STARTER_NAMES_SHOWN = 3;
+
+export function starterSteps(input: {
+  readonly chapter: number;
+  /** 设定本里的卡名（人物、地方、东西、设定）。 */
+  readonly cardNames: readonly string[];
+  /** 故事设定那页（题材、年代……）填了没有。 */
+  readonly storyFilled: boolean;
+}): readonly StarterStep[] {
+  const names = input.cardNames.filter((name) => name.trim());
+  const storyHint = names.length > 0
+    ? `设定本里有了：${names.slice(0, STARTER_NAMES_SHOWN).join("、")}${names.length > STARTER_NAMES_SHOWN ? ` 等 ${names.length} 个` : ""}`
+    : input.storyFilled ? "设定本里有了故事设定" : "跟 AI 聊聊点子，它把人物、世界记进设定本";
+  return [
+    { key: "story", label: "说说故事", hint: storyHint, done: names.length > 0 || input.storyFilled },
+    { key: "directions", label: input.chapter === 1 ? "第一章往哪走" : `第 ${input.chapter} 章往哪走`, hint: "AI 给几种走法挑，也能跳过", done: false },
+    { key: "write", label: "写", hint: "自己写或让 AI 起草，写完核账、定稿", done: false },
+  ];
+}
+
 export interface StarterWorkspaceProbe {
   readonly draft: { readonly content: string; readonly wordCount?: number };
   readonly chapters: readonly {

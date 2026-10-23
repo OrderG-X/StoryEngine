@@ -40,6 +40,16 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("楼门钥匙放回茶馆柜台底下")).toBeTruthy();
   });
 
+  it("这本书头一回定稿：头上一句说定稿是干什么的；之后、只看的旧预览都不说", () => {
+    const intro = /定稿就是把这章记进账/u;
+    const { rerender } = render(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} firstCommit />);
+    expect(screen.getByText(intro)).toBeTruthy();
+    rerender(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByText(intro)).toBeNull();
+    rerender(<CommitSheet preview={preview()} busy={false} onClose={vi.fn()} firstCommit />);
+    expect(screen.queryByText(intro)).toBeNull();
+  });
+
   it("不记 / 改记 / 改天数随【定稿】带上；什么都不动就是空的", () => {
     const onConfirm = vi.fn();
     render(<CommitSheet preview={preview()} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);

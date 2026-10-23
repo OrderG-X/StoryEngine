@@ -129,7 +129,7 @@ export function BrainstormPanel({ chapter, draftEmpty, hidden, busy, onAction }:
       <section className="se-bs is-ask" aria-label="往哪走">
         <div className="se-bs-top">
           <h2>第 {chapter} 章往哪走？</h2>
-          <p>{thinking ? "AI 在想几种走法，还会对一遍前文，要一两分钟……" : "没想好怎么写？说个大概，AI 给你几种走法挑；也可以直接在下面写。"}</p>
+          <p>{thinking ? `AI 在想几种走法${chapter > 1 ? "，还会对一遍前文" : ""}，要一两分钟……` : "没想好怎么写？说个大概，AI 给你几种走法挑；也可以直接在下面写。"}</p>
         </div>
         <IdeaForm initial="" label={thinking ? "在想…" : "给我几种走法"} busy={busy} onSubmit={(idea) => brainstorm(idea)} />
       </section>

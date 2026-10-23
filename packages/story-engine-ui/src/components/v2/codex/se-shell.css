@@ -206,6 +206,7 @@
   .se-cs-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 12px 10px 20px;}
   .se-cs-head h2{margin:0;font-size:16px;font-weight:600;color:var(--text);}
   .se-cs-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 20px 16px;display:flex;flex-direction:column;gap:16px;}
+  .se-cs-intro{margin:0;font-size:13px;line-height:1.7;color:var(--muted);}
   .se-cs-day{
     display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:10px 12px;
     border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:14px;color:var(--text);

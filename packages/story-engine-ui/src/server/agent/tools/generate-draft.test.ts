@@ -108,6 +108,14 @@ function longBody(mainCharacterName: string): string {
   return [para, para, para, para].join("\n\n");
 }
 
+describe("generate_draft 输出格式", () => {
+  it("「按前文改了几处」过输出格式不丢（2026-10-23 从零走查：被格式滤掉，回话没说正文改过）", () => {
+    const shape = (generateDraftTool.outputSchema as unknown as { shape: Record<string, { parse: (value: unknown) => unknown }> }).shape;
+    const continuity = { checked: true, sure: [], maybe: [], failures: [], autoFixed: { applied: 2, failed: 0 } };
+    expect(shape.qualityPipeline!.parse({ continuity })).toEqual({ continuity });
+  });
+});
+
 describe("generate_draft 写工作稿工具", () => {
   it("生成成功 → 写入工作稿文件，返回 draftPath/draftBody 与 refreshScope:full，且不带 snapshotId（草稿不建 git 快照）", async () => {
     const projectDir = await makeProject("出稿", "林远");

@@ -12,6 +12,7 @@ import {
   parseUserAction,
   readCommittedChapterNumbers,
   runUserAction,
+  afterDraftCheckLine,
   type UserActionToolExecutor,
 } from "./user-actions.js";
 
@@ -520,9 +521,15 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     });
     expect(calls).toEqual(["generate_draft", "check_continuity"]);
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
-    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处、可能 1 处，画在稿纸上了。");
+    expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
     // 核出确定的几处：改法在核账卡上，最后一个事件就是核账卡，不再挂下一步。
     expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity"]);
+  });
+
+  it("只剩「可能」：稿纸默认不画，回话说在卡上点开看，不说画上了", () => {
+    const item = { quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" };
+    expect(afterDraftCheckLine({ ok: true, sure: [], maybe: [item] })).toBe("写完核了一遍：没有确定对不上的；可能 1 处，在卡上点开看。");
+    expect(afterDraftCheckLine({ ok: true, sure: [item], maybe: [] }, 2)).toBe("写完核账，按前文改了 2 处；再核还有确定对不上 1 处，画在稿纸上了。");
   });
 
   it("写完核出的已按前文改过（2026-10-23）→ 回话说改了几处、再核还剩几处（作者看着正文变了，得知道是改过的）", async () => {

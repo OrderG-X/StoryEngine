@@ -68,6 +68,8 @@ export type BrainstormResult =
     /** 核账员核过前文没有；没核成时 checkNote 说原因。 */
     readonly checked: boolean;
     readonly checkNote?: string;
+    /** 前面还没有定稿的章（新书第一章）：没前文可对，核账员不核。 */
+    readonly nothingEarlier?: true;
     /** 章纲员 / 核账员还没读完全书，这次按已有笔记 + 最近几章原文想的。 */
     readonly coldNote?: string;
   }
@@ -320,21 +322,25 @@ export async function brainstormChapter(input: {
   const coldNotes = plannerWindow.cold ? [coldText("章纲员", plannerWindow.cold, upTo)] : [];
   let checked = false;
   let checkNote: string | undefined;
-  try {
-    const checkerWindow = await readerWindow({ ...windowInput, role: CHECKER_ROLE, callModel: input.callChecker });
-    if (checkerWindow.cold) {
-      input.onCold?.("checker");
-      coldNotes.push(coldText("核账员", checkerWindow.cold, upTo));
+  // 核出来的每处都要引前文原句核实；前面一章都没定稿（新书第一章）就一处也立不住，白调一次模型还说「核过前文」（2026-10-23 从零走查）。
+  const earlier = await readEarlierChapters(input.projectDir, input.chapter);
+  const nothingEarlier = earlier.chapters.length === 0;
+  if (!nothingEarlier) {
+    try {
+      const checkerWindow = await readerWindow({ ...windowInput, role: CHECKER_ROLE, callModel: input.callChecker });
+      if (checkerWindow.cold) {
+        input.onCold?.("checker");
+        coldNotes.push(coldText("核账员", checkerWindow.cold, upTo));
+      }
+      const text = await withStep("核账员核走法", () => input.callChecker(
+        [...checkerWindow.messages, { role: "user", content: brainstormCheckTask(input.chapter, options!) }],
+        { json: true },
+      ));
+      options = splitBrainstormProblems(text, options, earlier);
+      checked = true;
+    } catch (error) {
+      checkNote = `核账员这次没核成：${error instanceof Error ? error.message : String(error)}`;
     }
-    const earlier = await readEarlierChapters(input.projectDir, input.chapter);
-    const text = await withStep("核账员核走法", () => input.callChecker(
-      [...checkerWindow.messages, { role: "user", content: brainstormCheckTask(input.chapter, options!) }],
-      { json: true },
-    ));
-    options = splitBrainstormProblems(text, options, earlier);
-    checked = true;
-  } catch (error) {
-    checkNote = `核账员这次没核成：${error instanceof Error ? error.message : String(error)}`;
   }
 
   return {
@@ -344,6 +350,7 @@ export async function brainstormChapter(input: {
     options,
     checked,
     ...(checkNote ? { checkNote } : {}),
+    ...(nothingEarlier ? { nothingEarlier: true as const } : {}),
     ...(coldNotes.length > 0 ? { coldNote: coldNotes.join("") } : {}),
   };
 }

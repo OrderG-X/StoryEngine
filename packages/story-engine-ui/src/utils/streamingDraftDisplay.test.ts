@@ -12,4 +12,8 @@ describe("streamingDraftDisplay：流式期间不在稿纸顶上露出 Markdown 
   it("没有标题行 → 原样", () => {
     expect(streamingDraftDisplay("下午两点四十分。\n\n# 不是开头")).toBe("下午两点四十分。\n\n# 不是开头");
   });
+  it("成对的粗体记号去掉；还没写完的那半对先留着", () => {
+    expect(streamingDraftDisplay("纸上一行字：\n\n**三日后，亥时。**\n\n他")).toBe("纸上一行字：\n\n三日后，亥时。\n\n他");
+    expect(streamingDraftDisplay("纸上一行字：**三日后")).toBe("纸上一行字：**三日后");
+  });
 });

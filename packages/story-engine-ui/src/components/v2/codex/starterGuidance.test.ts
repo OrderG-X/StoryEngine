@@ -3,6 +3,7 @@ import {
   STARTER_INTENTS,
   defaultCenterViewForWorkspace,
   isStarterEmptyWorkspace,
+  starterSteps,
 } from "./starterGuidance.js";
 
 describe("starterGuidance", () => {
@@ -78,5 +79,16 @@ describe("starterGuidance", () => {
 
   it("空书、非空书打开都落写作台（书架点的是「继续写」）", () => {
     expect(defaultCenterViewForWorkspace()).toBe("desk");
+  });
+
+  it("开书三步：设定本还空着第一步不打勾；有卡就打勾、列名字，多的说等几个", () => {
+    const empty = starterSteps({ chapter: 1, cardNames: [], storyFilled: false });
+    expect(empty.map((step) => step.label)).toEqual(["说说故事", "第一章往哪走", "写"]);
+    expect(empty[0]).toMatchObject({ done: false, hint: "跟 AI 聊聊点子，它把人物、世界记进设定本" });
+    expect(starterSteps({ chapter: 1, cardNames: ["沈延"], storyFilled: false })[0]).toMatchObject({ done: true, hint: "设定本里有了：沈延" });
+    expect(starterSteps({ chapter: 1, cardNames: ["甲", "乙", "丙", "丁", " "], storyFilled: true })[0]!.hint).toBe("设定本里有了：甲、乙、丙 等 4 个");
+    expect(starterSteps({ chapter: 1, cardNames: [], storyFilled: true })[0]).toMatchObject({ done: true, hint: "设定本里有了故事设定" });
+    expect(starterSteps({ chapter: 1, cardNames: ["沈延"], storyFilled: true }).slice(1).every((step) => !step.done)).toBe(true);
+    expect(starterSteps({ chapter: 3, cardNames: [], storyFilled: false })[1]!.label).toBe("第 3 章往哪走");
   });
 });

@@ -87,6 +87,12 @@ export function namePeekCardsOf(bible: BibleView | null): NamePeekCard[] {
   }));
 }
 
+/** 新书首屏「说说故事」那一步：设定本里有哪些卡（人物在前）。 */
+export function starterCardNamesOf(bible: BibleView | null): string[] {
+  if (!bible) return [];
+  return [...bible.characters, ...bible.places, ...bible.items, ...bible.lore].map((entry) => entry.card.name);
+}
+
 /** 设定本左边分类后面的数（0 不显示）。 */
 export function bibleNavCounts(bible: BibleView | null): Partial<Record<BibleCat, number>> {
   if (!bible) return {};
