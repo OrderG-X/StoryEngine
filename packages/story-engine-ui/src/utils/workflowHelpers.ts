@@ -93,6 +93,13 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: ["model_call", "draft_write"],
       requiresConfirmation: false,
     },
+    "continue-confirm": {
+      id: "continue-confirm",
+      label: "接着往下写",
+      description: "从工作稿最后一句接着写，已写的字不动（写前自动存档，可在操作历史撤销）。",
+      permission: ["model_call", "draft_write"],
+      requiresConfirmation: false,
+    },
     "foundation-confirm": {
       id: "foundation-confirm",
       label: "确认改设定",
@@ -135,6 +142,14 @@ export function rewriteConfirmAction(target: { readonly chapter: number; readonl
     ...suggestedAction("rewrite-confirm"),
     label: `重写第 ${target.chapter} 章`,
     rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}) },
+  };
+}
+
+/** 「接着往下写」按钮：有稿没定稿的章，从最后一句接着写（P13）。 */
+export function continueConfirmAction(target: { readonly chapter: number; readonly chapterGoal?: string }): SuggestedAction {
+  return {
+    ...suggestedAction("continue-confirm"),
+    rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}), continueDraft: true },
   };
 }
 

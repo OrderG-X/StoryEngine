@@ -375,7 +375,7 @@ describe("draftLength 字数透明（一次成稿不重试：低于下限不拒�
   it("buildDraftLengthWarning：below_lower_bound → ⚠ 标注（实际X字/下限Y字）；其余状态 → 空串", () => {
     const base = { requestedDraftLength: 1800, lowerBound: 1530, upperBound: 2070, source: "writing_rules" as const };
     expect(buildDraftLengthWarning({ ...base, actualLength: 200, lengthStatus: "below_lower_bound" }))
-      .toBe("⚠ 低于目标字数下限（实际200字/下限1530字）。可以按原样接受，或让我重写一版补足字数。");
+      .toBe("⚠ 低于目标字数下限（实际200字/下限1530字）。可以按原样接受，或让我接着往下写补足字数。");
     expect(buildDraftLengthWarning({ ...base, actualLength: 1700, lengthStatus: "within_range" })).toBe("");
     expect(buildDraftLengthWarning({ ...base, actualLength: 2500, lengthStatus: "above_upper_bound" })).toBe("");
   });
@@ -523,10 +523,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(out.ok).toBe(false);
     expect(out.needsConfirmation).toBe(true);
     expect(out.blockedReason).toBe("chapter_has_text");
-    expect(out.rewriteConfirm).toEqual({ chapter: 6, chapterGoal: "让林溪回来" });
+    expect(out.rewriteConfirm).toEqual({ chapter: 6, chapterGoal: "让林溪回来", canContinue: true });
     expect(out.summary).toContain("「重写第 6 章」"); // 和按钮上的字一样（rewriteConfirmAction 的 label）
+    expect(out.summary).toContain("「接着往下写」");
     expect(out.summary).not.toMatch(/generate_draft|commit_apply|commit_preview/u);
-    expect(buildRewriteAwaitingAuthorOutput(6, true, {} as StateOverview).summary).toContain("已经定稿");
+    const committed = buildRewriteAwaitingAuthorOutput(6, true, {} as StateOverview);
+    expect(committed.summary).toContain("已经定稿");
+    expect(committed.summary).not.toContain("接着往下写"); // 定稿的章不接着写
+    expect(committed.rewriteConfirm).toEqual({ chapter: 6 });
   });
 
   it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
@@ -576,7 +580,7 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       expect(out.ok).toBe(false);
       expect(out.blockedReason).toBe("chapter_has_text");
       expect(out.needsConfirmation).toBe(true);
-      expect(out.rewriteConfirm).toEqual({ chapter: 1 });
+      expect(out.rewriteConfirm).toEqual({ chapter: 1, canContinue: true });
       expect(spy).not.toHaveBeenCalled();
       expect(await readFile(draftPath, "utf-8")).toContain("作者自己写的原稿");
     } finally {
@@ -601,6 +605,67 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       expect(typeof out.snapshotId).toBe("string");
       expect(spy).toHaveBeenCalled();
       expect(await readFile(draftPath, "utf-8")).not.toContain("旧稿。");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("接着往下写（P13）：已写的一个字不动、从最后一句接；稿纸先推已写的；不用作者点按钮；标题沿用", async () => {
+    const projectDir = await makeProject("接着写", "林远");
+    const draftPath = defaultDraftPath(projectDir, 1);
+    await mkdir(dirname(draftPath), { recursive: true });
+    const authorText = "林远推开门，屋里没人。\n\n他把\"账册\"放在桌上，**没有坐下**。";
+    await writeFile(draftPath, `# 第1章 · 空屋\n\n${authorText}\n`, "utf-8");
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const prompts: string[] = [];
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue({
+      async generateDraft({ context }) {
+        prompts.push(JSON.stringify(context.sections.find((section) => section.name === "already_written")?.content ?? null));
+        return { title: "别的标题", content: longBody("林远") };
+      },
+    });
+    const deltas: string[] = [];
+    try {
+      const out = await execute(
+        { continueDraft: true, chapterGoal: "让他等到天黑" },
+        { requestContext: buildProjectRequestContext(projectDir, 1, (payload) => deltas.push(payload.text), ["接着写，让他等到天黑"]) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; snapshotId?: string; continued?: { kept: number; added: number }; summary: string };
+      expect(out.ok).toBe(true);
+      expect(prompts[0]).toContain("林远推开门，屋里没人。");
+      expect(deltas[0]).toBe(`${authorText}\n\n`);
+      const file = await readFile(draftPath, "utf-8");
+      expect(file.startsWith(`# 第1章 · 空屋\n\n${authorText}\n\n林远在走廊尽头停下脚步`)).toBe(true);
+      expect(typeof out.snapshotId).toBe("string");
+      expect(out.continued?.kept).toBeGreaterThan(0);
+      expect(out.continued?.added).toBeGreaterThan(100);
+      expect(out.summary).toContain("接着往下写了");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("接着往下写：这章还没正文 → nothing_to_continue；已定稿 → chapter_committed；都不调模型", async () => {
+    const projectDir = await makeProject("没得接", "林远");
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    try {
+      const empty = await execute(
+        { continueDraft: true, chapter: 1 },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["接着写"]) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; blockedReason?: string; summary: string };
+      expect(empty).toMatchObject({ ok: false, blockedReason: "nothing_to_continue" });
+      expect(empty.summary).toContain("「写第 1 章」");
+
+      const committedPath = defaultCommittedChapterPath(projectDir, 1);
+      await mkdir(dirname(committedPath), { recursive: true });
+      await writeFile(committedPath, "# 第1章\n\n定稿的正文。", "utf-8");
+      const committed = await execute(
+        { continueDraft: true, chapter: 1 },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["接着写"]) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; blockedReason?: string; summary: string };
+      expect(committed).toMatchObject({ ok: false, blockedReason: "chapter_committed" });
+      expect(committed.summary).toContain("已经定稿");
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }

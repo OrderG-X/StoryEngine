@@ -55,7 +55,7 @@
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
 import { readFile } from "node:fs/promises";
-import { withBookLock } from "@actalk/story-core";
+import { quoteInText, withBookLock } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -84,7 +84,7 @@ import {
   type FastDraftReport,
   type WriterClient,
 } from "../writing/fast-draft-writer.js";
-import { type ChapterPlan } from "../book/chapter-plan.js";
+import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../writing/beat-miss-adjudication.js";
 import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
@@ -271,7 +271,7 @@ export function buildDraftLengthInfo(report: DraftLengthReport): GenerateDraftLe
  */
 export function buildDraftLengthWarning(info: GenerateDraftLengthInfo): string {
   if (info.lengthStatus !== "below_lower_bound") return "";
-  return `⚠ 低于目标字数下限（实际${info.actualLength}字/下限${info.lowerBound}字）。可以按原样接受，或让我重写一版补足字数。`;
+  return `⚠ 低于目标字数下限（实际${info.actualLength}字/下限${info.lowerBound}字）。可以按原样接受，或让我接着往下写补足字数。`;
 }
 
 /** 必命中要点保真核对的工具输出信息：missingBeats 是【裁决后】结果；被摘除的误报进 adjudicatedCovered（可追溯）。 */
@@ -866,6 +866,13 @@ export interface GenerateDraftInput {
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
   /**
+   * 接着往下写（P13）：本章已写的正文 + 这次写多少字 + 作者这次说的方向（原话）。给了就不新拟章纲（有就沿用）、
+   * 不分半写、只出一版；已写的字原样留着，之后按核账改、自动去味都只动接着写的那段，补字数那步不跑（它重写最后一段）。
+   */
+  readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
+  /** 正文流式时换掉稿纸上已流出的字（重写一段时退回、两段之间补空行），见 FastDraftInput.onStreamReset。只出一版时才用。 */
+  readonly onStreamReset?: (visible: string) => void;
+  /**
    * 适配层已建的「这一步写盘前」存档点（R4.2：两条出稿路首稿/覆盖都建）。传了它，本编排内部的
    * 第二次落盘（自动去味覆盖、续写补字重写）不再各建存档点——一次出稿在操作历史里就是一步，
    * 撤销一键退回这步之前；它同时作为 output.snapshotId 的兜底（内部没建更近的快照时）。
@@ -911,6 +918,8 @@ export interface GenerateDraftOutcome {
   readonly chapterPlan?: GenerateDraftPlanInfo;
   /** 出稿后的质量环节：续写够字数、前后核对与自动修改的结果（剩下要作者定的问题在 continuity.remaining）。 */
   readonly qualityPipeline?: QualityPipelineInfo;
+  /** 接着往下写（P13）：本来写好的字数、这次接着写的字数（稿纸顶栏同口径）。 */
+  readonly continued?: { readonly kept: number; readonly added: number };
   readonly issues: readonly string[];
   readonly overview: StateOverview;
   readonly summary: string;
@@ -1105,6 +1114,12 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
  *   模型挂→维持原结论+unavailable）。零判漏零调用。
  */
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
+  // 接着往下写：章纲员看不到作者写的半章，不新拟；本章有章纲就沿用（写手照它接着写还没写到的要点）。
+  if (input.continueFrom) {
+    input.onPhase?.("write");
+    const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
+    return withStep("接着写", () => runGenerateDraftWithPlan(input, plan));
+  }
   // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
   const planStartedAt = Date.now();
   const plannerCallModel = input.plannerCallModel;
@@ -1158,12 +1173,14 @@ function presenceSummarySentence(summary: string): string {
 async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: ChapterPlan | undefined): Promise<GenerateDraftOutcome> {
   const { projectDir, chapter, writerClient } = input;
   const lengthPolicy = input.policies?.lengthPolicy ?? "annotate";
+  const continueFrom = input.continueFrom?.text.trim() ? input.continueFrom : undefined;
   const run = await resolveDraftRunContext({
     ...(chapterPlan ? { chapterPlan } : {}),
     projectDir,
     chapter,
     ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
-    ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
+    // 接着写时作者说的字数是「这次写多少」（continueFrom.length），整章目标照写作规则。
+    ...(input.requestedDraftLength !== undefined && !continueFrom ? { requestedDraftLength: input.requestedDraftLength } : {}),
     ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
     ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
     ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
@@ -1171,9 +1188,12 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   });
   const { chapterGoal, maxTimelineEvents, lengthTarget, contextRanking, characterSelection } = run;
 
-  const sharedDraftInput = sharedFastDraftInput(run, input);
-  // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。
-  const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
+  const sharedDraftInput = {
+    ...sharedFastDraftInput(run, { ...input, ...(continueFrom ? { segmentByPlan: false } : {}) }),
+    ...(continueFrom ? { continueFrom } : {}),
+  };
+  // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。接着写只出一版。
+  const candidateCount = !continueFrom && (input.candidates === 2 || input.candidates === 3) ? input.candidates : 1;
   let report: FastDraftReport | undefined;
   let sampling: DraftCandidateSampling | undefined;
   let beatAdjudication: BeatMissAdjudication | undefined;
@@ -1197,6 +1217,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     report = await runFastDraft({
       ...sharedDraftInput,
       writerClient,
+      ...(input.onStreamReset ? { onStreamReset: input.onStreamReset } : {}),
       dryRun: false,
     });
   }
@@ -1244,7 +1265,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   let finalDraftContent = "";
   if (report?.passed && draftBody) {
     try {
-      const written = await writeAiDraft(projectDir, { chapter, title: finalReport?.title ?? `第${chapter}章`, body: draftBody });
+      // 接着写不换标题（沿用盘上那份的）。
+      const written = await writeAiDraft(projectDir, { chapter, ...(continueFrom ? {} : { title: finalReport?.title ?? `第${chapter}章` }), body: draftBody });
       draftPath = written.path;
       if (lengthPolicy === "enforce_or_rollback") finalDraftContent = written.content;
     } catch (error) {
@@ -1300,11 +1322,13 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     qualityPipeline = await runDraftQualityPipeline({
       projectDir,
       chapter,
-      title: finalReport.title ?? `第${chapter}章`,
+      ...(continueFrom ? {} : { title: finalReport.title ?? `第${chapter}章` }),
       draftBody,
       lengthTarget,
       ...(chapterPlan ? { chapterPlan } : {}),
-      ...(input.continueCallModel ? { continueCallModel: input.continueCallModel } : {}),
+      // 接着写：补字数那步会重写最后一段（可能是作者写的），不跑；按核账改只动接着写的那段。
+      ...(input.continueCallModel && !continueFrom ? { continueCallModel: input.continueCallModel } : {}),
+      ...(continueFrom ? { keepPrefix: continueFrom.text.trim() } : {}),
       ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
       ...(input.continuityFixCallModel ? { fixCallModel: input.continuityFixCallModel } : {}),
       // R4.2：本流程已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
@@ -1358,7 +1382,8 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   let autoDeAiInfo: GenerateDraftAutoDeAiInfo | undefined;
   let autoDeAiSnapshotId: string | undefined;
   if (effectiveAiFlavor) {
-    const targets = pickAutoDeAiTargets(effectiveAiFlavor);
+    // 接着写：作者写的那几句不替作者改（检出照列）。
+    const targets = pickAutoDeAiTargets(effectiveAiFlavor).filter((violation) => !continueFrom || !quoteInText(violation.text, continueFrom.text));
     const initialHighMedium = effectiveAiFlavor.bySeverity.high + effectiveAiFlavor.bySeverity.medium;
     if (targets.length > 0) {
       if ((input.autoDeAi ?? true) && input.deAiCallModel) {
@@ -1429,12 +1454,16 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ? buildCandidateSummaryLine(candidateCount, sampling.scoreInputs[sampling.chosenIndex], sampling.scoreInputs)
     : "";
 
+  const continued = continueFrom
+    ? { kept: countTextWords(continueFrom.text), added: Math.max(countTextWords(draftBody) - countTextWords(continueFrom.text), 0) }
+    : undefined;
   return {
     ok: true,
     chapter,
     draftPath,
     draftBody,
-    ...(finalReport.title ? { draftTitle: finalReport.title } : {}),
+    ...(finalReport.title && !continueFrom ? { draftTitle: finalReport.title } : {}),
+    ...(continued ? { continued } : {}),
     ...(draftLengthInfo ? { draftLength: draftLengthInfo } : {}),
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
@@ -1449,7 +1478,9 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     issues: report.issues,
     overview,
     summary:
-      `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。` +
+      (continued
+        ? `第 ${chapter} 章接着往下写了 ${continued.added} 字，前面写好的 ${continued.kept} 字没动，已写进工作稿（可撤销）。`
+        : `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。`) +
       candidateLine +
       `${presenceSummarySentence(characterSelection.summary)}工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
       (qualityPipeline && qualityPipeline.notes.length > 0 ? `\n${qualityPipeline.notes.join("\n")}` : "") +

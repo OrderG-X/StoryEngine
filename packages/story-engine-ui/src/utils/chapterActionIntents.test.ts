@@ -29,6 +29,7 @@ describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你�
     expect(userActionChoiceText({ toolName: "commit_preview", chapter: 5 })).toBe("预览第 5 章的定稿改动");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12, chapterGoal: "寄往上海的存根：1. …" }, "寄往上海的存根")).toBe("照「寄往上海的存根」写第 12 章的正文");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12 })).toBe("写第 12 章的正文");
+    expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12, continueDraft: true })).toBe("第 12 章接着往下写");
     // 定论（P12）：回显说清以哪边为准，原句照抄。
     expect(userActionChoiceText({ toolName: "settle_preview", chapter: 4, truth: { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" } })).toBe("以第 1 章为准：「杜叔走了整整十年」");
     expect(userActionChoiceText({ toolName: "settle_preview", chapter: 4, truth: { where: "setting", quote: "三年前过世", label: "人物卡" } })).toBe("以设定为准：人物卡「三年前过世」");

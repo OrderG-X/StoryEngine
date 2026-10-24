@@ -64,6 +64,30 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }] });
   });
 
+  it("本章别处说同一件事的句子跟着改（P13 真机：「四个字」只改了点名那句）；锁住的、超三句的、要删句的不收", async () => {
+    const text = "他说了四个字。不到时候。她问哪四个字。他说就这四个字。前面也说四个字。\n";
+    const out = await fixByUnits({
+      chapter: 9, text, fixes: [{ quote: "他说了四个字", goal }],
+      callModel: async () => reply([{ id: 1, to: "他说了三个字。" }, { id: 3, to: "她问哪三个字。" }, { id: 4, to: "他说就这三个字。" }]),
+    });
+    expect(out.text).toBe("他说了三个字。不到时候。她问哪三个字。他说就这三个字。前面也说四个字。\n");
+    expect(out).toMatchObject({ applied: [0], alsoChanged: 2 });
+
+    const locked = await fixByUnits({
+      chapter: 9, text, fixes: [{ quote: "她问哪四个字", goal }], lockedBefore: text.indexOf("不到时候"),
+      callModel: async () => reply([{ id: 3, to: "她问哪三个字。" }, { id: 1, to: "他说了三个字。" }, { id: 4, to: "" }]),
+    });
+    // 第 1 句在作者写的那段里，不连带改；连带的不许删句。
+    expect(locked.text).toBe("他说了四个字。不到时候。她问哪三个字。他说就这四个字。前面也说四个字。\n");
+    expect(locked.alsoChanged).toBe(0);
+
+    const capped = await fixByUnits({
+      chapter: 9, text: "甲。乙。丙。丁。戊。\n", fixes: [{ quote: "甲", goal }],
+      callModel: async () => reply([{ id: 1, to: "甲甲。" }, { id: 2, to: "乙乙。" }, { id: 3, to: "丙丙。" }, { id: 4, to: "丁丁。" }, { id: 5, to: "戊戊。" }]),
+    });
+    expect(capped.text).toBe("甲甲。乙乙。丙丙。丁丁。戊。\n");
+  });
+
   it("几处里一处换上了、一处没给：改了的照换，没给的照实说", async () => {
     const out = await fixByUnits({
       chapter: 5,

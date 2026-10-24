@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildInboxTodos } from "./inboxTodos.js";
 
-const ch = (n: number, title: string, status: "committed" | "planned" = "committed") => ({ id: `c${n}`, chapterNumber: n, title, status });
+const ch = (n: number, title: string, status: "committed" | "current" | "planned" = "committed") => ({ id: `c${n}`, chapterNumber: n, title, status });
 const overview = (over: { cleanup?: number; arcs?: { id: string; title: string; lastTouchedChapter?: number }[] } = {}) => ({
   threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: over.cleanup ?? 0, keyOpenItems: [] },
   arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: (over.arcs ?? []).map((a) => ({ ...a, status: "active" })) },
@@ -21,6 +21,11 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
       "3 章用了同一个标题「看手」",
     ]);
     expect(todos[3]?.prefill).toContain("第 19、20、32 章");
+  });
+
+  it("正在写、还没定稿的章不提「还没起标题」（标题出稿或定稿时才起）", () => {
+    const todos = buildInboxTodos({ chapters: [ch(8, "雾港"), ch(9, "第9章", "current")], overview: overview(), currentChapterNumber: 9 });
+    expect(todos).toEqual([]);
   });
 
   it("什么都不缺 → 空列表；重名只有两章不算", () => {

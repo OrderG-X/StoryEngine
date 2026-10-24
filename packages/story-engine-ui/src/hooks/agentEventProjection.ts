@@ -28,7 +28,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, continueConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -92,7 +92,7 @@ export interface AgentToolResultOutput {
   /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
   readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
   /** generate_draft 专属：有稿的章 AI 不覆盖，挂「重写这一章」按钮。 */
-  readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string };
+  readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
   /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
   readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 }
@@ -324,12 +324,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
         };
       }
-      // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）。
+      // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）；没定稿的再挂「接着往下写」。
       if (event.toolName === "generate_draft" && event.output?.rewriteConfirmAction) {
-        const button = rewriteConfirmAction(event.output.rewriteConfirmAction);
+        const target = event.output.rewriteConfirmAction;
+        const buttons = [...(target.canContinue ? [continueConfirmAction(target)] : []), rewriteConfirmAction(target)];
+        const ids = new Set(buttons.map((button) => button.id));
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => !ids.has(a.id)), ...buttons],
         };
       }
       // 删角色 / 覆盖已确立设定：挂「确认改设定」按钮（作者档，点了才由服务端执行）。

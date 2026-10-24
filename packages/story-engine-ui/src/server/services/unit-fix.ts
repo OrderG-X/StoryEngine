@@ -30,10 +30,17 @@ export interface UnitFixOutcome {
   readonly failed: readonly { readonly fix: number; readonly why: string }[];
   /** 换上去的句子（改前 → 改后）。 */
   readonly changes: readonly { readonly from: string; readonly to: string }[];
+  /** 其中不是点名的、本章别处说同一件事跟着改的句数。 */
+  readonly alsoChanged: number;
 }
 
 /** 一处原句最多落到几句上；再多就是引得太长，交给作者。 */
 const MAX_UNITS_PER_FIX = 4;
+/**
+ * 本章别处说同一件事、不跟着改就前后对不上的句子，最多连带改几句（真机 P13：「四个字」只改了点名那句，
+ * 本章另两句还说「四个字」，再核又报两处）。
+ */
+const MAX_ALSO_EDITS = 3;
 
 /** 原句落在哪几句（编号）；找不到 / 不唯一 / 太长给原因。 */
 export function unitsOfQuote(text: string, units: readonly TextUnit[], quote: string): readonly number[] | string {
@@ -51,7 +58,8 @@ export function unitFixTask(chapter: number, numbered: string, targets: readonly
     `下面是第 ${chapter} 章的工作稿，每句前面有编号 [n]。核账查出几处和前文、设定对不上，请只改点名的这几句：`,
     ...targets.map((target, index) => `${index + 1}. ${target.ids.map((id) => `[${id}]`).join("")}：${target.goal}`),
     "要求：",
-    "- 只改点名的句子，别的一个字不动；能小改就小改，口吻、写法、标点习惯照原来的；",
+    "- 只改点名的句子；能小改就小改，口吻、写法、标点习惯照原来的；",
+    `- 本章别的句子也说了同一件事、点名那句改了它不跟着改就前后对不上的（比如数目、时间、谁说的），也照同样的改法一并给出，最多 ${MAX_ALSO_EDITS} 句；和这件事无关的句子一个字不动；`,
     "- 一句改完还是一句：别把前后句抄进来，也别拆成几句；点名了两三句的，只改要改的那句就行；",
     "- 实在要删掉这句才通顺，to 给空串。",
     '只输出一个 JSON：{"edits":[{"id":12,"to":"改后的这一句"}]}',
@@ -72,22 +80,38 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
-/** 模型回的改法：只认点名的编号；新句过一遍 prepareUnitReplacement，用不了、和原句一样的不要。 */
-export function parseUnitFixEdits(reply: string, units: readonly TextUnit[], allowed: ReadonlySet<number>): UnitEdit[] | undefined {
+/**
+ * 模型回的改法：点名的编号照收；别的编号是「本章别处说同一件事」的连带改，最多 MAX_ALSO_EDITS 句、锁住的（接着写时作者写的那段）不收。
+ * 新句过一遍 prepareUnitReplacement，用不了、和原句一样的不要。
+ */
+export function parseUnitFixEdits(
+  reply: string,
+  units: readonly TextUnit[],
+  allowed: ReadonlySet<number>,
+  locked: ReadonlySet<number> = new Set(),
+): UnitEdit[] | undefined {
   const parsed = parseJsonObject(reply);
   if (!parsed || !Array.isArray(parsed.edits)) return undefined;
   const out: UnitEdit[] = [];
+  let also = 0;
   for (const raw of parsed.edits) {
     if (!raw || typeof raw !== "object") continue;
     const record = raw as Record<string, unknown>;
     const id = typeof record.id === "number" ? record.id : typeof record.id === "string" ? Number(record.id.replace(/[[\]\s]/gu, "")) : Number.NaN;
-    if (!Number.isInteger(id) || !allowed.has(id) || out.some((edit) => edit.id === id) || typeof record.to !== "string") continue;
-    const unit = units.find((item) => item.id === id)!;
+    if (!Number.isInteger(id) || out.some((edit) => edit.id === id) || typeof record.to !== "string") continue;
+    const unit = units.find((item) => item.id === id);
+    if (!unit) continue;
+    const named = allowed.has(id);
+    if (!named && (locked.has(id) || also >= MAX_ALSO_EDITS)) continue;
     const to = prepareUnitReplacement(units, id, record.to);
     if (to === undefined || to === unit.text || to.length > unit.text.length * 3 + 60) continue;
+    // 连带改的不许删句：删一句要作者看着办。
+    if (!named && !to.trim()) continue;
+    if (!named) also += 1;
     out.push({ id, from: unit.text, to });
   }
-  return out;
+  // 点名的一句都没改，连带的也不改（跟着改是为了和点名那句一致）。
+  return out.some((edit) => allowed.has(edit.id)) ? out : [];
 }
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -101,9 +125,12 @@ export async function fixByUnits(input: {
   readonly text: string;
   readonly fixes: readonly UnitFix[];
   readonly callModel: RevisionModelCaller;
+  /** 这个位置之前的句子不连带改（接着写：开头是本来写好的那段）。 */
+  readonly lockedBefore?: number;
 }): Promise<UnitFixOutcome> {
   const { text, fixes } = input;
   const units = splitUnits(text);
+  const locked = new Set(input.lockedBefore === undefined ? [] : units.filter((unit) => unit.start < input.lockedBefore!).map((unit) => unit.id));
   const failed: { fix: number; why: string }[] = [];
   const located: { fix: number; ids: readonly number[] }[] = [];
   fixes.forEach((fix, index) => {
@@ -111,7 +138,7 @@ export async function fixByUnits(input: {
     if (typeof ids === "string") failed.push({ fix: index, why: ids });
     else located.push({ fix: index, ids });
   });
-  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [] });
+  const unchanged = (): UnitFixOutcome => ({ text, applied: [], failed: failed.sort((a, b) => a.fix - b.fix), changes: [], alsoChanged: 0 });
   if (located.length === 0) return unchanged();
 
   // 两处落在同一句上：合成一条交给模型，免得同一句给两种改法。
@@ -131,8 +158,8 @@ export async function fixByUnits(input: {
 
   let edits: UnitEdit[] | undefined;
   try {
-    edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed);
-    if (!edits) edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed);
+    edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
+    if (!edits) edits = parseUnitFixEdits(await input.callModel(prompt), units, allowed, locked);
   } catch (error) {
     for (const target of targets) for (const fix of target.fixes) failed.push({ fix, why: `AI 没改成（${errorText(error)}）` });
     return unchanged();
@@ -167,6 +194,7 @@ export async function fixByUnits(input: {
     applied: applied.sort((a, b) => a - b),
     failed: failed.sort((a, b) => a.fix - b.fix),
     changes: result.applied.map((edit) => ({ from: edit.from, to: edit.to })),
+    alsoChanged: result.applied.filter((edit) => !allowed.has(edit.id)).length,
   };
 }
 
@@ -190,7 +218,7 @@ export async function fixDraftByUnits(input: {
   return withBookLock(projectDir, async () => {
     const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
     if (text === undefined || !text.trim()) {
-      return { text: text ?? "", applied: [], failed: input.fixes.map((_, fix) => ({ fix, why: "这一章没有工作稿了" })), changes: [] };
+      return { text: text ?? "", applied: [], failed: input.fixes.map((_, fix) => ({ fix, why: "这一章没有工作稿了" })), changes: [], alsoChanged: 0 };
     }
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
     if (outcome.applied.length === 0) return outcome;

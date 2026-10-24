@@ -47,7 +47,7 @@ import { settledContinuityByMessage, useChapterProgress } from "../../../workspa
 import { targetChapterWordsOf } from "./WritingDeskCodex.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
-import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
+import { lastAssistantNextStepPrompt, withoutRailDuplicates, type NextStepPrompt } from "./nextStepChoices.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { confirmableCommitPreviewMessageId, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
@@ -394,10 +394,11 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   // 「下一步」选项卡只在 agent 主动调 suggest_next_steps 给出上下文相关提议时出现——已删掉按 flowStatus 写死的兜底
   // （那套死选项不看你这章具体情况、还会和 agent 正文打架，正是 suggest_next_steps 当初要治的病）。
   // agent 没提议的回合就不出卡，顺着它正文走或直接打字即可。点选项=给 agent 发一句意图。
-  const nextStep = busy ? null : lastAssistantNextStepPrompt(messages);
+  const nextStepPrompt = busy ? null : lastAssistantNextStepPrompt(messages);
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
-  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStep && props.onSendMessage));
+  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStepPrompt && props.onSendMessage));
+  const nextStep = withoutRailDuplicates(nextStepPrompt, railActions.map((action) => action.label));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。

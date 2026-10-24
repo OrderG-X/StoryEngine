@@ -58,7 +58,7 @@ export type UserAction =
    * 「写这一章」按钮（2026-10-10 引擎升级第 5 期「出稿一条路」）：直接执行 generate_draft——先拿章纲、写、
    * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
    */
-  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
   /** 「内容审阅」「硬伤检查」按钮（重构 P4）：只读，走对话通道、结果和 AI 调的一样进对话（原来走单独的 HTTP 路由）。 */
   | { readonly toolName: "ai_review"; readonly chapter: number }
   | { readonly toolName: "quality_check"; readonly chapter: number }
@@ -158,7 +158,10 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (toolName === "ai_review" || toolName === "quality_check") return { kind: "action", action: { toolName, chapter } };
   if (toolName === "generate_draft") {
     const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
-    return { kind: "action", action: { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) } };
+    return {
+      kind: "action",
+      action: { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(record.continueDraft === true ? { continueDraft: true } : {}) },
+    };
   }
   if (toolName === "check_continuity") {
     return { kind: "action", action: { toolName: "check_continuity", chapter, ...(record.fresh === true ? { fresh: true } : {}) } };
@@ -275,6 +278,11 @@ export function writeNextChoice(target: NextDraftTarget, label: string = `AI 写
   return target.hasDraft
     ? { label: `核第 ${target.chapter} 章`, intent: `核第 ${target.chapter} 章的账`, action: { toolName: "check_continuity", chapter: target.chapter } }
     : { label, intent: `继续写第 ${target.chapter} 章的正文`, action: { toolName: "generate_draft", chapter: target.chapter } };
+}
+
+/** 「接着往下写」那个选项（P13）：稿子短了，从最后一句接着写，已写的不动。 */
+export function continueChoice(chapter: number): NextStepChoice {
+  return { label: "接着往下写", intent: `第 ${chapter} 章接着往下写`, action: { toolName: "generate_draft", chapter, continueDraft: true } };
 }
 
 /**
@@ -489,6 +497,8 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   readonly afterDraft?: boolean;
   /** 写完核出的按前文改了几处（改完再核的结果才进了核账记忆）。 */
   readonly fixedAfterDraft?: number;
+  /** 写完的稿子比字数下限短：下一步先给「接着往下写」。 */
+  readonly shortAfterDraft?: boolean;
 }): Promise<void> {
   const { action } = args;
   const stamp = Date.now();
@@ -563,13 +573,15 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
     : [];
   // 确定 N 处时，改法都在核账卡上（「改掉这 N 处」、逐条「改这处 / 不是问题」，R4.5），稿纸工具条照样有「定稿」：
   // 不再挂下一步（以前的「我自己改」会白发一句话给 AI）。只有结果是上次的，才问要不要重新核。
+  const more: NextStepChoice[] = args.shortAfterDraft ? [continueChoice(action.chapter)] : [];
   const choices: NextStepChoice[] = sureCount > 0
-    ? fresh
+    ? [...more, ...fresh]
     : [
+      ...more,
       {
         label: "预览定稿",
         intent: `预览第 ${action.chapter} 章的定稿改动`,
-        recommended: true,
+        recommended: more.length === 0,
         action: { toolName: "commit_preview", chapter: action.chapter },
       },
       // 写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
@@ -582,7 +594,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   args.sendEvent("tool-result", {
     toolCallId: nextCallId,
     toolName: "suggest_next_steps",
-    output: { ok: true, question: sureCount > 0 ? "结果同上次，要不要重新核？" : "接下来？", choices },
+    output: { ok: true, question: sureCount > 0 && fresh.length > 0 ? "结果同上次，要不要重新核？" : "接下来？", choices },
   });
 }
 
@@ -857,7 +869,8 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
   }
   const applied = result.applied.length;
   const failed = result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
-  const done = applied === 0 ? "" : total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`;
+  const also = applied > 0 && result.alsoChanged > 0 ? `本章别处说同一件事的 ${result.alsoChanged} 句跟着改了。` : "";
+  const done = applied === 0 ? "" : `${total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`}${also}`;
   const notDone = failed.length === 0
     ? ""
     : total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
@@ -933,6 +946,8 @@ interface GenerateDraftLikeOutput {
   readonly draftBody?: unknown;
   readonly draftLength?: { readonly actualLength?: unknown; readonly lowerBound?: unknown; readonly lengthStatus?: unknown };
   readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown; readonly autoFixed?: { readonly applied?: unknown } } };
+  readonly continued?: { readonly kept?: unknown; readonly added?: unknown };
+  readonly blockedReason?: unknown;
 }
 
 /**
@@ -945,11 +960,24 @@ export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): st
   const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;
   const short = result.draftLength?.lengthStatus === "below_lower_bound" && actual !== undefined && lower !== undefined
     ? `，比下限少 ${lower - actual} 字` : "";
-  const lines = [`第 ${chapter} 章写好了${title}${actual !== undefined ? `，${actual} 字` : ""}${short}。`];
+  const kept = result.continued?.kept;
+  const added = result.continued?.added;
+  const lines = [typeof kept === "number" && typeof added === "number"
+    ? `第 ${chapter} 章接着写了 ${added} 字，前面的 ${kept} 字没动${actual !== undefined ? `，全章 ${actual} 字` : ""}${short}。`
+    : `第 ${chapter} 章写好了${title}${actual !== undefined ? `，${actual} 字` : ""}${short}。`];
   if (typeof result.draftBody === "string" && !result.draftBody.trim()) {
     lines.push("正文已写盘，但这次没载入稿纸：切到别的章再切回来就能看到，不用重写。");
   }
   return lines.join("\n");
+}
+
+/** 出稿没成的下一步：接着写没得接 → 改成从头写；这章已定稿 → 不给（回话里说了怎么办）；其余照原样再来一次。 */
+export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown): NextStepChoice[] {
+  if (action.continueDraft && blockedReason === "chapter_committed") return [];
+  if (action.continueDraft && blockedReason === "nothing_to_continue") {
+    return [{ label: `AI 写第 ${action.chapter} 章`, intent: "写这一章的正文", recommended: true, action: { toolName: "generate_draft", chapter: action.chapter } }];
+  }
+  return [{ label: "再写一次", intent: "写这一章的正文", recommended: true, action }];
 }
 
 /** 「写这一章」按钮：服务端直接出稿（正文照常经 draft-delta 流进稿纸），结果按 agent 回合同款事件推给前端，再给下一步选项。 */
@@ -963,7 +991,11 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
     const scrubbed = args.scrubber.push(text);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   };
-  const input = { chapter: action.chapter, ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}) };
+  const input = {
+    chapter: action.chapter,
+    ...(action.chapterGoal ? { chapterGoal: action.chapterGoal } : {}),
+    ...(action.continueDraft ? { continueDraft: true } : {}),
+  };
   args.sendEvent("tool-call", { toolCallId, toolName: "generate_draft", args: input });
   let output: unknown;
   // 作者确认标记：按钮/选项点击本身就是作者授权，generate_draft 见此标记才允许整章重写有稿的章、
@@ -975,7 +1007,7 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "generate_draft", error: message, retryable: true });
-    emitText(`第 ${action.chapter} 章没写成：${message}。原来的稿子没动，可以再点一次「AI 写这一章」。`);
+    emitText(`第 ${action.chapter} 章没写成：${message}。原来的稿子没动，可以再点一次。`);
     const rest = args.scrubber.flush();
     if (rest) args.sendEvent("text-delta", { text: rest });
     return;
@@ -986,6 +1018,7 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
   const result = output as GenerateDraftLikeOutput | undefined;
   const written = result?.ok === true;
   const checked = result?.qualityPipeline?.continuity?.checked;
+  const short = written && result?.draftLength?.lengthStatus === "below_lower_bound";
   // 写成了：一句结论（细节在步骤里）；没写成：照原因说（summary 里是拒稿原因）。
   emitText(written && result
     ? [draftBrief(action.chapter, result), checked === false ? "写完那遍核账没跑成，可以点「核账」再核。" : ""].filter(Boolean).join("\n")
@@ -1003,26 +1036,24 @@ async function runGenerateDraftAction(args: Omit<Parameters<typeof runUserAction
       action: { toolName: "check_continuity", chapter: action.chapter },
       afterDraft: true,
       ...(typeof fixed === "number" && fixed > 0 ? { fixedAfterDraft: fixed } : {}),
+      ...(short ? { shortAfterDraft: true } : {}),
     });
     return;
   }
   const choices: NextStepChoice[] = written
     ? [
+      ...(short ? [continueChoice(action.chapter)] : []),
       {
         label: "预览定稿",
         intent: `预览第 ${action.chapter} 章的定稿改动`,
-        recommended: true,
+        recommended: !short,
         action: { toolName: "commit_preview", chapter: action.chapter },
       },
       // 写完已经核过一遍账（结果记在核账记忆里），点这个直接出核账卡，不再调模型。
       { label: "看核账结果", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
     ]
-    : [{
-        label: "再写一次",
-        intent: "写这一章的正文",
-        recommended: true,
-        action: { toolName: "generate_draft", chapter: action.chapter },
-      }];
+    : retryDraftChoices(action, result?.blockedReason);
+  if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {

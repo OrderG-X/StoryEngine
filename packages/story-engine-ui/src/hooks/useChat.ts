@@ -198,6 +198,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       // 出稿流式缓冲：generate_draft 的正文 delta 逐字累加到这里，显示在稿纸上（只读，不进作者的稿子，重构 P5）。
       // 每次出稿（generate_draft tool-call）重置；出稿结束后稿纸按盘上终稿重读。
       let streamedDraft = "";
+      // 接着写时本来写好的那段（服务端先推过来）：原样显示在新写的前面，不当新写的清理（换引号、去星号会改了作者的字）。
+      let streamBase = "";
       let draftStreamChapter: number | null = null;
       let reportedDraftChapterMismatch = false;
       // 流式要换到另一章时，先把手上那章存掉、再换稿纸；这期间流来的字先攒着。
@@ -243,7 +245,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       const showStreaming = (): void => {
         const paper = useDraftStore.getState();
         if (draftStreamChapter === null || paper.chapter !== draftStreamChapter) return;
-        paper.setStreaming(streamingDraftDisplay(streamedDraft));
+        paper.setStreaming(streamBase + streamingDraftDisplay(streamedDraft));
       };
       const endStreaming = (): void => {
         if (useDraftStore.getState().streaming !== null) useDraftStore.getState().setStreaming(null);
@@ -284,18 +286,17 @@ export function useChat(params: UseChatParams): UseChatResult {
             });
             return;
           }
-          if (!partial?.trim()) return;
-          if (!paper.incoming && partial.trim().length > paper.body.trim().length) {
-            editDraft(partial);
-            return;
-          }
-          if (generateAttempt && !paper.incoming && paper.body !== generateAttempt.bodyBefore && paper.body.trim().length >= partial.trim().length) {
+          // 盘上已经是这一轮写的新稿（停晚了一步、服务端已写进去）：用盘上那版，如实说——不管流出来的字还在不在、长短。
+          if (generateAttempt && !paper.incoming && paper.body !== generateAttempt.bodyBefore) {
             appendMessage({
               id: `assistant-reconcile-${Date.now()}`,
               role: "assistant",
-              content: `（核对盘上：停止前第 ${paper.chapter} 章其实已经写完了，稿纸上是盘上那一整版。）`,
+              content: `（核对盘上：停止前第 ${paper.chapter} 章其实已经写完了，稿纸上是盘上那一整版，要退回就撤销上一步。）`,
             });
+            return;
           }
+          if (!partial?.trim()) return;
+          if (!paper.incoming && partial.trim().length > paper.body.trim().length) editDraft(partial);
         } catch {
           // 尽力而为，绝不让它破坏收尾路径。
         }
@@ -343,6 +344,7 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (toolName === "generate_draft") {
                 useNavigationStore.getState().requestCenterView("desk");
                 streamedDraft = ""; // 新一次出稿：清空流式缓冲，逐字从头累加。
+                streamBase = "";
                 draftStreamChapter = null;
                 reportedDraftChapterMismatch = false;
                 generateAttempt = { bodyBefore: useDraftStore.getState().body };
@@ -359,7 +361,7 @@ export function useChat(params: UseChatParams): UseChatResult {
               if (!ownsCurrentWorkspace()) return;
               useUiStore.getState().setDraftPhase(phase);
             },
-            onDraftDelta: ({ chapter, text }) => {
+            onDraftDelta: ({ chapter, text, replace, base }) => {
               if (!ownsCurrentWorkspace()) return;
               if (draftStreamChapter === null) {
                 const previousChapter = operation.chapter;
@@ -368,6 +370,11 @@ export function useChat(params: UseChatParams): UseChatResult {
                 operation = adopted;
                 draftStreamChapter = chapter;
                 if (chapter !== previousChapter) {
+                  // 这一轮写的是另一章：这轮对话归那一章（稿纸跳过去后，下一句话说完它不收进「别的章的对话」）。
+                  const turnMessages = useChatStore.getState().messages;
+                  const assistantIndex = turnMessages.findIndex((message) => message.id === assistantMsgId);
+                  const opener = turnMessages.slice(0, Math.max(assistantIndex, 0)).reverse().find((message) => message.role === "user");
+                  if (opener && opener.chapter !== chapter) updateMessage(opener.id, (current) => ({ ...current, chapter }));
                   const storeBook = useBookStore.getState();
                   const cur = storeBook.workspace.currentChapter;
                   storeBook.updateWorkspace({
@@ -398,7 +405,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 }
                 return;
               }
-              streamedDraft += text;
+              if (base) streamBase = text;
+              else streamedDraft = replace ? text : streamedDraft + text;
               showStreaming();
             },
             onToolResult: (info) => {
@@ -966,8 +974,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           void handleSendUserAction({ toolName: "ledger_decision", ...action.ledgerTarget });
           return;
         case "rewrite-confirm":
+        case "continue-confirm":
           if (!action.rewriteTarget) {
-            showToast("这个重写按钮已经失效了，请让 AI 重新提一次。", 4200);
+            showToast("这个按钮已经失效了，请让 AI 重新提一次。", 4200);
             return;
           }
           consumeSuggestedAction(action);

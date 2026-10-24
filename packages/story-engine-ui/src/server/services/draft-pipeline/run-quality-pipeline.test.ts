@@ -98,6 +98,32 @@ describe("runDraftQualityPipeline", () => {
     expect(memory.issues).toHaveLength(0);
   });
 
+  it("接着写（P13）：核出的错在本来写好的那段里 → 不替作者改、只说有几处；错在接着写的那段照常改；标题不换", async () => {
+    const prefix = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
+    const draft = `${prefix}\n\n他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。`;
+    const { projectDir } = await makeBook(draft);
+    const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] }));
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, draftBody: draft, lengthTarget: TARGET,
+      checkCallModel: fakeChecker(), fixCallModel, skipOverwriteSnapshot: true, keepPrefix: prefix,
+    });
+    expect(fixCallModel).not.toHaveBeenCalled();
+    expect(result.draftBody).toContain("菜场还在，门口摆着几摊卖豆腐的。");
+    expect(result.notes.join("\n")).toContain("前面本来写好的那部分核出 1 处确定对不上，没替你改");
+    expect(result.info.continuity).toMatchObject({ sure: [expect.objectContaining({ quote: "菜场还在，门口摆着几摊卖豆腐的。" })] });
+
+    // 同一句落在接着写的那段里：照常按前文改，写盘时标题沿用原来的。
+    const tail = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。";
+    const second = await makeBook(`${tail}\n\n菜场还在，门口摆着几摊卖豆腐的。`);
+    const fixed = await runDraftQualityPipeline({
+      projectDir: second.projectDir, chapter: 8, draftBody: `${tail}\n\n菜场还在，门口摆着几摊卖豆腐的。`, lengthTarget: TARGET,
+      checkCallModel: fakeChecker(), fixCallModel, skipOverwriteSnapshot: true, keepPrefix: tail,
+    });
+    expect(fixCallModel).toHaveBeenCalledTimes(1);
+    expect(fixed.draftBody).toContain("菜场早没了");
+    expect(await readFile(second.draftPath, "utf-8")).toMatch(/^# 第8章 · 菜场\n/u);
+  });
+
   it("按核账改没改成（模型回的不能用）→ 正文不动、不再核，如实说那几处还在", async () => {
     const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
     const { projectDir, draftPath } = await makeBook(draft);
@@ -131,7 +157,8 @@ describe("runDraftQualityPipeline", () => {
     });
     expect(continueCallModel).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.notes.join("\n")).toContain("只差一点就没自动续写");
+    // 短了多少由出稿回执按最终正文说一次（draft-service 的字数提示），这里不另说。
+    expect(result.notes.join("\n")).not.toMatch(/下限|字数/u);
     // 作者写明了「至少 N 字」（定稿硬拦）→ 差一点也补到下限。
     const hard = await makeBook(draft);
     const continueHard = vi.fn(async () => "他推着车往后街走，修鞋摊还在，吴师傅抬头看了他一眼。");

@@ -13,10 +13,46 @@ import {
   nextDraftChapterAfter,
   parseUserAction,
   readCommittedChapterNumbers,
+  retryDraftChoices,
   runUserAction,
   afterDraftCheckLine,
   type UserActionToolExecutor,
 } from "./user-actions.js";
+
+describe("接着往下写的按钮动作（P13）", () => {
+  it("parseUserAction：continueDraft 只认 true，别的值不带", () => {
+    expect(parseUserAction({ toolName: "generate_draft", chapter: 3, continueDraft: true })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3, continueDraft: true } });
+    expect(parseUserAction({ toolName: "generate_draft", chapter: 3, continueDraft: "true" })).toEqual({ kind: "action", action: { toolName: "generate_draft", chapter: 3 } });
+  });
+
+  it("点了「接着往下写」→ 带 continueDraft 调工具；写成了回话说接了多少、前面的没动", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const inputs: unknown[] = [];
+    await runUserAction({
+      action: { toolName: "generate_draft", chapter: 4, continueDraft: true },
+      requestContext: new RequestContext(),
+      executeTool: async (name, input) => {
+        inputs.push(input);
+        return { ok: true, draftBody: "正文", continued: { kept: 900, added: 1200 }, draftLength: { actualLength: 2100, lowerBound: 2400, lengthStatus: "below_lower_bound" }, qualityPipeline: { continuity: { checked: false } } };
+      },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(inputs[0]).toEqual({ chapter: 4, continueDraft: true });
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toContain("第 4 章接着写了 1200 字，前面的 900 字没动，全章 2100 字，比下限少 300 字。");
+    const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { choices: { label: string }[] };
+    expect(next.choices.map((choice) => choice.label)).toEqual(["接着往下写", "预览定稿", "看核账结果"]);
+  });
+
+  it("没写成的下一步：没得接 → 改成从头写；已定稿 → 不给；别的 → 原样再来一次", () => {
+    const action = { toolName: "generate_draft" as const, chapter: 4, continueDraft: true };
+    expect(retryDraftChoices(action, "nothing_to_continue")).toEqual([expect.objectContaining({ label: "AI 写第 4 章", action: { toolName: "generate_draft", chapter: 4 } })]);
+    expect(retryDraftChoices(action, "chapter_committed")).toEqual([]);
+    expect(retryDraftChoices(action, undefined)).toEqual([expect.objectContaining({ label: "再写一次", action })]);
+  });
+});
 
 describe("parseUserAction 结构化动作解析", () => {
   it("「确认改账」：带标识和裁定草案才收；缺标识 / 空草案 / 超量都按非法处理", () => {
@@ -532,8 +568,11 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(calls).toEqual(["generate_draft", "check_continuity"]);
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
     expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
-    // 核出确定的几处：改法在核账卡上，最后一个事件就是核账卡，不再挂下一步。
-    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity"]);
+    // 核出确定的几处：改法在核账卡上；稿子短了（P13）才另挂一个「接着往下写」。
+    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity", "suggest_next_steps"]);
+    const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { question: string; choices: { label: string; action?: unknown }[] };
+    expect(next.question).toBe("接下来？");
+    expect(next.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: { toolName: "generate_draft", chapter: 2, continueDraft: true } })]);
   });
 
   it("只剩「可能」：稿纸默认不画，回话说在卡上点开看，不说画上了", () => {

@@ -49,3 +49,14 @@ export function lastAssistantNextStepPrompt(messages: readonly ChapterMessage[])
   }
   return null;
 }
+
+/**
+ * 选项里和建议条按钮同名的去掉（P13 真机：AI 在「有稿不覆盖」后又给了「接着往下写 / 重写第 9 章」两个选项，
+ * 和卡上的两个按钮各出一遍）。按钮是结构化动作，留按钮；比的是两边的按钮字，不看意思。一个不剩就不出这一行。
+ */
+export function withoutRailDuplicates(nextStep: NextStepPrompt | null, railLabels: readonly string[]): NextStepPrompt | null {
+  if (!nextStep || railLabels.length === 0) return nextStep;
+  const taken = new Set(railLabels.map((label) => label.trim()));
+  const choices = nextStep.choices.filter((choice) => !taken.has(choice.label.trim()));
+  return choices.length === 0 ? null : choices.length === nextStep.choices.length ? nextStep : { ...nextStep, choices };
+}

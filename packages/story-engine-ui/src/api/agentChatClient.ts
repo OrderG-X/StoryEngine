@@ -47,7 +47,7 @@ export type AgentUserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
-  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
   | { readonly toolName: "ai_review"; readonly chapter: number }
   | { readonly toolName: "quality_check"; readonly chapter: number }
   | { readonly toolName: "undo" }
@@ -240,6 +240,8 @@ export interface AgentToolResult {
 export interface RewriteConfirmTarget {
   readonly chapter: number;
   readonly chapterGoal?: string;
+  /** 工作稿还没定稿：卡上另给「接着往下写」。 */
+  readonly canContinue?: boolean;
 }
 
 /** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
@@ -270,7 +272,8 @@ export interface AgentChatHandlers {
   /** 思考链增量（仅思考模式下有）。累加成消息的「思考过程」。 */
   readonly onReasoningDelta?: (text: string) => void;
   /** 出稿正文增量（generate_draft 流式）：逐字进编辑器。带本次章号，前端只往当前章追。 */
-  readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string }) => void;
+  /** replace=true：text 是这次写的全部（换掉已经流出来的），否则接在后面；base=true：接着写时本来写好的那段（原样显示）。 */
+  readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string; readonly replace?: boolean; readonly base?: boolean }) => void;
   /** AI 出稿进行到哪一步（plan 拟章纲 / write 写正文）。 */
   readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" | "check" }) => void;
   readonly onToolCall: (info: { readonly toolCallId?: string; readonly toolName: string }) => void;
@@ -399,7 +402,12 @@ export async function streamAgentChat(
             return;
           }
           if (typeof parsed.text === "string" && typeof parsed.chapter === "number") {
-            handlers.onDraftDelta?.({ chapter: parsed.chapter, text: parsed.text });
+            handlers.onDraftDelta?.({
+              chapter: parsed.chapter,
+              text: parsed.text,
+              ...(parsed.replace === true ? { replace: true } : {}),
+              ...(parsed.base === true ? { base: true } : {}),
+            });
           }
           return;
         case "tool-call":
@@ -544,6 +552,7 @@ export async function streamAgentChat(
                     ...(typeof output.rewriteConfirm.chapterGoal === "string" && output.rewriteConfirm.chapterGoal.trim()
                       ? { chapterGoal: output.rewriteConfirm.chapterGoal.trim() }
                       : {}),
+                    ...(output.rewriteConfirm.canContinue === true ? { canContinue: true } : {}),
                   },
                 }
               : {}),
@@ -660,7 +669,7 @@ function isLedgerConfirm(value: unknown): value is { readonly key: string; reado
   return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
 }
 
-function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown } {
+function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown; readonly canContinue?: unknown } {
   return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
 
@@ -723,7 +732,7 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
     const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
       ? value.chapterGoal.trim().slice(0, 2000)
       : undefined;
-    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) };
+    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(value.continueDraft === true ? { continueDraft: true } : {}) };
   }
   return undefined;
 }

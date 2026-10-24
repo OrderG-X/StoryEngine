@@ -71,7 +71,11 @@ export function isUserConfirmedTool(context: ToolExecutionContext | undefined, t
  * 出稿流式 sink：text = 正文增量；phase = 出稿进行到哪一步（plan 拟章纲 / write 写正文，text 为空串）。
  * 拟章纲要一两分钟、这期间稿纸是空的，作者得知道 AI 在干什么。
  */
-export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string; readonly phase?: "plan" | "write" | "check" }) => void;
+/**
+ * replace=true：text 是这次写的、稿纸上该显示的全部，换掉已经流出去的（重写一段时退回、两段之间补空行）。
+ * base=true：接着写时本来写好的那段（原样显示、不当新写的清理；replace 换的是它后面新写的）。
+ */
+export type DraftDeltaSink = (payload: { readonly chapter: number; readonly text: string; readonly phase?: "plan" | "write" | "check"; readonly replace?: boolean; readonly base?: boolean }) => void;
 
 function isPositiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;

@@ -30,6 +30,7 @@ export function userActionChoiceText(
     case "check_continuity":
       return action.fresh ? `再核一遍第 ${action.chapter} 章的账` : `核第 ${action.chapter} 章的账`;
     case "generate_draft":
+      if (action.continueDraft) return `第 ${action.chapter} 章接着往下写`;
       return directionTitle ? `照「${directionTitle}」写第 ${action.chapter} 章的正文` : `写第 ${action.chapter} 章的正文`;
     case "commit_apply":
       return `确认定稿第 ${action.chapter} 章`;
