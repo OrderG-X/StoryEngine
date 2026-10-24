@@ -121,13 +121,17 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
     });
   }
 
-  if (!byChapter.has(currentChapterNumber + 1)) {
-    const fileState = fileStates.get(currentChapterNumber + 1);
-    byChapter.set(currentChapterNumber + 1, {
-      id: `ch-${currentChapterNumber + 1}`,
-      chapterNumber: currentChapterNumber + 1,
+  // 占位「下一章」：当前章的下一章，和最后定稿那章的下一章——翻回前面的章改完，「去第 N 章」「写第 N 章」
+  // 要能打开后面那章（2026-10-24 长篇走查：在第 1 章点「去第 10 章」说不在章节列表里）。
+  const lastCommitted = Math.max(0, ...[...fileStates.values()].filter((state) => state.hasCommittedChapter).map((state) => state.chapter));
+  for (const placeholder of new Set([currentChapterNumber + 1, lastCommitted + 1])) {
+    if (byChapter.has(placeholder)) continue;
+    const fileState = fileStates.get(placeholder);
+    byChapter.set(placeholder, {
+      id: `ch-${placeholder}`,
+      chapterNumber: placeholder,
       title: fileState?.committedTitle ?? fileState?.draftTitle ?? "下一章",
-      status: chapterStatusFromFileState(currentChapterNumber + 1, currentChapterNumber, fileState, "planned"),
+      status: chapterStatusFromFileState(placeholder, currentChapterNumber, fileState, "planned"),
       ...(fileState ? {
         hasDraftFile: fileState.hasDraftFile,
         hasCommittedChapter: fileState.hasCommittedChapter,
