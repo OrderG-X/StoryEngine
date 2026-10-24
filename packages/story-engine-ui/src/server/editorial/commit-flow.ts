@@ -291,11 +291,16 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     return { ok: false, code: "chapter_gap", reason: `第 ${last + 1} 章到第 ${input.chapter - 1} 章还没定稿，先定稿前面的章` };
   }
   const before = project(snapshot, { upTo: input.chapter - 1 });
+  const reopenable = (snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [])
+    .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
+      ? [{ thread: entry.thread, type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
+      : []));
   const keeper = await runLedgerKeeper({
     projectDir: input.bookDir,
     chapter: input.chapter,
     draft: input.text,
     before,
+    ...(reopenable.length > 0 ? { reopenable } : {}),
     callModel: input.callModel,
     ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
     ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),

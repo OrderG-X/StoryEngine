@@ -1,7 +1,8 @@
 /**
  * 记账员的上下文（重构 P3）：全部从投影确定性地拼，不读旧文件、不问模型。
  *
- * 四段：人物（已确立名字 + 别称）、开着的线索（T 短号）、现在有效的事实（F 短号）、最近的时间表。
+ * 四段：人物（已确立名字 + 别称）、开着的线索（T 短号）、现在有效的事实（F 短号）、最近的时间表；
+ * 重定稿时多一段：这一章上次定稿开的线索（R 短号，本章还在开就沿用编号）。
  * 短号只在这一次调用里有效，由 handles 换回真编号；模型交回来的短号对不上就当指向不存在的东西。
  *
  * 事实只列 hard / state，选取规则是精确的字符串出现与否（不是语义判断）：
@@ -32,6 +33,8 @@ export interface KeeperContext {
   readonly threadHandles: ReadonlyMap<string, string>;
   /** 「F7」→ 事实真编号。 */
   readonly factHandles: ReadonlyMap<string, string>;
+  /** 「R2」→ 这一章上次定稿时开的线索真编号（重定稿才有）。 */
+  readonly reopenHandles: ReadonlyMap<string, string>;
   /** 「T3」→ 线索标题、「F7」→ 事实内容（模型在说明里提了短号时换成名字给作者看）。 */
   readonly handleNames: ReadonlyMap<string, string>;
   readonly omittedThreads: number;
@@ -63,6 +66,30 @@ function threadSection(projection: BookProjection, handles: Map<string, string>,
     text: `【开着的线索（推进、收口时 thread 填这里的编号，不要新造；不在这里的才算新开）】\n${lines.join("\n")}${more}`,
     omitted,
   };
+}
+
+/** 这一章上次定稿时开的一条线索（重定稿时给记账员对照）。 */
+export interface ReopenableThread {
+  readonly thread: string;
+  readonly type: keyof typeof THREAD_TYPE_LABELS;
+  readonly title: string;
+  readonly note: string;
+}
+
+/**
+ * 重定稿（2026-10-24 长篇走查）：改了前面一章再定稿，记账员按新稿重记，线索换了说法就成了新编号，
+ * 后文推进、收口的还是旧编号——一章改两句，九条线索在后文成了没头的。列出上次开的，本章还在开的沿用编号。
+ */
+function reopenSection(reopenable: readonly ReopenableThread[], handles: Map<string, string>, names: Map<string, string>): string {
+  if (reopenable.length === 0) return "";
+  const lines = reopenable.map((thread, index) => {
+    const handle = `R${index + 1}`;
+    handles.set(handle, thread.thread);
+    names.set(handle, thread.title);
+    const note = thread.note === thread.title ? "" : `（上次记的：${thread.note}）`;
+    return `${handle} [${THREAD_TYPE_LABELS[thread.type]}] ${thread.title}${note}`;
+  });
+  return `【这一章上次定稿时开的线索（正文改过、这次重新记账；后文还接着这些线索）：本章正文还在开的，照样报 op = open，thread 填这里的编号、title 沿用；本章已经不开了的不报】\n${lines.join("\n")}`;
 }
 
 /** 主体名（含人物别称）在正文里逐字出现。 */
@@ -126,18 +153,21 @@ function timelineSection(projection: BookProjection): string {
   return `【前文的时间（最近 ${rows.length} 章；照表对，不要自己推算故事第几天）】\n${timelineText(rows)}`;
 }
 
-/** projection 应是「算到上一章」的投影；draft 是本章正文。 */
-export function buildKeeperContext(projection: BookProjection, draft: string): KeeperContext {
+/** projection 应是「算到上一章」的投影；draft 是本章正文；reopenable = 重定稿时这一章上次开的线索。 */
+export function buildKeeperContext(projection: BookProjection, draft: string, reopenable: readonly ReopenableThread[] = []): KeeperContext {
   const threadHandles = new Map<string, string>();
   const factHandles = new Map<string, string>();
+  const reopenHandles = new Map<string, string>();
   const handleNames = new Map<string, string>();
   const threads = threadSection(projection, threadHandles, handleNames);
+  const reopen = reopenSection(reopenable, reopenHandles, handleNames);
   const facts = factSection(projection, draft, factHandles, handleNames);
-  const sections = [castSection(projection), threads.text, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
+  const sections = [castSection(projection), threads.text, reopen, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
     threadHandles,
     factHandles,
+    reopenHandles,
     handleNames,
     omittedThreads: threads.omitted,
     omittedFacts: facts.omitted,

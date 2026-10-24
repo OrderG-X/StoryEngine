@@ -13,7 +13,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chapterTextPath, checkEntries, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
-import { buildKeeperContext } from "./keeper-context.js";
+import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
@@ -94,6 +94,8 @@ export interface KeeperInput {
   readonly draft: string;
   /** 算到上一章的投影。 */
   readonly before: BookProjection;
+  /** 重定稿：这一章上次定稿时开的线索（本章还在开就沿用编号）。 */
+  readonly reopenable?: readonly ReopenableThread[];
   readonly callModel: BrainCallModel;
   /** 笔记存放的根目录；缺省就是书目录（考卷传临时目录，不动书）。 */
   readonly notesRoot?: string;
@@ -203,7 +205,7 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     return { ok: false, reason: `记账员读前文没成：${oneLine(error)}` };
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
-  const context = buildKeeperContext(input.before, input.draft);
+  const context = buildKeeperContext(input.before, input.draft, input.reopenable);
   const task = buildKeeperTask(input.chapter, input.draft, context.text, await previousEnding(input.projectDir, input.chapter));
   let text: string;
   try {

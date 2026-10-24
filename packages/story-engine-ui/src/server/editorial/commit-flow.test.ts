@@ -111,6 +111,33 @@ describe("定稿编排", () => {
     expect(ledger.entries.find((entry: { kind: string; op?: string }) => entry.kind === "thread")?.review).toBe("author");
   });
 
+  it("改了前面一章再定稿：记账员看得到这章上次开的线索，本章还在开就沿用编号，后文的推进接得上", async () => {
+    await commitChapter1();
+    const tickets = memoryTicketStore();
+    const ch2 = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: CH2, tickets,
+      callModel: fakeModel({ threads: [{ op: "advance", thread: "T1", note: "知道是人为拨停", quote: "钟是被人故意拨停的" }] }),
+    }));
+    expect(await confirmChapterCommit({ bookDir: book, ticket: ch2.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+
+    const edited = CH1.replace("老周没有拦她", "老周侧身让开了");
+    const asked: string[] = [];
+    const keeper: BrainCallModel = async (messages) => {
+      const last = messages.at(-1)?.content ?? "";
+      if (!last.includes("交这一章的账单")) return "笔记：老周＝周守义。";
+      asked.push(last);
+      // 换了个说法（标题对不上上次的），但填了上次的编号。
+      return JSON.stringify({ threads: [{ op: "open", type: "question", title: "钟停在三点十五的缘故", thread: "r1", note: "钟停了", quote: "钟为什么偏偏停在这个时刻" }] });
+    };
+    const again = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: edited, callModel: keeper, tickets }));
+    expect(asked[0]).toContain("R1 [悬念] 钟为什么停（上次记的：钟停在三点十五分）");
+    const confirmed = await confirmChapterCommit({ bookDir: book, ticket: again.ticket, text: edited, tickets });
+    expect(confirmed).toMatchObject({ ok: true, result: { recommitted: true, orphanedThreads: [] } });
+    const view = await projectBook(book);
+    expect(view.threads).toHaveLength(1);
+    expect(view.threads[0]).toMatchObject({ title: "钟停在三点十五的缘故", openedAt: 1, lastTouchedAt: 2 });
+  });
+
   it("正文预览后又改过、票过期了、跳章、老书没导入、记账员没交上：都不定稿，如实说", async () => {
     const tickets = memoryTicketStore();
     const preview = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets }));
