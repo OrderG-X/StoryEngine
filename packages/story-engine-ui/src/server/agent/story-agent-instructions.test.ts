@@ -17,8 +17,8 @@ vi.mock("./model.js", () => ({
 
 import { buildInstructions, getStoryAgent, invalidateStoryAgent } from "./story-agent.js";
 
-describe("story agent 工具表（重构 P9：18 个，补资料并进 foundation_write）", () => {
-  it("18 个工具；没有 enrich_foundation 和老的补全/文风样本工具；指令里也不再提它们", async () => {
+describe("story agent 工具表（重构 P9：补资料并进 foundation_write；P12 加 settle_fact，19 个）", () => {
+  it("19 个工具；没有 enrich_foundation 和老的补全/文风样本工具；指令里也不再提它们", async () => {
     invalidateStoryAgent();
     const tools = Object.keys(await (await getStoryAgent()).listTools()).sort();
     invalidateStoryAgent();
@@ -39,6 +39,7 @@ describe("story agent 工具表（重构 P9：18 个，补资料并进 foundatio
       "read_state_overview",
       "read_timeline",
       "revise_draft",
+      "settle_fact",
       "suggest_next_steps",
       "web_search",
     ]);

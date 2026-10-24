@@ -812,6 +812,23 @@ describe("作者档按钮投影（重构 P4：「重写这一章」「确认改�
     ]);
   });
 
+  it("有稿没定稿的章（canContinue）→ 先挂「接着往下写」再挂「重写第 N 章」（P13）", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 },
+      {
+        type: "tool-result",
+        toolCallId: "g1",
+        toolName: "generate_draft",
+        endedAt: 2,
+        output: { ok: false, needsConfirmation: true, rewriteConfirmAction: { chapter: 3, canContinue: true }, summary: "第 3 章已经有工作稿了…" },
+      },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "continue-confirm", label: "接着往下写", rewriteTarget: { chapter: 3, continueDraft: true } }),
+      expect.objectContaining({ id: "rewrite-confirm", label: "重写第 3 章", rewriteTarget: { chapter: 3 } }),
+    ]);
+  });
+
   it("foundation_write 作者档 → 挂「确认改设定」按钮（带被拦下的写入原样）", () => {
     const input = { actionType: "delete_foundation_entry", category: "characters", targetId: "char-x" };
     const message = project([

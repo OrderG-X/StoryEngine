@@ -69,7 +69,7 @@ describe("通读解析 parseFullReadIssues", () => {
         { quote: "他从工作台上拿起那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "前后一致，不矛盾" },
       ],
     }), 3, BODY, EARLIER);
-    expect(issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表"]);
+    expect(issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表，表盖还开着。"]);
   });
 });
 
@@ -191,9 +191,12 @@ describe("引文对回原句 snapToOriginal / snapIssueQuotes", () => {
   const draft = "“我有一个条件。整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”\n\n他看了她一眼，没再说话。";
   const sentences = splitSentences(draft);
 
-  it("逐字就在 → 原样；抄错一两个字 → 换成正文真句；跨两句抄的 → 换成那两句；编的 → 原样", () => {
-    expect(snapToOriginal(sentences, "十一月底清空")).toBe("十一月底清空");
+  it("都对回整句（P12 编号句子）：半句 → 那一整句；抄错一两个字 → 正文真句；跨两句抄的 / 「A……B」两截 → 那几句；编的 → 原样", () => {
+    expect(snapToOriginal(sentences, "十一月底清空")).toBe("整条巷子十一月底清空，我要留到最后一天交房。");
+    expect(snapToOriginal(sentences, "整条巷子十一月底清空，我要留到最后一天交房。")).toBe("整条巷子十一月底清空，我要留到最后一天交房。");
     expect(snapToOriginal(sentences, "她看了她一眼，没再说话。")).toBe("他看了她一眼，没再说话。");
+    expect(snapToOriginal(sentences, "交房。登记簿里")).toBe("整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”");
+    expect(snapToOriginal(sentences, "整条巷子十一月底清空……铺子得开着门等人")).toBe("整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”");
     expect(snapToOriginal(sentences, "整条巷子十一月底清空，铺子得开着门等人。")).toBe("整条巷子十一月底清空，我要留到最后一天交房。登记簿里还有客人没取的表，铺子得开着门等人。”");
     expect(snapToOriginal(sentences, "他们明天一早就搬走了。")).toBe("他们明天一早就搬走了。");
   });

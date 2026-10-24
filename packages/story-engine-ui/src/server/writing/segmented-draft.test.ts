@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -30,6 +31,11 @@ async function makeBook(): Promise<string> {
 
 const han = (n: number, ch: string) => ch.repeat(n);
 
+async function writeRules(projectDir: string, ops: CardOp[]): Promise<void> {
+  const outcome = await runCommand(projectDir, cardWrite, { ops }, { caller: "author", idempotencyKey: `t-${Math.random()}` });
+  if (!outcome.ok) throw new Error(outcome.message);
+}
+
 describe("按章纲分前后两半写", () => {
   it("前半章只写前一半要点；后半章带上前半章原文接着写剩下的要点；拼成一章", async () => {
     const projectDir = await makeBook();
@@ -38,8 +44,8 @@ describe("按章纲分前后两半写", () => {
       generateDraft: vi.fn(async ({ context }) => {
         contexts.push(context);
         return contexts.length === 1
-          ? { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(900, "前")}。` }
-          : { title: "", content: `${han(900, "后")}。` };
+          ? { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。` }
+          : { title: "", content: `${han(1300, "后")}。` };
       }),
     };
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
@@ -51,7 +57,7 @@ describe("按章纲分前后两半写", () => {
     expect(secondPrompt).toContain("## already_written");
     expect(secondPrompt).toContain(han(50, "前"));
     const written = draftFileOf(report);
-    expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
+    expect(written).toContain(`林澈${han(1300, "前")}。\n\n${han(1300, "后")}。`);
     expect(report.passed).toBe(true);
   });
 
@@ -143,8 +149,8 @@ describe("按章纲分前后两半写", () => {
       generateDraft: vi.fn(async ({ context }) => {
         contexts.push(context);
         if (contexts.length === 1) return { title: "档案室", content: `${p1}\n\n${p2}\n\n林澈${han(600, "前")}。` };
-        if (contexts.length === 2) return { title: "档案室", content: `林澈一早出门，${han(900, "新")}。` };
-        return { title: "", content: `${han(900, "后")}。` };
+        if (contexts.length === 2) return { title: "档案室", content: `林澈一早出门，${han(1300, "新")}。` };
+        return { title: "", content: `${han(1300, "后")}。` };
       }),
     };
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
@@ -210,23 +216,223 @@ describe("按章纲分前后两半写", () => {
     const writer: WriterClient = {
       generateDraft: vi.fn(async ({ context }) => {
         contexts.push(context);
-        if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(600, "前")}。\n\n${scene}` };
-        if (contexts.length === 2) return { title: "", content: `${scene}\n\n${han(600, "后")}。` };
-        return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(600, "新")}。` };
+        if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。\n\n${scene}` };
+        if (contexts.length === 2) return { title: "", content: `${scene}\n\n${han(1300, "后")}。` };
+        return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(1300, "新")}。` };
       }),
     };
-    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    const resets: string[] = [];
+    const report = await runFastDraft({
+      projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000,
+      onStreamReset: (visible) => resets.push(visible),
+    });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
     expect(renderFastDraftPromptText(contexts[2])).toContain("把前半章（或上一章）已经写过的场面又写了一遍");
+    // 稿纸上：后半章从前半章 + 空行往下流；重写前退回前半章，定了再显示用上的那版——重演的那段不会留在稿纸上。
+    const firstVisible = `# 第2章 · 档案室\n林澈${han(1300, "前")}。\n\n${scene}\n\n`;
+    expect(resets).toEqual([firstVisible, firstVisible, `${firstVisible}他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(1300, "新")}。`]);
     const written = draftFileOf(report);
     expect(written.split(scene).length - 1).toBe(1);
     expect(written).toContain("管理员终于松了口");
     expect(report.issues.join("\n")).toContain("后半章首稿重演了前半章 1 段，已重写后半章");
   });
 
+  it("前半章写短了，后半章补上差的字数；整章还不到下限就说清差多少再要一次后半章，用更长的那版", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(800, "前")}。` };
+        if (contexts.length === 2) return { title: "", content: `${han(1000, "后")}。` };
+        return { title: "", content: `${han(1800, "补")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(3);
+    expect(renderFastDraftPromptText(contexts[1])).toMatch(/后半章写 21\d\d 个中文字符左右/u);
+    expect(renderFastDraftPromptText(contexts[2])).toMatch(/【上一次的后半章只写了 100\d 个字，整章比最少字数还差 \d+ 字】/u);
+    expect(report.draftBody).toContain(han(1800, "补"));
+    expect(report.draftBody).not.toContain(han(1000, "后"));
+    expect(report.issues.join("\n")).toMatch(/后半章重写了一次（100\d → 180\d 字）/u);
+  });
+
+  it("再要的后半章没更长 → 用原来那版，如实记一条", async () => {
+    const projectDir = await makeBook();
+    let calls = 0;
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async () => {
+        calls += 1;
+        return calls === 1 ? { title: "档案室", content: `林澈${han(1000, "前")}。` } : { title: "", content: `${han(calls === 2 ? 1000 : 700, "后")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    expect(report.draftBody).toContain(han(1000, "后"));
+    expect(report.issues.join("\n")).toContain("没写得更长，用的还是原来那版");
+  });
+
   it("findReplayedParagraphs：换几个字重演也认得；不相干的段不算", () => {
     const first = "林澈推开档案室的门，管理员抬头看了他一眼，说今天不对外开放，让他明天再来。";
     expect(findReplayedParagraphs(first, "林澈又推开档案室的门，管理员抬头瞥了他一眼，说今天不对外开放，叫他明天再来。")).toHaveLength(1);
     expect(findReplayedParagraphs(first, "傍晚下起了雨，他沿着河堤往回走，街灯一盏一盏亮起来，卖馄饨的摊子刚刚支起。")).toHaveLength(0);
+  });
+});
+
+// P13：作者写了半章、AI 稿短了，从工作稿最后一句接着写；已写的字一个不动。
+describe("接着往下写", () => {
+  const EXISTING = "林澈推开档案室的门，管理员抬头看了他一眼，说今天不对外开放，让他明天再来，他把介绍信递过去，对方翻了翻又还给他。\n\n他说了句\"那我等\"，**就在门口坐下**。";
+
+  it("已写的交给写手当 already_written，作者的方向进本章目标；正文 = 原样的已写 + 接着写的；有章纲也不分两半", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "随便", content: `# 第2章 · 随便\n\n他在走廊尽头等到天黑，管理员终于松了口，说\"进来吧\"。\n\n${han(760, "后")}。` };
+      }),
+    };
+    const report = await runFastDraft({
+      projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000,
+      continueFrom: { text: EXISTING, length: 800, direction: "让管理员松口" },
+    });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(1);
+    const prompt = renderFastDraftPromptText(contexts[0]);
+    expect(prompt).toContain("## already_written");
+    expect(prompt).toContain("管理员抬头看了他一眼");
+    expect(prompt).toContain("【作者说接下来写】让管理员松口");
+    expect(prompt).toContain("一个字都不要改");
+    expect(prompt).toContain("这次接着写 800 个中文字符左右");
+    expect(prompt).toContain("本章章纲里 already_written 还没写到的要点");
+    // 作者写的星号、直引号原样留着；新写那段照常清理（标题去掉、直引号换中文引号）。
+    expect(report.draftBody?.startsWith(`${EXISTING}\n\n他在走廊尽头等到天黑`)).toBe(true);
+    expect(report.draftBody).toContain("说“进来吧”。");
+    expect(report.draftBody).not.toContain("# 第2章");
+    expect(report.passed).toBe(true);
+  });
+
+  it("要接得多就分两次：前一次不收尾、停在场面中间；后一次带上前一次接着写、收住本章", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "", content: `${han(contexts.length === 1 ? 980 : 1000, contexts.length === 1 ? "甲" : "乙")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: EXISTING, length: 2000 } });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(2);
+    const first = renderFastDraftPromptText(contexts[0]);
+    expect(first).toContain("这次只接一段：写 1000 个中文字符左右");
+    expect(first).toContain("不要收尾");
+    const second = renderFastDraftPromptText(contexts[1]);
+    expect(second).toContain(han(50, "甲"));
+    expect(second).toContain("这次接着写 1020 个中文字符左右");
+    expect(second).toContain("收住本章");
+    expect(report.draftBody).toBe(`${EXISTING}\n\n${han(980, "甲")}。\n\n${han(1000, "乙")}。`);
+  });
+
+  it("没说写多少：写到本章目标；离目标差得少也写 600", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = { generateDraft: vi.fn(async ({ context }) => { contexts.push(context); return { title: "", content: `林澈${han(1000, "后")}。` }; }) };
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: `林澈${han(1000, "前")}。` } });
+    expect(renderFastDraftPromptText(contexts[0])).toMatch(/这次只接一段：写 99\d 个中文字符左右/u);
+    contexts.length = 0;
+    await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: `林澈${han(2900, "前")}。` } });
+    expect(renderFastDraftPromptText(contexts[0])).toContain("这次接着写 600 个中文字符左右");
+  });
+
+  it("接完还不到要的八成五：说清差多少再要一次最后那段，更长才用，留痕", async () => {
+    const projectDir = await makeBook();
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "", content: `${han(contexts.length === 1 ? 400 : 780, contexts.length === 1 ? "短" : "长")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: EXISTING, length: 800 } });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(2);
+    expect(renderFastDraftPromptText(contexts[1])).toMatch(/【上一次只写了 400 个字，还差 280 字】这次要写够 800 个中文字符/u);
+    expect(report.draftBody).toBe(`${EXISTING}\n\n${han(780, "长")}。`);
+    expect(report.issues.join("\n")).toContain("最后那段重写了一次（400 → 780 字）");
+  });
+
+  it("接着写的那段把已写的场面又写一遍 → 带提示重写一次，取重演少的那版并留痕", async () => {
+    const projectDir = await makeBook();
+    const scene = EXISTING.split("\n\n")[0]!;
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return contexts.length === 1
+          ? { title: "", content: `${scene}\n\n${han(700, "后")}。` }
+          : { title: "", content: `林澈在走廊尽头等到天黑。\n\n${han(760, "新")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: EXISTING, length: 800 } });
+    expect(writer.generateDraft).toHaveBeenCalledTimes(2);
+    expect(renderFastDraftPromptText(contexts[1])).toContain("上一次接着写的那段把已经写过的场面又写了一遍");
+    expect(report.draftBody?.split(scene).length).toBe(2);
+    expect(report.draftBody).toContain("走廊尽头等到天黑");
+    expect(report.issues.join("\n")).toContain("接着写的那段重演了前面 1 段，已重写");
+  });
+
+  it("作者定了「至少 N 字」（下限 = 目标）：瞄区间中间写；接完全章还不到下限就再要一次（P13 真机：至少 2500 只写到 2204）", async () => {
+    const projectDir = await makeBook();
+    await writeRules(projectDir, [{ op: "rules.set", field: "targetWords", value: 2000 }, { op: "rules.set", field: "minWords", value: 2000 }]);
+    const existing = `林澈${han(300, "前")}。`;
+    const contexts: WriterContextEnvelope[] = [];
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async ({ context }) => {
+        contexts.push(context);
+        return { title: "", content: `${han([900, 700, 950][contexts.length - 1]!, "甲乙丙"[contexts.length - 1]!)}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, continueFrom: { text: existing } });
+    // 下限 2000、上限 2300：瞄 2150，已写 302 → 接 1848（分两次）、至少 1698。
+    expect(renderFastDraftPromptText(contexts[0])).toContain("这次只接一段：写 924 个中文字符左右（不少于 849）");
+    expect(renderFastDraftPromptText(contexts[1])).toContain("这次接着写 948 个中文字符左右（不少于 798）");
+    expect(renderFastDraftPromptText(contexts[2])).toContain("【上一次只写了 700 个字，还差 98 字】这次要写够 948 个中文字符");
+    expect(report.draftBody).toBe(`${existing}\n\n${han(900, "甲")}。\n\n${han(950, "丙")}。`);
+  });
+
+  it("流式时：两段之间补空行；重写的那段先退回、定了用哪版再显示那版（稿纸上不会同一段写两遍）", async () => {
+    const projectDir = await makeBook();
+    const scene = EXISTING.split("\n\n")[0]!;
+    let calls = 0;
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return { title: "", content: `${han(1000, "甲")}。` };
+        if (calls === 2) return { title: "", content: `${scene}\n\n${han(700, "乙")}。` };
+        return { title: "", content: `${han(1000, "丙")}。` };
+      }),
+    };
+    const resets: string[] = [];
+    const report = await runFastDraft({
+      projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000,
+      continueFrom: { text: EXISTING, length: 2000 }, onStreamReset: (visible) => resets.push(visible),
+    });
+    // 只算新写的（本来写好的那段稿纸上另有，不在里面）。
+    const one = `${han(1000, "甲")}。`;
+    expect(resets).toEqual([`${one}\n\n`, `${one}\n\n`, `${one}\n\n${han(1000, "丙")}。`]);
+    expect(report.draftBody).toBe(`${EXISTING}\n\n${one}\n\n${han(1000, "丙")}。`);
+  });
+
+  it("接着写的那段是 JSON / 工具调用 → 拦下（开头是作者的字，整章查不出来）", async () => {
+    const projectDir = await makeBook();
+    const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "", content: `{"tool_call":"generate_draft","arguments":{}}` })) };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: EXISTING, length: 800 } });
+    expect(report.passed).toBe(false);
+    expect(report.issues.join("\n")).toContain("JSON or a tool-call artifact");
+  });
+
+  it("接着写超了上限不从结尾裁（砍掉的就是刚接上的那段），如实记一条", async () => {
+    const projectDir = await makeBook();
+    const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "", content: `林澈${han(3000, "后")}。` })) };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 1500, continueFrom: { text: EXISTING, length: 1000 } });
+    expect(report.draftBody).toContain(han(3000, "后"));
+    expect(report.issues.join("\n")).toContain("接着写的稿不从结尾裁");
   });
 });

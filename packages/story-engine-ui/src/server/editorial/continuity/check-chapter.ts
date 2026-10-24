@@ -12,6 +12,7 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { splitUnits } from "@actalk/story-core";
 import { findLedgerNumberConflicts } from "../../writing/ledger-number-check.js";
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
 import { timelineEntryFor, type StoryTimeline } from "../../book/story-timeline.js";
@@ -56,18 +57,9 @@ function parseJson(text: string): Record<string, unknown> {
 
 export const normalize = (text: string): string => text.replace(/\s+/gu, "");
 
-/** 句子切分：保留引号内的完整句。 */
+/** 句子切分：和编号句子同一套切法（核心 splitUnits：引号里的整句归一句、省略号不断句、标题行不算）。 */
 export function splitSentences(text: string): readonly string[] {
-  const out: string[] = [];
-  for (const paragraph of text.split(/\n+/u)) {
-    // 不猜白名单：切句
-    const parts = paragraph.match(/[^。！？!?…]+[。！？!?…]*[”」』"]?/gu) ?? [];
-    for (const part of parts) {
-      const sentence = part.trim();
-      if (sentence.length >= 4) out.push(sentence);
-    }
-  }
-  return out;
+  return splitUnits(text).map((unit) => unit.text);
 }
 
 /**
@@ -115,29 +107,59 @@ export function containsQuote(haystack: string, quote: string): boolean {
   return false;
 }
 
+/** 一处原句最多对到连着的几句上；再长就不对了（照原样）。 */
+const SNAP_MAX_SENTENCES = 6;
+
+/** 「A……B」几截按顺序都在 text 里。 */
+function fragmentsInOrder(text: string, fragments: readonly string[]): boolean {
+  let from = 0;
+  for (const fragment of fragments) {
+    const at = text.indexOf(fragment, from);
+    if (at < 0) return false;
+    from = at + fragment.length;
+  }
+  return true;
+}
+
 /**
- * 模型抄的原句对回正文里的真句（2026-10-22 真机试写）：containsQuote 宽进，抄错一两个字（他→她）也收，
- * 但作者看到的、「改这处」拿去定位的、合并去重比的都该是真原句——同一句抄成两个样子，作者看到两条一样的「确定」。
- * 逐字就在正文里的照原样；否则找连着的一到三句、两字片段九成落在里面的最短那段。都对不上的照原样（宁可不动）。
+ * 模型抄的原句对回正文里的整句（P12 编号句子）：核账抄的常是半句、抄错一两个字（他→她）、或「A……B」两截，
+ * 作者看到的、「改这处」按编号换的、合并去重比的都该是正文里的整句——同一句抄成两个样子，作者看到两条一样的「确定」；
+ * 半句交去改，改的其实是整句。按 splitSentences 的句子：
+ * 逐字（不计空白）落在连着的几句里 → 那几句；「A……B」几截按序落在里面 → 那几句；两字片段九成落在连着的一到三句里 → 那几句。
+ * 都取最短的那段；都对不上的照原样（宁可不动）。
  */
 export function snapToOriginal(sentences: readonly string[], quote: string): string {
   const target = normalize(quote);
-  if (target.length < 4 || normalize(sentences.join("")).includes(target)) return quote;
+  if (target.length < 4) return quote;
+  const norms = sentences.map(normalize);
+  const shortest = (fits: (joined: string) => boolean, maxCount: number): string | undefined => {
+    let best: { start: number; count: number; size: number } | undefined;
+    for (let start = 0; start < sentences.length; start += 1) {
+      let joined = "";
+      for (let count = 1; count <= maxCount && start + count <= sentences.length; count += 1) {
+        joined += norms[start + count - 1]!;
+        if (!fits(joined)) continue;
+        if (best === undefined || joined.length < best.size) best = { start, count, size: joined.length };
+        break;
+      }
+    }
+    return best ? sentences.slice(best.start, best.start + best.count).join("") : undefined;
+  };
+  const exact = shortest((joined) => joined.includes(target), SNAP_MAX_SENTENCES);
+  if (exact) return exact;
+  const fragments = quote.split("…").map(normalize).filter(Boolean);
+  if (fragments.length >= 2) {
+    const pieces = shortest((joined) => fragmentsInOrder(joined, fragments), SNAP_MAX_SENTENCES);
+    if (pieces) return pieces;
+  }
   const grams = bigrams(target);
   if (grams.size === 0) return quote;
-  let best: string | undefined;
-  for (let start = 0; start < sentences.length; start += 1) {
-    for (let count = 1; count <= 3 && start + count <= sentences.length; count += 1) {
-      const window = sentences.slice(start, start + count).join("");
-      const windowGrams = bigrams(window);
-      let shared = 0;
-      for (const gram of grams) if (windowGrams.has(gram)) shared += 1;
-      if (shared / grams.size < 0.9) continue;
-      if (best === undefined || normalize(window).length < normalize(best).length) best = window;
-      break;
-    }
-  }
-  return best ?? quote;
+  return shortest((joined) => {
+    const windowGrams = bigrams(joined);
+    let shared = 0;
+    for (const gram of grams) if (windowGrams.has(gram)) shared += 1;
+    return shared / grams.size >= 0.9;
+  }, 3) ?? quote;
 }
 
 /** 一批核账条目的两边原句都对回真句：本章那句对本章（错在前文某章的对那章），前文那句对它标的那章；设定原文不动。 */
@@ -156,33 +178,45 @@ export function snapIssueQuotes(
   });
 }
 
+/** 模型给的把握：只认 schema 的 sure，其余（maybe、没写、中文说法）都当 maybe。 */
+export function readConfidence(record: Record<string, unknown>): "sure" | "maybe" {
+  return String(record.confidence ?? "").trim().toLowerCase() === "sure" ? "sure" : "maybe";
+}
+
+/** 通读 JSON → 问题条目（带模型给的把握）：两边原句逐条核对（宽进：抄错一两个字也收），收下的都对回正文整句（snapToOriginal）。 */
 export function parseFullReadIssues(text: string, chapter: number, draftBody: string, earlier: EarlierText): readonly ContinuityIssueV2[] {
   const parsed = parseJson(text);
   const raw = Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
   const body = normalize(draftBody);
+  const draft = splitSentences(draftBody);
   const earlierByChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
+  const sentencesOf = (n: number): readonly string[] => (n === chapter ? draft : earlier.chapters.find((item) => item.chapter === n)?.sentences ?? []);
   const out: ContinuityIssueV2[] = [];
   for (const item of raw) {
     const record = asRecord(item);
     if (!record) continue;
-    const quote = String(record.quote ?? "").trim();
-    const earlierQuote = String(record.earlierQuote ?? "").trim();
+    const rawQuote = String(record.quote ?? "").trim();
+    const rawEarlier = String(record.earlierQuote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     // 理由里自己说「不矛盾」的不再按词表丢（重构 P7「不猜」）：是不是问题由 A 自复核的结构化判定（sure / maybe / no）定。
-    if (!containsQuote(body, quote)) continue;
+    if (!containsQuote(body, rawQuote)) continue;
     const claimedChapter = Number(record.earlierChapter);
     let earlierChapter: number | undefined;
-    // 本章自己和自己比：两句互相包含就是同一处（浏览器实测：「兜里只剩这一张纸了」对上含它的那一整句，报成「重复」）。
-    // 真重复（同一句在本章出现两次）照报——分两半写偶尔会把段落写两遍。
-    const sameSpot = normalize(earlierQuote).includes(normalize(quote)) || normalize(quote).includes(normalize(earlierQuote));
-    const shorter = normalize(quote).length <= normalize(earlierQuote).length ? normalize(quote) : normalize(earlierQuote);
-    const appearsTwice = shorter.length >= 4 && body.indexOf(shorter) !== body.lastIndexOf(shorter);
-    if (containsQuote(body, earlierQuote) && sameSpot && !appearsTwice) continue;
-    if (containsQuote(body, earlierQuote)) earlierChapter = chapter;
-    else if (Number.isInteger(claimedChapter) && earlierByChapter.has(claimedChapter) && containsQuote(earlierByChapter.get(claimedChapter)!, earlierQuote)) earlierChapter = claimedChapter;
-    else earlierChapter = [...earlierByChapter.entries()].find(([, text]) => containsQuote(text, earlierQuote))?.[0];
+    if (containsQuote(body, rawEarlier)) earlierChapter = chapter;
+    else if (Number.isInteger(claimedChapter) && earlierByChapter.has(claimedChapter) && containsQuote(earlierByChapter.get(claimedChapter)!, rawEarlier)) earlierChapter = claimedChapter;
+    else earlierChapter = [...earlierByChapter.entries()].find(([, text]) => containsQuote(text, rawEarlier))?.[0];
     if (earlierChapter === undefined) continue;
-    out.push({ quote, earlierQuote, earlierChapter, reason, kind: "event" });
+    const quote = snapToOriginal(draft, rawQuote);
+    const earlierQuote = snapToOriginal(sentencesOf(earlierChapter), rawEarlier);
+    if (earlierChapter === chapter) {
+      // 本章自己和自己比：两边落在同一句（或互相包含）就是同一处（浏览器实测：「兜里只剩这一张纸了」对上含它的那一整句，报成「重复」）。
+      // 真重复（同一句在本章出现两次）照报——分两半写偶尔会把段落写两遍。
+      const sameSpot = normalize(earlierQuote).includes(normalize(quote)) || normalize(quote).includes(normalize(earlierQuote));
+      const shorter = normalize(rawQuote).length <= normalize(rawEarlier).length ? normalize(rawQuote) : normalize(rawEarlier);
+      const appearsTwice = shorter.length >= 4 && body.indexOf(shorter) !== body.lastIndexOf(shorter);
+      if (sameSpot && !appearsTwice) continue;
+    }
+    out.push({ quote, earlierQuote, earlierChapter, reason, kind: "event", confidence: readConfidence(record) });
   }
   return out;
 }

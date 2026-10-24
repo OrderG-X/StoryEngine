@@ -261,10 +261,12 @@
   .step-card .cck-item{
     > .drc-desc{margin:4px 0 0;}
     > .cck-source{margin:8px 0 0;}
-    .cck-foot{display:flex;align-items:center;gap:6px;margin-top:8px;}
-    .cck-foot .drc-fix{margin:0;padding:3px 10px;}
+    .cck-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;}
+    .cck-foot .drc-fix{margin:0;padding:3px 10px;white-space:nowrap;}
     .cck-src{margin-right:auto;padding:2px 0;border:0;background:none;font:inherit;font-size:11.5px;color:var(--faint);cursor:pointer;}
     .cck-src:hover{color:var(--accent-hi);}
+    .cck-gone{font-size:11.5px;color:var(--success);}
+    &.is-gone > .drc-evi{color:var(--faint);text-decoration:line-through;text-decoration-color:var(--line-strong);}
   }
   /* 审稿条目：原句也做成引文块，和核账同一个样子；严重度左边一道同色细线。 */
   .step-card .drc-item:has(> .drc-line){
@@ -289,6 +291,24 @@
   }
   .step-card .cpc-decline:hover:not(:disabled){background:var(--hover);}
   .step-card .cpc-decline:disabled{opacity:.55;cursor:default;}
+
+  /* 定论卡（SettleCard）：定论一句衬线大字；按章列「原句划掉 → 新句」，右边 × 划掉不改；划掉的整行变淡。 */
+  .step-card .stc-canon{margin:0 0 10px;padding:8px 12px;border-left:3px solid var(--accent-line);border-radius:0 8px 8px 0;background:var(--sunken);font-size:14px;line-height:1.7;color:var(--text);}
+  .step-card .stc-group{margin:0 0 10px;}
+  .step-card .stc-group h4{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--muted);}
+  .step-card .stc-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .step-card .stc-row{display:flex;align-items:flex-start;gap:8px;}
+  .step-card .stc-change{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+  .step-card .stc-change p{margin:0;font-size:12.5px;line-height:1.7;overflow-wrap:anywhere;}
+  .step-card .stc-from{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--danger);}
+  .step-card .stc-to{color:var(--text);}
+  .step-card .stc-why{font-size:11.5px;color:var(--faint);}
+  .step-card .stc-x{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--faint);font-size:14px;line-height:22px;cursor:pointer;}
+  .step-card .stc-x:hover:not(:disabled){background:var(--hover);color:var(--text);}
+  .step-card .stc-row.is-excluded .stc-change{opacity:.45;}
+  .step-card .stc-row.is-excluded .stc-to{text-decoration:line-through;}
+  .step-card .stc-facts-toggle{margin:0 0 8px;}
+  .step-card .stc-facts{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.6;color:var(--muted);}
 
   /* 定稿前的账本清单：一条一行，依据原句小一号；勾掉的划线变淡。 */
   .step-card .cpc-ledger{margin:0 0 10px;}

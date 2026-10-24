@@ -41,6 +41,9 @@ const BODY = "林舟一早开门。他从工作台上拿起那块怀表，表盖
 
 const WATCH = { quote: "他从工作台上拿起那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "怀表锁在抽屉里，本章却在工作台上" };
 const AUNT = { quote: "周婶在门口喊他", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶的位置对不上" };
+/** 收下的原句都对回正文整句（P12 编号句子）。 */
+const WATCH_SENTENCE = "他从工作台上拿起那块怀表，表盖还开着。";
+const AUNT_SENTENCE = "周婶在门口喊他。";
 
 async function makeBook(): Promise<string> {
   const dir = await makeHomeTempDir("checker-");
@@ -87,7 +90,7 @@ describe("核账员：每遍核两次（G）", () => {
     expect(calls).toHaveLength(6);
     for (const key of Object.values(FOCUS_KEYS)) expect(calls.filter((call) => call.includes(key))).toHaveLength(2);
     expect(new Set(calls.filter((call) => call.includes(FOCUS_KEYS.objects))).size).toBe(1);
-    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"], [AUNT.quote, "maybe"]]);
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH_SENTENCE, "sure"], [AUNT_SENTENCE, "maybe"]]);
   });
 });
 
@@ -106,10 +109,10 @@ describe("核账员：三遍合并", () => {
     expect(result.cold).toBeUndefined();
     expect(result.failures).toEqual([]);
     expect(result.issues.map((issue) => [issue.quote, issue.reason, issue.confidence])).toEqual([
-      ["他从工作台上拿起那块怀表", "怀表锁在抽屉里，本章却在工作台上", "sure"],
-      ["周婶在门口喊他", "周婶的位置对不上", "sure"],
+      ["他从工作台上拿起那块怀表，表盖还开着。", "怀表锁在抽屉里，本章却在工作台上", "sure"],
+      ["周婶在门口喊他。", "周婶的位置对不上", "sure"],
     ]);
-    expect(result.issues[0]).toMatchObject({ earlierChapter: 2, earlierQuote: "林舟把怀表锁进了柜台下的抽屉" });
+    expect(result.issues[0]).toMatchObject({ earlierChapter: 2, earlierQuote: "林舟把怀表锁进了柜台下的抽屉。" });
   });
 
   it("把握：只认 schema 的 sure，其余（maybe、没写、中文「不确定」「确定」）→ maybe", async () => {
@@ -132,7 +135,7 @@ describe("核账员：三遍合并", () => {
       ],
     });
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel });
-    expect(result.issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表"]);
+    expect(result.issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表，表盖还开着。"]);
   });
 
   it("一遍失败：其余两遍照出结果，失败如实记下（带第几遍和盯什么）", async () => {
@@ -209,7 +212,7 @@ describe("核账员：窗口和提示", () => {
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, maxCatchUp: 1 });
     expect(result.cold).toEqual({ notedThrough: 0, rawFrom: 1, rawTo: 2 });
     expect(result.failures).toEqual([]);
-    expect(result.issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表"]);
+    expect(result.issues.map((issue) => issue.quote)).toEqual(["他从工作台上拿起那块怀表，表盖还开着。"]);
     expect(checkCalls()).toHaveLength(3);
     for (const { messages } of checkCalls()) {
       expect(messages).toHaveLength(3); // system + 冷窗口原文块 + 任务
@@ -436,8 +439,8 @@ describe("A 自复核", () => {
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: merged, variant: { selfReview: true } });
     expect(result.failures).toEqual([]);
     expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([
-      ["他从工作台上拿起那块怀表", "sure"], // 三遍报 maybe，复核判 sure → 升
-      ["林舟一早开门", "maybe"], // 复核判 maybe → 保持
+      ["他从工作台上拿起那块怀表，表盖还开着。", "sure"], // 三遍报 maybe，复核判 sure → 升
+      ["林舟一早开门。", "maybe"], // 复核判 maybe → 保持
       // 「周婶在门口喊他」复核判 no → 删掉
     ]);
   });
@@ -479,7 +482,7 @@ describe("A 自复核", () => {
         return callModel(messages, options);
       };
       const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel: merged, variant: { selfReview: true } });
-      expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"]]);
+      expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH_SENTENCE, "sure"]]);
       expect(result.failures).toHaveLength(1);
       expect(result.failures[0]).toContain("自复核没跑成");
     }
@@ -609,8 +612,8 @@ describe("D「确定」门槛（applySureGate）", () => {
     });
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { sureGate: true } });
     expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([
-      ["他从工作台上拿起那块怀表", "sure"], // 跨章 + 两句逐字 → 保留
-      ["周婶在门口喊他", "maybe"], // 同章两句只隔 2 句 → 降级
+      ["他从工作台上拿起那块怀表，表盖还开着。", "sure"], // 跨章 + 两句逐字 → 保留
+      ["周婶在门口喊他。", "maybe"], // 同章两句只隔 2 句 → 降级
     ]);
   });
 });
@@ -678,7 +681,7 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     const { callModel, byKind } = modelWithReview();
     const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { selfReview: true, timelineInReview: true } });
     expect(result.failures).toEqual([]);
-    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"]]);
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH_SENTENCE, "sure"]]);
     for (const { messages } of [...byKind().passes, ...byKind().review]) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
   });
 

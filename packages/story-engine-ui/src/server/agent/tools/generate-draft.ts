@@ -75,7 +75,7 @@ export type {
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
-import { defaultCommittedChapterPath } from "../../lib/project-io.js";
+import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
 import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
@@ -135,7 +135,10 @@ const inputSchema = z.object({
   chapterGoal: z.string().optional().describe(
     "本章方向：只能原样抄作者说过的话（可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
   ),
-  requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。")),
+  requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。continueDraft 时是这次接着写多少字（省略=写到本章目标）。")),
+  continueDraft: coerceBoolean(z.boolean().optional().describe(
+    "true=接着这一章的工作稿往下写：已写的字一个不动，从最后一句接着写（作者写了半章要你接、稿子短了要补、作者说接着写 / 续写 / 再写几百字）。不用作者点按钮；chapterGoal 这时填作者说接下来写什么（原话）。",
+  )),
   selectedCharacters: coerceStringArray(z.array(z.string()).optional().describe("一般不填。作者点名这章要写谁时，填人物名字。")),
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
@@ -173,6 +176,8 @@ const outputSchema = z.object({
   issues: z.array(z.string()).describe("出稿过程中的问题（失败时含拒绝原因，诚实回报）。"),
   overview: z.unknown().describe("出稿后重新读取的 StateOverview，供前端刷新写作区/总览。"),
   summary: z.string().describe("出稿结果的自然语言摘要（首行是本章章纲一句话，或章纲没拟成的原因）。"),
+  continued: z.object({ kept: z.number(), added: z.number() }).optional()
+    .describe("continueDraft 时：本来写好的字数、这次接着写的字数。"),
   qualityPipeline: z.object({
     continuation: z.object({
       before: z.number(), after: z.number(), rounds: z.number(), failures: z.array(z.string()),
@@ -182,7 +187,7 @@ const outputSchema = z.object({
       sure: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
       maybe: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
       failures: z.array(z.string()),
-      autoFixed: z.object({ applied: z.number(), failed: z.number() }).optional(),
+      autoFixed: z.object({ applied: z.number(), failed: z.number(), also: z.number().optional() }).optional(),
     }).optional(),
   }).optional().describe("出稿后的质量环节：续写够字数、前后核对（和「核账」同一套）。核出的确定问题已按前文改过一轮（continuity.autoFixed：改成几处、几处没改成），continuity.sure / maybe 是改完再核还剩、要用户定的问题。"),
   chapterPlan: z.object({
@@ -206,18 +211,23 @@ const outputSchema = z.object({
     z.literal("chapter_has_text"),
     z.literal("chapter_goal_not_author_words"),
     z.literal("rereading"),
+    z.literal("nothing_to_continue"),
+    z.literal("chapter_committed"),
   ]).optional().describe(
     "被护栏拦下时为此值（ok=false）：" +
       "rereading=导入的书记账员还在通读前文记账，记完才能出稿（summary 里有进度），如实转告、别重试；" +
       "previous_chapter_not_committed=前一章没定稿、现在写本章会穿帮；" +
       "chapter_has_text=这一章已经有稿子，整章重写要作者点「重写这一章」按钮（随这次结果出在对话里），告诉作者点按钮或说要改哪里，别重试；" +
-      "chapter_goal_not_author_words=chapterGoal 不是作者原话，原样抄作者的话（或不填）重调。",
+      "chapter_goal_not_author_words=chapterGoal 不是作者原话，原样抄作者的话（或不填）重调；" +
+      "nothing_to_continue=continueDraft 但这一章还没有正文，要从头写就不带 continueDraft 再调；" +
+      "chapter_committed=continueDraft 但这一章已经定稿，如实转告（summary 里说了怎么办），别重试。",
   ),
   needsConfirmation: z.boolean().optional().describe("true=要作者点按钮才做（chapter_has_text）。"),
   rewriteConfirm: z.object({
     chapter: z.number().int().positive(),
     chapterGoal: z.string().optional(),
-  }).optional().describe("「重写这一章」按钮带的东西（界面用，你不用转述）。"),
+    canContinue: z.boolean().optional(),
+  }).optional().describe("「重写这一章」「接着往下写」按钮带的东西（界面用，你不用转述）。"),
   pendingChapterToCommit: z.number().int().positive().optional().describe("被章序护栏拦下时，建议先定稿的那一章（= 本章号-1）。"),
   aiFlavor: z.object({
     total: z.number().int().nonnegative().describe("疑似 AI 腔命中总数（全量，含未截断进清单的）。"),
@@ -307,10 +317,17 @@ const outputSchema = z.object({
 
 /** 工具输出契约：共享编排 outcome 剥掉 HTTP 适配料（http 袋）与执法标记 + 护栏拦截字段（execute 护栏产出）。 */
 export type GenerateDraftToolOutput = Omit<GenerateDraftOutcome, "http" | "rejection"> & {
-  readonly blockedReason?: "previous_chapter_not_committed" | "chapter_has_text" | "chapter_goal_not_author_words" | "rereading";
+  readonly blockedReason?:
+    | "previous_chapter_not_committed"
+    | "chapter_has_text"
+    | "chapter_goal_not_author_words"
+    | "rereading"
+    | "nothing_to_continue"
+    | "chapter_committed";
   readonly pendingChapterToCommit?: number;
   readonly needsConfirmation?: boolean;
-  readonly rewriteConfirm?: { readonly chapter: number; readonly chapterGoal?: string };
+  /** canContinue：工作稿还没定稿，卡上另给「接着往下写」。 */
+  readonly rewriteConfirm?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
 };
 
 /** 章序护栏拦截时的工具输出（ok:false + 结构化 reason + 讲清穿帮原因的 summary）。纯逻辑、可测。 */
@@ -355,9 +372,28 @@ export function buildRewriteAwaitingAuthorOutput(
     overview,
     summary: committed
       ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销；重写后要重新定稿）。`
-      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
+      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要从最后一句接着写就点「接着往下写」，要整章重写就点「重写第 ${chapter} 章」（都先存档，可撤销）；只想改几处的话告诉我改哪里。`,
     refreshScope: "full",
-    rewriteConfirm: { chapter, ...(chapterGoal ? { chapterGoal } : {}) },
+    rewriteConfirm: { chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(committed ? {} : { canContinue: true }) },
+  };
+}
+
+/** 接着往下写却没得接 / 这章已定稿：如实说，不调模型。纯逻辑、可测。 */
+export function buildContinueBlockedOutput(
+  chapter: number,
+  reason: "nothing_to_continue" | "chapter_committed",
+  overview: StateOverview,
+): GenerateDraftToolOutput {
+  return {
+    ok: false,
+    chapter,
+    blockedReason: reason,
+    issues: [reason === "chapter_committed" ? `第 ${chapter} 章已经定稿` : `第 ${chapter} 章还没有正文`],
+    overview,
+    summary: reason === "chapter_committed"
+      ? `第 ${chapter} 章已经定稿了，接着写只接还没定稿的章。要往这章里加内容，先在稿纸上改、再重新定稿。`
+      : `第 ${chapter} 章还没有正文，没有可以接着写的。要从头写，就说「写第 ${chapter} 章」。`,
+    refreshScope: "full",
   };
 }
 
@@ -403,7 +439,9 @@ export const generateDraftTool = createTool({
     // 已入库前沿 → 推进下一章（治 off-by-one：入库后 currentChapter 仍停在刚入库那章，隐式出稿会重写它）。
     // 仅在「模型没显式给章号」且「回退到的章已入库、且是前沿（下一章未入库）」时推进；显式章号一律尊重。
     const explicitChapter = Number.isInteger(input.chapter) && (input.chapter as number) > 0;
-    const resolvedChapter = advancePastCommittedFrontier({
+    const continuing = input.continueDraft === true;
+    // 接着写就是接作者眼前这章，不往下一章推。
+    const resolvedChapter = continuing ? resolvedFromInputOrContext : advancePastCommittedFrontier({
       explicitChapter,
       resolvedChapter: resolvedFromInputOrContext,
       resolvedCommitted: explicitChapter ? false : await isChapterCommitted(projectDir, resolvedFromInputOrContext),
@@ -422,12 +460,24 @@ export const generateDraftTool = createTool({
           return buildGoalNotQuotedOutput(resolvedChapter, quote.notFound, overview);
         }
       }
-      // A2 有稿不覆盖：这一章已有工作稿或已定稿，整章重写要作者点「重写这一章」。
-      const committedNow = await isChapterCommitted(projectDir, resolvedChapter);
-      if (committedNow || await hasWorkingDraftText(projectDir, resolvedChapter)) {
+      // A2 有稿不覆盖：这一章已有工作稿或已定稿，整章重写要作者点「重写这一章」。接着写不覆盖，不拦。
+      const committedNow = continuing ? false : await isChapterCommitted(projectDir, resolvedChapter);
+      if (!continuing && (committedNow || await hasWorkingDraftText(projectDir, resolvedChapter))) {
         const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
         return buildRewriteAwaitingAuthorOutput(resolvedChapter, committedNow, overview, chapterGoal);
       }
+    }
+    // 接着写：已定稿的章不接（要改先改稿再定稿）；没正文没得接。读的是工作稿（作者眼前那份）。
+    let continueText = "";
+    if (continuing) {
+      const blocked = await isChapterCommitted(projectDir, resolvedChapter)
+        ? "chapter_committed" as const
+        : !(await hasWorkingDraftText(projectDir, resolvedChapter)) ? "nothing_to_continue" as const : undefined;
+      if (blocked) {
+        const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+        return buildContinueBlockedOutput(resolvedChapter, blocked, overview);
+      }
+      continueText = stripLeadingMarkdownChapterHeading(await readFile(defaultDraftPath(projectDir, resolvedChapter), "utf-8")).trim();
     }
     // 导入的书还在通读记账（P8）：账没记全，章纲员、核账员对照的前文是缺的，记完再出稿。
     const rereading = await rereadBlocker(projectDir, "出稿");
@@ -454,7 +504,7 @@ export const generateDraftTool = createTool({
     const snapshotId = await snapshotBeforeDraftOverwrite(
       projectDir,
       resolvedChapter,
-      `第${resolvedChapter}章再次出稿前快照`,
+      continuing ? `第${resolvedChapter}章接着写前快照` : `第${resolvedChapter}章再次出稿前快照`,
       `出稿：第${resolvedChapter}章`,
     );
     // 出稿流式：路由注入了 sink 就把正文 delta 逐字喂前端编辑器（带本次章号，前端只往当前章追）；缺失=不流式。
@@ -463,7 +513,9 @@ export const generateDraftTool = createTool({
     // 部分 provider 的 temperature 上限为 1 超了会被 400 拒；base 已 ≥0.85 时向上错不开会三版同温，
     // 改向下错开，见 resolveCandidateTemperatures），防 N 版同分布。采样不接 delta sink：
     // N 版正文逐字串进同一章编辑器会花屏，优胜稿落盘后由 refreshScope:"full" 一次性刷新。
-    const candidateCount = input.candidates === 2 || input.candidates === 3 ? input.candidates : 1;
+    const candidateCount = !continuing && (input.candidates === 2 || input.candidates === 3) ? input.candidates : 1;
+    // 接着写：稿纸上先推已写的那段，再接着推新写的字（原文不会在稿纸上消失再出现）。
+    if (continuing && draftDeltaSink) draftDeltaSink({ chapter: resolvedChapter, text: `${continueText}\n\n`, base: true });
     let writerClient: WriterClient;
     let candidateWriterClients: readonly WriterClient[] | undefined;
     let candidateTemperatures: readonly number[] | undefined;
@@ -493,8 +545,21 @@ export const generateDraftTool = createTool({
     const outcome = await runGenerateDraft({
       projectDir,
       chapter: resolvedChapter,
+      // 只出一版且在流式时：重写一段、接下一段前换掉稿纸上已流出的字（多候选不流式）。
+      ...(draftDeltaSink && candidateCount === 1
+        ? { onStreamReset: (visible: string) => draftDeltaSink({ chapter: resolvedChapter, text: visible, replace: true }) }
+        : {}),
       ...(chapterGoal ? { chapterGoal } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
+      ...(continuing
+        ? {
+          continueFrom: {
+            text: continueText,
+            ...(input.requestedDraftLength && input.requestedDraftLength > 0 ? { length: input.requestedDraftLength } : {}),
+            ...(chapterGoal ? { direction: chapterGoal } : {}),
+          },
+        }
+        : {}),
       ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
       ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
       ...(input.mustHitBeats !== undefined ? { mustHitBeats: input.mustHitBeats } : {}),

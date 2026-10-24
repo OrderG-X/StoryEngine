@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { buildContinuityFixIntent, canFixDirectly, continuityFixAction } from "./ContinuityCheckCard.js";
+import { buildContinuityFixIntent, canFixDirectly, continuityFixAction, settleChoices } from "./ContinuityCheckCard.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import {
   continuityFixChapter,
@@ -137,7 +137,7 @@ export function ContinuityMarks({
   const [pop, setPop] = useState<PopState | null>(null);
   const focusSeq = useContinuityFocus((s) => s.seq);
   const chapter = result?.check.chapter ?? 0;
-  const resultKey = result ? `${result.messageId}|${result.dismissed.join("|")}` : "";
+  const resultKey = result ? `${result.messageId}|${result.dismissed.join("|")}|${(result.settled ?? []).join("|")}` : "";
   const maybeShown = useMaybeMarks((s) => s.chapter !== null && s.chapter === chapter);
 
   // 划线：正文或结果变了就重算（防抖跟着编辑走）。
@@ -256,6 +256,11 @@ export function ContinuityMarks({
     : item.earlierChapter === chapter ? "本章前面" : `第 ${item.earlierChapter} 章`;
   const title = `${level === "maybe" ? "可能" : ""}和${where}对不上`;
   const direct = Boolean(onFixAction) && canFixDirectly(chapter, item);
+  // 两章打架、对设定的：作者定哪边为准（出定论卡），不给「改这处」（P12）。
+  const open = openContinuityItems(result);
+  const earlierOpen = (result.check.earlierOpen ?? [])
+    .filter((other) => !result.dismissed.includes(continuityItemKey(other)) && !(result.settled ?? []).includes(continuityItemKey(other)));
+  const choices = onFixAction ? settleChoices(chapter, item, [...open.sure, ...open.maybe, ...earlierOpen]) : undefined;
   const dismiss = () => {
     const mark = pop.mark;
     void dismissContinuityItem({ messageId: result.messageId, chapter, item: mark.item }).then((saved) => {
@@ -277,7 +282,18 @@ export function ContinuityMarks({
       <p className="se-cc-pop-quote serif">{where}：「{item.earlierQuote}」</p>
       {item.reason ? <p className="se-cc-pop-reason">{item.reason}</p> : null}
       <div className="se-cc-pop-acts">
-        {direct || onRevise ? (
+        {choices ? choices.map((choice, index) => (
+          <button
+            key={choice.label}
+            type="button"
+            className={index === 0 ? "is-primary" : undefined}
+            disabled={busy}
+            title={busy ? "等手上这件事做完再定" : "查全书哪几句跟着改，确认后一次改齐"}
+            onClick={() => { onFixAction!(choice.action); setPop(null); }}
+          >
+            {choice.label}
+          </button>
+        )) : direct || onRevise ? (
           <button
             type="button"
             className="is-primary"

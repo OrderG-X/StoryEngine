@@ -549,6 +549,13 @@
   .se-bk-rules:is(.is-chips,.is-strike) li.is-ai{border-style:dashed;border-color:var(--line-strong);}
   .se-bk-rules:is(.is-chips,.is-strike) .se-bk-ai{margin-left:2px;}
   .se-bk-rules.is-strike li > span:first-child{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--danger);}
+  /* 定论：一条一行，字是作者定的（衬线），右边「查前文」「删」 */
+  .se-bk-canon{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;}
+  .se-bk-canon li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;}
+  .se-bk-canon li + li{border-top:1px dashed var(--line-weak);}
+  .se-bk-canon li > :first-child{flex:1;min-width:0;}
+  .se-bk-canon .se-bk-value{font-size:15px;}
+  .se-bk-canon footer{display:flex;align-items:center;gap:8px;flex:none;font-size:12px;line-height:1.7;padding-top:2px;}
   .se-bk-samples{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
   .se-bk-samples li{padding:12px 14px;border:1px solid var(--line-weak);border-radius:10px;background:var(--sheet);}
   .se-bk-samples p{margin:0;font-size:14px;line-height:1.85;color:var(--text);white-space:pre-wrap;

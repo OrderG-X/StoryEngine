@@ -10,6 +10,8 @@
  */
 import { z } from "zod";
 import {
+  CANON_MAX,
+  CANON_TEXT_MAX,
   CARD_NAME_MAX,
   CardKind,
   EXEMPLAR_TEXT_MAX,
@@ -65,6 +67,10 @@ export const CardOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("rules.accept") }),
   z.object({ op: z.literal("exemplar.add"), text: z.string().trim().min(1).max(EXEMPLAR_TEXT_MAX), note: z.string().trim().max(RULE_ITEM_MAX).optional() }),
   z.object({ op: z.literal("exemplar.remove"), exemplar: ref }),
+  /** 定论（P12）：只有作者能记、能改；AI 提的一律等作者点头。 */
+  z.object({ op: z.literal("canon.add"), text: z.string().trim().min(1).max(CANON_TEXT_MAX) }),
+  /** 改一条定论（按编号或原文认）；空串 = 删掉。 */
+  z.object({ op: z.literal("canon.set"), canon: z.string().trim().min(1).max(CANON_TEXT_MAX), text: z.string().trim().max(CANON_TEXT_MAX) }),
 ]);
 export type CardOp = z.infer<typeof CardOp>;
 
@@ -372,6 +378,26 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
         at: context.at,
       };
       return { ok: true, file: { ...file, rules: { ...file.rules, exemplars: [...exemplars, exemplar] } }, line: "加了一段文风样本" };
+    }
+    case "canon.add": {
+      if (ai) return needsAuthor("定论要你自己定");
+      if (file.canon.some((item) => same(item.text, op.text))) return { ok: true, file };
+      if (file.canon.length >= CANON_MAX) return invalid(`定论最多 ${CANON_MAX} 条，先删几条旧的`);
+      const item = { id: nextId(file.canon.map((entry) => entry.id), "n-"), text: op.text, at: context.at };
+      return { ok: true, file: { ...file, canon: [...file.canon, item] }, line: `记下定论${quoted(op.text)}` };
+    }
+    case "canon.set": {
+      if (ai) return needsAuthor("定论要你自己改");
+      const target = op.canon.trim();
+      const item = file.canon.find((entry) => entry.id === target) ?? file.canon.find((entry) => same(entry.text, target));
+      if (!item) return invalid(`没有这条定论${quoted(target)}`);
+      if (!op.text) return { ok: true, file: { ...file, canon: file.canon.filter((entry) => entry !== item) }, line: `删了定论${quoted(item.text)}` };
+      if (item.text === op.text) return { ok: true, file };
+      return {
+        ok: true,
+        file: { ...file, canon: file.canon.map((entry) => (entry === item ? { ...entry, text: op.text, at: context.at } : entry)) },
+        line: `定论${quoted(item.text)}改成${quoted(op.text)}`,
+      };
     }
     case "exemplar.remove": {
       const exemplars = file.rules.exemplars;

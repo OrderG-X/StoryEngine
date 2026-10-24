@@ -362,6 +362,27 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState().streaming).toBeNull();
   });
 
+  it("流式里 replace 片段换掉已流出的字（重写一段时退回），之后的片段接着它往下", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mockedStreamAgentChat.mockImplementation(async (_input, handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftDelta?.({ chapter: 3, text: "前面写好的。\n\n重演的一段" });
+      handlers.onDraftDelta?.({ chapter: 3, text: "前面写好的。\n\n", replace: true });
+      handlers.onDraftDelta?.({ chapter: 3, text: "新的一段" });
+      await gate;
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("接着往下写"); });
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toContain("新的一段"));
+    expect(useDraftStore.getState().streaming).not.toContain("重演的一段");
+    release();
+    await act(async () => { await pending; });
+  });
+
   it("explicitly adopts a generate_draft target chapter and keeps streaming next-chapter support", async () => {
     const overview = makeOverview("Next chapter");
     const body = "第四章的新正文。";
@@ -391,6 +412,8 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState().chapter).toBe(4);
     expect(useDraftStore.getState().body).toBe(body);
     expect(useDraftStore.getState().body).not.toContain("串回第三章");
+    // 这一轮对话归第四章：之后在第四章接着聊，它不收进「别的章的对话」。
+    expect(useChatStore.getState().messages.find((message) => message.role === "user" && message.content === "继续写下一章")?.chapter).toBe(4);
     expect(mockedApplyOverview).toHaveBeenCalledWith(overview, { flowStatus: "draft_ready", chapter: 4, title: "第四章" });
     // 第三章原稿还在盘上，没被动过。
     expect(disk.get(3)?.draft?.body).toBe("第三章原有的工作稿。");
@@ -867,6 +890,42 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
 
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, title: "夜探祠堂", body: fullDraftOnDisk, savedBody: fullDraftOnDisk });
     expect(useBookStore.getState().workspace.flowStatus).toBe("draft_ready");
+    expect(messages().some((m) => m.content.includes("其实已经写完了"))).toBe(true);
+  });
+
+  it("接着写中途「停止」：本来写好的那段原样留着（不当新写的换引号、去星号），新写的那截接在后面", async () => {
+    const mine = "我写的\"直引号\"和**星号**。";
+    seedPaper(3, { draft: mine });
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      handlers.onDraftDelta?.({ chapter: 3, text: `${mine}\n\n`, base: true });
+      handlers.onDraftDelta?.({ chapter: 3, text: "接着写的\"一截\"。" });
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("接着往下写"); });
+    await vi.waitFor(() => expect(useDraftStore.getState().streaming).toContain("接着写的“一截”"));
+    expect(useDraftStore.getState().streaming?.startsWith(mine)).toBe(true);
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+    expect(useDraftStore.getState().body).toBe(`${mine}\n\n接着写的“一截”。`);
+  });
+
+  it("「停止」时流式已收（服务端写完、正在核账）→ 盘上是新稿也如实说", async () => {
+    seedPaper(3, { draft: "原来的稿。" });
+    scriptAbortableStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      writeDisk(3, { draft: "原来的稿。\n\n接着写完的一段。", title: "夜探祠堂" });
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.handleSendMessage("接着往下写"); });
+    await vi.waitFor(() => expect(useBookStore.getState().workspace.flowStatus).toBe("draft_generating"));
+    act(() => { result.current.stopAgent(); });
+    await act(async () => { await pending; });
+    expect(useDraftStore.getState().body).toBe("原来的稿。\n\n接着写完的一段。");
     expect(messages().some((m) => m.content.includes("其实已经写完了"))).toBe(true);
   });
 

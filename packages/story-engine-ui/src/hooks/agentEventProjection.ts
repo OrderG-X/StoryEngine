@@ -21,14 +21,14 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NextStepPrompt } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, continueConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -78,6 +78,8 @@ export interface AgentToolResultOutput {
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ContinuityCheckData;
   readonly brainstorm?: BrainstormCardData;
+  /** settle_preview / settle_fact 专属：定论卡（P12）。 */
+  readonly settle?: SettleCardData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
    *  供前端区分「还在读」和「出错」用——别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -90,7 +92,7 @@ export interface AgentToolResultOutput {
   /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
   readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
   /** generate_draft 专属：有稿的章 AI 不覆盖，挂「重写这一章」按钮。 */
-  readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string };
+  readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
   /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
   readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 }
@@ -187,6 +189,10 @@ const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
   undo_last_change: { stepLabel: "撤销上一步", card: null },
   prune_snapshots: { stepLabel: "裁剪操作历史", card: null },
   web_search: { stepLabel: "联网查资料", card: null },
+  // 定论（P12）：按钮出预览 / 对话 AI 出预览 / 确认改齐
+  settle_preview: { stepLabel: "查前文", card: null },
+  settle_fact: { stepLabel: "查前文", card: null },
+  settle_apply: { stepLabel: "改齐前文", card: null },
 };
 
 /**
@@ -206,6 +212,8 @@ const READONLY_TOOL_NAMES = new Set<string>([
   "check_continuity",
   "ai_review",
   "commit_preview",
+  "settle_preview",
+  "settle_fact",
 ]);
 
 /** 工具 id → 块体步骤展示；没登记的工具叫「其他步骤」（作者看的字里不出英文工具名；不静默、不崩，也不强造卡）。 */
@@ -316,12 +324,14 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
         };
       }
-      // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）。
+      // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）；没定稿的再挂「接着往下写」。
       if (event.toolName === "generate_draft" && event.output?.rewriteConfirmAction) {
-        const button = rewriteConfirmAction(event.output.rewriteConfirmAction);
+        const target = event.output.rewriteConfirmAction;
+        const buttons = [...(target.canContinue ? [continueConfirmAction(target)] : []), rewriteConfirmAction(target)];
+        const ids = new Set(buttons.map((button) => button.id));
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => !ids.has(a.id)), ...buttons],
         };
       }
       // 删角色 / 覆盖已确立设定：挂「确认改设定」按钮（作者档，点了才由服务端执行）。
@@ -345,6 +355,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
       if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
         return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
+      }
+      // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
+      if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {
+        return withCard(withEffects, { type: "settle", settle: event.output.settle });
       }
       // commit_preview 的定稿预览卡（R3）：裁决（可否定稿）+ 阻断项 + 问题计数照实显示——模型可能把硬阻断说软或略过。
       if (event.toolName === "commit_preview" && event.output?.commitPreview) {

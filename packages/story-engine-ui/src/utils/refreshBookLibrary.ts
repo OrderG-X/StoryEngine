@@ -1,11 +1,16 @@
-import { fetchDefaultBookLibrary } from "../api/client.js";
+import { fetchDefaultBookLibrary, fetchMissingBookPaths } from "../api/client.js";
 import { useRecentBooksStore } from "../stores/recentBooksStore.js";
-import { stableBookId } from "./bookUtils.js";
+import { isRealProjectBook, stableBookId } from "./bookUtils.js";
 
-/** 重扫默认书库、归并进书架（开机、恢复书、从备份恢复后都走这一条）。 */
+/** 重扫默认书库、归并进书架（开机、恢复书、从备份恢复后都走这一条）。从别处打开的书顺带问一声文件夹还在不在。 */
 export async function refreshBookLibrary(): Promise<void> {
   const library = await fetchDefaultBookLibrary();
-  useRecentBooksStore.getState().syncScannedBooks(library.books, library);
+  const root = library.root?.replace(/\/+$/u, "");
+  const elsewhere = useRecentBooksStore.getState().books
+    .filter((book) => isRealProjectBook(book) && (!root || !book.projectPath.startsWith(`${root}/`)))
+    .map((book) => book.projectPath);
+  const missingPaths = await fetchMissingBookPaths(elsewhere).catch(() => [] as readonly string[]);
+  useRecentBooksStore.getState().syncScannedBooks(library.books, { ...library, missingPaths });
 }
 
 /**

@@ -98,9 +98,37 @@ export type MessageCard =
   /** 服务端状态说明（如历史窗口被裁剪）：照实显示，不进助手正文。 */
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
   /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
-  | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number };
+  | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
+  /**
+   * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。
+   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）。
+   */
+  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string };
 
 export type MessageCardType = MessageCard["type"];
+
+/** 定论卡：只有原句和名字，没有编号。draft＝改的是还没定稿的工作稿。 */
+export interface SettleCardData {
+  readonly token: string;
+  readonly canon: string;
+  /** 设定本里已经有这条定论了（不再记一次）。 */
+  readonly canonExists: boolean;
+  /** 从哪一章点进来的（「再核第 N 章」）。 */
+  readonly chapter?: number;
+  readonly edits: readonly { readonly key: string; readonly chapter: number; readonly draft: boolean; readonly from: string; readonly to: string; readonly why?: string }[];
+  /** 账里跟着改的事实：after 缺省＝这条作废。 */
+  readonly facts: readonly { readonly chapter: number; readonly before: string; readonly after?: string }[];
+  /** 设定本跟着改的栏：card 缺省＝故事设定。 */
+  readonly fields: readonly { readonly key: string; readonly card?: string; readonly label: string; readonly from: string; readonly to: string }[];
+  /** 查了哪几章。 */
+  readonly searched: readonly number[];
+  /** 核账报过和它打架、这次却没查出改法的句子。 */
+  readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
+  /** 核账卡上点「以本章为准」的那条（条目键）：改齐后那条算改掉了。 */
+  readonly resolves?: string;
+  /** 没查全的（哪一批、为什么）。 */
+  readonly failures: readonly string[];
+}
 
 /** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */
 export interface BrainstormCardData {
@@ -138,7 +166,7 @@ export interface NextStepPrompt {
 /** 核账条目对的那句设定出自哪：哪一类（label：人物卡 / 地点…），落在一张卡里就带卡名。老卡片只有 label。 */
 export interface SettingRefData {
   readonly label: string;
-  readonly kind?: "story" | "character" | "place" | "item" | "lore";
+  readonly kind?: "canon" | "story" | "character" | "place" | "item" | "lore";
   readonly card?: string;
 }
 

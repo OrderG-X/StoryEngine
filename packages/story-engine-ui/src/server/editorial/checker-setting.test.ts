@@ -8,7 +8,7 @@ import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
-import { foundationMessage, readFoundationDigest, settingQuoteSource } from "./foundation-digest.js";
+import { cleanSettingQuote, foundationMessage, readFoundationDigest, settingQuoteSource } from "./foundation-digest.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 import type { ContinuityIssueV2, EarlierText } from "./continuity/check-chapter.js";
 
@@ -120,6 +120,16 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
     expect(settingQuoteSource(digest!, "沈青禾……根本没有的一句话")).toBeUndefined();
   });
 
+  it("定论（P12）排在最前；核账员引了定论原文，来源就是「定论」", async () => {
+    await writeCards(dir, [{ op: "canon.add", text: "沈敬山三年前过世" }], "canon");
+    const digest = await readFoundationDigest(dir);
+    expect(digest!.sections.map((section) => section.label)[0]).toBe("定论");
+    expect(settingQuoteSource(digest!, "沈敬山三年前过世")).toEqual({ label: "定论", kind: "canon" });
+    // 连着摘要里的小标题一起抄：小标题去掉，核账卡上带的是定论原文本身。
+    expect(cleanSettingQuote(digest!, "【定论】沈敬山三年前过世")).toBe("沈敬山三年前过世");
+    expect(cleanSettingQuote(digest!, "沈敬山三年前过世")).toBe("沈敬山三年前过世");
+  });
+
   it("settingQuoteSource：引文跨了同一节里两张卡，只到类、不带卡名", async () => {
     const digest = await readFoundationDigest(dir);
     expect(settingQuoteSource(digest!, "年龄：28……周守义（也叫：老周）")).toEqual({ label: "人物卡", kind: "character" });
@@ -128,7 +138,8 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
   it("foundationMessage：整段话带小标题，核账窗口里能认出来", async () => {
     const digest = await readFoundationDigest(dir);
     const text = foundationMessage(digest!);
-    expect(text).toContain("【设定本（作者定的硬设定：故事设定、人物、地点、物品、其他设定）】");
+    expect(text).toContain("【设定本（作者定的硬设定：定论、故事设定、人物、地点、物品、其他设定）】");
+    expect(text).toContain("「定论」是前文说法打架时作者定下的，全书以它为准");
     expect(text).toContain("东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准");
     expect(text).toContain("【人物卡】");
   });
@@ -151,7 +162,7 @@ describe("parseSettingIssues：设定原文照样经代码核对", () => {
     }, {
       quote: "沈青禾上了钟楼", settingQuote: "钟楼钥匙装在铜盒里，由老周保管", reason: "上楼要用钥匙，稿里没交代", confidence: "maybe",
     }), 6, BODY, earlier(), digest!);
-    expect(issues.map((issue) => issue.quote)).toEqual(["陆川说她爷爷走了五年", "沈青禾上了钟楼"]);
+    expect(issues.map((issue) => issue.quote)).toEqual(["陆川说她爷爷走了五年。", "沈青禾上了钟楼。"]);
     expect(at(issues, 0)).toMatchObject({ earlierQuote: "爷爷三年前过世", earlierChapter: 6, againstSetting: { label: "人物卡" } });
     expect(at(issues, 0).fixChapter).toBeUndefined();
     expect(at(issues, 1)).toMatchObject({ againstSetting: { label: "地点" } });
@@ -201,7 +212,7 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
     ]), 6, BODY, earlier(), digest!);
     expect(issues).toHaveLength(2);
     expect(issues[0]).toMatchObject({ quote: CH3, earlierQuote: CARD_LINE, earlierChapter: 3, fixChapter: 3, againstSetting: { label: "人物卡" }, confidence: "sure" });
-    expect(issues[1]).toMatchObject({ quote: "陆川说她爷爷走了五年", earlierChapter: 6, againstSetting: { label: "人物卡" } });
+    expect(issues[1]).toMatchObject({ quote: "陆川说她爷爷走了五年。", earlierChapter: 6, againstSetting: { label: "人物卡" } });
     expect(issues[1]!.fixChapter).toBeUndefined();
   });
 
@@ -223,7 +234,7 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
     ]), 6, BODY, earlier(), digest!);
     // 前三条中文 agrees 不宽进 → 当一致不收（宁可放过不误报）；第四条布尔 false 照收，confidence 中文不升 sure。
     expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ quote: "陆川说她爷爷走了五年", confidence: "maybe" });
+    expect(issues[0]).toMatchObject({ quote: "陆川说她爷爷走了五年。", confidence: "maybe" });
   });
 });
 

@@ -4,7 +4,7 @@
 // 重构 P9：字数来自设定卡写作规则（rules.targetWords / rules.minWords），经 lengthRulesOf 转成 lengthRules。
 import { describe, expect, it } from "vitest";
 import { emptyWritingRules, type WritingRules } from "@actalk/story-core";
-import { lengthRulesOf, readWritingRulesLengthIntent, resolveDraftLengthTarget, requestedDraftLengthBounds, type DraftLengthTarget } from "./draft-length-control.js";
+import { applyDraftLengthConstraint, draftLengthAim, lengthRulesOf, readWritingRulesLengthIntent, resolveDraftLengthTarget, requestedDraftLengthBounds, type DraftLengthTarget } from "./draft-length-control.js";
 
 function boundsOf(target: DraftLengthTarget): { readonly lower: number; readonly upper: number } {
   return { lower: target.lowerBound, upper: target.upperBound };
@@ -55,6 +55,15 @@ describe("resolveDraftLengthTarget × 显式 minWords（长跑 #4）", () => {
     expect(target.requested).toBe(2500);
     expect(target.lowerBound).toBe(requestedDraftLengthBounds(2500).lowerBound); // 2125，不是 1000
     expect(target.hardMinimum).toBeUndefined();
+  });
+
+  it("下限 = 目标时瞄区间中间（写手总往少了写，瞄着下限写多半不够）；平常就瞄目标", () => {
+    const floor = resolveDraftLengthTarget({ lengthRules: { targetWords: 2500, minWords: 2500 } });
+    expect(draftLengthAim(floor)).toBe(2688);
+    expect(applyDraftLengthConstraint("", floor)).toContain("项目写作规则要求至少 2500 字，这次写 2688 字左右");
+    const normal = resolveDraftLengthTarget({ lengthRules: { targetWords: 2500 } });
+    expect(draftLengthAim(normal)).toBe(2500);
+    expect(applyDraftLengthConstraint("", normal)).toContain("项目写作规则要求约 2500 字");
   });
 
   it("只有显式 min、没有目标：目标也抬到下限（上限区间才有意义）", () => {

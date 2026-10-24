@@ -6,7 +6,7 @@
  * - 账里有、卡里没有的列进 uncarded：出场人物一定是人物；别的主体不知道是什么，交给作者 / AI 分，不猜。
  * - 关系两端换成名字。编号只留给程序回指，展示时不许拼进文案。
  */
-import type { Card, CardAuthor, CardField, CardKind, SettingCardsFile, WritingRules } from "../schema/cards.js";
+import type { CanonItem, Card, CardAuthor, CardField, CardKind, SettingCardsFile, WritingRules } from "../schema/cards.js";
 import { nameKey } from "../text/quote.js";
 import type { BookProjection, CastMember, FactView, SubjectView } from "../projection/types.js";
 
@@ -70,6 +70,8 @@ export interface BibleView {
   readonly lore: readonly BibleEntry[];
   readonly relations: readonly BibleRelationView[];
   readonly uncarded: readonly UncardedEntry[];
+  /** 定论（作者定下的，全书以它为准）。 */
+  readonly canon: readonly CanonItem[];
   /** 主角卡的名字（没标就没有）。 */
   readonly protagonist?: string;
 }
@@ -179,6 +181,7 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
     lore: byKind("lore"),
     relations,
     uncarded: [...uncarded, ...others],
+    canon: cards.canon,
     ...(protagonist ? { protagonist } : {}),
   };
 }

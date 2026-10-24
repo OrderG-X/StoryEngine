@@ -520,6 +520,44 @@ describe("streamAgentChat", () => {
     expect(received?.checkedVersion).toBe("abc123");
   });
 
+  it("定论（P12）：settle_preview / settle_fact 的卡防御解析后透传；没查成不建卡；settle_apply 成功带票号", async () => {
+    const settle = {
+      token: "0123456789abcdef",
+      canon: "杜长顺十年前去世",
+      canonExists: false,
+      chapter: 4,
+      edits: [{ key: "e1", chapter: 2, draft: false, from: "“杜叔走了五年了。”", to: "“杜叔走了十年了。”" }, { key: "", chapter: 2, from: "坏的", to: "丢掉" }],
+      facts: [{ chapter: 2, before: "杜长顺五年前去世", after: "杜长顺十年前去世" }],
+      fields: [],
+      searched: [1, 2, 4],
+      missed: [],
+      failures: [],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", { toolCallId: "s1", toolName: "settle_preview", output: { ok: true, summary: "定论", settle } }),
+        frame("tool-result", { toolCallId: "s2", toolName: "settle_fact", output: { ok: false, summary: "没写出定论", settle } }),
+        frame("tool-result", { toolCallId: "s3", toolName: "settle_apply", output: { ok: true, summary: "改齐了。", settleToken: settle.token, refreshScope: "full" } }),
+        frame("done", {}),
+      ]),
+    ));
+    const received: { toolName: string; settle?: unknown; settleToken?: string }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "以第 1 章为准" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received.push(info); },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+    expect(received[0]?.settle).toEqual({ ...settle, edits: [settle.edits[0]] });
+    expect(received[1]?.settle).toBeUndefined();
+    expect(received[2]?.settleToken).toBe(settle.token);
+  });
+
   it("suggest_next_steps 的 choice.action（R4.7）→ 白名单内透传、白名单外/形状不对丢掉（选项保留，退回发文本）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

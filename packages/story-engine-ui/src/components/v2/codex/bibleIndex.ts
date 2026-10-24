@@ -26,6 +26,7 @@ export function bibleSearchSources(bible: BibleView | null): LibrarySearchSource
   const rules = bible.rules;
   return [
     { cat: "story", catLabel: "故事设定", items: bible.story.map((field) => `${field.label}：${field.value}`) },
+    { cat: "canon", catLabel: "定论", items: bible.canon.map((item) => item.text) },
     ...CARD_CATS.flatMap(({ key, cat, label }) =>
       bible[key].map((entry) => ({ cat, catLabel: label, focus: entry.card.name, items: cardItems(entry) }))),
     {
@@ -97,6 +98,7 @@ export function starterCardNamesOf(bible: BibleView | null): string[] {
 export function bibleNavCounts(bible: BibleView | null): Partial<Record<BibleCat, number>> {
   if (!bible) return {};
   return {
+    canon: bible.canon.length,
     chars: bible.characters.length,
     relations: bible.relations.length,
     items: bible.items.length,

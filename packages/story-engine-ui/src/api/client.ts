@@ -115,6 +115,17 @@ export async function fetchDefaultBookLibrary(signal?: AbortSignal): Promise<{
   };
 }
 
+/** 书架上从别处打开的书：哪几本的文件夹已经不在了（被删、挪走）。 */
+export async function fetchMissingBookPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
+  if (paths.length === 0) return [];
+  const payload = await fetchJson<{ ok: boolean; missing?: string[] }>(
+    "/api/books/missing",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths }) },
+    signal,
+  );
+  return payload.ok && Array.isArray(payload.missing) ? payload.missing.filter((path) => typeof path === "string") : [];
+}
+
 export async function createStoryProjectFromDraft(input: CreateProjectRequest, signal?: AbortSignal): Promise<{ readonly projectDir: string; readonly overview: StateOverview }> {
   const payload = await fetchJson<CreateProjectApiResponse>(
     "/api/projects/create",

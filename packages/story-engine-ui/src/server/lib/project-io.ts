@@ -382,7 +382,7 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
     const pruneKeep = isRecord(item.pruneTarget) ? readPositiveInteger(item.pruneTarget.keep) : undefined;
     // 「确认改账」按钮带的裁定草案：不进白名单的话刷新后按钮就空了（点了只能如实说过期）。内容由服务端执行前再校验。
     const ledgerTarget = readWorkspaceLedgerTarget(item.ledgerTarget);
-    // 「重写这一章」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
+    // 「重写这一章」「接着往下写」「确认改设定」按钮的参数（重构 P4）：同理要进白名单，内容由服务端执行前再校验。
     const rewriteTarget = readWorkspaceRewriteTarget(item.rewriteTarget);
     const foundationTarget = readWorkspaceFoundationTarget(item.foundationTarget);
     actions.push({
@@ -404,12 +404,12 @@ function readWorkspaceSuggestedActions(value: unknown): Record<string, unknown>[
   return actions.slice(0, 8);
 }
 
-function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string } | undefined {
+function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterGoal?: string; continueDraft?: true } | undefined {
   if (!isRecord(value)) return undefined;
   const chapter = readPositiveInteger(value.chapter);
   if (chapter === undefined) return undefined;
   const chapterGoal = readString(value.chapterGoal);
-  return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}) };
+  return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}), ...(value.continueDraft === true ? { continueDraft: true as const } : {}) };
 }
 
 function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string } | undefined {

@@ -74,8 +74,9 @@ export function buildInboxTodos(input: {
     if (todos.filter((t) => t.key.startsWith("arc-")).length >= 2) break;
   }
 
+  // 只看定稿了的章：正在写的章标题多半还是「第N章」，出稿或定稿时才起（长篇连写：给正在写的章提示「还没起标题」）。
   const placeholders = written
-    .filter((ch) => isPlaceholderChapterTitle(chapterBareTitle(ch.title ?? "").trim()))
+    .filter((ch) => ch.status === "committed" && isPlaceholderChapterTitle(chapterBareTitle(ch.title ?? "").trim()))
     .map((ch) => ch.chapterNumber)
     .sort((a, b) => a - b);
   if (placeholders.length > 0) {

@@ -4,7 +4,8 @@ import { useState, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ContinuityCheckCard, buildContinuityFixAllIntent, buildContinuityFixIntent } from "./ContinuityCheckCard.js";
-import { continuityItemKey } from "../../../workspace/chapterProgress.js";
+import { continuityItemKey, quoteInPaper } from "../../../workspace/chapterProgress.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
 import { useMaybeMarks } from "./maybeMarks.js";
 
 type CardProps = ComponentProps<typeof ContinuityCheckCard>;
@@ -90,11 +91,12 @@ describe("核账卡「可能」那段和稿纸划线", () => {
 describe("核账卡主按钮「改掉这 N 处」（R4.5：N 随「不是问题」实时变，intent 由卡片现拼）", () => {
   afterEach(() => cleanup());
 
+  // 主按钮只管前文就在本章的（P12：两章打架的要作者定哪边为准，不进主按钮）。
   const items = [
-    { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在红木抽屉里。", earlierChapter: 3, reason: "钥匙位置对不上" },
-    { quote: "外面下着大雨。", earlierQuote: "天上一个星子都没有，干得发裂。", earlierChapter: 2, reason: "天气对不上" },
-    { quote: "她管他叫周老师。", earlierQuote: "她一直叫他周伯。", earlierChapter: 1, reason: "称呼对不上" },
-    { quote: "怀表停在了三点。", earlierQuote: "怀表走得好好的。", earlierChapter: 4, reason: "怀表状态对不上" },
+    { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在红木抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" },
+    { quote: "外面下着大雨。", earlierQuote: "天上一个星子都没有，干得发裂。", earlierChapter: 9, reason: "天气对不上" },
+    { quote: "她管他叫周老师。", earlierQuote: "她一直叫他周伯。", earlierChapter: 9, reason: "称呼对不上" },
+    { quote: "怀表停在了三点。", earlierQuote: "怀表走得好好的。", earlierChapter: 9, reason: "怀表状态对不上" },
   ];
   const fourSure = { chapter: 9, source: "draft" as const, sure: items, maybe: [] };
   const first = items[0]!;
@@ -112,8 +114,8 @@ describe("核账卡主按钮「改掉这 N 处」（R4.5：N 随「不是问题�
     for (const kept of items.slice(1)) expect(intent).toContain(kept.quote);
     expect(intent).toContain("作者标过不是问题的 1 处别动");
     expect(intent).toContain("只改这几处");
-    // 句式照单条「改这处」：本章原句 ↔ 前文原句（标第几章）+ 理由。
-    expect(intent).toContain(`它和第 2 章「${items[1]!.earlierQuote}」对不上（${items[1]!.reason}）`);
+    // 句式照单条「改这处」：本章原句 ↔ 前文原句 + 理由。
+    expect(intent).toContain(`它和本章前面「${items[1]!.earlierQuote}」对不上（${items[1]!.reason}）`);
   });
 
   it("一处没划 → intent 逐条列全部，末尾仍圈「只改这几处」但不提「不是问题」", () => {
@@ -177,28 +179,13 @@ describe("核账卡：对设定本的条目（R7.3）", () => {
     expect(onRevise.mock.calls[0]![0]).toContain("设定本人物卡里的「爷爷沈敬山：三年前过世」");
   });
 
-  it("知道出自哪张卡：多一个「改设定卡」，点了翻到设定本那张卡；只知道哪类时叫「改设定」；老卡片没有类就不出", () => {
-    const onOpenSetting = vi.fn();
-    const withCard = { chapter: 6, sure: [{ ...setting, againstSetting: { label: "人物卡", kind: "character" as const, card: "沈青禾" } }], maybe: [] };
-    render(<ContinuityCheckCard check={withCard} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
-    fireEvent.click(screen.getByRole("button", { name: "改设定卡" }));
-    expect(onOpenSetting).toHaveBeenCalledWith("chars", "沈青禾");
-    cleanup();
-    const storyOnly = { chapter: 6, sure: [{ ...setting, againstSetting: { label: "故事设定", kind: "story" as const } }], maybe: [] };
-    render(<ContinuityCheckCard check={storyOnly} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
-    fireEvent.click(screen.getByRole("button", { name: "改设定" }));
-    expect(onOpenSetting).toHaveBeenLastCalledWith("story", undefined);
-    cleanup();
-    render(<ContinuityCheckCard check={{ chapter: 6, sure: [setting], maybe: [] }} onRevise={vi.fn()} onOpenSetting={onOpenSetting} />);
-    expect(screen.queryByRole("button", { name: /改设定/ })).toBeNull();
-  });
-
-  it("新稿自己错的设定条目：原句不加章号前缀、按钮「改这处」", () => {
-    const onRevise = vi.fn();
+  it("新稿自己错的设定条目：原句不加章号前缀；能直接改时给「以设定为准 / 以本章为准」", () => {
     const selfWrong = { chapter: 6, sure: [{ ...setting, earlierChapter: 6, fixChapter: undefined, quote: "他右手背上有疤。" }], maybe: [] };
-    render(<ContinuityCheckCard check={selfWrong} onRevise={onRevise} />);
+    render(<ContinuityCheckCard check={selfWrong} onRevise={vi.fn()} onFixAction={vi.fn()} />);
     expect(screen.getByText("「他右手背上有疤。」")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "改这处" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "以设定为准" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "以本章为准" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "改这处" })).toBeNull();
   });
 });
 
@@ -239,11 +226,12 @@ describe("intent 现拼的纯函数", () => {
 describe("核账卡「改这处」按钮直接改（重构 P6：结构化动作，不经模型）", () => {
   afterEach(() => cleanup());
 
-  const a = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 3, reason: "钥匙位置对不上" };
-  const b = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 2, reason: "天气对不上" };
-  const earlier = { quote: "她的眼睛是灰的。", earlierQuote: "眼睛：褐色", earlierChapter: 3, reason: "眼睛颜色对不上", againstSetting: { label: "人物卡" }, fixChapter: 3 };
+  const a = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
+  const b = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 9, reason: "天气对不上" };
+  const cross = { quote: "杜叔走了五年了。", earlierQuote: "杜叔走了整整十年。", earlierChapter: 3, reason: "去世年份对不上" };
+  const earlier = { quote: "她的眼睛是灰的。", earlierQuote: "眼睛：褐色", earlierChapter: 3, reason: "眼睛颜色对不上", againstSetting: { label: "人物卡", kind: "character" as const, card: "许微" }, fixChapter: 3 };
 
-  it("能直接改的：单条和「改掉这 N 处」都发结构化动作，不发话给模型", () => {
+  it("前文就在本章的：单条和「改掉这 N 处」都发结构化动作，不发话给模型", () => {
     const onRevise = vi.fn();
     const onFixAction = vi.fn();
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, b], maybe: [] }} onRevise={onRevise} onFixAction={onFixAction} />);
@@ -251,33 +239,99 @@ describe("核账卡「改这处」按钮直接改（重构 P6：结构化动作�
     expect(onFixAction).toHaveBeenLastCalledWith({
       toolName: "revise_draft",
       chapter: 9,
-      fixes: [{ targetText: a.quote, revisionGoal: `和第 3 章「${a.earlierQuote}」对上（${a.reason}）` }],
+      fixes: [{ targetText: a.quote, revisionGoal: `和本章前面「${a.earlierQuote}」对上（${a.reason}）` }],
     });
     fireEvent.click(screen.getByRole("button", { name: "改掉这 2 处" }));
     expect((onFixAction.mock.lastCall![0] as { fixes: unknown[] }).fixes).toHaveLength(2);
     expect(onRevise).not.toHaveBeenCalled();
   });
 
-  it("错在前文那章的（R7.3 对设定本）：单条交给 AI；主按钮只改本章的、照旧直接改，前文那章不跟着动", () => {
-    const onRevise = vi.fn();
+  it("两章打架的（P12）：不给「改这处」，给「以第 3 章为准 / 以本章为准」出定论卡；主按钮不算它", () => {
     const onFixAction = vi.fn();
-    render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, earlier], maybe: [] }} onRevise={onRevise} onFixAction={onFixAction} />);
-    fireEvent.click(screen.getByRole("button", { name: "改第 3 章" }));
-    expect(onRevise).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "改掉这 2 处" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "改掉本章 1 处" }));
-    expect(onRevise).toHaveBeenCalledTimes(1);
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, cross], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
+    expect(screen.getAllByRole("button", { name: "改这处" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "以第 3 章为准" }));
     expect(onFixAction).toHaveBeenLastCalledWith({
-      toolName: "revise_draft",
+      toolName: "settle_preview",
       chapter: 9,
-      fixes: [{ targetText: a.quote, revisionGoal: `和第 3 章「${a.earlierQuote}」对上（${a.reason}）` }],
+      truth: { where: "chapter", chapter: 3, quote: cross.earlierQuote },
+      other: { where: "chapter", chapter: 9, quote: cross.quote },
+      reason: cross.reason,
     });
+    expect(onFixAction.mock.lastCall![0]).not.toHaveProperty("item");
+    fireEvent.click(screen.getByRole("button", { name: "以本章为准" }));
+    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({ truth: { where: "chapter", chapter: 9, quote: cross.quote }, item: continuityItemKey(cross) }));
+    fireEvent.click(screen.getByRole("button", { name: "改掉本章 1 处" }));
+    expect((onFixAction.mock.lastCall![0] as { fixes: { targetText: string }[] }).fixes.map((fix) => fix.targetText)).toEqual([a.quote]);
   });
 
-  it("确定的全错在前文那章：不出主按钮，各自「改第 N 章」", () => {
-    render(<ContinuityCheckCard check={{ chapter: 9, sure: [earlier], maybe: [] }} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+  it("对设定的（错在前文那章）：「以设定为准 / 以第 3 章为准」，设定那边带卡名；全是这种就不出主按钮", () => {
+    const onFixAction = vi.fn();
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [earlier], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
     expect(screen.queryByRole("button", { name: /改掉/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "改第 3 章" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /改设定/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "以设定为准" }));
+    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      truth: { where: "setting", quote: earlier.earlierQuote, label: "人物卡", card: "许微" },
+      other: { where: "chapter", chapter: 3, quote: earlier.quote },
+    }));
+    expect(screen.getByRole("button", { name: "以第 3 章为准" })).toBeTruthy();
+  });
+
+  it("同一处前文 / 同一栏设定报了几句：「以那边为准」时别几句一起捎上（also），「以本章为准」不捎；对的不是同一句的不捎", () => {
+    const onFixAction = vi.fn();
+    const ch1 = { quote: "老码头在东边。", earlierQuote: "老码头在镇子西头", earlierChapter: 0, reason: "方位对不上", fixChapter: 1, againstSetting: { label: "位置", card: "老码头" } };
+    const ch5 = { quote: "老码头在东头，得坐三站。", earlierQuote: "老码头在镇子西头", earlierChapter: 0, reason: "方位对不上", fixChapter: 5, againstSetting: { label: "位置", card: "老码头" } };
+    const otherField = { quote: "码头上全是新船。", earlierQuote: "只剩几条旧渔船", earlierChapter: 0, reason: "船对不上", fixChapter: 6, againstSetting: { label: "现状", card: "老码头" } };
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [ch1], maybe: [], earlierOpen: [ch5, otherField] }} onFixAction={onFixAction} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "以设定为准" })[0]!);
+    expect(onFixAction).toHaveBeenLastCalledWith(expect.objectContaining({
+      other: { where: "chapter", chapter: 1, quote: ch1.quote },
+      also: [{ where: "chapter", chapter: 5, quote: ch5.quote }],
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "以第 1 章为准" }));
+    expect(onFixAction.mock.lastCall![0]).not.toHaveProperty("also");
+  });
+
+  it("和定论打架的：只给「以定论为准」（按定论查全书），定论要改去设定本改", () => {
+    const onFixAction = vi.fn();
+    const canon = { quote: "杜叔走了五年了。", earlierQuote: "杜长顺十年前去世", earlierChapter: 9, reason: "和定论对不上", againstSetting: { label: "定论", kind: "canon" as const } };
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [canon], maybe: [] }} onFixAction={onFixAction} />);
+    expect(screen.queryByRole("button", { name: "以本章为准" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "以定论为准" }));
+    expect(onFixAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 9 });
+  });
+});
+
+describe("核账卡：原句已经改掉的条目", () => {
+  afterEach(() => {
+    cleanup();
+    useDraftStore.getState().reset();
+  });
+
+  it("稿纸开着这一章、原句不在稿里了：标「已改掉」、不给按钮，主按钮不算它；别的章的稿子不算数", () => {
+    const here = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
+    const cross = { quote: "杜叔走了五年了。", earlierQuote: "杜叔走了整整十年。", earlierChapter: 3, reason: "去世年份对不上" };
+    const other = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 9, reason: "天气对不上" };
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "外面 下着大雨。杜叔走了十年了。他把钥匙锁回抽屉。", version: "v1" }, committed: null } as never);
+    const onFixAction = vi.fn();
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [here, cross, other], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
+    expect(screen.getAllByText("已改掉")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "以第 3 章为准" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "改这处" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "不是问题" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "改掉这 1 处" }));
+    expect((onFixAction.mock.lastCall![0] as { fixes: { targetText: string }[] }).fixes.map((fix) => fix.targetText)).toEqual([other.quote]);
+    cleanup();
+    useDraftStore.getState().loadPaper("/book", { chapter: 8, draft: { body: "别的章。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [here], maybe: [] }} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.queryByText("已改掉")).toBeNull();
+  });
+
+  it("原句两截（A……B）按顺序都在就算还在；空白不计", () => {
+    expect(quoteInPaper("她推开门。\n\n屋里 很暗，她没开灯。", "她推开门……她没开灯")).toBe(true);
+    expect(quoteInPaper("她没开灯。她推开门。", "她推开门……她没开灯")).toBe(false);
+    expect(quoteInPaper("屋里很暗。", "屋里 很暗")).toBe(true);
   });
 });
 
@@ -286,16 +340,29 @@ describe("核账卡：前面章节之前报过、还没改的（P7 后）", () =
 
   const old = { quote: "沈师傅走了也有五年了。", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年前", againstSetting: { label: "人物卡" } };
 
-  it("不算这一章的问题：状态照这一章算，收成一行，点开能改那章、能标不是问题", async () => {
+  it("不算这一章的问题：状态照这一章算，收成一行，点开能定哪边为准、能标不是问题", async () => {
     const onDismiss = vi.fn(async () => true);
-    render(<Controlled check={{ chapter: 8, sure: [], maybe: [], earlierOpen: [old] }} onRevise={vi.fn()} onDismiss={onDismiss} />);
+    render(<Controlled check={{ chapter: 8, sure: [], maybe: [], earlierOpen: [old] }} onRevise={vi.fn()} onFixAction={vi.fn()} onDismiss={onDismiss} />);
     expect(screen.getByText("没发现对不上")).toBeTruthy();
     expect(screen.queryByText(/设定说三年前/)).toBeNull();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "第 3 章还有 1 处之前报过、还没改" })); });
     expect(screen.getByText(/设定说三年前/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "改第 3 章" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "以第 3 章为准" })).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "不是问题" })); });
     expect(onDismiss).toHaveBeenCalledWith(old, false);
     expect(screen.queryByText(/之前报过/)).toBeNull();
+  });
+});
+
+describe("核账卡：定论改掉的别章条目", () => {
+  afterEach(() => cleanup());
+
+  it("settled 里的条目标「已改掉」、不给按钮，卡头只数还没改的", () => {
+    const ch1 = { quote: "老码头在东边。", earlierQuote: "位置：北岸", earlierChapter: 0, reason: "方位", fixChapter: 1, againstSetting: { label: "位置" } };
+    const here = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [ch1, here], maybe: [] }} settled={[continuityItemKey(ch1)]} onFixAction={vi.fn()} />);
+    expect(screen.getByText("已改掉")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "以设定为准" })).toBeNull();
+    expect(screen.getByText("确定 1 处")).toBeTruthy();
   });
 });

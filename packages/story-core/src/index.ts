@@ -27,6 +27,9 @@ export {
 export { AUTHOR_DECISIONS_SCHEMA, AuthorDecision, AuthorDecisionsFile, DecisionInput } from "./schema/decisions.js";
 export { BOOK_HEAD_SCHEMA, BookHead, COMMAND_RECEIPT_SCHEMA, ChangeSet, CommandReceipt } from "./schema/book.js";
 export {
+  CANON_MAX,
+  CANON_TEXT_MAX,
+  CanonItem,
   CARD_NAME_MAX,
   Card,
   CardAuthor,
@@ -83,6 +86,18 @@ export {
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./text/quote.js";
+export {
+  applyUnitEdits,
+  dropNeighborEcho,
+  fitQuotes,
+  numberedText,
+  prepareUnitReplacement,
+  splitUnits,
+  type AppliedUnitEdit,
+  type ApplyUnitEditsResult,
+  type TextUnit,
+  type UnitEdit,
+} from "./text/units.js";
 export {
   cjkBigrams,
   bigramSimilarity,
@@ -164,6 +179,7 @@ export { buildChapterLedger, chapterCommit, ChapterCommitArgs, type BuiltChapter
 export { chapterRetitle, ChapterRetitleArgs, type ChapterRetitleResult } from "./commands/chapter-retitle.js";
 export { ledgerReread, LedgerRereadArgs, type LedgerRereadResult } from "./commands/ledger-reread.js";
 export { decisionRecord, type DecisionRecordResult } from "./commands/decision-record.js";
+export { settleApply, SettleApplyArgs, type SettledChapter, type SettleApplyResult } from "./commands/settle-apply.js";
 export { WRITE_COMMANDS, writeCommandsFor } from "./commands/table.js";
 export { bookImport, BookImportArgs, type BookImportResult } from "./import/command.js";
 export { bookImportText, BookImportTextArgs, TEXT_IMPORT_MAX_CHAPTERS, type BookImportTextResult } from "./import/text-import.js";

@@ -101,6 +101,16 @@ export function requestedDraftLengthBounds(requested: number): { readonly lowerB
   };
 }
 
+/**
+ * 出稿瞄多少字：一般就是目标；目标被作者的「至少 N 字」顶到下限（下限 = 目标）时瞄区间中间——
+ * 写手总往少了写，瞄着下限写多半不够（P13 真机：至少 2500，接着写完全章 2204）。
+ */
+export function draftLengthAim(lengthTarget: DraftLengthTarget): number {
+  return lengthTarget.requested > lengthTarget.lowerBound
+    ? lengthTarget.requested
+    : Math.round((lengthTarget.lowerBound + lengthTarget.upperBound) / 2);
+}
+
 export function applyDraftLengthConstraint(chapterGoal: string, lengthTarget: DraftLengthTarget): string {
   const sourceLabel = lengthTarget.source === "user"
     ? "用户明确要求"
@@ -108,10 +118,12 @@ export function applyDraftLengthConstraint(chapterGoal: string, lengthTarget: Dr
       ? "项目写作规则要求"
       : "系统默认章节目标";
   const { requested, lowerBound, upperBound } = lengthTarget;
+  const aim = draftLengthAim(lengthTarget);
+  const ask = aim === requested ? `${sourceLabel}约 ${requested} 字` : `${sourceLabel}至少 ${lowerBound} 字，这次写 ${aim} 字左右`;
   return [
     chapterGoal,
     "",
-    `【本轮硬性字数要求】${sourceLabel}约 ${requested} 字，本次草稿必须遵守这个字数。正文不含标题必须控制在 ${lowerBound}-${upperBound} 个中文字符内。`,
+    `【本轮硬性字数要求】${ask}，本次草稿必须遵守这个字数。正文不含标题必须控制在 ${lowerBound}-${upperBound} 个中文字符内。`,
     "不要提前收束，不要写成结局感；不要为了压缩字数跳过前情承接、动作推进、证据链和必要场景转换。",
     "如果接近上限，优先收束当前场景，不要开启新的大段剧情。",
   ].join("\n");

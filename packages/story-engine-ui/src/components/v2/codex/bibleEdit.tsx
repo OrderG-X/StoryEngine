@@ -7,9 +7,11 @@ import type { BibleAppearances, BibleFact, CardAuthor } from "../../../api/bible
 import { PresenceStrip, Sec } from "./bibleVisual.js";
 
 /** 一处就地编辑：单行回车存，多行 ⌘/Ctrl+回车存，Esc 取消。 */
-export function InlineEdit({ value, multiline, placeholder, label, disabled, onSave, onCancel }: {
+export function InlineEdit({ value, multiline, wrap, placeholder, label, disabled, onSave, onCancel }: {
   readonly value: string;
   readonly multiline?: boolean;
+  /** 一句话但可能很长（定论）：框子折行显示全，回车照样存。 */
+  readonly wrap?: boolean;
   readonly placeholder?: string;
   /** 读屏用的名字。 */
   readonly label: string;
@@ -32,15 +34,15 @@ export function InlineEdit({ value, multiline, placeholder, label, disabled, onS
     if (event.key === "Escape") {
       event.preventDefault();
       onCancel();
-    } else if (event.key === "Enter" && !event.nativeEvent.isComposing && (!multiline || event.metaKey || event.ctrlKey)) {
+    } else if (event.key === "Enter" && !event.nativeEvent.isComposing && (!multiline || wrap || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       save();
     }
   };
   return (
-    <span className={`se-bk-edit${multiline ? " is-multi" : ""}`}>
-      {multiline ? (
-        <textarea ref={ref} value={draft} rows={Math.min(8, Math.max(2, draft.split("\n").length))} placeholder={placeholder} aria-label={label}
+    <span className={`se-bk-edit${multiline || wrap ? " is-multi" : ""}`}>
+      {multiline || wrap ? (
+        <textarea ref={ref} value={draft} rows={wrap ? Math.min(4, Math.max(2, Math.ceil(draft.length / 32))) : Math.min(8, Math.max(2, draft.split("\n").length))} placeholder={placeholder} aria-label={label}
           onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} />
       ) : (
         <input ref={ref} value={draft} placeholder={placeholder} aria-label={label}

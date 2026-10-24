@@ -13,6 +13,7 @@ import { ExportDialog } from "./shelf/ExportDialog.js";
 import { downloadBookBackup, fetchBookStats, fetchShelfMeta, fetchTrash, restoreBookBackup, saveBlob, setBookArchived, type ShelfBookMeta, type WordStats } from "../../api/shelfClient.js";
 import { BookInfoDialog } from "./shelf/BookInfoDialog.js";
 import { addReturnedBook, refreshBookLibrary } from "../../utils/refreshBookLibrary.js";
+import { bookActiveLabel } from "../../utils/bookUtils.js";
 import { toneOf } from "../../lib/tone.js";
 import { useNavigationStore } from "../../stores/navigationStore.js";
 import { useActiveModel } from "./codex/useActiveModel.js";
@@ -276,7 +277,7 @@ export default function HomeLanding({
                   <span className="se-faint">上次写到</span>
                   <b>第 {lastBook.currentChapterNumber} 章{lastBook.currentChapterTitle && !isBareChapterLabel(lastBook.currentChapterTitle) ? ` · ${lastBook.currentChapterTitle}` : ""}</b>
                   {/* 章节状态只在写作台显示（P6 第 6 步）：书架上这里原来的「已定稿」药丸按「有没有定稿过的章」算，最新一章还是工作稿时也说已定稿。 */}
-                  <span className="se-faint">· {lastBook.updatedAt}</span>
+                  <span className="se-faint">· {bookActiveLabel(lastBook)}</span>
                 </div>
                 {heroStats ? <p className="se-hero-today">{todayLine(heroStats.stats, heroStats.dailyGoal)}</p> : null}
                 <div className="se-hero-actions">
@@ -554,7 +555,7 @@ function RecentBook({
           <h3 title={book.title}>{book.title}</h3>
           <button aria-expanded={menuOpen} aria-label="书籍管理" className="se-book-more" onClick={() => setMenuOpen((current) => !current)} ref={menuBtnRef} type="button">···</button>
         </div>
-        <p>{book.writtenChapters} 章 · {book.updatedAt}</p>
+        <p>{book.writtenChapters} 章 · {bookActiveLabel(book)}</p>
         {menuOpen ? (
           <menu className={`se-book-menu${menuUp ? " is-up" : ""}`} ref={menuRef}>
             <button onClick={() => act("open")} type="button">继续写作</button>

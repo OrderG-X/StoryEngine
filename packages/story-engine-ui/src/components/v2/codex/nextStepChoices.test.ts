@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastAssistantNextStepPrompt } from "./nextStepChoices.js";
+import { lastAssistantNextStepPrompt, withoutRailDuplicates } from "./nextStepChoices.js";
 import type { ChapterMessage } from "../../../types.js";
 
 function msg(partial: Partial<ChapterMessage> & Pick<ChapterMessage, "id" | "role">): ChapterMessage {
@@ -58,5 +58,18 @@ describe("lastAssistantNextStepPrompt（下一步选项卡只来自 agent 提议
     // 模型生成的选项没有 action，照旧只带 label/intent——点击走发文本的老路。
     expect(p?.choices[1]).toEqual({ label: "我自己改", intent: "我自己改，先放着" });
     expect(p?.choices[1]).not.toHaveProperty("action");
+  });
+});
+
+describe("withoutRailDuplicates（选项和建议条按钮同名只留按钮）", () => {
+  const prompt = {
+    question: "第 9 章已有工作稿，接下来？",
+    choices: [{ label: "接着往下写", intent: "接着写" }, { label: "重写第 9 章", intent: "重写" }, { label: "先看现有稿", intent: "看稿" }],
+  };
+  it("同名的去掉；一个不剩就不出；没有按钮原样", () => {
+    expect(withoutRailDuplicates(prompt, ["接着往下写", "重写第 9 章"])?.choices.map((choice) => choice.label)).toEqual(["先看现有稿"]);
+    expect(withoutRailDuplicates({ ...prompt, choices: prompt.choices.slice(0, 2) }, ["接着往下写", "重写第 9 章"])).toBeNull();
+    expect(withoutRailDuplicates(prompt, [])).toBe(prompt);
+    expect(withoutRailDuplicates(null, ["接着往下写"])).toBeNull();
   });
 });

@@ -49,6 +49,8 @@ export interface ExemplarPromptItem {
 }
 
 export interface SettingPack {
+  /** 定论（P12）：作者定下的说法，全书以它为准。 */
+  readonly canon: readonly string[];
   /** 故事设定（一句话、题材、世界规矩……）。 */
   readonly story: readonly string[];
   readonly protagonist?: SettingBrief;
@@ -81,6 +83,7 @@ export const EMPTY_BIBLE: BibleView = {
   lore: [],
   relations: [],
   uncarded: [],
+  canon: [],
 };
 
 /**
@@ -204,6 +207,7 @@ export function buildSettingPack(bible: BibleView, focus: SettingFocus = {}): Se
     .filter((entry) => entry !== protagonistEntry && !castNames.has(entry.card.name))
     .map((entry) => entry.card.name);
   return {
+    canon: bible.canon.map((item) => clip(item.text)),
     story: bible.story.map((field) => clip(`${field.label}：${field.value}`)),
     ...(protagonistEntry ? { protagonist: briefOf(protagonistEntry) } : {}),
     cast,
@@ -253,6 +257,9 @@ export function renderSettingPack(pack: SettingPack): string[] {
       "以下是作者文风样本：模仿其句法节奏、用词偏好与叙事温度；不得照抄样本内容、情节或具体名物。",
       ...pack.exemplars.flatMap((item, index) => [`### 样本${index + 1}`, ...(item.note ? [`（注：${item.note}）`] : []), item.text, ""]),
     );
+  }
+  if (pack.canon.length > 0) {
+    out.push("## 作者定论（前文说法打架时作者定下的，全书以它为准；写的时候不许和它矛盾）", ...pack.canon.map((line) => `- ${line}`), "");
   }
   const rules = rulesLines(pack.rules);
   if (rules.length > 0) out.push("## 写作规则", ...rules, "");

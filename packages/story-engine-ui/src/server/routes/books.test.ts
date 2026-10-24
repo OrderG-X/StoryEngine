@@ -9,7 +9,7 @@ import type { StateOverview } from "../book/state-overview.js";
 import { createStoryProject } from "../book/project-store.js";
 import { makeHomeTempDir, testRunRoot } from "../lib/home-test-tmp.js";
 import { assertStoryEngineProject } from "../lib/project-io.js";
-import { registerBooksRoutes, resolveBookLastActiveMs, selectRecentDefaultBooks } from "./books.js";
+import { missingBookPaths, registerBooksRoutes, resolveBookLastActiveMs, selectRecentDefaultBooks } from "./books.js";
 
 const generatedDeleteRouteProjectDirs = new Set<string>();
 const generatedCreateRouteRootDirs = new Set<string>();
@@ -52,6 +52,20 @@ describe("selectRecentDefaultBooks / resolveBookLastActiveMs", () => {
     expect(resolveBookLastActiveMs(undefined, Number.NaN, 0, 7_000)).toBe(7_000);
   });
 });
+describe("missingBookPaths（书架上从别处打开的书，文件夹还在不在）", () => {
+  it("只报确实没有的目录；是文件的也算没了；不安全的路径不查", async () => {
+    const dir = await makeHomeTempDir("missing-books-");
+    try {
+      await mkdir(join(dir, "here"));
+      await writeFile(join(dir, "file"), "x");
+      expect(await missingBookPaths([join(dir, "here"), join(dir, "gone"), join(dir, "file"), "/etc/gone", join(dir, "gone")]))
+        .toEqual([join(dir, "file"), join(dir, "gone")].sort());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("books route 建书（重构 P9：作者填了什么写什么，不落占位）", () => {
   const ORIGINAL_BOOKS_DIR = process.env.SE_BOOKS_DIR;
 

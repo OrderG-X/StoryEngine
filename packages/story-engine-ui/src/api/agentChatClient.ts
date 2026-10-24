@@ -15,8 +15,9 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, SettingRefData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import { readSettleData } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
@@ -46,14 +47,25 @@ export type AgentUserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
-  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string }
+  | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
   | { readonly toolName: "ai_review"; readonly chapter: number }
   | { readonly toolName: "quality_check"; readonly chapter: number }
   | { readonly toolName: "undo" }
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
-  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] };
+  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
+  /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
+  | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
+  /** 设定本定论页「查前文」：拿这条定论查全书。 */
+  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
+  /** 定论卡「确认」：按票号一次改齐（作者档、可撤销）；excluded＝作者划掉不改的几处。 */
+  | { readonly toolName: "settle_apply"; readonly token: string; readonly excluded: readonly string[] };
+
+/** 定论的一边：某章的一句，或设定本的一栏。 */
+export type SettleSideData =
+  | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
+  | { readonly where: "setting"; readonly quote: string; readonly label: string; readonly card?: string };
 
 /** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
@@ -84,9 +96,9 @@ export interface ContinuityCheckItem {
   readonly fixChapter?: number;
 }
 
-const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["story", "character", "place", "item", "lore"]);
+const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["canon", "story", "character", "place", "item", "lore"]);
 
-/** 核账条目的 againstSetting（防御解析）：没有 label 的不算；kind 只认那五类，卡名是非空字符串才带。 */
+/** 核账条目的 againstSetting（防御解析）：没有 label 的不算；kind 只认那几类（定论 / 故事设定 / 四种卡），卡名是非空字符串才带。 */
 export function readSettingRef(value: unknown): SettingRefData | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
@@ -184,6 +196,10 @@ export interface AgentToolResult {
   readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
+  /** settle_preview / settle_fact 专属：定论卡（P12）。 */
+  readonly settle?: SettleCardData;
+  /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
+  readonly settleToken?: string;
   /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
    *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -224,6 +240,8 @@ export interface AgentToolResult {
 export interface RewriteConfirmTarget {
   readonly chapter: number;
   readonly chapterGoal?: string;
+  /** 工作稿还没定稿：卡上另给「接着往下写」。 */
+  readonly canContinue?: boolean;
 }
 
 /** 「确认改设定」按钮带回的东西（被拦下的那次资料写入，服务端执行前再校验）。 */
@@ -254,7 +272,8 @@ export interface AgentChatHandlers {
   /** 思考链增量（仅思考模式下有）。累加成消息的「思考过程」。 */
   readonly onReasoningDelta?: (text: string) => void;
   /** 出稿正文增量（generate_draft 流式）：逐字进编辑器。带本次章号，前端只往当前章追。 */
-  readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string }) => void;
+  /** replace=true：text 是这次写的全部（换掉已经流出来的），否则接在后面；base=true：接着写时本来写好的那段（原样显示）。 */
+  readonly onDraftDelta?: (info: { readonly chapter: number; readonly text: string; readonly replace?: boolean; readonly base?: boolean }) => void;
   /** AI 出稿进行到哪一步（plan 拟章纲 / write 写正文）。 */
   readonly onDraftPhase?: (info: { readonly chapter: number; readonly phase: "plan" | "write" | "check" }) => void;
   readonly onToolCall: (info: { readonly toolCallId?: string; readonly toolName: string }) => void;
@@ -383,7 +402,12 @@ export async function streamAgentChat(
             return;
           }
           if (typeof parsed.text === "string" && typeof parsed.chapter === "number") {
-            handlers.onDraftDelta?.({ chapter: parsed.chapter, text: parsed.text });
+            handlers.onDraftDelta?.({
+              chapter: parsed.chapter,
+              text: parsed.text,
+              ...(parsed.replace === true ? { replace: true } : {}),
+              ...(parsed.base === true ? { base: true } : {}),
+            });
           }
           return;
         case "tool-call":
@@ -448,6 +472,13 @@ export async function streamAgentChat(
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
+              : {}),
+            // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
+            ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
+              ? { settle: readSettleData(output.settle)! }
+              : {}),
+            ...(parsed.toolName === "settle_apply" && output.ok === true && typeof output.settleToken === "string"
+              ? { settleToken: output.settleToken }
               : {}),
             ...(parsed.toolName === "check_continuity" && typeof output.checkedVersion === "string" && output.checkedVersion
               ? { checkedVersion: output.checkedVersion }
@@ -521,6 +552,7 @@ export async function streamAgentChat(
                     ...(typeof output.rewriteConfirm.chapterGoal === "string" && output.rewriteConfirm.chapterGoal.trim()
                       ? { chapterGoal: output.rewriteConfirm.chapterGoal.trim() }
                       : {}),
+                    ...(output.rewriteConfirm.canContinue === true ? { canContinue: true } : {}),
                   },
                 }
               : {}),
@@ -637,7 +669,7 @@ function isLedgerConfirm(value: unknown): value is { readonly key: string; reado
   return isRecord(value) && typeof value.key === "string" && value.key.length > 0 && Array.isArray(value.decisions) && value.decisions.length > 0;
 }
 
-function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown } {
+function isRewriteConfirm(value: unknown): value is { readonly chapter: number; readonly chapterGoal?: unknown; readonly canContinue?: unknown } {
   return isRecord(value) && typeof value.chapter === "number" && Number.isInteger(value.chapter) && value.chapter > 0;
 }
 
@@ -700,7 +732,7 @@ export function parseNextStepUserAction(value: unknown): AgentUserAction | undef
     const chapterGoal = typeof value.chapterGoal === "string" && value.chapterGoal.trim()
       ? value.chapterGoal.trim().slice(0, 2000)
       : undefined;
-    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}) };
+    return { toolName: "generate_draft", chapter, ...(chapterGoal ? { chapterGoal } : {}), ...(value.continueDraft === true ? { continueDraft: true } : {}) };
   }
   return undefined;
 }

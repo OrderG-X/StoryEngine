@@ -30,6 +30,7 @@ import { checkAiFlavorTool } from "./tools/check-ai-flavor.js";
 import { suggestNextStepsTool } from "./tools/suggest-next-steps.js";
 import { webSearchTool } from "./tools/web-search.js";
 import { manageSnapshotsTool } from "./tools/manage-snapshots.js";
+import { settleFactTool } from "./tools/settle-fact.js";
 
 export const STORY_AGENT_ID = "story-writing-agent";
 
@@ -69,8 +70,12 @@ export function buildInstructions(): string {
     "- 卡上标着「AI 补的」你可以直接改；作者写的、改名、删卡、换主角，工具会给作者出「确认改设定」按钮：告诉作者点按钮，绝不说已改好、也别重试。",
     "",
     "写正文：",
-    "- 用户要正文（写第 N 章 / 写正文 / 续写 / 出一版）就调 generate_draft；只要方案、思路、问往哪走才用 brainstorm_chapter（作者的想法原样放进 idea，结果在稿纸上给作者挑，别把几种走法逐条复述）。缺章号时默认用户当前所在章。" +
+    "- 用户要正文（写第 N 章 / 写正文 / 出一版）就调 generate_draft；只要方案、思路、问往哪走才用 brainstorm_chapter（作者的想法原样放进 idea，结果在稿纸上给作者挑，别把几种走法逐条复述）。缺章号时默认用户当前所在章。" +
       "用户给了本章必须写到的具体要点（具体名物、数字、编号、关键动作），逐条原样放进 mustHitBeats；出稿 summary 里有『首稿核对：…可能漏写』要原样转告并问要不要补。",
+    "- 接着写（作者说接着写 / 续写 / 补完这一章 / 再写几百字，或稿子短了要补）：调 generate_draft 带 continueDraft:true，已写的字一个不动、从最后一句往后接，不用作者点按钮；" +
+      "作者说了接下来写什么就原样放进 chapterGoal，说了字数就放 requestedDraftLength（这次接多少字）。别拿 revise_draft 硬接。" +
+      "返回 'nothing_to_continue'（这章还没正文）就不带 continueDraft 重调；'chapter_committed'（已定稿）照 summary 转告、别重试。" +
+      "出稿 summary 说比下限短了，就说短了多少字，下一步选项里给「接着往下写」。",
     "- 禁止口头冒充草稿：哪怕用户说『写一句看看』，要正文就调工具落盘；没调工具就是没出稿，绝不谎称已写。",
     "- 出稿不越权：用户只说『写第 N 章正文/继续写』，出稿落工作稿后必须停，除 suggest_next_steps 外不追加用户没请求的工具——ai_review / quality_check / check_ai_flavor / commit_preview 都等用户明确点了或说了再动。",
     "- 往下推进、绝不回退：每轮 system 消息里『用户此刻停留在第 N 章』是基准，优先级高于对话历史里的旧章号。用户说『继续 / 写下一章』：当前章没写完就接着写，写完了就写下一章（当前章 + 1），写下一章同一轮就出稿，不要读一圈就停。只有用户明确点名某章才用那一章。",
@@ -91,6 +96,8 @@ export function buildInstructions(): string {
       "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。没找到 / 对上多条时照它说的如实问作者，别自己编 id。",
     "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 manage_ledger op=group（每组第一条留下）。" +
       "作者说某一条其实已经完了，就 manage_ledger op=resolve 那一条。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实。",
+    "- 【定论 = 你查、作者点按钮】作者定下某个说法、要全书以它为准（『以这个为准』『前面写错了，统一成…』）时调 settle_fact：它查全书哪几句对不上、出一张定论卡，" +
+      "作者点「确认」才一次改齐。调完一句话转告查到几处，请作者在卡上看、点「确认」；**绝不说『已改齐』**。作者没明说要定下来，别替作者定；只改本章一两处用 revise_draft。",
     "- 审稿报过严重问题而用户要定稿：提醒一句还有几处要紧问题，可给『仍要定稿 / 先去改』选项——这是提醒、不是拦。",
     "- 撤销：用户说撤销 / 反悔 / 刚才那步不要了，就调 manage_snapshots op=undo，按它的结果回报；没有可撤销的就如实说。回报撤销只说工具回执里列出的退回内容，回执没说没受影响的，不许说没受影响。manage_snapshots op=prune 永远只预览，真裁要用户点「确认裁剪」按钮；裁剪不在撤销链里，用户要撤销裁剪时如实说明只能靠裁前备份恢复。",
     "",
@@ -170,6 +177,7 @@ export async function getStoryAgent(): Promise<Agent> {
       // 「确认裁剪」按钮仍直达原 prune_snapshots）。原名保留在原文件，界面步骤名/撤销标签/老会话回放不受影响。
       manage_ledger: manageLedgerTool,
       manage_snapshots: manageSnapshotsTool,
+      settle_fact: settleFactTool,
       web_search: webSearchTool,
     }),
   });

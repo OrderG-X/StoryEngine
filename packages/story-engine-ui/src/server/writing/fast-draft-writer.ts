@@ -16,6 +16,8 @@ import { checkDraftBeatFidelity, type BeatFidelityReport } from "@actalk/story-c
 import {
   applyDraftLengthConstraint,
   buildDraftLengthReport,
+  countDraftChineseCharacters,
+  draftLengthAim,
   lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
@@ -89,6 +91,18 @@ export interface FastDraftInput {
    * 前半章只写前一半要点、后半章接着写剩下的要点并收尾——字数靠要点撑起来，而不是事后硬续。缺省 = 一次写完（旧行为）。
    */
   readonly segmentByPlan?: boolean;
+  /**
+   * 接着往下写（P13）：text = 本章已经写好的正文（作者写的或上一版 AI 稿，不含标题行）。给了就不从头写：
+   * 写手看着它从最后一句往下接，交回的正文 = 它原样 + 接着写的。length = 这次接着写多少字（不给 = 写到本章目标）；
+   * direction = 作者这次说接下来写什么（原话；chapterGoal 在没给方向时是章纲一句话或套话，不能当作者的话）。
+   */
+  readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
+  /**
+   * 正文流式进稿纸时，换掉已经流出去的字（参数 = 这次写的、稿纸上该显示的全部；接着写时不含本来写好的那段）：
+   * 分两段写时接下一段前补个空行，某段要重写时先退回这段之前、定了用哪版再显示那版——不然稿纸上同一段写两遍，
+   * 字数先涨后跌。不给 = 只追加。
+   */
+  readonly onStreamReset?: (visible: string) => void;
   readonly rankContext?: (envelope: WriterContextEnvelope) => WriterContextEnvelope;
   readonly maxOutputTokens?: number;
   readonly requestedDraftLength?: number;
@@ -152,6 +166,8 @@ const MIN_BEATS_TO_SEGMENT = 4;
  * 剩下一千多字靠续写补，硬伤几乎全出在续写段——一次写不够目标的都该分两半。1800 这类短章仍一次写完。
  */
 const MIN_TARGET_TO_SEGMENT = 2000;
+/** 接着往下写、没说写多少时：离本章目标还差得比这少，也写这么多（已经够长了还让接着写，就是要往下推一段）。 */
+const MIN_CONTINUE_LENGTH = 600;
 
 /** 改写某一段的内容（token 估算随之更新），其余段原样。 */
 function withSectionContent(context: WriterContextEnvelope, name: string, content: unknown): WriterContextEnvelope {
@@ -234,6 +250,8 @@ export interface SegmentedDraftInfo {
   /** 前半章首稿照抄上一章的段数，与重写后还剩的段数。 */
   readonly copiedFromPrevious: number;
   readonly copiedRemaining: number;
+  /** 整章不到下限、又要了一次后半章：之前和之后后半章的字数（没用上就相等）。 */
+  readonly lengthRetry?: { readonly before: number; readonly after: number };
 }
 
 /** 前半章与上一章原文至少这么多段高度重合才重写（偶尔一段回顾不算照抄）。 */
@@ -255,6 +273,7 @@ async function generateBySegments(input: {
   readonly rawChapterGoal: string;
   readonly lengthTarget: ReturnType<typeof resolveDraftLengthTarget>;
   readonly maxOutputTokens: number;
+  readonly restream?: (visible: string) => void;
 }): Promise<{
   readonly generated: Awaited<ReturnType<WriterClient["generateDraft"]>>;
   readonly secondHalfError?: string;
@@ -262,7 +281,8 @@ async function generateBySegments(input: {
 }> {
   const beats = input.plan.beats;
   const split = Math.ceil(beats.length / 2);
-  const half = Math.round(input.lengthTarget.requested / 2);
+  const aim = draftLengthAim(input.lengthTarget);
+  const half = Math.round(aim / 2);
   const numbered = (from: number, to: number) => beats.slice(from, to).map((beat, index) => `${from + index + 1}. ${beat}`).join("  ");
   const planSection = input.context.sections.find((section) => section.name === "chapter_plan")?.content as Record<string, unknown> | undefined;
   // 一章默认在同一天里（章纲只记一个故事日）：第十四轮后半章凭空写「第二天」，正文比日历多走两天、截止日无声越过。
@@ -287,6 +307,7 @@ async function generateBySegments(input: {
   const copied = previousText ? findReplayedParagraphs(previousText, firstBody) : [];
   let copiedRemaining = copied.length;
   if (copied.length >= COPY_RETRY_MIN_PARAGRAPHS) {
+    input.restream?.("");
     const retryGoal = [
       firstGoal,
       `【上一次的前半章把上一章的原文又写了一遍】例如：「${copied.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。上一章已经写完了，本章从上一章结尾之后接着写本章的要点，一句都不要照抄上一章。`,
@@ -304,13 +325,18 @@ async function generateBySegments(input: {
     }
   }
 
+  // 后半章补足前半章少写的（写手越到后面越短：长篇连写第 26～29 章首稿多在下限上下，前半章短了后半章还按一半要）。
+  const secondTarget = Math.max(half, aim - countDraftChineseCharacters(firstBody));
+  // 稿纸上：前半章（重写过就是用上的那版）+ 空行，后半章从这里往下流。
+  const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`;
+  input.restream?.(firstVisible);
   const secondGoal = [
     input.rawChapterGoal,
     "",
     `【本章分前后两半写，这次是后半章】前半章已经写好（见 already_written，那是本章正文，一个字都不要重写、不要复述）。`,
     `前半章已经写过要点 1–${split}（${numbered(0, split)}）：这些事已经发生了，后半章不要再写一遍、不要换个说法再来一次，人物也不要再「第一次」看见或说起它们。`,
     `紧接前半章最后一句往下写，只写章纲要点 ${split + 1}–${beats.length}：${numbered(split, beats.length)}。`,
-    `后半章写 ${half} 个中文字符左右（不少于 ${Math.round(half * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
+    `后半章写 ${secondTarget} 个中文字符左右（不少于 ${Math.round(secondTarget * 0.85)}），写到最后一个要点自然收住本章。不要写标题。`,
     sameDay ? `后半章紧接前半章最后一句的时刻往下写。${sameDay}` : "",
   ].filter(Boolean).join("\n");
   let secondContext = withSectionContent(withSectionsLast(input.context, PER_HALF_SECTIONS), "chapter_goal", { chapter: input.plan.chapter, goal: secondGoal });
@@ -331,6 +357,7 @@ async function generateBySegments(input: {
     let retried = false;
     let replayedRemaining = replays.length;
     if (replays.length > 0) {
+      input.restream?.(firstVisible);
       const retryGoal = [
         secondGoal,
         `【上一次的后半章把前半章（或上一章）已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从前半章最后一句之后往前推进新的事。`,
@@ -346,20 +373,192 @@ async function generateBySegments(input: {
         secondBody = retryBody;
         replayedRemaining = retryReplays;
       }
+      input.restream?.(firstVisible + secondBody);
+    }
+    // 整章还不到下限：说清上次写了多少、这次要多少，再要一次后半章，取更长且重演不更多的那版（只在短了时多花一次调用）。
+    const firstLength = countDraftChineseCharacters(firstBody);
+    const shortBy = input.lengthTarget.lowerBound - firstLength - countDraftChineseCharacters(secondBody);
+    let lengthRetry: SegmentedDraftInfo["lengthRetry"];
+    if (shortBy > 0) {
+      input.restream?.(firstVisible);
+      const before = countDraftChineseCharacters(secondBody);
+      const retryGoal = [
+        secondGoal,
+        `【上一次的后半章只写了 ${before} 个字，整章比最少字数还差 ${shortBy} 字】这次后半章要写够 ${secondTarget} 个中文字符：每个要点的场面写足（动作、对话、人物的反应、环境），不要加章纲以外的新事，不要跳天。`,
+      ].join("\n");
+      const retry = await input.writerClient.generateDraft({
+        context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
+        maxOutputTokens: input.maxOutputTokens,
+      }).catch(() => undefined);
+      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
+      const retryLength = countDraftChineseCharacters(retryBody);
+      const used = retryLength > before && findReplayedParagraphs(alreadyWritten, retryBody).length <= replayedRemaining;
+      if (used) secondBody = retryBody;
+      input.restream?.(firstVisible + secondBody);
+      lengthRetry = { before, after: used ? retryLength : before };
     }
     return {
       generated: {
         ...first,
         content: `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n${secondBody}`,
       },
-      info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining },
+      info: { split, replayedFound: replays.length, retried, replayedRemaining, copiedFromPrevious: copied.length, copiedRemaining, ...(lengthRetry ? { lengthRetry } : {}) },
     };
   } catch (error) {
+    input.restream?.(firstVisible);
     return {
       generated: first,
       secondHalfError: `后半章没写成（${describeErrorBriefly(error)}），只交了前半章，字数不够的部分由后续续写环节补。`,
     };
   }
+}
+
+export interface ContinuationInfo {
+  /** 接着写的那段里重演已写部分（或上一章）的段数；检出后重写过没有；最后还剩几段。 */
+  readonly replayedFound: number;
+  readonly retried: boolean;
+  readonly replayedRemaining: number;
+  /** 分几次接的（要接的多就分两次，写手一次写不了那么长）；planned 是本来要分几次（后一次没写成就少一次）。 */
+  readonly parts: number;
+  readonly planned: number;
+  /** 接完还不够、又要了一次最后那段：之前和之后那段的字数（没用上就相等）。 */
+  readonly lengthRetry?: { readonly before: number; readonly after: number };
+}
+
+/** 要接的字数超过这么多就分两次接：写手一次大约写一千来字（长篇连写第 26～29 章、P13 真机接 2200 只写了 1477）。 */
+const CONTINUE_CHUNK = 1400;
+
+/**
+ * 接着往下写：已写的正文作为 already_written 交给写手，从最后一句往下接；作者这次说的方向（原话）放在前面。
+ * 本章有章纲就照带（不新拟——章纲员看不到作者写的半章），让写手接着写还没写到的要点。
+ * 要接得多就分两次（前一次不收尾、停在场面中间，后一次收住本章）；每次的接缝重演照分半写的后半章那套查，
+ * 检出就带着提示重写一次、取重演少的那版。接完还不到 minLength，说清差多少再要一次最后那段，用更长的那版。
+ */
+async function generateContinuation(input: {
+  readonly writerClient: WriterClient;
+  readonly context: WriterContextEnvelope;
+  readonly chapter: number;
+  readonly existing: string;
+  readonly plan?: ChapterPlan;
+  readonly direction: string;
+  /** 这次瞄着接多少字；minLength = 至少接多少（不到就再要一次最后那段）。 */
+  readonly addLength: number;
+  readonly minLength: number;
+  readonly maxOutputTokens: number;
+  readonly restream?: (visible: string) => void;
+}): Promise<{ readonly generated: Awaited<ReturnType<WriterClient["generateDraft"]>>; readonly info: ContinuationInfo }> {
+  const parts = input.addLength > CONTINUE_CHUNK ? 2 : 1;
+  const firstTarget = parts === 2 ? Math.round(input.addLength / 2) : input.addLength;
+  const base = withSectionsLast(input.context, PER_HALF_SECTIONS);
+  const clean = (content: string): string => stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(content)).trim();
+  const previousText = previousChapterText(input.context);
+  const goalFor = (target: number, min: number, last: boolean): string => [
+    input.direction ? `【作者说接下来写】${input.direction}` : "",
+    "【接着往下写】本章已经写了一部分（见 already_written，那是本章的正文，一个字都不要改、不要重写、不要复述）。",
+    "紧接它最后一句往下写：人物在哪、手里拿着什么、是什么时候，都从那里接上；写过的事已经发生了，不再写一遍、不换个说法再来一次。",
+    input.plan
+      ? `本章章纲里 already_written 还没写到的要点，按顺序接着写；${last ? "要点都写到了就顺着往下推，写到合适的地方收住本章。" : "这次写不完的留到下一次。"}`
+      : last ? "顺着故事往下推，写到合适的地方收住本章。" : "顺着故事往下推。",
+    last
+      ? `这次接着写 ${target} 个中文字符左右（不少于 ${min}）。只写接下来的正文，不要标题、不要说明。`
+      : `这次只接一段：写 ${target} 个中文字符左右（不少于 ${min}），停在一个场面中间也行，不要收尾、不要总结，后面还会接着写。只写接下来的正文，不要标题、不要说明。`,
+  ].filter(Boolean).join("\n");
+  const contextFor = (written: string, goal: string): WriterContextEnvelope => withExtraSection(
+    withSectionContent(base, "chapter_goal", { chapter: input.chapter, goal }),
+    "already_written",
+    { instruction: "这是本章已经写好的正文。从它最后一句之后接着写。", text: written },
+  );
+  // 写一段：重演了已写的（含上一章）就带提示再要一次，取重演少的。稿纸上先退回这段之前（shownBefore = 这次已经接上的），
+  // 定了用哪版再显示那版。
+  const writeOnce = async (written: string, shownBefore: string, goal: string, required: boolean) => {
+    const alreadyWritten = previousText ? `${written}\n${previousText}` : written;
+    const context = contextFor(written, goal);
+    const first = required
+      ? await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens })
+      : await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
+    let body = first ? clean(first.content) : "";
+    if (!body) {
+      if (required) throw new Error("接着写的那段是空的");
+      return undefined;
+    }
+    const replays = findReplayedParagraphs(alreadyWritten, body);
+    let retried = false;
+    let remaining = replays.length;
+    if (replays.length > 0) {
+      input.restream?.(shownBefore);
+      const retryGoal = [
+        goal,
+        `【上一次接着写的那段把已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从已写部分最后一句之后往前推进新的事。`,
+      ].join("\n");
+      const retry = await input.writerClient.generateDraft({ context: contextFor(written, retryGoal), maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
+      const retryBody = retry ? clean(retry.content) : "";
+      retried = retryBody.length > 0;
+      const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
+      if (retryBody && retryReplays < replays.length) {
+        body = retryBody;
+        remaining = retryReplays;
+      }
+      input.restream?.(shownBefore + body);
+    }
+    return { generated: first!, body, found: replays.length, retried, remaining };
+  };
+
+  const pieces: string[] = [];
+  let found = 0;
+  let retried = false;
+  let remaining = 0;
+  let generated: Awaited<ReturnType<WriterClient["generateDraft"]>> | undefined;
+  let lastTarget = firstTarget;
+  let lastMin = Math.round(parts === 2 ? input.minLength / 2 : input.minLength);
+  const shownThrough = (list: readonly string[]): string => list.map((piece) => `${piece}\n\n`).join("");
+  for (let part = 0; part < parts; part += 1) {
+    const last = part === parts - 1;
+    const written = [input.existing, ...pieces].join("\n\n");
+    if (part > 0) {
+      const done = countDraftChineseCharacters(pieces.join(""));
+      lastTarget = Math.max(input.addLength - done, MIN_CONTINUE_LENGTH);
+      lastMin = Math.min(Math.max(input.minLength - done, Math.round(MIN_CONTINUE_LENGTH * 0.85)), lastTarget);
+      // 稿纸上前一段和这一段之间空一行（两次调用的字是直接接着流的）。
+      input.restream?.(shownThrough(pieces));
+    }
+    // 第二段没写成：交第一段（如实算字数），不让整次接着写白费。
+    const piece = await writeOnce(written, shownThrough(pieces), goalFor(lastTarget, lastMin, last), part === 0);
+    if (!piece) break;
+    generated ??= piece.generated;
+    pieces.push(piece.body);
+    found += piece.found;
+    retried ||= piece.retried;
+    remaining += piece.remaining;
+  }
+
+  // 接完还不够：说清差多少，再要一次最后那段（重演不更多、更长才用）。
+  let lengthRetry: ContinuationInfo["lengthRetry"];
+  const added = countDraftChineseCharacters(pieces.join(""));
+  if (added < input.minLength && pieces.length === parts) {
+    const lastPiece = pieces[pieces.length - 1]!;
+    const before = countDraftChineseCharacters(lastPiece);
+    const written = [input.existing, ...pieces.slice(0, -1)].join("\n\n");
+    const earlier = countDraftChineseCharacters(pieces.slice(0, -1).join(""));
+    const target = Math.max(lastTarget, input.addLength - earlier);
+    const goal = [
+      goalFor(target, input.minLength - earlier, true),
+      `【上一次只写了 ${before} 个字，还差 ${input.minLength - added} 字】这次要写够 ${target} 个中文字符：场面写足（动作、对话、人物的反应、环境），不要加和前文对不上的新事，不要跳天。`,
+    ].join("\n");
+    input.restream?.(shownThrough(pieces.slice(0, -1)));
+    const retry = await writeOnce(written, shownThrough(pieces.slice(0, -1)), goal, false).catch(() => undefined);
+    const after = retry ? countDraftChineseCharacters(retry.body) : before;
+    const replaysBefore = findReplayedParagraphs(previousText ? `${written}\n${previousText}` : written, lastPiece).length;
+    const used = retry !== undefined && after > before && retry.remaining <= replaysBefore;
+    if (used) pieces[pieces.length - 1] = retry.body;
+    input.restream?.(pieces.join("\n\n"));
+    lengthRetry = { before, after: used ? after : before };
+  }
+
+  // 只回接着写的那段：已写的由调用方原样拼回（清理星号、换引号都不能碰作者的字）。
+  return {
+    generated: { ...generated!, content: pieces.join("\n\n") },
+    info: { replayedFound: found, retried, replayedRemaining: remaining, parts: pieces.length, planned: parts, ...(lengthRetry ? { lengthRetry } : {}) },
+  };
 }
 
 export async function runFastDraft(input: FastDraftInput): Promise<FastDraftReport> {
@@ -424,7 +623,41 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
   try {
     const maxOutputTokens = input.maxOutputTokens ?? resolveDraftMaxOutputTokens(draftLengthTarget);
     // 目标字数不高（写手一次就写得出）时不分：第十二轮目标 1800 也拆成两个 900，平白多出接缝和重演。
-    const segmented = input.segmentByPlan && input.chapterPlan && input.chapterPlan.beats.length >= MIN_BEATS_TO_SEGMENT
+    const existing = input.continueFrom?.text.trim() ?? "";
+    const existingLength = countDraftChineseCharacters(existing);
+    // 作者说了这次写多少就照它（不少于八成五）；没说就写到本章字数：瞄区间中间，至少到下限（差得少也写 600）。
+    const asked = input.continueFrom?.length;
+    const addLength = asked ?? Math.max(draftLengthAim(draftLengthTarget) - existingLength, MIN_CONTINUE_LENGTH);
+    const minLength = asked
+      ? Math.round(asked * 0.85)
+      : Math.min(Math.max(draftLengthTarget.lowerBound - existingLength, Math.round(MIN_CONTINUE_LENGTH * 0.85)), addLength);
+    const continued = existing
+      ? await generateContinuation({
+        writerClient: input.writerClient,
+        context,
+        chapter: input.chapter,
+        existing,
+        ...(input.chapterPlan ? { plan: input.chapterPlan } : {}),
+        direction: input.continueFrom?.direction?.trim() ?? "",
+        addLength,
+        minLength,
+        maxOutputTokens,
+        ...(input.onStreamReset ? { restream: input.onStreamReset } : {}),
+      })
+      : undefined;
+    if (continued && continued.info.replayedFound > 0) {
+      writingRulesFailure.push(continued.info.replayedRemaining === 0
+        ? `接着写的那段重演了前面 ${continued.info.replayedFound} 段，已重写。`
+        : `接着写的那段重演了前面 ${continued.info.replayedFound} 段，${continued.info.retried ? "重写后" : ""}仍有 ${continued.info.replayedRemaining} 段和前面相近。`);
+    }
+    if (continued && continued.info.parts < continued.info.planned) writingRulesFailure.push("分两次接着写，后一次没写成，只接了前一段（停在场面中间）。");
+    if (continued?.info.lengthRetry) {
+      const { before, after } = continued.info.lengthRetry;
+      writingRulesFailure.push(after > before
+        ? `接着写的不够长，最后那段重写了一次（${before} → ${after} 字）。`
+        : "接着写的不够长，最后那段重写了一次，没写得更长，用的还是原来那版。");
+    }
+    const segmented = !continued && input.segmentByPlan && input.chapterPlan && input.chapterPlan.beats.length >= MIN_BEATS_TO_SEGMENT
       && draftLengthTarget.requested >= MIN_TARGET_TO_SEGMENT
       ? await generateBySegments({
         writerClient: input.writerClient,
@@ -433,14 +666,21 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         rawChapterGoal: input.chapterGoal,
         lengthTarget: draftLengthTarget,
         maxOutputTokens,
+        ...(input.onStreamReset ? { restream: input.onStreamReset } : {}),
       })
       : undefined;
-    const generated = segmented?.generated ?? await input.writerClient.generateDraft({ context, maxOutputTokens });
+    const generated = continued?.generated ?? segmented?.generated ?? await input.writerClient.generateDraft({ context, maxOutputTokens });
     if (segmented?.secondHalfError) writingRulesFailure.push(segmented.secondHalfError);
     if (segmented?.info && segmented.info.copiedFromPrevious >= COPY_RETRY_MIN_PARAGRAPHS) {
       writingRulesFailure.push(segmented.info.copiedRemaining < COPY_RETRY_MIN_PARAGRAPHS
         ? `前半章首稿照抄了上一章 ${segmented.info.copiedFromPrevious} 段，已重写前半章。`
         : `前半章首稿照抄了上一章 ${segmented.info.copiedFromPrevious} 段，重写后仍有 ${segmented.info.copiedRemaining} 段与上一章相近，请留意。`);
+    }
+    if (segmented?.info?.lengthRetry) {
+      const { before, after } = segmented.info.lengthRetry;
+      writingRulesFailure.push(after > before
+        ? `整章不到最少字数，后半章重写了一次（${before} → ${after} 字）。`
+        : `整章不到最少字数，后半章重写了一次，没写得更长，用的还是原来那版。`);
     }
     // 接缝重演留痕（第十四轮审读：检出与重写都没留下记录，事后查不到这一步做了什么）。
     if (segmented?.info && segmented.info.replayedFound > 0) {
@@ -451,16 +691,21 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
     const cleanedBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
     // 英文直引号换中文引号；回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
-    const rawDraftBody = looksLikeToolOrJsonArtifact(cleanedBody.trim()) ? cleanedBody : curlyStraightQuotes(cleanedBody);
+    const writtenBody = looksLikeToolOrJsonArtifact(cleanedBody.trim()) ? cleanedBody : curlyStraightQuotes(cleanedBody);
+    // 接着写：清理只动新写的那段，已写的原样拼在前面。
+    const rawDraftBody = continued ? `${existing}\n\n${writtenBody.trim()}` : writtenBody;
     const rawDraftLength = buildDraftLengthReport({
       draftBody: rawDraftBody,
       lengthTarget: draftLengthTarget,
     });
     // 分两半写的稿超了上限不裁：裁只能从结尾往前砍，砍掉的正是章纲最后几个要点
     // （第十七轮第 4 章停在半句对白上，要点 5 后半和要点 6 全丢）。超出多少如实记一条，交作者定。
-    const overLengthKept = Boolean(segmented) && rawDraftLength.lengthStatus === "above_upper_bound";
+    // 接着写的稿也不裁：从结尾往前砍砍掉的是刚接上的那段，裁不好还会截在半句上。
+    const overLengthKept = Boolean(segmented || continued) && rawDraftLength.lengthStatus === "above_upper_bound";
     if (overLengthKept) {
-      writingRulesFailure.push(`正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；分两半写的稿不从结尾裁（会截掉最后的要点），留给你定。`);
+      writingRulesFailure.push(continued
+        ? `正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；接着写的稿不从结尾裁，留给你定。`
+        : `正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；分两半写的稿不从结尾裁（会截掉最后的要点），留给你定。`);
     }
     const trimResult = rawDraftLength.lengthStatus === "above_upper_bound" && !overLengthKept
       ? trimDraftBodyToLengthTarget(rawDraftBody, draftLengthTarget)
@@ -487,6 +732,8 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       ? buildAiFlavorReport(detectAiFlavorViolations(normalizedGenerated.content, input.aiFlavorRules))
       : undefined;
     const issues = validateDraft(normalizedGenerated, context);
+    // 接着写的稿开头是作者的字，整章查不出新写那段是不是 JSON / 工具调用，单查一次。
+    if (continued && looksLikeToolOrJsonArtifact(writtenBody.trim())) issues.push("Draft content looks like JSON or a tool-call artifact.");
     if (trimResult && !trimResult.ok) {
       issues.push("Draft content could not be safely trimmed within the requested length range.");
     }

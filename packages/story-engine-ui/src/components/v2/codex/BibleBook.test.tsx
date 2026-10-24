@@ -53,6 +53,7 @@ function bibleView(over: Partial<BibleView> = {}): BibleView {
       { name: "老周", aliases: ["周叔"], character: true, appearances: { chapters: [2], first: 2, last: 2, viewpointChapters: 0 }, now: [], fixed: [] },
       { name: "旧邮局", aliases: [], character: false, now: [], fixed: [] },
     ],
+    canon: [],
     protagonist: "林澈",
     ...over,
   };
@@ -65,12 +66,13 @@ function renderBook(cat: Cat, over: { bible?: BibleView; busy?: boolean; focusNa
   const onChanged = vi.fn();
   const onJump = vi.fn();
   const onOpenCat = vi.fn();
+  const onAction = vi.fn();
   const view = render(
     <BibleBook cat={cat} projectPath="/books/fog" bible={over.bible ?? bibleView()} error={null} reload={reload} busy={over.busy ?? false}
-      onChanged={onChanged} onJump={onJump} onOpenCat={onOpenCat} {...(over.focusName ? { focusName: over.focusName } : {})}
+      onChanged={onChanged} onJump={onJump} onOpenCat={onOpenCat} onAction={onAction} {...(over.focusName ? { focusName: over.focusName } : {})}
       {...(over.chapterCount !== undefined ? { chapterCount: over.chapterCount } : {})} />,
   );
-  return { ...view, reload, onChanged, onJump, onOpenCat };
+  return { ...view, reload, onChanged, onJump, onOpenCat, onAction };
 }
 
 const lastOps = () => saveCards.mock.calls.at(-1)?.[1];
@@ -181,6 +183,23 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     await waitFor(() => expect(lastOps()).toEqual([{ op: "relation.set", a: "许微", b: "雾港灯塔", label: "在这儿值夜班" }]));
   });
 
+  it("定论（P12）：一条一行，点字改、删要点两下、「查前文」在右边出定论卡；没有时说怎么来", async () => {
+    const empty = renderBook("canon");
+    expect(screen.getByText(/核账卡上点「以第 N 章为准」/)).toBeTruthy();
+    empty.unmount();
+    const { onAction } = renderBook("canon", { bible: bibleView({ canon: [{ id: "n-1", text: "杜长顺十年前去世", at: AT }] }) });
+    fireEvent.click(screen.getByRole("button", { name: "查前文" }));
+    expect(onAction).toHaveBeenCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世" });
+    fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
+    const box = screen.getByLabelText("改这条定论");
+    fireEvent.change(box, { target: { value: "杜长顺九年前去世" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "canon.set", canon: "n-1", text: "杜长顺九年前去世" }]));
+    fireEvent.click(screen.getByRole("button", { name: "删" }));
+    fireEvent.click(screen.getByRole("button", { name: "确定删" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "canon.set", canon: "n-1", text: "" }]));
+  });
+
   it("写作规则：AI 补的可以全部认下；字数改了就存，清空 = 不限；加一条禁写", async () => {
     renderBook("rules");
     fireEvent.click(screen.getByRole("button", { name: "全部认下" }));
@@ -280,7 +299,7 @@ describe("设定本的样子（卡片墙、扉页、关系图）", () => {
   });
 
   it("左边分类后面的数", () => {
-    expect(bibleNavCounts(bibleView())).toEqual({ chars: 2, relations: 1, items: 0, places: 1, uncarded: 2 });
+    expect(bibleNavCounts(bibleView())).toEqual({ canon: 0, chars: 2, relations: 1, items: 0, places: 1, uncarded: 2 });
     expect(bibleNavCounts(null)).toEqual({});
   });
 

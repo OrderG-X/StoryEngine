@@ -11,3 +11,23 @@ describe("消息卡读回：出错卡（P11）", () => {
     expect(readMessageCards([{ type: "error" }])).toEqual([{ type: "error" }]);
   });
 });
+
+describe("消息卡读回：定论卡（P12）", () => {
+  const settle = {
+    token: "0123456789abcdef",
+    canon: "杜长顺十年前去世",
+    canonExists: false,
+    edits: [{ key: "e1", chapter: 2, draft: false, from: "五年", to: "十年" }],
+    facts: [],
+    fields: [{ key: "f1", card: "杜长顺", label: "去世", from: "五年前", to: "十年前" }],
+    searched: [1, 2],
+    missed: [],
+    failures: [],
+  };
+  it("划掉的只认卡上真有的；改齐了那句跟着存；票号不对整张不认", () => {
+    expect(readMessageCards([{ type: "settle", settle, excluded: ["e1", "e9"], applied: "改齐了。" }])).toEqual([
+      { type: "settle", settle, excluded: ["e1"], applied: "改齐了。" },
+    ]);
+    expect(readMessageCards([{ type: "settle", settle: { ...settle, token: "x" } }])).toEqual([]);
+  });
+});

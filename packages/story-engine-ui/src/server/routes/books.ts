@@ -4,6 +4,7 @@
  * POST /api/books/delete（挪进回收站，P10）
  * GET  /api/books/trash · POST /api/books/trash/restore · POST /api/books/trash/purge
  * POST /api/books/open-folder
+ * POST /api/books/missing（书架上从别处打开的书，哪几本的文件夹已经不在了）
  */
 import { execFile } from "node:child_process";
 import { access, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -82,6 +83,10 @@ export function registerBooksRoutes(middlewares: MiddlewareStack): void {
       await handleOpenBookFolder(req, res);
       return;
     }
+    if (req.url?.startsWith("/api/books/missing")) {
+      await handleMissingBooks(req, res);
+      return;
+    }
     next();
   });
 }
@@ -138,6 +143,41 @@ async function handleCreateProject(req: import("node:http").IncomingMessage, res
       ok: false,
       error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)),
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/books/missing — 书架上不在默认书库里的书（从别处打开的），文件夹还在不在
+// ---------------------------------------------------------------------------
+
+const MAX_MISSING_CHECK = 200;
+
+/** 只认「确实没有这个目录」（ENOENT / 不是目录）；读不了等别的错不算没了。不安全的路径不查（本来也打不开）。 */
+export async function missingBookPaths(paths: readonly string[]): Promise<string[]> {
+  const unique = [...new Set(paths.filter((path) => typeof path === "string" && path.trim()))].slice(0, MAX_MISSING_CHECK);
+  const missing: string[] = [];
+  await Promise.all(unique.map(async (path) => {
+    if (!isSafeProjectPath(path)) return;
+    try {
+      if (!(await stat(path)).isDirectory()) missing.push(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") missing.push(path);
+    }
+  }));
+  return missing.sort();
+}
+
+async function handleMissingBooks(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+  try {
+    if (req.method !== "POST") {
+      writeJson(res, 405, { ok: false, error: "Only POST is supported." });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const paths = Array.isArray(body.paths) ? body.paths.filter((path): path is string => typeof path === "string") : [];
+    writeJson(res, 200, { ok: true, missing: await missingBookPaths(paths) });
+  } catch (error) {
+    writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
   }
 }
 
