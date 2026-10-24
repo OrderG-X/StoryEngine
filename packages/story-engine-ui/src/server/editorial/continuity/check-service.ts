@@ -24,6 +24,7 @@ import {
   issueStillPresent,
   ledgerNumberIssues,
   mergeContinuityIssues,
+  settleMirroredIssues,
   readEarlierChapters,
   snapIssueQuotes,
   type ContinuityIssueV2,
@@ -151,8 +152,8 @@ async function checkByReader(input: {
   // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
   // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
   const timeline = await readStoryTimeline(input.projectDir).then((read) => read.timeline).catch(() => undefined);
-  const issues = applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...input.carryOver, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
-    .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const }))
+  const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...input.carryOver, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
+    .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
 }

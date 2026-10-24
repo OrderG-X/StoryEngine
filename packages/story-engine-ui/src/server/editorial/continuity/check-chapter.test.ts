@@ -9,6 +9,7 @@ import {
   ledgerNumberIssues,
   mergeContinuityIssues,
   parseFullReadIssues,
+  settleMirroredIssues,
   snapIssueQuotes,
   snapToOriginal,
   splitSentences,
@@ -147,6 +148,31 @@ describe("合并去重 mergeContinuityIssues：同一句只报一次", () => {
       issue("她说完就走了。", "另一句"),
     ]);
     expect(merged.map((item) => item.reason)).toEqual(["门的位置对不上", "搭边太短", "另一句"]);
+  });
+});
+
+describe("方向相反的一对 settleMirroredIssues：两条各让改对方，降成「可能」交作者挑", () => {
+  const LIU = "落款那个姓，姓刘。刘成泰。";
+  const RUAN = "船东阮成泰。被扣货车挂靠单位。";
+  const inChapter = (quote: string, earlierQuote: string, extra: Partial<ContinuityIssueV2> = {}): ContinuityIssueV2 =>
+    ({ quote, earlierQuote, earlierChapter: 19, reason: "姓对不上", kind: "identity", confidence: "sure", ...extra });
+
+  it("本章 A 对不上 B、又报 B 对不上 A → 两条都降「可能」；不成对的照旧", () => {
+    const settled = settleMirroredIssues([
+      inChapter(RUAN, LIU),
+      inChapter("阮。R。", "刮剩的是立刀旁", { earlierChapter: 18 }),
+      inChapter(LIU, RUAN),
+    ], 19);
+    expect(settled.map((item) => item.confidence)).toEqual(["maybe", "sure", "maybe"]);
+  });
+
+  it("引的是前文某章、或对设定本的，不算成对", () => {
+    const againstSetting = { label: "地点" };
+    const settled = settleMirroredIssues([
+      inChapter(RUAN, LIU, { earlierChapter: 18 }),
+      inChapter(LIU, RUAN, { againstSetting }),
+    ], 19);
+    expect(settled.map((item) => item.confidence)).toEqual(["sure", "sure"]);
   });
 });
 

@@ -308,6 +308,28 @@ export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): Co
   return merged;
 }
 
+/**
+ * 一对方向相反的条目（本章 A 句对不上本章 B 句、又报 B 句对不上 A 句）：两条各让改对方，「改掉这 N 处」一起改，
+ * 两句会互换说法、照样对不上（长篇连写 2026-10-24：一条要把「阮」改成「刘」，一条要把「刘」改成「阮」）。
+ * 哪句对代码判不了，两条都降成「可能」，交作者在卡上挑一条改。只看本章内的冲突（对前文某章的，前文那句不在本章，不会成对）。
+ */
+export function settleMirroredIssues(issues: readonly ContinuityIssueV2[], chapter: number): ContinuityIssueV2[] {
+  const inChapter = (issue: ContinuityIssueV2): boolean =>
+    issue.earlierChapter === chapter && issue.fixChapter === undefined && !issue.againstSetting;
+  const mirrored = new Set<number>();
+  issues.forEach((a, i) => {
+    if (!inChapter(a)) return;
+    issues.forEach((b, j) => {
+      if (j <= i || !inChapter(b)) return;
+      if (sameSentence(normalize(a.quote), normalize(b.earlierQuote)) && sameSentence(normalize(b.quote), normalize(a.earlierQuote))) {
+        mirrored.add(i);
+        mirrored.add(j);
+      }
+    });
+  });
+  return issues.map((issue, index) => (mirrored.has(index) && issue.confidence === "sure" ? { ...issue, confidence: "maybe" as const } : issue));
+}
+
 /** 两段搭着抄至少这么多字才算同一句（太短的搭边，如一个「她说」，不算）。 */
 const QUOTE_OVERLAP_MIN = 8;
 
