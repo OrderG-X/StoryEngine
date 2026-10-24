@@ -15,8 +15,9 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, SettingRefData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import { readSettleData } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
@@ -53,7 +54,18 @@ export type AgentUserAction =
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
-  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] };
+  | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
+  /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
+  | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly reason?: string }
+  /** 设定本定论页「查前文」：拿这条定论查全书。 */
+  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
+  /** 定论卡「确认」：按票号一次改齐（作者档、可撤销）；excluded＝作者划掉不改的几处。 */
+  | { readonly toolName: "settle_apply"; readonly token: string; readonly excluded: readonly string[] };
+
+/** 定论的一边：某章的一句，或设定本的一栏。 */
+export type SettleSideData =
+  | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
+  | { readonly where: "setting"; readonly quote: string; readonly label: string; readonly card?: string };
 
 /** 定稿预览账本清单里的一条（与服务端 agent/tools/commit-preview.ts 的 ledgerChecklist 同形）。 */
 export interface LedgerChecklistItemView {
@@ -84,9 +96,9 @@ export interface ContinuityCheckItem {
   readonly fixChapter?: number;
 }
 
-const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["story", "character", "place", "item", "lore"]);
+const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["canon", "story", "character", "place", "item", "lore"]);
 
-/** 核账条目的 againstSetting（防御解析）：没有 label 的不算；kind 只认那五类，卡名是非空字符串才带。 */
+/** 核账条目的 againstSetting（防御解析）：没有 label 的不算；kind 只认那几类（定论 / 故事设定 / 四种卡），卡名是非空字符串才带。 */
 export function readSettingRef(value: unknown): SettingRefData | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
@@ -184,6 +196,10 @@ export interface AgentToolResult {
   readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
+  /** settle_preview / settle_fact 专属：定论卡（P12）。 */
+  readonly settle?: SettleCardData;
+  /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
+  readonly settleToken?: string;
   /** check_continuity 专属：还在读前文的结构化进度（只在 ok:false 且原因=还在读时有）。
    *  前端要区分「还在读」和「出错」用这个字段，别解析 failures 的文字（R4.1）。 */
   readonly continuityPending?: { readonly done: number; readonly total: number };
@@ -448,6 +464,13 @@ export async function streamAgentChat(
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
+              : {}),
+            // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
+            ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
+              ? { settle: readSettleData(output.settle)! }
+              : {}),
+            ...(parsed.toolName === "settle_apply" && output.ok === true && typeof output.settleToken === "string"
+              ? { settleToken: output.settleToken }
               : {}),
             ...(parsed.toolName === "check_continuity" && typeof output.checkedVersion === "string" && output.checkedVersion
               ? { checkedVersion: output.checkedVersion }

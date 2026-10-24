@@ -444,6 +444,8 @@ export function useChat(params: UseChatParams): UseChatResult {
                 return;
               }
               if (info.toolName === "commit_apply") commitAttempt = null;
+              // 定论改齐了（P12）：那张定论卡（可能在前面的消息上）标成改齐了，按钮收起。
+              if (info.toolName === "settle_apply" && info.settleToken) useChatStore.getState().markSettleApplied(info.settleToken, info.summary ?? "");
               // 定稿成了：顶栏「设定本」亮个小点，点进去先看这章改了什么（重构 P6 第 6 步）。
               if (info.toolName === "commit_apply" && info.committed === true) useNavigationStore.getState().setUnseenChangesChapter(operation.chapter);
               const undone = info.undone === true && (info.toolName === "undo_last_change" || info.toolName === "manage_snapshots");
@@ -456,7 +458,8 @@ export function useChat(params: UseChatParams): UseChatResult {
               const hasDraftContent = useDraftStore.getState().body.trim().length > 0;
               const nextFlow = nextFlowAfterToolResult(info.toolName, info, flowBefore, hasDraftContent);
               if (!info.overview) {
-                const changedBible = info.refreshScope === "foundation" || (info.toolName === "manage_ledger" && info.refreshScope === "full");
+                const changedBible = info.refreshScope === "foundation"
+                  || ((info.toolName === "manage_ledger" || info.toolName === "settle_apply") && info.refreshScope === "full");
                 if (changedBible && projectPath) {
                   // 改设定、确认改账的结果不带概况（重构 P9）：重读一份，设定本、主角、待处理跟着变。
                   track(fetchStateOverview({ projectPath, maxTimelineEvents: 8 })

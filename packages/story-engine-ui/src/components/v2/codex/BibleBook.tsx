@@ -1,24 +1,25 @@
 /**
- * 设定本（重构 P9）：故事设定、写作规则、人物、关系、物品、地点、还没建卡。
+ * 设定本（重构 P9）：故事设定、定论（P12）、写作规则、人物、关系、物品、地点、还没建卡。
  *
  * 数据是设定视图（GET /api/bible）：卡上是作者定的（不会变的），「账里记的」是定稿时记账员记的（会变的、按最新一章）。
  * 作者在这里直接改，一次改动一步、可撤销（POST /api/cards，作者档）；AI 补的标「AI 补」，作者可以认下。
  * 账里有、卡里没有的列在「还没建卡」：是人物还是地方，作者点了算，不猜。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
 import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
 import { scrollBehavior } from "../../../stores/motionStore.js";
 
-export type BibleCat = "story" | "rules" | "chars" | "relations" | "items" | "places" | "uncarded";
+export type BibleCat = "story" | "canon" | "rules" | "chars" | "relations" | "items" | "places" | "uncarded";
 
 const KIND_NAME: Record<CardKind, string> = { character: "人物", place: "地点", item: "物品", lore: "设定" };
 const KIND_CAT: Record<CardKind, BibleCat> = { character: "chars", place: "places", item: "items", lore: "story" };
 
 /** 一类设定在设定本哪一页（核账卡「改设定卡」翻过去用）：故事设定和其他设定都在故事设定页。 */
-export function bibleCatOf(kind: CardKind | "story"): BibleCat {
-  return kind === "story" ? "story" : KIND_CAT[kind];
+export function bibleCatOf(kind: CardKind | "story" | "canon"): BibleCat {
+  return kind === "story" || kind === "canon" ? kind : KIND_CAT[kind];
 }
 
 /** 常用标签当快捷（作者想起什么标签都行）。「一句话」「题材」和书架、开书概况认的栏名一致。 */
@@ -56,6 +57,8 @@ export interface BibleBookProps {
   readonly chapterCount?: number;
   /** 书名（故事设定扉页上）。 */
   readonly bookTitle?: string;
+  /** 定论页「查前文」：在右边对话里出一张定论卡（P12）。 */
+  readonly onAction?: (action: AgentUserAction) => void;
 }
 
 export function BibleBook(props: BibleBookProps) {
@@ -99,6 +102,7 @@ export function BibleBook(props: BibleBookProps) {
         </div>
       ) : null}
       {props.cat === "story" ? <StoryPage ctx={ctx} /> : null}
+      {props.cat === "canon" ? <CanonPage ctx={ctx} /> : null}
       {props.cat === "rules" ? <RulesPage ctx={ctx} /> : null}
       {props.cat === "chars" ? <CardsPage ctx={ctx} kind="character" entries={ctx.bible.characters} /> : null}
       {props.cat === "relations" ? <RelationsPage ctx={ctx} /> : null}
@@ -188,6 +192,49 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
         onAccept={(label) => void ctx.save([{ op: "story.accept", label }])}
       />
       <CardsPage ctx={ctx} kind="lore" entries={ctx.bible.lore} nested />
+    </>
+  );
+}
+
+/* ── 定论：前后说法打架时作者定下的，全书以它为准（P12） ── */
+
+function CanonPage({ ctx }: { readonly ctx: PageContext }) {
+  const canon = ctx.bible.canon;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const check = (statement: string) => ctx.onAction?.({ toolName: "settle_preview", statement });
+  return (
+    <>
+      <PageHead title="定论" sub="前后说法打架时你定下的。写稿、核账都以它为准。" stats={[{ value: canon.length, label: "条" }]} />
+      <div className="se-bk-panel">
+        {canon.length > 0 ? (
+          <ul className="se-bk-canon">
+            {canon.map((item) => (
+              <li key={item.id}>
+                {editing === item.id ? (
+                  <InlineEdit value={item.text} label="改这条定论" placeholder="一句话说清" disabled={ctx.disabled}
+                    onSave={(text) => { setEditing(null); if (text && text !== item.text) void ctx.save([{ op: "canon.set", canon: item.id, text }]); }}
+                    onCancel={() => setEditing(null)} />
+                ) : (
+                  <button type="button" className="se-bk-value serif" disabled={ctx.disabled} onClick={() => setEditing(item.id)}>{item.text}</button>
+                )}
+                <footer>
+                  {ctx.onAction ? (
+                    <button type="button" className="se-bk-link" disabled={ctx.disabled} title="查全书哪几句和它对不上" onClick={() => check(item.text)}>查前文</button>
+                  ) : null}
+                  <ConfirmButton label="删" confirmLabel="确定删" disabled={ctx.disabled} onConfirm={() => void ctx.save([{ op: "canon.set", canon: item.id, text: "" }])} />
+                </footer>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="se-bk-hint">还没有。核账卡上点「以第 N 章为准」，或跟右边的 AI 说「以这个为准」，就记在这里。</p>
+        )}
+        {adding ? (
+          <InlineEdit value="" label="记一条定论" placeholder="一句话说清，比如：杜长顺十年前去世" disabled={ctx.disabled}
+            onSave={(text) => { setAdding(false); if (text) void ctx.save([{ op: "canon.add", text }]); }} onCancel={() => setAdding(false)} />
+        ) : <button type="button" className="se-bk-add" disabled={ctx.disabled} onClick={() => setAdding(true)}>+ 记一条</button>}
+      </div>
     </>
   );
 }

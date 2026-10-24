@@ -261,3 +261,15 @@ describe("readBibleTolerant：设定本读坏如实降级", () => {
     expect(read.failure).not.toMatch(/\/Users|\/var|\/private|\/tmp|\/home/u);
   });
 });
+
+describe("定论（P12）进写作上下文", () => {
+  it("作者定论全带、排在规则前，写明全书以它为准；没有就不出这一节", () => {
+    const bible = bibleOf([{ op: "canon.add", text: "杜长顺十年前去世" }, character("许微", { protagonist: true })]);
+    const pack = buildSettingPack(bible, {});
+    expect(pack.canon).toEqual(["杜长顺十年前去世"]);
+    const text = renderSettingPack(pack).join("\n");
+    expect(text).toContain("## 作者定论（前文说法打架时作者定下的，全书以它为准；写的时候不许和它矛盾）");
+    expect(text).toContain("杜长顺十年前去世");
+    expect(renderSettingPack(buildSettingPack(bibleOf([character("许微", { protagonist: true })]), {})).join("\n")).not.toContain("作者定论");
+  });
+});

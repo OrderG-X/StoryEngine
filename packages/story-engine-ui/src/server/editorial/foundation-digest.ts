@@ -9,8 +9,8 @@
 import { quoteInText, readCardsOrLegacy, type Card, type SettingCardsFile } from "@actalk/story-core";
 import { containsQuote, normalize } from "./continuity/check-chapter.js";
 
-/** 设定在哪类：故事设定，或某类设定卡。 */
-export type SettingKind = "story" | Card["kind"];
+/** 设定在哪类：定论（P12）、故事设定，或某类设定卡。 */
+export type SettingKind = "canon" | "story" | Card["kind"];
 
 /** 摘要里的一行：一张卡（带卡名），或故事设定的一栏（不带）。 */
 interface SettingLine {
@@ -63,7 +63,7 @@ function cardLine(file: SettingCardsFile, card: Card): string {
 
 /**
  * 读设定本拼摘要（重构 P9 改读设定卡）。设定本是空的（新建的书）→ undefined（核账照旧，不提示设定）；
- * 设定卡坏了由调用方按失败如实记。sections 按故事设定 → 人物 → 地点 → 物品 → 其他设定排，空的不进。
+ * 设定卡坏了由调用方按失败如实记。sections 按定论 → 故事设定 → 人物 → 地点 → 物品 → 其他设定排，空的不进。
  * 设定卡上只有稳定的东西：会变的现状（东西在谁手里、人在哪）在账里，不进这里。
  */
 export async function readFoundationDigest(projectDir: string): Promise<FoundationDigest | undefined> {
@@ -71,6 +71,7 @@ export async function readFoundationDigest(projectDir: string): Promise<Foundati
   const byKind = (kind: Card["kind"]): SettingLine[] =>
     file.cards.filter((card) => card.kind === kind).map((card) => ({ card: card.name, text: cardLine(file, card) }));
   const blocks: readonly { readonly label: string; readonly kind: SettingKind; readonly lines: readonly SettingLine[] }[] = [
+    { label: "定论", kind: "canon", lines: file.canon.map((item) => ({ text: item.text })) },
     { label: "故事设定", kind: "story", lines: file.story.fields.map((field) => ({ text: `${field.label}：${field.value}${field.by === "ai" ? AI_MARK : ""}` })) },
     { label: "人物卡", kind: "character", lines: byKind("character") },
     { label: "地点", kind: "place", lines: byKind("place") },
@@ -101,8 +102,8 @@ export async function readFoundationDigest(projectDir: string): Promise<Foundati
 /** 拼进核账窗口的那段话：小标题 + 各节原文摘要（＋截断说明）。 */
 export function foundationMessage(digest: FoundationDigest): string {
   return [
-    "【设定本（作者定的硬设定：故事设定、人物、地点、物品、其他设定）】",
-    "（东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准。标着「AI 补的」是 AI 补、作者还没认下的：和正文对不上时以正文为准，不算正文的错。）",
+    "【设定本（作者定的硬设定：定论、故事设定、人物、地点、物品、其他设定）】",
+    "（「定论」是前文说法打架时作者定下的，全书以它为准：哪一章的句子和定论对不上，都是那一句写错了，前文写的也一样。东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准。标着「AI 补的」是 AI 补、作者还没认下的：和正文对不上时以正文为准，不算正文的错。）",
     digest.text,
     ...(digest.truncated ? ["（设定本太长，这里只给了前面一部分。）"] : []),
   ].join("\n");

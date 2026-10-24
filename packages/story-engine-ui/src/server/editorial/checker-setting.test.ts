@@ -120,6 +120,13 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
     expect(settingQuoteSource(digest!, "沈青禾……根本没有的一句话")).toBeUndefined();
   });
 
+  it("定论（P12）排在最前；核账员引了定论原文，来源就是「定论」", async () => {
+    await writeCards(dir, [{ op: "canon.add", text: "沈敬山三年前过世" }], "canon");
+    const digest = await readFoundationDigest(dir);
+    expect(digest!.sections.map((section) => section.label)[0]).toBe("定论");
+    expect(settingQuoteSource(digest!, "沈敬山三年前过世")).toEqual({ label: "定论", kind: "canon" });
+  });
+
   it("settingQuoteSource：引文跨了同一节里两张卡，只到类、不带卡名", async () => {
     const digest = await readFoundationDigest(dir);
     expect(settingQuoteSource(digest!, "年龄：28……周守义（也叫：老周）")).toEqual({ label: "人物卡", kind: "character" });
@@ -128,7 +135,8 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
   it("foundationMessage：整段话带小标题，核账窗口里能认出来", async () => {
     const digest = await readFoundationDigest(dir);
     const text = foundationMessage(digest!);
-    expect(text).toContain("【设定本（作者定的硬设定：故事设定、人物、地点、物品、其他设定）】");
+    expect(text).toContain("【设定本（作者定的硬设定：定论、故事设定、人物、地点、物品、其他设定）】");
+    expect(text).toContain("「定论」是前文说法打架时作者定下的，全书以它为准");
     expect(text).toContain("东西在谁手里、人在哪这类会变的现状不在这里，以前文正文为准");
     expect(text).toContain("【人物卡】");
   });

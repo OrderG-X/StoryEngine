@@ -16,6 +16,7 @@ import type {
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
+import { readSettleData, readSettleExcluded } from "../../utils/settleCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
 /** 存盘形态的卡数组 → 校验过的卡。 */
@@ -88,6 +89,13 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       if (!brainstorm) return undefined;
       const picked = readPicked(value.picked, brainstorm);
       return { type, brainstorm, ...(picked !== undefined ? { picked } : {}) };
+    }
+    case "settle": {
+      const settle = readSettleData(value.settle);
+      if (!settle) return undefined;
+      const excluded = readSettleExcluded(value.excluded, settle);
+      const applied = typeof value.applied === "string" && value.applied.trim() ? value.applied.trim().slice(0, 2000) : "";
+      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}) };
     }
     default:
       return undefined;

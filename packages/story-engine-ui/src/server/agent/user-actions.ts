@@ -16,6 +16,7 @@ import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
+import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
 export const USER_ACTION_TOOL_NAMES = [
@@ -31,8 +32,8 @@ export const USER_ACTION_TOOL_NAMES = [
   "brainstorm_chapter",
 ] as const;
 export type UserActionToolName = (typeof USER_ACTION_TOOL_NAMES)[number];
-/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」）。 */
-const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo"] as const;
+/** 不走工具、服务端直接执行的作者命令（重构 P3：「确认改账」= 记作者裁定；P4：「确认改设定」；P12：定论预览 / 改齐）。 */
+const DIRECT_ACTION_NAMES = ["ledger_decision", "foundation_decision", "undo", "settle_preview", "settle_apply"] as const;
 
 /** 「确认定稿」：定这一章。「确认裁剪」：把操作历史裁到最近 keep 条（缺省=引擎默认 200）。 */
 export type UserAction =
@@ -79,7 +80,9 @@ export type UserAction =
    * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
    * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
    */
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
+  /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
+  | SettleUserAction;
 
 /** 核账「改这处」的一处：本章原句（逐字锚点）+ 要改成什么样。 */
 export interface ReviseFix {
@@ -131,6 +134,10 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
+  if (toolName === "settle_preview" || toolName === "settle_apply") {
+    const parsed = parseSettleAction(record);
+    return "invalid" in parsed ? { kind: "invalid", reason: parsed.invalid } : { kind: "action", action: parsed.action };
+  }
   if (toolName === "manage_snapshots") return { kind: "invalid", reason: "不支持的操作。" };
   if (toolName === "prune_snapshots") {
     const rawKeep = typeof record.keep === "string" ? Number(record.keep.trim()) : record.keep;
@@ -358,6 +365,10 @@ export async function runUserAction(args: {
   }
   if (action.toolName === "undo") {
     await runUndoAction(args);
+    return;
+  }
+  if (action.toolName === "settle_preview" || action.toolName === "settle_apply") {
+    await runSettleAction({ ...args, action });
     return;
   }
   if (action.toolName === "revise_draft") {

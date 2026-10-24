@@ -1,6 +1,6 @@
 /**
  * 工具结果「给界面的」和「给模型的」分开（2026-10-10 自审：一章约 20 万输入 token，八成是对话 AI 在烧——
- * 18 个工具把 7–8k 的状态总览塞回结果，出稿 / 改稿 / 定稿还带整章正文；一轮多步时这些在后续每一步里反复重发）。
+ * 当时 18 个工具把 7–8k 的状态总览塞回结果，出稿 / 改稿 / 定稿还带整章正文；一轮多步时这些在后续每一步里反复重发）。
  *
  * 界面照旧拿完整结果（SSE tool-result 原样转发、写作区刷新靠它）；模型只看去掉总览与正文的精简版。
  * 读类工具（read_*）的本职就是把资料给模型看，原样保留。
@@ -36,6 +36,8 @@ export function slimToolOutputForModel(toolName: string, output: unknown): unkno
       continue;
     }
     if (toolName === "commit_preview" && key === "plan") continue;
+    // 定论卡（原句 → 新句的清单）只给界面；模型转述 summary 就够。
+    if (toolName === "settle_fact" && key === "settle") continue;
     if (key === "ledgerChecklist" && Array.isArray(value)) {
       slim.ledgerChecklist = value.map((item) => (item && typeof item === "object" ? (item as { label?: unknown }).label : item));
       continue;

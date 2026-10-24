@@ -53,5 +53,12 @@ export function userActionChoiceText(
       return action.avoid?.length
         ? `第 ${action.chapter} 章再来几种走法${action.idea ? `：${action.idea}` : ""}`
         : `想想第 ${action.chapter} 章往哪走${action.idea ? `：${action.idea}` : ""}`;
+    case "settle_preview":
+      if ("statement" in action) return `按定论查前文：「${action.statement}」`;
+      return action.truth.where === "setting"
+        ? `以设定为准：${action.truth.label}「${action.truth.quote}」`
+        : `以第 ${action.truth.chapter} 章为准：「${action.truth.quote}」`;
+    case "settle_apply":
+      return "确认定论，改齐前文";
   }
 }

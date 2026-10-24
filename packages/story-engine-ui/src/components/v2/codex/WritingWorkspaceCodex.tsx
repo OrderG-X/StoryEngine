@@ -58,6 +58,7 @@ import "./se-bible.css";
 const CATS = [
   { id: "changes", title: "这章改了什么", sub: "定稿记下的人 · 线索 · 事", group: "刚定稿" },
   { id: "story", title: "故事设定", sub: "一句话 · 题材 · 世界规矩 · 其他设定", group: "设定卡" },
+  { id: "canon", title: "定论", sub: "前后打架时你定下的，全书以它为准" },
   { id: "rules", title: "写作规则", sub: "视角 · 字数 · 文风 · 禁写" },
   { id: "chars", title: "人物", sub: "人物卡 · 账里记的" },
   { id: "relations", title: "关系", sub: "谁和谁什么关系" },
@@ -68,7 +69,7 @@ const CATS = [
   { id: "timeline", title: "故事地图", sub: "章 × 人物 · 故事日" },
 ] as const;
 
-const BIBLE_CATS = new Set<string>(["story", "rules", "chars", "relations", "items", "places", "uncarded"]);
+const BIBLE_CATS = new Set<string>(["story", "canon", "rules", "chars", "relations", "items", "places", "uncarded"]);
 
 /** 仅供测试用：导出 CATS 数组供轻量测试断言（不影响生产代码）。 */
 export const __CATS_FOR_TEST = CATS;
@@ -635,6 +636,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
                         onOpenCat={openInBible}
                         chapterCount={lastCommittedChapter}
                         bookTitle={projectName}
+                        {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
                         {...(bibleFocus ? { focusName: bibleFocus } : {})}
                       />
                     ) : null}
@@ -753,7 +755,6 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
         <AiChatCodex
           {...props}
           onOpenChapter={openChapterNumber}
-          onOpenSetting={openInBible}
           mentionNames={mentionNames}
           rightOpen={effectiveRightOpen}
           // 展开/收起必须相对「当前实际显示态」翻——自动收起期间内部 rightOpen 仍是 true（用户默认意愿），

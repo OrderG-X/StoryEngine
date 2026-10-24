@@ -64,6 +64,17 @@ describe("改设定卡（ops）", () => {
     expect(applyCardOps(file, [{ op: "field.set", card: "三号仓", label: "样子", value: "砖房" }], { by: "ai", at: AT })).toMatchObject({ code: "needs_author" });
   });
 
+  it("定论只能作者记：AI 提的交给作者；按编号或原文改、空串删", () => {
+    const file = apply(emptySettingCards(), [{ op: "canon.add", text: "杜长顺十年前去世" }, { op: "canon.add", text: "杜长顺十年前去世" }]);
+    expect(file.canon).toEqual([{ id: "n-1", text: "杜长顺十年前去世", at: AT }]);
+    expect(applyCardOps(file, [{ op: "canon.add", text: "R 是船名缩写" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
+    expect(splitForAi(file, [{ op: "canon.add", text: "R 是船名缩写" }], AT).needsAuthor).toHaveLength(1);
+    const renamed = applyCardOps(file, [{ op: "canon.set", canon: "n-1", text: "杜长顺十年前病逝" }], { by: "author", at: AT });
+    expect(renamed.ok && renamed.lines).toEqual(["定论「杜长顺十年前去世」改成「杜长顺十年前病逝」"]);
+    const removed = apply(renamed.ok ? renamed.file : file, [{ op: "canon.set", canon: "杜长顺十年前病逝", text: "" }]);
+    expect(removed.canon).toEqual([]);
+  });
+
   it("splitForAi：能做的直接做，碰作者的交给作者，跟着它的一起交", () => {
     const file = apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "孟叔", fields: [{ label: "身份", value: "老站长" }] }]);
     const split = splitForAi(file, [

@@ -608,6 +608,7 @@ const CORE_COMMAND_KINDS: Record<string, SnapshotKind> = {
   "card.write": "bible",
   "card.fill": "bible",
   "cards.import": "bible",
+  "settle.apply": "commit",
 };
 
 /** 早于命令名进标签时（P3～P7 之间）核心打的存档点，整串认。 */

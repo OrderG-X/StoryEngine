@@ -37,6 +37,7 @@ import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
+import { SettleCard } from "./SettleCard.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
@@ -73,8 +74,6 @@ import { usePresence } from "../../../hooks/usePresence.js";
 type AiChatCodexProps = WritingWorkspaceLayoutProps & {
   /** 按章号打开一章（已定稿时顶卡的「去第 N 章」）。 */
   readonly onOpenChapter?: (chapter: number) => void;
-  /** 翻到设定本某一页、展开某张卡（核账卡「改设定卡」）。 */
-  readonly onOpenSetting?: (cat: string, card?: string) => void;
   /** @ 提及候选：设定本里的人物和地点（WritingWorkspaceCodex 从设定视图拼好传下来）。 */
   readonly mentionNames?: { readonly characters: readonly string[]; readonly locations: readonly string[] };
   readonly rightOpen: boolean;
@@ -583,7 +582,6 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             batchPendingForThisCard={props.aiFlavorBatchPending === message.id}
             onSendMessage={props.onSendMessage}
             onSendUserAction={props.onSendUserAction}
-            {...(props.onOpenSetting ? { onOpenSetting: props.onOpenSetting } : {})}
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={message.id === confirmablePreviewId}
             commitUndoable={message.id === undoableCommitId}
@@ -824,7 +822,6 @@ function MessageBubbles({
   batchPendingForThisCard = false,
   onSendMessage,
   onSendUserAction,
-  onOpenSetting,
   onSuggestedAction,
   commitConfirmable = false,
   commitUndoable = false,
@@ -850,8 +847,6 @@ function MessageBubbles({
   readonly onSendMessage?: (content: string) => void;
   /** 结构化动作直达（核账「改这处」按钮直接改，不经模型）。 */
   readonly onSendUserAction?: (action: AgentUserAction) => void;
-  /** 核账卡「改设定卡」：翻到设定本那张卡。 */
-  readonly onOpenSetting?: (cat: string, card?: string) => void;
   readonly onSuggestedAction?: (action: SuggestedAction) => void;
   /** 本条的定稿预览卡是否挂「确认定稿」按钮（最新一张未用掉的预览才挂）。 */
   readonly commitConfirmable?: boolean;
@@ -971,7 +966,6 @@ function MessageBubbles({
             dismissed={card.dismissed ?? []}
             superseded={continuitySuperseded}
             {...(continuitySuperseded ? {} : { onRevise: onSendMessage, onFixAction: onSendUserAction })}
-            {...(onOpenSetting ? { onOpenSetting } : {})}
             onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}
           />
         );
@@ -1001,6 +995,19 @@ function MessageBubbles({
       case "directions":
         // 头脑风暴走法卡：对话里只列名字，挑在稿纸上方（BrainstormPanel）。
         return <DirectionsCard key={card.type} messageId={message.id} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
+      case "settle":
+        // 定论卡（P12）：定论 + 前文要改的几句，划掉不改的、点「确认」一次改齐。
+        return (
+          <SettleCard
+            key={card.type}
+            messageId={message.id}
+            data={card.settle}
+            {...(card.excluded ? { excluded: card.excluded } : {})}
+            {...(card.applied ? { applied: card.applied } : {})}
+            busy={chatLoading}
+            {...(onSendUserAction ? { onAction: onSendUserAction } : {})}
+          />
+        );
       case "next-steps":
         // 「下一步」选项在 composer 上方渲染（lastAssistantNextStepPrompt），气泡内不重复。
         return null;
@@ -1082,6 +1089,7 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "draft-review",
   "continuity",
   "directions",
+  "settle",
   "quality",
   "commit-preview",
   "commit-report",

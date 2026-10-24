@@ -14,9 +14,9 @@ import { describe, it, expect } from "vitest";
 import { __CATS_FOR_TEST, buildChapterRows, chapterFootStatus, needsCommit, resolveRightPanelOpen } from "./WritingWorkspaceCodex.js";
 
 describe("设定本类目（重构 P9：设定本按设定卡分，伏笔线索和故事地图照旧）", () => {
-  it("打头是「这章改了什么」，接着是设定本七类，最后是伏笔线索、故事地图", () => {
+  it("打头是「这章改了什么」，接着是设定本八类（P12 加定论），最后是伏笔线索、故事地图", () => {
     expect(__CATS_FOR_TEST.map((c) => c.id)).toEqual([
-      "changes", "story", "rules", "chars", "relations", "items", "places", "uncarded", "hooks", "timeline",
+      "changes", "story", "canon", "rules", "chars", "relations", "items", "places", "uncarded", "hooks", "timeline",
     ]);
   });
 

@@ -22,6 +22,8 @@ export const RULE_ITEM_MAX = 400;
 export const RULE_LIST_MAX = 40;
 export const EXEMPLAR_TEXT_MAX = 3_000;
 export const EXEMPLARS_MAX = 12;
+export const CANON_TEXT_MAX = 400;
+export const CANON_MAX = 200;
 
 const text = z.string().trim().min(1);
 
@@ -61,6 +63,13 @@ export type RuleItem = z.infer<typeof RuleItem>;
 export const Exemplar = z.object({ id: text, text: text.max(EXEMPLAR_TEXT_MAX), note: text.max(RULE_ITEM_MAX).optional(), ...prov });
 export type Exemplar = z.infer<typeof Exemplar>;
 
+/**
+ * 定论（P12）：前文自己打架时作者定下的说法，一条一句（「杜长顺十年前去世」）。全书最高：核账、写手、章纲员都以它为准，
+ * 和它不一致的句子不管在哪一章都算写错了。只能是作者的——AI 只能提，作者点「确认」才记（所以不带 by）。
+ */
+export const CanonItem = z.object({ id: text, text: text.max(CANON_TEXT_MAX), at: text });
+export type CanonItem = z.infer<typeof CanonItem>;
+
 export const RULE_LISTS = ["style", "musts", "bans", "avoid"] as const;
 export type RuleList = (typeof RULE_LISTS)[number];
 export const RULE_SCALARS = ["perspective", "notes", "targetWords", "minWords"] as const;
@@ -94,6 +103,8 @@ export const SettingCardsFile = z.object({
   rules: WritingRules,
   cards: z.array(Card),
   relations: z.array(Relation),
+  /** 定论（P12 起；老文件没有这一栏，读进来是空的）。 */
+  canon: z.array(CanonItem).max(CANON_MAX).default([]),
 });
 export type SettingCardsFile = z.infer<typeof SettingCardsFile>;
 
@@ -102,5 +113,5 @@ export function emptyWritingRules(): WritingRules {
 }
 
 export function emptySettingCards(): SettingCardsFile {
-  return { schema: SETTING_CARDS_SCHEMA, story: { fields: [] }, rules: emptyWritingRules(), cards: [], relations: [] };
+  return { schema: SETTING_CARDS_SCHEMA, story: { fields: [] }, rules: emptyWritingRules(), cards: [], relations: [], canon: [] };
 }

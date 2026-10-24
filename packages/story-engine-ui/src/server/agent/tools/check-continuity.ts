@@ -23,7 +23,7 @@ const issueSchema = z.object({
   reason: z.string().describe("哪里对不上（一句话）。"),
   againstSetting: z.object({
     label: z.string(),
-    kind: z.enum(["story", "character", "place", "item", "lore"]).optional(),
+    kind: z.enum(["canon", "story", "character", "place", "item", "lore"]).optional(),
     card: z.string().optional().describe("设定原文落在哪张设定卡上（卡名）。"),
   }).optional().describe("这条对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章：earlierQuote 是设定原文。"),
   fixChapter: z.number().int().positive().optional().describe("错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。"),
