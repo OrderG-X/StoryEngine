@@ -50,6 +50,7 @@ import { withBookLock } from "@actalk/story-core";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
+import { curlyStraightQuotes } from "../../lib/dialogue-quotes.js";
 
 /* ---------------------------------------------------------------------------
  * D21 定位：精确子串优先 + 空白/引号归一兜底
@@ -355,7 +356,10 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
   const head = draftContent.slice(0, beforeSpan.start);
   const tail = draftContent.slice(beforeSpan.end);
   const replaced = draftContent.slice(beforeSpan.start, beforeSpan.end);
-  return head + trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, afterText.trim(), tail), tail) + tail;
+  // 模型回的直引号换成中文引号，除非这稿本来就整篇用直引号（作者自己的写法，跟着它）。
+  const rest = head + tail;
+  const text = rest.includes("\"") && !rest.includes("“") ? afterText.trim() : curlyStraightQuotes(afterText.trim());
+  return head + trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, text, tail), tail) + tail;
 }
 
 // 不猜白名单：切句
