@@ -35,6 +35,7 @@ import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-d
 import { describeErrorBriefly } from "../book/project-store.js";
 import { readBibleTolerant } from "./setting-pack.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
+import { curlyStraightQuotes } from "../../lib/dialogue-quotes.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -448,7 +449,9 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
         : `后半章首稿重演了前半章 ${segmented.info.replayedFound} 段，${segmented.info.retried ? "重写后" : ""}仍有 ${segmented.info.replayedRemaining} 段与前半章相近。`);
     }
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
-    const rawDraftBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
+    const cleanedBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
+    // 英文直引号换中文引号；回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
+    const rawDraftBody = looksLikeToolOrJsonArtifact(cleanedBody.trim()) ? cleanedBody : curlyStraightQuotes(cleanedBody);
     const rawDraftLength = buildDraftLengthReport({
       draftBody: rawDraftBody,
       lengthTarget: draftLengthTarget,

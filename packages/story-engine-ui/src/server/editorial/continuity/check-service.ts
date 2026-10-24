@@ -24,6 +24,7 @@ import {
   issueStillPresent,
   ledgerNumberIssues,
   mergeContinuityIssues,
+  settleMirroredIssues,
   readEarlierChapters,
   snapIssueQuotes,
   type ContinuityIssueV2,
@@ -151,8 +152,8 @@ async function checkByReader(input: {
   // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
   // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
   const timeline = await readStoryTimeline(input.projectDir).then((read) => read.timeline).catch(() => undefined);
-  const issues = applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...input.carryOver, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
-    .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const }))
+  const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...input.carryOver, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
+    .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
 }
@@ -163,7 +164,8 @@ export async function canReuseCheck(projectDir: string, chapter: number, body: s
   if (!memory || memory.version !== CHECK_MEMORY_VERSION || memory.bodyHash !== hashBody(body)) return false;
   const earlier = await readEarlierChapters(projectDir, chapter);
   const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
-  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? []);
+  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
+  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
 }
 
 export async function checkChapterBody(
@@ -176,19 +178,18 @@ export async function checkChapterBody(
   // 账本只读一次：数字对账用它，核账记忆的键也带上它。读不了就不传，核账那边会如实记「账本读不了」。
   const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
   const readerCallModel = options.readerCallModel ?? callConfiguredBrainModel;
+  // 设定本也只读一次：记忆的键带上它（改了设定要重核），上次对设定本的条目也按它判还在不在。
+  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const bodyHash = hashBody(body);
-  const earlierHash = hashEarlier(earlier, ledgerFacts ?? []);
+  const earlierHash = hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
   const memory = await readCheckMemory(projectDir, chapter);
   const reused = !options.fresh
     && Boolean(memory && memory.version === CHECK_MEMORY_VERSION && memory.bodyHash === bodyHash && memory.earlierHash === earlierHash);
   // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
-  const foundation = memory && !reused && memory.issues.some((issue) => issue.againstSetting)
-    ? await readFoundationDigest(projectDir).catch(() => undefined)
-    : undefined;
   const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteSource(foundation, settingQuote) !== undefined;
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
-    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, settingStillSays))
+    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, memory.body, settingStillSays))
     : [];
   let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited };
   let coldTotal: number | undefined;
@@ -196,7 +197,8 @@ export async function checkChapterBody(
     // R7.3：复用上次结果也照过一遍相对日子换算（纯确定性、不调模型）——作者后来改了故事日时，
     // 旧缓存里「明天 / 后天」那类条目按新时间线重新换算，不会把该收掉的误报又端出来。
     const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
-    result = { issues: applyRelativeDayAlignment(memory!.issues, chapter, timeline), failures: [] };
+    // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
+    result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
     result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
     if (result.coverage) {
@@ -210,7 +212,7 @@ export async function checkChapterBody(
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，
   // 那时笔记多半已读齐，就是全书的核账）。正常结果照旧缓存。
   if (!reused && !result.coverage && (result.failures.length === 0 || result.issues.length > 0)) {
-    await writeCheckMemory(projectDir, { chapter, bodyHash, earlierHash, issues: result.issues }).catch((error) => {
+    await writeCheckMemory(projectDir, { chapter, bodyHash, body, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
     });
   }

@@ -31,6 +31,8 @@ export interface KeeperHandles {
   readonly factHandles: ReadonlyMap<string, string>;
   /** 短号 → 给作者看的名字（线索标题、事实内容）：模型在说明里写了「归入T1」，换成名字再进清单。 */
   readonly handleNames?: ReadonlyMap<string, string>;
+  /** 重定稿：「R2」→ 这一章上次定稿时开的线索真编号（本章还在开，就沿用编号，后文的推进才接得上）。 */
+  readonly reopenHandles?: ReadonlyMap<string, string>;
 }
 
 const isDigit = (char: string | undefined): boolean => char !== undefined && char >= "0" && char <= "9";
@@ -48,7 +50,7 @@ export function nameHandles(text: string, names: ReadonlyMap<string, string> | u
   while (i < text.length) {
     const char = text[i]!;
     const letter = char.toUpperCase();
-    if ((letter === "T" || letter === "F") && isDigit(text[i + 1]) && !isAsciiWord(text[i - 1])) {
+    if ((letter === "T" || letter === "F" || letter === "R") && isDigit(text[i + 1]) && !isAsciiWord(text[i - 1])) {
       let end = i + 1;
       while (isDigit(text[end])) end += 1;
       const name = isAsciiWord(text[end]) ? undefined : names.get(`${letter}${text.slice(i + 1, end)}`);
@@ -312,7 +314,9 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
         continue;
       }
       if (!type && typeText) adjusted.push({ where, reason: `类型写成了「${typeText}」，按悬念记` });
-      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote } satisfies ThreadInput);
+      // 重定稿沿用上次的编号：只认这次列出的 R 短号，别的写法当新开（核心再按标题兜一次）。
+      const reopen = handleList(item.thread).map((handle) => handles.reopenHandles?.get(handle)).find((id) => id !== undefined);
+      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote, ...(reopen ? { thread: reopen } : {}) } satisfies ThreadInput);
       continue;
     }
     const targets = handleList(item.thread);

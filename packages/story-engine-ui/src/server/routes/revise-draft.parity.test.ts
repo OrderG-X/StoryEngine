@@ -222,7 +222,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     // HTTP 路：preview 步漂移守卫拦下 → 400 诚实拒（不再有可确认的漂移预览，apply 不会发生）
     expect(preview.statusCode).toBe(400);
     expect(preview.payload.ok).toBe(false);
-    expect(String(preview.payload.error)).toContain("不是你选择的片段");
+    expect(String(preview.payload.error)).toContain("不是你选的那段");
 
     // 工具路：overlap 守卫拦下 → ok:false applied:false
     expect(tool.ok).toBe(false);
@@ -453,6 +453,27 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
 });
 
 describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback，刻意保留、本组锁定）", () => {
+  it("模型回半截 JSON → 同一份提示再要一次，第二次能用就照改；两次都坏才如实说没改成", { timeout: 30_000 }, async () => {
+    const { toolDir } = await makeParityTwinProjects("revise-half-json-");
+    await writeParityDraft(toolDir, 1, parityReviseDraft(1));
+    llmMocks.streamChatModelToText
+      .mockResolvedValueOnce({ content: '{"taskId":"x","beforeText":""\n}', thinking: "" })
+      .mockResolvedValueOnce({ content: previewJson(REVISE_SENTENCE_B, REVISE_REPLACEMENT_B), thinking: "" });
+    const fixed = await driveToolExecute(reviseDraftTool, { chapter: 1, targetText: REVISE_SENTENCE_B, revisionGoal: "润色这段。" }, { projectDir: toolDir });
+    expect(fixed.applied).toBe(true);
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toContain(REVISE_REPLACEMENT_B);
+
+    llmMocks.streamChatModelToText.mockReset();
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: '{"taskId":"x","beforeText":""\n}', thinking: "" });
+    const before = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
+    const broken = await driveToolExecute(reviseDraftTool, { chapter: 1, targetText: REVISE_SENTENCE_C, revisionGoal: "润色这段。" }, { projectDir: toolDir });
+    expect(broken.applied).toBe(false);
+    expect(String(broken.summary)).toContain("回的格式不对");
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(before);
+  });
+
   it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", { timeout: 30_000 }, async () => {
     llmMocks.streamChatModelToText.mockRejectedValue(new Error("网络连接被重置"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");
@@ -483,7 +504,7 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     }, { projectDir: toolDir });
     expect(tool.ok).toBe(false);
     expect(tool.applied).toBe(false);
-    expect(String(tool.summary)).toContain("修订模型输出不可用");
+    expect(String(tool.summary)).toContain("AI 这次没给出能用的改法");
     expect(String(tool.summary)).toContain("网络连接被重置");
 
     // 模型真被调过（失败来自模型调用而非前置守卫）；两侧草稿逐字未动、字节一致

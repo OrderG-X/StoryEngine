@@ -6,6 +6,7 @@
  */
 import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { runWithLazySnapshot } from "./snapshot.js";
+import { TURN_ABORTED_MESSAGE, turnAborted } from "./turn-abort.js";
 
 export type CardWriteOutcome =
   | {
@@ -23,6 +24,7 @@ export async function writeCards(
   input: { readonly by: "author" | "ai"; readonly ops: readonly CardOp[]; readonly idempotencyKey?: string },
 ): Promise<CardWriteOutcome> {
   if (input.ops.length === 0) return { ok: true, lines: [] };
+  if (input.by === "ai" && turnAborted()) return { ok: false, code: "turn_aborted", message: TURN_ABORTED_MESSAGE };
   const spec = input.by === "author" ? cardWrite : cardFill;
   const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>
     runCommand(projectDir, spec, { ops: input.ops }, {

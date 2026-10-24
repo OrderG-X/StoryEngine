@@ -8,6 +8,8 @@
  * 以后核账不再报；存失败如实提示「没记住」。可撤回。
  * 主按钮「改掉这 N 处」在卡上（R4.5）：N 随「不是问题」实时变，intent 由卡片现拼——逐条列要改的原句，
  * 末尾写明作者标过不是问题的几处别动（服务端下一步不再给笼统的「改掉确定的 N 处」）。
+ * 主按钮只管错在这一章的（2026-10-24 长篇走查）：混着错在前文那章的，原来整批交给 AI，本章能直接改的也跟着走模型，
+ * 还顺手改了已定稿的前文；现在前文那几处各自留「改第 N 章」，主按钮写「改掉本章 N 处」。
  * 外壳沿用 StepCard，条目样式沿用审稿卡的 .drc-*。
  */
 import { useEffect, useRef, useState } from "react";
@@ -113,8 +115,10 @@ function ItemView({ chapter, item, onRevise, onOpenSetting, onDismiss }: {
   );
 }
 
-export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], onRevise, onFixAction, onOpenSetting, onDismiss }: {
+export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], superseded = false, onRevise, onFixAction, onOpenSetting, onDismiss }: {
   readonly check: ContinuityCheck;
+  /** 同一章后来又核过：这张是旧结果，说一句、不给改的按钮（上面不传 onRevise / onFixAction）。 */
+  readonly superseded?: boolean;
   /** 作者点过「不是问题」的条目键（存在卡上，稿纸划线共用一份）。 */
   readonly dismissed?: readonly string[];
   /** 交给 AI 改（发一句只改这几处的话）：错在前文那章、原句不逐字的走这条。 */
@@ -153,11 +157,12 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
     else onRevise?.(buildContinuityFixIntent(check.chapter, item));
   };
   const canRevise = (item: Item): boolean => Boolean(onRevise) || (Boolean(onFixAction) && canFixDirectly(check.chapter, item));
+  const sureHere = sure.filter((item) => canFixDirectly(check.chapter, item));
   const reviseAll = (): void => {
-    if (onFixAction && sure.every((item) => canFixDirectly(check.chapter, item))) onFixAction(continuityFixAction(check.chapter, sure));
-    else onRevise?.(buildContinuityFixAllIntent(check.chapter, sure, dismissed.length));
+    if (onFixAction) onFixAction(continuityFixAction(check.chapter, sureHere));
+    else onRevise?.(buildContinuityFixAllIntent(check.chapter, sureHere, dismissed.length));
   };
-  const canReviseAll = Boolean(onRevise) || (Boolean(onFixAction) && sure.every((item) => canFixDirectly(check.chapter, item)));
+  const canReviseAll = sureHere.length > 0 && (Boolean(onRevise) || Boolean(onFixAction));
   // 点开「可能」那段，稿纸上才把这一章的「可能」划出来；收起就撤（默认不划，见 maybeMarks）。
   const toggleMaybe = (): void => {
     const next = !showMaybe;
@@ -179,14 +184,15 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       defaultOpen
     >
       {empty ? null : <>
+      {superseded ? <p className="drc-summary">后来又核过，以最新一张为准。</p> : null}
       {/* 主按钮（R4.5）：改掉还没划掉的「确定」N 处，文字随「不是问题」实时变；intent 现拼、圈死范围。 */}
-      {sure.length > 0 && canReviseAll ? (
+      {canReviseAll ? (
         <button
           type="button"
           className="chip drc-fix-all"
           onClick={reviseAll}
         >
-          改掉这 {sure.length} 处
+          {sureHere.length < sure.length ? `改掉本章 ${sureHere.length} 处` : `改掉这 ${sureHere.length} 处`}
         </button>
       ) : null}
       {sure.length > 0 ? (

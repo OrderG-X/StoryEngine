@@ -63,6 +63,30 @@ export interface RefinedQualityReport {
 
 const labelOf = (type: string): string => QUALITY_TYPE_LABELS[type] ?? type;
 
+/** 内置：引擎 issue.type → 给作者看的一句话（引擎 message 是英文机器话，不给人看）。未收录的 type 用引擎原话。 */
+const QUALITY_TYPE_MESSAGES: Readonly<Record<string, string>> = {
+  empty_draft: "工作稿里一个字都没有",
+  draft_not_found_for_check: "这一章还没有工作稿可查",
+  tool_or_json_artifact: "工作稿看着像 JSON 或工具调用的残留，不像正文",
+  title_only: "只有标题，没有正文",
+  missing_chapter_title: "正文开头没有章节标题",
+  no_dialogue: "通篇没有对话",
+  missing_character_name: "没提到设定本里任何一个人物的名字",
+};
+
+/**
+ * 一条质检问题给人看的说法（硬伤检查卡、定稿预览的拦截原因共用这一处）。
+ * 长篇连写走查（2026-10-24）：硬伤检查卡把引擎原话「Draft body is shorter than 2500 Chinese characters (current: 1628).」直接摆给作者。
+ */
+export function describeQualityIssue(issue: Pick<CommitQualityIssue, "type" | "message" | "length">): string {
+  if (issue.type === "too_short") {
+    return issue.length
+      ? `正文 ${issue.length.current} 字，低于写作规则要求的下限 ${issue.length.min} 字（只数汉字，不含标点和标题）`
+      : "正文字数低于写作规则要求的下限";
+  }
+  return QUALITY_TYPE_MESSAGES[issue.type] ?? issue.message;
+}
+
 /** 把引擎质检报告分层 + 软误报降级。纯确定性。 */
 export function refineQualityReport(report: CommitQualityReport): RefinedQualityReport {
   // 1) 去重（同 type+message 只留一条）+ 跳过已 dismissed。
@@ -81,11 +105,11 @@ export function refineQualityReport(report: CommitQualityReport): RefinedQuality
   const refined: RefinedQualityIssue[] = deduped.map((issue) => {
     const rule = QUALITY_DOWNGRADE_RULES[issue.type];
     if (rule && issue.severity === "warning") {
-      const item: RefinedQualityIssue = { type: issue.type, label: labelOf(issue.type), severity: rule.to, message: issue.message, downgradeNote: rule.note };
+      const item: RefinedQualityIssue = { type: issue.type, label: labelOf(issue.type), severity: rule.to, message: describeQualityIssue(issue), downgradeNote: rule.note };
       downgraded.push(item);
       return item;
     }
-    return { type: issue.type, label: labelOf(issue.type), severity: issue.severity, message: issue.message };
+    return { type: issue.type, label: labelOf(issue.type), severity: issue.severity, message: describeQualityIssue(issue) };
   });
 
   // 3) 分层。severe 原来由 AI 判定层给（重构 P7 已删），留着字段给老卡片兼容，恒为空。

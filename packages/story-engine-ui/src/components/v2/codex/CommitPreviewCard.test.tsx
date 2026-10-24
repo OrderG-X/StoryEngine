@@ -50,6 +50,18 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(container.textContent ?? "").not.toContain("和前文对不上的问题");
   });
 
+  it("阻断项就是那条文稿问题（字数不够）→ 只列一次，「文稿问题」里不再重复；别的文稿问题照列", () => {
+    const short = "正文 1006 字，低于写作规则要求的下限 2500 字。";
+    const { container, rerender } = render(
+      <CommitPreviewCard preview={{ chapter: 23, canCommit: false, blockingReasons: [short], draftIssueCount: 1, draftIssues: [short] }} />,
+    );
+    expect((container.textContent ?? "").split(short)).toHaveLength(2);
+    expect(container.textContent ?? "").not.toContain("文稿问题");
+
+    rerender(<CommitPreviewCard preview={{ chapter: 23, canCommit: false, blockingReasons: [short], draftIssueCount: 2, draftIssues: [short, "第三段有乱码。"] }} />);
+    expect(container.textContent ?? "").toContain("文稿问题 1 项");
+  });
+
   // R7.7·报告 4.3：明细文案直接列在卡里——默认折叠（一屏读得完），点开才列出。
   it("带明细文案 → 默认折叠不露明细，点 chip 展开；不出现「质检卡」字样", () => {
     const { container } = render(

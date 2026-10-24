@@ -7,7 +7,7 @@
  * 不写真相；预览票只是缓存（`ledger/.preview/`，丢了重新预览）。清单投影成「定稿预览」卡认的 ledgerChecklist：
  * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
-import { checkDraftHardGates } from "../../writing/commit-quality-check.js";
+import { checkDraftHardGates, type CommitQualityIssue } from "../../writing/commit-quality-check.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
@@ -19,7 +19,7 @@ import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCall
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
 import { describeReaderWait } from "../../editorial/reader-progress.js";
 import { ensureBookOnCore } from "../../book/mirror/ensure.js";
-import { QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
+import { describeQualityIssue, QUALITY_TYPE_LABELS } from "../../writing/quality-report-refine.js";
 import { WEEKDAY_NAMES } from "../../book/story-timeline.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
@@ -103,13 +103,13 @@ export async function buildCommitPreviewToolOutput(input: {
   const rereading = await rereadBlocker(projectDir, "定稿");
   if (rereading) return blocked(chapter, [rereading], rereading);
 
-  const gates = (await checkDraftHardGates({ projectDir, draftContent: text })).map((issue) => ({ severity: issue.severity, type: issue.type, message: issue.message }));
+  const gates = await checkDraftHardGates({ projectDir, draftContent: text });
   if (gates.length > 0) {
     const reasons = gates.map(describeGate);
     return {
       ...blocked(chapter, reasons, `第 ${chapter} 章现在还定不了：${reasons.join("；")}。`),
       // 引擎原话是英文，给人看的（卡片里点开的明细）换成同一句中文说法。
-      draftQualityIssues: gates.map((issue, index) => ({ ...issue, message: reasons[index]! })),
+      draftQualityIssues: gates.map((issue, index) => ({ severity: issue.severity, type: issue.type, message: reasons[index]! })),
       ...(gates.some((issue) => issue.type === "too_short")
         ? { modelHint: "字数不足是硬阻断：先和作者商量扩写方向、把工作稿写够，再重新预览；不要在字数不足时反复预览。" }
         : {}),
@@ -157,22 +157,9 @@ function blocked(chapter: number, reasons: readonly string[], summary: string): 
   };
 }
 
-function describeGate(issue: { readonly type: string; readonly message: string }): string {
-  if (issue.type === "too_short") return describeLengthShortfall(issue.message);
+function describeGate(issue: CommitQualityIssue): string {
+  if (issue.type === "too_short") return `${describeQualityIssue(issue)}${LENGTH_RULE_HINT}`;
   return QUALITY_TYPE_LABELS[issue.type] ?? "正文过不了定稿硬闸";
-}
-
-/**
- * too_short 的引擎消息形如 `Draft body is shorter than 2250 Chinese characters (current: 2000).`，
- * 只从里面取两个数字；取不到也给定性文案，绝不吞掉长度阻断。
- */
-function describeLengthShortfall(message: string): string {
-  const min = /shorter than (\d+)/u.exec(message)?.[1];
-  const current = /current: (\d+)/u.exec(message)?.[1];
-  if (min === undefined) return `正文字数低于写作规则要求的下限，需扩写后再定稿${LENGTH_RULE_HINT}`;
-  return current === undefined
-    ? `正文字数低于写作规则要求的下限 ${min} 字，需扩写后再定稿${LENGTH_RULE_HINT}`
-    : `正文 ${current} 字，低于写作规则要求的下限 ${min} 字（只数汉字，不含标点和标题），需扩写后再定稿${LENGTH_RULE_HINT}`;
 }
 
 /** 下限是作者自己的写作规则：手写短章的作者得知道去哪改（重构 P6 第 7 步）。 */
@@ -232,7 +219,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
   const autoCount = others(preview.auto).length;
   const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
   const notes: string[] = [];
-  if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条原句对不上或指向前文没有的，没记上`);
+  if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条没记上（原因在清单里）`);
   if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
   if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
     notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);

@@ -717,6 +717,21 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report.issues).toEqual([]);
   });
 
+  it("写手用英文直引号写的对话 → 落盘前换成中文引号（长篇连写 2026-10-24：整章直引号和别章混着）", async () => {
+    const projectDir = await createFixtureProject();
+    const report = await runFastDraft({
+      projectDir,
+      chapter: 3,
+      chapterGoal: "秘书出场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "秘书登场", content: "\"今晚还有一场谈判。\"林婉清说，\"别忘了。\"" })),
+      },
+      selectedCharacters: ["林婉清"],
+    });
+    expect(report.passed).toBe(true);
+    expect(report.draftBody).toBe("“今晚还有一场谈判。”林婉清说，“别忘了。”");
+  });
+
   it("关卡只认本章带上的人：设定本里有、但这章没带的人不算；挡下时只列名字", async () => {
     const projectDir = await createFixtureProject();
 

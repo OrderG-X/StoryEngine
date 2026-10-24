@@ -81,20 +81,33 @@ describe("专员窗口：补笔记", () => {
     expect(b.messages).toEqual(a.messages);
   });
 
-  it("改第 3 章正文：3 及以后重写、1～2 复用；超出这次要读的章号的旧笔记也一并作废", async () => {
+  it("改第 3 章正文：只重写第 3 章（窗口是读完第 2 章那一刻的），1～2、4～5 照用", async () => {
     const dir = await makeBook(5);
     await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: fakeModel().callModel });
     await writeChapter(dir, 3, "正文3，改过了。");
     const second = fakeModel();
     const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 4, callModel: second.callModel });
-    expect(out).toMatchObject({ built: 2, reused: 2, missing: 0 });
-    expect(second.calls.map((call) => call.messages.at(-1)!.content.match(/第 (\d+) 章/u)![1])).toEqual(["3", "4"]);
-    expect(second.calls[0]!.messages.at(-1)!.content).toContain("改过了");
-    // 第 5 章的笔记是在旧窗口上写的：已作废，下次读到 5 要重写
-    expect(await notesOf(dir)).toEqual(["0001.json", "0002.json", "0003.json", "0004.json"]);
+    expect(out).toMatchObject({ built: 1, reused: 3, missing: 0, readThrough: 4 });
+    expect(second.calls).toHaveLength(1);
+    const ask = second.calls[0]!.messages;
+    expect(ask.at(-1)!.content).toContain("改过了");
+    expect(ask.map((message) => message.content).join("\n")).not.toContain("第4章的笔记");
+    expect(out.messages.map((message) => message.content)).toEqual(expect.arrayContaining(["第3章的笔记", "第4章的笔记"]));
     const third = fakeModel();
-    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: third.callModel });
-    expect(third.calls).toHaveLength(1);
+    expect(await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 5, callModel: third.callModel })).toMatchObject({ built: 0, reused: 5 });
+    expect(third.calls).toHaveLength(0);
+  });
+
+  it("改过的章算要补的：超过 maxCatchUp 才走冷窗口，改一两章不算", async () => {
+    const dir = await makeBook(6);
+    await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 6, callModel: fakeModel().callModel });
+    await writeChapter(dir, 1, "正文1，改过了。");
+    await writeChapter(dir, 4, "正文4，改过了。");
+    expect(await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 6, callModel: fakeModel().callModel, maxCatchUp: 1 })).toMatchObject({ missing: 2, built: 0, readThrough: 0 });
+    const model = fakeModel();
+    const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 6, callModel: model.callModel, maxCatchUp: 2 });
+    expect(out).toMatchObject({ built: 2, reused: 4, waited: { from: 1, to: 4 } });
+    expect(model.calls.map((call) => call.messages.at(-1)!.content.match(/第 (\d+) 章/u)![1])).toEqual(["1", "4"]);
   });
 
   it("提示词（角色说明 / 记笔记要求）改了，旧笔记不再算数", async () => {
@@ -106,12 +119,12 @@ describe("专员窗口：补笔记", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("笔记文件坏了当没有，从那一章接着重写", async () => {
+  it("笔记文件坏了当没有，只重写那一章", async () => {
     const dir = await makeBook(3);
     await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel: fakeModel().callModel });
     await writeFile(join(dir, "agents", "tester", "notes", "0002.json"), "{坏的", "utf-8");
     const out = await ensureReaderWindow({ projectDir: dir, role: ROLE, upTo: 3, callModel: fakeModel().callModel });
-    expect(out).toMatchObject({ built: 2, reused: 1 });
+    expect(out).toMatchObject({ built: 1, reused: 2 });
   });
 
   it("某章定稿读不到：停在前一章，不报错", async () => {
@@ -464,11 +477,11 @@ describe("专员窗口：卷笔记（T5 长书）", () => {
     const dir = await longBook(25);
     const first = volumeFakeModel();
     await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: first.callModel, maxChars: VOLUME_BUDGET });
-    // 改第 3 章正文 → 3 及以后的笔记重写（内容也真的不一样）→ 盖着它们的卷笔记（1-10）哈希对不上、重生成
+    // 改第 3 章正文 → 只有第 3 章的笔记重写（内容也真的不一样）→ 盖着它的卷笔记（1-10）哈希对不上、重生成
     await writeChapter(dir, 3, "第3章的正文，改过了。");
     const second = volumeFakeModel(600, 900, "改");
     const out = await ensureReaderWindow({ projectDir: dir, role: VOLUME_ROLE, upTo: 25, callModel: second.callModel, maxChars: VOLUME_BUDGET });
-    expect(out.built).toBe(23); // 3～25 章的笔记重写
+    expect(out.built).toBe(1); // 只重写第 3 章的笔记
     expect(out.volumesBuilt).toBeGreaterThan(0);
     const volumeCalls = second.calls.filter((call) => call.messages.at(-1)!.content.includes("缩写成一份卷笔记"));
     expect(volumeCalls.length).toBeGreaterThan(0);

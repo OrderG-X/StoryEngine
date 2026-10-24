@@ -16,6 +16,7 @@ import {
   capChatHistoryWindow,
   closingFallbackText,
   emitDraftCheckCards,
+  endsOnNextSteps,
   formatChapterStatusLine,
   isMastraToolValidationError,
   normalizeForwardedToolResult,
@@ -95,6 +96,26 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
       { type: "finish", payload: { stepResult: { reason: "stop" } } },
     ]);
     expect(collectText(done.events)).not.toContain("步数用完了");
+  });
+
+  it("停在出选项那一步是有意收尾：不报「步数用完」", async () => {
+    const out = await run([
+      textChunk("改好了三处。"),
+      ...toolChunks("suggest_next_steps", { ok: true }),
+      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
+    ]);
+    expect(collectText(out.events)).toBe("改好了三处。");
+  });
+
+  it("endsOnNextSteps：这一步说了话、又只调了出选项的工具才收尾（长篇连写：不收的话模型把同一段话再说一遍）", () => {
+    const step = (text: string, ...names: string[]) => ({ text, toolCalls: names.map((toolName) => ({ toolName })) });
+    expect(endsOnNextSteps({ steps: [step("", "revise_draft"), step("改好了。", "suggest_next_steps")] })).toBe(true);
+    // 先出选项、下一步才说结果的模型：这一步没说话，不停（长篇连写：停了作者只看到工具摘要）
+    expect(endsOnNextSteps({ steps: [step("", "foundation_write"), step("", "suggest_next_steps")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("改好了。", "revise_draft", "suggest_next_steps")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("", "suggest_next_steps"), step("", "read_draft")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("说了")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [] })).toBe(false);
   });
 
   it("P11：出稿时核过账、这轮 AI 没自己核 → 回合结束报出要补核账卡的章；AI 自己核过 / 出稿没核成的不报", async () => {

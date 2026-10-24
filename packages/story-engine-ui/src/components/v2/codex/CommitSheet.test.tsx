@@ -139,7 +139,7 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
   it("记账员的提醒和没记上的照实列", () => {
     render(<CommitSheet preview={preview({ notes: ["记账员还在读前文（笔记到第 3 章）"], notRecorded: ["新人物：原句对不上"] })} busy={false} onClose={vi.fn()} />);
     expect(screen.getByText("记账员还在读前文（笔记到第 3 章）")).toBeTruthy();
-    expect(screen.getByText("没记上 1 条（原句对不上）")).toBeTruthy();
+    expect(screen.getByText("没记上 1 条")).toBeTruthy();
     // 没给 onConfirm（旧预览）＝只看：没有【定稿】、没有选择按钮。
     expect(screen.queryByRole("button", { name: "确认定稿" })).toBeNull();
     expect(screen.queryByRole("button", { name: "不记" })).toBeNull();

@@ -93,14 +93,14 @@ function refusalReason(failure: RevisionOneShotFailure): string {
     case "exact_replacement_noop":
       return "给的替换文本与原句一致，等于没改；工作稿未改动。";
     case "model_output_unusable":
-      return `修订模型输出不可用，未改动工作稿：${failure.detail ?? "未知错误"}`;
+      return `AI 这次没给出能用的改法（${failure.detail ?? "原因不明"}），稿子没动，可以再试一次。`;
     case "before_text_not_found":
     case "before_text_ambiguous":
-      return "模型回吐的原句没法在工作稿里唯一定位，未改动工作稿。请重试或把要改的原文说得更精确。";
+      return "AI 改出来的句子在稿子里对不上原处，这处没改。再试一次，或把要改的原文说得更准。";
     case "drift_rejected":
-      return "模型改写的不是你指定的那段（它去动了别处），工作稿未改动。请把要改的原文逐字说清，或重试。";
+      return "AI 去改了别处、不是你指定的那段，这处没改。把要改的原文逐字说清，或再试一次。";
     case "noop":
-      return "模型回吐的片段与原文一致，等于没有任何修改；工作稿未改动。";
+      return "AI 改出来的和原文一样，等于没有任何修改；稿子没动。";
     case "target_unchanged":
       return "改写后你点名的那句仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或把要改的原文逐字说清。";
   }

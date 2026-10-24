@@ -105,6 +105,18 @@ describe("记账员交回的账单", () => {
     ]);
   });
 
+  it("重定稿：新开的线索填了这次列出的 R 短号就带上那条的真编号，别的写法照新开记", () => {
+    const parsed = parseKeeperOutput(JSON.stringify({
+      threads: [
+        { op: "open", type: "question", title: "钟停的缘故", thread: " r2 ", note: "钟停了", quote: q },
+        { op: "open", type: "question", title: "门外的人", thread: "R9", note: "有人敲门", quote: q },
+        { op: "open", type: "question", title: "井里", thread: "T1", note: "井里有东西", quote: q },
+      ],
+    }), { ...handles, reopenHandles: new Map([["R1", "t1-1"], ["R2", "t1-2"]]) });
+    expect(parsed?.entries.map((entry) => (entry.kind === "thread" ? entry.thread : undefined))).toEqual(["t1-2", undefined, undefined]);
+    expect(parsed?.drops).toEqual([]);
+  });
+
   it("章里换了天：daysInChapter 带上摘的换天原句；写 0 就不记、也不带原句", () => {
     const changed = parseKeeperOutput(JSON.stringify({ time: { basis: "judged", daysSincePrevious: 0, daysInChapter: 1, dayChangeQuote: "第二天早上", quote: "当晚" } }), handles);
     expect(changed?.entries[0]).toMatchObject({ kind: "time", daysInChapter: 1 });

@@ -17,7 +17,7 @@
  * 客户端断开（前端「停止」/90s 空闲看门狗掐 fetch）→ abort 本轮 agent.stream：停流式输出、
  * 尽力取消 in-flight 生成、不再开新工具步骤（已执行中的写盘工具不回滚，写盘本身有事务保护）。
  */
-import type { ModelMessage } from "ai";
+import { stepCountIs, type ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
 import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
@@ -32,6 +32,7 @@ import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { cachedCheckContinuity, checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
@@ -241,6 +242,20 @@ export function normalizeForwardedToolResult(result: unknown): unknown {
  */
 export const AGENT_TURN_MAX_STEPS = 12;
 
+/** 给作者出下一步选项的工具：它是一轮的收尾。 */
+const NEXT_STEPS_TOOL = "suggest_next_steps";
+
+/**
+ * 这一步先说了话、再只调了出选项的工具 → 这轮到此为止。不停的话模型拿到选项卡的结果会把同一段话再说一遍
+ * （长篇连写 2026-10-24：「改好了……」连着出现两遍）。这一步没说话的不停（有的模型先出选项、下一步才说结果）；
+ * 和别的工具一起调的也不停，那些结果还要转述。
+ */
+export function endsOnNextSteps({ steps }: { readonly steps: readonly { readonly text?: string; readonly toolCalls?: readonly { readonly toolName?: string }[] }[] }): boolean {
+  const last = steps.at(-1);
+  const calls = last?.toolCalls ?? [];
+  return Boolean(last?.text?.trim()) && calls.length > 0 && calls.every((call) => call.toolName === NEXT_STEPS_TOOL);
+}
+
 /** 步数用完、模型还停在工具调用上：如实告诉作者没做完。 */
 export const STEP_LIMIT_NOTICE = "\n\n（这一轮能走的步数用完了，事情可能还没做完。说「继续」我接着做。）";
 
@@ -305,6 +320,7 @@ export async function runAgentTurn(args: {
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
   let emittedText = false;
+  let lastToolName: unknown;
   // 空工具调用 id 兜底：上游三层（ai-sdk / openai-compatible / Mastra）正常都保证带 id，但适配器
   // 抽风给空串时，所有空 id 会塌成同一个——前一张工具卡被后一张覆盖、结果配错对、时间线卡死。
   // 给空 id 分配确定性合成 id；同工具名的 call/result 按 FIFO 配对，保证仍能对上。
@@ -351,6 +367,7 @@ export async function runAgentTurn(args: {
       }
       case "tool-call": {
         sawToolActivity = true;
+        lastToolName = chunk.payload?.toolName;
         const toolCallId = allocateSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
         args.sendEvent("tool-call", {
           toolCallId,
@@ -408,7 +425,8 @@ export async function runAgentTurn(args: {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
-  if (finishReason === "tool-calls" && !sawStreamError) {
+  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），不是步数用完。
+  if (finishReason === "tool-calls" && !sawStreamError && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
     const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
@@ -532,7 +550,7 @@ async function handleAgentChat(
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
-      const { usage: actionUsage, notices: actionNotices } = await withTokenMeter(() => runUserAction({
+      const { usage: actionUsage, notices: actionNotices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
         executeTool: executeUserActionTool,
@@ -541,7 +559,7 @@ async function handleAgentChat(
         scrubError: stringifyError,
         // 编辑部 R4.6：定稿后判「占位主角卡改名建议」用（缺省不给建议）。
         projectDir,
-      }));
+      })));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       for (const notice of actionNotices) sendEvent("status", { message: notice });
@@ -582,20 +600,21 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
+    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
           // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
           abortSignal: disconnectAbort.signal,
-          maxSteps: AGENT_TURN_MAX_STEPS,
+          // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」。
+          stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps],
         })
       ).fullStream as AsyncIterable<AgentTurnChunk>,
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
       ...(agentModel ? { model: agentModel } : {}),
-    }));
+    })));
 
     if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
 

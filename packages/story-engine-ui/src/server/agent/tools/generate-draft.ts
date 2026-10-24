@@ -210,7 +210,7 @@ const outputSchema = z.object({
     "被护栏拦下时为此值（ok=false）：" +
       "rereading=导入的书记账员还在通读前文记账，记完才能出稿（summary 里有进度），如实转告、别重试；" +
       "previous_chapter_not_committed=前一章没定稿、现在写本章会穿帮；" +
-      "chapter_has_text=这一章已经有稿子，整章重写要作者点「重写这一章」按钮（界面已出），告诉作者点按钮或说要改哪里，别重试；" +
+      "chapter_has_text=这一章已经有稿子，整章重写要作者点「重写这一章」按钮（随这次结果出在对话里），告诉作者点按钮或说要改哪里，别重试；" +
       "chapter_goal_not_author_words=chapterGoal 不是作者原话，原样抄作者的话（或不填）重调。",
   ),
   needsConfirmation: z.boolean().optional().describe("true=要作者点按钮才做（chapter_has_text）。"),
@@ -354,8 +354,8 @@ export function buildRewriteAwaitingAuthorOutput(
     issues: [committed ? `第 ${chapter} 章已经定稿` : `第 ${chapter} 章已有工作稿`],
     overview,
     summary: committed
-      ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写这一章」（重写前存档，可撤销；重写后要重新定稿）。`
-      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写这一章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
+      ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销；重写后要重新定稿）。`
+      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
     refreshScope: "full",
     rewriteConfirm: { chapter, ...(chapterGoal ? { chapterGoal } : {}) },
   };

@@ -11,10 +11,12 @@ const BODY: Record<Exclude<AiErrorReason, "unknown">, string> = {
   timeout: "服务商太久没有反应，可以再试一次。",
 };
 
-const UNKNOWN_BODY = "AI 服务暂时没响应，本次没有改动。";
+// 只说「没做完」，不打「没有改动」的包票：界面不知道服务端做到了哪一步（长篇连写走查 2026-10-24：出稿途中连接断了，
+// 卡上写「本次没有改动」，一分钟后稿还是写进了盘）。做了一半的，稿纸出错后会重读盘上的样子。
+const UNKNOWN_BODY = "AI 服务暂时没响应，这一步没做完。";
 
 export function aiErrorBody(reason: AiErrorReason | undefined): string {
-  return reason && reason !== "unknown" ? `${BODY[reason]}本次没有改动。` : UNKNOWN_BODY;
+  return reason && reason !== "unknown" ? `${BODY[reason]}这一步没做完。` : UNKNOWN_BODY;
 }
 
 /** 这几类得去设置里改了才会好：错误卡给「去设置」。 */

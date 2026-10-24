@@ -16,7 +16,7 @@ import { writeAiDraft } from "../../lib/ai-draft-write.js";
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
-import { reviseDraftText, type RevisionModelCaller } from "../revision-service.js";
+import { reviseDraftText, wholeSentenceTarget, type RevisionModelCaller } from "../revision-service.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";
 
@@ -117,7 +117,8 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
           projectDir: input.projectDir,
           chapter: input.chapter,
           draftContent: body,
-          targetText: item.quote,
+          // 和核账卡「改这处」一样先补成整句（半句交去改，模型写全整句、原文剩下的半句会留两遍）。
+          targetText: wholeSentenceTarget(body, item.quote),
           revisionGoal: continuityFixGoal(input.chapter, item),
           constraints: ["只改这一段，别的不动"],
           callModel: input.fixCallModel,

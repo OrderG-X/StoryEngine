@@ -96,7 +96,7 @@ export function checkTask(chapter: number, focus?: CheckerFocus): string {
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
-    "每条 contradictions：quote 逐字抄有问题的那一句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
+    "每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");

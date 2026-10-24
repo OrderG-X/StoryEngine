@@ -30,6 +30,18 @@ function Controlled({ onDismiss, ...props }: Omit<CardProps, "dismissed">) {
 const item = { quote: "她把便签塞进了抽屉。", earlierQuote: "便签一直揣在她兜里。", earlierChapter: 6, reason: "便签位置对不上" };
 const check = { chapter: 8, source: "draft" as const, sure: [item], maybe: [] };
 
+describe("旧核账卡（同一章后来又核过）", () => {
+  afterEach(() => cleanup());
+
+  it("说一句以最新一张为准；上面没给改的回调就没有「改这处 / 改掉这 N 处」，「不是问题」照留", () => {
+    render(<ContinuityCheckCard check={check} superseded onDismiss={vi.fn(async () => true)} />);
+    expect(screen.getByText("后来又核过，以最新一张为准。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "改这处" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /改掉这/u })).toBeNull();
+    expect(screen.getByRole("button", { name: "不是问题" })).toBeTruthy();
+  });
+});
+
 describe("核账卡「不是问题」", () => {
   afterEach(() => cleanup());
 
@@ -246,15 +258,26 @@ describe("核账卡「改这处」按钮直接改（重构 P6：结构化动作�
     expect(onRevise).not.toHaveBeenCalled();
   });
 
-  it("错在前文那章的（R7.3 对设定本）：交给 AI；有一条这样，「改掉这 N 处」整批交给 AI", () => {
+  it("错在前文那章的（R7.3 对设定本）：单条交给 AI；主按钮只改本章的、照旧直接改，前文那章不跟着动", () => {
     const onRevise = vi.fn();
     const onFixAction = vi.fn();
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [a, earlier], maybe: [] }} onRevise={onRevise} onFixAction={onFixAction} />);
     fireEvent.click(screen.getByRole("button", { name: "改第 3 章" }));
     expect(onRevise).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "改掉这 2 处" }));
-    expect(onRevise).toHaveBeenCalledTimes(2);
-    expect(onFixAction).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "改掉这 2 处" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "改掉本章 1 处" }));
+    expect(onRevise).toHaveBeenCalledTimes(1);
+    expect(onFixAction).toHaveBeenLastCalledWith({
+      toolName: "revise_draft",
+      chapter: 9,
+      fixes: [{ targetText: a.quote, revisionGoal: `和第 3 章「${a.earlierQuote}」对上（${a.reason}）` }],
+    });
+  });
+
+  it("确定的全错在前文那章：不出主按钮，各自「改第 N 章」", () => {
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [earlier], maybe: [] }} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /改掉/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "改第 3 章" })).toBeTruthy();
   });
 });
 

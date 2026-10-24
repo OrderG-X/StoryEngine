@@ -4,8 +4,9 @@
  * 窗口 = 角色说明 + 每章（定稿原文 → 专员自己写的笔记）。专员一章一章跟读，读完写笔记；
  * 之后要它干活（核账等），就在读完某一章那一刻的窗口后面接上新活。窗口只往后追加，前缀不变，服务商缓存能命中。
  *
- * 笔记存盘（<书目录>/agents/<角色>/notes/NNNN.json），带该章定稿正文的哈希：原文改了，这一章和往后的笔记全部作废重写
- * （后面的笔记是在旧窗口上写的）。窗口太长先把最老的几章原文折掉、只留笔记（第 1 步）；
+ * 笔记存盘（<书目录>/agents/<角色>/notes/NNNN.json），带该章定稿正文的哈希：原文改了只重写这一章的笔记，往后的照用
+ * （2026-10-24 长篇走查：原来往后的全部作废重写——改第 1 章两句，三个专员把后面每章重读一遍，书越长越贵；
+ *  笔记记的是那一章自己写了什么，那一章没改就还作数）。窗口太长先把最老的几章原文折掉、只留笔记（第 1 步）；
  * 折掉之后还超，就把整块的十份笔记缩写成一份卷笔记（2026-10-12 T5 长书）：
  *   - 卷笔记存 <书目录>/agents/<角色>/volumes/<起章>-<止章>.json，带十份下级材料的哈希，笔记变了就作废重写；
  *   - 窗口里用一条 user「【第 a～b 章（只留卷笔记）】」+ 一条 assistant 卷笔记代替这十章；
@@ -232,24 +233,6 @@ async function writeNote(projectDir: string, root: string, roleId: string, file:
   await writeAtomically(noteFile(root, roleId, file.chapter), `${JSON.stringify(file, null, 2)}\n`);
 }
 
-/** 作废第 fromChapter 章起（含）往后的全部笔记，包括超出这次要读到的章号的。 */
-async function removeNotesFrom(root: string, roleId: string, fromChapter: number): Promise<void> {
-  const files = await readdir(notesDir(root, roleId)).catch(() => [] as string[]);
-  for (const file of files) {
-    const match = /^(\d{4})\.json$/u.exec(file);
-    if (match && Number(match[1]) >= fromChapter) await rm(join(notesDir(root, roleId), file), { force: true });
-  }
-}
-
-/** 作废起章 ≥ fromChapter 的全部卷笔记（盖住的笔记重写了，它就不再算数）。 */
-async function removeVolumesFrom(root: string, roleId: string, fromChapter: number): Promise<void> {
-  const files = await readdir(volumesDir(root, roleId)).catch(() => [] as string[]);
-  for (const file of files) {
-    const match = /^(\d+)-(\d+)\.json$/u.exec(file);
-    if (match && Number(match[1]) >= fromChapter) await rm(join(volumesDir(root, roleId), file), { force: true });
-  }
-}
-
 const readUserContent = (role: ReaderRole, chapter: number, body: string): string =>
   `【第 ${chapter} 章 定稿原文】\n${body}\n\n${role.noteTask}`;
 
@@ -408,23 +391,31 @@ interface NotesState {
   readonly bodies: readonly string[];
   /** 从第 1 章起连续有效（对得上正文和提示词）的笔记。 */
   readonly valid: readonly ReaderWindowEntry[];
+  /** 第 1..upTo 章各自的笔记（下标 = 章号 - 1）：对得上就有，缺了、对不上（这一章改过）是 undefined。 */
+  readonly notes: readonly (ReaderWindowEntry | undefined)[];
+  /** 要重写笔记的章（缺的、对不上的），从小到大。 */
+  readonly stale: readonly number[];
 }
 
 async function inspectNotes(input: { readonly projectDir: string; readonly root: string; readonly role: ReaderRole; readonly upTo: number }): Promise<NotesState> {
   const roleHash = roleHashOf(input.role);
   const bodies: string[] = [];
-  const valid: ReaderWindowEntry[] = [];
-  let broken = false;
+  const notes: (ReaderWindowEntry | undefined)[] = [];
+  const stale: number[] = [];
   for (let chapter = 1; chapter <= input.upTo; chapter += 1) {
     const body = await readFinalBody(input.projectDir, chapter);
     if (!body) break;
     bodies.push(body);
-    if (broken) continue;
     const note = await readNote(input.root, input.role.id, chapter);
-    if (note && note.textHash === sha(body) && note.roleHash === roleHash) valid.push({ chapter, body, note: note.note });
-    else broken = true;
+    if (note && note.textHash === sha(body) && note.roleHash === roleHash) notes.push({ chapter, body, note: note.note });
+    else {
+      notes.push(undefined);
+      stale.push(chapter);
+    }
   }
-  return { upTo: bodies.length, bodies, valid };
+  const firstStale = stale[0] ?? bodies.length + 1;
+  const valid = notes.slice(0, firstStale - 1) as ReaderWindowEntry[];
+  return { upTo: bodies.length, bodies, valid, notes, stale };
 }
 
 /** 已定稿到第几章（chapters/NNNN.md 里最大的章号）。目录读不到是 0。 */
@@ -479,7 +470,7 @@ function buildVolumeMessages(role: ReaderRole, from: number, to: number, materia
 export interface EnsuredReaderWindow {
   /** 读完第 upTo 章那一刻的窗口；maxCatchUp 触发（missing > 0）时为空。 */
   readonly messages: BrainMessage[];
-  /** 这次新写的笔记数。 */
+  /** 这次新写的笔记数（只写缺的、对不上的那几章）。 */
   readonly built: number;
   /** 直接复用的笔记数。 */
   readonly reused: number;
@@ -497,8 +488,8 @@ export interface EnsuredReaderWindow {
 }
 
 /**
- * 确保专员读到了第 upTo 章：第 1..upTo 章每章的笔记都在、且对得上当前定稿正文，缺的按顺序补写。
- * 第一个对不上（或缺失）的章起往后的笔记全部作废重写（盖住它们的卷笔记一并作废）。某章定稿读不到就停在它前一章（不报错）。
+ * 确保专员读到了第 upTo 章：第 1..upTo 章每章的笔记都在、且对得上当前定稿正文，缺的、对不上的按章序补写，
+ * 补第 N 章时窗口是读完第 N-1 章那一刻的（往后对得上的笔记照用，盖住改过那章的卷笔记作废）。某章定稿读不到就停在它前一章（不报错）。
  * 折掉原文还超预算时按规划生成卷笔记（角色要有 volumeTask）：写每一章笔记用的窗口也先卷好，
  * 保证任何时刻发给模型的消息都不超预算。补笔记的模型调用失败照实抛出——已写下的笔记留着，下次接着补。
  */
@@ -527,8 +518,8 @@ export async function ensureReaderWindow(input: {
   const maxChars = input.maxChars ?? READER_WINDOW_MAX_CHARS;
   const inspect = () => inspectNotes({ projectDir: input.projectDir, root, role: input.role, upTo: input.upTo });
   const notReady = (state: NotesState): EnsuredReaderWindow =>
-    ({ messages: [], built: 0, reused: state.valid.length, missing: state.upTo - state.valid.length, volumesBuilt: 0, foldedChapters: 0, readThrough: state.valid.length });
-  const tooMany = (state: NotesState): boolean => input.maxCatchUp !== undefined && state.upTo - state.valid.length > input.maxCatchUp;
+    ({ messages: [], built: 0, reused: state.upTo - state.stale.length, missing: state.stale.length, volumesBuilt: 0, foldedChapters: 0, readThrough: state.valid.length });
+  const tooMany = (state: NotesState): boolean => input.maxCatchUp !== undefined && state.stale.length > input.maxCatchUp;
 
   // 开口那一刻（R6.1）：进锁前先看一眼已有几章有效笔记＋记下时间。等没等、等的是哪几章都按它算——
   // 排在后台补读后面时，轮到我们笔记已经齐了（built=0），但「开口时缺的章等完补上了」照样算等过。
@@ -536,16 +527,13 @@ export async function ensureReaderWindow(input: {
   const startedAt = Date.now();
   const peek = await inspect();
   if (tooMany(peek)) return notReady(peek); // 缺得太多走冷窗口：没等，不登记
-  const spokeWith = peek.valid.length;
+  const spokeStale = peek.stale;
   const run = (): Promise<EnsuredReaderWindow> => withCatchUpLock(`${root}\u0000${input.role.id}`, async () => {
     const state = await inspect();
     if (tooMany(state)) return notReady(state);
     const entries = [...state.valid];
+    // 盖住改过那章的卷笔记不用删：卷笔记带下级材料的哈希，对不上自然重写；别的卷照用。
     const firstStale = entries.length + 1;
-    if (firstStale <= state.upTo) {
-      await removeNotesFrom(root, input.role.id, firstStale);
-      await removeVolumesFrom(root, input.role.id, firstStale);
-    }
     const roleHash = roleHashOf(input.role);
     const volumeNotes = new Map<string, VolumeNoteEntry>();
     let volumesBuilt = 0;
@@ -616,6 +604,11 @@ export async function ensureReaderWindow(input: {
     }
     try {
       for (let chapter = firstStale; chapter <= state.upTo; chapter += 1) {
+        const kept = state.notes[chapter - 1];
+        if (kept) {
+          entries.push(kept);
+          continue;
+        }
         const body = state.bodies[chapter - 1]!;
         const window = await renderWindow();
         const note = (await input.callModel(
@@ -634,14 +627,14 @@ export async function ensureReaderWindow(input: {
     const final = await renderWindow();
     return {
       messages: final.messages,
-      built: entries.length - state.valid.length,
-      reused: state.valid.length,
+      built: state.stale.length,
+      reused: state.upTo - state.stale.length,
       missing: 0,
       volumesBuilt,
       foldedChapters: final.foldedChapters,
       readThrough: state.upTo,
       // 等过了（R6.1）：拿到窗口时读到的章比开口时多——多的就是这中间补上的（谁补的都算），如实带回执。
-      ...(state.upTo > spokeWith ? { waited: { from: spokeWith + 1, to: state.upTo, ms: Date.now() - startedAt } satisfies ReaderWaited } : {}),
+      ...(spokeStale.length > 0 ? { waited: { from: spokeStale[0]!, to: spokeStale.at(-1)!, ms: Date.now() - startedAt } satisfies ReaderWaited } : {}),
     };
   });
   if (!input.waitingAs) return run();

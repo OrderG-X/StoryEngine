@@ -45,11 +45,21 @@ export function latestTurnSuggestedActions(messages: readonly ChapterMessage[]):
 /** 建议条最多露几个（再多就是整张流程菜单，和下面的快捷条重复，作者反而不知道点哪个）。 */
 export const RAIL_MAX_VISIBLE = 3;
 
+/** 作者档确认按钮：AI 只提议、作者点了服务端才执行，AI 的话里会叫作者「点按钮」，所以有「下一步」选项时也得在。 */
+const AUTHOR_CONFIRM_ACTION_IDS: ReadonlySet<string> = new Set([
+  "commit-apply",
+  "prune-confirm",
+  "ledger-confirm",
+  "rewrite-confirm",
+  "foundation-confirm",
+]);
+
 /**
  * 建议条实际显示的动作：只留现在能点的（禁用的是「现在还不能做」，摆出来只是噪音），最多 3 个。
  * 通用流程菜单是按写作进度从前往后排的，超出时留最后几个（往前推进的那几步）。
+ * besideNextStep：这一轮已有「下一步」选项，只留作者档确认按钮（其余和选项重复）。
  */
-export function visibleRailActions(actions: readonly SuggestedAction[]): readonly SuggestedAction[] {
-  const enabled = actions.filter((action) => !action.disabledReason);
+export function visibleRailActions(actions: readonly SuggestedAction[], besideNextStep = false): readonly SuggestedAction[] {
+  const enabled = actions.filter((action) => !action.disabledReason && (!besideNextStep || AUTHOR_CONFIRM_ACTION_IDS.has(action.id)));
   return enabled.length > RAIL_MAX_VISIBLE ? enabled.slice(-RAIL_MAX_VISIBLE) : enabled;
 }

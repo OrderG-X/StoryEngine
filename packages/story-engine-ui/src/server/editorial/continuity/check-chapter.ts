@@ -191,12 +191,15 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
  * 上次报的问题两边原句是否都还在（本章那句在本章；前文那句在它标的那一章或本章更早处）。改掉了的不再带上。
  * 必须逐字还在：作者改错往往只改一两个字（「一九八五」→「一九八七」），模糊比对会把改好的当成还在
  * （2026-10-10 真机验收：改完三处再核，三处原样又报了一遍）。逐字对不上就不带，交给这次重新核。
+ * 两句都在本章的：两句连同中间那段也得和上次一字不差——本章前后对不上，常是作者挪了段、在中间补了一句改好的，
+ * 两句原样都还在（长篇连写 2026-10-24：作者把错位的一句挪回原处再核，「确定」照带、改好了还报）。
  */
 export function issueStillPresent(
   issue: ContinuityIssueV2,
   chapter: number,
   draftBody: string,
   earlier: EarlierText,
+  previousBody: string,
   settingStillSays: (settingQuote: string) => boolean = () => false,
 ): boolean {
   const body = normalize(draftBody);
@@ -213,9 +216,20 @@ export function issueStillPresent(
     return where.includes(quote) && settingStillSays(issue.earlierQuote);
   }
   if (!body.includes(quote)) return false;
-  if (issue.earlierChapter === chapter) return body.includes(earlierQuote);
+  if (issue.earlierChapter === chapter) {
+    const span = spanBetween(body, quote, earlierQuote);
+    return span !== undefined && span === spanBetween(normalize(previousBody), quote, earlierQuote);
+  }
   const earlierChapter = earlier.chapters.find((item) => item.chapter === issue.earlierChapter);
   return Boolean(earlierChapter) && normalize(earlierChapter!.sentences.join("")).includes(earlierQuote);
+}
+
+/** 两句按出现先后连同中间那段；有一句不在就没有。 */
+function spanBetween(text: string, a: string, b: string): string | undefined {
+  const at = text.indexOf(a);
+  const bt = text.indexOf(b);
+  if (at < 0 || bt < 0) return undefined;
+  return text.slice(Math.min(at, bt), Math.max(at + a.length, bt + b.length));
 }
 
 /** 先发一份；afterMs 后还没结果就再发一份；先成功的为准，两份都失败才算失败。 */
@@ -290,8 +304,9 @@ export async function ledgerNumberIssues(input: {
 }
 
 /**
- * 合并去重：先来的留下。同一句（一条的原句包含另一条的）只留一条——账本对账、核账记忆带上次的、
- * 核账员三遍常从同一句里各抄一段报同一个问题，作者看到两三遍。
+ * 合并去重：先来的留下。同一句只留一条——账本对账、核账记忆带上次的、核账员三遍常从同一句里各抄一段报同一个问题，作者看到两三遍。
+ * 同一句：一条的原句包含另一条的，或两段搭着抄（一条的尾巴就是另一条的开头）。长篇连写走查（2026-10-24）：
+ * 「……就在那排库房往里数第三个门」和「就在那排库房往里数第三个门，门前一小片空地……」各算一条，作者看到两遍、批量改时后一处已跟着改掉。
  */
 export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
   const merged: ContinuityIssueV2[] = [];
@@ -300,11 +315,48 @@ export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): Co
     const key = normalize(issue.quote).slice(0, 16);
     if (seen.has(key)) continue;
     const quote = normalize(issue.quote);
-    if (merged.some((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); })) continue;
+    if (merged.some((other) => sameSentence(normalize(other.quote), quote))) continue;
     seen.add(key);
     merged.push(issue);
   }
   return merged;
+}
+
+/**
+ * 一对方向相反的条目（本章 A 句对不上本章 B 句、又报 B 句对不上 A 句）：两条各让改对方，「改掉这 N 处」一起改，
+ * 两句会互换说法、照样对不上（长篇连写 2026-10-24：一条要把「阮」改成「刘」，一条要把「刘」改成「阮」）。
+ * 哪句对代码判不了，两条都降成「可能」，交作者在卡上挑一条改。只看本章内的冲突（对前文某章的，前文那句不在本章，不会成对）。
+ */
+export function settleMirroredIssues(issues: readonly ContinuityIssueV2[], chapter: number): ContinuityIssueV2[] {
+  const inChapter = (issue: ContinuityIssueV2): boolean =>
+    issue.earlierChapter === chapter && issue.fixChapter === undefined && !issue.againstSetting;
+  const mirrored = new Set<number>();
+  issues.forEach((a, i) => {
+    if (!inChapter(a)) return;
+    issues.forEach((b, j) => {
+      if (j <= i || !inChapter(b)) return;
+      if (sameSentence(normalize(a.quote), normalize(b.earlierQuote)) && sameSentence(normalize(b.quote), normalize(a.earlierQuote))) {
+        mirrored.add(i);
+        mirrored.add(j);
+      }
+    });
+  });
+  return issues.map((issue, index) => (mirrored.has(index) && issue.confidence === "sure" ? { ...issue, confidence: "maybe" as const } : issue));
+}
+
+/** 两段搭着抄至少这么多字才算同一句（太短的搭边，如一个「她说」，不算）。 */
+const QUOTE_OVERLAP_MIN = 8;
+
+function sameSentence(a: string, b: string): boolean {
+  return a.includes(b) || b.includes(a) || overlapsAtEdge(a, b) || overlapsAtEdge(b, a);
+}
+
+/** head 的尾巴就是 tail 的开头（搭上 ≥ QUOTE_OVERLAP_MIN 个字）。 */
+function overlapsAtEdge(head: string, tail: string): boolean {
+  for (let size = Math.min(head.length, tail.length) - 1; size >= QUOTE_OVERLAP_MIN; size -= 1) {
+    if (head.endsWith(tail.slice(0, size))) return true;
+  }
+  return false;
 }
 
 // ---------- 相对日子换算（2026-10-14 编辑部 R7.3，确定性、不调模型） ----------

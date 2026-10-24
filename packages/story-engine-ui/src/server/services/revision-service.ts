@@ -50,6 +50,7 @@ import { withBookLock } from "@actalk/story-core";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
+import { curlyStraightQuotes } from "../../lib/dialogue-quotes.js";
 
 /* ---------------------------------------------------------------------------
  * D21 定位：精确子串优先 + 空白/引号归一兜底
@@ -120,6 +121,34 @@ export function locateRevisionSpan(
     end = at + fragment.length;
   }
   return { start: origIndex[head]!, end: origIndex[end - 1]! + 1 };
+}
+
+// 不猜白名单：切句
+const SENTENCE_END = /[。！？!?…\n]/u;
+// 不猜白名单：切句
+const CLOSING_QUOTE = /[”」』"’]/u;
+/** 往外补句子时每边最多看这么多字，再远就不补（一段没句号的长文不该整段交出去）。 */
+const WHOLE_SENTENCE_MAX_REACH = 150;
+
+/**
+ * 把要改的那截补成整句（核账「改这处」用）：核账抄的原句常是半句（止于逗号），拿半句去改，模型顺手把整句写全，
+ * 原文剩下的半句还留在后面——落地成两遍（长篇连写 2026-10-24：「……不亏心，花在当年那条船的人身上，不亏心。」）。
+ * 按句读往两边补到句首句末；找不到、不唯一、或补得太远就原样返回（交给下游照常定位、如实报）。
+ */
+export function wholeSentenceTarget(draftContent: string, target: string): string {
+  const span = locateRevisionSpan(draftContent, target.trim());
+  if (typeof span === "string") return target;
+  const endsSentence = (at: number): boolean =>
+    SENTENCE_END.test(draftContent[at - 1] ?? "\n")
+    || (CLOSING_QUOTE.test(draftContent[at - 1] ?? "") && SENTENCE_END.test(draftContent[at - 2] ?? "\n"));
+  let start = span.start;
+  while (start > 0 && !endsSentence(start)) start -= 1;
+  let end = span.end;
+  while (end < draftContent.length && !endsSentence(end)) end += 1;
+  while (end < draftContent.length && draftContent[end] !== "\n" && SENTENCE_END.test(draftContent[end]!)) end += 1;
+  if (end < draftContent.length && CLOSING_QUOTE.test(draftContent[end]!) && SENTENCE_END.test(draftContent[end - 1]!)) end += 1;
+  if (span.start - start > WHOLE_SENTENCE_MAX_REACH || end - span.end > WHOLE_SENTENCE_MAX_REACH) return target;
+  return draftContent.slice(start, end).trim();
 }
 
 /* ---------------------------------------------------------------------------
@@ -196,6 +225,8 @@ export interface RevisionModelChannel {
  * 会把正常修订误杀成「请求超时」；流式 + 空闲超时只在上游彻底静默 90s 才判死、不设总时长上限。一律不传 max_tokens。
  * 非 2xx / 流中 error 帧 / finish_reason=length 由 llm-client 层诚实抛错（「模型请求失败」「模型返回错误」「被截断」）。
  */
+const REVISION_MAX_CONTENT_CHARS = 20_000;
+
 export async function createRevisionModelChannel(): Promise<RevisionModelChannel> {
   const configured = await resolveConfiguredChatModel("repair");
   return {
@@ -207,6 +238,8 @@ export async function createRevisionModelChannel(): Promise<RevisionModelChannel
         messages: [{ role: "user", content: prompt }],
         temperature: configured.profile.temperature ?? 0.45,
         responseFormat: { type: "json_object" },
+        // 改的是一两句：回的 JSON 远到不了这么长，超了就是原地打转（长篇连写 2026-10-24 探针：一次吐了两百万字才被截断）。
+        maxContentChars: REVISION_MAX_CONTENT_CHARS,
       });
       if (!content.trim()) throw new Error("修订模型返回了空内容。");
       return content;
@@ -281,13 +314,25 @@ async function generateModelPreview(input: {
     stateOverview: overview,
     ...(writingContextPack ? { writingContextPack } : {}),
   });
-  const raw = await input.callModel(prompt);
   try {
-    return parseDraftRevisionPreview(raw, input.task);
-  } catch {
-    // 引擎解析报的是英文（缺 afterText / 不是 JSON），作者看不懂：换成一句人话（P6 真机：「Draft revision preview requires afterText.」漏到对话里）。
-    throw new Error("模型这次没给出能用的改写（回的格式不对，或没写改后的句子），可以再试一次");
+    return parseDraftRevisionPreview(await input.callModel(prompt), input.task);
+  } catch (error) {
+    if (!isUnparsable(error)) throw error;
   }
+  // 模型偶尔回半截 JSON（长篇连写 2026-10-24：原文以“开头，模型把它写成英文引号、提前收了字符串）：
+  // 同一份提示再要一次，还不行才算没改成。模型调用本身出错（断网、跑飞）不重试，照常往上抛。
+  try {
+    return parseDraftRevisionPreview(await input.callModel(prompt), input.task);
+  } catch (error) {
+    if (!isUnparsable(error)) throw error;
+    // 引擎解析报的是英文（缺 afterText / 不是 JSON），作者看不懂：换成一句人话（P6 真机：「Draft revision preview requires afterText.」漏到对话里）。
+    throw new Error("回的格式不对，或没写改后的句子");
+  }
+}
+
+/** 解析失败（不是 JSON / 缺 afterText）——和模型调用本身出错分开。 */
+function isUnparsable(error: unknown): boolean {
+  return error instanceof SyntaxError || (error instanceof Error && error.message.startsWith("Draft revision"));
 }
 
 /**
@@ -311,7 +356,35 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
   const head = draftContent.slice(0, beforeSpan.start);
   const tail = draftContent.slice(beforeSpan.end);
   const replaced = draftContent.slice(beforeSpan.start, beforeSpan.end);
-  return head + trimSeamOverlap(head, replaced, afterText.trim(), tail) + tail;
+  // 模型回的直引号换成中文引号，除非这稿本来就整篇用直引号（作者自己的写法，跟着它）。
+  const rest = head + tail;
+  const text = rest.includes("\"") && !rest.includes("“") ? afterText.trim() : curlyStraightQuotes(afterText.trim());
+  return head + trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, text, tail), tail) + tail;
+}
+
+// 不猜白名单：切句
+const QUOTE_PAIRS: ReadonlyArray<readonly [string, string]> = [["“", "”"], ["「", "」"], ["『", "』"]];
+
+/**
+ * 接缝引号去重（长篇连写 2026-10-24）：局部改写不该改变这段的引号开合。两种落地错：
+ * - 要改的那截在引号里面（「她说，“」之后），新文本自己又包了一对 →「她说，““寄存人是谁……走。””」；
+ * - 要改的那截是半段话（开了引号没收），新文本把引号收了 → 原文后面还接着说，话说一半多出一个收引号。
+ * 被替换的那段原本没有、接缝处已经有了，或多出来的那个改变了这段的开合，就从新文本里去掉。纯逐字比对标点，不看意思。
+ */
+function trimSeamQuotes(head: string, replaced: string, afterText: string, tail: string): string {
+  let text = afterText;
+  for (const [open, close] of QUOTE_PAIRS) {
+    const balance = (value: string): number => value.split(open).length - value.split(close).length;
+    const extraOpen = (): boolean => text.startsWith(open) && !replaced.startsWith(open);
+    const extraClose = (): boolean => text.endsWith(close) && !replaced.endsWith(close);
+    if (extraOpen() && extraClose() && (head.endsWith(open) || tail.startsWith(close))) {
+      text = text.slice(open.length, text.length - close.length);
+      continue;
+    }
+    if (extraOpen() && (head.endsWith(open) || balance(text) > balance(replaced))) text = text.slice(open.length);
+    if (extraClose() && (tail.startsWith(close) || balance(text) < balance(replaced))) text = text.slice(0, text.length - close.length);
+  }
+  return text;
 }
 
 /** 接缝重合至少这么多字才算抄重（一两个字撞上是常事）。 */

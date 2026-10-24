@@ -19,6 +19,8 @@ export interface CommitQualityIssue {
   readonly severity: "info" | "warning" | "error";
   readonly type: string;
   readonly message: string;
+  /** too_short 带结构化字数：给人看的说法由 quality-report-refine 的 describeQualityIssue 统一出，别从 message 里抠数字。 */
+  readonly length?: { readonly min: number; readonly current: number };
   readonly candidateId?: string;
   readonly judgement?: QualityAiJudgement;
   readonly userDisplayCategory?: QualityUserDisplayCategory;
@@ -57,13 +59,15 @@ export async function checkDraftHardGates(input: {
   // 长跑 2026-10-04 #5：计数口径统一 countDraftChineseCharacters（[\u3400-\u9fff] 纯汉字，去标题行）——
   // 与出稿执法（draft-length-control）、UI 写作区显示（countTextWords 同字符集）同源，
   // 不再用自己的 \p{Script=Han} 另算一套（〇/扩展B 等边缘字符三处口径不一致）。
-  if (content && countDraftChineseCharacters(body) < minBodyChineseCharacters) {
-    issues.push(
-      errorIssue(
+  const bodyChineseCharacters = countDraftChineseCharacters(body);
+  if (content && bodyChineseCharacters < minBodyChineseCharacters) {
+    issues.push({
+      ...errorIssue(
         "too_short",
-        `Draft body is shorter than ${minBodyChineseCharacters} Chinese characters (current: ${countDraftChineseCharacters(body)}).`,
+        `Draft body is shorter than ${minBodyChineseCharacters} Chinese characters (current: ${bodyChineseCharacters}).`,
       ),
-    );
+      length: { min: minBodyChineseCharacters, current: bodyChineseCharacters },
+    });
   }
   return issues;
 }

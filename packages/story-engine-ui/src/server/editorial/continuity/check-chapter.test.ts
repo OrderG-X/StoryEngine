@@ -9,6 +9,7 @@ import {
   ledgerNumberIssues,
   mergeContinuityIssues,
   parseFullReadIssues,
+  settleMirroredIssues,
   snapIssueQuotes,
   snapToOriginal,
   splitSentences,
@@ -112,22 +113,33 @@ describe("核账记忆：上次的问题还在不在", () => {
   const issue = { quote: "他从工作台上拿起那块怀表，表盖还开着。", earlierQuote: "林舟把怀表锁进了柜台下的抽屉。", earlierChapter: 2, reason: "x", kind: "object" as const };
 
   it("两边原句逐字都在 → 在；作者只改了一个字 → 不在（不能模糊算还在）", () => {
-    expect(issueStillPresent(issue, 3, BODY, EARLIER)).toBe(true);
-    expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER)).toBe(false);
-    expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER)).toBe(false);
+    expect(issueStillPresent(issue, 3, BODY, EARLIER, BODY)).toBe(true);
+    expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER, BODY)).toBe(false);
+    expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER, BODY)).toBe(false);
+  });
+
+  it("两句都在本章：两句连同中间那段一字不差才算还在；作者挪了段、在中间补了句 → 不在（交给这次重核）", () => {
+    const before = "护士挂上吊瓶，罗睡着了。医生转头问罗：“这伤怎么来的？”许微回到床边。";
+    const here = { quote: "医生转头问罗：“这伤怎么来的？”", earlierQuote: "护士挂上吊瓶，罗睡着了。", earlierChapter: 3, reason: "睡着的人没法被问话", kind: "event" as const };
+    expect(issueStillPresent(here, 3, before, EARLIER, before)).toBe(true);
+    expect(issueStillPresent(here, 3, `${before}天黑了。`, EARLIER, before)).toBe(true);
+    const moved = "医生转头问罗：“这伤怎么来的？”护士挂上吊瓶，罗睡着了。许微回到床边。";
+    expect(issueStillPresent(here, 3, moved, EARLIER, before)).toBe(false);
+    const woke = "护士挂上吊瓶，罗睡着了。半夜罗醒了。医生转头问罗：“这伤怎么来的？”许微回到床边。";
+    expect(issueStillPresent(here, 3, woke, EARLIER, before)).toBe(false);
   });
 
   it("对设定本的条目：错的那句还在（本章或 fixChapter 那章）、设定本还这么写 → 在；句子改了或设定改了 → 不在", () => {
     const SETTING = "外貌：左腿有旧伤";
     const settingSays = (quote: string) => quote === SETTING;
     const here = { quote: "周婶在门口喊他。", earlierQuote: SETTING, earlierChapter: 3, reason: "x", kind: "event" as const, againstSetting: { label: "人物卡" } };
-    expect(issueStillPresent(here, 3, BODY, EARLIER, settingSays)).toBe(true);
-    expect(issueStillPresent(here, 3, BODY.replace("周婶在门口喊他。", "门口没人。"), EARLIER, settingSays)).toBe(false);
-    expect(issueStillPresent(here, 3, BODY, EARLIER, () => false)).toBe(false);
-    expect(issueStillPresent(here, 3, BODY, EARLIER)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY, settingSays)).toBe(true);
+    expect(issueStillPresent(here, 3, BODY.replace("周婶在门口喊他。", "门口没人。"), EARLIER, BODY, settingSays)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY, () => false)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY)).toBe(false);
     const there = { ...here, quote: "林溪说她后天走。", earlierChapter: 2, fixChapter: 2 };
-    expect(issueStillPresent(there, 3, BODY, EARLIER, settingSays)).toBe(true);
-    expect(issueStillPresent({ ...there, fixChapter: 1 }, 3, BODY, EARLIER, settingSays)).toBe(false);
+    expect(issueStillPresent(there, 3, BODY, EARLIER, BODY, settingSays)).toBe(true);
+    expect(issueStillPresent({ ...there, fixChapter: 1 }, 3, BODY, EARLIER, BODY, settingSays)).toBe(false);
   });
 });
 
@@ -137,6 +149,41 @@ describe("合并去重 mergeContinuityIssues：同一句只报一次", () => {
   it("一条的原句包含另一条的 → 只留先来的", () => {
     const merged = mergeContinuityIssues([issue("他从工作台上拿起那块怀表，表盖还开着。", "位置对不上"), issue("拿起那块怀表", "同一件事又报一遍")]);
     expect(merged.map((item) => item.reason)).toEqual(["位置对不上"]);
+  });
+
+  it("两段搭着抄（一条的尾巴是另一条的开头，搭上 8 字以上）→ 同一句，只留先来的；只搭一两个字的不算", () => {
+    const merged = mergeContinuityIssues([
+      issue("那扇门她来过不止一回，就在那排库房往里数第三个门", "门的位置对不上"),
+      issue("就在那排库房往里数第三个门，门前一小片空地", "同一扇门又报一遍"),
+      issue("门前一小片空地，她说", "搭边太短"),
+      issue("她说完就走了。", "另一句"),
+    ]);
+    expect(merged.map((item) => item.reason)).toEqual(["门的位置对不上", "搭边太短", "另一句"]);
+  });
+});
+
+describe("方向相反的一对 settleMirroredIssues：两条各让改对方，降成「可能」交作者挑", () => {
+  const LIU = "落款那个姓，姓刘。刘成泰。";
+  const RUAN = "船东阮成泰。被扣货车挂靠单位。";
+  const inChapter = (quote: string, earlierQuote: string, extra: Partial<ContinuityIssueV2> = {}): ContinuityIssueV2 =>
+    ({ quote, earlierQuote, earlierChapter: 19, reason: "姓对不上", kind: "identity", confidence: "sure", ...extra });
+
+  it("本章 A 对不上 B、又报 B 对不上 A → 两条都降「可能」；不成对的照旧", () => {
+    const settled = settleMirroredIssues([
+      inChapter(RUAN, LIU),
+      inChapter("阮。R。", "刮剩的是立刀旁", { earlierChapter: 18 }),
+      inChapter(LIU, RUAN),
+    ], 19);
+    expect(settled.map((item) => item.confidence)).toEqual(["maybe", "sure", "maybe"]);
+  });
+
+  it("引的是前文某章、或对设定本的，不算成对", () => {
+    const againstSetting = { label: "地点" };
+    const settled = settleMirroredIssues([
+      inChapter(RUAN, LIU, { earlierChapter: 18 }),
+      inChapter(LIU, RUAN, { againstSetting }),
+    ], 19);
+    expect(settled.map((item) => item.confidence)).toEqual(["sure", "sure"]);
   });
 });
 

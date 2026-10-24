@@ -22,6 +22,20 @@ describe("refineQualityReport · 质检分层 + 软误报降级", () => {
     expect(r.soft[0]?.label).toBe("没出现任何已知角色名"); // 真实 type 名也有标签
   });
 
+  it("给人看的说法是中文：字数不足用结构化字数，不把引擎英文原话摆给作者；没收录的 type 用原话", () => {
+    const r = refineQualityReport(report([
+      {
+        severity: "error", type: "too_short",
+        message: "Draft body is shorter than 2500 Chinese characters (current: 1628).",
+        length: { min: 2500, current: 1628 },
+      },
+      { severity: "warning", type: "missing_character_name", message: "Draft does not mention any known character name." },
+      { severity: "warning", type: "character_names_degraded", message: "人物卡读不出来：坏了" },
+    ]));
+    expect(r.blocking[0]?.message).toBe("正文 1628 字，低于写作规则要求的下限 2500 字（只数汉字，不含标点和标题）");
+    expect(r.soft.map((i) => i.message)).toEqual(["没提到设定本里任何一个人物的名字", "人物卡读不出来：坏了"]);
+  });
+
   it("软误报降级：missing_chapter_title(warning)→参考(info)，留痕透明", () => {
     const r = refineQualityReport(report([
       { severity: "warning", type: "missing_chapter_title", message: "no title" },

@@ -524,7 +524,7 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(out.needsConfirmation).toBe(true);
     expect(out.blockedReason).toBe("chapter_has_text");
     expect(out.rewriteConfirm).toEqual({ chapter: 6, chapterGoal: "让林溪回来" });
-    expect(out.summary).toContain("重写这一章");
+    expect(out.summary).toContain("「重写第 6 章」"); // 和按钮上的字一样（rewriteConfirmAction 的 label）
     expect(out.summary).not.toMatch(/generate_draft|commit_apply|commit_preview/u);
     expect(buildRewriteAwaitingAuthorOutput(6, true, {} as StateOverview).summary).toContain("已经定稿");
   });

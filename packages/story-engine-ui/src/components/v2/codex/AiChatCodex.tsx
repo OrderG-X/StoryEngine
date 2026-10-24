@@ -48,7 +48,7 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
-import { confirmableCommitPreviewMessageId, undoableCommitReportMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
@@ -398,11 +398,13 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const nextStep = busy ? null : lastAssistantNextStepPrompt(messages);
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
-  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages));
+  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStep && props.onSendMessage));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
   const undoableCommitId = undoableCommitReportMessageId(messages);
+  // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
+  const staleContinuityIds = supersededContinuityMessageIds(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -585,6 +587,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={message.id === confirmablePreviewId}
             commitUndoable={message.id === undoableCommitId}
+            continuitySuperseded={staleContinuityIds.has(message.id)}
             projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
@@ -634,8 +637,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         <ChatCapabilityBar onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} leading={props.contextActions} leadingOnly />
       ) : null}
 
-      {/* ── 建议动作条（A-6）：和「下一步」合成一条——有下一步选项就只出它，没有才出建议动作。 ── */}
-      {railActions.length > 0 && props.onSuggestedAction && !(nextStep && props.onSendMessage) ? (
+      {/* ── 建议动作条（A-6）：有「下一步」选项时只剩作者档确认按钮（确认改账 / 确认改设定…），别的和选项重复不出。 ── */}
+      {railActions.length > 0 && props.onSuggestedAction ? (
         <div className="suggest" aria-label="建议动作">
           {railActions.map((action) => (
             <button
@@ -825,6 +828,7 @@ function MessageBubbles({
   onSuggestedAction,
   commitConfirmable = false,
   commitUndoable = false,
+  continuitySuperseded = false,
   onPrefillComposer,
   liveOperation = null,
   isLatestMessage = true,
@@ -853,6 +857,8 @@ function MessageBubbles({
   readonly commitConfirmable?: boolean;
   /** 本条的定稿回执是否挂「撤销这次定稿」（最近一次改动就是这次定稿才挂）。 */
   readonly commitUndoable?: boolean;
+  /** 本条的核账卡是不是旧的（同一章后来又核过）：旧卡不给「改这处」。 */
+  readonly continuitySuperseded?: boolean;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
   /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
@@ -963,8 +969,8 @@ function MessageBubbles({
             key={card.type}
             check={card.check}
             dismissed={card.dismissed ?? []}
-            onRevise={onSendMessage}
-            onFixAction={onSendUserAction}
+            superseded={continuitySuperseded}
+            {...(continuitySuperseded ? {} : { onRevise: onSendMessage, onFixAction: onSendUserAction })}
             {...(onOpenSetting ? { onOpenSetting } : {})}
             onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}
           />

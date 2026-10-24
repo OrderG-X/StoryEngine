@@ -87,6 +87,19 @@ describe("stateOverviewAdapter", () => {
     });
   });
 
+  it("翻回前面的章：最后定稿那章的下一章也有占位（「去第 N 章」「写第 N 章」打得开）", () => {
+    const overview = {
+      ...createOverview(),
+      project: { title: "测试书", genre: "都市", logline: "", currentChapter: 1 },
+      timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
+      uiChapterFiles: [1, 2, 3].map((chapter) => ({ chapter, hasDraftFile: false, hasCommittedChapter: true, committedTitle: `正式${chapter}` })),
+    } satisfies StateOverview;
+    const workspace = workspaceFromStateOverview(overview, 1);
+    expect(workspace.chapters.map((chapter) => chapter.chapterNumber)).toEqual([1, 2, 3, 4]);
+    expect(workspace.chapters.at(-1)).toMatchObject({ chapterNumber: 4, status: "planned", title: "下一章" });
+    expect(countRealChapters(workspace.chapters, 1)).toBe(3);
+  });
+
   it("marks chapters committed only when a committed chapter file exists", () => {
     const overview = {
       ...createOverview(),
