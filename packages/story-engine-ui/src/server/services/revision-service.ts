@@ -355,7 +355,32 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
   const head = draftContent.slice(0, beforeSpan.start);
   const tail = draftContent.slice(beforeSpan.end);
   const replaced = draftContent.slice(beforeSpan.start, beforeSpan.end);
-  return head + trimSeamOverlap(head, replaced, afterText.trim(), tail) + tail;
+  return head + trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, afterText.trim(), tail), tail) + tail;
+}
+
+// 不猜白名单：切句
+const QUOTE_PAIRS: ReadonlyArray<readonly [string, string]> = [["“", "”"], ["「", "」"], ["『", "』"]];
+
+/**
+ * 接缝引号去重（长篇连写 2026-10-24）：局部改写不该改变这段的引号开合。两种落地错：
+ * - 要改的那截在引号里面（「她说，“」之后），新文本自己又包了一对 →「她说，““寄存人是谁……走。””」；
+ * - 要改的那截是半段话（开了引号没收），新文本把引号收了 → 原文后面还接着说，话说一半多出一个收引号。
+ * 被替换的那段原本没有、接缝处已经有了，或多出来的那个改变了这段的开合，就从新文本里去掉。纯逐字比对标点，不看意思。
+ */
+function trimSeamQuotes(head: string, replaced: string, afterText: string, tail: string): string {
+  let text = afterText;
+  for (const [open, close] of QUOTE_PAIRS) {
+    const balance = (value: string): number => value.split(open).length - value.split(close).length;
+    const extraOpen = (): boolean => text.startsWith(open) && !replaced.startsWith(open);
+    const extraClose = (): boolean => text.endsWith(close) && !replaced.endsWith(close);
+    if (extraOpen() && extraClose() && (head.endsWith(open) || tail.startsWith(close))) {
+      text = text.slice(open.length, text.length - close.length);
+      continue;
+    }
+    if (extraOpen() && (head.endsWith(open) || balance(text) > balance(replaced))) text = text.slice(open.length);
+    if (extraClose() && (tail.startsWith(close) || balance(text) < balance(replaced))) text = text.slice(0, text.length - close.length);
+  }
+  return text;
 }
 
 /** 接缝重合至少这么多字才算抄重（一两个字撞上是常事）。 */

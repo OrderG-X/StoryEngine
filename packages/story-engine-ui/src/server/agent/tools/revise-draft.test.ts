@@ -168,6 +168,34 @@ describe("revise_draft 草稿局部修订工具", () => {
     expect(await readFile(defaultDraftPath(projectDir, 1), "utf-8")).toContain("她回到更衣间，柜门推开，旧工装还叠在最底下。");
   });
 
+  it("新文本多包的引号不叠在接缝上、不在话说一半时收引号；原本就是引语的照常（长篇连写 2026-10-24）", async () => {
+    const projectDir = await makeProject("接缝引号");
+    const revise = async (body: string, targetText: string, afterText: string): Promise<string> => {
+      await writeDraft(projectDir, 1, `# 第1章\n\n${body}\n`);
+      const out = await runReviseDraftToolLogic({
+        projectDir,
+        chapter: 1,
+        targetText,
+        revisionGoal: "和前文对上",
+        callModel: async () => JSON.stringify({ beforeText: targetText, afterText, changeSummary: "改。" }),
+      });
+      expect(out.ok).toBe(true);
+      return readFile(defaultDraftPath(projectDir, 1), "utf-8");
+    };
+    // 引号里面那截，新文本自己又包了一对 → 两头都去掉。
+    expect(await revise("“家里旧物。”她说，“寄存人是谁，底单上有名字。”", "寄存人是谁，底单上有名字。", "“寄存人是谁，底单上写着。”"))
+      .toContain("她说，“寄存人是谁，底单上写着。”\n");
+    // 只在收尾那头叠了。
+    expect(await revise("孟叔说：“这把是外头配的私齿。”", "这把是外头配的私齿。", "这把不是局里出的，是外头配的私齿。”"))
+      .toContain("孟叔说：“这把不是局里出的，是外头配的私齿。”\n");
+    // 半段话（开了引号没收），新文本把引号收了 → 后面原文还接着说，不多出收引号。
+    expect(await revise("孟叔摩挲着包带，“说好三天内取。船没靠岸。”", "孟叔摩挲着包带，“说好三天内取。", "孟叔摩挲着包带，“说好就是那晚取，人没来。”"))
+      .toContain("孟叔摩挲着包带，“说好就是那晚取，人没来。船没靠岸。”\n");
+    // 叙述改成引语（原本不在引号里）→ 照常。
+    expect(await revise("他摇头。他说不去。灯灭了。", "他说不去。", "“我不去。”"))
+      .toContain("他摇头。“我不去。”灯灭了。");
+  });
+
   it("模型漂移到别的句子（改了别处、用户点名的目标句仍逐字留稿）→ 诚实 ok:false/applied:false，绝不谎称已改（afterfix·改稿谎报根治）", async () => {
     const projectDir = await makeProject("改稿漂移谎报");
     const draft = "# 第1章\n\n灯是我亲手关的。\n\n他点了点头，没有说话。\n";
