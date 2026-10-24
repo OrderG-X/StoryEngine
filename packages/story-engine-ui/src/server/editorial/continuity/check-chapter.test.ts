@@ -113,22 +113,33 @@ describe("核账记忆：上次的问题还在不在", () => {
   const issue = { quote: "他从工作台上拿起那块怀表，表盖还开着。", earlierQuote: "林舟把怀表锁进了柜台下的抽屉。", earlierChapter: 2, reason: "x", kind: "object" as const };
 
   it("两边原句逐字都在 → 在；作者只改了一个字 → 不在（不能模糊算还在）", () => {
-    expect(issueStillPresent(issue, 3, BODY, EARLIER)).toBe(true);
-    expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER)).toBe(false);
-    expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER)).toBe(false);
+    expect(issueStillPresent(issue, 3, BODY, EARLIER, BODY)).toBe(true);
+    expect(issueStillPresent(issue, 3, BODY.replace("表盖还开着", "表盖已合上"), EARLIER, BODY)).toBe(false);
+    expect(issueStillPresent(issue, 3, BODY.replace("工作台", "工作桌"), EARLIER, BODY)).toBe(false);
+  });
+
+  it("两句都在本章：两句连同中间那段一字不差才算还在；作者挪了段、在中间补了句 → 不在（交给这次重核）", () => {
+    const before = "护士挂上吊瓶，罗睡着了。医生转头问罗：“这伤怎么来的？”许微回到床边。";
+    const here = { quote: "医生转头问罗：“这伤怎么来的？”", earlierQuote: "护士挂上吊瓶，罗睡着了。", earlierChapter: 3, reason: "睡着的人没法被问话", kind: "event" as const };
+    expect(issueStillPresent(here, 3, before, EARLIER, before)).toBe(true);
+    expect(issueStillPresent(here, 3, `${before}天黑了。`, EARLIER, before)).toBe(true);
+    const moved = "医生转头问罗：“这伤怎么来的？”护士挂上吊瓶，罗睡着了。许微回到床边。";
+    expect(issueStillPresent(here, 3, moved, EARLIER, before)).toBe(false);
+    const woke = "护士挂上吊瓶，罗睡着了。半夜罗醒了。医生转头问罗：“这伤怎么来的？”许微回到床边。";
+    expect(issueStillPresent(here, 3, woke, EARLIER, before)).toBe(false);
   });
 
   it("对设定本的条目：错的那句还在（本章或 fixChapter 那章）、设定本还这么写 → 在；句子改了或设定改了 → 不在", () => {
     const SETTING = "外貌：左腿有旧伤";
     const settingSays = (quote: string) => quote === SETTING;
     const here = { quote: "周婶在门口喊他。", earlierQuote: SETTING, earlierChapter: 3, reason: "x", kind: "event" as const, againstSetting: { label: "人物卡" } };
-    expect(issueStillPresent(here, 3, BODY, EARLIER, settingSays)).toBe(true);
-    expect(issueStillPresent(here, 3, BODY.replace("周婶在门口喊他。", "门口没人。"), EARLIER, settingSays)).toBe(false);
-    expect(issueStillPresent(here, 3, BODY, EARLIER, () => false)).toBe(false);
-    expect(issueStillPresent(here, 3, BODY, EARLIER)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY, settingSays)).toBe(true);
+    expect(issueStillPresent(here, 3, BODY.replace("周婶在门口喊他。", "门口没人。"), EARLIER, BODY, settingSays)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY, () => false)).toBe(false);
+    expect(issueStillPresent(here, 3, BODY, EARLIER, BODY)).toBe(false);
     const there = { ...here, quote: "林溪说她后天走。", earlierChapter: 2, fixChapter: 2 };
-    expect(issueStillPresent(there, 3, BODY, EARLIER, settingSays)).toBe(true);
-    expect(issueStillPresent({ ...there, fixChapter: 1 }, 3, BODY, EARLIER, settingSays)).toBe(false);
+    expect(issueStillPresent(there, 3, BODY, EARLIER, BODY, settingSays)).toBe(true);
+    expect(issueStillPresent({ ...there, fixChapter: 1 }, 3, BODY, EARLIER, BODY, settingSays)).toBe(false);
   });
 });
 

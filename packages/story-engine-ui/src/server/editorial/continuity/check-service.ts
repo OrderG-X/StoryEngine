@@ -189,7 +189,7 @@ export async function checkChapterBody(
   // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
   const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteSource(foundation, settingQuote) !== undefined;
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
-    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, settingStillSays))
+    ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, memory.body, settingStillSays))
     : [];
   let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited };
   let coldTotal: number | undefined;
@@ -212,7 +212,7 @@ export async function checkChapterBody(
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，
   // 那时笔记多半已读齐，就是全书的核账）。正常结果照旧缓存。
   if (!reused && !result.coverage && (result.failures.length === 0 || result.issues.length > 0)) {
-    await writeCheckMemory(projectDir, { chapter, bodyHash, earlierHash, issues: result.issues }).catch((error) => {
+    await writeCheckMemory(projectDir, { chapter, bodyHash, body, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
     });
   }

@@ -191,12 +191,15 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
  * 上次报的问题两边原句是否都还在（本章那句在本章；前文那句在它标的那一章或本章更早处）。改掉了的不再带上。
  * 必须逐字还在：作者改错往往只改一两个字（「一九八五」→「一九八七」），模糊比对会把改好的当成还在
  * （2026-10-10 真机验收：改完三处再核，三处原样又报了一遍）。逐字对不上就不带，交给这次重新核。
+ * 两句都在本章的：两句连同中间那段也得和上次一字不差——本章前后对不上，常是作者挪了段、在中间补了一句改好的，
+ * 两句原样都还在（长篇连写 2026-10-24：作者把错位的一句挪回原处再核，「确定」照带、改好了还报）。
  */
 export function issueStillPresent(
   issue: ContinuityIssueV2,
   chapter: number,
   draftBody: string,
   earlier: EarlierText,
+  previousBody: string,
   settingStillSays: (settingQuote: string) => boolean = () => false,
 ): boolean {
   const body = normalize(draftBody);
@@ -213,9 +216,20 @@ export function issueStillPresent(
     return where.includes(quote) && settingStillSays(issue.earlierQuote);
   }
   if (!body.includes(quote)) return false;
-  if (issue.earlierChapter === chapter) return body.includes(earlierQuote);
+  if (issue.earlierChapter === chapter) {
+    const span = spanBetween(body, quote, earlierQuote);
+    return span !== undefined && span === spanBetween(normalize(previousBody), quote, earlierQuote);
+  }
   const earlierChapter = earlier.chapters.find((item) => item.chapter === issue.earlierChapter);
   return Boolean(earlierChapter) && normalize(earlierChapter!.sentences.join("")).includes(earlierQuote);
+}
+
+/** 两句按出现先后连同中间那段；有一句不在就没有。 */
+function spanBetween(text: string, a: string, b: string): string | undefined {
+  const at = text.indexOf(a);
+  const bt = text.indexOf(b);
+  if (at < 0 || bt < 0) return undefined;
+  return text.slice(Math.min(at, bt), Math.max(at + a.length, bt + b.length));
 }
 
 /** 先发一份；afterMs 后还没结果就再发一份；先成功的为准，两份都失败才算失败。 */

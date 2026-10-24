@@ -109,7 +109,7 @@ describe("核账服务（核账员一路）", () => {
     await writeCard("左腿有旧伤");
     const earlier = await readEarlierChapters(dir, 3);
     const setting: ContinuityIssueV2 = { quote: "周婶在门口喊他。", earlierQuote: "周婶……外貌：左腿有旧伤", earlierChapter: 3, reason: "设定写左腿", kind: "event", confidence: "sure", againstSetting: { label: "人物卡" } };
-    await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), earlierHash: hashEarlier(earlier, []), issues: [setting] });
+    await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, []), issues: [setting] });
     const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
     const edited = `${BODY}林舟低头擦着柜台。`;
     const carried = await checkChapterBody(dir, 3, edited, { readerCallModel: quiet });
@@ -335,13 +335,13 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
     const earlier = await readEarlierChapters(dir, 4);
-    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), earlierHash: hashEarlier(earlier, []), issues: [CURRENT, OLD] });
+    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, []), issues: [CURRENT, OLD] });
     return dir;
   }
 
   it("之前核第 2 章报过 → 不算第 4 章的问题，结论只提一句、条目进 earlierOpen", async () => {
     const dir = await bookWithChapter4Memory();
-    await writeCheckMemory(dir, { chapter: 2, bodyHash: "x", earlierHash: "y", issues: [TOLD] });
+    await writeCheckMemory(dir, { chapter: 2, bodyHash: "x", body: "", earlierHash: "y", issues: [TOLD] });
     const result = await checkChapterBody(dir, 4, BODY);
     expect(result.reused).toBe(true);
     expect(result.sure.map((item) => item.quote)).toEqual(["周婶在门口喊他"]);
@@ -352,7 +352,7 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
 
   it("核第 3 章时报过（第 2 章没核过）也算报过", async () => {
     const dir = await bookWithChapter4Memory();
-    await writeCheckMemory(dir, { chapter: 3, bodyHash: "x", earlierHash: "y", issues: [OLD] });
+    await writeCheckMemory(dir, { chapter: 3, bodyHash: "x", body: "", earlierHash: "y", issues: [OLD] });
     const result = await checkChapterBody(dir, 4, BODY);
     expect(result.earlierOpen).toHaveLength(1);
     expect(result.sure).toHaveLength(1);
@@ -368,7 +368,7 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
 
   it("第 1 章（错所在章之前）的核账记忆里有同一句不算报过", async () => {
     const dir = await bookWithChapter4Memory();
-    await writeCheckMemory(dir, { chapter: 1, bodyHash: "x", earlierHash: "y", issues: [TOLD] });
+    await writeCheckMemory(dir, { chapter: 1, bodyHash: "x", body: "", earlierHash: "y", issues: [TOLD] });
     const result = await checkChapterBody(dir, 4, BODY);
     expect(result.earlierOpen).toEqual([]);
   });
