@@ -96,6 +96,12 @@ describe("story agent instructions（确认口径唯一）", () => {
     expect(instructions).toContain("没调对应工具，就等于没执行");
   });
 
+  it("重写有稿的章也要真调 generate_draft：按钮随调用出现，不许凭印象叫作者去点", () => {
+    expect(instructions).toContain("作者要重写、重出已经有稿的章，也照样调 generate_draft");
+    expect(instructions).toContain("没调就没有按钮");
+    expect(instructions).not.toContain("界面已出「重写这一章」按钮");
+  });
+
   it("审校问题顺手改纪律：先 read_draft 定位逐字原文，软提醒不拦", () => {
     expect(instructions).toContain("先 read_draft 拿到正文");
     expect(instructions).toContain("提醒、不是拦");

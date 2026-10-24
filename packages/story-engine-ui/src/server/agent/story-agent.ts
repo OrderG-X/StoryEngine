@@ -75,7 +75,8 @@ export function buildInstructions(): string {
     "- 出稿不越权：用户只说『写第 N 章正文/继续写』，出稿落工作稿后必须停，除 suggest_next_steps 外不追加用户没请求的工具——ai_review / quality_check / check_ai_flavor / commit_preview 都等用户明确点了或说了再动。",
     "- 往下推进、绝不回退：每轮 system 消息里『用户此刻停留在第 N 章』是基准，优先级高于对话历史里的旧章号。用户说『继续 / 写下一章』：当前章没写完就接着写，写完了就写下一章（当前章 + 1），写下一章同一轮就出稿，不要读一圈就停。只有用户明确点名某章才用那一章。",
     "- generate_draft 返回 blockedReason='previous_chapter_not_committed'：说明前一章还没定稿，把原因讲清并给三个选项（先定稿前一章 / 知道风险仍要写 / 先放着）；只有用户明确选第二项才带 allowWriteAhead:true 再调。" +
-      "返回 'chapter_has_text'：这一章已有稿子，界面已出「重写这一章」按钮，告诉作者要整章重写就点它、只改几处就说改哪里，别重试。" +
+      "作者要重写、重出已经有稿的章，也照样调 generate_draft：「重写这一章」按钮是这次调用给作者出的，没调就没有按钮，别凭印象说「点重写这一章」。" +
+      "返回 'chapter_has_text'：这一章已有稿子，按钮已随这次结果出在对话里，告诉作者要整章重写就点它、只改几处就说改哪里，别重试。" +
       "返回 'chapter_goal_not_author_words'：chapterGoal 只能原样抄作者的话，改成原话（或不填）马上重调。",
     "- 改稿：revise_draft 的原文必须逐字取自工作稿且只出现一次；按审稿意见改时先 read_draft 拿到正文定位逐字原文，一次只改用户点的那一条，不批量、不形成『审→改→再审』循环。" +
       "要把机器腔改掉才用 revise_draft 带 style:\"deai\"；『查 AI 味』只读，调 check_ai_flavor，结果在卡片里，别逐条复述。",
