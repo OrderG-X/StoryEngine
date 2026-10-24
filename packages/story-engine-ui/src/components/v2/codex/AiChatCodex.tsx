@@ -398,7 +398,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const nextStep = busy ? null : lastAssistantNextStepPrompt(messages);
   // 「建议动作」条（A-6）：最后一轮消息上挂着的 suggestedActions（重新确认定稿/撤销本次修改/确认写入资料…）。
   // 忙碌时不渲染（回合进行中不可点；回合结束自然浮现）。retry-agent 不进条——错误气泡内已有就地重试。
-  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages));
+  const railActions = busy ? [] : visibleRailActions(latestTurnSuggestedActions(messages), Boolean(nextStep && props.onSendMessage));
   // 「确认定稿」按钮只挂在最新一张未用掉的定稿预览卡上（见 commitConfirm.ts）。
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
@@ -637,8 +637,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
         <ChatCapabilityBar onSendMessage={props.onSendMessage} onChapterButton={props.onChapterButton} disabled={workspaceBusy} leading={props.contextActions} leadingOnly />
       ) : null}
 
-      {/* ── 建议动作条（A-6）：和「下一步」合成一条——有下一步选项就只出它，没有才出建议动作。 ── */}
-      {railActions.length > 0 && props.onSuggestedAction && !(nextStep && props.onSendMessage) ? (
+      {/* ── 建议动作条（A-6）：有「下一步」选项时只剩作者档确认按钮（确认改账 / 确认改设定…），别的和选项重复不出。 ── */}
+      {railActions.length > 0 && props.onSuggestedAction ? (
         <div className="suggest" aria-label="建议动作">
           {railActions.map((action) => (
             <button
