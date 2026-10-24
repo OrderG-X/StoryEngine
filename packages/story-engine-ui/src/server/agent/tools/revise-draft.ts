@@ -93,7 +93,7 @@ function refusalReason(failure: RevisionOneShotFailure): string {
     case "exact_replacement_noop":
       return "给的替换文本与原句一致，等于没改；工作稿未改动。";
     case "model_output_unusable":
-      return `AI 这次没给出能用的改法，稿子没动：${failure.detail ?? "原因不明"}`;
+      return `AI 这次没给出能用的改法（${failure.detail ?? "原因不明"}），稿子没动，可以再试一次。`;
     case "before_text_not_found":
     case "before_text_ambiguous":
       return "AI 改出来的句子在稿子里对不上原处，这处没改。再试一次，或把要改的原文说得更准。";

@@ -803,6 +803,8 @@ async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0
     : `第 ${action.chapter} 章的走法没想出来。`);
 }
 
+const UNREVISED = "未修订：";
+
 /** 「改这处」按钮：逐处直接调 revise_draft（只改那一段），回执照实说改了几处、哪几处没改成。 */
 async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
   readonly action: Extract<UserAction, { readonly toolName: "revise_draft" }>;
@@ -851,7 +853,10 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
     if (result?.ok === true && result.applied === true) {
       applied += 1;
     } else {
-      failed.push({ fix, why: typeof result?.summary === "string" && result.summary.trim() ? humanizeToolNames(result.summary.trim()) : "没写进工作稿" });
+      // 回执已说「没改成」，工具摘要开头的「未修订：」不再叠一层。
+      const summary = typeof result?.summary === "string" ? result.summary.trim() : "";
+      const why = summary.startsWith(UNREVISED) ? summary.slice(UNREVISED.length) : summary;
+      failed.push({ fix, why: why ? humanizeToolNames(why) : "没写进工作稿" });
     }
   }
   const total = action.fixes.length;

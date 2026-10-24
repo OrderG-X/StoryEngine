@@ -813,7 +813,7 @@ describe("核账「改这处」结构化动作（revise_draft，重构 P6：按�
   });
 
   it("没改成（原句没找到 / 报错）照实说原因，给「让 AI 改」，不说改好了", async () => {
-    const events = await run([fix("甲")], async () => ({ ok: false, applied: false, summary: "原文在稿里没找到" }));
+    const events = await run([fix("甲")], async () => ({ ok: false, applied: false, summary: "未修订：原文在稿里没找到" }));
     expect(textOf(events)).toBe("这一处没改成：原文在稿里没找到");
     const next = events.at(-1)!.data.output as { question: string; choices: { label: string; intent: string }[] };
     expect(next.question).toBe("没改成，接下来？");

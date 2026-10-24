@@ -164,6 +164,8 @@ function previewRefusalMessage(failure: RevisionFailure): string {
       return "AI 改出来的句子在稿子里对不上原处，没改。再试一次，或把要改的那段选准一点。";
     case "drift_rejected":
       return "AI 去改了别处、不是你选的那段，没改。重新选一下要改的那段，或再试一次。";
+    case "model_output_unusable":
+      return `AI 这次没给出能用的改法（${failure.detail ?? "原因不明"}），没改，可以再试一次。`;
     default:
       return failure.detail ?? "修订预览生成失败。";
   }
