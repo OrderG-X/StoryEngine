@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withUpstreamSilenceGuard } from "./model.js";
 
 // 2026-10-08 十章验收第三轮：服务商临时故障时请求一直等不到响应头，底层 5 分钟才判死且不重试。
-const IDLE = 40;
+const IDLE = 200; // 满载跑全套时计时器会抖几十毫秒：阈值太小（原 40）会把「有内容在续命」误判成静默
 
 function streamOf(chunks: readonly string[], gapMs = 0): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();

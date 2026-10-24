@@ -60,7 +60,7 @@ function readerModel(confidence = "sure", verdict = confidence) {
 const notesCount = async (dir: string) => (await readdir(join(dir, "agents", "checker", "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).length;
 
 describe("核账服务（核账员一路）", () => {
-  it("核一章：先补前文笔记，再三遍核账加一轮自复核，问题带把握进结果", async () => {
+  it("核一章：先补前文笔记，再三遍核账（每遍两次）加一轮自复核，问题带把握进结果", async () => {
     const dir = await makeBook();
     const reader = readerModel();
     const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel });
@@ -71,7 +71,7 @@ describe("核账服务（核账员一路）", () => {
     // 结论那句不带逐条清单（重构 P6：清单在核账卡和稿纸划线上）。
     expect(result.headline).toContain("确定对不上 1 处");
     expect(result.headline).not.toContain(AUNT.quote);
-    expect(reader.calls).toEqual({ notes: 2, checks: 3, reviews: 1 });
+    expect(reader.calls).toEqual({ notes: 2, checks: 6, reviews: 1 });
     expect(await notesCount(dir)).toBe(2);
   });
 
