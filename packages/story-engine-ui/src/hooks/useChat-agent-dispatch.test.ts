@@ -781,7 +781,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
       (m) => m.role === "assistant" && hasCard(m, "error"),
     );
     expect(errorMessages).toHaveLength(1);
-    expect(errorMessages[0].content).toBe("AI 服务暂时没响应，本次没有改动。");
+    expect(errorMessages[0].content).toBe("AI 服务暂时没响应，这一步没做完。");
     expect(cardOf(errorMessages[0], "error")?.detail).toContain("落盘失败");
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });

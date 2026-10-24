@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { draftPath, draftWrite, runCommand, withBookLock } from "@actalk/story-core";
 import { chapterWordsNow, recordChapterWords } from "./word-stats.js";
+import { TURN_ABORTED_MESSAGE, turnAborted } from "./turn-abort.js";
 
 export class AiDraftWriteError extends Error {
   constructor(readonly code: string, message: string) {
@@ -40,6 +41,8 @@ export async function writeAiDraft(projectDir: string, input: AiDraftWriteInput)
   const path = join(projectDir, draftPath(input.chapter));
   // 写和回读在同一把锁里：回给界面的就是这次写下的那份。
   return withBookLock(projectDir, async () => {
+    // 作者喊停之后后到的稿不落盘（锁里再问一次：等锁的工夫也可能停了）。
+    if (turnAborted()) throw new AiDraftWriteError("turn_aborted", TURN_ABORTED_MESSAGE);
     // 写作统计：写之前量一下这章多少字，写完按差值记成 AI 写的。
     const wordsBefore = await chapterWordsNow(projectDir, input.chapter).catch(() => undefined);
     const outcome = await runCommand(projectDir, draftWrite, {

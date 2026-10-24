@@ -32,6 +32,7 @@ import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
 import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
+import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
 import { cachedCheckContinuity, checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
@@ -532,7 +533,7 @@ async function handleAgentChat(
     // 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行工具，不经模型、不过意图词表。
     if (parsedAction.kind === "action") {
       const actionStarted = Date.now();
-      const { usage: actionUsage, notices: actionNotices } = await withTokenMeter(() => runUserAction({
+      const { usage: actionUsage, notices: actionNotices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(() => runUserAction({
         action: parsedAction.action,
         requestContext,
         executeTool: executeUserActionTool,
@@ -541,7 +542,7 @@ async function handleAgentChat(
         scrubError: stringifyError,
         // 编辑部 R4.6：定稿后判「占位主角卡改名建议」用（缺省不给建议）。
         projectDir,
-      }));
+      })));
       // 定稿按钮不经对话 AI，但定稿里有章节声明、抽事实对账等模型调用，同样记账。
       console.info(`[token-usage] ${describeTokenUsage(actionUsage)}`);
       for (const notice of actionNotices) sendEvent("status", { message: notice });
@@ -582,7 +583,7 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await withTokenMeter(async () => runAgentTurn({
+    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
@@ -595,7 +596,7 @@ async function handleAgentChat(
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
       ...(agentModel ? { model: agentModel } : {}),
-    }));
+    })));
 
     if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
 
