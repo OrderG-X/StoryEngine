@@ -69,6 +69,28 @@ function fakeModel(byPass: Partial<Record<keyof typeof FOCUS_KEYS, Verdict[] | E
   return { callModel, calls, checkCalls: () => calls.filter((call) => call.json) };
 }
 
+describe("核账员：每遍核两次（G）", () => {
+  it("passRepeats=2：三遍各发两次、同样的输入；两次报的并起来去重", async () => {
+    const dir = await makeBook();
+    let objectsCalls = 0;
+    const calls: string[] = [];
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      calls.push(last);
+      if (!last.includes(FOCUS_KEYS.objects)) return pass();
+      objectsCalls += 1;
+      // 第一次只看到怀表，第二次两条都看到：并起来两条、怀表不重复
+      return objectsCalls === 1 ? pass({ ...WATCH, confidence: "sure" }) : pass({ ...WATCH, confidence: "maybe" }, { ...AUNT, confidence: "maybe" });
+    };
+    const result = await checkChapterByReader({ projectDir: dir, chapter: 3, draftBody: BODY, callModel, variant: { passRepeats: 2 } });
+    expect(calls).toHaveLength(6);
+    for (const key of Object.values(FOCUS_KEYS)) expect(calls.filter((call) => call.includes(key))).toHaveLength(2);
+    expect(new Set(calls.filter((call) => call.includes(FOCUS_KEYS.objects))).size).toBe(1);
+    expect(result.issues.map((issue) => [issue.quote, issue.confidence])).toEqual([[WATCH.quote, "sure"], [AUNT.quote, "maybe"]]);
+  });
+});
+
 describe("核账员：三遍合并", () => {
   it("三遍各自查、合并去重：一条的原句包含另一条的算同一条，留先出现的；同一句 sure 优先", async () => {
     const dir = await makeBook();
@@ -654,8 +676,8 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     for (const { messages } of [...byKind().passes, ...byKind().review]) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
   });
 
-  it("产品默认组合带上 F（R2.1 比分赢下）：A 自复核 + 时间线只进自复核", () => {
-    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true });
+  it("产品默认组合：A 自复核 + 时间线只进自复核（R2.1）+ 每遍核两次（2026-10-24 重考）", () => {
+    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true, passRepeats: 2 });
   });
 });
 

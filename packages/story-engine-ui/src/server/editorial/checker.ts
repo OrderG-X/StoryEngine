@@ -132,18 +132,22 @@ export interface ReaderCheckVariant {
   readonly sureGate?: boolean;
   /** F 时间线表只进自复核：三遍核账不附时间线表（B 对三遍的效果关掉），只在 A 自复核那一轮附表并写明「日子以表为准，不要自己推算」。要 selfReview 开着才有那一轮。 */
   readonly timelineInReview?: boolean;
+  /** G 每遍核几次（缺省 1）：同一遍同样的输入再独立核一次、合并去重——同一章两次核出的问题差得多，并起来漏得少。 */
+  readonly passRepeats?: number;
 }
 
 /** D 同章的两句至少相隔几句才可能算「确定」：同一个节拍里的两个说法（比如门开着又关上）常被误读成矛盾。 */
 export const SURE_GATE_MIN_SENTENCE_GAP = 3;
 
 /**
- * 产品核账缺省用的组合：A 自复核 + F 时间线只进自复核。
+ * 产品核账缺省用的组合：A 自复核 + F 时间线只进自复核 + G 每遍核两次。
  * A 是 T1.1 题库比分选出来的；F 是 R2.1 比分赢的（「确定」查准下限 46.1→47.2、查全 33.9→35.5、小考题误报 0/1/1→0/0/0，
  * 差距和口径见 docs/editorial-room/reports/R2.1-2026-10-12.md）。
+ * G（2026-10-24 重构后重考）：大考卷查全 57.1/60.7%→67.9%、「确定」查全 48.8/50.0%→59.9%，「确定」查准下限 47.8/48.6%→50.3%；
+ * 两次调用并行，单章单独核用时不变（约 40～80 秒），多花的是 token（输入多半走缓存）。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
-export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true };
+export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 2 };
 
 /** 翻原文那一轮的问法：窗口里有看不到原文的章（折叠只剩笔记，或冷窗口没给到）时，问它要翻哪些词的前文原文。 */
 export function keywordTask(chapter: number, cold = false): string {
@@ -636,8 +640,8 @@ export async function checkChapterByReader(input: {
         },
       }]
       : []),
-    ...CHECKER_PASSES.map(({ focus, label }) => ({
-      label,
+    ...CHECKER_PASSES.flatMap(({ focus, label }) => Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) => ({
+      label: repeat === 0 ? label : `${label}第 ${repeat + 1} 次`,
       run: async () => {
         const text = await input.callModel(
           [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
@@ -649,7 +653,7 @@ export async function checkChapterByReader(input: {
           ...(foundation ? parseSettingIssues(text, input.chapter, input.draftBody, earlier, foundation) : []),
         ].map((issue): ContinuityIssueV2 => ({ ...issue, confidence: confidences.get(issue.quote) ?? "maybe" }));
       },
-    })),
+    }))),
   ];
   const settled = await withStep("核账员", () => Promise.allSettled(passPlans.map((plan) => plan.run())));
   const failures: string[] = [...(lookup.failure ? [lookup.failure] : []), ...(foundationFailure ? [foundationFailure] : [])];
