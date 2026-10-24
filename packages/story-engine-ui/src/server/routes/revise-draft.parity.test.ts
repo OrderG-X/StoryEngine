@@ -453,6 +453,27 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
 });
 
 describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallback，刻意保留、本组锁定）", () => {
+  it("模型回半截 JSON → 同一份提示再要一次，第二次能用就照改；两次都坏才如实说没改成", { timeout: 30_000 }, async () => {
+    const { toolDir } = await makeParityTwinProjects("revise-half-json-");
+    await writeParityDraft(toolDir, 1, parityReviseDraft(1));
+    llmMocks.streamChatModelToText
+      .mockResolvedValueOnce({ content: '{"taskId":"x","beforeText":""\n}', thinking: "" })
+      .mockResolvedValueOnce({ content: previewJson(REVISE_SENTENCE_B, REVISE_REPLACEMENT_B), thinking: "" });
+    const fixed = await driveToolExecute(reviseDraftTool, { chapter: 1, targetText: REVISE_SENTENCE_B, revisionGoal: "润色这段。" }, { projectDir: toolDir });
+    expect(fixed.applied).toBe(true);
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toContain(REVISE_REPLACEMENT_B);
+
+    llmMocks.streamChatModelToText.mockReset();
+    llmMocks.streamChatModelToText.mockResolvedValue({ content: '{"taskId":"x","beforeText":""\n}', thinking: "" });
+    const before = await readFile(defaultDraftPath(toolDir, 1), "utf-8");
+    const broken = await driveToolExecute(reviseDraftTool, { chapter: 1, targetText: REVISE_SENTENCE_C, revisionGoal: "润色这段。" }, { projectDir: toolDir });
+    expect(broken.applied).toBe(false);
+    expect(String(broken.summary)).toContain("回的格式不对");
+    expect(llmMocks.streamChatModelToText).toHaveBeenCalledTimes(2);
+    expect(await readFile(defaultDraftPath(toolDir, 1), "utf-8")).toBe(before);
+  });
+
   it("modelErrorFallback：mock 模型 reject → HTTP preview 200 + 兜底预览（no-op 标志不丢）、工具 ok:false，两侧草稿都不动", { timeout: 30_000 }, async () => {
     llmMocks.streamChatModelToText.mockRejectedValue(new Error("网络连接被重置"));
     const { routeDir, toolDir } = await makeParityTwinProjects("revise-model-down-");

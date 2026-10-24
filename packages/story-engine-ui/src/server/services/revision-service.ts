@@ -224,6 +224,8 @@ export interface RevisionModelChannel {
  * 会把正常修订误杀成「请求超时」；流式 + 空闲超时只在上游彻底静默 90s 才判死、不设总时长上限。一律不传 max_tokens。
  * 非 2xx / 流中 error 帧 / finish_reason=length 由 llm-client 层诚实抛错（「模型请求失败」「模型返回错误」「被截断」）。
  */
+const REVISION_MAX_CONTENT_CHARS = 20_000;
+
 export async function createRevisionModelChannel(): Promise<RevisionModelChannel> {
   const configured = await resolveConfiguredChatModel("repair");
   return {
@@ -235,6 +237,8 @@ export async function createRevisionModelChannel(): Promise<RevisionModelChannel
         messages: [{ role: "user", content: prompt }],
         temperature: configured.profile.temperature ?? 0.45,
         responseFormat: { type: "json_object" },
+        // 改的是一两句：回的 JSON 远到不了这么长，超了就是原地打转（长篇连写 2026-10-24 探针：一次吐了两百万字才被截断）。
+        maxContentChars: REVISION_MAX_CONTENT_CHARS,
       });
       if (!content.trim()) throw new Error("修订模型返回了空内容。");
       return content;
@@ -309,13 +313,25 @@ async function generateModelPreview(input: {
     stateOverview: overview,
     ...(writingContextPack ? { writingContextPack } : {}),
   });
-  const raw = await input.callModel(prompt);
   try {
-    return parseDraftRevisionPreview(raw, input.task);
-  } catch {
+    return parseDraftRevisionPreview(await input.callModel(prompt), input.task);
+  } catch (error) {
+    if (!isUnparsable(error)) throw error;
+  }
+  // 模型偶尔回半截 JSON（长篇连写 2026-10-24：原文以“开头，模型把它写成英文引号、提前收了字符串）：
+  // 同一份提示再要一次，还不行才算没改成。模型调用本身出错（断网、跑飞）不重试，照常往上抛。
+  try {
+    return parseDraftRevisionPreview(await input.callModel(prompt), input.task);
+  } catch (error) {
+    if (!isUnparsable(error)) throw error;
     // 引擎解析报的是英文（缺 afterText / 不是 JSON），作者看不懂：换成一句人话（P6 真机：「Draft revision preview requires afterText.」漏到对话里）。
     throw new Error("回的格式不对，或没写改后的句子");
   }
+}
+
+/** 解析失败（不是 JSON / 缺 afterText）——和模型调用本身出错分开。 */
+function isUnparsable(error: unknown): boolean {
+  return error instanceof SyntaxError || (error instanceof Error && error.message.startsWith("Draft revision"));
 }
 
 /**
