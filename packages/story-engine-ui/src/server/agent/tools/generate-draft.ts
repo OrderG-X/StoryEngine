@@ -354,8 +354,8 @@ export function buildRewriteAwaitingAuthorOutput(
     issues: [committed ? `第 ${chapter} 章已经定稿` : `第 ${chapter} 章已有工作稿`],
     overview,
     summary: committed
-      ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写这一章」（重写前存档，可撤销；重写后要重新定稿）。`
-      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写这一章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
+      ? `第 ${chapter} 章已经定稿了，我不直接重写。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销；重写后要重新定稿）。`
+      : `第 ${chapter} 章已经有工作稿了，我不直接覆盖。要整章重写就点「重写第 ${chapter} 章」（重写前存档，可撤销）；只想改几处的话告诉我改哪里。`,
     refreshScope: "full",
     rewriteConfirm: { chapter, ...(chapterGoal ? { chapterGoal } : {}) },
   };
