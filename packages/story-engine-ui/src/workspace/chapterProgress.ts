@@ -81,8 +81,11 @@ function settledOf(message: ChapterMessage): Settled | undefined {
   };
 }
 
+/** 改掉的那句和核账原句是同一处：一个含着另一个（核账原句是整句，可能连着两三句；定论按句改）。 */
+const overlaps = (changed: string, quote: string): boolean => quoteInPaper(changed, quote) || quoteInPaper(quote, changed);
+
 /**
- * 哪几条被定论改掉了：这条原句就在那章被改的句子里；或者作者点的就是这条「以本章为准」、另一边真改了
+ * 哪几条被定论改掉了：这条原句就在那章被改的句子里（或改的句子就在这条原句里）；或者作者点的就是这条「以本章为准」、另一边真改了
  * （对设定的＝设定本改了栏，对前文的＝那章被改的句子里有前文原句）。
  */
 function settledKeysOf(check: ContinuityCheckData, later: readonly Settled[]): readonly string[] {
@@ -92,10 +95,10 @@ function settledKeysOf(check: ContinuityCheckData, later: readonly Settled[]): r
       const chapter = continuityFixChapter(check.chapter, item);
       const key = continuityItemKey(item);
       return later.some((settled) =>
-        settled.edits.some((edit) => edit.chapter === chapter && quoteInPaper(edit.from, item.quote))
+        settled.edits.some((edit) => edit.chapter === chapter && overlaps(edit.from, item.quote))
         || (settled.resolves === key && (item.againstSetting
           ? settled.fieldsChanged
-          : settled.edits.some((edit) => edit.chapter === item.earlierChapter && quoteInPaper(edit.from, item.earlierQuote)))));
+          : settled.edits.some((edit) => edit.chapter === item.earlierChapter && overlaps(edit.from, item.earlierQuote)))));
     })
     .map(continuityItemKey);
 }

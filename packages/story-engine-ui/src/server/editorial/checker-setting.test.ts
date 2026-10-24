@@ -159,7 +159,7 @@ describe("parseSettingIssues：设定原文照样经代码核对", () => {
     }, {
       quote: "沈青禾上了钟楼", settingQuote: "钟楼钥匙装在铜盒里，由老周保管", reason: "上楼要用钥匙，稿里没交代", confidence: "maybe",
     }), 6, BODY, earlier(), digest!);
-    expect(issues.map((issue) => issue.quote)).toEqual(["陆川说她爷爷走了五年", "沈青禾上了钟楼"]);
+    expect(issues.map((issue) => issue.quote)).toEqual(["陆川说她爷爷走了五年。", "沈青禾上了钟楼。"]);
     expect(at(issues, 0)).toMatchObject({ earlierQuote: "爷爷三年前过世", earlierChapter: 6, againstSetting: { label: "人物卡" } });
     expect(at(issues, 0).fixChapter).toBeUndefined();
     expect(at(issues, 1)).toMatchObject({ againstSetting: { label: "地点" } });
@@ -209,7 +209,7 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
     ]), 6, BODY, earlier(), digest!);
     expect(issues).toHaveLength(2);
     expect(issues[0]).toMatchObject({ quote: CH3, earlierQuote: CARD_LINE, earlierChapter: 3, fixChapter: 3, againstSetting: { label: "人物卡" }, confidence: "sure" });
-    expect(issues[1]).toMatchObject({ quote: "陆川说她爷爷走了五年", earlierChapter: 6, againstSetting: { label: "人物卡" } });
+    expect(issues[1]).toMatchObject({ quote: "陆川说她爷爷走了五年。", earlierChapter: 6, againstSetting: { label: "人物卡" } });
     expect(issues[1]!.fixChapter).toBeUndefined();
   });
 
@@ -231,7 +231,7 @@ describe("parseSettingChecks：第 4 遍逐句判定（agrees=false 才收）", 
     ]), 6, BODY, earlier(), digest!);
     // 前三条中文 agrees 不宽进 → 当一致不收（宁可放过不误报）；第四条布尔 false 照收，confidence 中文不升 sure。
     expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ quote: "陆川说她爷爷走了五年", confidence: "maybe" });
+    expect(issues[0]).toMatchObject({ quote: "陆川说她爷爷走了五年。", confidence: "maybe" });
   });
 });
 

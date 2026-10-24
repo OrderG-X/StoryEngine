@@ -21,7 +21,9 @@ import {
   hedged,
   normalize,
   parseFullReadIssues,
+  readConfidence,
   readEarlierChapters,
+  snapToOriginal,
   splitSentences,
   type ContinuityIssueV2,
   type EarlierText,
@@ -208,24 +210,6 @@ export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
   return hedged(once, 120_000);
 };
 
-/** 从模型原始 JSON 里按 quote 取把握：只认 schema 的 sure，其余（含中文说法）都当 maybe；同一句出现几次，有一次 sure 就是 sure。 */
-function readConfidences(text: string): Map<string, "sure" | "maybe"> {
-  const out = new Map<string, "sure" | "maybe">();
-  try {
-    const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)) as { contradictions?: unknown };
-    for (const item of Array.isArray(parsed.contradictions) ? parsed.contradictions : []) {
-      if (!item || typeof item !== "object") continue;
-      const record = item as Record<string, unknown>;
-      const quote = String(record.quote ?? "").trim();
-      const sure = String(record.confidence ?? "").trim().toLowerCase() === "sure";
-      if (sure || !out.has(quote)) out.set(quote, sure ? "sure" : "maybe");
-    }
-  } catch {
-    // 解析不了就全当 maybe（正文那边 parseFullReadIssues 自己会报「不是 JSON」）
-  }
-  return out;
-}
-
 /** A 自复核的提示：把三遍合并后的候选逐条列出（本章那句、另一侧那句、理由），让它再判一轮。
  *  R7.3 有设定本时多要三个字段：设定原句（settingQuote）＋两句各自和设定一致不一致（draftAgrees / earlierAgrees）。 */
 export function selfReviewTask(chapter: number, issues: readonly ContinuityIssueV2[], withSetting = false): string {
@@ -354,12 +338,15 @@ function mergePasses(passes: readonly (readonly ContinuityIssueV2[])[]): Continu
   return merged;
 }
 
+const sentencesOf = (earlier: EarlierText, chapter: number): readonly string[] =>
+  earlier.chapters.find((item) => item.chapter === chapter)?.sentences ?? [];
+
 /**
  * R7.3 解析对设定本的矛盾（模型输出里带 settingQuote 的条目）：
  * - 新稿和设定对不上：quote 在新稿里 → earlierChapter＝本章，按钮改本章；
  * - 新稿和设定一致、前文某章和设定对不上：quote 在前文那章 → fixChapter＝那章（问题指向前文那章，
  *   「第 3 章和人物卡不一致」，按钮也改那章，别让作者把对的改成错的）。
- * 设定原文必须按 containsQuote 口径真在设定本里、quote 必须真在新稿或某章前文里，抄不出的丢掉。
+ * 设定原文必须按 containsQuote 口径真在设定本里、quote 必须真在新稿或某章前文里，抄不出的丢掉；收下的 quote 对回那章的整句。
  * 填了 earlierQuote 的条目走老路（parseFullReadIssues），这里只收「对照设定本」的。
  */
 export function parseSettingIssues(
@@ -376,6 +363,7 @@ export function parseSettingIssues(
     return [];
   }
   const body = normalize(draftBody);
+  const draft = splitSentences(draftBody);
   const byChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
   const out: ContinuityIssueV2[] = [];
   for (const item of Array.isArray(parsed.contradictions) ? parsed.contradictions : []) {
@@ -388,8 +376,9 @@ export function parseSettingIssues(
     if (!settingQuote || !quote || !reason) continue;
     const source = settingQuoteSource(digest, settingQuote);
     if (!source) continue; // 设定原文和设定本对不上：不收
+    const confidence = readConfidence(record);
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", againstSetting: source });
+      out.push({ quote: snapToOriginal(draft, quote), earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: source });
       continue;
     }
     // quote 在前文哪一章：先信它报的 quoteChapter，对不上按章序搜。
@@ -399,7 +388,7 @@ export function parseSettingIssues(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", againstSetting: source });
+    out.push({ quote: snapToOriginal(sentencesOf(earlier, found), quote), earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: source });
   }
   return out;
 }
@@ -426,6 +415,7 @@ export function parseSettingChecks(
     return [];
   }
   const body = normalize(draftBody);
+  const draft = splitSentences(draftBody);
   const byChapter = new Map(earlier.chapters.map((item) => [item.chapter, normalize(item.sentences.join(""))]));
   const out: ContinuityIssueV2[] = [];
   for (const item of Array.isArray(parsed.checks) ? parsed.checks : []) {
@@ -440,7 +430,7 @@ export function parseSettingChecks(
     if (!source) continue; // 设定原文和设定本对不上：不收
     const confidence = /sure/u.test(String(record.confidence ?? "")) && !/unsure/u.test(String(record.confidence ?? "")) ? "sure" as const : "maybe" as const;
     if (containsQuote(body, quote)) {
-      out.push({ quote, earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: source });
+      out.push({ quote: snapToOriginal(draft, quote), earlierQuote: settingQuote, earlierChapter: chapter, reason, kind: "event", confidence, againstSetting: source });
       continue;
     }
     const claimed = Number(record.quoteChapter);
@@ -449,7 +439,7 @@ export function parseSettingChecks(
       ? claimed
       : [...byChapter.keys()].sort((a, b) => a - b).find((key) => containsQuote(byChapter.get(key)!, quote));
     if (found === undefined) continue;
-    out.push({ quote, earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: source });
+    out.push({ quote: snapToOriginal(sentencesOf(earlier, found), quote), earlierQuote: settingQuote, earlierChapter: found, fixChapter: found, reason, kind: "event", confidence, againstSetting: source });
   }
   return out;
 }
@@ -647,11 +637,10 @@ export async function checkChapterByReader(input: {
           [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
           { json: true },
         );
-        const confidences = readConfidences(text);
         return [
           ...parseFullReadIssues(text, input.chapter, input.draftBody, earlier),
           ...(foundation ? parseSettingIssues(text, input.chapter, input.draftBody, earlier, foundation) : []),
-        ].map((issue): ContinuityIssueV2 => ({ ...issue, confidence: confidences.get(issue.quote) ?? "maybe" }));
+        ];
       },
     }))),
   ];

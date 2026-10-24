@@ -150,6 +150,12 @@ describe("核账卡之后定论改齐了：改掉的条目不再算", () => {
     expect(openContinuityItems(result).sure).toEqual([wrongMarket]);
   });
 
+  it("核账原句连着两句、定论只改了其中一句：也算改掉", () => {
+    const twoSentences = { ...cross, quote: "老码头在东边，走过去二十分钟。他沿着河走。" };
+    const msg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [twoSentences] } }] };
+    expect(latestContinuityResult([msg, settle("s", { applied: "改齐了。" })], 11)?.settled).toEqual([continuityItemKey(twoSentences)]);
+  });
+
   it("「以本章为准」点的那条（resolves）：另一边真改了才算——对设定的看设定栏改没改，对前文的看那章被改的句子", () => {
     const setting = { quote: "港务局按失踪结的案", earlierQuote: "官方以海难结案", earlierChapter: 0, reason: "结案", fixChapter: 1, againstSetting: { label: "故事设定" } };
     const msg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [setting, wrongMarket] } }] };

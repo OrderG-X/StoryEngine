@@ -62,7 +62,7 @@ describe("runDraftQualityPipeline", () => {
     expect(result.changed).toBe(true);
     expect(result.snapshotId).toBe("snap-1");
     expect(result.info.continuation?.rounds).toBe(1);
-    expect(result.info.continuity).toMatchObject({ checked: true, sure: [expect.objectContaining({ quote: "菜场还在", earlierChapter: 7 })] });
+    expect(result.info.continuity).toMatchObject({ checked: true, sure: [expect.objectContaining({ quote: "菜场还在，门口摆着几摊卖豆腐的，他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。", earlierChapter: 7 })] });
     const written = await readFile(draftPath, "utf-8");
     expect(written).toContain("菜场还在"); // 不自动改，交作者定
     expect(written).toContain("修鞋的吴师傅");
@@ -109,7 +109,7 @@ describe("runDraftQualityPipeline", () => {
     });
     expect(result.changed).toBe(false);
     expect(await readFile(draftPath, "utf-8")).toBe(before);
-    expect(result.info.continuity).toMatchObject({ sure: [expect.objectContaining({ quote: "菜场还在" })], autoFixed: { applied: 0, failed: 1 } });
+    expect(result.info.continuity).toMatchObject({ sure: [expect.objectContaining({ quote: "菜场还在，门口摆着几摊卖豆腐的。" })], autoFixed: { applied: 0, failed: 1 } });
     expect(result.notes.join("\n")).toContain("1 处没改成");
   });
 

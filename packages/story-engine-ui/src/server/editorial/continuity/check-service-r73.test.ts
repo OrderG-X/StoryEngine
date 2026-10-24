@@ -73,7 +73,7 @@ describeWithBook("R7.3 复现书：相对时间按故事日换算（报告 3.3�
     ]);
     const result = await checkChapterBody(dir, 2, body, { readerCallModel: reader.callModel });
     expect(result.sure).toEqual([]);
-    expect(result.maybe.map((item) => item.quote)).toEqual([`“明天上午陆川来。”老周说`]);
+    expect(result.maybe.map((item) => item.quote)).toEqual([`“明天上午陆川来。”老周说，“你跟他把楼门的事说清楚。`]);
     // 作者把日子定准了（第 1、2 章都可靠）→ 正文没改、复用上次结果，也要按新时间线把这条收掉，不再端出来。
     await writeFile(join(dir, "story", "timeline.json"), JSON.stringify({
       schemaVersion: 1,

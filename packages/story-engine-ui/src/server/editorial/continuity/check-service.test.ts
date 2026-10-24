@@ -18,6 +18,8 @@ const BODY = "林舟一早开门。他从工作台上拿起那块怀表，表盖
 const LEDGER_SENTENCE = "他翻开扉页，看着那两行字——林秋，一九八五年春——看了很久。";
 
 const AUNT = { quote: "周婶在门口喊他", earlierQuote: "周婶端着茶进来", earlierChapter: 2, reason: "周婶的位置对不上" };
+/** 收下的原句都对回正文整句（P12 编号句子）。 */
+const AUNT_SENTENCE = "周婶在门口喊他。";
 
 async function makeBook(chapters = 2): Promise<string> {
   const dir = await makeHomeTempDir("check-service-");
@@ -65,7 +67,7 @@ describe("核账服务（核账员一路）", () => {
     const reader = readerModel();
     const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel });
     expect(result.ok).toBe(true);
-    expect(result.sure.map((item) => item.quote)).toEqual([AUNT.quote]);
+    expect(result.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
     expect(result.summary).toContain("确定对不上 1 处");
     expect(result.summary).toContain(AUNT.quote);
     // 结论那句不带逐条清单（重构 P6：清单在核账卡和稿纸划线上）。
@@ -82,7 +84,7 @@ describe("核账服务（核账员一路）", () => {
     const result = await checkChapterBody(dir, 3, `${BODY}${LEDGER_SENTENCE}`, { readerCallModel: reader.callModel });
     expect(result.sure.map((item) => item.quote)).toEqual([LEDGER_SENTENCE]);
     expect(result.sure[0]).toMatchObject({ earlierChapter: 2 });
-    expect(result.maybe.map((item) => item.quote)).toEqual([AUNT.quote]);
+    expect(result.maybe.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
   });
 
   it("上次的问题两边原句还在就照带，把握沿用上次（不随这次的运气跳）", async () => {
@@ -91,7 +93,7 @@ describe("核账服务（核账员一路）", () => {
     // 正文改了一处无关的句子；这次核账员把同一处报成「可能」，沿用上次的「确定」
     const second = await checkChapterBody(dir, 3, `${BODY}林舟低头擦着柜台。`, { readerCallModel: readerModel("maybe").callModel });
     expect(second.reused).toBe(false);
-    expect(second.sure.map((item) => item.quote)).toEqual([AUNT.quote]);
+    expect(second.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
     expect(second.maybe).toEqual([]);
     // 作者把那句改掉了：不再带
     const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ contradictions: [] }) : "笔记");
@@ -187,7 +189,7 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
     expect(first.summary).toContain("核账员还没读完全书（第 0 / 12 章）");
     expect(first.summary).toContain("第 5～12 章原文 + 账本");
     expect(first.summary).toContain("更早的细节可能漏");
-    expect(first.sure.map((item) => item.quote)).toContain(AUNT.quote);
+    expect(first.sure.map((item) => item.quote)).toContain(AUNT_SENTENCE);
     expect(first.reused).toBe(false);
     // 冷窗口不写核账记忆（小范围的结果不能当全书核过来缓存）；笔记在后台按顺序补，进度落盘给界面
     await vi.waitFor(async () => expect(await notesCount(dir)).toBe(12), { timeout: 5_000 });
@@ -198,7 +200,7 @@ describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + �
     expect(second.reused).toBe(false);
     expect(second.ok).toBe(true);
     expect(second.coverage).toBeUndefined();
-    expect(second.sure.map((item) => item.quote)).toContain(AUNT.quote);
+    expect(second.sure.map((item) => item.quote)).toContain(AUNT_SENTENCE);
   });
 
   it("R4.3 分母统一：核已定稿章的稿子时，回执和进度行同口径（共 y 章＝已定稿章数）", async () => {
