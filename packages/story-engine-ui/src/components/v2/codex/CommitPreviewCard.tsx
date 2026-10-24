@@ -59,6 +59,9 @@ export function CommitPreviewCard({
   const { day, review, auto } = splitChecklist(preview.ledgerChecklist ?? []);
   const reviewCount = review.length + (day?.needsConfirm ? 1 : 0);
   const autoCount = auto.filter((item) => item.removable).length;
+  // 阻断项本身就是一条文稿问题（如字数不够）时上面已列过，「文稿问题」里不再重复那一条。
+  const draftItems = (preview.draftIssues ?? []).filter((item) => !blocking.includes(item));
+  const draftCount = (draftIssueCount ?? 0) - ((preview.draftIssues ?? []).length - draftItems.length);
 
   // 能定：卡头「可以定稿」已说了结论，卡里只剩一行数 + 打开清单（弹窗一般已自动打开，这里是关了再开的入口）。
   const counts = [reviewCount > 0 ? `要你看 ${reviewCount} 条` : "", autoCount > 0 ? `自动记 ${autoCount} 条` : ""].filter(Boolean).join(" · ");
@@ -86,8 +89,8 @@ export function CommitPreviewCard({
           ))}
         </ul>
       ) : null}
-      {typeof draftIssueCount === "number" && draftIssueCount > 0 ? (
-        <IssueCountSection label="文稿问题" count={draftIssueCount} items={preview.draftIssues ?? []} />
+      {draftCount > 0 ? (
+        <IssueCountSection label="文稿问题" count={draftCount} items={draftItems} />
       ) : null}
       {typeof semanticIssueCount === "number" && semanticIssueCount > 0 ? (
         <IssueCountSection label="和前文对不上的问题" count={semanticIssueCount} items={preview.semanticIssues ?? []} />
