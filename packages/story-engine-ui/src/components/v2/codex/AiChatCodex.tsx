@@ -48,7 +48,7 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
 import { lastAssistantNextStepPrompt, type NextStepPrompt } from "./nextStepChoices.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
-import { confirmableCommitPreviewMessageId, undoableCommitReportMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
 import { latestTurnSuggestedActions, visibleRailActions } from "./suggestedActionRail.js";
 import { buildMessageRenderSegments } from "./messageSegments.js";
@@ -403,6 +403,8 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const confirmablePreviewId = confirmableCommitPreviewMessageId(messages);
   // 「撤销这次定稿」只挂在最近一次改动就是定稿的那张回执上（见 commitConfirm.ts）。
   const undoableCommitId = undoableCommitReportMessageId(messages);
+  // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
+  const staleContinuityIds = supersededContinuityMessageIds(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -585,6 +587,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             onSuggestedAction={props.onSuggestedAction}
             commitConfirmable={message.id === confirmablePreviewId}
             commitUndoable={message.id === undoableCommitId}
+            continuitySuperseded={staleContinuityIds.has(message.id)}
             projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
@@ -825,6 +828,7 @@ function MessageBubbles({
   onSuggestedAction,
   commitConfirmable = false,
   commitUndoable = false,
+  continuitySuperseded = false,
   onPrefillComposer,
   liveOperation = null,
   isLatestMessage = true,
@@ -853,6 +857,8 @@ function MessageBubbles({
   readonly commitConfirmable?: boolean;
   /** 本条的定稿回执是否挂「撤销这次定稿」（最近一次改动就是这次定稿才挂）。 */
   readonly commitUndoable?: boolean;
+  /** 本条的核账卡是不是旧的（同一章后来又核过）：旧卡不给「改这处」。 */
+  readonly continuitySuperseded?: boolean;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
   /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
@@ -963,8 +969,8 @@ function MessageBubbles({
             key={card.type}
             check={card.check}
             dismissed={card.dismissed ?? []}
-            onRevise={onSendMessage}
-            onFixAction={onSendUserAction}
+            superseded={continuitySuperseded}
+            {...(continuitySuperseded ? {} : { onRevise: onSendMessage, onFixAction: onSendUserAction })}
             {...(onOpenSetting ? { onOpenSetting } : {})}
             onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}
           />

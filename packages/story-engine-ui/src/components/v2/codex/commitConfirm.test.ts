@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChapterMessage } from "../../../types.js";
-import { confirmableCommitPreviewMessageId, undoableCommitReportMessageId } from "./commitConfirm.js";
+import { confirmableCommitPreviewMessageId, supersededContinuityMessageIds, undoableCommitReportMessageId } from "./commitConfirm.js";
 
 function assistant(id: string, extra: Partial<ChapterMessage> = {}): ChapterMessage {
   return { id, role: "assistant", content: "", ...extra };
@@ -66,5 +66,18 @@ describe("undoableCommitReportMessageId：「撤销这次定稿」只挂最近�
     ];
     expect(undoableCommitReportMessageId(messages)).toBeNull();
     expect(undoableCommitReportMessageId([])).toBeNull();
+  });
+});
+
+describe("supersededContinuityMessageIds：同一章后来又核过，旧核账卡算过时", () => {
+  const checkCard = (chapter: number) => ({ cards: [{ type: "continuity" as const, check: { chapter, source: "draft" as const, sure: [], maybe: [] } }] });
+  it("同章只有最新一张不算过时；别的章各自算", () => {
+    const messages = [
+      assistant("k1", checkCard(23)),
+      assistant("k2", checkCard(22)),
+      assistant("k3", checkCard(23)),
+      assistant("x", {}),
+    ];
+    expect([...supersededContinuityMessageIds(messages)]).toEqual(["k1"]);
   });
 });

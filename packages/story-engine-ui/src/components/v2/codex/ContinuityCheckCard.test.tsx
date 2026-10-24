@@ -30,6 +30,18 @@ function Controlled({ onDismiss, ...props }: Omit<CardProps, "dismissed">) {
 const item = { quote: "她把便签塞进了抽屉。", earlierQuote: "便签一直揣在她兜里。", earlierChapter: 6, reason: "便签位置对不上" };
 const check = { chapter: 8, source: "draft" as const, sure: [item], maybe: [] };
 
+describe("旧核账卡（同一章后来又核过）", () => {
+  afterEach(() => cleanup());
+
+  it("说一句以最新一张为准；上面没给改的回调就没有「改这处 / 改掉这 N 处」，「不是问题」照留", () => {
+    render(<ContinuityCheckCard check={check} superseded onDismiss={vi.fn(async () => true)} />);
+    expect(screen.getByText("后来又核过，以最新一张为准。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "改这处" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /改掉这/u })).toBeNull();
+    expect(screen.getByRole("button", { name: "不是问题" })).toBeTruthy();
+  });
+});
+
 describe("核账卡「不是问题」", () => {
   afterEach(() => cleanup());
 

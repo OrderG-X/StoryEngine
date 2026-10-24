@@ -30,3 +30,21 @@ export function undoableCommitReportMessageId(messages: readonly ChapterMessage[
   }
   return null;
 }
+
+/**
+ * 哪些核账卡已经过时（纯函数）：同一章后来又核过，前面那几张就是旧结果。旧卡上的「改这处 / 改掉这 N 处」
+ * 还能点就会拿旧理由去改现在的稿（长篇连写 2026-10-24：作者把错位的句子挪回原处再核，上一张卡还挂着
+ * 「改这处」，点了会把已经对的那句又改掉）。
+ */
+export function supersededContinuityMessageIds(messages: readonly ChapterMessage[]): ReadonlySet<string> {
+  const seen = new Set<number>();
+  const out = new Set<string>();
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    const check = cardOf(message, "continuity")?.check;
+    if (!check) continue;
+    if (seen.has(check.chapter)) out.add(message.id);
+    else seen.add(check.chapter);
+  }
+  return out;
+}

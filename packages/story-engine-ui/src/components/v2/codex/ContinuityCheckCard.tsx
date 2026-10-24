@@ -115,8 +115,10 @@ function ItemView({ chapter, item, onRevise, onOpenSetting, onDismiss }: {
   );
 }
 
-export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], onRevise, onFixAction, onOpenSetting, onDismiss }: {
+export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], superseded = false, onRevise, onFixAction, onOpenSetting, onDismiss }: {
   readonly check: ContinuityCheck;
+  /** 同一章后来又核过：这张是旧结果，说一句、不给改的按钮（上面不传 onRevise / onFixAction）。 */
+  readonly superseded?: boolean;
   /** 作者点过「不是问题」的条目键（存在卡上，稿纸划线共用一份）。 */
   readonly dismissed?: readonly string[];
   /** 交给 AI 改（发一句只改这几处的话）：错在前文那章、原句不逐字的走这条。 */
@@ -182,6 +184,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       defaultOpen
     >
       {empty ? null : <>
+      {superseded ? <p className="drc-summary">后来又核过，以最新一张为准。</p> : null}
       {/* 主按钮（R4.5）：改掉还没划掉的「确定」N 处，文字随「不是问题」实时变；intent 现拼、圈死范围。 */}
       {canReviseAll ? (
         <button
