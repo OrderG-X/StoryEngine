@@ -222,7 +222,7 @@ describe("parity: revise_draft 对拍——收编后的共享守卫（原 D21/D2
     // HTTP 路：preview 步漂移守卫拦下 → 400 诚实拒（不再有可确认的漂移预览，apply 不会发生）
     expect(preview.statusCode).toBe(400);
     expect(preview.payload.ok).toBe(false);
-    expect(String(preview.payload.error)).toContain("不是你选择的片段");
+    expect(String(preview.payload.error)).toContain("不是你选的那段");
 
     // 工具路：overlap 守卫拦下 → ok:false applied:false
     expect(tool.ok).toBe(false);
@@ -483,7 +483,7 @@ describe("parity: revise_draft 对拍——显式策略分歧（modelErrorFallba
     }, { projectDir: toolDir });
     expect(tool.ok).toBe(false);
     expect(tool.applied).toBe(false);
-    expect(String(tool.summary)).toContain("修订模型输出不可用");
+    expect(String(tool.summary)).toContain("AI 这次没给出能用的改法");
     expect(String(tool.summary)).toContain("网络连接被重置");
 
     // 模型真被调过（失败来自模型调用而非前置守卫）；两侧草稿逐字未动、字节一致
