@@ -39,16 +39,23 @@ describe("buildOutboundConversation", () => {
     expect(out[1]!.content).toContain("第8章已生成、已入库。"); // 原文保留、只加标注不删
   });
 
-  it("A2：成功回合（无失败步骤）原样、不加标注；用户回合永不加标注", () => {
+  it("A2：调过工具的回合注明调了哪些工具（去重）；没调工具的回合、用户回合原样", () => {
     const msgs = [
-      { id: "m-0", role: "user", content: "第8章已入库了吧" }, // 用户即便这么说也不标注
+      { id: "m-0", role: "user", content: "预览第 14 章的定稿改动" },
       {
-        id: "m-1", role: "assistant", content: "第8章已入库。",
-        toolSteps: [{ id: "t1", label: "正式入库", status: "completed", startedAt: 1 }],
+        id: "m-1", role: "assistant", content: "第 14 章可以定稿，清单打开了。",
+        toolSteps: [
+          { id: "t1", label: "定稿预览", toolName: "commit_preview", status: "verdict", startedAt: 1 },
+          { id: "t2", label: "定稿预览", toolName: "commit_preview", status: "completed", startedAt: 2 },
+        ],
       },
+      { id: "m-2", role: "user", content: "第8章已入库了吧" }, // 用户即便这么说也不标注
+      { id: "m-3", role: "assistant", content: "还没有。" },
     ];
     const out = buildOutboundConversation(msgs as any, 0, 96000);
-    expect(out[0]!.content).toBe("第8章已入库了吧");
-    expect(out[1]!.content).toBe("第8章已入库。");
+    expect(out[0]!.content).toBe("预览第 14 章的定稿改动");
+    expect(out[1]!.content).toBe("（上一轮注：这一回合的结果是调工具 commit_preview 做出来的；要同样的结果，这一轮也得真调工具，没调就是没做。）\n第 14 章可以定稿，清单打开了。");
+    expect(out[2]!.content).toBe("第8章已入库了吧");
+    expect(out[3]!.content).toBe("还没有。");
   });
 });
