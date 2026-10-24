@@ -10,6 +10,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { defaultDraftPath } from "../lib/project-io.js";
+import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
 import { locateRevisionSpan } from "../services/revision-service.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
@@ -250,26 +251,37 @@ export function nextDraftChapterAfter(chapter: number, committed: readonly numbe
   return next;
 }
 
+/** 写作前沿章和它是不是已经有工作稿（「写下一章」选项用）。 */
+export interface NextDraftTarget {
+  readonly chapter: number;
+  readonly hasDraft: boolean;
+}
+
+/**
+ * 「写下一章」那个选项（确定性）：下一章还空着 → AI 写；已经有工作稿（回头重定了旧章，下一章正写到一半）→
+ * 改成核那一章。选项点了是作者档，generate_draft 会整章重写——不能顶着「AI 写」的名字把手头的稿子换掉（长篇连写 2026-10-24）。
+ */
+export function writeNextChoice(target: NextDraftTarget, label: string = `AI 写第 ${target.chapter} 章`): NextStepChoice {
+  return target.hasDraft
+    ? { label: `核第 ${target.chapter} 章`, intent: `核第 ${target.chapter} 章的账`, action: { toolName: "check_continuity", chapter: target.chapter } }
+    : { label, intent: `继续写第 ${target.chapter} 章的正文`, action: { toolName: "generate_draft", chapter: target.chapter } };
+}
+
 /**
  * 定稿动作收尾的下一步选项（确定性）：成功 → 写下一章（+线索堆积时清理）；未成 → 重新预览。
- * nextDraftChapter（R7.7）：推荐写的「下一章」默认还是 N+1（旧行为，无书目录信息时），
- * 有书目录时由调用方传写作前沿章（第一个没定稿的章），重定旧章后不再推荐回去写旧章。
+ * next（R7.7）：推荐写的「下一章」默认还是 N+1（旧行为，无书目录信息时），
+ * 有书目录时由调用方传写作前沿章（第一个没定稿的章），重定旧章后不再推荐回去写旧章；那章已有工作稿就推荐核它。
  */
 export function commitApplyNextSteps(
   chapter: number,
   output: CommitApplyLikeOutput | undefined,
-  nextDraftChapter: number = chapter + 1,
+  next: NextDraftTarget = { chapter: chapter + 1, hasDraft: false },
 ): { readonly question: string; readonly choices: readonly NextStepChoice[] } {
   if (output?.committed === true) {
     return {
       question: `第 ${chapter} 章定稿了，接下来？`,
       choices: [
-        {
-          label: `AI 写第 ${nextDraftChapter} 章`,
-          intent: `继续写第 ${nextDraftChapter} 章的正文`,
-          recommended: true,
-          action: { toolName: "generate_draft", chapter: nextDraftChapter },
-        },
+        { ...writeNextChoice(next), recommended: true },
         ...(output.threadMaintenanceHint === "escalated"
           ? [{ label: "归并线索", intent: "看看开着的线索里有没有讲同一件事的，提一份归并方案给我确认" }]
           : []),
@@ -293,11 +305,12 @@ export type UserActionToolExecutor = (
   requestContext: RequestContext,
 ) => Promise<unknown>;
 
-/** 写作前沿章（R7.7）：有书目录时按定稿文件现算；没传目录/读不到定稿章 → N+1 旧口径兜底。 */
-async function resolveNextDraftChapter(projectDir: string | undefined, chapter: number): Promise<number> {
-  if (!projectDir) return chapter + 1;
+/** 写作前沿章（R7.7）：有书目录时按定稿文件现算；没传目录/读不到定稿章 → N+1 旧口径兜底。顺带看那章有没有工作稿。 */
+async function resolveNextDraftTarget(projectDir: string | undefined, chapter: number): Promise<NextDraftTarget> {
+  if (!projectDir) return { chapter: chapter + 1, hasDraft: false };
   const committed = await readCommittedChapterNumbers(projectDir);
-  return committed.length > 0 ? nextDraftChapterAfter(chapter, committed) : chapter + 1;
+  const next = committed.length > 0 ? nextDraftChapterAfter(chapter, committed) : chapter + 1;
+  return { chapter: next, hasDraft: await hasWorkingDraftText(projectDir, next).catch(() => false) };
 }
 
 /**
@@ -398,7 +411,7 @@ export async function runUserAction(args: {
   const rest = args.scrubber.flush();
   if (rest) args.sendEvent("text-delta", { text: rest });
 
-  const nextSteps = commitApplyNextSteps(action.chapter, result, await resolveNextDraftChapter(args.projectDir, action.chapter));
+  const nextSteps = commitApplyNextSteps(action.chapter, result, await resolveNextDraftTarget(args.projectDir, action.chapter));
   // 定稿成功后，设定本里还没标主角、账里有视角人物 → 多给一个「把『X』设为主角」。只是建议：作者点了
   // 才把 intent 发给模型，由模型走 foundation_write 设（可撤销）；建议判不了/判挂了按无建议处理。
   const renameSuggestion = result?.committed === true && args.projectDir
@@ -501,7 +514,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   // 不给「改掉确定的 N 处」（sure 是空的），问句也不写「做完了」。
   if (notChecked) {
     // 写下一章推荐写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
-    const nextDraftChapter = await resolveNextDraftChapter(args.projectDir, action.chapter);
+    const next = await resolveNextDraftTarget(args.projectDir, action.chapter);
     const failedCallId = `user-action-next-${stamp}`;
     args.sendEvent("tool-call", { toolCallId: failedCallId, toolName: "suggest_next_steps", args: {} });
     args.sendEvent("tool-result", {
@@ -517,11 +530,7 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
             recommended: true,
             action: { toolName: "check_continuity", chapter: action.chapter },
           },
-          {
-            label: "先让 AI 写下一章",
-            intent: "继续写下一章的正文",
-            action: { toolName: "generate_draft", chapter: nextDraftChapter },
-          },
+          writeNextChoice(next, "先让 AI 写下一章"),
         ],
       },
     });
@@ -547,12 +556,8 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
         recommended: true,
         action: { toolName: "commit_preview", chapter: action.chapter },
       },
-      {
-        label: "AI 写下一章",
-        intent: "继续写下一章的正文",
-        // 写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
-        action: { toolName: "generate_draft", chapter: await resolveNextDraftChapter(args.projectDir, action.chapter) },
-      },
+      // 写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
+      writeNextChoice(await resolveNextDraftTarget(args.projectDir, action.chapter), "AI 写下一章"),
       ...fresh,
     ];
   if (choices.length === 0) return;

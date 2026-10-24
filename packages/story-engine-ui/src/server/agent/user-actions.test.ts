@@ -111,6 +111,14 @@ describe("commitApplyNextSteps 定稿收尾的下一步（确定性）", () => {
     expect(steps.choices[1]).not.toHaveProperty("action");
   });
 
+  it("下一章已经有工作稿（回头重定了旧章）→ 推荐核那一章，不推荐「AI 写」（点了会整章重写手头的稿子）", () => {
+    expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: true }).choices).toEqual([
+      { label: "核第 18 章", intent: "核第 18 章的账", recommended: true, action: { toolName: "check_continuity", chapter: 18 } },
+    ]);
+    expect(commitApplyNextSteps(17, { committed: true }, { chapter: 18, hasDraft: false }).choices[0])
+      .toMatchObject({ label: "AI 写第 18 章", action: { toolName: "generate_draft", chapter: 18 } });
+  });
+
   it("没定稿 → 只给「重新预览」（带结构化动作：直达 commit_preview）", () => {
     expect(commitApplyNextSteps(5, { committed: false }).choices).toEqual([
       { label: "重新预览", intent: "生成第 5 章定稿预览", recommended: true, action: { toolName: "commit_preview", chapter: 5 } },
