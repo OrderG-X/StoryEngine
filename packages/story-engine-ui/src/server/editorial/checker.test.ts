@@ -264,7 +264,7 @@ describe("核账员：窗口和提示", () => {
   it("提示词：quote 是该改的那句，和前文一致的那句不能当 quote（长篇连写：改反方向，把对的铁门改成卷帘门）", () => {
     const task = checkTask(7);
     expect(task).toContain("quote 逐字抄有问题、该改的那一句");
-    expect(task).toContain("和更早几章、设定本一致的那句是对的，不能当 quote");
+    expect(task).toContain("和更早几章一致的那句是对的，不能当 quote");
   });
 });
 
