@@ -835,7 +835,7 @@ describe("核账「改这处」结构化动作（revise_draft，重构 P6：按�
         requestContext: new RequestContext(),
         executeTool: async (name, input) => {
           calls.push((input as { targetText: string }).targetText);
-          if ((input as { targetText: string }).targetText === "甲乙") await writeFile(draft, "改过了。丁戊。\n", "utf-8");
+          if ((input as { targetText: string }).targetText === "甲乙丙。") await writeFile(draft, "改过了。丁戊。\n", "utf-8");
           return { ok: true, applied: true };
         },
         sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
@@ -843,7 +843,8 @@ describe("核账「改这处」结构化动作（revise_draft，重构 P6：按�
         scrubError: String,
         projectDir,
       });
-      expect(calls).toEqual(["甲乙", "丁戊"]);
+      // 半句补成整句再交去改（核账抄的原句常止于逗号，长篇连写 2026-10-24）。
+      expect(calls).toEqual(["甲乙丙。", "丁戊。"]);
       expect(textOf(events)).toBe("改好了 2 处（可撤销）。1 处的原句在改前面那处时已经跟着改了，再核一遍看还对不对得上。");
       const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean }[] };
       expect(next.choices).toEqual([expect.objectContaining({ label: "再核一遍", recommended: true })]);

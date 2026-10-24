@@ -122,6 +122,34 @@ export function locateRevisionSpan(
   return { start: origIndex[head]!, end: origIndex[end - 1]! + 1 };
 }
 
+// 不猜白名单：切句
+const SENTENCE_END = /[。！？!?…\n]/u;
+// 不猜白名单：切句
+const CLOSING_QUOTE = /[”」』"’]/u;
+/** 往外补句子时每边最多看这么多字，再远就不补（一段没句号的长文不该整段交出去）。 */
+const WHOLE_SENTENCE_MAX_REACH = 150;
+
+/**
+ * 把要改的那截补成整句（核账「改这处」用）：核账抄的原句常是半句（止于逗号），拿半句去改，模型顺手把整句写全，
+ * 原文剩下的半句还留在后面——落地成两遍（长篇连写 2026-10-24：「……不亏心，花在当年那条船的人身上，不亏心。」）。
+ * 按句读往两边补到句首句末；找不到、不唯一、或补得太远就原样返回（交给下游照常定位、如实报）。
+ */
+export function wholeSentenceTarget(draftContent: string, target: string): string {
+  const span = locateRevisionSpan(draftContent, target.trim());
+  if (typeof span === "string") return target;
+  const endsSentence = (at: number): boolean =>
+    SENTENCE_END.test(draftContent[at - 1] ?? "\n")
+    || (CLOSING_QUOTE.test(draftContent[at - 1] ?? "") && SENTENCE_END.test(draftContent[at - 2] ?? "\n"));
+  let start = span.start;
+  while (start > 0 && !endsSentence(start)) start -= 1;
+  let end = span.end;
+  while (end < draftContent.length && !endsSentence(end)) end += 1;
+  while (end < draftContent.length && draftContent[end] !== "\n" && SENTENCE_END.test(draftContent[end]!)) end += 1;
+  if (end < draftContent.length && CLOSING_QUOTE.test(draftContent[end]!) && SENTENCE_END.test(draftContent[end - 1]!)) end += 1;
+  if (span.start - start > WHOLE_SENTENCE_MAX_REACH || end - span.end > WHOLE_SENTENCE_MAX_REACH) return target;
+  return draftContent.slice(start, end).trim();
+}
+
 /* ---------------------------------------------------------------------------
  * 结果类型：守卫拒绝是数据（code），用户可见文案由两侧适配层各按其历史口径组装
  * ------------------------------------------------------------------------- */

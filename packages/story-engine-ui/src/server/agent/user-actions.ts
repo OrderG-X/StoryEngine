@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { defaultDraftPath } from "../lib/project-io.js";
 import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
-import { locateRevisionSpan } from "../services/revision-service.js";
+import { locateRevisionSpan, wholeSentenceTarget } from "../services/revision-service.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
@@ -832,7 +832,10 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       }
     }
     const toolCallId = `user-action-revise_draft-${stamp}-${index}`;
-    const input = { chapter: action.chapter, targetText: fix.targetText, revisionGoal: fix.revisionGoal, constraints: ["只改这一段，别的不动"] };
+    // 核账抄的原句常是半句：补成整句再改，免得模型写全整句、原文剩下的半句又留一遍。
+    const current = applied > 0 ? await readDraft() : draftAtStart;
+    const targetText = current === undefined ? fix.targetText : wholeSentenceTarget(current, fix.targetText);
+    const input = { chapter: action.chapter, targetText, revisionGoal: fix.revisionGoal, constraints: ["只改这一段，别的不动"] };
     args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: input });
     let output: unknown;
     try {
