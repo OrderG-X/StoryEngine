@@ -6,12 +6,15 @@
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
 import type { RequestContext } from "@mastra/core/di";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultDraftPath } from "../lib/project-io.js";
+import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
 import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
-import { locateRevisionSpan, wholeSentenceTarget } from "../services/revision-service.js";
+import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
+import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
+import { createRevisionModelChannel, type RevisionModelCaller } from "../services/revision-service.js";
+import { fixDraftByUnits, type DraftUnitFixResult } from "../services/unit-fix.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
@@ -62,8 +65,8 @@ export type UserAction =
   /** 「撤销上一步」按钮（重构 P4）：撤上一回合的写盘改动（同对话里说「撤销上一步」的 manage_snapshots op=undo）。 */
   | { readonly toolName: "undo" }
   /**
-   * 核账条目上的「改这处」「改掉这 N 处」（重构 P6）：服务端按原句逐处直接调 revise_draft（只改那一段），
-   * 不经模型判断——模型曾读完稿就说「改好了」而没调改稿工具。改不成（原句没找到 / 出现多次）照实说，给「让 AI 改」。
+   * 核账条目上的「改这处」「改掉这 N 处」（重构 P6；P12 起按编号句子一次改齐）：服务端直接改、不经对话 AI——
+   * 模型曾读完稿就说「改好了」而没调改稿工具。改不成（原句没找到 / 出现多次）照实说，给「让 AI 改」。
    */
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly ReviseFix[] }
   /**
@@ -333,6 +336,8 @@ export async function runUserAction(args: {
   readonly scrubError: (error: unknown) => string;
   /** 项目目录（编辑部 R4.6 建议项用：定稿后判占位主角卡要不要给改名建议）；缺省不给建议，行为不变。 */
   readonly projectDir?: string;
+  /** 「改这处」用的修订模型（测试注入）；缺省按 repair 任务的配置。 */
+  readonly fixModel?: RevisionModelCaller;
 }): Promise<void> {
   const { action } = args;
   if (action.toolName === "prune_snapshots") {
@@ -814,9 +819,10 @@ async function runBrainstormAction(args: Omit<Parameters<typeof runUserAction>[0
     : `第 ${action.chapter} 章的走法没想出来。`);
 }
 
-const UNREVISED = "未修订：";
-
-/** 「改这处」按钮：逐处直接调 revise_draft（只改那一段），回执照实说改了几处、哪几处没改成。 */
+/**
+ * 「改这处」「改掉这 N 处」按钮（P12 编号句子）：这一章要改的几处一次交修订模型、按编号整句换，
+ * 回执照实说改了几处、哪几处没改成。结果按 revise_draft 的输出交给前端（稿纸换上新正文、可撤销）。
+ */
 async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[0], "action"> & {
   readonly action: Extract<UserAction, { readonly toolName: "revise_draft" }>;
 }): Promise<void> {
@@ -828,55 +834,50 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
     const rest = args.scrubber.flush();
     if (rest) args.sendEvent("text-delta", { text: rest });
   };
-  const failed: { readonly fix: ReviseFix; readonly why: string }[] = [];
-  // 两条报的是同一句（或句子相互重叠）：前一处改完，后一处的原句已经跟着变了——不再去找，也别叫作者「逐字确认」（长篇连写走查 2026-10-24）。
-  const swept: ReviseFix[] = [];
-  const readDraft = async (): Promise<string | undefined> => (args.projectDir
-    ? readFile(defaultDraftPath(args.projectDir, action.chapter), "utf-8").catch(() => undefined)
-    : undefined);
-  const draftAtStart = await readDraft();
-  let applied = 0;
-  for (const [index, fix] of action.fixes.entries()) {
-    if (applied > 0 && draftAtStart !== undefined && locateRevisionSpan(draftAtStart, fix.targetText) !== "not_found") {
-      const now = await readDraft();
-      if (now !== undefined && locateRevisionSpan(now, fix.targetText) === "not_found") {
-        swept.push(fix);
-        continue;
-      }
-    }
-    const toolCallId = `user-action-revise_draft-${stamp}-${index}`;
-    // 核账抄的原句常是半句：补成整句再改，免得模型写全整句、原文剩下的半句又留一遍。
-    const current = applied > 0 ? await readDraft() : draftAtStart;
-    const targetText = current === undefined ? fix.targetText : wholeSentenceTarget(current, fix.targetText);
-    const input = { chapter: action.chapter, targetText, revisionGoal: fix.revisionGoal, constraints: ["只改这一段，别的不动"] };
-    args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: input });
-    let output: unknown;
-    try {
-      output = await args.executeTool("revise_draft", input, args.requestContext);
-    } catch (error) {
-      const message = humanizeToolNames(args.scrubError(error));
-      args.sendEvent("tool-error", { toolCallId, toolName: "revise_draft", error: message, retryable: true });
-      failed.push({ fix, why: message });
-      continue;
-    }
-    args.sendEvent("tool-result", { toolCallId, toolName: "revise_draft", output });
-    const result = output as { readonly ok?: unknown; readonly applied?: unknown; readonly summary?: unknown } | undefined;
-    if (result?.ok === true && result.applied === true) {
-      applied += 1;
-    } else {
-      // 回执已说「没改成」，工具摘要开头的「未修订：」不再叠一层。
-      const summary = typeof result?.summary === "string" ? result.summary.trim() : "";
-      const why = summary.startsWith(UNREVISED) ? summary.slice(UNREVISED.length) : summary;
-      failed.push({ fix, why: why ? humanizeToolNames(why) : "没写进工作稿" });
-    }
-  }
+  const toolCallId = `user-action-revise_draft-${stamp}`;
   const total = action.fixes.length;
+  args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: { chapter: action.chapter } });
+  let result: DraftUnitFixResult;
+  let overview: StateOverview;
+  try {
+    if (!args.projectDir) throw new Error("没找到这本书");
+    const callModel = args.fixModel ?? (await createRevisionModelChannel()).call;
+    result = await fixDraftByUnits({
+      projectDir: args.projectDir,
+      chapter: action.chapter,
+      fixes: action.fixes.map((fix) => ({ quote: fix.targetText, goal: fix.revisionGoal })),
+      callModel,
+    });
+    overview = await buildStateOverview({ projectDir: args.projectDir, chapter: action.chapter, maxTimelineEvents: 8 });
+  } catch (error) {
+    const message = humanizeToolNames(args.scrubError(error));
+    args.sendEvent("tool-error", { toolCallId, toolName: "revise_draft", error: message, retryable: true });
+    emitText(`${total === 1 ? "这一处" : `这 ${total} 处`}没改成：${message}。可以再点一次。`);
+    return;
+  }
+  const applied = result.applied.length;
+  const failed = result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
   const done = applied === 0 ? "" : total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`;
-  const sweptText = swept.length === 0 ? "" : `${swept.length} 处的原句在改前面那处时已经跟着改了，再核一遍看还对不对得上。`;
   const notDone = failed.length === 0
     ? ""
-    : total === 1 ? `这一处没改成：${failed[0]!.why}` : `${failed.length} 处没改成：${failed[0]!.why}`;
-  emitText(`${done}${sweptText}${notDone}`);
+    : total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
+  const summary = `${done}${notDone}`;
+  args.sendEvent("tool-result", {
+    toolCallId,
+    toolName: "revise_draft",
+    output: {
+      ok: applied > 0,
+      applied: applied > 0,
+      summary,
+      refreshScope: "full",
+      chapter: action.chapter,
+      overview,
+      ...(applied > 0 ? { draftBody: stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(result.text)).trim() } : {}),
+      ...(result.draftVersion !== undefined ? { draftVersion: result.draftVersion } : {}),
+      ...(result.snapshotId ? { snapshotId: result.snapshotId } : {}),
+    },
+  });
+  emitText(summary);
   const choices: NextStepChoice[] = [
     ...(failed.length > 0 ? [{
       label: "让 AI 改",

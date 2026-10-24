@@ -2,7 +2,7 @@
  * 出稿后的固定质量环节（2026-10-08 写作主链重设计·阶段 3）：字数不够就接着写够 → 前后核对 → 按核账改一轮再核一遍。
  * 2026-10-10 引擎升级第 3 期：前后核对改用和「核账」按钮同一套服务（editorial/continuity/check-service），
  * 删掉了出稿专用的旧版核对（对照账本 + 上一章结尾，召回 17～25%、误报 35～57%）和没人用的自动改冲突段。
- * 2026-10-23：核出「确定」又错在新稿里的，按核账卡「改这处」同一句要求、同一条改稿路（reviseDraftText）逐处改，改完再核，
+ * 2026-10-23：核出「确定」又错在新稿里的，按核账卡「改这处」同一句要求、同一条改稿路改（P12 起按编号句子一次改齐），改完再核，
  * 留给作者的是改后还剩的（考卷：新稿里确定对不上每千字 2.10 → 0.69）。对的是设定卡的不自动改，交作者定。
  *
  * 编排在工具内一次跑完（确定性顺序），不再靠 agent 跨回合「预览→补字→再预览」接力（十章验收：每章来回 3–4 轮、
@@ -16,7 +16,8 @@ import { writeAiDraft } from "../../lib/ai-draft-write.js";
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
-import { reviseDraftText, wholeSentenceTarget, type RevisionModelCaller } from "../revision-service.js";
+import { type RevisionModelCaller } from "../revision-service.js";
+import { fixByUnits } from "../unit-fix.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";
 
@@ -31,7 +32,7 @@ export interface QualityPipelineInput {
   readonly continueCallModel?: ContinueCallModel;
   /** 前后核对（qualityCheck 槽，和「核账」同一套，核账员那一路）。缺失 = 不核对。 */
   readonly checkCallModel?: BrainCallModel;
-  /** 按核账改（repair 槽，和核账卡「改这处」同一条改稿路）。缺失 = 核出来不改、原样交作者。 */
+  /** 按核账改（repair 槽，和核账卡「改这处」同一条路 fixByUnits）。缺失 = 核出来不改、原样交作者。 */
   readonly fixCallModel?: RevisionModelCaller;
   /** true=本出稿流程已有「写盘前」存档点（适配层建），补写重写不再另建（R4.2：一次出稿=操作历史里的一步）。 */
   readonly skipOverwriteSnapshot?: boolean;
@@ -110,24 +111,15 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     const targets = first.ok && input.fixCallModel ? first.sure.filter((item) => fixableInDraft(input.chapter, item)) : [];
     if (input.fixCallModel && targets.length > 0) {
       const fixStartedAt = Date.now();
-      let applied = 0;
-      for (const item of targets) {
-        // 逐处在上一处改完的正文上改（同一条改稿路：定位 → 模型改写 → 落点与诚实守卫）；没改成的照实计数，正文不动。
-        const revised = await reviseDraftText({
-          projectDir: input.projectDir,
-          chapter: input.chapter,
-          draftContent: body,
-          // 和核账卡「改这处」一样先补成整句（半句交去改，模型写全整句、原文剩下的半句会留两遍）。
-          targetText: wholeSentenceTarget(body, item.quote),
-          revisionGoal: continuityFixGoal(input.chapter, item),
-          constraints: ["只改这一段，别的不动"],
-          callModel: input.fixCallModel,
-        }).catch(() => undefined);
-        if (revised?.ok) {
-          body = revised.updatedContent;
-          applied += 1;
-        }
-      }
+      // 和核账卡「改掉这 N 处」同一条路：几处一次交修订模型、按编号整句换；没改成的照实计数，正文不动。
+      const fixed = await fixByUnits({
+        chapter: input.chapter,
+        text: body,
+        fixes: targets.map((item) => ({ quote: item.quote, goal: continuityFixGoal(input.chapter, item) })),
+        callModel: input.fixCallModel,
+      });
+      body = fixed.text;
+      const applied = fixed.applied.length;
       timings.fixMs = Date.now() - fixStartedAt;
       autoFixed = { applied, failed: targets.length - applied };
       if (applied > 0) result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel });

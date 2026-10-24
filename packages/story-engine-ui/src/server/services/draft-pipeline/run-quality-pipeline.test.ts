@@ -72,14 +72,15 @@ describe("runDraftQualityPipeline", () => {
     expect(memory.issues).toHaveLength(1);
   });
 
-  // 2026-10-23：核出「确定」又错在新稿里的，按核账卡「改这处」同一句要求、同一条改稿路改一轮，改完再核。
+  // 2026-10-23：核出「确定」又错在新稿里的，按核账卡「改这处」同一句要求、同一条路改一轮（P12 起按编号句子），改完再核。
   it("按核账改：确定错在新稿里的按前文改、改完再核，留给作者的是改后还剩的；正文写盘", async () => {
     const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
     const { projectDir, draftPath } = await makeBook(draft);
     const checkCallModel = fakeChecker();
     const fixCallModel = vi.fn(async (prompt: string) => {
       expect(prompt).toContain("南门菜场十来年前就拆了"); // 改稿要求带着前文原句（和核账卡同一句）
-      return JSON.stringify({ beforeText: "菜场还在", afterText: "菜场早没了", changeSummary: "按第 7 章改" });
+      expect(prompt).toContain("1. [2]：");
+      return JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] });
     });
     const result = await runDraftQualityPipeline({
       projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,

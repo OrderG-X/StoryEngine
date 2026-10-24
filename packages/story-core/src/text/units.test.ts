@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUnitEdits, dropNeighborEcho, fitQuotes, numberedText, splitUnits } from "./units.js";
+import { applyUnitEdits, dropNeighborEcho, fitQuotes, numberedText, prepareUnitReplacement, splitUnits } from "./units.js";
 
 const texts = (text: string) => splitUnits(text).map((unit) => unit.text);
 
@@ -106,5 +106,16 @@ describe("新句抄了邻句（dropNeighborEcho）", () => {
     expect(dropNeighborEcho("嗯。他说。", "嗯。他低声说。", "嗯。")).toBe("嗯。他低声说。");
     expect(dropNeighborEcho("许微，那都是多少年前的事了。真的。", "许微，那都是多少年前的事了。是真的。", prev)).toBe("许微，那都是多少年前的事了。是真的。");
     expect(dropNeighborEcho(unit, "“许微，那都是多少年前的事了。", prev)).toBeUndefined();
+  });
+});
+
+describe("模型给的新句 → 能换上去的字（prepareUnitReplacement）", () => {
+  const units = splitUnits("“许微，那都是多少年前的事了。你爸没了十五年了，你翻这些有什么用。”\n她没接话。");
+
+  it("去编号、去抄进来的邻句、引号对齐；空串＝删句留引号；编号不存在 / 只剩邻句 → undefined", () => {
+    expect(prepareUnitReplacement(units, 2, "[2]许微，那都是多少年前的事了。你爸失踪十五年了，你翻这些有什么用。")).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+    expect(prepareUnitReplacement(units, 2, "")).toBe("”");
+    expect(prepareUnitReplacement(units, 9, "随便")).toBeUndefined();
+    expect(prepareUnitReplacement(units, 2, "“许微，那都是多少年前的事了。")).toBeUndefined();
   });
 });

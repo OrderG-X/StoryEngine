@@ -236,6 +236,20 @@ export function dropNeighborEcho(from: string, to: string, prev?: string, next?:
   return bare(out) ? out : undefined;
 }
 
+/**
+ * 模型给第 id 句的新写法 → 能换上去的字：去掉带回来的编号和换行、去掉抄进来的邻句、引号对齐原句。
+ * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平）返回 undefined。
+ */
+export function prepareUnitReplacement(units: readonly TextUnit[], id: number, to: string): string | undefined {
+  const index = units.findIndex((unit) => unit.id === id);
+  if (index < 0) return undefined;
+  const unit = units[index]!;
+  const cleaned = cleanReplacement(to);
+  if (!cleaned) return fitQuotes(unit.text, "");
+  const echoFree = dropNeighborEcho(unit.text, cleaned, units[index - 1]?.text, units[index + 1]?.text);
+  return echoFree === undefined ? undefined : fitQuotes(unit.text, echoFree);
+}
+
 export interface UnitEdit {
   /** 第几句（按改之前的正文切）。 */
   readonly id: number;

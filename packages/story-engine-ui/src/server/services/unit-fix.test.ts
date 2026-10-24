@@ -1,0 +1,89 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from "vitest";
+
+import { fixByUnits } from "./unit-fix.js";
+
+const goal = "和第 3 章「他那年二十九」对上";
+const reply = (edits: readonly { id: number | string; to: string }[]) => JSON.stringify({ edits });
+
+describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
+  const draft = "# 第五章 雾\n\n“我出。”杜卫平说，“我爹的账上沾了那船的钱，他那本手账里一笔一笔都记着。这些年这钱在我手里压着，花在当年那条船的人身上，不亏心。”\n许微没接话。\n";
+
+  it("核账抄的是半句：提示里点名那几句的编号，模型回整句、按编号换，不留两遍；收引号对齐原句", async () => {
+    const callModel = vi.fn(async (prompt: string) => {
+      expect(prompt).toContain("1. [2][3]：和第 3 章");
+      expect(prompt).toContain("\n[4]许微没接话。");
+      return reply([{ id: 3, to: "这些年这钱在我手里压着，花在当年那条船的人身上，我心里不亏。" }]);
+    });
+    const out = await fixByUnits({ chapter: 5, text: draft, fixes: [{ quote: "他那本手账里一笔一笔都记着。这些年这钱在我手里压着", goal }], callModel });
+    expect(out.applied).toEqual([0]);
+    expect(out.failed).toEqual([]);
+    expect(out.text).toBe(draft.replace("不亏心。”", "我心里不亏。”"));
+  });
+
+  it("新句抄进了前一句：去掉抄的那截；编号写成「[2]」也认", async () => {
+    const text = "他走了。\n许微没接话。\n";
+    const out = await fixByUnits({ chapter: 5, text, fixes: [{ quote: "许微没接话", goal }], callModel: async () => reply([{ id: "[2]", to: "他走了。许微点了点头。" }]) });
+    expect(out).toMatchObject({ text: "他走了。\n许微点了点头。\n", applied: [0] });
+  });
+
+  it("两处报的是同一句：合成一条交给模型，只问一次，两处都算改了", async () => {
+    const callModel = vi.fn(async (_prompt: string) => reply([{ id: 1, to: "甲乙丁。" }]));
+    const out = await fixByUnits({ chapter: 5, text: "甲乙丙。戊己。\n", fixes: [{ quote: "甲乙", goal: "一" }, { quote: "乙丙", goal: "二" }], callModel });
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(callModel.mock.calls[0]![0]).toContain("1. [1]：一；二");
+    expect(out).toMatchObject({ text: "甲乙丁。戊己。\n", applied: [0, 1], failed: [] });
+  });
+
+  it("原句找不到 / 不止一处 / 太长：不问模型，照实说为什么", async () => {
+    const callModel = vi.fn(async () => reply([]));
+    const out = await fixByUnits({
+      chapter: 5,
+      text: "他走了。他走了。一。二。三。四。五。\n",
+      fixes: [{ quote: "不在稿里", goal }, { quote: "他走了", goal }, { quote: "一。二。三。四。五", goal }],
+      callModel,
+    });
+    expect(callModel).not.toHaveBeenCalled();
+    expect(out.text).toBe("他走了。他走了。一。二。三。四。五。\n");
+    expect(out.failed.map((item) => item.why)).toEqual([
+      "原句在稿里找不到了（可能已经改过）",
+      "原句在稿里不止一处，不知道改哪一处",
+      "核账引的原句太长，没法只改那几句",
+    ]);
+  });
+
+  it("回的不是 JSON：同一份提示再要一次；还不行就照实说格式不对，正文不动", async () => {
+    const callModel = vi.fn(async () => "好的，我改成了……");
+    const out = await fixByUnits({ chapter: 5, text: "他走了。\n", fixes: [{ quote: "他走了", goal }], callModel });
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(out).toMatchObject({ text: "他走了。\n", applied: [], failed: [{ fix: 0, why: "AI 回的格式不对，没写改后的句子" }] });
+  });
+
+  it("只认点名的编号：改了别的句子不算；没给点名那句的改法照实说", async () => {
+    const out = await fixByUnits({ chapter: 5, text: "甲。乙。\n", fixes: [{ quote: "乙", goal }], callModel: async () => reply([{ id: 1, to: "改了甲。" }]) });
+    expect(out).toMatchObject({ text: "甲。乙。\n", applied: [], failed: [{ fix: 0, why: "AI 没给出这句的改法" }] });
+  });
+
+  it("几处里一处换上了、一处没给：改了的照换，没给的照实说", async () => {
+    const out = await fixByUnits({
+      chapter: 5,
+      text: "甲。乙。丙。\n",
+      fixes: [{ quote: "甲", goal }, { quote: "丙", goal }],
+      callModel: async () => reply([{ id: 1, to: "改了甲。" }]),
+    });
+    expect(out).toMatchObject({ text: "改了甲。乙。丙。\n", applied: [0], failed: [{ fix: 1, why: "AI 没给出这句的改法" }] });
+    expect(out.changes).toEqual([{ from: "甲。", to: "改了甲。" }]);
+  });
+
+  it("to 给空串 = 删掉这句", async () => {
+    const out = await fixByUnits({ chapter: 5, text: "甲。乙。丙。\n", fixes: [{ quote: "乙", goal }], callModel: async () => reply([{ id: 2, to: "" }]) });
+    expect(out).toMatchObject({ text: "甲。丙。\n", applied: [0] });
+  });
+
+  it("模型调用报错：不重试，照实说，正文不动", async () => {
+    const callModel = vi.fn(async () => { throw new Error("服务商超时"); });
+    const out = await fixByUnits({ chapter: 5, text: "他走了。\n", fixes: [{ quote: "他走了", goal }], callModel });
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(out).toMatchObject({ text: "他走了。\n", applied: [], failed: [{ fix: 0, why: "AI 没改成（服务商超时）" }] });
+  });
+});

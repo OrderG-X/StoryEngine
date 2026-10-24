@@ -17,11 +17,10 @@ import {
   applyUnitEdits,
   draftPath,
   draftVersionOf,
-  dropNeighborEcho,
-  fitQuotes,
   listChapterTexts,
   nameKey,
   numberedText,
+  prepareUnitReplacement,
   quoteInText,
   readCardsOrLegacy,
   readChapterLedger,
@@ -346,8 +345,7 @@ export function parseSweepEdits(text: string, batch: readonly SweepDoc[]): Omit<
     const key = `${doc.chapter}:${unit.id}`;
     if (seen.has(key)) continue;
     const proposed = str(record.to);
-    const echoFree = proposed ? dropNeighborEcho(unit.text, proposed.replace(/\s*\n+\s*/gu, ""), doc.units[unit.id - 2]?.text, doc.units[unit.id]?.text) : undefined;
-    const fitted = echoFree ? fitQuotes(unit.text, echoFree) : undefined;
+    const fitted = proposed ? prepareUnitReplacement(doc.units, unit.id, proposed) : undefined;
     if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
     seen.add(key);
     const why = str(record.why);
