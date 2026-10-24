@@ -50,6 +50,13 @@ describe("resolveDraftLengthTarget × 显式 minWords（长跑 #4）", () => {
     expect(target.upperBound).toBeGreaterThan(3000);
   });
 
+  it("显式 min 比目标的正常区间还低（作者把地板调低、目标照旧）：出稿照旧瞄目标区间，地板不当出稿下限", () => {
+    const target = resolveDraftLengthTarget({ lengthRules: { targetWords: 2500, minWords: 1000 } });
+    expect(target.requested).toBe(2500);
+    expect(target.lowerBound).toBe(requestedDraftLengthBounds(2500).lowerBound); // 2125，不是 1000
+    expect(target.hardMinimum).toBeUndefined();
+  });
+
   it("只有显式 min、没有目标：目标也抬到下限（上限区间才有意义）", () => {
     const target = resolveDraftLengthTarget({ lengthRules: { minWords: 3000 } });
     expect(target.source).toBe("writing_rules");

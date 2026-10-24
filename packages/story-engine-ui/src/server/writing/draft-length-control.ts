@@ -79,7 +79,10 @@ function withExplicitMinimum(target: DraftLengthTarget, minimum: number | undefi
   const min = normalizeDraftLengthNumber(minimum);
   if (min === undefined) return target;
   const requested = Math.max(target.requested, min);
-  const { upperBound } = requestedDraftLengthBounds(requested);
+  const { lowerBound: derived, upperBound } = requestedDraftLengthBounds(requested);
+  // 下限比目标的正常区间还低（作者为了一章短稿把地板调低、目标照旧，长篇连写 2026-10-24）：地板只管定稿拦不拦，
+  // 出稿照旧瞄目标区间——否则提示词写成「1000-2875 字」，写手一路往少了写（目标 2500 写出 1635）。
+  if (min < derived) return { ...target, requested, lowerBound: derived, upperBound };
   return { ...target, requested, lowerBound: min, upperBound, hardMinimum: true };
 }
 
