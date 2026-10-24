@@ -163,7 +163,8 @@ export async function canReuseCheck(projectDir: string, chapter: number, body: s
   if (!memory || memory.version !== CHECK_MEMORY_VERSION || memory.bodyHash !== hashBody(body)) return false;
   const earlier = await readEarlierChapters(projectDir, chapter);
   const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
-  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? []);
+  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
+  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
 }
 
 export async function checkChapterBody(
@@ -176,16 +177,15 @@ export async function checkChapterBody(
   // 账本只读一次：数字对账用它，核账记忆的键也带上它。读不了就不传，核账那边会如实记「账本读不了」。
   const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
   const readerCallModel = options.readerCallModel ?? callConfiguredBrainModel;
+  // 设定本也只读一次：记忆的键带上它（改了设定要重核），上次对设定本的条目也按它判还在不在。
+  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const bodyHash = hashBody(body);
-  const earlierHash = hashEarlier(earlier, ledgerFacts ?? []);
+  const earlierHash = hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
   const memory = await readCheckMemory(projectDir, chapter);
   const reused = !options.fresh
     && Boolean(memory && memory.version === CHECK_MEMORY_VERSION && memory.bodyHash === bodyHash && memory.earlierHash === earlierHash);
   // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
-  const foundation = memory && !reused && memory.issues.some((issue) => issue.againstSetting)
-    ? await readFoundationDigest(projectDir).catch(() => undefined)
-    : undefined;
   const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteSource(foundation, settingQuote) !== undefined;
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
     ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, settingStillSays))

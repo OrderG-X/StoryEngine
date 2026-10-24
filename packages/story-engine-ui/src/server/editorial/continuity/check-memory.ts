@@ -38,16 +38,17 @@ export function hashBody(body: string): string {
 }
 
 /**
- * 前文 + 账本（v3 起账本数字对账也算核账的输入：账本改了，上次的结果不能原样复用）。
+ * 前文 + 账本 + 设定本（v3 起账本数字对账也算核账的输入：账本改了，上次的结果不能原样复用；
+ * 设定本同理——核账有一遍专对设定本，作者改了设定再核，不能端出按旧设定核的结果，长篇连写 2026-10-24）。
  * 键尾固定拼 |engine:reader（R3 前新旧两路的记忆键不一样，防切换后互相复用；旧组合查错留下的记忆
  * 没带这个尾巴，自然对不上、会重新核一次——两路查出来的东西本来就不一样）。
  */
-export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = []): string {
+export function hashEarlier(earlier: EarlierText, ledger: readonly unknown[] = [], setting = ""): string {
   return sha([...earlier.chapters]
     .sort((a, b) => a.chapter - b.chapter)
     .map((item) => `${item.chapter}:${item.sentences.join("")}`)
     .join("\n")
-    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : "") + "|engine:reader");
+    .replace(/\s+/gu, "") + (ledger.length > 0 ? `|ledger:${JSON.stringify(ledger)}` : "") + (setting ? `|setting:${setting}` : "") + "|engine:reader");
 }
 
 export async function readCheckMemory(projectDir: string, chapter: number): Promise<CheckMemory | undefined> {

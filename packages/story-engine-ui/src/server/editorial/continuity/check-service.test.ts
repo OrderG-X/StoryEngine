@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../index.js";
 import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { checkChapterBody } from "./check-service.js";
+import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
 import { hashBody, hashEarlier, writeCheckMemory } from "./check-memory.js";
 import { addDismissal } from "./dismissals.js";
@@ -154,6 +154,25 @@ describe("核账服务：核账记忆", () => {
     const after = await checkChapterBody(dir, 3, `${BODY}林舟低头擦着柜台。`, { readerCallModel: reader.callModel });
     expect(after.reused).toBe(false);
     expect(reader.calls.checks).toBeGreaterThan(3);
+  });
+
+  it("设定本改了 → 不复用上次结果（长篇连写：作者把「仓门是铁门」记进设定后再核，端出的还是按旧设定核的）", async () => {
+    const dir = await makeBook();
+    const reader = readerModel();
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel });
+    expect(await canReuseCheck(dir, 3, BODY)).toBe(true);
+    await mkdir(join(dir, "story"), { recursive: true });
+    await writeFile(join(dir, "story", "character-bible.json"), JSON.stringify({
+      version: "v0",
+      characters: [{ id: "char-z1", name: "周婶", appearanceAnchors: ["左腿有旧伤"] }],
+    }), "utf-8");
+    expect(await canReuseCheck(dir, 3, BODY)).toBe(false);
+    const checksBefore = reader.calls.checks;
+    const after = await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel });
+    expect(after.reused).toBe(false);
+    expect(reader.calls.checks).toBeGreaterThan(checksBefore);
+    // 设定没再动 → 又能复用
+    expect((await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel })).reused).toBe(true);
   });
 });
 
