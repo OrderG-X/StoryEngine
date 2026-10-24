@@ -197,7 +197,8 @@ export async function checkChapterBody(
     // R7.3：复用上次结果也照过一遍相对日子换算（纯确定性、不调模型）——作者后来改了故事日时，
     // 旧缓存里「明天 / 后天」那类条目按新时间线重新换算，不会把该收掉的误报又端出来。
     const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
-    result = { issues: applyRelativeDayAlignment(memory!.issues, chapter, timeline), failures: [] };
+    // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
+    result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
     result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
     if (result.coverage) {
