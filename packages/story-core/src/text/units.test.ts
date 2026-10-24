@@ -118,4 +118,10 @@ describe("模型给的新句 → 能换上去的字（prepareUnitReplacement）"
     expect(prepareUnitReplacement(units, 9, "随便")).toBeUndefined();
     expect(prepareUnitReplacement(units, 2, "“许微，那都是多少年前的事了。")).toBeUndefined();
   });
+
+  it("一句改成了几句（添了原文没有的话）→ undefined；改完还是一句的照收", () => {
+    const talk = splitUnits("“我退休那年交出去了。”\n她没接话。");
+    expect(prepareUnitReplacement(talk, 1, "“前些年交出去过一把。”他说，“交给邮局一个姓孟的。钥匙的事，你问他去。”")).toBeUndefined();
+    expect(prepareUnitReplacement(talk, 1, "“我前些年交出去了。”")).toBe("“我前些年交出去了。”");
+  });
 });

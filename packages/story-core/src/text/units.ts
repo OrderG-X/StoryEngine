@@ -238,7 +238,8 @@ export function dropNeighborEcho(from: string, to: string, prev?: string, next?:
 
 /**
  * 模型给第 id 句的新写法 → 能换上去的字：去掉带回来的编号和换行、去掉抄进来的邻句、引号对齐原句。
- * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平）返回 undefined。
+ * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平、一句改成了几句）返回 undefined。
+ * 一句改成几句多半是添了原文没有的话（回归书：一句「我退休那年交出去了」改成三句、多出一段台词）：不换。
  */
 export function prepareUnitReplacement(units: readonly TextUnit[], id: number, to: string): string | undefined {
   const index = units.findIndex((unit) => unit.id === id);
@@ -247,7 +248,8 @@ export function prepareUnitReplacement(units: readonly TextUnit[], id: number, t
   const cleaned = cleanReplacement(to);
   if (!cleaned) return fitQuotes(unit.text, "");
   const echoFree = dropNeighborEcho(unit.text, cleaned, units[index - 1]?.text, units[index + 1]?.text);
-  return echoFree === undefined ? undefined : fitQuotes(unit.text, echoFree);
+  const fitted = echoFree === undefined ? undefined : fitQuotes(unit.text, echoFree);
+  return fitted !== undefined && splitUnits(fitted).length > splitUnits(unit.text).length ? undefined : fitted;
 }
 
 export interface UnitEdit {

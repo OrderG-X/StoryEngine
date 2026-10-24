@@ -8,7 +8,7 @@ import { cardFill, cardWrite, runCommand, type CardOp } from "@actalk/story-core
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { checkChapterByReader, checkTask, dropMisdirectedBySetting, parseSettingChecks, parseSettingIssues, parseVerdicts, selfReviewTask, settingCheckTask } from "./checker.js";
-import { foundationMessage, readFoundationDigest, settingQuoteSource } from "./foundation-digest.js";
+import { cleanSettingQuote, foundationMessage, readFoundationDigest, settingQuoteSource } from "./foundation-digest.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
 import type { ContinuityIssueV2, EarlierText } from "./continuity/check-chapter.js";
 
@@ -125,6 +125,9 @@ describe("readFoundationDigest：按设定卡拼设定（题材中立，栏名�
     const digest = await readFoundationDigest(dir);
     expect(digest!.sections.map((section) => section.label)[0]).toBe("定论");
     expect(settingQuoteSource(digest!, "沈敬山三年前过世")).toEqual({ label: "定论", kind: "canon" });
+    // 连着摘要里的小标题一起抄：小标题去掉，核账卡上带的是定论原文本身。
+    expect(cleanSettingQuote(digest!, "【定论】沈敬山三年前过世")).toBe("沈敬山三年前过世");
+    expect(cleanSettingQuote(digest!, "沈敬山三年前过世")).toBe("沈敬山三年前过世");
   });
 
   it("settingQuoteSource：引文跨了同一节里两张卡，只到类、不带卡名", async () => {

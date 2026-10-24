@@ -146,8 +146,13 @@ async function readOptional(path: string): Promise<string | undefined> {
   }
 }
 
-function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>): string {
-  if (side.where === "setting") return `设定本（${side.card ? `${side.label}「${side.card}」` : side.label}）：「${side.quote}」`;
+function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>, cards?: SettingCardsFile): string {
+  if (side.where === "setting") {
+    // 同一张卡上别的几栏帮着看懂这条说的是什么事（回归书：「下月办手续」不看「即将退休」那栏，定论写成了「每月办手续」）。
+    const card = side.card ? cards?.cards.find((item) => nameKey(item.name) === nameKey(side.card!)) : undefined;
+    const others = card?.fields.filter((field) => !quoteInText(side.quote, field.value) && !quoteInText(field.value, side.quote)).map((field) => `${field.label}：${field.value}`) ?? [];
+    return `设定本（${side.card ? `${side.label}「${side.card}」` : side.label}）：「${side.quote}」${others.length > 0 ? `（这张卡别的几栏：${others.join("；")}）` : ""}`;
+  }
   const doc = docs.get(side.chapter);
   const where = doc?.target === "draft" ? `第 ${side.chapter} 章（工作稿）` : `第 ${side.chapter} 章`;
   const unit = doc?.units.find((item) => quoteInText(side.quote, item.text)) ?? doc?.units.find((item) => quoteInText(item.text, side.quote));
@@ -157,17 +162,19 @@ function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>): string
   return `${where}：「${side.quote}」（前后文：${before}【${unit.text}】${after}）`;
 }
 
-export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, docs: ReadonlyMap<number, SweepDoc>): string {
+export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, docs: ReadonlyMap<number, SweepDoc>, cards?: SettingCardsFile): string {
   return [
     "作者在两处打架的说法里定了一处为准，请把它写成一条「定论」（这本书以后都以它为准）。",
-    `【作者选为准的】${sideLine(request.truth, docs)}`,
-    ...(request.other ? [`【和它打架的（这边要跟着改）】${sideLine(request.other, docs)}`] : []),
+    `【作者选为准的】${sideLine(request.truth, docs, cards)}`,
+    ...(request.other ? [`【和它打架的（这边要跟着改）】${sideLine(request.other, docs, cards)}`] : []),
     ...(request.reason ? [`【核账员说】${request.reason}`] : []),
     "要求：",
-    "- canon：写【作者选为准的】那边说的事，正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；",
-    "  只写两处打架的那一点，照作者选的那句的说法（前后文只是帮你看懂，里面别的事不写；数字、时间照原句抄）；主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
+    "- point：先想清楚两处说的是哪一件事、哪一点说得不一样，写成一个问句（比如「看仓人多大年纪？」「挂锁是什么颜色？」）；",
+    "- canon：照【作者选为准的】那边的说法回答这个问句，只答这一点：那句里别的事（长相、动作、别的物件）一概不写；",
+    "  正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；数字、时间照原句抄；原句说得含糊的，看前后文和另一边说的是什么事把它说明白；",
+    "  主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
     "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
-    '只输出一个 JSON：{"canon":"","names":[]}',
+    '只输出一个 JSON：{"point":"","canon":"","names":[]}',
   ].join("\n");
 }
 
@@ -185,12 +192,13 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     "下面是这本书的几章正文，每句前面有编号 [n]。逐句看，找出说法和这条定论对不上的句子（同一件事写成了别的样子）。",
     ...(mine.length > 0 ? [`核账已经报过这几句和它对不上，一定给出改法：${mine.map((side) => `第 ${side.chapter} 章「${side.quote}」`).join("；")}。`] : []),
-    "- 写了变化过程的、人物明确在撒谎或记错的、说的不是同一件事的，不算；",
-    "- 每处给出改法 to：只改和定论对不上的那几个字，别的字照抄，改完还是通顺的一整句，不加新情节；",
+    "- 原句说的得是定论里的同一个人、同一件东西、同一件事：名字不一样的、只是身份相近（都是看门的、都是老人）或同一类东西的，不算——宁可漏掉，也别把别人改成定论里的人；",
+    "- 写了变化过程的、人物明确在撒谎或记错的，不算；",
+    "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
     '只输出一个 JSON：{"edits":[{"chapter":1,"id":1,"to":"","why":""}]}。一处都没有就给 {"edits":[]}。',
     "",
-    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿，还没定稿）" : ""}】`, doc.numbered, ""]),
+    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}】`, doc.numbered, ""]),
   ].join("\n");
 }
 
@@ -265,15 +273,17 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
   ].join("\n");
 }
 
-export function reviewTask(canon: string, edits: readonly Omit<SettleEdit, "key">[]): string {
+export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[]): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     "另一个人逐句查了全书，说下面这几句和定论对不上、要改。请逐条复核：原句是不是真的和定论说不到一块。",
+    "- 先看原句（连同前后文）说的是不是定论里的同一个人、同一件东西：名字不一样、只是身份相近或同一类东西的，不算；",
     "- 原句写的就是这件事、而且写得和定论不一样：算；",
     "- 要靠推算才对不上的：推算的每一步都站得住才算；推得出、也说得通的不算；",
-    "- 说的不是同一件事、人物在撒谎或记错、写的是变化过程的：不算。",
+    "- 人物在撒谎或记错、写的是变化过程的：不算；",
+    "- 改法添了原句没有的情节、台词的：不算。",
     "",
-    ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.why ? `（他的理由：${edit.why}）` : ""}`),
+    ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
     "",
     '每条都要给。只输出一个 JSON：{"verdicts":[{"id":1,"conflict":true}]}',
   ].join("\n");
@@ -460,15 +470,25 @@ export async function proposeSettle(input: {
   const committedNumbers = await listChapterTexts(projectDir);
   const focusChapter = request.chapter;
 
-  // 正在写的那章有工作稿就查工作稿（作者眼前那份），别的章查定稿正文。
+  // 还没定稿的那章查工作稿（作者眼前那份）；已定稿的章查定稿正文，工作稿里同一句跟着改——只改工作稿的话
+  // 定稿正文还是原样，核别的章还会拿它报（回归书：核已定稿的第 3 章、点「以第 1 章为准」，只改了工作稿）。
+  // 定稿后作者又改过工作稿、核账报的那句只在工作稿里有，才查工作稿。
   const docs = new Map<number, SweepDoc>();
   const committed: { chapter: number; textSha256: string; draftVersion?: string; draftText?: string }[] = [];
   const drafts: { chapter: number; baseVersion: string }[] = [];
   if (focusChapter !== undefined) {
     const raw = await readOptional(join(projectDir, draftPath(focusChapter)));
     if (raw !== undefined && raw.trim()) {
-      docs.set(focusChapter, docOf(focusChapter, "draft", raw));
-      drafts.push({ chapter: focusChapter, baseVersion: draftVersionOf(raw) });
+      const draftDoc = docOf(focusChapter, "draft", raw);
+      const text = committedNumbers.includes(focusChapter) ? await readChapterText(projectDir, focusChapter) : undefined;
+      const committedDoc = text === undefined ? undefined : docOf(focusChapter, "committed", text);
+      const quotes = request.kind === "pick"
+        ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []))
+        : [];
+      if (!committedDoc || quotes.some((quote) => !unitOfQuote(committedDoc, quote) && unitOfQuote(draftDoc, quote))) {
+        docs.set(focusChapter, draftDoc);
+        drafts.push({ chapter: focusChapter, baseVersion: draftVersionOf(raw) });
+      }
     }
   }
   for (const chapter of committedNumbers) {
@@ -484,11 +504,11 @@ export async function proposeSettle(input: {
   let names: string[] = [];
   // 按已记下的定论查（核账卡「以定论为准」带的是核账员摘的那半句）：用设定本里那一整条，别再记一条半截的。
   const statementText = request.kind === "statement"
-    ? cards.canon.find((item) => item.text.includes(request.text.trim()))?.text ?? request.text.trim()
+    ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))?.text ?? request.text.trim()
     : "";
   try {
     if (request.kind === "pick") {
-      const asked = await askNames(callModel, canonTask(request, docs));
+      const asked = await askNames(callModel, canonTask(request, docs, cards));
       if (!asked.canon) return { ok: false, message: "这次没写出定论（模型没回），重新点一次试试。" };
       canon = asked.canon.slice(0, 400);
       names = asked.names;
@@ -532,8 +552,22 @@ export async function proposeSettle(input: {
     else failures.push(`${rangeLabel(batches[index]!)}这一批没查成（${result.reason instanceof Error ? result.reason.message : String(result.reason)}）`);
   });
   if (!fieldResult.ok) failures.push(`设定本那一遍没查成（${fieldResult.error instanceof Error ? fieldResult.error.message : String(fieldResult.error)}）`);
-  // 核账报过的那几句（作者认了它们打架）不复核；别的再问一遍，推算站不住的去掉。
   const flaggedUnits = flagged.map((side) => ({ side, unit: unitOfQuote(docs.get(side.chapter), side.quote) }));
+  const hasEdit = (side: ChapterSide, unit: TextUnit): boolean => found.some((edit) => edit.chapter === side.chapter && edit.id === unit.id);
+  // 核账报过、作者点过的那句是这次要定的事本身：整批查时漏了，只拿那几章单问一次（批里几万字，模型偶尔漏点名的句子）。
+  const unanswered = flaggedUnits.flatMap(({ side, unit }) => (unit && !hasEdit(side, unit) ? [{ side, unit }] : []));
+  const asked = new Set(batches.flatMap((batch, index) => (batchResults[index]!.status === "fulfilled" ? batch.map((doc) => doc.chapter) : [])));
+  const retry = unanswered.filter(({ side }) => asked.has(side.chapter));
+  if (retry.length > 0) {
+    const focus = [...new Set(retry.map(({ side }) => side.chapter))].sort((a, b) => a - b).map((chapter) => docs.get(chapter)!);
+    try {
+      const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side)) }], { json: true }), focus);
+      found.push(...again.filter((edit) => retry.some(({ side, unit }) => edit.chapter === side.chapter && edit.id === unit.id)));
+    } catch {
+      // 补问没成：下面照实列进「没查出改法」。
+    }
+  }
+  // 核账报过的那几句（作者认了它们打架）不复核；别的再问一遍，推算站不住的去掉。
   const clicked = (edit: Omit<SettleEdit, "key">): boolean =>
     flaggedUnits.some(({ side, unit }) => unit !== undefined && edit.chapter === side.chapter && edit.id === unit.id);
   const toReview = found.filter((edit) => !clicked(edit));
@@ -541,7 +575,11 @@ export async function proposeSettle(input: {
   const reviewDropped: SettleProposal["reviewDropped"][number][] = [];
   if (toReview.length > 0) {
     try {
-      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, toReview) }], { json: true }), toReview.length);
+      const withContext = toReview.map((edit) => {
+        const units = docs.get(edit.chapter)?.units ?? [];
+        return { ...edit, before: units[edit.id - 2]?.text ?? "", after: units[edit.id]?.text ?? "" };
+      });
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext) }], { json: true }), toReview.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
     } catch (error) {

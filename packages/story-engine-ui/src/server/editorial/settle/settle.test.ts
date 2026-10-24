@@ -128,8 +128,57 @@ describe("定论预览", () => {
     const model = fakeModel();
     await proposeSettle({ projectDir: dir, request: pick, callModel: model });
     const canonPrompt = model.prompts.find((prompt) => prompt.includes("写成一条「定论」"));
-    expect(canonPrompt).toContain("只写两处打架的那一点");
-    expect(canonPrompt).toContain("写【作者选为准的】那边说的事，正面写");
+    expect(canonPrompt).toContain("写成一个问句");
+    expect(canonPrompt).toContain("只答这一点");
+  });
+
+  it("核的是已定稿的章：改定稿正文，工作稿里同一句跟着改；定稿后改过工作稿、报的那句只在工作稿里，才改工作稿", async () => {
+    const onTwo = { ...pick, chapter: 2, other: { where: "chapter" as const, chapter: 2, quote: "杜叔走了五年了" } };
+    await writeFile(join(dir, draftPath(2)), CH2);
+    const outcome = await proposeSettle({ projectDir: dir, request: onTwo, callModel: fakeModel() });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.edits.filter((edit) => edit.chapter === 2).map((edit) => edit.target)).toEqual(["committed"]);
+    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”");
+    expect(await readFile(join(dir, draftPath(2)), "utf-8")).toContain("“杜叔走了十年了。”");
+
+    await writeFile(join(dir, draftPath(3)), "# 第3章 · 码头\n\n海风很冷。“杜叔走了五年了。”孟叔又说。\n");
+    const edited = await proposeSettle({
+      projectDir: dir,
+      request: { ...pick, chapter: 3, other: { where: "chapter", chapter: 3, quote: "“杜叔走了五年了。”孟叔又说" } },
+      callModel: async (messages, options) => {
+        const prompt = messages.at(-1)?.content ?? "";
+        const three = /【第 3 章（工作稿）】\n[\s\S]*?\[(\d+)\]“杜叔走了五年了。”/u.exec(prompt);
+        return prompt.includes("逐句看")
+          ? JSON.stringify({ edits: three ? [{ chapter: 3, id: Number(three[1]), to: "“杜叔走了十年了。”" }] : [] })
+          : fakeModel()(messages, options);
+      },
+    });
+    if (!edited.ok) throw new Error(edited.message);
+    expect(edited.proposal.edits.filter((edit) => edit.chapter === 3).map((edit) => edit.target)).toEqual(["draft"]);
+  });
+
+  it("整批查时漏了作者点的那句：只拿那一章单问一次；别的句子不从补问里收", async () => {
+    let sweeps = 0;
+    const base = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: pick,
+      callModel: async (messages, options) => {
+        const prompt = messages.at(-1)?.content ?? "";
+        if (!prompt.includes("逐句看")) return base(messages, options);
+        sweeps += 1;
+        if (sweeps === 1) return JSON.stringify({ edits: [] });
+        expect(prompt).toContain("【第 4 章（工作稿）】");
+        expect(prompt).not.toContain("【第 1 章】");
+        return JSON.stringify({ edits: [{ chapter: 4, id: 1, to: "孟叔又提起杜叔，说他十年前就没了。" }, { chapter: 4, id: 2, to: "许微点头。" }] });
+      },
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(sweeps).toBe(2);
+    expect(outcome.proposal.edits.map((edit) => [edit.chapter, edit.to])).toEqual([[4, "孟叔又提起杜叔，说他十年前就没了。"]]);
+    expect(outcome.proposal.missed).toEqual([]);
   });
 
   it("一批没查成如实记下，不当成没有要改的", async () => {

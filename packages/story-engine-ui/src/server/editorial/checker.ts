@@ -29,7 +29,7 @@ import {
   type EarlierText,
 } from "./continuity/check-chapter.js";
 import type { ChapterPlan } from "../book/chapter-plan.js";
-import { foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest } from "./foundation-digest.js";
+import { cleanSettingQuote, foundationMessage, readFoundationDigest, settingQuoteSource, type FoundationDigest } from "./foundation-digest.js";
 import { ensureReaderWindow, buildColdReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 
@@ -370,7 +370,7 @@ export function parseSettingIssues(
     if (!item || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
     if (String(record.earlierQuote ?? "").trim()) continue;
-    const settingQuote = String(record.settingQuote ?? "").trim();
+    const settingQuote = cleanSettingQuote(digest, String(record.settingQuote ?? ""));
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue;
@@ -422,7 +422,7 @@ export function parseSettingChecks(
     if (!item || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
     if (!AGREES_FALSE.test(String(record.agrees ?? "").trim())) continue;
-    const settingQuote = String(record.settingQuote ?? "").trim();
+    const settingQuote = cleanSettingQuote(digest, String(record.settingQuote ?? ""));
     const quote = String(record.quote ?? "").trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue; // 对不上与否只认结构化的 agrees，不再看理由里的字眼
@@ -673,13 +673,14 @@ export async function checkChapterByReader(input: {
           if (!ruling) return issue;
           const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
           if (foundation && !issue.againstSetting && ruling.settingQuote) {
-            const source = settingQuoteSource(foundation, ruling.settingQuote);
+            const settingQuote = cleanSettingQuote(foundation, ruling.settingQuote);
+            const source = settingQuoteSource(foundation, settingQuote);
             const draftWrong = ruling.draftAgrees === false;
             const earlierWrong = ruling.earlierAgrees === false;
             if (source && earlierWrong && !draftWrong) {
               return {
                 quote: issue.earlierQuote,
-                earlierQuote: ruling.settingQuote,
+                earlierQuote: settingQuote,
                 earlierChapter: issue.earlierChapter,
                 fixChapter: issue.earlierChapter,
                 reason: issue.reason,
@@ -691,7 +692,7 @@ export async function checkChapterByReader(input: {
             if (source && draftWrong && !earlierWrong) {
               return {
                 quote: issue.quote,
-                earlierQuote: ruling.settingQuote,
+                earlierQuote: settingQuote,
                 earlierChapter: input.chapter,
                 reason: issue.reason,
                 kind: "event",

@@ -109,6 +109,19 @@ export function foundationMessage(digest: FoundationDigest): string {
   ].join("\n");
 }
 
+/**
+ * 模型抄设定原文常连着摘要里的小标题一起抄（「【定论】孟叔……」）：小标题是我们自己拼的，去掉。
+ * 不去的话核账卡上「以定论为准」带的是带标题的半句，设定本里查不到那条定论、又记一条。
+ */
+export function cleanSettingQuote(digest: FoundationDigest, quote: string): string {
+  let out = quote.trim();
+  for (const section of digest.sections) {
+    const head = `【${section.label}】`;
+    if (out.startsWith(head)) out = out.slice(head.length).trim();
+  }
+  return out;
+}
+
 const quoteIn = (quote: string, text: string): boolean => containsQuote(normalize(text), quote) || quoteInText(quote, text);
 
 /**
