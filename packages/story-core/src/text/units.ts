@@ -169,6 +169,73 @@ export function fitQuotes(from: string, to: string): string | undefined {
   return undefined;
 }
 
+/** 比较用：去掉空白和各种引号。 */
+function bare(text: string): string {
+  return Array.from(text).filter((char) => !isBlank(char) && !OPENERS.has(char) && !QUOTE_CLOSERS.has(char) && char !== "\"").join("");
+}
+
+/** text 开头（不计空白引号）是不是 wanted：是就返回那截后面的位置（连着的收引号、空白一起算进那截）。 */
+function echoPrefixEnd(text: string, wanted: string): number | undefined {
+  const want = Array.from(wanted);
+  let matched = 0;
+  let offset = 0;
+  const chars = Array.from(text);
+  let index = 0;
+  for (; index < chars.length && matched < want.length; index += 1) {
+    const char = chars[index]!;
+    offset += char.length;
+    if (bare(char) === "") continue;
+    if (char !== want[matched]) return undefined;
+    matched += 1;
+  }
+  if (matched < want.length) return undefined;
+  for (; index < chars.length && (isBlank(chars[index]!) || QUOTE_CLOSERS.has(chars[index]!) || chars[index] === "\""); index += 1) offset += chars[index]!.length;
+  return offset;
+}
+
+/** text 结尾（不计空白引号）是不是 wanted：是就返回那截开始的位置（前面连着的开引号、空白一起算进那截）。 */
+function echoSuffixStart(text: string, wanted: string): number | undefined {
+  const want = Array.from(wanted);
+  const chars = Array.from(text);
+  let matched = 0;
+  let offset = text.length;
+  let index = chars.length - 1;
+  for (; index >= 0 && matched < want.length; index -= 1) {
+    const char = chars[index]!;
+    offset -= char.length;
+    if (bare(char) === "") continue;
+    if (char !== want[want.length - 1 - matched]) return undefined;
+    matched += 1;
+  }
+  if (matched < want.length) return undefined;
+  for (; index >= 0 && (isBlank(chars[index]!) || OPENERS.has(chars[index]!) || chars[index] === "\""); index -= 1) offset -= chars[index]!.length;
+  return offset;
+}
+
+/** 邻句（去掉空白引号后）短于这个不认抄：「嗯。」这种短句新句里自己带上很正常。 */
+const MIN_ECHO = 4;
+
+/**
+ * 模型改一句时常把相邻的句子也抄进来（一段对话被切成了几句，模型按整段回）：新句头上原样带着上一句、
+ * 尾上原样带着下一句的，把抄的那截去掉（不计空白和引号逐字比；原句自己就是这么开头 / 结尾的不动）。
+ * 去掉以后什么都不剩返回 undefined。去掉后引号由 fitQuotes 再对齐。
+ */
+export function dropNeighborEcho(from: string, to: string, prev?: string, next?: string): string | undefined {
+  let out = to;
+  const source = bare(from);
+  const head = prev ? bare(prev) : "";
+  if (head.length >= MIN_ECHO && !source.startsWith(head)) {
+    const cut = echoPrefixEnd(out, head);
+    if (cut !== undefined) out = out.slice(cut);
+  }
+  const tail = next ? bare(next) : "";
+  if (tail.length >= MIN_ECHO && !source.endsWith(tail)) {
+    const cut = echoSuffixStart(out, tail);
+    if (cut !== undefined) out = out.slice(0, cut);
+  }
+  return bare(out) ? out : undefined;
+}
+
 export interface UnitEdit {
   /** 第几句（按改之前的正文切）。 */
   readonly id: number;

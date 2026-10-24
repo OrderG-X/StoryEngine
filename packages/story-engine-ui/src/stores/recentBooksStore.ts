@@ -34,7 +34,7 @@ export interface RecentBooksStore {
   readonly upsertBook: (book: BookSummary) => void;
   readonly syncScannedBooks: (
     scanned: readonly BookSummary[],
-    library?: { readonly root?: string; readonly existingPaths?: readonly string[] },
+    library?: { readonly root?: string; readonly existingPaths?: readonly string[]; readonly missingPaths?: readonly string[] },
   ) => void;
   readonly removeBook: (bookId: string) => void;
   readonly renameBook: (bookId: string, nextTitle: string) => void;
@@ -73,9 +73,9 @@ export const useRecentBooksStore = create<RecentBooksStore>((set, get) => {
     // 本地比扫描新时做字段级归并：保留本地的书名/时间/活跃度，扫描只补章数等盘上字段。
     syncScannedBooks: (scanned, library) =>
       set((state) => {
-        // 默认书库里已经删掉/挪走的书：书架上不再留着（点了只会报找不到）。只清书库根目录下的条目——
-        // 用户从别处「打开书文件夹」加进来的书不在扫描范围内，不能凭扫描结果判它没了。
-        const missingInLibrary = missingDefaultLibraryPaths(state.books, library);
+        // 默认书库里已经删掉/挪走的书：书架上不再留着（点了只会报找不到）。书库根目录下的凭扫描结果判；
+        // 用户从别处「打开书文件夹」加进来的书不在扫描范围内，凭服务端逐本查过的 missingPaths 判。
+        const missingInLibrary = new Set([...missingDefaultLibraryPaths(state.books, library), ...(library?.missingPaths ?? [])]);
         const byPath = new Map(
           state.books.filter((book) => !missingInLibrary.has(book.projectPath)).map((book) => [book.projectPath, book]),
         );

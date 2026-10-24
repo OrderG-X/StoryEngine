@@ -137,7 +137,7 @@ export function ContinuityMarks({
   const [pop, setPop] = useState<PopState | null>(null);
   const focusSeq = useContinuityFocus((s) => s.seq);
   const chapter = result?.check.chapter ?? 0;
-  const resultKey = result ? `${result.messageId}|${result.dismissed.join("|")}` : "";
+  const resultKey = result ? `${result.messageId}|${result.dismissed.join("|")}|${(result.settled ?? []).join("|")}` : "";
   const maybeShown = useMaybeMarks((s) => s.chapter !== null && s.chapter === chapter);
 
   // 划线：正文或结果变了就重算（防抖跟着编辑走）。
@@ -257,7 +257,10 @@ export function ContinuityMarks({
   const title = `${level === "maybe" ? "可能" : ""}和${where}对不上`;
   const direct = Boolean(onFixAction) && canFixDirectly(chapter, item);
   // 两章打架、对设定的：作者定哪边为准（出定论卡），不给「改这处」（P12）。
-  const choices = onFixAction ? settleChoices(chapter, item) : undefined;
+  const open = openContinuityItems(result);
+  const earlierOpen = (result.check.earlierOpen ?? [])
+    .filter((other) => !result.dismissed.includes(continuityItemKey(other)) && !(result.settled ?? []).includes(continuityItemKey(other)));
+  const choices = onFixAction ? settleChoices(chapter, item, [...open.sure, ...open.maybe, ...earlierOpen]) : undefined;
   const dismiss = () => {
     const mark = pop.mark;
     void dismissContinuityItem({ messageId: result.messageId, chapter, item: mark.item }).then((saved) => {

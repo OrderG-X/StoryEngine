@@ -44,10 +44,14 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
     const chapter = chapterOf(item);
     return chapter ? [chapter] : [];
   });
-  const missed = isRecord(value.otherMissed) ? value.otherMissed : undefined;
-  const missedChapter = missed ? chapterOf(missed.chapter) : undefined;
-  const missedQuote = missed ? text(missed.quote) : "";
+  const missed = list(value.missed, 20).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const chapter = chapterOf(item.chapter);
+    const quote = text(item.quote);
+    return chapter && quote ? [{ chapter, quote }] : [];
+  });
   const failures = list(value.failures, 40).map(text).filter(Boolean);
+  const resolves = typeof value.resolves === "string" && value.resolves.length <= 4000 ? value.resolves : "";
   const chapter = chapterOf(value.chapter);
   return {
     token,
@@ -58,8 +62,9 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
     facts,
     fields,
     searched,
-    ...(missedChapter && missedQuote ? { otherMissed: { chapter: missedChapter, quote: missedQuote } } : {}),
+    missed,
     failures,
+    ...(resolves ? { resolves } : {}),
   };
 }
 

@@ -6,6 +6,8 @@ import {
   chapterProgress,
   continuityItemKey,
   latestContinuityResult,
+  openContinuityItems,
+  settledContinuityByMessage,
   type ContinuityResult,
 } from "./chapterProgress.js";
 
@@ -120,6 +122,61 @@ describe("核账结果取当前会话里这一章最新那张卡", () => {
     const messages = [msg("a", 11), msg("b", 10), msg("c", 11, { dismissed: ["k"], checkedVersion: "v3" }), msg("d", 12)];
     expect(latestContinuityResult(messages, 11)).toMatchObject({ messageId: "c", dismissed: ["k"], checkedVersion: "v3" });
     expect(latestContinuityResult(messages, 9)).toBeNull();
+  });
+});
+
+describe("核账卡之后定论改齐了：改掉的条目不再算", () => {
+  const cross = { quote: "老码头在东边", earlierQuote: "位置：北岸", earlierChapter: 0, reason: "方位", fixChapter: 5, againstSetting: { label: "位置" } };
+  const checkMsg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [wrongMarket, cross] } }] };
+  const settle = (id: string, extra: object): ChapterMessage => ({
+    id, role: "assistant", content: "", cards: [{
+      type: "settle",
+      settle: {
+        token: "0123456789abcdef", canon: "老码头在北岸", canonExists: false, fields: [], facts: [], searched: [5], missed: [], failures: [],
+        edits: [{ key: "e1", chapter: 5, draft: false, from: "老码头在东边，走过去二十分钟。", to: "老码头在北岸，走过去二十分钟。" }],
+      },
+      ...extra,
+    }],
+  } as ChapterMessage);
+
+  it("核账之后改齐的定论：那章被改的句子里有条目原句 = 改掉；没改齐 / 划掉 / 在核账之前的都不算", () => {
+    const key = continuityItemKey(cross);
+    expect(latestContinuityResult([checkMsg, settle("s", { applied: "改齐了。" })], 11)).toMatchObject({ settled: [key] });
+    expect(settledContinuityByMessage([checkMsg, settle("s", { applied: "改齐了。" })]).get("c")).toEqual([key]);
+    expect(latestContinuityResult([checkMsg, settle("s", {})], 11)?.settled).toBeUndefined();
+    expect(latestContinuityResult([checkMsg, settle("s", { applied: "改齐了。", excluded: ["e1"] })], 11)?.settled).toBeUndefined();
+    expect(settledContinuityByMessage([settle("s", { applied: "改齐了。" }), checkMsg]).size).toBe(0);
+    const result = latestContinuityResult([checkMsg, settle("s", { applied: "改齐了。" })], 11)!;
+    expect(openContinuityItems(result).sure).toEqual([wrongMarket]);
+  });
+
+  it("「以本章为准」点的那条（resolves）：另一边真改了才算——对设定的看设定栏改没改，对前文的看那章被改的句子", () => {
+    const setting = { quote: "港务局按失踪结的案", earlierQuote: "官方以海难结案", earlierChapter: 0, reason: "结案", fixChapter: 1, againstSetting: { label: "故事设定" } };
+    const msg: ChapterMessage = { id: "c", role: "assistant", content: "", cards: [{ type: "continuity", check: { ...check, sure: [setting, wrongMarket] } }] };
+    const fieldSettle = (extra: object): ChapterMessage => ({
+      id: "s", role: "assistant", content: "", cards: [{
+        type: "settle",
+        settle: {
+          token: "0123456789abcdef", canon: "按失踪结案", canonExists: false, edits: [], facts: [], searched: [], missed: [], failures: [],
+          fields: [{ key: "f1", label: "历史", from: "官方以海难结案", to: "港务局按失踪结案" }], resolves: continuityItemKey(setting),
+        },
+        applied: "改齐了。",
+        ...extra,
+      }],
+    } as ChapterMessage);
+    expect(latestContinuityResult([msg, fieldSettle({})], 11)?.settled).toEqual([continuityItemKey(setting)]);
+    expect(latestContinuityResult([msg, fieldSettle({ excluded: ["f1"] })], 11)?.settled).toBeUndefined();
+    const chapterSettle: ChapterMessage = {
+      id: "s2", role: "assistant", content: "", cards: [{
+        type: "settle",
+        settle: {
+          token: "0123456789abcdef", canon: "东门菜场", canonExists: false, fields: [], facts: [], searched: [10], missed: [], failures: [],
+          edits: [{ key: "e1", chapter: 10, draft: false, from: "约在南门菜场后街。", to: "约在东门菜场后街。" }], resolves: continuityItemKey(wrongMarket),
+        },
+        applied: "改齐了。",
+      }],
+    } as ChapterMessage;
+    expect(latestContinuityResult([msg, chapterSettle], 11)?.settled).toEqual([continuityItemKey(wrongMarket)]);
   });
 });
 

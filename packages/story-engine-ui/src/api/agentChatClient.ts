@@ -56,7 +56,7 @@ export type AgentUserAction =
   | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
   | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
-  | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly reason?: string }
+  | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
   /** 设定本定论页「查前文」：拿这条定论查全书。 */
   | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
   /** 定论卡「确认」：按票号一次改齐（作者档、可撤销）；excluded＝作者划掉不改的几处。 */

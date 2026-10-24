@@ -53,6 +53,9 @@ describe("定论按钮", () => {
     const pick = { toolName: "settle_preview", chapter: 2, truth: { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" }, other: { where: "chapter", chapter: 2, quote: "杜叔走了五年了" } };
     expect(parseUserAction(pick)).toMatchObject({ kind: "action", action: { toolName: "settle_preview", chapter: 2, truth: { chapter: 1 } } });
     expect(parseUserAction({ ...pick, truth: { where: "chapter", chapter: 1 } })).toMatchObject({ kind: "invalid" });
+    const also = [{ where: "chapter", chapter: 5, quote: "老码头在东头" }, { where: "setting", quote: "西头", label: "位置" }, { where: "chapter", chapter: 6 }];
+    expect(parseUserAction({ ...pick, also })).toMatchObject({ kind: "action", action: { also: [{ where: "chapter", chapter: 5, quote: "老码头在东头" }] } });
+    expect(parseUserAction({ ...pick, item: "杜叔走了五年了#杜叔走了整整十年" })).toMatchObject({ kind: "action", action: { item: "杜叔走了五年了#杜叔走了整整十年" } });
     expect(parseUserAction({ toolName: "settle_preview", chapter: 2, truth: { where: "setting", quote: "十年前", label: "去世" } }))
       .toMatchObject({ kind: "action", action: { truth: { where: "setting", label: "去世" } } });
     expect(parseUserAction({ toolName: "settle_preview", statement: " 杜长顺十年前去世 " }))
@@ -71,10 +74,11 @@ describe("定论按钮", () => {
       truth: { where: "chapter", chapter: 1, quote: "杜叔走了整整十年" },
       other: { where: "chapter", chapter: 2, quote: "杜叔走了五年了" },
     };
-    await runSettleAction({ ...preview, projectDir: dir, action, callModel: model });
+    await runSettleAction({ ...preview, projectDir: dir, action: { ...action, item: "k#1" }, callModel: model });
     const output = preview.result("settle_preview");
+    expect(output).toMatchObject({ settle: { resolves: "k#1" } });
     expect(output).toMatchObject({ ok: true, settle: { canon: "杜长顺十年前去世", edits: [{ chapter: 2, draft: false, from: "“杜叔走了五年了。”", to: "“杜叔走了十年了。”" }] } });
-    expect(preview.text()).toContain("前文有 1 句和它对不上（第 2 章）");
+    expect(preview.text()).toBe("查完了：第 2 章 1 句要改。点「确认」一起改齐，改前存档、能撤销。");
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toBe(CH2);
 
     const token = (output!.settle as { token: string }).token;

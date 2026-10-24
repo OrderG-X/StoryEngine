@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StateOverview } from "../api/types.js";
 import type { ChapterNavItem } from "../types.js";
-import { bookSummaryFromOverview, carryChapterFileFlags, keepUnlistedChapters, patchChapterFlagsFromPaper } from "./bookUtils.js";
+import { bookActiveLabel, bookSummaryFromOverview, carryChapterFileFlags, keepUnlistedChapters, patchChapterFlagsFromPaper } from "./bookUtils.js";
 
 const item = (chapterNumber: number, extra: Partial<ChapterNavItem> = {}): ChapterNavItem => ({
   id: `ch-${chapterNumber}`,
@@ -117,5 +117,14 @@ describe("bookSummaryFromOverview：书架「上次写到」", () => {
   it("字数只认概况里的实数，不按章数估（真机试写：10 章 1.3 万字，开过书后书架显示 3.0 万）", () => {
     expect(bookSummaryFromOverview({ ...overview(10), totalWords: 13210 } as StateOverview, "/books/fog").totalWords).toBe(13210);
     expect(bookSummaryFromOverview(overview(10), "/books/fog").totalWords).toBe(0);
+  });
+});
+
+describe("bookActiveLabel", () => {
+  it("按最后活跃的时刻现算，不用存下来的「刚刚」；没有时刻才用存的", () => {
+    const now = Date.UTC(2026, 9, 25, 12);
+    const book = { updatedAt: "刚刚", lastActiveMs: now - 3 * 3_600_000 } as Parameters<typeof bookActiveLabel>[0];
+    expect(bookActiveLabel(book, now)).toBe("3 小时前");
+    expect(bookActiveLabel({ ...book, lastActiveMs: undefined } as unknown as Parameters<typeof bookActiveLabel>[0], now)).toBe("刚刚");
   });
 });

@@ -22,7 +22,7 @@ import { runWithLazySnapshot } from "../../lib/snapshot.js";
 import { writeAtomically } from "../reader-window.js";
 import type { SettleProposal } from "./propose.js";
 
-export const SETTLE_PROPOSAL_SCHEMA = "settle-proposal/1" as const;
+export const SETTLE_PROPOSAL_SCHEMA = "settle-proposal/2" as const;
 /** 留最近这么多份预览，旧的删掉。 */
 const KEEP_PROPOSALS = 20;
 
@@ -75,10 +75,14 @@ export async function settleApplyArgs(projectDir: string, proposal: SettlePropos
     const unitEdits = mine.map(({ id, from, to }) => ({ id, from, to }));
     const text = await readChapterText(projectDir, item.chapter);
     const next = text === undefined ? undefined : applyUnitEdits(text, unitEdits);
-    const facts = proposal.facts
-      .filter((fact) => fact.chapter === item.chapter && fact.patch && next?.ok && quoteInText(fact.patch.quote, next.text))
+    // 老账没记原句的那几条是照整章的改法问的：这章有一句被划掉就都不动（不知道是哪句引起的）。
+    const partial = proposal.edits.some((edit) => edit.target === "committed" && edit.chapter === item.chapter && excluded.has(edit.key));
+    const mineFacts = proposal.facts.filter((fact) => fact.chapter === item.chapter && !(fact.loose && partial));
+    const facts = mineFacts
+      .filter((fact) => fact.patch && next?.ok && quoteInText(fact.patch.quote, next.text))
       .map((fact) => ({ id: fact.factId, ...fact.patch! }));
-    chapters.push({ chapter: item.chapter, textSha256: item.textSha256, edits: unitEdits, facts });
+    const retract = mineFacts.filter((fact) => fact.loose && !fact.patch).map((fact) => fact.factId);
+    chapters.push({ chapter: item.chapter, textSha256: item.textSha256, edits: unitEdits, facts, retract });
     if (item.draftVersion) {
       const draftText = await readFile(join(projectDir, draftPath(item.chapter)), "utf-8").catch(() => undefined);
       const units = draftText === undefined ? [] : splitUnits(draftText);

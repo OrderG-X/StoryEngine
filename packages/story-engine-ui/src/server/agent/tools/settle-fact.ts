@@ -34,6 +34,9 @@ export const settleFactTool = createTool({
     if (!projectDir) throw new Error("settle_fact 缺少 projectDir：请确认 RequestContext 注入了 projectDir。");
     const chapter = resolveChapterFromInputOrContext(input.chapter, context);
     const preview = await previewSettle(projectDir, { kind: "statement", text: input.canon, ...(chapter !== undefined ? { chapter } : {}) });
-    return preview.ok ? { ok: true, summary: preview.summary, settle: preview.card } : { ok: false, summary: preview.summary };
+    // 卡上那句话不念定论（卡上有）；给对话 AI 的要带上，它才知道卡上记的是哪一条（可能是设定本里已有的整条）。
+    return preview.ok
+      ? { ok: true, summary: `定论「${preview.card.canon}」：${preview.summary}`, settle: preview.card }
+      : { ok: false, summary: preview.summary };
   },
 });

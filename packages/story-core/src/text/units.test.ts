@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUnitEdits, fitQuotes, numberedText, splitUnits } from "./units.js";
+import { applyUnitEdits, dropNeighborEcho, fitQuotes, numberedText, splitUnits } from "./units.js";
 
 const texts = (text: string) => splitUnits(text).map((unit) => unit.text);
 
@@ -87,5 +87,24 @@ describe("applyUnitEdits", () => {
 
   it("引号理不平失败", () => {
     expect(applyUnitEdits(text, [{ id: 3, from: "“钥匙在抽屉里。”", to: "“钥匙在““兜里。”" }])).toMatchObject({ ok: false, code: "quotes_unbalanced" });
+  });
+});
+
+describe("新句抄了邻句（dropNeighborEcho）", () => {
+  const prev = "“许微，那都是多少年前的事了。";
+  const unit = "你爸没了十五年了，你翻这些有什么用。”";
+  const next = "她没接话，低头把信折好。";
+
+  it("头上抄了上一句、尾上抄了下一句：去掉抄的那截（不计引号空白）", () => {
+    expect(dropNeighborEcho(unit, "许微，那都是多少年前的事了。你爸失踪十五年了，你翻这些有什么用。”", prev)).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+    expect(dropNeighborEcho(unit, "“许微，那都是多少年前的事了。” 你爸失踪十五年了，你翻这些有什么用。”", prev)).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+    expect(dropNeighborEcho(unit, "你爸失踪十五年了，你翻这些有什么用。”她没接话，低头把信折好。", prev, next)).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+  });
+
+  it("没抄、邻句太短、原句自己就这么开头的：原样；只剩抄的那截：不要", () => {
+    expect(dropNeighborEcho(unit, "你爸失踪十五年了，你翻这些有什么用。”", prev, next)).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+    expect(dropNeighborEcho("嗯。他说。", "嗯。他低声说。", "嗯。")).toBe("嗯。他低声说。");
+    expect(dropNeighborEcho("许微，那都是多少年前的事了。真的。", "许微，那都是多少年前的事了。是真的。", prev)).toBe("许微，那都是多少年前的事了。是真的。");
+    expect(dropNeighborEcho(unit, "“许微，那都是多少年前的事了。", prev)).toBeUndefined();
   });
 });

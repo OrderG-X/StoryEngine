@@ -91,6 +91,14 @@ describe("recentBooksStore.syncScannedBooks", () => {
     expect(useRecentBooksStore.getState().books.map((b) => b.title)).toEqual(["扫描书", "老条目"]);
   });
 
+  it("从别处打开的书：服务端查过文件夹不在了（missingPaths）就从书架拿掉，别的照留", async () => {
+    const { useRecentBooksStore } = await import("./recentBooksStore.js");
+    useRecentBooksStore.getState().upsertBook(bookSummary({ id: "b-gone", title: "删了的", projectPath: "/custom/gone" }));
+    useRecentBooksStore.getState().upsertBook(bookSummary({ id: "b-here", title: "还在的", projectPath: "/custom/here" }));
+    useRecentBooksStore.getState().syncScannedBooks([], { root: "/books", existingPaths: [], missingPaths: ["/custom/gone"] });
+    expect(useRecentBooksStore.getState().books.map((b) => b.title)).toEqual(["还在的"]);
+  });
+
   it("竞态防护：本地条目比扫描新（刚打开/刚改名）→ 保留本地书名/时间/活跃度，扫描只补其余字段（评审加固）", async () => {
     const { useRecentBooksStore } = await import("./recentBooksStore.js");
     // 扫描在飞时用户改了名并打开了书：本地 lastActiveMs 更新、title 是新名

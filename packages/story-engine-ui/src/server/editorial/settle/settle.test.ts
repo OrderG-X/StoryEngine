@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, draftPath, projectBook, readBible, readChapterLedger, readDecisions, runCommand, type EntryInput } from "@actalk/story-core";
+import { chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
-import { proposeSettle } from "./propose.js";
+import { parseFieldEdits, parseSweepEdits, proposeSettle } from "./propose.js";
 import { applySettleProposal, readSettleProposal, saveSettleProposal } from "./store.js";
 
 const CH1 = "# 第1章 · 旧屋\n\n杜叔走了整整十年。屋里没人住过。\n\n许微推开门，灰扑了一脸。";
@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 /** 假模型：按提示词认是哪一步，回固定的答案；记下每步收到的提示。 */
-function fakeModel(over: { sweepFails?: boolean; factsReply?: string } = {}): BrainCallModel & { prompts: string[] } {
+function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string } = {}): BrainCallModel & { prompts: string[] } {
   const prompts: string[] = [];
   const call: BrainCallModel = async (messages) => {
     const prompt = messages.at(-1)?.content ?? "";
@@ -48,7 +48,8 @@ function fakeModel(over: { sweepFails?: boolean; factsReply?: string } = {}): Br
     if (prompt.includes("写成一条「定论」")) return JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] });
     if (prompt.includes("列出这件事涉及的")) return JSON.stringify({ names: ["杜叔"] });
     if (prompt.includes("设定本里相关的几栏")) return JSON.stringify({ edits: [] });
-    if (prompt.includes("账里这几条事实")) return over.factsReply ?? JSON.stringify({ facts: [{ id: "F1", action: "update", value: "十年前", text: "杜长顺十年前去世", quote: "杜叔走了十年了" }] });
+    if (prompt.includes("请逐条复核")) return over.reviewReply ?? JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: true }] });
+    if (prompt.includes("账里这几条")) return over.factsReply ?? JSON.stringify({ facts: [{ id: "F1", action: "update", value: "十年前", text: "杜长顺十年前去世", quote: "杜叔走了十年了" }] });
     if (prompt.includes("逐句看")) {
       if (over.sweepFails) throw new Error("连不上");
       const edits = [];
@@ -86,9 +87,49 @@ describe("定论预览", () => {
       ["e2", 4, "draft", "孟叔又提起杜叔，说他五年前就没了。", "孟叔又提起杜叔，说他十年前就没了。"],
     ]);
     expect(proposal.facts).toEqual([expect.objectContaining({ chapter: 2, before: "杜长顺五年前去世", after: "杜长顺十年前去世" })]);
-    expect(proposal.otherMissed).toBeUndefined();
+    expect(proposal.missed).toEqual([]);
     expect(proposal.failures).toEqual([]);
     expect(model.prompts.find((prompt) => prompt.includes("写成一条「定论」"))).toContain("前后文");
+  });
+
+  it("复核：作者点的那句不问；别的说不对不上的去掉，复核没做成就留着、如实说", async () => {
+    const model = fakeModel({ reviewReply: JSON.stringify({ verdicts: [{ id: 1, conflict: "false" }] }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.edits.map((edit) => [edit.key, edit.chapter])).toEqual([["e1", 4]]);
+    const review = model.prompts.find((prompt) => prompt.includes("请逐条复核"))!;
+    expect(review).toContain("“杜叔走了五年了。”");
+    expect(review).not.toContain("说他五年前就没了");
+
+    expect(outcome.proposal.reviewDropped).toEqual([expect.objectContaining({ chapter: 2, from: "“杜叔走了五年了。”" })]);
+
+    const broken = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel({ reviewReply: "不是 JSON" }) });
+    if (!broken.ok) throw new Error(broken.message);
+    expect(broken.proposal.edits).toHaveLength(2);
+    expect(broken.proposal.failures).toEqual([expect.stringContaining("复核没做成")]);
+  });
+
+  it("核账卡上同一条报的别几句（also）：章一定查、提示里点名、不复核；没查出改法的如实列出", async () => {
+    const model = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: { ...pick, also: [{ where: "chapter", chapter: 2, quote: "杜叔走了五年了" }, { where: "chapter", chapter: 3, quote: "海风很冷" }] },
+      callModel: model,
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看"))!;
+    expect(sweep).toContain("核账已经报过这几句和它对不上，一定给出改法：第 4 章「说他五年前就没了」；第 2 章「杜叔走了五年了」；第 3 章「海风很冷」");
+    expect(model.prompts.some((prompt) => prompt.includes("请逐条复核"))).toBe(false);
+    expect(outcome.proposal.searched).toContain(3);
+    expect(outcome.proposal.missed).toEqual([{ chapter: 3, quote: "海风很冷" }]);
+  });
+
+  it("定论只写打架的那一点：提示里说清楚", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    const canonPrompt = model.prompts.find((prompt) => prompt.includes("写成一条「定论」"));
+    expect(canonPrompt).toContain("只写两处打架的那一点");
+    expect(canonPrompt).toContain("写【作者选为准的】那边说的事，正面写");
   });
 
   it("一批没查成如实记下，不当成没有要改的", async () => {
@@ -96,7 +137,7 @@ describe("定论预览", () => {
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.proposal.edits).toEqual([]);
     expect(outcome.proposal.failures[0]).toContain("这一批没查成");
-    expect(outcome.proposal.otherMissed).toEqual({ chapter: 4, quote: "说他五年前就没了" });
+    expect(outcome.proposal.missed).toEqual([{ chapter: 4, quote: "说他五年前就没了" }]);
   });
 });
 
@@ -148,6 +189,32 @@ describe("确认改齐", () => {
     expect((await readDecisions(dir)).map((decision) => decision.type)).toEqual(["fact.retract"]);
   });
 
+  it("老书的账没记原句的事实也问一次：回 drop 的确认后作废，回 keep / 没回的不动", async () => {
+    const path = join(dir, "ledger/chapters/0002.json");
+    const raw = { ...(JSON.parse(await readFile(path, "utf-8")) as { entries: Record<string, unknown>[] }), origin: "import" };
+    raw.entries.push(
+      { kind: "fact", review: "auto", nature: "event", text: "孟叔记得杜叔五年前走的", id: "fact-2-90" },
+      { kind: "fact", review: "auto", nature: "event", text: "码头上常年起雾", id: "fact-2-91" },
+    );
+    await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`);
+    const model = fakeModel({ factsReply: JSON.stringify({ facts: [
+      { id: "F1", action: "update", value: "十年前", text: "杜长顺十年前去世", quote: "杜叔走了十年了" },
+      { id: "L1", action: "drop" },
+      { id: "L2", action: "keep" },
+    ] }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(model.prompts.find((prompt) => prompt.includes("没记原句"))).toContain("孟叔记得杜叔五年前走的");
+    expect(outcome.proposal.facts.map((fact) => [fact.factId, fact.after ?? null, fact.loose ?? false])).toEqual([
+      ["fact-2-90", null, true],
+      [expect.any(String), "杜长顺十年前去世", false],
+    ]);
+    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    expect(applied.result.chapters[0]).toMatchObject({ factsUpdated: ["杜长顺十年前去世"], factsRetracted: ["孟叔记得杜叔五年前走的"] });
+    expect((await readDecisions(dir)).map((decision) => (decision.type === "fact.retract" ? decision.fact : ""))).toEqual(["fact-2-90"]);
+  });
+
   it("预览后正文改过：一处都不改，如实说重新查", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
     if (!outcome.ok) throw new Error(outcome.message);
@@ -158,5 +225,32 @@ describe("确认改齐", () => {
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toBe(CH2);
     expect((await readBible(dir)).bible.canon).toEqual([]);
     expect(await applySettleProposal(dir, "0123456789abcdef", [])).toMatchObject({ ok: false, code: "proposal_missing" });
+  });
+});
+
+describe("改法解析", () => {
+  it("新句抄了上一句（一段对话切成两句）：去掉抄的那截再换，正文不会重复", () => {
+    const text = "“许微，那都是多少年前的事了。你爸没了十五年了，你翻这些有什么用。”";
+    const units = splitUnits(text);
+    const doc = { chapter: 2, target: "committed" as const, text, units, numbered: numberedText(units) };
+    const reply = JSON.stringify({ edits: [{ chapter: 2, id: 2, to: "许微，那都是多少年前的事了。你爸失踪十五年了，你翻这些有什么用。”" }] });
+    expect(parseSweepEdits(reply, [doc])).toEqual([
+      { chapter: 2, target: "committed", id: 2, from: "你爸没了十五年了，你翻这些有什么用。”", to: "你爸失踪十五年了，你翻这些有什么用。”" },
+    ]);
+  });
+
+  it("整栏内容抄回了栏头（卡名 · 栏名：）和「（AI 补的）」：去掉，只留内容", () => {
+    const fields = [
+      { id: "S1", label: "历史", value: "十五年前海难结案", ai: false },
+      { id: "S2", card: "许微", label: "年龄", value: "三十岁", ai: true },
+    ];
+    const reply = JSON.stringify({ edits: [
+      { id: "S1", to: "故事设定 · 历史：十五年前按失踪结案" },
+      { id: "S2", to: "[S2]许微 · 年龄：二十九岁（AI 补的）" },
+    ] });
+    expect(parseFieldEdits(reply, fields)).toEqual([
+      { label: "历史", from: "十五年前海难结案", to: "十五年前按失踪结案" },
+      { card: "许微", label: "年龄", from: "三十岁", to: "二十九岁" },
+    ]);
   });
 });

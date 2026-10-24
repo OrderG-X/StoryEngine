@@ -3,7 +3,7 @@
  *
  * 上面一句定论；下面按章列要改的句子（原句划掉 → 新句），每句右边 × 划掉不改；设定本、账里跟着改的另列。
  * 主按钮「确认」= 一条作者档命令一次改齐（改前存档、能撤销）；没要改的句子只「记下定论」。
- * 改齐了按钮收起、换成服务端回的那句结果。没查全如实说，给「重新查」。
+ * 改齐了按钮收起，标题旁写「改齐了」（改了什么对话里那句说了，卡上不再说一遍）。没查全如实说，给「重新查」。
  */
 import { useState } from "react";
 import { StepCard } from "./StepCard.js";
@@ -53,7 +53,7 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
   readonly messageId: string;
   readonly data: SettleCardData;
   readonly excluded?: readonly string[];
-  /** 改齐了：服务端回的那句结果。 */
+  /** 改齐了：服务端回的那句结果（有它 = 改齐了）。 */
   readonly applied?: string;
   readonly busy: boolean;
   readonly onAction?: (action: AgentUserAction) => void;
@@ -68,8 +68,8 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
   const changes = editsLeft + fieldsLeft;
   const canConfirm = !done && Boolean(onAction) && (changes > 0 || !data.canonExists);
   const recheck = () => onAction?.({ toolName: "settle_preview", statement: data.canon, ...(data.chapter ? { chapter: data.chapter } : {}) });
-  const incomplete = data.failures.length > 0 || data.otherMissed !== undefined;
-  const statusLabel = done ? "改齐了" : data.edits.length > 0 ? `前文 ${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
+  const incomplete = data.failures.length > 0 || data.missed.length > 0;
+  const statusLabel = done ? "改齐了" : data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
   return (
     <StepCard title="定论" status={done ? "done" : changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
       <p className="stc-canon serif">{data.canon}</p>
@@ -111,12 +111,11 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
       ) : null}
       {!done && incomplete ? (
         <p className="drc-summary stc-warn">
-          {data.otherMissed ? `你点的那句（第 ${data.otherMissed.chapter} 章）这次没查出改法。` : ""}
+          {data.missed.length > 0 ? `核账报的${data.missed.length > 1 ? ` ${data.missed.length} 句` : "那句"}（${[...new Set(data.missed.map((item) => `第 ${item.chapter} 章`))].join("、")}）这次没查出改法。` : ""}
           {data.failures.length > 0 ? `没查全：${data.failures.join("；")}。` : ""}
           {onAction ? <> <button type="button" className="se-sm-link" disabled={busy} onClick={recheck}>重新查</button></> : null}
         </p>
       ) : null}
-      {done ? <p className="drc-summary stc-done">{applied}</p> : null}
       {canConfirm ? (
         <div className="cpc-actions">
           <span className="cpc-counts">{changes > 0 ? `改 ${changes} 处，改前存档、能撤销` : "记进设定本「定论」"}</span>

@@ -18,6 +18,7 @@ const data: SettleCardData = {
   facts: [{ chapter: 2, before: "杜长顺五年前去世", after: "杜长顺十年前去世" }],
   fields: [],
   searched: [1, 2, 4],
+  missed: [],
   failures: [],
 };
 
@@ -48,13 +49,14 @@ describe("定论卡", () => {
     expect(onAction).toHaveBeenCalledWith({ toolName: "settle_apply", token: data.token, excluded: ["e2"] });
   });
 
-  it("账里跟着改的收起，点开才看；改齐了按钮收起、换成结果那句", async () => {
+  it("账里跟着改的收起，点开才看；改齐了按钮收起，结果那句只在对话里说一遍", async () => {
     render(<Live onAction={vi.fn()} />);
     expect(screen.queryByText(/杜长顺五年前去世/)).toBeNull();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账里跟着改 1 条" })); });
     expect(screen.getByText("第 2 章：杜长顺五年前去世 → 杜长顺十年前去世")).toBeTruthy();
     await act(async () => { useChatStore.getState().markSettleApplied(data.token, "改齐了。改了第 2 章 1 句。"); });
-    expect(screen.getByText("改齐了。改了第 2 章 1 句。")).toBeTruthy();
+    expect(screen.getByText("改齐了")).toBeTruthy();
+    expect(screen.queryByText("改齐了。改了第 2 章 1 句。")).toBeNull();
     expect(screen.queryByRole("button", { name: "确认" })).toBeNull();
     expect(screen.queryByRole("button", { name: "这句不改" })).toBeNull();
   });

@@ -57,7 +57,7 @@ function unitOf(text: string, sentence: string) {
 
 function fixCh2(extra: Partial<SettleApplyArgs["chapters"][number]> = {}): SettleApplyArgs["chapters"][number] {
   const unit = unitOf(CH2, "“杜叔走了五年了。”");
-  return { chapter: 2, textSha256: sha256(CH2), edits: [{ id: unit.id, from: unit.text, to: "“杜叔走了十年了。”" }], facts: [], ...extra };
+  return { chapter: 2, textSha256: sha256(CH2), edits: [{ id: unit.id, from: unit.text, to: "“杜叔走了十年了。”" }], facts: [], retract: [], ...extra };
 }
 
 describe("定论并改齐", () => {
@@ -114,6 +114,29 @@ describe("定论并改齐", () => {
     const after = await readChapterLedger(book, 2);
     expect(after?.entries.find((entry) => entry.id === fact.id)).toMatchObject({ value: "十年前", quote: "杜叔走了十年了" });
     expect(await readDecisions(book)).toEqual([]);
+  });
+
+  it("没记原句的老账：点名作废的照作废，没点名的不动", async () => {
+    await seed();
+    const path = join(book, "ledger/chapters/0002.json");
+    // 老书导入的账（origin: import）才允许事实不带原句。
+    const raw = { ...(JSON.parse(await readFile(path, "utf-8")) as { entries: Record<string, unknown>[] }), origin: "import" };
+    raw.entries.push(
+      { kind: "fact", review: "auto", nature: "event", text: "孟叔说杜叔五年前走的", id: "fact-2-90" },
+      { kind: "fact", review: "auto", nature: "event", text: "许微没接孟叔的话", id: "fact-2-91" },
+    );
+    await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`);
+    expect(await runCommand(book, settleApply, { label: "定论", cardOps: [], chapters: [fixCh2({ retract: ["fact-2-99"] })], drafts: [] }, author("s-unknown")))
+      .toMatchObject({ ok: false, code: "unknown_fact" });
+    const outcome = expectOk(await runCommand(book, settleApply, {
+      label: "定论",
+      cardOps: [],
+      chapters: [fixCh2({ retract: ["fact-2-90"] })],
+      drafts: [],
+    }, author("s-old")));
+    expect(outcome.result.chapters[0]?.factsRetracted).toEqual(["杜长顺五年前去世", "孟叔说杜叔五年前走的"]);
+    expect((await readDecisions(book)).map((decision) => decision.type === "fact.retract" ? decision.fact : "")).toEqual(expect.arrayContaining(["fact-2-90"]));
+    expect((await readDecisions(book)).some((decision) => decision.type === "fact.retract" && decision.fact === "fact-2-91")).toBe(false);
   });
 
   it("预览后正文改过、定稿后在别处改过：一处都不改", async () => {

@@ -530,6 +530,7 @@ describe("streamAgentChat", () => {
       facts: [{ chapter: 2, before: "杜长顺五年前去世", after: "杜长顺十年前去世" }],
       fields: [],
       searched: [1, 2, 4],
+      missed: [],
       failures: [],
     };
     vi.stubGlobal("fetch", vi.fn(async () =>

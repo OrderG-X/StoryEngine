@@ -8,11 +8,12 @@
 import { CANON_TEXT_MAX, type SettleApplyResult } from "@actalk/story-core";
 import { callConfiguredBrainModel } from "../editorial/checker.js";
 import type { BrainCallModel } from "../editorial/reader-window.js";
-import { proposeSettle, type SettleRequest, type SettleSide } from "../editorial/settle/propose.js";
+import { proposeSettle, type ChapterSide, type SettleRequest, type SettleSide } from "../editorial/settle/propose.js";
 import { applySettleProposal, saveSettleProposal, type StoredSettleProposal } from "../editorial/settle/store.js";
 
 const MAX_QUOTE = 800;
 const MAX_EXCLUDED = 200;
+const MAX_ALSO = 10;
 
 export type SettleUserAction =
   | {
@@ -20,7 +21,11 @@ export type SettleUserAction =
       readonly chapter: number;
       readonly truth: SettleSide;
       readonly other?: SettleSide;
+      /** 核账卡上和同一句打架的别几句（一并改）。 */
+      readonly also?: readonly ChapterSide[];
       readonly reason?: string;
+      /** 「以本章为准」时核账卡上点的那条（条目键）：原样带回定论卡，改齐后核账卡认它改掉了。 */
+      readonly item?: string;
     }
   /** 设定本「定论」页上「查前文」：拿已记下（或作者刚写的）定论查全书。 */
   | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
@@ -59,8 +64,12 @@ export function parseSettleAction(record: Record<string, unknown>): { readonly a
   const truth = readSide(record.truth);
   if (!Number.isInteger(chapter) || chapter <= 0 || !truth) return { invalid: "定论按钮的内容不对。" };
   const other = readSide(record.other);
+  const also = (Array.isArray(record.also) ? record.also : []).slice(0, MAX_ALSO).map(readSide).filter((side): side is ChapterSide => side?.where === "chapter");
   const reason = typeof record.reason === "string" ? record.reason.trim().slice(0, 400) : "";
-  return { action: { toolName: "settle_preview", chapter, truth, ...(other ? { other } : {}), ...(reason ? { reason } : {}) } };
+  const item = typeof record.item === "string" && record.item.length <= MAX_QUOTE * 2 + 1 ? record.item : "";
+  return {
+    action: { toolName: "settle_preview", chapter, truth, ...(other ? { other } : {}), ...(also.length > 0 ? { also } : {}), ...(reason ? { reason } : {}), ...(item ? { item } : {}) },
+  };
 }
 
 /** 定论卡要的东西（给界面；只有名字和原句，不带编号）。 */
@@ -73,8 +82,10 @@ export interface SettleCardOutput {
   readonly facts: readonly { readonly chapter: number; readonly before: string; readonly after?: string }[];
   readonly fields: readonly { readonly key: string; readonly card?: string; readonly label: string; readonly from: string; readonly to: string }[];
   readonly searched: readonly number[];
-  readonly otherMissed?: { readonly chapter: number; readonly quote: string };
+  readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
   readonly failures: readonly string[];
+  /** 核账卡上点「以本章为准」的那条（条目键，原样带回）。 */
+  readonly resolves?: string;
 }
 
 export function settleCardOf(stored: StoredSettleProposal): SettleCardOutput {
@@ -87,36 +98,36 @@ export function settleCardOf(stored: StoredSettleProposal): SettleCardOutput {
     facts: stored.facts.map((fact) => ({ chapter: fact.chapter, before: fact.before, ...(fact.after ? { after: fact.after } : {}) })),
     fields: stored.fields.map((field) => ({ key: field.key, ...(field.card ? { card: field.card } : {}), label: field.label, from: field.from, to: field.to })),
     searched: stored.searched,
-    ...(stored.otherMissed ? { otherMissed: stored.otherMissed } : {}),
+    missed: stored.missed,
     failures: stored.failures,
   };
 }
 
 const chapterList = (chapters: readonly number[]): string => [...new Set(chapters)].sort((a, b) => a - b).map((chapter) => `第 ${chapter} 章`).join("、");
 
-/** 预览卡上面那句话：定论 + 前文几处要改（在哪几章）+ 没查成的。 */
+/** 预览卡上面那句话：几处要改（在哪几章）+ 没查成的。定论本身卡上有，不再念一遍。 */
 export function settlePreviewSummary(card: SettleCardOutput): string {
-  const head = card.canonExists ? `这条定论设定本里已经有了：「${card.canon}」。` : `定论：「${card.canon}」。`;
-  const where = card.edits.length > 0 ? `（${chapterList(card.edits.map((edit) => edit.chapter))}）` : "";
-  const fields = card.fields.length > 0 ? `设定本 ${card.fields.length} 栏也和它对不上。` : "";
-  const body = card.edits.length > 0
-    ? `前文有 ${card.edits.length} 句和它对不上${where}，${fields}点「确认」一起改齐，改前存档、能撤销。`
-    : card.fields.length > 0
-      ? `${fields}点「确认」一起改。`
-      : card.canonExists ? "前文没查出和它对不上的。" : "前文没查出和它对不上的，点「记下定论」记进设定本。";
-  const missed = card.otherMissed ? `你点的那句（第 ${card.otherMissed.chapter} 章「${card.otherMissed.quote}」）这次没查出改法，可以重新查一遍。` : "";
+  const where = chapterList(card.edits.map((edit) => edit.chapter));
+  const fields = card.fields.length > 0 ? `设定本 ${card.fields.length} 栏` : "";
+  const parts = [card.edits.length > 0 ? `${where} ${card.edits.length} 句` : "", fields].filter(Boolean).join("、");
+  const body = parts
+    ? `查完了：${parts}要改。点「确认」一起改齐，改前存档、能撤销。`
+    : card.canonExists ? "查完了：没有要改的，设定本里也记着这条。" : "查完了：没有要改的。点「记下定论」记进设定本。";
+  const missed = card.missed.length > 0 ? `核账报的${card.missed.map((item) => `第 ${item.chapter} 章「${item.quote}」`).join("、")}这次没查出改法，可以重新查一遍。` : "";
   const failed = card.failures.length > 0 ? `没查全：${card.failures.join("；")}。` : "";
-  return [head, body, missed, failed].filter(Boolean).join("");
+  return [body, missed, failed].filter(Boolean).join("");
 }
 
 /** 改齐之后那句话：记了什么、改了哪几章几处、账里跟着改了 / 作废了什么。 */
 export function settleAppliedSummary(result: SettleApplyResult): string {
   const parts: string[] = [];
   if (result.cardLines.length > 0) parts.push(`设定本：${result.cardLines.join("；")}`);
+  // 已定稿章另有工作稿的，同一句跟着改了：作者眼里是同一章的同一句，不另报。
+  const committed = new Set(result.chapters.map((item) => item.chapter));
   const changes = [
-    ...result.chapters.map((item) => `第 ${item.chapter} 章 ${item.edits} 句`),
-    ...result.drafts.map((item) => `第 ${item.chapter} 章工作稿 ${item.edits} 句`),
-  ];
+    ...result.chapters.map((item) => ({ chapter: item.chapter, edits: item.edits })),
+    ...result.drafts.filter((item) => !committed.has(item.chapter)).map((item) => ({ chapter: item.chapter, edits: item.edits })),
+  ].sort((a, b) => a.chapter - b.chapter).map((item) => `第 ${item.chapter} 章 ${item.edits} 句`);
   if (changes.length > 0) parts.push(`改了${changes.join("、")}`);
   const updated = result.chapters.flatMap((item) => item.factsUpdated.map((text) => `第 ${item.chapter} 章「${text}」`));
   if (updated.length > 0) parts.push(`账里跟着改了${updated.join("、")}`);
@@ -179,13 +190,16 @@ export async function runSettleAction(args: SettleActionArgs & { readonly action
           chapter: action.chapter,
           truth: action.truth,
           ...(action.other ? { other: action.other } : {}),
+          ...(action.also ? { also: action.also } : {}),
           ...(action.reason ? { reason: action.reason } : {}),
         };
       const preview = await previewSettle(args.projectDir, request, args.callModel);
       args.sendEvent("tool-result", {
         toolCallId,
         toolName,
-        output: preview.ok ? { ok: true, summary: preview.summary, settle: preview.card } : { ok: false, summary: preview.summary },
+        output: preview.ok
+          ? { ok: true, summary: preview.summary, settle: { ...preview.card, ...("item" in action && action.item ? { resolves: action.item } : {}) } }
+          : { ok: false, summary: preview.summary },
       });
       emitText(preview.summary);
       return;

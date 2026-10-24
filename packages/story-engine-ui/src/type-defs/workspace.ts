@@ -122,8 +122,10 @@ export interface SettleCardData {
   readonly fields: readonly { readonly key: string; readonly card?: string; readonly label: string; readonly from: string; readonly to: string }[];
   /** 查了哪几章。 */
   readonly searched: readonly number[];
-  /** 作者点的那句这次没查出改法。 */
-  readonly otherMissed?: { readonly chapter: number; readonly quote: string };
+  /** 核账报过和它打架、这次却没查出改法的句子。 */
+  readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
+  /** 核账卡上点「以本章为准」的那条（条目键）：改齐后那条算改掉了。 */
+  readonly resolves?: string;
   /** 没查全的（哪一批、为什么）。 */
   readonly failures: readonly string[];
 }

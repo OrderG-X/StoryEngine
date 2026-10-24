@@ -5,7 +5,9 @@
  *  1. 写定论：模型把作者选的那句写成一句话，顺带报这件事涉及的名字；作者自己写的定论只问名字。
  *  2. 圈章：名字连同设定卡上的别名逐字出现在哪些已定稿章 / 当前工作稿里，只查这些（名字一个都没给就全书查）。
  *  3. 扫：圈到的章按编号句子分批并行问「哪几句和定论对不上、改成什么」，只回编号和新句；设定本里相关的栏也编号问一遍。
- *  4. 账跟着改：改到的句子里记过账的事实，问一次「照旧 / 改成 / 去掉」，新原句要逐字在改后的正文里。
+ *  4. 复核：扫出来的改法（作者点的那句除外）再问一遍「真的对不上吗」，推算站不住的去掉——扫的时候宁多勿漏，这里收。
+ *  5. 账跟着改：改到的句子里记过账的事实，问一次「照旧 / 改成 / 去掉」，新原句要逐字在改后的正文里；
+ *     老书导入的账没记原句的事实一并问（多半不动），说法变了的改、不成立的作废。
  *
  * 每一步失败都如实记进 failures，不当成「没有要改的」。纯提议：不写正文、不写真相，只把结果交回去（存盘由 store 管）。
  */
@@ -15,6 +17,7 @@ import {
   applyUnitEdits,
   draftPath,
   draftVersionOf,
+  dropNeighborEcho,
   fitQuotes,
   listChapterTexts,
   nameKey,
@@ -34,6 +37,7 @@ import type { BrainCallModel } from "../reader-window.js";
 export type SettleSide =
   | { readonly where: "chapter"; readonly chapter: number; readonly quote: string }
   | { readonly where: "setting"; readonly quote: string; readonly label: string; readonly card?: string };
+export type ChapterSide = Extract<SettleSide, { readonly where: "chapter" }>;
 
 export type SettleRequest =
   | {
@@ -42,6 +46,8 @@ export type SettleRequest =
       readonly chapter: number;
       readonly truth: SettleSide;
       readonly other?: SettleSide;
+      /** 核账卡上和同一句（同一条设定）打架的别几句：一并要改，一句都不能漏。 */
+      readonly also?: readonly ChapterSide[];
       /** 核账员说的哪里对不上。 */
       readonly reason?: string;
     }
@@ -67,6 +73,8 @@ export interface SettleFactChange {
   /** 改成什么（给人看的说明）；没有 = 作废。 */
   readonly after?: string;
   readonly patch?: { readonly value?: string; readonly text?: string; readonly quote: string };
+  /** 老账里没记原句的那种：不会因原句被改自动作废，作废要点名。 */
+  readonly loose?: true;
 }
 
 export interface SettleFieldEdit {
@@ -92,8 +100,10 @@ export interface SettleProposal {
   readonly drafts: readonly { readonly chapter: number; readonly baseVersion: string }[];
   /** 查过的章（给人看「查了第几章」）。 */
   readonly searched: readonly number[];
-  /** 作者点的那句打架的话这次没查出来要改（如实说）。 */
-  readonly otherMissed?: { readonly chapter: number; readonly quote: string };
+  /** 核账报过和它打架、这次却没查出改法的句子（如实说）。 */
+  readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
+  /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
+  readonly reviewDropped: readonly { readonly chapter: number; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
 }
 
@@ -152,10 +162,11 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
   return [
     "作者在两处打架的说法里定了一处为准，请把它写成一条「定论」（这本书以后都以它为准）。",
     `【作者选为准的】${sideLine(request.truth, docs)}`,
-    ...(request.other ? [`【和它打架的】${sideLine(request.other, docs)}`] : []),
+    ...(request.other ? [`【和它打架的（这边要跟着改）】${sideLine(request.other, docs)}`] : []),
     ...(request.reason ? [`【核账员说】${request.reason}`] : []),
     "要求：",
-    "- canon：一句话写清作者定下的这件事本身（照作者选的那句的说法，只写事实，不写章号、不写「以……为准」，不超过 60 字）；",
+    "- canon：写【作者选为准的】那边说的事，正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；",
+    "  只写两处打架的那一点，照作者选的那句的说法（前后文只是帮你看懂，里面别的事不写；数字、时间照原句抄）；主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
     "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
     '只输出一个 JSON：{"canon":"","names":[]}',
   ].join("\n");
@@ -169,10 +180,12 @@ export function namesTask(canon: string): string {
   ].join("\n");
 }
 
-export function sweepTask(canon: string, docs: readonly SweepDoc[]): string {
+export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: readonly ChapterSide[] = []): string {
+  const mine = flagged.filter((side) => docs.some((doc) => doc.chapter === side.chapter));
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     "下面是这本书的几章正文，每句前面有编号 [n]。逐句看，找出说法和这条定论对不上的句子（同一件事写成了别的样子）。",
+    ...(mine.length > 0 ? [`核账已经报过这几句和它对不上，一定给出改法：${mine.map((side) => `第 ${side.chapter} 章「${side.quote}」`).join("；")}。`] : []),
     "- 写了变化过程的、人物明确在撒谎或记错的、说的不是同一件事的，不算；",
     "- 每处给出改法 to：只改和定论对不上的那几个字，别的字照抄，改完还是通顺的一整句，不加新情节；",
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
@@ -195,10 +208,24 @@ export function fieldsTask(canon: string, fields: readonly FieldRef[]): string {
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
+    "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
     '只输出一个 JSON：{"edits":[{"id":"S1","to":""}]}。一栏都没有就给 {"edits":[]}。',
     "",
-    ...fields.map((field) => `[${field.id}]${field.card ? `${field.card} · ` : "故事设定 · "}${field.label}：${field.value}${field.ai ? "（AI 补的）" : ""}`),
+    ...fields.map((field) => `[${field.id}]${fieldHead(field)}${field.value}${field.ai ? AI_MARK : ""}`),
   ].join("\n");
+}
+
+const AI_MARK = "（AI 补的）";
+const fieldHead = (field: Pick<FieldRef, "card" | "label">): string => `${field.card ?? "故事设定"} · ${field.label}：`;
+
+/** 模型回的整栏内容常把提示里那栏的头（编号、卡名 · 栏名：）和「（AI 补的）」一起抄回来：照我们自己写的样子去掉。 */
+function stripFieldEcho(to: string, field: FieldRef): string {
+  let out = to.trim();
+  for (const head of [`[${field.id}]`, fieldHead(field), `${field.label}：`]) {
+    if (out.startsWith(head)) out = out.slice(head.length).trim();
+  }
+  if (out.endsWith(AI_MARK)) out = out.slice(0, -AI_MARK.length).trim();
+  return out;
 }
 
 interface FactRef {
@@ -209,19 +236,68 @@ interface FactRef {
   readonly attribute?: string;
   readonly value?: string;
   readonly text: string;
-  readonly quote: string;
+  /** 没有 = 老账没记原句。 */
+  readonly quote?: string;
 }
 
-export function factsTask(canon: string, chapter: number, edits: readonly SettleEdit[], facts: readonly FactRef[]): string {
+const factLine = (fact: FactRef): string =>
+  `[${fact.id}] ${[fact.subject, fact.attribute, fact.value].filter(Boolean).join("｜") || "（事件）"} —— ${fact.text}${fact.quote ? `（原句：「${fact.quote}」）` : ""}`;
+
+export function factsTask(canon: string, chapter: number, edits: readonly SettleEdit[], facts: readonly FactRef[], loose: readonly FactRef[] = []): string {
   return [
     `作者定下了一条定论：「${canon}」。第 ${chapter} 章为此改了这几句：`,
     ...edits.map((edit) => `- 原句「${edit.from}」→ 改成「${edit.to}」`),
-    "账里这几条事实引用了改掉的句子：",
-    ...facts.map((fact) => `[${fact.id}] ${[fact.subject, fact.attribute, fact.value].filter(Boolean).join("｜") || "（事件）"} —— ${fact.text}（原句：「${fact.quote}」）`),
-    "每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote）、drop（改后这条不成立了）。",
-    "quote 必须逐字抄改后的句子里的一段（至少 4 个字）。",
-    '只输出一个 JSON：{"facts":[{"id":"F1","action":"update","value":"","text":"","quote":""}]}',
+    ...(facts.length > 0
+      ? [
+        "账里这几条事实引用了改掉的句子：",
+        ...facts.map(factLine),
+        "这几条每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote）、drop（改后这条不成立了）。",
+      ]
+      : []),
+    ...(loose.length > 0
+      ? [
+        "账里这几条没记原句，看改了以后还对不对（多半不受影响）：",
+        ...loose.map(factLine),
+        "这几条：不受影响的回 keep（不用给 quote）；说法变了的回 update（同上，要给 quote）；不成立了的回 drop。",
+      ]
+      : []),
+    "quote 必须逐字抄改后的正文里的一段（至少 4 个字）。",
+    `只输出一个 JSON：{"facts":[{"id":"${facts[0]?.id ?? loose[0]?.id ?? "F1"}","action":"update","value":"","text":"","quote":""}]}`,
   ].join("\n");
+}
+
+export function reviewTask(canon: string, edits: readonly Omit<SettleEdit, "key">[]): string {
+  return [
+    `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    "另一个人逐句查了全书，说下面这几句和定论对不上、要改。请逐条复核：原句是不是真的和定论说不到一块。",
+    "- 原句写的就是这件事、而且写得和定论不一样：算；",
+    "- 要靠推算才对不上的：推算的每一步都站得住才算；推得出、也说得通的不算；",
+    "- 说的不是同一件事、人物在撒谎或记错、写的是变化过程的：不算。",
+    "",
+    ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.why ? `（他的理由：${edit.why}）` : ""}`),
+    "",
+    '每条都要给。只输出一个 JSON：{"verdicts":[{"id":1,"conflict":true}]}',
+  ].join("\n");
+}
+
+/** 复核结果：conflict 明说 false 的那几条（下标）去掉；没给的留着（作者在卡上还会一句句看）。格式不对抛错。 */
+export function parseReview(text: string, count: number): ReadonlySet<number> {
+  const parsed = parseJsonObject(text);
+  if (!parsed || !Array.isArray(parsed.verdicts)) throw new Error("模型回的不是要的格式");
+  const drop = new Set<number>();
+  for (const raw of parsed.verdicts) {
+    if (!raw || typeof raw !== "object") continue;
+    const record = raw as Record<string, unknown>;
+    const id = int(record.id);
+    if (id === undefined || id > count) continue;
+    if (record.conflict === false || str(record.conflict).toLowerCase() === "false") drop.add(id - 1);
+  }
+  return drop;
+}
+
+/** 原句落在哪个编号句子里（原句是半句、或横跨两句里的一句都认）。 */
+function unitOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit | undefined {
+  return doc?.units.find((item) => quoteInText(quote, item.text) || quoteInText(item.text, quote));
 }
 
 /** 把一章（或工作稿）切好编号。 */
@@ -270,7 +346,8 @@ export function parseSweepEdits(text: string, batch: readonly SweepDoc[]): Omit<
     const key = `${doc.chapter}:${unit.id}`;
     if (seen.has(key)) continue;
     const proposed = str(record.to);
-    const fitted = proposed ? fitQuotes(unit.text, proposed.replace(/\s*\n+\s*/gu, "")) : undefined;
+    const echoFree = proposed ? dropNeighborEcho(unit.text, proposed.replace(/\s*\n+\s*/gu, ""), doc.units[unit.id - 2]?.text, doc.units[unit.id]?.text) : undefined;
+    const fitted = echoFree ? fitQuotes(unit.text, echoFree) : undefined;
     if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
     seen.add(key);
     const why = str(record.why);
@@ -287,19 +364,36 @@ export function parseFieldEdits(text: string, fields: readonly FieldRef[]): Omit
     if (!raw || typeof raw !== "object") continue;
     const record = raw as Record<string, unknown>;
     const field = fields.find((item) => item.id === str(record.id));
-    const to = str(record.to);
+    const to = field ? stripFieldEcho(str(record.to), field) : "";
     if (!field || !to || to === field.value || out.some((item) => item.card === field.card && item.label === field.label)) continue;
     out.push({ ...(field.card ? { card: field.card } : {}), label: field.label, from: field.value, to });
   }
   return out;
 }
 
-export function parseFactChanges(text: string, chapter: number, facts: readonly FactRef[], nextText: string): SettleFactChange[] {
+export function parseFactChanges(text: string, chapter: number, facts: readonly FactRef[], nextText: string, loose: readonly FactRef[] = []): SettleFactChange[] {
   const parsed = parseJsonObject(text);
   if (!parsed || !Array.isArray(parsed.facts)) throw new Error("模型回的不是要的格式");
+  const replies = parsed.facts;
+  const replyOf = (id: string) => replies.find((item) => item && typeof item === "object" && str((item as Record<string, unknown>).id) === id) as Record<string, unknown> | undefined;
   const out: SettleFactChange[] = [];
+  // 老账没记原句的：没回、回 keep 就不动；回 update 但新原句核不上、回 drop 的作废（说法已经不对了）。
+  for (const fact of loose) {
+    const raw = replyOf(fact.id);
+    const action = str(raw?.action).toLowerCase();
+    if (action !== "update" && action !== "drop") continue;
+    const quote = str(raw?.quote);
+    const value = str(raw?.value);
+    const textAfter = str(raw?.text) || fact.text;
+    const base = { chapter, factId: fact.factId, before: fact.text, loose: true as const };
+    if (action === "drop" || !quote || !quoteInText(quote, nextText) || (fact.nature !== "event" && !value)) {
+      out.push(base);
+      continue;
+    }
+    out.push({ ...base, after: textAfter, patch: { ...(fact.nature !== "event" ? { value } : {}), text: textAfter, quote } });
+  }
   for (const fact of facts) {
-    const raw = parsed.facts.find((item) => item && typeof item === "object" && str((item as Record<string, unknown>).id) === fact.id) as Record<string, unknown> | undefined;
+    const raw = replyOf(fact.id);
     const action = str(raw?.action).toLowerCase();
     const quote = str(raw?.quote);
     const base = { chapter, factId: fact.factId, before: fact.text };
@@ -411,9 +505,13 @@ export async function proposeSettle(input: {
   }
 
   const terms = termsFor(names, cards);
+  // 核账报过、作者点过的那几句（打架的另一边 + 同一条报的别几句）：章一定查，改法不复核，查不出如实说。
+  const flagged: ChapterSide[] = request.kind === "pick"
+    ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" ? [side] : []))
+    : [];
   const pinned = new Set<number>([
     ...(focusChapter !== undefined ? [focusChapter] : []),
-    ...(request.kind === "pick" ? [request.truth, request.other].flatMap((side) => (side?.where === "chapter" ? [side.chapter] : [])) : []),
+    ...(request.kind === "pick" ? [request.truth, ...flagged].flatMap((side) => (side.where === "chapter" ? [side.chapter] : [])) : []),
   ]);
   const picked = [...docs.values()]
     .filter((doc) => terms.length === 0 || pinned.has(doc.chapter) || terms.some((term) => doc.text.includes(term)))
@@ -422,7 +520,7 @@ export async function proposeSettle(input: {
   const batches = batchesOf(picked);
   const fields = fieldRefs(cards, terms);
   const [batchResults, fieldResult] = await Promise.all([
-    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch) }], { json: true }), batch))),
+    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch, flagged) }], { json: true }), batch))),
     fields.length > 0
       ? callModel([{ role: "user", content: fieldsTask(canon, fields) }], { json: true }).then((text) => parseFieldEdits(text, fields)).then(
         (value) => ({ ok: true as const, value }),
@@ -436,7 +534,23 @@ export async function proposeSettle(input: {
     else failures.push(`${rangeLabel(batches[index]!)}这一批没查成（${result.reason instanceof Error ? result.reason.message : String(result.reason)}）`);
   });
   if (!fieldResult.ok) failures.push(`设定本那一遍没查成（${fieldResult.error instanceof Error ? fieldResult.error.message : String(fieldResult.error)}）`);
-  const edits: SettleEdit[] = found
+  // 核账报过的那几句（作者认了它们打架）不复核；别的再问一遍，推算站不住的去掉。
+  const flaggedUnits = flagged.map((side) => ({ side, unit: unitOfQuote(docs.get(side.chapter), side.quote) }));
+  const clicked = (edit: Omit<SettleEdit, "key">): boolean =>
+    flaggedUnits.some(({ side, unit }) => unit !== undefined && edit.chapter === side.chapter && edit.id === unit.id);
+  const toReview = found.filter((edit) => !clicked(edit));
+  let kept = found;
+  const reviewDropped: SettleProposal["reviewDropped"][number][] = [];
+  if (toReview.length > 0) {
+    try {
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, toReview) }], { json: true }), toReview.length);
+      kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
+      reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
+    } catch (error) {
+      failures.push(`复核没做成（${error instanceof Error ? error.message : String(error)}），下面几处请一句句看过再确认`);
+    }
+  }
+  const edits: SettleEdit[] = kept
     .sort((a, b) => a.chapter - b.chapter || a.id - b.id)
     .map((edit, index) => ({ ...edit, key: `e${index + 1}` }));
   const fieldEdits: SettleFieldEdit[] = (fieldResult.ok ? fieldResult.value : []).map((edit, index) => ({ ...edit, key: `f${index + 1}` }));
@@ -454,27 +568,36 @@ export async function proposeSettle(input: {
     }
     const ledger = await readChapterLedger(projectDir, chapter).catch(() => undefined);
     const affected: FactRef[] = [];
+    const loose: FactRef[] = [];
     for (const entry of ledger?.entries ?? []) {
-      if (entry.kind !== "fact" || !entry.quote) continue;
-      if (!quoteInText(entry.quote, doc.text) || quoteInText(entry.quote, applied.text)) continue;
-      affected.push({
-        id: `F${affected.length + 1}`,
+      if (entry.kind !== "fact") continue;
+      const ref = {
         factId: entry.id,
         nature: entry.nature,
         ...(entry.subject ? { subject: entry.subject } : {}),
         ...(entry.attribute ? { attribute: entry.attribute } : {}),
         ...(entry.value ? { value: entry.value } : {}),
         text: entry.text,
-        quote: entry.quote,
-      });
+      };
+      if (!entry.quote) {
+        loose.push({ id: `L${loose.length + 1}`, ...ref });
+        continue;
+      }
+      if (!quoteInText(entry.quote, doc.text) || quoteInText(entry.quote, applied.text)) continue;
+      affected.push({ id: `F${affected.length + 1}`, ...ref, quote: entry.quote });
     }
-    if (affected.length === 0) return;
+    if (affected.length === 0 && loose.length === 0) return;
     try {
-      const reply = await callModel([{ role: "user", content: factsTask(canon, chapter, mine, affected) }], { json: true });
-      facts.push(...parseFactChanges(reply, chapter, affected, applied.text));
+      const reply = await callModel([{ role: "user", content: factsTask(canon, chapter, mine, affected, loose) }], { json: true });
+      facts.push(...parseFactChanges(reply, chapter, affected, applied.text, loose));
     } catch (error) {
-      failures.push(`第 ${chapter} 章账里跟着改的那几条没问成（${error instanceof Error ? error.message : String(error)}），确认后这几条会作废`);
-      facts.push(...affected.map((fact) => ({ chapter, factId: fact.factId, before: fact.text })));
+      const why = error instanceof Error ? error.message : String(error);
+      if (affected.length > 0) {
+        failures.push(`第 ${chapter} 章账里跟着改的那几条没问成（${why}），确认后这几条会作废`);
+        facts.push(...affected.map((fact) => ({ chapter, factId: fact.factId, before: fact.text })));
+      } else {
+        failures.push(`第 ${chapter} 章账里没记原句的那几条没问成（${why}），确认后不动，可能有跟改后正文对不上的`);
+      }
     }
   }));
 
@@ -486,14 +609,9 @@ export async function proposeSettle(input: {
     return carried.length > 0 ? { chapter, textSha256, draftVersion } : { chapter, textSha256 };
   });
 
-  let otherMissed: SettleProposal["otherMissed"];
-  if (request.kind === "pick" && request.other?.where === "chapter") {
-    const other = request.other;
-    const doc = docs.get(other.chapter);
-    const unit = doc?.units.find((item) => quoteInText(other.quote, item.text) || quoteInText(item.text, other.quote));
-    const covered = unit !== undefined && edits.some((edit) => edit.chapter === other.chapter && edit.id === unit.id);
-    if (!covered) otherMissed = { chapter: other.chapter, quote: other.quote };
-  }
+  const missed = flaggedUnits
+    .filter(({ side, unit }) => !(unit !== undefined && edits.some((edit) => edit.chapter === side.chapter && edit.id === unit.id)))
+    .map(({ side }) => ({ chapter: side.chapter, quote: side.quote }));
 
   return {
     ok: true,
@@ -507,7 +625,8 @@ export async function proposeSettle(input: {
       committed: committedOut.filter((item) => edits.some((edit) => edit.target === "committed" && edit.chapter === item.chapter)),
       drafts: drafts.filter((item) => edits.some((edit) => edit.target === "draft" && edit.chapter === item.chapter)),
       searched: picked.map((doc) => doc.chapter),
-      ...(otherMissed ? { otherMissed } : {}),
+      missed,
+      reviewDropped,
       failures,
     },
   };

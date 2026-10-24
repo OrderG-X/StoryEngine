@@ -46,6 +46,8 @@ export const SettleApplyArgs = z.object({
     textSha256: z.string().regex(/^[0-9a-f]{64}$/u),
     edits: z.array(UnitEditArg).min(1),
     facts: z.array(FactPatch),
+    /** 没记原句（老账）、改了以后不成立的事实：作废（原句没法替它说话）。 */
+    retract: z.array(text).default([]),
   })),
   drafts: z.array(z.object({ chapter: chapterNo, baseVersion: text, edits: z.array(UnitEditArg).min(1) })),
 }).refine((args) => args.cardOps.length + args.chapters.length + args.drafts.length > 0, "什么都没要改");
@@ -88,9 +90,11 @@ function settleLedger(
   next: string,
   applied: readonly AppliedUnitEdit[],
   patches: readonly z.infer<typeof FactPatch>[],
+  retractIds: readonly string[],
 ): ChapterOutcome {
   const chapter = ledger.chapter;
   const patchById = new Map(patches.map((patch) => [patch.id, patch]));
+  const retractSet = new Set(retractIds);
   const units = splitUnits(next);
   const entries: LedgerEntry[] = [];
   const factsUpdated: string[] = [];
@@ -112,6 +116,12 @@ function settleLedger(
       }
       entries.push(updated);
       factsUpdated.push(updated.text);
+      continue;
+    }
+    if (entry.kind === "fact" && retractSet.has(entry.id)) {
+      entries.push(entry);
+      retract.push(entry.id);
+      factsRetracted.push(entry.text);
       continue;
     }
     const quote = entry.quote;
@@ -145,7 +155,7 @@ function settleLedger(
     entries.push({ ...entry, quote: edit.to });
     requoted += 1;
   }
-  const unknown = patches.find((patch) => !ledger.entries.some((entry) => entry.kind === "fact" && entry.id === patch.id));
+  const unknown = [...patches.map((patch) => patch.id), ...retractIds].find((id) => !ledger.entries.some((entry) => entry.kind === "fact" && entry.id === id));
   if (unknown) return { ok: false, code: "unknown_fact", message: `第 ${chapter} 章账里没有要改的那条事实了` };
   const parsed = ChapterLedger.safeParse({ ...ledger, textSha256: sha256(next), entries });
   if (!parsed.success) return { ok: false, code: "ledger_invalid", message: `第 ${chapter} 章的账单没拼成` };
@@ -202,7 +212,7 @@ export const settleApply: WriteCommandSpec<SettleApplyArgs, SettleApplyResult> =
       const applied = applyUnitEdits(original, item.edits);
       if (!applied.ok) return fail(applied.code, `第 ${item.chapter} 章没改成：${applied.message}。`);
       if (applied.applied.length === 0) continue;
-      const outcome = settleLedger(ledger, original, applied.text, applied.applied, item.facts);
+      const outcome = settleLedger(ledger, original, applied.text, applied.applied, item.facts, item.retract);
       if (!outcome.ok) return fail(outcome.code, `没改：${outcome.message}。`);
       writes.push(
         { path: chapterTextPath(item.chapter), content: outcome.text },

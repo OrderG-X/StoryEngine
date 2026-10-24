@@ -33,6 +33,12 @@ async function git(projectDir: string, args: readonly string[], env?: Record<str
     // 隔离用户全局 gitconfig：开了 commit 签名会导致提交挂起
     "-c",
     "commit.gpgsign=false",
+    // 提交后的自动维护（gc / maintenance）别甩到后台跑：后台进程还在往 .git/objects 写，
+    // 书挪进回收站、测试删临时书都会撞上（ENOTEMPTY）
+    "-c",
+    "gc.autoDetach=false",
+    "-c",
+    "maintenance.autoDetach=false",
     ...args,
   ];
   const { stdout } = env === undefined

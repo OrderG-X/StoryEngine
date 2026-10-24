@@ -261,10 +261,12 @@
   .step-card .cck-item{
     > .drc-desc{margin:4px 0 0;}
     > .cck-source{margin:8px 0 0;}
-    .cck-foot{display:flex;align-items:center;gap:6px;margin-top:8px;}
-    .cck-foot .drc-fix{margin:0;padding:3px 10px;}
+    .cck-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;}
+    .cck-foot .drc-fix{margin:0;padding:3px 10px;white-space:nowrap;}
     .cck-src{margin-right:auto;padding:2px 0;border:0;background:none;font:inherit;font-size:11.5px;color:var(--faint);cursor:pointer;}
     .cck-src:hover{color:var(--accent-hi);}
+    .cck-gone{font-size:11.5px;color:var(--success);}
+    &.is-gone > .drc-evi{color:var(--faint);text-decoration:line-through;text-decoration-color:var(--line-strong);}
   }
   /* 审稿条目：原句也做成引文块，和核账同一个样子；严重度左边一道同色细线。 */
   .step-card .drc-item:has(> .drc-line){
@@ -307,7 +309,6 @@
   .step-card .stc-row.is-excluded .stc-to{text-decoration:line-through;}
   .step-card .stc-facts-toggle{margin:0 0 8px;}
   .step-card .stc-facts{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.6;color:var(--muted);}
-  .step-card .stc-done{padding:8px 12px;border-radius:8px;background:var(--success-soft);}
 
   /* 定稿前的账本清单：一条一行，依据原句小一号；勾掉的划线变淡。 */
   .step-card .cpc-ledger{margin:0 0 10px;}

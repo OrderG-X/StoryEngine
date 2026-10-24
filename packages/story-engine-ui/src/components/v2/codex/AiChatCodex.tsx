@@ -43,7 +43,7 @@ import { DraftReviewCard } from "./DraftReviewCard.js";
 import { ChatContextMeter, UnarchiveButton } from "./ChatContextMeter.js";
 import { ChatSessionBar } from "./ChatSessionBar.js";
 import { ChapterTodoCard } from "./ChapterTodoCard.js";
-import { useChapterProgress } from "../../../workspace/chapterProgress.js";
+import { settledContinuityByMessage, useChapterProgress } from "../../../workspace/chapterProgress.js";
 import { targetChapterWordsOf } from "./WritingDeskCodex.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
 import { AiFlavorCard } from "./AiFlavorCard.js";
@@ -404,6 +404,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
   const undoableCommitId = undoableCommitReportMessageId(messages);
   // 同一章后来又核过的旧核账卡不再给「改这处」（见 commitConfirm.ts）。
   const staleContinuityIds = supersededContinuityMessageIds(messages);
+  const settledContinuity = settledContinuityByMessage(messages);
   const canClear = Boolean(props.onClearChat) && messages.length > 0 && !workspaceBusy;
   // 顶卡忙的时候主按钮上说正在干什么（原状态行的实时字幕）。
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -586,6 +587,7 @@ export default function AiChatCodex(props: AiChatCodexProps) {
             commitConfirmable={message.id === confirmablePreviewId}
             commitUndoable={message.id === undoableCommitId}
             continuitySuperseded={staleContinuityIds.has(message.id)}
+            continuitySettled={settledContinuity.get(message.id)}
             projectPath={props.projectPath ?? null}
           />
           </StepCardCollapsedByDefault.Provider>
@@ -826,6 +828,7 @@ function MessageBubbles({
   commitConfirmable = false,
   commitUndoable = false,
   continuitySuperseded = false,
+  continuitySettled,
   onPrefillComposer,
   liveOperation = null,
   isLatestMessage = true,
@@ -854,6 +857,8 @@ function MessageBubbles({
   readonly commitUndoable?: boolean;
   /** 本条的核账卡是不是旧的（同一章后来又核过）：旧卡不给「改这处」。 */
   readonly continuitySuperseded?: boolean;
+  /** 这张核账卡之后定论改掉的条目键。 */
+  readonly continuitySettled?: readonly string[] | undefined;
   /** 把一句话填进输入框（不发送），如定稿预览卡的「先不定」。 */
   readonly onPrefillComposer?: (text: string) => void;
   /** 本条是最新消息、且有不走对话的操作在跑时的说明（审稿/质检…）；其余为 null。 */
@@ -964,6 +969,7 @@ function MessageBubbles({
             key={card.type}
             check={card.check}
             dismissed={card.dismissed ?? []}
+            {...(continuitySettled ? { settled: continuitySettled } : {})}
             superseded={continuitySuperseded}
             {...(continuitySuperseded ? {} : { onRevise: onSendMessage, onFixAction: onSendUserAction })}
             onDismiss={projectPath ? (item, undo) => dismissContinuityItem({ messageId: message.id, chapter: card.check.chapter, item, undo }) : undefined}

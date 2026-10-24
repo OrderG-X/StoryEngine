@@ -88,6 +88,7 @@ export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.j
 export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./text/quote.js";
 export {
   applyUnitEdits,
+  dropNeighborEcho,
   fitQuotes,
   numberedText,
   splitUnits,

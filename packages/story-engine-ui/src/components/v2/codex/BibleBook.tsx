@@ -203,6 +203,8 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const check = (statement: string) => ctx.onAction?.({ toolName: "settle_preview", statement });
+  // 定论是一句话：框子折行好看全，粘进来的换行存的时候并掉。
+  const oneLine = (text: string): string => text.replace(/\s*\n+\s*/gu, "");
   return (
     <>
       <PageHead title="定论" sub="前后说法打架时你定下的。写稿、核账都以它为准。" stats={[{ value: canon.length, label: "条" }]} />
@@ -212,8 +214,8 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
             {canon.map((item) => (
               <li key={item.id}>
                 {editing === item.id ? (
-                  <InlineEdit value={item.text} label="改这条定论" placeholder="一句话说清" disabled={ctx.disabled}
-                    onSave={(text) => { setEditing(null); if (text && text !== item.text) void ctx.save([{ op: "canon.set", canon: item.id, text }]); }}
+                  <InlineEdit value={item.text} wrap label="改这条定论" placeholder="一句话说清" disabled={ctx.disabled}
+                    onSave={(raw) => { const text = oneLine(raw); setEditing(null); if (text && text !== item.text) void ctx.save([{ op: "canon.set", canon: item.id, text }]); }}
                     onCancel={() => setEditing(null)} />
                 ) : (
                   <button type="button" className="se-bk-value serif" disabled={ctx.disabled} onClick={() => setEditing(item.id)}>{item.text}</button>
@@ -231,8 +233,8 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
           <p className="se-bk-hint">还没有。核账卡上点「以第 N 章为准」，或跟右边的 AI 说「以这个为准」，就记在这里。</p>
         )}
         {adding ? (
-          <InlineEdit value="" label="记一条定论" placeholder="一句话说清，比如：杜长顺十年前去世" disabled={ctx.disabled}
-            onSave={(text) => { setAdding(false); if (text) void ctx.save([{ op: "canon.add", text }]); }} onCancel={() => setAdding(false)} />
+          <InlineEdit value="" wrap label="记一条定论" placeholder="一句话说清，比如：主角今年二十九岁" disabled={ctx.disabled}
+            onSave={(raw) => { const text = oneLine(raw); setAdding(false); if (text) void ctx.save([{ op: "canon.add", text }]); }} onCancel={() => setAdding(false)} />
         ) : <button type="button" className="se-bk-add" disabled={ctx.disabled} onClick={() => setAdding(true)}>+ 记一条</button>}
       </div>
     </>
