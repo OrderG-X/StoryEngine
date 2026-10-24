@@ -138,6 +138,16 @@ describe("合并去重 mergeContinuityIssues：同一句只报一次", () => {
     const merged = mergeContinuityIssues([issue("他从工作台上拿起那块怀表，表盖还开着。", "位置对不上"), issue("拿起那块怀表", "同一件事又报一遍")]);
     expect(merged.map((item) => item.reason)).toEqual(["位置对不上"]);
   });
+
+  it("两段搭着抄（一条的尾巴是另一条的开头，搭上 8 字以上）→ 同一句，只留先来的；只搭一两个字的不算", () => {
+    const merged = mergeContinuityIssues([
+      issue("那扇门她来过不止一回，就在那排库房往里数第三个门", "门的位置对不上"),
+      issue("就在那排库房往里数第三个门，门前一小片空地", "同一扇门又报一遍"),
+      issue("门前一小片空地，她说", "搭边太短"),
+      issue("她说完就走了。", "另一句"),
+    ]);
+    expect(merged.map((item) => item.reason)).toEqual(["门的位置对不上", "搭边太短", "另一句"]);
+  });
 });
 
 describe("引文对回原句 snapToOriginal / snapIssueQuotes", () => {

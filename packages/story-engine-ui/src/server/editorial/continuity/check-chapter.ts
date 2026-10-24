@@ -290,8 +290,9 @@ export async function ledgerNumberIssues(input: {
 }
 
 /**
- * 合并去重：先来的留下。同一句（一条的原句包含另一条的）只留一条——账本对账、核账记忆带上次的、
- * 核账员三遍常从同一句里各抄一段报同一个问题，作者看到两三遍。
+ * 合并去重：先来的留下。同一句只留一条——账本对账、核账记忆带上次的、核账员三遍常从同一句里各抄一段报同一个问题，作者看到两三遍。
+ * 同一句：一条的原句包含另一条的，或两段搭着抄（一条的尾巴就是另一条的开头）。长篇连写走查（2026-10-24）：
+ * 「……就在那排库房往里数第三个门」和「就在那排库房往里数第三个门，门前一小片空地……」各算一条，作者看到两遍、批量改时后一处已跟着改掉。
  */
 export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): ContinuityIssueV2[] {
   const merged: ContinuityIssueV2[] = [];
@@ -300,11 +301,26 @@ export function mergeContinuityIssues(ordered: readonly ContinuityIssueV2[]): Co
     const key = normalize(issue.quote).slice(0, 16);
     if (seen.has(key)) continue;
     const quote = normalize(issue.quote);
-    if (merged.some((other) => { const kept = normalize(other.quote); return kept.includes(quote) || quote.includes(kept); })) continue;
+    if (merged.some((other) => sameSentence(normalize(other.quote), quote))) continue;
     seen.add(key);
     merged.push(issue);
   }
   return merged;
+}
+
+/** 两段搭着抄至少这么多字才算同一句（太短的搭边，如一个「她说」，不算）。 */
+const QUOTE_OVERLAP_MIN = 8;
+
+function sameSentence(a: string, b: string): boolean {
+  return a.includes(b) || b.includes(a) || overlapsAtEdge(a, b) || overlapsAtEdge(b, a);
+}
+
+/** head 的尾巴就是 tail 的开头（搭上 ≥ QUOTE_OVERLAP_MIN 个字）。 */
+function overlapsAtEdge(head: string, tail: string): boolean {
+  for (let size = Math.min(head.length, tail.length) - 1; size >= QUOTE_OVERLAP_MIN; size -= 1) {
+    if (head.endsWith(tail.slice(0, size))) return true;
+  }
+  return false;
 }
 
 // ---------- 相对日子换算（2026-10-14 编辑部 R7.3，确定性、不调模型） ----------
