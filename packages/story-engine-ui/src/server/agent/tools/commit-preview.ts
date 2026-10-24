@@ -219,7 +219,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
   const autoCount = others(preview.auto).length;
   const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
   const notes: string[] = [];
-  if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条原句对不上或指向前文没有的，没记上`);
+  if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条没记上（原因在清单里）`);
   if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
   if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
     notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);

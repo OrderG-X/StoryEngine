@@ -282,7 +282,7 @@ export function CommitSheet({
 
           {preview.notRecorded && preview.notRecorded.length > 0 ? (
             <details className="se-cs-missed">
-              <summary>没记上 {preview.notRecorded.length} 条（原句对不上）</summary>
+              <summary>没记上 {preview.notRecorded.length} 条</summary>
               <ul>{preview.notRecorded.map((line) => <li key={line}>{line}</li>)}</ul>
             </details>
           ) : null}
