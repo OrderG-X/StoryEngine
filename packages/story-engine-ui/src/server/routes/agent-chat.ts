@@ -246,12 +246,14 @@ export const AGENT_TURN_MAX_STEPS = 12;
 const NEXT_STEPS_TOOL = "suggest_next_steps";
 
 /**
- * 这一步只调了出选项的工具 → 这轮到此为止。话在调它之前已经说过了，不停的话模型拿到选项卡的结果
- * 会把同一段话再说一遍（长篇连写 2026-10-24：「改好了……」连着出现两遍）。和别的工具一起调的不算，那些结果还要转述。
+ * 这一步先说了话、再只调了出选项的工具 → 这轮到此为止。不停的话模型拿到选项卡的结果会把同一段话再说一遍
+ * （长篇连写 2026-10-24：「改好了……」连着出现两遍）。这一步没说话的不停（有的模型先出选项、下一步才说结果）；
+ * 和别的工具一起调的也不停，那些结果还要转述。
  */
-export function endsOnNextSteps({ steps }: { readonly steps: readonly { readonly toolCalls?: readonly { readonly toolName?: string }[] }[] }): boolean {
-  const calls = steps.at(-1)?.toolCalls ?? [];
-  return calls.length > 0 && calls.every((call) => call.toolName === NEXT_STEPS_TOOL);
+export function endsOnNextSteps({ steps }: { readonly steps: readonly { readonly text?: string; readonly toolCalls?: readonly { readonly toolName?: string }[] }[] }): boolean {
+  const last = steps.at(-1);
+  const calls = last?.toolCalls ?? [];
+  return Boolean(last?.text?.trim()) && calls.length > 0 && calls.every((call) => call.toolName === NEXT_STEPS_TOOL);
 }
 
 /** 步数用完、模型还停在工具调用上：如实告诉作者没做完。 */
@@ -423,8 +425,8 @@ export async function runAgentTurn(args: {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
-  // 停在出选项那一步是有意收尾（endsOnNextSteps），不是步数用完。
-  if (finishReason === "tool-calls" && !sawStreamError && lastToolName !== NEXT_STEPS_TOOL) {
+  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），不是步数用完。
+  if (finishReason === "tool-calls" && !sawStreamError && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
     const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }

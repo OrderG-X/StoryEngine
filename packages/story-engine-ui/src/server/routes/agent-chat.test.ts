@@ -107,12 +107,14 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
     expect(collectText(out.events)).toBe("改好了三处。");
   });
 
-  it("endsOnNextSteps：这一步只调了出选项的工具才收尾（长篇连写：不收的话模型把同一段话再说一遍）", () => {
-    const step = (...names: string[]) => ({ toolCalls: names.map((toolName) => ({ toolName })) });
-    expect(endsOnNextSteps({ steps: [step("revise_draft"), step("suggest_next_steps")] })).toBe(true);
-    expect(endsOnNextSteps({ steps: [step("revise_draft", "suggest_next_steps")] })).toBe(false);
-    expect(endsOnNextSteps({ steps: [step("suggest_next_steps"), step("read_draft")] })).toBe(false);
-    expect(endsOnNextSteps({ steps: [step()] })).toBe(false);
+  it("endsOnNextSteps：这一步说了话、又只调了出选项的工具才收尾（长篇连写：不收的话模型把同一段话再说一遍）", () => {
+    const step = (text: string, ...names: string[]) => ({ text, toolCalls: names.map((toolName) => ({ toolName })) });
+    expect(endsOnNextSteps({ steps: [step("", "revise_draft"), step("改好了。", "suggest_next_steps")] })).toBe(true);
+    // 先出选项、下一步才说结果的模型：这一步没说话，不停（长篇连写：停了作者只看到工具摘要）
+    expect(endsOnNextSteps({ steps: [step("", "foundation_write"), step("", "suggest_next_steps")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("改好了。", "revise_draft", "suggest_next_steps")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("", "suggest_next_steps"), step("", "read_draft")] })).toBe(false);
+    expect(endsOnNextSteps({ steps: [step("说了")] })).toBe(false);
     expect(endsOnNextSteps({ steps: [] })).toBe(false);
   });
 
