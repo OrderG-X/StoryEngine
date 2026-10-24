@@ -6,9 +6,11 @@
  * 入库 delta 卡、撤销快照、草稿以 committed 态载入都照旧走。收尾文本与下一步选项确定性生成，不调模型。
  */
 import type { RequestContext } from "@mastra/core/di";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { defaultDraftPath } from "../lib/project-io.js";
+import { locateRevisionSpan } from "../services/revision-service.js";
 import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisions.js";
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
@@ -809,8 +811,21 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
     if (rest) args.sendEvent("text-delta", { text: rest });
   };
   const failed: { readonly fix: ReviseFix; readonly why: string }[] = [];
+  // 两条报的是同一句（或句子相互重叠）：前一处改完，后一处的原句已经跟着变了——不再去找，也别叫作者「逐字确认」（长篇连写走查 2026-10-24）。
+  const swept: ReviseFix[] = [];
+  const readDraft = async (): Promise<string | undefined> => (args.projectDir
+    ? readFile(defaultDraftPath(args.projectDir, action.chapter), "utf-8").catch(() => undefined)
+    : undefined);
+  const draftAtStart = await readDraft();
   let applied = 0;
   for (const [index, fix] of action.fixes.entries()) {
+    if (applied > 0 && draftAtStart !== undefined && locateRevisionSpan(draftAtStart, fix.targetText) !== "not_found") {
+      const now = await readDraft();
+      if (now !== undefined && locateRevisionSpan(now, fix.targetText) === "not_found") {
+        swept.push(fix);
+        continue;
+      }
+    }
     const toolCallId = `user-action-revise_draft-${stamp}-${index}`;
     const input = { chapter: action.chapter, targetText: fix.targetText, revisionGoal: fix.revisionGoal, constraints: ["只改这一段，别的不动"] };
     args.sendEvent("tool-call", { toolCallId, toolName: "revise_draft", args: input });
@@ -833,10 +848,11 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
   }
   const total = action.fixes.length;
   const done = applied === 0 ? "" : total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`;
+  const sweptText = swept.length === 0 ? "" : `${swept.length} 处的原句在改前面那处时已经跟着改了，再核一遍看还对不对得上。`;
   const notDone = failed.length === 0
     ? ""
     : total === 1 ? `这一处没改成：${failed[0]!.why}` : `${failed.length} 处没改成：${failed[0]!.why}`;
-  emitText(`${done}${notDone}`);
+  emitText(`${done}${sweptText}${notDone}`);
   const choices: NextStepChoice[] = [
     ...(failed.length > 0 ? [{
       label: "让 AI 改",

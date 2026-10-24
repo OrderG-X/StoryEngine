@@ -814,6 +814,36 @@ describe("核账「改这处」结构化动作（revise_draft，重构 P6：按�
     expect(next.choices.map((c) => c.label)).not.toContain("再核一遍");
   });
 
+  it("两条报的是同一句：前一处改完原句没了，后一处不再调工具、如实说跟着改了，推荐再核一遍", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "user-actions-swept-"));
+    try {
+      await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+      const draft = join(projectDir, "drafts", "fast", "chapter-0011.md");
+      await writeFile(draft, "甲乙丙。丁戊。\n", "utf-8");
+      const calls: unknown[] = [];
+      const events: { event: string; data: Record<string, unknown> }[] = [];
+      await runUserAction({
+        action: { toolName: "revise_draft", chapter: 11, fixes: [fix("甲乙"), fix("乙丙"), fix("丁戊")] },
+        requestContext: new RequestContext(),
+        executeTool: async (name, input) => {
+          calls.push((input as { targetText: string }).targetText);
+          if ((input as { targetText: string }).targetText === "甲乙") await writeFile(draft, "改过了。丁戊。\n", "utf-8");
+          return { ok: true, applied: true };
+        },
+        sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+        scrubber: { push: (t: string) => t, flush: () => "" },
+        scrubError: String,
+        projectDir,
+      });
+      expect(calls).toEqual(["甲乙", "丁戊"]);
+      expect(textOf(events)).toBe("改好了 2 处（可撤销）。1 处的原句在改前面那处时已经跟着改了，再核一遍看还对不对得上。");
+      const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean }[] };
+      expect(next.choices).toEqual([expect.objectContaining({ label: "再核一遍", recommended: true })]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it("一处成一处抛错：两样都如实说", async () => {
     let n = 0;
     const events = await run([fix("甲"), fix("乙")], async () => {
