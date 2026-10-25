@@ -132,6 +132,7 @@ export function buildLegacyMirror(input: LegacyMirrorInput): LegacyMirror {
         firstSeenChapter: thread.openedAt,
         lastTouchedChapter: thread.lastTouchedAt,
         evidence: evidenceOf(thread),
+        ...(thread.weight !== "normal" ? { weight: thread.weight } : {}),
       })),
   };
 

@@ -809,6 +809,18 @@ describe("改账待确认投影（manage_ledger 提草案后挂「确认改账�
       expect.objectContaining({ id: "ledger-confirm", label: "确认改账", ledgerTarget: { key: "k1", decisions, label: "删掉一条" } }),
     ]);
   });
+
+  it("一轮里两次改账提议 → 一个按钮带两次的裁定（不丢前一次）", () => {
+    const first = [{ type: "thread.weight", thread: "t1-1", weight: "major" }];
+    const second = [{ type: "thread.weight", thread: "t1-2", weight: "major" }];
+    const message = project([
+      { type: "tool-result", toolCallId: "l1", toolName: "manage_ledger", endedAt: 2, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions: first }, summary: "…" } },
+      { type: "tool-result", toolCallId: "l2", toolName: "manage_ledger", endedAt: 3, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k2", decisions: second }, summary: "…" } },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "ledger-confirm", ledgerTarget: { key: "k1+k2", decisions: [...first, ...second] } }),
+    ]);
+  });
 });
 
 describe("作者档按钮投影（重构 P4：「重写这一章」「确认改设定」）", () => {

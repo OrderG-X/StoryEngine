@@ -138,6 +138,56 @@ export function pruneConfirmAction(target?: { readonly keep?: number }): Suggest
   return { ...suggestedAction("prune-confirm"), pruneTarget: { ...(target?.keep ? { keep: target.keep } : {}) } };
 }
 
+/**
+ * 把作者档按钮挂进这一轮的建议条。同一种按钮一轮只摆一个：AI 一轮里提了几次改账、改设定 / 认下（并排调了几次工具），
+ * 合成一个按钮一起确认——长篇实跑：AI 一轮提了两条「定为大伏笔」，界面只剩后一个按钮，作者点了只记上一条，另一条悄悄丢了。
+ * 同一次提议再来一遍（key 已经并进去了）不重复并。定稿、裁剪、重写这类一轮只有一个的，后来的换掉先前的。
+ */
+export function withAuthorButton(actions: readonly SuggestedAction[] | undefined, button: SuggestedAction): SuggestedAction[] {
+  const list = [...(actions ?? [])];
+  const index = list.findIndex((action) => action.id === button.id);
+  if (index < 0) return [...list, button];
+  const [previous] = list.splice(index, 1);
+  return [...list, mergeAuthorButtons(previous!, button)];
+}
+
+const KEY_JOIN = "+";
+
+function joinLabels(previous: string | undefined, next: string | undefined): string | undefined {
+  if (!previous || previous === next) return next;
+  return next ? `${previous}；${next}` : previous;
+}
+
+function cardOpsOf(input: Readonly<Record<string, unknown>>): readonly unknown[] | undefined {
+  return Array.isArray(input.ops) ? input.ops : undefined;
+}
+
+function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): SuggestedAction {
+  const ledgerBefore = previous.ledgerTarget;
+  const ledgerNext = next.ledgerTarget;
+  if (ledgerBefore && ledgerNext) {
+    if (ledgerBefore.key.split(KEY_JOIN).includes(ledgerNext.key)) return previous;
+    const label = joinLabels(ledgerBefore.label, ledgerNext.label);
+    return {
+      ...next,
+      ledgerTarget: { key: `${ledgerBefore.key}${KEY_JOIN}${ledgerNext.key}`, decisions: [...ledgerBefore.decisions, ...ledgerNext.decisions], ...(label ? { label } : {}) },
+    };
+  }
+  const cardsBefore = previous.foundationTarget;
+  const cardsNext = next.foundationTarget;
+  const opsBefore = cardsBefore ? cardOpsOf(cardsBefore.input) : undefined;
+  const opsNext = cardsNext ? cardOpsOf(cardsNext.input) : undefined;
+  if (cardsBefore && cardsNext && opsBefore && opsNext) {
+    if (cardsBefore.key.split(KEY_JOIN).includes(cardsNext.key)) return previous;
+    const label = joinLabels(cardsBefore.label, cardsNext.label);
+    return {
+      ...next,
+      foundationTarget: { key: `${cardsBefore.key}${KEY_JOIN}${cardsNext.key}`, input: { ops: [...opsBefore, ...opsNext] }, ...(label ? { label } : {}) },
+    };
+  }
+  return next;
+}
+
 /** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
 export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }): SuggestedAction {
   return { ...suggestedAction("ledger-confirm"), ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}) } };

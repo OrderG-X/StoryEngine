@@ -123,6 +123,8 @@ export interface NarrativeThread {
   readonly firstSeenChapter: number;
   readonly lastTouchedChapter: number;
   readonly evidence: readonly string[];
+  /** 作者定的轻重（只写不是「一般」的）：大伏笔要到后面才揭，久不提也不当过期线索。 */
+  readonly weight?: "major" | "minor";
   readonly nextActionHint?: string;
   readonly relatedCharacters?: readonly string[];
   readonly relatedLocations?: readonly string[];

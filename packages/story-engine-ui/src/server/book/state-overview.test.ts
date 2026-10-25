@@ -120,9 +120,9 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     expect(overview.setting).toEqual({ cards: { characters: 1, places: 0, items: 0, lore: 0 }, uncarded: 0, storyFields: 0 });
   });
 
-  // 可清理的线索只按章数算（重构 P7「不猜」）：还开着、已经 5 章没碰过的才算；收了的不算。
+  // 可清理的线索只按章数和作者标的轻重算（重构 P7「不猜」）：还开着、已经 5 章没碰过的才算；收了的、标了大伏笔的不算。
   // 编辑部 R5.4 的口径照旧：可清理数和 open+touched 同一集合，恒 ≤ open+touched。
-  it("可清理线索 = 还开着且 5 章没碰过的；收了的、最近碰过的都不算", async () => {
+  it("可清理线索 = 还开着且 5 章没碰过的；收了的、最近碰过的、大伏笔都不算", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-r54-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -137,12 +137,14 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
         { id: "t-done-old", type: "intent", title: "犹豫了一下", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [] },
         { id: "t-touched-recent", type: "lead", title: "查清信号来源", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 5, evidence: [] },
         { id: "t-open-recent", type: "intent", title: "先不管", status: "open", firstSeenChapter: 2, lastTouchedChapter: 4, evidence: [] },
+        // 作者标了大伏笔：埋得再久也不劝清理。
+        { id: "t-major-old", type: "lead", title: "铁箱里是什么", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [], weight: "major" },
       ],
     });
 
     const overview = await buildStateOverview({ projectDir, chapter: 6 });
 
-    expect(overview.threads.open).toBe(2);
+    expect(overview.threads.open).toBe(3);
     expect(overview.threads.touched).toBe(1);
     expect(overview.threads.cleanupVisibleCount).toBe(1);
     expect(overview.threads.cleanupVisibleUnresolvedCount).toBe(1);

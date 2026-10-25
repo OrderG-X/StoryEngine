@@ -100,6 +100,17 @@ describe("stateOverviewAdapter", () => {
     expect(countRealChapters(workspace.chapters, 1)).toBe(3);
   });
 
+  it("工具回传的概览不带章节文件清单：定稿到的最后一章按时间线事件算，重定稿前面一章后后面那章的占位还在", () => {
+    const overview = {
+      ...createOverview(),
+      project: { title: "测试书", genre: "武侠", logline: "", currentChapter: 6 },
+      timeline: { recentEvents: [4, 5, 6].map((chapter) => ({ chapter, summary: `第${chapter}章的事` })), earlierSummary: [], macroSummary: [] },
+    } satisfies StateOverview;
+    const workspace = workspaceFromStateOverview(overview, 5);
+    expect(workspace.chapters.map((chapter) => chapter.chapterNumber)).toEqual([4, 5, 6, 7]);
+    expect(workspace.chapters.at(-1)).toMatchObject({ chapterNumber: 7, status: "planned" });
+  });
+
   it("marks chapters committed only when a committed chapter file exists", () => {
     const overview = {
       ...createOverview(),

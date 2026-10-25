@@ -28,7 +28,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, continueConfirmAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, continueConfirmAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -307,7 +307,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = commitConfirmAction(event.output.commitConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
@@ -315,7 +315,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = pruneConfirmAction(event.output.pruneConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 改账草案：模型只提议，挂「确认改账」按钮（建议条渲染），作者点了才由服务端记成作者裁定。
@@ -323,7 +323,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = ledgerConfirmAction(event.output.ledgerConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）；没定稿的再挂「接着往下写」。
@@ -343,7 +343,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           : foundationAcceptAction(event.output.foundationAcceptAction!);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。

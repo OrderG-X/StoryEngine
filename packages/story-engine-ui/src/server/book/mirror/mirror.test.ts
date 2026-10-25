@@ -65,6 +65,7 @@ function sample() {
   const decisions: AuthorDecision[] = [
     { id: "d-1", at: "2026-10-18T00:00:00.000Z", type: "fact.retract", fact: "f-wrong" },
     { id: "d-2", at: "2026-10-18T00:00:00.000Z", type: "thread.weight", thread: "g-truth", weight: "major" },
+    { id: "d-3", at: "2026-10-18T00:00:00.000Z", type: "thread.weight", thread: "t-clock", weight: "major" },
   ];
   return { ledgers, projection: project({ ledgers, decisions, version: 7 }) };
 }
@@ -95,7 +96,8 @@ describe("老格式镜像·生成", () => {
     expect(mirror.facts.facts[1]).not.toHaveProperty("supersededByChapter");
 
     expect(mirror.threads.threads).toEqual([
-      { id: "t-clock", type: "lead", title: "钟为什么停", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 2, evidence: ["钟停在三点十五分", "钟是被拨停的"] },
+      // 作者标的轻重带过去（大伏笔不当过期线索劝清理）；一般的不写。
+      { id: "t-clock", type: "lead", title: "钟为什么停", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 2, evidence: ["钟停在三点十五分", "钟是被拨停的"], weight: "major" },
       { id: "t-well", type: "intent", title: "去井边", status: "done", firstSeenChapter: 1, lastTouchedChapter: 2, evidence: ["她决定去井边", "去过井边了"] },
     ]);
     expect(mirror.goals.goals).toEqual([

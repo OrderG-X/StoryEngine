@@ -206,7 +206,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
   ]);
 
   const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
-  // 可清理的线索 = 还开着、已经 THREAD_CLEANUP_AFTER 章没碰过的。只按章数算，
+  // 可清理的线索 = 还开着、已经 THREAD_CLEANUP_AFTER 章没碰过的、作者没标成大伏笔的。只按章数和作者标的轻重算，
   // 不再按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
   const cleanupCandidateIds = new Set(threadPool.threads
     .filter((thread) => isCleanupCandidate(thread, currentChapter))
@@ -422,6 +422,8 @@ const THREAD_CLEANUP_AFTER = 5;
 
 function isCleanupCandidate(thread: NarrativeThread, currentChapter: number | null | undefined): boolean {
   if (thread.status !== "open" && thread.status !== "touched") return false;
+  // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）。
+  if (thread.weight === "major") return false;
   if (typeof currentChapter !== "number" || typeof thread.lastTouchedChapter !== "number") return false;
   return currentChapter - thread.lastTouchedChapter >= THREAD_CLEANUP_AFTER;
 }

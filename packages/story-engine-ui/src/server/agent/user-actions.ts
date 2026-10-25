@@ -108,6 +108,9 @@ export type ParsedUserAction =
   | { readonly kind: "invalid"; readonly reason: string }
   | { readonly kind: "action"; readonly action: UserAction };
 
+/** 按钮标识最长多少字：一轮里提了几次改账 / 改设定，界面并成一个按钮，标识是几次的拼起来（「+」隔开）。 */
+const MAX_ACTION_KEY_LENGTH = 600;
+
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
@@ -118,16 +121,17 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   }
   if (toolName === "ledger_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > 120) return { kind: "invalid", reason: "改账按钮缺少有效标识。" };
-    if (!Array.isArray(record.decisions) || record.decisions.length === 0 || record.decisions.length > MAX_DECISIONS_PER_CHANGE) {
-      return { kind: "invalid", reason: "改账内容不对。" };
+    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改账按钮缺少有效标识。" };
+    if (!Array.isArray(record.decisions) || record.decisions.length === 0) return { kind: "invalid", reason: "改账内容不对。" };
+    if (record.decisions.length > MAX_DECISIONS_PER_CHANGE) {
+      return { kind: "invalid", reason: `一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条账，这次有 ${record.decisions.length} 条，请让 AI 分几次提。` };
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
   }
   if (toolName === "foundation_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > 120) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
+    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
     const input = record.input;
     if (typeof input !== "object" || input === null || Array.isArray(input)) return { kind: "invalid", reason: "改设定内容不对。" };
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
