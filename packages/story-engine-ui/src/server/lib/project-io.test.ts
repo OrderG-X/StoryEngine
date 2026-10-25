@@ -715,3 +715,14 @@ describe("commitFilesAtomically 多文件原子提交（失败不留 tmp 残留�
     await expect(readFile(join(dir, "a.json"), "utf-8")).rejects.toThrow();
   });
 });
+
+describe("readWorkspaceMessages：操作历史里恢复记的那一行存盘不丢标记（2026-10-25）", () => {
+  it("kind=restore 原样留着；认不出的 kind 丢掉", () => {
+    const [note, other] = readWorkspaceMessages([
+      { id: "system-restore-1", role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" },
+      { id: "a1", role: "assistant", kind: "whatever", content: "好" },
+    ]);
+    expect(note).toMatchObject({ role: "system", kind: "restore" });
+    expect(other).not.toHaveProperty("kind");
+  });
+});

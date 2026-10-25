@@ -81,3 +81,18 @@ describe("supersededContinuityMessageIds：同一章后来又核过，旧核账�
     expect([...supersededContinuityMessageIds(messages)]).toEqual(["k1"]);
   });
 });
+
+describe("操作历史里恢复过之后（2026-10-25 桌面包走查）", () => {
+  const note = { id: "r1", role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" } as ChapterMessage;
+
+  it("旧定稿回执不再给「撤销这次定稿」", () => {
+    const report = assistant("c1", { cards: [{ type: "commit-report", report: { chapter: 9 } as never }], turnSnapshots: [{ toolName: "commit_apply", snapshotId: "s1" }] });
+    expect(undoableCommitReportMessageId([report])).toBe("c1");
+    expect(undoableCommitReportMessageId([report, note])).toBeNull();
+  });
+
+  it("旧预览卡不再给「确认定稿」", () => {
+    const preview = assistant("p1", { cards: [{ type: "commit-preview", preview: { chapter: 9, canCommit: true } }] });
+    expect(confirmableCommitPreviewMessageId([preview, note])).toBeNull();
+  });
+});

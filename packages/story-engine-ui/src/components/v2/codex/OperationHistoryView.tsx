@@ -10,6 +10,7 @@ import { fetchSnapshots, restoreSnapshotApi } from "../../../api/client.js";
 import type { SnapshotEntryDto } from "../../../api/types.js";
 import { flushAllSaves } from "../../../sync/saveAll.js";
 import { syncWorkspaceAfterRestore } from "../../../workspace/syncAfterRestore.js";
+import { noteRestoreInChat } from "../../../workspace/restoreNote.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { PageHead, Skeleton } from "./bibleVisual.js";
 
@@ -104,9 +105,11 @@ export default function OperationHistoryView({ projectPath, refreshKey }: {
     try {
       const flushed = await flushAllSaves();
       if (!flushed.ok) throw new Error(`${flushed.error}，先别恢复，等它存上再试`);
+      const label = snapshots?.find((snapshot) => snapshot.id === id)?.label;
       await restoreSnapshotApi(projectPath, id);
       setConfirmId(null);
       await syncWorkspaceAfterRestore(projectPath);
+      if (label) await noteRestoreInChat(projectPath, label);
       useNavigationStore.getState().showToast("已恢复到这个存档。恢复前的样子也存了一份，可以再恢复回去。", 4200);
       setSnapshots(await fetchSnapshots(projectPath));
     } catch (e) {

@@ -1,5 +1,6 @@
 import type { ChapterMessage } from "../../../types.js";
 import { cardOf, hasCard } from "../../../utils/messageCards.js";
+import { isRestoreNote } from "../../../utils/restoreNote.js";
 
 /**
  * 「确认定稿」按钮挂在哪张定稿预览卡上（纯函数）：只挂最新那张——从后往前扫，先遇到预览卡就是它；
@@ -9,6 +10,7 @@ import { cardOf, hasCard } from "../../../utils/messageCards.js";
 export function confirmableCommitPreviewMessageId(messages: readonly ChapterMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
+    if (isRestoreNote(message)) return null;
     if (message.role !== "assistant") continue;
     if (hasCard(message, "commit-report")) return null;
     const preview = cardOf(message, "commit-preview")?.preview;
@@ -25,6 +27,8 @@ export function confirmableCommitPreviewMessageId(messages: readonly ChapterMess
 export function undoableCommitReportMessageId(messages: readonly ChapterMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
+    // 之后在操作历史里恢复过：盘上已经不是定稿后的样子，旧回执不再给「撤销这次定稿」。
+    if (isRestoreNote(message)) return null;
     if (message.role !== "assistant" || (message.turnSnapshots?.length ?? 0) === 0) continue;
     return hasCard(message, "commit-report") ? message.id : null;
   }

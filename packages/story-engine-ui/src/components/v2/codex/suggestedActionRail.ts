@@ -1,5 +1,6 @@
 import type { ChapterMessage } from "../../../types.js";
 import type { SuggestedAction } from "../../../type-defs/workflow.js";
+import { isRestoreNote } from "../../../utils/restoreNote.js";
 
 /**
  * 「建议动作」条数据（A-6 修复）：把消息上的 suggestedActions 从死渲染面救活。
@@ -17,10 +18,10 @@ import type { SuggestedAction } from "../../../type-defs/workflow.js";
 const RAIL_EXCLUDED_ACTION_IDS: ReadonlySet<string> = new Set(["retry-agent"]);
 
 export function latestTurnSuggestedActions(messages: readonly ChapterMessage[]): readonly SuggestedAction[] {
-  // 先定回合边界：最后一条用户消息之后 = 最后一轮。
+  // 先定回合边界：最后一条用户消息之后 = 最后一轮；之后在操作历史里恢复过，那一轮的动作也不再算。
   let turnStart = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === "user") {
+    if (messages[i].role === "user" || isRestoreNote(messages[i])) {
       turnStart = i + 1;
       break;
     }

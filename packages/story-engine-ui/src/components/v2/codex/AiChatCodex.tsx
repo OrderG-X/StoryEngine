@@ -872,6 +872,8 @@ function MessageBubbles({
   readonly onOpenSettings?: () => void;
 }) {
   if (message.role === "system") {
+    // 操作历史里点的恢复：记一行，之前那轮的「下一步」到这儿为止（见 utils/restoreNote.ts）。
+    if (message.kind === "restore") return <div className="msg msg-ai se-op-row">{message.content}</div>;
     // 不走对话的操作挂的进行中卡：在跑就显示「正在…」，不在跑了（上次关页/刷新打断）就如实说没做完。
     const running = runningAgentCard(message.agentCards);
     if (!running) return null;
