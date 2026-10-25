@@ -115,6 +115,26 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     expect(onChanged).not.toHaveBeenCalled();
   });
 
+  it("存完、设定本重读回来才收起编辑框（不闪改前的字）；没存成框留着，写的字不丢", async () => {
+    let finishReload: () => void = () => undefined;
+    const reload = vi.fn(() => new Promise<void>((resolve) => { finishReload = resolve; }));
+    render(<BibleBook cat="canon" projectPath="/books/fog" bible={bibleView({ canon: [{ id: "n-1", text: "杜长顺十年前去世", at: AT }] })} error={null} reload={reload} busy={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
+    fireEvent.change(screen.getByLabelText("改这条定论"), { target: { value: "杜长顺九年前去世" } });
+    fireEvent.keyDown(screen.getByLabelText("改这条定论"), { key: "Enter" });
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("改这条定论")).toHaveProperty("value", "杜长顺九年前去世");
+    finishReload();
+    await waitFor(() => expect(screen.queryByLabelText("改这条定论")).toBeNull());
+
+    saveCards.mockResolvedValue({ ok: false, error: "没改设定：AI 正在改这本书，等它做完再试。" });
+    fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
+    fireEvent.change(screen.getByLabelText("改这条定论"), { target: { value: "杜长顺八年前去世" } });
+    fireEvent.keyDown(screen.getByLabelText("改这条定论"), { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "没改设定：AI 正在改这本书，等它做完再试。");
+    expect(screen.getByLabelText("改这条定论")).toHaveProperty("value", "杜长顺八年前去世");
+  });
+
   it("AI 在跑：提示等它做完，改不了", () => {
     renderBook("story", { busy: true });
     expect(screen.getByText("AI 正在忙，等它做完再改。")).toBeTruthy();

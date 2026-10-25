@@ -6,6 +6,17 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { BibleAppearances, BibleFact, CardAuthor } from "../../../api/bibleClient.js";
 import { PresenceStrip, Sec } from "./bibleVisual.js";
 
+/** 存完（连设定本重读回来）再收起编辑框：先收起会闪一下改前的字；没存成就留着框，写的字不丢。 */
+export function closeAfter(pending: Promise<boolean> | void, close: () => void): void {
+  if (!pending) {
+    close();
+    return;
+  }
+  void pending.then((saved) => {
+    if (saved) close();
+  });
+}
+
 /** 一处就地编辑：单行回车存，多行 ⌘/Ctrl+回车存，Esc 取消。 */
 export function InlineEdit({ value, multiline, wrap, placeholder, label, disabled, onSave, onCancel }: {
   readonly value: string;
@@ -81,18 +92,18 @@ export function FieldValue({ field, editing, disabled, onEdit, onDone, onSet, on
   readonly disabled?: boolean;
   readonly onEdit: () => void;
   readonly onDone: () => void;
-  readonly onSet: (value: string) => void;
+  readonly onSet: (value: string) => Promise<boolean> | void;
   readonly onAccept: () => void;
 }) {
   if (editing) {
     return <InlineEdit value={field.value} multiline label={field.label} placeholder="写上内容" disabled={disabled}
-      onSave={(next) => { onDone(); onSet(next); }} onCancel={onDone} />;
+      onSave={(next) => closeAfter(onSet(next), onDone)} onCancel={onDone} />;
   }
   return (
     <>
       <button type="button" className="se-bk-value" disabled={disabled} title="点一下改" onClick={onEdit}>{field.value}</button>
       <AiMark by={field.by} disabled={disabled} onAccept={onAccept} />
-      <button type="button" className="se-bk-x" disabled={disabled} aria-label={`删掉「${field.label}」`} onClick={() => onSet("")}>×</button>
+      <button type="button" className="se-bk-x" disabled={disabled} aria-label={`删掉「${field.label}」`} onClick={() => void onSet("")}>×</button>
     </>
   );
 }
@@ -111,7 +122,7 @@ export function FieldList({ fields, suggestions, taken, disabled, onSet, onAccep
   /** 页面别处已经摆出来的标签（不再当快捷）。 */
   readonly taken?: readonly string[];
   readonly disabled?: boolean;
-  readonly onSet: (label: string, value: string) => void;
+  readonly onSet: (label: string, value: string) => Promise<boolean> | void;
   readonly onAccept: (label: string) => void;
   readonly emptyText?: string;
 }) {
@@ -142,7 +153,7 @@ function AddField({ taken, suggestions, disabled, onAdd }: {
   readonly taken: readonly string[];
   readonly suggestions: readonly string[];
   readonly disabled?: boolean;
-  readonly onAdd: (label: string, value: string) => void;
+  readonly onAdd: (label: string, value: string) => Promise<boolean> | void;
 }) {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState<string | null>(null);
@@ -157,7 +168,7 @@ function AddField({ taken, suggestions, disabled, onAdd }: {
       <div className="se-bk-adding">
         <span className="se-bk-adding-label">{label}</span>
         <InlineEdit value="" multiline label={label} placeholder="写上内容" disabled={disabled}
-          onSave={(value) => { if (value) onAdd(label, value); close(); }} onCancel={close} />
+          onSave={(value) => { if (value) closeAfter(onAdd(label, value), close); else close(); }} onCancel={close} />
       </div>
     );
   }
