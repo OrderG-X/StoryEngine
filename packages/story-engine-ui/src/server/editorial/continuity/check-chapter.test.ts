@@ -10,6 +10,7 @@ import {
   mergeContinuityIssues,
   parseFullReadIssues,
   settleMirroredIssues,
+  settleRevisitedIssues,
   snapIssueQuotes,
   snapToOriginal,
   splitSentences,
@@ -184,6 +185,23 @@ describe("方向相反的一对 settleMirroredIssues：两条各让改对方，�
       inChapter(LIU, RUAN, { againstSetting }),
     ], 19);
     expect(settled.map((item) => item.confidence)).toEqual(["sure", "sure"]);
+  });
+});
+
+describe("上一遍按核账改过的句子 settleRevisitedIssues：这遍又报「确定」降成「可能」", () => {
+  const BODY = "倒计时还剩八天。她把信折好。";
+  const issue = (quote: string, extra: Partial<ContinuityIssueV2> = {}): ContinuityIssueV2 =>
+    ({ quote, earlierQuote: "还剩九天", earlierChapter: 12, reason: "天数对不上", kind: "number", confidence: "sure", ...extra });
+  const FIX = { from: "倒计时还剩九天。", to: "倒计时还剩八天。" };
+
+  it("原句就是改后那句（或落在里面）→ 降「可能」带改前那句；别的句子、本来就「可能」的照旧", () => {
+    const settled = settleRevisitedIssues([issue("倒计时还剩八天。"), issue("她把信折好。"), issue("还剩八天", { confidence: "maybe" })], 12, BODY, [FIX]);
+    expect(settled.map((item) => [item.confidence, item.revisited?.from])).toEqual([["maybe", FIX.from], ["sure", undefined], ["maybe", undefined]]);
+  });
+
+  it("改后那句已经不在稿里、或这条错在前面别的章 → 不降", () => {
+    expect(settleRevisitedIssues([issue("倒计时还剩八天。")], 12, "倒计时还剩七天。", [FIX])[0]!.confidence).toBe("sure");
+    expect(settleRevisitedIssues([issue("倒计时还剩八天。", { fixChapter: 9 })], 12, BODY, [FIX])[0]!.confidence).toBe("sure");
   });
 });
 

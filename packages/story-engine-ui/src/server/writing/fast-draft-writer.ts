@@ -9,6 +9,7 @@ import {
 import {
   estimateTokens,
   buildWriterContext,
+  type LastDraftConflict,
   type WriterContextEnvelope,
   type WritingContextPack,
 } from "./context-gateway.js";
@@ -85,6 +86,8 @@ export interface FastDraftInput {
   readonly mustHitBeats?: readonly string[];
   /** 本章章纲（阶段 2「先想后写」）：进受保护段并驱动翻旧资料，见 buildWriterContext。 */
   readonly chapterPlan?: ChapterPlan;
+  /** 这一章上一稿核出的「确定」对不上（错在本章的）：进受保护段 last_draft_conflicts，见 buildWriterContext。 */
+  readonly lastDraftConflicts?: readonly LastDraftConflict[];
   /**
    * 按章纲分前后两半写（2026-10-08 十章验收第五轮）：写手一次只写得出一千八到两千字，「先写短、再接着续」的续写
    * 会越过章纲最后一步自己编新的一天、新地点（第五轮 58 处矛盾里 27 处出在续写）。有章纲且要点够多时，
@@ -590,6 +593,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       maxTimelineEvents: input.maxTimelineEvents,
       ...(input.mustHitBeats && input.mustHitBeats.length > 0 ? { mustHitBeats: input.mustHitBeats } : {}),
       ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
+      ...(input.lastDraftConflicts && input.lastDraftConflicts.length > 0 ? { lastDraftConflicts: input.lastDraftConflicts } : {}),
     });
     context = input.rankContext ? input.rankContext(builtContext) : builtContext;
   } catch (error) {

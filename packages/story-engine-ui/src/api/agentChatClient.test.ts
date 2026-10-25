@@ -490,6 +490,24 @@ describe("streamAgentChat", () => {
     expect(received?.continuityCheck).toEqual({ chapter: 4, sure: [], maybe: [] });
   });
 
+  it("check_continuity 的「可能」里带 revisited（上一遍按核账改过的句子）→ 透传；from 不是字符串的不带", async () => {
+    const twice = { quote: "还剩八天", earlierQuote: "还剩九天", earlierChapter: 12, reason: "天数", revisited: { from: "还剩九天。" } };
+    const bad = { quote: "她走了", earlierQuote: "她没走", earlierChapter: 12, reason: "去留", revisited: { from: 3 } };
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", { toolCallId: "cc6", toolName: "check_continuity", output: { ok: true, chapter: 12, source: "draft", sure: [], maybe: [twice, bad], failures: [], summary: "核了" } }),
+        frame("done", {}),
+      ]),
+    ));
+    let received: { continuityCheck?: unknown } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "核一下" }] },
+      { onTextDelta: () => undefined, onToolCall: () => undefined, onToolResult: (info) => { received = info; }, onToolError: () => undefined, onError: () => undefined, onDone: () => undefined },
+    );
+    const { revisited: _ignored, ...plain } = bad;
+    expect(received?.continuityCheck).toEqual({ chapter: 12, sure: [], maybe: [twice, plain] });
+  });
+
   it("check_continuity 带 earlierOpen（前面章节之前报过、没改的）→ 透传进 continuityCheck", async () => {
     const old = { quote: "走了五年", earlierQuote: "三年前过世", earlierChapter: 3, fixChapter: 3, reason: "设定说三年", againstSetting: { label: "人物卡" } };
     vi.stubGlobal("fetch", vi.fn(async () =>

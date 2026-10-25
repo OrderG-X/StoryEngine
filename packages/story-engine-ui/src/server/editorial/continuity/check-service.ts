@@ -25,12 +25,13 @@ import {
   ledgerNumberIssues,
   mergeContinuityIssues,
   settleMirroredIssues,
+  settleRevisitedIssues,
   readEarlierChapters,
   snapIssueQuotes,
   type ContinuityIssueV2,
   type EarlierText,
 } from "./check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, writeCheckMemory } from "./check-memory.js";
+import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory } from "./check-memory.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
@@ -44,6 +45,8 @@ export interface ChapterCheckItem {
   readonly againstSetting?: { readonly label: string };
   /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝当前核的章。 */
   readonly fixChapter?: number;
+  /** 这句是上一遍按核账改出来的（from＝改前那句），这遍又说不对：已降成「可能」。 */
+  readonly revisited?: { readonly from: string };
 }
 
 export interface ChapterCheckResult {
@@ -81,6 +84,7 @@ const toItem = (issue: ContinuityIssueV2): ChapterCheckItem => ({
   reason: issue.reason,
   ...(issue.againstSetting ? { againstSetting: { ...issue.againstSetting } } : {}),
   ...(issue.fixChapter !== undefined ? { fixChapter: issue.fixChapter } : {}),
+  ...(issue.revisited ? { revisited: { ...issue.revisited } } : {}),
 });
 
 /** 这条错在哪一章：对设定本的条目原句在前文某章时是那章（fixChapter），其余是核的这一章。 */
@@ -201,6 +205,9 @@ export async function checkChapterBody(
     result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
     result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
+    // 上一遍按核账改过的句子这遍又被报「确定」：两遍说法相反，降成「可能」（不再自动来回改）。
+    const fixes = await readFixLog(projectDir, chapter);
+    result = { ...result, issues: settleRevisitedIssues(result.issues, chapter, body, fixes) };
     if (result.coverage) {
       // 冷窗口（R4.4）：核账员还没读完全书也照核（不跳过、不装核过——范围如实说），笔记后台接着补（点名 checker）。
       // 读完后作者再点一次「核账」，就是按读完全书来核的；冷窗口没写任何笔记，两边不会混。

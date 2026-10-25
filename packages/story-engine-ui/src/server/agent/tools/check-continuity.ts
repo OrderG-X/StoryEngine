@@ -27,6 +27,7 @@ const issueSchema = z.object({
     card: z.string().optional().describe("设定原文落在哪张设定卡上（卡名）。"),
   }).optional().describe("这条对的是设定本（人物卡 / 地点 / 资产 / 世界规则）而不是某一章：earlierQuote 是设定原文。"),
   fixChapter: z.number().int().positive().optional().describe("错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。"),
+  revisited: z.object({ from: z.string() }).optional().describe("这句是上一遍按核账改出来的（from＝改前那句），这遍又报了（两遍说法相反，或上次没改到点上）：已归进「可能」，别再自动改，交作者定。"),
 });
 
 const outputSchema = z.object({

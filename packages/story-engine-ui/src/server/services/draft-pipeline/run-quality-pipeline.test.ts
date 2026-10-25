@@ -98,6 +98,34 @@ describe("runDraftQualityPipeline", () => {
     expect(memory.issues).toHaveLength(0);
   });
 
+  it("改完再核，核账员又说改后那句不对（两遍说法相反）→ 降成「可能」交作者，不算「确定」；改句记下来", async () => {
+    const draft = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
+    const { projectDir } = await makeBook(draft);
+    const checkCallModel = vi.fn(async (messages: readonly { readonly role: string; readonly content: string }[], options: { readonly json?: boolean }) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+        return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+      }
+      if (!last.includes("这一遍只盯东西")) return JSON.stringify({ checks: [], contradictions: [] });
+      const quote = last.includes("菜场早没了") ? "菜场早没了" : "菜场还在";
+      return JSON.stringify({ checks: [], contradictions: [{ quote, earlierQuote: "南门菜场十来年前就拆了", earlierChapter: 7, reason: "两遍说法不一", confidence: "sure" }] });
+    });
+    const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] }));
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      checkCallModel, fixCallModel, skipOverwriteSnapshot: true,
+    });
+    expect(result.info.continuity?.sure).toEqual([]);
+    expect(result.info.continuity?.maybe).toEqual([expect.objectContaining({
+      quote: "菜场早没了，门口摆着几摊卖豆腐的。",
+      revisited: { from: "菜场还在，门口摆着几摊卖豆腐的。" },
+    })]);
+    const log = JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.fixes.json"), "utf-8")) as unknown;
+    expect(log).toEqual([{ from: "菜场还在，门口摆着几摊卖豆腐的。", to: "菜场早没了，门口摆着几摊卖豆腐的。" }]);
+  });
+
   it("接着写（P13）：核出的错在本来写好的那段里 → 不替作者改、只说有几处；错在接着写的那段照常改；标题不换", async () => {
     const prefix = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。\n\n菜场还在，门口摆着几摊卖豆腐的。";
     const draft = `${prefix}\n\n他推着车往后街走，找那个修鞋的吴师傅打听当年钟表厂宿舍的事。`;

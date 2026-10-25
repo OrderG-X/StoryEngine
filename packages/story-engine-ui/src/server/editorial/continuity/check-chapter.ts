@@ -38,6 +38,8 @@ export interface ContinuityIssueV2 {
   readonly againstSetting?: { readonly label: string; readonly kind?: SettingKind; readonly card?: string };
   /** R7.3 错在哪一章、按钮就改哪一章（quote 抄自前文某章时由代码定）；缺省＝当前核的章。 */
   readonly fixChapter?: number;
+  /** 这句是上一遍按核账改出来的（from＝改前那句）：这遍又说它不对，两遍说法相反，降成「可能」交作者定。 */
+  readonly revisited?: { readonly from: string };
 }
 
 export interface EarlierText {
@@ -376,6 +378,30 @@ export function settleMirroredIssues(issues: readonly ContinuityIssueV2[], chapt
     });
   });
   return issues.map((issue, index) => (mirrored.has(index) && issue.confidence === "sure" ? { ...issue, confidence: "maybe" as const } : issue));
+}
+
+/**
+ * 上一遍按核账改过的句子，这遍核账又说它不对（倒计时改成八天、再核又说不该是八天）：哪遍对代码判不了，
+ * 再自动改就来回改。错在本章、原句落在改后那句里（改后那句还在稿里）的「确定」降成「可能」，带上改前那句给作者看。
+ */
+export function settleRevisitedIssues(
+  issues: readonly ContinuityIssueV2[],
+  chapter: number,
+  body: string,
+  fixes: readonly { readonly from: string; readonly to: string }[],
+): ContinuityIssueV2[] {
+  if (fixes.length === 0) return [...issues];
+  const text = normalize(body);
+  const live = fixes.filter((fix) => {
+    const to = normalize(fix.to);
+    return to.length > 0 && text.includes(to);
+  });
+  return issues.map((issue) => {
+    if (issue.confidence !== "sure" || (issue.fixChapter !== undefined && issue.fixChapter !== chapter)) return issue;
+    const quote = normalize(issue.quote);
+    const fix = [...live].reverse().find((candidate) => sameSentence(normalize(candidate.to), quote));
+    return fix ? { ...issue, confidence: "maybe" as const, revisited: { from: fix.from } } : issue;
+  });
 }
 
 /** 两段搭着抄至少这么多字才算同一句（太短的搭边，如一个「她说」，不算）。 */

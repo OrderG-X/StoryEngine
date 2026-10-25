@@ -188,6 +188,19 @@ export interface BuildWriterContextInput {
    * 进受保护段 earlier_passages；③ 按它的检索词挑旧事实；④ 它定的开场地点算本章地点。不给 = 旧行为。
    */
   readonly chapterPlan?: ChapterPlan;
+  /**
+   * 这一章上一稿核账核出的「确定」对不上（错在本章的）：重写时交给写手，别再照着写错
+   * （长篇连写：章纲带着「三楼走廊」，重写沿用章纲又写了一遍）。
+   */
+  readonly lastDraftConflicts?: readonly LastDraftConflict[];
+}
+
+/** 上一稿的一处错：写成了 wrote，和 where 的 against 对不上（why）。 */
+export interface LastDraftConflict {
+  readonly wrote: string;
+  readonly against: string;
+  readonly where: string;
+  readonly why: string;
 }
 
 export async function buildWriterContext(input: BuildWriterContextInput): Promise<WriterContextEnvelope> {
@@ -281,6 +294,10 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       titles: existingChapterTitles,
     }, "dynamic")] : []),
     ...(plan ? [section("chapter_plan", buildChapterPlanSection(plan, storyClock), "dynamic")] : []),
+    ...(input.lastDraftConflicts && input.lastDraftConflicts.length > 0 ? [section("last_draft_conflicts", {
+      instruction: "这一章上一稿核账核出这些和前文、设定对不上的写法。这次别再这样写，以前文和设定为准；章纲要点里的说法和它们冲突时，也以前文和设定为准。",
+      conflicts: input.lastDraftConflicts,
+    }, "dynamic")] : []),
     ...(previousChapter ? [section("previous_chapter", previousChapter, "dynamic")] : []),
     ...(previousUncommittedDraft ? [section("previous_uncommitted_draft", previousUncommittedDraft, "dynamic")] : []),
     ...(earlierPassages.length > 0

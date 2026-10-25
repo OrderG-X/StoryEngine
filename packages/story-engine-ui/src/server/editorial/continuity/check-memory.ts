@@ -83,3 +83,39 @@ export async function writeCheckMemory(projectDir: string, memory: Omit<CheckMem
   const file: CheckMemory = { version: CHECK_MEMORY_VERSION, checkedAt: new Date().toISOString(), ...memory };
   await writeFileAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 }
+
+/**
+ * 按核账改过的句子（改前 → 改后），每章一份：再核时核账员又说改后那句不对的，降成「可能」交作者定
+ * （长篇连写 2026-10-24：倒计时第一遍核账说该减成八天、改了，第二遍又说同一天不该是八天——两遍说法相反，
+ * 「改掉本章 N 处」就来回改）。存 .story-engine-ui/continuity-checks/NNNN.fixes.json，只留最近 FIX_LOG_MAX 条。
+ */
+export interface FixRecord {
+  readonly from: string;
+  readonly to: string;
+}
+
+const FIX_LOG_MAX = 50;
+
+const fixLogPath = (projectDir: string, chapter: number): string =>
+  join(projectDir, ".story-engine-ui", "continuity-checks", `${String(chapter).padStart(4, "0")}.fixes.json`);
+
+export async function readFixLog(projectDir: string, chapter: number): Promise<readonly FixRecord[]> {
+  try {
+    const parsed = JSON.parse(await readFile(fixLogPath(projectDir, chapter), "utf-8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((record): record is FixRecord =>
+      Boolean(record) && typeof record.from === "string" && typeof record.to === "string" && record.to.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+export async function appendFixLog(projectDir: string, chapter: number, changes: readonly FixRecord[]): Promise<void> {
+  const fresh = changes.filter((change) => change.to.trim().length > 0 && change.to !== change.from);
+  if (fresh.length === 0) return;
+  await stat(projectDir); // 书已删就别再写
+  const path = fixLogPath(projectDir, chapter);
+  await mkdir(dirname(path), { recursive: true });
+  const log = [...(await readFixLog(projectDir, chapter)), ...fresh.map(({ from, to }) => ({ from, to }))].slice(-FIX_LOG_MAX);
+  await writeFileAtomic(path, `${JSON.stringify(log, null, 2)}\n`);
+}

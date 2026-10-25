@@ -110,6 +110,7 @@ import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite
 import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
 import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
 import { resolveProjectDraftLengthTarget, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
+import { writeCheckMemory } from "../editorial/continuity/check-memory.js";
 
 const DRAFT_TEXT = "# 第1章\n\n主角拿到账册，连夜翻看。\n";
 
@@ -359,6 +360,26 @@ describe("runGenerateDraft 先拟章纲（阶段 2「先想后写」）", () => 
     expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ chapterPlan: PLAN, chapterGoal: "林澈去档案室对出缺页" }));
     expect(result.chapterPlan).toEqual({ summary: "林澈去档案室对出缺页", beats: ["去档案室", "对出缺页"], newInformation: ["缺页是境外汇款"], scene: { location: "档案室" }, reused: false });
     expect(result.summary.split("\n")[0]).toBe("本章章纲：林澈去档案室对出缺页");
+  });
+
+  it("这一章上一稿核出「确定」对不上、错在本章的 → 交给写手（重写别照章纲再写错）；错在前面那章的、「可能」的不交", async () => {
+    planMocks.resolveChapterPlanForDraft.mockResolvedValue({ plan: PLAN, note: "沿用本章已有章纲：林澈去档案室对出缺页", reused: true });
+    const issue = { earlierChapter: 1, reason: "楼层对不上", kind: "place" as const };
+    await writeCheckMemory(projectDir!, {
+      chapter: 2, bodyHash: "x", body: "", earlierHash: "y",
+      issues: [
+        { ...issue, quote: "他上到三楼走廊。", earlierQuote: "档案室的单间在一楼。", confidence: "sure" },
+        { ...issue, quote: "第一章那句", earlierQuote: "设定原文", confidence: "sure", fixChapter: 1, againstSetting: { label: "地点" } },
+        { ...issue, quote: "可能的那句", earlierQuote: "前文", confidence: "maybe" },
+      ],
+    });
+    await runGenerateDraft({
+      projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), plannerCallModel: vi.fn(),
+      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    });
+    expect(storyEngineMocks.runFastDraft).toHaveBeenCalledWith(expect.objectContaining({
+      lastDraftConflicts: [{ wrote: "他上到三楼走廊。", against: "档案室的单间在一楼。", where: "第 1 章", why: "楼层对不上" }],
+    }));
   });
 
   it("作者给了方向 → 方向原话交给拟章纲，本章目标仍用作者原话", async () => {

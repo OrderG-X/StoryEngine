@@ -94,6 +94,8 @@ export interface ContinuityCheckItem {
   readonly againstSetting?: SettingRefData;
   /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
   readonly fixChapter?: number;
+  /** 这句是上一遍按核账改出来的（from＝改前那句），这遍又说不对：两遍说法相反，已降成「可能」。 */
+  readonly revisited?: { readonly from: string };
 }
 
 const SETTING_KINDS = new Set<NonNullable<SettingRefData["kind"]>>(["canon", "story", "character", "place", "item", "lore"]);
@@ -134,8 +136,15 @@ function toContinuityItems(value: unknown): readonly ContinuityCheckItem[] {
       reason: typeof record.reason === "string" ? record.reason : "",
       ...(againstSetting ? { againstSetting } : {}),
       ...(Number.isInteger(record.fixChapter) && (record.fixChapter as number) > 0 ? { fixChapter: record.fixChapter as number } : {}),
+      ...(readRevisited(record.revisited) ?? {}),
     }];
   });
+}
+
+function readRevisited(value: unknown): { readonly revisited: { readonly from: string } } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const from = (value as Record<string, unknown>).from;
+  return typeof from === "string" && from.trim() ? { revisited: { from: from.trim() } } : undefined;
 }
 
 /** commit_preview 的质量问题明细（{severity,type,message} → 给作者看的文案）。防御解析：非字符串丢掉、截超长、最多 20 条。 */
