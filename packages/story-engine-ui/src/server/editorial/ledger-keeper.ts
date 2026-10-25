@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterTextPath, checkEntries, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { chapterTextPath, checkEntries, quoteFromText, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
@@ -55,8 +55,9 @@ export const KEEPER_SPEC: readonly string[] = [
   "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样，不超过 60 个字（不要照抄原句）；quote 引最能代表本章的那句。",
   "",
   "time：每章都给（第 1 章没有上一章，只写星期、时段，没有就省略整个 time）。",
+  "- 换天以天亮为界：天亮之前（夜里、半夜、鸡叫、天还没亮）都算前一天的夜里；天亮以后（清晨、早上、晌午）才是新的一天。",
   "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照上一章结尾（下面【上一章结尾】是原文）和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事就是 0，隔了一夜才是 1）。只有确实判断不了才不填这个数。",
-  "- daysInChapter = 本章从开头到结尾又过了几天，每章都填：整章在同一天写 0。从早到晚、从白天到深夜都还是同一天。只有正文写到换了天（「第二天早上」「天亮了」「隔了一夜」这类），才写 1 或更多，并在 dayChangeQuote 里逐字摘那句换天的原句；找不出这样一句，就是同一天、写 0。代码会核对这句，核不上就按同一天记。",
+  "- daysInChapter = 本章从开头到结尾又过了几天，每章都填：整章在同一天写 0。从早到晚、从白天到深夜都还是同一天。只有正文写到换了天（「第二天早上」「天亮了」「隔了一夜」这类），才写 1 或更多，并在 dayChangeQuote 里逐字摘那句换天的原句；本章开头天还没亮、后面写到了白天（晌午、日头偏西这类），就是跨过了天亮、写 1，dayChangeQuote 摘第一句已经是白天的原句；找不出这样一句，就是同一天、写 0。代码会核对这句，核不上就按同一天记。",
   "- weekday 只填正文明写的星期，写成「周二」这样；没写就不填，不要自己推算。timeOfDay 填正文写的时段（「傍晚」）。",
   "- quote 引最能说明时间的那句原句。不要写「故事第几天」，那由代码按上表算。",
   "",
@@ -220,12 +221,22 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const repaired = await repairQuotes(parsed, input, [...window, { role: "user", content: task }, { role: "assistant", content: text }]);
   return {
     ok: true,
-    parsed: settleDayChange(repaired.parsed, input.draft),
+    parsed: settleDayChange(withOriginalQuotes(repaired.parsed, input.draft), input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
     ...extra,
   };
+}
+
+/** 核得上的原句换成正文原字（模型常多打空格、少抄引号）：清单、账里、设定本给作者看的都是正文里那一段。 */
+function withOriginalQuotes(parsed: KeeperParseResult, draft: string): KeeperParseResult {
+  const entries = parsed.entries.map((entry) => {
+    if (!("quote" in entry) || !entry.quote) return entry;
+    const original = quoteFromText(entry.quote, draft);
+    return original && original !== entry.quote ? ({ ...entry, quote: original } as EntryInput) : entry;
+  });
+  return { ...parsed, entries };
 }
 
 /**

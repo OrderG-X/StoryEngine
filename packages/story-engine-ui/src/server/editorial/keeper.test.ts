@@ -293,10 +293,12 @@ describe("记账员跑一章", () => {
         draft,
         before,
         maxCatchUp: 0,
-        callModel: async (_messages, options) => (options.json ? JSON.stringify({ summary: { text: "交钥匙", quote: "他把钥匙递过来" } }) : "笔记"),
+        // 多打了空格、少抄了引号：核得上，记的是正文原字。
+        callModel: async (_messages, options) => (options.json ? JSON.stringify({ summary: { text: "交钥匙", quote: "他把钥匙 递过来，说：「拿着" } }) : "笔记"),
       });
       const cleanOutcome = await clean;
       expect(cleanOutcome.ok && cleanOutcome.quoteRepair).toBeFalsy();
+      if (cleanOutcome.ok) expect(cleanOutcome.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来，说：「拿着" });
     } finally {
       await rm(book, { recursive: true, force: true });
     }
