@@ -27,6 +27,8 @@ describe("resolveDirectWriteChapterGoal（写这一章按钮：没方向也直�
 describe("userActionChoiceText（R4.7：结构化动作选项点击后的「你：…」回显文案）", () => {
   it("各动作给作者看得懂的一句话", () => {
     expect(userActionChoiceText({ toolName: "commit_preview", chapter: 5 })).toBe("预览第 5 章的定稿改动");
+    expect(userActionChoiceText({ toolName: "foundation_decision", key: "card-a", input: {}, label: "刚写的这几处", accept: true })).toBe("认下刚写的这几处");
+    expect(userActionChoiceText({ toolName: "foundation_decision", key: "card-b", input: {}, label: "「林远」的「身份」改了" })).toBe("确认改设定：「林远」的「身份」改了");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12, chapterGoal: "寄往上海的存根：1. …" }, "寄往上海的存根")).toBe("照「寄往上海的存根」写第 12 章的正文");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12 })).toBe("写第 12 章的正文");
     expect(userActionChoiceText({ toolName: "generate_draft", chapter: 12, continueDraft: true })).toBe("第 12 章接着往下写");

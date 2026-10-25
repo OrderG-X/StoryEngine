@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createStoryProject } from "../../book/project-store.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { listSnapshots } from "../../lib/snapshot.js";
+import { applyFoundationDecision } from "../foundation-decisions.js";
 import { buildProjectRequestContext } from "../request-context.js";
 import { foundationWriteLogic, foundationWriteTool, normalizeRawOp } from "./foundation-write.js";
 import { readFoundationLogic } from "./read-foundation.js";
@@ -154,6 +155,62 @@ describe("foundation_write：AI 能直接做的写进去，标 AI 补的", () =>
     const context = { requestContext: buildProjectRequestContext(book) } as unknown as ToolExecutionContext;
     const out = await execute({ ops: JSON.stringify([{ op: "card.create", kind: "地点", name: "市档案馆" }]) }, context);
     expect(out).toMatchObject({ ok: true, applied: ["建了地点卡「市档案馆」"] });
+  });
+});
+
+describe("foundation_write：AI 刚写进去的给「认下」按钮（作者口述让 AI 记的，点了算作者写的）", () => {
+  it("建卡、给作者的卡填栏、故事设定、写作规则 → 按钮带对应的认下；点了就都算作者写的", async () => {
+    const out = await foundationWriteLogic({
+      projectDir: book,
+      ops: [
+        { op: "card.create", kind: "人物", name: "苏晴", fields: [{ label: "身份", value: "报社记者" }] },
+        { op: "field.set", card: "苏晴", label: "性格", value: "急" },
+        { op: "field.set", card: "林远", label: "外貌", value: "高个子" },
+        { op: "relation.set", a: "林远", b: "苏晴", label: "大学同学" },
+        { op: "story.set", label: "基调", value: "冷" },
+        { op: "rules.add", list: "一定不要写", text: "不写血腥场面" },
+      ],
+    });
+    expect(out.needsConfirmation).toBeUndefined();
+    expect(out.foundationAccept).toMatchObject({ label: "刚写的这几处" });
+    expect(out.foundationAccept!.input).toEqual({
+      ops: [
+        { op: "field.accept", card: "苏晴" },
+        { op: "field.accept", card: "林远", label: "外貌" },
+        { op: "story.accept", label: "基调" },
+        { op: "rules.accept" },
+      ],
+    });
+    expect(out.summary).toContain("点「认下」就算你写的");
+
+    const done = await applyFoundationDecision(book, out.foundationAccept!);
+    expect(done.ok).toBe(true);
+    const file = await cards();
+    const su = file.cards.find((card) => card.name === "苏晴")!;
+    expect(su.by).toBe("author");
+    expect(su.fields.every((field) => field.by === "author")).toBe(true);
+    expect(file.cards.find((card) => card.name === "林远")!.fields.find((field) => field.label === "外貌")!.by).toBe("author");
+    expect(file.story.fields.find((field) => field.label === "基调")!.by).toBe("author");
+    expect(file.rules.bans[0]!.by).toBe("author");
+  });
+
+  it("写作规则里本来就有作者没过目的 AI 补的：不带整体认下，免得一并认下", async () => {
+    await foundationWriteLogic({ projectDir: book, ops: [{ op: "rules.add", list: "一定不要写", text: "不写血腥场面" }] });
+    const out = await foundationWriteLogic({ projectDir: book, ops: [{ op: "rules.add", list: "文风", text: "短句" }] });
+    expect(out.foundationAccept).toBeUndefined();
+  });
+
+  it("这一批里有要作者点头的：只出「确认改设定」，不再挂认下", async () => {
+    await authorWrite([{ op: "field.set", card: "林远", label: "身份", value: "审计员" }]);
+    const out = await foundationWriteLogic({
+      projectDir: book,
+      ops: [
+        { op: "field.set", card: "林远", label: "身份", value: "记者" },
+        { op: "card.create", kind: "item", name: "蓝色账册" },
+      ],
+    });
+    expect(out.foundationConfirm).toBeDefined();
+    expect(out.foundationAccept).toBeUndefined();
   });
 });
 

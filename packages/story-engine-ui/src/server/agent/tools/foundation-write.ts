@@ -22,6 +22,7 @@ import {
   readCardsOrLegacy,
   splitForAi,
 } from "@actalk/story-core";
+import type { SettingCardsFile } from "@actalk/story-core";
 
 import { writeCards } from "../../lib/card-write.js";
 import { coerceJsonArray } from "../../lib/lenient-args.js";
@@ -49,6 +50,8 @@ const outputSchema = z.object({
   applied: z.array(z.string()).describe("真改了的（只有名字）。"),
   needsConfirmation: z.boolean().optional().describe("有改动碰了作者写的：等作者点「确认改设定」。"),
   foundationConfirm: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional(),
+  foundationAccept: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional()
+    .describe("AI 刚写进去的那几处：作者点「认下」就算作者写的（作者口述让 AI 记的，认下后就不显示「AI 补」）。"),
   pending: z.array(z.string()).optional().describe("等作者点头的（只有名字）。"),
   notDone: z.array(z.string()).optional().describe("没改成的和原因。"),
   snapshotId: z.string().optional(),
@@ -131,6 +134,29 @@ function describeIssue(index: number, raw: Record<string, unknown>, issue: z.Zod
   return `第 ${index + 1} 步（${op}）格式不对${where ? `：${where}` : ""}`;
 }
 
+function rulesHaveAi(rules: SettingCardsFile["rules"]): boolean {
+  const lists = [rules.style, rules.musts, rules.bans, rules.avoid, rules.exemplars];
+  const scalars = [rules.perspective, rules.notes, rules.targetWords, rules.minWords];
+  return lists.some((list) => list.some((item) => item.by === "ai")) || scalars.some((item) => item?.by === "ai");
+}
+
+/**
+ * AI 刚直接写进去的那几处对应的「认下」：建卡 / 填栏 → 认下那张卡 / 那一栏；故事设定 → 那一栏；
+ * 写作规则只有一个整体认下，所以改前规则里本来就有 AI 补的（作者还没过目）就不带，免得一并认下。
+ */
+function acceptOpsFor(direct: readonly CardOp[], before: SettingCardsFile): CardOp[] {
+  const out = new Map<string, CardOp>();
+  const add = (op: CardOp): void => void out.set(JSON.stringify(op), op);
+  const wholeCard = new Set(direct.flatMap((op) => (op.op === "card.create" ? [op.name] : [])));
+  for (const op of direct) {
+    if (op.op === "card.create") add({ op: "field.accept", card: op.name });
+    else if (op.op === "field.set" && op.value !== "" && !wholeCard.has(op.card)) add({ op: "field.accept", card: op.card, label: op.label });
+    else if (op.op === "story.set" && op.value !== "") add({ op: "story.accept", label: op.label });
+    else if ((op.op === "rules.set" || op.op === "rules.add" || op.op === "exemplar.add") && !rulesHaveAi(before.rules)) add({ op: "rules.accept" });
+  }
+  return [...out.values()];
+}
+
 function confirmKey(ops: readonly CardOp[]): string {
   return `card-${createHash("sha256").update(JSON.stringify(ops)).digest("hex").slice(0, 24)}`;
 }
@@ -147,6 +173,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   const at = new Date().toISOString();
   const base = await readCardsOrLegacy(input.projectDir, at);
   const split = splitForAi(base, valid, at);
+  const direct = split.direct;
   notDone.push(...split.invalid.map((item) => item.reason));
 
   let applied: readonly string[] = [];
@@ -177,8 +204,18 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     }
   }
 
+  // AI 直接写进去的：给作者一个「认下」（作者口述让 AI 记的，点了就算作者写的）。要作者点头的那批还没做，不和它搅在一起。
+  let accept: FoundationWriteOutput["foundationAccept"];
+  if (applied.length > 0 && !confirm) {
+    const ops = acceptOpsFor(direct, base);
+    const after = ops.length > 0 ? await readCardsOrLegacy(input.projectDir, at) : undefined;
+    const dry = after ? applyCardOps(after, ops, { by: "author", at }) : undefined;
+    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops), input: { ops }, label: "刚写的这几处" };
+  }
+
   const parts = [
     applied.length > 0 ? `改好了：${applied.join("；")}。` : undefined,
+    accept ? "这几处标着「AI 补」，点「认下」就算你写的。" : undefined,
     pending.length > 0 ? `这几处碰了你写的，要你点「确认改设定」才改：${pending.join("；")}。` : undefined,
     notDone.length > 0 ? `没改成：${notDone.join("；")}。` : undefined,
   ].filter((part): part is string => part !== undefined);
@@ -186,6 +223,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     ok: applied.length > 0 || pending.length > 0,
     applied: [...applied],
     ...(confirm ? { needsConfirmation: true, foundationConfirm: confirm, pending: [...pending] } : {}),
+    ...(accept ? { foundationAccept: accept } : {}),
     ...(notDone.length > 0 ? { notDone } : {}),
     ...(snapshotId ? { snapshotId } : {}),
     ...(applied.length > 0 ? { refreshScope: "foundation" as const } : {}),

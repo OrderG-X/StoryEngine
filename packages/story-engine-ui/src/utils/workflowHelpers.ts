@@ -107,6 +107,13 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: "project_config_write",
       requiresConfirmation: false,
     },
+    "foundation-accept": {
+      id: "foundation-accept",
+      label: "认下",
+      description: "AI 刚写进设定本的这几处算成你写的，之后 AI 再改要你点头（可在操作历史撤销）。",
+      permission: "project_config_write",
+      requiresConfirmation: false,
+    },
     "continue-next": {
       id: "continue-next",
       label: "继续下一章",
@@ -150,6 +157,14 @@ export function continueConfirmAction(target: { readonly chapter: number; readon
   return {
     ...suggestedAction("continue-confirm"),
     rewriteTarget: { chapter: target.chapter, ...(target.chapterGoal ? { chapterGoal: target.chapterGoal } : {}), continueDraft: true },
+  };
+}
+
+/** 「认下」按钮：作者口述让 AI 记进设定本的，点了就算作者写的（核心 field.accept 等，作者档）。 */
+export function foundationAcceptAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }): SuggestedAction {
+  return {
+    ...suggestedAction("foundation-accept"),
+    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}) },
   };
 }
 

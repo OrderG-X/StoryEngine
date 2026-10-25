@@ -990,6 +990,14 @@ export function useChat(params: UseChatParams): UseChatResult {
           consumeSuggestedAction(action);
           void handleSendUserAction({ toolName: "foundation_decision", ...action.foundationTarget });
           return;
+        case "foundation-accept":
+          if (!action.foundationTarget) {
+            showToast("这个按钮已经失效了，请让 AI 重新提一次。", 4200);
+            return;
+          }
+          consumeSuggestedAction(action);
+          void handleSendUserAction({ toolName: "foundation_decision", ...action.foundationTarget, accept: true });
+          return;
         case "continue-next":
           handleChapterButton("write_next");
           return;

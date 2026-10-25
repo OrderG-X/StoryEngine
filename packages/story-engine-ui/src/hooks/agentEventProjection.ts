@@ -28,7 +28,7 @@ const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, continueConfirmAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, continueConfirmAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -95,6 +95,8 @@ export interface AgentToolResultOutput {
   readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
   /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
   readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  /** foundation_write 专属：AI 刚写进去的那几处，挂「认下」按钮。 */
+  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
 }
 
 export type AgentProjectionEvent =
@@ -335,8 +337,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         };
       }
       // 删角色 / 覆盖已确立设定：挂「确认改设定」按钮（作者档，点了才由服务端执行）。
-      if (event.toolName === "foundation_write" && event.output?.foundationConfirmAction) {
-        const button = foundationConfirmAction(event.output.foundationConfirmAction);
+      if (event.toolName === "foundation_write" && (event.output?.foundationConfirmAction || event.output?.foundationAcceptAction)) {
+        const button = event.output.foundationConfirmAction
+          ? foundationConfirmAction(event.output.foundationConfirmAction)
+          : foundationAcceptAction(event.output.foundationAcceptAction!);
         return {
           ...withEffects,
           suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
