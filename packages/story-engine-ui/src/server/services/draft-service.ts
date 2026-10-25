@@ -100,6 +100,8 @@ import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
 import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
+import { readCheckMemory } from "../editorial/continuity/check-memory.js";
+import type { LastDraftConflict } from "../writing/context-gateway.js";
 import { withStep } from "../lib/token-meter.js";
 import type { ContinueCallModel } from "./draft-pipeline/continue-draft.js";
 import type { BrainCallModel } from "../editorial/index.js";
@@ -974,6 +976,25 @@ interface DraftRunContext {
   readonly selectedCharacters?: readonly string[];
   readonly aiFlavorRules?: readonly AiFlavorRule[];
   readonly chapterPlan?: ChapterPlan;
+  /** 这一章上一稿核出的「确定」对不上（错在本章的）：写手别再照着写错。 */
+  readonly lastDraftConflicts?: readonly LastDraftConflict[];
+}
+
+/**
+ * 这一章上一稿核账核出的「确定」对不上、错在本章的（核账记忆里的）：重写、接着写时交给写手
+ * （长篇连写：重写沿用章纲，章纲里的「三楼走廊」又写了一遍）。没核过 / 读不了就没有。
+ */
+async function readLastDraftConflicts(projectDir: string, chapter: number): Promise<readonly LastDraftConflict[]> {
+  const memory = await readCheckMemory(projectDir, chapter).catch(() => undefined);
+  if (!memory) return [];
+  return memory.issues
+    .filter((issue) => issue.confidence === "sure" && (issue.fixChapter === undefined || issue.fixChapter === chapter))
+    .map((issue) => ({
+      wrote: issue.quote,
+      against: issue.earlierQuote,
+      where: issue.againstSetting ? `设定（${issue.againstSetting.label}）` : issue.earlierChapter === chapter ? "本章前面" : `第 ${issue.earlierChapter} 章`,
+      why: issue.reason,
+    }));
 }
 
 async function resolveDraftRunContext(input: {
@@ -1023,6 +1044,7 @@ async function resolveDraftRunContext(input: {
   const aiFlavorRules = input.aiFlavorRecheck
     ? [...ALL_BUILTIN_AI_FLAVOR_RULES, ...buildUserAntiAiPatternRules(await readAntiAiPatterns(input.projectDir))]
     : undefined;
+  const lastDraftConflicts = await readLastDraftConflicts(input.projectDir, input.chapter);
 
   return {
     chapterGoal,
@@ -1034,6 +1056,7 @@ async function resolveDraftRunContext(input: {
     ...(selectedCharacters !== undefined ? { selectedCharacters } : {}),
     ...(aiFlavorRules !== undefined ? { aiFlavorRules } : {}),
     ...(input.chapterPlan ? { chapterPlan: input.chapterPlan } : {}),
+    ...(lastDraftConflicts.length > 0 ? { lastDraftConflicts } : {}),
   };
 }
 
@@ -1060,6 +1083,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
     maxOutputTokens: positiveOrUndefined(input.maxOutputTokens) ?? resolveDraftMaxOutputTokens(run.lengthTarget),
     rankContext: run.contextRanking.rankContext,
     ...(run.chapterPlan ? { chapterPlan: run.chapterPlan } : {}),
+    ...(run.lastDraftConflicts ? { lastDraftConflicts: run.lastDraftConflicts } : {}),
     ...(run.chapterPlan && input.segmentByPlan ? { segmentByPlan: true } : {}),
   };
 }

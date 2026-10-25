@@ -185,7 +185,7 @@ const outputSchema = z.object({
     continuity: z.object({
       checked: z.boolean(),
       sure: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
-      maybe: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string() })),
+      maybe: z.array(z.object({ quote: z.string(), earlierQuote: z.string(), earlierChapter: z.number(), reason: z.string(), revisited: z.object({ from: z.string() }).optional().describe("上一遍按核账改出来的句子这遍又被说不对：两遍说法相反，交作者定。") })),
       failures: z.array(z.string()),
       autoFixed: z.object({ applied: z.number(), failed: z.number(), also: z.number().optional() }).optional(),
     }).optional(),

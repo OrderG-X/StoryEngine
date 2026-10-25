@@ -20,6 +20,7 @@ const DEFAULT_DROP_ORDER = [
 const PROTECTED_DYNAMIC_SECTIONS = new Set([
   "chapter_goal",
   "chapter_plan",
+  "last_draft_conflicts",
   "earlier_passages",
   "previous_chapter",
   "previous_uncommitted_draft",

@@ -9,7 +9,7 @@ import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReader
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
-import { hashBody, hashEarlier, writeCheckMemory } from "./check-memory.js";
+import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
 import { addDismissal } from "./dismissals.js";
 
 const CH1 = "客人把怀表放在绒布上就走了。周婶说这表是前天送来的。";
@@ -75,6 +75,21 @@ describe("核账服务（核账员一路）", () => {
     expect(result.headline).not.toContain(AUNT.quote);
     expect(reader.calls).toEqual({ notes: 2, checks: 6, reviews: 1 });
     expect(await notesCount(dir)).toBe(2);
+  });
+
+  it("上一遍按核账改过的句子这遍又报「确定」→ 降成「可能」、带上改前那句（两遍说法相反，不再自动来回改）", async () => {
+    const dir = await makeBook();
+    await appendFixLog(dir, 3, [{ from: "周婶在屋里喊他。", to: AUNT_SENTENCE }, { from: "一句", to: "" }]);
+    expect(await readFixLog(dir, 3)).toEqual([{ from: "周婶在屋里喊他。", to: AUNT_SENTENCE }]);
+    const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: readerModel().callModel });
+    expect(result.sure).toEqual([]);
+    expect(result.maybe).toEqual([expect.objectContaining({ quote: AUNT_SENTENCE, revisited: { from: "周婶在屋里喊他。" } })]);
+    // 改出来的那句后来又被改掉了（不在稿里）→ 照常「确定」
+    const other = await makeBook();
+    await appendFixLog(other, 3, [{ from: AUNT_SENTENCE, to: "周婶在门外等着。" }]);
+    const plain = await checkChapterBody(other, 3, BODY, { readerCallModel: readerModel().callModel });
+    expect(plain.sure).toEqual([expect.not.objectContaining({ revisited: expect.anything() })]);
+    expect(plain.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
   });
 
   it("账本数字对账照跑、排在前面；核账员的「可能」排在「确定」后面", async () => {

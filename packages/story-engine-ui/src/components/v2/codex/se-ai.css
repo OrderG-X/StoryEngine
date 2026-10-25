@@ -260,6 +260,7 @@
   /* 核账条目底下一行：左边「对照第 N 章」淡字链接，右边两个小按钮。 */
   .step-card .cck-item{
     > .drc-desc{margin:4px 0 0;}
+    > .cck-revisited{color:var(--faint);}
     > .cck-source{margin:8px 0 0;}
     .cck-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;}
     .cck-foot .drc-fix{margin:0;padding:3px 10px;white-space:nowrap;}

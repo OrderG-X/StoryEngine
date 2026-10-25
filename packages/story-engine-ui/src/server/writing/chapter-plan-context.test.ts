@@ -14,6 +14,7 @@ import {
   writeChapterPlan,
 } from "../book/chapter-plan.js";
 import { buildWriterContext } from "./context-gateway.js";
+import { makeWriterRankContext } from "./rank-writer-context.js";
 import { findEarlierPassages } from "./earlier-passages.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
@@ -149,6 +150,19 @@ describe("buildWriterContext 带章纲", () => {
     const prompt = renderFastDraftPromptText(envelope);
     expect(prompt).toContain("缺页记的是一笔境外汇款");
     expect(prompt).toContain("If the chapter_plan section exists");
+  });
+
+  it("上一稿核出的对不上 → 进受保护段 last_draft_conflicts（预算再紧也不裁）；没有就不出这段", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "story-engine-plan-context-conflicts-"));
+    const { projectDir } = await createStoryProject({ rootDir, title: "海州账册", genre: "urban", logline: "审计员林澈追查账册篡改。", protagonistName: "林澈" });
+    const conflict = { wrote: "他上到三楼走廊。", against: "档案室的单间在一楼。", where: "第 1 章", why: "楼层对不上" };
+    const envelope = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", lastDraftConflicts: [conflict] });
+    const ranked = makeWriterRankContext({ tokenBudget: 1 }).rankContext(envelope);
+    const section = ranked.sections.find((item) => item.name === "last_draft_conflicts")?.content as { instruction: string; conflicts: unknown[] } | undefined;
+    expect(section?.conflicts).toEqual([conflict]);
+    expect(section?.instruction).toContain("以前文和设定为准");
+    const plain = await buildWriterContext({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", lastDraftConflicts: [] });
+    expect(plain.sections.map((item) => item.name)).not.toContain("last_draft_conflicts");
   });
 
   it("不给章纲 → 没有这两段（旧行为）", async () => {

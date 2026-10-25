@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
 import { applyUnitEdits, numberedText, prepareUnitReplacement, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
@@ -227,6 +228,14 @@ export async function fixDraftByUnits(input: {
     if (outcome.applied.length === 0) return outcome;
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章按核账改前快照`);
     await writeAiDraft(projectDir, { chapter, body: outcome.text });
+    await recordUnitFixes(projectDir, chapter, outcome);
     return { ...outcome, draftVersion: nextDraftVersion(), ...(snapshotId ? { snapshotId } : {}) };
+  });
+}
+
+/** 按核账改出来的句子记下来：再核时核账员又说这句不对，就知道是两遍说法相反（check-memory 的改句记录）。记不上不影响改稿。 */
+export async function recordUnitFixes(projectDir: string, chapter: number, outcome: Pick<UnitFixOutcome, "changes">): Promise<void> {
+  await appendFixLog(projectDir, chapter, outcome.changes).catch((error) => {
+    console.warn("[unit-fix] 改句记录没存上（不影响这次改稿）", error);
   });
 }

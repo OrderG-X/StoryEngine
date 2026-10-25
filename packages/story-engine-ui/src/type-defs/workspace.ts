@@ -180,6 +180,8 @@ export interface ContinuityCheckItemData {
   readonly againstSetting?: SettingRefData;
   /** R7.3 错在哪一章、按钮就改哪一章（前文章和设定不一致时指向前文那章）；缺省＝本章。 */
   readonly fixChapter?: number;
+  /** 这句是上一遍按核账改出来的（from＝改前那句），这遍又说不对：两遍说法相反，在「可能」里交作者定。 */
+  readonly revisited?: { readonly from: string };
 }
 
 /** 「定稿预览」卡的确定性数据（commit_preview 工具输出的投影子集，渲染侧防御解析）。 */

@@ -17,7 +17,7 @@ import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwr
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
 import { locateRevisionSpan, type RevisionModelCaller } from "../revision-service.js";
-import { fixByUnits } from "../unit-fix.js";
+import { fixByUnits, recordUnitFixes } from "../unit-fix.js";
 import { continuityFixGoal } from "../../../lib/continuity-fix.js";
 import { continueDraftToLength, type ContinueCallModel } from "./continue-draft.js";
 
@@ -144,6 +144,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
         ...(input.keepPrefix ? { lockedBefore: input.keepPrefix.length } : {}),
       });
       body = fixed.text;
+      await recordUnitFixes(input.projectDir, input.chapter, fixed);
       const applied = fixed.applied.length;
       timings.fixMs = Date.now() - fixStartedAt;
       autoFixed = { applied, failed: targets.length - applied, ...(fixed.alsoChanged > 0 ? { also: fixed.alsoChanged } : {}) };
