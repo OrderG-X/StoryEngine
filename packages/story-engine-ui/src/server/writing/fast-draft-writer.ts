@@ -37,7 +37,7 @@ import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-d
 import { describeErrorBriefly } from "../book/project-store.js";
 import { readBibleTolerant } from "./setting-pack.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
-import { curlyStraightQuotes } from "../../lib/dialogue-quotes.js";
+import { chinesePunctuation, chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -690,8 +690,10 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     }
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
     const cleanedBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
-    // 英文直引号换中文引号；回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
-    const writtenBody = looksLikeToolOrJsonArtifact(cleanedBody.trim()) ? cleanedBody : curlyStraightQuotes(cleanedBody);
+    // 英文直引号、半角逗号换成中文的（接着写时跟着作者那段的写法）；回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
+    const writtenBody = looksLikeToolOrJsonArtifact(cleanedBody.trim())
+      ? cleanedBody
+      : continued ? chinesePunctuationLike(existing, cleanedBody) : chinesePunctuation(cleanedBody);
     // 接着写：清理只动新写的那段，已写的原样拼在前面。
     const rawDraftBody = continued ? `${existing}\n\n${writtenBody.trim()}` : writtenBody;
     const rawDraftLength = buildDraftLengthReport({

@@ -245,7 +245,7 @@ export function useChat(params: UseChatParams): UseChatResult {
       const showStreaming = (): void => {
         const paper = useDraftStore.getState();
         if (draftStreamChapter === null || paper.chapter !== draftStreamChapter) return;
-        paper.setStreaming(streamBase + streamingDraftDisplay(streamedDraft));
+        paper.setStreaming(streamBase + streamingDraftDisplay(streamedDraft, streamBase));
       };
       const endStreaming = (): void => {
         if (useDraftStore.getState().streaming !== null) useDraftStore.getState().setStreaming(null);

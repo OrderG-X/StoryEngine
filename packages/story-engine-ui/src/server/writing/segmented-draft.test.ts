@@ -303,9 +303,9 @@ describe("接着往下写", () => {
     expect(prompt).toContain("一个字都不要改");
     expect(prompt).toContain("这次接着写 800 个中文字符左右");
     expect(prompt).toContain("本章章纲里 already_written 还没写到的要点");
-    // 作者写的星号、直引号原样留着；新写那段照常清理（标题去掉、直引号换中文引号）。
+    // 作者写的星号、直引号原样留着；新写那段照常清理（标题去掉），标点跟着作者那段（作者整段用直引号，新写的也不换）。
     expect(report.draftBody?.startsWith(`${EXISTING}\n\n他在走廊尽头等到天黑`)).toBe(true);
-    expect(report.draftBody).toContain("说“进来吧”。");
+    expect(report.draftBody).toContain("说\"进来吧\"。");
     expect(report.draftBody).not.toContain("# 第2章");
     expect(report.passed).toBe(true);
   });

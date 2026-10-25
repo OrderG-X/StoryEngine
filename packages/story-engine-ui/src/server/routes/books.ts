@@ -334,7 +334,7 @@ function stableHash(value: string): string {
 }
 
 function bookSummaryFromOverviewServer(
-  overview: Pick<UiStateOverview, "project" | "timeline" | "characters" | "storyStatus" | "totalWords">,
+  overview: Pick<UiStateOverview, "project" | "timeline" | "characters" | "storyStatus" | "totalWords" | "uiChapterFiles">,
   projectPath: string,
   lastActiveMs: number,
 ) {
@@ -344,7 +344,12 @@ function bookSummaryFromOverviewServer(
   const characters = overview.characters;
   const storyStatus = overview.storyStatus;
 
-  const currentChapterNumber = proj.currentChapter ?? events.at(-1)?.chapter ?? 1;
+  // 「上次写到」和开书停在哪章同一个算法（useProjectNavigation）：最新有工作稿的那章 → 最新定稿章 → 引擎当前章。
+  const files = overview.uiChapterFiles ?? [];
+  const latestOf = (chapters: readonly number[]): number | undefined => (chapters.length ? Math.max(...chapters) : undefined);
+  const currentChapterNumber = latestOf(files.filter((file) => file.hasDraftFile).map((file) => file.chapter))
+    ?? latestOf(files.filter((file) => file.hasCommittedChapter).map((file) => file.chapter))
+    ?? proj.currentChapter ?? events.at(-1)?.chapter ?? 1;
   // 只认这一章自己的事件：最新章还是工作稿时没有事件，别拿上一章的章名配这一章的章号（P11 桌面包走查）。
   const currentEvent = events.find((e: any) => e.chapter === currentChapterNumber);
   const writtenChapters = Math.max(proj.currentChapter ?? events.length, events.length, 0);

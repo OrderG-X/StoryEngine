@@ -10,7 +10,7 @@
  */
 import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
 import { stripTrailingSegmentMarkers } from "../../writing/fast-draft-writer.js";
-import { curlyStraightQuotes } from "../../../lib/dialogue-quotes.js";
+import { chinesePunctuation } from "../../../lib/dialogue-quotes.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
 
 export type ContinueCallModel = (
@@ -84,7 +84,7 @@ export function buildContinuationMessages(input: {
 /** 剥掉模型可能加的 Markdown 标题行和末尾的「（全文完）」这类标记，留正文。
  *  「好的 / 以下是」这类开场白不再按词表剥（重构 P7「不猜」：正文第一句也可能是「好的。」）——提示词已要求只出正文。 */
 function cleanContinuation(text: string): string {
-  return curlyStraightQuotes(stripTrailingSegmentMarkers(text.replace(/^\s*#[^\n]*\n/u, ""))).trim();
+  return chinesePunctuation(stripTrailingSegmentMarkers(text.replace(/^\s*#[^\n]*\n/u, ""))).trim();
 }
 
 export async function continueDraftToLength(input: ContinueDraftInput): Promise<ContinueDraftResult> {

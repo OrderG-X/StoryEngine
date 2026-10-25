@@ -170,6 +170,22 @@ describe("books route 建书（重构 P9：作者填了什么写什么，不落�
     const books = response.payload.books as Array<Record<string, unknown>>;
     expect(books.find((item) => item.projectPath === book.projectDir)?.totalWords).toBe(4 + 3);
   });
+
+  it("书架「上次写到」：最新有工作稿的那章（和开书停的那章一样），章名用稿子第一行的", async () => {
+    const booksRoot = await makeHomeTempDir("story-engine-shelf-current-");
+    generatedCreateRouteRootDirs.add(booksRoot);
+    process.env.SE_BOOKS_DIR = booksRoot;
+    const book = await createStoryProject({ rootDir: booksRoot, title: "写到哪的书" });
+    await mkdir(join(book.projectDir, "chapters"), { recursive: true });
+    await writeFile(join(book.projectDir, "chapters", "0001.md"), "# 第1章 · 开端\n\n他推门。\n");
+    await mkdir(join(book.projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(join(book.projectDir, "drafts", "fast", "chapter-0002.md"), "# 第2章 · 雾里的船\n\n门开着。\n");
+
+    const response = await callBooksGetRoute("/api/books/list-default");
+
+    const books = response.payload.books as Array<Record<string, unknown>>;
+    expect(books.find((item) => item.projectPath === book.projectDir)).toMatchObject({ currentChapterNumber: 2, currentChapterTitle: "雾里的船" });
+  });
 });
 
 describe("books route create path guard（建书路径闸）", () => {
