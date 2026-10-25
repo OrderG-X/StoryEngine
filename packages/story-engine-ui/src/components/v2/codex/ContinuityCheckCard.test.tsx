@@ -91,11 +91,11 @@ describe("核账卡「可能」那段和稿纸划线", () => {
 describe("核账卡：上一遍按核账改过、这遍又说不对的", () => {
   afterEach(() => cleanup());
 
-  it("在「可能」里，点开能看到改前那句和「两遍说法不一，你定」", async () => {
+  it("在「可能」里，点开能看到改前那句和「这遍又报了，你定」", async () => {
     const revisited = { ...item, quote: "她把便签放回抽屉。", reason: "便签位置对不上", revisited: { from: "她把便签塞进了抽屉。" } };
     render(<ContinuityCheckCard check={{ ...check, sure: [], maybe: [revisited] }} />);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /还有 1 处可能有问题/ })); });
-    expect(screen.getByText("上一遍按核账改过这句（原来是「她把便签塞进了抽屉。」），两遍说法不一，你定。")).toBeTruthy();
+    expect(screen.getByText("这句上一遍按核账改过（原来是「她把便签塞进了抽屉。」），这遍又报了，你定。")).toBeTruthy();
   });
 });
 

@@ -163,7 +163,7 @@ function ItemView({ chapter, item, siblings, gone = false, onRevise, onSettle, o
     <li className={`drc-item cck-item${gone ? " is-gone" : ""}`}>
       <p className="drc-evi serif">{fix === chapter ? null : `第 ${fix} 章：`}「{item.quote}」</p>
       {item.reason ? <p className="drc-desc">{item.reason}</p> : null}
-      {item.revisited ? <p className="drc-desc cck-revisited">上一遍按核账改过这句（原来是「{item.revisited.from}」），两遍说法不一，你定。</p> : null}
+      {item.revisited ? <p className="drc-desc cck-revisited">这句上一遍按核账改过（原来是「{item.revisited.from}」），这遍又报了，你定。</p> : null}
       {showSource ? <p className="drc-evi serif cck-source">{source}：「{item.earlierQuote}」</p> : null}
       <div className="cck-foot">
         <button type="button" className="cck-src" aria-expanded={showSource} onClick={() => setShowSource((open) => !open)}>
