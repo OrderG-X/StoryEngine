@@ -8,6 +8,7 @@
  */
 import { readFile } from "node:fs/promises";
 
+import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
 import { applyUnitEdits, numberedText, prepareUnitReplacement, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
@@ -94,6 +95,8 @@ export function parseUnitFixEdits(
   if (!parsed || !Array.isArray(parsed.edits)) return undefined;
   const out: UnitEdit[] = [];
   let also = 0;
+  // 模型回的半角逗号、直引号换成中文的，除非这章本来就这么写（跟着原文的标点习惯）。
+  const context = units.map((unit) => unit.text).join("");
   for (const raw of parsed.edits) {
     if (!raw || typeof raw !== "object") continue;
     const record = raw as Record<string, unknown>;
@@ -103,7 +106,7 @@ export function parseUnitFixEdits(
     if (!unit) continue;
     const named = allowed.has(id);
     if (!named && (locked.has(id) || also >= MAX_ALSO_EDITS)) continue;
-    const to = prepareUnitReplacement(units, id, record.to);
+    const to = prepareUnitReplacement(units, id, chinesePunctuationLike(context, record.to));
     if (to === undefined || to === unit.text || to.length > unit.text.length * 3 + 60) continue;
     // 连带改的不许删句：删一句要作者看着办。
     if (!named && !to.trim()) continue;

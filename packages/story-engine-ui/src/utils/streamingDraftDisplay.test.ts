@@ -16,4 +16,8 @@ describe("streamingDraftDisplay：流式期间不在稿纸顶上露出 Markdown 
     expect(streamingDraftDisplay("纸上一行字：\n\n**三日后，亥时。**\n\n他")).toBe("纸上一行字：\n\n三日后，亥时。\n\n他");
     expect(streamingDraftDisplay("纸上一行字：**三日后")).toBe("纸上一行字：**三日后");
   });
+  it("接着往下写：标点跟着本来写好的那段", () => {
+    expect(streamingDraftDisplay("\"走,\"他说", "她说：“等等。”")).toBe("“走，”他说");
+    expect(streamingDraftDisplay("\"走,\"他说", "她说:\"等等,\"")).toBe("\"走,\"他说");
+  });
 });

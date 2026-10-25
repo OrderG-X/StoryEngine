@@ -894,7 +894,7 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
   });
 
   it("接着写中途「停止」：本来写好的那段原样留着（不当新写的换引号、去星号），新写的那截接在后面", async () => {
-    const mine = "我写的\"直引号\"和**星号**。";
+    const mine = "我写的\"直引号\"、“弯引号”和**星号**。";
     seedPaper(3, { draft: mine });
     scriptAbortableStream((handlers) => {
       handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });

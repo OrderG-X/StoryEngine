@@ -117,6 +117,21 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       return typeof span === "string" ? quoteInText(item.quote, input.keepPrefix) : span.start < input.keepPrefix.length;
     };
     const keptCount = first.ok ? first.sure.filter((item) => fixableInDraft(input.chapter, item) && kept(item)).length : 0;
+    // 没自动改时把「确定」按出处分开说：新写的 / 本来写好的 / 前文别的章或和设定本对不上的。
+    // 只报一个总数时，对话 AI 会把前面本来就有的、别的章的都说成「续写带进来的」。
+    const whereSure = (sure: readonly ChapterCheckItem[]): string => {
+      if (sure.length === 0) return "";
+      const elsewhere = sure.filter((item) => !fixableInDraft(input.chapter, item)).length;
+      const prefix = sure.filter((item) => fixableInDraft(input.chapter, item) && kept(item)).length;
+      const here = sure.length - elsewhere - prefix;
+      const parts = [
+        input.keepPrefix ? (here > 0 ? `新写的那段 ${here} 处` : "新写的那段没有") : here > 0 && here < sure.length ? `本章 ${here} 处` : undefined,
+        prefix > 0 ? `前面本来写好的那部分 ${prefix} 处` : undefined,
+        elsewhere > 0 ? `出在前文别的章或和设定本对不上的 ${elsewhere} 处` : undefined,
+      ].filter((part): part is string => part !== undefined);
+      const split = parts.length > 1 || input.keepPrefix ? `（${parts.join("，")}）` : elsewhere === sure.length ? "（都出在前文别的章或和设定本对不上）" : "";
+      return here > 0 ? `${split}，没自动改` : `${split}，这章不自动改`;
+    };
     const targets = first.ok && input.fixCallModel ? first.sure.filter((item) => fixableInDraft(input.chapter, item) && !kept(item)) : [];
     if (input.fixCallModel && targets.length > 0) {
       const fixStartedAt = Date.now();
@@ -166,9 +181,9 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       : result.ok
         ? result.sure.length + result.maybe.length === 0
           ? `前后核对：没发现和前文对不上的地方。${coldNote}`
-          : `前后核对：确定对不上 ${result.sure.length} 处${result.maybe.length > 0 ? `、可能 ${result.maybe.length} 处` : ""}，没自动改，点「核账」看是哪几句。${coldNote}`
+          : `前后核对：确定对不上 ${result.sure.length} 处${result.maybe.length > 0 ? `、可能 ${result.maybe.length} 处` : ""}${whereSure(result.sure)}，点「核账」看是哪几句。${coldNote}`
         : `写完那遍核账没跑成（${result.failures[0] ?? "原因不明"}），工作稿没动；可以点「核账」再核。${coldNote}`);
-    if (keptCount > 0) notes.push(`前面本来写好的那部分核出 ${keptCount} 处确定对不上，没替你改，点「核账」看是哪几句。`);
+    if (autoFixed && keptCount > 0) notes.push(`前面本来写好的那部分核出 ${keptCount} 处确定对不上，没替你改，点「核账」看是哪几句。`);
     timings.continuityMs = Date.now() - startedAt;
   }
   info = { ...info, timings };

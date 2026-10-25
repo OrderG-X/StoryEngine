@@ -109,7 +109,8 @@ describe("runDraftQualityPipeline", () => {
     });
     expect(fixCallModel).not.toHaveBeenCalled();
     expect(result.draftBody).toContain("菜场还在，门口摆着几摊卖豆腐的。");
-    expect(result.notes.join("\n")).toContain("前面本来写好的那部分核出 1 处确定对不上，没替你改");
+    // 按出处分开说，免得对话 AI 把本来就有的说成「接着写带进来的」。
+    expect(result.notes.join("\n")).toContain("确定对不上 1 处（新写的那段没有，前面本来写好的那部分 1 处），这章不自动改");
     expect(result.info.continuity).toMatchObject({ sure: [expect.objectContaining({ quote: "菜场还在，门口摆着几摊卖豆腐的。" })] });
 
     // 同一句落在接着写的那段里：照常按前文改，写盘时标题沿用原来的。
