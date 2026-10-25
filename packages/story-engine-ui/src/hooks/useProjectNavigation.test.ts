@@ -186,6 +186,11 @@ describe("useProjectNavigation chapter status helpers", () => {
     expect(result.map((m: ChapterMessage) => m.id)).toEqual(["user-1", "assistant-agent-1"]);
   });
 
+  it("entry：操作历史里恢复记的那一行留着（没了它，重开后恢复前那轮的「下一步」又挂出来）", () => {
+    const note: ChapterMessage = { id: "system-restore-1", role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" };
+    expect(__useProjectNavigationTest.entryChatMessages([note])).toEqual([note]);
+  });
+
   it("entry：带卡片的 AI 真实产物(整理资料卡等)不会被当脚手架误删", () => {
     const withCard = [
       {

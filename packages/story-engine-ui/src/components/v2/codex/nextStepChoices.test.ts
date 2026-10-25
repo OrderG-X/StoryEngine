@@ -73,3 +73,13 @@ describe("withoutRailDuplicates（选项和建议条按钮同名只留按钮）"
     expect(withoutRailDuplicates(null, ["接着往下写"])).toBeNull();
   });
 });
+
+describe("lastAssistantNextStepPrompt：操作历史里恢复过（2026-10-25 桌面包走查）", () => {
+  it("恢复那一行之前的「下一步」不再给（定稿后恢复到定稿前，不再挂「AI 写第 10 章」）", () => {
+    const committed = msg({ id: "a1", role: "assistant", cards: [{ type: "next-steps", prompt: {
+      question: "第 9 章定稿了，接下来？", choices: [{ label: "AI 写第 10 章", intent: "写第 10 章", recommended: true }],
+    } }] });
+    expect(lastAssistantNextStepPrompt([committed])?.question).toBe("第 9 章定稿了，接下来？");
+    expect(lastAssistantNextStepPrompt([committed, msg({ id: "r1", role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" })])).toBeNull();
+  });
+});

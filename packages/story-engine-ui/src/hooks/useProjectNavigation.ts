@@ -237,7 +237,8 @@ function isInjectedEntryScaffolding(message: ChapterMessage): boolean {
     return false;
   }
   // 系统提示（「已将误入聊天区的正文移回左侧草稿区」等）全是注入通知，非用户/AI 对话。
-  if (message.role === "system") return true;
+  // 操作历史里恢复记的那一行留着：没了它，重开后恢复前那轮的「下一步」又会挂出来。
+  if (message.role === "system") return message.kind !== "restore";
   const id = message.id ?? "";
   // 注入的流程 idle 招呼（assistant-workflow-*）/ 开书开场白（assistant-book-creation-*）。
   if (id.startsWith("assistant-workflow-") || id.startsWith("assistant-book-creation-")) return true;

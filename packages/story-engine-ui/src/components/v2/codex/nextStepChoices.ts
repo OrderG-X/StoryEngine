@@ -1,6 +1,7 @@
 import type { ChapterMessage } from "../../../types.js";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { cardOf } from "../../../utils/messageCards.js";
+import { isRestoreNote } from "../../../utils/restoreNote.js";
 
 /**
  * 「下一步」选项卡数据——只取 agent 主动调 suggest_next_steps 给出的上下文相关提议
@@ -34,6 +35,8 @@ export interface NextStepPrompt {
 export function lastAssistantNextStepPrompt(messages: readonly ChapterMessage[]): NextStepPrompt | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+    // 之后在操作历史里恢复过：那一轮的「下一步」按的是恢复前的书，不再给。
+    if (isRestoreNote(message)) return null;
     if (message.role !== "assistant") continue;
     const prompt = cardOf(message, "next-steps")?.prompt;
     if (!prompt || prompt.choices.length === 0) return null;

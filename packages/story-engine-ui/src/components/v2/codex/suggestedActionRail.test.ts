@@ -97,3 +97,12 @@ describe("visibleRailActions 建议条只露能点的、最多 3 个", () => {
     expect(visibleRailActions([a("x"), a("y", "不行")]).map((x: { id: string }) => x.id)).toEqual(["x"]);
   });
 });
+
+describe("latestTurnSuggestedActions：操作历史里恢复过（2026-10-25 桌面包走查）", () => {
+  it("恢复那一行之前那一轮的动作不再给", () => {
+    const note: ChapterMessage = { id: "r1", role: "system", kind: "restore", content: "已恢复到「定稿：第9章」之前。" };
+    const messages = [user("u1"), assistant("a1", [action("undo-last")])];
+    expect(latestTurnSuggestedActions(messages)).toHaveLength(1);
+    expect(latestTurnSuggestedActions([...messages, note])).toEqual([]);
+  });
+});

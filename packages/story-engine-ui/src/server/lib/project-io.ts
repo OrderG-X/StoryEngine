@@ -189,7 +189,7 @@ export function readWorkspaceMessages(value: unknown): {
   readonly toolSteps?: readonly Record<string, unknown>[];
   readonly segments?: readonly WorkspaceMessageSegment[];
   readonly createdAt?: string;
-  readonly kind?: "scaffolding";
+  readonly kind?: "scaffolding" | "restore";
   readonly intentTitle?: string;
   readonly turnStartedAt?: number;
   readonly turnEndedAt?: number;
@@ -211,7 +211,7 @@ export function readWorkspaceMessages(value: unknown): {
     toolSteps?: readonly Record<string, unknown>[];
     segments?: readonly WorkspaceMessageSegment[];
     createdAt?: string;
-    kind?: "scaffolding";
+    kind?: "scaffolding" | "restore";
     intentTitle?: string;
     turnStartedAt?: number;
     turnEndedAt?: number;
@@ -268,7 +268,7 @@ export function readWorkspaceMessages(value: unknown): {
       ...(segments.length > 0 ? { segments } : {}),
       ...(readString(item.createdAt) ? { createdAt: readString(item.createdAt) } : {}),
       ...(intentTitle ? { intentTitle } : {}),
-      ...(item.kind === "scaffolding" ? { kind: "scaffolding" as const } : {}),
+      ...(item.kind === "scaffolding" || item.kind === "restore" ? { kind: item.kind } : {}),
       ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
       ...(turnEndedAt !== undefined ? { turnEndedAt } : {}),
       ...(turnSnapshots.length > 0 ? { turnSnapshots } : {}),
