@@ -51,6 +51,15 @@ describe("carryChapterFileFlags", () => {
     expect(empty[0]!.status).toBe("planned");
   });
 
+  it("旧表里只是占位名「下一章」（点「去第 N 章」打开的空章）→ 定稿后不沿用，照新表叫「第N章」", () => {
+    const merged = carryChapterFileFlags(
+      [item(1, { status: "committed" }), item(2, { status: "committed" }), item(3, { status: "planned", title: "下一章" })],
+      [item(1, { status: "committed" }), item(2, { status: "current", title: "下一章" })],
+      2,
+    );
+    expect(merged.map((chapter) => chapter.title)).toEqual(["第1章", "第2章", "下一章"]);
+  });
+
   it("刚定稿的那章直接标已定稿（旧表里它还是工作稿）", () => {
     const merged = carryChapterFileFlags([item(7, { status: "current" })], [item(7, { status: "current", hasDraftFile: true, hasCommittedChapter: false })], 7);
     expect(merged[0]).toMatchObject({ hasDraftFile: true, hasCommittedChapter: true });

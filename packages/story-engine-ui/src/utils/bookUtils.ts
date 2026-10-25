@@ -1,6 +1,6 @@
 import type { BookSummary, ChapterNavItem } from "../types.js";
 import type { StateOverview } from "../api/types.js";
-import { isPlaceholderChapterTitle } from "../components/v2/v2Utils.js";
+import { chapterBareTitle, isPlaceholderChapterTitle } from "../components/v2/v2Utils.js";
 import { formatRelativeTimeMs } from "./textUtils.js";
 
 const RECENT_BOOKS_STORAGE_KEY = "story-engine-ng.recent-books";
@@ -96,9 +96,10 @@ export function titleFromEvent(
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
 }
 
+/** 起过名的章：只有章号、或是占位名（章节表给没写的章垫的「下一章」）都不算——占位名被沿用到定稿后的章上，会冒出「第 2 章还没起标题，现在叫「下一章」」。 */
 function hasRealTitle(chapter: Pick<ChapterNavItem, "chapterNumber" | "title">): boolean {
-  const title = chapter.title?.trim() ?? "";
-  return title !== "" && title !== `第${chapter.chapterNumber}章`;
+  const bare = chapterBareTitle(chapter.title ?? "").trim();
+  return bare !== "" && !isPlaceholderChapterTitle(bare);
 }
 
 export function carryChapterFileFlags(

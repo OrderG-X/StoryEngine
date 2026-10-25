@@ -291,7 +291,8 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     return { ok: false, code: "chapter_gap", reason: `第 ${last + 1} 章到第 ${input.chapter - 1} 章还没定稿，先定稿前面的章` };
   }
   const before = project(snapshot, { upTo: input.chapter - 1 });
-  const reopenable = (snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [])
+  const previous = snapshot.ledgers.find((ledger) => ledger.chapter === input.chapter)?.entries ?? [];
+  const reopenable = previous
     .flatMap((entry) => (entry.kind === "thread" && entry.op === "open"
       ? [{ thread: entry.thread, type: entry.type ?? "question", title: entry.title ?? entry.note, note: entry.note }]
       : []));
@@ -310,7 +311,10 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   if (!keeper.ok) return { ok: false, code: "keeper_failed", reason: keeper.reason, ...extra };
 
   const checked = checkEntries(keeper.parsed.entries, input.text, before);
-  const plan = classifyForReview(checked.accepted, before, { chapter: input.chapter, ...(input.knownNames ? { knownNames: input.knownNames } : {}) });
+  // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
+  const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [entry.name] : []));
+  const knownNames = [...(input.knownNames ?? []), ...confirmedNames];
+  const plan = classifyForReview(checked.accepted, before, { chapter: input.chapter, ...(knownNames.length > 0 ? { knownNames } : {}) });
   // 清单序号 = 核过的条目里的下标。
   const position = new Map(checked.accepted.map((item, index) => [item.index, index]));
   const resolve = subjectResolver(before);
