@@ -105,6 +105,19 @@ describe("记账员交回的账单", () => {
     ]);
   });
 
+  it("出场：泛称带 generic；和名字一样的称呼不带", () => {
+    const parsed = parseKeeperOutput(JSON.stringify({
+      presence: [
+        { name: "周守义", nameUsed: "那人", generic: "true", quote: "那人把钥匙递过来" },
+        { name: "沈青禾", nameUsed: "沈青禾", generic: true, quote: "沈青禾接住了" },
+      ],
+    }), handles);
+    expect(parsed?.entries).toEqual([
+      { kind: "presence", review: "auto", name: "周守义", nameUsed: "那人", generic: true, quote: "那人把钥匙递过来" },
+      { kind: "presence", review: "auto", name: "沈青禾", nameUsed: "沈青禾", quote: "沈青禾接住了" },
+    ]);
+  });
+
   it("重定稿：新开的线索填了这次列出的 R 短号就带上那条的真编号，别的写法照新开记", () => {
     const parsed = parseKeeperOutput(JSON.stringify({
       threads: [

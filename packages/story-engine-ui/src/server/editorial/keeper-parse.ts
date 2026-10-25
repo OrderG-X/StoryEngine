@@ -235,6 +235,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
     const presence: { -readonly [K in keyof PresenceInput]: PresenceInput[K] } = { kind: "presence", review: "auto", name, nameUsed, quote };
     if (flag(item.viewpoint) === true) presence.viewpoint = true;
+    if (flag(item.generic) === true && nameUsed !== name) presence.generic = true;
     entries.push(presence);
   }
 

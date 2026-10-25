@@ -71,7 +71,7 @@ export function classifyForReview(
     } else if (entry.kind === "thread" && entry.op === "close") {
       reasons.push("closes-thread");
     } else if (entry.kind === "presence") {
-      if (!known.has(nameKey(entry.name)) && !known.has(nameKey(entry.nameUsed))) reasons.push("new-character");
+      if (!known.has(nameKey(entry.name)) && (entry.generic || !known.has(nameKey(entry.nameUsed)))) reasons.push("new-character");
     } else if (entry.kind === "time") {
       hasTime = true;
       if (entry.basis === "estimated") reasons.push("time-estimated");

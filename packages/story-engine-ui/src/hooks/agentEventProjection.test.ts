@@ -240,6 +240,23 @@ describe("projectAgentEvent", () => {
     expect(msg.affectedScopes).toEqual(["foundation"]);
   });
 
+  it("foundation_write 带认下 → 挂「认下」按钮（带那几步认下）；有「确认改设定」时只挂确认", () => {
+    const target = { key: "card-a", input: { ops: [{ op: "field.accept", card: "苏晴" }] }, label: "刚写的这几处" };
+    let msg = emptyAssistantMessage("m4");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "f2", toolName: "foundation_write", startedAt: 1 });
+    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "f2", toolName: "foundation_write", endedAt: 2, output: { ok: true, foundationAcceptAction: target } });
+    expect(msg.suggestedActions?.map((action) => [action.id, action.label])).toEqual([["foundation-accept", "认下"]]);
+    expect(msg.suggestedActions?.[0]?.foundationTarget).toEqual(target);
+
+    let both = emptyAssistantMessage("m5");
+    both = projectAgentEvent(both, { type: "tool-call", toolCallId: "f3", toolName: "foundation_write", startedAt: 1 });
+    both = projectAgentEvent(both, {
+      type: "tool-result", toolCallId: "f3", toolName: "foundation_write", endedAt: 2,
+      output: { ok: true, foundationConfirmAction: { key: "card-b", input: { ops: [] }, label: "改名" }, foundationAcceptAction: target },
+    });
+    expect(both.suggestedActions?.map((action) => action.id)).toEqual(["foundation-confirm"]);
+  });
+
   it("generate_draft 出稿（refreshScope:full、无 snapshotId=草稿待保存）→ affectedScopes 含 full 徽标在、但无撤销点", () => {
     // 回归护栏：generate_draft/revise_draft 是「草稿待保存、不建 git 快照」→ 无 snapshotId 但确实影响正文·草稿。
     // 影响范围徽标必须按「是否只读工具」判定，不能用 snapshotId（那会误伤无快照的出稿回合，让「正文·草稿」徽标消失）。

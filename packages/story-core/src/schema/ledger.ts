@@ -102,6 +102,8 @@ const presenceShape = {
   nameUsed: text,
   /** 本章主要跟着这个人的眼睛走。 */
   viewpoint: z.boolean().optional(),
+  /** nameUsed 是换个场景就指别人的代称（「那人」「老头」）：只认本章这一处，不记成这个人的别名。 */
+  generic: z.boolean().optional(),
   quote: text,
 };
 

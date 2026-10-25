@@ -125,6 +125,16 @@ describe("老格式镜像·生成", () => {
     expect(second?.effects?.semanticSummary).not.toHaveProperty("characterAliases");
   });
 
+  it("泛称（generic）不进老格式的别名：「那人」只是那一章的叫法", () => {
+    const ledgers = [
+      ledger(1, [{ kind: "presence", name: "周守义", nameUsed: "周守义", quote: q }]),
+      ledger(2, [{ kind: "presence", name: "周守义", nameUsed: "那人", generic: true, quote: q }]),
+    ];
+    const mirror = buildLegacyMirror({ projection: project({ ledgers, decisions: [] }), ledgers, chapterTitles: new Map() });
+    expect(mirror.events[1]?.participants).toEqual(["周守义"]);
+    expect(mirror.events[1]?.effects?.semanticSummary).not.toHaveProperty("characterAliases");
+  });
+
   it("同样的真相生成一模一样的文件，格式和老代码写盘的一样", () => {
     const a = sample();
     const b = sample();

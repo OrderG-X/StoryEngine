@@ -220,7 +220,7 @@ function aliasesOf(ledger: ChapterLedger | undefined, projection: BookProjection
   const out: { name: string; alias: string }[] = [];
   const seen = new Set<string>();
   for (const entry of ledger?.entries ?? []) {
-    if (entry.kind !== "presence" || nameKey(entry.name) === nameKey(entry.nameUsed)) continue;
+    if (entry.kind !== "presence" || entry.generic || nameKey(entry.name) === nameKey(entry.nameUsed)) continue;
     const key = nameKey(entry.name);
     const member = projection.cast.find((item) => item.key === key || item.aliases.some((alias) => nameKey(alias) === key));
     const name = member?.name ?? entry.name;

@@ -39,6 +39,7 @@ export function userActionChoiceText(
     case "ledger_decision":
       return action.label ? `确认改账：${action.label}` : "确认改账";
     case "foundation_decision":
+      if (action.accept) return action.label ? `认下${action.label}` : "认下 AI 刚写的设定";
       return action.label ? `确认改设定：${action.label}` : "确认改设定";
     case "ai_review":
       return `审阅第 ${action.chapter} 章的内容`;

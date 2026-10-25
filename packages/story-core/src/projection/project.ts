@@ -57,7 +57,7 @@ class Names {
     const name = nameKey(entry.name);
     const used = nameKey(entry.nameUsed);
     if (!this.display.has(name)) this.display.set(name, entry.name);
-    if (used !== name && !this.aliasTo.has(used)) this.aliasTo.set(used, name);
+    if (used !== name && !entry.generic && !this.aliasTo.has(used)) this.aliasTo.set(used, name);
   }
 
   resolve(raw: string): { readonly key: string; readonly name: string } {
@@ -82,7 +82,7 @@ function buildCast(ledgers: readonly ChapterLedger[], names: Names): CastMember[
         member = { name, aliases: new Set(), chapters: new Set(), viewpoint: new Set(), quotes: new Map() };
         members.set(key, member);
       }
-      if (nameKey(entry.nameUsed) !== key) member.aliases.add(entry.nameUsed);
+      if (nameKey(entry.nameUsed) !== key && !entry.generic) member.aliases.add(entry.nameUsed);
       member.chapters.add(ledger.chapter);
       if (entry.viewpoint) member.viewpoint.add(ledger.chapter);
       if (entry.quote && !member.quotes.has(ledger.chapter)) member.quotes.set(ledger.chapter, entry.quote);

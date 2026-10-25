@@ -119,6 +119,20 @@ describe("投影", () => {
     expect(result.chapters[0]?.viewpoint).toBe("沈青禾");
   });
 
+  it("别名：泛称（generic）只认那一章是他，不记成别名、不顶替别人", () => {
+    const result = project({
+      ledgers: [
+        ledger(1, [presence("周守义")]),
+        ledger(2, [{ kind: "presence", name: "周守义", nameUsed: "那人", generic: true, quote: "那人来了" }]),
+        ledger(3, [presence("沈青禾", "那人")]),
+      ],
+      decisions: [],
+    });
+    expect(result.cast.find((member) => member.name === "周守义")).toMatchObject({ aliases: [], chapters: [1, 2] });
+    // 第 3 章「那人」是另一个人，不会因为第 2 章用过就归到周守义名下。
+    expect(result.cast.find((member) => member.name === "沈青禾")?.chapters).toEqual([3]);
+  });
+
   it("线索：开、推进、收；停太久；收了又推进算重开", () => {
     const result = project({
       ledgers: [

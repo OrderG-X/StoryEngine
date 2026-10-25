@@ -38,6 +38,8 @@ export function slimToolOutputForModel(toolName: string, output: unknown): unkno
     if (toolName === "commit_preview" && key === "plan") continue;
     // 定论卡（原句 → 新句的清单）只给界面；模型转述 summary 就够。
     if (toolName === "settle_fact" && key === "settle") continue;
+    // 「认下」按钮带的那几步只给界面；模型照 summary 提一句就够。
+    if (toolName === "foundation_write" && key === "foundationAccept") continue;
     if (key === "ledgerChecklist" && Array.isArray(value)) {
       slim.ledgerChecklist = value.map((item) => (item && typeof item === "object" ? (item as { label?: unknown }).label : item));
       continue;

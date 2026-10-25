@@ -53,7 +53,7 @@ export type AgentUserAction =
   | { readonly toolName: "undo" }
   | { readonly toolName: "revise_draft"; readonly chapter: number; readonly fixes: readonly { readonly targetText: string; readonly revisionGoal: string }[] }
   | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly accept?: boolean }
   | { readonly toolName: "brainstorm_chapter"; readonly chapter: number; readonly idea?: string; readonly avoid?: readonly string[] }
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
   | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
@@ -562,6 +562,15 @@ export async function streamAgentChat(
                     key: output.foundationConfirm.key,
                     input: output.foundationConfirm.input,
                     ...(typeof output.foundationConfirm.label === "string" && output.foundationConfirm.label ? { label: output.foundationConfirm.label } : {}),
+                  },
+                }
+              : {}),
+            ...(parsed.toolName === "foundation_write" && isFoundationConfirm(output.foundationAccept)
+              ? {
+                  foundationAcceptAction: {
+                    key: output.foundationAccept.key,
+                    input: output.foundationAccept.input,
+                    ...(typeof output.foundationAccept.label === "string" && output.foundationAccept.label ? { label: output.foundationAccept.label } : {}),
                   },
                 }
               : {}),
