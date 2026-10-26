@@ -108,9 +108,10 @@ export type MessageCard =
   | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
   /**
    * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。
-   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）。
+   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）；
+   * dropped＝作者点了「不改了」（整张不要，书里没动；能撤回）。
    */
-  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string };
+  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string; readonly dropped?: true };
 
 export type MessageCardType = MessageCard["type"];
 

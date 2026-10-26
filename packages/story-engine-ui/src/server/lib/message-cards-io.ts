@@ -100,7 +100,9 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       if (!settle) return undefined;
       const excluded = readSettleExcluded(value.excluded, settle);
       const applied = typeof value.applied === "string" && value.applied.trim() ? value.applied.trim().slice(0, 2000) : "";
-      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}) };
+      // 改齐了就不算「不改了」。
+      const dropped = !applied && value.dropped === true;
+      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}), ...(dropped ? { dropped: true as const } : {}) };
     }
     default:
       return undefined;

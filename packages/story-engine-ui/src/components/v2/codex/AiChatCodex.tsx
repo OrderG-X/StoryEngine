@@ -1018,6 +1018,7 @@ function MessageBubbles({
             data={card.settle}
             {...(card.excluded ? { excluded: card.excluded } : {})}
             {...(card.applied ? { applied: card.applied } : {})}
+            {...(card.dropped ? { dropped: true } : {})}
             busy={chatLoading}
             {...(onSendUserAction ? { onAction: onSendUserAction } : {})}
           />

@@ -309,6 +309,10 @@
   .step-card .stc-row.is-excluded .stc-change{opacity:.45;}
   .step-card .stc-row.is-excluded .stc-to{text-decoration:line-through;}
   .step-card .stc-facts-toggle{margin:0 0 8px;}
+  /* 「不改了」靠右、挨着「确认」（.cpc-actions > button 默认 margin-left:auto，第二个不再推）。 */
+  .step-card .cpc-actions > .stc-drop + .cpc-confirm{margin-left:0;}
+  .step-card .cpc-actions > .stc-drop{color:var(--muted);}
+  .step-card .cpc-actions > .stc-drop, .step-card .cpc-actions > .stc-drop + .cpc-confirm{flex:none;white-space:nowrap;}
   .step-card .stc-facts{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.6;color:var(--muted);}
 
   /* 定稿前的账本清单：一条一行，依据原句小一号；勾掉的划线变淡。 */
