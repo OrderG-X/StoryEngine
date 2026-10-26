@@ -75,21 +75,39 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "确认定稿（改记 1 条）" }));
-    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], 5);
+    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], { day: 5, dayEnd: 5 });
   });
 
-  it("记账员记成跨两天：作者填回同一天也算改了（按这一天记）", () => {
+  const spanning = (token: string) => {
+    const base = preview({ previewToken: token });
+    return { ...base, ledgerChecklist: base.ledgerChecklist!.map((item) => (item.id === "day" ? { ...item, label: "这一章记为故事第 3 天到第 4 天（按前后文判断）", editableDayEnd: 4 } : item)) };
+  };
+
+  it("记账员记成跨两天、其实没跨：「到第几天」也填成同一天（按这一天记）", () => {
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={preview({ previewToken: "tok-span" })} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    render(<CommitSheet preview={spanning("tok-span")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
-    // 删空再重打：删空时框里先空着（不弹回 3），再打 3。
-    const input = screen.getByRole("spinbutton", { name: "这一章是故事第几天" }) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "" } });
-    expect(input.value).toBe("");
-    fireEvent.change(input, { target: { value: "3" } });
+    // 删空再重打：删空时框里先空着（不弹回 4），再打 3。
+    const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
+    expect(end.value).toBe("4");
+    fireEvent.change(end, { target: { value: "" } });
+    expect(end.value).toBe("");
+    fireEvent.change(end, { target: { value: "3" } });
     expect(screen.getByText("这一章改记为故事第 3 天")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
-    expect(onConfirm).toHaveBeenLastCalledWith([], 3);
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 3, dayEnd: 3 });
+  });
+
+  // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；改头一天只能记成一天，章里第二天那段丢了。
+  it("跨天的章改头一天：跨的天数跟着挪", () => {
+    const onConfirm = vi.fn();
+    render(<CommitSheet preview={spanning("tok-shift")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
+    expect((screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement).value).toBe("5");
+    expect(screen.getByText("这一章改记为故事第 4 天到第 5 天")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 4, dayEnd: 5 });
   });
 
   it("关了再开（同一份预览）动过的还在", () => {

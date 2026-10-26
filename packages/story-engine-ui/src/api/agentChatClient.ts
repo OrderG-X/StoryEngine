@@ -44,7 +44,7 @@ export interface StreamAgentChatRequest {
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number }
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
   | { readonly toolName: "commit_preview"; readonly chapter: number }
@@ -79,6 +79,8 @@ export interface LedgerChecklistItemView {
   readonly removable: boolean;
   /** 作者能改的「第几天」（故事时间线）。 */
   readonly editableDay?: number;
+  /** 记账员记的这一章到第几天（跨天才有）。 */
+  readonly editableDayEnd?: number;
   /** 引擎没把握、请作者确认。 */
   readonly needsConfirm?: boolean;
   /** 默认不勾（要确认的改记）：不勾＝这条改记不作数，勾上才算确认。 */
@@ -678,6 +680,7 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
       removable: item.removable === true,
       ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),
+      ...(typeof item.editableDayEnd === "number" && Number.isInteger(item.editableDayEnd) && item.editableDayEnd > 0 ? { editableDayEnd: item.editableDayEnd } : {}),
       ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
       ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
     }];

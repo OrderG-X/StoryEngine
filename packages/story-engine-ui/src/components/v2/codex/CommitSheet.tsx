@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import {
+  type DayOverride,
   ledgerDayOverrideForCard,
   ledgerExclusionsForCard,
   rememberLedgerDayOverride,
@@ -112,7 +113,7 @@ export function CommitSheet({
   /** 有动作在跑：按钮先不让点。 */
   readonly busy: boolean;
   /** 传了且能定稿 → 底部有【定稿】；参数是作者去掉 / 确认的条目 id、改过的天数。没传＝只看（旧预览）。 */
-  readonly onConfirm?: (excluded: readonly string[], dayOverride?: number) => void;
+  readonly onConfirm?: (excluded: readonly string[], dayOverride?: DayOverride) => void;
   readonly onClose: () => void;
   /** 关的时候播退场（usePresence）。 */
   readonly presence?: PresenceHandle;
@@ -135,14 +136,28 @@ export function CommitSheet({
     rememberLedgerExclusions(preview.chapter, preview.previewToken, next);
     return next;
   });
-  const [dayOverride, setDayOverride] = useState<number | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
+  const [dayOverride, setDayOverride] = useState<DayOverride | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
   const [editingDay, setEditingDay] = useState(false);
   /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
   const [dayText, setDayText] = useState<string | null>(null);
-  const changeDay = (value: number | undefined) => {
+  const [dayEndText, setDayEndText] = useState<string | null>(null);
+  // 记账员记的头一天和跨了几天；作者改了以后按作者的。
+  const keptDay = day?.editableDay;
+  const shownDay = dayOverride?.day ?? keptDay ?? 1;
+  const shownEnd = dayOverride ? dayOverride.dayEnd ?? dayOverride.day : day?.editableDayEnd ?? shownDay;
+  const changeDay = (value: DayOverride | undefined) => {
     setDayOverride(value);
     rememberLedgerDayOverride(preview.chapter, preview.previewToken, value);
   };
+  /** 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。 */
+  const changeStart = (value: number | undefined) =>
+    changeDay(value === undefined ? undefined : { day: value, dayEnd: value + Math.max(0, shownEnd - shownDay) });
+  const changeEnd = (value: number | undefined) => {
+    if (value !== undefined) changeDay({ day: shownDay, dayEnd: Math.max(value, shownDay) });
+  };
+  const dayOverrideLabel = dayOverride
+    ? `这一章改记为故事第 ${dayOverride.day} 天${dayOverride.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? `到第 ${dayOverride.dayEnd} 天` : ""}`
+    : undefined;
   const [showAllReview, setShowAllReview] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
 
@@ -183,29 +198,51 @@ export function CommitSheet({
           ) : null}
           {day ? (
             <div className={`se-cs-day${day.needsConfirm ? " is-attention" : ""}`}>
-              <span>{dayOverride !== undefined ? `这一章改记为故事第 ${dayOverride} 天` : day.label}</span>
+              <span>{dayOverrideLabel ?? day.label}</span>
               {day.detail ? <span className="se-cs-quote serif">依据「{day.detail}」</span> : null}
-              {editable && day.editableDay !== undefined ? (
+              {editable && keptDay !== undefined ? (
                 editingDay ? (
-                  <label className="se-cs-day-edit">
+                  <span
+                    className="se-cs-day-edit"
+                    onBlur={(event) => {
+                      // 在两个框之间挪不算改完。
+                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                      setEditingDay(false);
+                      setDayText(null);
+                      setDayEndText(null);
+                    }}
+                  >
                     第
                     <input
                       type="number"
                       min={1}
                       autoFocus
                       aria-label="这一章是故事第几天"
-                      value={dayText ?? dayOverride ?? day.editableDay}
+                      value={dayText ?? shownDay}
                       disabled={busy}
                       onChange={(event) => {
                         setDayText(event.target.value);
                         const next = Number(event.target.value);
-                        // 填回原来那一天也算作者定的：记账员记成跨两天（第 N～N+1 天）时，作者填「第 N 天」就是要按这一天记（P6 第 7 步）。
-                        changeDay(Number.isInteger(next) && next >= 1 ? next : undefined);
+                        // 填回原来那一天也算作者定的。
+                        changeStart(Number.isInteger(next) && next >= 1 ? next : undefined);
                       }}
-                      onBlur={() => { setEditingDay(false); setDayText(null); }}
+                    />
+                    天到第
+                    <input
+                      type="number"
+                      min={1}
+                      aria-label="这一章到故事第几天"
+                      value={dayEndText ?? shownEnd}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setDayEndText(event.target.value);
+                        const next = Number(event.target.value);
+                        // 两头填成同一天＝这一章就这一天（记账员记成跨两天、其实没跨，P6 第 7 步）。
+                        changeEnd(Number.isInteger(next) && next >= 1 ? next : undefined);
+                      }}
                     />
                     天
-                  </label>
+                  </span>
                 ) : (
                   <button type="button" className="se-cs-quiet" disabled={busy} onClick={() => setEditingDay(true)}>改天数</button>
                 )
@@ -333,13 +370,14 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
   if (!preview) return null;
   const confirmable = confirmableCommitPreviewMessageId(messages) === messageId && Boolean(onSuggestedAction);
   const onConfirm = confirmable
-    ? (excluded: readonly string[], dayOverride?: number) => {
+    ? (excluded: readonly string[], dayOverride?: DayOverride) => {
       closeCommitSheet();
       onSuggestedAction!(commitConfirmAction({
         chapter: preview.chapter,
         ...(preview.previewToken ? { previewToken: preview.previewToken } : {}),
         ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride } : {}),
+        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
+        ...(dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? { dayEndOverride: dayOverride.dayEnd } : {}),
       }));
     }
     : undefined;

@@ -379,6 +379,8 @@ export interface ConfirmInput {
   readonly optedIn?: readonly unknown[];
   /** 作者改的「故事第几天」。 */
   readonly day?: unknown;
+  /** 作者改的「到第几天」（这一章跨天；没给或不比 day 大＝就这一天）。 */
+  readonly dayEnd?: unknown;
   readonly tickets: TicketStore;
   /** 写盘前存撤销点（失败就不写）。 */
   readonly snapshot?: (label: string, command: string) => Promise<void>;
@@ -410,22 +412,25 @@ export async function confirmChapterCommit(input: ConfirmInput): Promise<Confirm
   ]);
   const review = new Set(ticket.reviewIndexes);
   const day = indexOf(input.day);
+  const dayEnd = indexOf(input.dayEnd);
+  const span = day !== undefined && dayEnd !== undefined && dayEnd > day ? dayEnd - day : undefined;
   const entries: EntryInput[] = [];
   let timeSet = false;
   ticket.entries.forEach((entry, index) => {
     if (excluded.has(index)) return;
     if (entry.kind === "time" && day !== undefined && day >= 1) {
-      // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。稿纸上只让作者填一个「第几天」、
-      // 写着「这一章改记为故事第 N 天」，所以记账员猜的「章内过了几天」一并去掉——不然作者改完还是「第 N～N+1 天」，改不掉（P6 第 7 步）。
+      // 作者改了天数：这一条改成作者定的，星期、时段、原句照留。章内过了几天也照作者填的「到第几天」——
+      // 只填一天（或两头一样）就是这一天，记账员记的跨天一并去掉（P6 第 7 步：不然改完还是「第 N～N+1 天」，改不掉）；
+      // 跨天的章改了头一天、两头都填（长篇实跑：第 24 章改成第 21 天，章里第二天那段丢了，后面的章跟着错一天）。
       const { daysSincePrevious: _drop, daysInChapter: _span, ...rest } = entry;
-      entries.push({ ...rest, basis: "author", day, review: "author" } satisfies TimeInput);
+      entries.push({ ...rest, basis: "author", day, ...(span ? { daysInChapter: span } : {}), review: "author" } satisfies TimeInput);
       timeSet = true;
       return;
     }
     // 作者在清单上看过的，记成作者确认过。
     entries.push(review.has(index) ? { ...entry, review: "author" } : entry);
   });
-  if (!timeSet && day !== undefined && day >= 1) entries.push({ kind: "time", review: "author", basis: "author", day });
+  if (!timeSet && day !== undefined && day >= 1) entries.push({ kind: "time", review: "author", basis: "author", day, ...(span ? { daysInChapter: span } : {}) });
 
   const outcome = await runCommand(
     input.bookDir,

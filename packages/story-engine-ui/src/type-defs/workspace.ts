@@ -217,6 +217,7 @@ export interface CommitPreviewCardData {
     readonly detail?: string;
     readonly removable: boolean;
     readonly editableDay?: number;
+    readonly editableDayEnd?: number;
     readonly needsConfirm?: boolean;
     readonly defaultUnchecked?: boolean;
   }[];

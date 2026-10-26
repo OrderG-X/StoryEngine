@@ -798,12 +798,15 @@ export function useChat(params: UseChatParams): UseChatResult {
       const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
       const confirmedChanges = excluded.filter((id) => id.startsWith("change_confirm:")).length;
       const removedCount = excluded.length - confirmedChanges;
-      const dayOverride = target?.dayOverride ?? ledgerDayOverrideForConfirm(chapter, target?.previewToken);
+      const dayOverride = target?.dayOverride !== undefined
+        ? { day: target.dayOverride, ...(target.dayEndOverride !== undefined ? { dayEnd: target.dayEndOverride } : {}) }
+        : ledgerDayOverrideForConfirm(chapter, target?.previewToken);
+      const dayEnd = dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? dayOverride.dayEnd : undefined;
       clearLedgerExclusions(chapter);
       const notes = [
         ...(removedCount > 0 ? [`账本清单去掉了 ${removedCount} 条`] : []),
         ...(confirmedChanges > 0 ? [`确认改记 ${confirmedChanges} 条`] : []),
-        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
+        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride.day} 天${dayEnd !== undefined ? `到第 ${dayEnd} 天` : ""}`] : []),
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
@@ -813,7 +816,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         chapter,
         ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
         ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride } : {}),
+        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
+        ...(dayEnd !== undefined ? { dayEndOverride: dayEnd } : {}),
       });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],

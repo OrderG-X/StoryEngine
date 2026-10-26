@@ -36,6 +36,7 @@ const inputSchema = z.object({
   previewToken: z.string().optional().describe("预览票号（只由「确认定稿」按钮带来，你不用传）。"),
   excluded: z.array(z.string()).optional().describe("作者在清单上动过的条目（只由「确认定稿」按钮带来，你不用传）。"),
   dayOverride: z.number().int().positive().optional().describe("作者改的「第几天」（只由「确认定稿」按钮带来，你不用传）。"),
+  dayEndOverride: z.number().int().positive().optional().describe("作者改的「到第几天」（只由「确认定稿」按钮带来，你不用传）。"),
 });
 
 const outputSchema = z.object({
@@ -116,6 +117,7 @@ export async function applyCommitToolLogic(input: {
   readonly previewToken?: string;
   readonly excluded?: readonly string[];
   readonly dayOverride?: number;
+  readonly dayEndOverride?: number;
 }): Promise<CommitApplyToolOutput> {
   const { projectDir, chapter } = input;
   const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
@@ -131,6 +133,7 @@ export async function applyCommitToolLogic(input: {
     excluded: ids.excluded,
     optedIn: ids.optedIn,
     ...(input.dayOverride !== undefined ? { day: input.dayOverride } : {}),
+    ...(input.dayEndOverride !== undefined ? { dayEnd: input.dayEndOverride } : {}),
     tickets: ticketStoreFor(projectDir),
   });
   if (!outcome.ok) {
@@ -263,6 +266,7 @@ export const commitApplyTool = writeTool({
       ...(input.previewToken ? { previewToken: input.previewToken } : {}),
       ...(input.excluded && input.excluded.length > 0 ? { excluded: input.excluded } : {}),
       ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
+      ...(input.dayEndOverride !== undefined ? { dayEndOverride: input.dayEndOverride } : {}),
     });
   },
 });

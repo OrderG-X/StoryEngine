@@ -111,6 +111,30 @@ describe("定稿编排", () => {
     expect(ledger.entries.find((entry: { kind: string; op?: string }) => entry.kind === "thread")?.review).toBe("author");
   });
 
+  // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；作者只能改成一天，章里第二天那段丢了。
+  it("作者改天数也能记跨天：第 5 天到第 6 天", async () => {
+    await commitChapter1();
+    const tickets = memoryTicketStore();
+    const preview = expectPreview(
+      await prepareChapterCommit({
+        bookDir: book,
+        chapter: 2,
+        text: CH2,
+        tickets,
+        callModel: fakeModel({
+          summary: { text: "外乡人又来，沈青禾锁好钥匙", quote: "外乡人又来了" },
+          time: { basis: "text", daysSincePrevious: 1, daysInChapter: 1, dayChangeQuote: "沈青禾把钥匙锁进铜盒", timeOfDay: "上午", quote: "第二天上午" },
+          presence: [{ name: "周守义", nameUsed: "老周", quote: "老周站在门口" }],
+          facts: [],
+          threads: [],
+        }),
+      }),
+    );
+    expect(preview.time).toMatchObject({ day: 2, dayEnd: 3 });
+    expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, day: 5, dayEnd: 6 })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 5, dayEnd: 6, dayBasis: "author" });
+  });
+
   it("改了前面一章再定稿：记账员看得到这章上次开的线索，本章还在开就沿用编号，后文的推进接得上", async () => {
     await commitChapter1();
     const tickets = memoryTicketStore();

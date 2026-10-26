@@ -217,6 +217,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
       const detail = readString(item.detail);
       const reason = readString(item.reason);
       const editableDay = readPositiveInteger(item.editableDay);
+      const editableDayEnd = readPositiveInteger(item.editableDayEnd);
       return [{
         id,
         kind: readString(item.kind) ?? "",
@@ -225,6 +226,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
         ...(detail ? { detail } : {}),
         removable: item.removable === true,
         ...(editableDay !== undefined ? { editableDay } : {}),
+        ...(editableDayEnd !== undefined ? { editableDayEnd } : {}),
         ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
         ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
       }];
