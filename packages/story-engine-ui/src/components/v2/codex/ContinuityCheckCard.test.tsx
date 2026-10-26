@@ -339,6 +339,20 @@ describe("核账卡：原句已经改掉的条目", () => {
     expect(screen.queryByText("已改掉")).toBeNull();
   });
 
+  it("「可能」的也改掉了：卡头不再说「可能 N 处」，点开那行说都改掉了（长篇实跑第 36 章）", () => {
+    const fixedSure = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
+    const fixedMaybe = { quote: "茶碗边搁着药箱。", earlierQuote: "药箱搁在脚边。", earlierChapter: 9, reason: "药箱位置对不上" };
+    const liveMaybe = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 9, reason: "天气对不上" };
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "外面下着大雨。他把钥匙锁回抽屉。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [fixedSure], maybe: [fixedMaybe, liveMaybe] }} />);
+    expect(screen.getByText("可能 1 处")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "还有 1 处可能有问题（点开看）" })).toBeTruthy();
+    cleanup();
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [fixedSure], maybe: [fixedMaybe] }} />);
+    expect(screen.getByText("改掉了")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "可能有问题的 1 处都改掉了（点开看）" })).toBeTruthy();
+  });
+
   it("原句两截（A……B）按顺序都在就算还在；空白不计", () => {
     expect(quoteInPaper("她推开门。\n\n屋里 很暗，她没开灯。", "她推开门……她没开灯")).toBe(true);
     expect(quoteInPaper("她没开灯。她推开门。", "她推开门……她没开灯")).toBe(false);

@@ -247,6 +247,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   shownMaybeRef.current = showMaybe;
   const total = sure.length + maybe.length;
   const liveSure = sure.filter((item) => !gone(item)).length;
+  const liveMaybe = maybe.filter((item) => !gone(item)).length;
   const goneCount = [...sure, ...maybe, ...earlier].filter(gone).length;
   // 什么都没报、也没划掉过的：卡头一行「没发现对不上」就说完了，不再摆一段同样意思的话、也不给展开箭头。
   const empty = total === 0 && earlier.length === 0 && dismissed.length === 0;
@@ -254,7 +255,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
     <StepCard
       title={`核账 · 第 ${check.chapter} 章`}
       status={liveSure > 0 ? "attention" : "done"}
-      statusLabel={liveSure > 0 ? `确定 ${liveSure} 处` : maybe.length > 0 ? `可能 ${maybe.length} 处` : goneCount > 0 ? "改掉了" : "没发现对不上"}
+      statusLabel={liveSure > 0 ? `确定 ${liveSure} 处` : liveMaybe > 0 ? `可能 ${liveMaybe} 处` : goneCount > 0 ? "改掉了" : "没发现对不上"}
       defaultOpen
     >
       {empty ? null : <>
@@ -279,7 +280,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       {maybe.length > 0 ? (
         <>
           <button type="button" className="chip" onClick={toggleMaybe}>
-            {showMaybe ? "收起" : `还有 ${maybe.length} 处可能有问题（点开看）`}
+            {showMaybe ? "收起" : liveMaybe > 0 ? `还有 ${liveMaybe} 处可能有问题（点开看）` : `可能有问题的 ${maybe.length} 处都改掉了（点开看）`}
           </button>
           {showMaybe ? (
             <ul className="drc-list">
