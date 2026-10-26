@@ -12,7 +12,7 @@ import { planLedgerChange, type LedgerChangeRequest } from "../ledger-decisions.
 import { readProjectDirFromContext } from "../request-context.js";
 import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
 
-export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "clean", "group", "importance", "day"] as const;
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "clean", "group", "importance", "day", "summary"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];
 
 const groupList = z.array(z.union([z.string(), z.array(z.string())]));
@@ -22,13 +22,14 @@ const inputSchema = z.object({
   op: coerceEnum(z.enum(LEDGER_OPS).describe(
     "事实：add 补记；update 改写（id 或 targetText + text）；remove 删掉记错的（id 或 targetText）；supersede=某事实从某章起不再成立（id 或 targetText + chapter）。" +
       "线索：resolve=记为已收（query 或 id）；group=归并讲同一件事的几条（groups）；importance=定大伏笔 / 小线索（id 或 query + importance）。" +
-      "天数：day=改已定稿某章是故事第几天（chapter + day，这一章跨天再给 dayEnd）。",
+      "天数：day=改已定稿某章是故事第几天（chapter + day，这一章跨天再给 dayEnd）。" +
+      "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。",
   )),
   id: blankToUndefined(z.string().optional().describe("事实或线索的编号（read_state_overview 里取）。别念给作者听。")),
   chapter: coerceNumber(z.number().int().positive().optional().describe(
-    "add：算在第几章（缺省=最新定稿章）；supersede：从第几章起不再成立；resolve：在第几章收的（缺省=最新定稿章）。",
+    "add：算在第几章（缺省=最新定稿章）；supersede：从第几章起不再成立；resolve：在第几章收的（缺省=最新定稿章）；day / summary：改哪一章（缺省=最新定稿章）。",
   )),
-  text: blankToUndefined(z.string().optional().describe("add / update 的事实内容（一句话、具体可核对）。")),
+  text: blankToUndefined(z.string().optional().describe("add / update 的事实内容（一句话、具体可核对）；summary 的整条新梗概。")),
   targetText: blankToUndefined(z.string().optional().describe("不知道编号时，用那条事实的原话或关键词指认（对上多条会如实请你说清）。")),
   query: blankToUndefined(z.string().optional().describe("resolve / importance：线索的标题或关键词。")),
   importance: coerceEnum(z.enum(["major", "normal", "minor"]).optional().describe("importance：major=大伏笔（不许丢），minor=小线索（停多久都不提醒），normal=普通。")),

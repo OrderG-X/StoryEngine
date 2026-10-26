@@ -395,11 +395,15 @@ function buildChapters(
   // 定稿后作者改的天数（同一章改过几次，按最后一次）。
   const dayRulings = new Map<number, { readonly day: number; readonly dayEnd?: number }>();
   for (const decision of decisions) if (decision.type === "chapter.day") dayRulings.set(decision.chapter, decision);
+  // 定稿后作者改写的梗概（同理按最后一次）。
+  const summaryRulings = new Map<number, string>();
+  for (const decision of decisions) if (decision.type === "chapter.summary") summaryRulings.set(decision.chapter, decision.text);
   const views: ChapterView[] = [];
   let previousEnd = 0;
   for (const ledger of ledgers) {
     const time = ledger.entries.find((entry): entry is TimeEntry => entry.kind === "time");
-    const summary = ledger.entries.find((entry) => entry.kind === "summary");
+    const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
+    const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
     const ruling = dayRulings.get(ledger.chapter);
     let day: number;
     let basis: ChapterView["dayBasis"];
@@ -434,7 +438,7 @@ function buildChapters(
       chapter: ledger.chapter,
       origin: ledger.origin,
       committedAt: ledger.committedAt,
-      ...(summary?.kind === "summary" ? { summary: summary.text } : {}),
+      ...(summary !== undefined ? { summary } : {}),
       day,
       dayEnd,
       dayBasis: basis,

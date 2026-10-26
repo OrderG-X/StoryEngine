@@ -218,6 +218,19 @@ describe("投影", () => {
     ]);
   });
 
+  // 长篇实跑：第 41 章梗概记成「离云州北上」（其实往南），定稿后没处改。
+  it("作者裁定改一章的梗概：顶掉账单记的，改过几次按最后一次", () => {
+    const ledgers = [
+      ledger(1, [{ kind: "summary", text: "离城北上。", quote: "出了城" }]),
+      ledger(2, [{ kind: "summary", text: "到了渡口。", quote: "渡口" }]),
+    ];
+    const result = project({
+      ledgers,
+      decisions: [decision({ type: "chapter.summary", chapter: 1, text: "离城南下。" }), decision({ type: "chapter.summary", chapter: 1, text: "离城往南。" }, 2)],
+    });
+    expect(result.chapters.map((chapter) => chapter.summary)).toEqual(["离城往南。", "到了渡口。"]);
+  });
+
   it("定稿后改过正文：和账单记的 sha256 对不上就标出来", () => {
     const result = project({
       ledgers: [ledger(1, []), ledger(2, [])],

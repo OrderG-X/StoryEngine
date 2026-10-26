@@ -98,14 +98,25 @@
   .cd-goal.met .cd-goal-bar i{background:var(--success);}
   /* 本章梗概：顶条第二行，一行省略，点开看全 */
   .codex-desk-bar .cd-synopsis{
-    flex:1 1 100%;min-width:0;display:flex;gap:10px;align-items:baseline;margin:2px 0 0;padding:6px 12px;border:0;border-radius:8px;
-    background:var(--sunken);box-shadow:inset 2px 0 0 var(--accent-line);color:var(--muted);font-size:13px;line-height:1.6;text-align:left;cursor:pointer;
-    transition:background-color .15s ease;
+    flex:1 1 100%;min-width:0;display:flex;gap:6px;align-items:flex-start;margin:2px 0 0;border-radius:8px;
+    background:var(--sunken);box-shadow:inset 2px 0 0 var(--accent-line);transition:background-color .15s ease;
   }
-  .codex-desk-bar .cd-synopsis:hover{background:var(--hover);}
+  .codex-desk-bar .cd-synopsis:hover:not(.is-editing){background:var(--hover);}
+  .codex-desk-bar .cd-synopsis-text{
+    flex:1;min-width:0;display:flex;gap:10px;align-items:baseline;padding:6px 12px;border:0;background:transparent;
+    color:var(--muted);font-size:13px;line-height:1.6;text-align:left;cursor:pointer;
+  }
   .codex-desk-bar .cd-synopsis b{flex:none;font-size:11px;font-weight:700;letter-spacing:.16em;color:var(--accent);}
-  .codex-desk-bar .cd-synopsis span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .codex-desk-bar .cd-synopsis.is-open span{white-space:normal;}
+  .codex-desk-bar .cd-synopsis-text span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .codex-desk-bar .cd-synopsis.is-open .cd-synopsis-text span{white-space:normal;}
+  .codex-desk-bar .cd-synopsis-edit{
+    flex:none;margin:5px 8px 0 0;padding:1px 8px;border:0;border-radius:6px;background:transparent;
+    color:var(--accent);font-size:12px;line-height:1.6;cursor:pointer;
+  }
+  .codex-desk-bar .cd-synopsis-edit:hover:not(:disabled){background:var(--accent-soft);}
+  .codex-desk-bar .cd-synopsis-edit:disabled{opacity:.5;cursor:default;}
+  .codex-desk-bar .cd-synopsis.is-editing{padding:8px 12px;gap:10px;}
+  .codex-desk-bar .cd-synopsis.is-editing b{padding-top:6px;}
   /* 底条：上一章 | 再来一版 | 下一章 */
   /* 两边「上一章 / 下一章」按自身宽度占位，中间工具条在剩下的地方放；放不下时状态那句先省略，按钮不让（2026-10-22：窄屏「定稿」被「下一章」压住）。 */
   .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,auto) minmax(max-content,1fr);gap:12px;padding:8px 24px;}

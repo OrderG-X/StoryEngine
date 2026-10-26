@@ -29,6 +29,8 @@ const chapterDay = {
   day: z.number().int().min(1),
   dayEnd: z.number().int().min(1).optional(),
 };
+/** 作者改写一章的梗概（定稿后才发现记账员写偏了）：顶掉那章账单里记的。是作者说的，没有原句。 */
+const chapterSummary = { type: z.literal("chapter.summary"), chapter: z.number().int().min(1), text };
 const dayOrdered = (value: { type: string; day?: number; dayEnd?: number }): boolean =>
   value.type !== "chapter.day" || value.dayEnd === undefined || value.day === undefined || value.dayEnd >= value.day;
 const DAY_MESSAGE = "到第几天不能比第几天早";
@@ -60,6 +62,7 @@ export const DecisionInput = z.discriminatedUnion("type", [
   z.object(factExpire),
   z.object(factAssertShape),
   z.object(chapterDay),
+  z.object(chapterSummary),
 ]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
   .refine(dayOrdered, { message: DAY_MESSAGE });
 export type DecisionInput = z.infer<typeof DecisionInput>;
@@ -74,6 +77,7 @@ export const AuthorDecision = z.discriminatedUnion("type", [
   z.object({ ...factExpire, ...meta }),
   z.object({ ...factAssertShape, ...meta }),
   z.object({ ...chapterDay, ...meta }),
+  z.object({ ...chapterSummary, ...meta }),
 ]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
   .refine(dayOrdered, { message: DAY_MESSAGE });
 export type AuthorDecision = z.infer<typeof AuthorDecision>;

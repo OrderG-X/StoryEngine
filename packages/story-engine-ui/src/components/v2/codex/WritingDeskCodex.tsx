@@ -10,6 +10,7 @@ import { BrainstormPanel } from "./Brainstorm.js";
 import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { ChapterTitle } from "./ChapterTitle.js";
+import { ChapterSynopsis } from "./ChapterSynopsis.js";
 import { IconPencil } from "./icons.js";
 import { useChapterDirections, useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
@@ -149,7 +150,6 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   // 本章梗概：取时间线里本章的主事件（只有最近几章有），没有就不显示。
   const synopsisEvent = props.overview?.timeline?.recentEvents?.find((event) => event.chapter === draft.chapterNumber);
   const synopsis = (synopsisEvent?.mainEvent || synopsisEvent?.summary || "").trim();
-  const [synopsisOpen, setSynopsisOpen] = useState(false);
   // 上一章 / 下一章（按章号相邻，跳过未写的占位章）。
   const realChapters = [...props.workspace.chapters]
     .filter((ch) => ch.status !== "planned" || ch.chapterNumber === draft.chapterNumber)
@@ -218,16 +218,13 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
           </div>
         </div>
         {synopsis && !showStarter ? (
-          <button
-            type="button"
-            className={`cd-synopsis${synopsisOpen ? " is-open" : ""}`}
-            aria-expanded={synopsisOpen}
-            title={synopsisOpen ? "收起" : synopsis}
-            onClick={() => setSynopsisOpen((open) => !open)}
-          >
-            <b>本章梗概</b>
-            <span>{synopsis}</span>
-          </button>
+          <ChapterSynopsis
+            key={draft.chapterNumber}
+            chapter={draft.chapterNumber}
+            text={synopsis}
+            busy={workspaceBusy}
+            {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
+          />
         ) : null}
       </header>
 

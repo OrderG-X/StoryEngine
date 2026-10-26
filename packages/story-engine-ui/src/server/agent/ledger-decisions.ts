@@ -28,7 +28,7 @@ import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
 export interface LedgerChangeRequest {
-  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "clean" | "group" | "importance" | "day";
+  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "clean" | "group" | "importance" | "day" | "summary";
   readonly id?: string;
   readonly chapter?: number;
   readonly text?: string;
@@ -186,6 +186,15 @@ export async function planLedgerChange(projectDir: string, request: LedgerChange
         [{ type: "chapter.day", chapter, day, ...(dayEnd !== undefined ? { dayEnd } : {}) }],
         [`第 ${chapter} 章从故事${days(current.day, current.dayEnd)}改记为${days(day, dayEnd ?? day)}`],
       );
+    }
+    case "summary": {
+      const chapter = request.chapter ?? latest;
+      const current = view.chapters.find((item) => item.chapter === chapter);
+      if (!current) return fail("unknown_chapter", `第 ${chapter} 章还没定稿，梗概定稿时在清单上看。`);
+      const text = request.text?.trim();
+      if (!text) return fail("missing_text", `第 ${chapter} 章的梗概要改成什么？`);
+      if (current.summary === text) return fail("unchanged", `第 ${chapter} 章的梗概就是这样，不用改。`);
+      return proposal([{ type: "chapter.summary", chapter, text }], [`第 ${chapter} 章的梗概改成：${text}`]);
     }
     case "importance": {
       const ref = request.id ?? request.query;
