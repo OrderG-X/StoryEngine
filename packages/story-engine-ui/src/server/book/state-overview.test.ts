@@ -143,6 +143,12 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     // 作者翻到还没写的第 9 章：照最新定稿章（第 6 章）算，跟界面数的同一批（长篇实跑：界面说 5 条、AI 说 6 条）。
     const ahead = await buildStateOverview({ projectDir, chapter: 9 });
     expect(ahead.threads.cleanupItems.map((item) => item.title)).toEqual(["想了想"]);
+    // 只带作者标的分量（大伏笔 / 小线索），普通的不带；不再给按跨章数派生的「大 / 小」，免得对话 AI 当成作者标的。
+    const byTitle = new Map(overview.threads.keyOpenItems.map((item) => [item.title, item]));
+    expect(byTitle.get("铁箱里是什么")?.weight).toBe("major");
+    expect(byTitle.get("补发工钱")?.weight).toBe("minor");
+    expect(byTitle.get("先不管")).not.toHaveProperty("weight");
+    expect(JSON.stringify(overview.threads)).not.toContain("\"size\"");
     expect(overview.threads.cleanupVisibleUnresolvedCount).toBe(1);
     expect(overview.threads.cleanupVisibleUnresolvedCount)
       .toBeLessThanOrEqual(overview.threads.open + overview.threads.touched);

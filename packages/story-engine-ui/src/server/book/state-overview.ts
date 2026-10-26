@@ -102,8 +102,6 @@ export interface StateOverviewHookItem {
   readonly status: string;
   readonly lastTouchedChapter?: number;
   readonly risk?: "low" | "medium" | "high";
-  /** 热度读时派生：大伏笔 / 小线索。纯确定性、不写盘。 */
-  readonly size?: "major" | "minor";
   /** B5-2: 初次埋入章号（透传自 HookItem.firstSeenChapter）。读时投影，不写盘。 */
   readonly firstSeenChapter?: number;
   /** B5-2: 回收章号（status=resolved 时填；透传自 HookItem.resolvedAtChapter）。读时投影，不写盘。 */
@@ -119,8 +117,8 @@ export interface StateOverviewThreadItem {
   readonly cleanupCandidateClass?: string;
   /** 被折叠进本条的近重复数量（展示层「+N 条相关」）。未折叠时缺省（undefined）。 */
   readonly relatedCount?: number;
-  /** 热度读时派生：大伏笔 / 小线索。纯确定性、不写盘。 */
-  readonly size?: "major" | "minor";
+  /** 作者标的分量：major=大伏笔、minor=小线索；普通的不带。 */
+  readonly weight?: "major" | "minor";
   /** B5-2: 初次出现章号（透传自 NarrativeThread.firstSeenChapter）。读时投影，不写盘。 */
   readonly firstSeenChapter?: number;
 }
@@ -352,27 +350,6 @@ export function clusterNearDuplicates<T extends { readonly id: string; readonly 
   return clusters;
 }
 
-/**
- * 按「跨章数 + 提及次数 + 牵连角色数」确定性派生伏笔/线索的大小级别。
- * 纯读时计算，不写盘，不调 LLM，题材中立。
- *
- * weight = (span >= 10 ? 2 : 0) + (evidenceCount >= 3 ? 1 : 0) + (relatedCharacterCount >= 2 ? 1 : 0)
- * weight >= 2 → "major"，否则 "minor"
- */
-export function deriveSize(input: {
-  firstSeenChapter?: number;
-  lastTouchedChapter?: number;
-  evidenceCount: number;
-  relatedCharacterCount: number;
-}): "major" | "minor" {
-  const span = (input.lastTouchedChapter ?? 0) - (input.firstSeenChapter ?? 0);
-  const weight =
-    (span >= 10 ? 2 : 0) +
-    (input.evidenceCount >= 3 ? 1 : 0) +
-    (input.relatedCharacterCount >= 2 ? 1 : 0);
-  return weight >= 2 ? "major" : "minor";
-}
-
 function toHookOverview(hook: HookItem): StateOverviewHookItem {
   return {
     id: hook.id,
@@ -380,12 +357,6 @@ function toHookOverview(hook: HookItem): StateOverviewHookItem {
     status: hook.status,
     ...(hook.lastTouchedChapter !== undefined ? { lastTouchedChapter: hook.lastTouchedChapter } : {}),
     risk: hookRisk(hook),
-    size: deriveSize({
-      firstSeenChapter: hook.firstSeenChapter,
-      lastTouchedChapter: hook.lastTouchedChapter,
-      evidenceCount: hook.evidence?.length ?? 0,
-      relatedCharacterCount: hook.relatedCharacters?.length ?? 0,
-    }),
     ...(hook.firstSeenChapter !== undefined ? { firstSeenChapter: hook.firstSeenChapter } : {}),
     ...(hook.resolvedAtChapter !== undefined ? { resolvedAtChapter: hook.resolvedAtChapter } : {}),
   };
@@ -410,12 +381,8 @@ function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: strin
     lastTouchedChapter: thread.lastTouchedChapter,
     ...(cleanupCandidateClass && cleanupCandidateClass !== "none" ? { cleanupCandidateClass } : {}),
     ...(relatedCount !== undefined && relatedCount > 0 ? { relatedCount } : {}),
-    size: deriveSize({
-      firstSeenChapter: thread.firstSeenChapter,
-      lastTouchedChapter: thread.lastTouchedChapter,
-      evidenceCount: thread.evidence?.length ?? 0,
-      relatedCharacterCount: thread.relatedCharacters?.length ?? 0,
-    }),
+    // 只给作者标的分量。原来给按跨章数派生的「大 / 小」，对话 AI 当成作者标的，跟作者说「账上标的是小线索」（长篇实跑）。
+    ...(thread.weight === "major" || thread.weight === "minor" ? { weight: thread.weight } : {}),
     firstSeenChapter: thread.firstSeenChapter,
   };
 }
