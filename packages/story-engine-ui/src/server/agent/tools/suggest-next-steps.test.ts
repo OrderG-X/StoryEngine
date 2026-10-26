@@ -11,6 +11,12 @@ describe("suggestNextStepsTool", () => {
     });
   });
 
+  it("给了选项、漏了问句：用中性问句补上，照样出卡", async () => {
+    const result = await suggestNextStepsTool.execute?.({ choices: ["预览定稿", "再核一遍"] } as never, {} as never);
+
+    expect(result).toMatchObject({ ok: true, question: "接下来？", choices: [{ label: "预览定稿" }, { label: "再核一遍" }] });
+  });
+
   it("正常输入原样回传给前端渲染下一步卡片", async () => {
     const result = await suggestNextStepsTool.execute?.(
       {

@@ -29,6 +29,7 @@ const choiceInputSchema = z.union([
 ]);
 
 const MAX_CHOICES = 4;
+const DEFAULT_QUESTION = "接下来？";
 
 const inputSchema = z.object({
   question: z.string().trim().optional().describe("一句话问用户接下来想怎么走（如『这章定稿了，接下来？』）。"),
@@ -75,8 +76,9 @@ export const suggestNextStepsTool = createTool({
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>) => {
-    const question = input.question?.trim();
     const choices = normalizeChoices(input.choices ?? []);
+    // 模型无关：给了选项、漏了问句，用中性问句补上，别整步拒掉。
+    const question = input.question?.trim() || (choices.length > 0 ? DEFAULT_QUESTION : undefined);
 
     if (!question || choices.length === 0) {
       return {
