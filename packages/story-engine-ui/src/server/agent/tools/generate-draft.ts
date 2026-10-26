@@ -421,7 +421,7 @@ export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
     "为某章写一版正文进工作稿（未定稿）。一次调用里完成：先拟章纲、按章纲翻前文写，字数不够接着写，写完自动核账，检出机器腔默认自动去味一轮。" +
-    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」。" +
+    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」；核账卡回合结束自动出，不用再调 check_continuity，更别和本工具并排调（那时还没正文）。" +
     "summary 里的「首稿核对」漏写、「去味后新漏」、字数不够都要如实转达。引擎拒稿会 ok:false，如实说没写成。章纲见 chapterPlan，转达时一两句话说这章写了什么。",
   inputSchema,
   outputSchema,

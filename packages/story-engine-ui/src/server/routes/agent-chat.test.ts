@@ -136,6 +136,17 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
       ...toolChunks("generate_draft", { ok: false, chapter: 5, qualityPipeline: { continuity: { checked: true } } }),
     ]);
     expect(notChecked.result.draftCheckedChapters).toEqual([]);
+    // 长篇连写：AI 把核账和出稿并排调，核账先回来（还没正文、没核成），出稿后没再核 → 照样补卡
+    const checkedTooEarly = await run([
+      ...toolChunks("check_continuity", { ok: false, chapter: 34, summary: "第 34 章还没有正文，没法核账。" }),
+      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
+    ]);
+    expect(checkedTooEarly.result.draftCheckedChapters).toEqual([34]);
+    const checkedOldDraft = await run([
+      ...toolChunks("check_continuity", { ok: true, chapter: 34, summary: "核过了。" }),
+      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
+    ]);
+    expect(checkedOldDraft.result.draftCheckedChapters).toEqual([34]);
   });
 
   it("P11：补核账卡只用核账记忆——有就按核账工具同款事件发，没有就不发", async () => {

@@ -465,13 +465,19 @@ export async function runAgentTurn(args: {
   return { finishReason, draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)) };
 }
 
-/** 记下这轮哪章是「出稿时核过账」、哪章 AI 自己调过核账（只看工具名和结构化字段）。 */
+/**
+ * 记下这轮哪章是「出稿时核过账」、哪章出稿后 AI 自己核成了（只看工具名和结构化字段）。
+ * AI 自己的核账没核成、或核在出稿之前（长篇连写：和出稿并排调，那会儿还没正文），都不算，照样补卡。
+ */
 function noteCheckedChapter(toolName: unknown, output: unknown, draftChecked: Set<number>, toolChecked: Set<number>): void {
   if (typeof output !== "object" || output === null) return;
   const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } } };
   if (typeof record.chapter !== "number") return;
-  if (toolName === "check_continuity") toolChecked.add(record.chapter);
-  if (toolName === "generate_draft" && record.ok === true && record.qualityPipeline?.continuity?.checked === true) draftChecked.add(record.chapter);
+  if (toolName === "check_continuity" && record.ok !== false) toolChecked.add(record.chapter);
+  if (toolName === "generate_draft" && record.ok === true && record.qualityPipeline?.continuity?.checked === true) {
+    draftChecked.add(record.chapter);
+    toolChecked.delete(record.chapter);
+  }
 }
 
 /**
