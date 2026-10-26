@@ -23,6 +23,7 @@ import {
   RULE_LIST_MAX,
   RULE_LISTS,
   RULE_SCALARS,
+  SKIPPED_MAX,
   type Card,
   type CardAuthor,
   type CardField,
@@ -71,6 +72,9 @@ export const CardOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("canon.add"), text: z.string().trim().min(1).max(CANON_TEXT_MAX) }),
   /** 改一条定论（按编号或原文认）；空串 = 删掉。 */
   z.object({ op: z.literal("canon.set"), canon: z.string().trim().min(1).max(CANON_TEXT_MAX), text: z.string().trim().max(CANON_TEXT_MAX) }),
+  /** 「还没建卡」里这个名字不用建卡（只有作者能说）；unskip 放回去。 */
+  z.object({ op: z.literal("uncarded.skip"), name }),
+  z.object({ op: z.literal("uncarded.unskip"), name }),
 ]);
 export type CardOp = z.infer<typeof CardOp>;
 
@@ -165,7 +169,9 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
         fields.push({ label: field.label, value: field.value, by: context.by, at: context.at });
       }
       const card: Card = { id: nextId(file.cards.map((item) => item.id), "k-"), kind: op.kind, name: op.name, aliases, fields, by: context.by, at: context.at };
-      let next: SettingCardsFile = { ...file, cards: [...file.cards, card] };
+      // 说过不用建卡、后来又建了：从不用建卡里拿掉。
+      const skipped = file.skipped.filter((item) => !same(item, op.name) && !aliases.some((alias) => same(alias, item)));
+      let next: SettingCardsFile = { ...file, cards: [...file.cards, card], skipped };
       if (op.protagonist) {
         const step = applyCardOp(next, { op: "card.protagonist", card: card.id }, context);
         if (!step.ok) return step;
@@ -383,6 +389,19 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
         at: context.at,
       };
       return { ok: true, file: { ...file, rules: { ...file.rules, exemplars: [...exemplars, exemplar] } }, line: "加了一段文风样本" };
+    }
+    case "uncarded.skip": {
+      if (ai) return needsAuthor("建不建卡要你自己定");
+      const card = findCard(file, op.name);
+      if (card) return invalid(`${quoted(op.name)}已经有卡了（${KIND_LABELS[card.kind]}卡${quoted(card.name)}）`);
+      if (file.skipped.some((item) => same(item, op.name))) return { ok: true, file };
+      if (file.skipped.length >= SKIPPED_MAX) return invalid(`不用建卡的最多记 ${SKIPPED_MAX} 个`);
+      return { ok: true, file: { ...file, skipped: [...file.skipped, op.name] }, line: `${quoted(op.name)}不用建卡` };
+    }
+    case "uncarded.unskip": {
+      if (ai) return needsAuthor("建不建卡要你自己定");
+      if (!file.skipped.some((item) => same(item, op.name))) return { ok: true, file };
+      return { ok: true, file: { ...file, skipped: file.skipped.filter((item) => !same(item, op.name)) }, line: `${quoted(op.name)}放回「还没建卡」` };
     }
     case "canon.add": {
       if (ai) return needsAuthor("定论要你自己定");

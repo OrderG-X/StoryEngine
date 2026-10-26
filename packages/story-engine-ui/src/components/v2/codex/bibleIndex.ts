@@ -103,6 +103,7 @@ export function bibleNavCounts(bible: BibleView | null): Partial<Record<BibleCat
     relations: bible.relations.length,
     items: bible.items.length,
     places: bible.places.length,
-    uncarded: bible.uncarded.length,
+    // 作者说过不用建卡的不算。
+    uncarded: bible.uncarded.filter((entry) => !entry.skipped).length,
   };
 }

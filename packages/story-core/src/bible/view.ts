@@ -48,6 +48,8 @@ export interface UncardedEntry {
   readonly aliases: readonly string[];
   /** 出场人物（一定是人）；false = 账里的别的主体（不知道是什么）。 */
   readonly character: boolean;
+  /** 作者说过不用建卡：不列进待办、不提醒；写稿、在场检测照样用账里记的。 */
+  readonly skipped?: true;
   readonly appearances?: BibleAppearances;
   readonly now: readonly BibleFact[];
   readonly fixed: readonly BibleFact[];
@@ -184,13 +186,15 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
     return first(a) - first(b);
   });
 
+  const skippedKeys = new Set(cards.skipped.map(nameKey));
+  const skipped = (names: readonly string[]): { skipped?: true } => (names.some((item) => skippedKeys.has(nameKey(item))) ? { skipped: true } : {});
   const uncarded: UncardedEntry[] = [];
   for (const member of projection.cast) {
     if (usedCast.has(member.key)) continue;
     const subject = [member.key, ...member.aliases.map(nameKey)].map((key) => subjectByKey.get(key)).find((item) => item !== undefined);
     if (subject) usedSubjects.add(subject.key);
     const appearances = appearancesOf(member);
-    uncarded.push({ name: member.name, aliases: member.aliases, character: true, ...(appearances ? { appearances } : {}), ...factsOf(subject, facts) });
+    uncarded.push({ name: member.name, aliases: member.aliases, character: true, ...skipped([member.name, ...member.aliases]), ...(appearances ? { appearances } : {}), ...factsOf(subject, facts) });
   }
   uncarded.sort((a, b) => (b.appearances?.chapters.length ?? 0) - (a.appearances?.chapters.length ?? 0));
   const others: UncardedEntry[] = [];
@@ -198,7 +202,7 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
     if (usedSubjects.has(subject.key)) continue;
     const found = factsOf(subject, facts);
     if (found.now.length + found.fixed.length === 0) continue;
-    others.push({ name: subject.name, aliases: [], character: false, ...found });
+    others.push({ name: subject.name, aliases: [], character: false, ...skipped([subject.name]), ...found });
   }
   others.sort((a, b) => b.now.length + b.fixed.length - (a.now.length + a.fixed.length));
 

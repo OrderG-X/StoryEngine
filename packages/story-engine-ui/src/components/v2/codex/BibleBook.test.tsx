@@ -206,6 +206,29 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     await waitFor(() => expect(lastOps()).toEqual([{ op: "card.create", kind: "place", name: "旧邮局" }]));
   });
 
+  it("还没建卡：作者说「不用建卡」的收到最底下一行，点开能放回；人物页和左边的数都不算它", async () => {
+    renderBook("uncarded");
+    const row = screen.getByRole("button", { name: /旧邮局/u }).closest("article") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "不用建卡" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "uncarded.skip", name: "旧邮局" }]));
+    cleanup();
+    const skippedBible = bibleView({
+      uncarded: [
+        { name: "老周", aliases: ["周叔"], character: true, skipped: true, appearances: { chapters: [2], first: 2, last: 2, viewpointChapters: 0 }, now: [], fixed: [] },
+        { name: "旧邮局", aliases: [], character: false, now: [], fixed: [] },
+      ],
+    });
+    renderBook("uncarded", { bible: skippedBible });
+    expect(screen.queryByRole("button", { name: "建人物卡" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "不用建卡的 1 个" }));
+    fireEvent.click(screen.getByRole("button", { name: "放回" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "uncarded.unskip", name: "老周" }]));
+    expect(bibleNavCounts(skippedBible).uncarded).toBe(1);
+    cleanup();
+    renderBook("chars", { bible: skippedBible });
+    expect(screen.queryByRole("button", { name: /没建卡/u })).toBeNull();
+  });
+
   it("关系：改一句、认下 AI 记的、加一条新的", async () => {
     renderBook("relations");
     fireEvent.click(screen.getByRole("button", { name: "认下" }));

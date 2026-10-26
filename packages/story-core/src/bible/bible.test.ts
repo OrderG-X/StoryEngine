@@ -58,6 +58,21 @@ describe("改设定卡（ops）", () => {
     expect(applyCardOps(file, [{ op: "field.accept", card: "许微" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
   });
 
+  // 长篇实跑第 39 章：「还没建卡」攒到 61 条（车队、字条、老汉……），作者没法说「这个不用建」。
+  it("不用建卡：只有作者能说；已有卡的不收；放回去；后来建了卡就从里面拿掉", () => {
+    let file = apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "沈砚" }]);
+    const skipped = applyCardOps(file, [{ op: "uncarded.skip", name: "车队" }, { op: "uncarded.skip", name: "车队" }], { by: "author", at: AT });
+    expect(skipped.ok && skipped.lines).toEqual(["「车队」不用建卡"]);
+    file = skipped.ok ? skipped.file : file;
+    expect(file.skipped).toEqual(["车队"]);
+    expect(applyCardOps(file, [{ op: "uncarded.skip", name: "老汉" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
+    expect(applyCardOps(file, [{ op: "uncarded.skip", name: "沈砚" }], { by: "author", at: AT })).toMatchObject({ ok: false, code: "invalid" });
+    const back = applyCardOps(file, [{ op: "uncarded.unskip", name: "车队" }], { by: "author", at: AT });
+    expect(back.ok && back.file.skipped).toEqual([]);
+    expect(back.ok && back.lines).toEqual(["「车队」放回「还没建卡」"]);
+    expect(apply(file, [{ op: "card.create", kind: "lore", name: "押镖队伍", aliases: ["车队"] }]).skipped).toEqual([]);
+  });
+
   it("作者认下 AI 补的：变成作者的，AI 以后就改不了", () => {
     let file = apply(emptySettingCards(), [{ op: "card.create", kind: "place", name: "三号仓", fields: [{ label: "样子", value: "铁皮库房" }] }], "ai");
     file = apply(file, [{ op: "field.accept", card: "三号仓" }]);
@@ -187,6 +202,11 @@ describe("设定视图", () => {
     const view = bibleView(projection, apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "许微" }]));
     expect(view.uncarded.map((item) => [item.name, item.character])).toEqual([["孟庆山", true], ["韩德胜", true], ["铜钥匙", false]]);
     expect(view.uncarded[0]!.aliases).toEqual(["孟叔"]);
+  });
+
+  it("作者说不用建卡的：照样在「还没建卡」里（写稿、在场检测还要用账里记的），只是标上不用建", () => {
+    const view = bibleView(projection, apply(emptySettingCards(), [{ op: "uncarded.skip", name: "孟叔" }, { op: "uncarded.skip", name: "铜钥匙" }]));
+    expect(view.uncarded.map((item) => [item.name, item.skipped === true])).toEqual([["许微", false], ["孟庆山", true], ["韩德胜", false], ["铜钥匙", true]]);
   });
 
   // 长篇实跑：「刀疤军官」改名「韩照」、旧名留作别名，设定本里韩照只算第 20、22 章，「刀疤军官」还单列在账里记的。

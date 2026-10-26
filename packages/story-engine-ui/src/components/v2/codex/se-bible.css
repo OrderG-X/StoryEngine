@@ -426,6 +426,10 @@
   .se-bk-alias.is-ledger{padding-right:8px;border-style:dashed;color:var(--muted);cursor:pointer;}
   .se-bk-alias.is-ledger:hover:not(:disabled){color:var(--text);border-color:var(--accent-line);}
   .se-bk-make{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:auto;padding:0 14px 14px;}
+  .se-bk-make .se-bk-skip{margin-left:auto;color:var(--faint);}
+  .se-bk-skipped{margin-top:18px;}
+  .se-bk-skipped ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px 14px;}
+  .se-bk-skipped li{display:flex;align-items:center;gap:2px;font-size:13px;color:var(--muted);}
   .se-bk-card.is-open .se-bk-make{padding:0 20px 4px;}
 
   /* 标签 / 内容：小格子；内容长的占满一行，AI 补的虚线框 */

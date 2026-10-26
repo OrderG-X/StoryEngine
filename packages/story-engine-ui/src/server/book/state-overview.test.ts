@@ -92,6 +92,12 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     ]);
     expect(overview.setting.cards.characters).toBe(2);
     expect(overview.setting.uncarded).toBe(1);
+
+    // 作者说过不用建卡：人物名单照列（写稿要用），待建的数不算它。
+    await writeCards(projectDir, [{ op: "uncarded.skip", name: "老周" }]);
+    const after = await buildStateOverview({ projectDir, chapter: 2 });
+    expect(after.characters.knownCharacters).toContainEqual({ name: "周守义", carded: false, chapterCount: 2, lastSeenChapter: 2 });
+    expect(after.setting.uncarded).toBe(0);
   });
 
   it("作者没填题材、一句话、主角：概况就空着，不编占位", async () => {

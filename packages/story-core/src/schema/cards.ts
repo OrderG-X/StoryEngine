@@ -24,6 +24,7 @@ export const EXEMPLAR_TEXT_MAX = 3_000;
 export const EXEMPLARS_MAX = 12;
 export const CANON_TEXT_MAX = 400;
 export const CANON_MAX = 200;
+export const SKIPPED_MAX = 500;
 
 const text = z.string().trim().min(1);
 
@@ -105,6 +106,8 @@ export const SettingCardsFile = z.object({
   relations: z.array(Relation),
   /** 定论（P12 起；老文件没有这一栏，读进来是空的）。 */
   canon: z.array(CanonItem).max(CANON_MAX).default([]),
+  /** 作者说「不用建卡」的名字（账里记着的泛称、群体、物件……）：不再列进「还没建卡」、不再提醒；老文件没有这一栏。 */
+  skipped: z.array(text.max(CARD_NAME_MAX)).max(SKIPPED_MAX).default([]),
 });
 export type SettingCardsFile = z.infer<typeof SettingCardsFile>;
 
@@ -113,5 +116,5 @@ export function emptyWritingRules(): WritingRules {
 }
 
 export function emptySettingCards(): SettingCardsFile {
-  return { schema: SETTING_CARDS_SCHEMA, story: { fields: [] }, rules: emptyWritingRules(), cards: [], relations: [], canon: [] };
+  return { schema: SETTING_CARDS_SCHEMA, story: { fields: [] }, rules: emptyWritingRules(), cards: [], relations: [], canon: [], skipped: [] };
 }

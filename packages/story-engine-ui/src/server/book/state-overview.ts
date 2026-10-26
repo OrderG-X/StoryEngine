@@ -322,7 +322,8 @@ function settingOf(bible: BibleView | undefined): StateOverviewSetting {
     ...(bible.rules.targetWords ? { targetChapterWords: bible.rules.targetWords.value } : {}),
     ...(bible.rules.minWords ? { minChapterWords: bible.rules.minWords.value } : {}),
     cards: { characters: bible.characters.length, places: bible.places.length, items: bible.items.length, lore: bible.lore.length },
-    uncarded: bible.uncarded.length,
+    // 作者说过不用建卡的不算待建。
+    uncarded: bible.uncarded.filter((entry) => !entry.skipped).length,
     storyFields: bible.story.length,
   };
 }

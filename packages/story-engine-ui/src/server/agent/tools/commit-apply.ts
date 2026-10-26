@@ -165,6 +165,8 @@ export async function applyCommitToolLogic(input: {
   const view = after.chapters.find((item) => item.chapter === chapter);
   const cards = await readCardsOrLegacy(projectDir);
   const known = new Set(cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]).map(nameKey));
+  // 作者说过不用建卡的，也不再点名。
+  for (const name of cards.skipped) known.add(nameKey(name));
   const uncarded = after.cast.filter((member) => member.chapters.includes(chapter) && !known.has(member.key) && !member.aliases.some((alias) => known.has(nameKey(alias))));
   const newCharacters = uncarded.filter((member) => member.chapters[0] === chapter).map((member) => member.name);
   // 没建卡、这章正好第 N 次出场的：点一次名（账里算，不另记备忘；建了卡自然不再提）。

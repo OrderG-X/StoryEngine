@@ -468,7 +468,7 @@ function CardsPage({ ctx, kind, entries, nested }: {
     if (!q) return entries;
     return entries.filter((entry) => [entry.card.name, ...entry.card.aliases, ...entry.ledgerAliases].some((name) => name.toLowerCase().includes(q)));
   }, [entries, query]);
-  const uncarded = kind === "character" ? ctx.bible.uncarded.filter((entry) => entry.character).length : 0;
+  const uncarded = kind === "character" ? ctx.bible.uncarded.filter((entry) => entry.character && !entry.skipped).length : 0;
   const pending = entries.filter(hasAi).length;
   const openName = (name: string) => {
     if (entries.some((entry) => entry.card.name === name)) setOpen(name);
@@ -709,7 +709,10 @@ function RelationsPage({ ctx }: { readonly ctx: PageContext }) {
 const KIND_ORDER: readonly CardKind[] = ["character", "place", "item", "lore"];
 
 function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
-  const entries = ctx.bible.uncarded;
+  // 作者说过不用建卡的收在最底下一行（泛称、群体、物件……不用一条条看着）。
+  const entries = useMemo(() => ctx.bible.uncarded.filter((entry) => !entry.skipped), [ctx.bible.uncarded]);
+  const skipped = useMemo(() => ctx.bible.uncarded.filter((entry) => entry.skipped), [ctx.bible.uncarded]);
+  const [showSkipped, setShowSkipped] = useState(false);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const shown = useMemo(() => {
@@ -729,7 +732,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
           <input className="se-bk-filter" type="search" value={query} placeholder="找…" aria-label="找还没建卡的" onChange={(event) => setQuery(event.target.value)} />
         </div>
       ) : null}
-      {entries.length === 0 ? <p className="se-bk-blank is-done">账里记下的都有卡了，没有落下的。</p> : null}
+      {entries.length === 0 ? <p className="se-bk-blank is-done">{skipped.length > 0 ? "要建的都建了。" : "账里记下的都有卡了，没有落下的。"}</p> : null}
       {shown.length > 0 ? (
         <ul className="se-bk-grid">
           {shown.map((entry) => (
@@ -755,6 +758,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
                       ))}
                     </>
                   )}
+                  <button type="button" className="se-bk-link se-bk-skip" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "uncarded.skip", name: entry.name }])}>不用建卡</button>
                 </div>
                 {open === entry.name ? (
                   <div className="se-bk-card-body">
@@ -765,6 +769,23 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div className="se-bk-skipped">
+          <button type="button" className="se-bk-link" aria-expanded={showSkipped} onClick={() => setShowSkipped(!showSkipped)}>
+            不用建卡的 {skipped.length} 个{showSkipped ? "（收起）" : ""}
+          </button>
+          {showSkipped ? (
+            <ul>
+              {skipped.map((entry) => (
+                <li key={entry.name}>
+                  <span>{entry.name}</span>
+                  <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "uncarded.unskip", name: entry.name }])}>放回</button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
     </>
   );
