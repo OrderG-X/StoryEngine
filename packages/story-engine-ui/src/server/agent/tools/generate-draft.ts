@@ -142,7 +142,7 @@ const inputSchema = z.object({
   selectedCharacters: coerceStringArray(z.array(z.string()).optional().describe("一般不填。作者点名这章要写谁时，填人物名字。")),
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
-    "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。",
+    "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。和方向一起交章纲员，同样不是原话会被退回。",
   )),
   maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
@@ -397,6 +397,13 @@ export function buildContinueBlockedOutput(
   };
 }
 
+/** 交章纲员和写手的作者方向：方向原话 + 方向里没有的要点，一条一行；都没有就是 undefined（章纲按故事现状往下推）。 */
+export function authorDirectionOf(chapterGoal: string | undefined, mustHitBeats: readonly string[] | undefined): string | undefined {
+  const goal = chapterGoal?.trim() ?? "";
+  const beats = (mustHitBeats ?? []).map((beat) => beat.trim()).filter((beat) => beat && !goal.includes(beat));
+  return [goal, ...beats].filter(Boolean).join("\n") || undefined;
+}
+
 /** chapterGoal 不是作者原话：退回让 AI 原样抄或不填（在建快照、调模型之前，不花额度）。纯逻辑、可测。 */
 export function buildGoalNotQuotedOutput(
   chapter: number,
@@ -449,9 +456,11 @@ export const generateDraftTool = createTool({
     });
     // 作者档的两道结构护栏（重构 P4，替代按作者原话猜意图的门）。按钮点出来的出稿带作者确认标记，不受这两道约束。
     const authorConfirmed = isUserConfirmedTool(context, "generate_draft");
-    const chapterGoal = input.chapterGoal?.trim() || undefined;
+    // 作者要点（mustHitBeats）也是作者原话，和方向一起交章纲员：只交写手的话，章纲员自拟一份纲、写手照纲写，
+    // 要点被纲盖掉（长篇实跑第 35 章：作者五条要点只落了一条半，AI 把作者的话全放进了要点、方向没填）。
+    const chapterGoal = authorDirectionOf(input.chapterGoal, input.mustHitBeats);
     if (!authorConfirmed) {
-      // A1 找原句：chapterGoal 是「作者给的方向」，必须逐句出自作者在这段对话里说过的话（不是对话通道调的就没得核，照用）。
+      // A1 找原句：方向和要点是「作者给的」，必须逐句出自作者在这段对话里说过的话（不是对话通道调的就没得核，照用）。
       const authorWords = readAuthorWordsFromContext(context);
       if (chapterGoal && authorWords) {
         const quote = checkAuthorQuote(chapterGoal, authorWords);

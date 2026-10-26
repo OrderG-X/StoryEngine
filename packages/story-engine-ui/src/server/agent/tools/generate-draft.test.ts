@@ -31,6 +31,7 @@ import {
   buildCandidateSummaryLine,
   buildDraftLengthInfo,
   buildDraftLengthWarning,
+  authorDirectionOf,
   buildGoalNotQuotedOutput,
   buildRewriteAwaitingAuthorOutput,
   buildSequencingBlockedOutput,
@@ -533,6 +534,13 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(committed.rewriteConfirm).toEqual({ chapter: 6 });
   });
 
+  it("authorDirectionOf：作者要点和方向一起交章纲员（方向里已有的不重复）；都没有 → undefined", () => {
+    expect(authorDirectionOf(undefined, ["门环上挂着一枚梅花铜牌", "明日午时，听雪楼，只许一人"])).toBe("门环上挂着一枚梅花铜牌\n明日午时，听雪楼，只许一人");
+    expect(authorDirectionOf("进城落脚。门环上挂着一枚梅花铜牌", ["门环上挂着一枚梅花铜牌", " ", "只许一人"])).toBe("进城落脚。门环上挂着一枚梅花铜牌\n只许一人");
+    expect(authorDirectionOf("  ", [])).toBeUndefined();
+    expect(authorDirectionOf(undefined, undefined)).toBeUndefined();
+  });
+
   it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
     const out = buildGoalNotQuotedOutput(3, ["并埋下伏笔"], {} as StateOverview);
     expect(out.ok).toBe(false);
@@ -685,6 +693,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       ) as { ok: boolean; blockedReason?: string };
       expect(paraphrased.ok).toBe(false);
       expect(paraphrased.blockedReason).toBe("chapter_goal_not_author_words");
+      expect(spy).not.toHaveBeenCalled();
+
+      // 要点也交章纲员，同样要是作者原话（长篇实跑第 35 章：方向没填、话全在要点里）。
+      const paraphrasedBeat = await execute(
+        { mustHitBeats: ["爷爷固定摆锤"] },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, authorWords) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; blockedReason?: string };
+      expect(paraphrasedBeat.blockedReason).toBe("chapter_goal_not_author_words");
       expect(spy).not.toHaveBeenCalled();
 
       const quoted = await execute(
