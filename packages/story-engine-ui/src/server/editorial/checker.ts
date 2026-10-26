@@ -215,7 +215,7 @@ export const callConfiguredBrainModel: BrainCallModel = (messages, options) => {
  *  R7.3 有设定本时多要三个字段：设定原句（settingQuote）＋两句各自和设定一致不一致（draftAgrees / earlierAgrees）。 */
 export function selfReviewTask(chapter: number, issues: readonly ContinuityIssueV2[], withSetting = false): string {
   return [
-    `上面是作者刚交的第 ${chapter} 章新稿，你刚才核完报了下面这些对不上的地方。逐条复核一遍：`,
+    `上面是作者刚交的第 ${chapter} 章新稿，你刚才核完报了下面这些对不上的地方（有的是上一稿报过的，作者改过稿，一律按现在这稿判）。逐条复核一遍：`,
     ...issues.map((issue, index) => [
       `【K${index + 1}】${issue.fixChapter && issue.fixChapter !== chapter ? `第 ${issue.fixChapter} 章` : "本章"}那句：${issue.quote}`,
       `  ${
@@ -534,7 +534,11 @@ export async function checkChapterByReader(input: {
   readonly earlier?: EarlierText;
   /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
   readonly variant?: ReaderCheckVariant;
+  /** 上一稿报过、两边原句都还在的问题：和这次三遍的候选一起进自复核，判 no 的去掉（作者改了别处把它修好了），
+   *  其余照带、把握沿用上一稿（不随这次的运气跳）。 */
+  readonly carryOver?: readonly ContinuityIssueV2[];
 }): Promise<ReaderCheckResult> {
+  const carryOver = input.carryOver ?? [];
   const variant = input.variant ?? {};
   const role = checkerRoleFor(variant.structuredNotes);
   let window: BrainMessage[];
@@ -576,8 +580,8 @@ export async function checkChapterByReader(input: {
       foldedChapters = ready.foldedChapters;
     }
   } catch (error) {
-    // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成。
-    return { issues: [], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
+    // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
+    return { issues: [...carryOver], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   // R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则拼一份「设定」对照材料，三遍和自复核都带上。
@@ -652,8 +656,11 @@ export async function checkChapterByReader(input: {
     if (result.status === "fulfilled") passes.push(result.value);
     else failures.push(`${passPlans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
-  let issues = dropMisdirectedBySetting(mergePasses(passes));
+  // 上一稿带过来的排最前：同一句这次又报了，留上一稿那条（把握沿用）。
+  let issues = dropMisdirectedBySetting(mergePasses([carryOver, ...passes]));
+  const carried = new Set<ContinuityIssueV2>(issues.filter((issue) => carryOver.includes(issue)));
   // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
+  // 上一稿带过来的也在里头：原句没动、错却可能在别处改好了（长篇实跑：作者把地点挪对了，报的那句台词没动，「确定」一直带着）。
   if (variant.selfReview && issues.length > 0) {
     try {
       const text = await withStep("核账员自复核", () => input.callModel(
@@ -671,7 +678,7 @@ export async function checkChapterByReader(input: {
       issues = issues
         .map((issue, index): ContinuityIssueV2 => {
           const ruling = rulingOf(index);
-          if (!ruling) return issue;
+          if (!ruling || carried.has(issue)) return issue;
           const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
           if (foundation && !issue.againstSetting && ruling.settingQuote) {
             const settingQuote = cleanSettingQuote(foundation, ruling.settingQuote);

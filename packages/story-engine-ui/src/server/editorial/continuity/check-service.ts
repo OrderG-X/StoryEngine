@@ -127,7 +127,7 @@ export interface ChapterCheckOptions {
 
 /**
  * 核账：账本数字对账（确定性层）+ 核账员三遍，合并去重（账本的排前面）。
- * 上次的问题两边原句还在的照带，把握沿用上次；不再单独复核（核账员自己给把握，A 自复核在它那轮里）。
+ * 上次的问题两边原句还在的交给核账员，和这次的候选一起进自复核：判 no 的去掉（错在别处改好了），其余照带、把握沿用上次。
  */
 async function checkByReader(input: {
   readonly projectDir: string;
@@ -146,6 +146,7 @@ async function checkByReader(input: {
     maxCatchUp: READER_MAX_CATCH_UP,
     earlier: input.earlier,
     variant: DEFAULT_READER_VARIANT,
+    carryOver: input.carryOver,
   });
   const ledger = await withStep("账本对账", () => ledgerNumberIssues({
     projectDir: input.projectDir,
@@ -156,7 +157,7 @@ async function checkByReader(input: {
   // R7.3 相对日子换算（确定性，不调模型）：两句里都有「今天 / 明天 / 后天 / 大后天 / 昨天 / 前天」时按时间线的
   // 故事日换算成绝对第几天再比——同一天不报；换算不了（缺可靠故事日）最多「可能」。时间线读不了当没有，只降档不删条。
   const timeline = await readStoryTimeline(input.projectDir).then((read) => read.timeline).catch(() => undefined);
-  const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...input.carryOver, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
+  const issues = settleMirroredIssues(applyRelativeDayAlignment(mergeContinuityIssues(snapIssueQuotes([...ledger.issues, ...reader.issues], input.chapter, input.body, input.earlier)), input.chapter, timeline)
     .map((issue) => ({ ...issue, confidence: issue.confidence ?? "maybe" as const })), input.chapter)
     .sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === "sure" ? -1 : 1));
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
