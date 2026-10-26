@@ -490,3 +490,43 @@ describe("revise_draft 并行两处精确替换", () => {
     expect(onDisk).toContain("槐树巷五号");
   });
 });
+
+// 2026-10-27 桌面包走查：作者说「把第一句改成：……」，模型带了 replacementText 没填 revisionGoal，
+// 第一次调用挂在参数校验上，绕一圈读稿再调才改成。
+describe("revise_draft 修订目标缺省", () => {
+  it("给了精确替换文本、没填修订目标 → 参数照收、原样替换", async () => {
+    const parsed = await reviseDraftTool.inputSchema?.["~standard"].validate({ targetText: "出南门第三天", replacementText: "出了南门" });
+    expect(parsed).toBeDefined();
+    expect(parsed?.issues).toBeUndefined();
+    const projectDir = await makeProject("缺目标精确替换");
+    await writeDraft(projectDir, 51, "# 第51章\n\n出南门第三天，车到了白鹭渡。小满跳下车。\n");
+    snapshotBeforeDraftOverwrite.mockResolvedValue(undefined);
+    resolveConfiguredChatModel.mockResolvedValue({ profile: { temperature: 0.45, maxTokens: 1800 } });
+    const out = await executeRevise(
+      { chapter: 51, targetText: "出南门第三天，车到了白鹭渡。", replacementText: "出了南门，太阳落山的时候，车到了白鹭渡。" },
+      makeContext(projectDir, 51),
+    ) as { ok: boolean; applied: boolean };
+    expect(out.ok).toBe(true);
+    expect(out.applied).toBe(true);
+    const onDisk = await readFile(defaultDraftPath(projectDir, 51), "utf-8");
+    expect(onDisk).toContain("出了南门，太阳落山的时候，车到了白鹭渡。小满跳下车。");
+  });
+
+  it("要模型改写却没说往哪改 → 如实没改，不调模型", async () => {
+    const projectDir = await makeProject("缺目标改写");
+    await writeDraft(projectDir, 1, "# 第1章\n\n他推开门。\n");
+    let modelCalled = false;
+    const out = await runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "他推开门。",
+      revisionGoal: " ",
+      callModel: async () => { modelCalled = true; return MOCK_REVISION_JSON; },
+    });
+    expect(out.ok).toBe(false);
+    expect(out.applied).toBe(false);
+    expect(modelCalled).toBe(false);
+    expect(out.summary).toContain("没说这段要改成什么样");
+    expect(await readFile(defaultDraftPath(projectDir, 1), "utf-8")).toContain("他推开门。");
+  });
+});
