@@ -130,6 +130,13 @@ describe("记账员交回的账单", () => {
     expect(parsed?.drops).toEqual([]);
   });
 
+  it("重定稿：R 短号报成推进 / 收口也换成真编号交下去（定稿编排认得出是这章自己开的那条）", () => {
+    const parsed = parseKeeperOutput(JSON.stringify({
+      threads: [{ op: "advance", thread: "R1", note: "还没解开", quote: q }],
+    }), { ...handles, reopenHandles: new Map([["R1", "t1-1"]]) });
+    expect(parsed?.entries).toEqual([{ kind: "thread", review: "auto", op: "advance", thread: "t1-1", note: "还没解开", quote: q }]);
+  });
+
   it("章里换了天：daysInChapter 带上摘的换天原句；写 0 就不记、也不带原句", () => {
     const changed = parseKeeperOutput(JSON.stringify({ time: { basis: "judged", daysSincePrevious: 0, daysInChapter: 1, dayChangeQuote: "第二天早上", quote: "当晚" } }), handles);
     expect(changed?.entries[0]).toMatchObject({ kind: "time", daysInChapter: 1 });

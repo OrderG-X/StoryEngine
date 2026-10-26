@@ -29,6 +29,7 @@ import {
   type EntryInput,
   type LedgerEntry,
   type ReviewReason,
+  type ThreadInput,
   type TimeBasis,
   type TimeInput,
 } from "@actalk/story-core";
@@ -144,7 +145,15 @@ export interface CommitPreview {
     readonly timeOfDay?: string;
     /** 天数是估的（记账员没给时间），要作者确认或改。 */
     readonly needsConfirm: boolean;
+    /**
+     * 重定稿、记账员这次看的天数和上次定稿记的不一样（一样就没有）。
+     * kept：上次那条时间的原句还在正文里，照上次的记，other 是记账员这次看成的；
+     * 没 kept：那句改没了，按这次的记，other 是上次定稿记的。
+     */
+    readonly sinceLast?: { readonly kept: boolean; readonly otherDay: number; readonly otherDayEnd: number };
   };
+  /** 重定稿：这章上次开的、后文还接着的线索，这次没记上、上次的原句也没了（定稿后它们没了开头）。 */
+  readonly lostThreads?: readonly string[];
   readonly omittedThreads: number;
   readonly omittedFacts: number;
   /** 第一遍有原句对不上、请记账员重摘过一次（几条、救回几条）。 */
@@ -261,6 +270,90 @@ function previewDay(ledgers: readonly ChapterLedger[], chapter: number, entries:
   return after.chapters.find((view) => view.chapter === chapter);
 }
 
+type Accepted = ReturnType<typeof checkEntries>["accepted"];
+type Rejected = ReturnType<typeof checkEntries>["rejected"];
+
+/**
+ * 重定稿时这章上次开的线索别丢（作者长篇实跑 2026-10-27：第 5 章改错字重定稿，记账员把本章开的「刀疤军官为何放行」
+ * 报成了推进，核不上被拒；照这样定稿，它就没了开头，第 45 章的收口接不上）。
+ * 这次没记成本章开的：记账员这次还提到它（推进、收口）就按它这次说的记成开；没提、但后文接着它，上次那条原句还在就照上次的开；
+ * 原句也没了，如实告诉作者。
+ */
+function keepLastOpens(
+  ledgers: readonly ChapterLedger[],
+  chapter: number,
+  previous: readonly LedgerEntry[],
+  checked: { readonly accepted: Accepted; readonly rejected: Rejected },
+  text: string,
+  before: BookProjection,
+): { readonly accepted: Accepted; readonly rejected: Rejected; readonly lost: readonly string[] } {
+  const lastOpens = previous.flatMap((entry) => (entry.kind === "thread" && entry.op === "open" ? [entry] : []));
+  const covered = new Set<string>();
+  for (const { entry } of checked.accepted) {
+    if (entry.kind !== "thread" || entry.op !== "open") continue;
+    if (entry.thread) covered.add(entry.thread);
+    for (const last of lastOpens) if (nameKey(last.title ?? "") === nameKey(entry.title ?? "")) covered.add(last.thread);
+  }
+  const later = new Set(ledgers
+    .filter((ledger) => ledger.chapter > chapter)
+    .flatMap((ledger) => ledger.entries.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []))));
+  let nextIndex = Math.max(-1, ...checked.accepted.map((item) => item.index), ...checked.rejected.map((item) => item.index)) + 1;
+  const accepted = [...checked.accepted];
+  const folded = new Set<Rejected[number]>();
+  const lost: string[] = [];
+  for (const last of lastOpens) {
+    if (covered.has(last.thread)) continue;
+    const mentions = checked.rejected.filter((item) => item.entry.kind === "thread" && item.entry.op !== "open" && item.entry.thread === last.thread);
+    const title = last.title ?? last.note;
+    const candidates: EntryInput[] = [
+      ...mentions.flatMap((item) => (item.entry.kind === "thread"
+        ? [{ kind: "thread", review: "auto", op: "open", type: last.type ?? "question", title, note: item.entry.note, quote: item.entry.quote, thread: last.thread } satisfies ThreadInput]
+        : [])),
+      ...(mentions.length > 0 || later.has(last.thread) ? [withoutId(last)] : []),
+    ];
+    const reopened = candidates.map((entry) => checkEntries([entry], text, before).accepted[0]?.entry).find((entry) => entry !== undefined);
+    if (reopened) {
+      accepted.push({ index: nextIndex++, entry: reopened });
+      for (const item of mentions) folded.add(item);
+    } else if (later.has(last.thread)) {
+      lost.push(title);
+    }
+  }
+  return { accepted, rejected: checked.rejected.filter((item) => !folded.has(item)), lost };
+}
+
+function withoutId(entry: LedgerEntry): EntryInput {
+  const { id: _id, ...rest } = entry;
+  return rest as EntryInput;
+}
+
+/**
+ * 重定稿时天数照上次定稿的记（作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把第二天清早看成当天，
+ * 第 6～7 天成了第 5～6 天，后面 45 章跟着挪一天，清单上只露出这一章的天数）。
+ * 上次那条时间的原句还在正文里就照上次的；和记账员这次看的不一样时两边都给作者看，作者改天数照旧管用。
+ */
+function keepLastDay(
+  ledgers: readonly ChapterLedger[],
+  chapter: number,
+  previous: readonly LedgerEntry[],
+  accepted: Accepted,
+  text: string,
+  before: BookProjection,
+  textSha: string,
+): { readonly accepted: Accepted; readonly sinceLast: NonNullable<CommitPreview["time"]["sinceLast"]> } | undefined {
+  const last = previewDay(ledgers, chapter, previous.map(withoutId), textSha);
+  const now = previewDay(ledgers, chapter, accepted.map((item) => item.entry), textSha);
+  if (!last || !now || (last.day === now.day && last.dayEnd === now.dayEnd)) return undefined;
+  const lastTime = previous.find((entry) => entry.kind === "time");
+  const carried = lastTime ? checkEntries([withoutId(lastTime)], text, before).accepted[0]?.entry : undefined;
+  if (!carried) return { accepted, sinceLast: { kept: false, otherDay: last.day, otherDayEnd: last.dayEnd } };
+  const at = accepted.findIndex((item) => item.entry.kind === "time");
+  const next = at >= 0
+    ? accepted.map((item, index) => (index === at ? { index: item.index, entry: carried } : item))
+    : [...accepted, { index: Math.max(-1, ...accepted.map((item) => item.index)) + 1, entry: carried }];
+  return { accepted: next, sinceLast: { kept: true, otherDay: now.day, otherDayEnd: now.dayEnd } };
+}
+
 export interface PrepareInput {
   readonly bookDir: string;
   readonly chapter: number;
@@ -310,13 +403,19 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   const extra = { ...(keeper.cold ? { cold: keeper.cold } : {}), ...(keeper.waited ? { waited: keeper.waited } : {}) };
   if (!keeper.ok) return { ok: false, code: "keeper_failed", reason: keeper.reason, ...extra };
 
+  const textSha = sha256(input.text);
   const checked = checkEntries(keeper.parsed.entries, input.text, before);
+  const recommit = committed.includes(input.chapter);
+  const opens = recommit ? keepLastOpens(snapshot.ledgers, input.chapter, previous, checked, input.text, before) : undefined;
+  const kept = recommit ? keepLastDay(snapshot.ledgers, input.chapter, previous, opens?.accepted ?? checked.accepted, input.text, before, textSha) : undefined;
+  const accepted = kept?.accepted ?? opens?.accepted ?? checked.accepted;
+  const rejected = opens?.rejected ?? checked.rejected;
   // 重定稿：这章上次定稿时作者认过的出场人物不再当「第一次出场」问一遍（真跑：改两个错字重定稿，又问老郑、刀疤军官是谁）。
   const confirmedNames = previous.flatMap((entry) => (entry.kind === "presence" ? [entry.name] : []));
   const knownNames = [...(input.knownNames ?? []), ...confirmedNames];
-  const plan = classifyForReview(checked.accepted, before, { chapter: input.chapter, ...(knownNames.length > 0 ? { knownNames } : {}) });
+  const plan = classifyForReview(accepted, before, { chapter: input.chapter, ...(knownNames.length > 0 ? { knownNames } : {}) });
   // 清单序号 = 核过的条目里的下标。
-  const position = new Map(checked.accepted.map((item, index) => [item.index, index]));
+  const position = new Map(accepted.map((item, index) => [item.index, index]));
   const resolve = subjectResolver(before);
   const toItem = (item: ClassifiedEntry): CommitItem => ({
     index: position.get(item.index) ?? -1,
@@ -326,8 +425,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     reasons: reasonTexts(item, before, resolve),
     optIn: touchesHardFact(item, before),
   });
-  const entries = checked.accepted.map((item) => item.entry);
-  const textSha = sha256(input.text);
+  const entries = accepted.map((item) => item.entry);
   const day = previewDay(snapshot.ledgers, input.chapter, entries, textSha);
   const ticket: PreviewTicket = {
     id: randomBytes(8).toString("hex"),
@@ -343,11 +441,11 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     ok: true,
     ticket: ticket.id,
     chapter: input.chapter,
-    recommit: committed.includes(input.chapter),
+    recommit,
     review: plan.review.map(toItem),
     auto: plan.auto.map(toItem),
     notRecorded: [
-      ...checked.rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
+      ...rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
       ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),
     ],
     adjusted: keeper.parsed.adjusted.map((drop) => ({ code: "adjusted", label: dropLabel(drop), reason: drop.reason })),
@@ -357,8 +455,10 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
       basis: day?.dayBasis ?? "missing",
       ...(day?.weekday !== undefined ? { weekday: day.weekday } : {}),
       ...(day?.timeOfDay !== undefined ? { timeOfDay: day.timeOfDay } : {}),
-      needsConfirm: plan.timeMissing || day?.dayBasis === "missing" || day?.dayBasis === "estimated",
+      needsConfirm: plan.timeMissing || day?.dayBasis === "missing" || day?.dayBasis === "estimated" || kept?.sinceLast !== undefined,
+      ...(kept?.sinceLast ? { sinceLast: kept.sinceLast } : {}),
     },
+    ...(opens && opens.lost.length > 0 ? { lostThreads: opens.lost } : {}),
     omittedThreads: keeper.omittedThreads,
     omittedFacts: keeper.omittedFacts,
     ...(keeper.quoteRepair ? { quoteRepair: keeper.quoteRepair } : {}),

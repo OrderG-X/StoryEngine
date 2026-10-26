@@ -48,6 +48,18 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("除了天数，没有要你特别看的，下面这些自动记下。")).toBeTruthy();
   });
 
+  it("重定稿天数和上次不一样：天数那行说清两边；作者改了天数就不再说", () => {
+    const why = "记账员这次看成第 5 天到第 6 天，和上次定稿不一样；先照上次的记，不对就改天数";
+    render(<CommitSheet preview={preview({ ledgerChecklist: [
+      { id: "day", kind: "time", label: "这一章记为故事第 6 天到第 7 天（清晨到夜里）（照上次定稿）", reason: why, removable: false, editableDay: 6, editableDayEnd: 7, needsConfirm: true },
+      { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
+    ] })} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText(why)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
+    expect(screen.queryByText(why)).toBeNull();
+  });
+
   it("这本书头一回定稿：头上一句说定稿是干什么的；之后、只看的旧预览都不说", () => {
     const intro = /定稿就是把这章记进账/u;
     const { rerender } = render(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} firstCommit />);

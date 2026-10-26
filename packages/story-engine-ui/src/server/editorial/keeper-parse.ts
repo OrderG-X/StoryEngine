@@ -329,7 +329,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     const seen = new Set<string>();
     for (const handle of targets) {
       // 短号对不上：原样交下去，checkEntries 会以「前文没有这条线索」如实列出来。
-      const thread = handles.threadHandles.get(handle) ?? handle;
+      // R 短号（这一章上次开的）报成推进 / 收口：换成真编号交下去，定稿编排认得出是这章自己开的那条。
+      const thread = handles.threadHandles.get(handle) ?? handles.reopenHandles?.get(handle) ?? handle;
       if (seen.has(thread)) continue;
       seen.add(thread);
       entries.push({ kind: "thread", review: "auto", op, thread, note, quote: quote ?? "" } satisfies ThreadInput);

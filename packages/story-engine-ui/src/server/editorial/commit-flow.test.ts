@@ -162,6 +162,80 @@ describe("定稿编排", () => {
     expect(view.threads[0]).toMatchObject({ title: "钟停在三点十五的缘故", openedAt: 1, lastTouchedAt: 2 });
   });
 
+  // 作者长篇实跑 2026-10-27：第 5 章改错字重定稿，记账员把本章开的线索报成推进、被拒，定稿了第 45 章的收口就接不上。
+  it("重定稿别丢本章开的线索：报成推进的按开记、没提但后文接着的照上次开、原句也没了如实说", async () => {
+    await commitChapter1();
+    const tickets = memoryTicketStore();
+    const ch2 = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: CH2, tickets,
+      callModel: fakeModel({ threads: [{ op: "close", thread: "T1", note: "钟是被人故意拨停的", quote: "钟是被人故意拨停的" }] }),
+    }));
+    expect(await confirmChapterCommit({ bookDir: book, ticket: ch2.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+
+    const typo = `${CH1}\n\n风停了。`;
+    const asAdvance = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 1, text: typo, tickets,
+      callModel: fakeModel({ ...LEDGER1, threads: [{ op: "advance", thread: "R1", note: "钟停的缘故还没解开", quote: "钟为什么偏偏停在这个时刻" }] }),
+    }));
+    expect(asAdvance.notRecorded).toEqual([]);
+    expect([...asAdvance.review, ...asAdvance.auto].find((item) => item.kind === "thread")?.label).toContain("钟为什么停");
+    expect(asAdvance.lostThreads).toBeUndefined();
+    expect(await confirmChapterCommit({ bookDir: book, ticket: asAdvance.ticket, text: typo, tickets })).toMatchObject({ ok: true, result: { orphanedThreads: [] } });
+    expect((await projectBook(book)).threads).toEqual([expect.objectContaining({ title: "钟为什么停", openedAt: 1, status: "closed", closedAt: 2 })]);
+
+    const omitted = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 1, text: `${typo}\n\n钟楼外起了风。`, tickets,
+      callModel: fakeModel({ ...LEDGER1, threads: [] }),
+    }));
+    expect([...omitted.review, ...omitted.auto].some((item) => item.kind === "thread")).toBe(true);
+    expect(omitted.lostThreads).toBeUndefined();
+
+    const gone = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 1, text: typo.replace("钟为什么偏偏停在这个时刻？", ""), tickets,
+      callModel: fakeModel({ ...LEDGER1, threads: [] }),
+    }));
+    expect(gone.lostThreads).toEqual(["钟为什么停"]);
+  });
+
+  // 作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把天数看错一天，后面 45 章跟着挪。
+  it("重定稿天数：上次记时间那句还在就照上次的，记账员这次看的不一样两边都给作者看；那句改没了按这次的", async () => {
+    await commitChapter1();
+    const tickets = memoryTicketStore();
+    const ch2Ledger = (time: Record<string, unknown>) => fakeModel({ time, presence: [{ name: "周守义", nameUsed: "老周", quote: "老周" }] });
+    const first = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: CH2, tickets,
+      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
+    }));
+    expect(await confirmChapterCommit({ bookDir: book, ticket: first.ticket, text: CH2, tickets })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2 });
+
+    // 只改了一个字，记账员这次看成当天：照上次的第 2 天记，列出这次看成的第 1 天。
+    const typo = CH2.replace("没让他进", "没让他进门");
+    const same = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: typo, tickets,
+      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "外乡人又来了" }),
+    }));
+    expect(same.time).toMatchObject({ day: 2, dayEnd: 2, needsConfirm: true, sinceLast: { kept: true, otherDay: 1, otherDayEnd: 1 } });
+    expect(await confirmChapterCommit({ bookDir: book, ticket: same.ticket, text: typo, tickets })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).chapters[1]).toMatchObject({ day: 2, timeOfDay: "上午" });
+
+    // 天数一样：不多问。
+    const again = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: typo, tickets,
+      callModel: ch2Ledger({ basis: "judged", daysSincePrevious: 1, timeOfDay: "上午", quote: "第二天上午" }),
+    }));
+    expect(again.time.needsConfirm).toBe(false);
+    expect(again.time.sinceLast).toBeUndefined();
+
+    // 记时间那句改掉了：上次那条接不上，按这次的记，列出上次的第 2 天。
+    const rewritten = typo.replace("第二天上午", "三天后的上午");
+    const moved = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: rewritten, tickets,
+      callModel: ch2Ledger({ basis: "text", daysSincePrevious: 3, timeOfDay: "上午", quote: "三天后的上午" }),
+    }));
+    expect(moved.time).toMatchObject({ day: 4, needsConfirm: true, sinceLast: { kept: false, otherDay: 2, otherDayEnd: 2 } });
+  });
+
   it("重定稿：上次定稿认过的出场人物（含泛称）不再当第一次出场问；这次新冒出来的照问", async () => {
     const tickets = memoryTicketStore();
     const first = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(LEDGER1), tickets }));

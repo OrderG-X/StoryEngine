@@ -212,6 +212,7 @@
     border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:14px;color:var(--text);
   }
   .se-cs-day.is-attention{border-color:var(--warn);background:var(--warn-soft);}
+  .se-cs-day-why{flex-basis:100%;font-size:13px;line-height:1.6;color:var(--muted);}
   .se-cs-day-edit{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);}
   .se-cs-day-edit input{
     width:64px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:6px;

@@ -202,6 +202,7 @@ export function CommitSheet({
           {day ? (
             <div className={`se-cs-day${day.needsConfirm ? " is-attention" : ""}`}>
               <span>{dayOverrideLabel ?? day.label}</span>
+              {day.reason && !dayOverride ? <span className="se-cs-day-why">{day.reason}</span> : null}
               {day.detail ? <span className="se-cs-quote serif">依据「{day.detail}」</span> : null}
               {editable && keptDay !== undefined ? (
                 editingDay ? (

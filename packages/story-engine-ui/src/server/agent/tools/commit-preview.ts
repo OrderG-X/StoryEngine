@@ -212,19 +212,33 @@ function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   };
 }
 
+const daySpan = (day: number, dayEnd: number) => (dayEnd > day ? `第 ${day} 天到第 ${dayEnd} 天` : `第 ${day} 天`);
+
+/** 重定稿天数和上次不一样：为什么要作者看（照上次的记了 / 这次按新的记）。 */
+function dayReason(preview: CommitPreview): string | undefined {
+  const since = preview.time.sinceLast;
+  if (!since) return undefined;
+  const other = daySpan(since.otherDay, since.otherDayEnd);
+  return since.kept
+    ? `记账员这次看成${other}，和上次定稿不一样；先照上次的记，不对就改天数`
+    : `上次定稿记的是${other}，记时间的那句改过了，这次按新的记；不对就改天数`;
+}
+
 function dayLabel(preview: CommitPreview): string {
   const { time } = preview;
-  const span = time.dayEnd > time.day ? `故事第 ${time.day} 天到第 ${time.dayEnd} 天` : `故事第 ${time.day} 天`;
+  const span = `故事${daySpan(time.day, time.dayEnd)}`;
   const extra = [time.timeOfDay, time.weekday !== undefined ? WEEKDAY_NAMES[time.weekday] : undefined].filter(Boolean).join("，");
-  const basis = time.basis === "text"
-    ? "（正文明写）"
-    : time.basis === "author"
-      ? "（你定的）"
-      : time.basis === "judged"
-        ? "（按前后文判断）"
-        : preview.chapter <= 1
-          ? "（正文里没找到时间说法，先这么记，不对就改）"
-          : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
+  const basis = time.sinceLast?.kept
+    ? "（照上次定稿）"
+    : time.basis === "text"
+      ? "（正文明写）"
+      : time.basis === "author"
+        ? "（你定的）"
+        : time.basis === "judged"
+          ? "（按前后文判断）"
+          : preview.chapter <= 1
+            ? "（正文里没找到时间说法，先这么记，不对就改）"
+            : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
   return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
 }
 
@@ -237,6 +251,7 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
       id: "day",
       kind: "time",
       label: dayLabel(preview),
+      ...(dayReason(preview) ? { reason: dayReason(preview) } : {}),
       ...(timeQuote ? { detail: timeQuote } : {}),
       removable: false,
       editableDay: preview.time.day,
@@ -252,6 +267,9 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
   const notes: string[] = [];
   if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条没记上（原因在清单里）`);
   if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
+  if (preview.lostThreads && preview.lostThreads.length > 0) {
+    notes.push(`这章原来开的${preview.lostThreads.slice(0, 3).map((title) => `「${title}」`).join("")}这次没记上，后文还接着它；定稿后它就没了开头`);
+  }
   if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
     notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);
   }

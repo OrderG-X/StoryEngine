@@ -235,6 +235,24 @@ describe("commit_apply", () => {
     expect(byModel).toMatchObject({ canCommit: false, shortOnly: true });
   });
 
+  it("重定稿记账员看错天数：天数那行照上次定稿、说清这次看成第几天，算一条要你看（作者长篇实跑 2026-10-27）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await writeDraft(2, CH2);
+    const ch2 = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
+    await applyExecute({ chapter: 2, previewToken: ch2.previewToken }, buttonContext(2));
+
+    await writeDraft(2, CH2.replace("没让外人进", "没让外人进门"));
+    const wrongDay = { ...LEDGER2, time: { basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "林远把钥匙锁进铜盒" } };
+    const again = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(wrongDay) });
+    const day = again.ledgerChecklist?.[0];
+    expect(day).toMatchObject({ id: "day", editableDay: 2, needsConfirm: true, detail: "第二天上午" });
+    expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（照上次定稿）");
+    expect(day?.reason).toBe("记账员这次看成第 1 天，和上次定稿不一样；先照上次的记，不对就改天数");
+    expect(again.summary).toContain("要你看");
+  });
+
   it("票号没了 / 乱填：如实拒、不定稿", async () => {
     const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
