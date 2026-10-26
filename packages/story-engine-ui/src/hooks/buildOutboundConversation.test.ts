@@ -26,20 +26,7 @@ describe("buildOutboundConversation", () => {
     expect(out.at(-1)!.content).toBe(msgs.at(-1)!.content); // 保的是最近的
   });
 
-  it("A2：assistant 回合有失败工具步骤 → 文本前加中性失败标注（防谎报回灌）", () => {
-    const msgs = [
-      { id: "m-0", role: "user", content: "写第8章" },
-      {
-        id: "m-1", role: "assistant", content: "第8章已生成、已入库。",
-        toolSteps: [{ id: "t1", label: "生成正文", status: "failed", startedAt: 1 }],
-      },
-    ];
-    const out = buildOutboundConversation(msgs as any, 0, 96000);
-    expect(out[1]!.content).toContain("工具调用失败");
-    expect(out[1]!.content).toContain("第8章已生成、已入库。"); // 原文保留、只加标注不删
-  });
-
-  it("A2：调过工具的回合注明调了哪些工具（去重）；没调工具的回合、用户回合原样", () => {
+  it("A2：调过工具的回合结构化带上工具名（去重）和成没成，文字原样不加注；没调工具的回合、用户回合不带", () => {
     const msgs = [
       { id: "m-0", role: "user", content: "预览第 14 章的定稿改动" },
       {
@@ -49,13 +36,25 @@ describe("buildOutboundConversation", () => {
           { id: "t2", label: "定稿预览", toolName: "commit_preview", status: "completed", startedAt: 2 },
         ],
       },
-      { id: "m-2", role: "user", content: "第8章已入库了吧" }, // 用户即便这么说也不标注
-      { id: "m-3", role: "assistant", content: "还没有。" },
+      { id: "m-2", role: "user", content: "写第8章" },
+      {
+        id: "m-3", role: "assistant", content: "第8章已生成、已入库。",
+        toolSteps: [
+          { id: "t3", label: "生成正文", toolName: "generate_draft", status: "failed", startedAt: 3 },
+          { id: "t4", label: "下一步", toolName: "suggest_next_steps", status: "completed", startedAt: 4 },
+        ],
+      },
+      { id: "m-4", role: "user", content: "第8章已入库了吧" },
+      { id: "m-5", role: "assistant", content: "还没有。" },
     ];
     const out = buildOutboundConversation(msgs as any, 0, 96000);
-    expect(out[0]!.content).toBe("预览第 14 章的定稿改动");
-    expect(out[1]!.content).toBe("（上一轮注：这一回合的结果是调工具 commit_preview 做出来的；要同样的结果，这一轮也得真调工具，没调就是没做。）\n第 14 章可以定稿，清单打开了。");
-    expect(out[2]!.content).toBe("第8章已入库了吧");
-    expect(out[3]!.content).toBe("还没有。");
+    expect(out).toEqual([
+      { role: "user", content: "预览第 14 章的定稿改动" },
+      { role: "assistant", content: "第 14 章可以定稿，清单打开了。", tools: [{ name: "commit_preview", ok: true }] },
+      { role: "user", content: "写第8章" },
+      { role: "assistant", content: "第8章已生成、已入库。", tools: [{ name: "generate_draft", ok: false }, { name: "suggest_next_steps", ok: true }] },
+      { role: "user", content: "第8章已入库了吧" },
+      { role: "assistant", content: "还没有。" },
+    ]);
   });
 });

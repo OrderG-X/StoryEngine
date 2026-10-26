@@ -45,6 +45,7 @@ import {
   readString,
   readUiChapterFileStates,
   writeJson,
+  type ChatHistoryMessage,
   type MiddlewareStack,
   type UiChapterFileState,
 } from "../lib/project-io.js";
@@ -161,6 +162,35 @@ export function buildModelMessages(
   if (!systemMessage) return [...history];
   if (history.length === 0) return [systemMessage];
   return [...history.slice(0, -1), systemMessage, history[history.length - 1]!];
+}
+
+/** 历史里工具结果只说成没成，细节在那条回复里。 */
+const HISTORY_TOOL_DONE = "做完了，结果见下一条回复。";
+const HISTORY_TOOL_FAILED = "没成功；下一条回复里若说已经做成，不算数。";
+
+/**
+ * 聊天历史 → 模型消息：AI 那条回合调过的工具还原成真的工具调用和结果，再接那条回复的文字。
+ * 以前是往回复文字前头塞「（上一轮注：…调了工具…）」，长篇实跑第 17 章模型照着这个开头续写：
+ * 先抄一句注，再编一段「第 17 章写好了」，一个工具都没调。真的调用记录模型只会照着真调。
+ */
+export function historyToModelMessages(messages: readonly ChatHistoryMessage[]): import("ai").ModelMessage[] {
+  return messages.flatMap((message, index): import("ai").ModelMessage[] => {
+    if (message.role === "user" || !message.tools?.length) return [{ role: message.role, content: message.content }];
+    const calls = message.tools.map((tool, order) => ({ ...tool, toolCallId: `history-${index}-${order}` }));
+    return [
+      { role: "assistant", content: calls.map((call) => ({ type: "tool-call" as const, toolCallId: call.toolCallId, toolName: call.name, input: {} })) },
+      {
+        role: "tool",
+        content: calls.map((call) => ({
+          type: "tool-result" as const,
+          toolCallId: call.toolCallId,
+          toolName: call.name,
+          output: { type: "text" as const, value: call.ok ? HISTORY_TOOL_DONE : HISTORY_TOOL_FAILED },
+        })),
+      },
+      { role: "assistant", content: message.content },
+    ];
+  });
 }
 
 /**
@@ -593,7 +623,7 @@ async function handleAgentChat(
       ? allChapterStates.find((s) => s.chapter === currentChapter)
       : undefined;
     const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates);
-    const history = messages.map((m) => ({ role: m.role, content: m.content } as ModelMessage));
+    const history = historyToModelMessages(messages);
     // 当前章提示紧贴用户最新指令（而非塞开头被历史淹没）——⑤头号根因 lost-in-the-middle。
     const modelMessages: ModelMessage[] = buildModelMessages(systemMessage, history);
     const visibleTextScrubber = createStreamingScrubber();

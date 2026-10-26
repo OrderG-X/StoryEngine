@@ -19,6 +19,7 @@ import type { BrainstormCardData, SettingRefData, SettleCardData } from "../type
 import { readBrainstormData } from "../utils/brainstormCard.js";
 import { readSettleData } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
+import type { ChatHistoryMessage } from "../server/lib/project-io.js";
 
 const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
 
@@ -29,7 +30,7 @@ export function readAiErrorReason(value: unknown): AiErrorReason | undefined {
 
 export interface StreamAgentChatRequest {
   readonly projectPath: string;
-  readonly messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
+  readonly messages: readonly ChatHistoryMessage[];
   /** 用户当前打开/停留的章号。后端据此引导 agent 默认作用于该章、工具缺省回退该值（H3：回看旧章不写错章）。 */
   readonly currentChapter?: number;
   /**
