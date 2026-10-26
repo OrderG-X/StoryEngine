@@ -198,10 +198,21 @@ export function namesTask(canon: string, existing: readonly string[] = []): stri
   ].join("\n");
 }
 
-export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: readonly ChapterSide[] = []): string {
+/**
+ * 设定本里别的定论照样成立：交给查全书、查设定、复核的每一步（长篇实跑 2026-10-26：新定论「两个月前场里五十一个人」
+ * 被读成「那一场在两个月前」，把六句写「父亲半年前遇伏」的对句子连同设定本一句话都要改，而「父亲半年前遇伏」本身就是一条定论）。
+ */
+export const STANDING_CANON_MAX = 30;
+function standingLines(standing: readonly string[], rule: string): string[] {
+  if (standing.length === 0) return [];
+  return ["设定本里另外还定着这几条，照样成立：", ...standing.slice(0, STANDING_CANON_MAX).map((text) => `- ${text}`), rule];
+}
+
+export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: readonly ChapterSide[] = [], standing: readonly string[] = []): string {
   const mine = flagged.filter((side) => docs.some((doc) => doc.chapter === side.chapter));
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "原句和这几条说得一致的，就不是和新定论对不上（除非原句说的正是新定论那件事、新定论换了说法），别改。"),
     "下面是这本书的几章正文，每句前面有编号 [n]。逐句看，找出说法和这条定论对不上的句子（同一件事写成了别的样子）。",
     ...(mine.length > 0 ? [`核账已经报过这几句和它对不上，一定给出改法：${mine.map((side) => `第 ${side.chapter} 章「${side.quote}」`).join("；")}。`] : []),
     "- 原句说的得是定论里的同一个人、同一件东西、同一件事：名字不一样的、只是身份相近（都是看门的、都是老人）或同一类东西的，不算——宁可漏掉，也别把别人改成定论里的人；",
@@ -224,9 +235,10 @@ interface FieldRef {
   readonly ai: boolean;
 }
 
-export function fieldsTask(canon: string, fields: readonly FieldRef[]): string {
+export function fieldsTask(canon: string, fields: readonly FieldRef[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "栏里和这几条说得一致的部分别改。"),
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
     "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
@@ -287,9 +299,10 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
   ].join("\n");
 }
 
-export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[]): string {
+export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "原句和这几条说得一致、改了反倒和它们对不上的：不算（除非原句说的正是新定论那件事）。"),
     "另一个人逐句查了全书，说下面这几句和定论对不上、要改。请逐条复核：原句是不是真的和定论说不到一块。",
     "- 先看原句（连同前后文）说的是不是定论里的同一个人、同一件东西：名字不一样、只是身份相近或同一类东西的，不算；",
     "- 原句写的就是这件事、而且写得和定论不一样：算；",
@@ -551,6 +564,10 @@ export async function proposeSettle(input: {
     failures.push("没问出这条定论涉及谁，这次全书都查了");
   }
 
+  // 别的定论照样成立（这条要取代的那条、和它一字不差的那条除外）。
+  const standing = cards.canon
+    .filter((item) => item.id !== replaces?.id && nameKey(item.text) !== nameKey(canon))
+    .map((item) => item.text);
   const terms = termsFor(names, cards);
   // 核账报过、作者点过的那几句（打架的另一边 + 同一条报的别几句）：章一定查，改法不复核，查不出如实说。
   const flagged: ChapterSide[] = request.kind === "pick"
@@ -567,9 +584,9 @@ export async function proposeSettle(input: {
   const batches = batchesOf(picked);
   const fields = fieldRefs(cards, terms);
   const [batchResults, fieldResult] = await Promise.all([
-    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch, flagged) }], { json: true }), batch))),
+    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch, flagged, standing) }], { json: true }), batch))),
     fields.length > 0
-      ? callModel([{ role: "user", content: fieldsTask(canon, fields) }], { json: true }).then((text) => parseFieldEdits(text, fields)).then(
+      ? callModel([{ role: "user", content: fieldsTask(canon, fields, standing) }], { json: true }).then((text) => parseFieldEdits(text, fields)).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       )
@@ -590,7 +607,7 @@ export async function proposeSettle(input: {
   if (retry.length > 0) {
     const focus = [...new Set(retry.map(({ side }) => side.chapter))].sort((a, b) => a - b).map((chapter) => docs.get(chapter)!);
     try {
-      const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side)) }], { json: true }), focus);
+      const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side), standing) }], { json: true }), focus);
       found.push(...again.filter((edit) => retry.some(({ side, unit }) => edit.chapter === side.chapter && edit.id === unit.id)));
     } catch {
       // 补问没成：下面照实列进「没查出改法」。
@@ -608,7 +625,7 @@ export async function proposeSettle(input: {
         const units = docs.get(edit.chapter)?.units ?? [];
         return { ...edit, before: units[edit.id - 2]?.text ?? "", after: units[edit.id]?.text ?? "" };
       });
-      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext) }], { json: true }), toReview.length);
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext, standing) }], { json: true }), toReview.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
     } catch (error) {

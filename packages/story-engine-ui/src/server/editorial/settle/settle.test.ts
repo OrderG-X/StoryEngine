@@ -256,6 +256,27 @@ describe("按已记下的定论查", () => {
     if (!other.ok) throw new Error(other.message);
     expect(other.proposal.replaces).toBeUndefined();
   });
+
+  // 作者长篇实跑（2026-10-26）：新定论说的是石场人数，查全书时把六句写「父亲半年前遇伏」的对句子也要改——
+  // 「父亲半年前遇伏」本身就是设定本里的一条定论。别的定论照样成立，查全书、查设定、复核都得知道。
+  it("别的定论照样成立：查全书、查设定、复核的提示里都列上；要取代的那条不列", async () => {
+    const first = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
+    if (!first.ok) throw new Error(first.message);
+    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, first.proposal)).token, []);
+    if (!applied.ok) throw new Error(applied.message);
+
+    const model = fakeModel({ namesReply: JSON.stringify({ names: ["杜叔", "孟叔"], replaces: 0 }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "孟叔是杜长顺的表弟" }, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看"))!;
+    expect(sweep).toContain("设定本里另外还定着这几条，照样成立：\n- 杜长顺十年前去世");
+    expect(reviewTask("孟叔是杜长顺的表弟", [], ["杜长顺十年前去世"])).toContain("照样成立：\n- 杜长顺十年前去世");
+
+    const replacing = fakeModel({ namesReply: JSON.stringify({ names: ["杜叔"], replaces: 1 }) });
+    const again = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "杜长顺是八年前去世的" }, callModel: replacing });
+    if (!again.ok) throw new Error(again.message);
+    expect(replacing.prompts.find((prompt) => prompt.includes("逐句看"))).not.toContain("照样成立");
+  });
 });
 
 describe("确认改齐", () => {

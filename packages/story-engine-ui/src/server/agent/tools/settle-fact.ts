@@ -11,7 +11,7 @@ import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../
 import { previewSettle } from "../settle-actions.js";
 
 const inputSchema = z.object({
-  canon: z.string().trim().min(1).max(CANON_TEXT_MAX).describe("作者定下的说法，尽量用作者的原话（一句话说清是什么，如『杜长顺十年前去世』）。"),
+  canon: z.string().trim().min(1).max(CANON_TEXT_MAX).describe("作者定下的说法，尽量用作者的原话（一句话说清是什么，如『杜长顺十年前去世』）；谁、哪儿写全名，单拿出来也看得懂——作者话里省掉的主语、地方照前文补上，别留「那里」「这场」这种离了上下文就两可的说法。只写这件事本身：不写章号、不写「以…为准」「只管…」「不涉及…」这类说明（它原样记进设定本）。"),
   chapter: coerceNumber(blankToUndefined(z.number().int().positive().optional().describe("作者此刻在写的章号；缺省用当前章。这一章有工作稿时连工作稿一起查。"))),
 });
 
