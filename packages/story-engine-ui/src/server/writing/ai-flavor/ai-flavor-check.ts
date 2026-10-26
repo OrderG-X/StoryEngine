@@ -88,11 +88,11 @@ export function buildAiFlavorCheckMessages(
   return [{ role: "system", content: system }, { role: "user", content: `【本章正文】\n${draftText}` }];
 }
 
-/** 解析模型 JSON；过滤掉 text 不在草稿里的（保证能改写定位）；任何异常→ok:false 不编造。 */
+/** 解析模型 JSON；过滤掉 text 不在草稿里的（保证能改写定位）；任何异常→ok:false 不编造，summary 是没成的原因。 */
 export function parseAiFlavorReport(modelText: string, draftText: string, usedFallback: boolean): AiFlavorReport {
   try {
     const match = modelText.match(/\{[\s\S]*\}/u);
-    if (!match) return { ok: false, summary: "体检没成：模型没返回可解析的结果，可重试。", violations: [], usedFallback };
+    if (!match) return { ok: false, summary: "模型没交回能读的结果", violations: [], usedFallback };
     const parsed = reportSchema.parse(JSON.parse(match[0]));
     const violations: AiFlavorViolation[] = [];
     parsed.violations.forEach((v, i) => {
@@ -107,7 +107,7 @@ export function parseAiFlavorReport(modelText: string, draftText: string, usedFa
     });
     return { ok: true, summary: parsed.summary || (violations.length ? "挑出几处机器腔，见下。" : "这章读着挺像人写的，没挑出明显的机器腔。"), violations: violations.slice(0, MAX_VIOLATIONS), usedFallback };
   } catch {
-    return { ok: false, summary: "体检没成：模型结果解析失败，可重试。", violations: [], usedFallback };
+    return { ok: false, summary: "模型交回的结果读不了", violations: [], usedFallback };
   }
 }
 
@@ -115,6 +115,7 @@ export function parseAiFlavorReport(modelText: string, draftText: string, usedFa
  * 合并确定性闸 + LLM 复检：
  *   - 确定性命中(高精度)优先排前；LLM 命中里凡与确定性同句/互为子串的去掉，避免对同一处重复报。
  *   - ok = 确定性有命中 或 LLM 成功；两者都空且 LLM 没跑成 → ok:false 诚实回报（铁律④，不编造"没问题"）。
+ *   - LLM 没跑成时 llm.summary 是原因，照实带给作者（别只说「失败」）。
  */
 export function mergeAiFlavorReports(
   deterministic: readonly AiFlavorViolation[],
@@ -134,11 +135,13 @@ export function mergeAiFlavorReports(
     // LLM 跑成了：但它 summary 里自报的「N 处」是它合并前的自评，与最终 violations（确定性闸 + LLM 去重合并后）
     // 数对不上（Codex 1-5 章真机：嘴说 6 处、卡片 7 条）。处数一律由真值 sorted 派生，只保留 LLM 的定性评语。
     summary = composeAiFlavorSummary(sorted);
-  } else if (sorted.length > 0) {
-    // LLM 没跑成，但确定性闸有硬命中 → 兜底如实报（谎报-proof）。
-    summary = `确定性闸挑出 ${sorted.length} 处机器腔硬命中（AI 复检这次没跑成，先看这些）。`;
   } else {
-    summary = "体检没跑成：AI 复检失败、确定性闸也没挑出硬毛病，可重试。";
+    const said = llm.summary.trim() || "模型这遍没交出结果";
+    const reason = said.endsWith("。") ? said.slice(0, -1) : said;
+    // LLM 没跑成，但确定性闸有硬命中 → 兜底如实报（谎报-proof）。
+    summary = sorted.length > 0
+      ? `按规则挑出 ${sorted.length} 处机器腔，先看这些；模型那遍没跑成（${reason}）。`
+      : `体检没跑成：${reason}。可以再试一次。`;
   }
   return { ok, summary, violations: sorted, usedFallback: false };
 }
@@ -174,8 +177,8 @@ export async function runAiFlavorCheck(input: {
   try {
     const text = await input.callModel(buildAiFlavorCheckMessages(input.draftText, input.antiRules, input.establishedElements ?? []).map((m) => m.content).join("\n\n"));
     llm = parseAiFlavorReport(text, input.draftText, false);
-  } catch {
-    llm = { ok: false, summary: "", violations: [], usedFallback: false };
+  } catch (error) {
+    llm = { ok: false, summary: error instanceof Error ? error.message : String(error), violations: [], usedFallback: false };
   }
   return mergeAiFlavorReports(deterministic, llm);
 }
