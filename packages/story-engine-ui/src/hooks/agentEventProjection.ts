@@ -463,6 +463,7 @@ function settleTool(
         status,
         endedAt,
         ...(detail ? { detail } : {}),
+        ...(output?.toolValidationFailure === true ? { invalidArgs: true as const } : {}),
       }
       : step,
   );
