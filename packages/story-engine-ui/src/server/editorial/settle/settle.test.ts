@@ -5,7 +5,7 @@ import { chapterCommit, draftPath, numberedText, projectBook, readBible, readCha
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
-import { parseFieldEdits, parseSweepEdits, proposeSettle } from "./propose.js";
+import { canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
 import { applySettleProposal, readSettleProposal, saveSettleProposal } from "./store.js";
 
 const CH1 = "# 第1章 · 旧屋\n\n杜叔走了整整十年。屋里没人住过。\n\n许微推开门，灰扑了一脸。";
@@ -130,6 +130,16 @@ describe("定论预览", () => {
     const canonPrompt = model.prompts.find((prompt) => prompt.includes("写成一条「定论」"));
     expect(canonPrompt).toContain("写成一个问句");
     expect(canonPrompt).toContain("只答这一点");
+  });
+
+  // 长篇实跑：「以第 14 章为准」定成「某人手里攥着木杠」，扫全书把别章里放在膝上、打架顺手抄的、别人拿着的都列进来要改。
+  it("会变的状态写那件东西本身、不写一时的拿法；扫和复核都不算一时的拿法、放法", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    expect(model.prompts.find((prompt) => prompt.includes("写成一条「定论」"))).toContain("别写一时的拿法、姿势");
+    expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("原句只是那一场里一时的拿法、放法");
+    expect(canonTask(pick, new Map())).toContain("写那件东西本身");
+    expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, target: "committed", id: 1, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
   });
 
   it("核的是已定稿的章：改定稿正文，工作稿里同一句跟着改；定稿后改过工作稿、报的那句只在工作稿里，才改工作稿", async () => {
