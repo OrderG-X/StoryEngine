@@ -19,6 +19,27 @@ export function aiErrorBody(reason: AiErrorReason | undefined): string {
   return reason && reason !== "unknown" ? `${BODY[reason]}这一步没做完。` : UNKNOWN_BODY;
 }
 
+/** 出错卡要短说原因时用（前面已经写好了稿，不用再说该做什么）。 */
+const CAUSE: Record<AiErrorReason, string> = {
+  setup: "模型没设好",
+  auth: "服务商说密钥不对",
+  quota: "服务商额度用完了",
+  "rate-limit": "服务商暂时不让调用",
+  server: "服务商出了故障",
+  network: "连不上服务商",
+  timeout: "服务商太久没有反应",
+  unknown: "服务没响应",
+};
+
+/**
+ * 这一轮已经写好了稿（结果收到了）、之后那步才出错：说清写好的在稿纸上、不用重来（作者长篇实跑 2026-10-26：
+ * 第 26 章写完、核完、话也说完了，收尾那步服务商没反应，卡上只说「可以再试一次」，点了会把整章重写一遍）。
+ */
+export function aiErrorAfterWriteBody(reason: AiErrorReason | undefined, done: "draft" | "revise"): string {
+  const what = done === "draft" ? "正文已经写进稿纸" : "改好的稿已经在稿纸上";
+  return `${what}，不用重来；之后那步${CAUSE[reason ?? "unknown"]}，没做完。`;
+}
+
 /** 这几类得去设置里改了才会好：错误卡给「去设置」。 */
 export function aiErrorWantsSettings(reason: AiErrorReason | undefined): boolean {
   return reason === "setup" || reason === "auth";

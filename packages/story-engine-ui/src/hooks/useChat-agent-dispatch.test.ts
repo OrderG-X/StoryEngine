@@ -809,6 +809,32 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBe(true);
   });
 
+  it("出稿结果已经收到、之后那步超时：说正文在稿纸上不用重来，不给「重试这一步」，也不再「核对盘上」（作者长篇实跑 2026-10-26）", async () => {
+    window.localStorage.setItem("chatBrain", "agent");
+    const overview = makeOverview("Draft");
+    const realDraft = "窄道上只容一辆车，崔头领勒住马，抬手叫后头的车停下。";
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "g1" });
+      writeDisk(3, { draft: realDraft, title: "窄道" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "g1", refreshScope: "full", overview, ok: true, draftBody: realDraft, draftTitle: "窄道" });
+      handlers.onTextDelta("第 3 章写好了。");
+      handlers.onError("上游流式输出中断：90 秒没有新内容", true, "timeout");
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendMessage("写第三章");
+    });
+
+    const errorMessages = messages().filter((m) => m.role === "assistant" && hasCard(m, "error"));
+    expect(errorMessages).toHaveLength(1);
+    expect(errorMessages[0].content).toBe("正文已经写进稿纸，不用重来；之后那步服务商太久没有反应，没做完。");
+    expect(errorMessages[0].suggestedActions?.some((a) => a.id === "retry-agent")).toBeFalsy();
+    expect(messages().some((m) => m.content.includes("核对盘上"))).toBe(false);
+    expect(useDraftStore.getState().body).toBe(realDraft);
+  });
+
   // 重构 P4：回合收尾不再改写 AI 的回复。AI 说什么就显示什么，真相看工具步骤卡。
   it("回合收尾不改写回复：只读预览也照原文显示，步骤卡如实标完成", async () => {
     window.localStorage.setItem("chatBrain", "agent");
