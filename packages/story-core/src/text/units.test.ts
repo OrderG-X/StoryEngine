@@ -119,6 +119,11 @@ describe("模型给的新句 → 能换上去的字（prepareUnitReplacement）"
     expect(prepareUnitReplacement(units, 2, "“许微，那都是多少年前的事了。")).toBeUndefined();
   });
 
+  // 长篇实跑：定论改法回成「[97]上一句[98]这一句」，去掉抄的上一句后「[98]」留在了要换上的句子里。
+  it("抄回上一句时连两句的编号一起抄：都去掉", () => {
+    expect(prepareUnitReplacement(units, 2, "[1]“许微，那都是多少年前的事了。[2]你爸失踪十五年了，你翻这些有什么用。”")).toBe("你爸失踪十五年了，你翻这些有什么用。”");
+  });
+
   it("一句改成了几句（添了原文没有的话）→ undefined；改完还是一句的照收", () => {
     const talk = splitUnits("“我退休那年交出去了。”\n她没接话。");
     expect(prepareUnitReplacement(talk, 1, "“前些年交出去过一把。”他说，“交给邮局一个姓孟的。钥匙的事，你问他去。”")).toBeUndefined();
