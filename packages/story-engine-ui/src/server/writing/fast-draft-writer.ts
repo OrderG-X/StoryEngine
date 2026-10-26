@@ -708,7 +708,9 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     // （第十七轮第 4 章停在半句对白上，要点 5 后半和要点 6 全丢）。超出多少如实记一条，交作者定。
     // 接着写的稿也不裁：从结尾往前砍砍掉的是刚接上的那段，裁不好还会截在半句上。
     const overLengthKept = Boolean(segmented || continued) && rawDraftLength.lengthStatus === "above_upper_bound";
-    if (overLengthKept) {
+    // 接着写、作者又没定过本章字数：整章超没超默认目标不提——作者只说了这次写多少
+    // （长篇实跑：照作者说的接了 1381 字，却报「超过上限 2070 字，留给你定」，2070 是作者从没定过的默认数）。
+    if (overLengthKept && !(continued && draftLengthTarget.source === "default")) {
       writingRulesFailure.push(continued
         ? `正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；接着写的稿不从结尾裁，留给你定。`
         : `正文 ${rawDraftLength.actualLength} 字，超过上限 ${draftLengthTarget.upperBound} 字；分两半写的稿不从结尾裁（会截掉最后的要点），留给你定。`);
