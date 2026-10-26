@@ -989,6 +989,7 @@ function MessageBubbles({
             preview={card.preview}
             confirmable={commitConfirmable}
             onOpen={() => openCommitSheet(message.id)}
+            {...(onSendUserAction ? { onCommitShort: () => onSendUserAction({ toolName: "commit_preview", chapter: card.preview.chapter, allowShort: true }) } : {})}
           />
         );
       case "commit-report":

@@ -18,6 +18,16 @@ describe("CommitPreviewCard 定稿预览卡（R3）", () => {
     expect(container.textContent ?? "").toContain("第 7 章还没有工作稿。");
   });
 
+  it("只差字数下限：卡上也有「就这么短，照样定稿」（窗口关了也找得到）；别的原因挡住的没有", () => {
+    const preview: CommitPreviewCardData = { chapter: 7, canCommit: false, shortOnly: true, blockingReasons: ["正文 900 字，低于写作规则要求的下限 2000 字"] };
+    const onCommitShort = vi.fn();
+    const { getByRole, rerender, queryByRole } = render(<CommitPreviewCard preview={preview} onCommitShort={onCommitShort} />);
+    fireEvent.click(getByRole("button", { name: "就这么短，照样定稿" }));
+    expect(onCommitShort).toHaveBeenCalledTimes(1);
+    rerender(<CommitPreviewCard preview={{ ...preview, shortOnly: undefined }} onCommitShort={onCommitShort} />);
+    expect(queryByRole("button", { name: "就这么短，照样定稿" })).toBeNull();
+  });
+
   it("canCommit:true 且无阻断 → done 徽章「可以定稿」、不说「暂不可定稿」", () => {
     const preview: CommitPreviewCardData = { chapter: 7, canCommit: true, summary: "可以定稿。" };
     const { container, getByText } = render(<CommitPreviewCard preview={preview} />);
