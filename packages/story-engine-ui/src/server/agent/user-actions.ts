@@ -55,8 +55,8 @@ export type UserAction =
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
-  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。 */
-  | { readonly toolName: "commit_preview"; readonly chapter: number }
+  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。allowShort=「就这么短，照样定稿」：这一章不拿字数下限挡。 */
+  | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /**
    * 「写这一章」按钮（2026-10-10 引擎升级第 5 期「出稿一条路」）：直接执行 generate_draft——先拿章纲、写、
    * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
@@ -161,7 +161,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
-  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter } };
+  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter, ...(record.allowShort === true ? { allowShort: true as const } : {}) } };
   if (toolName === "ai_review" || toolName === "quality_check") return { kind: "action", action: { toolName, chapter } };
   if (toolName === "generate_draft") {
     const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
@@ -637,6 +637,8 @@ async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction
   };
   args.sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter: action.chapter } });
   let output: unknown;
+  // 「就这么短，照样定稿」：作者确认标记只在这次执行里有效（工具据它放字数下限）。
+  if (action.allowShort) markUserConfirmedTool(args.requestContext, "commit_preview");
   try {
     output = await args.executeTool("commit_preview", { chapter: action.chapter }, args.requestContext);
   } catch (error) {
@@ -645,6 +647,8 @@ async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction
     emitText(`第 ${action.chapter} 章的定稿预览没生成出来：${humanizeToolNames(message)}。可以再点一次「定稿」。`);
     flush();
     return;
+  } finally {
+    if (action.allowShort) markUserConfirmedTool(args.requestContext, undefined);
   }
   args.sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output });
   const result = output as CommitPreviewLikeOutput | undefined;

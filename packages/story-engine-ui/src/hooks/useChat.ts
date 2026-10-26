@@ -959,6 +959,9 @@ export function useChat(params: UseChatParams): UseChatResult {
         case "commit-apply":
           void handleConfirmCommit(action.commitTarget);
           return;
+        case "commit-short":
+          if (action.commitTarget?.chapter) void handleSendUserAction({ toolName: "commit_preview", chapter: action.commitTarget.chapter, allowShort: true });
+          return;
         case "prune-confirm":
           consumeSuggestedAction(action);
           void handleConfirmPrune(action.pruneTarget);

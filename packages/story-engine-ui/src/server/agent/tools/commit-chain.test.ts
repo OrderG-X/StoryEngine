@@ -121,8 +121,9 @@ describe("commit_preview", () => {
     expect(short.canCommit).toBe(false);
     expect(short.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
     expect(short.blockingReasons.join("")).toContain("下限");
-    // 下限是作者自己的写作规则：告诉作者能改（P6 第 7 步：手写短章只看到「需扩写」不知道去哪改）。
-    expect(short.blockingReasons.join("")).toContain("跟右边的 AI 说把每章字数下限改低");
+    // 下限是作者自己的写作规则：这章就该这么短，作者点按钮放这一章（作者长篇实跑 2026-10-26：原来只能去改全书下限）。
+    expect(short.blockingReasons.join("")).toContain("「就这么短，照样定稿」");
+    expect(short.shortOnly).toBe(true);
     expect(short.previewToken).toBeUndefined();
   });
 
@@ -225,6 +226,13 @@ describe("commit_apply", () => {
     const fresh = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
     expect(fresh.canCommit).toBe(false);
     expect(fresh.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
+    // 作者点了「就这么短，照样定稿」：只放这一章，清单里说一句。
+    const allowed = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2), allowShort: true });
+    expect(allowed.canCommit).toBe(true);
+    expect(allowed.notes?.some((note) => note.includes("你点了照样定稿，只这一章"))).toBe(true);
+    // 模型自己调（没有作者按钮的确认标记）照挡。
+    const byModel = (await previewExecute({ chapter: 2 }, modelContext(2))) as { canCommit: boolean; shortOnly?: boolean };
+    expect(byModel).toMatchObject({ canCommit: false, shortOnly: true });
   });
 
   it("票号没了 / 乱填：如实拒、不定稿", async () => {

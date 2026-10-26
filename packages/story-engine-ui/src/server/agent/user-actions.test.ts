@@ -373,6 +373,9 @@ describe("runUserAction 执行结构化动作", () => {
 describe("「定稿」按钮结构化动作（commit_preview）", () => {
   it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 一句结论（清单在弹窗里，重构 P6），不调模型", async () => {
     expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
+    // 「就这么短，照样定稿」只认布尔 true（别的值当没点）。
+    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: true })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4, allowShort: true } });
+    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: "true" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
     const requestContext = new RequestContext();
     let marked = true;
     const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {

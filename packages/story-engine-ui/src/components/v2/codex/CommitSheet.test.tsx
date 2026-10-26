@@ -190,6 +190,23 @@ describe("定稿清单开在哪、什么时候能直接再开", () => {
     expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", preview: preview({ canCommit: false }) })], paper)).toBeNull();
   });
 
+  it("只差字数下限：【知道了】旁边给【就这么短，照样定稿】，点了关窗、发这一章的照样定稿；别的挡住的原因不给", () => {
+    const short = preview({ canCommit: false, previewToken: undefined, ledgerChecklist: undefined, shortOnly: true, blockingReasons: ["正文 1137 字，低于写作规则要求的下限 2000 字"] });
+    useChatStore.setState({ messages: [msg("short", { preview: short })] });
+    const onSuggestedAction = vi.fn();
+    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    act(() => openCommitSheet("short"));
+    expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "就这么短，照样定稿" }));
+    expect(onSuggestedAction).toHaveBeenCalledWith(expect.objectContaining({ id: "commit-short", commitTarget: { chapter: 7 } }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+    useChatStore.setState({ messages: [msg("other", { preview: { ...short, shortOnly: undefined } })] });
+    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    act(() => openCommitSheet("other"));
+    expect(screen.queryByRole("button", { name: "就这么短，照样定稿" })).toBeNull();
+  });
+
   it("挂在外层的弹窗：打开那条消息上的预览；只有最新一张能点【定稿】，点了关窗、发确认定稿", () => {
     useChatStore.setState({ messages: [msg("old", { checkedVersion: "v1" }), msg("new", { checkedVersion: "v1" })] });
     useDraftStore.setState(paper);

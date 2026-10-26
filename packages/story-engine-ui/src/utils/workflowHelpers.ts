@@ -65,6 +65,13 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
       permission: "safe_read",
       requiresConfirmation: false,
     },
+    "commit-short": {
+      id: "commit-short",
+      label: "就这么短，照样定稿",
+      description: "只这一章不拿字数下限挡，重新出定稿清单；不改每章下限。",
+      permission: "safe_read",
+      requiresConfirmation: false,
+    },
     "commit-apply": {
       id: "commit-apply",
       label: "确认定稿",
@@ -131,6 +138,11 @@ export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
  */
 export function commitConfirmAction(target?: CommitConfirmTarget): SuggestedAction {
   return { ...suggestedAction("commit-apply"), ...(target ? { commitTarget: target } : {}) };
+}
+
+/** 「就这么短，照样定稿」（定稿窗口只差字数下限时）：重新出这一章的定稿清单，这一章不拿下限挡。 */
+export function commitShortAction(chapter: number): SuggestedAction {
+  return { ...suggestedAction("commit-short"), commitTarget: { chapter } };
 }
 
 /** 「确认裁剪」按钮：点了发结构化动作、由服务端直接真裁（裁剪快照预览之后出现）。 */

@@ -210,6 +210,8 @@ export interface CommitPreviewCardData {
   readonly notes?: readonly string[];
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
+  /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
+  readonly shortOnly?: boolean;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */
   readonly ledgerChecklist?: readonly {
     readonly id: string;

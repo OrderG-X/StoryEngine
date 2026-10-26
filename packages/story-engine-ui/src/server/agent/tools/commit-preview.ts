@@ -25,7 +25,7 @@ import { WEEKDAY_NAMES } from "../../book/story-timeline.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { isUserConfirmedTool, readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 记账员当场最多补多少章笔记；超过就按「已有笔记 + 最近几章原文」记（冷窗口），笔记在后台补。 */
@@ -71,6 +71,7 @@ const outputSchema = z.object({
   summary: z.string().describe("给作者看的一句话结论。"),
   notes: z.array(z.string()).optional().describe("要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……），summary 里【】内的就是这些。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引，界面不展示。"),
+  shortOnly: z.boolean().optional().describe("只差字数下限：定稿窗口里有「就这么短，照样定稿」按钮，作者点了只放这一章。"),
   ledgerChecklist: z.array(z.object({
     id: z.string(),
     kind: z.string(),
@@ -94,6 +95,8 @@ export async function buildCommitPreviewToolOutput(input: {
   /** 记账员用的模型调用（单测、考卷注入）；缺省用配置的模型。 */
   readonly callModel?: BrainCallModel;
   readonly maxCatchUp?: number;
+  /** 作者点了「就这么短，照样定稿」（按钮才有，模型调不出来）：这一章不拿字数下限挡。 */
+  readonly allowShort?: boolean;
 }): Promise<CommitPreviewToolOutput> {
   const { projectDir, chapter } = input;
   const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
@@ -106,16 +109,20 @@ export async function buildCommitPreviewToolOutput(input: {
   if (rereading) return blocked(chapter, [rereading], rereading);
 
   const allGates = await checkDraftHardGates({ projectDir, draftContent: text });
+  const short = allGates.find((issue) => issue.type === "too_short")?.length;
   const shortBefore = await committedShortOf(projectDir, chapter, allGates);
-  const gates = shortBefore === undefined ? allGates : allGates.filter((issue) => issue.type !== "too_short");
+  const shortAllowed = short !== undefined && (shortBefore !== undefined || input.allowShort === true);
+  const gates = shortAllowed ? allGates.filter((issue) => issue.type !== "too_short") : allGates;
   if (gates.length > 0) {
     const reasons = gates.map(describeGate);
+    const shortOnly = gates.every((issue) => issue.type === "too_short");
     return {
       ...blocked(chapter, reasons, `第 ${chapter} 章现在还定不了：${reasons.join("；")}。`),
       // 引擎原话是英文，给人看的（卡片里点开的明细）换成同一句中文说法。
       draftQualityIssues: gates.map((issue, index) => ({ severity: issue.severity, type: issue.type, message: reasons[index]! })),
+      ...(shortOnly ? { shortOnly: true } : {}),
       ...(gates.some((issue) => issue.type === "too_short")
-        ? { modelHint: "字数不足是硬阻断：先和作者商量扩写方向、把工作稿写够，再重新预览；不要在字数不足时反复预览。" }
+        ? { modelHint: "字数不到下限：问作者是扩写还是就这么短。就这么短的话，请作者在定稿窗口点「就这么短，照样定稿」（你替不了）；别在字数不足时反复预览。" }
         : {}),
     };
   }
@@ -145,7 +152,12 @@ export async function buildCommitPreviewToolOutput(input: {
     return blocked(chapter, [preview.reason], `第 ${chapter} 章现在还定不了：${preview.reason}`);
   }
   latestTickets.set(`${projectDir}\u0000${chapter}`, preview.ticket);
-  return fromPreview(preview, shortBefore === undefined ? [] : [`这章原来定稿时就不到 ${shortBefore} 字，字数下限这次不挡`]);
+  const shortNote = !short || !shortAllowed
+    ? []
+    : shortBefore !== undefined
+      ? [`这章原来定稿时就不到 ${short.min} 字，字数下限这次不挡`]
+      : [`这章 ${short.current} 字，比字数下限 ${short.min} 字少；你点了照样定稿，只这一章`];
+  return fromPreview(preview, shortNote);
 }
 
 /**
@@ -177,8 +189,11 @@ function describeGate(issue: CommitQualityIssue): string {
   return QUALITY_TYPE_LABELS[issue.type] ?? "正文过不了定稿硬闸";
 }
 
-/** 下限是作者自己的写作规则：手写短章的作者得知道去哪改（重构 P6 第 7 步）。 */
-const LENGTH_RULE_HINT = "。这一章就该这么短的话，可以跟右边的 AI 说把每章字数下限改低";
+/**
+ * 下限是作者自己的写作规则（重构 P6 第 7 步）。这一章就该这么短，作者点按钮放这一章；不用为一章去改全书下限
+ * （作者长篇实跑 2026-10-26：手写的第 36 章收在悬念上 1137 字，只能去改每章下限才定得了）。
+ */
+const LENGTH_RULE_HINT = "。这章就该这么短的话，点「就这么短，照样定稿」";
 
 type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[number];
 
@@ -283,6 +298,7 @@ export const commitPreviewTool = createTool({
     if (chapter === undefined) {
       throw new Error("commit_preview 缺少章号：没给章号，前端也没带当前章。请明确指定章号。");
     }
-    return buildCommitPreviewToolOutput({ projectDir, chapter });
+    // 「就这么短，照样定稿」按钮（user-actions 标了作者确认）才放字数下限；模型自己调的照挡。
+    return buildCommitPreviewToolOutput({ projectDir, chapter, ...(isUserConfirmedTool(context, "commit_preview") ? { allowShort: true } : {}) });
   },
 });

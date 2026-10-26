@@ -4,7 +4,7 @@
  *  - 头：定稿第 N 章；这一章记为故事第几天 + 依据原句 +【改天数】；记账员的提醒（没读完前文等）照实列。
  *  - 要你看的（≤8 条先露，其余点开）：每条一句 + 原句 +【记下】【不记】；要确认的改记是【改记】【不改】、默认不改。
  *  - 另外自动记下 N 条：收起；点开每条也能【不记】。
- *  - 定不了时：照实列阻断原因，只有【知道了】。
+ *  - 定不了时：照实列阻断原因，只有【知道了】；只差字数下限的多一个【就这么短，照样定稿】（只放这一章）。
  *  - 底：【先不定】【定稿】。定稿＝现有「确认定稿」结构化动作（带上作者去掉的、确认的、改的天数），不经模型。
  *
  * 作者动过的条目记在 utils/ledgerExclusions（按章 + 预览令牌），关了再开、从别处点「确认定稿」都带得上。
@@ -24,7 +24,7 @@ import { closeCommitSheet, useCommitSheet } from "../../../workspace/commitSheet
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { cardOf } from "../../../utils/messageCards.js";
-import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
+import { commitConfirmAction, commitShortAction } from "../../../utils/workflowHelpers.js";
 import type { SuggestedAction } from "../../../types.js";
 import { usePresence, type PresenceHandle } from "../../../hooks/usePresence.js";
 
@@ -108,6 +108,7 @@ export function CommitSheet({
   onClose,
   presence,
   firstCommit = false,
+  onCommitShort,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 有动作在跑：按钮先不让点。 */
@@ -119,6 +120,8 @@ export function CommitSheet({
   readonly presence?: PresenceHandle;
   /** 这本书还没定稿过：头一回说一句定稿是干什么的（2026-10-23 从零走查：新作者不知道定稿和存稿有什么两样）。 */
   readonly firstCommit?: boolean;
+  /** 只差字数下限时：作者说这章就这么短，重新出清单、这一章不拿下限挡。 */
+  readonly onCommitShort?: () => void;
 }) {
   const ledger = preview.ledgerChecklist ?? [];
   const { day, review, auto } = splitChecklist(ledger);
@@ -339,6 +342,11 @@ export function CommitSheet({
                 {confirmLabel}
               </button>
             </>
+          ) : blocked && preview.shortOnly && onCommitShort ? (
+            <>
+              <button type="button" className="se-cs-btn" onClick={onClose}>知道了</button>
+              <button type="button" className="se-cs-btn is-primary" disabled={busy} onClick={onCommitShort}>就这么短，照样定稿</button>
+            </>
           ) : (
             <button type="button" className="se-cs-btn is-primary" onClick={onClose}>知道了</button>
           )}
@@ -381,5 +389,22 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
       }));
     }
     : undefined;
-  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} presence={presence} firstCommit={firstCommit} />;
+  const onCommitShort = preview.shortOnly && onSuggestedAction
+    ? () => {
+      closeCommitSheet();
+      onSuggestedAction(commitShortAction(preview.chapter));
+    }
+    : undefined;
+  return (
+    <CommitSheet
+      key={messageId}
+      preview={preview}
+      busy={busy}
+      {...(onConfirm ? { onConfirm } : {})}
+      {...(onCommitShort ? { onCommitShort } : {})}
+      onClose={closeCommitSheet}
+      presence={presence}
+      firstCommit={firstCommit}
+    />
+  );
 }
