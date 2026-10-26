@@ -331,7 +331,7 @@ function repairLabel(entry: EntryInput): string {
 
 /** dayChange：说本章中间过了几天、却没摘出核得上的换天原句（排在最后一条）。 */
 export function buildQuoteRepairTask(entries: readonly EntryInput[], dayChange?: { readonly days: number; readonly wrote?: string }): string {
-  const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry ? (entry.quote ?? "（没写）") : "（没写）"}`);
+  const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry && entry.quote ? entry.quote : "（没写）"}`);
   if (dayChange) {
     lines.push(`${entries.length + 1}. 本章中间换天的那句（你说本章从开头到结尾过了 ${dayChange.days} 天）\n   你写的：${dayChange.wrote ?? "（没写）"}`);
   }

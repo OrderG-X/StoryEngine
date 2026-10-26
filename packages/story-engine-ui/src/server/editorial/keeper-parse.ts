@@ -185,8 +185,9 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     const raw = isRecord(root.summary) ? root.summary : {};
     const summary = named(str(raw.text) ?? str(raw.summary));
     const quote = quoteText(raw.quote);
-    if (summary && quote) entries.push({ kind: "summary", review: "auto", text: summary, quote } satisfies SummaryInput);
-    else drop("summary", summary ? "梗概没附原句" : "梗概是空的");
+    // 没附原句的照样交上去（quote 空着）：补摘那一步会请记账员补一句，补不上由核对如实列为没记上。
+    if (summary) entries.push({ kind: "summary", review: "auto", text: summary, quote: quote ?? "" } satisfies SummaryInput);
+    else drop("summary", "梗概是空的");
   }
 
   // —— 时间 ——
@@ -212,9 +213,9 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
     const timeOfDay = str(raw.timeOfDay);
     if (timeOfDay) time.timeOfDay = timeOfDay;
-    if (quote) time.quote = quote;
-    if (!quote) drop("time", "时间没附原句");
-    else if (time.daysSincePrevious === undefined && time.weekday === undefined && time.timeOfDay === undefined && time.daysInChapter === undefined) {
+    // 没附原句的照样交上去，等补摘（见梗概那条）。
+    time.quote = quote ?? "";
+    if (time.daysSincePrevious === undefined && time.weekday === undefined && time.timeOfDay === undefined && time.daysInChapter === undefined) {
       drop("time", "时间里什么都没写");
     } else entries.push(time);
   }
@@ -229,11 +230,11 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     const name = str(item.name);
     const nameUsed = str(item.nameUsed) ?? name;
     const quote = quoteText(item.quote);
-    if (!name || !nameUsed || !quote) {
-      drop(where, !name ? "没写名字" : "没附原句");
+    if (!name || !nameUsed) {
+      drop(where, "没写名字");
       continue;
     }
-    const presence: { -readonly [K in keyof PresenceInput]: PresenceInput[K] } = { kind: "presence", review: "auto", name, nameUsed, quote };
+    const presence: { -readonly [K in keyof PresenceInput]: PresenceInput[K] } = { kind: "presence", review: "auto", name, nameUsed, quote: quote ?? "" };
     if (flag(item.viewpoint) === true) presence.viewpoint = true;
     if (flag(item.generic) === true && nameUsed !== name) presence.generic = true;
     entries.push(presence);
@@ -248,8 +249,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
     }
     const factText = named(str(item.text));
     const quote = quoteText(item.quote);
-    if (!factText || !quote) {
-      drop(where, !factText ? "事实没写内容" : "事实没附原句");
+    if (!factText) {
+      drop(where, "事实没写内容");
       continue;
     }
     let nature = str(item.nature)?.toLowerCase();
@@ -269,7 +270,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       review: "auto",
       nature: nature as FactInput["nature"],
       text: factText,
-      quote,
+      quote: quote ?? "",
     };
     if (subject) fact.subject = subject;
     if (nature !== "event") {
@@ -302,8 +303,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       drop(where, opText ? `op 写成了「${opText}」，认不出` : "没写 op（开 / 推进 / 收）");
       continue;
     }
-    if (!note || !quote) {
-      drop(where, !note ? "没写这一章对它做了什么" : "没附原句");
+    if (!note) {
+      drop(where, "没写这一章对它做了什么");
       continue;
     }
     if (op === "open") {
@@ -317,7 +318,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       if (!type && typeText) adjusted.push({ where, reason: `类型写成了「${typeText}」，按悬念记` });
       // 重定稿沿用上次的编号：只认这次列出的 R 短号，别的写法当新开（核心再按标题兜一次）。
       const reopen = handleList(item.thread).map((handle) => handles.reopenHandles?.get(handle)).find((id) => id !== undefined);
-      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote, ...(reopen ? { thread: reopen } : {}) } satisfies ThreadInput);
+      entries.push({ kind: "thread", review: "auto", op, type: type ?? "question", title, note, quote: quote ?? "", ...(reopen ? { thread: reopen } : {}) } satisfies ThreadInput);
       continue;
     }
     const targets = handleList(item.thread);
@@ -331,7 +332,7 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       const thread = handles.threadHandles.get(handle) ?? handle;
       if (seen.has(thread)) continue;
       seen.add(thread);
-      entries.push({ kind: "thread", review: "auto", op, thread, note, quote } satisfies ThreadInput);
+      entries.push({ kind: "thread", review: "auto", op, thread, note, quote: quote ?? "" } satisfies ThreadInput);
     }
   }
 
