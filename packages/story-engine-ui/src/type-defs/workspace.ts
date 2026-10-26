@@ -268,6 +268,8 @@ export interface AiFlavorReport {
   readonly summary: string;
   readonly violations: readonly AiFlavorViolation[];
   readonly usedFallback: boolean;
+  /** 查的哪章（老消息没有）：稿纸开着这章时，原句已不在稿里的算改掉了。 */
+  readonly chapter?: number;
 }
 
 export interface LastFormalCommitApply {
