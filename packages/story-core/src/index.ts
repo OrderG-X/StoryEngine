@@ -85,7 +85,7 @@ export {
 } from "./bible/view.js";
 export { readLegacyCards, type LegacyCardsResult } from "./import/legacy-cards.js";
 
-export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteInText } from "./text/quote.js";
+export { MIN_QUOTE_LENGTH, nameKey, normalizeForQuote, quoteFromText, quoteInText } from "./text/quote.js";
 export {
   applyUnitEdits,
   dropNeighborEcho,

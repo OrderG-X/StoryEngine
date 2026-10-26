@@ -124,6 +124,16 @@ describe("read_foundation：读一张卡", () => {
     expect(overview.summary).toBe("设定本：1 张卡，账里还有 1 个没建卡。");
   });
 
+  it("作者说过不用建卡的：一览里不再列、不劝建；按名字照样读得到账里记的", async () => {
+    await commitChapter1();
+    await authorWrite([{ op: "uncarded.skip", name: "周守义" }]);
+    const overview = await readFoundationLogic({ projectDir: book });
+    expect(overview.text).not.toContain("还没建卡");
+    expect(overview.summary).toBe("设定本：1 张卡。");
+    const out = await readFoundationLogic({ projectDir: book, name: "老周" });
+    expect(out.text).toContain("- 在哪：门口（第 1 章）");
+  });
+
   it("设定本里没有、账里也没记 → found=false，如实说，附上全书一览", async () => {
     const out = await readFoundationLogic({ projectDir: book, name: "张三" });
     expect(out.found).toBe(false);

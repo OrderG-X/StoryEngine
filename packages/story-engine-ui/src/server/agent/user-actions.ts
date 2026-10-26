@@ -20,6 +20,7 @@ import { applyLedgerDecisions, MAX_DECISIONS_PER_CHANGE } from "./ledger-decisio
 import { buildProtagonistRenameSuggestion } from "./protagonist-rename-suggestion.js";
 import { markUserConfirmedTool } from "./request-context.js";
 import { parseSettleAction, runSettleAction, type SettleUserAction } from "./settle-actions.js";
+import { rereadBlocker } from "../editorial/reread-state.js";
 
 /** 允许经按钮直接执行的工具（白名单；新增前想清楚它是否真需要绕过模型）。 */
 export const USER_ACTION_TOOL_NAMES = [
@@ -48,12 +49,14 @@ export type UserAction =
     readonly excluded?: readonly string[];
     /** 作者改的「第几天」。 */
     readonly dayOverride?: number;
+    /** 作者改的「到第几天」（这一章跨天）。 */
+    readonly dayEndOverride?: number;
   }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   /** 「核账」：只读，拿这一章对前文原文找对不上的地方。fresh=「再细核一遍」（正文没改也重新核）。 */
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
-  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。 */
-  | { readonly toolName: "commit_preview"; readonly chapter: number }
+  /** 「定稿」按钮：只读，生成定稿预览（登记票据、列账本清单），不经模型判断。allowShort=「就这么短，照样定稿」：这一章不拿字数下限挡。 */
+  | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   /**
    * 「写这一章」按钮（2026-10-10 引擎升级第 5 期「出稿一条路」）：直接执行 generate_draft——先拿章纲、写、
    * 字数不够接着写、写完核账，和对话里让 AI 写同一套。原来按钮走 /api/draft/stream，没章纲也不核账。
@@ -108,6 +111,9 @@ export type ParsedUserAction =
   | { readonly kind: "invalid"; readonly reason: string }
   | { readonly kind: "action"; readonly action: UserAction };
 
+/** 按钮标识最长多少字：一轮里提了几次改账 / 改设定，界面并成一个按钮，标识是几次的拼起来（「+」隔开）。 */
+const MAX_ACTION_KEY_LENGTH = 600;
+
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
@@ -118,16 +124,17 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   }
   if (toolName === "ledger_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > 120) return { kind: "invalid", reason: "改账按钮缺少有效标识。" };
-    if (!Array.isArray(record.decisions) || record.decisions.length === 0 || record.decisions.length > MAX_DECISIONS_PER_CHANGE) {
-      return { kind: "invalid", reason: "改账内容不对。" };
+    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改账按钮缺少有效标识。" };
+    if (!Array.isArray(record.decisions) || record.decisions.length === 0) return { kind: "invalid", reason: "改账内容不对。" };
+    if (record.decisions.length > MAX_DECISIONS_PER_CHANGE) {
+      return { kind: "invalid", reason: `一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条账，这次有 ${record.decisions.length} 条，请让 AI 分几次提。` };
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
   }
   if (toolName === "foundation_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
-    if (!key || key.length > 120) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
+    if (!key || key.length > MAX_ACTION_KEY_LENGTH) return { kind: "invalid", reason: "改设定按钮缺少有效标识。" };
     const input = record.input;
     if (typeof input !== "object" || input === null || Array.isArray(input)) return { kind: "invalid", reason: "改设定内容不对。" };
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
@@ -154,7 +161,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   if (typeof chapter !== "number" || !Number.isInteger(chapter) || chapter <= 0) {
     return { kind: "invalid", reason: "缺少有效章号。" };
   }
-  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter } };
+  if (toolName === "commit_preview") return { kind: "action", action: { toolName: "commit_preview", chapter, ...(record.allowShort === true ? { allowShort: true as const } : {}) } };
   if (toolName === "ai_review" || toolName === "quality_check") return { kind: "action", action: { toolName, chapter } };
   if (toolName === "generate_draft") {
     const chapterGoal = typeof record.chapterGoal === "string" ? record.chapterGoal.trim().slice(0, 2000) : "";
@@ -195,8 +202,12 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
   const excluded = Array.isArray(record.excluded)
     ? [...new Set(record.excluded.filter((id): id is string => typeof id === "string" && id.trim().length > 0 && id.length <= 200).map((id) => id.trim()))].slice(0, MAX_EXCLUDED)
     : [];
-  const rawDay = typeof record.dayOverride === "string" ? Number(record.dayOverride.trim()) : record.dayOverride;
-  const dayOverride = typeof rawDay === "number" && Number.isInteger(rawDay) && rawDay >= 1 && rawDay <= 100_000 ? rawDay : undefined;
+  const dayOf = (raw: unknown): number | undefined => {
+    const value = typeof raw === "string" ? Number(raw.trim()) : raw;
+    return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100_000 ? value : undefined;
+  };
+  const dayOverride = dayOf(record.dayOverride);
+  const dayEndOverride = dayOverride === undefined ? undefined : dayOf(record.dayEndOverride);
   return {
     kind: "action",
     action: {
@@ -205,6 +216,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
       ...(previewToken ? { previewToken } : {}),
       ...(excluded.length > 0 ? { excluded } : {}),
       ...(dayOverride !== undefined ? { dayOverride } : {}),
+      ...(dayEndOverride !== undefined ? { dayEndOverride } : {}),
     },
   };
 }
@@ -410,6 +422,7 @@ export async function runUserAction(args: {
         ...(action.previewToken ? { previewToken: action.previewToken } : {}),
         ...(action.excluded && action.excluded.length > 0 ? { excluded: action.excluded } : {}),
         ...(action.dayOverride !== undefined ? { dayOverride: action.dayOverride } : {}),
+        ...(action.dayEndOverride !== undefined ? { dayEndOverride: action.dayEndOverride } : {}),
       },
       args.requestContext,
     );
@@ -539,6 +552,8 @@ async function runCheckContinuityAction(args: Omit<Parameters<typeof runUserActi
   // 没核成：下一步只给「再核一次」「先写下一章」——不给「预览定稿」（没核过不该推荐定稿）、
   // 不给「改掉确定的 N 处」（sure 是空的），问句也不写「做完了」。
   if (notChecked) {
+    // 导入的书还在通读记账：核账、AI 写稿都挡着，「再核一遍」「先写下一章」点了也是白点——不给下一步，回话已说清等它记完。
+    if (args.projectDir && await rereadBlocker(args.projectDir, "核账")) return;
     // 写下一章推荐写作前沿章（R7.7）：在旧章上核账时不再推荐回去重写 N+1 旧章。
     const next = await resolveNextDraftTarget(args.projectDir, action.chapter);
     const failedCallId = `user-action-next-${stamp}`;
@@ -622,6 +637,8 @@ async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction
   };
   args.sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter: action.chapter } });
   let output: unknown;
+  // 「就这么短，照样定稿」：作者确认标记只在这次执行里有效（工具据它放字数下限）。
+  if (action.allowShort) markUserConfirmedTool(args.requestContext, "commit_preview");
   try {
     output = await args.executeTool("commit_preview", { chapter: action.chapter }, args.requestContext);
   } catch (error) {
@@ -630,6 +647,8 @@ async function runCommitPreviewAction(args: Omit<Parameters<typeof runUserAction
     emitText(`第 ${action.chapter} 章的定稿预览没生成出来：${humanizeToolNames(message)}。可以再点一次「定稿」。`);
     flush();
     return;
+  } finally {
+    if (action.allowShort) markUserConfirmedTool(args.requestContext, undefined);
   }
   args.sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output });
   const result = output as CommitPreviewLikeOutput | undefined;
@@ -973,6 +992,8 @@ export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): st
 
 /** 出稿没成的下一步：接着写没得接 → 改成从头写；这章已定稿 → 不给（回话里说了怎么办）；其余照原样再来一次。 */
 export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown): NextStepChoice[] {
+  // 导入的书还在通读记账：再点也是同一句「等它记完」，不给「再写一次」。
+  if (blockedReason === "rereading") return [];
   if (action.continueDraft && blockedReason === "chapter_committed") return [];
   if (action.continueDraft && blockedReason === "nothing_to_continue") {
     return [{ label: `AI 写第 ${action.chapter} 章`, intent: "写这一章的正文", recommended: true, action: { toolName: "generate_draft", chapter: action.chapter } }];

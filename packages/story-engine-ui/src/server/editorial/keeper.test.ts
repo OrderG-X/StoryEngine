@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CHAPTER_LEDGER_SCHEMA, project, type ChapterLedger, type LedgerEntry } from "@actalk/story-core";
+import { CHAPTER_LEDGER_SCHEMA, checkEntries, project, type ChapterLedger, type LedgerEntry } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
@@ -128,6 +128,13 @@ describe("记账员交回的账单", () => {
     }), { ...handles, reopenHandles: new Map([["R1", "t1-1"], ["R2", "t1-2"]]) });
     expect(parsed?.entries.map((entry) => (entry.kind === "thread" ? entry.thread : undefined))).toEqual(["t1-2", undefined, undefined]);
     expect(parsed?.drops).toEqual([]);
+  });
+
+  it("重定稿：R 短号报成推进 / 收口也换成真编号交下去（定稿编排认得出是这章自己开的那条）", () => {
+    const parsed = parseKeeperOutput(JSON.stringify({
+      threads: [{ op: "advance", thread: "R1", note: "还没解开", quote: q }],
+    }), { ...handles, reopenHandles: new Map([["R1", "t1-1"]]) });
+    expect(parsed?.entries).toEqual([{ kind: "thread", review: "auto", op: "advance", thread: "t1-1", note: "还没解开", quote: q }]);
   });
 
   it("章里换了天：daysInChapter 带上摘的换天原句；写 0 就不记、也不带原句", () => {
@@ -293,10 +300,54 @@ describe("记账员跑一章", () => {
         draft,
         before,
         maxCatchUp: 0,
-        callModel: async (_messages, options) => (options.json ? JSON.stringify({ summary: { text: "交钥匙", quote: "他把钥匙递过来" } }) : "笔记"),
+        // 多打了空格、少抄了引号：核得上，记的是正文原字。
+        callModel: async (_messages, options) => (options.json ? JSON.stringify({ summary: { text: "交钥匙", quote: "他把钥匙 递过来，说：「拿着" } }) : "笔记"),
       });
       const cleanOutcome = await clean;
       expect(cleanOutcome.ok && cleanOutcome.quoteRepair).toBeFalsy();
+      if (cleanOutcome.ok) expect(cleanOutcome.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来，说：「拿着" });
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("忘了附原句的（时间、事实）不直接丢：补摘时一并问，补上了就记；还补不上，核对如实说「没附原句」", async () => {
+    const book = await makeHomeTempDir("keeper-noquote-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。");
+      const draft = "# 第2章\n\n天刚蒙蒙亮，她就起来换药。晌午到了柳湾。";
+      const first = JSON.stringify({
+        time: { basis: "judged", daysSincePrevious: 1 },
+        facts: [{ nature: "event", text: "她清早换药" }],
+      });
+      const run = (repair: string) => {
+        const asks: string[] = [];
+        const outcome = runLedgerKeeper({
+          projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
+          callModel: async (messages, options) => {
+            if (!options.json) return "笔记";
+            const last = messages.at(-1)?.content ?? "";
+            if (last.includes("逐字找不到")) { asks.push(last); return repair; }
+            return first;
+          },
+        });
+        return { asks, outcome };
+      };
+      const got = run(JSON.stringify({ quotes: [{ n: 1, quote: "天刚蒙蒙亮" }, { n: 2, quote: "她就起来换药" }] }));
+      const ok = await got.outcome;
+      expect(got.asks[0]).toContain("1. 时间\n   你写的：（没写）");
+      expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 2 } });
+      if (!ok.ok) throw new Error(ok.reason);
+      expect(ok.parsed.drops).toEqual([]);
+      expect(ok.parsed.entries).toEqual([
+        expect.objectContaining({ kind: "time", daysSincePrevious: 1, quote: "天刚蒙蒙亮" }),
+        expect.objectContaining({ kind: "fact", quote: "她就起来换药" }),
+      ]);
+      const still = await run(JSON.stringify({ quotes: [] })).outcome;
+      if (!still.ok) throw new Error(still.reason);
+      const checked = checkEntries(still.parsed.entries, draft, sampleBook());
+      expect(checked.rejected.map((item) => item.message)).toEqual([expect.stringContaining("没附原句"), expect.stringContaining("没附原句")]);
     } finally {
       await rm(book, { recursive: true, force: true });
     }

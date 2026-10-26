@@ -123,7 +123,13 @@ function buildChapters(overview: StateOverview, currentChapterNumber: number): C
 
   // 占位「下一章」：当前章的下一章，和最后定稿那章的下一章——翻回前面的章改完，「去第 N 章」「写第 N 章」
   // 要能打开后面那章（2026-10-24 长篇走查：在第 1 章点「去第 10 章」说不在章节列表里）。
-  const lastCommitted = Math.max(0, ...[...fileStates.values()].filter((state) => state.hasCommittedChapter).map((state) => state.chapter));
+  // 定稿到的最后一章：工具回传的概览不带章节文件清单，时间线事件（只记定稿了的章）也算——长篇实跑：已定稿到第 6 章、
+  // 回头重定稿第 5 章，回传的概览只认到第 6 章，第 7 章的占位没了，点「去第 7 章」说不在章节列表里。
+  const lastCommitted = Math.max(
+    0,
+    ...[...fileStates.values()].filter((state) => state.hasCommittedChapter).map((state) => state.chapter),
+    ...overview.timeline.recentEvents.map((event) => event.chapter),
+  );
   for (const placeholder of new Set([currentChapterNumber + 1, lastCommitted + 1])) {
     if (byChapter.has(placeholder)) continue;
     const fileState = fileStates.get(placeholder);

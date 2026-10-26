@@ -45,6 +45,8 @@ export interface ProjectionOptions {
 }
 
 export const DEFAULT_STALE_AFTER = 5;
+/** 大伏笔本来就要埋很久：没动这么多倍的章数才算「停太久」（缺省 5 × 4 = 20 章），免得作者定了大伏笔还天天被催。 */
+export const MAJOR_STALE_FACTOR = 4;
 
 const mod7 = (value: number): number => ((value % 7) + 7) % 7;
 
@@ -360,9 +362,10 @@ function buildThreads(
 
   const views = [...threads.values()].map((thread): ThreadView => {
     const lastTouchedAt = Math.max(thread.openedAt, ...thread.touches.map((touch) => touch.chapter));
+    const idleLimit = thread.weight === "major" ? staleAfter * MAJOR_STALE_FACTOR : staleAfter;
     const status = thread.closedAt !== undefined
       ? "closed"
-      : thread.weight !== "minor" && upTo - lastTouchedAt >= staleAfter
+      : thread.weight !== "minor" && upTo - lastTouchedAt >= idleLimit
         ? "stale"
         : thread.touches.some((touch) => touch.op === "advance")
           ? "active"
@@ -387,15 +390,29 @@ function buildChapters(
   ledgers: readonly ChapterLedger[],
   names: Names,
   textHashes: ReadonlyMap<number, string> | undefined,
+  decisions: readonly AuthorDecision[],
 ): ChapterView[] {
+  // 定稿后作者改的天数（同一章改过几次，按最后一次）。
+  const dayRulings = new Map<number, { readonly day: number; readonly dayEnd?: number }>();
+  for (const decision of decisions) if (decision.type === "chapter.day") dayRulings.set(decision.chapter, decision);
+  // 定稿后作者改写的梗概（同理按最后一次）。
+  const summaryRulings = new Map<number, string>();
+  for (const decision of decisions) if (decision.type === "chapter.summary") summaryRulings.set(decision.chapter, decision.text);
   const views: ChapterView[] = [];
   let previousEnd = 0;
   for (const ledger of ledgers) {
     const time = ledger.entries.find((entry): entry is TimeEntry => entry.kind === "time");
-    const summary = ledger.entries.find((entry) => entry.kind === "summary");
+    const ledgerSummary = ledger.entries.find((entry) => entry.kind === "summary");
+    const summary = summaryRulings.get(ledger.chapter) ?? (ledgerSummary?.kind === "summary" ? ledgerSummary.text : undefined);
+    const ruling = dayRulings.get(ledger.chapter);
     let day: number;
     let basis: ChapterView["dayBasis"];
-    if (time?.basis === "author" && time.day !== undefined) {
+    let dayEnd: number | undefined;
+    if (ruling) {
+      day = ruling.day;
+      dayEnd = Math.max(ruling.day, ruling.dayEnd ?? ruling.day);
+      basis = "author";
+    } else if (time?.basis === "author" && time.day !== undefined) {
       day = time.day;
       basis = "author";
     } else if (time?.daysSincePrevious !== undefined) {
@@ -405,7 +422,7 @@ function buildChapters(
       day = previousEnd + 1;
       basis = time ? time.basis : "missing";
     }
-    const dayEnd = day + (time?.daysInChapter ?? 0);
+    dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;
 
     const present: string[] = [];
@@ -421,7 +438,7 @@ function buildChapters(
       chapter: ledger.chapter,
       origin: ledger.origin,
       committedAt: ledger.committedAt,
-      ...(summary?.kind === "summary" ? { summary: summary.text } : {}),
+      ...(summary !== undefined ? { summary } : {}),
       day,
       dayEnd,
       dayBasis: basis,
@@ -462,7 +479,7 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
     version: input.version ?? 0,
     upTo,
     unsettled: input.unsettled ?? false,
-    chapters: buildChapters(ledgers, names, input.textHashes),
+    chapters: buildChapters(ledgers, names, input.textHashes, input.decisions),
     facts: facts.facts,
     subjects: facts.subjects,
     threads: threads.threads,

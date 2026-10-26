@@ -15,10 +15,12 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import { readDraftVersions } from "../utils/draftVersions.js";
 import { readSettleData } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
+import type { ChatHistoryMessage } from "../server/lib/project-io.js";
 
 const AI_ERROR_REASONS: readonly AiErrorReason[] = ["setup", "auth", "quota", "rate-limit", "server", "network", "timeout", "unknown"];
 
@@ -29,7 +31,7 @@ export function readAiErrorReason(value: unknown): AiErrorReason | undefined {
 
 export interface StreamAgentChatRequest {
   readonly projectPath: string;
-  readonly messages: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
+  readonly messages: readonly ChatHistoryMessage[];
   /** 用户当前打开/停留的章号。后端据此引导 agent 默认作用于该章、工具缺省回退该值（H3：回看旧章不写错章）。 */
   readonly currentChapter?: number;
   /**
@@ -43,10 +45,10 @@ export interface StreamAgentChatRequest {
 
 /** 结构化动作（与服务端 agent/user-actions.ts 的 UserAction 同形）。 */
 export type AgentUserAction =
-  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number }
+  | { readonly toolName: "commit_apply"; readonly chapter: number; readonly previewToken?: string; readonly excluded?: readonly string[]; readonly dayOverride?: number; readonly dayEndOverride?: number }
   | { readonly toolName: "prune_snapshots"; readonly keep?: number }
   | { readonly toolName: "check_continuity"; readonly chapter: number; readonly fresh?: boolean }
-  | { readonly toolName: "commit_preview"; readonly chapter: number }
+  | { readonly toolName: "commit_preview"; readonly chapter: number; readonly allowShort?: true }
   | { readonly toolName: "generate_draft"; readonly chapter: number; readonly chapterGoal?: string; readonly continueDraft?: boolean }
   | { readonly toolName: "ai_review"; readonly chapter: number }
   | { readonly toolName: "quality_check"; readonly chapter: number }
@@ -78,6 +80,8 @@ export interface LedgerChecklistItemView {
   readonly removable: boolean;
   /** 作者能改的「第几天」（故事时间线）。 */
   readonly editableDay?: number;
+  /** 记账员记的这一章到第几天（跨天才有）。 */
+  readonly editableDayEnd?: number;
   /** 引擎没把握、请作者确认。 */
   readonly needsConfirm?: boolean;
   /** 默认不勾（要确认的改记）：不勾＝这条改记不作数，勾上才算确认。 */
@@ -205,6 +209,8 @@ export interface AgentToolResult {
   readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
+  /** generate_draft 专属：一次写几版时落选的几版全文（「另外几版」卡）。 */
+  readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
@@ -482,6 +488,10 @@ export async function streamAgentChat(
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
               : {}),
+            // generate_draft 专属：一次写几版时落选的几版全文 → 「另外几版」卡，作者挑一版换进工作稿。没写成不建卡。
+            ...(parsed.toolName === "generate_draft" && output.ok !== false && readDraftVersions(output)
+              ? { draftVersions: readDraftVersions(output)! }
+              : {}),
             // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
             ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)
               ? { settle: readSettleData(output.settle)! }
@@ -519,6 +529,7 @@ export async function streamAgentChat(
                     ...(toIssueMessages(output.draftQualityIssues).length > 0 ? { draftIssues: toIssueMessages(output.draftQualityIssues) } : {}),
                     ...(toIssueMessages(output.semanticQualityIssues).length > 0 ? { semanticIssues: toIssueMessages(output.semanticQualityIssues) } : {}),
                     ...(typeof output.previewToken === "string" && output.previewToken ? { previewToken: output.previewToken } : {}),
+                    ...(output.shortOnly === true ? { shortOnly: true } : {}),
                     ...(toIssueMessages(output.notRecorded).length > 0 ? { notRecorded: toIssueMessages(output.notRecorded) } : {}),
                     ...(toIssueMessages(output.notes).length > 0 ? { notes: toIssueMessages(output.notes) } : {}),
                     ...(toLedgerChecklist(output.ledgerChecklist).length > 0 ? { ledgerChecklist: toLedgerChecklist(output.ledgerChecklist) } : {}),
@@ -677,6 +688,7 @@ function toLedgerChecklist(value: unknown): readonly LedgerChecklistItemView[] {
       ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail } : {}),
       removable: item.removable === true,
       ...(typeof item.editableDay === "number" && Number.isInteger(item.editableDay) && item.editableDay > 0 ? { editableDay: item.editableDay } : {}),
+      ...(typeof item.editableDayEnd === "number" && Number.isInteger(item.editableDayEnd) && item.editableDayEnd > 0 ? { editableDayEnd: item.editableDayEnd } : {}),
       ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
       ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
     }];

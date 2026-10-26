@@ -8,6 +8,7 @@ import { listChatSessions, readChatSession } from "../api/chatSessionsClient.js"
 import type { ImportBookRequest, StateOverview } from "../api/types.js";
 import { workspaceFromStateOverview } from "../api/stateOverviewAdapter.js";
 import { bookSummaryFromOverview, isRealProjectBook } from "../utils/bookUtils.js";
+import { chapterBareTitle, isPlaceholderChapterTitle } from "../components/v2/v2Utils.js";
 import { pushHomeUrl, pushWorkspaceUrlForBook, pushWorkspaceUrlForProject } from "../utils/routing.js";
 import { useNavigationStore } from "../stores/navigationStore.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -328,7 +329,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const { setMessages, setChatError, setSessions, setActiveArchivedCount, setChatHistoryBudget } = useChatStore.getState();
   const {
     setSteeringDirection,
-    setLastChapterDirection,
     setCommitPreviewReport,
     setDraftAIReview,
     setActiveRevisionTask,
@@ -475,7 +475,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       bookManagement.upsertRecentBook(book);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
-      setLastChapterDirection("");
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -530,7 +529,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setOpenProjectError(null);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
-      setLastChapterDirection("");
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -574,7 +572,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       setOpenProjectError(null);
       setSteeringDirection("");
       useUiStore.getState().clearComposerDrafts();
-      setLastChapterDirection("");
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -606,7 +603,9 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       const paper: ChapterPaper | null = currentProjectPath ? await fetchChapterPaper(currentProjectPath, chapter.chapterNumber) : null;
       if (!ownsNavigationOrigin(transition)) return;
       const outgoingChapter = useBookStore.getState().workspace.currentChapter?.chapterNumber ?? null;
-      const draftTitle = paper?.draft?.title ?? paper?.committed?.title ?? chapter.title;
+      // 章节表给没写的章垫的占位名「下一章」不当这章的名字（不管从哪个入口打开）。
+      const draftTitle = paper?.draft?.title ?? paper?.committed?.title
+        ?? (isPlaceholderChapterTitle(chapterBareTitle(chapter.title)) ? `第${chapter.chapterNumber}章` : chapter.title);
       const flowStatus: ChapterWorkflowState = paper
         ? flowStatusForPaper({ body: paper.draft?.body ?? paper.committed?.body ?? "", committed: paper.committed })
         : "idle";
@@ -631,7 +630,6 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
       if (currentProjectPath && paper) useDraftStore.getState().loadPaper(currentProjectPath, paper);
       // 输入框里没发的字按章存着：切走不丢，切回来还在；不会把这章的话带到别的章（P11）。
       useUiStore.getState().switchComposerChapter(outgoingChapter, chapter.chapterNumber);
-      setLastChapterDirection("");
       setChatError(null);
       setCommitPreviewReport(null);
       setDraftAIReview(null);
@@ -662,10 +660,7 @@ export function useProjectNavigation(params: UseProjectNavigationParams): UsePro
   const handleContinueNextChapter = async (): Promise<void> => {
     const nextChapterNumber = workspace.currentChapter.chapterNumber + 1;
     const existing = workspace.chapters.find((chapter) => chapter.chapterNumber === nextChapterNumber);
-    await openChapterWorkspace(existing ? {
-      ...existing,
-      title: existing.title === "下一章" ? `第${nextChapterNumber}章` : existing.title,
-    } : {
+    await openChapterWorkspace(existing ?? {
       id: `ch-${nextChapterNumber}`,
       chapterNumber: nextChapterNumber,
       title: `第${nextChapterNumber}章`,

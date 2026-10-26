@@ -32,6 +32,8 @@ const outputSchema = z.object({
     suggestedFix: z.string().optional(),
   })),
   usedFallback: z.boolean(),
+  /** 查的哪章：卡片据它对照稿纸，原句已不在稿里的算改掉了。 */
+  chapter: z.number().int().positive().optional(),
 });
 
 /**
@@ -92,7 +94,7 @@ export const checkAiFlavorTool = createTool({
       return content;
     };
     try {
-      return await runCheckAiFlavorToolLogic({ projectDir, chapter: resolvedChapter, callModel });
+      return { ...(await runCheckAiFlavorToolLogic({ projectDir, chapter: resolvedChapter, callModel })), chapter: resolvedChapter };
     } catch (error) {
       // 绝不静默：模型/网络挂了如实回报，不编造违规。
       return { ok: false, summary: `体检没成：${error instanceof Error ? error.message : String(error)}，可重试。`, violations: [], usedFallback: true };

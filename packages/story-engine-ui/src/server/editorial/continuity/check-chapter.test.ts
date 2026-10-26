@@ -52,6 +52,15 @@ describe("通读解析 parseFullReadIssues", () => {
     expect(issues[0].earlierChapter).toBe(2);
   });
 
+  it("模型把换行多转义一层（原句里是字面的 \\n）：去掉再核、对回正文整句，不把「\\n」给作者看", () => {
+    const body = "林舟一早开门。\n\n他从工作台上拿起那块怀表，表盖还开着。周婶在门口喊他。";
+    const issues = parseFullReadIssues(JSON.stringify({
+      contradictions: [{ quote: "林舟一早开门。\\n\\n他从工作台上拿起那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "位置对不上" }],
+    }), 3, body, EARLIER);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].quote).toBe("林舟一早开门。他从工作台上拿起那块怀表，表盖还开着。");
+  });
+
   it("本章那句和「本章前文」那句是同一处（互相包含）→ 不报", () => {
     const issues = parseFullReadIssues(JSON.stringify({
       contradictions: [{ quote: "表盖还开着", earlierQuote: "他从工作台上拿起那块怀表，表盖还开着。", earlierChapter: 3, reason: "重复" }],

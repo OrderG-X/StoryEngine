@@ -107,7 +107,8 @@ export function summarizeProcess(
         : "在想";
   return {
     label,
-    failed: tools.filter((step) => step.status === "failed").length,
+    // AI 传错参数、这步没执行，之后同一个工具又做成了：是它改了参数重来，不算没成功（点开照样看得到那一步）。
+    failed: tools.filter((step, at) => step.status === "failed" && !(step.invalidArgs && tools.slice(at + 1).some((later) => later.toolName === step.toolName && later.status === "completed"))).length,
     stopped: tools.some((step) => step.status === "stopped"),
     current,
   };

@@ -10,6 +10,16 @@ export interface DraftLengthTarget {
   readonly source: DraftLengthTargetSource;
   /** lowerBound 是作者写明的「至少 N 字」（chapterLength.minWords）：定稿侧按它硬拦，不够就得补到它。 */
   readonly hardMinimum?: boolean;
+  /**
+   * 作者写的「至少 N 字」比目标区间的下沿还低时记在这：出稿照区间瞄（lowerBound 进提示词），够不够按它判
+   * （长篇实跑：至少 2000、目标 2500，写了 2113 字却报「比下限少 12 字」——那个下限是 2500 的八五折）。
+   */
+  readonly floor?: number;
+}
+
+/** 够不够字数按哪条线判：作者的「至少 N 字」比区间下沿低就按它，否则按区间下沿。 */
+export function draftLengthFloor(lengthTarget: DraftLengthTarget): number {
+  return lengthTarget.floor ?? lengthTarget.lowerBound;
 }
 
 export interface DraftLengthReport {
@@ -82,7 +92,7 @@ function withExplicitMinimum(target: DraftLengthTarget, minimum: number | undefi
   const { lowerBound: derived, upperBound } = requestedDraftLengthBounds(requested);
   // 下限比目标的正常区间还低（作者为了一章短稿把地板调低、目标照旧，长篇连写 2026-10-24）：地板只管定稿拦不拦，
   // 出稿照旧瞄目标区间——否则提示词写成「1000-2875 字」，写手一路往少了写（目标 2500 写出 1635）。
-  if (min < derived) return { ...target, requested, lowerBound: derived, upperBound };
+  if (min < derived) return { ...target, requested, lowerBound: derived, upperBound, floor: min };
   return { ...target, requested, lowerBound: min, upperBound, hardMinimum: true };
 }
 
@@ -150,7 +160,7 @@ export function buildDraftLengthReport(input: {
   const lengthStatus = assessDraftLengthStatus(actualLength, input.lengthTarget);
   return {
     requestedDraftLength: input.lengthTarget.requested,
-    lowerBound: input.lengthTarget.lowerBound,
+    lowerBound: draftLengthFloor(input.lengthTarget),
     upperBound: input.lengthTarget.upperBound,
     actualLength,
     lengthStatus,
@@ -185,7 +195,7 @@ export function trimDraftBodyToLengthTarget(draftBody: string, lengthTarget: Dra
   const currentLength = countDraftChineseCharacters(normalized);
   if (currentLength <= lengthTarget.upperBound) {
     return {
-      ok: currentLength >= lengthTarget.lowerBound,
+      ok: currentLength >= draftLengthFloor(lengthTarget),
       draftBody: normalized,
       finalLength: currentLength,
     };
@@ -201,7 +211,7 @@ export function trimDraftBodyToLengthTarget(draftBody: string, lengthTarget: Dra
 }
 
 function assessDraftLengthStatus(actualLength: number, lengthTarget: DraftLengthTarget): DraftLengthStatus {
-  if (actualLength < lengthTarget.lowerBound) return "below_lower_bound";
+  if (actualLength < draftLengthFloor(lengthTarget)) return "below_lower_bound";
   if (actualLength > lengthTarget.upperBound) return "above_upper_bound";
   return "within_range";
 }
@@ -216,14 +226,14 @@ function trimByParagraphs(draftBody: string, lengthTarget: DraftLengthTarget): D
 
   for (const paragraph of paragraphs) {
     const paragraphLength = countDraftChineseCharacters(paragraph);
-    if (total >= lengthTarget.lowerBound && total + paragraphLength > lengthTarget.upperBound) break;
+    if (total >= draftLengthFloor(lengthTarget) && total + paragraphLength > lengthTarget.upperBound) break;
     if (total + paragraphLength > lengthTarget.upperBound) break;
     selected.push(paragraph);
     total += paragraphLength;
   }
 
   const draftBodyCandidate = selected.join("\n\n").trim();
-  if (draftBodyCandidate && total >= lengthTarget.lowerBound && total <= lengthTarget.upperBound) {
+  if (draftBodyCandidate && total >= draftLengthFloor(lengthTarget) && total <= lengthTarget.upperBound) {
     return { ok: true, draftBody: draftBodyCandidate, finalLength: total };
   }
   return { ok: false, draftBody: draftBodyCandidate, finalLength: total };
@@ -240,14 +250,14 @@ function trimBySentences(draftBody: string, lengthTarget: DraftLengthTarget): Dr
 
   for (const chunk of chunks) {
     const chunkLength = countDraftChineseCharacters(chunk);
-    if (total >= lengthTarget.lowerBound && total + chunkLength > lengthTarget.upperBound) break;
+    if (total >= draftLengthFloor(lengthTarget) && total + chunkLength > lengthTarget.upperBound) break;
     if (total + chunkLength > lengthTarget.upperBound) break;
     selected.push(chunk);
     total += chunkLength;
   }
 
   const draftBodyCandidate = selected.join("").trim();
-  if (draftBodyCandidate && total >= lengthTarget.lowerBound && total <= lengthTarget.upperBound) {
+  if (draftBodyCandidate && total >= draftLengthFloor(lengthTarget) && total <= lengthTarget.upperBound) {
     return { ok: true, draftBody: draftBodyCandidate, finalLength: total };
   }
   return { ok: false, draftBody: draftBodyCandidate, finalLength: total };
@@ -264,7 +274,7 @@ function trimByCjkBoundary(draftBody: string, lengthTarget: DraftLengthTarget): 
   const draftBodyCandidate = result.trim();
   const finalLength = countDraftChineseCharacters(draftBodyCandidate);
   return {
-    ok: Boolean(draftBodyCandidate) && finalLength >= lengthTarget.lowerBound && finalLength <= lengthTarget.upperBound,
+    ok: Boolean(draftBodyCandidate) && finalLength >= draftLengthFloor(lengthTarget) && finalLength <= lengthTarget.upperBound,
     draftBody: draftBodyCandidate,
     finalLength,
   };

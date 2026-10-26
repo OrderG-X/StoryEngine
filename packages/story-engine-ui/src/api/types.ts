@@ -80,6 +80,8 @@ export interface ToolStep {
   readonly endedAt?: number;
   /** 工具执行详情（真实 summary / 失败原因）；折叠步骤展开后显示「具体怎么执行的」。 */
   readonly detail?: string;
+  /** AI 传的参数没通过校验、这步没执行（原因已回给 AI，它多半会改了参数重来）。 */
+  readonly invalidArgs?: true;
 }
 
 /**
@@ -405,7 +407,7 @@ export type ImportBookApiResponse =
 export interface GenerateDraftRequest {
   readonly projectPath: string;
   readonly chapter: number;
-  readonly chapterGoal: string;
+  readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
   readonly maxOutputTokens?: number;
   readonly selectedCharacterIds?: readonly string[];

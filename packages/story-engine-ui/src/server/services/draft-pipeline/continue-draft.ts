@@ -8,8 +8,9 @@
  *
  * 模型无关：续写结果只取正文（剥标题/解释）；比原来还短、空、像 JSON → 视为没续成，原稿不动。
  */
-import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
+import { countDraftChineseCharacters, draftLengthFloor, type DraftLengthTarget } from "../../writing/draft-length-control.js";
 import { stripTrailingSegmentMarkers } from "../../writing/fast-draft-writer.js";
+import { cutAtWriterEndMark, WRITER_END_MARK } from "../../writing/prompt-cache-diagnostics.js";
 import { chinesePunctuation } from "../../../lib/dialogue-quotes.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
 
@@ -64,6 +65,7 @@ export function buildContinuationMessages(input: {
     `这一段续写写 ${target}–${ceiling} 个汉字（不少于 ${target}，不要超过 ${ceiling}）：把章纲里还没写到或写得太简略的要点写充分——用具体的动作、对话、场面推进，不要堆形容词、不要回顾前文、不要总结感想。`,
     "只在本章已经写到的场景里往深处写：不要开始新的一天、不要换到新的地点、不要引入新的人物、新的文书或新的物件、不要让事情有前文没有的新结果——把已有场面的动作、对话、细节写足，写到章纲最后一个要点就收住。",
     "人物、物件、地点、时间必须和前文一致。最后自然收住本章。",
+    `写完另起一行只写 ${WRITER_END_MARK}；这一行后面什么都不写（不要自检、不要说明）。`,
   ].join("\n");
   const plan = input.chapterPlan
     ? [
@@ -84,7 +86,7 @@ export function buildContinuationMessages(input: {
 /** 剥掉模型可能加的 Markdown 标题行和末尾的「（全文完）」这类标记，留正文。
  *  「好的 / 以下是」这类开场白不再按词表剥（重构 P7「不猜」：正文第一句也可能是「好的。」）——提示词已要求只出正文。 */
 function cleanContinuation(text: string): string {
-  return chinesePunctuation(stripTrailingSegmentMarkers(text.replace(/^\s*#[^\n]*\n/u, ""))).trim();
+  return chinesePunctuation(stripTrailingSegmentMarkers(cutAtWriterEndMark(text).replace(/^\s*#[^\n]*\n/u, ""))).trim();
 }
 
 export async function continueDraftToLength(input: ContinueDraftInput): Promise<ContinueDraftResult> {
@@ -95,9 +97,9 @@ export async function continueDraftToLength(input: ContinueDraftInput): Promise<
   let rounds = 0;
   for (let attempt = 0; attempt < maxRounds; attempt += 1) {
     const current = countDraftChineseCharacters(body);
-    if (current >= input.lengthTarget.lowerBound) break;
+    if (current >= draftLengthFloor(input.lengthTarget)) break;
     // 续到目标字数（而不是刚过下限）：留出余量，免得再被下限拦。
-    const need = Math.max(input.lengthTarget.requested - current, input.lengthTarget.lowerBound - current);
+    const need = Math.max(input.lengthTarget.requested - current, draftLengthFloor(input.lengthTarget) - current);
     const { prefix, lastParagraph } = splitForContinuation(body);
     let continuation = "";
     try {

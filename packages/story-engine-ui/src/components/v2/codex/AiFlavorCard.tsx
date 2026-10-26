@@ -8,6 +8,8 @@
  * 外壳走统一 StepCard（暗金折叠卡 + 状态徽章=X/N 已改），body 内仍用 .afc-*（高=暗红 / 中=金 / 轻=灰）。
  */
 import { StepCard } from "./StepCard.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
+import { quoteInPaper } from "../../../workspace/chapterProgress.js";
 import type { AiFlavorReport, AiFlavorViolation } from "../../../types.js";
 
 const SEVERITY_LABEL: Record<AiFlavorViolation["severity"], string> = { high: "重", medium: "中", low: "轻" };
@@ -27,10 +29,13 @@ export function AiFlavorCard({ report, fixedIds = [], pendingViolationId = null,
   /** 一键全修：把还没改的违规一次性批量去 AI 味。 */
   readonly onFixAll?: (violations: readonly AiFlavorViolation[]) => void;
 }) {
+  // 稿纸开着的正是这一章：原句已经不在稿里的（作者自己改了、让 AI 在对话里改了）也算改掉了。
+  const paper = useDraftStore((state) => (report.chapter !== undefined && state.loaded && state.chapter === report.chapter && state.body.trim() ? state.body : null));
+  const isFixed = (v: AiFlavorViolation): boolean => fixedIds.includes(v.id) || (paper !== null && !quoteInPaper(paper, v.text));
   const total = report.violations.length;
-  const fixedCount = report.violations.filter((v) => fixedIds.includes(v.id)).length;
+  const fixedCount = report.violations.filter(isFixed).length;
   const allFixed = total === 0 || fixedCount >= total;
-  const unfixed = report.violations.filter((v) => !fixedIds.includes(v.id));
+  const unfixed = report.violations.filter((v) => !isFixed(v));
   return (
     <StepCard
       title="检查机器腔"
@@ -58,7 +63,7 @@ export function AiFlavorCard({ report, fixedIds = [], pendingViolationId = null,
       {total === 0 ? null : (
         <ul className="afc-list">
           {report.violations.map((v) => {
-            const fixed = fixedIds.includes(v.id);
+            const fixed = isFixed(v);
             const pending = !fixed && pendingViolationId === v.id;
             return (
               <li className={`afc-item${fixed ? " afc-item-fixed" : ""}`} key={v.id}>

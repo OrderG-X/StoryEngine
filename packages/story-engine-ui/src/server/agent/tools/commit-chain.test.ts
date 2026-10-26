@@ -5,7 +5,7 @@
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createStoryProject } from "../../book/project-store.js";
-import { projectBook, readCards, readChapterLedger, readHead } from "@actalk/story-core";
+import { cardWrite, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,7 @@ import { MIRROR_BACKUP_DIR } from "../../book/mirror/sync.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { listSnapshots, restoreSnapshot } from "../../lib/snapshot.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
-import { commitApplyTool } from "./commit-apply.js";
+import { commitApplyTool, openThreadsHintDue } from "./commit-apply.js";
 import { buildCommitPreviewToolOutput, commitPreviewTool, OPT_IN_PREFIX } from "./commit-preview.js";
 
 const warmUpReadersMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -121,8 +121,9 @@ describe("commit_preview", () => {
     expect(short.canCommit).toBe(false);
     expect(short.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
     expect(short.blockingReasons.join("")).toContain("下限");
-    // 下限是作者自己的写作规则：告诉作者能改（P6 第 7 步：手写短章只看到「需扩写」不知道去哪改）。
-    expect(short.blockingReasons.join("")).toContain("跟右边的 AI 说把每章字数下限改低");
+    // 下限是作者自己的写作规则：这章就该这么短，作者点按钮放这一章（作者长篇实跑 2026-10-26：原来只能去改全书下限）。
+    expect(short.blockingReasons.join("")).toContain("「就这么短，照样定稿」");
+    expect(short.shortOnly).toBe(true);
     expect(short.previewToken).toBeUndefined();
   });
 
@@ -209,6 +210,49 @@ describe("commit_apply", () => {
     expect(await readHead(book)).toMatchObject({ version: base + 1 });
   });
 
+  it("字数下限后来才定、这章原来就短：改了再定稿不挡，提醒一句；原来够数的照样挡（作者长篇实跑 2026-10-26）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await runCommand(book, cardWrite, { ops: [{ op: "rules.set", field: "minWords", value: 2000 }] }, { caller: "author", idempotencyKey: "min-2000" });
+
+    await writeDraft(1, CH1.replace("老周没有拦他。", "老周没拦他。"));
+    const again = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    expect(again.canCommit).toBe(true);
+    expect(again.notes).toContain("这章原来定稿时就不到 2000 字，字数下限这次不挡");
+
+    // 新的一章照样按下限挡。
+    await writeDraft(2, CH2);
+    const fresh = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
+    expect(fresh.canCommit).toBe(false);
+    expect(fresh.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
+    // 作者点了「就这么短，照样定稿」：只放这一章，清单里说一句。
+    const allowed = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2), allowShort: true });
+    expect(allowed.canCommit).toBe(true);
+    expect(allowed.notes?.some((note) => note.includes("你点了照样定稿，只这一章"))).toBe(true);
+    // 模型自己调（没有作者按钮的确认标记）照挡。
+    const byModel = (await previewExecute({ chapter: 2 }, modelContext(2))) as { canCommit: boolean; shortOnly?: boolean };
+    expect(byModel).toMatchObject({ canCommit: false, shortOnly: true });
+  });
+
+  it("重定稿记账员看错天数：天数那行照上次定稿、说清这次看成第几天，算一条要你看（作者长篇实跑 2026-10-27）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await writeDraft(2, CH2);
+    const ch2 = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
+    await applyExecute({ chapter: 2, previewToken: ch2.previewToken }, buttonContext(2));
+
+    await writeDraft(2, CH2.replace("没让外人进", "没让外人进门"));
+    const wrongDay = { ...LEDGER2, time: { basis: "judged", daysSincePrevious: 0, timeOfDay: "上午", quote: "林远把钥匙锁进铜盒" } };
+    const again = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(wrongDay) });
+    const day = again.ledgerChecklist?.[0];
+    expect(day).toMatchObject({ id: "day", editableDay: 2, needsConfirm: true, detail: "第二天上午" });
+    expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（照上次定稿）");
+    expect(day?.reason).toBe("记账员这次看成第 1 天，和上次定稿不一样；先照上次的记，不对就改天数");
+    expect(again.summary).toContain("要你看");
+  });
+
   it("票号没了 / 乱填：如实拒、不定稿", async () => {
     const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
@@ -284,5 +328,18 @@ describe("commit_apply", () => {
     for (const [file, content] of mirrored) {
       expect(await readFile(join(book, MIRROR_BACKUP_DIR, file), "utf-8")).toBe(content);
     }
+  });
+});
+
+describe("openThreadsHintDue：开着的线索跨过一档才提「归并线索」", () => {
+  it("到 20 提一次；停在 20 多不再念；到 25、30 再提；变少不提", () => {
+    expect(openThreadsHintDue(19, 20)).toBe(true);
+    expect(openThreadsHintDue(18, 22)).toBe(true);
+    expect(openThreadsHintDue(20, 20)).toBe(false);
+    expect(openThreadsHintDue(20, 21)).toBe(false);
+    expect(openThreadsHintDue(24, 25)).toBe(true);
+    expect(openThreadsHintDue(29, 31)).toBe(true);
+    expect(openThreadsHintDue(26, 24)).toBe(false);
+    expect(openThreadsHintDue(10, 15)).toBe(false);
   });
 });

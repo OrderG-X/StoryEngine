@@ -116,6 +116,27 @@ describe("核账服务（核账员一路）", () => {
     expect(third.sure).toEqual([]);
   });
 
+  // 长篇实跑第 46 章：报的是一句台词（地点对不上），作者改的是前面交代地点的那句——台词没动，「确定」原样一直带着。
+  it("上次的问题原句没动、错在别处改好了：带进自复核，判 no 就去掉", async () => {
+    const dir = await makeBook();
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: readerModel("sure").callModel });
+    const reviewed: string[] = [];
+    const fixedElsewhere: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        reviewed.push(last);
+        return JSON.stringify({ verdicts: [{ id: "K1", verdict: "no" }] });
+      }
+      return JSON.stringify({ checks: [], contradictions: [] });
+    };
+    const second = await checkChapterBody(dir, 3, BODY.replace("林舟一早开门。", "林舟一早开门，周婶跟着进来。"), { readerCallModel: fixedElsewhere });
+    expect(reviewed).toHaveLength(1);
+    expect(reviewed[0]).toContain(AUNT_SENTENCE);
+    expect(second.sure).toEqual([]);
+    expect(second.maybe).toEqual([]);
+  });
+
   it("对设定本的条目改稿后照带（以前拿设定原文去正文里找、永远带不过来）；设定本改了就不带", async () => {
     const dir = await makeBook();
     await mkdir(join(dir, "story"), { recursive: true });

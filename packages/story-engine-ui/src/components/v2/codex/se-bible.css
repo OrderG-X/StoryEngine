@@ -247,8 +247,9 @@
   /* ═══ 设定本（重构 P9；2026-10-20 美化：卡片墙、小格子、扉页、两栏规则、关系图）。卡上写的就地改，账里记的跟在下面 ═══ */
   .se-bk{display:flex;flex-direction:column;gap:16px;}
   .se-bk-note{margin:0;font-size:13px;color:var(--muted);}
-  /* 改完的提示：钉在页顶，往下翻也看得见，× 关掉 */
-  .se-bk-notice{position:sticky;top:12px;z-index:5;display:flex;align-items:flex-start;gap:10px;margin:0;padding:8px 8px 8px 12px;
+  /* 改完的提示：钉在页顶，往下翻也看得见，× 关掉；浮着、不占地方（高 0，抵掉一份间距），出来时下面的字不挪 */
+  .se-bk-notice-pin{position:sticky;top:12px;z-index:5;height:0;margin-bottom:-16px;}
+  .se-bk-notice{position:absolute;top:0;left:0;right:0;display:flex;align-items:flex-start;gap:10px;margin:0;padding:8px 8px 8px 12px;
     border:1px solid color-mix(in srgb,var(--success) 30%,transparent);border-radius:10px;font-size:13px;line-height:1.6;color:var(--text);
     background:linear-gradient(var(--success-soft),var(--success-soft)),var(--surface-2);box-shadow:0 10px 24px -18px rgba(0,0,0,.6);}
   .se-bk-notice::before{content:"\2713";flex:none;display:inline-grid;place-items:center;width:18px;height:18px;margin-top:2px;border-radius:50%;
@@ -425,6 +426,10 @@
   .se-bk-alias.is-ledger{padding-right:8px;border-style:dashed;color:var(--muted);cursor:pointer;}
   .se-bk-alias.is-ledger:hover:not(:disabled){color:var(--text);border-color:var(--accent-line);}
   .se-bk-make{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:auto;padding:0 14px 14px;}
+  .se-bk-make .se-bk-skip{margin-left:auto;color:var(--faint);}
+  .se-bk-skipped{margin-top:18px;}
+  .se-bk-skipped ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px 14px;}
+  .se-bk-skipped li{display:flex;align-items:center;gap:2px;font-size:13px;color:var(--muted);}
   .se-bk-card.is-open .se-bk-make{padding:0 20px 4px;}
 
   /* 标签 / 内容：小格子；内容长的占满一行，AI 补的虚线框 */

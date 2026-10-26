@@ -52,7 +52,7 @@ export function checkEntries(entries: readonly EntryInput[], text: string, befor
     const reject = (reason: RejectReason, why: string) => rejected.push({ index, entry, reason, message: `${label(entry)}没记上：${why}` });
     const shape = entryShapeProblem(entry);
     if (shape) return reject("shape", shape);
-    if (entryNeedsQuote(entry) && (!entry.quote || !quoteInText(entry.quote, text))) return reject("quote_not_in_text", "附的原句在正文里找不到");
+    if (entryNeedsQuote(entry) && (!entry.quote || !quoteInText(entry.quote, text))) return reject("quote_not_in_text", entry.quote ? "附的原句在正文里找不到" : "没附原句");
     if (entry.kind === "thread" && entry.op !== "open" && !knownThreads.has(entry.thread ?? "")) {
       return reject("unknown_thread", "指向的线索前文没有");
     }

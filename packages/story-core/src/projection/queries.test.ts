@@ -60,7 +60,8 @@ describe("投影查询", () => {
     const { threads, omitted } = threadsForPrompt(view, { limit: 2 });
     expect(threads.map((thread) => thread.title)).toEqual(["钥匙开什么", "门外是谁"]);
     expect(omitted).toBe(1);
-    expect(threads[0]).toMatchObject({ weight: "major", status: "stale", idleChapters: 7, lastNote: "开：钥匙开什么" });
+    // 大伏笔停 7 章不算停太久（要 20 章），状态还是刚埋下。
+    expect(threads[0]).toMatchObject({ weight: "major", status: "open", idleChapters: 7, lastNote: "开：钥匙开什么" });
     expect(threads[1]).toMatchObject({ lastNote: "门外有脚印", idleChapters: 3 });
     for (const limit of [0, -3, Number.NaN, 2.5, undefined]) {
       expect(threadsForPrompt(view, { limit }).threads.map((thread) => thread.title)).toEqual(["钥匙开什么", "门外是谁", "账本下落"]);

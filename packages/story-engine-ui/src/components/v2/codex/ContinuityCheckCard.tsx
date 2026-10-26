@@ -199,8 +199,13 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   // 稿纸开着的正是这一章：原句已经不在稿里的条目算改掉了。
   const paper = useDraftStore((state) => (state.loaded && state.chapter === check.chapter && state.body.trim() ? state.body : null));
   const settledKeys = new Set(settled);
+  // 本章自己前后打架的，作者改的也可能是前面那句（长篇实跑第 37 章：改了「药箱留在门槛里」，卡上还给「改掉这 1 处」，点了会把对的那句改错）。
+  const otherSideGone = (item: Item): boolean =>
+    paper !== null && !item.againstSetting && item.earlierChapter === check.chapter && !quoteInPaper(paper, item.earlierQuote);
   const gone = (item: Item): boolean =>
-    settledKeys.has(continuityItemKey(item)) || (paper !== null && canFixDirectly(check.chapter, item) && !quoteInPaper(paper, item.quote));
+    settledKeys.has(continuityItemKey(item))
+    || (paper !== null && canFixDirectly(check.chapter, item) && !quoteInPaper(paper, item.quote))
+    || otherSideGone(item);
   const [showMaybe, setShowMaybe] = useState(false);
   const shownMaybeRef = useRef(false);
   const [showEarlier, setShowEarlier] = useState(false);
@@ -247,6 +252,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
   shownMaybeRef.current = showMaybe;
   const total = sure.length + maybe.length;
   const liveSure = sure.filter((item) => !gone(item)).length;
+  const liveMaybe = maybe.filter((item) => !gone(item)).length;
   const goneCount = [...sure, ...maybe, ...earlier].filter(gone).length;
   // 什么都没报、也没划掉过的：卡头一行「没发现对不上」就说完了，不再摆一段同样意思的话、也不给展开箭头。
   const empty = total === 0 && earlier.length === 0 && dismissed.length === 0;
@@ -254,7 +260,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
     <StepCard
       title={`核账 · 第 ${check.chapter} 章`}
       status={liveSure > 0 ? "attention" : "done"}
-      statusLabel={liveSure > 0 ? `确定 ${liveSure} 处` : maybe.length > 0 ? `可能 ${maybe.length} 处` : goneCount > 0 ? "改掉了" : "没发现对不上"}
+      statusLabel={liveSure > 0 ? `确定 ${liveSure} 处` : liveMaybe > 0 ? `可能 ${liveMaybe} 处` : goneCount > 0 ? "改掉了" : "没发现对不上"}
       defaultOpen
     >
       {empty ? null : <>
@@ -279,7 +285,7 @@ export function ContinuityCheckCard({ check, dismissed: dismissedKeysList = [], 
       {maybe.length > 0 ? (
         <>
           <button type="button" className="chip" onClick={toggleMaybe}>
-            {showMaybe ? "收起" : `还有 ${maybe.length} 处可能有问题（点开看）`}
+            {showMaybe ? "收起" : liveMaybe > 0 ? `还有 ${liveMaybe} 处可能有问题（点开看）` : `可能有问题的 ${maybe.length} 处都改掉了（点开看）`}
           </button>
           {showMaybe ? (
             <ul className="drc-list">

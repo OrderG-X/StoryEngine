@@ -105,7 +105,17 @@ describe("runAiFlavorCheck", () => {
     });
     expect(out.ok).toBe(true); // 确定性闸有命中
     expect(out.violations.some((v) => v.id.startsWith("aiflavor-rule-"))).toBe(true);
-    expect(out.summary).toContain("确定性闸");
+    expect(out.summary).toContain("按规则挑出");
+    expect(out.summary).toContain("模型超时");
+  });
+
+  it("LLM 没跑成、规则也没挑出 → ok:false，并说清没跑成的原因", async () => {
+    const out = await runAiFlavorCheck({
+      draftText: "窗外下着雨。", antiRules: [],
+      callModel: async () => { throw new Error("模型输出被截断（finish_reason=length）。"); },
+    });
+    expect(out.ok).toBe(false);
+    expect(out.summary).toBe("体检没跑成：模型输出被截断（finish_reason=length）。可以再试一次。");
   });
 });
 

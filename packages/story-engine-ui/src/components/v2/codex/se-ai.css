@@ -162,11 +162,11 @@
     animation:se-sweep 1.8s var(--ease-in-out) infinite;
   }
   /* 卡下面一行小字：编辑部在读前文（左）、不急的事（右）。 */
-  .se-todo-notes{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;padding:0 4px;font-size:12px;}
+  /* 不急的事的弹层按整行宽摆（按钮本身只有几个字宽，按它摆会一字一行）。 */
+  .se-todo-notes{position:relative;display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;padding:0 4px;font-size:12px;}
   .se-todo-notes:empty{display:none;}
   .se-todo-notes .se-checker-reading{flex:1 1 auto;min-width:0;margin:0;padding:0;}
   .se-todo-notes .se-todo-more{margin-left:auto;}
-  .se-todo-more{position:relative;}
   .se-todo-more-btn{border:0;background:none;padding:0;color:var(--faint);font-size:12px;cursor:pointer;}
   .se-todo-more-btn::after{content:" ›";}
   .se-todo-more-btn:hover{color:var(--text);text-decoration:underline;}
@@ -309,6 +309,10 @@
   .step-card .stc-row.is-excluded .stc-change{opacity:.45;}
   .step-card .stc-row.is-excluded .stc-to{text-decoration:line-through;}
   .step-card .stc-facts-toggle{margin:0 0 8px;}
+  /* 「不改了」靠右、挨着「确认」（.cpc-actions > button 默认 margin-left:auto，第二个不再推）。 */
+  .step-card .cpc-actions > .stc-drop + .cpc-confirm{margin-left:0;}
+  .step-card .cpc-actions > .stc-drop{color:var(--muted);}
+  .step-card .cpc-actions > .stc-drop, .step-card .cpc-actions > .stc-drop + .cpc-confirm{flex:none;white-space:nowrap;}
   .step-card .stc-facts{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.6;color:var(--muted);}
 
   /* 定稿前的账本清单：一条一行，依据原句小一号；勾掉的划线变淡。 */

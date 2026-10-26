@@ -41,6 +41,35 @@ export function quoteInText(quote: string, text: string): boolean {
 }
 
 /**
+ * 原句照正文原样取回：模型抄的原句核得上（quoteInText），但常多个空格、少个引号、全半角不同——记进账、给作者看的
+ * 用正文里那一段原字。按核对时一样的归一找到位置，取正文从第一个字到最后一个字的那段（跨段的去掉段间换行）；几截的用「……」接上。核不上给 undefined。
+ */
+export function quoteFromText(quote: string, text: string): string | undefined {
+  if (!quoteInText(quote, text)) return undefined;
+  let haystack = "";
+  const origin: number[] = [];
+  for (let index = 0; index < text.length; ) {
+    const char = String.fromCodePoint(text.codePointAt(index)!);
+    for (const part of normalizeForQuote(char)) {
+      haystack += part;
+      origin.push(index);
+    }
+    index += char.length;
+  }
+  const segments = normalizeForQuote(quote).split("...").filter((segment) => segment.length > 0);
+  const pieces: string[] = [];
+  let from = 0;
+  for (const segment of segments) {
+    const at = haystack.indexOf(segment, from);
+    const last = origin[at + segment.length - 1]!;
+    // 跨段摘的不带段落间的换行：清单、设定本里一行显示。
+    pieces.push(text.slice(origin[at]!, last + String.fromCodePoint(text.codePointAt(last)!).length).replace(/\s*\n\s*/gu, ""));
+    from = at + segment.length;
+  }
+  return pieces.join("……");
+}
+
+/**
  * 名字、主体、属性的比对键：同一个写法的不同排版算同一个（去空白、引号、全半角、大小写）。
  * 只认写法完全一样；「钥匙」和「钟箱钥匙」是两样东西，要归一起得靠记账员声明，不靠代码猜。
  */

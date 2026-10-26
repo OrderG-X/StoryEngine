@@ -64,7 +64,11 @@ export async function settleApplyArgs(projectDir: string, proposal: SettlePropos
   const edits = proposal.edits.filter((edit) => !excluded.has(edit.key));
   const fields = proposal.fields.filter((edit) => !excluded.has(edit.key));
   const cardOps: CardOp[] = [
-    ...(proposal.canonExists ? [] : [{ op: "canon.add" as const, text: proposal.canon }]),
+    ...(proposal.canonExists || proposal.sceneOnly
+      ? []
+      : [proposal.replaces
+        ? { op: "canon.set" as const, canon: proposal.replaces.id, text: proposal.canon }
+        : { op: "canon.add" as const, text: proposal.canon }]),
     ...fields.map((edit): CardOp => (edit.card ? { op: "field.set", card: edit.card, label: edit.label, value: edit.to } : { op: "story.set", label: edit.label, value: edit.to })),
   ];
   const chapters: SettleApplyArgs["chapters"][number][] = [];
@@ -97,7 +101,7 @@ export async function settleApplyArgs(projectDir: string, proposal: SettlePropos
     const mine = edits.filter((edit) => edit.target === "draft" && edit.chapter === item.chapter);
     if (mine.length > 0) drafts.push({ chapter: item.chapter, baseVersion: item.baseVersion, edits: mine.map(({ id, from, to }) => ({ id, from, to })) });
   }
-  return { label: `定论：${proposal.canon.slice(0, 40)}`, cardOps, chapters, drafts };
+  return { label: `${proposal.sceneOnly ? "改齐" : "定论"}：${proposal.canon.slice(0, 40)}`, cardOps, chapters, drafts };
 }
 
 export type SettleApplyOutcome =
@@ -111,7 +115,7 @@ export async function applySettleProposal(projectDir: string, token: string, exc
   const skip = new Set(excluded);
   const args = await settleApplyArgs(projectDir, proposal, skip);
   if (args.cardOps.length + args.chapters.length + args.drafts.length === 0) {
-    return { ok: false, code: "nothing", message: "这条定论已经记着，要改的几处也都划掉了，这次什么都没改。" };
+    return { ok: false, code: "nothing", message: proposal.sceneOnly ? "要改的几处都划掉了，这次什么都没改。" : "这条定论已经记着，要改的几处也都划掉了，这次什么都没改。" };
   }
   const key = `settle:${token}:${[...skip].sort().join(",")}`;
   const { snapshotId, result } = await runWithLazySnapshot(projectDir, (snapshot) =>

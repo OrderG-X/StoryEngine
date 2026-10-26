@@ -26,8 +26,15 @@ import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 开着的线索堆到这个数，定稿后的下一步选项里摆「归并线索」（只给选项，真归并要作者点「确认改账」）。 */
 export const THREAD_STALE_ESCALATION_THRESHOLD = 30;
-/** 开着的线索到这个数，回执里提一句。 */
+/** 开着的线索到这个数，回执里提一句；之后每多这么些条再提一次（不是每次定稿都念）。 */
 export const OPEN_THREADS_HINT_THRESHOLD = 20;
+const OPEN_THREADS_HINT_STEP = 5;
+
+/** 这次定稿让开着的线索跨过了 20、25、30……中的一档，才提「归并线索」。 */
+export function openThreadsHintDue(before: number, after: number): boolean {
+  const band = (open: number): number => (open < OPEN_THREADS_HINT_THRESHOLD ? 0 : 1 + Math.floor((open - OPEN_THREADS_HINT_THRESHOLD) / OPEN_THREADS_HINT_STEP));
+  return band(after) > band(before);
+}
 /** 没建卡的人出场满这么多章（这章正好满），回执里点一次名。 */
 export const RECURRING_UNCARDED_THRESHOLD = 3;
 
@@ -36,6 +43,7 @@ const inputSchema = z.object({
   previewToken: z.string().optional().describe("预览票号（只由「确认定稿」按钮带来，你不用传）。"),
   excluded: z.array(z.string()).optional().describe("作者在清单上动过的条目（只由「确认定稿」按钮带来，你不用传）。"),
   dayOverride: z.number().int().positive().optional().describe("作者改的「第几天」（只由「确认定稿」按钮带来，你不用传）。"),
+  dayEndOverride: z.number().int().positive().optional().describe("作者改的「到第几天」（只由「确认定稿」按钮带来，你不用传）。"),
 });
 
 const outputSchema = z.object({
@@ -116,6 +124,7 @@ export async function applyCommitToolLogic(input: {
   readonly previewToken?: string;
   readonly excluded?: readonly string[];
   readonly dayOverride?: number;
+  readonly dayEndOverride?: number;
 }): Promise<CommitApplyToolOutput> {
   const { projectDir, chapter } = input;
   const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
@@ -131,6 +140,7 @@ export async function applyCommitToolLogic(input: {
     excluded: ids.excluded,
     optedIn: ids.optedIn,
     ...(input.dayOverride !== undefined ? { day: input.dayOverride } : {}),
+    ...(input.dayEndOverride !== undefined ? { dayEnd: input.dayEndOverride } : {}),
     tickets: ticketStoreFor(projectDir),
   });
   if (!outcome.ok) {
@@ -155,6 +165,8 @@ export async function applyCommitToolLogic(input: {
   const view = after.chapters.find((item) => item.chapter === chapter);
   const cards = await readCardsOrLegacy(projectDir);
   const known = new Set(cards.cards.filter((card) => card.kind === "character").flatMap((card) => [card.name, ...card.aliases]).map(nameKey));
+  // 作者说过不用建卡的，也不再点名。
+  for (const name of cards.skipped) known.add(nameKey(name));
   const uncarded = after.cast.filter((member) => member.chapters.includes(chapter) && !known.has(member.key) && !member.aliases.some((alias) => known.has(nameKey(alias))));
   const newCharacters = uncarded.filter((member) => member.chapters[0] === chapter).map((member) => member.name);
   // 没建卡、这章正好第 N 次出场的：点一次名（账里算，不另记备忘；建了卡自然不再提）。
@@ -176,6 +188,7 @@ export async function applyCommitToolLogic(input: {
     },
   };
   const openThreads = after.threads.filter((thread) => thread.status !== "closed").length;
+  const openBefore = openThreads - report.ledger.threadsOpened + report.ledger.threadsClosed;
 
   const parts = [
     outcome.replayed
@@ -190,7 +203,7 @@ export async function applyCommitToolLogic(input: {
     ...(mirror.ok ? [] : ["（老格式资料没同步上，下次打开书会补；账本身已经记好。）"]),
     ...(newCharacters.length > 0 ? [`这章还出现了新人物：${newCharacters.join("、")}——要给谁建卡，在设定本「还没建卡」里点一下就行。`] : []),
     ...(recurring.length > 0 ? [`${recurring.map((name) => `「${name}」`).join("、")}已经出场 ${RECURRING_UNCARDED_THRESHOLD} 章了，还没有人物卡。`] : []),
-    ...(openThreads >= OPEN_THREADS_HINT_THRESHOLD ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),
+    ...(openThreadsHintDue(openBefore, openThreads) ? [`另外，开着的线索已积到 ${openThreads} 条——有讲同一件事的可以说「归并线索」。`] : []),
   ];
   const overview: StateOverview | undefined = await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }).catch(() => undefined);
   const title = markdownTitle(text);
@@ -263,6 +276,7 @@ export const commitApplyTool = writeTool({
       ...(input.previewToken ? { previewToken: input.previewToken } : {}),
       ...(input.excluded && input.excluded.length > 0 ? { excluded: input.excluded } : {}),
       ...(input.dayOverride !== undefined ? { dayOverride: input.dayOverride } : {}),
+      ...(input.dayEndOverride !== undefined ? { dayEndOverride: input.dayEndOverride } : {}),
     });
   },
 });

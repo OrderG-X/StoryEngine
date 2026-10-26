@@ -9,7 +9,7 @@
  * 补字 40 次、单回合思考 11 万字）。任何一步没成都原稿不动 + 如实说明，绝不影响出稿本身的 ok。
  * 真改了正文：先建快照（可撤销回首稿）再走 draft.write 写盘，两步在同一把书锁里（防与定稿、撤销交错）。
  */
-import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
+import { countDraftChineseCharacters, draftLengthFloor, type DraftLengthTarget } from "../../writing/draft-length-control.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
 import { quoteInText, withBookLock } from "@actalk/story-core";
 import { writeAiDraft } from "../../lib/ai-draft-write.js";
@@ -80,7 +80,9 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   // 凭空编出前文没有的对话（「韩德胜说钥匙交给孟叔了」），历轮审读里续写段也是矛盾最密的地方——略短就如实说短了多少、交作者定。
   // 作者写明了「至少 N 字」（定稿侧按它硬拦）时仍补到下限——不补作者也得手动再要一次续写，还卡着定不了稿。
   const firstLength = countDraftChineseCharacters(body);
-  const continueBelow = input.lengthTarget.hardMinimum ? input.lengthTarget.lowerBound : input.lengthTarget.lowerBound * CONTINUE_ONLY_BELOW_RATIO;
+  // 作者的「至少 N 字」比区间下沿低（floor）时也是作者写明的地板：不够就补到它。
+  const floor = draftLengthFloor(input.lengthTarget);
+  const continueBelow = input.lengthTarget.hardMinimum || input.lengthTarget.floor !== undefined ? floor : floor * CONTINUE_ONLY_BELOW_RATIO;
   if (input.continueCallModel && firstLength < continueBelow) {
     const startedAt = Date.now();
     const continued = await continueDraftToLength({
@@ -94,11 +96,11 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     info = { ...info, continuation: { before: continued.before, after: continued.after, rounds: continued.rounds, failures: continued.failures } };
     if (continued.rounds > 0) {
       body = continued.draftBody;
-      notes.push(continued.after >= input.lengthTarget.lowerBound
-        ? `首稿 ${continued.before} 字低于下限 ${input.lengthTarget.lowerBound}，已接着写到 ${continued.after} 字。`
-        : `首稿 ${continued.before} 字低于下限 ${input.lengthTarget.lowerBound}，接着写到 ${continued.after} 字，仍差 ${input.lengthTarget.lowerBound - continued.after} 字。`);
+      notes.push(continued.after >= floor
+        ? `首稿 ${continued.before} 字低于下限 ${floor}，已接着写到 ${continued.after} 字。`
+        : `首稿 ${continued.before} 字低于下限 ${floor}，接着写到 ${continued.after} 字，仍差 ${floor - continued.after} 字。`);
     } else if (continued.failures.length > 0) {
-      notes.push(`首稿 ${continued.before} 字低于下限 ${input.lengthTarget.lowerBound}，自动续写没成（${continued.failures.at(-1)}）。`);
+      notes.push(`首稿 ${continued.before} 字低于下限 ${floor}，自动续写没成（${continued.failures.at(-1)}）。`);
     }
   }
   // 只差一点没续的，不在这里另说：出稿回执末尾那句「低于目标字数下限」按最终正文说一次（以前两句数还差一个字）。

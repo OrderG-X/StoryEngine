@@ -4,7 +4,7 @@
  *  - 头：定稿第 N 章；这一章记为故事第几天 + 依据原句 +【改天数】；记账员的提醒（没读完前文等）照实列。
  *  - 要你看的（≤8 条先露，其余点开）：每条一句 + 原句 +【记下】【不记】；要确认的改记是【改记】【不改】、默认不改。
  *  - 另外自动记下 N 条：收起；点开每条也能【不记】。
- *  - 定不了时：照实列阻断原因，只有【知道了】。
+ *  - 定不了时：照实列阻断原因，只有【知道了】；只差字数下限的多一个【就这么短，照样定稿】（只放这一章）。
  *  - 底：【先不定】【定稿】。定稿＝现有「确认定稿」结构化动作（带上作者去掉的、确认的、改的天数），不经模型。
  *
  * 作者动过的条目记在 utils/ledgerExclusions（按章 + 预览令牌），关了再开、从别处点「确认定稿」都带得上。
@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommitPreviewCardData } from "../../../type-defs/workspace.js";
 import {
+  type DayOverride,
   ledgerDayOverrideForCard,
   ledgerExclusionsForCard,
   rememberLedgerDayOverride,
@@ -23,7 +24,7 @@ import { closeCommitSheet, useCommitSheet } from "../../../workspace/commitSheet
 import { useChatStore } from "../../../stores/chatStore.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { cardOf } from "../../../utils/messageCards.js";
-import { commitConfirmAction } from "../../../utils/workflowHelpers.js";
+import { commitConfirmAction, commitShortAction } from "../../../utils/workflowHelpers.js";
 import type { SuggestedAction } from "../../../types.js";
 import { usePresence, type PresenceHandle } from "../../../hooks/usePresence.js";
 
@@ -107,17 +108,20 @@ export function CommitSheet({
   onClose,
   presence,
   firstCommit = false,
+  onCommitShort,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 有动作在跑：按钮先不让点。 */
   readonly busy: boolean;
   /** 传了且能定稿 → 底部有【定稿】；参数是作者去掉 / 确认的条目 id、改过的天数。没传＝只看（旧预览）。 */
-  readonly onConfirm?: (excluded: readonly string[], dayOverride?: number) => void;
+  readonly onConfirm?: (excluded: readonly string[], dayOverride?: DayOverride) => void;
   readonly onClose: () => void;
   /** 关的时候播退场（usePresence）。 */
   readonly presence?: PresenceHandle;
   /** 这本书还没定稿过：头一回说一句定稿是干什么的（2026-10-23 从零走查：新作者不知道定稿和存稿有什么两样）。 */
   readonly firstCommit?: boolean;
+  /** 只差字数下限时：作者说这章就这么短，重新出清单、这一章不拿下限挡。 */
+  readonly onCommitShort?: () => void;
 }) {
   const ledger = preview.ledgerChecklist ?? [];
   const { day, review, auto } = splitChecklist(ledger);
@@ -135,14 +139,28 @@ export function CommitSheet({
     rememberLedgerExclusions(preview.chapter, preview.previewToken, next);
     return next;
   });
-  const [dayOverride, setDayOverride] = useState<number | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
+  const [dayOverride, setDayOverride] = useState<DayOverride | undefined>(() => ledgerDayOverrideForCard(preview.chapter, preview.previewToken));
   const [editingDay, setEditingDay] = useState(false);
   /** 正在打的字：删空了先让它空着（不然一删就弹回原来的数，再打成了「114」）。 */
   const [dayText, setDayText] = useState<string | null>(null);
-  const changeDay = (value: number | undefined) => {
+  const [dayEndText, setDayEndText] = useState<string | null>(null);
+  // 记账员记的头一天和跨了几天；作者改了以后按作者的。
+  const keptDay = day?.editableDay;
+  const shownDay = dayOverride?.day ?? keptDay ?? 1;
+  const shownEnd = dayOverride ? dayOverride.dayEnd ?? dayOverride.day : day?.editableDayEnd ?? shownDay;
+  const changeDay = (value: DayOverride | undefined) => {
     setDayOverride(value);
     rememberLedgerDayOverride(preview.chapter, preview.previewToken, value);
   };
+  /** 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。 */
+  const changeStart = (value: number | undefined) =>
+    changeDay(value === undefined ? undefined : { day: value, dayEnd: value + Math.max(0, shownEnd - shownDay) });
+  const changeEnd = (value: number | undefined) => {
+    if (value !== undefined) changeDay({ day: shownDay, dayEnd: Math.max(value, shownDay) });
+  };
+  const dayOverrideLabel = dayOverride
+    ? `这一章改记为故事第 ${dayOverride.day} 天${dayOverride.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? `到第 ${dayOverride.dayEnd} 天` : ""}`
+    : undefined;
   const [showAllReview, setShowAllReview] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
 
@@ -183,29 +201,52 @@ export function CommitSheet({
           ) : null}
           {day ? (
             <div className={`se-cs-day${day.needsConfirm ? " is-attention" : ""}`}>
-              <span>{dayOverride !== undefined ? `这一章改记为故事第 ${dayOverride} 天` : day.label}</span>
+              <span>{dayOverrideLabel ?? day.label}</span>
+              {day.reason && !dayOverride ? <span className="se-cs-day-why">{day.reason}</span> : null}
               {day.detail ? <span className="se-cs-quote serif">依据「{day.detail}」</span> : null}
-              {editable && day.editableDay !== undefined ? (
+              {editable && keptDay !== undefined ? (
                 editingDay ? (
-                  <label className="se-cs-day-edit">
+                  <span
+                    className="se-cs-day-edit"
+                    onBlur={(event) => {
+                      // 在两个框之间挪不算改完。
+                      if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                      setEditingDay(false);
+                      setDayText(null);
+                      setDayEndText(null);
+                    }}
+                  >
                     第
                     <input
                       type="number"
                       min={1}
                       autoFocus
                       aria-label="这一章是故事第几天"
-                      value={dayText ?? dayOverride ?? day.editableDay}
+                      value={dayText ?? shownDay}
                       disabled={busy}
                       onChange={(event) => {
                         setDayText(event.target.value);
                         const next = Number(event.target.value);
-                        // 填回原来那一天也算作者定的：记账员记成跨两天（第 N～N+1 天）时，作者填「第 N 天」就是要按这一天记（P6 第 7 步）。
-                        changeDay(Number.isInteger(next) && next >= 1 ? next : undefined);
+                        // 填回原来那一天也算作者定的。
+                        changeStart(Number.isInteger(next) && next >= 1 ? next : undefined);
                       }}
-                      onBlur={() => { setEditingDay(false); setDayText(null); }}
+                    />
+                    天到第
+                    <input
+                      type="number"
+                      min={1}
+                      aria-label="这一章到故事第几天"
+                      value={dayEndText ?? shownEnd}
+                      disabled={busy}
+                      onChange={(event) => {
+                        setDayEndText(event.target.value);
+                        const next = Number(event.target.value);
+                        // 两头填成同一天＝这一章就这一天（记账员记成跨两天、其实没跨，P6 第 7 步）。
+                        changeEnd(Number.isInteger(next) && next >= 1 ? next : undefined);
+                      }}
                     />
                     天
-                  </label>
+                  </span>
                 ) : (
                   <button type="button" className="se-cs-quiet" disabled={busy} onClick={() => setEditingDay(true)}>改天数</button>
                 )
@@ -256,7 +297,7 @@ export function CommitSheet({
           ) : null}
 
           {!blocked && review.length === 0 ? (
-            <p className="se-cs-none">{auto.length > 0 ? "没有要你特别看的，下面这些自动记下。" : "这一章没有要记的账。"}</p>
+            <p className="se-cs-none">{auto.length > 0 ? `${day?.needsConfirm ? "除了天数，" : ""}没有要你特别看的，下面这些自动记下。` : "这一章没有要记的账。"}</p>
           ) : null}
 
           {!blocked && auto.length > 0 ? (
@@ -302,6 +343,11 @@ export function CommitSheet({
                 {confirmLabel}
               </button>
             </>
+          ) : blocked && preview.shortOnly && onCommitShort ? (
+            <>
+              <button type="button" className="se-cs-btn" onClick={onClose}>知道了</button>
+              <button type="button" className="se-cs-btn is-primary" disabled={busy} onClick={onCommitShort}>就这么短，照样定稿</button>
+            </>
           ) : (
             <button type="button" className="se-cs-btn is-primary" onClick={onClose}>知道了</button>
           )}
@@ -333,15 +379,33 @@ export function CommitSheetHost({ busy, onSuggestedAction }: {
   if (!preview) return null;
   const confirmable = confirmableCommitPreviewMessageId(messages) === messageId && Boolean(onSuggestedAction);
   const onConfirm = confirmable
-    ? (excluded: readonly string[], dayOverride?: number) => {
+    ? (excluded: readonly string[], dayOverride?: DayOverride) => {
       closeCommitSheet();
       onSuggestedAction!(commitConfirmAction({
         chapter: preview.chapter,
         ...(preview.previewToken ? { previewToken: preview.previewToken } : {}),
         ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride } : {}),
+        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
+        ...(dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? { dayEndOverride: dayOverride.dayEnd } : {}),
       }));
     }
     : undefined;
-  return <CommitSheet key={messageId} preview={preview} busy={busy} {...(onConfirm ? { onConfirm } : {})} onClose={closeCommitSheet} presence={presence} firstCommit={firstCommit} />;
+  const onCommitShort = preview.shortOnly && onSuggestedAction
+    ? () => {
+      closeCommitSheet();
+      onSuggestedAction(commitShortAction(preview.chapter));
+    }
+    : undefined;
+  return (
+    <CommitSheet
+      key={messageId}
+      preview={preview}
+      busy={busy}
+      {...(onConfirm ? { onConfirm } : {})}
+      {...(onCommitShort ? { onCommitShort } : {})}
+      onClose={closeCommitSheet}
+      presence={presence}
+      firstCommit={firstCommit}
+    />
+  );
 }

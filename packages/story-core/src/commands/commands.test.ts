@@ -223,6 +223,13 @@ describe("作者裁定命令", () => {
     expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
   });
 
+  it("改梗概：章要定稿过，改了投影里换成作者写的", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
+    expectOk(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "她进了钟楼。" }, author("d1")));
+    expect((await projectBook(book)).chapters[0]?.summary).toBe("她进了钟楼。");
+    expect(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 2, text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+  });
+
   it("AI 调不了", async () => {
     const outcome = await runCommand(book, decisionRecord, { type: "issue.dismiss", issue: "x" }, { caller: "ai", idempotencyKey: "d" });
     expect(outcome).toMatchObject({ ok: false, code: "author_only" });

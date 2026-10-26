@@ -247,7 +247,9 @@ export function prepareUnitReplacement(units: readonly TextUnit[], id: number, t
   const unit = units[index]!;
   const cleaned = cleanReplacement(to);
   if (!cleaned) return fitQuotes(unit.text, "");
-  const echoFree = dropNeighborEcho(unit.text, cleaned, units[index - 1]?.text, units[index + 1]?.text);
+  // 抄回上一句时连编号一起抄（「[97]上一句[98]这一句」）：去掉抄的那截后，这一句的编号又露在头上，再清一遍。
+  const echoed = dropNeighborEcho(unit.text, cleaned, units[index - 1]?.text, units[index + 1]?.text);
+  const echoFree = echoed === undefined ? undefined : cleanReplacement(echoed);
   const fitted = echoFree === undefined ? undefined : fitQuotes(unit.text, echoFree);
   return fitted !== undefined && splitUnits(fitted).length > splitUnits(unit.text).length ? undefined : fitted;
 }

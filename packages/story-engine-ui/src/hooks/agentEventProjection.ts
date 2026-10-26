@@ -21,14 +21,14 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, DraftVersionsCardData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
 function isVerdictToolName(toolName: string | undefined): boolean {
   return typeof toolName === "string" && VERDICT_TOOL_NAMES.has(toolName);
 }
-import { commitConfirmAction, continueConfirmAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction } from "../utils/workflowHelpers.js";
+import { commitConfirmAction, continueConfirmAction, foundationAcceptAction, foundationConfirmAction, ledgerConfirmAction, pruneConfirmAction, rewriteConfirmAction, withAuthorButton } from "../utils/workflowHelpers.js";
 
 export type AgentRefreshScope = "full" | "foundation";
 
@@ -78,6 +78,8 @@ export interface AgentToolResultOutput {
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ContinuityCheckData;
   readonly brainstorm?: BrainstormCardData;
+  /** generate_draft 专属：落选的几版全文（「另外几版」卡）。 */
+  readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
@@ -307,7 +309,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = commitConfirmAction(event.output.commitConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 裁剪快照预览：模型只预览，挂「确认裁剪」按钮（建议条渲染），用户点了才由服务端真裁。
@@ -315,7 +317,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = pruneConfirmAction(event.output.pruneConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 改账草案：模型只提议，挂「确认改账」按钮（建议条渲染），作者点了才由服务端记成作者裁定。
@@ -323,7 +325,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
         const button = ledgerConfirmAction(event.output.ledgerConfirmAction);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 有稿的章：AI 不覆盖，挂「重写这一章」按钮（作者档，点了才由服务端整章重写）；没定稿的再挂「接着往下写」。
@@ -343,7 +345,7 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
           : foundationAcceptAction(event.output.foundationAcceptAction!);
         return {
           ...withEffects,
-          suggestedActions: [...(withEffects.suggestedActions ?? []).filter((a) => a.id !== button.id), button],
+          suggestedActions: withAuthorButton(withEffects.suggestedActions, button),
         };
       }
       // 质检明细：quality_check 的分层报告随消息走，渲染「质检」明细卡（blocking 硬伤 / soft 软提示）。
@@ -359,6 +361,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
       if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
         return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
+      }
+      // 「另外几版」：一次写几版时落选的几版随这条消息走，作者点开挑一版换进工作稿。
+      if (event.toolName === "generate_draft" && event.output?.draftVersions && event.output?.ok !== false) {
+        return withCard(withEffects, { type: "draft-versions", versions: event.output.draftVersions });
       }
       // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
       if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {
@@ -463,6 +469,7 @@ function settleTool(
         status,
         endedAt,
         ...(detail ? { detail } : {}),
+        ...(output?.toolValidationFailure === true ? { invalidArgs: true as const } : {}),
       }
       : step,
   );

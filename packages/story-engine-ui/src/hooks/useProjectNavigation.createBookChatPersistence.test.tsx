@@ -38,15 +38,7 @@ vi.mock("../api/client.js", () => ({
     hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
     threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
-    maintenance: {
-      diagnosticsAvailable: false,
-      cleanupVisibleCount: 0,
-      markDoneCandidateCount: 0,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: { markDone: "manual_only", merge: "disabled", drop: "disabled" },
-    },
-    uiHints: { recommendedNextPanels: [], warnings: [], disabledActions: [] },
+    uiHints: { warnings: [] },
   })),
   createStoryProjectFromDraft: vi.fn(),
 }));

@@ -157,6 +157,8 @@ export function ContinuityMarks({
       const collect = (items: readonly ContinuityItem[], level: Mark["level"]) => {
         for (const item of items) {
           if (continuityFixChapter(result.check.chapter, item) !== result.check.chapter) continue;
+          // 本章自己前后打架、前面那句作者已经改了：这条算改掉了，不再划（和核账卡「已改掉」同一口径）。
+          if (!item.againstSetting && item.earlierChapter === result.check.chapter && !findQuoteRange(stage, item.earlierQuote)) continue;
           const range = findQuoteRange(stage, item.quote);
           if (range) marks.push({ key: continuityItemKey(item), item, level, range });
         }

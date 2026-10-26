@@ -40,6 +40,26 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("楼门钥匙放回茶馆柜台底下")).toBeTruthy();
   });
 
+  it("只有天数要你看：说「除了天数，没有要你特别看的」（和对话里「要你看 1 条」对得上）", () => {
+    render(<CommitSheet preview={preview({ ledgerChecklist: [
+      { id: "day", kind: "time", label: "这一章记为故事第 11 天（先按上一章往后推，不对就改）", removable: false, editableDay: 11, needsConfirm: true },
+      { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
+    ] })} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText("除了天数，没有要你特别看的，下面这些自动记下。")).toBeTruthy();
+  });
+
+  it("重定稿天数和上次不一样：天数那行说清两边；作者改了天数就不再说", () => {
+    const why = "记账员这次看成第 5 天到第 6 天，和上次定稿不一样；先照上次的记，不对就改天数";
+    render(<CommitSheet preview={preview({ ledgerChecklist: [
+      { id: "day", kind: "time", label: "这一章记为故事第 6 天到第 7 天（清晨到夜里）（照上次定稿）", reason: why, removable: false, editableDay: 6, editableDayEnd: 7, needsConfirm: true },
+      { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
+    ] })} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText(why)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
+    expect(screen.queryByText(why)).toBeNull();
+  });
+
   it("这本书头一回定稿：头上一句说定稿是干什么的；之后、只看的旧预览都不说", () => {
     const intro = /定稿就是把这章记进账/u;
     const { rerender } = render(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} firstCommit />);
@@ -67,21 +87,39 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "确认定稿（改记 1 条）" }));
-    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], 5);
+    expect(onConfirm).toHaveBeenLastCalledWith(["change_confirm:1"], { day: 5, dayEnd: 5 });
   });
 
-  it("记账员记成跨两天：作者填回同一天也算改了（按这一天记）", () => {
+  const spanning = (token: string) => {
+    const base = preview({ previewToken: token });
+    return { ...base, ledgerChecklist: base.ledgerChecklist!.map((item) => (item.id === "day" ? { ...item, label: "这一章记为故事第 3 天到第 4 天（按前后文判断）", editableDayEnd: 4 } : item)) };
+  };
+
+  it("记账员记成跨两天、其实没跨：「到第几天」也填成同一天（按这一天记）", () => {
     const onConfirm = vi.fn();
-    render(<CommitSheet preview={preview({ previewToken: "tok-span" })} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    render(<CommitSheet preview={spanning("tok-span")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "改天数" }));
-    // 删空再重打：删空时框里先空着（不弹回 3），再打 3。
-    const input = screen.getByRole("spinbutton", { name: "这一章是故事第几天" }) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "" } });
-    expect(input.value).toBe("");
-    fireEvent.change(input, { target: { value: "3" } });
+    // 删空再重打：删空时框里先空着（不弹回 4），再打 3。
+    const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
+    expect(end.value).toBe("4");
+    fireEvent.change(end, { target: { value: "" } });
+    expect(end.value).toBe("");
+    fireEvent.change(end, { target: { value: "3" } });
     expect(screen.getByText("这一章改记为故事第 3 天")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
-    expect(onConfirm).toHaveBeenLastCalledWith([], 3);
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 3, dayEnd: 3 });
+  });
+
+  // 长篇实跑：第 24 章记账员记成第 20～21 天，其实是第 21～22 天；改头一天只能记成一天，章里第二天那段丢了。
+  it("跨天的章改头一天：跨的天数跟着挪", () => {
+    const onConfirm = vi.fn();
+    render(<CommitSheet preview={spanning("tok-shift")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
+    expect((screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement).value).toBe("5");
+    expect(screen.getByText("这一章改记为故事第 4 天到第 5 天")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 4, dayEnd: 5 });
   });
 
   it("关了再开（同一份预览）动过的还在", () => {
@@ -162,6 +200,23 @@ describe("定稿清单开在哪、什么时候能直接再开", () => {
     expect(reusableCommitPreviewId([msg("a", {})], paper)).toBeNull();
     expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", preview: preview({ chapter: 8 }) })], paper)).toBeNull();
     expect(reusableCommitPreviewId([msg("a", { checkedVersion: "v1", preview: preview({ canCommit: false }) })], paper)).toBeNull();
+  });
+
+  it("只差字数下限：【知道了】旁边给【就这么短，照样定稿】，点了关窗、发这一章的照样定稿；别的挡住的原因不给", () => {
+    const short = preview({ canCommit: false, previewToken: undefined, ledgerChecklist: undefined, shortOnly: true, blockingReasons: ["正文 1137 字，低于写作规则要求的下限 2000 字"] });
+    useChatStore.setState({ messages: [msg("short", { preview: short })] });
+    const onSuggestedAction = vi.fn();
+    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    act(() => openCommitSheet("short"));
+    expect(screen.getByRole("button", { name: "知道了" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "就这么短，照样定稿" }));
+    expect(onSuggestedAction).toHaveBeenCalledWith(expect.objectContaining({ id: "commit-short", commitTarget: { chapter: 7 } }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+    useChatStore.setState({ messages: [msg("other", { preview: { ...short, shortOnly: undefined } })] });
+    render(<CommitSheetHost busy={false} onSuggestedAction={onSuggestedAction} />);
+    act(() => openCommitSheet("other"));
+    expect(screen.queryByRole("button", { name: "就这么短，照样定稿" })).toBeNull();
   });
 
   it("挂在外层的弹窗：打开那条消息上的预览；只有最新一张能点【定稿】，点了关窗、发确认定稿", () => {

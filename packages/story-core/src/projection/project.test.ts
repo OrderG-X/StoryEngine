@@ -151,6 +151,18 @@ describe("投影", () => {
     expect(byTitle["谁卖了机芯"]?.status).toBe("open");
   });
 
+  it("大伏笔要埋很久：停 9 章不算停太久，停满 20 章才提醒；普通线索照旧 5 章", () => {
+    const at = (upTo: number) => project({
+      ledgers: [ledger(1, [open("t1-1", "铁箱里是什么"), open("t1-2", "工钱补没补")]), ledger(upTo, [])],
+      decisions: [decision({ type: "thread.weight", thread: "t1-1", weight: "major" }, 1)],
+    });
+    const status = (upTo: number, title: string) => at(upTo).threads.find((thread) => thread.title === title)?.status;
+    expect(status(10, "铁箱里是什么")).toBe("open");
+    expect(status(10, "工钱补没补")).toBe("stale");
+    expect(status(20, "铁箱里是什么")).toBe("open");
+    expect(status(21, "铁箱里是什么")).toBe("stale");
+  });
+
   it("作者裁定：归并、收口、分量；指向不存在的线索摆出来不吞", () => {
     const result = project({
       ledgers: [ledger(1, [open("t1-1", "老周回避"), open("t1-2", "阿笙被打断")]), ledger(4, [touch("t1-2", "advance"), touch("t9-9", "advance")])],
@@ -186,6 +198,37 @@ describe("投影", () => {
       [10, 10, "author", 3],
     ]);
     expect(result.chapters[2]?.weekdayDerived).toBe(true);
+  });
+
+  // 长篇实跑：第 24 章定稿后才发现天数记错（该是第 21～22 天），定稿后没处改。
+  it("作者裁定改一章的天数：顶掉账单记的，后面的章接着它往后推", () => {
+    const ledgers = [
+      ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
+      ledger(2, [{ kind: "time", basis: "judged", quote: "当晚", daysSincePrevious: 0 }]),
+      ledger(3, [{ kind: "time", basis: "judged", quote: "次日", daysSincePrevious: 1 }]),
+    ];
+    const result = project({
+      ledgers,
+      decisions: [decision({ type: "chapter.day", chapter: 2, day: 4 }), decision({ type: "chapter.day", chapter: 2, day: 5, dayEnd: 6 }, 2)],
+    });
+    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([
+      [1, 1, "text"],
+      [5, 6, "author"],
+      [7, 7, "judged"],
+    ]);
+  });
+
+  // 长篇实跑：第 41 章梗概记成「离云州北上」（其实往南），定稿后没处改。
+  it("作者裁定改一章的梗概：顶掉账单记的，改过几次按最后一次", () => {
+    const ledgers = [
+      ledger(1, [{ kind: "summary", text: "离城北上。", quote: "出了城" }]),
+      ledger(2, [{ kind: "summary", text: "到了渡口。", quote: "渡口" }]),
+    ];
+    const result = project({
+      ledgers,
+      decisions: [decision({ type: "chapter.summary", chapter: 1, text: "离城南下。" }), decision({ type: "chapter.summary", chapter: 1, text: "离城往南。" }, 2)],
+    });
+    expect(result.chapters.map((chapter) => chapter.summary)).toEqual(["离城往南。", "到了渡口。"]);
   });
 
   it("定稿后改过正文：和账单记的 sha256 对不上就标出来", () => {

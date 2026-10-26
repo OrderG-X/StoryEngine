@@ -89,6 +89,10 @@ export interface SettleProposal {
   readonly canon: string;
   /** 设定本里已经有这条定论（这次不再加）。 */
   readonly canonExists: boolean;
+  /** 只是某一场里的事（那一夜的风、谁一时站在哪）：只改句子，不记进设定本「定论」。 */
+  readonly sceneOnly?: boolean;
+  /** 改的是设定本里已有的那条定论（新的取代旧的）：确认时换掉它，不另加一条。 */
+  readonly replaces?: { readonly id: string; readonly text: string };
   readonly chapter?: number;
   readonly edits: readonly SettleEdit[];
   readonly facts: readonly SettleFactChange[];
@@ -173,27 +177,50 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
     "- canon：照【作者选为准的】那边的说法回答这个问句，只答这一点：那句里别的事（长相、动作、别的物件）一概不写；",
     "  正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；数字、时间照原句抄；原句说得含糊的，看前后文和另一边说的是什么事把它说明白；",
     "  主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
-    "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
-    '只输出一个 JSON：{"point":"","canon":"","names":[]}',
+    "  说的是谁平常带着什么、东西放在哪这类每场都会变的事时，写那件东西本身（「某某随身带的是一把黑伞」），别写一时的拿法、姿势（「攥着」「搭在肩上」「横在膝上」）；",
+    "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）；",
+    "- keep：这条以后写别的章还用得着吗？人物的年纪、长相、身份、来历，谁有什么东西、东西什么样，大事在哪天、在哪发生——用得着，写 true；只是那一场里的天气、风、光线，谁一时站在哪、在干什么——过了那一场就用不着，写 false（这样的只改句子，不记进设定本）。",
+    '只输出一个 JSON：{"point":"","canon":"","names":[],"keep":true}',
   ].join("\n");
 }
 
-export function namesTask(canon: string): string {
+export function namesTask(canon: string, existing: readonly string[] = []): string {
   return [
     `作者写下了一条定论（这本书以后都以它为准）：「${canon}」`,
-    "列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
-    '只输出一个 JSON：{"names":[]}',
+    "- canon：把它整理成设定本里记的一条：只写这件事本身是什么样，主语写全、单拿出来也看得懂；作者顺带说的「哪章哪句写错了」「以这个为准」这类话不写进去；意思不增不减，本来就是这样就照抄，不超过 40 字。",
+    "- names：列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
+    ...(existing.length > 0
+      ? [
+        "- replaces：设定本里已经记着下面几条定论。这条新的是不是在改其中一条（说的是同一件事，新的说法取代旧的）？是就填那条的编号，不是填 0。",
+        ...existing.map((text, index) => `[${index + 1}] ${text}`),
+        '只输出一个 JSON：{"canon":"","names":[],"replaces":0}',
+      ]
+      : ['只输出一个 JSON：{"canon":"","names":[]}']),
   ].join("\n");
 }
 
-export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: readonly ChapterSide[] = []): string {
+/**
+ * 设定本里别的定论照样成立：交给查全书、查设定、复核的每一步（长篇实跑 2026-10-26：新定论「两个月前场里五十一个人」
+ * 被读成「那一场在两个月前」，把六句写「父亲半年前遇伏」的对句子连同设定本一句话都要改，而「父亲半年前遇伏」本身就是一条定论）。
+ * 只用来别误改：和它们对不上的句子不归这次管（同日又撞上：定「赵老七不抽烟」，查全书顺手按「第 24 章起三匹拉车」改了两句骡子数）。
+ */
+export const STANDING_CANON_MAX = 30;
+function standingLines(standing: readonly string[], rule: string): string[] {
+  if (standing.length === 0) return [];
+  return ["设定本里另外还定着这几条，照样成立：", ...standing.slice(0, STANDING_CANON_MAX).map((text) => `- ${text}`), rule];
+}
+
+export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: readonly ChapterSide[] = [], standing: readonly string[] = []): string {
   const mine = flagged.filter((side) => docs.some((doc) => doc.chapter === side.chapter));
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "原句和这几条说得一致的，就不是和新定论对不上（除非原句说的正是新定论那件事、新定论换了说法），别改；原句和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是这本书的几章正文，每句前面有编号 [n]。逐句看，找出说法和这条定论对不上的句子（同一件事写成了别的样子）。",
     ...(mine.length > 0 ? [`核账已经报过这几句和它对不上，一定给出改法：${mine.map((side) => `第 ${side.chapter} 章「${side.quote}」`).join("；")}。`] : []),
     "- 原句说的得是定论里的同一个人、同一件东西、同一件事：名字不一样的、只是身份相近（都是看门的、都是老人）或同一类东西的，不算——宁可漏掉，也别把别人改成定论里的人；",
     "- 写了变化过程的、人物明确在撒谎或记错的，不算；",
+    "- 定论说的是从某一章、某个时候起才这样的：那之前的章里写成别的样子不算（那时候还没变）；",
+    "- 定论说的是平常带着什么、放在哪这类事时：原句只是那一场里一时的拿法、放法，或者那一场顺手抄起了别的东西、换了别人拿着，不算；",
     "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
     '只输出一个 JSON：{"edits":[{"chapter":1,"id":1,"to":"","why":""}]}。一处都没有就给 {"edits":[]}。',
@@ -210,9 +237,10 @@ interface FieldRef {
   readonly ai: boolean;
 }
 
-export function fieldsTask(canon: string, fields: readonly FieldRef[]): string {
+export function fieldsTask(canon: string, fields: readonly FieldRef[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "栏里和这几条说得一致的部分别改；和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
     "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
@@ -258,7 +286,7 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
       ? [
         "账里这几条事实引用了改掉的句子：",
         ...facts.map(factLine),
-        "这几条每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote）、drop（改后这条不成立了）。",
+        "这几条每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote；text 照原来那条的口气直接写现在是什么样，别写「改后」「而非」「原来是」这类改动经过）、drop（改后这条不成立了）。",
       ]
       : []),
     ...(loose.length > 0
@@ -273,15 +301,19 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
   ].join("\n");
 }
 
-export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[]): string {
+export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
+    ...standingLines(standing, "原句和这几条说得一致、改了反倒和它们对不上的：不算（除非原句说的正是新定论那件事）。"),
     "另一个人逐句查了全书，说下面这几句和定论对不上、要改。请逐条复核：原句是不是真的和定论说不到一块。",
     "- 先看原句（连同前后文）说的是不是定论里的同一个人、同一件东西：名字不一样、只是身份相近或同一类东西的，不算；",
     "- 原句写的就是这件事、而且写得和定论不一样：算；",
     "- 要靠推算才对不上的：推算的每一步都站得住才算；推得出、也说得通的不算；",
     "- 人物在撒谎或记错、写的是变化过程的：不算；",
-    "- 改法添了原句没有的情节、台词的：不算。",
+    "- 定论说的是从某一章、某个时候起才这样的，原句在那之前（那时候还没变）：不算；",
+    "- 定论说的是平常带着什么、放在哪这类事，原句只是那一场里一时的拿法、放法、顺手抄起的别的东西、换了别人拿着的：不算；",
+    "- 改法添了原句没有的情节、台词的：不算；",
+    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算。",
     "",
     ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
     "",
@@ -451,12 +483,15 @@ function fieldRefs(cards: SettingCardsFile, terms: readonly string[]): FieldRef[
   return refs;
 }
 
-async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[] }> {
+async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[]; keep: boolean; replaces?: number }> {
   const parsed = parseJsonObject(await callModel([{ role: "user", content: prompt }], { json: true }));
   if (!parsed) throw new Error("模型回的不是要的格式");
   const names = Array.isArray(parsed.names) ? parsed.names.map(str).filter(Boolean) : [];
   const canon = str(parsed.canon);
-  return { ...(canon ? { canon } : {}), names };
+  // 只认明说的 false（布尔或字串）；没给、给别的都照记定论（老行为）。
+  const keep = !(parsed.keep === false || (typeof parsed.keep === "string" && parsed.keep.trim().toLowerCase() === "false"));
+  const replaces = Number(parsed.replaces);
+  return { ...(canon ? { canon } : {}), names, keep, ...(Number.isInteger(replaces) && replaces > 0 ? { replaces } : {}) };
 }
 
 export async function proposeSettle(input: {
@@ -502,19 +537,32 @@ export async function proposeSettle(input: {
 
   let canon: string;
   let names: string[] = [];
+  let sceneOnly = false;
+  let replaces: SettleProposal["replaces"];
   // 按已记下的定论查（核账卡「以定论为准」带的是核账员摘的那半句）：用设定本里那一整条，别再记一条半截的。
-  const statementText = request.kind === "statement"
-    ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))?.text ?? request.text.trim()
-    : "";
+  const recorded = request.kind === "statement"
+    ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))
+    : undefined;
+  const statementText = request.kind === "statement" ? recorded?.text ?? request.text.trim() : "";
   try {
     if (request.kind === "pick") {
       const asked = await askNames(callModel, canonTask(request, docs, cards));
       if (!asked.canon) return { ok: false, message: "这次没写出定论（模型没回），重新点一次试试。" };
       canon = asked.canon.slice(0, 400);
       names = asked.names;
+      sceneOnly = !asked.keep;
     } else {
       canon = statementText;
-      names = (await askNames(callModel, namesTask(canon))).names;
+      // 新写的一条：问一句是不是在改设定本里已有的哪条（作者长篇实跑 2026-10-26：「那条定论过时了，改成…」
+      // 记成了第二条，旧的还在，核账照旧拿旧的报）。
+      const existing = recorded ? [] : cards.canon;
+      const asked = await askNames(callModel, namesTask(canon, existing.map((item) => item.text)));
+      // 新写的一条照模型整理过的记（长篇实跑：对话 AI 把「第 45 章那句写错了」写进了定论，查全书照着它把该改的那句放过了）；
+      // 按已记下的那条查时原样用。卡上给作者看的就是这一句。
+      if (!recorded && asked.canon) canon = asked.canon.slice(0, 400);
+      names = asked.names;
+      const old = asked.replaces === undefined ? undefined : existing[asked.replaces - 1];
+      if (old) replaces = { id: old.id, text: old.text };
     }
   } catch (error) {
     if (request.kind === "pick") return { ok: false, message: `这次没写出定论（${error instanceof Error ? error.message : String(error)}），重新点一次试试。` };
@@ -522,6 +570,10 @@ export async function proposeSettle(input: {
     failures.push("没问出这条定论涉及谁，这次全书都查了");
   }
 
+  // 别的定论照样成立（这条要取代的那条、和它一字不差的那条除外）。
+  const standing = cards.canon
+    .filter((item) => item.id !== replaces?.id && nameKey(item.text) !== nameKey(canon))
+    .map((item) => item.text);
   const terms = termsFor(names, cards);
   // 核账报过、作者点过的那几句（打架的另一边 + 同一条报的别几句）：章一定查，改法不复核，查不出如实说。
   const flagged: ChapterSide[] = request.kind === "pick"
@@ -538,9 +590,9 @@ export async function proposeSettle(input: {
   const batches = batchesOf(picked);
   const fields = fieldRefs(cards, terms);
   const [batchResults, fieldResult] = await Promise.all([
-    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch, flagged) }], { json: true }), batch))),
+    Promise.allSettled(batches.map(async (batch) => parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, batch, flagged, standing) }], { json: true }), batch))),
     fields.length > 0
-      ? callModel([{ role: "user", content: fieldsTask(canon, fields) }], { json: true }).then((text) => parseFieldEdits(text, fields)).then(
+      ? callModel([{ role: "user", content: fieldsTask(canon, fields, standing) }], { json: true }).then((text) => parseFieldEdits(text, fields)).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
       )
@@ -561,7 +613,7 @@ export async function proposeSettle(input: {
   if (retry.length > 0) {
     const focus = [...new Set(retry.map(({ side }) => side.chapter))].sort((a, b) => a - b).map((chapter) => docs.get(chapter)!);
     try {
-      const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side)) }], { json: true }), focus);
+      const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side), standing) }], { json: true }), focus);
       found.push(...again.filter((edit) => retry.some(({ side, unit }) => edit.chapter === side.chapter && edit.id === unit.id)));
     } catch {
       // 补问没成：下面照实列进「没查出改法」。
@@ -579,7 +631,7 @@ export async function proposeSettle(input: {
         const units = docs.get(edit.chapter)?.units ?? [];
         return { ...edit, before: units[edit.id - 2]?.text ?? "", after: units[edit.id]?.text ?? "" };
       });
-      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext) }], { json: true }), toReview.length);
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext, standing) }], { json: true }), toReview.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
     } catch (error) {
@@ -654,6 +706,8 @@ export async function proposeSettle(input: {
     proposal: {
       canon,
       canonExists: cards.canon.some((item) => nameKey(item.text) === nameKey(canon)),
+      ...(sceneOnly ? { sceneOnly } : {}),
+      ...(replaces ? { replaces } : {}),
       ...(focusChapter !== undefined ? { chapter: focusChapter } : {}),
       edits,
       facts: facts.sort((a, b) => a.chapter - b.chapter),

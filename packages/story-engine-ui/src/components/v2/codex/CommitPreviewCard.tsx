@@ -44,12 +44,15 @@ export function CommitPreviewCard({
   preview,
   onOpen,
   confirmable = false,
+  onCommitShort,
 }: {
   readonly preview: CommitPreviewCardData;
   /** 打开定稿清单（弹窗）。 */
   readonly onOpen?: () => void;
   /** 这是最新一张没用掉的可定稿预览（清单里能点【定稿】）。 */
   readonly confirmable?: boolean;
+  /** 只差字数下限：作者说这章就这么短（窗口关了也能在这儿点，阻断原因里提了这个按钮）。 */
+  readonly onCommitShort?: () => void;
 }) {
   const { canCommit, blockingReasons, draftIssueCount, semanticIssueCount } = preview;
   const blocking = blockingReasons?.filter((reason) => typeof reason === "string" && reason.trim()) ?? [];
@@ -88,6 +91,11 @@ export function CommitPreviewCard({
             <li className="cpc-item" key={reason}>{reason}</li>
           ))}
         </ul>
+      ) : null}
+      {blocked && preview.shortOnly && onCommitShort ? (
+        <div className="cpc-actions">
+          <button type="button" className="chip cpc-confirm" onClick={onCommitShort}>就这么短，照样定稿</button>
+        </div>
       ) : null}
       {draftCount > 0 ? (
         <IssueCountSection label="文稿问题" count={draftCount} items={draftItems} />

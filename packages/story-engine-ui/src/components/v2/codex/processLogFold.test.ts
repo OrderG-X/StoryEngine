@@ -95,6 +95,19 @@ describe("summarizeProcess：收起那一行", () => {
     expect(summarizeProcess(steps, labelOf, false).current).toBeNull();
     expect(summarizeProcess([], labelOf, true).current).toBe("在想");
   });
+
+  it("AI 传错参数没执行、之后同一工具改了参数做成了：不算没成功；别的失败照数", () => {
+    const invalid = (id: string, toolName: string): ToolStep => ({ ...tool(id, "failed", toolName), invalidArgs: true });
+    const retried = [
+      { kind: "tool" as const, step: invalid("改稿1", "revise_draft") },
+      { kind: "tool" as const, step: tool("读稿", "completed", "read_draft") },
+      { kind: "tool" as const, step: tool("改稿2", "completed", "revise_draft") },
+    ];
+    expect(summarizeProcess(retried, labelOf, false).failed).toBe(0);
+    expect(summarizeProcess([retried[0]!, retried[1]!], labelOf, false).failed).toBe(1);
+    const realFail = [{ kind: "tool" as const, step: tool("改稿1", "failed", "revise_draft") }, retried[2]!];
+    expect(summarizeProcess(realFail, labelOf, false).failed).toBe(1);
+  });
 });
 
 describe("processWorthShowing：卡片已经说清的单步不再挂一行", () => {

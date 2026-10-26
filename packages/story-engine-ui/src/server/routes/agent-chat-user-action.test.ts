@@ -346,6 +346,12 @@ describe("agent-chat route：定稿回执里的「还没建卡的人」", () => 
     expect(summary).not.toContain("还没有人物卡");
     expect(summary).not.toContain("周守义");
   });
+
+  it("作者说过不用建卡的（按别名对上）→ 也不再点名", { timeout: 60_000 }, async () => {
+    const summary = await commitChapter3(await makeBook([{ op: "uncarded.skip", name: "老周" }, { op: "uncarded.skip", name: "阿禾" }]));
+    expect(summary).not.toContain("新人物");
+    expect(summary).not.toContain("还没有人物卡");
+  });
 });
 
 function parseSse(raw: string): SseEvent[] {

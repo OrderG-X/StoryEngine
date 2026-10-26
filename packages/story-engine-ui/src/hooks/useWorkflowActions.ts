@@ -766,7 +766,6 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       return;
     }
     const chapter = wsBook.workspace.currentChapter.chapterNumber;
-    const direction = wsUi.lastChapterDirection || wsUi.steeringDirection || `继续第 ${chapter} 章。`;
     const operation = beginOwnedOperation("reroll-candidates");
     if (!operation) return;
     wsUi.setDraftActionLoading("reroll-candidates");
@@ -776,11 +775,11 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
       // 每版各自 try：某版失败不丢掉已成功的版（部分成功也展示，别白烧 token）。
       const candidates: { readonly content: string; readonly title?: string; readonly originTarget: WorkspaceOperationTarget }[] = [];
       let lastError: unknown;
-      // 章纲一句话（先拟章纲再写，和对话里让 AI 写同一套；第二版沿用第一版拟的章纲）
+      // 章纲一句话：不带方向 = 照本章已有章纲另写（作者给这章的方向在章纲里）；没有章纲才先拟一份，第二版沿用。
       let planNote: string | undefined;
       for (let index = 0; index < 2; index += 1) {
         try {
-          const result = await generateDraftCandidate({ projectPath, chapter, chapterGoal: direction });
+          const result = await generateDraftCandidate({ projectPath, chapter });
           planNote ??= result.planNote;
           if (!ownsCurrentWorkspace(operation)) {
             notifyStaleOperation();

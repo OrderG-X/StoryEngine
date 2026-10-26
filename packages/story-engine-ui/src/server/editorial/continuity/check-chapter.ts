@@ -57,7 +57,13 @@ function parseJson(text: string): Record<string, unknown> {
   return asRecord(JSON.parse(match[0])) ?? {};
 }
 
-export const normalize = (text: string): string => text.replace(/\s+/gu, "");
+/**
+ * 模型把换行多转义了一层（JSON 里写成 `\\n`），解出来是字面的反斜杠 n（长篇实跑 2026-10-25：核账原句「小满。\\n\\n小满在行李卷里…」
+ * 原样给作者看、对不回整句）。小说正文里没有字面转义，比对和展示前当空白去掉。
+ */
+export const dropLiteralEscapes = (text: string): string => text.replace(/\\[nrt]/gu, "");
+
+export const normalize = (text: string): string => dropLiteralEscapes(text).replace(/\s+/gu, "");
 
 /** 句子切分：和编号句子同一套切法（核心 splitUnits：引号里的整句归一句、省略号不断句、标题行不算）。 */
 export function splitSentences(text: string): readonly string[] {
@@ -197,8 +203,8 @@ export function parseFullReadIssues(text: string, chapter: number, draftBody: st
   for (const item of raw) {
     const record = asRecord(item);
     if (!record) continue;
-    const rawQuote = String(record.quote ?? "").trim();
-    const rawEarlier = String(record.earlierQuote ?? "").trim();
+    const rawQuote = dropLiteralEscapes(String(record.quote ?? "")).trim();
+    const rawEarlier = dropLiteralEscapes(String(record.earlierQuote ?? "")).trim();
     const reason = String(record.reason ?? "").trim();
     // 理由里自己说「不矛盾」的不再按词表丢（重构 P7「不猜」）：是不是问题由 A 自复核的结构化判定（sure / maybe / no）定。
     if (!containsQuote(body, rawQuote)) continue;

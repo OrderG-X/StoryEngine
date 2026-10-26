@@ -30,4 +30,18 @@ describe("消息卡读回：定论卡（P12）", () => {
     ]);
     expect(readMessageCards([{ type: "settle", settle: { ...settle, token: "x" } }])).toEqual([]);
   });
+
+  it("「不改了」跟着存；改齐了的不算不改了；只认 true", () => {
+    expect(readMessageCards([{ type: "settle", settle, dropped: true }])).toEqual([{ type: "settle", settle, dropped: true }]);
+    expect(readMessageCards([{ type: "settle", settle, dropped: true, applied: "改齐了。" }])).toEqual([{ type: "settle", settle, applied: "改齐了。" }]);
+    expect(readMessageCards([{ type: "settle", settle, dropped: "true" }])).toEqual([{ type: "settle", settle }]);
+  });
+});
+
+describe("消息卡读回：另外几版", () => {
+  it("几版全文跟着存、跟着读回；没章号整张不认", () => {
+    const versions = { chapter: 38, versions: [{ index: 1, body: "甲版正文。" }] };
+    expect(readMessageCards([{ type: "draft-versions", versions }])).toEqual([{ type: "draft-versions", versions }]);
+    expect(readMessageCards([{ type: "draft-versions", versions: { versions: versions.versions } }])).toEqual([]);
+  });
 });

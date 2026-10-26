@@ -70,17 +70,21 @@ export function storyText(bible: BibleView): string[] {
 export function bibleOverviewText(bible: BibleView): string[] {
   const names = (entries: readonly BibleEntry[]): string =>
     entries.length > 0 ? entries.map((entry) => `${entry.card.name}${entry.card.protagonist ? "（主角）" : ""}`).join("、") : "（没有）";
+  // 作者说过不用建卡的不列（别再劝作者建）。
+  const todo = bible.uncarded.filter((entry) => !entry.skipped);
   return [
     "故事设定：",
     ...storyText(bible),
     "写作规则：",
     ...rulesText(bible.rules),
+    // 定论对话 AI 也得看得见：作者问「定论有哪些」、要改哪一条时才说得上来。
+    ...(bible.canon.length > 0 ? [`定论（${bible.canon.length}，作者定下的，全书以它为准）：`, ...bible.canon.map((item) => `- ${item.text}`)] : []),
     `人物卡（${bible.characters.length}）：${names(bible.characters)}`,
     `地点卡（${bible.places.length}）：${names(bible.places)}`,
     `物品卡（${bible.items.length}）：${names(bible.items)}`,
     `设定卡（${bible.lore.length}）：${names(bible.lore)}`,
-    ...(bible.uncarded.length > 0
-      ? [`账里有、还没建卡（${bible.uncarded.length}）：${bible.uncarded.slice(0, 30).map((entry) => entry.name).join("、")}${bible.uncarded.length > 30 ? " 等" : ""}`]
+    ...(todo.length > 0
+      ? [`账里有、还没建卡（${todo.length}）：${todo.slice(0, 30).map((entry) => entry.name).join("、")}${todo.length > 30 ? " 等" : ""}`]
       : []),
   ];
 }

@@ -18,6 +18,8 @@ export interface WorkspaceDraftCandidate {
   readonly content: string;
   readonly title?: string;
   readonly originTarget: WorkspaceOperationTarget;
+  /** AI 出稿时一起写的第几版（对话「另外几版」卡打开的）；没有＝「再来一版」现抽的候选。 */
+  readonly version?: number;
 }
 
 export interface ChapterNavItem {
@@ -102,11 +104,14 @@ export type MessageCard =
   | { readonly type: "status-notes"; readonly notes: readonly string[] }
   /** 头脑风暴（brainstorm_chapter，重构 P6）：几种走法；picked＝作者挑中的那种（序号），没挑缺省。 */
   | { readonly type: "directions"; readonly brainstorm: BrainstormCardData; readonly picked?: number }
+  /** AI 一次写几版（generate_draft candidates>1）时落选的几版全文：作者点开看、挑一版换进工作稿。 */
+  | { readonly type: "draft-versions"; readonly versions: DraftVersionsCardData }
   /**
    * 定论（P12：核账卡「以第 N 章为准」、对话里「以这个为准」）：定论 + 前文要改的几句、账和设定本跟着改的。
-   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）。
+   * excluded＝作者划掉不改的那几处（key）；applied＝点了「确认」后服务端回的那句结果（有它就是改齐了）；
+   * dropped＝作者点了「不改了」（整张不要，书里没动；能撤回）。
    */
-  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string };
+  | { readonly type: "settle"; readonly settle: SettleCardData; readonly excluded?: readonly string[]; readonly applied?: string; readonly dropped?: true };
 
 export type MessageCardType = MessageCard["type"];
 
@@ -116,6 +121,10 @@ export interface SettleCardData {
   readonly canon: string;
   /** 设定本里已经有这条定论了（不再记一次）。 */
   readonly canonExists: boolean;
+  /** 只是某一场里的事：只改句子，不记进设定本。 */
+  readonly sceneOnly?: boolean;
+  /** 换掉设定本里原来那条定论（原文）。 */
+  readonly replaces?: string;
   /** 从哪一章点进来的（「再核第 N 章」）。 */
   readonly chapter?: number;
   readonly edits: readonly { readonly key: string; readonly chapter: number; readonly draft: boolean; readonly from: string; readonly to: string; readonly why?: string }[];
@@ -131,6 +140,12 @@ export interface SettleCardData {
   readonly resolves?: string;
   /** 没查全的（哪一批、为什么）。 */
   readonly failures: readonly string[];
+}
+
+/** 「另外几版」卡：哪一章、落选的几版（index＝第几版，1 起）。 */
+export interface DraftVersionsCardData {
+  readonly chapter: number;
+  readonly versions: readonly { readonly index: number; readonly body: string }[];
 }
 
 /** 头脑风暴卡：章纲员出的几种走法 + 核账员核前文的结果（线索只带名字，不带编号）。 */
@@ -206,6 +221,8 @@ export interface CommitPreviewCardData {
   readonly notes?: readonly string[];
   /** 预览令牌（不展示）：「确认定稿」按钮原样带回，服务重启后仍可凭它放行同一版草稿。 */
   readonly previewToken?: string;
+  /** 只差字数下限：定稿窗口给「就这么短，照样定稿」。 */
+  readonly shortOnly?: boolean;
   /** 定稿会往账本里写的东西：作者可去掉不对的（removable），去掉的定稿时不写；要确认的改记默认不勾（defaultUnchecked），勾上才作数。 */
   readonly ledgerChecklist?: readonly {
     readonly id: string;
@@ -215,6 +232,7 @@ export interface CommitPreviewCardData {
     readonly detail?: string;
     readonly removable: boolean;
     readonly editableDay?: number;
+    readonly editableDayEnd?: number;
     readonly needsConfirm?: boolean;
     readonly defaultUnchecked?: boolean;
   }[];
@@ -263,6 +281,8 @@ export interface AiFlavorReport {
   readonly summary: string;
   readonly violations: readonly AiFlavorViolation[];
   readonly usedFallback: boolean;
+  /** 查的哪章（老消息没有）：稿纸开着这章时，原句已不在稿里的算改掉了。 */
+  readonly chapter?: number;
 }
 
 export interface LastFormalCommitApply {

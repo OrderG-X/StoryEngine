@@ -41,10 +41,11 @@ export async function readFoundationLogic(input: { readonly projectDir: string; 
   const ref = input.name?.trim();
   if (!ref) {
     const cards = bible.characters.length + bible.places.length + bible.items.length + bible.lore.length;
+    const todo = bible.uncarded.filter((entry) => !entry.skipped).length;
     return {
       found: true,
       text: bibleOverviewText(bible).join("\n"),
-      summary: `设定本：${cards} 张卡${bible.uncarded.length > 0 ? `，账里还有 ${bible.uncarded.length} 个没建卡` : ""}。`,
+      summary: `设定本：${cards} 张卡${todo > 0 ? `，账里还有 ${todo} 个没建卡` : ""}。`,
     };
   }
   const entry = findEntry(bible, ref);

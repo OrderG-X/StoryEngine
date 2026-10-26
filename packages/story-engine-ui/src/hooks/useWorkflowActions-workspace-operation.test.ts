@@ -152,6 +152,8 @@ describe("workspace-bound writing operations", () => {
     const workflow = await actions();
 
     await workflow.handleRerollCandidates();
+    // 不编方向：照本章已有章纲另写（服务端沿用章纲里作者的原话）。
+    expect(apiMocks.generateDraftCandidate).toHaveBeenCalledWith(expect.not.objectContaining({ chapterGoal: expect.anything() }));
     const candidate = useUiStore.getState().draftCandidates?.[0];
     expect(candidate).toBeTruthy();
     setChapter(2, B_DRAFT, "session-b");

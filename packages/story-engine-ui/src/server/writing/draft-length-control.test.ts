@@ -4,7 +4,7 @@
 // 重构 P9：字数来自设定卡写作规则（rules.targetWords / rules.minWords），经 lengthRulesOf 转成 lengthRules。
 import { describe, expect, it } from "vitest";
 import { emptyWritingRules, type WritingRules } from "@actalk/story-core";
-import { applyDraftLengthConstraint, draftLengthAim, lengthRulesOf, readWritingRulesLengthIntent, resolveDraftLengthTarget, requestedDraftLengthBounds, type DraftLengthTarget } from "./draft-length-control.js";
+import { applyDraftLengthConstraint, buildDraftLengthReport, draftLengthAim, draftLengthFloor, lengthRulesOf, readWritingRulesLengthIntent, resolveDraftLengthTarget, requestedDraftLengthBounds, type DraftLengthTarget } from "./draft-length-control.js";
 
 function boundsOf(target: DraftLengthTarget): { readonly lower: number; readonly upper: number } {
   return { lower: target.lowerBound, upper: target.upperBound };
@@ -55,6 +55,17 @@ describe("resolveDraftLengthTarget × 显式 minWords（长跑 #4）", () => {
     expect(target.requested).toBe(2500);
     expect(target.lowerBound).toBe(requestedDraftLengthBounds(2500).lowerBound); // 2125，不是 1000
     expect(target.hardMinimum).toBeUndefined();
+  });
+
+  // 长篇实跑：至少 2000、目标 2500，写了 2113 字却报「比下限少 12 字」（2125 是 2500 的八五折，不是作者定的）。
+  it("显式 min 比区间下沿低：提示词照区间写，够不够按作者的 min 判", () => {
+    const target = resolveDraftLengthTarget({ lengthRules: { targetWords: 2500, minWords: 2000 } });
+    expect(applyDraftLengthConstraint("", target)).toContain("2125-2875");
+    expect(draftLengthFloor(target)).toBe(2000);
+    const ok = buildDraftLengthReport({ draftBody: "字".repeat(2113), lengthTarget: target });
+    expect(ok.lengthStatus).toBe("within_range");
+    expect(ok.lowerBound).toBe(2000);
+    expect(buildDraftLengthReport({ draftBody: "字".repeat(1990), lengthTarget: target }).lengthStatus).toBe("below_lower_bound");
   });
 
   it("下限 = 目标时瞄区间中间（写手总往少了写，瞄着下限写多半不够）；平常就瞄目标", () => {

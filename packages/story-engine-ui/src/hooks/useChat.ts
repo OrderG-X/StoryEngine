@@ -43,7 +43,7 @@ import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/apply
 import { syncWorkspaceAfterRestore } from "../workspace/syncAfterRestore.js";
 import { fetchChapterPaper } from "../api/workingDraftClient.js";
 import { patchChapterFlagsFromPaper } from "../utils/bookUtils.js";
-import { aiErrorBody } from "../lib/ai-error-text.js";
+import { aiErrorAfterWriteBody, aiErrorBody } from "../lib/ai-error-text.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 
 /** 回合收尾等盘上重读最多等这么久（读盘卡住不能一直占着工作区）。 */
@@ -209,14 +209,16 @@ export function useChat(params: UseChatParams): UseChatResult {
       const track = (promise: Promise<unknown>): void => {
         pendingPaperSyncs.push(promise.catch(() => undefined));
       };
+      // 这一轮已经写好的稿（出稿 / 改稿的结果收到了）：之后再出错，「重试这一步」会把整句话重发、整章重写，不给。
+      let finishedWrite: "draft" | "revise" | null = null;
       // 追加一条错误卡消息（error 卡；可重试时带 retry-agent）。tool-error 与 error 共用。
       const appendErrorMessage = (message: string, retryable: boolean, reason?: AiErrorReason) => {
         appendMessage({
           id: `assistant-agent-error-${Date.now()}`,
           role: "assistant",
-          content: aiErrorBody(reason),
+          content: finishedWrite ? aiErrorAfterWriteBody(reason, finishedWrite) : aiErrorBody(reason),
           cards: [{ type: "error", detail: message, ...(reason ? { reason } : {}) }],
-          ...(retryable
+          ...(retryable && !finishedWrite
             ? {
               suggestedActions: [
                 {
@@ -421,7 +423,14 @@ export function useChat(params: UseChatParams): UseChatResult {
                 endedAt: Date.now(),
                 output: info,
               });
-              if (info.toolName === "generate_draft") endStreaming();
+              if (info.toolName === "generate_draft") {
+                endStreaming();
+                // 结果收到了：之后出错不用再「核对盘上」说它其实写完了。
+                generateAttempt = null;
+              }
+              if ((info.toolName === "generate_draft" || info.toolName === "revise_draft") && info.ok !== false && !info.toolValidationFailure) {
+                finishedWrite = info.toolName === "generate_draft" ? "draft" : "revise";
+              }
               // 核账结果记下核的是哪一版：服务端报了就用它（它读的那份文件）；没报（老服务端）才用这时稿纸上的版本。
               // 之后稿子变了就显示「核过后改过稿」。AI 出完稿紧接着核账时稿纸可能还没换上新稿，不能拿稿纸的版本。
               if (info.toolName === "check_continuity" && !chapterMismatch) {
@@ -547,22 +556,7 @@ export function useChat(params: UseChatParams): UseChatResult {
         // streamAgentChat 内部已把异常转成 onError；这里兜底防御未捕获路径。
         if (!sawError) {
           const message = error instanceof Error ? error.message : String(error);
-          appendMessage({
-            id: `assistant-agent-error-${Date.now()}`,
-            role: "assistant",
-            content: aiErrorBody(undefined),
-            cards: [{ type: "error", detail: message }],
-            suggestedActions: [
-              {
-                id: "retry-agent",
-                label: "重试这一步",
-                description: "重新让写作助手处理这条消息",
-                permission: "safe_read",
-                requiresConfirmation: false,
-                endpoint: text,
-              },
-            ],
-          });
+          appendErrorMessage(message, true);
         }
         endStreaming();
         unstickGeneratingFlow();
@@ -798,12 +792,15 @@ export function useChat(params: UseChatParams): UseChatResult {
       const excluded = target?.excluded ?? ledgerExclusionsForConfirm(chapter, target?.previewToken);
       const confirmedChanges = excluded.filter((id) => id.startsWith("change_confirm:")).length;
       const removedCount = excluded.length - confirmedChanges;
-      const dayOverride = target?.dayOverride ?? ledgerDayOverrideForConfirm(chapter, target?.previewToken);
+      const dayOverride = target?.dayOverride !== undefined
+        ? { day: target.dayOverride, ...(target.dayEndOverride !== undefined ? { dayEnd: target.dayEndOverride } : {}) }
+        : ledgerDayOverrideForConfirm(chapter, target?.previewToken);
+      const dayEnd = dayOverride?.dayEnd !== undefined && dayOverride.dayEnd > dayOverride.day ? dayOverride.dayEnd : undefined;
       clearLedgerExclusions(chapter);
       const notes = [
         ...(removedCount > 0 ? [`账本清单去掉了 ${removedCount} 条`] : []),
         ...(confirmedChanges > 0 ? [`确认改记 ${confirmedChanges} 条`] : []),
-        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride} 天`] : []),
+        ...(dayOverride !== undefined ? [`这一章改记为故事第 ${dayOverride.day} 天${dayEnd !== undefined ? `到第 ${dayEnd} 天` : ""}`] : []),
       ];
       const text = notes.length > 0 ? `确认定稿第 ${chapter} 章（${notes.join("，")}）` : `确认定稿第 ${chapter} 章`;
       const conversation = buildOutboundConversation(liveChat.messages, liveChat.activeArchivedCount, liveChat.chatHistoryBudget);
@@ -813,7 +810,8 @@ export function useChat(params: UseChatParams): UseChatResult {
         chapter,
         ...(target?.previewToken ? { previewToken: target.previewToken } : {}),
         ...(excluded.length > 0 ? { excluded } : {}),
-        ...(dayOverride !== undefined ? { dayOverride } : {}),
+        ...(dayOverride !== undefined ? { dayOverride: dayOverride.day } : {}),
+        ...(dayEnd !== undefined ? { dayEndOverride: dayEnd } : {}),
       });
     },
     [projectPath, appendMessage, setChatError, runAgentDispatch, showToast],
@@ -960,6 +958,9 @@ export function useChat(params: UseChatParams): UseChatResult {
           return;
         case "commit-apply":
           void handleConfirmCommit(action.commitTarget);
+          return;
+        case "commit-short":
+          if (action.commitTarget?.chapter) void handleSendUserAction({ toolName: "commit_preview", chapter: action.commitTarget.chapter, allowShort: true });
           return;
         case "prune-confirm":
           consumeSuggestedAction(action);

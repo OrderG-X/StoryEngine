@@ -16,6 +16,7 @@ import type {
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
+import { readDraftVersions } from "../../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../../utils/settleCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
@@ -90,12 +91,18 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       const picked = readPicked(value.picked, brainstorm);
       return { type, brainstorm, ...(picked !== undefined ? { picked } : {}) };
     }
+    case "draft-versions": {
+      const versions = readDraftVersions(value.versions);
+      return versions ? { type, versions } : undefined;
+    }
     case "settle": {
       const settle = readSettleData(value.settle);
       if (!settle) return undefined;
       const excluded = readSettleExcluded(value.excluded, settle);
       const applied = typeof value.applied === "string" && value.applied.trim() ? value.applied.trim().slice(0, 2000) : "";
-      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}) };
+      // 改齐了就不算「不改了」。
+      const dropped = !applied && value.dropped === true;
+      return { type, settle, ...(excluded ? { excluded } : {}), ...(applied ? { applied } : {}), ...(dropped ? { dropped: true as const } : {}) };
     }
     default:
       return undefined;
@@ -217,6 +224,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
       const detail = readString(item.detail);
       const reason = readString(item.reason);
       const editableDay = readPositiveInteger(item.editableDay);
+      const editableDayEnd = readPositiveInteger(item.editableDayEnd);
       return [{
         id,
         kind: readString(item.kind) ?? "",
@@ -225,6 +233,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
         ...(detail ? { detail } : {}),
         removable: item.removable === true,
         ...(editableDay !== undefined ? { editableDay } : {}),
+        ...(editableDayEnd !== undefined ? { editableDayEnd } : {}),
         ...(item.needsConfirm === true ? { needsConfirm: true } : {}),
         ...(item.defaultUnchecked === true ? { defaultUnchecked: true } : {}),
       }];
@@ -242,6 +251,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     ...(draftIssues.length > 0 ? { draftIssues } : {}),
     ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
     ...(previewToken ? { previewToken } : {}),
+    ...(value.shortOnly === true ? { shortOnly: true } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
     ...(notRecorded.length > 0 ? { notRecorded } : {}),
     ...(notes.length > 0 ? { notes } : {}),

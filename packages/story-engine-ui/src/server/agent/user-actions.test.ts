@@ -51,6 +51,8 @@ describe("接着往下写的按钮动作（P13）", () => {
     expect(retryDraftChoices(action, "nothing_to_continue")).toEqual([expect.objectContaining({ label: "AI 写第 4 章", action: { toolName: "generate_draft", chapter: 4 } })]);
     expect(retryDraftChoices(action, "chapter_committed")).toEqual([]);
     expect(retryDraftChoices(action, undefined)).toEqual([expect.objectContaining({ label: "再写一次", action })]);
+    // 导入的书还在通读记账：再点也是同一句「等它记完」。
+    expect(retryDraftChoices({ toolName: "generate_draft", chapter: 11 }, "rereading")).toEqual([]);
   });
 });
 
@@ -101,6 +103,17 @@ describe("parseUserAction 结构化动作解析", () => {
     expect(parseUserAction({ toolName: "check_continuity", chapter: 3, fresh: "yes" })).toEqual({
       kind: "action",
       action: { toolName: "check_continuity", chapter: 3 },
+    });
+  });
+
+  it("改的天数随定稿动作带上：到第几天只跟着第几天一起认", () => {
+    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, dayOverride: "21", dayEndOverride: 22 })).toEqual({
+      kind: "action",
+      action: { toolName: "commit_apply", chapter: 5, dayOverride: 21, dayEndOverride: 22 },
+    });
+    expect(parseUserAction({ toolName: "commit_apply", chapter: 5, dayEndOverride: 22 })).toEqual({
+      kind: "action",
+      action: { toolName: "commit_apply", chapter: 5 },
     });
   });
 
@@ -360,6 +373,9 @@ describe("runUserAction 执行结构化动作", () => {
 describe("「定稿」按钮结构化动作（commit_preview）", () => {
   it("解析；执行时不带确认标记（只读），推 tool-call/tool-result + 一句结论（清单在弹窗里，重构 P6），不调模型", async () => {
     expect(parseUserAction({ toolName: "commit_preview", chapter: "4" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
+    // 「就这么短，照样定稿」只认布尔 true（别的值当没点）。
+    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: true })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4, allowShort: true } });
+    expect(parseUserAction({ toolName: "commit_preview", chapter: 4, allowShort: "true" })).toEqual({ kind: "action", action: { toolName: "commit_preview", chapter: 4 } });
     const requestContext = new RequestContext();
     let marked = true;
     const executeTool: UserActionToolExecutor = async (toolName, _input, context) => {
@@ -421,6 +437,30 @@ describe("「核账」按钮结构化动作（check_continuity，R4.1：没核�
     const labels = JSON.stringify(next.choices);
     expect(labels).not.toContain("预览定稿");
     expect(labels).not.toContain("改掉确定");
+  });
+
+  it("导入的书还在通读记账 → 回话说等它记完，不给「再核一遍」「先写下一章」（都挡着，点了白点）", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "user-actions-reread-"));
+    try {
+      await mkdir(join(projectDir, "agents", "ledger"), { recursive: true });
+      const now = new Date().toISOString();
+      await writeFile(join(projectDir, "agents", "ledger", "reread.json"), JSON.stringify({ schema: "reread/1", status: "running", run: "r1", total: 10, done: 3, recorded: 30, skipped: 0, startedAt: now, updatedAt: now, resumedAt: now, doneAtResume: 0 }));
+      const said = "这次没能核账：记账员还在通读前文、逐章记账（记完 3/10 章）。核账、定稿、想走法、AI 写稿都要等它记完，你自己写不受影响。";
+      const events: { event: string; data: Record<string, unknown> }[] = [];
+      await runUserAction({
+        action: { toolName: "check_continuity", chapter: 11 },
+        requestContext: new RequestContext(),
+        executeTool: async () => ({ ok: false, chapter: 11, sure: [], maybe: [], failures: [said], summary: said }),
+        sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+        scrubber: { push: (t: string) => t, flush: () => "" },
+        scrubError: String,
+        projectDir,
+      });
+      expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result", "text-delta"]);
+      expect(textOf(events)).toBe(said);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it("核出问题 → 回话只说结论那句（headline），清单留给核账卡和稿纸划线（重构 P6）", async () => {

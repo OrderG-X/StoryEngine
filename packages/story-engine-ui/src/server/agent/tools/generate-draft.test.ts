@@ -31,6 +31,7 @@ import {
   buildCandidateSummaryLine,
   buildDraftLengthInfo,
   buildDraftLengthWarning,
+  authorDirectionOf,
   buildGoalNotQuotedOutput,
   buildRewriteAwaitingAuthorOutput,
   buildSequencingBlockedOutput,
@@ -533,6 +534,13 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(committed.rewriteConfirm).toEqual({ chapter: 6 });
   });
 
+  it("authorDirectionOf：作者要点和方向一起交章纲员（方向里已有的不重复）；都没有 → undefined", () => {
+    expect(authorDirectionOf(undefined, ["门环上挂着一枚梅花铜牌", "明日午时，听雪楼，只许一人"])).toBe("门环上挂着一枚梅花铜牌\n明日午时，听雪楼，只许一人");
+    expect(authorDirectionOf("进城落脚。门环上挂着一枚梅花铜牌", ["门环上挂着一枚梅花铜牌", " ", "只许一人"])).toBe("进城落脚。门环上挂着一枚梅花铜牌\n只许一人");
+    expect(authorDirectionOf("  ", [])).toBeUndefined();
+    expect(authorDirectionOf(undefined, undefined)).toBeUndefined();
+  });
+
   it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
     const out = buildGoalNotQuotedOutput(3, ["并埋下伏笔"], {} as StateOverview);
     expect(out.ok).toBe(false);
@@ -685,6 +693,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       ) as { ok: boolean; blockedReason?: string };
       expect(paraphrased.ok).toBe(false);
       expect(paraphrased.blockedReason).toBe("chapter_goal_not_author_words");
+      expect(spy).not.toHaveBeenCalled();
+
+      // 要点也交章纲员，同样要是作者原话（长篇实跑第 35 章：方向没填、话全在要点里）。
+      const paraphrasedBeat = await execute(
+        { mustHitBeats: ["爷爷固定摆锤"] },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, authorWords) } as unknown as ToolExecutionContext,
+      ) as { ok: boolean; blockedReason?: string };
+      expect(paraphrasedBeat.blockedReason).toBe("chapter_goal_not_author_words");
       expect(spy).not.toHaveBeenCalled();
 
       const quoted = await execute(
@@ -1436,6 +1452,8 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true, score: 100 });
     expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: false, score: 75 });
     expect(out.candidatesReport?.[2].reason).toContain("低于字数下限");
+    // 落选的几版全文留给界面（「另外几版」卡），作者能换；不落盘
+    expect(out.otherVersions).toEqual([{ index: 1, body: flavored }, { index: 3, body: short }]);
     // summary 一行：选了第 2 个 + 核实过的优点
     expect(out.summary).toContain("已生成 3 个候选并选出第 2 个（要点全中、字数达标、无 AI 腔命中），其余落选原因见 candidatesReport。");
     // 优胜稿干净 → 不带 AI 腔 ⚠ 噪音

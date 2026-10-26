@@ -26,6 +26,14 @@ describe("工具结果给模型的精简版", () => {
     expect(JSON.stringify(slim).length).toBeLessThan(JSON.stringify(draftOutput).length / 5);
   });
 
+  it("落选的几版全文不给模型，只说几版放在卡上、作者自己换", () => {
+    const slim = slimToolOutputForModel("generate_draft", { ...draftOutput, otherVersions: [{ index: 1, body: "长".repeat(3000) }] }) as Record<string, unknown>;
+    expect(slim.otherVersions).toBeUndefined();
+    expect(String(slim.otherVersionsNote)).toContain("另外 1 版");
+    expect(String(slim.otherVersionsNote)).toContain("你换不了");
+    expect(JSON.stringify(slim)).not.toContain("长长长");
+  });
+
   it("读类工具原样给模型（本职就是给模型读资料）；非对象原样", () => {
     expect(slimToolOutputForModel("read_state_overview", draftOutput)).toBe(draftOutput);
     expect(slimToolOutputForModel("read_draft", draftOutput)).toBe(draftOutput);

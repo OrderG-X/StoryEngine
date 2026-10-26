@@ -435,4 +435,12 @@ describe("接着往下写", () => {
     expect(report.draftBody).toContain(han(3000, "后"));
     expect(report.issues.join("\n")).toContain("接着写的稿不从结尾裁");
   });
+
+  it("作者没定过本章字数：接着写超了默认目标不提「超过上限」（作者只说了这次写多少）", async () => {
+    const projectDir = await makeBook();
+    const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "", content: `林澈${han(3000, "后")}。` })) };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, continueFrom: { text: EXISTING, length: 1500 } });
+    expect(report.draftBody).toContain(han(3000, "后"));
+    expect(report.issues.join("\n")).not.toContain("超过上限");
+  });
 });

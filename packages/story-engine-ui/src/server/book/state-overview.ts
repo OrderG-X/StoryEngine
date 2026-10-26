@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, readBible, selectRelevant, type BibleView } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, readBible, selectRelevant, type BibleView } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 import { formatCommitRecoveryNotice, listCommitRecoveryNotices } from "./legacy-commit-recovery.js";
 import type {
@@ -56,6 +56,8 @@ export interface StateOverview {
      * 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进去，入库回执曾写出
      * 「未收口的线索已积到 55 条，其中 78 条已经低价值或过期」。「其中 X 条」要用这个数。 */
     readonly cleanupVisibleUnresolvedCount: number;
+    /** 可清理的线索全列（停得久的先，最多 MAX_CLEANUP_ITEMS 条）：跟界面「N 条线索可以清理」同一批，对话 AI 照这个列给作者。 */
+    readonly cleanupItems: readonly StateOverviewThreadItem[];
     readonly keyOpenItems: readonly StateOverviewThreadItem[];
   };
   readonly arcGoals: {
@@ -78,21 +80,8 @@ export interface StateOverview {
     readonly knownCharacters: readonly StateOverviewCharacterItem[];
   };
   readonly setting: StateOverviewSetting;
-  readonly maintenance: {
-    readonly diagnosticsAvailable: boolean;
-    readonly cleanupVisibleCount: number;
-    readonly mergeDisabled: true;
-    readonly dropDisabled: true;
-    readonly confirmPolicy: {
-      readonly markDone: "manual_only";
-      readonly merge: "disabled";
-      readonly drop: "disabled";
-    };
-  };
   readonly uiHints: {
-    readonly recommendedNextPanels: readonly string[];
     readonly warnings: readonly string[];
-    readonly disabledActions: readonly string[];
   };
 }
 
@@ -113,8 +102,6 @@ export interface StateOverviewHookItem {
   readonly status: string;
   readonly lastTouchedChapter?: number;
   readonly risk?: "low" | "medium" | "high";
-  /** 热度读时派生：大伏笔 / 小线索。纯确定性、不写盘。 */
-  readonly size?: "major" | "minor";
   /** B5-2: 初次埋入章号（透传自 HookItem.firstSeenChapter）。读时投影，不写盘。 */
   readonly firstSeenChapter?: number;
   /** B5-2: 回收章号（status=resolved 时填；透传自 HookItem.resolvedAtChapter）。读时投影，不写盘。 */
@@ -130,8 +117,8 @@ export interface StateOverviewThreadItem {
   readonly cleanupCandidateClass?: string;
   /** 被折叠进本条的近重复数量（展示层「+N 条相关」）。未折叠时缺省（undefined）。 */
   readonly relatedCount?: number;
-  /** 热度读时派生：大伏笔 / 小线索。纯确定性、不写盘。 */
-  readonly size?: "major" | "minor";
+  /** 作者标的分量：major=大伏笔、minor=小线索；普通的不带。 */
+  readonly weight?: "major" | "minor";
   /** B5-2: 初次出现章号（透传自 NarrativeThread.firstSeenChapter）。读时投影，不写盘。 */
   readonly firstSeenChapter?: number;
 }
@@ -164,6 +151,7 @@ export interface StateOverviewCharacterItem {
 
 const DEFAULT_MAX_TIMELINE_EVENTS = 5;
 const MAX_ITEMS = 12;
+const MAX_CLEANUP_ITEMS = 20;
 const MAX_TEXT = 160;
 // 「题材」是建书和老书迁移时写进故事设定的栏名（自家格式），照栏名原样取，不猜意思。
 const GENRE_LABEL = "题材";
@@ -205,12 +193,14 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     listCommitRecoveryNotices(input.projectDir).catch(() => [] as const),
   ]);
 
-  const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
-  // 可清理的线索 = 还开着、已经 THREAD_CLEANUP_AFTER 章没碰过的。只按章数算，
-  // 不再按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
-  const cleanupCandidateIds = new Set(threadPool.threads
-    .filter((thread) => isCleanupCandidate(thread, currentChapter))
-    .map((thread) => thread.id));
+  const latestChapter = inferCurrentChapter(timelineEvents);
+  const currentChapter = input.chapter ?? latestChapter;
+  // 可清理的线索只按章数和作者标的轻重算，不按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
+  // 从最新定稿章算、不随作者正翻着的章变（长篇实跑：翻到下一章，界面说 5 条、AI 说 6 条）。
+  const cleanupCandidates = threadPool.threads
+    .filter((thread) => isCleanupCandidate(thread, latestChapter))
+    .sort((a, b) => (a.lastTouchedChapter ?? 0) - (b.lastTouchedChapter ?? 0));
+  const cleanupCandidateIds = new Set(cleanupCandidates.map((thread) => thread.id));
   const cleanupVisibleCount = cleanupCandidateIds.size;
   const cleanupVisibleUnresolvedCount = cleanupVisibleCount;
   const recentEvents = timelineEvents
@@ -257,6 +247,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       openIntents: threadPool.threads.filter((thread) => thread.type === "intent" && thread.status === "open").length,
       cleanupVisibleCount,
       cleanupVisibleUnresolvedCount,
+      cleanupItems: cleanupCandidates.slice(0, MAX_CLEANUP_ITEMS).map((thread) => toThreadOverview(thread, "stale_candidate")),
       keyOpenItems: (() => {
         const threadSelectChapter = currentChapter ?? Math.max(0, ...threadPool.threads.map((t) => t.firstSeenChapter ?? 0));
         const selected = selectRelevant({
@@ -292,19 +283,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       knownCharacters: bible ? knownCharactersOf(bible) : [],
     },
     setting: settingOf(bible),
-    maintenance: {
-      diagnosticsAvailable: true,
-      cleanupVisibleCount,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: {
-        markDone: "manual_only",
-        merge: "disabled",
-        drop: "disabled",
-      },
-    },
     uiHints: {
-      recommendedNextPanels: buildRecommendedPanels({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
       warnings: [
         ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
         ...commitRecoveryNotices.map(formatCommitRecoveryNotice),
@@ -312,14 +291,6 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
         ...unique(corruptLedgerFiles.map((relativePath) =>
           `资料文件损坏，面板按空显示：${relativePath}。定稿等写入操作会如实报错，请先修复该文件。`)),
         ...unique(degradedReads),
-      ],
-      disabledActions: [
-        "merge_threads_confirm",
-        "drop_thread_confirm",
-        "auto_cleanup",
-        "auto_expire",
-        "auto_mark_done",
-        "auto_apply_review_plan_confirm",
       ],
     },
   };
@@ -351,7 +322,8 @@ function settingOf(bible: BibleView | undefined): StateOverviewSetting {
     ...(bible.rules.targetWords ? { targetChapterWords: bible.rules.targetWords.value } : {}),
     ...(bible.rules.minWords ? { minChapterWords: bible.rules.minWords.value } : {}),
     cards: { characters: bible.characters.length, places: bible.places.length, items: bible.items.length, lore: bible.lore.length },
-    uncarded: bible.uncarded.length,
+    // 作者说过不用建卡的不算待建。
+    uncarded: bible.uncarded.filter((entry) => !entry.skipped).length,
     storyFields: bible.story.length,
   };
 }
@@ -379,27 +351,6 @@ export function clusterNearDuplicates<T extends { readonly id: string; readonly 
   return clusters;
 }
 
-/**
- * 按「跨章数 + 提及次数 + 牵连角色数」确定性派生伏笔/线索的大小级别。
- * 纯读时计算，不写盘，不调 LLM，题材中立。
- *
- * weight = (span >= 10 ? 2 : 0) + (evidenceCount >= 3 ? 1 : 0) + (relatedCharacterCount >= 2 ? 1 : 0)
- * weight >= 2 → "major"，否则 "minor"
- */
-export function deriveSize(input: {
-  firstSeenChapter?: number;
-  lastTouchedChapter?: number;
-  evidenceCount: number;
-  relatedCharacterCount: number;
-}): "major" | "minor" {
-  const span = (input.lastTouchedChapter ?? 0) - (input.firstSeenChapter ?? 0);
-  const weight =
-    (span >= 10 ? 2 : 0) +
-    (input.evidenceCount >= 3 ? 1 : 0) +
-    (input.relatedCharacterCount >= 2 ? 1 : 0);
-  return weight >= 2 ? "major" : "minor";
-}
-
 function toHookOverview(hook: HookItem): StateOverviewHookItem {
   return {
     id: hook.id,
@@ -407,23 +358,19 @@ function toHookOverview(hook: HookItem): StateOverviewHookItem {
     status: hook.status,
     ...(hook.lastTouchedChapter !== undefined ? { lastTouchedChapter: hook.lastTouchedChapter } : {}),
     risk: hookRisk(hook),
-    size: deriveSize({
-      firstSeenChapter: hook.firstSeenChapter,
-      lastTouchedChapter: hook.lastTouchedChapter,
-      evidenceCount: hook.evidence?.length ?? 0,
-      relatedCharacterCount: hook.relatedCharacters?.length ?? 0,
-    }),
     ...(hook.firstSeenChapter !== undefined ? { firstSeenChapter: hook.firstSeenChapter } : {}),
     ...(hook.resolvedAtChapter !== undefined ? { resolvedAtChapter: hook.resolvedAtChapter } : {}),
   };
 }
 
-const THREAD_CLEANUP_AFTER = 5;
-
-function isCleanupCandidate(thread: NarrativeThread, currentChapter: number | null | undefined): boolean {
+/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter），只是大伏笔不劝清理。 */
+function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null): boolean {
   if (thread.status !== "open" && thread.status !== "touched") return false;
-  if (typeof currentChapter !== "number" || typeof thread.lastTouchedChapter !== "number") return false;
-  return currentChapter - thread.lastTouchedChapter >= THREAD_CLEANUP_AFTER;
+  // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）；
+  // 小线索是作者说过「停多久都不提醒」的。
+  if (thread.weight === "major" || thread.weight === "minor") return false;
+  if (latestChapter === null || typeof thread.lastTouchedChapter !== "number") return false;
+  return latestChapter - thread.lastTouchedChapter >= DEFAULT_STALE_AFTER;
 }
 
 function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: string, relatedCount?: number): StateOverviewThreadItem {
@@ -435,12 +382,8 @@ function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: strin
     lastTouchedChapter: thread.lastTouchedChapter,
     ...(cleanupCandidateClass && cleanupCandidateClass !== "none" ? { cleanupCandidateClass } : {}),
     ...(relatedCount !== undefined && relatedCount > 0 ? { relatedCount } : {}),
-    size: deriveSize({
-      firstSeenChapter: thread.firstSeenChapter,
-      lastTouchedChapter: thread.lastTouchedChapter,
-      evidenceCount: thread.evidence?.length ?? 0,
-      relatedCharacterCount: thread.relatedCharacters?.length ?? 0,
-    }),
+    // 只给作者标的分量。原来给按跨章数派生的「大 / 小」，对话 AI 当成作者标的，跟作者说「账上标的是小线索」（长篇实跑）。
+    ...(thread.weight === "major" || thread.weight === "minor" ? { weight: thread.weight } : {}),
     firstSeenChapter: thread.firstSeenChapter,
   };
 }
@@ -505,20 +448,6 @@ function hookRisk(hook: HookItem): "low" | "medium" | "high" {
   if (hook.nextActionHint) return "high";
   if (evidenceCount > 1 || hook.status === "active") return "medium";
   return "low";
-}
-
-function buildRecommendedPanels(input: {
-  readonly hookPool: HookPool;
-  readonly threadPool: ThreadPool;
-  readonly arcGoalPool: ArcGoalPool;
-  readonly cleanupVisibleCount: number;
-}): readonly string[] {
-  const panels = ["chapter_preview", "state_overview"];
-  if (input.threadPool.threads.some((thread) => thread.status === "open" || thread.status === "touched")) panels.push("thread_pool");
-  if (input.hookPool.hooks.some((hook) => hook.status === "active" || hook.status === "seeded")) panels.push("hook_pool");
-  if (input.arcGoalPool.goals.some((goal) => goal.status === "active" || goal.status === "touched")) panels.push("arc_goals");
-  if (input.cleanupVisibleCount > 0) panels.push("maintenance_diagnostics");
-  return panels;
 }
 
 function buildWarnings(input: {

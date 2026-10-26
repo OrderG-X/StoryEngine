@@ -414,6 +414,18 @@ describe("projectAgentEvent", () => {
     expect(ok.toolSteps![0].detail).toBeUndefined();
   });
 
+  it("generate_draft 一次写几版：落选的几版挂成「另外几版」卡；没写成不挂", () => {
+    const versions = { chapter: 38, versions: [{ index: 1, body: "另一版正文。" }] };
+    let msg = emptyAssistantMessage("versions");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "g1", toolName: "generate_draft", endedAt: 2, output: { ok: true, chapter: 38, draftVersions: versions } });
+    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
+    let failed = emptyAssistantMessage("versions-failed");
+    failed = projectAgentEvent(failed, { type: "tool-call", toolCallId: "g2", toolName: "generate_draft", startedAt: 1 });
+    failed = projectAgentEvent(failed, { type: "tool-result", toolCallId: "g2", toolName: "generate_draft", endedAt: 2, output: { ok: false, draftVersions: versions } });
+    expect(cardOf(failed, "draft-versions")).toBeUndefined();
+  });
+
   it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
     let msg = emptyAssistantMessage("check-ok");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });
@@ -807,6 +819,18 @@ describe("改账待确认投影（manage_ledger 提草案后挂「确认改账�
     ]);
     expect(message.suggestedActions).toEqual([
       expect.objectContaining({ id: "ledger-confirm", label: "确认改账", ledgerTarget: { key: "k1", decisions, label: "删掉一条" } }),
+    ]);
+  });
+
+  it("一轮里两次改账提议 → 一个按钮带两次的裁定（不丢前一次）", () => {
+    const first = [{ type: "thread.weight", thread: "t1-1", weight: "major" }];
+    const second = [{ type: "thread.weight", thread: "t1-2", weight: "major" }];
+    const message = project([
+      { type: "tool-result", toolCallId: "l1", toolName: "manage_ledger", endedAt: 2, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k1", decisions: first }, summary: "…" } },
+      { type: "tool-result", toolCallId: "l2", toolName: "manage_ledger", endedAt: 3, output: { ok: false, needsConfirmation: true, ledgerConfirmAction: { key: "k2", decisions: second }, summary: "…" } },
+    ]);
+    expect(message.suggestedActions).toEqual([
+      expect.objectContaining({ id: "ledger-confirm", ledgerTarget: { key: "k1+k2", decisions: [...first, ...second] } }),
     ]);
   });
 });

@@ -8,11 +8,16 @@
  * 集合里混着两类、按 id 前缀分流（R7.4 起）：常规条目在集合里＝勾掉（定稿不写）；
  * 要确认的改记（change_confirm: 前缀）在集合里＝勾上（作者确认了这条改记，定稿才作废旧条）——默认不进集合＝不确认。
  */
+/** 作者改过的天数：第 day 天（到第 dayEnd 天，这一章跨天时）。 */
+export interface DayOverride {
+  readonly day: number;
+  readonly dayEnd?: number;
+}
+
 interface Entry {
   readonly previewToken: string;
   readonly removed: ReadonlySet<string>;
-  /** 作者改过的「第几天」。 */
-  readonly dayOverride?: number;
+  readonly dayOverride?: DayOverride;
 }
 
 const byChapter = new Map<number, Entry>();
@@ -23,8 +28,8 @@ export function rememberLedgerExclusions(chapter: number, previewToken: string |
   byChapter.set(chapter, { previewToken: previewToken ?? "", removed, ...(sameCard && previous.dayOverride !== undefined ? { dayOverride: previous.dayOverride } : {}) });
 }
 
-/** 记下作者在清单上改的「第几天」（undefined = 改回原值）。 */
-export function rememberLedgerDayOverride(chapter: number, previewToken: string | undefined, day: number | undefined): void {
+/** 记下作者在清单上改的天数（undefined = 改回原值）。 */
+export function rememberLedgerDayOverride(chapter: number, previewToken: string | undefined, day: DayOverride | undefined): void {
   const previous = byChapter.get(chapter);
   const sameCard = previous && previous.previewToken === (previewToken ?? "");
   byChapter.set(chapter, {
@@ -34,14 +39,14 @@ export function rememberLedgerDayOverride(chapter: number, previewToken: string 
   });
 }
 
-/** 这张预览卡此前改过的「第几天」。 */
-export function ledgerDayOverrideForCard(chapter: number, previewToken: string | undefined): number | undefined {
+/** 这张预览卡此前改过的天数。 */
+export function ledgerDayOverrideForCard(chapter: number, previewToken: string | undefined): DayOverride | undefined {
   const entry = byChapter.get(chapter);
   return entry && entry.previewToken === (previewToken ?? "") ? entry.dayOverride : undefined;
 }
 
-/** 点「确认定稿」时该带上的「第几天」（规则同 ledgerExclusionsForConfirm）。 */
-export function ledgerDayOverrideForConfirm(chapter: number, previewToken: string | undefined): number | undefined {
+/** 点「确认定稿」时该带上的天数（规则同 ledgerExclusionsForConfirm）。 */
+export function ledgerDayOverrideForConfirm(chapter: number, previewToken: string | undefined): DayOverride | undefined {
   const entry = byChapter.get(chapter);
   if (!entry) return undefined;
   if (previewToken && entry.previewToken && previewToken !== entry.previewToken) return undefined;

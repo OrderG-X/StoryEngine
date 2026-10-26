@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyLedgerDecisions } from "../ledger-decisions.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { runManageLedger } from "./manage-ledger.js";
+import { confirmLabel, runManageLedger } from "./manage-ledger.js";
 
 let book: string;
 beforeEach(async () => {
@@ -77,6 +77,9 @@ describe("manage_ledger：只提草案", () => {
     const group = await runManageLedger(book, { op: "group", groups: ["钟为什么停", "钟楼的门为什么开着"] });
     expect(group.ledgerConfirm?.decisions).toEqual([{ type: "thread.merge", from: ["t1-2"], into: "t1-1" }]);
     expect(group.summary).toContain("把 「钟楼的门为什么开着」并进「钟为什么停」");
+    expect(group.ledgerConfirm?.label).toBe(group.ledgerConfirm?.lines[0]);
+    expect(confirmLabel(["把「甲」并进「乙」", "把「丙」并进「丁」"])).toBe("把「甲」并进「乙」 等 2 条");
+    expect(confirmLabel([])).toBe("改账");
 
     for (const out of [add, addHard, update, supersede, resolve, weight, group]) expect(out.summary).not.toMatch(/c\d+-|t\d+-|d-\d/u);
     expect(JSON.stringify(await projectBook(book))).toBe(before);
@@ -107,5 +110,36 @@ describe("manage_ledger：只提草案", () => {
 
     const bad = await applyLedgerDecisions(book, { key: "k-bad", decisions: [{ type: "fact.retract" }] });
     expect(bad).toMatchObject({ ok: false, applied: 0 });
+  });
+
+  // 长篇实跑：第 24 章定稿后才发现天数记错，AI 说「我手头没有能改时间线天数的工具」。
+  it("改已定稿章的天数：出按钮，作者点了后那章和后面的章跟着挪", async () => {
+    await commitTwo();
+    const before = await projectBook(book);
+    expect(before.chapters.map((chapter) => [chapter.day, chapter.dayEnd])).toEqual([[1, 1], [2, 2]]);
+    const plan = await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 4 });
+    expect(plan).toMatchObject({ needsConfirmation: true, ledgerConfirm: { lines: ["第 1 章从故事第 1 天改记为第 3 天到第 4 天"] } });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 1 });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    expect(applied).toMatchObject({ ok: true, applied: 1 });
+    expect((await projectBook(book)).chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([[3, 4, "author"], [5, 5, "missing"]]);
+
+    expect(await runManageLedger(book, { op: "day", chapter: 9, day: 3 })).toMatchObject({ ok: false, blockedReason: "unknown_chapter" });
+    expect(await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 2 })).toMatchObject({ ok: false, blockedReason: "bad_day" });
+    expect(await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 4 })).toMatchObject({ ok: false, blockedReason: "unchanged" });
+  });
+
+  // 长篇实跑：第 41 章梗概记成「离云州北上」（其实往南），AI 说梗概「改账够不着」。
+  it("改已定稿章的梗概：出按钮，作者点了投影里换成新梗概", async () => {
+    await commitTwo();
+    const plan = await runManageLedger(book, { op: "summary", chapter: 1, text: "她在钟楼里找到了铜钥匙。" });
+    expect(plan).toMatchObject({ needsConfirmation: true, ledgerConfirm: { lines: ["第 1 章的梗概改成：她在钟楼里找到了铜钥匙。"] } });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    expect(applied).toMatchObject({ ok: true, applied: 1 });
+    expect((await projectBook(book)).chapters[0]?.summary).toBe("她在钟楼里找到了铜钥匙。");
+
+    expect(await runManageLedger(book, { op: "summary", chapter: 9, text: "x" })).toMatchObject({ ok: false, blockedReason: "unknown_chapter" });
+    expect(await runManageLedger(book, { op: "summary", chapter: 1 })).toMatchObject({ ok: false, blockedReason: "missing_text" });
+    expect(await runManageLedger(book, { op: "summary", chapter: 1, text: "她在钟楼里找到了铜钥匙。" })).toMatchObject({ ok: false, blockedReason: "unchanged" });
   });
 });

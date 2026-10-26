@@ -100,6 +100,17 @@ describe("stateOverviewAdapter", () => {
     expect(countRealChapters(workspace.chapters, 1)).toBe(3);
   });
 
+  it("工具回传的概览不带章节文件清单：定稿到的最后一章按时间线事件算，重定稿前面一章后后面那章的占位还在", () => {
+    const overview = {
+      ...createOverview(),
+      project: { title: "测试书", genre: "武侠", logline: "", currentChapter: 6 },
+      timeline: { recentEvents: [4, 5, 6].map((chapter) => ({ chapter, summary: `第${chapter}章的事` })), earlierSummary: [], macroSummary: [] },
+    } satisfies StateOverview;
+    const workspace = workspaceFromStateOverview(overview, 5);
+    expect(workspace.chapters.map((chapter) => chapter.chapterNumber)).toEqual([4, 5, 6, 7]);
+    expect(workspace.chapters.at(-1)).toMatchObject({ chapterNumber: 7, status: "planned" });
+  });
+
   it("marks chapters committed only when a committed chapter file exists", () => {
     const overview = {
       ...createOverview(),
@@ -172,18 +183,11 @@ function createOverview(): StateOverview {
     project: { title: "测试书", genre: "都市", logline: "", currentChapter: 1 },
     storyStatus: { currentObjective: "进入总部" },
     hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
+    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, cleanupItems: [], keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
     characters: { protagonist: "林远", knownCharacters: [{ name: "林远", carded: true, protagonist: true }] },
     setting: { cards: { characters: 1, places: 0, items: 0, lore: 0 }, uncarded: 0, storyFields: 1 },
-    maintenance: {
-      diagnosticsAvailable: true,
-      cleanupVisibleCount: 0,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: { markDone: "manual_only", merge: "disabled", drop: "disabled" },
-    },
-    uiHints: { recommendedNextPanels: [], warnings: [], disabledActions: [] },
+    uiHints: { warnings: [] },
   };
 }

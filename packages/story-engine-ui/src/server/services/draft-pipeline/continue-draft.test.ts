@@ -42,6 +42,14 @@ describe("continueDraftToLength", () => {
     expect(result.draftBody).not.toContain("# 标题");
   });
 
+  it("结尾标记后面的自检、说明不进正文", async () => {
+    const draft = `${han(100)}。\n\n${han(50, "末")}。`;
+    const callModel = vi.fn(async () => `${han(200, "续")}。\n<<END>>\n检查一遍：字数够了。`);
+    const result = await continueDraftToLength({ chapter: 1, draftBody: draft, lengthTarget: TARGET, callModel });
+    expect(result.draftBody.endsWith(`${han(200, "续")}。`)).toBe(true);
+    expect(result.draftBody).not.toContain("检查一遍");
+  });
+
   it("已经够了 → 不调模型", async () => {
     const callModel = vi.fn();
     const result = await continueDraftToLength({ chapter: 1, draftBody: han(260), lengthTarget: TARGET, callModel });

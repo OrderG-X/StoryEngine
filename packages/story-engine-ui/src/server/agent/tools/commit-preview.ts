@@ -8,12 +8,13 @@
  * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
 import { checkDraftHardGates, type CommitQualityIssue } from "../../writing/commit-quality-check.js";
+import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { readCardsOrLegacy } from "@actalk/story-core";
+import { readCardsOrLegacy, readChapterPaper } from "@actalk/story-core";
 
 import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
@@ -24,7 +25,7 @@ import { WEEKDAY_NAMES } from "../../book/story-timeline.js";
 import { coreSnapshotFor } from "../../lib/snapshot.js";
 import { defaultDraftPath } from "../../lib/project-io.js";
 import { withStep } from "../../lib/token-meter.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
+import { isUserConfirmedTool, readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 记账员当场最多补多少章笔记；超过就按「已有笔记 + 最近几章原文」记（冷窗口），笔记在后台补。 */
@@ -70,6 +71,7 @@ const outputSchema = z.object({
   summary: z.string().describe("给作者看的一句话结论。"),
   notes: z.array(z.string()).optional().describe("要如实告诉作者的提醒（记账员没读完前文、这章定稿过会换掉原来的账……），summary 里【】内的就是这些。"),
   modelHint: z.string().optional().describe("给你（模型）的行动指引，界面不展示。"),
+  shortOnly: z.boolean().optional().describe("只差字数下限：定稿窗口里有「就这么短，照样定稿」按钮，作者点了只放这一章。"),
   ledgerChecklist: z.array(z.object({
     id: z.string(),
     kind: z.string(),
@@ -78,6 +80,7 @@ const outputSchema = z.object({
     detail: z.string().optional(),
     removable: z.boolean(),
     editableDay: z.number().int().optional(),
+    editableDayEnd: z.number().int().optional(),
     needsConfirm: z.boolean().optional(),
     defaultUnchecked: z.boolean().optional(),
   })).optional().describe("定稿要记的账：要作者看的排在前面；界面列成清单给作者勾，你不用逐条转述。"),
@@ -92,6 +95,8 @@ export async function buildCommitPreviewToolOutput(input: {
   /** 记账员用的模型调用（单测、考卷注入）；缺省用配置的模型。 */
   readonly callModel?: BrainCallModel;
   readonly maxCatchUp?: number;
+  /** 作者点了「就这么短，照样定稿」（按钮才有，模型调不出来）：这一章不拿字数下限挡。 */
+  readonly allowShort?: boolean;
 }): Promise<CommitPreviewToolOutput> {
   const { projectDir, chapter } = input;
   const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
@@ -103,15 +108,21 @@ export async function buildCommitPreviewToolOutput(input: {
   const rereading = await rereadBlocker(projectDir, "定稿");
   if (rereading) return blocked(chapter, [rereading], rereading);
 
-  const gates = await checkDraftHardGates({ projectDir, draftContent: text });
+  const allGates = await checkDraftHardGates({ projectDir, draftContent: text });
+  const short = allGates.find((issue) => issue.type === "too_short")?.length;
+  const shortBefore = await committedShortOf(projectDir, chapter, allGates);
+  const shortAllowed = short !== undefined && (shortBefore !== undefined || input.allowShort === true);
+  const gates = shortAllowed ? allGates.filter((issue) => issue.type !== "too_short") : allGates;
   if (gates.length > 0) {
     const reasons = gates.map(describeGate);
+    const shortOnly = gates.every((issue) => issue.type === "too_short");
     return {
       ...blocked(chapter, reasons, `第 ${chapter} 章现在还定不了：${reasons.join("；")}。`),
       // 引擎原话是英文，给人看的（卡片里点开的明细）换成同一句中文说法。
       draftQualityIssues: gates.map((issue, index) => ({ severity: issue.severity, type: issue.type, message: reasons[index]! })),
+      ...(shortOnly ? { shortOnly: true } : {}),
       ...(gates.some((issue) => issue.type === "too_short")
-        ? { modelHint: "字数不足是硬阻断：先和作者商量扩写方向、把工作稿写够，再重新预览；不要在字数不足时反复预览。" }
+        ? { modelHint: "字数不到下限：问作者是扩写还是就这么短。就这么短的话，请作者在定稿窗口点「就这么短，照样定稿」（你替不了）；别在字数不足时反复预览。" }
         : {}),
     };
   }
@@ -141,7 +152,23 @@ export async function buildCommitPreviewToolOutput(input: {
     return blocked(chapter, [preview.reason], `第 ${chapter} 章现在还定不了：${preview.reason}`);
   }
   latestTickets.set(`${projectDir}\u0000${chapter}`, preview.ticket);
-  return fromPreview(preview);
+  const shortNote = !short || !shortAllowed
+    ? []
+    : shortBefore !== undefined
+      ? [`这章原来定稿时就不到 ${short.min} 字，字数下限这次不挡`]
+      : [`这章 ${short.current} 字，比字数下限 ${short.min} 字少；你点了照样定稿，只这一章`];
+  return fromPreview(preview, shortNote);
+}
+
+/**
+ * 字数下限是作者后来定的、这章原来就按短的定了稿：回头改个错字再定稿，不拿下限挡（作者长篇实跑 2026-10-26：
+ * 第 3 章删一段重复，被后定的「至少 2000 字」挡住，提示还叫作者把全书下限改低）。返回下限字数；不是这种情况回 undefined。
+ */
+async function committedShortOf(projectDir: string, chapter: number, gates: readonly CommitQualityIssue[]): Promise<number | undefined> {
+  const short = gates.find((issue) => issue.type === "too_short")?.length;
+  if (!short) return undefined;
+  const committed = (await readChapterPaper(projectDir, chapter)).committed;
+  return committed && countDraftChineseCharacters(committed.body) < short.min ? short.min : undefined;
 }
 
 function blocked(chapter: number, reasons: readonly string[], summary: string): CommitPreviewToolOutput {
@@ -162,8 +189,11 @@ function describeGate(issue: CommitQualityIssue): string {
   return QUALITY_TYPE_LABELS[issue.type] ?? "正文过不了定稿硬闸";
 }
 
-/** 下限是作者自己的写作规则：手写短章的作者得知道去哪改（重构 P6 第 7 步）。 */
-const LENGTH_RULE_HINT = "。这一章就该这么短的话，可以跟右边的 AI 说把每章字数下限改低";
+/**
+ * 下限是作者自己的写作规则（重构 P6 第 7 步）。这一章就该这么短，作者点按钮放这一章；不用为一章去改全书下限
+ * （作者长篇实跑 2026-10-26：手写的第 36 章收在悬念上 1137 字，只能去改每章下限才定得了）。
+ */
+const LENGTH_RULE_HINT = "。这章就该这么短的话，点「就这么短，照样定稿」";
 
 type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[number];
 
@@ -182,23 +212,37 @@ function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   };
 }
 
+const daySpan = (day: number, dayEnd: number) => (dayEnd > day ? `第 ${day} 天到第 ${dayEnd} 天` : `第 ${day} 天`);
+
+/** 重定稿天数和上次不一样：为什么要作者看（照上次的记了 / 这次按新的记）。 */
+function dayReason(preview: CommitPreview): string | undefined {
+  const since = preview.time.sinceLast;
+  if (!since) return undefined;
+  const other = daySpan(since.otherDay, since.otherDayEnd);
+  return since.kept
+    ? `记账员这次看成${other}，和上次定稿不一样；先照上次的记，不对就改天数`
+    : `上次定稿记的是${other}，记时间的那句改过了，这次按新的记；不对就改天数`;
+}
+
 function dayLabel(preview: CommitPreview): string {
   const { time } = preview;
-  const span = time.dayEnd > time.day ? `故事第 ${time.day} 天到第 ${time.dayEnd} 天` : `故事第 ${time.day} 天`;
+  const span = `故事${daySpan(time.day, time.dayEnd)}`;
   const extra = [time.timeOfDay, time.weekday !== undefined ? WEEKDAY_NAMES[time.weekday] : undefined].filter(Boolean).join("，");
-  const basis = time.basis === "text"
-    ? "（正文明写）"
-    : time.basis === "author"
-      ? "（你定的）"
-      : time.basis === "judged"
-        ? "（按前后文判断）"
-        : preview.chapter <= 1
-          ? "（正文里没找到时间说法，先这么记，不对就改）"
-          : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
+  const basis = time.sinceLast?.kept
+    ? "（照上次定稿）"
+    : time.basis === "text"
+      ? "（正文明写）"
+      : time.basis === "author"
+        ? "（你定的）"
+        : time.basis === "judged"
+          ? "（按前后文判断）"
+          : preview.chapter <= 1
+            ? "（正文里没找到时间说法，先这么记，不对就改）"
+            : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
   return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
 }
 
-function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
+function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): CommitPreviewToolOutput {
   const timeItems = (items: readonly CommitItem[]) => items.filter((item) => item.kind === "time");
   const others = (items: readonly CommitItem[]) => items.filter((item) => item.kind !== "time");
   const timeQuote = [...timeItems(preview.review), ...timeItems(preview.auto)].find((item) => item.quote)?.quote;
@@ -207,9 +251,11 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
       id: "day",
       kind: "time",
       label: dayLabel(preview),
+      ...(dayReason(preview) ? { reason: dayReason(preview) } : {}),
       ...(timeQuote ? { detail: timeQuote } : {}),
       removable: false,
       editableDay: preview.time.day,
+      ...(preview.time.dayEnd > preview.time.day ? { editableDayEnd: preview.time.dayEnd } : {}),
       ...(preview.time.needsConfirm ? { needsConfirm: true } : {}),
     },
     ...others(preview.review).map((item) => toChecklistItem(item, true)),
@@ -221,6 +267,9 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
   const notes: string[] = [];
   if (notRecorded.length > 0) notes.push(`有 ${notRecorded.length} 条没记上（原因在清单里）`);
   if (preview.recommit) notes.push("这章定稿过，这次会换掉原来的账");
+  if (preview.lostThreads && preview.lostThreads.length > 0) {
+    notes.push(`这章原来开的${preview.lostThreads.slice(0, 3).map((title) => `「${title}」`).join("")}这次没记上，后文还接着它；定稿后它就没了开头`);
+  }
   if (preview.omittedThreads > 0 || preview.omittedFacts > 0) {
     notes.push(`前文太长，记账员这次没看全（另有 ${preview.omittedThreads} 条线索、${preview.omittedFacts} 条事实没列给它）`);
   }
@@ -229,6 +278,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
     notes.push(`记账员还在读前文（笔记到第 ${preview.cold.notedThrough} 章），这次按已有笔记${raw}记的`);
   }
   if (preview.waited) notes.push(describeReaderWait("ledger", preview.waited, "记账"));
+  notes.push(...extraNotes);
   const head = reviewCount > 0
     ? `第 ${preview.chapter} 章可以定稿：要你看 ${reviewCount} 条，其余 ${autoCount} 条自动记下（不对的都能去掉）。`
     : `第 ${preview.chapter} 章可以定稿：${autoCount} 条自动记下（不对的都能去掉）。`;
@@ -266,6 +316,7 @@ export const commitPreviewTool = createTool({
     if (chapter === undefined) {
       throw new Error("commit_preview 缺少章号：没给章号，前端也没带当前章。请明确指定章号。");
     }
-    return buildCommitPreviewToolOutput({ projectDir, chapter });
+    // 「就这么短，照样定稿」按钮（user-actions 标了作者确认）才放字数下限；模型自己调的照挡。
+    return buildCommitPreviewToolOutput({ projectDir, chapter, ...(isUserConfirmedTool(context, "commit_preview") ? { allowShort: true } : {}) });
   },
 });

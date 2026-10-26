@@ -34,6 +34,20 @@ describe("DraftCandidatesPanel", () => {
     }
   });
 
+  it("对话「另外几版」卡打开的：标「第 N 版」，不说「关掉就没了」（卡还在对话里）", () => {
+    const versions: readonly DraftCandidate[] = [
+      { content: "第一版正文。", version: 1, originTarget: { projectPath: "/book", chapter: 1, sessionId: "session", operationId: "op" } },
+    ];
+    render(<DraftCandidatesPanel candidates={versions} busy={false} onPick={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole("dialog", { name: "另外几版" })).toBeDefined();
+    expect(screen.getByText("第 1 版")).toBeDefined();
+    expect(screen.queryByText(/关掉就没了/u)).toBeNull();
+    cleanup();
+    render(<DraftCandidatesPanel candidates={candidates} busy={false} onPick={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText("候选 1")).toBeDefined();
+    expect(screen.getByText(/关掉就没了/u)).toBeDefined();
+  });
+
   it("closes the panel (discarding candidates) on 关闭", () => {
     const onClose = vi.fn();
     render(<DraftCandidatesPanel candidates={candidates} busy={false} onPick={vi.fn()} onClose={onClose} />);

@@ -18,6 +18,7 @@ import {
   emitDraftCheckCards,
   endsOnNextSteps,
   formatChapterStatusLine,
+  historyToModelMessages,
   isMastraToolValidationError,
   normalizeForwardedToolResult,
   readCurrentChapter,
@@ -25,6 +26,7 @@ import {
   runAgentTurn,
   type AgentTurnChunk,
 } from "./agent-chat.js";
+import { readChatMessages } from "../lib/project-io.js";
 import { startSseHeartbeat } from "../lib/sse-heartbeat.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 
@@ -134,6 +136,17 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
       ...toolChunks("generate_draft", { ok: false, chapter: 5, qualityPipeline: { continuity: { checked: true } } }),
     ]);
     expect(notChecked.result.draftCheckedChapters).toEqual([]);
+    // 长篇连写：AI 把核账和出稿并排调，核账先回来（还没正文、没核成），出稿后没再核 → 照样补卡
+    const checkedTooEarly = await run([
+      ...toolChunks("check_continuity", { ok: false, chapter: 34, summary: "第 34 章还没有正文，没法核账。" }),
+      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
+    ]);
+    expect(checkedTooEarly.result.draftCheckedChapters).toEqual([34]);
+    const checkedOldDraft = await run([
+      ...toolChunks("check_continuity", { ok: true, chapter: 34, summary: "核过了。" }),
+      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
+    ]);
+    expect(checkedOldDraft.result.draftCheckedChapters).toEqual([34]);
   });
 
   it("P11：补核账卡只用核账记忆——有就按核账工具同款事件发，没有就不发", async () => {
@@ -327,6 +340,49 @@ describe("capChatHistoryWindow 聊天历史窗口（r8 治回执模式先验）"
   it("窗内原样返回（不复制不截断）", () => {
     const messages = Array.from({ length: 5 }, (_, i) => msg(i));
     expect(capChatHistoryWindow(messages)).toBe(messages);
+  });
+});
+
+describe("historyToModelMessages 历史里的工具（长篇实跑第 17 章：照抄文字注、没调工具就说写好了）", () => {
+  it("AI 回合调过的工具还原成真的调用和结果，再接回复原文；没调工具的回合、用户回合原样", () => {
+    const messages = readChatMessages([
+      { role: "user", content: "写第16章" },
+      { role: "assistant", content: "第 16 章写好进工作稿了。", tools: [{ name: "generate_draft", ok: true }, { name: "check_continuity", ok: false }] },
+      { role: "user", content: "好" },
+      { role: "assistant", content: "嗯。", tools: [] },
+      { role: "user", content: "写第17章" },
+    ]);
+    expect(historyToModelMessages(messages)).toEqual([
+      { role: "user", content: "写第16章" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", toolCallId: "history-1-0", toolName: "generate_draft", input: {} },
+          { type: "tool-call", toolCallId: "history-1-1", toolName: "check_continuity", input: {} },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "history-1-0", toolName: "generate_draft", output: { type: "text", value: "做完了，结果见下一条回复。" } },
+          { type: "tool-result", toolCallId: "history-1-1", toolName: "check_continuity", output: { type: "text", value: "没成功；下一条回复里若说已经做成，不算数。" } },
+        ],
+      },
+      { role: "assistant", content: "第 16 章写好进工作稿了。" },
+      { role: "user", content: "好" },
+      { role: "assistant", content: "嗯。" },
+      { role: "user", content: "写第17章" },
+    ]);
+  });
+
+  it("工具记录读进来只认有名字的；用户消息带了也不认", () => {
+    expect(readChatMessages([
+      { role: "assistant", content: "好了", tools: [{ name: "" }, { ok: true }, { name: "read_draft" }, "x"] },
+      { role: "user", content: "嗯", tools: [{ name: "generate_draft", ok: true }] },
+    ])).toEqual([
+      { role: "assistant", content: "好了", tools: [{ name: "read_draft", ok: true }] },
+      { role: "user", content: "嗯" },
+    ]);
   });
 });
 

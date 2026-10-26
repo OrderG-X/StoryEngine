@@ -323,7 +323,8 @@ describe("核账卡：原句已经改掉的条目", () => {
   it("稿纸开着这一章、原句不在稿里了：标「已改掉」、不给按钮，主按钮不算它；别的章的稿子不算数", () => {
     const here = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
     const cross = { quote: "杜叔走了五年了。", earlierQuote: "杜叔走了整整十年。", earlierChapter: 3, reason: "去世年份对不上" };
-    const other = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 9, reason: "天气对不上" };
+    // 本章自己前后打架的，前面那句还在稿里（作者没改那边）。
+    const other = { quote: "外面下着大雨。", earlierQuote: "杜叔走了十年了。", earlierChapter: 9, reason: "天气对不上" };
     useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "外面 下着大雨。杜叔走了十年了。他把钥匙锁回抽屉。", version: "v1" }, committed: null } as never);
     const onFixAction = vi.fn();
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [here, cross, other], maybe: [] }} onRevise={vi.fn()} onFixAction={onFixAction} />);
@@ -337,6 +338,29 @@ describe("核账卡：原句已经改掉的条目", () => {
     useDraftStore.getState().loadPaper("/book", { chapter: 8, draft: { body: "别的章。", version: "v1" }, committed: null } as never);
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [here], maybe: [] }} onRevise={vi.fn()} onFixAction={vi.fn()} />);
     expect(screen.queryByText("已改掉")).toBeNull();
+  });
+
+  it("「可能」的也改掉了：卡头不再说「可能 N 处」，点开那行说都改掉了（长篇实跑第 36 章）", () => {
+    const fixedSure = { quote: "他把钥匙放回了柜台上。", earlierQuote: "钥匙锁在抽屉里。", earlierChapter: 9, reason: "钥匙位置对不上" };
+    const fixedMaybe = { quote: "茶碗边搁着药箱。", earlierQuote: "药箱搁在脚边。", earlierChapter: 9, reason: "药箱位置对不上" };
+    const liveMaybe = { quote: "外面下着大雨。", earlierQuote: "干得发裂。", earlierChapter: 8, reason: "天气对不上" };
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "外面下着大雨。他把钥匙锁回抽屉。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [fixedSure], maybe: [fixedMaybe, liveMaybe] }} />);
+    expect(screen.getByText("可能 1 处")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "还有 1 处可能有问题（点开看）" })).toBeTruthy();
+    cleanup();
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [fixedSure], maybe: [fixedMaybe] }} />);
+    expect(screen.getByText("改掉了")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "可能有问题的 1 处都改掉了（点开看）" })).toBeTruthy();
+  });
+
+  it("本章前后打架、作者改的是前面那句：也算改掉了，不再给「改这处 / 改掉这 N 处」（长篇实跑第 37 章）", () => {
+    const self = { quote: "药箱还夹在腋下。", earlierQuote: "他把药箱搁在门槛里头。", earlierChapter: 9, reason: "药箱去向对不上" };
+    const setting = { quote: "他左手端碗。", earlierQuote: "右臂有旧伤", earlierChapter: 9, reason: "x", againstSetting: { label: "人物卡", kind: "character" as const } };
+    useDraftStore.getState().loadPaper("/book", { chapter: 9, draft: { body: "他把药箱夹紧出门。药箱还夹在腋下。他左手端碗。", version: "v1" }, committed: null } as never);
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [self, setting], maybe: [] }} onRevise={vi.fn()} onFixAction={vi.fn()} />);
+    expect(screen.getAllByText("已改掉")).toHaveLength(1);
+    expect(screen.getByText("确定 1 处")).toBeTruthy(); // 设定那条另一边是设定原文，不在稿里不算改掉
   });
 
   it("原句两截（A……B）按顺序都在就算还在；空白不计", () => {

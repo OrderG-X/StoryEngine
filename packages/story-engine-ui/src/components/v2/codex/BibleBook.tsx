@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentUserAction } from "../../../api/agentChatClient.js";
 import { saveCards, type BibleEntry, type BibleView, type CardKind, type CardOp, type UncardedEntry, type WritingRules } from "../../../api/bibleClient.js";
-import { AiMark, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
+import { AiMark, closeAfter, ConfirmButton, FieldList, FieldValue, InlineEdit, LedgerNotes, type FieldItem } from "./bibleEdit.js";
 import { Avatar, PageHead, PresenceStrip, RelationGraph, Sec, Skeleton, firstGlyph } from "./bibleVisual.js";
 import { scrollBehavior } from "../../../stores/motionStore.js";
 
@@ -43,7 +43,7 @@ export interface BibleBookProps {
   readonly projectPath: string;
   readonly bible: BibleView | null;
   readonly error: string | null;
-  readonly reload: () => void;
+  readonly reload: () => Promise<void> | void;
   /** AI 在跑：先别改（跑完设定本会自己刷新）。 */
   readonly busy: boolean;
   /** 打开时先展开哪张卡（正文里名字速览点「在设定本中打开」）。 */
@@ -61,10 +61,18 @@ export interface BibleBookProps {
   readonly onAction?: (action: AgentUserAction) => void;
 }
 
+const NOTICE_MS = 5000;
+
 export function BibleBook(props: BibleBookProps) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ readonly ok: boolean; readonly text: string } | null>(null);
   useEffect(() => setNotice(null), [props.cat]);
+  // 存成了的提示几秒后自己收起（没存成的留着，等作者看清原因、点 ×）。
+  useEffect(() => {
+    if (!notice?.ok) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const save = async (ops: readonly CardOp[], after?: () => void): Promise<boolean> => {
     if (ops.length === 0 || saving) return false;
@@ -75,9 +83,14 @@ export function BibleBook(props: BibleBookProps) {
       setNotice({ ok: false, text: result.error });
       return false;
     }
-    setNotice(result.lines.length > 0 ? { ok: true, text: `${result.lines.join("；")}。可在操作历史里撤销。` } : { ok: true, text: "没有变化。" });
-    props.reload();
+    const said = result.lines.join("；");
+    // 末一条以整句引文收尾（「……。」）就不再补句号，免得「。」。」。
+    const stop = ["。」", "！」", "？」"].some((end) => said.endsWith(end)) ? "" : "。";
+    setNotice(result.lines.length > 0 ? { ok: true, text: `${said}${stop}可在操作历史里撤销。` } : { ok: true, text: "没有变化。" });
+    const reloaded = props.reload();
     props.onChanged?.();
+    // 重读回来再收起编辑框：先收起会闪一下改前的字。
+    await reloaded;
     after?.();
     return true;
   };
@@ -96,9 +109,12 @@ export function BibleBook(props: BibleBookProps) {
     <section className="se-bk" aria-label="设定本">
       {props.busy ? <p className="se-bk-note">AI 正在忙，等它做完再改。</p> : null}
       {notice ? (
-        <div className={`se-bk-notice${notice.ok ? "" : " is-error"}`}>
-          <p role="status">{notice.text}</p>
-          <button type="button" className="se-bk-notice-x" aria-label="关掉提示" onClick={() => setNotice(null)} />
+        // 浮在页顶、不占地方：占地方的话一出来下面整页往下挪，作者接着点就点歪了。
+        <div className="se-bk-notice-pin">
+          <div className={`se-bk-notice${notice.ok ? "" : " is-error"}`}>
+            <p role="status">{notice.text}</p>
+            <button type="button" className="se-bk-notice-x" aria-label="关掉提示" onClick={() => setNotice(null)} />
+          </div>
         </div>
       ) : null}
       {props.cat === "story" ? <StoryPage ctx={ctx} /> : null}
@@ -154,7 +170,7 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
   const value = (label: string, field: FieldItem | undefined) => (
     <FieldValue field={field ?? blankField(label)} editing={editing === label} disabled={ctx.disabled}
       onEdit={() => setEditing(label)} onDone={() => setEditing(null)}
-      onSet={(next) => void ctx.save([{ op: "story.set", label, value: next }])}
+      onSet={(next) => ctx.save([{ op: "story.set", label, value: next }])}
       onAccept={() => void ctx.save([{ op: "story.accept", label }])} />
   );
   return (
@@ -188,7 +204,7 @@ function StoryPage({ ctx }: { readonly ctx: PageContext }) {
         taken={[STORY_HERO, ...STORY_CHIPS]}
         suggestions={FIELD_SUGGESTIONS.story}
         disabled={ctx.disabled}
-        onSet={(label, next) => void ctx.save([{ op: "story.set", label, value: next }])}
+        onSet={(label, next) => ctx.save([{ op: "story.set", label, value: next }])}
         onAccept={(label) => void ctx.save([{ op: "story.accept", label }])}
       />
       <CardsPage ctx={ctx} kind="lore" entries={ctx.bible.lore} nested />
@@ -215,7 +231,7 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
               <li key={item.id}>
                 {editing === item.id ? (
                   <InlineEdit value={item.text} wrap label="改这条定论" placeholder="一句话说清" disabled={ctx.disabled}
-                    onSave={(raw) => { const text = oneLine(raw); setEditing(null); if (text && text !== item.text) void ctx.save([{ op: "canon.set", canon: item.id, text }]); }}
+                    onSave={(raw) => { const text = oneLine(raw); closeAfter(text && text !== item.text ? ctx.save([{ op: "canon.set", canon: item.id, text }]) : undefined, () => setEditing(null)); }}
                     onCancel={() => setEditing(null)} />
                 ) : (
                   <button type="button" className="se-bk-value serif" disabled={ctx.disabled} onClick={() => setEditing(item.id)}>{item.text}</button>
@@ -234,7 +250,7 @@ function CanonPage({ ctx }: { readonly ctx: PageContext }) {
         )}
         {adding ? (
           <InlineEdit value="" wrap label="记一条定论" placeholder="一句话说清，比如：主角今年二十九岁" disabled={ctx.disabled}
-            onSave={(raw) => { const text = oneLine(raw); setAdding(false); if (text) void ctx.save([{ op: "canon.add", text }]); }} onCancel={() => setAdding(false)} />
+            onSave={(raw) => { const text = oneLine(raw); closeAfter(text ? ctx.save([{ op: "canon.add", text }]) : undefined, () => setAdding(false)); }} onCancel={() => setAdding(false)} />
         ) : <button type="button" className="se-bk-add" disabled={ctx.disabled} onClick={() => setAdding(true)}>+ 记一条</button>}
       </div>
     </>
@@ -247,10 +263,10 @@ function RulesPage({ ctx }: { readonly ctx: PageContext }) {
   const rules = ctx.bible.rules;
   const hasAi = rulesHaveAi(rules);
   const setScalar = (field: "perspective" | "notes" | "targetWords" | "minWords", value: string | number | null) =>
-    void ctx.save([{ op: "rules.set", field, value }]);
+    ctx.save([{ op: "rules.set", field, value }]);
   const ruleList = (list: RuleListKey, variant: RuleVariant) => (
     <RuleList title={RULE_LIST_NAME[list]} variant={variant} items={rules[list]} disabled={ctx.disabled}
-      onAdd={(text) => void ctx.save([{ op: "rules.add", list, text }])}
+      onAdd={(text) => ctx.save([{ op: "rules.add", list, text }])}
       onRemove={(text) => void ctx.save([{ op: "rules.remove", list, text }])} />
   );
   return (
@@ -304,12 +320,12 @@ function ScalarText({ value, by, multiline, placeholder, label, disabled, onSave
   readonly placeholder: string;
   readonly label: string;
   readonly disabled: boolean;
-  readonly onSave: (value: string) => void;
+  readonly onSave: (value: string) => Promise<boolean> | void;
 }) {
   const [editing, setEditing] = useState(false);
   if (editing) {
     return <InlineEdit value={value} multiline={multiline} placeholder={placeholder} label={label} disabled={disabled}
-      onSave={(next) => { setEditing(false); onSave(next); }} onCancel={() => setEditing(false)} />;
+      onSave={(next) => closeAfter(onSave(next), () => setEditing(false))} onCancel={() => setEditing(false)} />;
   }
   return (
     <p className="se-bk-scalar">
@@ -359,7 +375,7 @@ function RuleList({ title, variant, items, disabled, onAdd, onRemove }: {
   readonly variant: RuleVariant;
   readonly items: readonly { readonly text: string; readonly by: "author" | "ai" }[];
   readonly disabled: boolean;
-  readonly onAdd: (text: string) => void;
+  readonly onAdd: (text: string) => Promise<boolean> | void;
   readonly onRemove: (text: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -379,7 +395,7 @@ function RuleList({ title, variant, items, disabled, onAdd, onRemove }: {
       ) : null}
       {adding ? (
         <InlineEdit value="" label={`加一条${title}`} placeholder="一条一句" disabled={disabled}
-          onSave={(text) => { setAdding(false); if (text) onAdd(text); }} onCancel={() => setAdding(false)} />
+          onSave={(text) => closeAfter(text ? onAdd(text) : undefined, () => setAdding(false))} onCancel={() => setAdding(false)} />
       ) : <button type="button" className="se-bk-add" disabled={disabled} onClick={() => setAdding(true)}>+ 加一条</button>}
     </div>
   );
@@ -408,7 +424,7 @@ function Exemplars({ ctx }: { readonly ctx: PageContext }) {
       ) : null}
       {adding ? (
         <InlineEdit value="" multiline label="文风样本" placeholder="贴一段原文" disabled={ctx.disabled}
-          onSave={(text) => { setAdding(false); if (text) void ctx.save([{ op: "exemplar.add", text }]); }} onCancel={() => setAdding(false)} />
+          onSave={(text) => closeAfter(text ? ctx.save([{ op: "exemplar.add", text }]) : undefined, () => setAdding(false))} onCancel={() => setAdding(false)} />
       ) : <button type="button" className="se-bk-add" disabled={ctx.disabled} onClick={() => setAdding(true)}>+ 贴一段</button>}
     </div>
   );
@@ -452,7 +468,7 @@ function CardsPage({ ctx, kind, entries, nested }: {
     if (!q) return entries;
     return entries.filter((entry) => [entry.card.name, ...entry.card.aliases, ...entry.ledgerAliases].some((name) => name.toLowerCase().includes(q)));
   }, [entries, query]);
-  const uncarded = kind === "character" ? ctx.bible.uncarded.filter((entry) => entry.character).length : 0;
+  const uncarded = kind === "character" ? ctx.bible.uncarded.filter((entry) => entry.character && !entry.skipped).length : 0;
   const pending = entries.filter(hasAi).length;
   const openName = (name: string) => {
     if (entries.some((entry) => entry.card.name === name)) setOpen(name);
@@ -536,7 +552,7 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
           <div className="se-bk-profile-id">
             {renaming ? (
               <InlineEdit value={card.name} label="改名" disabled={ctx.disabled}
-                onSave={(name) => { setRenaming(false); if (name) void ctx.save([{ op: "card.rename", card: card.id, name }]); }}
+                onSave={(name) => closeAfter(name ? ctx.save([{ op: "card.rename", card: card.id, name }]) : undefined, () => setRenaming(false))}
                 onCancel={() => setRenaming(false)} />
             ) : <div className="se-bk-card-title"><span className="se-bk-name">{card.name}</span>{tags}</div>}
             <div className="se-bk-aliases">
@@ -554,7 +570,7 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
               ))}
               {addingAlias ? (
                 <InlineEdit value="" label="加别名" placeholder="别名" disabled={ctx.disabled}
-                  onSave={(alias) => { setAddingAlias(false); if (alias) void ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }]); }}
+                  onSave={(alias) => closeAfter(alias ? ctx.save([{ op: "card.aliases", card: card.id, add: [alias] }]) : undefined, () => setAddingAlias(false))}
                   onCancel={() => setAddingAlias(false)} />
               ) : <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => setAddingAlias(true)}>+ 别名</button>}
             </div>
@@ -592,7 +608,7 @@ function CardView({ ctx, entry, open, onToggle, onOpenName }: {
             fields={card.fields}
             suggestions={FIELD_SUGGESTIONS[card.kind]}
             disabled={ctx.disabled}
-            onSet={(label, value) => void ctx.save([{ op: "field.set", card: card.id, label, value }])}
+            onSet={(label, value) => ctx.save([{ op: "field.set", card: card.id, label, value }])}
             onAccept={(label) => void ctx.save([{ op: "field.accept", card: card.id, label }])}
           />
           {entry.relations.length > 0 ? (
@@ -651,7 +667,7 @@ function RelationsPage({ ctx }: { readonly ctx: PageContext }) {
               </span>
               {editing === relation.id ? (
                 <InlineEdit value={relation.label} label={`${relation.a}和${relation.b}的关系`} disabled={ctx.disabled}
-                  onSave={(next) => { setEditing(null); void ctx.save([{ op: "relation.set", a: relation.a, b: relation.b, label: next }]); }}
+                  onSave={(next) => closeAfter(ctx.save([{ op: "relation.set", a: relation.a, b: relation.b, label: next }]), () => setEditing(null))}
                   onCancel={() => setEditing(null)} />
               ) : (
                 <>
@@ -693,7 +709,10 @@ function RelationsPage({ ctx }: { readonly ctx: PageContext }) {
 const KIND_ORDER: readonly CardKind[] = ["character", "place", "item", "lore"];
 
 function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
-  const entries = ctx.bible.uncarded;
+  // 作者说过不用建卡的收在最底下一行（泛称、群体、物件……不用一条条看着）。
+  const entries = useMemo(() => ctx.bible.uncarded.filter((entry) => !entry.skipped), [ctx.bible.uncarded]);
+  const skipped = useMemo(() => ctx.bible.uncarded.filter((entry) => entry.skipped), [ctx.bible.uncarded]);
+  const [showSkipped, setShowSkipped] = useState(false);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const shown = useMemo(() => {
@@ -713,7 +732,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
           <input className="se-bk-filter" type="search" value={query} placeholder="找…" aria-label="找还没建卡的" onChange={(event) => setQuery(event.target.value)} />
         </div>
       ) : null}
-      {entries.length === 0 ? <p className="se-bk-blank is-done">账里记下的都有卡了，没有落下的。</p> : null}
+      {entries.length === 0 ? <p className="se-bk-blank is-done">{skipped.length > 0 ? "要建的都建了。" : "账里记下的都有卡了，没有落下的。"}</p> : null}
       {shown.length > 0 ? (
         <ul className="se-bk-grid">
           {shown.map((entry) => (
@@ -739,6 +758,7 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
                       ))}
                     </>
                   )}
+                  <button type="button" className="se-bk-link se-bk-skip" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "uncarded.skip", name: entry.name }])}>不用建卡</button>
                 </div>
                 {open === entry.name ? (
                   <div className="se-bk-card-body">
@@ -749,6 +769,23 @@ function UncardedPage({ ctx }: { readonly ctx: PageContext }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div className="se-bk-skipped">
+          <button type="button" className="se-bk-link" aria-expanded={showSkipped} onClick={() => setShowSkipped(!showSkipped)}>
+            不用建卡的 {skipped.length} 个{showSkipped ? "（收起）" : ""}
+          </button>
+          {showSkipped ? (
+            <ul>
+              {skipped.map((entry) => (
+                <li key={entry.name}>
+                  <span>{entry.name}</span>
+                  <button type="button" className="se-bk-link" disabled={ctx.disabled} onClick={() => void ctx.save([{ op: "uncarded.unskip", name: entry.name }])}>放回</button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
     </>
   );

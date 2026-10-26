@@ -18,10 +18,40 @@ const choiceSchema = z.object({
   recommended: coerceBoolean(z.boolean().optional().describe("推荐项，至多一个。")),
 });
 
+/** 模型无关：多给了几个、只给了字、少写 intent 都别整步拒掉——边界里归一（见 normalizeChoices）。 */
+const choiceInputSchema = z.union([
+  z.string(),
+  z.object({
+    label: z.string().optional(),
+    intent: z.string().optional(),
+    recommended: coerceBoolean(z.boolean().optional()),
+  }),
+]);
+
+const MAX_CHOICES = 4;
+const DEFAULT_QUESTION = "接下来？";
+
 const inputSchema = z.object({
   question: z.string().trim().optional().describe("一句话问用户接下来想怎么走（如『这章定稿了，接下来？』）。"),
-  choices: coerceJsonArray(z.array(choiceSchema).max(4).describe("2–4 个选项，留一个『我自己说』兜底。")).optional(),
+  choices: coerceJsonArray(z.array(choiceInputSchema).describe("2–4 个选项，留一个『我自己说』兜底。")).optional(),
 });
+
+type Choice = z.infer<typeof choiceSchema>;
+
+/** 只给了字的当按钮文案也当发回的话；没写 intent 的用 label；没文案的丢掉；超过 4 个留前 4 个（推荐项排在后面也留下）。 */
+export function normalizeChoices(raw: readonly z.infer<typeof choiceInputSchema>[]): Choice[] {
+  const choices: Choice[] = [];
+  for (const item of raw) {
+    const label = (typeof item === "string" ? item : item.label ?? "").trim();
+    if (!label) continue;
+    const intent = (typeof item === "string" ? "" : item.intent ?? "").trim() || label;
+    choices.push({ label, intent, ...(typeof item !== "string" && item.recommended ? { recommended: true } : {}) });
+  }
+  if (choices.length <= MAX_CHOICES) return choices;
+  const recommended = choices.findIndex((choice) => choice.recommended);
+  if (recommended < MAX_CHOICES) return choices.slice(0, MAX_CHOICES);
+  return [...choices.slice(0, MAX_CHOICES - 1), choices[recommended] as Choice];
+}
 
 const outputSchema = z.discriminatedUnion("ok", [
   z.object({
@@ -46,8 +76,9 @@ export const suggestNextStepsTool = createTool({
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>) => {
-    const question = input.question?.trim();
-    const choices = input.choices ?? [];
+    const choices = normalizeChoices(input.choices ?? []);
+    // 模型无关：给了选项、漏了问句，用中性问句补上，别整步拒掉。
+    const question = input.question?.trim() || (choices.length > 0 ? DEFAULT_QUESTION : undefined);
 
     if (!question || choices.length === 0) {
       return {

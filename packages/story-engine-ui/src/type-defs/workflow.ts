@@ -49,4 +49,6 @@ export interface CommitConfirmTarget {
   readonly excluded?: readonly string[];
   /** 作者在账本清单上改的「第几天」。 */
   readonly dayOverride?: number;
+  /** 作者在账本清单上改的「到第几天」（这一章跨天）。 */
+  readonly dayEndOverride?: number;
 }

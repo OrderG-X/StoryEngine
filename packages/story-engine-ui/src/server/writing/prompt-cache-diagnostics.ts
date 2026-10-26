@@ -24,6 +24,18 @@ export interface PromptDifference {
 }
 
 const FAST_DRAFT_PROTOCOL_SECTION = "fast_draft_protocol";
+
+/**
+ * 写手正文的结尾标记（自家格式）：提示词要写手写完另起一行写它，这以后的不是正文。
+ * 长篇实跑：提示词写了「只写正文」，写手照样在正文后面接了一大段自检（「写完了。检查一遍：……可以定稿。」），原样进了工作稿。
+ */
+export const WRITER_END_MARK = "<<END>>";
+
+/** 去掉结尾标记和它后面的（自检、说明）。没有标记就原样返回（分不出哪是正文，不猜）。 */
+export function cutAtWriterEndMark(content: string): string {
+  const at = content.indexOf(WRITER_END_MARK);
+  return at < 0 ? content : content.slice(0, at);
+}
 const CHAPTER_SECTION = "Chapter";
 
 export function renderFastDraftPromptText(envelope: WriterContextEnvelope): string {
@@ -45,6 +57,7 @@ export function renderFastDraftPromptText(envelope: WriterContextEnvelope): stri
     "正文开头必须是 markdown 章节标题，格式：# 第N章 · 标题。N 用阿拉伯数字，等于本章章号。",
     "标题由你根据本章正文自然拟定，必须存在，但不要剧透设定里写着还没揭开、不能说破的内容。如给出 chapter_titles 段（本书已有各章标题），不要起与之重复的标题。",
     "连续章节必须避免重复上一章开头场面、首句结构和人物进场方式；除非用户明确要求原地续接，否则用新的动作、时间点或压力源切入。",
+    `正文写完，另起一行只写 ${WRITER_END_MARK}；这一行后面什么都不写（不要自检、不要说明、不要列要点）。`,
     "",
     stableText,
     "",

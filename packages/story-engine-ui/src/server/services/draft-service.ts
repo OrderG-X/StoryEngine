@@ -67,6 +67,7 @@ import {
 import {
   buildDraftLengthReport,
   countDraftChineseCharacters,
+  draftLengthFloor,
   lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
@@ -99,7 +100,7 @@ import { resolveInSceneCharacters, type InSceneResult } from "../writing/presenc
 import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
-import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
+import { resolveChapterPlanForDraft, resolveChapterPlanForReroll } from "../editorial/plan-chapter.js";
 import { readCheckMemory } from "../editorial/continuity/check-memory.js";
 import type { LastDraftConflict } from "../writing/context-gateway.js";
 import { withStep } from "../lib/token-meter.js";
@@ -151,7 +152,7 @@ function enforceDraftLengthTarget(input: {
   readonly allowDeterministicTrim: boolean;
 }): { readonly ok: true; readonly draftBody: string } | { readonly ok: false; readonly error: string } {
   const currentLength = countCjkChars(input.draftBody);
-  if (currentLength < input.lengthTarget.lowerBound) {
+  if (currentLength < draftLengthFloor(input.lengthTarget)) {
     return { ok: false, error: DRAFT_TOO_SHORT_ERROR };
   }
   if (currentLength <= input.lengthTarget.upperBound) {
@@ -722,6 +723,14 @@ interface DraftCandidateSampling {
   readonly effectiveReport?: FastDraftReport;
   /** 优胜候选的判漏 AI 复核结果（该候选无判漏/未注入裁决模型=undefined）；调用方据此构建裁决后的 beatFidelity 输出。 */
   readonly chosenBeatAdjudication?: BeatMissAdjudication;
+  /** 落选、但通过了的几版全文（index 1 起）：作者要「几版我挑」，落选的得让作者看得到、换得了。 */
+  readonly otherVersions?: readonly DraftOtherVersion[];
+}
+
+/** 落选的一版（全文，未落盘）：对话里出「另外几版」卡，作者点「用这版」才换进工作稿。 */
+export interface DraftOtherVersion {
+  readonly index: number;
+  readonly body: string;
 }
 
 /**
@@ -787,6 +796,9 @@ async function sampleDraftCandidates(input: {
     // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
     return { entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
   }
+  // 长篇实跑第 38 章：作者说「出两版我挑」，落选那版只有开头一百字，AI 还说「想换就说」——其实换不了。
+  const otherVersions = reports.flatMap((report, index) =>
+    index !== ranked.chosenIndex && scoreInputs[index]?.eligible && report?.draftBody?.trim() ? [{ index: index + 1, body: report.draftBody.trim() }] : []);
   return {
     entries,
     scoreInputs,
@@ -794,6 +806,7 @@ async function sampleDraftCandidates(input: {
     allFailed: false,
     effectiveReport: winnerReport,
     ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
+    ...(otherVersions.length > 0 ? { otherVersions } : {}),
   };
 }
 
@@ -915,6 +928,8 @@ export interface GenerateDraftOutcome {
   readonly aiFlavor?: GenerateDraftAiFlavorInfo;
   readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
   readonly candidatesReport?: readonly DraftCandidateReportEntry[];
+  /** 落选的几版全文（只给界面）。 */
+  readonly otherVersions?: readonly DraftOtherVersion[];
   readonly beatFidelity?: GenerateDraftBeatFidelityInfo;
   /** 本章章纲（拟成/沿用时）：要点、新信息、开场——agent 据此向作者一句话交代这章写了什么。 */
   readonly chapterPlan?: GenerateDraftPlanInfo;
@@ -1095,7 +1110,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
  */
 export async function generateDraftCandidate(input: GenerateDraftCandidateInput): Promise<GenerateDraftCandidateOutcome> {
   const planning = input.plannerCallModel
-    ? await resolveChapterPlanForDraft({
+    ? await resolveChapterPlanForReroll({
       projectDir: input.projectDir,
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
@@ -1103,11 +1118,13 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
       ...(input.planCheckReaderCallModel ? { planCheckReaderCallModel: input.planCheckReaderCallModel } : {}),
     })
     : undefined;
+  // 作者没给新方向：写手拿的本章目标也沿用章纲里记着的作者原话，和第一版出稿时一样。
+  const chapterGoal = input.chapterGoal?.trim() || planning?.direction;
   const run = await resolveDraftRunContext({
     ...(planning?.plan ? { chapterPlan: planning.plan } : {}),
     projectDir: input.projectDir,
     chapter: input.chapter,
-    ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
+    ...(chapterGoal ? { chapterGoal } : {}),
     ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
     ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
     ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
@@ -1492,6 +1509,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
     ...(sampling ? { candidatesReport: sampling.entries } : {}),
+    ...(sampling?.otherVersions ? { otherVersions: sampling.otherVersions } : {}),
     ...(beatFidelityInfo ? { beatFidelity: beatFidelityInfo } : {}),
     // 撤销点：内部第二次落盘（去味/补写）真建了自己的快照就用最近的；否则用适配层的「写盘前」存档点
     // （R4.2 后内部不再另建，通常就是它）；都没有（旧调用方不传）则由工具 execute 自行挂。

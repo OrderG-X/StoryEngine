@@ -142,7 +142,7 @@ const inputSchema = z.object({
   selectedCharacters: coerceStringArray(z.array(z.string()).optional().describe("一般不填。作者点名这章要写谁时，填人物名字。")),
   selectedHookIds: coerceStringArray(z.array(z.string()).optional().describe("一般不填。")),
   mustHitBeats: coerceStringArray(z.array(z.string()).optional().describe(
-    "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。",
+    "用户给的本章必须写到的具体要点（名物、数字、编号、关键动作），逐条原样填，别压成一句话、别换词。和方向一起交章纲员，同样不是原话会被退回。",
   )),
   maxTimelineEvents: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
   contextTokenBudget: coerceNumber(z.number().int().nonnegative().optional().describe("一般不填。")),
@@ -281,6 +281,9 @@ const outputSchema = z.object({
   })).optional().describe(
     "多候选采样（candidates>1）的逐候选透明报告：开头预览、得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
   ),
+  otherVersions: z.array(z.object({ index: z.number().int().positive(), body: z.string() })).optional().describe(
+    "落选的几版全文（只给界面，对话里出「另外几版」卡，作者点「用这版」换进工作稿）。",
+  ),
   beatFidelity: z.object({
     missingBeats: z.array(z.string()).describe("确定性核对判漏、且（跑了复核时）AI 复核后仍可能漏写/被改写的必命中要点原文。"),
     adjudicatedCovered: z.array(z.object({
@@ -397,6 +400,13 @@ export function buildContinueBlockedOutput(
   };
 }
 
+/** 交章纲员和写手的作者方向：方向原话 + 方向里没有的要点，一条一行；都没有就是 undefined（章纲按故事现状往下推）。 */
+export function authorDirectionOf(chapterGoal: string | undefined, mustHitBeats: readonly string[] | undefined): string | undefined {
+  const goal = chapterGoal?.trim() ?? "";
+  const beats = (mustHitBeats ?? []).map((beat) => beat.trim()).filter((beat) => beat && !goal.includes(beat));
+  return [goal, ...beats].filter(Boolean).join("\n") || undefined;
+}
+
 /** chapterGoal 不是作者原话：退回让 AI 原样抄或不填（在建快照、调模型之前，不花额度）。纯逻辑、可测。 */
 export function buildGoalNotQuotedOutput(
   chapter: number,
@@ -421,7 +431,7 @@ export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
     "为某章写一版正文进工作稿（未定稿）。一次调用里完成：先拟章纲、按章纲翻前文写，字数不够接着写，写完自动核账，检出机器腔默认自动去味一轮。" +
-    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」。" +
+    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」；核账卡回合结束自动出，不用再调 check_continuity，更别和本工具并排调（那时还没正文）。" +
     "summary 里的「首稿核对」漏写、「去味后新漏」、字数不够都要如实转达。引擎拒稿会 ok:false，如实说没写成。章纲见 chapterPlan，转达时一两句话说这章写了什么。",
   inputSchema,
   outputSchema,
@@ -449,9 +459,11 @@ export const generateDraftTool = createTool({
     });
     // 作者档的两道结构护栏（重构 P4，替代按作者原话猜意图的门）。按钮点出来的出稿带作者确认标记，不受这两道约束。
     const authorConfirmed = isUserConfirmedTool(context, "generate_draft");
-    const chapterGoal = input.chapterGoal?.trim() || undefined;
+    // 作者要点（mustHitBeats）也是作者原话，和方向一起交章纲员：只交写手的话，章纲员自拟一份纲、写手照纲写，
+    // 要点被纲盖掉（长篇实跑第 35 章：作者五条要点只落了一条半，AI 把作者的话全放进了要点、方向没填）。
+    const chapterGoal = authorDirectionOf(input.chapterGoal, input.mustHitBeats);
     if (!authorConfirmed) {
-      // A1 找原句：chapterGoal 是「作者给的方向」，必须逐句出自作者在这段对话里说过的话（不是对话通道调的就没得核，照用）。
+      // A1 找原句：方向和要点是「作者给的」，必须逐句出自作者在这段对话里说过的话（不是对话通道调的就没得核，照用）。
       const authorWords = readAuthorWordsFromContext(context);
       if (chapterGoal && authorWords) {
         const quote = checkAuthorQuote(chapterGoal, authorWords);

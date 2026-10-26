@@ -154,15 +154,29 @@ export function parseOptionalPositiveInteger(value: string | null): number | und
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export function readChatMessages(value: unknown): readonly { readonly role: "user" | "assistant"; readonly content: string }[] {
+/** 发给 AI 的一条聊天历史：AI 那条回合调过的工具结构化带上（服务端还原成真的工具调用记录，不往文字里塞注）。 */
+export interface ChatHistoryMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly tools?: readonly { readonly name: string; readonly ok: boolean }[];
+}
+
+export function readChatMessages(value: unknown): readonly ChatHistoryMessage[] {
   if (!Array.isArray(value)) return [];
-  const messages: { role: "user" | "assistant"; content: string }[] = [];
+  const messages: ChatHistoryMessage[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
     const content = readString(item.content);
     if (!content) continue;
-    if (item.role === "assistant" || item.role === "user") {
-      messages.push({ role: item.role, content });
+    if (item.role === "user") messages.push({ role: "user", content });
+    if (item.role === "assistant") {
+      const tools = Array.isArray(item.tools)
+        ? item.tools.filter(isRecord).flatMap((tool) => {
+          const name = readString(tool.name);
+          return name ? [{ name, ok: tool.ok !== false }] : [];
+        })
+        : [];
+      messages.push(tools.length > 0 ? { role: "assistant", content, tools } : { role: "assistant", content });
     }
   }
   return messages;

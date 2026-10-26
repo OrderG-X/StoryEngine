@@ -37,6 +37,7 @@ import { turnTailSummary } from "./turnTail.js";
 import { operationCaption, runningAgentCard } from "./operationCaption.js";
 import { ContinuityCheckCard } from "./ContinuityCheckCard.js";
 import { DirectionsCard } from "./Brainstorm.js";
+import { DraftVersionsCard } from "./DraftVersionsCard.js";
 import { SettleCard } from "./SettleCard.js";
 import { dismissContinuityItem } from "../../../workspace/continuityActions.js";
 import { DraftReviewCard } from "./DraftReviewCard.js";
@@ -989,6 +990,7 @@ function MessageBubbles({
             preview={card.preview}
             confirmable={commitConfirmable}
             onOpen={() => openCommitSheet(message.id)}
+            {...(onSendUserAction ? { onCommitShort: () => onSendUserAction({ toolName: "commit_preview", chapter: card.preview.chapter, allowShort: true }) } : {})}
           />
         );
       case "commit-report":
@@ -1004,6 +1006,9 @@ function MessageBubbles({
       case "directions":
         // 头脑风暴走法卡：对话里只列名字，挑在稿纸上方（BrainstormPanel）。
         return <DirectionsCard key={card.type} messageId={message.id} data={card.brainstorm} {...(card.picked !== undefined ? { picked: card.picked } : {})} />;
+      case "draft-versions":
+        // 另外几版：AI 一次写几版时落选的几版，点开在稿纸上并排挑。
+        return <DraftVersionsCard key={card.type} data={card.versions} busy={chatLoading} />;
       case "settle":
         // 定论卡（P12）：定论 + 前文要改的几句，划掉不改的、点「确认」一次改齐。
         return (
@@ -1013,6 +1018,7 @@ function MessageBubbles({
             data={card.settle}
             {...(card.excluded ? { excluded: card.excluded } : {})}
             {...(card.applied ? { applied: card.applied } : {})}
+            {...(card.dropped ? { dropped: true } : {})}
             busy={chatLoading}
             {...(onSendUserAction ? { onAction: onSendUserAction } : {})}
           />
@@ -1098,6 +1104,7 @@ const CARD_ORDER: readonly MessageCard["type"][] = [
   "draft-review",
   "continuity",
   "directions",
+  "draft-versions",
   "settle",
   "quality",
   "commit-preview",

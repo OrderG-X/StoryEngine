@@ -106,6 +106,20 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     await waitFor(() => expect(lastOps()).toEqual([{ op: "story.set", label: "一句话", value: "" }]));
   });
 
+  it("存成了的提示：整句引文收尾不再补句号；几秒后自己收起（没存成的留着）", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      saveCards.mockResolvedValue({ ok: true, lines: ["记下定论「长风镖局一共有三匹老马。」"] });
+      renderBook("story");
+      fireEvent.click(screen.getByRole("button", { name: "删掉「题材」" }));
+      expect(await screen.findByRole("status")).toHaveProperty("textContent", "记下定论「长风镖局一共有三匹老马。」可在操作历史里撤销。");
+      await vi.advanceTimersByTimeAsync(6000);
+      await waitFor(() => expect(screen.queryByText("记下定论「长风镖局一共有三匹老马。」可在操作历史里撤销。")).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("没改成：如实说原因，不重读、不刷新", async () => {
     saveCards.mockResolvedValue({ ok: false, error: "没改设定：AI 正在改这本书，等它做完再试。" });
     const { reload, onChanged } = renderBook("story");
@@ -113,6 +127,26 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     expect(await screen.findByRole("status")).toHaveProperty("textContent", "没改设定：AI 正在改这本书，等它做完再试。");
     expect(reload).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("存完、设定本重读回来才收起编辑框（不闪改前的字）；没存成框留着，写的字不丢", async () => {
+    let finishReload: () => void = () => undefined;
+    const reload = vi.fn(() => new Promise<void>((resolve) => { finishReload = resolve; }));
+    render(<BibleBook cat="canon" projectPath="/books/fog" bible={bibleView({ canon: [{ id: "n-1", text: "杜长顺十年前去世", at: AT }] })} error={null} reload={reload} busy={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
+    fireEvent.change(screen.getByLabelText("改这条定论"), { target: { value: "杜长顺九年前去世" } });
+    fireEvent.keyDown(screen.getByLabelText("改这条定论"), { key: "Enter" });
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("改这条定论")).toHaveProperty("value", "杜长顺九年前去世");
+    finishReload();
+    await waitFor(() => expect(screen.queryByLabelText("改这条定论")).toBeNull());
+
+    saveCards.mockResolvedValue({ ok: false, error: "没改设定：AI 正在改这本书，等它做完再试。" });
+    fireEvent.click(screen.getByRole("button", { name: "杜长顺十年前去世" }));
+    fireEvent.change(screen.getByLabelText("改这条定论"), { target: { value: "杜长顺八年前去世" } });
+    fireEvent.keyDown(screen.getByLabelText("改这条定论"), { key: "Enter" });
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "没改设定：AI 正在改这本书，等它做完再试。");
+    expect(screen.getByLabelText("改这条定论")).toHaveProperty("value", "杜长顺八年前去世");
   });
 
   it("AI 在跑：提示等它做完，改不了", () => {
@@ -170,6 +204,29 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     const row = screen.getByRole("button", { name: /旧邮局/u }).closest("article") as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: "地点" }));
     await waitFor(() => expect(lastOps()).toEqual([{ op: "card.create", kind: "place", name: "旧邮局" }]));
+  });
+
+  it("还没建卡：作者说「不用建卡」的收到最底下一行，点开能放回；人物页和左边的数都不算它", async () => {
+    renderBook("uncarded");
+    const row = screen.getByRole("button", { name: /旧邮局/u }).closest("article") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "不用建卡" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "uncarded.skip", name: "旧邮局" }]));
+    cleanup();
+    const skippedBible = bibleView({
+      uncarded: [
+        { name: "老周", aliases: ["周叔"], character: true, skipped: true, appearances: { chapters: [2], first: 2, last: 2, viewpointChapters: 0 }, now: [], fixed: [] },
+        { name: "旧邮局", aliases: [], character: false, now: [], fixed: [] },
+      ],
+    });
+    renderBook("uncarded", { bible: skippedBible });
+    expect(screen.queryByRole("button", { name: "建人物卡" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "不用建卡的 1 个" }));
+    fireEvent.click(screen.getByRole("button", { name: "放回" }));
+    await waitFor(() => expect(lastOps()).toEqual([{ op: "uncarded.unskip", name: "老周" }]));
+    expect(bibleNavCounts(skippedBible).uncarded).toBe(1);
+    cleanup();
+    renderBook("chars", { bible: skippedBible });
+    expect(screen.queryByRole("button", { name: /没建卡/u })).toBeNull();
   });
 
   it("关系：改一句、认下 AI 记的、加一条新的", async () => {

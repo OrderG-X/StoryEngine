@@ -32,9 +32,10 @@ describe("改设定卡（ops）", () => {
     ], { by: "author", at: AT });
     if (!outcome.ok) throw new Error(outcome.message);
     const card = outcome.file.cards[0]!;
-    expect(card).toMatchObject({ name: "许薇", aliases: ["小微"], protagonist: true, by: "author" });
+    // 改名后旧名留作别名：按旧名记的账还认得是这个人。
+    expect(card).toMatchObject({ name: "许薇", aliases: ["小微", "许微"], protagonist: true, by: "author" });
     expect(card.fields.map((field) => [field.label, field.value, field.by])).toEqual([["身份", "夜班分拣员", "author"], ["外貌", "身形偏瘦", "author"]]);
-    expect(outcome.lines).toEqual(["建了人物卡「许微」（主角）", "「许微」的「外貌」写上了", "「许微」加了别名「小微」", "「许微」改名为「许薇」"]);
+    expect(outcome.lines).toEqual(["建了人物卡「许微」（主角）", "「许微」的「外貌」写上了", "「许微」加了别名「小微」", "「许微」改名为「许薇」，旧名留作别名"]);
     expect(outcome.lines.join("")).not.toContain("k-");
   });
 
@@ -57,6 +58,21 @@ describe("改设定卡（ops）", () => {
     expect(applyCardOps(file, [{ op: "field.accept", card: "许微" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
   });
 
+  // 长篇实跑第 39 章：「还没建卡」攒到 61 条（车队、字条、老汉……），作者没法说「这个不用建」。
+  it("不用建卡：只有作者能说；已有卡的不收；放回去；后来建了卡就从里面拿掉", () => {
+    let file = apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "沈砚" }]);
+    const skipped = applyCardOps(file, [{ op: "uncarded.skip", name: "车队" }, { op: "uncarded.skip", name: "车队" }], { by: "author", at: AT });
+    expect(skipped.ok && skipped.lines).toEqual(["「车队」不用建卡"]);
+    file = skipped.ok ? skipped.file : file;
+    expect(file.skipped).toEqual(["车队"]);
+    expect(applyCardOps(file, [{ op: "uncarded.skip", name: "老汉" }], { by: "ai", at: AT })).toMatchObject({ ok: false, code: "needs_author" });
+    expect(applyCardOps(file, [{ op: "uncarded.skip", name: "沈砚" }], { by: "author", at: AT })).toMatchObject({ ok: false, code: "invalid" });
+    const back = applyCardOps(file, [{ op: "uncarded.unskip", name: "车队" }], { by: "author", at: AT });
+    expect(back.ok && back.file.skipped).toEqual([]);
+    expect(back.ok && back.lines).toEqual(["「车队」放回「还没建卡」"]);
+    expect(apply(file, [{ op: "card.create", kind: "lore", name: "押镖队伍", aliases: ["车队"] }]).skipped).toEqual([]);
+  });
+
   it("作者认下 AI 补的：变成作者的，AI 以后就改不了", () => {
     let file = apply(emptySettingCards(), [{ op: "card.create", kind: "place", name: "三号仓", fields: [{ label: "样子", value: "铁皮库房" }] }], "ai");
     file = apply(file, [{ op: "field.accept", card: "三号仓" }]);
@@ -71,6 +87,12 @@ describe("改设定卡（ops）", () => {
     expect(splitForAi(file, [{ op: "canon.add", text: "R 是船名缩写" }], AT).needsAuthor).toHaveLength(1);
     const renamed = applyCardOps(file, [{ op: "canon.set", canon: "n-1", text: "杜长顺十年前病逝" }], { by: "author", at: AT });
     expect(renamed.ok && renamed.lines).toEqual(["定论「杜长顺十年前去世」改成「杜长顺十年前病逝」"]);
+    // 长的只露个头，不把整条前后各抄一遍。
+    const long = "杜长顺十年前病逝，葬在城北义庄后头的山坡上，坟前有一棵歪脖子枣树";
+    const lengthened = applyCardOps(renamed.ok ? renamed.file : file, [{ op: "canon.set", canon: "n-1", text: long }], { by: "author", at: AT });
+    expect(lengthened.ok && lengthened.lines).toEqual(["改了定论「杜长顺十年前病逝」"]);
+    const again = applyCardOps(lengthened.ok ? lengthened.file : file, [{ op: "canon.set", canon: "n-1", text: `${long}。` }], { by: "author", at: AT });
+    expect(again.ok && again.lines).toEqual([`改了定论「${long.slice(0, 24)}…」`]);
     const removed = apply(renamed.ok ? renamed.file : file, [{ op: "canon.set", canon: "杜长顺十年前病逝", text: "" }]);
     expect(removed.canon).toEqual([]);
   });
@@ -180,6 +202,28 @@ describe("设定视图", () => {
     const view = bibleView(projection, apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "许微" }]));
     expect(view.uncarded.map((item) => [item.name, item.character])).toEqual([["孟庆山", true], ["韩德胜", true], ["铜钥匙", false]]);
     expect(view.uncarded[0]!.aliases).toEqual(["孟叔"]);
+  });
+
+  it("作者说不用建卡的：照样在「还没建卡」里（写稿、在场检测还要用账里记的），只是标上不用建", () => {
+    const view = bibleView(projection, apply(emptySettingCards(), [{ op: "uncarded.skip", name: "孟叔" }, { op: "uncarded.skip", name: "铜钥匙" }]));
+    expect(view.uncarded.map((item) => [item.name, item.skipped === true])).toEqual([["许微", false], ["孟庆山", true], ["韩德胜", false], ["铜钥匙", true]]);
+  });
+
+  // 长篇实跑：「刀疤军官」改名「韩照」、旧名留作别名，设定本里韩照只算第 20、22 章，「刀疤军官」还单列在账里记的。
+  it("卡的名字和别名在账里是几个人：都归这张卡（出场并起来、账并起来）", () => {
+    const renamed = project({
+      ledgers: [
+        ledger(1, [presence("刀疤军官"), fact("hard", "刀疤军官", "姓名", "韩照"), fact("state", "刀疤军官", "立场", "放行")]),
+        ledger(3, [presence("韩照"), fact("state", "韩照", "立场", "只看箱子"), fact("state", "韩照", "在哪", "溪弯")]),
+      ],
+      decisions: [],
+    });
+    const view = bibleView(renamed, apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "韩照", aliases: ["刀疤军官"] }]));
+    expect(view.uncarded).toEqual([]);
+    const han = view.characters[0]!;
+    expect(han.appearances).toMatchObject({ chapters: [1, 3], first: 1, last: 3 });
+    expect(han.fixed.map((item) => item.value)).toEqual(["韩照"]);
+    expect(han.now.map((item) => [item.attribute, item.value])).toEqual([["立场", "只看箱子"], ["在哪", "溪弯"]]);
   });
 });
 

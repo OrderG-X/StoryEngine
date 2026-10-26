@@ -4,7 +4,7 @@
  */
 import { resolveConfiguredChatModel, streamChatModelToText, type ModelTaskProfileKey, type ResolvedChatModel } from "../lib/llm-client.js";
 import { buildFastDraftMessages } from "./ai-flavor/builtin-anti-ai-rules.js";
-import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
+import { cutAtWriterEndMark, renderFastDraftPromptText, WRITER_END_MARK } from "./prompt-cache-diagnostics.js";
 import type { WriterClient } from "./fast-draft-writer.js";
 
 export async function createConfiguredWriterClient(task: ModelTaskProfileKey, onDelta?: (delta: string) => void): Promise<WriterClient> {
@@ -28,12 +28,41 @@ export function createOpenAICompatibleWriterClient(configured: ResolvedChatModel
         messages: buildFastDraftMessages(renderFastDraftPromptText(context)),
         temperature: configured.profile.temperature ?? 0.8,
         // 出稿流式：传了 onDelta 就把正文逐字外发（agent 路流式进编辑器）；runFastDraft 仍拿完整 content，引擎零改。
-        ...(onDelta ? { onDelta } : {}),
+        ...(onDelta ? { onDelta: untilEndMark(onDelta) } : {}),
       });
       return {
         title: `第${context.chapter}章`,
-        content: content.trim(),
+        content: cutAtWriterEndMark(content).trim(),
       };
     },
+  };
+}
+
+/** 流式外发也停在结尾标记前：标记后面的自检不往稿纸上流。末尾可能是标记前半截的几个字先压着，等下一段来了再定。 */
+export function untilEndMark(onDelta: (delta: string) => void): (delta: string) => void {
+  let seen = "";
+  let sent = 0;
+  let done = false;
+  return (delta) => {
+    if (done) return;
+    seen += delta;
+    const at = seen.indexOf(WRITER_END_MARK);
+    let upTo = at;
+    if (at >= 0) {
+      done = true;
+    } else {
+      let hold = 0;
+      for (let n = Math.min(WRITER_END_MARK.length - 1, seen.length); n > 0; n -= 1) {
+        if (WRITER_END_MARK.startsWith(seen.slice(-n))) {
+          hold = n;
+          break;
+        }
+      }
+      upTo = seen.length - hold;
+    }
+    if (upTo > sent) {
+      onDelta(seen.slice(sent, upTo));
+      sent = upTo;
+    }
   };
 }

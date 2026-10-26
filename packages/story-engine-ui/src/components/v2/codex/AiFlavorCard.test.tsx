@@ -2,9 +2,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AiFlavorCard } from "./AiFlavorCard.js";
+import { useDraftStore } from "../../../stores/draftStore.js";
 import type { AiFlavorReport } from "../../../types.js";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  useDraftStore.getState().reset();
+});
 
 const REPORT: AiFlavorReport = {
   ok: true,
@@ -17,6 +21,19 @@ const REPORT: AiFlavorReport = {
 };
 
 describe("AiFlavorCard", () => {
+  it("稿纸开着这一章、原句已不在稿里（作者自己改了、在对话里让 AI 改了）：也算已改", () => {
+    useDraftStore.getState().loadPaper("/book", { chapter: 30, draft: { body: "他心里一沉。仿佛一切都静止了。", version: "v1" }, committed: null } as never);
+    render(<AiFlavorCard report={{ ...REPORT, chapter: 30 }} onFix={vi.fn()} />);
+    expect(screen.getByText("1/2 已改")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /改掉这句/ })).toHaveLength(1);
+  });
+
+  it("稿纸开的是别的章：不拿它对照", () => {
+    useDraftStore.getState().loadPaper("/book", { chapter: 29, draft: { body: "别的章。", version: "v1" }, committed: null } as never);
+    render(<AiFlavorCard report={{ ...REPORT, chapter: 30 }} onFix={vi.fn()} />);
+    expect(screen.getByText("0/2 已改")).toBeTruthy();
+  });
+
   it("渲染总评+违规清单+进度，点「改掉这句」回传整条违规", () => {
     const onFix = vi.fn();
     const { container } = render(<AiFlavorCard report={REPORT} onFix={onFix} />);

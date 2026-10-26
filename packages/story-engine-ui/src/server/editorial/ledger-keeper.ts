@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterTextPath, checkEntries, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { chapterTextPath, checkEntries, quoteFromText, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
@@ -55,8 +55,9 @@ export const KEEPER_SPEC: readonly string[] = [
   "summary：本章梗概。text 用你自己的话一句话说清谁做了什么、结果怎样，不超过 60 个字（不要照抄原句）；quote 引最能代表本章的那句。",
   "",
   "time：每章都给（第 1 章没有上一章，只写星期、时段，没有就省略整个 time）。",
-  "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照上一章结尾（下面【上一章结尾】是原文）和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事就是 0，隔了一夜才是 1）。只有确实判断不了才不填这个数。",
-  "- daysInChapter = 本章从开头到结尾又过了几天，每章都填：整章在同一天写 0。从早到晚、从白天到深夜都还是同一天。只有正文写到换了天（「第二天早上」「天亮了」「隔了一夜」这类），才写 1 或更多，并在 dayChangeQuote 里逐字摘那句换天的原句；找不出这样一句，就是同一天、写 0。代码会核对这句，核不上就按同一天记。",
+  "- 换天以天亮为界：天亮之前（夜里、半夜、鸡叫、天还没亮）都算前一天的夜里；天亮以后（清晨、早上、晌午）才是新的一天。",
+  "- daysSincePrevious = 本章开头离上一章结尾隔了几天：同一天 0，「第二天」1，「三天后」3。正文明写了就照写、basis 填 text；没明写就对照上一章结尾（下面【上一章结尾】是原文）和本章开头判断、basis 填 judged（上一章结尾在夜里、本章开头接着当晚的事、天还没亮就是 0；本章开头已经天亮了，哪怕离上一章结尾只隔一两个时辰、只睡了一觉，也是 1）。只有确实判断不了才不填这个数。",
+  "- daysInChapter = 本章从开头到结尾又过了几天，每章都填：整章在同一天写 0。从早到晚、从白天到深夜都还是同一天。只有正文写到换了天（「第二天早上」「天亮了」「隔了一夜」这类），才写 1 或更多，并在 dayChangeQuote 里逐字摘那句换天的原句；本章开头天还没亮、后面写到了白天（晌午、日头偏西这类），就是跨过了天亮、写 1，dayChangeQuote 摘第一句已经是白天的原句；找不出这样一句，就是同一天、写 0。代码会核对这句，核不上就按同一天记。",
   "- weekday 只填正文明写的星期，写成「周二」这样；没写就不填，不要自己推算。timeOfDay 填正文写的时段（「傍晚」）。",
   "- quote 引最能说明时间的那句原句。不要写「故事第几天」，那由代码按上表算。",
   "",
@@ -74,6 +75,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "- state 和 hard 必须写清 subject（谁或什么）、attribute（哪一方面）、value（是什么）；text 用一句话说清这条事实。",
   "- 同一个人、同一样东西每次都用同一个名字当 subject；同一方面每次都用同一个说法当 attribute，尽量用短的常用说法（在哪、在谁手里、年纪、职业、和某某的关系、知不知道某事）。上面【现在有效的事实】里已经有的人、物和方面，照抄那里的写法——代码按写法认「同一方面」，写法一变，旧的现状就顶替不掉。",
   "- 本章明写推翻了上面【现在有效的事实】里某条不会变的事实（比如揭穿了假身份），在 replaces 里填它的编号（如 [\"F3\"]），quote 引推翻它的那句。会变的事实有了新值不用填 replaces，代码按最新一章算。",
+  "- 本章里同一件事只记一条：同一个动作、同一样东西的同一个变化（把钥匙揣进兜里 / 身上多了一把钥匙），不要换个说法再记一条。",
   "- 前文已经记过、本章只是又提了一遍的，不要再记。换了说法、意思一样（「姓张」和「弓长张」），或者只是补了细节、不和前文那条打架的（「信上有落款」和「落款是某某」），也不要在同一个 subject 同一个 attribute 下再记一条——代码会把同一格子的不同 value 当成前后矛盾报给作者。补的是新的一方面，就换一个 attribute 写；只有本章写的和前文那条真的不可能同时成立，才照同一个 attribute 记。",
   "",
   "threads：线索——悬念（question）、人物的打算或待办（intent）、主角的目标（goal）。",
@@ -220,12 +222,22 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
   const repaired = await repairQuotes(parsed, input, [...window, { role: "user", content: task }, { role: "assistant", content: text }]);
   return {
     ok: true,
-    parsed: settleDayChange(repaired.parsed, input.draft),
+    parsed: settleDayChange(withOriginalQuotes(repaired.parsed, input.draft), input.draft),
     omittedThreads: context.omittedThreads,
     omittedFacts: context.omittedFacts,
     ...(repaired.repair ? { quoteRepair: repaired.repair } : {}),
     ...extra,
   };
+}
+
+/** 核得上的原句换成正文原字（模型常多打空格、少抄引号）：清单、账里、设定本给作者看的都是正文里那一段。 */
+function withOriginalQuotes(parsed: KeeperParseResult, draft: string): KeeperParseResult {
+  const entries = parsed.entries.map((entry) => {
+    if (!("quote" in entry) || !entry.quote) return entry;
+    const original = quoteFromText(entry.quote, draft);
+    return original && original !== entry.quote ? ({ ...entry, quote: original } as EntryInput) : entry;
+  });
+  return { ...parsed, entries };
 }
 
 /**
@@ -320,7 +332,7 @@ function repairLabel(entry: EntryInput): string {
 
 /** dayChange：说本章中间过了几天、却没摘出核得上的换天原句（排在最后一条）。 */
 export function buildQuoteRepairTask(entries: readonly EntryInput[], dayChange?: { readonly days: number; readonly wrote?: string }): string {
-  const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry ? (entry.quote ?? "（没写）") : "（没写）"}`);
+  const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry && entry.quote ? entry.quote : "（没写）"}`);
   if (dayChange) {
     lines.push(`${entries.length + 1}. 本章中间换天的那句（你说本章从开头到结尾过了 ${dayChange.days} 天）\n   你写的：${dayChange.wrote ?? "（没写）"}`);
   }
