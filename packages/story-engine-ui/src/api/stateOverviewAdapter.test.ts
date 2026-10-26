@@ -183,18 +183,11 @@ function createOverview(): StateOverview {
     project: { title: "测试书", genre: "都市", logline: "", currentChapter: 1 },
     storyStatus: { currentObjective: "进入总部" },
     hooks: { activeCount: 0, touchedCount: 0, resolvedCount: 0, activeItems: [] },
-    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, keyOpenItems: [] },
+    threads: { total: 0, open: 0, touched: 0, done: 0, openIntents: 0, cleanupVisibleCount: 0, cleanupVisibleUnresolvedCount: 0, cleanupItems: [], keyOpenItems: [] },
     arcGoals: { activeCount: 0, touchedCount: 0, completedCount: 0, activeItems: [] },
     timeline: { recentEvents: [], earlierSummary: [], macroSummary: [] },
     characters: { protagonist: "林远", knownCharacters: [{ name: "林远", carded: true, protagonist: true }] },
     setting: { cards: { characters: 1, places: 0, items: 0, lore: 0 }, uncarded: 0, storyFields: 1 },
-    maintenance: {
-      diagnosticsAvailable: true,
-      cleanupVisibleCount: 0,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: { markDone: "manual_only", merge: "disabled", drop: "disabled" },
-    },
-    uiHints: { recommendedNextPanels: [], warnings: [], disabledActions: [] },
+    uiHints: { warnings: [] },
   };
 }

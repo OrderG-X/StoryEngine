@@ -55,25 +55,12 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
 
     // 瘦身后不再带老设定的大块（设定本内容走设定视图 / read_foundation）。
     expect(Object.keys(overview).sort()).toEqual([
-      "arcGoals", "characters", "hooks", "maintenance", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
+      "arcGoals", "characters", "hooks", "project", "setting", "storyStatus", "threads", "timeline", "uiHints",
     ]);
     expect(Object.keys(overview.storyStatus).sort()).toEqual(["currentObjective", "lastTimelineEvent"]);
 
-    expect(overview.maintenance).toMatchObject({
-      diagnosticsAvailable: true,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: {
-        markDone: "manual_only",
-        merge: "disabled",
-        drop: "disabled",
-      },
-    });
-    expect(overview.uiHints.disabledActions).toEqual(expect.arrayContaining([
-      "merge_threads_confirm",
-      "drop_thread_confirm",
-      "auto_apply_review_plan_confirm",
-    ]));
+    // 老的「归并 / 删除已禁用」开关不再给：对话 AI 照着它跟作者说「归并是禁用的」，其实 manage_ledger 能归并（长篇实跑）。
+    expect(Object.keys(overview.uiHints)).toEqual(["warnings"]);
     expect(overview.uiHints.warnings.join(" ")).not.toContain("设定卡读不出来");
     expect(overview.timeline.recentEvents.at(-1)?.summary.length).toBeLessThanOrEqual(160);
     expect(JSON.stringify(overview)).not.toContain("长文本尾巴不应该出现在 overview 里");
@@ -120,9 +107,9 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     expect(overview.setting).toEqual({ cards: { characters: 1, places: 0, items: 0, lore: 0 }, uncarded: 0, storyFields: 0 });
   });
 
-  // 可清理的线索只按章数和作者标的轻重算（重构 P7「不猜」）：还开着、已经 5 章没碰过的才算；收了的、标了大伏笔的不算。
-  // 编辑部 R5.4 的口径照旧：可清理数和 open+touched 同一集合，恒 ≤ open+touched。
-  it("可清理线索 = 还开着且 5 章没碰过的；收了的、最近碰过的、大伏笔都不算", async () => {
+  // 可清理的线索只按章数和作者标的轻重算（重构 P7「不猜」）：还开着、从最新定稿章算已经 5 章没碰过的才算；
+  // 收了的、标了大伏笔 / 小线索的不算。编辑部 R5.4 的口径照旧：可清理数和 open+touched 同一集合，恒 ≤ open+touched。
+  it("可清理线索 = 还开着且 5 章没碰过的；收了的、最近碰过的、大伏笔、小线索都不算", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "story-engine-state-overview-r54-"));
     const { projectDir } = await createStoryProject({
       rootDir,
@@ -139,14 +126,23 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
         { id: "t-open-recent", type: "intent", title: "先不管", status: "open", firstSeenChapter: 2, lastTouchedChapter: 4, evidence: [] },
         // 作者标了大伏笔：埋得再久也不劝清理。
         { id: "t-major-old", type: "lead", title: "铁箱里是什么", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [], weight: "major" },
+        // 作者标了小线索：停多久都不提醒（跟伏笔看板「停太久」一个口径）。
+        { id: "t-minor-old", type: "lead", title: "补发工钱", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1, evidence: [], weight: "minor" },
       ],
     });
+    await writeLegacyJson(projectDir, "timeline/events.json", Array.from({ length: 6 }, (_, i) => ({
+      id: `ch${String(i + 1).padStart(4, "0")}-001`, chapter: i + 1, summary: `第${i + 1}章`, participants: [],
+    })));
 
     const overview = await buildStateOverview({ projectDir, chapter: 6 });
 
-    expect(overview.threads.open).toBe(3);
+    expect(overview.threads.open).toBe(4);
     expect(overview.threads.touched).toBe(1);
     expect(overview.threads.cleanupVisibleCount).toBe(1);
+    expect(overview.threads.cleanupItems.map((item) => item.title)).toEqual(["想了想"]);
+    // 作者翻到还没写的第 9 章：照最新定稿章（第 6 章）算，跟界面数的同一批（长篇实跑：界面说 5 条、AI 说 6 条）。
+    const ahead = await buildStateOverview({ projectDir, chapter: 9 });
+    expect(ahead.threads.cleanupItems.map((item) => item.title)).toEqual(["想了想"]);
     expect(overview.threads.cleanupVisibleUnresolvedCount).toBe(1);
     expect(overview.threads.cleanupVisibleUnresolvedCount)
       .toBeLessThanOrEqual(overview.threads.open + overview.threads.touched);
@@ -164,9 +160,7 @@ describe("State Overview（重构 P9：账 + 设定本的几个数）", () => {
     expect(overview.hooks.activeCount).toBe(0);
     expect(overview.threads.total).toBe(0);
     expect(overview.arcGoals.activeCount).toBe(0);
-    expect(overview.maintenance.mergeDisabled).toBe(true);
-    expect(overview.maintenance.dropDisabled).toBe(true);
-    expect(overview.maintenance.confirmPolicy.markDone).toBe("manual_only");
+    expect(overview.threads.cleanupItems).toEqual([]);
   });
 
   // Task 4: 用例 A — 早期未收口伏笔仍出现在 activeItems（不被近章挤掉）

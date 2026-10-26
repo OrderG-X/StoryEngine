@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildTimelineLayers } from "./timeline-layers.js";
 import type { TimelineLayerEvent, TimelineMacroBlock } from "./timeline-layers.js";
-import { bigramSimilarity, readBible, selectRelevant, type BibleView } from "@actalk/story-core";
+import { bigramSimilarity, DEFAULT_STALE_AFTER, readBible, selectRelevant, type BibleView } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 import { formatCommitRecoveryNotice, listCommitRecoveryNotices } from "./legacy-commit-recovery.js";
 import type {
@@ -56,6 +56,8 @@ export interface StateOverview {
      * 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进去，入库回执曾写出
      * 「未收口的线索已积到 55 条，其中 78 条已经低价值或过期」。「其中 X 条」要用这个数。 */
     readonly cleanupVisibleUnresolvedCount: number;
+    /** 可清理的线索全列（停得久的先，最多 MAX_CLEANUP_ITEMS 条）：跟界面「N 条线索可以清理」同一批，对话 AI 照这个列给作者。 */
+    readonly cleanupItems: readonly StateOverviewThreadItem[];
     readonly keyOpenItems: readonly StateOverviewThreadItem[];
   };
   readonly arcGoals: {
@@ -78,21 +80,8 @@ export interface StateOverview {
     readonly knownCharacters: readonly StateOverviewCharacterItem[];
   };
   readonly setting: StateOverviewSetting;
-  readonly maintenance: {
-    readonly diagnosticsAvailable: boolean;
-    readonly cleanupVisibleCount: number;
-    readonly mergeDisabled: true;
-    readonly dropDisabled: true;
-    readonly confirmPolicy: {
-      readonly markDone: "manual_only";
-      readonly merge: "disabled";
-      readonly drop: "disabled";
-    };
-  };
   readonly uiHints: {
-    readonly recommendedNextPanels: readonly string[];
     readonly warnings: readonly string[];
-    readonly disabledActions: readonly string[];
   };
 }
 
@@ -164,6 +153,7 @@ export interface StateOverviewCharacterItem {
 
 const DEFAULT_MAX_TIMELINE_EVENTS = 5;
 const MAX_ITEMS = 12;
+const MAX_CLEANUP_ITEMS = 20;
 const MAX_TEXT = 160;
 // 「题材」是建书和老书迁移时写进故事设定的栏名（自家格式），照栏名原样取，不猜意思。
 const GENRE_LABEL = "题材";
@@ -205,12 +195,14 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
     listCommitRecoveryNotices(input.projectDir).catch(() => [] as const),
   ]);
 
-  const currentChapter = input.chapter ?? inferCurrentChapter(timelineEvents);
-  // 可清理的线索 = 还开着、已经 THREAD_CLEANUP_AFTER 章没碰过的、作者没标成大伏笔的。只按章数和作者标的轻重算，
-  // 不再按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
-  const cleanupCandidateIds = new Set(threadPool.threads
-    .filter((thread) => isCleanupCandidate(thread, currentChapter))
-    .map((thread) => thread.id));
+  const latestChapter = inferCurrentChapter(timelineEvents);
+  const currentChapter = input.chapter ?? latestChapter;
+  // 可清理的线索只按章数和作者标的轻重算，不按标题文字猜「泛泛的打算 / 低价值」（重构 P7「不猜」）。
+  // 从最新定稿章算、不随作者正翻着的章变（长篇实跑：翻到下一章，界面说 5 条、AI 说 6 条）。
+  const cleanupCandidates = threadPool.threads
+    .filter((thread) => isCleanupCandidate(thread, latestChapter))
+    .sort((a, b) => (a.lastTouchedChapter ?? 0) - (b.lastTouchedChapter ?? 0));
+  const cleanupCandidateIds = new Set(cleanupCandidates.map((thread) => thread.id));
   const cleanupVisibleCount = cleanupCandidateIds.size;
   const cleanupVisibleUnresolvedCount = cleanupVisibleCount;
   const recentEvents = timelineEvents
@@ -257,6 +249,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       openIntents: threadPool.threads.filter((thread) => thread.type === "intent" && thread.status === "open").length,
       cleanupVisibleCount,
       cleanupVisibleUnresolvedCount,
+      cleanupItems: cleanupCandidates.slice(0, MAX_CLEANUP_ITEMS).map((thread) => toThreadOverview(thread, "stale_candidate")),
       keyOpenItems: (() => {
         const threadSelectChapter = currentChapter ?? Math.max(0, ...threadPool.threads.map((t) => t.firstSeenChapter ?? 0));
         const selected = selectRelevant({
@@ -292,19 +285,7 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
       knownCharacters: bible ? knownCharactersOf(bible) : [],
     },
     setting: settingOf(bible),
-    maintenance: {
-      diagnosticsAvailable: true,
-      cleanupVisibleCount,
-      mergeDisabled: true,
-      dropDisabled: true,
-      confirmPolicy: {
-        markDone: "manual_only",
-        merge: "disabled",
-        drop: "disabled",
-      },
-    },
     uiHints: {
-      recommendedNextPanels: buildRecommendedPanels({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
       warnings: [
         ...buildWarnings({ hookPool: hookPool, threadPool: threadPool, arcGoalPool: arcGoalPool, cleanupVisibleCount }),
         ...commitRecoveryNotices.map(formatCommitRecoveryNotice),
@@ -312,14 +293,6 @@ export async function buildStateOverview(input: BuildStateOverviewInput): Promis
         ...unique(corruptLedgerFiles.map((relativePath) =>
           `资料文件损坏，面板按空显示：${relativePath}。定稿等写入操作会如实报错，请先修复该文件。`)),
         ...unique(degradedReads),
-      ],
-      disabledActions: [
-        "merge_threads_confirm",
-        "drop_thread_confirm",
-        "auto_cleanup",
-        "auto_expire",
-        "auto_mark_done",
-        "auto_apply_review_plan_confirm",
       ],
     },
   };
@@ -418,14 +391,14 @@ function toHookOverview(hook: HookItem): StateOverviewHookItem {
   };
 }
 
-const THREAD_CLEANUP_AFTER = 5;
-
-function isCleanupCandidate(thread: NarrativeThread, currentChapter: number | null | undefined): boolean {
+/** 跟伏笔看板「停太久」同一把尺子（核心投影的 staleAfter），只是大伏笔不劝清理。 */
+function isCleanupCandidate(thread: NarrativeThread, latestChapter: number | null): boolean {
   if (thread.status !== "open" && thread.status !== "touched") return false;
-  // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）。
-  if (thread.weight === "major") return false;
-  if (typeof currentChapter !== "number" || typeof thread.lastTouchedChapter !== "number") return false;
-  return currentChapter - thread.lastTouchedChapter >= THREAD_CLEANUP_AFTER;
+  // 大伏笔本来就要埋很久（长篇实跑：第 1 章的「铁箱里是什么」标了大伏笔，第 6 章起天天被劝清理）；
+  // 小线索是作者说过「停多久都不提醒」的。
+  if (thread.weight === "major" || thread.weight === "minor") return false;
+  if (latestChapter === null || typeof thread.lastTouchedChapter !== "number") return false;
+  return latestChapter - thread.lastTouchedChapter >= DEFAULT_STALE_AFTER;
 }
 
 function toThreadOverview(thread: NarrativeThread, cleanupCandidateClass?: string, relatedCount?: number): StateOverviewThreadItem {
@@ -507,20 +480,6 @@ function hookRisk(hook: HookItem): "low" | "medium" | "high" {
   if (hook.nextActionHint) return "high";
   if (evidenceCount > 1 || hook.status === "active") return "medium";
   return "low";
-}
-
-function buildRecommendedPanels(input: {
-  readonly hookPool: HookPool;
-  readonly threadPool: ThreadPool;
-  readonly arcGoalPool: ArcGoalPool;
-  readonly cleanupVisibleCount: number;
-}): readonly string[] {
-  const panels = ["chapter_preview", "state_overview"];
-  if (input.threadPool.threads.some((thread) => thread.status === "open" || thread.status === "touched")) panels.push("thread_pool");
-  if (input.hookPool.hooks.some((hook) => hook.status === "active" || hook.status === "seeded")) panels.push("hook_pool");
-  if (input.arcGoalPool.goals.some((goal) => goal.status === "active" || goal.status === "touched")) panels.push("arc_goals");
-  if (input.cleanupVisibleCount > 0) panels.push("maintenance_diagnostics");
-  return panels;
 }
 
 function buildWarnings(input: {
