@@ -244,6 +244,7 @@ function readCommitPreview(value: unknown): CommitPreviewCardData | undefined {
     ...(draftIssues.length > 0 ? { draftIssues } : {}),
     ...(semanticIssues.length > 0 ? { semanticIssues } : {}),
     ...(previewToken ? { previewToken } : {}),
+    ...(value.shortOnly === true ? { shortOnly: true } : {}),
     ...(ledgerChecklist.length > 0 ? { ledgerChecklist } : {}),
     ...(notRecorded.length > 0 ? { notRecorded } : {}),
     ...(notes.length > 0 ? { notes } : {}),
