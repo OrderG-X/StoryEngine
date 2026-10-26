@@ -66,14 +66,16 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
   const editsLeft = data.edits.filter((edit) => !skip.has(edit.key)).length;
   const fieldsLeft = data.fields.filter((field) => !skip.has(field.key)).length;
   const changes = editsLeft + fieldsLeft;
-  const canConfirm = !done && Boolean(onAction) && (changes > 0 || !data.canonExists);
+  const recordsCanon = !data.canonExists && !data.sceneOnly;
+  const canConfirm = !done && Boolean(onAction) && (changes > 0 || recordsCanon);
   const recheck = () => onAction?.({ toolName: "settle_preview", statement: data.canon, ...(data.chapter ? { chapter: data.chapter } : {}) });
   const incomplete = data.failures.length > 0 || data.missed.length > 0;
   const statusLabel = done ? "改齐了" : data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
   return (
-    <StepCard title="定论" status={done ? "done" : changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
+    <StepCard title={data.sceneOnly ? "改齐" : "定论"} status={done ? "done" : changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
       <p className="stc-canon serif">{data.canon}</p>
       {data.canonExists ? <p className="drc-summary">设定本里已经记着这条。</p> : null}
+      {data.sceneOnly ? <p className="drc-summary">只是那一场的事，改句子，不记进设定本。</p> : null}
       {groupByChapter(data.edits).map((group) => (
         <section key={`${group.chapter}:${group.draft}`} className="stc-group">
           <h4>第 {group.chapter} 章{group.draft ? "（工作稿）" : ""}</h4>

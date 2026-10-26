@@ -40,12 +40,12 @@ afterEach(async () => {
 });
 
 /** 假模型：按提示词认是哪一步，回固定的答案；记下每步收到的提示。 */
-function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string } = {}): BrainCallModel & { prompts: string[] } {
+function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string; canonReply?: string } = {}): BrainCallModel & { prompts: string[] } {
   const prompts: string[] = [];
   const call: BrainCallModel = async (messages) => {
     const prompt = messages.at(-1)?.content ?? "";
     prompts.push(prompt);
-    if (prompt.includes("写成一条「定论」")) return JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] });
+    if (prompt.includes("写成一条「定论」")) return over.canonReply ?? JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] });
     if (prompt.includes("列出这件事涉及的")) return JSON.stringify({ names: ["杜叔"] });
     if (prompt.includes("设定本里相关的几栏")) return JSON.stringify({ edits: [] });
     if (prompt.includes("请逐条复核")) return over.reviewReply ?? JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: true }] });
@@ -140,6 +140,24 @@ describe("定论预览", () => {
     expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("原句只是那一场里一时的拿法、放法");
     expect(canonTask(pick, new Map())).toContain("写那件东西本身");
     expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, target: "committed", id: 1, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
+  });
+
+  // 长篇实跑：核账报「昨夜在风口坐了半宿」和前一章「山沟里没风」打架，点「以第 23 章为准」把「那夜山沟里没风」记成了全书定论。
+  it("只是那一场的事（keep 给 false）：句子照改，不记进设定本「定论」", async () => {
+    const model = fakeModel({ canonReply: JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"], keep: "false" }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(model.prompts.find((prompt) => prompt.includes("写成一条「定论」"))).toContain("过了那一场就用不着");
+    expect(outcome.proposal.sceneOnly).toBe(true);
+    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toContain("“杜叔走了十年了。”");
+    expect(applied.result.cardLines).toEqual([]);
+    expect(JSON.parse(await readFile(join(dir, "ledger/cards.json"), "utf-8").catch(() => "{}")).canon ?? []).toEqual([]);
+
+    const kept = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
+    if (!kept.ok) throw new Error(kept.message);
+    expect(kept.proposal.sceneOnly).toBeUndefined();
   });
 
   it("核的是已定稿的章：改定稿正文，工作稿里同一句跟着改；定稿后改过工作稿、报的那句只在工作稿里，才改工作稿", async () => {

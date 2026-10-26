@@ -57,6 +57,7 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
     token,
     canon,
     canonExists: value.canonExists === true,
+    ...(value.sceneOnly === true ? { sceneOnly: true } : {}),
     ...(chapter ? { chapter } : {}),
     edits,
     facts,

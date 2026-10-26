@@ -89,6 +89,8 @@ export interface SettleProposal {
   readonly canon: string;
   /** 设定本里已经有这条定论（这次不再加）。 */
   readonly canonExists: boolean;
+  /** 只是某一场里的事（那一夜的风、谁一时站在哪）：只改句子，不记进设定本「定论」。 */
+  readonly sceneOnly?: boolean;
   readonly chapter?: number;
   readonly edits: readonly SettleEdit[];
   readonly facts: readonly SettleFactChange[];
@@ -174,8 +176,9 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
     "  正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；数字、时间照原句抄；原句说得含糊的，看前后文和另一边说的是什么事把它说明白；",
     "  主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
     "  说的是谁平常带着什么、东西放在哪这类每场都会变的事时，写那件东西本身（「某某随身带的是一把黑伞」），别写一时的拿法、姿势（「攥着」「搭在肩上」「横在膝上」）；",
-    "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
-    '只输出一个 JSON：{"point":"","canon":"","names":[]}',
+    "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）；",
+    "- keep：这条以后写别的章还用得着吗？人物的年纪、长相、身份、来历，谁有什么东西、东西什么样，大事在哪天、在哪发生——用得着，写 true；只是那一场里的天气、风、光线，谁一时站在哪、在干什么——过了那一场就用不着，写 false（这样的只改句子，不记进设定本）。",
+    '只输出一个 JSON：{"point":"","canon":"","names":[],"keep":true}',
   ].join("\n");
 }
 
@@ -454,12 +457,14 @@ function fieldRefs(cards: SettingCardsFile, terms: readonly string[]): FieldRef[
   return refs;
 }
 
-async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[] }> {
+async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[]; keep: boolean }> {
   const parsed = parseJsonObject(await callModel([{ role: "user", content: prompt }], { json: true }));
   if (!parsed) throw new Error("模型回的不是要的格式");
   const names = Array.isArray(parsed.names) ? parsed.names.map(str).filter(Boolean) : [];
   const canon = str(parsed.canon);
-  return { ...(canon ? { canon } : {}), names };
+  // 只认明说的 false（布尔或字串）；没给、给别的都照记定论（老行为）。
+  const keep = !(parsed.keep === false || (typeof parsed.keep === "string" && parsed.keep.trim().toLowerCase() === "false"));
+  return { ...(canon ? { canon } : {}), names, keep };
 }
 
 export async function proposeSettle(input: {
@@ -505,6 +510,7 @@ export async function proposeSettle(input: {
 
   let canon: string;
   let names: string[] = [];
+  let sceneOnly = false;
   // 按已记下的定论查（核账卡「以定论为准」带的是核账员摘的那半句）：用设定本里那一整条，别再记一条半截的。
   const statementText = request.kind === "statement"
     ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))?.text ?? request.text.trim()
@@ -515,6 +521,7 @@ export async function proposeSettle(input: {
       if (!asked.canon) return { ok: false, message: "这次没写出定论（模型没回），重新点一次试试。" };
       canon = asked.canon.slice(0, 400);
       names = asked.names;
+      sceneOnly = !asked.keep;
     } else {
       canon = statementText;
       names = (await askNames(callModel, namesTask(canon))).names;
@@ -657,6 +664,7 @@ export async function proposeSettle(input: {
     proposal: {
       canon,
       canonExists: cards.canon.some((item) => nameKey(item.text) === nameKey(canon)),
+      ...(sceneOnly ? { sceneOnly } : {}),
       ...(focusChapter !== undefined ? { chapter: focusChapter } : {}),
       edits,
       facts: facts.sort((a, b) => a.chapter - b.chapter),

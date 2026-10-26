@@ -72,6 +72,18 @@ describe("定论卡", () => {
     expect(onAction).toHaveBeenLastCalledWith({ toolName: "settle_apply", token: data.token, excluded: [] });
   });
 
+  it("只是那一场的事：标题「改齐」、说不记进设定本；没要改的不给按钮", () => {
+    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, sceneOnly: true } }] } as unknown as ChapterMessage]);
+    const { unmount } = render(<Live onAction={vi.fn()} />);
+    expect(screen.getByText("改齐")).toBeTruthy();
+    expect(screen.getByText("只是那一场的事，改句子，不记进设定本。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
+    unmount();
+    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, sceneOnly: true, edits: [], facts: [] } }] } as unknown as ChapterMessage]);
+    render(<Live onAction={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /确认|记下定论/ })).toBeNull();
+  });
+
   it("设定本里已经有这条、也没要改的：不给按钮", () => {
     useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: { ...data, canonExists: true, edits: [], facts: [] } }] } as unknown as ChapterMessage]);
     render(<Live onAction={vi.fn()} />);

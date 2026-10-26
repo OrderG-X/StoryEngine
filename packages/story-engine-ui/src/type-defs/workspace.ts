@@ -116,6 +116,8 @@ export interface SettleCardData {
   readonly canon: string;
   /** 设定本里已经有这条定论了（不再记一次）。 */
   readonly canonExists: boolean;
+  /** 只是某一场里的事：只改句子，不记进设定本。 */
+  readonly sceneOnly?: boolean;
   /** 从哪一章点进来的（「再核第 N 章」）。 */
   readonly chapter?: number;
   readonly edits: readonly { readonly key: string; readonly chapter: number; readonly draft: boolean; readonly from: string; readonly to: string; readonly why?: string }[];
