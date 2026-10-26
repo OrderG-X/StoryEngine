@@ -72,6 +72,12 @@ describe("改设定卡（ops）", () => {
     expect(splitForAi(file, [{ op: "canon.add", text: "R 是船名缩写" }], AT).needsAuthor).toHaveLength(1);
     const renamed = applyCardOps(file, [{ op: "canon.set", canon: "n-1", text: "杜长顺十年前病逝" }], { by: "author", at: AT });
     expect(renamed.ok && renamed.lines).toEqual(["定论「杜长顺十年前去世」改成「杜长顺十年前病逝」"]);
+    // 长的只露个头，不把整条前后各抄一遍。
+    const long = "杜长顺十年前病逝，葬在城北义庄后头的山坡上，坟前有一棵歪脖子枣树";
+    const lengthened = applyCardOps(renamed.ok ? renamed.file : file, [{ op: "canon.set", canon: "n-1", text: long }], { by: "author", at: AT });
+    expect(lengthened.ok && lengthened.lines).toEqual(["改了定论「杜长顺十年前病逝」"]);
+    const again = applyCardOps(lengthened.ok ? lengthened.file : file, [{ op: "canon.set", canon: "n-1", text: `${long}。` }], { by: "author", at: AT });
+    expect(again.ok && again.lines).toEqual([`改了定论「${long.slice(0, 24)}…」`]);
     const removed = apply(renamed.ok ? renamed.file : file, [{ op: "canon.set", canon: "杜长顺十年前病逝", text: "" }]);
     expect(removed.canon).toEqual([]);
   });

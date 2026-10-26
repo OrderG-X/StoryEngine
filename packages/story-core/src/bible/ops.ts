@@ -115,6 +115,9 @@ function nextId(ids: readonly string[], prefix: string): string {
 }
 
 const quoted = (text: string): string => `「${text}」`;
+/** 给人看的话里长句只露个头（改定论时整条前后各抄一遍，提示条占半屏）。 */
+const LINE_QUOTE_MAX = 24;
+const brief = (text: string): string => (text.length > LINE_QUOTE_MAX ? `${text.slice(0, LINE_QUOTE_MAX)}…` : text);
 const authorOwned = (card: Card): boolean => card.by === "author" || card.fields.some((field) => field.by === "author");
 
 function setField(fields: readonly CardField[], fieldLabel: string, fieldValue: string, context: OpContext): { fields: CardField[]; verb?: string } | { error: Step } {
@@ -398,7 +401,9 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
       return {
         ok: true,
         file: { ...file, canon: file.canon.map((entry) => (entry === item ? { ...entry, text: op.text, at: context.at } : entry)) },
-        line: `定论${quoted(item.text)}改成${quoted(op.text)}`,
+        line: item.text.length > LINE_QUOTE_MAX || op.text.length > LINE_QUOTE_MAX
+          ? `改了定论${quoted(brief(item.text))}`
+          : `定论${quoted(item.text)}改成${quoted(op.text)}`,
       };
     }
     case "exemplar.remove": {
