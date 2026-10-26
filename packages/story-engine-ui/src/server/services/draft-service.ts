@@ -67,6 +67,7 @@ import {
 import {
   buildDraftLengthReport,
   countDraftChineseCharacters,
+  draftLengthFloor,
   lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
@@ -151,7 +152,7 @@ function enforceDraftLengthTarget(input: {
   readonly allowDeterministicTrim: boolean;
 }): { readonly ok: true; readonly draftBody: string } | { readonly ok: false; readonly error: string } {
   const currentLength = countCjkChars(input.draftBody);
-  if (currentLength < input.lengthTarget.lowerBound) {
+  if (currentLength < draftLengthFloor(input.lengthTarget)) {
     return { ok: false, error: DRAFT_TOO_SHORT_ERROR };
   }
   if (currentLength <= input.lengthTarget.upperBound) {

@@ -8,7 +8,7 @@
  *
  * 模型无关：续写结果只取正文（剥标题/解释）；比原来还短、空、像 JSON → 视为没续成，原稿不动。
  */
-import { countDraftChineseCharacters, type DraftLengthTarget } from "../../writing/draft-length-control.js";
+import { countDraftChineseCharacters, draftLengthFloor, type DraftLengthTarget } from "../../writing/draft-length-control.js";
 import { stripTrailingSegmentMarkers } from "../../writing/fast-draft-writer.js";
 import { cutAtWriterEndMark, WRITER_END_MARK } from "../../writing/prompt-cache-diagnostics.js";
 import { chinesePunctuation } from "../../../lib/dialogue-quotes.js";
@@ -97,9 +97,9 @@ export async function continueDraftToLength(input: ContinueDraftInput): Promise<
   let rounds = 0;
   for (let attempt = 0; attempt < maxRounds; attempt += 1) {
     const current = countDraftChineseCharacters(body);
-    if (current >= input.lengthTarget.lowerBound) break;
+    if (current >= draftLengthFloor(input.lengthTarget)) break;
     // 续到目标字数（而不是刚过下限）：留出余量，免得再被下限拦。
-    const need = Math.max(input.lengthTarget.requested - current, input.lengthTarget.lowerBound - current);
+    const need = Math.max(input.lengthTarget.requested - current, draftLengthFloor(input.lengthTarget) - current);
     const { prefix, lastParagraph } = splitForContinuation(body);
     let continuation = "";
     try {

@@ -19,6 +19,7 @@ import {
   buildDraftLengthReport,
   countDraftChineseCharacters,
   draftLengthAim,
+  draftLengthFloor,
   lengthRulesOf,
   resolveDraftLengthTarget,
   resolveDraftMaxOutputTokens,
@@ -380,7 +381,7 @@ async function generateBySegments(input: {
     }
     // 整章还不到下限：说清上次写了多少、这次要多少，再要一次后半章，取更长且重演不更多的那版（只在短了时多花一次调用）。
     const firstLength = countDraftChineseCharacters(firstBody);
-    const shortBy = input.lengthTarget.lowerBound - firstLength - countDraftChineseCharacters(secondBody);
+    const shortBy = draftLengthFloor(input.lengthTarget) - firstLength - countDraftChineseCharacters(secondBody);
     let lengthRetry: SegmentedDraftInfo["lengthRetry"];
     if (shortBy > 0) {
       input.restream?.(firstVisible);
@@ -634,7 +635,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     const addLength = asked ?? Math.max(draftLengthAim(draftLengthTarget) - existingLength, MIN_CONTINUE_LENGTH);
     const minLength = asked
       ? Math.round(asked * 0.85)
-      : Math.min(Math.max(draftLengthTarget.lowerBound - existingLength, Math.round(MIN_CONTINUE_LENGTH * 0.85)), addLength);
+      : Math.min(Math.max(draftLengthFloor(draftLengthTarget) - existingLength, Math.round(MIN_CONTINUE_LENGTH * 0.85)), addLength);
     const continued = existing
       ? await generateContinuation({
         writerClient: input.writerClient,
