@@ -100,6 +100,41 @@ function factsOf(subject: SubjectView | undefined, facts: ReadonlyMap<string, Fa
   return { now: now.sort(byChapter), fixed: fixed.sort((a, b) => a.chapter - b.chapter) };
 }
 
+function unique<T>(items: readonly T[]): T[] {
+  return [...new Set(items)];
+}
+
+/** 几个出场人物并成一个：出场章、视角章取并集。 */
+function mergedMember(members: readonly CastMember[]): CastMember | undefined {
+  if (members.length <= 1) return members[0];
+  const sorted = (lists: readonly (readonly number[])[]): number[] => [...new Set(lists.flat())].sort((a, b) => a - b);
+  return {
+    ...members[0]!,
+    chapters: sorted(members.map((member) => member.chapters)),
+    viewpointChapters: sorted(members.map((member) => member.viewpointChapters)),
+    appearances: members.flatMap((member) => member.appearances).sort((a, b) => a.chapter - b.chapter),
+  };
+}
+
+/** 几个主体的账并在一张卡上：定下的都留；现状同一方面几个主体都有的，只留最近一章记的那个主体的。 */
+function mergedFacts(subjects: readonly SubjectView[], facts: ReadonlyMap<string, FactView>): { now: BibleFact[]; fixed: BibleFact[] } {
+  if (subjects.length <= 1) return factsOf(subjects[0], facts);
+  const parts = subjects.map((subject) => factsOf(subject, facts));
+  const latest = new Map<string, { chapter: number; part: number }>();
+  parts.forEach((part, index) => {
+    for (const fact of part.now) {
+      const key = nameKey(fact.attribute);
+      const seen = latest.get(key);
+      if (!seen || fact.chapter > seen.chapter) latest.set(key, { chapter: fact.chapter, part: index });
+    }
+  });
+  const now = parts.flatMap((part, index) => part.now.filter((fact) => latest.get(nameKey(fact.attribute))?.part === index));
+  return {
+    now: now.sort((a, b) => b.chapter - a.chapter),
+    fixed: parts.flatMap((part) => part.fixed).sort((a, b) => a.chapter - b.chapter),
+  };
+}
+
 function appearancesOf(member: CastMember | undefined): BibleAppearances | undefined {
   if (!member || member.chapters.length === 0) return undefined;
   return {
@@ -124,20 +159,21 @@ export function bibleView(projection: BookProjection, cards: SettingCardsFile): 
 
   const entryOf = (card: Card): BibleEntry => {
     const keys = namesOf(card).map(nameKey);
-    const member = card.kind === "character" ? keys.map((key) => castByKey.get(key)).find((item) => item !== undefined) : undefined;
-    if (member) usedCast.add(member.key);
-    const subjectKeys = [...keys, ...(member ? [member.key, ...member.aliases.map(nameKey)] : [])];
-    const subject = subjectKeys.map((key) => subjectByKey.get(key)).find((item) => item !== undefined);
-    if (subject) usedSubjects.add(subject.key);
+    // 卡的名字和别名可能在账里是几个出场人物（改名后旧名留作别名：账里旧章记的是旧名）：都归这张卡。
+    const members = card.kind === "character" ? unique(keys.map((key) => castByKey.get(key)).filter((item) => item !== undefined)) : [];
+    for (const member of members) usedCast.add(member.key);
+    const subjectKeys = [...keys, ...members.flatMap((member) => [member.key, ...member.aliases.map(nameKey)])];
+    const subjects = unique(subjectKeys.map((key) => subjectByKey.get(key)).filter((item) => item !== undefined));
+    for (const subject of subjects) usedSubjects.add(subject.key);
     const known = new Set(keys);
-    const ledgerAliases = member ? [member.name, ...member.aliases].filter((alias) => !known.has(nameKey(alias))) : [];
+    const ledgerAliases = unique(members.flatMap((member) => [member.name, ...member.aliases]).filter((alias) => !known.has(nameKey(alias))));
     const relations = cards.relations
       .filter((relation) => relation.a === card.id || relation.b === card.id)
       .map((relation) => ({ relation, other: cardById.get(relation.a === card.id ? relation.b : relation.a) }))
       .filter((item): item is { relation: SettingCardsFile["relations"][number]; other: Card } => item.other !== undefined)
       .map(({ relation, other }) => ({ id: relation.id, other: other.name, label: relation.label, by: relation.by }));
-    const appearances = appearancesOf(member);
-    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...factsOf(subject, facts), relations };
+    const appearances = appearancesOf(mergedMember(members));
+    return { card, ledgerAliases, ...(appearances ? { appearances } : {}), ...mergedFacts(subjects, facts), relations };
   };
 
   const entries = cards.cards.map(entryOf);

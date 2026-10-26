@@ -188,6 +188,23 @@ describe("设定视图", () => {
     expect(view.uncarded.map((item) => [item.name, item.character])).toEqual([["孟庆山", true], ["韩德胜", true], ["铜钥匙", false]]);
     expect(view.uncarded[0]!.aliases).toEqual(["孟叔"]);
   });
+
+  // 长篇实跑：「刀疤军官」改名「韩照」、旧名留作别名，设定本里韩照只算第 20、22 章，「刀疤军官」还单列在账里记的。
+  it("卡的名字和别名在账里是几个人：都归这张卡（出场并起来、账并起来）", () => {
+    const renamed = project({
+      ledgers: [
+        ledger(1, [presence("刀疤军官"), fact("hard", "刀疤军官", "姓名", "韩照"), fact("state", "刀疤军官", "立场", "放行")]),
+        ledger(3, [presence("韩照"), fact("state", "韩照", "立场", "只看箱子"), fact("state", "韩照", "在哪", "溪弯")]),
+      ],
+      decisions: [],
+    });
+    const view = bibleView(renamed, apply(emptySettingCards(), [{ op: "card.create", kind: "character", name: "韩照", aliases: ["刀疤军官"] }]));
+    expect(view.uncarded).toEqual([]);
+    const han = view.characters[0]!;
+    expect(han.appearances).toMatchObject({ chapters: [1, 3], first: 1, last: 3 });
+    expect(han.fixed.map((item) => item.value)).toEqual(["韩照"]);
+    expect(han.now.map((item) => [item.attribute, item.value])).toEqual([["立场", "只看箱子"], ["在哪", "溪弯"]]);
+  });
 });
 
 let book: string;
