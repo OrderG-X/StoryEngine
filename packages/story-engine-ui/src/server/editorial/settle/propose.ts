@@ -187,20 +187,22 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
 export function namesTask(canon: string, existing: readonly string[] = []): string {
   return [
     `作者写下了一条定论（这本书以后都以它为准）：「${canon}」`,
+    "- canon：把它整理成设定本里记的一条：只写这件事本身是什么样，主语写全、单拿出来也看得懂；作者顺带说的「哪章哪句写错了」「以这个为准」这类话不写进去；意思不增不减，本来就是这样就照抄，不超过 40 字。",
     "- names：列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
     ...(existing.length > 0
       ? [
         "- replaces：设定本里已经记着下面几条定论。这条新的是不是在改其中一条（说的是同一件事，新的说法取代旧的）？是就填那条的编号，不是填 0。",
         ...existing.map((text, index) => `[${index + 1}] ${text}`),
-        '只输出一个 JSON：{"names":[],"replaces":0}',
+        '只输出一个 JSON：{"canon":"","names":[],"replaces":0}',
       ]
-      : ['只输出一个 JSON：{"names":[]}']),
+      : ['只输出一个 JSON：{"canon":"","names":[]}']),
   ].join("\n");
 }
 
 /**
  * 设定本里别的定论照样成立：交给查全书、查设定、复核的每一步（长篇实跑 2026-10-26：新定论「两个月前场里五十一个人」
  * 被读成「那一场在两个月前」，把六句写「父亲半年前遇伏」的对句子连同设定本一句话都要改，而「父亲半年前遇伏」本身就是一条定论）。
+ * 只用来别误改：和它们对不上的句子不归这次管（同日又撞上：定「赵老七不抽烟」，查全书顺手按「第 24 章起三匹拉车」改了两句骡子数）。
  */
 export const STANDING_CANON_MAX = 30;
 function standingLines(standing: readonly string[], rule: string): string[] {
@@ -212,7 +214,7 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
   const mine = flagged.filter((side) => docs.some((doc) => doc.chapter === side.chapter));
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
-    ...standingLines(standing, "原句和这几条说得一致的，就不是和新定论对不上（除非原句说的正是新定论那件事、新定论换了说法），别改。"),
+    ...standingLines(standing, "原句和这几条说得一致的，就不是和新定论对不上（除非原句说的正是新定论那件事、新定论换了说法），别改；原句和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是这本书的几章正文，每句前面有编号 [n]。逐句看，找出说法和这条定论对不上的句子（同一件事写成了别的样子）。",
     ...(mine.length > 0 ? [`核账已经报过这几句和它对不上，一定给出改法：${mine.map((side) => `第 ${side.chapter} 章「${side.quote}」`).join("；")}。`] : []),
     "- 原句说的得是定论里的同一个人、同一件东西、同一件事：名字不一样的、只是身份相近（都是看门的、都是老人）或同一类东西的，不算——宁可漏掉，也别把别人改成定论里的人；",
@@ -238,7 +240,7 @@ interface FieldRef {
 export function fieldsTask(canon: string, fields: readonly FieldRef[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
-    ...standingLines(standing, "栏里和这几条说得一致的部分别改。"),
+    ...standingLines(standing, "栏里和这几条说得一致的部分别改；和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
     "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
@@ -310,7 +312,8 @@ export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key
     "- 人物在撒谎或记错、写的是变化过程的：不算；",
     "- 定论说的是从某一章、某个时候起才这样的，原句在那之前（那时候还没变）：不算；",
     "- 定论说的是平常带着什么、放在哪这类事，原句只是那一场里一时的拿法、放法、顺手抄起的别的东西、换了别人拿着的：不算；",
-    "- 改法添了原句没有的情节、台词的：不算。",
+    "- 改法添了原句没有的情节、台词的：不算；",
+    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算。",
     "",
     ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
     "",
@@ -554,6 +557,9 @@ export async function proposeSettle(input: {
       // 记成了第二条，旧的还在，核账照旧拿旧的报）。
       const existing = recorded ? [] : cards.canon;
       const asked = await askNames(callModel, namesTask(canon, existing.map((item) => item.text)));
+      // 新写的一条照模型整理过的记（长篇实跑：对话 AI 把「第 45 章那句写错了」写进了定论，查全书照着它把该改的那句放过了）；
+      // 按已记下的那条查时原样用。卡上给作者看的就是这一句。
+      if (!recorded && asked.canon) canon = asked.canon.slice(0, 400);
       names = asked.names;
       const old = asked.replaces === undefined ? undefined : existing[asked.replaces - 1];
       if (old) replaces = { id: old.id, text: old.text };

@@ -235,6 +235,20 @@ describe("按已记下的定论查", () => {
     expect(model.prompts.find((prompt) => prompt.includes("列出这件事涉及的"))).not.toContain("replaces");
   });
 
+  // 长篇实跑（2026-10-26）：对话 AI 把「第 45 章那句写错了」也写进了定论，查全书照着这半句把该改的那句放过了。
+  it("新写的一条照模型整理过的记（不带哪章哪句写错了）；按已记下的那条查时原样用", async () => {
+    const model = fakeModel({ namesReply: JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "杜长顺十年前去世，第 2 章写成二十年是错的" }, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(model.prompts.find((prompt) => prompt.includes("列出这件事涉及的"))).toContain("「哪章哪句写错了」");
+    expect(outcome.proposal.canon).toBe("杜长顺十年前去世");
+    const applied = await applySettleProposal(dir, (await saveSettleProposal(dir, outcome.proposal)).token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    const recorded = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "十年前去世" }, callModel: fakeModel({ namesReply: JSON.stringify({ canon: "杜叔死了十年", names: ["杜叔"] }) }) });
+    if (!recorded.ok) throw new Error(recorded.message);
+    expect(recorded.proposal).toMatchObject({ canon: "杜长顺十年前去世", canonExists: true });
+  });
+
   // 作者长篇实跑（2026-10-26）：「那条定论过时了，改成…」记成了第二条，旧的还在，核账照旧拿旧的报。
   it("改的是设定本里已有的那条：卡上带着旧的，确认后换掉它、不另加；模型说不是就照常加", async () => {
     const first = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel() });
@@ -271,6 +285,9 @@ describe("按已记下的定论查", () => {
     const sweep = model.prompts.find((prompt) => prompt.includes("逐句看"))!;
     expect(sweep).toContain("设定本里另外还定着这几条，照样成立：\n- 杜长顺十年前去世");
     expect(reviewTask("孟叔是杜长顺的表弟", [], ["杜长顺十年前去世"])).toContain("照样成立：\n- 杜长顺十年前去世");
+    // 只用来别误改：和别的定论对不上的不归这次管（实跑：定「不抽烟」顺手按「三匹拉车」改了骡子数）。
+    expect(sweep).toContain("原句和这几条对不上的也不归这次管");
+    expect(reviewTask("孟叔是杜长顺的表弟", [], ["杜长顺十年前去世"])).toContain("理由说的不是新定论这件事");
 
     const replacing = fakeModel({ namesReply: JSON.stringify({ names: ["杜叔"], replaces: 1 }) });
     const again = await proposeSettle({ projectDir: dir, request: { kind: "statement", text: "杜长顺是八年前去世的" }, callModel: replacing });
