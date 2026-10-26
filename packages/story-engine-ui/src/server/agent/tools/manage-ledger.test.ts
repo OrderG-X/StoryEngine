@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyLedgerDecisions } from "../ledger-decisions.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
-import { runManageLedger } from "./manage-ledger.js";
+import { confirmLabel, runManageLedger } from "./manage-ledger.js";
 
 let book: string;
 beforeEach(async () => {
@@ -77,6 +77,9 @@ describe("manage_ledger：只提草案", () => {
     const group = await runManageLedger(book, { op: "group", groups: ["钟为什么停", "钟楼的门为什么开着"] });
     expect(group.ledgerConfirm?.decisions).toEqual([{ type: "thread.merge", from: ["t1-2"], into: "t1-1" }]);
     expect(group.summary).toContain("把 「钟楼的门为什么开着」并进「钟为什么停」");
+    expect(group.ledgerConfirm?.label).toBe(group.ledgerConfirm?.lines[0]);
+    expect(confirmLabel(["把「甲」并进「乙」", "把「丙」并进「丁」"])).toBe("把「甲」并进「乙」 等 2 条");
+    expect(confirmLabel([])).toBe("改账");
 
     for (const out of [add, addHard, update, supersede, resolve, weight, group]) expect(out.summary).not.toMatch(/c\d+-|t\d+-|d-\d/u);
     expect(JSON.stringify(await projectBook(book))).toBe(before);

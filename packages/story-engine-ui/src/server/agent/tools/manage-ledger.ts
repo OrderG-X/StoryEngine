@@ -91,8 +91,14 @@ export async function runManageLedger(projectDir: string, input: z.infer<typeof 
     needsConfirmation: true,
     blockedReason: "awaiting_user_confirmation",
     summary: `要改的账：${lines.join("；")}。还没改——请点「确认改账」按钮（改前自动存档，可撤销）。`,
-    ledgerConfirm: { key: plan.key, label: lines[0] ?? "改账", decisions: [...plan.decisions], lines: [...lines] },
+    ledgerConfirm: { key: plan.key, label: confirmLabel(lines), decisions: [...plan.decisions], lines: [...lines] },
   };
+}
+
+/** 按钮点了之后对话里回显的那句：一次改好几条只念第一条，看着像只改了一条（作者长篇实跑：归并两组只回显了一组）。 */
+export function confirmLabel(lines: readonly string[]): string {
+  if (lines.length === 0) return "改账";
+  return lines.length > 1 ? `${lines[0]} 等 ${lines.length} 条` : lines[0]!;
 }
 
 export const manageLedgerTool = createTool({
