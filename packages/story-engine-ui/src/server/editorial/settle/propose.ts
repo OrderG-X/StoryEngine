@@ -91,6 +91,8 @@ export interface SettleProposal {
   readonly canonExists: boolean;
   /** 只是某一场里的事（那一夜的风、谁一时站在哪）：只改句子，不记进设定本「定论」。 */
   readonly sceneOnly?: boolean;
+  /** 改的是设定本里已有的那条定论（新的取代旧的）：确认时换掉它，不另加一条。 */
+  readonly replaces?: { readonly id: string; readonly text: string };
   readonly chapter?: number;
   readonly edits: readonly SettleEdit[];
   readonly facts: readonly SettleFactChange[];
@@ -182,11 +184,17 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
   ].join("\n");
 }
 
-export function namesTask(canon: string): string {
+export function namesTask(canon: string, existing: readonly string[] = []): string {
   return [
     `作者写下了一条定论（这本书以后都以它为准）：「${canon}」`,
-    "列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
-    '只输出一个 JSON：{"names":[]}',
+    "- names：列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
+    ...(existing.length > 0
+      ? [
+        "- replaces：设定本里已经记着下面几条定论。这条新的是不是在改其中一条（说的是同一件事，新的说法取代旧的）？是就填那条的编号，不是填 0。",
+        ...existing.map((text, index) => `[${index + 1}] ${text}`),
+        '只输出一个 JSON：{"names":[],"replaces":0}',
+      ]
+      : ['只输出一个 JSON：{"names":[]}']),
   ].join("\n");
 }
 
@@ -457,14 +465,15 @@ function fieldRefs(cards: SettingCardsFile, terms: readonly string[]): FieldRef[
   return refs;
 }
 
-async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[]; keep: boolean }> {
+async function askNames(callModel: BrainCallModel, prompt: string): Promise<{ canon?: string; names: string[]; keep: boolean; replaces?: number }> {
   const parsed = parseJsonObject(await callModel([{ role: "user", content: prompt }], { json: true }));
   if (!parsed) throw new Error("模型回的不是要的格式");
   const names = Array.isArray(parsed.names) ? parsed.names.map(str).filter(Boolean) : [];
   const canon = str(parsed.canon);
   // 只认明说的 false（布尔或字串）；没给、给别的都照记定论（老行为）。
   const keep = !(parsed.keep === false || (typeof parsed.keep === "string" && parsed.keep.trim().toLowerCase() === "false"));
-  return { ...(canon ? { canon } : {}), names, keep };
+  const replaces = Number(parsed.replaces);
+  return { ...(canon ? { canon } : {}), names, keep, ...(Number.isInteger(replaces) && replaces > 0 ? { replaces } : {}) };
 }
 
 export async function proposeSettle(input: {
@@ -511,10 +520,12 @@ export async function proposeSettle(input: {
   let canon: string;
   let names: string[] = [];
   let sceneOnly = false;
+  let replaces: SettleProposal["replaces"];
   // 按已记下的定论查（核账卡「以定论为准」带的是核账员摘的那半句）：用设定本里那一整条，别再记一条半截的。
-  const statementText = request.kind === "statement"
-    ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))?.text ?? request.text.trim()
-    : "";
+  const recorded = request.kind === "statement"
+    ? cards.canon.find((item) => quoteInText(request.text, item.text) || quoteInText(item.text, request.text))
+    : undefined;
+  const statementText = request.kind === "statement" ? recorded?.text ?? request.text.trim() : "";
   try {
     if (request.kind === "pick") {
       const asked = await askNames(callModel, canonTask(request, docs, cards));
@@ -524,7 +535,13 @@ export async function proposeSettle(input: {
       sceneOnly = !asked.keep;
     } else {
       canon = statementText;
-      names = (await askNames(callModel, namesTask(canon))).names;
+      // 新写的一条：问一句是不是在改设定本里已有的哪条（作者长篇实跑 2026-10-26：「那条定论过时了，改成…」
+      // 记成了第二条，旧的还在，核账照旧拿旧的报）。
+      const existing = recorded ? [] : cards.canon;
+      const asked = await askNames(callModel, namesTask(canon, existing.map((item) => item.text)));
+      names = asked.names;
+      const old = asked.replaces === undefined ? undefined : existing[asked.replaces - 1];
+      if (old) replaces = { id: old.id, text: old.text };
     }
   } catch (error) {
     if (request.kind === "pick") return { ok: false, message: `这次没写出定论（${error instanceof Error ? error.message : String(error)}），重新点一次试试。` };
@@ -665,6 +682,7 @@ export async function proposeSettle(input: {
       canon,
       canonExists: cards.canon.some((item) => nameKey(item.text) === nameKey(canon)),
       ...(sceneOnly ? { sceneOnly } : {}),
+      ...(replaces ? { replaces } : {}),
       ...(focusChapter !== undefined ? { chapter: focusChapter } : {}),
       edits,
       facts: facts.sort((a, b) => a.chapter - b.chapter),

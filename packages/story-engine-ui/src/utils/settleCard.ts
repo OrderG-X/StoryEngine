@@ -52,12 +52,14 @@ export function readSettleData(value: unknown): SettleCardData | undefined {
   });
   const failures = list(value.failures, 40).map(text).filter(Boolean);
   const resolves = typeof value.resolves === "string" && value.resolves.length <= 4000 ? value.resolves : "";
+  const replaces = text(value.replaces);
   const chapter = chapterOf(value.chapter);
   return {
     token,
     canon,
     canonExists: value.canonExists === true,
     ...(value.sceneOnly === true ? { sceneOnly: true } : {}),
+    ...(replaces ? { replaces } : {}),
     ...(chapter ? { chapter } : {}),
     edits,
     facts,

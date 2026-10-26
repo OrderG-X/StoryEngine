@@ -76,6 +76,7 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
       <p className="stc-canon serif">{data.canon}</p>
       {data.canonExists ? <p className="drc-summary">设定本里已经记着这条。</p> : null}
       {data.sceneOnly ? <p className="drc-summary">只是那一场的事，改句子，不记进设定本。</p> : null}
+      {data.replaces && recordsCanon ? <p className="drc-summary">换掉设定本里原来那条：{data.replaces}</p> : null}
       {groupByChapter(data.edits).map((group) => (
         <section key={`${group.chapter}:${group.draft}`} className="stc-group">
           <h4>第 {group.chapter} 章{group.draft ? "（工作稿）" : ""}</h4>
@@ -120,14 +121,14 @@ export function SettleCard({ messageId, data, excluded = [], applied, busy, onAc
       ) : null}
       {canConfirm ? (
         <div className="cpc-actions">
-          <span className="cpc-counts">{changes > 0 ? `改 ${changes} 处，改前存档、能撤销` : "记进设定本「定论」"}</span>
+          <span className="cpc-counts">{changes > 0 ? `改 ${changes} 处，改前存档、能撤销` : data.replaces ? "换掉设定本里原来那条定论" : "记进设定本「定论」"}</span>
           <button
             type="button"
             className="cpc-confirm"
             disabled={busy}
             onClick={() => onAction!({ toolName: "settle_apply", token: data.token, excluded: [...skip] })}
           >
-            {changes > 0 ? "确认" : "记下定论"}
+            {changes > 0 ? "确认" : data.replaces ? "换掉旧的" : "记下定论"}
           </button>
         </div>
       ) : null}

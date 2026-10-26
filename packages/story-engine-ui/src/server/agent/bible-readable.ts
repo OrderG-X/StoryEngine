@@ -75,6 +75,8 @@ export function bibleOverviewText(bible: BibleView): string[] {
     ...storyText(bible),
     "写作规则：",
     ...rulesText(bible.rules),
+    // 定论对话 AI 也得看得见：作者问「定论有哪些」、要改哪一条时才说得上来。
+    ...(bible.canon.length > 0 ? [`定论（${bible.canon.length}，作者定下的，全书以它为准）：`, ...bible.canon.map((item) => `- ${item.text}`)] : []),
     `人物卡（${bible.characters.length}）：${names(bible.characters)}`,
     `地点卡（${bible.places.length}）：${names(bible.places)}`,
     `物品卡（${bible.items.length}）：${names(bible.items)}`,

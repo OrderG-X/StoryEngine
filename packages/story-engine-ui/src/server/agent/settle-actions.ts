@@ -79,6 +79,8 @@ export interface SettleCardOutput {
   readonly canonExists: boolean;
   /** 只是某一场里的事：只改句子，不记进设定本。 */
   readonly sceneOnly?: boolean;
+  /** 换掉设定本里原来那条定论（原文）。 */
+  readonly replaces?: string;
   readonly chapter?: number;
   readonly edits: readonly { readonly key: string; readonly chapter: number; readonly draft: boolean; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly facts: readonly { readonly chapter: number; readonly before: string; readonly after?: string }[];
@@ -96,6 +98,7 @@ export function settleCardOf(stored: StoredSettleProposal): SettleCardOutput {
     canon: stored.canon,
     canonExists: stored.canonExists,
     ...(stored.sceneOnly ? { sceneOnly: true } : {}),
+    ...(stored.replaces ? { replaces: stored.replaces.text } : {}),
     ...(stored.chapter !== undefined ? { chapter: stored.chapter } : {}),
     edits: stored.edits.map((edit) => ({ key: edit.key, chapter: edit.chapter, draft: edit.target === "draft", from: edit.from, to: edit.to, ...(edit.why ? { why: edit.why } : {}) })),
     facts: stored.facts.map((fact) => ({ chapter: fact.chapter, before: fact.before, ...(fact.after ? { after: fact.after } : {}) })),
@@ -116,7 +119,8 @@ export function settlePreviewSummary(card: SettleCardOutput): string {
   const body = parts
     ? `查完了：${parts}要改。点「确认」一起改齐，改前存档、能撤销。`
     : card.sceneOnly ? "查完了：没有要改的。"
-    : card.canonExists ? "查完了：没有要改的，设定本里也记着这条。" : "查完了：没有要改的。点「记下定论」记进设定本。";
+    : card.canonExists ? "查完了：没有要改的，设定本里也记着这条。"
+    : card.replaces ? "查完了：没有要改的。点「换掉旧的」把设定本里原来那条换成这条。" : "查完了：没有要改的。点「记下定论」记进设定本。";
   const missed = card.missed.length > 0 ? `核账报的${card.missed.map((item) => `第 ${item.chapter} 章「${item.quote}」`).join("、")}这次没查出改法，可以重新查一遍。` : "";
   const failed = card.failures.length > 0 ? `没查全：${card.failures.join("；")}。` : "";
   return [body, missed, failed].filter(Boolean).join("");

@@ -36,6 +36,16 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("定论卡", () => {
+  it("换掉设定本里原来那条：卡上写出旧的，没句子要改时按钮是「换掉旧的」", () => {
+    const onAction = vi.fn();
+    const replacing: SettleCardData = { ...data, canon: "杜长顺八年前去世", replaces: "杜长顺十年前去世", edits: [], facts: [] };
+    useChatStore.getState().setMessages([{ id: "m1", role: "assistant", content: "", createdAt: 0, cards: [{ type: "settle", settle: replacing }] } as unknown as ChapterMessage]);
+    render(<Live onAction={onAction} />);
+    expect(screen.getByText("换掉设定本里原来那条：杜长顺十年前去世")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "换掉旧的" }));
+    expect(onAction).toHaveBeenCalledWith({ toolName: "settle_apply", token: data.token, excluded: [] });
+  });
+
   it("按章列原句 → 新句；划掉一句，确认带上划掉的；工作稿那章标出来", async () => {
     const onAction = vi.fn();
     render(<Live onAction={onAction} />);

@@ -64,7 +64,11 @@ export async function settleApplyArgs(projectDir: string, proposal: SettlePropos
   const edits = proposal.edits.filter((edit) => !excluded.has(edit.key));
   const fields = proposal.fields.filter((edit) => !excluded.has(edit.key));
   const cardOps: CardOp[] = [
-    ...(proposal.canonExists || proposal.sceneOnly ? [] : [{ op: "canon.add" as const, text: proposal.canon }]),
+    ...(proposal.canonExists || proposal.sceneOnly
+      ? []
+      : [proposal.replaces
+        ? { op: "canon.set" as const, canon: proposal.replaces.id, text: proposal.canon }
+        : { op: "canon.add" as const, text: proposal.canon }]),
     ...fields.map((edit): CardOp => (edit.card ? { op: "field.set", card: edit.card, label: edit.label, value: edit.to } : { op: "story.set", label: edit.label, value: edit.to })),
   ];
   const chapters: SettleApplyArgs["chapters"][number][] = [];
