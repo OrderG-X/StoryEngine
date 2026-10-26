@@ -139,6 +139,9 @@ describe("定论预览", () => {
     expect(model.prompts.find((prompt) => prompt.includes("写成一条「定论」"))).toContain("别写一时的拿法、姿势");
     expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("原句只是那一场里一时的拿法、放法");
     expect(canonTask(pick, new Map())).toContain("写那件东西本身");
+    // 作者长篇实跑（2026-10-26）：定论「第 24 章起：三匹拉车…」，扫出第 23 章的「四匹」要改。
+    expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("那之前的章里写成别的样子不算");
+    expect(reviewTask("甲", [])).toContain("原句在那之前（那时候还没变）：不算");
     expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, target: "committed", id: 1, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
   });
 
