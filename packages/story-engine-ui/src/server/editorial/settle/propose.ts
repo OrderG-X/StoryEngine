@@ -258,7 +258,7 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
       ? [
         "账里这几条事实引用了改掉的句子：",
         ...facts.map(factLine),
-        "这几条每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote）、drop（改后这条不成立了）。",
+        "这几条每条回一个 action：keep（改后的句子还是这么说，给新原句 quote）、update（改后说法变了：给新的 value（事件不用）、新的说明 text、新原句 quote；text 照原来那条的口气直接写现在是什么样，别写「改后」「而非」「原来是」这类改动经过）、drop（改后这条不成立了）。",
       ]
       : []),
     ...(loose.length > 0
