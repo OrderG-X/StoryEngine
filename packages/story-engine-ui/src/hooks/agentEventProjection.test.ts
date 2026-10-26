@@ -414,6 +414,18 @@ describe("projectAgentEvent", () => {
     expect(ok.toolSteps![0].detail).toBeUndefined();
   });
 
+  it("generate_draft 一次写几版：落选的几版挂成「另外几版」卡；没写成不挂", () => {
+    const versions = { chapter: 38, versions: [{ index: 1, body: "另一版正文。" }] };
+    let msg = emptyAssistantMessage("versions");
+    msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "g1", toolName: "generate_draft", startedAt: 1 });
+    msg = projectAgentEvent(msg, { type: "tool-result", toolCallId: "g1", toolName: "generate_draft", endedAt: 2, output: { ok: true, chapter: 38, draftVersions: versions } });
+    expect(cardOf(msg, "draft-versions")?.versions).toEqual(versions);
+    let failed = emptyAssistantMessage("versions-failed");
+    failed = projectAgentEvent(failed, { type: "tool-call", toolCallId: "g2", toolName: "generate_draft", startedAt: 1 });
+    failed = projectAgentEvent(failed, { type: "tool-result", toolCallId: "g2", toolName: "generate_draft", endedAt: 2, output: { ok: false, draftVersions: versions } });
+    expect(cardOf(failed, "draft-versions")).toBeUndefined();
+  });
+
   it("check_continuity ok:true 且 0 处 → 消息挂 continuityCheck（照旧出「没发现对不上」卡）、步骤 completed（R4.1）", () => {
     let msg = emptyAssistantMessage("check-ok");
     msg = projectAgentEvent(msg, { type: "tool-call", toolCallId: "c1", toolName: "check_continuity", startedAt: 1 });

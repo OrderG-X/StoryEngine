@@ -1452,6 +1452,8 @@ describe("generate_draft 多候选采样集成（mock writer 返回不同质量�
     expect(out.candidatesReport?.[1]).toMatchObject({ index: 2, chosen: true, score: 100 });
     expect(out.candidatesReport?.[2]).toMatchObject({ index: 3, chosen: false, score: 75 });
     expect(out.candidatesReport?.[2].reason).toContain("低于字数下限");
+    // 落选的几版全文留给界面（「另外几版」卡），作者能换；不落盘
+    expect(out.otherVersions).toEqual([{ index: 1, body: flavored }, { index: 3, body: short }]);
     // summary 一行：选了第 2 个 + 核实过的优点
     expect(out.summary).toContain("已生成 3 个候选并选出第 2 个（要点全中、字数达标、无 AI 腔命中），其余落选原因见 candidatesReport。");
     // 优胜稿干净 → 不带 AI 腔 ⚠ 噪音

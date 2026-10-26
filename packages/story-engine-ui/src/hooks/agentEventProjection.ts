@@ -21,7 +21,7 @@
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
 import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
-import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, DraftVersionsCardData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
 const VERDICT_TOOL_NAMES: ReadonlySet<string> = new Set<string>(["commit_preview"]);
@@ -78,6 +78,8 @@ export interface AgentToolResultOutput {
   /** check_continuity 专属：核账结果（agentChatClient 透传）。投影时挂到该消息→渲染「核账」卡。 */
   readonly continuityCheck?: ContinuityCheckData;
   readonly brainstorm?: BrainstormCardData;
+  /** generate_draft 专属：落选的几版全文（「另外几版」卡）。 */
+  readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** check_continuity 专属：还在读前文的结构化进度（agentChatClient 透传，只在 ok:false 且原因=还在读时有）。
@@ -359,6 +361,10 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // 头脑风暴：几种走法随这条消息走（对话里一张小卡，稿纸上方给作者挑）。
       if (event.toolName === "brainstorm_chapter" && event.output?.brainstorm && event.output?.ok !== false) {
         return withCard(withEffects, { type: "directions", brainstorm: event.output.brainstorm });
+      }
+      // 「另外几版」：一次写几版时落选的几版随这条消息走，作者点开挑一版换进工作稿。
+      if (event.toolName === "generate_draft" && event.output?.draftVersions && event.output?.ok !== false) {
+        return withCard(withEffects, { type: "draft-versions", versions: event.output.draftVersions });
       }
       // 定论卡（P12）：定论 + 前文要改的几句，作者划掉不改的、点「确认」一次改齐。
       if ((event.toolName === "settle_preview" || event.toolName === "settle_fact") && event.output?.settle && event.output?.ok !== false) {

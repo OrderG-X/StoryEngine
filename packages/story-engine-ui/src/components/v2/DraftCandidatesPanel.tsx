@@ -4,6 +4,7 @@ import { countTextWords } from "../../utils/textUtils.js";
 /**
  * 抽卡候选并排面板（阶段三块③）：「再来一版」生成的 2–3 个临时候选并排展示，点「用这版」替换当前工作稿。
  * 纯展示组件——生成/挑中/关闭由 useWorkflowActions + store 负责。候选临时、未落盘，关闭即丢弃、不影响当前工作稿。
+ * 对话「另外几版」卡打开的（候选带 version）：AI 出稿时一起写的几版，卡还在对话里，关了还能再点开。
  */
 export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose }: {
   readonly candidates: readonly DraftCandidate[];
@@ -11,11 +12,12 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
   readonly onPick: (content: string) => void;
   readonly onClose: () => void;
 }) {
+  const versions = candidates.length > 0 && candidates.every((candidate) => candidate.version !== undefined);
   return (
-    <div className="se-v2-candidates-overlay" role="dialog" aria-label="再来一版候选" aria-modal="true">
+    <div className="se-v2-candidates-overlay" role="dialog" aria-label={versions ? "另外几版" : "再来一版候选"} aria-modal="true">
       <div className="se-v2-candidates-panel">
         <header className="se-v2-candidates-header">
-          <strong>再来一版 · 选一个替换当前工作稿</strong>
+          <strong>{versions ? "另外几版" : "再来一版"} · 选一个替换当前工作稿</strong>
           <button className="se-v2-btn se-v2-btn-ghost" onClick={onClose} type="button">关闭</button>
         </header>
         <div className="se-v2-candidates-grid">
@@ -24,7 +26,7 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
             return (
               <article className="se-v2-candidate-card" key={index}>
                 <div className="se-v2-candidate-meta">
-                  <span>候选 {index + 1}</span>
+                  <span>{candidate.version !== undefined ? `第 ${candidate.version} 版` : `候选 ${index + 1}`}</span>
                   {/* T14 统一口径：候选字数与稿纸顶栏同函数（正文中文字符，不含标题）。 */}
                   <span>{countTextWords(candidate.content).toLocaleString()} 字</span>
                 </div>
@@ -41,7 +43,7 @@ export default function DraftCandidatesPanel({ candidates, busy, onPick, onClose
             );
           })}
         </div>
-        <p className="se-v2-candidates-foot">候选还没存，关掉就没了；选用前自动存档，可在「历史」里撤销。</p>
+        <p className="se-v2-candidates-foot">{versions ? "选用前自动存档，可在「历史」里撤销。" : "候选还没存，关掉就没了；选用前自动存档，可在「历史」里撤销。"}</p>
       </div>
     </div>
   );

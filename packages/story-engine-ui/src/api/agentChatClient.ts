@@ -15,8 +15,9 @@
 import { mergeSignals } from "./fetchJson.js";
 import type { StateOverview, DraftReviewView, QualityCardReport } from "./types.js";
 import type { AiFlavorReport } from "../types.js";
-import type { BrainstormCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
+import type { BrainstormCardData, DraftVersionsCardData, SettingRefData, SettleCardData } from "../type-defs/workspace.js";
 import { readBrainstormData } from "../utils/brainstormCard.js";
+import { readDraftVersions } from "../utils/draftVersions.js";
 import { readSettleData } from "../utils/settleCard.js";
 import type { AiErrorReason } from "../server/lib/ai-errors.js";
 import type { ChatHistoryMessage } from "../server/lib/project-io.js";
@@ -208,6 +209,8 @@ export interface AgentToolResult {
   readonly checkedVersion?: string;
   /** brainstorm_chapter 专属：几种走法（重构 P6 头脑风暴）。 */
   readonly brainstorm?: BrainstormCardData;
+  /** generate_draft 专属：一次写几版时落选的几版全文（「另外几版」卡）。 */
+  readonly draftVersions?: DraftVersionsCardData;
   /** settle_preview / settle_fact 专属：定论卡（P12）。 */
   readonly settle?: SettleCardData;
   /** settle_apply 专属：改齐了哪张定论卡（票号），前端把那张卡标成改齐了。 */
@@ -484,6 +487,10 @@ export async function streamAgentChat(
             // brainstorm_chapter 专属：几种走法 → 透传，前端渲染走法卡、稿纸上方给作者挑。没想出来（ok:false）不建卡。
             ...(parsed.toolName === "brainstorm_chapter" && output.ok !== false && readBrainstormData(output)
               ? { brainstorm: readBrainstormData(output)! }
+              : {}),
+            // generate_draft 专属：一次写几版时落选的几版全文 → 「另外几版」卡，作者挑一版换进工作稿。没写成不建卡。
+            ...(parsed.toolName === "generate_draft" && output.ok !== false && readDraftVersions(output)
+              ? { draftVersions: readDraftVersions(output)! }
               : {}),
             // 定论卡（P12）：按钮出的预览和对话 AI 调 settle_fact 出的是同一张。没查成（ok:false）不建卡。
             ...((parsed.toolName === "settle_preview" || parsed.toolName === "settle_fact") && output.ok !== false && readSettleData(output.settle)

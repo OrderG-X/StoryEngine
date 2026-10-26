@@ -281,6 +281,9 @@ const outputSchema = z.object({
   })).optional().describe(
     "多候选采样（candidates>1）的逐候选透明报告：开头预览、得分、AI 腔计数、字数、是否中选、原因全列出，失败候选也在内。candidates=1（默认）无此字段。",
   ),
+  otherVersions: z.array(z.object({ index: z.number().int().positive(), body: z.string() })).optional().describe(
+    "落选的几版全文（只给界面，对话里出「另外几版」卡，作者点「用这版」换进工作稿）。",
+  ),
   beatFidelity: z.object({
     missingBeats: z.array(z.string()).describe("确定性核对判漏、且（跑了复核时）AI 复核后仍可能漏写/被改写的必命中要点原文。"),
     adjudicatedCovered: z.array(z.object({

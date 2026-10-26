@@ -16,6 +16,7 @@ import type {
 import type { DraftReviewView, QualityCardReport } from "../../api/types.js";
 import { parseNextStepUserAction, readAiErrorReason, readSettingRef, type AgentUserAction } from "../../api/agentChatClient.js";
 import { readBrainstormData, readPicked } from "../../utils/brainstormCard.js";
+import { readDraftVersions } from "../../utils/draftVersions.js";
 import { readSettleData, readSettleExcluded } from "../../utils/settleCard.js";
 import { isRecord, readNonNegativeInteger, readPositiveInteger, readString, readStringAllowEmpty, readStringList } from "./value-readers.js";
 
@@ -89,6 +90,10 @@ function readMessageCard(value: unknown): MessageCard | undefined {
       if (!brainstorm) return undefined;
       const picked = readPicked(value.picked, brainstorm);
       return { type, brainstorm, ...(picked !== undefined ? { picked } : {}) };
+    }
+    case "draft-versions": {
+      const versions = readDraftVersions(value.versions);
+      return versions ? { type, versions } : undefined;
     }
     case "settle": {
       const settle = readSettleData(value.settle);

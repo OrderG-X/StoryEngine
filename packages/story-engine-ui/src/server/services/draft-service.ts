@@ -723,6 +723,14 @@ interface DraftCandidateSampling {
   readonly effectiveReport?: FastDraftReport;
   /** 优胜候选的判漏 AI 复核结果（该候选无判漏/未注入裁决模型=undefined）；调用方据此构建裁决后的 beatFidelity 输出。 */
   readonly chosenBeatAdjudication?: BeatMissAdjudication;
+  /** 落选、但通过了的几版全文（index 1 起）：作者要「几版我挑」，落选的得让作者看得到、换得了。 */
+  readonly otherVersions?: readonly DraftOtherVersion[];
+}
+
+/** 落选的一版（全文，未落盘）：对话里出「另外几版」卡，作者点「用这版」才换进工作稿。 */
+export interface DraftOtherVersion {
+  readonly index: number;
+  readonly body: string;
 }
 
 /**
@@ -788,6 +796,9 @@ async function sampleDraftCandidates(input: {
     // 防御：eligible 必有正文（scoreInputFromCandidateReport 保证），走到这是内部不一致——如实按全失败报，不假装出稿。
     return { entries, scoreInputs, allFailed: true, effectiveReport: winnerReport };
   }
+  // 长篇实跑第 38 章：作者说「出两版我挑」，落选那版只有开头一百字，AI 还说「想换就说」——其实换不了。
+  const otherVersions = reports.flatMap((report, index) =>
+    index !== ranked.chosenIndex && scoreInputs[index]?.eligible && report?.draftBody?.trim() ? [{ index: index + 1, body: report.draftBody.trim() }] : []);
   return {
     entries,
     scoreInputs,
@@ -795,6 +806,7 @@ async function sampleDraftCandidates(input: {
     allFailed: false,
     effectiveReport: winnerReport,
     ...(chosenBeatAdjudication ? { chosenBeatAdjudication } : {}),
+    ...(otherVersions.length > 0 ? { otherVersions } : {}),
   };
 }
 
@@ -916,6 +928,8 @@ export interface GenerateDraftOutcome {
   readonly aiFlavor?: GenerateDraftAiFlavorInfo;
   readonly autoDeAi?: GenerateDraftAutoDeAiInfo;
   readonly candidatesReport?: readonly DraftCandidateReportEntry[];
+  /** 落选的几版全文（只给界面）。 */
+  readonly otherVersions?: readonly DraftOtherVersion[];
   readonly beatFidelity?: GenerateDraftBeatFidelityInfo;
   /** 本章章纲（拟成/沿用时）：要点、新信息、开场——agent 据此向作者一句话交代这章写了什么。 */
   readonly chapterPlan?: GenerateDraftPlanInfo;
@@ -1495,6 +1509,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     ...(aiFlavorInfo ? { aiFlavor: aiFlavorInfo } : {}),
     ...(autoDeAiInfo ? { autoDeAi: autoDeAiInfo } : {}),
     ...(sampling ? { candidatesReport: sampling.entries } : {}),
+    ...(sampling?.otherVersions ? { otherVersions: sampling.otherVersions } : {}),
     ...(beatFidelityInfo ? { beatFidelity: beatFidelityInfo } : {}),
     // 撤销点：内部第二次落盘（去味/补写）真建了自己的快照就用最近的；否则用适配层的「写盘前」存档点
     // （R4.2 后内部不再另建，通常就是它）；都没有（旧调用方不传）则由工具 execute 自行挂。

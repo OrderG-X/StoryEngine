@@ -373,6 +373,30 @@ describe("streamAgentChat", () => {
     expect(received?.commitReport).toBeUndefined();
   });
 
+  it("generate_draft 的 otherVersions（落选几版全文）→ draftVersions，「另外几版」卡用；别的工具不认", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", { toolCallId: "g1", toolName: "generate_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
+        frame("tool-result", { toolCallId: "r1", toolName: "revise_draft", output: { ok: true, chapter: 38, otherVersions: [{ index: 1, body: "另一版。" }] } }),
+        frame("done", {}),
+      ]),
+    ));
+    const received: { draftVersions?: unknown }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写两版" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => { received.push(info); },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+    expect(received[0]?.draftVersions).toEqual({ chapter: 38, versions: [{ index: 1, body: "另一版。" }] });
+    expect(received[1]?.draftVersions).toBeUndefined();
+  });
+
   it("translates quality_check output.refined (真实字段名) → qualityReport for the 质检明细卡", async () => {
     // quality_check 真实输出分层报告字段名是 refined（quality-check.ts）。测翻译层：原始帧给 refined，断言收到 qualityReport。
     vi.stubGlobal("fetch", vi.fn(async () =>
