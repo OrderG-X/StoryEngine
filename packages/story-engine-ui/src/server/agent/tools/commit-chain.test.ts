@@ -15,7 +15,7 @@ import { MIRROR_BACKUP_DIR } from "../../book/mirror/sync.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { listSnapshots, restoreSnapshot } from "../../lib/snapshot.js";
 import { buildProjectRequestContext, markUserConfirmedTool } from "../request-context.js";
-import { commitApplyTool } from "./commit-apply.js";
+import { commitApplyTool, openThreadsHintDue } from "./commit-apply.js";
 import { buildCommitPreviewToolOutput, commitPreviewTool, OPT_IN_PREFIX } from "./commit-preview.js";
 
 const warmUpReadersMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -302,5 +302,18 @@ describe("commit_apply", () => {
     for (const [file, content] of mirrored) {
       expect(await readFile(join(book, MIRROR_BACKUP_DIR, file), "utf-8")).toBe(content);
     }
+  });
+});
+
+describe("openThreadsHintDue：开着的线索跨过一档才提「归并线索」", () => {
+  it("到 20 提一次；停在 20 多不再念；到 25、30 再提；变少不提", () => {
+    expect(openThreadsHintDue(19, 20)).toBe(true);
+    expect(openThreadsHintDue(18, 22)).toBe(true);
+    expect(openThreadsHintDue(20, 20)).toBe(false);
+    expect(openThreadsHintDue(20, 21)).toBe(false);
+    expect(openThreadsHintDue(24, 25)).toBe(true);
+    expect(openThreadsHintDue(29, 31)).toBe(true);
+    expect(openThreadsHintDue(26, 24)).toBe(false);
+    expect(openThreadsHintDue(10, 15)).toBe(false);
   });
 });
