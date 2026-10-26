@@ -106,6 +106,20 @@ describe("设定本：作者直接改（一次改动一步，可撤销）", () =
     await waitFor(() => expect(lastOps()).toEqual([{ op: "story.set", label: "一句话", value: "" }]));
   });
 
+  it("存成了的提示：整句引文收尾不再补句号；几秒后自己收起（没存成的留着）", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      saveCards.mockResolvedValue({ ok: true, lines: ["记下定论「长风镖局一共有三匹老马。」"] });
+      renderBook("story");
+      fireEvent.click(screen.getByRole("button", { name: "删掉「题材」" }));
+      expect(await screen.findByRole("status")).toHaveProperty("textContent", "记下定论「长风镖局一共有三匹老马。」可在操作历史里撤销。");
+      await vi.advanceTimersByTimeAsync(6000);
+      await waitFor(() => expect(screen.queryByText("记下定论「长风镖局一共有三匹老马。」可在操作历史里撤销。")).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("没改成：如实说原因，不重读、不刷新", async () => {
     saveCards.mockResolvedValue({ ok: false, error: "没改设定：AI 正在改这本书，等它做完再试。" });
     const { reload, onChanged } = renderBook("story");

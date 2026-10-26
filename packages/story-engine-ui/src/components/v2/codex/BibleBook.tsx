@@ -61,10 +61,18 @@ export interface BibleBookProps {
   readonly onAction?: (action: AgentUserAction) => void;
 }
 
+const NOTICE_MS = 5000;
+
 export function BibleBook(props: BibleBookProps) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ readonly ok: boolean; readonly text: string } | null>(null);
   useEffect(() => setNotice(null), [props.cat]);
+  // 存成了的提示几秒后自己收起（没存成的留着，等作者看清原因、点 ×）。
+  useEffect(() => {
+    if (!notice?.ok) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const save = async (ops: readonly CardOp[], after?: () => void): Promise<boolean> => {
     if (ops.length === 0 || saving) return false;
@@ -75,7 +83,10 @@ export function BibleBook(props: BibleBookProps) {
       setNotice({ ok: false, text: result.error });
       return false;
     }
-    setNotice(result.lines.length > 0 ? { ok: true, text: `${result.lines.join("；")}。可在操作历史里撤销。` } : { ok: true, text: "没有变化。" });
+    const said = result.lines.join("；");
+    // 末一条以整句引文收尾（「……。」）就不再补句号，免得「。」。」。
+    const stop = ["。」", "！」", "？」"].some((end) => said.endsWith(end)) ? "" : "。";
+    setNotice(result.lines.length > 0 ? { ok: true, text: `${said}${stop}可在操作历史里撤销。` } : { ok: true, text: "没有变化。" });
     const reloaded = props.reload();
     props.onChanged?.();
     // 重读回来再收起编辑框：先收起会闪一下改前的字。
@@ -98,9 +109,12 @@ export function BibleBook(props: BibleBookProps) {
     <section className="se-bk" aria-label="设定本">
       {props.busy ? <p className="se-bk-note">AI 正在忙，等它做完再改。</p> : null}
       {notice ? (
-        <div className={`se-bk-notice${notice.ok ? "" : " is-error"}`}>
-          <p role="status">{notice.text}</p>
-          <button type="button" className="se-bk-notice-x" aria-label="关掉提示" onClick={() => setNotice(null)} />
+        // 浮在页顶、不占地方：占地方的话一出来下面整页往下挪，作者接着点就点歪了。
+        <div className="se-bk-notice-pin">
+          <div className={`se-bk-notice${notice.ok ? "" : " is-error"}`}>
+            <p role="status">{notice.text}</p>
+            <button type="button" className="se-bk-notice-x" aria-label="关掉提示" onClick={() => setNotice(null)} />
+          </div>
         </div>
       ) : null}
       {props.cat === "story" ? <StoryPage ctx={ctx} /> : null}
