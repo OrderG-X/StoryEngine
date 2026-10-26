@@ -200,6 +200,24 @@ describe("投影", () => {
     expect(result.chapters[2]?.weekdayDerived).toBe(true);
   });
 
+  // 长篇实跑：第 24 章定稿后才发现天数记错（该是第 21～22 天），定稿后没处改。
+  it("作者裁定改一章的天数：顶掉账单记的，后面的章接着它往后推", () => {
+    const ledgers = [
+      ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
+      ledger(2, [{ kind: "time", basis: "judged", quote: "当晚", daysSincePrevious: 0 }]),
+      ledger(3, [{ kind: "time", basis: "judged", quote: "次日", daysSincePrevious: 1 }]),
+    ];
+    const result = project({
+      ledgers,
+      decisions: [decision({ type: "chapter.day", chapter: 2, day: 4 }), decision({ type: "chapter.day", chapter: 2, day: 5, dayEnd: 6 }, 2)],
+    });
+    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([
+      [1, 1, "text"],
+      [5, 6, "author"],
+      [7, 7, "judged"],
+    ]);
+  });
+
   it("定稿后改过正文：和账单记的 sha256 对不上就标出来", () => {
     const result = project({
       ledgers: [ledger(1, []), ledger(2, [])],

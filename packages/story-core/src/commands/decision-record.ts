@@ -21,6 +21,7 @@ const LABELS: Record<DecisionInput["type"], string> = {
   "fact.retract": "裁定：事实记错了",
   "fact.expire": "裁定：事实不再成立",
   "fact.assert": "裁定：补记事实",
+  "chapter.day": "裁定：改这一章的天数",
 };
 
 export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResult> = {
@@ -44,6 +45,9 @@ export const decisionRecord: WriteCommandSpec<DecisionInput, DecisionRecordResul
     }
     if ((args.type === "fact.retract" || args.type === "fact.expire") && !current.facts.some((fact) => fact.id === args.fact)) {
       return fail("unknown_fact", "这条事实已经不在了。");
+    }
+    if (args.type === "chapter.day" && !current.chapters.some((chapter) => chapter.chapter === args.chapter)) {
+      return fail("unknown_chapter", `第 ${args.chapter} 章还没定稿，天数没法改。`);
     }
     if (args.type === "fact.assert") {
       if (!current.chapters.some((chapter) => chapter.chapter === args.chapter)) {

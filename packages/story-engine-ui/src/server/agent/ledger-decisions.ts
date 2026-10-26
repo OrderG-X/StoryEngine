@@ -28,7 +28,7 @@ import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
 export interface LedgerChangeRequest {
-  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "clean" | "group" | "importance";
+  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "clean" | "group" | "importance" | "day";
   readonly id?: string;
   readonly chapter?: number;
   readonly text?: string;
@@ -41,6 +41,9 @@ export interface LedgerChangeRequest {
   readonly value?: string;
   /** group：几组线索，每组第一条留下、其余并进去。 */
   readonly groups?: readonly (readonly string[])[];
+  /** day：这一章是故事第几天（到第几天）。 */
+  readonly day?: number;
+  readonly dayEnd?: number;
 }
 
 /** 一份待作者确认的改账：按钮原样带回。 */
@@ -168,6 +171,21 @@ export async function planLedgerChange(projectDir: string, request: LedgerChange
       if (thread.status === "closed") return fail("already_closed", `线索「${thread.title}」已经收了（第 ${thread.closedAt} 章）。`);
       const chapter = request.chapter ?? latest;
       return proposal([{ type: "thread.close", thread: thread.id, chapter }], [`把线索「${thread.title}」记为第 ${chapter} 章已收`]);
+    }
+    case "day": {
+      const chapter = request.chapter ?? latest;
+      const current = view.chapters.find((item) => item.chapter === chapter);
+      if (!current) return fail("unknown_chapter", `第 ${chapter} 章还没定稿，天数定稿时在清单上改。`);
+      if (!request.day || request.day < 1) return fail("missing_day", `第 ${chapter} 章该是故事第几天？`);
+      const day = request.day;
+      const dayEnd = request.dayEnd !== undefined && request.dayEnd > day ? request.dayEnd : undefined;
+      if (request.dayEnd !== undefined && request.dayEnd < day) return fail("bad_day", `到第 ${request.dayEnd} 天比第 ${day} 天还早，请说清这一章是第几天到第几天。`);
+      const days = (from: number, to: number) => (to > from ? `第 ${from} 天到第 ${to} 天` : `第 ${from} 天`);
+      if (current.day === day && current.dayEnd === (dayEnd ?? day)) return fail("unchanged", `第 ${chapter} 章记的就是故事${days(day, dayEnd ?? day)}，不用改。`);
+      return proposal(
+        [{ type: "chapter.day", chapter, day, ...(dayEnd !== undefined ? { dayEnd } : {}) }],
+        [`第 ${chapter} 章从故事${days(current.day, current.dayEnd)}改记为${days(day, dayEnd ?? day)}`],
+      );
     }
     case "importance": {
       const ref = request.id ?? request.query;

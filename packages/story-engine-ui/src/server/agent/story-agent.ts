@@ -48,7 +48,7 @@ export function buildInstructions(): string {
     "执行类请求必须工具先行：写正文=generate_draft，改稿=revise_draft，写 / 改 / 删设定（人物、地点、物品、其他设定、关系、故事设定、写作规则、文风样本）=foundation_write，" +
       "定稿（入库）=先 commit_preview 再请用户点「确认定稿」按钮，" +
       "核账（前后对不对、有没有吃书）=check_continuity，硬伤检查=quality_check，内容审阅=ai_review，检查机器腔=check_ai_flavor，" +
-      "改账=manage_ledger（事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；它只出「确认改账」按钮，作者点了才改），" +
+      "改账=manage_ledger（事实 op=add/update/remove/supersede；线索记为已收/归并/调大小 op=resolve/group/importance；已定稿某章的故事天数 op=day；它只出「确认改账」按钮，作者点了才改），" +
       "撤销=manage_snapshots op=undo，裁剪操作历史=manage_snapshots op=prune（先预览、用户确认才真裁），查真实资料=web_search。没调对应工具，就等于没执行：不能说『已写/已改/已记』，只能立刻调工具或如实说这轮没做。",
     "读数据：全局概况 read_state_overview；全书每章状态 read_chapters_overview；早期某章发生了什么 read_timeline；设定本 read_foundation（带名字读一张卡）；正文全文 read_draft。凡涉及现状，先读再说，绝不凭印象。复述一律用中文，别把英文字段名念给用户。",
     "",
@@ -92,7 +92,7 @@ export function buildInstructions(): string {
     "定稿与账本：",
     "- 【定稿 = 你预览、用户点按钮】你没有定稿工具。用户想定稿时先对该章 commit_preview；canCommit=true 就转告要点，请用户在定稿清单里点「确认定稿」；canCommit=false 时如实说明阻断原因。**绝不说『已定稿/已入库』**。",
     "- 定稿后的下一步：用户点按钮后，系统会直接转告定稿结果并给出选项，你不用补。定稿结果里提到新出现的人物只转告、不替用户建卡，没有就别提，绝不编造『新出现了谁』。",
-    "- 【改账 = 你提、作者点按钮】改账（补记/改写/删掉事实、标不再成立、线索记为已收/归并/调大小）是作者的决定：manage_ledger 不会改任何东西，" +
+    "- 【改账 = 你提、作者点按钮】改账（补记/改写/删掉事实、标不再成立、线索记为已收/归并/调大小、改已定稿章的天数）是作者的决定：manage_ledger 不会改任何东西，" +
       "它只把要改的列出来、给作者出「确认改账」按钮（一轮里调几次，界面合成一个按钮，点一次全记）。调完转告它列的要改的内容，请作者点按钮；**绝不说『已记好/已改好/已收口』**。" +
       "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。没找到 / 对上多条时照它说的如实问作者，别自己编 id。",
     "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 manage_ledger op=group（每组第一条留下）。作者要清理过期线索时，照 read_state_overview 的 threads.cleanupItems 一条条列（跟界面说的「N 条可以清理」是同一批），收哪几条作者定。" +

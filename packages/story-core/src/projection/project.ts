@@ -390,15 +390,25 @@ function buildChapters(
   ledgers: readonly ChapterLedger[],
   names: Names,
   textHashes: ReadonlyMap<number, string> | undefined,
+  decisions: readonly AuthorDecision[],
 ): ChapterView[] {
+  // 定稿后作者改的天数（同一章改过几次，按最后一次）。
+  const dayRulings = new Map<number, { readonly day: number; readonly dayEnd?: number }>();
+  for (const decision of decisions) if (decision.type === "chapter.day") dayRulings.set(decision.chapter, decision);
   const views: ChapterView[] = [];
   let previousEnd = 0;
   for (const ledger of ledgers) {
     const time = ledger.entries.find((entry): entry is TimeEntry => entry.kind === "time");
     const summary = ledger.entries.find((entry) => entry.kind === "summary");
+    const ruling = dayRulings.get(ledger.chapter);
     let day: number;
     let basis: ChapterView["dayBasis"];
-    if (time?.basis === "author" && time.day !== undefined) {
+    let dayEnd: number | undefined;
+    if (ruling) {
+      day = ruling.day;
+      dayEnd = Math.max(ruling.day, ruling.dayEnd ?? ruling.day);
+      basis = "author";
+    } else if (time?.basis === "author" && time.day !== undefined) {
       day = time.day;
       basis = "author";
     } else if (time?.daysSincePrevious !== undefined) {
@@ -408,7 +418,7 @@ function buildChapters(
       day = previousEnd + 1;
       basis = time ? time.basis : "missing";
     }
-    const dayEnd = day + (time?.daysInChapter ?? 0);
+    dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;
 
     const present: string[] = [];
@@ -465,7 +475,7 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
     version: input.version ?? 0,
     upTo,
     unsettled: input.unsettled ?? false,
-    chapters: buildChapters(ledgers, names, input.textHashes),
+    chapters: buildChapters(ledgers, names, input.textHashes, input.decisions),
     facts: facts.facts,
     subjects: facts.subjects,
     threads: threads.threads,

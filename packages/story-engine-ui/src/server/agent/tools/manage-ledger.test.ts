@@ -108,4 +108,21 @@ describe("manage_ledger：只提草案", () => {
     const bad = await applyLedgerDecisions(book, { key: "k-bad", decisions: [{ type: "fact.retract" }] });
     expect(bad).toMatchObject({ ok: false, applied: 0 });
   });
+
+  // 长篇实跑：第 24 章定稿后才发现天数记错，AI 说「我手头没有能改时间线天数的工具」。
+  it("改已定稿章的天数：出按钮，作者点了后那章和后面的章跟着挪", async () => {
+    await commitTwo();
+    const before = await projectBook(book);
+    expect(before.chapters.map((chapter) => [chapter.day, chapter.dayEnd])).toEqual([[1, 1], [2, 2]]);
+    const plan = await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 4 });
+    expect(plan).toMatchObject({ needsConfirmation: true, ledgerConfirm: { lines: ["第 1 章从故事第 1 天改记为第 3 天到第 4 天"] } });
+    expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 1 });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    expect(applied).toMatchObject({ ok: true, applied: 1 });
+    expect((await projectBook(book)).chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([[3, 4, "author"], [5, 5, "missing"]]);
+
+    expect(await runManageLedger(book, { op: "day", chapter: 9, day: 3 })).toMatchObject({ ok: false, blockedReason: "unknown_chapter" });
+    expect(await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 2 })).toMatchObject({ ok: false, blockedReason: "bad_day" });
+    expect(await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 4 })).toMatchObject({ ok: false, blockedReason: "unchanged" });
+  });
 });

@@ -22,6 +22,16 @@ const issueDismiss = { type: z.literal("issue.dismiss"), issue: text, note: text
 const factRetract = { type: z.literal("fact.retract"), fact: text, note: text.optional() };
 /** 作者说这条事实从第 chapter 章起不再成立（没有新说法顶替）。老书里手动作废的事实导入成这个。 */
 const factExpire = { type: z.literal("fact.expire"), fact: text, chapter: z.number().int().min(1), note: text.optional() };
+/** 作者改一章的故事天数（定稿后才发现记错了）：第 day 天（到第 dayEnd 天，这一章跨天时）。顶掉那章账单里记的。 */
+const chapterDay = {
+  type: z.literal("chapter.day"),
+  chapter: z.number().int().min(1),
+  day: z.number().int().min(1),
+  dayEnd: z.number().int().min(1).optional(),
+};
+const dayOrdered = (value: { type: string; day?: number; dayEnd?: number }): boolean =>
+  value.type !== "chapter.day" || value.dayEnd === undefined || value.day === undefined || value.dayEnd >= value.day;
+const DAY_MESSAGE = "到第几天不能比第几天早";
 /**
  * 作者补记（或改写）一条事实，算在第 chapter 章（那章之后、下一章之前生效）。没有原句：是作者说的，不是正文写的。
  * corrects = 改写的是哪条（那条随之作废）。hard / state 必须写清谁、哪方面、是什么，和账单里的事实同一个规矩。
@@ -49,7 +59,9 @@ export const DecisionInput = z.discriminatedUnion("type", [
   z.object(factRetract),
   z.object(factExpire),
   z.object(factAssertShape),
-]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE });
+  z.object(chapterDay),
+]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
+  .refine(dayOrdered, { message: DAY_MESSAGE });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 
 const meta = { id: text, at: text };
@@ -61,7 +73,9 @@ export const AuthorDecision = z.discriminatedUnion("type", [
   z.object({ ...factRetract, ...meta }),
   z.object({ ...factExpire, ...meta }),
   z.object({ ...factAssertShape, ...meta }),
-]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE });
+  z.object({ ...chapterDay, ...meta }),
+]).refine((value) => value.type !== "fact.assert" || structured(value), { message: STRUCTURE_MESSAGE })
+  .refine(dayOrdered, { message: DAY_MESSAGE });
 export type AuthorDecision = z.infer<typeof AuthorDecision>;
 
 export const AuthorDecisionsFile = z.object({
