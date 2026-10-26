@@ -40,7 +40,8 @@ const inputSchema = z.object({
   targetText: z.string().describe(
     "要修订的原文片段，必须**逐字**取自当前工作稿且在稿中只出现一次（确定性替换的锚点）。出现多次会被拒绝。",
   ),
-  revisionGoal: z.string().describe("修订目标：希望把这段改成什么样（如『语气更克制』『补一个动作细节』）。"),
+  // 模型无关：给了 replacementText 时模型常不填它（真机 2026-10-27 第一次调必挂在参数校验上），缺省按空串，要改写时再诚实退回。
+  revisionGoal: z.string().optional().describe("修订目标：希望把这段改成什么样（如『语气更克制』『补一个动作细节』）。给了 replacementText 可不填。"),
   // afterfix·精确替换：用户给了「替换成的确切文本」时带上它——工具会**原样落地、不再让模型改写**（治真机：
   // 模型拿到精确文本却自行改写成别的）。仅做精确 find-replace 时用；要 AI 改写/润色时省略，走模型路。
   replacementText: z.string().optional().describe(
@@ -90,6 +91,8 @@ function refusalReason(failure: RevisionOneShotFailure): string {
       return "未在当前工作稿中找到要修的原文片段，请逐字确认目标段落。";
     case "target_ambiguous":
       return "原文片段在工作稿中出现多次，请改用更精确、只出现一次的片段。";
+    case "goal_empty":
+      return "没说这段要改成什么样，稿子没动。说一下往哪改，或直接给出要换成的那句。";
     case "exact_replacement_noop":
       return "给的替换文本与原句一致，等于没改；工作稿未改动。";
     case "model_output_unusable":
@@ -206,7 +209,7 @@ export const reviseDraftTool = createTool({
       projectDir,
       chapter: resolvedChapter,
       targetText: input.targetText,
-      revisionGoal: input.revisionGoal,
+      revisionGoal: input.revisionGoal ?? "",
       ...(input.style !== undefined ? { style: input.style } : {}),
       ...(input.problemSummary !== undefined ? { problemSummary: input.problemSummary } : {}),
       ...(input.constraints !== undefined ? { constraints: input.constraints } : {}),

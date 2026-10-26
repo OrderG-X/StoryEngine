@@ -129,6 +129,7 @@ export function locateRevisionSpan(
 
 export type RevisionFailureCode =
   | "target_empty"
+  | "goal_empty"
   | "target_not_found"
   | "target_ambiguous"
   | "exact_replacement_noop"
@@ -596,6 +597,10 @@ export async function reviseDraftText(input: Omit<Parameters<typeof reviseDraftO
     const preview = exactReplacementPreview(resolvedTask, resolvedTarget, exactReplacement);
     const updatedContent = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
     return { ok: true, mode: "exact", task: resolvedTask, preview, updatedContent };
+  }
+  // 要模型改写却没说往哪改：不让模型瞎改，如实退回（精确替换和去 AI 味不需要它）。
+  if (input.style !== "deai" && !input.revisionGoal.trim()) {
+    return { ok: false, code: "goal_empty", task: resolvedTask };
   }
 
   let preview: DraftRevisionPreview;
