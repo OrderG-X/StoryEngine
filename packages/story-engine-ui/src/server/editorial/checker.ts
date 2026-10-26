@@ -18,6 +18,7 @@ import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-cl
 import { withStep } from "../lib/token-meter.js";
 import {
   containsQuote,
+  dropLiteralEscapes,
   hedged,
   normalize,
   parseFullReadIssues,
@@ -371,7 +372,7 @@ export function parseSettingIssues(
     const record = item as Record<string, unknown>;
     if (String(record.earlierQuote ?? "").trim()) continue;
     const settingQuote = cleanSettingQuote(digest, String(record.settingQuote ?? ""));
-    const quote = String(record.quote ?? "").trim();
+    const quote = dropLiteralEscapes(String(record.quote ?? "")).trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue;
     const source = settingQuoteSource(digest, settingQuote);
@@ -423,7 +424,7 @@ export function parseSettingChecks(
     const record = item as Record<string, unknown>;
     if (!AGREES_FALSE.test(String(record.agrees ?? "").trim())) continue;
     const settingQuote = cleanSettingQuote(digest, String(record.settingQuote ?? ""));
-    const quote = String(record.quote ?? "").trim();
+    const quote = dropLiteralEscapes(String(record.quote ?? "")).trim();
     const reason = String(record.reason ?? "").trim();
     if (!settingQuote || !quote || !reason) continue; // 对不上与否只认结构化的 agrees，不再看理由里的字眼
     const source = settingQuoteSource(digest, settingQuote);
