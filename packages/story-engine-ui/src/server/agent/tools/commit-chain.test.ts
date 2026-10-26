@@ -5,7 +5,7 @@
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createStoryProject } from "../../book/project-store.js";
-import { projectBook, readCards, readChapterLedger, readHead } from "@actalk/story-core";
+import { cardWrite, projectBook, readCards, readChapterLedger, readHead, runCommand } from "@actalk/story-core";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -207,6 +207,24 @@ describe("commit_apply", () => {
     expect(again).toMatchObject({ ok: true, committed: true });
     expect(again.summary).toContain("已经定稿过了");
     expect(await readHead(book)).toMatchObject({ version: base + 1 });
+  });
+
+  it("字数下限后来才定、这章原来就短：改了再定稿不挡，提醒一句；原来够数的照样挡（作者长篇实跑 2026-10-26）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await runCommand(book, cardWrite, { ops: [{ op: "rules.set", field: "minWords", value: 2000 }] }, { caller: "author", idempotencyKey: "min-2000" });
+
+    await writeDraft(1, CH1.replace("老周没有拦他。", "老周没拦他。"));
+    const again = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    expect(again.canCommit).toBe(true);
+    expect(again.notes).toContain("这章原来定稿时就不到 2000 字，字数下限这次不挡");
+
+    // 新的一章照样按下限挡。
+    await writeDraft(2, CH2);
+    const fresh = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(LEDGER2) });
+    expect(fresh.canCommit).toBe(false);
+    expect(fresh.draftQualityIssues.map((issue) => issue.type)).toContain("too_short");
   });
 
   it("票号没了 / 乱填：如实拒、不定稿", async () => {

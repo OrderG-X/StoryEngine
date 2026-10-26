@@ -8,12 +8,13 @@
  * 条目 id 就是清单序号；默认不写、作者勾上才写的条目 id 带 `change_confirm:` 前缀（和「确认定稿」按钮的分流同口径）。
  */
 import { checkDraftHardGates, type CommitQualityIssue } from "../../writing/commit-quality-check.js";
+import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { readCardsOrLegacy } from "@actalk/story-core";
+import { readCardsOrLegacy, readChapterPaper } from "@actalk/story-core";
 
 import { callConfiguredBrainModel, catchUpReaders, rereadBlocker, type BrainCallModel } from "../../editorial/index.js";
 import { fileTicketStore, prepareChapterCommit, type CommitItem, type CommitPreview, type TicketStore } from "../../editorial/commit-flow.js";
@@ -104,7 +105,9 @@ export async function buildCommitPreviewToolOutput(input: {
   const rereading = await rereadBlocker(projectDir, "定稿");
   if (rereading) return blocked(chapter, [rereading], rereading);
 
-  const gates = await checkDraftHardGates({ projectDir, draftContent: text });
+  const allGates = await checkDraftHardGates({ projectDir, draftContent: text });
+  const shortBefore = await committedShortOf(projectDir, chapter, allGates);
+  const gates = shortBefore === undefined ? allGates : allGates.filter((issue) => issue.type !== "too_short");
   if (gates.length > 0) {
     const reasons = gates.map(describeGate);
     return {
@@ -142,7 +145,18 @@ export async function buildCommitPreviewToolOutput(input: {
     return blocked(chapter, [preview.reason], `第 ${chapter} 章现在还定不了：${preview.reason}`);
   }
   latestTickets.set(`${projectDir}\u0000${chapter}`, preview.ticket);
-  return fromPreview(preview);
+  return fromPreview(preview, shortBefore === undefined ? [] : [`这章原来定稿时就不到 ${shortBefore} 字，字数下限这次不挡`]);
+}
+
+/**
+ * 字数下限是作者后来定的、这章原来就按短的定了稿：回头改个错字再定稿，不拿下限挡（作者长篇实跑 2026-10-26：
+ * 第 3 章删一段重复，被后定的「至少 2000 字」挡住，提示还叫作者把全书下限改低）。返回下限字数；不是这种情况回 undefined。
+ */
+async function committedShortOf(projectDir: string, chapter: number, gates: readonly CommitQualityIssue[]): Promise<number | undefined> {
+  const short = gates.find((issue) => issue.type === "too_short")?.length;
+  if (!short) return undefined;
+  const committed = (await readChapterPaper(projectDir, chapter)).committed;
+  return committed && countDraftChineseCharacters(committed.body) < short.min ? short.min : undefined;
 }
 
 function blocked(chapter: number, reasons: readonly string[], summary: string): CommitPreviewToolOutput {
@@ -199,7 +213,7 @@ function dayLabel(preview: CommitPreview): string {
   return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
 }
 
-function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
+function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): CommitPreviewToolOutput {
   const timeItems = (items: readonly CommitItem[]) => items.filter((item) => item.kind === "time");
   const others = (items: readonly CommitItem[]) => items.filter((item) => item.kind !== "time");
   const timeQuote = [...timeItems(preview.review), ...timeItems(preview.auto)].find((item) => item.quote)?.quote;
@@ -231,6 +245,7 @@ function fromPreview(preview: CommitPreview): CommitPreviewToolOutput {
     notes.push(`记账员还在读前文（笔记到第 ${preview.cold.notedThrough} 章），这次按已有笔记${raw}记的`);
   }
   if (preview.waited) notes.push(describeReaderWait("ledger", preview.waited, "记账"));
+  notes.push(...extraNotes);
   const head = reviewCount > 0
     ? `第 ${preview.chapter} 章可以定稿：要你看 ${reviewCount} 条，其余 ${autoCount} 条自动记下（不对的都能去掉）。`
     : `第 ${preview.chapter} 章可以定稿：${autoCount} 条自动记下（不对的都能去掉）。`;
