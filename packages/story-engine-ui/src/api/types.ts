@@ -405,7 +405,7 @@ export type ImportBookApiResponse =
 export interface GenerateDraftRequest {
   readonly projectPath: string;
   readonly chapter: number;
-  readonly chapterGoal: string;
+  readonly chapterGoal?: string;
   readonly requestedDraftLength?: number;
   readonly maxOutputTokens?: number;
   readonly selectedCharacterIds?: readonly string[];

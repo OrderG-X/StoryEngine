@@ -229,6 +229,28 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
   });
 
+  it("AI 另写几版不带方向：沿用章纲和作者原话，不重拟、不冲掉作者的方向；作者给了新方向才重拟", async () => {
+    const { resolveChapterPlanForDraft, resolveChapterPlanForReroll } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel();
+    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
+    await resolveChapterPlanForDraft({
+      projectDir, chapter: 2, direction: "林澈去档案室，发现缺页的是第三页", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    const reroll = await resolveChapterPlanForReroll({
+      projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(reroll.reused).toBe(true);
+    expect(reroll.direction).toBe("林澈去档案室，发现缺页的是第三页");
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(1);
+    expect((await readChapterPlan(projectDir, 2))?.direction).toBe("林澈去档案室，发现缺页的是第三页");
+    const redirected = await resolveChapterPlanForReroll({
+      projectDir, chapter: 2, direction: "改成去银行", plannerCallModel: planner.callModel, planCheckReaderCallModel: checker,
+    });
+    expect(redirected.reused).toBe(false);
+    expect(redirected.direction).toBe("改成去银行");
+  });
+
   it("审出问题 → 交回章纲员改一轮（不循环），落盘的是改过的章纲", async () => {
     const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
     const projectDir = await makeBook();

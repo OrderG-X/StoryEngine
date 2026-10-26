@@ -161,6 +161,19 @@ export async function resolveChapterPlanForDraft(input: {
   return planned.plan ? { ...planned, note: `${planned.note}${directionChangeNote(planned.plan)}` } : planned;
 }
 
+/**
+ * 「AI 另写几版」拿章纲：作者没给新方向 = 照本章已有章纲另写，方向沿用章纲里记着的作者原话；
+ * 不拿空方向重拟——那会把作者给这章的方向冲掉（长篇实跑第 16 章：两版候选都没写作者点名的事，章纲也被覆盖）。
+ */
+export async function resolveChapterPlanForReroll(
+  input: Parameters<typeof resolveChapterPlanForDraft>[0],
+): Promise<ResolvedChapterPlan & { readonly direction?: string }> {
+  const given = input.direction?.trim();
+  const direction = given || (await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined))?.direction;
+  const resolved = await resolveChapterPlanForDraft({ ...input, direction: direction ?? "" });
+  return direction ? { ...resolved, direction } : resolved;
+}
+
 /** 章纲员没照方向原话安排的地方，回执如实告诉作者（P7：方向里的「铜盒」被悄悄改成「怀表」，作者不知道）。 */
 function directionChangeNote(plan: ChapterPlan): string {
   const changes = plan.directionChanges ?? [];

@@ -29,7 +29,6 @@ export interface UiStore {
   steeringDirection: string;
   /** 每章没发出去的输入框草稿（P11）：切章时存下离开那章的、换上要去那章的；换书清空。 */
   composerDrafts: Readonly<Record<number, string>>;
-  lastChapterDirection: string;
   draftActionLoading: string | null;
   /** AI 出稿进行到哪一步（服务端 draft-delta 带 phase 推过来）：plan=拟章纲，write=写正文；不在出稿为 null。稿纸空着时显示给作者看。 */
   draftPhase: DraftPhase | null;
@@ -53,7 +52,6 @@ export interface UiStore {
   /** 切章：把输入框里没发的字记到离开的那章，换上要去那章上次没发的字（没有就空）。 */
   switchComposerChapter: (from: number | null, to: number) => void;
   clearComposerDrafts: () => void;
-  setLastChapterDirection: (value: string) => void;
   setDraftActionLoading: (loading: string | null) => void;
   setDraftPhase: (phase: DraftPhase | null) => void;
   setDraftCandidates: (candidates: readonly DraftCandidate[] | null) => void;
@@ -79,7 +77,6 @@ export interface UiStore {
 export const useUiStore = create<UiStore>((set) => ({
   steeringDirection: "",
   composerDrafts: {},
-  lastChapterDirection: "",
   draftActionLoading: null,
   draftPhase: null,
   draftCandidates: null,
@@ -105,7 +102,6 @@ export const useUiStore = create<UiStore>((set) => ({
     return { composerDrafts: drafts, steeringDirection: next };
   }),
   clearComposerDrafts: () => set({ composerDrafts: {} }),
-  setLastChapterDirection: (value) => set({ lastChapterDirection: value }),
   setDraftActionLoading: (loading) => set({ draftActionLoading: loading }),
   setDraftPhase: (phase) => set({ draftPhase: phase }),
   setDraftCandidates: (candidates) => set({ draftCandidates: candidates }),

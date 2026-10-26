@@ -99,7 +99,7 @@ import { resolveInSceneCharacters, type InSceneResult } from "../writing/presenc
 import { readBibleTolerant } from "../writing/setting-pack.js";
 import { ALL_BUILTIN_AI_FLAVOR_RULES, buildUserAntiAiPatternRules } from "../writing/ai-flavor/ai-flavor-rules.js";
 import { runDeAiFlavorBatch, type DeAiSkippedByReason } from "./de-ai-flavor-batch.js";
-import { resolveChapterPlanForDraft } from "../editorial/plan-chapter.js";
+import { resolveChapterPlanForDraft, resolveChapterPlanForReroll } from "../editorial/plan-chapter.js";
 import { readCheckMemory } from "../editorial/continuity/check-memory.js";
 import type { LastDraftConflict } from "../writing/context-gateway.js";
 import { withStep } from "../lib/token-meter.js";
@@ -1095,7 +1095,7 @@ function sharedFastDraftInput(run: DraftRunContext, input: {
  */
 export async function generateDraftCandidate(input: GenerateDraftCandidateInput): Promise<GenerateDraftCandidateOutcome> {
   const planning = input.plannerCallModel
-    ? await resolveChapterPlanForDraft({
+    ? await resolveChapterPlanForReroll({
       projectDir: input.projectDir,
       chapter: input.chapter,
       ...(input.chapterGoal?.trim() ? { direction: input.chapterGoal } : {}),
@@ -1103,11 +1103,13 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
       ...(input.planCheckReaderCallModel ? { planCheckReaderCallModel: input.planCheckReaderCallModel } : {}),
     })
     : undefined;
+  // 作者没给新方向：写手拿的本章目标也沿用章纲里记着的作者原话，和第一版出稿时一样。
+  const chapterGoal = input.chapterGoal?.trim() || planning?.direction;
   const run = await resolveDraftRunContext({
     ...(planning?.plan ? { chapterPlan: planning.plan } : {}),
     projectDir: input.projectDir,
     chapter: input.chapter,
-    ...(input.chapterGoal !== undefined ? { chapterGoal: input.chapterGoal } : {}),
+    ...(chapterGoal ? { chapterGoal } : {}),
     ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
     ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
     ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),

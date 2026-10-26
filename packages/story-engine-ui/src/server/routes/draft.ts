@@ -61,12 +61,13 @@ async function handleGenerateDraft(req: import("node:http").IncomingMessage, res
     // P1-8：非流式出稿路此前漏校验，会在任意家目录 git init/改提交身份/提交
     await assertStoryEngineProject(projectDir);
     const chapter = requirePositiveBodyInteger(body.chapter, "Chapter is required.");
-    const rawChapterGoal = readString(body.chapterGoal) ?? `继续第 ${chapter} 章。`;
+    // 作者没给新方向：不补空话方向，交给候选照本章已有章纲另写（generateDraftCandidate 沿用章纲里的作者原话）。
+    const chapterGoal = readString(body.chapterGoal)?.trim();
     const writerClient = await createConfiguredWriterClient("fastDraft");
     const baseInput = {
       projectDir,
       chapter,
-      chapterGoal: rawChapterGoal,
+      ...(chapterGoal ? { chapterGoal } : {}),
       requestedDraftLength: readPositiveInteger(body.requestedDraftLength),
       selectedCharacters: optionalStringList(body.selectedCharacters),
       selectedHookIds: optionalStringList(body.selectedHookIds),
