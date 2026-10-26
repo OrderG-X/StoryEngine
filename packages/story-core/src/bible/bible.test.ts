@@ -32,9 +32,10 @@ describe("改设定卡（ops）", () => {
     ], { by: "author", at: AT });
     if (!outcome.ok) throw new Error(outcome.message);
     const card = outcome.file.cards[0]!;
-    expect(card).toMatchObject({ name: "许薇", aliases: ["小微"], protagonist: true, by: "author" });
+    // 改名后旧名留作别名：按旧名记的账还认得是这个人。
+    expect(card).toMatchObject({ name: "许薇", aliases: ["小微", "许微"], protagonist: true, by: "author" });
     expect(card.fields.map((field) => [field.label, field.value, field.by])).toEqual([["身份", "夜班分拣员", "author"], ["外貌", "身形偏瘦", "author"]]);
-    expect(outcome.lines).toEqual(["建了人物卡「许微」（主角）", "「许微」的「外貌」写上了", "「许微」加了别名「小微」", "「许微」改名为「许薇」"]);
+    expect(outcome.lines).toEqual(["建了人物卡「许微」（主角）", "「许微」的「外貌」写上了", "「许微」加了别名「小微」", "「许微」改名为「许薇」，旧名留作别名"]);
     expect(outcome.lines.join("")).not.toContain("k-");
   });
 

@@ -177,8 +177,10 @@ export function applyCardOp(file: SettingCardsFile, op: CardOp, context: OpConte
       if (ai && authorOwned(card)) return needsAuthor(`${quoted(card.name)}是你建的卡，改名要你点头`);
       const taken = nameTaken(file, op.name, card.id);
       if (taken) return invalid(`已经有叫${quoted(op.name)}的卡了`);
-      const aliases = card.aliases.filter((alias) => !same(alias, op.name));
-      return { ok: true, file: replaceCard(file, { ...card, name: op.name, aliases }), line: `${quoted(card.name)}改名为${quoted(op.name)}` };
+      // 旧名留作别名：账里、正文里按旧名记的那些还认得是这个人（长篇实跑：「刀疤军官」改名「韩照」后，
+      // 出场和定下的事全跟卡断开、旧名又回到「还没建卡」）。不要的别名作者自己去掉。
+      const aliases = [...card.aliases.filter((alias) => !same(alias, op.name)), card.name];
+      return { ok: true, file: replaceCard(file, { ...card, name: op.name, aliases }), line: `${quoted(card.name)}改名为${quoted(op.name)}，旧名留作别名` };
     }
     case "card.aliases": {
       const card = findCard(file, op.card);

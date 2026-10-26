@@ -256,7 +256,7 @@ describe("foundation_write：碰了作者写的不改，只出「确认改设定
         { op: "card.delete", card: "顾明" },
       ],
     });
-    expect(out.pending).toEqual(["「林远」改名为「林澈」", "「林澈」的「外貌」写上了", "删了人物卡「顾明」"]);
+    expect(out.pending).toEqual(["「林远」改名为「林澈」，旧名留作别名", "「林澈」的「外貌」写上了", "删了人物卡「顾明」"]);
     expect(out.snapshotId).toBeUndefined();
     expect(out.refreshScope).toBeUndefined();
     expect(out.summary).not.toContain("改好了");
