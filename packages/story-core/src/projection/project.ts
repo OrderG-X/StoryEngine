@@ -45,6 +45,8 @@ export interface ProjectionOptions {
 }
 
 export const DEFAULT_STALE_AFTER = 5;
+/** 大伏笔本来就要埋很久：没动这么多倍的章数才算「停太久」（缺省 5 × 4 = 20 章），免得作者定了大伏笔还天天被催。 */
+export const MAJOR_STALE_FACTOR = 4;
 
 const mod7 = (value: number): number => ((value % 7) + 7) % 7;
 
@@ -360,9 +362,10 @@ function buildThreads(
 
   const views = [...threads.values()].map((thread): ThreadView => {
     const lastTouchedAt = Math.max(thread.openedAt, ...thread.touches.map((touch) => touch.chapter));
+    const idleLimit = thread.weight === "major" ? staleAfter * MAJOR_STALE_FACTOR : staleAfter;
     const status = thread.closedAt !== undefined
       ? "closed"
-      : thread.weight !== "minor" && upTo - lastTouchedAt >= staleAfter
+      : thread.weight !== "minor" && upTo - lastTouchedAt >= idleLimit
         ? "stale"
         : thread.touches.some((touch) => touch.op === "advance")
           ? "active"

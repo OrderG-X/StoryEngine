@@ -151,6 +151,18 @@ describe("投影", () => {
     expect(byTitle["谁卖了机芯"]?.status).toBe("open");
   });
 
+  it("大伏笔要埋很久：停 9 章不算停太久，停满 20 章才提醒；普通线索照旧 5 章", () => {
+    const at = (upTo: number) => project({
+      ledgers: [ledger(1, [open("t1-1", "铁箱里是什么"), open("t1-2", "工钱补没补")]), ledger(upTo, [])],
+      decisions: [decision({ type: "thread.weight", thread: "t1-1", weight: "major" }, 1)],
+    });
+    const status = (upTo: number, title: string) => at(upTo).threads.find((thread) => thread.title === title)?.status;
+    expect(status(10, "铁箱里是什么")).toBe("open");
+    expect(status(10, "工钱补没补")).toBe("stale");
+    expect(status(20, "铁箱里是什么")).toBe("open");
+    expect(status(21, "铁箱里是什么")).toBe("stale");
+  });
+
   it("作者裁定：归并、收口、分量；指向不存在的线索摆出来不吞", () => {
     const result = project({
       ledgers: [ledger(1, [open("t1-1", "老周回避"), open("t1-2", "阿笙被打断")]), ledger(4, [touch("t1-2", "advance"), touch("t9-9", "advance")])],
