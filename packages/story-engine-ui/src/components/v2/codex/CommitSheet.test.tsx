@@ -40,6 +40,14 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(screen.getByText("楼门钥匙放回茶馆柜台底下")).toBeTruthy();
   });
 
+  it("只有天数要你看：说「除了天数，没有要你特别看的」（和对话里「要你看 1 条」对得上）", () => {
+    render(<CommitSheet preview={preview({ ledgerChecklist: [
+      { id: "day", kind: "time", label: "这一章记为故事第 11 天（先按上一章往后推，不对就改）", removable: false, editableDay: 11, needsConfirm: true },
+      { id: "2", kind: "fact", label: "楼门钥匙放回茶馆柜台底下", removable: true },
+    ] })} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText("除了天数，没有要你特别看的，下面这些自动记下。")).toBeTruthy();
+  });
+
   it("这本书头一回定稿：头上一句说定稿是干什么的；之后、只看的旧预览都不说", () => {
     const intro = /定稿就是把这章记进账/u;
     const { rerender } = render(<CommitSheet preview={preview()} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} firstCommit />);

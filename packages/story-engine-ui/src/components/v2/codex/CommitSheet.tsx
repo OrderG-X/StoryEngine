@@ -256,7 +256,7 @@ export function CommitSheet({
           ) : null}
 
           {!blocked && review.length === 0 ? (
-            <p className="se-cs-none">{auto.length > 0 ? "没有要你特别看的，下面这些自动记下。" : "这一章没有要记的账。"}</p>
+            <p className="se-cs-none">{auto.length > 0 ? `${day?.needsConfirm ? "除了天数，" : ""}没有要你特别看的，下面这些自动记下。` : "这一章没有要记的账。"}</p>
           ) : null}
 
           {!blocked && auto.length > 0 ? (
