@@ -167,9 +167,22 @@ function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>, cards?:
   const where = doc?.target === "draft" ? `第 ${side.chapter} 章（工作稿）` : `第 ${side.chapter} 章`;
   const unit = doc?.units.find((item) => quoteInText(side.quote, item.text)) ?? doc?.units.find((item) => quoteInText(item.text, side.quote));
   if (!doc || !unit) return `${where}：「${side.quote}」`;
-  const before = doc.units[unit.id - 2]?.text ?? "";
-  const after = doc.units[unit.id]?.text ?? "";
+  const { before, after } = aroundUnit(doc.units, unit);
   return `${where}：「${side.quote}」（前后文：${before}【${unit.text}】${after}）`;
+}
+
+/** 前后文最多各带这么多字。 */
+const AROUND_MAX = 160;
+
+/**
+ * 一句的前后文：同一段里它前后的句子（段首 / 段尾就带上一段最后一句 / 下一段第一句）。
+ * 换题材长篇实跑 2026-10-27：只带前后各一句，「借款人林朗」在同一段前两句，定论写成了「林晚在安心借的借款」。
+ */
+export function aroundUnit(units: readonly TextUnit[], unit: TextUnit): { readonly before: string; readonly after: string } {
+  const sameLine = units.filter((item) => item.line === unit.line);
+  const before = sameLine.filter((item) => item.id < unit.id).map((item) => item.text).join("") || (units[unit.id - 2]?.text ?? "");
+  const after = sameLine.filter((item) => item.id > unit.id).map((item) => item.text).join("") || (units[unit.id]?.text ?? "");
+  return { before: before.slice(-AROUND_MAX), after: after.slice(0, AROUND_MAX) };
 }
 
 export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, docs: ReadonlyMap<number, SweepDoc>, cards?: SettingCardsFile): string {
@@ -646,7 +659,8 @@ export async function proposeSettle(input: {
     try {
       const withContext = toReview.map((edit) => {
         const units = docs.get(edit.chapter)?.units ?? [];
-        return { ...edit, before: units[edit.id - 2]?.text ?? "", after: units[edit.id]?.text ?? "" };
+        const unit = units[edit.id - 1];
+        return { ...edit, ...(unit ? aroundUnit(units, unit) : { before: "", after: "" }) };
       });
       const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext, standing) }], { json: true }), toReview.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));

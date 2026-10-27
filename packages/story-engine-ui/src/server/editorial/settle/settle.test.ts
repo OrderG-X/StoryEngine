@@ -5,7 +5,7 @@ import { cardWrite, chapterCommit, draftPath, numberedText, projectBook, readBib
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
-import { canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
+import { aroundUnit, canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
 import { applySettleProposal, readSettleProposal, saveSettleProposal } from "./store.js";
 
 const CH1 = "# 第1章 · 旧屋\n\n杜叔走了整整十年。屋里没人住过。\n\n许微推开门，灰扑了一脸。";
@@ -422,6 +422,16 @@ describe("确认改齐", () => {
     expect(await readFile(join(dir, "chapters/0002.md"), "utf-8")).toBe(CH2);
     expect((await readBible(dir)).bible.canon).toEqual([]);
     expect(await applySettleProposal(dir, "0123456789abcdef", [])).toMatchObject({ ok: false, code: "proposal_missing" });
+  });
+});
+
+describe("aroundUnit：一句的前后文", () => {
+  it("带同一段里前后的句子（换题材长篇实跑 2026-10-27：「借款人林朗」在同一段前两句，只带一句时定论写成了林晚的借款）", () => {
+    const units = splitUnits("她进了门。\n\n“我是他姐姐。借款人林朗。先调合同。”林晚说，“借款时间去年三月。”\n\n“请本人来电。”");
+    const unit = units.find((item) => item.text.includes("借款时间"))!;
+    expect(aroundUnit(units, unit)).toEqual({ before: "“我是他姐姐。借款人林朗。先调合同。”", after: "“请本人来电。”" });
+    const first = units.find((item) => item.text.includes("我是他姐姐"))!;
+    expect(aroundUnit(units, first).before).toBe("她进了门。");
   });
 });
 
