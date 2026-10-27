@@ -23,6 +23,7 @@ import {
   normalizeForwardedToolResult,
   readCurrentChapter,
   readAuthorWords,
+  readPickedDirection,
   runAgentTurn,
   type AgentTurnChunk,
 } from "./agent-chat.js";
@@ -420,7 +421,37 @@ describe("readAuthorWords 作者原话（只给工具找原句用）", () => {
   });
 });
 
+describe("readPickedDirection 作者挑中的走法（换题材长篇实跑：说「照甲写」AI 不知道甲是什么）", () => {
+  it("章号对上当前章、有字 → 去掉首尾空白的原文", () => {
+    expect(readPickedDirection({ chapter: 14, text: "  老民警认账翻旧档：1. 去派出所  " }, 14)).toBe("老民警认账翻旧档：1. 去派出所");
+  });
+
+  it("章号对不上、没当前章、没字、形状不对 → 当没给", () => {
+    expect(readPickedDirection({ chapter: 13, text: "甲" }, 14)).toBeUndefined();
+    expect(readPickedDirection({ chapter: 14, text: "甲" }, undefined)).toBeUndefined();
+    expect(readPickedDirection({ chapter: 14, text: "   " }, 14)).toBeUndefined();
+    expect(readPickedDirection({ chapter: "14", text: "甲" }, 14)).toBeUndefined();
+    expect(readPickedDirection("甲", 14)).toBeUndefined();
+    expect(readPickedDirection(null, 14)).toBeUndefined();
+  });
+});
+
 describe("buildCurrentChapterSystemMessage 当前章上下文", () => {
+  it("带作者挑中的走法 → 原文进上下文，嘱咐照它写时原样填方向", () => {
+    const content = buildCurrentChapterSystemMessage(14, {
+      chapter: 14, hasDraftFile: false, hasCommittedChapter: false,
+    }, undefined, "老民警认账翻旧档：1. 去派出所 2. 只漏出名字")!.content as string;
+    expect(content).toContain("老民警认账翻旧档：1. 去派出所 2. 只漏出名字");
+    expect(content).toContain("原样填进 generate_draft 的 chapterGoal");
+  });
+
+  it("这章已定稿 → 不再提挑过的走法", () => {
+    const content = buildCurrentChapterSystemMessage(14, {
+      chapter: 14, hasDraftFile: true, hasCommittedChapter: true,
+    }, undefined, "老民警认账翻旧档")!.content as string;
+    expect(content).not.toContain("老民警认账翻旧档");
+  });
+
   it("有章号 → 一条 role=system 消息，点名该章 + 嘱咐别跳最新章", () => {
     const msg = buildCurrentChapterSystemMessage(2);
     expect(msg).not.toBeNull();

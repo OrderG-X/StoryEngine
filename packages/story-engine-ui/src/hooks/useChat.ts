@@ -322,12 +322,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
         // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
         const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
+        const pickedText = typeof currentChapterNumber === "number" ? pickedDirectionGoal(useChatStore.getState().messages, currentChapterNumber) : undefined;
         await streamAgentChat(
           {
             projectPath,
             messages: [...conversation, { role: "user", content: text }],
             ...(typeof currentChapterNumber === "number" ? { currentChapter: currentChapterNumber } : {}),
             ...(lastTurnUndoHint ? { lastTurnUndoHint } : {}),
+            ...(pickedText && typeof currentChapterNumber === "number" ? { pickedDirection: { chapter: currentChapterNumber, text: pickedText } } : {}),
             ...(action ? { action } : {}),
           },
           {

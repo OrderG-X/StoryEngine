@@ -39,6 +39,8 @@ export interface StreamAgentChatRequest {
    * 与作者说「撤销上一步」= 撤上一回合全部改动 的理解一致。
    */
   readonly lastTurnUndoHint?: { readonly snapshotId: string; readonly changes: number };
+  /** 作者给当前章挑中的走法（稿纸上方点的「用这个」）：作者在对话里说「照这个写」时 AI 才知道是哪条。 */
+  readonly pickedDirection?: { readonly chapter: number; readonly text: string };
   /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
   readonly action?: AgentUserAction;
 }
@@ -354,6 +356,7 @@ export async function streamAgentChat(
         messages: input.messages,
         ...(typeof input.currentChapter === "number" ? { currentChapter: input.currentChapter } : {}),
         ...(input.lastTurnUndoHint ? { lastTurnUndoHint: input.lastTurnUndoHint } : {}),
+        ...(input.pickedDirection ? { pickedDirection: input.pickedDirection } : {}),
         ...(input.action ? { action: input.action } : {}),
       }),
       signal: idleController.signal,

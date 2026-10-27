@@ -64,6 +64,22 @@ export function readAuthorWords(messages: readonly { readonly role: string; read
   return messages.filter((message) => message.role === "user" && message.content.trim()).map((message) => message.content);
 }
 
+const PICKED_DIRECTION_MAX = 2000;
+
+/**
+ * body.pickedDirection：作者在稿纸上方点「用这个」挑中的走法（前端从走法卡上取，只发当前章的）。
+ * 换题材长篇实跑 2026-10-28：作者挑了甲、在对话里说「照甲写，改一处」，AI 不知道甲是什么——
+ * 方向填「照走法甲写」被找原句挡下，再填作者原话，章纲员照样不知道甲，写成了另一条路。
+ * 挑走法是作者自己点的，这段字算作者的话。章号对不上当前章、没字、不是这个形状就当没给。
+ */
+export function readPickedDirection(raw: unknown, currentChapter: number | undefined): string | undefined {
+  if (currentChapter === undefined || typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as { readonly chapter?: unknown; readonly text?: unknown };
+  if (record.chapter !== currentChapter || typeof record.text !== "string") return undefined;
+  const text = record.text.trim().slice(0, PICKED_DIRECTION_MAX);
+  return text || undefined;
+}
+
 /**
  * 把「用户当前所在章」做成一条 system 上下文消息，喂给 agent，使它在涉及章号时默认作用于该章、
  * 不擅自跳到最新章（H3）。currentChapter 缺省时返回 null（不注入）。
@@ -94,6 +110,7 @@ export function buildCurrentChapterSystemMessage(
   currentChapter: number | undefined,
   chapterStatus?: UiChapterFileState | undefined,
   allStates?: readonly UiChapterFileState[],
+  pickedDirection?: string,
 ): import("ai").ModelMessage | null {
   // 全书磁盘真相硬约束（A3）：即使没有 currentChapter，只要拿到了全书状态也要注入这条反证，
   // 让模型无法凭对话历史/印象谎报「某章已入库/已写好」。
@@ -118,7 +135,11 @@ export function buildCurrentChapterSystemMessage(
       `如果用户明确点名了某一章（例如「写第 7 章」「改第 3 章」「入库第 5 章」），一律以用户点名的章号为准，` +
       `即使它不是第 ${currentChapter} 章——把该章号原样填进工具的 chapter 入参，绝不用第 ${currentChapter} 章顶替。` +
       `只有当用户没有明确点名另一章时，才默认作用于第 ${currentChapter} 章，绝不要擅自跳到最新章或别的章。` +
-      committedForwardLine,
+      committedForwardLine +
+      (pickedDirection && !chapterStatus?.hasCommittedChapter
+        ? `\n作者给第 ${currentChapter} 章挑了这条走法（在稿纸上方点的「用这个」）：\n${pickedDirection}\n` +
+          `作者让照它写（或照它写再改几处）时，把这段原样填进 generate_draft 的 chapterGoal，作者另外要改的用作者原话接在后面。`
+        : ""),
   };
 }
 
@@ -569,11 +590,12 @@ async function handleAgentChat(
     const agent = await getStoryAgent();
     // 出稿流式：注入 sink，让 generate_draft 工具把正文 delta 实时转成 draft-delta SSE 事件（前端逐字进编辑器）。
     // sink 在工具 await 模型期间同步触发 sendEvent（此时 agent.stream 正 parked，draft-delta 自然单独流出）。
+    const pickedDirection = readPickedDirection(body.pickedDirection, currentChapter);
     const requestContext = buildProjectRequestContext(
       projectDir,
       currentChapter,
       (payload) => sendEvent("draft-delta", payload),
-      readAuthorWords(messages),
+      [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
       lastTurnUndoHint,
     );
 
@@ -630,7 +652,7 @@ async function handleAgentChat(
     const currentChapterStatus = currentChapter !== undefined
       ? allChapterStates.find((s) => s.chapter === currentChapter)
       : undefined;
-    const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates);
+    const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates, pickedDirection);
     const history = historyToModelMessages(messages);
     // 当前章提示紧贴用户最新指令（而非塞开头被历史淹没）——⑤头号根因 lost-in-the-middle。
     const modelMessages: ModelMessage[] = buildModelMessages(systemMessage, history);
