@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
 import { CHAPTER_LEDGER_SCHEMA, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
 import { project } from "./project.js";
@@ -117,6 +118,38 @@ describe("投影", () => {
     expect(result.subjects).toHaveLength(1);
     expect(result.subjects[0]?.attributes[0]?.current).toEqual(["c3-1"]);
     expect(result.chapters[0]?.viewpoint).toBe("沈青禾");
+  });
+
+  it("别名：设定卡上写的别名也算——账里记成别名的人和事实归到卡名；别名是另一张卡的名字的不收", () => {
+    const at = "2026-10-27T00:00:00.000Z";
+    const cards = {
+      schema: "setting-cards/1",
+      story: { fields: [] },
+      rules: { style: [], musts: [], bans: [], avoid: [], exemplars: [] },
+      cards: [
+        { id: "k-1", kind: "character", name: "林国栋", aliases: ["林父", "老林"], fields: [], by: "author", at },
+        { id: "k-2", kind: "character", name: "老林", aliases: [], fields: [], by: "author", at },
+      ],
+      relations: [],
+      canon: [],
+      skipped: [],
+    } as unknown as SettingCardsFile;
+    const result = project({
+      ledgers: [
+        ledger(1, [state("林父", "伤势病情", "住院")]),
+        ledger(2, [presence("林国栋", "父亲"), state("林国栋", "伤势病情", "失语")]),
+        ledger(3, [presence("老林")]),
+      ],
+      decisions: [],
+      cards,
+    });
+    expect(result.subjects).toHaveLength(1);
+    expect(result.subjects[0]?.name).toBe("林国栋");
+    expect(result.subjects[0]?.attributes[0]?.current).toEqual(["c2-2"]);
+    // 「老林」自己有卡：是另一个人，不归到林国栋。
+    expect(result.cast.map((member) => member.name).sort()).toEqual(["林国栋", "老林"]);
+    // 不给卡照旧：林父、林国栋各算各的。
+    expect(project({ ledgers: [ledger(1, [state("林父", "伤势病情", "住院")]), ledger(2, [state("林国栋", "伤势病情", "失语")])], decisions: [] }).subjects).toHaveLength(2);
   });
 
   it("别名：泛称（generic）只认那一章是他，不记成别名、不顶替别人", () => {
