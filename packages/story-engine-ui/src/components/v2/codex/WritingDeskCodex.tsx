@@ -11,6 +11,7 @@ import { QuoteJumpMarker } from "./QuoteJump.js";
 import { PaperToolbar } from "./PaperToolbar.js";
 import { ChapterTitle } from "./ChapterTitle.js";
 import { ChapterSynopsis } from "./ChapterSynopsis.js";
+import { PreWriteMemo } from "./PreWriteMemo.js";
 import { IconPencil } from "./icons.js";
 import { useChapterDirections, useChapterProgress, useContinuityResult } from "../../../workspace/chapterProgress.js";
 import { chapterHeading, cleanProseForDisplay } from "../v2Utils.js";
@@ -101,6 +102,8 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   readonly starter?: { readonly cardNames: readonly string[]; readonly storyFilled: boolean };
   /** 按章号打开一章（已定稿时工具条的「去第 N 章」）。 */
   readonly onOpenChapter?: (chapter: number) => void;
+  /** 回原句：打开那一章、滚到这句（写前备忘里点线索、状态）。 */
+  readonly onJumpToQuote?: (chapter: number, quote: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"draft" | "committed">("draft");
   // 正文字号已上提到 displaySettingsStore（设置面板统一调）；底部旧 A-/A+ 步进器已撤。
@@ -224,6 +227,14 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
             text={synopsis}
             busy={workspaceBusy}
             {...(props.onSendUserAction ? { onAction: props.onSendUserAction } : {})}
+          />
+        ) : !showStarter && activeTab === "draft" && draft.status !== "committed" ? (
+          <PreWriteMemo
+            projectPath={props.projectPath ?? undefined}
+            chapter={draft.chapterNumber}
+            refreshKey={props.overview}
+            busy={workspaceBusy}
+            {...(props.onJumpToQuote ? { onJump: props.onJumpToQuote } : {})}
           />
         ) : null}
       </header>

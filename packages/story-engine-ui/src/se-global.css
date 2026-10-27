@@ -100,7 +100,7 @@
 }
 /* 列表行、分段钮：只变色不缩（以前悬停是硬切）。 */
 :root :where(
-  .se-ch,.se-new-ch,.cd-nav,.cd-nav span,.cd-synopsis,.se-bnav-item,.se-seg button,.se-modal-nav button,.se-pal-it,.ms-display-btn,.ms-display-reset,
+  .se-ch,.se-new-ch,.cd-nav,.cd-nav span,.cd-synopsis,.cd-memo-head,.cd-memo-body li button,.se-bnav-item,.se-seg button,.se-modal-nav button,.se-pal-it,.ms-display-btn,.ms-display-reset,
   .se-open-book-list button,.se-trash-list li,.se-export-formats button,.se-import-book-list label
 ){
   transition-property:background-color,color,border-color,box-shadow;

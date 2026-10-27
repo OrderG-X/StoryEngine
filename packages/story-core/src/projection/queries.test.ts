@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AuthorDecision } from "../schema/decisions.js";
 import { CHAPTER_LEDGER_SCHEMA, type ChapterLedger, type LedgerEntry } from "../schema/ledger.js";
 import { project } from "./project.js";
-import { chapterBrief, currentFactsAbout, threadsForPrompt, timelineTable, timelineText } from "./queries.js";
+import { chapterBrief, currentFactsAbout, preWriteMemo, threadsForPrompt, timelineTable, timelineText } from "./queries.js";
 
 type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string } : never) : never;
 
@@ -108,5 +108,108 @@ describe("投影查询", () => {
     });
     expect(chapterBrief(view, 2)?.threads).toEqual([{ id: "t-a", title: "钥匙开什么", op: "advance" }]);
     expect(chapterBrief(view, 9)).toBeUndefined();
+  });
+});
+
+describe("写前备忘", () => {
+  const summary = (text: string): Draft => ({ kind: "summary", text, quote: q });
+
+  it("前面一章都没定稿：空的，什么都不列", () => {
+    const view = project({ ledgers: [], decisions: [] });
+    expect(preWriteMemo(view, 1)).toEqual({ chapter: 1, threads: [], moreThreads: 0, changes: [] });
+  });
+
+  it("上一章停在哪：第几天、时段、梗概、在场、视角；跳过没定稿的章，接最近定稿的那章", () => {
+    const view = project({
+      ledgers: [
+        ledger(1, [time({ daysSincePrevious: 0 }), presence("许微", "许微", true)]),
+        ledger(3, [time({ daysSincePrevious: 1, daysInChapter: 2, timeOfDay: "傍晚" }), summary("许微去码头"), presence("许微", "许微", true), presence("孟叔")]),
+      ],
+      decisions: [],
+    });
+    const memo = preWriteMemo(view, 5);
+    expect(memo.previous).toMatchObject({
+      chapter: 3,
+      summary: "许微去码头",
+      present: ["许微", "孟叔"],
+      viewpoint: "许微",
+      time: { chapter: 3, day: 2, dayEnd: 4, timeOfDay: "傍晚", basis: "text" },
+    });
+  });
+
+  it("该接的线索：上一章动过的先，再停太久的（分量重、停得久的先），再大伏笔；收了的、刚埋没停多久的普通线索不列，只计数", () => {
+    const view = project({
+      ledgers: [
+        ledger(1, [open("t-old", "信是谁写的"), open("t-major", "父亲怎么失踪的"), open("t-closed", "钥匙开什么")]),
+        ledger(2, [open("t-older", "门外是谁")]),
+        ledger(5, [touch("t-closed", "close")]),
+        ledger(8, [open("t-fresh", "账本下落")]),
+        ledger(9, [touch("t-older", "advance", "门外有脚印"), open("t-new", "零三号仓是谁")]),
+      ],
+      decisions: [decision({ type: "thread.weight", thread: "t-major", weight: "major" })],
+    });
+    const memo = preWriteMemo(view, 10);
+    expect(memo.threads.map((item) => [item.title, item.reason])).toEqual([
+      ["门外是谁", "previous"],
+      ["零三号仓是谁", "previous"],
+      ["信是谁写的", "stale"],
+      ["父亲怎么失踪的", "major"],
+    ]);
+    expect(memo.threads[0]).toMatchObject({ previousOp: "advance", idle: 0, last: { chapter: 9, note: "门外有脚印", quote: q } });
+    expect(memo.threads[1]).toMatchObject({ previousOp: "open" });
+    expect(memo.threads[2]).toMatchObject({ idle: 8, last: { chapter: 1, note: "开：信是谁写的" } });
+    // 「账本下落」第 8 章埋、才停 1 章，不列；收了的「钥匙开什么」不算开着。
+    expect(memo.moreThreads).toBe(1);
+  });
+
+  it("最多列 5 条：上一章动过的先占 3 条，停太久的接着，还有空才补上一章动过的其余几条", () => {
+    const view = project({
+      ledgers: [
+        ledger(1, [open("s1", "停一"), open("s2", "停二"), open("s3", "停三")]),
+        ledger(10, ["p1", "p2", "p3", "p4"].map((id) => open(id, `新${id}`))),
+      ],
+      decisions: [],
+    });
+    const memo = preWriteMemo(view, 11);
+    expect(memo.threads.map((item) => item.title)).toEqual(["新p1", "新p2", "新p3", "停一", "停二"]);
+    expect(memo.moreThreads).toBe(2);
+  });
+
+  it("回头改前面的章：投影算到上一章，后文的账不露进来；作者在更后面收掉的线索这里仍当开着", () => {
+    const ledgers = [
+      ledger(1, [open("t-a", "钥匙开什么"), fact("state", "铜盒", "在哪", "井里")]),
+      ledger(2, [touch("t-a", "advance", "找到锁孔")]),
+      ledger(3, [fact("state", "铜盒", "在哪", "许微手里")]),
+    ];
+    const view = project({ ledgers, decisions: [decision({ type: "thread.close", thread: "t-a", chapter: 3 })] }, { upTo: 1 });
+    const memo = preWriteMemo(view, 2);
+    expect(memo.previous?.chapter).toBe(1);
+    expect(memo.threads).toEqual([expect.objectContaining({ title: "钥匙开什么", reason: "previous", previousOp: "open" })]);
+    expect(memo.changes).toEqual([{ subject: "铜盒", attribute: "在哪", value: "井里", chapter: 1, quote: q }]);
+  });
+
+  it("最近变了：只看最近 3 章里记的、现在还算数的状态；新的先，最多 6 条；不会变的事实不算", () => {
+    const view = project({
+      ledgers: [
+        ledger(1, [fact("state", "铜盒", "在哪", "井里")]),
+        ledger(5, [fact("state", "石头", "胳膊", "缠着绷带"), fact("hard", "石头", "年纪", "十六")]),
+        ledger(6, [fact("state", "镖旗", "在哪", "车上")]),
+        ledger(7, [
+          fact("state", "镖旗", "在哪", "埋进坟里"),
+          fact("state", "石头", "胳膊", "拆了线"),
+          ...["甲", "乙", "丙", "丁", "戊"].map((name) => fact("state", name, "在哪", "渡口")),
+        ]),
+      ],
+      decisions: [],
+    });
+    const memo = preWriteMemo(view, 8);
+    expect(memo.changes).toHaveLength(6);
+    expect(memo.changes.map((item) => `${item.subject}${item.attribute}${item.value}`)).toEqual([
+      "镖旗在哪埋进坟里", "石头胳膊拆了线", "甲在哪渡口", "乙在哪渡口", "丙在哪渡口", "丁在哪渡口",
+    ]);
+    // 第 1 章的「铜盒在井里」太早；第 6 章「镖旗在车上」被第 7 章推翻；不会变的「年纪」不列。
+    expect(JSON.stringify(memo.changes)).not.toContain("井里");
+    expect(JSON.stringify(memo.changes)).not.toContain("车上");
+    expect(JSON.stringify(memo.changes)).not.toContain("十六");
   });
 });

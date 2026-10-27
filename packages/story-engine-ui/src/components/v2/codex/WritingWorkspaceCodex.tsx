@@ -738,6 +738,7 @@ export default function WritingWorkspaceCodex(props: WritingWorkspaceLayoutProps
               <WritingDeskCodex
                 {...props}
                 onOpenChapter={openChapterNumber}
+                onJumpToQuote={jumpToQuote}
                 peekCards={peekCards}
                 starter={starter}
                 onOpenCharacter={(name) => openInBible("chars", name)}
