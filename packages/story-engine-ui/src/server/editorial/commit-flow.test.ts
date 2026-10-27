@@ -197,6 +197,26 @@ describe("定稿编排", () => {
     expect(gone.lostThreads).toEqual(["钟为什么停"]);
   });
 
+  // 换题材长篇实跑 2026-10-28：第 4 章改一个词重定稿，记账员把第 5～11 章还在推进的线索报成收口。
+  it("重定稿收掉一条后文还在接着的线索：要你看、说清后文哪几章还接着、默认不记", async () => {
+    await commitChapter1();
+    const tickets = memoryTicketStore();
+    const advance = (quote: string) => fakeModel({ threads: [{ op: "advance", thread: "T1", note: "钟停的缘故还没解开", quote }] });
+    for (const [chapter, text, quote] of [[2, CH2, "老周站在门口，没让他进"], [3, "# 第3章 · 雨\n\n雨下了一夜，钟楼没人上去。", "钟楼没人上去"]] as const) {
+      const preview = expectPreview(await prepareChapterCommit({ bookDir: book, chapter, text, tickets, callModel: advance(quote) }));
+      expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets })).toMatchObject({ ok: true });
+    }
+    const typo = CH2.replace("又来了", "又来了一趟");
+    const recommit = expectPreview(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text: typo, tickets,
+      callModel: fakeModel({ threads: [{ op: "close", thread: "T1", note: "钟是被人故意拨停的", quote: "钟是被人故意拨停的" }] }),
+    }));
+    const close = recommit.review.find((item) => item.kind === "thread");
+    expect(close).toMatchObject({ optIn: true, reasons: [{ code: "closes-thread", text: "后文第 3 章还在接着这条：这里收了，后面就接不上，默认不记" }] });
+    expect(await confirmChapterCommit({ bookDir: book, ticket: recommit.ticket, text: typo, tickets })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).threads[0]).toMatchObject({ title: "钟为什么停", status: "active", lastTouchedAt: 3 });
+  });
+
   // 作者长篇实跑 2026-10-27：第 5 章改一个错字重定稿，记账员这次把天数看错一天，后面 45 章跟着挪。
   it("重定稿天数：上次记时间那句还在就照上次的，记账员这次看的不一样两边都给作者看；那句改没了按这次的", async () => {
     await commitChapter1();

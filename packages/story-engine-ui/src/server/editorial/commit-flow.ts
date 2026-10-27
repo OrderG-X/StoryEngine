@@ -115,7 +115,7 @@ export interface CommitItem {
   readonly quote?: string;
   /** 为什么要你看（自动记下的为空）。 */
   readonly reasons: readonly { readonly code: ReviewReason; readonly text: string }[];
-  /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改。 */
+  /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改；重定稿时收掉后文还在接着的线索。 */
   readonly optIn: boolean;
 }
 
@@ -217,7 +217,12 @@ function entryLabel(entry: EntryInput, before: BookProjection): string {
   }
 }
 
-function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (name: string) => string): CommitItem["reasons"] {
+function reasonTexts(
+  item: ClassifiedEntry,
+  before: BookProjection,
+  resolve: (name: string) => string,
+  later: ReadonlyMap<string, readonly number[]> = new Map(),
+): CommitItem["reasons"] {
   const { entry } = item;
   return item.reasons.map((code) => {
     switch (code) {
@@ -235,14 +240,41 @@ function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (na
         const list = old.map((fact) => `第 ${fact.chapter} 章「${fact.text}」`).join("、");
         return { code, text: list ? `推翻前文：${list}` : "推翻了前文的一条事实" };
       }
-      case "closes-thread":
-        return { code, text: "收掉这条线索后，它就不再提醒了" };
+      case "closes-thread": {
+        const after = entry.kind === "thread" ? later.get(entry.thread ?? "") : undefined;
+        return after
+          ? { code, text: `后文第 ${after.join("、")} 章还在接着这条：这里收了，后面就接不上，默认不记` }
+          : { code, text: "收掉这条线索后，它就不再提醒了" };
+      }
       case "new-character":
         return { code, text: "第一次出场的人物；要是已有人物的新称呼，去掉这条告诉我是谁" };
       case "time-estimated":
         return { code, text: "天数是估的" };
     }
   });
+}
+
+/**
+ * 重定稿时，后文哪几章还在接着哪条线索（推进、收口）。换题材长篇实跑 2026-10-28：第 4 章改一个词重定稿，
+ * 记账员把第 5～11 章还在推进的「算清欠债」报成了收口——照记的话这条在第 4 章就收了，后面那几章接不上。
+ */
+function laterThreadTouches(ledgers: readonly ChapterLedger[], chapter: number): ReadonlyMap<string, readonly number[]> {
+  const out = new Map<string, number[]>();
+  for (const ledger of [...ledgers].sort((a, b) => a.chapter - b.chapter)) {
+    if (ledger.chapter <= chapter) continue;
+    for (const entry of ledger.entries) {
+      if (entry.kind !== "thread" || entry.op === "open") continue;
+      const chapters = out.get(entry.thread) ?? [];
+      if (!chapters.includes(ledger.chapter)) chapters.push(ledger.chapter);
+      out.set(entry.thread, chapters);
+    }
+  }
+  return out;
+}
+
+/** 收口的线索后文还在接着：默认不记，作者勾上才记。 */
+function closesLaterThread(item: ClassifiedEntry, later: ReadonlyMap<string, readonly number[]>): boolean {
+  return item.entry.kind === "thread" && item.entry.op === "close" && later.has(item.entry.thread ?? "");
 }
 
 /** 会改掉前文「不会变」的事实：和它对不上，或者明写要推翻它（定稿时默认不写、要作者勾；通读记账不写）。 */
@@ -417,13 +449,15 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   // 清单序号 = 核过的条目里的下标。
   const position = new Map(accepted.map((item, index) => [item.index, index]));
   const resolve = subjectResolver(before);
+  const later = recommit ? laterThreadTouches(snapshot.ledgers, input.chapter) : new Map<string, readonly number[]>();
+  const optIn = (item: ClassifiedEntry): boolean => touchesHardFact(item, before) || closesLaterThread(item, later);
   const toItem = (item: ClassifiedEntry): CommitItem => ({
     index: position.get(item.index) ?? -1,
     kind: item.entry.kind,
     label: entryLabel(item.entry, before),
     ...("quote" in item.entry && item.entry.quote ? { quote: item.entry.quote } : {}),
-    reasons: reasonTexts(item, before, resolve),
-    optIn: touchesHardFact(item, before),
+    reasons: reasonTexts(item, before, resolve, later),
+    optIn: optIn(item),
   });
   const entries = accepted.map((item) => item.entry);
   const day = previewDay(snapshot.ledgers, input.chapter, entries, textSha);
@@ -433,7 +467,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     textSha256: draftFingerprint(input.text),
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
-    optInIndexes: plan.review.filter((item) => touchesHardFact(item, before)).map((item) => position.get(item.index) ?? -1),
+    optInIndexes: plan.review.filter(optIn).map((item) => position.get(item.index) ?? -1),
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
   await input.tickets.put(ticket);
