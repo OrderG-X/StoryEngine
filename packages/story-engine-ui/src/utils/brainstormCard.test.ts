@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterMessage } from "../type-defs/workspace.js";
 import { readMessageCards } from "../server/lib/message-cards-io.js";
-import { directionGoal, latestDirections, pickedDirection, readBrainstormData } from "./brainstormCard.js";
+import { directionGoal, latestDirections, pickedDirection, pickedDirectionGoal, readBrainstormData } from "./brainstormCard.js";
 
 const RAW = {
   ok: true,
@@ -38,6 +38,17 @@ describe("头脑风暴卡数据（前端投影和存盘共用）", () => {
     expect(pickedDirection(messages, 12)?.title).toBe("老周开口");
     expect(pickedDirection(messages, 13)).toBeUndefined();
     expect(latestDirections(messages, 14)).toBeUndefined();
+  });
+
+  it("作者要走法时说的想法跟着方向走：章纲员看得到「不碰什么」；回显照旧按走法开头认", () => {
+    const data = readBrainstormData({ ...RAW, idea: "老周开口。不碰钟楼。" })!;
+    const goal = directionGoal(data.options[0]!, data.idea);
+    expect(goal).toBe("老周开口：1. 外乡人又来 2. 老周说出钟停那天\n作者要走法时说：老周开口。不碰钟楼。");
+    expect(goal.startsWith(directionGoal(data.options[0]!))).toBe(true);
+    expect(directionGoal(data.options[0]!, "  ")).toBe("老周开口：1. 外乡人又来 2. 老周说出钟停那天");
+    const messages: ChapterMessage[] = [{ id: "a", role: "assistant", content: "", cards: [{ type: "directions", brainstorm: data, picked: 0 }] }];
+    expect(pickedDirectionGoal(messages, 12)).toBe(goal);
+    expect(pickedDirectionGoal([{ id: "b", role: "assistant", content: "", cards: [{ type: "directions", brainstorm: data }] }], 12)).toBeUndefined();
   });
 
   it("存盘白名单认走法卡；挑的序号越界就当没挑", () => {

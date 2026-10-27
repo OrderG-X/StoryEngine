@@ -54,9 +54,14 @@ export function readPicked(value: unknown, data: BrainstormCardData): number | u
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < data.options.length ? value : undefined;
 }
 
-/** 挑中的走法 → 交给「写这一章」的方向（章纲员照它拟纲）。 */
-export function directionGoal(option: BrainstormOptionData): string {
-  return `${option.title}：${option.steps.map((step, index) => `${index + 1}. ${step}`).join(" ")}`;
+/**
+ * 挑中的走法 → 交给「写这一章」的方向（章纲员照它拟纲）。
+ * 作者要走法时说过的想法一并带上：走法只有三步，「不碰催收和陆生」这类话只在想法里，
+ * 不带过去章纲员就又写进去了（换题材长篇实跑 2026-10-27）。想法接在后面，回显照旧按走法开头认。
+ */
+export function directionGoal(option: BrainstormOptionData, idea?: string): string {
+  const steps = `${option.title}：${option.steps.map((step, index) => `${index + 1}. ${step}`).join(" ")}`;
+  return idea?.trim() ? `${steps}\n作者要走法时说：${idea.trim()}` : steps;
 }
 
 export interface ChapterDirections {
@@ -81,4 +86,11 @@ export function latestDirections(messages: readonly ChapterMessage[], chapter: n
 export function pickedDirection(messages: readonly ChapterMessage[], chapter: number): BrainstormOptionData | undefined {
   const latest = latestDirections(messages, chapter);
   return latest?.picked !== undefined ? latest.data.options[latest.picked] : undefined;
+}
+
+/** 这一章挑中的走法变成的方向（带上作者当时说的想法）；没挑返回 undefined。 */
+export function pickedDirectionGoal(messages: readonly ChapterMessage[], chapter: number): string | undefined {
+  const latest = latestDirections(messages, chapter);
+  const option = latest?.picked !== undefined ? latest.data.options[latest.picked] : undefined;
+  return option ? directionGoal(option, latest!.data.idea) : undefined;
 }
