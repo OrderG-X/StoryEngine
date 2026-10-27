@@ -138,7 +138,7 @@ export function buildCurrentChapterSystemMessage(
       committedForwardLine +
       (pickedDirection && !chapterStatus?.hasCommittedChapter
         ? `\n作者给第 ${currentChapter} 章挑了这条走法（在稿纸上方点的「用这个」）：\n${pickedDirection}\n` +
-          `作者让照它写（或照它写再改几处）时，把这段原样填进 generate_draft 的 chapterGoal，作者另外要改的用作者原话接在后面。`
+          `出稿写这一章时会自动照这条走法写，不用把它抄进 chapterGoal；chapterGoal 只填作者另外说的话（原话，没有就不填）。`
         : ""),
   };
 }
@@ -597,6 +597,7 @@ async function handleAgentChat(
       (payload) => sendEvent("draft-delta", payload),
       [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
       lastTurnUndoHint,
+      pickedDirection && currentChapter !== undefined ? { chapter: currentChapter, text: pickedDirection } : undefined,
     );
 
     res.writeHead(200, {

@@ -32,6 +32,7 @@ import {
   buildDraftLengthInfo,
   buildDraftLengthWarning,
   authorDirectionOf,
+  withPickedDirection,
   buildGoalNotQuotedOutput,
   buildRewriteAwaitingAuthorOutput,
   buildSequencingBlockedOutput,
@@ -547,6 +548,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(authorDirectionOf(undefined, undefined)).toBeUndefined();
   });
 
+  it("withPickedDirection：挑中的走法并进方向，作者另外说的接后面；方向里已有（按钮带来的）不重复；没挑照旧", () => {
+    expect(withPickedDirection("别让她认定是一家人", "老民警：1. 去派出所")).toBe("老民警：1. 去派出所\n作者另外说：别让她认定是一家人");
+    expect(withPickedDirection(undefined, "老民警：1. 去派出所")).toBe("老民警：1. 去派出所");
+    expect(withPickedDirection("老民警：1. 去派出所\n作者要走法时说：慢一点", "老民警：1. 去派出所\n作者要走法时说：慢一点")).toBe("老民警：1. 去派出所\n作者要走法时说：慢一点");
+    expect(withPickedDirection("写快一点", undefined)).toBe("写快一点");
+    expect(withPickedDirection(undefined, undefined)).toBeUndefined();
+  });
+
   it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
     const out = buildGoalNotQuotedOutput(3, ["并埋下伏笔"], {} as StateOverview);
     expect(out.ok).toBe(false);
@@ -796,6 +805,28 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
 
       const out = await execute({ chapter: 6 }, context) as { ok: boolean; chapter: number };
       expect(out.chapter).toBe(6);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("作者给这一章挑过走法：对话里只说「照甲写，改一处」，章纲员拿到的方向是走法原文 + 作者另外说的", async () => {
+    const projectDir = await makeProject("挑中走法");
+    const mockClient: WriterClient = mockWriterClient(longBody("林远"));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const planModule = await import("../../editorial/plan-chapter.js");
+    const plan = vi.mocked(planModule.resolveChapterPlanForDraft);
+    plan.mockClear();
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["照甲写。一处改：别急着揭底。"], undefined, { chapter: 1, text: "老民警：1. 去派出所 2. 只漏出名字" }),
+      } as unknown as ToolExecutionContext;
+
+      const out = await execute({ chapter: 1, chapterGoal: "一处改：别急着揭底。" }, context) as { ok: boolean };
+      expect(out.ok).toBe(true);
+      expect(plan.mock.calls.at(-1)?.[0]).toMatchObject({ direction: "老民警：1. 去派出所 2. 只漏出名字\n作者另外说：一处改：别急着揭底。" });
     } finally {
       spy.mockRestore();
     }

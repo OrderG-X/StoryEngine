@@ -76,7 +76,7 @@ export type {
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, isUserConfirmedTool } from "../request-context.js";
+import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, readPickedDirectionFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
 import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
@@ -407,6 +407,14 @@ export function authorDirectionOf(chapterGoal: string | undefined, mustHitBeats:
   return [goal, ...beats].filter(Boolean).join("\n") || undefined;
 }
 
+/** 作者给这一章挑中的走法并进方向：方向里已经有了（「写这一章」按钮带来的）就不重复；作者另外说的接在后面。纯逻辑、可测。 */
+export function withPickedDirection(goal: string | undefined, picked: string | undefined): string | undefined {
+  if (!picked) return goal;
+  if (!goal) return picked;
+  if (goal.includes(picked)) return goal;
+  return `${picked}\n作者另外说：${goal}`;
+}
+
 /** chapterGoal 不是作者原话：退回让 AI 原样抄或不填（在建快照、调模型之前，不花额度）。纯逻辑、可测。 */
 export function buildGoalNotQuotedOutput(
   chapter: number,
@@ -491,6 +499,8 @@ export const generateDraftTool = createTool({
       }
       continueText = stripLeadingMarkdownChapterHeading(await readFile(defaultDraftPath(projectDir, resolvedChapter), "utf-8")).trim();
     }
+    // 作者在稿纸上方给这一章挑过走法：照它写（和「写这一章」按钮同一口径），作者在对话里另外说的接在后面。
+    const direction = withPickedDirection(chapterGoal, readPickedDirectionFromContext(context, resolvedChapter));
     // 导入的书还在通读记账（P8）：账没记全，章纲员、核账员对照的前文是缺的，记完再出稿。
     const rereading = await rereadBlocker(projectDir, "出稿");
     if (rereading) {
@@ -561,14 +571,14 @@ export const generateDraftTool = createTool({
       ...(draftDeltaSink && candidateCount === 1
         ? { onStreamReset: (visible: string) => draftDeltaSink({ chapter: resolvedChapter, text: visible, replace: true }) }
         : {}),
-      ...(chapterGoal ? { chapterGoal } : {}),
+      ...(direction ? { chapterGoal: direction } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
       ...(continuing
         ? {
           continueFrom: {
             text: continueText,
             ...(input.requestedDraftLength && input.requestedDraftLength > 0 ? { length: input.requestedDraftLength } : {}),
-            ...(chapterGoal ? { direction: chapterGoal } : {}),
+            ...(direction ? { direction } : {}),
           },
         }
         : {}),

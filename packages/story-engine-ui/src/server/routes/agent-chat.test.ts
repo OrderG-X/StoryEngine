@@ -442,7 +442,7 @@ describe("buildCurrentChapterSystemMessage 当前章上下文", () => {
       chapter: 14, hasDraftFile: false, hasCommittedChapter: false,
     }, undefined, "老民警认账翻旧档：1. 去派出所 2. 只漏出名字")!.content as string;
     expect(content).toContain("老民警认账翻旧档：1. 去派出所 2. 只漏出名字");
-    expect(content).toContain("原样填进 generate_draft 的 chapterGoal");
+    expect(content).toContain("不用把它抄进 chapterGoal");
   });
 
   it("这章已定稿 → 不再提挑过的走法", () => {
