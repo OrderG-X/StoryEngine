@@ -176,6 +176,7 @@ export function dropEchoedLead(written: string, body: string): string {
   if (tail.length === 0) return body;
   const last = tail[tail.length - 1]!;
   const paragraphs = body.split(/\n+/u).map((item) => item.trim()).filter(Boolean);
+  if (paragraphs.length === 0) return body;
   let dropped = 0;
   while (dropped < paragraphs.length - 1 && tail.includes(paragraphs[dropped]!)) dropped += 1;
   const rest = paragraphs.slice(dropped);
@@ -379,7 +380,9 @@ async function generateBySegments(input: {
   });
   try {
     const second = await input.writerClient.generateDraft({ context: secondContext, maxOutputTokens: input.maxOutputTokens });
-    let secondBody = stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(second.content)).trim();
+    // 后半章开头原样抄了前半章最后一句（换题材长篇实跑第 21 章：「“泡上吧。”」连着两遍）：和接着写一样去掉。
+    const cleanSecond = (content: string): string => dropEchoedLead(firstBody, stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(content)).trim());
+    let secondBody = cleanSecond(second.content);
     if (!secondBody) throw new Error("后半章是空的");
     // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
     // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
@@ -398,7 +401,7 @@ async function generateBySegments(input: {
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
-      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
+      const retryBody = retry ? cleanSecond(retry.content) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
@@ -422,7 +425,7 @@ async function generateBySegments(input: {
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
-      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
+      const retryBody = retry ? cleanSecond(retry.content) : "";
       const retryLength = countDraftChineseCharacters(retryBody);
       const used = retryLength > before && findReplayedParagraphs(alreadyWritten, retryBody).length <= replayedRemaining;
       if (used) secondBody = retryBody;

@@ -80,6 +80,23 @@ describe("按章纲分前后两半写", () => {
     expect(written).not.toContain("全文完");
   });
 
+  it("后半章开头原样抄了前半章最后一句 → 拼接时去掉（换题材长篇实跑第 21 章「“泡上吧。”」连着两遍）", async () => {
+    const projectDir = await makeBook();
+    let calls = 0;
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async () => {
+        calls += 1;
+        return calls === 1
+          ? { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。\n\n“泡上吧。”` }
+          : { title: "", content: `“泡上吧。”\n\n${han(1300, "后")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    const written = draftFileOf(report);
+    expect(written).toContain(`“泡上吧。”\n\n${han(1300, "后")}。`);
+    expect(written.split("“泡上吧。”").length).toBe(2);
+  });
+
   it("stripTrailingSegmentMarkers：只去末尾整段的短标记；人物心声、正文中间的括号段不动", () => {
     expect(stripTrailingSegmentMarkers("他走了。\n\n（未完待续）\n\n")).toBe("他走了。");
     expect(stripTrailingSegmentMarkers("他走了。\n(待续)")).toBe("他走了。");
@@ -217,7 +234,8 @@ describe("按章纲分前后两半写", () => {
       generateDraft: vi.fn(async ({ context }) => {
         contexts.push(context);
         if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。\n\n${scene}` };
-        if (contexts.length === 2) return { title: "", content: `${scene}\n\n${han(1300, "后")}。` };
+        // 换了两个字重演（原样照抄的开头另有 dropEchoedLead 去掉）。
+        if (contexts.length === 2) return { title: "", content: `${scene.replace("抬头看了他一眼", "抬眼看了看他")}\n\n${han(1300, "后")}。` };
         return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(1300, "新")}。` };
       }),
     };
@@ -459,6 +477,7 @@ describe("接着往下写", () => {
     expect(dropEchoedLead(written, "林晚盯着火。\n\n新的一段。")).toBe("林晚盯着火。\n\n新的一段。");
     expect(dropEchoedLead(written, "新的一段。\n\n林晚看着火。")).toBe("新的一段。\n\n林晚看着火。");
     expect(dropEchoedLead(written, "林晚看着火。")).toBe("林晚看着火。");
+    expect(dropEchoedLead(written, "  \n ")).toBe("  \n ");
   });
 
   it("接着写的那段是 JSON / 工具调用 → 拦下（开头是作者的字，整章查不出来）", async () => {
