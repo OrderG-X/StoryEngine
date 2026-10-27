@@ -105,6 +105,16 @@ describe("头脑风暴：核账员核走法", () => {
     expect(checked[1]!.problems).toEqual([{ step: 2, earlierChapter: 2, earlierQuote: "把信寄给了林溪", reason: "信已经寄走了，抽屉里没有信" }]);
     expect(checked[2]!.problems).toEqual([]);
   });
+
+  it("推荐的那种核出对不上 → 不再标推荐（不挪给别的，章纲员没说第二好的是哪种）", () => {
+    expect(options[0]!.recommended).toBe(true);
+    const clean = splitBrainstormProblems(JSON.stringify({ problems: [] }), options, { chapters: [] });
+    expect(clean[0]!.recommended).toBe(true);
+    const checked = splitBrainstormProblems(JSON.stringify({ problems: [
+      { point: 2, conflict: true, earlierQuote: "把信寄给了林溪", earlierChapter: 2, reason: "信已经寄走了" },
+    ] }), options, { chapters: [{ chapter: 2, sentences: [CH2] }] });
+    expect(checked.map((option) => option.recommended)).toEqual([undefined, undefined, undefined]);
+  });
 });
 
 /** 假专员：json:false 写笔记；json:true 按角色回固定内容（可以抛错）。 */

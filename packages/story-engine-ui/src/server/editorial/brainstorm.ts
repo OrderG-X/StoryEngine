@@ -224,7 +224,12 @@ export function splitBrainstormProblems(text: string, options: readonly Brainsto
       reason: problem.reason,
     });
   }
-  return options.map((option, index) => ({ ...option, problems: byOption[index]! }));
+  // 推荐是章纲员还没核前文时挑的：核出对不上的就不再标推荐（换题材长篇实跑 2026-10-27：推荐的那种恰好对不上）。
+  return options.map((option, index) => {
+    const problems = byOption[index]!;
+    const { recommended, ...rest } = option;
+    return { ...rest, ...(recommended && problems.length === 0 ? { recommended } : {}), problems };
+  });
 }
 
 /** 读到第 upTo 章的跟读窗口：要补的笔记太多就用冷窗口（已有笔记 + 最近几章原文），同拟章纲 / 审章纲。 */
