@@ -8,6 +8,7 @@ import { uiText } from "./v2Utils.js";
 import { decideExternalDraftSync, draftTextToHtml } from "./draftEditorSync.js";
 import SelectionToolbar from "./SelectionToolbar.js";
 import { sentenceSpan } from "./sentenceSnap.js";
+import { setSnapPreview, SNAP_PREVIEW_KEY, SnapPreview } from "./snapPreview.js";
 import type { SelectionRevisionKey } from "./selectionRevisionTemplates.js";
 import FindReplacePanel from "./FindReplacePanel.js";
 import {
@@ -150,15 +151,13 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
   // jsdom 下会抛——try/catch 兜住，失败就不显示（真实定位交真机）。
   const refreshSelection = useCallback((instance: Editor) => {
     // 查找替换开着时不出选区浮动条——否则查找导航选中匹配会误触发块②的润色条。
-    if (!(canRewrite || canAsk) || findOpen) { setSelection(null); return; }
+    if (!(canRewrite || canAsk) || findOpen) { setSnapPreview(instance, null); setSelection(null); return; }
     const { from: rawFrom, to: rawTo, empty } = instance.state.selection;
-    if (empty) { setSelection(null); return; }
-    // 能改写时把选区对齐到整句（见 sentenceSnap.ts）：只选半句去润色，模型会补全句子，应用后后半句重复。
-    // 对齐后把编辑器选区也改过去，作者看到的就是会被改的那一整段。
+    if (empty) { setSnapPreview(instance, null); setSelection(null); return; }
+    // 能改写时改写的文字对齐到整句（见 sentenceSnap.ts）：只选半句去润色，模型会补全句子，应用后后半句重复。
+    // 编辑器选区不动（作者选几个字打字替换，不能一下吞掉整句），会被改的整句另用底纹标出来（snapPreview）。
     const snapped = canRewrite ? snapToSentences(instance, rawFrom, rawTo) : null;
-    if (snapped && (snapped.from !== rawFrom || snapped.to !== rawTo)) {
-      instance.commands.setTextSelection(snapped);
-    }
+    setSnapPreview(instance, snapped && (snapped.from !== rawFrom || snapped.to !== rawTo) ? snapped : null);
     const from = snapped?.from ?? rawFrom;
     const to = snapped?.to ?? rawTo;
     // leafText 必须用 "\n" 与 draft.content 的 getText 对齐：Tiptap 的 hardBreak（段内单换行 → <br>）
@@ -201,6 +200,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       FindHighlight,
       RevisionHighlight,
       SentenceFocus,
+      SnapPreview,
     ],
     content: draftTextToHtml(draft.content),
     editable: !locked,
@@ -210,7 +210,12 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       handleDOMEvents: {
         // 鼠标在正文里按下=开始拖选：先收起浮动条，等松手（document mouseup）选区定型后再弹。
         // 只在可编辑区触发，不含浮动条本身，故不影响「点工具条按钮」。
-        mousedown: () => { pointerSelectingRef.current = true; setSelection(null); return false; },
+        mousedown: (view) => {
+          pointerSelectingRef.current = true;
+          setSelection(null);
+          if (SNAP_PREVIEW_KEY.getState(view.state)) view.dispatch(view.state.tr.setMeta(SNAP_PREVIEW_KEY, null));
+          return false;
+        },
       },
     },
     onUpdate: ({ editor: instance }) => {
@@ -240,7 +245,7 @@ function EditablePaper({ draft, onEdit, paperStyle, onSelectionRewrite, onSelect
       if (pointerSelectingRef.current) return; // 鼠标拖选过程中先不弹浮动条，等松手再弹
       refreshSelectionRef.current(instance);
     },
-    onBlur: () => setSelection(null),
+    onBlur: ({ editor: instance }) => { setSnapPreview(instance, null); setSelection(null); },
   });
 
   // 锁 / 解锁不算作者改字：TipTap 的 setEditable 默认会发一次 update，onUpdate 会把编辑器里的字当作者打的回写——
