@@ -115,6 +115,12 @@ describe("generate_draft 输出格式", () => {
     const continuity = { checked: true, sure: [], maybe: [], failures: [], autoFixed: { applied: 2, failed: 0 } };
     expect(shape.qualityPipeline!.parse({ continuity })).toEqual({ continuity });
   });
+
+  // 换题材长篇实跑：两章都先被退回一次（删了「不服，」、把「他」换成「林朗」），作者每章看见「1 步没成功」。
+  it("chapterGoal 的说明讲清抄的每句一个字不改", () => {
+    const shape = (generateDraftTool.inputSchema as unknown as { shape: Record<string, { description?: string }> }).shape;
+    expect(shape.chapterGoal!.description).toContain("抄的每句一个字不改");
+  });
 });
 
 describe("generate_draft 写工作稿工具", () => {

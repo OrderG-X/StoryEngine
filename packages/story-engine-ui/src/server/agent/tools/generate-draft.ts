@@ -133,7 +133,7 @@ const inputSchema = z.object({
   // 2026-10-10 对话 AI 瘦身：参数说明只留模型要知道的（原来约 1700 字，每轮都发）。
   chapter: coerceNumber(z.number().int().positive().optional().describe("章号；省略=用户当前所在章。")),
   chapterGoal: z.string().optional().describe(
-    "本章方向：只能原样抄作者说过的话（可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
+    "本章方向：只能原样抄作者说过的话，抄的每句一个字不改（别删字、别把「他」换成名字；可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
   ),
   requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。continueDraft 时是这次接着写多少字（省略=写到本章目标）。")),
   continueDraft: coerceBoolean(z.boolean().optional().describe(
