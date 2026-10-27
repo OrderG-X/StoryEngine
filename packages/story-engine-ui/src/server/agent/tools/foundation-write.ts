@@ -115,6 +115,17 @@ export function normalizeRawOp(raw: Record<string, unknown>): Record<string, unk
   if (typeof out.kind === "string") out.kind = KIND_ALIASES[out.kind.trim()] ?? out.kind.trim().toLowerCase();
   if (typeof out.list === "string") out.list = LIST_ALIASES[out.list.trim()] ?? out.list.trim();
   if (typeof out.field === "string") out.field = SCALAR_ALIASES[out.field.trim()] ?? out.field.trim();
+  // 字数写成了故事设定的一栏（栏名正好是写作规则的「每章目标字数 / 每章至少字数」）：搬回写作规则，
+  // 不然写作台、出稿都不按它算，AI 却说记好了（换题材长篇实跑 2026-10-27）。只认自家栏名，别的栏不动。
+  // 只搬「写上」；空值是删故事设定里那一栏（把记错的那栏清掉），照旧删那一栏，不能当成删写作规则。
+  if (out.op === "story.set" && typeof out.label === "string" && !isEmptyValue(out.value)) {
+    const field = SCALAR_ALIASES[out.label.trim()];
+    if (field === "targetWords" || field === "minWords") {
+      delete out.label;
+      out.op = "rules.set";
+      out.field = field;
+    }
+  }
   if (out.protagonist === "true" || out.protagonist === "True") out.protagonist = true;
   if (out.protagonist === false || out.protagonist === "false" || out.protagonist === "False") delete out.protagonist;
   for (const key of ["aliases", "add", "remove"] as const) {
