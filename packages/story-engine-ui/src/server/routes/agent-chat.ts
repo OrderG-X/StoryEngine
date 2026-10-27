@@ -167,6 +167,8 @@ export function buildModelMessages(
 /** 历史里工具结果只说成没成，细节在那条回复里。 */
 const HISTORY_TOOL_DONE = "做完了，结果见下一条回复。";
 const HISTORY_TOOL_FAILED = "没成功；下一条回复里若说已经做成，不算数。";
+/** 换题材长篇实跑 2026-10-27：作者在定论卡上点了「不改了」再说一遍同一条，AI 回「卡就在上面」，一次都没再查。 */
+const HISTORY_TOOL_DROPPED = "出了卡，作者在卡上点了「不改了」：这张作废、书里没动。作者再提就重新调。";
 
 /**
  * 聊天历史 → 模型消息：AI 那条回合调过的工具还原成真的工具调用和结果，再接那条回复的文字。
@@ -185,7 +187,7 @@ export function historyToModelMessages(messages: readonly ChatHistoryMessage[]):
           type: "tool-result" as const,
           toolCallId: call.toolCallId,
           toolName: call.name,
-          output: { type: "text" as const, value: call.ok ? HISTORY_TOOL_DONE : HISTORY_TOOL_FAILED },
+          output: { type: "text" as const, value: !call.ok ? HISTORY_TOOL_FAILED : call.dropped ? HISTORY_TOOL_DROPPED : HISTORY_TOOL_DONE },
         })),
       },
       { role: "assistant", content: message.content },

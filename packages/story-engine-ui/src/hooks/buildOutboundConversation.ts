@@ -1,6 +1,10 @@
 import { estimateTokens } from "../lib/estimate-tokens.js";
 import type { ChapterMessage } from "../type-defs/workspace.js";
 import type { ChatHistoryMessage } from "../server/lib/project-io.js";
+import { cardOf } from "../utils/messageCards.js";
+
+/** 出定论卡的工具（对话里 settle_fact、核账卡按钮 settle_preview）：卡上点了「不改了」就带上 dropped。 */
+const SETTLE_TOOLS: ReadonlySet<string> = new Set(["settle_fact", "settle_preview"]);
 
 /**
  * A2 历史诚实化（治谎报回灌·配合 A3 全书磁盘真相双保险）：发给 AI 的历史带上那条回合调过哪些工具、成没成，
@@ -14,7 +18,12 @@ export function outboundTools(m: ChapterMessage): ChatHistoryMessage["tools"] {
   const steps = (m.toolSteps ?? []).filter((s) => s.toolName);
   const names = [...new Set(steps.map((s) => s.toolName!))];
   if (names.length === 0) return undefined;
-  return names.map((name) => ({ name, ok: !steps.some((s) => s.toolName === name && s.status === "failed") }));
+  const dropped = cardOf(m, "settle")?.dropped === true;
+  return names.map((name) => ({
+    name,
+    ok: !steps.some((s) => s.toolName === name && s.status === "failed"),
+    ...(dropped && SETTLE_TOOLS.has(name) ? { dropped: true as const } : {}),
+  }));
 }
 
 export function buildOutboundConversation(
