@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../index.js";
 import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
+import { describeTimelineForChapter, readStoryTimeline } from "../../book/story-timeline.js";
+import { syncLegacyMirror } from "../../book/mirror/sync.js";
+import { chapterCommit, decisionRecord, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
 import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
@@ -212,6 +215,52 @@ describe("核账服务：核账记忆", () => {
     // 设定没再动 → 又能复用
     expect((await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel })).reused).toBe(true);
   });
+  it("有一遍没跑成（别的遍照常报了错）→ 不记进核账记忆：下次重核，那一步的失败不会被当成全核过端出来", async () => {
+    const dir = await makeBook();
+    let calls = 0;
+    let broken = true;
+    const flaky: BrainCallModel = async (messages, options) => {
+      calls += 1;
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+        return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+      }
+      if (broken && last.includes("这一遍只盯时间")) throw new Error("连接断了");
+      return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
+    };
+    const first = await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
+    expect(first.failures.length).toBeGreaterThan(0);
+    expect(first.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
+    expect(await canReuseCheck(dir, 3, BODY)).toBe(false);
+    broken = false;
+    const before = calls;
+    const second = await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
+    expect(second.reused).toBe(false);
+    expect(second.failures).toEqual([]);
+    expect(calls).toBeGreaterThan(before);
+    // 这遍全跑成了 → 记下，再核才复用
+    expect((await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky })).reused).toBe(true);
+  });
+
+  it("作者改了前一章是哪天 → 不复用上次「没问题」的结果（时间线表进键）", async () => {
+    const dir = await makeHomeTempDir("check-service-day-");
+    const text = "林舟把怀表放进抽屉。周婶走到柜台。";
+    expect((await runCommand(dir, chapterCommit, { chapter: 1, text, entries: [{ kind: "time", review: "auto", basis: "author", day: 1, quote: text }] }, { caller: "author", idempotencyKey: "commit-1" })).ok).toBe(true);
+    await syncLegacyMirror(dir);
+    const reader = readerModel();
+    await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
+    expect(await canReuseCheck(dir, 2, BODY)).toBe(true);
+    expect((await runCommand(dir, decisionRecord, { type: "chapter.day", chapter: 1, day: 20 }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
+    await syncLegacyMirror(dir);
+    expect((await readStoryTimeline(dir)).timeline.entries[0]?.day).toBe(20);
+    expect(await canReuseCheck(dir, 2, BODY)).toBe(false);
+    const checksBefore = reader.calls.checks;
+    const after = await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
+    expect(after.reused).toBe(false);
+    expect(reader.calls.checks).toBeGreaterThan(checksBefore);
+  });
 });
 
 describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + 后台补读）", () => {
@@ -373,7 +422,8 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
     const earlier = await readEarlierChapters(dir, 4);
-    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, []), issues: [CURRENT, OLD] });
+    const timeline = describeTimelineForChapter((await readStoryTimeline(dir)).timeline, 4);
+    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, [], "", timeline), issues: [CURRENT, OLD] });
     return dir;
   }
 

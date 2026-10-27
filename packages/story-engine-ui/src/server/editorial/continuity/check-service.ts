@@ -6,7 +6,7 @@
  * 正文由调用方给（出稿后自检核的是还没落盘的稿子）。只读：不改正文、不写账本；只写核账记忆（作者的查错记录）。
  */
 import { readFactLedgerStrict } from "../../book/fact-ledger-store.js";
-import { readStoryTimeline } from "../../book/story-timeline.js";
+import { describeTimelineForChapter, readStoryTimeline, type StoryTimeline } from "../../book/story-timeline.js";
 import { type FactEntry } from "../../book/types.js";
 import {
   callConfiguredBrainModel,
@@ -33,7 +33,7 @@ import {
 } from "./check-chapter.js";
 import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory } from "./check-memory.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
-import { readFoundationDigest, settingQuoteSource } from "../foundation-digest.js";
+import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
 
 export interface ChapterCheckItem {
@@ -163,14 +163,43 @@ async function checkByReader(input: {
   return { issues, failures: [...ledger.failures, ...reader.failures], ...(reader.cold ? { coverage: { ...reader.cold } } : {}), ...(reader.waited ? { waited: reader.waited } : {}) };
 }
 
-/** 这章这份正文能不能直接用上次的核账结果（正文、前文、账本都没改）：只读盘、不调模型（P11：AI 出稿后补核账卡用）。 */
+/**
+ * 核账的输入读一次：前文、账本、设定本、时间线。核账记忆的键从这份算——核账员看得到的都进键（时间线表也进，
+ * 作者改了哪天要重核）。有一样读不了，键就是 undefined：不复用上次的，这次的结果也不存（读不了时核出来的不算全）。
+ */
+async function readCheckInputs(projectDir: string, chapter: number): Promise<{
+  readonly earlier: EarlierText;
+  readonly ledgerFacts?: readonly FactEntry[];
+  readonly foundation?: FoundationDigest;
+  readonly timeline?: StoryTimeline;
+  readonly earlierHash?: string;
+}> {
+  const earlier = await readEarlierChapters(projectDir, chapter);
+  const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
+  let foundationRead = true;
+  const foundation = await readFoundationDigest(projectDir).catch(() => {
+    foundationRead = false;
+    return undefined;
+  });
+  const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
+  const earlierHash = ledgerFacts && foundationRead && timeline
+    ? hashEarlier(earlier, ledgerFacts, foundation?.text, describeTimelineForChapter(timeline, chapter))
+    : undefined;
+  return {
+    earlier,
+    ...(ledgerFacts ? { ledgerFacts } : {}),
+    ...(foundation ? { foundation } : {}),
+    ...(timeline ? { timeline } : {}),
+    ...(earlierHash ? { earlierHash } : {}),
+  };
+}
+
+/** 这章这份正文能不能直接用上次的核账结果（正文、前文、账本、设定、时间线都没改）：只读盘、不调模型（P11：AI 出稿后补核账卡用）。 */
 export async function canReuseCheck(projectDir: string, chapter: number, body: string): Promise<boolean> {
   const memory = await readCheckMemory(projectDir, chapter);
   if (!memory || memory.version !== CHECK_MEMORY_VERSION || memory.bodyHash !== hashBody(body)) return false;
-  const earlier = await readEarlierChapters(projectDir, chapter);
-  const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
-  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
-  return memory.earlierHash === hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
+  const { earlierHash } = await readCheckInputs(projectDir, chapter);
+  return earlierHash !== undefined && memory.earlierHash === earlierHash;
 }
 
 export async function checkChapterBody(
@@ -179,17 +208,14 @@ export async function checkChapterBody(
   body: string,
   options: ChapterCheckOptions = {},
 ): Promise<ChapterCheckResult> {
-  const earlier = await readEarlierChapters(projectDir, chapter);
   // 账本只读一次：数字对账用它，核账记忆的键也带上它。读不了就不传，核账那边会如实记「账本读不了」。
-  const ledgerFacts = await readFactLedgerStrict(projectDir).then((ledger) => ledger.facts).catch(() => undefined);
+  // 设定本也只读一次：上次对设定本的条目按它判还在不在。
+  const { earlier, ledgerFacts, foundation, timeline, earlierHash } = await readCheckInputs(projectDir, chapter);
   const readerCallModel = options.readerCallModel ?? callConfiguredBrainModel;
-  // 设定本也只读一次：记忆的键带上它（改了设定要重核），上次对设定本的条目也按它判还在不在。
-  const foundation = await readFoundationDigest(projectDir).catch(() => undefined);
   const bodyHash = hashBody(body);
-  const earlierHash = hashEarlier(earlier, ledgerFacts ?? [], foundation?.text);
   // 核账记忆：正文和前文都没改 → 直接给上次的结果（同样的输入同样的输出）；改过 → 上次没改掉的问题带上一起复核。
   const memory = await readCheckMemory(projectDir, chapter);
-  const reused = !options.fresh
+  const reused = !options.fresh && earlierHash !== undefined
     && Boolean(memory && memory.version === CHECK_MEMORY_VERSION && memory.bodyHash === bodyHash && memory.earlierHash === earlierHash);
   // 旧版本查错留下的记忆不带（版本号加一 = 那时的结果不可信）。
   const settingStillSays = (settingQuote: string): boolean => foundation !== undefined && settingQuoteSource(foundation, settingQuote) !== undefined;
@@ -201,7 +227,6 @@ export async function checkChapterBody(
   if (reused) {
     // R7.3：复用上次结果也照过一遍相对日子换算（纯确定性、不调模型）——作者后来改了故事日时，
     // 旧缓存里「明天 / 后天」那类条目按新时间线重新换算，不会把该收掉的误报又端出来。
-    const timeline = await readStoryTimeline(projectDir).then((read) => read.timeline).catch(() => undefined);
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
     result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
@@ -218,8 +243,8 @@ export async function checkChapterBody(
     }
   }
   // 核账记忆：冷窗口的结果不写盘（它对照的范围小，不该被当成全书核过缓存起来；下次点「核账」重核，
-  // 那时笔记多半已读齐，就是全书的核账）。正常结果照旧缓存。
-  if (!reused && !result.coverage && (result.failures.length === 0 || result.issues.length > 0)) {
+  // 那时笔记多半已读齐，就是全书的核账）。有一步没跑成的也不存：存了下次就当全核过端出来，那一步的失败没了。
+  if (!reused && !result.coverage && result.failures.length === 0 && earlierHash !== undefined) {
     await writeCheckMemory(projectDir, { chapter, bodyHash, body, earlierHash, issues: result.issues }).catch((error) => {
       console.warn("[check_continuity] 核账记忆没存上（不影响这次结果）", error);
     });
