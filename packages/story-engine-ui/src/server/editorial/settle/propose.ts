@@ -80,6 +80,8 @@ export interface SettleFieldEdit {
   readonly key: string;
   /** 卡名；故事设定没有。 */
   readonly card?: string;
+  /** 「和林国栋」这类关系栏：card 和这张卡之间的关系。 */
+  readonly relationWith?: string;
   readonly label: string;
   readonly from: string;
   readonly to: string;
@@ -233,6 +235,8 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
 interface FieldRef {
   readonly id: string;
   readonly card?: string;
+  /** 关系栏：和哪张卡（label 是「和某某」）。 */
+  readonly relationWith?: string;
   readonly label: string;
   readonly value: string;
   readonly ai: boolean;
@@ -407,7 +411,7 @@ export function parseFieldEdits(text: string, fields: readonly FieldRef[]): Omit
     const field = fields.find((item) => item.id === str(record.id));
     const to = field ? stripFieldEcho(str(record.to), field) : "";
     if (!field || !to || to === field.value || out.some((item) => item.card === field.card && item.label === field.label)) continue;
-    out.push({ ...(field.card ? { card: field.card } : {}), label: field.label, from: field.value, to });
+    out.push({ ...(field.card ? { card: field.card } : {}), ...(field.relationWith ? { relationWith: field.relationWith } : {}), label: field.label, from: field.value, to });
   }
   return out;
 }
@@ -472,14 +476,23 @@ export function termsFor(names: readonly string[], cards: SettingCardsFile): str
 
 function fieldRefs(cards: SettingCardsFile, terms: readonly string[]): FieldRef[] {
   const refs: FieldRef[] = [];
-  const push = (card: string | undefined, label: string, value: string, ai: boolean): void => {
-    refs.push({ id: `S${refs.length + 1}`, ...(card ? { card } : {}), label, value, ai });
+  const push = (card: string | undefined, label: string, value: string, ai: boolean, relationWith?: string): void => {
+    refs.push({ id: `S${refs.length + 1}`, ...(card ? { card } : {}), ...(relationWith ? { relationWith } : {}), label, value, ai });
   };
+  const named = (card: SettingCardsFile["cards"][number]): boolean =>
+    terms.length === 0 || [card.name, ...card.aliases].some((name) => terms.some((term) => nameKey(term) === nameKey(name)));
   for (const field of cards.story.fields) push(undefined, field.label, field.value, field.by === "ai");
   for (const card of cards.cards) {
-    const names = [card.name, ...card.aliases];
-    if (terms.length > 0 && !names.some((name) => terms.some((term) => nameKey(term) === nameKey(name)))) continue;
+    if (!named(card)) continue;
     for (const field of card.fields) push(card.name, field.label, field.value, field.by === "ai");
+  }
+  // 关系也是设定本里的一栏（核账给的就是「和林国栋：二十年的老搭档」）：定论改了年头，关系不跟着改，
+  // 重核还报（换题材长篇实跑 2026-10-27）。
+  for (const relation of cards.relations) {
+    const a = cards.cards.find((card) => card.id === relation.a);
+    const b = cards.cards.find((card) => card.id === relation.b);
+    if (!a || !b || !(named(a) || named(b))) continue;
+    push(a.name, `和${b.name}`, relation.label, relation.by === "ai", b.name);
   }
   return refs;
 }

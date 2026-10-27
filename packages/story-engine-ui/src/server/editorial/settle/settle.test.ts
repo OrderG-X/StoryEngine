@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, readCards, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
@@ -40,14 +40,14 @@ afterEach(async () => {
 });
 
 /** 假模型：按提示词认是哪一步，回固定的答案；记下每步收到的提示。 */
-function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string; canonReply?: string; namesReply?: string } = {}): BrainCallModel & { prompts: string[] } {
+function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string; canonReply?: string; namesReply?: string; fieldsReply?: (prompt: string) => string } = {}): BrainCallModel & { prompts: string[] } {
   const prompts: string[] = [];
   const call: BrainCallModel = async (messages) => {
     const prompt = messages.at(-1)?.content ?? "";
     prompts.push(prompt);
     if (prompt.includes("写成一条「定论」")) return over.canonReply ?? JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] });
     if (prompt.includes("列出这件事涉及的")) return over.namesReply ?? JSON.stringify({ names: ["杜叔"] });
-    if (prompt.includes("设定本里相关的几栏")) return JSON.stringify({ edits: [] });
+    if (prompt.includes("设定本里相关的几栏")) return over.fieldsReply?.(prompt) ?? JSON.stringify({ edits: [] });
     if (prompt.includes("请逐条复核")) return over.reviewReply ?? JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: true }] });
     if (prompt.includes("账里这几条")) return over.factsReply ?? JSON.stringify({ facts: [{ id: "F1", action: "update", value: "十年前", text: "杜长顺十年前去世", quote: "杜叔走了十年了" }] });
     if (prompt.includes("逐句看")) {
@@ -330,6 +330,27 @@ describe("确认改齐", () => {
 
     const again = await applySettleProposal(dir, stored.token, []);
     expect(again).toMatchObject({ ok: true, replayed: true });
+  });
+
+  it("人物关系也是一栏：和定论对不上的关系跟着改（换题材长篇实跑：周伯和林国栋「二十年的老搭档」）", async () => {
+    const write = await runCommand(dir, cardWrite, { ops: [
+      { op: "card.create", kind: "character", name: "杜长顺", aliases: ["杜叔"] },
+      { op: "card.create", kind: "character", name: "孟叔" },
+      { op: "relation.set", a: "孟叔", b: "杜长顺", label: "认识五年的老朋友" },
+    ] }, { caller: "author", idempotencyKey: "cards" });
+    if (!write.ok) throw new Error(write.message);
+    const model = fakeModel({ fieldsReply: (prompt) => {
+      const id = /\[(S\d+)\]孟叔 · 和杜长顺：认识五年的老朋友/u.exec(prompt)?.[1];
+      return JSON.stringify({ edits: id ? [{ id, to: "认识十年的老朋友" }] : [] });
+    } });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.fields).toEqual([{ key: "f1", card: "孟叔", relationWith: "杜长顺", label: "和杜长顺", from: "认识五年的老朋友", to: "认识十年的老朋友" }]);
+    const stored = await saveSettleProposal(dir, outcome.proposal);
+    const applied = await applySettleProposal(dir, stored.token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    const cards = await readCards(dir);
+    expect(cards?.relations.map((relation) => relation.label)).toEqual(["认识十年的老朋友"]);
   });
 
   it("划掉的那处不改；账里那条跟着不动；记账没问成的那条作废并如实说", async () => {
