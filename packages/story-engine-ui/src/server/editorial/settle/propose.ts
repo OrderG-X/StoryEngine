@@ -115,7 +115,7 @@ export interface SettleProposal {
   /** 核账报过和它打架、这次却没查出改法的句子（如实说）。 */
   readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
   /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
-  readonly reviewDropped: readonly { readonly chapter: number; readonly from: string; readonly to: string; readonly why?: string }[];
+  readonly reviewDropped: readonly { readonly chapter?: number; readonly card?: string; readonly label?: string; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
 }
 
@@ -265,6 +265,8 @@ export function fieldsTask(canon: string, fields: readonly FieldRef[], standing:
     ...standingLines(standing, "栏里和这几条说得一致的部分别改；和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
+    // 换题材长篇实跑 2026-10-27：「欠了网贷，想把面馆铺面卖了」和定论不冲突，模型往里添了借款细节（4 次 2～4 次）。
+    "栏里没写到这件事、或者写得比定论粗（只是没那么细）的，不算对不上：别往栏里添定论的内容（定论另记在设定本里）。",
     "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
     '只输出一个 JSON：{"edits":[{"id":"S1","to":""}]}。一栏都没有就给 {"edits":[]}。',
     "",
@@ -323,7 +325,18 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
   ].join("\n");
 }
 
-export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[], standing: readonly string[] = []): string {
+/** 复核的一条：正文里的一句（chapter），或设定本里的一栏（where 写明哪张卡哪一栏）。 */
+export interface ReviewItem {
+  readonly chapter?: number;
+  readonly where?: string;
+  readonly from: string;
+  readonly to: string;
+  readonly why?: string;
+  readonly before?: string;
+  readonly after?: string;
+}
+
+export function reviewTask(canon: string, edits: readonly ReviewItem[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     ...standingLines(standing, "原句和这几条说得一致、改了反倒和它们对不上的：不算（除非原句说的正是新定论那件事）。"),
@@ -335,9 +348,10 @@ export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key
     "- 定论说的是从某一章、某个时候起才这样的，原句在那之前（那时候还没变）：不算；",
     "- 定论说的是平常带着什么、放在哪这类事，原句只是那一场里一时的拿法、放法、顺手抄起的别的东西、换了别人拿着的：不算；",
     "- 改法添了原句没有的情节、台词的：不算；",
-    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算。",
+    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算；",
+    "- 设定本里的栏：栏里本来没写到这件事、或者只是写得粗（没那么细）的，不算；改法往栏里添了定论内容的，不算。",
     "",
-    ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
+    ...edits.map((edit, index) => `[${index + 1}] ${edit.where ?? `第 ${edit.chapter} 章`}：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
     "",
     '每条都要给。只输出一个 JSON：{"verdicts":[{"id":1,"conflict":true}]}',
   ].join("\n");
@@ -653,18 +667,29 @@ export async function proposeSettle(input: {
   const clicked = (edit: Omit<SettleEdit, "key">): boolean =>
     flaggedUnits.some(({ side, unit }) => unit !== undefined && edit.chapter === side.chapter && edit.id === unit.id);
   const toReview = found.filter((edit) => !clicked(edit));
+  // 设定本的栏也复核（换题材长篇实跑 2026-10-27：「欠了网贷，想把面馆铺面卖了」不冲突，模型往里添借款细节）；
+  // 作者点的那一栏（以本章为准、打架的另一边是设定）不复核。
+  const flaggedSettings = (request.kind === "pick" ? [request.other] : []).flatMap((side) => (side?.where === "setting" ? [side] : []));
+  const fieldClicked = (edit: Omit<SettleFieldEdit, "key">): boolean =>
+    flaggedSettings.some((side) => side.label === edit.label && nameKey(side.card ?? "") === nameKey(edit.card ?? ""));
+  const foundFields = fieldResult.ok ? fieldResult.value : [];
+  const fieldsToReview = foundFields.filter((edit) => !fieldClicked(edit));
   let kept = found;
+  let keptFields = foundFields;
   const reviewDropped: SettleProposal["reviewDropped"][number][] = [];
-  if (toReview.length > 0) {
+  if (toReview.length + fieldsToReview.length > 0) {
     try {
-      const withContext = toReview.map((edit) => {
+      const withContext: ReviewItem[] = toReview.map((edit) => {
         const units = docs.get(edit.chapter)?.units ?? [];
         const unit = units[edit.id - 1];
         return { ...edit, ...(unit ? aroundUnit(units, unit) : { before: "", after: "" }) };
       });
-      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext, standing) }], { json: true }), toReview.length);
+      const fieldItems: ReviewItem[] = fieldsToReview.map((edit) => ({ where: `设定本（${fieldHead(edit).slice(0, -1)}）`, from: edit.from, to: edit.to }));
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, [...withContext, ...fieldItems], standing) }], { json: true }), withContext.length + fieldItems.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
+      keptFields = foundFields.filter((edit) => fieldClicked(edit) || !drop.has(toReview.length + fieldsToReview.indexOf(edit)));
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
+      reviewDropped.push(...fieldsToReview.filter((_, index) => drop.has(toReview.length + index)).map(({ card, label, from, to }) => ({ ...(card ? { card } : {}), label, from, to })));
     } catch (error) {
       failures.push(`复核没做成（${error instanceof Error ? error.message : String(error)}），下面几处请一句句看过再确认`);
     }
@@ -672,7 +697,7 @@ export async function proposeSettle(input: {
   const edits: SettleEdit[] = kept
     .sort((a, b) => a.chapter - b.chapter || a.id - b.id)
     .map((edit, index) => ({ ...edit, key: `e${index + 1}` }));
-  const fieldEdits: SettleFieldEdit[] = (fieldResult.ok ? fieldResult.value : []).map((edit, index) => ({ ...edit, key: `f${index + 1}` }));
+  const fieldEdits: SettleFieldEdit[] = keptFields.map((edit, index) => ({ ...edit, key: `f${index + 1}` }));
 
   // 账跟着改：每章把改法套一遍，原句被碰到的事实问一次。
   const facts: SettleFactChange[] = [];

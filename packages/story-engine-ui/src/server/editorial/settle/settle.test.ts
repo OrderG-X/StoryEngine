@@ -157,7 +157,7 @@ describe("定论预览", () => {
     // 作者长篇实跑（2026-10-26）：定论「第 24 章起：三匹拉车…」，扫出第 23 章的「四匹」要改。
     expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("那之前的章里写成别的样子不算");
     expect(reviewTask("甲", [])).toContain("原句在那之前（那时候还没变）：不算");
-    expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, target: "committed", id: 1, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
+    expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
   });
 
   // 长篇实跑：核账报「昨夜在风口坐了半宿」和前一章「山沟里没风」打架，点「以第 23 章为准」把「那夜山沟里没风」记成了全书定论。
@@ -370,6 +370,27 @@ describe("确认改齐", () => {
     if (!applied.ok) throw new Error(applied.message);
     const cards = await readCards(dir);
     expect(cards?.relations.map((relation) => relation.label)).toEqual(["认识十年的老朋友"]);
+  });
+
+  it("设定本的栏也复核：复核说不冲突（栏里只是没写这么细）就不上卡、留在存盘里（换题材长篇实跑：往「欠了网贷」里添借款细节）", async () => {
+    const write = await runCommand(dir, cardWrite, { ops: [
+      { op: "card.create", kind: "character", name: "杜长顺", aliases: ["杜叔"] },
+      { op: "field.set", card: "杜长顺", label: "处境", value: "早年跑船" },
+    ] }, { caller: "author", idempotencyKey: "cards" });
+    if (!write.ok) throw new Error(write.message);
+    const model = fakeModel({
+      fieldsReply: (prompt) => {
+        const id = /\[(S\d+)\]杜长顺 · 处境：早年跑船/u.exec(prompt)?.[1];
+        return JSON.stringify({ edits: id ? [{ id, to: "早年跑船，十年前去世" }] : [] });
+      },
+      reviewReply: JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: false }] }),
+    });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(model.prompts.find((prompt) => prompt.includes("请逐条复核"))).toContain("[2] 设定本（杜长顺 · 处境）：「早年跑船」→「早年跑船，十年前去世」");
+    expect(outcome.proposal.fields).toEqual([]);
+    expect(outcome.proposal.edits.map((edit) => edit.chapter)).toEqual([2, 4]);
+    expect(outcome.proposal.reviewDropped).toEqual([{ card: "杜长顺", label: "处境", from: "早年跑船", to: "早年跑船，十年前去世" }]);
   });
 
   it("划掉的那处不改；账里那条跟着不动；记账没问成的那条作废并如实说", async () => {
