@@ -250,11 +250,33 @@ describe("按章纲分前后两半写", () => {
     };
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
-    expect(renderFastDraftPromptText(contexts[1])).toMatch(/后半章写 21\d\d 个中文字符左右/u);
+    // 前半章只写到要的五成多：后半章要的（3000 − 802）按最低 0.75 放大。
+    expect(renderFastDraftPromptText(contexts[1])).toMatch(/后半章写 293\d 个中文字符左右/u);
     expect(renderFastDraftPromptText(contexts[2])).toMatch(/【上一次的后半章只写了 100\d 个字，整章比最少字数还差 \d+ 字】/u);
     expect(report.draftBody).toContain(han(1800, "补"));
     expect(report.draftBody).not.toContain(han(1000, "后"));
     expect(report.issues.join("\n")).toMatch(/后半章重写了一次（100\d → 180\d 字）/u);
+  });
+
+  it("写手只写到要的八成：后半章要的字数照这个比例放大；写得比要的多就缩小（换题材长篇实跑 2026-10-27）", async () => {
+    const projectDir = await makeBook();
+    const prompts: string[] = [];
+    const run = async (firstLength: number) => {
+      const writer: WriterClient = {
+        generateDraft: vi.fn(async ({ context }) => {
+          prompts.push(renderFastDraftPromptText(context));
+          return prompts.length % 2 === 1 ? { title: "档案室", content: `林澈${han(firstLength - 2, "前")}。` } : { title: "", content: `${han(1200, "后")}。` };
+        }),
+      };
+      await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 2000 });
+    };
+    await run(800);
+    // 要 1000 写了 800：还差 1200，按八成放大要 1500。
+    expect(prompts[1]).toContain("后半章写 1500 个中文字符左右");
+    prompts.length = 0;
+    await run(1200);
+    // 要 1000 写了 1200：还差 800，不够一半照一半 1000，按 1.2 缩小要 833。
+    expect(prompts[1]).toContain("后半章写 833 个中文字符左右");
   });
 
   it("再要的后半章没更长 → 用原来那版，如实记一条", async () => {

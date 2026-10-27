@@ -165,6 +165,9 @@ export function findReplayedParagraphs(firstHalf: string, secondHalf: string): r
 
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
+/** 后半章要的字数按前半章写到几成来放大 / 缩小，比例夹在这个范围里。 */
+const SEGMENT_RATIO_MIN = 0.75;
+const SEGMENT_RATIO_MAX = 1.25;
 /**
  * 目标字数至少这么多才分两半写。原为 2600：2026-10-10 真机试写目标 2500 的书一次只写出一千六七，
  * 剩下一千多字靠续写补，硬伤几乎全出在续写段——一次写不够目标的都该分两半。1800 这类短章仍一次写完。
@@ -330,7 +333,10 @@ async function generateBySegments(input: {
   }
 
   // 后半章补足前半章少写的（写手越到后面越短：长篇连写第 26～29 章首稿多在下限上下，前半章短了后半章还按一半要）。
-  const secondTarget = Math.max(half, aim - countDraftChineseCharacters(firstBody));
+  // 写手前半章只写到要的几成，后半章多半也是：要的字数按这个比例放大 / 缩小（换题材长篇实跑 2026-10-27：
+  // 每章都只到要的八成，整章 1600 上下、回回低于下限 1700）。比例夹在 0.75～1.25：照要的写满也不超上限太多。
+  const firstRatio = Math.min(SEGMENT_RATIO_MAX, Math.max(SEGMENT_RATIO_MIN, countDraftChineseCharacters(firstBody) / Math.max(1, half)));
+  const secondTarget = Math.round(Math.max(half, aim - countDraftChineseCharacters(firstBody)) / firstRatio);
   // 稿纸上：前半章（重写过就是用上的那版）+ 空行，后半章从这里往下流。
   const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`;
   input.restream?.(firstVisible);
