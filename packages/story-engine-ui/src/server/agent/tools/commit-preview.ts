@@ -32,6 +32,8 @@ import { coerceNumber } from "../../lib/lenient-args.js";
 const LEDGER_MAX_CATCH_UP = 10;
 /** 默认不写、作者勾上才写的条目 id 前缀（「确认定稿」按钮按它分流）。 */
 export const OPT_IN_PREFIX = "change_confirm:";
+/** 并成一行的几条（同一句说明推进几条线索）：清单 id 把序号连起来，去掉时一起去掉。 */
+export const MERGED_ID_JOIN = "+";
 /** 预览票的目录（相对书目录）。只是缓存：不进撤销快照。 */
 export const PREVIEW_TICKET_DIR = "ledger/.preview";
 
@@ -200,7 +202,7 @@ type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[num
 function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   const why = item.reasons.map((reason) => reason.text).join("；");
   return {
-    id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : String(item.index),
+    id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : [item.index, ...(item.merged ?? [])].join(MERGED_ID_JOIN),
     kind: item.kind,
     label: item.label,
     // 为什么要作者看：单独一栏，清单里同一原因的条目归在一起只说一遍（重构 P6）。

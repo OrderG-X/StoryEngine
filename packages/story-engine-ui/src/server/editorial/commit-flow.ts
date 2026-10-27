@@ -117,6 +117,8 @@ export interface CommitItem {
   readonly reasons: readonly { readonly code: ReviewReason; readonly text: string }[];
   /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改；重定稿时收掉后文还在接着的线索。 */
   readonly optIn: boolean;
+  /** 并进这一行的其余序号（同一句说明推进几条线索，清单上只列一行；去掉这行就一起去掉）。 */
+  readonly merged?: readonly number[];
 }
 
 export interface NotRecorded {
@@ -212,10 +214,46 @@ function entryLabel(entry: EntryInput, before: BookProjection): string {
       return `事实（${NATURE_LABELS[entry.nature]}）：${entry.text}`;
     case "thread": {
       if (entry.op === "open") return `新开${THREAD_TYPE_LABELS[entry.type ?? "question"]}：${entry.title ?? entry.note}`;
-      const title = before.threads.find((thread) => thread.id === entry.thread || thread.mergedFrom.includes(entry.thread ?? ""))?.title ?? "一条线索";
-      return `${entry.op === "close" ? "收口" : "推进"}「${title}」：${entry.note}`;
+      return `${entry.op === "close" ? "收口" : "推进"}「${threadTitle(entry, before)}」：${entry.note}`;
     }
   }
+}
+
+function threadTitle(entry: ThreadInput, before: BookProjection): string {
+  return before.threads.find((thread) => thread.id === entry.thread || thread.mergedFrom.includes(entry.thread ?? ""))?.title ?? "一条线索";
+}
+
+/**
+ * 自动记下的推进 / 收口：记账员一条写了几条线索，同一句说明拆成几行、清单上一字不差连出两三遍
+ * （换题材长篇实跑：前 21 章里 7 章这样）。同一动作、同一说明、同一原句的并成一行，标题并排列。
+ */
+function mergeSameNote(items: readonly ClassifiedEntry[], toItem: (item: ClassifiedEntry) => CommitItem, before: BookProjection): CommitItem[] {
+  const rows: { item: CommitItem; entry: ClassifiedEntry["entry"]; titles: string[]; merged: number[] }[] = [];
+  const byNote = new Map<string, (typeof rows)[number]>();
+  for (const classified of items) {
+    const item = toItem(classified);
+    const { entry } = classified;
+    if (entry.kind !== "thread" || entry.op === "open" || item.optIn) {
+      rows.push({ item, entry, titles: [], merged: [] });
+      continue;
+    }
+    const key = [entry.op, entry.note, entry.quote].join("\u0000");
+    const title = threadTitle(entry, before);
+    const row = byNote.get(key);
+    if (row) {
+      if (!row.titles.includes(title)) row.titles.push(title);
+      row.merged.push(item.index);
+      continue;
+    }
+    const fresh = { item, entry, titles: [title], merged: [] };
+    byNote.set(key, fresh);
+    rows.push(fresh);
+  }
+  return rows.map(({ item, entry, titles, merged }) => {
+    if (merged.length === 0 || entry.kind !== "thread") return item;
+    const label = `${entry.op === "close" ? "收口" : "推进"}${titles.map((title) => `「${title}」`).join("")}：${entry.note}`;
+    return { ...item, label, merged };
+  });
 }
 
 function reasonTexts(
@@ -478,7 +516,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     chapter: input.chapter,
     recommit,
     review: plan.review.map(toItem),
-    auto: plan.auto.map(toItem),
+    auto: mergeSameNote(plan.auto, toItem, before),
     notRecorded: [
       ...rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
       ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),

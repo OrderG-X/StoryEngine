@@ -21,7 +21,7 @@ import { scrubLocalAbsolutePaths } from "../../lib/local-path-scrubber.js";
 import { defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { isUserConfirmedTool, resolveChapterFromInputOrContext } from "../request-context.js";
 import { writeTool } from "../withSnapshot.js";
-import { latestTicketFor, OPT_IN_PREFIX, ticketStoreFor } from "./commit-preview.js";
+import { latestTicketFor, MERGED_ID_JOIN, OPT_IN_PREFIX, ticketStoreFor } from "./commit-preview.js";
 import { coerceNumber } from "../../lib/lenient-args.js";
 
 /** 开着的线索堆到这个数，定稿后的下一步选项里摆「归并线索」（只给选项，真归并要作者点「确认改账」）。 */
@@ -112,7 +112,7 @@ function splitChecklistIds(ids: readonly string[]): { excluded: string[]; optedI
   const optedIn: string[] = [];
   for (const id of ids) {
     if (id.startsWith(OPT_IN_PREFIX)) optedIn.push(id.slice(OPT_IN_PREFIX.length));
-    else if (id !== "day") excluded.push(id);
+    else if (id !== "day") excluded.push(...id.split(MERGED_ID_JOIN));
   }
   return { excluded, optedIn };
 }

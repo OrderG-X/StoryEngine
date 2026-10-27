@@ -85,6 +85,30 @@ describe("定稿编排", () => {
     expect(preview.notRecorded).toEqual([{ code: "parse", label: "线索「钟为什么停」", reason: "没写这一章对它做了什么" }]);
   });
 
+  it("一句说明推进两条线索：清单并成一行、标题并排；去掉这行两条都不记", async () => {
+    const tickets = memoryTicketStore();
+    const twoThreads = { ...LEDGER1, threads: [...LEDGER1.threads, { op: "open", type: "question", title: "钥匙开哪把锁", note: "钟箱里的铜钥匙", quote: "她在钟箱里摸到一把铜钥匙" }] };
+    const first = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: CH1, callModel: fakeModel(twoThreads), tickets, knownNames: ["沈青禾", "周守义"] }));
+    expect((await confirmChapterCommit({ bookDir: book, ticket: first.ticket, text: CH1, tickets })).ok).toBe(true);
+    const preview = expectPreview(await prepareChapterCommit({
+      bookDir: book,
+      chapter: 2,
+      text: CH2,
+      tickets,
+      callModel: fakeModel({
+        summary: { text: "外乡人又来", quote: "外乡人又来了" },
+        time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
+        threads: [{ op: "advance", thread: ["T1", "T2"], note: "钥匙锁进铜盒", quote: "沈青禾把钥匙锁进铜盒" }],
+      }),
+    }));
+    const rows = preview.auto.filter((item) => item.kind === "thread");
+    expect(rows.map((item) => item.label)).toEqual(["推进「钟为什么停」「钥匙开哪把锁」：钥匙锁进铜盒"]);
+    expect(rows[0]?.merged).toHaveLength(1);
+    const confirmed = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH2, tickets, excluded: [rows[0]?.index, ...(rows[0]?.merged ?? [])] });
+    expect(confirmed.ok).toBe(true);
+    expect((await projectBook(book)).threads.map((thread) => thread.lastTouchedAt)).toEqual([1, 1]);
+  });
+
   it("第 2 章：推进 / 收口用短号接上前文；原句对不上的如实列出；作者去掉一条、改天数；点两次只定稿一次", async () => {
     await commitChapter1();
     const tickets = memoryTicketStore();
