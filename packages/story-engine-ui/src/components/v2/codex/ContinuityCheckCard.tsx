@@ -85,8 +85,10 @@ function sameTruth(a: Item, b: Item): boolean {
   const qb = squash(b.earlierQuote);
   if (!qa || !qb || !(qa.includes(qb) || qb.includes(qa))) return false;
   if (a.againstSetting || b.againstSetting) {
-    return Boolean(a.againstSetting && b.againstSetting) && a.againstSetting!.kind !== "canon"
-      && a.againstSetting!.label === b.againstSetting!.label && (a.againstSetting!.card ?? "") === (b.againstSetting!.card ?? "");
+    if (!a.againstSetting || !b.againstSetting) return false;
+    // 同一条定论：「以定论为准」按整条查，报的几句一起捎上。
+    if (a.againstSetting.kind === "canon" || b.againstSetting.kind === "canon") return a.againstSetting.kind === b.againstSetting.kind;
+    return a.againstSetting.label === b.againstSetting.label && (a.againstSetting.card ?? "") === (b.againstSetting.card ?? "");
   }
   return a.earlierChapter > 0 && a.earlierChapter === b.earlierChapter;
 }
@@ -122,7 +124,10 @@ export function settleChoices(chapter: number, item: Item, siblings: readonly It
   };
   const setting = item.againstSetting;
   if (setting?.kind === "canon") {
-    return [{ label: "以定论为准", action: { toolName: "settle_preview", statement: item.earlierQuote, chapter } }];
+    // 核账报的这句（和同一条定论报的别几句）一起带上：定论卡一定查到它、查不出改法如实说。
+    const canon: SettleSide = { where: "setting", quote: item.earlierQuote, label: setting.label };
+    const also = [here, ...alsoFor(canon)].slice(0, MAX_ALSO);
+    return [{ label: "以定论为准", action: { toolName: "settle_preview", statement: item.earlierQuote, chapter, also } }];
   }
   if (setting) {
     const there: SettleSide = { where: "setting", quote: item.earlierQuote, label: setting.label, ...(setting.card ? { card: setting.card } : {}) };

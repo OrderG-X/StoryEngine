@@ -50,7 +50,13 @@ export type SettleRequest =
       /** 核账员说的哪里对不上。 */
       readonly reason?: string;
     }
-  | { readonly kind: "statement"; readonly text: string; readonly chapter?: number };
+  | {
+      readonly kind: "statement";
+      readonly text: string;
+      readonly chapter?: number;
+      /** 核账卡「以定论为准」：核账报的那几句（一定查、查不出改法如实说），和 pick 的 also 一样。 */
+      readonly also?: readonly ChapterSide[];
+    };
 
 export interface SettleEdit {
   /** 预览卡上去掉某处用的键。 */
@@ -531,9 +537,8 @@ export async function proposeSettle(input: {
       const draftDoc = docOf(focusChapter, "draft", raw);
       const text = committedNumbers.includes(focusChapter) ? await readChapterText(projectDir, focusChapter) : undefined;
       const committedDoc = text === undefined ? undefined : docOf(focusChapter, "committed", text);
-      const quotes = request.kind === "pick"
-        ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []))
-        : [];
+      const quotes = [...(request.kind === "pick" ? [request.other] : []), ...(request.also ?? [])]
+        .flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []));
       if (!committedDoc || quotes.some((quote) => !unitOfQuote(committedDoc, quote) && unitOfQuote(draftDoc, quote))) {
         docs.set(focusChapter, draftDoc);
         drafts.push({ chapter: focusChapter, baseVersion: draftVersionOf(raw) });
@@ -590,12 +595,12 @@ export async function proposeSettle(input: {
     .map((item) => item.text);
   const terms = termsFor(names, cards);
   // 核账报过、作者点过的那几句（打架的另一边 + 同一条报的别几句）：章一定查，改法不复核，查不出如实说。
-  const flagged: ChapterSide[] = request.kind === "pick"
-    ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" ? [side] : []))
-    : [];
+  // 「以定论为准」带的也算（换题材长篇实跑 2026-10-27：核账报的那句没带过来，查全书说「没有要改的」，那句照旧在稿里）。
+  const flagged: ChapterSide[] = [...(request.kind === "pick" ? [request.other] : []), ...(request.also ?? [])]
+    .flatMap((side) => (side?.where === "chapter" ? [side] : []));
   const pinned = new Set<number>([
     ...(focusChapter !== undefined ? [focusChapter] : []),
-    ...(request.kind === "pick" ? [request.truth, ...flagged].flatMap((side) => (side.where === "chapter" ? [side.chapter] : [])) : []),
+    ...[...(request.kind === "pick" ? [request.truth] : []), ...flagged].flatMap((side) => (side.where === "chapter" ? [side.chapter] : [])),
   ]);
   const picked = [...docs.values()]
     .filter((doc) => terms.length === 0 || pinned.has(doc.chapter) || terms.some((term) => doc.text.includes(term)))

@@ -310,7 +310,18 @@ describe("核账卡「改这处」按钮直接改（重构 P6：结构化动作�
     render(<ContinuityCheckCard check={{ chapter: 9, sure: [canon], maybe: [] }} onFixAction={onFixAction} />);
     expect(screen.queryByRole("button", { name: "以本章为准" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "以定论为准" }));
-    expect(onFixAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 9 });
+    // 核账报的这句一起带上：定论卡一定查到它（换题材长篇实跑 2026-10-27：没带，查全书说「没有要改的」）
+    expect(onFixAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 9, also: [{ where: "chapter", chapter: 9, quote: "杜叔走了五年了。" }] });
+  });
+
+  it("和同一条定论打架的几句：「以定论为准」一起捎上", () => {
+    const onFixAction = vi.fn();
+    const against = { label: "定论", kind: "canon" as const };
+    const first = { quote: "杜叔走了五年了。", earlierQuote: "杜长顺十年前去世", earlierChapter: 9, reason: "和定论对不上", againstSetting: against };
+    const second = { quote: "五年前那场丧事。", earlierQuote: "杜长顺十年前去世", earlierChapter: 9, reason: "和定论对不上", againstSetting: against };
+    render(<ContinuityCheckCard check={{ chapter: 9, sure: [first, second], maybe: [] }} onFixAction={onFixAction} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "以定论为准" })[0]!);
+    expect(onFixAction.mock.lastCall![0]).toMatchObject({ also: [{ chapter: 9, quote: "杜叔走了五年了。" }, { chapter: 9, quote: "五年前那场丧事。" }] });
   });
 });
 

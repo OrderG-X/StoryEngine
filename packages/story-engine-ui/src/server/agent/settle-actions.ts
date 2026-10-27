@@ -28,7 +28,7 @@ export type SettleUserAction =
       readonly item?: string;
     }
   /** 设定本「定论」页上「查前文」：拿已记下（或作者刚写的）定论查全书。 */
-  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
+  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number; readonly also?: readonly ChapterSide[] }
   | { readonly toolName: "settle_apply"; readonly token: string; readonly excluded: readonly string[] };
 
 function readSide(value: unknown): SettleSide | undefined {
@@ -45,6 +45,9 @@ function readSide(value: unknown): SettleSide | undefined {
   return record.where === "chapter" && Number.isInteger(chapter) && chapter > 0 ? { where: "chapter", chapter, quote } : undefined;
 }
 
+const readAlso = (value: unknown): ChapterSide[] =>
+  (Array.isArray(value) ? value : []).slice(0, MAX_ALSO).map(readSide).filter((side): side is ChapterSide => side?.where === "chapter");
+
 /** body.action 里的两个定论按钮；形状不对返回原因（路由回 400，不当普通对话）。 */
 export function parseSettleAction(record: Record<string, unknown>): { readonly action: SettleUserAction } | { readonly invalid: string } {
   if (record.toolName === "settle_apply") {
@@ -59,12 +62,13 @@ export function parseSettleAction(record: Record<string, unknown>): { readonly a
   if (record.statement !== undefined) {
     const statement = typeof record.statement === "string" ? record.statement.trim() : "";
     if (!statement || statement.length > CANON_TEXT_MAX) return { invalid: "定论的内容不对。" };
-    return { action: { toolName: "settle_preview", statement, ...(Number.isInteger(chapter) && chapter > 0 ? { chapter } : {}) } };
+    const also = readAlso(record.also);
+    return { action: { toolName: "settle_preview", statement, ...(Number.isInteger(chapter) && chapter > 0 ? { chapter } : {}), ...(also.length > 0 ? { also } : {}) } };
   }
   const truth = readSide(record.truth);
   if (!Number.isInteger(chapter) || chapter <= 0 || !truth) return { invalid: "定论按钮的内容不对。" };
   const other = readSide(record.other);
-  const also = (Array.isArray(record.also) ? record.also : []).slice(0, MAX_ALSO).map(readSide).filter((side): side is ChapterSide => side?.where === "chapter");
+  const also = readAlso(record.also);
   const reason = typeof record.reason === "string" ? record.reason.trim().slice(0, 400) : "";
   const item = typeof record.item === "string" && record.item.length <= MAX_QUOTE * 2 + 1 ? record.item : "";
   return {
@@ -192,7 +196,7 @@ export async function runSettleAction(args: SettleActionArgs & { readonly action
   try {
     if (action.toolName === "settle_preview") {
       const request: SettleRequest = "statement" in action
-        ? { kind: "statement", text: action.statement, ...(action.chapter !== undefined ? { chapter: action.chapter } : {}) }
+        ? { kind: "statement", text: action.statement, ...(action.chapter !== undefined ? { chapter: action.chapter } : {}), ...(action.also ? { also: action.also } : {}) }
         : {
           kind: "pick",
           chapter: action.chapter,

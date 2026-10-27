@@ -227,6 +227,25 @@ describe("定论预览", () => {
     expect(outcome.proposal.missed).toEqual([]);
   });
 
+  it("按定论查（核账卡「以定论为准」）带着核账报的那句：章一定查、整批漏了单问一次，还查不出就如实列出", async () => {
+    const base = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    let sweeps = 0;
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: { kind: "statement", text: "杜长顺十年前去世", chapter: 4, also: [{ where: "chapter", chapter: 4, quote: "说他五年前就没了" }] },
+      callModel: async (messages, options) => {
+        const prompt = messages.at(-1)?.content ?? "";
+        if (!prompt.includes("逐句看")) return base(messages, options);
+        sweeps += 1;
+        return JSON.stringify({ edits: [] });
+      },
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(sweeps).toBe(2);
+    expect(outcome.proposal.edits).toEqual([]);
+    expect(outcome.proposal.missed).toEqual([{ chapter: 4, quote: "说他五年前就没了" }]);
+  });
+
   it("一批没查成如实记下，不当成没有要改的", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel({ sweepFails: true }) });
     if (!outcome.ok) throw new Error(outcome.message);
