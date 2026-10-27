@@ -1,13 +1,15 @@
 /**
  * GET /api/story-map?project= —— 故事地图的数据（重构 P6，草图 ③）：每章第几天 + 谁出场，点格子回原文。
  *
- * 直接读新核心投影：章（故事日、星期、时段、依据、梗概、出场、视角）和人物（每章出场的原句）。
+ * 直接读新核心投影：章（故事日、星期、时段、依据、梗概、出场、视角）和人物（每章出场的原句）；
+ * 再加节奏诊断（每章推进了几条线索、字数，哪几章可能拖 / 赶）。
  */
-import { projectBook, type BookProjection } from "@actalk/story-core";
+import { projectBook, type BookProjection, type PaceReport } from "@actalk/story-core";
 import { guardProjectPath, writeJson, type MiddlewareStack } from "../lib/project-io.js";
 import { scrubLocalAbsolutePaths } from "../lib/local-path-scrubber.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
+import { readPaceReport } from "../services/pace-report.js";
 
 export interface StoryMapChapter {
   readonly chapter: number;
@@ -35,6 +37,8 @@ export interface StoryMap {
   readonly chapters: readonly StoryMapChapter[];
   /** 出场章数多的在前；一样多时当过视角的在前（多半是主角）。 */
   readonly cast: readonly StoryMapMember[];
+  /** 节奏诊断：每章推进了几条、字数，哪几章可能拖 / 赶。 */
+  readonly pace?: PaceReport;
 }
 
 export function toStoryMap(projection: Pick<BookProjection, "upTo" | "chapters" | "cast">): StoryMap {
@@ -89,7 +93,9 @@ export function registerStoryMapRoutes(middlewares: MiddlewareStack): void {
         writeJson(res, 200, { ok: false, error: `这本书的账还没接到新格式上：${onCore.reason}` });
         return;
       }
-      writeJson(res, 200, { ok: true, map: toStoryMap(await projectBook(projectDir)) });
+      const projection = await projectBook(projectDir);
+      const map: StoryMap = { ...toStoryMap(projection), pace: await readPaceReport(projectDir, projection) };
+      writeJson(res, 200, { ok: true, map });
     } catch (error) {
       writeJson(res, 500, { ok: false, error: scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error)) });
     }
