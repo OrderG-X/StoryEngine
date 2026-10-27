@@ -93,13 +93,19 @@ const CHECKER_PASSES: readonly { readonly focus: CheckerFocus; readonly label: s
   { focus: "time", label: "第 3 遍（盯时间）" },
 ];
 
+/**
+ * reason 是作者在核账卡上读的：笔记里核账员自己记日子用「D+3」这类记号，原样抄进 reason 作者看不懂
+ * （换题材长篇实跑 2026-10-27：「林朗说'十来万'是当天（D+3）下午说的」）。
+ */
+export const REASON_WORDING = "reason 用中文一句话说哪里对不上，是给作者看的：日子说成「第 4 天」「当天」「第二天」，不写笔记里自己用的记号（D+3 之类）";
+
 /** 核账提示：先逐条列出新稿里碰到硬信息的说法并对照前文，再把对不上的列为矛盾，每条带把握（sure / maybe）。 */
 export function checkTask(chapter: number, focus?: CheckerFocus): string {
   return [
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
-    "每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
+    `每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；${REASON_WORDING}；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。`,
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
@@ -758,7 +764,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
     ...(plan.direction ? [`【作者这章给的方向】\n${plan.direction}`] : []),
     "核对到的要点逐条列进 problems，每条判 conflict：true＝按前文不可能成立；false＝核对过、对得上或不构成矛盾（章纲明确安排了变化过程的、作者明确要求的变化过程，都不算）。作者方向本身和前文既成事实对不上的（东西已在别人手里、人已不在、事已发生过），conflict 照样写 true，authorWilled 也写 true——不要因为方向是作者给的就不报。",
-    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
+    `conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；${REASON_WORDING}；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。`,
     `【第 ${chapter} 章章纲】`,
     `一句话：${plan.summary}`,
     `要点：\n${plan.beats.map((beat, index) => `${index + 1}. ${beat}`).join("\n")}`,
