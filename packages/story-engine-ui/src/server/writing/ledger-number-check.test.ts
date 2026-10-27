@@ -76,6 +76,18 @@ describe("账本数字对账（确定性层）", () => {
     expect(findLedgerNumberConflicts({ chapter: 2, draftBody: "他住在槐树巷第九号院。", facts })).toEqual([]);
   });
 
+  it("「年」只比年份；「开张头十四年」「开店二十六年」这类时长不当模板（换题材长篇实跑误报）", () => {
+    const facts = [
+      fact("f-span", 2, "最前头撕掉了一沓，开张头十四年的账不知去向。", { subject: "账本" }),
+      fact("f-open", 1, "春分面馆开店二十六年。", { subject: "春分面馆" }),
+      fact("f-year", 1, "林国栋一九九四年盘下这间铺子。", { subject: "林国栋" }),
+    ];
+    expect(findLedgerNumberConflicts({ chapter: 5, draftBody: "“开张头一年。这排门脸里就他一家撑着。", facts })).toEqual([]);
+    expect(findLedgerNumberConflicts({ chapter: 40, draftBody: "春分面馆开店二十七年，头一回关门。", facts })).toEqual([]);
+    expect(findLedgerNumberConflicts({ chapter: 6, draftBody: "林国栋一九九六年盘下这间铺子。", facts })).toHaveLength(1);
+    expect(findLedgerNumberConflicts({ chapter: 6, draftBody: "林国栋九六年盘下这间铺子。", facts })).toHaveLength(1);
+  });
+
   it("只比本章之前、还算数的硬设定：被取代的、会变的状态、本章及以后记的都不比", () => {
     const facts = [
       fact("old", 1, "书店在青石巷五号。", { subject: "半页书店", supersededByChapter: 3 }),
