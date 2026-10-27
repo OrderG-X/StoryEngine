@@ -21,11 +21,13 @@ import {
   nameKey,
   numberedText,
   prepareUnitReplacement,
+  projectBook,
   quoteInText,
   readCardsOrLegacy,
   readChapterLedger,
   readChapterText,
   sha256,
+  splitNumberedReply,
   splitUnits,
   type SettingCardsFile,
   type TextUnit,
@@ -136,6 +138,8 @@ interface SweepDoc {
   readonly text: string;
   readonly units: readonly TextUnit[];
   readonly numbered: string;
+  /** 账里记的这章是故事第几天（「12～13」）；没记、估的不给。 */
+  readonly day?: string;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -248,10 +252,12 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
     "- 定论说的是从某一章、某个时候起才这样的：那之前的章里写成别的样子不算（那时候还没变）；",
     "- 定论说的是平常带着什么、放在哪这类事时：原句只是那一场里一时的拿法、放法，或者那一场顺手抄起了别的东西、换了别人拿着，不算；",
     "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；定论说的是别的章、别的日子的事时，照这一句所在那章的时间来说（隔了天的说「昨天」「那天」），别说得像是这一章当天的事；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
+    // 换题材长篇实跑 2026-10-28：定论「三月十七倒下」，第 4 章「位置空两个月」改成「快十天」——第 4 章是故事第 4 天，其实不到一礼拜。
+    ...(docs.some((doc) => doc.day) ? ["- 章名后面写着账里记的那章是故事第几天：改「隔了多少天、多久以前」这类说法时照它算，别自己估；"] : []),
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
     '只输出一个 JSON：{"edits":[{"chapter":1,"id":1,"to":"","why":""}]}。一处都没有就给 {"edits":[]}。',
     "",
-    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}】`, doc.numbered, ""]),
+    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}${doc.day ? ` · 故事第 ${doc.day} 天` : ""}】`, doc.numbered, ""]),
   ].join("\n");
 }
 
@@ -446,16 +452,18 @@ export function parseSweepEdits(text: string, batch: readonly SweepDoc[]): Omit<
     const chapter = int(record.chapter);
     const id = int(record.id);
     const doc = batch.find((item) => item.chapter === chapter);
-    const unit = doc && id !== undefined ? doc.units[id - 1] : undefined;
-    if (!doc || !unit) continue;
-    const key = `${doc.chapter}:${unit.id}`;
-    if (seen.has(key)) continue;
     const proposed = str(record.to);
-    const fitted = proposed ? prepareUnitReplacement(doc.units, unit.id, proposed) : undefined;
-    if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
-    seen.add(key);
+    if (!doc || id === undefined || !proposed) continue;
     const why = str(record.why);
-    out.push({ chapter: doc.chapter, target: doc.target, id: unit.id, from: unit.text, to: fitted, ...(why ? { why } : {}) });
+    // 照编号正文整段抄回来的（带着别的编号）：拆开，每句各自对。
+    for (const piece of splitNumberedReply(id, proposed)) {
+      const unit = doc.units[piece.id - 1];
+      if (!unit || seen.has(`${doc.chapter}:${unit.id}`)) continue;
+      const fitted = prepareUnitReplacement(doc.units, unit.id, piece.to);
+      if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
+      seen.add(`${doc.chapter}:${unit.id}`);
+      out.push({ chapter: doc.chapter, target: doc.target, id: unit.id, from: unit.text, to: fitted, ...(why ? { why } : {}) });
+    }
   }
   return out;
 }
@@ -605,6 +613,13 @@ export async function proposeSettle(input: {
     docs.set(chapter, docOf(chapter, "committed", text));
     const draftRaw = await readOptional(join(projectDir, draftPath(chapter)));
     committed.push({ chapter, textSha256: sha256(text), ...(draftRaw?.trim() ? { draftVersion: draftVersionOf(draftRaw), draftText: draftRaw } : {}) });
+  }
+  // 每章是故事第几天（账里记的；没记、估的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
+  const projection = await projectBook(projectDir).catch(() => undefined);
+  for (const view of projection?.chapters ?? []) {
+    const doc = docs.get(view.chapter);
+    if (!doc || view.dayBasis === "missing" || view.dayBasis === "estimated") continue;
+    docs.set(view.chapter, { ...doc, day: view.dayEnd > view.day ? `${view.day}～${view.dayEnd}` : `${view.day}` });
   }
 
   let canon: string;

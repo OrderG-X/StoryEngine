@@ -21,6 +21,7 @@ const E2: EntryInput[] = [
   { kind: "summary", review: "auto", text: "孟叔说起杜叔", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "hard", subject: "杜长顺", attribute: "去世", value: "五年前", text: "杜长顺五年前去世", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "state", subject: "码头", attribute: "样子", value: "雾大没人", text: "码头雾大没人", quote: "雾很大，码头上没人" },
+  { kind: "time", review: "auto", basis: "author", day: 5 },
 ];
 const E3: EntryInput[] = [{ kind: "summary", review: "auto", text: "许微在码头", quote: "许微数着集装箱" }];
 
@@ -143,6 +144,16 @@ describe("定论预览", () => {
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.proposal.edits.map((edit) => [edit.chapter, edit.from])).toContainEqual([2, "许微没接话。"]);
     expect(outcome.proposal.missed).toEqual([]);
+  });
+
+  // 换题材长篇实跑 2026-10-28：定论「三月十七倒下」，第 4 章「位置空两个月」改成「快十天」——那章是故事第 4 天，不到一礼拜。
+  it("查全书时章名后带账里记的故事第几天（没记的不带），改「隔了多久」照它算", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看"))!;
+    expect(sweep).toContain("【第 2 章 · 故事第 5 天】");
+    expect(sweep).toContain("【第 1 章】");
+    expect(sweep).toContain("章名后面写着账里记的那章是故事第几天");
   });
 
   it("定论只写打架的那一点：提示里说清楚", async () => {
@@ -503,6 +514,15 @@ describe("改法解析", () => {
     const doc = { chapter: 2, target: "draft" as const, text, units, numbered: numberedText(units) };
     const reply = JSON.stringify({ edits: [{ chapter: "第 2 章", id: "[1]", to: "他说三点半到。" }] });
     expect(parseSweepEdits(reply, [doc])).toEqual([{ chapter: 2, target: "draft", id: 1, from: "他说五点半到。", to: "他说三点半到。" }]);
+  });
+
+  // 换题材长篇实跑 2026-10-28：「“你知道就好。[98]…[99]…[100]你位置空一个星期了…”」整条被当成一句改成了几句丢掉。
+  it("改法照编号正文整段抄回来（带着别的编号）：按编号拆开，改了的那句照收", () => {
+    const text = "“你知道就好。活儿摊给了三个人。你位置空两个月了。”";
+    const units = splitUnits(text);
+    const doc = { chapter: 4, target: "committed" as const, text, units, numbered: numberedText(units) };
+    const reply = JSON.stringify({ edits: [{ chapter: 4, id: 1, to: "“你知道就好。[2]活儿摊给了三个人。[3]你位置空一个星期了。”" }] });
+    expect(parseSweepEdits(reply, [doc])).toEqual([{ chapter: 4, target: "committed", id: 3, from: "你位置空两个月了。”", to: "你位置空一个星期了。”" }]);
   });
 
   it("整栏内容抄回了栏头（卡名 · 栏名：）和「（AI 补的）」：去掉，只留内容", () => {

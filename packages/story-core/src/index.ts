@@ -92,6 +92,7 @@ export {
   fitQuotes,
   numberedText,
   prepareUnitReplacement,
+  splitNumberedReply,
   splitUnits,
   type AppliedUnitEdit,
   type ApplyUnitEditsResult,
