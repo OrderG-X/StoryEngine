@@ -55,7 +55,7 @@
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
 import { readFile } from "node:fs/promises";
-import { quoteInText, withBookLock } from "@actalk/story-core";
+import { draftVersionOf, quoteInText, readDraft, withBookLock } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -364,6 +364,8 @@ export async function runAutoDeAiRound(input: {
   readonly callModel: (prompt: string) => Promise<string>;
   /** true=本出稿流程已有「写盘前」存档点，这次覆盖不再另建（R4.2：一次出稿=操作历史里的一步）。 */
   readonly skipOverwriteSnapshot?: boolean;
+  /** 出稿这一路最后写下的那版。盘上已经不是它（作者存稿、撤销或恢复过）就不去味，不碰作者那份。 */
+  readonly baseVersion: string;
 }): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string; readonly snapshotId?: string }> {
   const notRun = (error?: string): { readonly info: GenerateDraftAutoDeAiInfo } => ({
     info: {
@@ -377,6 +379,7 @@ export async function runAutoDeAiRound(input: {
   // 违规句是正文整句、必为全文子串；对全文（含标题行）定位落盘，标题不动（对齐 routes/de-ai-flavor.ts）。
   const rawDraft = await readFile(input.draftPath, "utf-8").catch(() => "");
   if (!rawDraft.trim()) return notRun("工作稿读不到，没法定位改写");
+  if (draftVersionOf(rawDraft) !== input.baseVersion) return notRun("工作稿在这期间被改过（存稿、撤销或恢复），没去 AI 味");
 
   const result = await runDeAiFlavorBatch({
     draftText: rawDraft,
@@ -417,7 +420,7 @@ export async function runAutoDeAiRound(input: {
       if (!input.skipOverwriteSnapshot) {
         snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
       }
-      await writeAiDraft(input.projectDir, { chapter: input.chapter, body: written });
+      await writeAiDraft(input.projectDir, { chapter: input.chapter, body: written, baseVersion: draftVersionOf(rawDraft) });
     });
   } catch (error) {
     // 错误原文可能内嵌绝对路径（快照读稿 errno / git 报错带 -C 仓库路径）——info.error 直达用户，先消毒（铁律④）。
@@ -1156,11 +1159,13 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
  *   模型挂→维持原结论+unavailable）。零判漏零调用。
  */
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
+  // 开写时盘上是哪一版：拟纲、写稿的几分钟里作者存了稿、撤销或恢复过，写下来时就不盖掉作者那份（如实报没写进去）。
+  const startVersion = (await readDraft(input.projectDir, input.chapter))?.version ?? null;
   // 接着往下写：章纲员看不到作者写的半章，不新拟；本章有章纲就沿用（写手照它接着写还没写到的要点）。
   if (input.continueFrom) {
     input.onPhase?.("write");
     const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-    return withStep("接着写", () => runGenerateDraftWithPlan(input, plan));
+    return withStep("接着写", () => runGenerateDraftWithPlan(input, plan, startVersion));
   }
   // 阶段 2「先想后写」：出稿前先拿本章章纲（沿用或新拟）。拟不成 → 无章纲照旧出稿，note 如实进 summary。
   const planStartedAt = Date.now();
@@ -1177,7 +1182,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     : undefined;
   const draftStartedAt = Date.now();
   input.onPhase?.("write");
-  const outcome = await withStep("写正文", () => runGenerateDraftWithPlan(input, planning?.plan));
+  const outcome = await withStep("写正文", () => runGenerateDraftWithPlan(input, planning?.plan, startVersion));
   if (planning) {
     // 长篇里「写一章要多久」要看得见：章纲 / 出稿（含续写与核对，细分见 [draft-pipeline] 行）。
     console.info(`[draft-pipeline] ch${input.chapter} 章纲 ${Math.round((draftStartedAt - planStartedAt) / 1000)}s / 出稿全程 ${Math.round((Date.now() - draftStartedAt) / 1000)}s`);
@@ -1212,7 +1217,7 @@ function presenceSummarySentence(summary: string): string {
   return trimmed.length === 0 ? "" : `${trimmed}。`;
 }
 
-async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: ChapterPlan | undefined): Promise<GenerateDraftOutcome> {
+async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: ChapterPlan | undefined, startVersion: string | null): Promise<GenerateDraftOutcome> {
   const { projectDir, chapter, writerClient } = input;
   const lengthPolicy = input.policies?.lengthPolicy ?? "annotate";
   const continueFrom = input.continueFrom?.text.trim() ? input.continueFrom : undefined;
@@ -1305,11 +1310,19 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
   // 落盘：出稿只在这里写一次工作稿，走核心的 draft.write（重构 P7 第 3 步；引擎不再自己写盘）。
   let draftPath: string | undefined;
   let finalDraftContent = "";
+  // 这一路最后写下的那版：后面补写核账改、去 AI 味都拿它比，盘上换了就不写。
+  let draftVersion = "";
   if (report?.passed && draftBody) {
     try {
       // 接着写不换标题（沿用盘上那份的）。
-      const written = await writeAiDraft(projectDir, { chapter, ...(continueFrom ? {} : { title: finalReport?.title ?? `第${chapter}章` }), body: draftBody });
+      const written = await writeAiDraft(projectDir, {
+        chapter,
+        ...(continueFrom ? {} : { title: finalReport?.title ?? `第${chapter}章` }),
+        body: draftBody,
+        baseVersion: startVersion,
+      });
       draftPath = written.path;
+      draftVersion = written.version;
       if (lengthPolicy === "enforce_or_rollback") finalDraftContent = written.content;
     } catch (error) {
       const message = scrubLocalAbsolutePaths(error instanceof Error ? error.message : String(error));
@@ -1366,6 +1379,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       chapter,
       ...(continueFrom ? {} : { title: finalReport.title ?? `第${chapter}章` }),
       draftBody,
+      baseVersion: draftVersion,
       lengthTarget,
       ...(chapterPlan ? { chapterPlan } : {}),
       // 接着写：补字数那步会重写最后一段（可能是作者写的），不跑；按核账改只动接着写的那段。
@@ -1378,6 +1392,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     });
     if (qualityPipeline.changed) {
       draftBody = qualityPipeline.draftBody;
+      if (qualityPipeline.version) draftVersion = qualityPipeline.version;
       finalReport = { ...finalReport, draftLength: buildDraftLengthReport({ draftBody, lengthTarget }) };
       if (run.aiFlavorRules) effectiveAiFlavor = buildAiFlavorReport(detectAiFlavorViolations(draftBody, run.aiFlavorRules));
       if (input.mustHitBeats && input.mustHitBeats.length > 0) {
@@ -1438,6 +1453,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
           rules: run.aiFlavorRules ?? ALL_BUILTIN_AI_FLAVOR_RULES,
           antiRules: (await readAntiRules(projectDir)).items,
           callModel: input.deAiCallModel,
+          baseVersion: draftVersion,
           // R4.2：本流程已有「写盘前」存档点，去味覆盖不再另建——一次出稿=操作历史里的一步。
           ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
         });

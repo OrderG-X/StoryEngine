@@ -29,18 +29,18 @@ describe("喊停之后 AI 写不进书", () => {
   it("没喊停照常写；喊停（信号翻了，哪怕是写到一半才翻）之后的 AI 稿不落盘，抛 turn_aborted", async () => {
     const controller = new AbortController();
     await runAbortableTurn(controller.signal, async () => {
-      await writeAiDraft(book, { chapter: 1, body: "第一版。" });
+      await writeAiDraft(book, { chapter: 1, body: "第一版。", baseVersion: "overwrite" });
       expect(turnAborted()).toBe(false);
       controller.abort();
       expect(turnAborted()).toBe(true);
-      const error = await writeAiDraft(book, { chapter: 1, body: "停了以后才到的一版。" }).catch((caught: unknown) => caught);
+      const error = await writeAiDraft(book, { chapter: 1, body: "停了以后才到的一版。", baseVersion: "overwrite" }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(AiDraftWriteError);
       expect((error as AiDraftWriteError).code).toBe("turn_aborted");
     });
     expect(await draftOf(1)).toContain("第一版。");
     expect(await draftOf(1)).not.toContain("停了以后");
     // 这一轮之外（后台活、下一轮）不受影响
-    await writeAiDraft(book, { chapter: 1, body: "下一轮。" });
+    await writeAiDraft(book, { chapter: 1, body: "下一轮。", baseVersion: "overwrite" });
     expect(await draftOf(1)).toContain("下一轮。");
   });
 

@@ -8,11 +8,14 @@ vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({
   snapshotBeforeDraftOverwrite: vi.fn(async () => "snap-1"),
 }));
 
+import { readDraft } from "@actalk/story-core";
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { fixableInDraft, runDraftQualityPipeline } from "./run-quality-pipeline.js";
 
 // 假查错模型说的是核账员那套话术（写笔记 / 三遍核账 / 自复核），经 checkCallModel 注入；
 // 核账员本身的行为见 editorial/checker.test.ts 和 editorial/continuity/check-service.test.ts。
+
+const versionOf = async (dir: string, chapter: number) => (await readDraft(dir, chapter))?.version ?? null;
 
 const TARGET = { requested: 60, lowerBound: 40, upperBound: 70, source: "writing_rules" as const };
 
@@ -55,7 +58,7 @@ describe("runDraftQualityPipeline", () => {
     const checkCallModel = fakeChecker();
 
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
       continueCallModel, checkCallModel,
     });
 
@@ -83,7 +86,7 @@ describe("runDraftQualityPipeline", () => {
       return JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] });
     });
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
       checkCallModel, fixCallModel, skipOverwriteSnapshot: true,
     });
     expect(fixCallModel).toHaveBeenCalledTimes(1);
@@ -114,7 +117,7 @@ describe("runDraftQualityPipeline", () => {
     });
     const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] }));
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
       checkCallModel, fixCallModel, skipOverwriteSnapshot: true,
     });
     expect(result.info.continuity?.sure).toEqual([]);
@@ -132,7 +135,7 @@ describe("runDraftQualityPipeline", () => {
     const { projectDir } = await makeBook(draft);
     const fixCallModel = vi.fn(async () => JSON.stringify({ edits: [{ id: 2, to: "菜场早没了，门口摆着几摊卖豆腐的。" }] }));
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), draftBody: draft, lengthTarget: TARGET,
       checkCallModel: fakeChecker(), fixCallModel, skipOverwriteSnapshot: true, keepPrefix: prefix,
     });
     expect(fixCallModel).not.toHaveBeenCalled();
@@ -145,7 +148,7 @@ describe("runDraftQualityPipeline", () => {
     const tail = "林舟一早骑车出门，往南门去，路上想着祖父那张登记表上的字。";
     const second = await makeBook(`${tail}\n\n菜场还在，门口摆着几摊卖豆腐的。`);
     const fixed = await runDraftQualityPipeline({
-      projectDir: second.projectDir, chapter: 8, draftBody: `${tail}\n\n菜场还在，门口摆着几摊卖豆腐的。`, lengthTarget: TARGET,
+      projectDir: second.projectDir, chapter: 8, baseVersion: await versionOf(second.projectDir, 8), draftBody: `${tail}\n\n菜场还在，门口摆着几摊卖豆腐的。`, lengthTarget: TARGET,
       checkCallModel: fakeChecker(), fixCallModel, skipOverwriteSnapshot: true, keepPrefix: tail,
     });
     expect(fixCallModel).toHaveBeenCalledTimes(1);
@@ -159,7 +162,7 @@ describe("runDraftQualityPipeline", () => {
     const before = await readFile(draftPath, "utf-8");
     const checkCallModel = fakeChecker();
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
       checkCallModel, fixCallModel: vi.fn(async () => "不是 JSON"),
     });
     expect(result.changed).toBe(false);
@@ -182,7 +185,7 @@ describe("runDraftQualityPipeline", () => {
     const { projectDir, draftPath } = await makeBook(draft);
     const continueCallModel = vi.fn(async () => "续写的一段。");
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章", draftBody: draft, lengthTarget: { ...TARGET, lowerBound: 60 }, continueCallModel,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章", draftBody: draft, lengthTarget: { ...TARGET, lowerBound: 60 }, continueCallModel,
     });
     expect(continueCallModel).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
@@ -192,10 +195,27 @@ describe("runDraftQualityPipeline", () => {
     const hard = await makeBook(draft);
     const continueHard = vi.fn(async () => "他推着车往后街走，修鞋摊还在，吴师傅抬头看了他一眼。");
     await runDraftQualityPipeline({
-      projectDir: hard.projectDir, chapter: 8, title: "第8章", draftBody: draft,
+      projectDir: hard.projectDir, chapter: 8, baseVersion: await versionOf(hard.projectDir, 8), title: "第8章", draftBody: draft,
       lengthTarget: { ...TARGET, lowerBound: 60, hardMinimum: true }, continueCallModel: continueHard,
     });
     expect(continueHard).toHaveBeenCalled();
+  });
+
+  it("补写的那会儿作者存了稿 → 补写结果不写回、如实说，作者存的那份不动（外部审查 2026-10-28：补写落盘盖掉作者刚存的句子）", async () => {
+    const draft = "林舟推开门。";
+    const { projectDir, draftPath } = await makeBook(draft);
+    const continueCallModel = vi.fn(async () => {
+      await writeFile(draftPath, "# 第8章 · 菜场\n\n作者刚刚保存的新句子。\n", "utf-8");
+      return "林舟推开门后沿着旧街慢慢走去，一路走到南门。".repeat(4);
+    });
+    const result = await runDraftQualityPipeline({
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET, continueCallModel,
+    });
+    expect(continueCallModel).toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.conflict).toBe(true);
+    expect(result.notes.join("\n")).toContain("没写进去");
+    expect(await readFile(draftPath, "utf-8")).toContain("作者刚刚保存的新句子。");
   });
 
   it("什么都没改 → 不建快照、不写盘；核账没跑成如实说", async () => {
@@ -203,7 +223,7 @@ describe("runDraftQualityPipeline", () => {
     const { projectDir, draftPath } = await makeBook(draft);
     const before = await readFile(draftPath, "utf-8");
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章 · 菜场", draftBody: draft, lengthTarget: TARGET,
       continueCallModel: vi.fn(), checkCallModel: vi.fn(async (_messages: unknown, options: { readonly json?: boolean }) => {
         if (!options.json) return "笔记";
         throw new Error("idle timeout");
@@ -222,7 +242,7 @@ describe("runDraftQualityPipeline", () => {
     vi.mocked(snapshotBeforeDraftOverwrite).mockClear(); // 本文件无全局 clearAllMocks，清掉前面用例的调用记录
     const continueCallModel = vi.fn(async () => "菜场还在，门口摆着几摊卖豆腐的，他推着车往后街走，找修鞋的吴师傅打听钟表厂宿舍的事。");
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 8, title: "第8章", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章", draftBody: draft, lengthTarget: TARGET,
       continueCallModel, skipOverwriteSnapshot: true,
     });
     expect(result.changed).toBe(true);
@@ -245,7 +265,7 @@ describe("runDraftQualityPipeline", () => {
       return JSON.stringify({ checks: [], contradictions: [] });
     });
     const result = await runDraftQualityPipeline({
-      projectDir, chapter: 13, title: "第13章", draftBody: draft, lengthTarget: TARGET,
+      projectDir, chapter: 13, baseVersion: await versionOf(projectDir, 13), title: "第13章", draftBody: draft, lengthTarget: TARGET,
       checkCallModel: quiet,
     });
     expect(result.changed).toBe(false);

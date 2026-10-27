@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises";
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, draftVersionOf, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
@@ -232,7 +232,7 @@ export async function fixDraftByUnits(input: {
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
     if (outcome.applied.length === 0) return outcome;
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章按核账改前快照`);
-    await writeAiDraft(projectDir, { chapter, body: outcome.text });
+    await writeAiDraft(projectDir, { chapter, body: outcome.text, baseVersion: draftVersionOf(text) });
     await recordUnitFixes(projectDir, chapter, outcome);
     return { ...outcome, draftVersion: nextDraftVersion(), ...(snapshotId ? { snapshotId } : {}) };
   });

@@ -46,7 +46,7 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { withBookLock } from "@actalk/story-core";
+import { draftVersionOf, withBookLock } from "@actalk/story-core";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runWithSnapshot } from "../lib/snapshot.js";
@@ -415,8 +415,8 @@ export function nextDraftVersion(): number {
 }
 
 /** 改稿写回走 draft.write（重构 P7：AI 写工作稿只有这一条路）。 */
-async function persistRevisionUpdate(projectDir: string, chapter: number, updatedContent: string): Promise<number> {
-  await writeAiDraft(projectDir, { chapter, body: updatedContent });
+async function persistRevisionUpdate(projectDir: string, chapter: number, updatedContent: string, readContent: string): Promise<number> {
+  await writeAiDraft(projectDir, { chapter, body: updatedContent, baseVersion: draftVersionOf(readContent) });
   return nextDraftVersion();
 }
 
@@ -525,7 +525,7 @@ async function applyRevisionLocked(
   // 锁外，commit_apply 在锁内读同一工作稿并定稿——交错可丢修订或把半截稿定稿）。修订应用前快照的
   // 时序语义不变：守卫全过之后才进 runWithSnapshot（拒绝路径不建快照）。
   await runWithSnapshot(projectDir, "修订应用前快照", async () => {
-    await persistRevisionUpdate(projectDir, chapter, updatedContent);
+    await persistRevisionUpdate(projectDir, chapter, updatedContent, draftContent);
   });
   return { ok: true, applied: true, preview, draftPath, updatedContent };
 }
@@ -564,7 +564,7 @@ async function reviseDraftOneShotLocked(
   const draftContent = await readFile(draftPath, "utf-8");
   const revised = await reviseDraftText({ ...input, draftContent });
   if (!revised.ok) return revised;
-  const draftVersion = await persistRevisionUpdate(input.projectDir, input.chapter, revised.updatedContent);
+  const draftVersion = await persistRevisionUpdate(input.projectDir, input.chapter, revised.updatedContent, draftContent);
   return { ...revised, applied: true, draftPath, draftVersion };
 }
 

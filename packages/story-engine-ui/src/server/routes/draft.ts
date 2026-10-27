@@ -119,7 +119,7 @@ async function handleApplyDraftCandidate(req: import("node:http").IncomingMessag
     await assertStoryEngineProject(projectDir);
     // 快照与写稿同一把书锁（commit_apply 切不进「读稿与落章之间」）；写稿走 draft.write（重构 P7）。
     const { result: written } = await runWithSnapshot(projectDir, `抽卡选用候选前快照：第${chapter}章`, () =>
-      writeAiDraft(projectDir, { chapter, body: draftContent }));
+      writeAiDraft(projectDir, { chapter, body: draftContent, baseVersion: "overwrite" }));
     const draftPath = written.path;
     const overview = await withUiOverviewDetails(projectDir, await buildStateOverview({ projectDir, chapter, maxTimelineEvents: 8 }));
     writeJson(res, 200, {
