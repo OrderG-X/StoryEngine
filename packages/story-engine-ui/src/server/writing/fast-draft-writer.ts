@@ -163,6 +163,28 @@ export function findReplayedParagraphs(firstHalf: string, secondHalf: string): r
   return replayed;
 }
 
+/** 已写部分末尾几段算「刚写的」：接着写开头原样抄了其中一段就去掉。 */
+const ECHO_TAIL_PARAGRAPHS = 3;
+
+/**
+ * 接着写开头把已写部分最后的话原样又抄了一遍：去掉（确定性：整段字面相同，或开头正是已写最后一段）。
+ * 换题材长篇实跑 2026-10-27：作者写到「林晚看着火。」，接着写的第一段又是「林晚看着火。」——
+ * 短段进不了重演检查（REPLAY_MIN_CHARS），核账再报出来也算在作者那段上，不会自动改。
+ */
+export function dropEchoedLead(written: string, body: string): string {
+  const tail = written.split(/\n+/u).map((item) => item.trim()).filter(Boolean).slice(-ECHO_TAIL_PARAGRAPHS);
+  if (tail.length === 0) return body;
+  const last = tail[tail.length - 1]!;
+  const paragraphs = body.split(/\n+/u).map((item) => item.trim()).filter(Boolean);
+  let dropped = 0;
+  while (dropped < paragraphs.length - 1 && tail.includes(paragraphs[dropped]!)) dropped += 1;
+  const rest = paragraphs.slice(dropped);
+  const head = rest[0]!;
+  if (head.startsWith(last) && head.slice(last.length).trim()) rest[0] = head.slice(last.length).trim();
+  if (dropped === 0 && rest[0] === head) return body;
+  return rest.join("\n\n");
+}
+
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
 /** 后半章要的字数按前半章写到几成来放大 / 缩小，比例夹在这个范围里。 */
@@ -486,7 +508,7 @@ async function generateContinuation(input: {
     const first = required
       ? await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens })
       : await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
-    let body = first ? clean(first.content) : "";
+    let body = first ? dropEchoedLead(written, clean(first.content)) : "";
     if (!body) {
       if (required) throw new Error("接着写的那段是空的");
       return undefined;
@@ -501,7 +523,7 @@ async function generateContinuation(input: {
         `【上一次接着写的那段把已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从已写部分最后一句之后往前推进新的事。`,
       ].join("\n");
       const retry = await input.writerClient.generateDraft({ context: contextFor(written, retryGoal), maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
-      const retryBody = retry ? clean(retry.content) : "";
+      const retryBody = retry ? dropEchoedLead(written, clean(retry.content)) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
