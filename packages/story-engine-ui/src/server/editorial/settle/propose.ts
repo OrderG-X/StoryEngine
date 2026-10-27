@@ -30,6 +30,7 @@ import {
   type SettingCardsFile,
   type TextUnit,
 } from "@actalk/story-core";
+import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
@@ -144,10 +145,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 }
 
 const str = (value: unknown): string => (typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "");
-const int = (value: unknown): number | undefined => {
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value.trim()) : Number.NaN;
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-};
+const int = positiveIntLike;
 
 async function readOptional(path: string): Promise<string | undefined> {
   try {

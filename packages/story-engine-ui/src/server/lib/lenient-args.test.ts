@@ -10,6 +10,7 @@ import {
   coerceJsonObject,
   coerceNumber,
   coerceStringArray,
+  positiveIntLike,
 } from "./lenient-args.js";
 
 /**
@@ -203,5 +204,12 @@ describe("lenient-args 宽容层（治模型把 tool-call 参数全发成字符�
     const schema = z.object({ op: coerceEnum(z.enum(["add", "remove", "supersede"])) });
     const js = z.toJSONSchema(schema) as { properties: Record<string, { enum?: readonly string[] }> };
     expect(js.properties.op?.enum).toEqual(["add", "remove", "supersede"]);
+  });
+});
+
+describe("positiveIntLike：模型回的章号 / 句号", () => {
+  it("数字、数字串、「第 10 章」「[78]」都认；0、负数、小数、别的字不认", () => {
+    expect([10, "10", " 10 ", "第 10 章", "第10章", "[78]"].map(positiveIntLike)).toEqual([10, 10, 10, 10, 10, 78]);
+    expect([0, -1, 1.5, "", "十", "第十章", "10章以后", null, undefined].map(positiveIntLike)).toEqual(Array(9).fill(undefined));
   });
 });

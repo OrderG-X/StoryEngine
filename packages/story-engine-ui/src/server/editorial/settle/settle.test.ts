@@ -436,6 +436,14 @@ describe("改法解析", () => {
     ]);
   });
 
+  it("章号写成「第 2 章」、句号写成「[1]」也认（换题材长篇实跑 2026-10-27：同章另两句因章号认不出静默丢了）", () => {
+    const text = "他说五点半到。她点了点头。";
+    const units = splitUnits(text);
+    const doc = { chapter: 2, target: "draft" as const, text, units, numbered: numberedText(units) };
+    const reply = JSON.stringify({ edits: [{ chapter: "第 2 章", id: "[1]", to: "他说三点半到。" }] });
+    expect(parseSweepEdits(reply, [doc])).toEqual([{ chapter: 2, target: "draft", id: 1, from: "他说五点半到。", to: "他说三点半到。" }]);
+  });
+
   it("整栏内容抄回了栏头（卡名 · 栏名：）和「（AI 补的）」：去掉，只留内容", () => {
     const fields = [
       { id: "S1", label: "历史", value: "十五年前海难结案", ai: false },

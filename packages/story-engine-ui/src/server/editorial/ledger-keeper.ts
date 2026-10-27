@@ -12,6 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chapterTextPath, checkEntries, quoteFromText, quoteInText, readCards, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { positiveIntLike } from "../lib/lenient-args.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
@@ -352,9 +353,9 @@ function parseQuoteRepairs(text: string): Map<number, string> | undefined {
   const quotes = new Map<number, string>();
   for (const item of list) {
     const record = item as { n?: unknown; quote?: unknown } | null;
-    const n = typeof record?.n === "number" ? record.n : typeof record?.n === "string" ? Number(record.n.trim()) : Number.NaN;
+    const n = positiveIntLike(record?.n);
     const quote = quoteText(record?.quote);
-    if (Number.isInteger(n) && n >= 1 && quote) quotes.set(n, quote);
+    if (n !== undefined && quote) quotes.set(n, quote);
   }
   return quotes;
 }
