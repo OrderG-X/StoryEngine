@@ -15,7 +15,7 @@ import {
   isSkeletonPlan,
   parsePlanJson,
   PLAN_JSON_FIELDS,
-  PLAN_REQUIREMENT_LINES,
+  planRequirementLines,
   planMaterialBlocks,
   previousChapterEndDay,
   readDayOffset,
@@ -65,9 +65,11 @@ export type PlanChapterByPlannerResult =
 export function plannerTask(chapter: number, materials: PlanChapterMaterials, direction?: string): string {
   // 章纲员读过全书原文，「上一章正文 / 前面几章摘要」不用再带；账本里开着的线索、已确立事实这些照带（要求里点名了它们）。
   const blocks = planMaterialBlocks(chapter, materials, direction, { withoutPreviousChapter: true, withoutRecentSummaries: true });
-  const requirements = ["要求：", ...PLAN_REQUIREMENT_LINES, "JSON 字段：", PLAN_JSON_FIELDS].join("\n");
+  const requirements = ["要求：", ...planRequirementLines(chapter), "JSON 字段：", PLAN_JSON_FIELDS].join("\n");
   return [
-    `你已经从第 1 章跟读到了第 ${chapter - 1} 章（见上面的原文和你的笔记）。现在为第 ${chapter} 章拟一份章纲。只输出一个 JSON，不要解释、不要 Markdown。`,
+    chapter <= 1
+      ? "这是全书第 1 章，前面还没有正文。现在为第 1 章拟一份章纲。只输出一个 JSON，不要解释、不要 Markdown。"
+      : `你已经从第 1 章跟读到了第 ${chapter - 1} 章（见上面的原文和你的笔记）。现在为第 ${chapter} 章拟一份章纲。只输出一个 JSON，不要解释、不要 Markdown。`,
     ...blocks,
     requirements,
   ].join("\n\n");

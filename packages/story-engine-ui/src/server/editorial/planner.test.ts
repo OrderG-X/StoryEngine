@@ -301,6 +301,18 @@ describe("提示词文本", () => {
     expect(task).toContain(PLAN_JSON_FIELDS);
   });
 
+  it("第 1 章没有前文：不说「跟读到第 0 章」，要求换成开篇的说法，其余照旧", async () => {
+    const dir = await makeBook();
+    const task = plannerTask(1, await collectPlanMaterials(dir, 1));
+    const { PLAN_REQUIREMENT_LINES } = await import("./plan-materials.js");
+    expect(task).not.toContain("第 0 章");
+    expect(task).toContain("这是全书第 1 章，前面还没有正文");
+    expect(task).not.toContain(PLAN_REQUIREMENT_LINES[0]);
+    expect(task).not.toContain(PLAN_REQUIREMENT_LINES[2]);
+    expect(task).toContain("除非写明发生在故事开始之前");
+    for (const line of PLAN_REQUIREMENT_LINES.slice(3)) expect(task).toContain(line);
+  });
+
   async function writeCards(dir: string, ops: CardOp[]): Promise<void> {
     const outcome = await runCommand(dir, cardWrite, { ops }, { caller: "author", idempotencyKey: `planner-${ops.length}-${Math.random()}` });
     if (!outcome.ok) throw new Error(outcome.message);

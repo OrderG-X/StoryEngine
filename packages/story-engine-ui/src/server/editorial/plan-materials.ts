@@ -181,6 +181,18 @@ export const PLAN_REQUIREMENT_LINES: readonly string[] = [
   // 第十五、十七轮要点限到 60 字后矛盾翻倍（物件位置错 15 条）：章纲不再交代东西在哪，写手就乱放。要点写细，但物件状态照事实抄、不另编。
   "12. 每个要点写清谁、在哪、做了什么、局面怎么变；牵涉到的关键物件（文书、信物、钥匙、证据）写明此刻在谁手里或放在哪——照【已确立事实】和上一章结尾抄，不要另编；不写对白原话；不替前文补它没写过的设定（某张纸是谁的笔迹、某样东西原先归谁）。每个要点不超过 120 字。",
 ];
+/**
+ * 第 1 章前面还没有正文：要求第 1、3 条（接上一章、别重演前文）换成开篇的说法（换题材长篇实跑 2026-10-27：
+ * 章纲员拿着「跟读到第 0 章」拟第 1 章，开场写成「紧接上一章的次日」，还把设定本里还没写的事当成「上一章」写进 avoid）。
+ */
+export const OPENING_PLAN_NOTE = "设定本写的是前提和背景：里面的事除非写明发生在故事开始之前，都还没在正文里写过，别当成前文已经写过的。";
+const OPENING_REQUIREMENT_LINES: Readonly<Record<number, string>> = {
+  0: "1. 这是全书第 1 章，前面还没有正文：从故事的开头写起，不要写成接着哪一章；scene.time 写开场时间，dayOffset 填 0（第 8 条里和上一章比的说法不适用）。",
+  2: `3. ${OPENING_PLAN_NOTE}avoid 里不写「上一章」「前文」。`,
+};
+export function planRequirementLines(chapter: number): readonly string[] {
+  return chapter <= 1 ? PLAN_REQUIREMENT_LINES.map((line, index) => OPENING_REQUIREMENT_LINES[index] ?? line) : PLAN_REQUIREMENT_LINES;
+}
 export const PLAN_JSON_FIELDS = [
   "{\"summary\":\"一句话说这章讲什么\",\"beats\":[\"按顺序 3–6 个要点，每个是一件具体发生的事（人、地点、关键物件在谁手里）\"],\"newInformation\":[\"1–3 条本章新出现的信息/变化\"],",
   "\"scene\":{\"location\":\"开场地点\",\"time\":\"开场时间（相对上一章，如第二天上午）\"},\"dayOffset\":离上一章结尾过了几天（整数，同一天 0）,\"characters\":[\"出场人物名\"],",

@@ -77,6 +77,14 @@ describe("头脑风暴：解析章纲员的走法", () => {
     expect(task).toContain("【这几种已经给过作者了，别再出一样的】林溪来信");
     expect(task).toContain("【故事前提】一封信");
   });
+
+  it("第 1 章：说开篇，不说「跟读到第 0 章」「接住第 0 章的结尾」", () => {
+    const task = brainstormTask({ chapter: 1, materialBlocks: [], threads: [] });
+    expect(task).not.toContain("第 0 章");
+    expect(task).toContain("怎么开篇");
+    expect(task).toContain("都从故事的开头写起");
+    expect(task).toContain("除非写明发生在故事开始之前");
+  });
 });
 
 describe("头脑风暴：核账员核走法", () => {
