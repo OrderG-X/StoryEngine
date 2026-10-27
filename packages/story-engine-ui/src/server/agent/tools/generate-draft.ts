@@ -149,9 +149,11 @@ const inputSchema = z.object({
   allowWriteAhead: coerceBoolean(z.boolean().optional().describe("前一章没定稿被拦下时，只有用户明确说仍要先写才带 true。")),
   autoDeAi: coerceBoolean(z.boolean().optional().describe("false=检出机器腔只标注、不自动去味（默认自动去味一轮）。")),
   candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe("1–3，默认 1；用户明确要多版挑选才填，耗时和 token 约 N 倍。")),
+  thenPreview: coerceBoolean(z.boolean().optional().describe("作者明说写完就出定稿预览才带 true：稿写成了系统接着用这版出预览（不是定稿）。")),
 });
 
 const outputSchema = z.object({
+  thenPreview: z.boolean().optional().describe("稿写成了、作者要写完就出定稿预览：这一轮结束时系统接着出。"),
   ok: z.boolean().describe("是否成功出稿并写入工作稿。引擎校验不过拒绝写盘（空正文/JSON 伪正文/超上限无法安全裁剪等）时为 false；正文低于字数下限不拒绝、照常写盘（见 draftLength 与 summary 的 ⚠ 标注）。"),
   chapter: z.number().int().positive(),
   draftPath: z.string().optional().describe("工作稿文件路径（成功时）。"),
@@ -439,7 +441,7 @@ export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
     "为某章写一版正文进工作稿（未定稿）。一次调用里完成：先拟章纲、按章纲翻前文写，字数不够接着写，写完自动核账，检出机器腔默认自动去味一轮。" +
-    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」；核账卡回合结束自动出，不用再调 check_continuity，更别和本工具并排调（那时还没正文）。" +
+    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」；核账卡回合结束自动出。" +
     "summary 里的「首稿核对」漏写、「去味后新漏」、字数不够都要如实转达。引擎拒稿会 ok:false，如实说没写成。章纲见 chapterPlan，转达时一两句话说这章写了什么。",
   inputSchema,
   outputSchema,
@@ -616,7 +618,12 @@ export const generateDraftTool = createTool({
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;
     // 只在真出稿成功时挂 snapshotId（失败=没写成稿，无需撤销点）；service 已把本步存档点带出来，这里兜底。
-    return outcome.ok && snapshotId ? { ...toolOutput, snapshotId: toolOutput.snapshotId ?? snapshotId } : toolOutput;
+    // 作者要写完就出定稿预览：只在稿写成了时带上，路由在这一轮结束时用盘上这版出预览（turn-flow）。
+    return {
+      ...toolOutput,
+      ...(outcome.ok && snapshotId ? { snapshotId: toolOutput.snapshotId ?? snapshotId } : {}),
+      ...(outcome.ok && input.thenPreview === true ? { thenPreview: true } : {}),
+    };
   },
 });
 

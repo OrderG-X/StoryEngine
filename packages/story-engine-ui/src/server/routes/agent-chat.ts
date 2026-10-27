@@ -20,10 +20,11 @@
 import { stepCountIs, type ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
+import { DRAFT_TOOL, endsAfterDraftClosing } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
-import { commitPreviewTool } from "../agent/tools/commit-preview.js";
+import { buildCommitPreviewToolOutput, commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { aiReviewTool } from "../agent/tools/ai-review.js";
@@ -363,13 +364,20 @@ export async function runAgentTurn(args: {
   readonly shouldStop?: () => boolean;
   /** 对话 AI 用的模型：给了就把这轮用量记进全局用量账（P10）。 */
   readonly model?: AgentModelInfo;
-}): Promise<{ readonly finishReason: string | undefined; readonly draftCheckedChapters: readonly number[] }> {
+  /** 这一轮是按流程收的尾（turn-flow：出稿后的收尾那步走完）：停在工具调用上也不是步数用完。 */
+  readonly endedByFlow?: () => boolean;
+}): Promise<AgentTurnResult> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
   // AI 出稿时顺手核过账、这轮又没自己调核账的章（P11）：回合结束后照核账记忆补一张核账卡。
   const draftChecked = new Set<number>();
   const toolChecked = new Set<number>();
   let lastToolSummary: string | undefined;
+  // 出稿的结果：出稿后模型一个字没说（收尾那步只出了选项、或没跑成），就由这里转述出稿的摘要。
+  let draftSummary: string | undefined;
+  let textSinceDraft = false;
+  // 稿写成了、作者要写完就出定稿预览的章（generate_draft 的 thenPreview）：回合结束后接着出预览。
+  const previewAfterDraft = new Set<number>();
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
   let emittedText = false;
@@ -406,6 +414,7 @@ export async function runAgentTurn(args: {
         const text = chunk.payload?.text;
         if (text) {
           emittedText = true;
+          textSinceDraft = true;
           const scrubbed = args.scrubber.push(text);
           if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
         }
@@ -433,8 +442,19 @@ export async function runAgentTurn(args: {
         sawToolActivity = true;
         const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
         const output = normalizeForwardedToolResult(chunk.payload?.result);
-        const summary = (output as { readonly summary?: unknown } | undefined)?.summary;
-        if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
+        const record = output as { readonly summary?: unknown; readonly skipped?: unknown; readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown } | undefined;
+        // 没执行的（turn-flow 按流程跳过的）不当这一轮的结果转述。
+        const summary = record?.skipped === true ? undefined : record?.summary;
+        if (typeof summary === "string" && summary.trim()) {
+          lastToolSummary = summary.trim();
+          if (chunk.payload?.toolName === DRAFT_TOOL) {
+            draftSummary = lastToolSummary;
+            textSinceDraft = false;
+          }
+        }
+        if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && record.thenPreview === true && typeof record.chapter === "number") {
+          previewAfterDraft.add(record.chapter);
+        }
         args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
         noteCheckedChapter(chunk.payload?.toolName, output, draftChecked, toolChecked);
         break;
@@ -471,21 +491,33 @@ export async function runAgentTurn(args: {
     }
   }
 
-  const fallback = sawStreamError && !sawToolActivity
-    ? null
-    : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
+  const fallback = draftSummary !== undefined && !textSinceDraft
+    ? `${emittedText ? "\n\n" : ""}${draftSummary}`
+    : sawStreamError && !sawToolActivity
+      ? null
+      : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
   if (fallback) {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
-  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），不是步数用完。
-  if (finishReason === "tool-calls" && !sawStreamError && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
+  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），按流程收的尾（出稿后）也是，都不是步数用完。
+  if (finishReason === "tool-calls" && !sawStreamError && !args.endedByFlow?.() && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
     const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return { finishReason, draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)) };
+  return {
+    finishReason,
+    draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)),
+    previewAfterDraftChapters: [...previewAfterDraft],
+  };
+}
+
+export interface AgentTurnResult {
+  readonly finishReason: string | undefined;
+  readonly draftCheckedChapters: readonly number[];
+  readonly previewAfterDraftChapters: readonly number[];
 }
 
 /**
@@ -519,6 +551,27 @@ export async function emitDraftCheckCards(
     const toolCallId = `auto-check_continuity-${chapter}-${Date.now()}`;
     sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter } });
     sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
+  }
+}
+
+/**
+ * 作者要写完就出定稿预览（出稿带 thenPreview、稿写成了）：回合结束后服务端用盘上这版出预览，和作者点「定稿」看到的一样。
+ * 预览记下这版正文的指纹，作者之后又改了稿，「确认定稿」会如实拦下要重新预览。
+ */
+export async function emitPreviewsAfterDraft(
+  projectDir: string,
+  chapters: readonly number[],
+  sendEvent: (event: string, data: unknown) => void,
+  preview: (projectDir: string, chapter: number) => Promise<unknown> = (dir, chapter) => buildCommitPreviewToolOutput({ projectDir: dir, chapter }),
+): Promise<void> {
+  for (const chapter of chapters) {
+    const toolCallId = `auto-commit_preview-${chapter}-${Date.now()}`;
+    sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter } });
+    try {
+      sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output: await preview(projectDir, chapter) });
+    } catch (error) {
+      sendEvent("tool-error", { toolCallId, toolName: "commit_preview", error: stringifyError(error), retryable: true });
+    }
   }
 }
 
@@ -661,23 +714,28 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
+    const endedByFlow = endsAfterDraftClosing(requestContext);
+    const { result: { finishReason, draftCheckedChapters, previewAfterDraftChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
       fullStream: (
         await agent.stream([...modelMessages], {
           requestContext,
           // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
           abortSignal: disconnectAbort.signal,
-          // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」。
-          stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps],
+          // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」「出稿后收尾那步走完」。
+          stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps, endedByFlow],
+          // 同一步的工具一个一个执行（默认并发 10）：同一本书上的写不抢先后。这一步该执行哪些由 turn-flow 定。
+          toolCallConcurrency: 1,
         })
       ).fullStream as AsyncIterable<AgentTurnChunk>,
       sendEvent,
       scrubber: visibleTextScrubber,
       shouldStop: () => disconnectAbort.signal.aborted,
+      endedByFlow,
       ...(agentModel ? { model: agentModel } : {}),
     })));
 
     if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
+    if (!disconnectAbort.signal.aborted) await emitPreviewsAfterDraft(projectDir, previewAfterDraftChapters, sendEvent);
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);

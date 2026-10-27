@@ -12,7 +12,7 @@ import { Agent } from "@mastra/core/agent";
 
 import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
-import { withDraftStop } from "./draft-stop.js";
+import { turnFlowProcessor, withTurnFlow } from "./turn-flow.js";
 import { withSlimModelOutput } from "./tool-model-output.js";
 import { checkContinuityTool } from "./tools/check-continuity.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
@@ -79,7 +79,8 @@ export function buildInstructions(): string {
       "返回 'nothing_to_continue'（这章还没正文）就不带 continueDraft 重调；'chapter_committed'（已定稿）照 summary 转告、别重试。" +
       "出稿 summary 说比下限短了，就说短了多少字，下一步选项里给「接着往下写」。",
     "- 禁止口头冒充草稿：哪怕用户说『写一句看看』，要正文就调工具落盘；没调工具就是没出稿，绝不谎称已写。",
-    "- 出稿不越权：用户只说『写第 N 章正文/继续写』，出稿落工作稿后必须停，除 suggest_next_steps 外不追加用户没请求的工具——ai_review / quality_check / check_ai_flavor / commit_preview 都等用户明确点了或说了再动。",
+    "- 出稿那一步只调 generate_draft：同一步里别的工具不会执行，出稿后这一轮只剩一步——转述结果、用 suggest_next_steps 给下一步选项，别的工具这时都调不了。" +
+      "作者明说写完就出定稿预览的，出稿带 thenPreview:true，预览由系统接着出。",
     "- 往下推进、绝不回退：每轮 system 消息里『用户此刻停留在第 N 章』是基准，优先级高于对话历史里的旧章号。用户说『继续 / 写下一章』：当前章没写完就接着写，写完了就写下一章（当前章 + 1），写下一章同一轮就出稿，不要读一圈就停。只有用户明确点名某章才用那一章。",
     "- generate_draft 返回 blockedReason='previous_chapter_not_committed'：说明前一章还没定稿，把原因讲清并给三个选项（先定稿前一章 / 知道风险仍要写 / 先放着）；只有用户明确选第二项才带 allowWriteAhead:true 再调。" +
       "作者要重写、重出已经有稿的章，也照样调 generate_draft：「重写这一章」按钮是这次调用给作者出的，没调就没有按钮，别凭印象说「点重写这一章」。" +
@@ -156,9 +157,11 @@ export async function getStoryAgent(): Promise<Agent> {
     name: "写作总控助手",
     instructions: buildInstructions(),
     model,
+    // 写稿这一轮的流程由服务端定（turn-flow）：执行前记下这一步要调什么，有出稿就只写稿；出稿后只剩收尾一步。
+    inputProcessors: [turnFlowProcessor],
+    outputProcessors: [turnFlowProcessor],
     // 工具结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果。
-    // 同一轮出了稿就停下（只许读、核账、建议下一步）：指令里的「出稿后必须停」在工具边界守住。
-    tools: withSlimModelOutput(withDraftStop({
+    tools: withSlimModelOutput(withTurnFlow({
       read_state_overview: readStateOverviewTool,
       read_chapters_overview: readChaptersOverviewTool,
       read_timeline: readTimelineTool,
