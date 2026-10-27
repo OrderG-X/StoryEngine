@@ -147,6 +147,15 @@ describe("定论预览", () => {
     expect(task).toContain("是两样就别混成一样");
   });
 
+  // 换题材长篇实跑 2026-10-28：定论只给了「林国栋」，前文都叫「父亲」，第 1 章「房租照付」没圈到。
+  it("圈章的词连同正文里的叫法一起要；模型给了叫法，只提叫法的章也查", async () => {
+    expect(canonTask(pick, new Map())).toContain("连同正文里说到它们常用的叫法");
+    const model = fakeModel({ canonReply: JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜长顺", "码头"] }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.searched).toEqual([1, 2, 3, 4]);
+  });
+
   // 长篇实跑：「以第 14 章为准」定成「某人手里攥着木杠」，扫全书把别章里放在膝上、打架顺手抄的、别人拿着的都列进来要改。
   it("会变的状态写那件东西本身、不写一时的拿法；扫和复核都不算一时的拿法、放法", async () => {
     const model = fakeModel();
