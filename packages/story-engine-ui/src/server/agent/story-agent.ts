@@ -12,6 +12,7 @@ import { Agent } from "@mastra/core/agent";
 
 import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
+import { withDraftStop } from "./draft-stop.js";
 import { withSlimModelOutput } from "./tool-model-output.js";
 import { checkContinuityTool } from "./tools/check-continuity.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
@@ -156,7 +157,8 @@ export async function getStoryAgent(): Promise<Agent> {
     instructions: buildInstructions(),
     model,
     // 工具结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果。
-    tools: withSlimModelOutput({
+    // 同一轮出了稿就停下（只许读、核账、建议下一步）：指令里的「出稿后必须停」在工具边界守住。
+    tools: withSlimModelOutput(withDraftStop({
       read_state_overview: readStateOverviewTool,
       read_chapters_overview: readChaptersOverviewTool,
       read_timeline: readTimelineTool,
@@ -181,7 +183,7 @@ export async function getStoryAgent(): Promise<Agent> {
       manage_snapshots: manageSnapshotsTool,
       settle_fact: settleFactTool,
       web_search: webSearchTool,
-    }),
+    })),
   });
   return cachedAgent;
 }

@@ -45,6 +45,9 @@ export const REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY = "lastTurnUndoHint";
  */
 export const REQUEST_CONTEXT_PICKED_DIRECTION_KEY = "pickedDirection";
 
+/** 这一轮已经写好工作稿的章号（draft-stop：出稿后这一轮停下）。只在服务端这次请求里存在。 */
+export const REQUEST_CONTEXT_DRAFT_WRITTEN_KEY = "draftWrittenThisTurn";
+
 export interface PickedDirection {
   readonly chapter: number;
   readonly text: string;
