@@ -383,6 +383,28 @@ function unitOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit | undef
   return doc?.units.find((item) => quoteInText(quote, item.text) || quoteInText(item.text, quote));
 }
 
+/** 核账报的一句最多跨连着的几个编号句（核账对回整句时也最多 6 句）。 */
+const QUOTE_MAX_UNITS = 6;
+
+/**
+ * 核账报的那句落在哪几个编号句上：连着的几句里能装下它的最短那段（在一句里头就是那一句；跨了几句——「林晚说完这句，…“店不能这么空着。房租照付，…”」——就是那几句，头尾两句只盖住半句也算）。
+ * 换题材长篇实跑 2026-10-28：只认头一句，改法落在第二句上，卡上还说「核账报的那句没查出改法」。
+ */
+function unitsOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit[] {
+  if (!doc) return [];
+  let best: TextUnit[] | undefined;
+  for (let start = 0; start < doc.units.length; start += 1) {
+    let joined = "";
+    for (let end = start; end < doc.units.length && end < start + QUOTE_MAX_UNITS; end += 1) {
+      joined += doc.units[end]!.text;
+      if (!quoteInText(quote, joined)) continue;
+      if (best === undefined || end + 1 - start < best.length) best = doc.units.slice(start, end + 1);
+      break;
+    }
+  }
+  return best ?? doc.units.filter((item) => quoteInText(item.text, quote));
+}
+
 /** 把一章（或工作稿）切好编号。 */
 function docOf(chapter: number, target: SweepDoc["target"], text: string): SweepDoc {
   const units = splitUnits(text);
@@ -654,24 +676,25 @@ export async function proposeSettle(input: {
     else failures.push(`${rangeLabel(batches[index]!)}这一批没查成（${result.reason instanceof Error ? result.reason.message : String(result.reason)}）`);
   });
   if (!fieldResult.ok) failures.push(`设定本那一遍没查成（${fieldResult.error instanceof Error ? fieldResult.error.message : String(fieldResult.error)}）`);
-  const flaggedUnits = flagged.map((side) => ({ side, unit: unitOfQuote(docs.get(side.chapter), side.quote) }));
-  const hasEdit = (side: ChapterSide, unit: TextUnit): boolean => found.some((edit) => edit.chapter === side.chapter && edit.id === unit.id);
+  const flaggedUnits = flagged.map((side) => ({ side, units: unitsOfQuote(docs.get(side.chapter), side.quote) }));
+  const covers = (side: ChapterSide, units: readonly TextUnit[], edit: { readonly chapter: number; readonly id: number }): boolean =>
+    edit.chapter === side.chapter && units.some((unit) => unit.id === edit.id);
+  const hasEdit = (side: ChapterSide, units: readonly TextUnit[]): boolean => found.some((edit) => covers(side, units, edit));
   // 核账报过、作者点过的那句是这次要定的事本身：整批查时漏了，只拿那几章单问一次（批里几万字，模型偶尔漏点名的句子）。
-  const unanswered = flaggedUnits.flatMap(({ side, unit }) => (unit && !hasEdit(side, unit) ? [{ side, unit }] : []));
+  const unanswered = flaggedUnits.filter(({ side, units }) => units.length > 0 && !hasEdit(side, units));
   const asked = new Set(batches.flatMap((batch, index) => (batchResults[index]!.status === "fulfilled" ? batch.map((doc) => doc.chapter) : [])));
   const retry = unanswered.filter(({ side }) => asked.has(side.chapter));
   if (retry.length > 0) {
     const focus = [...new Set(retry.map(({ side }) => side.chapter))].sort((a, b) => a - b).map((chapter) => docs.get(chapter)!);
     try {
       const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side), standing) }], { json: true }), focus);
-      found.push(...again.filter((edit) => retry.some(({ side, unit }) => edit.chapter === side.chapter && edit.id === unit.id)));
+      found.push(...again.filter((edit) => retry.some(({ side, units }) => covers(side, units, edit))));
     } catch {
       // 补问没成：下面照实列进「没查出改法」。
     }
   }
   // 核账报过的那几句（作者认了它们打架）不复核；别的再问一遍，推算站不住的去掉。
-  const clicked = (edit: Omit<SettleEdit, "key">): boolean =>
-    flaggedUnits.some(({ side, unit }) => unit !== undefined && edit.chapter === side.chapter && edit.id === unit.id);
+  const clicked = (edit: Omit<SettleEdit, "key">): boolean => flaggedUnits.some(({ side, units }) => covers(side, units, edit));
   const toReview = found.filter((edit) => !clicked(edit));
   // 设定本的栏也复核（换题材长篇实跑 2026-10-27：「欠了网贷，想把面馆铺面卖了」不冲突，模型往里添借款细节）；
   // 作者点的那一栏（以本章为准、打架的另一边是设定）不复核。
@@ -760,7 +783,7 @@ export async function proposeSettle(input: {
   });
 
   const missed = flaggedUnits
-    .filter(({ side, unit }) => !(unit !== undefined && edits.some((edit) => edit.chapter === side.chapter && edit.id === unit.id)))
+    .filter(({ side, units }) => !edits.some((edit) => covers(side, units, edit)))
     .map(({ side }) => ({ chapter: side.chapter, quote: side.quote }));
 
   return {

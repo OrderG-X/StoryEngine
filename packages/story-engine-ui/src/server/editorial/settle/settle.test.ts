@@ -124,6 +124,27 @@ describe("定论预览", () => {
     expect(outcome.proposal.missed).toEqual([{ chapter: 3, quote: "海风很冷" }]);
   });
 
+  it("核账报的那句跨了几个编号句：改了其中哪一句都算查出了改法", async () => {
+    const base = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    // 改法落在被盖住的第二句上。
+    const model: BrainCallModel = async (messages, options) => {
+      const reply = await base(messages, options);
+      const prompt = messages.at(-1)?.content ?? "";
+      const second = /\[(\d+)\]许微没接话。/u.exec(prompt);
+      if (!prompt.includes("逐句看") || !second) return reply;
+      const parsed = JSON.parse(reply) as { edits: unknown[] };
+      return JSON.stringify({ edits: [...parsed.edits, { chapter: 2, id: Number(second[1]), to: "许微没接话，只点了点头。" }] });
+    };
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: { ...pick, also: [{ where: "chapter", chapter: 2, quote: "孟叔说。许微没接话" }] },
+      callModel: model,
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.edits.map((edit) => [edit.chapter, edit.from])).toContainEqual([2, "许微没接话。"]);
+    expect(outcome.proposal.missed).toEqual([]);
+  });
+
   it("定论只写打架的那一点：提示里说清楚", async () => {
     const model = fakeModel();
     await proposeSettle({ projectDir: dir, request: pick, callModel: model });
