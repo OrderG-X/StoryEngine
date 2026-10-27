@@ -117,6 +117,42 @@
   .codex-desk-bar .cd-synopsis-edit:disabled{opacity:.5;cursor:default;}
   .codex-desk-bar .cd-synopsis.is-editing{padding:8px 12px;gap:10px;}
   .codex-desk-bar .cd-synopsis.is-editing b{padding-top:6px;}
+  /* 写前备忘：没定稿的章，同一个位置；一行省略，点开分三块（上一章 / 该接的线索 / 最近变了），太长自己滚 */
+  .codex-desk-bar .cd-memo{
+    flex:1 1 100%;min-width:0;margin:2px 0 0;border-radius:8px;
+    background:var(--sunken);box-shadow:inset 2px 0 0 var(--accent-line);
+  }
+  .codex-desk-bar .cd-memo-head{
+    width:100%;min-width:0;display:flex;gap:10px;align-items:baseline;padding:6px 12px;border:0;border-radius:8px;background:transparent;
+    color:var(--muted);font-size:13px;line-height:1.6;text-align:left;cursor:pointer;
+  }
+  .codex-desk-bar .cd-memo-head:hover{background:var(--hover);}
+  .codex-desk-bar .cd-memo b{flex:none;font-size:11px;font-weight:700;letter-spacing:.16em;color:var(--accent);}
+  .codex-desk-bar .cd-memo-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .codex-desk-bar .cd-memo.is-error{display:flex;gap:10px;align-items:baseline;padding:6px 12px;color:var(--faint);font-size:12.5px;}
+  .codex-desk-bar .cd-memo-body{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:4px 20px;
+    max-height:38vh;overflow-y:auto;padding:2px 12px 10px;
+  }
+  .codex-desk-bar .cd-memo-body section{min-width:0;}
+  /* 线索那块最长：竖跨两行，「最近变了」接在「上一章」底下，不被挤到滚动区外面 */
+  .codex-desk-bar .cd-memo-body .cd-memo-threads{grid-row:span 2;}
+  .codex-desk-bar .cd-memo-body h4{margin:6px 0 4px;font-size:11.5px;font-weight:600;letter-spacing:.08em;color:var(--faint);}
+  .codex-desk-bar .cd-memo-body p{margin:0 0 2px;color:var(--text);font-size:13px;line-height:1.6;}
+  .codex-desk-bar .cd-memo-body .cd-memo-summary{color:var(--muted);}
+  .codex-desk-bar .cd-memo-body .cd-memo-more{color:var(--faint);font-size:12px;}
+  .codex-desk-bar .cd-memo-body ul{list-style:none;margin:0;padding:0;}
+  .codex-desk-bar .cd-memo-body li button{
+    width:calc(100% + 12px);min-width:0;display:flex;gap:8px;align-items:baseline;justify-content:space-between;
+    margin:0 -6px;padding:2px 6px;border:0;border-radius:6px;background:transparent;
+    color:var(--text);font-size:13px;line-height:1.6;text-align:left;cursor:pointer;
+  }
+  .codex-desk-bar .cd-memo-body li button:hover:not(:disabled){background:var(--hover);}
+  .codex-desk-bar .cd-memo-body li button:disabled{cursor:default;}
+  /* 线索标题常有一句话长：最多折两行，不一刀切成半句 */
+  .codex-desk-bar .cd-memo-text{min-width:0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;}
+  .codex-desk-bar .cd-memo-body em{flex:none;font-style:normal;font-size:12px;color:var(--faint);}
+  .codex-desk-bar .cd-memo-body em.is-warn{color:var(--warn);}
   /* 底条：上一章 | 再来一版 | 下一章 */
   /* 两边「上一章 / 下一章」按自身宽度占位，中间工具条在剩下的地方放；放不下时状态那句先省略，按钮不让（2026-10-22：窄屏「定稿」被「下一章」压住）。 */
   .codex-desk-bar-bottom{display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,auto) minmax(max-content,1fr);gap:12px;padding:8px 24px;}

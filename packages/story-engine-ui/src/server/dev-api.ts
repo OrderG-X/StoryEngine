@@ -29,6 +29,7 @@ import { registerContinuityDismissalsRoutes } from "./routes/continuity-dismissa
 import { registerStoryThreadsRoutes } from "./routes/story-threads.js";
 import { registerStoryMapRoutes } from "./routes/story-map.js";
 import { registerChapterChangesRoutes } from "./routes/chapter-changes.js";
+import { registerPreWriteMemoRoutes } from "./routes/pre-write-memo.js";
 import { registerBookSearchRoutes } from "./routes/book-search.js";
 import { registerBibleRoutes } from "./routes/bible.js";
 
@@ -63,6 +64,7 @@ export function registerStateOverviewApi(router: MiddlewareStack): void {
   registerStoryThreadsRoutes(router);
   registerStoryMapRoutes(router);
   registerChapterChangesRoutes(router);
+  registerPreWriteMemoRoutes(router);
   registerBookSearchRoutes(router);
   registerBibleRoutes(router);
   registerHealthRoutes(router);

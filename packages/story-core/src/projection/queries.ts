@@ -6,6 +6,7 @@
  */
 import type { ThreadType, TimeBasis } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
+import { DEFAULT_STALE_AFTER, MAJOR_STALE_FACTOR } from "./project.js";
 import type { BookProjection, ChapterView, FactView, ThreadStatus, ThreadView, ThreadWeight } from "./types.js";
 
 export interface SubjectFacts {
@@ -175,4 +176,141 @@ export function chapterBrief(projection: BookProjection, chapter: number): Chapt
     ...(view.editedSinceCommit !== undefined ? { editedSinceCommit: view.editedSinceCommit } : {}),
     textMissing: view.textMissing,
   };
+}
+
+// —— 写前备忘：动笔写第 N 章前看一眼（接哪天、谁在场、该接哪些线索、最近变了什么）——
+
+/** 该接的线索最多列几条。 */
+export const PRE_WRITE_THREAD_LIMIT = 5;
+/** 其中上一章刚动过的先占几条（停太久的也要露脸）。 */
+const PRE_WRITE_PREVIOUS_FIRST = 3;
+/** 「最近变了」最多列几条。 */
+export const PRE_WRITE_CHANGE_LIMIT = 6;
+/** 「最近变了」看最近几章（含上一章）。 */
+export const PRE_WRITE_RECENT_CHAPTERS = 3;
+
+export interface PreWritePrevious {
+  readonly chapter: number;
+  readonly summary?: string;
+  readonly present: readonly string[];
+  readonly viewpoint?: string;
+  readonly time: TimelineRow;
+}
+
+export interface PreWriteThread {
+  readonly id: string;
+  readonly title: string;
+  readonly weight: ThreadWeight;
+  /** 为什么提它：上一章刚动过 / 停太久 / 大伏笔。 */
+  readonly reason: "previous" | "stale" | "major";
+  /** 上一章对它做了什么（reason = previous 才有）。 */
+  readonly previousOp?: "open" | "advance";
+  /** 到上一章为止停了几章。 */
+  readonly idle: number;
+  /** 最近一笔：第几章、说明、原句（回原文用）。 */
+  readonly last: { readonly chapter: number; readonly note: string; readonly quote?: string };
+}
+
+export interface PreWriteChange {
+  readonly subject: string;
+  readonly attribute: string;
+  readonly value: string;
+  readonly chapter: number;
+  readonly quote?: string;
+}
+
+export interface PreWriteMemo {
+  /** 要写的那章。 */
+  readonly chapter: number;
+  /** 它前面最近定稿的那章；前面一章都没定稿就没有（整份备忘也就是空的）。 */
+  readonly previous?: PreWritePrevious;
+  readonly threads: readonly PreWriteThread[];
+  /** 开着、没列进来的线索条数。 */
+  readonly moreThreads: number;
+  /** 最近几章变了的状态（在哪、在谁手里、伤好没好……），新的先。 */
+  readonly changes: readonly PreWriteChange[];
+}
+
+/**
+ * 写第 chapter 章之前的备忘。投影要按「算到 chapter − 1」算（回头改前面的章时，后文的账不该露进来）；
+ * 作者裁定收掉的线索记在更后面一章的，这里仍当开着。全是账里记的结构，不读正文、不猜。
+ */
+export function preWriteMemo(projection: BookProjection, chapter: number): PreWriteMemo {
+  const empty: PreWriteMemo = { chapter, threads: [], moreThreads: 0, changes: [] };
+  const view = projection.chapters.filter((item) => item.chapter < chapter).at(-1);
+  if (!view) return empty;
+  const upTo = view.chapter;
+  const [time] = timelineTable({ ...projection, chapters: [view] }, upTo);
+  const previous: PreWritePrevious = {
+    chapter: upTo,
+    ...(view.summary !== undefined ? { summary: view.summary } : {}),
+    present: view.present,
+    ...(view.viewpoint !== undefined ? { viewpoint: view.viewpoint } : {}),
+    time: time as TimelineRow,
+  };
+
+  type Candidate = PreWriteThread & { readonly openedAt: number };
+  const candidates: Candidate[] = [];
+  let openCount = 0;
+  for (const thread of projection.threads) {
+    if (thread.openedAt > upTo) continue;
+    if (thread.closedAt !== undefined && thread.closedAt <= upTo) continue;
+    openCount += 1;
+    const touches = thread.touches.filter((touch) => touch.chapter <= upTo);
+    const last = touches.at(-1);
+    const lastChapter = Math.max(thread.openedAt, last?.chapter ?? thread.openedAt);
+    const idle = upTo - lastChapter;
+    const idleLimit = thread.weight === "major" ? DEFAULT_STALE_AFTER * MAJOR_STALE_FACTOR : DEFAULT_STALE_AFTER;
+    const previousTouch = touches.filter((touch) => touch.chapter === upTo && touch.op !== "close").at(-1);
+    const reason: PreWriteThread["reason"] | undefined = previousTouch
+      ? "previous"
+      : thread.weight !== "minor" && idle >= idleLimit
+        ? "stale"
+        : thread.weight === "major"
+          ? "major"
+          : undefined;
+    if (!reason) continue;
+    candidates.push({
+      id: thread.id,
+      title: thread.title,
+      weight: thread.weight,
+      reason,
+      ...(previousTouch ? { previousOp: previousTouch.op as "open" | "advance" } : {}),
+      idle,
+      last: { chapter: lastChapter, note: last?.note ?? thread.title, ...(last?.quote ? { quote: last.quote } : {}) },
+      openedAt: thread.openedAt,
+    });
+  }
+  const byWeight = (a: Candidate, b: Candidate): number => WEIGHT_RANK[a.weight] - WEIGHT_RANK[b.weight];
+  const stable = (a: Candidate, b: Candidate): number => a.openedAt - b.openedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const fromPrevious = candidates.filter((item) => item.reason === "previous").sort((a, b) => byWeight(a, b) || stable(a, b));
+  const stale = candidates.filter((item) => item.reason === "stale").sort((a, b) => byWeight(a, b) || b.idle - a.idle || stable(a, b));
+  const major = candidates.filter((item) => item.reason === "major").sort((a, b) => a.idle - b.idle || stable(a, b));
+  // 上一章刚动过的先占几条，再轮到停太久的；还有空才补上一章动过的其余几条和大伏笔。
+  const picked: Candidate[] = fromPrevious.slice(0, PRE_WRITE_PREVIOUS_FIRST);
+  for (const item of [...stale, ...fromPrevious.slice(PRE_WRITE_PREVIOUS_FIRST), ...major]) {
+    if (picked.length >= PRE_WRITE_THREAD_LIMIT) break;
+    picked.push(item);
+  }
+  const threads = picked.map(({ openedAt: _openedAt, ...item }) => item);
+
+  const changes = projection.facts
+    .filter((fact) =>
+      fact.nature === "state"
+      && fact.status === "current"
+      && fact.chapter <= upTo
+      && fact.chapter > upTo - PRE_WRITE_RECENT_CHAPTERS
+      && fact.subject !== undefined && fact.attribute !== undefined && fact.value !== undefined)
+    .map((fact, index) => ({ fact, index }))
+    .sort((a, b) => b.fact.chapter - a.fact.chapter || a.index - b.index)
+    .slice(0, PRE_WRITE_CHANGE_LIMIT)
+    .map(({ fact }): PreWriteChange => ({
+      subject: fact.subject as string,
+      attribute: fact.attribute as string,
+      value: fact.value as string,
+      chapter: fact.chapter,
+      ...(fact.quote ? { quote: fact.quote } : {}),
+    }));
+
+  return { chapter, previous, threads, moreThreads: openCount - threads.length, changes };
 }
