@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { RequestContext } from "@mastra/core/di";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 import { draftWrittenThisTurn, withDraftStop } from "./draft-stop.js";
@@ -15,40 +16,44 @@ function fakeTools() {
   });
 }
 
-const run = (tool: object, input: unknown, context: ToolExecutionContext) => (tool as { execute: Execute }).execute(input, context);
+/** 照 Mastra 调工具的样子：每次调用拿到的是合并出来的新一份请求上下文，往里 set 的下一次读不到。 */
+function perCall(base: RequestContext): ToolExecutionContext {
+  const merged = new RequestContext();
+  for (const [key, value] of base.entries()) merged.set(key, value);
+  return { requestContext: merged } as unknown as ToolExecutionContext;
+}
+
+const run = (tool: object, input: unknown, base: RequestContext) => (tool as { execute: Execute }).execute(input, perCall(base));
 
 describe("出稿后这一轮停下（换题材长篇实跑第 22 章：出完稿又并发调了十几个工具）", () => {
-  it("出稿成了：同一轮里定稿预览这类不执行、如实报；核账、建议下一步照常", async () => {
+  it("出稿成了：同一轮里定稿预览这类不执行、如实报；核账、建议下一步照常（每次调工具上下文是新的一份也认得）", async () => {
     const tools = fakeTools();
-    const context = { requestContext: buildProjectRequestContext("/tmp/book", 22) } as unknown as ToolExecutionContext;
-    await run(tools.commit_preview, {}, context);
-    expect(tools.commit_preview.execute).toBeDefined();
-    await run(tools.generate_draft, { ok: true }, context);
-    expect(draftWrittenThisTurn(context)).toBe(22);
-    await expect(run(tools.commit_preview, {}, context)).rejects.toThrow("这一轮已经写好第 22 章的工作稿，这一步先不做");
-    await expect(run(tools.generate_draft, { ok: true }, context)).rejects.toThrow("这一步先不做");
-    await expect(run(tools.check_continuity, {}, context)).resolves.toEqual({ ok: true });
-    await expect(run(tools.suggest_next_steps, {}, context)).resolves.toEqual({ ok: true });
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
+    await run(tools.generate_draft, { ok: true }, turn);
+    expect(draftWrittenThisTurn(perCall(turn))).toBe(22);
+    await expect(run(tools.commit_preview, {}, turn)).rejects.toThrow("这一轮已经写好第 22 章的工作稿，这一步先不做");
+    await expect(run(tools.generate_draft, { ok: true }, turn)).rejects.toThrow("这一步先不做");
+    await expect(run(tools.check_continuity, {}, turn)).resolves.toEqual({ ok: true });
+    await expect(run(tools.suggest_next_steps, {}, turn)).resolves.toEqual({ ok: true });
   });
 
   it("出稿没成：不算出了稿，后面照常；别的请求不受这一轮影响", async () => {
     const tools = fakeTools();
-    const context = { requestContext: buildProjectRequestContext("/tmp/book", 22) } as unknown as ToolExecutionContext;
-    await run(tools.generate_draft, { ok: false }, context);
-    expect(draftWrittenThisTurn(context)).toBeUndefined();
-    await expect(run(tools.commit_preview, {}, context)).resolves.toEqual({ ok: true });
-    const drafted = { requestContext: buildProjectRequestContext("/tmp/book", 22) } as unknown as ToolExecutionContext;
-    await run(tools.generate_draft, { ok: true }, drafted);
-    const next = { requestContext: buildProjectRequestContext("/tmp/book", 22) } as unknown as ToolExecutionContext;
-    await expect(run(tools.commit_preview, {}, next)).resolves.toEqual({ ok: true });
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    await run(tools.generate_draft, { ok: false }, turn);
+    expect(draftWrittenThisTurn(perCall(turn))).toBeUndefined();
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
+    await run(tools.generate_draft, { ok: true }, buildProjectRequestContext("/tmp/book", 22));
+    await expect(run(tools.commit_preview, {}, buildProjectRequestContext("/tmp/book", 22))).resolves.toEqual({ ok: true });
   });
 
   it("作者点的按钮带确认标记，照常执行；套过的不再套", async () => {
     const tools = fakeTools();
-    const context = { requestContext: buildProjectRequestContext("/tmp/book", 22) } as unknown as ToolExecutionContext;
-    await run(tools.generate_draft, { ok: true }, context);
-    markUserConfirmedTool(context.requestContext, "commit_preview");
-    await expect(run(tools.commit_preview, {}, context)).resolves.toEqual({ ok: true });
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    await run(tools.generate_draft, { ok: true }, turn);
+    markUserConfirmedTool(turn, "commit_preview");
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
     const once = tools.commit_preview.execute;
     withDraftStop(tools);
     expect(tools.commit_preview.execute).toBe(once);

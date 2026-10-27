@@ -5,7 +5,7 @@
  * 如实告诉模型这一步没做。作者点的按钮（结构化动作）一次只做一件事，带着作者确认标记，不受影响。
  */
 import type { ToolExecutionContext } from "@mastra/core/tools";
-import { isUserConfirmedTool, REQUEST_CONTEXT_DRAFT_WRITTEN_KEY } from "./request-context.js";
+import { isUserConfirmedTool, REQUEST_CONTEXT_TURN_STATE_KEY, type TurnState } from "./request-context.js";
 
 /** 出稿后同一轮还能调的。 */
 const AFTER_DRAFT_ALLOWED = new Set([
@@ -22,14 +22,18 @@ const WRAPPED = Symbol("draftStop");
 
 type Execute = (input: unknown, context: ToolExecutionContext) => Promise<unknown>;
 
+function turnState(context: ToolExecutionContext | undefined): TurnState | undefined {
+  const value = context?.requestContext?.get(REQUEST_CONTEXT_TURN_STATE_KEY);
+  return value && typeof value === "object" ? (value as TurnState) : undefined;
+}
+
 /** 这一轮已经写好的那一章（没出稿就是 undefined）。 */
 export function draftWrittenThisTurn(context: ToolExecutionContext | undefined): number | undefined {
-  const value = context?.requestContext?.get(REQUEST_CONTEXT_DRAFT_WRITTEN_KEY);
-  return typeof value === "number" ? value : undefined;
+  return turnState(context)?.draftWritten;
 }
 
 /**
- * 给工具套上「出稿后停」：generate_draft 写成了就在这次请求上记一笔；记过之后，白名单外的工具直接报没执行。
+ * 给工具套上「出稿后停」：generate_draft 写成了就在这一轮的状态上记一笔；记过之后，白名单外的工具直接报没执行。
  * 工具对象是模块里的单例、对话 AI 重建时会再套一次，所以套过的不再套。
  */
 export function withDraftStop<T extends Record<string, object>>(tools: T): T {
@@ -45,7 +49,8 @@ export function withDraftStop<T extends Record<string, object>>(tools: T): T {
       const output = await original.call(tool, input, context);
       if (name === "generate_draft" && (output as { ok?: unknown } | undefined)?.ok === true) {
         const chapter = (output as { chapter?: unknown }).chapter;
-        context?.requestContext?.set(REQUEST_CONTEXT_DRAFT_WRITTEN_KEY, typeof chapter === "number" ? chapter : 0);
+        const state = turnState(context);
+        if (state) state.draftWritten = typeof chapter === "number" ? chapter : 0;
       }
       return output;
     };

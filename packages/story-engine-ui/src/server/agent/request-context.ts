@@ -45,8 +45,16 @@ export const REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY = "lastTurnUndoHint";
  */
 export const REQUEST_CONTEXT_PICKED_DIRECTION_KEY = "pickedDirection";
 
-/** 这一轮已经写好工作稿的章号（draft-stop：出稿后这一轮停下）。只在服务端这次请求里存在。 */
-export const REQUEST_CONTEXT_DRAFT_WRITTEN_KEY = "draftWrittenThisTurn";
+/**
+ * 这一轮的可变状态：同一次请求里各次工具调用共用这一个对象。Mastra 每调一次工具都把请求上下文合并成新的一份，
+ * 工具往里 set 的值下一个工具读不到（换题材长篇实跑第 23 章：出稿后停的标记就这样丢了）；改这个对象的字段，引用跟着走。
+ */
+export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
+
+export interface TurnState {
+  /** 这一轮已经写好工作稿的章号（draft-stop：出稿后这一轮停下）。 */
+  draftWritten?: number;
+}
 
 export interface PickedDirection {
   readonly chapter: number;
@@ -107,7 +115,7 @@ export function buildProjectRequestContext(
   lastTurnUndoHint?: LastTurnUndoHint,
   pickedDirection?: PickedDirection,
 ): RequestContext {
-  const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir]];
+  const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir], [REQUEST_CONTEXT_TURN_STATE_KEY, {} satisfies TurnState]];
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
   if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
