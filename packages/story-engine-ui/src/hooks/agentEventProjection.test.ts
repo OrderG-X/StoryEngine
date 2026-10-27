@@ -125,6 +125,21 @@ describe("projectAgentEvent", () => {
     expect(message.agentCards![0].status).toBe("failed");
   });
 
+  it("出完稿这一轮别的工具没让执行（skipped）：步骤「已停止」、不当失败也不当裁决未过，不挂定稿预览卡", () => {
+    const message = project([
+      { type: "tool-call", toolCallId: "p1", toolName: "commit_preview", startedAt: 10 },
+      {
+        type: "tool-result",
+        toolCallId: "p1",
+        toolName: "commit_preview",
+        endedAt: 20,
+        output: { ok: false, skipped: true, summary: "这一轮已经写好第 25 章的工作稿，这一步先不做，等作者看完稿再说。" },
+      },
+    ]);
+    expect(message.toolSteps![0]).toMatchObject({ status: "stopped", detail: "这一轮已经写好第 25 章的工作稿，这一步先不做，等作者看完稿再说。" });
+    expect(cardOf(message, "commit-preview")).toBeUndefined();
+  });
+
   it("marks the toolStep FAILED when a tool result reports ok:false (结构性防谎报)", () => {
     const message = project([
       { type: "tool-call", toolCallId: "d1", toolName: "generate_draft", startedAt: 10 },

@@ -26,14 +26,15 @@ function perCall(base: RequestContext): ToolExecutionContext {
 const run = (tool: object, input: unknown, base: RequestContext) => (tool as { execute: Execute }).execute(input, perCall(base));
 
 describe("出稿后这一轮停下（换题材长篇实跑第 22 章：出完稿又并发调了十几个工具）", () => {
-  it("出稿成了：同一轮里定稿预览这类不执行、如实报；核账、建议下一步照常（每次调工具上下文是新的一份也认得）", async () => {
+  it("出稿成了：同一轮里定稿预览这类不执行、如实报没做（不抛错，免得前端当服务出错）；核账、建议下一步照常（每次调工具上下文是新的一份也认得）", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
     await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
     await run(tools.generate_draft, { ok: true }, turn);
     expect(draftWrittenThisTurn(perCall(turn))).toBe(22);
-    await expect(run(tools.commit_preview, {}, turn)).rejects.toThrow("这一轮已经写好第 22 章的工作稿，这一步先不做");
-    await expect(run(tools.generate_draft, { ok: true }, turn)).rejects.toThrow("这一步先不做");
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "这一轮已经写好第 22 章的工作稿，这一步先不做，等作者看完稿再说。" });
+    expect(tools.commit_preview.execute).toBeDefined();
+    await expect(run(tools.generate_draft, { ok: true }, turn)).resolves.toMatchObject({ ok: false, skipped: true });
     await expect(run(tools.check_continuity, {}, turn)).resolves.toEqual({ ok: true });
     await expect(run(tools.suggest_next_steps, {}, turn)).resolves.toEqual({ ok: true });
   });

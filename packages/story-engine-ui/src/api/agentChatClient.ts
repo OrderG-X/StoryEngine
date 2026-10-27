@@ -178,6 +178,8 @@ export interface AgentToolResult {
   readonly partialMiss?: boolean;
   /** R7.9：工具参数/输出没过 Mastra 校验（服务端归一标记）——投影层一律置「失败」，即便裁决类工具（没跑≠裁决未过）。 */
   readonly toolValidationFailure?: boolean;
+  /** 工具边界没让它执行（这一轮已经出了稿，先等作者看稿）：投影层置「已停止」，不当失败。 */
+  readonly skipped?: boolean;
   readonly summary?: string;
   /** 改草稿类工具（generate_draft/revise_draft）返回的「当前章完整草稿正文（去 Markdown 标题）」。
    *  前端据此把真正文载入工作区——否则只能用不含正文的 overview 刷新，草稿被占位覆盖、autosave 抹掉真正文。 */
@@ -451,6 +453,7 @@ export async function streamAgentChat(
             // R7.9：Mastra 校验失败标记（服务端 agent-chat 归一时带上）——投影层据此一律置「失败」，
             // 即便是裁决类工具（校验失败=工具没跑，不是「裁决未过」）。
             ...(output.toolValidationFailure === true ? { toolValidationFailure: true } : {}),
+            ...(output.skipped === true ? { skipped: true } : {}),
             ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
             // 改草稿工具的真正文必须透传，前端据此把真正文载入工作区（防占位覆盖+autosave 抹稿）。
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),

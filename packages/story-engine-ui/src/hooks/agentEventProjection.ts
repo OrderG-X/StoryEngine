@@ -58,6 +58,8 @@ export interface AgentToolResultOutput {
    * 但校验失败意味着工具根本没跑、没有裁决），且 summary 里带给人话原因，步骤卡点开不再空白。
    */
   readonly toolValidationFailure?: boolean;
+  /** 工具边界没让它执行（这一轮已经出了稿，先等作者看稿）：步骤「已停止」，不红、不当裁决未过。 */
+  readonly skipped?: boolean;
   readonly summary?: string;
   readonly issues?: readonly string[];
   readonly overview?: unknown;
@@ -273,16 +275,19 @@ export function projectAgentEvent(message: ChapterMessage, event: AgentProjectio
       // - ok===false 分两种（复审 T4 三轮修法 2）：裁决类只读工具（commit_preview，ok===canCommit）的
       //   ok:false 是「裁决未过」（工具没崩、给了真实否定答案）→「裁决未过」落定形态，不红不绿；
       //   其余工具（写类/出稿）的 ok:false（引擎拒绝/出稿失败/未写入）→「失败」，绝不被 agent 文本「已完成」幻觉盖过。
+      // - skipped===true（出完稿这一轮别的工具先不做）→「已停止」，不红、不当裁决未过。
       // - 否则「已完成」。并把真实 summary 显示在时间线上。
       const status = event.output?.toolValidationFailure === true
         ? "failed"
-        : event.output?.needsConfirmation === true
-          ? "needs_confirmation"
-          : event.output?.ok === false
-            ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
-            : event.output?.partialMiss === true
-              ? "partial"
-              : "completed";
+        : event.output?.skipped === true
+          ? "stopped"
+          : event.output?.needsConfirmation === true
+            ? "needs_confirmation"
+            : event.output?.ok === false
+              ? (isVerdictToolName(event.toolName) ? "verdict" : "failed")
+              : event.output?.partialMiss === true
+                ? "partial"
+                : "completed";
       const settled = settleTool(message, event.toolCallId, status, event.endedAt, event.output?.summary, event.output);
       // 块级撤销的命门：snapshotId 已从后端流到 event.output（agentChatClient→onToolResult），
       // 这里把它（连同 refreshScope）回写到消息上，建立「回合↔git 快照」映射，供 M3 块脚「撤销到此」。
@@ -453,7 +458,7 @@ function appendTextSegment(
 function settleTool(
   message: ChapterMessage,
   toolCallId: string,
-  status: "completed" | "failed" | "needs_confirmation" | "partial" | "verdict",
+  status: "completed" | "failed" | "needs_confirmation" | "partial" | "verdict" | "stopped",
   endedAt: number,
   summary?: string,
   output?: AgentToolResultOutput,
