@@ -1132,7 +1132,8 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
     aiFlavorRecheck: false,
   });
   const candidate = await runFastDraft({
-    ...sharedFastDraftInput(run, input),
+    // 和对话里出稿一样有章纲就分前后两半写：一口气写的候选常短到目标的一半（换题材长篇实跑 2026-10-27：1,090 / 1,591 字，目标 2,000）。
+    ...sharedFastDraftInput(run, { ...input, segmentByPlan: true }),
     writerClient: input.writerClient,
     dryRun: false,
   });
