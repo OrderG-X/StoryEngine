@@ -233,6 +233,22 @@ describe("投影", () => {
     expect(result.chapters[2]?.weekdayDerived).toBe(true);
   });
 
+  it("时间记了、却没说离上一章隔几天：按第二天记，标成估的（第一章不算）", () => {
+    const result = project({
+      ledgers: [
+        ledger(1, [{ kind: "time", basis: "text", quote: "周二傍晚", weekday: 1 }]),
+        ledger(2, [{ kind: "time", basis: "text", quote: "进了暑假", daysInChapter: 2 }]),
+        ledger(3, [{ kind: "time", basis: "judged", quote: "次日", daysSincePrevious: 1 }]),
+      ],
+      decisions: [],
+    });
+    expect(result.chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([
+      [1, 1, "text"],
+      [2, 4, "estimated"],
+      [5, 5, "judged"],
+    ]);
+  });
+
   // 长篇实跑：第 24 章定稿后才发现天数记错（该是第 21～22 天），定稿后没处改。
   it("作者裁定改一章的天数：顶掉账单记的，后面的章接着它往后推", () => {
     const ledgers = [

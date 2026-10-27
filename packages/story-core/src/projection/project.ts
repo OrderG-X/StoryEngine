@@ -441,7 +441,9 @@ function buildChapters(
       basis = time.basis;
     } else {
       day = previousEnd + 1;
-      basis = time ? time.basis : "missing";
+      // 记了时间却没说离上一章隔几天（「进了暑假」这类没说准的，记账员照规矩不填）：按第二天记是估的，
+      // 定稿清单请作者看一眼（换题材长篇实跑第 21 章：标成「正文明写」，暑假记成了上一章的第二天）。
+      basis = !time ? "missing" : views.length > 0 ? "estimated" : time.basis;
     }
     dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;

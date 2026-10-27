@@ -255,6 +255,19 @@ describe("commit_apply", () => {
     expect(again.summary).toContain("要你看");
   });
 
+  it("记账员没说离上一章隔几天：天数那行说清是估的，算一条要你看（换题材长篇实跑第 21 章「进了暑假」）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await writeDraft(2, CH2);
+    const vague = { ...LEDGER2, time: { basis: "text", timeOfDay: "上午", quote: "第二天上午" } };
+    const preview = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(vague) });
+    const day = preview.ledgerChecklist?.[0];
+    expect(day).toMatchObject({ id: "day", editableDay: 2, needsConfirm: true });
+    expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（正文没说离上一章隔了几天，先按第二天记，不对就改）");
+    expect(preview.summary).toContain("要你看");
+  });
+
   it("票号没了 / 乱填：如实拒、不定稿", async () => {
     const base = (await readHead(book)).version;
     await writeDraft(1, CH1);
