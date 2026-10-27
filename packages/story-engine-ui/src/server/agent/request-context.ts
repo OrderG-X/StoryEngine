@@ -54,6 +54,8 @@ export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
 export interface TurnState {
   /** 这一轮已经写好工作稿的章号（draft-stop：出稿后这一轮停下）。 */
   draftWritten?: number;
+  /** 这一轮正在写的稿有几份（模型把出稿和别的工具并发着调时，别的那几个按这个拦下）。 */
+  drafting?: number;
 }
 
 export interface PickedDirection {

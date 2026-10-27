@@ -49,6 +49,23 @@ describe("出稿后这一轮停下（换题材长篇实跑第 22 章：出完稿
     await expect(run(tools.commit_preview, {}, buildProjectRequestContext("/tmp/book", 22))).resolves.toEqual({ ok: true });
   });
 
+  it("出稿和定稿预览并发着调（第 26 章）：稿还在写，定稿预览拦下；这份稿没写成，之后再调的照常", async () => {
+    let finish: (value: unknown) => void = () => {};
+    const tools = withDraftStop({
+      generate_draft: { execute: vi.fn(() => new Promise((resolve) => { finish = resolve; })) },
+      commit_preview: { execute: vi.fn(async () => ({ ok: true })) },
+      read_draft: { execute: vi.fn(async () => ({ ok: true })) },
+    });
+    const turn = buildProjectRequestContext("/tmp/book", 26);
+    const drafting = run(tools.generate_draft, {}, turn);
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "这一轮正在写工作稿，这一步先不做，等稿写完、作者看过再说。" });
+    await expect(run(tools.generate_draft, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
+    await expect(run(tools.read_draft, {}, turn)).resolves.toEqual({ ok: true });
+    finish({ ok: false });
+    await drafting;
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
+  });
+
   it("作者点的按钮带确认标记，照常执行；套过的不再套", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
