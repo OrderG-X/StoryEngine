@@ -1,6 +1,9 @@
 /**
  * 故事地图的数据（GET /api/story-map，重构 P6）。读不到就如实给原因。
  */
+import type { PaceReport } from "@actalk/story-core";
+
+export type { PaceChapter, PaceFlag, PaceReport } from "@actalk/story-core";
 
 export interface StoryMapChapter {
   readonly chapter: number;
@@ -26,6 +29,8 @@ export interface StoryMap {
   readonly upTo: number;
   readonly chapters: readonly StoryMapChapter[];
   readonly cast: readonly StoryMapMember[];
+  /** 节奏诊断：每章推进了几条线索、字数，哪几章可能拖 / 赶。 */
+  readonly pace?: PaceReport;
 }
 
 export type StoryMapResult = { readonly ok: true; readonly map: StoryMap } | { readonly ok: false; readonly error: string };

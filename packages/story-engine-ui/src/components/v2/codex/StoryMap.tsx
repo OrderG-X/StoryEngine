@@ -4,10 +4,12 @@
  *  - 一行一章：章号、故事第几天（星期 / 时段，估的标「估」）、这章讲了什么；隔了几天在两行之间标出来。
  *  - 一列一个人：这章出场画一个点，视角人物画空心圈；点一下回写作台那一章、滚到他出场那句（老书导入的章没记原句，只打开那章）。
  *  - 人多时先看出场最多的 8 个，点「全部 N 人」再展开。
+ *  - 节奏：每章一根条（每千字推进几条线索，竖线是全书平常），可能拖 / 赶的章打个记号，上面列出原因，点了滚到那一行。
  * 数据直接是新核心投影（定稿时记账员记的），不猜。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchStoryMap, type StoryMap as MapData, type StoryMapChapter } from "../../../api/storyMapClient.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchStoryMap, type PaceChapter, type PaceFlag, type PaceReport, type StoryMap as MapData, type StoryMapChapter } from "../../../api/storyMapClient.js";
+import { paceNote, paceRange, paceReason } from "../../../lib/pace-text.js";
 import { Avatar, PageHead, Skeleton } from "./bibleVisual.js";
 
 /** 先露出场最多的几个人。 */
@@ -34,6 +36,29 @@ export function daysPassed(previous: StoryMapChapter | undefined, row: StoryMapC
   return passed >= 2 ? passed : 0;
 }
 
+/** 节奏条最长画到平常的几倍。 */
+const PACE_BAR_CAP = 3;
+/** 上面先列几处原因（多了点「全部 N 处」再展开）。 */
+const PACE_NOTES_VISIBLE = 4;
+/** 点了原因、那一行亮多久。 */
+const PACE_FLASH_MS = 1800;
+
+/** 节奏格的悬停说明：字数、推进几条；被标了就带上原因。 */
+export function paceCellTitle(row: PaceChapter, flags: readonly PaceFlag[]): string {
+  const counts = [`${row.words.toLocaleString("zh-CN")} 字`, `推进 ${row.advanced}`, `收 ${row.closed}`];
+  if (row.opened > 0) counts.push(`新开 ${row.opened}`);
+  const lines = [counts.join(" · ")];
+  if (row.density === undefined) lines.push("字太少、或前面还没有线索可推，不算");
+  for (const flag of flags) lines.push(`可能${flag.kind === "drag" ? "拖" : "赶"}：${paceReason(flag)}`);
+  return lines.join("\n");
+}
+
+/** 节奏条长度（%）：按全书平常算，平常在三分之一处。 */
+export function paceBarWidth(row: PaceChapter, report: PaceReport): number {
+  if (row.density === undefined || !report.typical) return 0;
+  return Math.round((Math.min(row.density / report.typical.density, PACE_BAR_CAP) / PACE_BAR_CAP) * 100);
+}
+
 const lastMaps = new Map<string, MapData>();
 
 export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapter }: {
@@ -50,6 +75,17 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
   const [showAllCast, setShowAllCast] = useState(false);
   const [reloadSeq, setReloadSeq] = useState(0);
   const reload = useCallback(() => setReloadSeq((seq) => seq + 1), []);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [flashChapter, setFlashChapter] = useState<number | null>(null);
+  useEffect(() => {
+    if (flashChapter === null) return undefined;
+    const timer = window.setTimeout(() => setFlashChapter(null), PACE_FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [flashChapter]);
+  const showRow = (chapter: number) => {
+    scrollRef.current?.querySelector(`tr[data-chapter="${chapter}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    setFlashChapter(chapter);
+  };
 
   useEffect(() => {
     if (busy || !projectPath) return undefined;
@@ -68,6 +104,15 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
   }, [projectPath, busy, reloadSeq]);
 
   const cast = useMemo(() => (map ? (showAllCast ? map.cast : map.cast.slice(0, CAST_VISIBLE)) : []), [map, showAllCast]);
+  const pace = map?.pace;
+  const paceOf = useMemo(() => new Map((pace?.chapters ?? []).map((row) => [row.chapter, row])), [pace]);
+  const flagsOf = useMemo(() => {
+    const byChapter = new Map<number, PaceFlag[]>();
+    for (const flag of pace?.flags ?? []) {
+      for (let chapter = flag.from; chapter <= flag.to; chapter += 1) byChapter.set(chapter, [...(byChapter.get(chapter) ?? []), flag]);
+    }
+    return byChapter;
+  }, [pace]);
   const quoteOf = useMemo(() => {
     const quotes = new Map<string, string>();
     for (const member of map?.cast ?? []) for (const item of member.appearances) quotes.set(`${member.name}\u0000${item.chapter}`, item.quote);
@@ -105,13 +150,15 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
               </button>
             ) : null}
           </div>
-          <div className="se-sm-scroll">
+          {pace ? <PaceNotes report={pace} onShow={showRow} /> : null}
+          <div className="se-sm-scroll" ref={scrollRef}>
             <table className="se-sm-table">
               <thead>
                 <tr>
                   <th scope="col" className="se-sm-ch">章</th>
                   <th scope="col" className="se-sm-day">故事日</th>
                   <th scope="col" className="se-sm-what">这章</th>
+                  {pace ? <th scope="col" className="se-sm-pace" title="每千字推进几条线索（收一条算两条），竖线是全书平常">节奏</th> : null}
                   {cast.map((member) => (
                     <th key={member.name} scope="col" className="se-sm-who" title={member.aliases.length > 0 ? `也叫：${member.aliases.join("、")}` : member.name}>
                       <Avatar name={member.name} kind="character" />
@@ -128,10 +175,10 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
                   return [
                     passed > 0 ? (
                       <tr key={`gap-${row.chapter}`} className="se-sm-gap">
-                        <td colSpan={3 + cast.length}><span>过了 {passed} 天</span></td>
+                        <td colSpan={(pace ? 4 : 3) + cast.length}><span>过了 {passed} 天</span></td>
                       </tr>
                     ) : null,
-                    <tr key={row.chapter}>
+                    <tr key={row.chapter} data-chapter={row.chapter} className={flashChapter === row.chapter ? "is-flash" : undefined}>
                       <th scope="row" className="se-sm-ch">
                         {onOpenChapter ? (
                           <button type="button" className="se-sm-chbtn" onClick={() => onOpenChapter(row.chapter)}>第 {row.chapter} 章</button>
@@ -143,6 +190,7 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
                         {dayDetail(row) ? <small>{dayDetail(row)}</small> : null}
                       </td>
                       <td className="se-sm-what">{row.summary ? <span title={row.summary}>{row.summary}</span> : <span className="se-sm-faint">—</span>}</td>
+                      {pace ? <PaceCell row={paceOf.get(row.chapter)} report={pace} flags={flagsOf.get(row.chapter) ?? []} /> : null}
                       {cast.map((member) => {
                         if (!row.present.includes(member.name)) return <td key={member.name} className="se-sm-cell" />;
                         const quote = quoteOf.get(`${member.name}\u0000${row.chapter}`);
@@ -169,5 +217,52 @@ export function StoryMap({ projectPath, busy, chapterTitles, onJump, onOpenChapt
         </>
       ) : null}
     </section>
+  );
+}
+
+function PaceCell({ row, report, flags }: { readonly row: PaceChapter | undefined; readonly report: PaceReport; readonly flags: readonly PaceFlag[] }) {
+  if (!row) return <td className="se-sm-pace"><span className="se-sm-faint">—</span></td>;
+  const width = paceBarWidth(row, report);
+  return (
+    <td className="se-sm-pace" title={paceCellTitle(row, flags)}>
+      <span className="se-sm-pacecell">
+        {row.density === undefined || !report.typical ? <span className="se-sm-faint">—</span> : (
+          <span className="se-sm-pacebar" aria-hidden="true"><i className={row.pace ? `is-${row.pace}` : ""} style={{ width: `${width}%` }} /></span>
+        )}
+        {row.pace ? <em className={`se-sm-pacetag is-${row.pace}`}>{row.pace === "slow" ? "拖" : "赶"}</em> : null}
+      </span>
+    </td>
+  );
+}
+
+/** 表格上面那几句：哪几章可能拖 / 赶、为什么；点了滚到那一行。 */
+function PaceNotes({ report, onShow }: { readonly report: PaceReport; readonly onShow: (chapter: number) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!report.typical) {
+    return <p className="se-sm-pacenote se-sm-faint">节奏：能比较的定稿章还少（或账里记的线索推进太少），先不下结论。</p>;
+  }
+  if (report.flags.length === 0) return <p className="se-sm-pacenote se-sm-faint">节奏：没看出明显拖或赶的章。</p>;
+  return (
+    <div className="se-sm-pacelist" aria-label="节奏">
+      <b>节奏</b>
+      <ul>
+        {(showAll ? report.flags : report.flags.slice(0, PACE_NOTES_VISIBLE)).map((flag) => (
+          <li key={`${flag.reason}-${flag.from}`}>
+            <button type="button" onClick={() => onShow(flag.from)} title={paceNote(flag)}>
+              <em className={`se-sm-pacetag is-${flag.kind === "drag" ? "slow" : "fast"}`}>{flag.kind === "drag" ? "拖" : "赶"}</em>
+              <span className="se-sm-pacech">{paceRange(flag)}</span>
+              <span className="se-sm-pacewhy">{paceReason(flag)}</span>
+            </button>
+          </li>
+        ))}
+        {report.flags.length > PACE_NOTES_VISIBLE ? (
+          <li>
+            <button type="button" className="se-sm-link" onClick={() => setShowAll((all) => !all)}>
+              {showAll ? "收起" : `全部 ${report.flags.length} 处`}
+            </button>
+          </li>
+        ) : null}
+      </ul>
+    </div>
   );
 }

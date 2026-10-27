@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { StoryMap as MapData, StoryMapMember } from "../../../api/storyMapClient.js";
-import { StoryMap, dayDetail, daysPassed } from "./StoryMap.js";
+import type { StoryMap as MapData, StoryMapMember, PaceReport } from "../../../api/storyMapClient.js";
+import { StoryMap, dayDetail, daysPassed, paceBarWidth, paceCellTitle } from "./StoryMap.js";
 
 const who = (name: string, chapters: readonly number[], over: Partial<StoryMapMember> = {}): StoryMapMember => ({
   name,
@@ -104,5 +104,55 @@ describe("故事地图（重构 P6，草图 ③）", () => {
     expect(daysPassed(MAP.chapters[0], base)).toBe(0);
     expect(daysPassed(base, MAP.chapters[2]!)).toBe(4);
     expect(dayDetail(MAP.chapters[2]!)).toBe("");
+  });
+
+  it("节奏：每章一根条、可能拖 / 赶打记号；上面列原因，点了滚到那一行亮一下", async () => {
+    const scrolled = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    const pace: PaceReport = {
+      typical: { density: 1, words: 2000 },
+      chapters: [
+        { chapter: 1, words: 2000, opened: 2, advanced: 0, closed: 0, span: 0, storyDays: 0, timeSure: true },
+        { chapter: 2, words: 2000, opened: 0, advanced: 0, closed: 0, density: 0, span: 0, storyDays: 1, timeSure: false, pace: "slow" },
+        { chapter: 3, words: 900, opened: 0, advanced: 3, closed: 1, density: 5.6, span: 1, storyDays: 5, timeSure: false, pace: "fast" },
+      ],
+      flags: [
+        { kind: "drag", reason: "slow", from: 2, to: 2, words: 2000, advanced: 0, closed: 0 },
+        { kind: "rush", reason: "dense", from: 3, to: 3, words: 900, advanced: 3, closed: 1 },
+      ],
+    };
+    mockFetch({ ok: true, map: { ...MAP, pace } });
+    render(<StoryMap projectPath="/book-pace" busy={false} chapterTitles={new Map()} />);
+    const notes = await screen.findByRole("list");
+    expect(notes.textContent).toBe("拖第 2 章2,000 字没推进线索赶第 3 章900 字里推进 3 条、收了 1 条线索");
+    expect(screen.getByText("节奏", { selector: "th" }).getAttribute("title")).toContain("竖线是全书平常");
+    const row3 = document.querySelector('tr[data-chapter="3"]')!;
+    expect(row3.querySelector(".se-sm-pacetag")?.textContent).toBe("赶");
+    expect(row3.querySelector(".se-sm-pace")?.getAttribute("title")).toBe("900 字 · 推进 3 · 收 1\n可能赶：900 字里推进 3 条、收了 1 条线索");
+    expect(document.querySelector('tr[data-chapter="1"] .se-sm-pacebar')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /第 2 章2,000 字没推进线索/u }));
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('tr[data-chapter="2"]')?.className).toBe("is-flash");
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it("节奏下不了结论、或没看出问题：一句话说清，不硬标", async () => {
+    mockFetch({ ok: true, map: { ...MAP, pace: { chapters: [], flags: [] } } });
+    const { unmount } = render(<StoryMap projectPath="/book-pace-few" busy={false} chapterTitles={new Map()} />);
+    expect(await screen.findByText("节奏：能比较的定稿章还少（或账里记的线索推进太少），先不下结论。")).toBeTruthy();
+    unmount();
+    mockFetch({ ok: true, map: { ...MAP, pace: { typical: { density: 1, words: 2000 }, chapters: [], flags: [] } } });
+    render(<StoryMap projectPath="/book-pace-fine" busy={false} chapterTitles={new Map()} />);
+    expect(await screen.findByText("节奏：没看出明显拖或赶的章。")).toBeTruthy();
+  });
+
+  it("节奏条按全书平常量，最长画到三倍；没密度的不画", () => {
+    const report: PaceReport = { typical: { density: 2, words: 2000 }, chapters: [], flags: [] };
+    const row = { chapter: 1, words: 2000, opened: 0, advanced: 2, closed: 0, span: 0, storyDays: 1, timeSure: true };
+    expect(paceBarWidth({ ...row, density: 2 }, report)).toBe(33);
+    expect(paceBarWidth({ ...row, density: 20 }, report)).toBe(100);
+    expect(paceBarWidth(row, report)).toBe(0);
+    expect(paceCellTitle({ ...row, opened: 1 }, [])).toBe("2,000 字 · 推进 2 · 收 0 · 新开 1\n字太少、或前面还没有线索可推，不算");
   });
 });

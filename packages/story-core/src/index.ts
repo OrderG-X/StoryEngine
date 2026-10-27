@@ -178,6 +178,18 @@ export {
   type SubjectFacts,
   type TimelineRow,
 } from "./projection/queries.js";
+export {
+  PACE_FAST_MIN_MOVES,
+  PACE_FAST_RATIO,
+  PACE_MIN_CHAPTERS,
+  PACE_SLOW_RATIO,
+  PACE_SPAN_DAYS,
+  PACE_SPAN_WORDS_RATIO,
+  paceReport,
+  type PaceChapter,
+  type PaceFlag,
+  type PaceReport,
+} from "./projection/pace.js";
 
 export { checkEntries, type CheckResult, type RejectedEntry, type RejectReason } from "./review/check.js";
 export { classifyForReview, type ClassifiedEntry, type ClassifyOptions, type ReviewPlan, type ReviewReason } from "./review/classify.js";
