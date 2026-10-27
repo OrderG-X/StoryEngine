@@ -176,10 +176,11 @@ const KIND_LABELS: Record<string, string> = { summary: "梗概", time: "时间",
 const THREAD_TYPE_LABELS = { question: "悬念", intent: "打算", goal: "目标" } as const;
 const NATURE_LABELS = { hard: "不会变", state: "会变", event: "发生过的事" } as const;
 
-/** 「facts 第 3 条」→「事实」。 */
+/** 「facts 第 3 条」→「一条事实」；认得出是哪条的带上名字：「线索「谁在敲门」」。 */
 function dropLabel(drop: KeeperDrop): string {
   const head = drop.where.split(/[ .]/u)[0] ?? "";
-  return `一条${KIND_LABELS[head] ?? "记录"}`;
+  const kind = KIND_LABELS[head] ?? "记录";
+  return drop.name ? `${kind}「${drop.name}」` : `一条${kind}`;
 }
 
 /** 名字 → 投影里的主体键（别称归到已确立名字）。 */

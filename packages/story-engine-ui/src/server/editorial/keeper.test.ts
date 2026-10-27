@@ -191,6 +191,16 @@ describe("记账员交回的账单", () => {
     expect(parsed?.entries[0]).toMatchObject({ note: "归入「钟为什么停」：钟停的原因有了眉目" });
   });
 
+  it("推进没写说明：丢掉时带上线索名字，作者知道是哪条没记上（换题材长篇实跑 2026-10-28）", () => {
+    const names = new Map([["T1", "钟为什么停"]]);
+    const parsed = parseKeeperOutput(JSON.stringify({ threads: [{ op: "advance", thread: "T1", quote: "钥匙递过来" }, { op: "advance", thread: "T9", quote: "x" }] }), { ...handles, handleNames: names });
+    expect(parsed?.entries).toEqual([]);
+    expect(parsed?.drops).toEqual([
+      { where: "threads 第 1 条", reason: "没写这一章对它做了什么", name: "钟为什么停" },
+      { where: "threads 第 2 条", reason: "没写这一章对它做了什么" },
+    ]);
+  });
+
   it("原句里多转义了一层的换行（字面的反斜杠 n）换回空白", () => {
     const parsed = parseKeeperOutput(JSON.stringify({ summary: { text: "找到书", quote: "林秋\\n一九八七年春" } }), handles);
     expect(parsed?.entries[0]).toMatchObject({ kind: "summary", quote: "林秋 一九八七年春" });

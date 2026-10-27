@@ -69,6 +69,22 @@ describe("定稿编排", () => {
     expect(view.threads[0]).toMatchObject({ title: "钟为什么停", status: "open" });
   });
 
+  it("记账员推进一条线索却没写说明：没记上的那条带线索名字，不只说「一条线索」", async () => {
+    await commitChapter1();
+    const preview = expectPreview(await prepareChapterCommit({
+      bookDir: book,
+      chapter: 2,
+      text: CH2,
+      tickets: memoryTicketStore(),
+      callModel: fakeModel({
+        summary: { text: "外乡人又来", quote: "外乡人又来了" },
+        time: { basis: "text", daysSincePrevious: 1, quote: "第二天上午" },
+        threads: [{ op: "advance", thread: "T1", quote: "钟是被人故意拨停的" }],
+      }),
+    }));
+    expect(preview.notRecorded).toEqual([{ code: "parse", label: "线索「钟为什么停」", reason: "没写这一章对它做了什么" }]);
+  });
+
   it("第 2 章：推进 / 收口用短号接上前文；原句对不上的如实列出；作者去掉一条、改天数；点两次只定稿一次", async () => {
     await commitChapter1();
     const tickets = memoryTicketStore();
