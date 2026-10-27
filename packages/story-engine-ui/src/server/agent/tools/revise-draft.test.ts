@@ -168,6 +168,23 @@ describe("revise_draft 草稿局部修订工具", () => {
     expect(await readFile(defaultDraftPath(projectDir, 1), "utf-8")).toContain("她回到更衣间，柜门推开，旧工装还叠在最底下。");
   });
 
+  it("要改的那截不带句号、新文本自己收了句号 → 接缝不落成「。。」（换题材长篇实跑 2026-10-27）", async () => {
+    const projectDir = await makeProject("接缝标点");
+    await writeDraft(projectDir, 1, "# 第1章\n\n方总说，“杭州那个项目，两周内进场。你自己定。”\n");
+    const out = await runReviseDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      targetText: "杭州那个项目，两周内进场",
+      revisionGoal: "",
+      replacementText: "杭州那个项目往后推了，两周后进场。",
+      callModel: async () => {
+        throw new Error("精确替换不调模型");
+      },
+    });
+    expect(out.ok).toBe(true);
+    expect(await readFile(defaultDraftPath(projectDir, 1), "utf-8")).toContain("“杭州那个项目往后推了，两周后进场。你自己定。”");
+  });
+
   it("新文本多包的引号不叠在接缝上、不在话说一半时收引号；原本就是引语的照常（长篇连写 2026-10-24）", async () => {
     const projectDir = await makeProject("接缝引号");
     const revise = async (body: string, targetText: string, afterText: string): Promise<string> => {

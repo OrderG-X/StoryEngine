@@ -331,7 +331,23 @@ function computeRevisionUpdate(draftContent: string, beforeSpan: RevisionTargetS
   const replaced = draftContent.slice(beforeSpan.start, beforeSpan.end);
   // 模型回的直引号、半角逗号换成中文的，除非这稿本来就整篇这么写（作者自己的写法，跟着它）。
   const text = chinesePunctuationLike(head + tail, afterText.trim());
-  return head + trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, text, tail), tail) + tail;
+  return head + trimSeamPunctuation(head, replaced, trimSeamQuotes(head, replaced, trimSeamOverlap(head, replaced, text, tail), tail), tail) + tail;
+}
+
+// 不猜白名单：切句
+const SEAM_PUNCTUATION = new Set(["。", "！", "？", "!", "?", "，", ",", "；", ";", "、", "：", ":"]);
+
+/**
+ * 接缝标点去重（换题材长篇实跑 2026-10-27）：要改的那截不带句号，新文本自己收了句号，落地成「两周后进场。。」。
+ * 新文本收尾的标点和原文紧跟着的那个一样、被替换的那段原本没有它，就去掉新文本的；开头同理。纯逐字比对。
+ */
+function trimSeamPunctuation(head: string, replaced: string, afterText: string, tail: string): string {
+  let text = afterText;
+  const last = text.slice(-1);
+  if (text.length > 1 && SEAM_PUNCTUATION.has(last) && tail.startsWith(last) && !replaced.endsWith(last)) text = text.slice(0, -1);
+  const first = text.slice(0, 1);
+  if (text.length > 1 && SEAM_PUNCTUATION.has(first) && head.endsWith(first) && !replaced.startsWith(first)) text = text.slice(1);
+  return text;
 }
 
 // 不猜白名单：切句
@@ -595,7 +611,10 @@ export async function reviseDraftText(input: Omit<Parameters<typeof reviseDraftO
       return { ok: false, code: "exact_replacement_noop", task: resolvedTask };
     }
     const preview = exactReplacementPreview(resolvedTask, resolvedTarget, exactReplacement);
-    const updatedContent = draftContent.slice(0, span.start) + exactReplacement + draftContent.slice(span.end);
+    // 原样落地，只去掉接缝上抄重的那个标点（「进场。」接在「。」前面不该成「。。」）。
+    const head = draftContent.slice(0, span.start);
+    const tail = draftContent.slice(span.end);
+    const updatedContent = head + trimSeamPunctuation(head, resolvedTarget, exactReplacement, tail) + tail;
     return { ok: true, mode: "exact", task: resolvedTask, preview, updatedContent };
   }
   // 要模型改写却没说往哪改：不让模型瞎改，如实退回（精确替换和去 AI 味不需要它）。
