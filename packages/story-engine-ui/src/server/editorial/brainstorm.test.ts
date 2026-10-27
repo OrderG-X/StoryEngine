@@ -74,6 +74,8 @@ describe("头脑风暴：解析章纲员的走法", () => {
     expect(task).toContain("t-key｜抽屉钥匙在谁手上｜停了 6 章");
     expect(task).toContain("t-letter｜信里写了什么｜刚动过｜大伏笔");
     expect(task).toContain("作者给了想法");
+    // 作者点名这章不碰的，三种里哪种都别碰（换题材长篇实跑 2026-10-27）
+    expect(task).toContain("他说了这章不碰、不写的事，哪一种都别碰");
     expect(task).toContain("【这几种已经给过作者了，别再出一样的】林溪来信");
     expect(task).toContain("【故事前提】一封信");
   });
