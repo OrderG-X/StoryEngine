@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CHAPTER_LEDGER_SCHEMA, checkEntries, project, type ChapterLedger, type LedgerEntry } from "@actalk/story-core";
+import { CHAPTER_LEDGER_SCHEMA, checkEntries, project, type ChapterLedger, type LedgerEntry, type SettingCardsFile } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
@@ -38,6 +38,23 @@ function sampleBook() {
   });
 }
 
+function sampleCards(): SettingCardsFile {
+  return {
+    schema: "setting-cards/1",
+    story: { fields: [] },
+    rules: { style: [], musts: [], bans: [], avoid: [], exemplars: [] },
+    cards: [
+      { id: "k-1", kind: "character", name: "沈青禾", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-2", kind: "character", name: "沈德厚", aliases: ["沈父"], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-3", kind: "character", name: "老周", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-4", kind: "place", name: "钟楼", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+    ],
+    relations: [{ id: "r-1", a: "k-1", b: "k-2", label: "父女", by: "author", at: "2026-10-27T00:00:00.000Z" }],
+    canon: [],
+    skipped: [],
+  } as unknown as SettingCardsFile;
+}
+
 describe("记账员上下文", () => {
   it("人物带别称、线索和事实各编短号、时间照表；短号能换回真编号", () => {
     const before = sampleBook();
@@ -50,6 +67,19 @@ describe("记账员上下文", () => {
     expect(context.factHandles.get("F1")).toBe("c1-4");
     expect(context.text).toContain("| 第 2 章 |");
     expect(context.omittedFacts).toBe(0);
+  });
+
+  it("设定本里有卡、还没出场的人物也列上（别名、卡上的关系）；已出场的不重复列", () => {
+    const cards = sampleCards();
+    const text = buildKeeperContext(sampleBook(), "父亲咳了一声。", [], cards).text;
+    expect(text).toContain("【设定本里还没出场的人物");
+    expect(text).toContain("沈德厚（又叫：沈父；和沈青禾：父女）");
+    // 沈青禾已出场、老周是已出场的周守义的别称：都不在这一段重复。
+    const section = text.slice(text.indexOf("【设定本里还没出场的人物"));
+    expect(section.split("\n\n")[0]).not.toContain("沈青禾（");
+    expect(section.split("\n\n")[0]).not.toContain("\n老周");
+    expect(section).not.toContain("钟楼");
+    expect(buildKeeperContext(sampleBook(), "正文").text).not.toContain("设定本里还没出场");
   });
 
   it("空书什么段都没有；事实太多就截断并如实写没列的条数", () => {
@@ -213,6 +243,8 @@ describe("记账员跑一章", () => {
     try {
       await mkdir(join(book, "chapters"), { recursive: true });
       await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      await mkdir(join(book, "ledger"), { recursive: true });
+      await writeFile(join(book, "ledger/cards.json"), JSON.stringify(sampleCards()));
       const before = sampleBook();
       const calls: BrainMessage[][] = [];
       const reply = JSON.stringify({ summary: { text: "老周交出钥匙", quote: "老周把钥匙递过来" }, threads: [{ op: "advance", thread: "T1", note: "有下落", quote: "钥匙递过来" }] });
@@ -234,6 +266,7 @@ describe("记账员跑一章", () => {
       expect(task).toContain("【开着的线索");
       expect(task).toContain("【上一章结尾】\n# 第1章\n\n钟停在三点十五分。老周没有拦她。");
       expect(task).toContain(KEEPER_SPEC[0]);
+      expect(task).toContain("沈德厚（又叫：沈父；和沈青禾：父女）");
       if (outcome.ok) expect(outcome.parsed.entries).toHaveLength(2);
 
       const broken = await runLedgerKeeper({ projectDir: book, chapter: 2, draft: "老周", before, callModel: async () => "不是 JSON" });
@@ -251,6 +284,8 @@ describe("记账员跑一章", () => {
     try {
       await mkdir(join(book, "chapters"), { recursive: true });
       await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      await mkdir(join(book, "ledger"), { recursive: true });
+      await writeFile(join(book, "ledger/cards.json"), JSON.stringify(sampleCards()));
       const before = sampleBook();
       const draft = "# 第2章\n\n他把钥匙递过来，说：「拿着。」沈青禾接住了。";
       const first = JSON.stringify({

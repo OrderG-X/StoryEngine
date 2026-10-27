@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterTextPath, checkEntries, quoteFromText, quoteInText, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { chapterTextPath, checkEntries, quoteFromText, quoteInText, readCards, type BookProjection, type EntryInput } from "@actalk/story-core";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
 import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
@@ -63,7 +63,7 @@ export const KEEPER_SPEC: readonly string[] = [
   "",
   "presence：本章真在场的每个有名字的人物各一条。",
   "- 在场 = 在本章的场景里露面：自己说话、做事、被人看见或听见（隔着电话、视频直接说话的也算）。只在别人嘴里、回忆、念头、信上、照片上出现的不算在场，不报——提得再多也不报。拿不准就问：这个人本章自己开口或动手了吗？没有就不报。",
-  "- name 写这个人的已确立名字：上面【本书已出场的人物】里有的，逐字沿用那里的写法；第一次出场的写正文里的名字。",
+  "- name 写这个人的已确立名字：上面【本书已出场的人物】【设定本里还没出场的人物】里有的，逐字沿用那里的写法；两边都没有的才写正文里的名字。",
   "- nameUsed 写本章正文里怎么称呼他（和 name 不同就是别称，代码会记成同一个人）；quote 必须逐字含 nameUsed。",
   "- 正文里冒出的新称呼如果指的是已有的人，name 写那个人的已确立名字、nameUsed 写新称呼，不要当成新人物。同一个人本章只报一条，用最主要的称呼。",
   "- nameUsed 要是换个场景就能指别人的叫法（「那人」「老头」「她」「男人」这类，不是专属这个人的名字、外号或身份称呼），加 \"generic\": true——代码只认本章这一处是他，不把这个叫法记成他的别名。",
@@ -208,7 +208,8 @@ export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome
     return { ok: false, reason: `记账员读前文没成：${oneLine(error)}` };
   }
   const extra = { ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
-  const context = buildKeeperContext(input.before, input.draft, input.reopenable);
+  const cards = await readCards(input.projectDir).catch(() => undefined);
+  const context = buildKeeperContext(input.before, input.draft, input.reopenable, cards);
   const task = buildKeeperTask(input.chapter, input.draft, context.text, await previousEnding(input.projectDir, input.chapter));
   let text: string;
   try {

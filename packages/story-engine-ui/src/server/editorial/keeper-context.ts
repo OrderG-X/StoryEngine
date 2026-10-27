@@ -13,12 +13,14 @@
  *  「没看全」（omittedFacts），定稿预览如实提醒作者。
  */
 import {
+  nameKey,
   normalizeForQuote,
   threadsForPrompt,
   timelineTable,
   timelineText,
   type BookProjection,
   type FactView,
+  type SettingCardsFile,
 } from "@actalk/story-core";
 
 export const MAX_PROMPT_THREADS = 200;
@@ -48,6 +50,31 @@ function castSection(projection: BookProjection): string {
   if (projection.cast.length === 0) return "";
   const lines = projection.cast.map((member) => (member.aliases.length > 0 ? `${member.name}（又叫：${member.aliases.join("、")}）` : member.name));
   return `【本书已出场的人物（name 务必逐字沿用这里的写法；正文用了别的称呼就写进 nameUsed）】\n${lines.join("\n")}`;
+}
+
+/**
+ * 设定本里有卡、账里还没出场过的人物（换题材长篇实跑 2026-10-27：父亲的卡叫「林国栋」，前两章只叫「父亲」，
+ * 记账员只看得到已出场的人，自己编了个「林父」——出场、事实都记在「林父」名下，跟那张卡对不上）。
+ * 带上别名和卡上的关系，模型才认得出正文里的称呼指的是谁。
+ */
+function cardCastSection(projection: BookProjection, cards: SettingCardsFile | undefined): string {
+  if (!cards) return "";
+  const known = new Set(projection.cast.flatMap((member) => [member.key, ...member.aliases.map(nameKey)]));
+  const byId = new Map(cards.cards.map((card) => [card.id, card] as const));
+  const lines = cards.cards
+    .filter((card) => card.kind === "character" && ![card.name, ...card.aliases].some((name) => known.has(nameKey(name))))
+    .map((card) => {
+      const relations = cards.relations
+        .filter((relation) => relation.a === card.id || relation.b === card.id)
+        .flatMap((relation) => {
+          const other = byId.get(relation.a === card.id ? relation.b : relation.a);
+          return other ? [`和${other.name}：${relation.label}`] : [];
+        });
+      const notes = [...(card.aliases.length > 0 ? [`又叫：${card.aliases.join("、")}`] : []), ...relations];
+      return notes.length > 0 ? `${card.name}（${notes.join("；")}）` : card.name;
+    });
+  if (lines.length === 0) return "";
+  return `【设定本里还没出场的人物（正文写到他们时 name、事实的 subject 都照这里的写法；正文的称呼写进 nameUsed）】\n${lines.join("\n")}`;
 }
 
 function threadSection(projection: BookProjection, handles: Map<string, string>, names: Map<string, string>): { text: string; omitted: number } {
@@ -153,8 +180,13 @@ function timelineSection(projection: BookProjection): string {
   return `【前文的时间（最近 ${rows.length} 章；照表对，不要自己推算故事第几天）】\n${timelineText(rows)}`;
 }
 
-/** projection 应是「算到上一章」的投影；draft 是本章正文；reopenable = 重定稿时这一章上次开的线索。 */
-export function buildKeeperContext(projection: BookProjection, draft: string, reopenable: readonly ReopenableThread[] = []): KeeperContext {
+/** projection 应是「算到上一章」的投影；draft 是本章正文；reopenable = 重定稿时这一章上次开的线索；cards = 设定卡（没有就不列卡上的人）。 */
+export function buildKeeperContext(
+  projection: BookProjection,
+  draft: string,
+  reopenable: readonly ReopenableThread[] = [],
+  cards?: SettingCardsFile,
+): KeeperContext {
   const threadHandles = new Map<string, string>();
   const factHandles = new Map<string, string>();
   const reopenHandles = new Map<string, string>();
@@ -162,7 +194,7 @@ export function buildKeeperContext(projection: BookProjection, draft: string, re
   const threads = threadSection(projection, threadHandles, handleNames);
   const reopen = reopenSection(reopenable, reopenHandles, handleNames);
   const facts = factSection(projection, draft, factHandles, handleNames);
-  const sections = [castSection(projection), threads.text, reopen, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
+  const sections = [castSection(projection), cardCastSection(projection, cards), threads.text, reopen, facts.text, timelineSection(projection)].filter((part) => part.length > 0);
   return {
     text: sections.join("\n\n"),
     threadHandles,

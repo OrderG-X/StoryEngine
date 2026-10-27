@@ -142,6 +142,8 @@ describe("commit_preview", () => {
     expect(list.filter((item) => item.kind === "fact")).toHaveLength(2);
     expect(out.summary).toBe("第 1 章可以定稿：要你看 1 条，其余 5 条自动记下（不对的都能去掉）。");
     expect(JSON.stringify(out.summary)).not.toMatch(/commit_apply|c1-|t1-/u);
+    // 要看的是哪几条点名给模型，免得转述成别的（换题材长篇实跑 2026-10-27）。
+    expect(out.modelHint).toContain(`要作者看的就是这几条（别说成别的）：${reviewed[0]?.label}。`);
   });
 
   it("第 1 章正文没写时间：天数说「先这么记」，不提没有的上一章（2026-10-23 桌面包走查）", async () => {

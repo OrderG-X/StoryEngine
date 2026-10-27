@@ -132,6 +132,14 @@ describe("定论预览", () => {
     expect(canonPrompt).toContain("只答这一点");
   });
 
+  // 换题材长篇实跑：以第 1 章为准改第 2 章「昨晚放回去」，改成「下午收市后放回去」——隔了一天，读着像当天下午。
+  it("改句照这一句所在那章的时间说：隔了天的说「昨天」「那天」", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看，找出说法和这条定论对不上的句子"));
+    expect(sweep).toContain("照这一句所在那章的时间来说");
+  });
+
   // 长篇实跑：「以第 14 章为准」定成「某人手里攥着木杠」，扫全书把别章里放在膝上、打架顺手抄的、别人拿着的都列进来要改。
   it("会变的状态写那件东西本身、不写一时的拿法；扫和复核都不算一时的拿法、放法", async () => {
     const model = fakeModel();

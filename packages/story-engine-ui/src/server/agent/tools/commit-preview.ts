@@ -262,6 +262,8 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
     ...others(preview.auto).map((item) => toChecklistItem(item, false)),
   ];
   const reviewCount = others(preview.review).length + (preview.time.needsConfirm ? 1 : 0);
+  // 要作者看的是哪几条，点名给模型（换题材长篇实跑 2026-10-27：要看的是两个新出场的人，模型转述成了两条新开的线索）。
+  const reviewLabels = [...(preview.time.needsConfirm ? ["这一章记为第几天"] : []), ...others(preview.review).map((item) => item.label)];
   const autoCount = others(preview.auto).length;
   const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
   const notes: string[] = [];
@@ -295,7 +297,8 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
     ...(notes.length > 0 ? { notes } : {}),
     modelHint:
       "预览通过：请作者在定稿清单里点「确认定稿」写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
-      "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。",
+      "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。" +
+      (reviewLabels.length > 0 ? `要作者看的就是这几条（别说成别的）：${reviewLabels.join("；")}。` : ""),
     ledgerChecklist,
   };
 }
