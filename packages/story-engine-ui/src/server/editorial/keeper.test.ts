@@ -55,6 +55,13 @@ function sampleCards(): SettingCardsFile {
   } as unknown as SettingCardsFile;
 }
 
+describe("交账单要求：换天", () => {
+  it("上一章约到「明天」的事本章开头在做、或本章说「昨天」指上一章：隔了一天（换题材长篇实跑 2026-10-27：记成了同一天）", () => {
+    const spec = KEEPER_SPEC.join("\n");
+    expect(spec).toContain("本章开头做的正是上一章约到「明天」「第二天」的事，或者本章里说「昨天」指的是上一章的事，也是 1");
+  });
+});
+
 describe("记账员上下文", () => {
   it("人物带别称、线索和事实各编短号、时间照表；短号能换回真编号", () => {
     const before = sampleBook();
