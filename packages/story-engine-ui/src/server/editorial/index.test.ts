@@ -51,7 +51,7 @@ describe("预热 / 补读（R3 后三个角色都常开，没有开关）", () =
     };
     await expect(warmUpReaders(dir, 3, { callModel: flaky })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(await notes(dir, "checker")).toEqual(["0001.json"]);
+    expect(await notes(dir, "planner")).toEqual(["0001.json"]);
   });
 
   it("catchUpReaders 点名只补指定的角色", async () => {
@@ -64,7 +64,7 @@ describe("预热 / 补读（R3 后三个角色都常开，没有开关）", () =
 });
 
 describe("三个角色共用一条补读队列（按角色依次补，不并发）", () => {
-  it("任何时刻最多一个模型调用在飞，且按 checker → ledger → planner 依次补完", async () => {
+  it("任何时刻最多一个模型调用在飞；定稿后预热按 planner → checker → ledger 依次补完（定稿后多半接着拟下一章的纲）", async () => {
     const dir = await makeBook(2);
     let inFlight = 0;
     let maxInFlight = 0;
@@ -79,7 +79,7 @@ describe("三个角色共用一条补读队列（按角色依次补，不并发�
     };
     await warmUpReaders(dir, 2, { callModel });
     expect(maxInFlight).toBe(1); // 没有两个角色的补读同时打模型
-    expect(roles).toEqual(["checker", "checker", "ledger", "ledger", "planner", "planner"]); // 一个角色补完才轮到下一个
+    expect(roles).toEqual(["planner", "planner", "checker", "checker", "ledger", "ledger"]); // 一个角色补完才轮到下一个
     expect(await notes(dir, "checker")).toEqual(["0001.json", "0002.json"]);
     expect(await notes(dir, "ledger")).toEqual(["0001.json", "0002.json"]);
     expect(await notes(dir, "planner")).toEqual(["0001.json", "0002.json"]);
