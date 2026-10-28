@@ -146,7 +146,7 @@ async function planByEditorialRoom(input: {
  * 章纲依赖的前文指纹：前面各章正文、账、设定、前面各章是哪天（本章的日子不进——时间线会读本章章纲里的天数）。
  * 读不了 → undefined：不沿用，拟出来的也不记指纹。
  */
-async function planBasisOf(projectDir: string, chapter: number): Promise<string | undefined> {
+export async function planBasisOf(projectDir: string, chapter: number): Promise<string | undefined> {
   try {
     const earlier = await readEarlierChapters(projectDir, chapter);
     const { facts } = await readFactLedgerStrict(projectDir);

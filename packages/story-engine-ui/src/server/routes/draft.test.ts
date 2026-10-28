@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeChapterPlan } from "../book/chapter-plan.js";
+import { planBasisOf } from "../editorial/plan-chapter.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 
@@ -289,6 +290,8 @@ describe("draft length guard routes", () => {
       entities: [],
       threadsAdvanced: [],
       avoid: [],
+      // 拟纲时的前文指纹和现在一样才沿用
+      basis: await planBasisOf(projectDir, 1),
       createdAt: "2026-10-27T00:00:00.000Z",
     });
     runFastDraft.mockResolvedValueOnce({
