@@ -143,6 +143,8 @@ export interface ReaderCheckVariant {
   readonly timelineInReview?: boolean;
   /** G 每遍核几次（缺省 1）：同一遍同样的输入再独立核一次、合并去重——同一章两次核出的问题差得多，并起来漏得少。 */
   readonly passRepeats?: number;
+  /** 改后只核改过的句子时并行几次（缺省同 passRepeats）。 */
+  readonly recheckRepeats?: number;
 }
 
 /** D 同章的两句至少相隔几句才可能算「确定」：同一个节拍里的两个说法（比如门开着又关上）常被误读成矛盾。 */
@@ -154,9 +156,13 @@ export const SURE_GATE_MIN_SENTENCE_GAP = 3;
  * 差距和口径见 docs/editorial-room/reports/R2.1-2026-10-12.md）。
  * G（2026-10-24 重构后重考）：大考卷查全 57.1/60.7%→67.9%、「确定」查全 48.8/50.0%→59.9%，「确定」查准下限 47.8/48.6%→50.3%；
  * 两次调用并行，单章单独核用时不变（约 40～80 秒），多花的是 token（输入多半走缓存）。
+ * G 加到四次（外部审查 2026-10-28）：改后改成只核改过的句子，老做法「改后整章再核一遍」顺带抽中的首遍漏错就没了
+ * （改后重核考卷 16 章 57 处标注：首遍抓到 34，并上整章再核 44，并上只核改过的 36）。首遍每遍核四次补回来：同一批章首遍
+ * 自己就抓到 46（「确定」33→40，查准下限 37%→40%）——而且是在按核账改之前抓到、跟着一起改掉，不是改完才摆在卡上。四次并行，多等的是排队，不是再核一整遍。
+ * 改后只核改过的那一遍照旧两次（recheckRepeats）。
  * checkChapterByReader 自己缺省全关（第 1 步原样，单测和评测各自显式传），只有走核账服务的产品路才带这个组合。
  */
-export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 2 };
+export const DEFAULT_READER_VARIANT: ReaderCheckVariant = { selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 };
 
 /** 翻原文那一轮的问法：窗口里有看不到原文的章（折叠只剩笔记，或冷窗口没给到）时，问它要翻哪些词的前文原文。 */
 export function keywordTask(chapter: number, cold = false): string {
@@ -809,7 +815,7 @@ export function recheckTask(chapter: number, changes: readonly ChangedSentence[]
 
 /**
  * 改后按改动重核（外部审查 2026-10-28：改稿后再跑一遍完整核账，等待翻倍）：整章刚核过、只改了几句，
- * 就只让核账员核改过的句子和它们牵连的本章别处——同一窗口、同一份新稿消息，按变体并行几次（passRepeats），
+ * 就只让核账员核改过的句子和它们牵连的本章别处——同一窗口、同一份新稿消息，按变体并行几次（recheckRepeats），
  * 候选照样自复核、过「确定」门槛。没改的句子沿用上一遍的结果，由核账服务带上（这里只返回这次新核出的）。
  */
 export async function recheckChangesByReader(input: ReaderCheckInput & {
@@ -819,7 +825,7 @@ export async function recheckChangesByReader(input: ReaderCheckInput & {
   const setup = await prepareReaderCheck(input);
   if ("failure" in setup) return { issues: [], failures: [setup.failure] };
   const task = recheckTask(input.chapter, input.changes);
-  const ran = await runReaderPasses(Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) =>
+  const ran = await runReaderPasses(Array.from({ length: Math.max(1, variant.recheckRepeats ?? variant.passRepeats ?? 1) }, (_, repeat) =>
     contradictionPass(input, setup, repeat === 0 ? "核改过的句子" : `核改过的句子第 ${repeat + 1} 次`, task)));
   const failures: string[] = [...setup.failures, ...ran.failures];
   let issues = dropMisdirectedBySetting(mergePasses(ran.passes));
