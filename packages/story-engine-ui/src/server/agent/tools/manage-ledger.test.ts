@@ -176,6 +176,29 @@ describe("manage_ledger review：理一遍线索（外部审查 2026-10-28：线
     expect((await projectBook(book)).threads.find((thread) => thread.title === "钟楼的门为什么开着")).toMatchObject({ status: "closed", closedAt: 2, closedBy: "author" });
   });
 
+  it("点多了取前几句、编号不在这章的丢掉；账里后面还在推进的，判在更早那章收不列（真机 2026-10-28）", async () => {
+    const author = (key: string) => ({ caller: "author" as const, idempotencyKey: key });
+    const c1 = await runCommand(book, chapterCommit, { chapter: 1, text: "# 第1章\n\n她要查清账。账本少了一页。谁撕的？", entries: [
+      { kind: "thread", review: "auto", op: "open", type: "intent", title: "查清账", note: "要查账", quote: "她要查清账" },
+      { kind: "thread", review: "auto", op: "open", type: "question", title: "谁撕的账页", note: "少了一页", quote: "账本少了一页" },
+    ] }, author("t1"));
+    if (!c1.ok) throw new Error(c1.message);
+    const threads = (await projectBook(book)).threads;
+    const audit = threads.find((thread) => thread.title === "查清账")!.id;
+    const c2 = await runCommand(book, chapterCommit, { chapter: 2, text: "# 第2章\n\n账查了一半。老周说是他撕的。他撕了扔进了灶膛。灶膛里还剩一角。她认得那是账页。", entries: [
+      { kind: "thread", review: "auto", op: "advance", thread: audit, note: "查了一半", quote: "账查了一半" },
+    ] }, author("t2"));
+    if (!c2.ok) throw new Error(c2.message);
+    const plan = await runManageLedger(book, { op: "review" }, {
+      callModel: fakeKeeper(
+        { threads: [{ id: "T1", status: "closed", chapter: 1, reason: "查完了" }, { id: "T2", status: "closed", chapter: 2, reason: "老周认了" }] },
+        { evidence: [{ id: "T2", ids: [2, 3, 99, 4, 5] }] },
+      ),
+    });
+    expect(plan.ledgerConfirm?.lines).toEqual(["「谁撕的账页」第 2 章已收：「老周说是他撕的。他撕了扔进了灶膛。灶膛里还剩一角。」"]);
+    expect(plan.summary).toContain("「查清账」记账员说第 1 章收了，但账里第 2 章还记着推进，第 1 章收了说不通，没列。");
+  });
+
   it("点不出原句、说的章不对、拿不准的都不列，如实说；一条都没有就不出按钮", async () => {
     await commitTwo();
     const plan = await runManageLedger(book, { op: "review" }, {

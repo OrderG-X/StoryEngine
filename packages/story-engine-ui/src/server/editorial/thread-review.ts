@@ -72,6 +72,7 @@ export function reviewTask(upTo: number, lines: readonly string[]): string {
     "- 悬念：标题问的那件事正文完整答出来了；打算：做完了或明确放弃了；目标：达成了或明确落空了。",
     "- 只揭晓了一部分、答案引出新疑问、人物只说了一半、只是又往前推了一步的，不算收。停了很多章没再写，也不等于收了。",
     "- 收了：status 写 closed，chapter 写正文写明收口的那一章。还开着：status 写 open。拿不准：status 写 unsure。",
+    "- 最近推进到第几章的，真收了也是那一章或以后（后面还在推进，说明那时还没收）。",
     "- reason 用中文一句话说怎么收的、或为什么还开着（给作者看，不写编号）。",
     "",
     "【开着的线索】（编号只在这次有效）",
@@ -200,6 +201,11 @@ export async function reviewOpenThreads(input: {
       unproven.push({ title: thread.title, ...(chapter !== undefined ? { chapter } : {}), why: chapter === undefined ? "没说在第几章收的" : `说的第 ${chapter} 章不在这条埋下之后的定稿章里` });
       continue;
     }
+    // 账里后面的章还记着推进：那一章收了说不通（真收了得从后面那章算），不列，作者自己看。
+    if (chapter < thread.lastTouchedAt) {
+      unproven.push({ title: thread.title, chapter, why: `账里第 ${thread.lastTouchedAt} 章还记着推进，第 ${chapter} 章收了说不通` });
+      continue;
+    }
     claimed.set(chapter, [...(claimed.get(chapter) ?? []), { handle, thread, reason: verdict.reason }]);
   }
 
@@ -227,11 +233,14 @@ export async function reviewOpenThreads(input: {
     }
     const byId = new Map(units.map((unit) => [unit.id, unit] as const));
     for (const item of items) {
-      const ids = evidence?.get(item.handle) ?? [];
-      const picked = ids.map((id) => byId.get(id)).filter((unit): unit is NonNullable<typeof unit> => unit !== undefined);
+      // 编号不在这一章的丢掉；点多了取前几句（真机：「最多 3 句」它点了 4 句，整条被丢）。
+      const picked = (evidence?.get(item.handle) ?? [])
+        .map((id) => byId.get(id))
+        .filter((unit): unit is NonNullable<typeof unit> => unit !== undefined)
+        .slice(0, MAX_EVIDENCE_UNITS);
       if (!evidence) {
         unproven.push({ title: item.thread.title, chapter, why: "点收口原句那步没成" });
-      } else if (picked.length === 0 || picked.length !== ids.length || picked.length > MAX_EVIDENCE_UNITS) {
+      } else if (picked.length === 0) {
         unproven.push({ title: item.thread.title, chapter, why: `第 ${chapter} 章里点不出写明收口的句子` });
       } else {
         suggestions.push({ thread: item.thread.id, title: item.thread.title, chapter, quote: picked.map((unit) => unit.text).join(""), reason: item.reason });
