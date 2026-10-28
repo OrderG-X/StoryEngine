@@ -283,10 +283,8 @@ export interface GenerateDraftBeatFidelityInfo {
   readonly adjudicatedCovered: readonly AdjudicatedCoveredBeat[];
   readonly adjudication: "not_run" | "applied" | "unavailable";
   readonly error?: string;
-  /** 自动去味真落改动后对最终正文复核时【新出现】的漏写（基准集是裁决【前】的确定性判漏）；确定性结果、未经 AI 复核。 */
+  /** 去味前没漏、去味后才漏的要点（去味改写吃掉了锚点；复核在去味后对最终正文跑，复核摘掉的不算）。 */
   readonly postDeAiNewMisses?: readonly string[];
-  /** 去味恰好改写了复核引证句的条目：覆盖结论的证据已过期，从 adjudicatedCovered 移出单列（可追溯，不静默）。 */
-  readonly staleAdjudications?: readonly AdjudicatedCoveredBeat[];
 }
 
 /**
@@ -334,14 +332,7 @@ export function buildBeatFidelityNote(info: GenerateDraftBeatFidelityInfo): stri
   if (info.postDeAiNewMisses && info.postDeAiNewMisses.length > 0) {
     parts.push(
       `⚠ 去味后新漏 ${info.postDeAiNewMisses.length} 条要点（${info.postDeAiNewMisses.join("、")}）：` +
-        `自动去味的整句改写吃掉了它们的锚点（这是对去味后最终正文的确定性复核，未经 AI 复核）。要不要我改稿补回？`,
-    );
-  }
-  if (info.staleAdjudications && info.staleAdjudications.length > 0) {
-    parts.push(
-      `⚠ 去味改写了 ${info.staleAdjudications.length} 条要点的复核引证句（` +
-        `${info.staleAdjudications.map((entry) => entry.beat).join("、")}）：这些要点此前经 AI 复核确认已写入正文，` +
-        `但证据句被自动去味改掉了，当前是否仍被覆盖需要确认。要不要我复核一遍？`,
+        `自动去味的整句改写吃掉了它们的锚点。要不要我改稿补回？`,
     );
   }
   return parts.join("\n");
@@ -366,7 +357,7 @@ export async function runAutoDeAiRound(input: {
   readonly skipOverwriteSnapshot?: boolean;
   /** 出稿这一路最后写下的那版。盘上已经不是它（作者存稿、撤销或恢复过）就不去味，不碰作者那份。 */
   readonly baseVersion: string;
-}): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string; readonly snapshotId?: string }> {
+}): Promise<{ readonly info: GenerateDraftAutoDeAiInfo; readonly draftBody?: string; readonly version?: string; readonly snapshotId?: string }> {
   const notRun = (error?: string): { readonly info: GenerateDraftAutoDeAiInfo } => ({
     info: {
       attempted: true,
@@ -414,13 +405,14 @@ export async function runAutoDeAiRound(input: {
   // 原稿不动+如实报」同款降级）。审计 High-2：读旧稿→快照→覆盖写整段进同一临界区（commit_apply 在锁内
   // 读同一工作稿并定稿，锁外裸写可被插进「读稿与落章之间」把半截稿定稿）；写走 draft.write（重构 P7）。
   let snapshotId: string | undefined;
+  let version: string;
   const written = `${result.updatedContent.trimEnd()}\n`;
   try {
-    await withBookLock(input.projectDir, async () => {
+    version = await withBookLock(input.projectDir, async () => {
       if (!input.skipOverwriteSnapshot) {
         snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章自动去AI味前快照`);
       }
-      await writeAiDraft(input.projectDir, { chapter: input.chapter, body: written, baseVersion: draftVersionOf(rawDraft) });
+      return (await writeAiDraft(input.projectDir, { chapter: input.chapter, body: written, baseVersion: draftVersionOf(rawDraft) })).version;
     });
   } catch (error) {
     // 错误原文可能内嵌绝对路径（快照读稿 errno / git 报错带 -C 仓库路径）——info.error 直达用户，先消毒（铁律④）。
@@ -432,6 +424,19 @@ export async function runAutoDeAiRound(input: {
   return {
     info: { attempted: true, fixedCount: result.rewritten, remainingHighMedium, skipped: result.skippedByReason },
     draftBody: stripLeadingMarkdownChapterHeading(written).trim(),
+    version,
+    ...(snapshotId ? { snapshotId } : {}),
+  };
+}
+
+/** 补字数、核账两段质量环节合成回执里的一份（补字数那段在前）。 */
+function mergeQualityPipelines(results: readonly QualityPipelineResult[]): Pick<QualityPipelineResult, "info" | "notes" | "snapshotId"> | undefined {
+  if (results.length === 0) return undefined;
+  const timings = Object.assign({}, ...results.map((result) => result.info.timings ?? {})) as NonNullable<QualityPipelineInfo["timings"]>;
+  const snapshotId = results.map((result) => result.snapshotId).filter((id): id is string => id !== undefined).at(-1);
+  return {
+    info: { ...Object.assign({}, ...results.map((result) => result.info)) as QualityPipelineInfo, ...(Object.keys(timings).length > 0 ? { timings } : {}) },
+    notes: results.flatMap((result) => result.notes),
     ...(snapshotId ? { snapshotId } : {}),
   };
 }
@@ -1362,88 +1367,54 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
     };
   }
 
-  // 阶段 3：出稿后的固定质量环节——字数不够就接着写够 → 前后核对 → 确定错在新稿里的按前文改一轮再核（注入了模型调用才跑；
-  // HTTP enforce 路不注入，保持现状）。真改了正文就以新正文重算字数 / AI 腔 / 要点核对，后续环节都基于新正文。
+  // 阶段 3：出稿后的固定质量环节，按这个顺序：字数不够就接着写够 → 去 AI 味 → 前后核对 → 确定错在新稿里的按前文改一轮再核
+  // （注入了模型调用才跑；HTTP enforce 路不注入，保持现状）。改正文的都排在核账前面，核账卡和回执说的就是最后落盘的这一版
+  // （外部审查 2026-10-28：以前去味排在核账后面，去味一改正文，核出的句子、核账卡就都对不上了，去味改出的句子也没人核）。
+  // 真改了正文就以新正文重算字数 / AI 腔 / 要点核对，后续环节都基于新正文。
   let effectiveAiFlavor = report.aiFlavor;
   let effectiveBeatFidelity = report.beatFidelity;
-  let qualityPipeline: QualityPipelineResult | undefined;
-  if (
-    lengthPolicy === "annotate"
-    && draftBody.trim()
-    && (input.continueCallModel || input.continuityCheckCallModel)
-  ) {
-    // 写完到换上终稿还要核账、按核账改、再核（几分钟）：稿纸上告诉作者正文还会换。
-    if (input.continuityCheckCallModel) input.onPhase?.("check");
-    qualityPipeline = await runDraftQualityPipeline({
-      projectDir,
-      chapter,
-      ...(continueFrom ? {} : { title: finalReport.title ?? `第${chapter}章` }),
-      draftBody,
-      baseVersion: draftVersion,
-      lengthTarget,
-      ...(chapterPlan ? { chapterPlan } : {}),
-      // 接着写：补字数那步会重写最后一段（可能是作者写的），不跑；按核账改只动接着写的那段。
-      ...(input.continueCallModel && !continueFrom ? { continueCallModel: input.continueCallModel } : {}),
-      ...(continueFrom ? { keepPrefix: continueFrom.text.trim() } : {}),
-      ...(input.continuityCheckCallModel ? { checkCallModel: input.continuityCheckCallModel } : {}),
-      ...(input.continuityFixCallModel ? { fixCallModel: input.continuityFixCallModel } : {}),
-      // R4.2：本流程已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
-      ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
-    });
-    if (qualityPipeline.changed) {
-      draftBody = qualityPipeline.draftBody;
-      if (qualityPipeline.version) draftVersion = qualityPipeline.version;
-      finalReport = { ...finalReport, draftLength: buildDraftLengthReport({ draftBody, lengthTarget }) };
-      if (run.aiFlavorRules) effectiveAiFlavor = buildAiFlavorReport(detectAiFlavorViolations(draftBody, run.aiFlavorRules));
-      if (input.mustHitBeats && input.mustHitBeats.length > 0) {
-        effectiveBeatFidelity = checkDraftBeatFidelity({ draftContent: draftBody, mustHitBeats: input.mustHitBeats });
-      }
+  const pipelines: QualityPipelineResult[] = [];
+  const takePipeline = (result: QualityPipelineResult): void => {
+    pipelines.push(result);
+    if (!result.changed) return;
+    draftBody = result.draftBody;
+    if (result.version) draftVersion = result.version;
+    if (finalReport) finalReport = { ...finalReport, draftLength: buildDraftLengthReport({ draftBody, lengthTarget }) };
+    if (run.aiFlavorRules) effectiveAiFlavor = buildAiFlavorReport(detectAiFlavorViolations(draftBody, run.aiFlavorRules));
+    if (input.mustHitBeats && input.mustHitBeats.length > 0) {
+      effectiveBeatFidelity = checkDraftBeatFidelity({ draftContent: draftBody, mustHitBeats: input.mustHitBeats });
     }
+  };
+  const qualityOn = lengthPolicy === "annotate" && draftBody.trim() !== "";
+  const pipelineInput = {
+    projectDir,
+    chapter,
+    ...(continueFrom ? {} : { title: finalReport.title ?? `第${chapter}章` }),
+    lengthTarget,
+    ...(chapterPlan ? { chapterPlan } : {}),
+    // R4.2：本流程已有「写盘前」存档点，续写补字的重写不再另建——一次出稿=操作历史里的一步。
+    ...(input.preWriteSnapshotId ? { skipOverwriteSnapshot: true } : {}),
+  };
+  // 接着写：补字数那步会重写最后一段（可能是作者写的），不跑。
+  if (qualityOn && input.continueCallModel && !continueFrom) {
+    takePipeline(await runDraftQualityPipeline({ ...pipelineInput, draftBody, baseVersion: draftVersion, continueCallModel: input.continueCallModel }));
   }
-
-  // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带；enforce 裁剪后为重建版），透传关键信息进输出，绝不藏起来。
-  // T14 统一口径：对外 actualLength 与稿纸顶栏同函数（countTextWords：去标题/frontmatter 的中文字符数），
-  // 杜绝顶栏「851 字」vs 回执「704 字」双口径；执法内部仍用引擎 CJK 计数（lengthStatus/bounds 不动）。
-  // 回读失败拿不到正文时保留引擎原计数，不谎报 0。
-  const draftLengthInfo = finalReport.draftLength
-    ? {
-      ...buildDraftLengthInfo(finalReport.draftLength),
-      actualLength: draftBody.trim() ? countTextWords(draftBody) : finalReport.draftLength.actualLength,
-    }
-    : undefined;
-
-  // 出稿后保真软警告（裁决后）：确定性核对判漏的要点先经 AI 复核（带正文逐字引证才摘除误报），
-  // 用裁决后结果如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。复核没跑成 → 维持确定性结论
-  // + adjudication:"unavailable" 如实标注。零判漏零调用（连裁决模型都不碰）。无锚点 beat 规则不检，不在此列。
-  // 多候选路径的复核已在采样选优前逐候选跑完（beatAdjudication=优胜者那份），这里不重复调。
-  const deterministicMissingBeats = effectiveBeatFidelity?.missingBeats ?? [];
-  if (!sampling && deterministicMissingBeats.length > 0 && input.beatAdjudicationCallModel) {
-    beatAdjudication = await adjudicateMissingBeats({
-      draftContent: draftBody,
-      missingBeats: deterministicMissingBeats,
-      callModel: input.beatAdjudicationCallModel,
-    });
-  }
-  // 去味真落改动后会往里并入新漏（见下），故用 let；summary 文案到最后才统一构建。
-  let beatFidelityInfo = buildBeatFidelityInfo({
-    deterministicMissingBeats,
-    ...(beatAdjudication ? { adjudication: beatAdjudication } : {}),
-  });
-
-  // 字数透明软警告（annotate）：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注。
-  const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
+  // 作者那份在这期间被改过（存稿、撤销或恢复）：后面的也都不做，不碰作者那份。
+  const conflicted = (): boolean => pipelines.some((result) => result.conflict === true);
 
   // AI 腔回检（warning-only）：检出 high/medium 默认接一轮自动去味（批量改写 + 复检，最多一轮）；
   // autoDeAi:false 或未注入改写模型 → 只标注不改写。改写失败=原稿不动+如实报，绝不影响本出稿的 ok。
   const aiFlavorInfo = effectiveAiFlavor ? buildAiFlavorInfo(effectiveAiFlavor) : undefined;
   let autoDeAiInfo: GenerateDraftAutoDeAiInfo | undefined;
   let autoDeAiSnapshotId: string | undefined;
+  // 去味吃掉锚点造成的新漏：去味前后各做一次确定性要点核对（零 token），去味后才漏的单独如实标注。
+  let deAiNewMisses: readonly string[] = [];
   if (effectiveAiFlavor) {
     // 接着写：作者写的那几句不替作者改（检出照列）。
     const targets = pickAutoDeAiTargets(effectiveAiFlavor).filter((violation) => !continueFrom || !quoteInText(violation.text, continueFrom.text));
     const initialHighMedium = effectiveAiFlavor.bySeverity.high + effectiveAiFlavor.bySeverity.medium;
     if (targets.length > 0) {
-      if ((input.autoDeAi ?? true) && input.deAiCallModel) {
+      if ((input.autoDeAi ?? true) && input.deAiCallModel && !conflicted()) {
         const round = await runAutoDeAiRound({
           projectDir,
           chapter,
@@ -1459,35 +1430,14 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
         });
         autoDeAiInfo = round.info;
         autoDeAiSnapshotId = round.snapshotId;
-        if (round.draftBody !== undefined) {
-          const deAiBody = round.draftBody;
-          draftBody = deAiBody;
-          // 去味真落了改动 → 对最终正文重跑一遍引擎确定性 beats 核对（纯函数、零 token）：
-          // ① 基准集用裁决【前】的确定性判漏 deterministicMissingBeats——裁决已摘除的要点本就词面无锚点，
-          //    去味后照样判漏，不算「新漏」（若拿裁决后的 missingBeats 当基准，会把它们误报成「去味吃掉了」）。
-          // ② adjudicatedCovered 的引证时效性：去味恰好改写了引证句的条目移出、单列 staleAdjudications 如实标注。
+        if (round.draftBody !== undefined && round.version !== undefined) {
+          const beforeDeAi = new Set(effectiveBeatFidelity?.missingBeats ?? []);
+          draftBody = round.draftBody;
+          draftVersion = round.version;
+          finalReport = { ...finalReport, draftLength: buildDraftLengthReport({ draftBody, lengthTarget }) };
           if (input.mustHitBeats && input.mustHitBeats.length > 0) {
-            const postDeAiMissing = checkDraftBeatFidelity({
-              draftContent: deAiBody,
-              mustHitBeats: input.mustHitBeats,
-            }).missingBeats;
-            const deterministicBaseline = new Set(deterministicMissingBeats);
-            const newMisses = postDeAiMissing.filter((beat) => !deterministicBaseline.has(beat));
-            if (newMisses.length > 0) {
-              beatFidelityInfo = {
-                ...(beatFidelityInfo ?? { missingBeats: [], adjudicatedCovered: [], adjudication: "not_run" as const }),
-                postDeAiNewMisses: newMisses,
-              };
-            }
-            const coveredEntries = beatFidelityInfo?.adjudicatedCovered ?? [];
-            const staleEntries = coveredEntries.filter((entry) => !isAdjudicationQuoteVerbatim(entry.quote, deAiBody));
-            if (beatFidelityInfo && staleEntries.length > 0) {
-              beatFidelityInfo = {
-                ...beatFidelityInfo,
-                adjudicatedCovered: coveredEntries.filter((entry) => isAdjudicationQuoteVerbatim(entry.quote, deAiBody)),
-                staleAdjudications: staleEntries,
-              };
-            }
+            effectiveBeatFidelity = checkDraftBeatFidelity({ draftContent: draftBody, mustHitBeats: input.mustHitBeats });
+            deAiNewMisses = effectiveBeatFidelity.missingBeats.filter((beat) => !beforeDeAi.has(beat));
           }
         }
       } else {
@@ -1500,6 +1450,65 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
       }
     }
   }
+
+  // 前后核对排在最后：和「核账」按钮同一套，核的是去味后的这版；按核账改了就再核一遍，记进核账记忆的是最后落盘那版。
+  if (qualityOn && input.continuityCheckCallModel && !conflicted()) {
+    // 核账、按核账改、再核要几分钟：稿纸上告诉作者正文还会换。
+    input.onPhase?.("check");
+    takePipeline(await runDraftQualityPipeline({
+      ...pipelineInput,
+      draftBody,
+      baseVersion: draftVersion,
+      // 接着写：按核账改只动接着写的那段。
+      ...(continueFrom ? { keepPrefix: continueFrom.text.trim() } : {}),
+      checkCallModel: input.continuityCheckCallModel,
+      ...(input.continuityFixCallModel ? { fixCallModel: input.continuityFixCallModel } : {}),
+    }));
+  }
+  const qualityPipeline = mergeQualityPipelines(pipelines);
+
+  // 字数透明：引擎对每版正文都记 draftLength（成功/失败均带；enforce 裁剪后为重建版），透传关键信息进输出，绝不藏起来。
+  // T14 统一口径：对外 actualLength 与稿纸顶栏同函数（countTextWords：去标题/frontmatter 的中文字符数），
+  // 杜绝顶栏「851 字」vs 回执「704 字」双口径；执法内部仍用引擎 CJK 计数（lengthStatus/bounds 不动）。
+  // 回读失败拿不到正文时保留引擎原计数，不谎报 0。
+  const draftLengthInfo = finalReport.draftLength
+    ? {
+      ...buildDraftLengthInfo(finalReport.draftLength),
+      actualLength: draftBody.trim() ? countTextWords(draftBody) : finalReport.draftLength.actualLength,
+    }
+    : undefined;
+
+  // 出稿后保真软警告（裁决后）：确定性核对判漏的要点先经 AI 复核（带正文逐字引证才摘除误报），
+  // 用裁决后结果如实提示、让用户决定改不改（绝不静默放过、也不阻塞）。复核没跑成 → 维持确定性结论
+  // + adjudication:"unavailable" 如实标注。零判漏零调用（连裁决模型都不碰）。无锚点 beat 规则不检，不在此列。
+  // 复核对的是最后落盘的正文：多候选在选优前逐候选复核过，选中那版之后没再改就沿用那份，改过就对最终正文再复核一次。
+  const finalMissingBeats = effectiveBeatFidelity?.missingBeats ?? [];
+  if (sampling && draftBody !== sampling.effectiveReport?.draftBody?.trim()) beatAdjudication = undefined;
+  if (!beatAdjudication && finalMissingBeats.length > 0 && input.beatAdjudicationCallModel) {
+    beatAdjudication = await adjudicateMissingBeats({
+      draftContent: draftBody,
+      missingBeats: finalMissingBeats,
+      callModel: input.beatAdjudicationCallModel,
+    });
+  }
+  // 去味后才漏的单列（复核摘掉的不算），其余照首稿核对说，不重复报。
+  const stillMissing = new Set(beatAdjudication?.missingBeats ?? finalMissingBeats);
+  const postDeAiNewMisses = deAiNewMisses.filter((beat) => stillMissing.has(beat));
+  const baseBeatInfo = buildBeatFidelityInfo({
+    deterministicMissingBeats: finalMissingBeats,
+    ...(beatAdjudication ? { adjudication: beatAdjudication } : {}),
+  });
+  const beatFidelityInfo = baseBeatInfo
+    ? {
+      ...baseBeatInfo,
+      missingBeats: baseBeatInfo.missingBeats.filter((beat) => !postDeAiNewMisses.includes(beat)),
+      ...(postDeAiNewMisses.length > 0 ? { postDeAiNewMisses } : {}),
+    }
+    : undefined;
+
+  // 字数透明软警告（annotate）：低于目标字数下限不拒绝、不自动补写（一次成稿），summary 如实标注。
+  const lengthWarning = draftLengthInfo ? buildDraftLengthWarning(draftLengthInfo) : "";
+
   const aiFlavorNote = aiFlavorInfo && autoDeAiInfo
     ? buildAutoDeAiNote(autoDeAiInfo, aiFlavorInfo)
     : aiFlavorInfo ? buildAiFlavorWarning(aiFlavorInfo) : "";

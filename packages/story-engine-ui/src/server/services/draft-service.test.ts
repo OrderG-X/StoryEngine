@@ -473,23 +473,38 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     }
   });
 
-  it("注入了续写/核对调用 → 跑质量环节；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
-    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({
-      draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, snapshotId: "snap-pipeline",
-      info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
-      notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。", "前后核对：对照了 3 条旧设定和前文，没发现冲突。"],
-    });
+  it("注入了续写/核对调用 → 先补字数、再核账（核的是补完的那版）；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
+    pipelineMocks.runDraftQualityPipeline
+      .mockResolvedValueOnce({
+        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, version: "v-continued", snapshotId: "snap-pipeline",
+        info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
+        notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。"],
+      })
+      .mockResolvedValueOnce({
+        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: false,
+        info: { continuity: { checked: true, sure: [], maybe: [], failures: [] } },
+        notes: ["前后核对：对照了 3 条旧设定和前文，没发现冲突。"],
+      });
     const continueCallModel = vi.fn();
+    const continuityCheckCallModel = vi.fn();
     const result = await runGenerateDraft({
       projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
-      continueCallModel, continuityCheckCallModel: vi.fn(),
+      continueCallModel, continuityCheckCallModel,
       policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
     });
-    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ chapter: 3, title: "账册", continueCallModel }));
+    const calls = pipelineMocks.runDraftQualityPipeline.mock.calls.map(([input]) => input as Record<string, unknown>);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ chapter: 3, title: "账册", continueCallModel });
+    expect(calls[0]).not.toHaveProperty("checkCallModel");
+    expect(calls[1]).toMatchObject({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", baseVersion: "v-continued", checkCallModel: continuityCheckCallModel });
+    expect(calls[1]).not.toHaveProperty("continueCallModel");
     expect(result.draftBody).toBe("主角拿到账册，连夜翻看，又接着写了很多。");
     expect(storyEngineMocks.buildDraftLengthReport).toHaveBeenCalledWith(expect.objectContaining({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。" }));
     expect(result.snapshotId).toBe("snap-pipeline");
-    expect(result.qualityPipeline).toEqual({ continuation: { before: 12, after: 2500, rounds: 1, failures: [] } });
+    expect(result.qualityPipeline).toEqual({
+      continuation: { before: 12, after: 2500, rounds: 1, failures: [] },
+      continuity: { checked: true, sure: [], maybe: [], failures: [] },
+    });
     expect(result.summary).toContain("已接着写到 2500 字");
     expect(result.summary).toContain("没发现冲突");
   });

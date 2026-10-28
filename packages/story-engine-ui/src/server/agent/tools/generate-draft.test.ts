@@ -6,7 +6,9 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { runDraftQualityPipeline } from "../../services/draft-pipeline/run-quality-pipeline.js";
+import type { BrainCallModel } from "../../editorial/index.js";
 import { createStoryProject } from "../../book/project-store.js";
 import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { runFastDraft, type WriterClient } from "../../writing/fast-draft-writer.js";
@@ -1192,6 +1194,26 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     expect(out.summary).not.toContain("⚠ 首稿核对"); // 去味前没有判漏，不打这条
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).not.toContain("第三块砖"); // 锚点确实被吃掉了
+  });
+
+  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后落盘的那版正文和版本，核账卡对得上", async () => {
+    const projectDir = await makeProject("去味先于核账", "林远");
+    const pipeline = vi.mocked(runDraftQualityPipeline);
+    pipeline.mockClear();
+    const checker: BrainCallModel = async () => "{}";
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
+      deAiCallModel: async () => KEEP_ANCHOR,
+      continuityCheckCallModel: checker,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.autoDeAi?.fixedCount).toBe(1);
+    const checkRun = pipeline.mock.calls.map(([input]) => input).find((input) => input.checkCallModel === checker);
+    const onDisk = (await readDraft(projectDir, 1))!;
+    expect(checkRun?.draftBody).toBe("林远撬开第三块砖，取出薄铁盒。");
+    expect(checkRun?.baseVersion).toBe(onDisk.version);
   });
 
   it("去味改写保住锚点 → 无 postDeAiNewMisses、beatFidelity 字段不出现、summary 无新漏噪音", async () => {

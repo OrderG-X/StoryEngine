@@ -292,7 +292,7 @@ const outputSchema = z.object({
       beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
       quote: z.string().describe(
         "模型引用的正文原句（已校验：归一化空白后为【裁决时工作稿】的逐字子串），作为覆盖证据；" +
-        "若之后自动去味改掉了这句，该条目会移入 staleAdjudications（覆盖结论过期）。",
+        "复核对的是最终正文（去味、按核账改都在复核之前）。",
       ),
     })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
     adjudication: z.union([
@@ -305,14 +305,7 @@ const outputSchema = z.object({
     ),
     error: z.string().optional().describe("复核模型失败原因（adjudication=unavailable 时）。"),
     postDeAiNewMisses: z.array(z.string()).optional().describe(
-      "自动去味真落了改动后，对最终正文再跑一遍确定性核对时【新出现】的漏写要点（去味整句改写吃掉了锚点；" +
-      "基准集是裁决【前】的确定性判漏——裁决已摘除的要点本就词面无锚点、去味后照样判漏，不算新漏）。这些是确定性核对结果、未经 AI 复核，请如实转达。",
-    ),
-    staleAdjudications: z.array(z.object({
-      beat: z.string().describe("复核曾确认覆盖、但引证句随后被自动去味改写的要点原文。"),
-      quote: z.string().describe("裁决时的引证原句——已被去味改写，不再是最终稿的逐字子串，覆盖结论过期。"),
-    })).optional().describe(
-      "引证过期的复核条目（从 adjudicatedCovered 移出，可追溯不静默）：去味恰好改写了它们的证据句，要点当前是否仍被覆盖需要人工或下一轮复核确认。",
+      "去味前没漏、去味后才漏的要点（去味整句改写吃掉了锚点；复核对的是最终正文，复核摘掉的不算），请如实转达。",
     ),
   }).optional().describe(
     "必命中要点保真核对（warning-only，绝不影响出稿成败）：确定性规则判漏的要点先经 AI 复核（带正文逐字引证才摘除误报）；" +
