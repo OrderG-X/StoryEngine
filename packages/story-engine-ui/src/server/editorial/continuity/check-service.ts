@@ -15,7 +15,9 @@ import {
   countCommittedChapters,
   DEFAULT_READER_VARIANT,
   describeReaderWait,
+  recheckChangesByReader,
   type BrainCallModel,
+  type ChangedSentence,
   type ColdCoverage,
   type ReaderWaited,
 } from "../index.js";
@@ -31,7 +33,7 @@ import {
   type ContinuityIssueV2,
   type EarlierText,
 } from "./check-chapter.js";
-import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory } from "./check-memory.js";
+import { CHECK_MEMORY_VERSION, hashBody, hashEarlier, readCheckMemory, readFixLog, writeCheckMemory, type FixRecord } from "./check-memory.js";
 import { isDismissed, readDismissals, sameIssue } from "./dismissals.js";
 import { readFoundationDigest, settingQuoteSource, type FoundationDigest } from "../foundation-digest.js";
 import { withStep } from "../../lib/token-meter.js";
@@ -71,6 +73,8 @@ export interface ChapterCheckResult {
   readonly dismissed: number;
   /** 正文、前文、账本都没改过，直接用的上次结果（没调模型）。 */
   readonly reused: boolean;
+  /** 上一遍核过的稿只按核账改了几句：这次只核了改过的这几句，别的沿用上一遍（外部审查 2026-10-28）。 */
+  readonly rechecked?: { readonly changed: number };
   /** 给作者看的一句话结论。 */
   readonly summary: string;
   /** summary 去掉逐条问题、只剩结论（重构 P6：问题清单在核账卡和稿纸划线上，「核账」按钮的回话只说这句）。 */
@@ -119,8 +123,10 @@ function earlierOpenNote(chapter: number, items: readonly ChapterCheckItem[]): s
 const READER_MAX_CATCH_UP = 10;
 
 export interface ChapterCheckOptions {
-  /** 正文没改也重新核。 */
+  /** 正文没改也重新核；改过也整章重核（不只核改过的句子）。 */
   readonly fresh?: boolean;
+  /** 这份正文是上一遍核过的稿按核账改了这几句（出稿流程里按核账改后）。缺省按改句记录找。 */
+  readonly afterFix?: readonly ChangedSentence[];
   /** 核账员的模型调用（测试注入）；缺省走配置的 qualityCheck 模型。 */
   readonly readerCallModel?: BrainCallModel;
 }
@@ -137,8 +143,10 @@ async function checkByReader(input: {
   readonly carryOver: readonly ContinuityIssueV2[];
   readonly ledgerFacts?: readonly FactEntry[];
   readonly callModel: BrainCallModel;
+  /** 只核改过的这几句：上一遍的结果（carryOver）已复核过，原样带上，排在新核出的前面。 */
+  readonly changes?: readonly ChangedSentence[];
 }): Promise<{ readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited }> {
-  const reader = await checkChapterByReader({
+  const common = {
     projectDir: input.projectDir,
     chapter: input.chapter,
     draftBody: input.body,
@@ -146,8 +154,10 @@ async function checkByReader(input: {
     maxCatchUp: READER_MAX_CATCH_UP,
     earlier: input.earlier,
     variant: DEFAULT_READER_VARIANT,
-    carryOver: input.carryOver,
-  });
+  };
+  const reader = input.changes
+    ? await recheckChangesByReader({ ...common, changes: input.changes }).then((focused) => ({ ...focused, issues: [...input.carryOver, ...focused.issues] }))
+    : await checkChapterByReader({ ...common, carryOver: input.carryOver });
   const ledger = await withStep("账本对账", () => ledgerNumberIssues({
     projectDir: input.projectDir,
     chapter: input.chapter,
@@ -194,6 +204,30 @@ async function readCheckInputs(projectDir: string, chapter: number): Promise<{
   };
 }
 
+/**
+ * 这份正文是不是上一遍核过的那份只改了这几句：上一遍那份按改前 → 改后逐句换（各换第一处）后和这份一样（不计空白）。
+ * 一句换不上、换完对不上（作者另外动过）都不算——那就整章重核。
+ */
+export function changesExplain(previous: string, changes: readonly ChangedSentence[], body: string): boolean {
+  let text = previous;
+  for (const change of changes) {
+    const at = change.from ? text.indexOf(change.from) : -1;
+    if (at < 0) return false;
+    text = text.slice(0, at) + change.to + text.slice(at + change.from.length);
+  }
+  return hashBody(text) === hashBody(body);
+}
+
+/** 改句记录里最近这几次改动（最近 1 条、2 条……）能不能把上一遍核过的那份换成现在这份；能就是这几句。 */
+const FIX_LOG_LOOKBACK = 12;
+function changesFromFixLog(previous: string, body: string, log: readonly FixRecord[]): readonly ChangedSentence[] | undefined {
+  for (let count = 1; count <= Math.min(log.length, FIX_LOG_LOOKBACK); count += 1) {
+    const recent = log.slice(-count);
+    if (changesExplain(previous, recent, body)) return recent;
+  }
+  return undefined;
+}
+
 /** 这章这份正文能不能直接用上次的核账结果（正文、前文、账本、设定、时间线都没改）：只读盘、不调模型（P11：AI 出稿后补核账卡用）。 */
 export async function canReuseCheck(projectDir: string, chapter: number, body: string): Promise<boolean> {
   const memory = await readCheckMemory(projectDir, chapter);
@@ -222,6 +256,14 @@ export async function checkChapterBody(
   const carryOver = memory && !reused && memory.version === CHECK_MEMORY_VERSION
     ? memory.issues.filter((issue) => issueStillPresent(issue, chapter, body, earlier, memory.body, settingStillSays))
     : [];
+  // 改后按改动重核（外部审查 2026-10-28）：上一遍整章核全了（记忆是同一份前文下存的），这份只是按核账改了几句 →
+  // 只核改过的句子，别的沿用上一遍。换不上、前文改过、作者要「再细核一遍」都整章重核。
+  const fixes = await readFixLog(projectDir, chapter);
+  const changes = !reused && !options.fresh && memory && memory.version === CHECK_MEMORY_VERSION && earlierHash !== undefined && memory.earlierHash === earlierHash
+    ? options.afterFix && options.afterFix.length > 0
+      ? changesExplain(memory.body, options.afterFix, body) ? options.afterFix : undefined
+      : changesFromFixLog(memory.body, body, fixes)
+    : undefined;
   let result: { readonly issues: readonly ContinuityIssueV2[]; readonly failures: readonly string[]; readonly coverage?: ColdCoverage; readonly waited?: ReaderWaited };
   let coldTotal: number | undefined;
   if (reused) {
@@ -230,9 +272,8 @@ export async function checkChapterBody(
     // 方向相反的一对同理照过一遍（纯确定性）：这道收口上线前存下的记忆也不会把成对的「确定」端出来。
     result = { issues: settleMirroredIssues(applyRelativeDayAlignment(memory!.issues, chapter, timeline), chapter), failures: [] };
   } else {
-    result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel }));
+    result = await withStep("核账", () => checkByReader({ projectDir, chapter, body, earlier, carryOver, ...(ledgerFacts ? { ledgerFacts } : {}), callModel: readerCallModel, ...(changes ? { changes } : {}) }));
     // 上一遍按核账改过的句子这遍又被报「确定」：两遍说法相反，降成「可能」（不再自动来回改）。
-    const fixes = await readFixLog(projectDir, chapter);
     result = { ...result, issues: settleRevisitedIssues(result.issues, chapter, body, fixes) };
     if (result.coverage) {
       // 冷窗口（R4.4）：核账员还没读完全书也照核（不跳过、不装核过——范围如实说），笔记后台接着补（点名 checker）。
@@ -301,6 +342,7 @@ export async function checkChapterBody(
     ...(!reused && result.waited ? { waited: result.waited } : {}),
     dismissed,
     reused,
+    ...(changes ? { rechecked: { changed: changes.length } } : {}),
     summary: baseSummary,
     headline,
   };

@@ -151,7 +151,8 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       const applied = fixed.applied.length;
       timings.fixMs = Date.now() - fixStartedAt;
       autoFixed = { applied, failed: targets.length - applied, ...(fixed.alsoChanged > 0 ? { also: fixed.alsoChanged } : {}) };
-      if (applied > 0) result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel });
+      // 改完只核改过的句子（外部审查 2026-10-28：整章再核一遍，等待翻倍）；上一遍没核全（有一步没跑成、冷窗口）的照旧整章重核。
+      if (applied > 0) result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel, afterFix: fixed.changes });
     }
     info = {
       ...info,
@@ -180,7 +181,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     notes.push(autoFixed
       ? `前后核对：核出 ${first.sure.length} 处确定和前文对不上，按前文改了 ${autoFixed.applied} 处${autoFixed.also ? `（本章别处说同一件事的 ${autoFixed.also} 句跟着改了）` : ""}${autoFixed.failed > 0 ? `（${autoFixed.failed} 处没改成）` : ""}。${
         autoFixed.applied === 0 ? `都还在，点「核账」看是哪几句。`
-          : result.ok ? `改完又核了一遍：${left}` : `改完再核没跑成（${result.failures[0] ?? "原因不明"}），可以点「核账」再核。`
+          : result.ok ? `${result.rechecked ? "改完又核了改过的句子" : "改完又核了一遍"}：${left}` : `改完再核没跑成（${result.failures[0] ?? "原因不明"}），可以点「核账」再核。`
       }${coldNote}`
       : result.ok
         ? result.sure.length + result.maybe.length === 0

@@ -42,8 +42,11 @@ export {
   parsePlanProblems,
   parseSettingChecks,
   parseSettingIssues,
+  recheckChangesByReader,
+  recheckTask,
   selfReviewTask,
   settingCheckTask,
+  type ChangedSentence,
   type PlanProblem,
   type ReaderCheckVariant,
 } from "./checker.js";

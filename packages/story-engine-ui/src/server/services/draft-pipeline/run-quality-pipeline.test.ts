@@ -97,9 +97,15 @@ describe("runDraftQualityPipeline", () => {
     // 改完再核：「菜场还在」已不在正文里，核账员再报也核不过原句，核账卡上就没了。
     expect(result.info.continuity).toMatchObject({ checked: true, sure: [], autoFixed: { applied: 1, failed: 0 } });
     expect(result.notes.join("\n")).toContain("按前文改了 1 处");
-    expect(result.notes.join("\n")).toContain("改完又核了一遍：没发现和前文对不上的地方");
+    expect(result.notes.join("\n")).toContain("改完又核了改过的句子：没发现和前文对不上的地方");
     const memory = JSON.parse(await readFile(join(projectDir, ".story-engine-ui", "continuity-checks", "0008.json"), "utf-8")) as { issues: unknown[] };
     expect(memory.issues).toHaveLength(0);
+    // 改完只核改过的那句（外部审查 2026-10-28）：整章三遍只跑了改前那一回，改后那回问的是改过的句子。
+    const asked = checkCallModel.mock.calls.map(([messages]) => messages.at(-1)!.content);
+    expect(asked.filter((content) => content.includes("这一遍只盯东西"))).toHaveLength(2);
+    const focused = asked.filter((content) => content.includes("刚按核账改了下面几句"));
+    expect(focused).toHaveLength(2);
+    expect(focused[0]).toContain("改前：菜场还在，门口摆着几摊卖豆腐的。\n   改后：菜场早没了，门口摆着几摊卖豆腐的。");
   });
 
   it("改完再核，核账员又说改后那句不对（两遍说法相反）→ 降成「可能」交作者，不算「确定」；改句记下来", async () => {
@@ -111,6 +117,9 @@ describe("runDraftQualityPipeline", () => {
       if (last.includes("你刚才核完报了")) {
         const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
         return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+      }
+      if (last.includes("刚按核账改了下面几句")) {
+        return JSON.stringify({ checks: [], contradictions: [{ quote: "菜场早没了", earlierQuote: "南门菜场十来年前就拆了", earlierChapter: 7, reason: "两遍说法不一", confidence: "sure" }] });
       }
       if (!last.includes("这一遍只盯东西")) return JSON.stringify({ checks: [], contradictions: [] });
       const quote = last.includes("菜场早没了") ? "菜场早没了" : "菜场还在";
