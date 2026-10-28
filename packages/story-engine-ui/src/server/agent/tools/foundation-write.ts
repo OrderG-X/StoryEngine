@@ -21,10 +21,12 @@ import {
   RULE_SCALAR_LABELS,
   readCardsOrLegacy,
   splitForAi,
+  withBookLock,
 } from "@actalk/story-core";
 import type { SettingCardsFile } from "@actalk/story-core";
 
 import { writeCards } from "../../lib/card-write.js";
+import { rememberCurrentBasis } from "../../lib/truth-basis-store.js";
 import { coerceJsonArray } from "../../lib/lenient-args.js";
 import { readProjectDirFromContext } from "../request-context.js";
 
@@ -49,8 +51,8 @@ const outputSchema = z.object({
   ok: z.boolean().describe("true = 有改动真写进去了，或者全部交给作者确认。"),
   applied: z.array(z.string()).describe("真改了的（只有名字）。"),
   needsConfirmation: z.boolean().optional().describe("有改动碰了作者写的：等作者点「确认改设定」。"),
-  foundationConfirm: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional(),
-  foundationAccept: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string() }).optional()
+  foundationConfirm: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string(), basis: z.string(), basisFrom: z.string() }).optional(),
+  foundationAccept: z.object({ key: z.string(), input: z.record(z.string(), z.unknown()), label: z.string(), basis: z.string(), basisFrom: z.string() }).optional()
     .describe("AI 刚写进去的那几处：作者点「认下」就算作者写的（作者口述让 AI 记的，认下后就不显示「AI 补」）。"),
   pending: z.array(z.string()).optional().describe("等作者点头的（只有名字）。"),
   notDone: z.array(z.string()).optional().describe("没改成的和原因。"),
@@ -187,16 +189,29 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
   const direct = split.direct;
   notDone.push(...split.invalid.map((item) => item.reason));
 
+  // 按钮的依据（写作版本 P1a）：作者点的时候书变了，就不执行、请 AI 重提。AI 这批写和前后两份依据在同一把锁里记：
+  // basisFrom 是写之前、basis 是写完的样子，一轮里先后几个按钮合成一个时，界面凭「后一个的 basisFrom = 前一个的 basis」
+  // 认定中间只有 AI 自己这批写，接不上就留前一个的依据（点了如实说过期）。
   let applied: readonly string[] = [];
   let snapshotId: string | undefined;
+  let basisFrom = "";
+  let basis = "";
+  const basisNeeded = split.needsAuthor.length > 0 || split.direct.length > 0;
   if (split.direct.length > 0) {
-    const outcome = await writeCards(input.projectDir, { by: "ai", ops: split.direct });
-    if (outcome.ok) {
-      applied = outcome.lines;
-      snapshotId = outcome.snapshotId;
-    } else {
-      notDone.push(outcome.message);
-    }
+    await withBookLock(input.projectDir, async () => {
+      basisFrom = await rememberCurrentBasis(input.projectDir);
+      const outcome = await writeCards(input.projectDir, { by: "ai", ops: split.direct });
+      if (outcome.ok) {
+        applied = outcome.lines;
+        snapshotId = outcome.snapshotId;
+      } else {
+        notDone.push(outcome.message);
+      }
+      basis = await rememberCurrentBasis(input.projectDir);
+    });
+  } else if (basisNeeded) {
+    basis = await rememberCurrentBasis(input.projectDir);
+    basisFrom = basis;
   }
 
   // 要作者点头的：按作者身份在「AI 那批改完之后」的样子上试一遍，拿到按钮上的人话；作者身份都做不了的如实列进没改成。
@@ -209,7 +224,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     if (dry.ok && dry.lines.length > 0) {
       pending = dry.lines;
       // 按钮回显是「确认改设定：<这里>」，不再带「改设定：」前缀。
-      confirm = { key: confirmKey(ops), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}` };
+      confirm = { key: confirmKey(ops), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}`, basis, basisFrom };
     } else if (!dry.ok) {
       notDone.push(`要你点头的那几处也做不了：${dry.message}`);
     }
@@ -221,7 +236,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     const ops = acceptOpsFor(direct, base);
     const after = ops.length > 0 ? await readCardsOrLegacy(input.projectDir, at) : undefined;
     const dry = after ? applyCardOps(after, ops, { by: "author", at }) : undefined;
-    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops), input: { ops }, label: "刚写的这几处" };
+    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops), input: { ops }, label: "刚写的这几处", basis, basisFrom };
   }
 
   const parts = [

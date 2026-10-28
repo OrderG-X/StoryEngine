@@ -143,6 +143,10 @@ export async function applyCommitToolLogic(input: {
     ...(input.dayEndOverride !== undefined ? { dayEnd: input.dayEndOverride } : {}),
     tickets: ticketStoreFor(projectDir),
   });
+  if (!outcome.ok && outcome.code === "idempotency_args_changed") {
+    // 同一张票已经按上次的选择定过稿了：这次没做事，但不能说「没定稿」。
+    return { ...refusal(chapter, outcome.reason, "already_committed"), summary: `第 ${chapter} 章已经定稿过了：这次改的天数或勾选没用上；要改，重新点「定稿」预览一次再确认。` };
+  }
   if (!outcome.ok) {
     const blockedReason = outcome.code === "text_changed" ? "draft_changed_since_preview" : outcome.code === "ticket_missing" ? "no_preview" : undefined;
     return refusal(chapter, outcome.reason, blockedReason);

@@ -7,11 +7,13 @@
 import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
+import { readTruthBasis } from "@actalk/story-core";
 
 import { MAX_DECISIONS_PER_CHANGE, planLedgerChange, proposal, type LedgerChangeRequest } from "../ledger-decisions.js";
 import { callConfiguredBrainModel, reviewOpenThreads, type BrainCallModel } from "../../editorial/index.js";
 import { readProjectDirFromContext } from "../request-context.js";
 import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
+import { rememberBasis } from "../../lib/truth-basis-store.js";
 
 export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "review", "group", "importance", "day", "summary"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];
@@ -59,6 +61,7 @@ const outputSchema = z.object({
     label: z.string(),
     decisions: z.array(z.unknown()),
     lines: z.array(z.string()),
+    basis: z.string().optional(),
   }).optional().describe("「确认改账」按钮带的东西（界面用，你不用转述）。"),
 });
 
@@ -75,6 +78,8 @@ const shortQuote = (text: string): string => (text.length > 40 ? `${text.slice(0
  * 收了的出「确认改账」按钮（作者点了才记），还开着、拿不准、点不出原句的都如实说。
  */
 async function runThreadReview(projectDir: string, callModel: BrainCallModel): Promise<z.infer<typeof outputSchema>> {
+  // 开理之前记依据（写作版本 P1a）：理的中途、或作者点确认之前账变了，确认时不记、重新理。
+  const basis = await readTruthBasis(projectDir);
   const review = await reviewOpenThreads({ projectDir, callModel });
   if (!review.ok) return { ok: false, op: "review", blockedReason: "review_failed", summary: `线索没理成：${review.reason}。` };
   const shown = review.suggestions.slice(0, MAX_DECISIONS_PER_CHANGE);
@@ -110,7 +115,7 @@ async function runThreadReview(projectDir: string, callModel: BrainCallModel): P
       `要收的：${plan.lines.join("；")}。还没记——请点「确认改账」按钮（改前自动存档，可撤销）。`,
       ...notes,
     ].join(""),
-    ledgerConfirm: { key: plan.key, label: confirmLabel(plan.lines), decisions: [...plan.decisions], lines: [...plan.lines] },
+    ledgerConfirm: { key: plan.key, label: confirmLabel(plan.lines), decisions: [...plan.decisions], lines: [...plan.lines], basis: await rememberBasis(projectDir, basis) },
   };
 }
 
@@ -145,7 +150,7 @@ export async function runManageLedger(
     needsConfirmation: true,
     blockedReason: "awaiting_user_confirmation",
     summary: `要改的账：${lines.join("；")}。还没改——请点「确认改账」按钮（改前自动存档，可撤销）。`,
-    ledgerConfirm: { key: plan.key, label: confirmLabel(lines), decisions: [...plan.decisions], lines: [...lines] },
+    ledgerConfirm: { key: plan.key, label: confirmLabel(lines), decisions: [...plan.decisions], lines: [...lines], ...(plan.basis ? { basis: plan.basis } : {}) },
   };
 }
 

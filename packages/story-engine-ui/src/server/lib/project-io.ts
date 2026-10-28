@@ -427,20 +427,27 @@ function readWorkspaceRewriteTarget(value: unknown): { chapter: number; chapterG
   return { chapter, ...(chapterGoal ? { chapterGoal: chapterGoal.slice(0, 2000) } : {}), ...(value.continueDraft === true ? { continueDraft: true as const } : {}) };
 }
 
-function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string } | undefined {
+/** 提议按钮的依据摘要（写作版本 P1a）：原样留着，点按钮时服务端拿它核。 */
+function readWorkspaceProposalBasis(value: Record<string, unknown>): { basis?: string; basisFrom?: string } {
+  const basis = readString(value.basis);
+  const basisFrom = readString(value.basisFrom);
+  return { ...(basis ? { basis: basis.slice(0, 128) } : {}), ...(basisFrom ? { basisFrom: basisFrom.slice(0, 128) } : {}) };
+}
+
+function readWorkspaceFoundationTarget(value: unknown): { key: string; input: Record<string, unknown>; label?: string; basis?: string; basisFrom?: string } | undefined {
   if (!isRecord(value) || !isRecord(value.input)) return undefined;
   const key = readString(value.key);
   if (!key) return undefined;
   const label = readString(value.label);
-  return { key, input: value.input, ...(label ? { label } : {}) };
+  return { key, input: value.input, ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
 }
 
-function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string } | undefined {
+function readWorkspaceLedgerTarget(value: unknown): { key: string; decisions: unknown[]; label?: string; basis?: string; basisFrom?: string } | undefined {
   if (!isRecord(value)) return undefined;
   const key = readString(value.key);
   if (!key || !Array.isArray(value.decisions) || value.decisions.length === 0) return undefined;
   const label = readString(value.label);
-  return { key, decisions: value.decisions.filter(isRecord).slice(0, 20), ...(label ? { label } : {}) };
+  return { key, decisions: value.decisions.filter(isRecord).slice(0, 20), ...(label ? { label } : {}), ...readWorkspaceProposalBasis(value) };
 }
 
 function readWorkspacePermission(value: unknown): string | readonly string[] | undefined {

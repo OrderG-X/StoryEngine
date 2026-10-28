@@ -9,6 +9,7 @@ import type { z } from "zod";
 import type { ChangeSet } from "../schema/book.js";
 import type { TxWrite } from "../store/transaction.js";
 import type { RecoveryReport } from "../store/transaction.js";
+import type { TruthBasis } from "../store/basis.js";
 
 /**
  * author = 只能由作者按按钮触发（定稿、改账、裁定、删除、裁剪历史）；
@@ -92,6 +93,16 @@ export interface RunOptions {
   /** 写成功后推事件。 */
   readonly emit?: (event: BookEvent) => void;
   readonly now?: () => Date;
+  /**
+   * 这次写是照哪一版真相算出来的（预览、提议里存的）。给了就在书锁里核：书里有一样变了就不写，返回 basis_changed + 变了哪些。
+   * 同一个幂等键的回执先回放（定稿自己就改了真相，点第二次不能因此报「变了」）。
+   */
+  readonly basis?: TruthBasis;
+  /**
+   * 作者这次的选择（缺省 = 参数本身）：回执记它的哈希，同一个幂等键换了选择再来就如实拒绝（idempotency_args_changed），
+   * 不按上次的选择回放成「做好了」。参数里有照现状重算的（比如按现在的正文对出来的改句），就传不随现状变的那部分。
+   */
+  readonly intent?: unknown;
 }
 
 /** 命令表里装的任意一条写命令（表本身不关心每条的参数类型）。 */

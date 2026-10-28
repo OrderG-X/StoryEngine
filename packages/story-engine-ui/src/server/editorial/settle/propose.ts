@@ -26,11 +26,13 @@ import {
   readCardsOrLegacy,
   readChapterLedger,
   readChapterText,
+  readTruthBasis,
   sha256,
   splitNumberedReply,
   splitUnits,
   type SettingCardsFile,
   type TextUnit,
+  type TruthBasis,
 } from "@actalk/story-core";
 import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
@@ -119,6 +121,8 @@ export interface SettleProposal {
   /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
   readonly reviewDropped: readonly { readonly chapter?: number; readonly card?: string; readonly label?: string; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
+  /** 开查之前书的真相（写作版本 P1a）：确认时书里有一样变了（别的章、设定、账、裁定），整条不写、重新查。 */
+  readonly basis: TruthBasis;
 }
 
 /** 一批最多这么多字（编号后的正文）：一章超了就自己一批。 */
@@ -582,6 +586,8 @@ export async function proposeSettle(input: {
 }): Promise<{ readonly ok: true; readonly proposal: SettleProposal } | { readonly ok: false; readonly message: string }> {
   const { projectDir, request, callModel } = input;
   const failures: string[] = [];
+  // 先记依据再读：读的中途书变了，确认时现读的和它对不上，照样作废，不会拿一半新一半旧的结果去改。
+  const basis = await readTruthBasis(projectDir);
   const cards = await readCardsOrLegacy(projectDir);
   const committedNumbers = await listChapterTexts(projectDir);
   const focusChapter = request.chapter;
@@ -818,6 +824,7 @@ export async function proposeSettle(input: {
       missed,
       reviewDropped,
       failures,
+      basis,
     },
   };
 }

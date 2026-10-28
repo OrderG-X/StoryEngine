@@ -875,6 +875,33 @@ describe("streamAgentChat", () => {
     expect(received[1]?.commitConfirmAction).toBeUndefined();
   });
 
+  it("改账 / 改设定 / 认下按钮带的依据摘要原样透传（作者点按钮时服务端拿它核）", async () => {
+    const basis = "a".repeat(64);
+    const from = "b".repeat(64);
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", {
+          toolCallId: "l1",
+          toolName: "manage_ledger",
+          output: { ok: false, needsConfirmation: true, ledgerConfirm: { key: "ledger:x", decisions: [{ type: "fact.retract", fact: "f1" }], basis }, summary: "…" },
+        }),
+        frame("tool-result", {
+          toolCallId: "f1",
+          toolName: "foundation_write",
+          output: { ok: true, needsConfirmation: true, foundationConfirm: { key: "card-1", input: { ops: [] }, label: "改", basis, basisFrom: from }, summary: "…" },
+        }),
+        frame("done", {}),
+      ]),
+    ));
+    const received: { ledgerConfirmAction?: unknown; foundationConfirmAction?: unknown }[] = [];
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "改" }] },
+      { ...noopHandlers(), onToolResult: (info) => { received.push(info); } },
+    );
+    expect(received[0]?.ledgerConfirmAction).toMatchObject({ key: "ledger:x", basis });
+    expect(received[1]?.foundationConfirmAction).toMatchObject({ key: "card-1", basis, basisFrom: from });
+  });
+
   it("commit_preview 残缺输出（无 chapter/canCommit）→ 不挂 commitPreview 卡（防御解析）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

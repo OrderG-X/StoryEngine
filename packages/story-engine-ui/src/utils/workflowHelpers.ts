@@ -1,4 +1,4 @@
-import type { CommitConfirmTarget, SuggestedAction } from "../types.js";
+import type { CommitConfirmTarget, ProposalBasis, SuggestedAction } from "../types.js";
 
 export function suggestedAction(id: SuggestedAction["id"]): SuggestedAction {
   const actions: Record<string, SuggestedAction> = {
@@ -174,6 +174,18 @@ function cardOpsOf(input: Readonly<Record<string, unknown>>): readonly unknown[]
   return Array.isArray(input.ops) ? input.ops : undefined;
 }
 
+/** 两个提议并成一个时的依据：后一个接得上前一个（中间只有它自己那批写）才用后一个的，否则留前一个的。 */
+function chainBasis(previous: ProposalBasis, next: ProposalBasis): ProposalBasis {
+  const from = previous.basisFrom ?? previous.basis;
+  if (!previous.basis || !next.basis) return {};
+  const basis = (next.basisFrom ?? next.basis) === previous.basis ? next.basis : previous.basis;
+  return { basis, ...(from ? { basisFrom: from } : {}) };
+}
+
+function basisFields(target: ProposalBasis): ProposalBasis {
+  return { ...(target.basis ? { basis: target.basis } : {}), ...(target.basisFrom ? { basisFrom: target.basisFrom } : {}) };
+}
+
 function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): SuggestedAction {
   const ledgerBefore = previous.ledgerTarget;
   const ledgerNext = next.ledgerTarget;
@@ -182,7 +194,12 @@ function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): S
     const label = joinLabels(ledgerBefore.label, ledgerNext.label);
     return {
       ...next,
-      ledgerTarget: { key: `${ledgerBefore.key}${KEY_JOIN}${ledgerNext.key}`, decisions: [...ledgerBefore.decisions, ...ledgerNext.decisions], ...(label ? { label } : {}) },
+      ledgerTarget: {
+        key: `${ledgerBefore.key}${KEY_JOIN}${ledgerNext.key}`,
+        decisions: [...ledgerBefore.decisions, ...ledgerNext.decisions],
+        ...(label ? { label } : {}),
+        ...chainBasis(ledgerBefore, ledgerNext),
+      },
     };
   }
   const cardsBefore = previous.foundationTarget;
@@ -194,15 +211,23 @@ function mergeAuthorButtons(previous: SuggestedAction, next: SuggestedAction): S
     const label = joinLabels(cardsBefore.label, cardsNext.label);
     return {
       ...next,
-      foundationTarget: { key: `${cardsBefore.key}${KEY_JOIN}${cardsNext.key}`, input: { ops: [...opsBefore, ...opsNext] }, ...(label ? { label } : {}) },
+      foundationTarget: {
+        key: `${cardsBefore.key}${KEY_JOIN}${cardsNext.key}`,
+        input: { ops: [...opsBefore, ...opsNext] },
+        ...(label ? { label } : {}),
+        ...chainBasis(cardsBefore, cardsNext),
+      },
     };
   }
   return next;
 }
 
 /** 「确认改账」按钮：点了发结构化动作、由服务端按作者档记下裁定（manage_ledger 提议之后出现）。 */
-export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }): SuggestedAction {
-  return { ...suggestedAction("ledger-confirm"), ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}) } };
+export function ledgerConfirmAction(target: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis): SuggestedAction {
+  return {
+    ...suggestedAction("ledger-confirm"),
+    ledgerTarget: { key: target.key, decisions: [...target.decisions], ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
+  };
 }
 
 /** 「重写这一章」按钮：有稿的章 AI 不覆盖，作者点了才由服务端整章重写（重构 P4）。 */
@@ -223,19 +248,19 @@ export function continueConfirmAction(target: { readonly chapter: number; readon
 }
 
 /** 「认下」按钮：作者口述让 AI 记进设定本的，点了就算作者写的（核心 field.accept 等，作者档）。 */
-export function foundationAcceptAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }): SuggestedAction {
+export function foundationAcceptAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis): SuggestedAction {
   return {
     ...suggestedAction("foundation-accept"),
-    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}) },
+    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
   };
 }
 
 /** 「确认改设定」按钮：删角色、覆盖已确立设定是作者档，作者点了才由服务端执行（重构 P4）。 */
-export function foundationConfirmAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }): SuggestedAction {
+export function foundationConfirmAction(target: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis): SuggestedAction {
   const base = suggestedAction("foundation-confirm");
   return {
     ...base,
     ...(target.label ? { description: `${target.label}（改前自动存档，可在操作历史撤销）。` } : {}),
-    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}) },
+    foundationTarget: { key: target.key, input: { ...target.input }, ...(target.label ? { label: target.label } : {}), ...basisFields(target) },
   };
 }

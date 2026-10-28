@@ -20,7 +20,7 @@
  * 未知工具仍 push 一个带可读标签的 toolStep（保证不静默、不崩），但不强造一张可能误导的卡。
  */
 import type { ChapterAgentCard, DraftReviewView, QualityCardReport, ToolStep } from "../api/types.js";
-import type { ChapterMessage, AiFlavorReport, MessageSegment } from "../types.js";
+import type { ChapterMessage, AiFlavorReport, MessageSegment, ProposalBasis } from "../types.js";
 import type { BrainstormCardData, CommitPreviewCardData, ContinuityCheckData, DraftVersionsCardData, NextStepPrompt, SettleCardData } from "../type-defs/workspace.js";
 import { cardOf, withCard, withCards } from "../utils/messageCards.js";
 /** 裁决类只读工具：ok:false 是「裁决未过」（工具没崩、给了真实否定答案），不是失败。 */
@@ -94,13 +94,13 @@ export interface AgentToolResultOutput {
   /** prune_snapshots 专属：预览后挂「确认裁剪」按钮。 */
   readonly pruneConfirmAction?: { readonly keep?: number };
   /** manage_ledger 专属：改账草案，挂「确认改账」按钮。 */
-  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string };
+  readonly ledgerConfirmAction?: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string } & ProposalBasis;
   /** generate_draft 专属：有稿的章 AI 不覆盖，挂「重写这一章」按钮。 */
   readonly rewriteConfirmAction?: { readonly chapter: number; readonly chapterGoal?: string; readonly canContinue?: boolean };
   /** foundation_write 专属：作者档的改设定，挂「确认改设定」按钮。 */
-  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  readonly foundationConfirmAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
   /** foundation_write 专属：AI 刚写进去的那几处，挂「认下」按钮。 */
-  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string };
+  readonly foundationAcceptAction?: { readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string } & ProposalBasis;
 }
 
 export type AgentProjectionEvent =

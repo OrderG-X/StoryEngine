@@ -82,12 +82,12 @@ export type UserAction =
    * 「确认改账」按钮（重构 P3）：manage_ledger 提的裁定草案原样带回，服务端按作者档命令记下（幂等键 = key）。
    * decisions 在服务端执行前逐条按裁定 schema 校验。
    */
-  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string }
+  | { readonly toolName: "ledger_decision"; readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }
   /**
    * 「确认改设定」按钮（重构 P4）：foundation_write 被拦下的那次写入（删角色 / 覆盖已确立设定）原样带回，
    * 服务端按入参 schema 校验后带作者确认执行（点两次只做一次 = key）。
    */
-  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string }
+  | { readonly toolName: "foundation_decision"; readonly key: string; readonly input: Readonly<Record<string, unknown>>; readonly label?: string; readonly basis?: string }
   /** 核账卡「以第 N 章为准」等（P12）：出定论预览（只读）；定论卡「确认」：按票号一次改齐（作者档、可撤销）。 */
   | SettleUserAction;
 
@@ -115,6 +115,12 @@ export type ParsedUserAction =
 /** 按钮标识最长多少字：一轮里提了几次改账 / 改设定，界面并成一个按钮，标识是几次的拼起来（「+」隔开）。 */
 const MAX_ACTION_KEY_LENGTH = 600;
 
+/** 按钮带的依据摘要（写作版本 P1a）：原样带给执行那步取回核对；不是字符串、太长的当没带（执行时如实说按钮旧了）。 */
+function basisOf(record: Record<string, unknown>): { readonly basis?: string } {
+  const basis = typeof record.basis === "string" ? record.basis.trim() : "";
+  return basis && basis.length <= 128 ? { basis } : {};
+}
+
 export function parseUserAction(raw: unknown): ParsedUserAction {
   if (raw === undefined || raw === null) return { kind: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) return { kind: "invalid", reason: "动作格式不对。" };
@@ -131,7 +137,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
       return { kind: "invalid", reason: `一次最多改 ${MAX_DECISIONS_PER_CHANGE} 条账，这次有 ${record.decisions.length} 条，请让 AI 分几次提。` };
     }
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
-    return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}) } };
+    return { kind: "action", action: { toolName: "ledger_decision", key, decisions: record.decisions, ...(label ? { label } : {}), ...basisOf(record) } };
   }
   if (toolName === "foundation_decision") {
     const key = typeof record.key === "string" ? record.key.trim() : "";
@@ -141,7 +147,7 @@ export function parseUserAction(raw: unknown): ParsedUserAction {
     const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
     return {
       kind: "action",
-      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}) },
+      action: { toolName: "foundation_decision", key, input: input as Record<string, unknown>, ...(label ? { label } : {}), ...basisOf(record) },
     };
   }
   if (toolName === "undo") return { kind: "action", action: { toolName: "undo" } };
@@ -734,7 +740,12 @@ async function runLedgerDecisionAction(args: Omit<Parameters<typeof runUserActio
   }
   let outcome: Awaited<ReturnType<typeof applyLedgerDecisions>>;
   try {
-    outcome = await applyLedgerDecisions(args.projectDir, { key: action.key, decisions: action.decisions, ...(action.label ? { label: action.label } : {}) });
+    outcome = await applyLedgerDecisions(args.projectDir, {
+      key: action.key,
+      decisions: action.decisions,
+      ...(action.label ? { label: action.label } : {}),
+      ...(action.basis ? { basis: action.basis } : {}),
+    });
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "manage_ledger", error: message, retryable: true });
@@ -771,7 +782,7 @@ async function runFoundationDecisionAction(args: Omit<Parameters<typeof runUserA
   }
   let outcome: Awaited<ReturnType<typeof applyFoundationDecision>>;
   try {
-    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input });
+    outcome = await applyFoundationDecision(args.projectDir, { key: action.key, input: action.input, ...(action.basis ? { basis: action.basis } : {}) });
   } catch (error) {
     const message = args.scrubError(error);
     args.sendEvent("tool-error", { toolCallId, toolName: "foundation_write", error: message, retryable: true });

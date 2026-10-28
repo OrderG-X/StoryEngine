@@ -2,8 +2,8 @@
  * 拟章纲编排（resolveChapterPlanForDraft）：章纲员窗口拟纲（planner.ts）→ 核账员窗口审纲（checker.ts）
  * → 有问题交回章纲员改一轮（不循环）。材料和天数归一这些纯函数在 plan-materials.ts。
  */
+import { basisDigestBefore, readTruthBasis, sha256 } from "@actalk/story-core";
 import { readChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
-import { readFactLedgerStrict } from "../book/fact-ledger-store.js";
 import { readStoryTimeline } from "../book/story-timeline.js";
 import {
   callConfiguredBrainModel,
@@ -16,9 +16,7 @@ import {
   type BrainCallModel,
   type PlanProblem,
 } from "./index.js";
-import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
-import { hashEarlier } from "./continuity/check-memory.js";
-import { readFoundationDigest } from "./foundation-digest.js";
+import { containsQuote, normalize } from "./continuity/check-chapter.js";
 import { withStep } from "../lib/token-meter.js";
 
 export interface ResolvedChapterPlan {
@@ -143,16 +141,15 @@ async function planByEditorialRoom(input: {
 }
 
 /**
- * 章纲依赖的前文指纹：前面各章正文、账、设定、前面各章是哪天（本章的日子不进——时间线会读本章章纲里的天数）。
- * 读不了 → undefined：不沿用，拟出来的也不记指纹。
+ * 章纲依赖的前文指纹（写作版本 P1a 起用真相依据）：前面各章正文和账、作者裁定、设定卡，加前面各章是哪天
+ * （本章和后面的不进；前面有章没定稿时它的天数来自它的章纲，不在真相里）。
+ * 拟纲前取：拟的过程中前文又改了，记下的是旧指纹，下次自然重拟。读不了 → undefined：不沿用，拟出来的也不记指纹。
  */
 export async function planBasisOf(projectDir: string, chapter: number): Promise<string | undefined> {
   try {
-    const earlier = await readEarlierChapters(projectDir, chapter);
-    const { facts } = await readFactLedgerStrict(projectDir);
-    const foundation = await readFoundationDigest(projectDir);
+    const truth = basisDigestBefore(await readTruthBasis(projectDir), chapter);
     const { timeline } = await readStoryTimeline(projectDir);
-    return hashEarlier(earlier, facts, foundation?.text, JSON.stringify(timeline.entries.filter((entry) => entry.chapter < chapter)));
+    return sha256(`${truth}|timeline:${JSON.stringify(timeline.entries.filter((entry) => entry.chapter < chapter))}`);
   } catch {
     return undefined;
   }

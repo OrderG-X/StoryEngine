@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { projectBook, readHead } from "@actalk/story-core";
+import { chapterCommit, projectBook, readHead, runCommand } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { confirmChapterCommit, fileTicketStore, memoryTicketStore, prepareChapterCommit, type CommitPreview, type PrepareFailure } from "./commit-flow.js";
@@ -339,6 +339,30 @@ describe("定稿编排", () => {
     const preview = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 1, text: loose, callModel: fakeModel(LEDGER1), tickets }));
     expect(await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text: CH1, tickets })).toMatchObject({ ok: true, version: 1 });
     expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe(CH1);
+  });
+
+  it("预览之后前面章的账变了：旧票不定稿、说清哪章变了；重新预览照新的天数算（Astra 探针 P3）", async () => {
+    const first = "# 一\n\n老张回家了。";
+    const next = "# 二\n\n第二天上午，老张出门。";
+    const commitDay = async (day: number) => {
+      const outcome = await runCommand(book, chapterCommit, { chapter: 1, text: first, entries: [{ kind: "time", review: "author", basis: "author", day }] }, { caller: "author", idempotencyKey: `day-${day}` });
+      expect(outcome.ok).toBe(true);
+    };
+    const model: BrainCallModel = async (messages) => messages.at(-1)!.content.includes("交这一章的账单")
+      ? JSON.stringify({ time: { basis: "text", daysSincePrevious: 1, daysInChapter: 0, quote: "第二天上午" } })
+      : "老张回家。";
+    await commitDay(1);
+    const tickets = memoryTicketStore();
+    const stale = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 2, text: next, callModel: model, tickets }));
+    expect(stale.time.day).toBe(2);
+    await commitDay(20);
+    const refused = await confirmChapterCommit({ bookDir: book, ticket: stale.ticket, text: next, tickets });
+    expect(refused).toMatchObject({ ok: false, code: "basis_changed", reason: expect.stringContaining("第 1 章的账") });
+    expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)).toBeUndefined();
+    const fresh = expectPreview(await prepareChapterCommit({ bookDir: book, chapter: 2, text: next, callModel: model, tickets }));
+    expect(fresh.time.day).toBe(21);
+    expect(await confirmChapterCommit({ bookDir: book, ticket: fresh.ticket, text: next, tickets })).toMatchObject({ ok: true });
+    expect((await projectBook(book)).chapters.find((chapter) => chapter.chapter === 2)?.day).toBe(21);
   });
 
   it("预览票存目录：进程重启（换一个 store 实例）也能确认；乱写的票号不读盘", async () => {

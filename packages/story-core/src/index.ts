@@ -143,9 +143,11 @@ export {
   readChapterText,
   readDecisions,
   readHead,
+  readTruthBasis,
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
+export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
 export { CARDS_PATH, chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, TX_DIR } from "./store/paths.js";
 export {

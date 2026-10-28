@@ -102,7 +102,7 @@ describe("manage_ledger：只提草案", () => {
   it("作者确认后：改写的那条作废、新说法生效；坏数据整批不记", async () => {
     await commitTwo();
     const update = await runManageLedger(book, { op: "update", targetText: "三点十五分", text: "钟停在三点二十分", value: "三点二十分" });
-    const applied = await applyLedgerDecisions(book, { key: update.ledgerConfirm?.key ?? "", decisions: update.ledgerConfirm?.decisions ?? [] });
+    const applied = await applyLedgerDecisions(book, { key: update.ledgerConfirm?.key ?? "", decisions: update.ledgerConfirm?.decisions ?? [], basis: update.ledgerConfirm?.basis });
     expect(applied).toMatchObject({ ok: true, applied: 1 });
     const view = await projectBook(book);
     expect(view.facts.find((fact) => fact.id === "c1-1")?.status).toBe("retracted");
@@ -120,7 +120,7 @@ describe("manage_ledger：只提草案", () => {
     const plan = await runManageLedger(book, { op: "day", chapter: 1, day: 3, dayEnd: 4 });
     expect(plan).toMatchObject({ needsConfirmation: true, ledgerConfirm: { lines: ["第 1 章从故事第 1 天改记为第 3 天到第 4 天"] } });
     expect((await projectBook(book)).chapters[0]).toMatchObject({ day: 1 });
-    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [], basis: plan.ledgerConfirm?.basis });
     expect(applied).toMatchObject({ ok: true, applied: 1 });
     expect((await projectBook(book)).chapters.map((chapter) => [chapter.day, chapter.dayEnd, chapter.dayBasis])).toEqual([[3, 4, "author"], [5, 5, "missing"]]);
 
@@ -134,7 +134,7 @@ describe("manage_ledger：只提草案", () => {
     await commitTwo();
     const plan = await runManageLedger(book, { op: "summary", chapter: 1, text: "她在钟楼里找到了铜钥匙。" });
     expect(plan).toMatchObject({ needsConfirmation: true, ledgerConfirm: { lines: ["第 1 章的梗概改成：她在钟楼里找到了铜钥匙。"] } });
-    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [], basis: plan.ledgerConfirm?.basis });
     expect(applied).toMatchObject({ ok: true, applied: 1 });
     expect((await projectBook(book)).chapters[0]?.summary).toBe("她在钟楼里找到了铜钥匙。");
 
@@ -171,7 +171,7 @@ describe("manage_ledger review：理一遍线索（外部审查 2026-10-28：线
     expect(plan.summary).toContain("1 条看着已经收了，1 条还开着");
     expect(plan.summary).not.toMatch(/T\d|thread-|c\d-\d/u);
     expect(JSON.stringify(await projectBook(book))).toBe(before);
-    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [], basis: plan.ledgerConfirm?.basis });
     expect(applied).toMatchObject({ ok: true, applied: 1 });
     expect((await projectBook(book)).threads.find((thread) => thread.title === "钟楼的门为什么开着")).toMatchObject({ status: "closed", closedAt: 2, closedBy: "author" });
   });

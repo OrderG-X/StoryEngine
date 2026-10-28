@@ -9,9 +9,9 @@ import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReader
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import { describeTimelineForChapter, readStoryTimeline } from "../../book/story-timeline.js";
 import { syncLegacyMirror } from "../../book/mirror/sync.js";
-import { chapterCommit, decisionRecord, runCommand } from "@actalk/story-core";
+import { chapterCommit, decisionRecord, readTruthBasis, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
-import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
+import type { ContinuityIssueV2 } from "./check-chapter.js";
 import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
 import { addDismissal } from "./dismissals.js";
 
@@ -148,9 +148,8 @@ describe("核账服务（核账员一路）", () => {
       characters: [{ id: "char-z1", name: "周婶", appearanceAnchors: [anchor] }],
     }), "utf-8");
     await writeCard("左腿有旧伤");
-    const earlier = await readEarlierChapters(dir, 3);
     const setting: ContinuityIssueV2 = { quote: "周婶在门口喊他。", earlierQuote: "周婶……外貌：左腿有旧伤", earlierChapter: 3, reason: "设定写左腿", kind: "event", confidence: "sure", againstSetting: { label: "人物卡" } };
-    await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, []), issues: [setting] });
+    await writeCheckMemory(dir, { chapter: 3, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(await readTruthBasis(dir), 3), issues: [setting] });
     const quiet: BrainCallModel = async (_messages, options) => (options.json ? JSON.stringify({ checks: [], contradictions: [] }) : "笔记");
     const edited = `${BODY}林舟低头擦着柜台。`;
     const carried = await checkChapterBody(dir, 3, edited, { readerCallModel: quiet });
@@ -512,9 +511,8 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   /** 第 4 章的核账记忆和这次的正文、前文对得上 → 走复用，结果就是这两条。 */
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
-    const earlier = await readEarlierChapters(dir, 4);
     const timeline = describeTimelineForChapter((await readStoryTimeline(dir)).timeline, 4);
-    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, [], "", timeline), issues: [CURRENT, OLD] });
+    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(await readTruthBasis(dir), 4, { timeline }), issues: [CURRENT, OLD] });
     return dir;
   }
 

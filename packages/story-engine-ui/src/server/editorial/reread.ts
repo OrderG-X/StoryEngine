@@ -82,7 +82,8 @@ async function rereadChapter(projectDir: string, chapter: number, run: string, c
   const plan = classifyForReview(checked.accepted, before, { chapter });
   const optIn = new Set(plan.review.filter((item) => touchesHardFact(item, before)).map((item) => item.index));
   const entries = checked.accepted.filter((item) => !optIn.has(item.index)).map((item) => item.entry);
-  const outcome = await runCommand(projectDir, ledgerReread, { chapter, entries }, { caller: "author", idempotencyKey: `reread:${run}:${chapter}` });
+  // 这一轮这一章只记一次：记完进程被杀、接着记时重跑记账员，账会不一样，照样回放上次记下的（不算换了选择）。
+  const outcome = await runCommand(projectDir, ledgerReread, { chapter, entries }, { caller: "author", idempotencyKey: `reread:${run}:${chapter}`, intent: { chapter } });
   if (!outcome.ok) return { ok: false, reason: outcome.message };
   return {
     ok: true,

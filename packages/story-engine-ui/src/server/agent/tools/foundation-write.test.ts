@@ -242,6 +242,41 @@ describe("foundation_write：碰了作者写的不改，只出「确认改设定
     expect(lin.fields.find((field) => field.label === "身份")).toMatchObject({ value: "审计员", by: "author" });
   });
 
+  it("按钮带提议时的依据：作者点之前设定又改过 → 不改、说清哪里变了；不带依据的旧按钮也不改；没变照改", async () => {
+    await authorWrite([{ op: "field.set", card: "林远", label: "身份", value: "审计员" }]);
+    const out = await foundationWriteLogic({ projectDir: book, ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }] });
+    const confirm = out.foundationConfirm!;
+    expect(confirm.basis).toMatch(/^[0-9a-f]{64}$/u);
+    expect(confirm.basisFrom).toBe(confirm.basis); // 这一批没有 AI 直接写的
+
+    const { basis: _drop, ...legacy } = confirm;
+    expect(await applyFoundationDecision(book, legacy)).toMatchObject({ ok: false, summary: expect.stringContaining("按钮是旧的") });
+
+    await authorWrite([{ op: "field.set", card: "林远", label: "性格", value: "闷" }]);
+    const stale = await applyFoundationDecision(book, confirm);
+    expect(stale).toMatchObject({ ok: false, summary: expect.stringContaining("提议之后设定本改过") });
+    expect((await cards()).cards.find((card) => card.name === "林远")!.fields.find((field) => field.label === "身份")).toMatchObject({ value: "审计员" });
+
+    const again = await foundationWriteLogic({ projectDir: book, ops: [{ op: "field.set", card: "林远", label: "身份", value: "记者" }] });
+    expect(await applyFoundationDecision(book, again.foundationConfirm!)).toMatchObject({ ok: true });
+    expect((await cards()).cards.find((card) => card.name === "林远")!.fields.find((field) => field.label === "身份")).toMatchObject({ value: "记者", by: "author" });
+  });
+
+  it("这一批有 AI 直接写的：basisFrom 是写之前、basis 是写完的样子（一轮几个按钮合并时靠它接上）", async () => {
+    await authorWrite([{ op: "field.set", card: "林远", label: "身份", value: "审计员" }]);
+    const out = await foundationWriteLogic({
+      projectDir: book,
+      ops: [
+        { op: "field.set", card: "林远", label: "身份", value: "记者" },
+        { op: "card.create", kind: "item", name: "蓝色账册" },
+      ],
+    });
+    const confirm = out.foundationConfirm!;
+    expect(confirm.basisFrom).toMatch(/^[0-9a-f]{64}$/u);
+    expect(confirm.basis).not.toBe(confirm.basisFrom);
+    expect(await applyFoundationDecision(book, confirm)).toMatchObject({ ok: true });
+  });
+
   it("改名 + 按新名字补栏、删作者建的卡：全交给作者（跟着被拦那步的一起交），一个字不写、不打存档点", async () => {
     await authorWrite([{ op: "card.create", kind: "character", name: "顾明" }]);
     const before = await cardsText();

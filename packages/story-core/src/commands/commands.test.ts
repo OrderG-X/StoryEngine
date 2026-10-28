@@ -76,7 +76,7 @@ describe("定稿命令", () => {
     expect(outcome.result.rejected[0]?.message).toBe("「老周哭了」没记上：附的原句在正文里找不到");
   });
 
-  it("AI 调不了；没带防重复标记不执行；同一个标记再点一次只回放", async () => {
+  it("AI 调不了；没带防重复标记不执行；同一个标记再点一次只回放，换了选择再点如实拒绝", async () => {
     const asAi = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { caller: "ai", idempotencyKey: "x" });
     expect(asAi).toMatchObject({ ok: false, code: "author_only" });
     const noKey = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { caller: "author" });
@@ -84,11 +84,20 @@ describe("定稿命令", () => {
 
     const emit = vi.fn();
     const first = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("same", emit)));
-    const again = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("same", emit)));
+    const again = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("same", emit)));
     expect(again.replayed).toBe(true);
     expect(again.result).toEqual(first.result);
-    expect(emit).toHaveBeenCalledTimes(1);
-    expect((await readHead(book)).version).toBe(1);
+    // 同一个标记换了参数：不按上次的回放成「做好了」
+    const changed = await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("same", emit));
+    expect(changed).toMatchObject({ ok: false, code: "idempotency_args_changed" });
+    // 调用方给了「作者的选择」：只比它，参数里照现状重算的部分不算
+    const sameIntent = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { ...author("intent", emit), intent: { pick: 1 } }));
+    expect(sameIntent.replayed).toBeFalsy();
+    const replayIntent = expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: `${CH1}\n`, entries: CH1_ENTRIES }, { ...author("intent", emit), intent: { pick: 1 } }));
+    expect(replayIntent.replayed).toBe(true);
+    expect(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, { ...author("intent", emit), intent: { pick: 2 } })).toMatchObject({ ok: false, code: "idempotency_args_changed" });
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect((await readHead(book)).version).toBe(2);
   });
 
   it("重定稿：同一条事实、同一条线索的编号沿用，后文接得上；不见了的被引用线索如实列出", async () => {
