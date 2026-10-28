@@ -586,6 +586,7 @@ export const generateDraftTool = createTool({
       // R4.2：出稿内部第二次落盘（自动去味/续写补字）不再各建存档点——本步的存档点已建（snapshotId），
       // 一次出稿在操作历史里就是一步，撤销一键退回这步之前。
       ...(snapshotId ? { preWriteSnapshotId: snapshotId } : {}),
+      ...(input.thenPreview === true ? { thenPreview: true } : {}),
       autoDeAi: autoDeAiEnabled,
       ...(deAiCallModel ? { deAiCallModel } : {}),
       candidates: candidateCount,

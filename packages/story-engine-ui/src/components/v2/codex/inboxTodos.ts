@@ -1,7 +1,7 @@
 /**
  * AI 栏「待处理」（2026-10-07 改版）：不急但别忘的事，按需点「让 AI …」把一句话放进输入框（不自动发、不直连引擎）。
  * 带 ops 的（重构 P9：还没标主角）点了直接改设定本（作者档、可撤销），不经模型。
- * 全部从现有只读数据确定性推出：还没标主角 / 可清理线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
+ * 全部从现有只读数据确定性推出：还没标主角 / 好几章没动的线索数 / 久未推进的主线目标 / 占位章名 / 重名章节。题材中立。
  */
 import type { CardOp } from "../../../api/bibleClient.js";
 import type { StateOverview } from "../../../api/types.js";
@@ -54,10 +54,10 @@ export function buildInboxTodos(input: {
   if (cleanup > 0) {
     todos.push({
       key: "threads-cleanup",
-      title: `${cleanup} 条线索可以清理`,
-      sub: "过期没推进或意思重复的线索，留着会挤占 AI 的注意力",
-      action: "让 AI 清理",
-      prefill: "清理过期线索：先列出要清哪些，我确认了再动",
+      title: `${cleanup} 条线索好几章没动`,
+      sub: "可能早就收了、或意思重复",
+      action: "让 AI 理一遍",
+      prefill: "把开着的线索理一遍，看看哪些其实已经收了",
     });
   }
 

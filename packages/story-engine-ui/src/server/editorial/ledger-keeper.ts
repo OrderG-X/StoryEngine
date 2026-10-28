@@ -170,41 +170,60 @@ export function buildKeeperTask(chapter: number, draft: string, contextText: str
  * 先确保读到第 N-1 章（缺的笔记按顺序补；太多就走冷窗口），再在窗口后面接一条 user 消息要账单。
  * 坏 JSON、调用失败 → ok=false + 原因，不抛。
  */
+/**
+ * 记账员的跟读窗口：确保读到第 upTo 章（缺的笔记按顺序补；太多就走冷窗口：已有笔记 + 最近几章原文）。
+ * 记账和理线索共用。读不成抛错（调用方如实说「读前文没成」）。
+ */
+export async function openKeeperWindow(input: {
+  readonly projectDir: string;
+  readonly upTo: number;
+  readonly callModel: BrainCallModel;
+  readonly notesRoot?: string;
+  readonly maxCatchUp?: number;
+  /** 等读期间进度行标注的动作名。 */
+  readonly waitingAs: string;
+}): Promise<{ readonly window: BrainMessage[]; readonly cold?: ColdCoverage; readonly waited?: ReaderWaited }> {
+  const root = input.notesRoot ?? input.projectDir;
+  const waiting = readerWaitingHandlers(root, LEDGER_ROLE.id, input.upTo);
+  const ready = await withStep("跟读补笔记", () =>
+    ensureReaderWindow({
+      projectDir: input.projectDir,
+      role: LEDGER_ROLE,
+      upTo: input.upTo,
+      callModel: input.callModel,
+      ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      maxCatchUp: input.maxCatchUp ?? KEEPER_MAX_CATCH_UP,
+      waitingAs: input.waitingAs,
+      onCatchUpBegin: waiting.onCatchUpBegin,
+      onProgress: waiting.onProgress,
+      onCatchUpEnd: waiting.onCatchUpEnd,
+    }),
+  );
+  const waited = ready.waited ? { waited: ready.waited } : {};
+  if (ready.missing === 0) return { window: ready.messages, ...waited };
+  const built = await buildColdReaderWindow({
+    projectDir: input.projectDir,
+    role: LEDGER_ROLE,
+    upTo: input.upTo,
+    ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+  });
+  return { window: built.messages, cold: built.coverage, ...waited };
+}
+
 export async function runLedgerKeeper(input: KeeperInput): Promise<KeeperOutcome> {
   if (input.draft.trim().length === 0) return { ok: false, reason: "正文是空的，没有可记的账" };
-  const root = input.notesRoot ?? input.projectDir;
   let window: BrainMessage[];
   let cold: ColdCoverage | undefined;
   let waited: ReaderWaited | undefined;
   try {
-    const waiting = readerWaitingHandlers(root, LEDGER_ROLE.id, input.chapter - 1);
-    const ready = await withStep("跟读补笔记", () =>
-      ensureReaderWindow({
-        projectDir: input.projectDir,
-        role: LEDGER_ROLE,
-        upTo: input.chapter - 1,
-        callModel: input.callModel,
-        ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
-        maxCatchUp: input.maxCatchUp ?? KEEPER_MAX_CATCH_UP,
-        waitingAs: "记账",
-        onCatchUpBegin: waiting.onCatchUpBegin,
-        onProgress: waiting.onProgress,
-        onCatchUpEnd: waiting.onCatchUpEnd,
-      }),
-    );
-    waited = ready.waited;
-    if (ready.missing > 0) {
-      const built = await buildColdReaderWindow({
-        projectDir: input.projectDir,
-        role: LEDGER_ROLE,
-        upTo: input.chapter - 1,
-        ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
-      });
-      window = built.messages;
-      cold = built.coverage;
-    } else {
-      window = ready.messages;
-    }
+    ({ window, cold, waited } = await openKeeperWindow({
+      projectDir: input.projectDir,
+      upTo: input.chapter - 1,
+      callModel: input.callModel,
+      ...(input.notesRoot ? { notesRoot: input.notesRoot } : {}),
+      ...(input.maxCatchUp !== undefined ? { maxCatchUp: input.maxCatchUp } : {}),
+      waitingAs: "记账",
+    }));
   } catch (error) {
     return { ok: false, reason: `记账员读前文没成：${oneLine(error)}` };
   }

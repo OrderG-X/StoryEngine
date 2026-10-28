@@ -8,11 +8,12 @@ import { createTool } from "@mastra/core/tools";
 import type { ToolExecutionContext } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { planLedgerChange, type LedgerChangeRequest } from "../ledger-decisions.js";
+import { MAX_DECISIONS_PER_CHANGE, planLedgerChange, proposal, type LedgerChangeRequest } from "../ledger-decisions.js";
+import { callConfiguredBrainModel, reviewOpenThreads, type BrainCallModel } from "../../editorial/index.js";
 import { readProjectDirFromContext } from "../request-context.js";
 import { blankToUndefined, coerceEnum, coerceJsonArray, coerceNumber } from "../../lib/lenient-args.js";
 
-export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "clean", "group", "importance", "day", "summary"] as const;
+export const LEDGER_OPS = ["add", "update", "remove", "supersede", "resolve", "review", "group", "importance", "day", "summary"] as const;
 export type LedgerOp = (typeof LEDGER_OPS)[number];
 
 const groupList = z.array(z.union([z.string(), z.array(z.string())]));
@@ -21,7 +22,8 @@ const inputSchema = z.object({
   // 模型无关：枚举大小写宽容（模型常传 "Add"/"REMOVE"）。
   op: coerceEnum(z.enum(LEDGER_OPS).describe(
     "事实：add 补记；update 改写（id 或 targetText + text）；remove 删掉记错的（id 或 targetText）；supersede=某事实从某章起不再成立（id 或 targetText + chapter）。" +
-      "线索：resolve=记为已收（query 或 id）；group=归并讲同一件事的几条（groups）；importance=定大伏笔 / 小线索（id 或 query + importance）。" +
+      "线索：resolve=记为已收（query 或 id）；review=把开着的线索理一遍，记账员按全书判哪些其实已经收了（作者说理一下线索、看看哪些收了时用，不带别的参数）；" +
+      "group=归并讲同一件事的几条（groups）；importance=定大伏笔 / 小线索（id 或 query + importance）。" +
       "天数：day=改已定稿某章是故事第几天（chapter + day，这一章跨天再给 dayEnd）。" +
       "梗概：summary=改写已定稿某章的梗概（chapter + text，text 是整条新梗概）。",
   )),
@@ -66,9 +68,60 @@ function normalizeGroups(value: z.infer<typeof groupList> | undefined): string[]
   return value.map((item) => (typeof item === "string" ? [item] : item));
 }
 
-export async function runManageLedger(projectDir: string, input: z.infer<typeof inputSchema>): Promise<z.infer<typeof outputSchema>> {
+const shortQuote = (text: string): string => (text.length > 40 ? `${text.slice(0, 40)}…` : text);
+
+/**
+ * 理线索：记账员按全书判哪些开着的线索其实已经收了、点出收口的原句（editorial/thread-review）；
+ * 收了的出「确认改账」按钮（作者点了才记），还开着、拿不准、点不出原句的都如实说。
+ */
+async function runThreadReview(projectDir: string, callModel: BrainCallModel): Promise<z.infer<typeof outputSchema>> {
+  const review = await reviewOpenThreads({ projectDir, callModel });
+  if (!review.ok) return { ok: false, op: "review", blockedReason: "review_failed", summary: `线索没理成：${review.reason}。` };
+  const shown = review.suggestions.slice(0, MAX_DECISIONS_PER_CHANGE);
+  const notes = [
+    review.unsure.length > 0 ? `拿不准的 ${review.unsure.length} 条：${review.unsure.slice(0, 5).map((title) => `「${title}」`).join("")}${review.unsure.length > 5 ? "等" : ""}，你看着定。` : "",
+    ...review.unproven.slice(0, 5).map((item) => `「${item.title}」记账员说${item.chapter !== undefined ? `第 ${item.chapter} 章` : ""}收了，但${item.why}，没列。`),
+    review.unproven.length > 5 ? `另有 ${review.unproven.length - 5} 条也是点不出原句，没列。` : "",
+    review.suggestions.length > shown.length ? `一次最多记 ${MAX_DECISIONS_PER_CHANGE} 条，另有 ${review.suggestions.length - shown.length} 条下次再理。` : "",
+    review.omitted > 0 ? `开着的太多，这次只看了 ${review.reviewed} 条，另有 ${review.omitted} 条没看。` : "",
+    review.cold ? `记账员还没读完全书（第 ${review.cold.notedThrough} 章），这次按已有笔记和最近几章原文判的，更早的可能漏。` : "",
+    ...review.failures.slice(0, 2).map((failure) => `（有一步没跑成：${failure}）`),
+  ].filter(Boolean);
+  const head = `理了 ${review.reviewed} 条开着的线索：`;
+  if (shown.length === 0) {
+    return {
+      ok: false,
+      op: "review",
+      blockedReason: "nothing_to_close",
+      summary: [`${head}没有看着已经收了的${review.stillOpen > 0 ? `，${review.stillOpen} 条还开着` : ""}。`, ...notes].join(""),
+    };
+  }
+  const plan = proposal(
+    shown.map((item) => ({ type: "thread.close" as const, thread: item.thread, chapter: item.chapter })),
+    shown.map((item) => `「${item.title}」第 ${item.chapter} 章已收：「${shortQuote(item.quote)}」`),
+  );
+  return {
+    ok: false,
+    op: "review",
+    needsConfirmation: true,
+    blockedReason: "awaiting_user_confirmation",
+    summary: [
+      `${head}${shown.length} 条看着已经收了${review.stillOpen > 0 ? `，${review.stillOpen} 条还开着` : ""}。`,
+      `要收的：${plan.lines.join("；")}。还没记——请点「确认改账」按钮（改前自动存档，可撤销）。`,
+      ...notes,
+    ].join(""),
+    ledgerConfirm: { key: plan.key, label: confirmLabel(plan.lines), decisions: [...plan.decisions], lines: [...plan.lines] },
+  };
+}
+
+export async function runManageLedger(
+  projectDir: string,
+  input: z.infer<typeof inputSchema>,
+  options: { readonly callModel?: BrainCallModel } = {},
+): Promise<z.infer<typeof outputSchema>> {
+  if (input.op === "review") return runThreadReview(projectDir, options.callModel ?? callConfiguredBrainModel);
   const request: LedgerChangeRequest = {
-    op: input.op,
+    op: input.op as LedgerChangeRequest["op"],
     ...(input.id ? { id: input.id } : {}),
     ...(input.chapter ? { chapter: input.chapter } : {}),
     ...(input.text ? { text: input.text } : {}),

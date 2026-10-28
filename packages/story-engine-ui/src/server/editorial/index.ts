@@ -70,6 +70,7 @@ export {
   type ReaderWaited,
 } from "./reader-progress.js";
 export { LEDGER_ROLE };
+export { MAX_REVIEW_THREADS, reviewOpenThreads, type ThreadCloseSuggestion, type ThreadReviewOutcome } from "./thread-review.js";
 export {
   brainstormChapter,
   BRAINSTORM_OPTIONS,

@@ -901,6 +901,8 @@ export interface GenerateDraftInput {
    * 撤销一键退回这步之前；它同时作为 output.snapshotId 的兜底（内部没建更近的快照时）。
    */
   readonly preWriteSnapshotId?: string;
+  /** 作者要写完就出定稿预览（generate_draft thenPreview）：回执说预览接着出，不再说「满意后让我做定稿预览」。 */
+  readonly thenPreview?: boolean;
 }
 
 /** HTTP 适配层投影料：工具 execute 投影时剥掉（不进 LLM 视野），路由据此组装 200/422 响应。 */
@@ -1550,7 +1552,7 @@ async function runGenerateDraftWithPlan(input: GenerateDraftInput, chapterPlan: 
         ? `第 ${chapter} 章接着往下写了 ${continued.added} 字，前面写好的 ${continued.kept} 字没动，已写进工作稿（可撤销）。`
         : `第 ${chapter} 章已生成正文并写入工作稿${finalReport.title ? `《${finalReport.title}》` : ""}。`) +
       candidateLine +
-      `${presenceSummarySentence(characterSelection.summary)}工作稿尚未定稿，可在写作区查看修改；满意后可以让我做定稿预览，再点「确认定稿」。` +
+      `${presenceSummarySentence(characterSelection.summary)}工作稿尚未定稿，可在写作区查看修改；${input.thenPreview ? "定稿预览接着出，看过再点「确认定稿」。" : "满意后可以让我做定稿预览，再点「确认定稿」。"}` +
       (qualityPipeline && qualityPipeline.notes.length > 0 ? `\n${qualityPipeline.notes.join("\n")}` : "") +
       (beatNote ? `\n${beatNote}` : "") +
       (lengthWarning ? `\n${lengthWarning}` : "") +

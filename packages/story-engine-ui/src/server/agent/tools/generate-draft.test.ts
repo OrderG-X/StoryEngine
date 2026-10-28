@@ -146,6 +146,21 @@ describe("generate_draft 写工作稿工具", () => {
     expect(onDisk).toContain("林远");
     // overview 供前端刷新
     expect(out.overview).toBeTruthy();
+    expect(out.summary).toContain("满意后可以让我做定稿预览");
+  });
+
+  it("作者要写完就出定稿预览：回执说预览接着出，不再叫作者「让我做定稿预览」（2026-10-28 真机：模型照着说「也出了定稿预览」）", async () => {
+    const projectDir = await makeProject("出稿", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "第 1 章：主角初入局。",
+      writerClient: mockWriterClient(longBody("林远")),
+      thenPreview: true,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.summary).toContain("定稿预览接着出，看过再点「确认定稿」。");
+    expect(out.summary).not.toContain("满意后可以让我做定稿预览");
   });
 
   // Codex 复测额外发现：首稿把「第三块砖→第三层杂志架」「债权池A-17→数字串」。mustHitBeats 注入硬约束 +

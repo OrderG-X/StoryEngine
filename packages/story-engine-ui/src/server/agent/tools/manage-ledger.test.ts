@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyLedgerDecisions } from "../ledger-decisions.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
+import type { BrainCallModel } from "../../editorial/index.js";
 import { confirmLabel, runManageLedger } from "./manage-ledger.js";
 
 let book: string;
@@ -85,14 +86,13 @@ describe("manage_ledger：只提草案", () => {
     expect(JSON.stringify(await projectBook(book))).toBe(before);
   });
 
-  it("查不准如实说：对上多条列候选、对不上说没找到、清理碎片说不需要、缺参数问清楚", async () => {
+  it("查不准如实说：对上多条列候选、对不上说没找到、缺参数问清楚", async () => {
     await commitTwo();
     const ambiguous = await runManageLedger(book, { op: "remove", targetText: "铜钥匙" });
     expect(ambiguous).toMatchObject({ ok: false, blockedReason: "ambiguous" });
     expect(ambiguous.summary).toContain("「铜钥匙在她包里」");
     expect(ambiguous.summary).toContain("「铜钥匙锁在铜盒里」");
     expect(await runManageLedger(book, { op: "remove", targetText: "外乡人" })).toMatchObject({ blockedReason: "not_found" });
-    expect(await runManageLedger(book, { op: "clean" })).toMatchObject({ ok: false, blockedReason: "not_needed" });
     expect(await runManageLedger(book, { op: "group" })).toMatchObject({ blockedReason: "missing_target" });
     expect(await runManageLedger(book, { op: "group", groups: [["钟为什么停"]] })).toMatchObject({ blockedReason: "too_few" });
     expect(await runManageLedger(book, { op: "add", text: "x", chapter: 5 })).toMatchObject({ blockedReason: "unknown_chapter" });
@@ -141,5 +141,66 @@ describe("manage_ledger：只提草案", () => {
     expect(await runManageLedger(book, { op: "summary", chapter: 9, text: "x" })).toMatchObject({ ok: false, blockedReason: "unknown_chapter" });
     expect(await runManageLedger(book, { op: "summary", chapter: 1 })).toMatchObject({ ok: false, blockedReason: "missing_text" });
     expect(await runManageLedger(book, { op: "summary", chapter: 1, text: "她在钟楼里找到了铜钥匙。" })).toMatchObject({ ok: false, blockedReason: "unchanged" });
+  });
+});
+
+describe("manage_ledger review：理一遍线索（外部审查 2026-10-28：线索只开不收）", () => {
+  /** 跟读写笔记的调用回「笔记」；理线索那次按 review 回；点句子那次按 evidence 回。 */
+  function fakeKeeper(review: unknown, evidence: unknown): BrainCallModel & { readonly asked: string[] } {
+    const asked: string[] = [];
+    const call: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const ask = messages.at(-1)!.content;
+      asked.push(ask);
+      return JSON.stringify(ask.includes("每句前面是编号") ? evidence : review);
+    };
+    return Object.assign(call, { asked });
+  }
+
+  it("判收了的按编号取原句、出「确认改账」；作者点了才记、记在说的那章；给作者的话里没有编号", async () => {
+    await commitTwo();
+    const before = JSON.stringify(await projectBook(book));
+    const keeper = fakeKeeper(
+      { threads: [{ id: "T1", status: "open", reason: "还没说钟为什么停" }, { id: "T2", status: "closed", chapter: 2, reason: "门锁上了" }] },
+      { evidence: [{ id: "T2", ids: [1] }] },
+    );
+    const plan = await runManageLedger(book, { op: "review" }, { callModel: keeper });
+    expect(keeper.asked[0]).toContain("T2 悬念「钟楼的门为什么开着」");
+    expect(plan).toMatchObject({ ok: false, needsConfirmation: true });
+    expect(plan.ledgerConfirm?.lines).toEqual(["「钟楼的门为什么开着」第 2 章已收：「第二天，钟楼的门锁上了。」"]);
+    expect(plan.summary).toContain("1 条看着已经收了，1 条还开着");
+    expect(plan.summary).not.toMatch(/T\d|thread-|c\d-\d/u);
+    expect(JSON.stringify(await projectBook(book))).toBe(before);
+    const applied = await applyLedgerDecisions(book, { key: plan.ledgerConfirm?.key ?? "", decisions: plan.ledgerConfirm?.decisions ?? [] });
+    expect(applied).toMatchObject({ ok: true, applied: 1 });
+    expect((await projectBook(book)).threads.find((thread) => thread.title === "钟楼的门为什么开着")).toMatchObject({ status: "closed", closedAt: 2, closedBy: "author" });
+  });
+
+  it("点不出原句、说的章不对、拿不准的都不列，如实说；一条都没有就不出按钮", async () => {
+    await commitTwo();
+    const plan = await runManageLedger(book, { op: "review" }, {
+      callModel: fakeKeeper(
+        { threads: [{ id: "T1", status: "closed", chapter: 9, reason: "x" }, { id: "T2", status: "closed", chapter: 2, reason: "门锁上了" }] },
+        { evidence: [{ id: "T2", ids: [40] }] },
+      ),
+    });
+    expect(plan).toMatchObject({ ok: false, blockedReason: "nothing_to_close" });
+    expect(plan.ledgerConfirm).toBeUndefined();
+    expect(plan.summary).toContain("「钟为什么停」记账员说第 9 章收了");
+    expect(plan.summary).toContain("「钟楼的门为什么开着」记账员说第 2 章收了，但第 2 章里点不出写明收口的句子，没列。");
+    const unsure = await runManageLedger(book, { op: "review" }, { callModel: fakeKeeper({ threads: [{ id: "T1", status: "maybe" }] }, { evidence: [] }) });
+    expect(unsure.summary).toContain("拿不准的 2 条：「钟为什么停」「钟楼的门为什么开着」");
+    const failing: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      if (messages.at(-1)!.content.includes("每句前面是编号")) throw new Error("idle timeout");
+      return JSON.stringify({ threads: [{ id: "T2", status: "closed", chapter: 2, reason: "门锁上了" }] });
+    };
+    const evidenceFailed = await runManageLedger(book, { op: "review" }, { callModel: failing });
+    expect(evidenceFailed).toMatchObject({ blockedReason: "nothing_to_close" });
+    expect(evidenceFailed.summary).toContain("点收口原句那步没成");
+    expect(evidenceFailed.summary).toContain("有一步没跑成：第 2 章点收口原句没成：idle timeout");
+    const broken = await runManageLedger(book, { op: "review" }, { callModel: fakeKeeper("不是 JSON", {}) });
+    expect(broken).toMatchObject({ ok: false, blockedReason: "review_failed" });
+    expect(broken.summary).toContain("线索没理成");
   });
 });

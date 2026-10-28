@@ -28,7 +28,7 @@ import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
 export const MAX_DECISIONS_PER_CHANGE = 20;
 
 export interface LedgerChangeRequest {
-  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "clean" | "group" | "importance" | "day" | "summary";
+  readonly op: "add" | "update" | "remove" | "supersede" | "resolve" | "group" | "importance" | "day" | "summary";
   readonly id?: string;
   readonly chapter?: number;
   readonly text?: string;
@@ -91,19 +91,13 @@ function fail(code: string, reason: string): LedgerPlanOutcome {
   return { ok: false, code, reason };
 }
 
-function proposal(decisions: DecisionInput[], lines: string[]): LedgerPlanOutcome {
+export function proposal(decisions: DecisionInput[], lines: string[]): LedgerPlanOutcome & { readonly ok: true } {
   const key = `ledger:${sha256(JSON.stringify(decisions)).slice(0, 12)}:${Date.now().toString(36)}`;
   return { ok: true, key, decisions, lines };
 }
 
 /** 把一次改账请求翻成裁定草案。不写盘（老书没接上新核心时会先导入，导入前存撤销点）。 */
 export async function planLedgerChange(projectDir: string, request: LedgerChangeRequest): Promise<LedgerPlanOutcome> {
-  if (request.op === "clean") {
-    return fail(
-      "not_needed",
-      "新账本只记带原句的线索，不再有要清的碎片；讲同一件事的几条线索可以归并（说出要并的几条，第一条留下）。",
-    );
-  }
   const onCore = await ensureBookOnCore(projectDir, { snapshot: coreSnapshotFor(projectDir) });
   if (!onCore.ok) return fail("not_on_core", `这本书的账还没接到新格式上：${onCore.reason}`);
   const view = await projectBook(projectDir);

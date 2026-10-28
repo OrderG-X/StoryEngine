@@ -2,7 +2,7 @@
  * ChatCapabilityBar —— 聊天区（右栏·唯一控制面）输入框上方的「能力快捷条」。
  *
  * 治「这么多能力用户不知道能用」：写作流程那几个工具已由 ChapterToolRail 按阶段列出；这里补上
- * **散的、非阶段性的资料/整理能力**（补全人物/故事设定/地点/物品/写作规则、整理关系/清理线索/合并伏笔）——
+ * **散的、非阶段性的资料/整理能力**（补全人物/故事设定/地点/物品/写作规则、整理关系/理线索/合并伏笔）——
  * 它们此前只散落在各资料面板按钮里、用户在聊天时看不见。高频几个常驻露脸，点「⋯ 更多」展开全部。
  *
  * 点一下：带 `button` 的是固定动作，直接发结构化动作（onChapterButton，重构 P4）；其余给 AI 发一句用户面中文（onSendMessage）。
@@ -63,7 +63,7 @@ export const CAPABILITY_GROUPS: readonly { readonly title: string; readonly acti
     title: "整理",
     actions: [
       { key: "rel", label: "整理人物关系", intent: "按正文里写过的，把人物之间的关系记进设定本" },
-      { key: "clean", label: "清理废弃线索", intent: "把线索里没用的僵尸碎片清理一下" },
+      { key: "tidy", label: "理一遍线索", intent: "把开着的线索理一遍，看看哪些其实已经收了" },
       { key: "merge", label: "归并线索", intent: "把讲同一件事的重复线索归并成一条" },
     ],
   },
@@ -95,7 +95,7 @@ export function contextActionsForView(view: "desk" | "library" | "history", cat:
     items: ["asset"],
     places: ["loc"],
     uncarded: ["uncard"],
-    hooks: ["clean", "merge"],
+    hooks: ["tidy", "merge"],
   };
   const keys = keysByCat[cat];
   if (!keys) return null;
