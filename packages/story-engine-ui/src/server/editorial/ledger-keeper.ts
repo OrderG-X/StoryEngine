@@ -11,11 +11,11 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterTextPath, checkEntries, quoteFromText, quoteInText, readCards, type BookProjection, type EntryInput } from "@actalk/story-core";
+import { chapterTextPath, checkEntries, numberedText, quoteFromText, quoteInText, readCards, splitUnits, type BookProjection, type EntryInput, type TextUnit } from "@actalk/story-core";
 import { positiveIntLike } from "../lib/lenient-args.js";
 import { withStep } from "../lib/token-meter.js";
 import { buildKeeperContext, type ReopenableThread } from "./keeper-context.js";
-import { extractJsonObject, parseKeeperOutput, quoteText, type KeeperParseResult } from "./keeper-parse.js";
+import { extractJsonObject, parseKeeperOutput, type KeeperParseResult } from "./keeper-parse.js";
 import { readerWaitingHandlers, type ReaderWaited } from "./reader-progress.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 
@@ -292,10 +292,10 @@ function dayChangeToRepair(parsed: KeeperParseResult, draft: string): number | u
 export const QUOTE_REPAIR_MAX = 12;
 
 /**
- * 原句补摘：用和定稿同一个核对（checkEntries）找出原句对不上的条目，在同一段对话里请记账员只为这几条从正文里重摘一句。
- * 说本章中间换了天却没摘出换天原句的，也在这次一并补摘（多数是漏写了 dayChangeQuote，判断本身没错）。
- * 重摘的原句也得核得上才换上去；补摘调用失败、交回来读不了，都照第一遍的交（最后由定稿清单如实列出没记上的）。
- * 模型无关：任何模型都会偶尔把「他」写成名字、跨过「某某说」拼对话——这里不放宽核对，只给一次改正的机会。
+ * 原句补摘：用和定稿同一个核对（checkEntries）找出原句对不上的条目，在同一段对话里请记账员只为这几条点出正文里的句子编号，
+ * 代码按编号取回原句（外部审查 2026-10-28：再让它抄一遍还是会抄错——第 28 章出场「老板娘」、两条线索重摘了照样对不上）。
+ * 说本章中间换了天却没摘出换天原句的，也在这次一并补点（多数是漏写了 dayChangeQuote，判断本身没错）。
+ * 取回的原句照样过同一个核对；补摘调用失败、交回来读不了，都照第一遍的交（最后由定稿清单如实列出没记上的）。
  */
 async function repairQuotes(
   parsed: KeeperParseResult,
@@ -306,27 +306,31 @@ async function repairQuotes(
   const dayChange = dayChangeToRepair(parsed, input.draft);
   const asked = broken.length + (dayChange ? 1 : 0);
   if (asked === 0) return { parsed };
+  const units = splitUnits(input.draft);
   let reply: string;
   try {
-    const ask = buildQuoteRepairTask(broken.map((item) => item.entry), dayChange ? { days: dayChange, ...(parsed.dayChangeQuote ? { wrote: parsed.dayChangeQuote } : {}) } : undefined);
+    const ask = buildQuoteRepairTask(broken.map((item) => item.entry), numberedText(units), dayChange ? { days: dayChange, ...(parsed.dayChangeQuote ? { wrote: parsed.dayChangeQuote } : {}) } : undefined);
     reply = await withStep("记账员补摘原句", () => input.callModel([...conversation, { role: "user", content: ask }], { json: true }));
   } catch (error) {
     return { parsed, repair: { asked, fixed: 0, failed: oneLine(error) } };
   }
   input.onRawOutput?.(reply);
-  const quotes = parseQuoteRepairs(reply);
-  if (!quotes) return { parsed, repair: { asked, fixed: 0, failed: "补摘交回来的不是 JSON" } };
+  const picks = parseQuoteRepairs(reply);
+  if (!picks) return { parsed, repair: { asked, fixed: 0, failed: "补摘交回来的不是 JSON" } };
+  const quoteOf = (n: number): string | undefined => quoteOfUnits(input.draft, units, picks.get(n) ?? []);
   const entries = [...parsed.entries];
   let fixed = 0;
   broken.forEach((item, position) => {
-    const quote = quotes.get(position + 1);
+    const quote = quoteOf(position + 1);
     if (!quote) return;
+    // 出场人物的那句里得有正文对他的叫法，不然记不成这个人在场。
+    if (item.entry.kind === "presence" && !quote.includes(item.entry.nameUsed)) return;
     const candidate = { ...item.entry, quote } as EntryInput;
     if (checkEntries([candidate], input.draft, input.before).rejected.some((rejected) => rejected.reason === "quote_not_in_text")) return;
     entries[item.index] = candidate;
     fixed += 1;
   });
-  const dayQuote = dayChange ? quotes.get(broken.length + 1) : undefined;
+  const dayQuote = dayChange ? quoteOf(broken.length + 1) : undefined;
   const dayFixed = dayQuote !== undefined && quoteInText(dayQuote, input.draft);
   if (dayFixed) fixed += 1;
   return {
@@ -351,8 +355,11 @@ function repairLabel(entry: EntryInput): string {
   }
 }
 
-/** dayChange：说本章中间过了几天、却没摘出核得上的换天原句（排在最后一条）。 */
-export function buildQuoteRepairTask(entries: readonly EntryInput[], dayChange?: { readonly days: number; readonly wrote?: string }): string {
+/** 补点时一条最多点几句（要挨着）。 */
+export const QUOTE_REPAIR_UNITS = 2;
+
+/** dayChange：说本章中间过了几天、却没摘出核得上的换天原句（排在最后一条）。numbered：本章正文的编号句子。 */
+export function buildQuoteRepairTask(entries: readonly EntryInput[], numbered: string, dayChange?: { readonly days: number; readonly wrote?: string }): string {
   const lines = entries.map((entry, index) => `${index + 1}. ${repairLabel(entry)}\n   你写的：${"quote" in entry && entry.quote ? entry.quote : "（没写）"}`);
   if (dayChange) {
     lines.push(`${entries.length + 1}. 本章中间换天的那句（你说本章从开头到结尾过了 ${dayChange.days} 天）\n   你写的：${dayChange.wrote ?? "（没写）"}`);
@@ -360,21 +367,42 @@ export function buildQuoteRepairTask(entries: readonly EntryInput[], dayChange?:
   return [
     "你刚交的账单里，下面几条附的 quote 在本章正文里逐字找不到（或没写）：",
     ...lines,
-    "请为每条从本章正文里重新摘一句原句：照抄连续的一段，至少 4 个字；「他」「她」照正文抄，不换成名字；不换人称；不跨过「某某说」拼接（要跨就在中间写……）。",
-    `正文里实在没有能说明它的句子，就给空串，那条不记${dayChange ? "（换天那条给空串，就按整章同一天记）" : ""}。`,
-    '只交 JSON：{"quotes":[{"n":1,"quote":"…"}]}',
+    "",
+    "下面是本章正文，每句前面是编号。请为每条点出正文里能说明它的那一句的编号，不用再抄原句，代码按编号取原文。" +
+      `一句说不全可以点挨着的 ${QUOTE_REPAIR_UNITS} 句；出场人物点的那句里要有括号里那几个字。`,
+    `正文里实在没有能说明它的句子，ids 给 []，那条不记${dayChange ? "（换天那条给 []，就按整章同一天记）" : ""}。`,
+    "",
+    "【本章正文】",
+    numbered,
+    "",
+    '只交 JSON：{"quotes":[{"n":1,"ids":[12]}]}',
   ].join("\n");
 }
 
-function parseQuoteRepairs(text: string): Map<number, string> | undefined {
+/** 每条点的编号（去重、排好）；不是 JSON 就 undefined。 */
+function parseQuoteRepairs(text: string): Map<number, number[]> | undefined {
   const list = extractJsonObject(text)?.quotes;
   if (!Array.isArray(list)) return undefined;
-  const quotes = new Map<number, string>();
+  const picks = new Map<number, number[]>();
   for (const item of list) {
-    const record = item as { n?: unknown; quote?: unknown } | null;
+    const record = item as { n?: unknown; ids?: unknown } | null;
     const n = positiveIntLike(record?.n);
-    const quote = quoteText(record?.quote);
-    if (n !== undefined && quote) quotes.set(n, quote);
+    const ids = Array.isArray(record?.ids) ? record.ids.map(positiveIntLike).filter((id): id is number => id !== undefined) : [];
+    if (n !== undefined && ids.length > 0) picks.set(n, [...new Set(ids)].sort((a, b) => a - b));
   }
-  return quotes;
+  return picks;
+}
+
+/** 按编号取回原句：头一句，后面紧挨着的再带上（最多 QUOTE_REPAIR_UNITS 句）；编号不在本章就没有。 */
+export function quoteOfUnits(draft: string, units: readonly TextUnit[], ids: readonly number[]): string | undefined {
+  const byId = new Map(units.map((unit) => [unit.id, unit] as const));
+  const first = byId.get(ids[0] ?? 0);
+  if (!first) return undefined;
+  let last = first;
+  for (const id of ids.slice(1, QUOTE_REPAIR_UNITS)) {
+    const unit = byId.get(id);
+    if (!unit || unit.id !== last.id + 1 || unit.line !== last.line) break;
+    last = unit;
+  }
+  return draft.slice(first.start, last.end);
 }
