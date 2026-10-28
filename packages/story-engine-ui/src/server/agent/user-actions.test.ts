@@ -664,6 +664,21 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(tools).toEqual(["check_continuity", "commit_preview"]);
   });
 
+  it("写手把「第 N 章 · 」写进了章名：回话书名号里只放章名", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await finishDraftTurn({
+      action: { toolName: "generate_draft", chapter: 29 },
+      output: { ok: true, draftTitle: "第29章 · 手印", draftBody: "正文", draftLength: { actualLength: 1859, lengthStatus: "within_range" } },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({ ok: true }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 29 章写好了《手印》，1859 字。");
+  });
+
   it("作者要的要点可能没写到 → 回话照说，下一步先给「补上这几条」", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await finishDraftTurn({

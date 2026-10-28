@@ -9,7 +9,7 @@ import type { RequestContext } from "@mastra/core/di";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
+import { extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
 import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
@@ -983,7 +983,9 @@ interface GenerateDraftLikeOutput {
  * 回话只说写好了、多少字、差多少（十章会话里这句约 400 字）。没载入稿纸这种要作者知道的照说。
  */
 export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): string {
-  const title = typeof result.draftTitle === "string" && result.draftTitle.trim() ? `《${result.draftTitle.trim()}》` : "";
+  // 写手有时把「第 N 章 · 」也写进章名：前面已经说了第几章，书名号里只放章名。
+  const bare = typeof result.draftTitle === "string" ? extractDraftTitle(`# ${result.draftTitle.trim()}`) : null;
+  const title = bare ? `《${bare}》` : "";
   const actual = typeof result.draftLength?.actualLength === "number" ? result.draftLength.actualLength : undefined;
   const lower = typeof result.draftLength?.lowerBound === "number" ? result.draftLength.lowerBound : undefined;
   const short = result.draftLength?.lengthStatus === "below_lower_bound" && actual !== undefined && lower !== undefined
