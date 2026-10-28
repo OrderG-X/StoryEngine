@@ -410,6 +410,31 @@ describe("streamChatModelToText 「光想不写」上限（maxThinkingMs）", ()
     spy.mockRestore();
   });
 
+  it("在限流闸里排队的时间不算「光想不写」（2026-10-28：一章核账 13 遍并发，排着队的几遍被当成思考超时掐掉）", async () => {
+    const holds: (() => void)[] = [];
+    const encoder = new TextEncoder();
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if (!String(init?.body).includes("占位")) return pacedStream(init?.signal, 2, 3);
+      // 占住许可：一直不出字，放行时一口气收尾。
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          holds.push(() => {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "占" } }] })}\n\ndata: [DONE]\n\n`));
+            controller.close();
+          });
+        },
+      }), { status: 200 });
+    });
+    const held = Array.from({ length: 8 }, () => streamChatModelToText({ configured, messages: [{ role: "user", content: "占位" }] }));
+    await vi.waitFor(() => expect(holds).toHaveLength(8));
+    const queued = streamChatModelToText({ configured, messages: [{ role: "user", content: "排队" }], maxThinkingMs: 120 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (const release of holds) release();
+    expect((await queued).content).toBe("写".repeat(3));
+    await Promise.all(held);
+    spy.mockRestore();
+  });
+
   it("上限内开始出正文 → 之后写多久都不掐（不是总时长上限）", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => pacedStream(init?.signal, 2, 20));
     const out = await streamChatModelToText({ configured, messages: [], maxThinkingMs: 120 });

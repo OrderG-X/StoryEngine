@@ -65,7 +65,7 @@ function readerModel(confidence = "sure", verdict = confidence) {
 const notesCount = async (dir: string) => (await readdir(join(dir, "agents", "checker", "notes")).catch(() => [] as string[])).filter((name) => name.endsWith(".json")).length;
 
 describe("核账服务（核账员一路）", () => {
-  it("核一章：先补前文笔记，再三遍核账（每遍两次）加一轮自复核，问题带把握进结果", async () => {
+  it("核一章：先补前文笔记，再三遍核账（每遍四次）加一轮自复核，问题带把握进结果", async () => {
     const dir = await makeBook();
     const reader = readerModel();
     const result = await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel });
@@ -76,7 +76,7 @@ describe("核账服务（核账员一路）", () => {
     // 结论那句不带逐条清单（重构 P6：清单在核账卡和稿纸划线上）。
     expect(result.headline).toContain("确定对不上 1 处");
     expect(result.headline).not.toContain(AUNT.quote);
-    expect(reader.calls).toEqual({ notes: 2, checks: 6, reviews: 1 });
+    expect(reader.calls).toEqual({ notes: 2, checks: 12, reviews: 1 });
     expect(await notesCount(dir)).toBe(2);
   });
 
@@ -293,10 +293,10 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
     const dir = await makeBook();
     const model = recordingModel();
     await checkChapterBody(dir, 3, BODY, { readerCallModel: model.callModel });
-    expect(model.asked.full).toBe(6);
+    expect(model.asked.full).toBe(12);
     await appendFixLog(dir, 3, [{ from: FROM, to: TO }]);
     const after = await checkChapterBody(dir, 3, FIXED, { readerCallModel: model.callModel });
-    expect(model.asked.full).toBe(6);
+    expect(model.asked.full).toBe(12);
     expect(model.asked.focused).toHaveLength(2);
     expect(model.asked.focused[0]).toContain(`改前：${FROM}\n   改后：${TO}`);
     expect(model.asked.reviews).toEqual([1]);
@@ -315,7 +315,7 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
       afterFix: [{ from: FROM, to: TO }, { from: "周婶在门口喊他。", to: "" }],
     });
     expect(after.rechecked).toEqual({ changed: 2 });
-    expect(model.asked.full).toBe(6);
+    expect(model.asked.full).toBe(12);
     expect(model.asked.focused[0]).toContain("改后：（删掉了）");
     expect(model.asked.reviews).toEqual([1, 1]);
     expect(after.sure.map((item) => item.quote)).toEqual([TO]);
@@ -328,13 +328,13 @@ describe("核账服务：改后只核改过的句子（外部审查 2026-10-28�
     await appendFixLog(dir, 3, [{ from: FROM, to: TO }]);
     const edited = await checkChapterBody(dir, 3, `${FIXED}林舟低头擦着柜台。`, { readerCallModel: model.callModel });
     expect(edited.rechecked).toBeUndefined();
-    expect(model.asked.full).toBe(12);
+    expect(model.asked.full).toBe(24);
     const stale = await checkChapterBody(dir, 3, BODY.replace("周婶", "林溪"), { readerCallModel: model.callModel, afterFix: [{ from: "不在稿里的句子。", to: "林溪在门口喊他。" }] });
     expect(stale.rechecked).toBeUndefined();
-    expect(model.asked.full).toBe(18);
+    expect(model.asked.full).toBe(36);
     const fresh = await checkChapterBody(dir, 3, BODY.replace("周婶", "林溪"), { readerCallModel: model.callModel, fresh: true });
     expect(fresh.rechecked).toBeUndefined();
-    expect(model.asked.full).toBe(24);
+    expect(model.asked.full).toBe(48);
     expect(model.asked.focused).toEqual([]);
   });
 

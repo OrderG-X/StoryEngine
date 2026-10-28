@@ -878,11 +878,16 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
   let thinkingTooLong = false;
   let contentChars = 0;
   let runaway = false;
-  const thinkingTimer = input.maxThinkingMs
-    ? setTimeout(() => { thinkingTooLong = true; idle.controller.abort(); }, input.maxThinkingMs)
-    : undefined;
-  (thinkingTimer as unknown as { unref?: () => void } | undefined)?.unref?.();
+  // 「光想不写」从请求真发出去算：在限流闸里排队、429 退避的时间不算（2026-10-28：一章核账 13 遍并发、闸只放几个，
+  // 排着队的几遍被当成「思考超过 180 秒」掐掉）。每次真发（含退避后重发）重新起算。
+  let thinkingTimer: ReturnType<typeof setTimeout> | undefined;
   const stopThinkingTimer = () => { if (thinkingTimer) clearTimeout(thinkingTimer); };
+  const startThinkingTimer = () => {
+    if (!input.maxThinkingMs) return;
+    stopThinkingTimer();
+    thinkingTimer = setTimeout(() => { thinkingTooLong = true; idle.controller.abort(); }, input.maxThinkingMs);
+    (thinkingTimer as unknown as { unref?: () => void }).unref?.();
+  };
   let gotBytes = false; // 是否收过任何字节——区分「从头零响应」与「流到一半断流」，错误文案才诚实（治审查 #5）
   try {
     const baseUrl = input.configured.provider.baseUrl.replace(/\/+$/u, "");
@@ -919,7 +924,7 @@ async function streamChatModelOnce(input: StreamChatInput): Promise<StreamChatRe
         headers,
         body: JSON.stringify(requestBody),
         signal: idle.controller.signal,
-      }, { onWait: idle.kick });
+      }, { onWait: idle.kick, onSend: startThinkingTimer });
     let response = await postChat(body);
     if (!response.ok && response.status === 400) {
       const firstErrorText = await response.clone().text().catch(() => "");

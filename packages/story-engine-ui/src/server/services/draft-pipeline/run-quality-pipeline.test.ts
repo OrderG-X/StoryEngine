@@ -102,7 +102,7 @@ describe("runDraftQualityPipeline", () => {
     expect(memory.issues).toHaveLength(0);
     // 改完只核改过的那句（外部审查 2026-10-28）：整章三遍只跑了改前那一回，改后那回问的是改过的句子。
     const asked = checkCallModel.mock.calls.map(([messages]) => messages.at(-1)!.content);
-    expect(asked.filter((content) => content.includes("这一遍只盯东西"))).toHaveLength(2);
+    expect(asked.filter((content) => content.includes("这一遍只盯东西"))).toHaveLength(4);
     const focused = asked.filter((content) => content.includes("刚按核账改了下面几句"));
     expect(focused).toHaveLength(2);
     expect(focused[0]).toContain("改前：菜场还在，门口摆着几摊卖豆腐的。\n   改后：菜场早没了，门口摆着几摊卖豆腐的。");

@@ -102,6 +102,24 @@ describe("provider-gate", () => {
     expect(await r2.text()).toBe("b");
   });
 
+  it("onSend 在请求真发出去前调，排队时不调；429 退避后重发再调一次", async () => {
+    const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 1, maxLimit: 1 });
+    const first = streamingResponse(["a"]);
+    const r1 = await gate.fetch(URL_A, undefined, { baseFetch: async () => first.response });
+    const sends: string[] = [];
+    const statuses = [429, 200];
+    const p2 = gate.fetch(URL_A, undefined, {
+      onSend: () => sends.push("send"),
+      baseFetch: async () => new Response("b", { status: statuses.shift() }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sends).toEqual([]);
+    first.finish();
+    await r1.text();
+    expect(await (await p2).text()).toBe("b");
+    expect(sends).toEqual(["send", "send"]);
+  });
+
   it("不同服务商各走各的闸", async () => {
     const gate = createProviderGate({ sleep: noSleep, log: quiet, initialLimit: 1, maxLimit: 1 });
     const held = streamingResponse(["x"]);

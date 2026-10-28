@@ -692,8 +692,8 @@ describe("F 时间线表只进自复核（R2.1）", () => {
     for (const { messages } of [...byKind().passes, ...byKind().review]) expect(messages.at(-1)!.content).not.toContain("【故事时间线");
   });
 
-  it("产品默认组合：A 自复核 + 时间线只进自复核（R2.1）+ 每遍核两次（2026-10-24 重考）", () => {
-    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true, passRepeats: 2 });
+  it("产品默认组合：A 自复核 + 时间线只进自复核（R2.1）+ 每遍核四次、改后只核改过的核两次（2026-10-28 改后重核考卷）", () => {
+    expect(DEFAULT_READER_VARIANT).toEqual({ selfReview: true, timelineInReview: true, passRepeats: 4, recheckRepeats: 2 });
   });
 });
 
