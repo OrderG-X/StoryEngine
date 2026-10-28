@@ -14,7 +14,7 @@ export interface WorkingDraft {
 /** 等作者选的一份（写作版本 P1b）：上次没存上的字（恢复稿），或 AI 写好、没换上的（候选）。 */
 export type PendingDraft =
   | { readonly kind: "recovery"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string }
-  | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: "draft_moved" | "basis_moved" | "interrupted" };
+  | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: "draft_moved" | "basis_moved" | "apply_failed" | "interrupted" };
 
 export interface ChapterPaper {
   readonly chapter: number;
@@ -30,6 +30,9 @@ export interface SaveWorkingDraftRequest {
   readonly body: string;
   readonly title?: string;
   readonly baseVersion: string | null;
+  /** 稿纸窗口号 + 这个窗口第几笔：撞版本时服务端按它存恢复稿（一个窗口一份，迟到的旧笔不覆盖新字）。 */
+  readonly client?: string;
+  readonly seq?: number;
 }
 
 export type SaveWorkingDraftResult =
@@ -92,6 +95,8 @@ export async function decidePendingDraft(input: {
   readonly pending: Pick<PendingDraft, "kind" | "id" | "sha">;
   readonly decision: "adopt" | "dismiss";
   readonly baseVersion: string | null;
+  /** 不要本窗口自己的恢复稿时带上（不用 sha，序号挡住还在路上的旧笔）。 */
+  readonly from?: { readonly client: string; readonly seq: number };
 }): Promise<PendingDecisionResult> {
   try {
     const response = await fetch(`${BASE}/pending`, {
@@ -105,6 +110,7 @@ export async function decidePendingDraft(input: {
         sha: input.pending.sha,
         decision: input.decision,
         baseVersion: input.baseVersion,
+        ...(input.from ? { client: input.from.client, seq: input.from.seq } : {}),
       }),
     });
     const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };

@@ -4,17 +4,41 @@
  * 只有一条规矩：存稿带 baseVersion，盘上对不上就不存（服务端回 409，交回盘上那份，稿纸出提示）。
  * 有了它，撤销、AI 改稿、别的窗口改过之后，旧字永远盖不回去，不用再冻结、排空、整页刷新。
  *
- * - 停笔 600ms 存一次；同一时刻只发一笔，发的时候又改了就等这笔回来再发。
+ * - 停笔 600ms 存一次；同一时刻只发一笔，发的时候又改了就等这笔回来再发。没存上（网断了、服务端写不进去）过一会儿再试。
  * - 什么时候都存（写作版本 P1b）：AI 回合里也存。AI 写完时稿子已经被作者改过，AI 那版换不上、留成候选，稿纸出提示让作者选。
- * - 撞了版本也接着存：服务端把作者手上那份存进恢复稿（不进工作稿），进程死了也找得回。同一份字被拒过就不再重发。
- * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉。
+ * - 撞了版本也接着存：服务端把作者手上那份存进恢复稿（不进工作稿），进程死了也找得回。每笔带这个窗口的号和第几笔，
+ *   服务端一个窗口每章留一份、迟到的旧笔不覆盖新字。回执里有恢复稿号才算存下了；没有就当没存上，接着试。
+ *   同一份字被拒过（已在恢复稿里）就不再重发。
+ * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉；存不上就不换（openPaper 抛 UnsavedPaperError）。
  */
 import { decidePendingDraft, fetchChapterPaper, saveWorkingDraft } from "../api/workingDraftClient.js";
 import { isDraftDirty, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
 
 export const DRAFT_SAVE_DELAY_MS = 600;
+/** 没存上，过这么久再试一次。 */
+export const DRAFT_RETRY_MS = 5000;
 
 export type DraftFlushResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+/** 换章前手上的字没存上：不换（字还在稿纸上）。 */
+export class UnsavedPaperError extends Error {
+  constructor(readonly reason: string) {
+    super(`你手上这一章的字还没存上（${reason}），先没换章。`);
+    this.name = "UnsavedPaperError";
+  }
+}
+
+function newClientId(): string {
+  const random = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  return random.toLowerCase().replace(/[^0-9a-z]/gu, "").slice(0, 24).padEnd(12, "0");
+}
+
+/** 这个稿纸窗口的号（开页面时给一个）和存了第几笔。 */
+let clientId = newClientId();
+let seq = 0;
+const nextSender = (): { readonly client: string; readonly seq: number } => ({ client: clientId, seq: (seq += 1) });
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight: Promise<DraftFlushResult> | null = null;
@@ -68,6 +92,7 @@ async function sendOnce(): Promise<DraftFlushResult> {
       body: sent.body,
       ...(sent.title.trim() ? { title: sent.title.trim() } : {}),
       baseVersion: sent.baseVersion,
+      ...nextSender(),
     });
     const live = useDraftStore.getState();
     if (live.projectPath !== sent.projectPath || live.chapter !== sent.chapter) return { ok: true };
@@ -76,7 +101,14 @@ async function sendOnce(): Promise<DraftFlushResult> {
       live.markSaved(result.version, sent.body, sent.title);
       return { ok: true };
     }
-    // 撞了版本：作者这份服务端已存成恢复稿（存成了才有号），稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
+    // 撞了版本：作者这份服务端存成了恢复稿才有号，稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
+    // 没有号 = 没另外存下来：当没存上，字还在稿纸上，过一会儿再试。
+    if (!result.recoveryId) {
+      const message = "别处刚改过这一章，你这段也没能另存下来。字还在稿纸上，稍后自动再试。";
+      live.markConflict(result.current);
+      live.markSaveError(message);
+      return { ok: false, error: message };
+    }
     rejected = sent;
     live.markConflict(result.current, result.recoveryId);
     return { ok: true };
@@ -99,13 +131,17 @@ export async function saveDraftNow(): Promise<DraftFlushResult> {
   } finally {
     inFlight = null;
   }
-  if (!result.ok) return result;
+  if (!result.ok) {
+    // 没存上：字还在稿纸上，过一会儿再试（这期间作者再打字也会重新排）。
+    if (timer === null) scheduleDraftSave(DRAFT_RETRY_MS);
+    return result;
+  }
   // 发出去之后作者又打了字：接着存。
   if (needsSave(useDraftStore.getState())) return saveDraftNow();
   return result;
 }
 
-/** 换章、撤销、关窗前：把没存的字存掉，等它落盘（撞了版本的那份在恢复稿里，也算存下了）。 */
+/** 换章、撤销、关窗前：把没存的字存掉，等它落盘（撞了版本的那份在恢复稿里，也算存下了；没存上如实返回）。 */
 export async function flushDraftSave(): Promise<DraftFlushResult> {
   return saveDraftNow();
 }
@@ -121,13 +157,17 @@ export function saveDraftKeepalive(): void {
     body: state.body,
     ...(state.title.trim() ? { title: state.title.trim() } : {}),
     baseVersion: state.baseVersion,
+    ...nextSender(),
   }, { keepalive: true }).catch(() => undefined);
 }
 
-/** 打开一章：先存掉手上那章，再从盘上读这一章整份换上。 */
+/** 打开一章：先存掉手上那章（存不上就不换，抛 UnsavedPaperError），再从盘上读这一章整份换上。 */
 export async function openPaper(projectPath: string, chapter: number): Promise<void> {
   const state = useDraftStore.getState();
-  if (state.loaded && (state.projectPath !== projectPath || state.chapter !== chapter)) await flushDraftSave();
+  if (state.loaded && (state.projectPath !== projectPath || state.chapter !== chapter)) {
+    const flushed = await flushDraftSave();
+    if (!flushed.ok) throw new UnsavedPaperError(flushed.error);
+  }
   const paper = await fetchChapterPaper(projectPath, chapter);
   useDraftStore.getState().loadPaper(projectPath, paper);
 }
@@ -163,7 +203,8 @@ export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
     const chapter = state.chapter;
     state.acceptIncoming();
     if (!incoming.recoveryId) return { ok: true };
-    const dropped = await decidePendingDraft({ projectPath, chapter, pending: { kind: "recovery", id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null });
+    // 本窗口自己的那份：带上窗口号和已发到第几笔，还在路上的旧笔到了也不再把它写回来。
+    const dropped = await decidePendingDraft({ projectPath, chapter, pending: { kind: "recovery", id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null, from: { client: clientId, seq } });
     return dropped.ok ? { ok: true } : { ok: false, error: `换好了，但没存上的那份没删掉（下次开这一章还会提示）：${dropped.error}` };
   }
   const pending = incoming.pending;
@@ -211,4 +252,6 @@ export function __resetDraftSyncForTests(): void {
   clearTimer();
   inFlight = null;
   rejected = null;
+  clientId = newClientId();
+  seq = 0;
 }

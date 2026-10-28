@@ -8,8 +8,9 @@
  *  4. 清单改成 applied，删掉事务目录。
  * 中途断电或进程被杀：下次写之前 `recoverTransactions` 把 prepared 的事务回滚（已换上的文件换回备份、
  * 新建的删掉），applied 的只清目录。调用方把版本号文件放在最后一个写，读的一方据此判断有没有读到一半。
- * 写入代次（REVISION_PATH）例外：换上了就不退回。调用方把它放在第一个写，书里有过任何可见的写入，代次就已经是新的——
- * 回滚把内容换回原样，代次也不会回到原样，读到过中间那版的依据一律对不上（写作版本 P1a 第 2 轮复核）。
+ * 写入代次（REVISION_PATH）例外：换上了就不退回，回滚把内容全换回原样之后再换一个新的（写作版本 P1b 第 3 轮复核）。
+ * 调用方把它放在第一个写：事务途中读到的依据带的是途中的代次，回滚后的书又是另一个代次，照途中读到的材料算的东西一律对不上
+ * （只留着途中那个代次不够：途中开工读到新代次 + 一半新内容，回滚后代次没变、内容回到原样，开工依据又对上了）。
  *
  * 安全边界：书目录本身是软链时按真实路径算；目标文件或它的任何一级上级目录是软链，一律拒绝（不跟着链写到书外）。
  * 清单坏了的事务不知道换到哪一步，原样留着、写命令拒绝开工；作者确认后由 setAsideBrokenTransactions
@@ -19,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { withBookLock } from "./lock.js";
+import { revisionWrite } from "./control.js";
 import { assertInsideBook, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
@@ -126,13 +128,17 @@ async function copyDurable(from: string, to: string): Promise<void> {
   await writeDurable(to, await readFile(from, "utf-8"));
 }
 
-/** 把一份 prepared 的事务退回去：已换上的文件换回备份，事务新建的文件删掉。 */
+/** 把一份 prepared 的事务退回去：已换上的文件换回备份，事务新建的文件删掉；换过代次的，最后再换一个新代次。 */
 async function rollback(bookDir: string, txDir: string, manifest: Manifest): Promise<void> {
+  let revisionSwapped = false;
   for (const file of manifest.files) {
     // 新文件还在暂存区 = 这个文件还没换上，书里是旧样子，不用动。
     if (await exists(join(txDir, "staged", file.slot))) continue;
-    // 代次换上了就留着（见文件头）。
-    if (file.path === REVISION_PATH) continue;
+    // 代次换上了不退回，等内容都换回去再换新的（见文件头）。
+    if (file.path === REVISION_PATH) {
+      revisionSwapped = true;
+      continue;
+    }
     const path = assertInsideBook(file.path);
     await assertPlainDirs(bookDir, dirname(path));
     const target = join(bookDir, path);
@@ -143,6 +149,13 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest): Pro
     // 备份已经不在 = 上次回滚到一半时已经换回去了。
     const backup = join(txDir, "backup", file.slot);
     if (await exists(backup)) await rename(backup, target);
+  }
+  if (revisionSwapped) {
+    const fresh = revisionWrite(new Date());
+    await assertPlainDirs(bookDir, dirname(fresh.path));
+    const temporary = join(txDir, "revision.json.tmp");
+    await writeDurable(temporary, fresh.content);
+    await rename(temporary, join(bookDir, fresh.path));
   }
 }
 

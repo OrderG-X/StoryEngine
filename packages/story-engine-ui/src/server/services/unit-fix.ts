@@ -6,13 +6,11 @@
  * 不再让模型抄原句、再拿抄来的字回稿里找，也就没有补整句、接缝去重那一套。
  * 一章要改几处只问一次模型；改不成的照实说为什么，正文不动。
  */
-import { readFile } from "node:fs/promises";
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, draftVersionOf, numberedText, prepareUnitReplacement, readTruthBasis, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, numberedText, prepareUnitReplacement, readDraftFile, readTruthBasis, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
-import { defaultDraftPath } from "../lib/project-io.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
 
 export interface UnitFix {
@@ -228,8 +226,9 @@ export async function fixDraftByUnits(input: {
   const { projectDir, chapter } = input;
   return oneAiWriterPerChapter(projectDir, chapter, async () => {
     const basis = await readTruthBasis(projectDir);
-    const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
-    if (text === undefined || !text.trim()) {
+    const file = await readDraftFile(projectDir, chapter).catch(() => undefined);
+    const text = file?.text;
+    if (file === undefined || text === undefined || !text.trim()) {
       return { text: text ?? "", applied: [], failed: input.fixes.map((_, fix) => ({ fix, why: "这一章没有工作稿了" })), changes: [], alsoChanged: 0 };
     }
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
@@ -237,7 +236,7 @@ export async function fixDraftByUnits(input: {
     const written = await applyAiDraft(projectDir, {
       chapter,
       body: outcome.text,
-      baseVersion: draftVersionOf(text),
+      baseVersion: file.version,
       basis,
       source: "unit-fix",
       snapshotLabel: `第${chapter}章按核账改前快照`,

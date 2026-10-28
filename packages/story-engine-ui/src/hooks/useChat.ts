@@ -36,7 +36,7 @@ import {
 import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
-import { editDraft, flushDraftSave, openPaper, refreshPaper } from "../drafts/draftSync.js";
+import { editDraft, flushDraftSave, openPaper, refreshPaper, UnsavedPaperError } from "../drafts/draftSync.js";
 import { saveChatNow } from "../sync/chatSync.js";
 import { flushAllSaves } from "../sync/saveAll.js";
 import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
@@ -394,7 +394,12 @@ export function useChat(params: UseChatParams): UseChatResult {
                   // AI 写的是另一章：稿纸换到那一章（先存掉手上那章）。
                   const switchProject = projectPath;
                   paperSwitch = openPaper(switchProject, chapter)
-                    .catch(() => {
+                    .catch((error: unknown) => {
+                      // 手上那章的字没存上：稿纸不换（字还在这一章上），如实说一声。
+                      if (error instanceof UnsavedPaperError) {
+                        useNavigationStore.getState().showToast(`AI 在写第 ${chapter} 章；${error.message}`, 6000);
+                        return;
+                      }
                       useDraftStore.getState().loadPaper(switchProject, { chapter, draft: null, committed: null, editedSinceCommit: null });
                     })
                     .then(() => { if (ownsCurrentWorkspace()) showStreaming(); });

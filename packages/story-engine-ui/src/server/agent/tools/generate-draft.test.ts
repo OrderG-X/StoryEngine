@@ -6,7 +6,8 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cardWrite, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, draftSave, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { pendingDraftFor } from "../../lib/draft-candidates.js";
 import { runDraftQualityPipeline } from "../../services/draft-pipeline/run-quality-pipeline.js";
 import type { BrainCallModel } from "../../editorial/index.js";
 import { createStoryProject } from "../../book/project-store.js";
@@ -683,10 +684,57 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     }
   });
 
+  it("接着往下写：接的那半章和底版一起读（写作版本 P1b 第 3 轮复核 B9）——写手接好前作者存的新句也接上；写的途中作者又存了 → 不换上、留候选", async () => {
+    const projectDir = await makeProject("接着写别丢字", "林远");
+    const old = "林远推开门，屋里没人。";
+    const added = "钥匙其实已经丢了。";
+    const authorSave = async (body: string) => {
+      const disk = await readDraft(projectDir, 1);
+      expect(await runCommand(projectDir, draftSave, { chapter: 1, body, baseVersion: disk?.version ?? null }, { caller: "author" })).toMatchObject({ ok: true });
+    };
+    await authorSave(old);
+    const writerClientModule = await import("../../writing/writer-client.js");
+    let writerSaw = "";
+    let saveDuringWriting: string | undefined;
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockImplementation(async () => {
+      // 工具已经查过没定稿；写手接好之前作者存了一句。
+      await authorSave(`${old}\n\n${added}`);
+      return {
+        async generateDraft({ context }) {
+          writerSaw = JSON.stringify(context.sections.find((section) => section.name === "already_written")?.content ?? null);
+          if (saveDuringWriting) await authorSave(saveDuringWriting);
+          return { title: "第1章", content: longBody("林远") };
+        },
+      };
+    });
+    try {
+      const run = () => execute(
+        { continueDraft: true, chapter: 1, autoDeAi: false },
+        { requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["接着写"]) } as unknown as ToolExecutionContext,
+      ) as Promise<{ ok: boolean; kept?: { reason: string } }>;
+      const first = await run();
+      expect(first.ok).toBe(true);
+      expect(writerSaw).toContain(added);
+      expect((await readDraft(projectDir, 1))?.body).toContain(added);
+
+      const authorNow = `${(await readDraft(projectDir, 1))!.body}\n\n作者写的途中又补的一段。`;
+      saveDuringWriting = authorNow;
+      const second = await run();
+      expect(second).toMatchObject({ ok: false, kept: { reason: "draft_moved" } });
+      expect((await readDraft(projectDir, 1))?.body).toBe(authorNow);
+      expect(await pendingDraftFor(projectDir, 1)).toMatchObject({ kind: "candidate", reason: "draft_moved" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("接着往下写：这章还没正文 → nothing_to_continue；已定稿 → chapter_committed；都不调模型", async () => {
     const projectDir = await makeProject("没得接", "林远");
     const writerClientModule = await import("../../writing/writer-client.js");
-    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockWriterClient(longBody("林远")));
+    // 有没有正文和版本号一起读（写作版本 P1b 第 3 轮复核），读的时候写手可能已经接好了；要看的是一个字都没让它写。
+    const writer = mockWriterClient(longBody("林远"));
+    const generate = vi.spyOn(writer, "generateDraft");
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(writer);
     try {
       const empty = await execute(
         { continueDraft: true, chapter: 1 },
@@ -704,7 +752,7 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
       ) as { ok: boolean; blockedReason?: string; summary: string };
       expect(committed).toMatchObject({ ok: false, blockedReason: "chapter_committed" });
       expect(committed.summary).toContain("已经定稿");
-      expect(spy).not.toHaveBeenCalled();
+      expect(generate).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }

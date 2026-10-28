@@ -309,19 +309,36 @@ export async function applyDraftRevision(
   readonly draftContent: string;
   readonly overview: StateOverview;
 }> {
-  const payload = await fetchJson<DraftRevisionApplyApiResponse>(
-    "/api/draft/revision/apply",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...input, confirm: true }),
-    },
-    signal,
-  );
+  let payload: DraftRevisionApplyApiResponse;
+  try {
+    payload = await fetchJson<DraftRevisionApplyApiResponse>(
+      "/api/draft/revision/apply",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...input, confirm: true }),
+      },
+      signal,
+    );
+  } catch (error) {
+    if (error instanceof FetchJsonError) {
+      const refused = error.payload as { code?: unknown; error?: unknown } | null;
+      if (typeof refused?.code === "string") throw new DraftRevisionRefused(refused.code, typeof refused.error === "string" ? refused.error : error.message);
+    }
+    throw error;
+  }
   if (!payload.ok) {
     throw new Error(payload.error);
   }
   return { result: payload.result, draftContent: payload.draftContent, overview: payload.overview };
+}
+
+/** 应用修订被服务端如实拒了，带原因代码：draft_kept = AI 这版没换上、留成候选；preview_stale = 方案过期，要重新生成。 */
+export class DraftRevisionRefused extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "DraftRevisionRefused";
+  }
 }
 
 export interface DeAiFlavorBatchChange {

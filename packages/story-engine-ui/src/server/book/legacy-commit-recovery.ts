@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, realpathSync } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { revisionWrite } from "@actalk/story-core";
+import { draftChapterOfPath, freshDraftGensWrite, revisionWrite } from "@actalk/story-core";
 import { describeErrorBriefly } from "./project-store.js";
 
 export interface CommitTransactionManifest {
@@ -462,11 +462,14 @@ async function recoverCommitTransactionResidue(
   const rollbackIssues = await restoreCommitTransactionBackups(projectDir, txDir, manifest.backups);
   // 正文换回了原样：写入代次换一个新的，读到过中途那版的预览、缓存一律对不上（写作版本 P1a 第 2 轮复核）。
   // 这里在老引擎的提交锁里，不再去拿书锁（两把锁交叉会互等），直接原子写代次文件。
+  // 换回来的里有工作稿：工作稿代次也换新纪元（P1b 第 3 轮复核），照中途那版发的存稿对不上。
   if (manifest.backups.length > 0) {
-    const revision = revisionWrite(new Date());
-    const revisionPath = join(projectDir, revision.path);
-    await ensureSafeDirectory(projectDir, dirname(revisionPath), true, "revision parent");
-    await writeTextNoFollow(projectDir, revisionPath, revision.content, "revision");
+    const touchedDraft = manifest.backups.some((backup) => draftChapterOfPath(backup.relativePath) !== undefined);
+    for (const write of [revisionWrite(new Date()), ...(touchedDraft ? [freshDraftGensWrite()] : [])]) {
+      const path = join(projectDir, write.path);
+      await ensureSafeDirectory(projectDir, dirname(path), true, "store-control parent");
+      await writeTextNoFollow(projectDir, path, write.content, "store-control");
+    }
   }
   if (rollbackIssues.length > 0) {
     // P1-6 治永久锁死：回滚不完整时不再永久抛错阻塞后续提交。无法判定的新建文件

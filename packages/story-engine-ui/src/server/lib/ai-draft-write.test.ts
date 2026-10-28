@@ -71,15 +71,22 @@ describe("applyAiDraft", () => {
     expect((await readDraft(book, 1))?.body).toBe("作者原来的稿。");
   });
 
-  it("开写时存的那份候选：换上了删掉，这一章更早没换上的也清掉", async () => {
+  it("开写时存的那份候选：换上了只删这一份；作者还没处理的别的候选都留着（写作版本 P1b 第 3 轮复核）", async () => {
     const begun = await start();
     const older = await saveDraftCandidate(book, { chapter: 1, body: "更早没换上的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "ready", reason: "draft_moved" });
     const writing = await saveDraftCandidate(book, { chapter: 1, body: "在写的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "writing" });
     const other = await saveDraftCandidate(book, { chapter: 2, body: "别的章的。", baseVersion: null, basisDigest: begun.basis.digest, source: "draft", status: "ready", reason: "draft_moved" });
     expect(await applyAiDraft(book, { chapter: 1, body: "写完的。", ...begun, source: "draft", candidateId: writing.id })).toMatchObject({ applied: true });
     expect(await readDraftCandidate(book, writing.id)).toBeUndefined();
-    expect(await readDraftCandidate(book, older.id)).toBeUndefined();
+    expect(await readDraftCandidate(book, older.id)).toMatchObject({ body: "更早没换上的。" });
     expect(await readDraftCandidate(book, other.id)).toBeDefined();
+    expect(await pendingDraftFor(book, 1)).toMatchObject({ kind: "candidate", id: older.id });
+  });
+
+  it("没给开写时的候选：换上前也先存一份，换上了删掉，候选目录里不多东西", async () => {
+    const begun = await start();
+    expect(await applyAiDraft(book, { chapter: 1, body: "一笔小改。", ...begun, source: "unit-fix" })).toMatchObject({ applied: true });
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
   });
 
   it("没换上时用的就是开写时存的那份候选（同一个号，状态改成等作者选）", async () => {

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommand } from "../commands/runner.js";
 import type { CommandFailure, CommandOutcome, CommandSuccess } from "../commands/types.js";
 import { readHead } from "../store/book.js";
+import { DRAFT_GENS_PATH } from "../store/paths.js";
+import { bumpRevision } from "../store/revision.js";
 import { draftAdoptCandidate, draftApplyGenerated, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./commands.js";
 import { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody } from "./draft.js";
 
@@ -52,7 +54,7 @@ describe("作者存稿（draft.save）", () => {
     const outcome = expectOk(await runCommand(book, draftSave, { chapter: 1, title: "钟停", body: "钟停了。", baseVersion: null }, { ...author, snapshot: async () => { snapshots += 1; } }));
     const text = await readFile(draftFile(1), "utf-8");
     expect(text).toBe("# 钟停\n\n钟停了。\n");
-    expect(outcome.result).toEqual({ chapter: 1, version: draftVersionOf(text), unchanged: false });
+    expect(outcome.result).toMatchObject({ chapter: 1, unchanged: false });
     expect(outcome.changed).toEqual({ drafts: [1] });
     expect(snapshots).toBe(0);
     expect((await readDraft(book, 1))?.version).toBe(outcome.result.version);
@@ -73,12 +75,48 @@ describe("作者存稿（draft.save）", () => {
     expect(details.current?.body).toBe("外面写的。");
   });
 
-  it("撤销把文件换回去：版本号跟着变回去，拿撤销前的版本号存会撞", async () => {
-    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "第一版。", baseVersion: null }, author)).result.version;
-    const v2 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "第二版。", baseVersion: v1 }, author)).result.version;
-    await writeFile(draftFile(1), "第一版。\n", "utf-8");
-    expect((await readDraft(book, 1))?.version).toBe(v1);
-    expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "第三版。", baseVersion: v2 }, author));
+  it("撤销把文件换回原样：版本号不回到原来那个，照撤销前发的旧存稿撞版本（不把撤销的结果盖回去）", async () => {
+    const vR = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "原稿。", baseVersion: null }, author)).result.version;
+    const vA = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "作者的。", baseVersion: vR }, author)).result.version;
+    const vB = expectOk(await runCommand(book, draftApplyGenerated, { chapter: 1, body: "AI 的。", baseVersion: vA }, ai)).result.version;
+    // 撤销：存档点把文件换回原样（store-control 不进存档点），再换代次。
+    await writeFile(draftFile(1), "原稿。\n", "utf-8");
+    await bumpRevision(book);
+    const now = (await readDraft(book, 1))!.version;
+    expect([vR, vA, vB]).not.toContain(now);
+    // 撤销前那笔「作者的。@原稿」迟到重发：撞版本，撤销的结果不动。
+    expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "作者的。", baseVersion: vR }, author));
+    expect(await readFile(draftFile(1), "utf-8")).toBe("原稿。\n");
+    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "接着写。", baseVersion: now }, author));
+  });
+
+  it("不经撤销，作者把稿改回原样：旧版本号也对不上（每写一次换一个代次号）", async () => {
+    const vR = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "原稿。", baseVersion: null }, author)).result.version;
+    const vA = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "改了。", baseVersion: vR }, author)).result.version;
+    const back = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "原稿。", baseVersion: vA }, author)).result.version;
+    expect(back).not.toBe(vR);
+    expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "改了。", baseVersion: vR }, author));
+  });
+
+  it("老书（还没有工作稿代次）：版本号就是全文的哈希，升级前打开的稿纸照样能存", async () => {
+    await mkdir(join(book, "drafts", "fast"), { recursive: true });
+    await writeFile(draftFile(4), "老稿。\n", "utf-8");
+    const legacy = (await readDraft(book, 4))!.version;
+    expect(legacy).toBe(draftVersionOf("老稿。\n", { epoch: "" }));
+    // 别的章先写过（代次文件建起来了），这一章还是老版本号。
+    expectOk(await runCommand(book, draftSave, { chapter: 5, body: "别章。", baseVersion: null }, author));
+    expect((await readDraft(book, 4))!.version).toBe(legacy);
+    expectOk(await runCommand(book, draftSave, { chapter: 4, body: "新写。", baseVersion: legacy }, author));
+  });
+
+  it("工作稿代次文件坏了：版本号谁都对不上（撞版本），下一次写换成好的", async () => {
+    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "一。", baseVersion: null }, author)).result.version;
+    await writeFile(join(book, DRAFT_GENS_PATH), "{坏了", "utf-8");
+    const now = (await readDraft(book, 1))!.version;
+    expect(now).not.toBe(v1);
+    expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "二。", baseVersion: v1 }, author));
+    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "二。", baseVersion: now }, author));
+    expect(JSON.parse(await readFile(join(book, DRAFT_GENS_PATH), "utf-8"))).toMatchObject({ schema: "draft-gens/1" });
   });
 
   it("不传章名时留着盘上原来的章名", async () => {
@@ -118,7 +156,7 @@ describe("AI 写稿换上（draft.applyGenerated）", () => {
     const labels: string[] = [];
     const outcome = expectOk(await runCommand(book, draftApplyGenerated, { chapter: 3, title: "外乡人", body: "外乡人来了。", baseVersion: null }, { ...ai, snapshot: async (label) => { labels.push(label); } }));
     expect(labels).toEqual(["AI 写稿：第 3 章"]);
-    expect(outcome.result.version).toBe(draftVersionOf(await readFile(draftFile(3), "utf-8")));
+    expect(outcome.result.version).toBe((await readDraft(book, 3))?.version);
   });
 
   it("基稿版本必带：缺了参数不过", async () => {

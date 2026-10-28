@@ -149,9 +149,10 @@ export {
   type BookSnapshot,
 } from "./store/book.js";
 export { bumpRevision, revisionWrite } from "./store/revision.js";
+export { draftStampOf, freshDraftGensWrite, readDraftGens, type DraftGens, type DraftStamp } from "./store/control.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
-export { CARDS_PATH, chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
+export { CARDS_PATH, chapterLedgerPath, chapterTextPath, DRAFT_GENS_PATH, draftChapterOfPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
 export {
   hasPendingTransactions,
   KEPT_REPORT_THRESHOLD,
@@ -218,7 +219,7 @@ export {
   type SerialPart,
   type SerialSplit,
 } from "./text/serial-split.js";
-export { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
+export { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, readDraftFile, readDraftStamp, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
 export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";

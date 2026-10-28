@@ -320,8 +320,8 @@ describe("draft length guard routes", () => {
     const draftFile = join(projectDir, "drafts", "fast", "chapter-0001.md");
     await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
     await writeFile(draftFile, "# 第1章\n\n作者的稿。\n", "utf-8");
-    const { draftVersionOf } = await import("@actalk/story-core");
-    const version = draftVersionOf(await readFile(draftFile, "utf-8"));
+    const { readDraft } = await import("@actalk/story-core");
+    const version = (await readDraft(projectDir, 1))!.version;
 
     const stale = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, draftContent: "另写的一版。", baseVersion: "旧的" });
     expect(stale.statusCode).toBe(409);

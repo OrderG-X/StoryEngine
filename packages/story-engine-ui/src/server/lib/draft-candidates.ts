@@ -1,17 +1,20 @@
 /**
  * 换不上的稿先留着，由作者在稿纸上选（写作版本 P1b）：
- * - AI 稿候选 `agents/drafts/candidates/<id>.json`（draft-candidate/1）：AI 写好、没换上工作稿的一份
- *   （写的途中作者改过稿 / 撤销过，或前文、设定改过）。出稿流程开写就存一份「在写」，写到一半停了（进程没了、流程抛错）也找得回；
- *   换上了就删。「在写」的那份只要还有人在写就不提示（本进程里登记着，见 releaseDraftCandidate）。
- * - 恢复稿 `agents/drafts/recovery/<id>.json`（draft-recovery/1）：作者存稿撞了版本时手上那份。
- *   同一章、同一底版只留最新的一份（撞版本后接着打字，一直存到这一份里）。
+ * - AI 稿候选 `agents/drafts/candidates/<id>.json`（draft-candidate/1）：AI 写好的一份，换上工作稿之前就先存下
+ *   （applyAiDraft 先存「在写」再换；出稿流程开写就存一份「在写」、每步更新）。换上了就删这一份；没换上（写的途中作者改过稿 /
+ *   撤销过，前文、设定改过，写盘出错）、写到一半停了（进程没了、流程抛错）都留着。「在写」的那份只要还有人在写就不提示
+ *   （本进程里登记着，见 releaseDraftCandidate）。别的流程换上了新稿，也不清作者还没处理的这些。
+ * - 恢复稿 `agents/drafts/recovery/r<章>-<窗口号>.json`（draft-recovery/1）：作者存稿撞了版本时手上那份。
+ *   一个稿纸窗口每章一份（窗口号前端开页面时随机给），存的是这个窗口最新的字；带请求序号，比盘上这份旧的请求不写（迟到的旧字盖不回新字）。
+ *   存上了、作者说不要了、找回了，就把正文清空、留着序号（再迟到的旧请求照样不写）。
+ * 写都在书锁里（和存稿、找回、换上同一把锁）：查过的那份到换上为止不会被别人改。
  * 都在 `agents/` 下，不进存档点（撤销不会把它们翻没）；作者没处理的不自动清。
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { composeDraftFile, parseDraftFile, readDraft, sha256 } from "@actalk/story-core";
+import { composeDraftFile, parseDraftFile, readDraft, sha256, withBookLock } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
 
 /** 本进程里正在写的候选：标着「在写」却不在这里的，就是写到一半停了（进程没了、流程抛错）。 */
@@ -22,8 +25,8 @@ const ID = /^[0-9a-z-]{8,80}$/u;
 export const DraftCandidateSource = z.enum(["draft", "continue", "de-ai", "unit-fix", "revise", "revision"]);
 export type DraftCandidateSource = z.infer<typeof DraftCandidateSource>;
 
-/** 为什么没换上：写的途中工作稿变了 / 前文或设定变了 / 写到一半进程没了。 */
-export const DraftKeptReason = z.enum(["draft_moved", "basis_moved", "interrupted"]);
+/** 为什么没换上：写的途中工作稿变了 / 前文或设定变了 / 换的时候写盘出错 / 写到一半进程没了。 */
+export const DraftKeptReason = z.enum(["draft_moved", "basis_moved", "apply_failed", "interrupted"]);
 export type DraftKeptReason = z.infer<typeof DraftKeptReason>;
 
 const DraftCandidateFile = z.object({
@@ -42,14 +45,22 @@ const DraftCandidateFile = z.object({
 });
 export type DraftCandidate = z.infer<typeof DraftCandidateFile>;
 
+/** 稿纸窗口号（前端开页面时随机给）。 */
+const CLIENT = /^[0-9a-z]{8,40}$/u;
+
 const DraftRecoveryFile = z.object({
   schema: z.literal("draft-recovery/1"),
   id: z.string().regex(ID),
   chapter: z.number().int().min(1),
   title: z.string().optional(),
+  /** 空 = 已经存上 / 不要了 / 找回了（留着序号挡迟到的旧请求）。 */
   body: z.string(),
   /** 作者是在哪一版上改的（撞版本时手上的底版）。 */
   baseVersion: z.string().nullable(),
+  /** 哪个稿纸窗口的。 */
+  client: z.string().regex(CLIENT),
+  /** 这个窗口第几笔存稿：只认比盘上大的。 */
+  seq: z.number().int().min(0),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -122,7 +133,8 @@ export async function saveDraftCandidate(projectDir: string, input: {
   };
   if (input.status === "writing") writingNow.add(id);
   else writingNow.delete(id);
-  await writeEntry(projectDir, candidatesDir(projectDir), id, candidate);
+  // 书锁里写：作者点「换成 AI 这版」查过的那份，到换上为止不会被改。
+  await withBookLock(projectDir, () => writeEntry(projectDir, candidatesDir(projectDir), id, candidate));
   return candidate;
 }
 
@@ -143,16 +155,7 @@ export async function readDraftCandidate(projectDir: string, id: string): Promis
 
 export async function removeDraftCandidate(projectDir: string, id: string): Promise<void> {
   writingNow.delete(id);
-  await removeEntry(candidatesDir(projectDir), id);
-}
-
-/** AI 的新一版换上了：这一章更早的候选都是照更早的稿写的，一起清掉。 */
-export async function clearDraftCandidates(projectDir: string, chapter: number): Promise<void> {
-  for (const candidate of await readEntries(candidatesDir(projectDir), DraftCandidateFile)) {
-    if (candidate.chapter === chapter && !writingNow.has(candidate.id)) {
-      await removeEntry(candidatesDir(projectDir), candidate.id);
-    }
-  }
+  await withBookLock(projectDir, () => removeEntry(candidatesDir(projectDir), id));
 }
 
 /** 这一章等作者选的那份（没换上的，或写到一半停了的）；正在写的不算。 */
@@ -165,27 +168,53 @@ export async function pendingDraftCandidate(projectDir: string, chapter: number)
 
 /* --------------------------------- 恢复稿 -------------------------------- */
 
-/** 存稿撞了版本：把作者手上那份留下。同一章同一底版只留一份（接着打的字存进同一份）。 */
+/** 一个稿纸窗口在一章上的那份恢复稿。 */
+export function recoveryIdOf(chapter: number, client: string): string {
+  return `r${chapter}-${client}`;
+}
+
+/** 窗口号和序号要么都对、要么都不认（不认的一笔单独存一份，不覆盖谁）。 */
+export function recoveryClientOf(client: unknown, seq: unknown): { readonly client: string; readonly seq: number } | undefined {
+  return typeof client === "string" && CLIENT.test(client) && typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 ? { client, seq } : undefined;
+}
+
+export interface RecoverySave {
+  readonly recovery: DraftRecovery;
+  /** 盘上这份比这笔请求新（迟到的旧请求）：没写。 */
+  readonly stale: boolean;
+}
+
+/**
+ * 存稿撞了版本：把作者手上那份留下。在书锁里：查序号和写是一下子的。
+ * 写不进去就抛（调用方如实告诉作者「没存上」，不能当存下了）。
+ */
 export async function saveDraftRecovery(projectDir: string, input: {
   readonly chapter: number;
   readonly title?: string;
   readonly body: string;
   readonly baseVersion: string | null;
-}): Promise<DraftRecovery> {
-  const id = `${input.chapter}-${(input.baseVersion ?? "new").slice(0, 24)}`;
-  const now = new Date().toISOString();
-  const previous = await readDraftRecovery(projectDir, id);
-  const recovery: DraftRecovery = {
-    schema: "draft-recovery/1",
-    id,
-    chapter: input.chapter,
-    ...splitTitle(input),
-    baseVersion: input.baseVersion,
-    createdAt: previous?.createdAt ?? now,
-    updatedAt: now,
-  };
-  await writeEntry(projectDir, recoveryDir(projectDir), id, recovery);
-  return recovery;
+  readonly from?: { readonly client: string; readonly seq: number };
+}): Promise<RecoverySave> {
+  return withBookLock(projectDir, async () => {
+    const from = input.from ?? { client: randomUUID().replace(/-/gu, "").slice(0, 24), seq: 0 };
+    const id = recoveryIdOf(input.chapter, from.client);
+    const previous = await readDraftRecovery(projectDir, id);
+    if (previous && previous.seq >= from.seq) return { recovery: previous, stale: true };
+    const now = new Date().toISOString();
+    const recovery: DraftRecovery = {
+      schema: "draft-recovery/1",
+      id,
+      chapter: input.chapter,
+      ...splitTitle(input),
+      baseVersion: input.baseVersion,
+      client: from.client,
+      seq: from.seq,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await writeEntry(projectDir, recoveryDir(projectDir), id, recovery);
+    return { recovery, stale: false };
+  });
 }
 
 export async function readDraftRecovery(projectDir: string, id: string): Promise<DraftRecovery | undefined> {
@@ -198,14 +227,42 @@ export async function readDraftRecovery(projectDir: string, id: string): Promise
   }
 }
 
-export async function removeDraftRecovery(projectDir: string, id: string): Promise<void> {
-  await removeEntry(recoveryDir(projectDir), id);
+/** 清空正文、留着序号（调用方在书锁里）。 */
+async function settleRecovery(projectDir: string, recovery: DraftRecovery, seq = recovery.seq): Promise<void> {
+  const { title: _title, ...rest } = recovery;
+  await writeEntry(projectDir, recoveryDir(projectDir), recovery.id, { ...rest, body: "", seq: Math.max(seq, recovery.seq), updatedAt: new Date().toISOString() });
 }
 
-/** 作者存上了：和存上的这份一样的恢复稿没用了。 */
-export async function clearSavedRecoveries(projectDir: string, chapter: number, savedBody: string): Promise<void> {
+/**
+ * 不要那一份了（调用方在书锁里）。是这个窗口自己的那份直接清；别的窗口留下的，要作者看到的就是这一份（sha）才清。
+ * 返回 false = 那一份在这期间变过了，没清。
+ */
+export async function dismissDraftRecovery(projectDir: string, recovery: DraftRecovery, check: { readonly sha?: string; readonly from?: { readonly client: string; readonly seq: number } }): Promise<boolean> {
+  const own = check.from?.client === recovery.client;
+  if (!own && check.sha !== sha256(recovery.body)) return false;
+  await settleRecovery(projectDir, recovery, own ? check.from!.seq : recovery.seq);
+  return true;
+}
+
+/** 找回了（调用方在书锁里、刚换上）。 */
+export async function consumeDraftRecovery(projectDir: string, recovery: DraftRecovery): Promise<void> {
+  await settleRecovery(projectDir, recovery);
+}
+
+/** 清空了的恢复稿留多久（挡迟到的旧请求；一个星期前发出的请求不会再到了）。 */
+const SETTLED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 作者存上了（调用方在书锁里）：这个窗口的那份清掉（留着这次的序号），别的窗口和存上的这份一样的也清。 */
+export async function clearSavedRecoveries(projectDir: string, chapter: number, savedBody: string, from?: { readonly client: string; readonly seq: number }): Promise<void> {
+  const now = Date.now();
   for (const recovery of await readEntries(recoveryDir(projectDir), DraftRecoveryFile)) {
-    if (recovery.chapter === chapter && recovery.body.trim() === savedBody.trim()) await removeEntry(recoveryDir(projectDir), recovery.id);
+    if (!recovery.body && now - Date.parse(recovery.updatedAt) > SETTLED_KEEP_MS) {
+      await removeEntry(recoveryDir(projectDir), recovery.id);
+      continue;
+    }
+    if (recovery.chapter !== chapter) continue;
+    if (from && recovery.client === from.client) await settleRecovery(projectDir, recovery, from.seq);
+    else if (recovery.body.trim() && recovery.body.trim() === savedBody.trim()) await settleRecovery(projectDir, recovery);
   }
 }
 

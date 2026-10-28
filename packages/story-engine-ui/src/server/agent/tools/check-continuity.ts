@@ -12,7 +12,7 @@ import { z } from "zod";
 import { coerceBoolean, coerceNumber } from "../../lib/lenient-args.js";
 import { readDraftContent } from "./read-draft.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../request-context.js";
-import { draftVersionOf } from "@actalk/story-core";
+import { draftVersionOf, readDraftStamp } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody, type ChapterCheckOptions } from "../../editorial/continuity/check-service.js";
 import { rereadBlocker } from "../../editorial/reread-state.js";
 
@@ -73,6 +73,8 @@ export async function runCheckContinuity(
   chapter: number,
   options: ChapterCheckOptions = {},
 ): Promise<CheckContinuityToolOutput> {
+  // 代次先读、正文后读（和核心 readDraftFile 同一个顺序）：正赶上写，算出的版本号谁都对不上，只会显示「核过后改过稿」。
+  const stamp = await readDraftStamp(projectDir, chapter);
   const draft = await readDraftContent({ projectDir, chapter });
   if (!draft.found || !draft.content.trim()) {
     return {
@@ -103,7 +105,7 @@ export async function runCheckContinuity(
     earlierOpen: [...result.earlierOpen],
     failures: [...result.failures],
     source: draft.source,
-    ...(draft.source === "draft" ? { checkedVersion: draftVersionOf(draft.content) } : {}),
+    ...(draft.source === "draft" ? { checkedVersion: draftVersionOf(draft.content, stamp) } : {}),
   };
 }
 

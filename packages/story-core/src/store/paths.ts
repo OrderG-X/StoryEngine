@@ -15,6 +15,11 @@ export const CARDS_PATH = "ledger/cards.json";
  * 不进存档点（撤销不能把它翻回去）：A→B→撤销回 A 之后，按 A 算的旧预览和现在的书摘要一样，靠它认出中间换过代。
  */
 export const REVISION_PATH = "store-control/revision.json";
+/**
+ * 工作稿代次（写作版本 P1b 第 3 轮复核）：每章工作稿每写一次换一个随机号，撤销 / 恢复整本换一个新纪元。
+ * 和写入代次一样不进存档点：撤销把稿子换回原样，版本号也不会回到原样（store/draft-gens.ts）。
+ */
+export const DRAFT_GENS_PATH = "store-control/drafts.json";
 export const TX_DIR = ".story-core-tx";
 /** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
 export const KEPT_TX_DIR = ".story-core-kept";
@@ -34,6 +39,14 @@ export const CHAPTER_LEDGER_DIR = "ledger/chapters";
 /** 工作稿（还没定稿的正文），沿用老书路径。 */
 export function draftPath(chapter: number): string {
   return `drafts/fast/chapter-${pad(chapter)}.md`;
+}
+
+/** 工作稿路径 → 章号；不是工作稿返回 undefined。 */
+export function draftChapterOfPath(path: string): number | undefined {
+  const match = /^drafts\/fast\/chapter-(\d{4,})\.md$/u.exec(path.split(sep).join("/"));
+  if (!match) return undefined;
+  const chapter = Number(match[1]);
+  return Number.isInteger(chapter) && chapter >= 1 ? chapter : undefined;
 }
 
 export function receiptPath(keyHash: string): string {

@@ -75,12 +75,13 @@ export type {
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
-import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
+import { defaultCommittedChapterPath } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, readPickedDirectionFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
 import { hasWorkingDraftText } from "../../lib/working-draft-text.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import {
+  NothingToContinueError,
   resolveCandidateTemperatures,
   runGenerateDraft,
   type GenerateDraftOutcome,
@@ -203,8 +204,8 @@ const outputSchema = z.object({
   snapshotId: z.string().optional().describe("换上工作稿前建的存档点 id（让这次出稿可撤销）。"),
   kept: z.object({
     candidateId: z.string(),
-    reason: z.enum(["draft_moved", "basis_moved"]),
-  }).optional().describe("写好了但没换上工作稿（ok=false）：写的途中作者改过这一章的稿（draft_moved）或前文、设定改过（basis_moved）。AI 这版留在稿纸上等作者选，如实转告 summary、别重写。"),
+    reason: z.enum(["draft_moved", "basis_moved", "apply_failed"]),
+  }).optional().describe("写好了但没换上工作稿（ok=false）：写的途中作者改过这一章的稿（draft_moved）、前文或设定改过（basis_moved），或换上时写盘没成功（apply_failed）。AI 这版留在稿纸上等作者选，如实转告 summary、别重写。"),
   contextBudget: z.object({
     droppedSections: z.array(z.string()),
     droppedDetails: z.array(z.object({ name: z.string(), reason: z.string(), coreImpact: z.boolean() })).optional(),
@@ -486,17 +487,10 @@ export const generateDraftTool = createTool({
         return buildRewriteAwaitingAuthorOutput(resolvedChapter, committedNow, overview, chapterGoal);
       }
     }
-    // 接着写：已定稿的章不接（要改先改稿再定稿）；没正文没得接。读的是工作稿（作者眼前那份）。
-    let continueText = "";
-    if (continuing) {
-      const blocked = await isChapterCommitted(projectDir, resolvedChapter)
-        ? "chapter_committed" as const
-        : !(await hasWorkingDraftText(projectDir, resolvedChapter)) ? "nothing_to_continue" as const : undefined;
-      if (blocked) {
-        const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
-        return buildContinueBlockedOutput(resolvedChapter, blocked, overview);
-      }
-      continueText = stripLeadingMarkdownChapterHeading(await readFile(defaultDraftPath(projectDir, resolvedChapter), "utf-8")).trim();
+    // 接着写：已定稿的章不接（要改先改稿再定稿）。要接的正文由出稿服务开工时和版本号一起读（没正文它如实挡下）。
+    if (continuing && await isChapterCommitted(projectDir, resolvedChapter)) {
+      const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+      return buildContinueBlockedOutput(resolvedChapter, "chapter_committed", overview);
     }
     // 作者在稿纸上方给这一章挑过走法：照它写（和「写这一章」按钮同一口径），作者在对话里另外说的接在后面。
     const direction = withPickedDirection(chapterGoal, readPickedDirectionFromContext(context, resolvedChapter));
@@ -532,8 +526,6 @@ export const generateDraftTool = createTool({
     // 改向下错开，见 resolveCandidateTemperatures），防 N 版同分布。采样不接 delta sink：
     // N 版正文逐字串进同一章编辑器会花屏，优胜稿落盘后由 refreshScope:"full" 一次性刷新。
     const candidateCount = !continuing && (input.candidates === 2 || input.candidates === 3) ? input.candidates : 1;
-    // 接着写：稿纸上先推已写的那段，再接着推新写的字（原文不会在稿纸上消失再出现）。
-    if (continuing && draftDeltaSink) draftDeltaSink({ chapter: resolvedChapter, text: `${continueText}\n\n`, base: true });
     let writerClient: WriterClient;
     let candidateWriterClients: readonly WriterClient[] | undefined;
     let candidateTemperatures: readonly number[] | undefined;
@@ -560,54 +552,62 @@ export const generateDraftTool = createTool({
     const deAiCallModel = autoDeAiEnabled ? await buildRepairDeAiCallModel() : undefined;
     // 共享编排在 services/draft-service.ts。本工具的显式策略（D1/D2）：annotate=一次成稿不拒绝、
     // 低于下限照写盘 + draftLength 透出 + summary ⚠ 标注；aiFlavorRecheck 开（回检/去味/beats 裁决全栈）。
-    const outcome = await runGenerateDraft({
-      projectDir,
-      chapter: resolvedChapter,
-      // 只出一版且在流式时：重写一段、接下一段前换掉稿纸上已流出的字（多候选不流式）。
-      ...(draftDeltaSink && candidateCount === 1
-        ? { onStreamReset: (visible: string) => draftDeltaSink({ chapter: resolvedChapter, text: visible, replace: true }) }
-        : {}),
-      ...(direction ? { chapterGoal: direction } : {}),
-      ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
-      ...(continuing
-        ? {
-          continueFrom: {
-            text: continueText,
-            ...(input.requestedDraftLength && input.requestedDraftLength > 0 ? { length: input.requestedDraftLength } : {}),
-            ...(direction ? { direction } : {}),
-          },
-        }
-        : {}),
-      ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
-      ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
-      ...(input.mustHitBeats !== undefined ? { mustHitBeats: input.mustHitBeats } : {}),
-      ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
-      ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
-      policies: { lengthPolicy: "annotate", aiFlavorRecheck: true },
-      snapshotLabel,
-      ...(input.thenPreview === true ? { thenPreview: true } : {}),
-      autoDeAi: autoDeAiEnabled,
-      ...(deAiCallModel ? { deAiCallModel } : {}),
-      candidates: candidateCount,
-      ...(candidateWriterClients ? { candidateWriterClients } : {}),
-      ...(candidateTemperatures ? { candidateTemperatures } : {}),
-      // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
-      // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
-      beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
-      // 阶段 2「先想后写」：出稿前编辑部拟章纲（章纲员 chapterSteering 槽 → 核账员审）。拟不成如实进 summary、照旧出稿。
-      plannerCallModel: callConfiguredPlannerModel,
-      // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（核账员，qualityCheck 槽）+ 按核账改（repair 槽）。
-      continueCallModel: callConfiguredContinueModel,
-      continuityCheckCallModel: callConfiguredBrainModel,
-      // 第八轮验收（旧核对，误报 35～57%）自动改了 32 句、18 句改出新毛病，那时停了自动改；2026-10-23 换成核账员的「确定」
-      // + 核账卡「改这处」同一条改稿路，考卷 9 份稿每千字确定错 2.10 → 0.69、人工抽 22 处 17 处干净，恢复改一轮再核。
-      continuityFixCallModel: callConfiguredFixModel,
-      // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
-      segmentByPlan: true,
-      writerClient,
-      // 出稿阶段推给稿纸（拟章纲要一两分钟、稿纸空着，作者得知道 AI 在干什么）。
-      ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write" | "check") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
-    });
+    let outcome: Awaited<ReturnType<typeof runGenerateDraft>>;
+    try {
+      outcome = await runGenerateDraft({
+        projectDir,
+        chapter: resolvedChapter,
+        // 只出一版且在流式时：重写一段、接下一段前换掉稿纸上已流出的字（多候选不流式）。
+        ...(draftDeltaSink && candidateCount === 1
+          ? { onStreamReset: (visible: string) => draftDeltaSink({ chapter: resolvedChapter, text: visible, replace: true }) }
+          : {}),
+        ...(direction ? { chapterGoal: direction } : {}),
+        ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
+        ...(continuing
+          ? {
+            continueFrom: {
+              ...(input.requestedDraftLength && input.requestedDraftLength > 0 ? { length: input.requestedDraftLength } : {}),
+              ...(direction ? { direction } : {}),
+            },
+            // 稿纸上先推已写的那段，再接着推新写的字（原文不会在稿纸上消失再出现）。
+            ...(draftDeltaSink ? { onContinueBase: (text: string) => draftDeltaSink({ chapter: resolvedChapter, text: `${text}\n\n`, base: true }) } : {}),
+          }
+          : {}),
+        ...(input.selectedCharacters !== undefined ? { selectedCharacters: input.selectedCharacters } : {}),
+        ...(input.selectedHookIds !== undefined ? { selectedHookIds: input.selectedHookIds } : {}),
+        ...(input.mustHitBeats !== undefined ? { mustHitBeats: input.mustHitBeats } : {}),
+        ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
+        ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
+        policies: { lengthPolicy: "annotate", aiFlavorRecheck: true },
+        snapshotLabel,
+        ...(input.thenPreview === true ? { thenPreview: true } : {}),
+        autoDeAi: autoDeAiEnabled,
+        ...(deAiCallModel ? { deAiCallModel } : {}),
+        candidates: candidateCount,
+        ...(candidateWriterClients ? { candidateWriterClients } : {}),
+        ...(candidateTemperatures ? { candidateTemperatures } : {}),
+        // 判漏 AI 复核（默认开，零判漏零调用）：triage 任务槽。惰性解析——只有真有判漏、复核真被调用时
+        // 才解析该槽；解析/调用失败在 adjudicateMissingBeats 里被接住 → 维持确定性结论 + unavailable 如实标注。
+        beatAdjudicationCallModel: buildTriageBeatAdjudicationCallModel(),
+        // 阶段 2「先想后写」：出稿前编辑部拟章纲（章纲员 chapterSteering 槽 → 核账员审）。拟不成如实进 summary、照旧出稿。
+        plannerCallModel: callConfiguredPlannerModel,
+        // 阶段 3：出稿后续写够字数（fastDraft 槽）+ 前后核对（核账员，qualityCheck 槽）+ 按核账改（repair 槽）。
+        continueCallModel: callConfiguredContinueModel,
+        continuityCheckCallModel: callConfiguredBrainModel,
+        // 第八轮验收（旧核对，误报 35～57%）自动改了 32 句、18 句改出新毛病，那时停了自动改；2026-10-23 换成核账员的「确定」
+        // + 核账卡「改这处」同一条改稿路，考卷 9 份稿每千字确定错 2.10 → 0.69、人工抽 22 处 17 处干净，恢复改一轮再核。
+        continuityFixCallModel: callConfiguredFixModel,
+        // 有章纲就按要点分前后两半写（字数在出稿时就够，少走事后续写）。
+        segmentByPlan: true,
+        writerClient,
+        // 出稿阶段推给稿纸（拟章纲要一两分钟、稿纸空着，作者得知道 AI 在干什么）。
+        ...(draftDeltaSink ? { onPhase: (phase: "plan" | "write" | "check") => draftDeltaSink({ chapter: resolvedChapter, text: "", phase }) } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof NothingToContinueError)) throw error;
+      const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
+      return buildContinueBlockedOutput(resolvedChapter, "nothing_to_continue", overview);
+    }
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;
     // 作者要写完就出定稿预览：只在稿写成了时带上，路由在这一轮结束时用盘上这版出预览（turn-flow）。

@@ -46,7 +46,8 @@ import { buildStateOverview } from "../book/state-overview.js";
 import { buildWritingContextPack } from "../writing/writing-context-pack.js";
 
 import { resolveConfiguredChatModel, streamChatModelToText } from "../lib/llm-client.js";
-import { draftVersionOf, readTruthBasis, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { readDraftFile, readTruthBasis, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
 import { applyAiDraft, oneAiWriterPerChapter, type AiDraftOutcome } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
@@ -138,8 +139,10 @@ export type RevisionFailureCode =
   | "drift_rejected"
   | "noop"
   | "target_unchanged"
-  /** 改好了，但写的途中稿子或前文变了，没换上：留成候选（detail 是给作者看的一句）。 */
-  | "draft_kept";
+  /** 改好了，但写的途中稿子或前文变了、写盘出错，没换上：留成候选（detail 是给作者看的一句）。 */
+  | "draft_kept"
+  /** 两步改稿的预览没带生成时的依据（旧预览、服务重启后记录不在了）：不认。 */
+  | "preview_stale";
 
 export interface RevisionFailure {
   readonly ok: false;
@@ -424,14 +427,15 @@ async function persistRevisionUpdate(input: {
   readonly projectDir: string;
   readonly chapter: number;
   readonly updatedContent: string;
-  readonly readContent: string;
+  /** 读稿时那一版（和读到的正文一起读的）。 */
+  readonly baseVersion: string;
   readonly basis: TruthBasis;
   readonly snapshotLabel: string;
 }): Promise<AiDraftOutcome> {
   return applyAiDraft(input.projectDir, {
     chapter: input.chapter,
     body: input.updatedContent,
-    baseVersion: draftVersionOf(input.readContent),
+    baseVersion: input.baseVersion,
     basis: input.basis,
     source: "revise",
     snapshotLabel: input.snapshotLabel,
@@ -460,6 +464,9 @@ export async function previewRevision(input: {
   };
 }): Promise<RevisionPreviewSuccess | RevisionFailure> {
   const { projectDir, chapter } = input;
+  // 先记依据、再读稿和材料（写作版本 P1b 第 3 轮复核）：应用时照这份核，读材料之后书上有写就不换上。
+  const basis = await readTruthBasis(projectDir);
+  const bound = async (preview: DraftRevisionPreview): Promise<DraftRevisionPreview> => ({ ...preview, basis: await rememberBasis(projectDir, basis) });
   const draftContent = input.draftContent ?? await readFile(defaultDraftPath(projectDir, chapter), "utf-8");
   const located = resolveRevisionTarget(draftContent, input.task);
   if (located.ok === false) return located;
@@ -471,7 +478,7 @@ export async function previewRevision(input: {
     if (exactReplacement === resolvedTarget.trim()) {
       return { ok: false, code: "exact_replacement_noop", task };
     }
-    return { ok: true, mode: "exact", task, preview: exactReplacementPreview(task, resolvedTarget, exactReplacement) };
+    return { ok: true, mode: "exact", task, preview: await bound(exactReplacementPreview(task, resolvedTarget, exactReplacement)) };
   }
 
   let preview: DraftRevisionPreview;
@@ -497,7 +504,7 @@ export async function previewRevision(input: {
   if (typeof placement === "string") {
     return { ok: false, code: placement, task, preview };
   }
-  return { ok: true, mode: "model", task, preview };
+  return { ok: true, mode: "model", task, preview: await bound(preview) };
 }
 
 export async function applyRevision(input: {
@@ -520,8 +527,13 @@ async function applyRevisionLocked(
   draftPath: string,
 ): Promise<RevisionApplySuccess | RevisionFailure> {
   const { projectDir, chapter, preview } = input;
-  const basis = await readTruthBasis(projectDir);
-  const draftContent = await readFile(draftPath, "utf-8");
+  // 依据用生成预览时记的那份（不在应用时重读：那等于拿新书给旧预览背书）。
+  // 稿子按改句定位、在锁里对着眼前这份换：作者这之间在别处打的字照样留着，改的那句变了就对不上、不改。
+  const basis = preview.basis ? await recallBasis(projectDir, preview.basis) : undefined;
+  if (!basis) return { ok: false, code: "preview_stale" };
+  const file = await readDraftFile(projectDir, chapter);
+  if (!file) return { ok: false, code: "before_text_not_found" };
+  const draftContent = file.text;
   const beforeSpan = locateRevisionSpan(draftContent, preview.beforeText);
   if (beforeSpan === "not_found") return { ok: false, code: "before_text_not_found" };
   if (beforeSpan === "ambiguous") return { ok: false, code: "before_text_ambiguous" };
@@ -545,7 +557,7 @@ async function applyRevisionLocked(
     }
   }
   // 存档点在换上前、同一把书锁里打（守卫全过、真要写才打）。
-  const written = await persistRevisionUpdate({ projectDir, chapter, updatedContent, readContent: draftContent, basis, snapshotLabel: "修订应用前快照" });
+  const written = await persistRevisionUpdate({ projectDir, chapter, updatedContent, baseVersion: file.version, basis, snapshotLabel: "修订应用前快照" });
   if (!written.applied) return keptFailure(written);
   return { ok: true, applied: true, preview, draftPath, updatedContent, ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}) };
 }
@@ -581,16 +593,18 @@ async function reviseDraftOneShotQueued(
   input: Parameters<typeof reviseDraftOneShot>[0],
   draftPath: string,
 ): Promise<RevisionOneShotSuccess | RevisionOneShotFailure> {
-  // 先读依据、再读稿：读稿之后书上有写，换上时就对不上。
+  // 先读依据、再读稿（正文和版本一起读）：读稿之后书上有写、稿子改过，换上时就对不上。
   const basis = await readTruthBasis(input.projectDir);
-  const draftContent = await readFile(draftPath, "utf-8");
+  const file = await readDraftFile(input.projectDir, input.chapter);
+  if (!file) throw new Error(`第 ${input.chapter} 章还没有工作稿，没法改。`);
+  const draftContent = file.text;
   const revised = await reviseDraftText({ ...input, draftContent });
   if (!revised.ok) return revised;
   const written = await persistRevisionUpdate({
     projectDir: input.projectDir,
     chapter: input.chapter,
     updatedContent: revised.updatedContent,
-    readContent: draftContent,
+    baseVersion: file.version,
     basis,
     snapshotLabel: `第${input.chapter}章修订前快照`,
   });

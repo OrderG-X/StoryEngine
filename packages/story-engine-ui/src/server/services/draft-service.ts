@@ -849,10 +849,14 @@ export interface GenerateDraftInput {
   /** 有章纲时按要点分前后两半写（引擎 segmentByPlan）：字数靠要点撑起来，少走事后续写（第五轮：续写出了近一半矛盾）。 */
   readonly segmentByPlan?: boolean;
   /**
-   * 接着往下写（P13）：本章已写的正文 + 这次写多少字 + 作者这次说的方向（原话）。给了就不新拟章纲（有就沿用）、
+   * 接着往下写（P13）：这次写多少字 + 作者这次说的方向（原话）。给了就不新拟章纲（有就沿用）、
    * 不分半写、只出一版；已写的字原样留着，之后按核账改、自动去味都只动接着写的那段，补字数那步不跑（它重写最后一段）。
+   * 本章已写的正文由这里开工时和工作稿版本一起读（写作版本 P1b 第 3 轮复核：调用方先读正文、这里后读版本，
+   * 中间作者存的字会被接着写的稿盖掉）。读到这一章没有正文了，抛 NothingToContinueError，不悄悄改成从头写。
    */
-  readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
+  readonly continueFrom?: { readonly length?: number; readonly direction?: string };
+  /** 接着写：开工读到已写的那段时调（稿纸上先原样推出这段，原文不会消失再出现）。 */
+  readonly onContinueBase?: (text: string) => void;
   /** 正文流式时换掉稿纸上已流出的字（重写一段时退回、两段之间补空行），见 FastDraftInput.onStreamReset。只出一版时才用。 */
   readonly onStreamReset?: (visible: string) => void;
   /**
@@ -913,7 +917,7 @@ export interface GenerateDraftOutcome {
   /** 换上工作稿前打的存档点（换上了才有）。 */
   readonly snapshotId?: string;
   /** 写好了但没换上（写的途中这一章的稿子改过，或前文、设定改过）：这版留成候选，稿纸上等作者选。 */
-  readonly kept?: { readonly candidateId: string; readonly reason: "draft_moved" | "basis_moved" };
+  readonly kept?: { readonly candidateId: string; readonly reason: "draft_moved" | "basis_moved" | "apply_failed" };
   readonly contextBudget?: ReturnType<typeof contextBudgetPayload>;
   readonly characterSelection?: InSceneResult;
   /** D1 执法拒稿（仅 lengthPolicy:"enforce_or_rollback"）：旧稿已回滚，路由投影 422 + error。 */
@@ -1127,10 +1131,19 @@ export async function generateDraftCandidate(input: GenerateDraftCandidateInput)
 export async function runGenerateDraft(input: GenerateDraftInput): Promise<GenerateDraftOutcome> {
   // 开写时书和这一章的稿是什么样（先读依据、再读稿和写稿要用的材料）：拟纲、写稿的几分钟里作者存了稿、撤销或恢复过，
   // 或前文、设定改过，换上时就对不上——不盖掉作者那份，这版留成候选、如实说（写作版本 P1b）。
+  // 稿只读这一次：版本号和接着写要接的正文是同一份。
   const startBasis = await readTruthBasis(input.projectDir);
-  const startVersion = (await readDraft(input.projectDir, input.chapter))?.version ?? null;
+  const startDraft = await readDraft(input.projectDir, input.chapter);
+  const startVersion = startDraft?.version ?? null;
+  let continueFrom: DraftStart["continueFrom"];
+  if (input.continueFrom) {
+    const text = startDraft?.body.trim() ?? "";
+    if (!text) throw new NothingToContinueError(input.chapter);
+    continueFrom = { text, ...input.continueFrom };
+    input.onContinueBase?.(text);
+  }
   // 开写时存的那份「在写」候选：不管怎么收场（换上、没换上、抛错），流程结束就不再算在写——没换上的、半路抛错的，稿纸会提示。
-  const start = { basis: startBasis, version: startVersion, progress: {} as { candidateId?: string } };
+  const start: DraftStart = { basis: startBasis, version: startVersion, ...(continueFrom ? { continueFrom } : {}), progress: {} };
   try {
     return await runGenerateDraftStarted(input, start);
   } finally {
@@ -1140,7 +1153,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
 
 async function runGenerateDraftStarted(input: GenerateDraftInput, start: DraftStart): Promise<GenerateDraftOutcome> {
   // 接着往下写：章纲员看不到作者写的半章，不新拟；本章有章纲就沿用（写手照它接着写还没写到的要点）。
-  if (input.continueFrom) {
+  if (start.continueFrom) {
     input.onPhase?.("write");
     const plan = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
     return withStep("接着写", () => runGenerateDraftWithPlan(input, plan, start));
@@ -1195,10 +1208,19 @@ function presenceSummarySentence(summary: string): string {
   return trimmed.length === 0 ? "" : `${trimmed}。`;
 }
 
-/** 开写时的样子（先读依据、再读稿），和这次出稿存的那份「在写」候选。 */
+/** 接着写的时候这一章已经没有正文了（作者开工前清掉了）：不悄悄改成从头写。 */
+export class NothingToContinueError extends Error {
+  constructor(readonly chapter: number) {
+    super(`第 ${chapter} 章还没有正文，没有可以接着写的。`);
+    this.name = "NothingToContinueError";
+  }
+}
+
+/** 开写时的样子（先读依据、再读稿；接着写要接的正文就是那次读到的），和这次出稿存的那份「在写」候选。 */
 interface DraftStart {
   readonly basis: TruthBasis;
   readonly version: string | null;
+  readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
   readonly progress: { candidateId?: string };
 }
 
@@ -1209,7 +1231,7 @@ async function runGenerateDraftWithPlan(
 ): Promise<GenerateDraftOutcome> {
   const { projectDir, chapter, writerClient } = input;
   const lengthPolicy = input.policies?.lengthPolicy ?? "annotate";
-  const continueFrom = input.continueFrom?.text.trim() ? input.continueFrom : undefined;
+  const continueFrom = start.continueFrom;
   const run = await resolveDraftRunContext({
     ...(chapterPlan ? { chapterPlan } : {}),
     projectDir,

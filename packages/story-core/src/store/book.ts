@@ -210,14 +210,18 @@ export async function readTruthBasis(bookDir: string): Promise<TruthBasis> {
 }
 
 /**
- * 读一份材料，并认它是照哪一版真相读的：先读依据 → 读材料 → 再读一遍依据。前后一样才给依据；
- * 中途有写（哪怕又改回原样）就不给（basis = undefined）——按内容复用的缓存拿不到依据就不存、不复用。
- * 不写盘、不拿锁。依据读不了也是 undefined，材料照常返回。
+ * 读一份材料，并认它是照哪一版真相读的：先读依据 → 读材料 → 再读一遍依据。前后一样、前后都没有在途的事务才给依据；
+ * 中途有写（哪怕又改回原样）、正赶上写到一半（读到的可能是一半新一半旧）就不给（basis = undefined）——
+ * 按内容复用的缓存拿不到依据就不存、不复用。不写盘、不拿锁。依据读不了也是 undefined，材料照常返回。
  */
 export async function readWithStableBasis<T>(bookDir: string, read: () => Promise<T>): Promise<{ readonly value: T; readonly basis?: TruthBasis }> {
-  const before = await readTruthBasis(bookDir).catch(() => undefined);
+  const settled = async (): Promise<TruthBasis | undefined> => {
+    if (await hasPendingTransactions(bookDir).catch(() => true)) return undefined;
+    return readTruthBasis(bookDir).catch(() => undefined);
+  };
+  const before = await settled();
   const value = await read();
-  const after = before ? await readTruthBasis(bookDir).catch(() => undefined) : undefined;
+  const after = before ? await settled() : undefined;
   return before && after && before.digest === after.digest ? { value, basis: before } : { value };
 }
 

@@ -42,6 +42,11 @@ export interface PlanContext {
   readonly bookDir: string;
   readonly caller: Caller;
   readonly now: Date;
+  /**
+   * 这次写的工作稿代次号：plan 写了哪章工作稿，runner 在同一个事务里把那章的代次换成它（store/control.ts）。
+   * plan 回报写完的版本号就用它算（draftVersionOf(全文, { epoch, gen: draftGen })）。
+   */
+  readonly draftGen: string;
 }
 
 export interface WriteCommandSpec<A, R> {

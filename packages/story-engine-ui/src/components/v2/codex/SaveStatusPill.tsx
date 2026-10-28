@@ -4,13 +4,13 @@
  * 重构 P5：直接看稿纸（draftStore）和对话存盘（chatSync）各自的状态。存得慢（超过 300ms）才显示「保存中…」，
  * 快的直接给「已保存」，不一闪一闪；成功后短暂显示「已保存」再淡出；失败常驻红色「保存失败」+「重试」，
  * 并做有限次退避自动重试。
- * 稿子撞版本不算失败——那由稿纸上方的提示条让作者选。
+ * 稿子撞版本不算失败——那由稿纸上方的提示条让作者选。稿子没存上也由稿纸上方的提示条说（带「再存一次」，
+ * 稿纸自己过一会儿再试），这里不再重复一遍（写作版本 P1b：同一句话两处显示）。
  * 渲染在 .codex-app 中栏（main.desk）右下角、写作台底栏之上，样式走 codex.css 的 .save-pill。
  */
 import { useEffect, useRef, useState } from "react";
 import { useDraftStore } from "../../../stores/draftStore.js";
 import { saveChatNow, useChatSaveStore } from "../../../sync/chatSync.js";
-import { scheduleDraftSave } from "../../../drafts/draftSync.js";
 import { usePresence } from "../../../hooks/usePresence.js";
 
 const MAX_AUTO_RETRIES = 4;
@@ -26,18 +26,17 @@ function combine(draft: PillStatus, chat: PillStatus): PillStatus {
   return "idle";
 }
 
-function retryAll(): void {
-  if (useDraftStore.getState().saveStatus === "error") scheduleDraftSave(0);
+function retryChat(): void {
   if (useChatSaveStore.getState().status === "error") void saveChatNow();
 }
 
 export function SaveStatusPill() {
-  const draftStatus = useDraftStore((s) => s.saveStatus);
-  const draftError = useDraftStore((s) => s.saveError);
+  // 稿子没存上在稿纸上方说，这里只管存着 / 存上了。
+  const draftStatus = useDraftStore((s) => (s.saveStatus === "error" ? "idle" : s.saveStatus));
   const chatStatus = useChatSaveStore((s) => s.status);
   const chatError = useChatSaveStore((s) => s.error);
   const status = combine(draftStatus, chatStatus);
-  const lastError = draftStatus === "error" ? draftError : chatStatus === "error" ? chatError : null;
+  const lastError = chatStatus === "error" ? chatError : null;
   const [showSaved, setShowSaved] = useState(false);
   const [savingSlow, setSavingSlow] = useState(false);
   const retryCountRef = useRef(0);
@@ -64,7 +63,7 @@ export function SaveStatusPill() {
     const delay = Math.min(30_000, 2_000 * 2 ** retryCountRef.current);
     const id = setTimeout(() => {
       retryCountRef.current += 1;
-      retryAll();
+      retryChat();
     }, delay);
     return () => clearTimeout(id);
   }, [status, lastError]);
@@ -89,7 +88,7 @@ export function SaveStatusPill() {
         <button
           type="button"
           className="save-pill-retry"
-          onClick={() => { retryCountRef.current = 0; retryAll(); }}
+          onClick={() => { retryCountRef.current = 0; retryChat(); }}
         >
           重试
         </button>

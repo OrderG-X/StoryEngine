@@ -68,7 +68,7 @@ describe("多文件事务", () => {
     expect(await hasPendingTransactions(book)).toBe(false);
   });
 
-  it("写到一半断了：写入代次换上了就不退回（内容换回原样，读到过中间那版的依据也对不上）", async () => {
+  it("写到一半断了：写入代次换上了就不退回，内容换回原样后再换一个新的（途中读到的代次和回滚后的都对不上）", async () => {
     await strandedTransaction("prepared", [
       { path: REVISION_PATH, existed: true, renamed: true, old: "代次一", next: "代次二" },
       { path: "chapters/0001.md", existed: true, renamed: true, old: "旧正文", next: "新正文" },
@@ -77,7 +77,20 @@ describe("多文件事务", () => {
     await recoverTransactions(book);
     expect(await read("chapters/0001.md")).toBe("旧正文");
     expect(await read("ledger/head.json")).toBe("旧版本");
-    expect(await read(REVISION_PATH)).toBe("代次二");
+    const after = await read(REVISION_PATH);
+    expect(after).not.toBe("代次一");
+    expect(after).not.toBe("代次二");
+    expect(JSON.parse(after)).toMatchObject({ schema: "store-revision/1" });
+  });
+
+  it("代次还没换上就断了：书里什么都没动，代次也不动", async () => {
+    await strandedTransaction("prepared", [
+      { path: REVISION_PATH, existed: true, renamed: false, old: "代次一", next: "代次二" },
+      { path: "chapters/0001.md", existed: true, renamed: false, old: "旧正文", next: "新正文" },
+    ]);
+    await recoverTransactions(book);
+    expect(await read(REVISION_PATH)).toBe("代次一");
+    expect(await read("chapters/0001.md")).toBe("旧正文");
   });
 
   it("已经写完只差收尾的：留着新内容，只清目录", async () => {

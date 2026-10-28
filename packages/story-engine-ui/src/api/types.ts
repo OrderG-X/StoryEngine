@@ -552,6 +552,8 @@ export interface DraftRevisionPreview {
   readonly riskNotes: readonly string[];
   readonly preservedFacts: readonly string[];
   readonly warnings: readonly string[];
+  /** 服务端记的生成依据：应用时原样带回。 */
+  readonly basis?: string;
 }
 
 export interface DraftRevisionApplyResult {
@@ -583,7 +585,7 @@ export type DraftRevisionPreviewApiResponse =
 
 export type DraftRevisionApplyApiResponse =
   | { readonly ok: true; readonly result: DraftRevisionApplyResult; readonly draftContent: string; readonly overview: StateOverview }
-  | { readonly ok: false; readonly error: string };
+  | { readonly ok: false; readonly error: string; readonly code?: string };
 
 export interface CommitSelectiveConfirmation {
   readonly assetDecisions?: readonly CommitSelectiveDecision[];

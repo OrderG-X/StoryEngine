@@ -12,8 +12,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { draftPath } from "../store/paths.js";
 import { fail } from "../commands/runner.js";
-import type { WriteCommandSpec } from "../commands/types.js";
-import { composeDraftFile, draftVersionOf, readDraft, type Draft } from "./draft.js";
+import type { PlanContext, WriteCommandSpec } from "../commands/types.js";
+import type { DraftStamp } from "../store/control.js";
+import { composeDraftFile, draftVersionOf, readDraft, readDraftStamp, type Draft } from "./draft.js";
 
 /** 三条命令同一份参数：都要说清是拿哪一版改 / 换的（这一章原来没有工作稿就是 null）。 */
 export const DraftSaveArgs = z.object({
@@ -46,24 +47,24 @@ async function readRaw(bookDir: string, chapter: number): Promise<string | undef
 }
 
 /** 盘上的版本和调用方手里的对不上：不写，把盘上那份交回去。盘上已经就是要写的这份不算对不上（同一笔重发）。 */
-async function conflictIfMoved(bookDir: string, chapter: number, baseVersion: string | null, currentText: string | undefined, nextText: string) {
-  const currentVersion = currentText === undefined ? null : draftVersionOf(currentText);
+async function conflictIfMoved(bookDir: string, chapter: number, baseVersion: string | null, currentText: string | undefined, stamp: DraftStamp, nextText: string) {
+  const currentVersion = currentText === undefined ? null : draftVersionOf(currentText, stamp);
   if (baseVersion === currentVersion || currentText === nextText) return undefined;
   const current = currentText === undefined ? null : await readDraft(bookDir, chapter) ?? null;
   const details: DraftConflictDetails = { current };
   return fail("draft_conflict", `第 ${chapter} 章的工作稿在别处改过了（比如 AI 改稿或撤销），这次没有写。`, details);
 }
 
-function planWrite(chapter: number, nextText: string, currentText: string | undefined, label: string) {
-  const version = draftVersionOf(nextText);
+/** 写了：版本号按这次的代次号算（runner 在同一个事务里换上它）。没写：还是盘上那一版。 */
+function planWrite(context: PlanContext, chapter: number, nextText: string, currentText: string | undefined, stamp: DraftStamp, label: string) {
   if (currentText === nextText) {
-    return { label, writes: [], changed: {}, result: { chapter, version, unchanged: true } };
+    return { label, writes: [], changed: {}, result: { chapter, version: draftVersionOf(nextText, stamp), unchanged: true } };
   }
   return {
     label,
     writes: [{ path: draftPath(chapter), content: nextText }],
     changed: { drafts: [chapter] },
-    result: { chapter, version, unchanged: false },
+    result: { chapter, version: draftVersionOf(nextText, { epoch: stamp.epoch, gen: context.draftGen }), unchanged: false },
   };
 }
 
@@ -74,12 +75,13 @@ async function nextDraftText(bookDir: string, args: { readonly chapter: number; 
   return composeDraftFile({ ...(title ? { title } : {}), body: args.body });
 }
 
-async function planReplace(bookDir: string, args: DraftSaveArgs, label: string) {
-  const currentText = await readRaw(bookDir, args.chapter);
-  const nextText = await nextDraftText(bookDir, args, currentText);
-  const conflict = await conflictIfMoved(bookDir, args.chapter, args.baseVersion, currentText, nextText);
+async function planReplace(context: PlanContext, args: DraftSaveArgs, label: string) {
+  const stamp = await readDraftStamp(context.bookDir, args.chapter);
+  const currentText = await readRaw(context.bookDir, args.chapter);
+  const nextText = await nextDraftText(context.bookDir, args, currentText);
+  const conflict = await conflictIfMoved(context.bookDir, args.chapter, args.baseVersion, currentText, stamp, nextText);
   if (conflict) return conflict;
-  return planWrite(args.chapter, nextText, currentText, label);
+  return planWrite(context, args.chapter, nextText, currentText, stamp, label);
 }
 
 export const draftSave: WriteCommandSpec<DraftSaveArgs, DraftWriteResult> = {
@@ -90,7 +92,7 @@ export const draftSave: WriteCommandSpec<DraftSaveArgs, DraftWriteResult> = {
   snapshot: false,
   idempotent: false,
   bumpsVersion: false,
-  plan: (context, args) => planReplace(context.bookDir, args, `存稿：第 ${args.chapter} 章`),
+  plan: (context, args) => planReplace(context, args, `存稿：第 ${args.chapter} 章`),
 };
 
 export const draftApplyGenerated: WriteCommandSpec<DraftSaveArgs, DraftWriteResult> = {
@@ -101,7 +103,7 @@ export const draftApplyGenerated: WriteCommandSpec<DraftSaveArgs, DraftWriteResu
   snapshot: true,
   idempotent: false,
   bumpsVersion: false,
-  plan: (context, args) => planReplace(context.bookDir, args, `AI 写稿：第 ${args.chapter} 章`),
+  plan: (context, args) => planReplace(context, args, `AI 写稿：第 ${args.chapter} 章`),
 };
 
 export const draftAdoptCandidate: WriteCommandSpec<DraftSaveArgs, DraftWriteResult> = {
@@ -112,5 +114,5 @@ export const draftAdoptCandidate: WriteCommandSpec<DraftSaveArgs, DraftWriteResu
   snapshot: true,
   idempotent: false,
   bumpsVersion: false,
-  plan: (context, args) => planReplace(context.bookDir, args, `换上 AI 稿：第 ${args.chapter} 章`),
+  plan: (context, args) => planReplace(context, args, `换上 AI 稿：第 ${args.chapter} 章`),
 };

@@ -1,6 +1,7 @@
 import {
   previewDraftRevision,
   applyDraftRevision,
+  DraftRevisionRefused,
   applyDeAiFlavorBatch,
   generateDraftCandidate,
   applyDraftCandidate,
@@ -502,15 +503,41 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         notifyStaleOperation();
         return;
       }
+      // 写的途中书变了：没换上，这版留成候选（不是出错）。预览收起（再点也换不上），稿纸上方出提示让作者选。
+      if (error instanceof DraftRevisionRefused && error.code === "draft_kept") {
+        updateAgentFlow(messageId, {
+          role: "assistant",
+          content: error.message,
+          card: completedAgentCard({
+            id: messageId.replace(/^assistant-/u, "agent-"),
+            kind: "revision",
+            agentName: "revisionAgent",
+            title: "这版没换上，留着",
+            summary: error.message,
+            detail: ["稿纸上方可以换成它"],
+          }),
+        });
+        const sUi = useUiStore.getState();
+        sUi.setActiveRevisionTask(null);
+        sUi.setActiveRevisionPreview(null);
+        await refreshPaper().catch(() => undefined);
+        return;
+      }
       failAgentFlow(messageId, {
         kind: "revision",
         agentName: "revisionAgent",
         title: "应用修订",
         error,
       });
-      useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
-      // 没换上的那版留成了候选：重读一次，稿纸出提示。
-      await refreshPaper().catch(() => undefined);
+      if (error instanceof DraftRevisionRefused && error.code === "preview_stale") {
+        // 方案过期：如实说，这份预览再点也没用，收起。
+        nav.showToast(error.message, 5000);
+        const sUi = useUiStore.getState();
+        sUi.setActiveRevisionTask(null);
+        sUi.setActiveRevisionPreview(null);
+      } else {
+        useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       finishOwnedOperation(operation);
     }

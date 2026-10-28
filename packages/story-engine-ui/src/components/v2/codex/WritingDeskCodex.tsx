@@ -436,7 +436,9 @@ function incomingCopy(incoming: PaperIncoming): { readonly text: string; readonl
   const words = countTextWords(incoming.body);
   switch (incoming.cause) {
     case "conflict":
-      return { text: "这一章刚在别处改过（AI 或撤销），你手上这版没存进去，另外留着。", accept: "换成那一版", keep: "保留我这版" };
+      return incoming.recoveryId
+        ? { text: "这一章刚在别处改过（AI 或撤销），你手上这版没存进去，另外留着。", accept: "换成那一版", keep: "保留我这版" }
+        : { text: "这一章刚在别处改过，你手上这版没存进去，也没能另外存下来。先别关窗。", accept: "换成那一版", keep: "保留我这版" };
     case "update":
       return { text: "这一章刚在别处改过，你手上还有没存的字。", accept: "换成那一版", keep: "保留我这版" };
     case "recovery":
@@ -447,7 +449,9 @@ function incomingCopy(incoming: PaperIncoming): { readonly text: string; readonl
         ? `AI 写到一半停了，写好的 ${words} 字还留着。`
         : reason === "basis_moved"
           ? `AI 写好一版（${words} 字），写的途中前文或设定改过，没换上。`
-          : `AI 写好一版（${words} 字），写的途中你改过稿，没换上。`;
+          : reason === "apply_failed"
+            ? `AI 写好一版（${words} 字），换上的时候没写进去，还留着。`
+            : `AI 写好一版（${words} 字），写的途中你改过稿，没换上。`;
       return { text, accept: "换成 AI 这版", keep: "不要了" };
     }
   }

@@ -158,11 +158,11 @@ async function executeFetch<T>(
   }
 }
 
+/** 给作者看的就是服务端说的那句（中文）；服务端什么都没说才给状态码。不带英文前缀（状态码在 FetchJsonError.status 上）。 */
 function buildFetchJsonErrorMessage(payload: unknown, status: number): string {
-  const fallback = `Request failed with status ${status}`;
   const details = payloadErrorDetails(payload);
-  if (details.length === 0) return fallback;
-  return [fallback, ...details].join(" ");
+  if (details.length === 0) return `没成功（HTTP ${status}）`;
+  return details.join(" ");
 }
 
 function payloadErrorDetails(payload: unknown): readonly string[] {

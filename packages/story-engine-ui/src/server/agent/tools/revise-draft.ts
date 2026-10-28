@@ -106,6 +106,8 @@ function refusalReason(failure: RevisionOneShotFailure): string {
       return "改写后你点名的那句仍原样留在工作稿里，等于没真改到；工作稿未改动。请重试或把要改的原文逐字说清。";
     case "draft_kept":
       return failure.detail ?? "改好了但没换上：写的途中稿子或前文改过，AI 这版留着，稿纸上可以换成它。";
+    case "preview_stale":
+      return "这份修改方案对不上现在的书了，稿子没动。请重新改一次。";
   }
 }
 

@@ -2,19 +2,20 @@
  * 写命令的执行器：所有写操作都从这里过，命令自己不碰盘。
  *
  * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放（同键换参数就拒绝）→ 核依据 → plan →
- * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和代次）→ 推事件。
+ * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和写入代次，
+ * 写了哪章工作稿就在同一个事务里换那章的工作稿代次）→ 推事件。
  * 什么都不用改的也留回执（带了防重复标记的话）：不然这次请求迟到重发，会把这之间别人改的盖回去。
  * 任何一步不成都如实返回失败，书保持原样。
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BOOK_HEAD_SCHEMA, COMMAND_RECEIPT_SCHEMA, CommandReceipt } from "../schema/book.js";
 import { canonicalJson, diffTruthBasis } from "../store/basis.js";
 import { BookFileError, readHead, readTruthBasis } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
-import { HEAD_PATH, receiptPath } from "../store/paths.js";
-import { revisionWrite } from "../store/revision.js";
+import { draftGensWrite, readDraftGens, revisionWrite } from "../store/control.js";
+import { draftChapterOfPath, HEAD_PATH, receiptPath } from "../store/paths.js";
 import { commitFiles, recoverTransactions, type RecoveryReport, type TxWrite } from "../store/transaction.js";
 import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec, WritePlan } from "./types.js";
 
@@ -96,9 +97,10 @@ export async function runCommand<A, R>(
     }
 
     const now = options.now?.() ?? new Date();
+    const draftGen = randomUUID();
     let planned: Awaited<ReturnType<typeof spec.plan>>;
     try {
-      planned = await spec.plan({ bookDir, caller: options.caller, now }, parsed.data);
+      planned = await spec.plan({ bookDir, caller: options.caller, now, draftGen }, parsed.data);
     } catch (error) {
       if (error instanceof BookFileError) return fail("book_file_invalid", error.message);
       return fail("plan_failed", "这一步出了意外，书保持原样。", error instanceof Error ? error.message : String(error));
@@ -132,8 +134,21 @@ export async function runCommand<A, R>(
 
     const bumps = spec.bumpsVersion !== false;
     const version = bumps ? head.version + 1 : head.version;
-    // 代次第一个换上（之后哪一步写失败回滚，代次都不退回）、版本号最后一个（读的一方据此判断有没有读到一半）。
-    const writes: TxWrite[] = [...(bumps ? [revisionWrite(now)] : []), ...planned.writes];
+    // 代次第一个换上（之后哪一步写失败回滚，换回原样后再换新的）、版本号最后一个（读的一方据此判断有没有读到一半）。
+    // 写了工作稿的，那几章的工作稿代次跟着换（在工作稿之前写：正赶上读的，算出来的版本号谁都对不上）。
+    const draftChapters = [...new Set(planned.writes.flatMap((write) => {
+      const chapter = draftChapterOfPath(write.path);
+      return chapter === undefined ? [] : [chapter];
+    }))];
+    let gens: TxWrite[] = [];
+    if (draftChapters.length > 0) {
+      try {
+        gens = [draftGensWrite(await readDraftGens(bookDir), draftChapters, draftGen)];
+      } catch (error) {
+        return fail("book_unreadable", "这本书的目录读不了，没有执行。", error instanceof Error ? error.message : String(error));
+      }
+    }
+    const writes: TxWrite[] = [...(bumps ? [revisionWrite(now)] : []), ...gens, ...planned.writes];
     if (key) writes.push(receiptOf(version, planned.changed));
     if (bumps) writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     try {
