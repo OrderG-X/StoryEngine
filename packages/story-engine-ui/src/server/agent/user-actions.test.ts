@@ -9,6 +9,7 @@ import { defaultDraftPath } from "../lib/project-io.js";
 import { isUserConfirmedTool } from "./request-context.js";
 import {
   commitApplyNextSteps,
+  finishDraftTurn,
   humanizeToolNames,
   nextDraftChapterAfter,
   parseUserAction,
@@ -43,7 +44,7 @@ describe("接着往下写的按钮动作（P13）", () => {
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
     expect(text).toContain("第 4 章接着写了 1200 字，前面的 900 字没动，全章 2100 字，比下限少 300 字。");
     const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { choices: { label: string }[] };
-    expect(next.choices.map((choice) => choice.label)).toEqual(["接着往下写", "预览定稿", "看核账结果"]);
+    expect(next.choices.map((choice) => choice.label)).toEqual(["接着往下写", "预览定稿", "核账"]);
   });
 
   it("没写成的下一步：没得接 → 改成从头写；已定稿 → 不给；别的 → 原样再来一次", () => {
@@ -566,7 +567,7 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     expect(next.choices[0]).toMatchObject({ label: "再核一遍", action: { toolName: "check_continuity", chapter: 5, fresh: true } });
   });
 
-  it("出稿写好 → 「预览定稿」直达 commit_preview、「看核账结果」直达 check_continuity（复用核账记忆），只这两个", async () => {
+  it("出稿写好（写完没核账）→ 「预览定稿」直达 commit_preview、「核账」直达 check_continuity，只这两个", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     await runUserAction({
       action: { toolName: "generate_draft", chapter: 2 },
@@ -578,41 +579,122 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
     });
     const next = events.at(-1)!.data.output as { choices: { label: string; action?: { toolName: string; chapter?: number } }[] };
     expect(next.choices[0]).toMatchObject({ label: "预览定稿", action: { toolName: "commit_preview", chapter: 2 } });
-    expect(next.choices[1]).toMatchObject({ label: "看核账结果", action: { toolName: "check_continuity", chapter: 2 } });
+    expect(next.choices[1]).toMatchObject({ label: "核账", action: { toolName: "check_continuity", chapter: 2 } });
     expect(next.choices).toHaveLength(2);
   });
 
-  it("出稿写好且写完核过账 → 回话只一句（字数），接着出核账卡（不再调模型），下一步按核账结果给", async () => {
+  it("出稿写好且写完核过账 → 回话只一句（字数），接着出核账卡（只读核账记忆，不再调工具），下一步按核账结果给", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
     const calls: string[] = [];
-    await runUserAction({
+    await finishDraftTurn({
       action: { toolName: "generate_draft", chapter: 2 },
+      output: {
+        ok: true,
+        draftTitle: "存根",
+        draftBody: "正文",
+        draftLength: { actualLength: 2300, lowerBound: 2400, lengthStatus: "below_lower_bound" },
+        qualityPipeline: { continuity: { checked: true } },
+        summary: "本章章纲：一大段。第 2 章已生成正文并写入工作稿……",
+      },
+      projectDir: "/books/x",
+      readCachedCheck: async () => ({ ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [{}], failures: [], headline: "这一章和前文都没改过，结果同上次。" }),
       requestContext: new RequestContext(),
       executeTool: async (name) => {
         calls.push(name);
-        return name === "generate_draft"
-          ? {
-            ok: true,
-            draftTitle: "存根",
-            draftBody: "正文",
-            draftLength: { actualLength: 2300, lowerBound: 2400, lengthStatus: "below_lower_bound" },
-            qualityPipeline: { continuity: { checked: true } },
-            summary: "本章章纲：一大段。第 2 章已生成正文并写入工作稿……",
-          }
-          : { ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [{}], failures: [], headline: "这一章和前文都没改过，结果同上次。" };
+        return { ok: true };
       },
       sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
       scrubber: { push: (t: string) => t, flush: () => "" },
       scrubError: String,
     });
-    expect(calls).toEqual(["generate_draft", "check_continuity"]);
+    expect(calls).toEqual([]);
     const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
     expect(text).toBe("第 2 章写好了《存根》，2300 字，比下限少 100 字。\n写完核了一遍：确定对不上 1 处，画在稿纸上了；另有可能 1 处，在卡上点开看。");
     // 核出确定的几处：改法在核账卡上；稿子短了（P13）才另挂一个「接着往下写」。
-    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["generate_draft", "check_continuity", "suggest_next_steps"]);
+    expect(events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName)).toEqual(["check_continuity", "suggest_next_steps"]);
     const next = events.filter((item) => item.event === "tool-result").at(-1)?.data.output as { question: string; choices: { label: string; action?: unknown }[] };
     expect(next.question).toBe("接下来？");
     expect(next.choices).toEqual([expect.objectContaining({ label: "接着往下写", action: { toolName: "generate_draft", chapter: 2, continueDraft: true } })]);
+  });
+
+  it("写完核过账、但记忆对不上（有一遍没核全）→ 如实说没核全，下一步给「核账」，不偷偷再跑一遍", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const calls: string[] = [];
+    await finishDraftTurn({
+      action: { toolName: "generate_draft", chapter: 2 },
+      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: true } } },
+      projectDir: "/books/x",
+      readCachedCheck: async () => null,
+      requestContext: new RequestContext(),
+      executeTool: async (name) => {
+        calls.push(name);
+        return { ok: true };
+      },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(calls).toEqual([]);
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 2 章写好了，3000 字。\n写完那遍核账没核全，可以点「核账」再核。");
+    const next = events.at(-1)!.data.output as { choices: { label: string }[] };
+    expect(next.choices.map((choice) => choice.label)).toEqual(["预览定稿", "核账"]);
+  });
+
+  it("作者要写完就出定稿预览 → 核账卡后接着出预览，不另给下一步（下一步在预览卡上）", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    const calls: string[] = [];
+    await finishDraftTurn({
+      action: { toolName: "generate_draft", chapter: 2 },
+      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, qualityPipeline: { continuity: { checked: true } } },
+      thenPreview: true,
+      projectDir: "/books/x",
+      readCachedCheck: async () => ({ ok: true, chapter: 2, sure: [], maybe: [], failures: [] }),
+      requestContext: new RequestContext(),
+      executeTool: async (name) => {
+        calls.push(name);
+        return { ok: true, chapter: 2, summary: "预览好了。" };
+      },
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    expect(calls).toEqual(["commit_preview"]);
+    const tools = events.filter((item) => item.event === "tool-call").map((item) => item.data.toolName);
+    expect(tools).toEqual(["check_continuity", "commit_preview"]);
+  });
+
+  it("写手把「第 N 章 · 」写进了章名：回话书名号里只放章名", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await finishDraftTurn({
+      action: { toolName: "generate_draft", chapter: 29 },
+      output: { ok: true, draftTitle: "第29章 · 手印", draftBody: "正文", draftLength: { actualLength: 1859, lengthStatus: "within_range" } },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({ ok: true }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 29 章写好了《手印》，1859 字。");
+  });
+
+  it("作者要的要点可能没写到 → 回话照说，下一步先给「补上这几条」", async () => {
+    const events: { event: string; data: Record<string, unknown> }[] = [];
+    await finishDraftTurn({
+      action: { toolName: "generate_draft", chapter: 2 },
+      output: { ok: true, draftBody: "正文", draftLength: { actualLength: 3000, lengthStatus: "within_range" }, beatFidelity: { missingBeats: ["老周认出账本", ""], postDeAiNewMisses: ["老周认出账本", "雨停"] } },
+      requestContext: new RequestContext(),
+      executeTool: async () => ({ ok: true }),
+      sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
+      scrubber: { push: (t: string) => t, flush: () => "" },
+      scrubError: String,
+    });
+    const text = events.filter((item) => item.event === "text-delta").map((item) => item.data.text).join("");
+    expect(text).toBe("第 2 章写好了，3000 字。\n这几条要点可能没写到：老周认出账本、雨停。");
+    const next = events.at(-1)!.data.output as { choices: { label: string; recommended?: boolean }[] };
+    expect(next.choices.map((choice) => choice.label)).toEqual(["补上这几条", "预览定稿", "核账"]);
+    expect(next.choices[1]?.recommended).toBe(false);
   });
 
   it("只剩「可能」：稿纸默认不画，回话说在卡上点开看，不说画上了", () => {
@@ -623,12 +705,13 @@ describe("服务端生成的下一步选项带结构化动作（R4.7/验收 3.8�
 
   it("写完核出的已按前文改过（2026-10-23）→ 回话说改了几处、再核还剩几处（作者看着正文变了，得知道是改过的）", async () => {
     const events: { event: string; data: Record<string, unknown> }[] = [];
-    await runUserAction({
+    await finishDraftTurn({
       action: { toolName: "generate_draft", chapter: 2 },
+      output: { ok: true, draftTitle: "存根", draftBody: "正文", draftLength: { actualLength: 2500 }, qualityPipeline: { continuity: { checked: true, autoFixed: { applied: 3, failed: 0 } } } },
+      projectDir: "/books/x",
+      readCachedCheck: async () => ({ ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [], failures: [] }),
       requestContext: new RequestContext(),
-      executeTool: async (name) => name === "generate_draft"
-        ? { ok: true, draftTitle: "存根", draftBody: "正文", draftLength: { actualLength: 2500 }, qualityPipeline: { continuity: { checked: true, autoFixed: { applied: 3, failed: 0 } } } }
-        : { ok: true, chapter: 2, reused: true, sure: [{ quote: "q", earlierQuote: "e", earlierChapter: 1, reason: "r" }], maybe: [], failures: [] },
+      executeTool: async () => ({ ok: true }),
       sendEvent: (event, data) => events.push({ event, data: data as Record<string, unknown> }),
       scrubber: { push: (t: string) => t, flush: () => "" },
       scrubError: String,

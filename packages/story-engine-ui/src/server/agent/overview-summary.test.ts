@@ -60,6 +60,19 @@ describe("summarizeStateOverview（重构 P9）", () => {
     expect(summary).toContain("最近时间线：林序在码头拿到船票。");
   });
 
+  it("开放线索把推进过、还没收的也算上（换题材长篇实跑第 26 章：14 条推进过没收，报 0 条）", async () => {
+    const projectDir = await fixture();
+    await mkdir(join(projectDir, "story"), { recursive: true });
+    await writeFile(join(projectDir, "story", "threads.json"), JSON.stringify({ threads: [
+      { id: "t1", title: "船票是谁给的", type: "question", status: "open", firstSeenChapter: 1, lastTouchedChapter: 1 },
+      { id: "t2", title: "码头那批货", type: "question", status: "touched", firstSeenChapter: 1, lastTouchedChapter: 1 },
+      { id: "t3", title: "老周的来历", type: "question", status: "done", firstSeenChapter: 1, lastTouchedChapter: 1 },
+    ] }), "utf-8");
+    const summary = summarizeStateOverview(await buildStateOverview({ projectDir }));
+
+    expect(summary).toContain("开放线索 2 条");
+  });
+
   it("设定本的内容不在摘要里展开（关系、卡上写的字走 read_foundation）", async () => {
     const overview = await buildStateOverview({ projectDir: await fixture(), maxTimelineEvents: 8 });
     const summary = summarizeStateOverview(overview);

@@ -21,15 +21,18 @@ import {
   nameKey,
   numberedText,
   prepareUnitReplacement,
+  projectBook,
   quoteInText,
   readCardsOrLegacy,
   readChapterLedger,
   readChapterText,
   sha256,
+  splitNumberedReply,
   splitUnits,
   type SettingCardsFile,
   type TextUnit,
 } from "@actalk/story-core";
+import { positiveIntLike } from "../../lib/lenient-args.js";
 import type { BrainCallModel } from "../reader-window.js";
 
 /** 作者选的那一边（或和它打架的那一边）：某章（或工作稿）里的一句，或设定本里的一句。 */
@@ -50,7 +53,13 @@ export type SettleRequest =
       /** 核账员说的哪里对不上。 */
       readonly reason?: string;
     }
-  | { readonly kind: "statement"; readonly text: string; readonly chapter?: number };
+  | {
+      readonly kind: "statement";
+      readonly text: string;
+      readonly chapter?: number;
+      /** 核账卡「以定论为准」：核账报的那几句（一定查、查不出改法如实说），和 pick 的 also 一样。 */
+      readonly also?: readonly ChapterSide[];
+    };
 
 export interface SettleEdit {
   /** 预览卡上去掉某处用的键。 */
@@ -80,6 +89,8 @@ export interface SettleFieldEdit {
   readonly key: string;
   /** 卡名；故事设定没有。 */
   readonly card?: string;
+  /** 「和林国栋」这类关系栏：card 和这张卡之间的关系。 */
+  readonly relationWith?: string;
   readonly label: string;
   readonly from: string;
   readonly to: string;
@@ -106,13 +117,19 @@ export interface SettleProposal {
   /** 核账报过和它打架、这次却没查出改法的句子（如实说）。 */
   readonly missed: readonly { readonly chapter: number; readonly quote: string }[];
   /** 复核去掉的改法（不上卡，留在存盘里查问题用）。 */
-  readonly reviewDropped: readonly { readonly chapter: number; readonly from: string; readonly to: string; readonly why?: string }[];
+  readonly reviewDropped: readonly { readonly chapter?: number; readonly card?: string; readonly label?: string; readonly from: string; readonly to: string; readonly why?: string }[];
   readonly failures: readonly string[];
 }
 
 /** 一批最多这么多字（编号后的正文）：一章超了就自己一批。 */
 export const SETTLE_BATCH_CHARS = 12_000;
 const MAX_NAMES = 8;
+
+/**
+ * 圈章靠这些词逐字出现。换题材长篇实跑 2026-10-28：定论「铺子是林家自有产业、没有房东」只给了「林国栋」，
+ * 这个名字只在 12～14 章出现（前文都叫「爸」「父亲」），第 1 章「房租照付」没圈到、没改。
+ */
+const NAMES_RULE = "这件事涉及的人名、地名、物名，连同正文里说到它们常用的叫法（人被叫作「父亲」「老周」这类；说的是钱、房子这类事，正文还会写到的「利息」「房租」这类词）；照正文的写法，最多 8 个";
 const MAX_EDITS_PER_BATCH = 24;
 
 interface SweepDoc {
@@ -121,6 +138,8 @@ interface SweepDoc {
   readonly text: string;
   readonly units: readonly TextUnit[];
   readonly numbered: string;
+  /** 账里记的这章是故事第几天（「12～13」）；没记、估的不给。 */
+  readonly day?: string;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -136,10 +155,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 }
 
 const str = (value: unknown): string => (typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "");
-const int = (value: unknown): number | undefined => {
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value.trim()) : Number.NaN;
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-};
+const int = positiveIntLike;
 
 async function readOptional(path: string): Promise<string | undefined> {
   try {
@@ -161,9 +177,22 @@ function sideLine(side: SettleSide, docs: ReadonlyMap<number, SweepDoc>, cards?:
   const where = doc?.target === "draft" ? `第 ${side.chapter} 章（工作稿）` : `第 ${side.chapter} 章`;
   const unit = doc?.units.find((item) => quoteInText(side.quote, item.text)) ?? doc?.units.find((item) => quoteInText(item.text, side.quote));
   if (!doc || !unit) return `${where}：「${side.quote}」`;
-  const before = doc.units[unit.id - 2]?.text ?? "";
-  const after = doc.units[unit.id]?.text ?? "";
+  const { before, after } = aroundUnit(doc.units, unit);
   return `${where}：「${side.quote}」（前后文：${before}【${unit.text}】${after}）`;
+}
+
+/** 前后文最多各带这么多字。 */
+const AROUND_MAX = 160;
+
+/**
+ * 一句的前后文：同一段里它前后的句子（段首 / 段尾就带上一段最后一句 / 下一段第一句）。
+ * 换题材长篇实跑 2026-10-27：只带前后各一句，「借款人林朗」在同一段前两句，定论写成了「林晚在安心借的借款」。
+ */
+export function aroundUnit(units: readonly TextUnit[], unit: TextUnit): { readonly before: string; readonly after: string } {
+  const sameLine = units.filter((item) => item.line === unit.line);
+  const before = sameLine.filter((item) => item.id < unit.id).map((item) => item.text).join("") || (units[unit.id - 2]?.text ?? "");
+  const after = sameLine.filter((item) => item.id > unit.id).map((item) => item.text).join("") || (units[unit.id]?.text ?? "");
+  return { before: before.slice(-AROUND_MAX), after: after.slice(0, AROUND_MAX) };
 }
 
 export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, docs: ReadonlyMap<number, SweepDoc>, cards?: SettingCardsFile): string {
@@ -174,11 +203,12 @@ export function canonTask(request: Extract<SettleRequest, { kind: "pick" }>, doc
     ...(request.reason ? [`【核账员说】${request.reason}`] : []),
     "要求：",
     "- point：先想清楚两处说的是哪一件事、哪一点说得不一样，写成一个问句（比如「看仓人多大年纪？」「挂锁是什么颜色？」）；",
+    "  【核账员说】点了哪样东西、哪个人对不上，就问那一样；两句里各自还有别的东西（比如一边是父亲的账本、一边是她自己的册子），是两样就别混成一样；",
     "- canon：照【作者选为准的】那边的说法回答这个问句，只答这一点：那句里别的事（长相、动作、别的物件）一概不写；",
     "  正面写（比如「某某二十九岁」），别写成否定另一边的话（「没有……」「不是……」）；数字、时间照原句抄；原句说得含糊的，看前后文和另一边说的是什么事把它说明白；",
     "  主语写全（写名字，别用「他」「她」「这」，也别省掉），单拿出来也看得懂；不写章号、不写「以……为准」，不超过 40 字；",
     "  说的是谁平常带着什么、东西放在哪这类每场都会变的事时，写那件东西本身（「某某随身带的是一把黑伞」），别写一时的拿法、姿势（「攥着」「搭在肩上」「横在膝上」）；",
-    "- names：这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）；",
+    `- names：${NAMES_RULE}；`,
     "- keep：这条以后写别的章还用得着吗？人物的年纪、长相、身份、来历，谁有什么东西、东西什么样，大事在哪天、在哪发生——用得着，写 true；只是那一场里的天气、风、光线，谁一时站在哪、在干什么——过了那一场就用不着，写 false（这样的只改句子，不记进设定本）。",
     '只输出一个 JSON：{"point":"","canon":"","names":[],"keep":true}',
   ].join("\n");
@@ -188,7 +218,7 @@ export function namesTask(canon: string, existing: readonly string[] = []): stri
   return [
     `作者写下了一条定论（这本书以后都以它为准）：「${canon}」`,
     "- canon：把它整理成设定本里记的一条：只写这件事本身是什么样，主语写全、单拿出来也看得懂；作者顺带说的「哪章哪句写错了」「以这个为准」这类话不写进去；意思不增不减，本来就是这样就照抄，不超过 40 字。",
-    "- names：列出这件事涉及的人名、地名、物名（照正文的写法，最多 6 个）。",
+    `- names：列出${NAMES_RULE}。`,
     ...(existing.length > 0
       ? [
         "- replaces：设定本里已经记着下面几条定论。这条新的是不是在改其中一条（说的是同一件事，新的说法取代旧的）？是就填那条的编号，不是填 0。",
@@ -221,17 +251,21 @@ export function sweepTask(canon: string, docs: readonly SweepDoc[], flagged: rea
     "- 写了变化过程的、人物明确在撒谎或记错的，不算；",
     "- 定论说的是从某一章、某个时候起才这样的：那之前的章里写成别的样子不算（那时候还没变）；",
     "- 定论说的是平常带着什么、放在哪这类事时：原句只是那一场里一时的拿法、放法，或者那一场顺手抄起了别的东西、换了别人拿着，不算；",
-    "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
+    "- 每处给出改法 to：把和定论对不上的说法改成定论的说法，别的字尽量照抄；改完还是一整句，读起来要通顺、前后说得通（别留下只有原说法才说得通的半截）；定论说的是别的章、别的日子的事时，照这一句所在那章的时间来说（隔了天的说「昨天」「那天」），别说得像是这一章当天的事；不加新情节、不加新台词，前后句写过的事别再写进这一句；",
+    // 换题材长篇实跑 2026-10-28：定论「三月十七倒下」，第 4 章「位置空两个月」改成「快十天」——第 4 章是故事第 4 天，其实不到一礼拜。
+    ...(docs.some((doc) => doc.day) ? ["- 章名后面写着账里记的那章是故事第几天：改「隔了多少天、多久以前」这类说法时照它算，别自己估；"] : []),
     "- chapter 写第几章，id 写那句的编号，why 用一句话说哪里和定论对不上。",
     '只输出一个 JSON：{"edits":[{"chapter":1,"id":1,"to":"","why":""}]}。一处都没有就给 {"edits":[]}。',
     "",
-    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}】`, doc.numbered, ""]),
+    ...docs.flatMap((doc) => [`【第 ${doc.chapter} 章${doc.target === "draft" ? "（工作稿）" : ""}${doc.day ? ` · 故事第 ${doc.day} 天` : ""}】`, doc.numbered, ""]),
   ].join("\n");
 }
 
 interface FieldRef {
   readonly id: string;
   readonly card?: string;
+  /** 关系栏：和哪张卡（label 是「和某某」）。 */
+  readonly relationWith?: string;
   readonly label: string;
   readonly value: string;
   readonly ai: boolean;
@@ -243,6 +277,8 @@ export function fieldsTask(canon: string, fields: readonly FieldRef[], standing:
     ...standingLines(standing, "栏里和这几条说得一致的部分别改；和这几条对不上的也不归这次管（这次只查新定论这一件事），别改。"),
     "下面是设定本里相关的几栏，每栏前面有编号。找出内容和这条定论对不上的栏，给出改后的整栏内容（只改对不上的部分，别的照抄）。",
     "说的不是同一件事的不算。",
+    // 换题材长篇实跑 2026-10-27：「欠了网贷，想把面馆铺面卖了」和定论不冲突，模型往里添了借款细节（4 次 2～4 次）。
+    "栏里没写到这件事、或者写得比定论粗（只是没那么细）的，不算对不上：别往栏里添定论的内容（定论另记在设定本里）。",
     "to 只写这一栏改后的内容本身，不带编号、卡名、栏名。",
     '只输出一个 JSON：{"edits":[{"id":"S1","to":""}]}。一栏都没有就给 {"edits":[]}。',
     "",
@@ -301,7 +337,18 @@ export function factsTask(canon: string, chapter: number, edits: readonly Settle
   ].join("\n");
 }
 
-export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key"> & { readonly before?: string; readonly after?: string })[], standing: readonly string[] = []): string {
+/** 复核的一条：正文里的一句（chapter），或设定本里的一栏（where 写明哪张卡哪一栏）。 */
+export interface ReviewItem {
+  readonly chapter?: number;
+  readonly where?: string;
+  readonly from: string;
+  readonly to: string;
+  readonly why?: string;
+  readonly before?: string;
+  readonly after?: string;
+}
+
+export function reviewTask(canon: string, edits: readonly ReviewItem[], standing: readonly string[] = []): string {
   return [
     `作者定下了一条定论（全书以它为准）：「${canon}」`,
     ...standingLines(standing, "原句和这几条说得一致、改了反倒和它们对不上的：不算（除非原句说的正是新定论那件事）。"),
@@ -313,9 +360,10 @@ export function reviewTask(canon: string, edits: readonly (Omit<SettleEdit, "key
     "- 定论说的是从某一章、某个时候起才这样的，原句在那之前（那时候还没变）：不算；",
     "- 定论说的是平常带着什么、放在哪这类事，原句只是那一场里一时的拿法、放法、顺手抄起的别的东西、换了别人拿着的：不算；",
     "- 改法添了原句没有的情节、台词的：不算；",
-    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算。",
+    "- 理由说的不是新定论这件事（是设定本里别的定论、别的设定）的：不算；",
+    "- 设定本里的栏：栏里本来没写到这件事、或者只是写得粗（没那么细）的，不算；改法往栏里添了定论内容的，不算。",
     "",
-    ...edits.map((edit, index) => `[${index + 1}] 第 ${edit.chapter} 章：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
+    ...edits.map((edit, index) => `[${index + 1}] ${edit.where ?? `第 ${edit.chapter} 章`}：「${edit.from}」→「${edit.to}」${edit.before || edit.after ? `（前后文：${edit.before ?? ""}【原句】${edit.after ?? ""}）` : ""}${edit.why ? `（他的理由：${edit.why}）` : ""}`),
     "",
     '每条都要给。只输出一个 JSON：{"verdicts":[{"id":1,"conflict":true}]}',
   ].join("\n");
@@ -339,6 +387,28 @@ export function parseReview(text: string, count: number): ReadonlySet<number> {
 /** 原句落在哪个编号句子里（原句是半句、或横跨两句里的一句都认）。 */
 function unitOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit | undefined {
   return doc?.units.find((item) => quoteInText(quote, item.text) || quoteInText(item.text, quote));
+}
+
+/** 核账报的一句最多跨连着的几个编号句（核账对回整句时也最多 6 句）。 */
+const QUOTE_MAX_UNITS = 6;
+
+/**
+ * 核账报的那句落在哪几个编号句上：连着的几句里能装下它的最短那段（在一句里头就是那一句；跨了几句——「林晚说完这句，…“店不能这么空着。房租照付，…”」——就是那几句，头尾两句只盖住半句也算）。
+ * 换题材长篇实跑 2026-10-28：只认头一句，改法落在第二句上，卡上还说「核账报的那句没查出改法」。
+ */
+function unitsOfQuote(doc: SweepDoc | undefined, quote: string): TextUnit[] {
+  if (!doc) return [];
+  let best: TextUnit[] | undefined;
+  for (let start = 0; start < doc.units.length; start += 1) {
+    let joined = "";
+    for (let end = start; end < doc.units.length && end < start + QUOTE_MAX_UNITS; end += 1) {
+      joined += doc.units[end]!.text;
+      if (!quoteInText(quote, joined)) continue;
+      if (best === undefined || end + 1 - start < best.length) best = doc.units.slice(start, end + 1);
+      break;
+    }
+  }
+  return best ?? doc.units.filter((item) => quoteInText(item.text, quote));
 }
 
 /** 把一章（或工作稿）切好编号。 */
@@ -382,16 +452,18 @@ export function parseSweepEdits(text: string, batch: readonly SweepDoc[]): Omit<
     const chapter = int(record.chapter);
     const id = int(record.id);
     const doc = batch.find((item) => item.chapter === chapter);
-    const unit = doc && id !== undefined ? doc.units[id - 1] : undefined;
-    if (!doc || !unit) continue;
-    const key = `${doc.chapter}:${unit.id}`;
-    if (seen.has(key)) continue;
     const proposed = str(record.to);
-    const fitted = proposed ? prepareUnitReplacement(doc.units, unit.id, proposed) : undefined;
-    if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
-    seen.add(key);
+    if (!doc || id === undefined || !proposed) continue;
     const why = str(record.why);
-    out.push({ chapter: doc.chapter, target: doc.target, id: unit.id, from: unit.text, to: fitted, ...(why ? { why } : {}) });
+    // 照编号正文整段抄回来的（带着别的编号）：拆开，每句各自对。
+    for (const piece of splitNumberedReply(id, proposed)) {
+      const unit = doc.units[piece.id - 1];
+      if (!unit || seen.has(`${doc.chapter}:${unit.id}`)) continue;
+      const fitted = prepareUnitReplacement(doc.units, unit.id, piece.to);
+      if (!fitted || fitted === unit.text || fitted.length > unit.text.length * 3 + 60) continue;
+      seen.add(`${doc.chapter}:${unit.id}`);
+      out.push({ chapter: doc.chapter, target: doc.target, id: unit.id, from: unit.text, to: fitted, ...(why ? { why } : {}) });
+    }
   }
   return out;
 }
@@ -406,7 +478,7 @@ export function parseFieldEdits(text: string, fields: readonly FieldRef[]): Omit
     const field = fields.find((item) => item.id === str(record.id));
     const to = field ? stripFieldEcho(str(record.to), field) : "";
     if (!field || !to || to === field.value || out.some((item) => item.card === field.card && item.label === field.label)) continue;
-    out.push({ ...(field.card ? { card: field.card } : {}), label: field.label, from: field.value, to });
+    out.push({ ...(field.card ? { card: field.card } : {}), ...(field.relationWith ? { relationWith: field.relationWith } : {}), label: field.label, from: field.value, to });
   }
   return out;
 }
@@ -471,14 +543,23 @@ export function termsFor(names: readonly string[], cards: SettingCardsFile): str
 
 function fieldRefs(cards: SettingCardsFile, terms: readonly string[]): FieldRef[] {
   const refs: FieldRef[] = [];
-  const push = (card: string | undefined, label: string, value: string, ai: boolean): void => {
-    refs.push({ id: `S${refs.length + 1}`, ...(card ? { card } : {}), label, value, ai });
+  const push = (card: string | undefined, label: string, value: string, ai: boolean, relationWith?: string): void => {
+    refs.push({ id: `S${refs.length + 1}`, ...(card ? { card } : {}), ...(relationWith ? { relationWith } : {}), label, value, ai });
   };
+  const named = (card: SettingCardsFile["cards"][number]): boolean =>
+    terms.length === 0 || [card.name, ...card.aliases].some((name) => terms.some((term) => nameKey(term) === nameKey(name)));
   for (const field of cards.story.fields) push(undefined, field.label, field.value, field.by === "ai");
   for (const card of cards.cards) {
-    const names = [card.name, ...card.aliases];
-    if (terms.length > 0 && !names.some((name) => terms.some((term) => nameKey(term) === nameKey(name)))) continue;
+    if (!named(card)) continue;
     for (const field of card.fields) push(card.name, field.label, field.value, field.by === "ai");
+  }
+  // 关系也是设定本里的一栏（核账给的就是「和林国栋：二十年的老搭档」）：定论改了年头，关系不跟着改，
+  // 重核还报（换题材长篇实跑 2026-10-27）。
+  for (const relation of cards.relations) {
+    const a = cards.cards.find((card) => card.id === relation.a);
+    const b = cards.cards.find((card) => card.id === relation.b);
+    if (!a || !b || !(named(a) || named(b))) continue;
+    push(a.name, `和${b.name}`, relation.label, relation.by === "ai", b.name);
   }
   return refs;
 }
@@ -517,9 +598,8 @@ export async function proposeSettle(input: {
       const draftDoc = docOf(focusChapter, "draft", raw);
       const text = committedNumbers.includes(focusChapter) ? await readChapterText(projectDir, focusChapter) : undefined;
       const committedDoc = text === undefined ? undefined : docOf(focusChapter, "committed", text);
-      const quotes = request.kind === "pick"
-        ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []))
-        : [];
+      const quotes = [...(request.kind === "pick" ? [request.other] : []), ...(request.also ?? [])]
+        .flatMap((side) => (side?.where === "chapter" && side.chapter === focusChapter ? [side.quote] : []));
       if (!committedDoc || quotes.some((quote) => !unitOfQuote(committedDoc, quote) && unitOfQuote(draftDoc, quote))) {
         docs.set(focusChapter, draftDoc);
         drafts.push({ chapter: focusChapter, baseVersion: draftVersionOf(raw) });
@@ -533,6 +613,13 @@ export async function proposeSettle(input: {
     docs.set(chapter, docOf(chapter, "committed", text));
     const draftRaw = await readOptional(join(projectDir, draftPath(chapter)));
     committed.push({ chapter, textSha256: sha256(text), ...(draftRaw?.trim() ? { draftVersion: draftVersionOf(draftRaw), draftText: draftRaw } : {}) });
+  }
+  // 每章是故事第几天（账里记的；没记、估的不给）：改「隔了多久」时照它算。投影读不了就不带，照常查。
+  const projection = await projectBook(projectDir).catch(() => undefined);
+  for (const view of projection?.chapters ?? []) {
+    const doc = docs.get(view.chapter);
+    if (!doc || view.dayBasis === "missing" || view.dayBasis === "estimated") continue;
+    docs.set(view.chapter, { ...doc, day: view.dayEnd > view.day ? `${view.day}～${view.dayEnd}` : `${view.day}` });
   }
 
   let canon: string;
@@ -576,12 +663,12 @@ export async function proposeSettle(input: {
     .map((item) => item.text);
   const terms = termsFor(names, cards);
   // 核账报过、作者点过的那几句（打架的另一边 + 同一条报的别几句）：章一定查，改法不复核，查不出如实说。
-  const flagged: ChapterSide[] = request.kind === "pick"
-    ? [request.other, ...(request.also ?? [])].flatMap((side) => (side?.where === "chapter" ? [side] : []))
-    : [];
+  // 「以定论为准」带的也算（换题材长篇实跑 2026-10-27：核账报的那句没带过来，查全书说「没有要改的」，那句照旧在稿里）。
+  const flagged: ChapterSide[] = [...(request.kind === "pick" ? [request.other] : []), ...(request.also ?? [])]
+    .flatMap((side) => (side?.where === "chapter" ? [side] : []));
   const pinned = new Set<number>([
     ...(focusChapter !== undefined ? [focusChapter] : []),
-    ...(request.kind === "pick" ? [request.truth, ...flagged].flatMap((side) => (side.where === "chapter" ? [side.chapter] : [])) : []),
+    ...[...(request.kind === "pick" ? [request.truth] : []), ...flagged].flatMap((side) => (side.where === "chapter" ? [side.chapter] : [])),
   ]);
   const picked = [...docs.values()]
     .filter((doc) => terms.length === 0 || pinned.has(doc.chapter) || terms.some((term) => doc.text.includes(term)))
@@ -604,36 +691,49 @@ export async function proposeSettle(input: {
     else failures.push(`${rangeLabel(batches[index]!)}这一批没查成（${result.reason instanceof Error ? result.reason.message : String(result.reason)}）`);
   });
   if (!fieldResult.ok) failures.push(`设定本那一遍没查成（${fieldResult.error instanceof Error ? fieldResult.error.message : String(fieldResult.error)}）`);
-  const flaggedUnits = flagged.map((side) => ({ side, unit: unitOfQuote(docs.get(side.chapter), side.quote) }));
-  const hasEdit = (side: ChapterSide, unit: TextUnit): boolean => found.some((edit) => edit.chapter === side.chapter && edit.id === unit.id);
+  const flaggedUnits = flagged.map((side) => ({ side, units: unitsOfQuote(docs.get(side.chapter), side.quote) }));
+  const covers = (side: ChapterSide, units: readonly TextUnit[], edit: { readonly chapter: number; readonly id: number }): boolean =>
+    edit.chapter === side.chapter && units.some((unit) => unit.id === edit.id);
+  const hasEdit = (side: ChapterSide, units: readonly TextUnit[]): boolean => found.some((edit) => covers(side, units, edit));
   // 核账报过、作者点过的那句是这次要定的事本身：整批查时漏了，只拿那几章单问一次（批里几万字，模型偶尔漏点名的句子）。
-  const unanswered = flaggedUnits.flatMap(({ side, unit }) => (unit && !hasEdit(side, unit) ? [{ side, unit }] : []));
+  const unanswered = flaggedUnits.filter(({ side, units }) => units.length > 0 && !hasEdit(side, units));
   const asked = new Set(batches.flatMap((batch, index) => (batchResults[index]!.status === "fulfilled" ? batch.map((doc) => doc.chapter) : [])));
   const retry = unanswered.filter(({ side }) => asked.has(side.chapter));
   if (retry.length > 0) {
     const focus = [...new Set(retry.map(({ side }) => side.chapter))].sort((a, b) => a - b).map((chapter) => docs.get(chapter)!);
     try {
       const again = parseSweepEdits(await callModel([{ role: "user", content: sweepTask(canon, focus, retry.map(({ side }) => side), standing) }], { json: true }), focus);
-      found.push(...again.filter((edit) => retry.some(({ side, unit }) => edit.chapter === side.chapter && edit.id === unit.id)));
+      found.push(...again.filter((edit) => retry.some(({ side, units }) => covers(side, units, edit))));
     } catch {
       // 补问没成：下面照实列进「没查出改法」。
     }
   }
   // 核账报过的那几句（作者认了它们打架）不复核；别的再问一遍，推算站不住的去掉。
-  const clicked = (edit: Omit<SettleEdit, "key">): boolean =>
-    flaggedUnits.some(({ side, unit }) => unit !== undefined && edit.chapter === side.chapter && edit.id === unit.id);
+  const clicked = (edit: Omit<SettleEdit, "key">): boolean => flaggedUnits.some(({ side, units }) => covers(side, units, edit));
   const toReview = found.filter((edit) => !clicked(edit));
+  // 设定本的栏也复核（换题材长篇实跑 2026-10-27：「欠了网贷，想把面馆铺面卖了」不冲突，模型往里添借款细节）；
+  // 作者点的那一栏（以本章为准、打架的另一边是设定）不复核。
+  const flaggedSettings = (request.kind === "pick" ? [request.other] : []).flatMap((side) => (side?.where === "setting" ? [side] : []));
+  const fieldClicked = (edit: Omit<SettleFieldEdit, "key">): boolean =>
+    flaggedSettings.some((side) => side.label === edit.label && nameKey(side.card ?? "") === nameKey(edit.card ?? ""));
+  const foundFields = fieldResult.ok ? fieldResult.value : [];
+  const fieldsToReview = foundFields.filter((edit) => !fieldClicked(edit));
   let kept = found;
+  let keptFields = foundFields;
   const reviewDropped: SettleProposal["reviewDropped"][number][] = [];
-  if (toReview.length > 0) {
+  if (toReview.length + fieldsToReview.length > 0) {
     try {
-      const withContext = toReview.map((edit) => {
+      const withContext: ReviewItem[] = toReview.map((edit) => {
         const units = docs.get(edit.chapter)?.units ?? [];
-        return { ...edit, before: units[edit.id - 2]?.text ?? "", after: units[edit.id]?.text ?? "" };
+        const unit = units[edit.id - 1];
+        return { ...edit, ...(unit ? aroundUnit(units, unit) : { before: "", after: "" }) };
       });
-      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, withContext, standing) }], { json: true }), toReview.length);
+      const fieldItems: ReviewItem[] = fieldsToReview.map((edit) => ({ where: `设定本（${fieldHead(edit).slice(0, -1)}）`, from: edit.from, to: edit.to }));
+      const drop = parseReview(await callModel([{ role: "user", content: reviewTask(canon, [...withContext, ...fieldItems], standing) }], { json: true }), withContext.length + fieldItems.length);
       kept = found.filter((edit) => clicked(edit) || !drop.has(toReview.indexOf(edit)));
+      keptFields = foundFields.filter((edit) => fieldClicked(edit) || !drop.has(toReview.length + fieldsToReview.indexOf(edit)));
       reviewDropped.push(...toReview.filter((_, index) => drop.has(index)).map(({ chapter, from, to, why }) => ({ chapter, from, to, ...(why ? { why } : {}) })));
+      reviewDropped.push(...fieldsToReview.filter((_, index) => drop.has(toReview.length + index)).map(({ card, label, from, to }) => ({ ...(card ? { card } : {}), label, from, to })));
     } catch (error) {
       failures.push(`复核没做成（${error instanceof Error ? error.message : String(error)}），下面几处请一句句看过再确认`);
     }
@@ -641,7 +741,7 @@ export async function proposeSettle(input: {
   const edits: SettleEdit[] = kept
     .sort((a, b) => a.chapter - b.chapter || a.id - b.id)
     .map((edit, index) => ({ ...edit, key: `e${index + 1}` }));
-  const fieldEdits: SettleFieldEdit[] = (fieldResult.ok ? fieldResult.value : []).map((edit, index) => ({ ...edit, key: `f${index + 1}` }));
+  const fieldEdits: SettleFieldEdit[] = keptFields.map((edit, index) => ({ ...edit, key: `f${index + 1}` }));
 
   // 账跟着改：每章把改法套一遍，原句被碰到的事实问一次。
   const facts: SettleFactChange[] = [];
@@ -698,7 +798,7 @@ export async function proposeSettle(input: {
   });
 
   const missed = flaggedUnits
-    .filter(({ side, unit }) => !(unit !== undefined && edits.some((edit) => edit.chapter === side.chapter && edit.id === unit.id)))
+    .filter(({ side, units }) => !edits.some((edit) => covers(side, units, edit)))
     .map(({ side }) => ({ chapter: side.chapter, quote: side.quote }));
 
   return {

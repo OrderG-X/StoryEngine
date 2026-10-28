@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeChapterPlan } from "../book/chapter-plan.js";
+import { planBasisOf } from "../editorial/plan-chapter.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import type { Middleware } from "../lib/project-io.js";
 
@@ -270,6 +272,46 @@ describe("draft length guard routes", () => {
     expect(resolveInSceneCharacters).toHaveBeenCalledWith(expect.objectContaining({ explicit: ["苏晴"] }));
     expect(runFastDraft).toHaveBeenCalledWith(expect.objectContaining({ selectedCharacters: ["苏晴"] }));
     expect(response.payload.characterSelection).toMatchObject({ selected: ["苏晴"], explicit: true });
+  });
+
+  it("另写几版：本章有章纲就照它分前后两半写（和对话里出稿一样），方向沿用章纲里作者的原话", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-segment-");
+    await writeProjectJson(projectDir);
+    await writeChapterPlan(projectDir, {
+      version: 1,
+      chapter: 1,
+      source: "model",
+      direction: "林远连夜对账。",
+      summary: "林远对账。",
+      beats: ["收截图", "算总数", "接催收电话", "打电话请假"],
+      newInformation: ["欠款翻倍"],
+      scene: { location: "店里", time: "当晚" },
+      characters: ["林远"],
+      entities: [],
+      threadsAdvanced: [],
+      avoid: [],
+      // 拟纲时的前文指纹和现在一样才沿用
+      basis: await planBasisOf(projectDir, 1),
+      createdAt: "2026-10-27T00:00:00.000Z",
+    });
+    runFastDraft.mockResolvedValueOnce({
+      chapter: 1,
+      passed: true,
+      draftBody: "林远把截图一张张抄下来。",
+      title: "对账",
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: { hash: "test", sections: [] },
+      issues: [],
+    });
+
+    const response = await callDraftRoute("/api/draft/generate", { projectPath: projectDir, chapter: 1, persist: false });
+
+    expect(response.statusCode).toBe(200);
+    expect(runFastDraft).toHaveBeenCalledWith(expect.objectContaining({
+      segmentByPlan: true,
+      chapterGoal: "林远连夜对账。",
+      chapterPlan: expect.objectContaining({ beats: ["收截图", "算总数", "接催收电话", "打电话请假"] }),
+    }));
   });
 
   it("重构 P4：落盘出稿的 HTTP 路已撤（persist 不是 false 一律 410，不调模型、不写盘）", async () => {

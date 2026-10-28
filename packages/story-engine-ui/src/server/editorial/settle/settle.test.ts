@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
+import { cardWrite, chapterCommit, draftPath, numberedText, projectBook, readBible, readChapterLedger, readDecisions, readCards, runCommand, splitUnits, type EntryInput } from "@actalk/story-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
 import type { BrainCallModel } from "../reader-window.js";
-import { canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
+import { aroundUnit, canonTask, parseFieldEdits, parseSweepEdits, proposeSettle, reviewTask } from "./propose.js";
 import { applySettleProposal, readSettleProposal, saveSettleProposal } from "./store.js";
 
 const CH1 = "# 第1章 · 旧屋\n\n杜叔走了整整十年。屋里没人住过。\n\n许微推开门，灰扑了一脸。";
@@ -21,6 +21,7 @@ const E2: EntryInput[] = [
   { kind: "summary", review: "auto", text: "孟叔说起杜叔", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "hard", subject: "杜长顺", attribute: "去世", value: "五年前", text: "杜长顺五年前去世", quote: "杜叔走了五年了" },
   { kind: "fact", review: "auto", nature: "state", subject: "码头", attribute: "样子", value: "雾大没人", text: "码头雾大没人", quote: "雾很大，码头上没人" },
+  { kind: "time", review: "auto", basis: "author", day: 5 },
 ];
 const E3: EntryInput[] = [{ kind: "summary", review: "auto", text: "许微在码头", quote: "许微数着集装箱" }];
 
@@ -40,14 +41,14 @@ afterEach(async () => {
 });
 
 /** 假模型：按提示词认是哪一步，回固定的答案；记下每步收到的提示。 */
-function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string; canonReply?: string; namesReply?: string } = {}): BrainCallModel & { prompts: string[] } {
+function fakeModel(over: { sweepFails?: boolean; factsReply?: string; reviewReply?: string; canonReply?: string; namesReply?: string; fieldsReply?: (prompt: string) => string } = {}): BrainCallModel & { prompts: string[] } {
   const prompts: string[] = [];
   const call: BrainCallModel = async (messages) => {
     const prompt = messages.at(-1)?.content ?? "";
     prompts.push(prompt);
     if (prompt.includes("写成一条「定论」")) return over.canonReply ?? JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜叔"] });
     if (prompt.includes("列出这件事涉及的")) return over.namesReply ?? JSON.stringify({ names: ["杜叔"] });
-    if (prompt.includes("设定本里相关的几栏")) return JSON.stringify({ edits: [] });
+    if (prompt.includes("设定本里相关的几栏")) return over.fieldsReply?.(prompt) ?? JSON.stringify({ edits: [] });
     if (prompt.includes("请逐条复核")) return over.reviewReply ?? JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: true }] });
     if (prompt.includes("账里这几条")) return over.factsReply ?? JSON.stringify({ facts: [{ id: "F1", action: "update", value: "十年前", text: "杜长顺十年前去世", quote: "杜叔走了十年了" }] });
     if (prompt.includes("逐句看")) {
@@ -124,12 +125,67 @@ describe("定论预览", () => {
     expect(outcome.proposal.missed).toEqual([{ chapter: 3, quote: "海风很冷" }]);
   });
 
+  it("核账报的那句跨了几个编号句：改了其中哪一句都算查出了改法", async () => {
+    const base = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    // 改法落在被盖住的第二句上。
+    const model: BrainCallModel = async (messages, options) => {
+      const reply = await base(messages, options);
+      const prompt = messages.at(-1)?.content ?? "";
+      const second = /\[(\d+)\]许微没接话。/u.exec(prompt);
+      if (!prompt.includes("逐句看") || !second) return reply;
+      const parsed = JSON.parse(reply) as { edits: unknown[] };
+      return JSON.stringify({ edits: [...parsed.edits, { chapter: 2, id: Number(second[1]), to: "许微没接话，只点了点头。" }] });
+    };
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: { ...pick, also: [{ where: "chapter", chapter: 2, quote: "孟叔说。许微没接话" }] },
+      callModel: model,
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.edits.map((edit) => [edit.chapter, edit.from])).toContainEqual([2, "许微没接话。"]);
+    expect(outcome.proposal.missed).toEqual([]);
+  });
+
+  // 换题材长篇实跑 2026-10-28：定论「三月十七倒下」，第 4 章「位置空两个月」改成「快十天」——那章是故事第 4 天，不到一礼拜。
+  it("查全书时章名后带账里记的故事第几天（没记的不带），改「隔了多久」照它算", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看"))!;
+    expect(sweep).toContain("【第 2 章 · 故事第 5 天】");
+    expect(sweep).toContain("【第 1 章】");
+    expect(sweep).toContain("章名后面写着账里记的那章是故事第几天");
+  });
+
   it("定论只写打架的那一点：提示里说清楚", async () => {
     const model = fakeModel();
     await proposeSettle({ projectDir: dir, request: pick, callModel: model });
     const canonPrompt = model.prompts.find((prompt) => prompt.includes("写成一条「定论」"));
     expect(canonPrompt).toContain("写成一个问句");
     expect(canonPrompt).toContain("只答这一点");
+  });
+
+  // 换题材长篇实跑：以第 1 章为准改第 2 章「昨晚放回去」，改成「下午收市后放回去」——隔了一天，读着像当天下午。
+  it("改句照这一句所在那章的时间说：隔了天的说「昨天」「那天」", async () => {
+    const model = fakeModel();
+    await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    const sweep = model.prompts.find((prompt) => prompt.includes("逐句看，找出说法和这条定论对不上的句子"));
+    expect(sweep).toContain("照这一句所在那章的时间来说");
+  });
+
+  // 换题材长篇实跑：核账员说的是「发票该在抽屉里」，定论却写成父亲的账本放回抽屉，再把她自己的册子改成塞进抽屉。
+  it("问句照核账员点的那样东西问；两句里是两样东西就别混成一样", () => {
+    const task = canonTask(pick, new Map());
+    expect(task).toContain("【核账员说】点了哪样东西、哪个人对不上，就问那一样");
+    expect(task).toContain("是两样就别混成一样");
+  });
+
+  // 换题材长篇实跑 2026-10-28：定论只给了「林国栋」，前文都叫「父亲」，第 1 章「房租照付」没圈到。
+  it("圈章的词连同正文里的叫法一起要；模型给了叫法，只提叫法的章也查", async () => {
+    expect(canonTask(pick, new Map())).toContain("连同正文里说到它们常用的叫法");
+    const model = fakeModel({ canonReply: JSON.stringify({ canon: "杜长顺十年前去世", names: ["杜长顺", "码头"] }) });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.searched).toEqual([1, 2, 3, 4]);
   });
 
   // 长篇实跑：「以第 14 章为准」定成「某人手里攥着木杠」，扫全书把别章里放在膝上、打架顺手抄的、别人拿着的都列进来要改。
@@ -142,7 +198,7 @@ describe("定论预览", () => {
     // 作者长篇实跑（2026-10-26）：定论「第 24 章起：三匹拉车…」，扫出第 23 章的「四匹」要改。
     expect(model.prompts.find((prompt) => prompt.includes("逐句看"))).toContain("那之前的章里写成别的样子不算");
     expect(reviewTask("甲", [])).toContain("原句在那之前（那时候还没变）：不算");
-    expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, target: "committed", id: 1, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
+    expect(reviewTask("某某随身带的是一把黑伞。", [{ chapter: 2, from: "甲", to: "乙" }])).toContain("顺手抄起的别的东西");
   });
 
   // 长篇实跑：核账报「昨夜在风口坐了半宿」和前一章「山沟里没风」打架，点「以第 23 章为准」把「那夜山沟里没风」记成了全书定论。
@@ -210,6 +266,25 @@ describe("定论预览", () => {
     expect(sweeps).toBe(2);
     expect(outcome.proposal.edits.map((edit) => [edit.chapter, edit.to])).toEqual([[4, "孟叔又提起杜叔，说他十年前就没了。"]]);
     expect(outcome.proposal.missed).toEqual([]);
+  });
+
+  it("按定论查（核账卡「以定论为准」）带着核账报的那句：章一定查、整批漏了单问一次，还查不出就如实列出", async () => {
+    const base = fakeModel({ reviewReply: JSON.stringify({ verdicts: [] }) });
+    let sweeps = 0;
+    const outcome = await proposeSettle({
+      projectDir: dir,
+      request: { kind: "statement", text: "杜长顺十年前去世", chapter: 4, also: [{ where: "chapter", chapter: 4, quote: "说他五年前就没了" }] },
+      callModel: async (messages, options) => {
+        const prompt = messages.at(-1)?.content ?? "";
+        if (!prompt.includes("逐句看")) return base(messages, options);
+        sweeps += 1;
+        return JSON.stringify({ edits: [] });
+      },
+    });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(sweeps).toBe(2);
+    expect(outcome.proposal.edits).toEqual([]);
+    expect(outcome.proposal.missed).toEqual([{ chapter: 4, quote: "说他五年前就没了" }]);
   });
 
   it("一批没查成如实记下，不当成没有要改的", async () => {
@@ -317,6 +392,48 @@ describe("确认改齐", () => {
     expect(again).toMatchObject({ ok: true, replayed: true });
   });
 
+  it("人物关系也是一栏：和定论对不上的关系跟着改（换题材长篇实跑：周伯和林国栋「二十年的老搭档」）", async () => {
+    const write = await runCommand(dir, cardWrite, { ops: [
+      { op: "card.create", kind: "character", name: "杜长顺", aliases: ["杜叔"] },
+      { op: "card.create", kind: "character", name: "孟叔" },
+      { op: "relation.set", a: "孟叔", b: "杜长顺", label: "认识五年的老朋友" },
+    ] }, { caller: "author", idempotencyKey: "cards" });
+    if (!write.ok) throw new Error(write.message);
+    const model = fakeModel({ fieldsReply: (prompt) => {
+      const id = /\[(S\d+)\]孟叔 · 和杜长顺：认识五年的老朋友/u.exec(prompt)?.[1];
+      return JSON.stringify({ edits: id ? [{ id, to: "认识十年的老朋友" }] : [] });
+    } });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(outcome.proposal.fields).toEqual([{ key: "f1", card: "孟叔", relationWith: "杜长顺", label: "和杜长顺", from: "认识五年的老朋友", to: "认识十年的老朋友" }]);
+    const stored = await saveSettleProposal(dir, outcome.proposal);
+    const applied = await applySettleProposal(dir, stored.token, []);
+    if (!applied.ok) throw new Error(applied.message);
+    const cards = await readCards(dir);
+    expect(cards?.relations.map((relation) => relation.label)).toEqual(["认识十年的老朋友"]);
+  });
+
+  it("设定本的栏也复核：复核说不冲突（栏里只是没写这么细）就不上卡、留在存盘里（换题材长篇实跑：往「欠了网贷」里添借款细节）", async () => {
+    const write = await runCommand(dir, cardWrite, { ops: [
+      { op: "card.create", kind: "character", name: "杜长顺", aliases: ["杜叔"] },
+      { op: "field.set", card: "杜长顺", label: "处境", value: "早年跑船" },
+    ] }, { caller: "author", idempotencyKey: "cards" });
+    if (!write.ok) throw new Error(write.message);
+    const model = fakeModel({
+      fieldsReply: (prompt) => {
+        const id = /\[(S\d+)\]杜长顺 · 处境：早年跑船/u.exec(prompt)?.[1];
+        return JSON.stringify({ edits: id ? [{ id, to: "早年跑船，十年前去世" }] : [] });
+      },
+      reviewReply: JSON.stringify({ verdicts: [{ id: 1, conflict: true }, { id: 2, conflict: false }] }),
+    });
+    const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: model });
+    if (!outcome.ok) throw new Error(outcome.message);
+    expect(model.prompts.find((prompt) => prompt.includes("请逐条复核"))).toContain("[2] 设定本（杜长顺 · 处境）：「早年跑船」→「早年跑船，十年前去世」");
+    expect(outcome.proposal.fields).toEqual([]);
+    expect(outcome.proposal.edits.map((edit) => edit.chapter)).toEqual([2, 4]);
+    expect(outcome.proposal.reviewDropped).toEqual([{ card: "杜长顺", label: "处境", from: "早年跑船", to: "早年跑船，十年前去世" }]);
+  });
+
   it("划掉的那处不改；账里那条跟着不动；记账没问成的那条作废并如实说", async () => {
     const outcome = await proposeSettle({ projectDir: dir, request: pick, callModel: fakeModel({ factsReply: "不是 JSON" }) });
     if (!outcome.ok) throw new Error(outcome.message);
@@ -370,6 +487,16 @@ describe("确认改齐", () => {
   });
 });
 
+describe("aroundUnit：一句的前后文", () => {
+  it("带同一段里前后的句子（换题材长篇实跑 2026-10-27：「借款人林朗」在同一段前两句，只带一句时定论写成了林晚的借款）", () => {
+    const units = splitUnits("她进了门。\n\n“我是他姐姐。借款人林朗。先调合同。”林晚说，“借款时间去年三月。”\n\n“请本人来电。”");
+    const unit = units.find((item) => item.text.includes("借款时间"))!;
+    expect(aroundUnit(units, unit)).toEqual({ before: "“我是他姐姐。借款人林朗。先调合同。”", after: "“请本人来电。”" });
+    const first = units.find((item) => item.text.includes("我是他姐姐"))!;
+    expect(aroundUnit(units, first).before).toBe("她进了门。");
+  });
+});
+
 describe("改法解析", () => {
   it("新句抄了上一句（一段对话切成两句）：去掉抄的那截再换，正文不会重复", () => {
     const text = "“许微，那都是多少年前的事了。你爸没了十五年了，你翻这些有什么用。”";
@@ -379,6 +506,23 @@ describe("改法解析", () => {
     expect(parseSweepEdits(reply, [doc])).toEqual([
       { chapter: 2, target: "committed", id: 2, from: "你爸没了十五年了，你翻这些有什么用。”", to: "你爸失踪十五年了，你翻这些有什么用。”" },
     ]);
+  });
+
+  it("章号写成「第 2 章」、句号写成「[1]」也认（换题材长篇实跑 2026-10-27：同章另两句因章号认不出静默丢了）", () => {
+    const text = "他说五点半到。她点了点头。";
+    const units = splitUnits(text);
+    const doc = { chapter: 2, target: "draft" as const, text, units, numbered: numberedText(units) };
+    const reply = JSON.stringify({ edits: [{ chapter: "第 2 章", id: "[1]", to: "他说三点半到。" }] });
+    expect(parseSweepEdits(reply, [doc])).toEqual([{ chapter: 2, target: "draft", id: 1, from: "他说五点半到。", to: "他说三点半到。" }]);
+  });
+
+  // 换题材长篇实跑 2026-10-28：「“你知道就好。[98]…[99]…[100]你位置空一个星期了…”」整条被当成一句改成了几句丢掉。
+  it("改法照编号正文整段抄回来（带着别的编号）：按编号拆开，改了的那句照收", () => {
+    const text = "“你知道就好。活儿摊给了三个人。你位置空两个月了。”";
+    const units = splitUnits(text);
+    const doc = { chapter: 4, target: "committed" as const, text, units, numbered: numberedText(units) };
+    const reply = JSON.stringify({ edits: [{ chapter: 4, id: 1, to: "“你知道就好。[2]活儿摊给了三个人。[3]你位置空一个星期了。”" }] });
+    expect(parseSweepEdits(reply, [doc])).toEqual([{ chapter: 4, target: "committed", id: 3, from: "你位置空两个月了。”", to: "你位置空一个星期了。”" }]);
   });
 
   it("整栏内容抄回了栏头（卡名 · 栏名：）和「（AI 补的）」：去掉，只留内容", () => {

@@ -198,6 +198,30 @@ describe("streamAgentChat", () => {
     expect(received?.summary).toContain("没通过校验");
   });
 
+  it("出完稿这一轮别的工具没让执行：skipped 随 tool-result 透传（投影层置「已停止」）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      sseResponse([
+        frame("tool-result", { toolCallId: "p1", toolName: "commit_preview", output: { ok: false, skipped: true, summary: "这一步先不做" } }),
+        frame("done", {}),
+      ]),
+    ));
+    let received: { ok?: boolean; skipped?: boolean } | undefined;
+    await streamAgentChat(
+      { projectPath: "/tmp/p", messages: [{ role: "user", content: "写第 25 章" }] },
+      {
+        onTextDelta: () => undefined,
+        onToolCall: () => undefined,
+        onToolResult: (info) => {
+          received = info;
+        },
+        onToolError: () => undefined,
+        onError: () => undefined,
+        onDone: () => undefined,
+      },
+    );
+    expect(received).toMatchObject({ ok: false, skipped: true });
+  });
+
   it("工具结果无 dryRun/action → 不带这两个 key（读类工具轻量投影行为不变）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       sseResponse([

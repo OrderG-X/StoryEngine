@@ -13,11 +13,38 @@ export function chinesePunctuation(content: string): string {
 }
 
 /**
- * 改稿、接着写换进来的那段：作者自己那部分本来就用直引号（一个弯引号都没有）、半角逗号（一个全角逗号都没有），就跟着作者，不换。
+ * 改稿、接着写换进来的那段（新写一章时是上一章）：作者自己那部分本来就用直引号（一个弯引号都没有）、半角逗号（一个全角逗号都没有），就跟着作者，不换。
+ * 弯引号、直角引号也跟着原文（见 quotesLike）。
  */
 export function chinesePunctuationLike(context: string, content: string): string {
   const quotes = context.includes("\"") && !context.includes("“") ? content : curlyStraightQuotes(content);
-  return context.includes(",") && !context.includes("，") ? quotes : fullWidthAfterHan(quotes);
+  const punctuated = context.includes(",") && !context.includes("，") ? quotes : fullWidthAfterHan(quotes);
+  return quotesLike(context, punctuated);
+}
+
+// 不猜白名单开始：自家格式
+const CORNER_TO_CURLY: Readonly<Record<string, string>> = { "「": "“", "」": "”", "『": "‘", "』": "’" };
+const CURLY_TO_CORNER: Readonly<Record<string, string>> = { "“": "「", "”": "」", "‘": "『", "’": "』" };
+// 不猜白名单结束
+
+/**
+ * 弯引号「“”」和直角引号「「」」跟着原文：原文对话用的那种多，换进来的那段一个都没用、全用了另一种，就换成原文那种。
+ * 换题材长篇实跑第 23 章：作者在对话里用「」引了句台词，写手整章 38 处对话都跟着用了「」，前 22 章全是“”。
+ * 两种都用了的不动（可能是作者有意的）。
+ */
+function quotesLike(context: string, content: string): string {
+  const count = (text: string, mark: string) => text.split(mark).length - 1;
+  const curly = count(context, "“");
+  const corner = count(context, "「");
+  if (curly > corner && count(content, "“") === 0 && count(content, "「") > 0) return swap(content, CORNER_TO_CURLY);
+  if (corner > curly && count(content, "「") === 0 && count(content, "“") > 0) return swap(content, CURLY_TO_CORNER);
+  return content;
+}
+
+function swap(content: string, table: Readonly<Record<string, string>>): string {
+  let out = "";
+  for (const char of content) out += table[char] ?? char;
+  return out;
 }
 
 function curlyStraightQuotes(content: string): string {

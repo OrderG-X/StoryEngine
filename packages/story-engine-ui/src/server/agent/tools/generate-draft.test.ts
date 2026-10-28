@@ -6,7 +6,9 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, readDraft, runCommand, type CardOp } from "@actalk/story-core";
+import { runDraftQualityPipeline } from "../../services/draft-pipeline/run-quality-pipeline.js";
+import type { BrainCallModel } from "../../editorial/index.js";
 import { createStoryProject } from "../../book/project-store.js";
 import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { runFastDraft, type WriterClient } from "../../writing/fast-draft-writer.js";
@@ -32,6 +34,7 @@ import {
   buildDraftLengthInfo,
   buildDraftLengthWarning,
   authorDirectionOf,
+  withPickedDirection,
   buildGoalNotQuotedOutput,
   buildRewriteAwaitingAuthorOutput,
   buildSequencingBlockedOutput,
@@ -115,6 +118,12 @@ describe("generate_draft 输出格式", () => {
     const continuity = { checked: true, sure: [], maybe: [], failures: [], autoFixed: { applied: 2, failed: 0 } };
     expect(shape.qualityPipeline!.parse({ continuity })).toEqual({ continuity });
   });
+
+  // 换题材长篇实跑：两章都先被退回一次（删了「不服，」、把「他」换成「林朗」），作者每章看见「1 步没成功」。
+  it("chapterGoal 的说明讲清抄的每句一个字不改", () => {
+    const shape = (generateDraftTool.inputSchema as unknown as { shape: Record<string, { description?: string }> }).shape;
+    expect(shape.chapterGoal!.description).toContain("抄的每句一个字不改");
+  });
 });
 
 describe("generate_draft 写工作稿工具", () => {
@@ -137,6 +146,21 @@ describe("generate_draft 写工作稿工具", () => {
     expect(onDisk).toContain("林远");
     // overview 供前端刷新
     expect(out.overview).toBeTruthy();
+    expect(out.summary).toContain("满意后可以让我做定稿预览");
+  });
+
+  it("作者要写完就出定稿预览：回执说预览接着出，不再叫作者「让我做定稿预览」（2026-10-28 真机：模型照着说「也出了定稿预览」）", async () => {
+    const projectDir = await makeProject("出稿", "林远");
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      chapterGoal: "第 1 章：主角初入局。",
+      writerClient: mockWriterClient(longBody("林远")),
+      thenPreview: true,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.summary).toContain("定稿预览接着出，看过再点「确认定稿」。");
+    expect(out.summary).not.toContain("满意后可以让我做定稿预览");
   });
 
   // Codex 复测额外发现：首稿把「第三块砖→第三层杂志架」「债权池A-17→数字串」。mustHitBeats 注入硬约束 +
@@ -541,6 +565,14 @@ describe("作者档结构护栏（重构 P4：有稿不覆盖 + 方向找原句�
     expect(authorDirectionOf(undefined, undefined)).toBeUndefined();
   });
 
+  it("withPickedDirection：挑中的走法并进方向，作者另外说的接后面；方向里已有（按钮带来的）不重复；没挑照旧", () => {
+    expect(withPickedDirection("别让她认定是一家人", "老民警：1. 去派出所")).toBe("老民警：1. 去派出所\n作者另外说：别让她认定是一家人");
+    expect(withPickedDirection(undefined, "老民警：1. 去派出所")).toBe("老民警：1. 去派出所");
+    expect(withPickedDirection("老民警：1. 去派出所\n作者要走法时说：慢一点", "老民警：1. 去派出所\n作者要走法时说：慢一点")).toBe("老民警：1. 去派出所\n作者要走法时说：慢一点");
+    expect(withPickedDirection("写快一点", undefined)).toBe("写快一点");
+    expect(withPickedDirection(undefined, undefined)).toBeUndefined();
+  });
+
   it("buildGoalNotQuotedOutput：列出不是原话的句子，不泄工具名", () => {
     const out = buildGoalNotQuotedOutput(3, ["并埋下伏笔"], {} as StateOverview);
     expect(out.ok).toBe(false);
@@ -790,6 +822,28 @@ describe("generate_draft execute 章号回退（currentChapter）", () => {
 
       const out = await execute({ chapter: 6 }, context) as { ok: boolean; chapter: number };
       expect(out.chapter).toBe(6);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("作者给这一章挑过走法：对话里只说「照甲写，改一处」，章纲员拿到的方向是走法原文 + 作者另外说的", async () => {
+    const projectDir = await makeProject("挑中走法");
+    const mockClient: WriterClient = mockWriterClient(longBody("林远"));
+    const writerClientModule = await import("../../writing/writer-client.js");
+    const planModule = await import("../../editorial/plan-chapter.js");
+    const plan = vi.mocked(planModule.resolveChapterPlanForDraft);
+    plan.mockClear();
+    const spy = vi.spyOn(writerClientModule, "createConfiguredWriterClient").mockResolvedValue(mockClient);
+
+    try {
+      const context = {
+        requestContext: buildProjectRequestContext(projectDir, 1, undefined, ["照甲写。一处改：别急着揭底。"], undefined, { chapter: 1, text: "老民警：1. 去派出所 2. 只漏出名字" }),
+      } as unknown as ToolExecutionContext;
+
+      const out = await execute({ chapter: 1, chapterGoal: "一处改：别急着揭底。" }, context) as { ok: boolean };
+      expect(out.ok).toBe(true);
+      expect(plan.mock.calls.at(-1)?.[0]).toMatchObject({ direction: "老民警：1. 去派出所 2. 只漏出名字\n作者另外说：一处改：别急着揭底。" });
     } finally {
       spy.mockRestore();
     }
@@ -1155,6 +1209,26 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     expect(out.summary).not.toContain("⚠ 首稿核对"); // 去味前没有判漏，不打这条
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).not.toContain("第三块砖"); // 锚点确实被吃掉了
+  });
+
+  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后落盘的那版正文和版本，核账卡对得上", async () => {
+    const projectDir = await makeProject("去味先于核账", "林远");
+    const pipeline = vi.mocked(runDraftQualityPipeline);
+    pipeline.mockClear();
+    const checker: BrainCallModel = async () => "{}";
+    const out = await runGenerateDraftToolLogic({
+      projectDir,
+      chapter: 1,
+      writerClient: mockWriterClient(ANCHOR_FLAVORED_BODY),
+      deAiCallModel: async () => KEEP_ANCHOR,
+      continuityCheckCallModel: checker,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.autoDeAi?.fixedCount).toBe(1);
+    const checkRun = pipeline.mock.calls.map(([input]) => input).find((input) => input.checkCallModel === checker);
+    const onDisk = (await readDraft(projectDir, 1))!;
+    expect(checkRun?.draftBody).toBe("林远撬开第三块砖，取出薄铁盒。");
+    expect(checkRun?.baseVersion).toBe(onDisk.version);
   });
 
   it("去味改写保住锚点 → 无 postDeAiNewMisses、beatFidelity 字段不出现、summary 无新漏噪音", async () => {

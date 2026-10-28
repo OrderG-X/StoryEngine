@@ -15,7 +15,7 @@ describe("改版 buildInboxTodos：AI 栏「待处理」", () => {
       currentChapterNumber: 58,
     });
     expect(todos.map((t) => t.title)).toEqual([
-      "36 条线索可以清理",
+      "36 条线索好几章没动",
       "主线目标 29 章没推进",
       "第 49 章还没起标题",
       "3 章用了同一个标题「看手」",

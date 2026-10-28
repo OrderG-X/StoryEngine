@@ -75,7 +75,9 @@ export function SettleCard({ messageId, data, excluded = [], applied, dropped = 
   const canConfirm = !done && !off && Boolean(onAction) && (changes > 0 || recordsCanon);
   const recheck = () => onAction?.({ toolName: "settle_preview", statement: data.canon, ...(data.chapter ? { chapter: data.chapter } : {}) });
   const incomplete = data.failures.length > 0 || data.missed.length > 0;
-  const statusLabel = done ? "改齐了" : off ? "不改了" : data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
+  // 只记定论、哪儿都没改：说「记下了」，不说「改齐了」（换题材长篇实跑第 22 章）。
+  const doneLabel = data.edits.length + data.fields.length + data.facts.length > 0 ? "改齐了" : "记下了";
+  const statusLabel = done ? doneLabel : off ? "不改了" : data.edits.length > 0 ? `${data.edits.length} 句要改` : data.fields.length > 0 ? `设定 ${data.fields.length} 栏要改` : "没查出要改的";
   return (
     <StepCard title={data.sceneOnly ? "改齐" : "定论"} status={done || off ? "done" : changes > 0 ? "attention" : "done"} statusLabel={statusLabel} defaultOpen keepOpen={canConfirm}>
       <p className="stc-canon serif">{data.canon}</p>

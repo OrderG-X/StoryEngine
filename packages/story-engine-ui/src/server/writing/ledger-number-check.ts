@@ -62,6 +62,8 @@ const UNIT_AFTER = /^(?:号|年|岁|层|楼|室|栋|幢|元|块|米|公里|斤|�
 /** 约数、相对时间、时长：会随故事推移变，不是死设定。 */
 const NOT_FIXED_AFTER = /^(?:[几多来余]|年[前后间来多底初]|岁[前后多]|号[前后])/u;
 const HAN_RUN_BEFORE = /([\p{Script=Han}]+)[，,、：:\s“”"'「」]{0,2}$/u;
+/** 「年」前面只认年份的写法（1987、一九八七、九四）；「十四年」「一年」是一段时长，换个场合本来就不一样。 */
+const CALENDAR_YEAR = /^(?:[0-9０-９]{4}|[零〇一二三四五六七八九]{2,4})$/u;
 // 不猜白名单结束
 /** 数字前面这些两字太泛，不能单独当模板（「今年二十八岁」谁都能说）：要求事实的主体紧挨在前面。 */
 const GENERIC_LEFT = new Set([
@@ -97,9 +99,12 @@ function numberSlots(sentence: string): readonly (NumberSlot & { readonly index:
     const runEnd = before.length - ((runMatch?.[0].length ?? 0) - run.length);
     // 不猜白名单：数字归一
     if (UNIT_AFTER.test(run.slice(-2)) && /[0-9０-９零〇一二两三四五六七八九十百千万]/u.test(before.charAt(runEnd - 3))) continue;
+    const unit = UNIT_AFTER.exec(after)![0];
+    // 换题材长篇实跑：第 2 章「开张头十四年的账」当了模板，第 5 章「开张头一年」报成「确定」——两段时长，不是一个数写错。
+    if (unit === "年" && !CALENDAR_YEAR.test(match[0])) continue;
     const value = parseNumberToken(match[0]);
     if (value === undefined) continue;
-    out.push({ left: run.slice(-2), unit: UNIT_AFTER.exec(after)![0], value, text: match[0], index });
+    out.push({ left: run.slice(-2), unit, value, text: match[0], index });
   }
   return out;
 }

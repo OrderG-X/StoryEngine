@@ -152,9 +152,20 @@ export function CommitSheet({
     setDayOverride(value);
     rememberLedgerDayOverride(preview.chapter, preview.previewToken, value);
   };
-  /** 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。 */
-  const changeStart = (value: number | undefined) =>
-    changeDay(value === undefined ? undefined : { day: value, dayEnd: value + Math.max(0, shownEnd - shownDay) });
+  /**
+   * 改头一天：跨的天数跟着挪（第 20～21 天改成 21 → 第 21～22 天）；要只记一天，把「到第几天」也改成同一天。
+   * 这次已经填过「到第几天」就按填的不动（换题材长篇实跑 2026-10-27：先填到第 13 天、再把头一天改成 12，
+   * 跟着挪成了第 12～14 天，框里却还显示 13）。
+   */
+  const changeStart = (value: number | undefined) => {
+    if (value === undefined) {
+      changeDay(undefined);
+      return;
+    }
+    const dayEnd = dayEndText !== null ? Math.max(shownEnd, value) : value + Math.max(0, shownEnd - shownDay);
+    if (dayEndText !== null && Number(dayEndText) !== dayEnd) setDayEndText(null);
+    changeDay({ day: value, dayEnd });
+  };
   const changeEnd = (value: number | undefined) => {
     if (value !== undefined) changeDay({ day: shownDay, dayEnd: Math.max(value, shownDay) });
   };

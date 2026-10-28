@@ -27,6 +27,13 @@ describe("fixByUnits：按编号整句换（P12 编号句子）", () => {
     expect(out).toMatchObject({ text: "他走了。\n许微点了点头。\n", applied: [0] });
   });
 
+  // 换题材长篇实跑 2026-10-28：改法照编号正文整段抄回（「上一句[2]这一句」），整条被当成一句改成了几句丢掉。
+  it("新写法带着别的编号（整段抄回来）：按编号拆开，点名那句照换", async () => {
+    const text = "他走了。\n许微没接话。\n";
+    const out = await fixByUnits({ chapter: 5, text, fixes: [{ quote: "许微没接话", goal }], callModel: async () => reply([{ id: 1, to: "他走了。[2]许微点了点头。" }]) });
+    expect(out).toMatchObject({ text: "他走了。\n许微点了点头。\n", applied: [0] });
+  });
+
   it("两处报的是同一句：合成一条交给模型，只问一次，两处都算改了", async () => {
     const callModel = vi.fn(async (_prompt: string) => reply([{ id: 1, to: "甲乙丁。" }]));
     const out = await fixByUnits({ chapter: 5, text: "甲乙丙。戊己。\n", fixes: [{ quote: "甲乙", goal: "一" }, { quote: "乙丙", goal: "二" }], callModel });

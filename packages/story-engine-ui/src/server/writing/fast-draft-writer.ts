@@ -39,7 +39,7 @@ import { buildPromptFingerprint, type PromptFingerprint } from "./prompt-cache-d
 import { describeErrorBriefly } from "../book/project-store.js";
 import { readBibleTolerant } from "./setting-pack.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
-import { chinesePunctuation, chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
+import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
 
 export { resolveDraftMaxOutputTokens } from "./draft-length-control.js";
 
@@ -163,8 +163,34 @@ export function findReplayedParagraphs(firstHalf: string, secondHalf: string): r
   return replayed;
 }
 
+/** 已写部分末尾几段算「刚写的」：接着写开头原样抄了其中一段就去掉。 */
+const ECHO_TAIL_PARAGRAPHS = 3;
+
+/**
+ * 接着写开头把已写部分最后的话原样又抄了一遍：去掉（确定性：整段字面相同，或开头正是已写最后一段）。
+ * 换题材长篇实跑 2026-10-27：作者写到「林晚看着火。」，接着写的第一段又是「林晚看着火。」——
+ * 短段进不了重演检查（REPLAY_MIN_CHARS），核账再报出来也算在作者那段上，不会自动改。
+ */
+export function dropEchoedLead(written: string, body: string): string {
+  const tail = written.split(/\n+/u).map((item) => item.trim()).filter(Boolean).slice(-ECHO_TAIL_PARAGRAPHS);
+  if (tail.length === 0) return body;
+  const last = tail[tail.length - 1]!;
+  const paragraphs = body.split(/\n+/u).map((item) => item.trim()).filter(Boolean);
+  if (paragraphs.length === 0) return body;
+  let dropped = 0;
+  while (dropped < paragraphs.length - 1 && tail.includes(paragraphs[dropped]!)) dropped += 1;
+  const rest = paragraphs.slice(dropped);
+  const head = rest[0]!;
+  if (head.startsWith(last) && head.slice(last.length).trim()) rest[0] = head.slice(last.length).trim();
+  if (dropped === 0 && rest[0] === head) return body;
+  return rest.join("\n\n");
+}
+
 /** 章纲要点至少几条才分两半写（太少就一次写完）。 */
 const MIN_BEATS_TO_SEGMENT = 4;
+/** 后半章要的字数按前半章写到几成来放大 / 缩小，比例夹在这个范围里。 */
+const SEGMENT_RATIO_MIN = 0.75;
+const SEGMENT_RATIO_MAX = 1.25;
 /**
  * 目标字数至少这么多才分两半写。原为 2600：2026-10-10 真机试写目标 2500 的书一次只写出一千六七，
  * 剩下一千多字靠续写补，硬伤几乎全出在续写段——一次写不够目标的都该分两半。1800 这类短章仍一次写完。
@@ -330,7 +356,10 @@ async function generateBySegments(input: {
   }
 
   // 后半章补足前半章少写的（写手越到后面越短：长篇连写第 26～29 章首稿多在下限上下，前半章短了后半章还按一半要）。
-  const secondTarget = Math.max(half, aim - countDraftChineseCharacters(firstBody));
+  // 写手前半章只写到要的几成，后半章多半也是：要的字数按这个比例放大 / 缩小（换题材长篇实跑 2026-10-27：
+  // 每章都只到要的八成，整章 1600 上下、回回低于下限 1700）。比例夹在 0.75～1.25：照要的写满也不超上限太多。
+  const firstRatio = Math.min(SEGMENT_RATIO_MAX, Math.max(SEGMENT_RATIO_MIN, countDraftChineseCharacters(firstBody) / Math.max(1, half)));
+  const secondTarget = Math.round(Math.max(half, aim - countDraftChineseCharacters(firstBody)) / firstRatio);
   // 稿纸上：前半章（重写过就是用上的那版）+ 空行，后半章从这里往下流。
   const firstVisible = `${first.content.match(/^#[^\n]*\n/u)?.[0] ?? ""}${firstBody}\n\n`;
   input.restream?.(firstVisible);
@@ -351,7 +380,9 @@ async function generateBySegments(input: {
   });
   try {
     const second = await input.writerClient.generateDraft({ context: secondContext, maxOutputTokens: input.maxOutputTokens });
-    let secondBody = stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(second.content)).trim();
+    // 后半章开头原样抄了前半章最后一句（换题材长篇实跑第 21 章：「“泡上吧。”」连着两遍）：和接着写一样去掉。
+    const cleanSecond = (content: string): string => dropEchoedLead(firstBody, stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(content)).trim());
+    let secondBody = cleanSecond(second.content);
     if (!secondBody) throw new Error("后半章是空的");
     // 接缝重演检测（第十三轮验收：后半章把前半章的整场戏重演一遍，7 处矛盾出在接缝）：后半章有段落与前半章
     // 某段高度重合 → 带着被重演的片段提示重写后半章一次，取重演更少的那版。确定性检测、只在检出时多花一次调用。
@@ -370,7 +401,7 @@ async function generateBySegments(input: {
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
-      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
+      const retryBody = retry ? cleanSecond(retry.content) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
@@ -394,7 +425,7 @@ async function generateBySegments(input: {
         context: withSectionContent(secondContext, "chapter_goal", { chapter: input.plan.chapter, goal: retryGoal }),
         maxOutputTokens: input.maxOutputTokens,
       }).catch(() => undefined);
-      const retryBody = retry ? stripTrailingSegmentMarkers(stripLeadingMarkdownChapterHeading(retry.content)).trim() : "";
+      const retryBody = retry ? cleanSecond(retry.content) : "";
       const retryLength = countDraftChineseCharacters(retryBody);
       const used = retryLength > before && findReplayedParagraphs(alreadyWritten, retryBody).length <= replayedRemaining;
       if (used) secondBody = retryBody;
@@ -480,7 +511,7 @@ async function generateContinuation(input: {
     const first = required
       ? await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens })
       : await input.writerClient.generateDraft({ context, maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
-    let body = first ? clean(first.content) : "";
+    let body = first ? dropEchoedLead(written, clean(first.content)) : "";
     if (!body) {
       if (required) throw new Error("接着写的那段是空的");
       return undefined;
@@ -495,7 +526,7 @@ async function generateContinuation(input: {
         `【上一次接着写的那段把已经写过的场面又写了一遍】例如：「${replays.slice(0, 2).map((text) => text.slice(0, 60)).join("」「")}」。这些都已经发生过了，这次绝对不要重演，从已写部分最后一句之后往前推进新的事。`,
       ].join("\n");
       const retry = await input.writerClient.generateDraft({ context: contextFor(written, retryGoal), maxOutputTokens: input.maxOutputTokens }).catch(() => undefined);
-      const retryBody = retry ? clean(retry.content) : "";
+      const retryBody = retry ? dropEchoedLead(written, clean(retry.content)) : "";
       retried = retryBody.length > 0;
       const retryReplays = retryBody ? findReplayedParagraphs(alreadyWritten, retryBody).length : replays.length;
       if (retryBody && retryReplays < replays.length) {
@@ -695,10 +726,11 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
     }
     const generatedTitle = chooseDraftTitle(input.chapter, generated.title, generated.content);
     const cleanedBody = stripTrailingSegmentMarkers(stripMarkdownEmphasis(stripLeadingMarkdownChapterHeading(generated.content)));
-    // 英文直引号、半角逗号换成中文的（接着写时跟着作者那段的写法）；回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
+    // 英文直引号、半角逗号换成中文的，引号跟着前文的写法（接着写跟作者那段，新写一章跟上一章）；
+    // 回的是 JSON / 工具调用就原样留着，交给下面的关卡认出来拦下。
     const writtenBody = looksLikeToolOrJsonArtifact(cleanedBody.trim())
       ? cleanedBody
-      : continued ? chinesePunctuationLike(existing, cleanedBody) : chinesePunctuation(cleanedBody);
+      : chinesePunctuationLike(continued ? existing : previousChapterText(context) ?? "", cleanedBody);
     // 接着写：清理只动新写的那段，已写的原样拼在前面。
     const rawDraftBody = continued ? `${existing}\n\n${writtenBody.trim()}` : writtenBody;
     const rawDraftLength = buildDraftLengthReport({

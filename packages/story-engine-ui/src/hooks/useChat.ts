@@ -17,7 +17,7 @@ import { flowStatusAfterGenerateFailure } from "./reconcileChapterState.js";
 import { openCommitSheet, reusableCommitPreviewId } from "../workspace/commitSheet.js";
 import { userActionChoiceText } from "../utils/chapterActionIntents.js";
 import { chapterButtonAction, NO_CHAPTER_HINT, type ChapterButton } from "../utils/chapterButtons.js";
-import { directionGoal, pickedDirection } from "../utils/brainstormCard.js";
+import { directionGoal, pickedDirection, pickedDirectionGoal } from "../utils/brainstormCard.js";
 import type { StateOverview } from "../api/types.js";
 import type { ChapterMessage, CommitConfirmTarget, SuggestedAction } from "../types.js";
 import { useBookStore } from "../stores/bookStore.js";
@@ -322,12 +322,14 @@ export function useChat(params: UseChatParams): UseChatResult {
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
         // 与块级「撤销到此」同一锚点；作者说「撤销上一步」指的是上一回合的全部改动。
         const lastTurnUndoHint = lastTurnUndoHintFromMessages(useChatStore.getState().messages);
+        const pickedText = typeof currentChapterNumber === "number" ? pickedDirectionGoal(useChatStore.getState().messages, currentChapterNumber) : undefined;
         await streamAgentChat(
           {
             projectPath,
             messages: [...conversation, { role: "user", content: text }],
             ...(typeof currentChapterNumber === "number" ? { currentChapter: currentChapterNumber } : {}),
             ...(lastTurnUndoHint ? { lastTurnUndoHint } : {}),
+            ...(pickedText && typeof currentChapterNumber === "number" ? { pickedDirection: { chapter: currentChapterNumber, text: pickedText } } : {}),
             ...(action ? { action } : {}),
           },
           {
@@ -888,8 +890,8 @@ export function useChat(params: UseChatParams): UseChatResult {
       const liveUi = useUiStore.getState();
       const chapter = liveBook.workspace.currentChapter?.chapterNumber;
       // 「写这一章」：作者在稿纸上方挑中过走法，就照它写（输入框里另写了话一并带上）。
-      const picked = typeof chapter === "number" ? pickedDirection(useChatStore.getState().messages, chapter) : undefined;
-      const direction = [picked ? directionGoal(picked) : "", liveUi.steeringDirection.trim()].filter(Boolean).join("\n");
+      const pickedGoal = typeof chapter === "number" ? pickedDirectionGoal(useChatStore.getState().messages, chapter) : undefined;
+      const direction = [pickedGoal ?? "", liveUi.steeringDirection.trim()].filter(Boolean).join("\n");
       const action = chapterButtonAction(button, {
         chapter,
         chapters: liveBook.workspace.chapters,

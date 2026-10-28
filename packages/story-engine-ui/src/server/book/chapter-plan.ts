@@ -60,6 +60,8 @@ export interface ChapterPlan {
   readonly avoid: readonly string[];
   /** 没照作者方向原话安排的地方（P7：章纲员把「铜盒」悄悄改成「怀表」、作者不知道）。缺省 = 照原话安排的 / 老章纲。 */
   readonly directionChanges?: readonly ChapterPlanDirectionChange[];
+  /** 拟纲时前文的指纹（前面各章正文、账、设定、前面各章是哪天）：变了就不沿用这份章纲。缺省 = 老章纲 / 作者给的。 */
+  readonly basis?: string;
   readonly createdAt: string;
 }
 
@@ -144,7 +146,7 @@ function stripStoryDayNumbering(text: string): string {
 
 export function normalizeChapterPlan(
   raw: unknown,
-  meta: { readonly chapter: number; readonly source?: "model" | "author"; readonly direction?: string; readonly now?: Date },
+  meta: { readonly chapter: number; readonly source?: "model" | "author"; readonly direction?: string; readonly basis?: string; readonly now?: Date },
 ): ChapterPlan | undefined {
   const record = asRecord(raw);
   if (!record) return undefined;
@@ -176,6 +178,7 @@ export function normalizeChapterPlan(
     threadsAdvanced: cleanThreadSteps(record.threadsAdvanced ?? record.threads),
     avoid: cleanList(record.avoid ?? record.doNotRepeat, 8),
     ...directionChangesOf(record.directionChanges, direction),
+    ...(meta.basis ? { basis: meta.basis } : {}),
     createdAt: (meta.now ?? new Date()).toISOString(),
   };
 }
@@ -274,6 +277,7 @@ export async function readChapterPlan(
       chapter,
       source: parsed.source === "author" ? "author" : "model",
       ...(typeof parsed.direction === "string" ? { direction: parsed.direction } : {}),
+      ...(typeof parsed.basis === "string" ? { basis: parsed.basis } : {}),
       ...(typeof parsed.createdAt === "string" && !Number.isNaN(Date.parse(parsed.createdAt)) ? { now: new Date(parsed.createdAt) } : {}),
     });
   } catch {

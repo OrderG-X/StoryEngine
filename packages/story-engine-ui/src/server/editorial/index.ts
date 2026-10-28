@@ -42,8 +42,11 @@ export {
   parsePlanProblems,
   parseSettingChecks,
   parseSettingIssues,
+  recheckChangesByReader,
+  recheckTask,
   selfReviewTask,
   settingCheckTask,
+  type ChangedSentence,
   type PlanProblem,
   type ReaderCheckVariant,
 } from "./checker.js";
@@ -70,6 +73,7 @@ export {
   type ReaderWaited,
 } from "./reader-progress.js";
 export { LEDGER_ROLE };
+export { MAX_REVIEW_THREADS, reviewOpenThreads, type ThreadCloseSuggestion, type ThreadReviewOutcome } from "./thread-review.js";
 export {
   brainstormChapter,
   BRAINSTORM_OPTIONS,
@@ -121,16 +125,17 @@ const readerRoles = (): readonly ReaderRole[] => [
  * 三个角色共用同一条补读队列（每本书一条），按 checker → ledger → planner 依次补，不同时并发打服务商；
  * 同一本书、同一组角色已有一轮要读到 ≥ upTo 的补读在队里时，这次不重排（角色不同不算，照排）。
  * R5.3：一轮读的途中作者又定稿了新章的话，这轮自己追到新末尾（见 catch-up.ts 的追新），不靠后面的预热补漏。
- * roles：显式点名要补的角色（调用方自己知道刚才等的是哪个角色，比如核账服务点名 checker）；缺省补全部三个角色。
+ * roles：显式点名要补的角色（调用方自己知道刚才等的是哪个角色，比如核账服务点名 checker），按点名的先后补；缺省补全部三个角色。
  */
 export async function catchUpReaders(
   projectDir: string,
   upTo: number,
   options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string; readonly roles?: readonly string[] } = {},
 ): Promise<void> {
+  const all = readerRoles();
   const wanted = options.roles
-    ? readerRoles().filter((role) => options.roles!.includes(role.id))
-    : readerRoles();
+    ? options.roles.flatMap((id) => all.filter((role) => role.id === id))
+    : all;
   if (wanted.length === 0) return;
   const root = options.notesRoot ?? projectDir;
   const roleIds = wanted.map((role) => role.id);
@@ -148,13 +153,18 @@ export async function catchUpReaders(
   }
 }
 
-/** 定稿后预热：后台给三个专员补笔记到刚定稿的这一章（走同一条队列依次补），不阻塞定稿。 */
+/**
+ * 定稿后预热：后台给三个专员补笔记到刚定稿的这一章（走同一条队列依次补），不阻塞定稿。
+ * 章纲员排最前：定稿后作者多半接着写下一章，头一步就是拟纲（换题材长篇实跑：拟纲前当场补笔记中位 22 秒）；
+ * 核账员接着（审纲、核新稿要它），记账员最后（下次定稿才用）。
+ */
 export function warmUpReaders(
   projectDir: string,
   chapter: number,
   options: { readonly callModel?: BrainCallModel; readonly notesRoot?: string } = {},
 ): Promise<void> {
-  return catchUpReaders(projectDir, chapter, options);
+  const checker = checkerRoleFor(DEFAULT_READER_VARIANT.structuredNotes);
+  return catchUpReaders(projectDir, chapter, { ...options, roles: [PLANNER_ROLE.id, checker.id, LEDGER_ROLE.id] });
 }
 
 /**

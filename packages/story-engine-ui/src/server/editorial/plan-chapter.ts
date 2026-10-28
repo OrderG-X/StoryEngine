@@ -2,7 +2,9 @@
  * 拟章纲编排（resolveChapterPlanForDraft）：章纲员窗口拟纲（planner.ts）→ 核账员窗口审纲（checker.ts）
  * → 有问题交回章纲员改一轮（不循环）。材料和天数归一这些纯函数在 plan-materials.ts。
  */
-import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { readChapterPlan, writeChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { readFactLedgerStrict } from "../book/fact-ledger-store.js";
+import { readStoryTimeline } from "../book/story-timeline.js";
 import {
   callConfiguredBrainModel,
   callConfiguredPlannerModel,
@@ -14,7 +16,9 @@ import {
   type BrainCallModel,
   type PlanProblem,
 } from "./index.js";
-import { containsQuote, normalize } from "./continuity/check-chapter.js";
+import { containsQuote, normalize, readEarlierChapters } from "./continuity/check-chapter.js";
+import { hashEarlier } from "./continuity/check-memory.js";
+import { readFoundationDigest } from "./foundation-digest.js";
 import { withStep } from "../lib/token-meter.js";
 
 export interface ResolvedChapterPlan {
@@ -139,8 +143,25 @@ async function planByEditorialRoom(input: {
 }
 
 /**
- * 出稿前拿到本章章纲：这章已有章纲、且作者方向没变（同为空或原话相同）→ 沿用（「重写这一章」保持同一份章纲）；
- * 否则编辑部重拟。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
+ * 章纲依赖的前文指纹：前面各章正文、账、设定、前面各章是哪天（本章的日子不进——时间线会读本章章纲里的天数）。
+ * 读不了 → undefined：不沿用，拟出来的也不记指纹。
+ */
+export async function planBasisOf(projectDir: string, chapter: number): Promise<string | undefined> {
+  try {
+    const earlier = await readEarlierChapters(projectDir, chapter);
+    const { facts } = await readFactLedgerStrict(projectDir);
+    const foundation = await readFoundationDigest(projectDir);
+    const { timeline } = await readStoryTimeline(projectDir);
+    return hashEarlier(earlier, facts, foundation?.text, JSON.stringify(timeline.entries.filter((entry) => entry.chapter < chapter)));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 出稿前拿到本章章纲：这章已有章纲、作者方向没变（同为空或原话相同）、拟纲后前文也没改 → 沿用（「重写这一章」保持同一份章纲）；
+ * 否则编辑部重拟。前文改过（定论、改了前面哪章、记了裁定）还沿用，章纲就可能和前文对不上又没人审（外部审查 2026-10-28）。
+ * 作者给的章纲照旧沿用。拟不成 → plan 缺省 + 如实说明，出稿照旧路径走，绝不阻断出稿。
  */
 export async function resolveChapterPlanForDraft(input: {
   readonly projectDir: string;
@@ -154,11 +175,16 @@ export async function resolveChapterPlanForDraft(input: {
 }): Promise<ResolvedChapterPlan> {
   const direction = input.direction?.trim() ?? "";
   const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-  if (existing && (existing.direction ?? "") === direction) {
+  const basis = await planBasisOf(input.projectDir, input.chapter);
+  const sameDirection = existing !== undefined && (existing.direction ?? "") === direction;
+  if (existing && sameDirection && (existing.source === "author" || (basis !== undefined && existing.basis === basis))) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}${directionChangeNote(existing)}`, reused: true };
   }
   const planned = await planByEditorialRoom(input, direction);
-  return planned.plan ? { ...planned, note: `${planned.note}${directionChangeNote(planned.plan)}` } : planned;
+  if (!planned.plan) return planned;
+  if (basis) await writeChapterPlan(input.projectDir, { ...planned.plan, basis });
+  const staleNote = sameDirection && existing.basis !== undefined && basis !== undefined ? "前文改过，章纲按现在的重拟了。" : "";
+  return { ...planned, note: `${staleNote}${planned.note}${directionChangeNote(planned.plan)}` };
 }
 
 /**

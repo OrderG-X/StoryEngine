@@ -20,6 +20,7 @@
 import { stepCountIs, type ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
+import { DRAFT_TOOL, endsAfterDraft, releaseTurnFlow } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
@@ -29,12 +30,12 @@ import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { aiReviewTool } from "../agent/tools/ai-review.js";
 import { qualityCheckTool } from "../agent/tools/quality-check.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
-import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
+import { finishDraftTurn, parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { cachedCheckContinuity, checkContinuityTool } from "../agent/tools/check-continuity.js";
+import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
@@ -62,6 +63,22 @@ export function readCurrentChapter(raw: unknown): number | undefined {
 /** 作者在这段对话窗口里说过的话（user 消息原文，旧→新）：只给工具「找原句」用，不猜意图。 */
 export function readAuthorWords(messages: readonly { readonly role: string; readonly content: string }[]): readonly string[] {
   return messages.filter((message) => message.role === "user" && message.content.trim()).map((message) => message.content);
+}
+
+const PICKED_DIRECTION_MAX = 2000;
+
+/**
+ * body.pickedDirection：作者在稿纸上方点「用这个」挑中的走法（前端从走法卡上取，只发当前章的）。
+ * 换题材长篇实跑 2026-10-28：作者挑了甲、在对话里说「照甲写，改一处」，AI 不知道甲是什么——
+ * 方向填「照走法甲写」被找原句挡下，再填作者原话，章纲员照样不知道甲，写成了另一条路。
+ * 挑走法是作者自己点的，这段字算作者的话。章号对不上当前章、没字、不是这个形状就当没给。
+ */
+export function readPickedDirection(raw: unknown, currentChapter: number | undefined): string | undefined {
+  if (currentChapter === undefined || typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as { readonly chapter?: unknown; readonly text?: unknown };
+  if (record.chapter !== currentChapter || typeof record.text !== "string") return undefined;
+  const text = record.text.trim().slice(0, PICKED_DIRECTION_MAX);
+  return text || undefined;
 }
 
 /**
@@ -94,6 +111,7 @@ export function buildCurrentChapterSystemMessage(
   currentChapter: number | undefined,
   chapterStatus?: UiChapterFileState | undefined,
   allStates?: readonly UiChapterFileState[],
+  pickedDirection?: string,
 ): import("ai").ModelMessage | null {
   // 全书磁盘真相硬约束（A3）：即使没有 currentChapter，只要拿到了全书状态也要注入这条反证，
   // 让模型无法凭对话历史/印象谎报「某章已入库/已写好」。
@@ -118,7 +136,11 @@ export function buildCurrentChapterSystemMessage(
       `如果用户明确点名了某一章（例如「写第 7 章」「改第 3 章」「入库第 5 章」），一律以用户点名的章号为准，` +
       `即使它不是第 ${currentChapter} 章——把该章号原样填进工具的 chapter 入参，绝不用第 ${currentChapter} 章顶替。` +
       `只有当用户没有明确点名另一章时，才默认作用于第 ${currentChapter} 章，绝不要擅自跳到最新章或别的章。` +
-      committedForwardLine,
+      committedForwardLine +
+      (pickedDirection && !chapterStatus?.hasCommittedChapter
+        ? `\n作者给第 ${currentChapter} 章挑了这条走法（在稿纸上方点的「用这个」）：\n${pickedDirection}\n` +
+          `出稿写这一章时会自动照这条走法写，不用把它抄进 chapterGoal；chapterGoal 只填作者另外说的话（原话，没有就不填）。`
+        : ""),
   };
 }
 
@@ -167,6 +189,8 @@ export function buildModelMessages(
 /** 历史里工具结果只说成没成，细节在那条回复里。 */
 const HISTORY_TOOL_DONE = "做完了，结果见下一条回复。";
 const HISTORY_TOOL_FAILED = "没成功；下一条回复里若说已经做成，不算数。";
+/** 换题材长篇实跑 2026-10-27：作者在定论卡上点了「不改了」再说一遍同一条，AI 回「卡就在上面」，一次都没再查。 */
+const HISTORY_TOOL_DROPPED = "出了卡，作者在卡上点了「不改了」：这张作废、书里没动。作者再提就重新调。";
 
 /**
  * 聊天历史 → 模型消息：AI 那条回合调过的工具还原成真的工具调用和结果，再接那条回复的文字。
@@ -185,7 +209,7 @@ export function historyToModelMessages(messages: readonly ChatHistoryMessage[]):
           type: "tool-result" as const,
           toolCallId: call.toolCallId,
           toolName: call.name,
-          output: { type: "text" as const, value: call.ok ? HISTORY_TOOL_DONE : HISTORY_TOOL_FAILED },
+          output: { type: "text" as const, value: !call.ok ? HISTORY_TOOL_FAILED : call.dropped ? HISTORY_TOOL_DROPPED : HISTORY_TOOL_DONE },
         })),
       },
       { role: "assistant", content: message.content },
@@ -340,13 +364,14 @@ export async function runAgentTurn(args: {
   readonly shouldStop?: () => boolean;
   /** 对话 AI 用的模型：给了就把这轮用量记进全局用量账（P10）。 */
   readonly model?: AgentModelInfo;
-}): Promise<{ readonly finishReason: string | undefined; readonly draftCheckedChapters: readonly number[] }> {
+  /** 这一轮是按流程收的尾（turn-flow：出稿后的收尾那步走完）：停在工具调用上也不是步数用完。 */
+  readonly endedByFlow?: () => boolean;
+}): Promise<AgentTurnResult> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
-  // AI 出稿时顺手核过账、这轮又没自己调核账的章（P11）：回合结束后照核账记忆补一张核账卡。
-  const draftChecked = new Set<number>();
-  const toolChecked = new Set<number>();
   let lastToolSummary: string | undefined;
+  // 稿写成了（turn-flow 到此收住这一轮）：结论、核账卡、预览、下一步由调用方按 finishDraftTurn 出，这里不再转述。
+  let writtenDraft: WrittenDraft | undefined;
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
   let emittedText = false;
@@ -410,10 +435,14 @@ export async function runAgentTurn(args: {
         sawToolActivity = true;
         const toolCallId = reuseSyntheticToolCallId(chunk.payload?.toolCallId, chunk.payload?.toolName);
         const output = normalizeForwardedToolResult(chunk.payload?.result);
-        const summary = (output as { readonly summary?: unknown } | undefined)?.summary;
+        const record = output as { readonly summary?: unknown; readonly skipped?: unknown; readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown } | undefined;
+        // 没执行的（turn-flow 按流程跳过的）不当这一轮的结果转述。
+        const summary = record?.skipped === true ? undefined : record?.summary;
         if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
+        if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && typeof record.chapter === "number") {
+          writtenDraft = { chapter: record.chapter, output, thenPreview: record.thenPreview === true };
+        }
         args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
-        noteCheckedChapter(chunk.payload?.toolName, output, draftChecked, toolChecked);
         break;
       }
       case "tool-error": {
@@ -448,55 +477,35 @@ export async function runAgentTurn(args: {
     }
   }
 
-  const fallback = sawStreamError && !sawToolActivity
+  const fallback = writtenDraft || (sawStreamError && !sawToolActivity)
     ? null
     : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
   if (fallback) {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
-  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），不是步数用完。
-  if (finishReason === "tool-calls" && !sawStreamError && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
+  // 说完话停在出选项那一步是有意收尾（endsOnNextSteps），按流程收的尾（出稿后）也是，都不是步数用完。
+  if (finishReason === "tool-calls" && !sawStreamError && !args.endedByFlow?.() && !(lastToolName === NEXT_STEPS_TOOL && emittedText)) {
     const scrubbed = args.scrubber.push(STEP_LIMIT_NOTICE);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return { finishReason, draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)) };
+  return { finishReason, emittedText, ...(writtenDraft ? { writtenDraft } : {}) };
 }
 
-/**
- * 记下这轮哪章是「出稿时核过账」、哪章出稿后 AI 自己核成了（只看工具名和结构化字段）。
- * AI 自己的核账没核成、或核在出稿之前（长篇连写：和出稿并排调，那会儿还没正文），都不算，照样补卡。
- */
-function noteCheckedChapter(toolName: unknown, output: unknown, draftChecked: Set<number>, toolChecked: Set<number>): void {
-  if (typeof output !== "object" || output === null) return;
-  const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } } };
-  if (typeof record.chapter !== "number") return;
-  if (toolName === "check_continuity" && record.ok !== false) toolChecked.add(record.chapter);
-  if (toolName === "generate_draft" && record.ok === true && record.qualityPipeline?.continuity?.checked === true) {
-    draftChecked.add(record.chapter);
-    toolChecked.delete(record.chapter);
-  }
+/** 这一轮写成的稿：章号、出稿工具的结果、作者要不要写完就出定稿预览。 */
+export interface WrittenDraft {
+  readonly chapter: number;
+  readonly output: unknown;
+  readonly thenPreview: boolean;
 }
 
-/**
- * 出稿时核过的账补成核账卡（P11）：和点「核账」看到的一样，状态跟着变「核过了」。
- * 只用核账记忆（cachedCheckContinuity）：出稿后稿子又被改过、记忆对不上就不补，不偷偷再调模型。
- */
-export async function emitDraftCheckCards(
-  projectDir: string,
-  chapters: readonly number[],
-  sendEvent: (event: string, data: unknown) => void,
-  readCached: (projectDir: string, chapter: number) => Promise<unknown> = cachedCheckContinuity,
-): Promise<void> {
-  for (const chapter of chapters) {
-    const output = await readCached(projectDir, chapter).catch(() => null);
-    if (!output) continue;
-    const toolCallId = `auto-check_continuity-${chapter}-${Date.now()}`;
-    sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter } });
-    sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
-  }
+export interface AgentTurnResult {
+  readonly finishReason: string | undefined;
+  /** 模型这一轮说过话（收尾的结论另起一段）。 */
+  readonly emittedText: boolean;
+  readonly writtenDraft?: WrittenDraft;
 }
 
 export function registerAgentChatRoutes(middlewares: MiddlewareStack): void {
@@ -567,12 +576,14 @@ async function handleAgentChat(
     const agent = await getStoryAgent();
     // 出稿流式：注入 sink，让 generate_draft 工具把正文 delta 实时转成 draft-delta SSE 事件（前端逐字进编辑器）。
     // sink 在工具 await 模型期间同步触发 sendEvent（此时 agent.stream 正 parked，draft-delta 自然单独流出）。
+    const pickedDirection = readPickedDirection(body.pickedDirection, currentChapter);
     const requestContext = buildProjectRequestContext(
       projectDir,
       currentChapter,
       (payload) => sendEvent("draft-delta", payload),
-      readAuthorWords(messages),
+      [...readAuthorWords(messages), ...(pickedDirection ? [pickedDirection] : [])],
       lastTurnUndoHint,
+      pickedDirection && currentChapter !== undefined ? { chapter: currentChapter, text: pickedDirection } : undefined,
     );
 
     res.writeHead(200, {
@@ -628,7 +639,7 @@ async function handleAgentChat(
     const currentChapterStatus = currentChapter !== undefined
       ? allChapterStates.find((s) => s.chapter === currentChapter)
       : undefined;
-    const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates);
+    const systemMessage = buildCurrentChapterSystemMessage(currentChapter, currentChapterStatus, allChapterStates, pickedDirection);
     const history = historyToModelMessages(messages);
     // 当前章提示紧贴用户最新指令（而非塞开头被历史淹没）——⑤头号根因 lost-in-the-middle。
     const modelMessages: ModelMessage[] = buildModelMessages(systemMessage, history);
@@ -636,23 +647,44 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const { result: { finishReason, draftCheckedChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
-      fullStream: (
-        await agent.stream([...modelMessages], {
+    const endedByFlow = endsAfterDraft(requestContext);
+    const { result: { finishReason }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => {
+      const turn = await runAgentTurn({
+        fullStream: (
+          await agent.stream([...modelMessages], {
+            requestContext,
+            // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
+            abortSignal: disconnectAbort.signal,
+            // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」「稿写成的那一步走完就收」。
+            stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps, endedByFlow],
+            // 同一步的工具一个一个执行（默认并发 10）：同一本书上的写不抢先后。这一步该执行哪些由 turn-flow 定。
+            toolCallConcurrency: 1,
+          })
+        ).fullStream as AsyncIterable<AgentTurnChunk>,
+        sendEvent,
+        scrubber: visibleTextScrubber,
+        shouldStop: () => disconnectAbort.signal.aborted,
+        endedByFlow,
+        ...(agentModel ? { model: agentModel } : {}),
+      });
+      // 稿写成了这一轮就收：一句结论、核账卡、作者要的定稿预览、下一步，和「写这一章」按钮同一套（不再让对话 AI 多说一轮）。
+      if (turn.writtenDraft && !disconnectAbort.signal.aborted) {
+        if (turn.emittedText) sendEvent("text-delta", { text: "\n\n" });
+        releaseTurnFlow(requestContext);
+        await finishDraftTurn({
+          action: { toolName: "generate_draft", chapter: turn.writtenDraft.chapter },
+          output: turn.writtenDraft.output,
+          thenPreview: turn.writtenDraft.thenPreview,
           requestContext,
-          // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
-          abortSignal: disconnectAbort.signal,
-          // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」。
-          stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps],
-        })
-      ).fullStream as AsyncIterable<AgentTurnChunk>,
-      sendEvent,
-      scrubber: visibleTextScrubber,
-      shouldStop: () => disconnectAbort.signal.aborted,
-      ...(agentModel ? { model: agentModel } : {}),
-    })));
-
-    if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
+          executeTool: executeUserActionTool,
+          sendEvent,
+          scrubber: visibleTextScrubber,
+          scrubError: stringifyError,
+          projectDir,
+        });
+      }
+      return turn;
+    }));
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);

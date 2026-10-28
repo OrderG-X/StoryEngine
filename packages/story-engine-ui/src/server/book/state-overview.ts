@@ -56,7 +56,7 @@ export interface StateOverview {
      * 编辑部 R5.4·新发现 4：cleanupVisibleCount 把已收口（done/stale）的意图线索也算进去，入库回执曾写出
      * 「未收口的线索已积到 55 条，其中 78 条已经低价值或过期」。「其中 X 条」要用这个数。 */
     readonly cleanupVisibleUnresolvedCount: number;
-    /** 可清理的线索全列（停得久的先，最多 MAX_CLEANUP_ITEMS 条）：跟界面「N 条线索可以清理」同一批，对话 AI 照这个列给作者。 */
+    /** 可清理的线索全列（停得久的先，最多 MAX_CLEANUP_ITEMS 条）：跟界面「N 条线索好几章没动」同一批，对话 AI 照这个列给作者。 */
     readonly cleanupItems: readonly StateOverviewThreadItem[];
     readonly keyOpenItems: readonly StateOverviewThreadItem[];
   };

@@ -76,7 +76,7 @@ export type {
 import { resolveConfiguredChatModel, streamChatModelToText } from "../../lib/llm-client.js";
 import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from "../../writing/writer-client.js";
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
-import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, isUserConfirmedTool } from "../request-context.js";
+import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, readPickedDirectionFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
 import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
@@ -133,7 +133,7 @@ const inputSchema = z.object({
   // 2026-10-10 对话 AI 瘦身：参数说明只留模型要知道的（原来约 1700 字，每轮都发）。
   chapter: coerceNumber(z.number().int().positive().optional().describe("章号；省略=用户当前所在章。")),
   chapterGoal: z.string().optional().describe(
-    "本章方向：只能原样抄作者说过的话（可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
+    "本章方向：只能原样抄作者说过的话，抄的每句一个字不改（别删字、别把「他」换成名字；可以只抄讲方向的那几句）；作者没给方向就别填，章纲会按故事现状往下推。不是原话会被退回。",
   ),
   requestedDraftLength: coerceNumber(z.number().int().nonnegative().optional().describe("期望字数；省略=按写作规则。continueDraft 时是这次接着写多少字（省略=写到本章目标）。")),
   continueDraft: coerceBoolean(z.boolean().optional().describe(
@@ -149,9 +149,11 @@ const inputSchema = z.object({
   allowWriteAhead: coerceBoolean(z.boolean().optional().describe("前一章没定稿被拦下时，只有用户明确说仍要先写才带 true。")),
   autoDeAi: coerceBoolean(z.boolean().optional().describe("false=检出机器腔只标注、不自动去味（默认自动去味一轮）。")),
   candidates: coerceNumber(z.number().int().min(1).max(3).optional().describe("1–3，默认 1；用户明确要多版挑选才填，耗时和 token 约 N 倍。")),
+  thenPreview: coerceBoolean(z.boolean().optional().describe("作者明说写完就出定稿预览才带 true：稿写成了系统接着用这版出预览（不是定稿）。")),
 });
 
 const outputSchema = z.object({
+  thenPreview: z.boolean().optional().describe("稿写成了、作者要写完就出定稿预览：这一轮结束时系统接着出。"),
   ok: z.boolean().describe("是否成功出稿并写入工作稿。引擎校验不过拒绝写盘（空正文/JSON 伪正文/超上限无法安全裁剪等）时为 false；正文低于字数下限不拒绝、照常写盘（见 draftLength 与 summary 的 ⚠ 标注）。"),
   chapter: z.number().int().positive(),
   draftPath: z.string().optional().describe("工作稿文件路径（成功时）。"),
@@ -290,7 +292,7 @@ const outputSchema = z.object({
       beat: z.string().describe("确定性核对判漏、但 AI 复核确认已被正文覆盖而摘除的要点原文。"),
       quote: z.string().describe(
         "模型引用的正文原句（已校验：归一化空白后为【裁决时工作稿】的逐字子串），作为覆盖证据；" +
-        "若之后自动去味改掉了这句，该条目会移入 staleAdjudications（覆盖结论过期）。",
+        "复核对的是最终正文（去味、按核账改都在复核之前）。",
       ),
     })).describe("被复核摘除的误报要点（可追溯，绝不静默消失）。"),
     adjudication: z.union([
@@ -303,14 +305,7 @@ const outputSchema = z.object({
     ),
     error: z.string().optional().describe("复核模型失败原因（adjudication=unavailable 时）。"),
     postDeAiNewMisses: z.array(z.string()).optional().describe(
-      "自动去味真落了改动后，对最终正文再跑一遍确定性核对时【新出现】的漏写要点（去味整句改写吃掉了锚点；" +
-      "基准集是裁决【前】的确定性判漏——裁决已摘除的要点本就词面无锚点、去味后照样判漏，不算新漏）。这些是确定性核对结果、未经 AI 复核，请如实转达。",
-    ),
-    staleAdjudications: z.array(z.object({
-      beat: z.string().describe("复核曾确认覆盖、但引证句随后被自动去味改写的要点原文。"),
-      quote: z.string().describe("裁决时的引证原句——已被去味改写，不再是最终稿的逐字子串，覆盖结论过期。"),
-    })).optional().describe(
-      "引证过期的复核条目（从 adjudicatedCovered 移出，可追溯不静默）：去味恰好改写了它们的证据句，要点当前是否仍被覆盖需要人工或下一轮复核确认。",
+      "去味前没漏、去味后才漏的要点（去味整句改写吃掉了锚点；复核对的是最终正文，复核摘掉的不算），请如实转达。",
     ),
   }).optional().describe(
     "必命中要点保真核对（warning-only，绝不影响出稿成败）：确定性规则判漏的要点先经 AI 复核（带正文逐字引证才摘除误报）；" +
@@ -407,6 +402,14 @@ export function authorDirectionOf(chapterGoal: string | undefined, mustHitBeats:
   return [goal, ...beats].filter(Boolean).join("\n") || undefined;
 }
 
+/** 作者给这一章挑中的走法并进方向：方向里已经有了（「写这一章」按钮带来的）就不重复；作者另外说的接在后面。纯逻辑、可测。 */
+export function withPickedDirection(goal: string | undefined, picked: string | undefined): string | undefined {
+  if (!picked) return goal;
+  if (!goal) return picked;
+  if (goal.includes(picked)) return goal;
+  return `${picked}\n作者另外说：${goal}`;
+}
+
 /** chapterGoal 不是作者原话：退回让 AI 原样抄或不填（在建快照、调模型之前，不花额度）。纯逻辑、可测。 */
 export function buildGoalNotQuotedOutput(
   chapter: number,
@@ -431,8 +434,8 @@ export const generateDraftTool = createTool({
   id: "generate_draft",
   description:
     "为某章写一版正文进工作稿（未定稿）。一次调用里完成：先拟章纲、按章纲翻前文写，字数不够接着写，写完自动核账，检出机器腔默认自动去味一轮。" +
-    "核账核出的确定对不上会按前文改一轮再核；改完还剩的在 qualityPipeline.continuity 和 summary 里，原样转告让用户定，别说「已经一致」；核账卡回合结束自动出，不用再调 check_continuity，更别和本工具并排调（那时还没正文）。" +
-    "summary 里的「首稿核对」漏写、「去味后新漏」、字数不够都要如实转达。引擎拒稿会 ok:false，如实说没写成。章纲见 chapterPlan，转达时一两句话说这章写了什么。",
+    "核账核出的确定对不上会按前文改一轮、再核改过的句子。写成了（ok:true）这一轮就结束：字数、漏写的要点、核账卡、下一步由系统接着出给作者。" +
+    "引擎拒稿会 ok:false，如实说没写成。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {
@@ -491,6 +494,8 @@ export const generateDraftTool = createTool({
       }
       continueText = stripLeadingMarkdownChapterHeading(await readFile(defaultDraftPath(projectDir, resolvedChapter), "utf-8")).trim();
     }
+    // 作者在稿纸上方给这一章挑过走法：照它写（和「写这一章」按钮同一口径），作者在对话里另外说的接在后面。
+    const direction = withPickedDirection(chapterGoal, readPickedDirectionFromContext(context, resolvedChapter));
     // 导入的书还在通读记账（P8）：账没记全，章纲员、核账员对照的前文是缺的，记完再出稿。
     const rereading = await rereadBlocker(projectDir, "出稿");
     if (rereading) {
@@ -561,14 +566,14 @@ export const generateDraftTool = createTool({
       ...(draftDeltaSink && candidateCount === 1
         ? { onStreamReset: (visible: string) => draftDeltaSink({ chapter: resolvedChapter, text: visible, replace: true }) }
         : {}),
-      ...(chapterGoal ? { chapterGoal } : {}),
+      ...(direction ? { chapterGoal: direction } : {}),
       ...(input.requestedDraftLength !== undefined ? { requestedDraftLength: input.requestedDraftLength } : {}),
       ...(continuing
         ? {
           continueFrom: {
             text: continueText,
             ...(input.requestedDraftLength && input.requestedDraftLength > 0 ? { length: input.requestedDraftLength } : {}),
-            ...(chapterGoal ? { direction: chapterGoal } : {}),
+            ...(direction ? { direction } : {}),
           },
         }
         : {}),
@@ -581,6 +586,7 @@ export const generateDraftTool = createTool({
       // R4.2：出稿内部第二次落盘（自动去味/续写补字）不再各建存档点——本步的存档点已建（snapshotId），
       // 一次出稿在操作历史里就是一步，撤销一键退回这步之前。
       ...(snapshotId ? { preWriteSnapshotId: snapshotId } : {}),
+      ...(input.thenPreview === true ? { thenPreview: true } : {}),
       autoDeAi: autoDeAiEnabled,
       ...(deAiCallModel ? { deAiCallModel } : {}),
       candidates: candidateCount,
@@ -606,7 +612,12 @@ export const generateDraftTool = createTool({
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;
     // 只在真出稿成功时挂 snapshotId（失败=没写成稿，无需撤销点）；service 已把本步存档点带出来，这里兜底。
-    return outcome.ok && snapshotId ? { ...toolOutput, snapshotId: toolOutput.snapshotId ?? snapshotId } : toolOutput;
+    // 作者要写完就出定稿预览：只在稿写成了时带上，路由在这一轮结束时用盘上这版出预览（turn-flow）。
+    return {
+      ...toolOutput,
+      ...(outcome.ok && snapshotId ? { snapshotId: toolOutput.snapshotId ?? snapshotId } : {}),
+      ...(outcome.ok && input.thenPreview === true ? { thenPreview: true } : {}),
+    };
   },
 });
 

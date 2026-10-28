@@ -14,6 +14,8 @@ export interface KeeperDrop {
   /** 哪一类、第几条（从 1 起），如「facts 第 3 条」。 */
   readonly where: string;
   readonly reason: string;
+  /** 丢的那条是哪个（线索标题等，给作者看的名字）：认得出才有，作者好知道是哪条没记上。 */
+  readonly name?: string;
 }
 
 export interface KeeperParseResult {
@@ -174,8 +176,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
   const entries: EntryInput[] = [];
   const drops: KeeperDrop[] = [];
   const adjusted: KeeperDrop[] = [];
-  const drop = (where: string, reason: string): void => {
-    drops.push({ where, reason });
+  const drop = (where: string, reason: string, name?: string): void => {
+    drops.push({ where, reason, ...(name ? { name } : {}) });
   };
   const named = (value: string | undefined): string | undefined => (value === undefined ? undefined : nameHandles(value, handles.handleNames));
   let dayChangeQuote: string | undefined;
@@ -304,7 +306,8 @@ export function parseKeeperOutput(text: string, handles: KeeperHandles): KeeperP
       continue;
     }
     if (!note) {
-      drop(where, "没写这一章对它做了什么");
+      const target = handleList(item.thread).map((handle) => handles.handleNames?.get(handle)).find((name) => name !== undefined);
+      drop(where, "没写这一章对它做了什么", target);
       continue;
     }
     if (op === "open") {

@@ -237,6 +237,20 @@ export function dropNeighborEcho(from: string, to: string, prev?: string, next?:
 }
 
 /**
+ * 模型给第 id 句的新写法里带着别的编号（照编号正文整段抄回来：「上一句[98]这一句[99]下一句」）：按编号拆开，
+ * 第一个编号前那截归第 id 句，每个「[n]」后那截归第 n 句。没带编号的原样一截。拆出来的每截再各自过 prepareUnitReplacement。
+ */
+export function splitNumberedReply(id: number, to: string): { readonly id: number; readonly to: string }[] {
+  // 不猜白名单：自家格式
+  const parts = to.split(/\[(\d+)\]/u);
+  if (parts.length === 1) return [{ id, to }];
+  const out: { id: number; to: string }[] = [];
+  if (parts[0]!.trim()) out.push({ id, to: parts[0]! });
+  for (let index = 1; index + 1 < parts.length; index += 2) out.push({ id: Number(parts[index]), to: parts[index + 1]! });
+  return out;
+}
+
+/**
  * 模型给第 id 句的新写法 → 能换上去的字：去掉带回来的编号和换行、去掉抄进来的邻句、引号对齐原句。
  * 空串＝删句（留下原句头尾的引号）。用不了（只剩抄的邻句、引号理不平、一句改成了几句）返回 undefined。
  * 一句改成几句多半是添了原文没有的话（回归书：一句「我退休那年交出去了」改成三句、多出一段台词）：不换。

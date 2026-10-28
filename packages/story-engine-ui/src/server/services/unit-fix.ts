@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises";
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, numberedText, prepareUnitReplacement, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, draftVersionOf, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../editorial/continuity/check-memory.js";
 import { writeAiDraft } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
@@ -101,18 +101,23 @@ export function parseUnitFixEdits(
   for (const raw of parsed.edits) {
     if (!raw || typeof raw !== "object") continue;
     const record = raw as Record<string, unknown>;
-    const id = typeof record.id === "number" ? record.id : typeof record.id === "string" ? Number(record.id.replace(/[[\]\s]/gu, "")) : Number.NaN;
-    if (!Number.isInteger(id) || out.some((edit) => edit.id === id) || typeof record.to !== "string") continue;
-    const unit = units.find((item) => item.id === id);
-    if (!unit) continue;
-    const named = allowed.has(id);
-    if (!named && (locked.has(id) || also >= MAX_ALSO_EDITS)) continue;
-    const to = prepareUnitReplacement(units, id, chinesePunctuationLike(context, record.to));
-    if (to === undefined || to === unit.text || to.length > unit.text.length * 3 + 60) continue;
-    // 连带改的不许删句：删一句要作者看着办。
-    if (!named && !to.trim()) continue;
-    if (!named) also += 1;
-    out.push({ id, from: unit.text, to });
+    const rawId = typeof record.id === "number" ? record.id : typeof record.id === "string" ? Number(record.id.replace(/[[\]\s]/gu, "")) : Number.NaN;
+    if (!Number.isInteger(rawId) || typeof record.to !== "string") continue;
+    // 照编号正文整段抄回来的（带着别的编号）：拆开，每句各自对。
+    for (const piece of splitNumberedReply(rawId, record.to)) {
+      const id = piece.id;
+      if (out.some((edit) => edit.id === id)) continue;
+      const unit = units.find((item) => item.id === id);
+      if (!unit) continue;
+      const named = allowed.has(id);
+      if (!named && (locked.has(id) || also >= MAX_ALSO_EDITS)) continue;
+      const to = prepareUnitReplacement(units, id, chinesePunctuationLike(context, piece.to));
+      if (to === undefined || to === unit.text || to.length > unit.text.length * 3 + 60) continue;
+      // 连带改的不许删句：删一句要作者看着办。
+      if (!named && !to.trim()) continue;
+      if (!named) also += 1;
+      out.push({ id, from: unit.text, to });
+    }
   }
   // 点名的一句都没改，连带的也不改（跟着改是为了和点名那句一致）。
   return out.some((edit) => allowed.has(edit.id)) ? out : [];
@@ -227,7 +232,7 @@ export async function fixDraftByUnits(input: {
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
     if (outcome.applied.length === 0) return outcome;
     const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章按核账改前快照`);
-    await writeAiDraft(projectDir, { chapter, body: outcome.text });
+    await writeAiDraft(projectDir, { chapter, body: outcome.text, baseVersion: draftVersionOf(text) });
     await recordUnitFixes(projectDir, chapter, outcome);
     return { ...outcome, draftVersion: nextDraftVersion(), ...(snapshotId ? { snapshotId } : {}) };
   });

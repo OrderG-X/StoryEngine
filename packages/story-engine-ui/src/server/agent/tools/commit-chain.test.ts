@@ -142,6 +142,8 @@ describe("commit_preview", () => {
     expect(list.filter((item) => item.kind === "fact")).toHaveLength(2);
     expect(out.summary).toBe("第 1 章可以定稿：要你看 1 条，其余 5 条自动记下（不对的都能去掉）。");
     expect(JSON.stringify(out.summary)).not.toMatch(/commit_apply|c1-|t1-/u);
+    // 要看的是哪几条点名给模型，免得转述成别的（换题材长篇实跑 2026-10-27）。
+    expect(out.modelHint).toContain(`要作者看的就是这几条（别说成别的）：${reviewed[0]?.label}。`);
   });
 
   it("第 1 章正文没写时间：天数说「先这么记」，不提没有的上一章（2026-10-23 桌面包走查）", async () => {
@@ -251,6 +253,34 @@ describe("commit_apply", () => {
     expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（照上次定稿）");
     expect(day?.reason).toBe("记账员这次看成第 1 天，和上次定稿不一样；先照上次的记，不对就改天数");
     expect(again.summary).toContain("要你看");
+  });
+
+  it("记账员没说离上一章隔几天：天数那行说清是估的，算一条要你看（换题材长篇实跑第 21 章「进了暑假」）", async () => {
+    await writeDraft(1, CH1);
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(LEDGER1) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await writeDraft(2, CH2);
+    const vague = { ...LEDGER2, time: { basis: "text", timeOfDay: "上午", quote: "第二天上午" } };
+    const preview = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(vague) });
+    const day = preview.ledgerChecklist?.[0];
+    expect(day).toMatchObject({ id: "day", editableDay: 2, needsConfirm: true });
+    expect(day?.label).toBe("这一章记为故事第 2 天（上午，周三）（正文没说离上一章隔了几天，先按第二天记，不对就改）");
+    expect(preview.summary).toContain("要你看");
+  });
+
+  it("一句说明推进两条线索：清单一行、标题并排；作者去掉这行两条都不记（换题材长篇实跑第 22 章同一段说明连出三遍）", async () => {
+    await writeDraft(1, CH1);
+    const twoThreads = { ...LEDGER1, threads: [...LEDGER1.threads, { op: "open", type: "question", title: "钥匙开哪把锁", note: "钟箱里的铜钥匙", quote: "他在钟箱里摸到一把铜钥匙" }] };
+    const first = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 1, callModel: fakeModel(twoThreads) });
+    await applyExecute({ chapter: 1, previewToken: first.previewToken }, buttonContext(1));
+    await writeDraft(2, CH2);
+    const both = { ...LEDGER2, threads: [{ op: "advance", thread: "T1, T2", note: "钥匙锁进铜盒", quote: "林远把钥匙锁进铜盒" }] };
+    const preview = await buildCommitPreviewToolOutput({ projectDir: book, chapter: 2, callModel: fakeModel(both) });
+    const rows = preview.ledgerChecklist?.filter((item) => item.kind === "thread") ?? [];
+    expect(rows.map((item) => item.label)).toEqual(["推进「钟为什么停」「钥匙开哪把锁」：钥匙锁进铜盒"]);
+    const out = (await applyExecute({ chapter: 2, previewToken: preview.previewToken, excluded: [rows[0]?.id] }, buttonContext(2))) as ApplyOut;
+    expect(out).toMatchObject({ ok: true, committed: true });
+    expect((await projectBook(book)).threads.map((thread) => thread.lastTouchedAt)).toEqual([1, 1]);
   });
 
   it("票号没了 / 乱填：如实拒、不定稿", async () => {

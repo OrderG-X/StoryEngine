@@ -93,13 +93,19 @@ const CHECKER_PASSES: readonly { readonly focus: CheckerFocus; readonly label: s
   { focus: "time", label: "第 3 遍（盯时间）" },
 ];
 
+/**
+ * reason 是作者在核账卡上读的：笔记里核账员自己记日子用「D+3」这类记号，原样抄进 reason 作者看不懂
+ * （换题材长篇实跑 2026-10-27：「林朗说'十来万'是当天（D+3）下午说的」）。
+ */
+export const REASON_WORDING = "reason 用中文一句话说哪里对不上，是给作者看的：日子说成「第 4 天」「当天」「第二天」，不写笔记里自己用的记号（D+3 之类）";
+
 /** 核账提示：先逐条列出新稿里碰到硬信息的说法并对照前文，再把对不上的列为矛盾，每条带把握（sure / maybe）。 */
 export function checkTask(chapter: number, focus?: CheckerFocus): string {
   return [
     `这是作者刚交的第 ${chapter} 章新稿（上面还没给过你）。对照你读过的前文原文和笔记，逐段核对：`,
     "1. 先在 checks 里按顺序列出新稿里每一处碰到硬信息的说法：物件在哪、谁拿着、写着什么、有几个；人物年龄、身份、住处、亲属、称呼；几天前、几点、星期、天色；谁知道什么；方位、距离、路上用时；数目。每条一句：说法要点 → 前文怎么写的 → 对得上 / 对不上。新稿自己前后也要核（同一场面的钟点、物件位置、人物位置）。",
     "2. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。本来会变的状态（门开关、灯、值班的人）不同时候不一样也不算。",
-    "每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。",
+    `每条 contradictions：quote 逐字抄有问题、该改的那一句（「改这处」只改它）——两句冲突时，和更早几章一致的那句是对的，不能当 quote；两句都在新稿里，抄和前文各章不一致的那句，前文没写过就抄后出现的那句；earlierQuote 逐字抄前文（或新稿更早处）和它冲突的那一句；earlierChapter 写那句在第几章；${REASON_WORDING}；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。`,
     ...(focus ? [`【这一遍的重点】${CHECKER_FOCUS[focus]}`] : []),
     "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
   ].join("\n");
@@ -520,8 +526,8 @@ async function lookupEarlierPassages(input: {
   }
 }
 
-/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A，可带时间线表 F）和「确定」门槛（D）。 */
-export async function checkChapterByReader(input: {
+/** 核账员核一章的输入（核整章、改后只核改过的句子两条路共用）。 */
+interface ReaderCheckInput {
   readonly projectDir: string;
   readonly chapter: number;
   readonly draftBody: string;
@@ -534,11 +540,22 @@ export async function checkChapterByReader(input: {
   readonly earlier?: EarlierText;
   /** T1 的四个做法（A 自复核 / B 时间线 / C 结构化笔记 / D 确定门槛）；缺省全关＝第 1 步的原样。产品默认见 DEFAULT_READER_VARIANT。 */
   readonly variant?: ReaderCheckVariant;
-  /** 上一稿报过、两边原句都还在的问题：和这次三遍的候选一起进自复核，判 no 的去掉（作者改了别处把它修好了），
-   *  其余照带、把握沿用上一稿（不随这次的运气跳）。 */
-  readonly carryOver?: readonly ContinuityIssueV2[];
-}): Promise<ReaderCheckResult> {
-  const carryOver = input.carryOver ?? [];
+}
+
+/** 核之前备好的：读完前文的窗口（翻过原文的接在后面）、新稿那条消息（三遍用 / 自复核用）、设定本、前文原文。 */
+interface ReaderCheckSetup {
+  readonly prefix: readonly BrainMessage[];
+  readonly draftMessage: string;
+  readonly reviewMessage: string;
+  readonly earlier: EarlierText;
+  readonly foundation?: FoundationDigest;
+  readonly failures: readonly string[];
+  readonly cold?: ColdCoverage;
+  readonly waited?: ReaderWaited;
+}
+
+/** 先确保读完前文（缺的笔记补上，补不完走冷窗口），再备好新稿那条消息。读前文没成返回 failure（这次没核成）。 */
+async function prepareReaderCheck(input: ReaderCheckInput): Promise<ReaderCheckSetup | { readonly failure: string }> {
   const variant = input.variant ?? {};
   const role = checkerRoleFor(variant.structuredNotes);
   let window: BrainMessage[];
@@ -581,7 +598,7 @@ export async function checkChapterByReader(input: {
     }
   } catch (error) {
     // 补到一半失败：已写下的笔记留着，下次接着补；这次如实说没核成（上一稿的问题照带）。
-    return { issues: [...carryOver], failures: [`核账员读前文没成：${error instanceof Error ? error.message : String(error)}`] };
+    return { failure: `核账员读前文没成：${error instanceof Error ? error.message : String(error)}` };
   }
   const earlier = input.earlier ?? await readEarlierChapters(input.projectDir, input.chapter);
   // R7.3 设定本进核账：人物卡 / 地点 / 资产 / 世界规则拼一份「设定」对照材料，三遍和自复核都带上。
@@ -617,8 +634,124 @@ export async function checkChapterByReader(input: {
   const reviewTimeline = variant.timelineInReview && timelineTable
     ? `【故事时间线（日子以这张表为准，不要自己推算）】\n${timelineTable}`
     : passesTimeline;
-  const draftMessage = draftParts(passesTimeline);
-  const reviewMessage = draftParts(reviewTimeline);
+  return {
+    prefix: lookup.prefix,
+    draftMessage: draftParts(passesTimeline),
+    reviewMessage: draftParts(reviewTimeline),
+    earlier,
+    ...(foundation ? { foundation } : {}),
+    failures: [...(lookup.failure ? [lookup.failure] : []), ...(foundationFailure ? [foundationFailure] : [])],
+    ...(cold ? { cold } : {}),
+    ...(waited ? { waited } : {}),
+  };
+}
+
+/** 并行跑几遍核账调用：没跑成的如实记一笔（label 写进失败说明），跑成的各自解析。 */
+async function runReaderPasses(
+  plans: readonly { readonly label: string; readonly run: () => Promise<readonly ContinuityIssueV2[]> }[],
+): Promise<{ readonly passes: readonly (readonly ContinuityIssueV2[])[]; readonly failures: readonly string[] }> {
+  const settled = await withStep("核账员", () => Promise.allSettled(plans.map((plan) => plan.run())));
+  const passes: (readonly ContinuityIssueV2[])[] = [];
+  const failures: string[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") passes.push(result.value);
+    else failures.push(`${plans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+  });
+  return { passes, failures };
+}
+
+/** 一遍对前文的核账调用（checks + contradictions 那套输出）：对前文的、对设定本的（有设定本时）都收。 */
+function contradictionPass(input: ReaderCheckInput, setup: ReaderCheckSetup, label: string, task: string) {
+  return {
+    label,
+    run: async (): Promise<readonly ContinuityIssueV2[]> => {
+      const text = await input.callModel([...setup.prefix, { role: "user", content: `${setup.draftMessage}\n\n${task}` }], { json: true });
+      return [
+        ...parseFullReadIssues(text, input.chapter, input.draftBody, setup.earlier),
+        ...(setup.foundation ? parseSettingIssues(text, input.chapter, input.draftBody, setup.earlier, setup.foundation) : []),
+      ];
+    },
+  };
+}
+
+/**
+ * A 自复核：候选在同一窗口里逐条再判一轮（no 的删掉，把握以复核为准）。carried 里的（上一稿带过来的）不改把握。
+ * 复核没跑成：候选原样交出（宁可多报），如实记一笔。
+ */
+async function selfReviewIssues(
+  input: ReaderCheckInput,
+  setup: ReaderCheckSetup,
+  candidates: readonly ContinuityIssueV2[],
+  carried: ReadonlySet<ContinuityIssueV2>,
+): Promise<{ readonly issues: ContinuityIssueV2[]; readonly failure?: string }> {
+  const { foundation } = setup;
+  try {
+    const text = await withStep("核账员自复核", () => input.callModel(
+      [...setup.prefix, { role: "user", content: `${setup.reviewMessage}\n\n${selfReviewTask(input.chapter, candidates, Boolean(foundation))}` }],
+      { json: true },
+    ));
+    const verdicts = parseVerdicts(text);
+    if (verdicts.size === 0) throw new Error("复核输出不是 JSON");
+    const rulingOf = (index: number) => verdicts.get(`K${index + 1}`);
+    // 判 no 的删掉，其余把握以复核为准；没给判断的按原把握保留。
+    // R7.3 设定裁定：复核逐句判了两边各自和设定一致不一致（settingQuote 已由代码核对真在设定本里）→
+    // 另一侧对不上、本章这句一致：错的是另一侧那句，那条原地改成「错的那句 vs 设定原文」、指向改那章
+    // （fixChapter），别让「本章 vs 前文」的矛头指向其实和设定一致的一侧、诱导作者把对的改成错的；
+    // 本章这句对不上、另一侧一致 → 对设定本报（earlierQuote 换成设定原文，改本章）。
+    const issues = candidates
+      .map((issue, index): ContinuityIssueV2 => {
+        const ruling = rulingOf(index);
+        if (!ruling || carried.has(issue)) return issue;
+        const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
+        if (foundation && !issue.againstSetting && ruling.settingQuote) {
+          const settingQuote = cleanSettingQuote(foundation, ruling.settingQuote);
+          const source = settingQuoteSource(foundation, settingQuote);
+          const draftWrong = ruling.draftAgrees === false;
+          const earlierWrong = ruling.earlierAgrees === false;
+          if (source && earlierWrong && !draftWrong) {
+            return {
+              quote: issue.earlierQuote,
+              earlierQuote: settingQuote,
+              earlierChapter: issue.earlierChapter,
+              fixChapter: issue.earlierChapter,
+              reason: issue.reason,
+              kind: "event",
+              confidence,
+              againstSetting: source,
+            };
+          }
+          if (source && draftWrong && !earlierWrong) {
+            return {
+              quote: issue.quote,
+              earlierQuote: settingQuote,
+              earlierChapter: input.chapter,
+              reason: issue.reason,
+              kind: "event",
+              confidence,
+              againstSetting: source,
+            };
+          }
+        }
+        return { ...issue, confidence };
+      })
+      .filter((_, index) => rulingOf(index)?.verdict !== "no");
+    return { issues };
+  } catch (error) {
+    return { issues: [...candidates], failure: `自复核没跑成：${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/** 核账员核一章：先确保读完前文（缺的笔记补上），再三遍并行核新稿，最后按变体做自复核（A，可带时间线表 F）和「确定」门槛（D）。 */
+export async function checkChapterByReader(input: ReaderCheckInput & {
+  /** 上一稿报过、两边原句都还在的问题：和这次三遍的候选一起进自复核，判 no 的去掉（作者改了别处把它修好了），
+   *  其余照带、把握沿用上一稿（不随这次的运气跳）。 */
+  readonly carryOver?: readonly ContinuityIssueV2[];
+}): Promise<ReaderCheckResult> {
+  const carryOver = input.carryOver ?? [];
+  const variant = input.variant ?? {};
+  const setup = await prepareReaderCheck(input);
+  if ("failure" in setup) return { issues: [...carryOver], failures: [setup.failure] };
+  const { foundation, earlier } = setup;
   // 三遍（盯东西 / 盯人 / 盯时间）+ R7.3 第 4 遍（对设定本，有设定本才跑）。第 4 遍用专用小 schema，只收「对设定本」的条目。
   // 合并去重按先来留下：同一句新稿既被三遍按「对前文」报、又被第 4 遍按「对设定」报时，留带裁定的设定条目
   // （fixChapter 指得准），所以第 4 遍排在合并序列最前（执行仍是并行的，只是标签叫第 4 遍）。
@@ -628,98 +761,75 @@ export async function checkChapterByReader(input: {
         label: "第 4 遍（对设定本）",
         run: async () => {
           const text = await input.callModel(
-            [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${settingCheckTask(input.chapter)}` }],
+            [...setup.prefix, { role: "user", content: `${setup.draftMessage}\n\n${settingCheckTask(input.chapter)}` }],
             { json: true },
           );
           return parseSettingChecks(text, input.chapter, input.draftBody, earlier, foundation);
         },
       }]
       : []),
-    ...CHECKER_PASSES.flatMap(({ focus, label }) => Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) => ({
-      label: repeat === 0 ? label : `${label}第 ${repeat + 1} 次`,
-      run: async () => {
-        const text = await input.callModel(
-          [...lookup.prefix, { role: "user", content: `${draftMessage}\n\n${checkTask(input.chapter, focus)}` }],
-          { json: true },
-        );
-        return [
-          ...parseFullReadIssues(text, input.chapter, input.draftBody, earlier),
-          ...(foundation ? parseSettingIssues(text, input.chapter, input.draftBody, earlier, foundation) : []),
-        ];
-      },
-    }))),
+    ...CHECKER_PASSES.flatMap(({ focus, label }) => Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) =>
+      contradictionPass(input, setup, repeat === 0 ? label : `${label}第 ${repeat + 1} 次`, checkTask(input.chapter, focus)))),
   ];
-  const settled = await withStep("核账员", () => Promise.allSettled(passPlans.map((plan) => plan.run())));
-  const failures: string[] = [...(lookup.failure ? [lookup.failure] : []), ...(foundationFailure ? [foundationFailure] : [])];
-  const passes: (readonly ContinuityIssueV2[])[] = [];
-  settled.forEach((result, index) => {
-    if (result.status === "fulfilled") passes.push(result.value);
-    else failures.push(`${passPlans[index]!.label}没跑成：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
-  });
+  const ran = await runReaderPasses(passPlans);
+  const failures: string[] = [...setup.failures, ...ran.failures];
   // 上一稿带过来的排最前：同一句这次又报了，留上一稿那条（把握沿用）。
-  let issues = dropMisdirectedBySetting(mergePasses([carryOver, ...passes]));
+  let issues = dropMisdirectedBySetting(mergePasses([carryOver, ...ran.passes]));
   const carried = new Set<ContinuityIssueV2>(issues.filter((issue) => carryOver.includes(issue)));
-  // A 自复核：三遍合并后，在同一窗口里把候选逐条再判一轮（no 的删掉，把握以复核为准）。没候选就不发这一轮（省调用）。
+  // A 自复核：没候选就不发这一轮（省调用）。
   // 上一稿带过来的也在里头：原句没动、错却可能在别处改好了（长篇实跑：作者把地点挪对了，报的那句台词没动，「确定」一直带着）。
   if (variant.selfReview && issues.length > 0) {
-    try {
-      const text = await withStep("核账员自复核", () => input.callModel(
-        [...lookup.prefix, { role: "user", content: `${reviewMessage}\n\n${selfReviewTask(input.chapter, issues, Boolean(foundation))}` }],
-        { json: true },
-      ));
-      const verdicts = parseVerdicts(text);
-      if (verdicts.size === 0) throw new Error("复核输出不是 JSON");
-      const rulingOf = (index: number) => verdicts.get(`K${index + 1}`);
-      // 判 no 的删掉，其余把握以复核为准；没给判断的按原把握保留。
-      // R7.3 设定裁定：复核逐句判了两边各自和设定一致不一致（settingQuote 已由代码核对真在设定本里）→
-      // 另一侧对不上、本章这句一致：错的是另一侧那句，那条原地改成「错的那句 vs 设定原文」、指向改那章
-      // （fixChapter），别让「本章 vs 前文」的矛头指向其实和设定一致的一侧、诱导作者把对的改成错的；
-      // 本章这句对不上、另一侧一致 → 对设定本报（earlierQuote 换成设定原文，改本章）。
-      issues = issues
-        .map((issue, index): ContinuityIssueV2 => {
-          const ruling = rulingOf(index);
-          if (!ruling || carried.has(issue)) return issue;
-          const confidence = ruling.verdict === "sure" ? "sure" as const : "maybe" as const;
-          if (foundation && !issue.againstSetting && ruling.settingQuote) {
-            const settingQuote = cleanSettingQuote(foundation, ruling.settingQuote);
-            const source = settingQuoteSource(foundation, settingQuote);
-            const draftWrong = ruling.draftAgrees === false;
-            const earlierWrong = ruling.earlierAgrees === false;
-            if (source && earlierWrong && !draftWrong) {
-              return {
-                quote: issue.earlierQuote,
-                earlierQuote: settingQuote,
-                earlierChapter: issue.earlierChapter,
-                fixChapter: issue.earlierChapter,
-                reason: issue.reason,
-                kind: "event",
-                confidence,
-                againstSetting: source,
-              };
-            }
-            if (source && draftWrong && !earlierWrong) {
-              return {
-                quote: issue.quote,
-                earlierQuote: settingQuote,
-                earlierChapter: input.chapter,
-                reason: issue.reason,
-                kind: "event",
-                confidence,
-                againstSetting: source,
-              };
-            }
-          }
-          return { ...issue, confidence };
-        })
-        .filter((_, index) => rulingOf(index)?.verdict !== "no");
-    } catch (error) {
-      // 复核没跑成：候选原样交出（宁可多报），如实记一笔。
-      failures.push(`自复核没跑成：${error instanceof Error ? error.message : String(error)}`);
-    }
+    const reviewed = await selfReviewIssues(input, setup, issues, carried);
+    issues = reviewed.issues;
+    if (reviewed.failure) failures.push(reviewed.failure);
   }
   // D「确定」门槛：最后加一道确定性的闸，压「确定」的误报和波动。
   if (variant.sureGate) issues = applySureGate(issues, input.chapter, input.draftBody, earlier);
-  return { issues, failures, ...(cold ? { cold } : {}), ...(waited ? { waited } : {}) };
+  return { issues, failures, ...(setup.cold ? { cold: setup.cold } : {}), ...(setup.waited ? { waited: setup.waited } : {}) };
+}
+
+/** 按核账改过的一句：改前 → 改后（改后空串＝删掉了这句）。 */
+export interface ChangedSentence {
+  readonly from: string;
+  readonly to: string;
+}
+
+/** 改后只核改过的句子：列出改前 → 改后，核改后的说法、以及本章别处有没有还照改前说的。输出和三遍同一套 JSON。 */
+export function recheckTask(chapter: number, changes: readonly ChangedSentence[]): string {
+  return [
+    `上面是第 ${chapter} 章新稿，刚按核账改了下面几句（新稿里已经是改后的样子）。别的句子刚核过，这一遍只核改过的这几句，对照你读过的前文原文和笔记、设定本、本章别处：`,
+    ...changes.map((change, index) => `${index + 1}. 改前：${change.from}\n   改后：${change.to.trim() ? change.to : "（删掉了）"}`),
+    "1. 先在 checks 里逐句列：改后的说法碰到的硬信息（物件、人物、时间、谁知道什么、数目）→ 前文、设定、本章别处怎么写的 → 对得上 / 对不上；",
+    "2. 再看本章别处：有没有句子还照改前的说法写、和改后这句对不上的；",
+    "3. 对不上的放进 contradictions。写了变化过程的、人物明确在撒谎或记错的、只是补充细节的，不算。",
+    `每条 contradictions：quote 逐字抄有问题、该改的那一句（改后的句子，或本章别处还照改前说法写的那句）；earlierQuote 逐字抄前文（或本章别处、设定本）和它冲突的那一句；earlierChapter 写那句在第几章；${REASON_WORDING}；confidence 写 sure（两处不可能同时成立）或 maybe（看着对不上，但也说得通）。抄不出原文的不要报。`,
+    "只输出一个 JSON：{\"checks\":[\"...\"],\"contradictions\":[{\"quote\":\"\",\"earlierQuote\":\"\",\"earlierChapter\":1,\"reason\":\"\",\"confidence\":\"sure\"}]}",
+  ].join("\n");
+}
+
+/**
+ * 改后按改动重核（外部审查 2026-10-28：改稿后再跑一遍完整核账，等待翻倍）：整章刚核过、只改了几句，
+ * 就只让核账员核改过的句子和它们牵连的本章别处——同一窗口、同一份新稿消息，按变体并行几次（passRepeats），
+ * 候选照样自复核、过「确定」门槛。没改的句子沿用上一遍的结果，由核账服务带上（这里只返回这次新核出的）。
+ */
+export async function recheckChangesByReader(input: ReaderCheckInput & {
+  readonly changes: readonly ChangedSentence[];
+}): Promise<ReaderCheckResult> {
+  const variant = input.variant ?? {};
+  const setup = await prepareReaderCheck(input);
+  if ("failure" in setup) return { issues: [], failures: [setup.failure] };
+  const task = recheckTask(input.chapter, input.changes);
+  const ran = await runReaderPasses(Array.from({ length: Math.max(1, variant.passRepeats ?? 1) }, (_, repeat) =>
+    contradictionPass(input, setup, repeat === 0 ? "核改过的句子" : `核改过的句子第 ${repeat + 1} 次`, task)));
+  const failures: string[] = [...setup.failures, ...ran.failures];
+  let issues = dropMisdirectedBySetting(mergePasses(ran.passes));
+  if (variant.selfReview && issues.length > 0) {
+    const reviewed = await selfReviewIssues(input, setup, issues, new Set());
+    issues = reviewed.issues;
+    if (reviewed.failure) failures.push(reviewed.failure);
+  }
+  if (variant.sureGate) issues = applySureGate(issues, input.chapter, input.draftBody, setup.earlier);
+  return { issues, failures, ...(setup.cold ? { cold: setup.cold } : {}), ...(setup.waited ? { waited: setup.waited } : {}) };
 }
 
 // ---------- 审章纲（2026-10-12 编辑部第 3 步） ----------
@@ -758,7 +868,7 @@ export function planCheckTask(chapter: number, plan: ChapterPlan): string {
     "- 日子：开场时间和「几天后」按前文过了几天算得对不对",
     ...(plan.direction ? [`【作者这章给的方向】\n${plan.direction}`] : []),
     "核对到的要点逐条列进 problems，每条判 conflict：true＝按前文不可能成立；false＝核对过、对得上或不构成矛盾（章纲明确安排了变化过程的、作者明确要求的变化过程，都不算）。作者方向本身和前文既成事实对不上的（东西已在别人手里、人已不在、事已发生过），conflict 照样写 true，authorWilled 也写 true——不要因为方向是作者给的就不报。",
-    "conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；reason 用中文一句话说哪里对不上；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。",
+    `conflict 为 true 的条目：earlierQuote 逐字抄前文和它冲突的那一句（抄不出原文的不要报）；earlierChapter 写那句在第几章；${REASON_WORDING}；要点内容来自作者方向的原话时 authorWilled 写 true、directionQuote 逐字抄方向里冲突的那句原话，否则 authorWilled 写 false（章纲员自己展开、方向里没说的细节都算 false）。conflict 为 false 的条目：reason 一句话写核对结论，其余字段留空。`,
     `【第 ${chapter} 章章纲】`,
     `一句话：${plan.summary}`,
     `要点：\n${plan.beats.map((beat, index) => `${index + 1}. ${beat}`).join("\n")}`,

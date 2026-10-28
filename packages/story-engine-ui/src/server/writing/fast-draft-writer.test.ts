@@ -732,6 +732,22 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(report.draftBody).toBe("“今晚还有一场谈判。”林婉清说，“别忘了。”");
   });
 
+  it("写手整章用了直角引号、上一章对话用弯引号 → 跟着上一章换成弯引号（换题材长篇实跑第 23 章）", async () => {
+    const projectDir = await createFixtureProject();
+    await mkdir(join(projectDir, "chapters"), { recursive: true });
+    await writeFile(join(projectDir, "chapters", "0002.md"), "# 第2章 · 谈判\n\n“今晚还有一场谈判。”林婉清说。\n", "utf-8");
+    const report = await runFastDraft({
+      projectDir,
+      chapter: 3,
+      chapterGoal: "秘书出场。",
+      writerClient: {
+        generateDraft: vi.fn(async () => ({ title: "秘书登场", content: "「谈完了。」林婉清说，「别忘了。」" })),
+      },
+      selectedCharacters: ["林婉清"],
+    });
+    expect(report.draftBody).toBe("“谈完了。”林婉清说，“别忘了。”");
+  });
+
   it("关卡只认本章带上的人：设定本里有、但这章没带的人不算；挡下时只列名字", async () => {
     const projectDir = await createFixtureProject();
 

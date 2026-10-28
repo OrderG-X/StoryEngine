@@ -11,7 +11,7 @@ import { readProjectDirFromContext, resolveChapterFromInputOrContext } from "../
 import { previewSettle } from "../settle-actions.js";
 
 const inputSchema = z.object({
-  canon: z.string().trim().min(1).max(CANON_TEXT_MAX).describe("作者定下的说法，尽量用作者的原话（一句话说清是什么，如『杜长顺十年前去世』）；谁、哪儿写全名，单拿出来也看得懂——作者话里省掉的主语、地方照前文补上，别留「那里」「这场」这种离了上下文就两可的说法。只写这件事本身：不写章号、不写「以…为准」「只管…」「不涉及…」这类说明（它原样记进设定本）。"),
+  canon: z.string().trim().min(1).max(CANON_TEXT_MAX).describe("作者定下的说法，尽量用作者的原话（一句话说清是什么，如『杜长顺十年前去世』）；谁、哪儿写全名，单拿出来也看得懂——作者话里省掉的主语、地方照前文补上，「我爸」「她妈」这类称呼写成那个人卡上的名字，别留「那里」「这场」这种离了上下文就两可的说法。只写这件事本身：不写章号、不写「以…为准」「只管…」「不涉及…」这类说明（它原样记进设定本）。"),
   chapter: coerceNumber(blankToUndefined(z.number().int().positive().optional().describe("作者此刻在写的章号；缺省用当前章。这一章有工作稿时连工作稿一起查。"))),
 });
 
@@ -26,7 +26,8 @@ export const settleFactTool = createTool({
   description:
     "作者定下某个说法、要全书以它为准时调用（如『杜叔是十年前走的，以这个为准』『前面写错了，统一成……』『那条定论过时了，改成……』）：" +
     "查全书哪几句和它对不上、设定本和账里哪些要跟着改，出一张定论卡给作者看（改的是设定本里已有的定论时，卡上会换掉旧的那条）。只出预览、不改任何东西；作者在卡上点「确认」才改齐。" +
-    "只在作者明说要定下来时调，别替作者定。",
+    // 换题材长篇实跑 2026-10-27：同一条连查了两遍（第二遍只换了措辞），白等一分钟。
+    "只在作者明说要定下来时调，别替作者定。一条定论调一次：卡出了就等作者点，别为换个措辞再调一遍。",
   inputSchema,
   outputSchema,
   execute: async (input: z.infer<typeof inputSchema>, context: ToolExecutionContext) => {

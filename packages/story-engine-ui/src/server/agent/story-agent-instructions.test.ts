@@ -309,19 +309,10 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).not.toContain("同轮继续 commit_apply");
   });
 
-  it("纯出稿不越权：用户只要写正文时，generate_draft 后停住并给下一步，不顺手 preview/apply", () => {
-    expect(instructions).toContain("出稿不越权");
-    expect(instructions).toContain("用户只说『写第 N 章正文/继续写』");
-    expect(instructions).toContain("出稿落工作稿后必须停");
-    expect(instructions).toContain("commit_preview 都等用户明确点了或说了再动");
-  });
-
-  it("纯出稿不越权覆盖审稿/质检/AI味：generate_draft 后除 suggest_next_steps 外不追加未请求工具", () => {
-    expect(instructions).toContain("除 suggest_next_steps 外");
-    expect(instructions).toContain("ai_review");
-    expect(instructions).toContain("quality_check");
-    expect(instructions).toContain("check_ai_flavor");
-    expect(instructions).toContain("用户没请求");
+  it("出稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：出稿那步只写稿、写成了这一轮就结束；写完出预览带 thenPreview", () => {
+    expect(instructions).toContain("出稿那一步只调 generate_draft");
+    expect(instructions).toContain("稿写成了这一轮就结束");
+    expect(instructions).toContain("thenPreview:true");
   });
 
 });

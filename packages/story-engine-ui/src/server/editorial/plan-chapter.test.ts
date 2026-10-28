@@ -159,6 +159,20 @@ describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后�
     expect(storyDayAtChapterEnd(make(["第二天上午，林舟开门", "傍晚关门"]))).toBe(2);
     expect(storyDayAtChapterEnd(undefined)).toBeUndefined();
   });
+
+  it("上一章开场是第几天以时间线为准，章纲只数章内换天（2026-10-28 第 33 章章纲跟着过时的第 32 章章纲少记四天）", async () => {
+    const { previousChapterEndDay } = await import("./plan-materials.js");
+    const projectDir = await makeBook();
+    const timeline = (entries: object[]) => writeFile(join(projectDir, "story", "timeline.json"), JSON.stringify({ schemaVersion: 1, entries }), "utf-8");
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子", "第二天上午，许棠上门"], storyDay: 5 }, { chapter: 1 })!);
+    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(10);
+    await timeline([{ chapter: 1, day: 9, daysInChapter: 2, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(11);
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子"] }, { chapter: 1 })!);
+    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(9);
+  });
 });
 
 // ---------- 出稿前的章纲编排：章纲员拟 → 核账员审 → 改一轮（R3 后唯一一条路） ----------
@@ -227,6 +241,29 @@ describe("resolveChapterPlanForDraft：编辑部编排", () => {
     });
     expect(redirected.reused).toBe(false);
     expect((await readChapterPlan(projectDir, 2))?.direction).toBe("改成去银行");
+  });
+
+  it("拟纲后前文改了（改了前面那章、记了设定）→ 不沿用、按现在的重拟并说一声；作者给的章纲照旧沿用（外部审查 2026-10-28）", async () => {
+    const { resolveChapterPlanForDraft } = await import("./plan-chapter.js");
+    const projectDir = await makeBook();
+    const planner = fakePlannerCallModel();
+    const checker = fakePlanCheckCallModel(JSON.stringify({ problems: [] }));
+    const resolve = () => resolveChapterPlanForDraft({ projectDir, chapter: 2, plannerCallModel: planner.callModel, planCheckReaderCallModel: checker });
+    await resolve();
+    expect((await readChapterPlan(projectDir, 2))?.basis).toEqual(expect.any(String));
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈把蓝色账册交给了许棠，档案室不用去了。\n", "utf-8");
+    const stale = await resolve();
+    expect(stale.reused).toBe(false);
+    expect(stale.note).toMatch(/^前文改过，章纲按现在的重拟了。/u);
+    expect(planner.calls.filter((call) => call.json)).toHaveLength(2);
+    expect((await resolve()).reused).toBe(true);
+    const cards = await runCommand(projectDir, cardWrite, { ops: [{ op: "card.create", kind: "item", name: "蓝色账册" }] }, { caller: "author", idempotencyKey: "stale-card" });
+    expect(cards.ok).toBe(true);
+    expect((await resolve()).reused).toBe(false);
+    const plan = (await readChapterPlan(projectDir, 2))!;
+    await writeChapterPlan(projectDir, { ...plan, source: "author" });
+    await writeFile(join(projectDir, "chapters", "0001.md"), "# 第1章 · 账册\n\n林澈烧了账册。\n", "utf-8");
+    expect((await resolve()).reused).toBe(true);
   });
 
   it("AI 另写几版不带方向：沿用章纲和作者原话，不重拟、不冲掉作者的方向；作者给了新方向才重拟", async () => {

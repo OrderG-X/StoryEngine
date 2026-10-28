@@ -235,6 +235,8 @@
   .se-v2-find-text-btn:hover:not(:disabled){border-color:var(--accent-line);background:var(--accent-soft);color:var(--text);}
   .se-v2-find-match{background:color-mix(in srgb,var(--warn) 26%,transparent);}
   .se-v2-find-match-current{background:color-mix(in srgb,var(--accent) 55%,transparent);box-shadow:0 0 0 1px var(--accent);}
+  /* 选了半句时，AI 改写会改的那一整句：淡底纹，作者的选区原样不动（snapPreview） */
+  .se-v2-snap-preview{background:var(--accent-soft);border-radius:2px;}
   /* 编辑器本身不画焦点框：稿纸框已有获得焦点时的描边反馈（.se-v2-writing-canvas:focus-within） */
   .ProseMirror:focus-visible{outline:none;box-shadow:none;}
 

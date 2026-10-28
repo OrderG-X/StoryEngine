@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyUnitEdits, dropNeighborEcho, fitQuotes, numberedText, prepareUnitReplacement, splitUnits } from "./units.js";
+import { applyUnitEdits, dropNeighborEcho, fitQuotes, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits } from "./units.js";
 
 const texts = (text: string) => splitUnits(text).map((unit) => unit.text);
 
@@ -128,5 +128,18 @@ describe("模型给的新句 → 能换上去的字（prepareUnitReplacement）"
     const talk = splitUnits("“我退休那年交出去了。”\n她没接话。");
     expect(prepareUnitReplacement(talk, 1, "“前些年交出去过一把。”他说，“交给邮局一个姓孟的。钥匙的事，你问他去。”")).toBeUndefined();
     expect(prepareUnitReplacement(talk, 1, "“我前些年交出去了。”")).toBe("“我前些年交出去了。”");
+  });
+});
+
+// 换题材长篇实跑 2026-10-28：定论改法回成「“你知道就好。[98]你的活儿…[99]审计这行…[100]你位置空一个星期了…”」，整条被当成一句改成了几句丢掉。
+describe("新写法里带着别的编号（splitNumberedReply）", () => {
+  it("按编号拆开：头一截归点名的那句，「[n]」后那截归第 n 句；没编号原样", () => {
+    expect(splitNumberedReply(97, "“你知道就好。[98]活儿摊给了三个人。[100]你位置空一个星期了。”")).toEqual([
+      { id: 97, to: "“你知道就好。" },
+      { id: 98, to: "活儿摊给了三个人。" },
+      { id: 100, to: "你位置空一个星期了。”" },
+    ]);
+    expect(splitNumberedReply(2, "[2]你爸失踪十五年了。")).toEqual([{ id: 2, to: "你爸失踪十五年了。" }]);
+    expect(splitNumberedReply(2, "你爸失踪十五年了。")).toEqual([{ id: 2, to: "你爸失踪十五年了。" }]);
   });
 });

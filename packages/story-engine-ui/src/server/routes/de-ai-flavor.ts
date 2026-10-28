@@ -8,6 +8,7 @@
  *   - violations 由前端把卡片里那几条传来（含可定位 text），不在端点重复体检（用户改的就是卡里那几条）。
  */
 import { readFile } from "node:fs/promises";
+import { readDraft } from "@actalk/story-core";
 import {
   assertStoryEngineProject,
   defaultDraftPath,
@@ -75,6 +76,8 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     await assertStoryEngineProject(projectDir);
 
     const draftPath = defaultDraftPath(projectDir, chapter);
+    // 改写模型跑着时作者存了稿就不写回（版本对不上如实报）。
+    const baseVersion = (await readDraft(projectDir, chapter))?.version ?? null;
     // 全文内容（含可能的标题行）：违规句是正文整句、必为全文子串，倒序落盘后写回全文，标题不动。
     const rawDraft = readString(body.draftContent) ?? await readFile(draftPath, "utf-8").catch(() => "");
     const violations = readViolations(body.violations);
@@ -100,7 +103,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     if (result.rewritten > 0 && result.updatedContent !== rawDraft) {
       // 快照与写稿同一把书锁（撤销、定稿切不进中间）；写稿走 draft.write（重构 P7）。
       const { snapshot, result: written } = await runWithSnapshot(projectDir, "一键去 AI 味前快照", () =>
-        writeAiDraft(projectDir, { chapter, body: result.updatedContent }));
+        writeAiDraft(projectDir, { chapter, body: result.updatedContent, baseVersion }));
       writtenContent = written.content;
       snapshotId = snapshot.id;
     }

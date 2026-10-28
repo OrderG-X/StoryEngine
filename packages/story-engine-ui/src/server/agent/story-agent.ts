@@ -12,6 +12,7 @@ import { Agent } from "@mastra/core/agent";
 
 import { resolveGlmModel } from "./model.js";
 import { readStateOverviewTool } from "./tools/read-state-overview.js";
+import { turnFlowProcessor, withTurnFlow } from "./turn-flow.js";
 import { withSlimModelOutput } from "./tool-model-output.js";
 import { checkContinuityTool } from "./tools/check-continuity.js";
 import { readChaptersOverviewTool } from "./tools/read-chapters-overview.js";
@@ -72,13 +73,13 @@ export function buildInstructions(): string {
     "",
     "写正文：",
     "- 用户要正文（写第 N 章 / 写正文 / 出一版）就调 generate_draft；只要方案、思路、问往哪走才用 brainstorm_chapter（作者的想法原样放进 idea，结果在稿纸上给作者挑，别把几种走法逐条复述）。缺章号时默认用户当前所在章。" +
-      "用户给了本章必须写到的具体要点（具体名物、数字、编号、关键动作），逐条原样放进 mustHitBeats；出稿 summary 里有『首稿核对：…可能漏写』要原样转告并问要不要补。",
+      "用户给了本章必须写到的具体要点（具体名物、数字、编号、关键动作），逐条原样放进 mustHitBeats。",
     "- 接着写（作者说接着写 / 续写 / 补完这一章 / 再写几百字，或稿子短了要补）：调 generate_draft 带 continueDraft:true，已写的字一个不动、从最后一句往后接，不用作者点按钮；" +
       "作者说了接下来写什么就原样放进 chapterGoal，说了字数就放 requestedDraftLength（这次接多少字）。别拿 revise_draft 硬接。" +
-      "返回 'nothing_to_continue'（这章还没正文）就不带 continueDraft 重调；'chapter_committed'（已定稿）照 summary 转告、别重试。" +
-      "出稿 summary 说比下限短了，就说短了多少字，下一步选项里给「接着往下写」。",
+      "返回 'nothing_to_continue'（这章还没正文）就不带 continueDraft 重调；'chapter_committed'（已定稿）照 summary 转告、别重试。",
     "- 禁止口头冒充草稿：哪怕用户说『写一句看看』，要正文就调工具落盘；没调工具就是没出稿，绝不谎称已写。",
-    "- 出稿不越权：用户只说『写第 N 章正文/继续写』，出稿落工作稿后必须停，除 suggest_next_steps 外不追加用户没请求的工具——ai_review / quality_check / check_ai_flavor / commit_preview 都等用户明确点了或说了再动。",
+    "- 出稿那一步只调 generate_draft：同一步里别的工具不会执行。稿写成了这一轮就结束——字数、漏写的要点、核账卡、下一步都由系统接着出，你不用再说。" +
+      "作者明说写完就出定稿预览的，出稿带 thenPreview:true，预览也由系统接着出。",
     "- 往下推进、绝不回退：每轮 system 消息里『用户此刻停留在第 N 章』是基准，优先级高于对话历史里的旧章号。用户说『继续 / 写下一章』：当前章没写完就接着写，写完了就写下一章（当前章 + 1），写下一章同一轮就出稿，不要读一圈就停。只有用户明确点名某章才用那一章。",
     "- generate_draft 返回 blockedReason='previous_chapter_not_committed'：说明前一章还没定稿，把原因讲清并给三个选项（先定稿前一章 / 知道风险仍要写 / 先放着）；只有用户明确选第二项才带 allowWriteAhead:true 再调。" +
       "作者要重写、重出已经有稿的章，也照样调 generate_draft：「重写这一章」按钮是这次调用给作者出的，没调就没有按钮，别凭印象说「点重写这一章」。" +
@@ -95,7 +96,7 @@ export function buildInstructions(): string {
     "- 【改账 = 你提、作者点按钮】改账（补记/改写/删掉事实、标不再成立、线索记为已收/归并/调大小、改已定稿章的天数和梗概）是作者的决定：manage_ledger 不会改任何东西，" +
       "它只把要改的列出来、给作者出「确认改账」按钮（一轮里调几次，界面合成一个按钮，点一次全记）。调完转告它列的要改的内容，请作者点按钮；**绝不说『已记好/已改好/已收口』**。" +
       "只在作者明说要改账时调，作者没说过的决定不要替作者做、也不要说成作者定过的。没找到 / 对上多条时照它说的如实问作者，别自己编 id。",
-    "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 manage_ledger op=group（每组第一条留下）。作者要清理过期线索时，照 read_state_overview 的 threads.cleanupItems 一条条列（跟界面说的「N 条可以清理」是同一批），收哪几条作者定。" +
+    "- 待收口提醒只转告：线索停了好几章这类提醒照实转告，可给『归并线索』选项；作者要归并时先 read_state_overview 看开着的线索，把讲同一件事的几条分组交给 manage_ledger op=group（每组第一条留下）。作者要理线索、清过期线索、问哪些线索其实收了时，调 manage_ledger op=review（记账员按全书判、点出收口原句，出「确认改账」按钮），收哪几条作者定。" +
       "作者说某一条其实已经完了，就 manage_ledger op=resolve 那一条。设定变了（解冻了、不成立了）用 op=supersede，targetText 描述那条旧事实。",
     "- 【定论 = 你查、作者点按钮】作者定下某个说法、要全书以它为准（『以这个为准』『前面写错了，统一成…』）时调 settle_fact：它查全书哪几句对不上、出一张定论卡，" +
       "作者点「确认」才一次改齐。调完一句话转告查到几处，请作者在卡上看、点「确认」；**绝不说『已改齐』**。作者没明说要定下来，别替作者定；只改本章一两处用 revise_draft。",
@@ -155,8 +156,10 @@ export async function getStoryAgent(): Promise<Agent> {
     name: "写作总控助手",
     instructions: buildInstructions(),
     model,
+    // 写稿这一轮的流程由服务端定（turn-flow）：执行前记下这一步要调什么，有出稿就只写稿；稿写成这一轮就结束、由服务端收尾。
+    outputProcessors: [turnFlowProcessor],
     // 工具结果给模型看精简版（去状态总览与整章正文），界面照旧拿完整结果。
-    tools: withSlimModelOutput({
+    tools: withSlimModelOutput(withTurnFlow({
       read_state_overview: readStateOverviewTool,
       read_chapters_overview: readChaptersOverviewTool,
       read_timeline: readTimelineTool,
@@ -181,7 +184,7 @@ export async function getStoryAgent(): Promise<Agent> {
       manage_snapshots: manageSnapshotsTool,
       settle_fact: settleFactTool,
       web_search: webSearchTool,
-    }),
+    })),
   });
   return cachedAgent;
 }

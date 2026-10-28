@@ -11,7 +11,7 @@ import { withStep } from "../lib/token-meter.js";
 import { coreSnapshotFor } from "../lib/snapshot.js";
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { readEarlierChapters, type EarlierText } from "./continuity/check-chapter.js";
-import { collectPlanMaterials, planMaterialBlocks } from "./plan-materials.js";
+import { collectPlanMaterials, OPENING_PLAN_NOTE, planMaterialBlocks } from "./plan-materials.js";
 import { buildColdReaderWindow, ensureReaderWindow, type BrainCallModel, type BrainMessage, type ColdCoverage, type ReaderRole } from "./reader-window.js";
 import { readerWaitingHandlers } from "./reader-progress.js";
 import { PLANNER_ROLE } from "./planner.js";
@@ -106,8 +106,12 @@ export function brainstormTask(input: {
 }): string {
   const threads = input.threads.slice(0, MAX_THREADS_IN_PROMPT);
   const idea = input.idea?.trim();
+  // 第 1 章前面没有正文：别说「跟读到第 0 章」「接住第 0 章的结尾」（换题材长篇实跑 2026-10-27）。
+  const opening = input.chapter <= 1;
   return [
-    `你已经从第 1 章跟读到了第 ${input.chapter - 1} 章（见上面的原文和你的笔记）。作者在想第 ${input.chapter} 章往哪走，请你给 ${BRAINSTORM_OPTIONS} 种不同的走法让他挑（几种是互相替代的，作者只会用一种）。只输出一个 JSON，不要解释、不要 Markdown。`,
+    opening
+      ? `这是全书第 1 章，前面还没有正文。作者在想第 1 章怎么开篇，请你给 ${BRAINSTORM_OPTIONS} 种不同的开法让他挑（几种是互相替代的，作者只会用一种）。只输出一个 JSON，不要解释、不要 Markdown。`
+      : `你已经从第 1 章跟读到了第 ${input.chapter - 1} 章（见上面的原文和你的笔记）。作者在想第 ${input.chapter} 章往哪走，请你给 ${BRAINSTORM_OPTIONS} 种不同的走法让他挑（几种是互相替代的，作者只会用一种）。只输出一个 JSON，不要解释、不要 Markdown。`,
     ...input.materialBlocks,
     threads.length > 0
       ? `【开着的线索（编号｜线索｜停了几章）】\n${threads.map((thread) => `${thread.id}｜${thread.title}｜${thread.idle > 0 ? `停了 ${thread.idle} 章` : "刚动过"}${thread.weight === "major" ? "｜大伏笔" : ""}`).join("\n")}`
@@ -115,8 +119,11 @@ export function brainstormTask(input: {
     ...(input.avoid && input.avoid.length > 0 ? [`【这几种已经给过作者了，别再出一样的】${input.avoid.join("；")}`] : []),
     [
       "要求：",
-      `- ${BRAINSTORM_OPTIONS} 种都接住第 ${input.chapter - 1} 章的结尾，彼此要真不一样：推进不同的线索，或者同一条线索走不同的方向；别只是换个说法。`,
-      ...(idea ? ["- 作者给了想法：每种都照他的想法走，只是走法不同。"] : []),
+      opening
+        ? `- ${BRAINSTORM_OPTIONS} 种都从故事的开头写起，彼此要真不一样：开场的事、先露的线索不同；别只是换个说法。${OPENING_PLAN_NOTE}`
+        : `- ${BRAINSTORM_OPTIONS} 种都接住第 ${input.chapter - 1} 章的结尾，彼此要真不一样：推进不同的线索，或者同一条线索走不同的方向；别只是换个说法。`,
+      // 换题材长篇实跑 2026-10-27：作者说「不碰催收和陆生」，三种里还有一种写了欠债和那通催收电话。
+      ...(idea ? ["- 作者给了想法：每种都照他的想法走，只是走法不同；他说了这章不碰、不写的事，哪一种都别碰，threads 也别挑那几条。"] : []),
       "- 每种 3 步，每步一句话、不超过 30 个字，写具体的事（谁、做了什么、结果怎样），不写「推动剧情」「制造悬念」这类空话；对白、细节留给正文。",
       "- 和前文对不上的不要出：东西在谁手上、人在哪、谁知道什么、过了几天。受保护的秘密不要揭开。",
       "- threads 填这种走法主要推进的开着的线索编号，最多 3 条（只从上面的列表里挑，没有就给空数组）。",
@@ -217,7 +224,12 @@ export function splitBrainstormProblems(text: string, options: readonly Brainsto
       reason: problem.reason,
     });
   }
-  return options.map((option, index) => ({ ...option, problems: byOption[index]! }));
+  // 推荐是章纲员还没核前文时挑的：核出对不上的就不再标推荐（换题材长篇实跑 2026-10-27：推荐的那种恰好对不上）。
+  return options.map((option, index) => {
+    const problems = byOption[index]!;
+    const { recommended, ...rest } = option;
+    return { ...rest, ...(recommended && problems.length === 0 ? { recommended } : {}), problems };
+  });
 }
 
 /** 读到第 upTo 章的跟读窗口：要补的笔记太多就用冷窗口（已有笔记 + 最近几章原文），同拟章纲 / 审章纲。 */

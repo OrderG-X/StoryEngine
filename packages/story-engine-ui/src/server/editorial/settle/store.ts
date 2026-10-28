@@ -69,7 +69,9 @@ export async function settleApplyArgs(projectDir: string, proposal: SettlePropos
       : [proposal.replaces
         ? { op: "canon.set" as const, canon: proposal.replaces.id, text: proposal.canon }
         : { op: "canon.add" as const, text: proposal.canon }]),
-    ...fields.map((edit): CardOp => (edit.card ? { op: "field.set", card: edit.card, label: edit.label, value: edit.to } : { op: "story.set", label: edit.label, value: edit.to })),
+    ...fields.map((edit): CardOp => (edit.card && edit.relationWith
+      ? { op: "relation.set", a: edit.card, b: edit.relationWith, label: edit.to }
+      : edit.card ? { op: "field.set", card: edit.card, label: edit.label, value: edit.to } : { op: "story.set", label: edit.label, value: edit.to })),
   ];
   const chapters: SettleApplyArgs["chapters"][number][] = [];
   const drafts: SettleApplyArgs["drafts"][number][] = [];

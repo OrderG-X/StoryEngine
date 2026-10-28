@@ -216,6 +216,26 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(lastAssistant()?.content).toBe("好的，我看一下。");
   });
 
+  it("作者给当前章挑过走法：请求带上那条走法原文（说「照甲写」时 AI 才知道甲是什么）；没挑不带", async () => {
+    scriptAgentStream((handlers) => handlers.onDone());
+    const brainstorm = { chapter: 3, idea: "别急着揭底", checked: true, options: [{ title: "老民警", steps: ["去派出所", "只漏出名字"], threads: [], problems: [] }] };
+    useChatStore.setState({ messages: [{ id: "d", role: "assistant", content: "", cards: [{ type: "directions", brainstorm, picked: 0 }] }] });
+    const { result } = renderHook(() => useChat(buildParams({})));
+
+    await act(async () => {
+      await result.current.handleSendMessage("照甲写，改一处");
+    });
+    const [picked] = mockedStreamAgentChat.mock.calls[0] as [StreamAgentChatRequest, AgentChatHandlers];
+    expect(picked.pickedDirection).toEqual({ chapter: 3, text: "老民警：1. 去派出所 2. 只漏出名字\n作者要走法时说：别急着揭底" });
+
+    useChatStore.setState({ messages: [{ id: "e", role: "assistant", content: "", cards: [{ type: "directions", brainstorm }] }] });
+    await act(async () => {
+      await result.current.handleSendMessage("写这一章");
+    });
+    const [unpicked] = mockedStreamAgentChat.mock.calls[1] as [StreamAgentChatRequest, AgentChatHandlers];
+    expect(unpicked.pickedDirection).toBeUndefined();
+  });
+
   it("drops a late first-message auto-rename response after project/session replacement", async () => {
     const renameGate = deferred<{
       ok: true;

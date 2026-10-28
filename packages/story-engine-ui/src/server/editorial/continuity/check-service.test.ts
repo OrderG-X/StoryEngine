@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrainCallModel } from "../index.js";
 import { CHECKER_ROLE, ensureReaderWindow, readReadersCatchUpStatus, startReaderCatchUp } from "../index.js";
 import { makeHomeTempDir } from "../../lib/home-test-tmp.js";
+import { describeTimelineForChapter, readStoryTimeline } from "../../book/story-timeline.js";
+import { syncLegacyMirror } from "../../book/mirror/sync.js";
+import { chapterCommit, decisionRecord, runCommand } from "@actalk/story-core";
 import { canReuseCheck, checkChapterBody } from "./check-service.js";
 import { readEarlierChapters, type ContinuityIssueV2 } from "./check-chapter.js";
 import { appendFixLog, hashBody, hashEarlier, readFixLog, writeCheckMemory } from "./check-memory.js";
@@ -212,6 +215,143 @@ describe("核账服务：核账记忆", () => {
     // 设定没再动 → 又能复用
     expect((await checkChapterBody(dir, 3, BODY, { readerCallModel: reader.callModel })).reused).toBe(true);
   });
+  it("有一遍没跑成（别的遍照常报了错）→ 不记进核账记忆：下次重核，那一步的失败不会被当成全核过端出来", async () => {
+    const dir = await makeBook();
+    let calls = 0;
+    let broken = true;
+    const flaky: BrainCallModel = async (messages, options) => {
+      calls += 1;
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+        return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+      }
+      if (broken && last.includes("这一遍只盯时间")) throw new Error("连接断了");
+      return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
+    };
+    const first = await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
+    expect(first.failures.length).toBeGreaterThan(0);
+    expect(first.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
+    expect(await canReuseCheck(dir, 3, BODY)).toBe(false);
+    broken = false;
+    const before = calls;
+    const second = await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
+    expect(second.reused).toBe(false);
+    expect(second.failures).toEqual([]);
+    expect(calls).toBeGreaterThan(before);
+    // 这遍全跑成了 → 记下，再核才复用
+    expect((await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky })).reused).toBe(true);
+  });
+
+  it("作者改了前一章是哪天 → 不复用上次「没问题」的结果（时间线表进键）", async () => {
+    const dir = await makeHomeTempDir("check-service-day-");
+    const text = "林舟把怀表放进抽屉。周婶走到柜台。";
+    expect((await runCommand(dir, chapterCommit, { chapter: 1, text, entries: [{ kind: "time", review: "auto", basis: "author", day: 1, quote: text }] }, { caller: "author", idempotencyKey: "commit-1" })).ok).toBe(true);
+    await syncLegacyMirror(dir);
+    const reader = readerModel();
+    await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
+    expect(await canReuseCheck(dir, 2, BODY)).toBe(true);
+    expect((await runCommand(dir, decisionRecord, { type: "chapter.day", chapter: 1, day: 20 }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
+    await syncLegacyMirror(dir);
+    expect((await readStoryTimeline(dir)).timeline.entries[0]?.day).toBe(20);
+    expect(await canReuseCheck(dir, 2, BODY)).toBe(false);
+    const checksBefore = reader.calls.checks;
+    const after = await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
+    expect(after.reused).toBe(false);
+    expect(reader.calls.checks).toBeGreaterThan(checksBefore);
+  });
+});
+
+describe("核账服务：改后只核改过的句子（外部审查 2026-10-28：改完再整章核一遍，等待翻倍）", () => {
+  const FROM = "他从工作台上拿起那块怀表，表盖还开着。";
+  const TO = "他从抽屉里取出那块怀表，表盖还开着。";
+  const FIXED = BODY.replace(FROM, TO);
+
+  /** 记下每次问的是什么：整章三遍（「这一遍只盯」）、只核改过的句子、自复核（带几条候选）。 */
+  function recordingModel(focusedReply: readonly object[] = []) {
+    const asked = { full: 0, focused: [] as string[], reviews: [] as number[] };
+    const callModel: BrainCallModel = async (messages, options) => {
+      if (!options.json) return "笔记";
+      const last = messages.at(-1)!.content;
+      if (last.includes("你刚才核完报了")) {
+        const ids = [...last.matchAll(/【(K\d+)】/gu)].map((match) => match[1]);
+        asked.reviews.push(ids.length);
+        return JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "sure" })) });
+      }
+      if (last.includes("刚按核账改了下面几句")) {
+        asked.focused.push(last);
+        return JSON.stringify({ checks: [], contradictions: focusedReply });
+      }
+      asked.full += 1;
+      return JSON.stringify({ checks: [], contradictions: last.includes("这一遍只盯人") ? [{ ...AUNT, confidence: "sure" }] : [] });
+    };
+    return { callModel, asked };
+  }
+
+  it("按核账改了一句（改句记录对得上）→ 只核改过的那句，没改的问题照带、不再复核；结果记进核账记忆", async () => {
+    const dir = await makeBook();
+    const model = recordingModel();
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: model.callModel });
+    expect(model.asked.full).toBe(6);
+    await appendFixLog(dir, 3, [{ from: FROM, to: TO }]);
+    const after = await checkChapterBody(dir, 3, FIXED, { readerCallModel: model.callModel });
+    expect(model.asked.full).toBe(6);
+    expect(model.asked.focused).toHaveLength(2);
+    expect(model.asked.focused[0]).toContain(`改前：${FROM}\n   改后：${TO}`);
+    expect(model.asked.reviews).toEqual([1]);
+    expect(after).toMatchObject({ ok: true, reused: false, rechecked: { changed: 1 } });
+    expect(after.sure.map((item) => item.quote)).toEqual([AUNT_SENTENCE]);
+    expect((await checkChapterBody(dir, 3, FIXED, { readerCallModel: model.callModel })).reused).toBe(true);
+  });
+
+  it("出稿流程直接给改了哪几句（删掉的句子也算）→ 只核改过的；改后那句又被报的照常自复核", async () => {
+    const dir = await makeBook();
+    const model = recordingModel([{ quote: "他从抽屉里取出那块怀表", earlierQuote: "林舟把怀表锁进了柜台下的抽屉", earlierChapter: 2, reason: "抽屉上了锁", confidence: "sure" }]);
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: model.callModel });
+    const deleted = FIXED.replace("周婶在门口喊他。", "");
+    const after = await checkChapterBody(dir, 3, deleted, {
+      readerCallModel: model.callModel,
+      afterFix: [{ from: FROM, to: TO }, { from: "周婶在门口喊他。", to: "" }],
+    });
+    expect(after.rechecked).toEqual({ changed: 2 });
+    expect(model.asked.full).toBe(6);
+    expect(model.asked.focused[0]).toContain("改后：（删掉了）");
+    expect(model.asked.reviews).toEqual([1, 1]);
+    expect(after.sure.map((item) => item.quote)).toEqual([TO]);
+  });
+
+  it("作者另外动过、改句换不上、要「再细核一遍」→ 整章重核", async () => {
+    const dir = await makeBook();
+    const model = recordingModel();
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: model.callModel });
+    await appendFixLog(dir, 3, [{ from: FROM, to: TO }]);
+    const edited = await checkChapterBody(dir, 3, `${FIXED}林舟低头擦着柜台。`, { readerCallModel: model.callModel });
+    expect(edited.rechecked).toBeUndefined();
+    expect(model.asked.full).toBe(12);
+    const stale = await checkChapterBody(dir, 3, BODY.replace("周婶", "林溪"), { readerCallModel: model.callModel, afterFix: [{ from: "不在稿里的句子。", to: "林溪在门口喊他。" }] });
+    expect(stale.rechecked).toBeUndefined();
+    expect(model.asked.full).toBe(18);
+    const fresh = await checkChapterBody(dir, 3, BODY.replace("周婶", "林溪"), { readerCallModel: model.callModel, fresh: true });
+    expect(fresh.rechecked).toBeUndefined();
+    expect(model.asked.full).toBe(24);
+    expect(model.asked.focused).toEqual([]);
+  });
+
+  it("上一遍有一步没跑成（没记进核账记忆）→ 改后整章重核", async () => {
+    const dir = await makeBook();
+    let broken = true;
+    const model = recordingModel();
+    const flaky: BrainCallModel = async (messages, options) => {
+      if (broken && options.json && messages.at(-1)!.content.includes("这一遍只盯时间")) throw new Error("连接断了");
+      return model.callModel(messages, options);
+    };
+    await checkChapterBody(dir, 3, BODY, { readerCallModel: flaky });
+    broken = false;
+    const after = await checkChapterBody(dir, 3, FIXED, { readerCallModel: flaky, afterFix: [{ from: FROM, to: TO }] });
+    expect(after.rechecked).toBeUndefined();
+    expect(model.asked.focused).toEqual([]);
+  });
 });
 
 describe("核账服务：核账员还没读完前文（R4.4 冷窗口兜底 + 后台补读）", () => {
@@ -373,7 +513,8 @@ describe("核账服务：前面章节没改的错不再每章重报（P7 后）"
   async function bookWithChapter4Memory(): Promise<string> {
     const dir = await makeBook(3);
     const earlier = await readEarlierChapters(dir, 4);
-    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, []), issues: [CURRENT, OLD] });
+    const timeline = describeTimelineForChapter((await readStoryTimeline(dir)).timeline, 4);
+    await writeCheckMemory(dir, { chapter: 4, bodyHash: hashBody(BODY), body: BODY, earlierHash: hashEarlier(earlier, [], "", timeline), issues: [CURRENT, OLD] });
     return dir;
   }
 

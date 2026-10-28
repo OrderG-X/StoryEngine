@@ -122,6 +122,23 @@ describe("定稿清单弹窗（重构 P6，草图 ②）", () => {
     expect(onConfirm).toHaveBeenLastCalledWith([], { day: 4, dayEnd: 5 });
   });
 
+  it("先填「到第几天」再改头一天：到第几天按填的不动，框里和上面那行说的一样", () => {
+    const onConfirm = vi.fn();
+    render(<CommitSheet preview={spanning("tok-end-first")} busy={false} onConfirm={onConfirm} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "改天数" }));
+    const end = screen.getByRole("spinbutton", { name: "这一章到故事第几天" }) as HTMLInputElement;
+    fireEvent.change(end, { target: { value: "5" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "4" } });
+    expect(end.value).toBe("5");
+    expect(screen.getByText("这一章改记为故事第 4 天到第 5 天")).toBeTruthy();
+    // 头一天改到比填的还晚：到第几天跟上来，框里也跟着显示。
+    fireEvent.change(screen.getByRole("spinbutton", { name: "这一章是故事第几天" }), { target: { value: "6" } });
+    expect(end.value).toBe("6");
+    expect(screen.getByText("这一章改记为故事第 6 天")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认定稿" }));
+    expect(onConfirm).toHaveBeenLastCalledWith([], { day: 6, dayEnd: 6 });
+  });
+
   it("关了再开（同一份预览）动过的还在", () => {
     const same = preview({ previewToken: "tok-same" });
     const first = render(<CommitSheet preview={same} busy={false} onConfirm={vi.fn()} onClose={vi.fn()} />);

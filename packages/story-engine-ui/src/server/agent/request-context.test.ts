@@ -12,6 +12,7 @@ import {
   readLastTurnUndoHintFromContext,
   readProjectDirFromContext,
   readAuthorWordsFromContext,
+  readPickedDirectionFromContext,
   resolveChapterFromInputOrContext,
 } from "./request-context.js";
 
@@ -53,6 +54,17 @@ describe("request-context projectDir + currentChapter 注入/读取", () => {
     expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book")))).toBeUndefined();
     expect(readAuthorWordsFromContext(ctx(buildProjectRequestContext("/tmp/book", 3, undefined, ["   "])))).toBeUndefined();
     expect(readAuthorWordsFromContext(undefined)).toBeUndefined();
+  });
+});
+
+describe("request-context 作者挑中的走法", () => {
+  it("只对挑的那一章读得回；没带、没字、章号不对都是 undefined", () => {
+    const c = ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, undefined, { chapter: 14, text: " 老民警：1. 去派出所 " }));
+    expect(readPickedDirectionFromContext(c, 14)).toBe("老民警：1. 去派出所");
+    expect(readPickedDirectionFromContext(c, 15)).toBeUndefined();
+    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14)), 14)).toBeUndefined();
+    expect(readPickedDirectionFromContext(ctx(buildProjectRequestContext("/tmp/book", 14, undefined, undefined, undefined, { chapter: 14, text: "  " })), 14)).toBeUndefined();
+    expect(readPickedDirectionFromContext(undefined, 14)).toBeUndefined();
   });
 });
 

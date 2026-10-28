@@ -76,6 +76,13 @@ describe("normalizeRawOp：边界归一模型常传的退化写法（只动句�
     expect(normalizeRawOp({ op: "rules.set", field: "minWords", value: "" }).value).toBeNull();
     expect(normalizeRawOp({ op: "rules.set", field: "targetWords" }).value).toBeNull();
     expect(normalizeRawOp({ op: "rules.set", field: "targetWords", value: "两千" }).value).toBe("两千");
+    // 字数写成了故事设定的一栏：栏名正好是写作规则的字数栏 → 搬回写作规则；别的栏照旧是故事设定
+    expect(normalizeRawOp({ op: "story.set", label: "每章目标字数", value: "2000" })).toEqual({ op: "rules.set", field: "targetWords", value: 2000 });
+    expect(normalizeRawOp({ op: "story.set", label: " 每章至少字数 ", value: 1800 })).toEqual({ op: "rules.set", field: "minWords", value: 1800 });
+    expect(normalizeRawOp({ op: "story.set", label: "视角", value: "第三人称" })).toEqual({ op: "story.set", label: "视角", value: "第三人称" });
+    expect(normalizeRawOp({ op: "story.set", label: "篇幅", value: "约 50 章" }).op).toBe("story.set");
+    // 删故事设定里记错的那一栏：照旧删那一栏，不当成删写作规则（实跑里 AI 先 rules.set 再删这一栏，曾把刚写的规则删了）
+    expect(normalizeRawOp({ op: "story.set", label: "每章目标字数", value: "" })).toEqual({ op: "story.set", label: "每章目标字数", value: "" });
     // field.set 的空串是「删这一栏」，不当没传
     expect(normalizeRawOp({ op: "field.set", card: "苏晴", label: "外貌", value: "" })).toEqual({ op: "field.set", card: "苏晴", label: "外貌", value: "" });
   });

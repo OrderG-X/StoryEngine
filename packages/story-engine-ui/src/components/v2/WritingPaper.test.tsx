@@ -4,6 +4,7 @@ import { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import WritingPaper from "./WritingPaper.js";
 import { SentenceFocus } from "./sentenceFocusPlugin.js";
+import { setSnapPreview, SnapPreview } from "./snapPreview.js";
 import { draftTextToHtml } from "./draftEditorSync.js";
 import type { DraftPreview } from "../../types.js";
 import { useUiStore } from "../../stores/uiStore.js";
@@ -181,6 +182,23 @@ describe("WritingPaper", () => {
       content: draftTextToHtml("他来了。她走了。"),
     });
     expect(editor.state.doc.textContent).toContain("她走了");
+    editor.destroy();
+  });
+
+  it("选半句：改写会改的整句只画底纹，作者的选区不动；一打字底纹就撤", () => {
+    // 换题材长篇实跑 2026-10-27：以前把选区直接扩到整句，作者选两个字打字替换，整句一下没了。
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit.configure({ heading: false, bulletList: false, orderedList: false, blockquote: false, codeBlock: false, horizontalRule: false, bold: false, italic: false, strike: false, code: false }), SnapPreview],
+      content: draftTextToHtml("春雨下不大，细细密密，石板亮了。她进了门。"),
+    });
+    editor.commands.setTextSelection({ from: 7, to: 11 });
+    setSnapPreview(editor, { from: 1, to: 17 });
+    expect(editor.state.selection).toMatchObject({ from: 7, to: 11 });
+    expect(editor.view.dom.querySelector(".se-v2-snap-preview")?.textContent).toBe("春雨下不大，细细密密，石板亮了。");
+    editor.commands.insertContent("细细的");
+    expect(editor.state.doc.textContent).toBe("春雨下不大，细细的，石板亮了。她进了门。");
+    expect(editor.view.dom.querySelector(".se-v2-snap-preview")).toBeNull();
     editor.destroy();
   });
 

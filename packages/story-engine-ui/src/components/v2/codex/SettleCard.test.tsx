@@ -96,6 +96,9 @@ describe("定论卡", () => {
     expect(onAction).toHaveBeenLastCalledWith({ toolName: "settle_preview", statement: data.canon, chapter: 4 });
     fireEvent.click(screen.getByRole("button", { name: "记下定论" }));
     expect(onAction).toHaveBeenLastCalledWith({ toolName: "settle_apply", token: data.token, excluded: [] });
+    act(() => { useChatStore.getState().markSettleApplied(data.token, "改齐了。设定本：定论记下一条。"); });
+    expect(screen.getByText("记下了")).toBeTruthy();
+    expect(screen.queryByText("改齐了")).toBeNull();
   });
 
   it("只是那一场的事：标题「改齐」、说不记进设定本；没要改的不给按钮", () => {

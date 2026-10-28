@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeChapterPlan } from "../book/chapter-plan.js";
 import type { WriterContextEnvelope } from "./context-gateway.js";
-import { findReplayedParagraphs, runFastDraft, stripTrailingSegmentMarkers, type WriterClient } from "./fast-draft-writer.js";
+import { dropEchoedLead, findReplayedParagraphs, runFastDraft, stripTrailingSegmentMarkers, type WriterClient } from "./fast-draft-writer.js";
 import { renderFastDraftPromptText } from "./prompt-cache-diagnostics.js";
 import { createStoryProject } from "../book/project-store.js";
 
@@ -78,6 +78,23 @@ describe("按章纲分前后两半写", () => {
     expect(written).toContain(`林澈${han(900, "前")}。\n\n${han(900, "后")}。`);
     expect(written).not.toContain("未完");
     expect(written).not.toContain("全文完");
+  });
+
+  it("后半章开头原样抄了前半章最后一句 → 拼接时去掉（换题材长篇实跑第 21 章「“泡上吧。”」连着两遍）", async () => {
+    const projectDir = await makeBook();
+    let calls = 0;
+    const writer: WriterClient = {
+      generateDraft: vi.fn(async () => {
+        calls += 1;
+        return calls === 1
+          ? { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。\n\n“泡上吧。”` }
+          : { title: "", content: `“泡上吧。”\n\n${han(1300, "后")}。` };
+      }),
+    };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
+    const written = draftFileOf(report);
+    expect(written).toContain(`“泡上吧。”\n\n${han(1300, "后")}。`);
+    expect(written.split("“泡上吧。”").length).toBe(2);
   });
 
   it("stripTrailingSegmentMarkers：只去末尾整段的短标记；人物心声、正文中间的括号段不动", () => {
@@ -217,7 +234,8 @@ describe("按章纲分前后两半写", () => {
       generateDraft: vi.fn(async ({ context }) => {
         contexts.push(context);
         if (contexts.length === 1) return { title: "档案室", content: `# 第2章 · 档案室\n\n林澈${han(1300, "前")}。\n\n${scene}` };
-        if (contexts.length === 2) return { title: "", content: `${scene}\n\n${han(1300, "后")}。` };
+        // 换了两个字重演（原样照抄的开头另有 dropEchoedLead 去掉）。
+        if (contexts.length === 2) return { title: "", content: `${scene.replace("抬头看了他一眼", "抬眼看了看他")}\n\n${han(1300, "后")}。` };
         return { title: "", content: `他在走廊尽头等到天黑，管理员终于松了口。\n\n${han(1300, "新")}。` };
       }),
     };
@@ -250,11 +268,33 @@ describe("按章纲分前后两半写", () => {
     };
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 3000 });
     expect(writer.generateDraft).toHaveBeenCalledTimes(3);
-    expect(renderFastDraftPromptText(contexts[1])).toMatch(/后半章写 21\d\d 个中文字符左右/u);
+    // 前半章只写到要的五成多：后半章要的（3000 − 802）按最低 0.75 放大。
+    expect(renderFastDraftPromptText(contexts[1])).toMatch(/后半章写 293\d 个中文字符左右/u);
     expect(renderFastDraftPromptText(contexts[2])).toMatch(/【上一次的后半章只写了 100\d 个字，整章比最少字数还差 \d+ 字】/u);
     expect(report.draftBody).toContain(han(1800, "补"));
     expect(report.draftBody).not.toContain(han(1000, "后"));
     expect(report.issues.join("\n")).toMatch(/后半章重写了一次（100\d → 180\d 字）/u);
+  });
+
+  it("写手只写到要的八成：后半章要的字数照这个比例放大；写得比要的多就缩小（换题材长篇实跑 2026-10-27）", async () => {
+    const projectDir = await makeBook();
+    const prompts: string[] = [];
+    const run = async (firstLength: number) => {
+      const writer: WriterClient = {
+        generateDraft: vi.fn(async ({ context }) => {
+          prompts.push(renderFastDraftPromptText(context));
+          return prompts.length % 2 === 1 ? { title: "档案室", content: `林澈${han(firstLength - 2, "前")}。` } : { title: "", content: `${han(1200, "后")}。` };
+        }),
+      };
+      await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, chapterPlan: PLAN, segmentByPlan: true, requestedDraftLength: 2000 });
+    };
+    await run(800);
+    // 要 1000 写了 800：还差 1200，按八成放大要 1500。
+    expect(prompts[1]).toContain("后半章写 1500 个中文字符左右");
+    prompts.length = 0;
+    await run(1200);
+    // 要 1000 写了 1200：还差 800，不够一半照一半 1000，按 1.2 缩小要 833。
+    expect(prompts[1]).toContain("后半章写 833 个中文字符左右");
   });
 
   it("再要的后半章没更长 → 用原来那版，如实记一条", async () => {
@@ -360,7 +400,8 @@ describe("接着往下写", () => {
 
   it("接着写的那段把已写的场面又写一遍 → 带提示重写一次，取重演少的那版并留痕", async () => {
     const projectDir = await makeBook();
-    const scene = EXISTING.split("\n\n")[0]!;
+    // 换了两个字重演（原样照抄的开头另有 dropEchoedLead 去掉）。
+    const scene = EXISTING.split("\n\n")[0]!.replace("看了他一眼", "瞥了他一眼");
     const contexts: WriterContextEnvelope[] = [];
     const writer: WriterClient = {
       generateDraft: vi.fn(async ({ context }) => {
@@ -373,7 +414,7 @@ describe("接着往下写", () => {
     const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: EXISTING, length: 800 } });
     expect(writer.generateDraft).toHaveBeenCalledTimes(2);
     expect(renderFastDraftPromptText(contexts[1])).toContain("上一次接着写的那段把已经写过的场面又写了一遍");
-    expect(report.draftBody?.split(scene).length).toBe(2);
+    expect(report.draftBody).not.toContain(scene);
     expect(report.draftBody).toContain("走廊尽头等到天黑");
     expect(report.issues.join("\n")).toContain("接着写的那段重演了前面 1 段，已重写");
   });
@@ -399,7 +440,7 @@ describe("接着往下写", () => {
 
   it("流式时：两段之间补空行；重写的那段先退回、定了用哪版再显示那版（稿纸上不会同一段写两遍）", async () => {
     const projectDir = await makeBook();
-    const scene = EXISTING.split("\n\n")[0]!;
+    const scene = EXISTING.split("\n\n")[0]!.replace("看了他一眼", "瞥了他一眼");
     let calls = 0;
     const writer: WriterClient = {
       generateDraft: vi.fn(async () => {
@@ -418,6 +459,25 @@ describe("接着往下写", () => {
     const one = `${han(1000, "甲")}。`;
     expect(resets).toEqual([`${one}\n\n`, `${one}\n\n`, `${one}\n\n${han(1000, "丙")}。`]);
     expect(report.draftBody).toBe(`${EXISTING}\n\n${one}\n\n${han(1000, "丙")}。`);
+  });
+
+  it("接着写开头把作者最后一段原样抄了一遍 → 去掉，接缝不出两遍（换题材长篇实跑 2026-10-27：「林晚看着火。」写了两遍）", async () => {
+    const projectDir = await makeBook();
+    const existing = `林澈把香插好，蹲在坟前烧纸。\n\n林澈看着火。`;
+    const writer: WriterClient = { generateDraft: vi.fn(async () => ({ title: "", content: `林澈看着火。\n\n纸灰被风卷起来，${han(780, "后")}。` })) };
+    const report = await runFastDraft({ projectDir, chapter: 2, chapterGoal: "继续第 2 章。", writerClient: writer, requestedDraftLength: 3000, continueFrom: { text: existing, length: 800 } });
+    expect(report.issues).toEqual([]);
+    expect(report.draftBody?.startsWith(`${existing}\n\n纸灰被风卷起来`)).toBe(true);
+  });
+
+  it("dropEchoedLead：整段相同、开头正是已写最后一段都去掉；只是像的不动，至少留一段", () => {
+    const written = "第一段。\n\n他把门关上。\n\n林晚看着火。";
+    expect(dropEchoedLead(written, "林晚看着火。\n\n他把门关上。\n\n新的一段。")).toBe("新的一段。");
+    expect(dropEchoedLead(written, "林晚看着火。火苗舔着纸边。")).toBe("火苗舔着纸边。");
+    expect(dropEchoedLead(written, "林晚盯着火。\n\n新的一段。")).toBe("林晚盯着火。\n\n新的一段。");
+    expect(dropEchoedLead(written, "新的一段。\n\n林晚看着火。")).toBe("新的一段。\n\n林晚看着火。");
+    expect(dropEchoedLead(written, "林晚看着火。")).toBe("林晚看着火。");
+    expect(dropEchoedLead(written, "  \n ")).toBe("  \n ");
   });
 
   it("接着写的那段是 JSON / 工具调用 → 拦下（开头是作者的字，整章查不出来）", async () => {

@@ -132,6 +132,21 @@ export function positiveOrUndefined(value: number | undefined): number | undefin
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * 模型 JSON 里的章号 / 句号：数字、数字串，或照我们自己提示里的写法写成「第 10 章」「[78]」。正整数才收。
+ * 换题材长篇实跑 2026-10-27：定论查全书回 {"chapter":"第 10 章"}，章号认不出，同章另两句静默丢了。
+ */
+export function positiveIntLike(value: unknown): number | undefined {
+  let text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+  // 不猜白名单：章节标题
+  const titled = /^第\s*(\d+)\s*章$/u.exec(text);
+  if (titled) text = titled[1]!;
+  const bracketed = /^\[(\d+)\]$/u.exec(text);
+  if (bracketed) text = bracketed[1]!;
+  const parsed = text ? Number(text) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /** 枚举宽容（trim + 小写）。枚举 canonical 值须为小写；空串→undefined。 */
 export const coerceEnum = <T extends z.ZodType>(base: T) => z.preprocess(toEnumLike, base);
 /** 大小写不敏感枚举（canonical 含 camelCase 时用）：按 canonical 值大小写不敏感匹配并归一回 canonical。 */

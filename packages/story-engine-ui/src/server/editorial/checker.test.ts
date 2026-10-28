@@ -19,6 +19,7 @@ import {
   parseKeywords,
   parsePlanProblems,
   planCheckTask,
+  REASON_WORDING,
   selfReviewTask,
 } from "./checker.js";
 import type { BrainCallModel, BrainMessage } from "./reader-window.js";
@@ -268,6 +269,12 @@ describe("核账员：窗口和提示", () => {
     const task = checkTask(7);
     expect(task).toContain("quote 逐字抄有问题、该改的那一句");
     expect(task).toContain("和更早几章一致的那句是对的，不能当 quote");
+  });
+
+  it("提示词：reason 是作者读的，日子用「第几天」说，不抄笔记里的 D+3 记号（换题材长篇实跑）", () => {
+    expect(checkTask(7)).toContain(REASON_WORDING);
+    expect(planCheckTask(3, PLAN)).toContain(REASON_WORDING);
+    expect(REASON_WORDING).toContain("D+3");
   });
 });
 

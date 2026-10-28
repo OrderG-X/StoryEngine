@@ -107,7 +107,7 @@ vi.mock("./draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks })
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "./de-ai-flavor-batch.js";
 import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
-import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, draftVersionOf, runCommand, type CardOp } from "@actalk/story-core";
 import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
 import { resolveProjectDraftLengthTarget, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 import { writeCheckMemory } from "../editorial/continuity/check-memory.js";
@@ -167,8 +167,6 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     const draftPath = defaultDraftPath(projectDir!, 2);
     vi.mocked(resolveInSceneCharacters).mockResolvedValueOnce(presenceWithPeriod());
     storyEngineMocks.runFastDraft.mockImplementationOnce(async () => {
-      await mkdir(dirname(draftPath), { recursive: true });
-      await writeFile(draftPath, DRAFT_TEXT, "utf-8");
       return {
         chapter: 2,
         passed: true,
@@ -190,6 +188,30 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     expect(result.ok).toBe(true);
     expect(result.summary).toContain("账里也没记过出场的人。工作稿尚未定稿");
     expect(result.summary).not.toContain("。。");
+  }, 10_000);
+
+  it("写稿那几分钟里作者存了稿（或撤销、恢复）→ AI 这版不写、如实说，盘上作者那份不动（外部审查 2026-10-28）", async () => {
+    const draftPath = defaultDraftPath(projectDir!, 2);
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, "# 第2章\n\n作者原来的稿。\n", "utf-8");
+    storyEngineMocks.runFastDraft.mockImplementationOnce(async () => {
+      await writeFile(draftPath, "# 第2章\n\n作者在这期间存的新稿。\n", "utf-8");
+      return {
+        chapter: 2,
+        passed: true,
+        draftBody: "主角拿到账册，连夜翻看。",
+        title: "账册",
+        contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+        promptFingerprint: {},
+        issues: [],
+      };
+    });
+
+    const result = await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { aiFlavorRecheck: false } });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain("工作稿在这期间被改过");
+    expect(await readFile(draftPath, "utf-8")).toContain("作者在这期间存的新稿。");
   }, 10_000);
 });
 
@@ -282,6 +304,7 @@ describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）"
       rules: [],
       antiRules: [],
       callModel: vi.fn(async () => ""),
+      baseVersion: draftVersionOf(DRAFT_TEXT),
     });
 
     // 降级如实报：本轮没跑成（改写放弃），error 直达用户前路径已洗。
@@ -309,7 +332,7 @@ describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）"
     storyEngineMocks.detectAiFlavorViolations.mockReturnValueOnce([] as never);
     const result = await runAutoDeAiRound({
       projectDir: projectDir!, chapter: 1, draftPath, initialHighMedium: 1, targets: [], rules: [], antiRules: [],
-      callModel: vi.fn(async () => ""), skipOverwriteSnapshot: true,
+      callModel: vi.fn(async () => ""), skipOverwriteSnapshot: true, baseVersion: draftVersionOf(DRAFT_TEXT),
     });
     expect(snapshotBeforeDraftOverwrite).not.toHaveBeenCalled();
     expect(result.snapshotId).toBeUndefined();
@@ -450,23 +473,38 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     }
   });
 
-  it("注入了续写/核对调用 → 跑质量环节；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
-    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({
-      draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, snapshotId: "snap-pipeline",
-      info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
-      notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。", "前后核对：对照了 3 条旧设定和前文，没发现冲突。"],
-    });
+  it("注入了续写/核对调用 → 先补字数、再核账（核的是补完的那版）；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
+    pipelineMocks.runDraftQualityPipeline
+      .mockResolvedValueOnce({
+        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, version: "v-continued", snapshotId: "snap-pipeline",
+        info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
+        notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。"],
+      })
+      .mockResolvedValueOnce({
+        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: false,
+        info: { continuity: { checked: true, sure: [], maybe: [], failures: [] } },
+        notes: ["前后核对：对照了 3 条旧设定和前文，没发现冲突。"],
+      });
     const continueCallModel = vi.fn();
+    const continuityCheckCallModel = vi.fn();
     const result = await runGenerateDraft({
       projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
-      continueCallModel, continuityCheckCallModel: vi.fn(),
+      continueCallModel, continuityCheckCallModel,
       policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
     });
-    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ chapter: 3, title: "账册", continueCallModel }));
+    const calls = pipelineMocks.runDraftQualityPipeline.mock.calls.map(([input]) => input as Record<string, unknown>);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ chapter: 3, title: "账册", continueCallModel });
+    expect(calls[0]).not.toHaveProperty("checkCallModel");
+    expect(calls[1]).toMatchObject({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", baseVersion: "v-continued", checkCallModel: continuityCheckCallModel });
+    expect(calls[1]).not.toHaveProperty("continueCallModel");
     expect(result.draftBody).toBe("主角拿到账册，连夜翻看，又接着写了很多。");
     expect(storyEngineMocks.buildDraftLengthReport).toHaveBeenCalledWith(expect.objectContaining({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。" }));
     expect(result.snapshotId).toBe("snap-pipeline");
-    expect(result.qualityPipeline).toEqual({ continuation: { before: 12, after: 2500, rounds: 1, failures: [] } });
+    expect(result.qualityPipeline).toEqual({
+      continuation: { before: 12, after: 2500, rounds: 1, failures: [] },
+      continuity: { checked: true, sure: [], maybe: [], failures: [] },
+    });
     expect(result.summary).toContain("已接着写到 2500 字");
     expect(result.summary).toContain("没发现冲突");
   });

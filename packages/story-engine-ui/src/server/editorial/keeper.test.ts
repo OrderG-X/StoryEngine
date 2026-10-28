@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CHAPTER_LEDGER_SCHEMA, checkEntries, project, type ChapterLedger, type LedgerEntry } from "@actalk/story-core";
+import { CHAPTER_LEDGER_SCHEMA, checkEntries, project, splitUnits, type ChapterLedger, type LedgerEntry, type SettingCardsFile } from "@actalk/story-core";
 import { describe, expect, it } from "vitest";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { buildKeeperContext, MAX_PROMPT_FACTS } from "./keeper-context.js";
 import { nameHandles, parseKeeperOutput } from "./keeper-parse.js";
-import { buildKeeperTask, KEEPER_SPEC, LEDGER_ROLE, runLedgerKeeper, settleDayChange } from "./ledger-keeper.js";
+import { buildKeeperTask, KEEPER_SPEC, LEDGER_ROLE, quoteOfUnits, runLedgerKeeper, settleDayChange } from "./ledger-keeper.js";
 import type { BrainMessage } from "./reader-window.js";
 
 type Draft = LedgerEntry extends infer E ? (E extends LedgerEntry ? Omit<E, "id" | "review"> & { id?: string } : never) : never;
@@ -38,6 +38,30 @@ function sampleBook() {
   });
 }
 
+function sampleCards(): SettingCardsFile {
+  return {
+    schema: "setting-cards/1",
+    story: { fields: [] },
+    rules: { style: [], musts: [], bans: [], avoid: [], exemplars: [] },
+    cards: [
+      { id: "k-1", kind: "character", name: "沈青禾", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-2", kind: "character", name: "沈德厚", aliases: ["沈父"], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-3", kind: "character", name: "老周", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+      { id: "k-4", kind: "place", name: "钟楼", aliases: [], fields: [], by: "author", at: "2026-10-27T00:00:00.000Z" },
+    ],
+    relations: [{ id: "r-1", a: "k-1", b: "k-2", label: "父女", by: "author", at: "2026-10-27T00:00:00.000Z" }],
+    canon: [],
+    skipped: [],
+  } as unknown as SettingCardsFile;
+}
+
+describe("交账单要求：换天", () => {
+  it("上一章约到「明天」的事本章开头在做、或本章说「昨天」指上一章：隔了一天（换题材长篇实跑 2026-10-27：记成了同一天）", () => {
+    const spec = KEEPER_SPEC.join("\n");
+    expect(spec).toContain("本章开头做的正是上一章约到「明天」「第二天」的事，或者本章里说「昨天」指的是上一章的事，也是 1");
+  });
+});
+
 describe("记账员上下文", () => {
   it("人物带别称、线索和事实各编短号、时间照表；短号能换回真编号", () => {
     const before = sampleBook();
@@ -50,6 +74,19 @@ describe("记账员上下文", () => {
     expect(context.factHandles.get("F1")).toBe("c1-4");
     expect(context.text).toContain("| 第 2 章 |");
     expect(context.omittedFacts).toBe(0);
+  });
+
+  it("设定本里有卡、还没出场的人物也列上（别名、卡上的关系）；已出场的不重复列", () => {
+    const cards = sampleCards();
+    const text = buildKeeperContext(sampleBook(), "父亲咳了一声。", [], cards).text;
+    expect(text).toContain("【设定本里还没出场的人物");
+    expect(text).toContain("沈德厚（又叫：沈父；和沈青禾：父女）");
+    // 沈青禾已出场、老周是已出场的周守义的别称：都不在这一段重复。
+    const section = text.slice(text.indexOf("【设定本里还没出场的人物"));
+    expect(section.split("\n\n")[0]).not.toContain("沈青禾（");
+    expect(section.split("\n\n")[0]).not.toContain("\n老周");
+    expect(section).not.toContain("钟楼");
+    expect(buildKeeperContext(sampleBook(), "正文").text).not.toContain("设定本里还没出场");
   });
 
   it("空书什么段都没有；事实太多就截断并如实写没列的条数", () => {
@@ -154,6 +191,16 @@ describe("记账员交回的账单", () => {
     expect(parsed?.entries[0]).toMatchObject({ note: "归入「钟为什么停」：钟停的原因有了眉目" });
   });
 
+  it("推进没写说明：丢掉时带上线索名字，作者知道是哪条没记上（换题材长篇实跑 2026-10-28）", () => {
+    const names = new Map([["T1", "钟为什么停"]]);
+    const parsed = parseKeeperOutput(JSON.stringify({ threads: [{ op: "advance", thread: "T1", quote: "钥匙递过来" }, { op: "advance", thread: "T9", quote: "x" }] }), { ...handles, handleNames: names });
+    expect(parsed?.entries).toEqual([]);
+    expect(parsed?.drops).toEqual([
+      { where: "threads 第 1 条", reason: "没写这一章对它做了什么", name: "钟为什么停" },
+      { where: "threads 第 2 条", reason: "没写这一章对它做了什么" },
+    ]);
+  });
+
   it("原句里多转义了一层的换行（字面的反斜杠 n）换回空白", () => {
     const parsed = parseKeeperOutput(JSON.stringify({ summary: { text: "找到书", quote: "林秋\\n一九八七年春" } }), handles);
     expect(parsed?.entries[0]).toMatchObject({ kind: "summary", quote: "林秋 一九八七年春" });
@@ -213,6 +260,8 @@ describe("记账员跑一章", () => {
     try {
       await mkdir(join(book, "chapters"), { recursive: true });
       await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      await mkdir(join(book, "ledger"), { recursive: true });
+      await writeFile(join(book, "ledger/cards.json"), JSON.stringify(sampleCards()));
       const before = sampleBook();
       const calls: BrainMessage[][] = [];
       const reply = JSON.stringify({ summary: { text: "老周交出钥匙", quote: "老周把钥匙递过来" }, threads: [{ op: "advance", thread: "T1", note: "有下落", quote: "钥匙递过来" }] });
@@ -234,6 +283,7 @@ describe("记账员跑一章", () => {
       expect(task).toContain("【开着的线索");
       expect(task).toContain("【上一章结尾】\n# 第1章\n\n钟停在三点十五分。老周没有拦她。");
       expect(task).toContain(KEEPER_SPEC[0]);
+      expect(task).toContain("沈德厚（又叫：沈父；和沈青禾：父女）");
       if (outcome.ok) expect(outcome.parsed.entries).toHaveLength(2);
 
       const broken = await runLedgerKeeper({ projectDir: book, chapter: 2, draft: "老周", before, callModel: async () => "不是 JSON" });
@@ -251,6 +301,8 @@ describe("记账员跑一章", () => {
     try {
       await mkdir(join(book, "chapters"), { recursive: true });
       await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。老周没有拦她。");
+      await mkdir(join(book, "ledger"), { recursive: true });
+      await writeFile(join(book, "ledger/cards.json"), JSON.stringify(sampleCards()));
       const before = sampleBook();
       const draft = "# 第2章\n\n他把钥匙递过来，说：「拿着。」沈青禾接住了。";
       const first = JSON.stringify({
@@ -275,7 +327,8 @@ describe("记账员跑一章", () => {
         return { calls, outcome };
       };
 
-      const fixed = run(async () => JSON.stringify({ quotes: [{ n: 1, quote: "他把钥匙递过来" }, { n: "2", quote: "老周说拿着" }] }));
+      // 点编号：第 1 条点了第 1 句；第 2 条点的编号本章没有。
+      const fixed = run(async () => JSON.stringify({ quotes: [{ n: 1, ids: [1] }, { n: "2", ids: [9] }] }));
       const ok = await fixed.outcome;
       expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 1 } });
       const ask = fixed.calls.at(-1) ?? [];
@@ -283,8 +336,11 @@ describe("记账员跑一章", () => {
       expect(ask.at(-2)).toMatchObject({ role: "assistant", content: first });
       expect(ask.at(-1)?.content).toContain("1. 梗概：老周交出钥匙");
       expect(ask.at(-1)?.content).toContain("你写的：老周把钥匙递过来");
+      // 正文按编号句子给：代码按编号取原文，不再让它抄。
+      expect(ask.at(-1)?.content).toContain("[1]他把钥匙递过来，说：「拿着。」[2]沈青禾接住了。");
       if (ok.ok) {
-        expect(ok.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来" });
+        // 记下的是正文原字（收尾的引号照原句的统一口径去掉）。
+        expect(ok.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来，说：「拿着。" });
         // 第 2 条重摘了还是对不上：保持原样，留给定稿清单如实列。
         expect(ok.parsed.entries[2]).toMatchObject({ kind: "fact", quote: "老周说拿着" });
       }
@@ -306,6 +362,35 @@ describe("记账员跑一章", () => {
       const cleanOutcome = await clean;
       expect(cleanOutcome.ok && cleanOutcome.quoteRepair).toBeFalsy();
       if (cleanOutcome.ok) expect(cleanOutcome.parsed.entries[0]).toMatchObject({ kind: "summary", quote: "他把钥匙递过来，说：「拿着" });
+    } finally {
+      await rm(book, { recursive: true, force: true });
+    }
+  });
+
+  it("补点取原句：挨着的两句连起来取，不挨着、跨段的只取头一句；出场人物点的句子里没有他的叫法不认", async () => {
+    const draft = "# 第2章\n\n老板娘没抬头。她把布往前一推。\n店里没别人。";
+    const units = splitUnits(draft);
+    expect(quoteOfUnits(draft, units, [1, 2])).toBe("老板娘没抬头。她把布往前一推。");
+    expect(quoteOfUnits(draft, units, [1, 3])).toBe("老板娘没抬头。");
+    expect(quoteOfUnits(draft, units, [2, 3])).toBe("她把布往前一推。");
+    expect(quoteOfUnits(draft, units, [7])).toBeUndefined();
+    const book = await makeHomeTempDir("keeper-presence-");
+    try {
+      await mkdir(join(book, "chapters"), { recursive: true });
+      await writeFile(join(book, "chapters/0001.md"), "# 第1章\n\n钟停在三点十五分。");
+      const first = JSON.stringify({ presence: [{ name: "绸布店老板", nameUsed: "老板娘", quote: "老板娘头也没抬" }, { name: "绸布店老板", nameUsed: "老板娘", quote: "老板娘把布推过来" }] });
+      const outcome = await runLedgerKeeper({
+        projectDir: book, chapter: 2, draft, before: sampleBook(), maxCatchUp: 0,
+        callModel: async (messages, options) => {
+          if (!options.json) return "笔记";
+          return messages.at(-1)?.content.includes("逐字找不到") ? JSON.stringify({ quotes: [{ n: 1, ids: [1] }, { n: 2, ids: [2] }] }) : first;
+        },
+      });
+      expect(outcome).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 1 } });
+      if (outcome.ok) {
+        expect(outcome.parsed.entries[0]).toMatchObject({ kind: "presence", quote: "老板娘没抬头。" });
+        expect(outcome.parsed.entries[1]).toMatchObject({ kind: "presence", quote: "老板娘把布推过来" });
+      }
     } finally {
       await rm(book, { recursive: true, force: true });
     }
@@ -334,15 +419,15 @@ describe("记账员跑一章", () => {
         });
         return { asks, outcome };
       };
-      const got = run(JSON.stringify({ quotes: [{ n: 1, quote: "天刚蒙蒙亮" }, { n: 2, quote: "她就起来换药" }] }));
+      const got = run(JSON.stringify({ quotes: [{ n: 1, ids: [1] }, { n: 2, ids: ["1"] }] }));
       const ok = await got.outcome;
       expect(got.asks[0]).toContain("1. 时间\n   你写的：（没写）");
       expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 2, fixed: 2 } });
       if (!ok.ok) throw new Error(ok.reason);
       expect(ok.parsed.drops).toEqual([]);
       expect(ok.parsed.entries).toEqual([
-        expect.objectContaining({ kind: "time", daysSincePrevious: 1, quote: "天刚蒙蒙亮" }),
-        expect.objectContaining({ kind: "fact", quote: "她就起来换药" }),
+        expect.objectContaining({ kind: "time", daysSincePrevious: 1, quote: "天刚蒙蒙亮，她就起来换药。" }),
+        expect.objectContaining({ kind: "fact", quote: "天刚蒙蒙亮，她就起来换药。" }),
       ]);
       const still = await run(JSON.stringify({ quotes: [] })).outcome;
       if (!still.ok) throw new Error(still.reason);
@@ -373,7 +458,7 @@ describe("记账员跑一章", () => {
         });
         return { asks, outcome };
       };
-      const proven = run(JSON.stringify({ quotes: [{ n: 1, quote: "第二天早上，她七点就上了山" }] }));
+      const proven = run(JSON.stringify({ quotes: [{ n: 1, ids: [2] }] }));
       const ok = await proven.outcome;
       expect(proven.asks[0]).toContain("1. 本章中间换天的那句（你说本章从开头到结尾过了 1 天）");
       expect(ok).toMatchObject({ ok: true, quoteRepair: { asked: 1, fixed: 1 } });
@@ -381,7 +466,7 @@ describe("记账员跑一章", () => {
         expect(ok.parsed.entries[0]).toMatchObject({ kind: "time", daysInChapter: 1 });
         expect(ok.parsed.adjusted).toEqual([]);
       }
-      const none = await run(JSON.stringify({ quotes: [{ n: 1, quote: "" }] })).outcome;
+      const none = await run(JSON.stringify({ quotes: [{ n: 1, ids: [] }] })).outcome;
       if (!none.ok) throw new Error(none.reason);
       expect(none.parsed.entries[0]).not.toHaveProperty("daysInChapter");
       expect(none.parsed.adjusted[0]?.reason).toContain("按整章同一天记");

@@ -32,6 +32,8 @@ import { coerceNumber } from "../../lib/lenient-args.js";
 const LEDGER_MAX_CATCH_UP = 10;
 /** 默认不写、作者勾上才写的条目 id 前缀（「确认定稿」按钮按它分流）。 */
 export const OPT_IN_PREFIX = "change_confirm:";
+/** 并成一行的几条（同一句说明推进几条线索）：清单 id 把序号连起来，去掉时一起去掉。 */
+export const MERGED_ID_JOIN = "+";
 /** 预览票的目录（相对书目录）。只是缓存：不进撤销快照。 */
 export const PREVIEW_TICKET_DIR = "ledger/.preview";
 
@@ -200,7 +202,7 @@ type ChecklistItem = NonNullable<CommitPreviewToolOutput["ledgerChecklist"]>[num
 function toChecklistItem(item: CommitItem, review: boolean): ChecklistItem {
   const why = item.reasons.map((reason) => reason.text).join("；");
   return {
-    id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : String(item.index),
+    id: item.optIn ? `${OPT_IN_PREFIX}${item.index}` : [item.index, ...(item.merged ?? [])].join(MERGED_ID_JOIN),
     kind: item.kind,
     label: item.label,
     // 为什么要作者看：单独一栏，清单里同一原因的条目归在一起只说一遍（重构 P6）。
@@ -236,7 +238,9 @@ function dayLabel(preview: CommitPreview): string {
         ? "（你定的）"
         : time.basis === "judged"
           ? "（按前后文判断）"
-          : preview.chapter <= 1
+          : time.basis === "estimated"
+            ? "（正文没说离上一章隔了几天，先按第二天记，不对就改）"
+            : preview.chapter <= 1
             ? "（正文里没找到时间说法，先这么记，不对就改）"
             : "（正文里没找到时间说法，先按上一章往后推，不对就改）";
   return `这一章记为${span}${extra ? `（${extra}）` : ""}${basis}`;
@@ -262,6 +266,8 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
     ...others(preview.auto).map((item) => toChecklistItem(item, false)),
   ];
   const reviewCount = others(preview.review).length + (preview.time.needsConfirm ? 1 : 0);
+  // 要作者看的是哪几条，点名给模型（换题材长篇实跑 2026-10-27：要看的是两个新出场的人，模型转述成了两条新开的线索）。
+  const reviewLabels = [...(preview.time.needsConfirm ? ["这一章记为第几天"] : []), ...others(preview.review).map((item) => item.label)];
   const autoCount = others(preview.auto).length;
   const notRecorded = preview.notRecorded.map((item) => `${item.label}：${item.reason}`);
   const notes: string[] = [];
@@ -295,7 +301,8 @@ function fromPreview(preview: CommitPreview, extraNotes: readonly string[]): Com
     ...(notes.length > 0 ? { notes } : {}),
     modelHint:
       "预览通过：请作者在定稿清单里点「确认定稿」写入（写入前自动存档、可撤销）。你不要说『已定稿』；" +
-      "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。",
+      "作者口头说确认定稿时可调 commit_apply，它只会再给作者出一个确认按钮。summary 里【】内的提醒要如实转达。" +
+      (reviewLabels.length > 0 ? `要作者看的就是这几条（别说成别的）：${reviewLabels.join("；")}。` : ""),
     ledgerChecklist,
   };
 }

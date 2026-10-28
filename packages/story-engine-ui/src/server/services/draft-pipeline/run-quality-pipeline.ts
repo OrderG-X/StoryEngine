@@ -12,7 +12,7 @@
 import { countDraftChineseCharacters, draftLengthFloor, type DraftLengthTarget } from "../../writing/draft-length-control.js";
 import { type ChapterPlan } from "../../book/chapter-plan.js";
 import { quoteInText, withBookLock } from "@actalk/story-core";
-import { writeAiDraft } from "../../lib/ai-draft-write.js";
+import { isDraftConflict, writeAiDraft } from "../../lib/ai-draft-write.js";
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
 import { checkChapterBody, type ChapterCheckItem, type ChapterCheckResult } from "../../editorial/continuity/check-service.js";
 import type { BrainCallModel } from "../../editorial/index.js";
@@ -27,6 +27,8 @@ export interface QualityPipelineInput {
   /** 不给 = 写回时沿用盘上的标题（接着写不换标题）。 */
   readonly title?: string;
   readonly draftBody: string;
+  /** draftBody 在盘上是哪一版（出稿刚写下的那份的 version）。补写、核账、改的这几分钟里盘上换了就不写回。 */
+  readonly baseVersion: string | null;
   readonly lengthTarget: DraftLengthTarget;
   readonly chapterPlan?: ChapterPlan;
   /** 续写（fastDraft 槽）。缺失 = 不补写。 */
@@ -61,14 +63,15 @@ export interface QualityPipelineInfo {
 export interface QualityPipelineResult {
   readonly draftBody: string;
   readonly changed: boolean;
+  /** 写回后盘上的版本（changed 时有）。 */
+  readonly version?: string;
+  /** 盘上那份在这期间被改过（作者存稿、撤销或恢复），这次的改动没写回。 */
+  readonly conflict?: boolean;
   readonly snapshotId?: string;
   readonly info: QualityPipelineInfo;
   /** 给作者看的几句话（进 summary）。 */
   readonly notes: readonly string[];
 }
-
-/** 首稿低于下限的这个比例才自动续写。 */
-const CONTINUE_ONLY_BELOW_RATIO = 0.8;
 
 export async function runDraftQualityPipeline(input: QualityPipelineInput): Promise<QualityPipelineResult> {
   let body = input.draftBody;
@@ -76,14 +79,13 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   let info: QualityPipelineInfo = {};
 
   const timings: { continueMs?: number; continuityMs?: number; fixMs?: number } = {};
-  // ① 字数严重不够才接着写（不在中间插句）。2026-10-10 真机试写：首稿只差两三百字也续，续出的一段挤成一大段、
-  // 凭空编出前文没有的对话（「韩德胜说钥匙交给孟叔了」），历轮审读里续写段也是矛盾最密的地方——略短就如实说短了多少、交作者定。
-  // 作者写明了「至少 N 字」（定稿侧按它硬拦）时仍补到下限——不补作者也得手动再要一次续写，还卡着定不了稿。
+  // ① 首稿不到下限就接着写（不在中间插句）。2026-10-10 曾改成只差一点不续（续出的段凭空编对话、矛盾最密），
+  // 那时续写的段不再核。现在续写在核账、按核账改之前，续出的错一样被核、被改；不续作者就得为几百字再等一整轮「接着往下写」
+  // （2026-10-28 春分面馆：目标 2000 字常出 1500 多，外部审查也点了这条）。
   const firstLength = countDraftChineseCharacters(body);
-  // 作者的「至少 N 字」比区间下沿低（floor）时也是作者写明的地板：不够就补到它。
+  // 作者的「至少 N 字」比区间下沿低（floor）时按作者写明的地板判。
   const floor = draftLengthFloor(input.lengthTarget);
-  const continueBelow = input.lengthTarget.hardMinimum || input.lengthTarget.floor !== undefined ? floor : floor * CONTINUE_ONLY_BELOW_RATIO;
-  if (input.continueCallModel && firstLength < continueBelow) {
+  if (input.continueCallModel && firstLength < floor) {
     const startedAt = Date.now();
     const continued = await continueDraftToLength({
       chapter: input.chapter,
@@ -103,7 +105,6 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       notes.push(`首稿 ${continued.before} 字低于下限 ${floor}，自动续写没成（${continued.failures.at(-1)}）。`);
     }
   }
-  // 只差一点没续的，不在这里另说：出稿回执末尾那句「低于目标字数下限」按最终正文说一次（以前两句数还差一个字）。
 
   // ② 前后核对：和「核账」按钮同一套（账本对账 + 模型查错 + 核账记忆）。③ 核出「确定」又错在新稿里的按前文改一轮、改完再核。
   // 结果记进核账记忆：作者随后点「核账」，正文没改就直接出这次（改后再核）的结果。
@@ -150,7 +151,8 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       const applied = fixed.applied.length;
       timings.fixMs = Date.now() - fixStartedAt;
       autoFixed = { applied, failed: targets.length - applied, ...(fixed.alsoChanged > 0 ? { also: fixed.alsoChanged } : {}) };
-      if (applied > 0) result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel });
+      // 改完只核改过的句子（外部审查 2026-10-28：整章再核一遍，等待翻倍）；上一遍没核全（有一步没跑成、冷窗口）的照旧整章重核。
+      if (applied > 0) result = await checkChapterBody(input.projectDir, input.chapter, body, { readerCallModel: input.checkCallModel, afterFix: fixed.changes });
     }
     info = {
       ...info,
@@ -179,7 +181,7 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
     notes.push(autoFixed
       ? `前后核对：核出 ${first.sure.length} 处确定和前文对不上，按前文改了 ${autoFixed.applied} 处${autoFixed.also ? `（本章别处说同一件事的 ${autoFixed.also} 句跟着改了）` : ""}${autoFixed.failed > 0 ? `（${autoFixed.failed} 处没改成）` : ""}。${
         autoFixed.applied === 0 ? `都还在，点「核账」看是哪几句。`
-          : result.ok ? `改完又核了一遍：${left}` : `改完再核没跑成（${result.failures[0] ?? "原因不明"}），可以点「核账」再核。`
+          : result.ok ? `${result.rechecked ? "改完又核了改过的句子" : "改完又核了一遍"}：${left}` : `改完再核没跑成（${result.failures[0] ?? "原因不明"}），可以点「核账」再核。`
       }${coldNote}`
       : result.ok
         ? result.sure.length + result.maybe.length === 0
@@ -197,14 +199,26 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
   const changed = body !== input.draftBody;
   if (!changed) return { draftBody: input.draftBody, changed: false, info, notes };
   let snapshotId: string | undefined;
-  await withBookLock(input.projectDir, async () => {
-    // 独立跑（如修订后的核对）照旧建覆盖前快照；出稿流程内（有「写盘前」存档点）不另建（R4.2）。
-    if (!input.skipOverwriteSnapshot) {
-      snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章补写与前后核对前快照`);
-    }
-    await writeAiDraft(input.projectDir, { chapter: input.chapter, ...(input.title ? { title: input.title } : {}), body });
-  });
-  return { draftBody: body.trim(), changed: true, ...(snapshotId ? { snapshotId } : {}), info, notes };
+  let version: string;
+  try {
+    version = await withBookLock(input.projectDir, async () => {
+      // 独立跑（如修订后的核对）照旧建覆盖前快照；出稿流程内（有「写盘前」存档点）不另建（R4.2）。
+      if (!input.skipOverwriteSnapshot) {
+        snapshotId = await snapshotBeforeDraftOverwrite(input.projectDir, input.chapter, `第${input.chapter}章补写与前后核对前快照`);
+      }
+      const written = await writeAiDraft(input.projectDir, {
+        chapter: input.chapter,
+        ...(input.title ? { title: input.title } : {}),
+        body,
+        baseVersion: input.baseVersion,
+      });
+      return written.version;
+    });
+  } catch (error) {
+    if (!isDraftConflict(error)) throw error;
+    return { draftBody: input.draftBody, changed: false, conflict: true, info, notes: [...notes, `上面补写、按核账改的都没写进去：${(error as Error).message}`] };
+  }
+  return { draftBody: body.trim(), changed: true, version, ...(snapshotId ? { snapshotId } : {}), info, notes };
 }
 
 /** 能按前文自动改的：错在新稿里（fixChapter 缺省或就是这章）、对的是前文原文或本章前面。对的是设定卡的不算——错的可能是卡。 */

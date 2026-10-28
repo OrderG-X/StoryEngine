@@ -39,6 +39,8 @@ export interface StreamAgentChatRequest {
    * 与作者说「撤销上一步」= 撤上一回合全部改动 的理解一致。
    */
   readonly lastTurnUndoHint?: { readonly snapshotId: string; readonly changes: number };
+  /** 作者给当前章挑中的走法（稿纸上方点的「用这个」）：作者在对话里说「照这个写」时 AI 才知道是哪条。 */
+  readonly pickedDirection?: { readonly chapter: number; readonly text: string };
   /** 结构化动作（用户点了「确认定稿」按钮）：服务端直接执行对应工具，不经模型。 */
   readonly action?: AgentUserAction;
 }
@@ -60,7 +62,7 @@ export type AgentUserAction =
   /** 核账卡「以第 N 章为准 / 以本章为准 / 以设定为准」（P12）：出定论预览，只读。 */
   | { readonly toolName: "settle_preview"; readonly chapter: number; readonly truth: SettleSideData; readonly other?: SettleSideData; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[]; readonly reason?: string; readonly item?: string }
   /** 设定本定论页「查前文」：拿这条定论查全书。 */
-  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number }
+  | { readonly toolName: "settle_preview"; readonly statement: string; readonly chapter?: number; readonly also?: readonly Extract<SettleSideData, { readonly where: "chapter" }>[] }
   /** 定论卡「确认」：按票号一次改齐（作者档、可撤销）；excluded＝作者划掉不改的几处。 */
   | { readonly toolName: "settle_apply"; readonly token: string; readonly excluded: readonly string[] };
 
@@ -176,6 +178,8 @@ export interface AgentToolResult {
   readonly partialMiss?: boolean;
   /** R7.9：工具参数/输出没过 Mastra 校验（服务端归一标记）——投影层一律置「失败」，即便裁决类工具（没跑≠裁决未过）。 */
   readonly toolValidationFailure?: boolean;
+  /** 工具边界没让它执行（这一轮已经出了稿，先等作者看稿）：投影层置「已停止」，不当失败。 */
+  readonly skipped?: boolean;
   readonly summary?: string;
   /** 改草稿类工具（generate_draft/revise_draft）返回的「当前章完整草稿正文（去 Markdown 标题）」。
    *  前端据此把真正文载入工作区——否则只能用不含正文的 overview 刷新，草稿被占位覆盖、autosave 抹掉真正文。 */
@@ -354,6 +358,7 @@ export async function streamAgentChat(
         messages: input.messages,
         ...(typeof input.currentChapter === "number" ? { currentChapter: input.currentChapter } : {}),
         ...(input.lastTurnUndoHint ? { lastTurnUndoHint: input.lastTurnUndoHint } : {}),
+        ...(input.pickedDirection ? { pickedDirection: input.pickedDirection } : {}),
         ...(input.action ? { action: input.action } : {}),
       }),
       signal: idleController.signal,
@@ -448,6 +453,7 @@ export async function streamAgentChat(
             // R7.9：Mastra 校验失败标记（服务端 agent-chat 归一时带上）——投影层据此一律置「失败」，
             // 即便是裁决类工具（校验失败=工具没跑，不是「裁决未过」）。
             ...(output.toolValidationFailure === true ? { toolValidationFailure: true } : {}),
+            ...(output.skipped === true ? { skipped: true } : {}),
             ...(typeof output.summary === "string" ? { summary: output.summary } : {}),
             // 改草稿工具的真正文必须透传，前端据此把真正文载入工作区（防占位覆盖+autosave 抹稿）。
             ...(typeof output.draftBody === "string" ? { draftBody: output.draftBody } : {}),

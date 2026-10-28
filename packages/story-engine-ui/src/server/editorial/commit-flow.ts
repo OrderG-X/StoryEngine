@@ -115,8 +115,10 @@ export interface CommitItem {
   readonly quote?: string;
   /** 为什么要你看（自动记下的为空）。 */
   readonly reasons: readonly { readonly code: ReviewReason; readonly text: string }[];
-  /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改。 */
+  /** 默认不写，作者勾上才写：会改掉前文「不会变」的事实，不能默认替作者改；重定稿时收掉后文还在接着的线索。 */
   readonly optIn: boolean;
+  /** 并进这一行的其余序号（同一句说明推进几条线索，清单上只列一行；去掉这行就一起去掉）。 */
+  readonly merged?: readonly number[];
 }
 
 export interface NotRecorded {
@@ -176,10 +178,11 @@ const KIND_LABELS: Record<string, string> = { summary: "梗概", time: "时间",
 const THREAD_TYPE_LABELS = { question: "悬念", intent: "打算", goal: "目标" } as const;
 const NATURE_LABELS = { hard: "不会变", state: "会变", event: "发生过的事" } as const;
 
-/** 「facts 第 3 条」→「事实」。 */
+/** 「facts 第 3 条」→「一条事实」；认得出是哪条的带上名字：「线索「谁在敲门」」。 */
 function dropLabel(drop: KeeperDrop): string {
   const head = drop.where.split(/[ .]/u)[0] ?? "";
-  return `一条${KIND_LABELS[head] ?? "记录"}`;
+  const kind = KIND_LABELS[head] ?? "记录";
+  return drop.name ? `${kind}「${drop.name}」` : `一条${kind}`;
 }
 
 /** 名字 → 投影里的主体键（别称归到已确立名字）。 */
@@ -211,13 +214,54 @@ function entryLabel(entry: EntryInput, before: BookProjection): string {
       return `事实（${NATURE_LABELS[entry.nature]}）：${entry.text}`;
     case "thread": {
       if (entry.op === "open") return `新开${THREAD_TYPE_LABELS[entry.type ?? "question"]}：${entry.title ?? entry.note}`;
-      const title = before.threads.find((thread) => thread.id === entry.thread || thread.mergedFrom.includes(entry.thread ?? ""))?.title ?? "一条线索";
-      return `${entry.op === "close" ? "收口" : "推进"}「${title}」：${entry.note}`;
+      return `${entry.op === "close" ? "收口" : "推进"}「${threadTitle(entry, before)}」：${entry.note}`;
     }
   }
 }
 
-function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (name: string) => string): CommitItem["reasons"] {
+function threadTitle(entry: ThreadInput, before: BookProjection): string {
+  return before.threads.find((thread) => thread.id === entry.thread || thread.mergedFrom.includes(entry.thread ?? ""))?.title ?? "一条线索";
+}
+
+/**
+ * 自动记下的推进 / 收口：记账员一条写了几条线索，同一句说明拆成几行、清单上一字不差连出两三遍
+ * （换题材长篇实跑：前 21 章里 7 章这样）。同一动作、同一说明、同一原句的并成一行，标题并排列。
+ */
+function mergeSameNote(items: readonly ClassifiedEntry[], toItem: (item: ClassifiedEntry) => CommitItem, before: BookProjection): CommitItem[] {
+  const rows: { item: CommitItem; entry: ClassifiedEntry["entry"]; titles: string[]; merged: number[] }[] = [];
+  const byNote = new Map<string, (typeof rows)[number]>();
+  for (const classified of items) {
+    const item = toItem(classified);
+    const { entry } = classified;
+    if (entry.kind !== "thread" || entry.op === "open" || item.optIn) {
+      rows.push({ item, entry, titles: [], merged: [] });
+      continue;
+    }
+    const key = [entry.op, entry.note, entry.quote].join("\u0000");
+    const title = threadTitle(entry, before);
+    const row = byNote.get(key);
+    if (row) {
+      if (!row.titles.includes(title)) row.titles.push(title);
+      row.merged.push(item.index);
+      continue;
+    }
+    const fresh = { item, entry, titles: [title], merged: [] };
+    byNote.set(key, fresh);
+    rows.push(fresh);
+  }
+  return rows.map(({ item, entry, titles, merged }) => {
+    if (merged.length === 0 || entry.kind !== "thread") return item;
+    const label = `${entry.op === "close" ? "收口" : "推进"}${titles.map((title) => `「${title}」`).join("")}：${entry.note}`;
+    return { ...item, label, merged };
+  });
+}
+
+function reasonTexts(
+  item: ClassifiedEntry,
+  before: BookProjection,
+  resolve: (name: string) => string,
+  later: ReadonlyMap<string, readonly number[]> = new Map(),
+): CommitItem["reasons"] {
   const { entry } = item;
   return item.reasons.map((code) => {
     switch (code) {
@@ -235,14 +279,41 @@ function reasonTexts(item: ClassifiedEntry, before: BookProjection, resolve: (na
         const list = old.map((fact) => `第 ${fact.chapter} 章「${fact.text}」`).join("、");
         return { code, text: list ? `推翻前文：${list}` : "推翻了前文的一条事实" };
       }
-      case "closes-thread":
-        return { code, text: "收掉这条线索后，它就不再提醒了" };
+      case "closes-thread": {
+        const after = entry.kind === "thread" ? later.get(entry.thread ?? "") : undefined;
+        return after
+          ? { code, text: `后文第 ${after.join("、")} 章还在接着这条：这里收了，后面就接不上，默认不记` }
+          : { code, text: "收掉这条线索后，它就不再提醒了" };
+      }
       case "new-character":
         return { code, text: "第一次出场的人物；要是已有人物的新称呼，去掉这条告诉我是谁" };
       case "time-estimated":
         return { code, text: "天数是估的" };
     }
   });
+}
+
+/**
+ * 重定稿时，后文哪几章还在接着哪条线索（推进、收口）。换题材长篇实跑 2026-10-28：第 4 章改一个词重定稿，
+ * 记账员把第 5～11 章还在推进的「算清欠债」报成了收口——照记的话这条在第 4 章就收了，后面那几章接不上。
+ */
+function laterThreadTouches(ledgers: readonly ChapterLedger[], chapter: number): ReadonlyMap<string, readonly number[]> {
+  const out = new Map<string, number[]>();
+  for (const ledger of [...ledgers].sort((a, b) => a.chapter - b.chapter)) {
+    if (ledger.chapter <= chapter) continue;
+    for (const entry of ledger.entries) {
+      if (entry.kind !== "thread" || entry.op === "open") continue;
+      const chapters = out.get(entry.thread) ?? [];
+      if (!chapters.includes(ledger.chapter)) chapters.push(ledger.chapter);
+      out.set(entry.thread, chapters);
+    }
+  }
+  return out;
+}
+
+/** 收口的线索后文还在接着：默认不记，作者勾上才记。 */
+function closesLaterThread(item: ClassifiedEntry, later: ReadonlyMap<string, readonly number[]>): boolean {
+  return item.entry.kind === "thread" && item.entry.op === "close" && later.has(item.entry.thread ?? "");
 }
 
 /** 会改掉前文「不会变」的事实：和它对不上，或者明写要推翻它（定稿时默认不写、要作者勾；通读记账不写）。 */
@@ -417,13 +488,15 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
   // 清单序号 = 核过的条目里的下标。
   const position = new Map(accepted.map((item, index) => [item.index, index]));
   const resolve = subjectResolver(before);
+  const later = recommit ? laterThreadTouches(snapshot.ledgers, input.chapter) : new Map<string, readonly number[]>();
+  const optIn = (item: ClassifiedEntry): boolean => touchesHardFact(item, before) || closesLaterThread(item, later);
   const toItem = (item: ClassifiedEntry): CommitItem => ({
     index: position.get(item.index) ?? -1,
     kind: item.entry.kind,
     label: entryLabel(item.entry, before),
     ...("quote" in item.entry && item.entry.quote ? { quote: item.entry.quote } : {}),
-    reasons: reasonTexts(item, before, resolve),
-    optIn: touchesHardFact(item, before),
+    reasons: reasonTexts(item, before, resolve, later),
+    optIn: optIn(item),
   });
   const entries = accepted.map((item) => item.entry);
   const day = previewDay(snapshot.ledgers, input.chapter, entries, textSha);
@@ -433,7 +506,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     textSha256: draftFingerprint(input.text),
     entries,
     reviewIndexes: plan.review.map((item) => position.get(item.index) ?? -1),
-    optInIndexes: plan.review.filter((item) => touchesHardFact(item, before)).map((item) => position.get(item.index) ?? -1),
+    optInIndexes: plan.review.filter(optIn).map((item) => position.get(item.index) ?? -1),
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
   await input.tickets.put(ticket);
@@ -443,7 +516,7 @@ export async function prepareChapterCommit(input: PrepareInput): Promise<CommitP
     chapter: input.chapter,
     recommit,
     review: plan.review.map(toItem),
-    auto: plan.auto.map(toItem),
+    auto: mergeSameNote(plan.auto, toItem, before),
     notRecorded: [
       ...rejected.map((item) => ({ code: item.reason, label: entryLabel(item.entry, before), reason: item.message })),
       ...keeper.parsed.drops.map((drop) => ({ code: "parse", label: dropLabel(drop), reason: drop.reason })),

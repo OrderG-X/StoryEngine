@@ -154,7 +154,7 @@ export function BrainstormPanel({ chapter, draftEmpty, hidden, busy, onAction }:
                 type="button"
                 className="se-bs-pick is-primary"
                 disabled={busy}
-                onClick={() => onAction({ toolName: "generate_draft", chapter, chapterGoal: directionGoal(picked) })}
+                onClick={() => onAction({ toolName: "generate_draft", chapter, chapterGoal: directionGoal(picked, data.idea) })}
               >
                 让 AI 照这个起草
               </button>

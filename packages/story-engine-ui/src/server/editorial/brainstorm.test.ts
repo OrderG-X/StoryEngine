@@ -74,8 +74,18 @@ describe("头脑风暴：解析章纲员的走法", () => {
     expect(task).toContain("t-key｜抽屉钥匙在谁手上｜停了 6 章");
     expect(task).toContain("t-letter｜信里写了什么｜刚动过｜大伏笔");
     expect(task).toContain("作者给了想法");
+    // 作者点名这章不碰的，三种里哪种都别碰（换题材长篇实跑 2026-10-27）
+    expect(task).toContain("他说了这章不碰、不写的事，哪一种都别碰");
     expect(task).toContain("【这几种已经给过作者了，别再出一样的】林溪来信");
     expect(task).toContain("【故事前提】一封信");
+  });
+
+  it("第 1 章：说开篇，不说「跟读到第 0 章」「接住第 0 章的结尾」", () => {
+    const task = brainstormTask({ chapter: 1, materialBlocks: [], threads: [] });
+    expect(task).not.toContain("第 0 章");
+    expect(task).toContain("怎么开篇");
+    expect(task).toContain("都从故事的开头写起");
+    expect(task).toContain("除非写明发生在故事开始之前");
   });
 });
 
@@ -94,6 +104,16 @@ describe("头脑风暴：核账员核走法", () => {
     expect(checked[0]!.problems).toEqual([]);
     expect(checked[1]!.problems).toEqual([{ step: 2, earlierChapter: 2, earlierQuote: "把信寄给了林溪", reason: "信已经寄走了，抽屉里没有信" }]);
     expect(checked[2]!.problems).toEqual([]);
+  });
+
+  it("推荐的那种核出对不上 → 不再标推荐（不挪给别的，章纲员没说第二好的是哪种）", () => {
+    expect(options[0]!.recommended).toBe(true);
+    const clean = splitBrainstormProblems(JSON.stringify({ problems: [] }), options, { chapters: [] });
+    expect(clean[0]!.recommended).toBe(true);
+    const checked = splitBrainstormProblems(JSON.stringify({ problems: [
+      { point: 2, conflict: true, earlierQuote: "把信寄给了林溪", earlierChapter: 2, reason: "信已经寄走了" },
+    ] }), options, { chapters: [{ chapter: 2, sentences: [CH2] }] });
+    expect(checked.map((option) => option.recommended)).toEqual([undefined, undefined, undefined]);
   });
 });
 

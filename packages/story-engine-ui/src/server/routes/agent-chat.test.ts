@@ -15,7 +15,6 @@ import {
   buildWholeBookTruthLine,
   capChatHistoryWindow,
   closingFallbackText,
-  emitDraftCheckCards,
   endsOnNextSteps,
   formatChapterStatusLine,
   historyToModelMessages,
@@ -23,6 +22,7 @@ import {
   normalizeForwardedToolResult,
   readCurrentChapter,
   readAuthorWords,
+  readPickedDirection,
   runAgentTurn,
   type AgentTurnChunk,
 } from "./agent-chat.js";
@@ -75,12 +75,13 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
   async function* streamOf(chunks: readonly AgentTurnChunk[]): AsyncIterable<AgentTurnChunk> {
     for (const chunk of chunks) yield chunk;
   }
-  async function run(chunks: readonly AgentTurnChunk[]) {
+  async function run(chunks: readonly AgentTurnChunk[], endedByFlow?: () => boolean) {
     const events: { event: string; data: unknown }[] = [];
     const result = await runAgentTurn({
       fullStream: streamOf(chunks),
       sendEvent: (event, data) => events.push({ event, data }),
       scrubber: passthroughScrubber(),
+      ...(endedByFlow ? { endedByFlow } : {}),
     });
     return { events, result };
   }
@@ -120,42 +121,30 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
     expect(endsOnNextSteps({ steps: [] })).toBe(false);
   });
 
-  it("P11：出稿时核过账、这轮 AI 没自己核 → 回合结束报出要补核账卡的章；AI 自己核过 / 出稿没核成的不报", async () => {
-    const drafted = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 3, summary: "写好了。", qualityPipeline: { continuity: { checked: true } } }),
-      textChunk("写好了，见核账卡。"),
-    ]);
-    expect(drafted.result.draftCheckedChapters).toEqual([3]);
-    const selfChecked = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 3, qualityPipeline: { continuity: { checked: true } } }),
-      ...toolChunks("check_continuity", { ok: true, chapter: 3, summary: "核过了。" }),
-    ]);
-    expect(selfChecked.result.draftCheckedChapters).toEqual([]);
-    const notChecked = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 4, qualityPipeline: { continuity: { checked: false } } }),
-      ...toolChunks("generate_draft", { ok: false, chapter: 5, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(notChecked.result.draftCheckedChapters).toEqual([]);
-    // 长篇连写：AI 把核账和出稿并排调，核账先回来（还没正文、没核成），出稿后没再核 → 照样补卡
-    const checkedTooEarly = await run([
-      ...toolChunks("check_continuity", { ok: false, chapter: 34, summary: "第 34 章还没有正文，没法核账。" }),
-      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(checkedTooEarly.result.draftCheckedChapters).toEqual([34]);
-    const checkedOldDraft = await run([
-      ...toolChunks("check_continuity", { ok: true, chapter: 34, summary: "核过了。" }),
-      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(checkedOldDraft.result.draftCheckedChapters).toEqual([34]);
+  it("稿写成了：交回章号、结果和要不要写完就预览（结论、核账卡、下一步由服务端接着出）；不转述摘要、不报「步数用完」", async () => {
+    const output = { ok: true, chapter: 26, thenPreview: true, summary: "第 26 章写好了，1700 字。" };
+    const written = await run([
+      textChunk("好，我来写第 26 章。"),
+      ...toolChunks("commit_preview", { ok: false, skipped: true, summary: "这一轮在写工作稿，这一步先不做，等稿写完、作者看过再说。" }),
+      ...toolChunks("generate_draft", output),
+      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
+    ], () => true);
+    expect(written.result.writtenDraft).toEqual({ chapter: 26, output, thenPreview: true });
+    expect(written.result.emittedText).toBe(true);
+    expect(collectText(written.events)).toBe("好，我来写第 26 章。");
+    // 模型一个字没说：也不兜底转述（服务端接着出结论）
+    const silent = await run([...toolChunks("generate_draft", { ok: true, chapter: 26, summary: "写好了。" })], () => true);
+    expect(silent.result).toMatchObject({ emittedText: false, writtenDraft: { chapter: 26, thenPreview: false } });
+    expect(collectText(silent.events)).toBe("");
   });
 
-  it("P11：补核账卡只用核账记忆——有就按核账工具同款事件发，没有就不发", async () => {
-    const events: { event: string; data: unknown }[] = [];
-    const cached = { ok: true, chapter: 3, sure: [], maybe: [], reused: true, summary: "没发现对不上的地方。" };
-    await emitDraftCheckCards("/books/x", [3, 4], (event, data) => events.push({ event, data }), async (_dir, chapter) => (chapter === 3 ? cached : null));
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result"]);
-    expect(events[1]?.data).toMatchObject({ toolName: "check_continuity", output: cached });
-    expect((events[0]?.data as { toolCallId: string }).toolCallId).toBe((events[1]?.data as { toolCallId: string }).toolCallId);
+  it("出稿没写成 / 没执行：不算写成，照常兜底转述", async () => {
+    const failed = await run([...toolChunks("generate_draft", { ok: false, chapter: 26, summary: "第 26 章还没章纲。" })]);
+    expect(failed.result.writtenDraft).toBeUndefined();
+    expect(collectText(failed.events)).toBe("第 26 章还没章纲。");
+    const skipped = await run([...toolChunks("generate_draft", { ok: false, skipped: true, summary: "一轮只写一章，这一章这一轮先不写。" })]);
+    expect(skipped.result.writtenDraft).toBeUndefined();
+    expect(collectText(skipped.events)).not.toContain("一轮只写一章");
   });
 
   it("一轮结束把对话 AI 的用量记进全局用量账（P10，记在主对话名下、带模型）", async () => {
@@ -375,6 +364,13 @@ describe("historyToModelMessages 历史里的工具（长篇实跑第 17 章：�
     ]);
   });
 
+  it("出的卡作者点了「不改了」：工具结果照实说这张作废、再提就重新调", () => {
+    const messages = readChatMessages([{ role: "assistant", content: "查完了。", tools: [{ name: "settle_fact", ok: true, dropped: true }] }]);
+    expect(messages[0]).toMatchObject({ tools: [{ name: "settle_fact", ok: true, dropped: true }] });
+    const [, result] = historyToModelMessages(messages);
+    expect(result).toMatchObject({ role: "tool", content: [{ output: { value: "出了卡，作者在卡上点了「不改了」：这张作废、书里没动。作者再提就重新调。" } }] });
+  });
+
   it("工具记录读进来只认有名字的；用户消息带了也不认", () => {
     expect(readChatMessages([
       { role: "assistant", content: "好了", tools: [{ name: "" }, { ok: true }, { name: "read_draft" }, "x"] },
@@ -413,7 +409,37 @@ describe("readAuthorWords 作者原话（只给工具找原句用）", () => {
   });
 });
 
+describe("readPickedDirection 作者挑中的走法（换题材长篇实跑：说「照甲写」AI 不知道甲是什么）", () => {
+  it("章号对上当前章、有字 → 去掉首尾空白的原文", () => {
+    expect(readPickedDirection({ chapter: 14, text: "  老民警认账翻旧档：1. 去派出所  " }, 14)).toBe("老民警认账翻旧档：1. 去派出所");
+  });
+
+  it("章号对不上、没当前章、没字、形状不对 → 当没给", () => {
+    expect(readPickedDirection({ chapter: 13, text: "甲" }, 14)).toBeUndefined();
+    expect(readPickedDirection({ chapter: 14, text: "甲" }, undefined)).toBeUndefined();
+    expect(readPickedDirection({ chapter: 14, text: "   " }, 14)).toBeUndefined();
+    expect(readPickedDirection({ chapter: "14", text: "甲" }, 14)).toBeUndefined();
+    expect(readPickedDirection("甲", 14)).toBeUndefined();
+    expect(readPickedDirection(null, 14)).toBeUndefined();
+  });
+});
+
 describe("buildCurrentChapterSystemMessage 当前章上下文", () => {
+  it("带作者挑中的走法 → 原文进上下文，嘱咐照它写时原样填方向", () => {
+    const content = buildCurrentChapterSystemMessage(14, {
+      chapter: 14, hasDraftFile: false, hasCommittedChapter: false,
+    }, undefined, "老民警认账翻旧档：1. 去派出所 2. 只漏出名字")!.content as string;
+    expect(content).toContain("老民警认账翻旧档：1. 去派出所 2. 只漏出名字");
+    expect(content).toContain("不用把它抄进 chapterGoal");
+  });
+
+  it("这章已定稿 → 不再提挑过的走法", () => {
+    const content = buildCurrentChapterSystemMessage(14, {
+      chapter: 14, hasDraftFile: true, hasCommittedChapter: true,
+    }, undefined, "老民警认账翻旧档")!.content as string;
+    expect(content).not.toContain("老民警认账翻旧档");
+  });
+
   it("有章号 → 一条 role=system 消息，点名该章 + 嘱咐别跳最新章", () => {
     const msg = buildCurrentChapterSystemMessage(2);
     expect(msg).not.toBeNull();

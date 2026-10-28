@@ -103,7 +103,7 @@ describe("contextActionsForView 快捷条随页面", () => {
     expect(contextActionsForView("desk", "story")).toBeNull();
     expect(contextActionsForView("library", "chars")?.map((a) => a.label)).toEqual(["补全人物", "整理人物关系"]);
     expect(contextActionsForView("library", "uncarded")?.map((a) => a.label)).toEqual(["给没建卡的建卡"]);
-    expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["清理废弃线索", "归并线索"]);
+    expect(contextActionsForView("library", "hooks")?.map((a) => a.label)).toEqual(["理一遍线索", "归并线索"]);
     expect(contextActionsForView("library", "timeline")).toBeNull();
     expect(contextActionsForView("history", "story")?.map((a) => a.label)).toEqual(["撤销上一步"]);
   });

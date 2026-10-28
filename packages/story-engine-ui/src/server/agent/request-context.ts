@@ -39,6 +39,32 @@ export const REQUEST_CONTEXT_USER_CONFIRMED_TOOL_KEY = "userConfirmedTool";
  */
 export const REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY = "lastTurnUndoHint";
 
+/**
+ * 作者给某一章挑中的走法（稿纸上方点的「用这个」，前端随请求带来）。出稿写的正是这一章时，走法原文并进作者方向——
+ * 和「写这一章」按钮一样照挑中的那种写，不靠模型把走法抄进 chapterGoal（换题材长篇实跑：模型两回都转述成「照走法甲写」）。
+ */
+export const REQUEST_CONTEXT_PICKED_DIRECTION_KEY = "pickedDirection";
+
+/**
+ * 这一轮的可变状态：同一次请求里各次工具调用共用这一个对象。Mastra 每调一次工具都把请求上下文合并成新的一份，
+ * 工具往里 set 的值下一个工具读不到（换题材长篇实跑第 23 章：出稿后停的标记就这样丢了）；改这个对象的字段，引用跟着走。
+ */
+export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
+
+export interface TurnState {
+  /** 模型这一步要调的工具（turn-flow：执行前记下，这一步有出稿就只写稿）。 */
+  stepTools?: readonly string[];
+  /** 这一轮的出稿正在执行（同一步别的工具不执行，第二份出稿也不写）。没写成就放开，模型可以改了再调。 */
+  draftStarted?: boolean;
+  /** 稿写成了：这一步走完这一轮就结束，结论、核账卡、下一步由服务端出（和「写这一章」按钮同一套）。 */
+  draftWritten?: { readonly chapter: number; readonly output: unknown; readonly thenPreview: boolean };
+}
+
+export interface PickedDirection {
+  readonly chapter: number;
+  readonly text: string;
+}
+
 export interface LastTurnUndoHint {
   /** git commit id（40 位十六进制）。 */
   readonly snapshotId: string;
@@ -91,13 +117,17 @@ export function buildProjectRequestContext(
   draftDeltaSink?: DraftDeltaSink,
   authorWords?: readonly string[],
   lastTurnUndoHint?: LastTurnUndoHint,
+  pickedDirection?: PickedDirection,
 ): RequestContext {
-  const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir]];
+  const entries: [string, unknown][] = [[REQUEST_CONTEXT_PROJECT_DIR_KEY, projectDir], [REQUEST_CONTEXT_TURN_STATE_KEY, {} satisfies TurnState]];
   if (isPositiveInt(currentChapter)) entries.push([REQUEST_CONTEXT_CURRENT_CHAPTER_KEY, currentChapter]);
   if (draftDeltaSink) entries.push([REQUEST_CONTEXT_DRAFT_DELTA_SINK_KEY, draftDeltaSink]);
   const words = (authorWords ?? []).filter((text) => typeof text === "string" && text.trim());
   if (words.length > 0) entries.push([REQUEST_CONTEXT_AUTHOR_WORDS_KEY, words]);
   if (lastTurnUndoHint) entries.push([REQUEST_CONTEXT_LAST_TURN_UNDO_HINT_KEY, lastTurnUndoHint]);
+  if (pickedDirection && isPositiveInt(pickedDirection.chapter) && pickedDirection.text.trim()) {
+    entries.push([REQUEST_CONTEXT_PICKED_DIRECTION_KEY, pickedDirection]);
+  }
   return new RequestContext(entries);
 }
 
@@ -125,6 +155,12 @@ export function readAuthorWordsFromContext(context: ToolExecutionContext | undef
   if (!Array.isArray(raw)) return undefined;
   const words = raw.filter((text): text is string => typeof text === "string" && text.trim().length > 0);
   return words.length > 0 ? words : undefined;
+}
+
+/** 工具层：作者给这一章挑中的走法原文（挑的不是这一章、没挑返回 undefined）。 */
+export function readPickedDirectionFromContext(context: ToolExecutionContext | undefined, chapter: number): string | undefined {
+  const raw = context?.requestContext?.get(REQUEST_CONTEXT_PICKED_DIRECTION_KEY) as Partial<PickedDirection> | undefined;
+  return raw?.chapter === chapter && typeof raw.text === "string" && raw.text.trim() ? raw.text.trim() : undefined;
 }
 
 /** 工具层：读出「上一个有写盘回合的首个快照」锚点（缺失/形状不对返回 undefined，undo 走默认逐步回退）。 */

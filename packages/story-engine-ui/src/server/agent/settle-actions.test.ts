@@ -61,6 +61,9 @@ describe("定论按钮", () => {
     expect(parseUserAction({ toolName: "settle_preview", statement: " 杜长顺十年前去世 " }))
       .toEqual({ kind: "action", action: { toolName: "settle_preview", statement: "杜长顺十年前去世" } });
     expect(parseUserAction({ toolName: "settle_preview", statement: "" })).toMatchObject({ kind: "invalid" });
+    // 核账卡「以定论为准」带着报的那句；只认章里的句子
+    expect(parseUserAction({ toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 4, also: [{ where: "chapter", chapter: 4, quote: "说他五年前就没了" }, { where: "setting", quote: "x", label: "y" }, "乱的"] }))
+      .toEqual({ kind: "action", action: { toolName: "settle_preview", statement: "杜长顺十年前去世", chapter: 4, also: [{ where: "chapter", chapter: 4, quote: "说他五年前就没了" }] } });
     expect(parseUserAction({ toolName: "settle_apply", token: "abc" })).toMatchObject({ kind: "invalid" });
     expect(parseUserAction({ toolName: "settle_apply", token: "0123456789abcdef", excluded: ["e1", 3] }))
       .toEqual({ kind: "action", action: { toolName: "settle_apply", token: "0123456789abcdef", excluded: ["e1"] } });

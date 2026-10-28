@@ -5,12 +5,13 @@
  * 增量缓存带来的「从中间算和从头算不一致」风险不值得。P7 实测慢了再说。
  *
  * 规则全是确定性的，不读正文、不判断意思：
- *  - 名字：出场条目里「正文用的称呼 ≠ 已确立名字」就是别名；主体名先过别名表再比。
+ *  - 名字：出场条目里「正文用的称呼 ≠ 已确立名字」就是别名；设定卡上写的别名也算；主体名先过别名表再比。
  *  - 状态（state）：同一主体同一方面，后一章的值顶替前一章的。
  *  - 不会变的（hard）：只有明写推翻（replaces）才作废；值不同又没推翻 = 矛盾，交给作者。
  *  - 线索：开 / 推进 / 收按章序；收了又推进 = 重新打开；作者的归并、收口、分量最后套上。
  *  - 时间：作者定的 > 隔几天 > 上一章 +1（标 missing，要确认）；星期从最近的明写星期推。
  */
+import type { SettingCardsFile } from "../schema/cards.js";
 import type { AuthorDecision } from "../schema/decisions.js";
 import type { ChapterLedger, FactEntry, PresenceEntry, ThreadEntry, TimeEntry } from "../schema/ledger.js";
 import { nameKey } from "../text/quote.js";
@@ -35,6 +36,8 @@ export interface ProjectionInput {
   /** 每章正文现在的 sha256；给了就能标「定稿后改过」。 */
   readonly textHashes?: ReadonlyMap<number, string>;
   readonly unsettled?: boolean;
+  /** 设定卡：卡上写的别名并进别名表（账里记成别名的人、东西，算到那张卡的名字上）。 */
+  readonly cards?: SettingCardsFile;
 }
 
 export interface ProjectionOptions {
@@ -54,6 +57,24 @@ const mod7 = (value: number): number => ((value % 7) + 7) % 7;
 class Names {
   private readonly aliasTo = new Map<string, string>();
   private readonly display = new Map<string, string>();
+
+  /**
+   * 设定卡上的别名指向卡名（换题材长篇实跑 2026-10-27：第 1 章记账员把父亲记成「林父」，作者在林国栋的卡上加了别名「林父」，
+   * 投影却还把「林父」当另一个人——写前备忘「最近变了」里林父、林国栋各一条伤势病情）。
+   * 先于出场条目套上；别名正好是另一张卡的名字的不收（那是两个人）。
+   */
+  addCards(cards: SettingCardsFile): void {
+    const cardKeys = new Set(cards.cards.map((card) => nameKey(card.name)));
+    for (const card of cards.cards) {
+      const key = nameKey(card.name);
+      if (!key) continue;
+      if (!this.display.has(key)) this.display.set(key, card.name);
+      for (const alias of card.aliases) {
+        const aliasKey = nameKey(alias);
+        if (aliasKey && aliasKey !== key && !cardKeys.has(aliasKey) && !this.aliasTo.has(aliasKey)) this.aliasTo.set(aliasKey, key);
+      }
+    }
+  }
 
   addPresence(entry: PresenceEntry): void {
     const name = nameKey(entry.name);
@@ -420,7 +441,9 @@ function buildChapters(
       basis = time.basis;
     } else {
       day = previousEnd + 1;
-      basis = time ? time.basis : "missing";
+      // 记了时间却没说离上一章隔几天（「进了暑假」这类没说准的，记账员照规矩不填）：按第二天记是估的，
+      // 定稿清单请作者看一眼（换题材长篇实跑第 21 章：标成「正文明写」，暑假记成了上一章的第二天）。
+      basis = !time ? "missing" : views.length > 0 ? "estimated" : time.basis;
     }
     dayEnd ??= day + (time?.daysInChapter ?? 0);
     previousEnd = dayEnd;
@@ -471,6 +494,7 @@ export function project(input: ProjectionInput, options: ProjectionOptions = {})
   const dismissed = new Set(input.decisions.flatMap((decision) => (decision.type === "issue.dismiss" ? [decision.issue] : [])));
 
   const names = new Names();
+  if (input.cards) names.addCards(input.cards);
   for (const ledger of ledgers) for (const entry of ledger.entries) if (entry.kind === "presence") names.addPresence(entry);
 
   const facts = buildFacts(ledgers, input.decisions, names, dismissed);

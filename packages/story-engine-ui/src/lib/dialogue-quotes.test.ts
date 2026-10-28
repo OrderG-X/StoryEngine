@@ -40,4 +40,11 @@ describe("chinesePunctuationLike：改稿、接着写换进来的那段跟着原
     expect(chinesePunctuationLike("他说:\"走.\"她没动,", "\"等等,\"她说")).toBe("\"等等,\"她说");
     expect(chinesePunctuationLike("他说：“走。”她没动,", "她说,等等")).toBe("她说,等等");
   });
+
+  it("弯引号 / 直角引号跟着原文：换进来的全用了另一种才换；两种都用了的不动（换题材长篇实跑第 23 章）", () => {
+    expect(chinesePunctuationLike("他说：“走。”她没动。", "「汤，周伯。」她说『东片』")).toBe("“汤，周伯。”她说‘东片’");
+    expect(chinesePunctuationLike("他说：「走。」她没动。", "“汤，周伯。”")).toBe("「汤，周伯。」");
+    expect(chinesePunctuationLike("他说：“走。”她没动。", "“汤。”她说「东片」")).toBe("“汤。”她说「东片」");
+    expect(chinesePunctuationLike("", "「汤。」")).toBe("「汤。」");
+  });
 });
