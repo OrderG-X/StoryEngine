@@ -10,6 +10,11 @@ export const HEAD_PATH = "ledger/head.json";
 export const DECISIONS_PATH = "ledger/decisions.json";
 /** 设定卡（作者裁定的一部分）。不在 = 还没建（老书还没迁）。 */
 export const CARDS_PATH = "ledger/cards.json";
+/**
+ * 书的写入代次（写作版本 P1a）：每次写真相都换一个新的随机号，撤销 / 恢复也换。
+ * 不进存档点（撤销不能把它翻回去）：A→B→撤销回 A 之后，按 A 算的旧预览和现在的书摘要一样，靠它认出中间换过代。
+ */
+export const REVISION_PATH = "store-control/revision.json";
 export const TX_DIR = ".story-core-tx";
 /** 收拾不了的坏事务挪到这里留证（作者确认后挪，不删）。 */
 export const KEPT_TX_DIR = ".story-core-kept";

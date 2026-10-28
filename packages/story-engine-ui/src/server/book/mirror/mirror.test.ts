@@ -248,7 +248,7 @@ describe("老格式镜像·写盘", () => {
     // 第 2 章 + 作者裁定之后：只改变了的文件；备份不再动。
     expect((await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: CH2_ENTRIES }, author("k2"))).ok).toBe(true);
     const threadId = JSON.parse(await readFile(join(book, MIRROR_FILES.threads), "utf-8")).threads[0].id as string;
-    expect((await runCommand(book, decisionRecord, { type: "thread.close", thread: threadId, chapter: 2 }, author("k3"))).ok).toBe(true);
+    expect((await runCommand(book, decisionRecord, { decisions: [{ type: "thread.close", thread: threadId, chapter: 2 }] }, author("k3"))).ok).toBe(true);
     const third = await syncLegacyMirror(book);
     expect(third).toMatchObject({ ok: true, version: 3, backedUp: [] });
     if (third.ok) expect(third.written).not.toContain(MIRROR_FILES.hooks);

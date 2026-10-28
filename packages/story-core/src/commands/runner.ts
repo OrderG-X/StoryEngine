@@ -2,7 +2,8 @@
  * 写命令的执行器：所有写操作都从这里过，命令自己不碰盘。
  *
  * 顺序固定：查权限 → 校参数 → 加书锁 → 收拾上次没写完的事务 → 有回执就回放（同键换参数就拒绝）→ 核依据 → plan →
- * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 版本号，版本号最后写；工作稿不动版本号）→ 推事件。
+ * 打快照 → 事务落盘（正文 / 账单 / 裁定 + 回执 + 写入代次 + 版本号，版本号最后写；工作稿不动版本号和代次）→ 推事件。
+ * 什么都不用改的也留回执（带了防重复标记的话）：不然这次请求迟到重发，会把这之间别人改的盖回去。
  * 任何一步不成都如实返回失败，书保持原样。
  */
 import { createHash } from "node:crypto";
@@ -13,8 +14,9 @@ import { canonicalJson, diffTruthBasis } from "../store/basis.js";
 import { BookFileError, readHead, readTruthBasis } from "../store/book.js";
 import { bookKey, withBookLock } from "../store/lock.js";
 import { HEAD_PATH, receiptPath } from "../store/paths.js";
+import { revisionWrite } from "../store/revision.js";
 import { commitFiles, recoverTransactions, type RecoveryReport, type TxWrite } from "../store/transaction.js";
-import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec } from "./types.js";
+import type { BookEvent, CommandFailure, CommandOutcome, RunOptions, WriteCommandSpec, WritePlan } from "./types.js";
 
 export function fail(code: string, message: string, details?: unknown): CommandFailure {
   return { ok: false, code, message, ...(details !== undefined ? { details } : {}) };
@@ -103,7 +105,20 @@ export async function runCommand<A, R>(
     }
     if (isFailure(planned)) return planned;
     const head = await readHead(bookDir);
+    const at = now.toISOString();
+    const receiptOf = (version: number, changed: WritePlan<R>["changed"]): TxWrite => {
+      const receipt: CommandReceipt = { schema: COMMAND_RECEIPT_SCHEMA, key: key as string, command: spec.name, version, at, changed, result: planned.result, argsHash };
+      return { path: receiptPath(keyHash(key as string)), content: `${JSON.stringify(receipt, null, 2)}\n` };
+    };
     if (planned.writes.length === 0) {
+      // 不用改也留回执：同一请求迟到重发时回放这次的结果，不会照那时的参数再执行一遍。
+      if (key) {
+        try {
+          await commitFiles(bookDir, [receiptOf(head.version, {})]);
+        } catch (error) {
+          return fail("write_failed", "写盘没成功，书保持原样。", error instanceof Error ? error.message : String(error));
+        }
+      }
       return { ok: true, result: planned.result, version: head.version, changed: {}, replayed: false, ...notice };
     }
 
@@ -117,22 +132,12 @@ export async function runCommand<A, R>(
 
     const bumps = spec.bumpsVersion !== false;
     const version = bumps ? head.version + 1 : head.version;
-    const at = now.toISOString();
     const writes: TxWrite[] = [...planned.writes];
-    if (key) {
-      const receipt: CommandReceipt = {
-        schema: COMMAND_RECEIPT_SCHEMA,
-        key,
-        command: spec.name,
-        version,
-        at,
-        changed: planned.changed,
-        result: planned.result,
-        argsHash,
-      };
-      writes.push({ path: receiptPath(keyHash(key)), content: `${JSON.stringify(receipt, null, 2)}\n` });
+    if (key) writes.push(receiptOf(version, planned.changed));
+    if (bumps) {
+      writes.push(revisionWrite(now));
+      writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     }
-    if (bumps) writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     try {
       await commitFiles(bookDir, writes);
     } catch (error) {

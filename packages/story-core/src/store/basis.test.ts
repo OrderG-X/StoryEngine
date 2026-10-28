@@ -6,8 +6,11 @@ import { chapterCommit } from "../commands/chapter-commit.js";
 import { decisionRecord } from "../commands/decision-record.js";
 import { runCommand } from "../commands/runner.js";
 import type { CommandOutcome, CommandSuccess } from "../commands/types.js";
+import { cardWrite } from "../bible/commands.js";
+import { readCards } from "./book.js";
 import { canonicalJson, diffTruthBasis } from "./basis.js";
-import { readBookSnapshot, readTruthBasis } from "./book.js";
+import { readBookSnapshot, readTruthBasis, readWithStableBasis } from "./book.js";
+import { bumpRevision } from "./revision.js";
 
 let book: string;
 beforeEach(async () => {
@@ -56,12 +59,47 @@ describe("真相依据", () => {
     const basis = await readTruthBasis(book);
     expectOk(await runCommand(book, chapterCommit, { chapter: 2, text: CH2, entries: [] }, author("c2")));
 
-    const stale = await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "钟停了" }, { ...author("d1"), basis });
+    const stale = await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "钟停了" }] }, { ...author("d1"), basis });
     expect(stale).toMatchObject({ ok: false, code: "basis_changed", details: { changes: expect.arrayContaining([{ kind: "text", chapter: 2, change: "added" }]) } });
 
     const fresh = await readTruthBasis(book);
-    expectOk(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "钟停了" }, { ...author("d2"), basis: fresh }));
-    const replay = expectOk(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "钟停了" }, { ...author("d2"), basis: fresh }));
+    expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "钟停了" }] }, { ...author("d2"), basis: fresh }));
+    const replay = expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "钟停了" }] }, { ...author("d2"), basis: fresh }));
     expect(replay.replayed).toBe(true);
+  });
+
+  it("换过代就作废：内容一个字节没变（撤销回原样），依据也对不上，说得出是「中间写过」", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("c1")));
+    const basis = await readTruthBasis(book);
+    await bumpRevision(book);
+    const now = await readTruthBasis(book);
+    expect(now.texts).toEqual(basis.texts);
+    expect(diffTruthBasis(basis, now)).toEqual([{ kind: "revision" }]);
+    const stale = await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "钟停了" }] }, { ...author("d1"), basis });
+    expect(stale).toMatchObject({ ok: false, code: "basis_changed", details: { changes: [{ kind: "revision" }] } });
+  });
+
+  it("稳读：读材料的中途有写（哪怕写回原样）不给依据；没写给读之前那份", async () => {
+    expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: [] }, author("c1")));
+    const quiet = await readWithStableBasis(book, async () => "材料");
+    expect(quiet).toEqual({ value: "材料", basis: await readTruthBasis(book) });
+    const busy = await readWithStableBasis(book, async () => {
+      await bumpRevision(book);
+      return "材料";
+    });
+    expect(busy).toEqual({ value: "材料" });
+  });
+
+  it("什么都不用改的请求也留回执：迟到重发不会把这之间别人改的盖回去", async () => {
+    const set = (value: string) => ({ ops: [{ op: "story.set", label: "地点", value }] });
+    expectOk(await runCommand(book, cardWrite, set("北京"), author("w1")));
+    const head = (await readTruthBasis(book)).digest;
+    const noop = expectOk(await runCommand(book, cardWrite, set("北京"), author("w2")));
+    expect(noop.changed).toEqual({});
+    expect((await readTruthBasis(book)).digest).toBe(head);
+    expectOk(await runCommand(book, cardWrite, set("广州"), author("w3")));
+    const late = expectOk(await runCommand(book, cardWrite, set("北京"), author("w2")));
+    expect(late.replayed).toBe(true);
+    expect((await readCards(book))?.story.fields.find((field) => field.label === "地点")?.value).toBe("广州");
   });
 });

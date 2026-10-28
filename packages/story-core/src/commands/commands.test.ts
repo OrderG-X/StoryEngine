@@ -211,36 +211,61 @@ describe("作者裁定命令", () => {
         { kind: "thread", review: "auto", op: "open", type: "intent", title: "老周不让人进钟楼", note: "老周没有拦她", quote: "老周没有拦她" },
       ],
     }, author("k1")));
-    const merged = expectOk(await runCommand(book, decisionRecord, { type: "thread.merge", from: ["t1-2"], into: "t1-1" }, author("d1")));
-    expect(merged.result).toEqual({ decision: "d-1" });
+    const merged = expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "thread.merge", from: ["t1-2"], into: "t1-1" }] }, author("d1")));
+    expect(merged.result).toEqual({ decisions: ["d-1"] });
     expect(merged.changed).toEqual({ decisions: true });
     const view = await projectBook(book);
     expect(view.threads.map((thread) => [thread.id, thread.mergedFrom])).toEqual([["t1-1", ["t1-2"]]]);
 
-    const missing = await runCommand(book, decisionRecord, { type: "thread.close", thread: "t1-2", chapter: 1 }, author("d2"));
+    const missing = await runCommand(book, decisionRecord, { decisions: [{ type: "thread.close", thread: "t1-2", chapter: 1 }] }, author("d2"));
     expect(missing).toMatchObject({ ok: false, code: "unknown_thread" });
   });
 
   it("补记事实：章要定稿过、改写的那条要还在、不会变的要写清谁哪方面是什么", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
-    const added = expectOk(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }, author("d1")));
-    expect(added.result).toEqual({ decision: "d-1" });
+    const added = expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "event", text: "钟楼失过一次火" }] }, author("d1")));
+    expect(added.result).toEqual({ decisions: ["d-1"] });
     expect((await projectBook(book)).facts.find((fact) => fact.id === "d-1")).toMatchObject({ chapter: 1, text: "钟楼失过一次火", review: "author", status: "current" });
 
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 2, nature: "event", text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "event", text: "x", corrects: "nope" }, author("d3"))).toMatchObject({ ok: false, code: "unknown_fact" });
-    expect(await runCommand(book, decisionRecord, { type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 2, nature: "event", text: "x" }] }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "event", text: "x", corrects: "nope" }] }, author("d3"))).toMatchObject({ ok: false, code: "unknown_fact" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "fact.assert", chapter: 1, nature: "hard", text: "老周很老" }] }, author("d4"))).toMatchObject({ ok: false, code: "invalid_args" });
   });
 
   it("改梗概：章要定稿过，改了投影里换成作者写的", async () => {
     expectOk(await runCommand(book, chapterCommit, { chapter: 1, text: CH1, entries: CH1_ENTRIES }, author("k1")));
-    expectOk(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 1, text: "她进了钟楼。" }, author("d1")));
+    expectOk(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 1, text: "她进了钟楼。" }] }, author("d1")));
     expect((await projectBook(book)).chapters[0]?.summary).toBe("她进了钟楼。");
-    expect(await runCommand(book, decisionRecord, { type: "chapter.summary", chapter: 2, text: "x" }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+    expect(await runCommand(book, decisionRecord, { decisions: [{ type: "chapter.summary", chapter: 2, text: "x" }] }, author("d2"))).toMatchObject({ ok: false, code: "unknown_chapter" });
+  });
+
+  it("一次几条：后一条按前一条记完的样子核；有一条记不上整批都不记（不会记一半）", async () => {
+    expectOk(await runCommand(book, chapterCommit, {
+      chapter: 1,
+      text: CH1,
+      entries: [
+        CH1_ENTRIES[5] as EntryInput,
+        { kind: "thread", review: "auto", op: "open", type: "intent", title: "老周不让人进钟楼", note: "老周没有拦她", quote: "老周没有拦她" },
+      ],
+    }, author("k1")));
+    const both = expectOk(await runCommand(book, decisionRecord, { decisions: [
+      { type: "thread.merge", from: ["t1-2"], into: "t1-1" },
+      { type: "chapter.summary", chapter: 1, text: "她进了钟楼。" },
+    ] }, author("d1")));
+    expect(both.result).toEqual({ decisions: ["d-1", "d-2"] });
+
+    const before = await readFile(join(book, "ledger", "decisions.json"), "utf-8");
+    const half = await runCommand(book, decisionRecord, { decisions: [
+      { type: "chapter.summary", chapter: 1, text: "改了" },
+      { type: "thread.close", thread: "t1-2", chapter: 1 },
+    ] }, author("d2"));
+    expect(half).toMatchObject({ ok: false, code: "unknown_thread" });
+    expect((half as { message: string }).message).toContain("第 2 条");
+    expect(await readFile(join(book, "ledger", "decisions.json"), "utf-8")).toBe(before);
   });
 
   it("AI 调不了", async () => {
-    const outcome = await runCommand(book, decisionRecord, { type: "issue.dismiss", issue: "x" }, { caller: "ai", idempotencyKey: "d" });
+    const outcome = await runCommand(book, decisionRecord, { decisions: [{ type: "issue.dismiss", issue: "x" }] }, { caller: "ai", idempotencyKey: "d" });
     expect(outcome).toMatchObject({ ok: false, code: "author_only" });
   });
 });

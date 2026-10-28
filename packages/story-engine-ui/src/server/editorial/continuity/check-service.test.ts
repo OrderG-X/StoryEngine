@@ -251,7 +251,7 @@ describe("核账服务：核账记忆", () => {
     const reader = readerModel();
     await checkChapterBody(dir, 2, BODY, { readerCallModel: reader.callModel });
     expect(await canReuseCheck(dir, 2, BODY)).toBe(true);
-    expect((await runCommand(dir, decisionRecord, { type: "chapter.day", chapter: 1, day: 20 }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
+    expect((await runCommand(dir, decisionRecord, { decisions: [{ type: "chapter.day", chapter: 1, day: 20 }] }, { caller: "author", idempotencyKey: "day-1" })).ok).toBe(true);
     await syncLegacyMirror(dir);
     expect((await readStoryTimeline(dir)).timeline.entries[0]?.day).toBe(20);
     expect(await canReuseCheck(dir, 2, BODY)).toBe(false);

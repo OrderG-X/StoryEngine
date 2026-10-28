@@ -21,6 +21,7 @@ import {
   CARDS_PATH,
   DECISIONS_PATH,
   HEAD_PATH,
+  REVISION_PATH,
 } from "./paths.js";
 import { hasPendingTransactions } from "./transaction.js";
 import { rawHash, truthBasisOf, type TruthBasis } from "./basis.js";
@@ -163,6 +164,7 @@ export interface BookSnapshot {
 }
 
 interface RawTruth {
+  readonly revision: string | undefined;
   readonly ledgers: readonly { readonly chapter: number; readonly raw: string }[];
   readonly decisions: string | undefined;
   readonly cards: string | undefined;
@@ -171,6 +173,8 @@ interface RawTruth {
 
 /** 四样真相按原样读出来（不解析）：快照和确认时核依据都从这里读，两边算的哈希同一个口径。 */
 async function readRawTruth(bookDir: string): Promise<RawTruth> {
+  // 代次先读：读真相的中途有写，记下的是旧代次，确认时对不上（见 basis.ts）。
+  const revision = await readOptional(bookDir, REVISION_PATH);
   const [ledgerChapters, decisions, cards, textChapters] = await Promise.all([
     listChapterLedgers(bookDir),
     readOptional(bookDir, DECISIONS_PATH),
@@ -187,11 +191,12 @@ async function readRawTruth(bookDir: string): Promise<RawTruth> {
     const text = await readChapterText(bookDir, chapter);
     if (text !== undefined) texts.set(chapter, sha256(text));
   }
-  return { ledgers, decisions, cards, texts };
+  return { revision, ledgers, decisions, cards, texts };
 }
 
 function basisOfRaw(raw: RawTruth): TruthBasis {
   return truthBasisOf({
+    revision: rawHash(raw.revision),
     texts: raw.texts,
     ledgers: new Map(raw.ledgers.map((item) => [item.chapter, sha256(item.raw)])),
     decisions: rawHash(raw.decisions),
@@ -202,6 +207,18 @@ function basisOfRaw(raw: RawTruth): TruthBasis {
 /** 书现在的真相依据（不写盘、不拿锁；要和写互斥的调用方自己在书锁里调）。 */
 export async function readTruthBasis(bookDir: string): Promise<TruthBasis> {
   return basisOfRaw(await readRawTruth(bookDir));
+}
+
+/**
+ * 读一份材料，并认它是照哪一版真相读的：先读依据 → 读材料 → 再读一遍依据。前后一样才给依据；
+ * 中途有写（哪怕又改回原样）就不给（basis = undefined）——按内容复用的缓存拿不到依据就不存、不复用。
+ * 不写盘、不拿锁。依据读不了也是 undefined，材料照常返回。
+ */
+export async function readWithStableBasis<T>(bookDir: string, read: () => Promise<T>): Promise<{ readonly value: T; readonly basis?: TruthBasis }> {
+  const before = await readTruthBasis(bookDir).catch(() => undefined);
+  const value = await read();
+  const after = before ? await readTruthBasis(bookDir).catch(() => undefined) : undefined;
+  return before && after && before.digest === after.digest ? { value, basis: before } : { value };
 }
 
 async function readOnce(bookDir: string): Promise<Omit<BookSnapshot, "unsettled">> {

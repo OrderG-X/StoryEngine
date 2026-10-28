@@ -1,22 +1,29 @@
 /**
  * 真相依据（写作版本 P1a，2026-10-29）：一份 AI 产物（定稿预览、定论预览、改账 / 改设定提议）是按书里哪一版真相算出来的。
  *
- * 记的是四样真相每个文件的原样 sha256（正文、章节账单、作者裁定、设定卡），不做任何归一：一个字节变了就算变了。
- * 作者点「确认」时，runner 在书锁里重读一遍、逐个比；有一样对不上，这张票作废、如实说哪里变了，不拿新真相去执行旧判断。
- * 读到一半正好有写也不怕：记下的是实际读到的字节，确认时现读的和它对不上，照样作废。
+ * 记两样：
+ *  - 写入代次（`store-control/revision.json` 原样的 sha256）：每次写真相、每次撤销 / 恢复都换新的，且不随撤销回退。
+ *    依据记下之后书上发生过任何一次写（哪怕 A→B→撤销回 A，内容又一模一样），代次都对不上。
+ *  - 四样真相每个文件的原样 sha256（正文、章节账单、作者裁定、设定卡），不做任何归一：用来如实说「哪里变了」，
+ *    也给缓存按内容认前文（basisDigestBefore 不带代次）。
+ * 代次先读、真相后读。作者点「确认」时，runner 在书锁里重读一遍、逐个比；有一样对不上，这张票作废、如实说哪里变了，
+ * 不拿新真相去执行旧判断。所以产物要在读材料之前记依据：读材料的中途有写，代次已经换了，确认时照样作废。
+ * 缓存（核账记忆、章纲）按内容复用，得在读完材料后再读一遍依据、前后一样才认（store/book 的 readWithStableBasis）。
  * 工作稿不算真相，不进依据（各票自己核目标稿的版本）。
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-export const TRUTH_BASIS_SCHEMA = "truth-basis/1" as const;
+export const TRUTH_BASIS_SCHEMA = "truth-basis/2" as const;
 
 const Sha = z.string().regex(/^[0-9a-f]{64}$/u);
 
 export const TruthBasis = z.object({
   schema: z.literal(TRUTH_BASIS_SCHEMA),
-  /** 下面四样规范化后的 sha256：两份依据一样当且仅当它一样。 */
+  /** 下面五样规范化后的 sha256：两份依据一样当且仅当它一样。 */
   digest: Sha,
+  /** 写入代次文件原样的 sha256；不在（还没写过的书）= null。 */
+  revision: Sha.nullable(),
   /** 章号 → 定稿正文原样的 sha256。 */
   texts: z.record(z.string(), Sha),
   /** 章号 → 章节账单原样的 sha256。 */
@@ -31,7 +38,9 @@ export type TruthBasis = z.infer<typeof TruthBasis>;
 /** 依据里变了的一样（结构，给人看的话在最外层拼）。 */
 export type BasisChange =
   | { readonly kind: "text" | "ledger"; readonly chapter: number; readonly change: "changed" | "added" | "removed" }
-  | { readonly kind: "decisions" | "cards"; readonly change: "changed" | "added" | "removed" };
+  | { readonly kind: "decisions" | "cards"; readonly change: "changed" | "added" | "removed" }
+  /** 四样真相的字节都一样，但中间写过（撤销 / 恢复回到原样、写了一样的内容）。 */
+  | { readonly kind: "revision" };
 
 const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");
 
@@ -47,6 +56,7 @@ export function canonicalJson(value: unknown): string {
 }
 
 export interface TruthHashes {
+  readonly revision: string | null;
   readonly texts: ReadonlyMap<number, string>;
   readonly ledgers: ReadonlyMap<number, string>;
   readonly decisions: string | null;
@@ -57,13 +67,14 @@ const record = (map: ReadonlyMap<number, string>): Record<string, string> =>
   Object.fromEntries([...map.entries()].sort(([a], [b]) => a - b).map(([chapter, hash]) => [String(chapter), hash]));
 
 export function truthBasisOf(hashes: TruthHashes): TruthBasis {
-  const parts = { texts: record(hashes.texts), ledgers: record(hashes.ledgers), decisions: hashes.decisions, cards: hashes.cards };
+  const parts = { revision: hashes.revision, texts: record(hashes.texts), ledgers: record(hashes.ledgers), decisions: hashes.decisions, cards: hashes.cards };
   return { schema: TRUTH_BASIS_SCHEMA, digest: sha(canonicalJson(parts)), ...parts };
 }
 
 /**
  * 依据里第 chapter 章「之前」那部分的摘要：前面各章的正文和账、作者裁定、设定卡。
  * 缓存按它认前文变没变（核账记忆、章纲）；laterLedgers 时连本章和后面各章的账也算（核账拿全书的账对数字）。
+ * 只看内容、不带写入代次：撤销回原样，按原样核过的结果照样能用。
  */
 export function basisDigestBefore(basis: TruthBasis, chapter: number, options: { readonly laterLedgers?: boolean } = {}): string {
   const before = (part: Record<string, string>): Record<string, string> =>
@@ -99,10 +110,11 @@ function diffOne(kind: "decisions" | "cards", was: string | null, now: string | 
 /** 两份依据之间变了什么（一样 = 空）。 */
 export function diffTruthBasis(before: TruthBasis, after: TruthBasis): readonly BasisChange[] {
   if (before.digest === after.digest) return [];
-  return [
+  const changes: BasisChange[] = [
     ...diffChapters("text", before.texts, after.texts),
     ...diffChapters("ledger", before.ledgers, after.ledgers),
     ...diffOne("decisions", before.decisions, after.decisions),
     ...diffOne("cards", before.cards, after.cards),
   ];
+  return changes.length > 0 ? changes : [{ kind: "revision" }];
 }

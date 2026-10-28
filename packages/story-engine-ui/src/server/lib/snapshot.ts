@@ -4,7 +4,7 @@ import { access, mkdir, readdir, readFile, rmdir, unlink, writeFile } from "node
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { recoverProjectCommitTransactions } from "../book/legacy-commit-recovery.js";
-import { recoverTransactions as recoverCoreTransactions, withBookLock } from "@actalk/story-core";
+import { bumpRevision, recoverTransactions as recoverCoreTransactions, REVISION_PATH, withBookLock } from "@actalk/story-core";
 import { mirrorIsStale, syncLegacyMirror } from "../book/mirror/sync.js";
 
 import { resolveGitCommand, resolveGlobalDataDir } from "./data-dirs.js";
@@ -98,6 +98,9 @@ const CORE_TX_MARKER = "# story-engine-ui: 新核心事务目录不入快照（�
 /** 新核心留证的东西（坏事务、镜像前的老文件原样）：撤销不能把它们抹掉。 */
 const CORE_KEPT_DIR = ".story-core-kept";
 const CORE_KEPT_MARKER = "# story-engine-ui: 新核心留证目录不入快照（撤销不抹证据）";
+/** 书的写入代次（写作版本 P1a）：撤销 / 恢复不能把它翻回去，恢复完换一个新的（按恢复前算的预览一律作废）。 */
+const CORE_REVISION_DIR = dirname(REVISION_PATH);
+const CORE_REVISION_MARKER = "# story-engine-ui: 写入代次不入快照（撤销不回退代次）";
 /** 写作统计（P10）：撤销不回退统计，恢复后重数。 */
 const WORD_STATS_DIR = ".story-engine-ui/stats";
 const WORD_STATS_MARKER = "# story-engine-ui: 写作统计不入快照（撤销不回退统计）";
@@ -112,6 +115,7 @@ const SNAPSHOT_EXCLUSIONS: readonly { readonly dir: string; readonly line: strin
   { dir: CORE_TX_DIR, line: `/${CORE_TX_DIR}/`, marker: CORE_TX_MARKER },
   { dir: CORE_KEPT_DIR, line: `/${CORE_KEPT_DIR}/`, marker: CORE_KEPT_MARKER },
   { dir: WORD_STATS_DIR, line: `/${WORD_STATS_DIR}/`, marker: WORD_STATS_MARKER },
+  { dir: CORE_REVISION_DIR, line: `/${CORE_REVISION_DIR}/`, marker: CORE_REVISION_MARKER },
 ];
 /** git 路径魔法：diff / checkout 时跳过这些目录。 */
 const EXCLUDE_PATHSPECS = SNAPSHOT_EXCLUSIONS.map((item) => `:(exclude)${item.dir}`);
@@ -319,6 +323,8 @@ export async function restoreSnapshot(projectDir: string, id: string): Promise<R
     // 当场把零文件空壳收掉；有内容的目录 rmdir 不动（ENOTEMPTY 停手），漏网壳由引擎 recover 兜底。
     await removeEmptiedTransactionShells(projectDir);
     await git(projectDir, ["checkout", id, "--", ".", ...EXCLUDE_PATHSPECS]);
+    // 真相换回去了：换一个新代次，恢复前照着书算的预览、提议按钮一律作废（哪怕又回到了和它一模一样的内容）。
+    await bumpRevision(projectDir);
     await git(projectDir, ["add", "-A"]);
     await git(projectDir, ["commit", "--allow-empty", "-m", `恢复到：${target.label}`]);
     // 账单和老格式镜像同在快照里，恢复后本该一致；万一对不上（镜像那次没写完就存了快照），按恢复后的账重生成一遍。

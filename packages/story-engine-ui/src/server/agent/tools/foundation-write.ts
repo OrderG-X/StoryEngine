@@ -170,8 +170,12 @@ function acceptOpsFor(direct: readonly CardOp[], before: SettingCardsFile): Card
   return [...out.values()];
 }
 
-function confirmKey(ops: readonly CardOp[]): string {
-  return `card-${createHash("sha256").update(JSON.stringify(ops)).digest("hex").slice(0, 24)}`;
+/**
+ * 按钮的防重复标记：同一份改动 + 同一份依据才是同一个按钮（点两次只做一次）。依据带进来，
+ * 之后再提一模一样的改动也是新按钮：不会撞上以前做过的那次的回执、被当成「刚才已经做过了」（P1a 复核）。
+ */
+function confirmKey(ops: readonly CardOp[], basis: string): string {
+  return `card-${createHash("sha256").update(JSON.stringify({ ops, basis })).digest("hex").slice(0, 24)}`;
 }
 
 export async function foundationWriteLogic(input: { readonly projectDir: string; readonly ops: readonly Record<string, unknown>[] }): Promise<FoundationWriteOutput> {
@@ -224,7 +228,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     if (dry.ok && dry.lines.length > 0) {
       pending = dry.lines;
       // 按钮回显是「确认改设定：<这里>」，不再带「改设定：」前缀。
-      confirm = { key: confirmKey(ops), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}`, basis, basisFrom };
+      confirm = { key: confirmKey(ops, basis), input: { ops }, label: `${dry.lines[0]}${dry.lines.length > 1 ? ` 等 ${dry.lines.length} 处` : ""}`, basis, basisFrom };
     } else if (!dry.ok) {
       notDone.push(`要你点头的那几处也做不了：${dry.message}`);
     }
@@ -236,7 +240,7 @@ export async function foundationWriteLogic(input: { readonly projectDir: string;
     const ops = acceptOpsFor(direct, base);
     const after = ops.length > 0 ? await readCardsOrLegacy(input.projectDir, at) : undefined;
     const dry = after ? applyCardOps(after, ops, { by: "author", at }) : undefined;
-    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops), input: { ops }, label: "刚写的这几处", basis, basisFrom };
+    if (dry?.ok && dry.lines.length > 0) accept = { key: confirmKey(ops, basis), input: { ops }, label: "刚写的这几处", basis, basisFrom };
   }
 
   const parts = [

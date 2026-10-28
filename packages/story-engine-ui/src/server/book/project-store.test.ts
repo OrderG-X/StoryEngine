@@ -38,9 +38,9 @@ describe("StoryEngine-NG ProjectStore", () => {
       protagonistName: "Guo Xu",
     });
 
-    // 不再建老格式目录、不写模板占位文件。
+    // 不再建老格式目录、不写模板占位文件（store-control 是核心的写入代次，写设定卡时记下）。
     const top = (await readdir(result.projectDir)).filter((name) => !name.startsWith(".")).sort();
-    expect(top).toEqual(["chapters", "ledger", "project.json"]);
+    expect(top).toEqual(["chapters", "ledger", "project.json", "store-control"]);
     expect((await stat(join(result.projectDir, "chapters"))).isDirectory()).toBe(true);
     for (const legacy of ["story", "world", "characters", "timeline", "time", "drafts"]) {
       await expect(access(join(result.projectDir, legacy))).rejects.toMatchObject({ code: "ENOENT" });

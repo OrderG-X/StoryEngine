@@ -3,7 +3,7 @@
  *
  *   对话 AI 调 manage_ledger → planLedgerChange 把要改什么翻成裁定草案（指向的事实 / 线索按编号或原话查准，
  *   查不准就如实说、列候选，绝不猜）→ 界面出「确认改账」按钮 → 作者点了 → applyLedgerDecisions 存一个撤销点、
- *   逐条记裁定 → 重生成老格式镜像。
+ *   整批记裁定（一个事务，要么全记上、要么都不记）→ 重生成老格式镜像。
  *
  * 老代码直接改 story/*.json 的那套（edit_fact_ledger / resolve_thread / group_related_leads / clean_legacy_threads /
  * set_foreshadowing_importance）在新核心下会被镜像盖掉（删了等于没删），已整体换成这里。
@@ -258,8 +258,9 @@ export function isAiLedgerKey(key: string): boolean {
 }
 
 /**
- * 作者点了「确认改账」：存一个撤销点，逐条记裁定（幂等：点两次只记一次），再重生成老格式镜像。
- * AI 提的草案必须带依据（basis = 摘要）：第一条记之前在书锁里核，账从提议之后变了就一条都不记、如实说（写作版本 P1a）。
+ * 作者点了「确认改账」：存一个撤销点，整批记裁定（一个事务；幂等：点两次只记一次），再重生成老格式镜像。
+ * AI 提的草案必须带依据（basis = 摘要）：在书锁里核，账从提议之后变了就一条都不记、如实说（写作版本 P1a）。
+ * 整批一个事务，所以不会记了一半、重点按钮时后半截绕过依据（P1a 复核）。
  * 作者在故事地图上直接点的（不是 AI 提的）照现在的账执行，不带依据。
  */
 export async function applyLedgerDecisions(projectDir: string, input: { readonly key: string; readonly decisions: readonly unknown[]; readonly label?: string; readonly basis?: string }): Promise<LedgerApplyOutcome> {
@@ -276,48 +277,46 @@ export async function applyLedgerDecisions(projectDir: string, input: { readonly
     if (!basis) return { ok: false, applied: 0, summary: "没改账：这个改账按钮是旧的（不知道是照哪一版账提的），请让 AI 重新提一次。" };
   }
   const label = `agent:manage_ledger${input.label ? `:${input.label.slice(0, 40)}` : ""}`;
-  let run: { readonly snapshotId?: string; readonly result: { applied: number; replayed: number; failures: string[]; mirrorOk: boolean } };
+  let run: { readonly snapshotId?: string; readonly result: { applied: number; replayed: boolean; failure?: string; mirrorOk: boolean } };
   try {
-    // 存撤销点和记裁定在同一把书锁里：撤销不会插进改账中间。真要写才存（全是重放、全没记上就不存）。
+    // 存撤销点和记裁定在同一把书锁里：撤销不会插进改账中间。真要写才存（重放、没记上就不存）。
     run = await runWithLazySnapshot(projectDir, async (snapshot) => {
-      let applied = 0;
-      let replayed = 0;
-      const failures: string[] = [];
-      for (const [index, decision] of decisions.entries()) {
-        // 依据只在第一条核：后面几条前面那条刚改过裁定，再核就是自己挡自己；整批在同一把书锁里，中间插不进别的写。
-        // 核心先回放回执再核依据，按钮点第二次照样回「刚才已经记过了」。
-        const outcome = await runCommand(projectDir, decisionRecord, decision, {
-          caller: "author",
-          idempotencyKey: `${input.key}:${index}`,
-          snapshot,
-          ...(index === 0 && basis ? { basis } : {}),
-        });
-        if (outcome.ok) {
-          if (outcome.replayed) replayed += 1;
-          else applied += 1;
-        } else if (outcome.code === "basis_changed") {
+      // 核心先回放回执再核依据：按钮点第二次照样回「刚才已经记过了」。
+      const outcome = await runCommand(projectDir, decisionRecord, { decisions }, {
+        caller: "author",
+        idempotencyKey: input.key,
+        snapshot,
+        ...(basis ? { basis } : {}),
+      });
+      let failure: string | undefined;
+      if (!outcome.ok) {
+        if (outcome.code === "basis_changed") {
           const changes = (outcome.details as { readonly changes?: Parameters<typeof describeBasisChanges>[0] } | undefined)?.changes ?? [];
-          failures.push(`提议之后${describeBasisChanges(changes)}改过，这份草案是照改之前算的，请让 AI 重新提一次`);
-          break;
+          failure = `提议之后${describeBasisChanges(changes)}改过，这份草案是照改之前算的，请让 AI 重新提一次`;
         } else {
-          failures.push(outcome.message);
+          failure = outcome.message;
         }
       }
-      const mirror = await syncLegacyMirror(projectDir);
+      const mirror = outcome.ok && !outcome.replayed ? await syncLegacyMirror(projectDir) : { ok: true as const };
       if (!mirror.ok) console.warn(`[manage_ledger] 改账后重生成老格式镜像没成：${mirror.reason}`);
-      return { applied, replayed, failures, mirrorOk: mirror.ok };
+      return {
+        applied: outcome.ok && !outcome.replayed ? outcome.result.decisions.length : 0,
+        replayed: outcome.ok && outcome.replayed,
+        ...(failure ? { failure } : {}),
+        mirrorOk: mirror.ok,
+      };
     }, label);
   } catch (error) {
     return { ok: false, applied: 0, summary: `没改账：没能先存撤销点（${error instanceof Error ? error.message : String(error)}），这次一条都没记。` };
   }
-  const { applied, replayed, failures, mirrorOk } = run.result;
+  const { applied, replayed, failure, mirrorOk } = run.result;
+  const reason = failure ?? "没记上";
   const parts = [
-    applied > 0 ? `账改好了（${applied} 条），改前已存档，可撤销。` : replayed > 0 ? "这次改账刚才已经记过了，没有重复记。" : "没改账。",
-    ...(failures.length > 0 ? [`有 ${failures.length} 条没记上：${failures.slice(0, 3).join("；")}`] : []),
+    applied > 0 ? `账改好了（${applied} 条），改前已存档，可撤销。` : replayed ? "这次改账刚才已经记过了，没有重复记。" : `没改账：${reason.endsWith("。") ? reason.slice(0, -1) : reason}。`,
     ...(mirrorOk ? [] : ["（老格式资料没同步上，下次打开书会补；裁定本身已经记好。）"]),
   ];
   return {
-    ok: failures.length === 0 && applied + replayed > 0,
+    ok: failure === undefined && (applied > 0 || replayed),
     applied,
     summary: parts.join(" "),
     ...(applied > 0 && run.snapshotId ? { snapshotId: run.snapshotId } : {}),
