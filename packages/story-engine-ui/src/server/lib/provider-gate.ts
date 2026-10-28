@@ -29,6 +29,8 @@ export interface ProviderGateOptions {
 export interface GatedFetchOptions {
   /** 排队、退避期间约每 5 秒调一次，供调用方给空闲计时器续命。 */
   readonly onWait?: () => void;
+  /** 拿到许可、请求真发出去之前调（每次重试都调）：调用方从这时起算「模型多久没出字」。 */
+  readonly onSend?: () => void;
 }
 
 const RETRYABLE_STATUS = new Set([429, 503]);
@@ -192,6 +194,7 @@ export function createProviderGate(options: ProviderGateOptions = {}) {
       const release = await withPulse(gate.acquire(signal), opts.onWait);
       let response: Response;
       try {
+        opts.onSend?.();
         response = await baseFetch(input, init);
       } catch (error) {
         release();
