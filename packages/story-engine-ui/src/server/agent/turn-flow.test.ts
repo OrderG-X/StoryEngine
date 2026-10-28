@@ -7,7 +7,7 @@ import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { buildProjectRequestContext, markUserConfirmedTool } from "./request-context.js";
-import { endsAfterDraftClosing, turnFlowProcessor, turnStateOf, withTurnFlow } from "./turn-flow.js";
+import { endsAfterDraft, releaseTurnFlow, turnFlowProcessor, turnStateOf, withTurnFlow } from "./turn-flow.js";
 
 type Execute = (input: unknown, context: ToolExecutionContext) => Promise<unknown>;
 
@@ -51,43 +51,74 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     const turn = buildProjectRequestContext("/tmp/book", 26);
     planStep(turn, ["commit_preview", "generate_draft", "generate_draft", "read_draft"]);
     await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "这一轮在写工作稿，这一步先不做，等稿写完、作者看过再说。" });
-    await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: true, chapter: 26 });
+    // 同一步的工具并排执行：第一份还在写，第二份进来
+    const first = run(tools.generate_draft, {}, turn);
     await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "一轮只写一章，这一章这一轮先不写。" });
     await expect(run(tools.read_draft, {}, turn)).resolves.toMatchObject({ ok: false, skipped: true });
+    await expect(first).resolves.toEqual({ ok: true, chapter: 26 });
     expect(tools.bodies.commit_preview).not.toHaveBeenCalled();
     expect(tools.bodies.read_draft).not.toHaveBeenCalled();
     expect(tools.bodies.generate_draft).toHaveBeenCalledTimes(1);
   });
 
-  it("出稿跑过：下一步只放出「建议下一步」，模型照样调了别的也不执行；那一步走完这一轮结束", async () => {
+  it("稿写成了：这一步走完这一轮就结束（之后的由服务端出）；同一轮模型再调别的也不执行", async () => {
+    const tools = fakeTools();
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    const stop = endsAfterDraft(turn);
+    planStep(turn, ["generate_draft"]);
+    expect(stop()).toBe(false);
+    await run(tools.generate_draft, {}, turn);
+    expect(stop()).toBe(true);
+    expect(turnStateOf(turn)?.draftWritten).toEqual({ chapter: 26, output: { ok: true, chapter: 26 }, thenPreview: false });
+    planStep(turn, ["commit_preview"]);
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "这一轮已经写过稿了，这一步先不做，等作者看完稿再说。" });
+    expect(tools.bodies.commit_preview).not.toHaveBeenCalled();
+  });
+
+  it("模型这一轮走完、服务端接着出定稿预览：放开拦法，照常执行", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["generate_draft"]);
     await run(tools.generate_draft, {}, turn);
-    const stop = endsAfterDraftClosing(turn);
-    expect(stop()).toBe(false);
-    expect(turnFlowProcessor.processInputStep({ requestContext: turn } as never)).toEqual({ activeTools: ["suggest_next_steps"] });
-    planStep(turn, ["commit_preview", "suggest_next_steps"]);
-    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: false, skipped: true, summary: "这一轮已经写过稿了，这一步先不做，等作者看完稿再说。" });
-    await expect(run(tools.suggest_next_steps, {}, turn)).resolves.toEqual({ ok: true });
-    expect(stop()).toBe(true);
+    releaseTurnFlow(turn);
+    await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
   });
 
-  it("没有出稿的轮次照常：读、预览、建议下一步都执行，下一步不收窄", async () => {
+  it("出稿没写成（被挡下）：不算写过稿，不结束这一轮，模型改了再调照常写", async () => {
+    const tools = fakeTools();
+    tools.bodies.generate_draft.mockResolvedValueOnce({ ok: false, chapter: 22 } as never);
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    planStep(turn, ["generate_draft"]);
+    await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: false, chapter: 22 });
+    expect(endsAfterDraft(turn)()).toBe(false);
+    planStep(turn, ["generate_draft"]);
+    await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: true, chapter: 26 });
+    expect(endsAfterDraft(turn)()).toBe(true);
+  });
+
+  it("出稿抛错：不算在写，模型可以再调", async () => {
+    const tools = fakeTools();
+    tools.bodies.generate_draft.mockRejectedValueOnce(new Error("断了"));
+    const turn = buildProjectRequestContext("/tmp/book", 22);
+    planStep(turn, ["generate_draft"]);
+    await expect(run(tools.generate_draft, {}, turn)).rejects.toThrow("断了");
+    planStep(turn, ["generate_draft"]);
+    await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: true, chapter: 26 });
+  });
+
+  it("没有出稿的轮次照常：读、预览、建议下一步都执行，不结束", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["read_draft", "commit_preview"]);
     await expect(run(tools.read_draft, {}, turn)).resolves.toEqual({ ok: true });
     await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
-    expect(turnFlowProcessor.processInputStep({ requestContext: turn } as never)).toBeUndefined();
-    expect(endsAfterDraftClosing(turn)()).toBe(false);
+    expect(endsAfterDraft(turn)()).toBe(false);
   });
 
   it("出稿参数没过校验、工具没跑：不算写过稿，模型改了参数再调照常写", async () => {
     const tools = fakeTools();
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["generate_draft"]);
-    expect(turnFlowProcessor.processInputStep({ requestContext: turn } as never)).toBeUndefined();
     planStep(turn, ["generate_draft"]);
     await expect(run(tools.generate_draft, {}, turn)).resolves.toEqual({ ok: true, chapter: 26 });
   });
@@ -97,7 +128,6 @@ describe("写稿这一轮的流程（外部审查 2026-10-28：工具边界一�
     const turn = buildProjectRequestContext("/tmp/book", 22);
     planStep(turn, ["generate_draft"]);
     await run(tools.generate_draft, {}, turn);
-    turnFlowProcessor.processInputStep({ requestContext: turn } as never);
     markUserConfirmedTool(turn, "commit_preview");
     await expect(run(tools.commit_preview, {}, turn)).resolves.toEqual({ ok: true });
     const once = tools.commit_preview.execute;
@@ -125,8 +155,8 @@ function toolCallStep(calls: readonly { readonly name: string; readonly input?: 
   ];
 }
 
-describe("写稿这一轮的流程：真框架（Mastra 先跑输出处理器、再执行工具；收窄的工具真传给了模型）", () => {
-  it("模型一步里先调预览、再调出稿：只写稿；下一步模型只拿到「建议下一步」；那一步走完不再调模型", async () => {
+describe("写稿这一轮的流程：真框架（Mastra 先跑输出处理器、再执行工具）", () => {
+  it("模型一步里先调预览、再调出稿：只写稿；稿写成这一轮就结束，不再调模型", async () => {
     const executed: string[] = [];
     const tool = (id: string) => createTool({
       id,
@@ -154,7 +184,6 @@ describe("写稿这一轮的流程：真框架（Mastra 先跑输出处理器、
       name: "turn-flow-test",
       instructions: "test",
       model,
-      inputProcessors: [turnFlowProcessor],
       outputProcessors: [turnFlowProcessor],
       tools: withTurnFlow({
         generate_draft: tool("generate_draft"),
@@ -166,22 +195,20 @@ describe("写稿这一轮的流程：真框架（Mastra 先跑输出处理器、
     const turn = buildProjectRequestContext("/tmp/book", 26);
     const stream = await agent.stream("写第 26 章，写完顺手出定稿预览", {
       requestContext: turn,
-      stopWhen: [stepCountIs(12), endsAfterDraftClosing(turn)],
+      stopWhen: [stepCountIs(12), endsAfterDraft(turn)],
       toolCallConcurrency: 1,
     });
     const results: { name: unknown; skipped: unknown }[] = [];
     for await (const chunk of stream.fullStream as AsyncIterable<{ type: string; payload?: { toolName?: string; result?: { skipped?: unknown } } }>) {
       if (chunk.type === "tool-result") results.push({ name: chunk.payload?.toolName, skipped: chunk.payload?.result?.skipped });
     }
-    expect(executed).toEqual(["generate_draft", "suggest_next_steps"]);
-    expect(offered).toHaveLength(2);
+    expect(executed).toEqual(["generate_draft"]);
+    expect(offered).toHaveLength(1);
     expect(offered[0]).toEqual(expect.arrayContaining(["generate_draft", "commit_preview", "read_draft", "suggest_next_steps"]));
-    expect(offered[1]).toEqual(["suggest_next_steps"]);
-    expect(results).toEqual(expect.arrayContaining([
+    expect(results).toEqual([
       { name: "commit_preview", skipped: true },
       { name: "generate_draft", skipped: undefined },
-      { name: "suggest_next_steps", skipped: undefined },
-    ]));
-    expect(turnStateOf(turn)).toMatchObject({ draftStarted: true, closing: true });
+    ]);
+    expect(turnStateOf(turn)).toMatchObject({ draftStarted: true, draftWritten: { chapter: 26, thenPreview: false } });
   });
 });

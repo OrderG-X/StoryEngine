@@ -15,8 +15,6 @@ import {
   buildWholeBookTruthLine,
   capChatHistoryWindow,
   closingFallbackText,
-  emitDraftCheckCards,
-  emitPreviewsAfterDraft,
   endsOnNextSteps,
   formatChapterStatusLine,
   historyToModelMessages,
@@ -123,83 +121,30 @@ describe("runAgentTurn 单次回合（重构 P4：不读原话、不改写回复
     expect(endsOnNextSteps({ steps: [] })).toBe(false);
   });
 
-  it("P11：出稿时核过账、这轮 AI 没自己核 → 回合结束报出要补核账卡的章；AI 自己核过 / 出稿没核成的不报", async () => {
-    const drafted = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 3, summary: "写好了。", qualityPipeline: { continuity: { checked: true } } }),
-      textChunk("写好了，见核账卡。"),
-    ]);
-    expect(drafted.result.draftCheckedChapters).toEqual([3]);
-    const selfChecked = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 3, qualityPipeline: { continuity: { checked: true } } }),
-      ...toolChunks("check_continuity", { ok: true, chapter: 3, summary: "核过了。" }),
-    ]);
-    expect(selfChecked.result.draftCheckedChapters).toEqual([]);
-    const notChecked = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 4, qualityPipeline: { continuity: { checked: false } } }),
-      ...toolChunks("generate_draft", { ok: false, chapter: 5, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(notChecked.result.draftCheckedChapters).toEqual([]);
-    // 长篇连写：AI 把核账和出稿并排调，核账先回来（还没正文、没核成），出稿后没再核 → 照样补卡
-    const checkedTooEarly = await run([
-      ...toolChunks("check_continuity", { ok: false, chapter: 34, summary: "第 34 章还没有正文，没法核账。" }),
-      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(checkedTooEarly.result.draftCheckedChapters).toEqual([34]);
-    const checkedOldDraft = await run([
-      ...toolChunks("check_continuity", { ok: true, chapter: 34, summary: "核过了。" }),
-      ...toolChunks("generate_draft", { ok: true, chapter: 34, qualityPipeline: { continuity: { checked: true } } }),
-    ]);
-    expect(checkedOldDraft.result.draftCheckedChapters).toEqual([34]);
-  });
-
-  it("P11：补核账卡只用核账记忆——有就按核账工具同款事件发，没有就不发", async () => {
-    const events: { event: string; data: unknown }[] = [];
-    const cached = { ok: true, chapter: 3, sure: [], maybe: [], reused: true, summary: "没发现对不上的地方。" };
-    await emitDraftCheckCards("/books/x", [3, 4], (event, data) => events.push({ event, data }), async (_dir, chapter) => (chapter === 3 ? cached : null));
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result"]);
-    expect(events[1]?.data).toMatchObject({ toolName: "check_continuity", output: cached });
-    expect((events[0]?.data as { toolCallId: string }).toolCallId).toBe((events[1]?.data as { toolCallId: string }).toolCallId);
-  });
-
-  it("出稿后按流程收的尾（turn-flow）：出稿后模型没再说话 → 转述出稿摘要；没执行的工具摘要不转述；不报「步数用完」", async () => {
-    const closed = await run([
+  it("稿写成了：交回章号、结果和要不要写完就预览（结论、核账卡、下一步由服务端接着出）；不转述摘要、不报「步数用完」", async () => {
+    const output = { ok: true, chapter: 26, thenPreview: true, summary: "第 26 章写好了，1700 字。" };
+    const written = await run([
       textChunk("好，我来写第 26 章。"),
       ...toolChunks("commit_preview", { ok: false, skipped: true, summary: "这一轮在写工作稿，这一步先不做，等稿写完、作者看过再说。" }),
-      ...toolChunks("generate_draft", { ok: true, chapter: 26, summary: "第 26 章写好了，1700 字。" }),
-      ...toolChunks("read_draft", { ok: false, skipped: true, summary: "这一轮已经写过稿了，这一步先不做，等作者看完稿再说。" }),
-      ...toolChunks("suggest_next_steps", { ok: true, question: "接下来？", choices: [] }),
+      ...toolChunks("generate_draft", output),
       { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
     ], () => true);
-    expect(collectText(closed.events)).toBe("好，我来写第 26 章。\n\n第 26 章写好了，1700 字。");
-    // 收尾那步模型说了话：不再转述
-    const spoke = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 26, summary: "第 26 章写好了，1700 字。" }),
-      textChunk("写好了，这章林晚去了医院。"),
-      ...toolChunks("suggest_next_steps", { ok: true, question: "接下来？", choices: [] }),
-      { type: "finish", payload: { stepResult: { reason: "tool-calls" } } },
-    ], () => true);
-    expect(collectText(spoke.events)).toBe("写好了，这章林晚去了医院。");
-    // 只有一张没执行的卡：不当结果转述
-    const onlySkipped = await run([...toolChunks("commit_preview", { ok: false, skipped: true, summary: "这一步先不做。" })]);
-    expect(collectText(onlySkipped.events)).not.toContain("这一步先不做");
+    expect(written.result.writtenDraft).toEqual({ chapter: 26, output, thenPreview: true });
+    expect(written.result.emittedText).toBe(true);
+    expect(collectText(written.events)).toBe("好，我来写第 26 章。");
+    // 模型一个字没说：也不兜底转述（服务端接着出结论）
+    const silent = await run([...toolChunks("generate_draft", { ok: true, chapter: 26, summary: "写好了。" })], () => true);
+    expect(silent.result).toMatchObject({ emittedText: false, writtenDraft: { chapter: 26, thenPreview: false } });
+    expect(collectText(silent.events)).toBe("");
   });
 
-  it("作者要写完就出定稿预览：稿写成了才报出那一章，没写成的不报；回合结束按预览工具同款事件发，出错如实发 tool-error", async () => {
-    const asked = await run([
-      ...toolChunks("generate_draft", { ok: true, chapter: 26, thenPreview: true, summary: "写好了。" }),
-    ]);
-    expect(asked.result.previewAfterDraftChapters).toEqual([26]);
-    const failed = await run([...toolChunks("generate_draft", { ok: false, chapter: 26, thenPreview: true, summary: "没写成。" })]);
-    expect(failed.result.previewAfterDraftChapters).toEqual([]);
-    const events: { event: string; data: unknown }[] = [];
-    const preview = { ok: true, chapter: 26, summary: "预览好了。" };
-    await emitPreviewsAfterDraft("/books/x", [26], (event, data) => events.push({ event, data }), async () => preview);
-    expect(events.map((e) => e.event)).toEqual(["tool-call", "tool-result"]);
-    expect(events[1]?.data).toMatchObject({ toolName: "commit_preview", output: preview });
-    const broken: { event: string; data: unknown }[] = [];
-    await emitPreviewsAfterDraft("/books/x", [26], (event, data) => broken.push({ event, data }), async () => { throw new Error("记账员没连上"); });
-    expect(broken.map((e) => e.event)).toEqual(["tool-call", "tool-error"]);
-    expect(broken[1]?.data).toMatchObject({ toolName: "commit_preview", error: expect.stringContaining("记账员没连上") });
+  it("出稿没写成 / 没执行：不算写成，照常兜底转述", async () => {
+    const failed = await run([...toolChunks("generate_draft", { ok: false, chapter: 26, summary: "第 26 章还没章纲。" })]);
+    expect(failed.result.writtenDraft).toBeUndefined();
+    expect(collectText(failed.events)).toBe("第 26 章还没章纲。");
+    const skipped = await run([...toolChunks("generate_draft", { ok: false, skipped: true, summary: "一轮只写一章，这一章这一轮先不写。" })]);
+    expect(skipped.result.writtenDraft).toBeUndefined();
+    expect(collectText(skipped.events)).not.toContain("一轮只写一章");
   });
 
   it("一轮结束把对话 AI 的用量记进全局用量账（P10，记在主对话名下、带模型）", async () => {

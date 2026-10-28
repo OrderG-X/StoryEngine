@@ -20,22 +20,22 @@
 import { stepCountIs, type ModelMessage } from "ai";
 
 import { buildProjectRequestContext, parseLastTurnUndoHint } from "../agent/request-context.js";
-import { DRAFT_TOOL, endsAfterDraftClosing } from "../agent/turn-flow.js";
+import { DRAFT_TOOL, endsAfterDraft, releaseTurnFlow } from "../agent/turn-flow.js";
 import { getStoryAgent, getStoryAgentModel, type AgentModelInfo } from "../agent/story-agent.js";
 import { recordUsage } from "../lib/usage-ledger.js";
 import { commitApplyTool } from "../agent/tools/commit-apply.js";
-import { buildCommitPreviewToolOutput, commitPreviewTool } from "../agent/tools/commit-preview.js";
+import { commitPreviewTool } from "../agent/tools/commit-preview.js";
 import { generateDraftTool } from "../agent/tools/generate-draft.js";
 import { pruneSnapshotsTool } from "../agent/tools/prune-snapshots.js";
 import { aiReviewTool } from "../agent/tools/ai-review.js";
 import { qualityCheckTool } from "../agent/tools/quality-check.js";
 import { manageSnapshotsTool } from "../agent/tools/manage-snapshots.js";
-import { parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
+import { finishDraftTurn, parseUserAction, runUserAction, type UserActionToolExecutor } from "../agent/user-actions.js";
 import { createStreamingScrubber } from "../lib/entity-id-scrubber.js";
 import { currentAgentFallback, describeTokenUsage, recordAgentUsage, sampleFromSdkUsage, withTokenMeter } from "../lib/token-meter.js";
 import { runAbortableTurn } from "../lib/turn-abort.js";
 import { appendTurnMetrics } from "../lib/turn-metrics.js";
-import { cachedCheckContinuity, checkContinuityTool } from "../agent/tools/check-continuity.js";
+import { checkContinuityTool } from "../agent/tools/check-continuity.js";
 import { reviseDraftTool } from "../agent/tools/revise-draft.js";
 import { brainstormChapterTool } from "../agent/tools/brainstorm-chapter.js";
 import {
@@ -369,15 +369,9 @@ export async function runAgentTurn(args: {
 }): Promise<AgentTurnResult> {
   let finishReason: string | undefined;
   let sawToolActivity = false;
-  // AI 出稿时顺手核过账、这轮又没自己调核账的章（P11）：回合结束后照核账记忆补一张核账卡。
-  const draftChecked = new Set<number>();
-  const toolChecked = new Set<number>();
   let lastToolSummary: string | undefined;
-  // 出稿的结果：出稿后模型一个字没说（收尾那步只出了选项、或没跑成），就由这里转述出稿的摘要。
-  let draftSummary: string | undefined;
-  let textSinceDraft = false;
-  // 稿写成了、作者要写完就出定稿预览的章（generate_draft 的 thenPreview）：回合结束后接着出预览。
-  const previewAfterDraft = new Set<number>();
+  // 稿写成了（turn-flow 到此收住这一轮）：结论、核账卡、预览、下一步由调用方按 finishDraftTurn 出，这里不再转述。
+  let writtenDraft: WrittenDraft | undefined;
   // 模型/网络中途出错（error 帧）：前端会出「AI 服务暂时没响应 · 重试」卡，就别再叠「抱歉没能回应」。
   let sawStreamError = false;
   let emittedText = false;
@@ -414,7 +408,6 @@ export async function runAgentTurn(args: {
         const text = chunk.payload?.text;
         if (text) {
           emittedText = true;
-          textSinceDraft = true;
           const scrubbed = args.scrubber.push(text);
           if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
         }
@@ -445,18 +438,11 @@ export async function runAgentTurn(args: {
         const record = output as { readonly summary?: unknown; readonly skipped?: unknown; readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown } | undefined;
         // 没执行的（turn-flow 按流程跳过的）不当这一轮的结果转述。
         const summary = record?.skipped === true ? undefined : record?.summary;
-        if (typeof summary === "string" && summary.trim()) {
-          lastToolSummary = summary.trim();
-          if (chunk.payload?.toolName === DRAFT_TOOL) {
-            draftSummary = lastToolSummary;
-            textSinceDraft = false;
-          }
-        }
-        if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && record.thenPreview === true && typeof record.chapter === "number") {
-          previewAfterDraft.add(record.chapter);
+        if (typeof summary === "string" && summary.trim()) lastToolSummary = summary.trim();
+        if (chunk.payload?.toolName === DRAFT_TOOL && record?.ok === true && typeof record.chapter === "number") {
+          writtenDraft = { chapter: record.chapter, output, thenPreview: record.thenPreview === true };
         }
         args.sendEvent("tool-result", { toolCallId, toolName: chunk.payload?.toolName, output });
-        noteCheckedChapter(chunk.payload?.toolName, output, draftChecked, toolChecked);
         break;
       }
       case "tool-error": {
@@ -491,11 +477,9 @@ export async function runAgentTurn(args: {
     }
   }
 
-  const fallback = draftSummary !== undefined && !textSinceDraft
-    ? `${emittedText ? "\n\n" : ""}${draftSummary}`
-    : sawStreamError && !sawToolActivity
-      ? null
-      : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
+  const fallback = writtenDraft || (sawStreamError && !sawToolActivity)
+    ? null
+    : closingFallbackText({ emittedText, sawToolActivity, lastToolSummary });
   if (fallback) {
     const scrubbed = args.scrubber.push(fallback);
     if (scrubbed) args.sendEvent("text-delta", { text: scrubbed });
@@ -507,72 +491,21 @@ export async function runAgentTurn(args: {
   }
   const remainingText = args.scrubber.flush();
   if (remainingText) args.sendEvent("text-delta", { text: remainingText });
-  return {
-    finishReason,
-    draftCheckedChapters: [...draftChecked].filter((chapter) => !toolChecked.has(chapter)),
-    previewAfterDraftChapters: [...previewAfterDraft],
-  };
+  return { finishReason, emittedText, ...(writtenDraft ? { writtenDraft } : {}) };
+}
+
+/** 这一轮写成的稿：章号、出稿工具的结果、作者要不要写完就出定稿预览。 */
+export interface WrittenDraft {
+  readonly chapter: number;
+  readonly output: unknown;
+  readonly thenPreview: boolean;
 }
 
 export interface AgentTurnResult {
   readonly finishReason: string | undefined;
-  readonly draftCheckedChapters: readonly number[];
-  readonly previewAfterDraftChapters: readonly number[];
-}
-
-/**
- * 记下这轮哪章是「出稿时核过账」、哪章出稿后 AI 自己核成了（只看工具名和结构化字段）。
- * AI 自己的核账没核成、或核在出稿之前（长篇连写：和出稿并排调，那会儿还没正文），都不算，照样补卡。
- */
-function noteCheckedChapter(toolName: unknown, output: unknown, draftChecked: Set<number>, toolChecked: Set<number>): void {
-  if (typeof output !== "object" || output === null) return;
-  const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown } } };
-  if (typeof record.chapter !== "number") return;
-  if (toolName === "check_continuity" && record.ok !== false) toolChecked.add(record.chapter);
-  if (toolName === "generate_draft" && record.ok === true && record.qualityPipeline?.continuity?.checked === true) {
-    draftChecked.add(record.chapter);
-    toolChecked.delete(record.chapter);
-  }
-}
-
-/**
- * 出稿时核过的账补成核账卡（P11）：和点「核账」看到的一样，状态跟着变「核过了」。
- * 只用核账记忆（cachedCheckContinuity）：出稿后稿子又被改过、记忆对不上就不补，不偷偷再调模型。
- */
-export async function emitDraftCheckCards(
-  projectDir: string,
-  chapters: readonly number[],
-  sendEvent: (event: string, data: unknown) => void,
-  readCached: (projectDir: string, chapter: number) => Promise<unknown> = cachedCheckContinuity,
-): Promise<void> {
-  for (const chapter of chapters) {
-    const output = await readCached(projectDir, chapter).catch(() => null);
-    if (!output) continue;
-    const toolCallId = `auto-check_continuity-${chapter}-${Date.now()}`;
-    sendEvent("tool-call", { toolCallId, toolName: "check_continuity", args: { chapter } });
-    sendEvent("tool-result", { toolCallId, toolName: "check_continuity", output });
-  }
-}
-
-/**
- * 作者要写完就出定稿预览（出稿带 thenPreview、稿写成了）：回合结束后服务端用盘上这版出预览，和作者点「定稿」看到的一样。
- * 预览记下这版正文的指纹，作者之后又改了稿，「确认定稿」会如实拦下要重新预览。
- */
-export async function emitPreviewsAfterDraft(
-  projectDir: string,
-  chapters: readonly number[],
-  sendEvent: (event: string, data: unknown) => void,
-  preview: (projectDir: string, chapter: number) => Promise<unknown> = (dir, chapter) => buildCommitPreviewToolOutput({ projectDir: dir, chapter }),
-): Promise<void> {
-  for (const chapter of chapters) {
-    const toolCallId = `auto-commit_preview-${chapter}-${Date.now()}`;
-    sendEvent("tool-call", { toolCallId, toolName: "commit_preview", args: { chapter } });
-    try {
-      sendEvent("tool-result", { toolCallId, toolName: "commit_preview", output: await preview(projectDir, chapter) });
-    } catch (error) {
-      sendEvent("tool-error", { toolCallId, toolName: "commit_preview", error: stringifyError(error), retryable: true });
-    }
-  }
+  /** 模型这一轮说过话（收尾的结论另起一段）。 */
+  readonly emittedText: boolean;
+  readonly writtenDraft?: WrittenDraft;
 }
 
 export function registerAgentChatRoutes(middlewares: MiddlewareStack): void {
@@ -714,28 +647,44 @@ async function handleAgentChat(
 
     const turnStarted = Date.now();
     const agentModel = getStoryAgentModel();
-    const endedByFlow = endsAfterDraftClosing(requestContext);
-    const { result: { finishReason, draftCheckedChapters, previewAfterDraftChapters }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => runAgentTurn({
-      fullStream: (
-        await agent.stream([...modelMessages], {
+    const endedByFlow = endsAfterDraft(requestContext);
+    const { result: { finishReason }, usage, notices } = await runAbortableTurn(disconnectAbort.signal, () => withTokenMeter(async () => {
+      const turn = await runAgentTurn({
+        fullStream: (
+          await agent.stream([...modelMessages], {
+            requestContext,
+            // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
+            abortSignal: disconnectAbort.signal,
+            // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」「稿写成的那一步走完就收」。
+            stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps, endedByFlow],
+            // 同一步的工具一个一个执行（默认并发 10）：同一本书上的写不抢先后。这一步该执行哪些由 turn-flow 定。
+            toolCallConcurrency: 1,
+          })
+        ).fullStream as AsyncIterable<AgentTurnChunk>,
+        sendEvent,
+        scrubber: visibleTextScrubber,
+        shouldStop: () => disconnectAbort.signal.aborted,
+        endedByFlow,
+        ...(agentModel ? { model: agentModel } : {}),
+      });
+      // 稿写成了这一轮就收：一句结论、核账卡、作者要的定稿预览、下一步，和「写这一章」按钮同一套（不再让对话 AI 多说一轮）。
+      if (turn.writtenDraft && !disconnectAbort.signal.aborted) {
+        if (turn.emittedText) sendEvent("text-delta", { text: "\n\n" });
+        releaseTurnFlow(requestContext);
+        await finishDraftTurn({
+          action: { toolName: "generate_draft", chapter: turn.writtenDraft.chapter },
+          output: turn.writtenDraft.output,
+          thenPreview: turn.writtenDraft.thenPreview,
           requestContext,
-          // 客户端断开即中止：Mastra 把 signal 穿进 streamText（取消 in-flight 生成、不再开新步骤）。
-          abortSignal: disconnectAbort.signal,
-          // 不传 maxSteps：Mastra 有 maxSteps 就忽略 stopWhen。步数上限照旧，另加「出完选项就收尾」「出稿后收尾那步走完」。
-          stopWhen: [stepCountIs(AGENT_TURN_MAX_STEPS), endsOnNextSteps, endedByFlow],
-          // 同一步的工具一个一个执行（默认并发 10）：同一本书上的写不抢先后。这一步该执行哪些由 turn-flow 定。
-          toolCallConcurrency: 1,
-        })
-      ).fullStream as AsyncIterable<AgentTurnChunk>,
-      sendEvent,
-      scrubber: visibleTextScrubber,
-      shouldStop: () => disconnectAbort.signal.aborted,
-      endedByFlow,
-      ...(agentModel ? { model: agentModel } : {}),
-    })));
-
-    if (!disconnectAbort.signal.aborted) await emitDraftCheckCards(projectDir, draftCheckedChapters, sendEvent);
-    if (!disconnectAbort.signal.aborted) await emitPreviewsAfterDraft(projectDir, previewAfterDraftChapters, sendEvent);
+          executeTool: executeUserActionTool,
+          sendEvent,
+          scrubber: visibleTextScrubber,
+          scrubError: stringifyError,
+          projectDir,
+        });
+      }
+      return turn;
+    }));
 
     // 本轮真实 token 用量（对话 AI + 工具内部调用）：打日志、发给前端。服务商没回用量时全是 0，照样如实发。
     console.info(`[token-usage] ${describeTokenUsage(usage)}`);

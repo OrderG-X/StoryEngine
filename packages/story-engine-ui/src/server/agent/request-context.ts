@@ -54,10 +54,10 @@ export const REQUEST_CONTEXT_TURN_STATE_KEY = "turnState";
 export interface TurnState {
   /** 模型这一步要调的工具（turn-flow：执行前记下，这一步有出稿就只写稿）。 */
   stepTools?: readonly string[];
-  /** 这一轮的出稿开始执行了（一轮只写一章，之后只剩收尾那一步）。 */
+  /** 这一轮的出稿正在执行（同一步别的工具不执行，第二份出稿也不写）。没写成就放开，模型可以改了再调。 */
   draftStarted?: boolean;
-  /** 到了出稿后的收尾那一步：只放出「建议下一步」，走完这一轮结束。 */
-  closing?: boolean;
+  /** 稿写成了：这一步走完这一轮就结束，结论、核账卡、下一步由服务端出（和「写这一章」按钮同一套）。 */
+  draftWritten?: { readonly chapter: number; readonly output: unknown; readonly thenPreview: boolean };
 }
 
 export interface PickedDirection {

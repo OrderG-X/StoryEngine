@@ -309,9 +309,9 @@ describe("buildInstructions 定稿 = 模型预览、用户点按钮（2026-10-07
     expect(instructions).not.toContain("同轮继续 commit_apply");
   });
 
-  it("出稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：出稿那步只写稿、之后只剩出选项；写完出预览带 thenPreview", () => {
+  it("出稿那一轮怎么走写明了（流程本身在 turn-flow 守住）：出稿那步只写稿、写成了这一轮就结束；写完出预览带 thenPreview", () => {
     expect(instructions).toContain("出稿那一步只调 generate_draft");
-    expect(instructions).toContain("出稿后这一轮只剩一步");
+    expect(instructions).toContain("稿写成了这一轮就结束");
     expect(instructions).toContain("thenPreview:true");
   });
 
