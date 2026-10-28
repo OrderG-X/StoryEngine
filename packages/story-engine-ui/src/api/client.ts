@@ -26,7 +26,7 @@ import type {
   StateOverviewApiResponse,
   StateOverviewRequest,
 } from "./types.js";
-import { fetchJson } from "./fetchJson.js";
+import { FetchJsonError, fetchJson } from "./fetchJson.js";
 export { fetchModelSettings, saveModelSettings, testModelConnection } from "./modelSettingsClient.js";
 
 
@@ -252,7 +252,7 @@ export async function generateDraftCandidate(
 
 /** 抽卡「挑中落盘」（块③）：把选中的候选正文写进工作稿，服务端写前留可撤销快照。 */
 export async function applyDraftCandidate(
-  input: { readonly projectPath: string; readonly chapter: number; readonly draftContent: string },
+  input: { readonly projectPath: string; readonly chapter: number; readonly draftContent: string; readonly baseVersion: string | null },
   signal?: AbortSignal,
 ): Promise<{ readonly draftContent: string; readonly draftTitle?: string; readonly overview: StateOverview }> {
   const payload = await fetchJson<
@@ -266,7 +266,13 @@ export async function applyDraftCandidate(
       body: JSON.stringify(input),
     },
     signal,
-  );
+  ).catch((error: unknown) => {
+    // 稿子在这期间改过（409）这类：给作者看服务端那句，不给状态码。
+    const said = error instanceof FetchJsonError && typeof (error.payload as { error?: unknown } | null)?.error === "string"
+      ? (error.payload as { error: string }).error
+      : undefined;
+    throw said ? new Error(said) : error;
+  });
   if (!payload.ok) {
     throw new Error(payload.error);
   }
@@ -342,7 +348,6 @@ export async function applyDeAiFlavorBatch(
     readonly projectPath: string;
     readonly chapter: number;
     readonly violations: readonly { readonly id?: string; readonly text: string; readonly reason?: string; readonly severity?: string; readonly suggestedFix?: string }[];
-    readonly draftContent?: string;
   },
   signal?: AbortSignal,
 ): Promise<DeAiFlavorBatchResponse> {

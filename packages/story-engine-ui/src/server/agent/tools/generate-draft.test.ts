@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // generate_draft 纯逻辑单测：复刻 routes/draft.ts 的 runFastDraft 落工作稿编排（进程内）。
-// 草稿待保存 → 不建 git 快照（withSnapshot 不参与）；写盘后 refreshScope:"full"。
+// 换上工作稿前打存档点（写作版本 P1b：AI 写的都可撤销，一次出稿只写一次）；写盘后 refreshScope:"full"。
 // writerClient 注入一个 mock model（不调真实 LLM），引擎应用走临时项目 fixture。
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -127,7 +127,7 @@ describe("generate_draft 输出格式", () => {
 });
 
 describe("generate_draft 写工作稿工具", () => {
-  it("生成成功 → 写入工作稿文件，返回 draftPath/draftBody 与 refreshScope:full，且不带 snapshotId（草稿不建 git 快照）", async () => {
+  it("生成成功 → 写入工作稿文件，返回 draftPath/draftBody 与 refreshScope:full；换上前打了存档点（可撤销）", async () => {
     const projectDir = await makeProject("出稿", "林远");
     const out = await runGenerateDraftToolLogic({
       projectDir,
@@ -139,8 +139,7 @@ describe("generate_draft 写工作稿工具", () => {
     expect(out.refreshScope).toBe("full");
     expect(out.draftPath).toBe(defaultDraftPath(projectDir, 1));
     expect(out.draftBody && out.draftBody.includes("林远")).toBe(true);
-    // 草稿待保存：不建 git 快照、不带 snapshotId
-    expect("snapshotId" in out).toBe(false);
+    expect(typeof out.snapshotId).toBe("string");
     // 工作稿确实落盘
     const onDisk = await readFile(defaultDraftPath(projectDir, 1), "utf-8");
     expect(onDisk).toContain("林远");
@@ -1211,7 +1210,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     expect(onDisk).not.toContain("第三块砖"); // 锚点确实被吃掉了
   });
 
-  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后落盘的那版正文和版本，核账卡对得上", async () => {
+  it("去味排在核账前（外部审查 2026-10-28）：核账拿到的是去味后的那版正文，最后换上的就是它，核账卡对得上", async () => {
     const projectDir = await makeProject("去味先于核账", "林远");
     const pipeline = vi.mocked(runDraftQualityPipeline);
     pipeline.mockClear();
@@ -1228,7 +1227,7 @@ describe("generate_draft 去味后 beats 复核（去味吃掉锚点 → 如实�
     const checkRun = pipeline.mock.calls.map(([input]) => input).find((input) => input.checkCallModel === checker);
     const onDisk = (await readDraft(projectDir, 1))!;
     expect(checkRun?.draftBody).toBe("林远撬开第三块砖，取出薄铁盒。");
-    expect(checkRun?.baseVersion).toBe(onDisk.version);
+    expect(onDisk.body.trim()).toBe("林远撬开第三块砖，取出薄铁盒。");
   });
 
   it("去味改写保住锚点 → 无 postDeAiNewMisses、beatFidelity 字段不出现、summary 无新漏噪音", async () => {

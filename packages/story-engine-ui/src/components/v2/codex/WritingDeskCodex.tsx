@@ -30,7 +30,9 @@ import { isWorkspaceBusy } from "../../../utils/workspaceOperation.js";
 import { useNavigationStore } from "../../../stores/navigationStore.js";
 import { useDraftStore } from "../../../stores/draftStore.js";
 import { useDraftPreview } from "../../../drafts/useDraftPreview.js";
-import { refreshPaper, scheduleDraftSave } from "../../../drafts/draftSync.js";
+import { acceptPaperIncoming, keepPaperMine, refreshPaper, scheduleDraftSave, type PaperDecisionResult } from "../../../drafts/draftSync.js";
+import { countTextWords } from "../../../utils/textUtils.js";
+import type { PaperIncoming } from "../../../stores/draftStore.js";
 import { retitleCommittedChapter } from "../../../api/workingDraftClient.js";
 import { useBookStore } from "../../../stores/bookStore.js";
 import { updateChapterListTitle } from "../../../utils/bookUtils.js";
@@ -429,30 +431,54 @@ export default function WritingDeskCodex(props: WritingWorkspaceLayoutProps & {
   );
 }
 
+/** 提示条上的一句和两个按钮（左：换成那一版；右：保留手上的）。 */
+function incomingCopy(incoming: PaperIncoming): { readonly text: string; readonly accept: string; readonly keep: string } {
+  const words = countTextWords(incoming.body);
+  switch (incoming.cause) {
+    case "conflict":
+      return { text: "这一章刚在别处改过（AI 或撤销），你手上这版没存进去，另外留着。", accept: "换成那一版", keep: "保留我这版" };
+    case "update":
+      return { text: "这一章刚在别处改过，你手上还有没存的字。", accept: "换成那一版", keep: "保留我这版" };
+    case "recovery":
+      return { text: `上次有一版没存进去（${words} 字），还留着。`, accept: "找回那一版", keep: "不要了" };
+    case "candidate": {
+      const reason = incoming.pending?.kind === "candidate" ? incoming.pending.reason : "draft_moved";
+      const text = reason === "interrupted"
+        ? `AI 写到一半停了，写好的 ${words} 字还留着。`
+        : reason === "basis_moved"
+          ? `AI 写好一版（${words} 字），写的途中前文或设定改过，没换上。`
+          : `AI 写好一版（${words} 字），写的途中你改过稿，没换上。`;
+      return { text, accept: "换成 AI 这版", keep: "不要了" };
+    }
+  }
+}
+
 /**
- * 稿纸上方的提示条（重构 P5）：盘上的稿子在别处变了（AI 改稿、撤销）而作者手上还有没存的字。
- * 两边都不悄悄覆盖，让作者选。
+ * 稿纸上方的提示条：盘上的稿子在别处变了（AI 改稿、撤销）而作者手上还有没存的字；
+ * 或者有一份等作者选的（AI 写好没换上的、上次没存进去的）。两边都不悄悄覆盖，让作者选。
  */
 function PaperIncomingBanner() {
   const incoming = useDraftStore((state) => state.incoming);
   const saveStatus = useDraftStore((state) => state.saveStatus);
   const saveError = useDraftStore((state) => state.saveError);
+  const [busy, setBusy] = useState(false);
   if (incoming) {
-    const text = incoming.cause === "conflict"
-      ? "这一章的稿子刚在别处改过（比如 AI 改稿或撤销），你手上这版还没存进去。"
-      : "AI 刚写了这一章的新一版，你手上还有没存的字。";
+    const copy = incomingCopy(incoming);
+    const pick = (decide: () => Promise<PaperDecisionResult>) => {
+      if (busy) return;
+      setBusy(true);
+      void decide()
+        .then((result) => { if (!result.ok) useNavigationStore.getState().showToast(result.error, 5000); })
+        .finally(() => setBusy(false));
+    };
+    // 撞版本时作者手上的字最要紧（主按钮是保留）；候选、恢复稿主按钮是换上。
+    const authorFirst = incoming.cause === "conflict" || incoming.cause === "update";
     return (
       <div className="cd-incoming" role="alert">
-        <span>{text}</span>
+        <span>{copy.text}</span>
         <div className="cd-incoming-actions">
-          <button type="button" onClick={() => useDraftStore.getState().acceptIncoming()}>换成那一版</button>
-          <button
-            type="button"
-            className="is-primary"
-            onClick={() => { useDraftStore.getState().keepMine(); scheduleDraftSave(0); }}
-          >
-            保留我这版
-          </button>
+          <button type="button" disabled={busy} className={authorFirst ? undefined : "is-primary"} onClick={() => pick(acceptPaperIncoming)}>{copy.accept}</button>
+          <button type="button" disabled={busy} className={authorFirst ? "is-primary" : undefined} onClick={() => pick(keepPaperMine)}>{copy.keep}</button>
         </div>
       </div>
     );

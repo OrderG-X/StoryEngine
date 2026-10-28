@@ -314,6 +314,31 @@ describe("draft length guard routes", () => {
     }));
   });
 
+  it("选这一版（写作版本 P1b）：带眼前那份的版本才换，换前存档；这期间稿子改过就不换、如实说", async () => {
+    projectDir = await makeHomeTempDir("story-engine-ui-draft-pick-");
+    await writeProjectJson(projectDir);
+    const draftFile = join(projectDir, "drafts", "fast", "chapter-0001.md");
+    await mkdir(join(projectDir, "drafts", "fast"), { recursive: true });
+    await writeFile(draftFile, "# 第1章\n\n作者的稿。\n", "utf-8");
+    const { draftVersionOf } = await import("@actalk/story-core");
+    const version = draftVersionOf(await readFile(draftFile, "utf-8"));
+
+    const stale = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, draftContent: "另写的一版。", baseVersion: "旧的" });
+    expect(stale.statusCode).toBe(409);
+    expect(String(stale.payload.error)).toContain("没换上");
+    expect(await readFile(draftFile, "utf-8")).toContain("作者的稿。");
+
+    const missing = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, draftContent: "另写的一版。" });
+    expect(missing.statusCode).toBe(500);
+    expect(String(missing.payload.error)).toContain("baseVersion");
+
+    const picked = await callDraftRoute("/api/draft/apply-candidate", { projectPath: projectDir, chapter: 1, draftContent: "另写的一版。", baseVersion: version });
+    expect(picked.statusCode).toBe(200);
+    expect(await readFile(draftFile, "utf-8")).toContain("另写的一版。");
+    const { listSnapshots } = await import("../lib/snapshot.js");
+    expect((await listSnapshots(projectDir)).some((entry) => entry.label === "抽卡选用候选前快照：第1章")).toBe(true);
+  });
+
   it("重构 P4：落盘出稿的 HTTP 路已撤（persist 不是 false 一律 410，不调模型、不写盘）", async () => {
     projectDir = await makeHomeTempDir("story-engine-ui-draft-gone-");
     await writeProjectJson(projectDir);

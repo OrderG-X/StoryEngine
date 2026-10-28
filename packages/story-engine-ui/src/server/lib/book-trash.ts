@@ -9,6 +9,7 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { withBookLock } from "@actalk/story-core";
 import { resolveBooksRootDir } from "./data-dirs.js";
+import { freshRevision } from "./book-backup.js";
 import { isSafeProjectPath } from "./project-io.js";
 
 export const TRASH_KEEP_DAYS = 30;
@@ -138,6 +139,7 @@ export async function restoreFromTrash(id: string): Promise<{ readonly projectPa
   let target = original;
   for (let n = 1; await exists(target); n += 1) target = `${original}-恢复${n > 1 ? n : ""}`;
   await mkdir(dirname(target), { recursive: true });
+  await freshRevision(join(entry, BOOK_DIR));
   await moveDir(join(entry, BOOK_DIR), target);
   await rm(entry, { recursive: true, force: true });
   return { projectPath: target, title: record.title };

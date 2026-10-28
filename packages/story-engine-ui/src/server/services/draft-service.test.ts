@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * draft-service 出稿主编排的回归锁：执法在写盘前（拒稿不碰盘上旧稿）、自动去味、章纲、质量环节。
- * 重构 P7 起引擎不写盘、出稿只写一次（走 draft.write），原来「先写后回读、不合格再回滚」那套连测试一起删了。
+ * 重构 P7 起引擎不写盘、出稿只写一次（走 draft.applyGenerated），原来「先写后回读、不合格再回滚」那套连测试一起删了。
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -63,9 +63,6 @@ vi.mock("../writing/ai-flavor/anti-rules.js", () => ({
   readAntiRules: vi.fn(async () => []),
 }));
 
-vi.mock("../lib/snapshot-on-draft-overwrite.js", () => ({
-  snapshotBeforeDraftOverwrite: vi.fn(async () => undefined),
-}));
 
 vi.mock("../writing/rank-writer-context.js", () => ({
   contextBudgetPayload: vi.fn(() => ({ budget: true })),
@@ -106,8 +103,8 @@ vi.mock("./draft-pipeline/run-quality-pipeline.js", () => ({ ...pipelineMocks })
 
 import { defaultDraftPath } from "../lib/project-io.js";
 import { runDeAiFlavorBatch } from "./de-ai-flavor-batch.js";
-import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
-import { cardWrite, draftVersionOf, runCommand, type CardOp } from "@actalk/story-core";
+import { cardWrite, runCommand, type CardOp } from "@actalk/story-core";
+import { pendingDraftCandidate, pendingDraftFor } from "../lib/draft-candidates.js";
 import { resolveInSceneCharacters, type InSceneResult } from "../writing/presence/in-scene-detector.js";
 import { resolveProjectDraftLengthTarget, runAutoDeAiRound, runGenerateDraft } from "./draft-service.js";
 import { writeCheckMemory } from "../editorial/continuity/check-memory.js";
@@ -190,7 +187,7 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     expect(result.summary).not.toContain("。。");
   }, 10_000);
 
-  it("写稿那几分钟里作者存了稿（或撤销、恢复）→ AI 这版不写、如实说，盘上作者那份不动（外部审查 2026-10-28）", async () => {
+  it("写稿那几分钟里作者存了稿（或撤销、恢复）→ AI 这版不换上、留成候选、如实说，盘上作者那份不动（写作版本 P1b）", async () => {
     const draftPath = defaultDraftPath(projectDir!, 2);
     await mkdir(dirname(draftPath), { recursive: true });
     await writeFile(draftPath, "# 第2章\n\n作者原来的稿。\n", "utf-8");
@@ -210,8 +207,11 @@ describe("runGenerateDraft 出稿回执句号去重（R5.4·新发现 4）", () 
     const result = await runGenerateDraft({ projectDir: projectDir!, chapter: 2, writerClient: stubWriterClient(), policies: { aiFlavorRecheck: false } });
 
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain("工作稿在这期间被改过");
+    expect(result.kept).toMatchObject({ reason: "draft_moved" });
+    expect(result.summary).toContain("AI 这版没换上");
     expect(await readFile(draftPath, "utf-8")).toContain("作者在这期间存的新稿。");
+    // 候选留着、等作者选（本进程写完的是 ready，稿纸会提示）
+    expect(await pendingDraftCandidate(projectDir!, 2)).toMatchObject({ id: result.kept?.candidateId, status: "ready", body: "主角拿到账册，连夜翻看。" });
   }, 10_000);
 });
 
@@ -261,83 +261,50 @@ describe("runGenerateDraft enforce 路执法（真稿保护）", () => {
   }, 10_000);
 });
 
-describe("runAutoDeAiRound 快照失败降级（P2-5·铁律④ 路径消毒）", () => {
-  let projectDir: string | undefined;
-
-  beforeEach(async () => {
+describe("runAutoDeAiRound 只在内存里改（写作版本 P1b）", () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-    projectDir = await mkdtemp(join(tmpdir(), "story-engine-draft-service-"));
   });
 
-  afterEach(async () => {
-    if (projectDir) {
-      await rm(projectDir, { recursive: true, force: true });
-      projectDir = undefined;
-    }
-  });
-
-  it("快照读稿 fail-closed 抛错带绝对路径 → info.error 如实降级但路径已消毒，原稿不动", async () => {
-    const draftPath = defaultDraftPath(projectDir!, 1);
-    await mkdir(dirname(draftPath), { recursive: true });
-    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+  it("改写没跑成、报错带绝对路径 → info.error 如实降级但路径已消毒，不给新正文", async () => {
     vi.mocked(runDeAiFlavorBatch).mockResolvedValue({
-      ok: true,
+      ok: false,
       detected: 1,
-      rewritten: 1,
-      skipped: 0,
-      skippedByReason: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
+      rewritten: 0,
+      skipped: 1,
+      skippedByReason: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 1 },
       changes: [],
-      updatedContent: "# 第1章\n\n改写后的正文，与原文不同。\n",
-      summary: "一键全修：1 处 AI 腔，改了 1 处。",
+      updatedContent: "主角拿到账册，连夜翻看。",
+      summary: "没改成。",
+      error: "读取失败（EACCES: permission denied, open '/Users/someone/books/a/drafts/fast/chapter-0001.md'）",
     });
-    // 快照 fail-closed 的 errno 原文内嵌绝对路径（真实形态见 snapshot-on-draft-overwrite）。
-    vi.mocked(snapshotBeforeDraftOverwrite).mockRejectedValueOnce(
-      new Error(`第1章工作稿读取失败（EACCES: permission denied, open '${draftPath}'），已中止`),
-    );
-
     const result = await runAutoDeAiRound({
-      projectDir: projectDir!,
-      chapter: 1,
-      draftPath,
+      draftBody: "主角拿到账册，连夜翻看。",
       initialHighMedium: 1,
       targets: [],
       rules: [],
       antiRules: [],
       callModel: vi.fn(async () => ""),
-      baseVersion: draftVersionOf(DRAFT_TEXT),
     });
-
-    // 降级如实报：本轮没跑成（改写放弃），error 直达用户前路径已洗。
-    expect(result.info.attempted).toBe(true);
-    expect(result.info.fixedCount).toBe(0);
+    expect(result.info).toMatchObject({ attempted: true, fixedCount: 0 });
     expect(result.info.error).toContain("(本地路径)");
-    expect(result.info.error ?? "").not.toContain(projectDir!);
+    expect(result.info.error ?? "").not.toContain("/Users/someone");
     expect(result.draftBody).toBeUndefined();
-    expect(result.snapshotId).toBeUndefined();
-    // 原稿分毫不动（降级承诺）。
-    expect(await readFile(draftPath, "utf-8")).toBe(DRAFT_TEXT);
   });
 
-  // R4.2（验收 3.2）：出稿流程内已有「写盘前」存档点，去味覆盖不再另建——一次出稿=操作历史里的一步。
-  it("skipOverwriteSnapshot → 覆盖前不再另建快照（撤销点由流程级存档点兜着），改写照落", async () => {
-    const draftPath = defaultDraftPath(projectDir!, 1);
-    await mkdir(dirname(draftPath), { recursive: true });
-    await writeFile(draftPath, DRAFT_TEXT, "utf-8");
+  it("改成了 → 交回改后的正文（由出稿流程最后一次换上工作稿）", async () => {
     vi.mocked(runDeAiFlavorBatch).mockResolvedValue({
       ok: true, detected: 1, rewritten: 1, skipped: 0,
       skippedByReason: { notFound: 0, ambiguous: 0, noop: 0, overlap: 0, noRewrite: 0 },
-      changes: [], updatedContent: "# 第1章\n\n改写后的正文，与原文不同。\n", summary: "一键全修：1 处 AI 腔，改了 1 处。",
+      changes: [], updatedContent: "改写后的正文，与原文不同。", summary: "一键全修：1 处 AI 腔，改了 1 处。",
     });
     // 复检那步要的是「违规数组」（引擎真实签名）；本文件的引擎 mock 默认给报告对象，这里按需给一次。
     storyEngineMocks.detectAiFlavorViolations.mockReturnValueOnce([] as never);
     const result = await runAutoDeAiRound({
-      projectDir: projectDir!, chapter: 1, draftPath, initialHighMedium: 1, targets: [], rules: [], antiRules: [],
-      callModel: vi.fn(async () => ""), skipOverwriteSnapshot: true, baseVersion: draftVersionOf(DRAFT_TEXT),
+      draftBody: "主角拿到账册，连夜翻看。", initialHighMedium: 1, targets: [], rules: [], antiRules: [], callModel: vi.fn(async () => ""),
     });
-    expect(snapshotBeforeDraftOverwrite).not.toHaveBeenCalled();
-    expect(result.snapshotId).toBeUndefined();
     expect(result.info.fixedCount).toBe(1);
-    expect(await readFile(draftPath, "utf-8")).toContain("改写后的正文");
+    expect(result.draftBody).toBe("改写后的正文，与原文不同。");
   });
 });
 
@@ -473,10 +440,10 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     }
   });
 
-  it("注入了续写/核对调用 → 先补字数、再核账（核的是补完的那版）；真改了正文就以新正文为准、字数重算、撤销点用它的快照、说明进 summary", async () => {
+  it("注入了续写/核对调用 → 先补字数、再核账（核的是补完的那版）；真改了正文就以新正文为准、字数重算、最后只写一次工作稿、说明进 summary", async () => {
     pipelineMocks.runDraftQualityPipeline
       .mockResolvedValueOnce({
-        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true, version: "v-continued", snapshotId: "snap-pipeline",
+        draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true,
         info: { continuation: { before: 12, after: 2500, rounds: 1, failures: [] } },
         notes: ["首稿 12 字低于下限 240，已接着写到 2500 字。"],
       })
@@ -494,13 +461,14 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     });
     const calls = pipelineMocks.runDraftQualityPipeline.mock.calls.map(([input]) => input as Record<string, unknown>);
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatchObject({ chapter: 3, title: "账册", continueCallModel });
+    expect(calls[0]).toMatchObject({ chapter: 3, continueCallModel });
     expect(calls[0]).not.toHaveProperty("checkCallModel");
-    expect(calls[1]).toMatchObject({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", baseVersion: "v-continued", checkCallModel: continuityCheckCallModel });
+    expect(calls[1]).toMatchObject({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", checkCallModel: continuityCheckCallModel });
     expect(calls[1]).not.toHaveProperty("continueCallModel");
     expect(result.draftBody).toBe("主角拿到账册，连夜翻看，又接着写了很多。");
     expect(storyEngineMocks.buildDraftLengthReport).toHaveBeenCalledWith(expect.objectContaining({ draftBody: "主角拿到账册，连夜翻看，又接着写了很多。" }));
-    expect(result.snapshotId).toBe("snap-pipeline");
+    expect(result.ok).toBe(true);
+    expect(await readFile(defaultDraftPath(projectDir!, 3), "utf-8")).toContain("又接着写了很多");
     expect(result.qualityPipeline).toEqual({
       continuation: { before: 12, after: 2500, rounds: 1, failures: [] },
       continuity: { checked: true, sure: [], maybe: [], failures: [] },
@@ -509,38 +477,26 @@ describe("runGenerateDraft 出稿后的质量环节（阶段 3：续写够字数
     expect(result.summary).toContain("没发现冲突");
   });
 
+  it("首稿存好了、后面的环节抛错 → 这版不丢：稿纸提示「写到一半停了」，工作稿没动", async () => {
+    storyEngineMocks.runFastDraft.mockResolvedValueOnce({
+      chapter: 3, passed: true, draftBody: "主角翻完账册，天亮了。", title: "账册",
+      contextStats: { totalTokenEstimate: 0, stableTokenEstimate: 0, dynamicTokenEstimate: 0, contextSections: [] },
+      promptFingerprint: {}, issues: [],
+    });
+    pipelineMocks.runDraftQualityPipeline.mockRejectedValueOnce(new Error("核账那步崩了"));
+    await expect(runGenerateDraft({
+      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
+      continueCallModel: vi.fn(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
+    })).rejects.toThrow("核账那步崩了");
+    expect(await pendingDraftFor(projectDir!, 3)).toMatchObject({ kind: "candidate", reason: "interrupted", body: "主角翻完账册，天亮了。" });
+    expect(await readFile(defaultDraftPath(projectDir!, 3), "utf-8")).toBe(DRAFT_TEXT);
+  });
+
   it("没注入 → 不跑（HTTP 路与旧行为不变）", async () => {
     await runGenerateDraft({ projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(), policies: { lengthPolicy: "annotate", aiFlavorRecheck: false } });
     expect(pipelineMocks.runDraftQualityPipeline).not.toHaveBeenCalled();
   });
 
-  // R4.2（验收 3.2）：适配层建好本步存档点（首稿「出稿：第N章」/覆盖「再次出稿前」）后，
-  // 内部第二次落盘不再各建快照——一次出稿=操作历史里的一步，撤销一键退回这步之前。
-  it("preWriteSnapshotId → 质量环节带 skipOverwriteSnapshot、输出撤销点用它", async () => {
-    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({
-      draftBody: "主角拿到账册，连夜翻看，又接着写了很多。", changed: true,
-      info: {}, notes: [],
-    });
-    const result = await runGenerateDraft({
-      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
-      continueCallModel: vi.fn(), continuityCheckCallModel: vi.fn(),
-      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
-      preWriteSnapshotId: "snap-flow",
-    });
-    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalledWith(expect.objectContaining({ skipOverwriteSnapshot: true }));
-    expect(result.snapshotId).toBe("snap-flow");
-  });
-
-  it("不传 preWriteSnapshotId → 质量环节照旧自建覆盖前快照（独立调用方行为不变）", async () => {
-    pipelineMocks.runDraftQualityPipeline.mockResolvedValue({ draftBody: DRAFT_TEXT, changed: false, info: {}, notes: [] });
-    await runGenerateDraft({
-      projectDir: projectDir!, chapter: 3, writerClient: stubWriterClient(),
-      continueCallModel: vi.fn(), continuityCheckCallModel: vi.fn(),
-      policies: { lengthPolicy: "annotate", aiFlavorRecheck: false },
-    });
-    expect(pipelineMocks.runDraftQualityPipeline).toHaveBeenCalled();
-    expect(pipelineMocks.runDraftQualityPipeline.mock.calls[0][0]).not.toHaveProperty("skipOverwriteSnapshot");
-  });
 });
 
 

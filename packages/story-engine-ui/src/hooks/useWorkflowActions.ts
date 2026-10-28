@@ -138,7 +138,9 @@ export interface UseWorkflowActionsParams {
 async function saveBeforeDraftAction(): Promise<string | null> {
   const flushed = await flushDraftSave();
   if (!flushed.ok) return `稿子还没存上（${flushed.error}），这次没有动手。`;
-  if (useDraftStore.getState().incoming) return "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再来。";
+  // 撞了版本、盘上变了：作者眼前的字和盘上的不是一份，先选。（AI 候选、恢复稿不在工作稿里，不挡。）
+  const cause = useDraftStore.getState().incoming?.cause;
+  if (cause === "conflict" || cause === "update") return "稿纸上方有一条「稿子在别处改过」的提示，先选好用哪一版再来。";
   return null;
 }
 
@@ -507,6 +509,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         error,
       });
       useChatStore.getState().setChatError(error instanceof Error ? error.message : String(error));
+      // 没换上的那版留成了候选：重读一次，稿纸出提示。
+      await refreshPaper().catch(() => undefined);
     } finally {
       finishOwnedOperation(operation);
     }
@@ -737,6 +741,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
         return;
       }
       nav.showToast(`一键全修没成：${error instanceof Error ? error.message : String(error)}`, 5000);
+      // 没换上的那版留成了候选：重读一次，稿纸出提示。
+      await refreshPaper().catch(() => undefined);
     } finally {
       if (isWorkspaceOperationCurrent(operation)) {
         if (ownsCurrentWorkspace(operation)) {
@@ -828,7 +834,8 @@ export function useWorkflowActions(params: UseWorkflowActionsParams) {
     try {
       const blocked = await saveBeforeDraftAction();
       if (blocked) throw new Error(blocked);
-      const result = await applyDraftCandidate({ projectPath, chapter, draftContent: content });
+      // 带作者眼前那份的版本：存完之后稿子又变了（AI、撤销）就不换，免得盖掉。
+      const result = await applyDraftCandidate({ projectPath, chapter, draftContent: content, baseVersion: useDraftStore.getState().baseVersion });
       if (!ownsCurrentWorkspace(operation)) {
         notifyStaleOperation();
         return;

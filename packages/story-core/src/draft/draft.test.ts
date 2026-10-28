@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCommand } from "../commands/runner.js";
 import type { CommandFailure, CommandOutcome, CommandSuccess } from "../commands/types.js";
 import { readHead } from "../store/book.js";
-import { draftSave, draftWrite, type DraftConflictDetails, type DraftWriteResult } from "./commands.js";
+import { draftAdoptCandidate, draftApplyGenerated, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./commands.js";
 import { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody } from "./draft.js";
 
 let book: string;
@@ -60,7 +60,7 @@ describe("作者存稿（draft.save）", () => {
 
   it("拿着旧版本号存：不写，交回盘上那份", async () => {
     const first = expectOk(await runCommand(book, draftSave, { chapter: 1, title: "钟停", body: "钟停了。", baseVersion: null }, author));
-    expectOk(await runCommand(book, draftWrite, { chapter: 1, body: "钟停了。AI 改过。" }, ai));
+    expectOk(await runCommand(book, draftApplyGenerated, { chapter: 1, body: "钟停了。AI 改过。", baseVersion: first.result.version }, ai));
     const details = expectConflict(await runCommand(book, draftSave, { chapter: 1, body: "钟停了。作者也改了。", baseVersion: first.result.version }, author));
     expect(details.current).toMatchObject({ chapter: 1, title: "钟停", body: "钟停了。AI 改过。" });
     expect(await readFile(draftFile(1), "utf-8")).toBe("# 钟停\n\n钟停了。AI 改过。\n");
@@ -104,21 +104,51 @@ describe("作者存稿（draft.save）", () => {
     const outcome = await runCommand(book, draftSave, { chapter: 1, body: "一。", baseVersion: null }, ai);
     expect(outcome).toMatchObject({ ok: false, code: "author_only" });
   });
+
+  it("同一笔重发：盘上已经是这份了，算存上（不因为版本已经换了报撞）", async () => {
+    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "一。", baseVersion: null }, author)).result.version;
+    const v2 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "二。", baseVersion: v1 }, author)).result.version;
+    const retry = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "二。", baseVersion: v1 }, author));
+    expect(retry.result).toEqual({ chapter: 1, version: v2, unchanged: true });
+  });
 });
 
-describe("AI 写稿（draft.write）", () => {
-  it("写前打快照；不带 baseVersion 时直接写", async () => {
+describe("AI 写稿换上（draft.applyGenerated）", () => {
+  it("写前打快照；新章 baseVersion 传 null", async () => {
     const labels: string[] = [];
-    const outcome = expectOk(await runCommand(book, draftWrite, { chapter: 3, title: "外乡人", body: "外乡人来了。" }, { ...ai, snapshot: async (label) => { labels.push(label); } }));
+    const outcome = expectOk(await runCommand(book, draftApplyGenerated, { chapter: 3, title: "外乡人", body: "外乡人来了。", baseVersion: null }, { ...ai, snapshot: async (label) => { labels.push(label); } }));
     expect(labels).toEqual(["AI 写稿：第 3 章"]);
     expect(outcome.result.version).toBe(draftVersionOf(await readFile(draftFile(3), "utf-8")));
   });
 
-  it("带 baseVersion（作者点的应用修订）：对不上就不写", async () => {
-    const v1 = expectOk(await runCommand(book, draftWrite, { chapter: 1, body: "一。" }, ai)).result.version;
+  it("基稿版本必带：缺了参数不过", async () => {
+    const outcome = await runCommand(book, draftApplyGenerated, { chapter: 1, body: "一。" } as never, ai);
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("写的途中作者存过稿：不换，作者那份不动", async () => {
+    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "一。", baseVersion: null }, author)).result.version;
     expectOk(await runCommand(book, draftSave, { chapter: 1, body: "作者改过。", baseVersion: v1 }, author));
-    expectConflict(await runCommand(book, draftWrite, { chapter: 1, body: "修订稿。", baseVersion: v1 }, author));
+    expectConflict(await runCommand(book, draftApplyGenerated, { chapter: 1, body: "AI 稿。", baseVersion: v1 }, ai));
     expect(await readFile(draftFile(1), "utf-8")).toBe("作者改过。\n");
+  });
+});
+
+describe("作者换上 AI 稿（draft.adoptCandidate）", () => {
+  it("作者档、写前打快照；拿作者眼前那份的版本换", async () => {
+    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "作者的。", baseVersion: null }, author)).result.version;
+    expect(await runCommand(book, draftAdoptCandidate, { chapter: 1, body: "AI 的。", baseVersion: v1 }, ai)).toMatchObject({ ok: false, code: "author_only" });
+    const labels: string[] = [];
+    expectOk(await runCommand(book, draftAdoptCandidate, { chapter: 1, body: "AI 的。", baseVersion: v1 }, { ...author, snapshot: async (label) => { labels.push(label); } }));
+    expect(labels).toEqual(["换上 AI 稿：第 1 章"]);
+    expect(await readFile(draftFile(1), "utf-8")).toBe("AI 的。\n");
+  });
+
+  it("作者眼前那份已经不是盘上的：不换", async () => {
+    const v1 = expectOk(await runCommand(book, draftSave, { chapter: 1, body: "一。", baseVersion: null }, author)).result.version;
+    expectOk(await runCommand(book, draftSave, { chapter: 1, body: "二。", baseVersion: v1 }, author));
+    expectConflict(await runCommand(book, draftAdoptCandidate, { chapter: 1, body: "AI 的。", baseVersion: v1 }, author));
+    expect(await readFile(draftFile(1), "utf-8")).toBe("二。\n");
   });
 });
 

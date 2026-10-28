@@ -10,7 +10,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { extractDraftTitle, stripLeadingMarkdownChapterHeading } from "../lib/project-io.js";
-import { hasWorkingDraftText } from "../lib/snapshot-on-draft-overwrite.js";
+import { hasWorkingDraftText } from "../lib/working-draft-text.js";
 import { buildStateOverview, type StateOverview } from "../book/state-overview.js";
 import { stripMarkdownEmphasis } from "../../lib/markdown-emphasis.js";
 import { createRevisionModelChannel, type RevisionModelCaller } from "../services/revision-service.js";
@@ -905,14 +905,15 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
     emitText(`${total === 1 ? "这一处" : `这 ${total} 处`}没改成：${message}。可以再点一次。`);
     return;
   }
-  const applied = result.applied.length;
-  const failed = result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
+  // 改好了但没换上（改的途中稿子或前文变了）：如实说，AI 这版留在稿纸上等作者选。
+  const applied = result.kept ? 0 : result.applied.length;
+  const failed = result.kept ? [] : result.failed.map(({ fix, why }) => ({ fix: action.fixes[fix]!, why }));
   const also = applied > 0 && result.alsoChanged > 0 ? `本章别处说同一件事的 ${result.alsoChanged} 句跟着改了。` : "";
   const done = applied === 0 ? "" : `${total === 1 ? "改好了这一处（可撤销）。" : `改好了 ${applied} 处（可撤销）。`}${also}`;
   const notDone = failed.length === 0
     ? ""
     : total === 1 ? `这一处没改成：${failed[0]!.why}。` : `${failed.length} 处没改成：${failed[0]!.why}。`;
-  const summary = `${done}${notDone}`;
+  const summary = result.kept ? result.kept.message : `${done}${notDone}`;
   args.sendEvent("tool-result", {
     toolCallId,
     toolName: "revise_draft",
@@ -942,6 +943,7 @@ async function runReviseFixesAction(args: Omit<Parameters<typeof runUserAction>[
       action: { toolName: "check_continuity" as const, chapter: action.chapter },
     }] : []),
   ];
+  if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });
   args.sendEvent("tool-result", {
@@ -986,6 +988,8 @@ interface GenerateDraftLikeOutput {
   readonly qualityPipeline?: { readonly continuity?: { readonly checked?: unknown; readonly autoFixed?: { readonly applied?: unknown } } };
   readonly continued?: { readonly kept?: unknown; readonly added?: unknown };
   readonly blockedReason?: unknown;
+  /** 写好了但没换上（AI 这版留在稿纸上等作者选）。 */
+  readonly kept?: unknown;
   readonly beatFidelity?: { readonly missingBeats?: readonly unknown[]; readonly postDeAiNewMisses?: readonly unknown[] };
 }
 
@@ -1013,9 +1017,11 @@ export function draftBrief(chapter: number, result: GenerateDraftLikeOutput): st
 }
 
 /** 出稿没成的下一步：接着写没得接 → 改成从头写；这章已定稿 → 不给（回话里说了怎么办）；其余照原样再来一次。 */
-export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown): NextStepChoice[] {
+export function retryDraftChoices(action: Extract<UserAction, { readonly toolName: "generate_draft" }>, blockedReason: unknown, kept?: unknown): NextStepChoice[] {
   // 导入的书还在通读记账：再点也是同一句「等它记完」，不给「再写一次」。
   if (blockedReason === "rereading") return [];
+  // 写好了没换上：AI 这版在稿纸上等作者选，不再写一遍。
+  if (kept) return [];
   if (action.continueDraft && blockedReason === "chapter_committed") return [];
   if (action.continueDraft && blockedReason === "nothing_to_continue") {
     return [{ label: `AI 写第 ${action.chapter} 章`, intent: "写这一章的正文", recommended: true, action: { toolName: "generate_draft", chapter: action.chapter } }];
@@ -1145,7 +1151,7 @@ export async function finishDraftTurn(args: Omit<Parameters<typeof runUserAction
       },
       { label: "核账", intent: "核账", action: { toolName: "check_continuity", chapter: action.chapter } },
     ]
-    : retryDraftChoices(action, result?.blockedReason);
+    : retryDraftChoices(action, result?.blockedReason, result?.kept);
   if (choices.length === 0) return;
   const nextCallId = `user-action-next-${stamp}`;
   args.sendEvent("tool-call", { toolCallId: nextCallId, toolName: "suggest_next_steps", args: {} });

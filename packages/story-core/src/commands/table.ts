@@ -10,7 +10,7 @@ import { decisionRecord } from "./decision-record.js";
 import { bookImport } from "../import/command.js";
 import { bookImportText } from "../import/text-import.js";
 import { ledgerReread } from "./ledger-reread.js";
-import { draftSave, draftWrite } from "../draft/commands.js";
+import { draftAdoptCandidate, draftApplyGenerated, draftSave } from "../draft/commands.js";
 import { cardFill, cardsImport, cardWrite } from "../bible/commands.js";
 import { settleApply } from "./settle-apply.js";
 import type { AnyWriteCommandSpec, Caller } from "./types.js";
@@ -23,7 +23,8 @@ export const WRITE_COMMANDS: Readonly<Record<string, AnyWriteCommandSpec>> = {
   [bookImportText.name]: bookImportText,
   [ledgerReread.name]: ledgerReread,
   [draftSave.name]: draftSave,
-  [draftWrite.name]: draftWrite,
+  [draftApplyGenerated.name]: draftApplyGenerated,
+  [draftAdoptCandidate.name]: draftAdoptCandidate,
   [cardWrite.name]: cardWrite,
   [cardFill.name]: cardFill,
   [cardsImport.name]: cardsImport,

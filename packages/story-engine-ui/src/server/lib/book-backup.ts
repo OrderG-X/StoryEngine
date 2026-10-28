@@ -8,7 +8,7 @@
  */
 import { lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { withBookLock } from "@actalk/story-core";
+import { REVISION_PATH, revisionWrite, withBookLock } from "@actalk/story-core";
 import { readBookMeta, safeFileName } from "./book-info.js";
 import { resolveBooksRootDir, resolveGlobalDataDir } from "./data-dirs.js";
 import { isRecord, isSafeProjectPath, writeFileAtomic } from "./project-io.js";
@@ -136,12 +136,23 @@ export async function restoreBookFromBackup(zip: Buffer, now: Date = new Date())
       await writeFile(dest, entry.data);
     }
     if (suffix) await retitle(join(staging, "project.json"), title);
+    await freshRevision(staging, now);
     await rename(staging, target);
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
   return { projectPath: target, title };
+}
+
+/**
+ * 解出来 / 搬回来的书换一个新的写入代次（写作版本 P1a 第 2 轮复核）：备份、回收站里的代次是那时候的，
+ * 书回到原路径时，读过原路径上后来那一版的预览、缓存不能因为代次一样就当成没变。书露面之前就换好。
+ */
+export async function freshRevision(bookDir: string, now: Date = new Date()): Promise<void> {
+  const write = revisionWrite(now);
+  await mkdir(dirname(join(bookDir, write.path)), { recursive: true });
+  await writeFileAtomic(join(bookDir, REVISION_PATH), write.content);
 }
 
 /** 改解出来那本的书名（只动 title，别的照原样）。 */

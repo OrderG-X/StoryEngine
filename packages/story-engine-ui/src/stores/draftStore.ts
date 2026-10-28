@@ -4,21 +4,28 @@
  * - `body` 是作者眼前的字；`savedBody` 是盘上 `baseVersion` 那一版的字。两者不一样 = 有没存的字。
  * - 盘上来了新版本（AI 写完、撤销后、打开章节）：没有没存的字就直接换上；有就放进 `incoming`，
  *   由作者选「换成那一版」还是「保留我这版」，绝不悄悄互相覆盖。
- * - 存稿撞版本（409）同样进 `incoming`。
+ * - 存稿撞版本（409）同样进 `incoming`（作者手上那份服务端已另存成恢复稿，不会丢）。
+ * - 写作版本 P1b：AI 写好、没换上的一版（候选），和上次没存上的一版（恢复稿），开章时也进 `incoming`，由作者选换不换。
  * - AI 出稿流式的字放 `streaming`（只读显示），不进作者的稿子。
  *
  * 存盘的调度在 `drafts/draftSync.ts`，这里只管状态。
  */
 import { create } from "zustand";
-import type { ChapterPaper, WorkingDraft } from "../api/workingDraftClient.js";
+import type { ChapterPaper, PendingDraft, WorkingDraft } from "../api/workingDraftClient.js";
 
 export interface PaperIncoming {
   readonly title?: string;
   readonly body: string;
-  /** 盘上那一版的版本号；盘上没有工作稿是 null。 */
+  /** 盘上那一版的版本号（conflict / update；盘上没有工作稿是 null）。候选、恢复稿不在工作稿里，也是 null。 */
   readonly version: string | null;
-  /** conflict = 存稿撞了版本；update = 别处（AI、撤销）写了新版本而你有没存的字。 */
-  readonly cause: "conflict" | "update";
+  /**
+   * conflict = 存稿撞了版本（作者手上这份服务端另存成了恢复稿 recoveryId）；update = 别处（AI、撤销）写了新版本而你有没存的字；
+   * candidate = AI 写好、没换上的一版；recovery = 上次没存上的一版（作者自己的字）。
+   */
+  readonly cause: "conflict" | "update" | "candidate" | "recovery";
+  readonly recoveryId?: string;
+  /** candidate / recovery：服务端存着的那一份。 */
+  readonly pending?: PendingDraft;
 }
 
 export type DraftSaveStatus = "idle" | "saving" | "saved" | "error";
@@ -56,10 +63,14 @@ export interface DraftStoreState {
   /** 存成功：sentBody 是这次发出去的字（发出后作者可能又打了字）。 */
   readonly markSaved: (version: string, sentBody: string, sentTitle: string) => void;
   readonly markSaveError: (message: string) => void;
-  /** 存稿撞版本。 */
-  readonly markConflict: (current: WorkingDraft | null) => void;
+  /** 存稿撞版本（recoveryId：服务端把作者手上这份另存成的恢复稿）。 */
+  readonly markConflict: (current: WorkingDraft | null, recoveryId?: string) => void;
+  /** conflict / update：换成盘上那一版。（候选、恢复稿要服务端换，见 draftSync 的 acceptPaperIncoming。） */
   readonly acceptIncoming: () => void;
+  /** conflict / update：保留手上这版，以盘上那一版为底再存。 */
   readonly keepMine: () => void;
+  /** 候选、恢复稿处理完了：收起提示。 */
+  readonly clearIncoming: () => void;
   readonly setStreaming: (text: string | null) => void;
   readonly reset: () => void;
 }
@@ -79,6 +90,18 @@ const EMPTY = {
   incoming: null,
   streaming: null,
 } satisfies Partial<DraftStoreState>;
+
+function pendingIncoming(pending: PendingDraft | undefined): PaperIncoming | null {
+  if (!pending) return null;
+  return { ...(pending.title ? { title: pending.title } : {}), body: pending.body, version: null, cause: pending.kind, pending };
+}
+
+/** 盘上没变时提示条该是什么：撞版本、盘上变了的提示留着（作者还没选）；其余跟着盘上等着选的那一份走。 */
+function keepOrPending(current: PaperIncoming | null, paper: ChapterPaper): PaperIncoming | null {
+  if (current && (current.cause === "conflict" || current.cause === "update")) return current;
+  if (current?.pending && paper.pending && current.pending.id === paper.pending.id && current.pending.sha === paper.pending.sha) return current;
+  return pendingIncoming(paper.pending);
+}
 
 /** 盘上这一章该显示的字：有工作稿用工作稿，没有就用定稿，都没有是空。 */
 function diskText(paper: ChapterPaper): { readonly body: string; readonly title?: string; readonly version: string | null } {
@@ -104,6 +127,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       baseVersion: disk.version,
       committed: paper.committed,
       loaded: true,
+      incoming: pendingIncoming(paper.pending),
     });
   },
 
@@ -117,12 +141,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
       ? disk.version === state.baseVersion
       : state.baseVersion === null && sameText(disk.body, state.savedBody);
     if (unchanged) {
-      set({ committed: paper.committed });
+      set({ committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
       return;
     }
     // 盘上那版就是作者眼前的字（自己那笔存稿先落盘、回执还没到）：认下版本号，不算冲突。
     if (dirty && sameText(disk.body, state.body)) {
-      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed });
+      set({ baseVersion: disk.version, savedBody: state.body, savedTitle: state.title, committed: paper.committed, incoming: keepOrPending(state.incoming, paper) });
       return;
     }
     if (options.force || !dirty) {
@@ -136,7 +160,7 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
         savedBody: disk.body,
         baseVersion: disk.version,
         committed: paper.committed,
-        incoming: null,
+        incoming: pendingIncoming(paper.pending),
         streaming: null,
       });
       return;
@@ -160,16 +184,20 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
 
   markSaveError: (message) => set({ saveStatus: "error", saveError: message }),
 
-  markConflict: (current) => set({
+  markConflict: (current, recoveryId) => set({
     saveStatus: "idle",
-    incoming: current
-      ? { ...(current.title ? { title: current.title } : {}), body: current.body, version: current.version, cause: "conflict" }
-      : { body: "", version: null, cause: "conflict" },
+    incoming: {
+      ...(current?.title ? { title: current.title } : {}),
+      body: current?.body ?? "",
+      version: current?.version ?? null,
+      cause: "conflict",
+      ...(recoveryId ? { recoveryId } : {}),
+    },
   }),
 
   acceptIncoming: () => {
     const incoming = get().incoming;
-    if (!incoming) return;
+    if (!incoming || (incoming.cause !== "conflict" && incoming.cause !== "update")) return;
     set((state) => ({
       title: incoming.title ?? state.title,
       savedTitle: incoming.title ?? state.title,
@@ -184,10 +212,12 @@ export const useDraftStore = create<DraftStoreState>((set, get) => ({
 
   keepMine: () => {
     const incoming = get().incoming;
-    if (!incoming) return;
+    if (!incoming || (incoming.cause !== "conflict" && incoming.cause !== "update")) return;
     // 以盘上那一版为底再存一次：savedBody 记成盘上的字，作者的字和它不一样 → 下一笔存稿照写。
     set({ baseVersion: incoming.version, savedBody: incoming.body, savedTitle: incoming.title ?? "", incoming: null, saveStatus: "idle", saveError: null });
   },
+
+  clearIncoming: () => set({ incoming: null }),
 
   setStreaming: (text) => set({ streaming: text }),
 

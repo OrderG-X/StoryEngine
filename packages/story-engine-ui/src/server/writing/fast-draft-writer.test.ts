@@ -226,7 +226,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
       tokenUsage: { promptTokens: 100, completionTokens: 60, totalTokens: 160 },
       issues: [],
     });
-    // 引擎不写盘：工作稿文件由调用方走 draft.write 落。
+    // 引擎不写盘：工作稿文件由调用方走 draft.applyGenerated 落。
     await expect(access(join(projectDir, "drafts", "fast", "chapter-0001.md"))).rejects.toThrow();
     await expect(Promise.resolve(draftFileOf(report))).resolves.toBe(
       "# 开局\n\nGuo Xu 站在大门前，第一次意识到自己的副本已经开始。\n",
@@ -240,7 +240,7 @@ describe("StoryEngine-NG FastDraftWriter", () => {
     expect(writerClient.generateDraft).toHaveBeenCalledOnce();
   });
 
-  it("generates the body without writing the draft file (落盘交给 draft.write)", async () => {
+  it("generates the body without writing the draft file (落盘交给 draft.applyGenerated)", async () => {
     const projectDir = await createFixtureProject();
     const writerClient: WriterClient = {
       generateDraft: vi.fn(async () => ({

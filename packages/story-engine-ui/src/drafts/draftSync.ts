@@ -5,13 +5,12 @@
  * 有了它，撤销、AI 改稿、别的窗口改过之后，旧字永远盖不回去，不用再冻结、排空、整页刷新。
  *
  * - 停笔 600ms 存一次；同一时刻只发一笔，发的时候又改了就等这笔回来再发。
- * - 有冲突提示挂着（incoming）就先不存，等作者选。
- * - AI 回合进行中先不自动存（holdDraftSaves）：作者这时打的字保持「没存」，AI 写的稿回来时稿纸出提示让作者选；
- *   要是先存上了，AI 的稿落盘后稿纸会当作没改过、把作者刚打的字静默换掉。
- * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉；只是切到后台（页面还活着）走 flushDraftSaveUnlessHeld，AI 回合里照样先不存。
+ * - 什么时候都存（写作版本 P1b）：AI 回合里也存。AI 写完时稿子已经被作者改过，AI 那版换不上、留成候选，稿纸出提示让作者选。
+ * - 撞了版本也接着存：服务端把作者手上那份存进恢复稿（不进工作稿），进程死了也找得回。同一份字被拒过就不再重发。
+ * - 换章、撤销、关窗前调 flushDraftSave 把没存的字存掉。
  */
-import { fetchChapterPaper, saveWorkingDraft } from "../api/workingDraftClient.js";
-import { isDraftDirty, useDraftStore } from "../stores/draftStore.js";
+import { decidePendingDraft, fetchChapterPaper, saveWorkingDraft } from "../api/workingDraftClient.js";
+import { isDraftDirty, useDraftStore, type DraftStoreState } from "../stores/draftStore.js";
 
 export const DRAFT_SAVE_DELAY_MS = 600;
 
@@ -19,7 +18,22 @@ export type DraftFlushResult = { readonly ok: true } | { readonly ok: false; rea
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight: Promise<DraftFlushResult> | null = null;
-let holds = 0;
+/** 上一笔撞了版本的那份（同一份字、同一底版不再重发，免得来回打转）。 */
+let rejected: { readonly projectPath: string; readonly chapter: number; readonly body: string; readonly title: string; readonly baseVersion: string | null } | null = null;
+
+function rejectedAlready(state: Pick<DraftStoreState, "projectPath" | "chapter" | "body" | "title" | "baseVersion">): boolean {
+  return rejected !== null
+    && rejected.projectPath === state.projectPath
+    && rejected.chapter === state.chapter
+    && rejected.body === state.body
+    && rejected.title === state.title
+    && rejected.baseVersion === state.baseVersion;
+}
+
+/** 有要存的字：打开了一章、和盘上不一样、这份没被拒过。 */
+function needsSave(state: DraftStoreState): boolean {
+  return Boolean(state.projectPath) && state.chapter > 0 && state.loaded && isDraftDirty(state) && !rejectedAlready(state);
+}
 
 function clearTimer(): void {
   if (timer !== null) {
@@ -36,7 +50,6 @@ export function editDraft(body: string, title?: string): void {
 
 export function scheduleDraftSave(delay = DRAFT_SAVE_DELAY_MS): void {
   clearTimer();
-  if (holds > 0) return;
   timer = setTimeout(() => {
     timer = null;
     void saveDraftNow();
@@ -45,9 +58,7 @@ export function scheduleDraftSave(delay = DRAFT_SAVE_DELAY_MS): void {
 
 async function sendOnce(): Promise<DraftFlushResult> {
   const state = useDraftStore.getState();
-  if (!state.projectPath || state.chapter <= 0 || !state.loaded) return { ok: true };
-  if (state.incoming) return { ok: true };
-  if (!isDraftDirty(state)) return { ok: true };
+  if (!state.projectPath || !needsSave(state)) return { ok: true };
   const sent = { projectPath: state.projectPath, chapter: state.chapter, body: state.body, title: state.title, baseVersion: state.baseVersion };
   state.markSaving();
   try {
@@ -61,10 +72,13 @@ async function sendOnce(): Promise<DraftFlushResult> {
     const live = useDraftStore.getState();
     if (live.projectPath !== sent.projectPath || live.chapter !== sent.chapter) return { ok: true };
     if (result.ok) {
+      rejected = null;
       live.markSaved(result.version, sent.body, sent.title);
       return { ok: true };
     }
-    live.markConflict(result.current);
+    // 撞了版本：作者这份服务端已存成恢复稿（存成了才有号），稿纸出提示。这份不再重发；作者接着改了就再存（更新恢复稿）。
+    rejected = sent;
+    live.markConflict(result.current, result.recoveryId);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -86,45 +100,20 @@ export async function saveDraftNow(): Promise<DraftFlushResult> {
     inFlight = null;
   }
   if (!result.ok) return result;
-  const state = useDraftStore.getState();
-  // 发出去之后作者又打了字：接着存（没有冲突挂着才存）。
-  if (state.loaded && !state.incoming && isDraftDirty(state)) return saveDraftNow();
+  // 发出去之后作者又打了字：接着存。
+  if (needsSave(useDraftStore.getState())) return saveDraftNow();
   return result;
 }
 
-/**
- * AI 回合开始：先不自动存稿，直到回合收尾（返回的函数调一次就放开）。放开时还有没存的字、又没有冲突提示挂着，就照常存。
- * 换章、关窗这类明说要存的（flushDraftSave / 关窗那一笔）不受影响。
- */
-export function holdDraftSaves(): () => void {
-  holds += 1;
-  clearTimer();
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    holds -= 1;
-    if (holds > 0) return;
-    const state = useDraftStore.getState();
-    if (state.loaded && !state.incoming && isDraftDirty(state)) scheduleDraftSave();
-  };
-}
-
-/** 换章、撤销、关窗前：把没存的字存掉，等它落盘。 */
+/** 换章、撤销、关窗前：把没存的字存掉，等它落盘（撞了版本的那份在恢复稿里，也算存下了）。 */
 export async function flushDraftSave(): Promise<DraftFlushResult> {
-  return saveDraftNow();
-}
-
-/** 切到后台这类「顺手存一下」：AI 回合里先不存（回合收尾放开时照常存），其余同 flushDraftSave。 */
-export async function flushDraftSaveUnlessHeld(): Promise<DraftFlushResult> {
-  if (holds > 0) return { ok: true };
   return saveDraftNow();
 }
 
 /** 关窗途中的最后一笔（keepalive，不等回执）。 */
 export function saveDraftKeepalive(): void {
   const state = useDraftStore.getState();
-  if (!state.projectPath || state.chapter <= 0 || !state.loaded || state.incoming || !isDraftDirty(state)) return;
+  if (!state.projectPath || !needsSave(state)) return;
   clearTimer();
   void saveWorkingDraft({
     projectPath: state.projectPath,
@@ -154,11 +143,72 @@ export async function refreshPaper(options: { readonly force?: boolean; readonly
   const projectPath = state.projectPath;
   const paper = await fetchChapterPaper(projectPath, state.chapter);
   useDraftStore.getState().receivePaper(projectPath, paper, options.force ? { force: true } : {});
+  // 盘上变了、作者手上还有没存的字：马上存一笔（撞版本，服务端存成恢复稿），别只留在页面里。
+  if (useDraftStore.getState().incoming?.cause === "update") scheduleDraftSave(0);
+}
+
+export type PaperDecisionResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+/**
+ * 稿纸提示条上「换成那一版」：
+ * - 撞版本 / 盘上变了：换成盘上那版（撞版本时那份恢复稿作者不要了，一起删）。
+ * - AI 候选 / 恢复稿：先存掉手上的字，再让服务端换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），换完重读。
+ */
+export async function acceptPaperIncoming(): Promise<PaperDecisionResult> {
+  const state = useDraftStore.getState();
+  const incoming = state.incoming;
+  if (!incoming || !state.projectPath) return { ok: true };
+  if (incoming.cause === "conflict" || incoming.cause === "update") {
+    const projectPath = state.projectPath;
+    const chapter = state.chapter;
+    state.acceptIncoming();
+    if (!incoming.recoveryId) return { ok: true };
+    const dropped = await decidePendingDraft({ projectPath, chapter, pending: { kind: "recovery", id: incoming.recoveryId, sha: "" }, decision: "dismiss", baseVersion: null });
+    return dropped.ok ? { ok: true } : { ok: false, error: `换好了，但没存上的那份没删掉（下次开这一章还会提示）：${dropped.error}` };
+  }
+  const pending = incoming.pending;
+  if (!pending) return { ok: true };
+  const flushed = await flushDraftSave();
+  if (!flushed.ok) return { ok: false, error: `你手上的字还没存上（${flushed.error}），没换。` };
+  const live = useDraftStore.getState();
+  if (live.incoming?.pending?.id !== pending.id) return { ok: false, error: "稿子刚才存的时候撞了版本，先看一眼上面那条提示。" };
+  const result = await decidePendingDraft({
+    projectPath: state.projectPath,
+    chapter: state.chapter,
+    pending,
+    decision: "adopt",
+    baseVersion: live.baseVersion,
+  });
+  if (result.ok) live.clearIncoming();
+  // 换上了就把新稿读回来；没换上也重读一次（那一份可能已经不在了）。
+  await refreshPaper().catch(() => undefined);
+  return result;
+}
+
+/**
+ * 稿纸提示条上「保留我这版」/「不要了」：
+ * - 撞版本 / 盘上变了：保留手上的字，以盘上那一版为底再存。
+ * - AI 候选 / 恢复稿：不要了（服务端删掉那一份）。
+ */
+export async function keepPaperMine(): Promise<PaperDecisionResult> {
+  const state = useDraftStore.getState();
+  const incoming = state.incoming;
+  if (!incoming || !state.projectPath) return { ok: true };
+  if (incoming.cause === "conflict" || incoming.cause === "update") {
+    state.keepMine();
+    scheduleDraftSave(0);
+    return { ok: true };
+  }
+  const pending = incoming.pending;
+  if (!pending) return { ok: true };
+  const result = await decidePendingDraft({ projectPath: state.projectPath, chapter: state.chapter, pending, decision: "dismiss", baseVersion: null });
+  if (result.ok && useDraftStore.getState().incoming?.pending?.id === pending.id) useDraftStore.getState().clearIncoming();
+  return result;
 }
 
 /** 只供单测：清掉模块里的计时器和在途。 */
 export function __resetDraftSyncForTests(): void {
   clearTimer();
   inFlight = null;
-  holds = 0;
+  rejected = null;
 }

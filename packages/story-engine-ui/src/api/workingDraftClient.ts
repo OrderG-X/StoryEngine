@@ -11,11 +11,17 @@ export interface WorkingDraft {
   readonly version: string;
 }
 
+/** 等作者选的一份（写作版本 P1b）：上次没存上的字（恢复稿），或 AI 写好、没换上的（候选）。 */
+export type PendingDraft =
+  | { readonly kind: "recovery"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string }
+  | { readonly kind: "candidate"; readonly id: string; readonly title?: string; readonly body: string; readonly sha: string; readonly reason: "draft_moved" | "basis_moved" | "interrupted" };
+
 export interface ChapterPaper {
   readonly chapter: number;
   readonly draft: WorkingDraft | null;
   readonly committed: { readonly title?: string; readonly body: string } | null;
   readonly editedSinceCommit: boolean | null;
+  readonly pending?: PendingDraft;
 }
 
 export interface SaveWorkingDraftRequest {
@@ -28,7 +34,7 @@ export interface SaveWorkingDraftRequest {
 
 export type SaveWorkingDraftResult =
   | { readonly ok: true; readonly version: string; readonly unchanged: boolean }
-  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null };
+  | { readonly ok: false; readonly conflict: true; readonly message: string; readonly current: WorkingDraft | null; readonly recoveryId?: string };
 
 const BASE = "/api/working-draft";
 
@@ -59,13 +65,54 @@ export async function saveWorkingDraft(input: SaveWorkingDraftRequest, options: 
     ...(options.keepalive ? { keepalive: true } : {}),
   });
   if (response.status === 409) {
-    const payload = await response.json() as { error?: string; current?: WorkingDraft | null };
-    return { ok: false, conflict: true, message: payload.error ?? "这一章的稿子在别处改过了。", current: payload.current ?? null };
+    const payload = await response.json() as { error?: string; current?: WorkingDraft | null; recoveryId?: string };
+    return {
+      ok: false,
+      conflict: true,
+      message: payload.error ?? "这一章的稿子在别处改过了。",
+      current: payload.current ?? null,
+      ...(typeof payload.recoveryId === "string" ? { recoveryId: payload.recoveryId } : {}),
+    };
   }
   if (!response.ok) throw new Error(await readError(response));
   const payload = await response.json() as { ok?: boolean; version?: string; unchanged?: boolean; error?: string };
   if (!payload.ok || typeof payload.version !== "string") throw new Error(payload.error ?? "存稿没成功。");
   return { ok: true, version: payload.version, unchanged: payload.unchanged === true };
+}
+
+export type PendingDecisionResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+
+/**
+ * 对等着选的那一份做决定：adopt = 换上（带作者眼前那份的版本，对不上不换；换前存档、可撤销），dismiss = 不要了。
+ * 没成如实给原因，不抛。
+ */
+export async function decidePendingDraft(input: {
+  readonly projectPath: string;
+  readonly chapter: number;
+  readonly pending: Pick<PendingDraft, "kind" | "id" | "sha">;
+  readonly decision: "adopt" | "dismiss";
+  readonly baseVersion: string | null;
+}): Promise<PendingDecisionResult> {
+  try {
+    const response = await fetch(`${BASE}/pending`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectPath: input.projectPath,
+        chapter: input.chapter,
+        kind: input.pending.kind,
+        id: input.pending.id,
+        sha: input.pending.sha,
+        decision: input.decision,
+        baseVersion: input.baseVersion,
+      }),
+    });
+    const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+    if (payload.ok === true) return { ok: true };
+    return { ok: false, error: payload.error?.trim() || `没成（${response.status}）。` };
+  } catch (error) {
+    return { ok: false, error: `没成：${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 export type RetitleChapterResult =

@@ -9,11 +9,10 @@
 import { readFile } from "node:fs/promises";
 
 import { chinesePunctuationLike } from "../../lib/dialogue-quotes.js";
-import { applyUnitEdits, draftVersionOf, numberedText, prepareUnitReplacement, splitNumberedReply, splitUnits, withBookLock, type TextUnit, type UnitEdit } from "@actalk/story-core";
+import { applyUnitEdits, draftVersionOf, numberedText, prepareUnitReplacement, readTruthBasis, splitNumberedReply, splitUnits, type TextUnit, type UnitEdit } from "@actalk/story-core";
 import { appendFixLog } from "../editorial/continuity/check-memory.js";
-import { writeAiDraft } from "../lib/ai-draft-write.js";
+import { applyAiDraft, oneAiWriterPerChapter } from "../lib/ai-draft-write.js";
 import { defaultDraftPath } from "../lib/project-io.js";
-import { snapshotBeforeDraftOverwrite } from "../lib/snapshot-on-draft-overwrite.js";
 import { locateRevisionSpan, nextDraftVersion, type RevisionModelCaller } from "./revision-service.js";
 
 export interface UnitFix {
@@ -211,11 +210,14 @@ export interface DraftUnitFixResult extends UnitFixOutcome {
   /** 真改了：写回的版本号和改前存档点。 */
   readonly draftVersion?: number;
   readonly snapshotId?: string;
+  /** 改好了但没换上（改的途中作者存过稿、撤销过，或前文变了）：留成候选，message 是给作者看的一句。 */
+  readonly kept?: { readonly candidateId: string; readonly message: string };
 }
 
 /**
- * 改工作稿（核账卡「改这处 / 改掉这 N 处」）：读稿 → 改 → 改成了就存档、写回，整段在书锁里
- * （和 revise_draft 一样：修订模型跑着时定稿、撤销排队，不会切进读和写中间）。没有工作稿照实说。
+ * 改工作稿（核账卡「改这处 / 改掉这 N 处」）：读依据 → 读稿 → 改 → 改成了就走 AI 写稿唯一通道换上（换上前存档）。
+ * 模型跑着时不占书锁（作者照常存稿）；读稿之后稿子或前文变了，换上时对不上就留成候选、如实说。同一章的 AI 改稿排队。
+ * 没有工作稿照实说。
  */
 export async function fixDraftByUnits(input: {
   readonly projectDir: string;
@@ -224,17 +226,25 @@ export async function fixDraftByUnits(input: {
   readonly callModel: RevisionModelCaller;
 }): Promise<DraftUnitFixResult> {
   const { projectDir, chapter } = input;
-  return withBookLock(projectDir, async () => {
+  return oneAiWriterPerChapter(projectDir, chapter, async () => {
+    const basis = await readTruthBasis(projectDir);
     const text = await readFile(defaultDraftPath(projectDir, chapter), "utf-8").catch(() => undefined);
     if (text === undefined || !text.trim()) {
       return { text: text ?? "", applied: [], failed: input.fixes.map((_, fix) => ({ fix, why: "这一章没有工作稿了" })), changes: [], alsoChanged: 0 };
     }
     const outcome = await fixByUnits({ chapter, text, fixes: input.fixes, callModel: input.callModel });
     if (outcome.applied.length === 0) return outcome;
-    const snapshotId = await snapshotBeforeDraftOverwrite(projectDir, chapter, `第${chapter}章按核账改前快照`);
-    await writeAiDraft(projectDir, { chapter, body: outcome.text, baseVersion: draftVersionOf(text) });
+    const written = await applyAiDraft(projectDir, {
+      chapter,
+      body: outcome.text,
+      baseVersion: draftVersionOf(text),
+      basis,
+      source: "unit-fix",
+      snapshotLabel: `第${chapter}章按核账改前快照`,
+    });
+    if (!written.applied) return { ...outcome, kept: { candidateId: written.candidateId, message: written.message } };
     await recordUnitFixes(projectDir, chapter, outcome);
-    return { ...outcome, draftVersion: nextDraftVersion(), ...(snapshotId ? { snapshotId } : {}) };
+    return { ...outcome, draftVersion: nextDraftVersion(), ...(written.snapshotId ? { snapshotId: written.snapshotId } : {}) };
   });
 }
 

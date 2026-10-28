@@ -36,7 +36,7 @@ import {
 import { lastTurnUndoHintFromMessages } from "../utils/lastTurnUndoHint.js";
 import { stripStaleTurnSuggestions } from "../utils/staleTurnSuggestions.js";
 import { streamingDraftDisplay } from "../utils/streamingDraftDisplay.js";
-import { editDraft, flushDraftSave, holdDraftSaves, openPaper, refreshPaper } from "../drafts/draftSync.js";
+import { editDraft, flushDraftSave, openPaper, refreshPaper } from "../drafts/draftSync.js";
 import { saveChatNow } from "../sync/chatSync.js";
 import { flushAllSaves } from "../sync/saveAll.js";
 import { applyOverviewToWorkspace, flowStatusForPaper } from "../workspace/applyOverview.js";
@@ -310,13 +310,11 @@ export function useChat(params: UseChatParams): UseChatResult {
       // M3：本轮的中止器——「停止」按钮 abort 它即可干净停掉这条流（streamAgentChat 据此不报错收尾）。
       const abortController = new AbortController();
       agentAbortRef.current = abortController;
-      let releaseDraftSaves: (() => void) | null = null;
       try {
         // AI 读的是盘上的稿子：先把作者没存的字存掉。存不上也照常发（AI 写的稿回来时稿纸会提示作者选）。
+        // 回合里作者接着打的字照常存（写作版本 P1b）：AI 写完时稿子改过，AI 那版不换上、留成候选让作者选。
         const flushed = await flushDraftSave();
         if (!flushed.ok) showToast(`稿子还没存上（${flushed.error}），AI 看到的是上一次存下的那版。`, 5200);
-        // 回合里作者接着打的字先不存：AI 改了稿，回来时稿纸出提示让作者选，不会把作者的字静默换掉。
-        releaseDraftSaves = holdDraftSaves();
         // H3：把用户当前所在章一并发给后端，让 agent 默认作用于该章、各工具缺省回退该值（回看旧章不写错章）。
         const currentChapterNumber = useBookStore.getState().workspace.currentChapter?.chapterNumber;
         // R7.2：带上「上一个有写盘回合的首个快照」——后端 undo 工具优先整回合回退（一回合改两处也全撤），
@@ -586,7 +584,6 @@ export function useChat(params: UseChatParams): UseChatResult {
         // 保持 operation 所有权直到盘上真值读完；否则异步读刚返回，finally 已释放 token，结果会被当成迟到数据丢掉。
         // 但最多等 RESYNC_WAIT_MS：读盘卡住不能把整个工作区一直占着（迟到的结果按所有权丢掉，稿纸下次读盘自会对上）。
         await settleWithin([...(resyncPromise ? [resyncPromise] : []), ...pendingPaperSyncs], RESYNC_WAIT_MS);
-        releaseDraftSaves?.();
         if (!ownsCurrentWorkspace() && isWorkspaceOperationCurrent(operation)) {
           notifyStaleOperation();
         }

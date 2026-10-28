@@ -3,7 +3,7 @@
  * 依据安全契约（写作版本 P1a 复核，Astra 2026-10-29 的七个探针 R1～R7 转成的回归测试）：
  * 旧依据算出来的东西不许执行、不许被当成新的复用，也不许报假成功。模型全是假的（确定性返回）。
  */
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   bookImportText,
@@ -29,6 +29,10 @@ import * as readers from "../editorial/reader-window.js";
 import { readRereadState } from "../editorial/reread-state.js";
 import { beginReread, runReread } from "../editorial/reread.js";
 import { applySettleProposal, saveSettleProposal } from "../editorial/settle/store.js";
+import { syncLegacyMirror } from "../book/mirror/sync.js";
+import { readChapterPlan } from "../book/chapter-plan.js";
+import { createBookBackup, restoreBookFromBackup } from "../lib/book-backup.js";
+import { moveBookToTrash, restoreFromTrash } from "../lib/book-trash.js";
 import { writeCards } from "../lib/card-write.js";
 import { makeHomeTempDir } from "../lib/home-test-tmp.js";
 import { createSnapshot, restoreSnapshot } from "../lib/snapshot.js";
@@ -36,13 +40,21 @@ import { applyFoundationDecision } from "./foundation-decisions.js";
 import { applyLedgerDecisions, planLedgerChange } from "./ledger-decisions.js";
 import { foundationWriteLogic } from "./tools/foundation-write.js";
 
+let sandbox: string;
 let book: string;
 beforeEach(async () => {
-  book = await makeHomeTempDir("basis-contracts-");
+  // 书放在一个临时书库里：备份恢复、回收站恢复都按书库路径来（Astra 第 2 轮 N1）。
+  sandbox = await makeHomeTempDir("basis-contracts-");
+  vi.stubEnv("SE_BOOKS_DIR", join(sandbox, "books"));
+  vi.stubEnv("SE_DATA_DIR", join(sandbox, "data"));
+  book = join(sandbox, "books/story-engine/demo");
+  await mkdir(book, { recursive: true });
+  await writeFile(join(book, "project.json"), JSON.stringify({ title: "依据契约测试书" }));
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  await rm(book, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+  await rm(sandbox, { recursive: true, force: true });
 });
 
 const author = (key: string) => ({ caller: "author" as const, idempotencyKey: key });
@@ -198,6 +210,74 @@ describe("依据安全契约", () => {
     const planner = vi.fn(async () => "不是 JSON");
     const result = await resolveChapterPlanForDraft({ projectDir: book, chapter: 2, plannerCallModel: planner, planCheckReaderCallModel: planner });
     expect(result.reused).toBe(false);
+    expect(planner).toHaveBeenCalled();
+  });
+  it.each(["backup", "trash"] as const)("R8 整书恢复（%s）回到原路径：读过后来那一版的旧定稿票作废", async (mode) => {
+    const textA = "# 一\n\n他叫张三。";
+    await seed(textA);
+    ok(await runCommand(book, draftSave, { chapter: 2, title: "二", body: "第二天，他交了钥匙。", baseVersion: null }, { caller: "author" }));
+    const text = await readFile(join(book, draftPath(2)), "utf-8");
+    const backup = mode === "backup" ? await createBookBackup(book) : undefined;
+    let trashA = "";
+    const original = readers.ensureReaderWindow;
+    let switched = false;
+    vi.spyOn(readers, "ensureReaderWindow").mockImplementation(async (input) => {
+      if (!switched) {
+        switched = true;
+        if (mode === "trash") {
+          trashA = await moveBookToTrash(book, "A");
+          await mkdir(book, { recursive: true });
+          await writeFile(join(book, "project.json"), JSON.stringify({ title: "同路径的新书" }));
+        }
+        ok(await runCommand(book, chapterCommit, { chapter: 1, text: "# 一\n\n他叫李四。", entries: [] }, author("state-B")));
+      }
+      return original(input);
+    });
+    const tickets = memoryTicketStore();
+    const preview = ok(await prepareChapterCommit({
+      bookDir: book, chapter: 2, text, tickets, callModel: async (messages, options) => {
+        if (!options?.json) return "笔记。";
+        expect(messages.at(-1)?.content).toContain("他叫李四");
+        await moveBookToTrash(book, "B");
+        const restored = mode === "backup" ? await restoreBookFromBackup(backup!.data) : await restoreFromTrash(trashA);
+        expect(restored.projectPath).toBe(book);
+        return JSON.stringify({ summary: { text: "李四交了钥匙", quote: "他交了钥匙" } });
+      },
+    }));
+    const result = await confirmChapterCommit({ bookDir: book, ticket: preview.ticket, text, tickets });
+    expect(result.ok).toBe(false);
+    expect((await projectBook(book)).chapters[1]?.summary ?? "").not.toContain("李四");
+  });
+
+  it("R9 拟章纲途中书 A→B→撤销回 A：章纲员读的是 B，拟出的章纲不挂 A 的指纹、下次重拟", async () => {
+    await seed("# 一\n\n他叫张三。");
+    expect((await syncLegacyMirror(book)).ok).toBe(true);
+    const saved = await createSnapshot(book, "state-A");
+    const basisA = await planBasisOf(book, 2);
+    const original = readers.ensureReaderWindow;
+    let switched = false;
+    vi.spyOn(readers, "ensureReaderWindow").mockImplementation(async (input) => {
+      if (!switched) {
+        switched = true;
+        ok(await runCommand(book, chapterCommit, { chapter: 1, text: "# 一\n\n他叫李四。", entries: [] }, author("state-B")));
+      }
+      return original(input);
+    });
+    await resolveChapterPlanForDraft({
+      projectDir: book, chapter: 2,
+      plannerCallModel: async (messages, options) => {
+        if (!options?.json) return "笔记。";
+        expect(messages.some((message) => message.content.includes("他叫李四"))).toBe(true);
+        await restoreSnapshot(book, saved.id);
+        return JSON.stringify({ summary: "李四去交钥匙", beats: ["李四去交钥匙"], characters: ["李四"], newInformation: ["钥匙有了下落"], scene: { location: "北城" }, dayOffset: 1 });
+      },
+      planCheckReaderCallModel: async (_messages, options) => (options?.json ? JSON.stringify({ problems: [] }) : "笔记。"),
+    });
+    expect(await planBasisOf(book, 2)).toBe(basisA);
+    expect((await readChapterPlan(book, 2))?.basis).not.toBe(basisA);
+    const planner = vi.fn(async () => "不是 JSON");
+    const second = await resolveChapterPlanForDraft({ projectDir: book, chapter: 2, plannerCallModel: planner, planCheckReaderCallModel: planner });
+    expect(second.reused).toBe(false);
     expect(planner).toHaveBeenCalled();
   });
 });

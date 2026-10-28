@@ -52,11 +52,14 @@ function skipReason(state: TurnState, name: string): string | undefined {
   return state.stepTools?.includes(DRAFT_TOOL) ? "这一轮在写工作稿，这一步先不做，等稿写完、作者看过再说。" : undefined;
 }
 
-/** 出稿的结果：写成了（ok:true）记下章号、结果和作者要不要写完就出定稿预览。 */
+/**
+ * 出稿的结果：写成了（ok:true）记下章号、结果和作者要不要写完就出定稿预览。写好了但没换上（kept：写的途中作者改过稿、
+ * 前文变了，AI 这版留在稿纸上等作者选）也算这一步走完：一句话说清就结束，不让模型再写一遍。
+ */
 function noteDraft(state: TurnState, output: unknown): void {
-  const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown } | undefined;
-  if (record?.ok === true && typeof record.chapter === "number") {
-    state.draftWritten = { chapter: record.chapter, output, thenPreview: record.thenPreview === true };
+  const record = output as { readonly ok?: unknown; readonly chapter?: unknown; readonly thenPreview?: unknown; readonly kept?: unknown } | undefined;
+  if ((record?.ok === true || (record?.kept !== undefined && record.kept !== null)) && typeof record?.chapter === "number") {
+    state.draftWritten = { chapter: record.chapter, output, thenPreview: record.ok === true && record.thenPreview === true };
   } else {
     state.draftStarted = false;
   }

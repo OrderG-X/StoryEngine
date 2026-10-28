@@ -11,12 +11,12 @@
  *   - 任务槽 callModel 装配：自动去味改写走 repair 槽、判漏 AI 复核走 triage 槽；
  *   - 本工具的显式策略：lengthPolicy:"annotate"（D1：一次成稿不拒绝，低于下限照写盘 + draftLength
  *     透出 + summary ⚠ 标注，由 agent 转达用户决定重写或接受）、aiFlavorRecheck:true（D2：回检栈开）；
- *   - 输出投影：剥掉 HTTP 适配料（http 袋），ok 时把覆盖前快照的 snapshotId 挂进输出。
+ *   - 输出投影：剥掉 HTTP 适配料（http 袋）。
  *
  * 快照策略（铁律「直接做+可撤销」的边界）：草稿是「待保存」的工作稿，不是状态入库，
- *   因此**不建入库级 git 快照**；写盘前用 snapshotBeforeDraftOverwrite 建这一步的存档点（M6+R4.2）：
- *   覆盖已有草稿建「再次出稿前」、首次出稿建「出稿：第N章」（首稿也是作者眼里的一步，撤销要能撤它），
- *   output.snapshotId 挂最近一个撤销点。（D4 已收敛：HTTP 非流式路同调同一 helper 同一语义。）
+ *   因此**不建入库级 git 快照**；出稿最后换上工作稿前、同一把书锁里建这一步的存档点（写作版本 P1b）：
+ *   覆盖已有草稿叫「再次出稿前」、首次出稿叫「出稿：第N章」（首稿也是作者眼里的一步，撤销要能撤它），
+ *   output.snapshotId 就是它。没换上（写的途中作者改过稿、前文变了）不建，这版留成候选（output.kept）。
  *   故本工具用 createTool 而非 writeTool。涉及草稿 → refreshScope:"full"（前端刷新写作区/总览）。
  *
  * 自动去味闭环、多候选采样防坍缩、beats 判漏 AI 复核降噪的实现全部在 services/draft-service.ts
@@ -78,7 +78,7 @@ import { createConfiguredWriterClient, createOpenAICompatibleWriterClient } from
 import { defaultCommittedChapterPath, defaultDraftPath, stripLeadingMarkdownChapterHeading } from "../../lib/project-io.js";
 import { readProjectDirFromContext, resolveChapterFromInputOrContext, readDraftDeltaSinkFromContext, readAuthorWordsFromContext, readPickedDirectionFromContext, isUserConfirmedTool } from "../request-context.js";
 import { checkAuthorQuote } from "./author-quote.js";
-import { hasWorkingDraftText, snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
+import { hasWorkingDraftText } from "../../lib/working-draft-text.js";
 import { evaluateChapterSequencingGuard } from "./chapter-sequencing-guard.js";
 import {
   resolveCandidateTemperatures,
@@ -200,7 +200,11 @@ const outputSchema = z.object({
     reused: z.boolean(),
   }).optional().describe("本章章纲：出稿前先拟的要点（推进什么、新信息是什么）。沿用 = 同一方向重写时用了这章已有的章纲。"),
   refreshScope: z.literal("full"),
-  snapshotId: z.string().optional().describe("覆盖现有非空工作稿前建的快照 id（M6：让『再写一版』可撤销）；首次出稿无此值。"),
+  snapshotId: z.string().optional().describe("换上工作稿前建的存档点 id（让这次出稿可撤销）。"),
+  kept: z.object({
+    candidateId: z.string(),
+    reason: z.enum(["draft_moved", "basis_moved"]),
+  }).optional().describe("写好了但没换上工作稿（ok=false）：写的途中作者改过这一章的稿（draft_moved）或前文、设定改过（basis_moved）。AI 这版留在稿纸上等作者选，如实转告 summary、别重写。"),
   contextBudget: z.object({
     droppedSections: z.array(z.string()),
     droppedDetails: z.array(z.object({ name: z.string(), reason: z.string(), coreImpact: z.boolean() })).optional(),
@@ -516,14 +520,11 @@ export const generateDraftTool = createTool({
       const overview = await buildStateOverview({ projectDir, chapter: resolvedChapter, maxTimelineEvents: 8 });
       return buildSequencingBlockedOutput(resolvedChapter, prior, overview);
     }
-    // M6 + R4.2（D4 收敛后与 HTTP 非流式路同 helper 同语义）：写盘前建这一步的存档点——覆盖现有非空草稿
-    // 用「再次出稿前」；首次出稿用「出稿：第N章」（首稿也是作者眼里的一步，撤销必须能撤它）。
-    const snapshotId = await snapshotBeforeDraftOverwrite(
-      projectDir,
-      resolvedChapter,
-      continuing ? `第${resolvedChapter}章接着写前快照` : `第${resolvedChapter}章再次出稿前快照`,
-      `出稿：第${resolvedChapter}章`,
-    );
+    // 存档点在最后换上工作稿前打（写作版本 P1b：一次出稿只写一次），这里只按开写时有没有稿定名字：
+    // 覆盖现有非空草稿用「再次出稿前」；首次出稿用「出稿：第N章」（首稿也是作者眼里的一步，撤销必须能撤它）。
+    const snapshotLabel = continuing
+      ? `第${resolvedChapter}章接着写前快照`
+      : (await hasWorkingDraftText(projectDir, resolvedChapter)) ? `第${resolvedChapter}章再次出稿前快照` : `出稿：第${resolvedChapter}章`;
     // 出稿流式：路由注入了 sink 就把正文 delta 逐字喂前端编辑器（带本次章号，前端只往当前章追）；缺失=不流式。
     const draftDeltaSink = readDraftDeltaSinkFromContext(context);
     // 多候选采样（第四层防坍缩）：N 个 writer 的 temperature 依次错开（基准 / ±0.15 / ±0.3——向上封顶 1.0，
@@ -583,9 +584,7 @@ export const generateDraftTool = createTool({
       ...(input.maxTimelineEvents !== undefined ? { maxTimelineEvents: input.maxTimelineEvents } : {}),
       ...(input.contextTokenBudget !== undefined ? { contextTokenBudget: input.contextTokenBudget } : {}),
       policies: { lengthPolicy: "annotate", aiFlavorRecheck: true },
-      // R4.2：出稿内部第二次落盘（自动去味/续写补字）不再各建存档点——本步的存档点已建（snapshotId），
-      // 一次出稿在操作历史里就是一步，撤销一键退回这步之前。
-      ...(snapshotId ? { preWriteSnapshotId: snapshotId } : {}),
+      snapshotLabel,
       ...(input.thenPreview === true ? { thenPreview: true } : {}),
       autoDeAi: autoDeAiEnabled,
       ...(deAiCallModel ? { deAiCallModel } : {}),
@@ -611,11 +610,9 @@ export const generateDraftTool = createTool({
     });
     // 投影：http 适配料（引擎原始报告/落盘全文/预算账本）不进 LLM 视野；rejection 仅 HTTP 执法策略产生、这里恒无。
     const { http: _httpProjection, rejection: _rejection, ...toolOutput } = outcome;
-    // 只在真出稿成功时挂 snapshotId（失败=没写成稿，无需撤销点）；service 已把本步存档点带出来，这里兜底。
     // 作者要写完就出定稿预览：只在稿写成了时带上，路由在这一轮结束时用盘上这版出预览（turn-flow）。
     return {
       ...toolOutput,
-      ...(outcome.ok && snapshotId ? { snapshotId: toolOutput.snapshotId ?? snapshotId } : {}),
       ...(outcome.ok && input.thenPreview === true ? { thenPreview: true } : {}),
     };
   },

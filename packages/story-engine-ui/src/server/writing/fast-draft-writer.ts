@@ -122,7 +122,7 @@ export interface FastDraftInput {
 export interface FastDraftReport {
   readonly chapter: number;
   readonly passed: boolean;
-  /** 通过时的正文（不含标题行）。引擎不写盘：落工作稿统一走核心的 draft.write（重构 P7）。 */
+  /** 通过时的正文（不含标题行）。引擎不写盘：落工作稿统一走核心的 draft.applyGenerated（AI 写稿唯一通道）。 */
   readonly draftBody?: string;
   readonly title?: string;
   readonly contextStats: {
@@ -796,7 +796,7 @@ export async function runFastDraft(input: FastDraftInput): Promise<FastDraftRepo
       }, latencyTimer);
     }
 
-    // 引擎只出正文、不写盘：落工作稿由调用方走核心的 draft.write（重构 P7 第 3 步）。
+    // 引擎只出正文、不写盘：落工作稿由调用方走核心的 draft.applyGenerated（AI 写稿唯一通道）。
     return withFastDraftDiagnostics(input.projectDir, {
       chapter: input.chapter,
       passed: true,

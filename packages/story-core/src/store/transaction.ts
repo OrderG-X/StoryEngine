@@ -8,6 +8,8 @@
  *  4. 清单改成 applied，删掉事务目录。
  * 中途断电或进程被杀：下次写之前 `recoverTransactions` 把 prepared 的事务回滚（已换上的文件换回备份、
  * 新建的删掉），applied 的只清目录。调用方把版本号文件放在最后一个写，读的一方据此判断有没有读到一半。
+ * 写入代次（REVISION_PATH）例外：换上了就不退回。调用方把它放在第一个写，书里有过任何可见的写入，代次就已经是新的——
+ * 回滚把内容换回原样，代次也不会回到原样，读到过中间那版的依据一律对不上（写作版本 P1a 第 2 轮复核）。
  *
  * 安全边界：书目录本身是软链时按真实路径算；目标文件或它的任何一级上级目录是软链，一律拒绝（不跟着链写到书外）。
  * 清单坏了的事务不知道换到哪一步，原样留着、写命令拒绝开工；作者确认后由 setAsideBrokenTransactions
@@ -17,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { withBookLock } from "./lock.js";
-import { assertInsideBook, KEPT_TX_DIR, TX_DIR } from "./paths.js";
+import { assertInsideBook, KEPT_TX_DIR, REVISION_PATH, TX_DIR } from "./paths.js";
 
 /** 留证区里超过这么多份，恢复报告里提醒一次（不自动删）。 */
 export const KEPT_REPORT_THRESHOLD = 20;
@@ -129,6 +131,8 @@ async function rollback(bookDir: string, txDir: string, manifest: Manifest): Pro
   for (const file of manifest.files) {
     // 新文件还在暂存区 = 这个文件还没换上，书里是旧样子，不用动。
     if (await exists(join(txDir, "staged", file.slot))) continue;
+    // 代次换上了就留着（见文件头）。
+    if (file.path === REVISION_PATH) continue;
     const path = assertInsideBook(file.path);
     await assertPlainDirs(bookDir, dirname(path));
     const target = join(bookDir, path);

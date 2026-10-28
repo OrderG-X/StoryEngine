@@ -132,12 +132,10 @@ export async function runCommand<A, R>(
 
     const bumps = spec.bumpsVersion !== false;
     const version = bumps ? head.version + 1 : head.version;
-    const writes: TxWrite[] = [...planned.writes];
+    // 代次第一个换上（之后哪一步写失败回滚，代次都不退回）、版本号最后一个（读的一方据此判断有没有读到一半）。
+    const writes: TxWrite[] = [...(bumps ? [revisionWrite(now)] : []), ...planned.writes];
     if (key) writes.push(receiptOf(version, planned.changed));
-    if (bumps) {
-      writes.push(revisionWrite(now));
-      writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
-    }
+    if (bumps) writes.push({ path: HEAD_PATH, content: `${JSON.stringify({ schema: BOOK_HEAD_SCHEMA, version, updatedAt: at }, null, 2)}\n` });
     try {
       await commitFiles(bookDir, writes);
     } catch (error) {

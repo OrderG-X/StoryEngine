@@ -148,13 +148,21 @@ async function planByEditorialRoom(input: {
  * 读不了 → undefined：不沿用，拟出来的也不记指纹。
  */
 export async function planBasisOf(projectDir: string, chapter: number, direction?: string): Promise<string | undefined> {
+  return (await readPlanBasis(projectDir, chapter, direction))?.key;
+}
+
+/**
+ * key 是存进章纲的指纹（只看内容：撤销回到同样的前文还能沿用）；digest 是这次读时整本书的依据（带写入代次）。
+ * 拟纲前后比两样：内容一样但中途书上有过写（比如 A→B→撤销回 A，章纲员读到的可能是 B），也不挂指纹（P1a 第 2 轮复核）。
+ */
+async function readPlanBasis(projectDir: string, chapter: number, direction?: string): Promise<{ readonly key: string; readonly digest: string } | undefined> {
   try {
     const read = await readWithStableBasis(projectDir, async () => ({
       materials: await collectPlanMaterials(projectDir, chapter, direction || undefined),
       timeline: (await readStoryTimeline(projectDir)).timeline.entries.filter((entry) => entry.chapter < chapter),
     }));
     if (!read.basis) return undefined;
-    return sha256(canonicalJson({ truth: basisDigestBefore(read.basis, chapter), ...read.value }));
+    return { key: sha256(canonicalJson({ truth: basisDigestBefore(read.basis, chapter), ...read.value })), digest: read.basis.digest };
   } catch {
     return undefined;
   }
@@ -177,15 +185,17 @@ export async function resolveChapterPlanForDraft(input: {
 }): Promise<ResolvedChapterPlan> {
   const direction = input.direction?.trim() ?? "";
   const existing = await readChapterPlan(input.projectDir, input.chapter).catch(() => undefined);
-  const basis = await planBasisOf(input.projectDir, input.chapter, direction);
+  const start = await readPlanBasis(input.projectDir, input.chapter, direction);
+  const basis = start?.key;
   const sameDirection = existing !== undefined && (existing.direction ?? "") === direction;
   if (existing && sameDirection && (existing.source === "author" || (basis !== undefined && existing.basis === basis))) {
     return { plan: existing, note: `沿用本章已有章纲：${existing.summary}${directionChangeNote(existing)}`, reused: true };
   }
   const planned = await planByEditorialRoom(input, direction);
   if (!planned.plan) return planned;
-  // 拟完再算一遍：拟纲那段时间里材料没变，这份章纲才挂指纹（变了就不挂，下次重拟）。
-  if (basis && (await planBasisOf(input.projectDir, input.chapter, direction)) === basis) {
+  // 拟完再读一遍：拟纲那段时间里材料没变、书上也没写过，这份章纲才挂指纹（变了就不挂，下次重拟）。
+  const end = start ? await readPlanBasis(input.projectDir, input.chapter, direction) : undefined;
+  if (basis && end?.key === basis && end.digest === start?.digest) {
     await writeChapterPlan(input.projectDir, { ...planned.plan, basis });
   }
   const staleNote = sameDirection && existing.basis !== undefined && basis !== undefined ? "前文改过，章纲按现在的重拟了。" : "";

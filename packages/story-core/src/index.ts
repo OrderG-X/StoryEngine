@@ -148,7 +148,7 @@ export {
   sha256,
   type BookSnapshot,
 } from "./store/book.js";
-export { bumpRevision } from "./store/revision.js";
+export { bumpRevision, revisionWrite } from "./store/revision.js";
 export { basisDigestBefore, canonicalJson, diffTruthBasis, TRUTH_BASIS_SCHEMA, TruthBasis, truthBasisOf, type BasisChange } from "./store/basis.js";
 export { bookKey, withBookLock } from "./store/lock.js";
 export { CARDS_PATH, chapterLedgerPath, chapterTextPath, draftPath, DECISIONS_PATH, HEAD_PATH, KEPT_TX_DIR, LEDGER_DIR, REVISION_PATH, TX_DIR } from "./store/paths.js";
@@ -219,7 +219,7 @@ export {
   type SerialSplit,
 } from "./text/serial-split.js";
 export { composeDraftFile, draftVersionOf, parseDraftFile, readChapterPaper, readDraft, sameDraftBody, type ChapterPaper, type Draft } from "./draft/draft.js";
-export { DraftSaveArgs, DraftWriteArgs, draftSave, draftWrite, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
+export { draftAdoptCandidate, draftApplyGenerated, DraftSaveArgs, draftSave, type DraftConflictDetails, type DraftWriteResult } from "./draft/commands.js";
 export { buildImportLedgers, type ImportAdjustment, type ImportBuild, type ImportCounts } from "./import/build.js";
 export { readLegacyData, type ImportSkip, type LegacyData } from "./import/legacy.js";
 export { BookEventHub, type BookEventListener } from "./commands/events.js";

@@ -108,7 +108,7 @@ const COMMIT_SENTENCE = "林远在会议室外停下脚步，反复掂量手里�
 /** 入库/质检对拍用的工作稿正文：444 个中文字符（实测，>300 下限），提及主角。 */
 export const PARITY_COMMIT_BODY = Array.from({ length: 12 }, () => COMMIT_SENTENCE).join("");
 
-/** 工作稿文件文本（带 Markdown 章节标题行，与核心 draft.write 写下的同构 `# 标题\n\n正文\n`）。 */
+/** 工作稿文件文本（带 Markdown 章节标题行，与核心 draft.applyGenerated 写下的同构 `# 标题\n\n正文\n`）。 */
 export function parityDraftFileText(chapter: number, body: string): string {
   return `# 第${chapter}章\n\n${body}\n`;
 }
