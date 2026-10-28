@@ -10,6 +10,7 @@ vi.mock("../../lib/snapshot-on-draft-overwrite.js", () => ({
 
 import { readDraft } from "@actalk/story-core";
 import { snapshotBeforeDraftOverwrite } from "../../lib/snapshot-on-draft-overwrite.js";
+import { countDraftChineseCharacters } from "../../writing/draft-length-control.js";
 import { fixableInDraft, runDraftQualityPipeline } from "./run-quality-pipeline.js";
 
 // 假查错模型说的是核账员那套话术（写笔记 / 三遍核账 / 自复核），经 checkCallModel 注入；
@@ -180,25 +181,23 @@ describe("runDraftQualityPipeline", () => {
     expect(fixableInDraft(8, { ...base, againstSetting: { label: "地点" } })).toBe(false);
   });
 
-  it("只比下限少一点 → 不续写，如实说短了多少（2026-10-10 真机试写：续出的段凭空编对话）", async () => {
+  it("首稿差一点到下限也接着写；够了下限不续（2026-10-28：目标 2000 常出 1500 多，作者得再等一轮「接着往下写」）", async () => {
     const draft = "林舟一早骑车出门，往南门去。他在后街口停下，找修鞋的吴师傅打听当年钟表厂宿舍的事，吴师傅想了很久才开口，说那片宿舍早拆了。";
-    const { projectDir, draftPath } = await makeBook(draft);
-    const continueCallModel = vi.fn(async () => "续写的一段。");
+    const { projectDir } = await makeBook(draft);
+    const continueCallModel = vi.fn(async () => `${draft}他推着车往后街走，修鞋摊还在，吴师傅抬头看了他一眼，又低头敲鞋钉。`);
     const result = await runDraftQualityPipeline({
       projectDir, chapter: 8, baseVersion: await versionOf(projectDir, 8), title: "第8章", draftBody: draft, lengthTarget: { ...TARGET, lowerBound: 60 }, continueCallModel,
     });
-    expect(continueCallModel).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    // 短了多少由出稿回执按最终正文说一次（draft-service 的字数提示），这里不另说。
-    expect(result.notes.join("\n")).not.toMatch(/下限|字数/u);
-    // 作者写明了「至少 N 字」（定稿硬拦）→ 差一点也补到下限。
-    const hard = await makeBook(draft);
-    const continueHard = vi.fn(async () => "他推着车往后街走，修鞋摊还在，吴师傅抬头看了他一眼。");
+    expect(continueCallModel).toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.notes.join("\n")).toContain("低于下限 60");
+    const enough = await makeBook(draft);
+    const notNeeded = vi.fn(async () => "不该续。");
     await runDraftQualityPipeline({
-      projectDir: hard.projectDir, chapter: 8, baseVersion: await versionOf(hard.projectDir, 8), title: "第8章", draftBody: draft,
-      lengthTarget: { ...TARGET, lowerBound: 60, hardMinimum: true }, continueCallModel: continueHard,
+      projectDir: enough.projectDir, chapter: 8, baseVersion: await versionOf(enough.projectDir, 8), title: "第8章", draftBody: draft,
+      lengthTarget: { ...TARGET, lowerBound: countDraftChineseCharacters(draft) }, continueCallModel: notNeeded,
     });
-    expect(continueHard).toHaveBeenCalled();
+    expect(notNeeded).not.toHaveBeenCalled();
   });
 
   it("补写的那会儿作者存了稿 → 补写结果不写回、如实说，作者存的那份不动（外部审查 2026-10-28：补写落盘盖掉作者刚存的句子）", async () => {

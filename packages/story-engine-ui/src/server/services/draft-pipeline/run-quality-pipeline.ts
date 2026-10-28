@@ -73,23 +73,19 @@ export interface QualityPipelineResult {
   readonly notes: readonly string[];
 }
 
-/** 首稿低于下限的这个比例才自动续写。 */
-const CONTINUE_ONLY_BELOW_RATIO = 0.8;
-
 export async function runDraftQualityPipeline(input: QualityPipelineInput): Promise<QualityPipelineResult> {
   let body = input.draftBody;
   const notes: string[] = [];
   let info: QualityPipelineInfo = {};
 
   const timings: { continueMs?: number; continuityMs?: number; fixMs?: number } = {};
-  // ① 字数严重不够才接着写（不在中间插句）。2026-10-10 真机试写：首稿只差两三百字也续，续出的一段挤成一大段、
-  // 凭空编出前文没有的对话（「韩德胜说钥匙交给孟叔了」），历轮审读里续写段也是矛盾最密的地方——略短就如实说短了多少、交作者定。
-  // 作者写明了「至少 N 字」（定稿侧按它硬拦）时仍补到下限——不补作者也得手动再要一次续写，还卡着定不了稿。
+  // ① 首稿不到下限就接着写（不在中间插句）。2026-10-10 曾改成只差一点不续（续出的段凭空编对话、矛盾最密），
+  // 那时续写的段不再核。现在续写在核账、按核账改之前，续出的错一样被核、被改；不续作者就得为几百字再等一整轮「接着往下写」
+  // （2026-10-28 春分面馆：目标 2000 字常出 1500 多，外部审查也点了这条）。
   const firstLength = countDraftChineseCharacters(body);
-  // 作者的「至少 N 字」比区间下沿低（floor）时也是作者写明的地板：不够就补到它。
+  // 作者的「至少 N 字」比区间下沿低（floor）时按作者写明的地板判。
   const floor = draftLengthFloor(input.lengthTarget);
-  const continueBelow = input.lengthTarget.hardMinimum || input.lengthTarget.floor !== undefined ? floor : floor * CONTINUE_ONLY_BELOW_RATIO;
-  if (input.continueCallModel && firstLength < continueBelow) {
+  if (input.continueCallModel && firstLength < floor) {
     const startedAt = Date.now();
     const continued = await continueDraftToLength({
       chapter: input.chapter,
@@ -109,7 +105,6 @@ export async function runDraftQualityPipeline(input: QualityPipelineInput): Prom
       notes.push(`首稿 ${continued.before} 字低于下限 ${floor}，自动续写没成（${continued.failures.at(-1)}）。`);
     }
   }
-  // 只差一点没续的，不在这里另说：出稿回执末尾那句「低于目标字数下限」按最终正文说一次（以前两句数还差一个字）。
 
   // ② 前后核对：和「核账」按钮同一套（账本对账 + 模型查错 + 核账记忆）。③ 核出「确定」又错在新稿里的按前文改一轮、改完再核。
   // 结果记进核账记忆：作者随后点「核账」，正文没改就直接出这次（改后再核）的结果。
