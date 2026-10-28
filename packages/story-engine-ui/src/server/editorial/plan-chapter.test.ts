@@ -159,6 +159,20 @@ describe("storyDayAtChapterEnd（第二十一轮第 2 章跨夜没记，此后�
     expect(storyDayAtChapterEnd(make(["第二天上午，林舟开门", "傍晚关门"]))).toBe(2);
     expect(storyDayAtChapterEnd(undefined)).toBeUndefined();
   });
+
+  it("上一章开场是第几天以时间线为准，章纲只数章内换天（2026-10-28 第 33 章章纲跟着过时的第 32 章章纲少记四天）", async () => {
+    const { previousChapterEndDay } = await import("./plan-materials.js");
+    const projectDir = await makeBook();
+    const timeline = (entries: object[]) => writeFile(join(projectDir, "story", "timeline.json"), JSON.stringify({ schemaVersion: 1, entries }), "utf-8");
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子", "第二天上午，许棠上门"], storyDay: 5 }, { chapter: 1 })!);
+    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(10);
+    await timeline([{ chapter: 1, day: 9, daysInChapter: 2, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(11);
+    await writeChapterPlan(projectDir, normalizeChapterPlan({ summary: "s", beats: ["傍晚回铺子"] }, { chapter: 1 })!);
+    await timeline([{ chapter: 1, day: 9, source: "declared", quote: "过去三天了。" }]);
+    expect(await previousChapterEndDay(projectDir, 2)).toBe(9);
+  });
 });
 
 // ---------- 出稿前的章纲编排：章纲员拟 → 核账员审 → 改一轮（R3 后唯一一条路） ----------

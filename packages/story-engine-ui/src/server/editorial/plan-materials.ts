@@ -309,6 +309,9 @@ export async function previousChapterEndDay(projectDir: string, chapter: number)
   if (!last) return undefined;
   // 时间线记了章内换天（定稿时正文声明、原句核过）就用它；没记再按那章章纲的要点推。
   if (last.endDay !== undefined) return last.endDay;
+  // 没记再按那章章纲的要点推章内换了几天；开场是第几天以时间线为准——定稿时按正文记过，
+  // 旧章纲的天数可能早过时了（2026-10-28 第 32 章章纲第 125 天、正文「评估过去三天了」记成第 130 天，第 33 章章纲跟着旧的记成第 126 天）。
   const previous = await readChapterPlan(projectDir, last.chapter).catch(() => undefined);
-  return storyDayAtChapterEnd(previous) ?? last.storyDay;
+  const planEnd = storyDayAtChapterEnd(previous);
+  return planEnd !== undefined && previous?.storyDay ? last.storyDay + (planEnd - previous.storyDay) : last.storyDay;
 }
