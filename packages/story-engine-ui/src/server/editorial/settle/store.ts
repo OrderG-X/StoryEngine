@@ -19,7 +19,7 @@ import {
   type SettleApplyResult,
 } from "@actalk/story-core";
 import { runWithLazySnapshot } from "../../lib/snapshot.js";
-import { describeBasisChanges } from "../../lib/truth-basis-store.js";
+import { describeBasisChanges } from "../../book/truth-basis.js";
 import { writeAtomically } from "../reader-window.js";
 import type { SettleProposal } from "./propose.js";
 

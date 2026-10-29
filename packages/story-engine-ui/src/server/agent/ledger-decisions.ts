@@ -24,8 +24,8 @@ import {
 import { ensureBookOnCore } from "../book/mirror/ensure.js";
 import { syncLegacyMirror } from "../book/mirror/sync.js";
 import { runWithLazySnapshot, coreSnapshotFor } from "../lib/snapshot.js";
-import { describeBasisChanges, recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
-import { readTruthBasisForWork } from "../book/truth-basis.js";
+import { describeBasisChanges, readTruthBasisForWork } from "../book/truth-basis.js";
+import { recallBasis, rememberBasis } from "../lib/truth-basis-store.js";
 
 /** 一次最多改几条（按钮带着裁定走，防一次塞太多看不清）。 */
 export const MAX_DECISIONS_PER_CHANGE = 20;

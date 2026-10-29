@@ -35,7 +35,7 @@ import {
   type TimeInput,
   type TruthBasis,
 } from "@actalk/story-core";
-import { describeBasisChanges } from "../lib/truth-basis-store.js";
+import { describeBasisChanges } from "../book/truth-basis.js";
 import type { KeeperDrop } from "./keeper-parse.js";
 import { runLedgerKeeper, type QuoteRepair } from "./ledger-keeper.js";
 import type { ReaderWaited } from "./reader-progress.js";

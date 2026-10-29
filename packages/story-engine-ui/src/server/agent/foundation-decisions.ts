@@ -7,7 +7,8 @@
  */
 import { CardOps, type BasisChange } from "@actalk/story-core";
 import { writeCards } from "../lib/card-write.js";
-import { describeBasisChanges, recallBasis } from "../lib/truth-basis-store.js";
+import { describeBasisChanges } from "../book/truth-basis.js";
+import { recallBasis } from "../lib/truth-basis-store.js";
 
 export interface FoundationDecisionOutcome {
   readonly ok: boolean;

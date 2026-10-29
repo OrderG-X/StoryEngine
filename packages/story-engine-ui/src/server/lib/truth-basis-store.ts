@@ -5,9 +5,9 @@
  */
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { diffTruthBasis, TruthBasis, type BasisChange } from "@actalk/story-core";
+import { TruthBasis } from "@actalk/story-core";
 import { writeFileAtomic } from "./project-io.js";
-import { readTruthBasisForWork, readTruthBasisToCompare } from "../book/truth-basis.js";
+import { readTruthBasisForWork } from "../book/truth-basis.js";
 
 const DIGEST = /^[0-9a-f]{64}$/u;
 /** 留最近这么多份依据（一份几 KB）；更老的提议按钮点了如实说过期。 */
@@ -51,33 +51,4 @@ export async function recallBasis(projectDir: string, digest: string): Promise<T
   } catch {
     return undefined;
   }
-}
-
-export type BasisCheck =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly code: "basis_missing" }
-  | { readonly ok: false; readonly code: "basis_changed"; readonly changes: readonly BasisChange[] };
-
-/** 按摘要核：书从那以后变没变。调用方要和写互斥就在书锁里调。 */
-export async function checkBasis(projectDir: string, digest: string): Promise<BasisCheck> {
-  const basis = await recallBasis(projectDir, digest);
-  if (!basis) return { ok: false, code: "basis_missing" };
-  const changes = diffTruthBasis(basis, await readTruthBasisToCompare(projectDir));
-  return changes.length === 0 ? { ok: true } : { ok: false, code: "basis_changed", changes };
-}
-
-/** 依据变了哪些 → 给作者看的一句（只有章号和「设定本 / 作者裁定」，不带编号）。 */
-export function describeBasisChanges(changes: readonly BasisChange[]): string {
-  const parts: string[] = [];
-  const chapters = (kind: "text" | "ledger") =>
-    [...new Set(changes.flatMap((change) => (change.kind === kind ? [change.chapter] : [])))].sort((a, b) => a - b);
-  const list = (numbers: readonly number[]): string =>
-    numbers.length > 4 ? `第 ${numbers.slice(0, 4).join("、")} 等 ${numbers.length} 章` : `第 ${numbers.join("、")} 章`;
-  const texts = chapters("text");
-  const ledgers = chapters("ledger").filter((chapter) => !texts.includes(chapter));
-  if (texts.length > 0) parts.push(`${list(texts)}的定稿正文`);
-  if (ledgers.length > 0) parts.push(`${list(ledgers)}的账`);
-  if (changes.some((change) => change.kind === "cards")) parts.push("设定本");
-  if (changes.some((change) => change.kind === "decisions")) parts.push("作者裁定");
-  return parts.length > 0 ? parts.join("、") : "书里的内容";
 }

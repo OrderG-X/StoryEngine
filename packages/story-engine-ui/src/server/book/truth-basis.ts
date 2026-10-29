@@ -10,7 +10,7 @@
  * 改设定卡只涨版本号、不同步镜像，也在这里补上。同步没成（写盘失败）如实说、不给依据。
  * 取到之后真相再变，依据就对不上，产物照依据作废——不用管镜像后来怎样。
  */
-import { listChapterLedgers, readHead, readTruthBasis, withBookLock, type TruthBasis } from "@actalk/story-core";
+import { listChapterLedgers, readHead, readTruthBasis, withBookLock, type BasisChange, type TruthBasis } from "@actalk/story-core";
 import { readMirrorVersion, syncLegacyMirror } from "./mirror/sync.js";
 
 export const MIRROR_LAG_MESSAGE = "按账整理的时间线和线索还没跟上刚改的账（同步没成），这次没做。稍后再试一次";
@@ -66,4 +66,20 @@ export async function readWithStableBasisForWork<T>(projectDir: string, read: ()
 /** 只用来比「书现在和那份依据一样不一样」，不挂到任何产物上（比的一方已经核过镜像）。 */
 export async function readTruthBasisToCompare(projectDir: string): Promise<TruthBasis> {
   return readTruthBasis(projectDir);
+}
+
+/** 依据变了哪些 → 给作者看的一句（只有章号和「设定本 / 作者裁定」，不带编号）。 */
+export function describeBasisChanges(changes: readonly BasisChange[]): string {
+  const parts: string[] = [];
+  const chapters = (kind: "text" | "ledger") =>
+    [...new Set(changes.flatMap((change) => (change.kind === kind ? [change.chapter] : [])))].sort((a, b) => a - b);
+  const list = (numbers: readonly number[]): string =>
+    numbers.length > 4 ? `第 ${numbers.slice(0, 4).join("、")} 等 ${numbers.length} 章` : `第 ${numbers.join("、")} 章`;
+  const texts = chapters("text");
+  const ledgers = chapters("ledger").filter((chapter) => !texts.includes(chapter));
+  if (texts.length > 0) parts.push(`${list(texts)}的定稿正文`);
+  if (ledgers.length > 0) parts.push(`${list(ledgers)}的账`);
+  if (changes.some((change) => change.kind === "cards")) parts.push("设定本");
+  if (changes.some((change) => change.kind === "decisions")) parts.push("作者裁定");
+  return parts.length > 0 ? parts.join("、") : "书里的内容";
 }
