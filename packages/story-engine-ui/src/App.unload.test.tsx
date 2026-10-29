@@ -66,3 +66,23 @@ it("只是还没到存的时候：不拦，keepalive 发出最后一笔", async 
   expect(event.defaultPrevented).toBe(false);
   expect(vi.mocked(saveWorkingDraft).mock.calls.at(-1)?.[1]).toEqual({ keepalive: true });
 });
+
+it("没存上之后的重试还在路上：再关一次照样拦（第 5 轮 S5）", async () => {
+  let done!: () => void;
+  const retry = new Promise<Awaited<ReturnType<typeof saveWorkingDraft>>>((resolve) => { done = () => resolve({ ok: true, version: "v2", unchanged: false }); });
+  vi.mocked(saveWorkingDraft).mockRejectedValueOnce(new Error("写盘失败")).mockImplementation(() => retry);
+  openPaper();
+  const app = render(createElement(App));
+  await act(async () => {
+    editDraft("唯一的新字。");
+    expect((await flushDraftSave()).ok).toBe(false);
+  });
+  const first = await leave();
+  const second = await leave();
+  expect(first.defaultPrevented).toBe(true);
+  expect(second.defaultPrevented).toBe(true);
+  await act(async () => { done(); await flushDraftSave(); });
+  const third = await leave();
+  app.unmount();
+  expect(third.defaultPrevented).toBe(false);
+});

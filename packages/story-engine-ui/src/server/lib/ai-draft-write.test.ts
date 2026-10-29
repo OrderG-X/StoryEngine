@@ -27,7 +27,7 @@ afterEach(async () => {
 async function start(chapter = 1) {
   const basis = await readTruthBasis(book);
   const baseVersion = (await readDraft(book, chapter))?.version ?? null;
-  return { basis, baseVersion };
+  return { basis, baseVersion, materials: [] };
 }
 
 async function authorSaves(chapter: number, body: string): Promise<void> {

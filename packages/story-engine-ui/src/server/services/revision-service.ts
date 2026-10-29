@@ -437,6 +437,7 @@ async function persistRevisionUpdate(input: {
     body: input.updatedContent,
     baseVersion: input.baseVersion,
     basis: input.basis,
+    materials: [],
     source: "revise",
     snapshotLabel: input.snapshotLabel,
   });

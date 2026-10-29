@@ -238,10 +238,15 @@ async function settleRecovery(projectDir: string, recovery: DraftRecovery, seq =
 
 /**
  * 不要那一份了（调用方在书锁里）。是这个窗口自己的那份直接清；别的窗口留下的，要作者看到的就是这一份（sha）才清。
+ * 已经清空了的（找回了、别处不要了）：本窗口的就把序号推到这一笔，在路上的旧笔到了不再写回来（第 5 轮复核 S10）。
  * 返回 false = 那一份在这期间变过了，没清。
  */
 export async function dismissDraftRecovery(projectDir: string, recovery: DraftRecovery, check: { readonly sha?: string; readonly from?: { readonly client: string; readonly seq: number } }): Promise<boolean> {
   const own = check.from?.client === recovery.client;
+  if (!recovery.body.trim()) {
+    if (own && check.from!.seq > recovery.seq) await settleRecovery(projectDir, recovery, check.from!.seq);
+    return true;
+  }
   if (!own && check.sha !== sha256(recovery.body)) return false;
   // 本窗口迟到的旧「不要了」：它说不要的那几笔已经被后来的字顶掉了，后来的字不清（第 4 轮复核 R2）。
   if (own && check.from!.seq < recovery.seq) return true;

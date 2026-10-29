@@ -125,14 +125,16 @@ export function registerWorkingDraftRoutes(middlewares: MiddlewareStack): void {
           const entry = kind === "candidate" ? await readDraftCandidate(projectDir, id) : await readDraftRecovery(projectDir, id);
           const live = entry && entry.chapter === chapter && entry.body.trim() ? entry : undefined;
           if (decision === "dismiss") {
-            // 不要了：已经不在也算成（重发、两个窗口各点一次）。
-            if (!live) return { status: 200, payload: { ok: true } };
             if (kind === "candidate") {
+              // 不要了：已经不在也算成（重发、两个窗口各点一次）。
+              if (!live) return { status: 200, payload: { ok: true } };
               if (sha !== undefined && sha !== sha256(live.body)) return { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
               await removeDraftCandidate(projectDir, id);
               return { status: 200, payload: { ok: true } };
             }
-            const dismissed = await dismissDraftRecovery(projectDir, live as DraftRecovery, { ...(sha !== undefined ? { sha } : {}), ...(from ? { from } : {}) });
+            // 恢复稿已经清空了（找回了、别处不要了）也算成；清空的那份也交给它推进序号（第 5 轮复核 S10）。
+            if (!entry || entry.chapter !== chapter) return { status: 200, payload: { ok: true } };
+            const dismissed = await dismissDraftRecovery(projectDir, entry as DraftRecovery, { ...(sha !== undefined ? { sha } : {}), ...(from ? { from } : {}) });
             return dismissed ? { status: 200, payload: { ok: true } } : { status: 409, payload: { ok: false, error: "那一份在这期间变过了，没删。看一眼再选。" } };
           }
           if (!live) return { status: 404, payload: { ok: false, error: "那一份已经不在了（可能已经换上或不要了）。" } };

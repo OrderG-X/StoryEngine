@@ -100,7 +100,7 @@ async function handleDeAiFlavorApply(req: import("node:http").IncomingMessage, r
     let writtenContent = rawDraft;
     if (result.rewritten > 0 && result.updatedContent !== rawDraft) {
       // AI 写稿唯一通道：换上前在同一把书锁里存档（撤销、定稿切不进中间）。
-      const written = await applyAiDraft(projectDir, { chapter, body: result.updatedContent, baseVersion, basis, source: "de-ai", snapshotLabel: "一键去 AI 味前快照" });
+      const written = await applyAiDraft(projectDir, { chapter, body: result.updatedContent, baseVersion, basis, materials: [], source: "de-ai", snapshotLabel: "一键去 AI 味前快照" });
       if (!written.applied) {
         writeJson(res, 409, { ok: false, code: "draft_kept", error: written.message, candidateId: written.candidateId });
         return;

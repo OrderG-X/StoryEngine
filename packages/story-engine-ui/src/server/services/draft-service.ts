@@ -48,7 +48,7 @@
  * 铁律：AI 写工作稿唯一通道是 applyAiDraft（lib/ai-draft-write.ts）；passed=false 的候选永远不得中选；
  * 回检/裁决/去味全部 warning-only，绝不影响出稿 ok；绝不静默失败、绝不谎报。
  */
-import { parseDraftFile, quoteInText, readChapterText, readDraftState, readTruthBasis, type TruthBasis } from "@actalk/story-core";
+import { parseDraftFile, quoteInText, readDraftState, readTruthBasis, type TruthBasis } from "@actalk/story-core";
 import {
   buildAiFlavorReport,
   detectAiFlavorViolations,
@@ -79,6 +79,7 @@ import {
   type WriterClient,
 } from "../writing/fast-draft-writer.js";
 import { readChapterPlan, type ChapterPlan } from "../book/chapter-plan.js";
+import { materialLog, planDigest, type MaterialLog } from "../book/material-reads.js";
 
 import { adjudicateMissingBeats, isAdjudicationQuoteVerbatim, type AdjudicatedCoveredBeat, type BeatMissAdjudication } from "../writing/beat-miss-adjudication.js";
 import { applyAiDraft, type AiDraftOutcome } from "../lib/ai-draft-write.js";
@@ -1133,10 +1134,6 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
   // 或前文、设定改过，换上时就对不上——不盖掉作者那份，这版留成候选、如实说（写作版本 P1b）。
   // 稿只读这一次：版本号和接着写要接的正文是同一份。
   const startBasis = await readTruthBasis(input.projectDir);
-  // 前一章还没定稿（作者知情后提前写）：写手、章纲、在场检测拿它的工作稿当前情。工作稿不进依据，单独记下开工时的版本。
-  const alsoRead = input.chapter > 1 && (await readChapterText(input.projectDir, input.chapter - 1)) === undefined
-    ? [{ chapter: input.chapter - 1, version: (await readDraftState(input.projectDir, input.chapter - 1)).version }]
-    : [];
   const startState = await readDraftState(input.projectDir, input.chapter);
   const startDraft = startState.file && parseDraftFile(startState.file.text);
   const startVersion = startState.version;
@@ -1148,7 +1145,7 @@ export async function runGenerateDraft(input: GenerateDraftInput): Promise<Gener
     input.onContinueBase?.(text);
   }
   // 开写时存的那份「在写」候选：不管怎么收场（换上、没换上、抛错），流程结束就不再算在写——没换上的、半路抛错的，稿纸会提示。
-  const start: DraftStart = { basis: startBasis, version: startVersion, alsoRead, ...(continueFrom ? { continueFrom } : {}), progress: {} };
+  const start: DraftStart = { basis: startBasis, version: startVersion, materials: materialLog(), ...(continueFrom ? { continueFrom } : {}), progress: {} };
   try {
     return await runGenerateDraftStarted(input, start);
   } finally {
@@ -1225,8 +1222,8 @@ export class NothingToContinueError extends Error {
 interface DraftStart {
   readonly basis: TruthBasis;
   readonly version: string | null;
-  /** 前一章没定稿时它的工作稿版本（写手拿它当前情）：换上时变了算前文改过。 */
-  readonly alsoRead: readonly { readonly chapter: number; readonly version: string | null }[];
+  /** 写这一稿用过、不在真相依据里的材料（本章章纲、前一章工作稿、已有各章章名）：换上时有一样变了算依据过期（第 5 轮复核 S8/S9）。 */
+  readonly materials: MaterialLog;
   readonly continueFrom?: { readonly text: string; readonly length?: number; readonly direction?: string };
   readonly progress: { candidateId?: string };
 }
@@ -1252,10 +1249,13 @@ async function runGenerateDraftWithPlan(
     aiFlavorRecheck: input.policies?.aiFlavorRecheck !== false,
   });
   const { chapterGoal, maxTimelineEvents, lengthTarget, contextRanking, characterSelection } = run;
+  // 照这份章纲写：记下它的内容，换上前章纲被换了（另一轮重拟、作者改了）就不换上。
+  if (chapterPlan) start.materials.note({ kind: "plan", chapter, digest: planDigest(chapterPlan) });
 
   const sharedDraftInput = {
     ...sharedFastDraftInput(run, { ...input, ...(continueFrom ? { segmentByPlan: false } : {}) }),
     ...(continueFrom ? { continueFrom } : {}),
+    materials: start.materials,
   };
   // candidates 只认 2/3（schema 已卡 1–3；逻辑层被直接调用时其余值一律当 1=现状零变化）。接着写只出一版。
   const candidateCount = !continueFrom && (input.candidates === 2 || input.candidates === 3) ? input.candidates : 1;
@@ -1473,7 +1473,7 @@ async function runGenerateDraftWithPlan(
       body: draftBody,
       baseVersion: start.version,
       basis: start.basis,
-      alsoRead: start.alsoRead,
+      materials: start.materials.reads(),
       source,
       ...(input.snapshotLabel ? { snapshotLabel: input.snapshotLabel } : {}),
       ...(start.progress.candidateId ? { candidateId: start.progress.candidateId } : {}),

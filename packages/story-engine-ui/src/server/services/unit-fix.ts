@@ -238,6 +238,7 @@ export async function fixDraftByUnits(input: {
       body: outcome.text,
       baseVersion: file.version,
       basis,
+      materials: [],
       source: "unit-fix",
       snapshotLabel: `第${chapter}章按核账改前快照`,
     });

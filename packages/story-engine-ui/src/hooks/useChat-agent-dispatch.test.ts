@@ -12,7 +12,7 @@ import { fetchStateOverview } from "../api/client.js";
 import { fetchChapterPaper, saveWorkingDraft, type ChapterPaper } from "../api/workingDraftClient.js";
 import { renameChatSession } from "../api/chatSessionsClient.js";
 import { applyOverviewToWorkspace } from "../workspace/applyOverview.js";
-import { __resetDraftSyncForTests, editDraft } from "../drafts/draftSync.js";
+import { __resetDraftSyncForTests, editDraft, flushDraftSave } from "../drafts/draftSync.js";
 import { isPaperCommitted } from "../drafts/useDraftPreview.js";
 import { useChat, type UseChatParams } from "./useChat.js";
 import type { AgentChatHandlers, StreamAgentChatRequest } from "../api/agentChatClient.js";
@@ -82,8 +82,9 @@ function seedPaper(chapter: number, input: Parameters<typeof writeDisk>[1]): voi
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 /** 给 streamAgentChat 装一个会按脚本回放事件的实现。 */
@@ -473,6 +474,114 @@ describe("useChat agent dispatch (Mastra phase 1)", () => {
     expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章没存上的字。" });
     expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(3);
     expect(mockedStreamAgentChat.mock.calls.at(-1)?.[0].currentChapter).toBe(3);
+  });
+
+  it("AI 换到另一章时那章读不出来：稿纸留在原章，读盘那会儿打的字照样存上（第 5 轮 S1）", async () => {
+    const entered = deferred<void>();
+    const fetched = deferred<ChapterPaper>();
+    mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s1" });
+      handlers.onDraftDelta?.({ chapter: 4, text: "第四章流式稿。" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s1", chapter: 4, ok: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      const turn = result.current.handleSendMessage("写第四章");
+      await entered.promise;
+      editDraft("读第四章时在第三章新打的字。");
+      fetched.reject(new Error("读盘失败"));
+      await turn;
+    });
+    await act(async () => { await flushDraftSave(); });
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "读第四章时在第三章新打的字。" });
+    expect(disk.get(3)?.draft?.body).toBe("读第四章时在第三章新打的字。");
+    expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(3);
+  });
+
+  it("换章之后才处理的工具结果又发起重读：回合等它读完才收尾（第 5 轮 S2）", async () => {
+    const entered = deferred<void>();
+    const first = deferred<ChapterPaper>();
+    const secondEntered = deferred<void>();
+    const second = deferred<ChapterPaper>();
+    mockedFetchChapterPaper
+      .mockImplementationOnce(async () => { entered.resolve(); return first.promise; })
+      .mockImplementationOnce(async () => { secondEntered.resolve(); return second.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s2" });
+      handlers.onDraftDelta?.({ chapter: 4, text: "已经出完第四章。" });
+      writeDisk(4, { draft: "第四章成稿。" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s2", chapter: 4, ok: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    let finished = false;
+    let turn!: Promise<void>;
+    await act(async () => {
+      turn = result.current.handleSendMessage("写第四章").then(() => { finished = true; });
+      await entered.promise;
+      first.resolve(emptyPaper(4));
+      await secondEntered.promise;
+      for (let n = 0; n < 30; n++) await Promise.resolve();
+    });
+    expect(finished).toBe(false);
+    expect(isWorkspaceBusy()).toBe(true);
+    await act(async () => { second.resolve(disk.get(4)!); await turn; });
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 4, body: "第四章成稿。" });
+    expect(isWorkspaceBusy()).toBe(false);
+  });
+
+  it("换章读盘超过收尾时限：回合交还后旧的读盘回来，不再换稿纸（第 5 轮 S3）", async () => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const fetched = deferred<ChapterPaper>();
+    mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s3" });
+      handlers.onDraftDelta?.({ chapter: 4, text: "旧书第四章。" });
+      handlers.onToolResult({ toolName: "generate_draft", toolCallId: "s3", chapter: 4, ok: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    try {
+      await act(async () => {
+        const turn = result.current.handleSendMessage("写第四章");
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(5001);
+        await turn;
+      });
+      expect(isWorkspaceBusy()).toBe(false);
+      await act(async () => {
+        fetched.resolve({ ...emptyPaper(4), draft: { chapter: 4, body: "迟到的第四章。", version: "late-v1" } });
+        for (let n = 0; n < 30; n++) await Promise.resolve();
+      });
+      expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章原有的工作稿。", streaming: null });
+      expect(useBookStore.getState().workspace.currentChapter.chapterNumber).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("换章还没换完出稿就报错：不再换过去、不再摆出流式稿、不谎报写完（第 5 轮 S4）", async () => {
+    const entered = deferred<void>();
+    const fetched = deferred<ChapterPaper>();
+    mockedFetchChapterPaper.mockImplementationOnce(async () => { entered.resolve(); return fetched.promise; });
+    scriptAgentStream((handlers) => {
+      handlers.onToolCall({ toolName: "generate_draft", toolCallId: "s4" });
+      handlers.onDraftDelta?.({ chapter: 4, text: "失败前的半章。" });
+      handlers.onToolError({ toolName: "generate_draft", toolCallId: "s4", message: "生成失败", retryable: true });
+      handlers.onDone();
+    });
+    const { result } = renderHook(() => useChat(buildParams({})));
+    await act(async () => {
+      const turn = result.current.handleSendMessage("写第四章");
+      await entered.promise;
+      fetched.resolve(emptyPaper(4));
+      await turn;
+    });
+    expect(useDraftStore.getState()).toMatchObject({ chapter: 3, body: "第三章原有的工作稿。", streaming: null });
+    expect(messages().some((message) => message.content.includes("其实已经写完了"))).toBe(false);
   });
 
   it("a stale agent finally releases its token without clearing loading in the replacement workspace", async () => {

@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildChapterPlanSection, collectPlanEntityTerms, collectPlanRetrievalTerms, readStoryClock, type ChapterPlan } from "../book/chapter-plan.js";
 import { findEarlierPassages, type EarlierPassage } from "./earlier-passages.js";
@@ -13,7 +13,9 @@ import {
   readThreadPool,
   readTimelineEvents,
 } from "../book/project-store.js";
-import { selectRelevant } from "@actalk/story-core";
+import { readDraftState, selectRelevant } from "@actalk/story-core";
+import { extractMarkdownTitle, readChapterTitles } from "../book/chapter-titles.js";
+import { titlesDigest, type MaterialLog } from "../book/material-reads.js";
 import { estimateTokens } from "../../lib/estimate-tokens.js";
 import { buildTimelineLayers } from "../book/timeline-layers.js";
 import { buildWritingContextPack, type WritingContextPack } from "./writing-context-pack.js";
@@ -193,6 +195,11 @@ export interface BuildWriterContextInput {
    * （长篇连写：章纲带着「三楼走廊」，重写沿用章纲又写了一遍）。
    */
   readonly lastDraftConflicts?: readonly LastDraftConflict[];
+  /**
+   * 记下这份上下文用了哪些不在真相依据里的材料（前一章工作稿、已有各章章名）：要换上工作稿的出稿必须给，
+   * 换上前逐条再核（第 5 轮复核 S8）。只出候选、不换上的可以不给。
+   */
+  readonly materials?: MaterialLog;
 }
 
 /** 上一稿的一处错：写成了 wrote，和 where 的 against 对不上（why）。 */
@@ -242,11 +249,15 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
       // 审计 Low：删掉「旧格式回退」第二跳——它与首读同一文件同一 JSON.parse，首读失败它必失败，
       // 永远不可能救回，只是把同一故障记两遍（且内层把权限错无痕吞成 []）。单跳：降级 + 留痕一次。
       .catch((error) => { trackReadFailure("时间线事件")(error); return [] as readonly TimelineEvent[]; }),
-    readPreviousUncommittedDraftContext(input.projectDir, input.chapter),
+    readPreviousUncommittedDraftContext(input.projectDir, input.chapter, input.materials),
     readPreviousChapterContext(input.projectDir, input.chapter)
       .catch((error) => { trackReadFailure("上一章正文")(error); return undefined; }),
     // 已有各章标题（R7.7·报告 5：拟标题防重名，第 7、9 章都叫「铁丝」）。读不到按空（不出段），不炸出稿。
-    readExistingChapterTitles(input.projectDir, input.chapter)
+    readChapterTitles(input.projectDir, input.chapter)
+      .then((titles) => {
+        input.materials?.note({ kind: "titles", except: input.chapter, digest: titlesDigest(titles) });
+        return titles;
+      })
       .catch(() => [] as readonly { chapter: number; title: string }[]),
   ]);
   const plan = input.chapterPlan;
@@ -343,6 +354,7 @@ export async function buildWriterContext(input: BuildWriterContextInput): Promis
 async function readPreviousUncommittedDraftContext(
   projectDir: string,
   chapter: number,
+  materials: MaterialLog | undefined,
 ): Promise<PreviousUncommittedDraftContext | undefined> {
   if (chapter <= 1) return undefined;
   const previousChapter = chapter - 1;
@@ -354,8 +366,11 @@ async function readPreviousUncommittedDraftContext(
   });
   if (committedContent !== undefined) return undefined;
 
-  const draftPath = join(projectDir, "drafts", "fast", `chapter-${padChapter(previousChapter)}.md`);
-  const draftContent = await readFile(draftPath, "utf-8").catch(() => undefined);
+  // 前一章没定稿：它的工作稿当前情（不在真相依据里），记下用的是哪一版（没有稿也记：换上前有了稿也算前文变了）。
+  const draft = await readDraftState(projectDir, previousChapter).catch(() => undefined);
+  if (!draft) return undefined;
+  materials?.note({ kind: "draft", chapter: previousChapter, version: draft.version });
+  const draftContent = draft.file?.text;
   const body = stripMarkdownHeading(draftContent ?? "");
   if (!body.trim()) return undefined;
   const title = extractMarkdownTitle(draftContent);
@@ -424,54 +439,6 @@ function previousChapterExcerpt(body: string): { readonly text: string; readonly
 
 function padChapter(chapter: number): string {
   return String(chapter).padStart(4, "0");
-}
-
-/** 拟标题防重名时最多带多少章的已有标题（长书只看最近的，防上下文膨胀）。 */
-const MAX_EXISTING_CHAPTER_TITLES = 60;
-
-/**
- * 已有各章标题（2026-10-14 编辑部 R7.7·报告 5）：定稿章（chapters/000N.md）+ 工作稿（drafts/fast/chapter-NNNN.md），
- * 取章号最大的最近 MAX_EXISTING_CHAPTER_TITLES 章、不含本章（重写本章时不能把自己的标题当「重名」）。
- * 定稿标题优先（正稿为准），只有工作稿的章用工作稿标题；读不出标题的章跳过。纯读盘、题材中立。
- */
-async function readExistingChapterTitles(
-  projectDir: string,
-  currentChapter: number,
-): Promise<readonly { chapter: number; title: string }[]> {
-  const chapters = new Set<number>();
-  const [committedFiles, draftFiles] = await Promise.all([
-    readdir(join(projectDir, "chapters")).catch(() => [] as string[]),
-    readdir(join(projectDir, "drafts", "fast")).catch(() => [] as string[]),
-  ]);
-  for (const file of committedFiles) {
-    const chapter = Number(/^(\d{4})\.md$/u.exec(file)?.[1]);
-    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
-  }
-  for (const file of draftFiles) {
-    const chapter = Number(/^chapter-(\d{4})\.md$/u.exec(file)?.[1]);
-    if (Number.isInteger(chapter) && chapter > 0) chapters.add(chapter);
-  }
-  const recent = [...chapters]
-    .filter((chapter) => chapter !== currentChapter)
-    .sort((a, b) => b - a)
-    .slice(0, MAX_EXISTING_CHAPTER_TITLES);
-  const withTitles = await Promise.all(recent.map(async (chapter) => {
-    const [committedTitle, draftTitle] = await Promise.all([
-      extractMarkdownTitle(await readFile(join(projectDir, "chapters", `${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
-      extractMarkdownTitle(await readFile(join(projectDir, "drafts", "fast", `chapter-${padChapter(chapter)}.md`), "utf-8").catch(() => undefined)),
-    ]);
-    const title = committedTitle ?? draftTitle;
-    return title ? { chapter, title } : undefined;
-  }));
-  return withTitles
-    .filter((item): item is { chapter: number; title: string } => item !== undefined)
-    .sort((a, b) => a.chapter - b.chapter);
-}
-
-function extractMarkdownTitle(content: string | undefined): string | undefined {
-  const line = content?.split(/\r?\n/u).find((item) => item.trim().startsWith("#"))?.trim();
-  if (!line) return undefined;
-  return line.replace(/^#+\s*/u, "").trim() || undefined;
 }
 
 function stripMarkdownHeading(content: string): string {

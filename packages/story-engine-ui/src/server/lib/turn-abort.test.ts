@@ -29,7 +29,7 @@ afterEach(async () => {
 async function aiWrite(body: string, candidateId?: string) {
   const basis = await readTruthBasis(book);
   const baseVersion = (await readDraft(book, 1))?.version ?? null;
-  return applyAiDraft(book, { chapter: 1, body, baseVersion, basis, source: "draft", ...(candidateId ? { candidateId } : {}) });
+  return applyAiDraft(book, { chapter: 1, body, baseVersion, basis, materials: [], source: "draft", ...(candidateId ? { candidateId } : {}) });
 }
 
 const draftOf = (chapter: number) => readFile(join(book, "drafts", "fast", `chapter-${String(chapter).padStart(4, "0")}.md`), "utf-8").catch(() => undefined);

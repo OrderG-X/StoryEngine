@@ -71,7 +71,7 @@ async function save(chapter: number, body: string): Promise<string> {
   return outcome.result.version;
 }
 async function begin(chapter: number) {
-  return { basis: await readTruthBasis(book), baseVersion: (await readDraftState(book, chapter)).version };
+  return { basis: await readTruthBasis(book), baseVersion: (await readDraftState(book, chapter)).version, materials: [] };
 }
 
 async function call(method: string, url: string, body?: Record<string, unknown>): Promise<{ status: number; payload: Record<string, unknown> }> {
@@ -248,6 +248,21 @@ describe("稿纸存稿撞版本：作者的字找得回", () => {
     expect((await readDraftRecovery(book, String(newer.payload.recoveryId)))?.body).toBe("新笔新增的重要句子。");
   });
 
+  it("恢复稿已被别的窗口找回、清空了：本窗口后来的「不要了」照样推进序号，在路上的旧笔到了不再写回来（第 5 轮 S10）", async () => {
+    const base = await save(1, "原稿。");
+    const changed = await save(1, "AI 工作稿。");
+    const request = { projectPath: book, chapter: 1, baseVersion: base, client: "samewindow10" };
+    const first = await call("PUT", "/api/working-draft", { ...request, body: "恢复稿第一笔。", seq: 1 });
+    expect(first.status).toBe(409);
+    const id = first.payload.recoveryId;
+    expect((await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id, sha: sha256("恢复稿第一笔。"), decision: "adopt", baseVersion: changed })).status).toBe(200);
+    expect((await call("POST", "/api/working-draft/pending", { projectPath: book, chapter: 1, kind: "recovery", id, sha: "", decision: "dismiss", baseVersion: null, client: request.client, seq: 2 })).status).toBe(200);
+    expect((await readDraftRecovery(book, String(id)))?.seq).toBe(2);
+    await call("PUT", "/api/working-draft", { ...request, body: "作者刚刚明确不要的第二笔。", seq: 2 });
+    expect((await readDraftRecovery(book, String(id)))?.body).toBe("");
+    expect(await pendingDraftFor(book, 1)).toBeUndefined();
+  });
+
   it("书从备份 / 回收站搬回来：稿纸上照原来那版发的存稿对不上", async () => {
     const base = await save(1, "搬走前的稿。");
     await freshRevision(book);
@@ -295,7 +310,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
     await writeFile(join(tx, "manifest.json"), JSON.stringify({ version: 2, chapter: 1, createdAt: "2026-10-20T00:00:00.000Z", files: [relative], backups: [{ relativePath: relative, existed: true, backupPath: `backups/${relative}`, sha256: sha256(original) }], status: "staged" }));
     await writeFile(join(book, relative), "前文：他叫李四。");
     const basis = await readTruthBasis(book);
-    const result = await applyAiDraft(book, { chapter: 2, body: "李四带着钥匙来了。", baseVersion: null, basis, source: "revise" });
+    const result = await applyAiDraft(book, { chapter: 2, body: "李四带着钥匙来了。", baseVersion: null, basis, materials: [], source: "revise" });
     expect(await readFile(join(book, relative), "utf-8")).toBe(original);
     expect(JSON.parse(await readFile(join(tx, "manifest.json"), "utf-8")).status).toBe("recovered");
     expect(result).toMatchObject({ applied: false, reason: "basis_moved" });
@@ -354,7 +369,7 @@ describe("AI 写的稿：旧依据不换上，换不上的整份留着", () => {
       failRest.release();
       expect(await failedWrite).toMatchObject({ ok: false });
       expect(await readFile(join(book, "chapters/0001.md"), "utf-8")).toBe("他叫张三。");
-      const applied = await applyAiDraft(book, { chapter: 2, body: "李四把钥匙交了出去。", baseVersion: null, basis, source: "draft" });
+      const applied = await applyAiDraft(book, { chapter: 2, body: "李四把钥匙交了出去。", baseVersion: null, basis, materials: [], source: "draft" });
       expect(applied).toMatchObject({ applied: false, reason: "basis_moved" });
       expect(await readDraft(book, 2)).toBeUndefined();
     } finally {
