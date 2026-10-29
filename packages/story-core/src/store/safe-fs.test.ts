@@ -289,7 +289,7 @@ describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开�
     expect(await displaced()).toEqual(["后来的 X"]);
   });
 
-  it("挪开之后、新建之前原处又有了 Y：不盖；挪开的 C 留在 aside，下次收拾交回来另存再挪进留证区", async () => {
+  it("挪开之后、换上之前原处又有了 Y：不盖；挪开的 C 留在 aside，下次收拾交回来另存再挪进留证区", async () => {
     const { discardAside, restoreFileInBook, settleInterruptedPlace } = await import("./safe-fs.js");
     await writeFile(target(), "现稿 C");
     const hook = async (point: string, path: string) => {
@@ -302,10 +302,11 @@ describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开�
     await discardAside(book, aside(), { label: "draft", expectSha: sha("现稿 C") });
     await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(target(), "utf-8")).toBe("别处新建的 Y");
-    expect(await displaced()).toEqual(["现稿 C"]);
+    // 没换上的临时文件（这次要放上的 A）也挪进了留证区。
+    expect((await displaced()).sort()).toEqual(["原稿 A", "现稿 C"].sort());
   });
 
-  it("新建之后、写之前原处被换成 Y：如实失败，Y 不动、挪开的 C 留在 aside", async () => {
+  it("换上之后、核之前原处被换成 Y：如实失败，Y 不动、挪开的 C 留在 aside", async () => {
     const { restoreFileInBook } = await import("./safe-fs.js");
     await writeFile(target(), "现稿 C");
     const hook = async (point: string, path: string) => {
@@ -331,7 +332,44 @@ describe("回滚 / 恢复盖掉、删掉别人可能动过的那份：先挪开�
     await expect(lstat(aside())).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("新建之前上级被换成书外软链：不往书外写内容，挪开的 C 留在 aside", async () => {
+  it("换上之前原处一直空着、读不到半份（第 27 轮）：内容在同目录临时文件里写好核过才换上去", async () => {
+    const { restoreFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    let seen: string | undefined = "没停";
+    const hook = async (point: string, path: string) => {
+      if (point === "after-precheck-before-open" && path === target()) seen = await readFile(target(), "utf-8").catch(() => undefined);
+    };
+    await restoreFileInBook(book, target(), "原稿 A", { label: "draft", expectTarget: sha("现稿 C"), aside: aside(), hook });
+    expect(seen).toBeUndefined();
+    expect(await readFile(target(), "utf-8")).toBe("原稿 A");
+    expect((await readdir(dirname(target()))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("换上之后、核之前外面拿着原处那份原位写进 X（第 27 轮）：X 不被盖，如实失败，挪开的 C 留在 aside、下次交回来另存", async () => {
+    const { restoreFileInBook, settleInterruptedPlace } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    const hook = async (point: string, path: string) => {
+      if (point === "after-open-before-verify" && path === target()) await writeFile(target(), "X");
+    };
+    await expect(restoreFileInBook(book, target(), "原稿 A", { label: "draft", expectTarget: sha("现稿 C"), aside: aside(), hook })).rejects.toMatchObject({ code: "UNSAFE_TARGET_CHANGED" });
+    expect(await readFile(target(), "utf-8")).toBe("X");
+    expect(await readFile(aside(), "utf-8")).toBe("现稿 C");
+    expect(await settleInterruptedPlace(book, target(), { label: "draft", aside: aside() })).toBe("现稿 C");
+    expect(await readFile(target(), "utf-8")).toBe("X");
+  });
+
+  it("临时文件写好、换上之前失败：临时文件挪进留证区，书里不留 .tmp", async () => {
+    const { restoreFileInBook } = await import("./safe-fs.js");
+    await writeFile(target(), "现稿 C");
+    const hook = async (point: string, path: string) => {
+      if (point === "after-precheck-before-open" && path === target()) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+    await expect(restoreFileInBook(book, target(), "原稿 A", { label: "draft", expectTarget: sha("现稿 C"), aside: aside(), hook })).rejects.toMatchObject({ code: "ENOSPC" });
+    expect((await readdir(dirname(target()))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    expect(await displaced()).toContain("原稿 A");
+  });
+
+  it("换上之前上级被换成书外软链：书外不出现稿件，挪开的 C 留在 aside", async () => {
     const { restoreFileInBook } = await import("./safe-fs.js");
     await writeFile(target(), "现稿 C");
     const away = join(outside, "drafts");
@@ -709,7 +747,7 @@ describe("老清单的旁记绑着这份事务（P1 第 24 轮）", () => {
 describe("摘名字清单（第 26 轮，safe-fs 文件头「摘名字」）", () => {
   /** 核心源码里每一处能摘掉、盖掉名字的调用：文件 + 所在函数 + 调用，各几处、为什么可以。多一处、少一处都报。 */
   const EXPECTED: readonly (readonly [string, string, string, number, string])[] = [
-    ["store/safe-fs.ts", "renameHeld", "rename", 1, "正常写换上：盖掉的是 rename 前核过的那份（文件头：那一瞬不守）"],
+    ["store/safe-fs.ts", "renameHeld", "rename", 1, "正常写换上：盖掉的是 rename 前核过的那份；新建换上核过原处不在（文件头：那一瞬不守）"],
     ["store/safe-fs.ts", "takeAside", "rename", 1, "目标挪到自己的固定 aside（先核过 aside 空着）：名字还在"],
     ["store/safe-fs.ts", "retireHeld", "rename", 1, "aside 挪进留证区的随机名字：名字还在"],
     ["store/safe-fs.ts", "retireName", "rename", 1, "挪进留证区的随机名字：名字还在"],

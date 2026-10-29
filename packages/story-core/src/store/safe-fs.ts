@@ -18,13 +18,12 @@
  * 不拿链接数、inode 代替。Node 没有「目标还是这份才换」的原子 rename（renamex_np / renameat2），就分四步、每步都不丢东西：
  *  1. 先把目标 rename 到调用方给的固定名字（aside，事务目录里）——这之后原处有人放了新的，不会被盖；
  *  2. 拿着打开的它核：挪开的就是核过的那个文件、内容（从头重读）还是该换掉的那份；不是就放回原处（原处又有了就留在 aside），如实失败；
- *  3. 在原处独占新建（O_CREAT | O_EXCL：原处有了就不建，如实失败）、整份写进要放上的内容、落盘、核（删的跳过这步）；
- *     没建成、原处还空着（磁盘满……）就当场把挪开的那份放回去再报错；
+ *  3. 同目录临时文件里整份写进要放上的内容、落盘、核过，再核原处还空着才 rename 上去（原处有了就不换，如实失败）、换上后核
+ *     （删的跳过这步）；没换上、原处还空着（磁盘满……）就当场把挪开的那份放回去再报错；
  *  4. 把 aside **挪进留证区**（`.story-core-kept/displaced/`，不删）：挪完拿着它再从头读一遍，有人往里写过就如实失败（东西在留证区）。
  * 被杀在任何一步，下次照固定名字 settleInterruptedPlace 收拾：挪开了还没放上的放回去，原处另有一份的交调用方另存。
- * 第 1 步到第 3 步写完之间原处是空的、或是写到一半的（读的一方读到「没有」或半份）：只有回滚、恢复这种本来就有半截事务挡着的
- * 地方用；被杀在写到一半，下次调用方按内容证明（不是这次写的、也不是原来的，先另存再换）。放回去也是在原处新建一份、写进
- * aside 现在的内容，aside 挪进留证区（不 link 回去）。
+ * 第 1 步到第 3 步换上之间原处是空的（读的一方读到「没有」，从来读不到半份）：只有回滚、恢复这种本来就有半截事务挡着的
+ * 地方用。放回去也是这样在原处新建一份、写进 aside 现在的内容，aside 挪进留证区（不 link 回去）。
  * 正常写（moveFileInBook：盖的给 precheckTargetSha 核内容，新建的给 null 核不在）只在 rename 前核一遍目标：守的是书锁之外的写
  * 在这之前改过的，核完到 rename 之间那一瞬不守——要守就得留上面的空档，作者存稿、读稿天天走这条路，代价更大；书里的写本来都在书锁里。
  *
@@ -325,9 +324,12 @@ export async function retireName(root: string, path: string, label: string): Pro
 }
 
 /**
- * 在原处独占新建一份、整份写进去（见文件头第 3 步）：O_CREAT | O_EXCL | O_NOFOLLOW——原处有了就不建、如实失败（不盖）；
- * 写完落盘，拿着它核还在原处、上级没换过、内容就是写进去的那份（途中有人往里写过如实失败，东西在原处、不删）。
+ * 在原处新建一份、整份写进去（见文件头第 3 步）：同目录临时文件里写好、落盘、核过，再核原处还空着才 rename 上去——原处有了
+ * 就不换、如实失败（不盖）；公开的名字上从来没有写到一半的那份（第 27 轮：独占建在原处再写，建好到写进去之间外面拿着它写的
+ * 会被盖掉）。换上之后拿着它核还在原处、上级没换过、内容就是写进去的那份（换上之后有人往里写过如实失败，东西在原处、不删）。
+ * 核完原处空着到 rename 那一瞬不守（同正常写，见文件头）。没换上的临时文件挪进留证区。
  * exactMode 给了的照它设权限（换回被盖掉那份的权限），没给的按 createMode 建（受 umask 管，缺省 0600）。
+ * 钩子：after-precheck-before-open 停在临时文件写好、换上之前；after-open-before-verify 停在换上之后、核之前。
  */
 async function createInBook(
   root: string,
@@ -339,28 +341,30 @@ async function createInBook(
   const bytes = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
   const dir = dirname(target);
   const dirId = await plainDirIdentity(root, dir, label);
-  await options.hook?.("after-precheck-before-open", target);
-  let handle: FileHandle;
+  const temporary = join(dir, `.${basename(target)}.${randomBytes(6).toString("hex")}.tmp`);
+  const handle = await open(temporary, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, options.createMode ?? 0o600);
+  let placed = false;
   try {
-    handle = await open(target, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, options.createMode ?? 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw targetChanged(root, target, label);
-    throw error;
-  }
-  try {
-    await options.hook?.("after-open-before-verify", target);
-    await assertSameDir(root, dir, dirId, label);
-    await assertHeldFile(handle, target, root, label);
-    if (options.exactMode !== undefined) await handle.chmod(options.exactMode);
-    await handle.writeFile(bytes);
-    await handle.sync();
-    await assertSameDir(root, dir, dirId, label);
-    await assertHeldFile(handle, target, root, label);
-    if (!(await bytesOf(handle)).equals(bytes)) throw targetChanged(root, target, label);
+    try {
+      await assertSameDir(root, dir, dirId, label);
+      await assertHeldFile(handle, temporary, root, label);
+      if (options.exactMode !== undefined) await handle.chmod(options.exactMode);
+      await handle.writeFile(bytes);
+      await handle.sync();
+      if (!(await bytesOf(handle)).equals(bytes)) throw unsafe("UNSAFE_CONTENT_MISMATCH", `Unsafe ${label}: ${relative(root, temporary)} does not hold what was written.`);
+      await options.hook?.("after-precheck-before-open", target);
+      await renameHeld(root, { handle, path: temporary, dir: dirId }, { path: target, dir: dirId, precheck: null }, label);
+      placed = true;
+      await options.hook?.("after-open-before-verify", target);
+      await assertSameDir(root, dir, dirId, label);
+      await assertHeldFile(handle, target, root, label);
+      if (!(await bytesOf(handle)).equals(bytes)) throw targetChanged(root, target, label);
+    } finally {
+      await handle.close();
+    }
   } finally {
-    await handle.close();
+    if (!placed) await retireName(root, temporary, label).catch(() => undefined);
   }
-  await syncDirectory(dir);
 }
 
 /**
@@ -509,8 +513,8 @@ export async function removeFileInBook(root: string, target: string, options: { 
 /**
  * 上次 restoreFileInBook / removeFileInBook 被杀在半路留在 aside 的，照固定名字收拾（见文件头）：原处空着的放回去；放回去了、
  * 被杀在挪走 aside 之前的（原处和 aside 内容一样）把 aside 挪进留证区；原处另有一份的：返回 aside 里的内容，调用方先另存、
- * 再 discardAside。aside 不是普通文件如实报错。被杀在新建之后、写完之前留在原处的半份不在这里认：调用方按内容证明
- * （不是这次写的、也不是原来的，先另存再换）。
+ * 再 discardAside。aside 不是普通文件如实报错。被杀在换上之后、挪走 aside 之前的（原处是这次放上的那份）也算「另有一份」：
+ * aside 交回来另存，原处那份调用方按内容证明（是这次写的直接认，不是这次写的、也不是原来的先另存再换）。
  */
 export async function settleInterruptedPlace(root: string, target: string, options: { readonly label: string; readonly aside: string }): Promise<string | undefined> {
   const { label } = options;
